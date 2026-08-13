@@ -101,9 +101,11 @@ lock. Its payload model represents object creation, property update, reparent,
 and destroy. The current proof integration covers identity publication,
 generated property setters, reparenting, and destruction.
 
-Records are an in-process prototype. They are retained without bounds and do not
-yet provide subscriptions, snapshots, transaction IDs, compaction, rollback, or
-serialization. Consumers must not treat this as a replication protocol.
+Records are an in-process prototype. Retention is now bounded and cursor reads
+detect eviction with `ResnapshotRequired`; the default capacity is 4,096.
+Snapshots, transaction IDs, compaction, rollback, and serialization are not yet
+implemented. Consumers must not treat this as a replication protocol. See
+`MutationGateway.md` for the reader and authoritative apply contracts.
 
 ## Luau and checked type boundaries
 
@@ -119,19 +121,17 @@ a later hardening pass.
 
 ## Blockers before loopback replication
 
-Before a first loopback server/client prototype, the smallest remaining blockers
-are:
+The authoritative command queue and bounded cursor are now implemented. Before a
+first loopback server/client prototype, the smallest remaining blockers are:
 
-1. define a bounded journal reader/subscription and snapshot baseline;
+1. define a snapshot baseline paired with the bounded journal cursor;
 2. persist ObjectIds (or a separate serialized identity) and resolve graph
    references during load;
-3. apply validation and authority consistently to every native mutation path,
-   including custom setters;
-4. add an authoritative command queue for returning worker results to `Main`;
-5. define schema versioning and deterministic wire encodings;
-6. finish the audit of direct Luau C callbacks and signal reentrancy safe points;
-7. add bounded document/tree/journal limits and malformed-input fuzzing.
+3. define schema versioning and deterministic wire encodings;
+4. assign authenticated command origins to reflection permission levels;
+5. finish the audit of direct Luau C callbacks and signal reentrancy safe points;
+6. add bounded document/tree limits and malformed-input fuzzing.
 
-The recommended next task is the authoritative command queue plus a bounded
-change-journal cursor. That creates the narrow handoff needed by both workers
-and a future loopback replication consumer without selecting a network stack.
+The recommended next task is serialized identity/reference resolution plus a
+snapshot baseline. That is the smallest remaining bridge to a loopback
+replication consumer without selecting a network transport.
