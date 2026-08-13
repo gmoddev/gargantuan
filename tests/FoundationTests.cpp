@@ -1,25 +1,36 @@
 #include "gargantuan/assets/InstanceSerialization.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Folder.hpp"
+#include "gargantuan/classes/Frame.hpp"
 #include "gargantuan/classes/ModuleScript.hpp"
+#include "gargantuan/classes/Part.hpp"
+#include "gargantuan/classes/WeldConstraint.hpp"
 #include "gargantuan/runtime/ChangeJournal.hpp"
 #include "gargantuan/runtime/DataModelRoot.hpp"
 #include "gargantuan/runtime/ExecutionDomain.hpp"
 #include "gargantuan/runtime/JobSystem.hpp"
 #include "gargantuan/runtime/MutationGateway.hpp"
 #include "gargantuan/runtime/ObjectId.hpp"
+#include "gargantuan/runtime/Snapshot.hpp"
 #include "gargantuan/scripting/ModuleResolution.hpp"
 #include "gargantuan/scripting/NativeCallback.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <iostream>
 #include <lua.h>
 #include <lualib.h>
 #include <stdexcept>
 #include <thread>
+#include <type_traits>
 #include <vector>
 
 namespace {
+	template <typename Needle, typename Variant> struct VariantContains;
+	template <typename Needle, typename... Values>
+	struct VariantContains<Needle, std::variant<Values...>> : std::bool_constant<(std::is_same_v<Needle, Values> || ...)> {};
+	static_assert(!VariantContains<std::any, gargantuan::WireValue>::value);
+
 	int Failures = 0;
 
 	void Check(bool condition, const char *message) {
@@ -293,6 +304,90 @@ namespace {
 		journal.Clear();
 	}
 
+	void TestSnapshotBaseline() {
+		using namespace gargantuan;
+		auto &journal = ChangeJournal::Get();
+		journal.Clear();
+		auto game = std::make_shared<DataModel>();
+		game->SetName("SnapshotGame");
+		auto first = std::make_shared<Part>();
+		first->SetName("First");
+		first->SetTransparency(0.25f);
+		first->SetParent(game);
+		auto second = std::make_shared<Part>();
+		second->SetName("Second");
+		second->SetParent(game);
+		auto weld = std::make_shared<WeldConstraint>();
+		weld->SetName("Link");
+		weld->SetPart0(first);
+		weld->SetPart1(second);
+		weld->SetParent(game);
+		auto frame = std::make_shared<Frame>();
+		frame->SetName("Panel");
+		frame->SetAutomaticSize(Enums::AutomaticSize::XY);
+		frame->SetPosition(UDim2(0.5f, 8, 1.0f, -4));
+		frame->SetParent(game);
+
+		auto snapshot = CaptureSnapshot(game);
+		const auto serialized = SerializeSnapshot(snapshot);
+		const auto repeated = SerializeSnapshot(CaptureSnapshot(game));
+		Check(serialized == repeated, "the same DataModel produces a deterministic snapshot");
+		Check(serialized.find("ObjectReference") != std::string::npos, "snapshot uses an explicit reference wire type");
+		Check(serialized.find("\"Slot\"") != std::string::npos, "snapshot uses explicit serialized ObjectIds");
+
+		auto parsed = DeserializeSnapshot(serialized);
+		Check(parsed.Succeeded(), "serialized snapshot parses successfully");
+		Check(SerializeSnapshot(*parsed.Value) == serialized, "snapshot wire document round-trips deterministically");
+		auto loaded = LoadSnapshot(*parsed.Value);
+		Check(loaded.Succeeded(), "parsed snapshot materializes successfully");
+		Check(loaded.Root && loaded.Root->GetName() == "SnapshotGame", "snapshot restores its root");
+		auto loadedWeld = std::dynamic_pointer_cast<WeldConstraint>(loaded.Root->FindFirstChild("Link", false));
+		auto loadedFirst = std::dynamic_pointer_cast<Part>(loaded.Root->FindFirstChild("First", false));
+		auto loadedSecond = std::dynamic_pointer_cast<Part>(loaded.Root->FindFirstChild("Second", false));
+		auto loadedFrame = std::dynamic_pointer_cast<Frame>(loaded.Root->FindFirstChild("Panel", false));
+		Check(loadedWeld && loadedFirst && loadedSecond && loadedFrame, "snapshot restores hierarchy and classes");
+		Check(
+			loadedWeld->GetPart0() == loadedFirst && loadedWeld->GetPart1() == loadedSecond,
+			"object references survive snapshot serialization and materialization"
+		);
+		Check(loadedFirst->GetTransparency() == 0.25f, "closed wire values restore serializable properties");
+		Check(loadedFrame->GetAutomaticSize() == Enums::AutomaticSize::XY, "wire enums restore by type and item");
+		Check(
+			loadedFrame->GetPosition().X.Scale == 0.5f && loadedFrame->GetPosition().X.Offset == 8 &&
+				loadedFrame->GetPosition().Y.Scale == 1.0f && loadedFrame->GetPosition().Y.Offset == -4,
+			"compound wire values restore without native type erasure"
+		);
+
+		journal.Clear();
+		auto transition = CaptureSnapshot(game);
+		first->SetTransparency(0.5f);
+		auto incremental = journal.Read(transition.Cursor);
+		Check(incremental.Status == ChangeReadStatus::Available, "snapshot cursor transitions to journal consumption");
+		Check(incremental.Records.size() == 1, "post-snapshot mutation appears exactly once after the cursor");
+
+		const auto originalCapacity = journal.GetCapacity();
+		journal.SetCapacity(1);
+		first->SetTransparency(0.6f);
+		first->SetTransparency(0.7f);
+		auto evicted = journal.Read(transition.Cursor);
+		Check(evicted.Status == ChangeReadStatus::ResnapshotRequired, "stale snapshot cursor requires resnapshot");
+		journal.SetCapacity(originalCapacity);
+
+		auto dangling = snapshot;
+		auto danglingWeld = std::find_if(
+			dangling.Objects.begin(), dangling.Objects.end(), [](const SnapshotObject &object) { return object.Name == "Link"; }
+		);
+		auto &reference = std::get<WireObjectReference>(danglingWeld->Properties.at("Part0"));
+		reference.Object = {999999, 1};
+		auto rejected = LoadSnapshot(dangling);
+		Check(!rejected.Succeeded(), "dangling serialized references cannot resolve");
+		Check(!loaded.Resolve({999999, 1}), "unknown or stale snapshot IDs resolve to null");
+		const auto loadedFirstId = snapshot.Objects[1].Id;
+		loadedFirst->Destroy();
+		Check(!loaded.Resolve(loadedFirstId), "destroyed snapshot objects no longer resolve");
+		journal.Clear();
+	}
+
 	void TestLuauExceptionBoundary() {
 		lua_State *L = luaL_newstate();
 		lua_pushcfunction(L, [](lua_State *state) {
@@ -323,6 +418,7 @@ int main() {
 	TestSchemaMetadata();
 	TestMutationGateway();
 	TestBoundedJournalCursor();
+	TestSnapshotBaseline();
 	TestLuauExceptionBoundary();
 	if (Failures == 0) std::cout << "All foundation tests passed\n";
 	return Failures == 0 ? 0 : 1;

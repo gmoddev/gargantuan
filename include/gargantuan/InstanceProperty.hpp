@@ -4,8 +4,11 @@
 #include "gargantuan/scripting/StackValue.hpp"
 #include <any>
 #include <functional>
+#include <memory>
+#include <optional>
 #include <string>
 #include <stdexcept>
+#include <type_traits>
 #include <utility>
 
 namespace gargantuan {
@@ -61,6 +64,18 @@ namespace gargantuan {
 			using ArgsType = std::tuple<Args...>;
 		};
 
+		template <typename T> struct SharedInstancePointer : std::false_type {};
+		template <typename T>
+		struct SharedInstancePointer<std::shared_ptr<T>> : std::bool_constant<std::is_base_of_v<Instance, T>> {
+			using Element = T;
+		};
+		template <typename T> struct OptionalSharedInstancePointer : std::false_type {};
+		template <typename T>
+		struct OptionalSharedInstancePointer<std::optional<std::shared_ptr<T>>>
+			: std::bool_constant<std::is_base_of_v<Instance, T>> {
+			using Element = T;
+		};
+
 		template <typename Class, typename Return, typename... Args>
 		struct MemberPointerTraits<Return (Class::*)(Args...) const> {
 			using ClassType = Class;
@@ -87,10 +102,14 @@ namespace gargantuan {
 
 		Enums::Permission ReadPermission = Enums::Permission::None;
 		std::function<std::any(Instance *self)> Read;
+		std::function<std::shared_ptr<Instance>(Instance *self)> ReadObjectReference;
+		std::function<std::pair<std::string, int>(Instance *self)> ReadEnumValue;
 		std::function<int(lua_State *L, std::any value)> PushStack;
 
 		Enums::Permission WritePermission = Enums::Permission::None;
 		std::function<void(Instance *self, std::any value)> Write;
+		std::function<void(Instance *self, std::shared_ptr<Instance> value)> WriteObjectReference;
+		std::function<void(Instance *self, int value)> WriteEnumValue;
 		std::function<bool(lua_State *L, int idx)> IsStack;
 		std::function<std::any(lua_State *L, int idx)> FromStack;
 
@@ -178,6 +197,33 @@ namespace gargantuan {
 				};
 			}
 
+			if constexpr (SharedInstancePointer<MemberType>::value) {
+				ReadObjectReference = [](Instance *self) {
+					ClassType *obj = reinterpret_cast<ClassType *>(self);
+					if constexpr (std::is_member_function_pointer_v<decltype(Pointer)>) {
+						return std::static_pointer_cast<Instance>((obj->*Pointer)());
+					} else {
+						return std::static_pointer_cast<Instance>(obj->*Pointer);
+					}
+				};
+			} else if constexpr (OptionalSharedInstancePointer<MemberType>::value) {
+				ReadObjectReference = [](Instance *self) -> std::shared_ptr<Instance> {
+					ClassType *obj = reinterpret_cast<ClassType *>(self);
+					MemberType value;
+					if constexpr (std::is_member_function_pointer_v<decltype(Pointer)>) value = (obj->*Pointer)();
+					else value = obj->*Pointer;
+					return value ? std::static_pointer_cast<Instance>(*value) : nullptr;
+				};
+			} else if constexpr (std::is_enum_v<MemberType>) {
+				ReadEnumValue = [](Instance *self) {
+					ClassType *obj = reinterpret_cast<ClassType *>(self);
+					MemberType value;
+					if constexpr (std::is_member_function_pointer_v<decltype(Pointer)>) value = (obj->*Pointer)();
+					else value = obj->*Pointer;
+					return std::pair(std::string(magic_enum::enum_type_name<MemberType>()), static_cast<int>(value));
+				};
+			}
+
 			PushStack = [](lua_State *L, const std::any &value) -> int {
 				if (auto val = std::any_cast<MemberType>(&value)) return StackValue<MemberType>::Push(L, *val);
 				return 0;
@@ -205,6 +251,29 @@ namespace gargantuan {
 
 				IsStack = [](lua_State *L, int idx) { return StackValue<ArgType>::Is(L, idx); };
 				FromStack = [](lua_State *L, int idx) { return StackValue<ArgType>::From(L, idx); };
+
+				if constexpr (SharedInstancePointer<ArgType>::value) {
+					using Element = typename SharedInstancePointer<ArgType>::Element;
+					WriteObjectReference = [](Instance *self, std::shared_ptr<Instance> value) {
+						ClassType *obj = reinterpret_cast<ClassType *>(self);
+						auto typed = std::dynamic_pointer_cast<Element>(value);
+						if (value && !typed) throw std::invalid_argument("Object reference has the wrong class");
+						(obj->*Pointer)(typed);
+					};
+				} else if constexpr (OptionalSharedInstancePointer<ArgType>::value) {
+					using Element = typename OptionalSharedInstancePointer<ArgType>::Element;
+					WriteObjectReference = [](Instance *self, std::shared_ptr<Instance> value) {
+						ClassType *obj = reinterpret_cast<ClassType *>(self);
+						auto typed = std::dynamic_pointer_cast<Element>(value);
+						if (value && !typed) throw std::invalid_argument("Object reference has the wrong class");
+						(obj->*Pointer)(typed ? std::optional(typed) : std::nullopt);
+					};
+				} else if constexpr (std::is_enum_v<ArgType>) {
+					WriteEnumValue = [](Instance *self, int value) {
+						ClassType *obj = reinterpret_cast<ClassType *>(self);
+						(obj->*Pointer)(static_cast<ArgType>(value));
+					};
+				}
 			} else {
 				using MemberType = typename Traits::MemberType;
 
