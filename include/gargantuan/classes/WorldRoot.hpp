@@ -10,6 +10,8 @@
 #include <vector>
 
 namespace gargantuan {
+	struct WorldRootTestAccess;
+
 	class WorldRoot : public Instance {
 		I_WorldRoot;
 
@@ -26,6 +28,7 @@ namespace gargantuan {
 		std::unordered_map<Constraint *, b3JointId> ConstraintJoints;
 
 	  private:
+		friend struct WorldRootTestAccess;
 		b3BodyId CreatePartBody(std::shared_ptr<BasePart> it);
 		b3JointId CreateConstraintJoint(std::shared_ptr<Constraint> it);
 	};

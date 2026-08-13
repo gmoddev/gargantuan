@@ -2,15 +2,17 @@
 
 ## Scope and interpretation
 
-This audit covers the repository at
-`e4fca3575cc84c0d5fa4a946b88bf528aac2223b`, including native code, Luau
-bindings, parsers, project loading, renderer/physics boundaries, build tooling,
-tests, and GitHub workflows. A repeated independent discovery pass produced 59
-candidates. Validation and attack-path review retained 33 source-backed findings:
-5 high, 9 medium, and 19 low. Fourteen additional candidates remain deferred
-because reachability or lifetime behavior needs runtime proof. Twelve were
-suppressed as non-vulnerabilities, unreachable developer-tool risks, or general
-hardening only.
+The original audit covered repository commit
+`e4fca3575cc84c0d5fa4a946b88bf528aac2223b`. This document was reconciled on
+2026-08-13 against current `main` plus the WorldRoot hardening in this change.
+This is not a new exhaustive audit: each original finding was checked against
+current implementation and tests, and stale evidence was corrected.
+
+Across the 33 validated findings, 10 are resolved, 4 are partially resolved,
+and 19 remain open. Across the 14 original proof-needed candidates, 2 are now
+resolved, 11 remain deferred, and 1 is no longer applicable. Overall status
+counts are therefore: **Resolved 12**, **Partially resolved 4**,
+**Still open 19**, **Deferred 11**, and **No longer applicable 1**.
 
 Severity describes the current local prototype boundary, not a future networked
 service. “High” generally means a trusted-looking project/source operation can
@@ -43,73 +45,73 @@ trust decision or capability boundary.
 
 ### High severity
 
-| ID | Finding | Evidence area | Required fix |
-|---|---|---|---|
-| SEC-001 | note: this is prob not as severes as thought, but should still be patched. PluginService later can be moree explicit. `FileLink` does not confine resolved paths and recursively imports executable source. A project can escape its intended root and cause host files with recognized suffixes to be read/run. | `src/classes/FileLink.cpp`, `src/Engine.cpp` | Canonicalize against a granted root, reject absolute/traversal/link escapes, impose recursion/file limits, and require project trust before execution. |
-| SEC-002 | Deserialization retains a `string_view` derived from temporary/replaceable JSON storage, creating a dangling native view. | Instance JSON deserializer sources | Store owned strings across parse steps; add ASan tests covering nested and failing documents. |
-| SEC-003 | Module loading statically downcasts the object found by `require` to `ModuleScript`. A path resolving to another class can cause native type confusion. | `src/script/ScriptEngine.cpp` require callbacks | Use checked class identity/casts and return a Luau error for invalid targets; test every wrong-type path. |
-| SEC-004 | Standalone Instance loading statically treats the loaded root as `DataModel`, making the fallback unsafe/unreachable for other root classes. | `src/Main.cpp` | Check the root type, explicitly wrap a non-DataModel root, and test each CLI target. |
-| SEC-005 | Children retain a raw `ParentPointer`; parent collection/destruction can leave a dangling pointer reachable through child operations. | `include/gargantuan/classes/Instance.hpp`, Instance lifecycle sources | Replace with validated handle/weak ownership, define detach-before-destroy ordering, and add sanitizer lifetime tests. |
+| ID | Status | Current evidence and remaining action |
+|---|---|---|
+| SEC-001 | Still open | `src/classes/FileLink.cpp` and normal `Engine` project startup still lack a canonical project trust/confinement boundary. EditorHost avoids execution but does not close the game-runtime path. |
+| SEC-002 | Resolved | `InstanceSerialization::TryDeserializeProperty` materializes JSON strings as owned `std::string`; regression coverage exercises nested project loading. Retained Luau-origin `string_view` properties remain tracked separately in the deferred table. |
+| SEC-003 | Resolved | `src/scripting/ModuleResolution.cpp` uses `dynamic_pointer_cast<ModuleScript>` and wrong-type tests in `FoundationTests.cpp` require rejection. |
+| SEC-004 | Resolved | `src/runtime/DataModelRoot.cpp::PrepareDataModelRoot` checks `DataModel` and otherwise parents a standalone root beneath `Workspace`; both paths have foundation coverage. |
+| SEC-005 | Resolved | `Instance::ParentReference` is a `weak_ptr`; parenting rejects cycles and destruction detaches monotonically. Lifetime, cycle, and reentrant-destroy tests cover the contract. |
 
 ### Medium severity
 
-| ID | Finding | Evidence area | Required fix |
-|---|---|---|---|
-| SEC-006 | Declared property/method security levels are not enforced by dispatch. | generated reflection/binding path | Enforce an `ExecutionDomain`/`AccessPolicy` at every call and property access; deny by default. |
-| SEC-007 | Generated vector conversion uses `lua_tovector` without proving the value has the expected vector representation. | generated bindings and `Vector3` conversion | Check Luau type/tag and arity before conversion; return a normal script error. |
-| SEC-008 | Short JSON arrays are indexed without validating their length. | property datatype deserializers | Require exact/minimum lengths before indexing; fuzz all property tags. |
-| SEC-009 | Constraint creation accepts missing or inconsistent endpoint state. | constraint/WorldRoot physics integration | Validate both parts, world membership, non-self constraints, and body handles before constructing a joint. |
-| SEC-010 | Native userdata dispatch can accept an invalid receiver or insufficient/wrong arguments. | datatype/class binding dispatchers | Centralize checked receiver and argument decoding; never reinterpret unchecked userdata. |
-| SEC-011 | Cross-enum operations can accept an enum item of the wrong enum type, producing type confusion at the API boundary. | enum Luau bindings | Compare enum type identity as well as item representation before conversion. |
-| SEC-012 | C++ exceptions can escape Luau C callbacks. | native binding and service callbacks | Catch at every callback boundary, translate to structured Luau errors, and test exception paths. |
-| SEC-013 | `Destroyed` is ordinary script-writable state, so scripts can forge lifecycle state and violate native assumptions. | Instance metadata/lifecycle | Make lifecycle internal and expose a read-only query; ensure destruction is monotonic and idempotent. |
-| SEC-014 | Non-string Luau error values can be converted through a null C string on native error paths. | script resume/error reporting | Use a safe error formatter for every Luau value type and a fallback message. |
+| ID | Status | Current evidence and remaining action |
+|---|---|---|
+| SEC-006 | Partially resolved | `MutationGateway`, `ExecutionDomain`, property write authority, and write permissions protect committed mutation. Read access and method dispatch still lack a complete deny-by-default access policy. |
+| SEC-007 | Still open | `StackValue<glm::vec3>::From` still calls `lua_tovector`; callers do not uniformly enforce `Is` before conversion. Central argument decoding remains required. |
+| SEC-008 | Still open | Several `InstanceSerialization` array decoders validate only `is_array()` before indexing. Add exact/minimum lengths and fuzz/property-tag tests. |
+| SEC-009 | Resolved | `WorldRoot::CreateConstraintJoint` now rejects missing, dead, self, cross-world, and invalid-handle endpoints before joint construction; focused tests cover missing and valid endpoints. |
+| SEC-010 | Still open | Tagged userdata lookup improved receiver rejection, but `UserdataMethod::CallFromMember` still converts positional arguments without central arity/type validation. |
+| SEC-011 | Still open | Enum conversion still needs explicit enum-type identity checks at every typed boundary. |
+| SEC-012 | Partially resolved | `InvokeNativeCallback` contains C++ exceptions for Instance and generic userdata dispatch, with regression coverage. Manually registered library/service callbacks are not yet uniformly wrapped. |
+| SEC-013 | Resolved | `Destroyed` is read-only in generated metadata; `Destroy()` commits state before callbacks and is monotonic, reentrant-safe, and idempotent under tests. |
+| SEC-014 | Still open | `ThreadEngine`, `Signal`, `Script`, and source-load diagnostics still call `lua_tostring` directly for arbitrary Luau errors. Add a total-value formatter. |
 
 ### Low severity
 
-| ID | Finding | Evidence area | Required fix |
-|---|---|---|---|
-| SEC-015 | Every script can reach `ProcessService`, including process termination and host output. | `src/classes/DataModel.cpp`, ProcessService bindings | Remove it from experience domains; expose a narrow application capability only to trusted hosts/tools. |
-| SEC-016 | Parent cycles are not rejected and can cause recursion, leaks, or non-terminating traversal. | Instance parenting | Validate acyclicity before mutation and cap defensive traversal depth. |
-| SEC-017 | Recursive Instance JSON has no effective byte/depth/object limits. | serialization/deserialization | Apply total and per-field budgets before allocation/recursion. |
-| SEC-018 | Scripts, tasks, and signals have no admission or execution quotas. | ScriptEngine/ThreadEngine/Signal | Budget by domain/script and frame; cap queues/connections and surface throttling. |
-| SEC-019 | Scheduled tasks have no cancellation/ownership and can survive invalid owners or overload the loop. | ThreadEngine | Add owned cancellation tokens, queue limits, deadline policy, and shutdown draining. |
-| SEC-020 | A self-replenishing `task.defer` chain can keep the scheduler in the same step indefinitely. | ThreadEngine defer processing | Swap bounded phase queues and defer newly queued work to the next frame. |
-| SEC-021 | Filesystem copy/move error paths can use an uninitialized pointer and delete after a failed transfer. | BaseFilesystem implementation | Initialize ownership explicitly, branch on operation success, and use RAII. |
-| SEC-022 | Table-to-vector conversion mixes allocation/conversion assumptions and can mishandle malformed tables. | datatype Luau conversion | Validate shape/types first and construct into owned, initialized storage. |
-| SEC-023 | The main Luau state is not root-sandboxed before custom environments are created. | `src/script/ScriptEngine.cpp` | Sandbox the root state, then construct least-privilege domain environments. |
-| SEC-024 | Projects open and queue source automatically without an explicit trust gate. | CLI/Engine project load | Default new/downloaded projects to restricted mode; record trust per canonical project identity. |
-| SEC-025 | TOML serialization does not safely encode all user-controlled key/value forms. | TOML serializer | Use a conforming encoder or rigorously quote/escape keys and values; round-trip fuzz. |
-| SEC-026 | Recursive `task.spawn` can grow the native call stack. | ThreadEngine | Make spawn enqueue-only and enforce per-frame/per-owner budgets. |
-| SEC-027 | Nested JSON type mismatches can throw uncaught exceptions and terminate loading. | JSON deserializers | Use checked access with path-aware diagnostics; contain exceptions at the document boundary. |
-| SEC-028 | Unsupported SDL mouse buttons are looked up with a throwing map access. | `src/services/UserInputService.cpp` | Treat unknown inputs as `Unknown` or ignore with a rate-limited diagnostic. |
-| SEC-029 | `Destroy()` is reentrant before destroyed state is committed. | Instance lifecycle | Transition atomically to `Destroying`, detach safely, then notify; make repeat calls harmless. |
-| SEC-030 | User Signals permit unsafe reentrant mutation while native invariants are mid-update. | Signal implementation and hierarchy/property callers | Define safe points; snapshot callbacks and queue invariant-sensitive notifications. |
-| SEC-031 | Very large scenes impose persistent per-frame renderer/physics work with no admission or degradation policy. | Engine, renderer, WorldRoot | Enforce scene budgets and add culling, sleeping, streaming, profiling, and graceful limits. |
-| SEC-032 | Signal connections and waiters are unbounded and have incomplete teardown ownership. | Signal implementation | Cap/attribute registrations and disconnect all waiters on owner/VM destruction. |
-| SEC-033 | `ReadFileToString` sizes then reads a mutable file without defending against a size race. | filesystem utility | Use a bounded streaming read or verify actual bytes/size safely; never write past allocated storage. |
+| ID | Status | Current evidence and remaining action |
+|---|---|---|
+| SEC-015 | Still open | `DataModel::GetServiceDefinitions` still exposes `ProcessService` to the normal experience service tree. |
+| SEC-016 | Resolved | `Instance::SetParent` rejects self-parenting and descendant cycles before mutation; rejected operations emit no journal records under tests. |
+| SEC-017 | Still open | Recursive project Instance JSON still has no explicit byte, depth, object, or aggregate allocation budget. |
+| SEC-018 | Still open | Script, task, and signal admission/execution quotas remain absent. The native `JobSystem` does not govern arbitrary Luau execution. |
+| SEC-019 | Partially resolved | `JobSystem` has groups, draining shutdown, and exception containment. Luau `ThreadEngine` tasks still lack owner cancellation and queue bounds. |
+| SEC-020 | Still open | `ThreadEngine::Step` swaps batches but continues until `DeferredQueue` is empty, so a replenishing defer chain can monopolize the step. |
+| SEC-021 | Resolved | `BaseFilesystem` copy/move paths use owned buffers and explicit success/byte-count handling; filesystem regression tests cover the corrected behavior. |
+| SEC-022 | Still open | `StackValue<std::vector<T>>::From` still resizes then appends while iterating and does not validate a dense, correctly typed table first. |
+| SEC-023 | Still open | Source threads call `luaL_sandboxthread`, but the root Luau state still has no demonstrated least-privilege sandbox initialization. |
+| SEC-024 | Still open | EditorHost opens documents without execution, but normal CLI/Engine project startup still queues source without an explicit persisted trust decision. |
+| SEC-025 | Still open | The project TOML writer still needs a conforming encoder or comprehensive escaping and round-trip fuzz coverage. |
+| SEC-026 | Still open | `task.spawn` still resumes directly; enqueue-only scheduling and owner/frame budgets remain required. |
+| SEC-027 | Partially resolved | EditorHost and snapshot/wire parsers contain exceptions and fail closed, and project loading returns structured errors in many paths. Legacy Instance JSON still uses unchecked field/index access in places. |
+| SEC-028 | Still open | Unsupported mouse buttons need explicit `find`/ignore behavior throughout event conversion; no focused regression currently proves total handling. |
+| SEC-029 | Resolved | `Instance::Destroy` commits `DestroyingState` and `Destroyed` before callbacks, invalidates identity predictably, and ignores reentrant/repeat calls under tests. |
+| SEC-030 | Still open | Signals snapshot some callback state, but hierarchy notifications still execute synchronously around multi-object mutation without a general transaction/safe-point contract. |
+| SEC-031 | Still open | Renderer and physics scene admission/degradation budgets remain future work. |
+| SEC-032 | Still open | Signal connections/waiters remain unbounded and teardown ownership is incomplete. |
+| SEC-033 | Resolved | `BaseFilesystem::ReadFileToString` reads into owned capacity and shrinks to the actual byte count, preventing overwrite after a size race; filesystem tests cover mutable-size behavior. |
 
 ## Deferred findings requiring runtime proof
 
 These candidates are credible enough to test, but the static audit could not
 establish a complete reachable exploit or invariant violation:
 
-| Candidate | Proof needed |
-|---|---|
-| GPU mesh transfer/failure paths | Force every SDL GPU allocation/upload failure and inspect null/partial teardown under a real backend. |
-| Shared custom globals across sandboxed threads | Demonstrate cross-domain mutation after the proposed domains exist, or prove current scripts can replace privileged values. |
-| TOML parser recursive/nesting exhaustion | Benchmark and fuzz deeply nested valid/invalid input with production parser settings. |
-| Signal callbacks retain a raw Luau VM pointer | Destroy VM/owners in each order under ASan and invoke/disconnect pending callbacks. |
-| Reflection base-pointer reinterpretation | Generate or manually register a mismatched class and show dispatch reaches the invalid base. |
-| Descendant-removal static casts | Produce each possible descendant class and prove the cast result is dereferenced unsafely. |
-| Reentrant ancestry callbacks observe corrupt state | Construct callbacks that reparent/destroy during each notification phase and assert tree invariants. |
-| Property `string_view` values retained from Luau | Force collection/mutation after assignment and inspect native storage under ASan. |
-| Module cache keyed by raw address identity | Force object destruction/address reuse and show a stale module result crosses identities. |
-| Project Studio lock lacks content hash | Demonstrate a realistic package/submodule substitution path in the intended distribution flow. |
-| Invalid Part dimensions reach Box3D | Fuzz NaN, infinity, negative, zero, and huge values against the linked Box3D revision. |
-| Vector2 arithmetic segfault note | Re-enable the disabled test under ASan and minimize the crash. |
-| Constraints resolve `Part1` through `Part0` path | Exercise unequal endpoints and determine whether this is correctness-only or unsafe handle use. |
-| Script coroutine registry reference uses/leaks wrong stack slot | Repeatedly start/fail/collect Scripts and inspect registry growth and resumed object identity. |
+| Candidate | Status | Current evidence or proof still needed |
+|---|---|---|
+| GPU mesh transfer/failure paths | Deferred | Force every SDL GPU allocation/upload failure and inspect partial teardown under a real backend. |
+| Shared custom globals across sandboxed threads | Deferred | Demonstrate cross-domain mutation or prove privileged globals cannot be replaced. |
+| TOML parser recursive/nesting exhaustion | Deferred | Benchmark and fuzz deeply nested valid/invalid input with production parser settings. |
+| Signal callbacks retain a raw Luau VM pointer | Deferred | Destroy VM/owners in each order under ASan and invoke/disconnect pending callbacks. |
+| Reflection base-pointer reinterpretation | Deferred | Generate or manually register a mismatched class and prove whether dispatch reaches an invalid base. |
+| Descendant-removal static casts | Resolved | `WorldRoot` now uses checked `dynamic_pointer_cast` paths; removing an unrelated `Folder` is covered without entering physics teardown. |
+| Reentrant ancestry callbacks observe corrupt state | Deferred | Construct callbacks that reparent/destroy during every notification phase and assert tree invariants. |
+| Property `string_view` values retained from Luau | Deferred | Generated properties such as `UserInputService::MouseIcon` still retain views; prove lifetime under collection or replace them with owned strings. |
+| Module cache keyed by raw address identity | No longer applicable | Current module resolution has no engine-side raw-address module cache; stable `ObjectId` is used for cross-subsystem object identity. Reassess if a cache is introduced. |
+| Project Studio lock lacks content hash | Deferred | The legacy in-engine Studio was removed, but project/package integrity policy remains undefined for future Studio workflows. |
+| Invalid Part dimensions reach Box3D | Deferred | Fuzz NaN, infinity, negative, zero, and huge values against the linked Box3D revision. |
+| Vector2 arithmetic segfault note | Deferred | Re-enable the disabled test under ASan and minimize the crash. |
+| Constraints resolve `Part1` through `Part0` path | Resolved | `WeldConstraint::GetActiveParts` now reads `Part1`; focused valid-distinct-endpoint coverage verifies the correction. |
+| Script coroutine registry reference uses/leaks wrong stack slot | Deferred | Repeatedly start/fail/collect Scripts and inspect registry growth and resumed object identity. |
 
 Deferred does not mean safe. Each belongs in the pre-alpha verification backlog.
 

@@ -26,7 +26,7 @@ namespace gargantuan {
 	// change
 
 	b3BodyId WorldRoot::CreatePartBody(std::shared_ptr<BasePart> it) {
-		Parts.push_back(it);
+		if (!it || it->GetDestroyed() || it->IsDestroying() || !b3World_IsValid(World)) return b3_nullBodyId;
 
 		b3BodyDef bodyDefinition = b3DefaultBodyDef();
 		bodyDefinition.position = ToBox3(it->GetCFrame().Position);
@@ -51,19 +51,44 @@ namespace gargantuan {
 		bodyDefinition.userData = it.get();
 
 		b3BodyId bodyId = b3CreateBody(World, &bodyDefinition);
+		if (!b3Body_IsValid(bodyId)) return b3_nullBodyId;
 		it->CreateBodyShape(bodyId, shapeDefinition);
+		Parts.push_back(it);
 		PartBodies[it.get()] = bodyId;
 		return bodyId;
 	}
 
 	b3JointId WorldRoot::CreateConstraintJoint(std::shared_ptr<Constraint> it) {
+		if (!it || it->GetDestroyed() || it->IsDestroying() || !b3World_IsValid(World)) return b3_nullJointId;
 		auto [part0, part1] = it->GetActiveParts();
-		if (!part0 && !part1) return b3_nullJointId;
+		if (!part0 || !part1 || part0 == part1 || part0->GetDestroyed() || part1->GetDestroyed() ||
+			part0->IsDestroying() || part1->IsDestroying())
+			return b3_nullJointId;
 
-		b3BodyId body0 = PartBodies.contains(part0.get()) ? PartBodies[part0.get()] : CreatePartBody(part0);
-		b3BodyId body1 = PartBodies.contains(part1.get()) ? PartBodies[part1.get()] : CreatePartBody(part1);
+		auto constraintWorld = it->FindFirstAncestorWhichIsA("WorldRoot");
+		auto part0World = part0->FindFirstAncestorWhichIsA("WorldRoot");
+		auto part1World = part1->FindFirstAncestorWhichIsA("WorldRoot");
+		if (constraintWorld.get() != this || part0World.get() != this || part1World.get() != this)
+			return b3_nullJointId;
+
+		if (auto existing = ConstraintJoints.find(it.get()); existing != ConstraintJoints.end()) {
+			return b3Joint_IsValid(existing->second) ? existing->second : b3_nullJointId;
+		}
+
+		auto getOrCreateBody = [this](const std::shared_ptr<BasePart> &part) {
+			if (auto existing = PartBodies.find(part.get()); existing != PartBodies.end()) {
+				return b3Body_IsValid(existing->second) ? existing->second : b3_nullBodyId;
+			}
+			return CreatePartBody(part);
+		};
+
+		b3BodyId body0 = getOrCreateBody(part0);
+		if (!b3Body_IsValid(body0)) return b3_nullJointId;
+		b3BodyId body1 = getOrCreateBody(part1);
+		if (!b3Body_IsValid(body1)) return b3_nullJointId;
 
 		b3JointId joint = it->CreateJoint(&World, body0, body1);
+		if (!b3Joint_IsValid(joint)) return b3_nullJointId;
 		ConstraintJoints[it.get()] = joint;
 		return joint;
 	}
@@ -77,16 +102,16 @@ namespace gargantuan {
 
 		Destroying->Once([this](std::monostate _) {
 			for (auto &[_, joint] : ConstraintJoints) {
-				b3DestroyJoint(joint, false);
+				if (b3Joint_IsValid(joint)) b3DestroyJoint(joint, false);
 			};
 			ConstraintJoints.clear();
 
 			for (auto &[_, body] : PartBodies) {
-				b3DestroyBody(body);
+				if (b3Body_IsValid(body)) b3DestroyBody(body);
 			};
 			PartBodies.clear();
 
-			b3DestroyWorld(World);
+			if (b3World_IsValid(World)) b3DestroyWorld(World);
 		});
 
 		BindDescendants([this](std::shared_ptr<Instance> instance) -> void {
@@ -98,13 +123,17 @@ namespace gargantuan {
 		});
 
 		DescendantRemoved->Connect([this](std::shared_ptr<Instance> instance) {
-			if (auto it = std::static_pointer_cast<BasePart>(instance); it && PartBodies.contains(it.get())) {
+			if (auto it = std::dynamic_pointer_cast<BasePart>(instance); it && PartBodies.contains(it.get())) {
 				erase(Parts, it);
-				b3DestroyBody(this->PartBodies[it.get()]);
+				if (b3Body_IsValid(this->PartBodies[it.get()])) b3DestroyBody(this->PartBodies[it.get()]);
 				this->PartBodies.erase(it.get());
-			} else if (auto it = std::static_pointer_cast<Constraint>(instance);
+				std::erase_if(this->ConstraintJoints, [](const auto &entry) {
+					return !b3Joint_IsValid(entry.second);
+				});
+			} else if (auto it = std::dynamic_pointer_cast<Constraint>(instance);
 					   it && ConstraintJoints.contains(it.get())) {
-				b3DestroyJoint(this->ConstraintJoints[it.get()], true);
+				if (b3Joint_IsValid(this->ConstraintJoints[it.get()]))
+					b3DestroyJoint(this->ConstraintJoints[it.get()], true);
 				this->ConstraintJoints.erase(it.get());
 			}
 		});

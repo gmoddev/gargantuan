@@ -17,6 +17,7 @@
 #include "gargantuan/runtime/WireJournal.hpp"
 #include "gargantuan/scripting/ModuleResolution.hpp"
 #include "gargantuan/scripting/NativeCallback.hpp"
+#include "gargantuan/services/Workspace.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -31,6 +32,13 @@
 #include <thread>
 #include <type_traits>
 #include <vector>
+
+namespace gargantuan {
+	struct WorldRootTestAccess {
+		static std::size_t BodyCount(const WorldRoot &world) { return world.PartBodies.size(); }
+		static std::size_t JointCount(const WorldRoot &world) { return world.ConstraintJoints.size(); }
+	};
+}
 
 namespace {
 	template <typename Needle, typename Variant> struct VariantContains;
@@ -125,6 +133,64 @@ namespace {
 			Check(records[i - 1].Sequence < records[i].Sequence, "change records are strictly ordered");
 		Check(!records.empty(), "committed mutations produce change records");
 		Check(sawProperty && sawReparent && sawDestroy, "journal represents property, reparent, and destroy commits");
+	}
+
+	void TestWorldRootConstraintValidation() {
+		using namespace gargantuan;
+		auto game = std::make_shared<DataModel>();
+		auto workspace = std::dynamic_pointer_cast<Workspace>(game->GetService("Workspace"));
+		Check(workspace != nullptr, "WorldRoot regression fixture obtains Workspace");
+		if (!workspace) return;
+
+		auto unrelated = std::make_shared<Folder>();
+		unrelated->SetParent(workspace);
+		const auto bodiesBeforeRemoval = WorldRootTestAccess::BodyCount(*workspace);
+		const auto jointsBeforeRemoval = WorldRootTestAccess::JointCount(*workspace);
+		unrelated->SetParent(nullptr);
+		Check(
+			WorldRootTestAccess::BodyCount(*workspace) == bodiesBeforeRemoval &&
+				WorldRootTestAccess::JointCount(*workspace) == jointsBeforeRemoval,
+			"removing an unrelated descendant does not enter physics teardown paths"
+		);
+
+		auto bothMissing = std::make_shared<WeldConstraint>();
+		bothMissing->SetParent(workspace);
+		Check(WorldRootTestAccess::JointCount(*workspace) == 0, "constraint with both endpoints missing is rejected");
+		bothMissing->SetParent(nullptr);
+
+		auto part0 = std::make_shared<Part>();
+		auto part1 = std::make_shared<Part>();
+		part0->SetParent(workspace);
+		part1->SetParent(workspace);
+
+		auto part0Missing = std::make_shared<WeldConstraint>();
+		part0Missing->SetPart1(part1);
+		part0Missing->SetParent(workspace);
+		Check(WorldRootTestAccess::JointCount(*workspace) == 0, "constraint with only Part0 missing is rejected");
+		part0Missing->SetParent(nullptr);
+
+		auto part1Missing = std::make_shared<WeldConstraint>();
+		part1Missing->SetPart0(part0);
+		part1Missing->SetParent(workspace);
+		Check(WorldRootTestAccess::JointCount(*workspace) == 0, "constraint with only Part1 missing is rejected");
+		part1Missing->SetParent(nullptr);
+
+		auto valid = std::make_shared<WeldConstraint>();
+		valid->SetPart0(part0);
+		valid->SetPart1(part1);
+		valid->SetParent(workspace);
+		auto [activePart0, activePart1] = valid->GetActiveParts();
+		Check(activePart0 == part0 && activePart1 == part1, "WeldConstraint resolves both distinct endpoints");
+		Check(WorldRootTestAccess::JointCount(*workspace) == 1, "constraint with valid endpoints creates one joint");
+		valid->SetParent(nullptr);
+		Check(WorldRootTestAccess::JointCount(*workspace) == 0, "removing a valid constraint tears down its joint");
+
+		auto selfConstraint = std::make_shared<WeldConstraint>();
+		selfConstraint->SetPart0(part0);
+		selfConstraint->SetPart1(part0);
+		selfConstraint->SetParent(workspace);
+		Check(WorldRootTestAccess::JointCount(*workspace) == 0, "self constraints are rejected");
+		selfConstraint->SetParent(nullptr);
 	}
 
 	void TestCheckedResolutionAndOwnedPaths() {
@@ -667,6 +733,7 @@ namespace {
 int main() {
 	TestHierarchyAndDestruction();
 	TestObjectIdsAndChanges();
+	TestWorldRootConstraintValidation();
 	TestCheckedResolutionAndOwnedPaths();
 	TestJobSystem();
 	TestSchemaMetadata();
