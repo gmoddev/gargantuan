@@ -6,8 +6,9 @@
 #pragma once
 
 #include "gargantuan/classes/DataModel.hpp"
-#include "gargantuan/filesystem/DiskFilesystem.hpp"
 #include "gargantuan/editor/EditorViewport.hpp"
+#include "gargantuan/editor/SharedFrameRing.hpp"
+#include "gargantuan/filesystem/DiskFilesystem.hpp"
 #include "gargantuan/runtime/ChangeJournal.hpp"
 #include "gargantuan/runtime/MutationGateway.hpp"
 
@@ -42,6 +43,7 @@ namespace gargantuan {
 		MutationGateway Mutations;
 		std::shared_ptr<Camera> ViewportCamera;
 		std::unique_ptr<EditorViewportRenderer> ViewportRenderer;
+		std::unique_ptr<SharedFrameRing> ViewportFrameRing;
 		std::uint32_t ViewportWidth = 0;
 		std::uint32_t ViewportHeight = 0;
 		std::uint64_t ViewportFrameNumber = 0;

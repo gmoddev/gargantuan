@@ -50,7 +50,9 @@ limited to 256 records.
 | `SetProperty` | Applies a closed non-reference `WireValue` through `MutationGateway`. |
 | `ConfigureViewport` | Negotiates a bounded engine-owned RGB8 viewport. |
 | `SetViewportCamera` | Applies a finite absolute editor-camera pose and field of view. |
-| `CaptureViewport` | Returns a versioned Base64 RGB8 offscreen frame. |
+| `OpenViewportTransport` | Explicitly selects shared-memory ring v1 and returns its fixed layout contract. |
+| `CloseViewportTransport` | Releases the host's shared-memory mapping. |
+| `CaptureViewport` | Publishes RGB8 to the selected ring, or returns the versioned Base64 fallback. |
 | `PickViewport` | Resolves a viewport pixel to the nearest live BasePart `ObjectId`. |
 
 `SetProperty` accepts only live objects whose replication scope is the open
@@ -58,6 +60,9 @@ DataModel. The committed setter path remains responsible for journal emission.
 Object references, enum items, create, reparent, destroy, transactions, saving,
 source mounts, and play sessions are deliberately outside v0. Viewport methods
 are a compatible capability extension with their own `ViewportVersion = 1`.
+`Handshake.ViewportTransports` is authoritative: clients must negotiate rather
+than assuming shared memory. The current Windows host advertises
+`SharedMemoryRing` version 1 with RGB8; hosts without it advertise Base64 only.
 
 ## Licensing and repository contract
 
@@ -71,9 +76,9 @@ are a compatible capability extension with their own `ViewportVersion = 1`.
 
 ## Next interface increment
 
-The viewport vertical slice is implemented in
-[EditorViewport.md](./EditorViewport.md). Its synchronous Base64 frame should be
-replaced by a negotiated local surface/ring before high-frequency use. Before
-accepting broader mutation types, add same-scope reference validation,
-transaction IDs, editor command authority, and bounded enum/reference decoding
-through the mutation gateway.
+The bounded shared-memory viewport transport is implemented in
+[EditorViewport.md](./EditorViewport.md). The smallest viewport follow-up is a
+continuous native presentation loop with measured frame pacing; the request
+path currently renders one frame per `CaptureViewport`. Before accepting broader
+mutation types, add same-scope reference validation, transaction IDs, editor
+command authority, and bounded enum/reference decoding through the gateway.

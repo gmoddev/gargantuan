@@ -3,14 +3,16 @@
 ## Implemented now
 
 EditorHost owns an offscreen SDL GPU renderer. Studio never receives a GPU
-handle or links against renderer internals. The current synchronous vertical
-slice exposes four bounded protocol methods:
+handle or links against renderer internals. The viewport interface exposes six
+bounded protocol methods:
 
 | Method | Contract |
 | --- | --- |
 | `ConfigureViewport` | Negotiates an RGB8 surface up to 1024 x 1024 and one million pixels. |
 | `SetViewportCamera` | Sets a finite absolute position, target, and optional 1-120 degree vertical field of view. |
-| `CaptureViewport` | Renders the current Workspace and returns a versioned, Base64-encoded RGB8 frame. |
+| `OpenViewportTransport` | Explicitly opens the advertised version-1 RGB8 shared-memory ring. |
+| `CloseViewportTransport` | Releases the host's mapping handle. |
+| `CaptureViewport` | Renders the current Workspace and publishes to the open ring, or returns bounded Base64 fallback data. |
 | `PickViewport` | Casts a camera ray through a pixel and returns the nearest live BasePart `ObjectId`. |
 
 The renderer reuses the normal shadow and opaque passes against engine-owned
@@ -23,10 +25,41 @@ Camera pose, field of view, and viewport size belong to an EditorHost-owned
 session camera. They are not persisted in the project or published to the
 document change journal.
 
-The Base64 frame is intentionally a proof transport. It is bounded and easy to
-validate, but copies several times and is not the intended steady-state path.
-A later revision may negotiate a local shared texture or shared-memory ring
-while preserving the same camera, picking, identity, and error contracts.
+## Shared-memory frame ring v1
+
+The handshake advertises `SharedMemoryRing` only when the platform
+implementation is available. Studio must select version 1 and `RGB8` through
+`OpenViewportTransport`; it may not infer support. Windows is the implemented
+platform in this pass. Other platforms retain the Base64 version-1 fallback
+until an equivalent named mapping implementation exists.
+
+EditorHost creates and owns a random, session-scoped named mapping. Its fixed
+9,437,440-byte allocation contains a 64-byte ring header followed by three
+fixed-capacity slots. Each slot has a 64-byte header and space for at most
+1024 x 1024 x 3 RGB8 bytes. Headers describe the ring/frame version, sequence,
+timestamp, dimensions, format, payload byte count, and slot state. Neither
+mapping size nor slot offsets are supplied by Studio.
+
+Publication changes a selected slot from `Writing` to `Complete` only after its
+metadata and payload are copied. Sequence numbers increase monotonically within
+an open transport. The producer selects slots modulo three and never waits for
+the consumer, so allocation cannot grow and a slow Studio causes old frames to
+be overwritten. Studio scans for the newest complete sequence, copies it, then
+rechecks state and sequence; an incomplete or concurrently overwritten copy is
+discarded. Intermediate frames are explicitly ephemeral.
+
+On normal shutdown Studio closes its view and requests
+`CloseViewportTransport`; EditorHost then closes its mapping handle. EOF or a
+process crash also releases that process's operating-system handles. Windows
+removes the named mapping when the last handle closes, so normal sessions leave
+no persistent mapping resource. Failed validation closes any partially opened
+client view and asks the host to close its mapping.
+
+The mapping contains CPU RGB pixels, never GPU memory, pointers, or renderer
+objects. Its random name is disclosed only through the token-bound EditorHost
+session and uses the process token's default mapping access control. Consumers
+still validate every fixed header field, slot state, dimension, format,
+sequence, and payload size before use.
 
 Picking currently intersects BasePart-oriented bounding boxes. This is
 deterministic and sufficient to prove selection identity, but it is not yet
@@ -55,8 +88,8 @@ through the Studio document model.
 
 ## Remaining work
 
-- replace synchronous Base64 capture with a negotiated local surface/ring;
-- add frame backpressure and cancellation;
+- add a continuous capture/presentation loop and measure 30/60 FPS latency;
+- implement the same named-ring contract on non-Windows platforms;
 - add camera orbit/pan helpers above the absolute-pose command;
 - define mesh-accurate picking and editor-gizmo precedence;
 - make renderer lifetime/device-loss tests part of automated GPU CI; and

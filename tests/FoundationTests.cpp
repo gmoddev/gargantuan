@@ -644,6 +644,34 @@ namespace {
 		journal.Clear();
 	}
 
+	void TestSharedFrameRing() {
+		using namespace gargantuan;
+		if (!SharedFrameRing::IsSupported()) return;
+		SharedFrameRing ring;
+		Check(!ring.GetName().empty(), "shared frame ring has an unguessable session name");
+		Check(
+			ring.GetMappingBytes() == SharedFrameRingLayout::MappingBytes,
+			"shared frame ring allocation is fixed and bounded"
+		);
+		std::vector<std::uint8_t> pixels(4 * 4 * 3, 0x5a);
+		for (std::uint64_t sequence = 1; sequence <= 100; ++sequence) {
+			Check(
+				ring.Publish(4, 4, pixels, sequence) == sequence,
+				"shared frame publication sequence is monotonic"
+			);
+		}
+		Check(ring.GetLatestSequence() == 100, "shared frame ring retains the latest publication sequence");
+		CheckThrows<std::invalid_argument>(
+			[&] { ring.Publish(4, 4, std::span<const std::uint8_t>(pixels.data(), pixels.size() - 1), 101); },
+			"shared frame ring rejects impossible payload sizes"
+		);
+		ring.Close();
+		CheckThrows<std::runtime_error>(
+			[&] { ring.Publish(4, 4, pixels, 102); },
+			"closed shared frame rings reject publication"
+		);
+	}
+
 	void TestEditorHostProtocol() {
 		using Json = nlohmann::ordered_json;
 		using namespace gargantuan;
@@ -677,6 +705,38 @@ namespace {
 		Check(!unauthorized["Ok"].get<bool>() && unauthorized["Error"]["Code"] == "Unauthorized", "EditorHost rejects the wrong launch token");
 		auto handshake = call("Handshake", Json::object(), "test-token");
 		Check(handshake["Ok"].get<bool>() && handshake["Result"]["ProtocolVersion"] == 1, "EditorHost negotiates protocol version 1");
+		auto sharedTransport = std::find_if(
+			handshake["Result"]["ViewportTransports"].begin(),
+			handshake["Result"]["ViewportTransports"].end(),
+			[](const Json &transport) { return transport["Name"] == "SharedMemoryRing"; }
+		);
+		Check(
+			SharedFrameRing::IsSupported()
+				? sharedTransport != handshake["Result"]["ViewportTransports"].end()
+				: sharedTransport == handshake["Result"]["ViewportTransports"].end(),
+			"EditorHost advertises shared-memory viewport transport only when supported"
+		);
+		auto invalidTransport = call("OpenViewportTransport", {
+			{"Transport", "SharedMemoryRing"}, {"Version", 999}, {"PixelFormat", "RGB8"}
+		}, "test-token");
+		Check(
+			!invalidTransport["Ok"].get<bool>() &&
+				invalidTransport["Error"]["Code"] == "UnsupportedViewportTransport",
+			"EditorHost rejects unknown shared-memory transport versions"
+		);
+		if (SharedFrameRing::IsSupported()) {
+			auto openedTransport = call("OpenViewportTransport", {
+				{"Transport", "SharedMemoryRing"}, {"Version", 1}, {"PixelFormat", "RGB8"}
+			}, "test-token");
+			Check(
+				openedTransport["Ok"].get<bool>() &&
+					openedTransport["Result"]["SlotCount"] == SharedFrameRingLayout::SlotCount &&
+					openedTransport["Result"]["MappingBytes"] == SharedFrameRingLayout::MappingBytes,
+				"EditorHost opens the fixed-capacity shared-memory viewport ring"
+			);
+			auto closedTransport = call("CloseViewportTransport", Json::object(), "test-token");
+			Check(closedTransport["Ok"].get<bool>(), "EditorHost closes the shared-memory viewport ring explicitly");
+		}
 		auto schema = call("GetSchema", Json::object(), "test-token");
 		Check(schema["Ok"].get<bool>() && !schema["Result"]["Classes"].empty(), "EditorHost exposes reflected class schemas");
 
@@ -783,6 +843,7 @@ int main() {
 	TestBoundedJournalCursor();
 	TestSnapshotBaseline();
 	TestWireJournalAndLoopbackReplication();
+	TestSharedFrameRing();
 	TestEditorHostProtocol();
 	TestLuauExceptionBoundary();
 	if (Failures == 0) std::cout << "All foundation tests passed\n";

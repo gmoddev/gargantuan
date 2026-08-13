@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
@@ -163,18 +164,73 @@ namespace gargantuan {
 			if (method == "Handshake") {
 				if (!parameters.empty())
 					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Handshake takes no parameters"));
+				Json capabilities = {
+					"OpenProject", "Schema", "Snapshot", "Journal", "SetProperty",
+					"ConfigureViewport", "SetViewportCamera", "CaptureViewport", "PickViewport"
+				};
+				Json viewportTransports = Json::array({{
+					{"Name", "Base64"}, {"Version", 1}, {"PixelFormats", {"RGB8"}}
+				}});
+				if (SharedFrameRing::IsSupported()) {
+					capabilities.push_back("SharedMemoryViewport");
+					viewportTransports.push_back({
+						{"Name", "SharedMemoryRing"},
+						{"Version", SharedFrameRingLayout::Version},
+						{"PixelFormats", {"RGB8"}},
+						{"SlotCount", SharedFrameRingLayout::SlotCount},
+					});
+				}
 				return SerializeBoundedResponse(SuccessResponse(
 					requestId,
 					{
 						{"Engine", "Gargantuan"},
 						{"ProtocolVersion", EditorHostProtocolVersion},
-						{"Capabilities", {
-							"OpenProject", "Schema", "Snapshot", "Journal", "SetProperty",
-							"ConfigureViewport", "SetViewportCamera", "CaptureViewport", "PickViewport"
-						}},
+						{"Capabilities", std::move(capabilities)},
 						{"ViewportWireVersion", 1},
+						{"ViewportTransports", std::move(viewportTransports)},
 					}
 				));
+			}
+
+			if (method == "OpenViewportTransport") {
+				if (!HasOnlyFields(parameters, {"Transport", "Version", "PixelFormat"}) ||
+					parameters.value("Transport", "") != "SharedMemoryRing" ||
+					parameters.value("Version", 0u) != SharedFrameRingLayout::Version ||
+					parameters.value("PixelFormat", "") != "RGB8")
+					return SerializeBoundedResponse(ErrorResponse(
+						requestId, "UnsupportedViewportTransport", "Requested viewport transport contract is unsupported"
+					));
+				if (!SharedFrameRing::IsSupported())
+					return SerializeBoundedResponse(ErrorResponse(
+						requestId, "UnsupportedViewportTransport", "Shared-memory viewport transport is unavailable"
+					));
+				try {
+					if (!ViewportFrameRing) ViewportFrameRing = std::make_unique<SharedFrameRing>();
+					return SerializeBoundedResponse(SuccessResponse(requestId, {
+						{"Transport", "SharedMemoryRing"},
+						{"Version", SharedFrameRingLayout::Version},
+						{"Name", ViewportFrameRing->GetName()},
+						{"MappingBytes", ViewportFrameRing->GetMappingBytes()},
+						{"HeaderBytes", SharedFrameRingLayout::HeaderBytes},
+						{"SlotCount", SharedFrameRingLayout::SlotCount},
+						{"SlotHeaderBytes", SharedFrameRingLayout::SlotHeaderBytes},
+						{"SlotStride", SharedFrameRingLayout::SlotStride},
+						{"MaximumPayloadBytes", SharedFrameRingLayout::MaximumPayloadBytes},
+						{"PixelFormat", "RGB8"},
+					}));
+				} catch (const std::exception &error) {
+					ViewportFrameRing.reset();
+					return SerializeBoundedResponse(ErrorResponse(requestId, "ViewportTransportUnavailable", error.what()));
+				}
+			}
+
+			if (method == "CloseViewportTransport") {
+				if (!parameters.empty())
+					return SerializeBoundedResponse(ErrorResponse(
+						requestId, "MalformedRequest", "CloseViewportTransport takes no parameters"
+					));
+				ViewportFrameRing.reset();
+				return SerializeBoundedResponse(SuccessResponse(requestId, {{"Closed", true}}));
 			}
 
 			if (method == "OpenProject") {
@@ -333,10 +389,26 @@ namespace gargantuan {
 					if (!ViewportRenderer)
 						ViewportRenderer = std::make_unique<EditorViewportRenderer>(ViewportWidth, ViewportHeight);
 					auto frame = ViewportRenderer->Capture({.WorldRoot = workspace, .Camera = camera});
+					if (ViewportFrameRing) {
+						const auto timestamp = static_cast<std::uint64_t>(
+							std::chrono::duration_cast<std::chrono::nanoseconds>(
+								std::chrono::steady_clock::now().time_since_epoch()
+							).count()
+						);
+						const auto sequence = ViewportFrameRing->Publish(
+							frame.Width, frame.Height, frame.RgbPixels, timestamp
+						);
+						ViewportFrameNumber = sequence;
+						return SerializeBoundedResponse(SuccessResponse(requestId, {
+							{"ViewportVersion", 1}, {"FrameNumber", sequence},
+							{"Width", frame.Width}, {"Height", frame.Height}, {"Format", "RGB8"},
+							{"Transport", "SharedMemoryRing"}, {"TransportVersion", SharedFrameRingLayout::Version},
+						}));
+					}
 					return SerializeBoundedResponse(SuccessResponse(requestId, {
 						{"ViewportVersion", 1}, {"FrameNumber", ++ViewportFrameNumber},
 						{"Width", frame.Width}, {"Height", frame.Height}, {"Format", "RGB8"},
-						{"Encoding", "Base64"}, {"Pixels", EncodeBase64(frame.RgbPixels)},
+						{"Transport", "Base64"}, {"Encoding", "Base64"}, {"Pixels", EncodeBase64(frame.RgbPixels)},
 					}));
 				} catch (const std::exception &error) {
 					return SerializeBoundedResponse(ErrorResponse(requestId, "ViewportUnavailable", error.what()));

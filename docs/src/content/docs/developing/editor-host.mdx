@@ -51,6 +51,12 @@ The initial protocol supports:
 - absolute editor-camera commands; and
 - viewport picking that returns a stable `ObjectId`.
 
+The handshake advertises supported viewport transports. On Windows, Studio can
+explicitly negotiate shared-memory ring version 1 for RGB8 frames. The ring has
+three fixed-capacity slots; EditorHost overwrites old slots instead of waiting
+or growing memory, and Studio consumes the newest complete frame. Platforms
+without that capability use the bounded Base64 fallback.
+
 Opening a project does not initialize rendering, execute scripts, step the
 simulation, or synchronize `FileLink` objects. Unknown protocol versions,
 methods, fields, malformed values, and oversized messages fail closed.
@@ -66,10 +72,11 @@ new Studio repository is private and separately licensed. Studio may launch or
 communicate with a Gargantuan build, but it must not copy engine implementation
 or depend on private C++ headers.
 
-The initial viewport frame uses synchronous Base64 RGB8 transfer. It proves the
-engine/editor boundary but will be replaced by a negotiated local surface or
-shared-memory ring before high-frequency use. Picking currently uses BasePart
-oriented bounds.
+The shared mapping contains CPU pixel bytes and versioned metadata only. It
+never exposes GPU handles, pointers, or renderer objects. Studio validates the
+fixed layout, complete state, sequence, dimensions, format, and payload length;
+the named mapping disappears when both processes release their session handles.
+Picking currently uses BasePart-oriented bounds.
 
 The long-term Studio UI is intended to be Luau-authored. A small native shell
 will own process lifecycle, IPC, windows, viewport presentation, filesystem
