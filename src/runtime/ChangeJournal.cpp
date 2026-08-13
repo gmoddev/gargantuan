@@ -2,6 +2,10 @@
 #include "gargantuan/runtime/ExecutionDomain.hpp"
 
 namespace gargantuan {
+	namespace {
+		thread_local std::size_t SuppressionDepth = 0;
+	}
+
 	ChangeJournal &ChangeJournal::Get() {
 		static ChangeJournal Journal;
 		return Journal;
@@ -9,6 +13,7 @@ namespace gargantuan {
 
 	std::uint64_t ChangeJournal::Commit(ObjectId object, ChangePayload payload) {
 		AssertAuthoritativeMutation("ChangeJournal::Commit");
+		if (SuppressionDepth != 0) return 0;
 		std::scoped_lock lock(Mutex);
 		const auto sequence = NextSequence++;
 		Records.push_back({sequence, object, std::move(payload)});
@@ -64,5 +69,13 @@ namespace gargantuan {
 	void ChangeJournal::Clear() {
 		std::scoped_lock lock(Mutex);
 		Records.clear();
+	}
+
+	ScopedChangeJournalSuppression::ScopedChangeJournalSuppression() {
+		++SuppressionDepth;
+	}
+
+	ScopedChangeJournalSuppression::~ScopedChangeJournalSuppression() {
+		--SuppressionDepth;
 	}
 }

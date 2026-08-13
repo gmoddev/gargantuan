@@ -8,6 +8,7 @@
 #include "gargantuan/datatypes/Vector2.hpp"
 #include "gargantuan/reflection/InstanceClassRegistry.hpp"
 #include "gargantuan/runtime/ExecutionDomain.hpp"
+#include "gargantuan/runtime/WireCodec.hpp"
 
 #include <any>
 #include <nlohmann/json.hpp>
@@ -19,151 +20,27 @@ namespace gargantuan {
 		using Json = nlohmann::ordered_json;
 
 		Json EncodeId(WireObjectId id) {
-			return Json{{"Slot", id.Slot}, {"Generation", id.Generation}};
+			return EncodeWireObjectId(id);
 		}
 
 		std::optional<WireObjectId> DecodeId(const Json &value) {
-			if (!value.is_object() || !value.contains("Slot") || !value.contains("Generation") ||
-				!value["Slot"].is_number_unsigned() || !value["Generation"].is_number_unsigned())
-				return std::nullopt;
-			WireObjectId result{value["Slot"].get<std::uint32_t>(), value["Generation"].get<std::uint32_t>()};
-			return result.IsValid() ? std::optional(result) : std::nullopt;
+			return DecodeWireObjectId(value);
 		}
 
 		std::optional<WireValue> EncodeNativeValue(const std::any &value) {
-			if (auto *typed = std::any_cast<bool>(&value)) return *typed;
-			if (auto *typed = std::any_cast<int>(&value)) return *typed;
-			if (auto *typed = std::any_cast<double>(&value)) return *typed;
-			if (auto *typed = std::any_cast<float>(&value)) return WireFloat{*typed};
-			if (auto *typed = std::any_cast<std::string>(&value)) return *typed;
-			if (auto *typed = std::any_cast<std::string_view>(&value)) return std::string(*typed);
-			if (auto *typed = std::any_cast<Vector2>(&value)) return WireVector2{typed->GetX(), typed->GetY()};
-			if (auto *typed = std::any_cast<glm::vec3>(&value)) return WireVector3{typed->x, typed->y, typed->z};
-			if (auto *typed = std::any_cast<Color3>(&value)) return WireColor3{typed->R, typed->G, typed->B};
-			if (auto *typed = std::any_cast<UDim>(&value)) return WireUDim{typed->Scale, typed->Offset};
-			if (auto *typed = std::any_cast<UDim2>(&value))
-				return WireUDim2{{typed->X.Scale, typed->X.Offset}, {typed->Y.Scale, typed->Y.Offset}};
-			if (auto *typed = std::any_cast<CFrame>(&value)) {
-				return WireCFrame{{
-					typed->Position.x,
-					typed->Position.y,
-					typed->Position.z,
-					typed->Rotation[0][0],
-					typed->Rotation[0][1],
-					typed->Rotation[0][2],
-					typed->Rotation[1][0],
-					typed->Rotation[1][1],
-					typed->Rotation[1][2],
-					typed->Rotation[2][0],
-					typed->Rotation[2][1],
-					typed->Rotation[2][2],
-				}};
-			}
-			if (auto *typed = std::any_cast<EnumItem>(&value)) {
-				if (!typed->EnumType) return std::nullopt;
-				return WireEnumItem{std::string(typed->EnumType->Name), std::string(typed->Name)};
-			}
-			return std::nullopt;
+			return EncodeNativeWireValue(value);
 		}
 
 		std::optional<std::any> DecodeNativeValue(const WireValue &value) {
-			return std::visit(
-				[](const auto &typed) -> std::optional<std::any> {
-					using Value = std::decay_t<decltype(typed)>;
-					if constexpr (std::is_same_v<Value, std::monostate> ||
-						std::is_same_v<Value, WireObjectReference>) {
-						return std::nullopt;
-					} else if constexpr (std::is_same_v<Value, WireFloat>) {
-						return typed.Value;
-					} else if constexpr (std::is_same_v<Value, WireVector2>) {
-						return Vector2(typed.X, typed.Y);
-					} else if constexpr (std::is_same_v<Value, WireVector3>) {
-						return glm::vec3(typed.X, typed.Y, typed.Z);
-					} else if constexpr (std::is_same_v<Value, WireColor3>) {
-						return Color3(typed.R, typed.G, typed.B);
-					} else if constexpr (std::is_same_v<Value, WireUDim>) {
-						return UDim(typed.Scale, typed.Offset);
-					} else if constexpr (std::is_same_v<Value, WireUDim2>) {
-						return UDim2(
-							typed.X.Scale, typed.X.Offset, typed.Y.Scale, typed.Y.Offset
-						);
-					} else if constexpr (std::is_same_v<Value, WireCFrame>) {
-						const auto &c = typed.Components;
-						return CFrame(
-							glm::vec3(c[0], c[1], c[2]),
-							glm::mat3(
-								glm::vec3(c[3], c[6], c[9]),
-								glm::vec3(c[4], c[7], c[10]),
-								glm::vec3(c[5], c[8], c[11])
-							)
-						);
-					} else if constexpr (std::is_same_v<Value, WireEnumItem>) {
-						return std::nullopt;
-					} else {
-						return std::any(typed);
-					}
-				},
-				value
-			);
+			return DecodeNativeWireValue(value);
 		}
 
 		Json EncodeValue(const WireValue &value) {
-			return std::visit(
-				[](const auto &typed) -> Json {
-					using Value = std::decay_t<decltype(typed)>;
-					if constexpr (std::is_same_v<Value, std::monostate>) return {{"Type", "Null"}};
-					if constexpr (std::is_same_v<Value, bool>) return {{"Type", "Bool"}, {"Value", typed}};
-					if constexpr (std::is_same_v<Value, int>) return {{"Type", "Int"}, {"Value", typed}};
-					if constexpr (std::is_same_v<Value, double>) return {{"Type", "Double"}, {"Value", typed}};
-					if constexpr (std::is_same_v<Value, WireFloat>) return {{"Type", "Float"}, {"Value", typed.Value}};
-					if constexpr (std::is_same_v<Value, std::string>) return {{"Type", "String"}, {"Value", typed}};
-					if constexpr (std::is_same_v<Value, WireVector2>) return {{"Type", "Vector2"}, {"Value", {typed.X, typed.Y}}};
-					if constexpr (std::is_same_v<Value, WireVector3>) return {{"Type", "Vector3"}, {"Value", {typed.X, typed.Y, typed.Z}}};
-					if constexpr (std::is_same_v<Value, WireColor3>) return {{"Type", "Color3"}, {"Value", {typed.R, typed.G, typed.B}}};
-					if constexpr (std::is_same_v<Value, WireUDim>) return {{"Type", "UDim"}, {"Value", {typed.Scale, typed.Offset}}};
-					if constexpr (std::is_same_v<Value, WireUDim2>)
-						return {{"Type", "UDim2"}, {"Value", {typed.X.Scale, typed.X.Offset, typed.Y.Scale, typed.Y.Offset}}};
-					if constexpr (std::is_same_v<Value, WireCFrame>) return {{"Type", "CFrame"}, {"Value", typed.Components}};
-					if constexpr (std::is_same_v<Value, WireEnumItem>) return {{"Type", "EnumItem"}, {"Enum", typed.EnumType}, {"Value", typed.Item}};
-					if constexpr (std::is_same_v<Value, WireObjectReference>) return {{"Type", "ObjectReference"}, {"Value", EncodeId(typed.Object)}};
-				},
-				value
-			);
+			return EncodeWireValue(value);
 		}
 
 		std::optional<WireValue> DecodeValue(const Json &encoded) {
-			if (!encoded.is_object() || !encoded.contains("Type") || !encoded["Type"].is_string()) return std::nullopt;
-			const auto type = encoded["Type"].get<std::string>();
-			if (type == "Null") return std::monostate{};
-			if (!encoded.contains("Value")) return std::nullopt;
-			const auto &value = encoded["Value"];
-			if (type == "Bool" && value.is_boolean()) return value.get<bool>();
-			if (type == "Int" && value.is_number_integer()) return value.get<int>();
-			if (type == "Double" && value.is_number()) return value.get<double>();
-			if (type == "Float" && value.is_number()) return WireFloat{value.get<float>()};
-			if (type == "String" && value.is_string()) return value.get<std::string>();
-			if (type == "Vector2" && value.is_array() && value.size() == 2)
-				return WireVector2{value[0].get<float>(), value[1].get<float>()};
-			if (type == "Vector3" && value.is_array() && value.size() == 3)
-				return WireVector3{value[0].get<float>(), value[1].get<float>(), value[2].get<float>()};
-			if (type == "Color3" && value.is_array() && value.size() == 3)
-				return WireColor3{value[0].get<float>(), value[1].get<float>(), value[2].get<float>()};
-			if (type == "UDim" && value.is_array() && value.size() == 2)
-				return WireUDim{value[0].get<float>(), value[1].get<int>()};
-			if (type == "UDim2" && value.is_array() && value.size() == 4)
-				return WireUDim2{{value[0].get<float>(), value[1].get<int>()}, {value[2].get<float>(), value[3].get<int>()}};
-			if (type == "CFrame" && value.is_array() && value.size() == 12) {
-				WireCFrame result;
-				for (std::size_t i = 0; i < result.Components.size(); ++i) result.Components[i] = value[i].get<float>();
-				return result;
-			}
-			if (type == "EnumItem" && encoded.contains("Enum") && encoded["Enum"].is_string() && value.is_string())
-				return WireEnumItem{encoded["Enum"].get<std::string>(), value.get<std::string>()};
-			if (type == "ObjectReference") {
-				auto id = DecodeId(value);
-				if (id) return WireObjectReference{*id};
-			}
-			return std::nullopt;
+			return DecodeWireValue(encoded);
 		}
 
 		void CollectObjects(

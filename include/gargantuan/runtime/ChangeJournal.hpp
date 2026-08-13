@@ -2,7 +2,6 @@
 
 #include "gargantuan/runtime/ObjectId.hpp"
 
-#include <any>
 #include <cstdint>
 #include <deque>
 #include <limits>
@@ -12,9 +11,13 @@
 #include <variant>
 #include <vector>
 
+#include "gargantuan/runtime/WireValue.hpp"
+
 namespace gargantuan {
+	class InProcessReplicationSession;
+
 	struct ObjectCreatedChange { std::string ClassName; };
-	struct PropertyUpdatedChange { std::string PropertyName; std::any Value; };
+	struct PropertyUpdatedChange { std::string PropertyName; WireValue Value; };
 	struct ObjectReparentedChange { std::optional<ObjectId> Parent; };
 	struct ObjectDestroyedChange {};
 	using ChangePayload = std::variant<ObjectCreatedChange, PropertyUpdatedChange, ObjectReparentedChange, ObjectDestroyedChange>;
@@ -49,5 +52,14 @@ namespace gargantuan {
 		std::uint64_t NextSequence = 1;
 		std::size_t Capacity = 4096;
 		std::deque<ChangeRecord> Records;
+	};
+
+	class ScopedChangeJournalSuppression {
+	  private:
+		friend class InProcessReplicationSession;
+		ScopedChangeJournalSuppression();
+		~ScopedChangeJournalSuppression();
+		ScopedChangeJournalSuppression(const ScopedChangeJournalSuppression &) = delete;
+		ScopedChangeJournalSuppression &operator=(const ScopedChangeJournalSuppression &) = delete;
 	};
 }

@@ -6,6 +6,7 @@
 #include "gargantuan/runtime/ChangeJournal.hpp"
 #include "gargantuan/runtime/ExecutionDomain.hpp"
 #include "gargantuan/runtime/ObjectId.hpp"
+#include "gargantuan/runtime/WireCodec.hpp"
 
 #include <lua.h>
 #include <lualib.h>
@@ -77,8 +78,25 @@ namespace gargantuan {
 	void Instance::NotifyPropertyCommitted(std::string_view propertyName) {
 		AssertAuthoritativeMutation("Instance property mutation");
 		auto *property = FindProperty(std::string(propertyName));
-		std::any committedValue;
-		if (property && property->Read) committedValue = property->Read(this);
+		if (!property || !property->Read) throw std::runtime_error("Committed property is not readable");
+		WireValue committedValue;
+		if (property->ReadObjectReference) {
+			auto referenced = property->ReadObjectReference(this);
+			committedValue = referenced
+				? WireValue(WireObjectReference{WireObjectId::FromObjectId(referenced->GetObjectId())})
+				: WireValue(std::monostate{});
+		} else if (property->ReadEnumValue) {
+			auto [enumName, enumValue] = property->ReadEnumValue(this);
+			auto enumType = Enums::GetEnums().find(enumName);
+			if (enumType == Enums::GetEnums().end()) throw std::runtime_error("Committed enum type is not registered");
+			auto item = enumType->second->FromValue(enumValue);
+			if (!item) throw std::runtime_error("Committed enum value is not registered");
+			committedValue = WireEnumItem{enumName, std::string(item->Name)};
+		} else {
+			auto encoded = EncodeNativeWireValue(property->Read(this));
+			if (!encoded) throw std::runtime_error("Committed property has no wire encoding");
+			committedValue = std::move(*encoded);
+		}
 		ChangeJournal::Get().Commit(
 			GetObjectId(), PropertyUpdatedChange{std::string(propertyName), std::move(committedValue)}
 		);

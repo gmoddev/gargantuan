@@ -9,9 +9,11 @@
 #include "gargantuan/runtime/DataModelRoot.hpp"
 #include "gargantuan/runtime/ExecutionDomain.hpp"
 #include "gargantuan/runtime/JobSystem.hpp"
+#include "gargantuan/runtime/InProcessReplicationSession.hpp"
 #include "gargantuan/runtime/MutationGateway.hpp"
 #include "gargantuan/runtime/ObjectId.hpp"
 #include "gargantuan/runtime/Snapshot.hpp"
+#include "gargantuan/runtime/WireJournal.hpp"
 #include "gargantuan/scripting/ModuleResolution.hpp"
 #include "gargantuan/scripting/NativeCallback.hpp"
 
@@ -30,6 +32,10 @@ namespace {
 	template <typename Needle, typename... Values>
 	struct VariantContains<Needle, std::variant<Values...>> : std::bool_constant<(std::is_same_v<Needle, Values> || ...)> {};
 	static_assert(!VariantContains<std::any, gargantuan::WireValue>::value);
+	static_assert(std::is_same_v<
+		decltype(gargantuan::PropertyUpdatedChange::Value),
+		gargantuan::WireValue
+	>);
 
 	int Failures = 0;
 
@@ -215,7 +221,7 @@ namespace {
 		Check(
 			std::holds_alternative<PropertyUpdatedChange>(records.front().Payload) &&
 				std::get<PropertyUpdatedChange>(records.front().Payload).PropertyName == "Name" &&
-				std::any_cast<std::string>(std::get<PropertyUpdatedChange>(records.front().Payload).Value) == "FromWorker",
+				std::get<std::string>(std::get<PropertyUpdatedChange>(records.front().Payload).Value) == "FromWorker",
 			"property command records the committed property value"
 		);
 
@@ -388,6 +394,132 @@ namespace {
 		journal.Clear();
 	}
 
+	void TestWireJournalAndLoopbackReplication() {
+		using namespace gargantuan;
+		auto &journal = ChangeJournal::Get();
+		const auto originalCapacity = journal.GetCapacity();
+		journal.Clear();
+		journal.SetCapacity(64);
+
+		auto source = std::make_shared<DataModel>();
+		source->SetName("SourceGame");
+		auto first = std::make_shared<Part>();
+		first->SetName("First");
+		first->SetTransparency(0.1f);
+		first->SetParent(source);
+		auto weld = std::make_shared<WeldConstraint>();
+		weld->SetName("Link");
+		weld->SetPart0(first);
+		weld->SetParent(source);
+
+		auto started = InProcessReplicationSession::Start(source);
+		Check(started.Succeeded(), "loopback session loads a serialized snapshot baseline");
+		auto session = started.Session;
+		Check(session && session->GetReceiverRoot(), "loopback session owns a receiver root");
+		Check(session->GetReceiverRoot() != source, "receiver state is distinct from authoritative source state");
+		Check(
+			session->ApplyAvailable().Status == ReplicationApplyStatus::NoChanges,
+			"snapshot plus zero deltas is already synchronized"
+		);
+
+		auto second = std::make_shared<Part>();
+		second->SetName("Second");
+		second->SetTransparency(0.4f);
+		weld->SetPart1(second);
+		second->SetParent(source);
+		first->SetTransparency(0.75f);
+
+		auto applied = session->ApplyAvailable();
+		Check(applied.Succeeded() && applied.AppliedRecords > 0, "ordered wire journal deltas apply successfully");
+		auto receiverFirst = std::dynamic_pointer_cast<Part>(
+			session->GetReceiverRoot()->FindFirstChild("First", false)
+		);
+		auto receiverSecond = std::dynamic_pointer_cast<Part>(
+			session->GetReceiverRoot()->FindFirstChild("Second", false)
+		);
+		auto receiverWeld = std::dynamic_pointer_cast<WeldConstraint>(
+			session->GetReceiverRoot()->FindFirstChild("Link", false)
+		);
+		Check(receiverFirst && receiverFirst->GetTransparency() == 0.75f, "property delta reproduces source state");
+		Check(receiverSecond && receiverSecond->GetTransparency() == 0.4f, "create and pre-parent properties reproduce source state");
+		Check(receiverWeld && receiverWeld->GetPart1() == receiverSecond, "create-before-reference ordering resolves correctly");
+
+		const auto cursor = session->GetCursor();
+		WireJournalRecord duplicate{
+			.Sequence = cursor.NextSequence - 1,
+			.Operation = WireJournalOperation::Destroy,
+			.Object = WireObjectId::FromObjectId(first->GetObjectId()),
+		};
+		Check(
+			session->ApplyWireRecords({duplicate}).Status == ReplicationApplyStatus::DuplicateRecord,
+			"duplicate records are explicitly rejected"
+		);
+		auto outOfOrder = duplicate;
+		outOfOrder.Sequence = cursor.NextSequence + 1;
+		Check(
+			session->ApplyWireRecords({outOfOrder}).Status == ReplicationApplyStatus::OutOfOrderRecord,
+			"out-of-order records are rejected"
+		);
+
+		const auto secondWireId = WireObjectId::FromObjectId(second->GetObjectId());
+		second->Destroy();
+		Check(session->ApplyAvailable().Succeeded(), "destroy delta applies in source order");
+		Check(!session->ResolveReceiver(secondWireId), "destroy invalidates receiver reference lookup");
+		WireJournalRecord staleReference{
+			.Sequence = session->GetCursor().NextSequence,
+			.Operation = WireJournalOperation::PropertyUpdate,
+			.Object = WireObjectId::FromObjectId(weld->GetObjectId()),
+			.PropertyName = "Part1",
+			.Value = WireObjectReference{secondWireId},
+		};
+		Check(
+			session->ApplyWireRecords({staleReference}).Status == ReplicationApplyStatus::ApplyRejected,
+			"later references to destroyed objects are rejected"
+		);
+		weld->SetPart1(std::nullopt);
+
+		auto encodedRecords = std::vector{
+			WireJournalRecord{
+				.Sequence = 1,
+				.Operation = WireJournalOperation::PropertyUpdate,
+				.Object = WireObjectId::FromObjectId(first->GetObjectId()),
+				.PropertyName = "Transparency",
+				.Value = WireFloat{0.5f},
+			}
+		};
+		const auto serializedRecords = SerializeWireJournalRecords(encodedRecords);
+		auto parsedRecords = DeserializeWireJournalRecords(serializedRecords);
+		Check(parsedRecords.Succeeded(), "wire journal records round-trip through the shared WireValue codec");
+		Check(serializedRecords.find("\"Type\":\"Float\"") != std::string::npos, "journal property values use WireValue encoding");
+		Check(
+			!DeserializeWireJournalRecords("{\"Version\":999,\"Records\":[]}").Succeeded(),
+			"unknown wire journal envelope versions fail closed"
+		);
+		Check(
+			!DeserializeWireJournalRecords(
+				"{\"Version\":1,\"Records\":[{\"Version\":2,\"Sequence\":1,\"Operation\":\"Destroy\",\"ObjectId\":{\"Slot\":1,\"Generation\":1}}]}"
+			).Succeeded(),
+			"unknown wire journal record versions fail closed"
+		);
+
+		journal.Clear();
+		auto staleStarted = InProcessReplicationSession::Start(source);
+		Check(staleStarted.Succeeded(), "stale-cursor probe session starts");
+		journal.SetCapacity(1);
+		first->SetTransparency(0.2f);
+		first->SetTransparency(0.3f);
+		Check(
+			staleStarted.Session->ApplyAvailable().Status == ReplicationApplyStatus::ResnapshotRequired,
+			"evicted replication cursor requires a new snapshot"
+		);
+
+		const auto sourceName = first->GetName();
+		receiverFirst->SetName("ReceiverOnly");
+		Check(first->GetName() == sourceName, "receiver mutation cannot mutate authoritative source state");
+		journal.SetCapacity(originalCapacity);
+		journal.Clear();
+	}
+
 	void TestLuauExceptionBoundary() {
 		lua_State *L = luaL_newstate();
 		lua_pushcfunction(L, [](lua_State *state) {
@@ -419,6 +551,7 @@ int main() {
 	TestMutationGateway();
 	TestBoundedJournalCursor();
 	TestSnapshotBaseline();
+	TestWireJournalAndLoopbackReplication();
 	TestLuauExceptionBoundary();
 	if (Failures == 0) std::cout << "All foundation tests passed\n";
 	return Failures == 0 ? 0 : 1;
