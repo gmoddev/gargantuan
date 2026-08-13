@@ -7,6 +7,7 @@
 
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/filesystem/DiskFilesystem.hpp"
+#include "gargantuan/editor/EditorViewport.hpp"
 #include "gargantuan/runtime/ChangeJournal.hpp"
 #include "gargantuan/runtime/MutationGateway.hpp"
 
@@ -22,6 +23,8 @@ namespace gargantuan {
 	inline constexpr std::uint32_t EditorHostProtocolVersion = 1;
 	inline constexpr std::size_t EditorHostMaximumRequestBytes = 1024 * 1024;
 	inline constexpr std::size_t EditorHostMaximumResponseBytes = 8 * 1024 * 1024;
+	inline constexpr std::uint32_t EditorHostMaximumViewportDimension = 1024;
+	inline constexpr std::uint64_t EditorHostMaximumViewportPixels = 1024 * 1024;
 	inline constexpr std::string_view EditorHostResponsePrefix = "GARGANTUAN_EDITOR/1 ";
 
 	class EditorHost {
@@ -37,5 +40,10 @@ namespace gargantuan {
 		std::shared_ptr<DataModel> World;
 		std::optional<ChangeCursor> Cursor;
 		MutationGateway Mutations;
+		std::shared_ptr<Camera> ViewportCamera;
+		std::unique_ptr<EditorViewportRenderer> ViewportRenderer;
+		std::uint32_t ViewportWidth = 0;
+		std::uint32_t ViewportHeight = 0;
+		std::uint64_t ViewportFrameNumber = 0;
 	};
 }

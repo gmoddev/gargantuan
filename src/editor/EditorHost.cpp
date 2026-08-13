@@ -6,13 +6,18 @@
 #include "gargantuan/editor/EditorHost.hpp"
 
 #include "gargantuan/InstanceProperty.hpp"
+#include "gargantuan/classes/Camera.hpp"
 #include "gargantuan/filesystem/Project.hpp"
 #include "gargantuan/reflection/InstanceClassRegistry.hpp"
 #include "gargantuan/runtime/Snapshot.hpp"
 #include "gargantuan/runtime/WireCodec.hpp"
 #include "gargantuan/runtime/WireJournal.hpp"
+#include "gargantuan/services/Workspace.hpp"
 
 #include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstdint>
 #include <filesystem>
 #include <nlohmann/json.hpp>
 #include <stdexcept>
@@ -95,6 +100,36 @@ namespace gargantuan {
 				{"NextSequence", cursor.NextSequence},
 			};
 		}
+
+		std::optional<glm::vec3> DecodeVector3(const Json &value) {
+			if (!value.is_array() || value.size() != 3) return std::nullopt;
+			glm::vec3 result;
+			for (std::size_t index = 0; index < 3; ++index) {
+				if (!value[index].is_number()) return std::nullopt;
+				const auto component = value[index].get<double>();
+				if (!std::isfinite(component) || std::abs(component) > 1'000'000.0) return std::nullopt;
+				result[index] = static_cast<float>(component);
+			}
+			return result;
+		}
+
+		std::string EncodeBase64(const std::vector<std::uint8_t> &bytes) {
+			static constexpr std::string_view Alphabet =
+				"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+			std::string result;
+			result.reserve(((bytes.size() + 2) / 3) * 4);
+			for (std::size_t index = 0; index < bytes.size(); index += 3) {
+				const std::uint32_t first = bytes[index];
+				const std::uint32_t second = index + 1 < bytes.size() ? bytes[index + 1] : 0;
+				const std::uint32_t third = index + 2 < bytes.size() ? bytes[index + 2] : 0;
+				const std::uint32_t value = (first << 16) | (second << 8) | third;
+				result.push_back(Alphabet[(value >> 18) & 0x3f]);
+				result.push_back(Alphabet[(value >> 12) & 0x3f]);
+				result.push_back(index + 1 < bytes.size() ? Alphabet[(value >> 6) & 0x3f] : '=');
+				result.push_back(index + 2 < bytes.size() ? Alphabet[value & 0x3f] : '=');
+			}
+			return result;
+		}
 	}
 
 	EditorHost::EditorHost(std::string sessionToken) : SessionToken(std::move(sessionToken)) {
@@ -133,7 +168,11 @@ namespace gargantuan {
 					{
 						{"Engine", "Gargantuan"},
 						{"ProtocolVersion", EditorHostProtocolVersion},
-						{"Capabilities", {"OpenProject", "Schema", "Snapshot", "Journal", "SetProperty"}},
+						{"Capabilities", {
+							"OpenProject", "Schema", "Snapshot", "Journal", "SetProperty",
+							"ConfigureViewport", "SetViewportCamera", "CaptureViewport", "PickViewport"
+						}},
+						{"ViewportWireVersion", 1},
 					}
 				));
 			}
@@ -154,7 +193,17 @@ namespace gargantuan {
 				Filesystem = std::move(filesystem);
 				World = std::move(world);
 				World->Filesystem = Filesystem.get();
+				auto workspace = std::dynamic_pointer_cast<Workspace>(World->GetService("Workspace"));
+				if (!workspace)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "InvalidProject", "Project has no valid Workspace"));
+				{
+					ScopedChangeJournalSuppression suppressSessionState;
+					ViewportCamera = std::make_shared<Camera>();
+				}
 				Cursor.reset();
+				ViewportWidth = 0;
+				ViewportHeight = 0;
+				ViewportFrameNumber = 0;
 				return SerializeBoundedResponse(SuccessResponse(
 					requestId,
 					{{"Root", EncodeWireObjectId(WireObjectId::FromObjectId(World->GetObjectId()))}}
@@ -208,6 +257,107 @@ namespace gargantuan {
 
 			if (!World)
 				return SerializeBoundedResponse(ErrorResponse(requestId, "ProjectRequired", "OpenProject must succeed first"));
+
+			auto workspace = std::dynamic_pointer_cast<Workspace>(World->GetService("Workspace"));
+			auto camera = ViewportCamera;
+			if (!workspace || !camera)
+				return SerializeBoundedResponse(ErrorResponse(requestId, "InvalidProject", "Project has no valid editor viewport state"));
+
+			if (method == "ConfigureViewport") {
+				if (!HasOnlyFields(parameters, {"Width", "Height"}) ||
+					!parameters.contains("Width") || !parameters["Width"].is_number_unsigned() ||
+					!parameters.contains("Height") || !parameters["Height"].is_number_unsigned())
+					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Viewport dimensions must be unsigned"));
+				const auto width = parameters["Width"].get<std::uint32_t>();
+				const auto height = parameters["Height"].get<std::uint32_t>();
+				if (width == 0 || height == 0 || width > EditorHostMaximumViewportDimension ||
+					height > EditorHostMaximumViewportDimension ||
+					static_cast<std::uint64_t>(width) * height > EditorHostMaximumViewportPixels)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "ViewportTooLarge", "Viewport dimensions exceed protocol limits"));
+				const bool firstConfiguration = ViewportWidth == 0 || ViewportHeight == 0;
+				ViewportWidth = width;
+				ViewportHeight = height;
+				{
+					ScopedChangeJournalSuppression suppressSessionState;
+					camera->SetViewportSize(Vector2(static_cast<float>(width), static_cast<float>(height)));
+					if (firstConfiguration)
+						camera->SetCFrame(CFrame::lookAt({10.0f, 10.0f, 10.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}));
+				}
+				if (ViewportRenderer) {
+					try {
+						ViewportRenderer->Resize(width, height);
+					} catch (const std::exception &error) {
+						ViewportRenderer.reset();
+						return SerializeBoundedResponse(ErrorResponse(requestId, "ViewportUnavailable", error.what()));
+					}
+				}
+				return SerializeBoundedResponse(SuccessResponse(requestId, {
+					{"ViewportVersion", 1}, {"Width", width}, {"Height", height}, {"Format", "RGB8"}
+				}));
+			}
+
+			if (method == "SetViewportCamera") {
+				if (!HasOnlyFields(parameters, {"Position", "Target", "FieldOfView"}) ||
+					!parameters.contains("Position") || !parameters.contains("Target"))
+					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Camera Position and Target are required"));
+				auto position = DecodeVector3(parameters["Position"]);
+				auto target = DecodeVector3(parameters["Target"]);
+				if (!position || !target || glm::length(*target - *position) < 1e-4f)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "InvalidCamera", "Camera vectors are invalid or coincident"));
+				float fieldOfView = camera->GetFieldOfView();
+				if (parameters.contains("FieldOfView")) {
+					if (!parameters["FieldOfView"].is_number())
+						return SerializeBoundedResponse(ErrorResponse(requestId, "InvalidCamera", "FieldOfView must be numeric"));
+					fieldOfView = parameters["FieldOfView"].get<float>();
+					if (!std::isfinite(fieldOfView) || fieldOfView < 1.0f || fieldOfView > 120.0f)
+						return SerializeBoundedResponse(ErrorResponse(requestId, "InvalidCamera", "FieldOfView is out of range"));
+				}
+				{
+					ScopedChangeJournalSuppression suppressSessionState;
+					camera->SetCFrame(CFrame::lookAt(*position, *target, {0.0f, 1.0f, 0.0f}));
+					camera->SetFieldOfView(fieldOfView);
+				}
+				return SerializeBoundedResponse(SuccessResponse(requestId, {
+					{"Position", {position->x, position->y, position->z}},
+					{"Target", {target->x, target->y, target->z}},
+					{"FieldOfView", fieldOfView},
+				}));
+			}
+
+			if (method == "CaptureViewport") {
+				if (!parameters.empty())
+					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "CaptureViewport takes no parameters"));
+				if (ViewportWidth == 0 || ViewportHeight == 0)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "ViewportRequired", "ConfigureViewport must succeed first"));
+				try {
+					if (!ViewportRenderer)
+						ViewportRenderer = std::make_unique<EditorViewportRenderer>(ViewportWidth, ViewportHeight);
+					auto frame = ViewportRenderer->Capture({.WorldRoot = workspace, .Camera = camera});
+					return SerializeBoundedResponse(SuccessResponse(requestId, {
+						{"ViewportVersion", 1}, {"FrameNumber", ++ViewportFrameNumber},
+						{"Width", frame.Width}, {"Height", frame.Height}, {"Format", "RGB8"},
+						{"Encoding", "Base64"}, {"Pixels", EncodeBase64(frame.RgbPixels)},
+					}));
+				} catch (const std::exception &error) {
+					return SerializeBoundedResponse(ErrorResponse(requestId, "ViewportUnavailable", error.what()));
+				}
+			}
+
+			if (method == "PickViewport") {
+				if (!HasOnlyFields(parameters, {"X", "Y"}) || !parameters.contains("X") ||
+					!parameters["X"].is_number() || !parameters.contains("Y") || !parameters["Y"].is_number())
+					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "PickViewport requires numeric X and Y"));
+				if (ViewportWidth == 0 || ViewportHeight == 0)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "ViewportRequired", "ConfigureViewport must succeed first"));
+				auto pick = PickEditorViewport(
+					workspace, camera, ViewportWidth, ViewportHeight,
+					parameters["X"].get<float>(), parameters["Y"].get<float>()
+				);
+				return SerializeBoundedResponse(SuccessResponse(requestId, {
+					{"Object", pick ? Json(EncodeWireObjectId(WireObjectId::FromObjectId(pick->Object))) : Json(nullptr)},
+					{"Distance", pick ? Json(pick->Distance) : Json(nullptr)},
+				}));
+			}
 
 			if (method == "GetSnapshot") {
 				if (!parameters.empty())

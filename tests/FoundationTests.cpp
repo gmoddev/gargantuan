@@ -657,7 +657,7 @@ namespace {
 		} cleanup{temporaryRoot};
 		std::filesystem::create_directories(temporaryRoot / ".gargantuan");
 		std::ofstream project(temporaryRoot / ".gargantuan" / "project.instance.json", std::ios::binary);
-		project << R"({"Version":0,"Name":"EditorWorld","ClassName":"DataModel","Properties":{},"Children":[{"Name":"Editable","ClassName":"Folder","Properties":{},"Children":[]}]})";
+		project << R"({"Version":0,"Name":"EditorWorld","ClassName":"DataModel","Properties":{},"Children":[{"Name":"Editable","ClassName":"Folder","Properties":{},"Children":[]},{"Name":"Workspace","ClassName":"Workspace","Properties":{},"Children":[{"Name":"PickTarget","ClassName":"Part","Properties":{},"Children":[]}]}]})";
 		project.close();
 
 		EditorHost host("test-token");
@@ -703,6 +703,48 @@ namespace {
 				"EditorHost publishes the committed mutation as one journal record"
 			);
 		}
+
+		auto captureBeforeConfiguration = call("CaptureViewport", Json::object(), "test-token");
+		Check(
+			!captureBeforeConfiguration["Ok"].get<bool>() &&
+				captureBeforeConfiguration["Error"]["Code"] == "ViewportRequired",
+			"viewport capture requires bounded configuration"
+		);
+		auto oversizedViewport = call("ConfigureViewport", {{"Width", 2048}, {"Height", 2048}}, "test-token");
+		Check(
+			!oversizedViewport["Ok"].get<bool>() && oversizedViewport["Error"]["Code"] == "ViewportTooLarge",
+			"viewport configuration enforces dimension and pixel bounds"
+		);
+		auto configuredViewport = call("ConfigureViewport", {{"Width", 320}, {"Height", 200}}, "test-token");
+		Check(
+			configuredViewport["Ok"].get<bool>() && configuredViewport["Result"]["Format"] == "RGB8",
+			"EditorHost negotiates a bounded RGB viewport surface"
+		);
+		auto invalidCamera = call("SetViewportCamera", {
+			{"Position", {0.0, 0.0, 10.0}}, {"Target", {0.0, 0.0, 10.0}}
+		}, "test-token");
+		Check(
+			!invalidCamera["Ok"].get<bool>() && invalidCamera["Error"]["Code"] == "InvalidCamera",
+			"viewport camera rejects coincident position and target"
+		);
+		auto camera = call("SetViewportCamera", {
+			{"Position", {0.0, 0.0, 10.0}}, {"Target", {0.0, 0.0, 0.0}}, {"FieldOfView", 70.0}
+		}, "test-token");
+		Check(camera["Ok"].get<bool>(), "EditorHost applies an absolute viewport camera command");
+		auto cameraChanges = call("PollChanges", Json::object(), "test-token");
+		Check(
+			cameraChanges["Ok"].get<bool>() && cameraChanges["Result"]["Records"].empty(),
+			"viewport camera session state does not enter the document journal"
+		);
+		auto picked = call("PickViewport", {{"X", 159.5}, {"Y", 99.5}}, "test-token");
+		auto pickTarget = std::find_if(objects.begin(), objects.end(), [](const Json &object) {
+			return object["Name"] == "PickTarget";
+		});
+		Check(
+			picked["Ok"].get<bool>() && pickTarget != objects.end() &&
+				picked["Result"]["Object"] == (*pickTarget)["Id"],
+			"viewport picking returns the selected Part ObjectId"
+		);
 
 		auto malformed = Json::parse(host.HandleRequest(std::string(EditorHostMaximumRequestBytes + 1, 'x')));
 		Check(!malformed["Ok"].get<bool>() && malformed["Error"]["Code"] == "MalformedRequest", "EditorHost rejects oversized direct requests before parsing");

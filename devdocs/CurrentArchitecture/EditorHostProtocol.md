@@ -48,12 +48,16 @@ limited to 256 records.
 | `GetSnapshot` | Returns snapshot v2 and establishes the session cursor. |
 | `PollChanges` | Returns scoped wire-journal v2 records after that cursor. |
 | `SetProperty` | Applies a closed non-reference `WireValue` through `MutationGateway`. |
+| `ConfigureViewport` | Negotiates a bounded engine-owned RGB8 viewport. |
+| `SetViewportCamera` | Applies a finite absolute editor-camera pose and field of view. |
+| `CaptureViewport` | Returns a versioned Base64 RGB8 offscreen frame. |
+| `PickViewport` | Resolves a viewport pixel to the nearest live BasePart `ObjectId`. |
 
 `SetProperty` accepts only live objects whose replication scope is the open
 DataModel. The committed setter path remains responsible for journal emission.
 Object references, enum items, create, reparent, destroy, transactions, saving,
-source mounts, viewport transport, and play sessions are deliberately outside
-v0.
+source mounts, and play sessions are deliberately outside v0. Viewport methods
+are a compatible capability extension with their own `ViewportVersion = 1`.
 
 ## Licensing and repository contract
 
@@ -67,7 +71,9 @@ v0.
 
 ## Next interface increment
 
-The smallest next increment after the v0 proof is renderer-owned viewport output
-plus picking and camera commands. Before accepting broader mutation types, add
-same-scope reference validation, transaction IDs, editor command authority, and
-bounded enum/reference decoding through the mutation gateway.
+The viewport vertical slice is implemented in
+[EditorViewport.md](./EditorViewport.md). Its synchronous Base64 frame should be
+replaced by a negotiated local surface/ring before high-frequency use. Before
+accepting broader mutation types, add same-scope reference validation,
+transaction IDs, editor command authority, and bounded enum/reference decoding
+through the mutation gateway.

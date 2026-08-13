@@ -69,6 +69,7 @@ namespace gargantuan {
 
 	class ScopedChangeJournalSuppression {
 	  private:
+		friend class EditorHost;
 		friend class InProcessReplicationSession;
 		ScopedChangeJournalSuppression();
 		~ScopedChangeJournalSuppression();

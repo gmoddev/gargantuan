@@ -12,6 +12,9 @@ in-process receiver.
 See [EditorHost v0](./EditorHostProtocol.md) for the implemented process boundary
 between the public MPL-2.0 engine and independently authored Studio clients.
 
+See [Editor viewport v1](./EditorViewport.md) for offscreen frame capture,
+camera commands, ObjectId picking, and the future Luau Studio UI service boundary.
+
 ## Scope and headline
 
 The current product is one C++23 executable. It owns an SDL window/GPU device (or
