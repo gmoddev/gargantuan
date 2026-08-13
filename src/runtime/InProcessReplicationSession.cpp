@@ -8,9 +8,17 @@
 #include "gargantuan/runtime/WireCodec.hpp"
 
 #include <exception>
+#include <unordered_set>
 #include <utility>
 
 namespace gargantuan {
+	namespace {
+		void CollectSubtree(const std::shared_ptr<Instance> &instance, std::unordered_set<Instance *> &subtree) {
+			if (!instance || !subtree.insert(instance.get()).second) return;
+			for (const auto &child : instance->Children) CollectSubtree(child, subtree);
+		}
+	}
+
 	ReplicationSessionStartResult InProcessReplicationSession::Start(const std::shared_ptr<Instance> &sourceRoot) {
 		AssertAuthoritativeMutation("InProcessReplicationSession::Start");
 		ReplicationSessionStartResult result;
@@ -77,8 +85,11 @@ namespace gargantuan {
 		if (records.empty()) return {ReplicationApplyStatus::NoChanges, 0, {}};
 		std::size_t applied = 0;
 		for (const auto &record : records) {
-			if (record.Version != WireJournalFormatVersion || !record.Object.IsValid() || record.Sequence == 0)
+			if (record.Version != WireJournalFormatVersion || !record.Scope.IsValid() ||
+				!record.Object.IsValid() || record.Sequence == 0)
 				return {ReplicationApplyStatus::MalformedRecord, applied, "Malformed or unsupported wire journal record"};
+			if (record.Scope.ToObjectId() != Cursor.Scope)
+				return {ReplicationApplyStatus::ApplyRejected, applied, "Wire journal record belongs to another replication scope"};
 			if (record.Sequence < Cursor.NextSequence)
 				return {ReplicationApplyStatus::DuplicateRecord, applied, "Duplicate wire journal sequence"};
 			if (record.Sequence > Cursor.NextSequence)
@@ -109,8 +120,9 @@ namespace gargantuan {
 		}
 
 		auto *property = instance->FindProperty(*record.PropertyName);
-		if (!property || !property->Write)
-			return {ReplicationApplyStatus::ApplyRejected, 0, "Receiver property is unknown or read-only"};
+		if (!property || property->ReplicationPolicy != InstanceProperty::Replication::FutureReplicated ||
+			!property->Write)
+			return {ReplicationApplyStatus::ApplyRejected, 0, "Receiver property is unknown, read-only, or not replicated"};
 		try {
 			if (std::holds_alternative<std::monostate>(*record.Value) ||
 				std::holds_alternative<WireObjectReference>(*record.Value)) {
@@ -189,8 +201,18 @@ namespace gargantuan {
 						return {ReplicationApplyStatus::MalformedRecord, 0, "Destroy contains unrelated metadata"};
 					auto instance = ResolveReceiver(record.Object);
 					if (!instance) return {ReplicationApplyStatus::ApplyRejected, 0, "Destroy target is stale or missing"};
+					std::unordered_set<Instance *> subtree;
+					CollectSubtree(instance, subtree);
 					instance->Destroy();
-					CandidateObjects.erase(record.Object);
+					for (auto object = Receiver.Objects.begin(); object != Receiver.Objects.end();) {
+						if (!subtree.contains(object->second.get())) {
+							++object;
+							continue;
+						}
+						TrackedObjects.erase(object->first);
+						CandidateObjects.erase(object->first);
+						object = Receiver.Objects.erase(object);
+					}
 					break;
 				}
 			}

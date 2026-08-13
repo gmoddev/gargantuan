@@ -11,6 +11,7 @@ return c({
 			type = t.CFrame,
 			unmodified = "gargantuan::CFrame()",
 			serializable = true,
+			replicated = true,
 		},
 	},
 })

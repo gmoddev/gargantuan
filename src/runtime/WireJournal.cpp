@@ -39,6 +39,7 @@ namespace gargantuan {
 	WireJournalRecord EncodeChangeRecord(const ChangeRecord &record) {
 		WireJournalRecord encoded{
 			.Sequence = record.Sequence,
+			.Scope = WireObjectId::FromObjectId(record.Scope),
 			.Object = WireObjectId::FromObjectId(record.Object),
 		};
 		std::visit(
@@ -48,6 +49,8 @@ namespace gargantuan {
 					encoded.Operation = WireJournalOperation::Create;
 					encoded.ClassName = payload.ClassName;
 				} else if constexpr (std::is_same_v<Payload, PropertyUpdatedChange>) {
+					if (!payload.Replicated)
+						throw std::runtime_error("Non-replicated property change cannot cross the wire boundary");
 					encoded.Operation = WireJournalOperation::PropertyUpdate;
 					encoded.PropertyName = payload.PropertyName;
 					encoded.Value = payload.Value;
@@ -69,6 +72,7 @@ namespace gargantuan {
 			WireJson encoded{
 				{"Version", record.Version},
 				{"Sequence", record.Sequence},
+				{"Scope", EncodeWireObjectId(record.Scope)},
 				{"Operation", OperationName(record.Operation)},
 				{"ObjectId", EncodeWireObjectId(record.Object)},
 			};
@@ -106,30 +110,32 @@ namespace gargantuan {
 				if (!encoded.is_object() || !encoded.contains("Version") ||
 					encoded.value("Version", 0u) != WireJournalFormatVersion ||
 					!encoded.contains("Sequence") || !encoded["Sequence"].is_number_unsigned() ||
+					!encoded.contains("Scope") ||
 					!encoded.contains("Operation") || !encoded["Operation"].is_string() ||
 					!encoded.contains("ObjectId")) {
 					result.Errors.push_back("Invalid or unsupported wire journal record");
 					return result;
 				}
 				auto operation = ParseOperation(encoded["Operation"].get<std::string>());
+				auto scope = DecodeWireObjectId(encoded["Scope"]);
 				auto object = DecodeWireObjectId(encoded["ObjectId"]);
 				const auto sequence = encoded["Sequence"].get<std::uint64_t>();
-				if (!operation || !object || sequence == 0) {
-					result.Errors.push_back("Invalid wire journal operation, sequence, or ObjectId");
+				if (!operation || !scope || !object || sequence == 0) {
+					result.Errors.push_back("Invalid wire journal operation, sequence, scope, or ObjectId");
 					return result;
 				}
 
-				WireJournalRecord record{.Sequence = sequence, .Operation = *operation, .Object = *object};
+				WireJournalRecord record{.Sequence = sequence, .Scope = *scope, .Operation = *operation, .Object = *object};
 				switch (*operation) {
 					case WireJournalOperation::Create:
-						if (!HasOnlyFields(encoded, {"Version", "Sequence", "Operation", "ObjectId", "ClassName"}) ||
+						if (!HasOnlyFields(encoded, {"Version", "Sequence", "Scope", "Operation", "ObjectId", "ClassName"}) ||
 							!encoded.contains("ClassName") || !encoded["ClassName"].is_string() ||
 							encoded["ClassName"].get<std::string>().empty())
 							throw std::invalid_argument("Invalid Create journal record");
 						record.ClassName = encoded["ClassName"].get<std::string>();
 						break;
 					case WireJournalOperation::PropertyUpdate: {
-						if (!HasOnlyFields(encoded, {"Version", "Sequence", "Operation", "ObjectId", "PropertyName", "Value"}) ||
+						if (!HasOnlyFields(encoded, {"Version", "Sequence", "Scope", "Operation", "ObjectId", "PropertyName", "Value"}) ||
 							!encoded.contains("PropertyName") || !encoded["PropertyName"].is_string() ||
 							encoded["PropertyName"].get<std::string>().empty() || !encoded.contains("Value"))
 							throw std::invalid_argument("Invalid PropertyUpdate journal record");
@@ -140,7 +146,7 @@ namespace gargantuan {
 						break;
 					}
 					case WireJournalOperation::Reparent:
-						if (!HasOnlyFields(encoded, {"Version", "Sequence", "Operation", "ObjectId", "ParentId"}) ||
+						if (!HasOnlyFields(encoded, {"Version", "Sequence", "Scope", "Operation", "ObjectId", "ParentId"}) ||
 							!encoded.contains("ParentId"))
 							throw std::invalid_argument("Invalid Reparent journal record");
 						if (!encoded["ParentId"].is_null()) {
@@ -150,7 +156,7 @@ namespace gargantuan {
 						}
 						break;
 					case WireJournalOperation::Destroy:
-						if (!HasOnlyFields(encoded, {"Version", "Sequence", "Operation", "ObjectId"}))
+						if (!HasOnlyFields(encoded, {"Version", "Sequence", "Scope", "Operation", "ObjectId"}))
 							throw std::invalid_argument("Invalid Destroy journal record");
 						break;
 				}

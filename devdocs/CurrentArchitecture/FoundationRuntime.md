@@ -54,10 +54,12 @@ than a borrowed pointer.
 - A slot may be reused after invalidation, but its generation is incremented.
 - A stale ID never resolves to the replacement object in that slot.
 - Generation wrap skips zero. Avoiding practical 32-bit generation exhaustion
-  and defining a wire representation are future protocol concerns.
+  remains a future protocol concern.
 
-IDs are native-only for now. Module cache identity uses `ObjectId` instead of a
-raw address. Serialization does not yet write IDs or graph references.
+IDs are native-only from Luau's perspective. `WireObjectId` serializes the same
+slot/generation pair for snapshots, references, journal targets, and DataModel
+scope identity. Receiver materialization resolves source IDs through a
+session-owned map rather than forcing them into the local registry.
 
 ## JobSystem and execution domains
 
@@ -89,22 +91,22 @@ metadata for:
 - an optional native validation predicate;
 - existing read/write permission levels.
 
-The class generator accepts the corresponding declarative fields. Metadata is
-descriptive except where current property dispatch can enforce it: main-domain
-authority, read-only state, and validation are checked on the wired mutation
-paths. No replication or persistence transport consumes the new flags yet.
+The class generator accepts the corresponding declarative fields. Snapshot and
+incremental replication now consume `FutureReplicated` explicitly; persistence
+continues to consume `Serializable` independently. Main-domain authority,
+read-only state, and validation are checked on wired mutation paths.
 
 ## Ordered committed changes
 
-`ChangeJournal` assigns monotonic sequence numbers while holding its journal
-lock. Its payload model represents object creation, property update, reparent,
-and destroy. The current proof integration covers identity publication,
-generated property setters, reparenting, and destruction.
+`ChangeJournal` assigns monotonic sequence numbers per DataModel scope while
+holding its journal lock. Its payload model represents object creation,
+property update, reparent, and destroy. Moving a subtree between scopes removes
+it from the old stream and republishes its current baseline into the new stream.
 
-Records are an in-process prototype. Retention is now bounded and cursor reads
+Records remain an in-process prototype. Retention is bounded per scope and cursor reads
 detect eviction with `ResnapshotRequired`; the default capacity is 4,096.
-Snapshots, transaction IDs, compaction, rollback, and serialization are not yet
-implemented. Consumers must not treat this as a replication protocol. See
+Transaction IDs, compaction, rollback, and network transport are not yet
+implemented. Consumers must not treat this as an untrusted network protocol. See
 `MutationGateway.md` for the reader and authoritative apply contracts.
 
 ## Luau and checked type boundaries
@@ -119,20 +121,11 @@ and converts them into ordinary Luau errors. Direct library callbacks that do
 not pass through userdata dispatch still need a complete boundary inventory in
 a later hardening pass.
 
-## Blockers before loopback replication
+## Remaining blockers before network replication
 
-The authoritative command queue and bounded cursor are now implemented. Before a
-first loopback server/client prototype, the smallest remaining blockers are:
-
-1. define a snapshot baseline paired with the bounded journal cursor;
-2. persist ObjectIds (or a separate serialized identity) and resolve graph
-   references during load;
-3. define schema versioning and deterministic wire encodings;
-4. assign authenticated command origins to reflection permission levels;
-5. finish the audit of direct Luau C callbacks and signal reentrancy safe points;
-6. add bounded document/tree limits and malformed-input fuzzing.
-
-Serialized identity/reference resolution and a cursor-paired snapshot baseline
-are now implemented. The recommended next task is a versioned wire encoding for
-journal records plus an in-process source/receiver session. That proves the
-complete replication flow without selecting a network transport.
+Snapshot baseline, serialized references, scoped journal records, and isolated
+in-process receiver apply are implemented. Before a network prototype, the
+smallest remaining blockers are pre-commit same-scope reference validation,
+hostile-input byte/count/depth limits and fuzzing, authenticated command-origin
+policy, and explicit transaction/notification safe points. Durable world IDs,
+schema migration, and transport negotiation remain later work.

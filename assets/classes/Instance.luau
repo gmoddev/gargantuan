@@ -31,6 +31,7 @@ return c({
 			description = "Non-unique identifier of the instance",
 			type = t.String,
 			unmodified = "CLASS_DEFINITION.ClassName",
+			replicated = true,
 		},
 		Parent = {
 			description = "Hierarchical parent of the instance, instances are unparented on destruction",

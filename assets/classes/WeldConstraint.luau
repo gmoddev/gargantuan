@@ -14,12 +14,14 @@ return c({
 			type = t.Optional(t.Instance("BasePart")),
 			unmodified = "std::nullopt",
 			serializable = true,
+			replicated = true,
 		},
 		Part1 = {
 			description = "Second part of this constraint.",
 			type = t.Optional(t.Instance("BasePart")),
 			unmodified = "std::nullopt",
 			serializable = true,
+			replicated = true,
 		},
 	},
 })

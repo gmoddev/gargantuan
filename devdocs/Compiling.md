@@ -41,6 +41,9 @@ Windows
 The project documentation currently targets Windows 10/11 and requires the Vulkan SDK for the supported graphics path.
 The Windows build environment must also provide CMake, Ninja, CCache, and the compiler toolchain.
 Because the Just recipes invoke shell commands, Windows users may occasionally find it easier to execute the underlying CMake commands manually when shell behavior differs.
+Run manual compiler builds from a Visual Studio Developer PowerShell/Command
+Prompt (or invoke `VsDevCmd.bat`) so the MSVC standard-library include paths are
+present.
 macOS
 The upstream development documentation currently targets recent macOS/Xcode versions.
 CMake, Ninja, and CCache can be installed through Homebrew:
@@ -80,10 +83,18 @@ From the repository root:
 rokit install
 
 If Rokit was just installed, restart the shell if necessary so the executable is visible in PATH.
-The build itself calls:
+The build workflow calls:
 lute tools/classgen
 
 before invoking CMake's build step. This generates native class/reflection sources required by the engine.
+The generator currently launches `clang-format` by name, so `clang-format` must
+also be available on `PATH`. On Visual Studio installations it is commonly
+under `VC/Tools/Llvm/*/bin`.
+
+This generation step is not yet modeled as a CMake dependency. Running only
+`cmake --build` from a fresh checkout can therefore fail or compile stale/missing
+generated files; run `lute tools/classgen` first until that bootstrap issue is
+fixed.
 4. Configure the build
 The current Justfile expects the build directory at:
 ./build

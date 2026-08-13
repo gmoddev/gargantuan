@@ -44,6 +44,8 @@ namespace gargantuan {
 		void FireAncestryChanged(std::shared_ptr<Instance> child, std::shared_ptr<Instance> parent);
 		void AssertIsAlive() const;
 		void NotifyPropertyCommitted(std::string_view propertyName);
+		[[nodiscard]] ObjectId GetReplicationScopeId() const;
+		void PublishReplicationSubtree(ObjectId scope);
 		void AssertCanMutate() const;
 		void ValidatePropertyMutation(std::string_view propertyName, const std::any &value) const;
 		MutationStatus ApplyPropertyMutation(

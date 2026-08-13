@@ -16,6 +16,7 @@ return c({
 			type = t.String,
 			unmodified = "std::string()",
 			serializable = true,
+			replicated = true,
 		},
 	},
 })

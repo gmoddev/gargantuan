@@ -14,12 +14,14 @@ return c({
 			overrideRead = "GetEnabled",
 			overrideWrite = "SetEnabled",
 			serializable = true,
+			replicated = true,
 		},
 		RunContext = {
 			description = "Whether to run this script as the client or server.",
 			type = t.EnumItem("RunContext"),
 			unmodified = "Enums::RunContext::None",
 			serializable = true,
+			replicated = true,
 		},
 	},
 })

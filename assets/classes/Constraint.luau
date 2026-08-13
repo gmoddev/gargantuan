@@ -18,18 +18,21 @@ return c({
 			type = t.Optional(t.Instance("Attachment")),
 			unmodified = "std::nullopt",
 			serializable = true,
+			replicated = true,
 		},
 		Attachment1 = {
 			description = "Second attachment of this constraint.",
 			type = t.Optional(t.Instance("Attachment")),
 			unmodified = "std::nullopt",
 			serializable = true,
+			replicated = true,
 		},
 		Enabled = {
 			description = "Whether this constraint is enabled.",
 			type = t.Bool,
 			unmodified = "true",
 			serializable = true,
+			replicated = true,
 		},
 	},
 })

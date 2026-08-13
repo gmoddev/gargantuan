@@ -10,6 +10,7 @@
 #include "gargantuan/runtime/ExecutionDomain.hpp"
 #include "gargantuan/runtime/WireCodec.hpp"
 
+#include <algorithm>
 #include <any>
 #include <nlohmann/json.hpp>
 #include <stdexcept>
@@ -82,7 +83,10 @@ namespace gargantuan {
 			}
 
 			for (const auto &[name, property] : definition->AllProperties) {
-				if (!property->Serializable || !property->Read || !property->Write) continue;
+				if (name == "Name") continue;
+				if (property->ReplicationPolicy != InstanceProperty::Replication::FutureReplicated ||
+					!property->Read || !property->Write)
+					continue;
 				if (property->ReadObjectReference) {
 					auto referenced = property->ReadObjectReference(instance.get());
 					if (!referenced) object.Properties.emplace(name, std::monostate{});
@@ -107,14 +111,20 @@ namespace gargantuan {
 			}
 			snapshot.Objects.push_back(std::move(object));
 		}
-		snapshot.Cursor = ChangeJournal::Get().CreateCursor();
+		const auto scope = root->GetReplicationScopeId();
+		if (!scope.IsValid() || scope != root->GetObjectId())
+			throw std::runtime_error("Snapshot root must be the DataModel that owns the replication scope");
+		snapshot.Cursor = ChangeJournal::Get().CreateCursor(scope);
 		return snapshot;
 	}
 
 	std::string SerializeSnapshot(const Snapshot &snapshot) {
 		Json document;
 		document["Version"] = snapshot.Version;
-		document["Cursor"] = snapshot.Cursor.NextSequence;
+		document["Cursor"] = Json{
+			{"Scope", EncodeId(WireObjectId::FromObjectId(snapshot.Cursor.Scope))},
+			{"NextSequence", snapshot.Cursor.NextSequence},
+		};
 		document["Objects"] = Json::array();
 		for (const auto &object : snapshot.Objects) {
 			Json encoded;
@@ -140,15 +150,23 @@ namespace gargantuan {
 		}
 		try {
 			if (!document.is_object() || document.value("Version", 0u) != SnapshotFormatVersion ||
-				!document.contains("Cursor") || !document["Cursor"].is_number_unsigned() ||
+				!document.contains("Cursor") || !document["Cursor"].is_object() ||
+				!document["Cursor"].contains("Scope") || !document["Cursor"].contains("NextSequence") ||
+				!document["Cursor"]["NextSequence"].is_number_unsigned() ||
 				!document.contains("Objects") || !document["Objects"].is_array()) {
 				result.Errors.push_back("Invalid or unsupported snapshot envelope");
 				return result;
 			}
 
 			Snapshot snapshot;
-			snapshot.Cursor.NextSequence = document["Cursor"].get<std::uint64_t>();
-			if (snapshot.Cursor.NextSequence == 0) {
+			auto cursorScope = DecodeId(document["Cursor"]["Scope"]);
+			if (!cursorScope) {
+				result.Errors.push_back("Invalid snapshot cursor scope");
+				return result;
+			}
+			snapshot.Cursor.Scope = cursorScope->ToObjectId();
+			snapshot.Cursor.NextSequence = document["Cursor"]["NextSequence"].get<std::uint64_t>();
+			if (!snapshot.Cursor.Scope.IsValid() || snapshot.Cursor.NextSequence == 0) {
 				result.Errors.push_back("Invalid zero snapshot cursor");
 				return result;
 			}
@@ -202,8 +220,18 @@ namespace gargantuan {
 	SnapshotLoadResult LoadSnapshot(const Snapshot &snapshot) {
 		AssertAuthoritativeMutation("LoadSnapshot");
 		SnapshotLoadResult result;
-		if (snapshot.Version != SnapshotFormatVersion) {
+		if (snapshot.Version != SnapshotFormatVersion || !snapshot.Cursor.Scope.IsValid() ||
+			snapshot.Cursor.NextSequence == 0) {
 			result.Errors.push_back("Unsupported snapshot version");
+			return result;
+		}
+		const auto rootObject = std::find_if(
+			snapshot.Objects.begin(),
+			snapshot.Objects.end(),
+			[](const SnapshotObject &object) { return !object.Parent.has_value(); }
+		);
+		if (rootObject == snapshot.Objects.end() || rootObject->Id.ToObjectId() != snapshot.Cursor.Scope) {
+			result.Errors.push_back("Snapshot root does not match its replication scope");
 			return result;
 		}
 
@@ -244,8 +272,9 @@ namespace gargantuan {
 				auto instance = result.Resolve(object.Id);
 				for (const auto &[name, value] : object.Properties) {
 					auto *property = instance->FindProperty(name);
-					if (!property || !property->Serializable || !property->Write)
-						throw std::runtime_error("Snapshot contains an unknown or non-serializable property");
+					if (!property || property->ReplicationPolicy != InstanceProperty::Replication::FutureReplicated ||
+						!property->Write)
+						throw std::runtime_error("Snapshot contains an unknown or non-replicated property");
 					if (std::holds_alternative<std::monostate>(value) ||
 						std::holds_alternative<WireObjectReference>(value)) {
 						if (!property->WriteObjectReference) throw std::runtime_error("Wire reference used for a value property");

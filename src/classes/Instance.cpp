@@ -21,6 +21,29 @@
 #include <vector>
 
 namespace gargantuan {
+	namespace {
+		WireValue EncodeCommittedProperty(Instance *instance, const InstanceProperty &property) {
+			if (!property.Read) throw std::runtime_error("Committed property is not readable");
+			if (property.ReadObjectReference) {
+				auto referenced = property.ReadObjectReference(instance);
+				return referenced
+					? WireValue(WireObjectReference{WireObjectId::FromObjectId(referenced->GetObjectId())})
+					: WireValue(std::monostate{});
+			}
+			if (property.ReadEnumValue) {
+				auto [enumName, enumValue] = property.ReadEnumValue(instance);
+				auto enumType = Enums::GetEnums().find(enumName);
+				if (enumType == Enums::GetEnums().end()) throw std::runtime_error("Committed enum type is not registered");
+				auto item = enumType->second->FromValue(enumValue);
+				if (!item) throw std::runtime_error("Committed enum value is not registered");
+				return WireEnumItem{enumName, std::string(item->Name)};
+			}
+			auto encoded = EncodeNativeWireValue(property.Read(instance));
+			if (!encoded) throw std::runtime_error("Committed property has no wire encoding");
+			return std::move(*encoded);
+		}
+	}
+
 	G_USERDATA_IMPL(
 		Instance,
 		.Tag = UserdataTag::Instance,
@@ -45,7 +68,8 @@ namespace gargantuan {
 			auto self = const_cast<Instance *>(this)->shared_from_this();
 			Id = ObjectRegistry::Get().Register(self);
 			auto definition = InstanceClassRegistry::GetDefinition(const_cast<Instance *>(this));
-			ChangeJournal::Get().Commit(Id, ObjectCreatedChange{definition ? definition->ClassName : "Instance"});
+			const auto scope = definition && definition->ClassName == "DataModel" ? Id : GetReplicationScopeId();
+			ChangeJournal::Get().Commit(scope, Id, ObjectCreatedChange{definition ? definition->ClassName : "Instance"});
 		}
 		return Id;
 	}
@@ -57,7 +81,8 @@ namespace gargantuan {
 		Destroyed = true;
 		const auto objectId = GetObjectId();
 		ObjectRegistry::Get().Invalidate(objectId);
-		ChangeJournal::Get().Commit(objectId, PropertyUpdatedChange{"Destroyed", true});
+		const auto scope = GetReplicationScopeId();
+		ChangeJournal::Get().Commit(scope, objectId, PropertyUpdatedChange{"Destroyed", true, true});
 		GetPropertyChangedSignal("Destroyed")->Fire({});
 
 		Destroying->Fire({});
@@ -68,7 +93,7 @@ namespace gargantuan {
 		}
 
 		SetParent(nullptr);
-		ChangeJournal::Get().Commit(objectId, ObjectDestroyedChange{});
+		ChangeJournal::Get().Commit(scope, objectId, ObjectDestroyedChange{});
 	}
 
 	void Instance::AssertIsAlive() const {
@@ -78,29 +103,55 @@ namespace gargantuan {
 	void Instance::NotifyPropertyCommitted(std::string_view propertyName) {
 		AssertAuthoritativeMutation("Instance property mutation");
 		auto *property = FindProperty(std::string(propertyName));
-		if (!property || !property->Read) throw std::runtime_error("Committed property is not readable");
-		WireValue committedValue;
-		if (property->ReadObjectReference) {
-			auto referenced = property->ReadObjectReference(this);
-			committedValue = referenced
-				? WireValue(WireObjectReference{WireObjectId::FromObjectId(referenced->GetObjectId())})
-				: WireValue(std::monostate{});
-		} else if (property->ReadEnumValue) {
-			auto [enumName, enumValue] = property->ReadEnumValue(this);
-			auto enumType = Enums::GetEnums().find(enumName);
-			if (enumType == Enums::GetEnums().end()) throw std::runtime_error("Committed enum type is not registered");
-			auto item = enumType->second->FromValue(enumValue);
-			if (!item) throw std::runtime_error("Committed enum value is not registered");
-			committedValue = WireEnumItem{enumName, std::string(item->Name)};
-		} else {
-			auto encoded = EncodeNativeWireValue(property->Read(this));
-			if (!encoded) throw std::runtime_error("Committed property has no wire encoding");
-			committedValue = std::move(*encoded);
-		}
+		if (!property) throw std::runtime_error("Committed property does not exist");
+		auto committedValue = EncodeCommittedProperty(this, *property);
+		const bool replicated = property->ReplicationPolicy == InstanceProperty::Replication::FutureReplicated;
 		ChangeJournal::Get().Commit(
-			GetObjectId(), PropertyUpdatedChange{std::string(propertyName), std::move(committedValue)}
+			replicated ? GetReplicationScopeId() : ObjectId{},
+			GetObjectId(),
+			PropertyUpdatedChange{
+				std::string(propertyName),
+				std::move(committedValue),
+				replicated,
+			}
 		);
 		GetPropertyChangedSignal(std::string(propertyName))->Fire({});
+	}
+
+	ObjectId Instance::GetReplicationScopeId() const {
+		const Instance *root = this;
+		std::shared_ptr<Instance> owner;
+		while (auto parent = root->ParentReference.lock()) {
+			owner = std::move(parent);
+			root = owner.get();
+		}
+		auto *definition = InstanceClassRegistry::GetDefinition(const_cast<Instance *>(root));
+		return definition && definition->ClassName == "DataModel" ? root->GetObjectId() : ObjectId{};
+	}
+
+	void Instance::PublishReplicationSubtree(ObjectId scope) {
+		if (!scope.IsValid()) return;
+		auto *definition = InstanceClassRegistry::GetDefinition(this);
+		if (!definition) throw std::runtime_error("Replicated object has no class definition");
+		const auto objectId = GetObjectId();
+		ChangeJournal::Get().Commit(scope, objectId, ObjectCreatedChange{definition->ClassName});
+		for (const auto &[name, property] : definition->AllProperties) {
+			if (property->ReplicationPolicy != InstanceProperty::Replication::FutureReplicated ||
+				!property->Read || !property->Write)
+				continue;
+			ChangeJournal::Get().Commit(
+				scope,
+				objectId,
+				PropertyUpdatedChange{name, EncodeCommittedProperty(this, *property), true}
+			);
+		}
+		auto parent = ParentReference.lock();
+		ChangeJournal::Get().Commit(
+			scope,
+			objectId,
+			ObjectReparentedChange{parent ? std::optional(parent->GetObjectId()) : std::nullopt}
+		);
+		for (const auto &child : Children) child->PublishReplicationSubtree(scope);
 	}
 
 	void Instance::AssertCanMutate() const {
@@ -166,6 +217,8 @@ namespace gargantuan {
 		for (auto ancestor = newParent; ancestor; ancestor = ancestor->ParentReference.lock()) {
 			if (ancestor == self) throw std::invalid_argument("An Instance cannot be parented to its descendant");
 		}
+		const auto oldScope = GetReplicationScopeId();
+		const auto newScope = newParent ? newParent->GetReplicationScopeId() : ObjectId{};
 
 		// This whole subtree leaves the old ancestry and joins the new one, so
 		// collect it once up front and reuse it for both sets of signals
@@ -187,7 +240,14 @@ namespace gargantuan {
 
 		const auto objectId = GetObjectId();
 		const auto newParentId = newParent ? std::optional(newParent->GetObjectId()) : std::nullopt;
-		ChangeJournal::Get().Commit(objectId, ObjectReparentedChange{newParentId});
+		if (!DestroyingState) {
+			if (oldScope == newScope) {
+				ChangeJournal::Get().Commit(newScope, objectId, ObjectReparentedChange{newParentId});
+			} else {
+				if (oldScope.IsValid()) ChangeJournal::Get().Commit(oldScope, objectId, ObjectDestroyedChange{});
+				if (newScope.IsValid()) PublishReplicationSubtree(newScope);
+			}
+		}
 
 		if (oldParent != nullptr) {
 			oldParent->ChildRemoved->Fire(self);

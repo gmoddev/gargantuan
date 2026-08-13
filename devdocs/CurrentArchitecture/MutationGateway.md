@@ -62,12 +62,12 @@ part of the authoritative hierarchy contract.
 Property update records contain an owned `WireValue` snapshot captured after
 assignment, so consumers do not need to reread the live object and `std::any`
 cannot leak across the serialization boundary. `ChangeJournal` retains 4,096
-records by default. Capacity is configurable and
+records per scope by default. Capacity is configurable and
 old records are evicted from the front. `CreateCursor` starts at the next commit.
 `Read` returns a bounded batch and an advanced cursor. If a cursor predates the
 oldest retained record, it returns `ResnapshotRequired` and no partial batch.
 
-The older `ReadSince` API remains for diagnostics and compatibility, but it
+The older `ReadSince` API reads the unscoped diagnostic stream and remains for compatibility, but it
 cannot report retention loss and must not be used by reliable replication.
 Capacity changes and snapshot construction are Main-domain policy decisions even
 though journal reads and commits are internally synchronized.
@@ -80,8 +80,9 @@ in-process completion value, not a protocol response. A callback can still
 trigger a later synchronous mutation, so multi-object transaction boundaries
 and deferred notification safe points remain open design work.
 
-The deterministic snapshot baseline, versioned journal records, and in-process
-source/receiver session are now implemented; see `SnapshotBaseline.md` and
-`LoopbackReplication.md`. Remaining work includes replication scope/world
-identity, schema-driven property selection, command-origin authority,
-transaction boundaries, hostile-input limits, and transport.
+The deterministic snapshot baseline, scoped versioned journal records,
+schema-driven property selection, and in-process source/receiver session are now
+implemented; see `SnapshotBaseline.md` and `LoopbackReplication.md`. Remaining
+work includes same-scope reference validation before commit, durable world
+identity, command-origin authority, transaction boundaries, hostile-input
+limits, and transport.

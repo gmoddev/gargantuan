@@ -6,15 +6,17 @@ The snapshot layer is the first deterministic, transport-shaped representation
 of authoritative `Instance` state. It is separate from the existing asset model
 serializer, whose compatibility format and public API remain unchanged.
 
-A version 1 snapshot contains:
+A version 2 snapshot contains:
 
 - an ordered list of objects in hierarchy traversal order;
 - each object's source `ObjectId`, class, name, and optional parent ID;
-- serializable reflected properties sorted by property name;
+- reflected properties explicitly marked `FutureReplicated`, sorted by name;
 - explicit object-reference values;
-- the `ChangeCursor` immediately after the captured baseline.
+- the scoped `ChangeCursor` immediately after the captured baseline.
 
-Capture is restricted to the authoritative `Main` domain. Identity publication
+The cursor carries both the source DataModel `ObjectId` scope and the next
+sequence in that scope's journal stream. Capture is restricted to the
+authoritative `Main` domain. Identity publication
 finishes before the cursor is sampled, so any lazy object-creation records are
 inside the baseline and incremental consumption begins exactly at
 `Cursor.NextSequence`.
@@ -68,6 +70,7 @@ The consumer contract is:
 
 ```text
 capture complete baseline
+  -> Cursor.Scope = source DataModel ObjectId
   -> Cursor.NextSequence = N
   -> consume journal records beginning at N
   -> if Read returns ResnapshotRequired, discard incremental state and request a new snapshot
@@ -84,6 +87,10 @@ implemented in `LoopbackReplication.md`. Receiver materialization and apply use
 a scoped journal-suppression policy, so local receiver mutations do not pollute
 the source cursor stream.
 
-Authentication, transport, durable save-file identity, hostile-input resource
+Persistence selection remains independent: `Serializable`/`Saved` does not
+implicitly put a property into a snapshot. The generated reflection schema is
+the single source of truth for both policies.
+
+Authentication, transport, durable world identity, hostile-input resource
 limits, and schema migration remain unimplemented. These are required before
 accepting snapshot or journal documents from an untrusted network peer.

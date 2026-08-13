@@ -2,9 +2,10 @@
 
 ## Implemented now
 
-`WireJournalRecord` version 1 is the incremental companion to snapshot version
-1. Every record carries a nonzero sequence, a generation-checked
-`WireObjectId`, and exactly one operation shape:
+`WireJournalRecord` version 2 is the incremental companion to snapshot version
+2. Every record carries a nonzero per-scope sequence, a generation-checked
+scope/world `WireObjectId`, an object `WireObjectId`, and exactly one operation
+shape:
 
 | Operation | Required payload |
 | --- | --- |
@@ -19,12 +20,19 @@ operation-inappropriate fields fail closed. Snapshot and journal encoding call
 the same `WireCodec` implementation for `WireObjectId` and `WireValue`; there
 is no journal-specific value type or identity encoding.
 
-Committed property journal entries now capture a closed `WireValue` at commit
-time. Native `std::any` remains inside reflection and mutation dispatch only; it
+Committed replicated-property journal entries capture a closed `WireValue` at
+commit time. Native `std::any` remains inside reflection and mutation dispatch only; it
 does not enter `ChangeRecord`, `WireJournalRecord`, snapshots, or serialized
-documents. Object-reference capture publishes the referenced object's ID before
-committing the referring property record, establishing create-before-reference
-ordering.
+documents. Objects entering a scope publish create, current replicated
+properties, and reparent records for their subtree. Producers must order a new
+object's scope entry before another scoped object publishes a reference to it.
+
+The authoritative root DataModel's `ObjectId` is the initial replication scope
+identity. `ChangeJournal` keeps a separately sequenced bounded stream per scope,
+so unrelated DataModels cannot create cursor gaps or leak records into a
+session. Unparented objects and non-replicated property changes remain in the
+unscoped diagnostic stream. Moving a subtree between DataModels emits a destroy
+in the old stream and a complete publication in the new stream.
 
 ## In-process session
 
@@ -33,7 +41,7 @@ ordering.
 ```text
 authoritative source hierarchy
   -> capture snapshot and cursor N
-  -> serialize and parse snapshot version 1
+  -> serialize and parse snapshot version 2
   -> materialize separate receiver objects
   -> consume source records N, N+1, ...
   -> encode, serialize, parse, and apply wire journal records
@@ -47,7 +55,8 @@ setter calls therefore cannot feed back into the authoritative source stream.
 Suppression is thread-local and deliberately narrow, not a general way to skip
 authoritative recording.
 
-Sequences are strict. A record below the expected cursor is rejected as a
+Scope matching and sequences are strict. A record for another scope is rejected.
+A record below the expected cursor is rejected as a
 duplicate, a record above it is rejected as out of order, and a source cursor
 older than retained journal history returns `ResnapshotRequired`. The cursor
 advances only after a record is validated and applied. There is no implicit
@@ -64,17 +73,15 @@ which still requires an owning parent for external create commands.
 This is an in-process architectural proof, not a network protocol. It does not
 provide transport framing, authentication, peer authority, compression,
 bandwidth budgets, schema negotiation, rollback, or multi-object transactions.
-The process-global source journal also does not yet tag records with a world or
-DataModel identity. The session can distinguish objects created after its
-snapshot, but moving an already-existing external object into the replicated
-root requires resnapshot because its original `Create` record predates the
-cursor.
+The DataModel-derived scope is runtime-lifetime identity, not a durable world
+UUID. Cross-scope object references are not yet a supported wire contract and
+must be rejected by a future pre-commit validator. Scope authorization and
+client-specific visibility/filtering are also not implemented.
 
 Wire parsers currently fail closed but do not yet impose hostile-input byte,
 record-count, string-length, or nesting limits. These limits and fuzzing are
 required before accepting documents from an untrusted transport.
 
-The smallest recommended next task is explicit replication scope/world identity
-on committed records plus schema-driven property replication policy. That
-removes dependence on the process-global journal before adding a loopback
-command/ack protocol or sockets.
+The smallest recommended next task is a pre-commit reference/scope validator
+plus bounded hostile-input limits and fuzz tests. That closes the remaining
+local protocol holes before adding a loopback command/ack policy or sockets.

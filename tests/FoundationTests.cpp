@@ -63,8 +63,10 @@ namespace {
 		auto grandchild = std::make_shared<Folder>();
 		child->SetParent(parent);
 		grandchild->SetParent(child);
+		ChangeJournal::Get().Clear();
 		CheckThrows<std::invalid_argument>([&] { parent->SetParent(parent); }, "self-parenting is rejected");
 		CheckThrows<std::invalid_argument>([&] { parent->SetParent(grandchild); }, "descendant cycles are rejected");
+		Check(ChangeJournal::Get().ReadSince(0).empty(), "rejected hierarchy cycles emit no committed records");
 
 		int destroyingCalls = 0;
 		auto childId = child->GetObjectId();
@@ -181,7 +183,17 @@ namespace {
 	void TestSchemaMetadata() {
 		using namespace gargantuan;
 		auto *destroyed = InstanceClassRegistry::GetDefinitionByName("Instance")->AllProperties.at("Destroyed");
+		auto *name = InstanceClassRegistry::GetDefinitionByName("Instance")->AllProperties.at("Name");
+		auto *archivable = InstanceClassRegistry::GetDefinitionByName("Instance")->AllProperties.at("Archivable");
 		Check(!destroyed->Editable && !destroyed->Write, "Destroyed lifecycle metadata is read-only and non-editable");
+		Check(
+			name->ReplicationPolicy == InstanceProperty::Replication::FutureReplicated,
+			"Name is selected for replication by explicit schema metadata"
+		);
+		Check(
+			archivable->ReplicationPolicy == InstanceProperty::Replication::None,
+			"Archivable remains excluded from replication by explicit schema metadata"
+		);
 		InstanceProperty property("SchemaProbe");
 		property.SetSerializable().SetReplication(InstanceProperty::Replication::FutureReplicated).SetAuthority(
 			InstanceProperty::Authority::Any
@@ -306,6 +318,13 @@ namespace {
 		folder->SetName("Four");
 		auto stale = journal.Read(cursor);
 		Check(stale.Status == ChangeReadStatus::ResnapshotRequired, "evicted cursor requires resnapshot");
+		const auto beforeClear = journal.CreateCursor().NextSequence;
+		journal.Clear();
+		folder->SetName("Five");
+		Check(
+			journal.CreateCursor().NextSequence > beforeClear,
+			"clearing retained records does not reuse journal sequence numbers"
+		);
 		journal.SetCapacity(originalCapacity);
 		journal.Clear();
 	}
@@ -335,6 +354,11 @@ namespace {
 		frame->SetParent(game);
 
 		auto snapshot = CaptureSnapshot(game);
+		Check(snapshot.Cursor.Scope == game->GetObjectId(), "snapshot cursor identifies its DataModel scope");
+		CheckThrows<std::runtime_error>(
+			[&] { (void)CaptureSnapshot(first); },
+			"snapshot capture requires the DataModel scope root"
+		);
 		const auto serialized = SerializeSnapshot(snapshot);
 		const auto repeated = SerializeSnapshot(CaptureSnapshot(game));
 		Check(serialized == repeated, "the same DataModel produces a deterministic snapshot");
@@ -387,6 +411,9 @@ namespace {
 		reference.Object = {999999, 1};
 		auto rejected = LoadSnapshot(dangling);
 		Check(!rejected.Succeeded(), "dangling serialized references cannot resolve");
+		auto wrongScope = snapshot;
+		wrongScope.Cursor.Scope = second->GetObjectId();
+		Check(!LoadSnapshot(wrongScope).Succeeded(), "snapshot root must match its declared replication scope");
 		Check(!loaded.Resolve({999999, 1}), "unknown or stale snapshot IDs resolve to null");
 		const auto loadedFirstId = snapshot.Objects[1].Id;
 		loadedFirst->Destroy();
@@ -421,12 +448,26 @@ namespace {
 			session->ApplyAvailable().Status == ReplicationApplyStatus::NoChanges,
 			"snapshot plus zero deltas is already synchronized"
 		);
+		first->SetArchivable(true);
+		Check(
+			session->ApplyAvailable().Status == ReplicationApplyStatus::NoChanges,
+			"properties without replication metadata do not enter the scoped wire stream"
+		);
+		auto otherScope = std::make_shared<DataModel>();
+		otherScope->SetName("OtherGame");
+		auto otherPart = std::make_shared<Part>();
+		otherPart->SetName("OtherPart");
+		otherPart->SetParent(otherScope);
+		Check(
+			session->ApplyAvailable().Status == ReplicationApplyStatus::NoChanges,
+			"mutations in another DataModel do not enter this replication session"
+		);
 
 		auto second = std::make_shared<Part>();
 		second->SetName("Second");
 		second->SetTransparency(0.4f);
-		weld->SetPart1(second);
 		second->SetParent(source);
+		weld->SetPart1(second);
 		first->SetTransparency(0.75f);
 
 		auto applied = session->ApplyAvailable();
@@ -445,8 +486,10 @@ namespace {
 		Check(receiverWeld && receiverWeld->GetPart1() == receiverSecond, "create-before-reference ordering resolves correctly");
 
 		const auto cursor = session->GetCursor();
+		const auto scope = WireObjectId::FromObjectId(cursor.Scope);
 		WireJournalRecord duplicate{
 			.Sequence = cursor.NextSequence - 1,
+			.Scope = scope,
 			.Operation = WireJournalOperation::Destroy,
 			.Object = WireObjectId::FromObjectId(first->GetObjectId()),
 		};
@@ -460,13 +503,21 @@ namespace {
 			session->ApplyWireRecords({outOfOrder}).Status == ReplicationApplyStatus::OutOfOrderRecord,
 			"out-of-order records are rejected"
 		);
+		auto wrongScope = duplicate;
+		wrongScope.Sequence = cursor.NextSequence;
+		wrongScope.Scope = WireObjectId::FromObjectId(otherScope->GetObjectId());
+		Check(
+			session->ApplyWireRecords({wrongScope}).Status == ReplicationApplyStatus::ApplyRejected,
+			"records from another replication scope are rejected"
+		);
 
 		const auto secondWireId = WireObjectId::FromObjectId(second->GetObjectId());
-		second->Destroy();
-		Check(session->ApplyAvailable().Succeeded(), "destroy delta applies in source order");
-		Check(!session->ResolveReceiver(secondWireId), "destroy invalidates receiver reference lookup");
+		second->SetParent(otherScope);
+		Check(session->ApplyAvailable().Succeeded(), "cross-scope removal applies in source order");
+		Check(!session->ResolveReceiver(secondWireId), "leaving the scope invalidates receiver reference lookup");
 		WireJournalRecord staleReference{
 			.Sequence = session->GetCursor().NextSequence,
+			.Scope = scope,
 			.Operation = WireJournalOperation::PropertyUpdate,
 			.Object = WireObjectId::FromObjectId(weld->GetObjectId()),
 			.PropertyName = "Part1",
@@ -481,6 +532,7 @@ namespace {
 		auto encodedRecords = std::vector{
 			WireJournalRecord{
 				.Sequence = 1,
+				.Scope = scope,
 				.Operation = WireJournalOperation::PropertyUpdate,
 				.Object = WireObjectId::FromObjectId(first->GetObjectId()),
 				.PropertyName = "Transparency",
@@ -491,13 +543,14 @@ namespace {
 		auto parsedRecords = DeserializeWireJournalRecords(serializedRecords);
 		Check(parsedRecords.Succeeded(), "wire journal records round-trip through the shared WireValue codec");
 		Check(serializedRecords.find("\"Type\":\"Float\"") != std::string::npos, "journal property values use WireValue encoding");
+		Check(serializedRecords.find("\"Scope\"") != std::string::npos, "journal records serialize their replication scope");
 		Check(
 			!DeserializeWireJournalRecords("{\"Version\":999,\"Records\":[]}").Succeeded(),
 			"unknown wire journal envelope versions fail closed"
 		);
 		Check(
 			!DeserializeWireJournalRecords(
-				"{\"Version\":1,\"Records\":[{\"Version\":2,\"Sequence\":1,\"Operation\":\"Destroy\",\"ObjectId\":{\"Slot\":1,\"Generation\":1}}]}"
+				"{\"Version\":2,\"Records\":[{\"Version\":3,\"Sequence\":1,\"Scope\":{\"Slot\":1,\"Generation\":1},\"Operation\":\"Destroy\",\"ObjectId\":{\"Slot\":1,\"Generation\":1}}]}"
 			).Succeeded(),
 			"unknown wire journal record versions fail closed"
 		);

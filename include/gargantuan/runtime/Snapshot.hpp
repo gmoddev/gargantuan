@@ -14,7 +14,7 @@
 namespace gargantuan {
 	class Instance;
 
-	inline constexpr std::uint32_t SnapshotFormatVersion = 1;
+	inline constexpr std::uint32_t SnapshotFormatVersion = 2;
 
 	struct SnapshotObject {
 		WireObjectId Id;
