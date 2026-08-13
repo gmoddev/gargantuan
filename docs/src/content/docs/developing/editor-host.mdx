@@ -1,0 +1,67 @@
+---
+title: EditorHost and Studio boundary
+description: The public process boundary between Gargantuan and the separately authored Studio application.
+---
+
+Gargantuan Studio is a separately authored private application. It consumes
+Gargantuan through the public, versioned EditorHost protocol instead of linking
+against private engine internals.
+
+```text
+Private Gargantuan Studio
+        |
+        | versioned local IPC
+        v
+Public Gargantuan EditorHost
+        |
+        v
+Mutation Gateway / Snapshot / Journal
+        |
+        v
+Authoritative DataModel
+```
+
+The `studio/` directory retained in this repository is an MPL-2.0 legacy
+scaffold. It is not the source of the new Studio application and must not be
+copied, adapted, translated, or otherwise used as implementation material for
+it.
+
+## EditorHost v0
+
+Start the headless host with a fresh random token for each launch:
+
+```powershell
+gargantuan --editor-host --editor-token <random-token>
+```
+
+The client sends bounded, single-line JSON requests over standard input. The
+host returns lines prefixed with `GARGANTUAN_EDITOR/1 ` over standard output.
+Every request carries protocol version `1`, a request ID, the launch token, a
+method, and parameters.
+
+The initial protocol supports:
+
+- protocol handshake and capability discovery;
+- non-executing project open;
+- reflected schema discovery;
+- deterministic snapshot capture;
+- ordered journal polling; and
+- scalar property mutation through the authoritative mutation gateway.
+
+Opening a project does not initialize rendering, execute scripts, step the
+simulation, or synchronize `FileLink` objects. Unknown protocol versions,
+methods, fields, malformed values, and oversized messages fail closed.
+
+The launch token associates a client with the process. It is sufficient for
+the initial local prototype, but it is not strong authentication against a
+hostile local user.
+
+## Licensing boundary
+
+Gargantuan, EditorHost, and the protocol remain public MPL-2.0 engine work. The
+new Studio repository is private and separately licensed. Studio may launch or
+communicate with a Gargantuan build, but it must not copy engine implementation
+or depend on private C++ headers.
+
+Viewport transport, picking, save operations, play sessions, reference-valued
+editing, and multi-command transactions remain future interface work.

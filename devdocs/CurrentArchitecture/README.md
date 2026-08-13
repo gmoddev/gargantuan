@@ -9,6 +9,9 @@ See [Snapshot baseline](./SnapshotBaseline.md) and
 identity/value formats, snapshot cursor transition, wire journal, and separate
 in-process receiver.
 
+See [EditorHost v0](./EditorHostProtocol.md) for the implemented process boundary
+between the public MPL-2.0 engine and independently authored Studio clients.
+
 ## Scope and headline
 
 The current product is one C++23 executable. It owns an SDL window/GPU device (or

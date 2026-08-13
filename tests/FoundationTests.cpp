@@ -5,6 +5,7 @@
 #include "gargantuan/classes/ModuleScript.hpp"
 #include "gargantuan/classes/Part.hpp"
 #include "gargantuan/classes/WeldConstraint.hpp"
+#include "gargantuan/editor/EditorHost.hpp"
 #include "gargantuan/runtime/ChangeJournal.hpp"
 #include "gargantuan/runtime/DataModelRoot.hpp"
 #include "gargantuan/runtime/ExecutionDomain.hpp"
@@ -19,9 +20,13 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <lua.h>
 #include <lualib.h>
+#include <nlohmann/json.hpp>
 #include <stdexcept>
 #include <thread>
 #include <type_traits>
@@ -573,6 +578,70 @@ namespace {
 		journal.Clear();
 	}
 
+	void TestEditorHostProtocol() {
+		using Json = nlohmann::ordered_json;
+		using namespace gargantuan;
+		const auto temporaryRoot = std::filesystem::temp_directory_path() /
+			("gargantuan-editor-host-" + std::to_string(
+				std::chrono::steady_clock::now().time_since_epoch().count()
+			));
+		struct TemporaryProjectCleanup {
+			std::filesystem::path Root;
+			~TemporaryProjectCleanup() { std::filesystem::remove_all(Root); }
+		} cleanup{temporaryRoot};
+		std::filesystem::create_directories(temporaryRoot / ".gargantuan");
+		std::ofstream project(temporaryRoot / ".gargantuan" / "project.instance.json", std::ios::binary);
+		project << R"({"Version":0,"Name":"EditorWorld","ClassName":"DataModel","Properties":{},"Children":[{"Name":"Editable","ClassName":"Folder","Properties":{},"Children":[]}]})";
+		project.close();
+
+		EditorHost host("test-token");
+		std::size_t requestNumber = 0;
+		auto call = [&](std::string method, Json parameters, std::string token) {
+			Json request{
+				{"Version", EditorHostProtocolVersion},
+				{"RequestId", std::to_string(++requestNumber)},
+				{"SessionToken", std::move(token)},
+				{"Method", std::move(method)},
+				{"Params", std::move(parameters)},
+			};
+			return Json::parse(host.HandleRequest(request.dump()));
+		};
+
+		auto unauthorized = call("Handshake", Json::object(), "wrong-token");
+		Check(!unauthorized["Ok"].get<bool>() && unauthorized["Error"]["Code"] == "Unauthorized", "EditorHost rejects the wrong launch token");
+		auto handshake = call("Handshake", Json::object(), "test-token");
+		Check(handshake["Ok"].get<bool>() && handshake["Result"]["ProtocolVersion"] == 1, "EditorHost negotiates protocol version 1");
+		auto schema = call("GetSchema", Json::object(), "test-token");
+		Check(schema["Ok"].get<bool>() && !schema["Result"]["Classes"].empty(), "EditorHost exposes reflected class schemas");
+
+		auto opened = call("OpenProject", {{"Root", temporaryRoot.string()}}, "test-token");
+		Check(opened["Ok"].get<bool>(), "EditorHost opens a project without starting the engine loop");
+		auto snapshot = call("GetSnapshot", Json::object(), "test-token");
+		Check(snapshot["Ok"].get<bool>(), "EditorHost returns a cursor-paired snapshot");
+		auto &objects = snapshot["Result"]["Snapshot"]["Objects"];
+		auto editable = std::find_if(objects.begin(), objects.end(), [](const Json &object) {
+			return object["Name"] == "Editable";
+		});
+		Check(editable != objects.end(), "EditorHost snapshot contains the project hierarchy");
+		if (editable != objects.end()) {
+			auto mutation = call("SetProperty", {
+				{"Object", (*editable)["Id"]},
+				{"Property", "Name"},
+				{"Value", {{"Type", "String"}, {"Value", "EditedThroughProtocol"}}},
+			}, "test-token");
+			Check(mutation["Ok"].get<bool>(), "EditorHost applies a typed property mutation through the gateway");
+			auto changes = call("PollChanges", Json::object(), "test-token");
+			Check(
+				changes["Ok"].get<bool>() && changes["Result"]["Records"].size() == 1 &&
+					changes["Result"]["Records"][0]["Operation"] == "PropertyUpdate",
+				"EditorHost publishes the committed mutation as one journal record"
+			);
+		}
+
+		auto malformed = Json::parse(host.HandleRequest(std::string(EditorHostMaximumRequestBytes + 1, 'x')));
+		Check(!malformed["Ok"].get<bool>() && malformed["Error"]["Code"] == "MalformedRequest", "EditorHost rejects oversized direct requests before parsing");
+	}
+
 	void TestLuauExceptionBoundary() {
 		lua_State *L = luaL_newstate();
 		lua_pushcfunction(L, [](lua_State *state) {
@@ -605,6 +674,7 @@ int main() {
 	TestBoundedJournalCursor();
 	TestSnapshotBaseline();
 	TestWireJournalAndLoopbackReplication();
+	TestEditorHostProtocol();
 	TestLuauExceptionBoundary();
 	if (Failures == 0) std::cout << "All foundation tests passed\n";
 	return Failures == 0 ? 0 : 1;

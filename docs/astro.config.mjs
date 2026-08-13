@@ -37,6 +37,10 @@ export default defineConfig({
 							slug: "developing/working-on-gargantuan",
 						},
 						{
+							label: "EditorHost and Studio Boundary",
+							slug: "developing/editor-host",
+						},
+						{
 							label: "Roadmap",
 							slug: "developing/roadmap",
 						},

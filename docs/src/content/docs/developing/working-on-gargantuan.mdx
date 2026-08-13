@@ -150,6 +150,12 @@ just run_testbed
 just run_studio
 ```
 
+<Aside type="caution" title="Legacy Studio scaffold">
+  `run_studio` does not launch the separately authored Gargantuan Studio
+  application. The retained `studio/` tree is legacy MPL-2.0 material. New
+  Studio development uses the public [EditorHost process boundary](./editor-host/).
+</Aside>
+
 **When you make changes in Gargantuan,** you can easily rebuild the engine and run the binary with the `fresh` recipes:
 ```
 just fresh_example cube.luau

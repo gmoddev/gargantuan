@@ -355,7 +355,11 @@ namespace gargantuan::InstanceSerialization {
 
 		LOG_INFO(App, "Registered property count for %s: %zu", className.c_str(), definition->AllProperties.size());
 		auto instance = definition->Constructor();
-		instance->GetName() = name.get<std::string>();
+		if (instance->ApplyPropertyMutation("Name", name.get<std::string>(), Enums::Permission::Engine) !=
+			MutationStatus::Success) {
+			instance->Destroy();
+			return state.ReturnError("Failed to apply Name for {}", state.FormatCurrentPath());
+		}
 		for (auto &[key, property] : definition->AllProperties) {
 			LOG_INFO(App, "Trying to deserialize %s of %s", key.data(), state.FormatCurrentPath().data());
 			if (key == "Parent" || !properties.contains(key) || !property->Serializable || !property->Write) continue;

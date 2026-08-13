@@ -4,6 +4,7 @@
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Script.hpp"
 #include "gargantuan/datatypes/Vector2.hpp"
+#include "gargantuan/editor/EditorHost.hpp"
 #include "gargantuan/filesystem/DiskFilesystem.hpp"
 #include "gargantuan/filesystem/Project.hpp"
 #include "gargantuan/render/Renderer.hpp"
@@ -105,6 +106,8 @@ int main(int argc, char *argv[]) {
 	program.add_group("Engine");
 	program.add_argument("--headless").flag().help("whether to disable the renderer");
 	program.add_argument("--enable_roblox_compat").flag().help("use roblox api compatibility (overrides projects)");
+	program.add_argument("--editor-host").flag().help("run the versioned local EditorHost protocol over standard I/O");
+	program.add_argument("--editor-token").help("per-launch EditorHost session token").default_value("");
 	program.add_group("Logging");
 	program.add_argument("--no_ansi").flag().help("disable ansi logs");
 	program.add_argument("--no_pretty").flag().help("whether to print json structured logs");
@@ -133,6 +136,19 @@ int main(int argc, char *argv[]) {
 	int hasProject = program.is_used("--project");
 	int hasScript = program.is_used("--script");
 	int hasInstance = program.is_used("--instance");
+	if (program.is_used("--editor-host")) {
+		if (hasProject + hasScript + hasInstance != 0) {
+			LOG_CRITICAL(App, "EditorHost opens projects through its protocol and cannot accept a target argument");
+			return 1;
+		}
+		try {
+			EditorHost host(program.get<std::string>("--editor-token"));
+			return host.Run(std::cin, std::cout);
+		} catch (const std::exception &error) {
+			LOG_CRITICAL(App, "%s", error.what());
+			return 1;
+		}
+	}
 	if (hasProject + hasScript + hasInstance == 0) {
 		LOG_CRITICAL(App, "No target provided, specify one of: --project, --script, or --instance");
 		std::exit(1);

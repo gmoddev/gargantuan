@@ -18,6 +18,21 @@ description: Planned features for Gargantuan.
 
 ### Studio
 
+The production Studio application is now developed as separately authored,
+private code. It communicates with the MPL-2.0 engine through the public
+[EditorHost process boundary](./editor-host/). The existing `studio/` tree is a
+retained MPL-2.0 legacy scaffold, not the implementation source for the private
+application.
+
+Engine-side editor interface progress:
+
+- [x] Versioned EditorHost handshake and capability discovery
+- [x] Non-executing project open
+- [x] Schema, snapshot, and ordered journal access
+- [x] Scalar property mutation through the authoritative gateway
+- [ ] Viewport transport, picking, and camera commands
+- [ ] Save, play-session, and transaction interfaces
+
 Projects will initially have:
 
 - a `.gargantuan/project.instance.json`
