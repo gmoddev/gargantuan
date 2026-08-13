@@ -132,6 +132,7 @@ first loopback server/client prototype, the smallest remaining blockers are:
 5. finish the audit of direct Luau C callbacks and signal reentrancy safe points;
 6. add bounded document/tree limits and malformed-input fuzzing.
 
-The recommended next task is serialized identity/reference resolution plus a
-snapshot baseline. That is the smallest remaining bridge to a loopback
-replication consumer without selecting a network transport.
+Serialized identity/reference resolution and a cursor-paired snapshot baseline
+are now implemented. The recommended next task is a versioned wire encoding for
+journal records plus an in-process source/receiver session. That proves the
+complete replication flow without selecting a network transport.

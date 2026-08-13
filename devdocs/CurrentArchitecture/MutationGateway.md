@@ -79,11 +79,12 @@ in-process completion value, not a protocol response. A callback can still
 trigger a later synchronous mutation, so multi-object transaction boundaries
 and deferred notification safe points remain open design work.
 
-Before loopback replication, the smallest remaining work is:
+The deterministic snapshot baseline and serialized reference map are now
+implemented; see `SnapshotBaseline.md`. Before loopback replication, the
+smallest remaining work is:
 
-1. define a deterministic serialized `ObjectId` and object-reference encoding;
-2. define a snapshot baseline paired with a journal cursor;
-3. add schema/version identifiers and deterministic property encodings;
-4. decide which command origins receive which property permission level;
-5. finish the native callback and construction-only write inventory;
-6. add transaction/notification boundaries for multi-object operations.
+1. encode journal records with the versioned `WireValue` schema;
+2. build an in-process source/receiver session over snapshot plus ordered records;
+3. decide which command origins receive which property permission level;
+4. finish the native callback and construction-only write inventory;
+5. add transaction/notification boundaries for multi-object operations.
