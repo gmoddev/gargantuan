@@ -79,13 +79,11 @@ can interleave on the same authoritative thread during capture.
 
 ## Deliberate limits and next blockers
 
-This pass does not serialize journal records, authenticate peers, select a
-transport, or provide durable save-file identity. Materializing a snapshot uses
-ordinary committed setters and therefore records local receiver changes; a
-future replication world/session should own its journal policy explicitly.
+Versioned journal records and the in-process source/receiver session are now
+implemented in `LoopbackReplication.md`. Receiver materialization and apply use
+a scoped journal-suppression policy, so local receiver mutations do not pollute
+the source cursor stream.
 
-Before a loopback replication prototype, the smallest remaining task is a
-versioned wire representation for journal records using `WireValue`, followed by
-an in-process source/receiver session that applies a snapshot and then ordered
-incremental changes. Resource limits for hostile snapshot documents and schema
-migration rules should be added before any untrusted network transport.
+Authentication, transport, durable save-file identity, hostile-input resource
+limits, and schema migration remain unimplemented. These are required before
+accepting snapshot or journal documents from an untrusted network peer.

@@ -4,6 +4,11 @@ See [Runtime foundation](./FoundationRuntime.md) for the implemented ownership,
 ObjectId, JobSystem, execution-domain, reflection-schema, and committed-change
 contracts introduced after the architecture audit.
 
+See [Snapshot baseline](./SnapshotBaseline.md) and
+[loopback replication](./LoopbackReplication.md) for the implemented versioned
+identity/value formats, snapshot cursor transition, wire journal, and separate
+in-process receiver.
+
 ## Scope and headline
 
 The current product is one C++23 executable. It owns an SDL window/GPU device (or

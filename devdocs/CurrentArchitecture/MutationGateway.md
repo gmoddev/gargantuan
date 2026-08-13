@@ -59,9 +59,10 @@ part of the authoritative hierarchy contract.
 
 ## Bounded change cursors
 
-Property update records contain an owned native value snapshot captured after
-assignment, so consumers of the proven property path do not need to reread the
-live object. `ChangeJournal` retains 4,096 records by default. Capacity is configurable and
+Property update records contain an owned `WireValue` snapshot captured after
+assignment, so consumers do not need to reread the live object and `std::any`
+cannot leak across the serialization boundary. `ChangeJournal` retains 4,096
+records by default. Capacity is configurable and
 old records are evicted from the front. `CreateCursor` starts at the next commit.
 `Read` returns a bounded batch and an advanced cursor. If a cursor predates the
 oldest retained record, it returns `ResnapshotRequired` and no partial batch.
@@ -73,18 +74,14 @@ though journal reads and commits are internally synchronized.
 
 ## Future work
 
-This pass does not implement snapshot creation, command authentication,
-transactions, rollback, transport, or replication. A mutation result is an
+This pass does not implement command authentication, transactions, rollback, or
+transport. A mutation result is an
 in-process completion value, not a protocol response. A callback can still
 trigger a later synchronous mutation, so multi-object transaction boundaries
 and deferred notification safe points remain open design work.
 
-The deterministic snapshot baseline and serialized reference map are now
-implemented; see `SnapshotBaseline.md`. Before loopback replication, the
-smallest remaining work is:
-
-1. encode journal records with the versioned `WireValue` schema;
-2. build an in-process source/receiver session over snapshot plus ordered records;
-3. decide which command origins receive which property permission level;
-4. finish the native callback and construction-only write inventory;
-5. add transaction/notification boundaries for multi-object operations.
+The deterministic snapshot baseline, versioned journal records, and in-process
+source/receiver session are now implemented; see `SnapshotBaseline.md` and
+`LoopbackReplication.md`. Remaining work includes replication scope/world
+identity, schema-driven property selection, command-origin authority,
+transaction boundaries, hostile-input limits, and transport.
