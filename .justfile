@@ -32,17 +32,9 @@ build:
 fresh_example example *flags: build
     -{{ GARGANTUAN_BINARY }} --script=./assets/examples/{{ example }} {{ flags }}
 
-# Rebuilds the engine, then runs the Gargantuan Studio project
-fresh_studio *flags: build
-    -{{ GARGANTUAN_BINARY }} --project=./studio {{ flags }}
-
 # Runs an example inside assets without rebuilding
 run_example example *flags:
     -{{ GARGANTUAN_BINARY }} --script=./assets/examples/{{ example }} {{ flags }}
-
-# Runs the Gargantuan Studio project without rebuilding
-run_studio *flags:
-    -{{ GARGANTUAN_BINARY }} --project=./studio {{ flags }}
 
 # Runs tests for the core library
 test_core: build

@@ -153,14 +153,16 @@ just fresh_example cube.luau
 
 Use the fresh_* form when testing C++ engine changes.
 Use the non-fresh form when only rerunning already-built code/content.
-8. Run Studio
-Run the current Studio project without rebuilding:
-just run_studio
+8. Run EditorHost
+The original in-engine Studio prototype and its Just recipes were removed after
+Studio moved to a separately authored application. Its MPL-2.0 implementation
+remains available through Git history.
 
-Rebuild first and then run it with:
-just fresh_studio
+Launch the public non-executing document host with a fresh random token:
+gargantuan --editor-host --editor-token <random-token>
 
-Studio is currently a development scaffold rather than a production editor, so it should not be treated as a comprehensive engine validation path.
+EditorHost expects bounded protocol messages on standard input. Use the private
+Studio client or a protocol test rather than treating it as an interactive shell.
 9. Run tests
 Gargantuan's current test suite uses Lest.
 Run all currently wired tests with:
@@ -185,8 +187,8 @@ just run_example <example>.luau
 or rebuild-and-run in one operation:
 just fresh_example <example>.luau
 
-For changes involving Studio-facing functionality:
-just fresh_studio
+For changes involving Studio-facing functionality, build the engine and run the
+EditorHost integration test through the normal CTest target.
 
 For changes affecting generated Instance classes, reflection, properties, or services, always use the normal build recipe rather than directly invoking the compiler, because just build runs class generation first.
 11. Testing expectations for foundational engine work
@@ -361,11 +363,8 @@ just run_example cube.luau
 Rebuild and run an example:
 just fresh_example cube.luau
 
-Run Studio:
-just run_studio
-
-Rebuild and run Studio:
-just fresh_studio
+Run EditorHost:
+gargantuan --editor-host --editor-token <random-token>
 
 Update submodules:
 just submodules

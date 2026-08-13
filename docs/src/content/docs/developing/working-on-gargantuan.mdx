@@ -143,24 +143,22 @@ Once built, you can run the binary with the `gargantuan` recipe:
 just gargantuan --help
 ```
 
-Run an `assets/example` script, the `assets/testbed` project, or the `studio` project:
+Run an `assets/example` script or the `assets/testbed` project:
 ```
 just run_example cube.luau
 just run_testbed
-just run_studio
 ```
 
-<Aside type="caution" title="Legacy Studio scaffold">
-  `run_studio` does not launch the separately authored Gargantuan Studio
-  application. The retained `studio/` tree is legacy MPL-2.0 material. New
-  Studio development uses the public [EditorHost process boundary](./editor-host/).
+<Aside type="note" title="Studio moved out of the engine repository">
+  The original in-engine Studio prototype was removed after Studio development
+  moved to the external [EditorHost architecture](./editor-host/). Its
+  MPL-2.0-covered historical implementation remains available through Git history.
 </Aside>
 
 **When you make changes in Gargantuan,** you can easily rebuild the engine and run the binary with the `fresh` recipes:
 ```
 just fresh_example cube.luau
 just fresh_testbed
-just fresh_studio
 ```
 
 Tests are written using the [Lest](https://lest-luau.github.io/lest/writing-tests) framework. To run the test suite, use the `test` recipe:

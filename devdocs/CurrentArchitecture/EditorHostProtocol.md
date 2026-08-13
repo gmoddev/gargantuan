@@ -5,8 +5,8 @@
 Gargantuan Studio is a separately authored private application. The public
 Gargantuan repository owns the engine, protocol specification, wire schemas,
 validation, and authoritative DataModel state. The private application must not
-include Gargantuan's private C++ headers or copy implementation from the legacy
-`studio/` scaffold.
+include Gargantuan's private C++ headers or copy implementation from the removed
+legacy Studio prototype in Git history.
 
 EditorHost v0 is a headless document host reached through standard input and
 output. It does not construct `Engine`, initialize a renderer, run scripts, step
@@ -60,8 +60,8 @@ v0.
 - Gargantuan and EditorHost remain public MPL-2.0 code.
 - The protocol is public and may be implemented by independent tools.
 - Gargantuan Studio lives in a private, separately licensed repository.
-- `gargantuan/studio/**` remains MPL-covered legacy material and is prohibited
-  source material for the new implementation.
+- The removed `gargantuan/studio/**` history remains MPL-covered legacy material
+  and is prohibited source material for the new implementation.
 - The private repository consumes a Gargantuan executable/release through this
   protocol; it does not duplicate engine implementation.
 

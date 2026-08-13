@@ -126,7 +126,7 @@ the future GUI contract and editor prerequisites are defined in the future docs.
 | Physics/collisions | `src/classes/WorldRoot.cpp`, `BasePart.cpp`, `Part.cpp`, `Constraint.cpp`, `WeldConstraint.cpp`, `physics/Conversions.hpp` | Box3D, Instance properties/signals, fixed frame phase | Complete property/body synchronization, validation, queries/groups, buffered events and character controller. |
 | Input | `src/services/UserInputService.cpp`, `src/classes/InputObject.cpp`, Camera SDL handling | SDL events, Signals | Correct device state plus actions, routing/focus, keyboard/mouse/gamepad/touch/text and remapping. |
 | GUI | `GuiObject.cpp`, GUI class headers/metadata, `src/render/passes/GuiPass.cpp` | Instance hierarchy, UDim/UDim2, renderer, input, SDL_ttf/image | Deterministic layout, display list/pass, text/images/clipping/layers, focus/routing and accessibility. |
-| Studio | `studio/src/Main.client.luau`, `studio/project.json` | Fluid/Luau, project loader, currently disabled GUI | All gates in `FutureArchitecture/GuiAndStudio.md`; initially a diagnostic harness only. |
+| Studio | External private application through public `EditorHost` | versioned local IPC, snapshot/journal wire contracts | Viewport transport, picking, camera commands, and explicit editor services without private engine headers. |
 | Logging/profiling | `src/Log.cpp`, `include/gargantuan/Log.hpp`, `Profiler.hpp` | SDL logging, Tracy | Applied levels, structured codes/context, source stacks, safe fields, counters and editor/CI capture. |
 | Tests | `src/datatypes/*.spec.luau`, CMake test target | Lest/Luau and engine executable build | Native/integration/fuzz/sanitizer suites and sample-game/package smoke tests. |
 
