@@ -1,5 +1,9 @@
 # Current architecture
 
+See [Runtime foundation](./FoundationRuntime.md) for the implemented ownership,
+ObjectId, JobSystem, execution-domain, reflection-schema, and committed-change
+contracts introduced after the architecture audit.
+
 ## Scope and headline
 
 The current product is one C++23 executable. It owns an SDL window/GPU device (or
