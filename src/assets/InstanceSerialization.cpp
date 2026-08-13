@@ -382,7 +382,8 @@ namespace gargantuan::InstanceSerialization {
 					instance->Destroy();
 					return state.ReturnError("Validation failed for property '{}' in {}", key, state.FormatCurrentPath());
 				}
-				property->Write(instance.get(), deserialized);
+				const auto status = instance->ApplyPropertyMutation(key, deserialized, Enums::Permission::Engine);
+				if (status != MutationStatus::Success) throw std::runtime_error("Serialized property mutation rejected");
 			} catch (const std::bad_any_cast &e) {
 				instance->Destroy();
 				return state.ReturnError(

@@ -146,6 +146,10 @@ add_library(gargantuan_core OBJECT ${GARGANTUAN_SOURCES})
 add_executable(gargantuan "src/Main.cpp" ${SHADER_OUTPUTS})
 target_link_libraries(gargantuan PRIVATE gargantuan_core)
 
+if(MSVC)
+	target_compile_options(gargantuan_core PUBLIC /EHsc)
+endif()
+
 # GCC 13+ rejects members named after their own type (ie. ScrptEngine's
 # ThreadEngine)
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")

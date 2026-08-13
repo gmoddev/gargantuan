@@ -13,6 +13,7 @@ namespace gargantuan {
 	}
 
 	void Camera::SetHorizontalFieldOfView(float fovy) {
+		ValidatePropertyMutation("HorizontalFieldOfView", fovy);
 		SetFieldOfView(glm::degrees(2 * glm::atan(1 / GetAspectRatio() * glm::tan(glm::radians(fovy) / 2))));
 		GetPropertyChangedSignal("HorizontalFieldOfView")->Fire({});
 	}
@@ -24,6 +25,7 @@ namespace gargantuan {
 	}
 
 	void Camera::SetDiagonalFieldOfView(float fovy) {
+		ValidatePropertyMutation("DiagonalFieldOfView", fovy);
 		SetFieldOfView(
 			glm::degrees(
 				2 * glm::atan(1 / glm::sqrt(1 + glm::pow(GetAspectRatio(), 2)) * glm::tan(glm::radians(fovy) / 2))
@@ -50,7 +52,7 @@ namespace gargantuan {
 			int width, height;
 			auto window = SDL_GetWindowFromEvent(&event);
 			SDL_GetWindowSizeInPixels(window, &width, &height);
-			ViewportSize = Vector2(width, height);
+			SetViewportSize(Vector2(width, height));
 		} else if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN && event.button.button == SDL_BUTTON_RIGHT) {
 			auto window = SDL_GetWindowFromEvent(&event);
 			SDL_SetWindowRelativeMouseMode(window, true);
@@ -79,7 +81,7 @@ namespace gargantuan {
 			AccumulatedDeltaY = 0.0f;
 
 			auto rotation = CFrame::fromEulerAnglesYXZ(glm::radians(Pitch), glm::radians(Yaw), 0.0f);
-			CFrame = gargantuan::CFrame(CFrame.Position, rotation.Rotation);
+			SetCFrame(gargantuan::CFrame(CFrame.Position, rotation.Rotation));
 		}
 
 		auto keys = SDL_GetKeyboardState(nullptr);
@@ -89,30 +91,30 @@ namespace gargantuan {
 		auto upVector = CFrame.GetUpVector();
 
 		if (keys[SDL_SCANCODE_W]) {
-			CFrame.Position += lookVector * FreecamSpeed * deltaTime;
+			SetCFrame(gargantuan::CFrame(CFrame.Position + lookVector * FreecamSpeed * deltaTime, CFrame.Rotation));
 		}
 
 		if (keys[SDL_SCANCODE_S]) {
-			CFrame.Position -= lookVector * FreecamSpeed * deltaTime;
+			SetCFrame(gargantuan::CFrame(CFrame.Position - lookVector * FreecamSpeed * deltaTime, CFrame.Rotation));
 		}
 
 		if (keys[SDL_SCANCODE_A]) {
-			CFrame.Position -= rightVector * FreecamSpeed * deltaTime;
+			SetCFrame(gargantuan::CFrame(CFrame.Position - rightVector * FreecamSpeed * deltaTime, CFrame.Rotation));
 		}
 
 		if (keys[SDL_SCANCODE_D]) {
-			CFrame.Position += rightVector * FreecamSpeed * deltaTime;
+			SetCFrame(gargantuan::CFrame(CFrame.Position + rightVector * FreecamSpeed * deltaTime, CFrame.Rotation));
 		}
 
 		if (keys[SDL_SCANCODE_SPACE]) {
-			CFrame.Position += glm::vec3(0, FreecamSpeed * deltaTime, 0);
+			SetCFrame(gargantuan::CFrame(CFrame.Position + glm::vec3(0, FreecamSpeed * deltaTime, 0), CFrame.Rotation));
 		}
 
 		// complex and volatile so i can screenshot on macos
 		bool shiftPressed = keys[SDL_SCANCODE_LSHIFT] || keys[SDL_SCANCODE_RSHIFT];
 		bool guiPressed = (SDL_GetModState() & SDL_KMOD_GUI) != 0;
 		if (shiftPressed && !guiPressed) {
-			CFrame.Position -= glm::vec3(0, FreecamSpeed * deltaTime, 0);
+			SetCFrame(gargantuan::CFrame(CFrame.Position - glm::vec3(0, FreecamSpeed * deltaTime, 0), CFrame.Rotation));
 		}
 	}
 }

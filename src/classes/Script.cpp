@@ -13,13 +13,16 @@ namespace gargantuan {
 	}
 
 	void Script::SetEnabled(bool enabled) {
-		GetPropertyChangedSignal("Enabled")->Fire({});
+		AssertCanMutate();
+		ValidatePropertyMutation("Enabled", enabled);
+		if (GetEnabled() == enabled) return;
 		if (Status == ScriptStatus::Disabled && enabled) {
 			Status = ScriptStatus::Idle;
 		} else if (Status != ScriptStatus::Disabled && !enabled) {
 			Cleanup();
 			Status = ScriptStatus::Disabled;
 		}
+		NotifyPropertyCommitted("Enabled");
 	}
 
 	void Script::Cleanup() {

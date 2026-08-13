@@ -4,6 +4,7 @@
 #include "gargantuan/classes/generated/Instance.hpp"
 #include "gargantuan/datatypes/Signal.hpp"
 #include "gargantuan/runtime/ObjectId.hpp"
+#include "gargantuan/runtime/MutationGateway.hpp"
 #include "gargantuan/scripting/Userdata.hpp"
 
 #include <memory>
@@ -44,6 +45,12 @@ namespace gargantuan {
 		void AssertIsAlive() const;
 		void NotifyPropertyCommitted(std::string_view propertyName);
 		void AssertCanMutate() const;
+		void ValidatePropertyMutation(std::string_view propertyName, const std::any &value) const;
+		MutationStatus ApplyPropertyMutation(
+			std::string_view propertyName,
+			const std::any &value,
+			Enums::Permission permission = Enums::Permission::None
+		);
 		[[nodiscard]] ObjectId GetObjectId() const;
 		[[nodiscard]] bool IsDestroying() const { return DestroyingState; }
 	);

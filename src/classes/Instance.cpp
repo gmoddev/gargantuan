@@ -40,6 +40,7 @@ namespace gargantuan {
 	ObjectId Instance::GetObjectId() const {
 		std::scoped_lock lock(IdentityMutex);
 		if (!Id.IsValid()) {
+			AssertAuthoritativeMutation("Instance identity publication");
 			auto self = const_cast<Instance *>(this)->shared_from_this();
 			Id = ObjectRegistry::Get().Register(self);
 			auto definition = InstanceClassRegistry::GetDefinition(const_cast<Instance *>(this));
@@ -55,7 +56,7 @@ namespace gargantuan {
 		Destroyed = true;
 		const auto objectId = GetObjectId();
 		ObjectRegistry::Get().Invalidate(objectId);
-		ChangeJournal::Get().Commit(objectId, PropertyUpdatedChange{"Destroyed"});
+		ChangeJournal::Get().Commit(objectId, PropertyUpdatedChange{"Destroyed", true});
 		GetPropertyChangedSignal("Destroyed")->Fire({});
 
 		Destroying->Fire({});
@@ -75,13 +76,42 @@ namespace gargantuan {
 
 	void Instance::NotifyPropertyCommitted(std::string_view propertyName) {
 		AssertAuthoritativeMutation("Instance property mutation");
-		ChangeJournal::Get().Commit(GetObjectId(), PropertyUpdatedChange{std::string(propertyName)});
+		auto *property = FindProperty(std::string(propertyName));
+		std::any committedValue;
+		if (property && property->Read) committedValue = property->Read(this);
+		ChangeJournal::Get().Commit(
+			GetObjectId(), PropertyUpdatedChange{std::string(propertyName), std::move(committedValue)}
+		);
 		GetPropertyChangedSignal(std::string(propertyName))->Fire({});
 	}
 
 	void Instance::AssertCanMutate() const {
 		AssertAuthoritativeMutation("Instance property mutation");
 		AssertIsAlive();
+	}
+
+	void Instance::ValidatePropertyMutation(std::string_view propertyName, const std::any &value) const {
+		auto *property = const_cast<Instance *>(this)->FindProperty(std::string(propertyName));
+		if (!property) throw std::invalid_argument("Property does not exist");
+		if (property->Validate && !property->Validate(value)) throw std::invalid_argument("Property validation failed");
+	}
+
+	MutationStatus Instance::ApplyPropertyMutation(
+		std::string_view propertyName,
+		const std::any &value,
+		Enums::Permission permission
+	) {
+		auto *property = FindProperty(std::string(propertyName));
+		if (!property) return MutationStatus::InvalidProperty;
+		if (!property->Write || property->WritePermission == Enums::Permission::Never) return MutationStatus::ReadOnly;
+		if (static_cast<int>(permission) < static_cast<int>(property->WritePermission)) return MutationStatus::Unauthorized;
+		if (property->WriteAuthority == InstanceProperty::Authority::Main &&
+			GetCurrentExecutionDomain() != ExecutionDomain::Main)
+			return MutationStatus::WrongExecutionDomain;
+		AssertIsAlive();
+		if (property->Validate && !property->Validate(value)) return MutationStatus::ValidationFailed;
+		property->Write(this, value);
+		return MutationStatus::Success;
 	}
 
 	std::string Instance::GetClassName() const {
@@ -209,19 +239,10 @@ namespace gargantuan {
 	};
 
 	void Instance::ResetPropertyToDefault(std::string propertyName) {
-		auto property = FindProperty(propertyName);
-
-		if (!property) throw std::runtime_error("Property does not exist");
-		if (property->Signal) throw std::runtime_error("Property is a signal");
-		if (!property->Write || property->WritePermission == Enums::Permission::Never) {
-			throw std::runtime_error("Property is read-only");
-		};
-		if (property->WriteAuthority == InstanceProperty::Authority::Main) AssertCanMutate();
-		if (property->Validate && !property->Validate(property->Unmodified)) {
-			throw std::invalid_argument("Default property value failed validation");
-		}
-
-		property->Write(this, property->Unmodified);
+		auto *property = FindProperty(propertyName);
+		if (!property || property->Signal) throw std::runtime_error("Property does not exist or is a signal");
+		const auto status = ApplyPropertyMutation(propertyName, property->Unmodified, Enums::Permission::Engine);
+		if (status != MutationStatus::Success) throw std::runtime_error("Default property mutation rejected");
 	};
 
 	const InstanceProperty *Instance::FindProperty(std::string name) {
@@ -272,11 +293,8 @@ namespace gargantuan {
 					if (property->Write && property->WritePermission != Enums::Permission::Never) {
 						if (!property->IsStack(L, 3)) luaL_typeerrorL(L, 3, property->ReflectedTypedef.c_str());
 						auto value = property->FromStack(L, 3);
-						if (property->WriteAuthority == InstanceProperty::Authority::Main) self->AssertCanMutate();
-						if (property->Validate && !property->Validate(value)) {
-							throw std::invalid_argument("Property validation failed");
-						}
-						property->Write(self, value);
+						const auto status = self->ApplyPropertyMutation(key, value);
+						if (status != MutationStatus::Success) throw std::runtime_error("Property mutation rejected");
 						return 0;
 					} else {
 						luaL_error(L, "Property %s is read-only", key);

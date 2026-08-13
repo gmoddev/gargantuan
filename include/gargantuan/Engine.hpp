@@ -8,6 +8,7 @@
 #include "gargantuan/services/RunService.hpp"
 #include "gargantuan/services/UserInputService.hpp"
 #include "gargantuan/services/Workspace.hpp"
+#include "gargantuan/runtime/MutationGateway.hpp"
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_gpu.h>
@@ -23,6 +24,7 @@ namespace gargantuan {
 		std::shared_ptr<DataModel> DataModel;
 		BaseRenderer *Renderer;
 		ScriptEngine *Script;
+		MutationGateway Mutations;
 
 		std::shared_ptr<Workspace> Workspace;
 		std::shared_ptr<WorldRoot> WorldRoot;

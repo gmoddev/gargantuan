@@ -11,6 +11,7 @@ namespace gargantuan {
 	}
 
 	void BasePart::SetPosition(glm::vec3 value) {
+		ValidatePropertyMutation("Position", value);
 		SetCFrame(gargantuan::CFrame(value, GetCFrame().Rotation));
 	}
 
@@ -21,6 +22,7 @@ namespace gargantuan {
 	}
 
 	void BasePart::SetRotation(glm::vec3 value) {
+		ValidatePropertyMutation("Rotation", value);
 		glm::mat3 rotMatrix = glm::mat3(glm::eulerAngleYXZ(value.y, value.x, value.z));
 		SetCFrame(gargantuan::CFrame(GetCFrame().Position, rotMatrix));
 	}

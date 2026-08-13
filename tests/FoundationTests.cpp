@@ -6,6 +6,7 @@
 #include "gargantuan/runtime/DataModelRoot.hpp"
 #include "gargantuan/runtime/ExecutionDomain.hpp"
 #include "gargantuan/runtime/JobSystem.hpp"
+#include "gargantuan/runtime/MutationGateway.hpp"
 #include "gargantuan/runtime/ObjectId.hpp"
 #include "gargantuan/scripting/ModuleResolution.hpp"
 #include "gargantuan/scripting/NativeCallback.hpp"
@@ -176,6 +177,122 @@ namespace {
 		Check(property.WriteAuthority == InstanceProperty::Authority::Any, "authority metadata is retained");
 	}
 
+	void TestMutationGateway() {
+		using namespace gargantuan;
+		auto &journal = ChangeJournal::Get();
+		journal.Clear();
+		auto folder = std::make_shared<Folder>();
+		const auto id = folder->GetObjectId();
+		journal.Clear();
+
+		MutationGateway gateway;
+		JobSystem jobs(2);
+		auto submitted = std::make_shared<JobGroup>();
+		std::shared_ptr<MutationCompletion> completion;
+		jobs.Submit(
+			[&] { completion = gateway.Submit(UpdatePropertyCommand{id, "Name", std::string("FromWorker")}); },
+			submitted
+		);
+		submitted->Wait();
+		Check(folder->GetName() != "FromWorker", "worker submission does not mutate authoritative state");
+		Check(journal.ReadSince(0).empty(), "queued command is not recorded before commit");
+		Check(gateway.Drain() == 1, "Main drains one queued mutation");
+		Check(completion->Wait().Succeeded(), "queued property mutation succeeds");
+		Check(folder->GetName() == "FromWorker", "Main applies worker property mutation");
+		auto records = journal.ReadSince(0);
+		Check(records.size() == 1, "successful property command emits exactly one change record");
+		Check(
+			std::holds_alternative<PropertyUpdatedChange>(records.front().Payload) &&
+				std::get<PropertyUpdatedChange>(records.front().Payload).PropertyName == "Name" &&
+				std::any_cast<std::string>(std::get<PropertyUpdatedChange>(records.front().Payload).Value) == "FromWorker",
+			"property command records the committed property value"
+		);
+
+		journal.Clear();
+		auto invalid = gateway.Apply(UpdatePropertyCommand{id, "Missing", std::string("value")});
+		Check(invalid.Status == MutationStatus::InvalidProperty, "invalid property command is rejected");
+		Check(journal.ReadSince(0).empty(), "invalid property command emits no record");
+		auto wrongType = gateway.Apply(UpdatePropertyCommand{id, "Name", 42});
+		Check(wrongType.Status == MutationStatus::ValidationFailed, "wrong native property type is rejected");
+		Check(journal.ReadSince(0).empty(), "wrong native property type emits no record");
+
+		auto *nameProperty = const_cast<InstanceProperty *>(folder->FindProperty("Name"));
+		const auto originalValidator = nameProperty->Validate;
+		nameProperty->Validate = [](const std::any &value) {
+			auto *name = std::any_cast<std::string>(&value);
+			return name && *name != "Rejected";
+		};
+		auto validation = gateway.Apply(UpdatePropertyCommand{id, "Name", std::string("Rejected")});
+		Check(validation.Status == MutationStatus::ValidationFailed, "schema validation rejects command value");
+		Check(journal.ReadSince(0).empty(), "validation failure emits no record");
+		nameProperty->Validate = originalValidator;
+
+		const auto originalPermission = nameProperty->WritePermission;
+		nameProperty->WritePermission = Enums::Permission::Engine;
+		auto unauthorized = gateway.Apply(UpdatePropertyCommand{id, "Name", std::string("Unauthorized")});
+		Check(unauthorized.Status == MutationStatus::Unauthorized, "property permission rejects command origin");
+		Check(journal.ReadSince(0).empty(), "unauthorized command emits no record");
+		nameProperty->WritePermission = originalPermission;
+
+		auto readOnly = gateway.Apply(UpdatePropertyCommand{id, "Destroyed", true});
+		Check(readOnly.Status == MutationStatus::ReadOnly, "read-only property command is rejected");
+		Check(journal.ReadSince(0).empty(), "read-only command emits no record");
+
+		MutationResult bypass;
+		auto bypassGroup = std::make_shared<JobGroup>();
+		jobs.Submit([&] { bypass = gateway.Apply(UpdatePropertyCommand{id, "Name", std::string("Bypass")}); }, bypassGroup);
+		bypassGroup->Wait();
+		Check(bypass.Status == MutationStatus::WrongExecutionDomain, "worker direct apply is unauthorized");
+		Check(journal.ReadSince(0).empty(), "unauthorized worker apply emits no record");
+
+		auto parent = std::make_shared<Folder>();
+		const auto parentId = parent->GetObjectId();
+		journal.Clear();
+		auto created = gateway.Apply(CreateObjectCommand{"Folder", parentId});
+		Check(created.Succeeded() && created.Object.has_value(), "create command constructs an owned object");
+		auto createdObject = ObjectRegistry::Get().Lookup(*created.Object);
+		Check(createdObject && createdObject->GetParent() == parent, "created object is attached to its authoritative parent");
+		auto otherParent = std::make_shared<Folder>();
+		const auto otherParentId = otherParent->GetObjectId();
+		journal.Clear();
+		auto reparented = gateway.Apply(ReparentObjectCommand{*created.Object, otherParentId});
+		Check(reparented.Succeeded() && createdObject->GetParent() == otherParent, "reparent command applies on Main");
+		Check(journal.ReadSince(0).size() == 1, "reparent command emits one committed record");
+		journal.Clear();
+		auto destroyed = gateway.Apply(DestroyObjectCommand{*created.Object});
+		Check(destroyed.Succeeded() && createdObject->GetDestroyed(), "destroy command applies on Main");
+		Check(!ObjectRegistry::Get().Lookup(*created.Object), "destroy command invalidates lookup");
+
+		folder->Destroy();
+		journal.Clear();
+		auto dead = gateway.Apply(UpdatePropertyCommand{id, "Name", std::string("Dead")});
+		Check(dead.Status == MutationStatus::StaleObject, "destroyed object command is rejected as stale");
+		Check(journal.ReadSince(0).empty(), "destroyed object command emits no record");
+		jobs.Shutdown(true);
+	}
+
+	void TestBoundedJournalCursor() {
+		using namespace gargantuan;
+		auto &journal = ChangeJournal::Get();
+		const auto originalCapacity = journal.GetCapacity();
+		journal.Clear();
+		journal.SetCapacity(2);
+		auto folder = std::make_shared<Folder>();
+		const auto id = folder->GetObjectId();
+		auto cursor = journal.CreateCursor();
+		folder->SetName("One");
+		folder->SetName("Two");
+		auto available = journal.Read(cursor, 1);
+		Check(available.Status == ChangeReadStatus::Available, "live cursor reads retained changes");
+		Check(available.Records.size() == 1, "cursor read respects its record bound");
+		folder->SetName("Three");
+		folder->SetName("Four");
+		auto stale = journal.Read(cursor);
+		Check(stale.Status == ChangeReadStatus::ResnapshotRequired, "evicted cursor requires resnapshot");
+		journal.SetCapacity(originalCapacity);
+		journal.Clear();
+	}
+
 	void TestLuauExceptionBoundary() {
 		lua_State *L = luaL_newstate();
 		lua_pushcfunction(L, [](lua_State *state) {
@@ -204,6 +321,8 @@ int main() {
 	TestCheckedResolutionAndOwnedPaths();
 	TestJobSystem();
 	TestSchemaMetadata();
+	TestMutationGateway();
+	TestBoundedJournalCursor();
 	TestLuauExceptionBoundary();
 	if (Failures == 0) std::cout << "All foundation tests passed\n";
 	return Failures == 0 ? 0 : 1;

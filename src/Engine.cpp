@@ -72,6 +72,7 @@ namespace gargantuan {
 
 	void Engine::Step() {
 		if (!ProcessService->Alive) return;
+		Mutations.Drain();
 
 		CurrentTick = SDL_GetTicks();
 		if (LastTick == 0) LastTick = CurrentTick;

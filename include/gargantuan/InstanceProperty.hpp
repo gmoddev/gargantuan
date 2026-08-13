@@ -5,6 +5,7 @@
 #include <any>
 #include <functional>
 #include <string>
+#include <stdexcept>
 #include <utility>
 
 namespace gargantuan {
@@ -197,7 +198,9 @@ namespace gargantuan {
 					ClassType *obj = reinterpret_cast<ClassType *>(self);
 					if (auto val = std::any_cast<ArgType>(&value)) {
 						(obj->*Pointer)(*val);
+						return;
 					}
+					throw std::invalid_argument("Reflected property value has the wrong native type");
 				};
 
 				IsStack = [](lua_State *L, int idx) { return StackValue<ArgType>::Is(L, idx); };
@@ -209,7 +212,9 @@ namespace gargantuan {
 					ClassType *obj = reinterpret_cast<ClassType *>(self);
 					if (auto val = std::any_cast<MemberType>(&value)) {
 						obj->*Pointer = *val;
+						return;
 					}
+					throw std::invalid_argument("Reflected property value has the wrong native type");
 				};
 
 				IsStack = [](lua_State *L, int idx) { return StackValue<MemberType>::Is(L, idx); };
