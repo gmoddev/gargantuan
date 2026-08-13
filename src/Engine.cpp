@@ -51,7 +51,7 @@ namespace gargantuan {
 		});
 
 		DataModel->DescendantRemoved->Connect([this](std::shared_ptr<Instance> inst) {
-			if (auto script = std::static_pointer_cast<gargantuan::Script>(inst);
+			if (auto script = std::dynamic_pointer_cast<gargantuan::Script>(inst);
 				script && Script->ScriptQueue.contains(script)) {
 				Script->ScriptQueue.erase(script);
 			}

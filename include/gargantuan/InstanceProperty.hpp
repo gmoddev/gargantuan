@@ -2,6 +2,7 @@
 
 #include "gargantuan/reflection/Enums.hpp"
 #include "gargantuan/scripting/StackValue.hpp"
+#include <any>
 #include <functional>
 #include <string>
 #include <utility>
@@ -68,11 +69,20 @@ namespace gargantuan {
 		};
 
 	  public:
+		enum class Persistence { Transient, Saved };
+		enum class Replication { None, FutureReplicated };
+		enum class Authority { Main, Any };
+
 		std::string Name{};
 		std::string ReflectedTypedef{};
 		std::any Unmodified{};
 		bool Signal{false};
 		bool Serializable{false};
+		Persistence PersistencePolicy = Persistence::Transient;
+		Replication ReplicationPolicy = Replication::None;
+		Authority WriteAuthority = Authority::Main;
+		bool Editable = true;
+		std::function<bool(const std::any &)> Validate;
 
 		Enums::Permission ReadPermission = Enums::Permission::None;
 		std::function<std::any(Instance *self)> Read;
@@ -102,6 +112,27 @@ namespace gargantuan {
 
 		InstanceProperty &SetSerializable(bool serializable = true) {
 			Serializable = serializable;
+			PersistencePolicy = serializable ? Persistence::Saved : Persistence::Transient;
+			return *this;
+		}
+
+		InstanceProperty &SetReplication(Replication replication) {
+			ReplicationPolicy = replication;
+			return *this;
+		}
+
+		InstanceProperty &SetAuthority(Authority authority) {
+			WriteAuthority = authority;
+			return *this;
+		}
+
+		InstanceProperty &SetEditable(bool editable) {
+			Editable = editable;
+			return *this;
+		}
+
+		InstanceProperty &SetValidator(std::function<bool(const std::any &)> validator) {
+			Validate = std::move(validator);
 			return *this;
 		}
 

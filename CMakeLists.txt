@@ -140,21 +140,24 @@ file(GLOB_RECURSE GARGANTUAN_SOURCES CONFIGURE_DEPENDS
 	"src/*.cpp"
 	"src/*.hpp"
 )
+list(REMOVE_ITEM GARGANTUAN_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/Main.cpp")
 
-add_executable(gargantuan ${GARGANTUAN_SOURCES} ${SHADER_OUTPUTS})
+add_library(gargantuan_core OBJECT ${GARGANTUAN_SOURCES})
+add_executable(gargantuan "src/Main.cpp" ${SHADER_OUTPUTS})
+target_link_libraries(gargantuan PRIVATE gargantuan_core)
 
 # GCC 13+ rejects members named after their own type (ie. ScrptEngine's
 # ThreadEngine)
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-	target_compile_options(gargantuan PRIVATE -Wno-changes-meaning)
+	target_compile_options(gargantuan_core PRIVATE -Wno-changes-meaning)
 endif()
 
-target_include_directories(gargantuan PRIVATE
+target_include_directories(gargantuan_core PUBLIC
 	"src"
 	"include"
 )
 
-target_include_directories(gargantuan SYSTEM PRIVATE
+target_include_directories(gargantuan_core SYSTEM PUBLIC
 	"vendor/argparse/include"
 	"vendor/box3d/include"
 	"vendor/glm/glm"
@@ -176,8 +179,8 @@ if(APPLE)
 	target_link_options(gargantuan PRIVATE "LINKER:-no_warn_duplicate_libraries")
 endif()
 
-target_link_libraries(gargantuan
-	PRIVATE
+target_link_libraries(gargantuan_core
+	PUBLIC
 		argparse::argparse
 		SDL3::SDL3
 		SDL3_ttf-static
@@ -194,6 +197,20 @@ target_link_libraries(gargantuan
 		Luau.Config
 		Tracy::TracyClient
 )
+
+include(CTest)
+if(BUILD_TESTING)
+	add_executable(gargantuan_foundation_tests "tests/FoundationTests.cpp")
+	target_link_libraries(gargantuan_foundation_tests PRIVATE gargantuan_core)
+	if(WIN32)
+		add_custom_command(TARGET gargantuan_foundation_tests POST_BUILD
+			COMMAND ${CMAKE_COMMAND} -E copy_if_different
+				"$<TARGET_FILE:SDL3::SDL3>"
+				"$<TARGET_FILE_DIR:gargantuan_foundation_tests>"
+		)
+	endif()
+	add_test(NAME gargantuan_foundation COMMAND gargantuan_foundation_tests)
+endif()
 
 if(WIN32)
 	add_custom_command(TARGET gargantuan POST_BUILD

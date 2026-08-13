@@ -323,7 +323,7 @@ namespace gargantuan::InstanceSerialization {
 			return std::nullopt;
 		}
 
-		state.CurrentPath.push_back(name.get<std::string_view>());
+		state.CurrentPath.push_back(name.get<std::string>());
 
 		auto properties = contents["Properties"];
 		if (!properties.is_object()) {
@@ -378,6 +378,10 @@ namespace gargantuan::InstanceSerialization {
 			auto deserialized = maybeDeserialized.value();
 
 			try {
+				if (property->Validate && !property->Validate(deserialized)) {
+					instance->Destroy();
+					return state.ReturnError("Validation failed for property '{}' in {}", key, state.FormatCurrentPath());
+				}
 				property->Write(instance.get(), deserialized);
 			} catch (const std::bad_any_cast &e) {
 				instance->Destroy();

@@ -93,7 +93,8 @@ namespace gargantuan {
 	}
 
 	void FileLink::Synchronize(const std::filesystem::path absolutePath) {
-		if (!ParentPointer || Synchronizing) return;
+		auto parent = GetParent();
+		if (!parent || Synchronizing) return;
 		Synchronizing = true;
 
 		LOG_INFO(App, "Synchronizing FileLink path: %s", Paths::ToUtf8(absolutePath).c_str());
@@ -118,7 +119,7 @@ namespace gargantuan {
 			auto child = InstanceFromPath(entry.path());
 			if (!child) continue;
 			child->SetArchivable(false);
-			child->SetParent(ParentPointer->shared_from_this());
+			child->SetParent(*parent);
 			OwnedSiblings.push_back(child);
 		}
 

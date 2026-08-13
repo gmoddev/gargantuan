@@ -7,6 +7,7 @@
 #include "gargantuan/filesystem/DiskFilesystem.hpp"
 #include "gargantuan/filesystem/Project.hpp"
 #include "gargantuan/render/Renderer.hpp"
+#include "gargantuan/runtime/DataModelRoot.hpp"
 
 #include <SDL3/SDL.h>
 #include <argparse/argparse.hpp>
@@ -88,15 +89,8 @@ Engine *ConstructInstance(std::string path, BaseRenderer *renderer) {
 		std::exit(1);
 	}
 
-	std::shared_ptr<DataModel> game;
-
 	auto instance = deserialized.Instance;
-	if (auto maybeGame = static_pointer_cast<DataModel>(instance)) {
-		game = maybeGame;
-	} else {
-		game = std::make_shared<DataModel>();
-		instance->SetParent(game->GetService("Workspace"));
-	}
+	auto game = PrepareDataModelRoot(instance);
 
 	return new Engine(game, renderer);
 }

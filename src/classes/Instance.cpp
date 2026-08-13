@@ -3,6 +3,9 @@
 #include "gargantuan/datatypes/Signal.hpp"
 #include "gargantuan/scripting/Userdata.hpp"
 #include "gargantuan/scripting/UserdataTag.hpp"
+#include "gargantuan/runtime/ChangeJournal.hpp"
+#include "gargantuan/runtime/ExecutionDomain.hpp"
+#include "gargantuan/runtime/ObjectId.hpp"
 
 #include <lua.h>
 #include <lualib.h>
@@ -28,10 +31,32 @@ namespace gargantuan {
 		}
 	);
 
-	void Instance::Destroy() {
-		if (Destroyed) {
-			return;
+	Instance::Instance() = default;
+
+	Instance::~Instance() {
+		ObjectRegistry::Get().Invalidate(Id);
+	}
+
+	ObjectId Instance::GetObjectId() const {
+		std::scoped_lock lock(IdentityMutex);
+		if (!Id.IsValid()) {
+			auto self = const_cast<Instance *>(this)->shared_from_this();
+			Id = ObjectRegistry::Get().Register(self);
+			auto definition = InstanceClassRegistry::GetDefinition(const_cast<Instance *>(this));
+			ChangeJournal::Get().Commit(Id, ObjectCreatedChange{definition ? definition->ClassName : "Instance"});
 		}
+		return Id;
+	}
+
+	void Instance::Destroy() {
+		AssertAuthoritativeMutation("Instance::Destroy");
+		if (Destroyed || DestroyingState) return;
+		DestroyingState = true;
+		Destroyed = true;
+		const auto objectId = GetObjectId();
+		ObjectRegistry::Get().Invalidate(objectId);
+		ChangeJournal::Get().Commit(objectId, PropertyUpdatedChange{"Destroyed"});
+		GetPropertyChangedSignal("Destroyed")->Fire({});
 
 		Destroying->Fire({});
 
@@ -41,17 +66,27 @@ namespace gargantuan {
 		}
 
 		SetParent(nullptr);
-		Destroyed = true;
+		ChangeJournal::Get().Commit(objectId, ObjectDestroyedChange{});
 	}
 
 	void Instance::AssertIsAlive() const {
 		if (Destroyed) throw std::runtime_error("Instance is destroyed");
 	}
 
+	void Instance::NotifyPropertyCommitted(std::string_view propertyName) {
+		AssertAuthoritativeMutation("Instance property mutation");
+		ChangeJournal::Get().Commit(GetObjectId(), PropertyUpdatedChange{std::string(propertyName)});
+		GetPropertyChangedSignal(std::string(propertyName))->Fire({});
+	}
+
+	void Instance::AssertCanMutate() const {
+		AssertAuthoritativeMutation("Instance property mutation");
+		AssertIsAlive();
+	}
+
 	std::string Instance::GetClassName() const {
 		AssertIsAlive();
-		auto wtf = *this;
-		InstanceClassDefinition *definition = InstanceClassRegistry::GetDefinition(&wtf);
+		InstanceClassDefinition *definition = InstanceClassRegistry::GetDefinition(const_cast<Instance *>(this));
 		return definition->ClassName;
 	}
 
@@ -64,46 +99,60 @@ namespace gargantuan {
 	}
 
 	std::optional<std::shared_ptr<Instance>> Instance::GetParent() const {
-		return ParentPointer != nullptr ? std::optional(ParentPointer->shared_from_this()) : std::nullopt;
+		if (auto parent = ParentReference.lock()) return parent;
+		return std::nullopt;
 	}
 
 	void Instance::SetParent(std::optional<std::shared_ptr<Instance>> value) {
-		AssertIsAlive();
+		AssertAuthoritativeMutation("Instance::SetParent");
+		if (!DestroyingState) AssertIsAlive();
 
 		std::shared_ptr<Instance> newParent = value.has_value() ? value.value() : nullptr;
-		if (ParentPointer == newParent.get()) return;
+		if (DestroyingState && newParent) throw std::runtime_error("A destroying Instance cannot be reparented");
+		if (newParent) newParent->AssertIsAlive();
+		auto oldParent = ParentReference.lock();
+		if (oldParent == newParent) return;
 
 		std::shared_ptr<Instance> self = shared_from_this();
+		if (newParent == self) throw std::invalid_argument("An Instance cannot be parented to itself");
+		for (auto ancestor = newParent; ancestor; ancestor = ancestor->ParentReference.lock()) {
+			if (ancestor == self) throw std::invalid_argument("An Instance cannot be parented to its descendant");
+		}
 
 		// This whole subtree leaves the old ancestry and joins the new one, so
 		// collect it once up front and reuse it for both sets of signals
 		std::vector<std::shared_ptr<Instance>> subtree = {self};
 		CollectDescendants(subtree);
 
-		if (ParentPointer != nullptr) {
-			auto &oldChildren = ParentPointer->Children;
+		if (oldParent != nullptr) {
+			auto &oldChildren = oldParent->Children;
 			if (auto it = std::find(oldChildren.begin(), oldChildren.end(), self); it != oldChildren.end()) {
 				oldChildren.erase(it);
-				ParentPointer->ChildRemoved->Fire(self);
-			}
-
-			for (Instance *ancestor = ParentPointer; ancestor != nullptr; ancestor = ancestor->ParentPointer) {
-				for (auto &node : subtree) {
-					ancestor->DescendantRemoved->Fire(node);
-				}
 			}
 		}
 
-		ParentPointer = newParent.get();
+		ParentReference = newParent;
 
 		if (newParent != nullptr) {
 			newParent->Children.push_back(self);
+		}
+
+		const auto objectId = GetObjectId();
+		const auto newParentId = newParent ? std::optional(newParent->GetObjectId()) : std::nullopt;
+		ChangeJournal::Get().Commit(objectId, ObjectReparentedChange{newParentId});
+
+		if (oldParent != nullptr) {
+			oldParent->ChildRemoved->Fire(self);
+			for (auto ancestor = oldParent; ancestor; ancestor = ancestor->ParentReference.lock()) {
+				for (auto &node : subtree) ancestor->DescendantRemoved->Fire(node);
+			}
+		}
+
+		if (newParent != nullptr) {
 			newParent->ChildAdded->Fire(self);
 
-			for (Instance *ancestor = newParent.get(); ancestor != nullptr; ancestor = ancestor->ParentPointer) {
-				for (auto &node : subtree) {
-					ancestor->DescendantAdded->Fire(node);
-				}
+			for (auto ancestor = newParent; ancestor; ancestor = ancestor->ParentReference.lock()) {
+				for (auto &node : subtree) ancestor->DescendantAdded->Fire(node);
 			}
 		}
 
@@ -151,14 +200,10 @@ namespace gargantuan {
 	std::shared_ptr<Signal<std::monostate>> Instance::GetPropertyChangedSignal(std::string propertyName) {
 		if (PropertyChangedSignals.contains(propertyName)) return PropertyChangedSignals[propertyName];
 
+		auto signal = std::make_shared<Signal<std::monostate>>();
 		auto property = FindProperty(propertyName);
 
 		if (!property) throw std::runtime_error("Property does not exist");
-		if (!property->Write || property->WritePermission == Enums::Permission::Never) {
-			throw std::runtime_error("Property is read-only");
-		};
-
-		auto signal = std::make_shared<Signal<std::monostate>>();
 		PropertyChangedSignals.emplace(propertyName, signal);
 		return signal;
 	};
@@ -171,6 +216,10 @@ namespace gargantuan {
 		if (!property->Write || property->WritePermission == Enums::Permission::Never) {
 			throw std::runtime_error("Property is read-only");
 		};
+		if (property->WriteAuthority == InstanceProperty::Authority::Main) AssertCanMutate();
+		if (property->Validate && !property->Validate(property->Unmodified)) {
+			throw std::invalid_argument("Default property value failed validation");
+		}
 
 		property->Write(this, property->Unmodified);
 	};
@@ -192,73 +241,82 @@ namespace gargantuan {
 	}
 
 	int Instance::LIndex(lua_State *L, Instance *self) {
-		const char *key = luaL_checkstring(L, 2);
+		return InvokeNativeCallback(L, [L, self] {
+			const char *key = luaL_checkstring(L, 2);
 
-		if (key && self) {
-			const auto *property = self->FindProperty(key);
-			if (property) {
-				if (property->Read) {
-					return property->PushStack(L, property->Read(self));
-				} else {
-					luaL_error(L, "Property %s is write-only", key);
+			if (key && self) {
+				const auto *property = self->FindProperty(key);
+				if (property) {
+					if (property->Read) {
+						return property->PushStack(L, property->Read(self));
+					} else {
+						luaL_error(L, "Property %s is write-only", key);
+					}
+				} else if (auto child = self->FindFirstChild(key, std::nullopt)) {
+					StackValue<std::shared_ptr<Instance>>::Push(L, child);
+					return 1;
 				}
-			} else if (auto child = self->FindFirstChild(key, std::nullopt)) {
-				// lua_settop(L, 0);
-				StackValue<std::shared_ptr<Instance>>::Push(L, child);
-				return 1;
 			}
-		}
 
-		return 0;
+			return 0;
+		});
 	};
 
 	int Instance::LNewIndex(lua_State *L, Instance *self) {
-		const char *key = luaL_checkstring(L, 2);
+		return InvokeNativeCallback(L, [L, self] {
+			const char *key = luaL_checkstring(L, 2);
 
-		if (key && self) {
-			const auto *property = self->FindProperty(key);
-			if (property) {
-				if (property->Write) {
-					if (!property->IsStack(L, 3)) luaL_typeerrorL(L, 3, property->ReflectedTypedef.c_str());
-					auto value = property->FromStack(L, 3);
-					property->Write(self, value);
-					return 0;
-				} else {
-					luaL_error(L, "Property %s is read-only", key);
+			if (key && self) {
+				const auto *property = self->FindProperty(key);
+				if (property) {
+					if (property->Write && property->WritePermission != Enums::Permission::Never) {
+						if (!property->IsStack(L, 3)) luaL_typeerrorL(L, 3, property->ReflectedTypedef.c_str());
+						auto value = property->FromStack(L, 3);
+						if (property->WriteAuthority == InstanceProperty::Authority::Main) self->AssertCanMutate();
+						if (property->Validate && !property->Validate(value)) {
+							throw std::invalid_argument("Property validation failed");
+						}
+						property->Write(self, value);
+						return 0;
+					} else {
+						luaL_error(L, "Property %s is read-only", key);
+					}
 				}
 			}
-		}
 
-		luaL_error(L, "Unknown property %s", key);
+			luaL_error(L, "Unknown property %s", key);
 
-		return 0;
+			return 0;
+		});
 	};
 
 	int Instance::LNamecall(lua_State *L, Instance *self) {
-		const char *key = lua_namecallatom(L, nullptr);
+		return InvokeNativeCallback(L, [L, self] {
+			const char *key = lua_namecallatom(L, nullptr);
 
-		if (key && self) {
-			const auto *method = self->FindMethod(key);
-			if (method) {
-				return method->Call(L, self);
+			if (key && self) {
+				const auto *method = self->FindMethod(key);
+				if (method) return method->Call(L, self);
 			}
-		}
 
-		luaL_error(L, "%s is not a valid method of %s", key, self->Name.data());
-		return 0;
+			luaL_error(L, "%s is not a valid method of %s", key, self->Name.data());
+			return 0;
+		});
 	};
 
 	std::string Instance::GetFullName() {
 		std::vector<std::string_view> path;
 
 		size_t totalLength = 0;
+		std::shared_ptr<Instance> owner;
 		Instance *current = this;
 
 		while (current) {
 			auto &name = current->Name;
 			path.push_back(name);
 			totalLength += name.size() + 1;
-			current = current->ParentPointer;
+			owner = current->ParentReference.lock();
+			current = owner.get();
 		};
 
 		if (path.empty()) {
@@ -359,32 +417,32 @@ namespace gargantuan {
 	}
 
 	std::shared_ptr<Instance> Instance::FindFirstAncestor(std::string name) {
-		auto *current = this->ParentPointer;
+		auto current = ParentReference.lock();
 		while (current) {
-			if (current->Name == name) return current->shared_from_this();
-			current = current->ParentPointer;
+			if (current->Name == name) return current;
+			current = current->ParentReference.lock();
 		}
 		return nullptr;
 	}
 
 	std::shared_ptr<Instance> Instance::FindFirstAncestorOfClass(std::string className) {
-		auto *current = this->ParentPointer;
+		auto current = ParentReference.lock();
 		while (current) {
-			if (InstanceClassRegistry::GetDefinition(current)->ClassName == className) {
-				return current->shared_from_this();
+			if (InstanceClassRegistry::GetDefinition(current.get())->ClassName == className) {
+				return current;
 			}
-			current = current->ParentPointer;
+			current = current->ParentReference.lock();
 		}
 		return nullptr;
 	}
 
 	std::shared_ptr<Instance> Instance::FindFirstAncestorWhichIsA(std::string className) {
-		auto *current = this->ParentPointer;
+		auto current = ParentReference.lock();
 		while (current) {
-			if (InstanceClassRegistry::GetDefinition(current)->InheritedClasses.contains(className)) {
-				return current->shared_from_this();
+			if (InstanceClassRegistry::GetDefinition(current.get())->InheritedClasses.contains(className)) {
+				return current;
 			}
-			current = current->ParentPointer;
+			current = current->ParentReference.lock();
 		}
 		return nullptr;
 	}

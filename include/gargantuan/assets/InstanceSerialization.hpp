@@ -18,7 +18,7 @@ namespace gargantuan::InstanceSerialization {
 		std::shared_ptr<Instance> Instance;
 		std::vector<std::string> Errors;
 
-		std::vector<std::string_view> CurrentPath{"(TOP)"};
+		std::vector<std::string> CurrentPath{"(TOP)"};
 		std::string FormatCurrentPath();
 
 		template <class... Args> void PushError(std::format_string<Args...> fmt, Args &&...args) {

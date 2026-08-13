@@ -3,9 +3,11 @@
 #include "gargantuan/InstanceClassDefinition.hpp"
 #include "gargantuan/classes/generated/Instance.hpp"
 #include "gargantuan/datatypes/Signal.hpp"
+#include "gargantuan/runtime/ObjectId.hpp"
 #include "gargantuan/scripting/Userdata.hpp"
 
 #include <memory>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -16,12 +18,16 @@ namespace gargantuan {
 	G_SHARED_USERDATA_DECL(
 		Instance, I_Instance;
 
-		virtual ~Instance() = default;
+		Instance();
+		virtual ~Instance();
 
 		std::vector<std::shared_ptr<Instance>> Children;
 		std::unordered_map<std::string, std::shared_ptr<Signal<std::monostate>>> PropertyChangedSignals;
-		Instance *ParentPointer = nullptr;
+		std::weak_ptr<Instance> ParentReference;
 		InstanceClassDefinition *CachedDefinition = nullptr;
+		mutable ObjectId Id;
+		mutable std::mutex IdentityMutex;
+		bool DestroyingState = false;
 
 		const InstanceProperty *FindProperty(std::string name);
 		const Self::Method *FindMethod(std::string name);
@@ -36,6 +42,10 @@ namespace gargantuan {
 		void CollectDescendants(std::vector<std::shared_ptr<Instance>> &descendants);
 		void FireAncestryChanged(std::shared_ptr<Instance> child, std::shared_ptr<Instance> parent);
 		void AssertIsAlive() const;
+		void NotifyPropertyCommitted(std::string_view propertyName);
+		void AssertCanMutate() const;
+		[[nodiscard]] ObjectId GetObjectId() const;
+		[[nodiscard]] bool IsDestroying() const { return DestroyingState; }
 	);
 
 	template <typename Subclass>

@@ -4,6 +4,7 @@
 #include "gargantuan/scripting/UserdataDefinition.hpp"
 #include "gargantuan/scripting/UserdataMethod.hpp"
 #include "gargantuan/scripting/UserdataProperty.hpp"
+#include "gargantuan/scripting/NativeCallback.hpp"
 
 #include <format>
 #include <lua.h>
@@ -141,6 +142,22 @@ namespace gargantuan {
 			return 1;
 		};
 
+		static int ProtectedIndex(lua_State *L) {
+			return InvokeNativeCallback(L, [L] { return DefaultIndex(L); });
+		}
+
+		static int ProtectedNewIndex(lua_State *L) {
+			return InvokeNativeCallback(L, [L] { return DefaultNewIndex(L); });
+		}
+
+		static int ProtectedNamecall(lua_State *L) {
+			return InvokeNativeCallback(L, [L] { return DefaultNamecall(L); });
+		}
+
+		static int ProtectedTostring(lua_State *L) {
+			return InvokeNativeCallback(L, [L] { return DefaultTostring(L); });
+		}
+
 		static void CreateUserdataMetatable(lua_State *L) {
 			const Definition &definition = ClassType::DEFINITION;
 			std::string typeString(definition.Type.data(), definition.Type.size());
@@ -150,16 +167,16 @@ namespace gargantuan {
 			lua_pushstring(L, typeString.c_str());
 			lua_setfield(L, -2, "__type");
 
-			lua_pushcfunction(L, ClassType::DefaultIndex, std::format("{}.__index", typeString).c_str());
+			lua_pushcfunction(L, ClassType::ProtectedIndex, std::format("{}.__index", typeString).c_str());
 			lua_setfield(L, -2, "__index");
 
-			lua_pushcfunction(L, ClassType::DefaultNewIndex, std::format("{}.__newindex", typeString).c_str());
+			lua_pushcfunction(L, ClassType::ProtectedNewIndex, std::format("{}.__newindex", typeString).c_str());
 			lua_setfield(L, -2, "__newindex");
 
-			lua_pushcfunction(L, ClassType::DefaultNamecall, "__namecall");
+			lua_pushcfunction(L, ClassType::ProtectedNamecall, "__namecall");
 			lua_setfield(L, -2, "__namecall");
 
-			lua_pushcfunction(L, ClassType::DefaultTostring, std::format("{}.__tostring", typeString).c_str());
+			lua_pushcfunction(L, ClassType::ProtectedTostring, std::format("{}.__tostring", typeString).c_str());
 			lua_setfield(L, -2, "__tostring");
 
 			for (const auto &[name, method] : definition.Methods) {
@@ -212,7 +229,9 @@ namespace gargantuan {
 			auto closure = [](lua_State *L) -> int {
 				auto *methodPointer = static_cast<Method *>(lua_touserdata(L, lua_upvalueindex(1)));
 				auto self = fromStackValue(L, 1);
-				return methodPointer && methodPointer->Call ? methodPointer->Call(L, self) : 0;
+				return InvokeNativeCallback(
+					L, [L, methodPointer, self] { return methodPointer && methodPointer->Call ? methodPointer->Call(L, self) : 0; }
+				);
 			};
 
 			lua_pushlightuserdata(L, const_cast<Method *>(&method));

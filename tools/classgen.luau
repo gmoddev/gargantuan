@@ -74,6 +74,21 @@ const function assembleProperties(state: GenerationState)
 		if property.serializable then
 			state.definitionProperties:line(`.SetSerializable()`)
 		end
+		if property.replicated then
+			state.definitionProperties:line(`.SetReplication(InstanceProperty::Replication::FutureReplicated)`)
+		end
+		if property.editable == false then
+			state.definitionProperties:line(`.SetEditable(false)`)
+		end
+		if property.authority then
+			state.definitionProperties:line(`.SetAuthority(InstanceProperty::Authority::{property.authority})`)
+		end
+		if property.readLevel then
+			state.definitionProperties:line(`.SetReadPermission(Enums::Permission::{property.readLevel})`)
+		end
+		if property.writeLevel then
+			state.definitionProperties:line(`.SetWritePermission(Enums::Permission::{property.writeLevel})`)
+		end
 
 		if property.overrideRead or property.overrideWrite then
 			if property.overrideRead then
@@ -96,16 +111,23 @@ const function assembleProperties(state: GenerationState)
 				:untab()
 				:line(`}`)
 				:newline()
-				:line(`void {setIdentifier}({property.type.cType} value) \{`)
-				:tab()
-				:line(`GetPropertyChangedSignal({keyString})->Fire(\{});`)
-				:line(`{key} = value;`)
-				:untab()
-				:line(`}`)
-				:newline()
+
+			if property.writable ~= false then
+				state.publicBody
+					:line(`void {setIdentifier}({property.type.cType} value) \{`)
+					:tab()
+					:line(`AssertCanMutate();`)
+					:line(`{key} = value;`)
+					:line(`NotifyPropertyCommitted({keyString});`)
+					:untab()
+					:line(`}`)
+					:newline()
+			end
 
 			state.definitionProperties:line(`.UseRead<&{state.class.name}::{getIdentifier}>()`)
-			state.definitionProperties:line(`.UseWrite<&{state.class.name}::{setIdentifier}>()`)
+			if property.writable ~= false then
+				state.definitionProperties:line(`.UseWrite<&{state.class.name}::{setIdentifier}>()`)
+			end
 		end
 
 		state.definitionProperties:line(".IntoPair(),"):untab()

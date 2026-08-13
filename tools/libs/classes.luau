@@ -8,6 +8,10 @@ export type ClassProperty = {
 	read description: string,
 	read unmodified: string,
 	read serializable: boolean?,
+	read replicated: boolean?,
+	read editable: boolean?,
+	read authority: "Main" | "Any"?,
+	read writable: boolean?,
 
 	read overrideRead: string?,
 	read overrideWrite: string?,

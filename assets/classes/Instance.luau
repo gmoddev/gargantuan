@@ -23,6 +23,9 @@ return c({
 			description = "Whether this instance has been destroyed",
 			type = t.Bool,
 			unmodified = "false",
+			writeLevel = "Never",
+			editable = false,
+			writable = false,
 		},
 		Name = {
 			description = "Non-unique identifier of the instance",

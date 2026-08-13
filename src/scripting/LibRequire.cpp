@@ -1,6 +1,7 @@
 #include "gargantuan/classes/LuaSourceContainer.hpp"
 #include "gargantuan/classes/ModuleScript.hpp"
 #include "gargantuan/scripting/ScriptEngine.hpp"
+#include "gargantuan/scripting/ModuleResolution.hpp"
 
 #include <Luau/Require.h>
 #include <cstring>
@@ -59,8 +60,8 @@ namespace gargantuan {
 		config->to_parent = [](lua_State *L, void *ctx) -> luarequire_NavigateResult {
 			auto scriptEngine = static_cast<ScriptEngine *>(ctx);
 
-			if (auto parent = scriptEngine->RequireCurrentInstance->ParentPointer) {
-				scriptEngine->RequireCurrentInstance = parent->shared_from_this();
+			if (auto parent = scriptEngine->RequireCurrentInstance->GetParent()) {
+				scriptEngine->RequireCurrentInstance = *parent;
 				return NAVIGATE_SUCCESS;
 			}
 
@@ -80,8 +81,11 @@ namespace gargantuan {
 
 		config->is_module_present = [](lua_State *L, void *ctx) -> bool {
 			auto scriptEngine = static_cast<ScriptEngine *>(ctx);
-			return scriptEngine->RequireCurrentInstance &&
-				   std::static_pointer_cast<gargantuan::ModuleScript>(scriptEngine->RequireCurrentInstance) != nullptr;
+			try {
+				return ResolveRequiredModule(scriptEngine->RequireCurrentInstance) != nullptr;
+			} catch (...) {
+				return false;
+			}
 		};
 
 		config->get_chunkname =
@@ -96,8 +100,8 @@ namespace gargantuan {
 		config->get_cache_key =
 			[](lua_State *L, void *ctx, char *buffer, size_t buffer_size, size_t *size_out) -> luarequire_WriteResult {
 			auto scriptEngine = static_cast<ScriptEngine *>(ctx);
-			void *modulePointer = scriptEngine->RequireCurrentInstance.get();
-			std::string key = std::format("module: {}", modulePointer);
+			auto id = scriptEngine->RequireCurrentInstance->GetObjectId();
+			std::string key = std::format("module:{}:{}", id.Slot, id.Generation);
 			return CopyStringToBuffer(key.c_str(), buffer, buffer_size, size_out);
 		};
 
@@ -119,14 +123,16 @@ namespace gargantuan {
 
 			if (!scriptEngine->RequireCurrentInstance) luaL_error(L, "Cannot require nil instance");
 
-			auto module = static_pointer_cast<gargantuan::ModuleScript>(scriptEngine->RequireCurrentInstance);
-			if (!module) {
+			std::shared_ptr<ModuleScript> module;
+			try {
+				module = ResolveRequiredModule(scriptEngine->RequireCurrentInstance);
+			} catch (const std::exception &) {
 				luaL_error(
 					L,
 					"Cannot require %s because it is not a ModuleScript",
 					scriptEngine->RequireCurrentInstance->GetFullName().c_str()
 				);
-			};
+			}
 
 			module->CompileBytecode(&scriptEngine->CompileOptions);
 			if (module->BytecodeCompileStatus != BytecodeCompileStatus::Success) {
