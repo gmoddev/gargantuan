@@ -5,56 +5,98 @@
 <img src="./assets/github/demo-sphere.gif" alt="Gargantuan" width="324px" />
 <img src="./assets/github/demo-waveform.gif" alt="Gargantuan" width="324px" />
 
-<h3>An Independent Game Engine for Roblox Developers</h3>
+<h3>An Independently Maintained Fork of Gargantuan</h3>
 
-<a href="https://discord.gg/wTudGB7cJA">
-<img src="https://img.shields.io/discord/1470469501790457858?logo=discord&logoColor=white&label=Discord&color=5865F2&style=flat-square" alt="Discord" />
-</a>
 <a href="./LICENSE.md">
-<img src="https://img.shields.io/github/license/teamfireworks/gargantuan?style=flat-square&label=License" alt="MPL-2.0 License" />
+<img src="https://img.shields.io/github/license/gmoddev/gargantuan?style=flat-square&label=License" alt="MPL-2.0 License" />
 </a>
-<a href="https://discord.gg/9Fuv68NcSt">
-<img src="https://img.shields.io/badge/-Made_by_Team_Fireworks-F8F1E9?style=flat-square&logo=data%3Aimage%2Fsvg%2Bxml%3Bbase64%2CPHN2ZyB3aWR0aD0iMTciIGhlaWdodD0iMTciIHZpZXdCb3g9IjAgMCAxNyAxNyIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHBhdGggZD0iTTEwLjMxMDUgMC4wNDM5NDUzTDkuODY4MTYgNi4xOTkyMkwxNi4wMjQ0IDUuNzU3ODFMMTYuMDY4NCA2LjAxOTUzTDguNTQ4ODMgOC4wMzMyTDEyLjY4NzUgOS4xNDI1OEwxMi43NjE3IDkuMTYzMDlMMTIuNzgyMiA5LjIzNzNMMTQuMDE5NSAxMy44NTY0TDEzLjg1NjQgMTQuMDE5NUw5LjIzNzMgMTIuNzgyMkw5LjE2MzA5IDEyLjc2MTdMOS4xNDI1OCAxMi42ODc1TDguMDMzMiA4LjU0ODgzTDYuMDE5NTMgMTYuMDY4NEw1Ljc1NzgxIDE2LjAyNDRMNi4xOTkyMiA5Ljg2ODE2TDAuMDQzOTQ1MyAxMC4zMTA1TDAgMTAuMDQ4OEw3LjUxODU1IDguMDM0MThMMy4zODA4NiA2LjkyNTc4TDMuMzA2NjQgNi45MDUyN0wzLjI4NjEzIDYuODMxMDVMMi4wNDg4MyAyLjIxMTkxTDIuMjExOTEgMi4wNDg4M0w2LjgzMTA1IDMuMjg2MTNMNi45MDUyNyAzLjMwNjY0TDYuOTI1NzggMy4zODA4Nkw4LjAzNDE4IDcuNTE4NTVMMTAuMDQ4OCAwTDEwLjMxMDUgMC4wNDM5NDUzWiIgZmlsbD0iI0ZGMDA0RCIvPgo8L3N2Zz4K&logoColor=%23FF004D&logoSize=auto&labelColor=%23F8F1E9&color=%23FF004D" alt="Made by Team Fireworks" />
+<a href="https://github.com/teamfireworks/gargantuan">
+<img src="https://img.shields.io/badge/Upstream-Team%20Fireworks-informational?style=flat-square" alt="Upstream Gargantuan" />
 </a>
 
 </div>
 
-## About Gargantuan
+## About This Fork
 
-Gargantuan is an 3D game engine, scriptable using Luau, independently developed
-and maintained by Team Fireworks.
+This repository is an independently maintained fork of
+[Gargantuan](https://github.com/teamfireworks/gargantuan), originally developed
+and maintained by [Team Fireworks](https://github.com/teamfireworks).
 
-- **Gargantuan is powerful,** boasting a feature rich 2D and 3D featureset.
-- **Gargantuan is productive,** with a familiar Luau API surface that facilitates rapid prototyping.
-- **Gargantuan is multiplatform,** enabling one game to run across desktop, mobile, and VR.
+It was split from upstream for personal development and experimentation with a
+different architectural direction and development methodology. It is not intended
+to replace or represent the upstream Gargantuan project.
 
-And finally,
+The goal of this fork is to retain the core idea that made Gargantuan interesting
+to me — a standalone game engine built around Luau, Instances, a DataModel, and a
+familiar Roblox-inspired development model — while allowing me to experiment with
+the runtime, tooling, security model, replication architecture, and eventually
+Studio in ways that may differ substantially from upstream.
 
-- **Gargantuan is 100% yours,** from the platform, assets, and even core scripts.
+Development in this repository is expected to diverge over time.
 
-Sparked your interest? [Read the documentation.](https://gargantuan.teamfireworks.org/)
+This fork remains public. Team Fireworks and other Gargantuan contributors are
+welcome to reference, adapt, or independently implement ideas and changes made
+here where permitted by the project's license.
 
-## Development
+For the original Gargantuan project, documentation, community, and contribution
+process, see the upstream repository:
 
-Gargantuan is maintained by [godmothersfire](https://github.com/godmothersfire)
-who representes [Team Fireworks](https://github.com/teamfireworks).
+https://github.com/teamfireworks/gargantuan
 
-Gargantuan is a project by and for the collective Roblox community. Gargantuan
-welcomes your contribution and support, even if it's just messing around with
-the engine. [We have a contributing guide for those interested!](https://gargantuan.teamfireworks.org/developing/contributing-to-gargantuan)
+## Current Direction
+
+Current development is focused primarily on strengthening the runtime foundation
+before expanding the engine's feature set.
+
+Work in this fork includes or is expected to include:
+
+- Explicit Instance lifetime, ownership, and hierarchy contracts.
+- An authoritative mutation model with validated and recorded state changes.
+- Stable object identity suitable for serialization and replication.
+- Deterministic snapshots and ordered incremental replication.
+- Explicit execution domains and security boundaries.
+- A Luau-first scripting environment built around the DataModel and Services.
+- Improved project and script synchronization workflows.
+- A future standalone Studio/editor built around the same runtime contracts.
+
+Longer term, the intent is to explore a development environment that retains the
+productivity and familiarity of Roblox's DataModel/Luau model while providing
+greater control over the underlying engine and its APIs.
+
+This is experimental work and should not currently be considered a production
+replacement for Gargantuan or Roblox.
+
+## Upstream Gargantuan
+
+Gargantuan is a 3D game engine scriptable using Luau, independently developed by
+Team Fireworks.
+
+The original project describes its goals as providing a powerful, productive,
+multiplatform game engine with a familiar Luau API surface while allowing
+developers to own their platform, assets, and core scripts.
+
+Upstream development is maintained separately by Team Fireworks:
+
+- Repository: https://github.com/teamfireworks/gargantuan
+- Documentation: https://gargantuan.teamfireworks.org/
+- Contributing: https://gargantuan.teamfireworks.org/developing/contributing-to-gargantuan
+
+Changes in this repository should not be interpreted as changes proposed,
+approved, or maintained by Team Fireworks.
 
 ## Prior Art
 
-Gargantuan's design were informed by several other game engines:
+The original Gargantuan design was informed by several other game engines and
+projects. These references are retained from upstream for attribution:
 
-| Resource                                                            | Info                                                            |
-| ------------------------------------------------------------------- | --------------------------------------------------------------- |
-| [Kinemium Engine](https://github.com/Qquaded/Kinemium-Engine)       | Initial reference implementation for some datatypes             |
+| Resource | Info |
+| --- | --- |
+| [Kinemium Engine](https://github.com/Qquaded/Kinemium-Engine) | Initial reference implementation for some datatypes |
 | [Phoenix Engine](https://github.com/PhoenixWhitefire/PhoenixEngine) | Initial reference implementation for Instances and the renderer |
-| [Kitbash'd](https://github.com/kitbashd)                            | Previously inspired the renderer, now irrelevant                |
-| [Flux](https://github.com/thegalaxydev/flux)                        | Inspired the architecture of instances and userdatas            |
-| [Librebox](https://github.com/StayBlue/librebox-demo/)              | Examples to bugtest the Gargantuan engine                       |
-| [Roblox Creator Documentation](https://create.roblox.com)           | API design inspirations                                         |
+| [Kitbash'd](https://github.com/kitbashd) | Previously inspired the renderer |
+| [Flux](https://github.com/thegalaxydev/flux) | Inspired the architecture of Instances and userdatas |
+| [Librebox](https://github.com/StayBlue/librebox-demo/) | Examples used to test the Gargantuan engine |
+| [Roblox Creator Documentation](https://create.roblox.com) | API design inspiration |
 
 ## License
 
@@ -62,20 +104,22 @@ This Source Code Form is subject to the terms of the Mozilla Public
 License, v. 2.0. If a copy of the MPL was not distributed with this
 file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
+This fork retains the licensing and applicable copyright notices of the
+upstream Gargantuan source from which it was derived.
+
 ## Legal Notice
 
-Gargantuan is an independent open-source game engine created and maintained by
-godmothersfire, who represents Team Fireworks.
+This repository is an independently maintained fork of Gargantuan.
 
-Gargantuan is an independent project and is NOT affiliated with, authorized by,
-endorsed by, or in any way officially connected with Roblox Corporation.
-"Roblox" is a registered trademark of Roblox Corporation.
+The original Gargantuan project was created and is maintained by Team Fireworks.
+This fork is not maintained, authorized, or endorsed by Team Fireworks, and
+changes made here should not be attributed to the upstream maintainers.
+
+Gargantuan and this fork are independent projects and are NOT affiliated with,
+authorized by, endorsed by, or in any way officially connected with Roblox
+Corporation. "Roblox" is a registered trademark of Roblox Corporation.
 
 No reverse engineering, decompilation, or extraction of proprietary binaries,
-source code, or assets belonging to Roblox Corporation was performed or utilized
-in developing Gargantuan. Gargantuan is built from scratch.
-
-API features such as Instances and data types are implemented solely for
-developer familiarity, platform portability, and software interoperability under
-applicable fair use law including but not limited to the Copyright Act of 1976,
-17 U.S.C. § 107.
+source code, or assets belonging to Roblox Corporation is represented as part of
+this fork. The engine implementation is based on independently implemented
+runtime and API concepts intended for developer familiarity and interoperability.
