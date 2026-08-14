@@ -14,6 +14,22 @@
 #include <type_traits>
 
 namespace gargantuan {
+	namespace {
+		std::optional<std::int32_t> DecodeSignedInt32(const WireJson &Value) {
+			if (Value.is_number_unsigned()) {
+				const auto Raw = Value.get<std::uint64_t>();
+				if (Raw <= static_cast<std::uint64_t>(std::numeric_limits<std::int32_t>::max()))
+					return static_cast<std::int32_t>(Raw);
+				return std::nullopt;
+			}
+			if (!Value.is_number_integer()) return std::nullopt;
+			const auto Raw = Value.get<std::int64_t>();
+			if (Raw < std::numeric_limits<std::int32_t>::min() || Raw > std::numeric_limits<std::int32_t>::max())
+				return std::nullopt;
+			return static_cast<std::int32_t>(Raw);
+		}
+	}
+
 	WireJson EncodeWireObjectId(WireObjectId id) {
 		return WireJson{{"Slot", id.Slot}, {"Generation", id.Generation}};
 	}
@@ -158,10 +174,10 @@ namespace gargantuan {
 			encoded["DefinitionVersion"].is_number_unsigned() && value.is_number_integer()) {
 			auto id = SchemaId::Parse(encoded["SchemaId"].get<std::string>());
 			const auto version = encoded["DefinitionVersion"].get<std::uint64_t>();
-			const auto item = value.get<std::int64_t>();
+			const auto item = DecodeSignedInt32(value);
 			if (id && version > 0 && version <= std::numeric_limits<std::uint32_t>::max() &&
-				item >= std::numeric_limits<std::int32_t>::min() && item <= std::numeric_limits<std::int32_t>::max())
-				return WireSchemaEnumValue{*id, static_cast<std::uint32_t>(version), static_cast<std::int32_t>(item)};
+				item)
+				return WireSchemaEnumValue{*id, static_cast<std::uint32_t>(version), *item};
 		}
 		if (type == "ObjectReference") {
 			auto id = DecodeWireObjectId(value);

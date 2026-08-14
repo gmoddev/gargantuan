@@ -202,6 +202,9 @@ namespace gargantuan {
 		}
 		if (payloadBytes > MaximumCustomSchemaPayloadBytes)
 			InvalidDefinition(definition, "enum definition exceeds its payload byte limit");
+		if (payloadBytes > MaximumCustomSchemaPayloadBytes -
+			std::min(CustomSchemaPayloadBytes, MaximumCustomSchemaPayloadBytes))
+			InvalidDefinition(definition, "candidate exceeds its aggregate custom schema payload byte limit");
 		const auto enumCount = std::count_if(DefinitionsById.begin(), DefinitionsById.end(), [](const auto &entry) {
 			return std::holds_alternative<SchemaEnumDefinition>(entry.second);
 		});
@@ -218,6 +221,7 @@ namespace gargantuan {
 		DefinitionsById.emplace(id, std::move(definition));
 		try { IdsByCanonicalName.emplace(canonical, id); }
 		catch (...) { DefinitionsById.erase(id); throw; }
+		CustomSchemaPayloadBytes += payloadBytes;
 	}
 
 	void RuntimeSchemaRegistry::Validate() {

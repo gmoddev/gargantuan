@@ -57,9 +57,12 @@ three fixed-capacity slots; EditorHost overwrites old slots instead of waiting
 or growing memory, and Studio consumes the newest complete frame. Platforms
 without that capability use the bounded Base64 fallback.
 
-Opening a project does not initialize rendering, execute scripts, step the
-simulation, or synchronize `FileLink` objects. Unknown protocol versions,
+Opening a project does not initialize rendering, execute gameplay scripts, step
+the simulation, or synchronize `FileLink` objects. Unknown protocol versions,
 methods, fields, malformed values, and oversized messages fail closed.
+Replacing a project first closes the prior live document and viewport snapshot,
+then establishes the next frozen schema before constructing a new DataModel. A
+failed replacement leaves no stale world alive against a different registry.
 
 The launch token associates a client with the process. It is sufficient for
 the initial local prototype, but it is not strong authentication against a

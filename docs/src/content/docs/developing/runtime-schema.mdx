@@ -58,12 +58,17 @@ It has no DataModel, filesystem, process, OS, debug, require, network, Studio,
 renderer, or registry-pointer access. Current limits are 256 KiB source, 250 ms
 execution, 16 MiB VM allocation, 64 enum definitions, 256 items per enum,
 100-byte UTF-8 identity/item names, and 64 KiB aggregate registration payload.
+The source path is canonicalized beneath the selected project root, symlink
+escapes are rejected, and the file is read through a fixed maximum-plus-one
+buffer so concurrent file growth cannot turn the size check into an unbounded
+read.
 
 The complete candidate validates before freeze. Any collision, malformed
 definition, script error, or budget failure aborts all project definitions and
 does not advance the active registry generation. The prior frozen registry, if
 one exists, remains coherent. Post-freeze registration fails even with the
-capability.
+capability. Aggregate payload accounting is enforced again by the canonical
+registry rather than trusting only the Luau facade.
 
 Registry generation is a session-local unsigned 64-bit cache selector. It is
 separate from per-definition semantic version and is not part of `SchemaId`.

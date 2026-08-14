@@ -288,11 +288,19 @@ namespace gargantuan {
 				auto root = std::filesystem::weakly_canonical(std::filesystem::path(parameters["Root"].get<std::string>()));
 				if (!std::filesystem::is_directory(root))
 					return SerializeBoundedResponse(ErrorResponse(requestId, "ProjectNotFound", "Project root is not a directory"));
+				if (World) World->Destroy();
+				World.reset();
+				Filesystem.reset();
+				ViewportCamera.reset();
+				LastViewportSnapshot.reset();
+				Cursor.reset();
+				ViewportWidth = 0;
+				ViewportHeight = 0;
+				ViewportFrameNumber = 0;
 				BootstrapProjectRuntimeSchema(root);
 				auto filesystem = std::make_unique<DiskFilesystem>(root);
 				auto project = Project::fromExisting(filesystem.get());
 				auto world = project.DeserializeGame();
-				if (World) World->Destroy();
 				Filesystem = std::move(filesystem);
 				World = std::move(world);
 				World->Filesystem = Filesystem.get();
@@ -300,11 +308,6 @@ namespace gargantuan {
 				if (!workspace)
 					return SerializeBoundedResponse(ErrorResponse(requestId, "InvalidProject", "Project has no valid Workspace"));
 				ViewportCamera = RenderCameraInput{};
-				LastViewportSnapshot.reset();
-				Cursor.reset();
-				ViewportWidth = 0;
-				ViewportHeight = 0;
-				ViewportFrameNumber = 0;
 				return SerializeBoundedResponse(SuccessResponse(
 					requestId,
 					{{"Root", EncodeWireObjectId(WireObjectId::FromObjectId(World->GetObjectId()))}}

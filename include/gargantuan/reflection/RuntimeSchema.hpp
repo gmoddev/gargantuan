@@ -135,6 +135,7 @@ namespace gargantuan {
 		std::unordered_map<SchemaId, SchemaDefinition, SchemaIdHash> DefinitionsById;
 		std::unordered_map<std::type_index, SchemaId> ClassIdsByType;
 		std::unordered_map<std::string, SchemaId> IdsByCanonicalName;
+		std::size_t CustomSchemaPayloadBytes = 0;
 		RuntimeSchemaRegistryState State = RuntimeSchemaRegistryState::Building;
 
 		void RequireBuilding(std::string_view operation) const;

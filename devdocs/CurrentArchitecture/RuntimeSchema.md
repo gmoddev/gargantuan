@@ -67,6 +67,12 @@ hard limits are:
 - 100 UTF-8 bytes per namespace, definition name, or item name; and
 - 64 KiB aggregate submitted definition payload.
 
+The selected file is canonicalized beneath the project root and symlink escapes
+are rejected. Reading uses a fixed maximum-plus-one buffer after the preliminary
+size check, so a concurrently growing file cannot cause unbounded allocation or
+execution of a silently truncated source. The canonical registry independently
+enforces the aggregate custom-schema payload ceiling.
+
 Registration input is fully parsed and bounded before insertion. A malformed
 field, collision, budget failure, runtime failure, or invalid definition aborts
 the entire candidate. Previously published schema and registry generation stay

@@ -16,7 +16,6 @@
 #include <lua.h>
 #include <luacode.h>
 #include <lualib.h>
-#include <sstream>
 #include <unordered_set>
 #include <vector>
 
@@ -83,6 +82,14 @@ namespace gargantuan {
 			return {value, length};
 		}
 
+		bool IsPathWithin(const std::filesystem::path &Root, const std::filesystem::path &Candidate) {
+			const auto Relative = Candidate.lexically_relative(Root);
+			if (Relative.empty() || Relative.is_absolute()) return false;
+			for (const auto &Component : Relative)
+				if (Component == "..") return false;
+			return true;
+		}
+
 		void RejectUnknownFields(lua_State *L, int tableIndex, std::initializer_list<std::string_view> allowed) {
 			tableIndex = lua_absindex(L, tableIndex);
 			std::size_t fields = 0;
@@ -115,7 +122,7 @@ namespace gargantuan {
 				lua_pop(L, 1);
 				state.CurrentDefinition = schemaNamespace + "." + name;
 				lua_getfield(L, 2, "Version");
-				if (!lua_isnumber(L, -1)) luaL_error(L, "Version must be a positive integer");
+				if (lua_type(L, -1) != LUA_TNUMBER) luaL_error(L, "Version must be a positive integer");
 				const auto rawVersion = lua_tonumber(L, -1);
 				if (!std::isfinite(rawVersion) || std::trunc(rawVersion) != rawVersion || rawVersion < 1 ||
 					rawVersion > std::numeric_limits<std::uint32_t>::max())
@@ -131,7 +138,7 @@ namespace gargantuan {
 				while (lua_next(L, itemsIndex) != 0) {
 					if (items.size() >= MaximumCustomEnumItems) luaL_error(L, "enum exceeds its item limit");
 					auto itemName = ReadBoundedString(L, -2, MaximumCustomEnumItemNameBytes, "enum item name");
-					if (!lua_isnumber(L, -1)) luaL_error(L, "enum item value must be an integer");
+					if (lua_type(L, -1) != LUA_TNUMBER) luaL_error(L, "enum item value must be an integer");
 					const auto rawValue = lua_tonumber(L, -1);
 					if (!std::isfinite(rawValue) || std::trunc(rawValue) != rawValue ||
 						rawValue < std::numeric_limits<std::int32_t>::min() || rawValue > std::numeric_limits<std::int32_t>::max())
@@ -251,18 +258,55 @@ namespace gargantuan {
 	}
 
 	std::optional<std::string> ReadProjectPreRunSource(const std::filesystem::path &projectRoot) {
-		const auto path = GetProjectPreRunPath(projectRoot);
-		if (!std::filesystem::exists(path)) return std::nullopt;
-		if (!std::filesystem::is_regular_file(path))
-			throw PreRunRegistrationError({PreRunDiagnosticCode::RuntimeError, path.string(), {}, "source is not a regular file"});
-		const auto size = std::filesystem::file_size(path);
-		if (size > MaximumPreRunSourceBytes)
-			throw PreRunRegistrationError({PreRunDiagnosticCode::SourceTooLarge, path.string(), {}, "source exceeds its byte limit"});
-		std::ifstream stream(path, std::ios::binary);
-		if (!stream) throw PreRunRegistrationError({PreRunDiagnosticCode::RuntimeError, path.string(), {}, "source could not be opened"});
-		std::ostringstream contents;
-		contents << stream.rdbuf();
-		return contents.str();
+		const auto RequestedPath = GetProjectPreRunPath(projectRoot);
+		try {
+			const auto CanonicalRoot = std::filesystem::weakly_canonical(projectRoot);
+			if (!std::filesystem::is_directory(CanonicalRoot))
+				throw PreRunRegistrationError({
+					PreRunDiagnosticCode::RuntimeError, RequestedPath.string(), {}, "project root is not a directory"
+				});
+			if (!std::filesystem::exists(RequestedPath)) return std::nullopt;
+			const auto CanonicalPath = std::filesystem::canonical(RequestedPath);
+			if (!IsPathWithin(CanonicalRoot, CanonicalPath))
+				throw PreRunRegistrationError({
+					PreRunDiagnosticCode::RuntimeError, RequestedPath.string(), {}, "source resolves outside the project root"
+				});
+			if (!std::filesystem::is_regular_file(CanonicalPath))
+				throw PreRunRegistrationError({
+					PreRunDiagnosticCode::RuntimeError, RequestedPath.string(), {}, "source is not a regular file"
+				});
+			const auto Size = std::filesystem::file_size(CanonicalPath);
+			if (Size > MaximumPreRunSourceBytes)
+				throw PreRunRegistrationError({
+					PreRunDiagnosticCode::SourceTooLarge, RequestedPath.string(), {}, "source exceeds its byte limit"
+				});
+
+			std::ifstream Stream(CanonicalPath, std::ios::binary);
+			if (!Stream)
+				throw PreRunRegistrationError({
+					PreRunDiagnosticCode::RuntimeError, RequestedPath.string(), {}, "source could not be opened"
+				});
+			std::string Contents(MaximumPreRunSourceBytes + 1, '\0');
+			Stream.read(Contents.data(), static_cast<std::streamsize>(Contents.size()));
+			const auto BytesRead = static_cast<std::size_t>(Stream.gcount());
+			if (BytesRead > MaximumPreRunSourceBytes)
+				throw PreRunRegistrationError({
+					PreRunDiagnosticCode::SourceTooLarge, RequestedPath.string(), {}, "source exceeds its byte limit"
+				});
+			if (Stream.bad())
+				throw PreRunRegistrationError({
+					PreRunDiagnosticCode::RuntimeError, RequestedPath.string(), {}, "source could not be read"
+				});
+			Contents.resize(BytesRead);
+			return Contents;
+		} catch (const PreRunRegistrationError &) {
+			throw;
+		} catch (const std::filesystem::filesystem_error &Error) {
+			throw PreRunRegistrationError({
+				PreRunDiagnosticCode::RuntimeError, RequestedPath.string(), {},
+				"source path could not be resolved: " + std::string(Error.what())
+			});
+		}
 	}
 
 	std::string_view GetPreRunDiagnosticCodeName(PreRunDiagnosticCode code) {

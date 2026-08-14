@@ -1,4 +1,5 @@
 #include "gargantuan/classes/DataModel.hpp"
+#include "gargantuan/reflection/PreRunRegistration.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 
 #include <chrono>
@@ -37,6 +38,47 @@ int main() {
 		}
 		auto world = std::make_shared<DataModel>();
 		if (!world) return 1;
+
+		std::ofstream ExactSource(root / ".gargantuan" / "prerun.luau", std::ios::binary | std::ios::trunc);
+		ExactSource << std::string(MaximumPreRunSourceBytes, ' ');
+		ExactSource.close();
+		auto ExactRead = ReadProjectPreRunSource(root);
+		if (!ExactRead || ExactRead->size() != MaximumPreRunSourceBytes) {
+			std::cerr << "PreRun source at the exact byte limit was rejected\n";
+			return 1;
+		}
+		std::ofstream OversizedSource(root / ".gargantuan" / "prerun.luau", std::ios::binary | std::ios::trunc);
+		OversizedSource << std::string(MaximumPreRunSourceBytes + 1, ' ');
+		OversizedSource.close();
+		try {
+			static_cast<void>(ReadProjectPreRunSource(root));
+			std::cerr << "PreRun source over the byte limit was accepted\n";
+			return 1;
+		} catch (const PreRunRegistrationError &Error) {
+			if (Error.GetDiagnostic().Code != PreRunDiagnosticCode::SourceTooLarge) return 1;
+		}
+
+		const auto ExternalSource = root.parent_path() / (root.filename().string() + "-external.luau");
+		struct ExternalCleanup {
+			std::filesystem::path Path;
+			~ExternalCleanup() { std::filesystem::remove(Path); }
+		} ExternalCleanupGuard{ExternalSource};
+		std::ofstream External(ExternalSource, std::ios::binary);
+		External << "error('outside project')";
+		External.close();
+		std::filesystem::remove(root / ".gargantuan" / "prerun.luau");
+		std::error_code SymlinkError;
+		std::filesystem::create_symlink(ExternalSource, root / ".gargantuan" / "prerun.luau", SymlinkError);
+		if (!SymlinkError) {
+			try {
+				static_cast<void>(ReadProjectPreRunSource(root));
+				std::cerr << "PreRun source symlink escaped the project root\n";
+				return 1;
+			} catch (const PreRunRegistrationError &) {
+			}
+		} else {
+			std::cerr << "PreRun symlink confinement test skipped: " << SymlinkError.message() << '\n';
+		}
 	} catch (const std::exception &error) {
 		std::cerr << error.what() << '\n';
 		return 1;

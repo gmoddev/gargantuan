@@ -716,6 +716,22 @@ namespace {
 			[&] { invalidUtf8.RegisterEnum(std::move(malformedName)); },
 			"custom enum registration rejects malformed UTF-8"
 		);
+		RuntimeSchemaRegistry AggregatePayload;
+		auto LargeItems = [] {
+			std::vector<SchemaEnumItem> Items;
+			for (std::size_t Index = 0; Index < MaximumCustomEnumItems; ++Index) {
+				auto Suffix = std::to_string(Index);
+				Items.push_back({std::string(MaximumCustomEnumItemNameBytes - Suffix.size(), 'x') + Suffix,
+					static_cast<std::int32_t>(Index)});
+			}
+			return Items;
+		};
+		AggregatePayload.RegisterEnum(MakeSchemaEnumDefinition("Game", "LargeA", 1, LargeItems()));
+		AggregatePayload.RegisterEnum(MakeSchemaEnumDefinition("Game", "LargeB", 1, LargeItems()));
+		CheckThrows<std::invalid_argument>(
+			[&] { AggregatePayload.RegisterEnum(MakeSchemaEnumDefinition("Game", "LargeC", 1, LargeItems())); },
+			"canonical registry enforces the aggregate custom schema payload limit"
+		);
 
 		const WireSchemaEnumValue value{enumId, 1, 1};
 		const auto encoded = EncodeWireValue(WireValue(value));
@@ -728,6 +744,15 @@ namespace {
 		auto malformedWire = encoded;
 		malformedWire["SchemaId"] = "not-a-schema-id";
 		Check(!DecodeWireValue(malformedWire), "malformed custom enum wire identity is rejected");
+		auto OversizedUnsignedWire = encoded;
+		OversizedUnsignedWire["Value"] = std::numeric_limits<std::uint64_t>::max();
+		Check(!DecodeWireValue(OversizedUnsignedWire), "oversized unsigned custom enum wire values are rejected before narrowing");
+		auto MaximumWire = encoded;
+		MaximumWire["Value"] = std::numeric_limits<std::int32_t>::max();
+		Check(DecodeWireValue(MaximumWire).has_value(), "signed 32-bit maximum custom enum wire value is accepted");
+		auto MinimumWire = encoded;
+		MinimumWire["Value"] = std::numeric_limits<std::int32_t>::min();
+		Check(DecodeWireValue(MinimumWire).has_value(), "signed 32-bit minimum custom enum wire value is accepted");
 		Check(FormatSchemaEnumValue(value, registry) == "Game.CombatState.Attacking",
 			"custom enum values format deterministically through the frozen registry");
 		WireJournalRecord replicatedValue{
@@ -803,6 +828,13 @@ namespace {
 			!ScriptSecurityContext::PreRunRegistration().HasCapability(ScriptCapability::MutateDataModel),
 			"PreRun definition capability does not grant DataModel mutation authority"
 		);
+		auto MutationTarget = std::make_shared<Folder>();
+		Check(
+			MutationTarget->ApplyPropertyMutation(
+				"Name", std::string("Denied"), Enums::Permission::None, ScriptSecurityContext::PreRunRegistration()
+			) == MutationStatus::Unauthorized,
+			"DefineSchema alone cannot cross the DataModel mutation boundary"
+		);
 		CheckThrows<std::logic_error>(
 			[&] { successful.RegisterEnum(authority, MakeSchemaEnumDefinition("Game", "Late"), ScriptSecurityContext::PreRunRegistration()); },
 			"post-freeze schema registration fails even with DefineSchema capability"
@@ -857,16 +889,35 @@ namespace {
 			Check(error.GetDiagnostic().Code == PreRunDiagnosticCode::SourceTooLarge,
 				"oversized PreRun source reports a structured source-limit diagnostic");
 		}
+		RuntimeSchemaLifecycle ExactSourceLimit;
+		PreparePreRun(ExactSourceLimit);
+		ExecutePreRunRegistration(
+			ExactSourceLimit, authority, std::string(MaximumPreRunSourceBytes, ' '), "exact-source-limit"
+		);
+		Check(ExactSourceLimit.HasCandidate(), "PreRun source exactly at its byte limit is accepted");
+		ExactSourceLimit.AbortCandidate(authority);
 
-		std::string tooManyDefinitions;
-		for (std::size_t index = 0; index <= MaximumCustomEnumDefinitions; ++index) {
-			tooManyDefinitions += "Schema:RegisterEnum({Namespace='Game',Name='Limit" +
-				std::to_string(index) + "',Version=1,Items={Value=0}})\n";
-		}
+		auto BuildDefinitionLimitSource = [](std::size_t Count) {
+			std::string Source;
+			for (std::size_t Index = 0; Index < Count; ++Index) {
+				Source += "Schema:RegisterEnum({Namespace='Game',Name='Limit" +
+					std::to_string(Index) + "',Version=1,Items={Value=0}})\n";
+			}
+			return Source;
+		};
+		RuntimeSchemaLifecycle ExactDefinitionLimit;
+		PreparePreRun(ExactDefinitionLimit);
+		ExecutePreRunRegistration(
+			ExactDefinitionLimit, authority, BuildDefinitionLimitSource(MaximumCustomEnumDefinitions), "exact-definition-limit"
+		);
+		Check(ExactDefinitionLimit.HasCandidate(), "PreRun enum count exactly at its limit is accepted");
+		ExactDefinitionLimit.AbortCandidate(authority);
+
+		const auto TooManyDefinitions = BuildDefinitionLimitSource(MaximumCustomEnumDefinitions + 1);
 		RuntimeSchemaLifecycle definitionLimit;
 		PreparePreRun(definitionLimit);
 		CheckThrows<PreRunRegistrationError>(
-			[&] { ExecutePreRunRegistration(definitionLimit, authority, tooManyDefinitions, "definition-limit"); },
+			[&] { ExecutePreRunRegistration(definitionLimit, authority, TooManyDefinitions, "definition-limit"); },
 			"PreRun definition-count overflow aborts registration"
 		);
 		Check(!definitionLimit.HasCandidate(), "definition-count overflow leaks no earlier definitions");
@@ -882,6 +933,53 @@ namespace {
 			"PreRun enum-item overflow aborts registration"
 		);
 		Check(!itemLimit.HasCandidate(), "enum-item overflow publishes no partial definition");
+		RuntimeSchemaLifecycle ExactItemLimit;
+		PreparePreRun(ExactItemLimit);
+		const auto ExactItems = "local items = {}\nfor index = 1, " +
+			std::to_string(MaximumCustomEnumItems) +
+			" do items['Item' .. index] = index end\nSchema:RegisterEnum({Namespace='Game',Name='ExactItems',Version=1,Items=items})";
+		ExecutePreRunRegistration(ExactItemLimit, authority, ExactItems, "exact-item-limit");
+		Check(ExactItemLimit.HasCandidate(), "PreRun enum item count exactly at its limit is accepted");
+		ExactItemLimit.AbortCandidate(authority);
+
+		auto BuildAggregatePayloadSource = [](std::size_t ShortItemCount) {
+			return "local global = 0\nfor definition = 0, 15 do\n"
+				"local items = {}\nfor item = 0, 255 do\nlocal itemName\n"
+				"if global < " + std::to_string(ShortItemCount) +
+				" then itemName = string.format('Item%07d', item) else itemName = string.format('Item%08d', item) end\n"
+				"items[itemName] = item\nglobal += 1\nend\n"
+				"Schema:RegisterEnum({Namespace='Game',Name='Payload' .. definition,Version=1,Items=items})\nend";
+		};
+		RuntimeSchemaLifecycle ExactAggregatePayload;
+		PreparePreRun(ExactAggregatePayload);
+		ExecutePreRunRegistration(
+			ExactAggregatePayload, authority, BuildAggregatePayloadSource(198), "exact-aggregate-payload"
+		);
+		Check(ExactAggregatePayload.HasCandidate(), "PreRun aggregate payload exactly at its byte limit is accepted");
+		ExactAggregatePayload.AbortCandidate(authority);
+		RuntimeSchemaLifecycle OversizedAggregatePayload;
+		PreparePreRun(OversizedAggregatePayload);
+		CheckThrows<PreRunRegistrationError>(
+			[&] {
+				ExecutePreRunRegistration(
+					OversizedAggregatePayload, authority, BuildAggregatePayloadSource(197), "oversized-aggregate-payload"
+				);
+			},
+			"PreRun aggregate payload one byte over its limit is rejected"
+		);
+
+		for (const auto Source : {
+			"Schema:RegisterEnum({Namespace='Game',Name='StringVersion',Version='1',Items={Value=1}})",
+			"Schema:RegisterEnum({Namespace='Game',Name='StringItem',Version=1,Items={Value='1'}})",
+		}) {
+			RuntimeSchemaLifecycle StrictTypes;
+			PreparePreRun(StrictTypes);
+			CheckThrows<PreRunRegistrationError>(
+				[&] { ExecutePreRunRegistration(StrictTypes, authority, Source, "strict-registration-types"); },
+				"PreRun registration rejects numeric strings without coercion"
+			);
+			Check(!StrictTypes.HasCandidate(), "type rejection aborts the complete candidate");
+		}
 
 		RuntimeSchemaLifecycle transactional;
 		PreparePreRun(transactional);
@@ -907,6 +1005,22 @@ namespace {
 				transactional.GetActiveGeneration() == previousGeneration &&
 				previous->FindEnumByName("Game.A") == nullptr && previous->FindEnumByName("Game.B") == nullptr,
 			"failed replacement leaks no definitions and does not advance registry generation"
+		);
+		PreparePreRun(transactional);
+		const std::string RuntimeFailureBatch = R"(
+			Schema:RegisterEnum({ Namespace="Game", Name="RuntimeA", Version=1, Items={ One=1 } })
+			Schema:RegisterEnum({ Namespace="Game", Name="RuntimeB", Version=1, Items={ Two=2 } })
+			error("abort after valid registrations")
+		)";
+		CheckThrows<PreRunRegistrationError>(
+			[&] { ExecutePreRunRegistration(transactional, authority, RuntimeFailureBatch, "runtime-failure-batch"); },
+			"a runtime failure after valid registrations aborts the complete PreRun transaction"
+		);
+		Check(
+			transactional.GetActiveRegistry() == previous &&
+				transactional.GetActiveGeneration() == previousGeneration &&
+				previous->FindEnumByName("Game.RuntimeA") == nullptr && previous->FindEnumByName("Game.RuntimeB") == nullptr,
+			"runtime failure leaks no registered definitions and does not advance generation"
 		);
 	}
 
@@ -2026,6 +2140,13 @@ namespace {
 				),
 			"failed project PreRun preserves the prior frozen schema and generation"
 		);
+		auto ClosedSnapshot = call("GetSnapshot", Json::object(), "test-token");
+		Check(
+			!ClosedSnapshot["Ok"].get<bool>() && ClosedSnapshot["Error"]["Code"] == "ProjectRequired",
+			"schema replacement closes the previous live world before running project PreRun"
+		);
+		auto Reopened = call("OpenProject", {{"Root", temporaryRoot.string()}}, "test-token");
+		Check(Reopened["Ok"].get<bool>(), "EditorHost can construct a fresh world after a rejected replacement");
 		auto snapshot = call("GetSnapshot", Json::object(), "test-token");
 		Check(snapshot["Ok"].get<bool>(), "EditorHost returns a cursor-paired snapshot");
 		auto &objects = snapshot["Result"]["Snapshot"]["Objects"];

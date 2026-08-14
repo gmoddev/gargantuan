@@ -45,7 +45,7 @@ limited to 256 records.
 | Method | Contract |
 | --- | --- |
 | `Handshake` | Returns engine identity, protocol version, and capabilities. |
-| `OpenProject` | Canonicalizes and loads a project root without executing it. |
+| `OpenProject` | Canonicalizes and loads a project root without executing gameplay scripts. |
 | `GetSchema` | Returns class compatibility metadata plus schema-discovery v2 definitions and registry generation. |
 | `GetSnapshot` | Returns snapshot v4 and establishes the session cursor. |
 | `PollChanges` | Returns scoped wire-journal v4 records after that cursor. |
@@ -87,6 +87,11 @@ definition kind and version, provenance, and ordered custom-enum items. Studio
 does not receive `DefineSchema`, the PreRun facade, candidate registry access,
 or mutable native metadata. The top-level EditorHost protocol remains version
 1; schema discovery is independently versioned.
+
+Replacing an open project closes and releases the prior live DataModel and
+viewport snapshot before entering the next schema candidate lifecycle. If the
+replacement PreRun or project load fails, no old world remains live against the
+new or prior registry; a later `OpenProject` may construct a fresh document.
 
 ## Licensing and repository contract
 
