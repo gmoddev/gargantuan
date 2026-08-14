@@ -603,8 +603,8 @@ namespace gargantuan {
 				if (!target || target->GetReplicationScopeId() != World->GetObjectId())
 					return SerializeBoundedResponse(ErrorResponse(requestId, "StaleObject", "Object is not live in the open project"));
 				MutationResult mutation = method == "AddTag"
-					? Mutations.Apply(AddTagCommand{object->ToObjectId(), parameters["Tag"].get<std::string>()}, StudioSecurity)
-					: Mutations.Apply(RemoveTagCommand{object->ToObjectId(), parameters["Tag"].get<std::string>()}, StudioSecurity);
+					? Mutations.Apply(AddTagCommand{object->ToObjectId(), parameters["Tag"].get<std::string>(), World->GetObjectId()}, StudioSecurity)
+					: Mutations.Apply(RemoveTagCommand{object->ToObjectId(), parameters["Tag"].get<std::string>(), World->GetObjectId()}, StudioSecurity);
 				Json result{{"Status", MutationStatusName(mutation.Status)}, {"Message", mutation.Message}};
 				if (mutation.Object) result["Object"] = EncodeWireObjectId(WireObjectId::FromObjectId(*mutation.Object));
 				return SerializeBoundedResponse(

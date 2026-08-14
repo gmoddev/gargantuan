@@ -39,19 +39,23 @@ namespace gargantuan {
 	}
 
 	int Tags::Add(lua_State *L, Instance *service) {
+		auto owner = Owner(service);
 		auto target = ReadInstance(L, 2);
+		if (target->GetDataModel() != owner) throw std::invalid_argument("Tags target belongs to another DataModel");
 		const auto tag = ReadString(L, 3);
 		MutationGateway gateway;
-		auto result = gateway.Apply(AddTagCommand{target->GetObjectId(), std::string(tag)});
+		auto result = gateway.Apply(AddTagCommand{target->GetObjectId(), std::string(tag), owner->GetObjectId()});
 		if (!result.Succeeded()) throw std::runtime_error(result.Message.empty() ? "Tag addition rejected" : result.Message);
 		return 0;
 	}
 
 	int Tags::Remove(lua_State *L, Instance *service) {
+		auto owner = Owner(service);
 		auto target = ReadInstance(L, 2);
+		if (target->GetDataModel() != owner) throw std::invalid_argument("Tags target belongs to another DataModel");
 		const auto tag = ReadString(L, 3);
 		MutationGateway gateway;
-		auto result = gateway.Apply(RemoveTagCommand{target->GetObjectId(), std::string(tag)});
+		auto result = gateway.Apply(RemoveTagCommand{target->GetObjectId(), std::string(tag), owner->GetObjectId()});
 		if (!result.Succeeded()) throw std::runtime_error(result.Message.empty() ? "Tag removal rejected" : result.Message);
 		return 0;
 	}
@@ -84,6 +88,7 @@ namespace gargantuan {
 		luaL_checktype(L, 2, LUA_TTABLE);
 		std::vector<std::string> names;
 		const auto length = lua_objlen(L, 2);
+		if (length > MaximumTagsPerQuery) throw std::invalid_argument("Tag query exceeds its name count limit");
 		names.reserve(length);
 		for (std::size_t index = 1; index <= length; ++index) {
 			lua_rawgeti(L, 2, static_cast<int>(index));

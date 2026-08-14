@@ -104,23 +104,37 @@ namespace gargantuan {
 
 		const TagAddedChange change{std::string(name)};
 		const auto id = Intern(name);
-		auto &reverse = TagToObjects[id];
-		auto [reversePosition, reverseInserted] = reverse.insert(object);
-		if (!reverseInserted) throw std::runtime_error("Tag reverse index is inconsistent");
+		bool reverseMembershipInserted = false;
+		bool forwardMapInserted = false;
+		bool forwardMembershipInserted = false;
 		try {
+			auto [reverseMapPosition, reverseMapInserted] = TagToObjects.try_emplace(id);
+			(void)reverseMapInserted;
+			if (!reverseMapPosition->second.insert(object).second)
+				throw std::runtime_error("Tag reverse index is inconsistent");
+			reverseMembershipInserted = true;
 			auto [objectPosition, objectInserted] = ObjectToTags.try_emplace(object);
-			try {
-				if (!objectPosition->second.insert(id).second) throw std::runtime_error("Tag forward index is inconsistent");
-			} catch (...) {
-				if (objectInserted && objectPosition->second.empty()) ObjectToTags.erase(objectPosition);
-				throw;
-			}
+			forwardMapInserted = objectInserted;
+			if (!objectPosition->second.insert(id).second) throw std::runtime_error("Tag forward index is inconsistent");
+			forwardMembershipInserted = true;
+			ChangeJournal::Get().Commit(scope, object, change);
 		} catch (...) {
-			reverse.erase(reversePosition);
+			if (forwardMembershipInserted) {
+				auto objectPosition = ObjectToTags.find(object);
+				if (objectPosition != ObjectToTags.end()) {
+					objectPosition->second.erase(id);
+					if (objectPosition->second.empty()) ObjectToTags.erase(objectPosition);
+				}
+			} else if (forwardMapInserted) {
+				ObjectToTags.erase(object);
+			}
+			if (reverseMembershipInserted) {
+				auto reversePosition = TagToObjects.find(id);
+				if (reversePosition != TagToObjects.end()) reversePosition->second.erase(object);
+			}
 			ReleaseIfUnused(id);
 			throw;
 		}
-		ChangeJournal::Get().Commit(scope, object, change);
 		return true;
 	}
 
@@ -140,11 +154,11 @@ namespace gargantuan {
 		auto reverse = TagToObjects.find(id);
 		if (reverse == TagToObjects.end() || !reverse->second.contains(object))
 			throw std::runtime_error("Tag indexes are inconsistent");
+		ChangeJournal::Get().Commit(scope, object, change);
 		forward->second.erase(id);
 		reverse->second.erase(object);
 		if (forward->second.empty()) ObjectToTags.erase(forward);
 		ReleaseIfUnused(id);
-		ChangeJournal::Get().Commit(scope, object, change);
 		return true;
 	}
 
@@ -161,10 +175,15 @@ namespace gargantuan {
 				throw std::runtime_error("Tag indexes are inconsistent during lifecycle cleanup");
 		}
 		const auto ids = forward->second;
+		if (publishChanges) {
+			std::vector<std::pair<ObjectId, ChangePayload>> changes;
+			changes.reserve(removed.size());
+			for (const auto &name : removed) changes.emplace_back(object, TagRemovedChange{name});
+			ChangeJournal::Get().CommitBatch(scope, std::move(changes));
+		}
 		for (const auto id : ids) TagToObjects.at(id).erase(object);
 		ObjectToTags.erase(forward);
 		for (const auto id : ids) ReleaseIfUnused(id);
-		if (publishChanges) for (const auto &name : removed) ChangeJournal::Get().Commit(scope, object, TagRemovedChange{name});
 		return removed;
 	}
 
@@ -205,6 +224,7 @@ namespace gargantuan {
 	) const {
 		DemandRead(securityContext);
 		if (names.empty()) return {};
+		if (names.size() > MaximumTagsPerQuery) throw std::invalid_argument("Tag query exceeds its name count limit");
 		std::vector<TagId> ids;
 		ids.reserve(names.size());
 		for (const auto &name : names) {

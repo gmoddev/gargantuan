@@ -60,6 +60,9 @@ namespace {
 	template <typename T>
 	concept ExposesGpuMesh = requires(T &value) { value.GetMesh(); };
 	static_assert(!ExposesGpuMesh<gargantuan::Part>);
+	template <typename T>
+	concept ExposesMutableAttributeStorage = requires(T &value) { value.Attributes; };
+	static_assert(!ExposesMutableAttributeStorage<gargantuan::Instance>);
 	static_assert(std::is_same_v<
 		gargantuan::RenderSnapshotPtr,
 		std::shared_ptr<const gargantuan::RenderSnapshot>
@@ -1253,6 +1256,16 @@ namespace {
 		ExpectRejected("Infinite", WireValue(std::numeric_limits<double>::infinity()), "non-finite attribute number is rejected");
 		ExpectRejected("Large", WireValue(std::string(MaximumAttributeValueBytes + 1, 'x')), "oversized attribute value is rejected");
 
+		auto signalBounded = std::make_shared<Folder>();
+		for (std::size_t index = 0; index < MaximumAttributeSignalsPerInstance; ++index)
+			(void)signalBounded->GetAttributeSignal("Signal" + std::to_string(index));
+		CheckThrows<std::invalid_argument>(
+			[&] { (void)signalBounded->GetAttributeSignal("SignalOverflow"); },
+			"per-name attribute signal creation is bounded"
+		);
+		Check(signalBounded->GetAttributeSignal("Signal0") != nullptr,
+			"existing attribute signals remain accessible at the creation limit");
+
 		auto counted = std::make_shared<Folder>();
 		const auto countedId = counted->GetObjectId();
 		for (std::size_t index = 0; index < MaximumAttributesPerInstance; ++index)
@@ -1296,6 +1309,34 @@ namespace {
 		auto deserializedPart = deserialized.Instance ? deserialized.Instance->FindFirstChild("AttributedPart", false) : nullptr;
 		Check(deserializedPart && deserializedPart->GetAttributeValue("Persisted") == std::optional<WireValue>(std::string("value")),
 			"deserialized Instance restores attributes");
+		auto versionOne = nlohmann::ordered_json::parse(serialized);
+		versionOne["Version"] = 1;
+		std::function<void(nlohmann::ordered_json &)> RemoveTags = [&](nlohmann::ordered_json &node) {
+			node.erase("Tags");
+			for (auto &child : node["Children"]) RemoveTags(child);
+		};
+		RemoveTags(versionOne);
+		std::istringstream versionOneInput(versionOne.dump());
+		auto loadedVersionOne = InstanceSerialization::Deserialize(InstanceSerialization::InstanceFormat::Json, versionOneInput);
+		auto versionOnePart = loadedVersionOne.Instance
+			? loadedVersionOne.Instance->FindFirstChild("AttributedPart", false)
+			: nullptr;
+		Check(loadedVersionOne.Ok && versionOnePart && versionOnePart->GetAttributeValue("Persisted") ==
+			std::optional<WireValue>(std::string("value")), "project version 1 retains attributes and defaults tags empty");
+		auto versionZero = versionOne;
+		versionZero["Version"] = 0;
+		std::function<void(nlohmann::ordered_json &)> RemoveAttributes = [&](nlohmann::ordered_json &node) {
+			node.erase("Attributes");
+			for (auto &child : node["Children"]) RemoveAttributes(child);
+		};
+		RemoveAttributes(versionZero);
+		std::istringstream versionZeroInput(versionZero.dump());
+		auto loadedVersionZero = InstanceSerialization::Deserialize(InstanceSerialization::InstanceFormat::Json, versionZeroInput);
+		auto versionZeroPart = loadedVersionZero.Instance
+			? loadedVersionZero.Instance->FindFirstChild("AttributedPart", false)
+			: nullptr;
+		Check(loadedVersionZero.Ok && versionZeroPart && versionZeroPart->GetAttributeValues().empty(),
+			"project version 0 deterministically defaults attributes and tags empty");
 		auto malformedDocument = nlohmann::ordered_json::parse(serialized);
 		for (auto &child : malformedDocument["Children"]) {
 			if (child["Name"] == "AttributedPart") child["Attributes"]["Bad"] = {{"Type", "Double"}, {"Value", "not-number"}};
@@ -1326,6 +1367,19 @@ namespace {
 		Check(gateway.Apply(UpdateAttributeCommand{id, "Persisted", std::nullopt}).Succeeded() &&
 			session->ApplyAvailable().Succeeded() && !receiverPart->GetAttributeValue("Persisted"),
 			"attribute removal replicates");
+		const auto duplicateAttributeCursor = session->GetCursor();
+		WireJournalRecord duplicateAttribute{
+			.Sequence = duplicateAttributeCursor.NextSequence,
+			.Scope = WireObjectId::FromObjectId(duplicateAttributeCursor.Scope),
+			.Operation = WireJournalOperation::AttributeUpdate,
+			.Object = WireObjectId::FromObjectId(id),
+			.AttributeName = "Persisted",
+			.Value = WireValue(std::monostate{}),
+		};
+		auto duplicateAttributeResult = session->ApplyWireRecords({duplicateAttribute});
+		Check(duplicateAttributeResult.Status == ReplicationApplyStatus::ApplyRejected &&
+			session->GetCursor().NextSequence == duplicateAttributeCursor.NextSequence,
+			"semantic no-op attribute replication is rejected without advancing the cursor");
 
 		part->Destroy();
 		journal.Clear();
@@ -1385,6 +1439,11 @@ namespace {
 				std::vector<ObjectId>({foreign->GetObjectId()}) &&
 			game->Tags.GetTagged(scope, "Enemy", ScriptSecurityContext::CoreTrusted()) == expectedEnemies,
 			"tag indexes remain isolated between DataModels");
+		Check(
+			gateway.Apply(AddTagCommand{foreign->GetObjectId(), "CrossScope", scope}).Status == MutationStatus::Rejected &&
+			!otherGame->Tags.Has(otherGame->GetObjectId(), foreign->GetObjectId(), "CrossScope", ScriptSecurityContext::CoreTrusted()),
+			"scope-bound tag commands cannot mutate another DataModel"
+		);
 		const auto recordsBeforeNoOps = RecordCount();
 		Check(gateway.Apply(AddTagCommand{firstId, "Enemy"}).Succeeded() &&
 			gateway.Apply(RemoveTagCommand{firstId, "Absent"}).Succeeded() && RecordCount() == recordsBeforeNoOps,
@@ -1408,6 +1467,31 @@ namespace {
 		Check(!gateway.Apply(AddTagCommand{countedId, "Overflow"}).Succeeded() &&
 			game->Tags.GetTags(scope, countedId, ScriptSecurityContext::CoreTrusted()).size() == MaximumTagsPerInstance,
 			"per-object tag limit rejection preserves prior membership");
+		CheckThrows<std::invalid_argument>([&] {
+			(void)game->Tags.GetTaggedAll(
+				scope,
+				std::vector<std::string>(MaximumTagsPerQuery + 1, "Enemy"),
+				ScriptSecurityContext::CoreTrusted()
+			);
+		}, "multi-tag query input is bounded before allocation/intersection work");
+
+		auto distinctGame = std::make_shared<DataModel>();
+		MutationGateway distinctGateway;
+		std::vector<std::shared_ptr<Folder>> distinctObjects;
+		for (std::size_t objectIndex = 0; objectIndex < MaximumDistinctTagsPerDataModel / MaximumTagsPerInstance; ++objectIndex) {
+			auto object = std::make_shared<Folder>();
+			object->SetParent(distinctGame);
+			for (std::size_t tagIndex = 0; tagIndex < MaximumTagsPerInstance; ++tagIndex) {
+				const auto ordinal = objectIndex * MaximumTagsPerInstance + tagIndex;
+				Check(distinctGateway.Apply(AddTagCommand{object->GetObjectId(), "Distinct" + std::to_string(ordinal)}).Succeeded(),
+					"distinct tags up to the DataModel limit are accepted");
+			}
+			distinctObjects.push_back(std::move(object));
+		}
+		auto distinctOverflow = std::make_shared<Folder>();
+		distinctOverflow->SetParent(distinctGame);
+		Check(!distinctGateway.Apply(AddTagCommand{distinctOverflow->GetObjectId(), "DistinctOverflow"}).Succeeded(),
+			"distinct tag limit is enforced at the authoritative index");
 
 		ScriptSecurityContext readOnly{ScriptExecutionDomain::Studio, {ScriptCapability::ReadDataModel}};
 		ScriptSecurityContext writeOnly{ScriptExecutionDomain::Studio, {ScriptCapability::MutateDataModel}};
@@ -1466,6 +1550,18 @@ namespace {
 		Check(game->Tags.GetTagged(scope, "Temporary", ScriptSecurityContext::CoreTrusted()).empty(),
 			"ancestor destruction removes descendant reverse entries");
 
+		auto movingAncestor = std::make_shared<Folder>();
+		auto movingDescendant = std::make_shared<Folder>();
+		movingAncestor->SetParent(game);
+		movingDescendant->SetParent(movingAncestor);
+		const auto movingDescendantId = movingDescendant->GetObjectId();
+		Check(gateway.Apply(AddTagCommand{movingDescendantId, "OldWorld"}).Succeeded(),
+			"cross-scope subtree fixture is tagged");
+		movingAncestor->SetParent(otherGame);
+		movingAncestor->SetParent(game);
+		Check(!game->Tags.Has(scope, movingDescendantId, "OldWorld", ScriptSecurityContext::CoreTrusted()),
+			"moving a subtree between DataModels cleans descendant tag membership before it can resurface");
+
 		first->Destroy();
 		auto replacement = std::make_shared<Folder>();
 		replacement->SetParent(game);
@@ -1478,6 +1574,21 @@ namespace {
 			"destroy removes authoritative reverse membership");
 		Check(receiverGame->Tags.GetTagged(receiverGame->GetObjectId(), "Enemy", ScriptSecurityContext::CoreTrusted()).size() == 1,
 			"receiver query cannot return destroyed membership");
+
+		auto duplicateSessionStart = InProcessReplicationSession::Start(game);
+		Check(duplicateSessionStart.Succeeded(), "duplicate tag replication fixture starts");
+		const auto duplicateCursor = duplicateSessionStart.Session->GetCursor();
+		WireJournalRecord duplicateTag{
+			.Sequence = duplicateCursor.NextSequence,
+			.Scope = WireObjectId::FromObjectId(duplicateCursor.Scope),
+			.Operation = WireJournalOperation::TagAdded,
+			.Object = WireObjectId::FromObjectId(secondId),
+			.TagName = "Enemy",
+		};
+		auto duplicateResult = duplicateSessionStart.Session->ApplyWireRecords({duplicateTag});
+		Check(duplicateResult.Status == ReplicationApplyStatus::ApplyRejected &&
+			duplicateSessionStart.Session->GetCursor().NextSequence == duplicateCursor.NextSequence,
+			"semantically duplicate tag replication is rejected without advancing the cursor");
 	}
 
 	void TestEditorHostProtocol() {

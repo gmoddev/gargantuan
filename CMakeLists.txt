@@ -206,11 +206,18 @@ include(CTest)
 if(BUILD_TESTING)
 	add_executable(gargantuan_foundation_tests "tests/FoundationTests.cpp")
 	target_link_libraries(gargantuan_foundation_tests PRIVATE gargantuan_core)
+	add_executable(gargantuan_attributes_tags_profile "tests/AttributesTagsProfile.cpp")
+	target_link_libraries(gargantuan_attributes_tags_profile PRIVATE gargantuan_core)
 	if(WIN32)
 		add_custom_command(TARGET gargantuan_foundation_tests POST_BUILD
 			COMMAND ${CMAKE_COMMAND} -E copy_if_different
 				"$<TARGET_FILE:SDL3::SDL3>"
 				"$<TARGET_FILE_DIR:gargantuan_foundation_tests>"
+		)
+		add_custom_command(TARGET gargantuan_attributes_tags_profile POST_BUILD
+			COMMAND ${CMAKE_COMMAND} -E copy_if_different
+				"$<TARGET_FILE:SDL3::SDL3>"
+				"$<TARGET_FILE_DIR:gargantuan_attributes_tags_profile>"
 		)
 	endif()
 	add_test(NAME gargantuan_foundation COMMAND gargantuan_foundation_tests)

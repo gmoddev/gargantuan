@@ -9,4 +9,8 @@ Tags are dynamic state, not frozen-schema definitions. Writes require `MutateDat
 
 The engine interns active names and maintains generation-safe indexes in both directions. `GetTagged` and explicit `GetTaggedAll` intersections use those indexes and return deterministic `ObjectId` order. Destroy and scope exit remove all memberships before identity reuse.
 
+`GetTaggedAll` is limited to 64 explicit names and remains an indexed AND
+operation. Service and EditorHost mutations carry an expected DataModel scope,
+so a valid foreign `ObjectId` cannot redirect a scoped tag command.
+
 Project persistence stores only sorted per-object membership. Snapshot and journal version 4 use initial tag arrays plus `TagAdded` and `TagRemoved`. Replication and Studio consume the same committed state. No namespaces, metadata, OR/NOT expressions, inheritance, or general query language exist.

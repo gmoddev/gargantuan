@@ -12,6 +12,8 @@
   authority, persistence, journal, replication, and Studio contracts.
 - [Instance tags](InstanceTags.md) defines scoped indexed membership,
   lifecycle cleanup, deterministic queries, and state-transfer contracts.
+- [Attributes + Tags evaluation](AttributesTagsEvaluation.md) records the
+  end-to-end decision gate, representative profiles, fixes, and accepted follow-up.
 
 See [Runtime foundation](./FoundationRuntime.md) for the implemented ownership,
 ObjectId, JobSystem, execution-domain, reflection-schema, and committed-change

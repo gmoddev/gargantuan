@@ -18,8 +18,8 @@ namespace gargantuan {
 	struct CreateObjectCommand { std::string ClassName; std::optional<ObjectId> Parent; };
 	struct UpdatePropertyCommand { ObjectId Object; std::string PropertyName; std::any Value; };
 	struct UpdateAttributeCommand { ObjectId Object; std::string AttributeName; std::optional<WireValue> Value; };
-	struct AddTagCommand { ObjectId Object; std::string TagName; };
-	struct RemoveTagCommand { ObjectId Object; std::string TagName; };
+	struct AddTagCommand { ObjectId Object; std::string TagName; std::optional<ObjectId> ExpectedScope; };
+	struct RemoveTagCommand { ObjectId Object; std::string TagName; std::optional<ObjectId> ExpectedScope; };
 	struct ReparentObjectCommand { ObjectId Object; std::optional<ObjectId> Parent; };
 	struct DestroyObjectCommand { ObjectId Object; };
 	using MutationCommand = std::variant<

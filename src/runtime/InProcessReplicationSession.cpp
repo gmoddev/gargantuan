@@ -167,6 +167,9 @@ namespace gargantuan {
 		std::optional<WireValue> value = *record.Value;
 		if (std::holds_alternative<std::monostate>(*record.Value)) value.reset();
 		try {
+			const auto current = instance->GetAttributeValue(*record.AttributeName, ScriptSecurityContext::CoreTrusted());
+			if (current == value)
+				return {ReplicationApplyStatus::ApplyRejected, 0, "AttributeUpdate is a semantic no-op"};
 			const auto status = instance->ApplyAttributeMutation(
 				*record.AttributeName, std::move(value), ScriptSecurityContext::CoreTrusted()
 			);
@@ -217,10 +220,16 @@ namespace gargantuan {
 					if (!instance) return {ReplicationApplyStatus::ApplyRejected, 0, "Tag target is stale or missing"};
 					auto dataModel = std::dynamic_pointer_cast<DataModel>(Receiver.Root);
 					if (!dataModel) return {ReplicationApplyStatus::ApplyRejected, 0, "Receiver root is not a DataModel"};
-					if (record.Operation == WireJournalOperation::TagAdded)
-						(void)dataModel->Tags.Add(dataModel->GetObjectId(), instance->GetObjectId(), *record.TagName, ScriptSecurityContext::CoreTrusted());
-					else
-						(void)dataModel->Tags.Remove(dataModel->GetObjectId(), instance->GetObjectId(), *record.TagName, ScriptSecurityContext::CoreTrusted());
+					const bool changed = record.Operation == WireJournalOperation::TagAdded
+						? dataModel->Tags.Add(dataModel->GetObjectId(), instance->GetObjectId(), *record.TagName, ScriptSecurityContext::CoreTrusted())
+						: dataModel->Tags.Remove(dataModel->GetObjectId(), instance->GetObjectId(), *record.TagName, ScriptSecurityContext::CoreTrusted());
+					if (!changed) return {
+						ReplicationApplyStatus::ApplyRejected,
+						0,
+						record.Operation == WireJournalOperation::TagAdded
+							? "TagAdded duplicates existing membership"
+							: "TagRemoved names absent membership",
+					};
 					break;
 				}
 				case WireJournalOperation::Reparent: {

@@ -100,6 +100,8 @@ namespace gargantuan {
 							auto dataModel = instance->GetDataModel();
 							if (!dataModel) return {MutationStatus::Rejected, std::nullopt, "Tag target is not owned by a DataModel"};
 							const auto scope = dataModel->GetObjectId();
+							if (typedCommand.ExpectedScope && *typedCommand.ExpectedScope != scope)
+								return {MutationStatus::Rejected, std::nullopt, "Tag target belongs to another DataModel"};
 							if constexpr (std::is_same_v<Command, AddTagCommand>)
 								(void)dataModel->Tags.Add(scope, typedCommand.Object, typedCommand.TagName, securityContext);
 							else

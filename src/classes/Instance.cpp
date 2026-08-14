@@ -279,9 +279,13 @@ namespace gargantuan {
 			throw std::runtime_error("Attribute signal access requires ReadDataModel");
 		AssertIsAlive();
 		ValidateAttributeName(name);
-		auto [found, inserted] = AttributeChangedSignals.try_emplace(std::string(name));
-		if (inserted) found->second = std::make_shared<Signal<std::monostate>>();
-		return found->second;
+		if (auto found = AttributeChangedSignals.find(std::string(name)); found != AttributeChangedSignals.end())
+			return found->second;
+		if (AttributeChangedSignals.size() >= MaximumAttributeSignalsPerInstance)
+			throw std::invalid_argument("Instance exceeds its attribute signal count limit");
+		auto signal = std::make_shared<Signal<std::monostate>>();
+		AttributeChangedSignals.emplace(std::string(name), signal);
+		return signal;
 	}
 
 	MutationStatus Instance::ApplyAttributeMutation(
@@ -305,10 +309,15 @@ namespace gargantuan {
 			candidate.erase(found);
 		}
 		(void)ValidateAttributeCollection(candidate);
-		Attributes = std::move(candidate);
-		ChangeJournal::Get().Commit(GetReplicationScopeId(), GetObjectId(), AttributeUpdatedChange{
-			std::string(name), value
-		});
+		Attributes.swap(candidate);
+		try {
+			ChangeJournal::Get().Commit(GetReplicationScopeId(), GetObjectId(), AttributeUpdatedChange{
+				std::string(name), value
+			});
+		} catch (...) {
+			Attributes.swap(candidate);
+			throw;
+		}
 		auto signal = AttributeChangedSignals.find(std::string(name));
 		if (signal != AttributeChangedSignals.end()) signal->second->Fire({});
 		return MutationStatus::Success;
@@ -390,17 +399,19 @@ namespace gargantuan {
 		for (auto ancestor = newParent; ancestor; ancestor = ancestor->ParentReference.lock()) {
 			if (ancestor == self) throw std::invalid_argument("An Instance cannot be parented to its descendant");
 		}
+		std::vector<std::shared_ptr<Instance>> subtree = {self};
+		CollectDescendants(subtree);
 		const auto oldScope = GetReplicationScopeId();
 		const auto newScope = newParent ? newParent->GetReplicationScopeId() : ObjectId{};
 		const auto objectId = GetObjectId();
 		if (!DestroyingState && oldScope != newScope) {
-			if (auto oldDataModel = GetDataModel()) oldDataModel->Tags.RemoveAll(oldScope, objectId);
+			if (auto oldDataModel = GetDataModel()) {
+				for (const auto &node : subtree) oldDataModel->Tags.RemoveAll(oldScope, node->GetObjectId());
+			}
 		}
 
 		// This whole subtree leaves the old ancestry and joins the new one, so
 		// collect it once up front and reuse it for both sets of signals
-		std::vector<std::shared_ptr<Instance>> subtree = {self};
-		CollectDescendants(subtree);
 
 		if (oldParent != nullptr) {
 			auto &oldChildren = oldParent->Children;

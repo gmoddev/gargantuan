@@ -3,12 +3,13 @@
 #include "gargantuan/runtime/ObjectId.hpp"
 
 #include <cstdint>
-#include <deque>
 #include <limits>
+#include <list>
 #include <mutex>
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -64,6 +65,7 @@ namespace gargantuan {
 		static ChangeJournal &Get();
 		std::uint64_t Commit(ObjectId object, ChangePayload payload);
 		std::uint64_t Commit(ObjectId scope, ObjectId object, ChangePayload payload);
+		void CommitBatch(ObjectId scope, std::vector<std::pair<ObjectId, ChangePayload>> changes);
 		[[nodiscard]] std::vector<ChangeRecord> ReadSince(std::uint64_t sequence) const;
 		[[nodiscard]] ChangeCursor CreateCursor(ObjectId scope = {}) const;
 		[[nodiscard]] ChangeReadResult Read(ChangeCursor cursor, std::size_t maximumRecords = std::numeric_limits<std::size_t>::max()) const;
@@ -74,7 +76,7 @@ namespace gargantuan {
 	  private:
 		struct Stream {
 			std::uint64_t NextSequence = 1;
-			std::deque<ChangeRecord> Records;
+			std::list<ChangeRecord> Records;
 		};
 		mutable std::mutex Mutex;
 		std::size_t Capacity = 4096;

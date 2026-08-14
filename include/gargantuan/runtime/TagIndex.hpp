@@ -12,8 +12,11 @@
 #include <vector>
 
 namespace gargantuan {
+	class Instance;
+
 	inline constexpr std::size_t MaximumTagNameBytes = 100;
 	inline constexpr std::size_t MaximumTagsPerInstance = 64;
+	inline constexpr std::size_t MaximumTagsPerQuery = MaximumTagsPerInstance;
 	inline constexpr std::size_t MaximumDistinctTagsPerDataModel = 1024;
 
 	using TagId = std::uint32_t;
@@ -25,7 +28,6 @@ namespace gargantuan {
 	  public:
 		bool Add(ObjectId scope, ObjectId object, std::string_view name, const ScriptSecurityContext &securityContext);
 		bool Remove(ObjectId scope, ObjectId object, std::string_view name, const ScriptSecurityContext &securityContext);
-		std::vector<std::string> RemoveAll(ObjectId scope, ObjectId object, bool publishChanges = true);
 
 		[[nodiscard]] bool Has(
 			ObjectId scope,
@@ -50,6 +52,8 @@ namespace gargantuan {
 		) const;
 
 	  private:
+		friend class Instance;
+		std::vector<std::string> RemoveAll(ObjectId scope, ObjectId object, bool publishChanges = true);
 		TagId Intern(std::string_view name);
 		void ReleaseIfUnused(TagId id);
 		[[nodiscard]] bool IsLiveInScope(ObjectId scope, ObjectId object) const;

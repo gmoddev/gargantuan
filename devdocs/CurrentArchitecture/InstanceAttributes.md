@@ -18,6 +18,7 @@ embedded null, and be at most 100 bytes. The authoritative limits are:
 | Encoded bytes per value | 4 KiB |
 | Aggregate name/value bytes per Instance | 16 KiB |
 | Replicated attribute bytes per Instance | 16 KiB |
+| Per-name change signals per Instance | 64 |
 
 The encoded-value limit measures canonical `WireValue` JSON. The stored subset
 is boolean, integer, finite double/float, bounded UTF-8 string, `Vector2`,
@@ -35,6 +36,8 @@ replacing its map. Reads require `ReadDataModel`; domains grant no authority.
 Creation, replacement, and removal each commit one `AttributeUpdatedChange` and
 fire the named signal once. Assigning the identical `WireValue`, or removing a
 missing name, is a successful no-op. Rejection leaves prior state unchanged.
+Attribute storage and its signal map are private native state; journal failure
+rolls a candidate map back before the error crosses the mutation boundary.
 
 ## Persistence and replication
 

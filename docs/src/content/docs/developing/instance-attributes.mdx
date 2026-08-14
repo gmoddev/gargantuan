@@ -12,7 +12,8 @@ require `ReadDataModel`. Assigning an identical value or removing a missing key
 produces no change record or signal.
 
 Current limits are 100 UTF-8 bytes per name, 64 attributes per Instance, 4 KiB
-per encoded value, and 16 KiB aggregate. Values currently support booleans,
+per encoded value, 16 KiB aggregate, and 64 lazily-created per-name change
+signals. Values currently support booleans,
 integers, finite numbers, bounded UTF-8 strings, `Vector2`, `Vector3`, `Color3`,
 `UDim`, `UDim2`, and finite `CFrame`. Nil removes a value. Tables, blobs, enums,
 object references, functions, userdata, and native pointers are rejected.

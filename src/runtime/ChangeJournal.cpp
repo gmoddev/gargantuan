@@ -1,6 +1,8 @@
 #include "gargantuan/runtime/ChangeJournal.hpp"
 #include "gargantuan/runtime/ExecutionDomain.hpp"
 
+#include <stdexcept>
+
 namespace gargantuan {
 	namespace {
 		thread_local std::size_t SuppressionDepth = 0;
@@ -20,10 +22,31 @@ namespace gargantuan {
 		if (SuppressionDepth != 0) return 0;
 		std::scoped_lock lock(Mutex);
 		auto &stream = Streams[scope];
-		const auto sequence = stream.NextSequence++;
+		if (stream.NextSequence == std::numeric_limits<std::uint64_t>::max())
+			throw std::overflow_error("Change journal sequence is exhausted");
+		const auto sequence = stream.NextSequence;
 		stream.Records.push_back({sequence, scope, object, std::move(payload)});
+		++stream.NextSequence;
 		while (stream.Records.size() > Capacity) stream.Records.pop_front();
 		return sequence;
+	}
+
+	void ChangeJournal::CommitBatch(ObjectId scope, std::vector<std::pair<ObjectId, ChangePayload>> changes) {
+		AssertAuthoritativeMutation("ChangeJournal::CommitBatch");
+		if (SuppressionDepth != 0 || changes.empty()) return;
+		std::scoped_lock lock(Mutex);
+		auto &stream = Streams[scope];
+		auto nextSequence = stream.NextSequence;
+		std::list<ChangeRecord> prepared;
+		for (auto &[object, payload] : changes) {
+			if (nextSequence == std::numeric_limits<std::uint64_t>::max())
+				throw std::overflow_error("Change journal sequence is exhausted");
+			prepared.push_back({nextSequence, scope, object, std::move(payload)});
+			++nextSequence;
+		}
+		stream.Records.splice(stream.Records.end(), prepared);
+		stream.NextSequence = nextSequence;
+		while (stream.Records.size() > Capacity) stream.Records.pop_front();
 	}
 
 	std::vector<ChangeRecord> ChangeJournal::ReadSince(std::uint64_t sequence) const {

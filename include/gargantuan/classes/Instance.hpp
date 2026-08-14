@@ -27,8 +27,12 @@ namespace gargantuan {
 
 		std::vector<std::shared_ptr<Instance>> Children;
 		std::unordered_map<std::string, std::shared_ptr<Signal<std::monostate>>> PropertyChangedSignals;
+
+	  private:
 		std::map<std::string, WireValue> Attributes;
 		std::unordered_map<std::string, std::shared_ptr<Signal<std::monostate>>> AttributeChangedSignals;
+
+	  public:
 		std::weak_ptr<Instance> ParentReference;
 		mutable ObjectId Id;
 		mutable std::mutex IdentityMutex;

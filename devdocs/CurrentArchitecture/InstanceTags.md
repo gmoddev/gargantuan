@@ -6,13 +6,24 @@ Each authoritative `DataModel` owns one bounded `TagIndex`. Tags are case-sensit
 
 Names are non-empty valid UTF-8 without embedded nulls and are limited to 100 bytes. An Instance may have 64 tags and a DataModel may have 1,024 distinct active tags. The index interns each active name to a session-local numeric `TagId`; that identifier is never persisted or sent over the wire.
 
+`GetTaggedAll` accepts at most 64 explicit names. It remains a bounded AND
+intersection, not a general query language.
+
 The canonical in-memory index maintains both `ObjectId -> TagId` and `TagId -> ObjectId` sets. Reverse sets use generation-checked `ObjectId`, never Instance pointers. Single-tag queries and explicit AND intersections start from indexed sets, validate live scope membership, and return `ObjectId` order. There is no query language, namespace, tag metadata, inheritance, or OR/NOT evaluation.
 
 ## Authority and lifecycle
 
-`AddTagCommand` and `RemoveTagCommand` use `MutationGateway`. Main-domain and `MutateDataModel` checks are enforced at the authoritative index; reads require `ReadDataModel`. Domains do not imply capabilities. Duplicate add and absent remove are successful no-ops with no record.
+`AddTagCommand` and `RemoveTagCommand` use `MutationGateway`. Studio/service
+commands include the expected DataModel scope, which the gateway rechecks.
+Main-domain and `MutateDataModel` checks are enforced at the authoritative
+index; reads require `ReadDataModel`. Domains do not imply capabilities.
+Duplicate add and absent remove are successful no-ops with no record.
 
-Destroy removes forward and reverse membership before ObjectId invalidation. Descendant destruction performs the same cleanup for every object. Leaving a DataModel scope removes that scope's memberships. Queries additionally validate the current ObjectId generation and world, so slot reuse cannot resurrect an old association.
+Destroy removes forward and reverse membership before ObjectId invalidation.
+Descendant destruction and cross-DataModel subtree movement clean every object,
+not only the subtree root. The lifecycle cleanup entry point is private to
+`Instance`. Queries additionally validate the current ObjectId generation and
+world, so slot reuse cannot resurrect an old association.
 
 ## Persistence and state transfer
 

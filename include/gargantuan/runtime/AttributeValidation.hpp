@@ -13,6 +13,7 @@ namespace gargantuan {
 	inline constexpr std::size_t MaximumAttributeValueBytes = 4 * 1024;
 	inline constexpr std::size_t MaximumAttributeBytesPerInstance = 16 * 1024;
 	inline constexpr std::size_t MaximumReplicatedAttributeBytesPerInstance = MaximumAttributeBytesPerInstance;
+	inline constexpr std::size_t MaximumAttributeSignalsPerInstance = MaximumAttributesPerInstance;
 
 	void ValidateAttributeName(std::string_view name);
 	[[nodiscard]] std::size_t ValidateAttributeValue(const WireValue &value);
