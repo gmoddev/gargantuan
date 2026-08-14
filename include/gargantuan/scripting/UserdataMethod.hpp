@@ -1,5 +1,7 @@
 #pragma once
 
+#include "gargantuan/reflection/SchemaId.hpp"
+#include "gargantuan/scripting/ScriptSecurity.hpp"
 #include "gargantuan/scripting/StackValue.hpp"
 #include <functional>
 #include <lualib.h>
@@ -9,8 +11,15 @@
 namespace gargantuan {
 	template <typename Self> struct UserdataMethod {
 	  public:
-		int (*Call)(lua_State *L, Self *instance);
+		int (*Call)(lua_State *L, Self *instance) = nullptr;
 		std::string Signature{};
+		SchemaId DeclaringSchemaId{};
+		ScriptDomainSet InvokeDomains = ScriptDomainSet::All();
+		ScriptCapability RequiredCapability = ScriptCapability::None;
+
+		[[nodiscard]] bool CanInvoke(const ScriptSecurityContext &context) const {
+			return InvokeDomains.Contains(context.Domain) && context.HasCapability(RequiredCapability);
+		}
 
 		template <auto MethodPointer, typename Class, typename Returns, typename... Arguments>
 		static UserdataMethod fromMember(Returns (Class::*)(Arguments...)) {

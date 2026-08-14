@@ -1,0 +1,52 @@
+---
+title: Runtime Schema
+description: The canonical native class and reflection schema implemented by Gargantuan.
+---
+
+Gargantuan's `RuntimeSchemaRegistry` is the authoritative metadata source for
+native Instance classes. Generated definitions flow into this registry;
+existing reflection APIs adapt the same registered objects rather than keeping
+a second class table.
+
+## Implemented foundation
+
+Each native definition has a deterministic 128-bit `SchemaId`, an `Engine`
+namespace, human-facing class name, canonical qualified name, definition
+version, native provenance, stable base identity, properties/signals, and
+methods. The ID is independent of addresses, hierarchy, startup randomness,
+and registration order. Its deterministic text form is 32 hexadecimal
+characters, and the zero value is invalid.
+
+Property metadata carries reflected value type, native readability and
+writability, persistence, replication, editor editability, write authority,
+domain sets, required capabilities, validation, and declaring class identity.
+Methods carry declaring identity plus invocation domain/capability metadata.
+Current method grants preserve existing behavior.
+
+Project serialization and replication selection consume their respective
+policies from these canonical property objects. Persistence no longer has a
+parallel boolean selector that could diverge.
+
+The registry provides lookup by stable ID, native type, and qualified or legacy
+unqualified name. Observable enumeration is sorted by canonical name. Validation
+fails on duplicate IDs/names, invalid or cyclic inheritance, invalid member
+ownership/types/access, and conflicting members.
+
+`InstanceClassDefinition` and `InstanceClassRegistry` remain as source-compatible
+native reflection names, but they are an alias and adapter over the runtime
+schema. Existing `IsA`, property lookup, snapshots, journals, replication,
+EditorHost, and mutation paths retain their contracts.
+
+Schema metadata is descriptive. Namespace, provenance, class name, and domain
+never imply privilege. Capability checks remain enforced by native reflection
+dispatch and `MutationGateway`.
+
+## Not implemented yet
+
+The registry is not frozen and has no registration lifecycle or session
+generation yet. PreRun, custom definitions, extensions, enums, migrations,
+packages, plugins, Studio schema discovery, and generated Luau typing remain
+future architecture.
+
+The next schema milestone is a transactional registration lifecycle and
+registry freeze using this same representation.

@@ -83,8 +83,7 @@ submitted to workers.
 `InstanceProperty` remains the single property schema. It now has explicit
 metadata for:
 
-- persistence (`Transient` or `Saved`, with existing `Serializable` mapped to
-  `Saved`);
+- persistence (`Transient` or `Saved`, selected by `SetSerializable`);
 - future replication (`None` or `FutureReplicated`);
 - write authority (`Main` or `Any`);
 - editability;
@@ -93,7 +92,7 @@ metadata for:
 
 The class generator accepts the corresponding declarative fields. Snapshot and
 incremental replication now consume `FutureReplicated` explicitly; persistence
-continues to consume `Serializable` independently. Main-domain authority,
+consumes that same canonical property policy. Main-domain authority,
 read-only state, and validation are checked on wired mutation paths.
 
 ## Ordered committed changes

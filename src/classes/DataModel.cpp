@@ -8,10 +8,10 @@
 namespace gargantuan {
 	const DataModel::ServiceDefinitions &DataModel::GetServiceDefinitions() const {
 		static const DataModel::ServiceDefinitions CONSTRUCTORS = {
-			{"ProcessService", ProcessService::CLASS_DEFINITION},
-			{"RunService", RunService::CLASS_DEFINITION},
-			{"UserInputService", UserInputService::CLASS_DEFINITION},
-			{"Workspace", Workspace::CLASS_DEFINITION},
+			{"ProcessService", SchemaId::FromNativeName("Engine", "ProcessService")},
+			{"RunService", SchemaId::FromNativeName("Engine", "RunService")},
+			{"UserInputService", SchemaId::FromNativeName("Engine", "UserInputService")},
+			{"Workspace", SchemaId::FromNativeName("Engine", "Workspace")},
 		};
 		return CONSTRUCTORS;
 	};

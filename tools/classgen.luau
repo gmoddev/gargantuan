@@ -65,6 +65,10 @@ const function assembleProperties(state: GenerationState)
 		pushTypeDependencies(state, property.type)
 
 		const keyString = string.format("%q", key)
+		const hasWritePath = if property.overrideRead or property.overrideWrite
+			then property.overrideWrite ~= nil
+			else property.writable ~= false
+		const isEditable = property.editable ~= false and hasWritePath and property.writeLevel ~= "Never"
 
 		state.definitionProperties
 			:line(`InstanceProperty({keyString})`)
@@ -77,7 +81,7 @@ const function assembleProperties(state: GenerationState)
 		if property.replicated then
 			state.definitionProperties:line(`.SetReplication(InstanceProperty::Replication::FutureReplicated)`)
 		end
-		if property.editable == false then
+		if not isEditable then
 			state.definitionProperties:line(`.SetEditable(false)`)
 		end
 		if property.authority then
@@ -157,6 +161,7 @@ const function assembleSignals(state: GenerationState)
 			:tab()
 			:line(`.SetReflectedTypedef({string.format("%q", signalType.luauType)})`)
 			:line(`.SetSignal()`)
+			:line(`.SetEditable(false)`)
 			:line(`.UseRead<&{state.class.name}::{key}>()`)
 			:line(`.IntoPair(),`)
 			:untab()
@@ -253,7 +258,11 @@ const function assembleImplFile(state: GenerationState)
 	output:line("namespace gargantuan {"):tab()
 
 	output:line(`const InstanceClassDefinition {state.class.name}::CLASS_DEFINITION\{`):tab()
+	output:line(`.Id = SchemaId::FromNativeName("Engine", {string.format("%q", state.class.name)}),`)
+	output:line(`.Namespace = "Engine",`)
 	output:line(`.ClassName = {string.format("%q", state.class.name)},`)
+	output:line(`.DefinitionVersion = 1,`)
+	output:line(`.Provenance = SchemaProvenance::NativeEngine,`)
 	if not state.class.abstract then
 		output
 			:line(`.Constructor = []() -> std::shared_ptr<Instance> \{`)
@@ -266,6 +275,10 @@ const function assembleImplFile(state: GenerationState)
 			:line("},")
 	end
 	output:line(`.Superclass = {state.superclass and string.format("%q", state.superclass) or "std::nullopt"},`)
+	const baseSchemaId = if state.superclass
+		then `SchemaId::FromNativeName("Engine", {string.format("%q", state.superclass)})`
+		else "std::nullopt"
+	output:line(`.BaseSchemaId = {baseSchemaId},`)
 	output
 		:line(".Properties = {")
 		:tab()

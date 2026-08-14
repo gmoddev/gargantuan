@@ -6,14 +6,10 @@
 #include <vector>
 
 namespace gargantuan::InstanceClassRegistry {
-	std::unordered_map<std::type_index, InstanceClassDefinition> &GetDefinitionsMap();
-
 	void InvalidateCaches();
 
 	template <typename T> void Register(InstanceClassDefinition definition) {
-		auto &map = GetDefinitionsMap();
-		map.emplace(std::type_index(typeid(T)), definition);
-		InvalidateCaches();
+		GetRuntimeSchemaRegistry().RegisterNative<T>(std::move(definition));
 	}
 
 	InstanceClassDefinition *GetDefinitionByType(std::type_index type);
@@ -23,6 +19,7 @@ namespace gargantuan::InstanceClassRegistry {
 	}
 
 	InstanceClassDefinition *GetDefinition(Instance *instance);
-	InstanceClassDefinition *GetDefinitionByName(std::string name);
+	InstanceClassDefinition *GetDefinitionByName(std::string_view name);
+	InstanceClassDefinition *GetDefinitionBySchemaId(SchemaId id);
 	std::vector<std::string> GetClassNames();
 }

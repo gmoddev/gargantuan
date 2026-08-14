@@ -398,7 +398,11 @@ namespace gargantuan {
 
 			if (key && self) {
 				const auto *method = self->FindMethod(key);
-				if (method) return method->Call(L, self);
+				if (method) {
+					if (!method->CanInvoke(GetCurrentScriptSecurityContext()))
+						luaL_error(L, "Current script context cannot invoke method %s", key);
+					return method->Call(L, self);
+				}
 			}
 
 			luaL_error(L, "%s is not a valid method of %s", key, self->Name.data());

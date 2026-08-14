@@ -1,4 +1,5 @@
 #include "gargantuan/classes/ServiceProvider.hpp"
+#include "gargantuan/reflection/InstanceClassRegistry.hpp"
 
 #include <SDL3/SDL.h>
 #include <optional>
@@ -18,14 +19,16 @@ namespace gargantuan {
 		if (it == Services.end()) {
 			const ServiceDefinitions &constructors = GetServiceDefinitions();
 			if (auto it = constructors.find(name); it != constructors.end()) {
-				auto &definition = it->second;
+				auto *definition = InstanceClassRegistry::GetDefinitionBySchemaId(it->second);
+				if (!definition || !definition->Constructor)
+					throw std::runtime_error(std::format("Service '{}' has no constructible schema", name));
 
-				if (auto existing = FindFirstChildOfClass(definition.ClassName, std::nullopt)) {
+				if (auto existing = FindFirstChildOfClass(definition->ClassName, std::nullopt)) {
 					Services.emplace(name, existing);
 					return existing;
 				}
 
-				auto service = definition.Constructor();
+				auto service = definition->Constructor();
 				service->SetParent(this->shared_from_this());
 				Services.emplace(name, service);
 				return service;

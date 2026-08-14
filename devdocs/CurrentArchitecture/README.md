@@ -2,6 +2,9 @@
 
 - [Script security](ScriptSecurity.md) defines enforceable execution domains
   and explicit native-boundary capabilities.
+- [Runtime schema](RuntimeSchema.md) defines stable native schema identity, the
+  canonical class/member registry, compatibility reflection views, and current
+  validation rules.
 
 See [Runtime foundation](./FoundationRuntime.md) for the implemented ownership,
 ObjectId, JobSystem, execution-domain, reflection-schema, and committed-change

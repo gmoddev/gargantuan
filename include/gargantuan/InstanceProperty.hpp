@@ -1,6 +1,7 @@
 #pragma once
 
 #include "gargantuan/reflection/Enums.hpp"
+#include "gargantuan/reflection/SchemaId.hpp"
 #include "gargantuan/scripting/ScriptSecurity.hpp"
 #include "gargantuan/scripting/StackValue.hpp"
 #include <any>
@@ -94,7 +95,6 @@ namespace gargantuan {
 		std::string ReflectedTypedef{};
 		std::any Unmodified{};
 		bool Signal{false};
-		bool Serializable{false};
 		Persistence PersistencePolicy = Persistence::Transient;
 		Replication ReplicationPolicy = Replication::None;
 		Authority WriteAuthority = Authority::Main;
@@ -104,6 +104,7 @@ namespace gargantuan {
 		ScriptCapability RequiredReadCapability = ScriptCapability::ReadDataModel;
 		ScriptCapability RequiredWriteCapability = ScriptCapability::MutateDataModel;
 		std::function<bool(const std::any &)> Validate;
+		SchemaId DeclaringSchemaId{};
 
 		Enums::Permission ReadPermission = Enums::Permission::None;
 		std::function<std::any(Instance *self)> Read;
@@ -136,7 +137,6 @@ namespace gargantuan {
 		}
 
 		InstanceProperty &SetSerializable(bool serializable = true) {
-			Serializable = serializable;
 			PersistencePolicy = serializable ? Persistence::Saved : Persistence::Transient;
 			return *this;
 		}

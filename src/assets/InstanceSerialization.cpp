@@ -94,7 +94,9 @@ namespace gargantuan::InstanceSerialization {
 		void
 		SerializeProperties(InstanceClassDefinition *definition, std::shared_ptr<Instance> instance, json &properties) {
 			for (auto &[key, property] : definition->Properties) {
-				if (key == "Parent" || !property.Serializable || !property.Read || !property.Write) continue;
+				if (key == "Parent" || property.PersistencePolicy != InstanceProperty::Persistence::Saved ||
+					!property.Read || !property.Write)
+					continue;
 
 				auto value = property.Read(instance.get());
 				if (auto serialized = TrySerializeValue(value); serialized.has_value()) {
@@ -362,7 +364,9 @@ namespace gargantuan::InstanceSerialization {
 		}
 		for (auto &[key, property] : definition->AllProperties) {
 			LOG_INFO(App, "Trying to deserialize %s of %s", key.data(), state.FormatCurrentPath().data());
-			if (key == "Parent" || !properties.contains(key) || !property->Serializable || !property->Write) continue;
+			if (key == "Parent" || !properties.contains(key) ||
+				property->PersistencePolicy != InstanceProperty::Persistence::Saved || !property->Write)
+				continue;
 			LOG_INFO(App, "Deserializing %s of %s", key.data(), state.FormatCurrentPath().data());
 
 			auto value = properties[key];

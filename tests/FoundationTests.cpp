@@ -15,6 +15,7 @@
 #include "gargantuan/runtime/ObjectId.hpp"
 #include "gargantuan/runtime/Snapshot.hpp"
 #include "gargantuan/runtime/WireJournal.hpp"
+#include "gargantuan/reflection/RuntimeSchema.hpp"
 #include "gargantuan/scripting/ModuleResolution.hpp"
 #include "gargantuan/scripting/NativeCallback.hpp"
 #include "gargantuan/services/Workspace.hpp"
@@ -67,6 +68,37 @@ namespace {
 		} catch (...) {
 		}
 		Check(false, message);
+	}
+
+	struct SchemaTestTypeA {};
+	struct SchemaTestTypeB {};
+	struct SchemaTestTypeC {};
+	struct SchemaTestTypeD {};
+
+	gargantuan::SchemaDefinition MakeSchemaDefinition(
+		std::string name,
+		std::optional<std::string> baseName = std::nullopt,
+		std::optional<gargantuan::SchemaId> id = std::nullopt
+	) {
+		using namespace gargantuan;
+		SchemaDefinition definition;
+		definition.Namespace = "Test";
+		definition.ClassName = std::move(name);
+		definition.Id = id.value_or(SchemaId::FromNativeName(definition.Namespace, definition.ClassName));
+		definition.DefinitionVersion = 1;
+		definition.Provenance = SchemaProvenance::NativeEngine;
+		definition.Superclass = std::move(baseName);
+		definition.BaseSchemaId = definition.Superclass
+			? std::optional(SchemaId::FromNativeName(definition.Namespace, *definition.Superclass))
+			: std::nullopt;
+		return definition;
+	}
+
+	gargantuan::InstanceProperty MakeReadOnlySchemaProperty(std::string name, std::string type = "string") {
+		gargantuan::InstanceProperty property(std::move(name));
+		property.SetReflectedTypedef(std::move(type)).SetEditable(false);
+		property.Read = [](gargantuan::Instance *) -> std::any { return std::string("value"); };
+		return property;
 	}
 
 	void TestHierarchyAndDestruction() {
@@ -284,6 +316,151 @@ namespace {
 			name->ReadDomains.Contains(ScriptExecutionDomain::Studio) &&
 				name->WriteDomains.Contains(ScriptExecutionDomain::Server),
 			"property metadata represents domains as independent set membership"
+		);
+	}
+
+	void TestRuntimeSchemaRegistry() {
+		using namespace gargantuan;
+
+		constexpr auto expectedPartId = SchemaId::FromNativeName("Engine", "Part");
+		auto *partDefinition = InstanceClassRegistry::GetDefinitionByName("Part");
+		auto *qualifiedPartDefinition = InstanceClassRegistry::GetDefinitionByName("Engine.Part");
+		Check(partDefinition && partDefinition->Id == expectedPartId, "native classes have deterministic SchemaIds");
+		Check(qualifiedPartDefinition == partDefinition, "canonical and compatibility class lookup share one definition");
+		Check(
+			InstanceClassRegistry::GetDefinitionBySchemaId(expectedPartId) == partDefinition,
+			"schema lookup by native ID succeeds"
+		);
+		Check(
+			InstanceClassRegistry::GetDefinitionBySchemaId(SchemaId::FromParts(0x1234, 0x5678)) == nullptr,
+			"unknown SchemaId lookup fails safely"
+		);
+		auto serializedId = expectedPartId.ToString();
+		Check(SchemaId::Parse(serializedId) == expectedPartId, "SchemaId has a deterministic serialized form");
+		Check(!SchemaId::Parse(std::string(32, 'z')), "malformed SchemaId fails safely");
+		Check(!SchemaId{}.IsValid() && !SchemaId::Parse(std::string(32, '0')), "zero SchemaId is explicitly invalid");
+
+		RuntimeSchemaRegistry firstConstruction;
+		RuntimeSchemaRegistry secondConstruction;
+		firstConstruction.RegisterNative<SchemaTestTypeA>(MakeSchemaDefinition("Stable"));
+		secondConstruction.RegisterNative<SchemaTestTypeA>(MakeSchemaDefinition("Stable"));
+		Check(
+			firstConstruction.FindByName("Test.Stable")->Id == secondConstruction.FindByName("Test.Stable")->Id,
+			"SchemaId survives repeated registry construction"
+		);
+		Check(
+			SchemaId::FromNativeName("Engine", "Part") != SchemaId::FromNativeName("Engine", "Folder"),
+			"distinct native classes have distinct SchemaIds"
+		);
+
+		RuntimeSchemaRegistry duplicateIds;
+		const auto sharedId = SchemaId::FromParts(1, 1);
+		duplicateIds.RegisterNative<SchemaTestTypeA>(MakeSchemaDefinition("First", std::nullopt, sharedId));
+		CheckThrows<std::invalid_argument>(
+			[&] { duplicateIds.RegisterNative<SchemaTestTypeB>(MakeSchemaDefinition("Second", std::nullopt, sharedId)); },
+			"duplicate SchemaIds are rejected"
+		);
+
+		RuntimeSchemaRegistry duplicateNames;
+		duplicateNames.RegisterNative<SchemaTestTypeA>(
+			MakeSchemaDefinition("SameName", std::nullopt, SchemaId::FromParts(2, 1))
+		);
+		CheckThrows<std::invalid_argument>(
+			[&] {
+				duplicateNames.RegisterNative<SchemaTestTypeB>(
+					MakeSchemaDefinition("SameName", std::nullopt, SchemaId::FromParts(2, 2))
+				);
+			},
+			"duplicate canonical names are rejected"
+		);
+
+		RuntimeSchemaRegistry invalidIdentity;
+		auto invalidDefinition = MakeSchemaDefinition("InvalidId");
+		invalidDefinition.Id = {};
+		CheckThrows<std::invalid_argument>(
+			[&] { invalidIdentity.RegisterNative<SchemaTestTypeA>(std::move(invalidDefinition)); },
+			"invalid default SchemaIds are rejected"
+		);
+
+		RuntimeSchemaRegistry invalidMembers;
+		auto wrongOwner = MakeSchemaDefinition("WrongOwner");
+		auto wrongOwnerProperty = MakeReadOnlySchemaProperty("Value");
+		wrongOwnerProperty.DeclaringSchemaId = SchemaId::FromParts(9, 9);
+		wrongOwner.Properties.emplace("Value", std::move(wrongOwnerProperty));
+		CheckThrows<std::invalid_argument>(
+			[&] { invalidMembers.RegisterNative<SchemaTestTypeA>(std::move(wrongOwner)); },
+			"members with a different declaring SchemaId are rejected"
+		);
+		auto unsupportedMember = MakeSchemaDefinition("UnsupportedMember");
+		unsupportedMember.Properties.emplace("Value", MakeReadOnlySchemaProperty("Value", ""));
+		CheckThrows<std::invalid_argument>(
+			[&] { invalidMembers.RegisterNative<SchemaTestTypeB>(std::move(unsupportedMember)); },
+			"members without reflected value types are rejected"
+		);
+		auto memberCollision = MakeSchemaDefinition("MemberCollision");
+		memberCollision.Properties.emplace("Value", MakeReadOnlySchemaProperty("Value"));
+		memberCollision.Methods.emplace("Value", UserdataMethod<Instance>{.Call = [](lua_State *, Instance *) { return 0; }});
+		CheckThrows<std::invalid_argument>(
+			[&] { invalidMembers.RegisterNative<SchemaTestTypeC>(std::move(memberCollision)); },
+			"property and method name collisions are rejected"
+		);
+
+		RuntimeSchemaRegistry missingBase;
+		missingBase.RegisterNative<SchemaTestTypeA>(MakeSchemaDefinition("Child", "Missing"));
+		CheckThrows<std::invalid_argument>([&] { missingBase.Validate(); }, "missing schema base classes are rejected");
+
+		RuntimeSchemaRegistry inheritanceCycle;
+		inheritanceCycle.RegisterNative<SchemaTestTypeA>(MakeSchemaDefinition("CycleA", "CycleB"));
+		inheritanceCycle.RegisterNative<SchemaTestTypeB>(MakeSchemaDefinition("CycleB", "CycleA"));
+		CheckThrows<std::invalid_argument>([&] { inheritanceCycle.Validate(); }, "schema inheritance cycles are rejected");
+
+		RuntimeSchemaRegistry orderedOne;
+		RuntimeSchemaRegistry orderedTwo;
+		orderedOne.RegisterNative<SchemaTestTypeA>(MakeSchemaDefinition("Zulu"));
+		orderedOne.RegisterNative<SchemaTestTypeB>(MakeSchemaDefinition("Alpha"));
+		orderedTwo.RegisterNative<SchemaTestTypeC>(MakeSchemaDefinition("Alpha"));
+		orderedTwo.RegisterNative<SchemaTestTypeD>(MakeSchemaDefinition("Zulu"));
+		auto firstOrder = orderedOne.Enumerate();
+		auto secondOrder = orderedTwo.Enumerate();
+		Check(
+			firstOrder.size() == 2 && secondOrder.size() == 2 &&
+				firstOrder[0]->CanonicalName == "Test.Alpha" && firstOrder[1]->CanonicalName == "Test.Zulu" &&
+				firstOrder[0]->CanonicalName == secondOrder[0]->CanonicalName &&
+				firstOrder[1]->CanonicalName == secondOrder[1]->CanonicalName,
+			"schema enumeration is deterministic and independent of registration order"
+		);
+
+		auto *instanceDefinition = InstanceClassRegistry::GetDefinitionByName("Instance");
+		auto *basePartDefinition = InstanceClassRegistry::GetDefinitionByName("BasePart");
+		Check(
+			partDefinition && basePartDefinition && partDefinition->BaseSchemaId == basePartDefinition->Id,
+			"schema inheritance uses stable base identity"
+		);
+		Check(
+			partDefinition && instanceDefinition && partDefinition->AllProperties.at("Name")->DeclaringSchemaId ==
+				instanceDefinition->Id,
+			"inherited members retain their declaring schema identity"
+		);
+		auto *cframe = partDefinition ? partDefinition->AllProperties.at("CFrame") : nullptr;
+		Check(
+			cframe && cframe->PersistencePolicy == InstanceProperty::Persistence::Saved &&
+				cframe->ReplicationPolicy == InstanceProperty::Replication::FutureReplicated,
+			"canonical schema exposes serialization and replication metadata"
+		);
+		Check(
+			partDefinition && partDefinition->DefinitionVersion == 1 &&
+				partDefinition->Provenance == SchemaProvenance::NativeEngine &&
+				partDefinition->Namespace == "Engine",
+			"native schema version, provenance, and namespace are populated"
+		);
+
+		auto part = std::make_shared<Part>();
+		Check(part->IsA("Part") && part->IsA("BasePart") && part->IsA("Instance"), "existing IsA behavior remains compatible");
+		ScriptSecurityContext noMutation{ScriptExecutionDomain::Studio, {ScriptCapability::ReadDataModel}};
+		Check(
+			part->ApplyPropertyMutation("Name", std::string("Denied"), Enums::Permission::None, noMutation) ==
+				MutationStatus::Unauthorized,
+			"schema-backed reflected mutation still enforces its native capability boundary"
 		);
 	}
 
@@ -926,6 +1103,7 @@ int main() {
 	TestCheckedResolutionAndOwnedPaths();
 	TestJobSystem();
 	TestSchemaMetadata();
+	TestRuntimeSchemaRegistry();
 	TestScriptSecurityModel();
 	TestMutationGateway();
 	TestBoundedJournalCursor();

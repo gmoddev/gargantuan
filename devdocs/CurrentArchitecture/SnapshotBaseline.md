@@ -87,7 +87,7 @@ implemented in `LoopbackReplication.md`. Receiver materialization and apply use
 a scoped journal-suppression policy, so local receiver mutations do not pollute
 the source cursor stream.
 
-Persistence selection remains independent: `Serializable`/`Saved` does not
+Persistence selection remains independent: `Saved` does not
 implicitly put a property into a snapshot. The generated reflection schema is
 the single source of truth for both policies.
 

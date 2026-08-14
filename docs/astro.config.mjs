@@ -41,6 +41,10 @@ export default defineConfig({
 							slug: "developing/editor-host",
 						},
 						{
+							label: "Runtime Schema",
+							slug: "developing/runtime-schema",
+						},
+						{
 							label: "Future Architecture",
 							slug: "developing/future-architecture",
 						},
