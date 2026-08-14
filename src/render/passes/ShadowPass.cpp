@@ -1,5 +1,7 @@
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
 
+#include "gargantuan/Log.hpp"
+#include "gargantuan/render/MeshProvider.hpp"
 #include "gargantuan/render/PipelineBuilder.hpp"
 #include "gargantuan/render/RenderPass.hpp"
 #include "gargantuan/render/Renderer.hpp"
@@ -8,6 +10,8 @@
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_error.h>
 #include <SDL3/SDL_gpu.h>
+#include <glm/ext/matrix_clip_space.hpp>
+#include <glm/ext/matrix_transform.hpp>
 #include <memory>
 
 namespace gargantuan {
@@ -41,7 +45,7 @@ namespace gargantuan {
 
 		SDL_GPURenderPass *Draw(SDL_GPUDevice *gpu, FrameContext &context) override {
 			glm::mat4 shadowProjection = glm::ortho<float>(-30.0f, 30.0f, -30.0f, 30.0f, -50.0f, 150.0f);
-			glm::vec3 lightPosition = glm::normalize(context.LightDirection) * 40.0f;
+			glm::vec3 lightPosition = glm::normalize(context.Snapshot.LightDirection) * 40.0f;
 			glm::mat4 shadowView = glm::lookAt(lightPosition, glm::vec3(0), glm::vec3(0, 1, 0));
 			glm::mat4 shadowMatrix = shadowProjection * shadowView;
 			context.ShadowMatrix = shadowMatrix;
@@ -58,17 +62,24 @@ namespace gargantuan {
 			SDL_GPURenderPass *pass = SDL_BeginGPURenderPass(context.Commands, nullptr, 0, &depthTarget);
 			SDL_BindGPUGraphicsPipeline(pass, Pipeline);
 
-			for (auto part : context.WorldRoot->Parts) {
-				if (!part->GetCastShadow()) {
+			for (const auto &item : context.Snapshot.Items) {
+				if (!item.CastShadow) {
 					continue;
 				}
 
-				auto &mesh = part->GetMesh();
+				const auto *mesh = context.MeshResources.Find(item.Geometry);
 				if (!mesh || !mesh->VertexBuffer || !mesh->IndexBuffer) {
+					LOG_WARN(
+						App,
+						"RenderSnapshot %llu shadow skipped ObjectId %u:%u because its primitive GPU resource is unavailable",
+						static_cast<unsigned long long>(context.Snapshot.Id),
+						item.Object.Slot,
+						item.Object.Generation
+					);
 					continue;
 				}
 
-				Uniforms uniforms{.ShadowMatrix = shadowMatrix, .PartMatrix = part->GetModelMatrix()};
+				Uniforms uniforms{.ShadowMatrix = shadowMatrix, .PartMatrix = item.ModelMatrix};
 				SDL_PushGPUVertexUniformData(context.Commands, 0, &uniforms, sizeof(Uniforms));
 
 				SDL_GPUBufferBinding vertexBinding{.buffer = mesh->VertexBuffer, .offset = 0};

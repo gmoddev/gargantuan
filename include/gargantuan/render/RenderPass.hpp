@@ -1,33 +1,30 @@
 #pragma once
 
-#include "gargantuan/classes/Camera.hpp"
-#include "gargantuan/classes/WorldRoot.hpp"
+#include "gargantuan/render/RenderSnapshot.hpp"
 #include "gargantuan/render/Shader.hpp"
 
 #include <SDL3/SDL.h>
-#include <memory>
 
 namespace gargantuan {
-	struct DrawContext {
-		std::shared_ptr<WorldRoot> WorldRoot;
-		std::shared_ptr<Camera> Camera;
+	class GpuMeshCache;
 
-		// Direction TOWARDS the light
-		glm::vec3 LightDirection;
-	};
+	struct FrameContext {
+		FrameContext(const RenderSnapshot &snapshot, GpuMeshCache &meshResources)
+			: Snapshot(snapshot), MeshResources(meshResources) {}
 
-	struct FrameContext : DrawContext {
-		SDL_GPUCommandBuffer *Commands;
+		const RenderSnapshot &Snapshot;
+		GpuMeshCache &MeshResources;
+		SDL_GPUCommandBuffer *Commands = nullptr;
 
-		SDL_GPUTexture *SwapchainTexture;
-		SDL_GPUTexture *DepthTexture;
+		SDL_GPUTexture *SwapchainTexture = nullptr;
+		SDL_GPUTexture *DepthTexture = nullptr;
 
-		SDL_GPUTexture *ShadowMapTexture;
-		SDL_GPUSampler *ShadowSampler;
-		glm::mat4 ShadowMatrix;
+		SDL_GPUTexture *ShadowMapTexture = nullptr;
+		SDL_GPUSampler *ShadowSampler = nullptr;
+		glm::mat4 ShadowMatrix{1.0f};
 
-		uint32_t Width;
-		uint32_t Height;
+		uint32_t Width = 0;
+		uint32_t Height = 0;
 	};
 
 	class RenderPass {

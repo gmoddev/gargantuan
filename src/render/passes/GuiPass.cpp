@@ -52,28 +52,6 @@ namespace gargantuan {
 			SDL_GPURenderPass *pass = SDL_BeginGPURenderPass(context.Commands, nullptr, 0, nullptr);
 			// SDL_BindGPUGraphicsPipeline(pass, Pipeline);
 
-			// for (auto part : context.WorldRoot->Parts) {
-			// 	if (!part->CastShadow) {
-			// 		continue;
-			// 	}
-
-			// 	auto &mesh = part->GetMesh();
-			// 	if (!mesh || !mesh->VertexBuffer || !mesh->IndexBuffer) {
-			// 		continue;
-			// 	}
-
-			// 	Uniforms uniforms{.ShadowMatrix = shadowMatrix, .PartMatrix = part->GetModelMatrix()};
-			// 	SDL_PushGPUVertexUniformData(context.Commands, 0, &uniforms, sizeof(Uniforms));
-
-			// 	SDL_GPUBufferBinding vertexBinding{.buffer = mesh->VertexBuffer, .offset = 0};
-			// 	SDL_BindGPUVertexBuffers(pass, 0, &vertexBinding, 1);
-
-			// 	SDL_GPUBufferBinding indexBinding{.buffer = mesh->IndexBuffer, .offset = 0};
-			// 	SDL_BindGPUIndexBuffer(pass, &indexBinding, SDL_GPU_INDEXELEMENTSIZE_32BIT);
-
-			// 	SDL_DrawGPUIndexedPrimitives(pass, mesh->IndexCount, 1, 0, 0, 0);
-			// }
-
 			return pass;
 		};
 	};

@@ -126,10 +126,12 @@ namespace gargantuan {
 
 			{
 				G_PROFILE("Draw");
-				Renderer->Draw({
-					.WorldRoot = WorldRoot,
-					.Camera = Workspace->GetCurrentCamera(),
-				});
+				const auto [viewportWidth, viewportHeight] = Renderer->GetViewportSize();
+				auto camera = Workspace->GetCurrentCamera();
+				auto snapshot = RenderExtraction.Extract(
+					*WorldRoot, MakeRenderCameraInput(*camera), viewportWidth, viewportHeight
+				);
+				Renderer->Draw(std::move(snapshot));
 			}
 
 			{

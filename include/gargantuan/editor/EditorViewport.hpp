@@ -27,10 +27,7 @@ namespace gargantuan {
 	};
 
 	[[nodiscard]] std::optional<EditorViewportPick> PickEditorViewport(
-		const std::shared_ptr<WorldRoot> &world,
-		const std::shared_ptr<Camera> &camera,
-		std::uint32_t width,
-		std::uint32_t height,
+		const RenderSnapshot &snapshot,
 		float x,
 		float y
 	);
@@ -44,7 +41,7 @@ namespace gargantuan {
 		EditorViewportRenderer &operator=(const EditorViewportRenderer &) = delete;
 
 		void Resize(std::uint32_t width, std::uint32_t height);
-		[[nodiscard]] EditorViewportFrame Capture(const DrawContext &context);
+		[[nodiscard]] EditorViewportFrame Capture(RenderSnapshotPtr snapshot);
 
 	  private:
 		void Destroy();
@@ -60,5 +57,6 @@ namespace gargantuan {
 		SDL_GPUSampler *ShadowSampler = nullptr;
 		SDL_GPUTransferBuffer *DownloadBuffer = nullptr;
 		std::vector<std::unique_ptr<RenderPass>> RenderPasses;
+		std::unique_ptr<GpuMeshCache> MeshResources;
 	};
 }

@@ -5,6 +5,9 @@
 - [Runtime schema](RuntimeSchema.md) defines stable native schema identity, the
   canonical class/member registry, compatibility reflection views, and current
   validation rules.
+- [Render extraction](RenderExtraction.md) defines the immutable frame snapshot,
+  runtime/editor extraction timing, picking identity, and renderer-owned
+  primitive resources.
 
 See [Runtime foundation](./FoundationRuntime.md) for the implemented ownership,
 ObjectId, JobSystem, execution-domain, reflection-schema, and committed-change

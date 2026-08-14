@@ -6,7 +6,6 @@
 #include "gargantuan/editor/EditorHost.hpp"
 
 #include "gargantuan/InstanceProperty.hpp"
-#include "gargantuan/classes/Camera.hpp"
 #include "gargantuan/filesystem/Project.hpp"
 #include "gargantuan/reflection/InstanceClassRegistry.hpp"
 #include "gargantuan/runtime/Snapshot.hpp"
@@ -296,10 +295,8 @@ namespace gargantuan {
 				auto workspace = std::dynamic_pointer_cast<Workspace>(World->GetService("Workspace"));
 				if (!workspace)
 					return SerializeBoundedResponse(ErrorResponse(requestId, "InvalidProject", "Project has no valid Workspace"));
-				{
-					ScopedChangeJournalSuppression suppressSessionState;
-					ViewportCamera = std::make_shared<Camera>();
-				}
+				ViewportCamera = RenderCameraInput{};
+				LastViewportSnapshot.reset();
 				Cursor.reset();
 				ViewportWidth = 0;
 				ViewportHeight = 0;
@@ -365,9 +362,9 @@ namespace gargantuan {
 				return SerializeBoundedResponse(ErrorResponse(requestId, "ProjectRequired", "OpenProject must succeed first"));
 
 			auto workspace = std::dynamic_pointer_cast<Workspace>(World->GetService("Workspace"));
-			auto camera = ViewportCamera;
-			if (!workspace || !camera)
+			if (!workspace || !ViewportCamera)
 				return SerializeBoundedResponse(ErrorResponse(requestId, "InvalidProject", "Project has no valid editor viewport state"));
+			auto &camera = *ViewportCamera;
 
 			if (method == "ConfigureViewport") {
 				if (!HasOnlyFields(parameters, {"Width", "Height"}) ||
@@ -383,12 +380,14 @@ namespace gargantuan {
 				const bool firstConfiguration = ViewportWidth == 0 || ViewportHeight == 0;
 				ViewportWidth = width;
 				ViewportHeight = height;
-				{
-					ScopedChangeJournalSuppression suppressSessionState;
-					camera->SetViewportSize(Vector2(static_cast<float>(width), static_cast<float>(height)));
-					if (firstConfiguration)
-						camera->SetCFrame(CFrame::lookAt({10.0f, 10.0f, 10.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}));
-				}
+				if (firstConfiguration)
+					camera = MakeLookAtRenderCameraInput(
+						{10.0f, 10.0f, 10.0f},
+						{0.0f, 0.0f, 0.0f},
+						{0.0f, 1.0f, 0.0f},
+						camera.VerticalFieldOfView
+					);
+				LastViewportSnapshot.reset();
 				if (ViewportRenderer) {
 					try {
 						ViewportRenderer->Resize(width, height);
@@ -410,7 +409,7 @@ namespace gargantuan {
 				auto target = DecodeVector3(parameters["Target"]);
 				if (!position || !target || glm::length(*target - *position) < 1e-4f)
 					return SerializeBoundedResponse(ErrorResponse(requestId, "InvalidCamera", "Camera vectors are invalid or coincident"));
-				float fieldOfView = camera->GetFieldOfView();
+				float fieldOfView = camera.VerticalFieldOfView;
 				if (parameters.contains("FieldOfView")) {
 					if (!parameters["FieldOfView"].is_number())
 						return SerializeBoundedResponse(ErrorResponse(requestId, "InvalidCamera", "FieldOfView must be numeric"));
@@ -418,11 +417,8 @@ namespace gargantuan {
 					if (!std::isfinite(fieldOfView) || fieldOfView < 1.0f || fieldOfView > 120.0f)
 						return SerializeBoundedResponse(ErrorResponse(requestId, "InvalidCamera", "FieldOfView is out of range"));
 				}
-				{
-					ScopedChangeJournalSuppression suppressSessionState;
-					camera->SetCFrame(CFrame::lookAt(*position, *target, {0.0f, 1.0f, 0.0f}));
-					camera->SetFieldOfView(fieldOfView);
-				}
+				camera = MakeLookAtRenderCameraInput(*position, *target, {0.0f, 1.0f, 0.0f}, fieldOfView);
+				LastViewportSnapshot.reset();
 				return SerializeBoundedResponse(SuccessResponse(requestId, {
 					{"Position", {position->x, position->y, position->z}},
 					{"Target", {target->x, target->y, target->z}},
@@ -438,7 +434,10 @@ namespace gargantuan {
 				try {
 					if (!ViewportRenderer)
 						ViewportRenderer = std::make_unique<EditorViewportRenderer>(ViewportWidth, ViewportHeight);
-					auto frame = ViewportRenderer->Capture({.WorldRoot = workspace, .Camera = camera});
+					LastViewportSnapshot = ViewportExtractor.Extract(
+						*workspace, camera, ViewportWidth, ViewportHeight
+					);
+					auto frame = ViewportRenderer->Capture(LastViewportSnapshot);
 					if (ViewportFrameRing) {
 						const auto timestamp = static_cast<std::uint64_t>(
 							std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -471,9 +470,12 @@ namespace gargantuan {
 					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "PickViewport requires numeric X and Y"));
 				if (ViewportWidth == 0 || ViewportHeight == 0)
 					return SerializeBoundedResponse(ErrorResponse(requestId, "ViewportRequired", "ConfigureViewport must succeed first"));
+				if (!LastViewportSnapshot)
+					LastViewportSnapshot = ViewportExtractor.Extract(
+						*workspace, camera, ViewportWidth, ViewportHeight
+					);
 				auto pick = PickEditorViewport(
-					workspace, camera, ViewportWidth, ViewportHeight,
-					parameters["X"].get<float>(), parameters["Y"].get<float>()
+					*LastViewportSnapshot, parameters["X"].get<float>(), parameters["Y"].get<float>()
 				);
 				return SerializeBoundedResponse(SuccessResponse(requestId, {
 					{"Object", pick ? Json(EncodeWireObjectId(WireObjectId::FromObjectId(pick->Object))) : Json(nullptr)},

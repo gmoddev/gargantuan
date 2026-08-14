@@ -1,0 +1,76 @@
+---
+title: Render Extraction
+description: The immutable frame-state boundary between Gargantuan's runtime and SDL renderer.
+---
+
+Gargantuan renders immutable extracted state:
+
+```text
+DataModel / Instances
+    -> RenderExtractor
+    -> shared_ptr<const RenderSnapshot>
+    -> renderer and render passes
+    -> current SDL GPU implementation
+```
+
+The governing dependency rule is:
+
+> Renderer/pass code consumes immutable extracted state and does not traverse
+> the DataModel.
+
+## Snapshot contract
+
+A `RenderSnapshot` owns its extraction identity, viewport dimensions, complete
+camera matrices and directions, lighting direction, render items, and
+extraction diagnostics. A render item contains only stable `ObjectId`, logical
+primitive geometry, transform/inverse transform, color/opacity, and its current
+shadow flag.
+
+Snapshots contain no Instance, WorldRoot, Camera, callback, or runtime-owned
+container pointers. They are published as const shared ownership, so later
+runtime mutation or destruction cannot change or invalidate a frame already
+being rendered.
+
+Items are ordered by `ObjectId`. The same identity is used for frame-local
+viewport picking. If an object is destroyed after extraction, the displayed
+snapshot remains internally valid while normal `ObjectRegistry` lookup rejects
+the stale ID; the next extraction omits it.
+
+## Timing and identity
+
+The runtime extracts after simulation and `PreRender`, immediately before its
+draw call. EditorHost extracts on viewport capture and uses the same snapshot
+for offscreen rendering. Picking uses the displayed snapshot when one exists.
+
+Extraction currently runs on the authoritative Main domain and rendering is
+synchronous. The value-only snapshot contract is suitable for later
+main-to-render-thread publication, but this pass does not add a render thread.
+
+Snapshot identity is a session-local unsigned 64-bit extraction sequence. Zero
+is invalid, the first successful extraction is 1, fatal failures do not consume
+a value, and exhaustion fails instead of wrapping. It is separate from
+`ObjectId`, schema generation, journal cursor, and viewport presentation frame
+numbers.
+
+## Camera and resources
+
+Runtime Camera Instances and EditorHost's plain camera state both become one
+`RenderCameraInput`. View, projection, and view-projection matrices are derived
+during extraction; passes never read a Camera Instance.
+
+Parts expose logical `PartType`, not `GpuMesh`. Each SDL renderer owns a
+device-local primitive mesh cache and resolves the snapshot's `RenderGeometry`
+keys below the extraction boundary. This preserves current primitive behavior
+without introducing an asset or general resource system.
+
+Fatal world/camera/viewport errors reject the whole candidate snapshot.
+Individual invalid items are skipped with explicit snapshot diagnostics.
+Unavailable GPU primitive resources are reported and skipped by the renderer.
+
+## Deliberately deferred
+
+SDL GPU remains visible in the renderer and pass implementation. This work does
+not introduce `RenderDevice`, a generic graphics API, backend selection,
+materials, textures, render threading, or a new GUI pipeline. A later rendering
+pass can place SDL resources behind a backend-neutral device boundary now that
+renderer data requirements are explicit.

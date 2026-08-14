@@ -6,6 +6,8 @@
 #include "gargantuan/classes/Part.hpp"
 #include "gargantuan/classes/WeldConstraint.hpp"
 #include "gargantuan/editor/EditorHost.hpp"
+#include "gargantuan/editor/EditorViewport.hpp"
+#include "gargantuan/render/RenderExtractor.hpp"
 #include "gargantuan/runtime/ChangeJournal.hpp"
 #include "gargantuan/runtime/DataModelRoot.hpp"
 #include "gargantuan/runtime/ExecutionDomain.hpp"
@@ -50,6 +52,13 @@ namespace {
 	static_assert(std::is_same_v<
 		decltype(gargantuan::PropertyUpdatedChange::Value),
 		gargantuan::WireValue
+	>);
+	template <typename T>
+	concept ExposesGpuMesh = requires(T &value) { value.GetMesh(); };
+	static_assert(!ExposesGpuMesh<gargantuan::Part>);
+	static_assert(std::is_same_v<
+		gargantuan::RenderSnapshotPtr,
+		std::shared_ptr<const gargantuan::RenderSnapshot>
 	>);
 
 	int Failures = 0;
@@ -606,6 +615,139 @@ namespace {
 		CheckThrows<std::logic_error>(
 			[] { BootstrapNativeRuntimeSchema(); },
 			"published native runtime schema cannot be reopened by bootstrap"
+		);
+	}
+
+	void TestRenderSnapshotExtraction() {
+		using namespace gargantuan;
+		auto game = std::make_shared<DataModel>();
+		auto workspace = std::dynamic_pointer_cast<Workspace>(game->GetService("Workspace"));
+		Check(workspace != nullptr, "render extraction fixture obtains Workspace");
+
+		auto primary = std::make_shared<Part>();
+		primary->SetName("PrimaryRenderPart");
+		primary->SetSize({2.0f, 4.0f, 6.0f});
+		primary->SetColor(Color3(0.25f, 0.5f, 0.75f));
+		primary->SetTransparency(0.2f);
+		primary->SetShape(Enums::PartType::Wedge);
+		primary->SetCFrame(CFrame(glm::vec3(0.0f, 0.0f, 0.0f)));
+		primary->SetParent(workspace);
+		const auto primaryId = primary->GetObjectId();
+
+		auto secondary = std::make_shared<Part>();
+		secondary->SetName("SecondaryRenderPart");
+		secondary->SetCFrame(CFrame(glm::vec3(5.0f, 0.0f, 0.0f)));
+		secondary->SetParent(workspace);
+		const auto secondaryId = secondary->GetObjectId();
+
+		auto camera = std::make_shared<Camera>();
+		camera->SetCFrame(CFrame::lookAt({0.0f, 0.0f, 10.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}));
+		camera->SetFieldOfView(60.0f);
+
+		RenderExtractor extractor;
+		auto invalidCamera = MakeRenderCameraInput(*camera);
+		invalidCamera.LookDirection = {};
+		CheckThrows<std::invalid_argument>(
+			[&] { static_cast<void>(extractor.Extract(*workspace, invalidCamera, 320, 200)); },
+			"invalid camera prevents RenderSnapshot publication"
+		);
+		Check(
+			extractor.GetLastSnapshotId() == InvalidRenderSnapshotId,
+			"failed extraction does not consume a RenderSnapshot identity"
+		);
+		CheckThrows<std::invalid_argument>(
+			[&] { static_cast<void>(extractor.Extract(*workspace, MakeRenderCameraInput(*camera), 0, 200)); },
+			"invalid viewport dimensions prevent RenderSnapshot publication"
+		);
+
+		auto first = extractor.Extract(*workspace, MakeRenderCameraInput(*camera), 320, 200);
+		Check(
+			first && first->Id == 1 && first->ViewportWidth == 320 && first->ViewportHeight == 200,
+			"valid world produces a complete first RenderSnapshot"
+		);
+		Check(
+			first->Camera.Position == glm::vec3(0.0f, 0.0f, 10.0f) &&
+				std::abs(first->Camera.VerticalFieldOfView - 60.0f) < 1e-5f,
+			"camera values are extracted into owned snapshot state"
+		);
+		Check(first->Items.size() == 2, "all valid primitive render items are extracted");
+		Check(
+			std::ranges::is_sorted(first->Items, {}, &RenderItem::Object),
+			"RenderSnapshot items have deterministic ObjectId ordering"
+		);
+		auto primaryItem = std::ranges::find(first->Items, primaryId, &RenderItem::Object);
+		Check(
+			primaryItem != first->Items.end() && primaryItem->Geometry == RenderGeometry::Wedge &&
+				primaryItem->Object == primaryId && primaryItem->Color == glm::vec4(0.25f, 0.5f, 0.75f, 0.8f),
+			"primitive geometry, visual state, and stable picking identity are extracted"
+		);
+		const auto firstPrimaryModel = primaryItem->ModelMatrix;
+		const auto firstCameraPosition = first->Camera.Position;
+
+		primary->SetCFrame(CFrame(glm::vec3(2.0f, 3.0f, 4.0f)));
+		primary->SetColor(Color3(1.0f, 0.0f, 0.0f));
+		camera->SetCFrame(CFrame::lookAt({0.0f, 5.0f, 15.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}));
+		Check(
+			primaryItem->ModelMatrix == firstPrimaryModel && primaryItem->Color == glm::vec4(0.25f, 0.5f, 0.75f, 0.8f) &&
+				first->Camera.Position == firstCameraPosition,
+			"runtime and camera mutation cannot alter an already published RenderSnapshot"
+		);
+
+		auto second = extractor.Extract(*workspace, MakeRenderCameraInput(*camera), 320, 200);
+		Check(second->Id == 2, "successful RenderSnapshot extraction increments frame identity");
+		auto updatedPrimary = std::ranges::find(second->Items, primaryId, &RenderItem::Object);
+		Check(
+			updatedPrimary != second->Items.end() && updatedPrimary->ModelMatrix != firstPrimaryModel &&
+				second->Camera.Position != firstCameraPosition,
+			"a later snapshot observes newly committed runtime state"
+		);
+
+		primary->SetCFrame(CFrame(glm::vec3(0.0f, 0.0f, 0.0f)));
+		auto visibleSnapshot = extractor.Extract(
+			*workspace,
+			MakeLookAtRenderCameraInput({0.0f, 0.0f, 10.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, 60.0f),
+			320,
+			200
+		);
+		auto pick = PickEditorViewport(*visibleSnapshot, 159.5f, 99.5f);
+		Check(pick && pick->Object == primaryId, "snapshot picking returns the stable ObjectId for the visible item");
+
+		primary->Destroy();
+		Check(!ObjectRegistry::Get().Lookup(primaryId), "destroyed render item identity is stale in the ObjectRegistry");
+		Check(
+			std::ranges::find(visibleSnapshot->Items, primaryId, &RenderItem::Object) != visibleSnapshot->Items.end(),
+			"destroying an Instance does not invalidate an in-flight RenderSnapshot"
+		);
+		pick = PickEditorViewport(*visibleSnapshot, 159.5f, 99.5f);
+		Check(
+			pick && pick->Object == primaryId,
+			"the displayed snapshot retains its frame-local picking identity after runtime destruction"
+		);
+		auto afterDestroy = extractor.Extract(*workspace, MakeRenderCameraInput(*camera), 320, 200);
+		Check(
+			std::ranges::find(afterDestroy->Items, primaryId, &RenderItem::Object) == afterDestroy->Items.end(),
+			"a newly extracted snapshot excludes destroyed objects"
+		);
+
+		secondary->SetSize({0.0f, 1.0f, 1.0f});
+		auto invalidItem = extractor.Extract(*workspace, MakeRenderCameraInput(*camera), 320, 200);
+		Check(
+			std::ranges::find(invalidItem->Items, secondaryId, &RenderItem::Object) == invalidItem->Items.end() &&
+				!invalidItem->Diagnostics.empty(),
+			"singular item transforms are rejected with an explicit extraction diagnostic"
+		);
+
+		const auto identityBeforeWorkerAttempt = extractor.GetLastSnapshotId();
+		{
+			ExecutionDomainScope worker(ExecutionDomain::Worker);
+			CheckThrows<std::logic_error>(
+				[&] { static_cast<void>(extractor.Extract(*workspace, MakeRenderCameraInput(*camera), 320, 200)); },
+				"RenderSnapshot extraction is confined to the authoritative Main domain"
+			);
+		}
+		Check(
+			extractor.GetLastSnapshotId() == identityBeforeWorkerAttempt,
+			"rejected off-domain extraction does not publish a snapshot"
 		);
 	}
 
@@ -1257,6 +1399,7 @@ int main() {
 	TestSchemaMetadata();
 	TestRuntimeSchemaRegistry();
 	TestRuntimeSchemaLifecycle();
+	TestRenderSnapshotExtraction();
 	TestScriptSecurityModel();
 	TestMutationGateway();
 	TestBoundedJournalCursor();

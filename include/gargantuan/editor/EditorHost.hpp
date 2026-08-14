@@ -9,6 +9,7 @@
 #include "gargantuan/editor/EditorViewport.hpp"
 #include "gargantuan/editor/SharedFrameRing.hpp"
 #include "gargantuan/filesystem/DiskFilesystem.hpp"
+#include "gargantuan/render/RenderExtractor.hpp"
 #include "gargantuan/runtime/ChangeJournal.hpp"
 #include "gargantuan/runtime/MutationGateway.hpp"
 
@@ -43,7 +44,9 @@ namespace gargantuan {
 		std::optional<ChangeCursor> Cursor;
 		MutationGateway Mutations;
 		ScriptSecurityContext StudioSecurity = ScriptSecurityContext::StudioCoreUi();
-		std::shared_ptr<Camera> ViewportCamera;
+		std::optional<RenderCameraInput> ViewportCamera;
+		RenderExtractor ViewportExtractor;
+		RenderSnapshotPtr LastViewportSnapshot;
 		std::unique_ptr<EditorViewportRenderer> ViewportRenderer;
 		std::unique_ptr<SharedFrameRing> ViewportFrameRing;
 		std::uint32_t ViewportWidth = 0;

@@ -2,52 +2,61 @@
 #include "gargantuan/render/PrimitiveMeshes.hpp"
 
 #include <SDL3/SDL.h>
+#include <format>
 #include <memory>
+#include <stdexcept>
+#include <utility>
 
-namespace gargantuan::MeshProvider {
+namespace gargantuan {
 	namespace {
-		std::unordered_map<std::string, Mesh> UnloadedMeshes = {
-			{"gargantuan://meshes/Ball", PrimitiveMeshes::Block()},
-			{"gargantuan://meshes/Block", PrimitiveMeshes::Block()},
-			{"gargantuan://meshes/Cylinder", PrimitiveMeshes::Block()},
-			{"gargantuan://meshes/Wedge", PrimitiveMeshes::Wedge()},
-			{"gargantuan://meshes/CornerWedge", PrimitiveMeshes::Block()},
-		};
-
-		std::unordered_map<std::string, std::unique_ptr<GpuMesh>> GpuMeshes;
-	} // namespace
-
-	std::unique_ptr<GpuMesh> &GetGpuMesh(std::string id) {
-		return GpuMeshes[id];
+		std::vector<std::pair<RenderGeometry, Mesh>> CreatePrimitiveMeshes() {
+			return {
+				{RenderGeometry::Ball, PrimitiveMeshes::Block()},
+				{RenderGeometry::Block, PrimitiveMeshes::Block()},
+				{RenderGeometry::Cylinder, PrimitiveMeshes::Block()},
+				{RenderGeometry::Wedge, PrimitiveMeshes::Wedge()},
+				{RenderGeometry::CornerWedge, PrimitiveMeshes::Block()},
+			};
+		}
 	}
 
-	void Destroy(SDL_GPUDevice *gpu) {
-		for (auto &[meshId, gpuMesh] : GpuMeshes) {
-			gpuMesh->Destroy(gpu);
+	void GpuMeshCache::Destroy() {
+		if (!Gpu) return;
+		for (auto &[geometry, gpuMesh] : Meshes) {
+			(void)geometry;
+			gpuMesh->Destroy(Gpu);
 		}
-		GpuMeshes.clear();
+		Meshes.clear();
+		Uploaded = false;
 	}
 
-	void UploadToGpu(SDL_GPUDevice *gpu) {
-		if (UnloadedMeshes.empty()) {
-			return;
-		}
-
-		auto cmd = SDL_AcquireGPUCommandBuffer(gpu);
+	void GpuMeshCache::UploadToGpu() {
+		if (Uploaded) return;
+		if (!Gpu) throw std::logic_error("Cannot upload primitive meshes without an SDL GPU device");
+		auto cmd = SDL_AcquireGPUCommandBuffer(Gpu);
+		if (!cmd) throw std::runtime_error(std::format("Failed to acquire mesh upload commands: {}", SDL_GetError()));
 		auto copyPass = SDL_BeginGPUCopyPass(cmd);
+		if (!copyPass) {
+			SDL_CancelGPUCommandBuffer(cmd);
+			throw std::runtime_error(std::format("Failed to begin mesh upload: {}", SDL_GetError()));
+		}
 
-		for (auto &[meshId, unloadedMesh] : UnloadedMeshes) {
-			// if (auto &gpuMesh = GpuMeshes.find(meshId)) {
-			//     gpuMesh->Destroy(Gpu);
-			// };
-
-			auto gpuMesh = std::make_unique<GpuMesh>(unloadedMesh);
-			gpuMesh->Upload(gpu, copyPass);
-			GpuMeshes[meshId] = std::move(gpuMesh);
+		for (auto &[geometry, mesh] : CreatePrimitiveMeshes()) {
+			auto gpuMesh = std::make_unique<GpuMesh>(std::move(mesh));
+			gpuMesh->Upload(Gpu, copyPass);
+			Meshes.emplace(geometry, std::move(gpuMesh));
 		}
 
 		SDL_EndGPUCopyPass(copyPass);
-		SDL_SubmitGPUCommandBuffer(cmd);
-		UnloadedMeshes.clear();
+		if (!SDL_SubmitGPUCommandBuffer(cmd)) {
+			Destroy();
+			throw std::runtime_error(std::format("Failed to submit mesh upload: {}", SDL_GetError()));
+		}
+		Uploaded = true;
 	}
-} // namespace gargantuan::MeshProvider
+
+	const GpuMesh *GpuMeshCache::Find(RenderGeometry geometry) const {
+		auto mesh = Meshes.find(geometry);
+		return mesh == Meshes.end() ? nullptr : mesh->second.get();
+	}
+}

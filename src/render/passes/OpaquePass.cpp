@@ -1,5 +1,7 @@
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
 
+#include "gargantuan/Log.hpp"
+#include "gargantuan/render/MeshProvider.hpp"
 #include "gargantuan/render/PipelineBuilder.hpp"
 #include "gargantuan/render/RenderPass.hpp"
 #include "gargantuan/render/Renderer.hpp"
@@ -97,23 +99,30 @@ namespace gargantuan {
 			SDL_BindGPUFragmentSamplers(pass, 0, &shadowBinding, 1);
 
 			WorldUniforms worldUniforms{
-				.ViewMatrix = context.Camera->GetViewMatrix(),
-				.ProjectionMatrix = context.Camera->GetProjectionMatrix(),
+				.ViewMatrix = context.Snapshot.Camera.ViewMatrix,
+				.ProjectionMatrix = context.Snapshot.Camera.ProjectionMatrix,
 				.ShadowBiasMatrix = SHADOW_BIAS_MATRIX * context.ShadowMatrix,
-				.LightDirection = glm::vec4(context.LightDirection, 0.0f),
+				.LightDirection = glm::vec4(context.Snapshot.LightDirection, 0.0f),
 			};
 			SDL_PushGPUVertexUniformData(context.Commands, 0, &worldUniforms, sizeof(WorldUniforms));
 			SDL_PushGPUFragmentUniformData(context.Commands, 0, &worldUniforms, sizeof(WorldUniforms));
 
-			for (auto part : context.WorldRoot->Parts) {
-				auto &mesh = part->GetMesh();
+			for (const auto &item : context.Snapshot.Items) {
+				const auto *mesh = context.MeshResources.Find(item.Geometry);
 				if (!mesh || !mesh->VertexBuffer || !mesh->IndexBuffer) {
+					LOG_WARN(
+						App,
+						"RenderSnapshot %llu skipped ObjectId %u:%u because its primitive GPU resource is unavailable",
+						static_cast<unsigned long long>(context.Snapshot.Id),
+						item.Object.Slot,
+						item.Object.Generation
+					);
 					continue;
 				}
 
 				PartUniforms uniforms{
-					.ModelMatrix = part->GetModelMatrix(),
-					.Color = glm::vec4((glm::vec3)part->GetColor(), 1.0f - part->GetTransparency()),
+					.ModelMatrix = item.ModelMatrix,
+					.Color = item.Color,
 				};
 				SDL_PushGPUVertexUniformData(context.Commands, 1, &uniforms, sizeof(PartUniforms));
 

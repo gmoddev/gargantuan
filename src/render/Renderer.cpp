@@ -42,6 +42,7 @@ namespace gargantuan {
 		}
 
 		SwapchainFormat = SDL_GetGPUSwapchainTextureFormat(Gpu, Window);
+		MeshResources = std::make_unique<GpuMeshCache>(Gpu);
 
 		SDL_GPUTextureCreateInfo shadowMapInfo{
 			.type = SDL_GPU_TEXTURETYPE_2D,
@@ -75,10 +76,15 @@ namespace gargantuan {
 		}
 	}
 
+	SDLRenderer::~SDLRenderer() = default;
+
 	void SDLRenderer::Destroy() {
 		SDL_WaitForGPUIdle(Gpu);
 
-		MeshProvider::Destroy(Gpu);
+		if (MeshResources) {
+			MeshResources->Destroy();
+			MeshResources.reset();
+		}
 
 		if (DepthTexture != nullptr) {
 			SDL_ReleaseGPUTexture(Gpu, DepthTexture);
@@ -105,8 +111,9 @@ namespace gargantuan {
 		SDL_DestroyWindow(Window);
 	}
 
-	void SDLRenderer::Draw(DrawContext drawContext) {
-		MeshProvider::UploadToGpu(Gpu);
+	void SDLRenderer::Draw(RenderSnapshotPtr snapshot) {
+		if (!snapshot) throw std::invalid_argument("SDLRenderer requires an immutable RenderSnapshot");
+		MeshResources->UploadToGpu();
 
 		if (!DepthTexture || !ShadowMapTexture) return;
 
@@ -116,15 +123,12 @@ namespace gargantuan {
 			return;
 		}
 
-		FrameContext frameContext;
+		FrameContext frameContext(*snapshot, *MeshResources);
 		frameContext.Commands = commands;
-		frameContext.WorldRoot = drawContext.WorldRoot;
-		frameContext.Camera = drawContext.Camera;
 
 		frameContext.DepthTexture = DepthTexture;
 		frameContext.ShadowMapTexture = ShadowMapTexture;
 		frameContext.ShadowSampler = ShadowSampler;
-		frameContext.LightDirection = glm::normalize(glm::vec3(0.75f, 1.0f, 0.5f));
 
 		auto swapchainResult = SDL_AcquireGPUSwapchainTexture(
 			frameContext.Commands, Window, &frameContext.SwapchainTexture, &frameContext.Width, &frameContext.Height
@@ -138,22 +142,11 @@ namespace gargantuan {
 			if (frameContext.Commands) SDL_CancelGPUCommandBuffer(frameContext.Commands);
 			return;
 		}
-
-		SDL_GPUColorTargetInfo colorTarget = {
-			.texture = frameContext.SwapchainTexture,
-			.clear_color = SDL_FColor{0.0f, 0.0f, 0.0f, 1.0f},
-			.load_op = SDL_GPU_LOADOP_CLEAR,
-			.store_op = SDL_GPU_STOREOP_STORE,
-		};
-
-		SDL_GPUDepthStencilTargetInfo depthTarget = {
-			.texture = frameContext.DepthTexture,
-			.clear_depth = 1.0f,
-			.load_op = SDL_GPU_LOADOP_CLEAR,
-			.store_op = SDL_GPU_STOREOP_DONT_CARE,
-			.stencil_load_op = SDL_GPU_LOADOP_DONT_CARE,
-			.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE,
-		};
+		if (frameContext.Width != snapshot->ViewportWidth || frameContext.Height != snapshot->ViewportHeight) {
+			SDL_CancelGPUCommandBuffer(frameContext.Commands);
+			LOG_TRACE(App, "RenderSnapshot viewport does not match the acquired swapchain target");
+			return;
+		}
 
 		for (auto &pass : RenderPasses) {
 			SDL_EndGPURenderPass(pass->Draw(Gpu, frameContext));
@@ -164,6 +157,8 @@ namespace gargantuan {
 
 	void SDLRenderer::Resize(int width, int height) {
 		if (width < 1 || height < 1) return;
+		Width = width;
+		Height = height;
 
 		// SDL_SetGPUSwapchainParameters(Gpu, Window, SDL_GPU_SWAPCHAINCOMPOSITION_SDR, SDL_GPU_PRESENTMODE_IMMEDIATE);
 		SDL_SetGPUSwapchainParameters(Gpu, Window, SDL_GPU_SWAPCHAINCOMPOSITION_SDR, SDL_GPU_PRESENTMODE_VSYNC);

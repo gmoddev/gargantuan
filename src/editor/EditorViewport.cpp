@@ -5,7 +5,6 @@
 
 #include "gargantuan/editor/EditorViewport.hpp"
 
-#include "gargantuan/classes/BasePart.hpp"
 #include "gargantuan/render/MeshProvider.hpp"
 #include "gargantuan/render/Renderer.hpp"
 
@@ -25,16 +24,16 @@ namespace gargantuan {
 		);
 		constexpr SDL_GPUTextureFormat ColorFormat = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
 
-		std::optional<float> IntersectPart(
-			const BasePart &part,
+		std::optional<float> IntersectItem(
+			const RenderItem &item,
 			const glm::vec3 &origin,
 			const glm::vec3 &direction
 		) {
-			const auto frame = part.GetCFrame();
-			const auto inverseRotation = glm::transpose(frame.Rotation);
-			const auto localOrigin = inverseRotation * (origin - frame.Position);
-			const auto localDirection = inverseRotation * direction;
-			const auto halfSize = glm::abs(part.GetSize()) * 0.5f;
+			const auto localOrigin4 = item.InverseModelMatrix * glm::vec4(origin, 1.0f);
+			const auto localDirection4 = item.InverseModelMatrix * glm::vec4(direction, 0.0f);
+			const auto localOrigin = glm::vec3(localOrigin4);
+			const auto localDirection = glm::vec3(localDirection4);
+			constexpr glm::vec3 halfSize(0.5f);
 			float minimum = 0.0f;
 			float maximum = std::numeric_limits<float>::infinity();
 			for (int axis = 0; axis < 3; ++axis) {
@@ -55,33 +54,29 @@ namespace gargantuan {
 	}
 
 	std::optional<EditorViewportPick> PickEditorViewport(
-		const std::shared_ptr<WorldRoot> &world,
-		const std::shared_ptr<Camera> &camera,
-		std::uint32_t width,
-		std::uint32_t height,
+		const RenderSnapshot &snapshot,
 		float x,
 		float y
 	) {
-		if (!world || !camera || width == 0 || height == 0 || !std::isfinite(x) || !std::isfinite(y) ||
-			x < 0.0f || y < 0.0f || x >= width || y >= height)
+		if (snapshot.Id == InvalidRenderSnapshotId || snapshot.ViewportWidth == 0 || snapshot.ViewportHeight == 0 ||
+			!std::isfinite(x) || !std::isfinite(y) || x < 0.0f || y < 0.0f ||
+			x >= snapshot.ViewportWidth || y >= snapshot.ViewportHeight)
 			return std::nullopt;
-		const auto cameraFrame = camera->GetCFrame();
-		const float tangent = std::tan(glm::radians(camera->GetFieldOfView()) * 0.5f);
-		const float normalizedX = ((x + 0.5f) / static_cast<float>(width)) * 2.0f - 1.0f;
-		const float normalizedY = 1.0f - ((y + 0.5f) / static_cast<float>(height)) * 2.0f;
-		const float aspect = static_cast<float>(width) / static_cast<float>(height);
+		const auto &camera = snapshot.Camera;
+		const float tangent = std::tan(glm::radians(camera.VerticalFieldOfView) * 0.5f);
+		const float normalizedX = ((x + 0.5f) / static_cast<float>(snapshot.ViewportWidth)) * 2.0f - 1.0f;
+		const float normalizedY = 1.0f - ((y + 0.5f) / static_cast<float>(snapshot.ViewportHeight)) * 2.0f;
+		const float aspect = static_cast<float>(snapshot.ViewportWidth) / static_cast<float>(snapshot.ViewportHeight);
 		const auto direction = glm::normalize(
-			cameraFrame.GetLookVector() + cameraFrame.GetRightVector() * (normalizedX * tangent * aspect) +
-			cameraFrame.GetUpVector() * (normalizedY * tangent)
+			camera.LookDirection + camera.RightDirection * (normalizedX * tangent * aspect) +
+			camera.UpDirection * (normalizedY * tangent)
 		);
 
 		std::optional<EditorViewportPick> closest;
-		for (const auto &instance : world->GetDescendants()) {
-			auto part = std::dynamic_pointer_cast<BasePart>(instance);
-			if (!part || part->GetDestroyed() || part->IsDestroying()) continue;
-			auto distance = IntersectPart(*part, cameraFrame.Position, direction);
+		for (const auto &item : snapshot.Items) {
+			auto distance = IntersectItem(item, camera.Position, direction);
 			if (!distance || (closest && *distance >= closest->Distance)) continue;
-			closest = EditorViewportPick{part->GetObjectId(), *distance};
+			closest = EditorViewportPick{item.Object, *distance};
 		}
 		return closest;
 	}
@@ -100,6 +95,7 @@ namespace gargantuan {
 			OwnsVideoSubsystem = false;
 			throw std::runtime_error(std::format("Failed to create viewport GPU device: {}", SDL_GetError()));
 		}
+		MeshResources = std::make_unique<GpuMeshCache>(Gpu);
 
 		SDL_GPUTextureCreateInfo shadowInfo{
 			.type = SDL_GPU_TEXTURETYPE_2D,
@@ -143,7 +139,10 @@ namespace gargantuan {
 
 	void EditorViewportRenderer::Destroy() {
 		if (Gpu) SDL_WaitForGPUIdle(Gpu);
-		if (Gpu) MeshProvider::Destroy(Gpu);
+		if (MeshResources) {
+			MeshResources->Destroy();
+			MeshResources.reset();
+		}
 		for (auto &pass : RenderPasses) pass->Destroy(Gpu);
 		RenderPasses.clear();
 		if (DownloadBuffer) SDL_ReleaseGPUTransferBuffer(Gpu, DownloadBuffer);
@@ -222,16 +221,15 @@ namespace gargantuan {
 		}
 	}
 
-	EditorViewportFrame EditorViewportRenderer::Capture(const DrawContext &context) {
-		if (!context.WorldRoot || !context.Camera) throw std::invalid_argument("Viewport draw context is incomplete");
-		MeshProvider::UploadToGpu(Gpu);
+	EditorViewportFrame EditorViewportRenderer::Capture(RenderSnapshotPtr snapshot) {
+		if (!snapshot) throw std::invalid_argument("Viewport capture requires an immutable RenderSnapshot");
+		if (snapshot->ViewportWidth != Width || snapshot->ViewportHeight != Height)
+			throw std::invalid_argument("RenderSnapshot dimensions do not match the viewport target");
+		MeshResources->UploadToGpu();
 		auto *commands = SDL_AcquireGPUCommandBuffer(Gpu);
 		if (!commands) throw std::runtime_error(std::format("Failed to acquire viewport command buffer: {}", SDL_GetError()));
 
-		FrameContext frame;
-		frame.WorldRoot = context.WorldRoot;
-		frame.Camera = context.Camera;
-		frame.LightDirection = glm::normalize(glm::vec3(0.75f, 1.0f, 0.5f));
+		FrameContext frame(*snapshot, *MeshResources);
 		frame.Commands = commands;
 		frame.SwapchainTexture = ColorTexture;
 		frame.DepthTexture = DepthTexture;

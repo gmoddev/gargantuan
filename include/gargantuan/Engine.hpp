@@ -3,6 +3,7 @@
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/WorldRoot.hpp"
 #include "gargantuan/render/Renderer.hpp"
+#include "gargantuan/render/RenderExtractor.hpp"
 #include "gargantuan/scripting/ScriptEngine.hpp"
 #include "gargantuan/services/ProcessService.hpp"
 #include "gargantuan/services/RunService.hpp"
@@ -25,6 +26,7 @@ namespace gargantuan {
 		BaseRenderer *Renderer;
 		ScriptEngine *Script;
 		MutationGateway Mutations;
+		RenderExtractor RenderExtraction;
 
 		std::shared_ptr<Workspace> Workspace;
 		std::shared_ptr<WorldRoot> WorldRoot;
