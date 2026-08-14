@@ -5,6 +5,10 @@ description: Repository policy for AI-assisted contributions.
 
 AI is explicitly allowed.
 
+For a concise architecture orientation and task-to-document routing, start with
+[`AICONTEXT.md`](../../../../../AICONTEXT.md). This policy remains authoritative
+for contribution rules and documentation authority.
+
 Contributors remain responsible for understanding, reviewing, testing, and
 explaining every submitted change.
 
@@ -19,8 +23,10 @@ is already part of an API or local convention.
 4. Read the ADR or accepted-design documents referenced by those documents.
 5. Read the relevant invariant documents, beginning with
    [`docs/invariants/Core.md`](../../../../invariants/Core.md).
-6. Inspect the implementation and tests before proposing or applying changes.
-7. Check `git status` and preserve unrelated or concurrent work.
+6. Check [`KNOWN_ISSUES.md`](../../../../../KNOWN_ISSUES.md) for verified defects
+   and engineering gaps in the affected area.
+7. Inspect the implementation and tests before proposing or applying changes.
+8. Check `git status` and preserve unrelated or concurrent work.
 
 Do not infer architecture solely from directory names, class names, roadmap
 items, comments, or historical audits.
@@ -113,9 +119,11 @@ The canonical list is in
 3. Keep the implementation slice bounded and avoid opportunistic refactors.
 4. Add or update tests for behavior, denial paths, bounds, and lifecycle edges.
 5. Update affected architecture, invariant, ADR, or protocol documents.
-6. Run verification proportional to risk and record anything the environment
+6. Update `KNOWN_ISSUES.md` when the change introduces, reclassifies, or
+   resolves a verified issue.
+7. Run verification proportional to risk and record anything the environment
    prevented from running.
-7. Review the final diff for unrelated files, generated artifacts, and stale claims.
+8. Review the final diff for unrelated files, generated artifacts, and stale claims.
 
 Never stage, discard, rewrite, or commit unrelated work. When another task is
 active in the same worktree, stage explicit paths only.
