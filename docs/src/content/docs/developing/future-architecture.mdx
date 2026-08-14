@@ -59,8 +59,13 @@ representation.
 
 Attributes should arrive early as typed, serializable, editor-visible values
 with change events and replication support. Initially, an Instance can own a map
-from a key to a `WireValue`. Schemas, defaults, validation, constraints, and
-access rules can follow without blocking the basic feature.
+from a key to a bounded subset of `WireValue`: nil, booleans, finite numbers,
+bounded UTF-8 strings, supported value datatypes, and stable object references.
+Containers and opaque byte blobs are excluded initially. The engine enforces
+limits on attribute name length, attributes per Instance, value size, aggregate
+bytes per Instance, and replicated attribute bytes. Schemas, defaults,
+validation, constraints, and access rules can follow without blocking the basic
+feature.
 
 Tags provide indexed organization across the hierarchy. The initial design uses
 interned identifiers, reverse indexes, and efficient intersection queries:
@@ -70,7 +75,10 @@ Tags:GetTagged("Enemy")
 Tags:GetTaggedAll({ "Enemy", "Alive" })
 ```
 
-Namespaced tags, metadata, ownership, and richer expressions can follow.
+Tags are owned by the tagged object's lifecycle. Destroying an object removes
+all of its tags and reverse-index entries atomically; queries validate object
+generations and must never retain or return dead IDs. Namespaced tags, metadata,
+ownership, and richer expressions can follow.
 
 ## Runtime and trust model
 
@@ -80,7 +88,9 @@ The runtime is divided by responsibility:
   serialization primitives, object identity and lifetime, mutation authority,
   native resources, low-level input, security, and EditorHost integration.
 - **Trusted Core Luau** implements scoped higher-level services, standard class
-  behavior, controllers, and engine conveniences over native primitives.
+  behavior, controllers, and engine conveniences over native primitives. Its
+  source is trusted, but it remains capability-constrained and passes through
+  the same native authorization checks as every other Luau domain.
 - **Registration/PreRun Luau** defines permitted schema, enums, classes,
   extensions, components, editor metadata, and replication declarations.
 - **Runtime game Luau** runs gameplay against the frozen schema and cannot
@@ -120,10 +130,18 @@ Engine boot
 
 Freezing makes class and enum identities, serialization and replication schemas,
 Studio discovery, and generated Luau types deterministic. Normal runtime code
-cannot casually reopen registration.
+cannot casually reopen registration. Registration is transactional: definitions
+are accumulated in a candidate registry, and any loader, validation, collision,
+or capability failure aborts the entire phase. The engine either publishes one
+fully validated frozen registry or publishes none; a partially frozen registry
+is never observable.
 
 Every custom definition has an authoritative `SchemaId` plus a namespace,
-human-facing name, version, and origin. Examples include `Engine.Material`,
+human-facing name, per-definition version, and origin. The frozen registry also
+has a session-local generation that changes whenever a different complete
+registry is installed. Definition versions drive compatibility and migration;
+the registry generation invalidates runtime and Studio caches without acting as
+a persisted schema version. Examples include `Engine.Material`,
 `Game.CombatState`, and `MyPackage.CustomHumanoid`. Provenance identifies native
 engine, Core Luau, game, package, plugin, or tooling origins, including package
 version and source module where relevant. This supports inspectability, conflict
@@ -140,7 +158,9 @@ A custom class has a distinct reflected identity, such as
 `CustomHumanoid : Model`. It may declare properties, attributes, methods,
 signals, validation, editor metadata, replication, serialization, and approved
 native components. It participates in `IsA`, reflection, Studio, persistence,
-and replication. Extensions and custom classes remain separate concepts.
+and replication. Serialized objects identify their class by stable `SchemaId`
+and definition version, never only by a display name. Extensions and custom
+classes remain separate concepts.
 
 Custom enums are registered during PreRun. Their stable identity includes the
 enum type, not only an item name or value, and supports typing, reflection,
@@ -225,6 +245,10 @@ Studio maintains a non-authoritative document cache populated by a deterministic
 engine snapshot and ordered journal updates. The cache indexes objects by stable
 ID and tracks hierarchy, properties, journal position, and dirty state. All
 authoritative changes return through EditorHost and the engine mutation gateway.
+Studio caches immutable schema metadata by `SchemaId` and definition version,
+with the registry generation selecting the active set. EditorHost sends cache
+identities before payloads so Studio can reuse known metadata instead of
+requesting the complete schema for every document or session.
 
 Studio should eventually expose where classes and extensions came from, native
 versus Core Luau behavior, components, reflected members, replication policy,
@@ -232,12 +256,16 @@ schema version, and required capabilities.
 
 ### Plugins
 
-`Plugin` is separate from first-party `Studio`. A plugin may receive DataModel
-reads, validated mutations, selection, command registration, and restricted UI
-registration by default. It does not inherit process control, private IPC,
-raw-engine access, unrestricted networking, or unrestricted filesystem access.
-Future permission prompts may explicitly grant more capabilities. Third-party
-plugins should ultimately execute across an isolated capability boundary.
+`Plugin` is separate from first-party `Studio`. Plugin code must never execute
+with a first-party Studio capability set, even when an early implementation
+shares the same VM or process. Every plugin entry point installs a plugin-specific
+security context, and native boundaries enforce it. A plugin may receive
+DataModel reads, validated mutations, selection, command registration, and
+restricted UI registration by default. It does not inherit process control,
+private IPC, raw-engine access, unrestricted networking, or unrestricted
+filesystem access. Future permission prompts may explicitly grant more
+capabilities. Process or VM isolation may strengthen this boundary later, but
+shared hosting never weakens the capability separation.
 
 ## Persistence, replication, and packages
 
@@ -245,11 +273,21 @@ Networking, persistence, and Studio share the same logical state model: stable
 ObjectIds, deterministic snapshots, ordered journal records, a closed
 `WireValue` schema, explicit authority, and scope or world identity. Reflection
 metadata selects replication behavior, including for custom classes and attributes.
+The registry is frozen before replication begins. Clients receive schema metadata
+needed to interpret state but never receive schema-definition authority and
+cannot add, replace, or extend definitions during a runtime session.
 
 Serialization uses explicit format versions, stable references, schema-aware
 properties, forward-reference resolution, bounded parsing, and safe failure. It
 never serializes native pointers or uses memory addresses as identity. Custom
 classes, enums, and components participate through the frozen registry.
+
+Saved projects eventually require explicit migrations when a custom class or
+enum definition version changes. A migration is selected by stable `SchemaId`
+and a declared version path, runs in a bounded registration or load context, and
+produces data validated against the destination definition before world
+construction. Missing, ambiguous, failed, or lossy migrations stop the load with
+diagnostics rather than silently coercing data or falling back to display names.
 
 Packages may contribute Luau modules, classes, enums, extensions, editor metadata,
 and approved component configuration. Their definitions obey the same namespacing,
@@ -289,23 +327,30 @@ The work divides into the following dependency-ordered packages:
    registry so one definition describes identity, inheritance, members, access,
    persistence, replication, editor behavior, version, and provenance. Existing
    generated native definitions become one input to that registry.
-3. **Add the registration lifecycle.** Introduce explicit native/Core load,
+3. **Add the registration lifecycle and freeze.** Introduce explicit native/Core load,
    PreRun registration, validation, freeze, and world-construction states. Add
    the `PreRun` and `Plugin` domains and narrowly scoped definition capabilities;
-   reject registration after freeze.
-4. **Implement extensibility one concept at a time.** Start with attributes and
-   tags, then custom enums, class extensions, custom classes, and finally curated
-   native components. Each increment needs schema collision checks, stable wire
-   identity, serialization/replication behavior, Studio discovery, and Luau tests.
-5. **Make Studio schema-driven.** Extend the existing snapshot/journal document
+   abort registration atomically on failure and reject changes after freeze.
+4. **Add attributes and tags.** Prove bounded values, lifecycle cleanup,
+   serialization, journaling, replication declarations, and Studio discovery
+   without introducing new class identity.
+5. **Add custom enums.** Establish namespaced definition identity, versioning,
+   wire representation, reflection, and collision behavior.
+6. **Add class extensions.** Add namespaced members to existing identities while
+   protecting native members and detecting extension conflicts.
+7. **Add custom classes.** Introduce distinct stable class identity, inheritance,
+   persistence, replication metadata, Studio representation, and migrations.
+8. **Add native component composition.** Permit custom classes to request only
+   curated, validated engine-owned component combinations.
+9. **Make Studio schema-driven.** Extend the existing snapshot/journal document
    flow with schema and provenance discovery, reference-valued edits,
    transactions, undo/redo, save, and play-session commands. Establish the
    separate plugin capability broker before exposing third-party plugin APIs.
-6. **Build replaceable systems vertically.** For input, characters, animation,
-   projectiles, and terrain, add the smallest native primitive, its trusted Core
-   Luau API, and one removable default. Complete and measure one end-to-end slice
-   before expanding breadth.
-7. **Carry the frozen schema into networking and tooling.** Use the same class,
+10. **Build replaceable systems vertically.** For input, characters, animation,
+    projectiles, and terrain, add the smallest native primitive, its trusted Core
+    Luau API, and one removable default. Complete and measure one end-to-end slice
+    before expanding breadth.
+11. **Carry the frozen schema into networking and tooling.** Use the same class,
    property, enum, attribute, identity, and authority metadata for persistence,
    replication, Studio, generated Luau types, diagnostics, and compatibility
    adapters.
