@@ -157,12 +157,32 @@ namespace gargantuan {
 		return {ReplicationApplyStatus::Success, 1, {}};
 	}
 
+	ReplicationApplyResult InProcessReplicationSession::ApplyAttribute(
+		const WireJournalRecord &record,
+		const std::shared_ptr<Instance> &instance
+	) {
+		if (!record.AttributeName || !record.Value)
+			return {ReplicationApplyStatus::MalformedRecord, 0, "AttributeUpdate is missing its name or WireValue"};
+		std::optional<WireValue> value = *record.Value;
+		if (std::holds_alternative<std::monostate>(*record.Value)) value.reset();
+		try {
+			const auto status = instance->ApplyAttributeMutation(
+				*record.AttributeName, std::move(value), ScriptSecurityContext::CoreTrusted()
+			);
+			if (status != MutationStatus::Success)
+				return {ReplicationApplyStatus::ApplyRejected, 0, "Receiver rejected the attribute WireValue"};
+		} catch (const std::exception &error) {
+			return {ReplicationApplyStatus::ApplyRejected, 0, error.what()};
+		}
+		return {ReplicationApplyStatus::Success, 1, {}};
+	}
+
 	ReplicationApplyResult InProcessReplicationSession::ApplyRecord(const WireJournalRecord &record) {
 		ScopedChangeJournalSuppression suppressReceiverChanges;
 		try {
 			switch (record.Operation) {
 				case WireJournalOperation::Create: {
-					if (!record.ClassName || record.Parent || record.PropertyName || record.Value ||
+					if (!record.ClassName || record.Parent || record.PropertyName || record.AttributeName || record.Value ||
 						Receiver.Objects.contains(record.Object))
 						return {ReplicationApplyStatus::MalformedRecord, 0, "Invalid or duplicate Create record"};
 					auto *definition = InstanceClassRegistry::GetDefinitionByName(*record.ClassName);
@@ -175,12 +195,21 @@ namespace gargantuan {
 					break;
 				}
 				case WireJournalOperation::PropertyUpdate: {
+					if (record.Parent || record.ClassName || record.AttributeName)
+						return {ReplicationApplyStatus::MalformedRecord, 0, "PropertyUpdate contains unrelated metadata"};
 					auto instance = ResolveReceiver(record.Object);
 					if (!instance) return {ReplicationApplyStatus::ApplyRejected, 0, "Property target is stale or missing"};
 					return ApplyProperty(record, instance);
 				}
+				case WireJournalOperation::AttributeUpdate: {
+					if (record.Parent || record.ClassName || record.PropertyName)
+						return {ReplicationApplyStatus::MalformedRecord, 0, "AttributeUpdate contains unrelated metadata"};
+					auto instance = ResolveReceiver(record.Object);
+					if (!instance) return {ReplicationApplyStatus::ApplyRejected, 0, "Attribute target is stale or missing"};
+					return ApplyAttribute(record, instance);
+				}
 				case WireJournalOperation::Reparent: {
-					if (record.ClassName || record.PropertyName || record.Value)
+					if (record.ClassName || record.PropertyName || record.AttributeName || record.Value)
 						return {ReplicationApplyStatus::MalformedRecord, 0, "Reparent contains unrelated metadata"};
 					auto instance = ResolveReceiver(record.Object);
 					if (!instance) return {ReplicationApplyStatus::ResnapshotRequired, 0, "Reparent target predates the snapshot"};
@@ -197,7 +226,7 @@ namespace gargantuan {
 					break;
 				}
 				case WireJournalOperation::Destroy: {
-					if (record.Parent || record.ClassName || record.PropertyName || record.Value)
+					if (record.Parent || record.ClassName || record.PropertyName || record.AttributeName || record.Value)
 						return {ReplicationApplyStatus::MalformedRecord, 0, "Destroy contains unrelated metadata"};
 					auto instance = ResolveReceiver(record.Object);
 					if (!instance) return {ReplicationApplyStatus::ApplyRejected, 0, "Destroy target is stale or missing"};

@@ -90,6 +90,11 @@ namespace gargantuan {
 								securityContext
 							);
 							return {status, typedCommand.Object, status == MutationStatus::Success ? "" : "Property mutation rejected"};
+						} else if constexpr (std::is_same_v<Command, UpdateAttributeCommand>) {
+							const auto status = instance->ApplyAttributeMutation(
+								typedCommand.AttributeName, std::move(typedCommand.Value), securityContext
+							);
+							return {status, typedCommand.Object, status == MutationStatus::Success ? "" : "Attribute mutation rejected"};
 						} else if constexpr (std::is_same_v<Command, ReparentObjectCommand>) {
 							std::shared_ptr<Instance> parent;
 							if (typedCommand.Parent) {

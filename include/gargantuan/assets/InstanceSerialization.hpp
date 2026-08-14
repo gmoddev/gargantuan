@@ -11,7 +11,7 @@
 
 namespace gargantuan::InstanceSerialization {
 	enum class InstanceFormat : int { Json, Binary };
-	using json = nlohmann::json;
+	using json = nlohmann::ordered_json;
 
 	struct DeserializationState {
 		bool Ok = false;

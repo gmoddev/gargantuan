@@ -1,6 +1,7 @@
 #pragma once
 
 #include "gargantuan/runtime/ObjectId.hpp"
+#include "gargantuan/runtime/WireValue.hpp"
 #include "gargantuan/scripting/ScriptSecurity.hpp"
 
 #include <any>
@@ -16,9 +17,16 @@
 namespace gargantuan {
 	struct CreateObjectCommand { std::string ClassName; std::optional<ObjectId> Parent; };
 	struct UpdatePropertyCommand { ObjectId Object; std::string PropertyName; std::any Value; };
+	struct UpdateAttributeCommand { ObjectId Object; std::string AttributeName; std::optional<WireValue> Value; };
 	struct ReparentObjectCommand { ObjectId Object; std::optional<ObjectId> Parent; };
 	struct DestroyObjectCommand { ObjectId Object; };
-	using MutationCommand = std::variant<CreateObjectCommand, UpdatePropertyCommand, ReparentObjectCommand, DestroyObjectCommand>;
+	using MutationCommand = std::variant<
+		CreateObjectCommand,
+		UpdatePropertyCommand,
+		UpdateAttributeCommand,
+		ReparentObjectCommand,
+		DestroyObjectCommand
+	>;
 
 	enum class MutationStatus {
 		Success,

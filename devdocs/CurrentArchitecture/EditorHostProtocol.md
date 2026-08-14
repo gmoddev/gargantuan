@@ -45,9 +45,10 @@ limited to 256 records.
 | `Handshake` | Returns engine identity, protocol version, and capabilities. |
 | `OpenProject` | Canonicalizes and loads a project root without executing it. |
 | `GetSchema` | Returns deterministic reflected class and property metadata. |
-| `GetSnapshot` | Returns snapshot v2 and establishes the session cursor. |
-| `PollChanges` | Returns scoped wire-journal v2 records after that cursor. |
+| `GetSnapshot` | Returns snapshot v3 and establishes the session cursor. |
+| `PollChanges` | Returns scoped wire-journal v3 records after that cursor. |
 | `SetProperty` | Applies a closed non-reference `WireValue` through `MutationGateway`. |
+| `SetAttribute` | Applies or removes a bounded attribute through `MutationGateway`. |
 | `ConfigureViewport` | Negotiates a bounded engine-owned RGB8 viewport. |
 | `SetViewportCamera` | Applies a finite absolute editor-camera pose and field of view. |
 | `OpenViewportTransport` | Explicitly selects shared-memory ring v1 and returns its fixed layout contract. |
@@ -57,7 +58,9 @@ limited to 256 records.
 
 `SetProperty` accepts only live objects whose replication scope is the open
 DataModel. The committed setter path remains responsible for journal emission.
-Object references, enum items, create, reparent, destroy, transactions, saving,
+`SetAttribute` uses the same live-object and `MutateDataModel` checks. Attribute
+state is delivered by snapshot and dedicated `AttributeUpdate` records rather
+than a second polling path. Object references, enum items, create, reparent, destroy, transactions, saving,
 source mounts, and play sessions are deliberately outside v0. Viewport methods
 are a compatible capability extension with their own `ViewportVersion = 1`.
 `Handshake.ViewportTransports` is authoritative: clients must negotiate rather

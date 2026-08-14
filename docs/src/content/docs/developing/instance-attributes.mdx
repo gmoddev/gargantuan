@@ -1,0 +1,23 @@
+---
+title: Instance attributes
+description: Bounded dynamic Instance state and its authority, persistence, and replication contracts.
+---
+
+Instances support case-sensitive dynamic attributes through `SetAttribute`,
+`GetAttribute`, `GetAttributes`, and `GetAttributeChangedSignal`. Attribute keys
+are runtime state; they do not alter Gargantuan's frozen class schema.
+
+Writes require `MutateDataModel` and use the validated mutation path. Reads
+require `ReadDataModel`. Assigning an identical value or removing a missing key
+produces no change record or signal.
+
+Current limits are 100 UTF-8 bytes per name, 64 attributes per Instance, 4 KiB
+per encoded value, and 16 KiB aggregate. Values currently support booleans,
+integers, finite numbers, bounded UTF-8 strings, `Vector2`, `Vector3`, `Color3`,
+`UDim`, `UDim2`, and finite `CFrame`. Nil removes a value. Tables, blobs, enums,
+object references, functions, userdata, and native pointers are rejected.
+
+Attributes are persisted in project JSON, included in snapshots, represented by
+dedicated ordered `AttributeUpdate` journal records, and applied by loopback
+replication. Studio reads its replicated cache and sends edits through
+EditorHost; it never becomes authoritative. Tags are separate future work.

@@ -70,6 +70,26 @@ return c({
 	},
 
 	methods = {
+		SetAttribute = {
+			description = "Sets or removes a bounded runtime attribute through authoritative mutation",
+			asLuau = true,
+			luauSignature = "(self: Instance, name: string, value: AttributeValue?) -> ()",
+		},
+		GetAttribute = {
+			description = "Returns a bounded runtime attribute or nil",
+			asLuau = true,
+			luauSignature = "(self: Instance, name: string) -> AttributeValue?",
+		},
+		GetAttributes = {
+			description = "Returns a copy of all bounded runtime attributes",
+			asLuau = true,
+			luauSignature = "(self: Instance) -> { [string]: AttributeValue }",
+		},
+		GetAttributeChangedSignal = {
+			description = "Returns a signal fired once for each committed change to the named attribute",
+			asLuau = true,
+			luauSignature = "(self: Instance, name: string) -> Signal<>",
+		},
 		IsA = {
 			description = "Whether this instance derives from the specified class",
 			params = { p("className", t.String) },

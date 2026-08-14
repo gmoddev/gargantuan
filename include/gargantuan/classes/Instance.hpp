@@ -5,9 +5,11 @@
 #include "gargantuan/datatypes/Signal.hpp"
 #include "gargantuan/runtime/ObjectId.hpp"
 #include "gargantuan/runtime/MutationGateway.hpp"
+#include "gargantuan/runtime/WireValue.hpp"
 #include "gargantuan/scripting/Userdata.hpp"
 
 #include <memory>
+#include <map>
 #include <mutex>
 #include <string>
 #include <string_view>
@@ -24,6 +26,8 @@ namespace gargantuan {
 
 		std::vector<std::shared_ptr<Instance>> Children;
 		std::unordered_map<std::string, std::shared_ptr<Signal<std::monostate>>> PropertyChangedSignals;
+		std::map<std::string, WireValue> Attributes;
+		std::unordered_map<std::string, std::shared_ptr<Signal<std::monostate>>> AttributeChangedSignals;
 		std::weak_ptr<Instance> ParentReference;
 		mutable ObjectId Id;
 		mutable std::mutex IdentityMutex;
@@ -51,6 +55,22 @@ namespace gargantuan {
 			std::string_view propertyName,
 			const std::any &value,
 			Enums::Permission permission = Enums::Permission::None,
+			const ScriptSecurityContext &securityContext = GetCurrentScriptSecurityContext()
+		);
+		[[nodiscard]] std::optional<WireValue> GetAttributeValue(
+			std::string_view name,
+			const ScriptSecurityContext &securityContext = GetCurrentScriptSecurityContext()
+		) const;
+		[[nodiscard]] std::map<std::string, WireValue> GetAttributeValues(
+			const ScriptSecurityContext &securityContext = GetCurrentScriptSecurityContext()
+		) const;
+		std::shared_ptr<Signal<std::monostate>> GetAttributeSignal(
+			std::string_view name,
+			const ScriptSecurityContext &securityContext = GetCurrentScriptSecurityContext()
+		);
+		MutationStatus ApplyAttributeMutation(
+			std::string_view name,
+			std::optional<WireValue> value,
 			const ScriptSecurityContext &securityContext = GetCurrentScriptSecurityContext()
 		);
 		[[nodiscard]] ObjectId GetObjectId() const;

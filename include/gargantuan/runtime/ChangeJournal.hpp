@@ -23,9 +23,19 @@ namespace gargantuan {
 		WireValue Value;
 		bool Replicated = false;
 	};
+	struct AttributeUpdatedChange {
+		std::string AttributeName;
+		std::optional<WireValue> Value;
+	};
 	struct ObjectReparentedChange { std::optional<ObjectId> Parent; };
 	struct ObjectDestroyedChange {};
-	using ChangePayload = std::variant<ObjectCreatedChange, PropertyUpdatedChange, ObjectReparentedChange, ObjectDestroyedChange>;
+	using ChangePayload = std::variant<
+		ObjectCreatedChange,
+		PropertyUpdatedChange,
+		AttributeUpdatedChange,
+		ObjectReparentedChange,
+		ObjectDestroyedChange
+	>;
 
 	struct ChangeRecord {
 		std::uint64_t Sequence;

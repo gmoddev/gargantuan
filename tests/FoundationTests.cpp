@@ -9,6 +9,7 @@
 #include "gargantuan/editor/EditorViewport.hpp"
 #include "gargantuan/render/RenderExtractor.hpp"
 #include "gargantuan/runtime/ChangeJournal.hpp"
+#include "gargantuan/runtime/AttributeValidation.hpp"
 #include "gargantuan/runtime/DataModelRoot.hpp"
 #include "gargantuan/runtime/ExecutionDomain.hpp"
 #include "gargantuan/runtime/JobSystem.hpp"
@@ -29,10 +30,12 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <lua.h>
 #include <lualib.h>
 #include <nlohmann/json.hpp>
 #include <stdexcept>
+#include <sstream>
 #include <thread>
 #include <type_traits>
 #include <vector>
@@ -1195,6 +1198,141 @@ namespace {
 		);
 	}
 
+	void TestInstanceAttributes() {
+		using namespace gargantuan;
+		auto &journal = ChangeJournal::Get();
+		journal.Clear();
+		auto game = std::make_shared<DataModel>();
+		game->SetArchivable(true);
+		auto part = std::make_shared<Part>();
+		part->SetName("AttributedPart");
+		part->SetParent(game);
+		const auto id = part->GetObjectId();
+		const auto schemaGeneration = GetRuntimeSchemaLifecycle().GetActiveGeneration();
+		auto *instanceSchema = InstanceClassRegistry::GetDefinitionByName("Instance");
+		Check(instanceSchema && instanceSchema->AllMethods.contains("SetAttribute") &&
+			instanceSchema->AllMethods.contains("GetAttribute") && instanceSchema->AllMethods.contains("GetAttributes") &&
+			instanceSchema->AllMethods.contains("GetAttributeChangedSignal"),
+			"frozen Instance schema describes attribute behavior without dynamic definitions");
+		MutationGateway gateway;
+		journal.Clear();
+		auto attributeCursor = journal.CreateCursor(game->GetObjectId());
+		auto AttributeRecordCount = [&] { return journal.Read(attributeCursor).Records.size(); };
+
+		int signalCalls = 0;
+		part->GetAttributeSignal("Health")->Connect([&](std::monostate) { ++signalCalls; });
+		auto created = gateway.Apply(UpdateAttributeCommand{id, "Health", WireValue(100)});
+		Check(created.Succeeded(), "attribute creation succeeds through MutationGateway");
+		Check(part->GetAttributeValue("Health") == std::optional<WireValue>(100), "attribute read returns committed value");
+		Check(part->GetAttributeValues().size() == 1, "attribute enumeration returns committed state");
+		Check(signalCalls == 1 && AttributeRecordCount() == 1, "attribute creation signals and journals exactly once");
+
+		auto updated = gateway.Apply(UpdateAttributeCommand{id, "Health", WireValue(75)});
+		Check(updated.Succeeded() && part->GetAttributeValue("Health") == std::optional<WireValue>(75), "attribute update replaces its value");
+		Check(signalCalls == 2 && AttributeRecordCount() == 2, "attribute update signals and journals exactly once");
+		auto noOp = gateway.Apply(UpdateAttributeCommand{id, "Health", WireValue(75)});
+		Check(noOp.Succeeded() && signalCalls == 2 && AttributeRecordCount() == 2, "identical attribute assignment is a true no-op");
+		auto removed = gateway.Apply(UpdateAttributeCommand{id, "Health", std::nullopt});
+		Check(removed.Succeeded() && !part->GetAttributeValue("Health"), "nil attribute mutation removes the value");
+		Check(signalCalls == 3 && AttributeRecordCount() == 3, "attribute removal signals and journals exactly once");
+		auto removeNoOp = gateway.Apply(UpdateAttributeCommand{id, "Health", std::nullopt});
+		Check(removeNoOp.Succeeded() && signalCalls == 3 && AttributeRecordCount() == 3, "removing a missing attribute is a no-op");
+
+		auto ExpectRejected = [&](std::string name, std::optional<WireValue> value, const char *message) {
+			const auto before = part->GetAttributeValues();
+			const auto records = AttributeRecordCount();
+			auto result = gateway.Apply(UpdateAttributeCommand{id, std::move(name), std::move(value)});
+			Check(!result.Succeeded() && part->GetAttributeValues() == before && AttributeRecordCount() == records &&
+				signalCalls == 3, message);
+		};
+		ExpectRejected("", WireValue(true), "empty attribute name is rejected atomically");
+		ExpectRejected(std::string(MaximumAttributeNameBytes + 1, 'a'), WireValue(true), "oversized attribute name is rejected");
+		ExpectRejected(std::string("\xc3\x28", 2), WireValue(true), "malformed UTF-8 attribute name is rejected");
+		ExpectRejected("Reference", WireValue(WireObjectReference{WireObjectId::FromObjectId(id)}), "unsupported reference attribute is rejected");
+		ExpectRejected("Infinite", WireValue(std::numeric_limits<double>::infinity()), "non-finite attribute number is rejected");
+		ExpectRejected("Large", WireValue(std::string(MaximumAttributeValueBytes + 1, 'x')), "oversized attribute value is rejected");
+
+		auto counted = std::make_shared<Folder>();
+		const auto countedId = counted->GetObjectId();
+		for (std::size_t index = 0; index < MaximumAttributesPerInstance; ++index)
+			Check(gateway.Apply(UpdateAttributeCommand{countedId, "A" + std::to_string(index), WireValue(true)}).Succeeded(),
+				"attributes up to the count limit are accepted");
+		Check(!gateway.Apply(UpdateAttributeCommand{countedId, "Overflow", WireValue(true)}).Succeeded(),
+			"attribute count limit is enforced");
+		Check(counted->GetAttributeValues().size() == MaximumAttributesPerInstance, "count rejection preserves prior attributes");
+
+		auto aggregate = std::make_shared<Folder>();
+		const auto aggregateId = aggregate->GetObjectId();
+		bool aggregateRejected = false;
+		for (std::size_t index = 0; index < MaximumAttributesPerInstance; ++index) {
+			auto result = gateway.Apply(UpdateAttributeCommand{
+				aggregateId, "B" + std::to_string(index), WireValue(std::string(1024, 'b'))
+			});
+			if (!result.Succeeded()) { aggregateRejected = true; break; }
+		}
+		Check(aggregateRejected, "aggregate attribute byte limit is enforced");
+		Check(ValidateAttributeCollection(aggregate->GetAttributeValues()) <= MaximumAttributeBytesPerInstance,
+			"aggregate rejection preserves a valid collection");
+
+		ScriptSecurityContext readOnly{ScriptExecutionDomain::Studio, {ScriptCapability::ReadDataModel}};
+		ScriptSecurityContext writeOnly{ScriptExecutionDomain::Studio, {ScriptCapability::MutateDataModel}};
+		Check(
+			gateway.Apply(UpdateAttributeCommand{id, "Denied", WireValue(true)}, readOnly).Status == MutationStatus::Unauthorized,
+			"attribute write requires MutateDataModel"
+		);
+		CheckThrows<std::runtime_error>([&] { (void)part->GetAttributeValues(writeOnly); }, "attribute read requires ReadDataModel");
+		Check(GetRuntimeSchemaLifecycle().GetActiveGeneration() == schemaGeneration, "attribute mutation does not change frozen schema generation");
+
+		Check(gateway.Apply(UpdateAttributeCommand{id, "Persisted", WireValue(std::string("value"))}).Succeeded(),
+			"persistence test attribute is accepted");
+		std::shared_ptr<Instance> persistenceRoot = game;
+		auto serialized = InstanceSerialization::Serialize(InstanceSerialization::InstanceFormat::Json, persistenceRoot);
+		Check(serialized == InstanceSerialization::Serialize(InstanceSerialization::InstanceFormat::Json, persistenceRoot),
+			"attribute persistence output is deterministic");
+		std::istringstream serializedInput(serialized);
+		auto deserialized = InstanceSerialization::Deserialize(InstanceSerialization::InstanceFormat::Json, serializedInput);
+		Check(deserialized.Ok, "attribute project persistence round-trips");
+		auto deserializedPart = deserialized.Instance ? deserialized.Instance->FindFirstChild("AttributedPart", false) : nullptr;
+		Check(deserializedPart && deserializedPart->GetAttributeValue("Persisted") == std::optional<WireValue>(std::string("value")),
+			"deserialized Instance restores attributes");
+		auto malformedDocument = nlohmann::ordered_json::parse(serialized);
+		for (auto &child : malformedDocument["Children"]) {
+			if (child["Name"] == "AttributedPart") child["Attributes"]["Bad"] = {{"Type", "Double"}, {"Value", "not-number"}};
+		}
+		std::istringstream malformedInput(malformedDocument.dump());
+		Check(!InstanceSerialization::Deserialize(InstanceSerialization::InstanceFormat::Json, malformedInput).Ok,
+			"malformed persisted attribute data is rejected");
+
+		auto snapshot = CaptureSnapshot(game);
+		auto snapshotPart = std::find_if(snapshot.Objects.begin(), snapshot.Objects.end(), [](const SnapshotObject &object) {
+			return object.Name == "AttributedPart";
+		});
+		Check(snapshotPart != snapshot.Objects.end() && snapshotPart->Attributes.at("Persisted") == WireValue(std::string("value")),
+			"snapshot contains initial attribute state");
+		auto parsedSnapshot = DeserializeSnapshot(SerializeSnapshot(snapshot));
+		Check(parsedSnapshot.Succeeded() && LoadSnapshot(*parsedSnapshot.Value).Succeeded(), "attribute snapshot parses and loads");
+
+		auto sessionStart = InProcessReplicationSession::Start(game);
+		Check(sessionStart.Succeeded(), "attribute replication session starts from snapshot state");
+		auto session = sessionStart.Session;
+		auto receiverPart = session ? session->GetReceiverRoot()->FindFirstChild("AttributedPart", false) : nullptr;
+		Check(receiverPart && receiverPart->GetAttributeValue("Persisted") == std::optional<WireValue>(std::string("value")),
+			"initial attribute state replicates");
+		Check(gateway.Apply(UpdateAttributeCommand{id, "Persisted", WireValue(std::string("updated"))}).Succeeded() &&
+			session->ApplyAvailable().Succeeded(), "attribute update replicates through ordered journal");
+		Check(receiverPart->GetAttributeValue("Persisted") == std::optional<WireValue>(std::string("updated")),
+			"receiver observes replicated attribute update");
+		Check(gateway.Apply(UpdateAttributeCommand{id, "Persisted", std::nullopt}).Succeeded() &&
+			session->ApplyAvailable().Succeeded() && !receiverPart->GetAttributeValue("Persisted"),
+			"attribute removal replicates");
+
+		part->Destroy();
+		journal.Clear();
+		Check(gateway.Apply(UpdateAttributeCommand{id, "Dead", WireValue(true)}).Status == MutationStatus::StaleObject,
+			"stale attribute target is rejected");
+		Check(journal.ReadSince(0).empty(), "stale attribute target produces no journal record");
+	}
+
 	void TestEditorHostProtocol() {
 		using Json = nlohmann::ordered_json;
 		using namespace gargantuan;
@@ -1313,6 +1451,28 @@ namespace {
 					changes["Result"]["Records"][0]["Operation"] == "PropertyUpdate",
 				"EditorHost publishes the committed mutation as one journal record"
 			);
+			auto attributeMutation = call("SetAttribute", {
+				{"Object", (*editable)["Id"]},
+				{"Attribute", "Health"},
+				{"Value", {{"Type", "Double"}, {"Value", 100.0}}},
+			}, "test-token");
+			Check(attributeMutation["Ok"].get<bool>(), "EditorHost applies a bounded attribute mutation through the gateway");
+			auto attributeChanges = call("PollChanges", Json::object(), "test-token");
+			Check(
+				attributeChanges["Ok"].get<bool>() && attributeChanges["Result"]["Records"].size() == 1 &&
+					attributeChanges["Result"]["Records"][0]["Operation"] == "AttributeUpdate" &&
+					attributeChanges["Result"]["Records"][0]["AttributeName"] == "Health",
+				"EditorHost publishes one dedicated attribute journal record"
+			);
+			auto unsupportedAttribute = call("SetAttribute", {
+				{"Object", (*editable)["Id"]},
+				{"Attribute", "Reference"},
+				{"Value", {{"Type", "ObjectReference"}, {"Value", (*editable)["Id"]}}},
+			}, "test-token");
+			Check(!unsupportedAttribute["Ok"].get<bool>(), "EditorHost rejects unsupported attribute WireValues");
+			auto rejectedAttributeChanges = call("PollChanges", Json::object(), "test-token");
+			Check(rejectedAttributeChanges["Ok"].get<bool>() && rejectedAttributeChanges["Result"]["Records"].empty(),
+				"rejected EditorHost attribute mutation emits no journal record");
 		}
 
 		auto captureBeforeConfiguration = call("CaptureViewport", Json::object(), "test-token");
@@ -1402,6 +1562,7 @@ int main() {
 	TestRenderSnapshotExtraction();
 	TestScriptSecurityModel();
 	TestMutationGateway();
+	TestInstanceAttributes();
 	TestBoundedJournalCursor();
 	TestSnapshotBaseline();
 	TestWireJournalAndLoopbackReplication();

@@ -10,9 +10,9 @@
 #include <vector>
 
 namespace gargantuan {
-	inline constexpr std::uint32_t WireJournalFormatVersion = 2;
+	inline constexpr std::uint32_t WireJournalFormatVersion = 3;
 
-	enum class WireJournalOperation { Create, PropertyUpdate, Reparent, Destroy };
+	enum class WireJournalOperation { Create, PropertyUpdate, AttributeUpdate, Reparent, Destroy };
 
 	struct WireJournalRecord {
 		std::uint32_t Version = WireJournalFormatVersion;
@@ -23,6 +23,7 @@ namespace gargantuan {
 		std::optional<WireObjectId> Parent;
 		std::optional<std::string> ClassName;
 		std::optional<std::string> PropertyName;
+		std::optional<std::string> AttributeName;
 		std::optional<WireValue> Value;
 	};
 

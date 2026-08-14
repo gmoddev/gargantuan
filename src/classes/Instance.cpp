@@ -4,10 +4,16 @@
 #include "gargantuan/scripting/Userdata.hpp"
 #include "gargantuan/scripting/UserdataTag.hpp"
 #include "gargantuan/runtime/ChangeJournal.hpp"
+#include "gargantuan/runtime/AttributeValidation.hpp"
 #include "gargantuan/runtime/ExecutionDomain.hpp"
 #include "gargantuan/runtime/ObjectId.hpp"
 #include "gargantuan/runtime/WireCodec.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
+#include "gargantuan/datatypes/CFrame.hpp"
+#include "gargantuan/datatypes/Color3.hpp"
+#include "gargantuan/datatypes/UDim2.hpp"
+#include "gargantuan/datatypes/Vector2.hpp"
+#include "gargantuan/datatypes/Vector3.hpp"
 
 #include <lua.h>
 #include <lualib.h>
@@ -23,6 +29,50 @@
 
 namespace gargantuan {
 	namespace {
+		std::optional<WireValue> ReadAttributeWireValue(lua_State *L, int index) {
+			if (lua_isnoneornil(L, index)) return std::nullopt;
+			if (lua_isboolean(L, index)) return WireValue(lua_toboolean(L, index) != 0);
+			if (lua_isnumber(L, index)) return WireValue(static_cast<double>(lua_tonumber(L, index)));
+			if (lua_isstring(L, index)) {
+				size_t length = 0;
+				const char *value = lua_tolstring(L, index, &length);
+				return WireValue(std::string(value, length));
+			}
+			if (StackValue<Vector2>::Is(L, index)) return EncodeNativeWireValue(StackValue<Vector2>::From(L, index));
+			if (StackValue<glm::vec3>::Is(L, index)) return EncodeNativeWireValue(StackValue<glm::vec3>::From(L, index));
+			if (StackValue<Color3>::Is(L, index)) return EncodeNativeWireValue(StackValue<Color3>::From(L, index));
+			if (StackValue<UDim>::Is(L, index)) return EncodeNativeWireValue(StackValue<UDim>::From(L, index));
+			if (StackValue<UDim2>::Is(L, index)) return EncodeNativeWireValue(StackValue<UDim2>::From(L, index));
+			if (StackValue<CFrame>::Is(L, index)) return EncodeNativeWireValue(StackValue<CFrame>::From(L, index));
+			throw std::invalid_argument("Attribute value type is unsupported");
+		}
+
+		int PushAttributeWireValue(lua_State *L, const WireValue &value) {
+			return std::visit(
+				[L](const auto &typed) -> int {
+					using Value = std::decay_t<decltype(typed)>;
+					if constexpr (std::is_same_v<Value, bool> || std::is_same_v<Value, int> ||
+						std::is_same_v<Value, double> || std::is_same_v<Value, std::string>)
+						return StackValue<Value>::Push(L, typed);
+					else if constexpr (std::is_same_v<Value, WireFloat>) return StackValue<float>::Push(L, typed.Value);
+					else if constexpr (std::is_same_v<Value, WireVector2>) return StackValue<Vector2>::Push(L, Vector2(typed.X, typed.Y));
+					else if constexpr (std::is_same_v<Value, WireVector3>) return StackValue<glm::vec3>::Push(L, {typed.X, typed.Y, typed.Z});
+					else if constexpr (std::is_same_v<Value, WireColor3>) return StackValue<Color3>::Push(L, Color3(typed.R, typed.G, typed.B));
+					else if constexpr (std::is_same_v<Value, WireUDim>) return StackValue<UDim>::Push(L, UDim(typed.Scale, typed.Offset));
+					else if constexpr (std::is_same_v<Value, WireUDim2>)
+						return StackValue<UDim2>::Push(L, UDim2(typed.X.Scale, typed.X.Offset, typed.Y.Scale, typed.Y.Offset));
+					else if constexpr (std::is_same_v<Value, WireCFrame>) {
+						const auto &c = typed.Components;
+						return StackValue<CFrame>::Push(L, CFrame(
+							glm::vec3(c[0], c[1], c[2]),
+							glm::mat3(glm::vec3(c[3], c[6], c[9]), glm::vec3(c[4], c[7], c[10]), glm::vec3(c[5], c[8], c[11]))
+						));
+					} else throw std::runtime_error("Stored attribute value type is unsupported");
+				},
+				value
+			);
+		}
+
 		WireValue EncodeCommittedProperty(Instance *instance, const InstanceProperty &property) {
 			if (!property.Read) throw std::runtime_error("Committed property is not readable");
 			if (property.ReadObjectReference) {
@@ -80,6 +130,8 @@ namespace gargantuan {
 		if (Destroyed || DestroyingState) return;
 		DestroyingState = true;
 		Destroyed = true;
+		Attributes.clear();
+		AttributeChangedSignals.clear();
 		const auto objectId = GetObjectId();
 		ObjectRegistry::Get().Invalidate(objectId);
 		const auto scope = GetReplicationScopeId();
@@ -146,6 +198,8 @@ namespace gargantuan {
 				PropertyUpdatedChange{name, EncodeCommittedProperty(this, *property), true}
 			);
 		}
+		for (const auto &[name, value] : Attributes)
+			ChangeJournal::Get().Commit(scope, objectId, AttributeUpdatedChange{name, value});
 		auto parent = ParentReference.lock();
 		ChangeJournal::Get().Commit(
 			scope,
@@ -184,6 +238,110 @@ namespace gargantuan {
 		if (property->Validate && !property->Validate(value)) return MutationStatus::ValidationFailed;
 		property->Write(this, value);
 		return MutationStatus::Success;
+	}
+
+	std::optional<WireValue> Instance::GetAttributeValue(
+		std::string_view name,
+		const ScriptSecurityContext &securityContext
+	) const {
+		if (!securityContext.HasCapability(ScriptCapability::ReadDataModel))
+			throw std::runtime_error("Attribute read requires ReadDataModel");
+		AssertIsAlive();
+		ValidateAttributeName(name);
+		auto found = Attributes.find(std::string(name));
+		return found == Attributes.end() ? std::nullopt : std::optional(found->second);
+	}
+
+	std::map<std::string, WireValue> Instance::GetAttributeValues(const ScriptSecurityContext &securityContext) const {
+		if (!securityContext.HasCapability(ScriptCapability::ReadDataModel))
+			throw std::runtime_error("Attribute read requires ReadDataModel");
+		AssertIsAlive();
+		return Attributes;
+	}
+
+	std::shared_ptr<Signal<std::monostate>> Instance::GetAttributeSignal(
+		std::string_view name,
+		const ScriptSecurityContext &securityContext
+	) {
+		if (!securityContext.HasCapability(ScriptCapability::ReadDataModel))
+			throw std::runtime_error("Attribute signal access requires ReadDataModel");
+		AssertIsAlive();
+		ValidateAttributeName(name);
+		auto [found, inserted] = AttributeChangedSignals.try_emplace(std::string(name));
+		if (inserted) found->second = std::make_shared<Signal<std::monostate>>();
+		return found->second;
+	}
+
+	MutationStatus Instance::ApplyAttributeMutation(
+		std::string_view name,
+		std::optional<WireValue> value,
+		const ScriptSecurityContext &securityContext
+	) {
+		if (GetCurrentExecutionDomain() != ExecutionDomain::Main) return MutationStatus::WrongExecutionDomain;
+		if (!securityContext.HasCapability(ScriptCapability::MutateDataModel)) return MutationStatus::Unauthorized;
+		AssertIsAlive();
+		ValidateAttributeName(name);
+		if (value) (void)ValidateAttributeValue(*value);
+
+		auto candidate = Attributes;
+		auto found = candidate.find(std::string(name));
+		if (value) {
+			if (found != candidate.end() && found->second == *value) return MutationStatus::Success;
+			candidate[std::string(name)] = *value;
+		} else {
+			if (found == candidate.end()) return MutationStatus::Success;
+			candidate.erase(found);
+		}
+		(void)ValidateAttributeCollection(candidate);
+		Attributes = std::move(candidate);
+		ChangeJournal::Get().Commit(GetReplicationScopeId(), GetObjectId(), AttributeUpdatedChange{
+			std::string(name), value
+		});
+		auto signal = AttributeChangedSignals.find(std::string(name));
+		if (signal != AttributeChangedSignals.end()) signal->second->Fire({});
+		return MutationStatus::Success;
+	}
+
+	int Instance::SetAttribute(lua_State *L, Instance *instance) {
+		if (!GetCurrentScriptSecurityContext().HasCapability(ScriptCapability::MutateDataModel))
+			throw std::runtime_error("Attribute mutation requires MutateDataModel");
+		size_t nameLength = 0;
+		const char *name = luaL_checklstring(L, 2, &nameLength);
+		MutationGateway gateway;
+		auto result = gateway.Apply(UpdateAttributeCommand{
+			instance->GetObjectId(), std::string(name, nameLength), ReadAttributeWireValue(L, 3)
+		});
+		if (!result.Succeeded()) throw std::runtime_error(result.Message.empty() ? "Attribute mutation rejected" : result.Message);
+		return 0;
+	}
+
+	int Instance::GetAttribute(lua_State *L, Instance *instance) {
+		size_t nameLength = 0;
+		const char *name = luaL_checklstring(L, 2, &nameLength);
+		auto value = instance->GetAttributeValue(std::string_view(name, nameLength));
+		if (!value) {
+			lua_pushnil(L);
+			return 1;
+		}
+		return PushAttributeWireValue(L, *value);
+	}
+
+	int Instance::GetAttributes(lua_State *L, Instance *instance) {
+		auto attributes = instance->GetAttributeValues();
+		lua_createtable(L, 0, static_cast<int>(attributes.size()));
+		for (const auto &[name, value] : attributes) {
+			PushAttributeWireValue(L, value);
+			lua_setfield(L, -2, name.c_str());
+		}
+		return 1;
+	}
+
+	int Instance::GetAttributeChangedSignal(lua_State *L, Instance *instance) {
+		size_t nameLength = 0;
+		const char *name = luaL_checklstring(L, 2, &nameLength);
+		return StackValue<std::shared_ptr<Signal<std::monostate>>>::Push(
+			L, instance->GetAttributeSignal(std::string_view(name, nameLength))
+		);
 	}
 
 	std::string Instance::GetClassName() const {

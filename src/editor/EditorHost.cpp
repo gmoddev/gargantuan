@@ -205,7 +205,7 @@ namespace gargantuan {
 				if (!parameters.empty())
 					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Handshake takes no parameters"));
 				Json capabilities = {
-					"OpenProject", "Schema", "Snapshot", "Journal", "SetProperty",
+					"OpenProject", "Schema", "Snapshot", "Journal", "SetProperty", "SetAttribute",
 					"ConfigureViewport", "SetViewportCamera", "CaptureViewport", "PickViewport"
 				};
 				Json viewportTransports = Json::array({{
@@ -552,6 +552,35 @@ namespace gargantuan {
 					{"Status", MutationStatusName(mutation.Status)},
 					{"Message", mutation.Message},
 				};
+				if (mutation.Object) result["Object"] = EncodeWireObjectId(WireObjectId::FromObjectId(*mutation.Object));
+				return SerializeBoundedResponse(
+					mutation.Succeeded() ? SuccessResponse(requestId, std::move(result))
+										: ErrorResponse(requestId, MutationStatusName(mutation.Status), mutation.Message)
+				);
+			}
+
+			if (method == "SetAttribute") {
+				if (!StudioSecurity.HasCapability(ScriptCapability::MutateDataModel))
+					return SerializeBoundedResponse(ErrorResponse(requestId, "Unauthorized", "SetAttribute requires MutateDataModel"));
+				if (!Cursor)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "SnapshotRequired", "GetSnapshot must establish a cursor"));
+				if (!HasOnlyFields(parameters, {"Object", "Attribute", "Value"}) ||
+					!parameters.contains("Object") || !parameters.contains("Attribute") ||
+					!parameters["Attribute"].is_string() || !parameters.contains("Value"))
+					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "SetAttribute fields are invalid"));
+				auto object = DecodeWireObjectId(parameters["Object"]);
+				auto value = DecodeWireValue(parameters["Value"]);
+				if (!object || !value)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "SetAttribute Object or WireValue is invalid"));
+				auto target = ObjectRegistry::Get().Lookup(object->ToObjectId());
+				if (!target || target->GetReplicationScopeId() != World->GetObjectId())
+					return SerializeBoundedResponse(ErrorResponse(requestId, "StaleObject", "Object is not live in the open project"));
+				std::optional<WireValue> attributeValue = std::move(*value);
+				if (std::holds_alternative<std::monostate>(*attributeValue)) attributeValue.reset();
+				auto mutation = Mutations.Apply(UpdateAttributeCommand{
+					object->ToObjectId(), parameters["Attribute"].get<std::string>(), std::move(attributeValue)
+				}, StudioSecurity);
+				Json result{{"Status", MutationStatusName(mutation.Status)}, {"Message", mutation.Message}};
 				if (mutation.Object) result["Object"] = EncodeWireObjectId(WireObjectId::FromObjectId(*mutation.Object));
 				return SerializeBoundedResponse(
 					mutation.Succeeded() ? SuccessResponse(requestId, std::move(result))

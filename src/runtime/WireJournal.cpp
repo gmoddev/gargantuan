@@ -1,6 +1,7 @@
 #include "gargantuan/runtime/WireJournal.hpp"
 
 #include "gargantuan/runtime/WireCodec.hpp"
+#include "gargantuan/runtime/AttributeValidation.hpp"
 
 #include <stdexcept>
 #include <type_traits>
@@ -11,6 +12,7 @@ namespace gargantuan {
 			switch (operation) {
 				case WireJournalOperation::Create: return "Create";
 				case WireJournalOperation::PropertyUpdate: return "PropertyUpdate";
+				case WireJournalOperation::AttributeUpdate: return "AttributeUpdate";
 				case WireJournalOperation::Reparent: return "Reparent";
 				case WireJournalOperation::Destroy: return "Destroy";
 			}
@@ -20,6 +22,7 @@ namespace gargantuan {
 		std::optional<WireJournalOperation> ParseOperation(std::string_view operation) {
 			if (operation == "Create") return WireJournalOperation::Create;
 			if (operation == "PropertyUpdate") return WireJournalOperation::PropertyUpdate;
+			if (operation == "AttributeUpdate") return WireJournalOperation::AttributeUpdate;
 			if (operation == "Reparent") return WireJournalOperation::Reparent;
 			if (operation == "Destroy") return WireJournalOperation::Destroy;
 			return std::nullopt;
@@ -54,6 +57,10 @@ namespace gargantuan {
 					encoded.Operation = WireJournalOperation::PropertyUpdate;
 					encoded.PropertyName = payload.PropertyName;
 					encoded.Value = payload.Value;
+				} else if constexpr (std::is_same_v<Payload, AttributeUpdatedChange>) {
+					encoded.Operation = WireJournalOperation::AttributeUpdate;
+					encoded.AttributeName = payload.AttributeName;
+					encoded.Value = payload.Value.value_or(WireValue(std::monostate{}));
 				} else if constexpr (std::is_same_v<Payload, ObjectReparentedChange>) {
 					encoded.Operation = WireJournalOperation::Reparent;
 					if (payload.Parent) encoded.Parent = WireObjectId::FromObjectId(*payload.Parent);
@@ -82,6 +89,10 @@ namespace gargantuan {
 					break;
 				case WireJournalOperation::PropertyUpdate:
 					encoded["PropertyName"] = record.PropertyName.value_or("");
+					encoded["Value"] = record.Value ? EncodeWireValue(*record.Value) : WireJson(nullptr);
+					break;
+				case WireJournalOperation::AttributeUpdate:
+					encoded["AttributeName"] = record.AttributeName.value_or("");
 					encoded["Value"] = record.Value ? EncodeWireValue(*record.Value) : WireJson(nullptr);
 					break;
 				case WireJournalOperation::Reparent:
@@ -142,6 +153,19 @@ namespace gargantuan {
 						auto value = DecodeWireValue(encoded["Value"]);
 						if (!value) throw std::invalid_argument("Invalid PropertyUpdate WireValue");
 						record.PropertyName = encoded["PropertyName"].get<std::string>();
+						record.Value = std::move(*value);
+						break;
+					}
+					case WireJournalOperation::AttributeUpdate: {
+						if (!HasOnlyFields(encoded, {"Version", "Sequence", "Scope", "Operation", "ObjectId", "AttributeName", "Value"}) ||
+							!encoded.contains("AttributeName") || !encoded["AttributeName"].is_string() ||
+							encoded["AttributeName"].get_ref<const std::string &>().empty() || !encoded.contains("Value"))
+							throw std::invalid_argument("Invalid AttributeUpdate journal record");
+						auto value = DecodeWireValue(encoded["Value"]);
+						if (!value) throw std::invalid_argument("Invalid AttributeUpdate WireValue");
+						record.AttributeName = encoded["AttributeName"].get<std::string>();
+						ValidateAttributeName(*record.AttributeName);
+						if (!std::holds_alternative<std::monostate>(*value)) (void)ValidateAttributeValue(*value);
 						record.Value = std::move(*value);
 						break;
 					}

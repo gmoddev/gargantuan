@@ -8,6 +8,7 @@
 #include "gargantuan/datatypes/Vector2.hpp"
 #include "gargantuan/reflection/InstanceClassRegistry.hpp"
 #include "gargantuan/runtime/ExecutionDomain.hpp"
+#include "gargantuan/runtime/AttributeValidation.hpp"
 #include "gargantuan/runtime/WireCodec.hpp"
 
 #include <algorithm>
@@ -109,6 +110,8 @@ namespace gargantuan {
 					object.Properties.emplace(name, std::move(*encoded));
 				}
 			}
+			object.Attributes = instance->GetAttributeValues(ScriptSecurityContext::CoreTrusted());
+			(void)ValidateAttributeCollection(object.Attributes);
 			snapshot.Objects.push_back(std::move(object));
 		}
 		const auto scope = root->GetReplicationScopeId();
@@ -134,6 +137,8 @@ namespace gargantuan {
 			encoded["Parent"] = object.Parent ? EncodeId(*object.Parent) : Json(nullptr);
 			encoded["Properties"] = Json::object();
 			for (const auto &[name, value] : object.Properties) encoded["Properties"][name] = EncodeValue(value);
+			encoded["Attributes"] = Json::object();
+			for (const auto &[name, value] : object.Attributes) encoded["Attributes"][name] = EncodeValue(value);
 			document["Objects"].push_back(std::move(encoded));
 		}
 		return document.dump();
@@ -174,8 +179,8 @@ namespace gargantuan {
 			for (const auto &encoded : document["Objects"]) {
 				if (!encoded.is_object() || !encoded.contains("Id") || !encoded.contains("ClassName") ||
 					!encoded["ClassName"].is_string() || !encoded.contains("Name") || !encoded["Name"].is_string() ||
-					!encoded.contains("Parent") || !encoded.contains("Properties") ||
-					!encoded["Properties"].is_object()) {
+					!encoded.contains("Parent") || !encoded.contains("Properties") || !encoded["Properties"].is_object() ||
+					!encoded.contains("Attributes") || !encoded["Attributes"].is_object()) {
 					result.Errors.push_back("Invalid snapshot object");
 					return result;
 				}
@@ -208,6 +213,15 @@ namespace gargantuan {
 					}
 					object.Properties.emplace(name, std::move(*value));
 				}
+				for (const auto &[name, encodedValue] : encoded["Attributes"].items()) {
+					auto value = DecodeValue(encodedValue);
+					if (!value) {
+						result.Errors.push_back("Invalid wire value for attribute " + name);
+						return result;
+					}
+					object.Attributes.emplace(name, std::move(*value));
+				}
+				(void)ValidateAttributeCollection(object.Attributes);
 				snapshot.Objects.push_back(std::move(object));
 			}
 			result.Value = std::move(snapshot);
@@ -298,6 +312,11 @@ namespace gargantuan {
 							MutationStatus::Success)
 							throw std::runtime_error("Snapshot property value was rejected");
 					}
+				}
+				for (const auto &[name, value] : object.Attributes) {
+					if (instance->ApplyAttributeMutation(name, value, ScriptSecurityContext::CoreTrusted()) !=
+						MutationStatus::Success)
+						throw std::runtime_error("Snapshot attribute value was rejected");
 				}
 			}
 		} catch (const std::exception &error) {

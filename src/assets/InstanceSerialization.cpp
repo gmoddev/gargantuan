@@ -7,6 +7,8 @@
 #include "gargantuan/datatypes/UDim.hpp"
 #include "gargantuan/datatypes/Vector2.hpp"
 #include "gargantuan/reflection/InstanceClassRegistry.hpp"
+#include "gargantuan/runtime/AttributeValidation.hpp"
+#include "gargantuan/runtime/WireCodec.hpp"
 
 #include <SDL3/SDL_log.h>
 #include <cstring>
@@ -38,7 +40,7 @@ namespace gargantuan::InstanceSerialization {
 		//   explicit format that also specifies the EnumType
 		// - Int32 and Int64 are merged into Int as those are irrelevant to Gargantuan
 
-		using json = nlohmann::json;
+		using json = nlohmann::ordered_json;
 
 		struct SerializationState {
 			std::unordered_map<std::shared_ptr<Instance>, json> InstanceMap;
@@ -133,6 +135,9 @@ namespace gargantuan::InstanceSerialization {
 			serialized["Name"] = instance->GetName();
 			serialized["ClassName"] = definition->ClassName;
 			serialized["Properties"] = properties;
+			serialized["Attributes"] = json::object();
+			for (const auto &[name, value] : instance->GetAttributeValues(ScriptSecurityContext::CoreTrusted()))
+				serialized["Attributes"][name] = EncodeWireValue(value);
 			serialized["Children"] = children;
 
 			state.InstanceMap.emplace(instance, serialized);
@@ -145,7 +150,7 @@ namespace gargantuan::InstanceSerialization {
 		case InstanceFormat::Json: {
 			Json::SerializationState state;
 			auto serialized = Json::SerializeInstance(instance, state);
-			serialized["Version"] = 0;
+			serialized["Version"] = 1;
 			return serialized.dump();
 		}
 		default: {
@@ -322,7 +327,11 @@ namespace gargantuan::InstanceSerialization {
 		return state.ReturnError("Unsupported property value: %s", unknown.dump());
 	};
 
-	std::optional<std::shared_ptr<Instance>> TryDeserializeInstance(json contents, DeserializationState &state) {
+	std::optional<std::shared_ptr<Instance>> TryDeserializeInstance(
+		json contents,
+		DeserializationState &state,
+		bool requireAttributes
+	) {
 		auto name = contents["Name"];
 		if (!name.is_string()) {
 			state.PushError("Child under {}has an invalid Name field", state.FormatCurrentPath());
@@ -334,6 +343,15 @@ namespace gargantuan::InstanceSerialization {
 		auto properties = contents["Properties"];
 		if (!properties.is_object()) {
 			state.PushError("Instance {} has an invalid Properties field", state.FormatCurrentPath());
+			return std::nullopt;
+		}
+		if (requireAttributes && (!contents.contains("Attributes") || !contents["Attributes"].is_object())) {
+			state.PushError("Instance {} has an invalid Attributes field", state.FormatCurrentPath());
+			return std::nullopt;
+		}
+		auto attributes = contents.contains("Attributes") ? contents["Attributes"] : json::object();
+		if (!attributes.is_object()) {
+			state.PushError("Instance {} has an invalid Attributes field", state.FormatCurrentPath());
 			return std::nullopt;
 		}
 
@@ -415,9 +433,28 @@ namespace gargantuan::InstanceSerialization {
 				return state.ReturnError("Unknown error setting property '{}' in {}", key, state.FormatCurrentPath());
 			}
 		}
+		try {
+			std::map<std::string, WireValue> decodedAttributes;
+			for (const auto &[key, encoded] : attributes.items()) {
+				auto value = DecodeWireValue(encoded);
+				if (!value) throw std::invalid_argument("Malformed attribute WireValue");
+				ValidateAttributeName(key);
+				(void)ValidateAttributeValue(*value);
+				decodedAttributes.emplace(key, std::move(*value));
+			}
+			(void)ValidateAttributeCollection(decodedAttributes);
+			for (const auto &[key, value] : decodedAttributes) {
+				if (instance->ApplyAttributeMutation(key, value, ScriptSecurityContext::CoreTrusted()) !=
+					MutationStatus::Success)
+					throw std::runtime_error("Serialized attribute mutation rejected");
+			}
+		} catch (const std::exception &error) {
+			instance->Destroy();
+			return state.ReturnError("Failed to deserialize attributes in {}: {}", state.FormatCurrentPath(), error.what());
+		}
 
 		for (auto &child : children) {
-			auto maybeChild = TryDeserializeInstance(child, state);
+			auto maybeChild = TryDeserializeInstance(child, state, requireAttributes);
 			if (maybeChild.has_value()) {
 				maybeChild.value()->SetParent(instance);
 			} else {
@@ -455,12 +492,13 @@ namespace gargantuan::InstanceSerialization {
 				return state;
 			}
 
-			if (contents["Version"] != 0) {
+			if (!contents.contains("Version") || !contents["Version"].is_number_integer() ||
+				(contents["Version"] != 0 && contents["Version"] != 1)) {
 				state.PushError("Unsupported instance format version");
 				return state;
 			}
 
-			auto maybeInstance = TryDeserializeInstance(contents, state);
+			auto maybeInstance = TryDeserializeInstance(contents, state, contents["Version"] == 1);
 			if (maybeInstance.has_value()) {
 				state.Ok = true;
 				state.Instance = maybeInstance.value();
