@@ -358,10 +358,17 @@ The work divides into the following dependency-ordered packages:
 The first practical milestone is narrower than the full vision: freeze a native
 plus Core registry; expose attributes and tags; serialize and journal them; let
 Studio discover and edit them through EditorHost; and prove capability denial in
-tests. The next milestone adds one namespaced custom enum and one custom class
-through PreRun, including round-trip persistence, replication metadata, Studio
-inspection, collision failure, and post-freeze rejection. Higher-level systems
-should not depend on extensibility semantics until those slices are reliable.
+tests.
+
+The next milestone adds one namespaced custom enum through PreRun, including
+round-trip persistence, replication metadata, Studio inspection, collision
+failure, and post-freeze rejection.
+
+Class extensions follow once enum and schema identity are proven. Custom classes
+follow extensions and must additionally prove stable class identity, inheritance,
+persistence, replication, Studio representation, and migration behavior.
+Higher-level systems should not depend on extensibility semantics until those
+slices are reliable.
 
 Every slice is complete only when its public contract, native enforcement,
 serialization, replication declaration, Studio representation, diagnostics,
