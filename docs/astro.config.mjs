@@ -49,6 +49,10 @@ export default defineConfig({
 							slug: "developing/future-architecture",
 						},
 						{
+							label: "Game Networking Architecture",
+							slug: "developing/networking-architecture",
+						},
+						{
 							label: "Roadmap",
 							slug: "developing/roadmap",
 						},

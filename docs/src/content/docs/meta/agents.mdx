@@ -4,3 +4,135 @@ description: Repository policy for AI-assisted contributions.
 ---
 
 AI is explicitly allowed.
+
+Contributors remain responsible for understanding, reviewing, testing, and
+explaining every submitted change.
+
+Always use PascalCase where applicable. Preserve established camelCase where it
+is already part of an API or local convention.
+
+## Before modifying code
+
+1. Read this policy completely.
+2. Read [`docs/architecture/README.md`](../../../../architecture/README.md).
+3. Read the current architecture document for every subsystem in scope.
+4. Read the ADR or accepted-design documents referenced by those documents.
+5. Read the relevant invariant documents, beginning with
+   [`docs/invariants/Core.md`](../../../../invariants/Core.md).
+6. Inspect the implementation and tests before proposing or applying changes.
+7. Check `git status` and preserve unrelated or concurrent work.
+
+Do not infer architecture solely from directory names, class names, roadmap
+items, comments, or historical audits.
+
+## Sources of truth
+
+Documentation classes and their authority are defined in
+[`docs/architecture/README.md`](../../../../architecture/README.md). In brief:
+
+1. Tests and mechanically enforced invariants prove current behavior.
+2. Current architecture documents describe verified implemented structure.
+3. Accepted ADRs record decisions and constraints, including decisions not yet
+   completely implemented.
+4. Protocol specifications define exact versioned external representations.
+5. Source code is implementation evidence, but its existence alone does not
+   make an accidental dependency an accepted design.
+6. Roadmaps and proposals are non-normative future intent.
+7. Historical audits are evidence about their recorded revision only.
+
+If documentation, tests, and implementation disagree, identify the discrepancy
+and update code, tests, or documentation within the task's authorized scope. If
+resolution changes architecture or materially expands scope, request direction.
+
+## Documentation routing
+
+After reading the architecture index and core invariants, load only the material
+relevant to the task:
+
+| Work area | Current architecture | Additional contracts |
+| --- | --- | --- |
+| Runtime schema and reflection | [Runtime Schema](../developing/runtime-schema/) | Core invariants |
+| Object identity and mutation | `devdocs/CurrentArchitecture/FoundationRuntime.md` and `MutationGateway.md` | Snapshot and loopback-replication documents |
+| Attributes | [Instance Attributes](../developing/instance-attributes/) | Runtime schema and mutation documents |
+| Tags and queries | [Instance Tags](../developing/instance-tags/) | Object lifecycle invariants |
+| Rendering | [Render Extraction](../developing/render-extraction/) | Core invariants |
+| Scripting and capabilities | `devdocs/CurrentArchitecture/ScriptSecurity.md` | Runtime-schema capability metadata |
+| EditorHost and Studio | [EditorHost](../developing/editor-host/) | EditorHost protocol, snapshot, journal, viewport, and security documents |
+| Game networking | Current implementation remains the loopback proof | [Game Networking Architecture](../developing/networking-architecture/) is accepted future direction |
+| Broad future design | Current subsystem documents first | [Future Architecture](../developing/future-architecture/) and the roadmap are non-current where marked future |
+
+The material under `devdocs/CurrentArchitecture/` is being reclassified
+gradually. Verify each file against the current implementation before treating
+all of its prose as current. The top-level audits began as an August 12, 2026
+snapshot and are historical evidence unless subsequently reverified.
+
+## Mandatory change rules
+
+Architecture-affecting code and its documentation are one change. Update the
+relevant current architecture, invariant, ADR, or protocol document when a
+change alters:
+
+- subsystem ownership or a cross-subsystem dependency;
+- object, resource, connection, or process lifecycle;
+- authority or mutation paths;
+- execution domains, capabilities, or security behavior;
+- thread, process, VM, or transport boundaries;
+- serialization, snapshot, journal, IPC, or network formats;
+- public API semantics or compatibility behavior;
+- identity, generation, scope, ordering, or cache invalidation;
+- resource limits, backpressure, failure, or cancellation semantics; or
+- architecture-level dependencies.
+
+Do not silently introduce new architecture. A new ownership model, authority
+path, process boundary, wire protocol, or foundational dependency normally
+requires an ADR or an explicit update to an accepted design document.
+
+## Core constraints
+
+The canonical list is in
+[`docs/invariants/Core.md`](../../../../invariants/Core.md). Key rules include:
+
+- The DataModel owns its live object graph and identity scope.
+- Stable identity never depends on memory address, name, or hierarchy path.
+- Stale generation-safe IDs never resolve to replacement objects.
+- Authoritative external mutations pass validation, authority checks, and the
+  mutation gateway.
+- Runtime schema publication is transactional and immutable after publication.
+- Schema metadata never grants privilege by name, namespace, or provenance.
+- Renderer and render passes consume immutable extracted state.
+- Studio holds a replicated document view and returns authoritative changes
+  through EditorHost.
+- Change-journal order is authoritative history, not a universal network
+  sequence.
+- Bounded inputs, queues, and failure behavior are part of every public boundary.
+
+## Change workflow
+
+1. Establish current behavior from tests, code, and current documentation.
+2. State which invariants and boundaries the change must preserve.
+3. Keep the implementation slice bounded and avoid opportunistic refactors.
+4. Add or update tests for behavior, denial paths, bounds, and lifecycle edges.
+5. Update affected architecture, invariant, ADR, or protocol documents.
+6. Run verification proportional to risk and record anything the environment
+   prevented from running.
+7. Review the final diff for unrelated files, generated artifacts, and stale claims.
+
+Never stage, discard, rewrite, or commit unrelated work. When another task is
+active in the same worktree, stage explicit paths only.
+
+## Definition of done
+
+A change is complete when:
+
+- the requested behavior is implemented;
+- relevant positive, negative, bound, and lifecycle tests pass;
+- architectural invariants still hold;
+- public or protocol failure behavior is explicit;
+- affected documentation is current;
+- obsolete claims are corrected or classified as historical;
+- verification limitations are reported; and
+- the final change set contains only intended files.
+
+For substantial pull requests, include an architecture-impact section covering
+ownership, lifecycle, serialization and wire formats, public API, security and
+capabilities, cross-subsystem dependencies, ADR requirements, and updated docs.

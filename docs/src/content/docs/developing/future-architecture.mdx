@@ -269,6 +269,10 @@ shared hosting never weakens the capability separation.
 
 ## Persistence, replication, and packages
 
+The detailed decisions for game replication, Luau remotes, sequence domains,
+scheduling, and transport are maintained in the
+[game networking architecture](./networking-architecture/).
+
 Networking, persistence, and Studio share the same logical state model: stable
 ObjectIds, deterministic snapshots, ordered journal records, a closed
 `WireValue` schema, explicit authority, and scope or world identity. Reflection
