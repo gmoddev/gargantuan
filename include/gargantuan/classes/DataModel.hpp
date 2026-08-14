@@ -3,6 +3,7 @@
 #include "gargantuan/classes/ServiceProvider.hpp"
 #include "gargantuan/classes/generated/DataModel.hpp"
 #include "gargantuan/filesystem/BaseFilesystem.hpp"
+#include "gargantuan/runtime/TagIndex.hpp"
 
 #include <filesystem>
 
@@ -14,5 +15,6 @@ namespace gargantuan {
 
 		std::filesystem::path Root;
 		BaseFilesystem *Filesystem = nullptr;
+		TagIndex Tags;
 	};
 }

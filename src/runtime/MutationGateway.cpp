@@ -1,5 +1,6 @@
 #include "gargantuan/runtime/MutationGateway.hpp"
 
+#include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Instance.hpp"
 #include "gargantuan/reflection/InstanceClassRegistry.hpp"
 #include "gargantuan/runtime/ExecutionDomain.hpp"
@@ -95,6 +96,15 @@ namespace gargantuan {
 								typedCommand.AttributeName, std::move(typedCommand.Value), securityContext
 							);
 							return {status, typedCommand.Object, status == MutationStatus::Success ? "" : "Attribute mutation rejected"};
+						} else if constexpr (std::is_same_v<Command, AddTagCommand> || std::is_same_v<Command, RemoveTagCommand>) {
+							auto dataModel = instance->GetDataModel();
+							if (!dataModel) return {MutationStatus::Rejected, std::nullopt, "Tag target is not owned by a DataModel"};
+							const auto scope = dataModel->GetObjectId();
+							if constexpr (std::is_same_v<Command, AddTagCommand>)
+								(void)dataModel->Tags.Add(scope, typedCommand.Object, typedCommand.TagName, securityContext);
+							else
+								(void)dataModel->Tags.Remove(scope, typedCommand.Object, typedCommand.TagName, securityContext);
+							return {MutationStatus::Success, typedCommand.Object, {}};
 						} else if constexpr (std::is_same_v<Command, ReparentObjectCommand>) {
 							std::shared_ptr<Instance> parent;
 							if (typedCommand.Parent) {

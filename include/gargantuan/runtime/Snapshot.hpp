@@ -14,7 +14,7 @@
 namespace gargantuan {
 	class Instance;
 
-	inline constexpr std::uint32_t SnapshotFormatVersion = 3;
+	inline constexpr std::uint32_t SnapshotFormatVersion = 4;
 
 	struct SnapshotObject {
 		WireObjectId Id;
@@ -23,6 +23,7 @@ namespace gargantuan {
 		std::optional<WireObjectId> Parent;
 		std::map<std::string, WireValue> Properties;
 		std::map<std::string, WireValue> Attributes;
+		std::vector<std::string> Tags;
 	};
 
 	struct Snapshot {

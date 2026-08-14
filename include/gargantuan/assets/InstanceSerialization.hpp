@@ -7,6 +7,7 @@
 #include <optional>
 #include <string_view>
 #include <utility>
+#include <unordered_map>
 #include <vector>
 
 namespace gargantuan::InstanceSerialization {
@@ -19,6 +20,7 @@ namespace gargantuan::InstanceSerialization {
 		std::vector<std::string> Errors;
 
 		std::vector<std::string> CurrentPath{"(TOP)"};
+		std::unordered_map<std::shared_ptr<gargantuan::Instance>, std::vector<std::string>> PendingTags;
 		std::string FormatCurrentPath();
 
 		template <class... Args> void PushError(std::format_string<Args...> fmt, Args &&...args) {

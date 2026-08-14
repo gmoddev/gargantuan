@@ -20,4 +20,4 @@ object references, functions, userdata, and native pointers are rejected.
 Attributes are persisted in project JSON, included in snapshots, represented by
 dedicated ordered `AttributeUpdate` journal records, and applied by loopback
 replication. Studio reads its replicated cache and sends edits through
-EditorHost; it never becomes authoritative. Tags are separate future work.
+EditorHost; it never becomes authoritative. Tags are a separate indexed dynamic-state system.

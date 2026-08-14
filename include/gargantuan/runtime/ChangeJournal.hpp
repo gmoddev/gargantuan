@@ -27,12 +27,16 @@ namespace gargantuan {
 		std::string AttributeName;
 		std::optional<WireValue> Value;
 	};
+	struct TagAddedChange { std::string TagName; };
+	struct TagRemovedChange { std::string TagName; };
 	struct ObjectReparentedChange { std::optional<ObjectId> Parent; };
 	struct ObjectDestroyedChange {};
 	using ChangePayload = std::variant<
 		ObjectCreatedChange,
 		PropertyUpdatedChange,
 		AttributeUpdatedChange,
+		TagAddedChange,
+		TagRemovedChange,
 		ObjectReparentedChange,
 		ObjectDestroyedChange
 	>;

@@ -17,6 +17,7 @@
 #include "gargantuan/runtime/MutationGateway.hpp"
 #include "gargantuan/runtime/ObjectId.hpp"
 #include "gargantuan/runtime/Snapshot.hpp"
+#include "gargantuan/runtime/TagIndex.hpp"
 #include "gargantuan/runtime/WireJournal.hpp"
 #include "gargantuan/reflection/RuntimeSchema.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
@@ -1333,6 +1334,152 @@ namespace {
 		Check(journal.ReadSince(0).empty(), "stale attribute target produces no journal record");
 	}
 
+	void TestInstanceTags() {
+		using namespace gargantuan;
+		auto &journal = ChangeJournal::Get();
+		journal.Clear();
+		auto game = std::make_shared<DataModel>();
+		game->SetArchivable(true);
+		auto first = std::make_shared<Folder>();
+		auto second = std::make_shared<Folder>();
+		auto third = std::make_shared<Folder>();
+		first->SetName("FirstTagged");
+		second->SetName("SecondTagged");
+		third->SetName("ThirdTagged");
+		first->SetParent(game);
+		second->SetParent(game);
+		third->SetParent(game);
+		const auto scope = game->GetObjectId();
+		const auto firstId = first->GetObjectId();
+		const auto secondId = second->GetObjectId();
+		const auto thirdId = third->GetObjectId();
+		const auto schemaGeneration = GetRuntimeSchemaLifecycle().GetActiveGeneration();
+		auto *tagsSchema = InstanceClassRegistry::GetDefinitionByName("Tags");
+		Check(tagsSchema && tagsSchema->AllMethods.contains("GetTagged") && tagsSchema->AllMethods.contains("GetTaggedAll"),
+			"frozen schema describes the bounded Tags service API");
+		Check(game->GetService("Tags")->GetClassName() == "Tags", "DataModel constructs the scoped Tags service from frozen schema");
+
+		MutationGateway gateway;
+		journal.Clear();
+		auto cursor = journal.CreateCursor(scope);
+		auto RecordCount = [&] { return journal.Read(cursor).Records.size(); };
+		Check(gateway.Apply(AddTagCommand{firstId, "Enemy"}).Succeeded(), "tag add succeeds through MutationGateway");
+		Check(gateway.Apply(AddTagCommand{secondId, "Enemy"}).Succeeded() &&
+			gateway.Apply(AddTagCommand{secondId, "Alive"}).Succeeded() &&
+			gateway.Apply(AddTagCommand{thirdId, "Alive"}).Succeeded(), "multiple bounded memberships are accepted");
+		Check(game->Tags.Has(scope, firstId, "Enemy", ScriptSecurityContext::CoreTrusted()), "tag membership lookup succeeds");
+		Check(game->Tags.GetTags(scope, secondId, ScriptSecurityContext::CoreTrusted()) == std::vector<std::string>({"Alive", "Enemy"}),
+			"object-side tags enumerate in deterministic name order");
+		auto expectedEnemies = std::vector<ObjectId>({firstId, secondId});
+		std::sort(expectedEnemies.begin(), expectedEnemies.end());
+		Check(game->Tags.GetTagged(scope, "Enemy", ScriptSecurityContext::CoreTrusted()) == expectedEnemies,
+			"reverse query returns deterministic ObjectId order");
+		Check(game->Tags.GetTaggedAll(scope, {"Enemy", "Alive"}, ScriptSecurityContext::CoreTrusted()) == std::vector<ObjectId>({secondId}),
+			"multi-tag query intersects indexed candidate sets");
+		Check(game->Tags.GetTagged(scope, "Unknown", ScriptSecurityContext::CoreTrusted()).empty(), "unknown tag query is empty");
+		auto otherGame = std::make_shared<DataModel>();
+		auto foreign = std::make_shared<Folder>();
+		foreign->SetParent(otherGame);
+		Check(gateway.Apply(AddTagCommand{foreign->GetObjectId(), "Enemy"}).Succeeded() &&
+			otherGame->Tags.GetTagged(otherGame->GetObjectId(), "Enemy", ScriptSecurityContext::CoreTrusted()) ==
+				std::vector<ObjectId>({foreign->GetObjectId()}) &&
+			game->Tags.GetTagged(scope, "Enemy", ScriptSecurityContext::CoreTrusted()) == expectedEnemies,
+			"tag indexes remain isolated between DataModels");
+		const auto recordsBeforeNoOps = RecordCount();
+		Check(gateway.Apply(AddTagCommand{firstId, "Enemy"}).Succeeded() &&
+			gateway.Apply(RemoveTagCommand{firstId, "Absent"}).Succeeded() && RecordCount() == recordsBeforeNoOps,
+			"duplicate add and absent remove are journal-free no-ops");
+
+		auto ExpectRejected = [&](MutationCommand command, const char *message) {
+			const auto before = game->Tags.GetTags(scope, firstId, ScriptSecurityContext::CoreTrusted());
+			const auto records = RecordCount();
+			Check(!gateway.Apply(std::move(command)).Succeeded() &&
+				game->Tags.GetTags(scope, firstId, ScriptSecurityContext::CoreTrusted()) == before && RecordCount() == records, message);
+		};
+		ExpectRejected(AddTagCommand{firstId, ""}, "empty tag is rejected atomically");
+		ExpectRejected(AddTagCommand{firstId, std::string(MaximumTagNameBytes + 1, 'x')}, "oversized tag is rejected atomically");
+		ExpectRejected(AddTagCommand{firstId, std::string("\xc3\x28", 2)}, "malformed UTF-8 tag is rejected atomically");
+
+		auto counted = std::make_shared<Folder>();
+		counted->SetParent(game);
+		const auto countedId = counted->GetObjectId();
+		for (std::size_t index = 0; index < MaximumTagsPerInstance; ++index)
+			Check(gateway.Apply(AddTagCommand{countedId, "Tag" + std::to_string(index)}).Succeeded(), "tags up to the per-object limit are accepted");
+		Check(!gateway.Apply(AddTagCommand{countedId, "Overflow"}).Succeeded() &&
+			game->Tags.GetTags(scope, countedId, ScriptSecurityContext::CoreTrusted()).size() == MaximumTagsPerInstance,
+			"per-object tag limit rejection preserves prior membership");
+
+		ScriptSecurityContext readOnly{ScriptExecutionDomain::Studio, {ScriptCapability::ReadDataModel}};
+		ScriptSecurityContext writeOnly{ScriptExecutionDomain::Studio, {ScriptCapability::MutateDataModel}};
+		Check(gateway.Apply(AddTagCommand{thirdId, "Denied"}, readOnly).Status == MutationStatus::Unauthorized,
+			"tag mutation requires MutateDataModel");
+		CheckThrows<std::runtime_error>([&] { (void)game->Tags.GetTagged(scope, "Alive", writeOnly); },
+			"tag query requires ReadDataModel");
+		Check(GetRuntimeSchemaLifecycle().GetActiveGeneration() == schemaGeneration,
+			"tag changes do not alter frozen schema generation");
+
+		std::shared_ptr<Instance> persistenceRoot = game;
+		auto serialized = InstanceSerialization::Serialize(InstanceSerialization::InstanceFormat::Json, persistenceRoot);
+		Check(serialized == InstanceSerialization::Serialize(InstanceSerialization::InstanceFormat::Json, persistenceRoot),
+			"tag persistence is deterministic");
+		std::istringstream persistedInput(serialized);
+		auto deserialized = InstanceSerialization::Deserialize(InstanceSerialization::InstanceFormat::Json, persistedInput);
+		Check(deserialized.Ok, "tag project persistence round-trips");
+		auto loadedGame = std::dynamic_pointer_cast<DataModel>(deserialized.Instance);
+		auto loadedFirst = loadedGame ? loadedGame->FindFirstChild("FirstTagged", false) : nullptr;
+		Check(loadedGame && loadedFirst && loadedGame->Tags.Has(loadedGame->GetObjectId(), loadedFirst->GetObjectId(), "Enemy", ScriptSecurityContext::CoreTrusted()),
+			"deserialization rebuilds the reverse tag index");
+		auto malformed = nlohmann::ordered_json::parse(serialized);
+		for (auto &child : malformed["Children"]) if (child["Name"] == "FirstTagged") child["Tags"] = {"Enemy", "Enemy"};
+		std::istringstream malformedInput(malformed.dump());
+		Check(!InstanceSerialization::Deserialize(InstanceSerialization::InstanceFormat::Json, malformedInput).Ok,
+			"duplicate persisted tag membership is rejected");
+
+		auto snapshot = CaptureSnapshot(game);
+		auto snapshotFirst = std::find_if(snapshot.Objects.begin(), snapshot.Objects.end(), [](const SnapshotObject &object) { return object.Name == "FirstTagged"; });
+		Check(snapshotFirst != snapshot.Objects.end() && snapshotFirst->Tags == std::vector<std::string>({"Enemy"}),
+			"snapshot captures canonical tag membership");
+		auto parsed = DeserializeSnapshot(SerializeSnapshot(snapshot));
+		Check(parsed.Succeeded() && LoadSnapshot(*parsed.Value).Succeeded(), "tag snapshot parses and rebuilds indexes");
+
+		auto sessionStart = InProcessReplicationSession::Start(game);
+		Check(sessionStart.Succeeded(), "tag replication starts from snapshot membership");
+		auto receiverGame = sessionStart.Session ? std::dynamic_pointer_cast<DataModel>(sessionStart.Session->GetReceiverRoot()) : nullptr;
+		auto receiverFirst = receiverGame ? receiverGame->FindFirstChild("FirstTagged", false) : nullptr;
+		Check(receiverGame && receiverFirst && receiverGame->Tags.Has(receiverGame->GetObjectId(), receiverFirst->GetObjectId(), "Enemy", ScriptSecurityContext::CoreTrusted()),
+			"initial tag membership replicates");
+		Check(gateway.Apply(AddTagCommand{firstId, "Boss"}).Succeeded() && sessionStart.Session->ApplyAvailable().Succeeded(),
+			"tag add replicates through the ordered journal");
+		Check(receiverGame->Tags.Has(receiverGame->GetObjectId(), receiverFirst->GetObjectId(), "Boss", ScriptSecurityContext::CoreTrusted()),
+			"receiver reverse index observes replicated add");
+		Check(gateway.Apply(RemoveTagCommand{firstId, "Boss"}).Succeeded() && sessionStart.Session->ApplyAvailable().Succeeded() &&
+			!receiverGame->Tags.Has(receiverGame->GetObjectId(), receiverFirst->GetObjectId(), "Boss", ScriptSecurityContext::CoreTrusted()),
+			"tag removal replicates");
+
+		auto ancestor = std::make_shared<Folder>();
+		auto descendant = std::make_shared<Folder>();
+		ancestor->SetParent(game);
+		descendant->SetParent(ancestor);
+		const auto descendantId = descendant->GetObjectId();
+		Check(gateway.Apply(AddTagCommand{descendantId, "Temporary"}).Succeeded(), "descendant tag fixture is indexed");
+		ancestor->Destroy();
+		Check(game->Tags.GetTagged(scope, "Temporary", ScriptSecurityContext::CoreTrusted()).empty(),
+			"ancestor destruction removes descendant reverse entries");
+
+		first->Destroy();
+		auto replacement = std::make_shared<Folder>();
+		replacement->SetParent(game);
+		const auto replacementId = replacement->GetObjectId();
+		Check(replacementId.Slot == firstId.Slot && replacementId.Generation != firstId.Generation &&
+			!game->Tags.Has(scope, replacementId, "Enemy", ScriptSecurityContext::CoreTrusted()),
+			"generation-reused slots do not inherit old tags");
+		Check(sessionStart.Session->ApplyAvailable().Succeeded(), "tagged destroy and subsequent generation-safe create replicate");
+		Check(game->Tags.GetTagged(scope, "Enemy", ScriptSecurityContext::CoreTrusted()) == std::vector<ObjectId>({secondId}),
+			"destroy removes authoritative reverse membership");
+		Check(receiverGame->Tags.GetTagged(receiverGame->GetObjectId(), "Enemy", ScriptSecurityContext::CoreTrusted()).size() == 1,
+			"receiver query cannot return destroyed membership");
+	}
+
 	void TestEditorHostProtocol() {
 		using Json = nlohmann::ordered_json;
 		using namespace gargantuan;
@@ -1473,6 +1620,19 @@ namespace {
 			auto rejectedAttributeChanges = call("PollChanges", Json::object(), "test-token");
 			Check(rejectedAttributeChanges["Ok"].get<bool>() && rejectedAttributeChanges["Result"]["Records"].empty(),
 				"rejected EditorHost attribute mutation emits no journal record");
+			auto addTag = call("AddTag", {{"Object", (*editable)["Id"]}, {"Tag", "Enemy"}}, "test-token");
+			Check(addTag["Ok"].get<bool>(), "EditorHost applies tag addition through the mutation gateway");
+			auto tagAdded = call("PollChanges", Json::object(), "test-token");
+			Check(tagAdded["Ok"].get<bool>() && tagAdded["Result"]["Records"].size() == 1 &&
+				tagAdded["Result"]["Records"][0]["Operation"] == "TagAdded" &&
+				tagAdded["Result"]["Records"][0]["TagName"] == "Enemy",
+				"EditorHost publishes one semantic TagAdded record");
+			auto removeTag = call("RemoveTag", {{"Object", (*editable)["Id"]}, {"Tag", "Enemy"}}, "test-token");
+			Check(removeTag["Ok"].get<bool>(), "EditorHost applies tag removal through the mutation gateway");
+			auto tagRemoved = call("PollChanges", Json::object(), "test-token");
+			Check(tagRemoved["Ok"].get<bool>() && tagRemoved["Result"]["Records"].size() == 1 &&
+				tagRemoved["Result"]["Records"][0]["Operation"] == "TagRemoved",
+				"EditorHost publishes one semantic TagRemoved record");
 		}
 
 		auto captureBeforeConfiguration = call("CaptureViewport", Json::object(), "test-token");
@@ -1563,6 +1723,7 @@ int main() {
 	TestScriptSecurityModel();
 	TestMutationGateway();
 	TestInstanceAttributes();
+	TestInstanceTags();
 	TestBoundedJournalCursor();
 	TestSnapshotBaseline();
 	TestWireJournalAndLoopbackReplication();

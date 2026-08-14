@@ -2,6 +2,7 @@
 
 #include "gargantuan/runtime/WireCodec.hpp"
 #include "gargantuan/runtime/AttributeValidation.hpp"
+#include "gargantuan/runtime/TagIndex.hpp"
 
 #include <stdexcept>
 #include <type_traits>
@@ -13,6 +14,8 @@ namespace gargantuan {
 				case WireJournalOperation::Create: return "Create";
 				case WireJournalOperation::PropertyUpdate: return "PropertyUpdate";
 				case WireJournalOperation::AttributeUpdate: return "AttributeUpdate";
+				case WireJournalOperation::TagAdded: return "TagAdded";
+				case WireJournalOperation::TagRemoved: return "TagRemoved";
 				case WireJournalOperation::Reparent: return "Reparent";
 				case WireJournalOperation::Destroy: return "Destroy";
 			}
@@ -23,6 +26,8 @@ namespace gargantuan {
 			if (operation == "Create") return WireJournalOperation::Create;
 			if (operation == "PropertyUpdate") return WireJournalOperation::PropertyUpdate;
 			if (operation == "AttributeUpdate") return WireJournalOperation::AttributeUpdate;
+			if (operation == "TagAdded") return WireJournalOperation::TagAdded;
+			if (operation == "TagRemoved") return WireJournalOperation::TagRemoved;
 			if (operation == "Reparent") return WireJournalOperation::Reparent;
 			if (operation == "Destroy") return WireJournalOperation::Destroy;
 			return std::nullopt;
@@ -61,6 +66,12 @@ namespace gargantuan {
 					encoded.Operation = WireJournalOperation::AttributeUpdate;
 					encoded.AttributeName = payload.AttributeName;
 					encoded.Value = payload.Value.value_or(WireValue(std::monostate{}));
+				} else if constexpr (std::is_same_v<Payload, TagAddedChange>) {
+					encoded.Operation = WireJournalOperation::TagAdded;
+					encoded.TagName = payload.TagName;
+				} else if constexpr (std::is_same_v<Payload, TagRemovedChange>) {
+					encoded.Operation = WireJournalOperation::TagRemoved;
+					encoded.TagName = payload.TagName;
 				} else if constexpr (std::is_same_v<Payload, ObjectReparentedChange>) {
 					encoded.Operation = WireJournalOperation::Reparent;
 					if (payload.Parent) encoded.Parent = WireObjectId::FromObjectId(*payload.Parent);
@@ -94,6 +105,10 @@ namespace gargantuan {
 				case WireJournalOperation::AttributeUpdate:
 					encoded["AttributeName"] = record.AttributeName.value_or("");
 					encoded["Value"] = record.Value ? EncodeWireValue(*record.Value) : WireJson(nullptr);
+					break;
+				case WireJournalOperation::TagAdded:
+				case WireJournalOperation::TagRemoved:
+					encoded["TagName"] = record.TagName.value_or("");
 					break;
 				case WireJournalOperation::Reparent:
 					encoded["ParentId"] = record.Parent ? EncodeWireObjectId(*record.Parent) : WireJson(nullptr);
@@ -169,6 +184,14 @@ namespace gargantuan {
 						record.Value = std::move(*value);
 						break;
 					}
+					case WireJournalOperation::TagAdded:
+					case WireJournalOperation::TagRemoved:
+						if (!HasOnlyFields(encoded, {"Version", "Sequence", "Scope", "Operation", "ObjectId", "TagName"}) ||
+							!encoded.contains("TagName") || !encoded["TagName"].is_string())
+							throw std::invalid_argument("Invalid tag journal record");
+						record.TagName = encoded["TagName"].get<std::string>();
+						ValidateTagName(*record.TagName);
+						break;
 					case WireJournalOperation::Reparent:
 						if (!HasOnlyFields(encoded, {"Version", "Sequence", "Scope", "Operation", "ObjectId", "ParentId"}) ||
 							!encoded.contains("ParentId"))

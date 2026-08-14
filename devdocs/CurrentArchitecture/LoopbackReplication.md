@@ -2,8 +2,8 @@
 
 ## Implemented now
 
-`WireJournalRecord` version 3 is the incremental companion to snapshot version
-3. Every record carries a nonzero per-scope sequence, a generation-checked
+`WireJournalRecord` version 4 is the incremental companion to snapshot version
+4. Every record carries a nonzero per-scope sequence, a generation-checked
 scope/world `WireObjectId`, an object `WireObjectId`, and exactly one operation
 shape:
 
@@ -12,6 +12,7 @@ shape:
 | `Create` | class name |
 | `PropertyUpdate` | property name and `WireValue` |
 | `AttributeUpdate` | attribute name and `WireValue`; `Null` removes |
+| `TagAdded` / `TagRemoved` | bounded tag name |
 | `Reparent` | nullable parent `WireObjectId` |
 | `Destroy` | no additional payload |
 
@@ -42,7 +43,7 @@ in the old stream and a complete publication in the new stream.
 ```text
 authoritative source hierarchy
   -> capture snapshot and cursor N
-  -> serialize and parse snapshot version 3
+  -> serialize and parse snapshot version 4
   -> materialize separate receiver objects
   -> consume source records N, N+1, ...
   -> encode, serialize, parse, and apply wire journal records

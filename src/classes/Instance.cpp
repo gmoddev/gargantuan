@@ -1,4 +1,5 @@
 #include "gargantuan/classes/Instance.hpp"
+#include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/InstanceProperty.hpp"
 #include "gargantuan/datatypes/Signal.hpp"
 #include "gargantuan/scripting/Userdata.hpp"
@@ -130,11 +131,12 @@ namespace gargantuan {
 		if (Destroyed || DestroyingState) return;
 		DestroyingState = true;
 		Destroyed = true;
+		const auto objectId = GetObjectId();
+		const auto scope = GetReplicationScopeId();
+		if (auto dataModel = GetDataModel()) dataModel->Tags.RemoveAll(scope, objectId);
 		Attributes.clear();
 		AttributeChangedSignals.clear();
-		const auto objectId = GetObjectId();
 		ObjectRegistry::Get().Invalidate(objectId);
-		const auto scope = GetReplicationScopeId();
 		ChangeJournal::Get().Commit(scope, objectId, PropertyUpdatedChange{"Destroyed", true, true});
 		GetPropertyChangedSignal("Destroyed")->Fire({});
 
@@ -182,6 +184,12 @@ namespace gargantuan {
 		return definition && definition->ClassName == "DataModel" ? root->GetObjectId() : ObjectId{};
 	}
 
+	std::shared_ptr<DataModel> Instance::GetDataModel() const {
+		std::shared_ptr<Instance> root = const_cast<Instance *>(this)->shared_from_this();
+		while (auto parent = root->ParentReference.lock()) root = std::move(parent);
+		return std::dynamic_pointer_cast<DataModel>(root);
+	}
+
 	void Instance::PublishReplicationSubtree(ObjectId scope) {
 		if (!scope.IsValid()) return;
 		auto *definition = InstanceClassRegistry::GetDefinition(this);
@@ -206,6 +214,10 @@ namespace gargantuan {
 			objectId,
 			ObjectReparentedChange{parent ? std::optional(parent->GetObjectId()) : std::nullopt}
 		);
+		if (auto dataModel = GetDataModel()) {
+			for (const auto &name : dataModel->Tags.GetTags(scope, objectId, ScriptSecurityContext::CoreTrusted()))
+				ChangeJournal::Get().Commit(scope, objectId, TagAddedChange{name});
+		}
 		for (const auto &child : Children) child->PublishReplicationSubtree(scope);
 	}
 
@@ -380,6 +392,10 @@ namespace gargantuan {
 		}
 		const auto oldScope = GetReplicationScopeId();
 		const auto newScope = newParent ? newParent->GetReplicationScopeId() : ObjectId{};
+		const auto objectId = GetObjectId();
+		if (!DestroyingState && oldScope != newScope) {
+			if (auto oldDataModel = GetDataModel()) oldDataModel->Tags.RemoveAll(oldScope, objectId);
+		}
 
 		// This whole subtree leaves the old ancestry and joins the new one, so
 		// collect it once up front and reuse it for both sets of signals
@@ -399,7 +415,6 @@ namespace gargantuan {
 			newParent->Children.push_back(self);
 		}
 
-		const auto objectId = GetObjectId();
 		const auto newParentId = newParent ? std::optional(newParent->GetObjectId()) : std::nullopt;
 		if (!DestroyingState) {
 			if (oldScope == newScope) {

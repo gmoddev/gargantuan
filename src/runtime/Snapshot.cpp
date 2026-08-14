@@ -1,6 +1,7 @@
 #include "gargantuan/runtime/Snapshot.hpp"
 
 #include "gargantuan/classes/Instance.hpp"
+#include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/datatypes/CFrame.hpp"
 #include "gargantuan/datatypes/Color3.hpp"
 #include "gargantuan/datatypes/Enum.hpp"
@@ -15,6 +16,7 @@
 #include <any>
 #include <nlohmann/json.hpp>
 #include <stdexcept>
+#include <set>
 #include <unordered_set>
 
 namespace gargantuan {
@@ -72,6 +74,8 @@ namespace gargantuan {
 		for (const auto &instance : instances)
 			ids.emplace(instance.get(), WireObjectId::FromObjectId(instance->GetObjectId()));
 
+		auto dataModel = std::dynamic_pointer_cast<DataModel>(root);
+		if (!dataModel) throw std::runtime_error("Snapshot root must be a DataModel");
 		Snapshot snapshot;
 		for (const auto &instance : instances) {
 			auto *definition = InstanceClassRegistry::GetDefinition(instance.get());
@@ -112,6 +116,7 @@ namespace gargantuan {
 			}
 			object.Attributes = instance->GetAttributeValues(ScriptSecurityContext::CoreTrusted());
 			(void)ValidateAttributeCollection(object.Attributes);
+			object.Tags = dataModel->Tags.GetTags(dataModel->GetObjectId(), instance->GetObjectId(), ScriptSecurityContext::CoreTrusted());
 			snapshot.Objects.push_back(std::move(object));
 		}
 		const auto scope = root->GetReplicationScopeId();
@@ -139,6 +144,7 @@ namespace gargantuan {
 			for (const auto &[name, value] : object.Properties) encoded["Properties"][name] = EncodeValue(value);
 			encoded["Attributes"] = Json::object();
 			for (const auto &[name, value] : object.Attributes) encoded["Attributes"][name] = EncodeValue(value);
+			encoded["Tags"] = object.Tags;
 			document["Objects"].push_back(std::move(encoded));
 		}
 		return document.dump();
@@ -180,7 +186,8 @@ namespace gargantuan {
 				if (!encoded.is_object() || !encoded.contains("Id") || !encoded.contains("ClassName") ||
 					!encoded["ClassName"].is_string() || !encoded.contains("Name") || !encoded["Name"].is_string() ||
 					!encoded.contains("Parent") || !encoded.contains("Properties") || !encoded["Properties"].is_object() ||
-					!encoded.contains("Attributes") || !encoded["Attributes"].is_object()) {
+					!encoded.contains("Attributes") || !encoded["Attributes"].is_object() ||
+					!encoded.contains("Tags") || !encoded["Tags"].is_array()) {
 					result.Errors.push_back("Invalid snapshot object");
 					return result;
 				}
@@ -222,6 +229,15 @@ namespace gargantuan {
 					object.Attributes.emplace(name, std::move(*value));
 				}
 				(void)ValidateAttributeCollection(object.Attributes);
+				std::set<std::string> uniqueTags;
+				for (const auto &tag : encoded["Tags"]) {
+					if (!tag.is_string()) throw std::invalid_argument("Snapshot tag is not a string");
+					auto name = tag.get<std::string>();
+					ValidateTagName(name);
+					if (!uniqueTags.insert(name).second) throw std::invalid_argument("Snapshot contains duplicate tags");
+					if (uniqueTags.size() > MaximumTagsPerInstance) throw std::invalid_argument("Snapshot exceeds the per-Instance tag limit");
+				}
+				object.Tags.assign(uniqueTags.begin(), uniqueTags.end());
 				snapshot.Objects.push_back(std::move(object));
 			}
 			result.Value = std::move(snapshot);
@@ -281,6 +297,8 @@ namespace gargantuan {
 				instance->SetParent(parent);
 			}
 			if (rootCount != 1) throw std::runtime_error("Snapshot must contain exactly one root");
+			auto dataModel = std::dynamic_pointer_cast<DataModel>(result.Root);
+			if (!dataModel) throw std::runtime_error("Snapshot root is not a DataModel");
 
 			for (const auto &object : snapshot.Objects) {
 				auto instance = result.Resolve(object.Id);
@@ -318,6 +336,8 @@ namespace gargantuan {
 						MutationStatus::Success)
 						throw std::runtime_error("Snapshot attribute value was rejected");
 				}
+				for (const auto &tag : object.Tags)
+					(void)dataModel->Tags.Add(dataModel->GetObjectId(), instance->GetObjectId(), tag, ScriptSecurityContext::CoreTrusted());
 			}
 		} catch (const std::exception &error) {
 			result.Errors.push_back(error.what());

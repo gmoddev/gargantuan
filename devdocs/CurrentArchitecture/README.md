@@ -10,6 +10,8 @@
   primitive resources.
 - [Instance attributes](InstanceAttributes.md) defines bounded dynamic state,
   authority, persistence, journal, replication, and Studio contracts.
+- [Instance tags](InstanceTags.md) defines scoped indexed membership,
+  lifecycle cleanup, deterministic queries, and state-transfer contracts.
 
 See [Runtime foundation](./FoundationRuntime.md) for the implemented ownership,
 ObjectId, JobSystem, execution-domain, reflection-schema, and committed-change

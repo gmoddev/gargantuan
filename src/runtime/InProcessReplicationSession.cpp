@@ -2,6 +2,7 @@
 
 #include "gargantuan/InstanceProperty.hpp"
 #include "gargantuan/classes/Instance.hpp"
+#include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/datatypes/Enum.hpp"
 #include "gargantuan/reflection/InstanceClassRegistry.hpp"
 #include "gargantuan/runtime/ExecutionDomain.hpp"
@@ -181,8 +182,8 @@ namespace gargantuan {
 		ScopedChangeJournalSuppression suppressReceiverChanges;
 		try {
 			switch (record.Operation) {
-				case WireJournalOperation::Create: {
-					if (!record.ClassName || record.Parent || record.PropertyName || record.AttributeName || record.Value ||
+			case WireJournalOperation::Create: {
+					if (!record.ClassName || record.Parent || record.PropertyName || record.AttributeName || record.TagName || record.Value ||
 						Receiver.Objects.contains(record.Object))
 						return {ReplicationApplyStatus::MalformedRecord, 0, "Invalid or duplicate Create record"};
 					auto *definition = InstanceClassRegistry::GetDefinitionByName(*record.ClassName);
@@ -195,21 +196,35 @@ namespace gargantuan {
 					break;
 				}
 				case WireJournalOperation::PropertyUpdate: {
-					if (record.Parent || record.ClassName || record.AttributeName)
+					if (record.Parent || record.ClassName || record.AttributeName || record.TagName)
 						return {ReplicationApplyStatus::MalformedRecord, 0, "PropertyUpdate contains unrelated metadata"};
 					auto instance = ResolveReceiver(record.Object);
 					if (!instance) return {ReplicationApplyStatus::ApplyRejected, 0, "Property target is stale or missing"};
 					return ApplyProperty(record, instance);
 				}
 				case WireJournalOperation::AttributeUpdate: {
-					if (record.Parent || record.ClassName || record.PropertyName)
+					if (record.Parent || record.ClassName || record.PropertyName || record.TagName)
 						return {ReplicationApplyStatus::MalformedRecord, 0, "AttributeUpdate contains unrelated metadata"};
 					auto instance = ResolveReceiver(record.Object);
 					if (!instance) return {ReplicationApplyStatus::ApplyRejected, 0, "Attribute target is stale or missing"};
 					return ApplyAttribute(record, instance);
 				}
+				case WireJournalOperation::TagAdded:
+				case WireJournalOperation::TagRemoved: {
+					if (record.Parent || record.ClassName || record.PropertyName || record.AttributeName || record.Value || !record.TagName)
+						return {ReplicationApplyStatus::MalformedRecord, 0, "Tag record contains invalid metadata"};
+					auto instance = ResolveReceiver(record.Object);
+					if (!instance) return {ReplicationApplyStatus::ApplyRejected, 0, "Tag target is stale or missing"};
+					auto dataModel = std::dynamic_pointer_cast<DataModel>(Receiver.Root);
+					if (!dataModel) return {ReplicationApplyStatus::ApplyRejected, 0, "Receiver root is not a DataModel"};
+					if (record.Operation == WireJournalOperation::TagAdded)
+						(void)dataModel->Tags.Add(dataModel->GetObjectId(), instance->GetObjectId(), *record.TagName, ScriptSecurityContext::CoreTrusted());
+					else
+						(void)dataModel->Tags.Remove(dataModel->GetObjectId(), instance->GetObjectId(), *record.TagName, ScriptSecurityContext::CoreTrusted());
+					break;
+				}
 				case WireJournalOperation::Reparent: {
-					if (record.ClassName || record.PropertyName || record.AttributeName || record.Value)
+					if (record.ClassName || record.PropertyName || record.AttributeName || record.TagName || record.Value)
 						return {ReplicationApplyStatus::MalformedRecord, 0, "Reparent contains unrelated metadata"};
 					auto instance = ResolveReceiver(record.Object);
 					if (!instance) return {ReplicationApplyStatus::ResnapshotRequired, 0, "Reparent target predates the snapshot"};
@@ -226,7 +241,7 @@ namespace gargantuan {
 					break;
 				}
 				case WireJournalOperation::Destroy: {
-					if (record.Parent || record.ClassName || record.PropertyName || record.AttributeName || record.Value)
+					if (record.Parent || record.ClassName || record.PropertyName || record.AttributeName || record.TagName || record.Value)
 						return {ReplicationApplyStatus::MalformedRecord, 0, "Destroy contains unrelated metadata"};
 					auto instance = ResolveReceiver(record.Object);
 					if (!instance) return {ReplicationApplyStatus::ApplyRejected, 0, "Destroy target is stale or missing"};

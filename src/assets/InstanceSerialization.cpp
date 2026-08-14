@@ -1,6 +1,7 @@
 #include "gargantuan/assets/InstanceSerialization.hpp"
 #include "gargantuan/Log.hpp"
 #include "gargantuan/classes/Instance.hpp"
+#include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/datatypes/CFrame.hpp"
 #include "gargantuan/datatypes/Color3.hpp"
 #include "gargantuan/datatypes/Enum.hpp"
@@ -8,6 +9,7 @@
 #include "gargantuan/datatypes/Vector2.hpp"
 #include "gargantuan/reflection/InstanceClassRegistry.hpp"
 #include "gargantuan/runtime/AttributeValidation.hpp"
+#include "gargantuan/runtime/TagIndex.hpp"
 #include "gargantuan/runtime/WireCodec.hpp"
 
 #include <SDL3/SDL_log.h>
@@ -17,6 +19,7 @@
 #include <nlohmann/json.hpp>
 #include <nlohmann/json_fwd.hpp>
 #include <optional>
+#include <set>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -138,6 +141,10 @@ namespace gargantuan::InstanceSerialization {
 			serialized["Attributes"] = json::object();
 			for (const auto &[name, value] : instance->GetAttributeValues(ScriptSecurityContext::CoreTrusted()))
 				serialized["Attributes"][name] = EncodeWireValue(value);
+			serialized["Tags"] = json::array();
+			if (auto dataModel = instance->GetDataModel())
+				for (const auto &tag : dataModel->Tags.GetTags(dataModel->GetObjectId(), instance->GetObjectId(), ScriptSecurityContext::CoreTrusted()))
+					serialized["Tags"].push_back(tag);
 			serialized["Children"] = children;
 
 			state.InstanceMap.emplace(instance, serialized);
@@ -150,7 +157,7 @@ namespace gargantuan::InstanceSerialization {
 		case InstanceFormat::Json: {
 			Json::SerializationState state;
 			auto serialized = Json::SerializeInstance(instance, state);
-			serialized["Version"] = 1;
+			serialized["Version"] = 2;
 			return serialized.dump();
 		}
 		default: {
@@ -330,7 +337,8 @@ namespace gargantuan::InstanceSerialization {
 	std::optional<std::shared_ptr<Instance>> TryDeserializeInstance(
 		json contents,
 		DeserializationState &state,
-		bool requireAttributes
+		bool requireAttributes,
+		bool requireTags
 	) {
 		auto name = contents["Name"];
 		if (!name.is_string()) {
@@ -352,6 +360,15 @@ namespace gargantuan::InstanceSerialization {
 		auto attributes = contents.contains("Attributes") ? contents["Attributes"] : json::object();
 		if (!attributes.is_object()) {
 			state.PushError("Instance {} has an invalid Attributes field", state.FormatCurrentPath());
+			return std::nullopt;
+		}
+		if (requireTags && (!contents.contains("Tags") || !contents["Tags"].is_array())) {
+			state.PushError("Instance {} has an invalid Tags field", state.FormatCurrentPath());
+			return std::nullopt;
+		}
+		auto tags = contents.contains("Tags") ? contents["Tags"] : json::array();
+		if (!tags.is_array()) {
+			state.PushError("Instance {} has an invalid Tags field", state.FormatCurrentPath());
 			return std::nullopt;
 		}
 
@@ -452,9 +469,23 @@ namespace gargantuan::InstanceSerialization {
 			instance->Destroy();
 			return state.ReturnError("Failed to deserialize attributes in {}: {}", state.FormatCurrentPath(), error.what());
 		}
+		try {
+			std::set<std::string> decodedTags;
+			for (const auto &encoded : tags) {
+				if (!encoded.is_string()) throw std::invalid_argument("Tag is not a string");
+				auto tag = encoded.get<std::string>();
+				ValidateTagName(tag);
+				if (!decodedTags.insert(std::move(tag)).second) throw std::invalid_argument("Duplicate tag membership");
+				if (decodedTags.size() > MaximumTagsPerInstance) throw std::invalid_argument("Instance exceeds its tag count limit");
+			}
+			state.PendingTags.emplace(instance, std::vector<std::string>(decodedTags.begin(), decodedTags.end()));
+		} catch (const std::exception &error) {
+			instance->Destroy();
+			return state.ReturnError("Failed to deserialize tags in {}: {}", state.FormatCurrentPath(), error.what());
+		}
 
 		for (auto &child : children) {
-			auto maybeChild = TryDeserializeInstance(child, state, requireAttributes);
+			auto maybeChild = TryDeserializeInstance(child, state, requireAttributes, requireTags);
 			if (maybeChild.has_value()) {
 				maybeChild.value()->SetParent(instance);
 			} else {
@@ -493,15 +524,27 @@ namespace gargantuan::InstanceSerialization {
 			}
 
 			if (!contents.contains("Version") || !contents["Version"].is_number_integer() ||
-				(contents["Version"] != 0 && contents["Version"] != 1)) {
+				(contents["Version"] != 0 && contents["Version"] != 1 && contents["Version"] != 2)) {
 				state.PushError("Unsupported instance format version");
 				return state;
 			}
 
-			auto maybeInstance = TryDeserializeInstance(contents, state, contents["Version"] == 1);
+			const auto version = contents["Version"].get<int>();
+			auto maybeInstance = TryDeserializeInstance(contents, state, version >= 1, version >= 2);
 			if (maybeInstance.has_value()) {
-				state.Ok = true;
-				state.Instance = maybeInstance.value();
+				try {
+					for (const auto &[instance, tags] : state.PendingTags) {
+						auto dataModel = instance->GetDataModel();
+						if (!dataModel && !tags.empty()) throw std::runtime_error("Tagged Instance is not owned by a DataModel");
+						if (dataModel) for (const auto &tag : tags)
+							(void)dataModel->Tags.Add(dataModel->GetObjectId(), instance->GetObjectId(), tag, ScriptSecurityContext::CoreTrusted());
+					}
+					state.Ok = true;
+					state.Instance = maybeInstance.value();
+				} catch (const std::exception &error) {
+					maybeInstance.value()->Destroy();
+					state.PushError("Failed to rebuild tag index: {}", error.what());
+				}
 			}
 
 			break;

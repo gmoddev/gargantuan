@@ -45,10 +45,11 @@ limited to 256 records.
 | `Handshake` | Returns engine identity, protocol version, and capabilities. |
 | `OpenProject` | Canonicalizes and loads a project root without executing it. |
 | `GetSchema` | Returns deterministic reflected class and property metadata. |
-| `GetSnapshot` | Returns snapshot v3 and establishes the session cursor. |
-| `PollChanges` | Returns scoped wire-journal v3 records after that cursor. |
+| `GetSnapshot` | Returns snapshot v4 and establishes the session cursor. |
+| `PollChanges` | Returns scoped wire-journal v4 records after that cursor. |
 | `SetProperty` | Applies a closed non-reference `WireValue` through `MutationGateway`. |
 | `SetAttribute` | Applies or removes a bounded attribute through `MutationGateway`. |
+| `AddTag` / `RemoveTag` | Applies bounded tag membership through `MutationGateway`. |
 | `ConfigureViewport` | Negotiates a bounded engine-owned RGB8 viewport. |
 | `SetViewportCamera` | Applies a finite absolute editor-camera pose and field of view. |
 | `OpenViewportTransport` | Explicitly selects shared-memory ring v1 and returns its fixed layout contract. |
@@ -60,7 +61,9 @@ limited to 256 records.
 DataModel. The committed setter path remains responsible for journal emission.
 `SetAttribute` uses the same live-object and `MutateDataModel` checks. Attribute
 state is delivered by snapshot and dedicated `AttributeUpdate` records rather
-than a second polling path. Object references, enum items, create, reparent, destroy, transactions, saving,
+than a second polling path. `AddTag` and `RemoveTag` use that same authority;
+snapshot membership and `TagAdded`/`TagRemoved` carry committed tag state.
+Object references, enum items, create, reparent, destroy, transactions, saving,
 source mounts, and play sessions are deliberately outside v0. Viewport methods
 are a compatible capability extension with their own `ViewportVersion = 1`.
 `Handshake.ViewportTransports` is authoritative: clients must negotiate rather

@@ -7,12 +7,13 @@ of authoritative `Instance` state. It is separate from the asset model
 serializer; both reuse `WireValue` for attributes, while retaining distinct
 document envelopes and purposes.
 
-A version 3 snapshot contains:
+A version 4 snapshot contains:
 
 - an ordered list of objects in hierarchy traversal order;
 - each object's source `ObjectId`, class, name, and optional parent ID;
 - reflected properties explicitly marked `FutureReplicated`, sorted by name;
 - bounded dynamic attributes sorted by name;
+- bounded dynamic tag membership sorted by name;
 - explicit object-reference values;
 - the scoped `ChangeCursor` immediately after the captured baseline.
 

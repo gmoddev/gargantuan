@@ -40,9 +40,9 @@ missing name, is a successful no-op. Rejection leaves prior state unchanged.
 
 Project JSON version 1 stores an `Attributes` object per Instance in sorted
 order and accepts legacy version 0 documents without attributes. Snapshot
-version 3 carries the same map. Both loaders validate the complete collection.
+version 4 carries the same map alongside tags. Both loaders validate the complete collection.
 
-Wire journal version 3 adds `AttributeUpdate` with stable `ObjectId`, name, and
+Wire journal version 4 includes `AttributeUpdate` with stable `ObjectId`, name, and
 `WireValue`; `Null` means removal. Snapshot plus subsequent records reconstructs
 identical state. Loopback replication applies initial state, updates, and
 removals to its isolated receiver. EditorHost exposes bounded `SetAttribute`
@@ -51,5 +51,5 @@ and otherwise uses the existing snapshot/journal document path.
 ## Deferred
 
 Reference-valued attributes await an explicit cross-scope load policy. Enums,
-tags, attribute schemas/namespaces, broader migrations, and a full Studio
+attribute schemas/namespaces, broader migrations, and a full Studio
 Properties UI are not implemented.

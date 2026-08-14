@@ -1,0 +1,12 @@
+---
+title: Instance tags
+description: Bounded indexed Instance membership, lifecycle, persistence, and replication contracts.
+---
+
+Gargantuan's `Tags` service manages case-sensitive tags scoped to one `DataModel`. Names must be valid UTF-8, contain no embedded null, and fit within 100 bytes. Instances may have 64 tags; a world may have 1,024 active distinct names.
+
+Tags are dynamic state, not frozen-schema definitions. Writes require `MutateDataModel` and pass through `MutationGateway`; reads require `ReadDataModel`. Duplicate add and absent remove are no-ops.
+
+The engine interns active names and maintains generation-safe indexes in both directions. `GetTagged` and explicit `GetTaggedAll` intersections use those indexes and return deterministic `ObjectId` order. Destroy and scope exit remove all memberships before identity reuse.
+
+Project persistence stores only sorted per-object membership. Snapshot and journal version 4 use initial tag arrays plus `TagAdded` and `TagRemoved`. Replication and Studio consume the same committed state. No namespaces, metadata, OR/NOT expressions, inheritance, or general query language exist.

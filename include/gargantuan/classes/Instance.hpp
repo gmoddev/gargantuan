@@ -18,6 +18,7 @@
 #include <vector>
 
 namespace gargantuan {
+	class DataModel;
 	G_SHARED_USERDATA_DECL(
 		Instance, I_Instance;
 
@@ -48,6 +49,7 @@ namespace gargantuan {
 		void AssertIsAlive() const;
 		void NotifyPropertyCommitted(std::string_view propertyName);
 		[[nodiscard]] ObjectId GetReplicationScopeId() const;
+		[[nodiscard]] std::shared_ptr<DataModel> GetDataModel() const;
 		void PublishReplicationSubtree(ObjectId scope);
 		void AssertCanMutate() const;
 		void ValidatePropertyMutation(std::string_view propertyName, const std::any &value) const;
