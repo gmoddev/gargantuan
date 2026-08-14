@@ -24,3 +24,6 @@ include/gargantuan/datatypes/generated/
 src/classes/generated/
 src/services/generated/
 src/datatypes/generated/
+
+# Local viewport captures
+/viewport.ppm
