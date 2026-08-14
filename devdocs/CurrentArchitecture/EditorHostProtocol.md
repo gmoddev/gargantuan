@@ -67,9 +67,11 @@ than assuming shared memory. The current Windows host advertises
 The handshake also publishes `ScriptSecurityVersion`,
 `StudioExecutionDomain`, and the exact `StudioCapabilities` grant. Version 1
 uses the `Studio` domain with `ReadDataModel`, `MutateDataModel`,
-`EditorCommands`, and `SelectionAccess`. This grant is an enforceable contract:
+`EditorCommands`, `SelectionAccess`, and `ViewportControl`. This grant is an
+enforceable contract:
 schema reads, snapshots, journal polling, reflected property dispatch, and the
-mutation gateway check it at their native boundaries. It does not grant
+mutation gateway check it at their native boundaries. Every viewport method
+also checks `ViewportControl`. It does not grant
 process, filesystem, network, or arbitrary engine-native access.
 
 ## Licensing and repository contract

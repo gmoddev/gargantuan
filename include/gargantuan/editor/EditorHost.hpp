@@ -31,6 +31,7 @@ namespace gargantuan {
 	class EditorHost {
 	  public:
 		explicit EditorHost(std::string sessionToken);
+		EditorHost(std::string sessionToken, ScriptSecurityContext studioSecurity);
 
 		[[nodiscard]] std::string HandleRequest(std::string_view request);
 		int Run(std::istream &input, std::ostream &output);

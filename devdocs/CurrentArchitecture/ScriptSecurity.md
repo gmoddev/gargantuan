@@ -13,7 +13,10 @@ The initial capabilities are `ReadDataModel`, `MutateDataModel`,
 `FilesystemWrite`, `ProcessControl`, `NetworkSend`, and `NetworkReceive`.
 `CoreTrusted()` currently grants the complete set for existing engine-internal
 execution. EditorHost uses `StudioCoreUi()`, which grants only
-`ReadDataModel`, `MutateDataModel`, `EditorCommands`, and `SelectionAccess`.
+`ReadDataModel`, `MutateDataModel`, `EditorCommands`, `SelectionAccess`, and
+`ViewportControl`. Every viewport transport, configuration, camera, capture,
+and picking request enforces `ViewportControl` at EditorHost dispatch. The
+grant does not expose renderer or shared-memory implementation handles to Luau.
 
 `InstanceProperty` metadata carries readable domains, writable domains, and
 required read/write capabilities. Native Luau property dispatch enforces that

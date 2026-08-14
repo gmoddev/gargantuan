@@ -767,10 +767,31 @@ namespace {
 		Check(
 			handshake["Result"]["StudioExecutionDomain"] == "Studio" &&
 				handshake["Result"]["StudioCapabilities"] == Json::array({
-					"ReadDataModel", "MutateDataModel", "EditorCommands", "SelectionAccess"
+					"ReadDataModel", "MutateDataModel", "EditorCommands", "SelectionAccess", "ViewportControl"
 				}),
 			"EditorHost exposes the narrow Studio-domain capability grant"
 		);
+		EditorHost restrictedHost("restricted-token", {
+			ScriptExecutionDomain::Studio,
+			{ScriptCapability::ReadDataModel},
+		});
+		for (const auto method : {
+			"OpenViewportTransport", "CloseViewportTransport", "ConfigureViewport",
+			"SetViewportCamera", "CaptureViewport", "PickViewport",
+		}) {
+			Json restrictedRequest{
+				{"Version", EditorHostProtocolVersion},
+				{"RequestId", method},
+				{"SessionToken", "restricted-token"},
+				{"Method", method},
+				{"Params", Json::object()},
+			};
+			auto restrictedViewport = Json::parse(restrictedHost.HandleRequest(restrictedRequest.dump()));
+			Check(
+				!restrictedViewport["Ok"].get<bool>() && restrictedViewport["Error"]["Code"] == "Unauthorized",
+				"EditorHost enforces ViewportControl for every viewport method"
+			);
+		}
 		auto sharedTransport = std::find_if(
 			handshake["Result"]["ViewportTransports"].begin(),
 			handshake["Result"]["ViewportTransports"].end(),

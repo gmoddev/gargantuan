@@ -78,6 +78,13 @@ fixed layout, complete state, sequence, dimensions, format, and payload length;
 the named mapping disappears when both processes release their session handles.
 Picking currently uses BasePart-oriented bounds.
 
+Every viewport transport, configuration, camera, capture, and picking method
+requires the explicit `ViewportControl` capability at EditorHost dispatch. The
+restricted Studio Luau service receives only viewport size, camera values,
+frame sequence/dimensions, and picked stable IDs. Shared-memory names and
+handles, RGB buffers, renderer objects, and IPC streams remain in the native
+host layer.
+
 The long-term Studio UI is intended to be Luau-authored. A small native shell
 will own process lifecycle, IPC, windows, viewport presentation, filesystem
 dialogs, and Luau runtime bootstrap. Explorer, Properties, selection, commands,
@@ -91,4 +98,6 @@ snapshot/journal data, structured commands, and viewport pixels. Script domains
 (`Core`, `Studio`, `Server`, and `Client`) are contexts rather than a privilege
 ordering; native dispatch authorizes explicit capabilities. Studio's baseline
 grant is read access, validated mutation, editor commands, and local selection.
-It does not include process, filesystem, or network access.
+The implemented Luau viewport adapter adds `ViewportControl`; it does not infer
+that permission from the `Studio` domain. Process, filesystem, and network
+access remain ungranted.

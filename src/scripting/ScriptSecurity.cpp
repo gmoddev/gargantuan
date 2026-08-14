@@ -71,6 +71,7 @@ namespace gargantuan {
 				ScriptCapability::MutateDataModel,
 				ScriptCapability::EditorCommands,
 				ScriptCapability::SelectionAccess,
+				ScriptCapability::ViewportControl,
 			},
 		};
 	}

@@ -165,7 +165,11 @@ namespace gargantuan {
 		}
 	}
 
-	EditorHost::EditorHost(std::string sessionToken) : SessionToken(std::move(sessionToken)) {
+	EditorHost::EditorHost(std::string sessionToken) :
+		EditorHost(std::move(sessionToken), ScriptSecurityContext::StudioCoreUi()) {}
+
+	EditorHost::EditorHost(std::string sessionToken, ScriptSecurityContext studioSecurity) :
+		SessionToken(std::move(sessionToken)), StudioSecurity(std::move(studioSecurity)) {
 		if (SessionToken.empty() || SessionToken.size() > 256)
 			throw std::invalid_argument("EditorHost requires a nonempty bounded session token");
 	}
@@ -193,6 +197,11 @@ namespace gargantuan {
 
 			const auto method = message["Method"].get<std::string>();
 			const auto &parameters = message["Params"];
+			const bool viewportMethod = method == "OpenViewportTransport" || method == "CloseViewportTransport" ||
+				method == "ConfigureViewport" || method == "SetViewportCamera" ||
+				method == "CaptureViewport" || method == "PickViewport";
+			if (viewportMethod && !StudioSecurity.HasCapability(ScriptCapability::ViewportControl))
+				return SerializeBoundedResponse(ErrorResponse(requestId, "Unauthorized", "Viewport access requires ViewportControl"));
 			if (method == "Handshake") {
 				if (!parameters.empty())
 					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Handshake takes no parameters"));

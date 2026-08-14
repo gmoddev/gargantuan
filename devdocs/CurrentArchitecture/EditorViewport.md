@@ -20,6 +20,10 @@ color/depth textures, downloads only after a GPU fence, and contains GPU/setup
 failures as structured `ViewportUnavailable` errors. Capture remains on the
 serialized EditorHost domain. It does not execute scripts, step physics, or
 permit Studio to mutate the source outside existing validated commands.
+All six viewport methods require the explicit `ViewportControl` capability at
+EditorHost dispatch. The private Studio service may expose camera, size, copied
+frame metadata, and picked ObjectIds, but never the shared mapping name, native
+handle, renderer pointer, SDL/Vulkan object, or IPC stream to Luau.
 
 Camera pose, field of view, and viewport size belong to an EditorHost-owned
 session camera. They are not persisted in the project or published to the
@@ -65,7 +69,7 @@ Picking currently intersects BasePart-oriented bounding boxes. This is
 deterministic and sufficient to prove selection identity, but it is not yet
 mesh-accurate and does not include GUI or editor gizmos.
 
-## Future Luau Studio UI
+## Luau Studio UI boundary
 
 The protocol is UI-toolkit independent. The private Studio's current Python
 shell is only an integration adapter. The intended split is:
@@ -82,9 +86,11 @@ Native Studio bootstrap
 
 Explorer, Properties, toolbars, selection behavior, settings, and most editor
 workflows should be Luau-authored consumers of those explicit services. Luau
-must not receive arbitrary native or operating-system access. `ViewportService`
-will adapt the public EditorHost methods and resolve picked `ObjectId` values
-through the Studio document model.
+must not receive arbitrary native or operating-system access. The private
+Studio adapts these methods through a restricted `ViewportService` and resolves
+picked `ObjectId` values through the Studio document model. Frame bytes remain
+in the C# presentation layer; Luau receives only bounded dimensions and
+sequence metadata.
 
 ## Remaining work
 
@@ -93,4 +99,4 @@ through the Studio document model.
 - add camera orbit/pan helpers above the absolute-pose command;
 - define mesh-accurate picking and editor-gizmo precedence;
 - make renderer lifetime/device-loss tests part of automated GPU CI; and
-- bootstrap the restricted Luau editor-service runtime in the private app.
+- add camera orbit/pan policy in the Luau editor layer without widening the native service.
