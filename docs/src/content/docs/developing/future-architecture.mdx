@@ -1,0 +1,324 @@
+---
+title: Future architecture
+description: Long-term direction for Gargantuan's engine, runtime, extensibility, and Studio.
+---
+
+This document records the intended long-term architecture for Gargantuan. It is
+a design direction, not a description of implemented APIs or a compatibility
+promise. The [roadmap](./roadmap/) tracks nearer-term delivery.
+
+Gargantuan aims to be a Roblox-compatible-ish game engine and Studio environment
+built with C++ and Luau. It should preserve the productive parts of Roblox
+development while deliberately redesigning legacy, restrictive, or unsafe
+behavior. Roblox compatibility is an API and developer-experience target, not
+an internal implementation constraint.
+
+## Design principles
+
+1. Compatibility does not dictate internal architecture.
+2. Execution domains are contexts, not privilege levels.
+3. Capabilities are explicit and enforced at native boundaries.
+4. Native privilege is never inferred from a script's name, path, parent, or source.
+5. Runtime schema is registered, validated, and then frozen.
+6. Custom classes and extensions have distinct semantics.
+7. Definitions have stable identity, namespaces, versions, and provenance.
+8. Engine DataModel state has one authoritative owner.
+9. Studio maintains a replicated document model, not a second authority.
+10. Third-party plugins are less trusted than first-party Studio code.
+11. Built-in systems should generally be replaceable defaults.
+12. Filesystem, process, and native access require explicit capabilities.
+13. Native components are curated and engine-owned.
+14. Networking, serialization, Studio, and Luau typing consume the same schema.
+15. High-level systems use native primitives composed by Core Luau where practical.
+
+In short: C++ provides powerful, safe primitives; trusted Core Luau turns them
+into a productive platform; PreRun safely defines the extended runtime schema;
+normal Luau builds the game; and Studio consumes the same reflected contracts
+across a separate process boundary.
+
+## Compatibility and public object model
+
+Luau is the primary scripting language. Generic Roblox-oriented modules should
+work with little or no modification where practical. Familiar concepts include
+`game`, services, Instances, properties, signals, hierarchy, attributes, and
+server/client runtime separation. Engine-specific APIs may extend beyond the
+Roblox surface, and compatibility adapters should sit above native primitives.
+
+Instances remain the main public object model and provide hierarchy, stable
+engine-managed identity, reflected members, attributes, serialization,
+replication, editor representation, script access, and lifetime semantics. The
+native representation may use handles, registries, or components without
+mirroring the public model exactly.
+
+Object identity is independent of memory address, name, and hierarchy path. It
+must survive serialization, snapshots, journal updates, editor replication, and
+reference resolution by using the established generation-safe identity and wire
+representation.
+
+### Attributes, tags, and queries
+
+Attributes should arrive early as typed, serializable, editor-visible values
+with change events and replication support. Initially, an Instance can own a map
+from a key to a `WireValue`. Schemas, defaults, validation, constraints, and
+access rules can follow without blocking the basic feature.
+
+Tags provide indexed organization across the hierarchy. The initial design uses
+interned identifiers, reverse indexes, and efficient intersection queries:
+
+```luau
+Tags:GetTagged("Enemy")
+Tags:GetTaggedAll({ "Enemy", "Alive" })
+```
+
+Namespaced tags, metadata, ownership, and richer expressions can follow.
+
+## Runtime and trust model
+
+The runtime is divided by responsibility:
+
+- **Native C++ core** owns rendering, physics, VM hosting, networking and
+  serialization primitives, object identity and lifetime, mutation authority,
+  native resources, low-level input, security, and EditorHost integration.
+- **Trusted Core Luau** implements scoped higher-level services, standard class
+  behavior, controllers, and engine conveniences over native primitives.
+- **Registration/PreRun Luau** defines permitted schema, enums, classes,
+  extensions, components, editor metadata, and replication declarations.
+- **Runtime game Luau** runs gameplay against the frozen schema and cannot
+  arbitrarily redefine the runtime structure.
+
+Initial execution domains are `Core`, `Studio`, `Plugin`, `PreRun`, `Server`,
+and `Client`. They identify where code runs; they are not a privilege hierarchy.
+Authorization comes from explicit capabilities such as DataModel read/mutation,
+schema definition, editor commands, selection, viewport control, networking,
+asset access, plugin UI, filesystem, process control, or raw-engine access.
+
+Capabilities are checked where native or reflected operations occur, not merely
+recorded as metadata. The native host assigns every context and capability set.
+Privilege is never inferred from a script name, path, parent Instance, package,
+or source. Copying a privileged built-in script into a game therefore produces
+ordinary unprivileged code.
+
+## Runtime schema and registration
+
+A central registry describes native and Core-defined classes, custom game
+classes, enums, extensions, properties, signals, methods, components, and their
+serialization, replication, editor, and provenance metadata.
+
+PreRun is a controlled lifecycle phase rather than an ordinary service:
+
+```text
+Engine boot
+    -> load native definitions
+    -> load trusted Core definitions
+    -> open registration
+    -> run game and package registration
+    -> validate the complete registry
+    -> freeze the registry
+    -> construct the world
+    -> begin normal runtime
+```
+
+Freezing makes class and enum identities, serialization and replication schemas,
+Studio discovery, and generated Luau types deterministic. Normal runtime code
+cannot casually reopen registration.
+
+Every custom definition has an authoritative `SchemaId` plus a namespace,
+human-facing name, version, and origin. Examples include `Engine.Material`,
+`Game.CombatState`, and `MyPackage.CustomHumanoid`. Provenance identifies native
+engine, Core Luau, game, package, plugin, or tooling origins, including package
+version and source module where relevant. This supports inspectability, conflict
+detection, and package management without letting load order decide collisions.
+
+### Extensions, classes, enums, and components
+
+A class extension adds namespaced members or approved behavior hooks to an
+existing class. It cannot replace protected native members or lifecycle methods,
+bypass reflection or security, or silently collide. The target retains its
+original identity.
+
+A custom class has a distinct reflected identity, such as
+`CustomHumanoid : Model`. It may declare properties, attributes, methods,
+signals, validation, editor metadata, replication, serialization, and approved
+native components. It participates in `IsA`, reflection, Studio, persistence,
+and replication. Extensions and custom classes remain separate concepts.
+
+Custom enums are registered during PreRun. Their stable identity includes the
+enum type, not only an item name or value, and supports typing, reflection,
+validation, serialization, replication, and Studio property editing.
+
+Custom classes may compose curated native components such as transform, physics
+body, character motor, animation, navigation, audio, or network identity. C++
+retains ownership of implementation, memory, lifetime, thread affinity,
+validation, security, and serialization primitives. The registry rejects
+unsupported combinations; arbitrary native ECS composition is not an initial API.
+
+## Replaceable platform systems
+
+High-level features generally follow this layering:
+
+```text
+Native primitive
+    -> trusted Core Luau abstraction
+    -> replaceable developer-facing default
+```
+
+Candidates include input actions, character and camera controllers, projectiles,
+animation helpers, default UI behavior, and common gameplay services. Strong
+defaults should not create hidden assumptions that prevent replacement.
+
+### Characters and animation
+
+The native character contract remains small: root transform, collision,
+ownership, input target, rig/animation interface, and an optional character
+motor. Core Luau and approved native components provide a removable default
+controller. Block, humanoid, custom, vehicle, and mech rigs should all be viable.
+
+Animation compatibility belongs in importers and rig adapters rather than the
+internal clip format. An `AnimationClip` uses stable joint or bone identity,
+tracks, keyframes, interpolation, and metadata. Adapters map it to native,
+R6-compatible, R15-compatible, or custom rigs. Reference rigs use independently
+authored geometry and assets rather than proprietary Roblox assets.
+
+### Projectiles, terrain, and input
+
+A native projectile primitive can provide batched ballistic integration, swept
+collision, gravity, penetration, and ricochet queries. A Core Luau
+`ProjectileService` adds the gameplay API, events, tracers, and networking policy
+without baking weapon or damage rules into C++.
+
+Terrain should expose bulk, chunk, procedural, carving, filling, noise, water,
+asynchronous, streaming-aware, and undoable mutation primitives. Heavy work
+belongs in native operations rather than thousands of Luau calls.
+
+Input begins with raw device state and builds an Instance-based, inspectable
+action system over it. Actions support bindings, contexts, priorities, analog
+values, chords, processors, rebinding, and enable/disable state. A local
+preference service stores control preferences by default.
+
+## Studio and plugin architecture
+
+Studio is a separate application connected through the public, versioned
+[EditorHost boundary](./editor-host/):
+
+```text
+Gargantuan Engine
+    -> EditorHost
+    -> versioned IPC
+    -> native Studio host
+    -> restricted Studio Luau runtime
+    -> Luau-authored Studio UI
+```
+
+The native Studio host owns application and window lifecycle, EditorHost process
+control, IPC, viewport transport, OS integration, dialogs, clipboard, input
+capture, VM bootstrap, and crash handling. Editor workflows and business logic
+stay in Luau where practical.
+
+Studio receives stable DTOs and `ObjectId` values, never raw engine pointers,
+GPU handles, native addresses, or private headers. Its Luau runtime uses explicit
+services such as `DocumentService`, `SelectionService`, `ViewportService`, and
+`CommandService`, without arbitrary filesystem, process, network, or raw-engine access.
+
+### Replicated document model
+
+Studio maintains a non-authoritative document cache populated by a deterministic
+engine snapshot and ordered journal updates. The cache indexes objects by stable
+ID and tracks hierarchy, properties, journal position, and dirty state. All
+authoritative changes return through EditorHost and the engine mutation gateway.
+
+Studio should eventually expose where classes and extensions came from, native
+versus Core Luau behavior, components, reflected members, replication policy,
+schema version, and required capabilities.
+
+### Plugins
+
+`Plugin` is separate from first-party `Studio`. A plugin may receive DataModel
+reads, validated mutations, selection, command registration, and restricted UI
+registration by default. It does not inherit process control, private IPC,
+raw-engine access, unrestricted networking, or unrestricted filesystem access.
+Future permission prompts may explicitly grant more capabilities. Third-party
+plugins should ultimately execute across an isolated capability boundary.
+
+## Persistence, replication, and packages
+
+Networking, persistence, and Studio share the same logical state model: stable
+ObjectIds, deterministic snapshots, ordered journal records, a closed
+`WireValue` schema, explicit authority, and scope or world identity. Reflection
+metadata selects replication behavior, including for custom classes and attributes.
+
+Serialization uses explicit format versions, stable references, schema-aware
+properties, forward-reference resolution, bounded parsing, and safe failure. It
+never serializes native pointers or uses memory addresses as identity. Custom
+classes, enums, and components participate through the frozen registry.
+
+Packages may contribute Luau modules, classes, enums, extensions, editor metadata,
+and approved component configuration. Their definitions obey the same namespacing,
+identity, provenance, versioning, validation, and collision rules as game definitions.
+
+## Host boundaries and identity
+
+Authentication remains outside the core engine where possible. A hosting layer
+provides safe user, player, session, principal, and claim information. It owns
+credentials, login, token issuance, recovery, and fleet authorization; Luau never
+receives authentication secrets. Gargantuan remains usable without that platform.
+
+Ordinary project source mounts stay confined to the project root. Privileged
+filesystem facilities are separate capabilities for plugins, Studio, or the
+native host and are not smuggled through normal source-linking abstractions.
+Opening a downloaded or untrusted project never grants host-level filesystem or
+process authority automatically.
+
+## Implementation scope
+
+This direction builds on existing foundations rather than requiring a clean
+rewrite. The repository already contains generation-safe `ObjectId` handling,
+the closed `WireValue` representation, deterministic snapshots and journal
+records, a capability-checked mutation gateway, initial execution domains and
+capabilities, native class reflection, in-process replication scaffolding, and
+the versioned EditorHost boundary. These pieces should be extended and unified
+instead of replaced by parallel state or security systems.
+
+The work divides into the following dependency-ordered packages:
+
+1. **Harden the existing foundation.** Make hierarchy and lifetime changes
+   transactional, close capability checks at every native/reflection boundary,
+   keep project paths root-confined, bound parsers and queues, and add focused
+   tests for malformed input, identity reuse, mutation authorization, snapshots,
+   journals, and EditorHost messages.
+2. **Unify reflection into the runtime schema.** Evolve the current native class
+   registry so one definition describes identity, inheritance, members, access,
+   persistence, replication, editor behavior, version, and provenance. Existing
+   generated native definitions become one input to that registry.
+3. **Add the registration lifecycle.** Introduce explicit native/Core load,
+   PreRun registration, validation, freeze, and world-construction states. Add
+   the `PreRun` and `Plugin` domains and narrowly scoped definition capabilities;
+   reject registration after freeze.
+4. **Implement extensibility one concept at a time.** Start with attributes and
+   tags, then custom enums, class extensions, custom classes, and finally curated
+   native components. Each increment needs schema collision checks, stable wire
+   identity, serialization/replication behavior, Studio discovery, and Luau tests.
+5. **Make Studio schema-driven.** Extend the existing snapshot/journal document
+   flow with schema and provenance discovery, reference-valued edits,
+   transactions, undo/redo, save, and play-session commands. Establish the
+   separate plugin capability broker before exposing third-party plugin APIs.
+6. **Build replaceable systems vertically.** For input, characters, animation,
+   projectiles, and terrain, add the smallest native primitive, its trusted Core
+   Luau API, and one removable default. Complete and measure one end-to-end slice
+   before expanding breadth.
+7. **Carry the frozen schema into networking and tooling.** Use the same class,
+   property, enum, attribute, identity, and authority metadata for persistence,
+   replication, Studio, generated Luau types, diagnostics, and compatibility
+   adapters.
+
+The first practical milestone is narrower than the full vision: freeze a native
+plus Core registry; expose attributes and tags; serialize and journal them; let
+Studio discover and edit them through EditorHost; and prove capability denial in
+tests. The next milestone adds one namespaced custom enum and one custom class
+through PreRun, including round-trip persistence, replication metadata, Studio
+inspection, collision failure, and post-freeze rejection. Higher-level systems
+should not depend on extensibility semantics until those slices are reliable.
+
+Every slice is complete only when its public contract, native enforcement,
+serialization, replication declaration, Studio representation, diagnostics,
+and automated tests agree. This prevents the registry, networking, editor, and
+Luau APIs from drifting into separate models.

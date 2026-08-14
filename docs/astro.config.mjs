@@ -41,6 +41,10 @@ export default defineConfig({
 							slug: "developing/editor-host",
 						},
 						{
+							label: "Future Architecture",
+							slug: "developing/future-architecture",
+						},
+						{
 							label: "Roadmap",
 							slug: "developing/roadmap",
 						},
