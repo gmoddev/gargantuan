@@ -98,13 +98,6 @@ Engine *ConstructInstance(std::string path, BaseRenderer *renderer) {
 }
 
 int main(int argc, char *argv[]) {
-	try {
-		BootstrapNativeRuntimeSchema();
-	} catch (const std::exception &exception) {
-		std::cerr << "Runtime schema bootstrap failed: " << exception.what() << std::endl;
-		return 1;
-	}
-
 	argparse::ArgumentParser program("gargantuan");
 	program.add_description("An independent game engine for Roblox developers");
 	program.add_group("Targets");
@@ -144,6 +137,13 @@ int main(int argc, char *argv[]) {
 	int hasProject = program.is_used("--project");
 	int hasScript = program.is_used("--script");
 	int hasInstance = program.is_used("--instance");
+	try {
+		if (hasProject) BootstrapProjectRuntimeSchema(program.get<std::string>("--project"));
+		else BootstrapNativeRuntimeSchema();
+	} catch (const std::exception &exception) {
+		std::cerr << "Runtime schema bootstrap failed: " << exception.what() << std::endl;
+		return 1;
+	}
 	if (program.is_used("--editor-host")) {
 		if (hasProject + hasScript + hasInstance != 0) {
 			LOG_CRITICAL(App, "EditorHost opens projects through its protocol and cannot accept a target argument");

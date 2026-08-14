@@ -1,6 +1,7 @@
 #pragma once
 
 #include "gargantuan/runtime/ObjectId.hpp"
+#include "gargantuan/reflection/SchemaId.hpp"
 
 #include <array>
 #include <compare>
@@ -28,6 +29,12 @@ namespace gargantuan {
 	struct WireUDim2 { WireUDim X; WireUDim Y; auto operator<=>(const WireUDim2 &) const = default; };
 	struct WireCFrame { std::array<float, 12> Components; auto operator<=>(const WireCFrame &) const = default; };
 	struct WireEnumItem { std::string EnumType; std::string Item; auto operator<=>(const WireEnumItem &) const = default; };
+	struct WireSchemaEnumValue {
+		SchemaId EnumSchemaId;
+		std::uint32_t DefinitionVersion = 0;
+		std::int32_t ItemValue = 0;
+		auto operator<=>(const WireSchemaEnumValue &) const = default;
+	};
 	struct WireObjectReference { WireObjectId Object; auto operator<=>(const WireObjectReference &) const = default; };
 
 	using WireValue = std::variant<
@@ -44,6 +51,7 @@ namespace gargantuan {
 		WireUDim2,
 		WireCFrame,
 		WireEnumItem,
+		WireSchemaEnumValue,
 		WireObjectReference
 	>;
 }

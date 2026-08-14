@@ -5,5 +5,5 @@
 namespace gargantuan {
 	// Compatibility name retained for generated classes and existing native
 	// reflection callers. RuntimeSchemaRegistry owns the authoritative object.
-	using InstanceClassDefinition = SchemaDefinition;
+	using InstanceClassDefinition = SchemaClassDefinition;
 }

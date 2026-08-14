@@ -59,6 +59,7 @@ namespace gargantuan {
 			[](const auto &typed) {
 				using Value = std::decay_t<decltype(typed)>;
 				if constexpr (std::is_same_v<Value, std::monostate> || std::is_same_v<Value, WireEnumItem> ||
+					std::is_same_v<Value, WireSchemaEnumValue> ||
 					std::is_same_v<Value, WireObjectReference>) return false;
 				else if constexpr (std::is_same_v<Value, double>) return std::isfinite(typed);
 				else if constexpr (std::is_same_v<Value, WireFloat>) return std::isfinite(typed.Value);

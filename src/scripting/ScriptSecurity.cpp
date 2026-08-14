@@ -26,7 +26,7 @@ namespace gargantuan {
 	}
 
 	ScriptDomainSet ScriptDomainSet::All() {
-		return {ScriptExecutionDomain::Core, ScriptExecutionDomain::Studio,
+		return {ScriptExecutionDomain::Core, ScriptExecutionDomain::PreRun, ScriptExecutionDomain::Studio,
 			ScriptExecutionDomain::Server, ScriptExecutionDomain::Client};
 	}
 
@@ -52,6 +52,7 @@ namespace gargantuan {
 			ScriptCapability::ProcessControl,
 			ScriptCapability::NetworkSend,
 			ScriptCapability::NetworkReceive,
+			ScriptCapability::DefineSchema,
 		};
 	}
 
@@ -61,6 +62,10 @@ namespace gargantuan {
 
 	ScriptSecurityContext ScriptSecurityContext::CoreTrusted() {
 		return {ScriptExecutionDomain::Core, ScriptCapabilitySet::AllDefined()};
+	}
+
+	ScriptSecurityContext ScriptSecurityContext::PreRunRegistration() {
+		return {ScriptExecutionDomain::PreRun, {ScriptCapability::DefineSchema}};
 	}
 
 	ScriptSecurityContext ScriptSecurityContext::StudioCoreUi() {
@@ -87,6 +92,7 @@ namespace gargantuan {
 	std::string_view GetScriptExecutionDomainName(ScriptExecutionDomain domain) {
 		switch (domain) {
 			case ScriptExecutionDomain::Core: return "Core";
+			case ScriptExecutionDomain::PreRun: return "PreRun";
 			case ScriptExecutionDomain::Studio: return "Studio";
 			case ScriptExecutionDomain::Server: return "Server";
 			case ScriptExecutionDomain::Client: return "Client";
@@ -107,6 +113,7 @@ namespace gargantuan {
 			case ScriptCapability::ProcessControl: return "ProcessControl";
 			case ScriptCapability::NetworkSend: return "NetworkSend";
 			case ScriptCapability::NetworkReceive: return "NetworkReceive";
+			case ScriptCapability::DefineSchema: return "DefineSchema";
 		}
 		throw std::invalid_argument("Unknown script capability");
 	}

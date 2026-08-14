@@ -1,153 +1,129 @@
 # Runtime schema
 
-Gargantuan has one canonical native class schema owned by
-`RuntimeSchemaRegistry`. Generated class definitions are registered into this
-registry, and existing reflection APIs are compatibility views over the same
-registered `SchemaDefinition` objects.
+Gargantuan has one canonical schema owned by `RuntimeSchemaRegistry`. Native
+classes and project enums are definition kinds in that registry. Existing
+class-reflection APIs are class-only compatibility views over the same frozen
+definitions; there is no separate custom-enum registry.
 
-## Implemented now
+## Identity and definitions
 
-### Stable identity
+`SchemaId` is a deterministic 128-bit identity with a 32-character lowercase
+hexadecimal wire form. Zero is invalid. Native classes use
+`FromNativeName(namespace, name)` and custom enums use the independently
+domain-separated `FromEnumName(namespace, name)`. Neither identity depends on
+addresses, registration order, randomness, hierarchy, or registry generation.
+The same qualified class and enum names therefore have different candidate IDs,
+although the registry separately rejects their canonical-name collision.
 
-Every registered native class has a 128-bit `SchemaId`. The all-zero value is
-invalid. `SchemaId::FromNativeName` deterministically derives native IDs from a
-domain-separated engine algorithm plus the qualified namespace and class name;
-it does not use an address, hierarchy position, startup randomness, or
-registration order. The generated definition stores that ID directly.
+The canonical tagged definition model currently supports:
 
-The wire-neutral text form is 32 lowercase hexadecimal characters. Parsing
-rejects malformed and zero IDs. A registry also rejects duplicate IDs, so a
-hash collision is a bootstrap error rather than a load-order decision.
+- `SchemaClassDefinition`: native construction, base identity, reflected
+  properties/signals/methods, editor metadata, and flattened class views; and
+- `SchemaEnumDefinition`: namespace, name, stable ID, nonzero definition
+  version, provenance/origin, and ordered name/numeric-value items.
 
-Native classes currently use the `Engine` namespace, definition version `1`,
-and `NativeEngine` provenance. Provenance can represent native engine, Core
-Luau, game, package, plugin, and tooling origins, but only native registration
-is implemented in this pass. Provenance and namespace are descriptive identity
-metadata; neither grants authority.
+Native classes use namespace `Engine`, version `1`, and `NativeEngine`
+provenance. PreRun enums use project-selected namespaces such as `Game`, a
+project-declared version, and `Game` provenance. Provenance and namespace are
+descriptive and grant no authority.
 
-### Canonical definition
+Enum items are sorted lexically by item name during candidate construction.
+Names and numeric values are unique; aliases and flags semantics are not
+supported. A runtime enum value is `{EnumSchemaId, DefinitionVersion,
+ItemValue}`. Equality and persistence therefore include the owning enum rather
+than treating an item as an unqualified integer.
 
-`SchemaDefinition` currently owns:
+## Candidate lifecycle and PreRun
 
-- `SchemaId`, namespace, class name, canonical name, and definition version;
-- provenance and optional origin detail;
-- base name and stable base `SchemaId`;
-- native construction and description metadata;
-- declared properties/signals and methods;
-- class editor visibility;
-- flattened inherited property and method compatibility views.
+The explicit lifecycle is:
 
-Properties retain their native read/write paths and reflected value type. The
-same property object carries persistence, replication, editability,
-main-domain authority, readable/writable domains, required capabilities,
-validation, signal kind, and declaring `SchemaId`. Methods carry their
-declaring `SchemaId` and enforceable invocation domain/capability metadata;
-current generated methods default to the existing unrestricted method policy.
-Signals remain reflected properties with signal metadata, matching current
-runtime behavior.
+```text
+Bootstrap
+  -> NativeRegistration
+  -> CoreRegistration
+  -> PreRunRegistration
+  -> Validation
+  -> Frozen
+  -> Runtime
+```
 
-`PersistencePolicy` is the only Instance-property persistence selector. The
-former parallel `Serializable` boolean was removed. Project serialization reads
-the persistence policy, while snapshots and replication read the replication
-policy from the same registered property objects.
+Generated native seeds are copied into a hidden mutable candidate. The native
+bootstrap authority then advances to PreRun. If a project contains
+`.gargantuan/prerun.luau`, the native host selects that file and executes it in
+a dedicated `PreRun` domain. Filename, hierarchy, namespace, and provenance do
+not grant authority. The registration callback separately requires the
+`DefineSchema` capability.
 
-### Registry ownership and validation
+PreRun exposes only sandboxed base, math, string, table, UTF-8, and the readonly
+`Schema:RegisterEnum` facade. It has no DataModel, filesystem, process, OS,
+debug, require, network, Studio, renderer, or registry-pointer access. Current
+hard limits are:
 
-`RuntimeSchemaLifecycle` owns two deliberately separate concepts:
+- 256 KiB source;
+- 250 ms execution time;
+- 16 MiB per-VM allocation;
+- 64 custom enum definitions per candidate;
+- 256 items per enum;
+- 100 UTF-8 bytes per namespace, definition name, or item name; and
+- 64 KiB aggregate submitted definition payload.
 
-- a mutable candidate registry available only through the native bootstrap
-  authority during registration; and
-- an active registry that is complete, frozen, and visible to runtime
-  reflection consumers.
+Registration input is fully parsed and bounded before insertion. A malformed
+field, collision, budget failure, runtime failure, or invalid definition aborts
+the entire candidate. Previously published schema and registry generation stay
+unchanged, and world construction does not begin for a failed initial project
+bootstrap.
 
-The explicit phase sequence is `Bootstrap` -> `NativeRegistration` ->
-`CoreRegistration` -> `ExternalRegistration` -> `Validation` -> `Frozen` ->
-`Runtime`. Only adjacent registration transitions are accepted. Core and
-external registration are empty lifecycle slots today; no Core Luau, PreRun,
-or custom-definition loader is implemented.
-
-Generated static class registration collects deterministic native bootstrap
-inputs. At startup those inputs are sorted by canonical identity, moved into a
-fresh candidate, and the input collection is cleared. It is not a second
-runtime registry and is never exposed to reflection consumers. `main()`
-publishes the native schema before constructing a normal `Instance`; the
-`Instance` constructor also fails immediately if that ordering contract is
-violated.
-
-Candidate validation computes inheritance and all flattened member views into
-temporary structures before committing them. Freeze is a separate required
-step after successful whole-candidate validation. Publication changes the
-active registry only after freeze succeeds. Registration or validation failure
-discards the candidate, leaves any prior active registry unchanged, and does
-not change its generation. No best-effort definitions become observable.
-
-The frozen `RuntimeSchemaRegistry` supports lookup by `SchemaId`, native C++
-type, qualified canonical name, and the unqualified-name compatibility form.
-Enumeration is sorted by canonical name. Public lookup APIs return
-`const SchemaDefinition*`; mutable definition access remains confined to the
-candidate's build implementation. A frozen registry rejects registration,
-repeat validation/freeze, and reopening.
-
-Registration and validation reject:
-
-- invalid IDs, empty names/namespaces, zero versions, and non-native provenance
-  passed through native registration;
-- duplicate native types, `SchemaId` values, and canonical names;
-- missing bases, mismatched base names/IDs, and inheritance cycles;
-- properties with invalid owner/name/type/access metadata;
-- replicated properties without both native read and write paths;
-- editor-editable properties without an effective write path;
-- methods without native calls or with invalid declaring owners; and
-- property/method collisions within one definition.
-
-Inheritance flattening is computed only after the complete candidate set
-validates. Failed validation does not publish partially flattened compatibility
-views. Derived members preserve the current native reflection override
-semantics, and inherited members retain the declaring class ID.
-
-### Registry generation
+Whole-candidate validation resolves class inheritance and flattened members
+before freeze. Publication happens only after validation and freeze. The active
+registry is immutable, public lookup returns const definitions, and even a
+caller retaining `DefineSchema` cannot register after the lifecycle reaches
+Runtime. The candidate is never visible through ordinary reflection.
 
 Each successful complete publication receives a session-local unsigned 64-bit
-registry generation. Zero is invalid; the first publication is generation 1,
-and each later complete replacement through a controlled lifecycle instance
-increments it once. Candidate failure does not increment it. The counter never
-wraps: publication is rejected if the maximum value has been reached.
+registry generation. Zero is invalid; failed candidates do not advance it, and
+the counter fails closed rather than rolling over. Registry generation selects
+an active cache set. It is independent of each definition's semantic
+`DefinitionVersion` and is not part of `SchemaId`.
 
-Registry generation is cache-invalidation state, not persisted schema meaning.
-It is independent from each definition's `DefinitionVersion`; changing or
-comparing one must not be used as a substitute for the other.
+## Validation and compatibility
 
-### Reflection compatibility
+The registry rejects invalid/duplicate IDs, duplicate canonical names, invalid
+UTF-8 or embedded nulls, zero versions, missing/cyclic class bases, invalid
+member ownership/access, duplicate enum item names or numeric values, excessive
+counts/payloads, and wrong provenance at the native/custom registration
+boundaries. Observable enumeration sorts by canonical name and then definition
+kind. Typed `FindClass*` and `FindEnum*` APIs fail safely on the wrong kind.
 
-`InstanceClassDefinition` is now an alias for `SchemaDefinition`.
-`InstanceClassRegistry` delegates type/name lookup and deterministic class
-enumeration to the frozen active `RuntimeSchemaRegistry`. Its generated
-`Register` compatibility entry point contributes only native bootstrap input.
-Existing
-`FindProperty`, `FindMethod`, `IsA`, serialization, snapshot, replication,
-mutation, and EditorHost schema DTO paths therefore consume the canonical
-registered definitions without a second class registry.
+`InstanceClassDefinition` aliases `SchemaClassDefinition`, and
+`InstanceClassRegistry` remains a class-only adapter over the active registry.
+Native class IDs, `IsA`, property/method lookup, construction, persistence,
+snapshots, journals, replication, mutation, rendering, and viewport behavior
+remain unchanged.
 
-The existing EditorHost protocol is unchanged. Its current schema response is a
-compatibility DTO backed by this registry; stable schema discovery over IPC is
-deferred.
+The existing native `EnumItem` system remains a compatibility representation
+for built-in engine enums. Project enums use canonical schema identity and do
+not replace that system in this slice. A future bounded pass may adapt native
+enums into schema definitions; there are not two custom-enum authorities.
 
-Security remains enforced at native boundaries. Reading schema metadata does
-not grant a capability. Reflected property reads/writes, method invocation, and
-`MutationGateway` continue to check their current domain/capability contracts.
+## Wire and EditorHost
 
-## Deferred future architecture
+`WireValue` now has a closed `SchemaEnum` variant containing the enum
+`SchemaId`, exact definition version, and signed 32-bit item value. Encoding is
+deterministic. Materialization requires a frozen enum definition of the correct
+kind, exact version, and known item; missing definitions, wrong kinds, version
+mismatches, malformed IDs, and unknown items fail rather than coercing to a
+name or integer. General migrations are deferred. Attributes continue to
+reject this new variant, and Tags are unaffected.
 
-The lifecycle and atomic native publication are implemented. The Core and
-external registration phases are currently explicit no-ops. Deferred work
-includes:
+`GetSchema` keeps the existing `Classes` compatibility DTO and adds schema
+discovery version `2`, the active registry generation, and deterministic
+`Definitions`. Enum DTOs contain stable identity, kind, namespace/name,
+definition version, provenance, and ordered items. Studio receives immutable
+metadata only; it receives neither `DefineSchema` nor the registration facade.
 
-- PreRun, Core Luau, game, package, plugin, or tooling loaders;
-- custom classes, enums, extensions, components, attributes, or tags;
-- migrations and saved/wire class IDs;
-- EditorHost schema discovery and Studio schema-driven UI; and
-- generated Luau types.
+## Deferred
 
-The next bounded architecture task is attributes and tags as the first
-end-to-end feature built on the frozen schema. It must not reopen or replace the
-registry lifecycle introduced here.
+Core Luau registration, native-enum unification, enum globals/generated Luau
+types, enum-valued Attributes, migrations, packages, plugins, class extensions,
+custom classes, and component composition are not implemented. The next step
+is a bounded review of this PreRun/enum slice before class extensions.

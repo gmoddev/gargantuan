@@ -10,7 +10,7 @@
 #include <string_view>
 
 namespace gargantuan {
-	enum class ScriptExecutionDomain : std::uint8_t { Core, Studio, Server, Client };
+	enum class ScriptExecutionDomain : std::uint8_t { Core, PreRun, Studio, Server, Client };
 
 	enum class ScriptCapability : std::uint64_t {
 		None = 0,
@@ -24,6 +24,7 @@ namespace gargantuan {
 		ProcessControl = 1ull << 7,
 		NetworkSend = 1ull << 8,
 		NetworkReceive = 1ull << 9,
+		DefineSchema = 1ull << 10,
 	};
 
 	class ScriptDomainSet {
@@ -57,6 +58,7 @@ namespace gargantuan {
 
 		[[nodiscard]] bool HasCapability(ScriptCapability capability) const;
 		[[nodiscard]] static ScriptSecurityContext CoreTrusted();
+		[[nodiscard]] static ScriptSecurityContext PreRunRegistration();
 		[[nodiscard]] static ScriptSecurityContext StudioCoreUi();
 	};
 

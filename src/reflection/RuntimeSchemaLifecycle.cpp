@@ -4,6 +4,7 @@
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
+#include "gargantuan/reflection/PreRunRegistration.hpp"
 
 #include <algorithm>
 #include <limits>
@@ -17,7 +18,7 @@ namespace gargantuan {
 	namespace {
 		struct NativeSchemaSeed {
 			std::type_index NativeType;
-			SchemaDefinition Definition;
+			SchemaClassDefinition Definition;
 		};
 
 		std::vector<NativeSchemaSeed> &GetNativeSchemaSeeds() {
@@ -35,7 +36,7 @@ namespace gargantuan {
 			return lifecycle;
 		}
 
-		std::string CanonicalName(const SchemaDefinition &definition) {
+		std::string CanonicalName(const SchemaClassDefinition &definition) {
 			return definition.Namespace + "." + definition.ClassName;
 		}
 	}
@@ -77,11 +78,26 @@ namespace gargantuan {
 	void RuntimeSchemaLifecycle::RegisterNative(
 		const RuntimeSchemaBootstrapAuthority &,
 		std::type_index nativeType,
-		SchemaDefinition definition
+		SchemaClassDefinition definition
 	) {
 		RequirePhase(RuntimeSchemaLifecyclePhase::NativeRegistration, "register a native definition");
 		try {
 			CandidateRegistry->RegisterNative(nativeType, std::move(definition));
+		} catch (const std::exception &exception) {
+			RejectCandidate("registration", exception.what());
+		}
+	}
+
+	void RuntimeSchemaLifecycle::RegisterEnum(
+		const RuntimeSchemaBootstrapAuthority &,
+		SchemaEnumDefinition definition,
+		const ScriptSecurityContext &securityContext
+	) {
+		RequirePhase(RuntimeSchemaLifecyclePhase::PreRunRegistration, "register an enum definition");
+		if (!securityContext.HasCapability(ScriptCapability::DefineSchema))
+			RejectCandidate("registration", "enum definition requires DefineSchema capability");
+		try {
+			CandidateRegistry->RegisterEnum(std::move(definition));
 		} catch (const std::exception &exception) {
 			RejectCandidate("registration", exception.what());
 		}
@@ -97,9 +113,9 @@ namespace gargantuan {
 				expected = RuntimeSchemaLifecyclePhase::CoreRegistration;
 				break;
 			case RuntimeSchemaLifecyclePhase::CoreRegistration:
-				expected = RuntimeSchemaLifecyclePhase::ExternalRegistration;
+				expected = RuntimeSchemaLifecyclePhase::PreRunRegistration;
 				break;
-			case RuntimeSchemaLifecyclePhase::ExternalRegistration:
+			case RuntimeSchemaLifecyclePhase::PreRunRegistration:
 				expected = RuntimeSchemaLifecyclePhase::Validation;
 				break;
 			default:
@@ -176,7 +192,7 @@ namespace gargantuan {
 			);
 	}
 
-	void RegisterNativeSchemaSeed(std::type_index nativeType, SchemaDefinition definition) {
+	void RegisterNativeSchemaSeed(std::type_index nativeType, SchemaClassDefinition definition) {
 		std::scoped_lock lock(GetNativeSchemaSeedMutex());
 		if (GetMutableRuntimeSchemaLifecycle().HasActiveRegistry())
 			throw std::logic_error("Native schema seed registration occurred after runtime schema publication");
@@ -192,8 +208,7 @@ namespace gargantuan {
 		std::vector<NativeSchemaSeed> seeds;
 		{
 			std::scoped_lock lock(GetNativeSchemaSeedMutex());
-			seeds = std::move(GetNativeSchemaSeeds());
-			GetNativeSchemaSeeds().clear();
+			seeds = GetNativeSchemaSeeds();
 		}
 		std::sort(seeds.begin(), seeds.end(), [](const auto &left, const auto &right) {
 			const auto leftName = CanonicalName(left.Definition);
@@ -209,7 +224,39 @@ namespace gargantuan {
 			for (auto &seed : seeds)
 				lifecycle.RegisterNative(authority, seed.NativeType, std::move(seed.Definition));
 			lifecycle.AdvanceRegistrationPhase(authority, RuntimeSchemaLifecyclePhase::CoreRegistration);
-			lifecycle.AdvanceRegistrationPhase(authority, RuntimeSchemaLifecyclePhase::ExternalRegistration);
+			lifecycle.AdvanceRegistrationPhase(authority, RuntimeSchemaLifecyclePhase::PreRunRegistration);
+			lifecycle.AdvanceRegistrationPhase(authority, RuntimeSchemaLifecyclePhase::Validation);
+			lifecycle.ValidateCandidate(authority);
+			lifecycle.FreezeCandidate(authority);
+			lifecycle.PublishCandidate(authority);
+		} catch (...) {
+			if (lifecycle.HasCandidate()) lifecycle.AbortCandidate(authority);
+			throw;
+		}
+	}
+
+	void BootstrapProjectRuntimeSchema(const std::filesystem::path &projectRoot) {
+		auto &lifecycle = GetMutableRuntimeSchemaLifecycle();
+		const auto &authority = GetRuntimeSchemaBootstrapAuthority();
+
+		std::vector<NativeSchemaSeed> nativeDefinitions;
+		{
+			std::scoped_lock lock(GetNativeSchemaSeedMutex());
+			nativeDefinitions = GetNativeSchemaSeeds();
+		}
+		if (nativeDefinitions.empty()) throw std::logic_error("Native schema seeds are unavailable for project registration");
+		std::sort(nativeDefinitions.begin(), nativeDefinitions.end(), [](const auto &left, const auto &right) {
+			return CanonicalName(left.Definition) < CanonicalName(right.Definition);
+		});
+
+		lifecycle.BeginCandidate(authority);
+		try {
+			for (auto &seed : nativeDefinitions)
+				lifecycle.RegisterNative(authority, seed.NativeType, std::move(seed.Definition));
+			lifecycle.AdvanceRegistrationPhase(authority, RuntimeSchemaLifecyclePhase::CoreRegistration);
+			lifecycle.AdvanceRegistrationPhase(authority, RuntimeSchemaLifecyclePhase::PreRunRegistration);
+			if (auto source = ReadProjectPreRunSource(projectRoot))
+				ExecutePreRunRegistration(lifecycle, authority, *source, GetProjectPreRunPath(projectRoot).string());
 			lifecycle.AdvanceRegistrationPhase(authority, RuntimeSchemaLifecyclePhase::Validation);
 			lifecycle.ValidateCandidate(authority);
 			lifecycle.FreezeCandidate(authority);
@@ -240,7 +287,7 @@ namespace gargantuan {
 			case RuntimeSchemaLifecyclePhase::Bootstrap: return "Bootstrap";
 			case RuntimeSchemaLifecyclePhase::NativeRegistration: return "NativeRegistration";
 			case RuntimeSchemaLifecyclePhase::CoreRegistration: return "CoreRegistration";
-			case RuntimeSchemaLifecyclePhase::ExternalRegistration: return "ExternalRegistration";
+			case RuntimeSchemaLifecyclePhase::PreRunRegistration: return "PreRunRegistration";
 			case RuntimeSchemaLifecyclePhase::Validation: return "Validation";
 			case RuntimeSchemaLifecyclePhase::Frozen: return "Frozen";
 			case RuntimeSchemaLifecyclePhase::Runtime: return "Runtime";

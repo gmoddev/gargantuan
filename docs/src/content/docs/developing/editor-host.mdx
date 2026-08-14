@@ -42,7 +42,7 @@ method, and parameters.
 The initial protocol supports:
 
 - protocol handshake and capability discovery;
-- non-executing project open;
+- project open that runs no gameplay scripts (only bounded PreRun schema registration when configured);
 - reflected schema discovery;
 - deterministic snapshot capture;
 - ordered journal polling; and
@@ -95,9 +95,14 @@ transactions remain future interface work.
 The current private proof now uses an Avalonia C# host to bootstrap a restricted
 Studio-domain Luau VM. The public boundary exposes only stable IDs, schema,
 snapshot/journal data, structured commands, and viewport pixels. Script domains
-(`Core`, `Studio`, `Server`, and `Client`) are contexts rather than a privilege
+(`Core`, `PreRun`, `Studio`, `Server`, and `Client`) are contexts rather than a privilege
 ordering; native dispatch authorizes explicit capabilities. Studio's baseline
 grant is read access, validated mutation, editor commands, and local selection.
 The implemented Luau viewport adapter adds `ViewportControl`; it does not infer
 that permission from the `Studio` domain. Process, filesystem, and network
 access remain ungranted.
+
+`GetSchema` schema-discovery version 2 exposes the frozen registry generation
+and immutable class/enum metadata. Project enum definitions are created only by
+the engine's bounded PreRun candidate lifecycle. Studio receives neither the
+`DefineSchema` capability nor the registration facade.

@@ -7,6 +7,8 @@
 #include <optional>
 
 namespace gargantuan {
+	class RuntimeSchemaRegistry;
+	struct SchemaEnumItem;
 	using WireJson = nlohmann::ordered_json;
 
 	WireJson EncodeWireObjectId(WireObjectId id);
@@ -15,4 +17,12 @@ namespace gargantuan {
 	std::optional<WireValue> DecodeWireValue(const WireJson &encoded);
 	std::optional<WireValue> EncodeNativeWireValue(const std::any &value);
 	std::optional<std::any> DecodeNativeWireValue(const WireValue &value);
+	const SchemaEnumItem &ValidateSchemaEnumValue(
+		const WireSchemaEnumValue &value,
+		const RuntimeSchemaRegistry &registry
+	);
+	std::string FormatSchemaEnumValue(
+		const WireSchemaEnumValue &value,
+		const RuntimeSchemaRegistry &registry
+	);
 }

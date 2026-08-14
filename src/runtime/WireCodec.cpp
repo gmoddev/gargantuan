@@ -5,7 +5,11 @@
 #include "gargantuan/datatypes/Enum.hpp"
 #include "gargantuan/datatypes/UDim2.hpp"
 #include "gargantuan/datatypes/Vector2.hpp"
+#include "gargantuan/reflection/RuntimeSchema.hpp"
 
+#include <algorithm>
+#include <limits>
+#include <stdexcept>
 #include <string_view>
 #include <type_traits>
 
@@ -47,6 +51,7 @@ namespace gargantuan {
 			if (!typed->EnumType) return std::nullopt;
 			return WireEnumItem{std::string(typed->EnumType->Name), std::string(typed->Name)};
 		}
+		if (auto *typed = std::any_cast<WireSchemaEnumValue>(&value)) return *typed;
 		return std::nullopt;
 	}
 
@@ -55,7 +60,8 @@ namespace gargantuan {
 			[](const auto &typed) -> std::optional<std::any> {
 				using Value = std::decay_t<decltype(typed)>;
 				if constexpr (std::is_same_v<Value, std::monostate> ||
-					std::is_same_v<Value, WireObjectReference> || std::is_same_v<Value, WireEnumItem>) {
+					std::is_same_v<Value, WireObjectReference> || std::is_same_v<Value, WireEnumItem> ||
+					std::is_same_v<Value, WireSchemaEnumValue>) {
 					return std::nullopt;
 				} else if constexpr (std::is_same_v<Value, WireFloat>) {
 					return typed.Value;
@@ -106,6 +112,12 @@ namespace gargantuan {
 				if constexpr (std::is_same_v<Value, WireCFrame>) return {{"Type", "CFrame"}, {"Value", typed.Components}};
 				if constexpr (std::is_same_v<Value, WireEnumItem>)
 					return {{"Type", "EnumItem"}, {"Enum", typed.EnumType}, {"Value", typed.Item}};
+				if constexpr (std::is_same_v<Value, WireSchemaEnumValue>) return {
+					{"Type", "SchemaEnum"},
+					{"SchemaId", typed.EnumSchemaId.ToString()},
+					{"DefinitionVersion", typed.DefinitionVersion},
+					{"Value", typed.ItemValue},
+				};
 				if constexpr (std::is_same_v<Value, WireObjectReference>)
 					return {{"Type", "ObjectReference"}, {"Value", EncodeWireObjectId(typed.Object)}};
 			},
@@ -141,10 +153,48 @@ namespace gargantuan {
 		}
 		if (type == "EnumItem" && encoded.contains("Enum") && encoded["Enum"].is_string() && value.is_string())
 			return WireEnumItem{encoded["Enum"].get<std::string>(), value.get<std::string>()};
+		if (type == "SchemaEnum" && encoded.size() == 4 && encoded.contains("SchemaId") &&
+			encoded["SchemaId"].is_string() && encoded.contains("DefinitionVersion") &&
+			encoded["DefinitionVersion"].is_number_unsigned() && value.is_number_integer()) {
+			auto id = SchemaId::Parse(encoded["SchemaId"].get<std::string>());
+			const auto version = encoded["DefinitionVersion"].get<std::uint64_t>();
+			const auto item = value.get<std::int64_t>();
+			if (id && version > 0 && version <= std::numeric_limits<std::uint32_t>::max() &&
+				item >= std::numeric_limits<std::int32_t>::min() && item <= std::numeric_limits<std::int32_t>::max())
+				return WireSchemaEnumValue{*id, static_cast<std::uint32_t>(version), static_cast<std::int32_t>(item)};
+		}
 		if (type == "ObjectReference") {
 			auto id = DecodeWireObjectId(value);
 			if (id) return WireObjectReference{*id};
 		}
 		return std::nullopt;
+	}
+
+	const SchemaEnumItem &ValidateSchemaEnumValue(
+		const WireSchemaEnumValue &value,
+		const RuntimeSchemaRegistry &registry
+	) {
+		if (!value.EnumSchemaId.IsValid() || value.DefinitionVersion == 0)
+			throw std::invalid_argument("Schema enum value identity or version is invalid");
+		const auto *definition = registry.FindDefinitionById(value.EnumSchemaId);
+		if (!definition) throw std::invalid_argument("Schema enum definition is missing");
+		const auto *enumDefinition = std::get_if<SchemaEnumDefinition>(definition);
+		if (!enumDefinition) throw std::invalid_argument("Schema enum value resolves to the wrong definition kind");
+		if (enumDefinition->DefinitionVersion != value.DefinitionVersion)
+			throw std::invalid_argument("Schema enum definition version is incompatible");
+		auto item = std::find_if(enumDefinition->Items.begin(), enumDefinition->Items.end(), [&](const auto &candidate) {
+			return candidate.Value == value.ItemValue;
+		});
+		if (item == enumDefinition->Items.end()) throw std::invalid_argument("Schema enum item value is unknown");
+		return *item;
+	}
+
+	std::string FormatSchemaEnumValue(
+		const WireSchemaEnumValue &value,
+		const RuntimeSchemaRegistry &registry
+	) {
+		const auto &item = ValidateSchemaEnumValue(value, registry);
+		const auto *definition = registry.FindEnumById(value.EnumSchemaId);
+		return definition->CanonicalName + "." + item.Name;
 	}
 }

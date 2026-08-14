@@ -6,8 +6,10 @@
 #pragma once
 
 #include "gargantuan/reflection/RuntimeSchema.hpp"
+#include "gargantuan/scripting/ScriptSecurity.hpp"
 
 #include <cstdint>
+#include <filesystem>
 #include <memory>
 #include <string_view>
 #include <typeindex>
@@ -20,7 +22,7 @@ namespace gargantuan {
 		Bootstrap,
 		NativeRegistration,
 		CoreRegistration,
-		ExternalRegistration,
+		PreRunRegistration,
 		Validation,
 		Frozen,
 		Runtime,
@@ -40,11 +42,16 @@ namespace gargantuan {
 		void RegisterNative(
 			const RuntimeSchemaBootstrapAuthority &authority,
 			std::type_index nativeType,
-			SchemaDefinition definition
+			SchemaClassDefinition definition
+		);
+		void RegisterEnum(
+			const RuntimeSchemaBootstrapAuthority &authority,
+			SchemaEnumDefinition definition,
+			const ScriptSecurityContext &securityContext
 		);
 
 		template <typename T>
-		void RegisterNative(const RuntimeSchemaBootstrapAuthority &authority, SchemaDefinition definition) {
+		void RegisterNative(const RuntimeSchemaBootstrapAuthority &authority, SchemaClassDefinition definition) {
 			RegisterNative(authority, std::type_index(typeid(T)), std::move(definition));
 		}
 
@@ -74,8 +81,9 @@ namespace gargantuan {
 		void RejectCandidate(std::string_view operation, std::string_view reason);
 	};
 
-	void RegisterNativeSchemaSeed(std::type_index nativeType, SchemaDefinition definition);
+	void RegisterNativeSchemaSeed(std::type_index nativeType, SchemaClassDefinition definition);
 	void BootstrapNativeRuntimeSchema();
+	void BootstrapProjectRuntimeSchema(const std::filesystem::path &projectRoot);
 	void RequireFrozenRuntimeSchema(std::string_view operation);
 
 	[[nodiscard]] const RuntimeSchemaBootstrapAuthority &GetRuntimeSchemaBootstrapAuthority();

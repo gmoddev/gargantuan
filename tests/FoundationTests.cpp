@@ -18,7 +18,9 @@
 #include "gargantuan/runtime/ObjectId.hpp"
 #include "gargantuan/runtime/Snapshot.hpp"
 #include "gargantuan/runtime/TagIndex.hpp"
+#include "gargantuan/runtime/WireCodec.hpp"
 #include "gargantuan/runtime/WireJournal.hpp"
+#include "gargantuan/reflection/PreRunRegistration.hpp"
 #include "gargantuan/reflection/RuntimeSchema.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/scripting/ModuleResolution.hpp"
@@ -92,13 +94,13 @@ namespace {
 	struct SchemaTestTypeC {};
 	struct SchemaTestTypeD {};
 
-	gargantuan::SchemaDefinition MakeSchemaDefinition(
+	gargantuan::SchemaClassDefinition MakeSchemaDefinition(
 		std::string name,
 		std::optional<std::string> baseName = std::nullopt,
 		std::optional<gargantuan::SchemaId> id = std::nullopt
 	) {
 		using namespace gargantuan;
-		SchemaDefinition definition;
+		SchemaClassDefinition definition;
 		definition.Namespace = "Test";
 		definition.ClassName = std::move(name);
 		definition.Id = id.value_or(SchemaId::FromNativeName(definition.Namespace, definition.ClassName));
@@ -108,6 +110,26 @@ namespace {
 		definition.BaseSchemaId = definition.Superclass
 			? std::optional(SchemaId::FromNativeName(definition.Namespace, *definition.Superclass))
 			: std::nullopt;
+		return definition;
+	}
+
+	gargantuan::SchemaEnumDefinition MakeSchemaEnumDefinition(
+		std::string schemaNamespace,
+		std::string name,
+		std::uint32_t version = 1,
+		std::vector<gargantuan::SchemaEnumItem> items = {
+			{"Idle", 0}, {"Attacking", 1}, {"Blocking", 2},
+		}
+	) {
+		using namespace gargantuan;
+		SchemaEnumDefinition definition;
+		definition.Id = SchemaId::FromEnumName(schemaNamespace, name);
+		definition.Namespace = std::move(schemaNamespace);
+		definition.Name = std::move(name);
+		definition.DefinitionVersion = version;
+		definition.Provenance = SchemaProvenance::Game;
+		definition.OriginDetail = ".gargantuan/prerun.luau";
+		definition.Items = std::move(items);
 		return definition;
 	}
 
@@ -496,7 +518,7 @@ namespace {
 
 		static_assert(std::is_same_v<
 			decltype(std::declval<const RuntimeSchemaRegistry &>().FindByName(std::string_view{})),
-			const SchemaDefinition *
+			const SchemaClassDefinition *
 		>);
 
 		RuntimeSchemaRegistry directRegistry;
@@ -528,7 +550,7 @@ namespace {
 		CheckThrows<std::logic_error>(
 			[&] {
 				invalidTransition.AdvanceRegistrationPhase(
-					authority, RuntimeSchemaLifecyclePhase::ExternalRegistration
+					authority, RuntimeSchemaLifecyclePhase::PreRunRegistration
 				);
 			},
 			"runtime schema lifecycle rejects phase jumps"
@@ -546,7 +568,7 @@ namespace {
 		freezeBeforeValidation.BeginCandidate(authority);
 		freezeBeforeValidation.RegisterNative<SchemaTestTypeA>(authority, MakeSchemaDefinition("Unvalidated"));
 		freezeBeforeValidation.AdvanceRegistrationPhase(authority, RuntimeSchemaLifecyclePhase::CoreRegistration);
-		freezeBeforeValidation.AdvanceRegistrationPhase(authority, RuntimeSchemaLifecyclePhase::ExternalRegistration);
+		freezeBeforeValidation.AdvanceRegistrationPhase(authority, RuntimeSchemaLifecyclePhase::PreRunRegistration);
 		freezeBeforeValidation.AdvanceRegistrationPhase(authority, RuntimeSchemaLifecyclePhase::Validation);
 		CheckThrows<std::runtime_error>(
 			[&] { freezeBeforeValidation.FreezeCandidate(authority); },
@@ -564,7 +586,7 @@ namespace {
 			definition.DefinitionVersion = version;
 			lifecycle.RegisterNative<SchemaTestTypeA>(authority, std::move(definition));
 			lifecycle.AdvanceRegistrationPhase(authority, RuntimeSchemaLifecyclePhase::CoreRegistration);
-			lifecycle.AdvanceRegistrationPhase(authority, RuntimeSchemaLifecyclePhase::ExternalRegistration);
+			lifecycle.AdvanceRegistrationPhase(authority, RuntimeSchemaLifecyclePhase::PreRunRegistration);
 			lifecycle.AdvanceRegistrationPhase(authority, RuntimeSchemaLifecyclePhase::Validation);
 			lifecycle.ValidateCandidate(authority);
 			lifecycle.FreezeCandidate(authority);
@@ -592,7 +614,7 @@ namespace {
 		lifecycle.BeginCandidate(authority);
 		lifecycle.RegisterNative<SchemaTestTypeB>(authority, MakeSchemaDefinition("Broken", "Missing"));
 		lifecycle.AdvanceRegistrationPhase(authority, RuntimeSchemaLifecyclePhase::CoreRegistration);
-		lifecycle.AdvanceRegistrationPhase(authority, RuntimeSchemaLifecyclePhase::ExternalRegistration);
+		lifecycle.AdvanceRegistrationPhase(authority, RuntimeSchemaLifecyclePhase::PreRunRegistration);
 		lifecycle.AdvanceRegistrationPhase(authority, RuntimeSchemaLifecyclePhase::Validation);
 		CheckThrows<std::runtime_error>(
 			[&] { lifecycle.ValidateCandidate(authority); },
@@ -622,6 +644,269 @@ namespace {
 		CheckThrows<std::logic_error>(
 			[] { BootstrapNativeRuntimeSchema(); },
 			"published native runtime schema cannot be reopened by bootstrap"
+		);
+	}
+
+	void TestCustomEnumPreRun() {
+		using namespace gargantuan;
+		const auto &authority = GetRuntimeSchemaBootstrapAuthority();
+		const auto enumId = SchemaId::FromEnumName("Game", "CombatState");
+		Check(enumId == SchemaId::FromEnumName("Game", "CombatState"), "custom enum SchemaId is deterministic");
+		Check(enumId != SchemaId::FromEnumName("Game", "MovementState"), "custom enum names domain-separate identity");
+		Check(enumId != SchemaId::FromEnumName("Tools", "CombatState"), "custom enum namespaces domain-separate identity");
+		Check(enumId != SchemaId::FromNativeName("Game", "CombatState"), "class and enum SchemaIds use distinct domains");
+		Check(
+			WireSchemaEnumValue{enumId, 1, 1} !=
+				WireSchemaEnumValue{SchemaId::FromEnumName("Game", "MovementState"), 1, 1},
+			"enum item identity includes the owning enum SchemaId"
+		);
+
+		RuntimeSchemaRegistry registry;
+		registry.RegisterNative<SchemaTestTypeA>(MakeSchemaDefinition("Host"));
+		registry.RegisterEnum(MakeSchemaEnumDefinition("Game", "CombatState"));
+		registry.Validate();
+		registry.Freeze();
+		const auto *customEnum = registry.FindEnumById(enumId);
+		Check(
+			customEnum && customEnum->CanonicalName == "Game.CombatState" &&
+				customEnum->DefinitionVersion == 1 && customEnum->Provenance == SchemaProvenance::Game,
+			"canonical registry exposes frozen custom enum identity, version, and provenance"
+		);
+		Check(
+			customEnum && customEnum->Items == std::vector<SchemaEnumItem>({
+				{"Attacking", 1}, {"Blocking", 2}, {"Idle", 0},
+			}),
+			"custom enum item enumeration is deterministic"
+		);
+		Check(registry.FindClassById(enumId) == nullptr, "typed class lookup rejects enum definitions");
+		Check(registry.FindEnumById(SchemaId::FromNativeName("Test", "Host")) == nullptr,
+			"typed enum lookup rejects class definitions");
+
+		RuntimeSchemaRegistry registrationOrder;
+		registrationOrder.RegisterEnum(MakeSchemaEnumDefinition("Game", "CombatState"));
+		registrationOrder.RegisterNative<SchemaTestTypeB>(MakeSchemaDefinition("Host"));
+		registrationOrder.Validate();
+		registrationOrder.Freeze();
+		auto names = [](const RuntimeSchemaRegistry &source) {
+			std::vector<std::string> result;
+			for (const auto *definition : source.EnumerateDefinitions())
+				result.emplace_back(GetSchemaDefinitionCanonicalName(*definition));
+			return result;
+		};
+		Check(names(registry) == names(registrationOrder), "schema enumeration is independent of registration order");
+
+		RuntimeSchemaRegistry canonicalCollision;
+		auto collidingClass = MakeSchemaDefinition("CombatState");
+		collidingClass.Namespace = "Game";
+		collidingClass.Id = SchemaId::FromNativeName("Game", "CombatState");
+		canonicalCollision.RegisterNative<SchemaTestTypeA>(std::move(collidingClass));
+		CheckThrows<std::invalid_argument>(
+			[&] { canonicalCollision.RegisterEnum(MakeSchemaEnumDefinition("Game", "CombatState")); },
+			"class and enum canonical-name collision is rejected rather than load-order resolved"
+		);
+		RuntimeSchemaRegistry itemCollision;
+		CheckThrows<std::invalid_argument>(
+			[&] { itemCollision.RegisterEnum(MakeSchemaEnumDefinition("Game", "Alias", 1, {{"A", 1}, {"B", 1}})); },
+			"custom enum numeric aliases are rejected"
+		);
+		RuntimeSchemaRegistry invalidUtf8;
+		auto malformedName = MakeSchemaEnumDefinition("Game", "Malformed");
+		malformedName.Items[0].Name = std::string("\xc0", 1);
+		CheckThrows<std::invalid_argument>(
+			[&] { invalidUtf8.RegisterEnum(std::move(malformedName)); },
+			"custom enum registration rejects malformed UTF-8"
+		);
+
+		const WireSchemaEnumValue value{enumId, 1, 1};
+		const auto encoded = EncodeWireValue(WireValue(value));
+		const auto decoded = DecodeWireValue(encoded);
+		Check(
+			decoded && std::get_if<WireSchemaEnumValue>(&*decoded) &&
+				*std::get_if<WireSchemaEnumValue>(&*decoded) == value,
+			"custom enum value round-trips with stable schema identity and definition version"
+		);
+		auto malformedWire = encoded;
+		malformedWire["SchemaId"] = "not-a-schema-id";
+		Check(!DecodeWireValue(malformedWire), "malformed custom enum wire identity is rejected");
+		Check(FormatSchemaEnumValue(value, registry) == "Game.CombatState.Attacking",
+			"custom enum values format deterministically through the frozen registry");
+		WireJournalRecord replicatedValue{
+			.Version = WireJournalFormatVersion,
+			.Sequence = 1,
+			.Scope = {1, 1},
+			.Operation = WireJournalOperation::PropertyUpdate,
+			.Object = {2, 1},
+			.PropertyName = "State",
+			.Value = WireValue(value),
+		};
+		const auto replicatedRoundTrip = DeserializeWireJournalRecords(
+			SerializeWireJournalRecords({replicatedValue})
+		);
+		Check(
+			replicatedRoundTrip.Succeeded() && replicatedRoundTrip.Value->size() == 1 &&
+				std::get<WireSchemaEnumValue>(*replicatedRoundTrip.Value->front().Value) == value,
+			"loopback journal wire transport retains typed custom enum identity"
+		);
+		if (replicatedRoundTrip.Succeeded())
+			static_cast<void>(ValidateSchemaEnumValue(
+				std::get<WireSchemaEnumValue>(*replicatedRoundTrip.Value->front().Value), registry
+			));
+		CheckThrows<std::invalid_argument>(
+			[&] { static_cast<void>(ValidateSchemaEnumValue({enumId, 2, 1}, registry)); },
+			"custom enum materialization fails closed on definition-version mismatch"
+		);
+		CheckThrows<std::invalid_argument>(
+			[&] { static_cast<void>(ValidateSchemaEnumValue({SchemaId::FromParts(99, 99), 1, 1}, registry)); },
+			"custom enum materialization fails closed on missing definitions"
+		);
+		CheckThrows<std::invalid_argument>(
+			[&] { static_cast<void>(ValidateSchemaEnumValue({SchemaId::FromNativeName("Test", "Host"), 1, 1}, registry)); },
+			"custom enum materialization fails closed on wrong-kind definitions"
+		);
+		CheckThrows<std::invalid_argument>(
+			[&] { static_cast<void>(ValidateSchemaEnumValue({enumId, 1, 999}, registry)); },
+			"custom enum materialization fails closed on unknown items"
+		);
+		CheckThrows<std::invalid_argument>(
+			[&] { static_cast<void>(ValidateAttributeValue(WireValue(value))); },
+			"enum-valued Attributes remain explicitly unsupported"
+		);
+
+		auto PreparePreRun = [&](RuntimeSchemaLifecycle &lifecycle) {
+			lifecycle.BeginCandidate(authority);
+			lifecycle.RegisterNative<SchemaTestTypeA>(authority, MakeSchemaDefinition("PreRunHost"));
+			lifecycle.AdvanceRegistrationPhase(authority, RuntimeSchemaLifecyclePhase::CoreRegistration);
+			lifecycle.AdvanceRegistrationPhase(authority, RuntimeSchemaLifecyclePhase::PreRunRegistration);
+		};
+		const std::string validSource = R"(
+			assert(os == nil and io == nil and debug == nil and require == nil)
+			Schema:RegisterEnum({
+				Namespace = "Game",
+				Name = "CombatState",
+				Version = 1,
+				Items = { Idle = 0, Attacking = 1, Blocking = 2 },
+			})
+		)";
+		RuntimeSchemaLifecycle successful;
+		PreparePreRun(successful);
+		ExecutePreRunRegistration(successful, authority, validSource, "valid-prerun");
+		successful.AdvanceRegistrationPhase(authority, RuntimeSchemaLifecyclePhase::Validation);
+		successful.ValidateCandidate(authority);
+		successful.FreezeCandidate(authority);
+		successful.PublishCandidate(authority);
+		Check(
+			successful.GetActiveRegistry()->FindEnumByName("Game.CombatState") != nullptr &&
+				successful.GetActiveGeneration() == 1,
+			"bounded authorized PreRun registers and atomically publishes a custom enum"
+		);
+		Check(
+			!ScriptSecurityContext::PreRunRegistration().HasCapability(ScriptCapability::MutateDataModel),
+			"PreRun definition capability does not grant DataModel mutation authority"
+		);
+		CheckThrows<std::logic_error>(
+			[&] { successful.RegisterEnum(authority, MakeSchemaEnumDefinition("Game", "Late"), ScriptSecurityContext::PreRunRegistration()); },
+			"post-freeze schema registration fails even with DefineSchema capability"
+		);
+
+		for (const auto domain : {ScriptExecutionDomain::PreRun, ScriptExecutionDomain::Core,
+			ScriptExecutionDomain::Studio, ScriptExecutionDomain::Server, ScriptExecutionDomain::Client}) {
+			RuntimeSchemaLifecycle denied;
+			PreparePreRun(denied);
+			CheckThrows<PreRunRegistrationError>(
+				[&] { ExecutePreRunRegistration(denied, authority, validSource, "unauthorized-prerun", {domain, {}}); },
+				"execution domain without DefineSchema cannot register custom schema"
+			);
+			Check(!denied.HasCandidate() && !denied.HasActiveRegistry(),
+				"unauthorized PreRun aborts the complete hidden candidate");
+		}
+
+		RuntimeSchemaLifecycle runaway;
+		PreparePreRun(runaway);
+		try {
+			ExecutePreRunRegistration(runaway, authority, "while true do end", "runaway-prerun");
+			Check(false, "runaway PreRun is interrupted");
+		} catch (const PreRunRegistrationError &error) {
+			Check(error.GetDiagnostic().Code == PreRunDiagnosticCode::ExecutionBudgetExceeded,
+				"runaway PreRun reports a structured execution-budget diagnostic");
+		}
+		Check(!runaway.HasCandidate(), "runaway PreRun publishes no candidate state");
+
+		RuntimeSchemaLifecycle allocation;
+		PreparePreRun(allocation);
+		try {
+			ExecutePreRunRegistration(
+				allocation, authority,
+				"local value = string.rep('x', 20000000)",
+				"allocation-prerun"
+			);
+			Check(false, "excessive PreRun allocation is rejected");
+		} catch (const PreRunRegistrationError &error) {
+			Check(error.GetDiagnostic().Code == PreRunDiagnosticCode::MemoryBudgetExceeded,
+				"excessive PreRun allocation reports a structured memory-budget diagnostic");
+		}
+		Check(!allocation.HasCandidate(), "allocation failure publishes no candidate state");
+
+		RuntimeSchemaLifecycle sourceLimit;
+		PreparePreRun(sourceLimit);
+		try {
+			ExecutePreRunRegistration(
+				sourceLimit, authority, std::string(MaximumPreRunSourceBytes + 1, ' '), "oversized-prerun"
+			);
+			Check(false, "oversized PreRun source is rejected");
+		} catch (const PreRunRegistrationError &error) {
+			Check(error.GetDiagnostic().Code == PreRunDiagnosticCode::SourceTooLarge,
+				"oversized PreRun source reports a structured source-limit diagnostic");
+		}
+
+		std::string tooManyDefinitions;
+		for (std::size_t index = 0; index <= MaximumCustomEnumDefinitions; ++index) {
+			tooManyDefinitions += "Schema:RegisterEnum({Namespace='Game',Name='Limit" +
+				std::to_string(index) + "',Version=1,Items={Value=0}})\n";
+		}
+		RuntimeSchemaLifecycle definitionLimit;
+		PreparePreRun(definitionLimit);
+		CheckThrows<PreRunRegistrationError>(
+			[&] { ExecutePreRunRegistration(definitionLimit, authority, tooManyDefinitions, "definition-limit"); },
+			"PreRun definition-count overflow aborts registration"
+		);
+		Check(!definitionLimit.HasCandidate(), "definition-count overflow leaks no earlier definitions");
+
+		std::string tooManyItems = "local items = {}\n";
+		tooManyItems += "for index = 0, " + std::to_string(MaximumCustomEnumItems) +
+			" do items['Item' .. index] = index end\n";
+		tooManyItems += "Schema:RegisterEnum({Namespace='Game',Name='TooManyItems',Version=1,Items=items})";
+		RuntimeSchemaLifecycle itemLimit;
+		PreparePreRun(itemLimit);
+		CheckThrows<PreRunRegistrationError>(
+			[&] { ExecutePreRunRegistration(itemLimit, authority, tooManyItems, "item-limit"); },
+			"PreRun enum-item overflow aborts registration"
+		);
+		Check(!itemLimit.HasCandidate(), "enum-item overflow publishes no partial definition");
+
+		RuntimeSchemaLifecycle transactional;
+		PreparePreRun(transactional);
+		ExecutePreRunRegistration(transactional, authority, validSource, "initial-prerun");
+		transactional.AdvanceRegistrationPhase(authority, RuntimeSchemaLifecyclePhase::Validation);
+		transactional.ValidateCandidate(authority);
+		transactional.FreezeCandidate(authority);
+		transactional.PublishCandidate(authority);
+		const auto previous = transactional.GetActiveRegistry();
+		const auto previousGeneration = transactional.GetActiveGeneration();
+		PreparePreRun(transactional);
+		const std::string invalidBatch = R"(
+			Schema:RegisterEnum({ Namespace="Game", Name="A", Version=1, Items={ One=1 } })
+			Schema:RegisterEnum({ Namespace="Game", Name="B", Version=1, Items={ Two=2 } })
+			Schema:RegisterEnum({ Namespace="Game", Name="C", Version=1, Items={ X=3, Y=3 } })
+		)";
+		CheckThrows<PreRunRegistrationError>(
+			[&] { ExecutePreRunRegistration(transactional, authority, invalidBatch, "invalid-batch"); },
+			"one malformed custom enum aborts the complete PreRun transaction"
+		);
+		Check(
+			transactional.GetActiveRegistry() == previous &&
+				transactional.GetActiveGeneration() == previousGeneration &&
+				previous->FindEnumByName("Game.A") == nullptr && previous->FindEnumByName("Game.B") == nullptr,
+			"failed replacement leaks no definitions and does not advance registry generation"
 		);
 	}
 
@@ -761,6 +1046,7 @@ namespace {
 	void TestScriptSecurityModel() {
 		using namespace gargantuan;
 		Check(GetScriptExecutionDomainName(ScriptExecutionDomain::Core) == "Core", "Core script domain is represented");
+		Check(GetScriptExecutionDomainName(ScriptExecutionDomain::PreRun) == "PreRun", "PreRun script domain is represented");
 		Check(GetScriptExecutionDomainName(ScriptExecutionDomain::Studio) == "Studio", "Studio script domain is represented");
 		Check(GetScriptExecutionDomainName(ScriptExecutionDomain::Server) == "Server", "Server script domain is represented");
 		Check(GetScriptExecutionDomainName(ScriptExecutionDomain::Client) == "Client", "Client script domain is represented");
@@ -777,6 +1063,11 @@ namespace {
 		Check(
 			!coreWithoutCapabilities.HasCapability(ScriptCapability::MutateDataModel),
 			"Core domain does not imply mutation capability"
+		);
+		Check(
+			!coreWithoutCapabilities.HasCapability(ScriptCapability::DefineSchema) &&
+				ScriptSecurityContext::PreRunRegistration().HasCapability(ScriptCapability::DefineSchema),
+			"schema definition authority is an explicit capability rather than a domain rank"
 		);
 		Check(
 			!clientProcessOnly.HasCapability(ScriptCapability::ReadDataModel),
@@ -1606,6 +1897,22 @@ namespace {
 		std::ofstream project(temporaryRoot / ".gargantuan" / "project.instance.json", std::ios::binary);
 		project << R"({"Version":0,"Name":"EditorWorld","ClassName":"DataModel","Properties":{},"Children":[{"Name":"Editable","ClassName":"Folder","Properties":{},"Children":[]},{"Name":"Workspace","ClassName":"Workspace","Properties":{},"Children":[{"Name":"PickTarget","ClassName":"Part","Properties":{},"Children":[]}]}]})";
 		project.close();
+		std::ofstream preRun(temporaryRoot / ".gargantuan" / "prerun.luau", std::ios::binary);
+		preRun << R"(Schema:RegisterEnum({
+			Namespace = "Game",
+			Name = "CombatState",
+			Version = 1,
+			Items = { Idle = 0, Attacking = 1, Blocking = 2 },
+		}))";
+		preRun.close();
+		const auto rejectedRoot = temporaryRoot / "rejected";
+		std::filesystem::create_directories(rejectedRoot / ".gargantuan");
+		std::ofstream rejectedProject(rejectedRoot / ".gargantuan" / "project.instance.json", std::ios::binary);
+		rejectedProject << R"({"Version":0,"Name":"RejectedWorld","ClassName":"DataModel","Properties":{},"Children":[]})";
+		rejectedProject.close();
+		std::ofstream rejectedPreRun(rejectedRoot / ".gargantuan" / "prerun.luau", std::ios::binary);
+		rejectedPreRun << R"(Schema:RegisterEnum({ Namespace="Game", Name="Broken", Version=1, Items={ A=1, B=1 } }))";
+		rejectedPreRun.close();
 
 		EditorHost host("test-token");
 		std::size_t requestNumber = 0;
@@ -1685,10 +1992,40 @@ namespace {
 			Check(closedTransport["Ok"].get<bool>(), "EditorHost closes the shared-memory viewport ring explicitly");
 		}
 		auto schema = call("GetSchema", Json::object(), "test-token");
-		Check(schema["Ok"].get<bool>() && !schema["Result"]["Classes"].empty(), "EditorHost exposes reflected class schemas");
+		Check(
+			schema["Ok"].get<bool>() && schema["Result"]["SchemaDiscoveryVersion"] == 2 &&
+				!schema["Result"]["Classes"].empty() && !schema["Result"]["Definitions"].empty(),
+			"EditorHost exposes versioned frozen schema discovery without removing the class adapter"
+		);
 
 		auto opened = call("OpenProject", {{"Root", temporaryRoot.string()}}, "test-token");
 		Check(opened["Ok"].get<bool>(), "EditorHost opens a project without starting the engine loop");
+		auto projectSchema = call("GetSchema", Json::object(), "test-token");
+		auto discoveredEnum = std::find_if(
+			projectSchema["Result"]["Definitions"].begin(), projectSchema["Result"]["Definitions"].end(),
+			[](const Json &definition) { return definition["CanonicalName"] == "Game.CombatState"; }
+		);
+		Check(
+			projectSchema["Ok"].get<bool>() && discoveredEnum != projectSchema["Result"]["Definitions"].end() &&
+				(*discoveredEnum)["Kind"] == "Enum" && (*discoveredEnum)["Provenance"] == "Game" &&
+				(*discoveredEnum)["Items"].size() == 3,
+			"EditorHost exposes immutable project enum metadata after PreRun publication"
+		);
+		const auto publishedGeneration = projectSchema["Result"]["RegistryGeneration"];
+		auto rejectedOpen = call("OpenProject", {{"Root", rejectedRoot.string()}}, "test-token");
+		Check(
+			!rejectedOpen["Ok"].get<bool>() && rejectedOpen["Error"]["Code"] == "RequestRejected",
+			"EditorHost reports failed PreRun project bootstrap as a structured error"
+		);
+		auto preservedSchema = call("GetSchema", Json::object(), "test-token");
+		Check(
+			preservedSchema["Result"]["RegistryGeneration"] == publishedGeneration &&
+				std::any_of(
+					preservedSchema["Result"]["Definitions"].begin(), preservedSchema["Result"]["Definitions"].end(),
+					[](const Json &definition) { return definition["CanonicalName"] == "Game.CombatState"; }
+				),
+			"failed project PreRun preserves the prior frozen schema and generation"
+		);
 		auto snapshot = call("GetSnapshot", Json::object(), "test-token");
 		Check(snapshot["Ok"].get<bool>(), "EditorHost returns a cursor-paired snapshot");
 		auto &objects = snapshot["Result"]["Snapshot"]["Objects"];
@@ -1830,6 +2167,7 @@ int main() {
 	TestSchemaMetadata();
 	TestRuntimeSchemaRegistry();
 	TestRuntimeSchemaLifecycle();
+	TestCustomEnumPreRun();
 	TestRenderSnapshotExtraction();
 	TestScriptSecurityModel();
 	TestMutationGateway();

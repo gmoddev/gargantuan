@@ -8,6 +8,7 @@
 #include "gargantuan/InstanceProperty.hpp"
 #include "gargantuan/filesystem/Project.hpp"
 #include "gargantuan/reflection/InstanceClassRegistry.hpp"
+#include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/runtime/Snapshot.hpp"
 #include "gargantuan/runtime/WireCodec.hpp"
 #include "gargantuan/runtime/WireJournal.hpp"
@@ -105,6 +106,7 @@ namespace gargantuan {
 			Json result = Json::array();
 			for (const auto domain : {
 				ScriptExecutionDomain::Core,
+				ScriptExecutionDomain::PreRun,
 				ScriptExecutionDomain::Studio,
 				ScriptExecutionDomain::Server,
 				ScriptExecutionDomain::Client,
@@ -127,6 +129,7 @@ namespace gargantuan {
 				ScriptCapability::ProcessControl,
 				ScriptCapability::NetworkSend,
 				ScriptCapability::NetworkReceive,
+				ScriptCapability::DefineSchema,
 			}) {
 				if (capabilities.Contains(capability)) result.push_back(GetScriptCapabilityName(capability));
 			}
@@ -285,6 +288,7 @@ namespace gargantuan {
 				auto root = std::filesystem::weakly_canonical(std::filesystem::path(parameters["Root"].get<std::string>()));
 				if (!std::filesystem::is_directory(root))
 					return SerializeBoundedResponse(ErrorResponse(requestId, "ProjectNotFound", "Project root is not a directory"));
+				BootstrapProjectRuntimeSchema(root);
 				auto filesystem = std::make_unique<DiskFilesystem>(root);
 				auto project = Project::fromExisting(filesystem.get());
 				auto world = project.DeserializeGame();
@@ -355,7 +359,31 @@ namespace gargantuan {
 						{"Properties", std::move(properties)},
 					});
 				}
-				return SerializeBoundedResponse(SuccessResponse(requestId, {{"Classes", std::move(classes)}}));
+				Json definitions = Json::array();
+				for (const auto *entry : GetActiveRuntimeSchemaRegistry().EnumerateDefinitions()) {
+					Json encoded{
+						{"SchemaId", GetSchemaDefinitionId(*entry).ToString()},
+						{"Kind", GetSchemaDefinitionKind(*entry) == SchemaDefinitionKind::Class ? "Class" : "Enum"},
+						{"Namespace", GetSchemaDefinitionNamespace(*entry)},
+						{"Name", GetSchemaDefinitionName(*entry)},
+						{"CanonicalName", GetSchemaDefinitionCanonicalName(*entry)},
+						{"DefinitionVersion", GetSchemaDefinitionVersion(*entry)},
+						{"Provenance", GetSchemaProvenanceName(GetSchemaDefinitionProvenance(*entry))},
+					};
+					if (const auto *enumDefinition = std::get_if<SchemaEnumDefinition>(entry)) {
+						Json items = Json::array();
+						for (const auto &item : enumDefinition->Items)
+							items.push_back({{"Name", item.Name}, {"Value", item.Value}});
+						encoded["Items"] = std::move(items);
+					}
+					definitions.push_back(std::move(encoded));
+				}
+				return SerializeBoundedResponse(SuccessResponse(requestId, {
+					{"SchemaDiscoveryVersion", 2},
+					{"RegistryGeneration", GetRuntimeSchemaLifecycle().GetActiveGeneration()},
+					{"Definitions", std::move(definitions)},
+					{"Classes", std::move(classes)},
+				}));
 			}
 
 			if (!World)

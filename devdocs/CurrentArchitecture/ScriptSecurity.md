@@ -2,15 +2,16 @@
 
 ## Implemented now
 
-Gargantuan represents four script execution contexts: `Core`, `Studio`,
-`Server`, and `Client`. A domain identifies where code is executing; it is not
+Gargantuan represents five script execution contexts: `Core`, `PreRun`,
+`Studio`, `Server`, and `Client`. A domain identifies where code is executing; it is not
 a numeric trust level. Authorization is an explicit capability-set test, so a
 Client context granted one operation can perform it while a Core context
 without that capability cannot.
 
 The initial capabilities are `ReadDataModel`, `MutateDataModel`,
 `EditorCommands`, `SelectionAccess`, `ViewportControl`, `FilesystemRead`,
-`FilesystemWrite`, `ProcessControl`, `NetworkSend`, and `NetworkReceive`.
+`FilesystemWrite`, `ProcessControl`, `NetworkSend`, `NetworkReceive`, and
+`DefineSchema`.
 `CoreTrusted()` currently grants the complete set for existing engine-internal
 execution. EditorHost uses `StudioCoreUi()`, which grants only
 `ReadDataModel`, `MutateDataModel`, `EditorCommands`, `SelectionAccess`, and
@@ -29,6 +30,14 @@ The current context is thread-local and defaults to trusted Core for backwards
 compatibility with engine-owned call paths. New untrusted script entry points
 must establish a `ScriptSecurityScope` before dispatch. Treating the default as
 an ambient permission for new code is prohibited.
+
+`PreRunRegistration()` grants only `DefineSchema`. The native bootstrap selects
+the project registration source and installs this context; being in the
+`PreRun` domain, using a `Game` namespace, or having `Game` provenance does not
+authorize registration. The callback also requires the lifecycle to be in its
+hidden-candidate `PreRunRegistration` phase. Freeze remains authoritative even
+if a context retains the capability. PreRun receives no DataModel mutation,
+filesystem, process, network, Studio, or viewport capability.
 
 ## Deferred
 

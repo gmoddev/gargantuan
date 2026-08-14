@@ -9,9 +9,11 @@ include Gargantuan's private C++ headers or copy implementation from the removed
 legacy Studio prototype in Git history.
 
 EditorHost v0 is a headless document host reached through standard input and
-output. It does not construct `Engine`, initialize a renderer, run scripts, step
+output. It does not construct `Engine`, initialize a renderer, run gameplay scripts, step
 simulation, or synchronize `FileLink` objects. Opening is therefore distinct
-from executing. Protocol responses are lines prefixed with
+from executing a game. Project open may run only the bounded, capability-scoped
+`.gargantuan/prerun.luau` schema-registration phase before constructing the
+document. Protocol responses are lines prefixed with
 `GARGANTUAN_EDITOR/1 `; requests are unprefixed single-line JSON documents.
 
 Each launch requires a random token supplied with `--editor-token`. Every
@@ -44,7 +46,7 @@ limited to 256 records.
 | --- | --- |
 | `Handshake` | Returns engine identity, protocol version, and capabilities. |
 | `OpenProject` | Canonicalizes and loads a project root without executing it. |
-| `GetSchema` | Returns deterministic reflected class and property metadata. |
+| `GetSchema` | Returns class compatibility metadata plus schema-discovery v2 definitions and registry generation. |
 | `GetSnapshot` | Returns snapshot v4 and establishes the session cursor. |
 | `PollChanges` | Returns scoped wire-journal v4 records after that cursor. |
 | `SetProperty` | Applies a closed non-reference `WireValue` through `MutationGateway`. |
@@ -79,6 +81,12 @@ schema reads, snapshots, journal polling, reflected property dispatch, and the
 mutation gateway check it at their native boundaries. Every viewport method
 also checks `ViewportControl`. It does not grant
 process, filesystem, network, or arbitrary engine-native access.
+
+Schema discovery is read-only. Version 2 returns stable class/enum identity,
+definition kind and version, provenance, and ordered custom-enum items. Studio
+does not receive `DefineSchema`, the PreRun facade, candidate registry access,
+or mutable native metadata. The top-level EditorHost protocol remains version
+1; schema discovery is independently versioned.
 
 ## Licensing and repository contract
 
