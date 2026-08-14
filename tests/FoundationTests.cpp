@@ -275,6 +275,65 @@ namespace {
 			"replication metadata is retained"
 		);
 		Check(property.WriteAuthority == InstanceProperty::Authority::Any, "authority metadata is retained");
+		Check(
+			name->RequiredReadCapability == ScriptCapability::ReadDataModel &&
+				name->RequiredWriteCapability == ScriptCapability::MutateDataModel,
+			"property metadata carries enforceable read and mutation capabilities"
+		);
+		Check(
+			name->ReadDomains.Contains(ScriptExecutionDomain::Studio) &&
+				name->WriteDomains.Contains(ScriptExecutionDomain::Server),
+			"property metadata represents domains as independent set membership"
+		);
+	}
+
+	void TestScriptSecurityModel() {
+		using namespace gargantuan;
+		Check(GetScriptExecutionDomainName(ScriptExecutionDomain::Core) == "Core", "Core script domain is represented");
+		Check(GetScriptExecutionDomainName(ScriptExecutionDomain::Studio) == "Studio", "Studio script domain is represented");
+		Check(GetScriptExecutionDomainName(ScriptExecutionDomain::Server) == "Server", "Server script domain is represented");
+		Check(GetScriptExecutionDomainName(ScriptExecutionDomain::Client) == "Client", "Client script domain is represented");
+
+		ScriptSecurityContext coreWithoutCapabilities{ScriptExecutionDomain::Core, {}};
+		ScriptSecurityContext serverMutator{
+			ScriptExecutionDomain::Server,
+			{ScriptCapability::MutateDataModel},
+		};
+		ScriptSecurityContext clientProcessOnly{
+			ScriptExecutionDomain::Client,
+			{ScriptCapability::ProcessControl},
+		};
+		Check(
+			!coreWithoutCapabilities.HasCapability(ScriptCapability::MutateDataModel),
+			"Core domain does not imply mutation capability"
+		);
+		Check(
+			!clientProcessOnly.HasCapability(ScriptCapability::ReadDataModel),
+			"capabilities are independent rather than a numeric privilege hierarchy"
+		);
+
+		auto folder = std::make_shared<Folder>();
+		const auto id = folder->GetObjectId();
+		MutationGateway gateway;
+		auto deniedCore = gateway.Apply(
+			UpdatePropertyCommand{id, "Name", std::string("DeniedCore")},
+			coreWithoutCapabilities
+		);
+		Check(deniedCore.Status == MutationStatus::Unauthorized, "native gateway enforces explicit capabilities for Core");
+		auto allowedServer = gateway.Apply(
+			UpdatePropertyCommand{id, "Name", std::string("AllowedServer")},
+			serverMutator
+		);
+		Check(
+			allowedServer.Succeeded() && folder->GetName() == "AllowedServer",
+			"Server domain can mutate only when explicitly granted MutateDataModel"
+		);
+		auto deniedClient = gateway.Apply(
+			UpdatePropertyCommand{id, "Name", std::string("DeniedClient")},
+			clientProcessOnly
+		);
+		Check(deniedClient.Status == MutationStatus::Unauthorized, "unrelated ProcessControl does not grant mutation");
+		folder->Destroy();
 	}
 
 	void TestMutationGateway() {
@@ -705,6 +764,13 @@ namespace {
 		Check(!unauthorized["Ok"].get<bool>() && unauthorized["Error"]["Code"] == "Unauthorized", "EditorHost rejects the wrong launch token");
 		auto handshake = call("Handshake", Json::object(), "test-token");
 		Check(handshake["Ok"].get<bool>() && handshake["Result"]["ProtocolVersion"] == 1, "EditorHost negotiates protocol version 1");
+		Check(
+			handshake["Result"]["StudioExecutionDomain"] == "Studio" &&
+				handshake["Result"]["StudioCapabilities"] == Json::array({
+					"ReadDataModel", "MutateDataModel", "EditorCommands", "SelectionAccess"
+				}),
+			"EditorHost exposes the narrow Studio-domain capability grant"
+		);
 		auto sharedTransport = std::find_if(
 			handshake["Result"]["ViewportTransports"].begin(),
 			handshake["Result"]["ViewportTransports"].end(),
@@ -839,6 +905,7 @@ int main() {
 	TestCheckedResolutionAndOwnedPaths();
 	TestJobSystem();
 	TestSchemaMetadata();
+	TestScriptSecurityModel();
 	TestMutationGateway();
 	TestBoundedJournalCursor();
 	TestSnapshotBaseline();

@@ -168,11 +168,13 @@ namespace gargantuan {
 	MutationStatus Instance::ApplyPropertyMutation(
 		std::string_view propertyName,
 		const std::any &value,
-		Enums::Permission permission
+		Enums::Permission permission,
+		const ScriptSecurityContext &securityContext
 	) {
 		auto *property = FindProperty(std::string(propertyName));
 		if (!property) return MutationStatus::InvalidProperty;
 		if (!property->Write || property->WritePermission == Enums::Permission::Never) return MutationStatus::ReadOnly;
+		if (!property->CanWrite(securityContext)) return MutationStatus::Unauthorized;
 		if (static_cast<int>(permission) < static_cast<int>(property->WritePermission)) return MutationStatus::Unauthorized;
 		if (property->WriteAuthority == InstanceProperty::Authority::Main &&
 			GetCurrentExecutionDomain() != ExecutionDomain::Main)
@@ -347,6 +349,8 @@ namespace gargantuan {
 				const auto *property = self->FindProperty(key);
 				if (property) {
 					if (property->Read) {
+						if (!property->CanRead(GetCurrentScriptSecurityContext()))
+							luaL_error(L, "Current script context cannot read property %s", key);
 						return property->PushStack(L, property->Read(self));
 					} else {
 						luaL_error(L, "Property %s is write-only", key);
@@ -369,6 +373,8 @@ namespace gargantuan {
 				const auto *property = self->FindProperty(key);
 				if (property) {
 					if (property->Write && property->WritePermission != Enums::Permission::Never) {
+						if (!property->CanWrite(GetCurrentScriptSecurityContext()))
+							luaL_error(L, "Current script context cannot write property %s", key);
 						if (!property->IsStack(L, 3)) luaL_typeerrorL(L, 3, property->ReflectedTypedef.c_str());
 						auto value = property->FromStack(L, 3);
 						const auto status = self->ApplyPropertyMutation(key, value);

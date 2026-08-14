@@ -1,6 +1,7 @@
 #pragma once
 
 #include "gargantuan/runtime/ObjectId.hpp"
+#include "gargantuan/scripting/ScriptSecurity.hpp"
 
 #include <any>
 #include <condition_variable>
@@ -56,8 +57,14 @@ namespace gargantuan {
 	class MutationGateway {
 	  public:
 		~MutationGateway();
-		std::shared_ptr<MutationCompletion> Submit(MutationCommand command);
-		MutationResult Apply(MutationCommand command);
+		std::shared_ptr<MutationCompletion> Submit(
+			MutationCommand command,
+			ScriptSecurityContext securityContext = GetCurrentScriptSecurityContext()
+		);
+		MutationResult Apply(
+			MutationCommand command,
+			ScriptSecurityContext securityContext = GetCurrentScriptSecurityContext()
+		);
 		std::size_t Drain(std::size_t maximumCommands = static_cast<std::size_t>(-1));
 		[[nodiscard]] std::size_t GetPendingCount() const;
 
@@ -65,6 +72,7 @@ namespace gargantuan {
 		struct PendingMutation {
 			MutationCommand Command;
 			std::shared_ptr<MutationCompletion> Completion;
+			ScriptSecurityContext SecurityContext;
 		};
 		mutable std::mutex Mutex;
 		std::deque<PendingMutation> Pending;

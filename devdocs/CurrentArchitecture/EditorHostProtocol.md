@@ -64,6 +64,14 @@ are a compatible capability extension with their own `ViewportVersion = 1`.
 than assuming shared memory. The current Windows host advertises
 `SharedMemoryRing` version 1 with RGB8; hosts without it advertise Base64 only.
 
+The handshake also publishes `ScriptSecurityVersion`,
+`StudioExecutionDomain`, and the exact `StudioCapabilities` grant. Version 1
+uses the `Studio` domain with `ReadDataModel`, `MutateDataModel`,
+`EditorCommands`, and `SelectionAccess`. This grant is an enforceable contract:
+schema reads, snapshots, journal polling, reflected property dispatch, and the
+mutation gateway check it at their native boundaries. It does not grant
+process, filesystem, network, or arbitrary engine-native access.
+
 ## Licensing and repository contract
 
 - Gargantuan and EditorHost remain public MPL-2.0 code.

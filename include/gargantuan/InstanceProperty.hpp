@@ -1,6 +1,7 @@
 #pragma once
 
 #include "gargantuan/reflection/Enums.hpp"
+#include "gargantuan/scripting/ScriptSecurity.hpp"
 #include "gargantuan/scripting/StackValue.hpp"
 #include <any>
 #include <functional>
@@ -98,6 +99,10 @@ namespace gargantuan {
 		Replication ReplicationPolicy = Replication::None;
 		Authority WriteAuthority = Authority::Main;
 		bool Editable = true;
+		ScriptDomainSet ReadDomains = ScriptDomainSet::All();
+		ScriptDomainSet WriteDomains = ScriptDomainSet::All();
+		ScriptCapability RequiredReadCapability = ScriptCapability::ReadDataModel;
+		ScriptCapability RequiredWriteCapability = ScriptCapability::MutateDataModel;
 		std::function<bool(const std::any &)> Validate;
 
 		Enums::Permission ReadPermission = Enums::Permission::None;
@@ -149,6 +154,34 @@ namespace gargantuan {
 		InstanceProperty &SetEditable(bool editable) {
 			Editable = editable;
 			return *this;
+		}
+
+		InstanceProperty &SetReadDomains(ScriptDomainSet domains) {
+			ReadDomains = std::move(domains);
+			return *this;
+		}
+
+		InstanceProperty &SetWriteDomains(ScriptDomainSet domains) {
+			WriteDomains = std::move(domains);
+			return *this;
+		}
+
+		InstanceProperty &SetRequiredReadCapability(ScriptCapability capability) {
+			RequiredReadCapability = capability;
+			return *this;
+		}
+
+		InstanceProperty &SetRequiredWriteCapability(ScriptCapability capability) {
+			RequiredWriteCapability = capability;
+			return *this;
+		}
+
+		[[nodiscard]] bool CanRead(const ScriptSecurityContext &context) const {
+			return ReadDomains.Contains(context.Domain) && context.HasCapability(RequiredReadCapability);
+		}
+
+		[[nodiscard]] bool CanWrite(const ScriptSecurityContext &context) const {
+			return WriteDomains.Contains(context.Domain) && context.HasCapability(RequiredWriteCapability);
 		}
 
 		InstanceProperty &SetValidator(std::function<bool(const std::any &)> validator) {

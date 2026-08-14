@@ -51,7 +51,8 @@ namespace gargantuan {
 		MutationStatus ApplyPropertyMutation(
 			std::string_view propertyName,
 			const std::any &value,
-			Enums::Permission permission = Enums::Permission::None
+			Enums::Permission permission = Enums::Permission::None,
+			const ScriptSecurityContext &securityContext = GetCurrentScriptSecurityContext()
 		);
 		[[nodiscard]] ObjectId GetObjectId() const;
 		[[nodiscard]] bool IsDestroying() const { return DestroyingState; }

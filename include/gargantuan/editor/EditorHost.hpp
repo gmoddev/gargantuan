@@ -41,6 +41,7 @@ namespace gargantuan {
 		std::shared_ptr<DataModel> World;
 		std::optional<ChangeCursor> Cursor;
 		MutationGateway Mutations;
+		ScriptSecurityContext StudioSecurity = ScriptSecurityContext::StudioCoreUi();
 		std::shared_ptr<Camera> ViewportCamera;
 		std::unique_ptr<EditorViewportRenderer> ViewportRenderer;
 		std::unique_ptr<SharedFrameRing> ViewportFrameRing;

@@ -42,21 +42,26 @@ namespace gargantuan {
 		ReadySignal.notify_all();
 	}
 
-	std::shared_ptr<MutationCompletion> MutationGateway::Submit(MutationCommand command) {
+	std::shared_ptr<MutationCompletion> MutationGateway::Submit(
+		MutationCommand command,
+		ScriptSecurityContext securityContext
+	) {
 		auto completion = std::make_shared<MutationCompletion>();
 		std::scoped_lock lock(Mutex);
-		Pending.push_back({std::move(command), completion});
+		Pending.push_back({std::move(command), completion, std::move(securityContext)});
 		return completion;
 	}
 
-	MutationResult MutationGateway::Apply(MutationCommand command) {
+	MutationResult MutationGateway::Apply(MutationCommand command, ScriptSecurityContext securityContext) {
 		if (GetCurrentExecutionDomain() != ExecutionDomain::Main) {
 			return {MutationStatus::WrongExecutionDomain, std::nullopt, "Mutation application requires Main"};
 		}
+		if (!securityContext.HasCapability(ScriptCapability::MutateDataModel))
+			return {MutationStatus::Unauthorized, std::nullopt, "Mutation requires MutateDataModel"};
 
 		try {
 			return std::visit(
-				[](auto &typedCommand) -> MutationResult {
+				[&securityContext](auto &typedCommand) -> MutationResult {
 					using Command = std::decay_t<decltype(typedCommand)>;
 					if constexpr (std::is_same_v<Command, CreateObjectCommand>) {
 						auto *definition = InstanceClassRegistry::GetDefinitionByName(typedCommand.ClassName);
@@ -78,7 +83,12 @@ namespace gargantuan {
 						auto instance = ObjectRegistry::Get().Lookup(typedCommand.Object);
 						if (!instance) return {MutationStatus::StaleObject, std::nullopt, "Object is stale or dead"};
 						if constexpr (std::is_same_v<Command, UpdatePropertyCommand>) {
-							const auto status = instance->ApplyPropertyMutation(typedCommand.PropertyName, typedCommand.Value);
+							const auto status = instance->ApplyPropertyMutation(
+								typedCommand.PropertyName,
+								typedCommand.Value,
+								Enums::Permission::None,
+								securityContext
+							);
 							return {status, typedCommand.Object, status == MutationStatus::Success ? "" : "Property mutation rejected"};
 						} else if constexpr (std::is_same_v<Command, ReparentObjectCommand>) {
 							std::shared_ptr<Instance> parent;
@@ -116,7 +126,7 @@ namespace gargantuan {
 				pending = std::move(Pending.front());
 				Pending.pop_front();
 			}
-			pending.Completion->Complete(Apply(std::move(pending.Command)));
+			pending.Completion->Complete(Apply(std::move(pending.Command), std::move(pending.SecurityContext)));
 			++count;
 		}
 		return count;

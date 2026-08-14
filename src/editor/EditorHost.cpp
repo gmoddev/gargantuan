@@ -102,6 +102,38 @@ namespace gargantuan {
 			};
 		}
 
+		Json EncodeDomains(const ScriptDomainSet &domains) {
+			Json result = Json::array();
+			for (const auto domain : {
+				ScriptExecutionDomain::Core,
+				ScriptExecutionDomain::Studio,
+				ScriptExecutionDomain::Server,
+				ScriptExecutionDomain::Client,
+			}) {
+				if (domains.Contains(domain)) result.push_back(GetScriptExecutionDomainName(domain));
+			}
+			return result;
+		}
+
+		Json EncodeCapabilities(const ScriptCapabilitySet &capabilities) {
+			Json result = Json::array();
+			for (const auto capability : {
+				ScriptCapability::ReadDataModel,
+				ScriptCapability::MutateDataModel,
+				ScriptCapability::EditorCommands,
+				ScriptCapability::SelectionAccess,
+				ScriptCapability::ViewportControl,
+				ScriptCapability::FilesystemRead,
+				ScriptCapability::FilesystemWrite,
+				ScriptCapability::ProcessControl,
+				ScriptCapability::NetworkSend,
+				ScriptCapability::NetworkReceive,
+			}) {
+				if (capabilities.Contains(capability)) result.push_back(GetScriptCapabilityName(capability));
+			}
+			return result;
+		}
+
 		std::optional<glm::vec3> DecodeVector3(const Json &value) {
 			if (!value.is_array() || value.size() != 3) return std::nullopt;
 			glm::vec3 result;
@@ -188,6 +220,9 @@ namespace gargantuan {
 						{"Capabilities", std::move(capabilities)},
 						{"ViewportWireVersion", 1},
 						{"ViewportTransports", std::move(viewportTransports)},
+						{"ScriptSecurityVersion", 1},
+						{"StudioExecutionDomain", GetScriptExecutionDomainName(StudioSecurity.Domain)},
+						{"StudioCapabilities", EncodeCapabilities(StudioSecurity.Capabilities)},
 					}
 				));
 			}
@@ -269,6 +304,8 @@ namespace gargantuan {
 			if (method == "GetSchema") {
 				if (!parameters.empty())
 					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "GetSchema takes no parameters"));
+				if (!StudioSecurity.HasCapability(ScriptCapability::ReadDataModel))
+					return SerializeBoundedResponse(ErrorResponse(requestId, "Unauthorized", "Schema access requires ReadDataModel"));
 				auto classNames = InstanceClassRegistry::GetClassNames();
 				std::ranges::sort(classNames);
 				Json classes = Json::array();
@@ -295,6 +332,10 @@ namespace gargantuan {
 							{"Replication", property->ReplicationPolicy == InstanceProperty::Replication::FutureReplicated ? "Replicated" : "None"},
 							{"Authority", property->WriteAuthority == InstanceProperty::Authority::Main ? "Main" : "Any"},
 							{"HasValidator", static_cast<bool>(property->Validate)},
+							{"ReadDomains", EncodeDomains(property->ReadDomains)},
+							{"WriteDomains", EncodeDomains(property->WriteDomains)},
+							{"RequiredReadCapability", GetScriptCapabilityName(property->RequiredReadCapability)},
+							{"RequiredWriteCapability", GetScriptCapabilityName(property->RequiredWriteCapability)},
 						};
 						if (auto defaultValue = EncodeNativeWireValue(property->Unmodified))
 							encoded["Default"] = EncodeWireValue(*defaultValue);
@@ -434,6 +475,8 @@ namespace gargantuan {
 			if (method == "GetSnapshot") {
 				if (!parameters.empty())
 					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "GetSnapshot takes no parameters"));
+				if (!StudioSecurity.HasCapability(ScriptCapability::ReadDataModel))
+					return SerializeBoundedResponse(ErrorResponse(requestId, "Unauthorized", "Snapshot access requires ReadDataModel"));
 				auto snapshot = CaptureSnapshot(World);
 				Cursor = snapshot.Cursor;
 				return SerializeBoundedResponse(SuccessResponse(
@@ -443,6 +486,8 @@ namespace gargantuan {
 			}
 
 			if (method == "PollChanges") {
+				if (!StudioSecurity.HasCapability(ScriptCapability::ReadDataModel))
+					return SerializeBoundedResponse(ErrorResponse(requestId, "Unauthorized", "Journal access requires ReadDataModel"));
 				if (!Cursor)
 					return SerializeBoundedResponse(ErrorResponse(requestId, "SnapshotRequired", "GetSnapshot must establish a cursor"));
 				if (!HasOnlyFields(parameters, {"MaximumRecords"}))
@@ -470,6 +515,8 @@ namespace gargantuan {
 			}
 
 			if (method == "SetProperty") {
+				if (!StudioSecurity.HasCapability(ScriptCapability::MutateDataModel))
+					return SerializeBoundedResponse(ErrorResponse(requestId, "Unauthorized", "SetProperty requires MutateDataModel"));
 				if (!Cursor)
 					return SerializeBoundedResponse(ErrorResponse(requestId, "SnapshotRequired", "GetSnapshot must establish a cursor"));
 				if (!HasOnlyFields(parameters, {"Object", "Property", "Value"}) ||
@@ -489,7 +536,7 @@ namespace gargantuan {
 					return SerializeBoundedResponse(ErrorResponse(requestId, "UnsupportedValue", "EditorHost v0 accepts closed value properties only"));
 				auto mutation = Mutations.Apply(UpdatePropertyCommand{
 					object->ToObjectId(), parameters["Property"].get<std::string>(), std::move(*native)
-				});
+				}, StudioSecurity);
 				Json result{
 					{"Status", MutationStatusName(mutation.Status)},
 					{"Message", mutation.Message},

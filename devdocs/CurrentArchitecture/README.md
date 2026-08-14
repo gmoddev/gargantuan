@@ -1,5 +1,8 @@
 # Current architecture
 
+- [Script security](ScriptSecurity.md) defines enforceable execution domains
+  and explicit native-boundary capabilities.
+
 See [Runtime foundation](./FoundationRuntime.md) for the implemented ownership,
 ObjectId, JobSystem, execution-domain, reflection-schema, and committed-change
 contracts introduced after the architecture audit.

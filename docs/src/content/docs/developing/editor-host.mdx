@@ -85,3 +85,10 @@ settings, and most workflows should consume explicit `DocumentService`,
 `SelectionService`, `ViewportService`, and `CommandService` APIs from Luau.
 Save operations, play sessions, reference-valued editing, and multi-command
 transactions remain future interface work.
+The current private proof now uses an Avalonia C# host to bootstrap a restricted
+Studio-domain Luau VM. The public boundary exposes only stable IDs, schema,
+snapshot/journal data, structured commands, and viewport pixels. Script domains
+(`Core`, `Studio`, `Server`, and `Client`) are contexts rather than a privilege
+ordering; native dispatch authorizes explicit capabilities. Studio's baseline
+grant is read access, validated mutation, editor commands, and local selection.
+It does not include process, filesystem, or network access.
