@@ -25,7 +25,6 @@ namespace gargantuan {
 		std::vector<std::shared_ptr<Instance>> Children;
 		std::unordered_map<std::string, std::shared_ptr<Signal<std::monostate>>> PropertyChangedSignals;
 		std::weak_ptr<Instance> ParentReference;
-		InstanceClassDefinition *CachedDefinition = nullptr;
 		mutable ObjectId Id;
 		mutable std::mutex IdentityMutex;
 		bool DestroyingState = false;

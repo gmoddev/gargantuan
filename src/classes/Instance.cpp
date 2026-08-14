@@ -7,6 +7,7 @@
 #include "gargantuan/runtime/ExecutionDomain.hpp"
 #include "gargantuan/runtime/ObjectId.hpp"
 #include "gargantuan/runtime/WireCodec.hpp"
+#include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 
 #include <lua.h>
 #include <lualib.h>
@@ -55,7 +56,7 @@ namespace gargantuan {
 		}
 	);
 
-	Instance::Instance() = default;
+	Instance::Instance() { RequireFrozenRuntimeSchema("Instance construction"); }
 
 	Instance::~Instance() {
 		ObjectRegistry::Get().Invalidate(Id);
@@ -187,7 +188,7 @@ namespace gargantuan {
 
 	std::string Instance::GetClassName() const {
 		AssertIsAlive();
-		InstanceClassDefinition *definition = InstanceClassRegistry::GetDefinition(const_cast<Instance *>(this));
+		const InstanceClassDefinition *definition = InstanceClassRegistry::GetDefinition(const_cast<Instance *>(this));
 		return definition->ClassName;
 	}
 

@@ -23,7 +23,24 @@ namespace gargantuan {
 		}
 	}
 
+	void RuntimeSchemaRegistry::RequireBuilding(std::string_view operation) const {
+		if (State != RuntimeSchemaRegistryState::Building)
+			throw std::logic_error(
+				"Runtime schema registry cannot " + std::string(operation) + " while " +
+				std::string(GetRuntimeSchemaRegistryStateName(State))
+			);
+	}
+
+	void RuntimeSchemaRegistry::RequireFrozen(std::string_view operation) const {
+		if (State != RuntimeSchemaRegistryState::Frozen)
+			throw std::logic_error(
+				"Runtime schema registry cannot " + std::string(operation) + " while " +
+				std::string(GetRuntimeSchemaRegistryStateName(State))
+			);
+	}
+
 	void RuntimeSchemaRegistry::RegisterNative(std::type_index nativeType, SchemaDefinition definition) {
+		RequireBuilding("register a native definition");
 		if (!definition.Id.IsValid()) InvalidDefinition(definition, "SchemaId is invalid");
 		if (definition.Namespace.empty()) InvalidDefinition(definition, "namespace is empty");
 		if (definition.ClassName.empty()) InvalidDefinition(definition, "class name is empty");
@@ -74,20 +91,10 @@ namespace gargantuan {
 			DefinitionsByType.erase(definitionIterator);
 			throw;
 		}
-		InvalidateCaches();
-	}
-
-	void RuntimeSchemaRegistry::InvalidateCaches() {
-		Validated = false;
-		for (auto &[type, definition] : DefinitionsByType) {
-			definition.Flattened = false;
-			definition.InheritedClasses.clear();
-			definition.AllProperties.clear();
-			definition.AllMethods.clear();
-		}
 	}
 
 	void RuntimeSchemaRegistry::Validate() {
+		RequireBuilding("validate");
 		struct FlattenedDefinition {
 			std::unordered_set<std::string> InheritedClasses;
 			std::unordered_map<std::string, const InstanceProperty *> Properties;
@@ -141,37 +148,42 @@ namespace gargantuan {
 			definition->AllMethods = std::move(result.Methods);
 			definition->Flattened = true;
 		}
-		Validated = true;
+		State = RuntimeSchemaRegistryState::Validated;
 	}
 
-	void RuntimeSchemaRegistry::EnsureValidated() {
-		if (!Validated) Validate();
+	void RuntimeSchemaRegistry::Freeze() {
+		if (State != RuntimeSchemaRegistryState::Validated)
+			throw std::logic_error(
+				"Runtime schema registry cannot freeze while " +
+				std::string(GetRuntimeSchemaRegistryStateName(State))
+			);
+		State = RuntimeSchemaRegistryState::Frozen;
 	}
 
-	SchemaDefinition *RuntimeSchemaRegistry::FindById(SchemaId id) {
-		EnsureValidated();
+	const SchemaDefinition *RuntimeSchemaRegistry::FindById(SchemaId id) const {
+		RequireFrozen("look up a definition");
 		auto type = TypesById.find(id);
 		if (type == TypesById.end()) return nullptr;
 		auto definition = DefinitionsByType.find(type->second);
 		return definition == DefinitionsByType.end() ? nullptr : &definition->second;
 	}
 
-	SchemaDefinition *RuntimeSchemaRegistry::FindByType(std::type_index nativeType) {
-		EnsureValidated();
+	const SchemaDefinition *RuntimeSchemaRegistry::FindByType(std::type_index nativeType) const {
+		RequireFrozen("look up a definition");
 		auto definition = DefinitionsByType.find(nativeType);
 		return definition == DefinitionsByType.end() ? nullptr : &definition->second;
 	}
 
-	SchemaDefinition *RuntimeSchemaRegistry::FindByName(std::string_view name) {
-		EnsureValidated();
+	const SchemaDefinition *RuntimeSchemaRegistry::FindByName(std::string_view name) const {
+		RequireFrozen("look up a definition");
 		if (name.find('.') != std::string_view::npos) {
 			auto type = TypesByCanonicalName.find(std::string(name));
 			if (type == TypesByCanonicalName.end()) return nullptr;
 			return &DefinitionsByType.at(type->second);
 		}
 
-		SchemaDefinition *match = nullptr;
-		for (auto &[type, definition] : DefinitionsByType) {
+		const SchemaDefinition *match = nullptr;
+		for (const auto &[type, definition] : DefinitionsByType) {
 			if (definition.ClassName != name) continue;
 			if (match) return nullptr;
 			match = &definition;
@@ -179,20 +191,24 @@ namespace gargantuan {
 		return match;
 	}
 
-	std::vector<const SchemaDefinition *> RuntimeSchemaRegistry::Enumerate() {
-		EnsureValidated();
+	std::vector<const SchemaDefinition *> RuntimeSchemaRegistry::Enumerate() const {
+		RequireFrozen("enumerate definitions");
 		std::vector<const SchemaDefinition *> result;
 		result.reserve(DefinitionsByType.size());
-		for (auto &[type, definition] : DefinitionsByType) result.push_back(&definition);
+		for (const auto &[type, definition] : DefinitionsByType) result.push_back(&definition);
 		std::sort(result.begin(), result.end(), [](const auto *left, const auto *right) {
 			return left->CanonicalName < right->CanonicalName;
 		});
 		return result;
 	}
 
-	RuntimeSchemaRegistry &GetRuntimeSchemaRegistry() {
-		static RuntimeSchemaRegistry registry;
-		return registry;
+	std::string_view GetRuntimeSchemaRegistryStateName(RuntimeSchemaRegistryState state) {
+		switch (state) {
+			case RuntimeSchemaRegistryState::Building: return "Building";
+			case RuntimeSchemaRegistryState::Validated: return "Validated";
+			case RuntimeSchemaRegistryState::Frozen: return "Frozen";
+		}
+		throw std::invalid_argument("Unknown runtime schema registry state");
 	}
 
 	std::string_view GetSchemaProvenanceName(SchemaProvenance provenance) {

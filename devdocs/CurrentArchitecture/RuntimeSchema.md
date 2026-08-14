@@ -53,9 +53,40 @@ policy from the same registered property objects.
 
 ### Registry ownership and validation
 
-`RuntimeSchemaRegistry` owns registered definitions and supports lookup by
-`SchemaId`, native C++ type, qualified canonical name, and the unqualified-name
-compatibility form. Enumeration is sorted by canonical name.
+`RuntimeSchemaLifecycle` owns two deliberately separate concepts:
+
+- a mutable candidate registry available only through the native bootstrap
+  authority during registration; and
+- an active registry that is complete, frozen, and visible to runtime
+  reflection consumers.
+
+The explicit phase sequence is `Bootstrap` -> `NativeRegistration` ->
+`CoreRegistration` -> `ExternalRegistration` -> `Validation` -> `Frozen` ->
+`Runtime`. Only adjacent registration transitions are accepted. Core and
+external registration are empty lifecycle slots today; no Core Luau, PreRun,
+or custom-definition loader is implemented.
+
+Generated static class registration collects deterministic native bootstrap
+inputs. At startup those inputs are sorted by canonical identity, moved into a
+fresh candidate, and the input collection is cleared. It is not a second
+runtime registry and is never exposed to reflection consumers. `main()`
+publishes the native schema before constructing a normal `Instance`; the
+`Instance` constructor also fails immediately if that ordering contract is
+violated.
+
+Candidate validation computes inheritance and all flattened member views into
+temporary structures before committing them. Freeze is a separate required
+step after successful whole-candidate validation. Publication changes the
+active registry only after freeze succeeds. Registration or validation failure
+discards the candidate, leaves any prior active registry unchanged, and does
+not change its generation. No best-effort definitions become observable.
+
+The frozen `RuntimeSchemaRegistry` supports lookup by `SchemaId`, native C++
+type, qualified canonical name, and the unqualified-name compatibility form.
+Enumeration is sorted by canonical name. Public lookup APIs return
+`const SchemaDefinition*`; mutable definition access remains confined to the
+candidate's build implementation. A frozen registry rejects registration,
+repeat validation/freeze, and reopening.
 
 Registration and validation reject:
 
@@ -74,11 +105,25 @@ validates. Failed validation does not publish partially flattened compatibility
 views. Derived members preserve the current native reflection override
 semantics, and inherited members retain the declaring class ID.
 
+### Registry generation
+
+Each successful complete publication receives a session-local unsigned 64-bit
+registry generation. Zero is invalid; the first publication is generation 1,
+and each later complete replacement through a controlled lifecycle instance
+increments it once. Candidate failure does not increment it. The counter never
+wraps: publication is rejected if the maximum value has been reached.
+
+Registry generation is cache-invalidation state, not persisted schema meaning.
+It is independent from each definition's `DefinitionVersion`; changing or
+comparing one must not be used as a substitute for the other.
+
 ### Reflection compatibility
 
 `InstanceClassDefinition` is now an alias for `SchemaDefinition`.
-`InstanceClassRegistry` delegates registration, type/name lookup, deterministic
-class enumeration, and cache invalidation to `RuntimeSchemaRegistry`. Existing
+`InstanceClassRegistry` delegates type/name lookup and deterministic class
+enumeration to the frozen active `RuntimeSchemaRegistry`. Its generated
+`Register` compatibility entry point contributes only native bootstrap input.
+Existing
 `FindProperty`, `FindMethod`, `IsA`, serialization, snapshot, replication,
 mutation, and EditorHost schema DTO paths therefore consume the canonical
 registered definitions without a second class registry.
@@ -93,19 +138,16 @@ not grant a capability. Reflected property reads/writes, method invocation, and
 
 ## Deferred future architecture
 
-This pass does **not** implement registry lifecycle states or freezing. The
-registry may still accept native definitions during initialization, and it
-validates before an observable lookup/enumeration.
+The lifecycle and atomic native publication are implemented. The Core and
+external registration phases are currently explicit no-ops. Deferred work
+includes:
 
-Also deferred:
-
-- transactional registration/freeze and registry generations;
 - PreRun, Core Luau, game, package, plugin, or tooling loaders;
 - custom classes, enums, extensions, components, attributes, or tags;
 - migrations and saved/wire class IDs;
 - EditorHost schema discovery and Studio schema-driven UI; and
 - generated Luau types.
 
-The next bounded architecture task is registration lifecycle plus a
-transactional registry freeze. It should publish one fully validated registry
-or none without replacing this schema representation.
+The next bounded architecture task is attributes and tags as the first
+end-to-end feature built on the frozen schema. It must not reopen or replace the
+registry lifecycle introduced here.

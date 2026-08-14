@@ -28,9 +28,46 @@ policies from these canonical property objects. Persistence no longer has a
 parallel boolean selector that could diverge.
 
 The registry provides lookup by stable ID, native type, and qualified or legacy
-unqualified name. Observable enumeration is sorted by canonical name. Validation
-fails on duplicate IDs/names, invalid or cyclic inheritance, invalid member
-ownership/types/access, and conflicting members.
+unqualified name. Observable enumeration is sorted by canonical name. Public
+lookups return immutable definitions. Validation fails on duplicate IDs/names,
+invalid or cyclic inheritance, invalid member ownership/types/access, and
+conflicting members.
+
+## Registration lifecycle and freeze
+
+Native startup follows an explicit sequence:
+
+```text
+Bootstrap
+  -> NativeRegistration
+  -> CoreRegistration
+  -> ExternalRegistration
+  -> Validation
+  -> Frozen
+  -> Runtime
+```
+
+Core and external registration are reserved no-op phases in the current
+implementation. PreRun and custom definitions are not implemented.
+
+Generated native definitions are deterministic bootstrap inputs to a hidden,
+mutable candidate registry. The candidate is validated as a whole, including
+inheritance and flattened member views, before it can freeze. Only a frozen
+candidate can be atomically published as the active registry. If registration,
+validation, freeze, or generation assignment fails, the candidate is discarded
+and the previous active registry and generation remain unchanged.
+
+The active registry is immutable. Registration after freeze, repeated freeze,
+and lifecycle phase jumps fail with diagnostics. Normal runtime construction
+requires the schema to have reached `Runtime`, so no normal `Instance` can be
+constructed against a partially registered schema.
+
+Each successful complete publication receives a session-local unsigned 64-bit
+registry generation. Zero is invalid and the first generation is 1. Successful
+replacement increments it; failed candidates do not. The counter fails closed
+at its maximum rather than wrapping. Registry generation exists for cache
+invalidation and is separate from the persisted semantic
+`DefinitionVersion` on each schema.
 
 `InstanceClassDefinition` and `InstanceClassRegistry` remain as source-compatible
 native reflection names, but they are an alias and adapter over the runtime
@@ -43,10 +80,10 @@ dispatch and `MutationGateway`.
 
 ## Not implemented yet
 
-The registry is not frozen and has no registration lifecycle or session
-generation yet. PreRun, custom definitions, extensions, enums, migrations,
-packages, plugins, Studio schema discovery, and generated Luau typing remain
-future architecture.
+PreRun, Core Luau registration, custom definitions, extensions, enums,
+migrations, packages, plugins, Studio schema discovery, and generated Luau
+typing remain future architecture. The lifecycle has reserved phases for later
+loaders, but no runtime Luau environment has schema-definition authority.
 
-The next schema milestone is a transactional registration lifecycle and
-registry freeze using this same representation.
+The next schema milestone is attributes and tags as an end-to-end feature on
+the frozen schema.

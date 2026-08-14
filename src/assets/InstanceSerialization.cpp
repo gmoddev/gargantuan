@@ -92,7 +92,11 @@ namespace gargantuan::InstanceSerialization {
 		}
 
 		void
-		SerializeProperties(InstanceClassDefinition *definition, std::shared_ptr<Instance> instance, json &properties) {
+		SerializeProperties(
+			const InstanceClassDefinition *definition,
+			std::shared_ptr<Instance> instance,
+			json &properties
+		) {
 			for (auto &[key, property] : definition->Properties) {
 				if (key == "Parent" || property.PersistencePolicy != InstanceProperty::Persistence::Saved ||
 					!property.Read || !property.Write)

@@ -16,6 +16,7 @@
 #include "gargantuan/runtime/Snapshot.hpp"
 #include "gargantuan/runtime/WireJournal.hpp"
 #include "gargantuan/reflection/RuntimeSchema.hpp"
+#include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/scripting/ModuleResolution.hpp"
 #include "gargantuan/scripting/NativeCallback.hpp"
 #include "gargantuan/services/Workspace.hpp"
@@ -99,6 +100,11 @@ namespace {
 		property.SetReflectedTypedef(std::move(type)).SetEditable(false);
 		property.Read = [](gargantuan::Instance *) -> std::any { return std::string("value"); };
 		return property;
+	}
+
+	void FreezeSchemaRegistry(gargantuan::RuntimeSchemaRegistry &registry) {
+		registry.Validate();
+		registry.Freeze();
 	}
 
 	void TestHierarchyAndDestruction() {
@@ -344,6 +350,8 @@ namespace {
 		RuntimeSchemaRegistry secondConstruction;
 		firstConstruction.RegisterNative<SchemaTestTypeA>(MakeSchemaDefinition("Stable"));
 		secondConstruction.RegisterNative<SchemaTestTypeA>(MakeSchemaDefinition("Stable"));
+		FreezeSchemaRegistry(firstConstruction);
+		FreezeSchemaRegistry(secondConstruction);
 		Check(
 			firstConstruction.FindByName("Test.Stable")->Id == secondConstruction.FindByName("Test.Stable")->Id,
 			"SchemaId survives repeated registry construction"
@@ -420,6 +428,8 @@ namespace {
 		orderedOne.RegisterNative<SchemaTestTypeB>(MakeSchemaDefinition("Alpha"));
 		orderedTwo.RegisterNative<SchemaTestTypeC>(MakeSchemaDefinition("Alpha"));
 		orderedTwo.RegisterNative<SchemaTestTypeD>(MakeSchemaDefinition("Zulu"));
+		FreezeSchemaRegistry(orderedOne);
+		FreezeSchemaRegistry(orderedTwo);
 		auto firstOrder = orderedOne.Enumerate();
 		auto secondOrder = orderedTwo.Enumerate();
 		Check(
@@ -461,6 +471,141 @@ namespace {
 			part->ApplyPropertyMutation("Name", std::string("Denied"), Enums::Permission::None, noMutation) ==
 				MutationStatus::Unauthorized,
 			"schema-backed reflected mutation still enforces its native capability boundary"
+		);
+	}
+
+	void TestRuntimeSchemaLifecycle() {
+		using namespace gargantuan;
+		const auto &authority = GetRuntimeSchemaBootstrapAuthority();
+
+		static_assert(std::is_same_v<
+			decltype(std::declval<const RuntimeSchemaRegistry &>().FindByName(std::string_view{})),
+			const SchemaDefinition *
+		>);
+
+		RuntimeSchemaRegistry directRegistry;
+		directRegistry.RegisterNative<SchemaTestTypeA>(MakeSchemaDefinition("Direct"));
+		CheckThrows<std::logic_error>(
+			[&] { static_cast<void>(directRegistry.FindByName("Test.Direct")); },
+			"candidate definitions are not observable before freeze"
+		);
+		directRegistry.Validate();
+		CheckThrows<std::logic_error>(
+			[&] { static_cast<void>(directRegistry.FindByName("Test.Direct")); },
+			"validated candidate definitions remain hidden before freeze"
+		);
+		directRegistry.Freeze();
+		const auto *stableDefinition = directRegistry.FindByName("Test.Direct");
+		Check(stableDefinition != nullptr, "frozen registry lookup succeeds");
+		Check(
+			stableDefinition == directRegistry.FindByName("Test.Direct"),
+			"frozen compatibility definitions remain stable"
+		);
+		CheckThrows<std::logic_error>([&] { directRegistry.Freeze(); }, "a frozen registry cannot freeze twice");
+		CheckThrows<std::logic_error>(
+			[&] { directRegistry.RegisterNative<SchemaTestTypeB>(MakeSchemaDefinition("Late")); },
+			"post-freeze registration is rejected"
+		);
+
+		RuntimeSchemaLifecycle invalidTransition;
+		invalidTransition.BeginCandidate(authority);
+		CheckThrows<std::logic_error>(
+			[&] {
+				invalidTransition.AdvanceRegistrationPhase(
+					authority, RuntimeSchemaLifecyclePhase::ExternalRegistration
+				);
+			},
+			"runtime schema lifecycle rejects phase jumps"
+		);
+		invalidTransition.AdvanceRegistrationPhase(authority, RuntimeSchemaLifecyclePhase::CoreRegistration);
+		CheckThrows<std::logic_error>(
+			[&] {
+				invalidTransition.RegisterNative<SchemaTestTypeA>(authority, MakeSchemaDefinition("OutsideNative"));
+			},
+			"native registration outside its phase is rejected"
+		);
+		invalidTransition.AbortCandidate(authority);
+
+		RuntimeSchemaLifecycle freezeBeforeValidation;
+		freezeBeforeValidation.BeginCandidate(authority);
+		freezeBeforeValidation.RegisterNative<SchemaTestTypeA>(authority, MakeSchemaDefinition("Unvalidated"));
+		freezeBeforeValidation.AdvanceRegistrationPhase(authority, RuntimeSchemaLifecyclePhase::CoreRegistration);
+		freezeBeforeValidation.AdvanceRegistrationPhase(authority, RuntimeSchemaLifecyclePhase::ExternalRegistration);
+		freezeBeforeValidation.AdvanceRegistrationPhase(authority, RuntimeSchemaLifecyclePhase::Validation);
+		CheckThrows<std::runtime_error>(
+			[&] { freezeBeforeValidation.FreezeCandidate(authority); },
+			"freeze before whole-candidate validation is rejected"
+		);
+		Check(
+			freezeBeforeValidation.GetPhase() == RuntimeSchemaLifecyclePhase::Bootstrap &&
+				!freezeBeforeValidation.HasCandidate(),
+			"failed freeze discards the unpublished candidate"
+		);
+
+		auto PublishSingle = [&](RuntimeSchemaLifecycle &lifecycle, std::string name, std::uint32_t version) {
+			lifecycle.BeginCandidate(authority);
+			auto definition = MakeSchemaDefinition(std::move(name));
+			definition.DefinitionVersion = version;
+			lifecycle.RegisterNative<SchemaTestTypeA>(authority, std::move(definition));
+			lifecycle.AdvanceRegistrationPhase(authority, RuntimeSchemaLifecyclePhase::CoreRegistration);
+			lifecycle.AdvanceRegistrationPhase(authority, RuntimeSchemaLifecyclePhase::ExternalRegistration);
+			lifecycle.AdvanceRegistrationPhase(authority, RuntimeSchemaLifecyclePhase::Validation);
+			lifecycle.ValidateCandidate(authority);
+			lifecycle.FreezeCandidate(authority);
+			lifecycle.PublishCandidate(authority);
+		};
+
+		RuntimeSchemaLifecycle lifecycle;
+		Check(
+			lifecycle.GetActiveGeneration() == InvalidRuntimeSchemaGeneration && !lifecycle.HasActiveRegistry(),
+			"unpublished schema lifecycle starts with invalid generation zero"
+		);
+		PublishSingle(lifecycle, "PublishedOne", 7);
+		const auto firstActive = lifecycle.GetActiveRegistry();
+		const auto firstGeneration = lifecycle.GetActiveGeneration();
+		Check(
+			lifecycle.GetPhase() == RuntimeSchemaLifecyclePhase::Runtime && firstActive->IsFrozen(),
+			"valid bootstrap publishes one frozen active registry"
+		);
+		Check(firstGeneration == 1, "first successful schema publication receives generation one");
+		Check(
+			firstActive->FindByName("Test.PublishedOne")->DefinitionVersion == 7 && firstGeneration != 7,
+			"definition version remains independent from registry generation"
+		);
+
+		lifecycle.BeginCandidate(authority);
+		lifecycle.RegisterNative<SchemaTestTypeB>(authority, MakeSchemaDefinition("Broken", "Missing"));
+		lifecycle.AdvanceRegistrationPhase(authority, RuntimeSchemaLifecyclePhase::CoreRegistration);
+		lifecycle.AdvanceRegistrationPhase(authority, RuntimeSchemaLifecyclePhase::ExternalRegistration);
+		lifecycle.AdvanceRegistrationPhase(authority, RuntimeSchemaLifecyclePhase::Validation);
+		CheckThrows<std::runtime_error>(
+			[&] { lifecycle.ValidateCandidate(authority); },
+			"one invalid candidate definition aborts publication"
+		);
+		Check(
+			lifecycle.GetActiveRegistry() == firstActive && lifecycle.GetActiveGeneration() == firstGeneration,
+			"candidate failure preserves the previous active registry and generation"
+		);
+		Check(
+			firstActive->FindByName("Test.Broken") == nullptr,
+			"candidate failure leaks no definitions into the active registry"
+		);
+
+		PublishSingle(lifecycle, "PublishedTwo", 1);
+		Check(
+			lifecycle.GetActiveGeneration() == firstGeneration + 1 &&
+				lifecycle.GetActiveRegistry()->FindByName("Test.PublishedTwo") != nullptr,
+			"a successful complete replacement increments generation"
+		);
+
+		Check(
+			GetRuntimeSchemaLifecycle().GetPhase() == RuntimeSchemaLifecyclePhase::Runtime &&
+				GetRuntimeSchemaLifecycle().GetActiveGeneration() != InvalidRuntimeSchemaGeneration,
+			"native bootstrap reaches the frozen runtime phase with a valid generation"
+		);
+		CheckThrows<std::logic_error>(
+			[] { BootstrapNativeRuntimeSchema(); },
+			"published native runtime schema cannot be reopened by bootstrap"
 		);
 	}
 
@@ -1097,6 +1242,13 @@ namespace {
 }
 
 int main() {
+	try {
+		gargantuan::BootstrapNativeRuntimeSchema();
+	} catch (const std::exception &exception) {
+		std::cerr << "Runtime schema bootstrap failed: " << exception.what() << '\n';
+		return 1;
+	}
+
 	TestHierarchyAndDestruction();
 	TestObjectIdsAndChanges();
 	TestWorldRootConstraintValidation();
@@ -1104,6 +1256,7 @@ int main() {
 	TestJobSystem();
 	TestSchemaMetadata();
 	TestRuntimeSchemaRegistry();
+	TestRuntimeSchemaLifecycle();
 	TestScriptSecurityModel();
 	TestMutationGateway();
 	TestBoundedJournalCursor();

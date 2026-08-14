@@ -8,6 +8,7 @@
 #include "gargantuan/filesystem/DiskFilesystem.hpp"
 #include "gargantuan/filesystem/Project.hpp"
 #include "gargantuan/render/Renderer.hpp"
+#include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/runtime/DataModelRoot.hpp"
 
 #include <SDL3/SDL.h>
@@ -97,6 +98,13 @@ Engine *ConstructInstance(std::string path, BaseRenderer *renderer) {
 }
 
 int main(int argc, char *argv[]) {
+	try {
+		BootstrapNativeRuntimeSchema();
+	} catch (const std::exception &exception) {
+		std::cerr << "Runtime schema bootstrap failed: " << exception.what() << std::endl;
+		return 1;
+	}
+
 	argparse::ArgumentParser program("gargantuan");
 	program.add_description("An independent game engine for Roblox developers");
 	program.add_group("Targets");

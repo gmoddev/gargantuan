@@ -1,25 +1,24 @@
 #pragma once
 
 #include "gargantuan/InstanceClassDefinition.hpp"
+#include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 
 #include <typeindex>
 #include <vector>
 
 namespace gargantuan::InstanceClassRegistry {
-	void InvalidateCaches();
-
 	template <typename T> void Register(InstanceClassDefinition definition) {
-		GetRuntimeSchemaRegistry().RegisterNative<T>(std::move(definition));
+		RegisterNativeSchemaSeed(std::type_index(typeid(T)), std::move(definition));
 	}
 
-	InstanceClassDefinition *GetDefinitionByType(std::type_index type);
+	const InstanceClassDefinition *GetDefinitionByType(std::type_index type);
 
-	template <typename T> InstanceClassDefinition *GetDefinition() {
+	template <typename T> const InstanceClassDefinition *GetDefinition() {
 		return GetDefinitionByType(std::type_index(typeid(T)));
 	}
 
-	InstanceClassDefinition *GetDefinition(Instance *instance);
-	InstanceClassDefinition *GetDefinitionByName(std::string_view name);
-	InstanceClassDefinition *GetDefinitionBySchemaId(SchemaId id);
+	const InstanceClassDefinition *GetDefinition(Instance *instance);
+	const InstanceClassDefinition *GetDefinitionByName(std::string_view name);
+	const InstanceClassDefinition *GetDefinitionBySchemaId(SchemaId id);
 	std::vector<std::string> GetClassNames();
 }

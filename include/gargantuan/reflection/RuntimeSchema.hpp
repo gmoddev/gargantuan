@@ -56,6 +56,12 @@ namespace gargantuan {
 		std::unordered_map<std::string, const UserdataMethod<Instance> *> AllMethods{};
 	};
 
+	enum class RuntimeSchemaRegistryState : std::uint8_t {
+		Building,
+		Validated,
+		Frozen,
+	};
+
 	class RuntimeSchemaRegistry {
 	  public:
 		void RegisterNative(std::type_index nativeType, SchemaDefinition definition);
@@ -65,23 +71,27 @@ namespace gargantuan {
 		}
 
 		void Validate();
-		void InvalidateCaches();
+		void Freeze();
 
-		[[nodiscard]] SchemaDefinition *FindById(SchemaId id);
-		[[nodiscard]] SchemaDefinition *FindByType(std::type_index nativeType);
-		[[nodiscard]] SchemaDefinition *FindByName(std::string_view name);
-		[[nodiscard]] std::vector<const SchemaDefinition *> Enumerate();
+		[[nodiscard]] const SchemaDefinition *FindById(SchemaId id) const;
+		[[nodiscard]] const SchemaDefinition *FindByType(std::type_index nativeType) const;
+		[[nodiscard]] const SchemaDefinition *FindByName(std::string_view name) const;
+		[[nodiscard]] std::vector<const SchemaDefinition *> Enumerate() const;
 		[[nodiscard]] std::size_t Size() const { return DefinitionsByType.size(); }
+		[[nodiscard]] RuntimeSchemaRegistryState GetState() const { return State; }
+		[[nodiscard]] bool IsValidated() const { return State != RuntimeSchemaRegistryState::Building; }
+		[[nodiscard]] bool IsFrozen() const { return State == RuntimeSchemaRegistryState::Frozen; }
 
 	  private:
 		std::unordered_map<std::type_index, SchemaDefinition> DefinitionsByType;
 		std::unordered_map<SchemaId, std::type_index, SchemaIdHash> TypesById;
 		std::unordered_map<std::string, std::type_index> TypesByCanonicalName;
-		bool Validated = false;
+		RuntimeSchemaRegistryState State = RuntimeSchemaRegistryState::Building;
 
-		void EnsureValidated();
+		void RequireBuilding(std::string_view operation) const;
+		void RequireFrozen(std::string_view operation) const;
 	};
 
-	[[nodiscard]] RuntimeSchemaRegistry &GetRuntimeSchemaRegistry();
+	[[nodiscard]] std::string_view GetRuntimeSchemaRegistryStateName(RuntimeSchemaRegistryState state);
 	[[nodiscard]] std::string_view GetSchemaProvenanceName(SchemaProvenance provenance);
 }

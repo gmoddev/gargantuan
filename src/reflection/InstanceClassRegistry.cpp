@@ -5,30 +5,26 @@
 #include <vector>
 
 namespace gargantuan::InstanceClassRegistry {
-	void InvalidateCaches() { GetRuntimeSchemaRegistry().InvalidateCaches(); }
-
-	InstanceClassDefinition *GetDefinitionByType(std::type_index type) {
-		return GetRuntimeSchemaRegistry().FindByType(type);
+	const InstanceClassDefinition *GetDefinitionByType(std::type_index type) {
+		return GetActiveRuntimeSchemaRegistry().FindByType(type);
 	}
 
-	InstanceClassDefinition *GetDefinition(Instance *instance) {
+	const InstanceClassDefinition *GetDefinition(Instance *instance) {
 		if (!instance) return nullptr;
-		auto *definition = GetDefinitionByType(std::type_index(typeid(*instance)));
-		if (definition) instance->CachedDefinition = definition;
-		return definition;
+		return GetDefinitionByType(std::type_index(typeid(*instance)));
 	}
 
-	InstanceClassDefinition *GetDefinitionByName(std::string_view name) {
-		return GetRuntimeSchemaRegistry().FindByName(name);
+	const InstanceClassDefinition *GetDefinitionByName(std::string_view name) {
+		return GetActiveRuntimeSchemaRegistry().FindByName(name);
 	}
 
-	InstanceClassDefinition *GetDefinitionBySchemaId(SchemaId id) {
-		return GetRuntimeSchemaRegistry().FindById(id);
+	const InstanceClassDefinition *GetDefinitionBySchemaId(SchemaId id) {
+		return GetActiveRuntimeSchemaRegistry().FindById(id);
 	}
 
 	std::vector<std::string> GetClassNames() {
 		std::vector<std::string> result;
-		for (const auto *definition : GetRuntimeSchemaRegistry().Enumerate())
+		for (const auto *definition : GetActiveRuntimeSchemaRegistry().Enumerate())
 			result.push_back(definition->ClassName);
 		return result;
 	}
