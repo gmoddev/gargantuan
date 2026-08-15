@@ -229,8 +229,20 @@ namespace gargantuan {
 			auto closure = [](lua_State *L) -> int {
 				auto *methodPointer = static_cast<Method *>(lua_touserdata(L, lua_upvalueindex(1)));
 				auto self = fromStackValue(L, 1);
+				if (!self && methodPointer && methodPointer->AllowSecondArgumentReceiver)
+					self = fromStackValue(L, 2);
 				return InvokeNativeCallback(
-					L, [L, methodPointer, self] { return methodPointer && methodPointer->Call ? methodPointer->Call(L, self) : 0; }
+					L, [L, methodPointer, self] {
+						if (!methodPointer || !methodPointer->Call) {
+							luaL_error(L, "Missing native userdata method");
+							return 0;
+						}
+						if (!self) {
+							luaL_typeerror(L, 1, ClassType::DEFINITION.Type.data());
+							return 0;
+						}
+						return methodPointer->Call(L, self);
+					}
 				);
 			};
 

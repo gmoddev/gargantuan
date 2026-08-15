@@ -3,7 +3,7 @@
 #include "gargantuan/scripting/Userdata.hpp"
 #include "gargantuan/scripting/UserdataTag.hpp"
 
-#include <cstdlib>
+#include <cmath>
 #include <lua.h>
 #include <lualib.h>
 #include <sstream>
@@ -21,23 +21,24 @@ namespace gargantuan {
 				{"Magnitude", Property::fromRead([](Vector2 *self) { return self->GetMagnitude(); })},
 			},
 		.Methods = {
-			{"Cross", Method::fromMember<&Vector2::Cross>()},
+			{"Cross", Method::fromCheckedMember<&Vector2::Cross>()},
 			{"Abs", Method::fromMember<&Vector2::Abs>()},
 			{"Ceil", Method::fromMember<&Vector2::Ceil>()},
 			{"Floor", Method::fromMember<&Vector2::Floor>()},
 			{"Sign", Method::fromMember<&Vector2::Sign>()},
-			{"Angle", Method::fromMember<&Vector2::Angle>()},
-			{"Dot", Method::fromMember<&Vector2::Dot>()},
-			{"Lerp", Method::fromMember<&Vector2::Lerp>()},
-			{"Max", Method::fromMember<&Vector2::Max>()},
-			{"Min", Method::fromMember<&Vector2::Min>()},
+			{"Angle", Method{Vector2::LAngle}},
+			{"Dot", Method::fromCheckedMember<&Vector2::Dot>()},
+			{"FuzzyEq", Method{Vector2::LFuzzyEq}},
+			{"Lerp", Method::fromCheckedMember<&Vector2::Lerp>()},
+			{"Max", Method::fromCheckedMember<&Vector2::Max>()},
+			{"Min", Method::fromCheckedMember<&Vector2::Min>()},
 			{"__tostring", Method{Vector2::LTostring}},
 			{"__add", Method{Vector2::LAdd}},
 			{"__sub", Method{Vector2::LSub}},
-			{"__mul", Method{Vector2::LMul}},
+			{"__mul", Method{.Call = Vector2::LMul, .AllowSecondArgumentReceiver = true}},
 			{"__div", Method{Vector2::LDiv}},
+			{"__unm", Method{Vector2::LUnm}},
 			{"__eq", Method{Vector2::LEq}},
-			{"__lt", Method{Vector2::LLt}},
 		}
 	)
 
@@ -62,7 +63,7 @@ namespace gargantuan {
 	};
 
 	float Vector2::Cross(const Vector2 &other) const {
-		return (GetX() * other.GetY()) - (GetY() * GetX());
+		return (GetX() * other.GetY()) - (GetY() * other.GetX());
 	};
 
 	Vector2 Vector2::Abs() const {
@@ -103,7 +104,11 @@ namespace gargantuan {
 	};
 
 	bool Vector2::FuzzyEq(const Vector2 &other, float epsilon) const {
-		return glm::abs(Value.x - this->Value.x) <= epsilon && glm::abs(Value.y - this->Value.y) <= epsilon;
+		return glm::abs(Value.x - other.Value.x) <= epsilon && glm::abs(Value.y - other.Value.y) <= epsilon;
+	};
+
+	Vector2 Vector2::Unm() const {
+		return -Value;
 	};
 
 	int Vector2::LTostring(lua_State *L, Vector2 *self) {
@@ -115,42 +120,71 @@ namespace gargantuan {
 	}
 
 	int Vector2::LAdd(lua_State *L, Vector2 *self) {
-		Vector2 other = CheckStackValue<Vector2>(L, -1);
-		StackValue<Vector2>::Push(L, self->Value + other.Value);
+		static_cast<void>(self);
+		const Vector2 left = CheckStackValue<Vector2>(L, 1);
+		const Vector2 right = CheckStackValue<Vector2>(L, 2);
+		StackValue<Vector2>::Push(L, left + right);
 		return 1;
 	}
 
 	int Vector2::LSub(lua_State *L, Vector2 *self) {
-		Vector2 other = CheckStackValue<Vector2>(L, -1);
-		StackValue<Vector2>::Push(L, self->Value - other.Value);
+		static_cast<void>(self);
+		const Vector2 left = CheckStackValue<Vector2>(L, 1);
+		const Vector2 right = CheckStackValue<Vector2>(L, 2);
+		StackValue<Vector2>::Push(L, left - right);
 		return 1;
 	}
 
 	int Vector2::LMul(lua_State *L, Vector2 *self) {
-		if (lua_isnumber(L, -1)) {
-			float other = lua_tonumber(L, -1);
-			StackValue<Vector2>::Push(L, self->Value * other);
-		} else if (StackValue<Vector2>::Is(L, -1)) {
-			Vector2 other = CheckStackValue<Vector2>(L, -1);
-			StackValue<Vector2>::Push(L, self->Value * other.Value);
-		} else {
+		static_cast<void>(self);
+		if (StackValue<Vector2>::Is(L, 1)) {
+			const Vector2 left = StackValue<Vector2>::From(L, 1);
+			if (StackValue<Vector2>::Is(L, 2))
+				return StackValue<Vector2>::Push(L, left * StackValue<Vector2>::From(L, 2));
+			if (lua_isnumber(L, 2))
+				return StackValue<Vector2>::Push(L, left * static_cast<float>(lua_tonumber(L, 2)));
 			luaL_typeerror(L, 2, "Vector2 or number");
 			return 0;
 		}
-		return 1;
+		if (lua_isnumber(L, 1) && StackValue<Vector2>::Is(L, 2))
+			return StackValue<Vector2>::Push(
+				L, StackValue<Vector2>::From(L, 2) * static_cast<float>(lua_tonumber(L, 1))
+			);
+		luaL_typeerror(L, 1, "Vector2 or number");
+		return 0;
 	}
 
 	int Vector2::LDiv(lua_State *L, Vector2 *self) {
-		if (lua_isnumber(L, -1)) {
-			float other = lua_tonumber(L, -1);
-			StackValue<Vector2>::Push(L, self->Value / other);
-		} else if (StackValue<Vector2>::Is(L, -1)) {
-			Vector2 other = CheckStackValue<Vector2>(L, -1);
-			StackValue<Vector2>::Push(L, self->Value / other.Value);
-		} else {
-			luaL_typeerror(L, 2, "Vector2 or number");
+		static_cast<void>(self);
+		const Vector2 left = CheckStackValue<Vector2>(L, 1);
+		if (StackValue<Vector2>::Is(L, 2))
+			return StackValue<Vector2>::Push(L, left / StackValue<Vector2>::From(L, 2));
+		if (lua_isnumber(L, 2))
+			return StackValue<Vector2>::Push(L, left / static_cast<float>(lua_tonumber(L, 2)));
+		luaL_typeerror(L, 2, "Vector2 or number");
+		return 0;
+	}
+
+	int Vector2::LUnm(lua_State *L, Vector2 *self) {
+		static_cast<void>(self);
+		return StackValue<Vector2>::Push(L, CheckStackValue<Vector2>(L, 1).Unm());
+	}
+
+	int Vector2::LAngle(lua_State *L, Vector2 *self) {
+		const Vector2 other = CheckStackValue<Vector2>(L, 2);
+		const bool isSigned = luaL_optboolean(L, 3, false);
+		lua_pushnumber(L, self->Angle(other, isSigned));
+		return 1;
+	}
+
+	int Vector2::LFuzzyEq(lua_State *L, Vector2 *self) {
+		const Vector2 other = CheckStackValue<Vector2>(L, 2);
+		const float epsilon = luaL_optnumber(L, 3, 1e-5f);
+		if (!std::isfinite(epsilon) || epsilon < 0.0f) {
+			luaL_argerror(L, 3, "epsilon must be finite and non-negative");
 			return 0;
 		}
+		lua_pushboolean(L, self->FuzzyEq(other, epsilon));
 		return 1;
 	}
 
@@ -169,13 +203,4 @@ namespace gargantuan {
 		return 1;
 	}
 
-	int Vector2::LLt(lua_State *L, Vector2 *self) {
-		if (StackValue<Vector2>::Is(L, 2)) {
-			Vector2 other = StackValue<Vector2>::From(L, 2);
-			lua_pushboolean(L, *self < other);
-		} else {
-			lua_pushboolean(L, false);
-		}
-		return 1;
-	}
 }

@@ -5,6 +5,7 @@
 #include "gargantuan/classes/ModuleScript.hpp"
 #include "gargantuan/classes/Part.hpp"
 #include "gargantuan/classes/WeldConstraint.hpp"
+#include "gargantuan/datatypes/Vector2.hpp"
 #include "gargantuan/editor/EditorHost.hpp"
 #include "gargantuan/editor/EditorViewport.hpp"
 #include "gargantuan/render/RenderExtractor.hpp"
@@ -1868,6 +1869,19 @@ namespace {
 
 		Check(gateway.Apply(UpdateAttributeCommand{id, "Persisted", WireValue(std::string("value"))}).Succeeded(),
 			"persistence test attribute is accepted");
+		const WireVector2 Offset{10.0f, 20.0f};
+		Check(gateway.Apply(UpdateAttributeCommand{id, "Offset", WireValue(Offset)}).Succeeded() &&
+			part->GetAttributeValue("Offset") == std::optional<WireValue>(Offset),
+			"Vector2 attribute mutation retains its closed WireValue representation");
+		const auto EncodedOffset = EncodeWireValue(WireValue(Offset));
+		const auto DecodedOffset = DecodeWireValue(EncodedOffset);
+		Check(DecodedOffset == std::optional<WireValue>(Offset),
+			"Vector2 WireValue encoding round-trips without a format change");
+		const auto NativeOffset = DecodeNativeWireValue(WireValue(Offset));
+		const auto *DecodedNativeOffset = NativeOffset ? std::any_cast<Vector2>(&*NativeOffset) : nullptr;
+		Check(DecodedNativeOffset && DecodedNativeOffset->GetX() == 10.0f && DecodedNativeOffset->GetY() == 20.0f &&
+			EncodeNativeWireValue(std::any(*DecodedNativeOffset)) == std::optional<WireValue>(Offset),
+			"Vector2 tagged userdata materializes through the existing WireValue codec");
 		std::shared_ptr<Instance> persistenceRoot = game;
 		auto serialized = InstanceSerialization::Serialize(InstanceSerialization::InstanceFormat::Json, persistenceRoot);
 		Check(serialized == InstanceSerialization::Serialize(InstanceSerialization::InstanceFormat::Json, persistenceRoot),
@@ -1878,6 +1892,8 @@ namespace {
 		auto deserializedPart = deserialized.Instance ? deserialized.Instance->FindFirstChild("AttributedPart", false) : nullptr;
 		Check(deserializedPart && deserializedPart->GetAttributeValue("Persisted") == std::optional<WireValue>(std::string("value")),
 			"deserialized Instance restores attributes");
+		Check(deserializedPart && deserializedPart->GetAttributeValue("Offset") == std::optional<WireValue>(Offset),
+			"Vector2 attributes persist without changing their wire meaning");
 		auto versionOne = nlohmann::ordered_json::parse(serialized);
 		versionOne["Version"] = 1;
 		std::function<void(nlohmann::ordered_json &)> RemoveTags = [&](nlohmann::ordered_json &node) {
@@ -1920,6 +1936,8 @@ namespace {
 		});
 		Check(snapshotPart != snapshot.Objects.end() && snapshotPart->Attributes.at("Persisted") == WireValue(std::string("value")),
 			"snapshot contains initial attribute state");
+		Check(snapshotPart != snapshot.Objects.end() && snapshotPart->Attributes.at("Offset") == WireValue(Offset),
+			"snapshot contains Vector2 attribute state");
 		auto parsedSnapshot = DeserializeSnapshot(SerializeSnapshot(snapshot));
 		Check(parsedSnapshot.Succeeded() && LoadSnapshot(*parsedSnapshot.Value).Succeeded(), "attribute snapshot parses and loads");
 
@@ -1929,10 +1947,17 @@ namespace {
 		auto receiverPart = session ? session->GetReceiverRoot()->FindFirstChild("AttributedPart", false) : nullptr;
 		Check(receiverPart && receiverPart->GetAttributeValue("Persisted") == std::optional<WireValue>(std::string("value")),
 			"initial attribute state replicates");
+		Check(receiverPart && receiverPart->GetAttributeValue("Offset") == std::optional<WireValue>(Offset),
+			"initial Vector2 attribute state replicates");
 		Check(gateway.Apply(UpdateAttributeCommand{id, "Persisted", WireValue(std::string("updated"))}).Succeeded() &&
 			session->ApplyAvailable().Succeeded(), "attribute update replicates through ordered journal");
 		Check(receiverPart->GetAttributeValue("Persisted") == std::optional<WireValue>(std::string("updated")),
 			"receiver observes replicated attribute update");
+		const WireVector2 UpdatedOffset{-5.0f, 4.0f};
+		Check(gateway.Apply(UpdateAttributeCommand{id, "Offset", WireValue(UpdatedOffset)}).Succeeded() &&
+			session->ApplyAvailable().Succeeded() &&
+			receiverPart->GetAttributeValue("Offset") == std::optional<WireValue>(UpdatedOffset),
+			"Vector2 attribute journal updates replicate without coercion");
 		Check(gateway.Apply(UpdateAttributeCommand{id, "Persisted", std::nullopt}).Succeeded() &&
 			session->ApplyAvailable().Succeeded() && !receiverPart->GetAttributeValue("Persisted"),
 			"attribute removal replicates");
@@ -2694,6 +2719,37 @@ namespace {
 		Check(Vector && Vector[0] == 0.0f && Vector[1] == 0.0f && Vector[2] == 1.0f,
 			"native Vector3 values retain three float components");
 		Check(std::string_view(lua_tostring(L, -1)) == "vector", "Vector3 retains Luau's native vector representation");
+
+		lua_settop(L, 0);
+		Check(Load(L, R"(
+			local Value = 2 * Vector2.new(1, 2)
+			local InvalidOk = pcall(function() return "wrong" * Vector2.new(1, 2) end)
+			local OrderingOk = pcall(function() return Vector2.zero < Vector2.one end)
+			return Value.X, Value.Y, Vector2.new(1, 2):Cross(Vector2.new(3, 4)),
+				Vector2.new(1, 2):FuzzyEq(Vector2.new(1.00001, 1.99999), 0.0001),
+				InvalidOk, OrderingOk, type(Value)
+		)", "luau-vector2-safety") == LUA_OK && lua_pcall(L, 0, 7, 0) == LUA_OK,
+			"Vector2 arithmetic executes through the real Luau userdata boundary");
+		Check(lua_tonumber(L, -7) == 2.0 && lua_tonumber(L, -6) == 4.0 && lua_tonumber(L, -5) == -2.0,
+			"Vector2 scalar-left multiplication and Cross return exact expected values");
+		Check(lua_toboolean(L, -4) && !lua_toboolean(L, -3) && !lua_toboolean(L, -2) &&
+			std::string_view(lua_tostring(L, -1)) == "userdata",
+			"Vector2 FuzzyEq succeeds while invalid multiplication and ordering fail as Luau errors");
+
+		auto Vector2AttributePart = std::make_shared<Folder>();
+		Vector2AttributePart->SetParent(game);
+		StackValue<std::shared_ptr<Folder>>::Push(L, Vector2AttributePart);
+		lua_setglobal(L, "Vector2AttributePart");
+		lua_settop(L, 0);
+		Check(Load(L, R"(
+			Vector2AttributePart:SetAttribute("Offset", Vector2.new(10, 20))
+			local Value = Vector2AttributePart:GetAttribute("Offset")
+			return Value.X, Value.Y
+		)", "luau-vector2-attribute") == LUA_OK && lua_pcall(L, 0, 2, 0) == LUA_OK,
+			"Luau stores and retrieves a Vector2 Attribute through MutationGateway");
+		Check(lua_tonumber(L, -2) == 10.0 && lua_tonumber(L, -1) == 20.0 &&
+			Vector2AttributePart->GetAttributeValue("Offset") == std::optional<WireValue>(WireVector2{10.0f, 20.0f}),
+			"Luau Vector2 Attribute access retains exact component values");
 
 		lua_settop(L, 0);
 		Check(Load(L, "local =", "luau-syntax-error") != LUA_OK, "Luau syntax errors fail during bytecode loading");

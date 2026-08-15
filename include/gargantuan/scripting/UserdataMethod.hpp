@@ -16,6 +16,7 @@ namespace gargantuan {
 		SchemaId DeclaringSchemaId{};
 		ScriptDomainSet InvokeDomains = ScriptDomainSet::All();
 		ScriptCapability RequiredCapability = ScriptCapability::None;
+		bool AllowSecondArgumentReceiver = false;
 
 		[[nodiscard]] bool CanInvoke(const ScriptSecurityContext &context) const {
 			return InvokeDomains.Contains(context.Domain) && context.HasCapability(RequiredCapability);
@@ -45,6 +46,30 @@ namespace gargantuan {
 			return fromMember<MethodPointer>(MethodPointer);
 		}
 
+		template <auto MethodPointer, typename Class, typename Returns, typename... Arguments>
+		static UserdataMethod fromCheckedMember(Returns (Class::*)(Arguments...)) {
+			return {.Call = [](lua_State *L, Self *instance) -> int {
+				auto *derived = static_cast<Class *>(instance);
+				return CallFromCheckedMember<MethodPointer, Class, Arguments...>(
+					L, derived, std::index_sequence_for<Arguments...>{}
+				);
+			}};
+		}
+
+		template <auto MethodPointer, typename Class, typename Returns, typename... Arguments>
+		static UserdataMethod fromCheckedMember(Returns (Class::*)(Arguments...) const) {
+			return {.Call = [](lua_State *L, Self *instance) -> int {
+				auto *derived = static_cast<Class *>(instance);
+				return CallFromCheckedMember<MethodPointer, Class, Arguments...>(
+					L, derived, std::index_sequence_for<Arguments...>{}
+				);
+			}};
+		}
+
+		template <auto MethodPointer> static UserdataMethod fromCheckedMember() {
+			return fromCheckedMember<MethodPointer>(MethodPointer);
+		}
+
 	  private:
 		template <auto MethodPointer, typename Class, typename... Arguments, std::size_t... Indices>
 		static int CallFromMember(lua_State *L, Class *instance, std::index_sequence<Indices...>) {
@@ -56,6 +81,24 @@ namespace gargantuan {
 			} else {
 				auto &&res = std::invoke(
 					MethodPointer, instance, StackValue<std::decay_t<Arguments>>::From(L, Indices + 2)...
+				);
+				StackValue<std::decay_t<Ret>>::Push(L, std::forward<decltype(res)>(res));
+				return 1;
+			}
+		}
+
+		template <auto MethodPointer, typename Class, typename... Arguments, std::size_t... Indices>
+		static int CallFromCheckedMember(lua_State *L, Class *instance, std::index_sequence<Indices...>) {
+			using Ret = std::invoke_result_t<decltype(MethodPointer), Class *, std::decay_t<Arguments>...>;
+
+			if constexpr (std::is_void_v<Ret>) {
+				std::invoke(
+					MethodPointer, instance, CheckStackValue<std::decay_t<Arguments>>(L, Indices + 2)...
+				);
+				return 0;
+			} else {
+				auto &&res = std::invoke(
+					MethodPointer, instance, CheckStackValue<std::decay_t<Arguments>>(L, Indices + 2)...
 				);
 				StackValue<std::decay_t<Ret>>::Push(L, std::forward<decltype(res)>(res));
 				return 1;

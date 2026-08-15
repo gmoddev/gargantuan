@@ -117,9 +117,13 @@ parented under a new DataModel's Workspace. Retained deserialization paths own
 their strings.
 
 Native userdata dispatch catches C++ exceptions at the Luau callback boundary
-and converts them into ordinary Luau errors. Direct library callbacks that do
-not pass through userdata dispatch still need a complete boundary inventory in
-a later hardening pass.
+and converts them into ordinary Luau errors. Generic dispatch rejects missing or
+wrong-tag receivers before invoking native methods. `Vector2` remains a
+`glm::vec2` value stored in tagged userdata; its binary arithmetic validates both
+operands explicitly, permits scalar-left multiplication only, and does not
+define ordering. Its library constants are readonly value userdata. Direct
+library callbacks that do not pass through userdata dispatch still need a
+complete boundary inventory in a later hardening pass.
 
 ## Remaining blockers before network replication
 
