@@ -20,6 +20,9 @@
 - [Networking foundation validation](NetworkingFoundationValidation.md) maps and
   adversarially revalidates the identity, lifecycle, bounds, sequencing,
   accounting, simulator, and scheduler contracts before a real transport.
+- [Real game transport](RealGameTransport.md) defines the optional pinned
+  GameNetworkingSockets adapter, handle isolation, lifecycle mapping, private
+  compatibility envelope, limits, polling, statistics, and authority boundary.
 
 See [Runtime foundation](./FoundationRuntime.md) for the implemented ownership,
 ObjectId, JobSystem, execution-domain, reflection-schema, and committed-change
@@ -110,10 +113,10 @@ native definition map; the present DataModel registers only `ProcessService`,
 `RunService`, `UserInputService`, and `Workspace`
 (`src/classes/DataModel.cpp:9-16`). `Workspace` creates a current Camera
 (`src/services/Workspace.cpp:7-9`). A `ReplicatedStorage` class/source scaffold
-exists but is not registered. There is no gameplay replication system,
-production scheduler, or real transport; the networking subsystem has pure
-contracts, an in-memory deterministic test transport, and a validated scheduler
-policy contract.
+exists but is not registered. There is no gameplay replication system or
+production scheduler; the networking subsystem has pure contracts, an in-memory
+deterministic test transport, a validated scheduler policy contract, and an
+optional real GNS transport adapter.
 
 ## Frame execution model
 
@@ -141,9 +144,11 @@ sequenceDiagram
 ```
 
 Everything shown executes on the main thread. `thread_local` state in
-`ScriptEngine.cpp:71` is bookkeeping, not parallel execution. There are no job
-workers, render thread, async I/O workers, network threads, or deterministic
-simulation lanes.
+`ScriptEngine.cpp:71` is bookkeeping, not parallel execution. There are no
+Gargantuan-owned job workers, render thread, async I/O workers, network workers,
+or deterministic simulation lanes. When the optional real transport is enabled,
+GNS may run its internal service thread; Gargantuan observes its callbacks only
+during explicit transport polling.
 
 ## Current service set
 

@@ -108,6 +108,7 @@ The following documents describe recently implemented, source-verified slices:
 - [Deterministic simulated transport](../../devdocs/CurrentArchitecture/SimulatedTransport.md)
 - [Network scheduler contract](../../devdocs/CurrentArchitecture/NetworkSchedulerContract.md)
 - [Networking foundation validation](../../devdocs/CurrentArchitecture/NetworkingFoundationValidation.md)
+- [Real game transport](../../devdocs/CurrentArchitecture/RealGameTransport.md)
 - [Script security](../../devdocs/CurrentArchitecture/ScriptSecurity.md)
 - [EditorHost protocol](../../devdocs/CurrentArchitecture/EditorHostProtocol.md)
 - [Editor viewport](../../devdocs/CurrentArchitecture/EditorViewport.md)
@@ -121,8 +122,8 @@ a goal; each migration must verify claims against current code and tests.
 - [Future architecture](../src/content/docs/developing/future-architecture.mdx)
   is the broad accepted direction, with implementation status stated per section.
 - [Game networking architecture](../src/content/docs/developing/networking-architecture.mdx)
-  records accepted boundaries and deferred transport/API choices; no real game
-  transport exists yet.
+  records accepted boundaries and the evidence-backed GNS transport selection;
+  gameplay networking layers remain deferred.
 - [Roadmap](../src/content/docs/developing/roadmap.mdx) is non-normative ordering.
 - Files under `devdocs/FutureArchitecture/` are design input and must be
   reconciled with newer accepted documents before implementation.

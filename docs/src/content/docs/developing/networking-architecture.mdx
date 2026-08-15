@@ -9,17 +9,20 @@ declaring an unfinished transport backend or public API spelling to be final.
 
 **Status:** The boundaries and invariants in this document are accepted design
 direction. Deterministic simulator validation confirmed the semantic delivery,
-lifecycle, boundedness, and scheduler/transport split. Names marked as
-candidates, binary layouts, real transport selection, and tuning values remain
-provisional pending their respective implementation evidence.
+lifecycle, boundedness, and scheduler/transport split. GameNetworkingSockets is
+now the selected first real adapter; public API names, gameplay binary layouts,
+and tuning values remain provisional pending their respective implementation
+evidence.
 
 **Implementation status:** The Attributes and Tags prerequisite, native
 protocol-input hardening, backend-neutral pure contracts, deterministic
 in-memory transport, simulator validation, and the scheduler semantic contract
 are complete. The simulator exercises delivery and lifecycle semantics without
 sockets, and a deterministic policy proof validates scheduler admission,
-precedence, budgets, supersession, and flush behavior. The production scheduler,
-real transport, and runtime phases below remain unfinished.
+precedence, budgets, supersession, and flush behavior. An optional pinned
+GameNetworkingSockets adapter now proves real localhost connection, message,
+limit, failure, and teardown behavior. The production scheduler and runtime
+phases below remain unfinished.
 
 ## Context
 
@@ -234,11 +237,11 @@ itself authenticate a Gargantuan player or server; the handshake consumes a
 short-lived session ticket or equivalent proof issued by the hosting/control
 plane.
 
-**Current preferred initial real-game transport candidate:** Valve
-GameNetworkingSockets, because its message model, reliable/unreliable delivery,
-prioritized lanes, diagnostics, and network simulation align with games. Final
-backend selection is deferred until the simulated-transport contracts are
-proven.
+**Selected initial real-game transport:** Valve GameNetworkingSockets 1.6.0 at
+source revision `2cb93a06350bb065db53abdb0d87cf297e0bfd34`. Its message model,
+reliable/unreliable delivery, diagnostics, congestion behavior, and statistics
+fit the proven `IGameTransport` boundary. GNS handles and lanes remain adapter
+details and cannot dictate scheduler or replication semantics.
 
 QUIC remains a serious candidate when standards interoperability, connection
 migration, direct Go compatibility, or browser-adjacent deployment matters.
@@ -363,8 +366,11 @@ of the accepted decisions above.
    conditions.
 - [x] **Stop and validate.** Exercise the contracts, inspect metrics and failure
    behavior, and revise this ADR before committing to a real backend.
-- [ ] **Select and implement one real transport adapter.** Add handshake,
-   authentication hook, connection lifecycle, negotiated limits, and stats.
+- [x] **Select and implement one real transport adapter.** The pinned GNS adapter
+  provides real connection lifecycle, delivery, locally enforced limits,
+  compatible statistics, and a host-owned authentication hook boundary.
+  Authentication tickets and negotiated-limit exchange remain explicit later
+  protocol work rather than being simulated by attacker-controlled payload.
 - [ ] **Add bounded Luau remotes.** Preserve familiar event/request ergonomics over
    the tested scheduler and transport semantics.
 - [ ] **Add basic client replication.** Implement baseline plus reliable publish,
@@ -381,7 +387,7 @@ the handshake contract exists. Collaborative editing remains later work.
 
 The following are intentionally not fixed by this ADR:
 
-- GNS versus QUIC or another mature real transport;
+- whether later evidence warrants a second QUIC or other transport adapter;
 - exact public Instance class names and method spelling for remotes;
 - exact binary field layout, compression, quantization, and varint scheme;
 - sequence widths, wrap rules, acknowledgement layout, and channel granularity;
@@ -405,9 +411,9 @@ while exploring them.
   [ByteNet](https://ffrostfall.github.io/ByteNet/), and
   [Blink](https://1axen.github.io/blink/) demonstrate batching, typed schemas,
   compact buffer codecs, reliability selection, and generated protocols above Roblox.
-- [GameNetworkingSockets](https://github.com/ValveSoftware/GameNetworkingSockets)
-  provides a game-oriented candidate with message delivery, lanes, encryption,
-  diagnostics, and network-condition simulation.
+- [GameNetworkingSockets](https://github.com/ValveSoftware/GameNetworkingSockets/tree/2cb93a06350bb065db53abdb0d87cf297e0bfd34)
+  is the pinned first real adapter and provides message delivery, encryption,
+  congestion control, diagnostics, and transport statistics.
 - [RFC 9000](https://www.rfc-editor.org/rfc/rfc9000) and
   [RFC 9221](https://www.rfc-editor.org/rfc/rfc9221) define QUIC streams and QUIC
   unreliable datagrams as a standards-based alternative.

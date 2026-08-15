@@ -101,6 +101,7 @@ add_subdirectory(vendor/sdl_ttf SYSTEM)
 
 option(GARGANTUAN_TRACY "Compile in the Tracy client" OFF)
 option(GARGANTUAN_BUILD_RENDERER_BENCHMARKS "Build the manual renderer feasibility benchmark" ON)
+option(GARGANTUAN_WITH_GNS "Build the optional GameNetworkingSockets transport adapter" OFF)
 set(GARGANTUAN_FILAMENT_ROOT "" CACHE PATH "External Filament SDK root for the experimental renderer benchmark")
 set(GARGANTUAN_WITH_FILAMENT OFF)
 if(GARGANTUAN_FILAMENT_ROOT)
@@ -123,6 +124,10 @@ set(TRACY_ON_DEMAND ON CACHE BOOL "" FORCE)
 set(TRACY_ONLY_LOCALHOST ON CACHE BOOL "" FORCE)
 set(TRACY_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
 add_subdirectory(vendor/tracy)
+
+if(GARGANTUAN_WITH_GNS)
+	include(cmake/GameNetworkingSockets.cmake)
+endif()
 
 option(
 	GARGANTUAN_TRACY_TOOLS
@@ -162,6 +167,7 @@ list(REMOVE_ITEM GARGANTUAN_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/Main.cpp")
 if(NOT GARGANTUAN_WITH_FILAMENT)
 	list(REMOVE_ITEM GARGANTUAN_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/render/FilamentRenderer.cpp")
 endif()
+list(REMOVE_ITEM GARGANTUAN_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/network/GameNetworkingSocketsTransport.cpp")
 
 add_library(gargantuan_core OBJECT ${GARGANTUAN_SOURCES})
 add_executable(gargantuan "src/Main.cpp" ${SHADER_OUTPUTS})
@@ -265,6 +271,19 @@ target_link_libraries(gargantuan_core
 		Tracy::TracyClient
 )
 
+if(GARGANTUAN_WITH_GNS)
+	add_library(gargantuan_gns_transport STATIC
+		"src/network/GameNetworkingSocketsTransport.cpp"
+	)
+	target_compile_features(gargantuan_gns_transport PUBLIC cxx_std_23)
+	target_compile_definitions(gargantuan_gns_transport PUBLIC GARGANTUAN_WITH_GNS=1)
+	target_include_directories(gargantuan_gns_transport PUBLIC "include")
+	target_link_libraries(gargantuan_gns_transport PUBLIC GameNetworkingSockets::static)
+	if(MSVC)
+		target_compile_options(gargantuan_gns_transport PRIVATE /EHsc)
+	endif()
+endif()
+
 include(CTest)
 if(BUILD_TESTING)
 	add_executable(gargantuan_foundation_tests "tests/FoundationTests.cpp")
@@ -279,6 +298,13 @@ if(BUILD_TESTING)
 	target_link_libraries(gargantuan_simulated_transport_tests PRIVATE gargantuan_core)
 	add_executable(gargantuan_scheduler_contract_tests "tests/SchedulerContractTests.cpp")
 	target_link_libraries(gargantuan_scheduler_contract_tests PRIVATE gargantuan_core)
+	if(GARGANTUAN_WITH_GNS)
+		add_executable(gargantuan_real_transport_tests "tests/GameNetworkingSocketsTransportTests.cpp")
+		target_link_libraries(gargantuan_real_transport_tests PRIVATE
+			gargantuan_core
+			gargantuan_gns_transport
+		)
+	endif()
 	if(GARGANTUAN_BUILD_RENDERER_BENCHMARKS)
 		add_executable(gargantuan_renderer_benchmark "tests/RendererBenchmark.cpp")
 		target_link_libraries(gargantuan_renderer_benchmark PRIVATE gargantuan_core)
@@ -318,6 +344,13 @@ if(BUILD_TESTING)
 				"$<TARGET_FILE:SDL3::SDL3>"
 				"$<TARGET_FILE_DIR:gargantuan_scheduler_contract_tests>"
 		)
+		if(GARGANTUAN_WITH_GNS)
+			add_custom_command(TARGET gargantuan_real_transport_tests POST_BUILD
+				COMMAND ${CMAKE_COMMAND} -E copy_if_different
+					"$<TARGET_FILE:SDL3::SDL3>"
+					"$<TARGET_FILE_DIR:gargantuan_real_transport_tests>"
+			)
+		endif()
 		if(GARGANTUAN_BUILD_RENDERER_BENCHMARKS)
 			add_custom_command(TARGET gargantuan_renderer_benchmark POST_BUILD
 				COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -338,6 +371,9 @@ if(BUILD_TESTING)
 	add_test(NAME gargantuan_networking_contracts COMMAND gargantuan_networking_contract_tests)
 	add_test(NAME gargantuan_simulated_transport COMMAND gargantuan_simulated_transport_tests)
 	add_test(NAME gargantuan_scheduler_contract COMMAND gargantuan_scheduler_contract_tests)
+	if(GARGANTUAN_WITH_GNS)
+		add_test(NAME gargantuan_real_transport COMMAND gargantuan_real_transport_tests)
+	endif()
 	if(GARGANTUAN_WITH_FILAMENT)
 		add_test(NAME gargantuan_filament_renderer COMMAND gargantuan_filament_renderer_tests)
 	endif()

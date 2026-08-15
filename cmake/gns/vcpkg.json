@@ -1,0 +1,13 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+  "name": "gargantuan-gns-dependencies",
+  "version-string": "1.0.0",
+  "builtin-baseline": "6f7ffeb18f99796233b958aaaf14ec7bd4fb64b2",
+  "dependencies": [
+    "protobuf",
+    {
+      "name": "openssl",
+      "platform": "!windows"
+    }
+  ]
+}
