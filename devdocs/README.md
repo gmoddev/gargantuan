@@ -19,6 +19,9 @@ project scaffold.
   findings, plausible risks needing runtime proof, and general hardening.
 - [Future architecture](FutureArchitecture/README.md) defines the target product
   and its boundaries.
+- [Physics and deformation research](FutureArchitecture/PhysicsAndDeformationResearch.md)
+  records non-normative backend, deformation, authoring, persistence, networking,
+  and benchmark research for the isolated physics-system design phase.
 - [Networking and security](FutureArchitecture/NetworkingAndSecurity.md) designs
   the authoritative online model.
 - [GUI and Studio](FutureArchitecture/GuiAndStudio.md) defines runtime UI and the
