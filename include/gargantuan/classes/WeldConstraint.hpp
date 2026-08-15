@@ -7,6 +7,9 @@ namespace gargantuan {
 		I_WeldConstraint;
 
 		virtual std::tuple<std::shared_ptr<BasePart>, std::shared_ptr<BasePart>> GetActiveParts() const override;
-		b3JointId CreateJoint(b3WorldId *world, b3BodyId body0, b3BodyId body1) override;
+		[[nodiscard]] PhysicsConstraintDesc GetPhysicsConstraint(
+			PhysicsBodyId BodyA,
+			PhysicsBodyId BodyB
+		) const override;
 	};
 }

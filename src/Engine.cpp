@@ -12,7 +12,6 @@
 #include "gargantuan/services/Workspace.hpp"
 
 #include <SDL3/SDL.h>
-#include <box3d/box3d.h>
 #include <filesystem>
 #include <glm/glm.hpp>
 #include <lua.h>

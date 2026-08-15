@@ -1,6 +1,4 @@
 #include "gargantuan/classes/WeldConstraint.hpp"
-#include <box3d/box3d.h>
-#include <box3d/types.h>
 
 namespace gargantuan {
 	std::tuple<std::shared_ptr<BasePart>, std::shared_ptr<BasePart>> WeldConstraint::GetActiveParts() const {
@@ -15,11 +13,15 @@ namespace gargantuan {
 		return {part0, part1};
 	};
 
-	b3JointId WeldConstraint::CreateJoint(b3WorldId *world, b3BodyId body0, b3BodyId body1) {
-		b3WeldJointDef jointDefinition = b3DefaultWeldJointDef();
-		jointDefinition.base.bodyIdA = body0;
-		jointDefinition.base.bodyIdB = body1;
-		jointDefinition.base.collideConnected = true;
-		return b3CreateWeldJoint(*world, &jointDefinition);
+	PhysicsConstraintDesc WeldConstraint::GetPhysicsConstraint(
+		PhysicsBodyId BodyA,
+		PhysicsBodyId BodyB
+	) const {
+		return {
+			.Kind = PhysicsConstraintKind::Weld,
+			.BodyA = BodyA,
+			.BodyB = BodyB,
+			.CollideConnected = true,
+		};
 	}
 }

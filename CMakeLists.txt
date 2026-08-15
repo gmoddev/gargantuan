@@ -288,6 +288,8 @@ include(CTest)
 if(BUILD_TESTING)
 	add_executable(gargantuan_foundation_tests "tests/FoundationTests.cpp")
 	target_link_libraries(gargantuan_foundation_tests PRIVATE gargantuan_core)
+	add_executable(gargantuan_physics_backend_tests "tests/PhysicsBackendTests.cpp")
+	target_link_libraries(gargantuan_physics_backend_tests PRIVATE gargantuan_core)
 	add_executable(gargantuan_prerun_bootstrap_tests "tests/PreRunBootstrapTests.cpp")
 	target_link_libraries(gargantuan_prerun_bootstrap_tests PRIVATE gargantuan_core)
 	add_executable(gargantuan_attributes_tags_profile "tests/AttributesTagsProfile.cpp")
@@ -329,6 +331,11 @@ if(BUILD_TESTING)
 				"$<TARGET_FILE:SDL3::SDL3>"
 				"$<TARGET_FILE_DIR:gargantuan_attributes_tags_profile>"
 		)
+		add_custom_command(TARGET gargantuan_physics_backend_tests POST_BUILD
+			COMMAND ${CMAKE_COMMAND} -E copy_if_different
+				"$<TARGET_FILE:SDL3::SDL3>"
+				"$<TARGET_FILE_DIR:gargantuan_physics_backend_tests>"
+		)
 		add_custom_command(TARGET gargantuan_networking_contract_tests POST_BUILD
 			COMMAND ${CMAKE_COMMAND} -E copy_if_different
 				"$<TARGET_FILE:SDL3::SDL3>"
@@ -367,6 +374,7 @@ if(BUILD_TESTING)
 		endif()
 	endif()
 	add_test(NAME gargantuan_foundation COMMAND gargantuan_foundation_tests)
+	add_test(NAME gargantuan_physics_backend COMMAND gargantuan_physics_backend_tests)
 	add_test(NAME gargantuan_prerun_bootstrap COMMAND gargantuan_prerun_bootstrap_tests)
 	add_test(NAME gargantuan_networking_contracts COMMAND gargantuan_networking_contract_tests)
 	add_test(NAME gargantuan_simulated_transport COMMAND gargantuan_simulated_transport_tests)

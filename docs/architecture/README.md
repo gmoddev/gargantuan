@@ -86,6 +86,7 @@ them in scope rather than silently selecting one source.
 | Replication | State projection and transfer to a receiver or peer | Authoritative gameplay decisions, direct unvalidated mutation |
 | Scripting | Luau VMs, execution contexts, native bindings, scheduling | Ambient host authority not explicitly granted |
 | Rendering | Immutable extracted render state, renderer-owned GPU resources | DataModel traversal or mutation, retained Instance pointers |
+| Physics | Neutral rigid-body semantics, safe-point updates, backend identity and events | Backend-native handles outside the adapter |
 | EditorHost | Versioned editor-facing engine boundary, commands, snapshots, journals, viewport transport | First-party Studio UX state, private engine pointer exposure |
 | Studio | Editor UX and non-authoritative document projections | Authoritative DataModel state, raw engine/GPU ownership |
 | Game networking | Connection, scheduling, delivery, remotes, peer-specific replication intent | Authoritative source history or platform-service policy |
@@ -97,6 +98,7 @@ The following documents describe recently implemented, source-verified slices:
 
 - [Runtime schema](../src/content/docs/developing/runtime-schema.mdx)
 - [Render extraction](../src/content/docs/developing/render-extraction.mdx)
+- [Physics backend](../../devdocs/CurrentArchitecture/PhysicsBackend.md)
 - [Instance attributes](../src/content/docs/developing/instance-attributes.mdx)
 - [Instance tags](../src/content/docs/developing/instance-tags.mdx)
 - [EditorHost and Studio boundary](../src/content/docs/developing/editor-host.mdx)

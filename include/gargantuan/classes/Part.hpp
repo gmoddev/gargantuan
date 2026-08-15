@@ -16,6 +16,6 @@ namespace gargantuan {
 	class Part : public BasePart {
 		I_Part;
 
-		void CreateBodyShape(b3BodyId bodyId, b3ShapeDef &bodyShape) override;
+		[[nodiscard]] PhysicsShapeDesc GetPhysicsShape() const override;
 	};
 } // namespace gargantuan

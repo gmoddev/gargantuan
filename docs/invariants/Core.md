@@ -118,6 +118,19 @@ Tests should enforce them where practical.
    against the live registry before authoritative use.
 5. GPU resources are renderer/backend-owned and never stored in or exposed by Instances.
 
+## Physics
+
+1. Engine systems depend on Gargantuan physics semantics; backend-native types,
+   handles, callbacks, and ownership primitives remain inside the backend adapter.
+2. Physics body and constraint IDs are generation-safe engine values independent
+   of `ObjectId`, native pointers, and backend handles.
+3. Committed authoritative Part changes become physics intents and are applied on
+   Main at an explicit non-stepping safe point.
+4. Backend events are copied into engine-owned values and validated against live
+   physics and object identities before they reach Instances.
+5. Backend-internal body or shape reconstruction does not unexpectedly change
+   Gargantuan physics identity or leave dangling constraint identity.
+
 ## EditorHost and Studio
 
 1. EditorHost is the versioned public process boundary between Studio and the engine.

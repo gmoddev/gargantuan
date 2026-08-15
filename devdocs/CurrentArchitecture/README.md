@@ -8,6 +8,8 @@
 - [Render extraction](RenderExtraction.md) defines the immutable frame snapshot,
   runtime/editor extraction timing, picking identity, and renderer-owned
   primitive resources.
+- [Physics backend](PhysicsBackend.md) defines neutral rigid-body semantics,
+  generation-safe physics identity, safe-point updates, and Box3D confinement.
 - [Instance attributes](InstanceAttributes.md) defines bounded dynamic state,
   authority, persistence, journal, replication, and Studio contracts.
 - [Instance tags](InstanceTags.md) defines scoped indexed membership,
@@ -154,7 +156,7 @@ during explicit transport polling.
 
 | Service | Present behavior | Reality check |
 |---|---|---|
-| `Workspace` | Owns current Camera and inherits `WorldRoot`. | Useful primitive world root; no streaming, raycast API, terrain, characters, or network ownership. |
+| `Workspace` | Owns current Camera and inherits `WorldRoot`, which coordinates the neutral rigid physics world. | Useful primitive world root; no streaming, raycast API, terrain, characters, or network ownership. |
 | `RunService` | Signal container used by `Engine`. | `src/services/RunService.cpp` is empty; semantics are hard-coded in the frame loop. |
 | `UserInputService` | Converts a subset of SDL events, tracks keys, emits signals. | Mouse state has map/update bugs and unsupported buttons can throw. No action mapping, gamepads, touch, text input, routing, or UI focus. |
 | `ProcessService` | Controls process lifetime and stdout/stderr. | Exposed to every script without a capability check; inappropriate for untrusted experiences. |
@@ -172,8 +174,10 @@ during explicit transport polling.
   `shared_ptr`; children store raw `ParentPointer` (`include/gargantuan/classes/Instance.hpp:19-24`).
 - **Synchronous events.** Signals resume callbacks immediately; tasks and Scripts
   share the same VM and host thread.
-- **Direct subsystem coupling.** `Engine` knows concrete services, the renderer
-  reads `WorldRoot::Parts`, and physics writes Instance properties directly.
+- **Bounded subsystem coupling.** `Engine` knows concrete services and the renderer
+  reads `WorldRoot::Parts`. Physics publishes post-step transforms through the
+  authoritative setter path, while Box3D mechanics remain behind the documented
+  [physics backend boundary](PhysicsBackend.md).
 - **Local filesystem is part of loading.** Project and FileLink data resolve
   directly to host paths without a capability-oriented asset layer.
 

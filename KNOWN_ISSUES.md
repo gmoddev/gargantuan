@@ -44,28 +44,6 @@ cannot recursively import itself, reports malformed models with actionable
 paths, and has coverage for successful imports, malformed files, cycles or
 self-reference, and depth/count limits.
 
-## KI-005: BasePart property edits do not synchronize existing Box3D bodies
-
-- Status: Open
-- Priority: High
-- Area: Physics and authoritative mutation
-- Relevant code:
-  - `src/classes/WorldRoot.cpp`
-  - `src/classes/BasePart.cpp`
-  - `assets/classes/BasePart.luau`
-
-`WorldRoot::CreatePartBody` copies transform, anchoring, collision, touch, and
-shape information into Box3D only when the body is created. No property-change
-observers update or rebuild an existing body. Authoritative edits to `CFrame`,
-`Size`, `Anchored`, `CanCollide`, and `CanTouch` can therefore leave physics
-behavior inconsistent with the Instance state seen by scripts, persistence,
-replication, Studio, and rendering.
-
-Resolution requires an explicit Main-domain body-update protocol that applies
-committed property changes at a safe physics boundary, preserves body and
-constraint lifecycle, and tests transform, geometry, body type, sensor/contact,
-and repeated-edit behavior.
-
 ## Maintenance rules
 
 - Record only issues verified against the current branch.

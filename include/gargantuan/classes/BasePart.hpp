@@ -1,8 +1,8 @@
 #pragma once
 
 #include "gargantuan/classes/generated/BasePart.hpp"
+#include "gargantuan/physics/PhysicsTypes.hpp"
 
-#include <box3d/box3d.h>
 #include <glm/glm.hpp>
 
 namespace gargantuan {
@@ -10,7 +10,7 @@ namespace gargantuan {
 		I_BasePart;
 
 		glm::vec3 AccumulatedImpulse = {0.0f, 0.0f, 0.0f};
-		virtual void CreateBodyShape(b3BodyId bodyId, b3ShapeDef &bodyShape) = 0;
+		[[nodiscard]] virtual PhysicsShapeDesc GetPhysicsShape() const = 0;
 
 	};
 } // namespace gargantuan

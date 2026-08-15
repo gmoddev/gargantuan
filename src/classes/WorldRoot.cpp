@@ -1,201 +1,340 @@
 #include "gargantuan/classes/WorldRoot.hpp"
-#include "gargantuan/classes/BasePart.hpp"
-#include "gargantuan/classes/Constraint.hpp"
-#include "gargantuan/classes/Instance.hpp"
-#include "gargantuan/datatypes/CFrame.hpp"
-#include "gargantuan/physics/Conversions.hpp"
+#include "gargantuan/Log.hpp"
 
-#include <SDL3/SDL.h>
-
-#include <box3d/box3d.h>
-#include <box3d/collision.h>
-#include <box3d/id.h>
-#include <box3d/math_functions.h>
-#include <box3d/types.h>
-#include <cstddef>
+#include <algorithm>
 #include <memory>
 #include <optional>
-#include <unordered_map>
-#include <variant>
+#include <string_view>
+#include <utility>
 #include <vector>
 
 namespace gargantuan {
-	const auto ZERO_VEC3 = glm::vec3(0.0f, 0.0f, 0.0f).value;
-
-	// TODO: Observe properties and reconstruct physics objects when they
-	// change
-
-	b3BodyId WorldRoot::CreatePartBody(std::shared_ptr<BasePart> it) {
-		if (!it || it->GetDestroyed() || it->IsDestroying() || !b3World_IsValid(World)) return b3_nullBodyId;
-
-		b3BodyDef bodyDefinition = b3DefaultBodyDef();
-		bodyDefinition.position = ToBox3(it->GetCFrame().Position);
-		bodyDefinition.rotation = ToBox3(it->GetCFrame().ToQuaternion());
-
-		b3ShapeDef shapeDefinition = b3DefaultShapeDef();
-
-		if (it->GetAnchored()) {
-			bodyDefinition.type = (b3BodyType)b3_staticBody;
-		} else {
-			bodyDefinition.type = (b3BodyType)b3_dynamicBody;
-			shapeDefinition.density = 0.7f;
-		};
-
-		if (it->GetCanCollide()) {
-			shapeDefinition.isSensor = false;
-		} else {
-			shapeDefinition.isSensor = true;
-			shapeDefinition.enableSensorEvents = it->GetCanTouch();
+	namespace {
+		[[nodiscard]] bool HasImpulse(const glm::vec3 &Impulse) {
+			return Impulse.x != 0.0f || Impulse.y != 0.0f || Impulse.z != 0.0f;
 		}
 
-		bodyDefinition.userData = it.get();
-
-		b3BodyId bodyId = b3CreateBody(World, &bodyDefinition);
-		if (!b3Body_IsValid(bodyId)) return b3_nullBodyId;
-		it->CreateBodyShape(bodyId, shapeDefinition);
-		Parts.push_back(it);
-		PartBodies[it.get()] = bodyId;
-		return bodyId;
+		[[nodiscard]] std::vector<ObjectId> SortedIds(const std::unordered_set<ObjectId> &Ids) {
+			std::vector<ObjectId> Result(Ids.begin(), Ids.end());
+			std::sort(Result.begin(), Result.end());
+			return Result;
+		}
 	}
 
-	b3JointId WorldRoot::CreateConstraintJoint(std::shared_ptr<Constraint> it) {
-		if (!it || it->GetDestroyed() || it->IsDestroying() || !b3World_IsValid(World)) return b3_nullJointId;
-		auto [part0, part1] = it->GetActiveParts();
-		if (!part0 || !part1 || part0 == part1 || part0->GetDestroyed() || part1->GetDestroyed() ||
-			part0->IsDestroying() || part1->IsDestroying())
-			return b3_nullJointId;
+	PhysicsBodyDesc WorldRoot::DescribePart(const BasePart &Part) const {
+		return {
+			.Transform = Part.GetCFrame(),
+			.Shape = Part.GetPhysicsShape(),
+			.Anchored = Part.GetAnchored(),
+			.CanCollide = Part.GetCanCollide(),
+			.CanTouch = Part.GetCanTouch(),
+			.Density = 0.7f,
+		};
+	}
 
-		auto constraintWorld = it->FindFirstAncestorWhichIsA("WorldRoot");
-		auto part0World = part0->FindFirstAncestorWhichIsA("WorldRoot");
-		auto part1World = part1->FindFirstAncestorWhichIsA("WorldRoot");
-		if (constraintWorld.get() != this || part0World.get() != this || part1World.get() != this)
-			return b3_nullJointId;
+	PhysicsBodyId WorldRoot::CreatePartBody(const std::shared_ptr<BasePart> &Part) {
+		if (!Part || Part->GetDestroyed() || Part->IsDestroying() || !Physics.IsValid()) return {};
+		const auto Object = Part->GetObjectId();
+		if (auto Existing = PartBodies.find(Object); Existing != PartBodies.end()) {
+			if (Physics.IsBodyValid(Existing->second)) return Existing->second;
+			BodyParts.erase(Existing->second);
+			PartBodies.erase(Existing);
+		}
+		const auto Body = Physics.CreateBody(DescribePart(*Part));
+		if (!Body.IsValid()) {
+			LOG_ERROR(App, "[Physics:Backend] Failed to create body for %s", Part->GetFullName().c_str());
+			return {};
+		}
+		if (std::find(Parts.begin(), Parts.end(), Part) == Parts.end()) Parts.push_back(Part);
+		PartBodies[Object] = Body;
+		BodyParts[Body] = Part;
+		return Body;
+	}
 
-		if (auto existing = ConstraintJoints.find(it.get()); existing != ConstraintJoints.end()) {
-			return b3Joint_IsValid(existing->second) ? existing->second : b3_nullJointId;
+	PhysicsConstraintId WorldRoot::CreateConstraintJoint(const std::shared_ptr<Constraint> &Constraint) {
+		if (!Constraint || Constraint->GetDestroyed() || Constraint->IsDestroying() || !Constraint->GetEnabled() ||
+			!Physics.IsValid()) return {};
+		if (auto Existing = ConstraintJoints.find(Constraint->GetObjectId()); Existing != ConstraintJoints.end())
+			return Physics.IsConstraintValid(Existing->second) ? Existing->second : PhysicsConstraintId{};
+		auto [PartA, PartB] = Constraint->GetActiveParts();
+		if (!PartA || !PartB || PartA == PartB || PartA->GetDestroyed() || PartB->GetDestroyed() ||
+			PartA->IsDestroying() || PartB->IsDestroying()) return {};
+
+		const auto ConstraintWorld = Constraint->FindFirstAncestorWhichIsA("WorldRoot");
+		const auto PartAWorld = PartA->FindFirstAncestorWhichIsA("WorldRoot");
+		const auto PartBWorld = PartB->FindFirstAncestorWhichIsA("WorldRoot");
+		if (ConstraintWorld.get() != this || PartAWorld.get() != this || PartBWorld.get() != this) return {};
+
+		const auto BodyA = CreatePartBody(PartA);
+		const auto BodyB = CreatePartBody(PartB);
+		if (!BodyA.IsValid() || !BodyB.IsValid()) return {};
+		const auto Joint = Physics.CreateConstraint(Constraint->GetPhysicsConstraint(BodyA, BodyB));
+		if (!Joint.IsValid()) {
+			LOG_ERROR(App, "[Physics:Backend] Failed to create constraint for %s", Constraint->GetFullName().c_str());
+			return {};
+		}
+		ConstraintJoints[Constraint->GetObjectId()] = Joint;
+		return Joint;
+	}
+
+	void WorldRoot::TrackPart(const std::shared_ptr<BasePart> &Part) {
+		if (!Part || Part->GetDestroyed() || Part->IsDestroying()) return;
+		const auto Id = Part->GetObjectId();
+		TrackedParts[Id] = Part;
+		if (PhysicsConnections.contains(Id)) return;
+		auto MarkDirty = [this, Id](std::monostate) {
+			if (!ShuttingDownPhysics && !PublishingPhysicsState && TrackedParts.contains(Id)) DirtyBodies.insert(Id);
+		};
+		auto &Connections = PhysicsConnections[Id];
+		for (const std::string_view Name : {"CFrame", "Size", "Anchored", "CanCollide", "CanTouch"})
+			Connections.push_back(Part->GetPropertyChangedSignal(std::string(Name))->Connect(MarkDirty));
+		if (Part->FindProperty("Shape"))
+			Connections.push_back(Part->GetPropertyChangedSignal("Shape")->Connect(MarkDirty));
+	}
+
+	void WorldRoot::TrackConstraint(const std::shared_ptr<Constraint> &Constraint) {
+		if (!Constraint || Constraint->GetDestroyed() || Constraint->IsDestroying()) return;
+		const auto Id = Constraint->GetObjectId();
+		TrackedConstraints[Id] = Constraint;
+		if (PhysicsConnections.contains(Id)) return;
+		auto MarkDirty = [this, Id](std::monostate) {
+			if (!ShuttingDownPhysics && TrackedConstraints.contains(Id)) DirtyConstraints.insert(Id);
+		};
+		auto &Connections = PhysicsConnections[Id];
+		for (const std::string_view Name : {"Enabled", "Attachment0", "Attachment1"})
+			Connections.push_back(Constraint->GetPropertyChangedSignal(std::string(Name))->Connect(MarkDirty));
+		for (const std::string_view Name : {"Part0", "Part1"})
+			if (Constraint->FindProperty(std::string(Name)))
+				Connections.push_back(Constraint->GetPropertyChangedSignal(std::string(Name))->Connect(MarkDirty));
+	}
+
+	void WorldRoot::RemovePart(const std::shared_ptr<BasePart> &Part) {
+		if (!Part) return;
+		const auto Object = Part->GetObjectId();
+		erase(Parts, Part);
+		DirtyBodies.erase(Object);
+		TrackedParts.erase(Object);
+		if (auto Connections = PhysicsConnections.find(Object); Connections != PhysicsConnections.end()) {
+			for (const auto &Connection : Connections->second) Connection->Disconnect();
+			PhysicsConnections.erase(Connections);
+		}
+		if (auto Found = PartBodies.find(Object); Found != PartBodies.end()) {
+			BodyParts.erase(Found->second);
+			if (Physics.IsBodyValid(Found->second)) {
+				auto Result = Physics.DestroyBody(Found->second);
+				if (!Result.Succeeded()) LOG_ERROR(App, "[Physics:Backend] Body destruction failed: %s", Result.Message.c_str());
+			}
+			PartBodies.erase(Found);
+		}
+		RemoveInvalidConstraintMappings();
+		for (const auto &[Id, _] : TrackedConstraints) DirtyConstraints.insert(Id);
+	}
+
+	void WorldRoot::RemoveConstraint(const std::shared_ptr<Constraint> &Constraint) {
+		if (!Constraint) return;
+		const auto Object = Constraint->GetObjectId();
+		DirtyConstraints.erase(Object);
+		TrackedConstraints.erase(Object);
+		if (auto Connections = PhysicsConnections.find(Object); Connections != PhysicsConnections.end()) {
+			for (const auto &Connection : Connections->second) Connection->Disconnect();
+			PhysicsConnections.erase(Connections);
+		}
+		if (auto Found = ConstraintJoints.find(Object); Found != ConstraintJoints.end()) {
+			if (Physics.IsConstraintValid(Found->second)) {
+				auto Result = Physics.DestroyConstraint(Found->second);
+				if (!Result.Succeeded()) LOG_ERROR(App, "[Physics:Backend] Constraint destruction failed: %s", Result.Message.c_str());
+			}
+			ConstraintJoints.erase(Found);
+		}
+	}
+
+	void WorldRoot::ReconcileConstraint(const std::shared_ptr<Constraint> &Constraint) {
+		if (!Constraint || Constraint->GetDestroyed() || Constraint->IsDestroying()) return;
+		const auto Object = Constraint->GetObjectId();
+		auto [PartA, PartB] = Constraint->GetActiveParts();
+		const bool ShouldExist = Constraint->GetEnabled() && PartA && PartB && PartA != PartB &&
+			Constraint->FindFirstAncestorWhichIsA("WorldRoot").get() == this &&
+			PartA->FindFirstAncestorWhichIsA("WorldRoot").get() == this &&
+			PartB->FindFirstAncestorWhichIsA("WorldRoot").get() == this;
+		auto Existing = ConstraintJoints.find(Object);
+		if (!ShouldExist) {
+			if (Existing != ConstraintJoints.end()) {
+				if (Physics.IsConstraintValid(Existing->second)) Physics.DestroyConstraint(Existing->second);
+				ConstraintJoints.erase(Existing);
+			}
+			return;
 		}
 
-		auto getOrCreateBody = [this](const std::shared_ptr<BasePart> &part) {
-			if (auto existing = PartBodies.find(part.get()); existing != PartBodies.end()) {
-				return b3Body_IsValid(existing->second) ? existing->second : b3_nullBodyId;
-			}
-			return CreatePartBody(part);
-		};
-
-		b3BodyId body0 = getOrCreateBody(part0);
-		if (!b3Body_IsValid(body0)) return b3_nullJointId;
-		b3BodyId body1 = getOrCreateBody(part1);
-		if (!b3Body_IsValid(body1)) return b3_nullJointId;
-
-		b3JointId joint = it->CreateJoint(&World, body0, body1);
-		if (!b3Joint_IsValid(joint)) return b3_nullJointId;
-		ConstraintJoints[it.get()] = joint;
-		return joint;
+		const auto BodyA = CreatePartBody(PartA);
+		const auto BodyB = CreatePartBody(PartB);
+		if (!BodyA.IsValid() || !BodyB.IsValid()) {
+			DirtyConstraints.insert(Object);
+			return;
+		}
+		const auto Replacement = Physics.CreateConstraint(Constraint->GetPhysicsConstraint(BodyA, BodyB));
+		if (!Replacement.IsValid()) {
+			LOG_ERROR(App, "[Physics:Backend] Constraint update failed for %s", Constraint->GetFullName().c_str());
+			DirtyConstraints.insert(Object);
+			return;
+		}
+		if (Existing != ConstraintJoints.end() && Physics.IsConstraintValid(Existing->second))
+			Physics.DestroyConstraint(Existing->second);
+		ConstraintJoints[Object] = Replacement;
 	}
 
-	WorldRoot::WorldRoot() {
-		b3WorldDef worldDefinition = b3DefaultWorldDef();
-		worldDefinition.enableSleep = true;
-		worldDefinition.gravity = b3Vec3{0.0f, -Gravity, 0.0f};
+	void WorldRoot::ApplyPendingPhysicsChanges() {
+		if (ShuttingDownPhysics || !Physics.IsValid()) return;
+		if (GravityDirty) {
+			auto Result = Physics.SetGravity({0.0f, -GetGravity(), 0.0f});
+			if (Result.Succeeded()) GravityDirty = false;
+			else LOG_ERROR(App, "[Physics:Backend] Gravity update failed: %s", Result.Message.c_str());
+		}
 
-		World = b3CreateWorld(&worldDefinition);
+		const auto BodyUpdates = SortedIds(DirtyBodies);
+		DirtyBodies.clear();
+		for (const auto Object : BodyUpdates) {
+			auto Tracked = TrackedParts.find(Object);
+			auto Part = Tracked == TrackedParts.end() ? nullptr : Tracked->second.lock();
+			if (!Part || Part->GetDestroyed() || Part->IsDestroying() ||
+				Part->FindFirstAncestorWhichIsA("WorldRoot").get() != this) continue;
+			auto Found = PartBodies.find(Object);
+			if (Found == PartBodies.end() || !Physics.IsBodyValid(Found->second)) {
+				if (!CreatePartBody(Part).IsValid()) DirtyBodies.insert(Object);
+				continue;
+			}
+			auto Result = Physics.UpdateBody(Found->second, DescribePart(*Part));
+			if (!Result.Succeeded()) {
+				LOG_ERROR(App, "[Physics:Backend] Body update failed for %s: %s", Part->GetFullName().c_str(), Result.Message.c_str());
+				DirtyBodies.insert(Object);
+			}
+		}
 
-		Destroying->Once([this](std::monostate _) {
-			for (auto &[_, joint] : ConstraintJoints) {
-				if (b3Joint_IsValid(joint)) b3DestroyJoint(joint, false);
-			};
-			ConstraintJoints.clear();
+		const auto ConstraintUpdates = SortedIds(DirtyConstraints);
+		DirtyConstraints.clear();
+		for (const auto Object : ConstraintUpdates) {
+			auto Tracked = TrackedConstraints.find(Object);
+			auto Constraint = Tracked == TrackedConstraints.end() ? nullptr : Tracked->second.lock();
+			if (Constraint) ReconcileConstraint(Constraint);
+		}
+	}
 
-			for (auto &[_, body] : PartBodies) {
-				if (b3Body_IsValid(body)) b3DestroyBody(body);
-			};
-			PartBodies.clear();
+	void WorldRoot::ApplyPendingImpulses() {
+		for (const auto &Part : Parts) {
+			if (!Part || Part->GetDestroyed() || Part->IsDestroying() || !HasImpulse(Part->AccumulatedImpulse)) continue;
+			auto Found = PartBodies.find(Part->GetObjectId());
+			if (Found == PartBodies.end()) continue;
+			auto Result = Physics.ApplyLinearImpulse(Found->second, Part->AccumulatedImpulse);
+			if (Result.Succeeded()) Part->AccumulatedImpulse = {};
+			else LOG_ERROR(App, "[Physics:Backend] Impulse application failed: %s", Result.Message.c_str());
+		}
+	}
 
-			if (b3World_IsValid(World)) b3DestroyWorld(World);
+	void WorldRoot::RemoveInvalidConstraintMappings() {
+		std::erase_if(ConstraintJoints, [this](const auto &Entry) {
+			return !Physics.IsConstraintValid(Entry.second);
+		});
+	}
+
+	void WorldRoot::ShutdownPhysics() {
+		if (ShuttingDownPhysics) return;
+		ShuttingDownPhysics = true;
+		if (UnbindDescendants) UnbindDescendants();
+		if (DescendantRemovedConnection) DescendantRemovedConnection->Disconnect();
+		if (DestroyingConnection) DestroyingConnection->Disconnect();
+		if (GravityConnection) GravityConnection->Disconnect();
+		for (auto &[_, Connections] : PhysicsConnections)
+			for (const auto &Connection : Connections) Connection->Disconnect();
+		PhysicsConnections.clear();
+		DirtyBodies.clear();
+		DirtyConstraints.clear();
+		TrackedParts.clear();
+		TrackedConstraints.clear();
+		ConstraintJoints.clear();
+		PartBodies.clear();
+		BodyParts.clear();
+		Parts.clear();
+	}
+
+	std::shared_ptr<BasePart> WorldRoot::ResolvePart(PhysicsBodyId Body) const {
+		auto Found = BodyParts.find(Body);
+		if (Found == BodyParts.end()) return nullptr;
+		auto Part = Found->second.lock();
+		if (!Part || Part->GetDestroyed() || Part->IsDestroying()) return nullptr;
+		auto Current = PartBodies.find(Part->GetObjectId());
+		return Current != PartBodies.end() && Current->second == Body ? Part : nullptr;
+	}
+
+	WorldRoot::WorldRoot() : Physics(PhysicsWorldConfig{.Gravity = {0.0f, -Gravity, 0.0f}}) {
+		GravityConnection = GetPropertyChangedSignal("Gravity")->Connect([this](std::monostate) {
+			if (!ShuttingDownPhysics) GravityDirty = true;
 		});
 
-		BindDescendants([this](std::shared_ptr<Instance> instance) -> void {
-			if (auto it = std::dynamic_pointer_cast<BasePart>(instance)) {
-				CreatePartBody(it);
-			} else if (auto it = std::dynamic_pointer_cast<Constraint>(instance)) {
-				CreateConstraintJoint(it);
+		DestroyingConnection = Destroying->Once([this](std::monostate) { ShutdownPhysics(); });
+
+		UnbindDescendants = BindDescendants([this](std::shared_ptr<Instance> Instance) {
+			if (auto Part = std::dynamic_pointer_cast<BasePart>(Instance)) {
+				TrackPart(Part);
+				(void)CreatePartBody(Part);
+				for (const auto &[Id, _] : TrackedConstraints) DirtyConstraints.insert(Id);
+			} else if (auto Constraint = std::dynamic_pointer_cast<gargantuan::Constraint>(Instance)) {
+				TrackConstraint(Constraint);
+				(void)CreateConstraintJoint(Constraint);
 			}
 		});
 
-		DescendantRemoved->Connect([this](std::shared_ptr<Instance> instance) {
-			if (auto it = std::dynamic_pointer_cast<BasePart>(instance); it && PartBodies.contains(it.get())) {
-				erase(Parts, it);
-				if (b3Body_IsValid(this->PartBodies[it.get()])) b3DestroyBody(this->PartBodies[it.get()]);
-				this->PartBodies.erase(it.get());
-				std::erase_if(this->ConstraintJoints, [](const auto &entry) {
-					return !b3Joint_IsValid(entry.second);
-				});
-			} else if (auto it = std::dynamic_pointer_cast<Constraint>(instance);
-					   it && ConstraintJoints.contains(it.get())) {
-				if (b3Joint_IsValid(this->ConstraintJoints[it.get()]))
-					b3DestroyJoint(this->ConstraintJoints[it.get()], true);
-				this->ConstraintJoints.erase(it.get());
-			}
+		DescendantRemovedConnection = DescendantRemoved->Connect([this](std::shared_ptr<Instance> Instance) {
+			if (ShuttingDownPhysics) return;
+			if (auto Part = std::dynamic_pointer_cast<BasePart>(Instance)) RemovePart(Part);
+			else if (auto Constraint = std::dynamic_pointer_cast<gargantuan::Constraint>(Instance))
+				RemoveConstraint(Constraint);
 		});
-	};
+	}
 
-	void WorldRoot::StepPhysics(double deltaTime, std::optional<std::vector<std::shared_ptr<Instance>>> instances) {
-		StepAccumulator += deltaTime;
+	WorldRoot::~WorldRoot() {
+		ShutdownPhysics();
+	}
 
-		int steps = 0;
-		while (StepAccumulator >= STEP_INTERVAL && steps < MAX_STEPS_PER_FRAME) {
-			b3World_Step(World, STEP_INTERVAL, SUB_STEP_COUNT);
+	void WorldRoot::StepPhysics(
+		double DeltaTime,
+		std::optional<std::vector<std::shared_ptr<Instance>>> Instances
+	) {
+		(void)Instances;
+		ApplyPendingPhysicsChanges();
+		StepAccumulator += static_cast<float>(DeltaTime);
+		int Steps = 0;
+		while (StepAccumulator >= STEP_INTERVAL && Steps < MAX_STEPS_PER_FRAME) {
+			ApplyPendingImpulses();
+			auto Result = Physics.Step({.DeltaTime = STEP_INTERVAL, .SubStepCount = SUB_STEP_COUNT});
+			if (Result.EventsTruncated)
+				LOG_ERROR(App, "[Physics:Backend] Step event limit reached; excess events were rejected");
+			for (const auto &Motion : Result.Motions) {
+				auto Part = ResolvePart(Motion.Body);
+				if (!Part || Part->GetCFrame().FuzzyEq(Motion.Transform)) continue;
+				PublishingPhysicsState = true;
+				try {
+					Part->SetCFrame(Motion.Transform);
+				} catch (...) {
+					PublishingPhysicsState = false;
+					throw;
+				}
+				PublishingPhysicsState = false;
+			}
 
-			b3BodyEvents events = b3World_GetBodyEvents(World);
-			b3ContactEvents contactEvents = b3World_GetContactEvents(World);
-
-			for (int i = 0; i < events.moveCount; ++i) {
-				const b3BodyMoveEvent &move = events.moveEvents[i];
-
-				BasePart *part = static_cast<BasePart *>(move.userData);
-				if (part == nullptr) continue;
-
-				part->SetCFrame(
-					gargantuan::CFrame(FromBox3(move.transform.p), glm::mat3_cast(FromBox3(move.transform.q)))
-				);
-
-				if (auto body = PartBodies[part]; part->AccumulatedImpulse.value > ZERO_VEC3) {
-					b3Body_ApplyLinearImpulseToCenter(body, ToBox3(part->AccumulatedImpulse), true);
-					part->AccumulatedImpulse = {};
+			for (const auto &Contact : Result.Contacts) {
+				auto PartA = ResolvePart(Contact.BodyA);
+				auto PartB = ResolvePart(Contact.BodyB);
+				if (!PartA || !PartB) continue;
+				if (Contact.Phase == PhysicsContactPhase::Began) {
+					if (PartA->GetCanTouch()) PartA->Touched->Fire(PartB);
+					if (PartB->GetCanTouch()) PartB->Touched->Fire(PartA);
+				} else {
+					if (PartA->GetCanTouch()) PartA->TouchEnded->Fire(PartB);
+					if (PartB->GetCanTouch()) PartB->TouchEnded->Fire(PartA);
 				}
 			}
-
-			for (int i = 0; i < contactEvents.beginCount; ++i) {
-				const b3ContactBeginTouchEvent &event = contactEvents.beginEvents[i];
-
-				BasePart *partA = static_cast<BasePart *>(b3Body_GetUserData(b3Shape_GetBody(event.shapeIdA)));
-				if (partA == nullptr) continue;
-
-				BasePart *partB = static_cast<BasePart *>(b3Body_GetUserData(b3Shape_GetBody(event.shapeIdB)));
-				if (partB == nullptr) continue;
-
-				partA->Touched->Fire(std::static_pointer_cast<BasePart>(partB->shared_from_this()));
-				partB->Touched->Fire(std::static_pointer_cast<BasePart>(partA->shared_from_this()));
-			}
-
-			for (int i = 0; i < contactEvents.endCount; ++i) {
-				const b3ContactEndTouchEvent &event = contactEvents.endEvents[i];
-
-				BasePart *partA = static_cast<BasePart *>(b3Body_GetUserData(b3Shape_GetBody(event.shapeIdA)));
-				if (partA == nullptr) continue;
-
-				BasePart *partB = static_cast<BasePart *>(b3Body_GetUserData(b3Shape_GetBody(event.shapeIdB)));
-				if (partB == nullptr) continue;
-
-				partA->TouchEnded->Fire(std::static_pointer_cast<BasePart>(partB->shared_from_this()));
-				partB->TouchEnded->Fire(std::static_pointer_cast<BasePart>(partA->shared_from_this()));
-			}
-
 			StepAccumulator -= STEP_INTERVAL;
-			++steps;
+			++Steps;
 		}
-
-		if (steps == MAX_STEPS_PER_FRAME) StepAccumulator = 0.0f;
+		if (Steps == MAX_STEPS_PER_FRAME) StepAccumulator = 0.0f;
 	}
-
 }
