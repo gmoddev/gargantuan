@@ -1,6 +1,7 @@
 #include "gargantuan/network/SimulatedTransport.hpp"
 
 #include <algorithm>
+#include <cassert>
 #include <cmath>
 #include <deque>
 #include <limits>
@@ -194,28 +195,32 @@ namespace gargantuan::network {
 			return SimulatedTime(static_cast<std::int64_t>(Duration));
 		}
 
-		bool HasEventCapacity(
+		std::size_t ReservedLifecycleEventCapacity(const SimulatedTransportState &Transport) {
+			std::size_t Result = 0;
+			for (const auto &[Connection, State] : Transport.Connections) {
+				(void)Connection;
+				Result += State.CurrentState == ConnectionState::Connecting ? 4 : 2;
+			}
+			return Result;
+		}
+
+		bool HasEventCapacityWithReservations(
 			const SimulatedNetworkState &Network,
 			const SimulatedTransportState &Transport,
 			std::size_t Required
 		) {
-			return Required <= Network.Configuration.MaximumPendingEventsPerTransport &&
-				Transport.Events.size() <= Network.Configuration.MaximumPendingEventsPerTransport - Required;
+			const auto Reserved = ReservedLifecycleEventCapacity(Transport);
+			const auto Maximum = static_cast<std::size_t>(Network.Configuration.MaximumPendingEventsPerTransport);
+			return Required <= Maximum && Reserved <= Maximum - Required &&
+				Transport.Events.size() <= Maximum - Required - Reserved;
 		}
 
 		bool QueueEvent(
 			const SimulatedNetworkState &Network,
 			SimulatedTransportState &Transport,
-			TransportEvent Event,
-			bool IsMessage
+			TransportEvent Event
 		) {
-			if (!HasEventCapacity(Network, Transport, 1)) return false;
-			if (IsMessage) {
-				const auto ReservedTerminalEvents = Transport.Connections.size() * 2;
-				if (ReservedTerminalEvents >= Network.Configuration.MaximumPendingEventsPerTransport ||
-					Transport.Events.size() >= Network.Configuration.MaximumPendingEventsPerTransport - ReservedTerminalEvents)
-					return false;
-			}
+			if (!HasEventCapacityWithReservations(Network, Transport, 1)) return false;
 			Transport.Events.push_back(std::move(Event));
 			return true;
 		}
@@ -295,10 +300,9 @@ namespace gargantuan::network {
 			RemoveConnectionEvents(*Transport, Connection);
 			Transport->Connections.erase(Iterator);
 			ReleaseConnection(*Transport, Connection);
-			if (HasEventCapacity(Network, *Transport, 2)) {
-				Transport->Events.push_back(ConnectionStateEvent{Connection, Previous, ConnectionState::Closed});
-				Transport->Events.push_back(DisconnectedEvent{Connection, Information});
-			}
+			assert(HasEventCapacityWithReservations(Network, *Transport, 2));
+			Transport->Events.push_back(ConnectionStateEvent{Connection, Previous, ConnectionState::Closed});
+			Transport->Events.push_back(DisconnectedEvent{Connection, Information});
 		}
 
 		void CloseLink(
@@ -333,8 +337,24 @@ namespace gargantuan::network {
 				static_cast<double>(Connection.UnreliableAttempts));
 		}
 
+		void SaturatingIncrement(std::uint64_t &Value) {
+			if (Value != std::numeric_limits<std::uint64_t>::max()) ++Value;
+		}
+
+		void SaturatingIncrement(std::optional<std::uint64_t> &Value) {
+			if (Value) SaturatingIncrement(*Value);
+		}
+
+		void SaturatingAdd(std::optional<std::uint64_t> &Value, std::size_t Amount) {
+			if (!Value) return;
+			const auto Delta = static_cast<std::uint64_t>(Amount);
+			if (*Value > std::numeric_limits<std::uint64_t>::max() - Delta)
+				*Value = std::numeric_limits<std::uint64_t>::max();
+			else *Value += Delta;
+		}
+
 		void RecordUnreliableDrop(SimulatedConnection &Connection) {
-			++*Connection.Statistics.DroppedUnreliableMessages;
+			SaturatingIncrement(Connection.Statistics.DroppedUnreliableMessages);
 			UpdateLossRatio(Connection);
 		}
 
@@ -358,11 +378,12 @@ namespace gargantuan::network {
 				std::tuple{First, Link.FirstConnection, &FirstConnection->second},
 				std::tuple{Second, Link.SecondConnection, &SecondConnection->second},
 			}) {
+				State->CurrentState = ConnectionState::Connected;
+				assert(HasEventCapacityWithReservations(Network, *Transport, 2));
 				Transport->Events.push_back(ConnectionStateEvent{
 					Connection, ConnectionState::Connecting, ConnectionState::Authenticating});
 				Transport->Events.push_back(ConnectionStateEvent{
 					Connection, ConnectionState::Authenticating, ConnectionState::Connected});
-				State->CurrentState = ConnectionState::Connected;
 			}
 		}
 
@@ -382,10 +403,19 @@ namespace gargantuan::network {
 			auto &SourceConnection = SourceIterator->second;
 			auto &DestinationConnection = DestinationIterator->second;
 			if (Item.Delivery == DeliveryMode::ReliableOrdered) {
+				if (Item.Payload.size() > SourceConnection.ReliableQueueBytes) {
+					CloseLink(Network, Item.LinkId, Item.SourceTransportId,
+						{DisconnectReason::TransportFailure, "Simulated reliable accounting underflow"});
+					return;
+				}
 				SourceConnection.ReliableQueueBytes -= Item.Payload.size();
 				SourceConnection.Statistics.QueuedReliableBytes = SourceConnection.ReliableQueueBytes;
 			} else if (SourceConnection.QueuedUnreliableMessages > 0) {
 				--SourceConnection.QueuedUnreliableMessages;
+			} else {
+				CloseLink(Network, Item.LinkId, Item.SourceTransportId,
+					{DisconnectReason::TransportFailure, "Simulated unreliable accounting underflow"});
+				return;
 			}
 
 			if (Item.Delivery == DeliveryMode::UnreliableSequenced) {
@@ -410,7 +440,7 @@ namespace gargantuan::network {
 				.Order = Item.Order,
 				.Payload = Item.Payload,
 			};
-			if (!QueueEvent(Network, *Destination, std::move(Event), true)) {
+			if (!QueueEvent(Network, *Destination, std::move(Event))) {
 				if (Item.Delivery == DeliveryMode::ReliableOrdered) {
 					CloseLink(Network, Item.LinkId, Item.DestinationTransportId,
 						{DisconnectReason::ResourceExhaustion, "Simulated receive queue exhausted"});
@@ -420,10 +450,10 @@ namespace gargantuan::network {
 				return;
 			}
 
-			++*SourceConnection.Statistics.MessagesDelivered;
-			if (Item.Duplicate) ++*SourceConnection.Statistics.DuplicatedUnreliableMessages;
-			++*DestinationConnection.Statistics.MessagesReceived;
-			*DestinationConnection.Statistics.BytesReceived += Item.Payload.size();
+			SaturatingIncrement(SourceConnection.Statistics.MessagesDelivered);
+			if (Item.Duplicate) SaturatingIncrement(SourceConnection.Statistics.DuplicatedUnreliableMessages);
+			SaturatingIncrement(DestinationConnection.Statistics.MessagesReceived);
+			SaturatingAdd(DestinationConnection.Statistics.BytesReceived, Item.Payload.size());
 		}
 
 		void ProcessScheduledItem(SimulatedNetworkState &Network, const ScheduledItem &Item) {
@@ -451,12 +481,13 @@ namespace gargantuan::network {
 			const auto Start = std::max(Network.CurrentTime, Connection.NextSendAvailable);
 			auto Finish = AddTime(Start, *Transmission);
 			if (!Finish) return std::nullopt;
-			Connection.NextSendAvailable = *Finish;
 			auto At = AddTime(*Finish, Network.Configuration.BaseLatency);
 			if (!At) return std::nullopt;
 			At = AddTime(*At, RandomDuration(Network, Network.Configuration.MaximumJitter));
 			if (!At) return std::nullopt;
 			if (Reorder) At = AddTime(*At, RandomDuration(Network, Network.Configuration.MaximumReorderDelay));
+			if (!At) return std::nullopt;
+			Connection.NextSendAvailable = *Finish;
 			return At;
 		}
 	}
@@ -571,7 +602,8 @@ namespace gargantuan::network {
 			: std::optional<SimulatedTime>(Network->CurrentTime);
 		if (!TimeoutAt || !CanSchedule(*Network, RequiredSchedules) ||
 			Network->Links.size() >= Network->Configuration.MaximumConnections ||
-			!HasEventCapacity(*Network, *State, 4) || !HasEventCapacity(*Network, *Server, 4))
+			!HasEventCapacityWithReservations(*Network, *State, 4) ||
+			!HasEventCapacityWithReservations(*Network, *Server, 4))
 			return Operation(TransportOperationStatus::ResourceExhausted);
 
 		auto ClientConnection = AllocateConnection(*State);
@@ -694,11 +726,23 @@ namespace gargantuan::network {
 			Payload.size() > std::min(Network->Configuration.MaximumUnreliableDatagramBytes,
 				Connection.Limits.MaximumUnreliableMessageBytes))
 			return Operation(TransportOperationStatus::MessageRejected);
+		const auto OriginalRandomState = Network->RandomState;
+		const auto OriginalNextSendAvailable = Connection.NextSendAvailable;
+		const auto OriginalLastReliableDelivery = Connection.LastReliableDelivery;
+		const auto OriginalStatistics = Connection.Statistics;
+		const auto OriginalUnreliableAttempts = Connection.UnreliableAttempts;
+		auto RollBackProspectiveSend = [&] {
+			Network->RandomState = OriginalRandomState;
+			Connection.NextSendAvailable = OriginalNextSendAvailable;
+			Connection.LastReliableDelivery = OriginalLastReliableDelivery;
+			Connection.Statistics = OriginalStatistics;
+			Connection.UnreliableAttempts = OriginalUnreliableAttempts;
+		};
 
 		if (Message.Delivery() != DeliveryMode::ReliableOrdered) {
-			++*Connection.Statistics.MessagesSent;
-			*Connection.Statistics.BytesSent += Payload.size();
-			++Connection.UnreliableAttempts;
+			SaturatingIncrement(Connection.Statistics.MessagesSent);
+			SaturatingAdd(Connection.Statistics.BytesSent, Payload.size());
+			SaturatingIncrement(Connection.UnreliableAttempts);
 			if (ProbabilityHit(*Network, Network->Configuration.UnreliableLossProbability)) {
 				RecordUnreliableDrop(Connection);
 				return Operation(TransportOperationStatus::Succeeded);
@@ -726,8 +770,8 @@ namespace gargantuan::network {
 				})) CloseLink(*Network, LinkId, State->Id, Information);
 				return TerminalOperation(TransportOperationStatus::ResourceExhausted, std::move(Information));
 			}
-			++*Connection.Statistics.MessagesSent;
-			*Connection.Statistics.BytesSent += Payload.size();
+			SaturatingIncrement(Connection.Statistics.MessagesSent);
+			SaturatingAdd(Connection.Statistics.BytesSent, Payload.size());
 		} else if (Copies > Network->Configuration.MaximumQueuedUnreliableMessages -
 			Connection.QueuedUnreliableMessages || !CanScheduleMessages(*Network, Copies)) {
 			RecordUnreliableDrop(Connection);
@@ -740,7 +784,10 @@ namespace gargantuan::network {
 			const bool Reorder = Message.Delivery() != DeliveryMode::ReliableOrdered &&
 				ProbabilityHit(*Network, Network->Configuration.UnreliableReorderProbability);
 			auto DeliveryTime = ComputeDeliveryTime(*Network, Connection, Payload.size(), Reorder);
-			if (!DeliveryTime) return Operation(TransportOperationStatus::ResourceExhausted);
+			if (!DeliveryTime) {
+				RollBackProspectiveSend();
+				return Operation(TransportOperationStatus::ResourceExhausted);
+			}
 			if (Message.Delivery() == DeliveryMode::ReliableOrdered) {
 				*DeliveryTime = std::max(*DeliveryTime, Connection.LastReliableDelivery);
 				Connection.LastReliableDelivery = *DeliveryTime;

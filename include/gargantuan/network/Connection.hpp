@@ -28,6 +28,7 @@ namespace gargantuan::network {
 
 template <> struct std::hash<gargantuan::network::ConnectionId> {
 	std::size_t operator()(const gargantuan::network::ConnectionId &Id) const noexcept {
-		return (static_cast<std::size_t>(Id.Generation) << 32) ^ Id.Slot;
+		const auto Combined = (static_cast<std::uint64_t>(Id.Generation) << 32) | Id.Slot;
+		return std::hash<std::uint64_t>{}(Combined);
 	}
 };

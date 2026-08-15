@@ -11,14 +11,16 @@ namespace gargantuan::network {
 		if (!Connection.IsValid() || !Epoch.IsValid()) return false;
 		for (const auto Object : KnownObjects) if (!Object.IsValid()) return false;
 		for (const auto Object : RelevantObjects) if (!Object.IsValid()) return false;
-		for (const auto &[Object, Sequence] : LatestStateSequences)
-			if (!Object.IsValid() || !Sequence.IsValid() || !KnownObjects.contains(Object)) return false;
+		for (const auto &[State, Sequence] : LatestStateSequences)
+			if (!State.Object.IsValid() || !State.Channel.IsValid() || !Sequence.IsValid() ||
+				!KnownObjects.contains(State.Object)) return false;
 		return true;
 	}
 
 	void ReplicationView::ForgetReplica(ObjectId Object) {
 		KnownObjects.erase(Object);
-		LatestStateSequences.erase(Object);
+		std::erase_if(LatestStateSequences,
+			[&](const auto &Entry) { return Entry.first.Object == Object; });
 	}
 
 	bool ReplicationOperation::IsValid() const {

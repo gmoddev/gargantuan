@@ -68,7 +68,7 @@ Authoritative DataModel / live Instance graph
 | Rendering or viewport picking | `render-extraction.mdx` and `devdocs/CurrentArchitecture/EditorViewport.md` |
 | Studio, EditorHost, snapshots, journals, viewport IPC | `editor-host.mdx` plus the relevant `devdocs/CurrentArchitecture` protocol document |
 | Luau execution or permissions | `devdocs/CurrentArchitecture/ScriptSecurity.md` |
-| Game networking | `devdocs/CurrentArchitecture/ProtocolInputHardening.md`, `NetworkingContracts.md`, `SimulatedTransport.md`, `NetworkSchedulerContract.md`, then `networking-architecture.mdx`; pure contracts, the in-memory simulator, and scheduler policy contract exist, but no production scheduler or real transport exists |
+| Game networking | `devdocs/CurrentArchitecture/ProtocolInputHardening.md`, `NetworkingContracts.md`, `SimulatedTransport.md`, `NetworkSchedulerContract.md`, `NetworkingFoundationValidation.md`, then `networking-architecture.mdx`; Foundations 1–4 have completed adversarial validation, but no production scheduler or real transport exists |
 
 ## Current implementation landmarks
 

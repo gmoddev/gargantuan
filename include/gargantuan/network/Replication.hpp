@@ -7,19 +7,25 @@
 #include "gargantuan/runtime/WireValue.hpp"
 
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <string>
-#include <unordered_map>
 #include <unordered_set>
 #include <variant>
 
 namespace gargantuan::network {
+	struct ReplicaStateChannel {
+		ObjectId Object;
+		StateChannelId Channel;
+		auto operator<=>(const ReplicaStateChannel &) const = default;
+	};
+
 	struct ReplicationView {
 		ConnectionId Connection;
 		ReplicationEpoch Epoch;
 		std::unordered_set<ObjectId> KnownObjects;
 		std::unordered_set<ObjectId> RelevantObjects;
-		std::unordered_map<ObjectId, RealtimeStateSequence> LatestStateSequences;
+		std::map<ReplicaStateChannel, RealtimeStateSequence> LatestStateSequences;
 
 		[[nodiscard]] bool IsValid() const;
 		[[nodiscard]] bool Knows(ObjectId Object) const { return KnownObjects.contains(Object); }

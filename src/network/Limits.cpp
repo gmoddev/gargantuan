@@ -16,6 +16,7 @@ namespace gargantuan::network {
 			MaximumDecodedMessageBytes >= MaximumUnreliableMessageBytes &&
 			MaximumDecodedMessageBytes <= NativeMaximumNetworkMessageBytes &&
 			MaximumSendBytesPerTick >= MaximumReliableMessageBytes &&
+			MaximumSendBytesPerTick >= MaximumUnreliableMessageBytes &&
 			MaximumSendBytesPerTick <= NativeMaximumNetworkBytesPerTick &&
 			MaximumReceiveBytesPerTick >= MaximumDecodedMessageBytes &&
 			MaximumReceiveBytesPerTick <= NativeMaximumNetworkBytesPerTick &&

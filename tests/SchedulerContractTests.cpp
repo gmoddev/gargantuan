@@ -510,23 +510,34 @@ int main() {
 		SchedulerPolicyHarness Scheduler(Transport);
 		auto QueueLimits = TestLimits(8, 8, 64, 8, 4);
 		Scheduler.RegisterConnection(Connection, QueueLimits);
+		auto Control = Intent(Connection, DeliveryMode::ReliableOrdered, TrafficClass::Control,
+			9, QueueLimits);
 		auto Older = Intent(Connection, DeliveryMode::UnreliableSequenced, TrafficClass::RealtimeState,
 			1, QueueLimits, 1, RealtimeStateOrder{StateChannelId(7), RealtimeStateSequence(1)});
 		auto Newer = Intent(Connection, DeliveryMode::UnreliableSequenced, TrafficClass::RealtimeState,
 			2, QueueLimits, 1, RealtimeStateOrder{StateChannelId(7), RealtimeStateSequence(2)});
+		auto Newest = Intent(Connection, DeliveryMode::UnreliableSequenced, TrafficClass::RealtimeState,
+			3, QueueLimits, 1, RealtimeStateOrder{StateChannelId(7), RealtimeStateSequence(3)});
 		auto Stale = Intent(Connection, DeliveryMode::UnreliableSequenced, TrafficClass::RealtimeState,
 			3, QueueLimits, 1, RealtimeStateOrder{StateChannelId(7), RealtimeStateSequence(1)});
-		Check(Scheduler.Submit(std::move(*Older)).Accepted() &&
+		Check(Scheduler.Submit(std::move(*Control)).Accepted() && Scheduler.Submit(std::move(*Older)).Accepted() &&
 			Scheduler.Submit(std::move(*Newer)).Status == SchedulerSubmitStatus::AcceptedWithSupersession &&
+			Scheduler.Submit(std::move(*Newest)).Status == SchedulerSubmitStatus::AcceptedWithSupersession &&
 			Scheduler.Submit(std::move(*Stale)).Status == SchedulerSubmitStatus::DroppedUnreliable,
-			"newer unsent sequenced state deterministically supersedes older state in the same channel");
+			"repeated newer unsent state deterministically supersedes older state in the same channel");
+		auto Limited = Scheduler.Flush(Connection, SchedulerTickBudget{8, 1});
+		auto Final = Intent(Connection, DeliveryMode::UnreliableSequenced, TrafficClass::RealtimeState,
+			4, QueueLimits, 1, RealtimeStateOrder{StateChannelId(7), RealtimeStateSequence(4)});
+		Check(Limited.Status == SchedulerFlushStatus::BudgetLimited &&
+			Scheduler.Submit(std::move(*Final)).Status == SchedulerSubmitStatus::AcceptedWithSupersession,
+			"a newer state supersedes retained state after a higher-priority budget-limited flush");
 		Scheduler.Flush(Connection, SchedulerTickBudget{8, 4});
 		auto Statistics = Scheduler.GetStatistics(Connection);
-		Check(Transport.SubmittedValues == std::vector<unsigned int>({2}) && Statistics &&
-			Statistics->SequencedStatesSuperseded == 1 &&
+		Check(Transport.SubmittedValues == std::vector<unsigned int>({9, 4}) && Statistics &&
+			Statistics->SequencedStatesSuperseded == 3 &&
 			Statistics->UnreliableMessagesDroppedBeforeTransport == 1 && Statistics->QueuedMessages == 0 &&
 			Statistics->QueuedUnreliableMessages == 0 && Statistics->IsValidFor(QueueLimits),
-			"only the newest retained sequence reaches transport and supersession remains observable");
+			"only the newest retained sequence reaches transport without count or byte drift");
 	}
 
 	{

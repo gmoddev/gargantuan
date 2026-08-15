@@ -248,6 +248,22 @@ int main() {
 
 	{
 		SimulatedTransportConfiguration Configuration;
+		Configuration.BaseLatency = 10us;
+		Configuration.BandwidthBytesPerSecond = MaximumSimulatedBandwidthBytesPerSecond;
+		auto Pair = StartPair(Configuration);
+		auto Intent = Message(Pair.ClientConnection, DeliveryMode::ReliableOrdered, 1, Pair.Limits);
+		(void)Pair.Network->Advance(std::chrono::microseconds::max() - 5us);
+		auto Before = Pair.Client->GetStatistics(Pair.ClientConnection);
+		auto Rejected = Pair.Client->Send(*Intent);
+		auto After = Pair.Client->GetStatistics(Pair.ClientConnection);
+		Check(Before && After && Rejected.Status == TransportOperationStatus::ResourceExhausted &&
+			After->MessagesSent == Before->MessagesSent && After->BytesSent == Before->BytesSent &&
+			After->QueuedReliableBytes == Before->QueuedReliableBytes,
+			"delivery-time overflow rejects atomically without consuming bandwidth or statistics");
+	}
+
+	{
+		SimulatedTransportConfiguration Configuration;
 		Configuration.MaximumReliableQueueBytes = 32;
 		auto Network = SimulatedNetwork::Create(Configuration);
 		auto Server = Network->CreateTransport();
@@ -377,6 +393,39 @@ int main() {
 
 	{
 		SimulatedTransportConfiguration Configuration;
+		Configuration.MaximumConnections = 1;
+		Configuration.MaximumPendingEventsPerTransport = 4;
+		Configuration.MaximumScheduledEvents = 8;
+		Configuration.BandwidthBytesPerSecond = MaximumSimulatedBandwidthBytesPerSecond;
+		auto Pair = StartPair(Configuration);
+		for (unsigned int Value = 1; Value <= 2; ++Value) {
+			auto Filler = Message(Pair.ClientConnection, DeliveryMode::UnreliableUnordered, Value, Pair.Limits);
+			Check(Filler && Pair.Client->Send(*Filler).Succeeded(),
+				"receive-queue sequence test fills only the unreserved message capacity");
+		}
+		(void)Pair.Network->Advance(2us);
+		Pair.Network->Pump();
+		auto Newer = Message(Pair.ClientConnection, DeliveryMode::UnreliableSequenced, 100, Pair.Limits,
+			RealtimeStateOrder{StateChannelId(9), RealtimeStateSequence(100)});
+		Check(Newer && Pair.Client->Send(*Newer).Succeeded(),
+			"a sequenced send remains best effort when the receive-event queue is full");
+		(void)Pair.Network->Advance(1us);
+		Pair.Network->Pump();
+		Check(PayloadValues(Drain(Pair.Server)) == std::vector<unsigned int>({1, 2}),
+			"the newer sequenced value can be dropped by local receive-event congestion");
+		auto Older = Message(Pair.ClientConnection, DeliveryMode::UnreliableSequenced, 99, Pair.Limits,
+			RealtimeStateOrder{StateChannelId(9), RealtimeStateSequence(99)});
+		Check(Older && Pair.Client->Send(*Older).Succeeded(),
+			"an older sequence can still reach transport after receive capacity is released");
+		(void)Pair.Network->Advance(1us);
+		Pair.Network->Pump();
+		auto Statistics = Pair.Client->GetStatistics(Pair.ClientConnection);
+		Check(Drain(Pair.Server).empty() && Statistics && Statistics->DroppedUnreliableMessages == 2,
+			"transport-observed newer state prevents stale resurrection even when consumer admission dropped it");
+	}
+
+	{
+		SimulatedTransportConfiguration Configuration;
 		Configuration.BandwidthBytesPerSecond = 100;
 		auto Limits = TestLimits(100, 100, 400);
 		auto Pair = StartPair(Configuration, Limits);
@@ -453,6 +502,9 @@ int main() {
 	{
 		auto Pair = StartPair();
 		auto FirstId = Pair.ServerConnection;
+		auto PendingOldGeneration = Message(Pair.ClientConnection, DeliveryMode::ReliableOrdered, 13, Pair.Limits);
+		Check(PendingOldGeneration && Pair.Client->Send(*PendingOldGeneration).Succeeded(),
+			"the old generation can have delayed work pending before closure");
 		Check(Pair.Server->Disconnect(FirstId, {DisconnectReason::LocalShutdown, "test close"}).Succeeded() &&
 			Pair.Server->Disconnect(FirstId, {DisconnectReason::LocalShutdown, "duplicate close"}).Succeeded(),
 			"duplicate close requests are idempotent while closure is pending");
@@ -486,7 +538,47 @@ int main() {
 		(void)Pair.Network->Advance(1ms);
 		Pair.Network->Pump();
 		Check(PayloadValues(Drain(Pair.Server)) == std::vector<unsigned int>({42}),
-			"stale-ID rejection does not disturb the newer connection");
+			"cancelled old-generation work cannot leak into a reused connection slot");
+	}
+
+	{
+		SimulatedTransportConfiguration Configuration;
+		Configuration.MaximumConnections = 3;
+		Configuration.MaximumPendingEventsPerTransport = 12;
+		Configuration.MaximumScheduledEvents = 16;
+		Configuration.BandwidthBytesPerSecond = MaximumSimulatedBandwidthBytesPerSecond;
+		auto Network = SimulatedNetwork::Create(Configuration);
+		auto Server = Network->CreateTransport();
+		auto Limits = TestLimits();
+		Check(Server->Start({TransportRole::Server, {"activation-reserve", 1}, Limits, {}}).Succeeded(),
+			"event-reservation test server starts");
+		for (unsigned int Cycle = 0; Cycle < 4; ++Cycle) {
+			auto Client = Network->CreateTransport();
+			Check(Client->Start({TransportRole::Client, {"activation-reserve", 1}, Limits, {}}).Succeeded(),
+				"terminal history setup connection starts");
+			Network->Pump();
+			auto ClientConnection = ConnectedId(Drain(Client));
+			Check(ClientConnection.IsValid() &&
+				Client->Disconnect(ClientConnection, {DisconnectReason::LocalShutdown, "reserve setup"}).Succeeded(),
+				"terminal history setup connection closes");
+			Network->Pump();
+			(void)Drain(Client);
+		}
+		auto FirstPending = Network->CreateTransport();
+		auto SecondPending = Network->CreateTransport();
+		Check(FirstPending->Start({TransportRole::Client, {"activation-reserve", 1}, Limits, {}}).Succeeded() &&
+			SecondPending->Start({TransportRole::Client, {"activation-reserve", 1}, Limits, {}}).Status ==
+				TransportOperationStatus::ResourceExhausted,
+			"pending activation lifecycle events are reserved before accepting another connection");
+		Network->Pump();
+		auto FirstConnection = ConnectedId(Drain(FirstPending));
+		Check(FirstConnection.IsValid() &&
+			FirstPending->Disconnect(FirstConnection, {DisconnectReason::LocalShutdown, "reserved close"}).Succeeded(),
+			"the admitted pending connection remains closable");
+		Network->Pump();
+		auto ServerEvents = Drain(Server);
+		Check(ServerEvents.size() == 10 && CountDisconnects(ServerEvents) == 5,
+			"bounded saturation retains every terminal event without exceeding configured capacity");
 	}
 
 	{

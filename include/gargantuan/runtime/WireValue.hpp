@@ -58,6 +58,7 @@ namespace gargantuan {
 
 template <> struct std::hash<gargantuan::WireObjectId> {
 	std::size_t operator()(const gargantuan::WireObjectId &id) const noexcept {
-		return (static_cast<std::size_t>(id.Generation) << 32) ^ id.Slot;
+		const auto Combined = (static_cast<std::uint64_t>(id.Generation) << 32) | id.Slot;
+		return std::hash<std::uint64_t>{}(Combined);
 	}
 };

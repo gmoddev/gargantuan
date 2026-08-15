@@ -61,6 +61,9 @@ lanes, streams, backend priorities, or bandwidth percentages.
 `NetworkLimits` contains the core message, decoded-byte, reliable-queue,
 in-flight-request, per-tick byte, and per-tick message ceilings. Every field is
 nonzero, checked against a hard native safety ceiling, and validated before use.
+The send-byte budget can hold either one maximum reliable message or one maximum
+unreliable message, so a valid session never advertises a message size that its
+own scheduler tick cannot submit.
 Negotiation computes the component-wise minimum of two valid advertisements, so
 the result cannot exceed either side. There is no handshake exchange yet.
 
@@ -96,9 +99,11 @@ acknowledgement, and wrap protocols remain deferred.
 ## Replication intent
 
 `ReplicationView` stores one connection's epoch, known objects, relevant objects,
-and optional latest realtime sequences. Forgetting a known replica removes only
-peer knowledge; it does not destroy the authoritative object or erase relevance
-intent.
+and optional latest realtime sequences keyed by both `ObjectId` and strong
+`StateChannelId`. Independent state channels on one replica therefore cannot
+overwrite each other's sequence knowledge. Forgetting a known replica clears
+all of its channel sequence entries but removes only peer knowledge; it does not
+destroy the authoritative object or erase relevance intent.
 
 `ReplicationOperation` is an epoch-scoped variant for publish, property update,
 extension-property update, reparent, attribute update, tag add/remove, and

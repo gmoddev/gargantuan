@@ -87,14 +87,26 @@ accepted sequence is dropped before a receive event is queued. It does not
 inspect or decode the payload. Unordered unreliable traffic remains available
 to test raw duplication and reordering.
 
+"Accepted sequence" means observed by the destination transport at delivery
+time. If consumer event capacity then drops that unreliable value, an older
+value in the same channel remains stale and cannot resurrect superseded state.
+
 ## Backpressure, lifecycle, and close policy
 
 Bandwidth is modeled as deterministic serialization time on each connection
 direction. It does not implement scheduler traffic-class priority. Pending
 reliable bytes, unreliable copies, scheduled work, and receive events all have
-hard ceilings. Receive-event capacity reserves space for terminal lifecycle
-outcomes. Reliable receive exhaustion closes the connection; unreliable receive
-exhaustion drops the message.
+hard ceilings. Receive-event admission accounts for cumulative reservations for
+pending activation transitions and terminal lifecycle outcomes before accepting
+another connection or message. Terminal events therefore cannot disappear behind
+an already saturated receive queue. Reliable receive exhaustion closes the
+connection; unreliable receive exhaustion drops the message.
+
+Delivery-time calculation stages bandwidth availability, reliable ordering time,
+fault RNG state, and send statistics. Time overflow rejects the send without
+committing any of that prospective state. Internal reliable-byte and unreliable-
+copy accounting underflow closes the affected link as a structured transport
+failure rather than wrapping.
 
 Connection slots are reused only with an incremented generation. Startup queues
 `Connecting -> Authenticating -> Connected` and exposes it only after `Pump`.
@@ -111,7 +123,9 @@ The simulator meaningfully populates bytes sent/received, messages sent,
 delivered, and received, unreliable drops and delivered duplicates, reliable
 queued bytes, estimated base-latency RTT, and an unreliable loss estimate. These
 fields remain optional in the backend-neutral contract so a real backend need
-not fabricate unavailable measurements.
+not fabricate unavailable measurements. Cumulative `uint64_t` diagnostics
+saturate at their maximum instead of wrapping; current queue gauges remain exact
+and bounded by their configured resource ceilings.
 
 ## Deliberate differences and deferred work
 

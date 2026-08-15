@@ -17,6 +17,9 @@
 - [Protocol input hardening](ProtocolInputHardening.md) defines the implemented
   bounds, same-scope reference checks, host-owned command origin, atomic batch
   preflight, and notification safe points beneath future networking.
+- [Networking foundation validation](NetworkingFoundationValidation.md) maps and
+  adversarially revalidates the identity, lifecycle, bounds, sequencing,
+  accounting, simulator, and scheduler contracts before a real transport.
 
 See [Runtime foundation](./FoundationRuntime.md) for the implemented ownership,
 ObjectId, JobSystem, execution-domain, reflection-schema, and committed-change

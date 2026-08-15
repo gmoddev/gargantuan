@@ -95,6 +95,11 @@ int main() {
 	InvalidLimits.MaximumReliableMessageBytes = 0;
 	Check(!InvalidLimits.IsValid() && !NegotiateNetworkLimits(FirstLimits, InvalidLimits),
 		"zero or invalid advertised limits cannot participate in negotiation");
+	InvalidLimits = FirstLimits;
+	InvalidLimits.MaximumReliableMessageBytes = 256;
+	InvalidLimits.MaximumSendBytesPerTick = InvalidLimits.MaximumUnreliableMessageBytes - 1;
+	Check(!InvalidLimits.IsValid(),
+		"a per-tick send budget cannot advertise an unreliable message it cannot submit");
 
 	ReplicationEpoch Epoch(1);
 	auto NextEpoch = Epoch.TryNext();
@@ -128,12 +133,21 @@ int main() {
 		.Epoch = Epoch,
 		.KnownObjects = {Object},
 		.RelevantObjects = {Object},
-		.LatestStateSequences = {{Object, RealtimeStateSequence(3)}},
+		.LatestStateSequences = {
+			{ReplicaStateChannel{Object, StateChannelId(1)}, RealtimeStateSequence(3)},
+			{ReplicaStateChannel{Object, StateChannelId(2)}, RealtimeStateSequence(7)},
+		},
 	};
-	Check(View.IsValid() && View.Knows(Object), "replication view stores valid per-peer knowledge");
+	Check(View.IsValid() && View.Knows(Object) && View.LatestStateSequences.size() == 2,
+		"replication view stores independent realtime sequences per object and state channel");
+	auto InvalidView = View;
+	InvalidView.LatestStateSequences.emplace(
+		ReplicaStateChannel{Object, StateChannelId()}, RealtimeStateSequence(8));
+	Check(!InvalidView.IsValid(), "replication view rejects an invalid state-channel identity");
 	View.ForgetReplica(Object);
-	Check(!View.Knows(Object) && View.RelevantObjects.contains(Object) && Object.IsValid(),
-		"forgetting a replica does not destroy identity or erase relevance intent");
+	Check(!View.Knows(Object) && View.RelevantObjects.contains(Object) &&
+		View.LatestStateSequences.empty() && Object.IsValid(),
+		"forgetting a replica clears every channel sequence without destroying identity or relevance intent");
 	ReplicationOperation Unpublish{
 		.Epoch = Epoch,
 		.Intent = UnpublishReplication{Object},
