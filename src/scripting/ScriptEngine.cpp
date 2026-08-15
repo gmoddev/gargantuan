@@ -27,9 +27,13 @@
 #include <magic_enum/magic_enum.hpp>
 #include <memory>
 #include <stdexcept>
+#include <type_traits>
 #include <vector>
 
 namespace gargantuan {
+	static_assert(LUA_VECTOR_DOUBLE == 0, "Gargantuan requires Luau float vectors");
+	static_assert(LUA_VECTOR_SIZE == 3, "Gargantuan requires three-component Luau vectors");
+	static_assert(std::is_same_v<LUA_VECTOR_TYPE, float>, "Luau VM and native Vector3 precision must match");
 
 	struct Lib {
 		std::string Label;
@@ -102,6 +106,7 @@ namespace gargantuan {
 			.vectorLib = "Vector3",
 			.vectorCtor = "new",
 			.vectorType = "Vector3",
+			.vectorPrecision = 0,
 		};
 	}
 

@@ -25,16 +25,19 @@
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/scripting/ModuleResolution.hpp"
 #include "gargantuan/scripting/NativeCallback.hpp"
+#include "gargantuan/scripting/ScriptEngine.hpp"
 #include "gargantuan/services/Workspace.hpp"
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <limits>
 #include <lua.h>
+#include <luacode.h>
 #include <lualib.h>
 #include <nlohmann/json.hpp>
 #include <stdexcept>
@@ -2585,6 +2588,105 @@ namespace {
 		Check(std::string(lua_tostring(L, -1)) == "direct Luau error", "native guard preserves Luau diagnostics");
 		lua_close(L);
 	}
+
+	void TestLuauEmbeddingCompatibility() {
+		using namespace gargantuan;
+		static_assert(LUA_VECTOR_DOUBLE == 0);
+		static_assert(LUA_VECTOR_SIZE == 3);
+		static_assert(std::is_same_v<LUA_VECTOR_TYPE, float>);
+
+		auto game = std::make_shared<DataModel>();
+		ScriptEngine engine(game);
+		lua_State *L = engine.L;
+		Check(engine.CompileOptions.vectorPrecision == 0,
+			"Luau compiler vector precision matches the float-vector VM");
+
+		auto Load = [&](lua_State *State, std::string_view Source, const char *Name) -> int {
+			size_t BytecodeSize = 0;
+			char *Bytecode = luau_compile(Source.data(), Source.size(), &engine.CompileOptions, &BytecodeSize);
+			if (!Bytecode) return LUA_ERRSYNTAX;
+			const auto Status = luau_load(State, Name, Bytecode, BytecodeSize, 0);
+			std::free(Bytecode);
+			return Status;
+		};
+
+		lua_settop(L, 0);
+		Check(Load(L, "return Vector3.new(1, 0, 0):Cross(Vector3.new(0, 1, 0)), type(Vector3.zero)",
+			"luau-compatibility") == LUA_OK, "Luau compiler bytecode loads into the matching VM");
+		Check(lua_pcall(L, 0, 2, 0) == LUA_OK, "compiled Luau executes successfully");
+		const auto *Vector = lua_tovector(L, -2);
+		Check(Vector && Vector[0] == 0.0f && Vector[1] == 0.0f && Vector[2] == 1.0f,
+			"native Vector3 values retain three float components");
+		Check(std::string_view(lua_tostring(L, -1)) == "vector", "Vector3 retains Luau's native vector representation");
+
+		lua_settop(L, 0);
+		Check(Load(L, "local =", "luau-syntax-error") != LUA_OK, "Luau syntax errors fail during bytecode loading");
+		lua_settop(L, 0);
+		Check(Load(L, "error('runtime failure')", "luau-runtime-error") == LUA_OK,
+			"valid runtime-error source compiles");
+		Check(lua_pcall(L, 0, 0, 0) != LUA_OK, "Luau runtime errors remain protected-call failures");
+
+		lua_settop(L, 0);
+		Check(Load(L,
+			"return coroutine.create(function() coroutine.yield('paused'); return 'done' end)",
+			"luau-coroutine") == LUA_OK && lua_pcall(L, 0, 1, 0) == LUA_OK,
+			"Luau coroutine source compiles and returns a thread");
+		lua_State *Coroutine = lua_tothread(L, -1);
+		Check(Coroutine && lua_resume(Coroutine, L, 0) == LUA_YIELD &&
+			std::string_view(lua_tostring(Coroutine, -1)) == "paused", "Luau coroutine yields through the native API");
+		lua_settop(Coroutine, 0);
+		Check(lua_resume(Coroutine, L, 0) == LUA_OK && std::string_view(lua_tostring(Coroutine, -1)) == "done",
+			"Luau coroutine resumes to completion");
+
+		lua_settop(L, 0);
+		lua_State *Sandboxed = lua_newthread(L);
+		const int ThreadReference = lua_ref(L, -1);
+		lua_pop(L, 1);
+		luaL_sandboxthread(Sandboxed);
+		Check(Load(Sandboxed, "return 42", "luau-sandbox-thread") == LUA_OK &&
+			lua_resume(Sandboxed, L, 0) == LUA_OK && lua_tonumber(Sandboxed, -1) == 42,
+			"sandboxed Luau threads execute compiled bytecode");
+		Check(lua_unref(L, ThreadReference) == LUA_NOREF,
+			"Luau 0.734 thread reference cleanup returns LUA_NOREF");
+
+		lua_settop(L, 0);
+		Check(Load(L, R"(
+			LuauTaskResult = 0
+			task.defer(function() LuauTaskResult += 1 end)
+			task.delay(0, function() LuauTaskResult += 2 end)
+			task.spawn(function() task.wait(0); LuauTaskResult += 4 end)
+		)", "luau-task") == LUA_OK && lua_pcall(L, 0, 0, 0) == LUA_OK,
+			"task scheduling source executes");
+		engine.Threads.Step();
+		engine.Threads.Step();
+		lua_getglobal(L, "LuauTaskResult");
+		Check(lua_tonumber(L, -1) == 7, "task.defer, task.delay, and task.wait resume correctly");
+
+		lua_settop(L, 0);
+		const auto SignalLoadStatus = Load(L, R"(
+			local SignalValue = Signal.new()
+			local Result = 0
+			local Connection = SignalValue:Connect(function(Value) Result += Value end)
+			SignalValue:Fire(2)
+			Connection:Disconnect()
+			SignalValue:Fire(4)
+			SignalValue:Once(function(Value) Result += Value end)
+			SignalValue:Fire(8)
+			SignalValue:Fire(16)
+			SignalResult = Result
+			Connection = nil
+		)", "luau-signal");
+		const auto SignalExecutionStatus = SignalLoadStatus == LUA_OK ? lua_pcall(L, 0, 0, 0) : SignalLoadStatus;
+		if (SignalExecutionStatus != LUA_OK)
+			std::cerr << "Luau Signal regression diagnostic: " <<
+				(lua_tostring(L, -1) ? lua_tostring(L, -1) : "unknown Luau error") << '\n';
+		Check(SignalExecutionStatus == LUA_OK,
+			"Signal callbacks and userdata garbage collection execute without native failure");
+		lua_gc(L, LUA_GCCOLLECT, 0);
+		lua_getglobal(L, "SignalResult");
+		Check(lua_tonumber(L, -1) == 10, "Signal Connect, Once, Fire, and Disconnect preserve callback semantics");
+		lua_settop(L, 0);
+	}
 }
 
 int main() {
@@ -2617,6 +2719,7 @@ int main() {
 	TestClassExtensionRuntime();
 	TestEditorHostProtocol();
 	TestLuauExceptionBoundary();
+	TestLuauEmbeddingCompatibility();
 	if (Failures == 0) std::cout << "All foundation tests passed\n";
 	return Failures == 0 ? 0 : 1;
 }

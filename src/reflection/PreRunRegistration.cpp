@@ -353,7 +353,10 @@ namespace gargantuan {
 				lua_callbacks(L)->interrupt = Interrupt;
 				OpenSafeLibraries(L);
 				size_t bytecodeSize = 0;
-				char *bytecode = luau_compile(source.data(), source.size(), nullptr, &bytecodeSize);
+				lua_CompileOptions CompileOptions{
+					.vectorPrecision = 0,
+				};
+				char *bytecode = luau_compile(source.data(), source.size(), &CompileOptions, &bytecodeSize);
 				if (!bytecode) Fail(state, PreRunDiagnosticCode::CompileError, "Luau compiler returned no bytecode");
 				const auto loadStatus = luau_load(L, state.SourceName.c_str(), bytecode, bytecodeSize, 0);
 				std::free(bytecode);

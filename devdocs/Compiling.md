@@ -12,6 +12,18 @@ CCache to accelerate repeated compilation;
 Git submodules for several dependencies.
 
 The current build produces a C++23 Gargantuan executable and associated generated/runtime files.
+
+Embedded dependency baselines are intentionally separate:
+
+- the engine pins Luau 0.734 at `3fc82b1071ab387531175869afc4fb528464afa4` in `vendor/luau`;
+- Gargantuan Studio embeds its independent NuGet Luau runtime and is not versioned by the engine submodule;
+- Lute remains a separate repository-managed tooling runtime.
+
+The engine VM uses the default three-component, 32-bit float vector layout
+(`LUA_VECTOR_SIZE=3`, `LUA_VECTOR_DOUBLE=0`). Engine and PreRun compilation set
+`lua_CompileOptions.vectorPrecision=0` to match it. Double-precision Luau
+vectors require a separate ABI, runtime, and serialization review.
+
 1. Clone the repository
 The repository depends on Git submodules, so clone recursively:
 git clone --recursive https://github.com/gmoddev/gargantuan.git
