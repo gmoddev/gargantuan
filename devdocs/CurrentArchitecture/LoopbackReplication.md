@@ -90,5 +90,7 @@ and interest authorization are not implemented. Shared hostile-input ceilings,
 authority context, transactional preflight, and notification safe points are
 documented in `ProtocolInputHardening.md`.
 
-The next networking task is the pure backend-neutral contract milestone. It
-must not turn this debug/session journal into a packet protocol.
+Pure backend-neutral networking contracts now exist separately under
+`include/gargantuan/network/`; they do not consume or reinterpret this
+debug/session journal. The next networking task is the deterministic simulated
+transport and must not turn this journal into a packet protocol.

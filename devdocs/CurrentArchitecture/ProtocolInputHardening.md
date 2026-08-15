@@ -143,6 +143,8 @@ semantics.
 Still unimplemented: packet framing, negotiated per-session budgets, peer
 authentication and tickets, durable hosting identity, schema negotiation,
 visibility/interest management, transport-specific message limits, congestion
-control, binary game codecs, replication views, networking threads, sockets,
-and disconnect policy. `ChangeJournal.Sequence` remains authoritative scoped
-history and is not a packet or per-peer replication sequence.
+control, binary game codecs, populated replication views, networking threads,
+sockets, and runtime disconnect policy. Pure value/interface contracts now live
+in `NetworkingContracts.md`; they do not consume this boundary yet.
+`ChangeJournal.Sequence` remains authoritative scoped history and is not a packet
+or per-peer replication sequence.

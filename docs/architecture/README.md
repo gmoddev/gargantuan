@@ -104,6 +104,7 @@ The following documents describe recently implemented, source-verified slices:
 - [Mutation gateway](../../devdocs/CurrentArchitecture/MutationGateway.md)
 - [Snapshot baseline](../../devdocs/CurrentArchitecture/SnapshotBaseline.md)
 - [Loopback replication](../../devdocs/CurrentArchitecture/LoopbackReplication.md)
+- [Networking contracts](../../devdocs/CurrentArchitecture/NetworkingContracts.md)
 - [Script security](../../devdocs/CurrentArchitecture/ScriptSecurity.md)
 - [EditorHost protocol](../../devdocs/CurrentArchitecture/EditorHostProtocol.md)
 - [Editor viewport](../../devdocs/CurrentArchitecture/EditorViewport.md)

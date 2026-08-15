@@ -12,10 +12,10 @@ direction. Names marked as candidates, binary layouts, transport selection, and
 tuning values remain provisional until they are tested against a deterministic
 simulated transport.
 
-**Implementation status:** The Attributes and Tags prerequisite and native
-protocol-input hardening are complete. The current networking implementation
-remains the wire-shaped in-process replication proof; backend-neutral
-game-network contracts, the deterministic simulated transport, and every real
+**Implementation status:** The Attributes and Tags prerequisite, native
+protocol-input hardening, and backend-neutral pure contracts are complete. The
+current executable networking behavior remains the wire-shaped in-process
+replication proof; the deterministic simulated transport and every real
 transport/runtime phase below remain unfinished.
 
 ## Context
@@ -318,7 +318,7 @@ of the accepted decisions above.
 - [x] **Harden protocol inputs.** Complete same-scope reference validation,
    hostile-input bounds and fuzzing, authenticated command-origin policy, and
    transaction/notification safe points.
-- [ ] **Define pure contracts.** Add backend-neutral delivery modes, connection
+- [x] **Define pure contracts.** Add backend-neutral delivery modes, connection
    state, traffic intent, limits, statistics, replication views/operations, and
    remote request outcomes without selecting GNS or opening sockets.
 - [ ] **Implement deterministic simulated transport.** Prove delivery, scheduling,
