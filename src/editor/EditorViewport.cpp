@@ -6,7 +6,7 @@
 #include "gargantuan/editor/EditorViewport.hpp"
 
 #include "gargantuan/render/MeshProvider.hpp"
-#include "gargantuan/render/Renderer.hpp"
+#include "gargantuan/render/SDLRenderer.hpp"
 
 #include <SDL3/SDL.h>
 #include <algorithm>

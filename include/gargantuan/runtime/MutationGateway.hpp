@@ -15,6 +15,38 @@
 #include <variant>
 
 namespace gargantuan {
+	inline constexpr std::size_t MaximumPendingMutations = 4096;
+
+	enum class MutationCommandOrigin { LocalInternal, Studio, AuthenticatedPeer };
+
+	class MutationAuthorityContext {
+	  public:
+		[[nodiscard]] static MutationAuthorityContext Local(ScriptSecurityContext SecurityContext);
+		[[nodiscard]] static MutationAuthorityContext Studio(
+			ScriptSecurityContext SecurityContext,
+			ObjectId Scope
+		);
+		[[nodiscard]] static MutationAuthorityContext AuthenticatedPeer(
+			ScriptSecurityContext SecurityContext,
+			ObjectId Scope
+		);
+
+		[[nodiscard]] const ScriptSecurityContext &GetSecurityContext() const { return SecurityContext; }
+		[[nodiscard]] MutationCommandOrigin GetOrigin() const { return Origin; }
+		[[nodiscard]] std::optional<ObjectId> GetScope() const { return Scope; }
+
+	  private:
+		MutationAuthorityContext(
+			MutationCommandOrigin OriginValue,
+			ScriptSecurityContext SecurityContextValue,
+			std::optional<ObjectId> ScopeValue
+		);
+
+		MutationCommandOrigin Origin;
+		ScriptSecurityContext SecurityContext;
+		std::optional<ObjectId> Scope;
+	};
+
 	struct CreateObjectCommand { std::string ClassName; std::optional<ObjectId> Parent; };
 	struct UpdatePropertyCommand { ObjectId Object; std::string PropertyName; std::any Value; };
 	struct UpdateAttributeCommand { ObjectId Object; std::string AttributeName; std::optional<WireValue> Value; };
@@ -81,10 +113,15 @@ namespace gargantuan {
 			MutationCommand command,
 			ScriptSecurityContext securityContext = GetCurrentScriptSecurityContext()
 		);
+		std::shared_ptr<MutationCompletion> Submit(
+			MutationCommand Command,
+			MutationAuthorityContext Authority
+		);
 		MutationResult Apply(
 			MutationCommand command,
 			ScriptSecurityContext securityContext = GetCurrentScriptSecurityContext()
 		);
+		MutationResult Apply(MutationCommand Command, MutationAuthorityContext Authority);
 		std::size_t Drain(std::size_t maximumCommands = static_cast<std::size_t>(-1));
 		[[nodiscard]] std::size_t GetPendingCount() const;
 
@@ -92,7 +129,7 @@ namespace gargantuan {
 		struct PendingMutation {
 			MutationCommand Command;
 			std::shared_ptr<MutationCompletion> Completion;
-			ScriptSecurityContext SecurityContext;
+			MutationAuthorityContext Authority;
 		};
 		mutable std::mutex Mutex;
 		std::deque<PendingMutation> Pending;

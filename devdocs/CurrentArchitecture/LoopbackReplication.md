@@ -65,10 +65,13 @@ older than retained journal history returns `ResnapshotRequired`. The cursor
 advances only after a record is validated and applied. There is no implicit
 sorting or gap filling.
 
-Before a batch mutates receiver state, its sequence/scope envelope and custom
-class create/property identities are preflighted against a simulated class and
-hierarchy map. A malformed later custom record therefore cannot partially apply
-an earlier custom update. General multi-object rollback remains deferred.
+Before a batch mutates receiver state, its complete sequence/scope envelope and
+semantic effect are preflighted against simulated class, hierarchy, Attribute,
+Tag, extension, and custom-property state. References must resolve within the
+receiving session, hierarchy changes must remain acyclic, and aggregate bounds
+are checked across the complete candidate batch. A rejected later record cannot
+commit an earlier prefix. Observable signals are deferred until the valid batch
+has completely committed.
 
 Creates are materialized as unparented candidate objects before later property
 or reference records are applied. Reparenting beneath a tracked receiver object
@@ -79,17 +82,13 @@ which still requires an owning parent for external create commands.
 ## Deliberate limits
 
 This is an in-process architectural proof, not a network protocol. It does not
-provide transport framing, authentication, peer authority, compression,
-bandwidth budgets, schema negotiation, rollback, or multi-object transactions.
+provide transport framing, authentication, compression, negotiated bandwidth
+budgets, schema negotiation, or a generalized transaction subsystem.
 The DataModel-derived scope is runtime-lifetime identity, not a durable world
-UUID. Cross-scope object references are not yet a supported wire contract and
-must be rejected by a future pre-commit validator. Scope authorization and
-client-specific visibility/filtering are also not implemented.
+UUID. Native cross-scope references are rejected, but future per-peer visibility
+and interest authorization are not implemented. Shared hostile-input ceilings,
+authority context, transactional preflight, and notification safe points are
+documented in `ProtocolInputHardening.md`.
 
-Wire parsers currently fail closed but do not yet impose hostile-input byte,
-record-count, string-length, or nesting limits. These limits and fuzzing are
-required before accepting documents from an untrusted transport.
-
-The smallest recommended next task is a pre-commit reference/scope validator
-plus bounded hostile-input limits and fuzz tests. That closes the remaining
-local protocol holes before adding a loopback command/ack policy or sockets.
+The next networking task is the pure backend-neutral contract milestone. It
+must not turn this debug/session journal into a packet protocol.

@@ -1,6 +1,7 @@
 #include "gargantuan/runtime/AttributeValidation.hpp"
 
 #include "gargantuan/runtime/WireCodec.hpp"
+#include "gargantuan/runtime/ProtocolInput.hpp"
 
 #include <cmath>
 #include <stdexcept>
@@ -8,40 +9,6 @@
 
 namespace gargantuan {
 	namespace {
-		bool IsValidUtf8(std::string_view value) {
-			for (std::size_t index = 0; index < value.size();) {
-				const auto first = static_cast<unsigned char>(value[index]);
-				std::size_t count = 0;
-				std::uint32_t codePoint = 0;
-				if (first <= 0x7f) {
-					count = 1;
-					codePoint = first;
-				} else if ((first & 0xe0) == 0xc0) {
-					count = 2;
-					codePoint = first & 0x1f;
-				} else if ((first & 0xf0) == 0xe0) {
-					count = 3;
-					codePoint = first & 0x0f;
-				} else if ((first & 0xf8) == 0xf0) {
-					count = 4;
-					codePoint = first & 0x07;
-				} else return false;
-
-				if (index + count > value.size()) return false;
-				for (std::size_t offset = 1; offset < count; ++offset) {
-					const auto continuation = static_cast<unsigned char>(value[index + offset]);
-					if ((continuation & 0xc0) != 0x80) return false;
-					codePoint = (codePoint << 6) | (continuation & 0x3f);
-				}
-				if ((count == 2 && codePoint < 0x80) || (count == 3 && codePoint < 0x800) ||
-					(count == 4 && codePoint < 0x10000) || codePoint > 0x10ffff ||
-					(codePoint >= 0xd800 && codePoint <= 0xdfff))
-					return false;
-				index += count;
-			}
-			return true;
-		}
-
 		template <typename... Values> bool AllFinite(Values... values) {
 			return (... && std::isfinite(static_cast<double>(values)));
 		}
@@ -50,7 +17,7 @@ namespace gargantuan {
 	void ValidateAttributeName(std::string_view name) {
 		if (name.empty()) throw std::invalid_argument("Attribute name cannot be empty");
 		if (name.size() > MaximumAttributeNameBytes) throw std::invalid_argument("Attribute name exceeds its byte limit");
-		if (!IsValidUtf8(name)) throw std::invalid_argument("Attribute name is not valid UTF-8");
+		if (!IsValidProtocolUtf8(name)) throw std::invalid_argument("Attribute name is not valid UTF-8");
 		if (name.find('\0') != std::string_view::npos) throw std::invalid_argument("Attribute name contains an embedded null");
 	}
 
@@ -63,7 +30,7 @@ namespace gargantuan {
 					std::is_same_v<Value, WireObjectReference>) return false;
 				else if constexpr (std::is_same_v<Value, double>) return std::isfinite(typed);
 				else if constexpr (std::is_same_v<Value, WireFloat>) return std::isfinite(typed.Value);
-				else if constexpr (std::is_same_v<Value, std::string>) return IsValidUtf8(typed) && typed.find('\0') == std::string::npos;
+				else if constexpr (std::is_same_v<Value, std::string>) return IsValidProtocolUtf8(typed) && typed.find('\0') == std::string::npos;
 				else if constexpr (std::is_same_v<Value, WireVector2>) return AllFinite(typed.X, typed.Y);
 				else if constexpr (std::is_same_v<Value, WireVector3>) return AllFinite(typed.X, typed.Y, typed.Z);
 				else if constexpr (std::is_same_v<Value, WireColor3>) return AllFinite(typed.R, typed.G, typed.B);

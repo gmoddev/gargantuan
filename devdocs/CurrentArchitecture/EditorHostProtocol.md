@@ -63,7 +63,9 @@ limited to 256 records.
 
 `SetProperty` accepts only live objects whose replication scope is the open
 DataModel. The committed setter path remains responsible for journal emission.
-`SetAttribute` uses the same live-object and `MutateDataModel` checks. Attribute
+`SetAttribute` uses the same live-object and `MutateDataModel` checks. Every
+mutation carries a host-created Studio authority context scoped to the open
+DataModel; decoded request data never supplies capabilities or scope. Attribute
 state is delivered by snapshot and dedicated `AttributeUpdate` records rather
 than a second polling path. `AddTag` and `RemoveTag` use that same authority;
 snapshot membership and `TagAdded`/`TagRemoved` carry committed tag state.
@@ -112,6 +114,6 @@ new or prior registry; a later `OpenProject` may construct a fresh document.
 The bounded shared-memory viewport transport is implemented in
 [EditorViewport.md](./EditorViewport.md). The smallest viewport follow-up is a
 continuous native presentation loop with measured frame pacing; the request
-path currently renders one frame per `CaptureViewport`. Before accepting broader
-mutation types, add same-scope reference validation, transaction IDs, editor
-command authority, and bounded enum/reference decoding through the gateway.
+path currently renders one frame per `CaptureViewport`. Same-scope mutation
+authority and bounded enum/value decoding are implemented; broader mutation
+types still require explicit editor transaction semantics and protocol review.

@@ -3,6 +3,7 @@
 #include "gargantuan/classes/Instance.hpp"
 #include "gargantuan/runtime/ChangeJournal.hpp"
 #include "gargantuan/runtime/ExecutionDomain.hpp"
+#include "gargantuan/runtime/ProtocolInput.hpp"
 
 #include <algorithm>
 #include <limits>
@@ -10,30 +11,6 @@
 
 namespace gargantuan {
 	namespace {
-		bool IsValidUtf8(std::string_view value) {
-			for (std::size_t index = 0; index < value.size();) {
-				const auto first = static_cast<unsigned char>(value[index]);
-				std::size_t count = 0;
-				std::uint32_t codePoint = 0;
-				if (first <= 0x7f) { count = 1; codePoint = first; }
-				else if ((first & 0xe0) == 0xc0) { count = 2; codePoint = first & 0x1f; }
-				else if ((first & 0xf0) == 0xe0) { count = 3; codePoint = first & 0x0f; }
-				else if ((first & 0xf8) == 0xf0) { count = 4; codePoint = first & 0x07; }
-				else return false;
-				if (index + count > value.size()) return false;
-				for (std::size_t offset = 1; offset < count; ++offset) {
-					const auto continuation = static_cast<unsigned char>(value[index + offset]);
-					if ((continuation & 0xc0) != 0x80) return false;
-					codePoint = (codePoint << 6) | (continuation & 0x3f);
-				}
-				if ((count == 2 && codePoint < 0x80) || (count == 3 && codePoint < 0x800) ||
-					(count == 4 && codePoint < 0x10000) || codePoint > 0x10ffff ||
-					(codePoint >= 0xd800 && codePoint <= 0xdfff)) return false;
-				index += count;
-			}
-			return true;
-		}
-
 		void DemandRead(const ScriptSecurityContext &securityContext) {
 			if (!securityContext.HasCapability(ScriptCapability::ReadDataModel))
 				throw std::runtime_error("Tag query requires ReadDataModel");
@@ -50,7 +27,7 @@ namespace gargantuan {
 		if (name.empty()) throw std::invalid_argument("Tag name cannot be empty");
 		if (name.size() > MaximumTagNameBytes) throw std::invalid_argument("Tag name exceeds its byte limit");
 		if (name.find('\0') != std::string_view::npos) throw std::invalid_argument("Tag name contains an embedded null");
-		if (!IsValidUtf8(name)) throw std::invalid_argument("Tag name is not valid UTF-8");
+		if (!IsValidProtocolUtf8(name)) throw std::invalid_argument("Tag name is not valid UTF-8");
 	}
 
 	TagId TagIndex::Find(std::string_view name) const {

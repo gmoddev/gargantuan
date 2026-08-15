@@ -1,0 +1,23 @@
+material {
+    name : GargantuanBenchmark,
+    shadingModel : lit,
+    parameters : [
+        {
+            type : float4,
+            name : baseColor
+        }
+    ],
+    culling : back,
+    colorWrite : true,
+    depthWrite : true,
+    depthCulling : true
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        material.baseColor = materialParams.baseColor;
+        material.roughness = 1.0;
+        material.metallic = 0.0;
+    }
+}

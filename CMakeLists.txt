@@ -100,6 +100,24 @@ add_subdirectory(vendor/sdl_ttf SYSTEM)
 ################################################################################
 
 option(GARGANTUAN_TRACY "Compile in the Tracy client" OFF)
+option(GARGANTUAN_BUILD_RENDERER_BENCHMARKS "Build the manual renderer feasibility benchmark" ON)
+set(GARGANTUAN_FILAMENT_ROOT "" CACHE PATH "External Filament SDK root for the experimental renderer benchmark")
+set(GARGANTUAN_WITH_FILAMENT OFF)
+if(GARGANTUAN_FILAMENT_ROOT)
+	if(NOT WIN32 OR NOT MSVC)
+		message(FATAL_ERROR "The experimental Filament v1.71.5 benchmark integration currently supports only 64-bit MSVC Windows builds")
+	endif()
+	if(MSVC_VERSION LESS 1950)
+		message(FATAL_ERROR "The official Filament v1.71.5 Windows SDK requires an MSVC 19.50-compatible standard library ABI")
+	endif()
+	if(NOT EXISTS "${GARGANTUAN_FILAMENT_ROOT}/include/filament/Engine.h")
+		message(FATAL_ERROR "GARGANTUAN_FILAMENT_ROOT does not contain Filament headers")
+	endif()
+	if(NOT EXISTS "${GARGANTUAN_FILAMENT_ROOT}/bin/matc.exe")
+		message(FATAL_ERROR "GARGANTUAN_FILAMENT_ROOT does not contain the matching matc tool")
+	endif()
+	set(GARGANTUAN_WITH_FILAMENT ON)
+endif()
 set(TRACY_ENABLE ${GARGANTUAN_TRACY} CACHE BOOL "" FORCE)
 set(TRACY_ON_DEMAND ON CACHE BOOL "" FORCE)
 set(TRACY_ONLY_LOCALHOST ON CACHE BOOL "" FORCE)
@@ -141,6 +159,9 @@ file(GLOB_RECURSE GARGANTUAN_SOURCES CONFIGURE_DEPENDS
 	"src/*.hpp"
 )
 list(REMOVE_ITEM GARGANTUAN_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/Main.cpp")
+if(NOT GARGANTUAN_WITH_FILAMENT)
+	list(REMOVE_ITEM GARGANTUAN_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/render/FilamentRenderer.cpp")
+endif()
 
 add_library(gargantuan_core OBJECT ${GARGANTUAN_SOURCES})
 add_executable(gargantuan "src/Main.cpp" ${SHADER_OUTPUTS})
@@ -160,6 +181,48 @@ target_include_directories(gargantuan_core PUBLIC
 	"src"
 	"include"
 )
+
+if(GARGANTUAN_WITH_FILAMENT)
+	set(FILAMENT_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated/filament")
+	set(FILAMENT_GENERATED_MATERIAL "${FILAMENT_GENERATED_DIR}/GargantuanBenchmarkMaterial.h")
+	file(MAKE_DIRECTORY "${FILAMENT_GENERATED_DIR}")
+	add_custom_command(
+		OUTPUT "${FILAMENT_GENERATED_MATERIAL}"
+		COMMAND "${GARGANTUAN_FILAMENT_ROOT}/bin/matc.exe"
+			--platform desktop
+			--api opengl
+			--api vulkan
+			--variant-filter=dynamicLighting,shadowReceiver,skinning,vsm,fog,ssr,stereo
+			--output-format header
+			--output "${FILAMENT_GENERATED_MATERIAL}"
+			"${CMAKE_CURRENT_SOURCE_DIR}/assets/filament/benchmark.mat"
+		MAIN_DEPENDENCY "${CMAKE_CURRENT_SOURCE_DIR}/assets/filament/benchmark.mat"
+		COMMENT "Compiling the experimental Filament benchmark material"
+		VERBATIM
+	)
+	target_sources(gargantuan_core PRIVATE "${FILAMENT_GENERATED_MATERIAL}")
+	target_include_directories(gargantuan_core SYSTEM PRIVATE
+		"${GARGANTUAN_FILAMENT_ROOT}/include"
+		"${FILAMENT_GENERATED_DIR}"
+	)
+	target_compile_definitions(gargantuan_core PUBLIC GARGANTUAN_WITH_FILAMENT=1)
+
+	if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+		set(FILAMENT_RUNTIME_VARIANT mdd)
+	else()
+		set(FILAMENT_RUNTIME_VARIANT md)
+	endif()
+	set(FILAMENT_LIBRARY_DIR "${GARGANTUAN_FILAMENT_ROOT}/lib/x86_64/${FILAMENT_RUNTIME_VARIANT}")
+	foreach(FILAMENT_LIBRARY filament backend filaflat filabridge utils zstd bluegl bluevk smol-v)
+		if(NOT EXISTS "${FILAMENT_LIBRARY_DIR}/${FILAMENT_LIBRARY}.lib")
+			message(FATAL_ERROR "Filament library is missing: ${FILAMENT_LIBRARY_DIR}/${FILAMENT_LIBRARY}.lib")
+		endif()
+		target_link_libraries(gargantuan_core PUBLIC "${FILAMENT_LIBRARY_DIR}/${FILAMENT_LIBRARY}.lib")
+	endforeach()
+	if(WIN32)
+		target_link_libraries(gargantuan_core PUBLIC opengl32 gdi32 user32 shlwapi)
+	endif()
+endif()
 
 target_include_directories(gargantuan_core SYSTEM PUBLIC
 	"vendor/argparse/include"
@@ -210,6 +273,14 @@ if(BUILD_TESTING)
 	target_link_libraries(gargantuan_prerun_bootstrap_tests PRIVATE gargantuan_core)
 	add_executable(gargantuan_attributes_tags_profile "tests/AttributesTagsProfile.cpp")
 	target_link_libraries(gargantuan_attributes_tags_profile PRIVATE gargantuan_core)
+	if(GARGANTUAN_BUILD_RENDERER_BENCHMARKS)
+		add_executable(gargantuan_renderer_benchmark "tests/RendererBenchmark.cpp")
+		target_link_libraries(gargantuan_renderer_benchmark PRIVATE gargantuan_core)
+	endif()
+	if(GARGANTUAN_WITH_FILAMENT)
+		add_executable(gargantuan_filament_renderer_tests "tests/FilamentRendererTests.cpp")
+		target_link_libraries(gargantuan_filament_renderer_tests PRIVATE gargantuan_core)
+	endif()
 	if(WIN32)
 		add_custom_command(TARGET gargantuan_foundation_tests POST_BUILD
 			COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -226,9 +297,26 @@ if(BUILD_TESTING)
 				"$<TARGET_FILE:SDL3::SDL3>"
 				"$<TARGET_FILE_DIR:gargantuan_attributes_tags_profile>"
 		)
+		if(GARGANTUAN_BUILD_RENDERER_BENCHMARKS)
+			add_custom_command(TARGET gargantuan_renderer_benchmark POST_BUILD
+				COMMAND ${CMAKE_COMMAND} -E copy_if_different
+					"$<TARGET_FILE:SDL3::SDL3>"
+					"$<TARGET_FILE_DIR:gargantuan_renderer_benchmark>"
+			)
+		endif()
+		if(GARGANTUAN_WITH_FILAMENT)
+			add_custom_command(TARGET gargantuan_filament_renderer_tests POST_BUILD
+				COMMAND ${CMAKE_COMMAND} -E copy_if_different
+					"$<TARGET_FILE:SDL3::SDL3>"
+					"$<TARGET_FILE_DIR:gargantuan_filament_renderer_tests>"
+			)
+		endif()
 	endif()
 	add_test(NAME gargantuan_foundation COMMAND gargantuan_foundation_tests)
 	add_test(NAME gargantuan_prerun_bootstrap COMMAND gargantuan_prerun_bootstrap_tests)
+	if(GARGANTUAN_WITH_FILAMENT)
+		add_test(NAME gargantuan_filament_renderer COMMAND gargantuan_filament_renderer_tests)
+	endif()
 endif()
 
 if(WIN32)

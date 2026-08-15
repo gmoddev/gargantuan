@@ -44,8 +44,9 @@ or destroyed ID cannot resolve. Local receiver objects retain their own runtime
 
 Consequently, `WireObjectId` is stable within the source object's lifetime and
 within the snapshot/change stream that names it. It is not yet a durable UUID
-that survives independently authored save histories. Generation exhaustion and
-long-term identity migration remain future protocol concerns.
+that survives independently authored save histories. Exhausted registry slots
+are retired rather than wrapping; long-term durable identity migration remains
+a future protocol concern.
 
 ## Closed wire value schema
 
@@ -106,6 +107,7 @@ Persistence selection remains independent: `Saved` does not
 implicitly put a property into a snapshot. The generated reflection schema is
 the single source of truth for both policies.
 
-Authentication, transport, durable world identity, hostile-input resource
-limits, and schema migration remain unimplemented. These are required before
-accepting snapshot or journal documents from an untrusted network peer.
+Hostile-input resource limits and complete snapshot semantic preflight are now
+implemented in `ProtocolInputHardening.md`. Authentication, transport, durable
+world identity, negotiated session policy, and schema migration remain
+unimplemented.

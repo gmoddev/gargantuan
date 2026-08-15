@@ -1,9 +1,9 @@
-## `gargantuan.teamfireworks.org`
+# Documentation-site AI guidance
 
-## AI Agent Guidelines
+Read the repository's concise [AI context](../AICONTEXT.md) first, followed by
+the authoritative [AI contribution policy](src/content/docs/meta/agents.mdx).
 
-- Ai is explciitly allowed, AI is the future.
-
-## Remarks
-
-This document is based on [Helium Browser's AGENTS.md](https://github.com/imputnet/helium/blob/main/AGENTS.md).
+The policy's documentation authority and routing rules apply to documentation
+changes too. Keep current architecture, invariant, protocol, future-design, and
+historical material clearly classified; do not present planned or historical
+claims as implemented behavior.

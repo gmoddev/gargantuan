@@ -10,6 +10,36 @@
 #include <utility>
 
 namespace gargantuan {
+	MutationAuthorityContext::MutationAuthorityContext(
+		MutationCommandOrigin OriginValue,
+		ScriptSecurityContext SecurityContextValue,
+		std::optional<ObjectId> ScopeValue
+	) : Origin(OriginValue), SecurityContext(std::move(SecurityContextValue)), Scope(ScopeValue) {
+		if (Scope && !Scope->IsValid()) throw std::invalid_argument("Mutation authority scope is invalid");
+	}
+
+	MutationAuthorityContext MutationAuthorityContext::Local(ScriptSecurityContext SecurityContext) {
+		return {MutationCommandOrigin::LocalInternal, std::move(SecurityContext), std::nullopt};
+	}
+
+	MutationAuthorityContext MutationAuthorityContext::Studio(
+		ScriptSecurityContext SecurityContext,
+		ObjectId Scope
+	) {
+		if (SecurityContext.Domain != ScriptExecutionDomain::Studio)
+			throw std::invalid_argument("Studio mutation authority requires the Studio execution domain");
+		return {MutationCommandOrigin::Studio, std::move(SecurityContext), Scope};
+	}
+
+	MutationAuthorityContext MutationAuthorityContext::AuthenticatedPeer(
+		ScriptSecurityContext SecurityContext,
+		ObjectId Scope
+	) {
+		if (SecurityContext.Domain != ScriptExecutionDomain::Client)
+			throw std::invalid_argument("Peer mutation authority requires the Client execution domain");
+		return {MutationCommandOrigin::AuthenticatedPeer, std::move(SecurityContext), Scope};
+	}
+
 	MutationGateway::~MutationGateway() {
 		std::deque<PendingMutation> pending;
 		{
@@ -47,22 +77,40 @@ namespace gargantuan {
 		MutationCommand command,
 		ScriptSecurityContext securityContext
 	) {
+		return Submit(std::move(command), MutationAuthorityContext::Local(std::move(securityContext)));
+	}
+
+	std::shared_ptr<MutationCompletion> MutationGateway::Submit(
+		MutationCommand command,
+		MutationAuthorityContext Authority
+	) {
 		auto completion = std::make_shared<MutationCompletion>();
-		std::scoped_lock lock(Mutex);
-		Pending.push_back({std::move(command), completion, std::move(securityContext)});
+		{
+			std::scoped_lock lock(Mutex);
+			if (Pending.size() >= MaximumPendingMutations) {
+				completion->Complete({MutationStatus::Rejected, std::nullopt, "Mutation queue is full"});
+				return completion;
+			}
+			Pending.push_back({std::move(command), completion, std::move(Authority)});
+		}
 		return completion;
 	}
 
 	MutationResult MutationGateway::Apply(MutationCommand command, ScriptSecurityContext securityContext) {
+		return Apply(std::move(command), MutationAuthorityContext::Local(std::move(securityContext)));
+	}
+
+	MutationResult MutationGateway::Apply(MutationCommand command, MutationAuthorityContext Authority) {
 		if (GetCurrentExecutionDomain() != ExecutionDomain::Main) {
 			return {MutationStatus::WrongExecutionDomain, std::nullopt, "Mutation application requires Main"};
 		}
+		const auto &securityContext = Authority.GetSecurityContext();
 		if (!securityContext.HasCapability(ScriptCapability::MutateDataModel))
 			return {MutationStatus::Unauthorized, std::nullopt, "Mutation requires MutateDataModel"};
 
 		try {
 			return std::visit(
-				[&securityContext](auto &typedCommand) -> MutationResult {
+				[&securityContext, &Authority](auto &typedCommand) -> MutationResult {
 					using Command = std::decay_t<decltype(typedCommand)>;
 					if constexpr (std::is_same_v<Command, CreateObjectCommand>) {
 						auto *definition = InstanceClassRegistry::GetDefinitionByName(typedCommand.ClassName);
@@ -74,6 +122,8 @@ namespace gargantuan {
 						if (typedCommand.Parent) {
 							parent = ObjectRegistry::Get().Lookup(*typedCommand.Parent);
 							if (!parent) return {MutationStatus::StaleObject, std::nullopt, "Parent is stale or dead"};
+							if (Authority.GetScope() && parent->GetReplicationScopeId() != *Authority.GetScope())
+								return {MutationStatus::Rejected, std::nullopt, "Parent belongs to another DataModel"};
 						}
 						auto instance = InstanceClassRegistry::Construct(*definition);
 						if (!instance) return {MutationStatus::InternalError, std::nullopt, "Constructor returned null"};
@@ -83,6 +133,8 @@ namespace gargantuan {
 					} else {
 						auto instance = ObjectRegistry::Get().Lookup(typedCommand.Object);
 						if (!instance) return {MutationStatus::StaleObject, std::nullopt, "Object is stale or dead"};
+						if (Authority.GetScope() && instance->GetReplicationScopeId() != *Authority.GetScope())
+							return {MutationStatus::Rejected, std::nullopt, "Object belongs to another DataModel"};
 						if constexpr (std::is_same_v<Command, UpdatePropertyCommand>) {
 							const auto status = instance->ApplyPropertyMutation(
 								typedCommand.PropertyName,
@@ -122,9 +174,13 @@ namespace gargantuan {
 							return {MutationStatus::Success, typedCommand.Object, {}};
 						} else if constexpr (std::is_same_v<Command, ReparentObjectCommand>) {
 							std::shared_ptr<Instance> parent;
+							if (Authority.GetScope() && !typedCommand.Parent)
+								return {MutationStatus::Rejected, std::nullopt, "Scoped mutation cannot remove an object from its DataModel"};
 							if (typedCommand.Parent) {
 								parent = ObjectRegistry::Get().Lookup(*typedCommand.Parent);
 								if (!parent) return {MutationStatus::StaleObject, std::nullopt, "Parent is stale or dead"};
+								if (Authority.GetScope() && parent->GetReplicationScopeId() != *Authority.GetScope())
+									return {MutationStatus::Rejected, std::nullopt, "Parent belongs to another DataModel"};
 							}
 							instance->SetParent(parent ? std::optional(parent) : std::nullopt);
 							return {MutationStatus::Success, typedCommand.Object, {}};
@@ -149,14 +205,14 @@ namespace gargantuan {
 		AssertAuthoritativeMutation("MutationGateway::Drain");
 		std::size_t count = 0;
 		while (count < maximumCommands) {
-			PendingMutation pending;
+			std::optional<PendingMutation> pending;
 			{
 				std::scoped_lock lock(Mutex);
 				if (Pending.empty()) break;
-				pending = std::move(Pending.front());
+				pending.emplace(std::move(Pending.front()));
 				Pending.pop_front();
 			}
-			pending.Completion->Complete(Apply(std::move(pending.Command), std::move(pending.SecurityContext)));
+			pending->Completion->Complete(Apply(std::move(pending->Command), std::move(pending->Authority)));
 			++count;
 		}
 		return count;

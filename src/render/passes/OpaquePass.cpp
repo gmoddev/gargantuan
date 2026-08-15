@@ -4,7 +4,7 @@
 #include "gargantuan/render/MeshProvider.hpp"
 #include "gargantuan/render/PipelineBuilder.hpp"
 #include "gargantuan/render/RenderPass.hpp"
-#include "gargantuan/render/Renderer.hpp"
+#include "gargantuan/render/SDLRenderer.hpp"
 #include "gargantuan/render/Shader.hpp"
 
 #include <SDL3/SDL.h>

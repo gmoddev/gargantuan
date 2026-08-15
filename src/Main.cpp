@@ -8,6 +8,7 @@
 #include "gargantuan/filesystem/DiskFilesystem.hpp"
 #include "gargantuan/filesystem/Project.hpp"
 #include "gargantuan/render/Renderer.hpp"
+#include "gargantuan/render/SDLRenderer.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/runtime/DataModelRoot.hpp"
 

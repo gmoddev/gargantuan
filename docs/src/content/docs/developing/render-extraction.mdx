@@ -74,3 +74,53 @@ not introduce `RenderDevice`, a generic graphics API, backend selection,
 materials, textures, render threading, or a new GUI pipeline. A later rendering
 pass can place SDL resources behind a backend-neutral device boundary now that
 renderer data requirements are explicit.
+
+## Renderer technology decision checkpoint
+
+This section is non-normative future guidance. Gargantuan should revisit its
+renderer technology before the "competent lighting/renderer" roadmap work grows
+into a mature material, asset, lighting, culling, batching, and post-processing
+stack. The decision should be driven by a measured comparative prototype, not by
+making the current SDL implementation permanent by default.
+
+The candidate directions are:
+
+1. Gargantuan owns engine and rendering semantics while Filament supplies most
+   rendering technology.
+2. Gargantuan owns engine semantics while Ogre-Next owns a disposable,
+   persistent render-side scene projection.
+3. Gargantuan owns both engine semantics and a renderer built on a lower-level
+   API such as Diligent or SDL GPU.
+
+The first investigation should introduce only the smallest internal backend
+seam needed to compare one serious alternative, initially Filament, with the
+current SDL path. It should not build three polished backends. Compare at least
+material flexibility, instancing and batching, culling, lighting, large-scene
+performance, platform support, integration cost, debugging, licensing, and
+EditorHost compatibility. If rendering behavior proves to be a product
+differentiator that an integrated renderer cannot express without distorting
+Gargantuan's model, that evidence can justify owning more of the stack.
+
+Every option must preserve the existing authority boundary:
+
+```text
+authoritative DataModel
+    -> extracted or incrementally maintained render projection
+    -> immutable publication
+    -> renderer-owned scene and GPU resources
+```
+
+Any persistent render scene is a disposable `ObjectId`-indexed projection, not
+game state. It must never become authoritative or retain live `Instance`
+pointers. As scene scale makes full per-frame traversal, transform inversion,
+sorting, and snapshot reconstruction materially expensive, evaluate an
+incremental `RenderProjection` fed from committed changes. Publication to the
+renderer must remain immutable even if its construction becomes incremental.
+
+Renderer benchmarks must also separate GPU rendering from Studio viewport
+presentation. GPU-to-CPU readback, pixel conversion, shared-memory transfer,
+managed copies, and bitmap upload can dominate observed Studio frame time
+independently of the renderer. Measure these stages separately. A shared GPU
+texture may later become the preferred fast path, while the bounded RGB
+shared-memory transport remains a portable fallback; adopting such a path
+requires its own process-boundary and lifecycle review.

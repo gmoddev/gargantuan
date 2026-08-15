@@ -2,6 +2,8 @@
 #include "gargantuan/classes/Instance.hpp"
 
 #include <mutex>
+#include <limits>
+#include <stdexcept>
 #include <vector>
 
 namespace gargantuan {
@@ -28,6 +30,8 @@ namespace gargantuan {
 		std::scoped_lock lock(State->Mutex);
 		std::uint32_t slot;
 		if (State->FreeSlots.empty()) {
+			if (State->Entries.size() > std::numeric_limits<std::uint32_t>::max())
+				throw std::overflow_error("Object registry slot space is exhausted");
 			slot = static_cast<std::uint32_t>(State->Entries.size());
 			State->Entries.push_back({instance, 1});
 		} else {
@@ -44,7 +48,8 @@ namespace gargantuan {
 		auto &entry = State->Entries[id.Slot];
 		if (entry.Generation != id.Generation) return;
 		entry.Object.reset();
-		if (++entry.Generation == 0) entry.Generation = 1;
+		if (entry.Generation == std::numeric_limits<std::uint32_t>::max()) return;
+		++entry.Generation;
 		State->FreeSlots.push_back(id.Slot);
 	}
 

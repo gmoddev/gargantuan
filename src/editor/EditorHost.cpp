@@ -9,6 +9,7 @@
 #include "gargantuan/filesystem/Project.hpp"
 #include "gargantuan/reflection/InstanceClassRegistry.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
+#include "gargantuan/runtime/ProtocolInput.hpp"
 #include "gargantuan/runtime/Snapshot.hpp"
 #include "gargantuan/runtime/WireCodec.hpp"
 #include "gargantuan/runtime/WireJournal.hpp"
@@ -181,6 +182,11 @@ namespace gargantuan {
 		try {
 			if (request.empty() || request.size() > EditorHostMaximumRequestBytes)
 				return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Request byte length is invalid"));
+			try {
+				ValidateProtocolJsonDocument(request, EditorHostMaximumRequestBytes);
+			} catch (const std::invalid_argument &Error) {
+				return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", Error.what()));
+			}
 
 			auto message = Json::parse(request);
 			if (!HasOnlyFields(message, {"Version", "RequestId", "SessionToken", "Method", "Params"}) ||
@@ -630,7 +636,7 @@ namespace gargantuan {
 					return SerializeBoundedResponse(ErrorResponse(requestId, "UnsupportedValue", "EditorHost v0 accepts closed value properties only"));
 				auto mutation = Mutations.Apply(UpdatePropertyCommand{
 					object->ToObjectId(), parameters["Property"].get<std::string>(), std::move(*native)
-				}, StudioSecurity);
+				}, MutationAuthorityContext::Studio(StudioSecurity, World->GetObjectId()));
 				Json result{
 					{"Status", MutationStatusName(mutation.Status)},
 					{"Message", mutation.Message},
@@ -662,7 +668,7 @@ namespace gargantuan {
 				if (std::holds_alternative<std::monostate>(*attributeValue)) attributeValue.reset();
 				auto mutation = Mutations.Apply(UpdateAttributeCommand{
 					object->ToObjectId(), parameters["Attribute"].get<std::string>(), std::move(attributeValue)
-				}, StudioSecurity);
+				}, MutationAuthorityContext::Studio(StudioSecurity, World->GetObjectId()));
 				Json result{{"Status", MutationStatusName(mutation.Status)}, {"Message", mutation.Message}};
 				if (mutation.Object) result["Object"] = EncodeWireObjectId(WireObjectId::FromObjectId(*mutation.Object));
 				return SerializeBoundedResponse(
@@ -725,7 +731,7 @@ namespace gargantuan {
 					*version,
 					parameters["Property"].get<std::string>(),
 					std::move(*value),
-				}, StudioSecurity);
+				}, MutationAuthorityContext::Studio(StudioSecurity, World->GetObjectId()));
 				Json result{{"Status", MutationStatusName(mutation.Status)}, {"Message", mutation.Message}};
 				if (mutation.Object) result["Object"] = EncodeWireObjectId(WireObjectId::FromObjectId(*mutation.Object));
 				return SerializeBoundedResponse(
@@ -792,7 +798,7 @@ namespace gargantuan {
 					));
 				auto mutation = Mutations.Apply(UpdatePropertyCommand{
 					object->ToObjectId(), parameters["Property"].get<std::string>(), std::move(*native)
-				}, StudioSecurity);
+				}, MutationAuthorityContext::Studio(StudioSecurity, World->GetObjectId()));
 				Json result{{"Status", MutationStatusName(mutation.Status)}, {"Message", mutation.Message}};
 				if (mutation.Object) result["Object"] = EncodeWireObjectId(WireObjectId::FromObjectId(*mutation.Object));
 				return SerializeBoundedResponse(
@@ -816,8 +822,10 @@ namespace gargantuan {
 				if (!target || target->GetReplicationScopeId() != World->GetObjectId())
 					return SerializeBoundedResponse(ErrorResponse(requestId, "StaleObject", "Object is not live in the open project"));
 				MutationResult mutation = method == "AddTag"
-					? Mutations.Apply(AddTagCommand{object->ToObjectId(), parameters["Tag"].get<std::string>(), World->GetObjectId()}, StudioSecurity)
-					: Mutations.Apply(RemoveTagCommand{object->ToObjectId(), parameters["Tag"].get<std::string>(), World->GetObjectId()}, StudioSecurity);
+					? Mutations.Apply(AddTagCommand{object->ToObjectId(), parameters["Tag"].get<std::string>(), World->GetObjectId()},
+						MutationAuthorityContext::Studio(StudioSecurity, World->GetObjectId()))
+					: Mutations.Apply(RemoveTagCommand{object->ToObjectId(), parameters["Tag"].get<std::string>(), World->GetObjectId()},
+						MutationAuthorityContext::Studio(StudioSecurity, World->GetObjectId()));
 				Json result{{"Status", MutationStatusName(mutation.Status)}, {"Message", mutation.Message}};
 				if (mutation.Object) result["Object"] = EncodeWireObjectId(WireObjectId::FromObjectId(*mutation.Object));
 				return SerializeBoundedResponse(

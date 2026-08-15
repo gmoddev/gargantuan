@@ -53,8 +53,8 @@ than a borrowed pointer.
 - `Destroy` invalidates lookup before destruction callbacks run.
 - A slot may be reused after invalidation, but its generation is incremented.
 - A stale ID never resolves to the replacement object in that slot.
-- Generation wrap skips zero. Avoiding practical 32-bit generation exhaustion
-  remains a future protocol concern.
+- A slot is permanently retired at maximum generation rather than wrapping to
+  an identity that could collide with historical input.
 
 IDs are native-only from Luau's perspective. `WireObjectId` serializes the same
 slot/generation pair for snapshots, references, journal targets, and DataModel
@@ -134,9 +134,8 @@ complete boundary inventory in a later hardening pass.
 
 ## Remaining blockers before network replication
 
-Snapshot baseline, serialized references, scoped journal records, and isolated
-in-process receiver apply are implemented. Before a network prototype, the
-smallest remaining blockers are pre-commit same-scope reference validation,
-hostile-input byte/count/depth limits and fuzzing, authenticated command-origin
-policy, and explicit transaction/notification safe points. Durable world IDs,
-schema migration, and transport negotiation remain later work.
+Snapshot baseline, serialized references, scoped journal records, isolated
+in-process receiver apply, and the reusable protocol-input hardening boundary
+are implemented. See `ProtocolInputHardening.md`. Durable world IDs, schema
+migration, peer authentication, networking contracts, and transport negotiation
+remain later work.

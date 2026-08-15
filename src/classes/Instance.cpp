@@ -480,6 +480,19 @@ namespace gargantuan {
 			return MutationStatus::WrongExecutionDomain;
 		AssertIsAlive();
 		if (property->Validate && !property->Validate(value)) return MutationStatus::ValidationFailed;
+		if (property->WriteObjectReference) {
+			if (!property->DecodeObjectReference) return MutationStatus::ValidationFailed;
+			try {
+				auto Referenced = property->DecodeObjectReference(value);
+				if (Referenced) {
+					Referenced->AssertIsAlive();
+					if (Referenced->GetReplicationScopeId() != GetReplicationScopeId())
+						return MutationStatus::ValidationFailed;
+				}
+			} catch (const std::exception &) {
+				return MutationStatus::ValidationFailed;
+			}
+		}
 		if (property->CustomSchemaPropertyType) {
 			return ApplyCustomClassPropertyMutation(
 				property->DeclaringSchemaId,

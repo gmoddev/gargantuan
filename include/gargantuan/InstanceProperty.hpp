@@ -119,6 +119,7 @@ namespace gargantuan {
 		Enums::Permission WritePermission = Enums::Permission::None;
 		std::function<void(Instance *self, std::any value)> Write;
 		std::function<void(Instance *self, std::shared_ptr<Instance> value)> WriteObjectReference;
+		std::function<std::shared_ptr<Instance>(const std::any &value)> DecodeObjectReference;
 		std::function<void(Instance *self, int value)> WriteEnumValue;
 		std::function<bool(lua_State *L, int idx)> IsStack;
 		std::function<std::any(lua_State *L, int idx)> FromStack;
@@ -291,6 +292,11 @@ namespace gargantuan {
 
 				if constexpr (SharedInstancePointer<ArgType>::value) {
 					using Element = typename SharedInstancePointer<ArgType>::Element;
+					DecodeObjectReference = [](const std::any &value) -> std::shared_ptr<Instance> {
+						auto typed = std::any_cast<ArgType>(&value);
+						if (!typed) throw std::invalid_argument("Object reference has the wrong native type");
+						return std::static_pointer_cast<Instance>(*typed);
+					};
 					WriteObjectReference = [](Instance *self, std::shared_ptr<Instance> value) {
 						ClassType *obj = reinterpret_cast<ClassType *>(self);
 						auto typed = std::dynamic_pointer_cast<Element>(value);
@@ -299,6 +305,11 @@ namespace gargantuan {
 					};
 				} else if constexpr (OptionalSharedInstancePointer<ArgType>::value) {
 					using Element = typename OptionalSharedInstancePointer<ArgType>::Element;
+					DecodeObjectReference = [](const std::any &value) -> std::shared_ptr<Instance> {
+						auto typed = std::any_cast<ArgType>(&value);
+						if (!typed) throw std::invalid_argument("Object reference has the wrong native type");
+						return *typed ? std::static_pointer_cast<Instance>(**typed) : nullptr;
+					};
 					WriteObjectReference = [](Instance *self, std::shared_ptr<Instance> value) {
 						ClassType *obj = reinterpret_cast<ClassType *>(self);
 						auto typed = std::dynamic_pointer_cast<Element>(value);
@@ -325,6 +336,34 @@ namespace gargantuan {
 
 				IsStack = [](lua_State *L, int idx) { return StackValue<MemberType>::Is(L, idx); };
 				FromStack = [](lua_State *L, int idx) { return StackValue<MemberType>::From(L, idx); };
+
+				if constexpr (SharedInstancePointer<MemberType>::value) {
+					using Element = typename SharedInstancePointer<MemberType>::Element;
+					DecodeObjectReference = [](const std::any &value) -> std::shared_ptr<Instance> {
+						auto typed = std::any_cast<MemberType>(&value);
+						if (!typed) throw std::invalid_argument("Object reference has the wrong native type");
+						return std::static_pointer_cast<Instance>(*typed);
+					};
+					WriteObjectReference = [](Instance *self, std::shared_ptr<Instance> value) {
+						ClassType *obj = reinterpret_cast<ClassType *>(self);
+						auto typed = std::dynamic_pointer_cast<Element>(value);
+						if (value && !typed) throw std::invalid_argument("Object reference has the wrong class");
+						obj->*Pointer = typed;
+					};
+				} else if constexpr (OptionalSharedInstancePointer<MemberType>::value) {
+					using Element = typename OptionalSharedInstancePointer<MemberType>::Element;
+					DecodeObjectReference = [](const std::any &value) -> std::shared_ptr<Instance> {
+						auto typed = std::any_cast<MemberType>(&value);
+						if (!typed) throw std::invalid_argument("Object reference has the wrong native type");
+						return *typed ? std::static_pointer_cast<Instance>(**typed) : nullptr;
+					};
+					WriteObjectReference = [](Instance *self, std::shared_ptr<Instance> value) {
+						ClassType *obj = reinterpret_cast<ClassType *>(self);
+						auto typed = std::dynamic_pointer_cast<Element>(value);
+						if (value && !typed) throw std::invalid_argument("Object reference has the wrong class");
+						obj->*Pointer = typed ? std::optional(typed) : std::nullopt;
+					};
+				}
 			}
 
 			return *this;

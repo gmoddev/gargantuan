@@ -14,6 +14,9 @@
   lifecycle cleanup, deterministic queries, and state-transfer contracts.
 - [Attributes + Tags evaluation](AttributesTagsEvaluation.md) records the
   end-to-end decision gate, representative profiles, fixes, and accepted follow-up.
+- [Protocol input hardening](ProtocolInputHardening.md) defines the implemented
+  bounds, same-scope reference checks, host-owned command origin, atomic batch
+  preflight, and notification safe points beneath future networking.
 
 See [Runtime foundation](./FoundationRuntime.md) for the implemented ownership,
 ObjectId, JobSystem, execution-domain, reflection-schema, and committed-change

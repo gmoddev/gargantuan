@@ -20,6 +20,7 @@ namespace gargantuan::InstanceSerialization {
 		std::vector<std::string> Errors;
 
 		std::vector<std::string> CurrentPath{"(TOP)"};
+		std::size_t ObjectsDecoded = 0;
 		std::unordered_map<std::shared_ptr<gargantuan::Instance>, std::vector<std::string>> PendingTags;
 		std::string FormatCurrentPath();
 

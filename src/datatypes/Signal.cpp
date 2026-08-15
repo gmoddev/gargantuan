@@ -12,8 +12,42 @@
 #include <lua.h>
 #include <lualib.h>
 #include <memory>
+#include <utility>
 
 namespace gargantuan {
+	namespace {
+		thread_local std::size_t SignalDeferralDepth = 0;
+		thread_local bool SignalDeferralCanceled = false;
+		thread_local std::vector<std::pair<std::shared_ptr<BaseSignal>, BaseSignal::CallbackArgument>> DeferredSignals;
+	}
+
+	ScopedSignalDeferral::ScopedSignalDeferral() { ++SignalDeferralDepth; }
+
+	ScopedSignalDeferral::~ScopedSignalDeferral() {
+		if (!Active) return;
+		Active = false;
+		SignalDeferralCanceled = true;
+		if (--SignalDeferralDepth == 0) {
+			DeferredSignals.clear();
+			SignalDeferralCanceled = false;
+		}
+	}
+
+	void ScopedSignalDeferral::Commit() {
+		if (!Active) return;
+		Active = false;
+		if (--SignalDeferralDepth != 0) return;
+		if (SignalDeferralCanceled) {
+			DeferredSignals.clear();
+			SignalDeferralCanceled = false;
+			return;
+		}
+		auto Pending = std::move(DeferredSignals);
+		DeferredSignals.clear();
+		for (auto &[Signal, Value] : Pending)
+			if (Signal) Signal->Fire(std::move(Value));
+	}
+
 	G_USERDATA_IMPL(
 		SignalConnection,
 		.Tag = UserdataTag::SignalConnection,
@@ -92,6 +126,10 @@ namespace gargantuan {
 	};
 
 	void BaseSignal::Fire(CallbackArgument value) {
+		if (SignalDeferralDepth != 0) {
+			DeferredSignals.emplace_back(shared_from_this(), std::move(value));
+			return;
+		}
 		// A handler may connect, disconnect or fire this signal again, so run
 		// over a snapshot rather than the live list. The snapshot holds owning
 		// pointers, so a handler that clears Connections outright -- which

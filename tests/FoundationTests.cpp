@@ -9,6 +9,8 @@
 #include "gargantuan/editor/EditorHost.hpp"
 #include "gargantuan/editor/EditorViewport.hpp"
 #include "gargantuan/render/RenderExtractor.hpp"
+#include "gargantuan/render/RenderProjection.hpp"
+#include "gargantuan/render/Renderer.hpp"
 #include "gargantuan/runtime/ChangeJournal.hpp"
 #include "gargantuan/runtime/AttributeValidation.hpp"
 #include "gargantuan/runtime/DataModelRoot.hpp"
@@ -17,6 +19,7 @@
 #include "gargantuan/runtime/InProcessReplicationSession.hpp"
 #include "gargantuan/runtime/MutationGateway.hpp"
 #include "gargantuan/runtime/ObjectId.hpp"
+#include "gargantuan/runtime/ProtocolInput.hpp"
 #include "gargantuan/runtime/Snapshot.hpp"
 #include "gargantuan/runtime/TagIndex.hpp"
 #include "gargantuan/runtime/WireCodec.hpp"
@@ -73,6 +76,7 @@ namespace {
 		gargantuan::RenderSnapshotPtr,
 		std::shared_ptr<const gargantuan::RenderSnapshot>
 	>);
+	static_assert(std::is_abstract_v<gargantuan::BaseRenderer>);
 
 	int Failures = 0;
 
@@ -2721,6 +2725,335 @@ namespace {
 		journal.Clear();
 	}
 
+	void TestProtocolInputHardening() {
+		using namespace gargantuan;
+		using namespace gargantuan::InstanceSerialization;
+
+		Check(
+			!DecodeWireObjectId(WireJson{{"Slot", 1}, {"Generation", 1}, {"Extra", true}}),
+			"wire ObjectIds reject unknown fields"
+		);
+		Check(!DecodeWireObjectId(WireJson{{"Slot", 0}, {"Generation", 1}}), "wire ObjectIds reject zero slots");
+		Check(
+			!DecodeWireObjectId(WireJson{{"Slot", std::uint64_t{1} << 32}, {"Generation", 1}}),
+			"wire ObjectIds reject narrowing overflow"
+		);
+		Check(
+			!DecodeWireValue(WireJson{{"Type", "Vector3"}, {"Value", WireJson::array({1.0, 2.0})}}),
+			"WireValue rejects truncated compound values"
+		);
+		Check(
+			!DecodeWireValue(WireJson{{"Type", "Bool"}, {"Value", true}, {"Capabilities", "all"}}),
+			"WireValue rejects packet-supplied extra metadata"
+		);
+		Check(
+			!DecodeWireValue(WireJson{{"Type", "Int"}, {"Value", std::uint64_t{1} << 32}}),
+			"WireValue rejects signed integer narrowing overflow"
+		);
+		Check(
+			!DecodeWireValue(WireJson{{"Type", "String"}, {"Value", std::string(MaximumProtocolStringBytes + 1, 'x')}}),
+			"WireValue rejects oversized strings"
+		);
+		CheckThrows<std::invalid_argument>(
+			[] { (void)EncodeWireValue(WireFloat{std::numeric_limits<float>::infinity()}); },
+			"structured WireValue rejects non-finite numerics"
+		);
+
+		WireJson Deep = nullptr;
+		for (std::size_t Index = 0; Index <= MaximumProtocolJsonDepth; ++Index) Deep = WireJson::array({std::move(Deep)});
+		CheckThrows<std::invalid_argument>(
+			[&] { ValidateProtocolJsonTree(Deep); },
+			"protocol JSON rejects excessive nesting"
+		);
+		std::string DeepDocument(MaximumProtocolJsonDepth + 1, '[');
+		DeepDocument += "null";
+		DeepDocument.append(MaximumProtocolJsonDepth + 1, ']');
+		Check(
+			!DeserializeWireJournalRecords(DeepDocument).Succeeded(),
+			"wire decoder rejects excessive nesting before JSON parsing"
+		);
+		Check(
+			!DeserializeSnapshot(std::string(MaximumProtocolDocumentBytes + 1, ' ')).Succeeded(),
+			"snapshot decoder rejects oversized documents before parsing"
+		);
+		WireJson OversizedJournal{{"Version", WireJournalFormatVersion}, {"Records", WireJson::array()}};
+		for (std::size_t Index = 0; Index <= MaximumWireJournalRecords; ++Index)
+			OversizedJournal["Records"].push_back(WireJson::object());
+		Check(
+			!DeserializeWireJournalRecords(OversizedJournal.dump()).Succeeded(),
+			"wire journal decoder rejects oversized record batches"
+		);
+
+		auto PersistedPart = std::make_shared<Part>();
+		std::shared_ptr<Instance> PersistedRoot = PersistedPart;
+		auto PersistedDocument = WireJson::parse(Serialize(InstanceFormat::Json, PersistedRoot));
+		PersistedDocument["Properties"]["Size"] = WireJson{{"Vector3", WireJson::array({1.0, 2.0})}};
+		std::istringstream TruncatedPersistence(PersistedDocument.dump());
+		auto TruncatedResult = Deserialize(InstanceFormat::Json, TruncatedPersistence);
+		Check(!TruncatedResult.Ok, "persistence decoder rejects truncated compound values without throwing");
+
+		auto FirstWorld = std::make_shared<DataModel>();
+		auto FirstPart = std::make_shared<Part>();
+		FirstPart->SetParent(FirstWorld);
+		auto FirstWeld = std::make_shared<WeldConstraint>();
+		FirstWeld->SetParent(FirstWorld);
+		auto SecondWorld = std::make_shared<DataModel>();
+		auto SecondPart = std::make_shared<Part>();
+		SecondPart->SetParent(SecondWorld);
+		std::optional<std::shared_ptr<BasePart>> ForeignReference = SecondPart;
+		Check(
+			FirstWeld->ApplyPropertyMutation(
+				"Part0", ForeignReference, Enums::Permission::Engine, ScriptSecurityContext::CoreTrusted()
+			) == MutationStatus::ValidationFailed,
+			"authoritative object-reference mutation rejects another DataModel scope"
+		);
+		Check(!FirstWeld->GetPart0(), "rejected cross-scope reference does not commit");
+
+		ScriptSecurityContext PeerSecurity{
+			ScriptExecutionDomain::Client,
+			{ScriptCapability::MutateDataModel},
+		};
+		auto PeerAuthority = MutationAuthorityContext::AuthenticatedPeer(PeerSecurity, FirstWorld->GetObjectId());
+		MutationGateway Gateway;
+		Check(
+			Gateway.Apply(
+				UpdatePropertyCommand{SecondPart->GetObjectId(), "Name", std::string("CrossScope")}, PeerAuthority
+			).Status == MutationStatus::Rejected,
+			"host-owned peer authority cannot mutate outside its assigned DataModel scope"
+		);
+		Check(
+			Gateway.Apply(
+				UpdatePropertyCommand{FirstPart->GetObjectId(), "Name", std::string("InScope")}, PeerAuthority
+			).Succeeded(),
+			"host-owned peer authority can carry an explicitly assigned in-scope capability context"
+		);
+
+		auto Source = std::make_shared<DataModel>();
+		auto SourcePart = std::make_shared<Part>();
+		SourcePart->SetParent(Source);
+		auto CycleParent = std::make_shared<Folder>();
+		CycleParent->SetParent(Source);
+		auto CycleChild = std::make_shared<Folder>();
+		CycleChild->SetParent(CycleParent);
+		auto ReferenceWeld = std::make_shared<WeldConstraint>();
+		ReferenceWeld->SetName("ReferenceWeld");
+		ReferenceWeld->SetParent(Source);
+		auto Started = InProcessReplicationSession::Start(Source);
+		Check(Started.Succeeded(), "hostile batch test starts from a valid baseline");
+		auto Session = Started.Session;
+		auto ReceiverPart = std::dynamic_pointer_cast<Part>(Session->GetReceiverRoot()->Children.front());
+		auto Cursor = Session->GetCursor();
+		const auto Scope = WireObjectId::FromObjectId(Source->GetObjectId());
+		const auto PartId = WireObjectId::FromObjectId(SourcePart->GetObjectId());
+		std::vector<WireJournalRecord> RejectedBatch{
+			{
+				.Sequence = Cursor.NextSequence,
+				.Scope = Scope,
+				.Operation = WireJournalOperation::AttributeUpdate,
+				.Object = PartId,
+				.AttributeName = "Prefix",
+				.Value = std::string("must-not-commit"),
+			},
+			{
+				.Sequence = Cursor.NextSequence + 1,
+				.Scope = Scope,
+				.Operation = WireJournalOperation::TagRemoved,
+				.Object = PartId,
+				.TagName = "Absent",
+			},
+		};
+		auto Rejected = Session->ApplyWireRecords(RejectedBatch);
+		Check(
+			Rejected.Status == ReplicationApplyStatus::ApplyRejected && Rejected.AppliedRecords == 0 &&
+				Session->GetCursor().NextSequence == Cursor.NextSequence &&
+				!ReceiverPart->GetAttributeValue("Prefix", ScriptSecurityContext::CoreTrusted()),
+			"semantic rejection after a valid batch prefix commits no state or cursor prefix"
+		);
+
+		auto ReferenceCursor = Session->GetCursor();
+		bool RejectedPrefixNotified = false;
+		auto RejectedPrefixConnection = ReceiverPart->GetAttributeSignal(
+			"ReferencePrefix", ScriptSecurityContext::CoreTrusted()
+		)->Connect([&](std::monostate) { RejectedPrefixNotified = true; });
+		std::vector<WireJournalRecord> WrongReferenceClassBatch{
+			{
+				.Sequence = ReferenceCursor.NextSequence,
+				.Scope = Scope,
+				.Operation = WireJournalOperation::AttributeUpdate,
+				.Object = PartId,
+				.AttributeName = "ReferencePrefix",
+				.Value = 1,
+			},
+			{
+				.Sequence = ReferenceCursor.NextSequence + 1,
+				.Scope = Scope,
+				.Operation = WireJournalOperation::PropertyUpdate,
+				.Object = WireObjectId::FromObjectId(ReferenceWeld->GetObjectId()),
+				.PropertyName = "Part0",
+				.Value = WireObjectReference{WireObjectId::FromObjectId(CycleParent->GetObjectId())},
+			},
+		};
+		auto WrongReferenceClass = Session->ApplyWireRecords(WrongReferenceClassBatch);
+		Check(
+			WrongReferenceClass.Status == ReplicationApplyStatus::ApplyRejected &&
+				WrongReferenceClass.AppliedRecords == 0 &&
+				Session->GetCursor().NextSequence == ReferenceCursor.NextSequence &&
+				!ReceiverPart->GetAttributeValue("ReferencePrefix", ScriptSecurityContext::CoreTrusted()) &&
+				!RejectedPrefixNotified,
+			"reference class compatibility is preflighted before batch state, cursor, or notifications commit"
+		);
+		RejectedPrefixConnection->Disconnect();
+
+		bool NotificationSawCommittedBatch = false;
+		auto Connection = ReceiverPart->GetAttributeSignal(
+			"First", ScriptSecurityContext::CoreTrusted()
+		)->Connect([&](std::monostate) {
+			NotificationSawCommittedBatch = ReceiverPart->GetAttributeValue(
+				"Second", ScriptSecurityContext::CoreTrusted()
+			).has_value();
+		});
+		std::vector<WireJournalRecord> ValidBatch{
+			{
+				.Sequence = Cursor.NextSequence,
+				.Scope = Scope,
+				.Operation = WireJournalOperation::AttributeUpdate,
+				.Object = PartId,
+				.AttributeName = "First",
+				.Value = 1,
+			},
+			{
+				.Sequence = Cursor.NextSequence + 1,
+				.Scope = Scope,
+				.Operation = WireJournalOperation::AttributeUpdate,
+				.Object = PartId,
+				.AttributeName = "Second",
+				.Value = 2,
+			},
+		};
+		Check(Session->ApplyWireRecords(ValidBatch).Succeeded(), "fully preflighted hostile-shaped batch commits");
+		Check(NotificationSawCommittedBatch, "batch notifications observe the complete committed batch state");
+		Connection->Disconnect();
+
+		Cursor = Session->GetCursor();
+		WireJournalRecord Cycle{
+			.Sequence = Cursor.NextSequence,
+			.Scope = Scope,
+			.Operation = WireJournalOperation::Reparent,
+			.Object = WireObjectId::FromObjectId(CycleParent->GetObjectId()),
+			.Parent = WireObjectId::FromObjectId(CycleChild->GetObjectId()),
+		};
+		Check(
+			Session->ApplyWireRecords({Cycle}).Status == ReplicationApplyStatus::ApplyRejected,
+			"wire reparent preflight rejects hierarchy cycles"
+		);
+
+		auto SnapshotValue = CaptureSnapshot(Source);
+		auto SnapshotCycle = SnapshotValue;
+		auto ParentPosition = std::find_if(
+			SnapshotCycle.Objects.begin(), SnapshotCycle.Objects.end(),
+			[&](const SnapshotObject &Object) { return Object.Id == WireObjectId::FromObjectId(CycleParent->GetObjectId()); }
+		);
+		ParentPosition->Parent = WireObjectId::FromObjectId(CycleChild->GetObjectId());
+		auto SnapshotRejected = LoadSnapshot(SnapshotCycle);
+		Check(
+			!SnapshotRejected.Succeeded() && !SnapshotRejected.Root && SnapshotRejected.Objects.empty(),
+			"snapshot semantic preflight rejects cycles before publishing candidate state"
+		);
+
+		MutationGateway BoundedGateway;
+		std::shared_ptr<MutationCompletion> OverflowCompletion;
+		for (std::size_t Index = 0; Index <= MaximumPendingMutations; ++Index)
+			OverflowCompletion = BoundedGateway.Submit(
+				UpdatePropertyCommand{FirstPart->GetObjectId(), "Name", std::string("Queued")}
+			);
+		Check(
+			OverflowCompletion->IsReady() && OverflowCompletion->Wait().Status == MutationStatus::Rejected,
+			"mutation gateway rejects work beyond its fixed pending-command ceiling"
+		);
+	}
+
+	void TestRenderBackendBoundary() {
+		using namespace gargantuan;
+		class RecordingRenderer final : public BaseRenderer {
+		  public:
+			void Draw(RenderSnapshotPtr Snapshot) override { LastSnapshot = std::move(Snapshot); }
+			void Resize(int WidthValue, int HeightValue) override {
+				Width = WidthValue;
+				Height = HeightValue;
+			}
+			void Destroy() override { Destroyed = true; }
+			[[nodiscard]] std::pair<std::uint32_t, std::uint32_t> GetViewportSize() const override {
+				return {static_cast<std::uint32_t>(Width), static_cast<std::uint32_t>(Height)};
+			}
+
+			RenderSnapshotPtr LastSnapshot;
+			int Width = 0;
+			int Height = 0;
+			bool Destroyed = false;
+		};
+
+		auto Published = std::make_shared<RenderSnapshot>();
+		Published->Id = 1;
+		Published->ViewportWidth = 320;
+		Published->ViewportHeight = 200;
+		RenderSnapshotPtr Immutable = Published;
+		RecordingRenderer Renderer;
+		Renderer.Resize(320, 200);
+		Renderer.Draw(Immutable);
+		Renderer.Destroy();
+		Check(
+			Renderer.LastSnapshot == Immutable && Renderer.GetViewportSize() == std::pair<std::uint32_t, std::uint32_t>{320, 200} &&
+				Renderer.Destroyed,
+			"backend-neutral renderer receives immutable snapshots and owns resize/shutdown behavior"
+		);
+
+		RenderProjection Projection;
+		RenderSnapshot First;
+		First.Id = 1;
+		First.Items = {
+			{.Object = {10, 1}, .Geometry = RenderGeometry::Block},
+			{.Object = {11, 1}, .Geometry = RenderGeometry::Ball},
+		};
+		auto FirstChanges = Projection.Apply(First);
+		Check(
+			FirstChanges.Created == 2 && FirstChanges.Updated == 0 && FirstChanges.Removed == 0 &&
+				Projection.GetSize() == 2,
+			"render projection creates one disposable entry per ObjectId"
+		);
+		auto Unchanged = Projection.Apply(First);
+		Check(
+			Unchanged.Unchanged == 2 && Unchanged.Created == 0 && Unchanged.Updated == 0 && Unchanged.Removed == 0,
+			"render projection preserves unchanged renderer-side objects"
+		);
+
+		RenderSnapshot Second;
+		Second.Id = 2;
+		Second.Items = {
+			{.Object = {10, 1}, .Geometry = RenderGeometry::Cylinder, .Color = {0.5f, 0.25f, 0.75f, 1.0f}},
+			{.Object = {11, 2}, .Geometry = RenderGeometry::Ball},
+		};
+		auto SecondChanges = Projection.Apply(Second);
+		Check(
+			SecondChanges.Created == 1 && SecondChanges.Updated == 1 && SecondChanges.Removed == 1 &&
+				Projection.GetItem({11, 1}) == nullptr && Projection.GetItem({11, 2}) != nullptr,
+			"generation reuse removes the stale ObjectId projection before retaining its replacement"
+		);
+
+		RenderSnapshot Duplicate = Second;
+		Duplicate.Id = 3;
+		Duplicate.Items.push_back(Duplicate.Items.front());
+		CheckThrows<std::invalid_argument>(
+			[&] { static_cast<void>(Projection.Apply(Duplicate)); },
+			"render projection rejects duplicate ObjectIds"
+		);
+		Check(
+			Projection.GetSize() == 2 && Projection.GetItem({10, 1}) != nullptr && Projection.GetItem({11, 2}) != nullptr,
+			"invalid projection publication does not partially replace the previous projection"
+		);
+		Projection.Clear();
+		Check(Projection.GetSize() == 0, "render projection shutdown releases every disposable entry");
+	}
+
 	void TestCustomClassRuntime() {
 		using namespace gargantuan;
 		const auto ParentId = SchemaId::FromCustomClassName("Game", "DamageableFolder");
@@ -3459,6 +3792,7 @@ int main() {
 	TestClassExtensionSchema();
 	TestCustomClassSchema();
 	TestRenderSnapshotExtraction();
+	TestRenderBackendBoundary();
 	TestScriptSecurityModel();
 	TestMutationGateway();
 	TestInstanceAttributes();
@@ -3466,6 +3800,7 @@ int main() {
 	TestBoundedJournalCursor();
 	TestSnapshotBaseline();
 	TestWireJournalAndLoopbackReplication();
+	TestProtocolInputHardening();
 	TestSharedFrameRing();
 	TestClassExtensionRuntime();
 	TestCustomClassRuntime();

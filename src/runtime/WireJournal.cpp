@@ -2,6 +2,7 @@
 
 #include "gargantuan/runtime/WireCodec.hpp"
 #include "gargantuan/runtime/AttributeValidation.hpp"
+#include "gargantuan/runtime/ProtocolInput.hpp"
 #include "gargantuan/runtime/TagIndex.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 
@@ -155,13 +156,22 @@ namespace gargantuan {
 	WireJournalParseResult DeserializeWireJournalRecords(std::string_view serialized) {
 		WireJournalParseResult result;
 		try {
+			ValidateProtocolJsonDocument(serialized);
+		} catch (const std::exception &Error) {
+			result.Errors.push_back(Error.what());
+			return result;
+		}
+		try {
 			auto document = WireJson::parse(serialized);
+			ValidateProtocolJsonTree(document);
 			if (!document.is_object() || !HasOnlyFields(document, {"Version", "Records"}) ||
 				document.value("Version", 0u) != WireJournalFormatVersion ||
 				!document.contains("Records") || !document["Records"].is_array()) {
 				result.Errors.push_back("Invalid or unsupported wire journal envelope");
 				return result;
 			}
+			if (document["Records"].size() > MaximumWireJournalRecords)
+				throw std::invalid_argument("Wire journal record count exceeds its limit");
 
 			std::vector<WireJournalRecord> records;
 			for (const auto &encoded : document["Records"]) {
@@ -195,10 +205,13 @@ namespace gargantuan {
 							!encoded.contains("ClassSchemaId") || !encoded["ClassSchemaId"].is_string() ||
 							!encoded.contains("DefinitionVersion") || !encoded["DefinitionVersion"].is_number_unsigned())
 							throw std::invalid_argument("Invalid Create journal record");
-					record.ClassName = encoded["ClassName"].get<std::string>();
-					if (auto id = SchemaId::Parse(encoded["ClassSchemaId"].get<std::string>()); id) {
-						auto *definition = GetActiveRuntimeSchemaRegistry().FindClassById(*id);
-						const auto version = DecodeWireUnsigned32(encoded["DefinitionVersion"]).value_or(0);
+						ValidateProtocolString(
+							encoded["ClassName"].get_ref<const std::string &>(), MaximumProtocolIdentifierBytes, "Create class name"
+						);
+						record.ClassName = encoded["ClassName"].get<std::string>();
+						if (auto id = SchemaId::Parse(encoded["ClassSchemaId"].get<std::string>()); id) {
+							auto *definition = GetActiveRuntimeSchemaRegistry().FindClassById(*id);
+							const auto version = DecodeWireUnsigned32(encoded["DefinitionVersion"]).value_or(0);
 							const auto expectedName = definition && definition->ConstructionKind == SchemaClassConstructionKind::CustomData
 								? definition->CanonicalName : definition ? definition->ClassName : std::string{};
 							if (!definition || version == 0 || definition->DefinitionVersion != version ||
@@ -219,6 +232,7 @@ namespace gargantuan {
 						auto value = DecodeWireValue(encoded["Value"]);
 						if (!value) throw std::invalid_argument("Invalid PropertyUpdate WireValue");
 						record.PropertyName = encoded["PropertyName"].get<std::string>();
+						ValidateProtocolString(*record.PropertyName, MaximumProtocolIdentifierBytes, "Property name");
 						record.Value = std::move(*value);
 						const auto hasOwner = encoded.contains("DeclaringClassSchemaId");
 						if (hasOwner != encoded.contains("DefinitionVersion"))
@@ -267,9 +281,10 @@ namespace gargantuan {
 						auto extensionId = SchemaId::Parse(encodedId);
 						if (!extensionId || extensionId->ToString() != encodedId)
 							throw std::invalid_argument("Invalid extension SchemaId");
-					const auto version = DecodeWireUnsigned32(encoded["DefinitionVersion"]).value_or(0);
+						const auto version = DecodeWireUnsigned32(encoded["DefinitionVersion"]).value_or(0);
 						if (version == 0) throw std::invalid_argument("Invalid extension definition version");
 						auto name = encoded["PropertyName"].get<std::string>();
+						ValidateProtocolString(name, MaximumProtocolIdentifierBytes, "Extension property name");
 						auto *extension = GetActiveRuntimeSchemaRegistry().FindExtensionById(*extensionId);
 						auto *property = GetActiveRuntimeSchemaRegistry().FindExtensionProperty(*extensionId, name);
 						auto value = DecodeWireValue(encoded["Value"]);

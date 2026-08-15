@@ -12,6 +12,12 @@ direction. Names marked as candidates, binary layouts, transport selection, and
 tuning values remain provisional until they are tested against a deterministic
 simulated transport.
 
+**Implementation status:** The Attributes and Tags prerequisite and native
+protocol-input hardening are complete. The current networking implementation
+remains the wire-shaped in-process replication proof; backend-neutral
+game-network contracts, the deterministic simulated transport, and every real
+transport/runtime phase below remain unfinished.
+
 ## Context
 
 Gargantuan already has stable session object identity, a bounded `WireValue`
@@ -304,31 +310,31 @@ port.
 
 ## Implementation order
 
-This ADR can be maintained while the current Attributes and Tags vertical slice
-finishes. Networking implementation should not interrupt that slice.
+This checklist records implementation progress without changing the authority
+of the accepted decisions above.
 
-1. **Finish and review Attributes and Tags.** Confirm frozen-schema,
+- [x] **Finish and review Attributes and Tags.** Confirm frozen-schema,
    serialization, journaling, Studio, and capability behavior.
-2. **Harden protocol inputs.** Complete same-scope reference validation,
+- [x] **Harden protocol inputs.** Complete same-scope reference validation,
    hostile-input bounds and fuzzing, authenticated command-origin policy, and
    transaction/notification safe points.
-3. **Define pure contracts.** Add backend-neutral delivery modes, connection
+- [ ] **Define pure contracts.** Add backend-neutral delivery modes, connection
    state, traffic intent, limits, statistics, replication views/operations, and
    remote request outcomes without selecting GNS or opening sockets.
-4. **Implement deterministic simulated transport.** Prove delivery, scheduling,
+- [ ] **Implement deterministic simulated transport.** Prove delivery, scheduling,
    backpressure, cancellation, and sequence-domain behavior under hostile
    conditions.
-5. **Stop and validate.** Exercise the contracts, inspect metrics and failure
+- [ ] **Stop and validate.** Exercise the contracts, inspect metrics and failure
    behavior, and revise this ADR before committing to a real backend.
-6. **Select and implement one real transport adapter.** Add handshake,
+- [ ] **Select and implement one real transport adapter.** Add handshake,
    authentication hook, connection lifecycle, negotiated limits, and stats.
-7. **Add bounded Luau remotes.** Preserve familiar event/request ergonomics over
+- [ ] **Add bounded Luau remotes.** Preserve familiar event/request ergonomics over
    the tested scheduler and transport semantics.
-8. **Add basic client replication.** Implement baseline plus reliable publish,
+- [ ] **Add basic client replication.** Implement baseline plus reliable publish,
    update, reparent, attributes, and unpublish operations.
-9. **Add realtime replication when gameplay requires it.** Introduce sequenced
+- [ ] **Add realtime replication when gameplay requires it.** Introduce sequenced
    transforms/physics, ownership leases, interpolation, and correction.
-10. **Add interest and streaming when world scale requires it.** Expand
+- [ ] **Add interest and streaming when world scale requires it.** Expand
     per-client views, priorities, relevance, and bandwidth policy.
 
 Node integration for discovery and join tickets can proceed independently once

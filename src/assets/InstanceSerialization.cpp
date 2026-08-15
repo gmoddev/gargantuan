@@ -10,13 +10,17 @@
 #include "gargantuan/reflection/InstanceClassRegistry.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/runtime/AttributeValidation.hpp"
+#include "gargantuan/runtime/ProtocolInput.hpp"
 #include "gargantuan/runtime/TagIndex.hpp"
 #include "gargantuan/runtime/WireCodec.hpp"
 
 #include <SDL3/SDL_log.h>
+#include <array>
+#include <cmath>
 #include <cstring>
 #include <istream>
 #include <memory>
+#include <limits>
 #include <nlohmann/json.hpp>
 #include <nlohmann/json_fwd.hpp>
 #include <optional>
@@ -205,6 +209,19 @@ namespace gargantuan::InstanceSerialization {
 	// Deserialization
 	// FIXME: Current path refers to the parent when it really should refer to
 	// the current child
+	namespace {
+		std::optional<std::string> ReadBoundedDocument(std::istream &Input) {
+			std::string Result;
+			std::array<char, 4096> Buffer{};
+			while (Input) {
+				Input.read(Buffer.data(), static_cast<std::streamsize>(Buffer.size()));
+				const auto Count = static_cast<std::size_t>(Input.gcount());
+				if (Count > MaximumProtocolDocumentBytes - Result.size()) return std::nullopt;
+				Result.append(Buffer.data(), Count);
+			}
+			return Result;
+		}
+	}
 
 	std::string DeserializationState::FormatCurrentPath() {
 		std::ostringstream stream;
@@ -217,7 +234,25 @@ namespace gargantuan::InstanceSerialization {
 		return stream.str();
 	}
 
-	std::optional<std::any> TryDeserializeProperty(json unknown, DeserializationState &state) {
+	std::optional<std::any> TryDeserializeProperty(const json &unknown, DeserializationState &state) {
+		auto DecodeFloat = [](const json &Value) -> std::optional<float> {
+			if (!Value.is_number()) return std::nullopt;
+			const auto Decoded = Value.get<double>();
+			if (!std::isfinite(Decoded) || Decoded < -std::numeric_limits<float>::max() ||
+				Decoded > std::numeric_limits<float>::max()) return std::nullopt;
+			return static_cast<float>(Decoded);
+		};
+		auto DecodeInt = [](const json &Value) -> std::optional<int> {
+			if (Value.is_number_unsigned()) {
+				const auto Decoded = Value.get<std::uint64_t>();
+				if (Decoded > static_cast<std::uint64_t>(std::numeric_limits<int>::max())) return std::nullopt;
+				return static_cast<int>(Decoded);
+			}
+			if (!Value.is_number_integer()) return std::nullopt;
+			const auto Decoded = Value.get<std::int64_t>();
+			if (Decoded < std::numeric_limits<int>::min() || Decoded > std::numeric_limits<int>::max()) return std::nullopt;
+			return static_cast<int>(Decoded);
+		};
 		if (unknown.size() == 0) return state.ReturnError("Missing explicit property to infer from");
 		if (unknown.size() > 1) return state.ReturnError("Got too many possible property types");
 
@@ -227,7 +262,7 @@ namespace gargantuan::InstanceSerialization {
 			return value.get<bool>();
 		} else if (unknown.contains("CFrame")) {
 			auto value = unknown["CFrame"];
-			if (!value.is_array() || value.size() < 12) {
+			if (!value.is_array() || value.size() != 12) {
 				return state.ReturnError("Expected CFrame to be an array of 12 components");
 			};
 
@@ -267,17 +302,23 @@ namespace gargantuan::InstanceSerialization {
 			auto r22 = value[11];
 			if (!r22.is_number()) return state.ReturnError("Expected R22 component to be a float");
 
+			auto X = DecodeFloat(x); auto Y = DecodeFloat(y); auto Z = DecodeFloat(z);
+			auto R00 = DecodeFloat(r00); auto R01 = DecodeFloat(r01); auto R02 = DecodeFloat(r02);
+			auto R10 = DecodeFloat(r10); auto R11 = DecodeFloat(r11); auto R12 = DecodeFloat(r12);
+			auto R20 = DecodeFloat(r20); auto R21 = DecodeFloat(r21); auto R22 = DecodeFloat(r22);
+			if (!X || !Y || !Z || !R00 || !R01 || !R02 || !R10 || !R11 || !R12 || !R20 || !R21 || !R22)
+				return state.ReturnError("CFrame contains a non-finite or out-of-range component");
 			return CFrame(
-				glm::vec3(x.get<float>(), y.get<float>(), z.get<float>()),
+				glm::vec3(*X, *Y, *Z),
 				glm::mat3(
-					glm::vec3(r00.get<float>(), r10.get<float>(), r20.get<float>()),
-					glm::vec3(r01.get<float>(), r11.get<float>(), r21.get<float>()),
-					glm::vec3(r02.get<float>(), r12.get<float>(), r22.get<float>())
+					glm::vec3(*R00, *R10, *R20),
+					glm::vec3(*R01, *R11, *R21),
+					glm::vec3(*R02, *R12, *R22)
 				)
 			);
 		} else if (unknown.contains("Color3")) {
 			auto value = unknown["Color3"];
-			if (!value.is_array() || value.size() < 3) {
+			if (!value.is_array() || value.size() != 3) {
 				return state.ReturnError("Expected Color3 to be an array of RGB components");
 			};
 
@@ -290,20 +331,34 @@ namespace gargantuan::InstanceSerialization {
 			auto b = value[2];
 			if (!b.is_number()) return state.ReturnError("Expected blue component to be a float");
 
-			return Color3(r.get<float>(), g.get<float>(), b.get<float>());
+			auto R = DecodeFloat(r); auto G = DecodeFloat(g); auto B = DecodeFloat(b);
+			if (!R || !G || !B) return state.ReturnError("Color3 contains a non-finite or out-of-range component");
+			return Color3(*R, *G, *B);
 		} else if (unknown.contains("Double")) {
 			auto value = unknown["Double"];
 			if (!value.is_number()) return state.ReturnError("Expected double");
-			return value.get<double>();
+			const auto Decoded = value.get<double>();
+			if (!std::isfinite(Decoded)) return state.ReturnError("Expected a finite double");
+			return Decoded;
 		} else if (unknown.contains("EnumItem")) {
 			auto value = unknown["EnumItem"];
-			if (!value.is_array()) return state.ReturnError("Expected EnumItem to be an array");
+			if (!value.is_array() || value.size() != 2) return state.ReturnError("Expected EnumItem to be an array of 2 strings");
 
 			auto enumType = value[0];
 			if (!enumType.is_string()) return state.ReturnError("Expected EnumType to be a string");
 
 			auto enumName = value[1];
 			if (!enumName.is_string()) return state.ReturnError("Expected EnumName to be a string");
+			try {
+				ValidateProtocolString(
+					enumType.get_ref<const std::string &>(), MaximumProtocolIdentifierBytes, "Persisted enum type"
+				);
+				ValidateProtocolString(
+					enumName.get_ref<const std::string &>(), MaximumProtocolIdentifierBytes, "Persisted enum item"
+				);
+			} catch (const std::exception &Error) {
+				return state.ReturnError("Invalid persisted enum identity: {}", Error.what());
+			}
 
 			auto enumTypeString = enumType.get<std::string>();
 			auto &enums = Enums::GetEnums();
@@ -320,10 +375,12 @@ namespace gargantuan::InstanceSerialization {
 		} else if (unknown.contains("Float")) {
 			auto value = unknown["Float"];
 			if (!value.is_number()) return state.ReturnError("Expected float");
-			return value.get<float>();
+			auto Decoded = DecodeFloat(value);
+			if (!Decoded) return state.ReturnError("Expected a finite in-range float");
+			return *Decoded;
 		} else if (unknown.contains("Vector3")) {
 			auto value = unknown["Vector3"];
-			if (!value.is_array()) return state.ReturnError("Expected Vector3 to be an array");
+			if (!value.is_array() || value.size() != 3) return state.ReturnError("Expected Vector3 to be an array of 3 components");
 
 			auto x = value[0];
 			if (!x.is_number()) return state.ReturnError("Expected X component to be a float");
@@ -334,18 +391,24 @@ namespace gargantuan::InstanceSerialization {
 			auto z = value[2];
 			if (!z.is_number()) return state.ReturnError("Expected Z component to be a float");
 
-			return glm::vec3(x.get<float>(), y.get<float>(), z.get<float>());
+			auto X = DecodeFloat(x); auto Y = DecodeFloat(y); auto Z = DecodeFloat(z);
+			if (!X || !Y || !Z) return state.ReturnError("Vector3 contains a non-finite or out-of-range component");
+			return glm::vec3(*X, *Y, *Z);
 		} else if (unknown.contains("Int")) {
 			auto value = unknown["Int"];
-			if (!value.is_number_integer()) return state.ReturnError("Expected int");
-			return value.get<int>();
+			auto Decoded = DecodeInt(value);
+			if (!Decoded) return state.ReturnError("Expected a signed 32-bit int");
+			return *Decoded;
 		} else if (unknown.contains("String")) {
 			auto value = unknown["String"];
 			if (!value.is_string()) return state.ReturnError("Expected string");
-			return value.get<std::string>();
+			const auto &Decoded = value.get_ref<const std::string &>();
+			try { ValidateProtocolString(Decoded, MaximumProtocolStringBytes, "Persisted string"); }
+			catch (const std::exception &Error) { return state.ReturnError("Invalid persisted string: {}", Error.what()); }
+			return Decoded;
 		} else if (unknown.contains("UDim")) {
 			auto value = unknown["UDim"];
-			if (!value.is_array()) return state.ReturnError("Expected UDim to be an array");
+			if (!value.is_array() || value.size() != 2) return state.ReturnError("Expected UDim to be an array of 2 components");
 
 			auto scale = value[0];
 			if (!scale.is_number()) return state.ReturnError("Expected Scale component to be a float");
@@ -353,10 +416,12 @@ namespace gargantuan::InstanceSerialization {
 			auto offset = value[1];
 			if (!offset.is_number_integer()) return state.ReturnError("Expected Offset component to be an integer");
 
-			return UDim(scale.get<float>(), offset.get<int>());
+			auto Scale = DecodeFloat(scale); auto Offset = DecodeInt(offset);
+			if (!Scale || !Offset) return state.ReturnError("UDim contains a non-finite or out-of-range component");
+			return UDim(*Scale, *Offset);
 		} else if (unknown.contains("Vector2")) {
 			auto value = unknown["Vector2"];
-			if (!value.is_array()) return state.ReturnError("Expected Vector2 to be an array");
+			if (!value.is_array() || value.size() != 2) return state.ReturnError("Expected Vector2 to be an array of 2 components");
 
 			auto x = value[0];
 			if (!x.is_number()) return state.ReturnError("Expected X component to be a float");
@@ -364,14 +429,16 @@ namespace gargantuan::InstanceSerialization {
 			auto y = value[1];
 			if (!y.is_number()) return state.ReturnError("Expected Y component to be a float");
 
-			return Vector2(x.get<float>(), y.get<float>());
+			auto X = DecodeFloat(x); auto Y = DecodeFloat(y);
+			if (!X || !Y) return state.ReturnError("Vector2 contains a non-finite or out-of-range component");
+			return Vector2(*X, *Y);
 		}
 
 		return state.ReturnError("Unsupported property value: %s", unknown.dump());
 	};
 
 	std::optional<std::shared_ptr<Instance>> TryDeserializeInstance(
-		json contents,
+		const json &contents,
 		DeserializationState &state,
 		bool requireAttributes,
 		bool requireTags,
@@ -379,24 +446,35 @@ namespace gargantuan::InstanceSerialization {
 		bool requireClassIdentity,
 		bool requireCustomProperties
 	) {
-		auto name = contents["Name"];
-		if (!name.is_string()) {
+		if (state.CurrentPath.size() > MaximumProtocolJsonDepth)
+			return state.ReturnError("Instance hierarchy exceeds its depth limit at {}", state.FormatCurrentPath());
+		if (state.ObjectsDecoded == MaximumPersistenceObjects)
+			return state.ReturnError("Instance document exceeds its object-count limit");
+		++state.ObjectsDecoded;
+		if (!contents.is_object())
+			return state.ReturnError("Instance {} is not an object", state.FormatCurrentPath());
+		if (!contents.contains("Name") || !contents["Name"].is_string()) {
 			state.PushError("Child under {}has an invalid Name field", state.FormatCurrentPath());
 			return std::nullopt;
 		}
+		const auto &name = contents["Name"];
+		try { ValidateProtocolString(name.get_ref<const std::string &>(), MaximumProtocolStringBytes, "Instance name"); }
+		catch (const std::exception &Error) { return state.ReturnError("Invalid Instance name: {}", Error.what()); }
 
 		state.CurrentPath.push_back(name.get<std::string>());
 
-		auto properties = contents["Properties"];
-		if (!properties.is_object()) {
+		if (!contents.contains("Properties") || !contents["Properties"].is_object()) {
 			state.PushError("Instance {} has an invalid Properties field", state.FormatCurrentPath());
 			return std::nullopt;
 		}
+		const auto &properties = contents["Properties"];
+		if (properties.size() > MaximumSnapshotPropertiesPerObject)
+			return state.ReturnError("Instance {} exceeds its property-count limit", state.FormatCurrentPath());
 		if (requireAttributes && (!contents.contains("Attributes") || !contents["Attributes"].is_object())) {
 			state.PushError("Instance {} has an invalid Attributes field", state.FormatCurrentPath());
 			return std::nullopt;
 		}
-		auto attributes = contents.contains("Attributes") ? contents["Attributes"] : json::object();
+		const auto attributes = contents.contains("Attributes") ? contents["Attributes"] : json::object();
 		if (!attributes.is_object()) {
 			state.PushError("Instance {} has an invalid Attributes field", state.FormatCurrentPath());
 			return std::nullopt;
@@ -430,11 +508,13 @@ namespace gargantuan::InstanceSerialization {
 			return std::nullopt;
 		}
 
-		auto children = contents["Children"];
-		if (!children.is_array()) {
+		if (!contents.contains("Children") || !contents["Children"].is_array()) {
 			state.PushError("Instance {} has an invalid Children field", state.FormatCurrentPath());
 			return std::nullopt;
 		}
+		const auto &children = contents["Children"];
+		if (children.size() > MaximumPersistenceObjects)
+			return state.ReturnError("Instance {} exceeds its child-count limit", state.FormatCurrentPath());
 
 		auto maybeClassName = contents["ClassName"];
 		if (!maybeClassName.is_string()) {
@@ -443,6 +523,8 @@ namespace gargantuan::InstanceSerialization {
 		}
 
 		auto className = maybeClassName.get<std::string>();
+		try { ValidateProtocolString(className, MaximumProtocolIdentifierBytes, "Persisted class name"); }
+		catch (const std::exception &Error) { return state.ReturnError("Invalid class name: {}", Error.what()); }
 		const InstanceClassDefinition *definition = nullptr;
 		if (requireClassIdentity) {
 			if (!contents.contains("ClassSchemaId") || !contents["ClassSchemaId"].is_string() ||
@@ -684,8 +766,15 @@ namespace gargantuan::InstanceSerialization {
 		case InstanceFormat::Json: {
 			json contents;
 			try {
-				contents = json::parse(input);
-			} catch (json::parse_error e) {
+				auto Encoded = ReadBoundedDocument(input);
+				if (!Encoded || Encoded->empty()) {
+					state.PushError("Instance document byte length is invalid");
+					return state;
+				}
+				ValidateProtocolJsonDocument(*Encoded);
+				contents = json::parse(*Encoded);
+				ValidateProtocolJsonTree(contents);
+			} catch (const std::exception &e) {
 				state.PushError("Failed to parse JSON: {}", e.what());
 				return state;
 			}
@@ -703,9 +792,15 @@ namespace gargantuan::InstanceSerialization {
 			}
 
 			const auto version = contents["Version"].get<int>();
-			auto maybeInstance = TryDeserializeInstance(
-				contents, state, version >= 1, version >= 2, version >= 3, version >= 4, version >= 4
-			);
+			std::optional<std::shared_ptr<Instance>> maybeInstance;
+			try {
+				maybeInstance = TryDeserializeInstance(
+					contents, state, version >= 1, version >= 2, version >= 3, version >= 4, version >= 4
+				);
+			} catch (const std::exception &Error) {
+				state.PushError("Failed to validate instance document: {}", Error.what());
+				return state;
+			}
 			if (maybeInstance.has_value()) {
 				try {
 					for (const auto &[instance, tags] : state.PendingTags) {

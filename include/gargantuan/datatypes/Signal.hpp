@@ -19,6 +19,19 @@
 namespace gargantuan {
 	G_ENUM(SignalType, Engine, User);
 
+	class ScopedSignalDeferral {
+	  public:
+		ScopedSignalDeferral();
+		~ScopedSignalDeferral();
+		void Commit();
+
+		ScopedSignalDeferral(const ScopedSignalDeferral &) = delete;
+		ScopedSignalDeferral &operator=(const ScopedSignalDeferral &) = delete;
+
+	  private:
+		bool Active = true;
+	};
+
 	G_SHARED_USERDATA_DECL(
 		SignalConnection, typedef std::shared_ptr<SignalConnection> Pointer;
 		typedef Userdata<SignalConnection, Pointer> Self;

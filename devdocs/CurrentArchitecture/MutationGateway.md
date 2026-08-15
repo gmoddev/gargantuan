@@ -23,7 +23,7 @@ Main-domain engine code
 ```
 
 `Engine::Step` drains queued commands before simulation and scripts. Submission
-is thread-safe and never applies state inline. `Apply` is synchronous for
+is thread-safe, bounded to 4,096 pending commands, and never applies state inline. `Apply` is synchronous for
 authoritative internal callers, but returns `WrongExecutionDomain` outside
 `Main`. Arbitrary Luau is not scheduled on workers.
 
@@ -34,6 +34,13 @@ Commands address existing objects with generation-checked `ObjectId` values.
 Stale or destroyed targets fail before mutation. Creation currently requires an
 owning parent so a newly created object has an authoritative owner; support for
 an explicit root/object store can broaden that later.
+
+Commands also carry a host-created `MutationAuthorityContext`. Local internal
+commands retain their existing security context. Studio and future authenticated
+peer contexts carry an assigned DataModel scope, and the gateway rejects targets,
+parents, and creates outside it. Authority metadata is not part of the decoded
+command payload and cannot be manufactured from names, hierarchy, or schema
+metadata.
 
 Property dispatch converges on `Instance::ApplyPropertyMutation`. It checks
 property existence, read-only and permission metadata, execution affinity,
@@ -85,15 +92,15 @@ though journal reads and commits are internally synchronized.
 
 ## Future work
 
-This pass does not implement command authentication, transactions, rollback, or
-transport. A mutation result is an
-in-process completion value, not a protocol response. A callback can still
-trigger a later synchronous mutation, so multi-object transaction boundaries
-and deferred notification safe points remain open design work.
+This pass does not implement command authentication, players, permissions,
+transport, or a generalized transaction/rollback subsystem. A mutation result
+is an in-process completion value, not a protocol response. Loopback batch
+preflight and notification deferral are narrow state-applicator safe points;
+ordinary synchronous native callbacks may still initiate a later mutation.
 
 The deterministic snapshot baseline, scoped versioned journal records,
-schema-driven property selection, and in-process source/receiver session are now
-implemented; see `SnapshotBaseline.md` and `LoopbackReplication.md`. Remaining
-work includes same-scope reference validation before commit, durable world
-identity, command-origin authority, transaction boundaries, hostile-input
-limits, and transport.
+schema-driven property selection, in-process source/receiver session, and
+protocol input hardening are now implemented; see `SnapshotBaseline.md`,
+`LoopbackReplication.md`, and `ProtocolInputHardening.md`. Remaining work
+includes durable world identity, real peer authentication, pure networking
+contracts, negotiated policy, and transport.

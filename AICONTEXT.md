@@ -68,7 +68,7 @@ Authoritative DataModel / live Instance graph
 | Rendering or viewport picking | `render-extraction.mdx` and `devdocs/CurrentArchitecture/EditorViewport.md` |
 | Studio, EditorHost, snapshots, journals, viewport IPC | `editor-host.mdx` plus the relevant `devdocs/CurrentArchitecture` protocol document |
 | Luau execution or permissions | `devdocs/CurrentArchitecture/ScriptSecurity.md` |
-| Game networking | `networking-architecture.mdx`; it is accepted future direction, not proof of current transport |
+| Game networking | `devdocs/CurrentArchitecture/ProtocolInputHardening.md`, then `networking-architecture.mdx`; no transport exists |
 
 ## Current implementation landmarks
 

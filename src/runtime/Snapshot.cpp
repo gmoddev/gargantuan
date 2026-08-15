@@ -11,6 +11,7 @@
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/runtime/ExecutionDomain.hpp"
 #include "gargantuan/runtime/AttributeValidation.hpp"
+#include "gargantuan/runtime/ProtocolInput.hpp"
 #include "gargantuan/runtime/WireCodec.hpp"
 
 #include <algorithm>
@@ -48,6 +49,15 @@ namespace gargantuan {
 			return DecodeWireValue(encoded);
 		}
 
+		bool HasOnlyFields(const Json &Value, std::initializer_list<std::string_view> Allowed) {
+			if (!Value.is_object()) return false;
+			for (const auto &[Name, Child] : Value.items()) {
+				(void)Child;
+				if (std::find(Allowed.begin(), Allowed.end(), Name) == Allowed.end()) return false;
+			}
+			return true;
+		}
+
 		void CollectObjects(
 			const std::shared_ptr<Instance> &instance,
 			std::vector<std::shared_ptr<Instance>> &objects,
@@ -57,6 +67,155 @@ namespace gargantuan {
 			instance->AssertIsAlive();
 			objects.push_back(instance);
 			for (const auto &child : instance->Children) CollectObjects(child, objects, visited);
+		}
+
+		void ValidateSnapshotForLoad(const Snapshot &SnapshotValue) {
+			if (SnapshotValue.Version != SnapshotFormatVersion || !SnapshotValue.Cursor.Scope.IsValid() ||
+				SnapshotValue.Cursor.NextSequence == 0 || SnapshotValue.Objects.empty() ||
+				SnapshotValue.Objects.size() > MaximumSnapshotObjects)
+				throw std::invalid_argument("Snapshot envelope is invalid or oversized");
+
+			std::unordered_map<WireObjectId, const SnapshotObject *> Objects;
+			std::size_t RootCount = 0;
+			for (const auto &Object : SnapshotValue.Objects) {
+				if (!Object.Id.IsValid() || !Objects.emplace(Object.Id, &Object).second)
+					throw std::invalid_argument("Snapshot contains an invalid or duplicate ObjectId");
+				if (!Object.Parent) ++RootCount;
+			}
+			if (RootCount != 1)
+				throw std::invalid_argument("Snapshot must contain exactly one root");
+
+			const auto &Schema = GetActiveRuntimeSchemaRegistry();
+			for (const auto &Object : SnapshotValue.Objects) {
+				ValidateProtocolString(Object.ClassName, MaximumProtocolIdentifierBytes, "Snapshot class name");
+				ValidateProtocolString(Object.Name, MaximumProtocolStringBytes, "Snapshot object name");
+				auto *Definition = InstanceClassRegistry::GetDefinitionBySchemaId(Object.ClassSchemaId);
+				const auto ExpectedName = Definition && Definition->ConstructionKind == SchemaClassConstructionKind::CustomData
+					? Definition->CanonicalName : Definition ? Definition->ClassName : std::string{};
+				if (!Definition || Definition->DefinitionVersion != Object.ClassDefinitionVersion ||
+					!InstanceClassRegistry::IsConstructible(*Definition) || Object.ClassName != ExpectedName)
+					throw std::invalid_argument("Snapshot class identity/version is incompatible");
+				if (Object.Parent && !Objects.contains(*Object.Parent))
+					throw std::invalid_argument("Snapshot parent is outside the receiving scope");
+				if (Object.Properties.size() > MaximumSnapshotPropertiesPerObject)
+					throw std::invalid_argument("Snapshot property count exceeds its limit");
+
+				for (const auto &[Name, Value] : Object.Properties) {
+					ValidateProtocolString(Name, MaximumProtocolIdentifierBytes, "Snapshot property name");
+					ValidateProtocolWireValue(Value);
+					auto PropertyPosition = Definition->AllProperties.find(Name);
+					auto *Property = PropertyPosition == Definition->AllProperties.end() ? nullptr : PropertyPosition->second;
+					if (!Property || Property->ReplicationPolicy != InstanceProperty::Replication::FutureReplicated ||
+						!Property->Write)
+						throw std::invalid_argument("Snapshot contains an unknown or non-replicated property");
+					if (std::holds_alternative<std::monostate>(Value) ||
+						std::holds_alternative<WireObjectReference>(Value)) {
+						if (!Property->WriteObjectReference)
+							throw std::invalid_argument("Snapshot uses a reference for a value property");
+						if (const auto *Reference = std::get_if<WireObjectReference>(&Value);
+							Reference && !Objects.contains(Reference->Object))
+							throw std::invalid_argument("Snapshot reference is outside the receiving scope");
+					} else if (const auto *EnumValue = std::get_if<WireEnumItem>(&Value)) {
+						if (!Property->WriteEnumValue || Property->ReflectedTypedef != "Enum." + EnumValue->EnumType)
+							throw std::invalid_argument("Snapshot enum does not match its reflected property");
+						auto EnumType = Enums::GetEnums().find(EnumValue->EnumType);
+						if (EnumType == Enums::GetEnums().end() || !EnumType->second->FromName(EnumValue->Item))
+							throw std::invalid_argument("Snapshot enum identity is unknown");
+					} else {
+						auto Native = DecodeNativeValue(Value);
+						if (!Native || (Property->Validate && !Property->Validate(*Native)))
+							throw std::invalid_argument("Snapshot property value is invalid");
+					}
+				}
+
+				for (const auto &[Name, Value] : Object.Attributes) {
+					(void)Name;
+					ValidateProtocolWireValue(Value);
+				}
+				(void)ValidateAttributeCollection(Object.Attributes);
+				if (Object.Extensions.size() > MaximumCustomExtensionDefinitions)
+					throw std::invalid_argument("Snapshot extension state exceeds its definition limit");
+				std::size_t ExtensionCount = 0;
+				std::size_t ExtensionBytes = 0;
+				std::optional<SchemaId> PreviousExtension;
+				for (const auto &State : Object.Extensions) {
+					auto *Extension = Schema.FindExtensionById(State.ExtensionSchemaId);
+					if (!Extension || Extension->DefinitionVersion != State.DefinitionVersion ||
+						(PreviousExtension && !(*PreviousExtension < State.ExtensionSchemaId)) ||
+						!Schema.IsExtensionApplicableToClass(State.ExtensionSchemaId, Definition->Id) ||
+						State.Properties.empty() || State.Properties.size() > MaximumExtensionProperties)
+						throw std::invalid_argument("Snapshot extension state is incompatible");
+					PreviousExtension = State.ExtensionSchemaId;
+					for (const auto &[Name, Value] : State.Properties) {
+						ValidateProtocolWireValue(Value);
+						auto *Property = Schema.FindExtensionProperty(State.ExtensionSchemaId, Name);
+						if (!Property || Value == Property->DefaultValue)
+							throw std::invalid_argument("Snapshot extension property state is non-canonical");
+						++ExtensionCount;
+						ExtensionBytes += sizeof(SchemaId) + sizeof(State.DefinitionVersion) + Name.size() +
+							ValidateSchemaExtensionPropertyValue(Property->Type, Value);
+						if (ExtensionCount > MaximumExtensionOverridesPerInstance ||
+							ExtensionBytes > MaximumExtensionOverrideBytesPerInstance)
+							throw std::invalid_argument("Snapshot extension state exceeds its sparse-state limit");
+					}
+				}
+
+				if (Object.CustomProperties.size() > MaximumCustomClassInheritanceDepth)
+					throw std::invalid_argument("Snapshot custom property state exceeds its owner limit");
+				std::size_t CustomCount = 0;
+				std::size_t CustomBytes = 0;
+				std::optional<SchemaId> PreviousOwner;
+				for (const auto &State : Object.CustomProperties) {
+					auto *Owner = Schema.FindClassById(State.DeclaringClassSchemaId);
+					if (!Owner || Owner->ConstructionKind != SchemaClassConstructionKind::CustomData ||
+						Owner->DefinitionVersion != State.DefinitionVersion ||
+						(PreviousOwner && !(*PreviousOwner < State.DeclaringClassSchemaId)) ||
+						!Schema.IsClassDerivedFrom(Definition->Id, State.DeclaringClassSchemaId) ||
+						State.Properties.empty() || State.Properties.size() > MaximumCustomClassProperties)
+						throw std::invalid_argument("Snapshot custom property state is incompatible");
+					PreviousOwner = State.DeclaringClassSchemaId;
+					for (const auto &[Name, Value] : State.Properties) {
+						ValidateProtocolWireValue(Value);
+						auto *Property = Schema.FindCustomClassProperty(State.DeclaringClassSchemaId, Name);
+						if (!Property || Value == Property->DefaultValue)
+							throw std::invalid_argument("Snapshot custom property state is non-canonical");
+						++CustomCount;
+						CustomBytes += sizeof(SchemaId) + sizeof(State.DefinitionVersion) + Name.size() +
+							ValidateSchemaExtensionPropertyValue(Property->Type, Value);
+						if (CustomCount > MaximumCustomPropertyOverridesPerInstance ||
+							CustomBytes > MaximumCustomPropertyOverrideBytesPerInstance)
+							throw std::invalid_argument("Snapshot custom property state exceeds its sparse-state limit");
+					}
+				}
+
+				if (Object.Tags.size() > MaximumTagsPerInstance)
+					throw std::invalid_argument("Snapshot tag state exceeds its limit");
+				std::set<std::string> Tags;
+				for (const auto &Tag : Object.Tags) {
+					ValidateTagName(Tag);
+					if (!Tags.insert(Tag).second) throw std::invalid_argument("Snapshot contains duplicate tags");
+				}
+			}
+
+			std::unordered_map<WireObjectId, std::uint8_t> VisitState;
+			VisitState.reserve(Objects.size());
+			for (const auto &[Start, Object] : Objects) {
+				(void)Object;
+				if (VisitState[Start] == 2) continue;
+				std::vector<WireObjectId> Path;
+				auto Current = Start;
+				while (true) {
+					auto &State = VisitState[Current];
+					if (State == 1) throw std::invalid_argument("Snapshot hierarchy contains a cycle");
+					if (State == 2) break;
+					State = 1;
+					Path.push_back(Current);
+					auto Position = Objects.find(Current);
+					if (Position == Objects.end() || !Position->second->Parent) break;
+					Current = *Position->second->Parent;
+				}
+				for (const auto Id : Path) VisitState[Id] = 2;
+			}
 		}
 	}
 
@@ -199,6 +358,12 @@ namespace gargantuan {
 
 	SnapshotParseResult DeserializeSnapshot(std::string_view serialized) {
 		SnapshotParseResult result;
+		try {
+			ValidateProtocolJsonDocument(serialized);
+		} catch (const std::exception &Error) {
+			result.Errors.push_back(Error.what());
+			return result;
+		}
 		Json document;
 		try {
 			document = Json::parse(serialized);
@@ -207,14 +372,20 @@ namespace gargantuan {
 			return result;
 		}
 		try {
-			if (!document.is_object() || document.value("Version", 0u) != SnapshotFormatVersion ||
+			ValidateProtocolJsonTree(document);
+			if (!HasOnlyFields(document, {"Version", "Cursor", "Objects"}) || document.size() != 3 ||
+				document.value("Version", 0u) != SnapshotFormatVersion ||
 				!document.contains("Cursor") || !document["Cursor"].is_object() ||
+				!HasOnlyFields(document["Cursor"], {"Scope", "NextSequence"}) ||
+				document["Cursor"].size() != 2 ||
 				!document["Cursor"].contains("Scope") || !document["Cursor"].contains("NextSequence") ||
 				!document["Cursor"]["NextSequence"].is_number_unsigned() ||
 				!document.contains("Objects") || !document["Objects"].is_array()) {
 				result.Errors.push_back("Invalid or unsupported snapshot envelope");
 				return result;
 			}
+			if (document["Objects"].empty() || document["Objects"].size() > MaximumSnapshotObjects)
+				throw std::invalid_argument("Snapshot object count is outside its supported range");
 
 			Snapshot snapshot;
 			auto cursorScope = DecodeId(document["Cursor"]["Scope"]);
@@ -230,7 +401,10 @@ namespace gargantuan {
 			}
 
 			for (const auto &encoded : document["Objects"]) {
-				if (!encoded.is_object() || !encoded.contains("Id") || !encoded.contains("ClassSchemaId") ||
+				if (!HasOnlyFields(encoded, {
+						"Id", "ClassSchemaId", "ClassDefinitionVersion", "ClassName", "Name", "Parent",
+						"Properties", "Attributes", "Extensions", "CustomProperties", "Tags"
+					}) || encoded.size() != 11 || !encoded.contains("Id") || !encoded.contains("ClassSchemaId") ||
 					!encoded["ClassSchemaId"].is_string() || !encoded.contains("ClassDefinitionVersion") ||
 					!encoded["ClassDefinitionVersion"].is_number_unsigned() || !encoded.contains("ClassName") ||
 					!encoded["ClassName"].is_string() || !encoded.contains("Name") || !encoded["Name"].is_string() ||
@@ -242,6 +416,14 @@ namespace gargantuan {
 					result.Errors.push_back("Invalid snapshot object");
 					return result;
 				}
+				ValidateProtocolString(
+					encoded["ClassName"].get_ref<const std::string &>(), MaximumProtocolIdentifierBytes, "Snapshot class name"
+				);
+				ValidateProtocolString(
+					encoded["Name"].get_ref<const std::string &>(), MaximumProtocolStringBytes, "Snapshot object name"
+				);
+				if (encoded["Properties"].size() > MaximumSnapshotPropertiesPerObject)
+					throw std::invalid_argument("Snapshot property count exceeds its limit");
 
 				auto id = DecodeId(encoded["Id"]);
 				if (!id) {
@@ -276,6 +458,7 @@ namespace gargantuan {
 				}
 
 				for (const auto &[name, encodedValue] : encoded["Properties"].items()) {
+					ValidateProtocolString(name, MaximumProtocolIdentifierBytes, "Snapshot property name");
 					auto value = DecodeValue(encodedValue);
 					if (!value) {
 						result.Errors.push_back("Invalid wire value for property " + name);
@@ -283,6 +466,8 @@ namespace gargantuan {
 					}
 					object.Properties.emplace(name, std::move(*value));
 				}
+				if (encoded["Attributes"].size() > MaximumAttributesPerInstance)
+					throw std::invalid_argument("Snapshot attribute count exceeds its limit");
 				for (const auto &[name, encodedValue] : encoded["Attributes"].items()) {
 					auto value = DecodeValue(encodedValue);
 					if (!value) {
@@ -298,7 +483,8 @@ namespace gargantuan {
 				std::size_t ExtensionOverrideCount = 0;
 				std::size_t ExtensionOverrideBytes = 0;
 				for (const auto &encodedExtension : encoded["Extensions"]) {
-					if (!encodedExtension.is_object() || !encodedExtension.contains("ExtensionSchemaId") ||
+					if (!HasOnlyFields(encodedExtension, {"ExtensionSchemaId", "DefinitionVersion", "Properties"}) ||
+						encodedExtension.size() != 3 || !encodedExtension.contains("ExtensionSchemaId") ||
 						!encodedExtension["ExtensionSchemaId"].is_string() ||
 						!encodedExtension.contains("DefinitionVersion") ||
 						!encodedExtension["DefinitionVersion"].is_number_unsigned() ||
@@ -342,7 +528,8 @@ namespace gargantuan {
 				std::size_t CustomOverrideCount = 0;
 				std::size_t CustomOverrideBytes = 0;
 				for (const auto &encodedState : encoded["CustomProperties"]) {
-					if (!encodedState.is_object() || !encodedState.contains("DeclaringClassSchemaId") ||
+					if (!HasOnlyFields(encodedState, {"DeclaringClassSchemaId", "DefinitionVersion", "Properties"}) ||
+						encodedState.size() != 3 || !encodedState.contains("DeclaringClassSchemaId") ||
 						!encodedState["DeclaringClassSchemaId"].is_string() ||
 						!encodedState.contains("DefinitionVersion") || !encodedState["DefinitionVersion"].is_number_unsigned() ||
 						!encodedState.contains("Properties") || !encodedState["Properties"].is_object())
@@ -379,6 +566,8 @@ namespace gargantuan {
 					object.CustomProperties.push_back(std::move(state));
 				}
 				std::set<std::string> uniqueTags;
+				if (encoded["Tags"].size() > MaximumTagsPerInstance)
+					throw std::invalid_argument("Snapshot tag count exceeds its limit");
 				for (const auto &tag : encoded["Tags"]) {
 					if (!tag.is_string()) throw std::invalid_argument("Snapshot tag is not a string");
 					auto name = tag.get<std::string>();
@@ -399,9 +588,10 @@ namespace gargantuan {
 	SnapshotLoadResult LoadSnapshot(const Snapshot &snapshot) {
 		AssertAuthoritativeMutation("LoadSnapshot");
 		SnapshotLoadResult result;
-		if (snapshot.Version != SnapshotFormatVersion || !snapshot.Cursor.Scope.IsValid() ||
-			snapshot.Cursor.NextSequence == 0) {
-			result.Errors.push_back("Unsupported snapshot version");
+		try {
+			ValidateSnapshotForLoad(snapshot);
+		} catch (const std::exception &Error) {
+			result.Errors.push_back(Error.what());
 			return result;
 		}
 		const auto rootObject = std::find_if(
@@ -521,6 +711,8 @@ namespace gargantuan {
 			}
 		} catch (const std::exception &error) {
 			result.Errors.push_back(error.what());
+			result.Root.reset();
+			result.Objects.clear();
 		}
 		return result;
 	}
