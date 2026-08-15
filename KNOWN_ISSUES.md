@@ -4,32 +4,6 @@ This file tracks verified current defects and engineering gaps that are useful
 to contributors but do not belong in the feature roadmap. An entry remains
 open until its resolution criteria are implemented and verified.
 
-## KI-001: Render pass labels prevent a clean Windows compile
-
-- Status: Open
-- Priority: High
-- Area: Rendering and Windows build portability
-- Upstream reference: [teamfireworks/gargantuan#34](https://github.com/teamfireworks/gargantuan/issues/34)
-- Relevant code:
-  - `include/gargantuan/render/RenderPass.hpp`
-  - `src/render/passes/GuiPass.cpp`
-  - `src/render/passes/OpaquePass.cpp`
-  - `src/render/passes/ShadowPass.cpp`
-  - `src/scripting/LibVector3.cpp`
-
-`RenderPass` declares an uninitialized `static constexpr std::string LABEL`,
-which is ill-formed. Derived render passes use `std::string_view` labels, and
-`LibVector3.cpp` calls `std::strcmp` without directly including `<cstring>`.
-
-The upstream fix in commit
-[`b041227`](https://github.com/teamfireworks/gargantuan/commit/b0412279a10cd70d202ff6f38223d793795a2fdc)
-corrects the derived labels and missing include but leaves the invalid base
-declaration unchanged. Do not cherry-pick it as-is.
-
-Resolution requires one consistent compile-time label representation across
-the base and derived render passes, the explicit `<cstring>` include, and a
-successful Windows build.
-
 ## KI-002: Box3D diagnostics are not integrated with engine logging
 
 - Status: Open
@@ -70,23 +44,6 @@ cannot recursively import itself, reports malformed models with actionable
 paths, and has coverage for successful imports, malformed files, cycles or
 self-reference, and depth/count limits.
 
-## KI-004: Project names are interpolated into JSON without escaping
-
-- Status: Open
-- Priority: Medium
-- Area: Project creation and persistence
-- Relevant code:
-  - `src/filesystem/Project.cpp`
-
-When `Project::fromInit` creates a placeholder DataModel, it concatenates
-`projectName` directly into a JSON string. Quotes, backslashes, control
-characters, or other JSON-sensitive content can produce an invalid project
-file or alter its structure.
-
-Resolution requires constructing the placeholder through the JSON encoder used
-by project persistence, followed by round-trip tests for ordinary names,
-quotes, backslashes, Unicode, and control characters.
-
 ## KI-005: BasePart property edits do not synchronize existing Box3D bodies
 
 - Status: Open
@@ -108,26 +65,6 @@ Resolution requires an explicit Main-domain body-update protocol that applies
 committed property changes at a safe physics boundary, preserves body and
 constraint lifecycle, and tests transform, geometry, body type, sensor/contact,
 and repeated-edit behavior.
-
-## KI-006: Vector2 arithmetic regression is disabled after a reported crash
-
-- Status: Open; reproduction required
-- Priority: High
-- Area: Luau datatype bindings
-- Relevant code:
-  - `src/datatypes/Vector2.spec.luau`
-  - `src/datatypes/Vector2.cpp`
-
-The arithmetic-operator test is commented out with a note that it apparently
-segfaults Gargantuan. The current bindings still expose `__add`, `__sub`,
-`__mul`, and `__div`, so ordinary Luau arithmetic reaches an unverified native
-path. The current environment has not independently reproduced which operator
-or operand order triggers the crash.
-
-Resolution requires isolating every vector/vector and vector/scalar operand
-order under native and sanitizer coverage, converting invalid operands into
-ordinary Luau errors, fixing any unsafe receiver or stack handling, and
-reenabling the regression test.
 
 ## Maintenance rules
 

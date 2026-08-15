@@ -5,6 +5,8 @@
 #include <lua.h>
 #include <lualib.h>
 
+#include <cstring>
+
 namespace gargantuan {
 	int Vector3_Abs(lua_State *L) {
 		glm::vec3 self = StackValue<glm::vec3>::From(L, 1);

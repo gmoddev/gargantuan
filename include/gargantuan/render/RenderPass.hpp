@@ -5,6 +5,8 @@
 
 #include <SDL3/SDL.h>
 
+#include <string_view>
+
 namespace gargantuan {
 	class GpuMeshCache;
 
@@ -29,7 +31,7 @@ namespace gargantuan {
 
 	class RenderPass {
 	  public:
-		static constexpr std::string LABEL;
+		static constexpr std::string_view LABEL = "RenderPass";
 
 		Shader Shader;
 		SDL_GPUGraphicsPipeline *Pipeline = nullptr;

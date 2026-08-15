@@ -8,6 +8,8 @@
 #include "gargantuan/datatypes/Vector2.hpp"
 #include "gargantuan/editor/EditorHost.hpp"
 #include "gargantuan/editor/EditorViewport.hpp"
+#include "gargantuan/filesystem/DiskFilesystem.hpp"
+#include "gargantuan/filesystem/Project.hpp"
 #include "gargantuan/render/RenderExtractor.hpp"
 #include "gargantuan/render/RenderProjection.hpp"
 #include "gargantuan/render/Renderer.hpp"
@@ -3220,6 +3222,40 @@ namespace {
 		Journal.Clear();
 	}
 
+	void TestProjectCreationJsonNames() {
+		using Json = nlohmann::ordered_json;
+		using namespace gargantuan;
+		const auto TemporaryRoot = std::filesystem::temp_directory_path() /
+			("gargantuan-project-name-" + std::to_string(
+				std::chrono::steady_clock::now().time_since_epoch().count()
+			));
+		struct TemporaryProjectCleanup {
+			std::filesystem::path Root;
+			~TemporaryProjectCleanup() { std::filesystem::remove_all(Root); }
+		} Cleanup{TemporaryRoot};
+
+		const std::vector<std::string> Names{
+			"Ordinary Project",
+			"Quoted \"Project\"",
+			R"(Backslash\Project)",
+			"Unicode \xE2\x98\x83",
+			"Line\nTab\tControl\x01",
+		};
+		for (std::size_t Index = 0; Index < Names.size(); ++Index) {
+			const auto CaseRoot = TemporaryRoot / std::to_string(Index);
+			std::filesystem::create_directories(CaseRoot);
+			DiskFilesystem Filesystem(CaseRoot);
+			auto Created = Project::fromInit(&Filesystem, Names[Index]);
+			const auto Contents = Filesystem.ReadFileToString(Created.InstanceFilePath);
+			const auto Document = Json::parse(Contents, nullptr, false);
+			Check(
+				!Document.is_discarded() && Document.is_object() &&
+					Document.value("Name", std::string{}) == Names[Index],
+				"project creation JSON round-trips names through the canonical encoder"
+			);
+		}
+	}
+
 	void TestEditorHostProtocol() {
 		using Json = nlohmann::ordered_json;
 		using namespace gargantuan;
@@ -3804,6 +3840,7 @@ int main() {
 	TestSharedFrameRing();
 	TestClassExtensionRuntime();
 	TestCustomClassRuntime();
+	TestProjectCreationJsonNames();
 	TestEditorHostProtocol();
 	TestLuauExceptionBoundary();
 	TestLuauEmbeddingCompatibility();

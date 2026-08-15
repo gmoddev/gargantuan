@@ -161,13 +161,7 @@ namespace gargantuan {
 	}
 
 	void BaseFilesystem::WriteStringToFile(const std::filesystem::path &path, std::string contents) {
-		if (!Exists(path)) {
-			throw std::runtime_error(
-				std::format("File {} does not exist", path.string())
-			);
-		}
-
-		if (Type(path) != FileType::File) {
+		if (Exists(path) && Type(path) != FileType::File) {
 			throw std::runtime_error(
 				std::format("{} is not a file", path.string())
 			);
