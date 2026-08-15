@@ -254,6 +254,8 @@ namespace gargantuan {
 				auto *classDefinition = InstanceClassRegistry::GetDefinitionByName(object.ClassName);
 				if (!classDefinition) throw std::invalid_argument("Snapshot class definition is missing");
 				std::optional<SchemaId> previousExtensionId;
+				std::size_t ExtensionOverrideCount = 0;
+				std::size_t ExtensionOverrideBytes = 0;
 				for (const auto &encodedExtension : encoded["Extensions"]) {
 					if (!encodedExtension.is_object() || !encodedExtension.contains("ExtensionSchemaId") ||
 						!encodedExtension["ExtensionSchemaId"].is_string() ||
@@ -279,7 +281,12 @@ namespace gargantuan {
 						auto *property = GetActiveRuntimeSchemaRegistry().FindExtensionProperty(*extensionId, name);
 						auto value = DecodeValue(encodedValue);
 						if (!property || !value) throw std::invalid_argument("Snapshot extension property is malformed or unknown");
-						(void)ValidateSchemaExtensionPropertyValue(property->Type, *value);
+						++ExtensionOverrideCount;
+						ExtensionOverrideBytes += sizeof(SchemaId) + sizeof(extension->DefinitionVersion) + name.size() +
+							ValidateSchemaExtensionPropertyValue(property->Type, *value);
+						if (ExtensionOverrideCount > MaximumExtensionOverridesPerInstance ||
+							ExtensionOverrideBytes > MaximumExtensionOverrideBytesPerInstance)
+							throw std::invalid_argument("Snapshot exceeds its per-Instance extension override limits");
 						if (*value == property->DefaultValue)
 							throw std::invalid_argument("Snapshot redundantly stores an extension default");
 						state.Properties.emplace(name, std::move(*value));

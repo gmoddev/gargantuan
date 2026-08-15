@@ -1157,6 +1157,35 @@ namespace {
 					Properties={ Damage={ Type="Integer", Default=0 } } })
 			)", "extension-capability", {ScriptExecutionDomain::PreRun, {}});
 		}, "PreRun domain without DefineSchema cannot register an extension");
+
+		RuntimeSchemaLifecycle Malformed;
+		Prepare(Malformed);
+		try {
+			ExecutePreRunRegistration(Malformed, authority, R"(
+				Schema:RegisterExtension({ Namespace="Game", Name="BadDefault", Version=1, Target="Test.PreRunHost",
+					Properties={ Damage={ Type="Integer", Default="0" } } })
+			)", "extension-malformed-diagnostic");
+			Check(false, "malformed extension registration is rejected");
+		} catch (const PreRunRegistrationError &Error) {
+			Check(Error.GetDiagnostic().Code == PreRunDiagnosticCode::SchemaRegistrationError &&
+				Error.GetDiagnostic().Definition == "Game.BadDefault",
+				"malformed extension registration reports its schema failure class and definition context");
+		}
+
+		RuntimeSchemaLifecycle LaterRuntimeFailure;
+		Prepare(LaterRuntimeFailure);
+		try {
+			ExecutePreRunRegistration(LaterRuntimeFailure, authority, R"(
+				Schema:RegisterExtension({ Namespace="Game", Name="ValidThenAbort", Version=1, Target="Test.PreRunHost",
+					Properties={ Damage={ Type="Integer", Default=0 } } })
+				error("abort after extension registration")
+			)", "extension-runtime-diagnostic");
+			Check(false, "runtime failure after extension registration is rejected");
+		} catch (const PreRunRegistrationError &Error) {
+			Check(Error.GetDiagnostic().Code == PreRunDiagnosticCode::RuntimeError &&
+				Error.GetDiagnostic().Definition.empty(),
+				"a later script failure is not misclassified as an extension registration failure");
+		}
 	}
 
 	void TestRenderSnapshotExtraction() {
@@ -2155,6 +2184,14 @@ namespace {
 				},
 			})
 		)";
+		for (std::size_t ExtensionIndex = 0; ExtensionIndex < 3; ++ExtensionIndex) {
+			preRun << "Schema:RegisterExtension({ Namespace='Game.Bounds', Name='Dense" << ExtensionIndex <<
+				"', Version=1, Target='Engine.BasePart', Properties={";
+			const auto PropertyCount = ExtensionIndex < 2 ? MaximumExtensionProperties : 1;
+			for (std::size_t PropertyIndex = 0; PropertyIndex < PropertyCount; ++PropertyIndex)
+				preRun << "Value" << PropertyIndex << "={ Type='Integer', Default=0 },";
+			preRun << "} })\n";
+		}
 		preRun.close();
 		BootstrapProjectRuntimeSchema(temporaryRoot);
 		const auto extensionId = SchemaId::FromExtensionName("Game.Combat", "CombatProperties");
@@ -2169,6 +2206,28 @@ namespace {
 		part->SetParent(game);
 		auto unrelated = std::make_shared<Folder>();
 		unrelated->SetParent(game);
+		auto BoundedPart = std::make_shared<Part>();
+		for (std::size_t ExtensionIndex = 0; ExtensionIndex < 2; ++ExtensionIndex) {
+			const auto BoundedExtensionId = SchemaId::FromExtensionName(
+				"Game.Bounds", "Dense" + std::to_string(ExtensionIndex)
+			);
+			for (std::size_t PropertyIndex = 0; PropertyIndex < MaximumExtensionProperties; ++PropertyIndex)
+				Check(BoundedPart->ApplyExtensionPropertyMutation(
+					BoundedExtensionId,
+					1,
+					"Value" + std::to_string(PropertyIndex),
+					1,
+					ScriptSecurityContext::CoreTrusted()
+				) == MutationStatus::Success, "extension runtime accepts its exact per-Instance override count limit");
+		}
+		Check(BoundedPart->GetExtensionPropertyOverrides().size() == 2,
+			"exactly bounded extension overrides remain grouped by canonical extension identity");
+		MutationGateway BoundedGateway;
+		Check(BoundedGateway.Apply(UpdateExtensionPropertyCommand{
+			BoundedPart->GetObjectId(), SchemaId::FromExtensionName("Game.Bounds", "Dense2"), 1, "Value0", 1
+		}, ScriptSecurityContext::CoreTrusted()).Status == MutationStatus::ValidationFailed,
+			"extension runtime rejects one override beyond its per-Instance count limit");
+		BoundedPart->Destroy();
 		Check(std::get<int>(part->GetExtensionPropertyValue(extensionId, "Damage")) == 0,
 			"missing extension override reads the immutable schema default");
 		CheckThrows<std::invalid_argument>([&] {
@@ -2222,6 +2281,23 @@ namespace {
 			"snapshot v5 carries sparse extension overrides with stable identity and version");
 		auto parsedSnapshot = DeserializeSnapshot(SerializeSnapshot(snapshot));
 		Check(parsedSnapshot.Succeeded(), "extension snapshot state round-trips through the bounded wire format");
+		auto OversizedSnapshot = snapshot;
+		auto OversizedPart = std::find_if(OversizedSnapshot.Objects.begin(), OversizedSnapshot.Objects.end(), [](const auto &Object) {
+			return Object.Name == "ExtendedPart";
+		});
+		for (std::size_t ExtensionIndex = 0; ExtensionIndex < 2; ++ExtensionIndex) {
+			SnapshotExtensionState State{
+				SchemaId::FromExtensionName("Game.Bounds", "Dense" + std::to_string(ExtensionIndex)), 1, {}
+			};
+			for (std::size_t PropertyIndex = 0; PropertyIndex < MaximumExtensionProperties; ++PropertyIndex)
+				State.Properties.emplace("Value" + std::to_string(PropertyIndex), 1);
+			OversizedPart->Extensions.push_back(std::move(State));
+		}
+		std::sort(OversizedPart->Extensions.begin(), OversizedPart->Extensions.end(), [](const auto &Left, const auto &Right) {
+			return Left.ExtensionSchemaId < Right.ExtensionSchemaId;
+		});
+		Check(!DeserializeSnapshot(SerializeSnapshot(OversizedSnapshot)).Succeeded(),
+			"snapshot parsing rejects extension state beyond the canonical per-Instance override limit");
 
 		auto started = InProcessReplicationSession::Start(game);
 		Check(started.Succeeded(), "loopback replication materializes extension state from the initial snapshot");

@@ -103,8 +103,9 @@ definition version and selects the active set by registry generation. Studio
 has read-only discovery; it cannot register or modify definitions.
 
 Extension values are sparse per-Instance runtime state distinct from Attributes.
-Missing overrides read the frozen default. Luau reads/writes by extension plus
-property identity, and writes require `MutateDataModel` through
+Missing overrides read the frozen default. Each Instance is limited to 128
+physical overrides and 32 KiB of aggregate extension state. Luau reads/writes by
+extension plus property identity, and writes require `MutateDataModel` through
 `MutationGateway`; `DefineSchema` grants no runtime authority. Persistence
 version 3 and snapshot/journal version 5 carry extension ID, exact definition
 version, property identity, and typed value. Target, kind, version, and type

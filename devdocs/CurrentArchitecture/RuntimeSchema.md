@@ -100,8 +100,8 @@ Extension values are sparse per-Instance overrides keyed by extension
 `SchemaId` and property name. Missing storage reads the frozen default. A write
 resolves extension identity/version, target applicability, property identity,
 and exact type against the active frozen registry. Setting the default removes
-the physical override. Per-Instance state is bounded by override count and a
-32 KiB aggregate encoded payload.
+the physical override. Per-Instance state is bounded to 128 overrides and a 32
+KiB aggregate encoded payload.
 
 Luau uses `GetExtensionProperty(extension, property)` and
 `SetExtensionProperty(extension, property, value)`. Reads require

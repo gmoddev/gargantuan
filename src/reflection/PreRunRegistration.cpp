@@ -211,6 +211,9 @@ namespace gargantuan {
 
 		int RegisterExtension(lua_State *L) {
 			auto &state = GetState(L);
+			state.Failure = PreRunDiagnosticCode::SchemaRegistrationError;
+			state.HasFailure = true;
+			state.CurrentDefinition.clear();
 			try {
 				if (!state.Security.HasCapability(ScriptCapability::DefineSchema))
 					throw std::runtime_error("Schema registration requires DefineSchema");
@@ -287,6 +290,8 @@ namespace gargantuan {
 				state.Lifecycle->RegisterExtension(
 					*state.Authority, std::move(definition), std::move(target), state.Security
 				);
+				state.HasFailure = false;
+				state.CurrentDefinition.clear();
 				return 0;
 			} catch (const std::exception &exception) {
 				state.Failure = PreRunDiagnosticCode::SchemaRegistrationError;
