@@ -356,6 +356,16 @@ int main() {
 		.MessagesSubmitted = 1,
 		.BytesSubmitted = 1,
 	}.IsValidFor(Budget), "failed flush results cannot claim that work was submitted");
+	const SchedulerStatistics AccountedQueue{
+		.QueuedReliableBytes = 64,
+		.QueuedReliableMessages = 64,
+		.QueuedMessages = 64,
+	};
+	auto ImpossibleQueue = AccountedQueue;
+	++ImpossibleQueue.QueuedReliableMessages;
+	++ImpossibleQueue.QueuedMessages;
+	Check(AccountedQueue.IsValidFor(Limits) && !ImpossibleQueue.IsValidFor(Limits),
+		"reliable message-count validity derives from queued bytes rather than a byte limit used as a count");
 
 	{
 		const ConnectionId Connection{1, 1};

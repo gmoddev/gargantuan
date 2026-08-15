@@ -168,7 +168,10 @@ invent an independent unbounded budget.
 exhaustion, unreliable drops before transport, sequenced supersession, transport
 submissions, batching, budget-limited flushes, transport backpressure, and exact
 queued bytes/messages. These counters never masquerade as `NetworkStatistics`.
-In particular, a scheduler drop does not increment a transport drop counter.
+Queue validity applies byte ceilings to byte totals. Message-count consistency is
+derived separately from exact queue accounting and the non-empty payload invariant;
+a byte limit is never interpreted as a message-count limit. In particular, a
+scheduler drop does not increment a transport drop counter.
 
 ## Deterministic policy proof and deferred implementation
 

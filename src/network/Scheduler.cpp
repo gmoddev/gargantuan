@@ -4,6 +4,14 @@
 #include <limits>
 
 namespace gargantuan::network {
+	namespace {
+		constexpr std::size_t MinimumQueuedMessageBytes = 1;
+
+		bool MessageCountFitsQueuedBytes(std::size_t Messages, std::size_t Bytes) {
+			return Messages <= Bytes / MinimumQueuedMessageBytes;
+		}
+	}
+
 	bool SchedulerSubmitResult::Accepted() const {
 		return Status == SchedulerSubmitStatus::Accepted ||
 			Status == SchedulerSubmitStatus::AcceptedWithSupersession;
@@ -57,8 +65,9 @@ namespace gargantuan::network {
 		if (!Limits.IsValid()) return false;
 		if (QueuedReliableBytes > Limits.MaximumQueuedReliableBytes ||
 			QueuedUnreliableBytes > Limits.MaximumSendBytesPerTick ||
-			QueuedReliableMessages > Limits.MaximumQueuedReliableBytes ||
 			QueuedUnreliableMessages > Limits.MaximumMessagesPerTick ||
+			!MessageCountFitsQueuedBytes(QueuedReliableMessages, QueuedReliableBytes) ||
+			!MessageCountFitsQueuedBytes(QueuedUnreliableMessages, QueuedUnreliableBytes) ||
 			QueuedReliableMessages > std::numeric_limits<std::size_t>::max() - QueuedUnreliableMessages ||
 			QueuedMessages != QueuedReliableMessages + QueuedUnreliableMessages)
 			return false;
