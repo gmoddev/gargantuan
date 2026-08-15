@@ -1,9 +1,9 @@
 #pragma once
 
 #include "gargantuan/classes/Instance.hpp"
-#include "nlohmann/json.hpp" // IWYU pragma: export
 
 #include <format>
+#include <istream>
 #include <optional>
 #include <string_view>
 #include <utility>
@@ -12,8 +12,6 @@
 
 namespace gargantuan::InstanceSerialization {
 	enum class InstanceFormat : int { Json, Binary };
-	using json = nlohmann::ordered_json;
-
 	struct DeserializationState {
 		bool Ok = false;
 		std::shared_ptr<Instance> Instance;
@@ -37,5 +35,6 @@ namespace gargantuan::InstanceSerialization {
 	};
 
 	std::string Serialize(InstanceFormat format, std::shared_ptr<Instance> &instance);
+	std::string SerializeEmptyProject(InstanceFormat Format, std::string_view ProjectName);
 	DeserializationState Deserialize(InstanceFormat format, std::istream &input);
 }

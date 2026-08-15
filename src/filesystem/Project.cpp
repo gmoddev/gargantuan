@@ -52,14 +52,7 @@ namespace gargantuan {
 		if (instance) {
 			instanceFileContents = InstanceSerialization::Serialize(format, instance);
 		} else if (format == InstanceFormat::Json) {
-			const InstanceSerialization::json placeholder{
-				{"Version", 0},
-				{"Name", projectName},
-				{"ClassName", "DataModel"},
-				{"Properties", InstanceSerialization::json::object()},
-				{"Children", InstanceSerialization::json::array()},
-			};
-			instanceFileContents = placeholder.dump();
+			instanceFileContents = InstanceSerialization::SerializeEmptyProject(format, projectName);
 		} else if (format == InstanceFormat::Binary) {
 			throw std::runtime_error("Binary instance formats are not yet implemented");
 		}

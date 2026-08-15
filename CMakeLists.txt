@@ -101,6 +101,7 @@ add_subdirectory(vendor/sdl_ttf SYSTEM)
 
 option(GARGANTUAN_TRACY "Compile in the Tracy client" OFF)
 option(GARGANTUAN_BUILD_RENDERER_BENCHMARKS "Build the manual renderer feasibility benchmark" ON)
+option(GARGANTUAN_BUILD_SERIALIZATION_BENCHMARKS "Build the serialization baseline benchmark" ON)
 option(GARGANTUAN_WITH_GNS "Build the optional GameNetworkingSockets transport adapter" OFF)
 set(GARGANTUAN_FILAMENT_ROOT "" CACHE PATH "External Filament SDK root for the experimental renderer benchmark")
 set(GARGANTUAN_WITH_FILAMENT OFF)
@@ -234,7 +235,6 @@ target_include_directories(gargantuan_core SYSTEM PUBLIC
 	"vendor/argparse/include"
 	"vendor/box3d/include"
 	"vendor/glm/glm"
-	"vendor/glaze/include"
 	"vendor/luau/Ast/include"
 	"vendor/luau/CodeGen/include"
 	"vendor/luau/Common/include"
@@ -260,8 +260,6 @@ target_link_libraries(gargantuan_core
 		SDL3_image-static
 		box3d::box3d
 		glm
-		glaze::glaze
-		nlohmann_json
 		Luau.Compiler
 		Luau.CodeGen
 		Luau.Ast
@@ -269,6 +267,8 @@ target_link_libraries(gargantuan_core
 		Luau.Require
 		Luau.Config
 		Tracy::TracyClient
+	PRIVATE
+		nlohmann_json
 )
 
 if(GARGANTUAN_WITH_GNS)
@@ -287,7 +287,7 @@ endif()
 include(CTest)
 if(BUILD_TESTING)
 	add_executable(gargantuan_foundation_tests "tests/FoundationTests.cpp")
-	target_link_libraries(gargantuan_foundation_tests PRIVATE gargantuan_core)
+	target_link_libraries(gargantuan_foundation_tests PRIVATE gargantuan_core nlohmann_json)
 	add_executable(gargantuan_physics_backend_tests "tests/PhysicsBackendTests.cpp")
 	target_link_libraries(gargantuan_physics_backend_tests PRIVATE gargantuan_core)
 	add_executable(gargantuan_prerun_bootstrap_tests "tests/PreRunBootstrapTests.cpp")
@@ -310,6 +310,11 @@ if(BUILD_TESTING)
 	if(GARGANTUAN_BUILD_RENDERER_BENCHMARKS)
 		add_executable(gargantuan_renderer_benchmark "tests/RendererBenchmark.cpp")
 		target_link_libraries(gargantuan_renderer_benchmark PRIVATE gargantuan_core)
+	endif()
+	if(GARGANTUAN_BUILD_SERIALIZATION_BENCHMARKS)
+		add_executable(gargantuan_serialization_benchmark "tests/SerializationBenchmark.cpp")
+		target_link_libraries(gargantuan_serialization_benchmark PRIVATE gargantuan_core)
+		add_test(NAME SerializationBenchmarkSmoke COMMAND gargantuan_serialization_benchmark)
 	endif()
 	if(GARGANTUAN_WITH_FILAMENT)
 		add_executable(gargantuan_filament_renderer_tests "tests/FilamentRendererTests.cpp")
@@ -351,12 +356,38 @@ if(BUILD_TESTING)
 				"$<TARGET_FILE:SDL3::SDL3>"
 				"$<TARGET_FILE_DIR:gargantuan_scheduler_contract_tests>"
 		)
+		if(GARGANTUAN_BUILD_SERIALIZATION_BENCHMARKS)
+			add_custom_command(TARGET gargantuan_serialization_benchmark POST_BUILD
+				COMMAND ${CMAKE_COMMAND} -E copy_if_different
+					"$<TARGET_FILE:SDL3::SDL3>"
+					"$<TARGET_FILE_DIR:gargantuan_serialization_benchmark>"
+			)
+		endif()
 		if(GARGANTUAN_WITH_GNS)
 			add_custom_command(TARGET gargantuan_real_transport_tests POST_BUILD
 				COMMAND ${CMAKE_COMMAND} -E copy_if_different
 					"$<TARGET_FILE:SDL3::SDL3>"
 					"$<TARGET_FILE_DIR:gargantuan_real_transport_tests>"
 			)
+			set(GARGANTUAN_PROTOBUF_RUNTIMES "")
+			if(TARGET protobuf::libprotobuf)
+				list(APPEND GARGANTUAN_PROTOBUF_RUNTIMES "$<TARGET_FILE:protobuf::libprotobuf>")
+			elseif(DEFINED Protobuf_DIR)
+				get_filename_component(GARGANTUAN_PROTOBUF_PACKAGE_ROOT "${Protobuf_DIR}/../.." ABSOLUTE)
+				if(EXISTS "${GARGANTUAN_PROTOBUF_PACKAGE_ROOT}/bin/libprotobuf.dll")
+					list(APPEND GARGANTUAN_PROTOBUF_RUNTIMES "${GARGANTUAN_PROTOBUF_PACKAGE_ROOT}/bin/libprotobuf.dll")
+				endif()
+				if(EXISTS "${GARGANTUAN_PROTOBUF_PACKAGE_ROOT}/debug/bin/libprotobufd.dll")
+					list(APPEND GARGANTUAN_PROTOBUF_RUNTIMES "${GARGANTUAN_PROTOBUF_PACKAGE_ROOT}/debug/bin/libprotobufd.dll")
+				endif()
+			endif()
+			foreach(GARGANTUAN_PROTOBUF_RUNTIME IN LISTS GARGANTUAN_PROTOBUF_RUNTIMES)
+				add_custom_command(TARGET gargantuan_real_transport_tests POST_BUILD
+					COMMAND ${CMAKE_COMMAND} -E copy_if_different
+						"${GARGANTUAN_PROTOBUF_RUNTIME}"
+						"$<TARGET_FILE_DIR:gargantuan_real_transport_tests>"
+				)
+			endforeach()
 		endif()
 		if(GARGANTUAN_BUILD_RENDERER_BENCHMARKS)
 			add_custom_command(TARGET gargantuan_renderer_benchmark POST_BUILD

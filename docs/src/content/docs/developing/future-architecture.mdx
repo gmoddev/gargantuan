@@ -286,6 +286,56 @@ properties, forward-reference resolution, bounded parsing, and safe failure. It
 never serializes native pointers or uses memory addresses as identity. Custom
 classes, enums, and components participate through the frozen registry.
 
+### Serialization and codec boundary
+
+**Status: implemented. Yes, this boundary is feasible, and it was separated
+before the remaining gameplay-networking surfaces are built.** Replacing
+nlohmann JSON with Glaze is not part of this implementation.
+
+The current implementation already has the semantic types needed for an
+incremental boundary: `Snapshot`, `SnapshotObject`, `WireJournalRecord`,
+`WireValue`, stable wire object identity, and versioned EditorHost requests.
+Before Serialization Foundation 1, nlohmann types escaped through public engine
+headers such as `WireCodec.hpp`, `ProtocolInput.hpp`, and
+`InstanceSerialization.hpp`. Those leaks are now removed. Adding remotes,
+replication messages, bootstrap messages, and session protocols can build on
+Gargantuan-owned types rather than a JSON DOM.
+
+Gargantuan therefore owns three distinct layers:
+
+```text
+Semantic types
+    -> explicit format contracts, validation, limits, and versions
+    -> JSON, binary, or diagnostic codec implementations
+```
+
+Serialization libraries implement the final layer; they do not define engine
+semantics or durable formats. Public semantic and protocol-facing headers should
+not expose nlohmann, Glaze, or another codec library unless the API is explicitly
+a third-party integration surface. Codec entry points should be typed and
+format-specific, such as snapshot, journal, project, or EditorHost encode/decode
+operations. Gargantuan should not introduce a universal type-erased serializer
+or an engine-owned generic JSON DOM merely to hide nlohmann.
+
+The first implementation slice preserves current JSON bytes and compatibility
+semantics. It inventories nlohmann use, moves JSON-specific `WireValue` encoding
+behind private codec modules, removes third-party JSON types from public headers,
+and adds canonical fixtures for project, snapshot, journal, and EditorHost
+formats. Parser budgets, schema validation, version rejection, and normalized
+errors remain engine-owned regardless of backend. Deterministic field order is
+specified per format rather than inherited accidentally from `ordered_json`.
+The verified current boundary and detailed format policies are documented in
+`devdocs/CurrentArchitecture/SerializationCodecBoundary.md`.
+
+After that boundary and its compatibility tests exist, Glaze may be prototyped
+in one typed codec and compared using Gargantuan workloads. The decision must
+include runtime performance, allocation behavior, clean and incremental build
+time, compiler memory, binary size, format fidelity, and C#/Go interoperability.
+Keeping nlohmann behind the boundary remains a successful outcome if Glaze does
+not provide a measured net benefit. The optimized multiplayer codec remains a
+separate versioned binary design, as specified by the game networking
+architecture; EditorHost and human-readable project data may continue using JSON.
+
 Saved projects eventually require explicit migrations when a custom class or
 enum definition version changes. A migration is selected by stable `SchemaId`
 and a declared version path, runs in a bounded registration or load context, and
@@ -363,6 +413,12 @@ The work divides into the following dependency-ordered packages:
    property, enum, attribute, identity, and authority metadata for persistence,
    replication, Studio, generated Luau types, diagnostics, and compatibility
    adapters.
+12. **Separate codec implementations before gameplay networking expands.** This
+    slice is implemented: existing JSON formats remain stable, third-party
+    serialization types are absent from semantic and protocol-facing headers,
+    canonical fixtures lock compatibility, and JSON-specific conversion is
+    behind typed codec entry points. Benchmark Glaze only as a later milestone;
+    do not make Glaze or a generic serializer part of the architecture.
 
 The first practical milestone is narrower than the full vision: freeze a native
 plus Core registry; expose attributes and tags; serialize and journal them; let

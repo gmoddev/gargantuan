@@ -41,6 +41,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <limits>
 #include <lua.h>
 #include <luacode.h>
@@ -160,6 +161,15 @@ namespace {
 			.OriginDetail = ".gargantuan/prerun.luau",
 			.Properties = std::move(properties),
 		};
+	}
+
+	std::string ReadSerializationFixture(std::string_view Name) {
+		const auto Path = std::filesystem::path(__FILE__).parent_path() / "fixtures" / "serialization" / Name;
+		std::ifstream Input(Path, std::ios::binary);
+		if (!Input) throw std::runtime_error("Unable to open serialization fixture: " + Path.string());
+		std::string Contents((std::istreambuf_iterator<char>(Input)), std::istreambuf_iterator<char>());
+		while (!Contents.empty() && (Contents.back() == '\n' || Contents.back() == '\r')) Contents.pop_back();
+		return Contents;
 	}
 
 	gargantuan::SchemaClassDefinition MakeCustomClassDefinition(
@@ -794,8 +804,11 @@ namespace {
 		);
 
 		const WireSchemaEnumValue value{enumId, 1, 1};
-		const auto encoded = EncodeWireValue(WireValue(value));
-		const auto decoded = DecodeWireValue(encoded);
+		using Json = nlohmann::ordered_json;
+		const auto encodedText = EncodeWireValueJson(WireValue(value));
+		Check(encodedText.has_value(), "custom enum WireValue JSON encodes through the public codec boundary");
+		auto encoded = Json::parse(*encodedText);
+		const auto decoded = DecodeWireValueJson(encoded.dump());
 		Check(
 			decoded && std::get_if<WireSchemaEnumValue>(&*decoded) &&
 				*std::get_if<WireSchemaEnumValue>(&*decoded) == value,
@@ -803,20 +816,19 @@ namespace {
 		);
 		auto malformedWire = encoded;
 		malformedWire["SchemaId"] = "not-a-schema-id";
-		Check(!DecodeWireValue(malformedWire), "malformed custom enum wire identity is rejected");
+		Check(!DecodeWireValueJson(malformedWire.dump()), "malformed custom enum wire identity is rejected");
 		auto OversizedUnsignedWire = encoded;
 		OversizedUnsignedWire["Value"] = std::numeric_limits<std::uint64_t>::max();
-		Check(!DecodeWireValue(OversizedUnsignedWire), "oversized unsigned custom enum wire values are rejected before narrowing");
-		Check(DecodeWireUnsigned32(std::numeric_limits<std::uint32_t>::max()) ==
-			std::optional<std::uint32_t>(std::numeric_limits<std::uint32_t>::max()) &&
-			!DecodeWireUnsigned32(std::uint64_t{4294967296}),
+		Check(!DecodeWireValueJson(OversizedUnsignedWire.dump()), "oversized unsigned custom enum wire values are rejected before narrowing");
+		Check(DecodeWireObjectIdJson(Json{{"Slot", std::numeric_limits<std::uint32_t>::max()}, {"Generation", 1}}.dump()) &&
+			!DecodeWireObjectIdJson(Json{{"Slot", std::uint64_t{4294967296}}, {"Generation", 1}}.dump()),
 			"wire uint32 decoding accepts the exact maximum and rejects maximum plus one before narrowing");
 		auto MaximumWire = encoded;
 		MaximumWire["Value"] = std::numeric_limits<std::int32_t>::max();
-		Check(DecodeWireValue(MaximumWire).has_value(), "signed 32-bit maximum custom enum wire value is accepted");
+		Check(DecodeWireValueJson(MaximumWire.dump()).has_value(), "signed 32-bit maximum custom enum wire value is accepted");
 		auto MinimumWire = encoded;
 		MinimumWire["Value"] = std::numeric_limits<std::int32_t>::min();
-		Check(DecodeWireValue(MinimumWire).has_value(), "signed 32-bit minimum custom enum wire value is accepted");
+		Check(DecodeWireValueJson(MinimumWire.dump()).has_value(), "signed 32-bit minimum custom enum wire value is accepted");
 		Check(FormatSchemaEnumValue(value, registry) == "Game.CombatState.Attacking",
 			"custom enum values format deterministically through the frozen registry");
 		WireJournalRecord replicatedValue{
@@ -2213,9 +2225,11 @@ namespace {
 		Check(gateway.Apply(UpdateAttributeCommand{id, "Offset", WireValue(Offset)}).Succeeded() &&
 			part->GetAttributeValue("Offset") == std::optional<WireValue>(Offset),
 			"Vector2 attribute mutation retains its closed WireValue representation");
-		const auto EncodedOffset = EncodeWireValue(WireValue(Offset));
-		const auto DecodedOffset = DecodeWireValue(EncodedOffset);
-		Check(DecodedOffset == std::optional<WireValue>(Offset),
+		const auto EncodedOffset = EncodeWireValueJson(WireValue(Offset));
+		const auto DecodedOffset = EncodedOffset ? DecodeWireValueJson(*EncodedOffset) : SerializationResult<WireValue>(
+			SerializationFailure(SerializationErrorCode::InternalFailure, "encode failed")
+		);
+		Check(DecodedOffset && *DecodedOffset == WireValue(Offset),
 			"Vector2 WireValue encoding round-trips without a format change");
 		const auto NativeOffset = DecodeNativeWireValue(WireValue(Offset));
 		const auto *DecodedNativeOffset = NativeOffset ? std::any_cast<Vector2>(&*NativeOffset) : nullptr;
@@ -2730,41 +2744,52 @@ namespace {
 	void TestProtocolInputHardening() {
 		using namespace gargantuan;
 		using namespace gargantuan::InstanceSerialization;
+		using Json = nlohmann::ordered_json;
 
 		Check(
-			!DecodeWireObjectId(WireJson{{"Slot", 1}, {"Generation", 1}, {"Extra", true}}),
+			!DecodeWireObjectIdJson(Json{{"Slot", 1}, {"Generation", 1}, {"Extra", true}}.dump()),
 			"wire ObjectIds reject unknown fields"
 		);
-		Check(!DecodeWireObjectId(WireJson{{"Slot", 0}, {"Generation", 1}}), "wire ObjectIds reject zero slots");
+		Check(!DecodeWireObjectIdJson(Json{{"Slot", 0}, {"Generation", 1}}.dump()), "wire ObjectIds reject zero slots");
 		Check(
-			!DecodeWireObjectId(WireJson{{"Slot", std::uint64_t{1} << 32}, {"Generation", 1}}),
+			!DecodeWireObjectIdJson(Json{{"Slot", std::uint64_t{1} << 32}, {"Generation", 1}}.dump()),
 			"wire ObjectIds reject narrowing overflow"
 		);
 		Check(
-			!DecodeWireValue(WireJson{{"Type", "Vector3"}, {"Value", WireJson::array({1.0, 2.0})}}),
+			!DecodeWireValueJson(Json{{"Type", "Vector3"}, {"Value", Json::array({1.0, 2.0})}}.dump()),
 			"WireValue rejects truncated compound values"
 		);
 		Check(
-			!DecodeWireValue(WireJson{{"Type", "Bool"}, {"Value", true}, {"Capabilities", "all"}}),
+			!DecodeWireValueJson(Json{{"Type", "Bool"}, {"Value", true}, {"Capabilities", "all"}}.dump()),
 			"WireValue rejects packet-supplied extra metadata"
 		);
 		Check(
-			!DecodeWireValue(WireJson{{"Type", "Int"}, {"Value", std::uint64_t{1} << 32}}),
+			!DecodeWireValueJson(Json{{"Type", "Int"}, {"Value", std::uint64_t{1} << 32}}.dump()),
 			"WireValue rejects signed integer narrowing overflow"
 		);
 		Check(
-			!DecodeWireValue(WireJson{{"Type", "String"}, {"Value", std::string(MaximumProtocolStringBytes + 1, 'x')}}),
+			!DecodeWireValueJson(Json{{"Type", "String"}, {"Value", std::string(MaximumProtocolStringBytes + 1, 'x')}}.dump()),
 			"WireValue rejects oversized strings"
 		);
-		CheckThrows<std::invalid_argument>(
-			[] { (void)EncodeWireValue(WireFloat{std::numeric_limits<float>::infinity()}); },
+		Check(
+			!EncodeWireValueJson(WireFloat{std::numeric_limits<float>::infinity()}),
 			"structured WireValue rejects non-finite numerics"
 		);
+		const auto TruncatedWireValue = DecodeWireValueJson("{");
+		Check(
+			!TruncatedWireValue && TruncatedWireValue.error().Code == SerializationErrorCode::TruncatedInput,
+			"serializer-specific truncated-input exceptions normalize to Gargantuan errors"
+		);
+		const auto DuplicateWireValue = DecodeWireValueJson(R"({"Type":"Bool","Value":false,"Value":true})");
+		Check(
+			DuplicateWireValue && std::get_if<bool>(&*DuplicateWireValue) && *std::get_if<bool>(&*DuplicateWireValue),
+			"the existing last-value-wins duplicate-field behavior is compatibility-locked explicitly"
+		);
 
-		WireJson Deep = nullptr;
-		for (std::size_t Index = 0; Index <= MaximumProtocolJsonDepth; ++Index) Deep = WireJson::array({std::move(Deep)});
-		CheckThrows<std::invalid_argument>(
-			[&] { ValidateProtocolJsonTree(Deep); },
+		Json Deep = nullptr;
+		for (std::size_t Index = 0; Index <= MaximumProtocolJsonDepth; ++Index) Deep = Json::array({std::move(Deep)});
+		Check(
+			!DecodeWireValueJson(Deep.dump()),
 			"protocol JSON rejects excessive nesting"
 		);
 		std::string DeepDocument(MaximumProtocolJsonDepth + 1, '[');
@@ -2778,9 +2803,9 @@ namespace {
 			!DeserializeSnapshot(std::string(MaximumProtocolDocumentBytes + 1, ' ')).Succeeded(),
 			"snapshot decoder rejects oversized documents before parsing"
 		);
-		WireJson OversizedJournal{{"Version", WireJournalFormatVersion}, {"Records", WireJson::array()}};
+		Json OversizedJournal{{"Version", WireJournalFormatVersion}, {"Records", Json::array()}};
 		for (std::size_t Index = 0; Index <= MaximumWireJournalRecords; ++Index)
-			OversizedJournal["Records"].push_back(WireJson::object());
+			OversizedJournal["Records"].push_back(Json::object());
 		Check(
 			!DeserializeWireJournalRecords(OversizedJournal.dump()).Succeeded(),
 			"wire journal decoder rejects oversized record batches"
@@ -2788,8 +2813,8 @@ namespace {
 
 		auto PersistedPart = std::make_shared<Part>();
 		std::shared_ptr<Instance> PersistedRoot = PersistedPart;
-		auto PersistedDocument = WireJson::parse(Serialize(InstanceFormat::Json, PersistedRoot));
-		PersistedDocument["Properties"]["Size"] = WireJson{{"Vector3", WireJson::array({1.0, 2.0})}};
+		auto PersistedDocument = Json::parse(Serialize(InstanceFormat::Json, PersistedRoot));
+		PersistedDocument["Properties"]["Size"] = Json{{"Vector3", Json::array({1.0, 2.0})}};
 		std::istringstream TruncatedPersistence(PersistedDocument.dump());
 		auto TruncatedResult = Deserialize(InstanceFormat::Json, TruncatedPersistence);
 		Check(!TruncatedResult.Ok, "persistence decoder rejects truncated compound values without throwing");
@@ -3220,6 +3245,72 @@ namespace {
 			Custom->GetCustomClassPropertyOverrides().empty(),
 			"writing a custom property default removes its physical override deterministically");
 		Journal.Clear();
+	}
+
+	void TestSerializationGoldenFixtures() {
+		using namespace gargantuan;
+		using namespace gargantuan::InstanceSerialization;
+
+		const auto ProjectMinimal = ReadSerializationFixture("project_v4_minimal.json");
+		auto MinimalRoot = std::make_shared<DataModel>();
+		MinimalRoot->SetName("FixtureProject");
+		MinimalRoot->SetArchivable(true);
+		std::shared_ptr<Instance> MinimalSerializable = MinimalRoot;
+		Check(
+			Serialize(InstanceFormat::Json, MinimalSerializable) == ProjectMinimal,
+			"minimal project fixture locks deterministic persistence v4 output"
+		);
+		std::istringstream MinimalInput(ProjectMinimal);
+		auto MinimalDecoded = Deserialize(InstanceFormat::Json, MinimalInput);
+		std::shared_ptr<Instance> MinimalDecodedRoot = MinimalDecoded.Instance;
+		Check(
+			MinimalDecoded.Ok && MinimalDecodedRoot &&
+				Serialize(InstanceFormat::Json, MinimalDecodedRoot) == ProjectMinimal,
+			"minimal project fixture decodes to semantic state and re-encodes canonically"
+		);
+
+		const auto ProjectComplex = ReadSerializationFixture("project_v4_complex.json");
+		std::istringstream ProjectInput(ProjectComplex);
+		auto ProjectDecoded = Deserialize(InstanceFormat::Json, ProjectInput);
+		std::shared_ptr<Instance> ProjectRoot = ProjectDecoded.Instance;
+		const auto ProjectChild = ProjectRoot && ProjectRoot->Children.size() == 1
+			? ProjectRoot->Children.front() : std::shared_ptr<Instance>{};
+		Check(
+			ProjectDecoded.Ok && ProjectChild && ProjectChild->GetName() == "FixtureCustom" &&
+				ProjectChild->GetAttributeValue("Health") == std::optional<WireValue>(12),
+			"complex project fixture decodes its child and Attribute semantic state"
+		);
+		// Project v4 child emission is gated by the root's non-persisted runtime Archivable flag.
+		// Reapply that existing serializer precondition without changing the durable format.
+		if (ProjectRoot) ProjectRoot->SetArchivable(true);
+		const auto ProjectReencoded = ProjectRoot ? Serialize(InstanceFormat::Json, ProjectRoot) : std::string{};
+		Check(
+			ProjectDecoded.Ok && ProjectRoot && ProjectReencoded == ProjectComplex,
+			"complex project fixture preserves Attributes, Tags, extensions, custom classes, and sparse state"
+		);
+
+		for (const auto Name : {"snapshot_v6_minimal.json", "snapshot_v6_complex.json"}) {
+			const auto Fixture = ReadSerializationFixture(Name);
+			auto Decoded = DeserializeSnapshot(Fixture);
+			Check(
+				Decoded.Succeeded() && SerializeSnapshot(*Decoded.Value) == Fixture,
+				"snapshot fixtures decode to semantic state and re-encode canonically"
+			);
+		}
+
+		const auto JournalFixture = ReadSerializationFixture("journal_v6_representative.json");
+		auto JournalDecoded = DeserializeWireJournalRecords(JournalFixture);
+		Check(
+			JournalDecoded.Succeeded() && SerializeWireJournalRecords(*JournalDecoded.Value) == JournalFixture,
+			"journal fixture preserves custom, extension, enum, and Tag wire semantics"
+		);
+
+		EditorHost Host("fixture-token");
+		Check(
+			Host.HandleRequest(ReadSerializationFixture("editorhost_v1_request.json")) ==
+				ReadSerializationFixture("editorhost_v1_response.json"),
+			"EditorHost request and response fixtures preserve the versioned JSON envelope"
+		);
 	}
 
 	void TestProjectCreationJsonNames() {
@@ -3840,6 +3931,7 @@ int main() {
 	TestSharedFrameRing();
 	TestClassExtensionRuntime();
 	TestCustomClassRuntime();
+	TestSerializationGoldenFixtures();
 	TestProjectCreationJsonNames();
 	TestEditorHostProtocol();
 	TestLuauExceptionBoundary();

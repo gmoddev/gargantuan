@@ -1,4 +1,5 @@
 #include "gargantuan/runtime/WireCodec.hpp"
+#include "serialization/JsonCodec.hpp"
 
 #include "gargantuan/datatypes/CFrame.hpp"
 #include "gargantuan/datatypes/Color3.hpp"
@@ -17,7 +18,9 @@
 
 namespace gargantuan {
 	namespace {
-		bool HasOnlyFields(const WireJson &Value, std::initializer_list<std::string_view> Allowed) {
+		using Json = JsonCodec::Json;
+
+		bool HasOnlyFieldsImpl(const Json &Value, std::initializer_list<std::string_view> Allowed) {
 			if (!Value.is_object()) return false;
 			for (const auto &[Name, Child] : Value.items()) {
 				(void)Child;
@@ -26,7 +29,7 @@ namespace gargantuan {
 			return true;
 		}
 
-		std::optional<std::int32_t> DecodeSignedInt32(const WireJson &Value) {
+		std::optional<std::int32_t> DecodeSignedInt32(const Json &Value) {
 			if (Value.is_number_unsigned()) {
 				const auto Raw = Value.get<std::uint64_t>();
 				if (Raw <= static_cast<std::uint64_t>(std::numeric_limits<std::int32_t>::max()))
@@ -40,13 +43,13 @@ namespace gargantuan {
 			return static_cast<std::int32_t>(Raw);
 		}
 
-		std::optional<double> DecodeFiniteDouble(const WireJson &Value) {
+		std::optional<double> DecodeFiniteDouble(const Json &Value) {
 			if (!Value.is_number()) return std::nullopt;
 			const auto Result = Value.get<double>();
 			return std::isfinite(Result) ? std::optional(Result) : std::nullopt;
 		}
 
-		std::optional<float> DecodeFiniteFloat(const WireJson &Value) {
+		std::optional<float> DecodeFiniteFloat(const Json &Value) {
 			auto Decoded = DecodeFiniteDouble(Value);
 			if (!Decoded || *Decoded < -std::numeric_limits<float>::max() ||
 				*Decoded > std::numeric_limits<float>::max()) return std::nullopt;
@@ -64,22 +67,26 @@ namespace gargantuan {
 		}
 	}
 
-	std::optional<std::uint32_t> DecodeWireUnsigned32(const WireJson &value) {
+	bool JsonCodec::HasOnlyFields(const Json &Value, std::initializer_list<std::string_view> Allowed) {
+		return HasOnlyFieldsImpl(Value, Allowed);
+	}
+
+	std::optional<std::uint32_t> JsonCodec::DecodeUnsigned32(const Json &value) {
 		if (!value.is_number_unsigned()) return std::nullopt;
 		const auto raw = value.get<std::uint64_t>();
 		if (raw > std::numeric_limits<std::uint32_t>::max()) return std::nullopt;
 		return static_cast<std::uint32_t>(raw);
 	}
 
-	WireJson EncodeWireObjectId(WireObjectId id) {
-		return WireJson{{"Slot", id.Slot}, {"Generation", id.Generation}};
+	JsonCodec::Json JsonCodec::EncodeObjectId(WireObjectId id) {
+		return Json{{"Slot", id.Slot}, {"Generation", id.Generation}};
 	}
 
-	std::optional<WireObjectId> DecodeWireObjectId(const WireJson &value) {
+	std::optional<WireObjectId> JsonCodec::DecodeObjectId(const Json &value) {
 		if (!HasOnlyFields(value, {"Slot", "Generation"}) || value.size() != 2 ||
 			!value.contains("Slot") || !value.contains("Generation")) return std::nullopt;
-		auto slot = DecodeWireUnsigned32(value["Slot"]);
-		auto generation = DecodeWireUnsigned32(value["Generation"]);
+		auto slot = DecodeUnsigned32(value["Slot"]);
+		auto generation = DecodeUnsigned32(value["Generation"]);
 		if (!slot || !generation) return std::nullopt;
 		WireObjectId result{*slot, *generation};
 		return result.IsValid() ? std::optional(result) : std::nullopt;
@@ -152,10 +159,10 @@ namespace gargantuan {
 		);
 	}
 
-	WireJson EncodeWireValue(const WireValue &value) {
+	JsonCodec::Json JsonCodec::EncodeWireValue(const WireValue &value) {
 		ValidateProtocolWireValue(value);
 		return std::visit(
-			[](const auto &typed) -> WireJson {
+			[](const auto &typed) -> Json {
 				using Value = std::decay_t<decltype(typed)>;
 				if constexpr (std::is_same_v<Value, std::monostate>) return {{"Type", "Null"}};
 				if constexpr (std::is_same_v<Value, bool>) return {{"Type", "Bool"}, {"Value", typed}};
@@ -179,13 +186,13 @@ namespace gargantuan {
 					{"Value", typed.ItemValue},
 				};
 				if constexpr (std::is_same_v<Value, WireObjectReference>)
-					return {{"Type", "ObjectReference"}, {"Value", EncodeWireObjectId(typed.Object)}};
+					return {{"Type", "ObjectReference"}, {"Value", EncodeObjectId(typed.Object)}};
 			},
 			value
 		);
 	}
 
-	std::optional<WireValue> DecodeWireValue(const WireJson &encoded) {
+	std::optional<WireValue> JsonCodec::DecodeWireValue(const Json &encoded) {
 		if (!encoded.is_object() || !encoded.contains("Type") || !encoded["Type"].is_string()) return std::nullopt;
 		const auto &type = encoded["Type"].get_ref<const std::string &>();
 		if (!ValidateWireText(type, 32)) return std::nullopt;
@@ -269,10 +276,59 @@ namespace gargantuan {
 				return WireSchemaEnumValue{*id, static_cast<std::uint32_t>(version), *item};
 		}
 		if (type == "ObjectReference" && HasOnlyFields(encoded, {"Type", "Value"}) && encoded.size() == 2) {
-			auto id = DecodeWireObjectId(value);
+			auto id = DecodeObjectId(value);
 			if (id) return WireObjectReference{*id};
 		}
 		return std::nullopt;
+	}
+
+	SerializationResult<std::string> EncodeWireObjectIdJson(WireObjectId Id) {
+		return JsonCodec::Encode(JsonCodec::EncodeObjectId(Id), "WireObjectId");
+	}
+
+	SerializationResult<WireObjectId> DecodeWireObjectIdJson(std::string_view Encoded) {
+		auto Document = JsonCodec::Parse(Encoded, MaximumProtocolDocumentBytes, "WireObjectId");
+		if (!Document) return std::unexpected(Document.error());
+		auto Decoded = JsonCodec::DecodeObjectId(*Document);
+		if (!Decoded) return SerializationFailure(
+			SerializationErrorCode::InvalidValue,
+			"WireObjectId has invalid fields or values",
+			"$"
+		);
+		return *Decoded;
+	}
+
+	SerializationResult<std::string> EncodeWireValueJson(const WireValue &Value) {
+		try {
+			return JsonCodec::Encode(JsonCodec::EncodeWireValue(Value), "WireValue");
+		} catch (const std::invalid_argument &Error) {
+			return SerializationFailure(SerializationErrorCode::InvalidValue, Error.what(), "$");
+		} catch (const std::exception &Error) {
+			return SerializationFailure(
+				SerializationErrorCode::InternalFailure,
+				"WireValue JSON encoding failed",
+				"$",
+				Error.what()
+			);
+		}
+	}
+
+	SerializationResult<WireValue> DecodeWireValueJson(std::string_view Encoded) {
+		auto Document = JsonCodec::Parse(Encoded, MaximumProtocolDocumentBytes, "WireValue");
+		if (!Document) return std::unexpected(Document.error());
+		auto Decoded = JsonCodec::DecodeWireValue(*Document);
+		if (!Decoded) return SerializationFailure(
+			SerializationErrorCode::InvalidValue,
+			"WireValue has invalid fields or values",
+			"$"
+		);
+		return std::move(*Decoded);
+	}
+
+	std::size_t MeasureWireValueJsonBytes(const WireValue &Value) {
+		auto Encoded = EncodeWireValueJson(Value);
+		if (!Encoded) throw std::invalid_argument(Encoded.error().Format());
+		return Encoded->size();
 	}
 
 	const SchemaEnumItem &ValidateSchemaEnumValue(

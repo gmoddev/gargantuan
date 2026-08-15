@@ -13,6 +13,7 @@
 #include "gargantuan/runtime/ProtocolInput.hpp"
 #include "gargantuan/runtime/TagIndex.hpp"
 #include "gargantuan/runtime/WireCodec.hpp"
+#include "serialization/JsonCodec.hpp"
 
 #include <SDL3/SDL_log.h>
 #include <array>
@@ -21,8 +22,6 @@
 #include <istream>
 #include <memory>
 #include <limits>
-#include <nlohmann/json.hpp>
-#include <nlohmann/json_fwd.hpp>
 #include <optional>
 #include <set>
 #include <sstream>
@@ -34,6 +33,8 @@
 #include <vector>
 
 namespace gargantuan::InstanceSerialization {
+	using json = JsonCodec::Json;
+
 	// Serialization
 
 	using Serializable =
@@ -47,8 +48,6 @@ namespace gargantuan::InstanceSerialization {
 		// - Because of this, removed Enum's explicit format to implement a new EnumItem
 		//   explicit format that also specifies the EnumType
 		// - Int32 and Int64 are merged into Int as those are irrelevant to Gargantuan
-
-		using json = nlohmann::ordered_json;
 
 		struct SerializationState {
 			std::unordered_map<std::shared_ptr<Instance>, json> InstanceMap;
@@ -126,7 +125,7 @@ namespace gargantuan::InstanceSerialization {
 			}
 		}
 
-		nlohmann::ordered_json SerializeInstance(std::shared_ptr<Instance> instance, SerializationState &state) {
+		json SerializeInstance(std::shared_ptr<Instance> instance, SerializationState &state) {
 			if (state.InstanceMap.contains(instance)) {
 				return state.InstanceMap.at(instance);
 			}
@@ -141,7 +140,7 @@ namespace gargantuan::InstanceSerialization {
 			auto properties = json::object();
 			SerializeProperties(definition, instance, properties);
 
-			nlohmann::ordered_json serialized;
+			json serialized;
 			serialized["Name"] = instance->GetName();
 			serialized["ClassName"] = definition->ConstructionKind == SchemaClassConstructionKind::CustomData
 				? definition->CanonicalName : definition->ClassName;
@@ -150,7 +149,7 @@ namespace gargantuan::InstanceSerialization {
 			serialized["Properties"] = properties;
 			serialized["Attributes"] = json::object();
 			for (const auto &[name, value] : instance->GetAttributeValues(ScriptSecurityContext::CoreTrusted()))
-				serialized["Attributes"][name] = EncodeWireValue(value);
+				serialized["Attributes"][name] = JsonCodec::EncodeWireValue(value);
 			serialized["Extensions"] = json::array();
 			for (const auto &[extensionId, properties] : instance->GetExtensionPropertyOverrides(
 				ScriptSecurityContext::CoreTrusted()
@@ -163,7 +162,7 @@ namespace gargantuan::InstanceSerialization {
 					{"Properties", json::object()},
 				};
 				for (const auto &[name, value] : properties)
-					encoded["Properties"][name] = EncodeWireValue(value);
+					encoded["Properties"][name] = JsonCodec::EncodeWireValue(value);
 				serialized["Extensions"].push_back(std::move(encoded));
 			}
 			serialized["CustomProperties"] = json::array();
@@ -178,7 +177,7 @@ namespace gargantuan::InstanceSerialization {
 					{"Properties", json::object()},
 				};
 				for (const auto &[name, value] : properties)
-					encoded["Properties"][name] = EncodeWireValue(value);
+					encoded["Properties"][name] = JsonCodec::EncodeWireValue(value);
 				serialized["CustomProperties"].push_back(std::move(encoded));
 			}
 			serialized["Tags"] = json::array();
@@ -198,13 +197,30 @@ namespace gargantuan::InstanceSerialization {
 			Json::SerializationState state;
 			auto serialized = Json::SerializeInstance(instance, state);
 			serialized["Version"] = 4;
-			return serialized.dump();
+			auto Encoded = JsonCodec::Encode(serialized, "Instance persistence");
+			if (!Encoded) throw std::runtime_error(Encoded.error().Format());
+			return std::move(*Encoded);
 		}
 		default: {
 			return "";
 		}
 		}
 	};
+
+	std::string SerializeEmptyProject(InstanceFormat Format, std::string_view ProjectName) {
+		if (Format != InstanceFormat::Json)
+			throw std::runtime_error("Binary instance formats are not yet implemented");
+		json Placeholder{
+			{"Version", 0},
+			{"Name", ProjectName},
+			{"ClassName", "DataModel"},
+			{"Properties", json::object()},
+			{"Children", json::array()},
+		};
+		auto Encoded = JsonCodec::Encode(Placeholder, "Empty project");
+		if (!Encoded) throw std::runtime_error(Encoded.error().Format());
+		return std::move(*Encoded);
+	}
 
 	// Deserialization
 	// FIXME: Current path refers to the parent when it really should refer to
@@ -533,7 +549,7 @@ namespace gargantuan::InstanceSerialization {
 				return std::nullopt;
 			}
 			auto classId = SchemaId::Parse(contents["ClassSchemaId"].get<std::string>());
-			auto decodedVersion = DecodeWireUnsigned32(contents["ClassDefinitionVersion"]);
+			auto decodedVersion = JsonCodec::DecodeUnsigned32(contents["ClassDefinitionVersion"]);
 			const auto version = decodedVersion.value_or(0);
 			definition = classId ? InstanceClassRegistry::GetDefinitionBySchemaId(*classId) : nullptr;
 			const auto expectedName = definition && definition->ConstructionKind == SchemaClassConstructionKind::CustomData
@@ -614,7 +630,7 @@ namespace gargantuan::InstanceSerialization {
 		try {
 			std::map<std::string, WireValue> decodedAttributes;
 			for (const auto &[key, encoded] : attributes.items()) {
-				auto value = DecodeWireValue(encoded);
+				auto value = JsonCodec::DecodeWireValue(encoded);
 				if (!value) throw std::invalid_argument("Malformed attribute WireValue");
 				ValidateAttributeName(key);
 				(void)ValidateAttributeValue(*value);
@@ -644,7 +660,7 @@ namespace gargantuan::InstanceSerialization {
 				if (!declaringId || (previousDeclaringClassId && !(*previousDeclaringClassId < *declaringId)))
 					throw std::invalid_argument("Invalid, duplicate, or unordered custom declaring class SchemaId");
 				previousDeclaringClassId = *declaringId;
-				auto decodedVersion = DecodeWireUnsigned32(encodedState["DefinitionVersion"]);
+				auto decodedVersion = JsonCodec::DecodeUnsigned32(encodedState["DefinitionVersion"]);
 				if (!decodedVersion || *decodedVersion == 0)
 					throw std::invalid_argument("Invalid custom property declaring class version");
 				const auto version = *decodedVersion;
@@ -658,7 +674,7 @@ namespace gargantuan::InstanceSerialization {
 					throw std::invalid_argument("Custom property state is empty or oversized");
 				for (const auto &[propertyName, encodedValue] : encodedProperties.items()) {
 					auto *property = GetActiveRuntimeSchemaRegistry().FindCustomClassProperty(*declaringId, propertyName);
-					auto value = DecodeWireValue(encodedValue);
+					auto value = JsonCodec::DecodeWireValue(encodedValue);
 					if (!property || !value) throw std::invalid_argument("Unknown or malformed custom property");
 					(void)ValidateSchemaExtensionPropertyValue(property->Type, *value);
 					if (*value == property->DefaultValue)
@@ -692,7 +708,7 @@ namespace gargantuan::InstanceSerialization {
 					(previousExtensionId && !(*previousExtensionId < *extensionId)))
 					throw std::invalid_argument("Invalid, duplicate, or unordered extension SchemaId");
 				previousExtensionId = *extensionId;
-				auto decodedVersion = DecodeWireUnsigned32(encodedExtension["DefinitionVersion"]);
+				auto decodedVersion = JsonCodec::DecodeUnsigned32(encodedExtension["DefinitionVersion"]);
 				if (!decodedVersion || *decodedVersion == 0)
 					throw std::invalid_argument("Invalid extension definition version");
 				const auto version = *decodedVersion;
@@ -704,7 +720,7 @@ namespace gargantuan::InstanceSerialization {
 					throw std::invalid_argument("Extension property state is empty or oversized");
 				for (const auto &[propertyName, encodedValue] : encodedProperties.items()) {
 					auto *property = GetActiveRuntimeSchemaRegistry().FindExtensionProperty(*extensionId, propertyName);
-					auto value = DecodeWireValue(encodedValue);
+					auto value = JsonCodec::DecodeWireValue(encodedValue);
 					if (!property || !value) throw std::invalid_argument("Unknown or malformed extension property");
 					(void)ValidateSchemaExtensionPropertyValue(property->Type, *value);
 					if (*value == property->DefaultValue)
@@ -764,20 +780,17 @@ namespace gargantuan::InstanceSerialization {
 
 		switch (format) {
 		case InstanceFormat::Json: {
-			json contents;
-			try {
-				auto Encoded = ReadBoundedDocument(input);
-				if (!Encoded || Encoded->empty()) {
+			auto Encoded = ReadBoundedDocument(input);
+			if (!Encoded || Encoded->empty()) {
 					state.PushError("Instance document byte length is invalid");
 					return state;
-				}
-				ValidateProtocolJsonDocument(*Encoded);
-				contents = json::parse(*Encoded);
-				ValidateProtocolJsonTree(contents);
-			} catch (const std::exception &e) {
-				state.PushError("Failed to parse JSON: {}", e.what());
+			}
+			auto Parsed = JsonCodec::Parse(*Encoded, MaximumProtocolDocumentBytes, "Instance persistence");
+			if (!Parsed) {
+				state.PushError("Failed to parse JSON: {}", Parsed.error().Format());
 				return state;
 			}
+			auto contents = std::move(*Parsed);
 
 			if (!contents.is_object()) {
 				state.PushError("Expected a JSON object");

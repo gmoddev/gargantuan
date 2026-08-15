@@ -13,24 +13,24 @@
 #include "gargantuan/runtime/AttributeValidation.hpp"
 #include "gargantuan/runtime/ProtocolInput.hpp"
 #include "gargantuan/runtime/WireCodec.hpp"
+#include "serialization/JsonCodec.hpp"
 
 #include <algorithm>
 #include <any>
-#include <nlohmann/json.hpp>
 #include <stdexcept>
 #include <set>
 #include <unordered_set>
 
 namespace gargantuan {
 	namespace {
-		using Json = nlohmann::ordered_json;
+		using Json = JsonCodec::Json;
 
 		Json EncodeId(WireObjectId id) {
-			return EncodeWireObjectId(id);
+			return JsonCodec::EncodeObjectId(id);
 		}
 
 		std::optional<WireObjectId> DecodeId(const Json &value) {
-			return DecodeWireObjectId(value);
+			return JsonCodec::DecodeObjectId(value);
 		}
 
 		std::optional<WireValue> EncodeNativeValue(const std::any &value) {
@@ -42,11 +42,11 @@ namespace gargantuan {
 		}
 
 		Json EncodeValue(const WireValue &value) {
-			return EncodeWireValue(value);
+			return JsonCodec::EncodeWireValue(value);
 		}
 
 		std::optional<WireValue> DecodeValue(const Json &encoded) {
-			return DecodeWireValue(encoded);
+			return JsonCodec::DecodeWireValue(encoded);
 		}
 
 		bool HasOnlyFields(const Json &Value, std::initializer_list<std::string_view> Allowed) {
@@ -353,26 +353,20 @@ namespace gargantuan {
 			encoded["Tags"] = object.Tags;
 			document["Objects"].push_back(std::move(encoded));
 		}
-		return document.dump();
+		auto Encoded = JsonCodec::Encode(document, "Snapshot");
+		if (!Encoded) throw std::runtime_error(Encoded.error().Format());
+		return std::move(*Encoded);
 	}
 
 	SnapshotParseResult DeserializeSnapshot(std::string_view serialized) {
 		SnapshotParseResult result;
-		try {
-			ValidateProtocolJsonDocument(serialized);
-		} catch (const std::exception &Error) {
-			result.Errors.push_back(Error.what());
+		auto Parsed = JsonCodec::Parse(serialized, MaximumProtocolDocumentBytes, "Snapshot");
+		if (!Parsed) {
+			result.Errors.push_back(Parsed.error().Format());
 			return result;
 		}
-		Json document;
+		auto document = std::move(*Parsed);
 		try {
-			document = Json::parse(serialized);
-		} catch (const std::exception &error) {
-			result.Errors.push_back(error.what());
-			return result;
-		}
-		try {
-			ValidateProtocolJsonTree(document);
 			if (!HasOnlyFields(document, {"Version", "Cursor", "Objects"}) || document.size() != 3 ||
 				document.value("Version", 0u) != SnapshotFormatVersion ||
 				!document.contains("Cursor") || !document["Cursor"].is_object() ||
@@ -431,7 +425,7 @@ namespace gargantuan {
 					return result;
 				}
 				auto classId = SchemaId::Parse(encoded["ClassSchemaId"].get<std::string>());
-				auto decodedClassVersion = DecodeWireUnsigned32(encoded["ClassDefinitionVersion"]);
+				auto decodedClassVersion = JsonCodec::DecodeUnsigned32(encoded["ClassDefinitionVersion"]);
 				const auto classVersion = decodedClassVersion.value_or(0);
 				auto *classDefinition = classId ? GetActiveRuntimeSchemaRegistry().FindClassById(*classId) : nullptr;
 				if (!classDefinition || classVersion == 0 || classDefinition->DefinitionVersion != classVersion)
@@ -495,7 +489,7 @@ namespace gargantuan {
 						throw std::invalid_argument("Snapshot extension identities are invalid or unordered");
 					previousExtensionId = *extensionId;
 					auto *extension = GetActiveRuntimeSchemaRegistry().FindExtensionById(*extensionId);
-					auto decodedVersion = DecodeWireUnsigned32(encodedExtension["DefinitionVersion"]);
+					auto decodedVersion = JsonCodec::DecodeUnsigned32(encodedExtension["DefinitionVersion"]);
 					const auto version = decodedVersion.value_or(0);
 					if (!extension || extension->DefinitionVersion != version)
 						throw std::invalid_argument("Snapshot extension version is missing or incompatible");
@@ -539,7 +533,7 @@ namespace gargantuan {
 						throw std::invalid_argument("Snapshot custom property declaring identities are invalid or unordered");
 					previousDeclaringClassId = *declaringId;
 					auto *declaringClass = GetActiveRuntimeSchemaRegistry().FindClassById(*declaringId);
-					auto decodedVersion = DecodeWireUnsigned32(encodedState["DefinitionVersion"]);
+					auto decodedVersion = JsonCodec::DecodeUnsigned32(encodedState["DefinitionVersion"]);
 					const auto version = decodedVersion.value_or(0);
 					if (!declaringClass || declaringClass->ConstructionKind != SchemaClassConstructionKind::CustomData ||
 						declaringClass->DefinitionVersion != version ||

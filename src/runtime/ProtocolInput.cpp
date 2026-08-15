@@ -1,6 +1,6 @@
 #include "gargantuan/runtime/ProtocolInput.hpp"
+#include "serialization/JsonCodec.hpp"
 
-#include <nlohmann/json.hpp>
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -11,7 +11,7 @@
 namespace gargantuan {
 	namespace {
 		void ValidateJsonNode(
-			const nlohmann::ordered_json &Value,
+			const JsonCodec::Json &Value,
 			std::size_t Depth,
 			std::size_t &Nodes
 		) {
@@ -97,7 +97,7 @@ namespace gargantuan {
 		}
 	}
 
-	void ValidateProtocolJsonTree(const nlohmann::ordered_json &Value) {
+	void JsonCodec::ValidateTree(const Json &Value) {
 		std::size_t Nodes = 0;
 		ValidateJsonNode(Value, 1, Nodes);
 	}

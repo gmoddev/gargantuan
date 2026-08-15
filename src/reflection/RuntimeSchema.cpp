@@ -159,7 +159,7 @@ namespace gargantuan {
 		if (!valid) throw std::invalid_argument(
 			"Extension property value does not match declared " + std::string(GetSchemaExtensionPropertyTypeName(type)) + " type"
 		);
-		const auto bytes = EncodeWireValue(value).dump().size();
+		const auto bytes = MeasureWireValueJsonBytes(value);
 		if (bytes > MaximumExtensionDefaultValueBytes)
 			throw std::invalid_argument("Extension property value exceeds its encoded byte limit");
 		return bytes;

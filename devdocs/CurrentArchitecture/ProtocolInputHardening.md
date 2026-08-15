@@ -5,6 +5,8 @@ last_verified: 2026-08-15
 related_code:
   - include/gargantuan/runtime/ProtocolInput.hpp
   - src/runtime/ProtocolInput.cpp
+  - src/serialization/JsonCodec.cpp
+  - include/gargantuan/serialization/SerializationError.hpp
   - src/runtime/WireCodec.cpp
   - src/runtime/Snapshot.cpp
   - src/runtime/WireJournal.cpp
@@ -40,6 +42,11 @@ nesting-checked before JSON parsing, then node-, field-, string-, shape-, count-
 integer-, and value-checked after parsing. All unsigned-to-32-bit and signed
 integer conversions validate range before narrowing. Floating-point protocol
 values must be finite.
+
+The JSON parser and serializer now sit behind Gargantuan-owned codec entry
+points. Third-party JSON exceptions and types do not cross semantic or protocol
+headers; syntax and truncation failures normalize to `SerializationError` before
+format-specific semantic validation continues.
 
 The hard native ceilings are safety limits rather than future session budgets:
 

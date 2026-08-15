@@ -111,6 +111,7 @@ The following documents describe recently implemented, source-verified slices:
 - [Network scheduler contract](../../devdocs/CurrentArchitecture/NetworkSchedulerContract.md)
 - [Networking foundation validation](../../devdocs/CurrentArchitecture/NetworkingFoundationValidation.md)
 - [Real game transport](../../devdocs/CurrentArchitecture/RealGameTransport.md)
+- [Serialization codec boundary](../../devdocs/CurrentArchitecture/SerializationCodecBoundary.md)
 - [Script security](../../devdocs/CurrentArchitecture/ScriptSecurity.md)
 - [EditorHost protocol](../../devdocs/CurrentArchitecture/EditorHostProtocol.md)
 - [Editor viewport](../../devdocs/CurrentArchitecture/EditorViewport.md)

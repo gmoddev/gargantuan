@@ -14,6 +14,7 @@
 #include "gargantuan/runtime/WireCodec.hpp"
 #include "gargantuan/runtime/WireJournal.hpp"
 #include "gargantuan/services/Workspace.hpp"
+#include "serialization/JsonCodec.hpp"
 
 #include <algorithm>
 #include <array>
@@ -21,13 +22,12 @@
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
-#include <nlohmann/json.hpp>
 #include <stdexcept>
 #include <vector>
 
 namespace gargantuan {
 	namespace {
-		using Json = nlohmann::ordered_json;
+		using Json = JsonCodec::Json;
 
 		enum class LineReadStatus { Complete, End, Oversized };
 
@@ -75,9 +75,20 @@ namespace gargantuan {
 		}
 
 		std::string SerializeBoundedResponse(Json response) {
-			auto serialized = response.dump();
-			if (serialized.size() <= EditorHostMaximumResponseBytes) return serialized;
-			return ErrorResponse(nullptr, "ResponseTooLarge", "EditorHost response exceeded its byte limit").dump();
+			auto Serialized = JsonCodec::Encode(response, "EditorHost response");
+			if (Serialized && Serialized->size() <= EditorHostMaximumResponseBytes) return std::move(*Serialized);
+			auto Fallback = JsonCodec::Encode(
+				ErrorResponse(nullptr, "ResponseTooLarge", "EditorHost response exceeded its byte limit"),
+				"EditorHost error response"
+			);
+			return Fallback ? std::move(*Fallback) :
+				R"({"Version":1,"RequestId":null,"Ok":false,"Error":{"Code":"InternalError","Message":"Response encoding failed"}})";
+		}
+
+		Json ParseGeneratedJson(std::string_view Encoded, std::string_view Name) {
+			auto Parsed = JsonCodec::Parse(Encoded, EditorHostMaximumResponseBytes, Name);
+			if (!Parsed) throw std::runtime_error(Parsed.error().Format());
+			return std::move(*Parsed);
 		}
 
 		const char *MutationStatusName(MutationStatus status) {
@@ -98,7 +109,7 @@ namespace gargantuan {
 
 		Json EncodeCursor(ChangeCursor cursor) {
 			return Json{
-				{"Scope", EncodeWireObjectId(WireObjectId::FromObjectId(cursor.Scope))},
+				{"Scope", JsonCodec::EncodeObjectId(WireObjectId::FromObjectId(cursor.Scope))},
 				{"NextSequence", cursor.NextSequence},
 			};
 		}
@@ -188,7 +199,12 @@ namespace gargantuan {
 				return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", Error.what()));
 			}
 
-			auto message = Json::parse(request);
+			auto ParsedMessage = JsonCodec::Parse(request, EditorHostMaximumRequestBytes, "EditorHost request");
+			if (!ParsedMessage)
+				return SerializeBoundedResponse(ErrorResponse(
+					requestId, "MalformedRequest", ParsedMessage.error().Format()
+				));
+			auto message = std::move(*ParsedMessage);
 			if (!HasOnlyFields(message, {"Version", "RequestId", "SessionToken", "Method", "Params"}) ||
 				message.value("Version", 0u) != EditorHostProtocolVersion ||
 				!message.contains("RequestId") || !message["RequestId"].is_string() ||
@@ -317,7 +333,7 @@ namespace gargantuan {
 				ViewportCamera = RenderCameraInput{};
 				return SerializeBoundedResponse(SuccessResponse(
 					requestId,
-					{{"Root", EncodeWireObjectId(WireObjectId::FromObjectId(World->GetObjectId()))}}
+					{{"Root", JsonCodec::EncodeObjectId(WireObjectId::FromObjectId(World->GetObjectId()))}}
 				));
 			}
 
@@ -358,7 +374,7 @@ namespace gargantuan {
 							{"RequiredWriteCapability", GetScriptCapabilityName(property->RequiredWriteCapability)},
 						};
 						if (auto defaultValue = EncodeNativeWireValue(property->Unmodified))
-							encoded["Default"] = EncodeWireValue(*defaultValue);
+							encoded["Default"] = JsonCodec::EncodeWireValue(*defaultValue);
 						properties.push_back(std::move(encoded));
 					}
 					classes.push_back({
@@ -399,7 +415,7 @@ namespace gargantuan {
 								{"Name", property.Name},
 								{"CanonicalName", property.CanonicalName},
 								{"Type", GetSchemaExtensionPropertyTypeName(property.Type)},
-								{"Default", EncodeWireValue(property.DefaultValue)},
+								{"Default", JsonCodec::EncodeWireValue(property.DefaultValue)},
 								{"Readable", true},
 								{"Writable", true},
 								{"Editable", property.Editable},
@@ -424,7 +440,7 @@ namespace gargantuan {
 								{"Name", property.Name},
 								{"CanonicalName", property.CanonicalName},
 								{"Type", GetSchemaExtensionPropertyTypeName(property.Type)},
-								{"Default", EncodeWireValue(property.DefaultValue)},
+								{"Default", JsonCodec::EncodeWireValue(property.DefaultValue)},
 								{"Readable", true},
 								{"Writable", true},
 								{"Editable", property.Editable},
@@ -460,8 +476,8 @@ namespace gargantuan {
 					!parameters.contains("Width") || !parameters["Width"].is_number_unsigned() ||
 					!parameters.contains("Height") || !parameters["Height"].is_number_unsigned())
 					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Viewport dimensions must be unsigned"));
-				auto width = DecodeWireUnsigned32(parameters["Width"]);
-				auto height = DecodeWireUnsigned32(parameters["Height"]);
+				auto width = JsonCodec::DecodeUnsigned32(parameters["Width"]);
+				auto height = JsonCodec::DecodeUnsigned32(parameters["Height"]);
 				if (!width || !height || *width == 0 || *height == 0 ||
 					*width > EditorHostMaximumViewportDimension || *height > EditorHostMaximumViewportDimension ||
 					static_cast<std::uint64_t>(*width) * *height > EditorHostMaximumViewportPixels)
@@ -567,7 +583,7 @@ namespace gargantuan {
 					*LastViewportSnapshot, parameters["X"].get<float>(), parameters["Y"].get<float>()
 				);
 				return SerializeBoundedResponse(SuccessResponse(requestId, {
-					{"Object", pick ? Json(EncodeWireObjectId(WireObjectId::FromObjectId(pick->Object))) : Json(nullptr)},
+					{"Object", pick ? Json(JsonCodec::EncodeObjectId(WireObjectId::FromObjectId(pick->Object))) : Json(nullptr)},
 					{"Distance", pick ? Json(pick->Distance) : Json(nullptr)},
 				}));
 			}
@@ -581,7 +597,7 @@ namespace gargantuan {
 				Cursor = snapshot.Cursor;
 				return SerializeBoundedResponse(SuccessResponse(
 					requestId,
-					{{"Snapshot", Json::parse(SerializeSnapshot(snapshot))}}
+					{{"Snapshot", ParseGeneratedJson(SerializeSnapshot(snapshot), "Snapshot response")}}
 				));
 			}
 
@@ -607,7 +623,7 @@ namespace gargantuan {
 				records.reserve(changes.Records.size());
 				for (const auto &record : changes.Records) records.push_back(EncodeChangeRecord(record));
 				Cursor = changes.Cursor;
-				auto wire = Json::parse(SerializeWireJournalRecords(records));
+				auto wire = ParseGeneratedJson(SerializeWireJournalRecords(records), "Journal response");
 				return SerializeBoundedResponse(SuccessResponse(
 					requestId,
 					{{"Records", std::move(wire["Records"])}, {"Cursor", EncodeCursor(*Cursor)}}
@@ -624,8 +640,8 @@ namespace gargantuan {
 					!parameters["Property"].is_string() || parameters["Property"].get_ref<const std::string &>().empty() ||
 					parameters["Property"].get_ref<const std::string &>().size() > 256 || !parameters.contains("Value"))
 					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "SetProperty fields are invalid"));
-				auto object = DecodeWireObjectId(parameters["Object"]);
-				auto value = DecodeWireValue(parameters["Value"]);
+				auto object = JsonCodec::DecodeObjectId(parameters["Object"]);
+				auto value = JsonCodec::DecodeWireValue(parameters["Value"]);
 				if (!object || !value)
 					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "SetProperty Object or WireValue is invalid"));
 				auto target = ObjectRegistry::Get().Lookup(object->ToObjectId());
@@ -641,7 +657,7 @@ namespace gargantuan {
 					{"Status", MutationStatusName(mutation.Status)},
 					{"Message", mutation.Message},
 				};
-				if (mutation.Object) result["Object"] = EncodeWireObjectId(WireObjectId::FromObjectId(*mutation.Object));
+				if (mutation.Object) result["Object"] = JsonCodec::EncodeObjectId(WireObjectId::FromObjectId(*mutation.Object));
 				return SerializeBoundedResponse(
 					mutation.Succeeded() ? SuccessResponse(requestId, std::move(result))
 										: ErrorResponse(requestId, MutationStatusName(mutation.Status), mutation.Message)
@@ -657,8 +673,8 @@ namespace gargantuan {
 					!parameters.contains("Object") || !parameters.contains("Attribute") ||
 					!parameters["Attribute"].is_string() || !parameters.contains("Value"))
 					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "SetAttribute fields are invalid"));
-				auto object = DecodeWireObjectId(parameters["Object"]);
-				auto value = DecodeWireValue(parameters["Value"]);
+				auto object = JsonCodec::DecodeObjectId(parameters["Object"]);
+				auto value = JsonCodec::DecodeWireValue(parameters["Value"]);
 				if (!object || !value)
 					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "SetAttribute Object or WireValue is invalid"));
 				auto target = ObjectRegistry::Get().Lookup(object->ToObjectId());
@@ -670,7 +686,7 @@ namespace gargantuan {
 					object->ToObjectId(), parameters["Attribute"].get<std::string>(), std::move(attributeValue)
 				}, MutationAuthorityContext::Studio(StudioSecurity, World->GetObjectId()));
 				Json result{{"Status", MutationStatusName(mutation.Status)}, {"Message", mutation.Message}};
-				if (mutation.Object) result["Object"] = EncodeWireObjectId(WireObjectId::FromObjectId(*mutation.Object));
+				if (mutation.Object) result["Object"] = JsonCodec::EncodeObjectId(WireObjectId::FromObjectId(*mutation.Object));
 				return SerializeBoundedResponse(
 					mutation.Succeeded() ? SuccessResponse(requestId, std::move(result))
 										: ErrorResponse(requestId, MutationStatusName(mutation.Status), mutation.Message)
@@ -695,10 +711,10 @@ namespace gargantuan {
 					return SerializeBoundedResponse(ErrorResponse(
 						requestId, "MalformedRequest", "SetExtensionProperty fields are invalid"
 					));
-				auto object = DecodeWireObjectId(parameters["Object"]);
+				auto object = JsonCodec::DecodeObjectId(parameters["Object"]);
 				const auto encodedId = parameters["ExtensionSchemaId"].get<std::string>();
 				auto extensionId = SchemaId::Parse(encodedId);
-				auto value = DecodeWireValue(parameters["Value"]);
+				auto value = JsonCodec::DecodeWireValue(parameters["Value"]);
 				if (!object || !extensionId || extensionId->ToString() != encodedId || !value)
 					return SerializeBoundedResponse(ErrorResponse(
 						requestId, "MalformedRequest", "SetExtensionProperty identity or value is invalid"
@@ -712,7 +728,7 @@ namespace gargantuan {
 				auto *property = GetActiveRuntimeSchemaRegistry().FindExtensionProperty(
 					*extensionId, parameters["Property"].get<std::string>()
 				);
-				auto version = DecodeWireUnsigned32(parameters["DefinitionVersion"]);
+				auto version = JsonCodec::DecodeUnsigned32(parameters["DefinitionVersion"]);
 				if (!version || *version == 0)
 					return SerializeBoundedResponse(ErrorResponse(
 						requestId, "MalformedRequest", "DefinitionVersion is outside the supported range"
@@ -733,7 +749,7 @@ namespace gargantuan {
 					std::move(*value),
 				}, MutationAuthorityContext::Studio(StudioSecurity, World->GetObjectId()));
 				Json result{{"Status", MutationStatusName(mutation.Status)}, {"Message", mutation.Message}};
-				if (mutation.Object) result["Object"] = EncodeWireObjectId(WireObjectId::FromObjectId(*mutation.Object));
+				if (mutation.Object) result["Object"] = JsonCodec::EncodeObjectId(WireObjectId::FromObjectId(*mutation.Object));
 				return SerializeBoundedResponse(
 					mutation.Succeeded() ? SuccessResponse(requestId, std::move(result))
 						: ErrorResponse(requestId, MutationStatusName(mutation.Status), mutation.Message)
@@ -758,10 +774,10 @@ namespace gargantuan {
 					return SerializeBoundedResponse(ErrorResponse(
 						requestId, "MalformedRequest", "SetCustomProperty fields are invalid"
 					));
-				auto object = DecodeWireObjectId(parameters["Object"]);
+				auto object = JsonCodec::DecodeObjectId(parameters["Object"]);
 				const auto encodedId = parameters["DeclaringClassSchemaId"].get<std::string>();
 				auto declaringId = SchemaId::Parse(encodedId);
-				auto value = DecodeWireValue(parameters["Value"]);
+				auto value = JsonCodec::DecodeWireValue(parameters["Value"]);
 				if (!object || !declaringId || declaringId->ToString() != encodedId || !value)
 					return SerializeBoundedResponse(ErrorResponse(
 						requestId, "MalformedRequest", "SetCustomProperty identity or value is invalid"
@@ -776,7 +792,7 @@ namespace gargantuan {
 					*declaringId, parameters["Property"].get<std::string>()
 				);
 				auto *targetClass = InstanceClassRegistry::GetDefinition(target.get());
-				auto version = DecodeWireUnsigned32(parameters["DefinitionVersion"]);
+				auto version = JsonCodec::DecodeUnsigned32(parameters["DefinitionVersion"]);
 				if (!version || *version == 0)
 					return SerializeBoundedResponse(ErrorResponse(
 						requestId, "MalformedRequest", "DefinitionVersion is outside the supported range"
@@ -800,7 +816,7 @@ namespace gargantuan {
 					object->ToObjectId(), parameters["Property"].get<std::string>(), std::move(*native)
 				}, MutationAuthorityContext::Studio(StudioSecurity, World->GetObjectId()));
 				Json result{{"Status", MutationStatusName(mutation.Status)}, {"Message", mutation.Message}};
-				if (mutation.Object) result["Object"] = EncodeWireObjectId(WireObjectId::FromObjectId(*mutation.Object));
+				if (mutation.Object) result["Object"] = JsonCodec::EncodeObjectId(WireObjectId::FromObjectId(*mutation.Object));
 				return SerializeBoundedResponse(
 					mutation.Succeeded() ? SuccessResponse(requestId, std::move(result))
 						: ErrorResponse(requestId, MutationStatusName(mutation.Status), mutation.Message)
@@ -815,7 +831,7 @@ namespace gargantuan {
 				if (!HasOnlyFields(parameters, {"Object", "Tag"}) || !parameters.contains("Object") ||
 					!parameters.contains("Tag") || !parameters["Tag"].is_string())
 					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Tag mutation fields are invalid"));
-				auto object = DecodeWireObjectId(parameters["Object"]);
+				auto object = JsonCodec::DecodeObjectId(parameters["Object"]);
 				if (!object)
 					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Tag mutation Object is invalid"));
 				auto target = ObjectRegistry::Get().Lookup(object->ToObjectId());
@@ -827,7 +843,7 @@ namespace gargantuan {
 					: Mutations.Apply(RemoveTagCommand{object->ToObjectId(), parameters["Tag"].get<std::string>(), World->GetObjectId()},
 						MutationAuthorityContext::Studio(StudioSecurity, World->GetObjectId()));
 				Json result{{"Status", MutationStatusName(mutation.Status)}, {"Message", mutation.Message}};
-				if (mutation.Object) result["Object"] = EncodeWireObjectId(WireObjectId::FromObjectId(*mutation.Object));
+				if (mutation.Object) result["Object"] = JsonCodec::EncodeObjectId(WireObjectId::FromObjectId(*mutation.Object));
 				return SerializeBoundedResponse(
 					mutation.Succeeded() ? SuccessResponse(requestId, std::move(result))
 										: ErrorResponse(requestId, MutationStatusName(mutation.Status), mutation.Message)
@@ -836,7 +852,8 @@ namespace gargantuan {
 
 			return SerializeBoundedResponse(ErrorResponse(requestId, "UnknownMethod", "EditorHost method is not supported"));
 		} catch (const nlohmann::json::exception &error) {
-			return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", error.what()));
+			(void)error;
+			return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "EditorHost JSON fields are malformed"));
 		} catch (const std::exception &error) {
 			return SerializeBoundedResponse(ErrorResponse(requestId, "RequestRejected", error.what()));
 		} catch (...) {

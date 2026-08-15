@@ -46,7 +46,7 @@ namespace gargantuan {
 		if (!supported) throw std::invalid_argument("Attribute WireValue type is unsupported or non-finite");
 		if (const auto *string = std::get_if<std::string>(&value); string && string->size() > MaximumAttributeValueBytes)
 			throw std::invalid_argument("Attribute value exceeds its encoded byte limit");
-		const auto encodedBytes = EncodeWireValue(value).dump().size();
+		const auto encodedBytes = MeasureWireValueJsonBytes(value);
 		if (encodedBytes > MaximumAttributeValueBytes) throw std::invalid_argument("Attribute value exceeds its encoded byte limit");
 		return encodedBytes;
 	}

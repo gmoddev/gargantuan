@@ -1,6 +1,7 @@
 #include "gargantuan/runtime/WireJournal.hpp"
 
 #include "gargantuan/runtime/WireCodec.hpp"
+#include "serialization/JsonCodec.hpp"
 #include "gargantuan/runtime/AttributeValidation.hpp"
 #include "gargantuan/runtime/ProtocolInput.hpp"
 #include "gargantuan/runtime/TagIndex.hpp"
@@ -11,6 +12,7 @@
 
 namespace gargantuan {
 	namespace {
+		using Json = JsonCodec::Json;
 		const char *OperationName(WireJournalOperation operation) {
 			switch (operation) {
 				case WireJournalOperation::Create: return "Create";
@@ -37,7 +39,7 @@ namespace gargantuan {
 			return std::nullopt;
 		}
 
-		bool HasOnlyFields(const WireJson &encoded, std::initializer_list<std::string_view> allowed) {
+		bool HasOnlyFields(const Json &encoded, std::initializer_list<std::string_view> allowed) {
 			for (const auto &[name, value] : encoded.items()) {
 				(void)value;
 				bool found = false;
@@ -105,14 +107,14 @@ namespace gargantuan {
 	}
 
 	std::string SerializeWireJournalRecords(const std::vector<WireJournalRecord> &records) {
-		WireJson document{{"Version", WireJournalFormatVersion}, {"Records", WireJson::array()}};
+		Json document{{"Version", WireJournalFormatVersion}, {"Records", Json::array()}};
 		for (const auto &record : records) {
-			WireJson encoded{
+			Json encoded{
 				{"Version", record.Version},
 				{"Sequence", record.Sequence},
-				{"Scope", EncodeWireObjectId(record.Scope)},
+				{"Scope", JsonCodec::EncodeObjectId(record.Scope)},
 				{"Operation", OperationName(record.Operation)},
-				{"ObjectId", EncodeWireObjectId(record.Object)},
+				{"ObjectId", JsonCodec::EncodeObjectId(record.Object)},
 			};
 			switch (record.Operation) {
 				case WireJournalOperation::Create:
@@ -122,7 +124,7 @@ namespace gargantuan {
 					break;
 				case WireJournalOperation::PropertyUpdate:
 					encoded["PropertyName"] = record.PropertyName.value_or("");
-					encoded["Value"] = record.Value ? EncodeWireValue(*record.Value) : WireJson(nullptr);
+					encoded["Value"] = record.Value ? JsonCodec::EncodeWireValue(*record.Value) : Json(nullptr);
 					if (record.DeclaringClassSchemaId) {
 						encoded["DeclaringClassSchemaId"] = record.DeclaringClassSchemaId->ToString();
 						encoded["DefinitionVersion"] = record.DefinitionVersion.value_or(0);
@@ -130,40 +132,40 @@ namespace gargantuan {
 					break;
 				case WireJournalOperation::AttributeUpdate:
 					encoded["AttributeName"] = record.AttributeName.value_or("");
-					encoded["Value"] = record.Value ? EncodeWireValue(*record.Value) : WireJson(nullptr);
+					encoded["Value"] = record.Value ? JsonCodec::EncodeWireValue(*record.Value) : Json(nullptr);
 					break;
 				case WireJournalOperation::ExtensionPropertyUpdate:
 					encoded["ExtensionSchemaId"] = record.ExtensionSchemaId
 						? record.ExtensionSchemaId->ToString() : "";
 					encoded["DefinitionVersion"] = record.DefinitionVersion.value_or(0);
 					encoded["PropertyName"] = record.ExtensionPropertyName.value_or("");
-					encoded["Value"] = record.Value ? EncodeWireValue(*record.Value) : WireJson(nullptr);
+					encoded["Value"] = record.Value ? JsonCodec::EncodeWireValue(*record.Value) : Json(nullptr);
 					break;
 				case WireJournalOperation::TagAdded:
 				case WireJournalOperation::TagRemoved:
 					encoded["TagName"] = record.TagName.value_or("");
 					break;
 				case WireJournalOperation::Reparent:
-					encoded["ParentId"] = record.Parent ? EncodeWireObjectId(*record.Parent) : WireJson(nullptr);
+					encoded["ParentId"] = record.Parent ? JsonCodec::EncodeObjectId(*record.Parent) : Json(nullptr);
 					break;
 				case WireJournalOperation::Destroy: break;
 			}
 			document["Records"].push_back(std::move(encoded));
 		}
-		return document.dump();
+		auto Encoded = JsonCodec::Encode(document, "WireJournal");
+		if (!Encoded) throw std::runtime_error(Encoded.error().Format());
+		return std::move(*Encoded);
 	}
 
 	WireJournalParseResult DeserializeWireJournalRecords(std::string_view serialized) {
 		WireJournalParseResult result;
-		try {
-			ValidateProtocolJsonDocument(serialized);
-		} catch (const std::exception &Error) {
-			result.Errors.push_back(Error.what());
+		auto Parsed = JsonCodec::Parse(serialized, MaximumProtocolDocumentBytes, "WireJournal");
+		if (!Parsed) {
+			result.Errors.push_back(Parsed.error().Format());
 			return result;
 		}
 		try {
-			auto document = WireJson::parse(serialized);
-			ValidateProtocolJsonTree(document);
+			auto document = std::move(*Parsed);
 			if (!document.is_object() || !HasOnlyFields(document, {"Version", "Records"}) ||
 				document.value("Version", 0u) != WireJournalFormatVersion ||
 				!document.contains("Records") || !document["Records"].is_array()) {
@@ -185,8 +187,8 @@ namespace gargantuan {
 					return result;
 				}
 				auto operation = ParseOperation(encoded["Operation"].get<std::string>());
-				auto scope = DecodeWireObjectId(encoded["Scope"]);
-				auto object = DecodeWireObjectId(encoded["ObjectId"]);
+				auto scope = JsonCodec::DecodeObjectId(encoded["Scope"]);
+				auto object = JsonCodec::DecodeObjectId(encoded["ObjectId"]);
 				const auto sequence = encoded["Sequence"].get<std::uint64_t>();
 				if (!operation || !scope || !object || sequence == 0) {
 					result.Errors.push_back("Invalid wire journal operation, sequence, scope, or ObjectId");
@@ -211,7 +213,7 @@ namespace gargantuan {
 						record.ClassName = encoded["ClassName"].get<std::string>();
 						if (auto id = SchemaId::Parse(encoded["ClassSchemaId"].get<std::string>()); id) {
 							auto *definition = GetActiveRuntimeSchemaRegistry().FindClassById(*id);
-							const auto version = DecodeWireUnsigned32(encoded["DefinitionVersion"]).value_or(0);
+							const auto version = JsonCodec::DecodeUnsigned32(encoded["DefinitionVersion"]).value_or(0);
 							const auto expectedName = definition && definition->ConstructionKind == SchemaClassConstructionKind::CustomData
 								? definition->CanonicalName : definition ? definition->ClassName : std::string{};
 							if (!definition || version == 0 || definition->DefinitionVersion != version ||
@@ -229,7 +231,7 @@ namespace gargantuan {
 							!encoded.contains("PropertyName") || !encoded["PropertyName"].is_string() ||
 							encoded["PropertyName"].get<std::string>().empty() || !encoded.contains("Value"))
 							throw std::invalid_argument("Invalid PropertyUpdate journal record");
-						auto value = DecodeWireValue(encoded["Value"]);
+						auto value = JsonCodec::DecodeWireValue(encoded["Value"]);
 						if (!value) throw std::invalid_argument("Invalid PropertyUpdate WireValue");
 						record.PropertyName = encoded["PropertyName"].get<std::string>();
 						ValidateProtocolString(*record.PropertyName, MaximumProtocolIdentifierBytes, "Property name");
@@ -242,7 +244,7 @@ namespace gargantuan {
 								!encoded["DefinitionVersion"].is_number_unsigned())
 								throw std::invalid_argument("Custom PropertyUpdate identity fields are malformed");
 							auto declaringId = SchemaId::Parse(encoded["DeclaringClassSchemaId"].get<std::string>());
-							const auto version = DecodeWireUnsigned32(encoded["DefinitionVersion"]).value_or(0);
+							const auto version = JsonCodec::DecodeUnsigned32(encoded["DefinitionVersion"]).value_or(0);
 							auto *declaringClass = declaringId ? GetActiveRuntimeSchemaRegistry().FindClassById(*declaringId) : nullptr;
 							auto *property = declaringId
 								? GetActiveRuntimeSchemaRegistry().FindCustomClassProperty(*declaringId, *record.PropertyName) : nullptr;
@@ -260,7 +262,7 @@ namespace gargantuan {
 							!encoded.contains("AttributeName") || !encoded["AttributeName"].is_string() ||
 							encoded["AttributeName"].get_ref<const std::string &>().empty() || !encoded.contains("Value"))
 							throw std::invalid_argument("Invalid AttributeUpdate journal record");
-						auto value = DecodeWireValue(encoded["Value"]);
+						auto value = JsonCodec::DecodeWireValue(encoded["Value"]);
 						if (!value) throw std::invalid_argument("Invalid AttributeUpdate WireValue");
 						record.AttributeName = encoded["AttributeName"].get<std::string>();
 						ValidateAttributeName(*record.AttributeName);
@@ -281,13 +283,13 @@ namespace gargantuan {
 						auto extensionId = SchemaId::Parse(encodedId);
 						if (!extensionId || extensionId->ToString() != encodedId)
 							throw std::invalid_argument("Invalid extension SchemaId");
-						const auto version = DecodeWireUnsigned32(encoded["DefinitionVersion"]).value_or(0);
+						const auto version = JsonCodec::DecodeUnsigned32(encoded["DefinitionVersion"]).value_or(0);
 						if (version == 0) throw std::invalid_argument("Invalid extension definition version");
 						auto name = encoded["PropertyName"].get<std::string>();
 						ValidateProtocolString(name, MaximumProtocolIdentifierBytes, "Extension property name");
 						auto *extension = GetActiveRuntimeSchemaRegistry().FindExtensionById(*extensionId);
 						auto *property = GetActiveRuntimeSchemaRegistry().FindExtensionProperty(*extensionId, name);
-						auto value = DecodeWireValue(encoded["Value"]);
+						auto value = JsonCodec::DecodeWireValue(encoded["Value"]);
 						if (!extension || extension->DefinitionVersion != version || !property || !value)
 							throw std::invalid_argument("Unknown or incompatible extension property identity");
 						(void)ValidateSchemaExtensionPropertyValue(property->Type, *value);
@@ -310,7 +312,7 @@ namespace gargantuan {
 							!encoded.contains("ParentId"))
 							throw std::invalid_argument("Invalid Reparent journal record");
 						if (!encoded["ParentId"].is_null()) {
-							auto parent = DecodeWireObjectId(encoded["ParentId"]);
+							auto parent = JsonCodec::DecodeObjectId(encoded["ParentId"]);
 							if (!parent) throw std::invalid_argument("Invalid Reparent parent ObjectId");
 							record.Parent = *parent;
 						}
