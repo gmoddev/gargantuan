@@ -93,5 +93,6 @@ documented in `ProtocolInputHardening.md`.
 Pure backend-neutral networking contracts now exist separately under
 `include/gargantuan/network/`; they do not consume or reinterpret this
 debug/session journal. The deterministic simulated transport is also separate
-and does not consume this journal. Simulator validation and the future scheduler
-contract must not turn this journal into a packet protocol.
+and does not consume this journal. The validated scheduler contract likewise
+accepts `NetworkMessageIntent`, never journal records or journal sequence, and
+must not turn this journal into a packet protocol.

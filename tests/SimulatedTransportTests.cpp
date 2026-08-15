@@ -312,8 +312,11 @@ int main() {
 		Check(PayloadValues(Drain(Pair.Server)) == std::vector<unsigned int>({9, 9}),
 			"the fault model can duplicate unreliable messages");
 		auto Statistics = Pair.Client->GetStatistics(Pair.ClientConnection);
-		Check(Statistics && Statistics->DuplicatedUnreliableMessages == 1,
-			"delivered injected duplicates are counted");
+		auto ReceiverStatistics = Pair.Server->GetStatistics(Pair.ServerConnection);
+		Check(Statistics && Statistics->MessagesSent == 1 && Statistics->MessagesDelivered == 2 &&
+			Statistics->BytesSent == 1 && Statistics->DuplicatedUnreliableMessages == 1 &&
+			ReceiverStatistics && ReceiverStatistics->MessagesReceived == 2 && ReceiverStatistics->BytesReceived == 2,
+			"duplication statistics distinguish one accepted send from two delivered and received copies");
 	}
 
 	{

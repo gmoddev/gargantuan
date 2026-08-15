@@ -8,15 +8,18 @@ networking. It refines the [future architecture](./future-architecture/) without
 declaring an unfinished transport backend or public API spelling to be final.
 
 **Status:** The boundaries and invariants in this document are accepted design
-direction. Names marked as candidates, binary layouts, transport selection, and
-tuning values remain provisional until they are tested against a deterministic
-simulated transport.
+direction. Deterministic simulator validation confirmed the semantic delivery,
+lifecycle, boundedness, and scheduler/transport split. Names marked as
+candidates, binary layouts, real transport selection, and tuning values remain
+provisional pending their respective implementation evidence.
 
 **Implementation status:** The Attributes and Tags prerequisite, native
-protocol-input hardening, backend-neutral pure contracts, and deterministic
-in-memory transport are complete. The simulator exercises delivery and lifecycle
-semantics without sockets; simulator validation/scheduler-contract review and
-every real transport/runtime phase below remain unfinished.
+protocol-input hardening, backend-neutral pure contracts, deterministic
+in-memory transport, simulator validation, and the scheduler semantic contract
+are complete. The simulator exercises delivery and lifecycle semantics without
+sockets, and a deterministic policy proof validates scheduler admission,
+precedence, budgets, supersession, and flush behavior. The production scheduler,
+real transport, and runtime phases below remain unfinished.
 
 ## Context
 
@@ -287,8 +290,42 @@ At minimum, tests must prove:
 - a journal sequence gap is never treated as packet loss.
 
 The fake transport must test protocol behavior, not reproduce a chosen real
-backend's API. Only after these contracts pass should a GNS or QUIC adapter be
-selected and implemented.
+backend's API. The pre-backend validation checkpoint covers transport delivery,
+lifecycle, bounds, statistics, and scheduler policy. Requirements that need a
+`RemoteManager` or `ReplicationCoordinator`—remote request termination,
+irrelevant journal filtering/coalescing, and publish/unpublish execution—remain
+mandatory validation gates for those later layers and are exercised against the
+simulator when those layers exist. They are not falsely claimed by the transport
+alone.
+
+### Validation checkpoint result
+
+The simulator confirmed the accepted transport semantics without requiring an
+architectural invariant change. It also established the boundary needed before
+a real adapter:
+
+```text
+NetworkScheduler
+    owns semantic admission, queues, selection, supersession, per-tick budgets,
+    batching opportunities, transport submission, and scheduler statistics
+
+IGameTransport
+    owns delivery mechanics, transport resource limits, lifecycle, terminal
+    outcomes, datagram availability, and transport statistics
+```
+
+`Submit` queues a validated `NetworkMessageIntent`; it does not immediately
+send a packet. `Flush` is an explicit per-connection scheduling boundary that
+makes eligible work available to the transport within a validated budget. It is
+not a delivery acknowledgement. Reliable `WouldBlock` is observable temporary
+backpressure, while hard reliable backlog exhaustion is structured and terminal.
+Unreliable work may be dropped before submission, and newer unsent sequenced
+state supersedes older state in the same existing channel.
+
+The validation matrix and deterministic evidence are recorded in
+`devdocs/CurrentArchitecture/NetworkSchedulerContract.md`. Real-backend evidence
+is still required for backend-specific congestion behavior, diagnostics,
+handshake integration, and tuning.
 
 ## Security and resource limits
 
@@ -324,7 +361,7 @@ of the accepted decisions above.
 - [x] **Implement deterministic simulated transport.** Prove delivery, scheduling,
    backpressure, cancellation, and sequence-domain behavior under hostile
    conditions.
-- [ ] **Stop and validate.** Exercise the contracts, inspect metrics and failure
+- [x] **Stop and validate.** Exercise the contracts, inspect metrics and failure
    behavior, and revise this ADR before committing to a real backend.
 - [ ] **Select and implement one real transport adapter.** Add handshake,
    authentication hook, connection lifecycle, negotiated limits, and stats.

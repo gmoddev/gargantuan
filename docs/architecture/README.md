@@ -106,6 +106,7 @@ The following documents describe recently implemented, source-verified slices:
 - [Loopback replication](../../devdocs/CurrentArchitecture/LoopbackReplication.md)
 - [Networking contracts](../../devdocs/CurrentArchitecture/NetworkingContracts.md)
 - [Deterministic simulated transport](../../devdocs/CurrentArchitecture/SimulatedTransport.md)
+- [Network scheduler contract](../../devdocs/CurrentArchitecture/NetworkSchedulerContract.md)
 - [Script security](../../devdocs/CurrentArchitecture/ScriptSecurity.md)
 - [EditorHost protocol](../../devdocs/CurrentArchitecture/EditorHostProtocol.md)
 - [Editor viewport](../../devdocs/CurrentArchitecture/EditorViewport.md)
