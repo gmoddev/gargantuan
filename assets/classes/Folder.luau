@@ -4,4 +4,5 @@ return c({
 	name = "Folder",
 	description = "Simple container for instances, offers little additional functionality",
 	since = "0.1.0",
+	customSubclassPolicy = "DataOnly",
 })

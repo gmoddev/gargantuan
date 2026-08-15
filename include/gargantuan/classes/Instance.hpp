@@ -19,6 +19,11 @@
 
 namespace gargantuan {
 	class DataModel;
+	[[nodiscard]] InstanceProperty MakeCustomClassInstanceProperty(
+		SchemaId declaringClassId,
+		std::uint32_t definitionVersion,
+		const SchemaClassProperty &property
+	);
 	G_SHARED_USERDATA_DECL(
 		Instance, I_Instance;
 
@@ -31,6 +36,8 @@ namespace gargantuan {
 	  private:
 		std::map<std::string, WireValue> Attributes;
 		std::map<SchemaId, std::map<std::string, WireValue>> ExtensionValues;
+		std::map<SchemaId, std::map<std::string, WireValue>> CustomPropertyValues;
+		SchemaId RuntimeSchemaClassId{};
 		std::unordered_map<std::string, std::shared_ptr<Signal<std::monostate>>> AttributeChangedSignals;
 
 	  public:
@@ -95,6 +102,23 @@ namespace gargantuan {
 			WireValue value,
 			const ScriptSecurityContext &securityContext = GetCurrentScriptSecurityContext()
 		);
+		[[nodiscard]] WireValue GetCustomClassPropertyValue(
+			SchemaId declaringClassId,
+			std::string_view propertyName,
+			const ScriptSecurityContext &securityContext = GetCurrentScriptSecurityContext()
+		) const;
+		[[nodiscard]] std::map<SchemaId, std::map<std::string, WireValue>> GetCustomClassPropertyOverrides(
+			const ScriptSecurityContext &securityContext = GetCurrentScriptSecurityContext()
+		) const;
+		MutationStatus ApplyCustomClassPropertyMutation(
+			SchemaId declaringClassId,
+			std::uint32_t definitionVersion,
+			std::string_view propertyName,
+			WireValue value,
+			const ScriptSecurityContext &securityContext = GetCurrentScriptSecurityContext()
+		);
+		[[nodiscard]] SchemaId GetRuntimeSchemaClassId() const { return RuntimeSchemaClassId; }
+		void BindRuntimeSchemaClass(SchemaId classId);
 		[[nodiscard]] ObjectId GetObjectId() const;
 		[[nodiscard]] bool IsDestroying() const { return DestroyingState; }
 	);

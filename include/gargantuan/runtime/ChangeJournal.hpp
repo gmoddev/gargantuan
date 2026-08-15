@@ -18,11 +18,17 @@
 namespace gargantuan {
 	class InProcessReplicationSession;
 
-	struct ObjectCreatedChange { std::string ClassName; };
+	struct ObjectCreatedChange {
+		std::string ClassName;
+		SchemaId ClassSchemaId{};
+		std::uint32_t DefinitionVersion = 0;
+	};
 	struct PropertyUpdatedChange {
 		std::string PropertyName;
 		WireValue Value;
 		bool Replicated = false;
+		std::optional<SchemaId> DeclaringClassSchemaId{};
+		std::uint32_t DefinitionVersion = 0;
 	};
 	struct AttributeUpdatedChange {
 		std::string AttributeName;

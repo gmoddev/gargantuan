@@ -29,6 +29,7 @@ namespace gargantuan {
 			std::size_t AllocatedBytes = 0;
 			std::size_t DefinitionCount = 0;
 			std::size_t ExtensionDefinitionCount = 0;
+			std::size_t ClassDefinitionCount = 0;
 			std::size_t PayloadBytes = 0;
 			PreRunDiagnosticCode Failure = PreRunDiagnosticCode::RuntimeError;
 			bool HasFailure = false;
@@ -301,6 +302,97 @@ namespace gargantuan {
 			}
 		}
 
+		int RegisterClass(lua_State *L) {
+			auto &state = GetState(L);
+			state.Failure = PreRunDiagnosticCode::SchemaRegistrationError;
+			state.HasFailure = true;
+			state.CurrentDefinition.clear();
+			try {
+				if (!state.Security.HasCapability(ScriptCapability::DefineSchema))
+					throw std::runtime_error("Schema registration requires DefineSchema");
+				luaL_checktype(L, 2, LUA_TTABLE);
+				RejectUnknownFields(L, 2, {"Namespace", "Name", "Version", "Base", "Properties"});
+				lua_getfield(L, 2, "Namespace");
+				auto schemaNamespace = ReadBoundedString(L, -1, MaximumSchemaNamespaceBytes, "Namespace");
+				lua_pop(L, 1);
+				lua_getfield(L, 2, "Name");
+				auto name = ReadBoundedString(L, -1, MaximumSchemaDefinitionNameBytes, "Name");
+				lua_pop(L, 1);
+				state.CurrentDefinition = schemaNamespace + "." + name;
+				lua_getfield(L, 2, "Version");
+				if (lua_type(L, -1) != LUA_TNUMBER) luaL_error(L, "Version must be a positive integer");
+				const auto rawVersion = lua_tonumber(L, -1);
+				if (!std::isfinite(rawVersion) || std::trunc(rawVersion) != rawVersion || rawVersion < 1 ||
+					rawVersion > std::numeric_limits<std::uint32_t>::max())
+					luaL_error(L, "Version must be a positive 32-bit integer");
+				const auto version = static_cast<std::uint32_t>(rawVersion);
+				lua_pop(L, 1);
+				lua_getfield(L, 2, "Base");
+				auto base = ReadBoundedString(
+					L, -1, MaximumSchemaNamespaceBytes + MaximumSchemaDefinitionNameBytes + 1, "Base"
+				);
+				lua_pop(L, 1);
+				lua_getfield(L, 2, "Properties");
+				luaL_checktype(L, -1, LUA_TTABLE);
+				const auto propertiesIndex = lua_absindex(L, -1);
+				std::vector<SchemaClassProperty> properties;
+				properties.reserve(std::min<std::size_t>(lua_objlen(L, propertiesIndex), MaximumCustomClassProperties));
+				lua_pushnil(L);
+				while (lua_next(L, propertiesIndex) != 0) {
+					if (properties.size() >= MaximumCustomClassProperties)
+						luaL_error(L, "custom class exceeds its property limit");
+					auto propertyName = ReadBoundedString(
+						L, -2, MaximumExtensionPropertyNameBytes, "custom class property name"
+					);
+					luaL_checktype(L, -1, LUA_TTABLE);
+					RejectUnknownFields(L, -1, {"Type", "Default"});
+					lua_getfield(L, -1, "Type");
+					auto typeName = ReadBoundedString(L, -1, 16, "custom class property Type");
+					lua_pop(L, 1);
+					auto type = ParseSchemaExtensionPropertyType(typeName);
+					if (!type) luaL_error(L, "custom class property Type is unsupported");
+					lua_getfield(L, -1, "Default");
+					auto defaultValue = ReadExtensionDefault(L, -1, *type);
+					lua_pop(L, 1);
+					properties.push_back({
+						.Name = std::move(propertyName),
+						.Type = *type,
+						.DefaultValue = std::move(defaultValue),
+					});
+					lua_pop(L, 1);
+				}
+				lua_pop(L, 1);
+				if (++state.ClassDefinitionCount > MaximumCustomClassDefinitions)
+					throw std::runtime_error("PreRun exceeds its custom class definition count limit");
+				std::size_t payloadBytes = schemaNamespace.size() + name.size() + base.size();
+				for (const auto &property : properties)
+					payloadBytes += property.Name.size() + GetSchemaExtensionPropertyTypeName(property.Type).size() +
+						ValidateSchemaExtensionPropertyValue(property.Type, property.DefaultValue);
+				if (payloadBytes > MaximumCustomSchemaPayloadBytes - std::min(state.PayloadBytes, MaximumCustomSchemaPayloadBytes))
+					throw std::runtime_error("PreRun exceeds its aggregate registration payload limit");
+				state.PayloadBytes += payloadBytes;
+				SchemaClassDefinition definition{
+					.Id = SchemaId::FromCustomClassName(schemaNamespace, name),
+					.Namespace = std::move(schemaNamespace),
+					.ClassName = std::move(name),
+					.DefinitionVersion = version,
+					.Provenance = SchemaProvenance::Game,
+					.ConstructionKind = SchemaClassConstructionKind::CustomData,
+					.DeclaredCustomProperties = std::move(properties),
+					.OriginDetail = state.SourceName,
+				};
+				state.Lifecycle->RegisterClass(*state.Authority, std::move(definition), std::move(base), state.Security);
+				state.HasFailure = false;
+				state.CurrentDefinition.clear();
+				return 0;
+			} catch (const std::exception &exception) {
+				state.Failure = PreRunDiagnosticCode::SchemaRegistrationError;
+				state.HasFailure = true;
+				luaL_error(L, "%s", exception.what());
+				return 0;
+			}
+		}
+
 		void OpenSafeLibraries(lua_State *L) {
 			lua_pop(L, luaopen_base(L));
 			lua_pop(L, luaopen_math(L));
@@ -312,6 +404,8 @@ namespace gargantuan {
 			lua_setfield(L, -2, "RegisterEnum");
 			lua_pushcfunction(L, RegisterExtension, "Schema.RegisterExtension");
 			lua_setfield(L, -2, "RegisterExtension");
+			lua_pushcfunction(L, RegisterClass, "Schema.RegisterClass");
+			lua_setfield(L, -2, "RegisterClass");
 			lua_setreadonly(L, -1, true);
 			lua_setglobal(L, "Schema");
 			luaL_sandbox(L);

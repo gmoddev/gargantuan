@@ -20,5 +20,8 @@ namespace gargantuan::InstanceClassRegistry {
 	const InstanceClassDefinition *GetDefinition(Instance *instance);
 	const InstanceClassDefinition *GetDefinitionByName(std::string_view name);
 	const InstanceClassDefinition *GetDefinitionBySchemaId(SchemaId id);
+	[[nodiscard]] bool IsConstructible(const InstanceClassDefinition &definition);
+	[[nodiscard]] std::shared_ptr<Instance> Construct(const InstanceClassDefinition &definition);
+	[[nodiscard]] std::shared_ptr<Instance> ConstructByName(std::string_view name);
 	std::vector<std::string> GetClassNames();
 }

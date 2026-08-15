@@ -9,6 +9,8 @@
 #include "gargantuan/runtime/WireCodec.hpp"
 
 #include <exception>
+#include <map>
+#include <stdexcept>
 #include <unordered_set>
 #include <utility>
 
@@ -84,18 +86,22 @@ namespace gargantuan {
 	) {
 		AssertAuthoritativeMutation("InProcessReplicationSession::ApplyWireRecords");
 		if (records.empty()) return {ReplicationApplyStatus::NoChanges, 0, {}};
-		std::size_t applied = 0;
+		auto ExpectedSequence = Cursor.NextSequence;
 		for (const auto &record : records) {
 			if (record.Version != WireJournalFormatVersion || !record.Scope.IsValid() ||
 				!record.Object.IsValid() || record.Sequence == 0)
-				return {ReplicationApplyStatus::MalformedRecord, applied, "Malformed or unsupported wire journal record"};
+				return {ReplicationApplyStatus::MalformedRecord, 0, "Malformed or unsupported wire journal record"};
 			if (record.Scope.ToObjectId() != Cursor.Scope)
-				return {ReplicationApplyStatus::ApplyRejected, applied, "Wire journal record belongs to another replication scope"};
-			if (record.Sequence < Cursor.NextSequence)
-				return {ReplicationApplyStatus::DuplicateRecord, applied, "Duplicate wire journal sequence"};
-			if (record.Sequence > Cursor.NextSequence)
-				return {ReplicationApplyStatus::OutOfOrderRecord, applied, "Out-of-order wire journal sequence"};
-
+				return {ReplicationApplyStatus::ApplyRejected, 0, "Wire journal record belongs to another replication scope"};
+			if (record.Sequence < ExpectedSequence)
+				return {ReplicationApplyStatus::DuplicateRecord, 0, "Duplicate wire journal sequence"};
+			if (record.Sequence > ExpectedSequence)
+				return {ReplicationApplyStatus::OutOfOrderRecord, 0, "Out-of-order wire journal sequence"};
+			++ExpectedSequence;
+		}
+		if (auto Preflight = PreflightCustomClassRecords(records); !Preflight.Succeeded()) return Preflight;
+		std::size_t applied = 0;
+		for (const auto &record : records) {
 			auto recordResult = ApplyRecord(record);
 			if (!recordResult.Succeeded()) {
 				recordResult.AppliedRecords = applied;
@@ -105,6 +111,143 @@ namespace gargantuan {
 			++applied;
 		}
 		return {ReplicationApplyStatus::Success, applied, {}};
+	}
+
+	ReplicationApplyResult InProcessReplicationSession::PreflightCustomClassRecords(
+		const std::vector<WireJournalRecord> &records
+	) const {
+		using CustomPropertyState = std::map<SchemaId, std::map<std::string, WireValue>>;
+		std::unordered_map<WireObjectId, SchemaId> ClassIds;
+		std::unordered_map<WireObjectId, std::optional<WireObjectId>> Parents;
+		std::unordered_map<WireObjectId, CustomPropertyState> CustomPropertyStates;
+		std::unordered_map<const Instance *, WireObjectId> IdsByInstance;
+		for (const auto &[Object, Instance] : Receiver.Objects) IdsByInstance.emplace(Instance.get(), Object);
+		for (const auto &[Object, Instance] : Receiver.Objects) {
+			auto *Definition = InstanceClassRegistry::GetDefinition(Instance.get());
+			if (Definition) ClassIds.emplace(Object, Definition->Id);
+			CustomPropertyStates.emplace(Object, Instance->GetCustomClassPropertyOverrides(
+				ScriptSecurityContext::CoreTrusted()
+			));
+			std::optional<WireObjectId> Parent;
+			if (auto Owner = Instance->GetParent()) {
+				auto Found = IdsByInstance.find(Owner->get());
+				if (Found != IdsByInstance.end()) Parent = Found->second;
+			}
+			Parents.emplace(Object, Parent);
+		}
+		const auto &Schema = GetActiveRuntimeSchemaRegistry();
+		for (const auto &Record : records) {
+			if (Record.Operation == WireJournalOperation::Create) {
+				if (!Record.ClassName || !Record.ClassSchemaId || !Record.DefinitionVersion || Record.Parent ||
+					Record.PropertyName || Record.DeclaringClassSchemaId || Record.AttributeName ||
+					Record.ExtensionSchemaId || Record.ExtensionPropertyName || Record.TagName || Record.Value)
+					return {ReplicationApplyStatus::MalformedRecord, 0, "Invalid Create record"};
+				auto *Definition = Schema.FindClassById(*Record.ClassSchemaId);
+				const auto ExpectedName = Definition && Definition->ConstructionKind == SchemaClassConstructionKind::CustomData
+					? Definition->CanonicalName : Definition ? Definition->ClassName : std::string{};
+				if (!Definition || Definition->DefinitionVersion != *Record.DefinitionVersion ||
+					ExpectedName != *Record.ClassName || !Schema.IsClassConstructible(*Definition))
+					return {ReplicationApplyStatus::ApplyRejected, 0,
+						"Create class identity is unknown or incompatible"};
+				if (!ClassIds.emplace(Record.Object, Definition->Id).second)
+					return {ReplicationApplyStatus::MalformedRecord, 0, "Create record contains a duplicate ObjectId"};
+				Parents.emplace(Record.Object, std::nullopt);
+				CustomPropertyStates.emplace(Record.Object, CustomPropertyState{});
+				continue;
+			}
+			if (Record.Operation == WireJournalOperation::Reparent) {
+				if (Parents.contains(Record.Object)) Parents[Record.Object] = Record.Parent;
+				continue;
+			}
+			if (Record.Operation == WireJournalOperation::Destroy) {
+				std::unordered_set<WireObjectId> Removed{Record.Object};
+				bool Changed;
+				do {
+					Changed = false;
+					for (const auto &[Object, Parent] : Parents)
+						if (Parent && Removed.contains(*Parent) && Removed.insert(Object).second) Changed = true;
+				} while (Changed);
+				for (const auto &Object : Removed) {
+					ClassIds.erase(Object);
+					Parents.erase(Object);
+					CustomPropertyStates.erase(Object);
+				}
+				continue;
+			}
+			if (Record.Operation != WireJournalOperation::PropertyUpdate) continue;
+			auto Target = ClassIds.find(Record.Object);
+			if (Target == ClassIds.end()) {
+				if (Record.DeclaringClassSchemaId)
+					return {ReplicationApplyStatus::ApplyRejected, 0, "Custom property target is stale or missing"};
+				continue;
+			}
+			auto *TargetClass = Schema.FindClassById(Target->second);
+			const InstanceProperty *ReflectedProperty = nullptr;
+			if (TargetClass && Record.PropertyName) {
+				auto Property = TargetClass->AllProperties.find(*Record.PropertyName);
+				if (Property != TargetClass->AllProperties.end()) ReflectedProperty = Property->second;
+			}
+			const bool CustomProperty = ReflectedProperty && ReflectedProperty->CustomSchemaPropertyType.has_value();
+			if (!CustomProperty && !Record.DeclaringClassSchemaId) continue;
+			if (!CustomProperty || !Record.DeclaringClassSchemaId || !Record.DefinitionVersion || !Record.Value)
+				return {ReplicationApplyStatus::MalformedRecord, 0,
+					"Custom PropertyUpdate is missing stable identity, version, property, or value"};
+			auto *DeclaringClass = Schema.FindClassById(*Record.DeclaringClassSchemaId);
+			auto *Property = Record.PropertyName
+				? Schema.FindCustomClassProperty(*Record.DeclaringClassSchemaId, *Record.PropertyName) : nullptr;
+			if (!DeclaringClass || DeclaringClass->ConstructionKind != SchemaClassConstructionKind::CustomData ||
+				DeclaringClass->DefinitionVersion != *Record.DefinitionVersion || !Property ||
+				ReflectedProperty->DeclaringSchemaId != *Record.DeclaringClassSchemaId ||
+				!Schema.IsClassDerivedFrom(Target->second, *Record.DeclaringClassSchemaId))
+				return {ReplicationApplyStatus::ApplyRejected, 0,
+					"Custom property stable identity, version, or target is incompatible"};
+			try {
+				(void)ValidateSchemaExtensionPropertyValue(Property->Type, *Record.Value);
+				auto State = CustomPropertyStates.find(Record.Object);
+				if (State == CustomPropertyStates.end())
+					return {ReplicationApplyStatus::ApplyRejected, 0, "Custom property target state is stale or missing"};
+				auto Current = Property->DefaultValue;
+				if (auto Owner = State->second.find(*Record.DeclaringClassSchemaId); Owner != State->second.end())
+					if (auto Existing = Owner->second.find(*Record.PropertyName); Existing != Owner->second.end())
+						Current = Existing->second;
+				if (Current == *Record.Value)
+					return {ReplicationApplyStatus::ApplyRejected, 0,
+						"Custom PropertyUpdate is a semantic no-op"};
+
+				if (*Record.Value == Property->DefaultValue) {
+					auto Owner = State->second.find(*Record.DeclaringClassSchemaId);
+					if (Owner != State->second.end()) {
+						Owner->second.erase(*Record.PropertyName);
+						if (Owner->second.empty()) State->second.erase(Owner);
+					}
+				} else {
+					State->second[*Record.DeclaringClassSchemaId][*Record.PropertyName] = *Record.Value;
+				}
+
+				std::size_t Count = 0;
+				std::size_t Bytes = 0;
+				for (const auto &[DeclaringId, Values] : State->second) {
+					auto *Definition = Schema.FindClassById(DeclaringId);
+					if (!Definition || Definition->ConstructionKind != SchemaClassConstructionKind::CustomData ||
+						!Schema.IsClassDerivedFrom(Target->second, DeclaringId))
+						throw std::invalid_argument("Custom property override does not belong to the target class");
+					for (const auto &[Name, Value] : Values) {
+						auto *DefinitionProperty = Schema.FindCustomClassProperty(DeclaringId, Name);
+						if (!DefinitionProperty || Value == DefinitionProperty->DefaultValue)
+							throw std::invalid_argument("Custom property override is unknown or redundantly stores its default");
+						++Count;
+						Bytes += sizeof(SchemaId) + sizeof(Definition->DefinitionVersion) + Name.size() +
+							ValidateSchemaExtensionPropertyValue(DefinitionProperty->Type, Value);
+						if (Count > MaximumCustomPropertyOverridesPerInstance ||
+							Bytes > MaximumCustomPropertyOverrideBytesPerInstance)
+							throw std::invalid_argument("Instance exceeds its custom property override limits");
+					}
+				}
+			} catch (const std::exception &Error) {
+				return {ReplicationApplyStatus::ApplyRejected, 0, Error.what()};
+			}
+		}
+		return {ReplicationApplyStatus::Success, 0, {}};
 	}
 
 	ReplicationApplyResult InProcessReplicationSession::ApplyProperty(
@@ -124,6 +267,33 @@ namespace gargantuan {
 		if (!property || property->ReplicationPolicy != InstanceProperty::Replication::FutureReplicated ||
 			!property->Write)
 			return {ReplicationApplyStatus::ApplyRejected, 0, "Receiver property is unknown, read-only, or not replicated"};
+		if (property->CustomSchemaPropertyType) {
+			if (!record.DeclaringClassSchemaId || !record.DefinitionVersion ||
+				property->DeclaringSchemaId != *record.DeclaringClassSchemaId ||
+				property->DeclaringDefinitionVersion != *record.DefinitionVersion)
+				return {ReplicationApplyStatus::ApplyRejected, 0, "Custom property stable identity/version does not match"};
+			try {
+				const auto current = instance->GetCustomClassPropertyValue(
+					*record.DeclaringClassSchemaId, *record.PropertyName, ScriptSecurityContext::CoreTrusted()
+				);
+				if (current == *record.Value)
+					return {ReplicationApplyStatus::ApplyRejected, 0, "Custom PropertyUpdate is a semantic no-op"};
+				const auto status = instance->ApplyCustomClassPropertyMutation(
+					*record.DeclaringClassSchemaId,
+					*record.DefinitionVersion,
+					*record.PropertyName,
+					*record.Value,
+					ScriptSecurityContext::CoreTrusted()
+				);
+				return status == MutationStatus::Success
+					? ReplicationApplyResult{ReplicationApplyStatus::Success, 1, {}}
+					: ReplicationApplyResult{ReplicationApplyStatus::ApplyRejected, 0, "Receiver rejected custom property value"};
+			} catch (const std::exception &error) {
+				return {ReplicationApplyStatus::ApplyRejected, 0, error.what()};
+			}
+		}
+		if (record.DeclaringClassSchemaId || record.DefinitionVersion)
+			return {ReplicationApplyStatus::MalformedRecord, 0, "Native PropertyUpdate contains custom identity metadata"};
 		try {
 			if (std::holds_alternative<std::monostate>(*record.Value) ||
 				std::holds_alternative<WireObjectReference>(*record.Value)) {
@@ -220,30 +390,36 @@ namespace gargantuan {
 		try {
 			switch (record.Operation) {
 			case WireJournalOperation::Create: {
-					if (!record.ClassName || record.Parent || record.PropertyName || record.AttributeName ||
-						record.ExtensionSchemaId || record.DefinitionVersion || record.ExtensionPropertyName ||
+					if (!record.ClassName || !record.ClassSchemaId || !record.DefinitionVersion ||
+						record.Parent || record.PropertyName || record.DeclaringClassSchemaId || record.AttributeName ||
+						record.ExtensionSchemaId || record.ExtensionPropertyName ||
 						record.TagName || record.Value ||
 						Receiver.Objects.contains(record.Object))
 						return {ReplicationApplyStatus::MalformedRecord, 0, "Invalid or duplicate Create record"};
-					auto *definition = InstanceClassRegistry::GetDefinitionByName(*record.ClassName);
-					if (!definition || !definition->Constructor)
-						return {ReplicationApplyStatus::ApplyRejected, 0, "Create names an unknown class"};
-					auto instance = definition->Constructor();
+					auto *definition = InstanceClassRegistry::GetDefinitionBySchemaId(*record.ClassSchemaId);
+					const auto expectedName = definition && definition->ConstructionKind == SchemaClassConstructionKind::CustomData
+						? definition->CanonicalName : definition ? definition->ClassName : std::string{};
+					if (!definition || definition->DefinitionVersion != *record.DefinitionVersion ||
+						expectedName != *record.ClassName || !InstanceClassRegistry::IsConstructible(*definition))
+						return {ReplicationApplyStatus::ApplyRejected, 0, "Create class identity is unknown or incompatible"};
+					auto instance = InstanceClassRegistry::Construct(*definition);
 					if (!instance) return {ReplicationApplyStatus::ApplyRejected, 0, "Create constructor returned null"};
 					Receiver.Objects.emplace(record.Object, std::move(instance));
 					CandidateObjects.insert(record.Object);
 					break;
 				}
 				case WireJournalOperation::PropertyUpdate: {
-					if (record.Parent || record.ClassName || record.AttributeName || record.ExtensionSchemaId ||
-						record.DefinitionVersion || record.ExtensionPropertyName || record.TagName)
+					if (record.Parent || record.ClassName || record.ClassSchemaId || record.AttributeName ||
+						record.ExtensionSchemaId || record.ExtensionPropertyName || record.TagName ||
+						(record.DeclaringClassSchemaId.has_value() != record.DefinitionVersion.has_value()))
 						return {ReplicationApplyStatus::MalformedRecord, 0, "PropertyUpdate contains unrelated metadata"};
 					auto instance = ResolveReceiver(record.Object);
 					if (!instance) return {ReplicationApplyStatus::ApplyRejected, 0, "Property target is stale or missing"};
 					return ApplyProperty(record, instance);
 				}
 				case WireJournalOperation::AttributeUpdate: {
-					if (record.Parent || record.ClassName || record.PropertyName || record.ExtensionSchemaId ||
+					if (record.Parent || record.ClassName || record.ClassSchemaId || record.PropertyName ||
+						record.DeclaringClassSchemaId || record.ExtensionSchemaId ||
 						record.DefinitionVersion || record.ExtensionPropertyName || record.TagName)
 						return {ReplicationApplyStatus::MalformedRecord, 0, "AttributeUpdate contains unrelated metadata"};
 					auto instance = ResolveReceiver(record.Object);
@@ -251,7 +427,8 @@ namespace gargantuan {
 					return ApplyAttribute(record, instance);
 				}
 				case WireJournalOperation::ExtensionPropertyUpdate: {
-					if (record.Parent || record.ClassName || record.PropertyName || record.AttributeName || record.TagName)
+					if (record.Parent || record.ClassName || record.ClassSchemaId || record.PropertyName ||
+						record.DeclaringClassSchemaId || record.AttributeName || record.TagName)
 						return {ReplicationApplyStatus::MalformedRecord, 0, "ExtensionPropertyUpdate contains unrelated metadata"};
 					auto instance = ResolveReceiver(record.Object);
 					if (!instance)
@@ -260,7 +437,8 @@ namespace gargantuan {
 				}
 				case WireJournalOperation::TagAdded:
 				case WireJournalOperation::TagRemoved: {
-					if (record.Parent || record.ClassName || record.PropertyName || record.AttributeName ||
+					if (record.Parent || record.ClassName || record.ClassSchemaId || record.PropertyName ||
+						record.DeclaringClassSchemaId || record.AttributeName ||
 						record.ExtensionSchemaId || record.DefinitionVersion || record.ExtensionPropertyName ||
 						record.Value || !record.TagName)
 						return {ReplicationApplyStatus::MalformedRecord, 0, "Tag record contains invalid metadata"};
@@ -281,7 +459,8 @@ namespace gargantuan {
 					break;
 				}
 				case WireJournalOperation::Reparent: {
-					if (record.ClassName || record.PropertyName || record.AttributeName || record.ExtensionSchemaId ||
+					if (record.ClassName || record.ClassSchemaId || record.PropertyName || record.DeclaringClassSchemaId ||
+						record.AttributeName || record.ExtensionSchemaId ||
 						record.DefinitionVersion || record.ExtensionPropertyName || record.TagName || record.Value)
 						return {ReplicationApplyStatus::MalformedRecord, 0, "Reparent contains unrelated metadata"};
 					auto instance = ResolveReceiver(record.Object);
@@ -299,7 +478,8 @@ namespace gargantuan {
 					break;
 				}
 				case WireJournalOperation::Destroy: {
-					if (record.Parent || record.ClassName || record.PropertyName || record.AttributeName ||
+					if (record.Parent || record.ClassName || record.ClassSchemaId || record.PropertyName ||
+						record.DeclaringClassSchemaId || record.AttributeName ||
 						record.ExtensionSchemaId || record.DefinitionVersion || record.ExtensionPropertyName ||
 						record.TagName || record.Value)
 						return {ReplicationApplyStatus::MalformedRecord, 0, "Destroy contains unrelated metadata"};

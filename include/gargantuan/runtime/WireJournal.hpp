@@ -10,7 +10,7 @@
 #include <vector>
 
 namespace gargantuan {
-	inline constexpr std::uint32_t WireJournalFormatVersion = 5;
+	inline constexpr std::uint32_t WireJournalFormatVersion = 6;
 
 	enum class WireJournalOperation {
 		Create,
@@ -31,7 +31,9 @@ namespace gargantuan {
 		WireObjectId Object;
 		std::optional<WireObjectId> Parent;
 		std::optional<std::string> ClassName;
+		std::optional<SchemaId> ClassSchemaId;
 		std::optional<std::string> PropertyName;
+		std::optional<SchemaId> DeclaringClassSchemaId;
 		std::optional<std::string> AttributeName;
 		std::optional<SchemaId> ExtensionSchemaId;
 		std::optional<std::uint32_t> DefinitionVersion;

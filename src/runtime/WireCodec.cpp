@@ -30,15 +30,23 @@ namespace gargantuan {
 		}
 	}
 
+	std::optional<std::uint32_t> DecodeWireUnsigned32(const WireJson &value) {
+		if (!value.is_number_unsigned()) return std::nullopt;
+		const auto raw = value.get<std::uint64_t>();
+		if (raw > std::numeric_limits<std::uint32_t>::max()) return std::nullopt;
+		return static_cast<std::uint32_t>(raw);
+	}
+
 	WireJson EncodeWireObjectId(WireObjectId id) {
 		return WireJson{{"Slot", id.Slot}, {"Generation", id.Generation}};
 	}
 
 	std::optional<WireObjectId> DecodeWireObjectId(const WireJson &value) {
-		if (!value.is_object() || !value.contains("Slot") || !value.contains("Generation") ||
-			!value["Slot"].is_number_unsigned() || !value["Generation"].is_number_unsigned())
-			return std::nullopt;
-		WireObjectId result{value["Slot"].get<std::uint32_t>(), value["Generation"].get<std::uint32_t>()};
+		if (!value.is_object() || !value.contains("Slot") || !value.contains("Generation")) return std::nullopt;
+		auto slot = DecodeWireUnsigned32(value["Slot"]);
+		auto generation = DecodeWireUnsigned32(value["Generation"]);
+		if (!slot || !generation) return std::nullopt;
+		WireObjectId result{*slot, *generation};
 		return result.IsValid() ? std::optional(result) : std::nullopt;
 	}
 

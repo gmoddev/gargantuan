@@ -104,7 +104,8 @@ namespace gargantuan::InstanceSerialization {
 			json &properties
 		) {
 			for (auto &[key, property] : definition->Properties) {
-				if (key == "Parent" || property.PersistencePolicy != InstanceProperty::Persistence::Saved ||
+				if (key == "Parent" || property.CustomSchemaPropertyType ||
+					property.PersistencePolicy != InstanceProperty::Persistence::Saved ||
 					!property.Read || !property.Write)
 					continue;
 
@@ -114,8 +115,9 @@ namespace gargantuan::InstanceSerialization {
 				}
 			}
 
-			if (definition->Superclass.has_value()) {
-				auto *superclass = InstanceClassRegistry::GetDefinitionByName(definition->Superclass.value());
+			if (definition->BaseSchemaId) {
+				auto *superclass = InstanceClassRegistry::GetDefinitionBySchemaId(*definition->BaseSchemaId);
+				if (!superclass) throw std::runtime_error("Published class has no registered base SchemaId");
 				SerializeProperties(superclass, instance, properties);
 			}
 		}
@@ -137,7 +139,10 @@ namespace gargantuan::InstanceSerialization {
 
 			nlohmann::ordered_json serialized;
 			serialized["Name"] = instance->GetName();
-			serialized["ClassName"] = definition->ClassName;
+			serialized["ClassName"] = definition->ConstructionKind == SchemaClassConstructionKind::CustomData
+				? definition->CanonicalName : definition->ClassName;
+			serialized["ClassSchemaId"] = definition->Id.ToString();
+			serialized["ClassDefinitionVersion"] = definition->DefinitionVersion;
 			serialized["Properties"] = properties;
 			serialized["Attributes"] = json::object();
 			for (const auto &[name, value] : instance->GetAttributeValues(ScriptSecurityContext::CoreTrusted()))
@@ -157,6 +162,21 @@ namespace gargantuan::InstanceSerialization {
 					encoded["Properties"][name] = EncodeWireValue(value);
 				serialized["Extensions"].push_back(std::move(encoded));
 			}
+			serialized["CustomProperties"] = json::array();
+			for (const auto &[declaringClassId, properties] : instance->GetCustomClassPropertyOverrides(
+				ScriptSecurityContext::CoreTrusted()
+			)) {
+				auto *declaringClass = GetActiveRuntimeSchemaRegistry().FindClassById(declaringClassId);
+				if (!declaringClass) throw std::runtime_error("Serialized custom class definition is missing");
+				json encoded{
+					{"DeclaringClassSchemaId", declaringClassId.ToString()},
+					{"DefinitionVersion", declaringClass->DefinitionVersion},
+					{"Properties", json::object()},
+				};
+				for (const auto &[name, value] : properties)
+					encoded["Properties"][name] = EncodeWireValue(value);
+				serialized["CustomProperties"].push_back(std::move(encoded));
+			}
 			serialized["Tags"] = json::array();
 			if (auto dataModel = instance->GetDataModel())
 				for (const auto &tag : dataModel->Tags.GetTags(dataModel->GetObjectId(), instance->GetObjectId(), ScriptSecurityContext::CoreTrusted()))
@@ -173,7 +193,7 @@ namespace gargantuan::InstanceSerialization {
 		case InstanceFormat::Json: {
 			Json::SerializationState state;
 			auto serialized = Json::SerializeInstance(instance, state);
-			serialized["Version"] = 3;
+			serialized["Version"] = 4;
 			return serialized.dump();
 		}
 		default: {
@@ -355,7 +375,9 @@ namespace gargantuan::InstanceSerialization {
 		DeserializationState &state,
 		bool requireAttributes,
 		bool requireTags,
-		bool requireExtensions
+		bool requireExtensions,
+		bool requireClassIdentity,
+		bool requireCustomProperties
 	) {
 		auto name = contents["Name"];
 		if (!name.is_string()) {
@@ -397,6 +419,16 @@ namespace gargantuan::InstanceSerialization {
 			state.PushError("Instance {} has an invalid Extensions field", state.FormatCurrentPath());
 			return std::nullopt;
 		}
+		if (requireCustomProperties && (!contents.contains("CustomProperties") ||
+			!contents["CustomProperties"].is_array())) {
+			state.PushError("Instance {} has an invalid CustomProperties field", state.FormatCurrentPath());
+			return std::nullopt;
+		}
+		auto customProperties = contents.contains("CustomProperties") ? contents["CustomProperties"] : json::array();
+		if (!customProperties.is_array()) {
+			state.PushError("Instance {} has an invalid CustomProperties field", state.FormatCurrentPath());
+			return std::nullopt;
+		}
 
 		auto children = contents["Children"];
 		if (!children.is_array()) {
@@ -411,23 +443,44 @@ namespace gargantuan::InstanceSerialization {
 		}
 
 		auto className = maybeClassName.get<std::string>();
-		auto definition = InstanceClassRegistry::GetDefinitionByName(className);
+		const InstanceClassDefinition *definition = nullptr;
+		if (requireClassIdentity) {
+			if (!contents.contains("ClassSchemaId") || !contents["ClassSchemaId"].is_string() ||
+				!contents.contains("ClassDefinitionVersion") || !contents["ClassDefinitionVersion"].is_number_unsigned()) {
+				state.PushError("Instance {} has invalid stable class identity fields", state.FormatCurrentPath());
+				return std::nullopt;
+			}
+			auto classId = SchemaId::Parse(contents["ClassSchemaId"].get<std::string>());
+			auto decodedVersion = DecodeWireUnsigned32(contents["ClassDefinitionVersion"]);
+			const auto version = decodedVersion.value_or(0);
+			definition = classId ? InstanceClassRegistry::GetDefinitionBySchemaId(*classId) : nullptr;
+			const auto expectedName = definition && definition->ConstructionKind == SchemaClassConstructionKind::CustomData
+				? definition->CanonicalName : definition ? definition->ClassName : std::string{};
+			if (!definition || version == 0 || definition->DefinitionVersion != version || className != expectedName) {
+				state.PushError("Instance {} has missing or incompatible class identity/version", state.FormatCurrentPath());
+				return std::nullopt;
+			}
+		} else {
+			definition = InstanceClassRegistry::GetDefinitionByName(className);
+			if (definition && definition->ConstructionKind != SchemaClassConstructionKind::Native) definition = nullptr;
+		}
 		if (!definition) {
 			state.PushError("Instance {} has unknown ClassName '{}'", state.FormatCurrentPath(), className);
 			return std::nullopt;
-		} else if (!definition->Constructor) {
+		} else if (!InstanceClassRegistry::IsConstructible(*definition)) {
 			state.PushError("Cannot deserialize instance {} of class {}", state.FormatCurrentPath(), className);
 			return std::nullopt;
 		}
 
 		LOG_INFO(App, "Registered property count for %s: %zu", className.c_str(), definition->AllProperties.size());
-		auto instance = definition->Constructor();
+		auto instance = InstanceClassRegistry::Construct(*definition);
 		if (instance->ApplyPropertyMutation("Name", name.get<std::string>(), Enums::Permission::Engine) !=
 			MutationStatus::Success) {
 			instance->Destroy();
 			return state.ReturnError("Failed to apply Name for {}", state.FormatCurrentPath());
 		}
 		for (auto &[key, property] : definition->AllProperties) {
+			if (property->CustomSchemaPropertyType) continue;
 			LOG_INFO(App, "Trying to deserialize %s of %s", key.data(), state.FormatCurrentPath().data());
 			if (key == "Parent" || !properties.contains(key) ||
 				property->PersistencePolicy != InstanceProperty::Persistence::Saved || !property->Write)
@@ -496,6 +549,51 @@ namespace gargantuan::InstanceSerialization {
 			return state.ReturnError("Failed to deserialize attributes in {}: {}", state.FormatCurrentPath(), error.what());
 		}
 		try {
+			if (customProperties.size() > MaximumCustomClassInheritanceDepth)
+				throw std::invalid_argument("Instance exceeds its custom property declaring-class state limit");
+			std::optional<SchemaId> previousDeclaringClassId;
+			for (const auto &encodedState : customProperties) {
+				if (!encodedState.is_object() || !encodedState.contains("DeclaringClassSchemaId") ||
+					!encodedState["DeclaringClassSchemaId"].is_string() ||
+					!encodedState.contains("DefinitionVersion") || !encodedState["DefinitionVersion"].is_number_unsigned() ||
+					!encodedState.contains("Properties") || !encodedState["Properties"].is_object())
+					throw std::invalid_argument("Malformed custom property state");
+				auto declaringId = SchemaId::Parse(encodedState["DeclaringClassSchemaId"].get<std::string>());
+				if (!declaringId || (previousDeclaringClassId && !(*previousDeclaringClassId < *declaringId)))
+					throw std::invalid_argument("Invalid, duplicate, or unordered custom declaring class SchemaId");
+				previousDeclaringClassId = *declaringId;
+				auto decodedVersion = DecodeWireUnsigned32(encodedState["DefinitionVersion"]);
+				if (!decodedVersion || *decodedVersion == 0)
+					throw std::invalid_argument("Invalid custom property declaring class version");
+				const auto version = *decodedVersion;
+				auto *declaringClass = GetActiveRuntimeSchemaRegistry().FindClassById(*declaringId);
+				if (!declaringClass || declaringClass->ConstructionKind != SchemaClassConstructionKind::CustomData ||
+					declaringClass->DefinitionVersion != version ||
+					!GetActiveRuntimeSchemaRegistry().IsClassDerivedFrom(definition->Id, *declaringId))
+					throw std::invalid_argument("Missing or incompatible custom property declaring class version");
+				const auto &encodedProperties = encodedState["Properties"];
+				if (encodedProperties.empty() || encodedProperties.size() > MaximumCustomClassProperties)
+					throw std::invalid_argument("Custom property state is empty or oversized");
+				for (const auto &[propertyName, encodedValue] : encodedProperties.items()) {
+					auto *property = GetActiveRuntimeSchemaRegistry().FindCustomClassProperty(*declaringId, propertyName);
+					auto value = DecodeWireValue(encodedValue);
+					if (!property || !value) throw std::invalid_argument("Unknown or malformed custom property");
+					(void)ValidateSchemaExtensionPropertyValue(property->Type, *value);
+					if (*value == property->DefaultValue)
+						throw std::invalid_argument("Persisted custom property state redundantly stores its default");
+					if (instance->ApplyCustomClassPropertyMutation(
+						*declaringId, version, propertyName, std::move(*value), ScriptSecurityContext::CoreTrusted()
+					) != MutationStatus::Success)
+						throw std::runtime_error("Serialized custom property mutation rejected");
+				}
+			}
+		} catch (const std::exception &error) {
+			instance->Destroy();
+			return state.ReturnError(
+				"Failed to deserialize custom property state in {}: {}", state.FormatCurrentPath(), error.what()
+			);
+		}
+		try {
 			if (extensions.size() > MaximumCustomExtensionDefinitions)
 				throw std::invalid_argument("Instance exceeds its extension definition state limit");
 			std::optional<SchemaId> previousExtensionId;
@@ -512,7 +610,10 @@ namespace gargantuan::InstanceSerialization {
 					(previousExtensionId && !(*previousExtensionId < *extensionId)))
 					throw std::invalid_argument("Invalid, duplicate, or unordered extension SchemaId");
 				previousExtensionId = *extensionId;
-				const auto version = encodedExtension["DefinitionVersion"].get<std::uint32_t>();
+				auto decodedVersion = DecodeWireUnsigned32(encodedExtension["DefinitionVersion"]);
+				if (!decodedVersion || *decodedVersion == 0)
+					throw std::invalid_argument("Invalid extension definition version");
+				const auto version = *decodedVersion;
 				auto *extension = GetActiveRuntimeSchemaRegistry().FindExtensionById(*extensionId);
 				if (!extension || extension->DefinitionVersion != version)
 					throw std::invalid_argument("Missing or incompatible extension definition version");
@@ -554,7 +655,9 @@ namespace gargantuan::InstanceSerialization {
 		}
 
 		for (auto &child : children) {
-			auto maybeChild = TryDeserializeInstance(child, state, requireAttributes, requireTags, requireExtensions);
+			auto maybeChild = TryDeserializeInstance(
+				child, state, requireAttributes, requireTags, requireExtensions, requireClassIdentity, requireCustomProperties
+			);
 			if (maybeChild.has_value()) {
 				maybeChild.value()->SetParent(instance);
 			} else {
@@ -594,13 +697,15 @@ namespace gargantuan::InstanceSerialization {
 
 			if (!contents.contains("Version") || !contents["Version"].is_number_integer() ||
 				(contents["Version"] != 0 && contents["Version"] != 1 && contents["Version"] != 2 &&
-					contents["Version"] != 3)) {
+					contents["Version"] != 3 && contents["Version"] != 4)) {
 				state.PushError("Unsupported instance format version");
 				return state;
 			}
 
 			const auto version = contents["Version"].get<int>();
-			auto maybeInstance = TryDeserializeInstance(contents, state, version >= 1, version >= 2, version >= 3);
+			auto maybeInstance = TryDeserializeInstance(
+				contents, state, version >= 1, version >= 2, version >= 3, version >= 4, version >= 4
+			);
 			if (maybeInstance.has_value()) {
 				try {
 					for (const auto &[instance, tags] : state.PendingTags) {

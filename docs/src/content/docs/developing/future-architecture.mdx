@@ -344,8 +344,11 @@ The work divides into the following dependency-ordered packages:
    implemented: namespaced extension identity targets existing class IDs,
    protects native members, follows inheritance, and carries sparse state through
    persistence/replication/Studio. Methods, enum/reference values, and hooks remain deferred.
-7. **Add custom classes.** Introduce distinct stable class identity, inheritance,
-   persistence, replication metadata, Studio representation, and migrations.
+7. **Add custom classes.** The bounded data-only slice is implemented: custom
+   classes have distinct stable identity, validated native/custom inheritance,
+   scalar declarative properties, Folder-hosted construction, exact-version
+   persistence/replication, and Studio representation. Migrations, behavior,
+   richer property types, and additional native hosts remain deferred.
 8. **Add native component composition.** Permit custom classes to request only
    curated, validated engine-owned component combinations.
 9. **Make Studio schema-driven.** Extend the existing snapshot/journal document
@@ -372,10 +375,11 @@ and String properties through the same transactional PreRun lifecycle. It keeps
 the target class identity unchanged, stores sparse values separately from
 Attributes, and proves exact-version persistence/replication and Studio discovery.
 
-Custom classes remain next and must additionally prove stable class identity, inheritance,
-persistence, replication, Studio representation, and migration behavior.
-Higher-level systems should not depend on extensibility semantics until those
-slices are reliable.
+The bounded custom-class milestone now proves stable identity, native/custom
+inheritance, data-only construction, sparse scalar state, exact-version
+persistence/replication, and Studio representation. Migrations and native
+component composition remain separate milestones. Higher-level systems should
+not depend on those deferred semantics until their slices are reliable.
 
 Every slice is complete only when its public contract, native enforcement,
 serialization, replication declaration, Studio representation, diagnostics,

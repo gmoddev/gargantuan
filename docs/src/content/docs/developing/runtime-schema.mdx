@@ -4,13 +4,13 @@ description: Gargantuan's canonical frozen class, custom-enum, and class-extensi
 ---
 
 `RuntimeSchemaRegistry` is Gargantuan's one authoritative schema. Native
-classes, project enums, and project class extensions are tagged definition kinds in the same registry;
+native and project classes, project enums, and project class extensions are tagged definitions in the same registry;
 legacy class reflection is a class-only adapter over those frozen definitions.
 
 ## Stable identity
 
-Every definition has a deterministic 128-bit `SchemaId`. Native classes and
-custom enums and extensions use three separate identity domains, so IDs do not depend on pointers,
+Every definition has a deterministic 128-bit `SchemaId`. Native classes,
+custom classes, custom enums, and extensions use four separate identity domains, so IDs do not depend on pointers,
 startup randomness, hierarchy, registration order, or registry generation.
 The wire form is 32 lowercase hexadecimal characters and zero is invalid.
 
@@ -21,6 +21,10 @@ carry `{EnumSchemaId, DefinitionVersion, ItemValue}`; an integer or display
 name alone is never authoritative identity. An extension has its own stable ID
 and version, stores a resolved target class `SchemaId`, and owns ordered
 namespaced declarative properties without changing the target class identity.
+A custom class is still a class definition. It stores a stable base class ID,
+an engine-owned construction policy and native host ID, and ordered declarative
+properties. Definition version is compatibility metadata and never contributes
+to its `SchemaId`.
 
 ## Registration lifecycle
 
@@ -65,12 +69,24 @@ Schema:RegisterExtension({
         Team = { Type = "String", Default = "" },
     },
 })
+
+Schema:RegisterClass({
+    Namespace = "Game",
+    Name = "CombatFolder",
+    Version = 1,
+    Base = "Engine.Folder",
+    Properties = {
+        Health = { Type = "Integer", Default = 100 },
+        Faction = { Type = "String", Default = "" },
+    },
+})
 ```
 
 It has no DataModel, filesystem, process, OS, debug, require, network, Studio,
 renderer, or registry-pointer access. Current limits are 256 KiB source, 250 ms
 execution, 16 MiB VM allocation, 64 enum definitions, 256 items per enum, 64
-extension definitions, 64 properties per extension, 4 KiB per encoded default,
+extension definitions, 64 custom class definitions, 64 properties per extension
+or custom class, 16 inheritance levels, 4 KiB per encoded default,
 100-byte UTF-8 identity/item/property names, and 64 KiB aggregate registration payload.
 The source path is canonicalized beneath the selected project root, symlink
 escapes are rejected, and the file is read through a fixed maximum-plus-one
@@ -96,7 +112,7 @@ unknown item. General migrations are not implemented, so exact version equality
 is the current policy. Attributes still reject enum values and Tags are
 unchanged.
 
-EditorHost `GetSchema` exposes schema-discovery version 3, active registry
+EditorHost `GetSchema` exposes schema-discovery version 4, active registry
 generation, and deterministic class/enum/extension definitions while retaining its old
 `Classes` DTO. Studio caches immutable definitions by `SchemaId` plus
 definition version and selects the active set by registry generation. Studio
@@ -107,10 +123,30 @@ Missing overrides read the frozen default. Each Instance is limited to 128
 physical overrides and 32 KiB of aggregate extension state. Luau reads/writes by
 extension plus property identity, and writes require `MutateDataModel` through
 `MutationGateway`; `DefineSchema` grants no runtime authority. Persistence
-version 3 and snapshot/journal version 5 carry extension ID, exact definition
+version 4 and snapshot/journal version 6 carry extension ID, exact definition
 version, property identity, and typed value. Target, kind, version, and type
 mismatches fail safely. The initial property domain is Boolean, signed 32-bit
 Integer, finite Number, and bounded UTF-8 String.
+
+Custom classes use the same scalar property domain and sparse storage policy.
+The runtime object carries its actual custom class `SchemaId` separately from
+the engine-owned C++ host implementation. `ClassName`, reflection, `IsA`,
+persistence, snapshots, replication, and Studio resolve semantic identity from
+the frozen class definition. The first native policy permits only data-only
+subclasses of `Engine.Folder`; physics-bearing, service, abstract, and internal
+classes remain forbidden. Custom-on-custom inheritance is supported within the
+same candidate, including child-before-parent registration, with whole-candidate
+cycle, depth, constructibility, and inherited-member collision validation.
+
+Missing custom overrides read the declaring class default. Each Instance is
+limited to 128 physical custom-property overrides and 32 KiB of encoded custom
+state. Setting the default removes storage. Values remain distinct from
+Attributes and extension state and use ordinary reflected property mutation
+through `MutationGateway`; `DefineSchema` still grants no runtime authority.
+Persistence version 4 and snapshot/journal version 6 carry exact class and
+declaring-class `SchemaId` plus definition version. Legacy persistence versions
+remain name-based only for native classes, and exact version mismatch fails
+rather than falling back to a native base.
 
 ## Compatibility and deferred work
 
@@ -121,6 +157,7 @@ compatibility system; project enums use the canonical schema and no second
 custom-enum registry exists.
 
 Core Luau registration, native-enum unification, enum globals/generated types,
-enum-valued Attributes or extension properties, object-reference extension
-properties, extension methods/hooks, migrations, packages, plugins, custom
-classes, and component composition are deferred.
+enum-valued Attributes or schema properties, object-reference schema
+properties, project behavior callbacks/hooks, migrations, packages, plugins,
+additional custom-subclassable native hosts, and component composition are
+deferred.

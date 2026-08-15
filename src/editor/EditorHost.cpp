@@ -356,10 +356,11 @@ namespace gargantuan {
 						properties.push_back(std::move(encoded));
 					}
 					classes.push_back({
-						{"Name", definition->ClassName},
+						{"Name", definition->ConstructionKind == SchemaClassConstructionKind::CustomData
+							? definition->CanonicalName : definition->ClassName},
 						{"Description", definition->Description},
 						{"Superclass", definition->Superclass ? Json(*definition->Superclass) : Json(nullptr)},
-						{"Constructible", definition->Constructor != nullptr},
+						{"Constructible", InstanceClassRegistry::IsConstructible(*definition)},
 						{"Properties", std::move(properties)},
 					});
 				}
@@ -379,6 +380,31 @@ namespace gargantuan {
 					if (const auto *classDefinition = std::get_if<SchemaClassDefinition>(entry)) {
 						encoded["BaseSchemaId"] = classDefinition->BaseSchemaId
 							? Json(classDefinition->BaseSchemaId->ToString()) : Json(nullptr);
+						encoded["ConstructionKind"] = classDefinition->ConstructionKind == SchemaClassConstructionKind::Native
+							? "Native" : "CustomData";
+						encoded["CustomSubclassPolicy"] = classDefinition->ProjectSubclassPolicy == CustomSubclassPolicy::DataOnly
+							? "DataOnly" : "Forbidden";
+						encoded["NativeHostClassSchemaId"] = classDefinition->ConstructionKind == SchemaClassConstructionKind::CustomData
+							? Json(classDefinition->NativeHostClassId.ToString()) : Json(nullptr);
+						encoded["Constructible"] = InstanceClassRegistry::IsConstructible(*classDefinition);
+						Json properties = Json::array();
+						for (const auto &property : classDefinition->DeclaredCustomProperties) {
+							properties.push_back({
+								{"Name", property.Name},
+								{"CanonicalName", property.CanonicalName},
+								{"Type", GetSchemaExtensionPropertyTypeName(property.Type)},
+								{"Default", EncodeWireValue(property.DefaultValue)},
+								{"Readable", true},
+								{"Writable", true},
+								{"Editable", property.Editable},
+								{"Persistence", "Saved"},
+								{"Replication", "Replicated"},
+								{"Authority", "Main"},
+								{"RequiredReadCapability", "ReadDataModel"},
+								{"RequiredWriteCapability", "MutateDataModel"},
+							});
+						}
+						encoded["Properties"] = std::move(properties);
 					} else if (const auto *enumDefinition = std::get_if<SchemaEnumDefinition>(entry)) {
 						Json items = Json::array();
 						for (const auto &item : enumDefinition->Items)
@@ -408,7 +434,7 @@ namespace gargantuan {
 					definitions.push_back(std::move(encoded));
 				}
 				return SerializeBoundedResponse(SuccessResponse(requestId, {
-					{"SchemaDiscoveryVersion", 3},
+					{"SchemaDiscoveryVersion", 4},
 					{"RegistryGeneration", GetRuntimeSchemaLifecycle().GetActiveGeneration()},
 					{"Definitions", std::move(definitions)},
 					{"Classes", std::move(classes)},
@@ -428,15 +454,15 @@ namespace gargantuan {
 					!parameters.contains("Width") || !parameters["Width"].is_number_unsigned() ||
 					!parameters.contains("Height") || !parameters["Height"].is_number_unsigned())
 					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Viewport dimensions must be unsigned"));
-				const auto width = parameters["Width"].get<std::uint32_t>();
-				const auto height = parameters["Height"].get<std::uint32_t>();
-				if (width == 0 || height == 0 || width > EditorHostMaximumViewportDimension ||
-					height > EditorHostMaximumViewportDimension ||
-					static_cast<std::uint64_t>(width) * height > EditorHostMaximumViewportPixels)
+				auto width = DecodeWireUnsigned32(parameters["Width"]);
+				auto height = DecodeWireUnsigned32(parameters["Height"]);
+				if (!width || !height || *width == 0 || *height == 0 ||
+					*width > EditorHostMaximumViewportDimension || *height > EditorHostMaximumViewportDimension ||
+					static_cast<std::uint64_t>(*width) * *height > EditorHostMaximumViewportPixels)
 					return SerializeBoundedResponse(ErrorResponse(requestId, "ViewportTooLarge", "Viewport dimensions exceed protocol limits"));
 				const bool firstConfiguration = ViewportWidth == 0 || ViewportHeight == 0;
-				ViewportWidth = width;
-				ViewportHeight = height;
+				ViewportWidth = *width;
+				ViewportHeight = *height;
 				if (firstConfiguration)
 					camera = MakeLookAtRenderCameraInput(
 						{10.0f, 10.0f, 10.0f},
@@ -447,14 +473,14 @@ namespace gargantuan {
 				LastViewportSnapshot.reset();
 				if (ViewportRenderer) {
 					try {
-						ViewportRenderer->Resize(width, height);
+						ViewportRenderer->Resize(*width, *height);
 					} catch (const std::exception &error) {
 						ViewportRenderer.reset();
 						return SerializeBoundedResponse(ErrorResponse(requestId, "ViewportUnavailable", error.what()));
 					}
 				}
 				return SerializeBoundedResponse(SuccessResponse(requestId, {
-					{"ViewportVersion", 1}, {"Width", width}, {"Height", height}, {"Format", "RGB8"}
+					{"ViewportVersion", 1}, {"Width", *width}, {"Height", *height}, {"Format", "RGB8"}
 				}));
 			}
 
@@ -680,8 +706,12 @@ namespace gargantuan {
 				auto *property = GetActiveRuntimeSchemaRegistry().FindExtensionProperty(
 					*extensionId, parameters["Property"].get<std::string>()
 				);
-				const auto version = parameters["DefinitionVersion"].get<std::uint32_t>();
-				if (!extension || extension->DefinitionVersion != version || !property || !property->Editable)
+				auto version = DecodeWireUnsigned32(parameters["DefinitionVersion"]);
+				if (!version || *version == 0)
+					return SerializeBoundedResponse(ErrorResponse(
+						requestId, "MalformedRequest", "DefinitionVersion is outside the supported range"
+					));
+				if (!extension || extension->DefinitionVersion != *version || !property || !property->Editable)
 					return SerializeBoundedResponse(ErrorResponse(
 						requestId, "InvalidProperty", "Extension property identity is missing, incompatible, or not editable"
 					));
@@ -692,9 +722,76 @@ namespace gargantuan {
 				auto mutation = Mutations.Apply(UpdateExtensionPropertyCommand{
 					object->ToObjectId(),
 					*extensionId,
-					version,
+					*version,
 					parameters["Property"].get<std::string>(),
 					std::move(*value),
+				}, StudioSecurity);
+				Json result{{"Status", MutationStatusName(mutation.Status)}, {"Message", mutation.Message}};
+				if (mutation.Object) result["Object"] = EncodeWireObjectId(WireObjectId::FromObjectId(*mutation.Object));
+				return SerializeBoundedResponse(
+					mutation.Succeeded() ? SuccessResponse(requestId, std::move(result))
+						: ErrorResponse(requestId, MutationStatusName(mutation.Status), mutation.Message)
+				);
+			}
+
+			if (method == "SetCustomProperty") {
+				if (!StudioSecurity.HasCapability(ScriptCapability::MutateDataModel))
+					return SerializeBoundedResponse(ErrorResponse(
+						requestId, "Unauthorized", "SetCustomProperty requires MutateDataModel"
+					));
+				if (!Cursor)
+					return SerializeBoundedResponse(ErrorResponse(
+						requestId, "SnapshotRequired", "GetSnapshot must establish a cursor"
+					));
+				if (!HasOnlyFields(parameters, {
+						"Object", "DeclaringClassSchemaId", "DefinitionVersion", "Property", "Value"
+					}) || !parameters.contains("Object") || !parameters.contains("DeclaringClassSchemaId") ||
+					!parameters["DeclaringClassSchemaId"].is_string() || !parameters.contains("DefinitionVersion") ||
+					!parameters["DefinitionVersion"].is_number_unsigned() || !parameters.contains("Property") ||
+					!parameters["Property"].is_string() || !parameters.contains("Value"))
+					return SerializeBoundedResponse(ErrorResponse(
+						requestId, "MalformedRequest", "SetCustomProperty fields are invalid"
+					));
+				auto object = DecodeWireObjectId(parameters["Object"]);
+				const auto encodedId = parameters["DeclaringClassSchemaId"].get<std::string>();
+				auto declaringId = SchemaId::Parse(encodedId);
+				auto value = DecodeWireValue(parameters["Value"]);
+				if (!object || !declaringId || declaringId->ToString() != encodedId || !value)
+					return SerializeBoundedResponse(ErrorResponse(
+						requestId, "MalformedRequest", "SetCustomProperty identity or value is invalid"
+					));
+				auto target = ObjectRegistry::Get().Lookup(object->ToObjectId());
+				if (!target || target->GetReplicationScopeId() != World->GetObjectId())
+					return SerializeBoundedResponse(ErrorResponse(
+						requestId, "StaleObject", "Object is not live in the open project"
+					));
+				auto *declaringClass = GetActiveRuntimeSchemaRegistry().FindClassById(*declaringId);
+				auto *property = GetActiveRuntimeSchemaRegistry().FindCustomClassProperty(
+					*declaringId, parameters["Property"].get<std::string>()
+				);
+				auto *targetClass = InstanceClassRegistry::GetDefinition(target.get());
+				auto version = DecodeWireUnsigned32(parameters["DefinitionVersion"]);
+				if (!version || *version == 0)
+					return SerializeBoundedResponse(ErrorResponse(
+						requestId, "MalformedRequest", "DefinitionVersion is outside the supported range"
+					));
+				if (!declaringClass || declaringClass->ConstructionKind != SchemaClassConstructionKind::CustomData ||
+					declaringClass->DefinitionVersion != *version || !property || !property->Editable || !targetClass ||
+					!GetActiveRuntimeSchemaRegistry().IsClassDerivedFrom(targetClass->Id, *declaringId))
+					return SerializeBoundedResponse(ErrorResponse(
+						requestId, "InvalidProperty", "Custom property identity is missing, incompatible, or not editable"
+					));
+				try { (void)ValidateSchemaExtensionPropertyValue(property->Type, *value); }
+				catch (const std::exception &error) {
+					return SerializeBoundedResponse(ErrorResponse(requestId, "ValidationFailed", error.what()));
+				}
+				auto native = DecodeNativeWireValue(*value);
+				if (!native)
+					return SerializeBoundedResponse(ErrorResponse(
+						requestId, "UnsupportedValue", "Custom property has no native mutation representation"
+					));
+				auto mutation = Mutations.Apply(UpdatePropertyCommand{
+					object->ToObjectId(), parameters["Property"].get<std::string>(), std::move(*native)
 				}, StudioSecurity);
 				Json result{{"Status", MutationStatusName(mutation.Status)}, {"Message", mutation.Message}};
 				if (mutation.Object) result["Object"] = EncodeWireObjectId(WireObjectId::FromObjectId(*mutation.Object));

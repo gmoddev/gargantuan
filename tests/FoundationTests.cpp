@@ -156,6 +156,37 @@ namespace {
 		};
 	}
 
+	gargantuan::SchemaClassDefinition MakeCustomClassDefinition(
+		std::string schemaNamespace,
+		std::string name,
+		std::vector<gargantuan::SchemaClassProperty> properties = {
+			{.Name = "Health", .Type = gargantuan::SchemaExtensionPropertyType::Integer, .DefaultValue = 100},
+		}
+	) {
+		using namespace gargantuan;
+		return {
+			.Id = SchemaId::FromCustomClassName(schemaNamespace, name),
+			.Namespace = std::move(schemaNamespace),
+			.ClassName = std::move(name),
+			.DefinitionVersion = 1,
+			.Provenance = SchemaProvenance::Game,
+			.ConstructionKind = SchemaClassConstructionKind::CustomData,
+			.ProjectSubclassPolicy = CustomSubclassPolicy::DataOnly,
+			.Constructor = nullptr,
+			.DeclaredCustomProperties = std::move(properties),
+			.OriginDetail = ".gargantuan/prerun.luau",
+		};
+	}
+
+	gargantuan::SchemaClassDefinition MakeCustomSubclassableHost(std::string name) {
+		auto Definition = MakeSchemaDefinition(std::move(name));
+		Definition.ProjectSubclassPolicy = gargantuan::CustomSubclassPolicy::DataOnly;
+		Definition.Constructor = []() -> std::shared_ptr<gargantuan::Instance> {
+			return std::make_shared<gargantuan::Folder>();
+		};
+		return Definition;
+	}
+
 	gargantuan::InstanceProperty MakeReadOnlySchemaProperty(std::string name, std::string type = "string") {
 		gargantuan::InstanceProperty property(std::move(name));
 		property.SetReflectedTypedef(std::move(type)).SetEditable(false);
@@ -770,6 +801,10 @@ namespace {
 		auto OversizedUnsignedWire = encoded;
 		OversizedUnsignedWire["Value"] = std::numeric_limits<std::uint64_t>::max();
 		Check(!DecodeWireValue(OversizedUnsignedWire), "oversized unsigned custom enum wire values are rejected before narrowing");
+		Check(DecodeWireUnsigned32(std::numeric_limits<std::uint32_t>::max()) ==
+			std::optional<std::uint32_t>(std::numeric_limits<std::uint32_t>::max()) &&
+			!DecodeWireUnsigned32(std::uint64_t{4294967296}),
+			"wire uint32 decoding accepts the exact maximum and rejects maximum plus one before narrowing");
 		auto MaximumWire = encoded;
 		MaximumWire["Value"] = std::numeric_limits<std::int32_t>::max();
 		Check(DecodeWireValue(MaximumWire).has_value(), "signed 32-bit maximum custom enum wire value is accepted");
@@ -1186,6 +1221,305 @@ namespace {
 			Check(Error.GetDiagnostic().Code == PreRunDiagnosticCode::RuntimeError &&
 				Error.GetDiagnostic().Definition.empty(),
 				"a later script failure is not misclassified as an extension registration failure");
+		}
+	}
+
+	void TestCustomClassSchema() {
+		using namespace gargantuan;
+		const auto ClassId = SchemaId::FromCustomClassName("Game", "DamageableFolder");
+		Check(ClassId == SchemaId::FromCustomClassName("Game", "DamageableFolder") &&
+			ClassId != SchemaId::FromCustomClassName("Package", "DamageableFolder") &&
+			ClassId != SchemaId::FromCustomClassName("Game", "OtherFolder"),
+			"custom class identity is deterministic and namespace/name sensitive");
+		Check(ClassId != SchemaId::FromNativeName("Game", "DamageableFolder") &&
+			ClassId != SchemaId::FromEnumName("Game", "DamageableFolder") &&
+			ClassId != SchemaId::FromExtensionName("Game", "DamageableFolder"),
+			"native class, custom class, enum, and extension identities are domain separated");
+
+		RuntimeSchemaRegistry Registry;
+		Registry.RegisterNative<SchemaTestTypeA>(MakeCustomSubclassableHost("Host"));
+		Registry.RegisterClass(MakeCustomClassDefinition("Game", "Child", {
+			{.Name = "Faction", .Type = SchemaExtensionPropertyType::String, .DefaultValue = std::string()},
+		}), "Game.Parent");
+		Registry.RegisterClass(MakeCustomClassDefinition("Game", "Parent", {
+			{.Name = "Health", .Type = SchemaExtensionPropertyType::Integer, .DefaultValue = 100},
+			{.Name = "Enabled", .Type = SchemaExtensionPropertyType::Boolean, .DefaultValue = true},
+		}), "Test.Host");
+		FreezeSchemaRegistry(Registry);
+		const auto *Parent = Registry.FindClassByName("Game.Parent");
+		const auto *Child = Registry.FindClassByName("Game.Child");
+		Check(Parent && Child && Parent->ConstructionKind == SchemaClassConstructionKind::CustomData &&
+			Child->BaseSchemaId == Parent->Id && Child->NativeHostClassId == SchemaId::FromNativeName("Test", "Host") &&
+			Child->InheritedClassIds.contains(Parent->Id) && Child->InheritedClassIds.contains(Child->Id),
+			"whole-candidate validation resolves ordered custom inheritance to one approved native host");
+		Check(Child && Child->AllProperties.contains("Health") && Child->AllProperties.contains("Faction") &&
+			Child->AllProperties.at("Health")->DeclaringSchemaId == Parent->Id &&
+			Registry.IsClassConstructible(*Child),
+			"custom classes inherit bounded declarative properties without changing their declaring identity");
+
+		RuntimeSchemaRegistry MissingBase;
+		MissingBase.RegisterNative<SchemaTestTypeA>(MakeCustomSubclassableHost("Host"));
+		MissingBase.RegisterClass(MakeCustomClassDefinition("Game", "MissingBase"), "Game.Absent");
+		CheckThrows<std::invalid_argument>([&] { MissingBase.Validate(); },
+			"custom class validation rejects a missing base");
+
+		RuntimeSchemaRegistry ForbiddenBase;
+		ForbiddenBase.RegisterNative<SchemaTestTypeA>(MakeSchemaDefinition("Forbidden"));
+		ForbiddenBase.RegisterClass(MakeCustomClassDefinition("Game", "Denied"), "Test.Forbidden");
+		CheckThrows<std::invalid_argument>([&] { ForbiddenBase.Validate(); },
+			"custom class validation rejects a native base without data-only subclass policy");
+
+		RuntimeSchemaRegistry Cycle;
+		Cycle.RegisterNative<SchemaTestTypeA>(MakeCustomSubclassableHost("Host"));
+		Cycle.RegisterClass(MakeCustomClassDefinition("Game", "A"), "Game.B");
+		Cycle.RegisterClass(MakeCustomClassDefinition("Game", "B", {
+			{.Name = "Other", .Type = SchemaExtensionPropertyType::Integer, .DefaultValue = 0},
+		}), "Game.A");
+		CheckThrows<std::invalid_argument>([&] { Cycle.Validate(); },
+			"custom-on-custom inheritance cycles reject the complete candidate");
+
+		RuntimeSchemaRegistry DuplicateProperty;
+		DuplicateProperty.RegisterNative<SchemaTestTypeA>(MakeCustomSubclassableHost("Host"));
+		CheckThrows<std::invalid_argument>([&] {
+			DuplicateProperty.RegisterClass(MakeCustomClassDefinition("Game", "Duplicate", {
+				{.Name = "Value", .Type = SchemaExtensionPropertyType::Integer, .DefaultValue = 0},
+				{.Name = "Value", .Type = SchemaExtensionPropertyType::Integer, .DefaultValue = 1},
+			}), "Test.Host");
+		}, "custom class registration rejects duplicate property identities");
+
+		RuntimeSchemaRegistry InvalidDefault;
+		InvalidDefault.RegisterNative<SchemaTestTypeA>(MakeCustomSubclassableHost("Host"));
+		CheckThrows<std::invalid_argument>([&] {
+			InvalidDefault.RegisterClass(MakeCustomClassDefinition("Game", "InvalidDefault", {
+				{.Name = "Value", .Type = SchemaExtensionPropertyType::Integer, .DefaultValue = std::string("0")},
+			}), "Test.Host");
+		}, "custom class defaults must exactly match their declared scalar type");
+
+		RuntimeSchemaRegistry ProtectedNamespace;
+		ProtectedNamespace.RegisterNative<SchemaTestTypeA>(MakeCustomSubclassableHost("Host"));
+		CheckThrows<std::invalid_argument>([&] {
+			ProtectedNamespace.RegisterClass(MakeCustomClassDefinition("Engine", "Impostor"), "Test.Host");
+		}, "project classes cannot impersonate the protected Engine namespace");
+
+		RuntimeSchemaRegistry NativeCollision;
+		auto NativeHost = MakeCustomSubclassableHost("Host");
+		NativeHost.Properties.emplace("Name", MakeReadOnlySchemaProperty("Name"));
+		NativeCollision.RegisterNative<SchemaTestTypeA>(std::move(NativeHost));
+		NativeCollision.RegisterClass(MakeCustomClassDefinition("Game", "Collision", {
+			{.Name = "Name", .Type = SchemaExtensionPropertyType::String, .DefaultValue = std::string()},
+		}), "Test.Host");
+		CheckThrows<std::invalid_argument>([&] { NativeCollision.Validate(); },
+			"custom classes cannot shadow inherited protected native members");
+
+		RuntimeSchemaRegistry InheritedCollision;
+		InheritedCollision.RegisterNative<SchemaTestTypeA>(MakeCustomSubclassableHost("Host"));
+		InheritedCollision.RegisterClass(MakeCustomClassDefinition("Game", "Base", {
+			{.Name = "Value", .Type = SchemaExtensionPropertyType::Integer, .DefaultValue = 0},
+		}), "Test.Host");
+		InheritedCollision.RegisterClass(MakeCustomClassDefinition("Game", "Derived", {
+			{.Name = "Value", .Type = SchemaExtensionPropertyType::Integer, .DefaultValue = 1},
+		}), "Game.Base");
+		CheckThrows<std::invalid_argument>([&] { InheritedCollision.Validate(); },
+			"custom classes cannot shadow inherited custom properties");
+
+		RuntimeSchemaRegistry CanonicalCollision;
+		CanonicalCollision.RegisterNative<SchemaTestTypeA>(MakeCustomSubclassableHost("Host"));
+		CanonicalCollision.RegisterEnum(MakeSchemaEnumDefinition("Game", "SharedIdentity"));
+		CheckThrows<std::invalid_argument>([&] {
+			CanonicalCollision.RegisterClass(
+				MakeCustomClassDefinition("Game", "SharedIdentity"), "Test.Host"
+			);
+		}, "custom class and enum canonical-name collisions fail independently of their separated SchemaIds");
+
+		auto MakeProperties = [](std::size_t Count) {
+			std::vector<SchemaClassProperty> Properties;
+			Properties.reserve(Count);
+			for (std::size_t Index = 0; Index < Count; ++Index)
+				Properties.push_back({
+					.Name = "Value" + std::to_string(Index),
+					.Type = SchemaExtensionPropertyType::Integer,
+					.DefaultValue = static_cast<int>(Index),
+				});
+			return Properties;
+		};
+		RuntimeSchemaRegistry ExactPropertyLimit;
+		ExactPropertyLimit.RegisterNative<SchemaTestTypeA>(MakeCustomSubclassableHost("Host"));
+		ExactPropertyLimit.RegisterClass(MakeCustomClassDefinition(
+			"Game", "ExactProperties", MakeProperties(MaximumCustomClassProperties)
+		), "Test.Host");
+		FreezeSchemaRegistry(ExactPropertyLimit);
+		Check(
+			ExactPropertyLimit.FindClassByName("Game.ExactProperties")->DeclaredCustomProperties.size() ==
+				MaximumCustomClassProperties,
+			"custom class property count exactly at its canonical limit is accepted"
+		);
+		RuntimeSchemaRegistry PropertyOverflow;
+		PropertyOverflow.RegisterNative<SchemaTestTypeA>(MakeCustomSubclassableHost("Host"));
+		CheckThrows<std::invalid_argument>([&] {
+			PropertyOverflow.RegisterClass(MakeCustomClassDefinition(
+				"Game", "TooManyProperties", MakeProperties(MaximumCustomClassProperties + 1)
+			), "Test.Host");
+		}, "custom class property count over its canonical limit is rejected");
+
+		RuntimeSchemaRegistry ExactClassLimit;
+		ExactClassLimit.RegisterNative<SchemaTestTypeA>(MakeCustomSubclassableHost("Host"));
+		for (std::size_t Index = 0; Index < MaximumCustomClassDefinitions; ++Index)
+			ExactClassLimit.RegisterClass(
+				MakeCustomClassDefinition("Game", "Limit" + std::to_string(Index)), "Test.Host"
+			);
+		FreezeSchemaRegistry(ExactClassLimit);
+		Check(
+			ExactClassLimit.EnumerateClasses().size() == MaximumCustomClassDefinitions + 1,
+			"custom class definition count exactly at its canonical limit is accepted"
+		);
+		RuntimeSchemaRegistry ClassOverflow;
+		ClassOverflow.RegisterNative<SchemaTestTypeA>(MakeCustomSubclassableHost("Host"));
+		for (std::size_t Index = 0; Index < MaximumCustomClassDefinitions; ++Index)
+			ClassOverflow.RegisterClass(
+				MakeCustomClassDefinition("Game", "Limit" + std::to_string(Index)), "Test.Host"
+			);
+		CheckThrows<std::invalid_argument>([&] {
+			ClassOverflow.RegisterClass(MakeCustomClassDefinition("Game", "Overflow"), "Test.Host");
+		}, "custom class definition count over its canonical limit is rejected");
+
+		RuntimeSchemaRegistry ExactDepth;
+		ExactDepth.RegisterNative<SchemaTestTypeA>(MakeCustomSubclassableHost("Host"));
+		std::string BaseName = "Test.Host";
+		for (std::size_t Index = 0; Index < MaximumCustomClassInheritanceDepth - 1; ++Index) {
+			const auto Name = "Depth" + std::to_string(Index);
+			ExactDepth.RegisterClass(MakeCustomClassDefinition("Game", Name, {{
+				.Name = "Value" + std::to_string(Index),
+				.Type = SchemaExtensionPropertyType::Integer,
+				.DefaultValue = 0,
+			}}), BaseName);
+			BaseName = "Game." + Name;
+		}
+		FreezeSchemaRegistry(ExactDepth);
+		Check(
+			ExactDepth.FindClassByName(BaseName) != nullptr,
+			"custom inheritance depth exactly at its canonical limit is accepted"
+		);
+		RuntimeSchemaRegistry DepthOverflow;
+		DepthOverflow.RegisterNative<SchemaTestTypeA>(MakeCustomSubclassableHost("Host"));
+		BaseName = "Test.Host";
+		for (std::size_t Index = 0; Index < MaximumCustomClassInheritanceDepth; ++Index) {
+			const auto Name = "Depth" + std::to_string(Index);
+			DepthOverflow.RegisterClass(MakeCustomClassDefinition("Game", Name, {{
+				.Name = "Value" + std::to_string(Index),
+				.Type = SchemaExtensionPropertyType::Integer,
+				.DefaultValue = 0,
+			}}), BaseName);
+			BaseName = "Game." + Name;
+		}
+		CheckThrows<std::invalid_argument>([&] { DepthOverflow.Validate(); },
+			"custom inheritance depth over its canonical limit is rejected");
+
+		RuntimeSchemaRegistry EmbeddedNull;
+		EmbeddedNull.RegisterNative<SchemaTestTypeA>(MakeCustomSubclassableHost("Host"));
+		CheckThrows<std::invalid_argument>([&] {
+			EmbeddedNull.RegisterClass(MakeCustomClassDefinition("Game", "EmbeddedNull", {{
+				.Name = std::string("Bad\0Name", 8),
+				.Type = SchemaExtensionPropertyType::Integer,
+				.DefaultValue = 0,
+			}}), "Test.Host");
+		}, "custom class property names reject embedded nulls");
+
+		const auto &Authority = GetRuntimeSchemaBootstrapAuthority();
+		auto Prepare = [&](RuntimeSchemaLifecycle &Lifecycle) {
+			Lifecycle.BeginCandidate(Authority);
+			Lifecycle.RegisterNative<SchemaTestTypeA>(Authority, MakeCustomSubclassableHost("Host"));
+			Lifecycle.AdvanceRegistrationPhase(Authority, RuntimeSchemaLifecyclePhase::CoreRegistration);
+			Lifecycle.AdvanceRegistrationPhase(Authority, RuntimeSchemaLifecyclePhase::PreRunRegistration);
+		};
+		RuntimeSchemaLifecycle Denied;
+		Prepare(Denied);
+		CheckThrows<std::runtime_error>([&] {
+			Denied.RegisterClass(Authority, MakeCustomClassDefinition("Game", "Denied"), "Test.Host",
+				{ScriptExecutionDomain::PreRun, {}});
+		}, "PreRun domain without DefineSchema cannot register a custom class");
+		Check(!Denied.HasCandidate(), "capability-denied custom registration discards the hidden candidate");
+
+		RuntimeSchemaLifecycle Atomic;
+		Prepare(Atomic);
+		ExecutePreRunRegistration(Atomic, Authority, R"(
+			Schema:RegisterEnum({ Namespace="Game", Name="NeverPublished", Version=1, Items={ Value=0 } })
+			Schema:RegisterClass({ Namespace="Game", Name="A", Version=1, Base="Game.B",
+				Properties={ Value={ Type="Integer", Default=0 } } })
+			Schema:RegisterClass({ Namespace="Game", Name="B", Version=1, Base="Game.A",
+				Properties={ Other={ Type="Integer", Default=0 } } })
+		)", "custom-class-cycle");
+		Atomic.AdvanceRegistrationPhase(Authority, RuntimeSchemaLifecyclePhase::Validation);
+		CheckThrows<std::runtime_error>([&] { Atomic.ValidateCandidate(Authority); },
+			"late custom inheritance validation failure aborts the complete mixed candidate");
+		Check(!Atomic.HasCandidate() && !Atomic.HasActiveRegistry(),
+			"failed custom class candidate publishes no enum, class, generation, or partial state");
+
+		auto BuildClassLimitSource = [](std::size_t Count) {
+			return "for index = 1, " + std::to_string(Count) + " do "
+				"Schema:RegisterClass({Namespace='Game',Name='Class' .. index,Version=1,Base='Test.Host',"
+				"Properties={Value={Type='Integer',Default=0}}}) end";
+		};
+		RuntimeSchemaLifecycle ExactPreRunClassLimit;
+		Prepare(ExactPreRunClassLimit);
+		ExecutePreRunRegistration(
+			ExactPreRunClassLimit, Authority,
+			BuildClassLimitSource(MaximumCustomClassDefinitions), "exact-custom-class-limit"
+		);
+		Check(ExactPreRunClassLimit.HasCandidate(),
+			"PreRun custom class count exactly at its facade limit is accepted");
+		ExactPreRunClassLimit.AbortCandidate(Authority);
+
+		RuntimeSchemaLifecycle PreRunClassOverflow;
+		Prepare(PreRunClassOverflow);
+		CheckThrows<PreRunRegistrationError>([&] {
+			ExecutePreRunRegistration(
+				PreRunClassOverflow, Authority,
+				BuildClassLimitSource(MaximumCustomClassDefinitions + 1), "custom-class-limit-overflow"
+			);
+		}, "PreRun custom class count over its facade limit aborts registration");
+		Check(!PreRunClassOverflow.HasCandidate(),
+			"PreRun custom class count overflow leaks no earlier definitions");
+
+		auto BuildPropertyLimitSource = [](std::size_t Count) {
+			return "local properties = {} for index = 1, " + std::to_string(Count) + " do "
+				"properties['Value' .. index] = {Type='Integer',Default=0} end "
+				"Schema:RegisterClass({Namespace='Game',Name='PropertyLimit',Version=1,Base='Test.Host',"
+				"Properties=properties})";
+		};
+		RuntimeSchemaLifecycle ExactPreRunPropertyLimit;
+		Prepare(ExactPreRunPropertyLimit);
+		ExecutePreRunRegistration(
+			ExactPreRunPropertyLimit, Authority,
+			BuildPropertyLimitSource(MaximumCustomClassProperties), "exact-custom-property-limit"
+		);
+		Check(ExactPreRunPropertyLimit.HasCandidate(),
+			"PreRun custom property count exactly at its facade limit is accepted");
+		ExactPreRunPropertyLimit.AbortCandidate(Authority);
+
+		RuntimeSchemaLifecycle PreRunPropertyOverflow;
+		Prepare(PreRunPropertyOverflow);
+		CheckThrows<PreRunRegistrationError>([&] {
+			ExecutePreRunRegistration(
+				PreRunPropertyOverflow, Authority,
+				BuildPropertyLimitSource(MaximumCustomClassProperties + 1), "custom-property-limit-overflow"
+			);
+		}, "PreRun custom property count over its facade limit aborts registration");
+		Check(!PreRunPropertyOverflow.HasCandidate(),
+			"PreRun custom property count overflow publishes no partial class");
+
+		for (const auto Source : {
+			"Schema:RegisterClass({Namespace='Game',Name='StringVersion',Version='1',Base='Test.Host',Properties={Value={Type='Integer',Default=0}}})",
+			"Schema:RegisterClass({Namespace='Game',Name='Callback',Version=1,Base='Test.Host',Properties={Value={Type='Integer',Default=0}},Callback=function() end})",
+		}) {
+			RuntimeSchemaLifecycle StrictClassPayload;
+			Prepare(StrictClassPayload);
+			CheckThrows<PreRunRegistrationError>([&] {
+				ExecutePreRunRegistration(
+					StrictClassPayload, Authority, Source, "strict-custom-class-payload"
+				);
+			}, "PreRun custom class registration rejects wrong types and behavior fields");
+			Check(!StrictClassPayload.HasCandidate(),
+				"strict custom class payload rejection aborts the complete candidate");
 		}
 	}
 
@@ -2208,6 +2542,32 @@ namespace {
 					Damage = { Type = "Integer", Default = 0 },
 				},
 			})
+			Schema:RegisterExtension({
+				Namespace = "Game.Data",
+				Name = "FolderProperties",
+				Version = 1,
+				Target = "Engine.Folder",
+				Properties = { Label = { Type = "String", Default = "" } },
+			})
+			Schema:RegisterClass({
+				Namespace = "Game",
+				Name = "CombatFolder",
+				Version = 1,
+				Base = "Game.DamageableFolder",
+				Properties = { Faction = { Type = "String", Default = "Neutral" } },
+			})
+			Schema:RegisterClass({
+				Namespace = "Game",
+				Name = "DamageableFolder",
+				Version = 1,
+				Base = "Engine.Folder",
+				Properties = {
+					Enabled = { Type = "Boolean", Default = true },
+					Health = { Type = "Integer", Default = 100 },
+					Rating = { Type = "Number", Default = 1.5 },
+					Title = { Type = "String", Default = "Unit" },
+				},
+			})
 		)";
 		for (std::size_t ExtensionIndex = 0; ExtensionIndex < 3; ++ExtensionIndex) {
 			preRun << "Schema:RegisterExtension({ Namespace='Game.Bounds', Name='Dense" << ExtensionIndex <<
@@ -2329,7 +2689,7 @@ namespace {
 		part->ApplyExtensionPropertyMutation(
 			extensionId, 1, "Damage", 9, ScriptSecurityContext::CoreTrusted()
 		);
-		Check(started.Session->ApplyAvailable().Succeeded(), "extension property delta replicates through journal v5");
+		Check(started.Session->ApplyAvailable().Succeeded(), "extension property delta replicates through journal v6");
 		auto receiverPart = started.Session->GetReceiverRoot()->FindFirstChild("ExtendedPart", false);
 		Check(receiverPart && std::get<int>(receiverPart->GetExtensionPropertyValue(extensionId, "Damage")) == 9,
 			"replicated receiver resolves extension meaning through the frozen schema");
@@ -2337,7 +2697,7 @@ namespace {
 		std::shared_ptr<Instance> serializableRoot = game;
 		const auto serialized = InstanceSerialization::Serialize(InstanceSerialization::InstanceFormat::Json, serializableRoot);
 		Check(serialized.find(extensionId.ToString()) != std::string::npos &&
-			serialized.find("\"Version\":3") != std::string::npos,
+			serialized.find("\"Version\":4") != std::string::npos,
 			"persistence stores extension SchemaId, version, property identity, and WireValue");
 		std::istringstream persistedStream(serialized);
 		auto loaded = InstanceSerialization::Deserialize(
@@ -2361,6 +2721,172 @@ namespace {
 		journal.Clear();
 	}
 
+	void TestCustomClassRuntime() {
+		using namespace gargantuan;
+		const auto ParentId = SchemaId::FromCustomClassName("Game", "DamageableFolder");
+		const auto ChildId = SchemaId::FromCustomClassName("Game", "CombatFolder");
+		const auto FolderExtensionId = SchemaId::FromExtensionName("Game.Data", "FolderProperties");
+		const auto *ParentDefinition = GetActiveRuntimeSchemaRegistry().FindClassById(ParentId);
+		const auto *ChildDefinition = GetActiveRuntimeSchemaRegistry().FindClassById(ChildId);
+		Check(ParentDefinition && ChildDefinition && ChildDefinition->BaseSchemaId == ParentId &&
+			ChildDefinition->NativeHostClassId == SchemaId::FromNativeName("Engine", "Folder"),
+			"published custom class identities resolve to their custom base and approved Folder host");
+
+		auto Game = std::make_shared<DataModel>();
+		Game->SetArchivable(true);
+		auto Custom = InstanceClassRegistry::ConstructByName("Game.CombatFolder");
+		Check(Custom && std::dynamic_pointer_cast<Folder>(Custom) &&
+			Custom->GetClassName() == "Game.CombatFolder" &&
+			Custom->IsA("Game.CombatFolder") && Custom->IsA("Game.DamageableFolder") &&
+			Custom->IsA("Folder") && Custom->IsA("Instance") && !Custom->IsA("Part"),
+			"custom construction preserves real schema identity, host behavior, and ID-based IsA ancestry");
+		if (!Custom) return;
+		Custom->SetName("CustomCombatFolder");
+		Custom->SetParent(Game);
+		Check(std::get<int>(Custom->GetCustomClassPropertyValue(ParentId, "Health")) == 100 &&
+			std::get<std::string>(Custom->GetCustomClassPropertyValue(ChildId, "Faction")) == "Neutral",
+			"custom properties read immutable sparse defaults across custom inheritance");
+		Check(std::get<std::string>(Custom->GetExtensionPropertyValue(FolderExtensionId, "Label")).empty(),
+			"class extensions targeting a native ancestor apply to a custom class without copying definitions");
+
+		auto &Journal = ChangeJournal::Get();
+		Journal.Clear();
+		auto Cursor = Journal.CreateCursor(Game->GetObjectId());
+		MutationGateway Gateway;
+		Check(Gateway.Apply(UpdatePropertyCommand{Custom->GetObjectId(), "Health", 75},
+			ScriptSecurityContext::PreRunRegistration()).Status == MutationStatus::Unauthorized,
+			"DefineSchema does not imply custom class runtime mutation authority");
+		Check(Journal.Read(Cursor).Records.empty(), "unauthorized custom property mutation emits no journal record");
+		Check(Gateway.Apply(UpdatePropertyCommand{Custom->GetObjectId(), "Health", std::string("75")},
+			ScriptSecurityContext::CoreTrusted()).Status == MutationStatus::ValidationFailed,
+			"custom property mutation rejects values outside its declared type");
+		Check(Gateway.Apply(UpdatePropertyCommand{Custom->GetObjectId(), "Health", 75},
+			ScriptSecurityContext::CoreTrusted()).Succeeded(),
+			"MutationGateway commits an authorized custom property update");
+		auto Changes = Journal.Read(Cursor);
+		Check(Changes.Records.size() == 1 && std::holds_alternative<PropertyUpdatedChange>(Changes.Records[0].Payload) &&
+			std::get<PropertyUpdatedChange>(Changes.Records[0].Payload).DeclaringClassSchemaId == ParentId,
+			"custom property updates use the normal property journal with stable declaring identity");
+		Check(Custom->ApplyAttributeMutation("Health", WireValue(12), ScriptSecurityContext::CoreTrusted()) ==
+			MutationStatus::Success && Custom->GetAttributeValue("Health") == WireValue(12),
+			"same-named Attributes remain independent dynamic state on custom Instances");
+		Check(Gateway.Apply(AddTagCommand{Custom->GetObjectId(), "CustomEnemy"},
+			ScriptSecurityContext::CoreTrusted()).Succeeded(),
+			"custom Instances participate in the existing indexed tag architecture");
+
+		auto Snapshot = CaptureSnapshot(Game);
+		auto SnapshotCustom = std::find_if(Snapshot.Objects.begin(), Snapshot.Objects.end(), [](const auto &Object) {
+			return Object.Name == "CustomCombatFolder";
+		});
+		Check(SnapshotCustom != Snapshot.Objects.end() && SnapshotCustom->ClassSchemaId == ChildId &&
+			SnapshotCustom->ClassDefinitionVersion == 1 && SnapshotCustom->CustomProperties.size() == 1 &&
+			std::get<int>(SnapshotCustom->CustomProperties[0].Properties.at("Health")) == 75,
+			"snapshot v6 carries custom class and sparse property identity/version independently from Attributes");
+		auto ParsedSnapshot = DeserializeSnapshot(SerializeSnapshot(Snapshot));
+		Check(ParsedSnapshot.Succeeded() && LoadSnapshot(*ParsedSnapshot.Value).Succeeded(),
+			"custom class snapshots validate and materialize against the active frozen schema");
+		auto OversizedSnapshotVersion = nlohmann::ordered_json::parse(SerializeSnapshot(Snapshot));
+		for (auto &Object : OversizedSnapshotVersion["Objects"])
+			if (Object["Name"] == "CustomCombatFolder")
+				Object["ClassDefinitionVersion"] = std::uint64_t{4294967297};
+		Check(!DeserializeSnapshot(OversizedSnapshotVersion.dump()).Succeeded(),
+			"custom class snapshots reject oversized definition versions before uint32 narrowing");
+
+		auto Started = InProcessReplicationSession::Start(Game);
+		Check(Started.Succeeded(), "loopback replication materializes custom class state from the initial snapshot");
+		Check(Gateway.Apply(UpdatePropertyCommand{Custom->GetObjectId(), "Health", 60},
+			ScriptSecurityContext::CoreTrusted()).Succeeded() && Started.Session->ApplyAvailable().Succeeded(),
+			"custom class property deltas replicate through the canonical property journal");
+		auto Receiver = Started.Session->GetReceiverRoot()->FindFirstChild("CustomCombatFolder", false);
+		Check(Receiver && Receiver->GetClassName() == "Game.CombatFolder" &&
+			std::get<int>(Receiver->GetCustomClassPropertyValue(ParentId, "Health")) == 60 &&
+			Receiver->GetAttributeValue("Health") == WireValue(12),
+			"replication reconstructs exact custom schema identity plus distinct custom and dynamic state");
+		const auto AtomicCursor = Started.Session->GetCursor();
+		const auto ReceiverCustomId = SnapshotCustom->Id;
+		WireJournalRecord ValidThenRejected{
+			.Sequence = AtomicCursor.NextSequence,
+			.Scope = WireObjectId::FromObjectId(AtomicCursor.Scope),
+			.Operation = WireJournalOperation::PropertyUpdate,
+			.Object = ReceiverCustomId,
+			.PropertyName = "Health",
+			.DeclaringClassSchemaId = ParentId,
+			.DefinitionVersion = 1,
+			.Value = 59,
+		};
+		auto InvalidAfterValid = ValidThenRejected;
+		InvalidAfterValid.Sequence++;
+		InvalidAfterValid.DefinitionVersion = 2;
+		InvalidAfterValid.Value = 58;
+		Check(Started.Session->ApplyWireRecords({ValidThenRejected, InvalidAfterValid}).Status ==
+			ReplicationApplyStatus::ApplyRejected &&
+			Started.Session->GetCursor().NextSequence == AtomicCursor.NextSequence && Receiver &&
+			std::get<int>(Receiver->GetCustomClassPropertyValue(ParentId, "Health")) == 60,
+			"custom replication preflights a batch so malformed later schema state cannot partially mutate the receiver");
+		auto DuplicateAfterValid = ValidThenRejected;
+		DuplicateAfterValid.Sequence++;
+		Check(Started.Session->ApplyWireRecords({ValidThenRejected, DuplicateAfterValid}).Status ==
+			ReplicationApplyStatus::ApplyRejected &&
+			Started.Session->GetCursor().NextSequence == AtomicCursor.NextSequence && Receiver &&
+			std::get<int>(Receiver->GetCustomClassPropertyValue(ParentId, "Health")) == 60,
+			"custom replication simulates effective values so a later semantic no-op cannot commit a batch prefix");
+		auto OversizedJournalVersion = nlohmann::ordered_json::parse(
+			SerializeWireJournalRecords({ValidThenRejected})
+		);
+		OversizedJournalVersion["Records"][0]["DefinitionVersion"] = std::uint64_t{4294967297};
+		Check(!DeserializeWireJournalRecords(OversizedJournalVersion.dump()).Succeeded(),
+			"custom property journal records reject oversized definition versions before uint32 narrowing");
+		auto Created = Gateway.Apply(CreateObjectCommand{"Game.CombatFolder", Game->GetObjectId()},
+			ScriptSecurityContext::CoreTrusted());
+		Check(Created.Succeeded() && Created.Object && Gateway.Apply(UpdatePropertyCommand{
+			*Created.Object, "Name", std::string("ReplicatedCustom")
+		}, ScriptSecurityContext::CoreTrusted()).Succeeded() && Started.Session->ApplyAvailable().Succeeded(),
+			"runtime construction and create journal accept a canonical custom class name under mutation authority");
+		auto ReceiverCreated = Started.Session->GetReceiverRoot()->FindFirstChild("ReplicatedCustom", false);
+		Check(ReceiverCreated && ReceiverCreated->GetClassName() == "Game.CombatFolder" &&
+			std::get<int>(ReceiverCreated->GetCustomClassPropertyValue(ParentId, "Health")) == 100,
+			"journal Create carries stable custom class identity/version and preserves sparse defaults");
+		const auto ReceiverCursor = Started.Session->GetCursor();
+		WireJournalRecord WrongKindCreate{
+			.Sequence = ReceiverCursor.NextSequence,
+			.Scope = WireObjectId::FromObjectId(ReceiverCursor.Scope),
+			.Operation = WireJournalOperation::Create,
+			.Object = {999999, 1},
+			.ClassName = "Game.CombatFolder",
+			.ClassSchemaId = SchemaId::FromEnumName("Game", "CombatState"),
+			.DefinitionVersion = 1,
+		};
+		Check(Started.Session->ApplyWireRecords({WrongKindCreate}).Status == ReplicationApplyStatus::ApplyRejected &&
+			Started.Session->GetCursor().NextSequence == ReceiverCursor.NextSequence,
+			"replication rejects wrong-kind custom class identity without advancing receiver state");
+
+		std::shared_ptr<Instance> Serializable = Game;
+		const auto Serialized = InstanceSerialization::Serialize(InstanceSerialization::InstanceFormat::Json, Serializable);
+		Check(Serialized.find(ChildId.ToString()) != std::string::npos &&
+			Serialized.find(ParentId.ToString()) != std::string::npos && Serialized.find("\"Version\":4") != std::string::npos,
+			"persistence v4 stores custom class, declaring property identity, and exact definition versions");
+		auto OversizedPersistedVersion = nlohmann::ordered_json::parse(Serialized);
+		for (auto &Child : OversizedPersistedVersion["Children"])
+			if (Child["Name"] == "CustomCombatFolder")
+				Child["ClassDefinitionVersion"] = std::uint64_t{4294967297};
+		std::istringstream OversizedPersistedStream(OversizedPersistedVersion.dump());
+		Check(!InstanceSerialization::Deserialize(
+			InstanceSerialization::InstanceFormat::Json, OversizedPersistedStream
+		).Ok, "custom class persistence rejects oversized definition versions before uint32 narrowing");
+		std::istringstream Persisted(Serialized);
+		auto Loaded = InstanceSerialization::Deserialize(InstanceSerialization::InstanceFormat::Json, Persisted);
+		auto LoadedCustom = Loaded.Instance ? Loaded.Instance->FindFirstChild("CustomCombatFolder", false) : nullptr;
+		Check(Loaded.Ok && LoadedCustom && LoadedCustom->GetClassName() == "Game.CombatFolder" &&
+			std::get<int>(LoadedCustom->GetCustomClassPropertyValue(ParentId, "Health")) == 60,
+			"persistence reconstructs the exact constructible custom class without base-class fallback");
+
+		Check(Gateway.Apply(UpdatePropertyCommand{Custom->GetObjectId(), "Health", 100},
+			ScriptSecurityContext::CoreTrusted()).Succeeded() &&
+			Custom->GetCustomClassPropertyOverrides().empty(),
+			"writing a custom property default removes its physical override deterministically");
+		Journal.Clear();
+	}
+
 	void TestEditorHostProtocol() {
 		using Json = nlohmann::ordered_json;
 		using namespace gargantuan;
@@ -2374,7 +2900,30 @@ namespace {
 		} cleanup{temporaryRoot};
 		std::filesystem::create_directories(temporaryRoot / ".gargantuan");
 		std::ofstream project(temporaryRoot / ".gargantuan" / "project.instance.json", std::ios::binary);
-		project << R"({"Version":0,"Name":"EditorWorld","ClassName":"DataModel","Properties":{},"Children":[{"Name":"Editable","ClassName":"Folder","Properties":{},"Children":[]},{"Name":"Workspace","ClassName":"Workspace","Properties":{},"Children":[{"Name":"PickTarget","ClassName":"Part","Properties":{},"Children":[]}]}]})";
+		auto PersistedNode = [](std::string Name, std::string ClassName, SchemaId ClassId, Json Children) {
+			return Json{
+				{"Name", std::move(Name)}, {"ClassName", std::move(ClassName)},
+				{"ClassSchemaId", ClassId.ToString()}, {"ClassDefinitionVersion", 1},
+				{"Properties", Json::object()}, {"Attributes", Json::object()},
+				{"Extensions", Json::array()}, {"CustomProperties", Json::array()},
+				{"Tags", Json::array()}, {"Children", std::move(Children)},
+			};
+		};
+		Json WorkspaceChildren = Json::array({PersistedNode(
+			"PickTarget", "Part", SchemaId::FromNativeName("Engine", "Part"), Json::array()
+		)});
+		Json ProjectChildren = Json::array({
+			PersistedNode("Editable", "Folder", SchemaId::FromNativeName("Engine", "Folder"), Json::array()),
+			PersistedNode("CustomEditable", "Game.StudioFolder",
+				SchemaId::FromCustomClassName("Game", "StudioFolder"), Json::array()),
+			PersistedNode("Workspace", "Workspace", SchemaId::FromNativeName("Engine", "Workspace"),
+				std::move(WorkspaceChildren)),
+		});
+		auto ProjectDocument = PersistedNode(
+			"EditorWorld", "DataModel", SchemaId::FromNativeName("Engine", "DataModel"), std::move(ProjectChildren)
+		);
+		ProjectDocument["Version"] = 4;
+		project << ProjectDocument.dump();
 		project.close();
 		std::ofstream preRun(temporaryRoot / ".gargantuan" / "prerun.luau", std::ios::binary);
 		preRun << R"(Schema:RegisterEnum({
@@ -2389,6 +2938,13 @@ namespace {
 			Version = 1,
 			Target = "Engine.BasePart",
 			Properties = { Damage = { Type = "Integer", Default = 0 } },
+		})
+		Schema:RegisterClass({
+			Namespace = "Game",
+			Name = "StudioFolder",
+			Version = 1,
+			Base = "Engine.Folder",
+			Properties = { Score = { Type = "Integer", Default = 10 } },
 		}))";
 		preRun.close();
 		const auto rejectedRoot = temporaryRoot / "rejected";
@@ -2479,7 +3035,7 @@ namespace {
 		}
 		auto schema = call("GetSchema", Json::object(), "test-token");
 		Check(
-			schema["Ok"].get<bool>() && schema["Result"]["SchemaDiscoveryVersion"] == 3 &&
+			schema["Ok"].get<bool>() && schema["Result"]["SchemaDiscoveryVersion"] == 4 &&
 				!schema["Result"]["Classes"].empty() && !schema["Result"]["Definitions"].empty(),
 			"EditorHost exposes versioned frozen schema discovery without removing the class adapter"
 		);
@@ -2495,6 +3051,10 @@ namespace {
 			projectSchema["Result"]["Definitions"].begin(), projectSchema["Result"]["Definitions"].end(),
 			[](const Json &definition) { return definition["CanonicalName"] == "Game.Combat.CombatProperties"; }
 		);
+		auto DiscoveredCustomClass = std::find_if(
+			projectSchema["Result"]["Definitions"].begin(), projectSchema["Result"]["Definitions"].end(),
+			[](const Json &Definition) { return Definition["CanonicalName"] == "Game.StudioFolder"; }
+		);
 		Check(
 			projectSchema["Ok"].get<bool>() && discoveredEnum != projectSchema["Result"]["Definitions"].end() &&
 				(*discoveredEnum)["Kind"] == "Enum" && (*discoveredEnum)["Provenance"] == "Game" &&
@@ -2508,8 +3068,15 @@ namespace {
 					SchemaId::FromNativeName("Engine", "BasePart").ToString() &&
 				(*discoveredExtension)["Properties"].size() == 1 &&
 				(*discoveredExtension)["Properties"][0]["Default"]["Type"] == "Int",
-			"EditorHost schema discovery v3 exposes immutable bounded extension metadata"
+			"EditorHost schema discovery v4 exposes immutable bounded extension metadata"
 		);
+		Check(DiscoveredCustomClass != projectSchema["Result"]["Definitions"].end() &&
+			(*DiscoveredCustomClass)["Kind"] == "Class" &&
+			(*DiscoveredCustomClass)["ConstructionKind"] == "CustomData" &&
+			(*DiscoveredCustomClass)["NativeHostClassSchemaId"] ==
+				SchemaId::FromNativeName("Engine", "Folder").ToString() &&
+			(*DiscoveredCustomClass)["Properties"].size() == 1,
+			"EditorHost schema discovery exposes immutable custom class construction and property metadata");
 		const auto publishedGeneration = projectSchema["Result"]["RegistryGeneration"];
 		auto rejectedOpen = call("OpenProject", {{"Root", rejectedRoot.string()}}, "test-token");
 		Check(
@@ -2541,7 +3108,13 @@ namespace {
 		auto extensionTarget = std::find_if(objects.begin(), objects.end(), [](const Json &object) {
 			return object["Name"] == "PickTarget";
 		});
+		auto CustomEditable = std::find_if(objects.begin(), objects.end(), [](const Json &Object) {
+			return Object["Name"] == "CustomEditable";
+		});
 		Check(editable != objects.end(), "EditorHost snapshot contains the project hierarchy");
+		Check(CustomEditable != objects.end() && (*CustomEditable)["ClassName"] == "Game.StudioFolder" &&
+			(*CustomEditable)["ClassSchemaId"] == SchemaId::FromCustomClassName("Game", "StudioFolder").ToString(),
+			"EditorHost snapshot carries stable custom class identity/version");
 		if (editable != objects.end()) {
 			auto mutation = call("SetProperty", {
 				{"Object", (*editable)["Id"]},
@@ -2618,9 +3191,54 @@ namespace {
 			}, "test-token");
 			Check(!wrongVersion["Ok"].get<bool>(),
 				"EditorHost rejects extension definition-version mismatch");
+			auto OversizedExtensionVersion = call("SetExtensionProperty", {
+				{"Object", (*extensionTarget)["Id"]},
+				{"ExtensionSchemaId", (*discoveredExtension)["SchemaId"]},
+				{"DefinitionVersion", std::uint64_t{4294967297}},
+				{"Property", "Damage"},
+				{"Value", {{"Type", "Int"}, {"Value", 13}}},
+			}, "test-token");
+			Check(!OversizedExtensionVersion["Ok"].get<bool>() &&
+				OversizedExtensionVersion["Error"]["Code"] == "MalformedRequest",
+				"EditorHost rejects extension definition versions outside uint32 before conversion");
 			auto rejectedChanges = call("PollChanges", Json::object(), "test-token");
 			Check(rejectedChanges["Ok"].get<bool>() && rejectedChanges["Result"]["Records"].empty(),
 				"rejected extension edit emits no journal record");
+		}
+		if (CustomEditable != objects.end() && DiscoveredCustomClass != projectSchema["Result"]["Definitions"].end()) {
+			auto CustomMutation = call("SetCustomProperty", {
+				{"Object", (*CustomEditable)["Id"]},
+				{"DeclaringClassSchemaId", (*DiscoveredCustomClass)["SchemaId"]},
+				{"DefinitionVersion", 1}, {"Property", "Score"},
+				{"Value", {{"Type", "Int"}, {"Value", 20}}},
+			}, "test-token");
+			Check(CustomMutation["Ok"].get<bool>(),
+				"EditorHost routes custom property edits through authoritative schema-aware mutation");
+			auto CustomChanges = call("PollChanges", Json::object(), "test-token");
+			Check(CustomChanges["Ok"].get<bool>() && CustomChanges["Result"]["Records"].size() == 1 &&
+				CustomChanges["Result"]["Records"][0]["Operation"] == "PropertyUpdate" &&
+				CustomChanges["Result"]["Records"][0]["DeclaringClassSchemaId"] ==
+					(*DiscoveredCustomClass)["SchemaId"],
+				"EditorHost publishes a stable declaring-class identity on custom property journal updates");
+			auto WrongCustomVersion = call("SetCustomProperty", {
+				{"Object", (*CustomEditable)["Id"]},
+				{"DeclaringClassSchemaId", (*DiscoveredCustomClass)["SchemaId"]},
+				{"DefinitionVersion", 2}, {"Property", "Score"},
+				{"Value", {{"Type", "Int"}, {"Value", 21}}},
+			}, "test-token");
+			Check(!WrongCustomVersion["Ok"].get<bool>() &&
+				call("PollChanges", Json::object(), "test-token")["Result"]["Records"].empty(),
+				"EditorHost rejects custom class version mismatch without journaling");
+			auto OversizedCustomVersion = call("SetCustomProperty", {
+				{"Object", (*CustomEditable)["Id"]},
+				{"DeclaringClassSchemaId", (*DiscoveredCustomClass)["SchemaId"]},
+				{"DefinitionVersion", std::uint64_t{4294967297}}, {"Property", "Score"},
+				{"Value", {{"Type", "Int"}, {"Value", 21}}},
+			}, "test-token");
+			Check(!OversizedCustomVersion["Ok"].get<bool>() &&
+				OversizedCustomVersion["Error"]["Code"] == "MalformedRequest" &&
+				call("PollChanges", Json::object(), "test-token")["Result"]["Records"].empty(),
+				"EditorHost rejects custom definition versions outside uint32 without mutation or journaling");
 		}
 
 		auto captureBeforeConfiguration = call("CaptureViewport", Json::object(), "test-token");
@@ -2839,6 +3457,7 @@ int main() {
 	TestRuntimeSchemaLifecycle();
 	TestCustomEnumPreRun();
 	TestClassExtensionSchema();
+	TestCustomClassSchema();
 	TestRenderSnapshotExtraction();
 	TestScriptSecurityModel();
 	TestMutationGateway();
@@ -2849,6 +3468,7 @@ int main() {
 	TestWireJournalAndLoopbackReplication();
 	TestSharedFrameRing();
 	TestClassExtensionRuntime();
+	TestCustomClassRuntime();
 	TestEditorHostProtocol();
 	TestLuauExceptionBoundary();
 	TestLuauEmbeddingCompatibility();

@@ -263,6 +263,9 @@ const function assembleImplFile(state: GenerationState)
 	output:line(`.ClassName = {string.format("%q", state.class.name)},`)
 	output:line(`.DefinitionVersion = 1,`)
 	output:line(`.Provenance = SchemaProvenance::NativeEngine,`)
+	if state.class.customSubclassPolicy then
+		output:line(`.ProjectSubclassPolicy = CustomSubclassPolicy::{state.class.customSubclassPolicy},`)
+	end
 	if not state.class.abstract then
 		output
 			:line(`.Constructor = []() -> std::shared_ptr<Instance> \{`)

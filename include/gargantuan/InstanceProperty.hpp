@@ -2,6 +2,7 @@
 
 #include "gargantuan/reflection/Enums.hpp"
 #include "gargantuan/reflection/SchemaId.hpp"
+#include "gargantuan/runtime/WireValue.hpp"
 #include "gargantuan/scripting/ScriptSecurity.hpp"
 #include "gargantuan/scripting/StackValue.hpp"
 #include <any>
@@ -105,6 +106,9 @@ namespace gargantuan {
 		ScriptCapability RequiredWriteCapability = ScriptCapability::MutateDataModel;
 		std::function<bool(const std::any &)> Validate;
 		SchemaId DeclaringSchemaId{};
+		std::uint32_t DeclaringDefinitionVersion = 0;
+		std::optional<std::uint8_t> CustomSchemaPropertyType{};
+		WireValue CustomSchemaDefaultValue = std::monostate{};
 
 		Enums::Permission ReadPermission = Enums::Permission::None;
 		std::function<std::any(Instance *self)> Read;

@@ -14,13 +14,12 @@ namespace gargantuan {
 			return 0;
 		}
 
-		auto constructor = classDefinition->Constructor;
-		if (!constructor) {
+		if (!InstanceClassRegistry::IsConstructible(*classDefinition)) {
 			luaL_error(L, "Instance class %s cannot be constructed", className);
 			return 0;
 		}
 
-		auto instance = constructor();
+		auto instance = InstanceClassRegistry::Construct(*classDefinition);
 		StackValue<std::shared_ptr<Instance>>::Push(L, instance);
 		return 1;
 	};

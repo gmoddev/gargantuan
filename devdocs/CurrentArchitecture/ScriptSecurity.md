@@ -39,6 +39,12 @@ hidden-candidate `PreRunRegistration` phase. Freeze remains authoritative even
 if a context retains the capability. PreRun receives no DataModel mutation,
 filesystem, process, network, Studio, or viewport capability.
 
+`Schema:RegisterClass` follows the same rule as enum and extension registration:
+it requires both the hidden `PreRunRegistration` lifecycle phase and the native
+`DefineSchema` capability. The resulting class grants no construction or
+mutation authority. Runtime construction and custom property writes continue
+to require the ordinary DataModel mutation path after the registry is frozen.
+
 ## Deferred
 
 Server and Client have identities but no final default grant profiles. There is

@@ -81,7 +81,14 @@ namespace gargantuan {
 		for (const auto &instance : instances) {
 			auto *definition = InstanceClassRegistry::GetDefinition(instance.get());
 			if (!definition) throw std::runtime_error("Snapshot object has no class definition");
-			SnapshotObject object{.Id = ids.at(instance.get()), .ClassName = definition->ClassName, .Name = instance->GetName()};
+			SnapshotObject object{
+				.Id = ids.at(instance.get()),
+				.ClassSchemaId = definition->Id,
+				.ClassDefinitionVersion = definition->DefinitionVersion,
+				.ClassName = definition->ConstructionKind == SchemaClassConstructionKind::CustomData
+					? definition->CanonicalName : definition->ClassName,
+				.Name = instance->GetName(),
+			};
 			if (auto parent = instance->GetParent()) {
 				auto parentId = ids.find(parent->get());
 				if (parentId == ids.end()) throw std::runtime_error("Snapshot contains an external parent");
@@ -89,6 +96,7 @@ namespace gargantuan {
 			}
 
 			for (const auto &[name, property] : definition->AllProperties) {
+				if (property->CustomSchemaPropertyType) continue;
 				if (name == "Name") continue;
 				if (property->ReplicationPolicy != InstanceProperty::Replication::FutureReplicated ||
 					!property->Read || !property->Write)
@@ -124,6 +132,13 @@ namespace gargantuan {
 				if (!extension) throw std::runtime_error("Snapshot extension definition is missing");
 				object.Extensions.push_back({extensionId, extension->DefinitionVersion, properties});
 			}
+			for (const auto &[declaringClassId, properties] : instance->GetCustomClassPropertyOverrides(
+				ScriptSecurityContext::CoreTrusted()
+			)) {
+				auto *declaringClass = GetActiveRuntimeSchemaRegistry().FindClassById(declaringClassId);
+				if (!declaringClass) throw std::runtime_error("Snapshot custom class definition is missing");
+				object.CustomProperties.push_back({declaringClassId, declaringClass->DefinitionVersion, properties});
+			}
 			object.Tags = dataModel->Tags.GetTags(dataModel->GetObjectId(), instance->GetObjectId(), ScriptSecurityContext::CoreTrusted());
 			snapshot.Objects.push_back(std::move(object));
 		}
@@ -145,6 +160,8 @@ namespace gargantuan {
 		for (const auto &object : snapshot.Objects) {
 			Json encoded;
 			encoded["Id"] = EncodeId(object.Id);
+			encoded["ClassSchemaId"] = object.ClassSchemaId.ToString();
+			encoded["ClassDefinitionVersion"] = object.ClassDefinitionVersion;
 			encoded["ClassName"] = object.ClassName;
 			encoded["Name"] = object.Name;
 			encoded["Parent"] = object.Parent ? EncodeId(*object.Parent) : Json(nullptr);
@@ -162,6 +179,17 @@ namespace gargantuan {
 				for (const auto &[name, value] : extension.Properties)
 					extensionValue["Properties"][name] = EncodeValue(value);
 				encoded["Extensions"].push_back(std::move(extensionValue));
+			}
+			encoded["CustomProperties"] = Json::array();
+			for (const auto &state : object.CustomProperties) {
+				Json encodedState{
+					{"DeclaringClassSchemaId", state.DeclaringClassSchemaId.ToString()},
+					{"DefinitionVersion", state.DefinitionVersion},
+					{"Properties", Json::object()},
+				};
+				for (const auto &[name, value] : state.Properties)
+					encodedState["Properties"][name] = EncodeValue(value);
+				encoded["CustomProperties"].push_back(std::move(encodedState));
 			}
 			encoded["Tags"] = object.Tags;
 			document["Objects"].push_back(std::move(encoded));
@@ -202,11 +230,14 @@ namespace gargantuan {
 			}
 
 			for (const auto &encoded : document["Objects"]) {
-				if (!encoded.is_object() || !encoded.contains("Id") || !encoded.contains("ClassName") ||
+				if (!encoded.is_object() || !encoded.contains("Id") || !encoded.contains("ClassSchemaId") ||
+					!encoded["ClassSchemaId"].is_string() || !encoded.contains("ClassDefinitionVersion") ||
+					!encoded["ClassDefinitionVersion"].is_number_unsigned() || !encoded.contains("ClassName") ||
 					!encoded["ClassName"].is_string() || !encoded.contains("Name") || !encoded["Name"].is_string() ||
 					!encoded.contains("Parent") || !encoded.contains("Properties") || !encoded["Properties"].is_object() ||
 					!encoded.contains("Attributes") || !encoded["Attributes"].is_object() ||
 					!encoded.contains("Extensions") || !encoded["Extensions"].is_array() ||
+					!encoded.contains("CustomProperties") || !encoded["CustomProperties"].is_array() ||
 					!encoded.contains("Tags") || !encoded["Tags"].is_array()) {
 					result.Errors.push_back("Invalid snapshot object");
 					return result;
@@ -217,9 +248,21 @@ namespace gargantuan {
 					result.Errors.push_back("Invalid snapshot ObjectId");
 					return result;
 				}
+				auto classId = SchemaId::Parse(encoded["ClassSchemaId"].get<std::string>());
+				auto decodedClassVersion = DecodeWireUnsigned32(encoded["ClassDefinitionVersion"]);
+				const auto classVersion = decodedClassVersion.value_or(0);
+				auto *classDefinition = classId ? GetActiveRuntimeSchemaRegistry().FindClassById(*classId) : nullptr;
+				if (!classDefinition || classVersion == 0 || classDefinition->DefinitionVersion != classVersion)
+					throw std::invalid_argument("Snapshot class identity/version is missing or incompatible");
+				const auto expectedClassName = classDefinition->ConstructionKind == SchemaClassConstructionKind::CustomData
+					? classDefinition->CanonicalName : classDefinition->ClassName;
+				if (encoded["ClassName"].get<std::string>() != expectedClassName)
+					throw std::invalid_argument("Snapshot class display identity is inconsistent");
 
 				SnapshotObject object{
 					.Id = *id,
+					.ClassSchemaId = *classId,
+					.ClassDefinitionVersion = classVersion,
 					.ClassName = encoded["ClassName"].get<std::string>(),
 					.Name = encoded["Name"].get<std::string>()
 				};
@@ -251,8 +294,6 @@ namespace gargantuan {
 				(void)ValidateAttributeCollection(object.Attributes);
 				if (encoded["Extensions"].size() > MaximumCustomExtensionDefinitions)
 					throw std::invalid_argument("Snapshot exceeds its extension definition state limit");
-				auto *classDefinition = InstanceClassRegistry::GetDefinitionByName(object.ClassName);
-				if (!classDefinition) throw std::invalid_argument("Snapshot class definition is missing");
 				std::optional<SchemaId> previousExtensionId;
 				std::size_t ExtensionOverrideCount = 0;
 				std::size_t ExtensionOverrideBytes = 0;
@@ -268,7 +309,8 @@ namespace gargantuan {
 						throw std::invalid_argument("Snapshot extension identities are invalid or unordered");
 					previousExtensionId = *extensionId;
 					auto *extension = GetActiveRuntimeSchemaRegistry().FindExtensionById(*extensionId);
-					const auto version = encodedExtension["DefinitionVersion"].get<std::uint32_t>();
+					auto decodedVersion = DecodeWireUnsigned32(encodedExtension["DefinitionVersion"]);
+					const auto version = decodedVersion.value_or(0);
 					if (!extension || extension->DefinitionVersion != version)
 						throw std::invalid_argument("Snapshot extension version is missing or incompatible");
 					if (!GetActiveRuntimeSchemaRegistry().IsExtensionApplicableToClass(*extensionId, classDefinition->Id))
@@ -293,6 +335,48 @@ namespace gargantuan {
 					}
 					if (state.Properties.empty()) throw std::invalid_argument("Snapshot extension state has no overrides");
 					object.Extensions.push_back(std::move(state));
+				}
+				if (encoded["CustomProperties"].size() > MaximumCustomClassInheritanceDepth)
+					throw std::invalid_argument("Snapshot exceeds its custom property declaring-class state limit");
+				std::optional<SchemaId> previousDeclaringClassId;
+				std::size_t CustomOverrideCount = 0;
+				std::size_t CustomOverrideBytes = 0;
+				for (const auto &encodedState : encoded["CustomProperties"]) {
+					if (!encodedState.is_object() || !encodedState.contains("DeclaringClassSchemaId") ||
+						!encodedState["DeclaringClassSchemaId"].is_string() ||
+						!encodedState.contains("DefinitionVersion") || !encodedState["DefinitionVersion"].is_number_unsigned() ||
+						!encodedState.contains("Properties") || !encodedState["Properties"].is_object())
+						throw std::invalid_argument("Snapshot custom property state is malformed");
+					auto declaringId = SchemaId::Parse(encodedState["DeclaringClassSchemaId"].get<std::string>());
+					if (!declaringId || (previousDeclaringClassId && !(*previousDeclaringClassId < *declaringId)))
+						throw std::invalid_argument("Snapshot custom property declaring identities are invalid or unordered");
+					previousDeclaringClassId = *declaringId;
+					auto *declaringClass = GetActiveRuntimeSchemaRegistry().FindClassById(*declaringId);
+					auto decodedVersion = DecodeWireUnsigned32(encodedState["DefinitionVersion"]);
+					const auto version = decodedVersion.value_or(0);
+					if (!declaringClass || declaringClass->ConstructionKind != SchemaClassConstructionKind::CustomData ||
+						declaringClass->DefinitionVersion != version ||
+						!GetActiveRuntimeSchemaRegistry().IsClassDerivedFrom(classDefinition->Id, *declaringId))
+						throw std::invalid_argument("Snapshot custom property owner/version is incompatible");
+					if (encodedState["Properties"].empty() ||
+						encodedState["Properties"].size() > MaximumCustomClassProperties)
+						throw std::invalid_argument("Snapshot custom property state is empty or oversized");
+					SnapshotCustomClassState state{*declaringId, version, {}};
+					for (const auto &[name, encodedValue] : encodedState["Properties"].items()) {
+						auto *property = GetActiveRuntimeSchemaRegistry().FindCustomClassProperty(*declaringId, name);
+						auto value = DecodeValue(encodedValue);
+						if (!property || !value) throw std::invalid_argument("Snapshot custom property is malformed or unknown");
+						++CustomOverrideCount;
+						CustomOverrideBytes += sizeof(SchemaId) + sizeof(version) + name.size() +
+							ValidateSchemaExtensionPropertyValue(property->Type, *value);
+						if (CustomOverrideCount > MaximumCustomPropertyOverridesPerInstance ||
+							CustomOverrideBytes > MaximumCustomPropertyOverrideBytesPerInstance)
+							throw std::invalid_argument("Snapshot exceeds its custom property override limits");
+						if (*value == property->DefaultValue)
+							throw std::invalid_argument("Snapshot redundantly stores a custom property default");
+						state.Properties.emplace(name, std::move(*value));
+					}
+					object.CustomProperties.push_back(std::move(state));
 				}
 				std::set<std::string> uniqueTags;
 				for (const auto &tag : encoded["Tags"]) {
@@ -335,12 +419,19 @@ namespace gargantuan {
 				result.Errors.push_back("Invalid or duplicate snapshot ObjectId");
 				return result;
 			}
-			auto *definition = InstanceClassRegistry::GetDefinitionByName(object.ClassName);
-			if (!definition || !definition->Constructor) {
+			auto *definition = InstanceClassRegistry::GetDefinitionBySchemaId(object.ClassSchemaId);
+			if (!definition || definition->DefinitionVersion != object.ClassDefinitionVersion ||
+				!InstanceClassRegistry::IsConstructible(*definition)) {
 				result.Errors.push_back("Unknown or non-constructible snapshot class: " + object.ClassName);
 				return result;
 			}
-			auto instance = definition->Constructor();
+			const auto expectedName = definition->ConstructionKind == SchemaClassConstructionKind::CustomData
+				? definition->CanonicalName : definition->ClassName;
+			if (object.ClassName != expectedName) {
+				result.Errors.push_back("Snapshot class identity is inconsistent: " + object.ClassName);
+				return result;
+			}
+			auto instance = InstanceClassRegistry::Construct(*definition);
 			if (instance->ApplyPropertyMutation("Name", object.Name, Enums::Permission::Engine) != MutationStatus::Success) {
 				result.Errors.push_back("Snapshot object name was rejected");
 				return result;
@@ -411,6 +502,18 @@ namespace gargantuan {
 							ScriptSecurityContext::CoreTrusted()
 						) != MutationStatus::Success)
 							throw std::runtime_error("Snapshot extension property value was rejected");
+					}
+				}
+				for (const auto &state : object.CustomProperties) {
+					for (const auto &[name, value] : state.Properties) {
+						if (instance->ApplyCustomClassPropertyMutation(
+							state.DeclaringClassSchemaId,
+							state.DefinitionVersion,
+							name,
+							value,
+							ScriptSecurityContext::CoreTrusted()
+						) != MutationStatus::Success)
+							throw std::runtime_error("Snapshot custom property value was rejected");
 					}
 				}
 				for (const auto &tag : object.Tags)

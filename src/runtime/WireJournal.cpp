@@ -59,11 +59,21 @@ namespace gargantuan {
 				if constexpr (std::is_same_v<Payload, ObjectCreatedChange>) {
 					encoded.Operation = WireJournalOperation::Create;
 					encoded.ClassName = payload.ClassName;
+					auto *definition = payload.ClassSchemaId.IsValid()
+						? GetActiveRuntimeSchemaRegistry().FindClassById(payload.ClassSchemaId)
+						: GetActiveRuntimeSchemaRegistry().FindClassByName(payload.ClassName);
+					if (!definition || (payload.DefinitionVersion != 0 &&
+						definition->DefinitionVersion != payload.DefinitionVersion))
+						throw std::runtime_error("Create change has an unknown or incompatible class identity");
+					encoded.ClassSchemaId = definition->Id;
+					encoded.DefinitionVersion = definition->DefinitionVersion;
 				} else if constexpr (std::is_same_v<Payload, PropertyUpdatedChange>) {
 					if (!payload.Replicated)
 						throw std::runtime_error("Non-replicated property change cannot cross the wire boundary");
 					encoded.Operation = WireJournalOperation::PropertyUpdate;
 					encoded.PropertyName = payload.PropertyName;
+					encoded.DeclaringClassSchemaId = payload.DeclaringClassSchemaId;
+					if (payload.DeclaringClassSchemaId) encoded.DefinitionVersion = payload.DefinitionVersion;
 					encoded.Value = payload.Value;
 				} else if constexpr (std::is_same_v<Payload, AttributeUpdatedChange>) {
 					encoded.Operation = WireJournalOperation::AttributeUpdate;
@@ -106,10 +116,16 @@ namespace gargantuan {
 			switch (record.Operation) {
 				case WireJournalOperation::Create:
 					encoded["ClassName"] = record.ClassName.value_or("");
+					encoded["ClassSchemaId"] = record.ClassSchemaId ? record.ClassSchemaId->ToString() : "";
+					encoded["DefinitionVersion"] = record.DefinitionVersion.value_or(0);
 					break;
 				case WireJournalOperation::PropertyUpdate:
 					encoded["PropertyName"] = record.PropertyName.value_or("");
 					encoded["Value"] = record.Value ? EncodeWireValue(*record.Value) : WireJson(nullptr);
+					if (record.DeclaringClassSchemaId) {
+						encoded["DeclaringClassSchemaId"] = record.DeclaringClassSchemaId->ToString();
+						encoded["DefinitionVersion"] = record.DefinitionVersion.value_or(0);
+					}
 					break;
 				case WireJournalOperation::AttributeUpdate:
 					encoded["AttributeName"] = record.AttributeName.value_or("");
@@ -170,14 +186,33 @@ namespace gargantuan {
 				WireJournalRecord record{.Sequence = sequence, .Scope = *scope, .Operation = *operation, .Object = *object};
 				switch (*operation) {
 					case WireJournalOperation::Create:
-						if (!HasOnlyFields(encoded, {"Version", "Sequence", "Scope", "Operation", "ObjectId", "ClassName"}) ||
+						if (!HasOnlyFields(encoded, {
+								"Version", "Sequence", "Scope", "Operation", "ObjectId", "ClassName",
+								"ClassSchemaId", "DefinitionVersion"
+							}) ||
 							!encoded.contains("ClassName") || !encoded["ClassName"].is_string() ||
-							encoded["ClassName"].get<std::string>().empty())
+							encoded["ClassName"].get<std::string>().empty() ||
+							!encoded.contains("ClassSchemaId") || !encoded["ClassSchemaId"].is_string() ||
+							!encoded.contains("DefinitionVersion") || !encoded["DefinitionVersion"].is_number_unsigned())
 							throw std::invalid_argument("Invalid Create journal record");
-						record.ClassName = encoded["ClassName"].get<std::string>();
+					record.ClassName = encoded["ClassName"].get<std::string>();
+					if (auto id = SchemaId::Parse(encoded["ClassSchemaId"].get<std::string>()); id) {
+						auto *definition = GetActiveRuntimeSchemaRegistry().FindClassById(*id);
+						const auto version = DecodeWireUnsigned32(encoded["DefinitionVersion"]).value_or(0);
+							const auto expectedName = definition && definition->ConstructionKind == SchemaClassConstructionKind::CustomData
+								? definition->CanonicalName : definition ? definition->ClassName : std::string{};
+							if (!definition || version == 0 || definition->DefinitionVersion != version ||
+								*record.ClassName != expectedName || !GetActiveRuntimeSchemaRegistry().IsClassConstructible(*definition))
+								throw std::invalid_argument("Unknown, incompatible, or non-constructible Create class identity");
+							record.ClassSchemaId = *id;
+							record.DefinitionVersion = version;
+						} else throw std::invalid_argument("Invalid Create class SchemaId");
 						break;
 					case WireJournalOperation::PropertyUpdate: {
-						if (!HasOnlyFields(encoded, {"Version", "Sequence", "Scope", "Operation", "ObjectId", "PropertyName", "Value"}) ||
+						if (!HasOnlyFields(encoded, {
+								"Version", "Sequence", "Scope", "Operation", "ObjectId", "PropertyName", "Value",
+								"DeclaringClassSchemaId", "DefinitionVersion"
+							}) ||
 							!encoded.contains("PropertyName") || !encoded["PropertyName"].is_string() ||
 							encoded["PropertyName"].get<std::string>().empty() || !encoded.contains("Value"))
 							throw std::invalid_argument("Invalid PropertyUpdate journal record");
@@ -185,6 +220,25 @@ namespace gargantuan {
 						if (!value) throw std::invalid_argument("Invalid PropertyUpdate WireValue");
 						record.PropertyName = encoded["PropertyName"].get<std::string>();
 						record.Value = std::move(*value);
+						const auto hasOwner = encoded.contains("DeclaringClassSchemaId");
+						if (hasOwner != encoded.contains("DefinitionVersion"))
+							throw std::invalid_argument("Custom PropertyUpdate identity fields are incomplete");
+						if (hasOwner) {
+							if (!encoded["DeclaringClassSchemaId"].is_string() ||
+								!encoded["DefinitionVersion"].is_number_unsigned())
+								throw std::invalid_argument("Custom PropertyUpdate identity fields are malformed");
+							auto declaringId = SchemaId::Parse(encoded["DeclaringClassSchemaId"].get<std::string>());
+							const auto version = DecodeWireUnsigned32(encoded["DefinitionVersion"]).value_or(0);
+							auto *declaringClass = declaringId ? GetActiveRuntimeSchemaRegistry().FindClassById(*declaringId) : nullptr;
+							auto *property = declaringId
+								? GetActiveRuntimeSchemaRegistry().FindCustomClassProperty(*declaringId, *record.PropertyName) : nullptr;
+							if (!declaringClass || declaringClass->ConstructionKind != SchemaClassConstructionKind::CustomData ||
+								declaringClass->DefinitionVersion != version || !property)
+								throw std::invalid_argument("Unknown or incompatible custom PropertyUpdate identity");
+							(void)ValidateSchemaExtensionPropertyValue(property->Type, *record.Value);
+							record.DeclaringClassSchemaId = *declaringId;
+							record.DefinitionVersion = version;
+						}
 						break;
 					}
 					case WireJournalOperation::AttributeUpdate: {
@@ -213,7 +267,7 @@ namespace gargantuan {
 						auto extensionId = SchemaId::Parse(encodedId);
 						if (!extensionId || extensionId->ToString() != encodedId)
 							throw std::invalid_argument("Invalid extension SchemaId");
-						const auto version = encoded["DefinitionVersion"].get<std::uint32_t>();
+					const auto version = DecodeWireUnsigned32(encoded["DefinitionVersion"]).value_or(0);
 						if (version == 0) throw std::invalid_argument("Invalid extension definition version");
 						auto name = encoded["PropertyName"].get<std::string>();
 						auto *extension = GetActiveRuntimeSchemaRegistry().FindExtensionById(*extensionId);

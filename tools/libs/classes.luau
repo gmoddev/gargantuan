@@ -45,6 +45,7 @@ export type Class = {
 
 	read root: boolean?,
 	read abstract: boolean?,
+	read customSubclassPolicy: "DataOnly"?,
 	read extends: string?,
 	read deprecated: boolean?,
 

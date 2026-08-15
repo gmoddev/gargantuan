@@ -47,7 +47,7 @@ Authoritative DataModel / live Instance graph
 | Area | Owns | Critical boundary |
 | --- | --- | --- |
 | DataModel | Live graph, services, identity, committed history | No GPU, Studio UI, or transport policy ownership |
-| Runtime schema | Stable class/enum/extension identity and reflection policy | Build candidate, validate, then freeze atomically |
+| Runtime schema | Stable native/custom class, enum, and extension identity and reflection policy | Build candidate, validate, then freeze atomically |
 | Mutation | Validated authoritative commands | Does not own transport or Studio projection state |
 | Change journal | Ordered committed history per DataModel scope | Not a packet, peer, render, or RPC sequence |
 | Rendering | Immutable extracted state and GPU resources | Never traverses/mutates DataModel; no Instance pointers in snapshots |
@@ -78,6 +78,10 @@ Authoritative DataModel / live Instance graph
 - Class extensions are distinct frozen definitions targeting an existing class
   ID. Their scalar properties use sparse per-Instance state through the mutation
   gateway; they do not change class identity or use Attributes as storage.
+- Custom classes are canonical constructible class definitions with stable
+  custom identity, stable inheritance, scalar declarative properties, and an
+  engine-owned data-only host policy. The first approved host is `Engine.Folder`;
+  project code cannot register native behavior callbacks.
 - Attributes and tags are bounded dynamic Instance state, not schema changes.
   Their writes use mutation authority; tags maintain generation-safe indexes.
 - Render extraction happens after simulation and `PreRender`; snapshots are

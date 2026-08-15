@@ -3,6 +3,7 @@
 #include "gargantuan/runtime/WireValue.hpp"
 
 #include <any>
+#include <cstdint>
 #include <nlohmann/json.hpp>
 #include <optional>
 
@@ -11,6 +12,7 @@ namespace gargantuan {
 	struct SchemaEnumItem;
 	using WireJson = nlohmann::ordered_json;
 
+	std::optional<std::uint32_t> DecodeWireUnsigned32(const WireJson &value);
 	WireJson EncodeWireObjectId(WireObjectId id);
 	std::optional<WireObjectId> DecodeWireObjectId(const WireJson &value);
 	WireJson EncodeWireValue(const WireValue &value);

@@ -1,8 +1,11 @@
 #include "gargantuan/classes/DataModel.hpp"
+#include "gargantuan/assets/InstanceSerialization.hpp"
+#include "gargantuan/reflection/InstanceClassRegistry.hpp"
 #include "gargantuan/reflection/PreRunRegistration.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 
 #include <chrono>
+#include <any>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -32,6 +35,37 @@ int main() {
 		Version = 1,
 		Target = "Engine.BasePart",
 		Properties = { Damage = { Type = "Integer", Default = 0 } },
+	})
+	Schema:RegisterClass({
+		Namespace = "Game",
+		Name = "AChild",
+		Version = 1,
+		Base = "Game.ZParent",
+		Properties = { Aggressive = { Type = "Boolean", Default = true } },
+	})
+	Schema:RegisterClass({
+		Namespace = "Game",
+		Name = "ZParent",
+		Version = 1,
+		Base = "Engine.Folder",
+		Properties = {
+			Health = { Type = "Integer", Default = 100 },
+			Nameplate = { Type = "String", Default = "" },
+		},
+	})
+	Schema:RegisterClass({
+		Namespace = "Game",
+		Name = "Folder",
+		Version = 1,
+		Base = "Engine.Folder",
+		Properties = { Marker = { Type = "Integer", Default = 0 } },
+	})
+	Schema:RegisterClass({
+		Namespace = "Game",
+		Name = "DataModel",
+		Version = 1,
+		Base = "Engine.Folder",
+		Properties = { Marker = { Type = "Integer", Default = 0 } },
 	}))";
 	source.close();
 
@@ -40,12 +74,55 @@ int main() {
 		const auto &lifecycle = GetRuntimeSchemaLifecycle();
 		if (lifecycle.GetActiveGeneration() != 1 ||
 			lifecycle.GetActiveRegistry()->FindEnumByName("Game.BootstrapState") == nullptr ||
-			lifecycle.GetActiveRegistry()->FindExtensionByName("Game.Bootstrap.PartState") == nullptr) {
+			lifecycle.GetActiveRegistry()->FindExtensionByName("Game.Bootstrap.PartState") == nullptr ||
+			lifecycle.GetActiveRegistry()->FindClassByName("Game.ZParent") == nullptr ||
+			lifecycle.GetActiveRegistry()->FindClassByName("Game.AChild") == nullptr) {
 			std::cerr << "Project startup did not publish one complete generation\n";
 			return 1;
 		}
 		auto world = std::make_shared<DataModel>();
 		if (!world) return 1;
+		auto custom = InstanceClassRegistry::ConstructByName("Game.AChild");
+		if (!custom || custom->GetClassName() != "Game.AChild" || !custom->IsA("Game.AChild") ||
+			!custom->IsA("Game.ZParent") || !custom->IsA("Engine.Folder") ||
+			!custom->IsA("Engine.Instance") || custom->IsA("Engine.Part")) {
+			std::cerr << "Custom class construction or schema inheritance is invalid\n";
+			return 1;
+		}
+		auto *health = custom->FindProperty("Health");
+		auto *aggressive = custom->FindProperty("Aggressive");
+		if (!health || !aggressive || std::any_cast<int>(health->Read(custom.get())) != 100 ||
+			!std::any_cast<bool>(aggressive->Read(custom.get()))) {
+			std::cerr << "Custom class inherited defaults are invalid\n";
+			return 1;
+		}
+		if (custom->ApplyPropertyMutation("Health", 75, Enums::Permission::None,
+			ScriptSecurityContext::CoreTrusted()) != MutationStatus::Success ||
+			std::any_cast<int>(health->Read(custom.get())) != 75) {
+			std::cerr << "Custom class property mutation was rejected\n";
+			return 1;
+		}
+		auto collidingName = InstanceClassRegistry::ConstructByName("Game.Folder");
+		if (!collidingName) {
+			std::cerr << "Namespaced short-name collision class was not constructible\n";
+			return 1;
+		}
+		std::shared_ptr<Instance> serializableCollision = collidingName;
+		const auto serializedCollision = InstanceSerialization::Serialize(
+			InstanceSerialization::InstanceFormat::Json, serializableCollision
+		);
+		if (serializedCollision.find(
+			SchemaId::FromCustomClassName("Game", "Folder").ToString()
+		) == std::string::npos) {
+			std::cerr << "Namespaced short-name collision did not serialize through stable base identity\n";
+			return 1;
+		}
+		auto spoofedDataModel = InstanceClassRegistry::ConstructByName("Game.DataModel");
+		if (!spoofedDataModel || spoofedDataModel->GetDataModel() ||
+			spoofedDataModel->GetReplicationScopeId().IsValid()) {
+			std::cerr << "Project class short name granted native DataModel lifecycle semantics\n";
+			return 1;
+		}
 
 		std::ofstream ExactSource(root / ".gargantuan" / "prerun.luau", std::ios::binary | std::ios::trunc);
 		ExactSource << std::string(MaximumPreRunSourceBytes, ' ');

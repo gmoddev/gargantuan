@@ -66,7 +66,7 @@ namespace gargantuan {
 					using Command = std::decay_t<decltype(typedCommand)>;
 					if constexpr (std::is_same_v<Command, CreateObjectCommand>) {
 						auto *definition = InstanceClassRegistry::GetDefinitionByName(typedCommand.ClassName);
-						if (!definition || !definition->Constructor)
+						if (!definition || !InstanceClassRegistry::IsConstructible(*definition))
 							return {MutationStatus::InvalidClass, std::nullopt, "Unknown or non-constructible class"};
 						if (!typedCommand.Parent)
 							return {MutationStatus::Rejected, std::nullopt, "Created objects require an owning parent"};
@@ -75,7 +75,7 @@ namespace gargantuan {
 							parent = ObjectRegistry::Get().Lookup(*typedCommand.Parent);
 							if (!parent) return {MutationStatus::StaleObject, std::nullopt, "Parent is stale or dead"};
 						}
-						auto instance = definition->Constructor();
+						auto instance = InstanceClassRegistry::Construct(*definition);
 						if (!instance) return {MutationStatus::InternalError, std::nullopt, "Constructor returned null"};
 						const auto id = instance->GetObjectId();
 						if (parent) instance->SetParent(parent);

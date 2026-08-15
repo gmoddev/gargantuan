@@ -95,6 +95,13 @@ incremental replication now consume `FutureReplicated` explicitly; persistence
 consumes that same canonical property policy. Main-domain authority,
 read-only state, and validation are checked on wired mutation paths.
 
+Project custom classes reuse this canonical class model. Their actual runtime
+schema identity is stored separately from the native C++ implementation host,
+so `ClassName`, `IsA`, reflection, persistence, and replication see the custom
+class while native ownership and destruction continue through an engine-owned
+host. The initial `DataOnly` host policy permits only `Engine.Folder`; project
+code cannot register constructors, callbacks, methods, or lifecycle hooks.
+
 ## Ordered committed changes
 
 `ChangeJournal` assigns monotonic sequence numbers per DataModel scope while

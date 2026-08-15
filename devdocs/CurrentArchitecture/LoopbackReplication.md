@@ -2,15 +2,15 @@
 
 ## Implemented now
 
-`WireJournalRecord` version 5 is the incremental companion to snapshot version
-5. Every record carries a nonzero per-scope sequence, a generation-checked
+`WireJournalRecord` version 6 is the incremental companion to snapshot version
+6. Every record carries a nonzero per-scope sequence, a generation-checked
 scope/world `WireObjectId`, an object `WireObjectId`, and exactly one operation
 shape:
 
 | Operation | Required payload |
 | --- | --- |
-| `Create` | class name |
-| `PropertyUpdate` | property name and `WireValue` |
+| `Create` | stable class `SchemaId`, exact definition version, and compatibility/canonical class name |
+| `PropertyUpdate` | property name and `WireValue`; custom properties also carry declaring class `SchemaId` and exact version |
 | `AttributeUpdate` | attribute name and `WireValue`; `Null` removes |
 | `ExtensionPropertyUpdate` | extension `SchemaId`, exact definition version, property name, and typed `WireValue` |
 | `TagAdded` / `TagRemoved` | bounded tag name |
@@ -44,7 +44,7 @@ in the old stream and a complete publication in the new stream.
 ```text
 authoritative source hierarchy
   -> capture snapshot and cursor N
-  -> serialize and parse snapshot version 5
+  -> serialize and parse snapshot version 6
   -> materialize separate receiver objects
   -> consume source records N, N+1, ...
   -> encode, serialize, parse, and apply wire journal records
@@ -64,6 +64,11 @@ duplicate, a record above it is rejected as out of order, and a source cursor
 older than retained journal history returns `ResnapshotRequired`. The cursor
 advances only after a record is validated and applied. There is no implicit
 sorting or gap filling.
+
+Before a batch mutates receiver state, its sequence/scope envelope and custom
+class create/property identities are preflighted against a simulated class and
+hierarchy map. A malformed later custom record therefore cannot partially apply
+an earlier custom update. General multi-object rollback remains deferred.
 
 Creates are materialized as unparented candidate objects before later property
 or reference records are applied. Reparenting beneath a tracked receiver object

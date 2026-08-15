@@ -49,6 +49,12 @@ namespace gargantuan {
 			SchemaEnumDefinition definition,
 			const ScriptSecurityContext &securityContext
 		);
+		void RegisterClass(
+			const RuntimeSchemaBootstrapAuthority &authority,
+			SchemaClassDefinition definition,
+			std::string baseCanonicalName,
+			const ScriptSecurityContext &securityContext
+		);
 		void RegisterExtension(
 			const RuntimeSchemaBootstrapAuthority &authority,
 			SchemaExtensionDefinition definition,

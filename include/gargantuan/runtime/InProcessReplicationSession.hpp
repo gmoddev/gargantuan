@@ -57,6 +57,9 @@ namespace gargantuan {
 			const WireJournalRecord &record,
 			const std::shared_ptr<Instance> &instance
 		);
+		ReplicationApplyResult PreflightCustomClassRecords(
+			const std::vector<WireJournalRecord> &records
+		) const;
 
 		SnapshotLoadResult Receiver;
 		ChangeCursor Cursor;

@@ -32,6 +32,11 @@
 
 namespace gargantuan {
 	namespace {
+		bool IsNativeDataModelDefinition(const SchemaClassDefinition *definition) {
+			static const auto DataModelId = SchemaId::FromNativeName("Engine", "DataModel");
+			return definition && definition->Id == DataModelId;
+		}
+
 		std::optional<WireValue> ReadAttributeWireValue(lua_State *L, int index) {
 			if (lua_isnoneornil(L, index)) return std::nullopt;
 			if (lua_isboolean(L, index)) return WireValue(lua_toboolean(L, index) != 0);
@@ -109,6 +114,33 @@ namespace gargantuan {
 			throw std::invalid_argument("Unknown extension property type");
 		}
 
+		std::any CustomWireValueToAny(const WireValue &value) {
+			return std::visit([](const auto &typed) -> std::any {
+				using Value = std::decay_t<decltype(typed)>;
+				if constexpr (std::is_same_v<Value, bool> || std::is_same_v<Value, int> ||
+					std::is_same_v<Value, double> || std::is_same_v<Value, std::string>) return typed;
+				else throw std::invalid_argument("Custom class property has an unsupported stored value type");
+			}, value);
+		}
+
+		WireValue CustomAnyToWireValue(SchemaExtensionPropertyType type, const std::any &value) {
+			switch (type) {
+				case SchemaExtensionPropertyType::Boolean:
+					if (const auto *typed = std::any_cast<bool>(&value)) return *typed;
+					break;
+				case SchemaExtensionPropertyType::Integer:
+					if (const auto *typed = std::any_cast<int>(&value)) return *typed;
+					break;
+				case SchemaExtensionPropertyType::Number:
+					if (const auto *typed = std::any_cast<double>(&value); typed && std::isfinite(*typed)) return *typed;
+					break;
+				case SchemaExtensionPropertyType::String:
+					if (const auto *typed = std::any_cast<std::string>(&value)) return *typed;
+					break;
+			}
+			throw std::invalid_argument("Custom class property value has the wrong native type");
+		}
+
 		int PushExtensionWireValue(lua_State *L, const WireValue &value) {
 			return std::visit([L](const auto &typed) -> int {
 				using Value = std::decay_t<decltype(typed)>;
@@ -153,6 +185,35 @@ namespace gargantuan {
 			return bytes;
 		}
 
+		std::size_t ValidateCustomPropertyOverrides(
+			const Instance *instance,
+			const std::map<SchemaId, std::map<std::string, WireValue>> &overrides
+		) {
+			const auto &registry = GetActiveRuntimeSchemaRegistry();
+			const auto &classDefinition = GetInstanceSchemaClass(instance);
+			std::size_t count = 0;
+			std::size_t bytes = 0;
+			for (const auto &[declaringClassId, values] : overrides) {
+				auto *declaringClass = registry.FindClassById(declaringClassId);
+				if (!declaringClass || declaringClass->ConstructionKind != SchemaClassConstructionKind::CustomData ||
+					!registry.IsClassDerivedFrom(classDefinition.Id, declaringClassId))
+					throw std::invalid_argument("Custom property override does not belong to the Instance class");
+				for (const auto &[name, value] : values) {
+					auto *property = registry.FindCustomClassProperty(declaringClassId, name);
+					if (!property) throw std::invalid_argument("Custom property override names an unknown property");
+					if (value == property->DefaultValue)
+						throw std::invalid_argument("Custom property override redundantly stores its schema default");
+					++count;
+					bytes += sizeof(SchemaId) + sizeof(declaringClass->DefinitionVersion) + name.size() +
+						ValidateSchemaExtensionPropertyValue(property->Type, value);
+					if (count > MaximumCustomPropertyOverridesPerInstance ||
+						bytes > MaximumCustomPropertyOverrideBytesPerInstance)
+						throw std::invalid_argument("Instance exceeds its custom property override limits");
+				}
+			}
+			return bytes;
+		}
+
 		WireValue EncodeCommittedProperty(Instance *instance, const InstanceProperty &property) {
 			if (!property.Read) throw std::runtime_error("Committed property is not readable");
 			if (property.ReadObjectReference) {
@@ -175,6 +236,52 @@ namespace gargantuan {
 		}
 	}
 
+	InstanceProperty MakeCustomClassInstanceProperty(
+		SchemaId declaringClassId,
+		std::uint32_t definitionVersion,
+		const SchemaClassProperty &property
+	) {
+		InstanceProperty result(property.Name);
+		result.ReflectedTypedef = property.Type == SchemaExtensionPropertyType::Boolean ? "boolean" :
+			property.Type == SchemaExtensionPropertyType::String ? "string" : "number";
+		result.Unmodified = CustomWireValueToAny(property.DefaultValue);
+		result.PersistencePolicy = InstanceProperty::Persistence::Saved;
+		result.ReplicationPolicy = InstanceProperty::Replication::FutureReplicated;
+		result.WriteAuthority = InstanceProperty::Authority::Main;
+		result.Editable = property.Editable;
+		result.DeclaringSchemaId = declaringClassId;
+		result.DeclaringDefinitionVersion = definitionVersion;
+		result.CustomSchemaPropertyType = static_cast<std::uint8_t>(property.Type);
+		result.CustomSchemaDefaultValue = property.DefaultValue;
+		const auto name = property.Name;
+		result.Read = [declaringClassId, name](Instance *self) {
+			return CustomWireValueToAny(self->GetCustomClassPropertyValue(declaringClassId, name));
+		};
+		result.Write = [](Instance *, std::any) {};
+		result.Validate = [type = property.Type](const std::any &value) {
+			try {
+				(void)ValidateSchemaExtensionPropertyValue(type, CustomAnyToWireValue(type, value));
+				return true;
+			} catch (const std::invalid_argument &) { return false; }
+		};
+		result.PushStack = [](lua_State *L, std::any value) {
+			if (auto *typed = std::any_cast<bool>(&value)) return StackValue<bool>::Push(L, *typed);
+			if (auto *typed = std::any_cast<int>(&value)) return StackValue<int>::Push(L, *typed);
+			if (auto *typed = std::any_cast<double>(&value)) return StackValue<double>::Push(L, *typed);
+			if (auto *typed = std::any_cast<std::string>(&value)) return StackValue<std::string>::Push(L, *typed);
+			throw std::invalid_argument("Custom class property cannot be pushed to Luau");
+		};
+		result.IsStack = [type = property.Type](lua_State *L, int index) {
+			return type == SchemaExtensionPropertyType::Boolean ? lua_type(L, index) == LUA_TBOOLEAN :
+				type == SchemaExtensionPropertyType::String ? lua_type(L, index) == LUA_TSTRING :
+				lua_type(L, index) == LUA_TNUMBER;
+		};
+		result.FromStack = [type = property.Type](lua_State *L, int index) {
+			return CustomWireValueToAny(ReadExtensionWireValue(L, index, type));
+		};
+		return result;
+	}
+
 	G_USERDATA_IMPL(
 		Instance,
 		.Tag = UserdataTag::Instance,
@@ -188,6 +295,17 @@ namespace gargantuan {
 
 	Instance::Instance() { RequireFrozenRuntimeSchema("Instance construction"); }
 
+	void Instance::BindRuntimeSchemaClass(SchemaId classId) {
+		if (RuntimeSchemaClassId.IsValid()) throw std::logic_error("Instance runtime schema class is already bound");
+		auto *definition = GetActiveRuntimeSchemaRegistry().FindClassById(classId);
+		auto *nativeHost = InstanceClassRegistry::GetDefinitionByType(std::type_index(typeid(*this)));
+		if (!definition || definition->ConstructionKind != SchemaClassConstructionKind::CustomData ||
+			!nativeHost || definition->NativeHostClassId != nativeHost->Id)
+			throw std::invalid_argument("Custom class cannot bind to this native host type");
+		RuntimeSchemaClassId = classId;
+		Name = definition->CanonicalName;
+	}
+
 	Instance::~Instance() {
 		ObjectRegistry::Get().Invalidate(Id);
 	}
@@ -199,8 +317,13 @@ namespace gargantuan {
 			auto self = const_cast<Instance *>(this)->shared_from_this();
 			Id = ObjectRegistry::Get().Register(self);
 			auto definition = InstanceClassRegistry::GetDefinition(const_cast<Instance *>(this));
-			const auto scope = definition && definition->ClassName == "DataModel" ? Id : GetReplicationScopeId();
-			ChangeJournal::Get().Commit(scope, Id, ObjectCreatedChange{definition ? definition->ClassName : "Instance"});
+			const auto scope = IsNativeDataModelDefinition(definition) ? Id : GetReplicationScopeId();
+			ChangeJournal::Get().Commit(scope, Id, ObjectCreatedChange{
+				definition ? (definition->ConstructionKind == SchemaClassConstructionKind::CustomData
+					? definition->CanonicalName : definition->ClassName) : "Instance",
+				definition ? definition->Id : SchemaId{},
+				definition ? definition->DefinitionVersion : 0,
+			});
 		}
 		return Id;
 	}
@@ -215,6 +338,7 @@ namespace gargantuan {
 		if (auto dataModel = GetDataModel()) dataModel->Tags.RemoveAll(scope, objectId);
 		Attributes.clear();
 		ExtensionValues.clear();
+		CustomPropertyValues.clear();
 		AttributeChangedSignals.clear();
 		ObjectRegistry::Get().Invalidate(objectId);
 		ChangeJournal::Get().Commit(scope, objectId, PropertyUpdatedChange{"Destroyed", true, true});
@@ -261,7 +385,7 @@ namespace gargantuan {
 			root = owner.get();
 		}
 		auto *definition = InstanceClassRegistry::GetDefinition(const_cast<Instance *>(root));
-		return definition && definition->ClassName == "DataModel" ? root->GetObjectId() : ObjectId{};
+		return IsNativeDataModelDefinition(definition) ? root->GetObjectId() : ObjectId{};
 	}
 
 	std::shared_ptr<DataModel> Instance::GetDataModel() const {
@@ -275,15 +399,27 @@ namespace gargantuan {
 		auto *definition = InstanceClassRegistry::GetDefinition(this);
 		if (!definition) throw std::runtime_error("Replicated object has no class definition");
 		const auto objectId = GetObjectId();
-		ChangeJournal::Get().Commit(scope, objectId, ObjectCreatedChange{definition->ClassName});
+		ChangeJournal::Get().Commit(scope, objectId, ObjectCreatedChange{
+			definition->ConstructionKind == SchemaClassConstructionKind::CustomData
+				? definition->CanonicalName : definition->ClassName,
+			definition->Id,
+			definition->DefinitionVersion,
+		});
 		for (const auto &[name, property] : definition->AllProperties) {
+			if (property->CustomSchemaPropertyType) continue;
 			if (property->ReplicationPolicy != InstanceProperty::Replication::FutureReplicated ||
 				!property->Read || !property->Write)
 				continue;
 			ChangeJournal::Get().Commit(
 				scope,
 				objectId,
-				PropertyUpdatedChange{name, EncodeCommittedProperty(this, *property), true}
+				PropertyUpdatedChange{
+					name,
+					EncodeCommittedProperty(this, *property),
+					true,
+					property->CustomSchemaPropertyType ? std::optional(property->DeclaringSchemaId) : std::nullopt,
+					property->CustomSchemaPropertyType ? property->DeclaringDefinitionVersion : 0,
+				}
 			);
 		}
 		for (const auto &[name, value] : Attributes)
@@ -294,6 +430,14 @@ namespace gargantuan {
 			for (const auto &[name, value] : values)
 				ChangeJournal::Get().Commit(scope, objectId, ExtensionPropertyUpdatedChange{
 					extensionId, extension->DefinitionVersion, name, value
+				});
+		}
+		for (const auto &[declaringClassId, values] : CustomPropertyValues) {
+			auto *declaringClass = GetActiveRuntimeSchemaRegistry().FindClassById(declaringClassId);
+			if (!declaringClass) throw std::runtime_error("Instance contains state for a missing custom class definition");
+			for (const auto &[name, value] : values)
+				ChangeJournal::Get().Commit(scope, objectId, PropertyUpdatedChange{
+					name, value, true, declaringClassId, declaringClass->DefinitionVersion
 				});
 		}
 		auto parent = ParentReference.lock();
@@ -336,6 +480,17 @@ namespace gargantuan {
 			return MutationStatus::WrongExecutionDomain;
 		AssertIsAlive();
 		if (property->Validate && !property->Validate(value)) return MutationStatus::ValidationFailed;
+		if (property->CustomSchemaPropertyType) {
+			return ApplyCustomClassPropertyMutation(
+				property->DeclaringSchemaId,
+				property->DeclaringDefinitionVersion,
+				propertyName,
+				CustomAnyToWireValue(
+					static_cast<SchemaExtensionPropertyType>(*property->CustomSchemaPropertyType), value
+				),
+				securityContext
+			);
+		}
 		property->Write(this, value);
 		return MutationStatus::Success;
 	}
@@ -494,6 +649,82 @@ namespace gargantuan {
 		return MutationStatus::Success;
 	}
 
+	WireValue Instance::GetCustomClassPropertyValue(
+		SchemaId declaringClassId,
+		std::string_view propertyName,
+		const ScriptSecurityContext &securityContext
+	) const {
+		if (!securityContext.HasCapability(ScriptCapability::ReadDataModel))
+			throw std::runtime_error("Custom class property read requires ReadDataModel");
+		AssertIsAlive();
+		const auto &registry = GetActiveRuntimeSchemaRegistry();
+		const auto &classDefinition = GetInstanceSchemaClass(this);
+		if (!registry.IsClassDerivedFrom(classDefinition.Id, declaringClassId))
+			throw std::invalid_argument("Custom property does not apply to the Instance class");
+		auto *property = registry.FindCustomClassProperty(declaringClassId, propertyName);
+		if (!property) throw std::invalid_argument("Custom class property does not exist");
+		if (auto owner = CustomPropertyValues.find(declaringClassId); owner != CustomPropertyValues.end())
+			if (auto value = owner->second.find(std::string(propertyName)); value != owner->second.end())
+				return value->second;
+		return property->DefaultValue;
+	}
+
+	std::map<SchemaId, std::map<std::string, WireValue>> Instance::GetCustomClassPropertyOverrides(
+		const ScriptSecurityContext &securityContext
+	) const {
+		if (!securityContext.HasCapability(ScriptCapability::ReadDataModel))
+			throw std::runtime_error("Custom class property read requires ReadDataModel");
+		AssertIsAlive();
+		(void)ValidateCustomPropertyOverrides(this, CustomPropertyValues);
+		return CustomPropertyValues;
+	}
+
+	MutationStatus Instance::ApplyCustomClassPropertyMutation(
+		SchemaId declaringClassId,
+		std::uint32_t definitionVersion,
+		std::string_view propertyName,
+		WireValue value,
+		const ScriptSecurityContext &securityContext
+	) {
+		if (GetCurrentExecutionDomain() != ExecutionDomain::Main) return MutationStatus::WrongExecutionDomain;
+		if (!securityContext.HasCapability(ScriptCapability::MutateDataModel)) return MutationStatus::Unauthorized;
+		AssertIsAlive();
+		const auto &registry = GetActiveRuntimeSchemaRegistry();
+		auto *declaringClass = registry.FindClassById(declaringClassId);
+		if (!declaringClass || declaringClass->ConstructionKind != SchemaClassConstructionKind::CustomData ||
+			declaringClass->DefinitionVersion != definitionVersion) return MutationStatus::InvalidProperty;
+		const auto &classDefinition = GetInstanceSchemaClass(this);
+		if (!registry.IsClassDerivedFrom(classDefinition.Id, declaringClassId)) return MutationStatus::InvalidProperty;
+		auto *property = registry.FindCustomClassProperty(declaringClassId, propertyName);
+		if (!property) return MutationStatus::InvalidProperty;
+		try { (void)ValidateSchemaExtensionPropertyValue(property->Type, value); }
+		catch (const std::invalid_argument &) { return MutationStatus::ValidationFailed; }
+
+		auto current = property->DefaultValue;
+		if (auto owner = CustomPropertyValues.find(declaringClassId); owner != CustomPropertyValues.end())
+			if (auto found = owner->second.find(std::string(propertyName)); found != owner->second.end()) current = found->second;
+		if (current == value) return MutationStatus::Success;
+		auto candidate = CustomPropertyValues;
+		if (value == property->DefaultValue) {
+			if (auto owner = candidate.find(declaringClassId); owner != candidate.end()) {
+				owner->second.erase(std::string(propertyName));
+				if (owner->second.empty()) candidate.erase(owner);
+			}
+		} else candidate[declaringClassId][std::string(propertyName)] = value;
+		(void)ValidateCustomPropertyOverrides(this, candidate);
+		CustomPropertyValues.swap(candidate);
+		try {
+			ChangeJournal::Get().Commit(GetReplicationScopeId(), GetObjectId(), PropertyUpdatedChange{
+				std::string(propertyName), value, true, declaringClassId, definitionVersion
+			});
+		} catch (...) {
+			CustomPropertyValues.swap(candidate);
+			throw;
+		}
+		GetPropertyChangedSignal(std::string(propertyName))->Fire({});
+		return MutationStatus::Success;
+	}
+
 	int Instance::SetAttribute(lua_State *L, Instance *instance) {
 		if (!GetCurrentScriptSecurityContext().HasCapability(ScriptCapability::MutateDataModel))
 			throw std::runtime_error("Attribute mutation requires MutateDataModel");
@@ -579,7 +810,8 @@ namespace gargantuan {
 	std::string Instance::GetClassName() const {
 		AssertIsAlive();
 		const InstanceClassDefinition *definition = InstanceClassRegistry::GetDefinition(const_cast<Instance *>(this));
-		return definition->ClassName;
+		return definition->ConstructionKind == SchemaClassConstructionKind::CustomData
+			? definition->CanonicalName : definition->ClassName;
 	}
 
 	void Instance::FireAncestryChanged(std::shared_ptr<Instance> child, std::shared_ptr<Instance> parent) {
@@ -844,19 +1076,9 @@ namespace gargantuan {
 	};
 
 	bool Instance::IsA(std::string className) {
-		auto currentDefinition = InstanceClassRegistry::GetDefinition(this);
-		while (true) {
-			if (currentDefinition->ClassName == className) {
-				return true;
-			}
-
-			auto superclass = currentDefinition->Superclass;
-			if (superclass.has_value()) {
-				currentDefinition = InstanceClassRegistry::GetDefinitionByName(superclass.value());
-			} else {
-				return false;
-			}
-		}
+		auto *requested = InstanceClassRegistry::GetDefinitionByName(className);
+		auto *actual = InstanceClassRegistry::GetDefinition(this);
+		return requested && actual && actual->InheritedClassIds.contains(requested->Id);
 	}
 
 	std::vector<std::shared_ptr<Instance>> Instance::GetChildren() {
@@ -887,8 +1109,10 @@ namespace gargantuan {
 	}
 
 	std::shared_ptr<Instance> Instance::FindFirstChildOfClass(std::string className, std::optional<bool> recursive) {
+		auto *requested = InstanceClassRegistry::GetDefinitionByName(className);
+		if (!requested) return nullptr;
 		for (const auto &child : Children) {
-			if (InstanceClassRegistry::GetDefinition(child.get())->ClassName == className) return child;
+			if (InstanceClassRegistry::GetDefinition(child.get())->Id == requested->Id) return child;
 			if (recursive) {
 				if (auto found = child->FindFirstChildOfClass(className, recursive)) return found;
 			}
@@ -898,7 +1122,7 @@ namespace gargantuan {
 
 	std::shared_ptr<Instance> Instance::FindFirstChildWhichIsA(std::string className, std::optional<bool> recursive) {
 		for (const auto &child : Children) {
-			if (InstanceClassRegistry::GetDefinition(child.get())->InheritedClasses.contains(className)) return child;
+			if (child->IsA(className)) return child;
 			if (recursive) {
 				if (auto found = child->FindFirstChildWhichIsA(className, recursive)) return found;
 			}
@@ -928,9 +1152,11 @@ namespace gargantuan {
 	}
 
 	std::shared_ptr<Instance> Instance::FindFirstAncestorOfClass(std::string className) {
+		auto *requested = InstanceClassRegistry::GetDefinitionByName(className);
+		if (!requested) return nullptr;
 		auto current = ParentReference.lock();
 		while (current) {
-			if (InstanceClassRegistry::GetDefinition(current.get())->ClassName == className) {
+			if (InstanceClassRegistry::GetDefinition(current.get())->Id == requested->Id) {
 				return current;
 			}
 			current = current->ParentReference.lock();
@@ -941,7 +1167,7 @@ namespace gargantuan {
 	std::shared_ptr<Instance> Instance::FindFirstAncestorWhichIsA(std::string className) {
 		auto current = ParentReference.lock();
 		while (current) {
-			if (InstanceClassRegistry::GetDefinition(current.get())->InheritedClasses.contains(className)) {
+			if (current->IsA(className)) {
 				return current;
 			}
 			current = current->ParentReference.lock();

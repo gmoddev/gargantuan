@@ -4,6 +4,7 @@
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 #include "gargantuan/reflection/RuntimeSchema.hpp"
+#include "gargantuan/classes/Instance.hpp"
 #include "gargantuan/runtime/WireCodec.hpp"
 
 #include <algorithm>
@@ -181,6 +182,8 @@ namespace gargantuan {
 		ValidateIdentity(definition.Id, definition.Namespace, definition.ClassName, definition.DefinitionVersion, definition);
 		if (definition.Provenance != SchemaProvenance::NativeEngine)
 			InvalidDefinition(definition, "RegisterNative requires NativeEngine provenance");
+		if (definition.ConstructionKind != SchemaClassConstructionKind::Native)
+			InvalidDefinition(definition, "RegisterNative requires native construction metadata");
 		if (definition.Superclass.has_value() != definition.BaseSchemaId.has_value())
 			InvalidDefinition(definition, "base name and base SchemaId must either both exist or both be absent");
 		definition.CanonicalName = ClassCanonicalName(definition);
@@ -188,6 +191,8 @@ namespace gargantuan {
 		definition.InheritedClasses.clear();
 		definition.AllProperties.clear();
 		definition.AllMethods.clear();
+		definition.InheritedClassIds.clear();
+		definition.NativeHostClassId = definition.Id;
 		if (ClassIdsByType.contains(nativeType))
 			throw std::invalid_argument("Native type is already registered in the runtime schema");
 		if (DefinitionsById.contains(definition.Id))
@@ -279,6 +284,88 @@ namespace gargantuan {
 		CustomSchemaPayloadBytes += payloadBytes;
 	}
 
+	void RuntimeSchemaRegistry::RegisterClass(
+		SchemaClassDefinition definition,
+		std::string_view baseCanonicalName
+	) {
+		RequireBuilding("register a custom class definition");
+		ValidateIdentity(definition.Id, definition.Namespace, definition.ClassName, definition.DefinitionVersion, definition);
+		if (definition.Provenance != SchemaProvenance::Game)
+			InvalidDefinition(definition, "custom class registration requires Game provenance");
+		if (definition.Namespace == "Engine" || definition.Namespace.starts_with("Engine."))
+			InvalidDefinition(definition, "project classes cannot use the protected Engine namespace");
+		if (definition.Id != SchemaId::FromCustomClassName(definition.Namespace, definition.ClassName))
+			InvalidDefinition(definition, "SchemaId does not match deterministic custom class identity");
+		if (definition.ConstructionKind != SchemaClassConstructionKind::CustomData || definition.Constructor)
+			InvalidDefinition(definition, "custom class must use bounded data-only construction");
+		if (!definition.Properties.empty() || !definition.Methods.empty())
+			InvalidDefinition(definition, "custom class cannot supply native members or callbacks");
+		if (baseCanonicalName.empty() || baseCanonicalName.find('.') == std::string_view::npos ||
+			baseCanonicalName.size() > MaximumSchemaNamespaceBytes + MaximumSchemaDefinitionNameBytes + 1 ||
+			baseCanonicalName.find('\0') != std::string_view::npos || !IsValidUtf8(baseCanonicalName))
+			InvalidDefinition(definition, "base must be a valid canonical class name");
+		if (definition.DeclaredCustomProperties.empty()) InvalidDefinition(definition, "custom class has no properties");
+		if (definition.DeclaredCustomProperties.size() > MaximumCustomClassProperties)
+			InvalidDefinition(definition, "custom class exceeds its property limit");
+
+		definition.CanonicalName = ClassCanonicalName(definition);
+		definition.PendingBaseCanonicalName = std::string(baseCanonicalName);
+		definition.BaseSchemaId.reset();
+		definition.Superclass.reset();
+		definition.NativeHostClassId = {};
+		definition.ProjectSubclassPolicy = CustomSubclassPolicy::DataOnly;
+		definition.Flattened = false;
+		definition.InheritedClasses.clear();
+		definition.InheritedClassIds.clear();
+		definition.AllProperties.clear();
+		definition.AllMethods.clear();
+		std::sort(definition.DeclaredCustomProperties.begin(), definition.DeclaredCustomProperties.end(),
+			[](const auto &left, const auto &right) { return left.Name < right.Name; });
+		std::unordered_set<std::string> names;
+		std::size_t payloadBytes = definition.Namespace.size() + definition.ClassName.size() + baseCanonicalName.size();
+		for (auto &property : definition.DeclaredCustomProperties) {
+			if (property.Name.empty()) InvalidDefinition(definition, "custom property name is empty");
+			if (property.Name.size() > MaximumExtensionPropertyNameBytes)
+				InvalidDefinition(definition, "custom property name exceeds its byte limit");
+			if (property.Name.find('\0') != std::string::npos || !IsValidUtf8(property.Name))
+				InvalidDefinition(definition, "custom property name is invalid UTF-8 or contains null");
+			if (!names.insert(property.Name).second)
+				InvalidDefinition(definition, "duplicate custom property name " + property.Name);
+			property.CanonicalName = definition.CanonicalName + "." + property.Name;
+			try {
+				payloadBytes += property.Name.size() + GetSchemaExtensionPropertyTypeName(property.Type).size() +
+					ValidateSchemaExtensionPropertyValue(property.Type, property.DefaultValue);
+			} catch (const std::exception &error) {
+				InvalidDefinition(definition, "invalid default for property " + property.Name + ": " + error.what());
+			}
+			definition.Properties.emplace(property.Name, MakeCustomClassInstanceProperty(
+				definition.Id, definition.DefinitionVersion, property
+			));
+		}
+		if (payloadBytes > MaximumCustomSchemaPayloadBytes)
+			InvalidDefinition(definition, "custom class definition exceeds its payload byte limit");
+		if (payloadBytes > MaximumCustomSchemaPayloadBytes -
+			std::min(CustomSchemaPayloadBytes, MaximumCustomSchemaPayloadBytes))
+			InvalidDefinition(definition, "candidate exceeds its aggregate custom schema payload byte limit");
+		const auto classCount = std::count_if(DefinitionsById.begin(), DefinitionsById.end(), [](const auto &entry) {
+			const auto *candidate = std::get_if<SchemaClassDefinition>(&entry.second);
+			return candidate && candidate->Provenance == SchemaProvenance::Game;
+		});
+		if (classCount >= MaximumCustomClassDefinitions)
+			InvalidDefinition(definition, "candidate exceeds its custom class definition limit");
+		if (DefinitionsById.contains(definition.Id))
+			throw std::invalid_argument("Duplicate SchemaId " + definition.Id.ToString());
+		if (IdsByCanonicalName.contains(definition.CanonicalName))
+			throw std::invalid_argument("Duplicate canonical schema name " + definition.CanonicalName);
+
+		const auto id = definition.Id;
+		const auto canonical = definition.CanonicalName;
+		DefinitionsById.emplace(id, std::move(definition));
+		try { IdsByCanonicalName.emplace(canonical, id); }
+		catch (...) { DefinitionsById.erase(id); throw; }
+		CustomSchemaPayloadBytes += payloadBytes;
+	}
+
 	void RuntimeSchemaRegistry::RegisterExtension(
 		SchemaExtensionDefinition definition,
 		std::string_view targetCanonicalName
@@ -352,6 +439,7 @@ namespace gargantuan {
 	void RuntimeSchemaRegistry::Validate() {
 		RequireBuilding("validate");
 		struct FlattenedDefinition {
+			std::size_t Depth = 1;
 			std::unordered_set<std::string> InheritedClasses;
 			std::unordered_map<std::string, const InstanceProperty *> Properties;
 			std::unordered_map<std::string, const UserdataMethod<Instance> *> Methods;
@@ -362,12 +450,31 @@ namespace gargantuan {
 		std::sort(ordered.begin(), ordered.end(), [](const auto *left, const auto *right) {
 			return left->CanonicalName < right->CanonicalName;
 		});
+		for (auto *definition : ordered) {
+			if (definition->ConstructionKind == SchemaClassConstructionKind::CustomData) {
+				if (!definition->PendingBaseCanonicalName)
+					InvalidDefinition(*definition, "custom class has no pending canonical base");
+				auto baseIdentity = IdsByCanonicalName.find(*definition->PendingBaseCanonicalName);
+				if (baseIdentity == IdsByCanonicalName.end()) InvalidDefinition(*definition, "base definition is not registered");
+				auto base = DefinitionsById.find(baseIdentity->second);
+				auto *baseClass = base == DefinitionsById.end() ? nullptr : std::get_if<SchemaClassDefinition>(&base->second);
+				if (!baseClass) InvalidDefinition(*definition, "base definition is not a class");
+				if (baseClass->ProjectSubclassPolicy != CustomSubclassPolicy::DataOnly)
+					InvalidDefinition(*definition, "base class does not permit project data-only subclasses");
+				definition->BaseSchemaId = baseClass->Id;
+				definition->Superclass = baseClass->ConstructionKind == SchemaClassConstructionKind::CustomData
+					? baseClass->CanonicalName : baseClass->ClassName;
+				definition->NativeHostClassId = baseClass->ConstructionKind == SchemaClassConstructionKind::CustomData
+					? baseClass->NativeHostClassId : baseClass->Id;
+			}
+		}
 		for (const auto *definition : ordered) {
 			if (!definition->Superclass) continue;
 			auto base = DefinitionsById.find(*definition->BaseSchemaId);
 			if (base == DefinitionsById.end()) InvalidDefinition(*definition, "base SchemaId is not registered");
 			auto *baseClass = std::get_if<SchemaClassDefinition>(&base->second);
-			if (!baseClass || baseClass->ClassName != *definition->Superclass)
+			if (!baseClass || (baseClass->ClassName != *definition->Superclass &&
+				baseClass->CanonicalName != *definition->Superclass))
 				InvalidDefinition(*definition, "base name does not match a class base SchemaId");
 		}
 		std::unordered_map<SchemaId, unsigned char, SchemaIdHash> visitState;
@@ -381,11 +488,33 @@ namespace gargantuan {
 			if (definition.BaseSchemaId) {
 				auto &base = std::get<SchemaClassDefinition>(DefinitionsById.at(*definition.BaseSchemaId));
 				visit(base);
+				if (definition.ConstructionKind == SchemaClassConstructionKind::CustomData) {
+					definition.NativeHostClassId = base.ConstructionKind == SchemaClassConstructionKind::CustomData
+						? base.NativeHostClassId : base.Id;
+					auto host = DefinitionsById.find(definition.NativeHostClassId);
+					auto *hostClass = host == DefinitionsById.end()
+						? nullptr : std::get_if<SchemaClassDefinition>(&host->second);
+					if (!hostClass || hostClass->ConstructionKind != SchemaClassConstructionKind::Native ||
+						!hostClass->Constructor || hostClass->ProjectSubclassPolicy != CustomSubclassPolicy::DataOnly)
+						InvalidDefinition(definition, "custom class native host is not an approved data-only constructor");
+				}
 				result = flattened.at(base.Id);
+				++result.Depth;
 				result.InheritedClasses.insert(base.ClassName);
+				result.InheritedClasses.insert(base.CanonicalName);
 			}
-			for (auto &[name, property] : definition.Properties) result.Properties[name] = &property;
-			for (auto &[name, method] : definition.Methods) result.Methods[name] = &method;
+			if (result.Depth > MaximumCustomClassInheritanceDepth)
+				InvalidDefinition(definition, "inheritance exceeds its depth limit");
+			for (auto &[name, property] : definition.Properties) {
+				if (result.Properties.contains(name) || result.Methods.contains(name))
+					InvalidDefinition(definition, "member " + name + " collides with an inherited member");
+				result.Properties[name] = &property;
+			}
+			for (auto &[name, method] : definition.Methods) {
+				if (result.Properties.contains(name) || result.Methods.contains(name))
+					InvalidDefinition(definition, "member " + name + " collides with an inherited member");
+				result.Methods[name] = &method;
+			}
 			flattened.emplace(definition.Id, std::move(result));
 			state = 2;
 		};
@@ -393,6 +522,12 @@ namespace gargantuan {
 		for (auto *definition : ordered) {
 			auto &result = flattened.at(definition->Id);
 			definition->InheritedClasses = std::move(result.InheritedClasses);
+			definition->InheritedClasses.insert(definition->ClassName);
+			definition->InheritedClasses.insert(definition->CanonicalName);
+			definition->InheritedClassIds.clear();
+			for (auto current = definition; current; current = current->BaseSchemaId
+				? std::get_if<SchemaClassDefinition>(&DefinitionsById.at(*current->BaseSchemaId)) : nullptr)
+				definition->InheritedClassIds.insert(current->Id);
 			definition->AllProperties = std::move(result.Properties);
 			definition->AllMethods = std::move(result.Methods);
 			definition->Flattened = true;
@@ -487,6 +622,30 @@ namespace gargantuan {
 			match = typed;
 		}
 		return match;
+	}
+
+	const SchemaClassProperty *RuntimeSchemaRegistry::FindCustomClassProperty(
+		SchemaId declaringClassId,
+		std::string_view propertyName
+	) const {
+		auto *definition = FindClassById(declaringClassId);
+		if (!definition || definition->ConstructionKind != SchemaClassConstructionKind::CustomData) return nullptr;
+		auto found = std::lower_bound(definition->DeclaredCustomProperties.begin(), definition->DeclaredCustomProperties.end(),
+			propertyName, [](const SchemaClassProperty &property, std::string_view name) { return property.Name < name; });
+		return found == definition->DeclaredCustomProperties.end() || found->Name != propertyName ? nullptr : &*found;
+	}
+
+	bool RuntimeSchemaRegistry::IsClassDerivedFrom(SchemaId classId, SchemaId baseClassId) const {
+		auto *definition = FindClassById(classId);
+		return definition && definition->InheritedClassIds.contains(baseClassId);
+	}
+
+	bool RuntimeSchemaRegistry::IsClassConstructible(const SchemaClassDefinition &definition) const {
+		if (definition.ConstructionKind == SchemaClassConstructionKind::Native) return definition.Constructor != nullptr;
+		if (!definition.NativeHostClassId.IsValid()) return false;
+		auto *host = FindClassById(definition.NativeHostClassId);
+		return host && host->ConstructionKind == SchemaClassConstructionKind::Native && host->Constructor &&
+			host->ProjectSubclassPolicy == CustomSubclassPolicy::DataOnly;
 	}
 
 	const SchemaExtensionDefinition *RuntimeSchemaRegistry::FindExtensionById(SchemaId id) const {

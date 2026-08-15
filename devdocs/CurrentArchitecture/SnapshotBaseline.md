@@ -7,13 +7,16 @@ of authoritative `Instance` state. It is separate from the asset model
 serializer; both reuse `WireValue` for attributes, while retaining distinct
 document envelopes and purposes.
 
-A version 5 snapshot contains:
+A version 6 snapshot contains:
 
 - an ordered list of objects in hierarchy traversal order;
-- each object's source `ObjectId`, class, name, and optional parent ID;
+- each object's source `ObjectId`, stable class `SchemaId`, exact class
+  definition version, compatibility class name, name, and optional parent ID;
 - reflected properties explicitly marked `FutureReplicated`, sorted by name;
 - bounded dynamic attributes sorted by name;
 - sparse extension overrides grouped by extension `SchemaId` and exact
+  definition version, with properties sorted by name;
+- sparse custom class overrides grouped by declaring class `SchemaId` and exact
   definition version, with properties sorted by name;
 - bounded dynamic tag membership sorted by name;
 - explicit object-reference values;
@@ -62,10 +65,14 @@ Reference read/write hooks are extensions of `InstanceProperty`, not a second
 metadata registry. The existing `UseRead` and `UseWrite` templates populate
 those hooks for `shared_ptr<Instance-derived>` and optional shared references.
 Materialization constructs and maps every object before applying hierarchy,
-properties, references, and extension overrides, so forward references are
+properties, references, extension overrides, and custom class overrides, so forward references are
 valid. Extension state requires a frozen definition of kind Extension, exact
 version, target applicability, a known property, and an exact value type.
 Default-valued overrides are rejected because canonical sparse state omits them.
+Custom class objects require an active constructible class definition with exact
+identity/version; missing definitions never fall back to the native host or base.
+Custom property state likewise requires an applicable custom declaring class,
+exact version, known property, and exact scalar value type.
 
 ## Determinism and cursor transition
 

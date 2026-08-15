@@ -1,7 +1,7 @@
 ---
 status: current
 owner: engine
-last_verified: 2026-08-14
+last_verified: 2026-08-15
 related_code:
   - include/gargantuan/
   - src/
@@ -75,6 +75,13 @@ Tests should enforce them where practical.
 9. Extension property meaning is frozen schema; per-Instance extension values are
    bounded runtime state mutated only through authoritative capability-checked paths.
    They remain distinct from Attributes and do not mutate registry generation.
+10. A project custom class is a canonical class definition with stable identity,
+    a stable class base, and a native-owned construction policy. Its C++ host type
+    never replaces its public schema identity, and missing/incompatible persisted
+    identity must not fall back to a native base.
+11. Custom class properties are frozen declarative schema with bounded sparse
+    per-Instance state. They remain distinct from Attributes and extensions, and
+    project registration can never supply native callbacks or behavior hooks.
 
 ## Security and execution
 
