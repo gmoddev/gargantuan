@@ -103,6 +103,22 @@ namespace gargantuan {
 		}
 	}
 
+	void RuntimeSchemaLifecycle::RegisterExtension(
+		const RuntimeSchemaBootstrapAuthority &,
+		SchemaExtensionDefinition definition,
+		std::string targetCanonicalName,
+		const ScriptSecurityContext &securityContext
+	) {
+		RequirePhase(RuntimeSchemaLifecyclePhase::PreRunRegistration, "register an extension definition");
+		if (!securityContext.HasCapability(ScriptCapability::DefineSchema))
+			RejectCandidate("registration", "extension definition requires DefineSchema capability");
+		try {
+			CandidateRegistry->RegisterExtension(std::move(definition), targetCanonicalName);
+		} catch (const std::exception &exception) {
+			RejectCandidate("registration", exception.what());
+		}
+	}
+
 	void RuntimeSchemaLifecycle::AdvanceRegistrationPhase(
 		const RuntimeSchemaBootstrapAuthority &,
 		RuntimeSchemaLifecyclePhase nextPhase

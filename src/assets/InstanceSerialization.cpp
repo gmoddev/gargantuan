@@ -8,6 +8,7 @@
 #include "gargantuan/datatypes/UDim.hpp"
 #include "gargantuan/datatypes/Vector2.hpp"
 #include "gargantuan/reflection/InstanceClassRegistry.hpp"
+#include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/runtime/AttributeValidation.hpp"
 #include "gargantuan/runtime/TagIndex.hpp"
 #include "gargantuan/runtime/WireCodec.hpp"
@@ -141,6 +142,21 @@ namespace gargantuan::InstanceSerialization {
 			serialized["Attributes"] = json::object();
 			for (const auto &[name, value] : instance->GetAttributeValues(ScriptSecurityContext::CoreTrusted()))
 				serialized["Attributes"][name] = EncodeWireValue(value);
+			serialized["Extensions"] = json::array();
+			for (const auto &[extensionId, properties] : instance->GetExtensionPropertyOverrides(
+				ScriptSecurityContext::CoreTrusted()
+			)) {
+				auto *extension = GetActiveRuntimeSchemaRegistry().FindExtensionById(extensionId);
+				if (!extension) throw std::runtime_error("Serialized extension definition is missing");
+				json encoded{
+					{"ExtensionSchemaId", extensionId.ToString()},
+					{"DefinitionVersion", extension->DefinitionVersion},
+					{"Properties", json::object()},
+				};
+				for (const auto &[name, value] : properties)
+					encoded["Properties"][name] = EncodeWireValue(value);
+				serialized["Extensions"].push_back(std::move(encoded));
+			}
 			serialized["Tags"] = json::array();
 			if (auto dataModel = instance->GetDataModel())
 				for (const auto &tag : dataModel->Tags.GetTags(dataModel->GetObjectId(), instance->GetObjectId(), ScriptSecurityContext::CoreTrusted()))
@@ -157,7 +173,7 @@ namespace gargantuan::InstanceSerialization {
 		case InstanceFormat::Json: {
 			Json::SerializationState state;
 			auto serialized = Json::SerializeInstance(instance, state);
-			serialized["Version"] = 2;
+			serialized["Version"] = 3;
 			return serialized.dump();
 		}
 		default: {
@@ -338,7 +354,8 @@ namespace gargantuan::InstanceSerialization {
 		json contents,
 		DeserializationState &state,
 		bool requireAttributes,
-		bool requireTags
+		bool requireTags,
+		bool requireExtensions
 	) {
 		auto name = contents["Name"];
 		if (!name.is_string()) {
@@ -369,6 +386,15 @@ namespace gargantuan::InstanceSerialization {
 		auto tags = contents.contains("Tags") ? contents["Tags"] : json::array();
 		if (!tags.is_array()) {
 			state.PushError("Instance {} has an invalid Tags field", state.FormatCurrentPath());
+			return std::nullopt;
+		}
+		if (requireExtensions && (!contents.contains("Extensions") || !contents["Extensions"].is_array())) {
+			state.PushError("Instance {} has an invalid Extensions field", state.FormatCurrentPath());
+			return std::nullopt;
+		}
+		auto extensions = contents.contains("Extensions") ? contents["Extensions"] : json::array();
+		if (!extensions.is_array()) {
+			state.PushError("Instance {} has an invalid Extensions field", state.FormatCurrentPath());
 			return std::nullopt;
 		}
 
@@ -470,6 +496,49 @@ namespace gargantuan::InstanceSerialization {
 			return state.ReturnError("Failed to deserialize attributes in {}: {}", state.FormatCurrentPath(), error.what());
 		}
 		try {
+			if (extensions.size() > MaximumCustomExtensionDefinitions)
+				throw std::invalid_argument("Instance exceeds its extension definition state limit");
+			std::optional<SchemaId> previousExtensionId;
+			for (const auto &encodedExtension : extensions) {
+				if (!encodedExtension.is_object() || !encodedExtension.contains("ExtensionSchemaId") ||
+					!encodedExtension["ExtensionSchemaId"].is_string() ||
+					!encodedExtension.contains("DefinitionVersion") ||
+					!encodedExtension["DefinitionVersion"].is_number_unsigned() ||
+					!encodedExtension.contains("Properties") || !encodedExtension["Properties"].is_object())
+					throw std::invalid_argument("Malformed extension state");
+				const auto encodedId = encodedExtension["ExtensionSchemaId"].get<std::string>();
+				auto extensionId = SchemaId::Parse(encodedId);
+				if (!extensionId || extensionId->ToString() != encodedId ||
+					(previousExtensionId && !(*previousExtensionId < *extensionId)))
+					throw std::invalid_argument("Invalid, duplicate, or unordered extension SchemaId");
+				previousExtensionId = *extensionId;
+				const auto version = encodedExtension["DefinitionVersion"].get<std::uint32_t>();
+				auto *extension = GetActiveRuntimeSchemaRegistry().FindExtensionById(*extensionId);
+				if (!extension || extension->DefinitionVersion != version)
+					throw std::invalid_argument("Missing or incompatible extension definition version");
+				const auto &encodedProperties = encodedExtension["Properties"];
+				if (encodedProperties.empty() || encodedProperties.size() > MaximumExtensionProperties)
+					throw std::invalid_argument("Extension property state is empty or oversized");
+				for (const auto &[propertyName, encodedValue] : encodedProperties.items()) {
+					auto *property = GetActiveRuntimeSchemaRegistry().FindExtensionProperty(*extensionId, propertyName);
+					auto value = DecodeWireValue(encodedValue);
+					if (!property || !value) throw std::invalid_argument("Unknown or malformed extension property");
+					(void)ValidateSchemaExtensionPropertyValue(property->Type, *value);
+					if (*value == property->DefaultValue)
+						throw std::invalid_argument("Persisted extension state redundantly stores its default");
+					if (instance->ApplyExtensionPropertyMutation(
+						*extensionId, version, propertyName, std::move(*value), ScriptSecurityContext::CoreTrusted()
+					) != MutationStatus::Success)
+						throw std::runtime_error("Serialized extension property mutation rejected");
+				}
+			}
+		} catch (const std::exception &error) {
+			instance->Destroy();
+			return state.ReturnError(
+				"Failed to deserialize extension state in {}: {}", state.FormatCurrentPath(), error.what()
+			);
+		}
+		try {
 			std::set<std::string> decodedTags;
 			for (const auto &encoded : tags) {
 				if (!encoded.is_string()) throw std::invalid_argument("Tag is not a string");
@@ -485,7 +554,7 @@ namespace gargantuan::InstanceSerialization {
 		}
 
 		for (auto &child : children) {
-			auto maybeChild = TryDeserializeInstance(child, state, requireAttributes, requireTags);
+			auto maybeChild = TryDeserializeInstance(child, state, requireAttributes, requireTags, requireExtensions);
 			if (maybeChild.has_value()) {
 				maybeChild.value()->SetParent(instance);
 			} else {
@@ -524,13 +593,14 @@ namespace gargantuan::InstanceSerialization {
 			}
 
 			if (!contents.contains("Version") || !contents["Version"].is_number_integer() ||
-				(contents["Version"] != 0 && contents["Version"] != 1 && contents["Version"] != 2)) {
+				(contents["Version"] != 0 && contents["Version"] != 1 && contents["Version"] != 2 &&
+					contents["Version"] != 3)) {
 				state.PushError("Unsupported instance format version");
 				return state;
 			}
 
 			const auto version = contents["Version"].get<int>();
-			auto maybeInstance = TryDeserializeInstance(contents, state, version >= 1, version >= 2);
+			auto maybeInstance = TryDeserializeInstance(contents, state, version >= 1, version >= 2, version >= 3);
 			if (maybeInstance.has_value()) {
 				try {
 					for (const auto &[instance, tags] : state.PendingTags) {

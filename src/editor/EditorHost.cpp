@@ -208,7 +208,8 @@ namespace gargantuan {
 				if (!parameters.empty())
 					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Handshake takes no parameters"));
 				Json capabilities = {
-					"OpenProject", "Schema", "Snapshot", "Journal", "SetProperty", "SetAttribute", "AddTag", "RemoveTag",
+					"OpenProject", "Schema", "Snapshot", "Journal", "SetProperty", "SetAttribute", "SetExtensionProperty",
+					"AddTag", "RemoveTag",
 					"ConfigureViewport", "SetViewportCamera", "CaptureViewport", "PickViewport"
 				};
 				Json viewportTransports = Json::array({{
@@ -364,25 +365,50 @@ namespace gargantuan {
 				}
 				Json definitions = Json::array();
 				for (const auto *entry : GetActiveRuntimeSchemaRegistry().EnumerateDefinitions()) {
+					const auto kind = GetSchemaDefinitionKind(*entry);
 					Json encoded{
 						{"SchemaId", GetSchemaDefinitionId(*entry).ToString()},
-						{"Kind", GetSchemaDefinitionKind(*entry) == SchemaDefinitionKind::Class ? "Class" : "Enum"},
+						{"Kind", kind == SchemaDefinitionKind::Class ? "Class" :
+							kind == SchemaDefinitionKind::Enum ? "Enum" : "Extension"},
 						{"Namespace", GetSchemaDefinitionNamespace(*entry)},
 						{"Name", GetSchemaDefinitionName(*entry)},
 						{"CanonicalName", GetSchemaDefinitionCanonicalName(*entry)},
 						{"DefinitionVersion", GetSchemaDefinitionVersion(*entry)},
 						{"Provenance", GetSchemaProvenanceName(GetSchemaDefinitionProvenance(*entry))},
 					};
-					if (const auto *enumDefinition = std::get_if<SchemaEnumDefinition>(entry)) {
+					if (const auto *classDefinition = std::get_if<SchemaClassDefinition>(entry)) {
+						encoded["BaseSchemaId"] = classDefinition->BaseSchemaId
+							? Json(classDefinition->BaseSchemaId->ToString()) : Json(nullptr);
+					} else if (const auto *enumDefinition = std::get_if<SchemaEnumDefinition>(entry)) {
 						Json items = Json::array();
 						for (const auto &item : enumDefinition->Items)
 							items.push_back({{"Name", item.Name}, {"Value", item.Value}});
 						encoded["Items"] = std::move(items);
+					} else if (const auto *extension = std::get_if<SchemaExtensionDefinition>(entry)) {
+						encoded["TargetClassSchemaId"] = extension->TargetClassId.ToString();
+						Json properties = Json::array();
+						for (const auto &property : extension->Properties) {
+							properties.push_back({
+								{"Name", property.Name},
+								{"CanonicalName", property.CanonicalName},
+								{"Type", GetSchemaExtensionPropertyTypeName(property.Type)},
+								{"Default", EncodeWireValue(property.DefaultValue)},
+								{"Readable", true},
+								{"Writable", true},
+								{"Editable", property.Editable},
+								{"Persistence", "Saved"},
+								{"Replication", "Replicated"},
+								{"Authority", "Main"},
+								{"RequiredReadCapability", "ReadDataModel"},
+								{"RequiredWriteCapability", "MutateDataModel"},
+							});
+						}
+						encoded["Properties"] = std::move(properties);
 					}
 					definitions.push_back(std::move(encoded));
 				}
 				return SerializeBoundedResponse(SuccessResponse(requestId, {
-					{"SchemaDiscoveryVersion", 2},
+					{"SchemaDiscoveryVersion", 3},
 					{"RegistryGeneration", GetRuntimeSchemaLifecycle().GetActiveGeneration()},
 					{"Definitions", std::move(definitions)},
 					{"Classes", std::move(classes)},
@@ -616,6 +642,65 @@ namespace gargantuan {
 				return SerializeBoundedResponse(
 					mutation.Succeeded() ? SuccessResponse(requestId, std::move(result))
 										: ErrorResponse(requestId, MutationStatusName(mutation.Status), mutation.Message)
+				);
+			}
+
+			if (method == "SetExtensionProperty") {
+				if (!StudioSecurity.HasCapability(ScriptCapability::MutateDataModel))
+					return SerializeBoundedResponse(ErrorResponse(
+						requestId, "Unauthorized", "SetExtensionProperty requires MutateDataModel"
+					));
+				if (!Cursor)
+					return SerializeBoundedResponse(ErrorResponse(
+						requestId, "SnapshotRequired", "GetSnapshot must establish a cursor"
+					));
+				if (!HasOnlyFields(parameters, {
+						"Object", "ExtensionSchemaId", "DefinitionVersion", "Property", "Value"
+					}) || !parameters.contains("Object") || !parameters.contains("ExtensionSchemaId") ||
+					!parameters["ExtensionSchemaId"].is_string() || !parameters.contains("DefinitionVersion") ||
+					!parameters["DefinitionVersion"].is_number_unsigned() || !parameters.contains("Property") ||
+					!parameters["Property"].is_string() || !parameters.contains("Value"))
+					return SerializeBoundedResponse(ErrorResponse(
+						requestId, "MalformedRequest", "SetExtensionProperty fields are invalid"
+					));
+				auto object = DecodeWireObjectId(parameters["Object"]);
+				const auto encodedId = parameters["ExtensionSchemaId"].get<std::string>();
+				auto extensionId = SchemaId::Parse(encodedId);
+				auto value = DecodeWireValue(parameters["Value"]);
+				if (!object || !extensionId || extensionId->ToString() != encodedId || !value)
+					return SerializeBoundedResponse(ErrorResponse(
+						requestId, "MalformedRequest", "SetExtensionProperty identity or value is invalid"
+					));
+				auto target = ObjectRegistry::Get().Lookup(object->ToObjectId());
+				if (!target || target->GetReplicationScopeId() != World->GetObjectId())
+					return SerializeBoundedResponse(ErrorResponse(
+						requestId, "StaleObject", "Object is not live in the open project"
+					));
+				auto *extension = GetActiveRuntimeSchemaRegistry().FindExtensionById(*extensionId);
+				auto *property = GetActiveRuntimeSchemaRegistry().FindExtensionProperty(
+					*extensionId, parameters["Property"].get<std::string>()
+				);
+				const auto version = parameters["DefinitionVersion"].get<std::uint32_t>();
+				if (!extension || extension->DefinitionVersion != version || !property || !property->Editable)
+					return SerializeBoundedResponse(ErrorResponse(
+						requestId, "InvalidProperty", "Extension property identity is missing, incompatible, or not editable"
+					));
+				try { (void)ValidateSchemaExtensionPropertyValue(property->Type, *value); }
+				catch (const std::exception &error) {
+					return SerializeBoundedResponse(ErrorResponse(requestId, "ValidationFailed", error.what()));
+				}
+				auto mutation = Mutations.Apply(UpdateExtensionPropertyCommand{
+					object->ToObjectId(),
+					*extensionId,
+					version,
+					parameters["Property"].get<std::string>(),
+					std::move(*value),
+				}, StudioSecurity);
+				Json result{{"Status", MutationStatusName(mutation.Status)}, {"Message", mutation.Message}};
+				if (mutation.Object) result["Object"] = EncodeWireObjectId(WireObjectId::FromObjectId(*mutation.Object));
+				return SerializeBoundedResponse(
+					mutation.Succeeded() ? SuccessResponse(requestId, std::move(result))
+						: ErrorResponse(requestId, MutationStatusName(mutation.Status), mutation.Message)
 				);
 			}
 

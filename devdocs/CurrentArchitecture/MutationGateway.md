@@ -27,7 +27,8 @@ is thread-safe and never applies state inline. `Apply` is synchronous for
 authoritative internal callers, but returns `WrongExecutionDomain` outside
 `Main`. Arbitrary Luau is not scheduled on workers.
 
-The initial typed command set is create, property update, reparent, and destroy.
+The typed command set is create, reflected-property update, bounded attribute
+update, class-extension property update, tag add/remove, reparent, and destroy.
 Commands address existing objects with generation-checked `ObjectId` values.
 Stale or destroyed targets fail before mutation. Creation currently requires an
 owning parent so a newly created object has an authoritative owner; support for
@@ -39,6 +40,10 @@ lifecycle, and the optional schema validator before invoking the reflection
 writer. Luau property writes, reset-to-default, deserialization, and queued
 property commands use this path. Generated setters also validate schema values,
 which preserves synchronous native mutation without making the queue optional.
+Extension-property dispatch separately resolves the frozen extension
+identity/version, target applicability, property identity, and exact scalar
+type. It changes sparse Instance extension state and emits a dedicated journal
+record; it never routes through Attributes.
 
 ## Mutation-path audit
 

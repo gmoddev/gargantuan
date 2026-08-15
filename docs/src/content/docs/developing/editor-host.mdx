@@ -105,7 +105,10 @@ The implemented Luau viewport adapter adds `ViewportControl`; it does not infer
 that permission from the `Studio` domain. Process, filesystem, and network
 access remain ungranted.
 
-`GetSchema` schema-discovery version 2 exposes the frozen registry generation
-and immutable class/enum metadata. Project enum definitions are created only by
-the engine's bounded PreRun candidate lifecycle. Studio receives neither the
-`DefineSchema` capability nor the registration facade.
+`GetSchema` schema-discovery version 3 exposes the frozen registry generation
+and immutable class/enum/extension metadata. Extension properties carry stable
+owner/target identity, exact version, type, default, and editability metadata.
+Runtime extension edits use `SetExtensionProperty`, snapshot/journal version 5,
+and the authoritative mutation gateway. Project definitions are created only
+by the engine's bounded PreRun candidate lifecycle. Studio receives neither
+the `DefineSchema` capability nor the registration facade.

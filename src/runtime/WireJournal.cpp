@@ -3,6 +3,7 @@
 #include "gargantuan/runtime/WireCodec.hpp"
 #include "gargantuan/runtime/AttributeValidation.hpp"
 #include "gargantuan/runtime/TagIndex.hpp"
+#include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 
 #include <stdexcept>
 #include <type_traits>
@@ -14,6 +15,7 @@ namespace gargantuan {
 				case WireJournalOperation::Create: return "Create";
 				case WireJournalOperation::PropertyUpdate: return "PropertyUpdate";
 				case WireJournalOperation::AttributeUpdate: return "AttributeUpdate";
+				case WireJournalOperation::ExtensionPropertyUpdate: return "ExtensionPropertyUpdate";
 				case WireJournalOperation::TagAdded: return "TagAdded";
 				case WireJournalOperation::TagRemoved: return "TagRemoved";
 				case WireJournalOperation::Reparent: return "Reparent";
@@ -26,6 +28,7 @@ namespace gargantuan {
 			if (operation == "Create") return WireJournalOperation::Create;
 			if (operation == "PropertyUpdate") return WireJournalOperation::PropertyUpdate;
 			if (operation == "AttributeUpdate") return WireJournalOperation::AttributeUpdate;
+			if (operation == "ExtensionPropertyUpdate") return WireJournalOperation::ExtensionPropertyUpdate;
 			if (operation == "TagAdded") return WireJournalOperation::TagAdded;
 			if (operation == "TagRemoved") return WireJournalOperation::TagRemoved;
 			if (operation == "Reparent") return WireJournalOperation::Reparent;
@@ -66,6 +69,12 @@ namespace gargantuan {
 					encoded.Operation = WireJournalOperation::AttributeUpdate;
 					encoded.AttributeName = payload.AttributeName;
 					encoded.Value = payload.Value.value_or(WireValue(std::monostate{}));
+				} else if constexpr (std::is_same_v<Payload, ExtensionPropertyUpdatedChange>) {
+					encoded.Operation = WireJournalOperation::ExtensionPropertyUpdate;
+					encoded.ExtensionSchemaId = payload.ExtensionSchemaId;
+					encoded.DefinitionVersion = payload.DefinitionVersion;
+					encoded.ExtensionPropertyName = payload.PropertyName;
+					encoded.Value = payload.Value;
 				} else if constexpr (std::is_same_v<Payload, TagAddedChange>) {
 					encoded.Operation = WireJournalOperation::TagAdded;
 					encoded.TagName = payload.TagName;
@@ -104,6 +113,13 @@ namespace gargantuan {
 					break;
 				case WireJournalOperation::AttributeUpdate:
 					encoded["AttributeName"] = record.AttributeName.value_or("");
+					encoded["Value"] = record.Value ? EncodeWireValue(*record.Value) : WireJson(nullptr);
+					break;
+				case WireJournalOperation::ExtensionPropertyUpdate:
+					encoded["ExtensionSchemaId"] = record.ExtensionSchemaId
+						? record.ExtensionSchemaId->ToString() : "";
+					encoded["DefinitionVersion"] = record.DefinitionVersion.value_or(0);
+					encoded["PropertyName"] = record.ExtensionPropertyName.value_or("");
 					encoded["Value"] = record.Value ? EncodeWireValue(*record.Value) : WireJson(nullptr);
 					break;
 				case WireJournalOperation::TagAdded:
@@ -181,6 +197,34 @@ namespace gargantuan {
 						record.AttributeName = encoded["AttributeName"].get<std::string>();
 						ValidateAttributeName(*record.AttributeName);
 						if (!std::holds_alternative<std::monostate>(*value)) (void)ValidateAttributeValue(*value);
+						record.Value = std::move(*value);
+						break;
+					}
+					case WireJournalOperation::ExtensionPropertyUpdate: {
+						if (!HasOnlyFields(encoded, {
+								"Version", "Sequence", "Scope", "Operation", "ObjectId", "ExtensionSchemaId",
+								"DefinitionVersion", "PropertyName", "Value"
+							}) || !encoded.contains("ExtensionSchemaId") || !encoded["ExtensionSchemaId"].is_string() ||
+							!encoded.contains("DefinitionVersion") || !encoded["DefinitionVersion"].is_number_unsigned() ||
+							!encoded.contains("PropertyName") || !encoded["PropertyName"].is_string() ||
+							!encoded.contains("Value"))
+							throw std::invalid_argument("Invalid ExtensionPropertyUpdate journal record");
+						const auto encodedId = encoded["ExtensionSchemaId"].get<std::string>();
+						auto extensionId = SchemaId::Parse(encodedId);
+						if (!extensionId || extensionId->ToString() != encodedId)
+							throw std::invalid_argument("Invalid extension SchemaId");
+						const auto version = encoded["DefinitionVersion"].get<std::uint32_t>();
+						if (version == 0) throw std::invalid_argument("Invalid extension definition version");
+						auto name = encoded["PropertyName"].get<std::string>();
+						auto *extension = GetActiveRuntimeSchemaRegistry().FindExtensionById(*extensionId);
+						auto *property = GetActiveRuntimeSchemaRegistry().FindExtensionProperty(*extensionId, name);
+						auto value = DecodeWireValue(encoded["Value"]);
+						if (!extension || extension->DefinitionVersion != version || !property || !value)
+							throw std::invalid_argument("Unknown or incompatible extension property identity");
+						(void)ValidateSchemaExtensionPropertyValue(property->Type, *value);
+						record.ExtensionSchemaId = *extensionId;
+						record.DefinitionVersion = version;
+						record.ExtensionPropertyName = std::move(name);
 						record.Value = std::move(*value);
 						break;
 					}

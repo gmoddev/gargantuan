@@ -49,6 +49,12 @@ namespace gargantuan {
 			SchemaEnumDefinition definition,
 			const ScriptSecurityContext &securityContext
 		);
+		void RegisterExtension(
+			const RuntimeSchemaBootstrapAuthority &authority,
+			SchemaExtensionDefinition definition,
+			std::string targetCanonicalName,
+			const ScriptSecurityContext &securityContext
+		);
 
 		template <typename T>
 		void RegisterNative(const RuntimeSchemaBootstrapAuthority &authority, SchemaClassDefinition definition) {

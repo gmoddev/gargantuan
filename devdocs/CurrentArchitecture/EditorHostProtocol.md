@@ -46,11 +46,12 @@ limited to 256 records.
 | --- | --- |
 | `Handshake` | Returns engine identity, protocol version, and capabilities. |
 | `OpenProject` | Canonicalizes and loads a project root without executing gameplay scripts. |
-| `GetSchema` | Returns class compatibility metadata plus schema-discovery v2 definitions and registry generation. |
-| `GetSnapshot` | Returns snapshot v4 and establishes the session cursor. |
-| `PollChanges` | Returns scoped wire-journal v4 records after that cursor. |
+| `GetSchema` | Returns class compatibility metadata plus schema-discovery v3 definitions and registry generation. |
+| `GetSnapshot` | Returns snapshot v5 and establishes the session cursor. |
+| `PollChanges` | Returns scoped wire-journal v5 records after that cursor. |
 | `SetProperty` | Applies a closed non-reference `WireValue` through `MutationGateway`. |
 | `SetAttribute` | Applies or removes a bounded attribute through `MutationGateway`. |
+| `SetExtensionProperty` | Applies a schema-resolved extension property through `MutationGateway`. |
 | `AddTag` / `RemoveTag` | Applies bounded tag membership through `MutationGateway`. |
 | `ConfigureViewport` | Negotiates a bounded engine-owned RGB8 viewport. |
 | `SetViewportCamera` | Applies a finite absolute editor-camera pose and field of view. |
@@ -82,8 +83,9 @@ mutation gateway check it at their native boundaries. Every viewport method
 also checks `ViewportControl`. It does not grant
 process, filesystem, network, or arbitrary engine-native access.
 
-Schema discovery is read-only. Version 2 returns stable class/enum identity,
-definition kind and version, provenance, and ordered custom-enum items. Studio
+Schema discovery is read-only. Version 3 returns stable class/enum/extension
+identity, definition kind and version, provenance, class-base and extension-target
+IDs, ordered custom-enum items, and ordered declarative extension properties. Studio
 does not receive `DefineSchema`, the PreRun facade, candidate registry access,
 or mutable native metadata. The top-level EditorHost protocol remains version
 1; schema discovery is independently versioned.

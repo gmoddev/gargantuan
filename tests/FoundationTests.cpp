@@ -133,6 +133,25 @@ namespace {
 		return definition;
 	}
 
+	gargantuan::SchemaExtensionDefinition MakeSchemaExtensionDefinition(
+		std::string schemaNamespace,
+		std::string name,
+		std::vector<gargantuan::SchemaExtensionProperty> properties = {
+			{.Name = "Damage", .Type = gargantuan::SchemaExtensionPropertyType::Integer, .DefaultValue = 0},
+		}
+	) {
+		using namespace gargantuan;
+		return {
+			.Id = SchemaId::FromExtensionName(schemaNamespace, name),
+			.Namespace = std::move(schemaNamespace),
+			.Name = std::move(name),
+			.DefinitionVersion = 1,
+			.Provenance = SchemaProvenance::Game,
+			.OriginDetail = ".gargantuan/prerun.luau",
+			.Properties = std::move(properties),
+		};
+	}
+
 	gargantuan::InstanceProperty MakeReadOnlySchemaProperty(std::string name, std::string type = "string") {
 		gargantuan::InstanceProperty property(std::move(name));
 		property.SetReflectedTypedef(std::move(type)).SetEditable(false);
@@ -1022,6 +1041,119 @@ namespace {
 				previous->FindEnumByName("Game.RuntimeA") == nullptr && previous->FindEnumByName("Game.RuntimeB") == nullptr,
 			"runtime failure leaks no registered definitions and does not advance generation"
 		);
+	}
+
+	void TestClassExtensionSchema() {
+		using namespace gargantuan;
+		const auto extensionId = SchemaId::FromExtensionName("Game.Combat", "CombatProperties");
+		Check(extensionId == SchemaId::FromExtensionName("Game.Combat", "CombatProperties"),
+			"extension SchemaId is deterministic");
+		Check(extensionId != SchemaId::FromNativeName("Game.Combat", "CombatProperties") &&
+			extensionId != SchemaId::FromEnumName("Game.Combat", "CombatProperties"),
+			"class, enum, and extension SchemaIds use distinct identity domains");
+
+		RuntimeSchemaRegistry registry;
+		registry.RegisterNative<SchemaTestTypeA>(MakeSchemaDefinition("Host"));
+		registry.RegisterNative<SchemaTestTypeB>(MakeSchemaDefinition("Derived", "Host"));
+		registry.RegisterNative<SchemaTestTypeC>(MakeSchemaDefinition("Unrelated"));
+		registry.RegisterExtension(MakeSchemaExtensionDefinition(
+			"Game.Combat", "CombatProperties", {
+				{.Name = "Team", .Type = SchemaExtensionPropertyType::String, .DefaultValue = std::string()},
+				{.Name = "Damage", .Type = SchemaExtensionPropertyType::Integer, .DefaultValue = 0},
+			}
+		), "Test.Host");
+		registry.RegisterExtension(MakeSchemaExtensionDefinition(
+			"Package.Vehicle", "VehicleProperties", {
+				{.Name = "Fuel", .Type = SchemaExtensionPropertyType::Number, .DefaultValue = 1.0},
+			}
+		), "Test.Host");
+		FreezeSchemaRegistry(registry);
+		auto *extension = registry.FindExtensionById(extensionId);
+		Check(extension && extension->TargetClassId == SchemaId::FromNativeName("Test", "Host") &&
+			extension->Properties[0].Name == "Damage" && extension->Properties[1].Name == "Team",
+			"extension target identity and property order are canonicalized in the frozen registry");
+		Check(registry.IsExtensionApplicableToClass(extensionId, SchemaId::FromNativeName("Test", "Host")) &&
+			registry.IsExtensionApplicableToClass(extensionId, SchemaId::FromNativeName("Test", "Derived")) &&
+			!registry.IsExtensionApplicableToClass(extensionId, SchemaId::FromNativeName("Test", "Unrelated")),
+			"extension applicability follows class inheritance without changing extension identity");
+		Check(registry.FindApplicableExtensions(SchemaId::FromNativeName("Test", "Derived")).size() == 2,
+			"multiple independent extensions apply deterministically to one derived class");
+		Check(registry.FindClassById(extensionId) == nullptr && registry.FindEnumById(extensionId) == nullptr,
+			"typed class and enum lookup reject extension definitions");
+
+		RuntimeSchemaRegistry missingTarget;
+		missingTarget.RegisterNative<SchemaTestTypeA>(MakeSchemaDefinition("Host"));
+		CheckThrows<std::invalid_argument>([&] {
+			missingTarget.RegisterExtension(MakeSchemaExtensionDefinition("Game", "Missing"), "Test.Absent");
+		}, "extension registration rejects a nonexistent target");
+
+		RuntimeSchemaRegistry wrongTarget;
+		wrongTarget.RegisterNative<SchemaTestTypeA>(MakeSchemaDefinition("Host"));
+		wrongTarget.RegisterEnum(MakeSchemaEnumDefinition("Game", "State"));
+		CheckThrows<std::invalid_argument>([&] {
+			wrongTarget.RegisterExtension(MakeSchemaExtensionDefinition("Game", "WrongKind"), "Game.State");
+		}, "extension registration rejects an enum target");
+		wrongTarget.RegisterExtension(MakeSchemaExtensionDefinition("Game", "First"), "Test.Host");
+		CheckThrows<std::invalid_argument>([&] {
+			wrongTarget.RegisterExtension(MakeSchemaExtensionDefinition("Game", "Second"), "Game.First");
+		}, "extension registration rejects an extension target");
+
+		RuntimeSchemaRegistry duplicateProperty;
+		duplicateProperty.RegisterNative<SchemaTestTypeA>(MakeSchemaDefinition("Host"));
+		CheckThrows<std::invalid_argument>([&] {
+			duplicateProperty.RegisterExtension(MakeSchemaExtensionDefinition("Game", "DuplicateProperty", {
+				{.Name = "Damage", .Type = SchemaExtensionPropertyType::Integer, .DefaultValue = 0},
+				{.Name = "Damage", .Type = SchemaExtensionPropertyType::Integer, .DefaultValue = 1},
+			}), "Test.Host");
+		}, "duplicate extension property names are rejected");
+
+		RuntimeSchemaRegistry invalidDefault;
+		invalidDefault.RegisterNative<SchemaTestTypeA>(MakeSchemaDefinition("Host"));
+		CheckThrows<std::invalid_argument>([&] {
+			invalidDefault.RegisterExtension(MakeSchemaExtensionDefinition("Game", "InvalidDefault", {
+				{.Name = "Damage", .Type = SchemaExtensionPropertyType::Integer, .DefaultValue = std::string("0")},
+			}), "Test.Host");
+		}, "extension property defaults must exactly match their declared type");
+
+		RuntimeSchemaRegistry nativeCollision;
+		auto protectedTarget = MakeSchemaDefinition("Host");
+		protectedTarget.Properties.emplace("Name", MakeReadOnlySchemaProperty("Name"));
+		nativeCollision.RegisterNative<SchemaTestTypeA>(std::move(protectedTarget));
+		nativeCollision.RegisterExtension(MakeSchemaExtensionDefinition("Game", "Collision", {
+			{.Name = "Name", .Type = SchemaExtensionPropertyType::String, .DefaultValue = std::string()},
+		}), "Test.Host");
+		CheckThrows<std::invalid_argument>([&] { nativeCollision.Validate(); },
+			"extension validation rejects shadowing a protected native member");
+
+		const auto &authority = GetRuntimeSchemaBootstrapAuthority();
+		auto Prepare = [&](RuntimeSchemaLifecycle &lifecycle) {
+			lifecycle.BeginCandidate(authority);
+			lifecycle.RegisterNative<SchemaTestTypeA>(authority, MakeSchemaDefinition("PreRunHost"));
+			lifecycle.AdvanceRegistrationPhase(authority, RuntimeSchemaLifecyclePhase::CoreRegistration);
+			lifecycle.AdvanceRegistrationPhase(authority, RuntimeSchemaLifecyclePhase::PreRunRegistration);
+		};
+		RuntimeSchemaLifecycle atomic;
+		Prepare(atomic);
+		CheckThrows<PreRunRegistrationError>([&] {
+			ExecutePreRunRegistration(atomic, authority, R"(
+				Schema:RegisterEnum({ Namespace="Game", Name="PublishedNever", Version=1, Items={ A=1 } })
+				Schema:RegisterExtension({ Namespace="Game", Name="ValidNever", Version=1, Target="Test.PreRunHost",
+					Properties={ Damage={ Type="Integer", Default=0 } } })
+				Schema:RegisterExtension({ Namespace="Game", Name="Invalid", Version=1, Target="Test.Missing",
+					Properties={ Damage={ Type="Integer", Default=0 } } })
+			)", "extension-atomicity");
+		}, "one invalid extension aborts enum and extension registration together");
+		Check(!atomic.HasCandidate() && !atomic.HasActiveRegistry(),
+			"failed mixed PreRun registration publishes no partial candidate");
+
+		RuntimeSchemaLifecycle denied;
+		Prepare(denied);
+		CheckThrows<PreRunRegistrationError>([&] {
+			ExecutePreRunRegistration(denied, authority, R"(
+				Schema:RegisterExtension({ Namespace="Game", Name="Denied", Version=1, Target="Test.PreRunHost",
+					Properties={ Damage={ Type="Integer", Default=0 } } })
+			)", "extension-capability", {ScriptExecutionDomain::PreRun, {}});
+		}, "PreRun domain without DefineSchema cannot register an extension");
 	}
 
 	void TestRenderSnapshotExtraction() {
@@ -1996,6 +2128,135 @@ namespace {
 			"semantically duplicate tag replication is rejected without advancing the cursor");
 	}
 
+	void TestClassExtensionRuntime() {
+		using namespace gargantuan;
+		const auto temporaryRoot = std::filesystem::temp_directory_path() /
+			("gargantuan-extension-runtime-" + std::to_string(
+				std::chrono::steady_clock::now().time_since_epoch().count()
+			));
+		struct TemporaryExtensionCleanup {
+			std::filesystem::path Root;
+			~TemporaryExtensionCleanup() { std::filesystem::remove_all(Root); }
+		} cleanup{temporaryRoot};
+		std::filesystem::create_directories(temporaryRoot / ".gargantuan");
+		std::ofstream preRun(temporaryRoot / ".gargantuan" / "prerun.luau", std::ios::binary);
+		preRun << R"(
+			Schema:RegisterExtension({
+				Namespace = "Game.Combat",
+				Name = "CombatProperties",
+				Version = 1,
+				Target = "Engine.BasePart",
+				Properties = {
+					Team = { Type = "String", Default = "" },
+					Damage = { Type = "Integer", Default = 0 },
+				},
+			})
+		)";
+		preRun.close();
+		BootstrapProjectRuntimeSchema(temporaryRoot);
+		const auto extensionId = SchemaId::FromExtensionName("Game.Combat", "CombatProperties");
+		auto *extension = GetActiveRuntimeSchemaRegistry().FindExtensionById(extensionId);
+		Check(extension && extension->TargetClassId == SchemaId::FromNativeName("Engine", "BasePart"),
+			"project PreRun publishes one canonical extension targeting stable class identity");
+
+		auto game = std::make_shared<DataModel>();
+		game->SetArchivable(true);
+		auto part = std::make_shared<Part>();
+		part->SetName("ExtendedPart");
+		part->SetParent(game);
+		auto unrelated = std::make_shared<Folder>();
+		unrelated->SetParent(game);
+		Check(std::get<int>(part->GetExtensionPropertyValue(extensionId, "Damage")) == 0,
+			"missing extension override reads the immutable schema default");
+		CheckThrows<std::invalid_argument>([&] {
+			static_cast<void>(unrelated->GetExtensionPropertyValue(extensionId, "Damage"));
+		}, "unrelated class cannot read an inapplicable extension property");
+		CheckThrows<std::runtime_error>([&] {
+			static_cast<void>(part->GetExtensionPropertyValue(
+				extensionId, "Damage", {ScriptExecutionDomain::Server, {}}
+			));
+		}, "extension property reads require explicit DataModel read authority");
+
+		auto &journal = ChangeJournal::Get();
+		journal.Clear();
+		const auto scope = game->GetObjectId();
+		auto cursor = journal.CreateCursor(scope);
+		MutationGateway gateway;
+		const auto defineOnly = ScriptSecurityContext::PreRunRegistration();
+		Check(gateway.Apply(UpdateExtensionPropertyCommand{
+			part->GetObjectId(), extensionId, 1, "Damage", 5
+		}, defineOnly).Status == MutationStatus::Unauthorized,
+			"DefineSchema does not imply extension-value mutation authority");
+		Check(journal.Read(cursor).Records.empty(), "unauthorized extension mutation emits no journal record");
+		Check(gateway.Apply(UpdateExtensionPropertyCommand{
+			part->GetObjectId(), extensionId, 2, "Damage", 5
+		}, ScriptSecurityContext::CoreTrusted()).Status == MutationStatus::InvalidProperty,
+			"extension mutation rejects an incompatible definition version");
+		Check(gateway.Apply(UpdateExtensionPropertyCommand{
+			unrelated->GetObjectId(), extensionId, 1, "Damage", 5
+		}, ScriptSecurityContext::CoreTrusted()).Status == MutationStatus::InvalidProperty,
+			"extension mutation rejects a target-class mismatch");
+		Check(gateway.Apply(UpdateExtensionPropertyCommand{
+			part->GetObjectId(), extensionId, 1, "Damage", std::string("5")
+		}, ScriptSecurityContext::CoreTrusted()).Status == MutationStatus::ValidationFailed,
+			"extension mutation rejects a WireValue with the wrong declared type");
+		auto mutation = gateway.Apply(UpdateExtensionPropertyCommand{
+			part->GetObjectId(), extensionId, 1, "Damage", 5
+		}, ScriptSecurityContext::CoreTrusted());
+		Check(mutation.Succeeded() && std::get<int>(part->GetExtensionPropertyValue(extensionId, "Damage")) == 5,
+			"authorized extension mutation commits authoritative Instance state");
+		auto changes = journal.Read(cursor);
+		Check(changes.Records.size() == 1 &&
+			std::holds_alternative<ExtensionPropertyUpdatedChange>(changes.Records[0].Payload),
+			"extension mutation emits one dedicated semantic journal record");
+
+		auto snapshot = CaptureSnapshot(game);
+		auto snapshotPart = std::find_if(snapshot.Objects.begin(), snapshot.Objects.end(), [](const auto &object) {
+			return object.Name == "ExtendedPart";
+		});
+		Check(snapshotPart != snapshot.Objects.end() && snapshotPart->Extensions.size() == 1 &&
+			std::get<int>(snapshotPart->Extensions[0].Properties.at("Damage")) == 5,
+			"snapshot v5 carries sparse extension overrides with stable identity and version");
+		auto parsedSnapshot = DeserializeSnapshot(SerializeSnapshot(snapshot));
+		Check(parsedSnapshot.Succeeded(), "extension snapshot state round-trips through the bounded wire format");
+
+		auto started = InProcessReplicationSession::Start(game);
+		Check(started.Succeeded(), "loopback replication materializes extension state from the initial snapshot");
+		part->ApplyExtensionPropertyMutation(
+			extensionId, 1, "Damage", 9, ScriptSecurityContext::CoreTrusted()
+		);
+		Check(started.Session->ApplyAvailable().Succeeded(), "extension property delta replicates through journal v5");
+		auto receiverPart = started.Session->GetReceiverRoot()->FindFirstChild("ExtendedPart", false);
+		Check(receiverPart && std::get<int>(receiverPart->GetExtensionPropertyValue(extensionId, "Damage")) == 9,
+			"replicated receiver resolves extension meaning through the frozen schema");
+
+		std::shared_ptr<Instance> serializableRoot = game;
+		const auto serialized = InstanceSerialization::Serialize(InstanceSerialization::InstanceFormat::Json, serializableRoot);
+		Check(serialized.find(extensionId.ToString()) != std::string::npos &&
+			serialized.find("\"Version\":3") != std::string::npos,
+			"persistence stores extension SchemaId, version, property identity, and WireValue");
+		std::istringstream persistedStream(serialized);
+		auto loaded = InstanceSerialization::Deserialize(
+			InstanceSerialization::InstanceFormat::Json, persistedStream
+		);
+		auto loadedPart = loaded.Instance ? loaded.Instance->FindFirstChild("ExtendedPart", false) : nullptr;
+		Check(loaded.Ok && loadedPart &&
+			std::get<int>(loadedPart->GetExtensionPropertyValue(extensionId, "Damage")) == 9,
+			"persistence reconstructs extension state under exact-version and target validation");
+
+		part->ApplyExtensionPropertyMutation(
+			extensionId, 1, "Damage", 0, ScriptSecurityContext::CoreTrusted()
+		);
+		Check(part->GetExtensionPropertyOverrides().empty(),
+			"writing the schema default removes the physical override deterministically");
+		const auto sparseSerialized = InstanceSerialization::Serialize(
+			InstanceSerialization::InstanceFormat::Json, serializableRoot
+		);
+		Check(sparseSerialized.find(extensionId.ToString()) == std::string::npos,
+			"default-valued extension state is omitted from canonical persistence");
+		journal.Clear();
+	}
+
 	void TestEditorHostProtocol() {
 		using Json = nlohmann::ordered_json;
 		using namespace gargantuan;
@@ -2017,6 +2278,13 @@ namespace {
 			Name = "CombatState",
 			Version = 1,
 			Items = { Idle = 0, Attacking = 1, Blocking = 2 },
+		})
+		Schema:RegisterExtension({
+			Namespace = "Game.Combat",
+			Name = "CombatProperties",
+			Version = 1,
+			Target = "Engine.BasePart",
+			Properties = { Damage = { Type = "Integer", Default = 0 } },
 		}))";
 		preRun.close();
 		const auto rejectedRoot = temporaryRoot / "rejected";
@@ -2107,7 +2375,7 @@ namespace {
 		}
 		auto schema = call("GetSchema", Json::object(), "test-token");
 		Check(
-			schema["Ok"].get<bool>() && schema["Result"]["SchemaDiscoveryVersion"] == 2 &&
+			schema["Ok"].get<bool>() && schema["Result"]["SchemaDiscoveryVersion"] == 3 &&
 				!schema["Result"]["Classes"].empty() && !schema["Result"]["Definitions"].empty(),
 			"EditorHost exposes versioned frozen schema discovery without removing the class adapter"
 		);
@@ -2119,11 +2387,24 @@ namespace {
 			projectSchema["Result"]["Definitions"].begin(), projectSchema["Result"]["Definitions"].end(),
 			[](const Json &definition) { return definition["CanonicalName"] == "Game.CombatState"; }
 		);
+		auto discoveredExtension = std::find_if(
+			projectSchema["Result"]["Definitions"].begin(), projectSchema["Result"]["Definitions"].end(),
+			[](const Json &definition) { return definition["CanonicalName"] == "Game.Combat.CombatProperties"; }
+		);
 		Check(
 			projectSchema["Ok"].get<bool>() && discoveredEnum != projectSchema["Result"]["Definitions"].end() &&
 				(*discoveredEnum)["Kind"] == "Enum" && (*discoveredEnum)["Provenance"] == "Game" &&
 				(*discoveredEnum)["Items"].size() == 3,
 			"EditorHost exposes immutable project enum metadata after PreRun publication"
+		);
+		Check(
+			discoveredExtension != projectSchema["Result"]["Definitions"].end() &&
+				(*discoveredExtension)["Kind"] == "Extension" &&
+				(*discoveredExtension)["TargetClassSchemaId"] ==
+					SchemaId::FromNativeName("Engine", "BasePart").ToString() &&
+				(*discoveredExtension)["Properties"].size() == 1 &&
+				(*discoveredExtension)["Properties"][0]["Default"]["Type"] == "Int",
+			"EditorHost schema discovery v3 exposes immutable bounded extension metadata"
 		);
 		const auto publishedGeneration = projectSchema["Result"]["RegistryGeneration"];
 		auto rejectedOpen = call("OpenProject", {{"Root", rejectedRoot.string()}}, "test-token");
@@ -2152,6 +2433,9 @@ namespace {
 		auto &objects = snapshot["Result"]["Snapshot"]["Objects"];
 		auto editable = std::find_if(objects.begin(), objects.end(), [](const Json &object) {
 			return object["Name"] == "Editable";
+		});
+		auto extensionTarget = std::find_if(objects.begin(), objects.end(), [](const Json &object) {
+			return object["Name"] == "PickTarget";
 		});
 		Check(editable != objects.end(), "EditorHost snapshot contains the project hierarchy");
 		if (editable != objects.end()) {
@@ -2202,6 +2486,37 @@ namespace {
 			Check(tagRemoved["Ok"].get<bool>() && tagRemoved["Result"]["Records"].size() == 1 &&
 				tagRemoved["Result"]["Records"][0]["Operation"] == "TagRemoved",
 				"EditorHost publishes one semantic TagRemoved record");
+		}
+		if (extensionTarget != objects.end() &&
+			discoveredExtension != projectSchema["Result"]["Definitions"].end()) {
+			auto extensionMutation = call("SetExtensionProperty", {
+				{"Object", (*extensionTarget)["Id"]},
+				{"ExtensionSchemaId", (*discoveredExtension)["SchemaId"]},
+				{"DefinitionVersion", 1},
+				{"Property", "Damage"},
+				{"Value", {{"Type", "Int"}, {"Value", 12}}},
+			}, "test-token");
+			Check(extensionMutation["Ok"].get<bool>(),
+				"EditorHost applies extension edits through the authoritative mutation gateway");
+			auto extensionChanges = call("PollChanges", Json::object(), "test-token");
+			Check(extensionChanges["Ok"].get<bool>() &&
+				extensionChanges["Result"]["Records"].size() == 1 &&
+				extensionChanges["Result"]["Records"][0]["Operation"] == "ExtensionPropertyUpdate" &&
+				extensionChanges["Result"]["Records"][0]["ExtensionSchemaId"] ==
+					(*discoveredExtension)["SchemaId"],
+				"EditorHost publishes one identity- and version-bearing extension journal record");
+			auto wrongVersion = call("SetExtensionProperty", {
+				{"Object", (*extensionTarget)["Id"]},
+				{"ExtensionSchemaId", (*discoveredExtension)["SchemaId"]},
+				{"DefinitionVersion", 2},
+				{"Property", "Damage"},
+				{"Value", {{"Type", "Int"}, {"Value", 13}}},
+			}, "test-token");
+			Check(!wrongVersion["Ok"].get<bool>(),
+				"EditorHost rejects extension definition-version mismatch");
+			auto rejectedChanges = call("PollChanges", Json::object(), "test-token");
+			Check(rejectedChanges["Ok"].get<bool>() && rejectedChanges["Result"]["Records"].empty(),
+				"rejected extension edit emits no journal record");
 		}
 
 		auto captureBeforeConfiguration = call("CaptureViewport", Json::object(), "test-token");
@@ -2289,6 +2604,7 @@ int main() {
 	TestRuntimeSchemaRegistry();
 	TestRuntimeSchemaLifecycle();
 	TestCustomEnumPreRun();
+	TestClassExtensionSchema();
 	TestRenderSnapshotExtraction();
 	TestScriptSecurityModel();
 	TestMutationGateway();
@@ -2298,6 +2614,7 @@ int main() {
 	TestSnapshotBaseline();
 	TestWireJournalAndLoopbackReplication();
 	TestSharedFrameRing();
+	TestClassExtensionRuntime();
 	TestEditorHostProtocol();
 	TestLuauExceptionBoundary();
 	if (Failures == 0) std::cout << "All foundation tests passed\n";

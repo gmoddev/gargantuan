@@ -20,7 +20,9 @@
 #include <lualib.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -72,6 +74,83 @@ namespace gargantuan {
 				},
 				value
 			);
+		}
+
+		WireValue ReadExtensionWireValue(
+			lua_State *L,
+			int index,
+			SchemaExtensionPropertyType type
+		) {
+			switch (type) {
+				case SchemaExtensionPropertyType::Boolean:
+					if (lua_type(L, index) != LUA_TBOOLEAN) luaL_typeerrorL(L, index, "boolean");
+					return lua_toboolean(L, index) != 0;
+				case SchemaExtensionPropertyType::Integer: {
+					if (lua_type(L, index) != LUA_TNUMBER) luaL_typeerrorL(L, index, "integer");
+					const auto value = lua_tonumber(L, index);
+					if (!std::isfinite(value) || std::trunc(value) != value ||
+						value < std::numeric_limits<int>::min() || value > std::numeric_limits<int>::max())
+						throw std::invalid_argument("Extension Integer value must be a signed 32-bit integer");
+					return static_cast<int>(value);
+				}
+				case SchemaExtensionPropertyType::Number: {
+					if (lua_type(L, index) != LUA_TNUMBER) luaL_typeerrorL(L, index, "number");
+					const auto value = lua_tonumber(L, index);
+					if (!std::isfinite(value)) throw std::invalid_argument("Extension Number value must be finite");
+					return static_cast<double>(value);
+				}
+				case SchemaExtensionPropertyType::String: {
+					if (lua_type(L, index) != LUA_TSTRING) luaL_typeerrorL(L, index, "string");
+					std::size_t length = 0;
+					const auto *value = lua_tolstring(L, index, &length);
+					return std::string(value, length);
+				}
+			}
+			throw std::invalid_argument("Unknown extension property type");
+		}
+
+		int PushExtensionWireValue(lua_State *L, const WireValue &value) {
+			return std::visit([L](const auto &typed) -> int {
+				using Value = std::decay_t<decltype(typed)>;
+				if constexpr (std::is_same_v<Value, bool> || std::is_same_v<Value, int> ||
+					std::is_same_v<Value, double> || std::is_same_v<Value, std::string>)
+					return StackValue<Value>::Push(L, typed);
+				else throw std::runtime_error("Stored extension property type is unsupported");
+			}, value);
+		}
+
+		const SchemaClassDefinition &GetInstanceSchemaClass(const Instance *instance) {
+			auto *definition = InstanceClassRegistry::GetDefinition(const_cast<Instance *>(instance));
+			if (!definition) throw std::runtime_error("Instance has no runtime schema class definition");
+			return *definition;
+		}
+
+		std::size_t ValidateExtensionOverrides(
+			const Instance *instance,
+			const std::map<SchemaId, std::map<std::string, WireValue>> &overrides
+		) {
+			const auto &registry = GetActiveRuntimeSchemaRegistry();
+			const auto &classDefinition = GetInstanceSchemaClass(instance);
+			std::size_t count = 0;
+			std::size_t bytes = 0;
+			for (const auto &[extensionId, values] : overrides) {
+				auto *extension = registry.FindExtensionById(extensionId);
+				if (!extension || !registry.IsExtensionApplicableToClass(extensionId, classDefinition.Id))
+					throw std::invalid_argument("Extension override does not apply to the Instance class");
+				for (const auto &[name, value] : values) {
+					auto *property = registry.FindExtensionProperty(extensionId, name);
+					if (!property) throw std::invalid_argument("Extension override names an unknown property");
+					if (value == property->DefaultValue)
+						throw std::invalid_argument("Extension override redundantly stores its schema default");
+					++count;
+					bytes += sizeof(SchemaId) + sizeof(extension->DefinitionVersion) + name.size() +
+						ValidateSchemaExtensionPropertyValue(property->Type, value);
+					if (count > MaximumExtensionOverridesPerInstance ||
+						bytes > MaximumExtensionOverrideBytesPerInstance)
+						throw std::invalid_argument("Instance exceeds its extension override limits");
+				}
+			}
+			return bytes;
 		}
 
 		WireValue EncodeCommittedProperty(Instance *instance, const InstanceProperty &property) {
@@ -135,6 +214,7 @@ namespace gargantuan {
 		const auto scope = GetReplicationScopeId();
 		if (auto dataModel = GetDataModel()) dataModel->Tags.RemoveAll(scope, objectId);
 		Attributes.clear();
+		ExtensionValues.clear();
 		AttributeChangedSignals.clear();
 		ObjectRegistry::Get().Invalidate(objectId);
 		ChangeJournal::Get().Commit(scope, objectId, PropertyUpdatedChange{"Destroyed", true, true});
@@ -208,6 +288,14 @@ namespace gargantuan {
 		}
 		for (const auto &[name, value] : Attributes)
 			ChangeJournal::Get().Commit(scope, objectId, AttributeUpdatedChange{name, value});
+		for (const auto &[extensionId, values] : ExtensionValues) {
+			auto *extension = GetActiveRuntimeSchemaRegistry().FindExtensionById(extensionId);
+			if (!extension) throw std::runtime_error("Instance contains state for a missing extension definition");
+			for (const auto &[name, value] : values)
+				ChangeJournal::Get().Commit(scope, objectId, ExtensionPropertyUpdatedChange{
+					extensionId, extension->DefinitionVersion, name, value
+				});
+		}
 		auto parent = ParentReference.lock();
 		ChangeJournal::Get().Commit(
 			scope,
@@ -323,6 +411,89 @@ namespace gargantuan {
 		return MutationStatus::Success;
 	}
 
+	WireValue Instance::GetExtensionPropertyValue(
+		SchemaId extensionId,
+		std::string_view propertyName,
+		const ScriptSecurityContext &securityContext
+	) const {
+		if (!securityContext.HasCapability(ScriptCapability::ReadDataModel))
+			throw std::runtime_error("Extension property read requires ReadDataModel");
+		AssertIsAlive();
+		const auto &registry = GetActiveRuntimeSchemaRegistry();
+		const auto &classDefinition = GetInstanceSchemaClass(this);
+		if (!registry.IsExtensionApplicableToClass(extensionId, classDefinition.Id))
+			throw std::invalid_argument("Extension does not apply to the Instance class");
+		auto *property = registry.FindExtensionProperty(extensionId, propertyName);
+		if (!property) throw std::invalid_argument("Extension property does not exist");
+		auto extension = ExtensionValues.find(extensionId);
+		if (extension != ExtensionValues.end()) {
+			auto value = extension->second.find(std::string(propertyName));
+			if (value != extension->second.end()) return value->second;
+		}
+		return property->DefaultValue;
+	}
+
+	std::map<SchemaId, std::map<std::string, WireValue>> Instance::GetExtensionPropertyOverrides(
+		const ScriptSecurityContext &securityContext
+	) const {
+		if (!securityContext.HasCapability(ScriptCapability::ReadDataModel))
+			throw std::runtime_error("Extension property read requires ReadDataModel");
+		AssertIsAlive();
+		(void)ValidateExtensionOverrides(this, ExtensionValues);
+		return ExtensionValues;
+	}
+
+	MutationStatus Instance::ApplyExtensionPropertyMutation(
+		SchemaId extensionId,
+		std::uint32_t definitionVersion,
+		std::string_view propertyName,
+		WireValue value,
+		const ScriptSecurityContext &securityContext
+	) {
+		if (GetCurrentExecutionDomain() != ExecutionDomain::Main) return MutationStatus::WrongExecutionDomain;
+		if (!securityContext.HasCapability(ScriptCapability::MutateDataModel)) return MutationStatus::Unauthorized;
+		AssertIsAlive();
+		const auto &registry = GetActiveRuntimeSchemaRegistry();
+		auto *extension = registry.FindExtensionById(extensionId);
+		if (!extension || extension->DefinitionVersion != definitionVersion) return MutationStatus::InvalidProperty;
+		const auto &classDefinition = GetInstanceSchemaClass(this);
+		if (!registry.IsExtensionApplicableToClass(extensionId, classDefinition.Id))
+			return MutationStatus::InvalidProperty;
+		auto *property = registry.FindExtensionProperty(extensionId, propertyName);
+		if (!property) return MutationStatus::InvalidProperty;
+		try { (void)ValidateSchemaExtensionPropertyValue(property->Type, value); }
+		catch (const std::invalid_argument &) { return MutationStatus::ValidationFailed; }
+
+		auto current = property->DefaultValue;
+		if (auto extensionValues = ExtensionValues.find(extensionId); extensionValues != ExtensionValues.end()) {
+			if (auto found = extensionValues->second.find(std::string(propertyName)); found != extensionValues->second.end())
+				current = found->second;
+		}
+		if (current == value) return MutationStatus::Success;
+
+		auto candidate = ExtensionValues;
+		if (value == property->DefaultValue) {
+			auto found = candidate.find(extensionId);
+			if (found != candidate.end()) {
+				found->second.erase(std::string(propertyName));
+				if (found->second.empty()) candidate.erase(found);
+			}
+		} else {
+			candidate[extensionId][std::string(propertyName)] = value;
+		}
+		(void)ValidateExtensionOverrides(this, candidate);
+		ExtensionValues.swap(candidate);
+		try {
+			ChangeJournal::Get().Commit(GetReplicationScopeId(), GetObjectId(), ExtensionPropertyUpdatedChange{
+				extensionId, definitionVersion, std::string(propertyName), std::move(value)
+			});
+		} catch (...) {
+			ExtensionValues.swap(candidate);
+			throw;
+		}
+		return MutationStatus::Success;
+	}
+
 	int Instance::SetAttribute(lua_State *L, Instance *instance) {
 		if (!GetCurrentScriptSecurityContext().HasCapability(ScriptCapability::MutateDataModel))
 			throw std::runtime_error("Attribute mutation requires MutateDataModel");
@@ -363,6 +534,46 @@ namespace gargantuan {
 		return StackValue<std::shared_ptr<Signal<std::monostate>>>::Push(
 			L, instance->GetAttributeSignal(std::string_view(name, nameLength))
 		);
+	}
+
+	int Instance::GetExtensionProperty(lua_State *L, Instance *instance) {
+		std::size_t extensionLength = 0;
+		const auto *extensionName = luaL_checklstring(L, 2, &extensionLength);
+		std::size_t propertyLength = 0;
+		const auto *propertyName = luaL_checklstring(L, 3, &propertyLength);
+		auto *extension = GetActiveRuntimeSchemaRegistry().FindExtensionByName(
+			std::string_view(extensionName, extensionLength)
+		);
+		if (!extension) throw std::invalid_argument("Extension definition does not exist or is ambiguous");
+		return PushExtensionWireValue(L, instance->GetExtensionPropertyValue(
+			extension->Id, std::string_view(propertyName, propertyLength)
+		));
+	}
+
+	int Instance::SetExtensionProperty(lua_State *L, Instance *instance) {
+		std::size_t extensionLength = 0;
+		const auto *extensionName = luaL_checklstring(L, 2, &extensionLength);
+		std::size_t propertyLength = 0;
+		const auto *propertyName = luaL_checklstring(L, 3, &propertyLength);
+		auto *extension = GetActiveRuntimeSchemaRegistry().FindExtensionByName(
+			std::string_view(extensionName, extensionLength)
+		);
+		if (!extension) throw std::invalid_argument("Extension definition does not exist or is ambiguous");
+		auto *property = GetActiveRuntimeSchemaRegistry().FindExtensionProperty(
+			extension->Id, std::string_view(propertyName, propertyLength)
+		);
+		if (!property) throw std::invalid_argument("Extension property does not exist");
+		MutationGateway gateway;
+		auto result = gateway.Apply(UpdateExtensionPropertyCommand{
+			instance->GetObjectId(),
+			extension->Id,
+			extension->DefinitionVersion,
+			std::string(propertyName, propertyLength),
+			ReadExtensionWireValue(L, 4, property->Type),
+		});
+		if (!result.Succeeded())
+			throw std::runtime_error(result.Message.empty() ? "Extension property mutation rejected" : result.Message);
+		return 0;
 	}
 
 	std::string Instance::GetClassName() const {

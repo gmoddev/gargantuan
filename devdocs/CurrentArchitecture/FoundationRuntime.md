@@ -99,7 +99,8 @@ read-only state, and validation are checked on wired mutation paths.
 
 `ChangeJournal` assigns monotonic sequence numbers per DataModel scope while
 holding its journal lock. Its payload model represents object creation,
-property update, reparent, and destroy. Moving a subtree between scopes removes
+reflected/extension/attribute updates, tag changes, reparenting, and destruction.
+Moving a subtree between scopes removes
 it from the old stream and republishes its current baseline into the new stream.
 
 Records remain an in-process prototype. Retention is bounded per scope and cursor reads

@@ -1,41 +1,43 @@
 # Runtime schema
 
 Gargantuan has one canonical schema owned by `RuntimeSchemaRegistry`. Native
-classes and project enums are definition kinds in that registry. Existing
-class-reflection APIs are class-only compatibility views over the same frozen
-definitions; there is no separate custom-enum registry.
+classes, project enums, and project class extensions are tagged definition
+kinds in that registry. Class-reflection APIs are compatibility views over the
+same frozen definitions; there is no custom-enum or extension side registry.
 
 ## Identity and definitions
 
 `SchemaId` is a deterministic 128-bit identity with a 32-character lowercase
-hexadecimal wire form. Zero is invalid. Native classes use
-`FromNativeName(namespace, name)` and custom enums use the independently
-domain-separated `FromEnumName(namespace, name)`. Neither identity depends on
-addresses, registration order, randomness, hierarchy, or registry generation.
-The same qualified class and enum names therefore have different candidate IDs,
-although the registry separately rejects their canonical-name collision.
+hexadecimal wire form. Zero is invalid. Classes, enums, and extensions use the
+independently domain-separated `FromNativeName`, `FromEnumName`, and
+`FromExtensionName` derivations. Identity never includes an address,
+registration order, randomness, target memory representation, definition
+version, or registry generation. The registry also rejects duplicate IDs and
+canonical names, so a calculated collision fails instead of becoming
+load-order-dependent.
 
-The canonical tagged definition model currently supports:
+The canonical definition model supports:
 
 - `SchemaClassDefinition`: native construction, base identity, reflected
-  properties/signals/methods, editor metadata, and flattened class views; and
-- `SchemaEnumDefinition`: namespace, name, stable ID, nonzero definition
-  version, provenance/origin, and ordered name/numeric-value items.
+  properties/signals/methods, editor metadata, and flattened class views;
+- `SchemaEnumDefinition`: identity/version/provenance and lexically ordered
+  unique name/signed-32-bit-value items; and
+- `SchemaExtensionDefinition`: its own identity/version/provenance, a resolved
+  target class `SchemaId`, and lexically ordered declarative properties.
 
-Native classes use namespace `Engine`, version `1`, and `NativeEngine`
-provenance. PreRun enums use project-selected namespaces such as `Game`, a
-project-declared version, and `Game` provenance. Provenance and namespace are
-descriptive and grant no authority.
+An extension does not copy, replace, or change its target class identity. It
+applies to the target and derived classes through registry inheritance lookup;
+members are not copied into derived class definitions. Property canonical
+identity is `ExtensionCanonicalName.PropertyName`. The initial closed type
+domain is Boolean, signed 32-bit Integer, finite Number, and bounded UTF-8
+String. Defaults are validated during registration and frozen as immutable
+metadata. Enum-valued and object-reference extension properties are deferred.
 
-Enum items are sorted lexically by item name during candidate construction.
-Names and numeric values are unique; aliases and flags semantics are not
-supported. A runtime enum value is `{EnumSchemaId, DefinitionVersion,
-ItemValue}`. Equality and persistence therefore include the owning enum rather
-than treating an item as an unqualified integer.
+Native property, signal, and method names on the target's flattened surface are
+protected. Extensions expose no callbacks, functions, lifecycle hooks, native
+pointers, getters/setters, constructors, or inheritance changes.
 
 ## Candidate lifecycle and PreRun
-
-The explicit lifecycle is:
 
 ```text
 Bootstrap
@@ -48,88 +50,92 @@ Bootstrap
 ```
 
 Generated native seeds are copied into a hidden mutable candidate. The native
-bootstrap authority then advances to PreRun. If a project contains
-`.gargantuan/prerun.luau`, the native host selects that file and executes it in
-a dedicated `PreRun` domain. Filename, hierarchy, namespace, and provenance do
-not grant authority. The registration callback separately requires the
-`DefineSchema` capability.
+bootstrap authority advances the phases. A project-local canonicalized
+`.gargantuan/prerun.luau` executes before world construction in the `PreRun`
+domain. Filename, hierarchy, namespace, provenance, target class, and domain do
+not grant authority: each registration callback independently requires the
+native `DefineSchema` capability and the PreRun registration phase.
 
-PreRun exposes only sandboxed base, math, string, table, UTF-8, and the readonly
-`Schema:RegisterEnum` facade. It has no DataModel, filesystem, process, OS,
-debug, require, network, Studio, renderer, or registry-pointer access. Current
-hard limits are:
+PreRun exposes sandboxed base, math, string, table, UTF-8, and a readonly
+`Schema` facade with only `RegisterEnum` and `RegisterExtension`. It has no
+DataModel, filesystem, process, OS, debug, require, network, Studio, renderer,
+native pointer, or registry access. Extension registration uses this shape:
 
-- 256 KiB source;
-- 250 ms execution time;
-- 16 MiB per-VM allocation;
-- 64 custom enum definitions per candidate;
-- 256 items per enum;
-- 100 UTF-8 bytes per namespace, definition name, or item name; and
-- 64 KiB aggregate submitted definition payload.
+```lua
+Schema:RegisterExtension({
+    Namespace = "Game.Combat",
+    Name = "CombatProperties",
+    Version = 1,
+    Target = "Engine.BasePart",
+    Properties = {
+        Damage = { Type = "Integer", Default = 0 },
+        Team = { Type = "String", Default = "" },
+    },
+})
+```
 
-The selected file is canonicalized beneath the project root and symlink escapes
-are rejected. Reading uses a fixed maximum-plus-one buffer after the preliminary
-size check, so a concurrently growing file cannot cause unbounded allocation or
-execution of a silently truncated source. The canonical registry independently
-enforces the aggregate custom-schema payload ceiling.
+Current bounds are 256 KiB source, 250 ms execution, 16 MiB VM allocation, 64
+enums, 256 items per enum, 64 extensions, 64 properties per extension, 4 KiB
+per encoded extension default, 100 UTF-8 bytes per identity/item/property name,
+and 64 KiB shared custom-schema payload. The canonical registry independently
+enforces definition, property, default, and aggregate limits rather than
+trusting the Luau facade.
 
-Registration input is fully parsed and bounded before insertion. A malformed
-field, collision, budget failure, runtime failure, or invalid definition aborts
-the entire candidate. Previously published schema and registry generation stay
-unchanged, and world construction does not begin for a failed initial project
-bootstrap.
+Registration resolves the target canonical name to a class `SchemaId` while
+the candidate is building. Missing, enum, and extension targets fail. A
+malformed field, collision, limit failure, runtime failure, or validation
+failure aborts the complete candidate. The previous active registry and
+generation remain unchanged, and failed initial bootstrap constructs no world.
+Validation and freeze precede one atomic publication; active definitions are
+const and registration after freeze fails even with retained capability.
 
-Whole-candidate validation resolves class inheritance and flattened members
-before freeze. Publication happens only after validation and freeze. The active
-registry is immutable, public lookup returns const definitions, and even a
-caller retaining `DefineSchema` cannot register after the lifecycle reaches
-Runtime. The candidate is never visible through ordinary reflection.
+Each successful publication receives a nonzero session-local registry
+generation. It selects a complete cache set, is not semantic definition
+compatibility, and is not part of `SchemaId`. Failed candidates do not advance
+it.
 
-Each successful complete publication receives a session-local unsigned 64-bit
-registry generation. Zero is invalid; failed candidates do not advance it, and
-the counter fails closed rather than rolling over. Registry generation selects
-an active cache set. It is independent of each definition's semantic
-`DefinitionVersion` and is not part of `SchemaId`.
+## Runtime extension state
 
-## Validation and compatibility
+Extension values are sparse per-Instance overrides keyed by extension
+`SchemaId` and property name. Missing storage reads the frozen default. A write
+resolves extension identity/version, target applicability, property identity,
+and exact type against the active frozen registry. Setting the default removes
+the physical override. Per-Instance state is bounded by override count and a
+32 KiB aggregate encoded payload.
 
-The registry rejects invalid/duplicate IDs, duplicate canonical names, invalid
-UTF-8 or embedded nulls, zero versions, missing/cyclic class bases, invalid
-member ownership/access, duplicate enum item names or numeric values, excessive
-counts/payloads, and wrong provenance at the native/custom registration
-boundaries. Observable enumeration sorts by canonical name and then definition
-kind. Typed `FindClass*` and `FindEnum*` APIs fail safely on the wrong kind.
+Luau uses `GetExtensionProperty(extension, property)` and
+`SetExtensionProperty(extension, property, value)`. Reads require
+`ReadDataModel`; writes require `MutateDataModel` and route through
+`MutationGateway`. `DefineSchema` grants neither permission. Destroyed
+Instances release extension state normally. Attributes remain dynamic
+untyped-name state, Tags remain dynamic indexed state, and neither is used as
+extension storage.
 
-`InstanceClassDefinition` aliases `SchemaClassDefinition`, and
-`InstanceClassRegistry` remains a class-only adapter over the active registry.
-Native class IDs, `IsA`, property/method lookup, construction, persistence,
-snapshots, journals, replication, mutation, rendering, and viewport behavior
-remain unchanged.
-
-The existing native `EnumItem` system remains a compatibility representation
-for built-in engine enums. Project enums use canonical schema identity and do
-not replace that system in this slice. A future bounded pass may adapt native
-enums into schema definitions; there are not two custom-enum authorities.
+Project persistence version 3 stores extension `SchemaId`, exact definition
+version, property name, and `WireValue`. Snapshot and journal version 5 carry
+sparse initial state and dedicated `ExtensionPropertyUpdate` records. Load and
+replication require a present Extension definition, exact version, applicable
+target, known property, and exact value type; malformed state does not
+partially apply. Migrations are deferred.
 
 ## Wire and EditorHost
 
-`WireValue` now has a closed `SchemaEnum` variant containing the enum
-`SchemaId`, exact definition version, and signed 32-bit item value. Encoding is
-deterministic. Materialization requires a frozen enum definition of the correct
-kind, exact version, and known item; missing definitions, wrong kinds, version
-mismatches, malformed IDs, and unknown items fail rather than coercing to a
-name or integer. General migrations are deferred. Attributes continue to
-reject this new variant, and Tags are unaffected.
+Schema discovery version 3 retains the `Classes` compatibility DTO and emits
+deterministic immutable definitions plus registry generation. Extension DTOs
+carry target class ID, ordered property identities, types, defaults, and the
+standard read/write/editability metadata. Studio caches immutable definitions
+by `SchemaId + DefinitionVersion`, selects the active set by registry
+generation, and validates an entire replacement before swapping it. Studio
+receives no `DefineSchema`, candidate handles, callbacks, or mutable native
+metadata.
 
-`GetSchema` keeps the existing `Classes` compatibility DTO and adds schema
-discovery version `2`, the active registry generation, and deterministic
-`Definitions`. Enum DTOs contain stable identity, kind, namespace/name,
-definition version, provenance, and ordered items. Studio receives immutable
-metadata only; it receives neither `DefineSchema` nor the registration facade.
+The existing native `EnumItem` system remains a compatibility representation.
+Project custom enum values use `{EnumSchemaId, DefinitionVersion, ItemValue}`;
+extension scalar values never become unqualified native enum values.
 
 ## Deferred
 
-Core Luau registration, native-enum unification, enum globals/generated Luau
-types, enum-valued Attributes, migrations, packages, plugins, class extensions,
-custom classes, and component composition are not implemented. The next step
-is a bounded review of this PreRun/enum slice before class extensions.
+Custom classes, extension methods/hooks, enum-valued and object-reference
+extension properties, Core/package/plugin registration, native-enum migration,
+generated Luau enum types, migrations, per-extension ACLs, and component
+composition are not implemented.

@@ -61,6 +61,22 @@ namespace gargantuan {
 			return {high, low};
 		}
 
+		[[nodiscard]] static constexpr SchemaId FromExtensionName(
+			std::string_view schemaNamespace,
+			std::string_view name
+		) {
+			std::uint64_t high = Hash("Gargantuan.SchemaId.Extension.High.v1", 14695981039346656037ull);
+			high = Hash(schemaNamespace, high);
+			high = Hash(std::string_view("\0", 1), high);
+			high = Hash(name, high);
+
+			std::uint64_t low = Hash("Gargantuan.SchemaId.Extension.Low.v1", 1099511628211ull);
+			low = Hash(schemaNamespace, low);
+			low = Hash(std::string_view("\0", 1), low);
+			low = Hash(name, low);
+			return {high, low};
+		}
+
 		auto operator<=>(const SchemaId &) const = default;
 
 	  private:

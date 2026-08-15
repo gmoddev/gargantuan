@@ -43,9 +43,9 @@ rolls a candidate map back before the error crosses the mutation boundary.
 
 Project JSON version 1 stores an `Attributes` object per Instance in sorted
 order and accepts legacy version 0 documents without attributes. Snapshot
-version 4 carries the same map alongside tags. Both loaders validate the complete collection.
+version 5 carries the same map alongside tags and extension state. Both loaders validate the complete collection.
 
-Wire journal version 4 includes `AttributeUpdate` with stable `ObjectId`, name, and
+Wire journal version 5 includes `AttributeUpdate` with stable `ObjectId`, name, and
 `WireValue`; `Null` means removal. Snapshot plus subsequent records reconstructs
 identical state. Loopback replication applies initial state, updates, and
 removals to its isolated receiver. EditorHost exposes bounded `SetAttribute`

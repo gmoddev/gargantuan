@@ -18,6 +18,13 @@ namespace gargantuan {
 	struct CreateObjectCommand { std::string ClassName; std::optional<ObjectId> Parent; };
 	struct UpdatePropertyCommand { ObjectId Object; std::string PropertyName; std::any Value; };
 	struct UpdateAttributeCommand { ObjectId Object; std::string AttributeName; std::optional<WireValue> Value; };
+	struct UpdateExtensionPropertyCommand {
+		ObjectId Object;
+		SchemaId ExtensionSchemaId;
+		std::uint32_t DefinitionVersion = 0;
+		std::string PropertyName;
+		WireValue Value;
+	};
 	struct AddTagCommand { ObjectId Object; std::string TagName; std::optional<ObjectId> ExpectedScope; };
 	struct RemoveTagCommand { ObjectId Object; std::string TagName; std::optional<ObjectId> ExpectedScope; };
 	struct ReparentObjectCommand { ObjectId Object; std::optional<ObjectId> Parent; };
@@ -26,6 +33,7 @@ namespace gargantuan {
 		CreateObjectCommand,
 		UpdatePropertyCommand,
 		UpdateAttributeCommand,
+		UpdateExtensionPropertyCommand,
 		AddTagCommand,
 		RemoveTagCommand,
 		ReparentObjectCommand,

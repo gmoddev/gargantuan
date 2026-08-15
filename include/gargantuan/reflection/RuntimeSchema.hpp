@@ -7,6 +7,7 @@
 
 #include "gargantuan/InstanceProperty.hpp"
 #include "gargantuan/reflection/SchemaId.hpp"
+#include "gargantuan/runtime/WireValue.hpp"
 #include "gargantuan/scripting/UserdataMethod.hpp"
 
 #include <cstdint>
@@ -33,13 +34,20 @@ namespace gargantuan {
 		Tooling,
 	};
 
-	enum class SchemaDefinitionKind : std::uint8_t { Class, Enum };
+	enum class SchemaDefinitionKind : std::uint8_t { Class, Enum, Extension };
+	enum class SchemaExtensionPropertyType : std::uint8_t { Boolean, Integer, Number, String };
 
 	inline constexpr std::size_t MaximumSchemaNamespaceBytes = 100;
 	inline constexpr std::size_t MaximumSchemaDefinitionNameBytes = 100;
 	inline constexpr std::size_t MaximumCustomEnumDefinitions = 64;
 	inline constexpr std::size_t MaximumCustomEnumItems = 256;
 	inline constexpr std::size_t MaximumCustomEnumItemNameBytes = 100;
+	inline constexpr std::size_t MaximumCustomExtensionDefinitions = 64;
+	inline constexpr std::size_t MaximumExtensionProperties = 64;
+	inline constexpr std::size_t MaximumExtensionPropertyNameBytes = 100;
+	inline constexpr std::size_t MaximumExtensionDefaultValueBytes = 4 * 1024;
+	inline constexpr std::size_t MaximumExtensionOverridesPerInstance = 128;
+	inline constexpr std::size_t MaximumExtensionOverrideBytesPerInstance = 32 * 1024;
 	inline constexpr std::size_t MaximumCustomSchemaPayloadBytes = 64 * 1024;
 
 	struct SchemaClassDefinition {
@@ -83,7 +91,28 @@ namespace gargantuan {
 		std::vector<SchemaEnumItem> Items;
 	};
 
-	using SchemaDefinition = std::variant<SchemaClassDefinition, SchemaEnumDefinition>;
+	struct SchemaExtensionProperty {
+		std::string Name;
+		std::string CanonicalName;
+		SchemaExtensionPropertyType Type = SchemaExtensionPropertyType::Boolean;
+		WireValue DefaultValue = false;
+		bool Editable = true;
+		auto operator<=>(const SchemaExtensionProperty &) const = default;
+	};
+
+	struct SchemaExtensionDefinition {
+		SchemaId Id{};
+		std::string Namespace;
+		std::string Name;
+		std::uint32_t DefinitionVersion = 1;
+		SchemaProvenance Provenance = SchemaProvenance::Game;
+		std::string OriginDetail{};
+		std::string CanonicalName{};
+		SchemaId TargetClassId{};
+		std::vector<SchemaExtensionProperty> Properties;
+	};
+
+	using SchemaDefinition = std::variant<SchemaClassDefinition, SchemaEnumDefinition, SchemaExtensionDefinition>;
 
 	[[nodiscard]] SchemaDefinitionKind GetSchemaDefinitionKind(const SchemaDefinition &definition);
 	[[nodiscard]] const SchemaId &GetSchemaDefinitionId(const SchemaDefinition &definition);
@@ -92,6 +121,12 @@ namespace gargantuan {
 	[[nodiscard]] std::string_view GetSchemaDefinitionCanonicalName(const SchemaDefinition &definition);
 	[[nodiscard]] std::uint32_t GetSchemaDefinitionVersion(const SchemaDefinition &definition);
 	[[nodiscard]] SchemaProvenance GetSchemaDefinitionProvenance(const SchemaDefinition &definition);
+	[[nodiscard]] std::string_view GetSchemaExtensionPropertyTypeName(SchemaExtensionPropertyType type);
+	[[nodiscard]] std::optional<SchemaExtensionPropertyType> ParseSchemaExtensionPropertyType(std::string_view type);
+	[[nodiscard]] std::size_t ValidateSchemaExtensionPropertyValue(
+		SchemaExtensionPropertyType type,
+		const WireValue &value
+	);
 
 	enum class RuntimeSchemaRegistryState : std::uint8_t {
 		Building,
@@ -103,6 +138,7 @@ namespace gargantuan {
 	  public:
 		void RegisterNative(std::type_index nativeType, SchemaClassDefinition definition);
 		void RegisterEnum(SchemaEnumDefinition definition);
+		void RegisterExtension(SchemaExtensionDefinition definition, std::string_view targetCanonicalName);
 
 		template <typename T> void RegisterNative(SchemaClassDefinition definition) {
 			RegisterNative(std::type_index(typeid(T)), std::move(definition));
@@ -118,8 +154,17 @@ namespace gargantuan {
 		[[nodiscard]] const SchemaClassDefinition *FindClassByName(std::string_view name) const;
 		[[nodiscard]] const SchemaEnumDefinition *FindEnumById(SchemaId id) const;
 		[[nodiscard]] const SchemaEnumDefinition *FindEnumByName(std::string_view name) const;
+		[[nodiscard]] const SchemaExtensionDefinition *FindExtensionById(SchemaId id) const;
+		[[nodiscard]] const SchemaExtensionDefinition *FindExtensionByName(std::string_view name) const;
+		[[nodiscard]] const SchemaExtensionProperty *FindExtensionProperty(
+			SchemaId extensionId,
+			std::string_view propertyName
+		) const;
+		[[nodiscard]] bool IsExtensionApplicableToClass(SchemaId extensionId, SchemaId classId) const;
+		[[nodiscard]] std::vector<const SchemaExtensionDefinition *> FindApplicableExtensions(SchemaId classId) const;
 		[[nodiscard]] std::vector<const SchemaDefinition *> EnumerateDefinitions() const;
 		[[nodiscard]] std::vector<const SchemaClassDefinition *> EnumerateClasses() const;
+		[[nodiscard]] std::vector<const SchemaExtensionDefinition *> EnumerateExtensions() const;
 
 		// Class-only compatibility surface retained for existing reflection code.
 		[[nodiscard]] const SchemaClassDefinition *FindById(SchemaId id) const { return FindClassById(id); }

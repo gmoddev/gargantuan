@@ -96,6 +96,19 @@ namespace gargantuan {
 								typedCommand.AttributeName, std::move(typedCommand.Value), securityContext
 							);
 							return {status, typedCommand.Object, status == MutationStatus::Success ? "" : "Attribute mutation rejected"};
+						} else if constexpr (std::is_same_v<Command, UpdateExtensionPropertyCommand>) {
+							const auto status = instance->ApplyExtensionPropertyMutation(
+								typedCommand.ExtensionSchemaId,
+								typedCommand.DefinitionVersion,
+								typedCommand.PropertyName,
+								std::move(typedCommand.Value),
+								securityContext
+							);
+							return {
+								status,
+								typedCommand.Object,
+								status == MutationStatus::Success ? "" : "Extension property mutation rejected"
+							};
 						} else if constexpr (std::is_same_v<Command, AddTagCommand> || std::is_same_v<Command, RemoveTagCommand>) {
 							auto dataModel = instance->GetDataModel();
 							if (!dataModel) return {MutationStatus::Rejected, std::nullopt, "Tag target is not owned by a DataModel"};

@@ -109,7 +109,7 @@ tag membership. This version model is adequate for the current native-only
 state, but custom definitions will require an explicit migration contract rather
 than an indefinite series of ad hoc top-level version checks.
 
-Snapshot and wire-journal version 4 remain coherent. Attributes use dedicated
+Snapshot and wire-journal version 5 remain coherent. Attributes use dedicated
 `AttributeUpdate`; tags use `TagAdded` and `TagRemoved`. These semantics remain
 separate from schema-defined `PropertyUpdate`. Stable `ObjectId`, bounded
 `WireValue`, monotonic sequences, scope checks, no-op suppression, and receiver

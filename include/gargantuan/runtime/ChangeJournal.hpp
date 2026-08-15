@@ -28,6 +28,12 @@ namespace gargantuan {
 		std::string AttributeName;
 		std::optional<WireValue> Value;
 	};
+	struct ExtensionPropertyUpdatedChange {
+		SchemaId ExtensionSchemaId;
+		std::uint32_t DefinitionVersion = 0;
+		std::string PropertyName;
+		WireValue Value;
+	};
 	struct TagAddedChange { std::string TagName; };
 	struct TagRemovedChange { std::string TagName; };
 	struct ObjectReparentedChange { std::optional<ObjectId> Parent; };
@@ -36,6 +42,7 @@ namespace gargantuan {
 		ObjectCreatedChange,
 		PropertyUpdatedChange,
 		AttributeUpdatedChange,
+		ExtensionPropertyUpdatedChange,
 		TagAddedChange,
 		TagRemovedChange,
 		ObjectReparentedChange,

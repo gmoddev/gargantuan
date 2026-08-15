@@ -4,8 +4,10 @@
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 #include "gargantuan/reflection/RuntimeSchema.hpp"
+#include "gargantuan/runtime/WireCodec.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <functional>
 #include <stdexcept>
 #include <type_traits>
@@ -45,11 +47,16 @@ namespace gargantuan {
 			return definition.Namespace + "." + definition.Name;
 		}
 
+		std::string ExtensionCanonicalName(const SchemaExtensionDefinition &definition) {
+			return definition.Namespace + "." + definition.Name;
+		}
+
 		template <typename Definition>
 		[[noreturn]] void InvalidDefinition(const Definition &definition, std::string_view reason) {
 			const auto canonical = [&]() {
 				if constexpr (std::is_same_v<Definition, SchemaClassDefinition>) return ClassCanonicalName(definition);
-				else return EnumCanonicalName(definition);
+				else if constexpr (std::is_same_v<Definition, SchemaEnumDefinition>) return EnumCanonicalName(definition);
+				else return ExtensionCanonicalName(definition);
 			}();
 			throw std::invalid_argument("Invalid schema definition '" + canonical + "': " + std::string(reason));
 		}
@@ -77,8 +84,9 @@ namespace gargantuan {
 	}
 
 	SchemaDefinitionKind GetSchemaDefinitionKind(const SchemaDefinition &definition) {
-		return std::holds_alternative<SchemaClassDefinition>(definition)
-			? SchemaDefinitionKind::Class : SchemaDefinitionKind::Enum;
+		if (std::holds_alternative<SchemaClassDefinition>(definition)) return SchemaDefinitionKind::Class;
+		if (std::holds_alternative<SchemaEnumDefinition>(definition)) return SchemaDefinitionKind::Enum;
+		return SchemaDefinitionKind::Extension;
 	}
 
 	const SchemaId &GetSchemaDefinitionId(const SchemaDefinition &definition) {
@@ -107,6 +115,53 @@ namespace gargantuan {
 
 	SchemaProvenance GetSchemaDefinitionProvenance(const SchemaDefinition &definition) {
 		return std::visit([](const auto &typed) { return typed.Provenance; }, definition);
+	}
+
+	std::string_view GetSchemaExtensionPropertyTypeName(SchemaExtensionPropertyType type) {
+		switch (type) {
+			case SchemaExtensionPropertyType::Boolean: return "Boolean";
+			case SchemaExtensionPropertyType::Integer: return "Integer";
+			case SchemaExtensionPropertyType::Number: return "Number";
+			case SchemaExtensionPropertyType::String: return "String";
+		}
+		throw std::invalid_argument("Unknown extension property type");
+	}
+
+	std::optional<SchemaExtensionPropertyType> ParseSchemaExtensionPropertyType(std::string_view type) {
+		if (type == "Boolean") return SchemaExtensionPropertyType::Boolean;
+		if (type == "Integer") return SchemaExtensionPropertyType::Integer;
+		if (type == "Number") return SchemaExtensionPropertyType::Number;
+		if (type == "String") return SchemaExtensionPropertyType::String;
+		return std::nullopt;
+	}
+
+	std::size_t ValidateSchemaExtensionPropertyValue(
+		SchemaExtensionPropertyType type,
+		const WireValue &value
+	) {
+		bool valid = false;
+		switch (type) {
+			case SchemaExtensionPropertyType::Boolean:
+				valid = std::holds_alternative<bool>(value);
+				break;
+			case SchemaExtensionPropertyType::Integer:
+				valid = std::holds_alternative<int>(value);
+				break;
+			case SchemaExtensionPropertyType::Number:
+				valid = std::holds_alternative<double>(value) && std::isfinite(std::get<double>(value));
+				break;
+			case SchemaExtensionPropertyType::String:
+				if (const auto *string = std::get_if<std::string>(&value))
+					valid = IsValidUtf8(*string) && string->find('\0') == std::string::npos;
+				break;
+		}
+		if (!valid) throw std::invalid_argument(
+			"Extension property value does not match declared " + std::string(GetSchemaExtensionPropertyTypeName(type)) + " type"
+		);
+		const auto bytes = EncodeWireValue(value).dump().size();
+		if (bytes > MaximumExtensionDefaultValueBytes)
+			throw std::invalid_argument("Extension property value exceeds its encoded byte limit");
+		return bytes;
 	}
 
 	void RuntimeSchemaRegistry::RequireBuilding(std::string_view operation) const {
@@ -224,6 +279,76 @@ namespace gargantuan {
 		CustomSchemaPayloadBytes += payloadBytes;
 	}
 
+	void RuntimeSchemaRegistry::RegisterExtension(
+		SchemaExtensionDefinition definition,
+		std::string_view targetCanonicalName
+	) {
+		RequireBuilding("register an extension definition");
+		ValidateIdentity(definition.Id, definition.Namespace, definition.Name, definition.DefinitionVersion, definition);
+		if (definition.Provenance != SchemaProvenance::Game)
+			InvalidDefinition(definition, "custom extension registration requires Game provenance");
+		if (definition.Id != SchemaId::FromExtensionName(definition.Namespace, definition.Name))
+			InvalidDefinition(definition, "SchemaId does not match deterministic extension identity");
+		if (definition.TargetClassId.IsValid())
+			InvalidDefinition(definition, "target SchemaId must be resolved by the canonical registry");
+		if (targetCanonicalName.empty() || targetCanonicalName.find('.') == std::string_view::npos ||
+			targetCanonicalName.size() > MaximumSchemaNamespaceBytes + MaximumSchemaDefinitionNameBytes + 1 ||
+			targetCanonicalName.find('\0') != std::string_view::npos || !IsValidUtf8(targetCanonicalName))
+			InvalidDefinition(definition, "target must be a valid canonical class name");
+		auto targetIdentity = IdsByCanonicalName.find(std::string(targetCanonicalName));
+		if (targetIdentity == IdsByCanonicalName.end()) InvalidDefinition(definition, "target definition is not registered");
+		auto target = DefinitionsById.find(targetIdentity->second);
+		if (target == DefinitionsById.end() || !std::holds_alternative<SchemaClassDefinition>(target->second))
+			InvalidDefinition(definition, "target definition is not a class");
+		definition.TargetClassId = targetIdentity->second;
+		if (definition.Properties.empty()) InvalidDefinition(definition, "extension has no properties");
+		if (definition.Properties.size() > MaximumExtensionProperties)
+			InvalidDefinition(definition, "extension exceeds its property limit");
+		definition.CanonicalName = ExtensionCanonicalName(definition);
+		std::sort(definition.Properties.begin(), definition.Properties.end(), [](const auto &left, const auto &right) {
+			return left.Name < right.Name;
+		});
+		std::unordered_set<std::string> names;
+		std::size_t payloadBytes = definition.Namespace.size() + definition.Name.size() + targetCanonicalName.size();
+		for (auto &property : definition.Properties) {
+			if (property.Name.empty()) InvalidDefinition(definition, "extension property name is empty");
+			if (property.Name.size() > MaximumExtensionPropertyNameBytes)
+				InvalidDefinition(definition, "extension property name exceeds its byte limit");
+			if (property.Name.find('\0') != std::string::npos || !IsValidUtf8(property.Name))
+				InvalidDefinition(definition, "extension property name is invalid UTF-8 or contains null");
+			if (!names.insert(property.Name).second)
+				InvalidDefinition(definition, "duplicate extension property name " + property.Name);
+			property.CanonicalName = definition.CanonicalName + "." + property.Name;
+			try {
+				payloadBytes += property.Name.size() + GetSchemaExtensionPropertyTypeName(property.Type).size() +
+					ValidateSchemaExtensionPropertyValue(property.Type, property.DefaultValue);
+			} catch (const std::exception &error) {
+				InvalidDefinition(definition, "invalid default for property " + property.Name + ": " + error.what());
+			}
+		}
+		if (payloadBytes > MaximumCustomSchemaPayloadBytes)
+			InvalidDefinition(definition, "extension definition exceeds its payload byte limit");
+		if (payloadBytes > MaximumCustomSchemaPayloadBytes -
+			std::min(CustomSchemaPayloadBytes, MaximumCustomSchemaPayloadBytes))
+			InvalidDefinition(definition, "candidate exceeds its aggregate custom schema payload byte limit");
+		const auto extensionCount = std::count_if(DefinitionsById.begin(), DefinitionsById.end(), [](const auto &entry) {
+			return std::holds_alternative<SchemaExtensionDefinition>(entry.second);
+		});
+		if (extensionCount >= MaximumCustomExtensionDefinitions)
+			InvalidDefinition(definition, "candidate exceeds its custom extension definition limit");
+		if (DefinitionsById.contains(definition.Id))
+			throw std::invalid_argument("Duplicate SchemaId " + definition.Id.ToString());
+		if (IdsByCanonicalName.contains(definition.CanonicalName))
+			throw std::invalid_argument("Duplicate canonical schema name " + definition.CanonicalName);
+
+		const auto id = definition.Id;
+		const auto canonical = definition.CanonicalName;
+		DefinitionsById.emplace(id, std::move(definition));
+		try { IdsByCanonicalName.emplace(canonical, id); }
+		catch (...) { DefinitionsById.erase(id); throw; }
+		CustomSchemaPayloadBytes += payloadBytes;
+	}
+
 	void RuntimeSchemaRegistry::Validate() {
 		RequireBuilding("validate");
 		struct FlattenedDefinition {
@@ -271,6 +396,19 @@ namespace gargantuan {
 			definition->AllProperties = std::move(result.Properties);
 			definition->AllMethods = std::move(result.Methods);
 			definition->Flattened = true;
+		}
+		for (auto &[id, candidate] : DefinitionsById) {
+			(void)id;
+			auto *extension = std::get_if<SchemaExtensionDefinition>(&candidate);
+			if (!extension) continue;
+			auto target = DefinitionsById.find(extension->TargetClassId);
+			if (target == DefinitionsById.end()) InvalidDefinition(*extension, "target SchemaId is not registered");
+			auto *targetClass = std::get_if<SchemaClassDefinition>(&target->second);
+			if (!targetClass) InvalidDefinition(*extension, "target SchemaId does not identify a class");
+			for (const auto &property : extension->Properties) {
+				if (targetClass->AllProperties.contains(property.Name) || targetClass->AllMethods.contains(property.Name))
+					InvalidDefinition(*extension, "property " + property.Name + " collides with a protected native member");
+			}
 		}
 		State = RuntimeSchemaRegistryState::Validated;
 	}
@@ -351,6 +489,57 @@ namespace gargantuan {
 		return match;
 	}
 
+	const SchemaExtensionDefinition *RuntimeSchemaRegistry::FindExtensionById(SchemaId id) const {
+		auto definition = FindDefinitionById(id);
+		return definition ? std::get_if<SchemaExtensionDefinition>(definition) : nullptr;
+	}
+
+	const SchemaExtensionDefinition *RuntimeSchemaRegistry::FindExtensionByName(std::string_view name) const {
+		RequireFrozen("look up an extension definition");
+		if (name.find('.') != std::string_view::npos) {
+			auto id = IdsByCanonicalName.find(std::string(name));
+			return id == IdsByCanonicalName.end() ? nullptr : FindExtensionById(id->second);
+		}
+		const SchemaExtensionDefinition *match = nullptr;
+		for (const auto &[id, definition] : DefinitionsById) {
+			(void)id;
+			const auto *typed = std::get_if<SchemaExtensionDefinition>(&definition);
+			if (!typed || typed->Name != name) continue;
+			if (match) return nullptr;
+			match = typed;
+		}
+		return match;
+	}
+
+	const SchemaExtensionProperty *RuntimeSchemaRegistry::FindExtensionProperty(
+		SchemaId extensionId,
+		std::string_view propertyName
+	) const {
+		auto *extension = FindExtensionById(extensionId);
+		if (!extension) return nullptr;
+		auto found = std::lower_bound(extension->Properties.begin(), extension->Properties.end(), propertyName,
+			[](const SchemaExtensionProperty &property, std::string_view name) { return property.Name < name; });
+		return found == extension->Properties.end() || found->Name != propertyName ? nullptr : &*found;
+	}
+
+	bool RuntimeSchemaRegistry::IsExtensionApplicableToClass(SchemaId extensionId, SchemaId classId) const {
+		auto *extension = FindExtensionById(extensionId);
+		auto *definition = FindClassById(classId);
+		if (!extension || !definition) return false;
+		while (definition) {
+			if (definition->Id == extension->TargetClassId) return true;
+			definition = definition->BaseSchemaId ? FindClassById(*definition->BaseSchemaId) : nullptr;
+		}
+		return false;
+	}
+
+	std::vector<const SchemaExtensionDefinition *> RuntimeSchemaRegistry::FindApplicableExtensions(SchemaId classId) const {
+		std::vector<const SchemaExtensionDefinition *> result;
+		for (const auto *extension : EnumerateExtensions())
+			if (IsExtensionApplicableToClass(extension->Id, classId)) result.push_back(extension);
+		return result;
+	}
+
 	std::vector<const SchemaDefinition *> RuntimeSchemaRegistry::EnumerateDefinitions() const {
 		RequireFrozen("enumerate definitions");
 		std::vector<const SchemaDefinition *> result;
@@ -369,6 +558,13 @@ namespace gargantuan {
 		std::vector<const SchemaClassDefinition *> result;
 		for (const auto *definition : EnumerateDefinitions())
 			if (const auto *typed = std::get_if<SchemaClassDefinition>(definition)) result.push_back(typed);
+		return result;
+	}
+
+	std::vector<const SchemaExtensionDefinition *> RuntimeSchemaRegistry::EnumerateExtensions() const {
+		std::vector<const SchemaExtensionDefinition *> result;
+		for (const auto *definition : EnumerateDefinitions())
+			if (const auto *typed = std::get_if<SchemaExtensionDefinition>(definition)) result.push_back(typed);
 		return result;
 	}
 

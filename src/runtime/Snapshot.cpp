@@ -8,6 +8,7 @@
 #include "gargantuan/datatypes/UDim2.hpp"
 #include "gargantuan/datatypes/Vector2.hpp"
 #include "gargantuan/reflection/InstanceClassRegistry.hpp"
+#include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/runtime/ExecutionDomain.hpp"
 #include "gargantuan/runtime/AttributeValidation.hpp"
 #include "gargantuan/runtime/WireCodec.hpp"
@@ -116,6 +117,13 @@ namespace gargantuan {
 			}
 			object.Attributes = instance->GetAttributeValues(ScriptSecurityContext::CoreTrusted());
 			(void)ValidateAttributeCollection(object.Attributes);
+			for (const auto &[extensionId, properties] : instance->GetExtensionPropertyOverrides(
+				ScriptSecurityContext::CoreTrusted()
+			)) {
+				auto *extension = GetActiveRuntimeSchemaRegistry().FindExtensionById(extensionId);
+				if (!extension) throw std::runtime_error("Snapshot extension definition is missing");
+				object.Extensions.push_back({extensionId, extension->DefinitionVersion, properties});
+			}
 			object.Tags = dataModel->Tags.GetTags(dataModel->GetObjectId(), instance->GetObjectId(), ScriptSecurityContext::CoreTrusted());
 			snapshot.Objects.push_back(std::move(object));
 		}
@@ -144,6 +152,17 @@ namespace gargantuan {
 			for (const auto &[name, value] : object.Properties) encoded["Properties"][name] = EncodeValue(value);
 			encoded["Attributes"] = Json::object();
 			for (const auto &[name, value] : object.Attributes) encoded["Attributes"][name] = EncodeValue(value);
+			encoded["Extensions"] = Json::array();
+			for (const auto &extension : object.Extensions) {
+				Json extensionValue{
+					{"ExtensionSchemaId", extension.ExtensionSchemaId.ToString()},
+					{"DefinitionVersion", extension.DefinitionVersion},
+					{"Properties", Json::object()},
+				};
+				for (const auto &[name, value] : extension.Properties)
+					extensionValue["Properties"][name] = EncodeValue(value);
+				encoded["Extensions"].push_back(std::move(extensionValue));
+			}
 			encoded["Tags"] = object.Tags;
 			document["Objects"].push_back(std::move(encoded));
 		}
@@ -187,6 +206,7 @@ namespace gargantuan {
 					!encoded["ClassName"].is_string() || !encoded.contains("Name") || !encoded["Name"].is_string() ||
 					!encoded.contains("Parent") || !encoded.contains("Properties") || !encoded["Properties"].is_object() ||
 					!encoded.contains("Attributes") || !encoded["Attributes"].is_object() ||
+					!encoded.contains("Extensions") || !encoded["Extensions"].is_array() ||
 					!encoded.contains("Tags") || !encoded["Tags"].is_array()) {
 					result.Errors.push_back("Invalid snapshot object");
 					return result;
@@ -229,6 +249,44 @@ namespace gargantuan {
 					object.Attributes.emplace(name, std::move(*value));
 				}
 				(void)ValidateAttributeCollection(object.Attributes);
+				if (encoded["Extensions"].size() > MaximumCustomExtensionDefinitions)
+					throw std::invalid_argument("Snapshot exceeds its extension definition state limit");
+				auto *classDefinition = InstanceClassRegistry::GetDefinitionByName(object.ClassName);
+				if (!classDefinition) throw std::invalid_argument("Snapshot class definition is missing");
+				std::optional<SchemaId> previousExtensionId;
+				for (const auto &encodedExtension : encoded["Extensions"]) {
+					if (!encodedExtension.is_object() || !encodedExtension.contains("ExtensionSchemaId") ||
+						!encodedExtension["ExtensionSchemaId"].is_string() ||
+						!encodedExtension.contains("DefinitionVersion") ||
+						!encodedExtension["DefinitionVersion"].is_number_unsigned() ||
+						!encodedExtension.contains("Properties") || !encodedExtension["Properties"].is_object())
+						throw std::invalid_argument("Snapshot extension state is malformed");
+					auto extensionId = SchemaId::Parse(encodedExtension["ExtensionSchemaId"].get<std::string>());
+					if (!extensionId || (previousExtensionId && !(*previousExtensionId < *extensionId)))
+						throw std::invalid_argument("Snapshot extension identities are invalid or unordered");
+					previousExtensionId = *extensionId;
+					auto *extension = GetActiveRuntimeSchemaRegistry().FindExtensionById(*extensionId);
+					const auto version = encodedExtension["DefinitionVersion"].get<std::uint32_t>();
+					if (!extension || extension->DefinitionVersion != version)
+						throw std::invalid_argument("Snapshot extension version is missing or incompatible");
+					if (!GetActiveRuntimeSchemaRegistry().IsExtensionApplicableToClass(*extensionId, classDefinition->Id))
+						throw std::invalid_argument("Snapshot extension does not apply to its object class");
+					SnapshotExtensionState state{*extensionId, version, {}};
+					if (encodedExtension["Properties"].empty() ||
+						encodedExtension["Properties"].size() > MaximumExtensionProperties)
+						throw std::invalid_argument("Snapshot extension property state is empty or oversized");
+					for (const auto &[name, encodedValue] : encodedExtension["Properties"].items()) {
+						auto *property = GetActiveRuntimeSchemaRegistry().FindExtensionProperty(*extensionId, name);
+						auto value = DecodeValue(encodedValue);
+						if (!property || !value) throw std::invalid_argument("Snapshot extension property is malformed or unknown");
+						(void)ValidateSchemaExtensionPropertyValue(property->Type, *value);
+						if (*value == property->DefaultValue)
+							throw std::invalid_argument("Snapshot redundantly stores an extension default");
+						state.Properties.emplace(name, std::move(*value));
+					}
+					if (state.Properties.empty()) throw std::invalid_argument("Snapshot extension state has no overrides");
+					object.Extensions.push_back(std::move(state));
+				}
 				std::set<std::string> uniqueTags;
 				for (const auto &tag : encoded["Tags"]) {
 					if (!tag.is_string()) throw std::invalid_argument("Snapshot tag is not a string");
@@ -335,6 +393,18 @@ namespace gargantuan {
 					if (instance->ApplyAttributeMutation(name, value, ScriptSecurityContext::CoreTrusted()) !=
 						MutationStatus::Success)
 						throw std::runtime_error("Snapshot attribute value was rejected");
+				}
+				for (const auto &extension : object.Extensions) {
+					for (const auto &[name, value] : extension.Properties) {
+						if (instance->ApplyExtensionPropertyMutation(
+							extension.ExtensionSchemaId,
+							extension.DefinitionVersion,
+							name,
+							value,
+							ScriptSecurityContext::CoreTrusted()
+						) != MutationStatus::Success)
+							throw std::runtime_error("Snapshot extension property value was rejected");
+					}
 				}
 				for (const auto &tag : object.Tags)
 					(void)dataModel->Tags.Add(dataModel->GetObjectId(), instance->GetObjectId(), tag, ScriptSecurityContext::CoreTrusted());

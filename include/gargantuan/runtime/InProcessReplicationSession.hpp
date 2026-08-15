@@ -53,6 +53,10 @@ namespace gargantuan {
 		ReplicationApplyResult ApplyRecord(const WireJournalRecord &record);
 		ReplicationApplyResult ApplyProperty(const WireJournalRecord &record, const std::shared_ptr<Instance> &instance);
 		ReplicationApplyResult ApplyAttribute(const WireJournalRecord &record, const std::shared_ptr<Instance> &instance);
+		ReplicationApplyResult ApplyExtensionProperty(
+			const WireJournalRecord &record,
+			const std::shared_ptr<Instance> &instance
+		);
 
 		SnapshotLoadResult Receiver;
 		ChangeCursor Cursor;

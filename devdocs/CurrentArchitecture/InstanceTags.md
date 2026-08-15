@@ -27,7 +27,7 @@ world, so slot reuse cannot resurrect an old association.
 
 ## Persistence and state transfer
 
-Project JSON version 2 persists one sorted `Tags` array per object and rebuilds the reverse index; the reverse index itself is not serialized. Versions 0 and 1 remain readable without tags. Snapshot and wire-journal version 4 carry sorted initial membership plus explicit `TagAdded` and `TagRemoved` records. Loopback replication and EditorHost use those same records and stable object identity.
+Project JSON version 3 persists one sorted `Tags` array per object and rebuilds the reverse index; the reverse index itself is not serialized. Versions 0, 1, and 2 remain readable. Snapshot and wire-journal version 5 carry sorted initial membership plus explicit `TagAdded` and `TagRemoved` records. Loopback replication and EditorHost use those same records and stable object identity.
 
 The `Tags` service exposes bounded add, remove, membership, object-tag, single-tag, and explicit all-tags intersection operations. Studio stores membership in its replicated document and derives a local read index; edits still return through EditorHost authority.
 

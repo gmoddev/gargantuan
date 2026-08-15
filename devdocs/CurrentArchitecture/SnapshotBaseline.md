@@ -7,12 +7,14 @@ of authoritative `Instance` state. It is separate from the asset model
 serializer; both reuse `WireValue` for attributes, while retaining distinct
 document envelopes and purposes.
 
-A version 4 snapshot contains:
+A version 5 snapshot contains:
 
 - an ordered list of objects in hierarchy traversal order;
 - each object's source `ObjectId`, class, name, and optional parent ID;
 - reflected properties explicitly marked `FutureReplicated`, sorted by name;
 - bounded dynamic attributes sorted by name;
+- sparse extension overrides grouped by extension `SchemaId` and exact
+  definition version, with properties sorted by name;
 - bounded dynamic tag membership sorted by name;
 - explicit object-reference values;
 - the scoped `ChangeCursor` immediately after the captured baseline.
@@ -48,7 +50,7 @@ long-term identity migration remain future protocol concerns.
 
 - null, boolean, integer, float, double, and owned string;
 - `Vector2`, `Vector3`, `Color3`, `UDim`, `UDim2`, and `CFrame`;
-- enum type/item pairs;
+- enum type/item pairs and schema-enum identity/version/item values;
 - `WireObjectReference`.
 
 `std::any` exists only behind reflection while converting native property
@@ -60,7 +62,10 @@ Reference read/write hooks are extensions of `InstanceProperty`, not a second
 metadata registry. The existing `UseRead` and `UseWrite` templates populate
 those hooks for `shared_ptr<Instance-derived>` and optional shared references.
 Materialization constructs and maps every object before applying hierarchy,
-properties, and references, so forward references are valid.
+properties, references, and extension overrides, so forward references are
+valid. Extension state requires a frozen definition of kind Extension, exact
+version, target applicability, a known property, and an exact value type.
+Default-valued overrides are rejected because canonical sparse state omits them.
 
 ## Determinism and cursor transition
 

@@ -69,6 +69,12 @@ Tests should enforce them where practical.
    privilege based on namespace, provenance, class name, script name, path, or parentage.
 7. Persistence, replication selection, reflection, Studio discovery, and generated
    typing derive from the same canonical definitions rather than parallel policy tables.
+8. A class extension has its own kind-separated identity and targets a stable
+   class identity. It never replaces that class, changes `IsA`, or grants runtime
+   authority from its namespace, provenance, or target.
+9. Extension property meaning is frozen schema; per-Instance extension values are
+   bounded runtime state mutated only through authoritative capability-checked paths.
+   They remain distinct from Attributes and do not mutate registry generation.
 
 ## Security and execution
 

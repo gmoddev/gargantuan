@@ -30,6 +30,7 @@ namespace gargantuan {
 
 	  private:
 		std::map<std::string, WireValue> Attributes;
+		std::map<SchemaId, std::map<std::string, WireValue>> ExtensionValues;
 		std::unordered_map<std::string, std::shared_ptr<Signal<std::monostate>>> AttributeChangedSignals;
 
 	  public:
@@ -77,6 +78,21 @@ namespace gargantuan {
 		MutationStatus ApplyAttributeMutation(
 			std::string_view name,
 			std::optional<WireValue> value,
+			const ScriptSecurityContext &securityContext = GetCurrentScriptSecurityContext()
+		);
+		[[nodiscard]] WireValue GetExtensionPropertyValue(
+			SchemaId extensionId,
+			std::string_view propertyName,
+			const ScriptSecurityContext &securityContext = GetCurrentScriptSecurityContext()
+		) const;
+		[[nodiscard]] std::map<SchemaId, std::map<std::string, WireValue>> GetExtensionPropertyOverrides(
+			const ScriptSecurityContext &securityContext = GetCurrentScriptSecurityContext()
+		) const;
+		MutationStatus ApplyExtensionPropertyMutation(
+			SchemaId extensionId,
+			std::uint32_t definitionVersion,
+			std::string_view propertyName,
+			WireValue value,
 			const ScriptSecurityContext &securityContext = GetCurrentScriptSecurityContext()
 		);
 		[[nodiscard]] ObjectId GetObjectId() const;

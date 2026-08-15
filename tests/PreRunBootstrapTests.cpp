@@ -25,6 +25,13 @@ int main() {
 		Name = "BootstrapState",
 		Version = 1,
 		Items = { Ready = 1 },
+	})
+	Schema:RegisterExtension({
+		Namespace = "Game.Bootstrap",
+		Name = "PartState",
+		Version = 1,
+		Target = "Engine.BasePart",
+		Properties = { Damage = { Type = "Integer", Default = 0 } },
 	}))";
 	source.close();
 
@@ -32,7 +39,8 @@ int main() {
 		BootstrapProjectRuntimeSchema(root);
 		const auto &lifecycle = GetRuntimeSchemaLifecycle();
 		if (lifecycle.GetActiveGeneration() != 1 ||
-			lifecycle.GetActiveRegistry()->FindEnumByName("Game.BootstrapState") == nullptr) {
+			lifecycle.GetActiveRegistry()->FindEnumByName("Game.BootstrapState") == nullptr ||
+			lifecycle.GetActiveRegistry()->FindExtensionByName("Game.Bootstrap.PartState") == nullptr) {
 			std::cerr << "Project startup did not publish one complete generation\n";
 			return 1;
 		}

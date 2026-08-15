@@ -340,8 +340,10 @@ The work divides into the following dependency-ordered packages:
    without introducing new class identity.
 5. **Add custom enums.** Establish namespaced definition identity, versioning,
    wire representation, reflection, and collision behavior.
-6. **Add class extensions.** Add namespaced members to existing identities while
-   protecting native members and detecting extension conflicts.
+6. **Add class extensions.** The bounded declarative scalar-property slice is
+   implemented: namespaced extension identity targets existing class IDs,
+   protects native members, follows inheritance, and carries sparse state through
+   persistence/replication/Studio. Methods, enum/reference values, and hooks remain deferred.
 7. **Add custom classes.** Introduce distinct stable class identity, inheritance,
    persistence, replication metadata, Studio representation, and migrations.
 8. **Add native component composition.** Permit custom classes to request only
@@ -364,13 +366,13 @@ plus Core registry; expose attributes and tags; serialize and journal them; let
 Studio discover and edit them through EditorHost; and prove capability denial in
 tests.
 
-The bounded custom-enum milestone now implements one namespaced definition
-through capability-scoped PreRun, stable wire identity, Studio inspection,
-collision failure, and post-freeze rejection. A focused evaluation of that
-slice is the next checkpoint.
+The bounded custom-enum milestone and its security evaluation are complete. The
+first class-extension slice now adds only declarative Boolean, Integer, Number,
+and String properties through the same transactional PreRun lifecycle. It keeps
+the target class identity unchanged, stores sparse values separately from
+Attributes, and proves exact-version persistence/replication and Studio discovery.
 
-Class extensions follow once enum and schema identity are proven. Custom classes
-follow extensions and must additionally prove stable class identity, inheritance,
+Custom classes remain next and must additionally prove stable class identity, inheritance,
 persistence, replication, Studio representation, and migration behavior.
 Higher-level systems should not depend on extensibility semantics until those
 slices are reliable.

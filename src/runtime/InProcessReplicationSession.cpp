@@ -181,12 +181,48 @@ namespace gargantuan {
 		return {ReplicationApplyStatus::Success, 1, {}};
 	}
 
+	ReplicationApplyResult InProcessReplicationSession::ApplyExtensionProperty(
+		const WireJournalRecord &record,
+		const std::shared_ptr<Instance> &instance
+	) {
+		if (!record.ExtensionSchemaId || !record.DefinitionVersion ||
+			!record.ExtensionPropertyName || !record.Value)
+			return {
+				ReplicationApplyStatus::MalformedRecord,
+				0,
+				"ExtensionPropertyUpdate is missing stable identity, version, property, or value"
+			};
+		try {
+			const auto current = instance->GetExtensionPropertyValue(
+				*record.ExtensionSchemaId,
+				*record.ExtensionPropertyName,
+				ScriptSecurityContext::CoreTrusted()
+			);
+			if (current == *record.Value)
+				return {ReplicationApplyStatus::ApplyRejected, 0, "ExtensionPropertyUpdate is a semantic no-op"};
+			const auto status = instance->ApplyExtensionPropertyMutation(
+				*record.ExtensionSchemaId,
+				*record.DefinitionVersion,
+				*record.ExtensionPropertyName,
+				*record.Value,
+				ScriptSecurityContext::CoreTrusted()
+			);
+			if (status != MutationStatus::Success)
+				return {ReplicationApplyStatus::ApplyRejected, 0, "Receiver rejected the extension property value"};
+		} catch (const std::exception &error) {
+			return {ReplicationApplyStatus::ApplyRejected, 0, error.what()};
+		}
+		return {ReplicationApplyStatus::Success, 1, {}};
+	}
+
 	ReplicationApplyResult InProcessReplicationSession::ApplyRecord(const WireJournalRecord &record) {
 		ScopedChangeJournalSuppression suppressReceiverChanges;
 		try {
 			switch (record.Operation) {
 			case WireJournalOperation::Create: {
-					if (!record.ClassName || record.Parent || record.PropertyName || record.AttributeName || record.TagName || record.Value ||
+					if (!record.ClassName || record.Parent || record.PropertyName || record.AttributeName ||
+						record.ExtensionSchemaId || record.DefinitionVersion || record.ExtensionPropertyName ||
+						record.TagName || record.Value ||
 						Receiver.Objects.contains(record.Object))
 						return {ReplicationApplyStatus::MalformedRecord, 0, "Invalid or duplicate Create record"};
 					auto *definition = InstanceClassRegistry::GetDefinitionByName(*record.ClassName);
@@ -199,22 +235,34 @@ namespace gargantuan {
 					break;
 				}
 				case WireJournalOperation::PropertyUpdate: {
-					if (record.Parent || record.ClassName || record.AttributeName || record.TagName)
+					if (record.Parent || record.ClassName || record.AttributeName || record.ExtensionSchemaId ||
+						record.DefinitionVersion || record.ExtensionPropertyName || record.TagName)
 						return {ReplicationApplyStatus::MalformedRecord, 0, "PropertyUpdate contains unrelated metadata"};
 					auto instance = ResolveReceiver(record.Object);
 					if (!instance) return {ReplicationApplyStatus::ApplyRejected, 0, "Property target is stale or missing"};
 					return ApplyProperty(record, instance);
 				}
 				case WireJournalOperation::AttributeUpdate: {
-					if (record.Parent || record.ClassName || record.PropertyName || record.TagName)
+					if (record.Parent || record.ClassName || record.PropertyName || record.ExtensionSchemaId ||
+						record.DefinitionVersion || record.ExtensionPropertyName || record.TagName)
 						return {ReplicationApplyStatus::MalformedRecord, 0, "AttributeUpdate contains unrelated metadata"};
 					auto instance = ResolveReceiver(record.Object);
 					if (!instance) return {ReplicationApplyStatus::ApplyRejected, 0, "Attribute target is stale or missing"};
 					return ApplyAttribute(record, instance);
 				}
+				case WireJournalOperation::ExtensionPropertyUpdate: {
+					if (record.Parent || record.ClassName || record.PropertyName || record.AttributeName || record.TagName)
+						return {ReplicationApplyStatus::MalformedRecord, 0, "ExtensionPropertyUpdate contains unrelated metadata"};
+					auto instance = ResolveReceiver(record.Object);
+					if (!instance)
+						return {ReplicationApplyStatus::ApplyRejected, 0, "Extension property target is stale or missing"};
+					return ApplyExtensionProperty(record, instance);
+				}
 				case WireJournalOperation::TagAdded:
 				case WireJournalOperation::TagRemoved: {
-					if (record.Parent || record.ClassName || record.PropertyName || record.AttributeName || record.Value || !record.TagName)
+					if (record.Parent || record.ClassName || record.PropertyName || record.AttributeName ||
+						record.ExtensionSchemaId || record.DefinitionVersion || record.ExtensionPropertyName ||
+						record.Value || !record.TagName)
 						return {ReplicationApplyStatus::MalformedRecord, 0, "Tag record contains invalid metadata"};
 					auto instance = ResolveReceiver(record.Object);
 					if (!instance) return {ReplicationApplyStatus::ApplyRejected, 0, "Tag target is stale or missing"};
@@ -233,7 +281,8 @@ namespace gargantuan {
 					break;
 				}
 				case WireJournalOperation::Reparent: {
-					if (record.ClassName || record.PropertyName || record.AttributeName || record.TagName || record.Value)
+					if (record.ClassName || record.PropertyName || record.AttributeName || record.ExtensionSchemaId ||
+						record.DefinitionVersion || record.ExtensionPropertyName || record.TagName || record.Value)
 						return {ReplicationApplyStatus::MalformedRecord, 0, "Reparent contains unrelated metadata"};
 					auto instance = ResolveReceiver(record.Object);
 					if (!instance) return {ReplicationApplyStatus::ResnapshotRequired, 0, "Reparent target predates the snapshot"};
@@ -250,7 +299,9 @@ namespace gargantuan {
 					break;
 				}
 				case WireJournalOperation::Destroy: {
-					if (record.Parent || record.ClassName || record.PropertyName || record.AttributeName || record.TagName || record.Value)
+					if (record.Parent || record.ClassName || record.PropertyName || record.AttributeName ||
+						record.ExtensionSchemaId || record.DefinitionVersion || record.ExtensionPropertyName ||
+						record.TagName || record.Value)
 						return {ReplicationApplyStatus::MalformedRecord, 0, "Destroy contains unrelated metadata"};
 					auto instance = ResolveReceiver(record.Object);
 					if (!instance) return {ReplicationApplyStatus::ApplyRejected, 0, "Destroy target is stale or missing"};

@@ -13,4 +13,4 @@ The engine interns active names and maintains generation-safe indexes in both di
 operation. Service and EditorHost mutations carry an expected DataModel scope,
 so a valid foreign `ObjectId` cannot redirect a scoped tag command.
 
-Project persistence stores only sorted per-object membership. Snapshot and journal version 4 use initial tag arrays plus `TagAdded` and `TagRemoved`. Replication and Studio consume the same committed state. No namespaces, metadata, OR/NOT expressions, inheritance, or general query language exist.
+Project persistence stores only sorted per-object membership. Snapshot and journal version 5 use initial tag arrays plus `TagAdded` and `TagRemoved`. Replication and Studio consume the same committed state. No namespaces, metadata, OR/NOT expressions, inheritance, or general query language exist.

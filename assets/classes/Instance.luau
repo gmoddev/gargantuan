@@ -90,6 +90,16 @@ return c({
 			asLuau = true,
 			luauSignature = "(self: Instance, name: string) -> Signal<>",
 		},
+		GetExtensionProperty = {
+			description = "Reads a schema-defined extension property by canonical extension and property name",
+			asLuau = true,
+			luauSignature = "(self: Instance, extension: string, property: string) -> boolean | number | string",
+		},
+		SetExtensionProperty = {
+			description = "Writes a schema-defined extension property through authoritative mutation",
+			asLuau = true,
+			luauSignature = "(self: Instance, extension: string, property: string, value: boolean | number | string) -> ()",
+		},
 		IsA = {
 			description = "Whether this instance derives from the specified class",
 			params = { p("className", t.String) },
