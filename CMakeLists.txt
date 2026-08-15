@@ -275,6 +275,8 @@ if(BUILD_TESTING)
 	target_link_libraries(gargantuan_attributes_tags_profile PRIVATE gargantuan_core)
 	add_executable(gargantuan_networking_contract_tests "tests/NetworkingContractsTests.cpp")
 	target_link_libraries(gargantuan_networking_contract_tests PRIVATE gargantuan_core)
+	add_executable(gargantuan_simulated_transport_tests "tests/SimulatedTransportTests.cpp")
+	target_link_libraries(gargantuan_simulated_transport_tests PRIVATE gargantuan_core)
 	if(GARGANTUAN_BUILD_RENDERER_BENCHMARKS)
 		add_executable(gargantuan_renderer_benchmark "tests/RendererBenchmark.cpp")
 		target_link_libraries(gargantuan_renderer_benchmark PRIVATE gargantuan_core)
@@ -304,6 +306,11 @@ if(BUILD_TESTING)
 				"$<TARGET_FILE:SDL3::SDL3>"
 				"$<TARGET_FILE_DIR:gargantuan_networking_contract_tests>"
 		)
+		add_custom_command(TARGET gargantuan_simulated_transport_tests POST_BUILD
+			COMMAND ${CMAKE_COMMAND} -E copy_if_different
+				"$<TARGET_FILE:SDL3::SDL3>"
+				"$<TARGET_FILE_DIR:gargantuan_simulated_transport_tests>"
+		)
 		if(GARGANTUAN_BUILD_RENDERER_BENCHMARKS)
 			add_custom_command(TARGET gargantuan_renderer_benchmark POST_BUILD
 				COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -322,6 +329,7 @@ if(BUILD_TESTING)
 	add_test(NAME gargantuan_foundation COMMAND gargantuan_foundation_tests)
 	add_test(NAME gargantuan_prerun_bootstrap COMMAND gargantuan_prerun_bootstrap_tests)
 	add_test(NAME gargantuan_networking_contracts COMMAND gargantuan_networking_contract_tests)
+	add_test(NAME gargantuan_simulated_transport COMMAND gargantuan_simulated_transport_tests)
 	if(GARGANTUAN_WITH_FILAMENT)
 		add_test(NAME gargantuan_filament_renderer COMMAND gargantuan_filament_renderer_tests)
 	endif()

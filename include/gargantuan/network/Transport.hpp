@@ -71,6 +71,7 @@ namespace gargantuan::network {
 		virtual ~IGameTransport() = default;
 		virtual TransportOperationResult Start(const TransportStartConfiguration &Configuration) = 0;
 		virtual TransportOperationResult Stop(DisconnectInfo Information) = 0;
+		virtual TransportOperationResult Disconnect(ConnectionId Connection, DisconnectInfo Information) = 0;
 		virtual TransportOperationResult Send(const NetworkMessageIntent &Message) = 0;
 		virtual std::size_t PollEvents(std::span<TransportEvent> Output) = 0;
 		[[nodiscard]] virtual std::optional<std::size_t> GetAvailableDatagramBytes(ConnectionId Connection) const = 0;

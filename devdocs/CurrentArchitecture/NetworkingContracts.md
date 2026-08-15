@@ -64,8 +64,10 @@ Negotiation computes the component-wise minimum of two valid advertisements, so
 the result cannot exceed either side. There is no handshake exchange yet.
 
 `NetworkStatistics` uses `std::optional` for every backend-dependent measurement.
-Unavailable values are not fabricated as zero. RTT must be nonnegative and a
-present loss ratio must be finite and in `[0, 1]`.
+It can distinguish submitted, delivered, and received messages and can report
+unreliable drops or duplicates where a backend measures them. Unavailable values
+are not fabricated as zero. RTT must be nonnegative and a present loss ratio
+must be finite and in `[0, 1]`.
 
 ## Failure and request termination
 
@@ -115,12 +117,15 @@ or backend resource.
 
 `IGameTransport` is one narrow message-oriented interface. A validated start
 configuration selects client or server role, a generic endpoint, advertised
-limits, and bounded opaque handshake material. The interface starts/stops,
-sends validated message intents, polls into caller-owned bounded event storage,
+limits, and bounded opaque handshake material. The interface starts/stops an
+endpoint, disconnects one identified connection, sends validated message intents,
+polls into caller-owned bounded event storage,
 reports available datagram size and optional statistics, and returns structured
 outcomes. It exposes no descriptor, GNS handle, QUIC stream, packet structure,
 allocator, or mutation entrypoint. The same boundary can be implemented by a
-deterministic simulator, GNS, or QUIC without changing higher-layer semantics.
+the implemented deterministic simulator, GNS, or QUIC without changing
+higher-layer semantics. Per-connection disconnect was added when simulator
+evidence showed that server endpoint stop could not express peer-local closure.
 
 Opaque handshake material is host-supplied transport setup data. It is separate
 from application payload, `MutationAuthorityContext`, capabilities, and decoded
@@ -128,11 +133,12 @@ replication intent; it cannot grant DataModel authority.
 
 ## Deliberately not implemented
 
-There is no simulated or real transport, packet framing, codec, scheduler
-execution, coordinator, remote runtime, request timer, coroutine suspension,
+There is no real transport, packet framing, codec, scheduler execution,
+coordinator, remote runtime, request timer, coroutine suspension,
 multiplayer replication, authentication/ticket validation, player model,
 interest management, socket listener, network thread, Node integration, or
-Studio play session. No contract type is exposed to Luau.
+Studio play session. The deterministic in-memory implementation is documented in
+`SimulatedTransport.md`. No contract type is exposed to Luau.
 
 Existing EditorHost request strings, `ChangeCursor`, `WireJournalRecord`, and
 `MutationCompletion` remain specific to IPC, authoritative history/debug

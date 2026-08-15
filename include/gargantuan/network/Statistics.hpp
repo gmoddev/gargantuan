@@ -10,8 +10,10 @@ namespace gargantuan::network {
 		std::optional<std::uint64_t> BytesSent;
 		std::optional<std::uint64_t> BytesReceived;
 		std::optional<std::uint64_t> MessagesSent;
+		std::optional<std::uint64_t> MessagesDelivered;
 		std::optional<std::uint64_t> MessagesReceived;
 		std::optional<std::uint64_t> DroppedUnreliableMessages;
+		std::optional<std::uint64_t> DuplicatedUnreliableMessages;
 		std::optional<std::size_t> QueuedReliableBytes;
 		std::optional<std::chrono::microseconds> EstimatedRoundTripTime;
 		std::optional<double> MessageLossRatio;

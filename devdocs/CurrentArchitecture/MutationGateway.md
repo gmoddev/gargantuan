@@ -103,4 +103,5 @@ schema-driven property selection, in-process source/receiver session, and
 protocol input hardening are now implemented; see `SnapshotBaseline.md`,
 `LoopbackReplication.md`, and `ProtocolInputHardening.md`. Remaining work
 includes durable world identity, real peer authentication, negotiated runtime
-policy, the deterministic simulated transport, and a real transport.
+policy, the scheduler/coordinator layers, and a real transport. The deterministic
+simulator is implemented without gaining a mutation or authority path.

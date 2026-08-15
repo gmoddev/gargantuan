@@ -13,10 +13,10 @@ tuning values remain provisional until they are tested against a deterministic
 simulated transport.
 
 **Implementation status:** The Attributes and Tags prerequisite, native
-protocol-input hardening, and backend-neutral pure contracts are complete. The
-current executable networking behavior remains the wire-shaped in-process
-replication proof; the deterministic simulated transport and every real
-transport/runtime phase below remain unfinished.
+protocol-input hardening, backend-neutral pure contracts, and deterministic
+in-memory transport are complete. The simulator exercises delivery and lifecycle
+semantics without sockets; simulator validation/scheduler-contract review and
+every real transport/runtime phase below remain unfinished.
 
 ## Context
 
@@ -321,7 +321,7 @@ of the accepted decisions above.
 - [x] **Define pure contracts.** Add backend-neutral delivery modes, connection
    state, traffic intent, limits, statistics, replication views/operations, and
    remote request outcomes without selecting GNS or opening sockets.
-- [ ] **Implement deterministic simulated transport.** Prove delivery, scheduling,
+- [x] **Implement deterministic simulated transport.** Prove delivery, scheduling,
    backpressure, cancellation, and sequence-domain behavior under hostile
    conditions.
 - [ ] **Stop and validate.** Exercise the contracts, inspect metrics and failure

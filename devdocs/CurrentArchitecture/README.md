@@ -107,7 +107,9 @@ native definition map; the present DataModel registers only `ProcessService`,
 `RunService`, `UserInputService`, and `Workspace`
 (`src/classes/DataModel.cpp:9-16`). `Workspace` creates a current Camera
 (`src/services/Workspace.cpp:7-9`). A `ReplicatedStorage` class/source scaffold
-exists but is not registered, and there is no transport or replication system.
+exists but is not registered. There is no gameplay replication system or real
+transport; the networking subsystem has only pure contracts and an in-memory
+deterministic test transport.
 
 ## Frame execution model
 
