@@ -19,8 +19,12 @@
 #include <optional>
 
 namespace gargantuan {
-	Engine::Engine(std::shared_ptr<gargantuan::DataModel> game, BaseRenderer *renderer)
-		: DataModel(game), Renderer(renderer), Script(new class ScriptEngine(game)),
+	Engine::Engine(
+		std::shared_ptr<gargantuan::DataModel> game,
+		BaseRenderer *renderer,
+		std::function<void(std::string, std::string)> RuntimeDiagnostic
+	)
+		: DataModel(game), Renderer(renderer), Script(std::make_unique<class ScriptEngine>(game, std::move(RuntimeDiagnostic))),
 		  Workspace(GetService<gargantuan::Workspace>()),
 		  WorldRoot(std::static_pointer_cast<gargantuan::WorldRoot>(Workspace)),
 		  RunService(GetService<gargantuan::RunService>()), ProcessService(GetService<gargantuan::ProcessService>()),
@@ -29,7 +33,7 @@ namespace gargantuan {
 		DataModel->BindDescendants([this](std::shared_ptr<Instance> inst) {
 			if (auto script = std::dynamic_pointer_cast<gargantuan::Script>(inst)) {
 				this->Script->ScriptQueue.insert(script);
-				inst->Destroying->Once([ScriptEngine = this->Script, script](std::monostate _) {
+				inst->Destroying->Once([ScriptEngine = this->Script.get(), script](std::monostate _) {
 					if (ScriptEngine->ScriptQueue.contains(script)) ScriptEngine->ScriptQueue.erase(script);
 				});
 			}
@@ -59,10 +63,15 @@ namespace gargantuan {
 		LOG_INFO(App, "Constructed engine");
 	}
 
+	Engine::~Engine() { Destroy(); }
+
 	void Engine::Destroy() {
+		if (Destroyed) return;
+		Destroyed = true;
 		LOG_INFO(App, "Destroying engine");
-		Renderer->Destroy();
-		WorldRoot->Destroy();
+		if (Renderer) Renderer->Destroy();
+		if (WorldRoot) WorldRoot->Destroy();
+		Script.reset();
 	}
 
 	float Engine::GetDeltaTime() {

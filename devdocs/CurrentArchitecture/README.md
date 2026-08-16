@@ -44,13 +44,17 @@ between the public MPL-2.0 engine and independently authored Studio clients.
 See [Editor viewport v1](./EditorViewport.md) for offscreen frame capture,
 camera commands, ObjectId picking, and the future Luau Studio UI service boundary.
 
+See [minimal local Play](./PlaySession.md) for the EditorHost-owned isolated runtime
+graph, exact lifecycle identity, diagnostics/input boundary, and teardown contract.
+
 ## Scope and headline
 
-The current product is one C++23 executable. It owns an SDL window/GPU device (or
+The normal runtime is one C++23 executable. It owns an SDL window/GPU device (or
 a no-op headless renderer), one DataModel, one Luau VM, one Box3D world, and a
-single-threaded frame loop. It is closer to an engine testbed than a game
-platform. See `CMakeLists.txt:1-199`, `src/Main.cpp:104-187`, and
-`src/Engine.cpp:23-143`.
+single-threaded frame loop. EditorHost normally owns only its authoring DataModel;
+during explicit local Play it additionally owns one separately deserialized runtime
+DataModel/VM/Engine until Stop. See `CMakeLists.txt`, `src/Main.cpp`,
+`src/Engine.cpp`, and `src/editor/PlaySession.cpp`.
 
 ```mermaid
 flowchart TD
@@ -87,8 +91,9 @@ flowchart TD
 Notable ordering: scripts run after rendering, while `PreSimulation`,
 `PostSimulation`, and `PreRender` callbacks run before draw. This means newly
 queued regular Scripts do not run until the end of a frame, while signal callbacks
-can run synchronously in earlier phases. There is no explicit application state
-machine for loading, editing, playing, pausing, stopping, or recovering.
+can run synchronously in earlier phases. Normal gameplay has no general application
+state machine; EditorHost's minimal Play boundary has only
+Stopped/Starting/Running/Stopping/Failed. Pause, debug, and test states do not exist.
 
 ## Runtime object topology
 

@@ -82,5 +82,5 @@ populated from Source by this feature.
 
 Studio diagnostics use the pinned Luau compiler against a local buffer. They do
 not execute source, affect project state, or enter transaction history. LSP,
-debugging, Play/Stop, hot reload, filesystem synchronization, and MCP source
+debugging, hot reload, filesystem synchronization, and MCP source
 tools remain deferred.

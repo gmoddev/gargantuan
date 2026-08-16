@@ -9,8 +9,9 @@ include Gargantuan's private C++ headers or copy implementation from the removed
 legacy Studio prototype in Git history.
 
 EditorHost v0 is a headless document host reached through standard input and
-output. It does not construct `Engine`, initialize a renderer, run gameplay scripts, step
-simulation, or synchronize `FileLink` objects. Opening is therefore distinct
+output. Opening does not construct `Engine`, initialize a runtime renderer, run
+gameplay scripts, step simulation, or synchronize `FileLink` objects. Explicit
+`StartPlaySession` is the sole minimal local execution path. Opening is therefore distinct
 from executing a game. Project open may run only the bounded, capability-scoped
 `.gargantuan/prerun.luau` schema-registration phase before constructing the
 document. Protocol responses are lines prefixed with
@@ -74,6 +75,9 @@ UTF-8 bytes with no NUL.
 | `Undo` / `Redo` | Traverses only the current engine history cursor entry and publishes ordinary authoritative journal state. |
 | `GetScriptSource` | Reads exact bounded Source plus its conflict token for one live supported script ObjectId. |
 | `SetScriptSource` | Commits bounded UTF-8 Source through MutationGateway using the exact expected SourceVersion. |
+| `StartPlaySession` / `StopPlaySession` | Starts or destroys the one isolated local runtime from current authoritative in-memory state using an exact engine-issued session identity. |
+| `GetPlaySessionState` / `PollPlayDiagnostics` | Observes bounded lifecycle and runtime diagnostics without granting mutation authority. |
+| `SendPlayInput` | Sends a closed focus/key/pointer `HostEvent` subset to the exact active runtime. |
 | `ConfigureViewport` | Negotiates a bounded engine-owned RGB8 viewport. |
 | `SetViewportCamera` | Applies a finite absolute editor-camera pose and field of view. |
 | `OpenViewportTransport` | Explicitly selects shared-memory ring v1 and returns its fixed layout contract. |
@@ -138,6 +142,7 @@ The bounded shared-memory viewport transport is implemented in
 mutation, persistence, transactions, and Undo/Redo are implemented. Script
 authoring uses project-v4 persistence and a journaled SourceVersion invalidation
 without exposing Source through ordinary snapshots or gameplay replication.
-Minimal Play/Stop lifecycle remains the next creator-loop interface increment;
-project revision remains separate from transaction identity, source version,
-and journal sequence.
+Minimal isolated Play/Stop is implemented in [PlaySession.md](./PlaySession.md).
+The next creator-loop increment may build a first playable vertical slice on that
+boundary; project revision remains separate from play identity, transaction identity,
+source version, and journal sequence.

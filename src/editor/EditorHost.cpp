@@ -27,6 +27,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <limits>
+#include <magic_enum/magic_enum.hpp>
 #include <stdexcept>
 #include <vector>
 
@@ -162,6 +163,36 @@ namespace gargantuan {
 			return result;
 		}
 
+		bool IsAuthoringMethodWhilePlaying(std::string_view Method) {
+			return Method == "OpenProject" || Method == "CreateProject" || Method == "SaveProject" ||
+				Method == "SaveProjectAs" || Method == "BeginTransaction" || Method == "CommitTransaction" ||
+				Method == "Undo" || Method == "Redo" || Method == "SetScriptSource" ||
+				Method == "SetProperty" || Method == "SetAttribute" || Method == "SetExtensionProperty" ||
+				Method == "SetCustomProperty" || Method == "AddTag" || Method == "RemoveTag" ||
+				Method == "CreateInstance" || Method == "DestroyInstance" ||
+				Method == "DuplicateInstance" || Method == "ReparentInstance";
+		}
+
+		std::optional<PlaySessionId> DecodePlaySessionId(const Json &Value) {
+			if (!Value.is_string()) return std::nullopt;
+			const auto &Encoded = Value.get_ref<const std::string &>();
+			std::uint64_t Parsed = 0;
+			const auto [End, Error] = std::from_chars(Encoded.data(), Encoded.data() + Encoded.size(), Parsed);
+			if (Encoded.empty() || Encoded.front() == '0' || Error != std::errc{} ||
+				End != Encoded.data() + Encoded.size() || Parsed == 0) return std::nullopt;
+			return PlaySessionId{Parsed};
+		}
+
+		Json EncodePlayDiagnostics(std::vector<PlayDiagnostic> Diagnostics) {
+			Json Result = Json::array();
+			for (auto &Diagnostic : Diagnostics) Result.push_back({
+				{"Sequence", Diagnostic.Sequence}, {"TimestampMilliseconds", Diagnostic.TimestampMilliseconds},
+				{"Severity", std::move(Diagnostic.Severity)}, {"Category", std::move(Diagnostic.Category)},
+				{"Message", std::move(Diagnostic.Message)},
+			});
+			return Result;
+		}
+
 		Json EncodeProjectState(
 			const std::shared_ptr<DataModel> &world,
 			std::uint64_t persistedRevision,
@@ -275,6 +306,10 @@ namespace gargantuan {
 	}
 
 	EditorHost::~EditorHost() {
+		if (ActivePlaySession) {
+			ActivePlaySession->Stop();
+			ActivePlaySession.reset();
+		}
 		try {
 			if (World) (void)World->Transactions.TerminateOwner(*World, TransactionOwner);
 		} catch (...) {
@@ -316,6 +351,10 @@ namespace gargantuan {
 
 			const auto method = message["Method"].get<std::string>();
 			const auto &parameters = message["Params"];
+			if (ActivePlaySession && IsAuthoringMethodWhilePlaying(method))
+				return SerializeBoundedResponse(ErrorResponse(
+					requestId, "PlaySessionActive", "Stop Play before changing the authoritative project"
+				));
 			std::optional<TransactionId> RequestTransaction;
 			if (parameters.contains("TransactionId")) {
 				if (!parameters["TransactionId"].is_string())
@@ -349,6 +388,7 @@ namespace gargantuan {
 					"AuthoritativeTransactions",
 					"Undo", "Redo", "AuthoritativeHistoryStatus",
 					"ReadScriptSource", "WriteScriptSource",
+					"PlaySession", "DiagnosticStream", "SendPlayInput",
 					"ConfigureViewport", "SetViewportCamera", "CaptureViewport", "PickViewport"
 				};
 				Json viewportTransports = Json::array({{
@@ -376,6 +416,139 @@ namespace gargantuan {
 						{"StudioCapabilities", EncodeCapabilities(StudioSecurity.Capabilities)},
 					}
 				));
+			}
+
+			if (method == "StartPlaySession") {
+				if (!parameters.empty())
+					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "StartPlaySession takes no parameters"));
+				if (!StudioSecurity.HasCapability(ScriptCapability::EditorCommands) ||
+					!StudioSecurity.HasCapability(ScriptCapability::ReadDataModel))
+					return SerializeBoundedResponse(ErrorResponse(requestId, "Unauthorized", "Play requires EditorCommands and ReadDataModel"));
+				if (!World || !CurrentProject)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "ProjectRequired", "OpenProject must succeed first"));
+				if (World->Transactions.GetOpenCount() != 0)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "TransactionOpen", "Commit the open authoring transaction before Play"));
+				if (ActivePlaySession)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "PlaySessionActive", "One local Play session is already active"));
+				if (NextPlaySessionId == 0)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "PlaySessionExhausted", "Play session identity is exhausted"));
+				const auto Id = PlaySessionId{NextPlaySessionId++};
+				try {
+					auto Snapshot = CurrentProject->CaptureGame(World, World->GetAuthoritativeRevision());
+					ActivePlaySession = std::make_unique<PlaySession>(
+						Id, std::move(Snapshot.Contents), CurrentProject->InstanceFileFormat,
+						CurrentProject->Root, ViewportWidth == 0 ? 720 : ViewportWidth,
+						ViewportHeight == 0 ? 540 : ViewportHeight, Snapshot.Revision
+					);
+					LastPlaySessionId = Id;
+					LastPlaySessionState = ActivePlaySession->GetState();
+					LastViewportSnapshot.reset();
+					return SerializeBoundedResponse(SuccessResponse(requestId, {
+						{"PlaySessionId", std::to_string(Id.Value)},
+						{"State", GetPlaySessionStateName(LastPlaySessionState)},
+						{"LaunchAuthoritativeRevision", Snapshot.Revision},
+						{"Diagnostics", EncodePlayDiagnostics(ActivePlaySession->DrainDiagnostics())},
+					}));
+				} catch (const std::exception &Error) {
+					ActivePlaySession.reset();
+					LastPlaySessionId = Id;
+					LastPlaySessionState = PlaySessionState::Failed;
+					return SerializeBoundedResponse(ErrorResponse(requestId, "PlayStartFailed", Error.what()));
+				}
+			}
+
+			if (method == "StopPlaySession") {
+				if (!HasOnlyFields(parameters, {"PlaySessionId"}) || !parameters.contains("PlaySessionId"))
+					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "StopPlaySession requires PlaySessionId"));
+				auto Id = DecodePlaySessionId(parameters["PlaySessionId"]);
+				if (!Id)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "PlaySessionId is invalid"));
+				if (!ActivePlaySession || ActivePlaySession->GetId().Value != Id->Value)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "StalePlaySession", "PlaySessionId is not the active owned session"));
+				ActivePlaySession->Stop();
+				auto Diagnostics = ActivePlaySession->DrainDiagnostics();
+				LastPlaySessionId = *Id;
+				LastPlaySessionState = PlaySessionState::Stopped;
+				ActivePlaySession.reset();
+				LastViewportSnapshot.reset();
+				return SerializeBoundedResponse(SuccessResponse(requestId, {
+					{"PlaySessionId", std::to_string(Id->Value)}, {"State", "Stopped"},
+					{"Diagnostics", EncodePlayDiagnostics(std::move(Diagnostics))},
+				}));
+			}
+
+			if (method == "GetPlaySessionState") {
+				if (!parameters.empty())
+					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "GetPlaySessionState takes no parameters"));
+				auto State = ActivePlaySession ? ActivePlaySession->GetState() : LastPlaySessionState;
+				auto Id = ActivePlaySession ? ActivePlaySession->GetId() : LastPlaySessionId;
+				return SerializeBoundedResponse(SuccessResponse(requestId, {
+					{"PlaySessionId", Id.Value == 0 ? Json(nullptr) : Json(std::to_string(Id.Value))},
+					{"State", GetPlaySessionStateName(State)}, {"Active", ActivePlaySession != nullptr},
+				}));
+			}
+
+			if (method == "PollPlayDiagnostics") {
+				if (!HasOnlyFields(parameters, {"PlaySessionId"}) || !parameters.contains("PlaySessionId"))
+					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "PollPlayDiagnostics requires PlaySessionId"));
+				auto Id = DecodePlaySessionId(parameters["PlaySessionId"]);
+				if (!Id || !ActivePlaySession || ActivePlaySession->GetId().Value != Id->Value)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "StalePlaySession", "PlaySessionId is not active"));
+				return SerializeBoundedResponse(SuccessResponse(requestId, {
+					{"PlaySessionId", std::to_string(Id->Value)},
+					{"State", GetPlaySessionStateName(ActivePlaySession->GetState())},
+					{"Diagnostics", EncodePlayDiagnostics(ActivePlaySession->DrainDiagnostics())},
+				}));
+			}
+
+			if (method == "SendPlayInput") {
+				if (!StudioSecurity.HasCapability(ScriptCapability::ViewportControl))
+					return SerializeBoundedResponse(ErrorResponse(requestId, "Unauthorized", "Play input requires ViewportControl"));
+				if (!HasOnlyFields(parameters, {"PlaySessionId", "Type", "Focused", "Physical", "Logical", "State", "Repeat", "Modifiers", "X", "Y", "DeltaX", "DeltaY"}) ||
+					!parameters.contains("PlaySessionId") || !parameters.contains("Type") || !parameters["Type"].is_string())
+					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "SendPlayInput fields are malformed"));
+				auto Id = DecodePlaySessionId(parameters["PlaySessionId"]);
+				if (!Id || !ActivePlaySession || ActivePlaySession->GetId().Value != Id->Value)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "StalePlaySession", "PlaySessionId is not active"));
+				const auto Type = parameters["Type"].get<std::string>();
+				if (Type == "Focus") {
+					if (!parameters.contains("Focused") || !parameters["Focused"].is_boolean())
+						return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Focus input requires Focused"));
+					ActivePlaySession->ProcessEvent(FocusEvent{parameters["Focused"].get<bool>()});
+				} else if (Type == "Key") {
+					if (!parameters.contains("Physical") || !parameters["Physical"].is_number_unsigned() ||
+						!parameters.contains("Logical") || !parameters["Logical"].is_number_unsigned() ||
+						!parameters.contains("State") || !parameters["State"].is_string())
+						return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Key input fields are malformed"));
+					auto PhysicalValue = JsonCodec::DecodeUnsigned32(parameters["Physical"]);
+					auto LogicalValue = JsonCodec::DecodeUnsigned32(parameters["Logical"]);
+					auto ModifierValue = parameters.contains("Modifiers") ? JsonCodec::DecodeUnsigned32(parameters["Modifiers"]) : std::optional<std::uint32_t>{0};
+					const auto StateName = parameters["State"].get<std::string>();
+					if (!PhysicalValue || !LogicalValue || !ModifierValue || *ModifierValue > 63 ||
+						!magic_enum::enum_contains<PhysicalKey>(static_cast<std::uint16_t>(*PhysicalValue)) ||
+						!magic_enum::enum_contains<LogicalKey>(static_cast<std::uint16_t>(*LogicalValue)) ||
+						(StateName != "Pressed" && StateName != "Released"))
+						return SerializeBoundedResponse(ErrorResponse(requestId, "InvalidPlayInput", "Key input is outside the closed HostEvent vocabulary"));
+					ActivePlaySession->ProcessEvent(KeyEvent{
+						{1}, static_cast<PhysicalKey>(*PhysicalValue), static_cast<LogicalKey>(*LogicalValue),
+						static_cast<KeyModifier>(*ModifierValue),
+						StateName == "Pressed" ? ButtonState::Pressed : ButtonState::Released,
+						parameters.value("Repeat", false),
+					});
+				} else if (Type == "PointerMove") {
+					for (const auto Field : {"X", "Y", "DeltaX", "DeltaY"})
+						if (!parameters.contains(Field) || !parameters[Field].is_number() || !std::isfinite(parameters[Field].get<float>()))
+							return SerializeBoundedResponse(ErrorResponse(requestId, "InvalidPlayInput", "Pointer input must be finite"));
+					ActivePlaySession->ProcessEvent(PointerMoveEvent{
+						{1}, {parameters["X"].get<float>(), parameters["Y"].get<float>()},
+						{parameters["DeltaX"].get<float>(), parameters["DeltaY"].get<float>()},
+					});
+				} else {
+					return SerializeBoundedResponse(ErrorResponse(requestId, "InvalidPlayInput", "Input Type is unsupported"));
+				}
+				return SerializeBoundedResponse(SuccessResponse(requestId, {
+					{"PlaySessionId", std::to_string(Id->Value)}, {"Accepted", true},
+				}));
 			}
 
 			if (method == "OpenViewportTransport") {
@@ -958,6 +1131,7 @@ namespace gargantuan {
 						return SerializeBoundedResponse(ErrorResponse(requestId, "ViewportUnavailable", error.what()));
 					}
 				}
+				if (ActivePlaySession) ActivePlaySession->Resize(*width, *height);
 				return SerializeBoundedResponse(SuccessResponse(requestId, {
 					{"ViewportVersion", 1}, {"Width", *width}, {"Height", *height}, {"Format", "RGB8"}
 				}));
@@ -996,9 +1170,24 @@ namespace gargantuan {
 				try {
 					if (!ViewportRenderer)
 						ViewportRenderer = std::make_unique<EditorViewportRenderer>(ViewportWidth, ViewportHeight);
-					LastViewportSnapshot = ViewportExtractor.Extract(
-						*workspace, camera, ViewportWidth, ViewportHeight
-					);
+					Json PlayIdentity = nullptr;
+					const char *Mode = "Edit";
+					if (ActivePlaySession && ActivePlaySession->GetState() == PlaySessionState::Running) {
+						ActivePlaySession->Step();
+						if (ActivePlaySession->GetState() != PlaySessionState::Running)
+							return SerializeBoundedResponse(ErrorResponse(requestId, "PlaySessionExited", "Runtime exited while capturing the viewport"));
+						auto RuntimeWorld = ActivePlaySession->GetWorld();
+						auto RuntimeWorkspace = RuntimeWorld ? std::dynamic_pointer_cast<Workspace>(RuntimeWorld->GetService("Workspace")) : nullptr;
+						if (!RuntimeWorkspace || !RuntimeWorkspace->GetCurrentCamera())
+							return SerializeBoundedResponse(ErrorResponse(requestId, "PlaySessionFailed", "Runtime has no valid Workspace camera"));
+						LastViewportSnapshot = ViewportExtractor.Extract(
+							*RuntimeWorkspace, MakeRenderCameraInput(*RuntimeWorkspace->GetCurrentCamera()), ViewportWidth, ViewportHeight
+						);
+						PlayIdentity = std::to_string(ActivePlaySession->GetId().Value);
+						Mode = "Play";
+					} else {
+						LastViewportSnapshot = ViewportExtractor.Extract(*workspace, camera, ViewportWidth, ViewportHeight);
+					}
 					auto frame = ViewportRenderer->Capture(LastViewportSnapshot);
 					if (ViewportFrameRing) {
 						const auto timestamp = static_cast<std::uint64_t>(
@@ -1014,19 +1203,28 @@ namespace gargantuan {
 							{"ViewportVersion", 1}, {"FrameNumber", sequence},
 							{"Width", frame.Width}, {"Height", frame.Height}, {"Format", "RGB8"},
 							{"Transport", "SharedMemoryRing"}, {"TransportVersion", SharedFrameRingLayout::Version},
+							{"Mode", Mode}, {"PlaySessionId", PlayIdentity},
 						}));
 					}
 					return SerializeBoundedResponse(SuccessResponse(requestId, {
 						{"ViewportVersion", 1}, {"FrameNumber", ++ViewportFrameNumber},
 						{"Width", frame.Width}, {"Height", frame.Height}, {"Format", "RGB8"},
 						{"Transport", "Base64"}, {"Encoding", "Base64"}, {"Pixels", EncodeBase64(frame.RgbPixels)},
+						{"Mode", Mode}, {"PlaySessionId", PlayIdentity},
 					}));
 				} catch (const std::exception &error) {
+					if (ActivePlaySession) {
+						ActivePlaySession->Stop();
+						LastPlaySessionState = PlaySessionState::Failed;
+						return SerializeBoundedResponse(ErrorResponse(requestId, "PlaySessionExited", error.what()));
+					}
 					return SerializeBoundedResponse(ErrorResponse(requestId, "ViewportUnavailable", error.what()));
 				}
 			}
 
 			if (method == "PickViewport") {
+				if (ActivePlaySession)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "PlaySessionActive", "Runtime object selection is not available during Play"));
 				if (!HasOnlyFields(parameters, {"X", "Y"}) || !parameters.contains("X") ||
 					!parameters["X"].is_number() || !parameters.contains("Y") || !parameters["Y"].is_number())
 					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "PickViewport requires numeric X and Y"));

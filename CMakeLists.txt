@@ -539,7 +539,7 @@ if(WIN32)
 	)
 
 	add_custom_command(TARGET gargantuan POST_BUILD
-		COMMAND ${CMAKE_COMMAND} -E copy_directory_if_newer 
+		COMMAND ${CMAKE_COMMAND} -E copy_directory
 			"${CMAKE_CURRENT_BINARY_DIR}/shaders"
 			"$<TARGET_FILE_DIR:gargantuan>/shaders"
 		COMMENT "Copying shaders next to gargantuan.exe"

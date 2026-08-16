@@ -110,4 +110,5 @@ SDL remains the default platform and rendering implementation. GLM remains an
 accepted foundational C++ value representation, Luau remains product
 semantics, and the STL is not abstracted. Renderer replacement, a generic RHI,
 materials, textures/assets, advanced lighting, retained UI paint, render
-threading, and Play-mode Studio integration remain deferred.
+threading, and advanced Play rendering remain deferred. Minimal Play reuses the
+current offscreen EditorHost renderer through the existing extraction boundary.

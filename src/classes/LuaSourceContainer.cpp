@@ -74,7 +74,7 @@ namespace gargantuan {
 		luaL_sandboxthread(L);
 
 		if (luau_load(L, ChunkName.c_str(), Bytecode.data(), BytecodeSize, 0) != LUA_OK) {
-			return std::format("Failed to load %s: %s", ChunkName.c_str(), lua_tostring(L, -1));
+			return std::format("Failed to load {}: {}", ChunkName, lua_tostring(L, -1));
 		};
 
 		return std::nullopt;

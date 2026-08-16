@@ -13,14 +13,16 @@ bounded protocol methods:
 | `SetViewportCamera` | Sets a finite absolute position, target, and optional 1-120 degree vertical field of view. |
 | `OpenViewportTransport` | Explicitly opens the advertised version-1 RGB8 shared-memory ring. |
 | `CloseViewportTransport` | Releases the host's mapping handle. |
-| `CaptureViewport` | Renders the current Workspace and publishes to the open ring, or returns bounded Base64 fallback data. |
+| `CaptureViewport` | Renders the authoring Workspace in Edit or the exact active runtime Workspace in Play and publishes to the open ring, or returns bounded Base64 fallback data. |
 | `PickViewport` | Casts a camera ray through a pixel and returns the nearest live BasePart `ObjectId`. |
 
 The renderer reuses the normal shadow and opaque passes against engine-owned
 color/depth textures, downloads only after a GPU fence, and contains GPU/setup
 failures as structured `ViewportUnavailable` errors. Capture remains on the
-serialized EditorHost domain. It does not execute scripts, step physics, or
-permit Studio to mutate the source outside existing validated commands.
+serialized EditorHost domain. In Edit it never executes scripts. In Play it steps
+only the isolated session Engine before extracting the runtime Workspace. Responses
+carry `Mode` and an exact `PlaySessionId`; Studio rejects stale runtime frames.
+Capture never permits Studio to mutate project source outside existing validated commands.
 All six viewport methods require the explicit `ViewportControl` capability at
 EditorHost dispatch. The private Studio service may expose camera, size, copied
 frame metadata, and picked ObjectIds, but never the shared mapping name, native

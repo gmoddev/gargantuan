@@ -1,7 +1,7 @@
 ---
 status: current
 owner: engine
-last_verified: 2026-08-15
+last_verified: 2026-08-16
 related_code:
   - include/gargantuan/
   - src/
@@ -27,6 +27,9 @@ Tests should enforce them where practical.
    mutation authority by retaining an Instance pointer.
 5. Ownership of native resources is explicit. GPU, physics, filesystem, process,
    transport, and platform handles do not cross public boundaries implicitly.
+6. A local Play runtime is a separately owned DataModel/VM graph captured from a
+   committed authoritative state. Runtime mutation never aliases or commits into
+   authoring state, revision, dirty state, or history.
 
 ## Object identity and lifecycle
 

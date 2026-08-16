@@ -7,6 +7,7 @@
 
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/editor/EditorViewport.hpp"
+#include "gargantuan/editor/PlaySession.hpp"
 #include "gargantuan/editor/SharedFrameRing.hpp"
 #include "gargantuan/filesystem/DiskFilesystem.hpp"
 #include "gargantuan/filesystem/Project.hpp"
@@ -62,5 +63,9 @@ namespace gargantuan {
 		std::uint32_t ViewportWidth = 0;
 		std::uint32_t ViewportHeight = 0;
 		std::uint64_t ViewportFrameNumber = 0;
+		std::unique_ptr<PlaySession> ActivePlaySession;
+		PlaySessionId LastPlaySessionId;
+		PlaySessionState LastPlaySessionState = PlaySessionState::Stopped;
+		std::uint64_t NextPlaySessionId = 1;
 	};
 }

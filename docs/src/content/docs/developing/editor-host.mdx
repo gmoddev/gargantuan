@@ -51,7 +51,9 @@ The initial protocol supports:
 - engine-owned bounded transactions plus Undo/Redo;
 - bounded offscreen RGB viewport capture;
 - absolute editor-camera commands; and
-- viewport picking that returns a stable `ObjectId`.
+- viewport picking that returns a stable `ObjectId`;
+- one explicit isolated local Play/Stop lifecycle from current in-memory state; and
+- bounded runtime diagnostics and focused input forwarding.
 
 The handshake advertises supported viewport transports. On Windows, Studio can
 explicitly negotiate shared-memory ring version 1 for RGB8 frames. The ring has
@@ -95,7 +97,9 @@ will own process lifecycle, IPC, windows, viewport presentation, filesystem
 dialogs, and Luau runtime bootstrap. Explorer, Properties, selection, commands,
 settings, and most workflows should consume explicit `DocumentService`,
 `SelectionService`, `ViewportService`, and `CommandService` APIs from Luau.
-Play sessions and reference-valued editing remain future interface work.
+Reference-valued editing remains future interface work. Minimal Play sessions are
+implemented with a separate runtime DataModel and VM; multiplayer, debugging,
+live-edit synchronization, and applying runtime changes back remain deferred.
 Structural editing, grouped transactions, Undo/Redo, and dedicated Script/
 ModuleScript Source authoring are implemented. Save and Save As persist an
 engine-captured project snapshot; Studio never serializes its document cache.

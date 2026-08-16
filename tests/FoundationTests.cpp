@@ -4024,6 +4024,9 @@ namespace {
 				std::ranges::contains(handshake["Result"]["Capabilities"], "AuthoritativeHistoryStatus") &&
 				std::ranges::contains(handshake["Result"]["Capabilities"], "ReadScriptSource") &&
 				std::ranges::contains(handshake["Result"]["Capabilities"], "WriteScriptSource") &&
+				std::ranges::contains(handshake["Result"]["Capabilities"], "PlaySession") &&
+				std::ranges::contains(handshake["Result"]["Capabilities"], "DiagnosticStream") &&
+				std::ranges::contains(handshake["Result"]["Capabilities"], "SendPlayInput") &&
 				!std::ranges::contains(handshake["Result"]["Capabilities"], "AbortTransaction"),
 			"EditorHost advertises persistence, structural authoring, and honest commit-only transaction capabilities"
 		);
@@ -4064,6 +4067,13 @@ namespace {
 			auto RestrictedSource = Json::parse(restrictedHost.HandleRequest(RestrictedRequest.dump()));
 			Check(!RestrictedSource["Ok"].get<bool>() && RestrictedSource["Error"]["Code"] == "Unauthorized",
 				"EditorHost script source access requires trusted editor authority");
+		}
+		{
+			Json RestrictedRequest{{"Version", EditorHostProtocolVersion}, {"RequestId", "StartPlaySession"},
+				{"SessionToken", "restricted-token"}, {"Method", "StartPlaySession"}, {"Params", Json::object()}};
+			auto RestrictedPlay = Json::parse(restrictedHost.HandleRequest(RestrictedRequest.dump()));
+			Check(!RestrictedPlay["Ok"].get<bool>() && RestrictedPlay["Error"]["Code"] == "Unauthorized",
+				"EditorHost Play requires trusted editor authority");
 		}
 		{
 			Json RestrictedRequest{{"Version", EditorHostProtocolVersion}, {"RequestId", "CreateProject"},
@@ -4296,6 +4306,47 @@ namespace {
 					AfterStale["Result"]["Source"] == SourceA &&
 					call("PollChanges", Json::object(), "test-token")["Result"]["Records"].empty(),
 					"stale source token rejects without mutation, revision, or journal publication");
+				auto StateBeforePlay = call("GetProjectState", Json::object(), "test-token")["Result"];
+				auto StartPlay = call("StartPlaySession", Json::object(), "test-token");
+				Check(StartPlay["Ok"].get<bool>() && StartPlay["Result"]["State"] == "Running" &&
+					StartPlay["Result"]["LaunchAuthoritativeRevision"] == StateBeforePlay["AuthoritativeRevision"],
+					"Play starts an isolated runtime from the current authoritative in-memory revision");
+				const auto PlayId = StartPlay["Result"]["PlaySessionId"];
+				Check(call("SendPlayInput", {
+					{"PlaySessionId", PlayId}, {"Type", "Focus"}, {"Focused", true}
+				}, "test-token")["Ok"].get<bool>(), "focused viewport input reaches the exact active Play session");
+				Check(!call("StartPlaySession", Json::object(), "test-token")["Ok"].get<bool>(),
+					"a second Play request cannot start another local session");
+				auto RejectedPlayMutation = call("SetScriptSource", {
+					{"Object", ScriptId}, {"ExpectedSourceVersion", SourceAVersion}, {"Source", "return 1"}
+				}, "test-token");
+				Check(!RejectedPlayMutation["Ok"].get<bool>() && RejectedPlayMutation["Error"]["Code"] == "PlaySessionActive",
+					"authoritative source mutation is disabled during Play");
+				auto PlayDiagnostics = call("PollPlayDiagnostics", {{"PlaySessionId", PlayId}}, "test-token");
+				const auto HasLuauError = [](const Json &Diagnostics) {
+					return std::ranges::any_of(Diagnostics, [](const Json &Diagnostic) {
+						return Diagnostic["Category"] == "Luau" && Diagnostic["Severity"] == "Error";
+					});
+				};
+				Check(PlayDiagnostics["Ok"].get<bool>() &&
+					(HasLuauError(StartPlay["Result"]["Diagnostics"]) ||
+						HasLuauError(PlayDiagnostics["Result"]["Diagnostics"])),
+					"invalid runtime Script source is contained and reported through bounded diagnostics");
+				auto StaleStop = call("StopPlaySession", {{"PlaySessionId", "999999"}}, "test-token");
+				Check(!StaleStop["Ok"].get<bool>() && StaleStop["Error"]["Code"] == "StalePlaySession",
+					"stale PlaySessionId cannot stop the owned runtime");
+				auto StopPlay = call("StopPlaySession", {{"PlaySessionId", PlayId}}, "test-token");
+				Check(StopPlay["Ok"].get<bool>() && StopPlay["Result"]["State"] == "Stopped" &&
+					call("GetProjectState", Json::object(), "test-token")["Result"] == StateBeforePlay,
+					"Stop destroys runtime state without changing authoring revision, dirty state, or history");
+				for (int Cycle = 0; Cycle < 10; ++Cycle) {
+					auto RepeatedStart = call("StartPlaySession", Json::object(), "test-token");
+					Check(RepeatedStart["Ok"].get<bool>(), "repeated Play starts successfully");
+					Check(call("StopPlaySession", {{"PlaySessionId", RepeatedStart["Result"]["PlaySessionId"]}}, "test-token")["Ok"].get<bool>(),
+						"repeated Stop destroys the exact session");
+				}
+				Check(call("GetProjectState", Json::object(), "test-token")["Result"] == StateBeforePlay,
+					"ten Play/Stop cycles preserve authoring state and history");
 				auto NonScriptSource = call("GetScriptSource", {{"Object", (*ScriptWorkspace)["Id"]}}, "test-token");
 				Check(!NonScriptSource["Ok"].get<bool>() && NonScriptSource["Error"]["Code"] == "NotScript",
 					"source reads reject non-script objects");
@@ -4630,9 +4681,11 @@ namespace {
 				);
 				const auto Transaction = BeganTransaction["Result"]["TransactionId"];
 				auto SaveWhileOpen = call("SaveProject", Json::object(), "test-token");
+				auto PlayWhileOpen = call("StartPlaySession", Json::object(), "test-token");
 				Check(
-					!SaveWhileOpen["Ok"].get<bool>() && SaveWhileOpen["Error"]["Code"] == "TransactionOpen",
-					"Save cannot persist an intermediate commit-only transaction state"
+					!SaveWhileOpen["Ok"].get<bool>() && SaveWhileOpen["Error"]["Code"] == "TransactionOpen" &&
+					!PlayWhileOpen["Ok"].get<bool>() && PlayWhileOpen["Error"]["Code"] == "TransactionOpen",
+					"Save and Play cannot observe an intermediate commit-only transaction state"
 				);
 				Check(
 					call(

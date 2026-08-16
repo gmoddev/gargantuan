@@ -9,6 +9,7 @@
 #include <luacode.h>
 #include <lualib.h>
 #include <memory>
+#include <functional>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -46,7 +47,7 @@ namespace gargantuan {
 
 	class ScriptEngine {
 	  public:
-		ScriptEngine(std::shared_ptr<DataModel> game);
+		ScriptEngine(std::shared_ptr<DataModel> game, std::function<void(std::string, std::string)> RuntimeDiagnostic = {});
 		~ScriptEngine();
 
 		lua_State *L = nullptr;
@@ -57,6 +58,7 @@ namespace gargantuan {
 		std::shared_ptr<gargantuan::DataModel> DataModel;
 		std::shared_ptr<Instance> RequireCurrentInstance = nullptr;
 		std::unordered_map<std::string, std::shared_ptr<Instance>> RequirePathCache;
+		std::function<void(std::string, std::string)> RuntimeDiagnostic;
 		std::shared_ptr<Instance> FindRequiredInstanceByPath(const char *path);
 
 		void Step();

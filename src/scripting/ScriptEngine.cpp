@@ -74,8 +74,11 @@ namespace gargantuan {
 
 	static thread_local lua_State *CurrentState = nullptr;
 
-	ScriptEngine::ScriptEngine(std::shared_ptr<gargantuan::DataModel> game)
-		: L(luaL_newstate()), Threads(L), DataModel(game) {
+	ScriptEngine::ScriptEngine(
+		std::shared_ptr<gargantuan::DataModel> game,
+		std::function<void(std::string, std::string)> RuntimeDiagnosticValue
+	)
+		: L(luaL_newstate()), Threads(L), DataModel(game), RuntimeDiagnostic(std::move(RuntimeDiagnosticValue)) {
 		if (L == nullptr) {
 			throw std::runtime_error("Failed to instantiate Luau VM");
 		}
@@ -209,10 +212,14 @@ namespace gargantuan {
 
 			switch (status) {
 			case ScriptStatus::Error:
-				LOG_CRITICAL(App, "%s", script->ErrorMessage.c_str());
+				LOG_CRITICAL(Lua, "[Runtime:Luau] [%s] %s", script->GetFullName().c_str(), script->ErrorMessage.c_str());
+				if (RuntimeDiagnostic)
+					RuntimeDiagnostic("Error", "[" + script->GetFullName() + "] " + script->ErrorMessage);
 				[[fallthrough]];
 
 			case ScriptStatus::Finished:
+				if (status == ScriptStatus::Finished && RuntimeDiagnostic)
+					RuntimeDiagnostic("Information", "[" + script->GetFullName() + "] completed");
 			case ScriptStatus::Disabled:
 			case ScriptStatus::Yielded:
 			case ScriptStatus::Running:

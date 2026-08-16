@@ -34,6 +34,13 @@ generic `SetProperty` rejects it. Server/Client code and ordinary project
 scripts do not receive the EditorHost session token or source operations, so
 Studio authoring does not create a gameplay source-disclosure path.
 
+Minimal Play startup also requires EditorCommands plus ReadDataModel. The host
+serializes the current authoritative state into a distinct runtime DataModel and
+constructs the normal server Script VM against that graph. Runtime code receives no
+EditorHost token, project transaction/history object, Studio-domain grant, filesystem,
+process, or network capability. `SendPlayInput` is a native closed HostEvent adapter
+guarded by ViewportControl; it is not a general IPC or capability delegation surface.
+
 The current context is thread-local and defaults to trusted Core for backwards
 compatibility with engine-owned call paths. New untrusted script entry points
 must establish a `ScriptSecurityScope` before dispatch. Treating the default as

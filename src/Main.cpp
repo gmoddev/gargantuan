@@ -212,5 +212,7 @@ int main(int argc, char *argv[]) {
 
 	auto exitCode = engine->ProcessService->ExitCode;
 	engine->Destroy();
-	std::exit(exitCode);
+	delete engine;
+	delete renderer;
+	return exitCode;
 }

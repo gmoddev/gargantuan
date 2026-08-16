@@ -13,6 +13,7 @@
 #include "gargantuan/platform/HostEvent.hpp"
 
 #include <chrono>
+#include <functional>
 #include <glm/gtc/matrix_transform.hpp>
 #include <lua.h>
 #include <memory>
@@ -24,7 +25,7 @@ namespace gargantuan {
 	  public:
 		std::shared_ptr<DataModel> DataModel;
 		BaseRenderer *Renderer;
-		ScriptEngine *Script;
+		std::unique_ptr<ScriptEngine> Script;
 		MutationGateway Mutations;
 		RenderExtractor RenderExtraction;
 
@@ -36,8 +37,12 @@ namespace gargantuan {
 
 		bool IsRunning = true;
 
-		Engine(std::shared_ptr<gargantuan::DataModel> game, BaseRenderer *renderer);
-		~Engine() = delete;
+		Engine(
+			std::shared_ptr<gargantuan::DataModel> game,
+			BaseRenderer *renderer,
+			std::function<void(std::string, std::string)> RuntimeDiagnostic = {}
+		);
+		~Engine();
 
 		void Step();
 		float GetDeltaTime();
@@ -47,6 +52,7 @@ namespace gargantuan {
 	  private:
 		std::chrono::steady_clock::time_point CurrentTick{};
 		std::chrono::steady_clock::time_point LastTick{};
+		bool Destroyed = false;
 
 		template <typename T>
 			requires std::is_base_of_v<Instance, T>
