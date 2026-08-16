@@ -366,6 +366,121 @@ native host and are not smuggled through normal source-linking abstractions.
 Opening a downloaded or untrusted project never grants host-level filesystem or
 process authority automatically.
 
+## Optional crash diagnostics and telemetry
+
+**Status: planned and unimplemented.** Gargantuan may eventually use a separate
+public repository or module, provisionally `gmoddev/gargantuan-telemetry`, for
+basic crash reporting and diagnostics. The name, license, distribution model,
+and integration mechanism are not commitments. This work is future
+infrastructure, not a blocker for networking validation, the platform/input
+boundary, a playable vertical slice, asset architecture, or Studio development.
+Its priority should increase as builds reach more external testers and users,
+when failures are less likely to be reproducible on a developer's machine.
+
+The principal architectural requirement is:
+
+> Telemetry is an optional observer and must never become part of Gargantuan's
+> correctness, authority, persistence, networking, or startup requirements.
+
+The engine must continue to operate when telemetry is not compiled, disabled,
+unavailable, misconfigured, broken, unable to reach an endpoint, or physically
+absent where the selected integration permits removal. Telemetry failure must
+fail open with respect to normal engine operation, and absence of the optional
+implementation must not prevent engine startup.
+
+The intended boundary follows existing backend and codec separation:
+
+```text
+Physics semantics       -> IPhysicsBackend           -> Box3D
+Transport semantics     -> IGameTransport            -> GNS
+Serialization semantics -> Gargantuan codec boundary -> nlohmann / Glaze
+
+Gargantuan diagnostic semantics
+    -> small Gargantuan-owned optional reporting boundary
+    -> default telemetry implementation / replacement / none
+```
+
+The engine-owned boundary should remain as small as actual requirements permit;
+this document does not prescribe a large virtual backend interface. The default
+implementation should be independently replaceable, omittable, and removable
+without forking core engine semantics. Possible mechanisms include optional
+runtime dynamic loading, a small stable C-compatible bridge, or compile-time
+no-op hooks. If a DLL or shared module is used, it must not create a mandatory
+loader dependency. The final mechanism and ABI remain undecided.
+
+### Build support and reporting policy
+
+Whether telemetry support is compiled into a build is separate from whether
+reporting is enabled by runtime or user policy. A future build option might be
+named `GARGANTUAN_WITH_TELEMETRY`, but that name is illustrative and is not an
+API commitment. A build containing support must still permit reporting to be
+disabled according to the eventual consent, privacy, and product policy.
+
+### Crash-reporting-first scope
+
+The first implementation, if built, should focus on bounded crash diagnostics,
+not broad behavioral or product analytics. Candidate metadata includes the
+Gargantuan version and build revision/configuration, platform and CPU
+architecture, crash or exception category, available stack or symbol data,
+loaded Gargantuan component versions, a bounded recent diagnostic or breadcrumb
+tail, and an anonymous report identifier. This is not a final crash schema.
+
+Serious native crashes can leave the process unsafe. Future crash handling
+should therefore prefer minimal bounded capture followed by termination, with
+complex reporting deferred to a separate reporter or a later launch:
+
+```text
+engine crash
+    -> minimal bounded crash capture
+    -> local crash artifact
+    -> process terminates
+
+later: separate reporter / next launch
+    -> optional upload
+```
+
+An engine-owned, versioned crash artifact could contain build and exception
+metadata, thread/stack and module information, a bounded breadcrumb or log tail,
+and an optional reference to a platform dump. Its exact format, extension, and
+version remain undecided. The artifact must remain useful when automatic upload
+is disabled so a developer or user can attach it manually to a bug report.
+
+Bounded semantic breadcrumbs are a possible diagnostic input. Events such as
+`EngineStarted`, `ProjectLoaded`, `SchemaFrozen`, `RendererInitialized`,
+`PhysicsInitialized`, `NetworkListening`, `PeerConnected`,
+`ReplicationBaselineStarted`, and `ReplicationBaselineCompleted` illustrate
+the intended level. A future breadcrumb facility must use an explicitly bounded
+ring buffer, engine-defined semantics, privacy-conscious metadata, no arbitrary
+payload logging by default, and no per-frame spam. Breadcrumbs are diagnostic
+observations and never gameplay authority. No breadcrumb API is defined here.
+
+### Privacy and failure isolation
+
+Crash reporting must apply explicit data minimization. It must not silently
+collect project or Luau source, arbitrary project files, project names,
+usernames, arbitrary filesystem paths, environment variables, RemoteEvent or
+network payloads, player data, or authentication/session secrets. Any expansion
+beyond basic diagnostic metadata requires explicit review. Telemetry must not
+silently evolve into general behavioral analytics.
+
+Future telemetry work must be best effort, bounded, non-authoritative,
+non-blocking, and fail-open. It must never:
+
+- determine whether engine startup succeeds;
+- provide runtime, networking, persistence, or authentication identity;
+- provide authentication or authority;
+- mutate the DataModel or hold engine correctness state;
+- block gameplay waiting for an upload;
+- create unbounded queues;
+- propagate telemetry exceptions into engine code;
+- require Internet connectivity; or
+- make crash-report delivery a shutdown requirement.
+
+The reporting endpoint, hosting infrastructure, exact collected fields,
+consent and default-enable policy, crash artifact format, repository/module
+name, compile option, ABI, license, and distribution details all require future
+design and review.
+
 ## Implementation scope
 
 This direction builds on existing foundations rather than requiring a clean
