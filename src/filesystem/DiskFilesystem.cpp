@@ -64,6 +64,7 @@ namespace gargantuan {
 		case FileOpen::AppendRead:
 			return "a+";
 		}
+		throw std::invalid_argument("Unknown FileOpen mode");
 	}
 
 	FileType MapDirectoryEntryType(const std::filesystem::directory_entry &entry) {

@@ -1,7 +1,10 @@
-#include "render/sdl/SDLShader.hpp"
 #include "gargantuan/filesystem/Paths.hpp"
+#include "render/sdl/SDLShader.hpp"
 
 #include <SDL3/SDL.h>
+
+#include <format>
+#include <stdexcept>
 
 namespace gargantuan {
 	std::filesystem::path GetSDLShaderPath(const std::filesystem::path &relativePath) {
@@ -38,13 +41,16 @@ namespace gargantuan {
 		}
 	}
 
-	SDL_GPUShader *
-	SDLFileShader::CompileFile(SDL_GPUDevice *gpu, const std::filesystem::path &filepath, SDL_GPUShaderCreateInfo info) {
+	SDL_GPUShader *SDLFileShader::CompileFile(
+		SDL_GPUDevice *gpu, const std::filesystem::path &filepath, SDL_GPUShaderCreateInfo info
+	) {
 		size_t codeSize;
-		void *code = SDL_LoadFile(filepath.string().c_str(), &codeSize);
+		const auto DisplayPath = Paths::ToUtf8(filepath);
+		void *code = SDL_LoadFile(DisplayPath.c_str(), &codeSize);
 		if (code == nullptr) {
-			SDL_Log("Failed to open shader file %s", filepath.string().c_str());
-			return nullptr;
+			throw std::runtime_error(
+				std::format("Failed to open required shader file '{}': {}", DisplayPath, SDL_GetError())
+			);
 		}
 
 		info.code_size = codeSize;
@@ -54,8 +60,7 @@ namespace gargantuan {
 		SDL_free(code);
 
 		if (shader == nullptr) {
-			SDL_Log("Failed to create shader file %s: %s", filepath.c_str(), SDL_GetError());
-			return nullptr;
+			throw std::runtime_error(std::format("Failed to create shader from '{}': {}", DisplayPath, SDL_GetError()));
 		};
 
 		return shader;

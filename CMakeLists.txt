@@ -12,7 +12,8 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # Shaders
 ################################################################################
 
-find_program(GLSL_COMPILER glslc REQUIRED)
+include(cmake/ShaderTools.cmake)
+GargantuanFindGlslc(GARGANTUAN_GLSLC_EXECUTABLE)
 if(APPLE)
 	find_program(SPIRV_CROSS spirv-cross)
 	find_program(XCRUN xcrun)
@@ -39,7 +40,7 @@ foreach(SHADER IN LISTS SHADER_SOURCES)
 	set(SPIRV_OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/shaders/${SHADER_NAME}.spv")
 	add_custom_command(
 		OUTPUT ${SPIRV_OUTPUT}
-		COMMAND ${GLSL_COMPILER} ${SHADER} -o ${SPIRV_OUTPUT}
+		COMMAND ${GARGANTUAN_GLSLC_EXECUTABLE} ${SHADER} -o ${SPIRV_OUTPUT}
 		DEPENDS ${SHADER}
 		COMMENT "Compiling SPIR-V ${SHADER_NAME}"
 	)
@@ -83,6 +84,10 @@ set(SDL_RENDER ON CACHE BOOL "" FORCE)
 set(SDL_SHARED ON CACHE BOOL "" FORCE)
 set(SDL_TEST OFF CACHE BOOL "" FORCE)
 set(SDLIMAGE_AVIF OFF CACHE BOOL "" FORCE) #was giving me compile issues (don't wnna install nasm for no reason)
+# SDL_image's vendored zlib CMake renames its tracked source zconf.h during an
+# out-of-source configure. The stb backend already provides the PNG support the
+# engine uses, so keep that support without configuring the mutating libpng path.
+set(SDLIMAGE_PNG_LIBPNG OFF CACHE BOOL "" FORCE)
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 
 add_subdirectory(vendor/argparse SYSTEM)
@@ -288,6 +293,12 @@ endif()
 
 include(CTest)
 if(BUILD_TESTING)
+	add_test(NAME gargantuan_shader_tool_validation
+		COMMAND ${CMAKE_COMMAND}
+			-DGARGANTUAN_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+			-DGARGANTUAN_GLSLC_EXECUTABLE=${GARGANTUAN_GLSLC_EXECUTABLE}
+			-P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/ShaderToolValidationTests.cmake
+	)
 	if(GARGANTUAN_BUILD_GLAZE_SERIALIZATION_PROTOTYPE)
 		if(MSVC AND MSVC_VERSION LESS 1950)
 			message(FATAL_ERROR "The pinned Glaze prototype requires MSVC 19.50 or newer")
