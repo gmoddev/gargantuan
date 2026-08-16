@@ -26,6 +26,9 @@
 #include "gargantuan/runtime/TagIndex.hpp"
 #include "gargantuan/runtime/WireCodec.hpp"
 #include "gargantuan/runtime/WireJournal.hpp"
+#ifdef GARGANTUAN_WITH_GLAZE_SERIALIZATION_PROTOTYPE
+#include "serialization/GlazePrototype.hpp"
+#endif
 #include "gargantuan/reflection/PreRunRegistration.hpp"
 #include "gargantuan/reflection/RuntimeSchema.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
@@ -3296,6 +3299,15 @@ namespace {
 				Decoded.Succeeded() && SerializeSnapshot(*Decoded.Value) == Fixture,
 				"snapshot fixtures decode to semantic state and re-encode canonically"
 			);
+			#ifdef GARGANTUAN_WITH_GLAZE_SERIALIZATION_PROTOTYPE
+			auto GlazeDecoded = GlazePrototype::DecodeSnapshot(Fixture);
+			auto GlazeEncoded = GlazeDecoded ? GlazePrototype::EncodeSnapshot(*GlazeDecoded) :
+				SerializationResult<std::string>(std::unexpected(GlazeDecoded.error()));
+			Check(
+				GlazeDecoded.has_value() && GlazeEncoded.has_value() && *GlazeEncoded == Fixture,
+				"Glaze Snapshot prototype preserves golden canonical bytes"
+			);
+			#endif
 		}
 
 		const auto JournalFixture = ReadSerializationFixture("journal_v6_representative.json");
@@ -3304,6 +3316,15 @@ namespace {
 			JournalDecoded.Succeeded() && SerializeWireJournalRecords(*JournalDecoded.Value) == JournalFixture,
 			"journal fixture preserves custom, extension, enum, and Tag wire semantics"
 		);
+		#ifdef GARGANTUAN_WITH_GLAZE_SERIALIZATION_PROTOTYPE
+		auto GlazeJournalDecoded = GlazePrototype::DecodeJournal(JournalFixture);
+		auto GlazeJournalEncoded = GlazeJournalDecoded ? GlazePrototype::EncodeJournal(*GlazeJournalDecoded) :
+			SerializationResult<std::string>(std::unexpected(GlazeJournalDecoded.error()));
+		Check(
+			GlazeJournalDecoded.has_value() && GlazeJournalEncoded.has_value() && *GlazeJournalEncoded == JournalFixture,
+			"Glaze Journal prototype preserves golden canonical bytes"
+		);
+		#endif
 
 		EditorHost Host("fixture-token");
 		Check(

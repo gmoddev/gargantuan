@@ -14,6 +14,7 @@
 #include "gargantuan/runtime/ProtocolInput.hpp"
 #include "gargantuan/runtime/WireCodec.hpp"
 #include "serialization/JsonCodec.hpp"
+#include "runtime/SnapshotValidation.hpp"
 
 #include <algorithm>
 #include <any>
@@ -217,6 +218,10 @@ namespace gargantuan {
 				for (const auto Id : Path) VisitState[Id] = 2;
 			}
 		}
+	}
+
+	void ValidateSnapshotSemantic(const Snapshot &SnapshotValue) {
+		ValidateSnapshotForLoad(SnapshotValue);
 	}
 
 	std::shared_ptr<Instance> SnapshotLoadResult::Resolve(WireObjectId id) const {

@@ -327,14 +327,20 @@ specified per format rather than inherited accidentally from `ordered_json`.
 The verified current boundary and detailed format policies are documented in
 `devdocs/CurrentArchitecture/SerializationCodecBoundary.md`.
 
-After that boundary and its compatibility tests exist, Glaze may be prototyped
-in one typed codec and compared using Gargantuan workloads. The decision must
-include runtime performance, allocation behavior, clean and incremental build
-time, compiler memory, binary size, format fidelity, and C#/Go interoperability.
-Keeping nlohmann behind the boundary remains a successful outcome if Glaze does
-not provide a measured net benefit. The optimized multiplayer codec remains a
-separate versioned binary design, as specified by the game networking
-architecture; EditorHost and human-readable project data may continue using JSON.
+Serialization Foundation 2 evaluated the pinned Glaze revision in private typed
+Snapshot v6 and WireJournal v6 prototypes. Existing golden JSON and all current
+`WireValue` alternatives retain canonical-compatible output, while Release
+benchmarks show material encode and decode gains. The resulting decision is
+**hybrid JSON backends**: Glaze is a justified future backend for strongly typed,
+high-volume codecs; nlohmann remains private and appropriate for dynamic,
+debugging, Project, and EditorHost paths until a specific path has its own
+evidence. No production backend selection changed in the evaluation milestone.
+The pinned Glaze revision also requires the newer verified MSVC 19.50 toolchain,
+which must be resolved as a supported compiler baseline before production
+adoption. Detailed evidence is recorded in
+`devdocs/CurrentArchitecture/SerializationBackendEvaluation.md`. The optimized
+multiplayer codec remains a separate versioned binary design, as specified by
+the game networking architecture.
 
 Saved projects eventually require explicit migrations when a custom class or
 enum definition version changes. A migration is selected by stable `SchemaId`
