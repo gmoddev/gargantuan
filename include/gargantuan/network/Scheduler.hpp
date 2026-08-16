@@ -12,6 +12,8 @@
 
 namespace gargantuan::network {
 	class IGameTransport;
+	inline constexpr std::size_t NativeMaximumSchedulerQueuedReliableBytes = 256 * 1024 * 1024;
+	inline constexpr std::uint32_t MaximumConsecutiveStructuralReplicationMessages = 8;
 	enum class SchedulerSubmitStatus : std::uint8_t {
 		Accepted,
 		AcceptedWithSupersession,
@@ -91,7 +93,10 @@ namespace gargantuan::network {
 
 	class NetworkScheduler final : public INetworkScheduler {
 	  public:
-		explicit NetworkScheduler(IGameTransport &Transport);
+		explicit NetworkScheduler(
+			IGameTransport &Transport,
+			std::size_t MaximumTotalQueuedReliableBytes = NativeMaximumSchedulerQueuedReliableBytes
+		);
 		~NetworkScheduler() override;
 
 		bool RegisterConnection(ConnectionId Connection, const NetworkLimits &Limits) override;

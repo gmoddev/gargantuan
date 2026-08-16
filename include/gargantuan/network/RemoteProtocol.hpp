@@ -13,7 +13,7 @@
 #include <vector>
 
 namespace gargantuan::network {
-	inline constexpr std::uint16_t RemoteProtocolVersion = 1;
+	inline constexpr std::uint16_t RemoteProtocolVersion = 2;
 	inline constexpr std::size_t MaximumRemoteFrameBytes = 256 * 1024;
 	inline constexpr std::size_t MaximumRemoteStringBytes = 16 * 1024;
 	inline constexpr std::uint16_t MaximumRemoteArguments = 32;
@@ -43,6 +43,7 @@ namespace gargantuan::network {
 		std::uint16_t Version = RemoteProtocolVersion;
 		RemoteMessageKind Kind = RemoteMessageKind::ReliableEvent;
 		ObjectId Remote;
+		RemotePublicationId Publication{1};
 		RemoteRequestId Request;
 		RemoteEventSequence Sequence;
 		std::chrono::milliseconds Deadline{};

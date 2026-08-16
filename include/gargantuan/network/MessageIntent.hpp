@@ -19,6 +19,7 @@ namespace gargantuan::network {
 
 	struct RemoteEventOrder {
 		StateChannelId Channel;
+		RemotePublicationId Publication;
 		RemoteEventSequence Sequence;
 	};
 

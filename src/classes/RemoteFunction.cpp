@@ -234,6 +234,7 @@ namespace gargantuan {
 					Server ? ScriptExecutionDomain::Server : ScriptExecutionDomain::Client,
 					{ScriptCapability::NetworkSend, ScriptCapability::NetworkReceive},
 				};
+				Context.AllowsTaskSchedulerYield = false;
 				ScriptSecurityScope Scope(Context);
 				const auto PendingBefore = BoundManager->GetMetrics().InFlightRequests;
 				const int Status = lua_resume(Thread, HandlerState, ArgumentCount);

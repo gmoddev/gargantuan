@@ -1,10 +1,13 @@
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Folder.hpp"
 #include "gargantuan/classes/Part.hpp"
+#include "gargantuan/classes/RemoteEvent.hpp"
+#include "gargantuan/classes/RemoteFunction.hpp"
 #include "gargantuan/classes/WeldConstraint.hpp"
 #include "gargantuan/network/ReplicaApplier.hpp"
 #include "gargantuan/network/ReplicationCoordinator.hpp"
 #include "gargantuan/network/ReplicationTransport.hpp"
+#include "gargantuan/network/RemoteManager.hpp"
 #include "gargantuan/network/SimulatedTransport.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/runtime/ChangeJournal.hpp"
@@ -75,6 +78,160 @@ namespace {
 			}
 		return false;
 	}
+
+	void TestMixedSimulatorComposition() {
+		auto World = std::make_shared<DataModel>();
+		auto Event = std::make_shared<RemoteEvent>();
+		auto Function = std::make_shared<RemoteFunction>();
+		Event->SetParent(World);
+		Function->SetParent(World);
+		const auto Limits = NetworkLimits::NativeCeilings();
+		SimulatedTransportConfiguration Configuration;
+		Configuration.BaseLatency = 2ms;
+		Configuration.MaximumJitter = 3ms;
+		Configuration.MaximumReorderDelay = 5ms;
+		Configuration.UnreliableReorderProbability = 1.0;
+		auto Network = SimulatedNetwork::Create(Configuration);
+		auto ServerTransport = Network->CreateTransport();
+		auto ClientTransport = Network->CreateTransport();
+		Check(
+			ServerTransport->Start({TransportRole::Server, {"mixed-composition", 1}, Limits, {}}).Succeeded() &&
+				ClientTransport->Start({TransportRole::Client, {"mixed-composition", 1}, Limits, {}}).Succeeded(),
+			"mixed simulator endpoints start"
+		);
+		Network->Pump();
+		const auto ServerConnection = ConnectedId(Drain(ServerTransport));
+		const auto ClientConnection = ConnectedId(Drain(ClientTransport));
+		NetworkScheduler ServerScheduler(*ServerTransport);
+		NetworkScheduler ClientScheduler(*ClientTransport);
+		Check(
+			ServerScheduler.RegisterConnection(ServerConnection, Limits) &&
+				ClientScheduler.RegisterConnection(ClientConnection, Limits),
+			"mixed simulator schedulers share one connection session"
+		);
+		ReplicationCoordinator Coordinator(World);
+		auto Baseline = Coordinator.AddPeer(ServerConnection, ReplicationEpoch(1));
+		ReplicaApplier ClientReplica;
+		Check(
+			Baseline.Succeeded() &&
+				Deliver(
+					*Baseline.Frame,
+					ServerConnection,
+					Limits,
+					ServerScheduler,
+					Network,
+					ClientTransport,
+					ClientReplica
+				),
+			"mixed simulator establishes the replication baseline"
+		);
+		auto ServerVisibility = [&](ConnectionId Connection, ObjectId Object) {
+			const auto *View = Coordinator.GetView(Connection);
+			return View && View->Knows(Object);
+		};
+		auto ClientVisibility = [&](ConnectionId, ObjectId Object) {
+			return ClientReplica.Resolve(Object) != nullptr;
+		};
+		RemoteManager ServerRemotes(
+			RemoteManagerRole::Server,
+			ServerScheduler,
+			ServerVisibility,
+			[](ObjectId Object) { return ObjectRegistry::Get().Lookup(Object); }
+		);
+		RemoteManager ClientRemotes(
+			RemoteManagerRole::Client,
+			ClientScheduler,
+			ClientVisibility,
+			[&](ObjectId Object) { return ClientReplica.Resolve(Object); }
+		);
+		Check(
+			ServerRemotes.AddPeer(ServerConnection, ReplicationEpoch(1), Limits) &&
+				ClientRemotes.AddPeer(ClientConnection, ReplicationEpoch(1), Limits),
+			"mixed simulator RemoteManagers bind the baseline epoch"
+		);
+		for (const auto [Object, Kind] : {
+				 std::pair{Event->GetObjectId(), RemoteInstanceKind::ReliableEvent},
+				 std::pair{Function->GetObjectId(), RemoteInstanceKind::Function},
+			 }) {
+			Check(
+				ServerRemotes.RegisterRemote(Object, Kind) && ClientRemotes.RegisterRemote(Object, Kind) &&
+					ServerRemotes.PublishRemote(ServerConnection, Object) &&
+					ClientRemotes.PublishRemote(ClientConnection, Object),
+				"mixed simulator publishes replicated Remote identity"
+			);
+		}
+
+		auto NewObject = std::make_shared<Folder>();
+		NewObject->SetParent(World);
+		auto Publication = Coordinator.ProduceIncremental(ServerConnection);
+		Check(Publication.Succeeded(), "mixed simulator produces a new Object publication");
+		if (Publication.Succeeded()) {
+			auto Queued = QueueReplicationFrame(*Publication.Frame, ServerConnection, Limits, ServerScheduler);
+			Check(Queued && Queued->Accepted(), "mixed simulator queues publication on shared scheduler");
+		}
+		bool EventResolved = false;
+		bool RequestHandled = false;
+		std::optional<RemoteRequestTerminalStatus> RequestStatus;
+		ClientRemotes.SetEventHandler(Event->GetObjectId(), [&](const RemoteInvocation &Invocation) {
+			const auto *Reference = std::get_if<WireObjectReference>(&Invocation.Arguments.front());
+			EventResolved = Reference && ClientReplica.Resolve(Reference->Object.ToObjectId()) != nullptr;
+		});
+		ServerRemotes.SetRequestHandler(
+			Function->GetObjectId(), [&](const RemoteInvocation &, RemoteManager::RequestReply Reply) {
+				RequestHandled = Reply({42}, std::nullopt);
+			}
+		);
+		Check(
+			ServerRemotes
+					.SendEvent(
+						ServerConnection,
+						Event->GetObjectId(),
+						{WireObjectReference{WireObjectId::FromObjectId(NewObject->GetObjectId())}}
+					)
+					.Status == RemoteSendStatus::DeferredForMaterialization,
+			"mixed simulator reliable event waits on explicit publication"
+		);
+		Check(
+			ClientRemotes
+				.StartRequest(
+					ClientConnection,
+					Function->GetObjectId(),
+					{},
+					[&](RemoteRequestResult Result) { RequestStatus = Result.Outcome.Status; },
+					1s
+				)
+				.Accepted(),
+			"mixed simulator request starts beside replication traffic"
+		);
+		bool PublicationApplied = false;
+		for (int Tick = 0; Tick < 20 && (!EventResolved || !RequestStatus); ++Tick) {
+			(void)ServerScheduler.Flush(ServerConnection, SchedulerTickBudget::FromNetworkLimits(Limits));
+			(void)ClientScheduler.Flush(ClientConnection, SchedulerTickBudget::FromNetworkLimits(Limits));
+			(void)Network->Advance(10ms);
+			Network->Pump();
+			for (const auto &TransportEventValue : Drain(ServerTransport))
+				(void)ServerRemotes.HandleTransportEvent(TransportEventValue);
+			for (const auto &TransportEventValue : Drain(ClientTransport)) {
+				if (const auto *Received = std::get_if<ReceivedMessageEvent>(&TransportEventValue);
+					Received && Received->Traffic == TrafficClass::StructuralReplication) {
+					PublicationApplied = ClientReplica.ApplyBytes(Received->Payload).Succeeded();
+					if (PublicationApplied) {
+						(void)ServerRemotes.MarkMaterialized(ServerConnection, NewObject->GetObjectId());
+						(void)ClientRemotes.MarkMaterialized(ClientConnection, NewObject->GetObjectId());
+					}
+				} else {
+					(void)ClientRemotes.HandleTransportEvent(TransportEventValue);
+				}
+			}
+			ServerRemotes.Pump();
+			ClientRemotes.Pump();
+		}
+		Check(
+			PublicationApplied && EventResolved && RequestHandled &&
+				RequestStatus == RemoteRequestTerminalStatus::Success,
+			"mixed simulator composes replication, dependency-gated RemoteEvent, and request/response"
+		);
+	}
 }
 
 int main() {
@@ -86,6 +243,7 @@ int main() {
 		std::cerr << Error.what() << '\n';
 		return 1;
 	}
+	TestMixedSimulatorComposition();
 
 	auto Game = std::make_shared<DataModel>();
 	Game->SetName("ServerWorld");

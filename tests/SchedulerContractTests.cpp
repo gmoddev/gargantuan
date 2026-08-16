@@ -113,14 +113,17 @@ namespace {
 	struct SequenceKey {
 		std::uint8_t Domain = 0;
 		std::uint64_t Channel = 0;
+		std::uint64_t Publication = 0;
 		auto operator<=>(const SequenceKey &) const = default;
 	};
 
 	std::optional<std::pair<SequenceKey, std::uint64_t>> SequencedKey(const MessageOrder &Order) {
 		if (const auto *Realtime = std::get_if<RealtimeStateOrder>(&Order))
-			return std::pair(SequenceKey{1, Realtime->Channel.Value()}, Realtime->Sequence.Value());
+			return std::pair(SequenceKey{1, Realtime->Channel.Value(), 0}, Realtime->Sequence.Value());
 		if (const auto *Remote = std::get_if<RemoteEventOrder>(&Order))
-			return std::pair(SequenceKey{2, Remote->Channel.Value()}, Remote->Sequence.Value());
+			return std::pair(
+				SequenceKey{2, Remote->Channel.Value(), Remote->Publication.Value()}, Remote->Sequence.Value()
+			);
 		return std::nullopt;
 	}
 
@@ -541,6 +544,43 @@ int main() {
 	}
 
 	{
+		const ConnectionId Connection{61, 1};
+		RecordingTransport Transport(Connection);
+		NetworkScheduler Scheduler(Transport);
+		auto QueueLimits = TestLimits(8, 8, 64, 8, 4);
+		Scheduler.RegisterConnection(Connection, QueueLimits);
+		const StateChannelId Channel{88};
+		auto OldPublication = Intent(
+			Connection,
+			DeliveryMode::UnreliableSequenced,
+			TrafficClass::RealtimeState,
+			100,
+			QueueLimits,
+			1,
+			RemoteEventOrder{Channel, RemotePublicationId(1), RemoteEventSequence(100)}
+		);
+		auto NewPublication = Intent(
+			Connection,
+			DeliveryMode::UnreliableSequenced,
+			TrafficClass::RealtimeState,
+			1,
+			QueueLimits,
+			1,
+			RemoteEventOrder{Channel, RemotePublicationId(2), RemoteEventSequence(1)}
+		);
+		Check(
+			OldPublication && NewPublication && Scheduler.Submit(std::move(*OldPublication)).Accepted() &&
+				Scheduler.Submit(std::move(*NewPublication)).Accepted(),
+			"a new Remote publication owns a distinct scheduler supersession domain"
+		);
+		Scheduler.Flush(Connection, SchedulerTickBudget{8, 4});
+		Check(
+			Transport.SubmittedValues == std::vector<unsigned int>({100, 1}),
+			"old high sequence cannot supersede new low sequence across publication lifetimes"
+		);
+	}
+
+	{
 		const ConnectionId Connection{7, 1};
 		RecordingTransport Transport(Connection);
 		SchedulerPolicyHarness Scheduler(Transport);
@@ -561,6 +601,77 @@ int main() {
 			Statistics->QueuedMessages == 0 && Statistics->QueuedReliableBytes == 0 &&
 			Statistics->QueuedReliableMessages == 0 && Statistics->IsValidFor(BurstLimits),
 			"a bounded 5000-message producer burst never exceeds per-tick budgets and drains predictably");
+	}
+
+	{
+		const ConnectionId Connection{70, 1};
+		RecordingTransport Transport(Connection);
+		NetworkScheduler Scheduler(Transport, 64);
+		auto FairLimits = TestLimits(1, 1, 64, 32, 32);
+		Check(Scheduler.RegisterConnection(Connection, FairLimits), "production scheduler registers fairness peer");
+		for (unsigned int Value = 1; Value <= 16; ++Value) {
+			auto Structural = Intent(
+				Connection,
+				DeliveryMode::ReliableOrdered,
+				TrafficClass::StructuralReplication,
+				Value,
+				FairLimits
+			);
+			Check(Structural && Scheduler.Submit(std::move(*Structural)).Accepted(), "structural burst is admitted");
+		}
+		for (unsigned int Value = 101; Value <= 102; ++Value) {
+			auto Application = Intent(
+				Connection,
+				DeliveryMode::ReliableOrdered,
+				TrafficClass::ReliableApplication,
+				Value,
+				FairLimits
+			);
+			Check(Application && Scheduler.Submit(std::move(*Application)).Accepted(), "reliable application work is admitted");
+		}
+		auto FairFlush = Scheduler.Flush(Connection, SchedulerTickBudget{9, 9});
+		Check(
+			FairFlush.Status == SchedulerFlushStatus::BudgetLimited &&
+				Transport.SubmittedValues == std::vector<unsigned int>({1, 2, 3, 4, 5, 6, 7, 8, 101}),
+			"bounded structural precedence guarantees reliable application service during sustained replication"
+		);
+	}
+
+	{
+		const ConnectionId PeerA{71, 1};
+		const ConnectionId PeerB{72, 1};
+		const ConnectionId PeerC{73, 1};
+		RecordingTransport Transport(PeerA);
+		NetworkScheduler Scheduler(Transport, 8);
+		auto AggregateLimits = TestLimits(4, 4, 8, 4, 4);
+		Check(
+			Scheduler.RegisterConnection(PeerA, AggregateLimits) &&
+				Scheduler.RegisterConnection(PeerB, AggregateLimits) &&
+				Scheduler.RegisterConnection(PeerC, AggregateLimits),
+			"production scheduler registers aggregate-budget peers"
+		);
+		for (const auto Peer : {PeerA, PeerB}) {
+			auto Message = Intent(
+				Peer, DeliveryMode::ReliableOrdered, TrafficClass::ReliableApplication, Peer.Slot, AggregateLimits, 4
+			);
+			Check(Message && Scheduler.Submit(std::move(*Message)).Accepted(), "aggregate reliable work fits ceiling");
+		}
+		auto Overflow = Intent(
+			PeerB, DeliveryMode::ReliableOrdered, TrafficClass::ReliableApplication, 9, AggregateLimits, 1
+		);
+		auto OverflowResult = Scheduler.Submit(std::move(*Overflow));
+		Check(
+			OverflowResult.Status == SchedulerSubmitStatus::ReliableBacklogExhausted &&
+				OverflowResult.IsTerminal(),
+			"aggregate reliable queue exhaustion is bounded and terminal for the submitting peer"
+		);
+		auto Replacement = Intent(
+			PeerC, DeliveryMode::ReliableOrdered, TrafficClass::ReliableApplication, 10, AggregateLimits, 4
+		);
+		Check(
+			Replacement && Scheduler.Submit(std::move(*Replacement)).Accepted(),
+			"terminal peer cleanup releases its aggregate reliable queue charge"
+		);
 	}
 
 	{

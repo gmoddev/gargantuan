@@ -1,4 +1,5 @@
 #include "gargantuan/classes/DataModel.hpp"
+#include "gargantuan/classes/Folder.hpp"
 #include "gargantuan/classes/RemoteEvent.hpp"
 #include "gargantuan/classes/RemoteFunction.hpp"
 #include "gargantuan/network/RemoteManager.hpp"
@@ -323,6 +324,8 @@ int main() {
 		"server RemoteEvent is bound and visible"
 	);
 	PushGlobal(Engine.L, "ServerRemote", ServerEvent);
+	auto RemoteSecurityTarget = std::make_shared<Folder>();
+	PushGlobal(Engine.L, "RemoteSecurityTarget", RemoteSecurityTarget);
 	{
 		ScriptSecurityScope Scope(
 			{ScriptExecutionDomain::Server,
@@ -330,8 +333,23 @@ int main() {
 		);
 		const int ConnectStatus = Run(Engine, R"(
 			SignalValue = 'unset'
+			DeferredCanMutate = nil
+			DelayedCanMutate = nil
+			WaitCanMutate = nil
+			DeferredMutationOk = nil
 			SignalConnection = ServerRemote.OnServerEvent:Connect(function(Peer, Text, Value)
 				SignalValue = tostring(Peer.Slot) .. ':' .. Text .. ':' .. tostring(Value)
+				task.defer(function()
+					DeferredCanMutate = HasMutateDataModel()
+					DeferredMutationOk = pcall(function()
+						RemoteSecurityTarget:SetAttribute('Compromised', true)
+					end)
+				end)
+				task.delay(0, function() DelayedCanMutate = HasMutateDataModel() end)
+				task.spawn(function()
+					task.wait(0)
+					WaitCanMutate = HasMutateDataModel()
+				end)
 			end)
 		)");
 		if (ConnectStatus != LUA_OK) std::cerr << "Signal connect error: " << lua_tostring(Engine.L, -1) << '\n';
@@ -364,6 +382,17 @@ int main() {
 		"OnServerEvent delivers provisional immutable peer context and typed arguments"
 	);
 	lua_pop(Engine.L, 1);
+	Engine.Threads.Step();
+	Engine.Threads.Step();
+	for (const char *Name : {"DeferredCanMutate", "DelayedCanMutate", "WaitCanMutate", "DeferredMutationOk"}) {
+		lua_getglobal(Engine.L, Name);
+		Check(!lua_toboolean(Engine.L, -1), "Remote-triggered task work retains network-only authority");
+		lua_pop(Engine.L, 1);
+	}
+	Check(
+		!RemoteSecurityTarget->GetAttributeValue("Compromised"),
+		"Remote-triggered deferred work cannot mutate the DataModel through ambient Core authority"
+	);
 	Check(Run(Engine, "SignalConnection:Disconnect()") == LUA_OK, "Luau RemoteEvent connection disconnects normally");
 	EventMessage.Arguments = {std::string("ignored"), 10};
 	Check(
@@ -375,6 +404,58 @@ int main() {
 		std::string_view(lua_tostring(Engine.L, -1)) == "7:event:9", "disconnected Luau handler is not invoked again"
 	);
 	lua_pop(Engine.L, 1);
+
+	auto ServerFunction = std::make_shared<RemoteFunction>();
+	Visible.insert(ServerFunction->GetObjectId());
+	Check(
+		ServerFunction->BindRemoteManager(&Server) &&
+			Server.PublishRemote(Connection, ServerFunction->GetObjectId()),
+		"server RemoteFunction is bound and visible"
+	);
+	PushGlobal(Engine.L, "ServerFunction", ServerFunction);
+	{
+		ScriptSecurityScope Scope(
+			{ScriptExecutionDomain::Server,
+			 {ScriptCapability::ReadDataModel, ScriptCapability::NetworkSend, ScriptCapability::NetworkReceive}}
+		);
+		Check(
+			Run(Engine, R"(
+				WaitHandlerContinued = false
+				ServerFunction:SetServerHandler(function(Peer)
+					task.wait(0)
+					WaitHandlerContinued = true
+					return 1
+				end)
+			)") == LUA_OK,
+			"server RemoteFunction installs a bounded request handler"
+		);
+	}
+	RemoteMessage WaitRequest{
+		.Kind = RemoteMessageKind::Request,
+		.Remote = ServerFunction->GetObjectId(),
+		.Request = RemoteRequestId(1),
+		.Deadline = 1s,
+	};
+	Check(
+		Server.HandleTransportEvent(Incoming(Connection, WaitRequest)) && Server.Pump() == 1,
+		"RemoteFunction request reaches its Luau handler"
+	);
+	Engine.Threads.Step();
+	lua_getglobal(Engine.L, "WaitHandlerContinued");
+	Check(
+		!lua_toboolean(Engine.L, -1),
+		"unsupported task.wait cannot leave a failed RemoteFunction handler scheduled to continue later"
+	);
+	lua_pop(Engine.L, 1);
+	Check(!ServerScheduler.Messages.empty(), "failed RemoteFunction handler emits one bounded terminal response");
+	if (!ServerScheduler.Messages.empty()) {
+		auto HandlerFailure = DecodeRemoteMessage(ServerScheduler.Messages.back().Payload());
+		Check(
+			HandlerFailure && HandlerFailure->Kind == RemoteMessageKind::RequestError && HandlerFailure->Error &&
+				HandlerFailure->Error->Code == "handler_error",
+			"task.wait rejection becomes a sanitized RemoteFunction handler error"
+		);
+	}
 
 	ServerEvent->Destroy();
 	Check(

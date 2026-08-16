@@ -21,12 +21,18 @@ namespace gargantuan {
 namespace gargantuan::network {
 	inline constexpr std::uint32_t MaximumRemoteCallsPerPeerPerSecond = 1024;
 	inline constexpr std::uint32_t MaximumRemoteCallsPerRemotePerSecond = 256;
+	inline constexpr std::uint32_t MaximumRemoteCallsPerManagerPerSecond = 8192;
 	inline constexpr std::uint32_t MaximumConcurrentRemoteHandlersPerPeer = 64;
+	inline constexpr std::size_t MaximumConcurrentRemoteHandlersPerManager = 4096;
+	inline constexpr std::size_t MaximumRemoteInFlightRequestsPerManager = 8192;
 	inline constexpr std::size_t MaximumRemotePeers = 512;
+	inline constexpr std::size_t MaximumRemotePeerSlots = 16 * 1024;
 	inline constexpr std::size_t MaximumQueuedRemoteDispatchMessages = 8192;
 	inline constexpr std::size_t MaximumQueuedRemoteDispatchBytes = 32 * 1024 * 1024;
 	inline constexpr std::size_t MaximumRemoteBroadcastSubmissionsPerSecond = 4096;
 	inline constexpr std::size_t MaximumRemoteBroadcastBytesPerSecond = 16 * 1024 * 1024;
+	inline constexpr std::size_t MaximumRemoteGeneratedReliableMessagesPerSecond = 4096;
+	inline constexpr std::size_t MaximumRemoteGeneratedReliableBytesPerSecond = 32 * 1024 * 1024;
 
 	enum class RemoteManagerRole : std::uint8_t { Server, Client };
 
@@ -49,6 +55,7 @@ namespace gargantuan::network {
 	struct RemoteSendResult {
 		RemoteSendStatus Status = RemoteSendStatus::SchedulerRejected;
 		std::optional<RemoteRequestId> Request;
+		std::optional<DisconnectInfo> TerminalDisconnect;
 		[[nodiscard]] bool Accepted() const {
 			return Status == RemoteSendStatus::Accepted || Status == RemoteSendStatus::DeferredForMaterialization;
 		}
@@ -113,6 +120,7 @@ namespace gargantuan::network {
 		using RequestReply = std::function<bool(std::vector<WireValue>, std::optional<StructuredRemoteError>)>;
 		using RequestHandler = std::function<void(const RemoteInvocation &, RequestReply)>;
 		using RequestCompletion = std::function<void(RemoteRequestResult)>;
+		using TerminalHandler = std::function<void(ConnectionId, const DisconnectInfo &)>;
 
 		RemoteManager(
 			RemoteManagerRole Role,
@@ -134,6 +142,7 @@ namespace gargantuan::network {
 
 		bool SetEventHandler(ObjectId Remote, EventHandler Handler);
 		bool SetRequestHandler(ObjectId Remote, RequestHandler Handler);
+		void SetTerminalHandler(TerminalHandler Handler);
 
 		RemoteSendResult SendEvent(ConnectionId Connection, ObjectId Remote, std::vector<WireValue> Arguments);
 		std::vector<RemoteSendResult> Broadcast(ObjectId Remote, std::vector<WireValue> Arguments);
@@ -156,5 +165,6 @@ namespace gargantuan::network {
 	  private:
 		struct Implementation;
 		std::shared_ptr<Implementation> State;
+		void DrainSchedulerTerminals();
 	};
 }

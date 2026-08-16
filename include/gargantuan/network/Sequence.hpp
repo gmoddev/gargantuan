@@ -30,6 +30,7 @@ namespace gargantuan::network {
 	struct ReliableReplicationSequenceDomain;
 	struct RealtimeStateSequenceDomain;
 	struct RemoteEventSequenceDomain;
+	struct RemotePublicationIdDomain;
 	struct RemoteRequestIdDomain;
 	struct StateChannelIdDomain;
 
@@ -37,6 +38,7 @@ namespace gargantuan::network {
 	using ReliableReplicationSequence = MonotonicSequence<ReliableReplicationSequenceDomain>;
 	using RealtimeStateSequence = MonotonicSequence<RealtimeStateSequenceDomain>;
 	using RemoteEventSequence = MonotonicSequence<RemoteEventSequenceDomain>;
+	using RemotePublicationId = MonotonicSequence<RemotePublicationIdDomain>;
 	using RemoteRequestId = MonotonicSequence<RemoteRequestIdDomain>;
 	using StateChannelId = MonotonicSequence<StateChannelIdDomain>;
 }

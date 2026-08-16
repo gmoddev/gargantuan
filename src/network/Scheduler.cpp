@@ -6,6 +6,7 @@
 #include <deque>
 #include <limits>
 #include <map>
+#include <stdexcept>
 
 namespace gargantuan::network {
 	namespace {
@@ -101,14 +102,18 @@ namespace gargantuan::network {
 		struct SequencedQueueKey {
 			std::uint8_t Domain = 0;
 			std::uint64_t Channel = 0;
+			std::uint64_t Publication = 0;
 			auto operator<=>(const SequencedQueueKey &) const = default;
 		};
 
 		std::optional<std::pair<SequencedQueueKey, std::uint64_t>> GetSequencedQueueKey(const MessageOrder &Order) {
 			if (const auto *Realtime = std::get_if<RealtimeStateOrder>(&Order))
-				return std::pair(SequencedQueueKey{1, Realtime->Channel.Value()}, Realtime->Sequence.Value());
+				return std::pair(SequencedQueueKey{1, Realtime->Channel.Value(), 0}, Realtime->Sequence.Value());
 			if (const auto *Remote = std::get_if<RemoteEventOrder>(&Order))
-				return std::pair(SequencedQueueKey{2, Remote->Channel.Value()}, Remote->Sequence.Value());
+				return std::pair(
+					SequencedQueueKey{2, Remote->Channel.Value(), Remote->Publication.Value()},
+					Remote->Sequence.Value()
+				);
 			return std::nullopt;
 		}
 	}
@@ -118,10 +123,12 @@ namespace gargantuan::network {
 			NetworkLimits Limits;
 			std::array<std::deque<NetworkMessageIntent>, 6> Queues;
 			SchedulerStatistics Statistics;
+			std::uint32_t ConsecutiveStructuralReplicationMessages = 0;
 			bool Active = true;
 		};
 
-		explicit Implementation(IGameTransport &Transport) : Transport(Transport) {}
+		explicit Implementation(IGameTransport &Transport, std::size_t MaximumTotalQueuedReliableBytes)
+			: Transport(Transport), MaximumTotalQueuedReliableBytes(MaximumTotalQueuedReliableBytes) {}
 
 		static void Queue(ConnectionQueue &Connection, NetworkMessageIntent Message) {
 			const auto Precedence = SchedulerTrafficPrecedence(Message.Traffic());
@@ -131,13 +138,15 @@ namespace gargantuan::network {
 			++Connection.Statistics.QueuedMessages;
 		}
 
-		static void Clear(ConnectionQueue &Connection) {
+		void Clear(ConnectionQueue &Connection) {
+			TotalQueuedReliableBytes -= Connection.Statistics.QueuedReliableBytes;
 			for (auto &QueueValue : Connection.Queues) QueueValue.clear();
 			Connection.Statistics.QueuedReliableBytes = 0;
 			Connection.Statistics.QueuedReliableMessages = 0;
 			Connection.Statistics.QueuedUnreliableBytes = 0;
 			Connection.Statistics.QueuedUnreliableMessages = 0;
 			Connection.Statistics.QueuedMessages = 0;
+			Connection.ConsecutiveStructuralReplicationMessages = 0;
 		}
 
 		static SchedulerSubmitResult RejectUnreliable(ConnectionQueue &Connection) {
@@ -147,10 +156,16 @@ namespace gargantuan::network {
 		}
 
 		IGameTransport &Transport;
+		std::size_t MaximumTotalQueuedReliableBytes = 0;
+		std::size_t TotalQueuedReliableBytes = 0;
 		std::map<ConnectionId, ConnectionQueue> Connections;
 	};
 
-	NetworkScheduler::NetworkScheduler(IGameTransport &Transport) : State(std::make_unique<Implementation>(Transport)) {}
+	NetworkScheduler::NetworkScheduler(IGameTransport &Transport, std::size_t MaximumTotalQueuedReliableBytes)
+		: State(std::make_unique<Implementation>(Transport, MaximumTotalQueuedReliableBytes)) {
+		if (MaximumTotalQueuedReliableBytes == 0)
+			throw std::invalid_argument("NetworkScheduler aggregate reliable queue limit must be positive");
+	}
 	NetworkScheduler::~NetworkScheduler() = default;
 
 	bool NetworkScheduler::RegisterConnection(ConnectionId Connection, const NetworkLimits &Limits) {
@@ -172,16 +187,18 @@ namespace gargantuan::network {
 		}
 		const auto Bytes = Message.Payload().size();
 		if (Message.Delivery() == DeliveryMode::ReliableOrdered) {
-			if (Bytes > Connection.Limits.MaximumQueuedReliableBytes - Connection.Statistics.QueuedReliableBytes) {
+			if (Bytes > Connection.Limits.MaximumQueuedReliableBytes - Connection.Statistics.QueuedReliableBytes ||
+				Bytes > State->MaximumTotalQueuedReliableBytes - State->TotalQueuedReliableBytes) {
 				++Connection.Statistics.IntentsRejected;
 				++Connection.Statistics.ReliableBacklogExhaustions;
-				Implementation::Clear(Connection);
+				State->Clear(Connection);
 				Connection.Active = false;
 				return {SchedulerSubmitStatus::ReliableBacklogExhausted,
 					DisconnectInfo{DisconnectReason::ResourceExhaustion, "Reliable scheduler backlog exhausted"}};
 			}
 			Implementation::Queue(Connection, std::move(Message));
 			Connection.Statistics.QueuedReliableBytes += Bytes;
+			State->TotalQueuedReliableBytes += Bytes;
 			++Connection.Statistics.IntentsAccepted;
 			return {SchedulerSubmitStatus::Accepted};
 		}
@@ -222,7 +239,16 @@ namespace gargantuan::network {
 		auto &Connection = Iterator->second;
 		if (!Budget.IsValidFor(Connection.Limits)) return {.Status = SchedulerFlushStatus::InvalidBudget};
 		SchedulerFlushResult Result{.Status = SchedulerFlushStatus::Drained};
-		for (auto &QueueValue : Connection.Queues) while (!QueueValue.empty()) {
+		while (Connection.Statistics.QueuedMessages != 0) {
+			std::size_t QueueIndex = 0;
+			if (!Connection.Queues[0].empty()) QueueIndex = 0;
+			else if (!Connection.Queues[1].empty() && !Connection.Queues[2].empty())
+				QueueIndex = Connection.ConsecutiveStructuralReplicationMessages >=
+					MaximumConsecutiveStructuralReplicationMessages ? 2 : 1;
+			else {
+				while (QueueIndex < Connection.Queues.size() && Connection.Queues[QueueIndex].empty()) ++QueueIndex;
+			}
+			auto &QueueValue = Connection.Queues[QueueIndex];
 			const auto &Message = QueueValue.front();
 			const auto Bytes = Message.Payload().size();
 			if (Result.MessagesSubmitted == Budget.MaximumMessages || Bytes > Budget.MaximumBytes - Result.BytesSubmitted) {
@@ -240,12 +266,13 @@ namespace gargantuan::network {
 				Result.Status = SchedulerFlushStatus::TerminalFailure;
 				Result.TerminalDisconnect = Submission.TerminalDisconnect.value_or(DisconnectInfo{
 					DisconnectReason::TransportFailure, "Transport rejected scheduler submission"});
-				Implementation::Clear(Connection);
+				State->Clear(Connection);
 				Connection.Active = false;
 				return Result;
 			}
 			if (Message.Delivery() == DeliveryMode::ReliableOrdered) {
 				Connection.Statistics.QueuedReliableBytes -= Bytes;
+				State->TotalQueuedReliableBytes -= Bytes;
 				--Connection.Statistics.QueuedReliableMessages;
 			} else {
 				Connection.Statistics.QueuedUnreliableBytes -= Bytes;
@@ -256,11 +283,23 @@ namespace gargantuan::network {
 			++Connection.Statistics.MessagesSubmittedToTransport;
 			++Result.MessagesSubmitted;
 			Result.BytesSubmitted += Bytes;
+			if (QueueIndex == 1) {
+				if (Connection.ConsecutiveStructuralReplicationMessages != std::numeric_limits<std::uint32_t>::max())
+					++Connection.ConsecutiveStructuralReplicationMessages;
+			}
+			else if (QueueIndex == 2)
+				Connection.ConsecutiveStructuralReplicationMessages = 0;
 		}
 		return Result;
 	}
 
-	bool NetworkScheduler::CancelConnection(ConnectionId Connection) { return State->Connections.erase(Connection) != 0; }
+	bool NetworkScheduler::CancelConnection(ConnectionId Connection) {
+		auto Existing = State->Connections.find(Connection);
+		if (Existing == State->Connections.end()) return false;
+		State->Clear(Existing->second);
+		State->Connections.erase(Existing);
+		return true;
+	}
 
 	std::optional<SchedulerStatistics> NetworkScheduler::GetStatistics(ConnectionId Connection) const {
 		auto Iterator = State->Connections.find(Connection);

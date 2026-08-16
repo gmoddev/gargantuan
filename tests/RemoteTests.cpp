@@ -63,11 +63,17 @@ namespace {
 
 	struct RecordingScheduler final : INetworkScheduler {
 		std::vector<NetworkMessageIntent> Messages;
+		std::optional<SchedulerSubmitResult> NextSubmitResult;
 		bool RegisterConnection(ConnectionId, const NetworkLimits &) override {
 			return true;
 		}
 		SchedulerSubmitResult Submit(NetworkMessageIntent Intent) override {
 			Messages.push_back(std::move(Intent));
+			if (NextSubmitResult) {
+				auto Result = std::move(*NextSubmitResult);
+				NextSubmitResult.reset();
+				return Result;
+			}
 			return {SchedulerSubmitStatus::Accepted};
 		}
 		SchedulerFlushResult Flush(ConnectionId, SchedulerTickBudget) override {
@@ -204,7 +210,7 @@ namespace {
 			const StateChannelId Channel(
 				(static_cast<std::uint64_t>(MessageValue.Remote.Generation) << 32) | MessageValue.Remote.Slot
 			);
-			Order = RemoteEventOrder{Channel, MessageValue.Sequence};
+			Order = RemoteEventOrder{Channel, MessageValue.Publication, MessageValue.Sequence};
 		}
 		return {Connection, Delivery, Traffic, std::move(Order), std::move(*Bytes)};
 	}
@@ -231,7 +237,7 @@ namespace {
 				Decoded && Decoded->Kind == Original.Kind && Decoded->Arguments == Original.Arguments,
 				"every Remote opcode round trips independently of backend memory layout"
 			);
-			for (std::size_t Boundary = 0; Boundary < std::min<std::size_t>(44, Encoded->size()); ++Boundary)
+			for (std::size_t Boundary = 0; Boundary < std::min<std::size_t>(52, Encoded->size()); ++Boundary)
 				Check(
 					!DecodeRemoteMessage(std::span<const std::byte>(*Encoded).first(Boundary)),
 					"every truncated Remote header boundary fails closed"
@@ -242,13 +248,13 @@ namespace {
 		Check(Reliable.has_value(), "valid Remote corpus seed encodes");
 		if (!Reliable) return;
 		auto InvalidVersion = *Reliable;
-		InvalidVersion[4] = std::byte{2};
+		InvalidVersion[4] = std::byte{3};
 		Check(!DecodeRemoteMessage(InvalidVersion), "unknown Remote protocol versions fail closed");
 		auto InvalidOpcode = *Reliable;
 		InvalidOpcode[6] = std::byte{0xff};
 		Check(!DecodeRemoteMessage(InvalidOpcode), "unknown Remote opcodes fail closed");
 		auto InvalidCount = *Reliable;
-		InvalidCount[36] = std::byte{33};
+		InvalidCount[44] = std::byte{33};
 		Check(!DecodeRemoteMessage(InvalidCount), "excessive Remote argument counts fail before allocation");
 		auto Trailing = *Reliable;
 		Trailing.push_back(std::byte{0});
@@ -260,7 +266,7 @@ namespace {
 		auto TaggedBytes = EncodeRemoteMessage(Tagged);
 		Check(TaggedBytes.has_value(), "tagged malformed-input corpus seed encodes");
 		if (TaggedBytes) {
-			(*TaggedBytes)[44] = std::byte{0xff};
+			(*TaggedBytes)[52] = std::byte{0xff};
 			Check(!DecodeRemoteMessage(*TaggedBytes), "invalid WireValue tags fail before application dispatch");
 			TaggedBytes->pop_back();
 			Check(!DecodeRemoteMessage(*TaggedBytes), "truncated Remote argument fails closed");
@@ -270,15 +276,21 @@ namespace {
 		Check(!EncodeRemoteMessage(InvalidReference), "invalid ObjectId generation fails before encoding");
 		auto RequestBytes = EncodeRemoteMessage(Message(RemoteMessageKind::Request, Remote));
 		if (RequestBytes) {
-			for (std::size_t Index = 16; Index < 24; ++Index)
+			for (std::size_t Index = 24; Index < 32; ++Index)
 				(*RequestBytes)[Index] = std::byte{0};
 			Check(!DecodeRemoteMessage(*RequestBytes), "malformed zero RequestId fails closed");
 		}
 		auto SequenceBytes = EncodeRemoteMessage(Message(RemoteMessageKind::SequencedEvent, Remote));
 		if (SequenceBytes) {
-			for (std::size_t Index = 24; Index < 32; ++Index)
+			for (std::size_t Index = 32; Index < 40; ++Index)
 				(*SequenceBytes)[Index] = std::byte{0};
 			Check(!DecodeRemoteMessage(*SequenceBytes), "malformed zero sequence metadata fails closed");
+		}
+		auto PublicationBytes = EncodeRemoteMessage(Message(RemoteMessageKind::ReliableEvent, Remote));
+		if (PublicationBytes) {
+			for (std::size_t Index = 16; Index < 24; ++Index)
+				(*PublicationBytes)[Index] = std::byte{0};
+			Check(!DecodeRemoteMessage(*PublicationBytes), "malformed zero publication lifetime fails closed");
 		}
 
 		auto MaximumString = Message(RemoteMessageKind::ReliableEvent, Remote);
@@ -504,7 +516,7 @@ namespace {
 								 Fixture.ServerConnection,
 								 DeliveryMode::UnreliableSequenced,
 								 TrafficClass::RealtimeState,
-								 RemoteEventOrder{Channel, RemoteEventSequence(Sequence)},
+								 RemoteEventOrder{Channel, Remote.Publication, RemoteEventSequence(Sequence)},
 								 std::move(*Bytes)
 							 }
 						 ),
@@ -598,6 +610,95 @@ namespace {
 	}
 
 	void TestLifecycleAndEpochIsolation() {
+		{
+			RemoteFixture Reentrant;
+			const ObjectId ReentrantRemote{300, 1};
+			Reentrant.Register(ReentrantRemote, RemoteInstanceKind::Function);
+			std::size_t ReentrantCompletions = 0;
+			Check(
+				Reentrant.Client
+					->StartRequest(
+						Reentrant.ClientConnection,
+						ReentrantRemote,
+						{},
+						[&](RemoteRequestResult Result) {
+							++ReentrantCompletions;
+							Check(
+								Result.Outcome.Status == RemoteRequestTerminalStatus::Disconnected,
+								"reentrant teardown preserves the terminal request outcome"
+							);
+							Check(
+								!Reentrant.Client->RemovePeer(Reentrant.ClientConnection),
+								"peer structure is removed before a request completion can reenter teardown"
+							);
+						},
+						1s
+					)
+					.Accepted(),
+				"request starts before reentrant peer teardown"
+			);
+			Check(
+				Reentrant.Client->RemovePeer(Reentrant.ClientConnection),
+				"outer peer teardown succeeds without retaining an iterator across callbacks"
+			);
+			Check(ReentrantCompletions == 1, "reentrant peer teardown completes the request exactly once");
+		}
+
+		{
+			RecordingScheduler TerminalScheduler;
+			const ConnectionId TerminalConnection{75, 1};
+			const ObjectId Function{303, 1};
+			const ObjectId Event{304, 1};
+			std::set<ObjectId> Visible{Function, Event};
+			RemoteManager Manager(
+				RemoteManagerRole::Server,
+				TerminalScheduler,
+				[&](ConnectionId, ObjectId Object) { return Visible.contains(Object); },
+				[](ObjectId) -> std::shared_ptr<Instance> { return nullptr; }
+			);
+			Check(
+				Manager.AddPeer(TerminalConnection, ReplicationEpoch(1), TestLimits()) &&
+					Manager.RegisterRemote(Function, RemoteInstanceKind::Function) &&
+					Manager.RegisterRemote(Event, RemoteInstanceKind::ReliableEvent) &&
+					Manager.PublishRemote(TerminalConnection, Function) &&
+					Manager.PublishRemote(TerminalConnection, Event),
+				"terminal scheduler fixture initializes"
+			);
+			std::size_t PendingDisconnected = 0;
+			Check(
+				Manager
+					.StartRequest(
+						TerminalConnection,
+						Function,
+						{},
+						[&](RemoteRequestResult Result) {
+							if (Result.Outcome.Status == RemoteRequestTerminalStatus::Disconnected)
+								++PendingDisconnected;
+						}
+					)
+					.Accepted(),
+				"request is pending before terminal scheduler exhaustion"
+			);
+			std::size_t TerminalCallbacks = 0;
+			Manager.SetTerminalHandler([&](ConnectionId Connection, const DisconnectInfo &Information) {
+				Check(
+					Connection == TerminalConnection && Information.Reason == DisconnectReason::ResourceExhaustion,
+					"terminal scheduler outcome retains connection identity and reason"
+				);
+				++TerminalCallbacks;
+			});
+			TerminalScheduler.NextSubmitResult = SchedulerSubmitResult{
+				SchedulerSubmitStatus::ReliableBacklogExhausted,
+				DisconnectInfo{DisconnectReason::ResourceExhaustion, "test reliable backlog exhausted"},
+			};
+			auto TerminalSend = Manager.SendEvent(TerminalConnection, Event, {});
+			Check(
+				TerminalSend.TerminalDisconnect && PendingDisconnected == 1 && TerminalCallbacks == 1 &&
+					Manager.SendEvent(TerminalConnection, Event, {}).Status == RemoteSendStatus::InvalidPeer,
+				"terminal scheduler exhaustion tears down Remote state and completes pending requests once"
+			);
+		}
+
 		RemoteFixture Fixture;
 		const ObjectId Remote{301, 1};
 		Fixture.Register(Remote, RemoteInstanceKind::Function);
@@ -619,6 +720,10 @@ namespace {
 		const auto OldConnection = Fixture.ClientConnection;
 		Fixture.Client->RemovePeer(OldConnection);
 		Check(
+			!Fixture.Client->AddPeer(OldConnection, ReplicationEpoch(2), Fixture.Limits),
+			"a retired ConnectionId generation cannot be rebound to a newer replication epoch"
+		);
+		Check(
 			Fixture.ClientScheduler->CancelConnection(OldConnection),
 			"old epoch scheduler queue is cancelled at the session boundary"
 		);
@@ -631,6 +736,7 @@ namespace {
 			Fixture.Client->AddPeer(NewConnection, ReplicationEpoch(2), Fixture.Limits),
 			"new connection generation creates a fresh Remote session"
 		);
+		Fixture.ClientConnection = NewConnection;
 		Check(Fixture.Client->PublishRemote(NewConnection, Remote), "Remote visibility is rebuilt in the new epoch");
 		Check(Completions == 1, "old epoch request completed once during reset");
 		auto Late = Message(RemoteMessageKind::Response, Remote);
@@ -673,6 +779,31 @@ namespace {
 			Fixture.Client->StartRequest(NewConnection, Remote, {}, [](RemoteRequestResult) {}).Status ==
 				RemoteSendStatus::UnpublishedRemote,
 			"unpublished Remote fails closed before request tracking"
+		);
+
+		const ObjectId RepublishedEvent{302, 1};
+		Fixture.Register(RepublishedEvent, RemoteInstanceKind::ReliableEvent);
+		std::size_t RepublishedDeliveries = 0;
+		Fixture.Client->SetEventHandler(
+			RepublishedEvent, [&](const RemoteInvocation &) { ++RepublishedDeliveries; }
+		);
+		auto OldPublication = Message(RemoteMessageKind::ReliableEvent, RepublishedEvent);
+		Check(
+			Fixture.Client->UnpublishRemote(NewConnection, RepublishedEvent) &&
+				Fixture.Client->PublishRemote(NewConnection, RepublishedEvent),
+			"Remote can be republished with a fresh publication lifetime"
+		);
+		Check(
+			Fixture.Client->HandleTransportEvent(Incoming(NewConnection, OldPublication)) &&
+				Fixture.Client->Pump() == 1 && RepublishedDeliveries == 0,
+			"a delayed frame from the old publication lifetime cannot dispatch after republish"
+		);
+		auto CurrentPublication = OldPublication;
+		CurrentPublication.Publication = RemotePublicationId(2);
+		Check(
+			Fixture.Client->HandleTransportEvent(Incoming(NewConnection, CurrentPublication)) &&
+				Fixture.Client->Pump() == 1 && RepublishedDeliveries == 1,
+			"the current publication lifetime remains dispatchable after stale-frame rejection"
 		);
 		Check(Fixture.Client->UnregisterRemote(Remote), "destroyed Remote identity unregisters");
 		Check(
@@ -940,6 +1071,37 @@ namespace {
 				) &&
 				BroadcastScheduler.Messages.empty(),
 			"aggregate broadcast budget rejects fanout before allocating per-peer payload copies"
+		);
+
+		RecordingScheduler AggregateScheduler;
+		RemoteManager AggregateManager(
+			RemoteManagerRole::Server,
+			AggregateScheduler,
+			[&](ConnectionId, ObjectId Object) { return Object == Event; },
+			[](ObjectId) -> std::shared_ptr<Instance> { return nullptr; }
+		);
+		Check(
+			AggregateManager.RegisterRemote(Event, RemoteInstanceKind::ReliableEvent),
+			"aggregate call budget Remote registers"
+		);
+		std::vector<ConnectionId> AggregatePeers;
+		for (std::uint32_t Slot = 200; Slot < 233; ++Slot) {
+			const ConnectionId Peer{Slot, 1};
+			AggregatePeers.push_back(Peer);
+			Check(
+				AggregateManager.AddPeer(Peer, ReplicationEpoch(1), Limits) &&
+					AggregateManager.PublishRemote(Peer, Event),
+				"aggregate call budget peer registers"
+			);
+		}
+		std::size_t AggregateAccepted = 0;
+		for (const auto Peer : AggregatePeers)
+			for (std::uint32_t Call = 0; Call < MaximumRemoteCallsPerRemotePerSecond; ++Call)
+				AggregateAccepted += AggregateManager.SendEvent(Peer, Event, {}).Accepted();
+		Check(
+			AggregateAccepted == MaximumRemoteCallsPerManagerPerSecond &&
+				AggregateScheduler.Messages.size() == MaximumRemoteCallsPerManagerPerSecond,
+			"coordinated peers cannot exceed the manager-wide Remote call ceiling"
 		);
 	}
 

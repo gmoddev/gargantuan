@@ -4,6 +4,7 @@
 #include <SDL3/SDL_log.h>
 #include <chrono>
 #include <lua.h>
+#include <utility>
 
 namespace gargantuan {
 	double GetCurrentTime() {
@@ -22,6 +23,16 @@ namespace gargantuan {
 	}
 
 	void ThreadEngine::ResumeThread(lua_State *thread, int threadReference, int argumentCount) {
+		ResumeThreadWithContext(thread, threadReference, argumentCount, GetCurrentScriptSecurityContext());
+	}
+
+	void ThreadEngine::ResumeThreadWithContext(
+		lua_State *thread,
+		int threadReference,
+		int argumentCount,
+		ScriptSecurityContext securityContext
+	) {
+		ScriptSecurityScope SecurityScope(std::move(securityContext));
 		int status = lua_resume(thread, L, argumentCount);
 		lua_unref(L, threadReference);
 		switch (status) {
@@ -42,13 +53,15 @@ namespace gargantuan {
 
 			switch (task.type) {
 			case ThreadEngine::ScheduledTask::Type::Delay: {
-				ResumeThread(task.Thread, task.ThreadReference, task.ArgumentCount);
+				ResumeThreadWithContext(
+					task.Thread, task.ThreadReference, task.ArgumentCount, std::move(task.SecurityContext)
+				);
 				break;
 			}
 			case ThreadEngine::ScheduledTask::Type::Wait: {
 				double actualWait = currentTime - task.ScheduledTime;
 				lua_pushnumber(task.Thread, actualWait);
-				ResumeThread(task.Thread, task.ThreadReference, 1);
+				ResumeThreadWithContext(task.Thread, task.ThreadReference, 1, std::move(task.SecurityContext));
 				break;
 			}
 			}
@@ -59,14 +72,17 @@ namespace gargantuan {
 			currentBatch.swap(DeferredQueue);
 
 			for (auto &task : currentBatch) {
-				ResumeThread(task.Thread, task.ThreadReference, task.ArgumentCount);
+				ResumeThreadWithContext(
+					task.Thread, task.ThreadReference, task.ArgumentCount, std::move(task.SecurityContext)
+				);
 			}
 		}
 	}
 
-	void ThreadEngine::QueueScheduledTask(
+	bool ThreadEngine::QueueScheduledTask(
 		lua_State *thread, ScheduledTask::Type type, double delaySeconds, int argumentCount
 	) {
+		if (ScheduledQueue.size() + DeferredQueue.size() >= MaximumQueuedScriptTasks) return false;
 		ScheduledQueue.push({
 			.type = type,
 			.Thread = thread,
@@ -74,14 +90,19 @@ namespace gargantuan {
 			.ArgumentCount = argumentCount,
 			.ScheduledTime = GetCurrentTime(),
 			.WakeTime = GetCurrentTime() + delaySeconds,
+			.SecurityContext = GetCurrentScriptSecurityContext(),
 		});
+		return true;
 	}
 
-	void ThreadEngine::QueueDeferredTask(lua_State *thread, int argumentCount) {
+	bool ThreadEngine::QueueDeferredTask(lua_State *thread, int argumentCount) {
+		if (ScheduledQueue.size() + DeferredQueue.size() >= MaximumQueuedScriptTasks) return false;
 		DeferredQueue.push_back({
 			.Thread = thread,
 			.ThreadReference = TakeThreadReference(thread),
 			.ArgumentCount = argumentCount,
+			.SecurityContext = GetCurrentScriptSecurityContext(),
 		});
+		return true;
 	}
 } // namespace gargantuan

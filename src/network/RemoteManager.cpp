@@ -72,7 +72,7 @@ namespace gargantuan::network {
 
 		MessageOrder OrderFor(const RemoteMessage &Message) {
 			if (Message.Kind != RemoteMessageKind::SequencedEvent) return {};
-			return RemoteEventOrder{RemoteStateChannel(Message.Remote), Message.Sequence};
+			return RemoteEventOrder{RemoteStateChannel(Message.Remote), Message.Publication, Message.Sequence};
 		}
 
 		RemoteRequestResult TerminalResult(
@@ -94,6 +94,7 @@ namespace gargantuan::network {
 			NetworkLimits Limits;
 			std::unordered_set<ObjectId> PublishedRemotes;
 			std::unordered_set<ObjectId> MaterializedObjects;
+			std::unordered_map<ObjectId, RemotePublicationId> Publications;
 			std::unordered_map<ObjectId, RemoteEventSequence> NextOutgoingSequence;
 			std::unordered_map<ObjectId, RemoteEventSequence> LatestIncomingSequence;
 			RemoteRequestId NextRequest{1};
@@ -140,6 +141,11 @@ namespace gargantuan::network {
 			std::vector<std::byte> Encoded;
 			std::vector<ObjectId> Dependencies;
 			std::chrono::steady_clock::time_point Deadline;
+		};
+
+		struct PendingCompletion {
+			RequestCompletion Completion;
+			RemoteRequestResult Result;
 		};
 
 		Implementation(
@@ -189,7 +195,12 @@ namespace gargantuan::network {
 			return true;
 		}
 
-		bool RemoteAvailable(ConnectionId Connection, ObjectId Remote, RemoteInstanceKind *Kind = nullptr) {
+		bool RemoteAvailable(
+			ConnectionId Connection,
+			ObjectId Remote,
+			RemoteInstanceKind *Kind = nullptr,
+			RemotePublicationId *Publication = nullptr
+		) {
 			auto Peer = Peers.find(Connection);
 			auto Registered = Remotes.find(Remote);
 			if (Peer == Peers.end() || Registered == Remotes.end()) return false;
@@ -197,10 +208,31 @@ namespace gargantuan::network {
 				return false;
 			if (!IsVisible || !IsVisible(Connection, Remote)) return false;
 			if (Kind) *Kind = Registered->second;
+			if (Publication) {
+				auto Current = Peer->second.Publications.find(Remote);
+				if (Current == Peer->second.Publications.end() || !Current->second.IsValid()) return false;
+				*Publication = Current->second;
+			}
 			return true;
 		}
 
-		bool AdmitCall(PeerState &Peer, ObjectId Remote) {
+		bool AdmitManagerCall() {
+			const auto Now = GetTime();
+			if (!ManagerRateWindowInitialized || Now < ManagerRateWindow ||
+				Now - ManagerRateWindow >= std::chrono::seconds(1)) {
+				ManagerRateWindow = Now;
+				ManagerRateWindowInitialized = true;
+				ManagerCalls = 0;
+			}
+			if (ManagerCalls >= MaximumRemoteCallsPerManagerPerSecond) {
+				SaturatingIncrement(Metrics.RateLimitRejections);
+				return false;
+			}
+			++ManagerCalls;
+			return true;
+		}
+
+		bool AdmitPeerCall(PeerState &Peer, ObjectId Remote) {
 			const auto Now = GetTime();
 			if (!Peer.RateWindowInitialized || Now < Peer.RateWindow ||
 				Now - Peer.RateWindow >= std::chrono::seconds(1)) {
@@ -220,6 +252,29 @@ namespace gargantuan::network {
 			return true;
 		}
 
+		bool AdmitCall(PeerState &Peer, ObjectId Remote) {
+			return AdmitManagerCall() && AdmitPeerCall(Peer, Remote);
+		}
+
+		bool AdmitGeneratedReliable(std::size_t Bytes) {
+			const auto Now = GetTime();
+			if (!GeneratedRateWindowInitialized || Now < GeneratedRateWindow ||
+				Now - GeneratedRateWindow >= std::chrono::seconds(1)) {
+				GeneratedRateWindow = Now;
+				GeneratedRateWindowInitialized = true;
+				GeneratedReliableMessages = 0;
+				GeneratedReliableBytes = 0;
+			}
+			if (GeneratedReliableMessages >= MaximumRemoteGeneratedReliableMessagesPerSecond ||
+				Bytes > MaximumRemoteGeneratedReliableBytesPerSecond - GeneratedReliableBytes) {
+				SaturatingIncrement(Metrics.ResourceRejections);
+				return false;
+			}
+			++GeneratedReliableMessages;
+			GeneratedReliableBytes += Bytes;
+			return true;
+		}
+
 		RemoteSendResult SubmitEncoded(
 			ConnectionId Connection,
 			const RemoteMessage &Message,
@@ -234,7 +289,10 @@ namespace gargantuan::network {
 			if (!Missing.empty()) {
 				if (!AllowDependencyDeferral || DeliveryFor(Message.Kind) != DeliveryMode::ReliableOrdered)
 					return {RemoteSendStatus::ReferenceNotMaterialized};
-				if (Encoded.size() > Peer->second.Limits.MaximumQueuedReliableBytes ||
+				if (Deferred.size() >= MaximumQueuedRemoteDispatchMessages ||
+					Encoded.size() > MaximumQueuedRemoteDispatchBytes ||
+					Metrics.DeferredReliableBytes > MaximumQueuedRemoteDispatchBytes - Encoded.size() ||
+					Encoded.size() > Peer->second.Limits.MaximumQueuedReliableBytes ||
 					Peer->second.DeferredReliableBytes >
 						Peer->second.Limits.MaximumQueuedReliableBytes - Encoded.size())
 					return {RemoteSendStatus::SchedulerRejected};
@@ -263,7 +321,14 @@ namespace gargantuan::network {
 			auto Submitted = Scheduler.Submit(std::move(*Intent));
 			if (Submitted.Status == SchedulerSubmitStatus::DroppedUnreliable)
 				return {RemoteSendStatus::DroppedUnreliable};
-			if (!Submitted.Accepted()) return {RemoteSendStatus::SchedulerRejected};
+			if (!Submitted.Accepted()) {
+				if (Submitted.TerminalDisconnect)
+					TerminalConnections.try_emplace(Connection, *Submitted.TerminalDisconnect);
+				return {
+					.Status = RemoteSendStatus::SchedulerRejected,
+					.TerminalDisconnect = std::move(Submitted.TerminalDisconnect),
+				};
+			}
 			if (Submitted.Status == SchedulerSubmitStatus::AcceptedWithSupersession)
 				SaturatingIncrement(Metrics.SequencedEventsSuperseded);
 			return {RemoteSendStatus::Accepted};
@@ -271,14 +336,24 @@ namespace gargantuan::network {
 
 		RemoteSendResult
 		SendMessage(ConnectionId Connection, RemoteMessage Message, bool AllowDependencyDeferral = true) {
+			auto Peer = Peers.find(Connection);
+			if (Peer == Peers.end()) return {RemoteSendStatus::InvalidPeer};
+			auto Publication = Peer->second.Publications.find(Message.Remote);
+			if (Publication == Peer->second.Publications.end() || !Publication->second.IsValid())
+				return {RemoteSendStatus::UnpublishedRemote};
+			Message.Publication = Publication->second;
 			auto Encoded = EncodeRemoteMessage(Message);
 			if (!Encoded) return {RemoteSendStatus::InvalidArguments};
+			if ((Message.Kind == RemoteMessageKind::Response || Message.Kind == RemoteMessageKind::RequestError ||
+				 Message.Kind == RemoteMessageKind::Cancellation) &&
+				!AdmitGeneratedReliable(Encoded->size()))
+				return {RemoteSendStatus::RateLimited};
 			return SubmitEncoded(Connection, Message, std::move(*Encoded), AllowDependencyDeferral);
 		}
 
-		void CompletePending(PendingKey Key, RemoteRequestResult Result) {
+		std::optional<PendingCompletion> TakePending(PendingKey Key, RemoteRequestResult Result) {
 			auto Pending = PendingRequests.find(Key);
-			if (Pending == PendingRequests.end()) return;
+			if (Pending == PendingRequests.end()) return std::nullopt;
 			auto Completion = std::move(Pending->second.Completion);
 			for (auto Iterator = Deferred.begin(); Iterator != Deferred.end();) {
 				if (Iterator->Connection != Key.Connection || Iterator->Message.Kind != RemoteMessageKind::Request ||
@@ -303,7 +378,65 @@ namespace gargantuan::network {
 				SaturatingIncrement(Metrics.RequestsTimedOut);
 			if (Result.Outcome.Status == RemoteRequestTerminalStatus::Cancelled)
 				SaturatingIncrement(Metrics.RequestsCancelled);
-			if (Completion) Completion(std::move(Result));
+			return PendingCompletion{std::move(Completion), std::move(Result)};
+		}
+
+		void CompletePending(PendingKey Key, RemoteRequestResult Result) {
+			auto Pending = TakePending(Key, std::move(Result));
+			if (Pending && Pending->Completion) Pending->Completion(std::move(Pending->Result));
+		}
+
+		static void RunCompletions(std::vector<PendingCompletion> Completions) {
+			for (auto &Pending : Completions)
+				if (Pending.Completion) Pending.Completion(std::move(Pending.Result));
+		}
+
+		bool RemovePeerState(ConnectionId Connection) {
+			auto Peer = Peers.find(Connection);
+			if (Peer == Peers.end()) return false;
+			std::vector<PendingCompletion> Completions;
+			std::vector<PendingKey> PendingKeys;
+			for (const auto &[Key, Pending] : PendingRequests)
+				if (Key.Connection == Connection) PendingKeys.push_back(Key);
+			for (const auto &Key : PendingKeys) {
+				auto Pending = TakePending(
+					Key, TerminalResult(Key.Request, RemoteRequestTerminalStatus::Disconnected)
+				);
+				if (Pending) Completions.push_back(std::move(*Pending));
+			}
+			std::erase_if(IncomingRequests, [&](const auto &Entry) { return Entry.first.Connection == Connection; });
+			for (auto Iterator = DispatchQueue.begin(); Iterator != DispatchQueue.end();) {
+				if (Iterator->Connection != Connection) {
+					++Iterator;
+					continue;
+				}
+				Metrics.QueuedDispatchBytes -= Iterator->EncodedBytes;
+				Iterator = DispatchQueue.erase(Iterator);
+			}
+			for (auto Iterator = Deferred.begin(); Iterator != Deferred.end();) {
+				if (Iterator->Connection != Connection) {
+					++Iterator;
+					continue;
+				}
+				Metrics.DeferredReliableBytes -= Iterator->Encoded.size();
+				Iterator = Deferred.erase(Iterator);
+			}
+			Metrics.DeferredReliableMessages = Deferred.size();
+			Metrics.QueuedDispatchMessages = DispatchQueue.size();
+			Peers.erase(Peer);
+			RunCompletions(std::move(Completions));
+			return true;
+		}
+
+		void DrainTerminals() {
+			while (!TerminalConnections.empty()) {
+				auto Terminals = std::move(TerminalConnections);
+				TerminalConnections.clear();
+				for (const auto &[Connection, Information] : Terminals)
+					(void)RemovePeerState(Connection);
+				for (auto &[Connection, Information] : Terminals)
+					if (OnTerminal) OnTerminal(Connection, Information);
+			}
 		}
 
 		bool SendReply(
@@ -349,16 +482,19 @@ namespace gargantuan::network {
 
 		void Dispatch(QueuedMessage Queued) {
 			auto Peer = Peers.find(Queued.Connection);
-			if (Peer != Peers.end() && Queued.Message.Kind == RemoteMessageKind::Request &&
-				!AdmitCall(Peer->second, Queued.Message.Remote))
-				return;
+			if (Peer != Peers.end() && IsCall(Queued.Message.Kind) && !AdmitManagerCall()) return;
 			auto Registered = Remotes.find(Queued.Message.Remote);
+			RemotePublicationId Publication;
 			if (Peer == Peers.end() || Registered == Remotes.end() ||
-				!RemoteAvailable(Queued.Connection, Queued.Message.Remote) ||
+				!RemoteAvailable(Queued.Connection, Queued.Message.Remote, nullptr, &Publication) ||
 				!IsRemoteMessageKindCompatible(Queued.Message.Kind, Registered->second)) {
 				SaturatingIncrement(Metrics.VisibilityRejections);
 				if (Queued.Message.Kind == RemoteMessageKind::Request)
 					RejectRequest(Queued.Connection, Queued.Message, "remote_unavailable", "Remote is unavailable");
+				return;
+			}
+			if (Queued.Message.Publication != Publication) {
+				SaturatingIncrement(Metrics.ProtocolRejections);
 				return;
 			}
 			if (!ArgumentsValid(Queued.Connection, Queued.Message.Arguments, true)) {
@@ -368,10 +504,7 @@ namespace gargantuan::network {
 					);
 				return;
 			}
-			if (IsCall(Queued.Message.Kind) && Queued.Message.Kind != RemoteMessageKind::Request &&
-				!AdmitCall(Peer->second, Queued.Message.Remote)) {
-				if (Queued.Message.Kind == RemoteMessageKind::Request)
-					RejectRequest(Queued.Connection, Queued.Message, "rate_limited", "Remote request rate exceeded");
+			if (IsCall(Queued.Message.Kind) && !AdmitPeerCall(Peer->second, Queued.Message.Remote)) {
 				return;
 			}
 
@@ -445,7 +578,8 @@ namespace gargantuan::network {
 				RejectRequest(Queued.Connection, Queued.Message, "duplicate_request", "Duplicate request ID");
 				return;
 			}
-			if (Peer->second.ConcurrentHandlers >= MaximumConcurrentRemoteHandlersPerPeer ||
+			if (IncomingRequests.size() >= MaximumConcurrentRemoteHandlersPerManager ||
+				Peer->second.ConcurrentHandlers >= MaximumConcurrentRemoteHandlersPerPeer ||
 				Peer->second.ConcurrentHandlers >= Peer->second.Limits.MaximumInFlightRemoteRequests) {
 				SaturatingIncrement(Metrics.ResourceRejections);
 				RejectRequest(Queued.Connection, Queued.Message, "request_limit", "Remote request limit exceeded");
@@ -496,6 +630,7 @@ namespace gargantuan::network {
 		Clock GetTime;
 		bool Active = true;
 		std::map<ConnectionId, PeerState> Peers;
+		std::unordered_map<std::uint32_t, std::uint32_t> HighestPeerGeneration;
 		std::unordered_map<ObjectId, RemoteInstanceKind> Remotes;
 		std::unordered_map<ObjectId, EventHandler> EventHandlers;
 		std::unordered_map<ObjectId, RequestHandler> RequestHandlers;
@@ -507,6 +642,15 @@ namespace gargantuan::network {
 		bool BroadcastRateWindowInitialized = false;
 		std::size_t BroadcastBytes = 0;
 		std::size_t BroadcastSubmissions = 0;
+		std::chrono::steady_clock::time_point ManagerRateWindow{};
+		bool ManagerRateWindowInitialized = false;
+		std::uint32_t ManagerCalls = 0;
+		std::chrono::steady_clock::time_point GeneratedRateWindow{};
+		bool GeneratedRateWindowInitialized = false;
+		std::size_t GeneratedReliableMessages = 0;
+		std::size_t GeneratedReliableBytes = 0;
+		std::map<ConnectionId, DisconnectInfo> TerminalConnections;
+		TerminalHandler OnTerminal;
 		RemoteMetrics Metrics;
 	};
 
@@ -526,52 +670,44 @@ namespace gargantuan::network {
 	RemoteManager::~RemoteManager() {
 		if (!State) return;
 		State->Active = false;
+		std::vector<Implementation::PendingCompletion> Completions;
 		std::vector<Implementation::PendingKey> PendingKeys;
 		PendingKeys.reserve(State->PendingRequests.size());
 		for (const auto &[Key, Pending] : State->PendingRequests)
 			PendingKeys.push_back(Key);
-		for (const auto &Key : PendingKeys)
-			State->CompletePending(Key, TerminalResult(Key.Request, RemoteRequestTerminalStatus::Disconnected));
+		for (const auto &Key : PendingKeys) {
+			auto Pending = State->TakePending(
+				Key, TerminalResult(Key.Request, RemoteRequestTerminalStatus::Disconnected)
+			);
+			if (Pending) Completions.push_back(std::move(*Pending));
+		}
+		State->Peers.clear();
+		State->IncomingRequests.clear();
+		State->DispatchQueue.clear();
+		State->Deferred.clear();
+		Implementation::RunCompletions(std::move(Completions));
 	}
 
 	bool RemoteManager::AddPeer(ConnectionId Connection, ReplicationEpoch Epoch, NetworkLimits Limits) {
 		if (!State->Active || !Connection.IsValid() || !Epoch.IsValid() || !Limits.IsValid() ||
 			State->Peers.size() >= MaximumRemotePeers)
 			return false;
+		auto Highest = State->HighestPeerGeneration.find(Connection.Slot);
+		if ((Highest != State->HighestPeerGeneration.end() && Connection.Generation <= Highest->second) ||
+			(Highest == State->HighestPeerGeneration.end() &&
+			 State->HighestPeerGeneration.size() >= MaximumRemotePeerSlots))
+			return false;
 		for (const auto &[Existing, Peer] : State->Peers)
 			if (Existing.Slot == Connection.Slot) return false;
-		return State->Peers.emplace(Connection, Implementation::PeerState{.Epoch = Epoch, .Limits = Limits}).second;
+		if (!State->Peers.emplace(Connection, Implementation::PeerState{.Epoch = Epoch, .Limits = Limits}).second)
+			return false;
+		State->HighestPeerGeneration[Connection.Slot] = Connection.Generation;
+		return true;
 	}
 
 	bool RemoteManager::RemovePeer(ConnectionId Connection) {
-		auto Peer = State->Peers.find(Connection);
-		if (Peer == State->Peers.end()) return false;
-		std::vector<Implementation::PendingKey> PendingKeys;
-		for (const auto &[Key, Pending] : State->PendingRequests)
-			if (Key.Connection == Connection) PendingKeys.push_back(Key);
-		for (const auto &Key : PendingKeys)
-			State->CompletePending(Key, TerminalResult(Key.Request, RemoteRequestTerminalStatus::Disconnected));
-		std::erase_if(State->IncomingRequests, [&](const auto &Entry) { return Entry.first.Connection == Connection; });
-		for (auto Iterator = State->DispatchQueue.begin(); Iterator != State->DispatchQueue.end();) {
-			if (Iterator->Connection != Connection) {
-				++Iterator;
-				continue;
-			}
-			State->Metrics.QueuedDispatchBytes -= Iterator->EncodedBytes;
-			Iterator = State->DispatchQueue.erase(Iterator);
-		}
-		for (auto Iterator = State->Deferred.begin(); Iterator != State->Deferred.end();) {
-			if (Iterator->Connection != Connection) {
-				++Iterator;
-				continue;
-			}
-			State->Metrics.DeferredReliableBytes -= Iterator->Encoded.size();
-			Iterator = State->Deferred.erase(Iterator);
-		}
-		State->Metrics.DeferredReliableMessages = State->Deferred.size();
-		State->Metrics.QueuedDispatchMessages = State->DispatchQueue.size();
-		State->Peers.erase(Peer);
-		return true;
+		auto StateValue = State;
+		return StateValue->RemovePeerState(Connection);
 	}
 
 	bool RemoteManager::RegisterRemote(ObjectId Remote, RemoteInstanceKind Kind) {
@@ -581,6 +717,7 @@ namespace gargantuan::network {
 
 	bool RemoteManager::UnregisterRemote(ObjectId Remote) {
 		if (State->Remotes.erase(Remote) == 0) return false;
+		std::vector<Implementation::PendingCompletion> Completions;
 		State->EventHandlers.erase(Remote);
 		State->RequestHandlers.erase(Remote);
 		for (auto &[Connection, Peer] : State->Peers) {
@@ -592,8 +729,12 @@ namespace gargantuan::network {
 		std::vector<Implementation::PendingKey> PendingKeys;
 		for (const auto &[Key, Pending] : State->PendingRequests)
 			if (Pending.Remote == Remote) PendingKeys.push_back(Key);
-		for (const auto &Key : PendingKeys)
-			State->CompletePending(Key, TerminalResult(Key.Request, RemoteRequestTerminalStatus::ProtocolRejected));
+		for (const auto &Key : PendingKeys) {
+			auto Pending = State->TakePending(
+				Key, TerminalResult(Key.Request, RemoteRequestTerminalStatus::ProtocolRejected)
+			);
+			if (Pending) Completions.push_back(std::move(*Pending));
+		}
 		for (auto Iterator = State->IncomingRequests.begin(); Iterator != State->IncomingRequests.end();) {
 			if (Iterator->second.Remote != Remote) {
 				++Iterator;
@@ -612,6 +753,8 @@ namespace gargantuan::network {
 			if (Peer != State->Peers.end() && Peer->second.ConcurrentHandlers != 0) --Peer->second.ConcurrentHandlers;
 			Iterator = State->IncomingRequests.erase(Iterator);
 		}
+		for (auto &[Connection, Peer] : State->Peers)
+			Peer.Publications.erase(Remote);
 		for (auto Iterator = State->DispatchQueue.begin(); Iterator != State->DispatchQueue.end();) {
 			if (Iterator->Message.Remote != Remote) {
 				++Iterator;
@@ -637,6 +780,9 @@ namespace gargantuan::network {
 		}
 		State->Metrics.QueuedDispatchMessages = State->DispatchQueue.size();
 		State->Metrics.DeferredReliableMessages = State->Deferred.size();
+		auto StateValue = State;
+		StateValue->DrainTerminals();
+		Implementation::RunCompletions(std::move(Completions));
 		return true;
 	}
 
@@ -647,6 +793,17 @@ namespace gargantuan::network {
 			return false;
 		const bool Inserted = Peer->second.PublishedRemotes.insert(Remote).second;
 		if (Inserted) {
+			auto &Publication = Peer->second.Publications[Remote];
+			if (!Publication.IsValid())
+				Publication = RemotePublicationId(1);
+			else {
+				auto Next = Publication.TryNext();
+				if (!Next) {
+					Peer->second.PublishedRemotes.erase(Remote);
+					return false;
+				}
+				Publication = *Next;
+			}
 			Peer->second.NextOutgoingSequence.erase(Remote);
 			Peer->second.LatestIncomingSequence.erase(Remote);
 		}
@@ -657,14 +814,19 @@ namespace gargantuan::network {
 	bool RemoteManager::UnpublishRemote(ConnectionId Connection, ObjectId Remote) {
 		auto Peer = State->Peers.find(Connection);
 		if (Peer == State->Peers.end() || Peer->second.PublishedRemotes.erase(Remote) == 0) return false;
+		std::vector<Implementation::PendingCompletion> Completions;
 		Peer->second.MaterializedObjects.erase(Remote);
 		Peer->second.NextOutgoingSequence.erase(Remote);
 		Peer->second.LatestIncomingSequence.erase(Remote);
 		std::vector<Implementation::PendingKey> PendingKeys;
 		for (const auto &[Key, Pending] : State->PendingRequests)
 			if (Key.Connection == Connection && Pending.Remote == Remote) PendingKeys.push_back(Key);
-		for (const auto &Key : PendingKeys)
-			State->CompletePending(Key, TerminalResult(Key.Request, RemoteRequestTerminalStatus::ProtocolRejected));
+		for (const auto &Key : PendingKeys) {
+			auto Pending = State->TakePending(
+				Key, TerminalResult(Key.Request, RemoteRequestTerminalStatus::ProtocolRejected)
+			);
+			if (Pending) Completions.push_back(std::move(*Pending));
+		}
 		for (auto Iterator = State->IncomingRequests.begin(); Iterator != State->IncomingRequests.end();) {
 			if (Iterator->first.Connection != Connection || Iterator->second.Remote != Remote) {
 				++Iterator;
@@ -703,6 +865,9 @@ namespace gargantuan::network {
 		}
 		State->Metrics.QueuedDispatchMessages = State->DispatchQueue.size();
 		State->Metrics.DeferredReliableMessages = State->Deferred.size();
+		auto StateValue = State;
+		StateValue->DrainTerminals();
+		Implementation::RunCompletions(std::move(Completions));
 		return true;
 	}
 
@@ -735,6 +900,15 @@ namespace gargantuan::network {
 		if (Kind == State->Remotes.end() || Kind->second != RemoteInstanceKind::Function) return false;
 		State->RequestHandlers[Remote] = std::move(Handler);
 		return true;
+	}
+
+	void RemoteManager::SetTerminalHandler(TerminalHandler Handler) {
+		State->OnTerminal = std::move(Handler);
+	}
+
+	void RemoteManager::DrainSchedulerTerminals() {
+		auto StateValue = State;
+		StateValue->DrainTerminals();
 	}
 
 	RemoteSendResult
@@ -782,6 +956,7 @@ namespace gargantuan::network {
 				Result.Accepted() ? State->Metrics.SequencedEventsAccepted : State->Metrics.UnreliableEventsDropped
 			);
 		}
+		DrainSchedulerTerminals();
 		return Result;
 	}
 
@@ -852,7 +1027,8 @@ namespace gargantuan::network {
 		if (!State->RemoteAvailable(Connection, Remote)) return {RemoteSendStatus::UnpublishedRemote};
 		if (Deadline <= std::chrono::milliseconds::zero() || Deadline > MaximumRemoteRequestDeadline)
 			return {RemoteSendStatus::InvalidArguments};
-		if (Peer->second.PendingOutgoingRequests >= Peer->second.Limits.MaximumInFlightRemoteRequests)
+		if (State->PendingRequests.size() >= MaximumRemoteInFlightRequestsPerManager ||
+			Peer->second.PendingOutgoingRequests >= Peer->second.Limits.MaximumInFlightRemoteRequests)
 			return {RemoteSendStatus::RequestLimitExceeded};
 		if (!State->AdmitCall(Peer->second, Remote)) return {RemoteSendStatus::RateLimited};
 		const auto Request = Peer->second.NextRequest;
@@ -868,20 +1044,19 @@ namespace gargantuan::network {
 		};
 		if (!Message.IsValid()) return {RemoteSendStatus::InvalidArguments};
 		Implementation::PendingKey Key{Connection, Request};
-		State->PendingRequests.emplace(
-			Key, Implementation::PendingRequest{Remote, State->GetTime() + Deadline, std::move(Completion)}
-		);
-		++Peer->second.PendingOutgoingRequests;
-		State->Metrics.InFlightRequests = State->PendingRequests.size();
 		auto Result = State->SendMessage(Connection, std::move(Message));
 		Result.Request = Request;
 		if (!Result.Accepted()) {
-			State->PendingRequests.erase(Key);
-			--Peer->second.PendingOutgoingRequests;
-			State->Metrics.InFlightRequests = State->PendingRequests.size();
 			SaturatingIncrement(State->Metrics.ResourceRejections);
-		} else
+			DrainSchedulerTerminals();
+		} else {
+			State->PendingRequests.emplace(
+				Key, Implementation::PendingRequest{Remote, State->GetTime() + Deadline, std::move(Completion)}
+			);
+			++Peer->second.PendingOutgoingRequests;
+			State->Metrics.InFlightRequests = State->PendingRequests.size();
 			SaturatingIncrement(State->Metrics.RequestsStarted);
+		}
 		return Result;
 	}
 
@@ -894,6 +1069,7 @@ namespace gargantuan::network {
 		State->CompletePending(Key, TerminalResult(Handle.Request, RemoteRequestTerminalStatus::Cancelled));
 		RemoteMessage Message{.Kind = RemoteMessageKind::Cancellation, .Remote = Remote, .Request = Handle.Request};
 		(void)State->SendMessage(Handle.Connection, std::move(Message), false);
+		DrainSchedulerTerminals();
 		return true;
 	}
 
@@ -931,7 +1107,7 @@ namespace gargantuan::network {
 		if (Decoded->Kind == RemoteMessageKind::SequencedEvent) {
 			const auto *Order = std::get_if<RemoteEventOrder>(&Received->Order);
 			if (!Order || Order->Channel != RemoteStateChannel(Decoded->Remote) ||
-				Order->Sequence != Decoded->Sequence) {
+				Order->Publication != Decoded->Publication || Order->Sequence != Decoded->Sequence) {
 				SaturatingIncrement(State->Metrics.ProtocolRejections);
 				return false;
 			}
@@ -1047,6 +1223,7 @@ namespace gargantuan::network {
 			++Processed;
 		}
 		State->Metrics.QueuedDispatchMessages = State->DispatchQueue.size();
+		DrainSchedulerTerminals();
 		return Processed;
 	}
 

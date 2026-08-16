@@ -3924,6 +3924,38 @@ namespace {
 		Check(lua_tonumber(L, -1) == 7, "task.defer, task.delay, and task.wait resume correctly");
 
 		lua_settop(L, 0);
+		lua_pushcfunction(L, [](lua_State *State) {
+			lua_pushboolean(
+				State,
+				GetCurrentScriptSecurityContext().HasCapability(ScriptCapability::MutateDataModel)
+			);
+			return 1;
+		}, "HasTaskMutationAuthority");
+		lua_setglobal(L, "HasTaskMutationAuthority");
+		{
+			ScriptSecurityScope Scope({ScriptExecutionDomain::Client, {ScriptCapability::NetworkReceive}});
+			Check(Load(L, R"(
+				DeferredTaskCanMutate = nil
+				DelayedTaskCanMutate = nil
+				WaitTaskCanMutate = nil
+				task.defer(function() DeferredTaskCanMutate = HasTaskMutationAuthority() end)
+				task.delay(0, function() DelayedTaskCanMutate = HasTaskMutationAuthority() end)
+				task.spawn(function()
+					task.wait(0)
+					WaitTaskCanMutate = HasTaskMutationAuthority()
+				end)
+			)", "luau-task-security") == LUA_OK && lua_pcall(L, 0, 0, 0) == LUA_OK,
+				"restricted task scheduling source executes");
+		}
+		engine.Threads.Step();
+		engine.Threads.Step();
+		for (const char *Name : {"DeferredTaskCanMutate", "DelayedTaskCanMutate", "WaitTaskCanMutate"}) {
+			lua_getglobal(L, Name);
+			Check(!lua_toboolean(L, -1), "task continuation preserves its originating restricted capability context");
+			lua_pop(L, 1);
+		}
+
+		lua_settop(L, 0);
 		const auto SignalLoadStatus = Load(L, R"(
 			local SignalValue = Signal.new()
 			local Result = 0

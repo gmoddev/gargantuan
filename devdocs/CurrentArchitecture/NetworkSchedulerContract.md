@@ -1,7 +1,7 @@
 ---
 status: current
 owner: networking
-last_verified: 2026-08-15
+last_verified: 2026-08-16
 related_code:
   - include/gargantuan/network/Scheduler.hpp
   - src/network/Scheduler.cpp
@@ -18,7 +18,7 @@ related_adrs:
 The deterministic simulator and pure contracts now prove the transport and
 scheduler-facing portion of the accepted networking architecture. The simulator
 owns delivery mechanics, connection lifecycle, in-flight transport limits, and
-transport observations. A future production `NetworkScheduler` owns bounded work
+transport observations. The production `NetworkScheduler` owns bounded work
 before transport submission. Neither layer owns application or DataModel
 authority.
 
@@ -46,10 +46,10 @@ The validation matrix is deliberately explicit about later layers:
 | Scheduler unreliable drop/supersession | `PROVEN` | Pre-transport drop and same-channel newest-wins tests |
 | Scheduler budgets and flush semantics | `PROVEN` | Per-flush limits, multi-tick drain, and simulator integration tests |
 | `ChangeJournal.Sequence` type separation | `PROVEN` | No scheduler/transport contract accepts journal sequence |
-| Irrelevant journal skipping and state coalescing | `DEFERRED TO REPLICATION` | Requires `ReplicationCoordinator` behavior |
-| Publish/unpublish execution | `DEFERRED TO REPLICATION` | Intent types are proven; execution is not implemented |
-| Remote request termination and handler budgets | `DEFERRED TO REMOTES` | Terminal value vocabulary exists; runtime does not |
-| Reference visibility/dependency policy | `DEFERRED TO REPLICATION` | Per-peer planning is intentionally above scheduler |
+| Irrelevant journal skipping and state coalescing | `PROVEN ABOVE SCHEDULER` | `ReplicationCoordinator` tests skip and coalesce per peer |
+| Publish/unpublish execution | `PROVEN ABOVE SCHEDULER` | Basic replication simulator and GNS tests apply explicit operations |
+| Remote request termination and handler budgets | `PROVEN ABOVE SCHEDULER` | `RemoteManager` and Luau tests cover all terminal outcomes and ceilings |
+| Reference visibility/dependency policy | `PROVEN ABOVE SCHEDULER` | Mixed simulator/GNS and adversarial Remote tests cover materialization and rejection |
 | Backend retransmission, congestion control, and path behavior | `DEFERRED TO REAL TRANSPORT` | Simulator proves semantics, not backend mechanics |
 | Ticket validation and authenticated peer establishment | `DEFERRED TO AUTHENTICATION` | Opaque handshake data carries no authority |
 | Transport and scheduler authority separation | `PROVEN` | No DataModel, mutation, capability, schema, or Luau dependency |
@@ -62,7 +62,7 @@ would contradict the accepted implementation order.
 
 ## Scheduler ownership
 
-`INetworkScheduler` defines the narrow future production boundary:
+`INetworkScheduler` defines the narrow production boundary:
 
 ```text
 trusted engine subsystem
@@ -76,7 +76,8 @@ The scheduler owns:
 
 - generation-safe registered connection state and validated negotiated limits;
 - per-connection semantic queues;
-- admission, byte/message accounting, and observable rejection;
+- admission, per-connection and manager-wide byte/message accounting, and
+  observable rejection;
 - traffic-class selection at explicit tick/flush boundaries;
 - reliable backlog policy and transport-backpressure retention;
 - unreliable congestion drop and sequenced unsent-state supersession;
@@ -125,20 +126,26 @@ The semantic precedence is:
 6. background.
 
 This is selection order, not a lane, stream, OS priority, or fixed bandwidth
-percentage. Background work cannot delay already eligible control work. A
-budget-limited tick may leave lower-priority work queued; the contract does not
-promise that every class sends every tick. More elaborate fairness requires
-production measurements and remains a scheduler implementation choice provided
-control/structural precedence and boundedness remain intact.
+percentage. Background work cannot delay already eligible control work. Control
+always remains first. When structural replication and reliable application work
+are both queued, production scheduling submits at most eight consecutive
+structural messages before one reliable application message. This prevents a
+sustained replication baseline from starving admitted terminal Remote responses
+or requests while retaining structural precedence. A budget-limited tick may
+leave lower-priority work queued. There is still no implicit causal ordering
+between replication and Remote traffic on unrelated logical channels.
 
 ## Reliable and unreliable congestion
 
 Accepted reliable work is counted against
-`NetworkLimits.MaximumQueuedReliableBytes` and is never silently discarded while
+`NetworkLimits.MaximumQueuedReliableBytes` per connection and the production
+scheduler's 256 MiB manager-wide ceiling. It is never silently discarded while
 the connection is healthy. Transport `WouldBlock` is temporary backpressure:
 the scheduler retains the work and reports it. Crossing the hard scheduler
-backlog ceiling is terminal `ResourceExhaustion`; accepted work cannot be
-promised after that connection failure.
+backlog ceiling is terminal `ResourceExhaustion` for the submitting connection;
+its queued charge is cleared immediately, so one peer cannot retain aggregate
+capacity after terminal rejection. Accepted work cannot be promised after that
+connection failure.
 
 Unreliable work never gains an unbounded scheduler backlog. The initial contract
 retains at most one negotiated tick's byte/message budget before transport;
@@ -178,7 +185,9 @@ scheduler drop does not increment a transport drop counter.
 `SchedulerContractTests.cpp` retains the deterministic policy proof that
 established the interface. It proves selection, admission,
 supersession, flush, backpressure, cancellation, statistics separation, a bounded
-5,000-message burst, and integration with `SimulatedTransport`. `NetworkScheduler`
+5,000-message burst, aggregate multi-peer reliable exhaustion and charge release,
+bounded structural/application fairness, and integration with
+`SimulatedTransport`. `NetworkScheduler`
 now implements that policy in production, and basic client replication exercises
 it through both the simulator and the optional real GNS adapter. Identical
 simulator state, intent order, limits, and ticks produce identical submission traces.

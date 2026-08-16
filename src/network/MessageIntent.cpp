@@ -7,8 +7,10 @@ namespace gargantuan::network {
 		return std::visit([](const auto &Value) {
 			using Type = std::decay_t<decltype(Value)>;
 			if constexpr (std::is_same_v<Type, std::monostate>) return true;
-			else if constexpr (std::is_same_v<Type, RealtimeStateOrder> || std::is_same_v<Type, RemoteEventOrder>)
+			else if constexpr (std::is_same_v<Type, RealtimeStateOrder>)
 				return Value.Channel.IsValid() && Value.Sequence.IsValid();
+			else if constexpr (std::is_same_v<Type, RemoteEventOrder>)
+				return Value.Channel.IsValid() && Value.Publication.IsValid() && Value.Sequence.IsValid();
 			else return Value.Sequence.IsValid();
 		}, Order);
 	}

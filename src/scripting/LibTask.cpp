@@ -59,7 +59,10 @@ namespace gargantuan {
 		lua_State *thread = GetThreadFromArgument(L, 1, argumentsToPass);
 
 		auto scriptEngine = ScriptEngine::Get(L);
-		scriptEngine->Threads.QueueDeferredTask(thread, argumentsToPass);
+		if (!scriptEngine->Threads.QueueDeferredTask(thread, argumentsToPass)) {
+			luaL_error(L, "task queue limit exceeded");
+			return 0;
+		}
 
 		return 1;
 	}
@@ -71,9 +74,12 @@ namespace gargantuan {
 		lua_State *thread = GetThreadFromArgument(L, 2, argumentsToPass);
 
 		auto scriptEngine = ScriptEngine::Get(L);
-		scriptEngine->Threads.QueueScheduledTask(
+		if (!scriptEngine->Threads.QueueScheduledTask(
 			thread, ThreadEngine::ScheduledTask::Type::Delay, delaySeconds, argumentsToPass
-		);
+		)) {
+			luaL_error(L, "task queue limit exceeded");
+			return 0;
+		}
 
 		return 1;
 	}
@@ -87,10 +93,19 @@ namespace gargantuan {
 	}
 
 	int LibTask_wait(lua_State *L) {
+		if (!GetCurrentScriptSecurityContext().AllowsTaskSchedulerYield) {
+			luaL_error(L, "task.wait is unavailable in this handler context");
+			return 0;
+		}
 		auto scriptEngine = ScriptEngine::Get(L);
 		double delaySeconds = luaL_optnumber(L, 1, 0.0f);
 		lua_settop(L, 0);
-		scriptEngine->Threads.QueueScheduledTask(L, ThreadEngine::ScheduledTask::Type::Wait, delaySeconds, 1);
+		if (!scriptEngine->Threads.QueueScheduledTask(
+			L, ThreadEngine::ScheduledTask::Type::Wait, delaySeconds, 1
+		)) {
+			luaL_error(L, "task queue limit exceeded");
+			return 0;
+		}
 		return lua_yield(L, 0);
 	}
 

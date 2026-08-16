@@ -1,7 +1,10 @@
 #include "gargantuan/network/GameNetworkingSocketsTransport.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Folder.hpp"
+#include "gargantuan/classes/RemoteEvent.hpp"
+#include "gargantuan/classes/RemoteFunction.hpp"
 #include "gargantuan/network/ReplicaApplier.hpp"
+#include "gargantuan/network/RemoteManager.hpp"
 #include "gargantuan/network/ReplicationCoordinator.hpp"
 #include "gargantuan/network/ReplicationTransport.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
@@ -178,6 +181,7 @@ namespace {
 }
 
 int main() {
+	using namespace gargantuan;
 	using namespace gargantuan::network;
 	try { gargantuan::BootstrapNativeRuntimeSchema(); }
 	catch (const std::exception &Error) { std::cerr << Error.what() << '\n'; return 1; }
@@ -284,7 +288,7 @@ int main() {
 
 	{
 		std::cout << "[Networking:GNS] reliable backend bounds\n" << std::flush;
-		constexpr std::size_t MaximumBackendReliablePayload = 512 * 1024 - 24;
+		constexpr std::size_t MaximumBackendReliablePayload = 512 * 1024 - 32;
 		auto AtLimit = Message(Pair.ClientConnection, DeliveryMode::ReliableOrdered,
 			std::vector<std::byte>(MaximumBackendReliablePayload, std::byte{0x5a}), Pair.Limits);
 		Check(AtLimit && Pair.Client->Send(*AtLimit).Succeeded(),
@@ -342,6 +346,12 @@ int main() {
 		auto Child = std::make_shared<gargantuan::Folder>();
 		Child->SetName("GnsReplicatedFolder");
 		Child->SetParent(Game);
+		auto Event = std::make_shared<gargantuan::RemoteEvent>();
+		Event->SetName("MixedRemoteEvent");
+		Event->SetParent(Game);
+		auto Function = std::make_shared<gargantuan::RemoteFunction>();
+		Function->SetName("MixedRemoteFunction");
+		Function->SetParent(Game);
 		gargantuan::network::ReplicationCoordinator Coordinator(Game);
 		auto Baseline = Coordinator.AddPeer(Pair.ServerConnection, ReplicationEpoch(1));
 		NetworkScheduler Scheduler(*Pair.Server);
@@ -369,6 +379,131 @@ int main() {
 			Check(Applied && ClientReplica.GetReplicaRoot() &&
 				ClientReplica.GetReplicaRoot()->FindFirstChild("GnsReplicatedFolder", false),
 				"independent real localhost client materializes the authoritative server baseline");
+
+			NetworkScheduler ClientScheduler(*Pair.Client);
+			Check(
+				ClientScheduler.RegisterConnection(Pair.ClientConnection, Pair.Limits),
+				"real mixed session registers the client scheduler"
+			);
+			auto ServerVisibility = [&](ConnectionId Connection, ObjectId Object) {
+				const auto *View = Coordinator.GetView(Connection);
+				return View && View->Knows(Object);
+			};
+			auto ClientVisibility = [&](ConnectionId, ObjectId Object) {
+				return ClientReplica.Resolve(Object) != nullptr;
+			};
+			RemoteManager ServerRemotes(
+				RemoteManagerRole::Server,
+				Scheduler,
+				ServerVisibility,
+				[](ObjectId Object) { return gargantuan::ObjectRegistry::Get().Lookup(Object); }
+			);
+			RemoteManager ClientRemotes(
+				RemoteManagerRole::Client,
+				ClientScheduler,
+				ClientVisibility,
+				[&](ObjectId Object) { return ClientReplica.Resolve(Object); }
+			);
+			Check(
+				ServerRemotes.AddPeer(Pair.ServerConnection, ReplicationEpoch(1), Pair.Limits) &&
+					ClientRemotes.AddPeer(Pair.ClientConnection, ReplicationEpoch(1), Pair.Limits),
+				"real mixed session attaches RemoteManagers to the replication epoch"
+			);
+			for (const auto [Object, Kind] : {
+					 std::pair{Event->GetObjectId(), RemoteInstanceKind::ReliableEvent},
+					 std::pair{Function->GetObjectId(), RemoteInstanceKind::Function},
+				 }) {
+				Check(
+					ServerRemotes.RegisterRemote(Object, Kind) && ClientRemotes.RegisterRemote(Object, Kind) &&
+						ServerRemotes.PublishRemote(Pair.ServerConnection, Object) &&
+						ClientRemotes.PublishRemote(Pair.ClientConnection, Object),
+					"real mixed session publishes replicated Remote identity"
+				);
+			}
+
+			auto NewlyPublished = std::make_shared<gargantuan::Folder>();
+			NewlyPublished->SetName("MixedNewObject");
+			NewlyPublished->SetParent(Game);
+			auto Publication = Coordinator.ProduceIncremental(Pair.ServerConnection);
+			Check(Publication.Succeeded(), "real mixed session produces a new-object publication");
+			if (Publication.Succeeded()) {
+				auto QueuedPublication = QueueReplicationFrame(
+					*Publication.Frame, Pair.ServerConnection, Pair.Limits, Scheduler
+				);
+				Check(QueuedPublication && QueuedPublication->Accepted(), "mixed publication enters shared scheduler");
+			}
+
+			bool ReferencedEventDelivered = false;
+			bool RequestHandled = false;
+			std::optional<RemoteRequestTerminalStatus> RequestTerminal;
+			ClientRemotes.SetEventHandler(Event->GetObjectId(), [&](const RemoteInvocation &Invocation) {
+				const auto *Reference = std::get_if<WireObjectReference>(&Invocation.Arguments.front());
+				ReferencedEventDelivered = Reference &&
+					ClientReplica.Resolve(Reference->Object.ToObjectId()) != nullptr;
+			});
+			ServerRemotes.SetRequestHandler(
+				Function->GetObjectId(), [&](const RemoteInvocation &, RemoteManager::RequestReply Reply) {
+					RequestHandled = Reply({77}, std::nullopt);
+				}
+			);
+			Check(
+				ServerRemotes
+						.SendEvent(
+							Pair.ServerConnection,
+							Event->GetObjectId(),
+							{WireObjectReference{WireObjectId::FromObjectId(NewlyPublished->GetObjectId())}}
+						)
+						.Status == RemoteSendStatus::DeferredForMaterialization,
+				"reliable Remote waits on an explicit publication dependency in the real mixed session"
+			);
+			Check(
+				ClientRemotes
+					.StartRequest(
+						Pair.ClientConnection,
+						Function->GetObjectId(),
+						{},
+						[&](RemoteRequestResult Result) { RequestTerminal = Result.Outcome.Status; },
+						2s
+					)
+					.Accepted(),
+				"RemoteFunction request shares the real session with publication traffic"
+			);
+
+			bool PublicationApplied = false;
+			const auto MixedDeadline = std::chrono::steady_clock::now() + 5s;
+			while (std::chrono::steady_clock::now() < MixedDeadline &&
+				   (!ReferencedEventDelivered || !RequestTerminal)) {
+				(void)Scheduler.Flush(Pair.ServerConnection, SchedulerTickBudget::FromNetworkLimits(Pair.Limits));
+				(void)ClientScheduler.Flush(
+					Pair.ClientConnection, SchedulerTickBudget::FromNetworkLimits(Pair.Limits)
+				);
+				for (const auto &TransportEventValue : Drain(*Pair.Server))
+					(void)ServerRemotes.HandleTransportEvent(TransportEventValue);
+				for (const auto &TransportEventValue : Drain(*Pair.Client)) {
+					if (const auto *Received = std::get_if<ReceivedMessageEvent>(&TransportEventValue);
+						Received && Received->Traffic == TrafficClass::StructuralReplication) {
+						PublicationApplied = ClientReplica.ApplyBytes(Received->Payload).Succeeded();
+						if (PublicationApplied) {
+							(void)ServerRemotes.MarkMaterialized(
+								Pair.ServerConnection, NewlyPublished->GetObjectId()
+							);
+							(void)ClientRemotes.MarkMaterialized(
+								Pair.ClientConnection, NewlyPublished->GetObjectId()
+							);
+						}
+					} else {
+						(void)ClientRemotes.HandleTransportEvent(TransportEventValue);
+					}
+				}
+				ServerRemotes.Pump();
+				ClientRemotes.Pump();
+				std::this_thread::sleep_for(1ms);
+			}
+			Check(
+				PublicationApplied && ReferencedEventDelivered && RequestHandled &&
+					RequestTerminal == RemoteRequestTerminalStatus::Success,
+				"real localhost GNS composes replication, dependency-gated RemoteEvent, and RemoteFunction traffic"
+			);
 		}
 		Pair.ServerEvents.clear();
 		Pair.ClientEvents.clear();

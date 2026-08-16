@@ -55,6 +55,7 @@ namespace gargantuan {
 	struct ScriptSecurityContext {
 		ScriptExecutionDomain Domain = ScriptExecutionDomain::Core;
 		ScriptCapabilitySet Capabilities;
+		bool AllowsTaskSchedulerYield = true;
 
 		[[nodiscard]] bool HasCapability(ScriptCapability capability) const;
 		[[nodiscard]] static ScriptSecurityContext CoreTrusted();

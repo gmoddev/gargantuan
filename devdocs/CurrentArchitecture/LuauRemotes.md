@@ -37,7 +37,8 @@ The canonical runtime schema registers these ordinary Instance classes:
 | `RemoteFunction` | reliable bounded request/response | handlers and pending requests |
 
 `RemoteEventBase` and `RemoteBase` are abstract schema classes. A Remote uses
-its ordinary generation-safe `ObjectId` as semantic wire identity. No global
+its ordinary generation-safe `ObjectId` plus a per-peer `RemotePublicationId`
+as semantic wire identity and publication lifetime. No global
 mutable Remote-name registry or pointer identity is used. Connection-local
 compact indexes are deliberately deferred because the current bounded frame is
 already sufficient and an index would add publication lifecycle state without
@@ -61,7 +62,7 @@ runtime. It owns:
 - per-peer/per-Remote admission;
 - incoming safe-point dispatch;
 - request IDs, deadlines, cancellation, and exactly-once completion;
-- per-peer sequence state;
+- per-peer publication and sequence state;
 - explicit reliable materialization dependencies; and
 - Remote-specific metrics.
 
@@ -130,9 +131,14 @@ Nested RemoteFunction calls are supported: a handler may suspend on another
 RemoteFunction without blocking unrelated handlers. Each nested request keeps
 its own ID and deadline. Arbitrary application-level cyclic dependencies still
 have no distributed deadlock detection; finite deadlines terminate them.
-The exact `ScriptSecurityContext` at suspension is restored around every
-RemoteFunction and signal-wait continuation, so yielding cannot upgrade a game
-coroutine to the engine thread's ambient authority.
+The exact `ScriptSecurityContext` at scheduling or suspension is restored around
+every `task.spawn`, `task.defer`, `task.delay`, `task.wait`, RemoteFunction, and
+signal-wait continuation, so yielding cannot upgrade a game coroutine to the
+engine thread's ambient authority. `task.wait` is rejected inside an incoming
+RemoteFunction handler because that boundary supports only nested
+RemoteFunction suspension; a rejected handler cannot remain scheduled and run
+after its terminal error. The shared script task queue is capped at 65,536
+entries.
 
 The handler API uses methods rather than Roblox callback properties. Peer
 slot/generation arguments and handler-setter spelling are intentionally
@@ -153,13 +159,16 @@ frame must fit both the 256 KiB Remote frame ceiling and the smaller negotiated
 unreliable datagram limit. The scheduler bounds unreliable work to the current
 tick and preferentially drops it under congestion.
 
-An `UnreliableSequencedRemoteEvent` is one state channel per Remote, peer, and
-connection session. It uses its own `RemoteEventSequence` domain and the
+An `UnreliableSequencedRemoteEvent` is one state channel per Remote, peer,
+connection session, and publication lifetime. It uses its own
+`RemoteEventSequence` and `RemotePublicationId` domains and the
 scheduler's `RemoteEventOrder`; it never reuses replication sequences,
 `ChangeJournal.Sequence`, or packet numbers. A newer queued value may supersede
 an older unsent value. Duplicate or reordered values at or below the latest
 accepted sequence are discarded. Disconnect, unpublication, and republish
-clear the relevant sequence state.
+clear the relevant sequence state. A republished Remote receives a newer
+publication ID, so an old high sequence cannot supersede or poison the new
+publication's low sequence.
 
 ## Request lifecycle
 
@@ -189,6 +198,11 @@ request frame is removed atomically at every terminal state, so cancellation or
 timeout cannot release the original request later. Disconnect terminates outgoing
 requests, removes incoming requests, drops queued and deferred work, clears
 sequence/rate state, and removes the peer.
+
+A terminal scheduler result is preserved in `RemoteSendResult`, drained into the
+same peer teardown path, and exposed to the host through a terminal callback.
+Reliable queue exhaustion therefore resumes older pending requests with
+`disconnected` exactly once instead of leaving them until their deadlines.
 
 Cancellation or a peer-selected short deadline revokes reply eligibility but
 does not immediately release the handler-work admission slot. The slot remains
@@ -222,11 +236,11 @@ containers, functions, threads, callbacks, arbitrary userdata, and cyclic data
 are unsupported. The bridge never serializes execution context, capabilities,
 or trust metadata.
 
-## Binary protocol version 1
+## Binary protocol version 2
 
 The Remote protocol is Gargantuan-owned, language-neutral little-endian binary.
 It is independent of GNS, Box3D, nlohmann, Glaze, compiler ABI, and C++ struct
-layout. The fixed 44-byte header is:
+layout. The fixed 52-byte header is:
 
 | Offset | Bytes | Field |
 | ---: | ---: | --- |
@@ -235,14 +249,15 @@ layout. The fixed 44-byte header is:
 | 6 | 1 | message kind |
 | 7 | 1 | zero reserved |
 | 8 | 8 | Remote `ObjectId` slot/generation |
-| 16 | 8 | `RemoteRequestId`, or zero |
-| 24 | 8 | `RemoteEventSequence`, or zero |
-| 32 | 4 | request deadline milliseconds, or zero |
-| 36 | 2 | argument count |
-| 38 | 2 | zero reserved |
-| 40 | 4 | payload bytes |
+| 16 | 8 | peer-local `RemotePublicationId` |
+| 24 | 8 | `RemoteRequestId`, or zero |
+| 32 | 8 | `RemoteEventSequence`, or zero |
+| 40 | 4 | request deadline milliseconds, or zero |
+| 44 | 2 | argument count |
+| 46 | 2 | zero reserved |
+| 48 | 4 | payload bytes |
 
-Version 1 opcode assignments are `0 ReliableEvent`, `1 UnreliableEvent`,
+Version 2 opcode assignments are `0 ReliableEvent`, `1 UnreliableEvent`,
 `2 SequencedEvent`, `3 Request`, `4 Response`, `5 RequestError`, and
 `6 Cancellation`. Unknown versions, opcodes, nonzero reserved fields, invalid
 field combinations, count/length mismatches, invalid tags, invalid UTF-8,
@@ -252,8 +267,9 @@ non-finite values, invalid IDs, and trailing bytes fail closed.
 and a Luau VM. `tests/fuzz/RemoteProtocolFuzz.cpp` is a dependency-free
 libFuzzer-ready adapter. Deterministic corpus tests cover empty/truncated input,
 all kinds, maximum and oversized values, invalid version/opcode/count/tag/UTF-8,
-invalid references/IDs, malformed request/sequence fields, oversized errors,
-and trailing data.
+invalid references/IDs/publications, malformed request/sequence fields,
+oversized errors, and trailing data. Version 1 frames are incompatible and fail
+closed rather than inheriting publication state implicitly.
 
 ## Visibility and replication dependency
 
@@ -261,7 +277,8 @@ Remote invocation requires all of these checks:
 
 1. the generation-safe Remote `ObjectId` exists in the manager;
 2. the Remote class matches the wire message kind;
-3. the peer's current session has published and materialized the Remote;
+3. the peer's current session has published and materialized the Remote and the
+   message carries that publication's current nonzero `RemotePublicationId`;
 4. `ReplicationView`-supplied visibility authorizes the Remote; and
 5. every Object argument resolves to a live current-generation Object visible
    to that peer.
@@ -321,8 +338,13 @@ The initial hard ceilings are intentionally small in number:
 | total calls per peer per second | 1024 |
 | concurrent incoming handlers per peer | 64 and negotiated request ceiling |
 | manager peers | 512 |
+| manager calls per second | 8192 |
+| aggregate concurrent incoming handlers | 4096 |
+| aggregate in-flight outgoing requests | 8192 |
 | aggregate queued dispatch | 8192 messages / 32 MiB |
 | aggregate broadcast per second | 4096 submissions / 16 MiB |
+| generated reliable terminal messages per second | 4096 / 32 MiB |
+| shared Luau task queue | 65,536 tasks |
 
 Negotiated `NetworkLimits` additionally bound reliable/unreliable message size,
 reliable queue bytes, in-flight outgoing requests per peer, decoded bytes per
@@ -362,7 +384,9 @@ unpublication/destruction, broadcast isolation, and reconnect/epoch rejection.
 The optional real GNS test proves localhost reliable/unreliable/sequenced
 messages in both directions, client and server requests, a 200-event bounded
 reliable workload, disconnect with a pending request, reconnect, new connection
-generation, and stale old-session rejection. It uses no Internet service.
+generation, stale old-session rejection, and mixed baseline/publication plus
+Remote event/request routing through one production scheduler and session. It
+uses no Internet service.
 
 ## Deliberately deferred
 

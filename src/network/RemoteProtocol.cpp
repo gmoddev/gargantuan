@@ -9,7 +9,7 @@
 namespace gargantuan::network {
 	namespace {
 		constexpr std::uint32_t RemoteMagic = 0x544d5247; // "GRMT" in little endian.
-		constexpr std::size_t RemoteHeaderBytes = 44;
+		constexpr std::size_t RemoteHeaderBytes = 52;
 		constexpr std::size_t MinimumRemoteArgumentBytes = 1;
 
 		bool HasRequest(RemoteMessageKind Kind) {
@@ -35,6 +35,7 @@ namespace gargantuan::network {
 
 	bool RemoteMessage::IsValid() const {
 		if (Version != RemoteProtocolVersion || Kind > RemoteMessageKind::Cancellation || !Remote.IsValid() ||
+			!Publication.IsValid() ||
 			Arguments.size() > MaximumRemoteArguments)
 			return false;
 		const bool RequestExpected = HasRequest(Kind);
@@ -82,6 +83,7 @@ namespace gargantuan::network {
 			Output.Integer(static_cast<std::uint8_t>(Message.Kind));
 			Output.Integer<std::uint8_t>(0);
 			WriteBinaryObjectId(Output, Message.Remote);
+			Output.Integer(Message.Publication.Value());
 			Output.Integer(Message.Request.Value());
 			Output.Integer(Message.Sequence.Value());
 			Output.Integer(static_cast<std::uint32_t>(Message.Deadline.count()));
@@ -110,9 +112,10 @@ namespace gargantuan::network {
 			std::uint16_t Version, ArgumentCount, ReservedTail;
 			std::uint8_t Kind, Reserved;
 			ObjectId Remote;
-			std::uint64_t Request, Sequence;
+			std::uint64_t Publication, Request, Sequence;
 			if (!Input.Integer(Magic) || !Input.Integer(Version) || !Input.Integer(Kind) || !Input.Integer(Reserved) ||
-				!ReadBinaryObjectId(Input, Remote) || !Input.Integer(Request) || !Input.Integer(Sequence) ||
+				!ReadBinaryObjectId(Input, Remote) || !Input.Integer(Publication) || !Input.Integer(Request) ||
+				!Input.Integer(Sequence) ||
 				!Input.Integer(Deadline) || !Input.Integer(ArgumentCount) || !Input.Integer(ReservedTail) ||
 				!Input.Integer(PayloadBytes))
 				return SerializationFailure(SerializationErrorCode::TruncatedInput, Input.Error);
@@ -140,6 +143,7 @@ namespace gargantuan::network {
 				.Version = Version,
 				.Kind = static_cast<RemoteMessageKind>(Kind),
 				.Remote = Remote,
+				.Publication = RemotePublicationId(Publication),
 				.Request = RemoteRequestId(Request),
 				.Sequence = RemoteEventSequence(Sequence),
 				.Deadline = std::chrono::milliseconds(Deadline),

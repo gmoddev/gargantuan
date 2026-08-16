@@ -1,7 +1,7 @@
 ---
 status: current
 owner: networking
-last_verified: 2026-08-15
+last_verified: 2026-08-16
 related_code:
   - include/gargantuan/network/GameNetworkingSocketsTransport.hpp
   - src/network/GameNetworkingSocketsTransport.cpp
@@ -76,9 +76,10 @@ and reliable ordering after it accepts the message. `UnreliableUnordered` and
 rejection remains scheduler policy; the adapter carries the strong order/channel
 metadata without interpreting application state.
 
-The adapter adds a private 24-byte compatibility envelope to each GNS message.
+The adapter adds a private 32-byte compatibility envelope to each GNS message.
 It carries a fixed magic, adapter-envelope version, validated delivery mode,
 traffic class, order-domain kind, state channel, and strong sequence. It contains
+the Remote publication lifetime when the order domain is a Remote and contains
 no authority, capability, schema, DataModel command, or backend handle. This is
 an internal adapter compatibility boundary, not the future gameplay packet codec
 or a public wire-layout promise. Receive rejects truncated frames, bad magic or
@@ -86,7 +87,7 @@ version, forged enums, invalid sequence metadata, delivery/backend-flag mismatch
 empty payloads, and values outside active limits before exposing an event.
 
 Unreliable messages use a conservative 1,200-byte complete-frame ceiling and
-are never fragmented by Gargantuan, yielding 1,176 application bytes after the
+are never fragmented by Gargantuan, yielding 1,168 application bytes after the
 envelope. Reliable messages are bounded by both active `NetworkLimits` and GNS's
 512 KiB send-message ceiling, including the envelope. The adapter exposes the
 effective unreliable application ceiling through `GetAvailableDatagramBytes`.
@@ -125,7 +126,7 @@ Before reliable submission, the adapter compares GNS pending reliable bytes
 against the validated Gargantuan reliable-queue ceiling without overflowing.
 GNS acceptance results map to structured success, temporary blocking, resource
 exhaustion, invalid state/connection, message rejection, or transport failure.
-The future scheduler remains responsible for semantic admission, prioritization,
+The production scheduler remains responsible for semantic admission, prioritization,
 per-tick policy, unreliable supersession, and retrying a temporary submission.
 
 ## Statistics and disconnect mapping

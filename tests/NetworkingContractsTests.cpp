@@ -47,6 +47,7 @@ int main() {
 	static_assert(!std::is_convertible_v<ReliableReplicationSequence, RealtimeStateSequence>);
 	static_assert(!std::is_convertible_v<RealtimeStateSequence, RemoteEventSequence>);
 	static_assert(!std::is_convertible_v<RemoteEventSequence, RemoteRequestId>);
+	static_assert(!std::is_convertible_v<RemotePublicationId, RemoteEventSequence>);
 	static_assert(!std::is_constructible_v<RemoteRequestId, ReplicationEpoch>);
 	static_assert(!std::is_pointer_v<ConnectionId> && std::is_trivially_copyable_v<ConnectionId>);
 	static_assert(std::is_abstract_v<IGameTransport>);

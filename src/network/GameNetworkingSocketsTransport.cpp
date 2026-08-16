@@ -20,8 +20,8 @@ namespace gargantuan::network {
 			static_cast<std::byte>('G'), static_cast<std::byte>('G'),
 			static_cast<std::byte>('N'), static_cast<std::byte>('S')
 		};
-		constexpr std::uint8_t AdapterEnvelopeVersion = 1;
-		constexpr std::size_t AdapterEnvelopeBytes = 24;
+		constexpr std::uint8_t AdapterEnvelopeVersion = 2;
+		constexpr std::size_t AdapterEnvelopeBytes = 32;
 		constexpr std::size_t BackendMaximumUnreliableFrameBytes = 1200;
 		constexpr int ResourceExhaustionEndReason = k_ESteamNetConnectionEnd_AppException_Min + 1;
 		constexpr int ProtocolViolationEndReason = k_ESteamNetConnectionEnd_AppException_Min + 2;
@@ -81,33 +81,36 @@ namespace gargantuan::network {
 			return std::numeric_limits<std::uint8_t>::max();
 		}
 
-		std::pair<std::uint64_t, std::uint64_t> OrderValues(const MessageOrder &Order) {
+		std::array<std::uint64_t, 3> OrderValues(const MessageOrder &Order) {
 			if (const auto *Realtime = std::get_if<RealtimeStateOrder>(&Order))
-				return {Realtime->Channel.Value(), Realtime->Sequence.Value()};
+				return {Realtime->Channel.Value(), 0, Realtime->Sequence.Value()};
 			if (const auto *Event = std::get_if<RemoteEventOrder>(&Order))
-				return {Event->Channel.Value(), Event->Sequence.Value()};
+				return {Event->Channel.Value(), Event->Publication.Value(), Event->Sequence.Value()};
 			if (const auto *Reliable = std::get_if<ReliableReplicationOrder>(&Order))
-				return {0, Reliable->Sequence.Value()};
-			return {0, 0};
+				return {0, 0, Reliable->Sequence.Value()};
+			return {0, 0, 0};
 		}
 
 		std::optional<MessageOrder> DecodeOrder(
 			std::uint8_t Kind,
 			std::uint64_t Channel,
+			std::uint64_t Publication,
 			std::uint64_t Sequence
 		) {
 			switch (Kind) {
 			case 0:
-				if (Channel != 0 || Sequence != 0) return std::nullopt;
+				if (Channel != 0 || Publication != 0 || Sequence != 0) return std::nullopt;
 				return MessageOrder{std::monostate{}};
 			case 1:
-				if (Channel == 0 || Sequence == 0) return std::nullopt;
+				if (Channel == 0 || Publication != 0 || Sequence == 0) return std::nullopt;
 				return MessageOrder{RealtimeStateOrder{StateChannelId(Channel), RealtimeStateSequence(Sequence)}};
 			case 2:
-				if (Channel == 0 || Sequence == 0) return std::nullopt;
-				return MessageOrder{RemoteEventOrder{StateChannelId(Channel), RemoteEventSequence(Sequence)}};
+				if (Channel == 0 || Publication == 0 || Sequence == 0) return std::nullopt;
+				return MessageOrder{RemoteEventOrder{
+					StateChannelId(Channel), RemotePublicationId(Publication), RemoteEventSequence(Sequence)
+				}};
 			case 3:
-				if (Channel != 0 || Sequence == 0) return std::nullopt;
+				if (Channel != 0 || Publication != 0 || Sequence == 0) return std::nullopt;
 				return MessageOrder{ReliableReplicationOrder{ReliableReplicationSequence(Sequence)}};
 			default:
 				return std::nullopt;
@@ -124,9 +127,10 @@ namespace gargantuan::network {
 			Result[5] = static_cast<std::byte>(Message.Delivery());
 			Result[6] = static_cast<std::byte>(Message.Traffic());
 			Result[7] = static_cast<std::byte>(OrderKind(Message.Order()));
-			const auto [Channel, Sequence] = OrderValues(Message.Order());
+			const auto [Channel, Publication, Sequence] = OrderValues(Message.Order());
 			WriteU64(std::span<std::byte, 8>(Result.data() + 8, 8), Channel);
-			WriteU64(std::span<std::byte, 8>(Result.data() + 16, 8), Sequence);
+			WriteU64(std::span<std::byte, 8>(Result.data() + 16, 8), Publication);
+			WriteU64(std::span<std::byte, 8>(Result.data() + 24, 8), Sequence);
 			std::copy(Message.Payload().begin(), Message.Payload().end(), Result.begin() + AdapterEnvelopeBytes);
 			return Result;
 		}
@@ -429,7 +433,8 @@ namespace gargantuan::network {
 			auto Order = DecodeOrder(
 				Kind,
 				ReadU64(std::span<const std::byte, 8>(Frame.data() + 8, 8)),
-				ReadU64(std::span<const std::byte, 8>(Frame.data() + 16, 8))
+				ReadU64(std::span<const std::byte, 8>(Frame.data() + 16, 8)),
+				ReadU64(std::span<const std::byte, 8>(Frame.data() + 24, 8))
 			);
 			if (!Order) return std::nullopt;
 			const auto PayloadBytes = FrameBytes - AdapterEnvelopeBytes;

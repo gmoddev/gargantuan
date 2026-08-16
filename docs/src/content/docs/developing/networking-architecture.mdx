@@ -387,6 +387,12 @@ of the accepted decisions above.
   validated groups without an upstream authority path.
 - [x] **Add bounded Luau remotes.** Preserve familiar event/request ergonomics over
    the tested scheduler and transport semantics.
+- [x] **Independently validate Networking Foundations 1–7.** Mixed simulator and
+   localhost GNS proofs now exercise replication and Remote traffic through one
+   scheduler/session. The validation corrected coroutine security-context
+   restoration, reentrant peer teardown, Remote publication lifetimes,
+   manager-wide resource ceilings, scheduler terminal propagation, aggregate
+   reliable queueing, and bounded replication/application fairness.
 - [ ] **Add realtime replication when gameplay requires it.** Introduce sequenced
    transforms/physics, ownership leases, interpolation, and correction.
 - [ ] **Add interest and streaming when world scale requires it.** Expand
