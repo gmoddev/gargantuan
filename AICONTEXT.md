@@ -69,7 +69,7 @@ Authoritative DataModel / live Instance graph
 | Physics bodies, constraints, stepping, or touch events | `devdocs/CurrentArchitecture/PhysicsBackend.md` |
 | Studio, EditorHost, snapshots, journals, viewport IPC | `editor-host.mdx` plus the relevant `devdocs/CurrentArchitecture` protocol document |
 | Luau execution or permissions | `devdocs/CurrentArchitecture/ScriptSecurity.md` |
-| Game networking | `devdocs/CurrentArchitecture/ProtocolInputHardening.md`, `NetworkingContracts.md`, `SimulatedTransport.md`, `NetworkSchedulerContract.md`, `NetworkingFoundationValidation.md`, then `networking-architecture.mdx`; Foundations 1–4 have completed adversarial validation, but no production scheduler or real transport exists |
+| Game networking | `devdocs/CurrentArchitecture/ProtocolInputHardening.md`, `NetworkingContracts.md`, `SimulatedTransport.md`, `NetworkSchedulerContract.md`, `NetworkingFoundationValidation.md`, `RealGameTransport.md`, and `BasicClientReplication.md`, then `networking-architecture.mdx`; Foundations 1–6 include a production scheduler, pinned GNS adapter, and reliable basic client replication |
 
 ## Current implementation landmarks
 

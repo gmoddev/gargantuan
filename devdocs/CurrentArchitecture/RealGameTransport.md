@@ -162,7 +162,8 @@ congestion behavior, reliable delivery, real connection failure, and backend
 metrics; it does not promise deterministic timing or injected faults through
 this adapter.
 
-Authentication/tickets, negotiated-limit exchange, packet/gameplay codecs,
-production `NetworkScheduler`, `ReplicationCoordinator`, `RemoteManager`,
-multiplayer replication, Luau remotes, Players, Node, interest management, and
+The production `NetworkScheduler`, `ReplicationCoordinator`, versioned basic
+replication codec, and client applicator now run over the localhost GNS test
+path. Authentication/tickets, negotiated-limit exchange, `RemoteManager`, Luau
+remotes, Players, realtime replication, Node, spatial interest management, and
 Studio play mode remain unimplemented.

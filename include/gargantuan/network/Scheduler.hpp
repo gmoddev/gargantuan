@@ -8,8 +8,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <memory>
 
 namespace gargantuan::network {
+	class IGameTransport;
 	enum class SchedulerSubmitStatus : std::uint8_t {
 		Accepted,
 		AcceptedWithSupersession,
@@ -85,5 +87,21 @@ namespace gargantuan::network {
 		virtual SchedulerFlushResult Flush(ConnectionId Connection, SchedulerTickBudget Budget) = 0;
 		virtual bool CancelConnection(ConnectionId Connection) = 0;
 		[[nodiscard]] virtual std::optional<SchedulerStatistics> GetStatistics(ConnectionId Connection) const = 0;
+	};
+
+	class NetworkScheduler final : public INetworkScheduler {
+	  public:
+		explicit NetworkScheduler(IGameTransport &Transport);
+		~NetworkScheduler() override;
+
+		bool RegisterConnection(ConnectionId Connection, const NetworkLimits &Limits) override;
+		SchedulerSubmitResult Submit(NetworkMessageIntent Intent) override;
+		SchedulerFlushResult Flush(ConnectionId Connection, SchedulerTickBudget Budget) override;
+		bool CancelConnection(ConnectionId Connection) override;
+		[[nodiscard]] std::optional<SchedulerStatistics> GetStatistics(ConnectionId Connection) const override;
+
+	  private:
+		struct Implementation;
+		std::unique_ptr<Implementation> State;
 	};
 }

@@ -17,6 +17,7 @@
 
 namespace gargantuan {
 	class InProcessReplicationSession;
+	namespace network { class ReplicaApplier; }
 
 	struct ObjectCreatedChange {
 		std::string ClassName;
@@ -100,6 +101,7 @@ namespace gargantuan {
 	  private:
 		friend class EditorHost;
 		friend class InProcessReplicationSession;
+		friend class network::ReplicaApplier;
 		ScopedChangeJournalSuppression();
 		~ScopedChangeJournalSuppression();
 		ScopedChangeJournalSuppression(const ScopedChangeJournalSuppression &) = delete;

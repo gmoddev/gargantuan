@@ -4,6 +4,7 @@
 #include "gargantuan/network/Sequence.hpp"
 #include "gargantuan/reflection/SchemaId.hpp"
 #include "gargantuan/runtime/ObjectId.hpp"
+#include "gargantuan/runtime/Snapshot.hpp"
 #include "gargantuan/runtime/WireValue.hpp"
 
 #include <cstdint>
@@ -37,6 +38,13 @@ namespace gargantuan::network {
 		SchemaId ClassSchemaId;
 		std::uint32_t DefinitionVersion = 0;
 		std::optional<ObjectId> Parent;
+		std::string ClassName;
+		std::string Name;
+		std::map<std::string, WireValue> Properties;
+		std::map<std::string, WireValue> Attributes;
+		std::vector<SnapshotExtensionState> Extensions;
+		std::vector<SnapshotCustomClassState> CustomProperties;
+		std::vector<std::string> Tags;
 	};
 
 	struct PropertyReplicationUpdate {
@@ -69,6 +77,7 @@ namespace gargantuan::network {
 	struct TagAddedReplication { ObjectId Object; std::string TagName; };
 	struct TagRemovedReplication { ObjectId Object; std::string TagName; };
 	struct UnpublishReplication { ObjectId Object; };
+	struct DestroyReplication { ObjectId Object; };
 
 	using ReplicationIntent = std::variant<
 		PublishReplication,
@@ -78,7 +87,8 @@ namespace gargantuan::network {
 		AttributeReplicationUpdate,
 		TagAddedReplication,
 		TagRemovedReplication,
-		UnpublishReplication
+		UnpublishReplication,
+		DestroyReplication
 	>;
 
 	struct ReplicationOperation {

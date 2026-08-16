@@ -18,11 +18,13 @@ evidence.
 protocol-input hardening, backend-neutral pure contracts, deterministic
 in-memory transport, simulator validation, and the scheduler semantic contract
 are complete. The simulator exercises delivery and lifecycle semantics without
-sockets, and a deterministic policy proof validates scheduler admission,
+sockets. The production scheduler implements the validated admission,
 precedence, budgets, supersession, and flush behavior. An optional pinned
-GameNetworkingSockets adapter now proves real localhost connection, message,
-limit, failure, and teardown behavior. The production scheduler and runtime
-phases below remain unfinished.
+GameNetworkingSockets adapter proves real localhost connection, message, limit,
+failure, teardown, and basic-replication behavior. Reliable basic client
+replication now provides a per-peer coordinator, versioned bounded binary codec,
+schema-compatible baseline, incremental application, and replica applicator.
+Luau remotes and realtime replication remain unfinished.
 
 ## Context
 
@@ -294,12 +296,12 @@ At minimum, tests must prove:
 
 The fake transport must test protocol behavior, not reproduce a chosen real
 backend's API. The pre-backend validation checkpoint covers transport delivery,
-lifecycle, bounds, statistics, and scheduler policy. Requirements that need a
-`RemoteManager` or `ReplicationCoordinator`—remote request termination,
-irrelevant journal filtering/coalescing, and publish/unpublish execution—remain
-mandatory validation gates for those later layers and are exercised against the
-simulator when those layers exist. They are not falsely claimed by the transport
-alone.
+lifecycle, bounds, statistics, and scheduler policy. The requirements that need
+a `ReplicationCoordinator`—irrelevant journal filtering/coalescing and
+publish/unpublish execution—are now exercised through the production scheduler
+and simulator. Remote request termination remains a mandatory validation gate
+for the later `RemoteManager`; it is not claimed by the transport or replication
+layer.
 
 ### Validation checkpoint result
 
@@ -371,10 +373,13 @@ of the accepted decisions above.
   compatible statistics, and a host-owned authentication hook boundary.
   Authentication tickets and negotiated-limit exchange remain explicit later
   protocol work rather than being simulated by attacker-controlled payload.
+- [x] **Add basic client replication.** A server-owned coordinator now produces
+  versioned, bounded reliable baseline, publish, update, reparent, Attribute,
+  Tag, extension/custom-class, unpublish, and destroy operations. The production
+  scheduler feeds both simulator and localhost GNS paths, and the client applies
+  validated groups without an upstream authority path.
 - [ ] **Add bounded Luau remotes.** Preserve familiar event/request ergonomics over
    the tested scheduler and transport semantics.
-- [ ] **Add basic client replication.** Implement baseline plus reliable publish,
-   update, reparent, attributes, and unpublish operations.
 - [ ] **Add realtime replication when gameplay requires it.** Introduce sequenced
    transforms/physics, ownership leases, interpolation, and correction.
 - [ ] **Add interest and streaming when world scale requires it.** Expand

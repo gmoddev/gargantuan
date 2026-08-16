@@ -133,8 +133,11 @@ This backend does not reproduce TCP, UDP, GNS, QUIC, kernel buffers,
 retransmission packets, congestion control, encryption, address resolution, or
 OS errors. Reliable loss is modeled by preserving the semantic outcome rather
 than emulating a retransmission protocol. Jitter is a bounded nonnegative delay.
-Bandwidth is a clear per-direction serializer, not a production scheduler.
+Bandwidth remains a clear per-direction serializer. The production
+`NetworkScheduler` is a separate higher layer and is exercised against this
+backend.
 
-`NetworkScheduler`, `ReplicationCoordinator`, `RemoteManager`, packet codecs,
-replication execution, Luau remotes, authentication/tickets, Players, real
-transport selection, Node, and Studio play mode remain unimplemented.
+`NetworkScheduler`, `ReplicationCoordinator`, the basic binary replication
+codec, and reliable replica execution are implemented above this backend.
+`RemoteManager`, Luau remotes, authentication/tickets, Players, realtime
+replication, Node, and Studio play mode remain unimplemented.

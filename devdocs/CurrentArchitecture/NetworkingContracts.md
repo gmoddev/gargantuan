@@ -145,17 +145,20 @@ protocol would falsely imply authority.
 semantic traffic precedence, and scheduler-only statistics now define the
 pre-transport policy boundary. `Submit` is queue admission, while `Flush` is one
 explicit per-connection tick boundary that may submit eligible work without
-promising remote receipt. The deterministic policy proof is test-only; the
-production scheduler remains unimplemented. See `NetworkSchedulerContract.md`.
+promising remote receipt. The deterministic policy proof is now implemented by
+the production `NetworkScheduler`. See `NetworkSchedulerContract.md`.
 
 ## Deliberately not implemented
 
-There is no gameplay packet codec, production scheduler execution, coordinator,
-remote runtime, request timer, coroutine suspension, multiplayer replication,
-authentication/ticket validation, player model, interest management, Node
-integration, or Studio play session. The deterministic in-memory implementation
-is documented in `SimulatedTransport.md`; the opt-in real GNS adapter is
-documented in `RealGameTransport.md`. No contract type is exposed to Luau.
+There is now a versioned basic-replication binary codec, production scheduler,
+per-peer coordinator, and client replica applicator. Their reliable-only scope
+is documented in `BasicClientReplication.md`. There is no remote runtime,
+request timer, coroutine suspension, realtime replication,
+authentication/ticket validation, player model, spatial interest management,
+Node integration, or Studio play session. The deterministic in-memory
+implementation is documented in `SimulatedTransport.md`; the opt-in real GNS
+adapter is documented in `RealGameTransport.md`. No contract type is exposed to
+Luau.
 
 Existing EditorHost request strings, `ChangeCursor`, `WireJournalRecord`, and
 `MutationCompletion` remain specific to IPC, authoritative history/debug

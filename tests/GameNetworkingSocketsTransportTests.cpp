@@ -1,4 +1,10 @@
 #include "gargantuan/network/GameNetworkingSocketsTransport.hpp"
+#include "gargantuan/classes/DataModel.hpp"
+#include "gargantuan/classes/Folder.hpp"
+#include "gargantuan/network/ReplicaApplier.hpp"
+#include "gargantuan/network/ReplicationCoordinator.hpp"
+#include "gargantuan/network/ReplicationTransport.hpp"
+#include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 
 #include <algorithm>
 #include <array>
@@ -173,6 +179,8 @@ namespace {
 
 int main() {
 	using namespace gargantuan::network;
+	try { gargantuan::BootstrapNativeRuntimeSchema(); }
+	catch (const std::exception &Error) { std::cerr << Error.what() << '\n'; return 1; }
 	std::cout << "[Networking:GNS] validating configuration\n" << std::flush;
 
 	{
@@ -323,6 +331,45 @@ int main() {
 		Check(ClientStatistics && !ClientStatistics->MessagesDelivered &&
 			!ClientStatistics->DroppedUnreliableMessages,
 			"unsupported GNS delivery and drop metrics remain unavailable rather than fabricated");
+		Pair.ServerEvents.clear();
+		Pair.ClientEvents.clear();
+	}
+
+	{
+		std::cout << "[Networking:GNS] real basic client replication\n" << std::flush;
+		auto Game = std::make_shared<gargantuan::DataModel>();
+		Game->SetName("GnsServerWorld");
+		auto Child = std::make_shared<gargantuan::Folder>();
+		Child->SetName("GnsReplicatedFolder");
+		Child->SetParent(Game);
+		gargantuan::network::ReplicationCoordinator Coordinator(Game);
+		auto Baseline = Coordinator.AddPeer(Pair.ServerConnection, ReplicationEpoch(1));
+		NetworkScheduler Scheduler(*Pair.Server);
+		Check(Baseline.Succeeded() && Scheduler.RegisterConnection(Pair.ServerConnection, Pair.Limits),
+			"real replication baseline and scheduler connection initialize");
+		if (Baseline.Succeeded()) {
+			auto Queued = QueueReplicationFrame(*Baseline.Frame, Pair.ServerConnection, Pair.Limits, Scheduler);
+			auto Flushed = Scheduler.Flush(Pair.ServerConnection, SchedulerTickBudget::FromNetworkLimits(Pair.Limits));
+			Check(Queued && Queued->Accepted() && Flushed.Status == SchedulerFlushStatus::Drained,
+				"real replication baseline is admitted and submitted through NetworkScheduler");
+			Pair.ServerEvents.clear();
+			Pair.ClientEvents.clear();
+			Pump(*Pair.Server, *Pair.Client, Pair.ServerEvents, Pair.ClientEvents, 5s, [&] {
+				return std::ranges::any_of(Pair.ClientEvents, [](const TransportEvent &Event) {
+					const auto *MessageValue = std::get_if<ReceivedMessageEvent>(&Event);
+					return MessageValue && MessageValue->Traffic == TrafficClass::StructuralReplication;
+				});
+			});
+			ReplicaApplier ClientReplica;
+			bool Applied = false;
+			for (const auto &Event : Pair.ClientEvents)
+				if (const auto *MessageValue = std::get_if<ReceivedMessageEvent>(&Event);
+					MessageValue && MessageValue->Traffic == TrafficClass::StructuralReplication)
+					Applied = ClientReplica.ApplyBytes(MessageValue->Payload).Succeeded();
+			Check(Applied && ClientReplica.GetReplicaRoot() &&
+				ClientReplica.GetReplicaRoot()->FindFirstChild("GnsReplicatedFolder", false),
+				"independent real localhost client materializes the authoritative server baseline");
+		}
 		Pair.ServerEvents.clear();
 		Pair.ClientEvents.clear();
 	}

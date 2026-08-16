@@ -173,15 +173,16 @@ derived separately from exact queue accounting and the non-empty payload invaria
 a byte limit is never interpreted as a message-count limit. In particular, a
 scheduler drop does not increment a transport drop counter.
 
-## Deterministic policy proof and deferred implementation
+## Deterministic policy proof and production implementation
 
-`SchedulerContractTests.cpp` contains a deliberately test-only deterministic
-policy harness implementing the interface. It proves selection, admission,
+`SchedulerContractTests.cpp` retains the deterministic policy proof that
+established the interface. It proves selection, admission,
 supersession, flush, backpressure, cancellation, statistics separation, a bounded
-5,000-message burst, and integration with `SimulatedTransport`. Identical state,
-intent order, limits, and ticks produce identical submission traces.
+5,000-message burst, and integration with `SimulatedTransport`. `NetworkScheduler`
+now implements that policy in production, and basic client replication exercises
+it through both the simulator and the optional real GNS adapter. Identical
+simulator state, intent order, limits, and ticks produce identical submission traces.
 
-There is no production `NetworkScheduler` execution, thread, timer, codec,
-`ReplicationCoordinator`, `RemoteManager`, multiplayer replication, Luau remote,
-real transport, authentication/ticket, Player, Node, or Studio play-mode
-implementation.
+The scheduler is explicitly tick/flush driven; it does not own a thread or
+timer. `RemoteManager`, Luau remotes, authentication/tickets, Players, Node, and
+Studio play mode remain unimplemented.

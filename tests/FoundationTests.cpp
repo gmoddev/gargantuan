@@ -10,6 +10,8 @@
 #include "gargantuan/editor/EditorViewport.hpp"
 #include "gargantuan/filesystem/DiskFilesystem.hpp"
 #include "gargantuan/filesystem/Project.hpp"
+#include "gargantuan/network/ReplicaApplier.hpp"
+#include "gargantuan/network/ReplicationCoordinator.hpp"
 #include "gargantuan/render/RenderExtractor.hpp"
 #include "gargantuan/render/RenderProjection.hpp"
 #include "gargantuan/render/Renderer.hpp"
@@ -3242,6 +3244,34 @@ namespace {
 		Check(Loaded.Ok && LoadedCustom && LoadedCustom->GetClassName() == "Game.CombatFolder" &&
 			std::get<int>(LoadedCustom->GetCustomClassPropertyValue(ParentId, "Health")) == 60,
 			"persistence reconstructs the exact constructible custom class without base-class fallback");
+
+		Check(Custom->ApplyExtensionPropertyMutation(FolderExtensionId, 1, "Label", WireValue(std::string("Network")),
+			ScriptSecurityContext::CoreTrusted()) == MutationStatus::Success,
+			"custom-class replication fixture commits extension state");
+		network::ReplicationCoordinator NetworkCoordinator(Game);
+		auto NetworkBaseline = NetworkCoordinator.AddPeer({701, 1}, network::ReplicationEpoch(1));
+		network::ReplicaApplier NetworkReplica;
+		Check(NetworkBaseline.Succeeded() && NetworkReplica.ApplyFrame(*NetworkBaseline.Frame).Succeeded(),
+			"game replication baseline materializes custom classes against exact schema compatibility");
+		auto NetworkCustom = NetworkReplica.GetReplicaRoot()
+			? NetworkReplica.GetReplicaRoot()->FindFirstChild("CustomCombatFolder", false) : nullptr;
+		Check(NetworkCustom && NetworkCustom->GetClassName() == "Game.CombatFolder" &&
+			std::get<int>(NetworkCustom->GetCustomClassPropertyValue(ParentId, "Health")) == 60 &&
+			std::get<std::string>(NetworkCustom->GetExtensionPropertyValue(FolderExtensionId, "Label")) == "Network",
+			"game replication preserves custom identity, sparse custom properties, and Class Extension state");
+		Check(Gateway.Apply(UpdatePropertyCommand{Custom->GetObjectId(), "Health", 59},
+			ScriptSecurityContext::CoreTrusted()).Succeeded() &&
+			Custom->ApplyExtensionPropertyMutation(FolderExtensionId, 1, "Label", WireValue(std::string("Network2")),
+				ScriptSecurityContext::CoreTrusted()) == MutationStatus::Success,
+			"custom and extension incremental replication fixture mutates authoritative state");
+		auto NetworkDelta = NetworkCoordinator.ProduceIncremental({701, 1});
+		Check(NetworkDelta.Succeeded() && NetworkReplica.ApplyFrame(*NetworkDelta.Frame).Succeeded(),
+			"game replication applies custom and extension changes through typed replication operations");
+		NetworkCustom = NetworkReplica.GetReplicaRoot()
+			? NetworkReplica.GetReplicaRoot()->FindFirstChild("CustomCombatFolder", false) : nullptr;
+		Check(NetworkCustom && std::get<int>(NetworkCustom->GetCustomClassPropertyValue(ParentId, "Health")) == 59 &&
+			std::get<std::string>(NetworkCustom->GetExtensionPropertyValue(FolderExtensionId, "Label")) == "Network2",
+			"incremental game replication preserves exact custom and extension definition versions");
 
 		Check(Gateway.Apply(UpdatePropertyCommand{Custom->GetObjectId(), "Health", 100},
 			ScriptSecurityContext::CoreTrusted()).Succeeded() &&
