@@ -3999,7 +3999,8 @@ namespace {
 			"EditorHost exposes the narrow Studio-domain capability grant"
 		);
 		Check(
-			std::ranges::contains(handshake["Result"]["Capabilities"], "SaveProject") &&
+			std::ranges::contains(handshake["Result"]["Capabilities"], "CreateProject") &&
+				std::ranges::contains(handshake["Result"]["Capabilities"], "SaveProject") &&
 				std::ranges::contains(handshake["Result"]["Capabilities"], "SaveProjectAs") &&
 				std::ranges::contains(handshake["Result"]["Capabilities"], "AuthoritativeRevision") &&
 				std::ranges::contains(handshake["Result"]["Capabilities"], "CreateInstance") &&
@@ -4045,6 +4046,14 @@ namespace {
 			Check(!RestrictedHistory["Ok"].get<bool>() && RestrictedHistory["Error"]["Code"] == "Unauthorized",
 				"EditorHost history execution requires trusted authoring mutation capability");
 		}
+		{
+			Json RestrictedRequest{{"Version", EditorHostProtocolVersion}, {"RequestId", "CreateProject"},
+				{"SessionToken", "restricted-token"}, {"Method", "CreateProject"},
+				{"Params", {{"Destination", (temporaryRoot / "restricted-new").string()}, {"Name", "Restricted"}}}};
+			auto RestrictedCreate = Json::parse(restrictedHost.HandleRequest(RestrictedRequest.dump()));
+			Check(!RestrictedCreate["Ok"].get<bool>() && RestrictedCreate["Error"]["Code"] == "Unauthorized",
+				"EditorHost project creation requires trusted EditorCommands authority");
+		}
 		auto sharedTransport = std::find_if(
 			handshake["Result"]["ViewportTransports"].begin(),
 			handshake["Result"]["ViewportTransports"].end(),
@@ -4076,6 +4085,133 @@ namespace {
 			);
 			auto closedTransport = call("CloseViewportTransport", Json::object(), "test-token");
 			Check(closedTransport["Ok"].get<bool>(), "EditorHost closes the shared-memory viewport ring explicitly");
+		}
+
+		auto InvalidCreatePath = call("CreateProject", {
+			{"Destination", "relative-project"}, {"Name", "Relative"}
+		}, "test-token");
+		Check(!InvalidCreatePath["Ok"].get<bool>() && InvalidCreatePath["Error"]["Code"] == "InvalidDestination",
+			"CreateProject rejects non-absolute destinations");
+		auto InvalidCreateName = call("CreateProject", {
+			{"Destination", (temporaryRoot / "invalid-name").string()}, {"Name", "   "}
+		}, "test-token");
+		Check(!InvalidCreateName["Ok"].get<bool>() && InvalidCreateName["Error"]["Code"] == "InvalidProjectName",
+			"CreateProject rejects non-visible project names");
+		auto SpoofedCreateState = call("CreateProject", {
+			{"Destination", (temporaryRoot / "spoofed-state").string()}, {"Name", "Spoofed"},
+			{"AuthoritativeRevision", 99}
+		}, "test-token");
+		Check(!SpoofedCreateState["Ok"].get<bool>() && SpoofedCreateState["Error"]["Code"] == "MalformedRequest",
+			"CreateProject rejects request-supplied revision authority");
+		auto MissingParentCreate = call("CreateProject", {
+			{"Destination", (temporaryRoot / "missing-parent" / "project").string()}, {"Name", "Missing Parent"}
+		}, "test-token");
+		Check(!MissingParentCreate["Ok"].get<bool>() && MissingParentCreate["Error"]["Code"] == "InvalidDestination",
+			"CreateProject rejects a destination whose parent is absent");
+
+		const auto EmptyDestination = temporaryRoot / "existing-empty";
+		std::filesystem::create_directory(EmptyDestination);
+		auto ExistingEmpty = call("CreateProject", {
+			{"Destination", EmptyDestination.string()}, {"Name", "Existing Empty"}
+		}, "test-token");
+		Check(!ExistingEmpty["Ok"].get<bool>() && ExistingEmpty["Error"]["Code"] == "DestinationExists" &&
+			std::filesystem::is_empty(EmptyDestination),
+			"CreateProject conservatively preserves and rejects an existing empty directory");
+
+		const auto NonemptyDestination = temporaryRoot / "existing-nonempty";
+		std::filesystem::create_directory(NonemptyDestination);
+		std::ofstream(NonemptyDestination / "user-file.txt") << "preserve";
+		auto ExistingNonempty = call("CreateProject", {
+			{"Destination", NonemptyDestination.string()}, {"Name", "Existing Nonempty"}
+		}, "test-token");
+		Check(!ExistingNonempty["Ok"].get<bool>() && ExistingNonempty["Error"]["Code"] == "DestinationExists" &&
+			std::filesystem::is_regular_file(NonemptyDestination / "user-file.txt"),
+			"CreateProject rejects an existing nonempty directory without touching user content");
+
+		const auto FailedCreateDestination = temporaryRoot / "failed-create";
+		host.SetPersistenceCheckpointForTesting([] { throw std::runtime_error("injected create failure"); });
+		auto FailedCreate = call("CreateProject", {
+			{"Destination", FailedCreateDestination.string()}, {"Name", "Failed Project"}
+		}, "test-token");
+		host.SetPersistenceCheckpointForTesting({});
+		Check(!FailedCreate["Ok"].get<bool>() && FailedCreate["Error"]["Code"] == "PersistenceFailure" &&
+			!std::filesystem::exists(FailedCreateDestination),
+			"CreateProject removes only its owned staging artifacts after persistence failure");
+
+		const auto CreatedRoot = temporaryRoot / "created-project";
+		auto CreatedProject = call("CreateProject", {
+			{"Destination", CreatedRoot.string()}, {"Name", "Created Project"}
+		}, "test-token");
+		Check(CreatedProject["Ok"].get<bool>() &&
+			CreatedProject["Result"]["ProjectState"]["AuthoritativeRevision"] == DataModel::InitialProjectRevision &&
+			CreatedProject["Result"]["ProjectState"]["PersistedRevision"] == DataModel::InitialProjectRevision &&
+			!CreatedProject["Result"]["ProjectState"]["Dirty"].get<bool>() &&
+			!CreatedProject["Result"]["ProjectState"]["History"]["CanUndo"].get<bool>() &&
+			!CreatedProject["Result"]["ProjectState"]["History"]["CanRedo"].get<bool>(),
+			"CreateProject activates a clean revision-one session with empty history");
+		const auto CreatedProjectPath = CreatedRoot / ".gargantuan" / "project.instance.json";
+		std::ifstream CreatedProjectStream(CreatedProjectPath, std::ios::binary);
+		const auto CreatedProjectDocument = Json::parse(CreatedProjectStream);
+		CreatedProjectStream.close();
+		Check(CreatedProjectDocument["Version"] == 4 && CreatedProjectDocument["Name"] == "Created Project" &&
+			CreatedProjectDocument["Children"].size() == 1 &&
+			CreatedProjectDocument["Children"][0]["ClassName"] == "Workspace",
+			"CreateProject immediately persists the minimal DataModel plus Workspace in project format v4");
+		auto ExistingProjectCreate = call("CreateProject", {
+			{"Destination", CreatedRoot.string()}, {"Name", "Overwrite Attempt"}
+		}, "test-token");
+		Check(!ExistingProjectCreate["Ok"].get<bool>() && ExistingProjectCreate["Error"]["Code"] == "ExistingProject",
+			"CreateProject never overwrites an existing Gargantuan project");
+		auto CreatedSnapshot = call("GetSnapshot", Json::object(), "test-token");
+		Check(CreatedSnapshot["Ok"].get<bool>() && CreatedSnapshot["Result"]["Snapshot"]["Objects"].size() == 2,
+			"the minimum new project is immediately available through the normal authoritative snapshot path");
+		auto CreatedWorkspace = std::find_if(
+			CreatedSnapshot["Result"]["Snapshot"]["Objects"].begin(),
+			CreatedSnapshot["Result"]["Snapshot"]["Objects"].end(),
+			[](const Json &Object) { return Object["ClassName"] == "Workspace"; }
+		);
+		Check(CreatedWorkspace != CreatedSnapshot["Result"]["Snapshot"]["Objects"].end(),
+			"the minimum new project exposes its canonical Workspace");
+		if (CreatedWorkspace != CreatedSnapshot["Result"]["Snapshot"]["Objects"].end()) {
+			auto NewFolder = call("CreateInstance", {
+				{"ClassSchemaId", SchemaId::FromNativeName("Engine", "Folder").ToString()},
+				{"DefinitionVersion", 1}, {"Parent", (*CreatedWorkspace)["Id"]}, {"Name", "First Folder"}
+			}, "test-token");
+			auto EditedCreatedState = call("GetProjectState", Json::object(), "test-token");
+			Check(NewFolder["Ok"].get<bool>() &&
+				EditedCreatedState["Result"]["AuthoritativeRevision"] == DataModel::InitialProjectRevision + 1 &&
+				EditedCreatedState["Result"]["PersistedRevision"] == DataModel::InitialProjectRevision &&
+				EditedCreatedState["Result"]["Dirty"].get<bool>() &&
+				EditedCreatedState["Result"]["History"]["CanUndo"].get<bool>(),
+				"a new project immediately supports normal structural authoring, revision, and history semantics");
+			auto SavedCreatedProject = call("SaveProject", Json::object(), "test-token");
+			Check(SavedCreatedProject["Ok"].get<bool>() &&
+				!SavedCreatedProject["Result"]["Dirty"].get<bool>() &&
+				SavedCreatedProject["Result"]["History"]["CanUndo"].get<bool>(),
+				"saving a new project makes it clean without clearing authoritative history");
+			auto ReopenedCreatedProject = call("OpenProject", {{"Root", CreatedRoot.string()}}, "test-token");
+			auto ReopenedCreatedSnapshot = call("GetSnapshot", Json::object(), "test-token");
+			Check(ReopenedCreatedProject["Ok"].get<bool>() &&
+				!ReopenedCreatedProject["Result"]["ProjectState"]["Dirty"].get<bool>() &&
+				!ReopenedCreatedProject["Result"]["ProjectState"]["History"]["CanUndo"].get<bool>() &&
+				std::ranges::any_of(ReopenedCreatedSnapshot["Result"]["Snapshot"]["Objects"],
+					[](const Json &Object) { return Object["Name"] == "First Folder"; }),
+				"a saved new project reopens clean with persisted hierarchy and session-local history cleared");
+			const auto FailedReplacementRoot = temporaryRoot / "failed-replacement";
+			host.SetPersistenceCheckpointForTesting([] { throw std::runtime_error("injected replacement failure"); });
+			auto FailedReplacement = call("CreateProject", {
+				{"Destination", FailedReplacementRoot.string()}, {"Name", "Failed Replacement"}
+			}, "test-token");
+			host.SetPersistenceCheckpointForTesting({});
+			auto StateAfterFailedReplacement = call("GetProjectState", Json::object(), "test-token");
+			auto SnapshotAfterFailedReplacement = call("GetSnapshot", Json::object(), "test-token");
+			Check(!FailedReplacement["Ok"].get<bool>() &&
+				FailedReplacement["Error"]["Code"] == "PersistenceFailure" &&
+				!std::filesystem::exists(FailedReplacementRoot) &&
+				StateAfterFailedReplacement["Result"] == ReopenedCreatedProject["Result"]["ProjectState"] &&
+				std::ranges::any_of(SnapshotAfterFailedReplacement["Result"]["Snapshot"]["Objects"],
+					[](const Json &Object) { return Object["Name"] == "First Folder"; }),
+				"failed CreateProject staging preserves the prior active session and removes no user destination");
 		}
 		auto schema = call("GetSchema", Json::object(), "test-token");
 		Check(

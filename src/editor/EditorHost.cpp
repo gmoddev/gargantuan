@@ -18,8 +18,10 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <charconv>
 #include <chrono>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
@@ -199,6 +201,36 @@ namespace gargantuan {
 			return normalized;
 		}
 
+		bool IsValidProjectName(std::string_view Name) {
+			if (Name.empty() || Name.size() > 100 || !IsValidProtocolUtf8(Name) ||
+				Name.find('\0') != std::string_view::npos)
+				return false;
+			bool HasVisibleCharacter = false;
+			for (const auto Character : Name) {
+				const auto Byte = static_cast<unsigned char>(Character);
+				if (Byte < 0x20 || Byte == 0x7f) return false;
+				if (Byte >= 0x80 || !std::isspace(Byte)) HasVisibleCharacter = true;
+			}
+			return HasVisibleCharacter;
+		}
+
+		std::filesystem::path CreateOwnedStagingDirectory(const std::filesystem::path &Destination) {
+			static std::atomic_uint64_t Counter = 1;
+			for (std::size_t Attempt = 0; Attempt < 32; ++Attempt) {
+				const auto Candidate = Destination.parent_path() / std::format(
+					".{}.creating-{}-{}", Destination.filename().string(),
+					std::chrono::steady_clock::now().time_since_epoch().count(),
+					Counter.fetch_add(1, std::memory_order_relaxed)
+				);
+				std::error_code Error;
+				if (std::filesystem::create_directory(Candidate, Error)) return Candidate;
+				if (Error && Error != std::errc::file_exists) throw std::filesystem::filesystem_error(
+					"Could not create project staging directory", Candidate, Error
+				);
+			}
+			throw std::runtime_error("Could not allocate a unique project staging directory");
+		}
+
 		std::optional<glm::vec3> DecodeVector3(const Json &value) {
 			if (!value.is_array() || value.size() != 3) return std::nullopt;
 			glm::vec3 result;
@@ -306,7 +338,7 @@ namespace gargantuan {
 				if (!parameters.empty())
 					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Handshake takes no parameters"));
 				Json capabilities = {
-					"OpenProject", "Schema", "Snapshot", "Journal", "SetProperty", "SetAttribute", "SetExtensionProperty",
+					"OpenProject", "CreateProject", "Schema", "Snapshot", "Journal", "SetProperty", "SetAttribute", "SetExtensionProperty",
 					"AddTag", "RemoveTag", "SaveProject", "SaveProjectAs", "AuthoritativeRevision",
 					"CreateInstance", "DestroyInstance", "DuplicateInstance", "ReparentInstance",
 					"BeginTransaction",
@@ -426,6 +458,138 @@ namespace gargantuan {
 						{"ProjectState", EncodeProjectState(World, PersistedRevision, CurrentProject)},
 					}
 				));
+			}
+
+			if (method == "CreateProject") {
+				if (!StudioSecurity.HasCapability(ScriptCapability::EditorCommands))
+					return SerializeBoundedResponse(ErrorResponse(
+						requestId, "Unauthorized", "Project creation requires EditorCommands"
+					));
+				if (!HasOnlyFields(parameters, {"Destination", "Name"}) ||
+					!parameters.contains("Destination") || !parameters.contains("Name") ||
+					!parameters["Name"].is_string())
+					return SerializeBoundedResponse(ErrorResponse(
+						requestId, "MalformedRequest", "CreateProject requires Destination and Name"
+					));
+				const auto Name = parameters["Name"].get<std::string>();
+				if (!IsValidProjectName(Name))
+					return SerializeBoundedResponse(ErrorResponse(
+						requestId, "InvalidProjectName", "Project Name must be valid visible UTF-8 within 100 bytes"
+					));
+				auto Destination = ValidateProjectDestination(parameters["Destination"]);
+				if (!Destination)
+					return SerializeBoundedResponse(ErrorResponse(
+						requestId, "InvalidDestination", "Project destination is not a normalized absolute local directory path"
+					));
+				std::error_code FilesystemError;
+				if (std::filesystem::exists(*Destination, FilesystemError)) {
+					const auto ProjectConfiguration = *Destination / ".gargantuan";
+					const bool ExistingProject =
+						std::filesystem::is_regular_file(ProjectConfiguration / "project.instance.json", FilesystemError) ||
+						std::filesystem::is_regular_file(ProjectConfiguration / "project.instance.bin", FilesystemError);
+					return SerializeBoundedResponse(ErrorResponse(
+						requestId,
+						ExistingProject ? "ExistingProject" : "DestinationExists",
+						"New Project requires a destination that does not already exist"
+					));
+				}
+				if (FilesystemError || !std::filesystem::is_directory(Destination->parent_path(), FilesystemError))
+					return SerializeBoundedResponse(ErrorResponse(
+						requestId, "InvalidDestination", "Project destination parent is not an accessible directory"
+					));
+				if (World && World->Transactions.GetOpenCount() != 0)
+					return SerializeBoundedResponse(ErrorResponse(
+						requestId, "TransactionOpen", "Commit the open authoring transaction before creating a project"
+					));
+
+				std::filesystem::path Staging;
+				bool StagingOwned = false;
+				try {
+					Staging = CreateOwnedStagingDirectory(*Destination);
+					StagingOwned = true;
+					auto StagingFilesystem = std::make_unique<DiskFilesystem>(Staging);
+					auto StagingProject = Project::forDestination(
+						StagingFilesystem.get(), InstanceSerialization::InstanceFormat::Json
+					);
+					auto NewWorld = std::make_shared<DataModel>();
+					NewWorld->SetName(Name);
+					if (!std::dynamic_pointer_cast<Workspace>(NewWorld->GetService("Workspace")))
+						throw std::runtime_error("The canonical new project could not create Workspace");
+					NewWorld->MarkPersistenceSubtreeArchivable();
+					NewWorld->Root = Staging;
+					NewWorld->Filesystem = StagingFilesystem.get();
+					NewWorld->InitializeLoadedProjectRevision();
+					auto Snapshot = StagingProject.CaptureGame(NewWorld, NewWorld->GetAuthoritativeRevision());
+					StagingProject.PersistGameAtomically(Snapshot, PersistenceCheckpointForTesting);
+					NewWorld->Destroy();
+					NewWorld.reset();
+					std::filesystem::rename(Staging, *Destination);
+					StagingOwned = false;
+				} catch (const std::filesystem::filesystem_error &) {
+					if (StagingOwned) {
+						std::error_code Ignored;
+						std::filesystem::remove_all(Staging, Ignored);
+					}
+					return SerializeBoundedResponse(ErrorResponse(
+						requestId, "FilesystemFailure", "The new project could not be established atomically"
+					));
+				} catch (const std::exception &) {
+					if (StagingOwned) {
+						std::error_code Ignored;
+						std::filesystem::remove_all(Staging, Ignored);
+					}
+					return SerializeBoundedResponse(ErrorResponse(
+						requestId, "PersistenceFailure", "The new project could not be serialized and persisted"
+					));
+				}
+
+				try {
+					if (World) {
+						(void)World->Transactions.TerminateOwner(*World, TransactionOwner);
+						World->Destroy();
+					}
+					World.reset();
+					Filesystem.reset();
+					CurrentProject.reset();
+					PersistedRevision = 0;
+					ViewportCamera.reset();
+					LastViewportSnapshot.reset();
+					Cursor.reset();
+					ViewportWidth = 0;
+					ViewportHeight = 0;
+					ViewportFrameNumber = 0;
+					BootstrapProjectRuntimeSchema(*Destination);
+					auto NewFilesystem = std::make_unique<DiskFilesystem>(*Destination);
+					auto NewProject = Project::fromExisting(NewFilesystem.get());
+					auto LoadedWorld = NewProject.DeserializeGame();
+					LoadedWorld->InitializeLoadedProjectRevision();
+					Filesystem = std::move(NewFilesystem);
+					CurrentProject = std::move(NewProject);
+					World = std::move(LoadedWorld);
+					World->Filesystem = Filesystem.get();
+					PersistedRevision = World->GetAuthoritativeRevision();
+					if (!std::dynamic_pointer_cast<Workspace>(World->GetService("Workspace")))
+						throw std::runtime_error("New project has no valid Workspace");
+					ViewportCamera = RenderCameraInput{};
+				} catch (const std::exception &) {
+					if (World) {
+						try { World->Destroy(); }
+						catch (...) {}
+					}
+					World.reset();
+					Filesystem.reset();
+					CurrentProject.reset();
+					PersistedRevision = 0;
+					ViewportCamera.reset();
+					Cursor.reset();
+					return SerializeBoundedResponse(ErrorResponse(
+						requestId, "ProjectActivationFailure", "The persisted new project could not be activated"
+					));
+				}
+				return SerializeBoundedResponse(SuccessResponse(requestId, {
+					{"Root", JsonCodec::EncodeObjectId(WireObjectId::FromObjectId(World->GetObjectId()))},
+					{"ProjectState", EncodeProjectState(World, PersistedRevision, CurrentProject)},
+				}));
 			}
 
 			if (method == "GetProjectState") {
