@@ -76,10 +76,19 @@ Extensions, and custom-property overrides without inventing another serializer.
 Duplicate records the clone snapshot rather than relying on the source surviving.
 Object-reference values use `WireObjectReference`, never native pointers.
 
-Future restoration of a destroyed object must allocate fresh generation-safe
-identity. Historical destroyed IDs remain stale; Foundation 3B must explicitly
-reconcile restored identities and references rather than reviving an old
-generation. Restoration and reference remapping are not implemented here.
+History restoration always allocates fresh generation-safe identities. A
+history-local alias table maps each captured identity to the current live
+generation after Create, Delete, or Duplicate restoration. The table is not an
+ObjectRegistry override and is never exposed as request authority: the old ID
+remains stale to every normal API. Repeated restore/destroy cycles update the
+alias and never resurrect a generation.
+
+Closed scalar `WireObjectReference` values are resolved through this alias table
+before validation/application. Project-v4 subtree JSON does not currently encode
+an arbitrary object-reference graph, so restoration makes no claim to rebuild
+external inbound references or unsupported internal reference edges. Existing
+generation-safe reference behavior is preserved; no missing reference is
+silently substituted with another object.
 
 ## Revision and journal relationship
 
@@ -91,8 +100,36 @@ creates no history entry. Rejected operations contribute no semantic change.
 Journal records remain the authoritative projection feed. A transaction may
 release many ordinary journal records in operation order, but `TransactionId`
 is not encoded as `ChangeJournal.Sequence` and no wire-journal format version
-changed. EditorHost commit returns transaction identity, starting/resulting
+changed. Undo and Redo publish the same ordinary semantic records as forward
+authoring; clients never invert cached state. EditorHost commit returns transaction identity, starting/resulting
 revision, and change count; Studio then consumes the normal journal batch.
+
+## Cursor, execution, and branch invalidation
+
+The cursor is an applied-entry count in the retained deque. Entries before it
+are undoable; the entry at it is the next redo. `CanUndo`, `CanRedo`, and bounded
+next labels derive from that position. Undo executes the preceding entry in
+reverse change order, Redo executes the next entry in forward order, and neither
+appends a synthetic history transaction. A new authoring commit behind the tip
+discards the redo suffix before retention.
+
+Execution is Main-domain, requires trusted mutation authority, rejects while an
+explicit group is open, and accepts no transaction selector from request data.
+Semantic state, exact schema/version, live generations, hierarchy, scope,
+resource bounds, and revision availability use the mutation/lifecycle paths.
+Subtree reconstruction is detached and bounded before attachment. Incompatible
+state returns a structured failure without moving the cursor or revision.
+
+Every successful Undo or Redo advances `AuthoritativeRevision` once; it never
+restores an old revision and never changes `PersistedRevision`. An Undo after
+Save is therefore dirty even if values resemble an older persisted state. Save
+does not clear history. Project open/replacement clears history, cursor, aliases,
+and open grouping state.
+
+EditorHost advertises `Undo`, `Redo`, and `AuthoritativeHistoryStatus`. Undo and
+Redo take empty payloads. Project state and journal responses carry derived
+history status; raw cursor indices, restoration aliases, and arbitrary history
+selection are not protocol operations.
 
 ## Bounds and eviction
 
@@ -105,7 +142,6 @@ before state mutation. When retained-history count or aggregate bytes would be
 exceeded, oldest entries are evicted deterministically; current project state
 is unaffected.
 
-The retained deque is prepared for a future cursor: Foundation 3B may move a
-cursor for Undo/Redo and discard its future branch on a new commit. Foundation
-3A retains only the committed tip and exposes no cursor movement, Undo, Redo,
-`CanUndo`, or `CanRedo` operation.
+Front eviction decrements the applied-count cursor when needed, preserving valid
+availability without underflow. Diagnostics expose retained count, cursor count,
+semantic bytes, availability, and bounded next labels only.

@@ -164,14 +164,22 @@ namespace gargantuan {
 		) {
 			if (!world || !project) return {
 				{"AuthoritativeRevision", 0}, {"PersistedRevision", 0},
-				{"Dirty", false}, {"CurrentDestination", nullptr}
+				{"Dirty", false}, {"CurrentDestination", nullptr},
+				{"History", {{"CanUndo", false}, {"CanRedo", false}, {"UndoLabel", nullptr}, {"RedoLabel", nullptr}}}
 			};
 			const auto authoritativeRevision = world->GetAuthoritativeRevision();
+			const auto History = world->Transactions.GetStatus();
 			return {
 				{"AuthoritativeRevision", authoritativeRevision},
 				{"PersistedRevision", persistedRevision},
 				{"Dirty", authoritativeRevision != persistedRevision},
 				{"CurrentDestination", project->Root.generic_string()},
+				{"History", {
+					{"CanUndo", History.CanUndo}, {"CanRedo", History.CanRedo},
+					{"UndoLabel", History.UndoLabel ? Json(*History.UndoLabel) : Json(nullptr)},
+					{"RedoLabel", History.RedoLabel ? Json(*History.RedoLabel) : Json(nullptr)},
+					{"RetainedCount", History.RetainedCount}, {"SemanticBytes", History.SemanticBytes}
+				}},
 			};
 		}
 
@@ -304,6 +312,7 @@ namespace gargantuan {
 					"BeginTransaction",
 					"CommitTransaction",
 					"AuthoritativeTransactions",
+					"Undo", "Redo", "AuthoritativeHistoryStatus",
 					"ConfigureViewport", "SetViewportCamera", "CaptureViewport", "PickViewport"
 				};
 				Json viewportTransports = Json::array({{
@@ -496,6 +505,40 @@ namespace gargantuan {
 						{"ProjectState", EncodeProjectState(World, PersistedRevision, CurrentProject)},
 					}
 				));
+			}
+
+			if (method == "Undo" || method == "Redo") {
+				if (!parameters.empty())
+					return SerializeBoundedResponse(ErrorResponse(
+						requestId, "MalformedRequest", "Undo and Redo take no parameters"
+					));
+				if (!StudioSecurity.HasCapability(ScriptCapability::MutateDataModel))
+					return SerializeBoundedResponse(ErrorResponse(
+						requestId, "Unauthorized", "History execution requires MutateDataModel"
+					));
+				if (!World || !CurrentProject)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "NoProjectLoaded", "No project is loaded"));
+				if (!Cursor)
+					return SerializeBoundedResponse(ErrorResponse(
+						requestId, "SnapshotRequired", "GetSnapshot must establish a journal cursor"
+					));
+				auto Result = method == "Undo" ? Mutations.Undo(*World, StudioSecurity) : Mutations.Redo(*World, StudioSecurity);
+				if (!Result.Succeeded()) {
+					const char *Code = Result.Status == TransactionStatus::NothingToUndo ? "NothingToUndo" :
+						Result.Status == TransactionStatus::NothingToRedo ? "NothingToRedo" :
+						Result.Status == TransactionStatus::RevisionExhausted ? "RevisionExhausted" :
+						Result.Status == TransactionStatus::InvalidState ? "TransactionOpen" : "HistoryExecutionFailed";
+					return SerializeBoundedResponse(ErrorResponse(requestId, Code, Result.Message));
+				}
+				const auto Status = World->Transactions.GetStatus();
+				return SerializeBoundedResponse(SuccessResponse(requestId, {
+					{"TransactionId", std::to_string(Result.Id.Value)},
+					{"Action", method}, {"ResultingRevision", Result.ResultingRevision},
+					{"CanUndo", Status.CanUndo}, {"CanRedo", Status.CanRedo},
+					{"UndoLabel", Status.UndoLabel ? Json(*Status.UndoLabel) : Json(nullptr)},
+					{"RedoLabel", Status.RedoLabel ? Json(*Status.RedoLabel) : Json(nullptr)},
+					{"ProjectState", EncodeProjectState(World, PersistedRevision, CurrentProject)},
+				}));
 			}
 
 			if (method == "SaveProject" || method == "SaveProjectAs") {

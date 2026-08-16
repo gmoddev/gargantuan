@@ -8,6 +8,7 @@
 #include <limits>
 #include <stdexcept>
 #include <type_traits>
+#include <unordered_set>
 
 namespace gargantuan {
 	namespace {
@@ -159,13 +160,137 @@ namespace gargantuan {
 	}
 
 	void AuthoritativeTransactionHistory::Retain(CommittedTransaction Transaction) {
+		bool PruneMappings = false;
+		while (History.size() > Cursor) {
+			RetainedBytes -= History.back().SemanticBytes;
+			History.pop_back();
+			PruneMappings = true;
+		}
 		while (!History.empty() && (History.size() >= RetainedTransactionLimit ||
 									Transaction.SemanticBytes > RetainedByteLimit - RetainedBytes)) {
 			RetainedBytes -= History.front().SemanticBytes;
 			History.pop_front();
+			if (Cursor != 0) --Cursor;
+			PruneMappings = true;
 		}
 		RetainedBytes += Transaction.SemanticBytes;
 		History.push_back(std::move(Transaction));
+		Cursor = History.size();
+		if (PruneMappings && !IdentityMappings.empty()) {
+			std::unordered_set<ObjectId> Referenced;
+			auto IncludeWireReference = [&](const WireValue &Value) {
+				if (const auto *Reference = std::get_if<WireObjectReference>(&Value))
+					Referenced.insert(Reference->Object.ToObjectId());
+			};
+			for (const auto &Retained : History)
+				for (const auto &Change : Retained.Changes)
+					std::visit([&](const auto &Typed) {
+						using ChangeType = std::decay_t<decltype(Typed)>;
+						if constexpr (std::is_same_v<ChangeType, PropertyTransactionChange>) {
+							Referenced.insert(Typed.Object); IncludeWireReference(Typed.Before); IncludeWireReference(Typed.After);
+						} else if constexpr (std::is_same_v<ChangeType, AttributeTransactionChange>) {
+							Referenced.insert(Typed.Object);
+							if (Typed.Before) IncludeWireReference(*Typed.Before);
+							if (Typed.After) IncludeWireReference(*Typed.After);
+						} else if constexpr (std::is_same_v<ChangeType, TagTransactionChange> ||
+							std::is_same_v<ChangeType, ExtensionTransactionChange>) {
+							Referenced.insert(Typed.Object);
+							if constexpr (std::is_same_v<ChangeType, ExtensionTransactionChange>) {
+								IncludeWireReference(Typed.Before); IncludeWireReference(Typed.After);
+							}
+						} else if constexpr (std::is_same_v<ChangeType, ReparentTransactionChange>) {
+							Referenced.insert(Typed.Object);
+							if (Typed.BeforeParent) Referenced.insert(*Typed.BeforeParent);
+							if (Typed.AfterParent) Referenced.insert(*Typed.AfterParent);
+						} else {
+							Referenced.insert(Typed.Root);
+							if (Typed.Parent) Referenced.insert(*Typed.Parent);
+							Referenced.insert(Typed.Objects.begin(), Typed.Objects.end());
+						}
+					}, Change);
+			std::erase_if(IdentityMappings, [&](const auto &Entry) { return !Referenced.contains(Entry.first); });
+		}
+	}
+
+	TransactionHistoryStatus AuthoritativeTransactionHistory::GetStatus() const {
+		TransactionHistoryStatus Status{
+			.CanUndo = Cursor != 0,
+			.CanRedo = Cursor < History.size(),
+			.RetainedCount = History.size(),
+			.Cursor = Cursor,
+			.SemanticBytes = RetainedBytes,
+		};
+		if (Status.CanUndo) {
+			Status.UndoTransaction = History[Cursor - 1].Id;
+			Status.UndoLabel = History[Cursor - 1].Label;
+		}
+		if (Status.CanRedo) {
+			Status.RedoTransaction = History[Cursor].Id;
+			Status.RedoLabel = History[Cursor].Label;
+		}
+		return Status;
+	}
+
+	const CommittedTransaction *AuthoritativeTransactionHistory::GetUndoTransaction() const {
+		return Cursor == 0 ? nullptr : &History[Cursor - 1];
+	}
+
+	const CommittedTransaction *AuthoritativeTransactionHistory::GetRedoTransaction() const {
+		return Cursor >= History.size() ? nullptr : &History[Cursor];
+	}
+
+	ObjectId AuthoritativeTransactionHistory::ResolveIdentity(ObjectId Historical) const {
+		auto Current = Historical;
+		for (std::size_t Depth = 0; Depth < IdentityMappings.size(); ++Depth) {
+			auto Found = std::find_if(IdentityMappings.rbegin(), IdentityMappings.rend(), [&](const auto &Entry) {
+				return Entry.first == Current;
+			});
+			if (Found == IdentityMappings.rend() || Found->second == Current) break;
+			Current = Found->second;
+		}
+		return Current;
+	}
+
+	void AuthoritativeTransactionHistory::RemapIdentity(ObjectId Historical, ObjectId Current) {
+		std::vector<ObjectId> Aliases;
+		for (const auto &Entry : IdentityMappings)
+			if (ResolveIdentity(Entry.first) == Historical) Aliases.push_back(Entry.first);
+		for (auto Alias : Aliases) {
+			auto Entry = std::find_if(IdentityMappings.begin(), IdentityMappings.end(),
+				[&](const auto &Candidate) { return Candidate.first == Alias; });
+			if (Entry != IdentityMappings.end()) Entry->second = Current;
+		}
+		auto Found = std::find_if(IdentityMappings.begin(), IdentityMappings.end(), [&](const auto &Entry) {
+			return Entry.first == Historical;
+		});
+		if (Found == IdentityMappings.end()) IdentityMappings.emplace_back(Historical, Current);
+		else Found->second = Current;
+	}
+
+	TransactionResult AuthoritativeTransactionHistory::CompleteUndo(DataModel &World) {
+		if (Open) return Failure(TransactionStatus::InvalidState, {}, "Undo is unavailable while a transaction is open");
+		if (Cursor == 0) return Failure(TransactionStatus::NothingToUndo, {}, "There is nothing to undo");
+		World.EnsureAuthoritativeRevisionAvailable();
+		const auto &Transaction = History[Cursor - 1];
+		const auto StartingRevision = World.GetAuthoritativeRevision();
+		World.AdvanceAuthoritativeRevision();
+		--Cursor;
+		return {.Status = TransactionStatus::Success, .Id = Transaction.Id,
+			.StartingRevision = StartingRevision, .ResultingRevision = World.GetAuthoritativeRevision(),
+			.ChangeCount = Transaction.Changes.size()};
+	}
+
+	TransactionResult AuthoritativeTransactionHistory::CompleteRedo(DataModel &World) {
+		if (Open) return Failure(TransactionStatus::InvalidState, {}, "Redo is unavailable while a transaction is open");
+		if (Cursor >= History.size()) return Failure(TransactionStatus::NothingToRedo, {}, "There is nothing to redo");
+		World.EnsureAuthoritativeRevisionAvailable();
+		const auto &Transaction = History[Cursor];
+		const auto StartingRevision = World.GetAuthoritativeRevision();
+		World.AdvanceAuthoritativeRevision();
+		++Cursor;
+		return {.Status = TransactionStatus::Success, .Id = Transaction.Id,
+			.StartingRevision = StartingRevision, .ResultingRevision = World.GetAuthoritativeRevision(),
+			.ChangeCount = Transaction.Changes.size()};
 	}
 
 	TransactionResult AuthoritativeTransactionHistory::Commit(DataModel &World, TransactionId Id, std::uint64_t Owner) {
@@ -267,5 +392,7 @@ namespace gargantuan {
 		Open.reset();
 		History.clear();
 		RetainedBytes = 0;
+		Cursor = 0;
+		IdentityMappings.clear();
 	}
 }

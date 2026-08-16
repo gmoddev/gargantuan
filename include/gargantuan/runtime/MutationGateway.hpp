@@ -76,6 +76,11 @@ namespace gargantuan {
 	struct ReparentObjectCommand { ObjectId Object; std::optional<ObjectId> Parent; };
 	struct DestroyObjectCommand { ObjectId Object; };
 	struct DuplicateObjectCommand { ObjectId Object; };
+	struct RestoreSubtreeCommand {
+		std::string PersistentSnapshot;
+		ObjectId Parent;
+		std::size_t ExpectedObjectCount = 0;
+	};
 	using MutationCommand = std::variant<
 		CreateObjectCommand,
 		UpdatePropertyCommand,
@@ -85,7 +90,8 @@ namespace gargantuan {
 		RemoveTagCommand,
 		ReparentObjectCommand,
 		DestroyObjectCommand,
-		DuplicateObjectCommand
+		DuplicateObjectCommand,
+		RestoreSubtreeCommand
 	>;
 
 	enum class MutationStatus {
@@ -144,6 +150,8 @@ namespace gargantuan {
 			ScriptSecurityContext securityContext = GetCurrentScriptSecurityContext()
 		);
 		MutationResult Apply(MutationCommand Command, MutationAuthorityContext Authority);
+		TransactionResult Undo(DataModel &World, ScriptSecurityContext SecurityContext);
+		TransactionResult Redo(DataModel &World, ScriptSecurityContext SecurityContext);
 		std::size_t Drain(std::size_t maximumCommands = static_cast<std::size_t>(-1));
 		[[nodiscard]] std::size_t GetPendingCount() const;
 

@@ -111,6 +111,21 @@ namespace gargantuan {
 		LimitExceeded,
 		RevisionExhausted,
 		InvalidState,
+		NothingToUndo,
+		NothingToRedo,
+		ExecutionFailed,
+	};
+
+	struct TransactionHistoryStatus {
+		bool CanUndo = false;
+		bool CanRedo = false;
+		std::optional<TransactionId> UndoTransaction;
+		std::optional<TransactionId> RedoTransaction;
+		std::optional<std::string> UndoLabel;
+		std::optional<std::string> RedoLabel;
+		std::size_t RetainedCount = 0;
+		std::size_t Cursor = 0;
+		std::size_t SemanticBytes = 0;
 	};
 
 	struct TransactionResult {
@@ -162,6 +177,13 @@ namespace gargantuan {
 			std::chrono::steady_clock::time_point Now = std::chrono::steady_clock::now()
 		);
 		void Reset();
+		[[nodiscard]] TransactionHistoryStatus GetStatus() const;
+		[[nodiscard]] const CommittedTransaction *GetUndoTransaction() const;
+		[[nodiscard]] const CommittedTransaction *GetRedoTransaction() const;
+		[[nodiscard]] ObjectId ResolveIdentity(ObjectId Historical) const;
+		void RemapIdentity(ObjectId Historical, ObjectId Current);
+		TransactionResult CompleteUndo(DataModel &World);
+		TransactionResult CompleteRedo(DataModel &World);
 
 		[[nodiscard]] bool IsOpen(TransactionId Id, std::uint64_t Owner) const;
 		[[nodiscard]] std::size_t GetOpenCount() const {
@@ -196,6 +218,8 @@ namespace gargantuan {
 		std::optional<OpenTransaction> Open;
 		std::deque<CommittedTransaction> History;
 		std::size_t RetainedBytes = 0;
+		std::size_t Cursor = 0;
+		std::vector<std::pair<ObjectId, ObjectId>> IdentityMappings;
 		std::size_t RetainedTransactionLimit;
 		std::size_t RetainedByteLimit;
 	};

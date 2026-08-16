@@ -53,6 +53,26 @@ namespace gargantuan {
 			}
 			return false;
 		}
+
+		WireValue ResolveWireReferences(const WireValue &Value, const AuthoritativeTransactionHistory &History) {
+			if (const auto *Reference = std::get_if<WireObjectReference>(&Value)) {
+				const auto Resolved = History.ResolveIdentity(Reference->Object.ToObjectId());
+				return WireObjectReference{WireObjectId::FromObjectId(Resolved)};
+			}
+			return Value;
+		}
+
+		void PublishCapturedJournal(std::vector<BufferedChangeRecord> Records) {
+			for (std::size_t Index = 0; Index < Records.size();) {
+				const auto Scope = Records[Index].Scope;
+				std::vector<std::pair<ObjectId, ChangePayload>> Changes;
+				while (Index < Records.size() && Records[Index].Scope == Scope) {
+					Changes.emplace_back(Records[Index].Object, std::move(Records[Index].Payload));
+					++Index;
+				}
+				ChangeJournal::Get().CommitBatch(Scope, std::move(Changes));
+			}
+		}
 	}
 	MutationAuthorityContext::MutationAuthorityContext(
 		MutationCommandOrigin OriginValue,
@@ -224,7 +244,58 @@ namespace gargantuan {
 			return std::visit(
 				[&](auto &CommandValue) -> MutationResult {
 					using Command = std::decay_t<decltype(CommandValue)>;
-					if constexpr (std::is_same_v<Command, CreateObjectCommand>) {
+					if constexpr (std::is_same_v<Command, RestoreSubtreeCommand>) {
+						if (Authority.GetOrigin() != MutationCommandOrigin::LocalInternal)
+							return {MutationStatus::Unauthorized, std::nullopt, "Subtree restoration is internal-only"};
+						auto Parent = ObjectRegistry::Get().Lookup(CommandValue.Parent);
+						if (!Parent) return {MutationStatus::StaleObject, std::nullopt, "Restore parent identity is stale"};
+						auto DataModelValue = Parent->GetDataModel();
+						if (!DataModelValue)
+							return {MutationStatus::InvalidParent, std::nullopt, "Restore parent is not project-owned"};
+						std::istringstream Input(CommandValue.PersistentSnapshot);
+						InstanceSerialization::DeserializationState State;
+						{
+							ScopedChangeJournalSuppression Suppression;
+							State = InstanceSerialization::DeserializeDetached(
+								InstanceSerialization::InstanceFormat::Json, Input
+							);
+						}
+						if (!State.Ok || !State.Instance)
+							return {MutationStatus::ValidationFailed, std::nullopt, "History subtree snapshot is incompatible"};
+						const auto Required = SubtreeSize(State.Instance);
+						if (CommandValue.ExpectedObjectCount == 0 || Required != CommandValue.ExpectedObjectCount)
+							return {MutationStatus::ValidationFailed, std::nullopt, "History subtree shape is incompatible"};
+						const auto Existing = SubtreeSize(DataModelValue);
+						if (Existing > MaximumPersistenceObjects || Required > MaximumPersistenceObjects - Existing)
+							return {MutationStatus::ResourceLimit, std::nullopt, "Restore would exceed the object-count limit"};
+						if (AncestryDepth(Parent) + SubtreeDepth(State.Instance) > MaximumProtocolJsonDepth)
+							return {MutationStatus::ResourceLimit, std::nullopt, "Restore would exceed the hierarchy depth limit"};
+						auto Root = State.Instance;
+						Root->MarkPersistenceSubtreeArchivable();
+						DataModelValue->BeginAuthoritativeRevisionBatch();
+						try {
+							{
+								ScopedChangeJournalSuppression Suppression;
+								Root->SetParent(Parent);
+								for (const auto &[Node, Tags] : State.PendingTags)
+									for (const auto &Tag : Tags)
+										(void)DataModelValue->Tags.Add(
+											DataModelValue->GetObjectId(), Node->GetObjectId(), Tag,
+											ScriptSecurityContext::CoreTrusted()
+										);
+							}
+							Root->PublishReplicationSubtree(DataModelValue->GetObjectId());
+							DataModelValue->CommitAuthoritativeRevisionBatch();
+							return {MutationStatus::Success, Root->GetObjectId(), {}};
+						} catch (...) {
+							{
+								ScopedChangeJournalSuppression Suppression;
+								Root->Destroy();
+							}
+							DataModelValue->CancelAuthoritativeRevisionBatch();
+							throw;
+						}
+					} else if constexpr (std::is_same_v<Command, CreateObjectCommand>) {
 						auto *Definition = InstanceClassRegistry::GetDefinitionBySchemaId(CommandValue.ClassSchemaId);
 						if (!Definition || Definition->DefinitionVersion != CommandValue.DefinitionVersion ||
 							!InstanceClassRegistry::IsConstructible(*Definition) || !Definition->EditorVisible ||
@@ -692,6 +763,187 @@ namespace gargantuan {
 		} catch (...) {
 			return {MutationStatus::InternalError, std::nullopt, "Unknown mutation failure"};
 		}
+	}
+
+	namespace {
+		TransactionResult ExecuteHistory(
+			MutationGateway &Gateway, DataModel &World, ScriptSecurityContext SecurityContext, bool Redo
+		) {
+			auto &History = World.Transactions;
+			if (History.GetOpenCount() != 0)
+				return {.Status = TransactionStatus::InvalidState, .Message = "History execution is unavailable while a transaction is open"};
+			const auto *Transaction = Redo ? History.GetRedoTransaction() : History.GetUndoTransaction();
+			if (!Transaction)
+				return {.Status = Redo ? TransactionStatus::NothingToRedo : TransactionStatus::NothingToUndo,
+					.Message = Redo ? "There is nothing to redo" : "There is nothing to undo"};
+			try {
+				World.EnsureAuthoritativeRevisionAvailable();
+			} catch (const std::overflow_error &Error) {
+				return {.Status = TransactionStatus::RevisionExhausted, .Id = Transaction->Id, .Message = Error.what()};
+			}
+
+			auto ApplyChange = [&](const TransactionChange &Change, bool Forward) -> MutationResult {
+				return std::visit([&](const auto &Typed) -> MutationResult {
+					using ChangeType = std::decay_t<decltype(Typed)>;
+					if constexpr (std::is_same_v<ChangeType, PropertyTransactionChange>) {
+						auto Object = History.ResolveIdentity(Typed.Object);
+						auto InstanceValue = ObjectRegistry::Get().Lookup(Object);
+						if (!InstanceValue) return {MutationStatus::StaleObject, {}, "History property target is stale"};
+						auto *Property = InstanceValue->FindProperty(Typed.PropertyName);
+						if (!Property || Property->DeclaringSchemaId != Typed.DeclaringSchemaId ||
+							Property->DeclaringDefinitionVersion != Typed.DefinitionVersion)
+							return {MutationStatus::ValidationFailed, {}, "History property schema is incompatible"};
+						const auto Expected = ResolveWireReferences(Forward ? Typed.Before : Typed.After, History);
+						if (InstanceValue->ReadPropertyWireValue(Typed.PropertyName) != std::optional<WireValue>(Expected))
+							return {MutationStatus::ValidationFailed, {}, "History property state has diverged"};
+						auto Native = DecodeNativeWireValue(ResolveWireReferences(Forward ? Typed.After : Typed.Before, History));
+						if (!Native) return {MutationStatus::ValidationFailed, {}, "History property value is unsupported"};
+						return Gateway.Apply(UpdatePropertyCommand{Object, Typed.PropertyName, std::move(*Native)},
+							MutationAuthorityContext::Local(SecurityContext));
+					} else if constexpr (std::is_same_v<ChangeType, AttributeTransactionChange>) {
+						auto Object = History.ResolveIdentity(Typed.Object);
+						auto InstanceValue = ObjectRegistry::Get().Lookup(Object);
+						if (!InstanceValue) return {MutationStatus::StaleObject, {}, "History attribute target is stale"};
+						auto Expected = Forward ? Typed.Before : Typed.After;
+						if (Expected) Expected = ResolveWireReferences(*Expected, History);
+						if (InstanceValue->GetAttributeValue(Typed.AttributeName, ScriptSecurityContext::CoreTrusted()) != Expected)
+							return {MutationStatus::ValidationFailed, {}, "History attribute state has diverged"};
+						auto Value = Forward ? Typed.After : Typed.Before;
+						if (Value) Value = ResolveWireReferences(*Value, History);
+						return Gateway.Apply(UpdateAttributeCommand{Object, Typed.AttributeName, std::move(Value)},
+							MutationAuthorityContext::Local(SecurityContext));
+					} else if constexpr (std::is_same_v<ChangeType, TagTransactionChange>) {
+						auto Object = History.ResolveIdentity(Typed.Object);
+						auto InstanceValue = ObjectRegistry::Get().Lookup(Object);
+						if (!InstanceValue || InstanceValue->GetDataModel().get() != &World)
+							return {MutationStatus::StaleObject, {}, "History tag target is stale"};
+						const bool Expected = Forward ? Typed.Before : Typed.After;
+						if (World.Tags.Has(World.GetObjectId(), Object, Typed.TagName, ScriptSecurityContext::CoreTrusted()) != Expected)
+							return {MutationStatus::ValidationFailed, {}, "History tag state has diverged"};
+						const bool Value = Forward ? Typed.After : Typed.Before;
+						if (Value) return Gateway.Apply(AddTagCommand{Object, Typed.TagName, World.GetObjectId()},
+							MutationAuthorityContext::Local(SecurityContext));
+						return Gateway.Apply(RemoveTagCommand{Object, Typed.TagName, World.GetObjectId()},
+							MutationAuthorityContext::Local(SecurityContext));
+					} else if constexpr (std::is_same_v<ChangeType, ExtensionTransactionChange>) {
+						auto Object = History.ResolveIdentity(Typed.Object);
+						auto InstanceValue = ObjectRegistry::Get().Lookup(Object);
+						if (!InstanceValue) return {MutationStatus::StaleObject, {}, "History extension target is stale"};
+						try {
+							const auto Expected = ResolveWireReferences(Forward ? Typed.Before : Typed.After, History);
+							if (InstanceValue->GetExtensionPropertyValue(Typed.ExtensionSchemaId, Typed.PropertyName,
+								ScriptSecurityContext::CoreTrusted()) != Expected)
+								return {MutationStatus::ValidationFailed, {}, "History extension state has diverged"};
+						} catch (...) { return {MutationStatus::ValidationFailed, {}, "History extension schema is incompatible"}; }
+						return Gateway.Apply(UpdateExtensionPropertyCommand{Object, Typed.ExtensionSchemaId,
+							Typed.DefinitionVersion, Typed.PropertyName,
+							ResolveWireReferences(Forward ? Typed.After : Typed.Before, History)},
+							MutationAuthorityContext::Local(SecurityContext));
+					} else if constexpr (std::is_same_v<ChangeType, ReparentTransactionChange>) {
+						auto Object = History.ResolveIdentity(Typed.Object);
+						auto InstanceValue = ObjectRegistry::Get().Lookup(Object);
+						if (!InstanceValue) return {MutationStatus::StaleObject, {}, "History reparent target is stale"};
+						auto ExpectedParent = Forward ? Typed.BeforeParent : Typed.AfterParent;
+						if (ExpectedParent) ExpectedParent = History.ResolveIdentity(*ExpectedParent);
+						auto CurrentParent = InstanceValue->GetParent();
+						const auto Current = CurrentParent ? std::optional((*CurrentParent)->GetObjectId()) : std::nullopt;
+						if (Current != ExpectedParent)
+							return {MutationStatus::ValidationFailed, {}, "History hierarchy state has diverged"};
+						auto Parent = Forward ? Typed.AfterParent : Typed.BeforeParent;
+						if (Parent) Parent = History.ResolveIdentity(*Parent);
+						return Gateway.Apply(ReparentObjectCommand{Object, Parent}, MutationAuthorityContext::Local(SecurityContext));
+					} else {
+						const bool Restore = Typed.Kind == SubtreeTransactionKind::Destroy ? !Forward : Forward;
+						if (Restore) {
+							if (!Typed.Parent) return {MutationStatus::InvalidParent, {}, "History subtree has no restorable parent"};
+							auto Result = Gateway.Apply(RestoreSubtreeCommand{Typed.PersistentSnapshot,
+								History.ResolveIdentity(*Typed.Parent), Typed.Objects.size()},
+								MutationAuthorityContext::Local(SecurityContext));
+							if (!Result.Succeeded() || !Result.Object) return Result;
+							auto Root = ObjectRegistry::Get().Lookup(*Result.Object);
+							std::vector<std::shared_ptr<Instance>> Nodes{Root};
+							Root->CollectDescendants(Nodes);
+							if (Nodes.size() != Typed.Objects.size())
+								throw std::logic_error("Validated history subtree shape changed during attachment");
+							for (std::size_t Index = 0; Index < Nodes.size(); ++Index)
+								History.RemapIdentity(Typed.Objects[Index], Nodes[Index]->GetObjectId());
+							return Result;
+						}
+						return Gateway.Apply(DestroyObjectCommand{History.ResolveIdentity(Typed.Root)},
+							MutationAuthorityContext::Local(SecurityContext));
+					}
+				}, Change);
+			};
+
+			bool Changed = false;
+			std::vector<BufferedChangeRecord> JournalRecords;
+			std::vector<const TransactionChange *> AppliedChanges;
+			{
+				ScopedAuthoritativeRevisionDeferral RevisionDeferral(World, Changed);
+				ScopedChangeJournalCapture JournalCapture;
+				auto RollBack = [&](bool AppliedForward) {
+					for (auto It = AppliedChanges.rbegin(); It != AppliedChanges.rend(); ++It) {
+						auto RollbackResult = ApplyChange(**It, !AppliedForward);
+						if (!RollbackResult.Succeeded())
+							throw std::logic_error("History execution rollback failed after preflight divergence");
+					}
+				};
+				if (Redo) {
+					for (const auto &Change : Transaction->Changes) {
+						auto Result = ApplyChange(Change, true);
+						if (!Result.Succeeded()) {
+							RollBack(true);
+							(void)JournalCapture.Take();
+							return {.Status = TransactionStatus::ExecutionFailed, .Id = Transaction->Id, .Message = Result.Message};
+						}
+						AppliedChanges.push_back(&Change);
+					}
+				} else {
+					for (auto It = Transaction->Changes.rbegin(); It != Transaction->Changes.rend(); ++It) {
+						auto Result = ApplyChange(*It, false);
+						if (!Result.Succeeded()) {
+							RollBack(false);
+							(void)JournalCapture.Take();
+							return {.Status = TransactionStatus::ExecutionFailed, .Id = Transaction->Id, .Message = Result.Message};
+						}
+						AppliedChanges.push_back(&*It);
+					}
+				}
+				JournalRecords = JournalCapture.Take();
+			}
+			if (!Changed) return {.Status = TransactionStatus::ExecutionFailed, .Id = Transaction->Id,
+				.Message = "History execution produced no authoritative change"};
+			try {
+				std::vector<std::pair<ObjectId, std::size_t>> ScopeCounts;
+				for (const auto &Record : JournalRecords) {
+					auto Found = std::find_if(ScopeCounts.begin(), ScopeCounts.end(), [&](const auto &Entry) { return Entry.first == Record.Scope; });
+					if (Found == ScopeCounts.end()) ScopeCounts.emplace_back(Record.Scope, 1); else ++Found->second;
+				}
+				for (const auto &[Scope, Count] : ScopeCounts) ChangeJournal::Get().EnsureCanCommit(Scope, Count);
+				auto Result = Redo ? History.CompleteRedo(World) : History.CompleteUndo(World);
+				if (!Result.Succeeded()) return Result;
+				PublishCapturedJournal(std::move(JournalRecords));
+				return Result;
+			} catch (const std::exception &Error) {
+				return {.Status = TransactionStatus::ExecutionFailed, .Id = Transaction->Id, .Message = Error.what()};
+			}
+		}
+	}
+
+	TransactionResult MutationGateway::Undo(DataModel &World, ScriptSecurityContext SecurityContext) {
+		if (GetCurrentExecutionDomain() != ExecutionDomain::Main)
+			return {.Status = TransactionStatus::InvalidState, .Message = "Undo requires Main"};
+		if (!SecurityContext.HasCapability(ScriptCapability::MutateDataModel))
+			return {.Status = TransactionStatus::InvalidState, .Message = "Undo requires authoring mutation authority"};
+		return ExecuteHistory(*this, World, std::move(SecurityContext), false);
+	}
+
+	TransactionResult MutationGateway::Redo(DataModel &World, ScriptSecurityContext SecurityContext) {
+		if (GetCurrentExecutionDomain() != ExecutionDomain::Main)
+			return {.Status = TransactionStatus::InvalidState, .Message = "Redo requires Main"};
+		if (!SecurityContext.HasCapability(ScriptCapability::MutateDataModel))
+			return {.Status = TransactionStatus::InvalidState, .Message = "Redo requires authoring mutation authority"};
+		return ExecuteHistory(*this, World, std::move(SecurityContext), true);
 	}
 
 	std::size_t MutationGateway::Drain(std::size_t maximumCommands) {

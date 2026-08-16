@@ -3460,8 +3460,38 @@ namespace {
 			World->Transactions.Commit(*World, Began.Id, 41).Status == TransactionStatus::NotFound,
 			"committed transaction identity cannot be committed twice"
 		);
+		auto CreatedForIdentity = Gateway.Apply(
+			CreateObjectCommand{SchemaId::FromNativeName("Engine", "Folder"), 1, FirstParent->GetObjectId(), "IdentityHistory"},
+			MutationAuthorityContext::Studio(ScriptSecurityContext::StudioCoreUi(), Scope, std::nullopt, 41)
+		);
+		Check(CreatedForIdentity.Succeeded() && CreatedForIdentity.Object,
+			"ObjectId restoration fixture creates an authoritative object");
+		const auto HistoricalCreatedId = *CreatedForIdentity.Object;
+		Check(Gateway.Undo(*World, ScriptSecurityContext::StudioCoreUi()).Succeeded() &&
+			!ObjectRegistry::Get().Lookup(HistoricalCreatedId),
+			"Undo Create destroys the historical generation");
+		auto ReusedSlotObject = std::make_shared<Folder>();
+		ReusedSlotObject->SetArchivable(true);
+		ReusedSlotObject->SetParent(FirstParent);
+		Check(Gateway.Redo(*World, ScriptSecurityContext::StudioCoreUi()).Succeeded(),
+			"Redo Create restores the captured semantic object");
+		const auto RestoredCreatedId = World->Transactions.ResolveIdentity(HistoricalCreatedId);
+		Check(RestoredCreatedId != HistoricalCreatedId && ObjectRegistry::Get().Lookup(RestoredCreatedId) &&
+			!Gateway.Apply(DestroyObjectCommand{HistoricalCreatedId}, ScriptSecurityContext::CoreTrusted()).Succeeded(),
+			"Redo Create allocates a fresh identity and the stale generation cannot affect it after slot reuse");
+		Check(Gateway.Apply(DestroyObjectCommand{RestoredCreatedId},
+			MutationAuthorityContext::Studio(ScriptSecurityContext::StudioCoreUi(), Scope, std::nullopt, 41)).Succeeded() &&
+			Gateway.Undo(*World, ScriptSecurityContext::StudioCoreUi()).Succeeded(),
+			"identity alias chain fixture restores a later Delete of a previously restored Create");
+		const auto TwiceRestoredCreatedId = World->Transactions.ResolveIdentity(HistoricalCreatedId);
+		Check(TwiceRestoredCreatedId != RestoredCreatedId &&
+			Gateway.Apply(UpdatePropertyCommand{TwiceRestoredCreatedId, "Name", std::string("AliasBranch")},
+				MutationAuthorityContext::Studio(ScriptSecurityContext::StudioCoreUi(), Scope, std::nullopt, 41)).Succeeded() &&
+			World->Transactions.ResolveIdentity(HistoricalCreatedId) == TwiceRestoredCreatedId,
+			"redo-branch truncation flattens retained identity aliases onto the current generation");
 
 		const auto NoOpRevision = World->GetAuthoritativeRevision();
+		const auto HistoryBeforeNoOp = World->Transactions.GetCommitted().size();
 		auto NoOp = World->Transactions.Begin(*World, 41, "No-op", TransactionOrigin::Studio);
 		auto NoOpAuthority = MutationAuthorityContext::Studio(
 			ScriptSecurityContext::StudioCoreUi(), Scope, NoOp.Id, 41
@@ -3473,7 +3503,7 @@ namespace {
 		auto NoOpCommit = World->Transactions.Commit(*World, NoOp.Id, 41);
 		Check(
 			NoOpCommit.Status == TransactionStatus::NoChanges && World->GetAuthoritativeRevision() == NoOpRevision &&
-				World->Transactions.GetCommitted().size() == 1,
+				World->Transactions.GetCommitted().size() == HistoryBeforeNoOp,
 			"no-op transaction creates no history and advances no revision"
 		);
 
@@ -3547,6 +3577,21 @@ namespace {
 				World->Transactions.GetCommitted().back().Label == "Set Name",
 			"one-shot Studio mutation creates and commits one implicit transaction"
 		);
+		const auto BeforeHistoryExecution = World->GetAuthoritativeRevision();
+		auto UndoImplicit = Gateway.Undo(*World, ScriptSecurityContext::StudioCoreUi());
+		auto RedoImplicit = Gateway.Redo(*World, ScriptSecurityContext::StudioCoreUi());
+		Check(UndoImplicit.Succeeded() && RedoImplicit.Succeeded() && Target->GetName() == "Implicit" &&
+			World->GetAuthoritativeRevision() == BeforeHistoryExecution + 2 &&
+			World->Transactions.GetStatus().CanUndo && !World->Transactions.GetStatus().CanRedo,
+			"authoritative property Undo and Redo move the cursor and each advance monotonic revision once");
+		Check(Gateway.Undo(*World, ScriptSecurityContext::StudioCoreUi()).Succeeded(),
+			"branch-invalidation fixture moves behind the newest transaction");
+		Check(Gateway.Apply(
+			UpdatePropertyCommand{TargetId, "Name", std::string("Divergent")},
+			MutationAuthorityContext::Studio(ScriptSecurityContext::StudioCoreUi(), Scope, std::nullopt, 41)
+		).Succeeded() && !World->Transactions.GetStatus().CanRedo &&
+			Gateway.Redo(*World, ScriptSecurityContext::StudioCoreUi()).Status == TransactionStatus::NothingToRedo,
+			"new persistent authoring after Undo deterministically truncates the redo branch");
 
 		for (std::size_t Index = 0; Index < MaximumRetainedTransactions + 4; ++Index)
 			Check(
@@ -3563,6 +3608,18 @@ namespace {
 				World->Transactions.GetRetainedBytes() <= MaximumRetainedTransactionBytes,
 			"history evicts oldest entries deterministically at the exact count bound"
 		);
+		for (std::size_t Index = 0; Index < 50; ++Index)
+			Check(Gateway.Undo(*World, ScriptSecurityContext::StudioCoreUi()).Succeeded(),
+				"bounded cursor stress Undo succeeds");
+		for (std::size_t Index = 0; Index < 25; ++Index)
+			Check(Gateway.Redo(*World, ScriptSecurityContext::StudioCoreUi()).Succeeded(),
+				"bounded cursor stress Redo succeeds");
+		Check(Gateway.Apply(
+			UpdatePropertyCommand{TargetId, "Name", std::string("Stress-Divergence")},
+			MutationAuthorityContext::Studio(ScriptSecurityContext::StudioCoreUi(), Scope, std::nullopt, 41)
+		).Succeeded() && !World->Transactions.GetStatus().CanRedo &&
+			World->Transactions.GetStatus().Cursor == World->Transactions.GetStatus().RetainedCount,
+			"100-plus transaction stress preserves the cursor through Undo, Redo, branch truncation, and eviction");
 
 		PropertyTransactionChange AggregatePrototype{
 			TargetId,
@@ -3627,6 +3684,10 @@ namespace {
 
 		const auto CustomClassId = SchemaId::FromCustomClassName("Game", "CombatFolder");
 		const auto ExtensionId = SchemaId::FromExtensionName("Game.Data", "FolderProperties");
+		double UndoDuplicateElapsed = 0.0;
+		double RedoDuplicateElapsed = 0.0;
+		double UndoDeleteElapsed = 0.0;
+		double RedoDeleteElapsed = 0.0;
 		auto CustomSource = InstanceClassRegistry::ConstructByName("Game.CombatFolder");
 		Check(CustomSource != nullptr, "transaction duplicate fixture constructs the active custom class");
 		if (CustomSource) {
@@ -3681,7 +3742,69 @@ namespace {
 				"duplicate history captures fresh subtree identities plus custom, extension, Attribute, Tag, and "
 				"descendant state"
 			);
+			if (DuplicateChange && Duplicated.Object) {
+				const auto HistoricalDuplicate = *Duplicated.Object;
+				const auto UndoDuplicateStarted = std::chrono::steady_clock::now();
+				const auto UndoDuplicateResult = Gateway.Undo(*World, ScriptSecurityContext::StudioCoreUi());
+				UndoDuplicateElapsed = std::chrono::duration<double, std::milli>(
+					std::chrono::steady_clock::now() - UndoDuplicateStarted).count();
+				Check(UndoDuplicateResult.Succeeded() &&
+					!ObjectRegistry::Get().Lookup(HistoricalDuplicate),
+					"Undo Duplicate destroys the captured duplicate generation");
+				CustomSource->Destroy();
+				const auto RedoDuplicateStarted = std::chrono::steady_clock::now();
+				const auto RedoDuplicateResult = Gateway.Redo(*World, ScriptSecurityContext::StudioCoreUi());
+				RedoDuplicateElapsed = std::chrono::duration<double, std::milli>(
+					std::chrono::steady_clock::now() - RedoDuplicateStarted).count();
+				Check(RedoDuplicateResult.Succeeded(),
+					"Redo Duplicate restores captured state without depending on the source object");
+				const auto RestoredId = World->Transactions.ResolveIdentity(HistoricalDuplicate);
+				auto Restored = ObjectRegistry::Get().Lookup(RestoredId);
+				Check(Restored && RestoredId != HistoricalDuplicate && Restored->FindFirstChild("TransactionCustomChild", false) &&
+					Restored->ReadPropertyWireValue("Health") == std::optional<WireValue>(73) &&
+					Restored->GetAttributeValue("HistoryAttribute", ScriptSecurityContext::CoreTrusted()) ==
+						std::optional<WireValue>(std::string("attribute-state")) &&
+					World->Tags.Has(Scope, RestoredId, "transaction-tag", ScriptSecurityContext::CoreTrusted()) &&
+					Restored->GetExtensionPropertyValue(ExtensionId, "Label", ScriptSecurityContext::CoreTrusted()) ==
+						WireValue(std::string("extension-state")),
+					"Redo Duplicate allocates fresh identities and restores descendants, Attributes, Tags, extensions, and custom state");
+				Check(Gateway.Apply(DestroyObjectCommand{RestoredId},
+					MutationAuthorityContext::Studio(ScriptSecurityContext::StudioCoreUi(), Scope, std::nullopt, 41)).Succeeded(),
+					"Delete restoration performance fixture destroys the restored custom subtree");
+				const auto UndoDeleteStarted = std::chrono::steady_clock::now();
+				const auto UndoDeleteResult = Gateway.Undo(*World, ScriptSecurityContext::StudioCoreUi());
+				UndoDeleteElapsed = std::chrono::duration<double, std::milli>(
+					std::chrono::steady_clock::now() - UndoDeleteStarted).count();
+				const auto RedoDeleteStarted = std::chrono::steady_clock::now();
+				const auto RedoDeleteResult = Gateway.Redo(*World, ScriptSecurityContext::StudioCoreUi());
+				RedoDeleteElapsed = std::chrono::duration<double, std::milli>(
+					std::chrono::steady_clock::now() - RedoDeleteStarted).count();
+				Check(UndoDeleteResult.Succeeded() && RedoDeleteResult.Succeeded(),
+					"small custom subtree Delete Undo/Redo performance cycle succeeds");
+			}
 		}
+
+		auto MissingParent = std::make_shared<Folder>();
+		MissingParent->SetArchivable(true);
+		MissingParent->SetParent(World);
+		auto StableParent = std::make_shared<Folder>();
+		StableParent->SetArchivable(true);
+		StableParent->SetParent(World);
+		auto AtomicTarget = std::make_shared<Folder>();
+		AtomicTarget->SetArchivable(true);
+		AtomicTarget->SetParent(MissingParent);
+		Check(Gateway.Apply(ReparentObjectCommand{AtomicTarget->GetObjectId(), StableParent->GetObjectId()},
+			MutationAuthorityContext::Studio(ScriptSecurityContext::StudioCoreUi(), Scope, std::nullopt, 41)).Succeeded(),
+			"failed-history atomicity fixture commits a reparent transaction");
+		MissingParent->Destroy();
+		const auto FailedUndoRevision = World->GetAuthoritativeRevision();
+		const auto FailedUndoStatus = World->Transactions.GetStatus();
+		auto FailedUndo = Gateway.Undo(*World, ScriptSecurityContext::StudioCoreUi());
+		Check(FailedUndo.Status == TransactionStatus::ExecutionFailed &&
+			World->GetAuthoritativeRevision() == FailedUndoRevision &&
+			World->Transactions.GetStatus().Cursor == FailedUndoStatus.Cursor &&
+			AtomicTarget->GetParent() && *AtomicTarget->GetParent() == StableParent,
+			"incompatible Reparent Undo fails before mutation with cursor, revision, and hierarchy unchanged");
 
 		auto MeasurePropertyEdits = [&](std::size_t Count, bool Explicit) {
 			const auto Started = std::chrono::steady_clock::now();
@@ -3716,10 +3839,26 @@ namespace {
 		const auto SinglePropertyElapsed = MeasurePropertyEdits(1, false);
 		const auto TenPropertyElapsed = MeasurePropertyEdits(10, true);
 		const auto HundredPropertyElapsed = MeasurePropertyEdits(100, true);
+		const auto UndoHundredStarted = std::chrono::steady_clock::now();
+		Check(Gateway.Undo(*World, ScriptSecurityContext::StudioCoreUi()).Succeeded(),
+			"100-change transaction performance Undo succeeds");
+		const auto UndoHundredElapsed = std::chrono::duration<double, std::milli>(
+			std::chrono::steady_clock::now() - UndoHundredStarted).count();
+		const auto RedoHundredStarted = std::chrono::steady_clock::now();
+		Check(Gateway.Redo(*World, ScriptSecurityContext::StudioCoreUi()).Succeeded(),
+			"100-change transaction performance Redo succeeds");
+		const auto RedoHundredElapsed = std::chrono::duration<double, std::milli>(
+			std::chrono::steady_clock::now() - RedoHundredStarted).count();
 		std::cout << "METRIC transaction_single_property_ms " << SinglePropertyElapsed << '\n'
 				  << "METRIC transaction_explicit_10_ms " << TenPropertyElapsed << '\n'
 				  << "METRIC transaction_explicit_100_ms " << HundredPropertyElapsed << '\n'
-				  << "METRIC transaction_delete_subtree_2_ms " << DeleteElapsed << '\n';
+				  << "METRIC transaction_delete_subtree_2_ms " << DeleteElapsed << '\n'
+				  << "METRIC undo_property_transaction_100_ms " << UndoHundredElapsed << '\n'
+				  << "METRIC redo_property_transaction_100_ms " << RedoHundredElapsed << '\n';
+		std::cout << "METRIC undo_duplicate_subtree_2_ms " << UndoDuplicateElapsed << '\n'
+				  << "METRIC redo_duplicate_subtree_2_ms " << RedoDuplicateElapsed << '\n'
+				  << "METRIC undo_delete_subtree_2_ms " << UndoDeleteElapsed << '\n'
+				  << "METRIC redo_delete_subtree_2_ms " << RedoDeleteElapsed << '\n';
 	}
 
 	void TestProjectRevisionPersistence() {
@@ -3869,6 +4008,9 @@ namespace {
 				std::ranges::contains(handshake["Result"]["Capabilities"], "ReparentInstance") &&
 				std::ranges::contains(handshake["Result"]["Capabilities"], "BeginTransaction") &&
 				std::ranges::contains(handshake["Result"]["Capabilities"], "CommitTransaction") &&
+				std::ranges::contains(handshake["Result"]["Capabilities"], "Undo") &&
+				std::ranges::contains(handshake["Result"]["Capabilities"], "Redo") &&
+				std::ranges::contains(handshake["Result"]["Capabilities"], "AuthoritativeHistoryStatus") &&
 				!std::ranges::contains(handshake["Result"]["Capabilities"], "AbortTransaction"),
 			"EditorHost advertises persistence, structural authoring, and honest commit-only transaction capabilities"
 		);
@@ -3895,6 +4037,13 @@ namespace {
 				!restrictedViewport["Ok"].get<bool>() && restrictedViewport["Error"]["Code"] == "Unauthorized",
 				"EditorHost enforces ViewportControl for every viewport method"
 			);
+		}
+		for (const auto Method : {"Undo", "Redo"}) {
+			Json RestrictedRequest{{"Version", EditorHostProtocolVersion}, {"RequestId", Method},
+				{"SessionToken", "restricted-token"}, {"Method", Method}, {"Params", Json::object()}};
+			auto RestrictedHistory = Json::parse(restrictedHost.HandleRequest(RestrictedRequest.dump()));
+			Check(!RestrictedHistory["Ok"].get<bool>() && RestrictedHistory["Error"]["Code"] == "Unauthorized",
+				"EditorHost history execution requires trusted authoring mutation capability");
 		}
 		auto sharedTransport = std::find_if(
 			handshake["Result"]["ViewportTransports"].begin(),
@@ -4110,6 +4259,27 @@ namespace {
 					return Record["Operation"] == "Destroy" && Record["ObjectId"] == CreatedId;
 				}), "recursive DestroyInstance is one logical revision with destruction records");
 
+			const auto DeletedRevision = DeleteChanges["Result"]["ProjectState"]["AuthoritativeRevision"].get<std::uint64_t>();
+			auto UndoDelete = call("Undo", Json::object(), "test-token");
+			auto UndoDeleteChanges = call("PollChanges", Json::object(), "test-token");
+			auto RestoredRoot = std::find_if(
+				UndoDeleteChanges["Result"]["Records"].begin(), UndoDeleteChanges["Result"]["Records"].end(),
+				[&](const Json &Record) {
+					return Record["Operation"] == "Create" &&
+						Record.value("ClassSchemaId", "") == (*DiscoveredCustomClass)["SchemaId"];
+				}
+			);
+			Check(UndoDelete["Ok"].get<bool>() && UndoDelete["Result"]["ResultingRevision"] == DeletedRevision + 1 &&
+				UndoDelete["Result"]["CanRedo"].get<bool>() &&
+				RestoredRoot != UndoDeleteChanges["Result"]["Records"].end() && (*RestoredRoot)["ObjectId"] != CreatedId,
+				"Undo Delete restores the semantic subtree with fresh authoritative identities and one revision");
+			auto RedoDelete = call("Redo", Json::object(), "test-token");
+			auto RedoDeleteChanges = call("PollChanges", Json::object(), "test-token");
+			Check(RedoDelete["Ok"].get<bool>() && RedoDelete["Result"]["ResultingRevision"] == DeletedRevision + 2 &&
+				std::ranges::any_of(RedoDeleteChanges["Result"]["Records"], [&](const Json &Record) {
+					return Record["Operation"] == "Destroy" && Record["ObjectId"] == (*RestoredRoot)["ObjectId"];
+				}), "Redo Delete destroys the currently restored generation rather than the stale historical identity");
+
 			auto BeforeRejected = call("GetProjectState", Json::object(), "test-token");
 			Check(!call("DestroyInstance", {{"Object", CreatedId}}, "test-token")["Ok"].get<bool>() &&
 				!call("DuplicateInstance", {{"Object", CreatedId}}, "test-token")["Ok"].get<bool>() &&
@@ -4150,8 +4320,10 @@ namespace {
 					"bounded labels and invented transaction identities fail without mutation authority"
 				);
 				auto BeganTransaction = call("BeginTransaction", {{"Label", "Protocol Group"}}, "test-token");
+				auto UndoWhileOpen = call("Undo", Json::object(), "test-token");
 				Check(
-					BeganTransaction["Ok"].get<bool>() && BeganTransaction["Result"]["Status"] == "Open",
+					BeganTransaction["Ok"].get<bool>() && BeganTransaction["Result"]["Status"] == "Open" &&
+						!UndoWhileOpen["Ok"].get<bool>() && UndoWhileOpen["Error"]["Code"] == "TransactionOpen",
 					"EditorHost issues an engine-owned explicit transaction identity"
 				);
 				const auto Transaction = BeganTransaction["Result"]["TransactionId"];
@@ -4210,6 +4382,16 @@ namespace {
 						GroupedChanges["Result"]["Records"].size() == 3,
 					"CommitTransaction advances one revision and releases the grouped authoritative journal batch"
 				);
+				auto UndoGroup = call("Undo", Json::object(), "test-token");
+				auto UndoGroupChanges = call("PollChanges", Json::object(), "test-token");
+				auto RedoGroup = call("Redo", Json::object(), "test-token");
+				auto RedoGroupChanges = call("PollChanges", Json::object(), "test-token");
+				Check(UndoGroup["Ok"].get<bool>() && RedoGroup["Ok"].get<bool>() &&
+					UndoGroupChanges["Result"]["Records"].size() == 3 &&
+					RedoGroupChanges["Result"]["Records"].size() == 3 &&
+					RedoGroup["Result"]["ResultingRevision"] ==
+						CommittedTransaction["Result"]["ResultingRevision"].get<std::uint64_t>() + 2,
+					"Undo and Redo execute a grouped property, Attribute, and reparent transaction as ordinary journal batches");
 				Check(
 					!call("CommitTransaction", {{"TransactionId", Transaction}}, "test-token")["Ok"].get<bool>(),
 					"EditorHost rejects duplicate transaction commit"
@@ -4230,6 +4412,19 @@ namespace {
 						changes["Result"]["ProjectState"]["PersistedRevision"],
 				"EditorHost publishes the committed mutation as one journal record"
 			);
+			auto UndoProperty = call("Undo", Json::object(), "test-token");
+			(void)call("PollChanges", Json::object(), "test-token");
+			Check(UndoProperty["Ok"].get<bool>() && UndoProperty["Result"]["CanRedo"].get<bool>(),
+				"property Undo moves the authoritative cursor without decrementing project revision");
+			Check(call("SetProperty", {
+				{"Object", (*editable)["Id"]}, {"Property", "Name"},
+				{"Value", {{"Type", "String"}, {"Value", "DivergentPropertyEdit"}}},
+			}, "test-token")["Ok"].get<bool>(), "a divergent property edit commits after Undo");
+			(void)call("PollChanges", Json::object(), "test-token");
+			auto InvalidatedRedo = call("Redo", Json::object(), "test-token");
+			Check(!InvalidatedRedo["Ok"].get<bool>() && InvalidatedRedo["Error"]["Code"] == "NothingToRedo" &&
+				!call("GetProjectState", Json::object(), "test-token")["Result"]["History"]["CanRedo"].get<bool>(),
+				"a new persistent transaction after Undo truncates the redo branch");
 			auto attributeMutation = call("SetAttribute", {
 				{"Object", (*editable)["Id"]},
 				{"Attribute", "Health"},
@@ -4360,6 +4555,26 @@ namespace {
 		Check(Save["Ok"].get<bool>() && !Save["Result"]["Dirty"].get<bool>() &&
 			Save["Result"]["PersistedRevision"] == Save["Result"]["AuthoritativeRevision"],
 			"Save records the exact persisted revision and leaves an unchanged project clean");
+		const auto SavedRevision = Save["Result"]["PersistedRevision"].get<std::uint64_t>();
+		Check(Save["Result"]["History"]["CanUndo"].get<bool>(),
+			"Save preserves authoritative Undo history");
+		auto UndoAfterSave = call("Undo", Json::object(), "test-token");
+		auto UndoAfterSaveChanges = call("PollChanges", Json::object(), "test-token");
+		Check(UndoAfterSave["Ok"].get<bool>() &&
+			UndoAfterSaveChanges["Result"]["ProjectState"]["AuthoritativeRevision"] == SavedRevision + 1 &&
+			UndoAfterSaveChanges["Result"]["ProjectState"]["PersistedRevision"] == SavedRevision &&
+			UndoAfterSaveChanges["Result"]["ProjectState"]["Dirty"].get<bool>(),
+			"Undo after Save advances monotonic revision, preserves PersistedRevision, and becomes dirty");
+		auto RedoAfterSave = call("Redo", Json::object(), "test-token");
+		auto RedoAfterSaveChanges = call("PollChanges", Json::object(), "test-token");
+		Check(RedoAfterSave["Ok"].get<bool>() &&
+			RedoAfterSaveChanges["Result"]["ProjectState"]["AuthoritativeRevision"] == SavedRevision + 2 &&
+			RedoAfterSaveChanges["Result"]["ProjectState"]["PersistedRevision"] == SavedRevision &&
+			RedoAfterSaveChanges["Result"]["ProjectState"]["Dirty"].get<bool>(),
+			"Redo after Save independently advances revision without changing the persistence checkpoint");
+		Save = call("SaveProject", Json::object(), "test-token");
+		Check(Save["Ok"].get<bool>() && !Save["Result"]["Dirty"].get<bool>(),
+			"Save after Undo/Redo persists the final authoritative state without clearing history");
 		{
 			std::ifstream SavedProject(temporaryRoot / ".gargantuan" / "project.instance.json", std::ios::binary);
 			Json SavedDocument;
@@ -4482,11 +4697,14 @@ namespace {
 
 		auto Abandoned = call("BeginTransaction", {{"Label", "Replaced Session"}}, "test-token");
 		const auto AbandonedId = Abandoned["Result"]["TransactionId"];
+		auto ReplacedProject = call("OpenProject", {{"Root", SaveAsRoot.string()}}, "test-token");
 		Check(
 			Abandoned["Ok"].get<bool>() &&
-				call("OpenProject", {{"Root", SaveAsRoot.string()}}, "test-token")["Ok"].get<bool>() &&
+				ReplacedProject["Ok"].get<bool>() &&
+				!ReplacedProject["Result"]["ProjectState"]["History"]["CanUndo"].get<bool>() &&
+				!ReplacedProject["Result"]["ProjectState"]["History"]["CanRedo"].get<bool>() &&
 				!call("CommitTransaction", {{"TransactionId", AbandonedId}}, "test-token")["Ok"].get<bool>(),
-			"project replacement terminates an open transaction and its identity cannot affect the new project"
+			"project replacement clears history/cursor and old transaction identity cannot affect the new project"
 		);
 
 		auto malformed = Json::parse(host.HandleRequest(std::string(EditorHostMaximumRequestBytes + 1, 'x')));
