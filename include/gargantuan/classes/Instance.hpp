@@ -63,6 +63,7 @@ namespace gargantuan {
 		[[nodiscard]] ObjectId GetReplicationScopeId() const;
 		[[nodiscard]] std::shared_ptr<DataModel> GetDataModel() const;
 		void PublishReplicationSubtree(ObjectId scope);
+		void MarkPersistenceSubtreeArchivable();
 		void AssertCanMutate() const;
 		void ValidatePropertyMutation(std::string_view propertyName, const std::any &value) const;
 		MutationStatus ApplyPropertyMutation(

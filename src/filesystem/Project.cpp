@@ -120,6 +120,7 @@ namespace gargantuan {
 		} else {
 			auto game = std::dynamic_pointer_cast<DataModel>(deserialized.Instance);
 			if (!game) throw std::runtime_error("Project root has inconsistent DataModel type metadata");
+			game->MarkPersistenceSubtreeArchivable();
 			game->Root = Root;
 			return game;
 		}

@@ -1802,19 +1802,26 @@ namespace {
 		Check(bypass.Status == MutationStatus::WrongExecutionDomain, "worker direct apply is unauthorized");
 		Check(journal.ReadSince(0).empty(), "unauthorized worker apply emits no record");
 
+		auto ProjectRoot = std::make_shared<DataModel>();
 		auto parent = std::make_shared<Folder>();
+		parent->SetParent(ProjectRoot);
 		const auto parentId = parent->GetObjectId();
 		journal.Clear();
-		auto created = gateway.Apply(CreateObjectCommand{"Folder", parentId});
+		auto created = gateway.Apply(CreateObjectCommand{
+			SchemaId::FromNativeName("Engine", "Folder"), 1, parentId, std::nullopt
+		});
 		Check(created.Succeeded() && created.Object.has_value(), "create command constructs an owned object");
 		auto createdObject = ObjectRegistry::Get().Lookup(*created.Object);
 		Check(createdObject && createdObject->GetParent() == parent, "created object is attached to its authoritative parent");
 		auto otherParent = std::make_shared<Folder>();
+		otherParent->SetParent(ProjectRoot);
 		const auto otherParentId = otherParent->GetObjectId();
 		journal.Clear();
+		const auto ReparentCursor = journal.CreateCursor(ProjectRoot->GetObjectId());
 		auto reparented = gateway.Apply(ReparentObjectCommand{*created.Object, otherParentId});
 		Check(reparented.Succeeded() && createdObject->GetParent() == otherParent, "reparent command applies on Main");
-		Check(journal.ReadSince(0).size() == 1, "reparent command emits one committed record");
+		Check(journal.Read(ReparentCursor).Records.size() == 1,
+			"reparent command emits one committed record");
 		journal.Clear();
 		auto destroyed = gateway.Apply(DestroyObjectCommand{*created.Object});
 		Check(destroyed.Succeeded() && createdObject->GetDestroyed(), "destroy command applies on Main");
@@ -3201,7 +3208,9 @@ namespace {
 		OversizedJournalVersion["Records"][0]["DefinitionVersion"] = std::uint64_t{4294967297};
 		Check(!DeserializeWireJournalRecords(OversizedJournalVersion.dump()).Succeeded(),
 			"custom property journal records reject oversized definition versions before uint32 narrowing");
-		auto Created = Gateway.Apply(CreateObjectCommand{"Game.CombatFolder", Game->GetObjectId()},
+		auto Created = Gateway.Apply(CreateObjectCommand{
+			SchemaId::FromCustomClassName("Game", "CombatFolder"), 1, Game->GetObjectId(), std::nullopt
+		},
 			ScriptSecurityContext::CoreTrusted());
 		Check(Created.Succeeded() && Created.Object && Gateway.Apply(UpdatePropertyCommand{
 			*Created.Object, "Name", std::string("ReplicatedCustom")
@@ -3538,8 +3547,12 @@ namespace {
 		Check(
 			std::ranges::contains(handshake["Result"]["Capabilities"], "SaveProject") &&
 				std::ranges::contains(handshake["Result"]["Capabilities"], "SaveProjectAs") &&
-				std::ranges::contains(handshake["Result"]["Capabilities"], "AuthoritativeRevision"),
-			"EditorHost advertises project revision and persistence capabilities"
+				std::ranges::contains(handshake["Result"]["Capabilities"], "AuthoritativeRevision") &&
+				std::ranges::contains(handshake["Result"]["Capabilities"], "CreateInstance") &&
+				std::ranges::contains(handshake["Result"]["Capabilities"], "DestroyInstance") &&
+				std::ranges::contains(handshake["Result"]["Capabilities"], "DuplicateInstance") &&
+				std::ranges::contains(handshake["Result"]["Capabilities"], "ReparentInstance"),
+			"EditorHost advertises persistence and structural authoring capabilities"
 		);
 		auto SaveWithoutProject = call("SaveProject", Json::object(), "test-token");
 		Check(!SaveWithoutProject["Ok"].get<bool>() && SaveWithoutProject["Error"]["Code"] == "NoProjectLoaded",
@@ -3679,10 +3692,124 @@ namespace {
 		auto CustomEditable = std::find_if(objects.begin(), objects.end(), [](const Json &Object) {
 			return Object["Name"] == "CustomEditable";
 		});
+		auto WorkspaceObject = std::find_if(objects.begin(), objects.end(), [](const Json &Object) {
+			return Object["Name"] == "Workspace";
+		});
 		Check(editable != objects.end(), "EditorHost snapshot contains the project hierarchy");
 		Check(CustomEditable != objects.end() && (*CustomEditable)["ClassName"] == "Game.StudioFolder" &&
 			(*CustomEditable)["ClassSchemaId"] == SchemaId::FromCustomClassName("Game", "StudioFolder").ToString(),
 			"EditorHost snapshot carries stable custom class identity/version");
+		Check(WorkspaceObject != objects.end(), "EditorHost snapshot contains the protected Workspace service");
+		Json StructuralDestinationId;
+		Json StructuralDuplicateId;
+		if (WorkspaceObject != objects.end() && DiscoveredCustomClass != projectSchema["Result"]["Definitions"].end()) {
+			auto BeforeCreate = call("GetProjectState", Json::object(), "test-token");
+			auto Created = call("CreateInstance", {
+				{"ClassSchemaId", (*DiscoveredCustomClass)["SchemaId"]},
+				{"DefinitionVersion", 1}, {"Parent", (*WorkspaceObject)["Id"]}, {"Name", "StructuralSource"},
+			}, "test-token");
+			Check(Created["Ok"].get<bool>() &&
+				Created["Result"]["AuthoritativeRevision"] ==
+					BeforeCreate["Result"]["AuthoritativeRevision"].get<std::uint64_t>() + 1,
+				"CreateInstance allocates authoritative identity and advances one project revision");
+			const auto CreatedId = Created["Result"]["Object"];
+			auto CreateChanges = call("PollChanges", Json::object(), "test-token");
+			Check(std::ranges::any_of(CreateChanges["Result"]["Records"], [&](const Json &Record) {
+				return Record["Operation"] == "Create" && Record["ObjectId"] == CreatedId &&
+					Record["ClassSchemaId"] == (*DiscoveredCustomClass)["SchemaId"];
+			}), "CreateInstance publishes stable identity and exact custom schema through the journal");
+
+			Check(call("SetAttribute", {
+				{"Object", CreatedId}, {"Attribute", "Health"}, {"Value", {{"Type", "Int"}, {"Value", 42}}},
+			}, "test-token")["Ok"].get<bool>(), "structural source accepts persistent attribute state");
+			Check(call("AddTag", {{"Object", CreatedId}, {"Tag", "StructuralTag"}}, "test-token")["Ok"].get<bool>(),
+				"structural source accepts persistent tag state");
+			Check(call("SetCustomProperty", {
+				{"Object", CreatedId}, {"DeclaringClassSchemaId", (*DiscoveredCustomClass)["SchemaId"]},
+				{"DefinitionVersion", 1}, {"Property", "Score"},
+				{"Value", {{"Type", "Int"}, {"Value", 77}}},
+			}, "test-token")["Ok"].get<bool>(), "structural source accepts custom class state");
+			(void)call("PollChanges", Json::object(), "test-token");
+			auto Child = call("CreateInstance", {
+				{"ClassSchemaId", SchemaId::FromNativeName("Engine", "Folder").ToString()},
+				{"DefinitionVersion", 1}, {"Parent", CreatedId}, {"Name", "StructuralChild"},
+			}, "test-token");
+			Check(Child["Ok"].get<bool>(), "CreateInstance supports an ordinary nested child");
+			(void)call("PollChanges", Json::object(), "test-token");
+
+			auto BeforeDuplicate = call("GetProjectState", Json::object(), "test-token");
+			auto Duplicate = call("DuplicateInstance", {{"Object", CreatedId}}, "test-token");
+			Check(Duplicate["Ok"].get<bool>() && Duplicate["Result"]["Object"] != CreatedId &&
+				Duplicate["Result"]["AuthoritativeRevision"] ==
+					BeforeDuplicate["Result"]["AuthoritativeRevision"].get<std::uint64_t>() + 1,
+				"DuplicateInstance clones a subtree with fresh root identity as one project revision");
+			StructuralDuplicateId = Duplicate["Result"]["Object"];
+			auto DuplicateChanges = call("PollChanges", Json::object(), "test-token");
+			Check(std::ranges::count_if(DuplicateChanges["Result"]["Records"], [](const Json &Record) {
+				return Record["Operation"] == "Create";
+			}) == 2 && std::ranges::any_of(DuplicateChanges["Result"]["Records"], [&](const Json &Record) {
+				return Record["ObjectId"] == StructuralDuplicateId && Record["Operation"] == "TagAdded";
+			}) && std::ranges::any_of(DuplicateChanges["Result"]["Records"], [&](const Json &Record) {
+				return Record["ObjectId"] == StructuralDuplicateId && Record["Operation"] == "AttributeUpdate";
+			}) && std::ranges::any_of(DuplicateChanges["Result"]["Records"], [&](const Json &Record) {
+				return Record["ObjectId"] == StructuralDuplicateId && Record["Operation"] == "PropertyUpdate" &&
+					Record.value("DeclaringClassSchemaId", "") == (*DiscoveredCustomClass)["SchemaId"];
+			}), "DuplicateInstance journals its subtree, attributes, tags, and custom state atomically");
+
+			auto Destination = call("CreateInstance", {
+				{"ClassSchemaId", SchemaId::FromNativeName("Engine", "Folder").ToString()},
+				{"DefinitionVersion", 1}, {"Parent", (*WorkspaceObject)["Id"]}, {"Name", "StructuralDestination"},
+			}, "test-token");
+			Check(Destination["Ok"].get<bool>(), "structural workflow creates a reparent destination");
+			StructuralDestinationId = Destination["Result"]["Object"];
+			(void)call("PollChanges", Json::object(), "test-token");
+			auto BeforeReparent = call("GetProjectState", Json::object(), "test-token");
+			Check(call("ReparentInstance", {
+				{"Object", StructuralDuplicateId}, {"Parent", StructuralDestinationId},
+			}, "test-token")["Ok"].get<bool>(), "ReparentInstance accepts a valid identity-based move");
+			auto ReparentChanges = call("PollChanges", Json::object(), "test-token");
+			Check(ReparentChanges["Result"]["Records"].size() == 1 &&
+				ReparentChanges["Result"]["Records"][0]["Operation"] == "Reparent" &&
+				ReparentChanges["Result"]["ProjectState"]["AuthoritativeRevision"] ==
+					BeforeReparent["Result"]["AuthoritativeRevision"].get<std::uint64_t>() + 1,
+				"ReparentInstance journals one committed move and advances one revision");
+
+			auto BeforeCycle = call("GetProjectState", Json::object(), "test-token");
+			Check(!call("ReparentInstance", {
+				{"Object", StructuralDestinationId}, {"Parent", StructuralDuplicateId},
+			}, "test-token")["Ok"].get<bool>() &&
+				call("PollChanges", Json::object(), "test-token")["Result"]["Records"].empty() &&
+				call("GetProjectState", Json::object(), "test-token")["Result"] == BeforeCycle["Result"],
+				"cycle rejection leaves hierarchy, revision, and journal unchanged");
+
+			auto BeforeDelete = call("GetProjectState", Json::object(), "test-token");
+			Check(call("DestroyInstance", {{"Object", CreatedId}}, "test-token")["Ok"].get<bool>(),
+				"DestroyInstance recursively destroys the authoritative subtree");
+			auto DeleteChanges = call("PollChanges", Json::object(), "test-token");
+			Check(DeleteChanges["Result"]["ProjectState"]["AuthoritativeRevision"] ==
+				BeforeDelete["Result"]["AuthoritativeRevision"].get<std::uint64_t>() + 1 &&
+				std::ranges::any_of(DeleteChanges["Result"]["Records"], [&](const Json &Record) {
+					return Record["Operation"] == "Destroy" && Record["ObjectId"] == CreatedId;
+				}), "recursive DestroyInstance is one logical revision with destruction records");
+
+			auto BeforeRejected = call("GetProjectState", Json::object(), "test-token");
+			Check(!call("DestroyInstance", {{"Object", CreatedId}}, "test-token")["Ok"].get<bool>() &&
+				!call("DuplicateInstance", {{"Object", CreatedId}}, "test-token")["Ok"].get<bool>() &&
+				!call("ReparentInstance", {{"Object", CreatedId}, {"Parent", StructuralDestinationId}}, "test-token")["Ok"].get<bool>() &&
+				!call("CreateInstance", {
+					{"ClassSchemaId", SchemaId::FromNativeName("Engine", "Folder").ToString()},
+					{"DefinitionVersion", 1}, {"Parent", CreatedId},
+				}, "test-token")["Ok"].get<bool>() &&
+				!call("DestroyInstance", {{"Object", (*WorkspaceObject)["Id"]}}, "test-token")["Ok"].get<bool>() &&
+				!call("DuplicateInstance", {{"Object", (*WorkspaceObject)["Id"]}}, "test-token")["Ok"].get<bool>() &&
+				!call("CreateInstance", {
+					{"ClassSchemaId", SchemaId::FromNativeName("Engine", "DataModel").ToString()},
+					{"DefinitionVersion", 1}, {"Parent", (*WorkspaceObject)["Id"]},
+				}, "test-token")["Ok"].get<bool>() &&
+				call("PollChanges", Json::object(), "test-token")["Result"]["Records"].empty() &&
+				call("GetProjectState", Json::object(), "test-token")["Result"] == BeforeRejected["Result"],
+				"stale and protected structural requests fail atomically without revision or journal changes");
+		}
 		if (editable != objects.end()) {
 			auto mutation = call("SetProperty", {
 				{"Object", (*editable)["Id"]},
@@ -3753,6 +3880,19 @@ namespace {
 				extensionChanges["Result"]["Records"][0]["ExtensionSchemaId"] ==
 					(*discoveredExtension)["SchemaId"],
 				"EditorHost publishes one identity- and version-bearing extension journal record");
+			auto ExtensionDuplicate = call("DuplicateInstance", {{"Object", (*extensionTarget)["Id"]}}, "test-token");
+			Check(ExtensionDuplicate["Ok"].get<bool>(),
+				"DuplicateInstance accepts an Instance with extension state");
+			auto ExtensionDuplicateId = ExtensionDuplicate["Result"]["Object"];
+			auto ExtensionDuplicateChanges = call("PollChanges", Json::object(), "test-token");
+			Check(std::ranges::any_of(ExtensionDuplicateChanges["Result"]["Records"], [&](const Json &Record) {
+				return Record["ObjectId"] == ExtensionDuplicateId &&
+					Record["Operation"] == "ExtensionPropertyUpdate" &&
+					Record["ExtensionSchemaId"] == (*discoveredExtension)["SchemaId"];
+			}), "DuplicateInstance independently clones persistent Class Extension overrides");
+			Check(call("DestroyInstance", {{"Object", ExtensionDuplicateId}}, "test-token")["Ok"].get<bool>(),
+				"extension duplicate cleanup uses authoritative DestroyInstance");
+			(void)call("PollChanges", Json::object(), "test-token");
 			auto wrongVersion = call("SetExtensionProperty", {
 				{"Object", (*extensionTarget)["Id"]},
 				{"ExtensionSchemaId", (*discoveredExtension)["SchemaId"]},
@@ -3822,6 +3962,21 @@ namespace {
 			SavedProject >> SavedDocument;
 			Check(SavedDocument["Version"] == 4,
 				"Save preserves the current project instance format version");
+		}
+		{
+			DiskFilesystem ReopenFilesystem(temporaryRoot);
+			auto ReopenProject = Project::fromExisting(&ReopenFilesystem);
+			auto ReopenedWorld = ReopenProject.DeserializeGame();
+			auto Destination = ReopenedWorld->FindFirstDescendant("StructuralDestination");
+			auto SurvivingDuplicate = Destination ? Destination->FindFirstChild("StructuralSource", false) : nullptr;
+			Check(Destination && SurvivingDuplicate &&
+				SurvivingDuplicate->GetAttributeValue("Health", ScriptSecurityContext::CoreTrusted()) ==
+					std::optional<WireValue>(std::int32_t{42}) &&
+				ReopenedWorld->Tags.Has(ReopenedWorld->GetObjectId(), SurvivingDuplicate->GetObjectId(),
+					"StructuralTag", ScriptSecurityContext::CoreTrusted()) &&
+				SurvivingDuplicate->FindFirstChild("StructuralChild", false),
+				"Save/reopen preserves duplicate subtree, reparent, state, and prior deletion");
+			ReopenedWorld->Destroy();
 		}
 		const auto SaveAsRoot = temporaryRoot.parent_path() /
 			(temporaryRoot.filename().string() + "-save-as");

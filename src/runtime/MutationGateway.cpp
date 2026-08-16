@@ -1,20 +1,64 @@
 #include "gargantuan/runtime/MutationGateway.hpp"
 
+#include "gargantuan/assets/InstanceSerialization.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Instance.hpp"
 #include "gargantuan/reflection/InstanceClassRegistry.hpp"
+#include "gargantuan/runtime/ChangeJournal.hpp"
 #include "gargantuan/runtime/ExecutionDomain.hpp"
+#include "gargantuan/runtime/ProtocolInput.hpp"
 
+#include <algorithm>
 #include <exception>
+#include <sstream>
 #include <stdexcept>
 #include <utility>
 
 namespace gargantuan {
+	namespace {
+		std::size_t SubtreeSize(const std::shared_ptr<Instance> &Root) {
+			std::vector<std::shared_ptr<Instance>> Descendants;
+			Root->CollectDescendants(Descendants);
+			return Descendants.size() + 1;
+		}
+
+		std::size_t SubtreeDepth(const std::shared_ptr<Instance> &Root) {
+			std::size_t Depth = 1;
+			for (const auto &Child : Root->Children)
+				Depth = std::max(Depth, std::size_t{1} + SubtreeDepth(Child));
+			return Depth;
+		}
+
+		std::size_t AncestryDepth(const std::shared_ptr<Instance> &InstanceValue) {
+			std::size_t Depth = 1;
+			for (auto Current = InstanceValue->GetParent(); Current; Current = (*Current)->GetParent())
+				++Depth;
+			return Depth;
+		}
+
+		bool IsProtectedStructuralObject(
+			const std::shared_ptr<DataModel> &DataModelValue, const std::shared_ptr<Instance> &InstanceValue
+		) {
+			if (!DataModelValue || DataModelValue->IsProtectedService(InstanceValue)) return true;
+			auto *Definition = InstanceClassRegistry::GetDefinition(InstanceValue.get());
+			return !Definition || !Definition->EditorVisible || !InstanceClassRegistry::IsConstructible(*Definition);
+		}
+
+		bool WouldCreateCycle(const std::shared_ptr<Instance> &Child, const std::shared_ptr<Instance> &Parent) {
+			for (auto Current = Parent; Current;) {
+				if (Current == Child) return true;
+				auto Next = Current->GetParent();
+				Current = Next ? *Next : nullptr;
+			}
+			return false;
+		}
+	}
 	MutationAuthorityContext::MutationAuthorityContext(
 		MutationCommandOrigin OriginValue,
 		ScriptSecurityContext SecurityContextValue,
 		std::optional<ObjectId> ScopeValue
-	) : Origin(OriginValue), SecurityContext(std::move(SecurityContextValue)), Scope(ScopeValue) {
+	)
+		: Origin(OriginValue), SecurityContext(std::move(SecurityContextValue)), Scope(ScopeValue) {
 		if (Scope && !Scope->IsValid()) throw std::invalid_argument("Mutation authority scope is invalid");
 	}
 
@@ -22,19 +66,14 @@ namespace gargantuan {
 		return {MutationCommandOrigin::LocalInternal, std::move(SecurityContext), std::nullopt};
 	}
 
-	MutationAuthorityContext MutationAuthorityContext::Studio(
-		ScriptSecurityContext SecurityContext,
-		ObjectId Scope
-	) {
+	MutationAuthorityContext MutationAuthorityContext::Studio(ScriptSecurityContext SecurityContext, ObjectId Scope) {
 		if (SecurityContext.Domain != ScriptExecutionDomain::Studio)
 			throw std::invalid_argument("Studio mutation authority requires the Studio execution domain");
 		return {MutationCommandOrigin::Studio, std::move(SecurityContext), Scope};
 	}
 
-	MutationAuthorityContext MutationAuthorityContext::AuthenticatedPeer(
-		ScriptSecurityContext SecurityContext,
-		ObjectId Scope
-	) {
+	MutationAuthorityContext
+	MutationAuthorityContext::AuthenticatedPeer(ScriptSecurityContext SecurityContext, ObjectId Scope) {
 		if (SecurityContext.Domain != ScriptExecutionDomain::Client)
 			throw std::invalid_argument("Peer mutation authority requires the Client execution domain");
 		return {MutationCommandOrigin::AuthenticatedPeer, std::move(SecurityContext), Scope};
@@ -73,17 +112,13 @@ namespace gargantuan {
 		ReadySignal.notify_all();
 	}
 
-	std::shared_ptr<MutationCompletion> MutationGateway::Submit(
-		MutationCommand command,
-		ScriptSecurityContext securityContext
-	) {
+	std::shared_ptr<MutationCompletion>
+	MutationGateway::Submit(MutationCommand command, ScriptSecurityContext securityContext) {
 		return Submit(std::move(command), MutationAuthorityContext::Local(std::move(securityContext)));
 	}
 
-	std::shared_ptr<MutationCompletion> MutationGateway::Submit(
-		MutationCommand command,
-		MutationAuthorityContext Authority
-	) {
+	std::shared_ptr<MutationCompletion>
+	MutationGateway::Submit(MutationCommand command, MutationAuthorityContext Authority) {
 		auto completion = std::make_shared<MutationCompletion>();
 		{
 			std::scoped_lock lock(Mutex);
@@ -110,83 +145,271 @@ namespace gargantuan {
 
 		try {
 			return std::visit(
-				[&securityContext, &Authority](auto &typedCommand) -> MutationResult {
-					using Command = std::decay_t<decltype(typedCommand)>;
+				[&](auto &CommandValue) -> MutationResult {
+					using Command = std::decay_t<decltype(CommandValue)>;
 					if constexpr (std::is_same_v<Command, CreateObjectCommand>) {
-						auto *definition = InstanceClassRegistry::GetDefinitionByName(typedCommand.ClassName);
-						if (!definition || !InstanceClassRegistry::IsConstructible(*definition))
-							return {MutationStatus::InvalidClass, std::nullopt, "Unknown or non-constructible class"};
-						if (!typedCommand.Parent)
-							return {MutationStatus::Rejected, std::nullopt, "Created objects require an owning parent"};
-						std::shared_ptr<Instance> parent;
-						if (typedCommand.Parent) {
-							parent = ObjectRegistry::Get().Lookup(*typedCommand.Parent);
-							if (!parent) return {MutationStatus::StaleObject, std::nullopt, "Parent is stale or dead"};
-							if (Authority.GetScope() && parent->GetReplicationScopeId() != *Authority.GetScope())
-								return {MutationStatus::Rejected, std::nullopt, "Parent belongs to another DataModel"};
+						auto *Definition = InstanceClassRegistry::GetDefinitionBySchemaId(CommandValue.ClassSchemaId);
+						if (!Definition || Definition->DefinitionVersion != CommandValue.DefinitionVersion ||
+							!InstanceClassRegistry::IsConstructible(*Definition) || !Definition->EditorVisible ||
+							Definition->ClassName == "DataModel")
+							return {
+								MutationStatus::InvalidClass,
+								std::nullopt,
+								"Class is missing, incompatible, or not editor-constructible"
+							};
+						auto Parent = ObjectRegistry::Get().Lookup(CommandValue.Parent);
+						if (!Parent) return {MutationStatus::StaleObject, std::nullopt, "Parent identity is stale"};
+						if (Authority.GetScope() && Parent->GetReplicationScopeId() != *Authority.GetScope())
+							return {MutationStatus::InvalidParent, std::nullopt, "Parent is outside the project scope"};
+						auto DataModelValue = Parent->GetDataModel();
+						if (!DataModelValue)
+							return {MutationStatus::InvalidParent, std::nullopt, "Parent is not project-owned"};
+						const auto Scope = DataModelValue->GetObjectId();
+						if (DataModelValue->IsProtectedServiceClass(Definition->Id))
+							return {
+								MutationStatus::InvalidClass,
+								std::nullopt,
+								"Service and singleton classes are not editor-constructible"
+							};
+						if (SubtreeSize(DataModelValue) >= MaximumPersistenceObjects)
+							return {
+								MutationStatus::ResourceLimit, std::nullopt, "Project object-count limit is reached"
+							};
+						if (AncestryDepth(Parent) + 1 > MaximumProtocolJsonDepth)
+							return {
+								MutationStatus::ResourceLimit,
+								std::nullopt,
+								"Create would exceed the hierarchy depth limit"
+							};
+						auto InstanceValue = InstanceClassRegistry::Construct(*Definition);
+						if (!InstanceValue)
+							return {MutationStatus::InternalError, std::nullopt, "Class constructor returned null"};
+						{
+							ScopedChangeJournalSuppression Suppression;
+							if (InstanceValue->ApplyPropertyMutation(
+									"Archivable", true, Enums::Permission::Engine, securityContext
+								) != MutationStatus::Success)
+								return {
+									MutationStatus::ValidationFailed,
+									std::nullopt,
+									"Created class cannot enter persistent project state"
+								};
+							if (CommandValue.Name &&
+								InstanceValue->ApplyPropertyMutation(
+									"Name", *CommandValue.Name, Enums::Permission::Engine, securityContext
+								) != MutationStatus::Success)
+								return {MutationStatus::ValidationFailed, std::nullopt, "Initial Name is invalid"};
 						}
-						auto instance = InstanceClassRegistry::Construct(*definition);
-						if (!instance) return {MutationStatus::InternalError, std::nullopt, "Constructor returned null"};
-						const auto id = instance->GetObjectId();
-						if (parent) instance->SetParent(parent);
-						return {MutationStatus::Success, id, {}};
+						DataModelValue->BeginAuthoritativeRevisionBatch();
+						try {
+							{
+								ScopedChangeJournalSuppression Suppression;
+								InstanceValue->SetParent(Parent);
+							}
+							const auto Id = InstanceValue->GetObjectId();
+							InstanceValue->PublishReplicationSubtree(Scope);
+							DataModelValue->CommitAuthoritativeRevisionBatch();
+							return {MutationStatus::Success, Id, {}};
+						} catch (...) {
+							{
+								ScopedChangeJournalSuppression Suppression;
+								InstanceValue->Destroy();
+							}
+							DataModelValue->CancelAuthoritativeRevisionBatch();
+							throw;
+						}
 					} else {
-						auto instance = ObjectRegistry::Get().Lookup(typedCommand.Object);
-						if (!instance) return {MutationStatus::StaleObject, std::nullopt, "Object is stale or dead"};
-						if (Authority.GetScope() && instance->GetReplicationScopeId() != *Authority.GetScope())
-							return {MutationStatus::Rejected, std::nullopt, "Object belongs to another DataModel"};
+						auto InstanceValue = ObjectRegistry::Get().Lookup(CommandValue.Object);
+						if (!InstanceValue)
+							return {MutationStatus::StaleObject, std::nullopt, "Object identity is stale"};
+						if (Authority.GetScope() && InstanceValue->GetReplicationScopeId() != *Authority.GetScope())
+							return {MutationStatus::Rejected, std::nullopt, "Object is outside the project scope"};
 						if constexpr (std::is_same_v<Command, UpdatePropertyCommand>) {
-							const auto status = instance->ApplyPropertyMutation(
-								typedCommand.PropertyName,
-								typedCommand.Value,
-								Enums::Permission::None,
-								securityContext
+							const auto Status = InstanceValue->ApplyPropertyMutation(
+								CommandValue.PropertyName, CommandValue.Value, Enums::Permission::None, securityContext
 							);
-							return {status, typedCommand.Object, status == MutationStatus::Success ? "" : "Property mutation rejected"};
+							return {
+								Status,
+								CommandValue.Object,
+								Status == MutationStatus::Success ? "" : "Property mutation rejected"
+							};
 						} else if constexpr (std::is_same_v<Command, UpdateAttributeCommand>) {
-							const auto status = instance->ApplyAttributeMutation(
-								typedCommand.AttributeName, std::move(typedCommand.Value), securityContext
+							const auto Status = InstanceValue->ApplyAttributeMutation(
+								CommandValue.AttributeName, std::move(CommandValue.Value), securityContext
 							);
-							return {status, typedCommand.Object, status == MutationStatus::Success ? "" : "Attribute mutation rejected"};
+							return {
+								Status,
+								CommandValue.Object,
+								Status == MutationStatus::Success ? "" : "Attribute mutation rejected"
+							};
 						} else if constexpr (std::is_same_v<Command, UpdateExtensionPropertyCommand>) {
-							const auto status = instance->ApplyExtensionPropertyMutation(
-								typedCommand.ExtensionSchemaId,
-								typedCommand.DefinitionVersion,
-								typedCommand.PropertyName,
-								std::move(typedCommand.Value),
+							const auto Status = InstanceValue->ApplyExtensionPropertyMutation(
+								CommandValue.ExtensionSchemaId,
+								CommandValue.DefinitionVersion,
+								CommandValue.PropertyName,
+								std::move(CommandValue.Value),
 								securityContext
 							);
 							return {
-								status,
-								typedCommand.Object,
-								status == MutationStatus::Success ? "" : "Extension property mutation rejected"
+								Status,
+								CommandValue.Object,
+								Status == MutationStatus::Success ? "" : "Extension property mutation rejected"
 							};
-						} else if constexpr (std::is_same_v<Command, AddTagCommand> || std::is_same_v<Command, RemoveTagCommand>) {
-							auto dataModel = instance->GetDataModel();
-							if (!dataModel) return {MutationStatus::Rejected, std::nullopt, "Tag target is not owned by a DataModel"};
-							const auto scope = dataModel->GetObjectId();
-							if (typedCommand.ExpectedScope && *typedCommand.ExpectedScope != scope)
-								return {MutationStatus::Rejected, std::nullopt, "Tag target belongs to another DataModel"};
+						} else if constexpr (std::is_same_v<Command, AddTagCommand> ||
+											 std::is_same_v<Command, RemoveTagCommand>) {
+							auto DataModelValue = InstanceValue->GetDataModel();
+							if (!DataModelValue)
+								return {MutationStatus::Rejected, std::nullopt, "Tag target is not project-owned"};
+							const auto Scope = DataModelValue->GetObjectId();
+							if (CommandValue.ExpectedScope && *CommandValue.ExpectedScope != Scope)
+								return {
+									MutationStatus::Rejected, std::nullopt, "Tag target is outside the expected scope"
+							};
 							if constexpr (std::is_same_v<Command, AddTagCommand>)
-								(void)dataModel->Tags.Add(scope, typedCommand.Object, typedCommand.TagName, securityContext);
+								(void)DataModelValue->Tags.Add(
+									Scope, CommandValue.Object, CommandValue.TagName, securityContext
+								);
 							else
-								(void)dataModel->Tags.Remove(scope, typedCommand.Object, typedCommand.TagName, securityContext);
-							return {MutationStatus::Success, typedCommand.Object, {}};
+								(void)DataModelValue->Tags.Remove(
+									Scope, CommandValue.Object, CommandValue.TagName, securityContext
+								);
+							return {MutationStatus::Success, CommandValue.Object, {}};
 						} else if constexpr (std::is_same_v<Command, ReparentObjectCommand>) {
-							std::shared_ptr<Instance> parent;
-							if (Authority.GetScope() && !typedCommand.Parent)
-								return {MutationStatus::Rejected, std::nullopt, "Scoped mutation cannot remove an object from its DataModel"};
-							if (typedCommand.Parent) {
-								parent = ObjectRegistry::Get().Lookup(*typedCommand.Parent);
-								if (!parent) return {MutationStatus::StaleObject, std::nullopt, "Parent is stale or dead"};
-								if (Authority.GetScope() && parent->GetReplicationScopeId() != *Authority.GetScope())
-									return {MutationStatus::Rejected, std::nullopt, "Parent belongs to another DataModel"};
+							if (!CommandValue.Parent)
+								return {
+									MutationStatus::InvalidParent, std::nullopt, "Project objects require a parent"
+								};
+							auto Parent = ObjectRegistry::Get().Lookup(*CommandValue.Parent);
+							if (!Parent) return {MutationStatus::StaleObject, std::nullopt, "Parent identity is stale"};
+							auto DataModelValue = InstanceValue->GetDataModel();
+							if (IsProtectedStructuralObject(DataModelValue, InstanceValue))
+								return {
+									MutationStatus::ProtectedObject,
+									std::nullopt,
+									"Protected project objects cannot be reparented"
+								};
+							if (Parent->GetDataModel() != DataModelValue || WouldCreateCycle(InstanceValue, Parent))
+								return {
+									MutationStatus::InvalidParent,
+									std::nullopt,
+									"Parent is outside scope or creates a hierarchy cycle"
+								};
+							if (AncestryDepth(Parent) + SubtreeDepth(InstanceValue) > MaximumProtocolJsonDepth)
+								return {
+									MutationStatus::ResourceLimit,
+									std::nullopt,
+									"Reparent would exceed the hierarchy depth limit"
+								};
+							ChangeJournal::Get().EnsureCanCommit(DataModelValue->GetObjectId(), 1);
+							DataModelValue->BeginAuthoritativeRevisionBatch();
+							try {
+								InstanceValue->SetParent(Parent);
+								DataModelValue->CommitAuthoritativeRevisionBatch();
+							} catch (...) {
+								DataModelValue->CancelAuthoritativeRevisionBatch();
+								throw;
 							}
-							instance->SetParent(parent ? std::optional(parent) : std::nullopt);
-							return {MutationStatus::Success, typedCommand.Object, {}};
+							return {MutationStatus::Success, CommandValue.Object, {}};
+						} else if constexpr (std::is_same_v<Command, DestroyObjectCommand>) {
+							auto DataModelValue = InstanceValue->GetDataModel();
+							if (IsProtectedStructuralObject(DataModelValue, InstanceValue))
+								return {
+									MutationStatus::ProtectedObject,
+									std::nullopt,
+									"Protected project objects cannot be destroyed"
+								};
+							std::vector<std::shared_ptr<Instance>> DestroyedNodes{InstanceValue};
+							InstanceValue->CollectDescendants(DestroyedNodes);
+							std::size_t DestroyRecords = 0;
+							for (const auto &Node : DestroyedNodes)
+								DestroyRecords += 2 + DataModelValue->Tags
+														  .GetTags(
+															  DataModelValue->GetObjectId(),
+															  Node->GetObjectId(),
+															  ScriptSecurityContext::CoreTrusted()
+														  )
+														  .size();
+							ChangeJournal::Get().EnsureCanCommit(DataModelValue->GetObjectId(), DestroyRecords);
+							DataModelValue->BeginAuthoritativeRevisionBatch();
+							try {
+								InstanceValue->Destroy();
+								DataModelValue->CommitAuthoritativeRevisionBatch();
+							} catch (...) {
+								DataModelValue->CancelAuthoritativeRevisionBatch();
+								throw;
+							}
+							return {MutationStatus::Success, CommandValue.Object, {}};
 						} else {
-							instance->Destroy();
-							return {MutationStatus::Success, typedCommand.Object, {}};
+							auto DataModelValue = InstanceValue->GetDataModel();
+							if (IsProtectedStructuralObject(DataModelValue, InstanceValue))
+								return {
+									MutationStatus::ProtectedObject,
+									std::nullopt,
+									"Protected project objects cannot be duplicated"
+								};
+							auto Parent = InstanceValue->GetParent();
+							if (!Parent)
+								return {MutationStatus::InvalidParent, std::nullopt, "Duplicate source has no parent"};
+							const auto Required = SubtreeSize(InstanceValue);
+							const auto Existing = SubtreeSize(DataModelValue);
+							if (Existing > MaximumPersistenceObjects ||
+								Required > MaximumPersistenceObjects - Existing)
+								return {
+									MutationStatus::ResourceLimit,
+									std::nullopt,
+									"Duplicate would exceed the object-count limit"
+								};
+							if (AncestryDepth(*Parent) + SubtreeDepth(InstanceValue) > MaximumProtocolJsonDepth)
+								return {
+									MutationStatus::ResourceLimit,
+									std::nullopt,
+									"Duplicate would exceed the hierarchy depth limit"
+								};
+							std::string Encoded = InstanceSerialization::Serialize(
+								InstanceSerialization::InstanceFormat::Json, InstanceValue
+							);
+							std::istringstream Input(Encoded);
+							InstanceSerialization::DeserializationState State;
+							{
+								ScopedChangeJournalSuppression Suppression;
+								State = InstanceSerialization::DeserializeDetached(
+									InstanceSerialization::InstanceFormat::Json, Input
+								);
+							}
+							if (!State.Ok || !State.Instance)
+								return {
+									MutationStatus::ValidationFailed,
+									std::nullopt,
+									"Persistent source state could not be cloned"
+								};
+							auto Clone = State.Instance;
+							Clone->MarkPersistenceSubtreeArchivable();
+							DataModelValue->BeginAuthoritativeRevisionBatch();
+							try {
+								{
+									ScopedChangeJournalSuppression Suppression;
+									Clone->SetParent(*Parent);
+									for (const auto &[Node, Tags] : State.PendingTags)
+										for (const auto &Tag : Tags)
+											(void)DataModelValue->Tags.Add(
+												DataModelValue->GetObjectId(),
+												Node->GetObjectId(),
+												Tag,
+												ScriptSecurityContext::CoreTrusted()
+											);
+								}
+								const auto Id = Clone->GetObjectId();
+								Clone->PublishReplicationSubtree(DataModelValue->GetObjectId());
+								DataModelValue->CommitAuthoritativeRevisionBatch();
+								return {MutationStatus::Success, Id, {}};
+							} catch (...) {
+								{
+									ScopedChangeJournalSuppression Suppression;
+									Clone->Destroy();
+								}
+								DataModelValue->CancelAuthoritativeRevisionBatch();
+								throw;
+							}
 						}
 					}
 				},
@@ -194,6 +417,8 @@ namespace gargantuan {
 			);
 		} catch (const std::invalid_argument &error) {
 			return {MutationStatus::ValidationFailed, std::nullopt, error.what()};
+		} catch (const std::overflow_error &error) {
+			return {MutationStatus::RevisionExhausted, std::nullopt, error.what()};
 		} catch (const std::exception &error) {
 			return {MutationStatus::Rejected, std::nullopt, error.what()};
 		} catch (...) {

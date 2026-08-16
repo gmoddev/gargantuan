@@ -27,8 +27,11 @@ selection, diagnostics, networking, and Studio layout do not advance it.
 
 The project revision is neither an undo transaction identifier nor an alias for
 `ChangeJournal.Sequence`, network sequence state, or `ObjectId` generation.
-Future persistent Create/Delete/Duplicate/Reparent operations must advance this
-same counter when their committed state transition succeeds.
+Create, recursive Delete, subtree Duplicate, and changed Reparent use a narrow
+revision batch so each logical structural operation advances this same counter
+once even when lifecycle work emits multiple journal records. Rejected
+structural operations and same-parent no-ops do not advance it. This revision
+batch is accounting, not a transaction or undo identifier.
 
 ## Persisted revision and dirty state
 

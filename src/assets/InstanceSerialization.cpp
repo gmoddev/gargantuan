@@ -770,7 +770,8 @@ namespace gargantuan::InstanceSerialization {
 		return instance;
 	}
 
-	DeserializationState Deserialize(InstanceFormat format, std::istream &input) {
+	namespace {
+		DeserializationState DeserializeImpl(InstanceFormat format, std::istream &input, bool ApplyPendingTags) {
 		DeserializationState state;
 
 		if (!input.good()) {
@@ -817,6 +818,7 @@ namespace gargantuan::InstanceSerialization {
 			if (maybeInstance.has_value()) {
 				try {
 					for (const auto &[instance, tags] : state.PendingTags) {
+						if (!ApplyPendingTags) continue;
 						auto dataModel = instance->GetDataModel();
 						if (!dataModel && !tags.empty()) throw std::runtime_error("Tagged Instance is not owned by a DataModel");
 						if (dataModel) for (const auto &tag : tags)
@@ -838,6 +840,15 @@ namespace gargantuan::InstanceSerialization {
 			break;
 		}
 
-		return state;
-	};
+			return state;
+		}
+	}
+
+	DeserializationState Deserialize(InstanceFormat format, std::istream &input) {
+		return DeserializeImpl(format, input, true);
+	}
+
+	DeserializationState DeserializeDetached(InstanceFormat format, std::istream &input) {
+		return DeserializeImpl(format, input, false);
+	}
 }

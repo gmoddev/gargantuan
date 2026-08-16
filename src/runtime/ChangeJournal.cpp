@@ -49,6 +49,16 @@ namespace gargantuan {
 		while (stream.Records.size() > Capacity) stream.Records.pop_front();
 	}
 
+	void ChangeJournal::EnsureCanCommit(ObjectId scope, std::size_t count) const {
+		AssertAuthoritativeMutation("ChangeJournal::EnsureCanCommit");
+		if (SuppressionDepth != 0 || count == 0) return;
+		std::scoped_lock lock(Mutex);
+		auto Found = Streams.find(scope);
+		const auto Next = Found == Streams.end() ? std::uint64_t{1} : Found->second.NextSequence;
+		if (count > std::numeric_limits<std::uint64_t>::max() - Next)
+			throw std::overflow_error("Change journal sequence is exhausted");
+	}
+
 	std::vector<ChangeRecord> ChangeJournal::ReadSince(std::uint64_t sequence) const {
 		std::scoped_lock lock(Mutex);
 		std::vector<ChangeRecord> result;

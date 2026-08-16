@@ -98,6 +98,10 @@ namespace gargantuan {
 				case MutationStatus::StaleObject: return "StaleObject";
 				case MutationStatus::InvalidClass: return "InvalidClass";
 				case MutationStatus::InvalidProperty: return "InvalidProperty";
+				case MutationStatus::InvalidParent: return "InvalidParent";
+				case MutationStatus::ProtectedObject: return "ProtectedObject";
+				case MutationStatus::ResourceLimit: return "ResourceLimit";
+				case MutationStatus::RevisionExhausted: return "RevisionExhausted";
 				case MutationStatus::ReadOnly: return "ReadOnly";
 				case MutationStatus::Unauthorized: return "Unauthorized";
 				case MutationStatus::ValidationFailed: return "ValidationFailed";
@@ -266,6 +270,7 @@ namespace gargantuan {
 				Json capabilities = {
 					"OpenProject", "Schema", "Snapshot", "Journal", "SetProperty", "SetAttribute", "SetExtensionProperty",
 					"AddTag", "RemoveTag", "SaveProject", "SaveProjectAs", "AuthoritativeRevision",
+					"CreateInstance", "DestroyInstance", "DuplicateInstance", "ReparentInstance",
 					"ConfigureViewport", "SetViewportCamera", "CaptureViewport", "PickViewport"
 				};
 				Json viewportTransports = Json::array({{
@@ -454,6 +459,10 @@ namespace gargantuan {
 					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "GetSchema takes no parameters"));
 				if (!StudioSecurity.HasCapability(ScriptCapability::ReadDataModel))
 					return SerializeBoundedResponse(ErrorResponse(requestId, "Unauthorized", "Schema access requires ReadDataModel"));
+				auto IsEditorConstructible = [&](const InstanceClassDefinition &Definition) {
+					return InstanceClassRegistry::IsConstructible(Definition) && Definition.EditorVisible &&
+						Definition.ClassName != "DataModel" && (!World || !World->IsProtectedServiceClass(Definition.Id));
+				};
 				auto classNames = InstanceClassRegistry::GetClassNames();
 				std::ranges::sort(classNames);
 				Json classes = Json::array();
@@ -494,7 +503,7 @@ namespace gargantuan {
 							? definition->CanonicalName : definition->ClassName},
 						{"Description", definition->Description},
 						{"Superclass", definition->Superclass ? Json(*definition->Superclass) : Json(nullptr)},
-						{"Constructible", InstanceClassRegistry::IsConstructible(*definition)},
+						{"Constructible", IsEditorConstructible(*definition)},
 						{"Properties", std::move(properties)},
 					});
 				}
@@ -520,7 +529,7 @@ namespace gargantuan {
 							? "DataOnly" : "Forbidden";
 						encoded["NativeHostClassSchemaId"] = classDefinition->ConstructionKind == SchemaClassConstructionKind::CustomData
 							? Json(classDefinition->NativeHostClassId.ToString()) : Json(nullptr);
-						encoded["Constructible"] = InstanceClassRegistry::IsConstructible(*classDefinition);
+					encoded["Constructible"] = IsEditorConstructible(*classDefinition);
 						Json properties = Json::array();
 						for (const auto &property : classDefinition->DeclaredCustomProperties) {
 							properties.push_back({
@@ -941,6 +950,55 @@ namespace gargantuan {
 					mutation.Succeeded() ? SuccessResponse(requestId, std::move(result))
 						: ErrorResponse(requestId, MutationStatusName(mutation.Status), mutation.Message)
 				);
+			}
+
+			if (method == "CreateInstance" || method == "DestroyInstance" ||
+				method == "DuplicateInstance" || method == "ReparentInstance") {
+				if (!StudioSecurity.HasCapability(ScriptCapability::MutateDataModel))
+					return SerializeBoundedResponse(ErrorResponse(requestId, "Unauthorized", "Structural editing requires MutateDataModel"));
+				if (!Cursor)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "SnapshotRequired", "GetSnapshot must establish a cursor"));
+				MutationResult Mutation;
+				if (method == "CreateInstance") {
+					if (!HasOnlyFields(parameters, {"ClassSchemaId", "DefinitionVersion", "Parent", "Name"}) ||
+						!parameters.contains("ClassSchemaId") || !parameters["ClassSchemaId"].is_string() ||
+						!parameters.contains("DefinitionVersion") || !parameters["DefinitionVersion"].is_number_unsigned() ||
+						!parameters.contains("Parent") || (parameters.contains("Name") && !parameters["Name"].is_string()))
+						return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "CreateInstance fields are invalid"));
+					const auto EncodedId = parameters["ClassSchemaId"].get<std::string>();
+					auto ClassId = SchemaId::Parse(EncodedId);
+					auto Version = JsonCodec::DecodeUnsigned32(parameters["DefinitionVersion"]);
+					auto Parent = JsonCodec::DecodeObjectId(parameters["Parent"]);
+					if (!ClassId || ClassId->ToString() != EncodedId || !Version || *Version == 0 || !Parent)
+						return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "CreateInstance identity is invalid"));
+					std::optional<std::string> Name;
+					if (parameters.contains("Name")) Name = parameters["Name"].get<std::string>();
+					Mutation = Mutations.Apply(CreateObjectCommand{*ClassId, *Version, Parent->ToObjectId(), std::move(Name)},
+						MutationAuthorityContext::Studio(StudioSecurity, World->GetObjectId()));
+				} else {
+					const bool Reparent = method == "ReparentInstance";
+					if (!HasOnlyFields(parameters, Reparent ? std::initializer_list<std::string_view>{"Object", "Parent"}
+						: std::initializer_list<std::string_view>{"Object"}) || !parameters.contains("Object") ||
+						(Reparent && !parameters.contains("Parent")))
+						return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Structural identity fields are invalid"));
+					auto Object = JsonCodec::DecodeObjectId(parameters["Object"]);
+					auto Parent = Reparent ? JsonCodec::DecodeObjectId(parameters["Parent"]) : std::optional<WireObjectId>{};
+					if (!Object || (Reparent && !Parent))
+						return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Structural ObjectId is invalid"));
+					if (method == "DestroyInstance")
+						Mutation = Mutations.Apply(DestroyObjectCommand{Object->ToObjectId()},
+							MutationAuthorityContext::Studio(StudioSecurity, World->GetObjectId()));
+					else if (method == "DuplicateInstance")
+						Mutation = Mutations.Apply(DuplicateObjectCommand{Object->ToObjectId()},
+							MutationAuthorityContext::Studio(StudioSecurity, World->GetObjectId()));
+					else Mutation = Mutations.Apply(ReparentObjectCommand{Object->ToObjectId(), Parent->ToObjectId()},
+						MutationAuthorityContext::Studio(StudioSecurity, World->GetObjectId()));
+				}
+				Json Result{{"Status", MutationStatusName(Mutation.Status)}, {"Message", Mutation.Message},
+					{"AuthoritativeRevision", World->GetAuthoritativeRevision()}};
+				if (Mutation.Object) Result["Object"] = JsonCodec::EncodeObjectId(WireObjectId::FromObjectId(*Mutation.Object));
+				return SerializeBoundedResponse(Mutation.Succeeded() ? SuccessResponse(requestId, std::move(Result))
+					: ErrorResponse(requestId, MutationStatusName(Mutation.Status), Mutation.Message));
 			}
 
 			if (method == "AddTag" || method == "RemoveTag") {

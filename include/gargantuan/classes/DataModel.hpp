@@ -22,9 +22,16 @@ namespace gargantuan {
 		[[nodiscard]] std::uint64_t GetAuthoritativeRevision() const { return AuthoritativeRevision; }
 		void EnsureAuthoritativeRevisionAvailable() const;
 		void AdvanceAuthoritativeRevision();
+		void BeginAuthoritativeRevisionBatch();
+		void CommitAuthoritativeRevisionBatch();
+		void CancelAuthoritativeRevisionBatch() noexcept;
 		void InitializeLoadedProjectRevision();
+		[[nodiscard]] bool IsProtectedService(const std::shared_ptr<Instance> &InstanceValue) const;
+		[[nodiscard]] bool IsProtectedServiceClass(SchemaId ClassSchemaId) const;
 
 	  private:
 		std::uint64_t AuthoritativeRevision = InitialProjectRevision;
+		bool RevisionBatchActive = false;
+		bool RevisionBatchChanged = false;
 	};
 }

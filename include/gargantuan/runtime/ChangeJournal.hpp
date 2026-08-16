@@ -80,6 +80,7 @@ namespace gargantuan {
 		std::uint64_t Commit(ObjectId object, ChangePayload payload);
 		std::uint64_t Commit(ObjectId scope, ObjectId object, ChangePayload payload);
 		void CommitBatch(ObjectId scope, std::vector<std::pair<ObjectId, ChangePayload>> changes);
+		void EnsureCanCommit(ObjectId scope, std::size_t count) const;
 		[[nodiscard]] std::vector<ChangeRecord> ReadSince(std::uint64_t sequence) const;
 		[[nodiscard]] ChangeCursor CreateCursor(ObjectId scope = {}) const;
 		[[nodiscard]] ChangeReadResult Read(ChangeCursor cursor, std::size_t maximumRecords = std::numeric_limits<std::size_t>::max()) const;
@@ -101,6 +102,7 @@ namespace gargantuan {
 	  private:
 		friend class EditorHost;
 		friend class InProcessReplicationSession;
+		friend class MutationGateway;
 		friend class network::ReplicaApplier;
 		ScopedChangeJournalSuppression();
 		~ScopedChangeJournalSuppression();

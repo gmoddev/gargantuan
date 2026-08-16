@@ -47,7 +47,12 @@ namespace gargantuan {
 		std::optional<ObjectId> Scope;
 	};
 
-	struct CreateObjectCommand { std::string ClassName; std::optional<ObjectId> Parent; };
+	struct CreateObjectCommand {
+		SchemaId ClassSchemaId;
+		std::uint32_t DefinitionVersion = 0;
+		ObjectId Parent;
+		std::optional<std::string> Name;
+	};
 	struct UpdatePropertyCommand { ObjectId Object; std::string PropertyName; std::any Value; };
 	struct UpdateAttributeCommand { ObjectId Object; std::string AttributeName; std::optional<WireValue> Value; };
 	struct UpdateExtensionPropertyCommand {
@@ -61,6 +66,7 @@ namespace gargantuan {
 	struct RemoveTagCommand { ObjectId Object; std::string TagName; std::optional<ObjectId> ExpectedScope; };
 	struct ReparentObjectCommand { ObjectId Object; std::optional<ObjectId> Parent; };
 	struct DestroyObjectCommand { ObjectId Object; };
+	struct DuplicateObjectCommand { ObjectId Object; };
 	using MutationCommand = std::variant<
 		CreateObjectCommand,
 		UpdatePropertyCommand,
@@ -69,7 +75,8 @@ namespace gargantuan {
 		AddTagCommand,
 		RemoveTagCommand,
 		ReparentObjectCommand,
-		DestroyObjectCommand
+		DestroyObjectCommand,
+		DuplicateObjectCommand
 	>;
 
 	enum class MutationStatus {
@@ -78,6 +85,10 @@ namespace gargantuan {
 		StaleObject,
 		InvalidClass,
 		InvalidProperty,
+		InvalidParent,
+		ProtectedObject,
+		ResourceLimit,
+		RevisionExhausted,
 		ReadOnly,
 		Unauthorized,
 		ValidationFailed,

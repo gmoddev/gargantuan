@@ -401,61 +401,65 @@ namespace gargantuan {
 
 	void Instance::PublishReplicationSubtree(ObjectId scope) {
 		if (!scope.IsValid()) return;
-		auto *definition = InstanceClassRegistry::GetDefinition(this);
-		if (!definition) throw std::runtime_error("Replicated object has no class definition");
-		const auto objectId = GetObjectId();
-		ChangeJournal::Get().Commit(scope, objectId, ObjectCreatedChange{
-			definition->ConstructionKind == SchemaClassConstructionKind::CustomData
-				? definition->CanonicalName : definition->ClassName,
-			definition->Id,
-			definition->DefinitionVersion,
-		});
-		for (const auto &[name, property] : definition->AllProperties) {
-			if (property->CustomSchemaPropertyType) continue;
-			if (property->ReplicationPolicy != InstanceProperty::Replication::FutureReplicated ||
-				!property->Read || !property->Write)
-				continue;
-			ChangeJournal::Get().Commit(
-				scope,
-				objectId,
-				PropertyUpdatedChange{
+		std::vector<std::pair<ObjectId, ChangePayload>> Changes;
+		std::function<void(Instance *)> Append = [&](Instance *Current) {
+			auto *definition = InstanceClassRegistry::GetDefinition(Current);
+			if (!definition) throw std::runtime_error("Replicated object has no class definition");
+			const auto objectId = Current->GetObjectId();
+			Changes.emplace_back(objectId, ObjectCreatedChange{
+				definition->ConstructionKind == SchemaClassConstructionKind::CustomData
+					? definition->CanonicalName : definition->ClassName,
+				definition->Id,
+				definition->DefinitionVersion,
+			});
+			for (const auto &[name, property] : definition->AllProperties) {
+				if (property->CustomSchemaPropertyType) continue;
+				if (property->ReplicationPolicy != InstanceProperty::Replication::FutureReplicated ||
+					!property->Read || !property->Write)
+					continue;
+				Changes.emplace_back(objectId, PropertyUpdatedChange{
 					name,
-					EncodeCommittedProperty(this, *property),
+					EncodeCommittedProperty(Current, *property),
 					true,
 					property->CustomSchemaPropertyType ? std::optional(property->DeclaringSchemaId) : std::nullopt,
 					property->CustomSchemaPropertyType ? property->DeclaringDefinitionVersion : 0,
-				}
-			);
-		}
-		for (const auto &[name, value] : Attributes)
-			ChangeJournal::Get().Commit(scope, objectId, AttributeUpdatedChange{name, value});
-		for (const auto &[extensionId, values] : ExtensionValues) {
-			auto *extension = GetActiveRuntimeSchemaRegistry().FindExtensionById(extensionId);
-			if (!extension) throw std::runtime_error("Instance contains state for a missing extension definition");
-			for (const auto &[name, value] : values)
-				ChangeJournal::Get().Commit(scope, objectId, ExtensionPropertyUpdatedChange{
-					extensionId, extension->DefinitionVersion, name, value
 				});
-		}
-		for (const auto &[declaringClassId, values] : CustomPropertyValues) {
-			auto *declaringClass = GetActiveRuntimeSchemaRegistry().FindClassById(declaringClassId);
-			if (!declaringClass) throw std::runtime_error("Instance contains state for a missing custom class definition");
-			for (const auto &[name, value] : values)
-				ChangeJournal::Get().Commit(scope, objectId, PropertyUpdatedChange{
-					name, value, true, declaringClassId, declaringClass->DefinitionVersion
-				});
-		}
-		auto parent = ParentReference.lock();
-		ChangeJournal::Get().Commit(
-			scope,
-			objectId,
-			ObjectReparentedChange{parent ? std::optional(parent->GetObjectId()) : std::nullopt}
-		);
-		if (auto dataModel = GetDataModel()) {
-			for (const auto &name : dataModel->Tags.GetTags(scope, objectId, ScriptSecurityContext::CoreTrusted()))
-				ChangeJournal::Get().Commit(scope, objectId, TagAddedChange{name});
-		}
-		for (const auto &child : Children) child->PublishReplicationSubtree(scope);
+			}
+			for (const auto &[name, value] : Current->Attributes)
+				Changes.emplace_back(objectId, AttributeUpdatedChange{name, value});
+			for (const auto &[extensionId, values] : Current->ExtensionValues) {
+				auto *extension = GetActiveRuntimeSchemaRegistry().FindExtensionById(extensionId);
+				if (!extension) throw std::runtime_error("Instance contains state for a missing extension definition");
+				for (const auto &[name, value] : values)
+					Changes.emplace_back(objectId, ExtensionPropertyUpdatedChange{
+						extensionId, extension->DefinitionVersion, name, value
+					});
+			}
+			for (const auto &[declaringClassId, values] : Current->CustomPropertyValues) {
+				auto *declaringClass = GetActiveRuntimeSchemaRegistry().FindClassById(declaringClassId);
+				if (!declaringClass) throw std::runtime_error("Instance contains state for a missing custom class definition");
+				for (const auto &[name, value] : values)
+					Changes.emplace_back(objectId, PropertyUpdatedChange{
+						name, value, true, declaringClassId, declaringClass->DefinitionVersion
+					});
+			}
+			auto parent = Current->ParentReference.lock();
+			Changes.emplace_back(objectId, ObjectReparentedChange{
+				parent ? std::optional(parent->GetObjectId()) : std::nullopt
+			});
+			if (auto dataModel = Current->GetDataModel()) {
+				for (const auto &name : dataModel->Tags.GetTags(scope, objectId, ScriptSecurityContext::CoreTrusted()))
+					Changes.emplace_back(objectId, TagAddedChange{name});
+			}
+			for (const auto &child : Current->Children) Append(child.get());
+		};
+		Append(this);
+		ChangeJournal::Get().CommitBatch(scope, std::move(Changes));
+	}
+
+	void Instance::MarkPersistenceSubtreeArchivable() {
+		Archivable = true;
+		for (const auto &Child : Children) Child->MarkPersistenceSubtreeArchivable();
 	}
 
 	void Instance::AssertCanMutate() const {

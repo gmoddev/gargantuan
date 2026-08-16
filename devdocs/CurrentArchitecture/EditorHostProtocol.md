@@ -61,6 +61,10 @@ limited to 256 records.
 | `SetExtensionProperty` | Applies a schema-resolved extension property through `MutationGateway`. |
 | `SetCustomProperty` | Applies a schema-resolved custom class property through `MutationGateway`. |
 | `AddTag` / `RemoveTag` | Applies bounded tag membership through `MutationGateway`. |
+| `CreateInstance` | Creates an editor-constructible active schema identity under a stable parent; engine returns the allocated ObjectId. |
+| `DestroyInstance` | Recursively destroys one generation-safe, non-protected project target. |
+| `DuplicateInstance` | Engine-clones one persistent subtree beside its source with fresh identities. |
+| `ReparentInstance` | Atomically moves one stable target beneath another after scope/cycle/protection validation. |
 | `ConfigureViewport` | Negotiates a bounded engine-owned RGB8 viewport. |
 | `SetViewportCamera` | Applies a finite absolute editor-camera pose and field of view. |
 | `OpenViewportTransport` | Explicitly selects shared-memory ring v1 and returns its fixed layout contract. |
@@ -76,8 +80,8 @@ DataModel; decoded request data never supplies capabilities or scope. Attribute
 state is delivered by snapshot and dedicated `AttributeUpdate` records rather
 than a second polling path. `AddTag` and `RemoveTag` use that same authority;
 snapshot membership and `TagAdded`/`TagRemoved` carry committed tag state.
-Object references, enum items, create, reparent, destroy, transactions, saving,
-source mounts, and play sessions are deliberately outside v0. Viewport methods
+Object-reference and enum-item property mutation, transactions, source mounts,
+and play sessions are deliberately outside v0. Viewport methods
 are a compatible capability extension with their own `ViewportVersion = 1`.
 `Handshake.ViewportTransports` is authoritative: clients must negotiate rather
 than assuming shared memory. The current Windows host advertises
@@ -119,8 +123,7 @@ new or prior registry; a later `OpenProject` may construct a fresh document.
 ## Next interface increment
 
 The bounded shared-memory viewport transport is implemented in
-[EditorViewport.md](./EditorViewport.md). The smallest viewport follow-up is a
-continuous native presentation loop with measured frame pacing; the request
-path currently renders one frame per `CaptureViewport`. Same-scope mutation
-authority and bounded enum/value decoding are implemented; broader mutation
-types still require explicit editor transaction semantics and protocol review.
+[EditorViewport.md](./EditorViewport.md). Authoritative scalar and structural
+mutation, persistence, and bounded enum/value decoding are implemented. The
+next authoring interface increment is explicit engine-owned transaction and
+Undo/Redo semantics; project revision remains separate from that history.

@@ -37,4 +37,5 @@ namespace gargantuan::InstanceSerialization {
 	std::string Serialize(InstanceFormat format, std::shared_ptr<Instance> &instance);
 	std::string SerializeEmptyProject(InstanceFormat Format, std::string_view ProjectName);
 	DeserializationState Deserialize(InstanceFormat format, std::istream &input);
+	DeserializationState DeserializeDetached(InstanceFormat format, std::istream &input);
 }
