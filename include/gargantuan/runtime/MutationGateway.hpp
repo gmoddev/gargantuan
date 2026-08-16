@@ -63,6 +63,11 @@ namespace gargantuan {
 		std::optional<std::string> Name;
 	};
 	struct UpdatePropertyCommand { ObjectId Object; std::string PropertyName; std::any Value; };
+	struct UpdateScriptSourceCommand {
+		ObjectId Object;
+		int ExpectedSourceVersion = 0;
+		std::string Source;
+	};
 	struct UpdateAttributeCommand { ObjectId Object; std::string AttributeName; std::optional<WireValue> Value; };
 	struct UpdateExtensionPropertyCommand {
 		ObjectId Object;
@@ -84,6 +89,7 @@ namespace gargantuan {
 	using MutationCommand = std::variant<
 		CreateObjectCommand,
 		UpdatePropertyCommand,
+		UpdateScriptSourceCommand,
 		UpdateAttributeCommand,
 		UpdateExtensionPropertyCommand,
 		AddTagCommand,
@@ -107,6 +113,7 @@ namespace gargantuan {
 		ReadOnly,
 		Unauthorized,
 		ValidationFailed,
+		Conflict,
 		Rejected,
 		InternalError,
 		TransactionNotFound,

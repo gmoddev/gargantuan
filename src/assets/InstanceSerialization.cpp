@@ -89,6 +89,8 @@ namespace gargantuan::InstanceSerialization {
 				return SerializedPair{"Vector3", {value->x, value->y, value->z}};
 			} else if (auto *value = std::any_cast<int>(&unknown)) {
 				return SerializedPair{"Int", *value};
+			} else if (auto *value = std::any_cast<std::string>(&unknown)) {
+				return SerializedPair{"String", *value};
 			} else if (auto *value = std::any_cast<std::string_view>(&unknown)) {
 				return SerializedPair{"String", std::string(value->data(), value->size())};
 			} else if (auto *value = std::any_cast<UDim>(&unknown)) {

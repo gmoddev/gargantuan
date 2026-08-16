@@ -1827,6 +1827,16 @@ namespace {
 		Check(destroyed.Succeeded() && createdObject->GetDestroyed(), "destroy command applies on Main");
 		Check(!ObjectRegistry::Get().Lookup(*created.Object), "destroy command invalidates lookup");
 
+		auto ScriptValue = std::make_shared<ModuleScript>();
+		ScriptValue->SetParent(ProjectRoot);
+		const auto RevisionBeforeInvalidSource = ProjectRoot->GetAuthoritativeRevision();
+		bool InvalidUtf8Rejected = false;
+		try { ScriptValue->SetSource(std::string("\xC0", 1)); }
+		catch (const std::invalid_argument &) { InvalidUtf8Rejected = true; }
+		Check(InvalidUtf8Rejected && ScriptValue->GetSource().empty() &&
+			ProjectRoot->GetAuthoritativeRevision() == RevisionBeforeInvalidSource,
+			"script source rejects malformed UTF-8 without changing authoritative state");
+
 		folder->Destroy();
 		journal.Clear();
 		auto dead = gateway.Apply(UpdatePropertyCommand{id, "Name", std::string("Dead")});
@@ -4012,6 +4022,8 @@ namespace {
 				std::ranges::contains(handshake["Result"]["Capabilities"], "Undo") &&
 				std::ranges::contains(handshake["Result"]["Capabilities"], "Redo") &&
 				std::ranges::contains(handshake["Result"]["Capabilities"], "AuthoritativeHistoryStatus") &&
+				std::ranges::contains(handshake["Result"]["Capabilities"], "ReadScriptSource") &&
+				std::ranges::contains(handshake["Result"]["Capabilities"], "WriteScriptSource") &&
 				!std::ranges::contains(handshake["Result"]["Capabilities"], "AbortTransaction"),
 			"EditorHost advertises persistence, structural authoring, and honest commit-only transaction capabilities"
 		);
@@ -4045,6 +4057,13 @@ namespace {
 			auto RestrictedHistory = Json::parse(restrictedHost.HandleRequest(RestrictedRequest.dump()));
 			Check(!RestrictedHistory["Ok"].get<bool>() && RestrictedHistory["Error"]["Code"] == "Unauthorized",
 				"EditorHost history execution requires trusted authoring mutation capability");
+		}
+		for (const auto Method : {"GetScriptSource", "SetScriptSource"}) {
+			Json RestrictedRequest{{"Version", EditorHostProtocolVersion}, {"RequestId", Method},
+				{"SessionToken", "restricted-token"}, {"Method", Method}, {"Params", Json::object()}};
+			auto RestrictedSource = Json::parse(restrictedHost.HandleRequest(RestrictedRequest.dump()));
+			Check(!RestrictedSource["Ok"].get<bool>() && RestrictedSource["Error"]["Code"] == "Unauthorized",
+				"EditorHost script source access requires trusted editor authority");
 		}
 		{
 			Json RestrictedRequest{{"Version", EditorHostProtocolVersion}, {"RequestId", "CreateProject"},
@@ -4212,6 +4231,153 @@ namespace {
 				std::ranges::any_of(SnapshotAfterFailedReplacement["Result"]["Snapshot"]["Objects"],
 					[](const Json &Object) { return Object["Name"] == "First Folder"; }),
 				"failed CreateProject staging preserves the prior active session and removes no user destination");
+
+			auto ScriptSnapshot = call("GetSnapshot", Json::object(), "test-token");
+			auto ScriptWorkspace = std::find_if(
+				ScriptSnapshot["Result"]["Snapshot"]["Objects"].begin(),
+				ScriptSnapshot["Result"]["Snapshot"]["Objects"].end(),
+				[](const Json &Object) { return Object["ClassName"] == "Workspace"; }
+			);
+			Check(ScriptWorkspace != ScriptSnapshot["Result"]["Snapshot"]["Objects"].end(),
+				"script authoring fixture resolves the authoritative Workspace");
+			if (ScriptWorkspace != ScriptSnapshot["Result"]["Snapshot"]["Objects"].end()) {
+				auto CreatedScript = call("CreateInstance", {
+					{"ClassSchemaId", SchemaId::FromNativeName("Engine", "Script").ToString()},
+					{"DefinitionVersion", 1}, {"Parent", (*ScriptWorkspace)["Id"]}, {"Name", "AuthoringScript"}
+				}, "test-token");
+				Check(CreatedScript["Ok"].get<bool>(), "Script is constructible through normal structural authoring");
+				(void)call("PollChanges", Json::object(), "test-token");
+				const auto ScriptId = CreatedScript["Result"]["Object"];
+				auto InitialSource = call("GetScriptSource", {{"Object", ScriptId}}, "test-token");
+				Check(InitialSource["Ok"].get<bool>() && InitialSource["Result"]["Source"] == "" &&
+					InitialSource["Result"]["SourceVersion"].get<int>() > 0,
+					"new Script has empty authoritative source and a bounded conflict token");
+				const auto InitialVersion = InitialSource["Result"]["SourceVersion"].get<int>();
+				auto SourcePrivacySnapshot = call("GetSnapshot", Json::object(), "test-token");
+				auto SourcePrivacyObject = std::find_if(
+					SourcePrivacySnapshot["Result"]["Snapshot"]["Objects"].begin(),
+					SourcePrivacySnapshot["Result"]["Snapshot"]["Objects"].end(),
+					[&](const Json &Object) { return Object["Id"] == ScriptId; }
+				);
+				Check(SourcePrivacyObject != SourcePrivacySnapshot["Result"]["Snapshot"]["Objects"].end() &&
+					!(*SourcePrivacyObject)["Properties"].contains("Source") &&
+					(*SourcePrivacyObject)["Properties"].contains("SourceVersion"),
+					"gameplay/editor snapshots expose only source invalidation state, never source text");
+				auto GenericSourceWrite = call("SetProperty", {
+					{"Object", ScriptId}, {"Property", "Source"},
+					{"Value", {{"Type", "String"}, {"Value", "bypass"}}}
+				}, "test-token");
+				Check(!GenericSourceWrite["Ok"].get<bool>() && GenericSourceWrite["Error"]["Code"] == "Unauthorized",
+					"generic property mutation cannot bypass source conflict semantics");
+				const std::string SourceA = "-- unicode: \xF0\x9F\x9A\x80\nlocal =\nlocal Value = [[exact\ntext]]\n";
+				auto BeforeSourceState = call("GetProjectState", Json::object(), "test-token");
+				auto SetSourceA = call("SetScriptSource", {
+					{"Object", ScriptId}, {"ExpectedSourceVersion", InitialVersion}, {"Source", SourceA}
+				}, "test-token");
+				auto AfterSourceState = call("GetProjectState", Json::object(), "test-token");
+				Check(SetSourceA["Ok"].get<bool>() &&
+					SetSourceA["Result"]["AuthoritativeRevision"] ==
+						BeforeSourceState["Result"]["AuthoritativeRevision"].get<std::uint64_t>() + 1 &&
+					AfterSourceState["Result"]["History"]["UndoLabel"] == "Edit Script" &&
+					AfterSourceState["Result"]["History"]["SemanticBytes"].get<std::uint64_t>() > 0,
+					"one source commit advances the project revision exactly once");
+				auto SourceChanges = call("PollChanges", Json::object(), "test-token");
+				Check(SourceChanges["Ok"].get<bool>() && SourceChanges["Result"]["Records"].size() == 1 &&
+					SourceChanges["Result"]["Records"][0]["Operation"] == "PropertyUpdate" &&
+					SourceChanges["Result"]["Records"][0]["PropertyName"] == "SourceVersion" &&
+					SourceChanges["Result"]["Records"][0].dump().find(SourceA) == std::string::npos,
+					"source commit journals only its invalidation token, never source text");
+				const auto SourceAVersion = SetSourceA["Result"]["SourceVersion"].get<int>();
+				auto StaleWrite = call("SetScriptSource", {
+					{"Object", ScriptId}, {"ExpectedSourceVersion", InitialVersion}, {"Source", "stale overwrite"}
+				}, "test-token");
+				auto AfterStale = call("GetScriptSource", {{"Object", ScriptId}}, "test-token");
+				Check(!StaleWrite["Ok"].get<bool>() && StaleWrite["Error"]["Code"] == "SourceConflict" &&
+					AfterStale["Result"]["Source"] == SourceA &&
+					call("PollChanges", Json::object(), "test-token")["Result"]["Records"].empty(),
+					"stale source token rejects without mutation, revision, or journal publication");
+				auto NonScriptSource = call("GetScriptSource", {{"Object", (*ScriptWorkspace)["Id"]}}, "test-token");
+				Check(!NonScriptSource["Ok"].get<bool>() && NonScriptSource["Error"]["Code"] == "NotScript",
+					"source reads reject non-script objects");
+				auto MaximumSource = std::string(MaximumScriptSourceBytes, 'x');
+				auto MaximumWrite = call("SetScriptSource", {
+					{"Object", ScriptId}, {"ExpectedSourceVersion", SourceAVersion}, {"Source", MaximumSource}
+				}, "test-token");
+				Check(MaximumWrite["Ok"].get<bool>(), "script source accepts the exact 64 KiB UTF-8 bound");
+				auto OversizedWrite = call("SetScriptSource", {
+					{"Object", ScriptId}, {"ExpectedSourceVersion", MaximumWrite["Result"]["SourceVersion"]},
+					{"Source", std::string(MaximumScriptSourceBytes + 1, 'x')}
+				}, "test-token");
+				Check(!OversizedWrite["Ok"].get<bool>(), "script source rejects input above the UTF-8 byte bound");
+				(void)call("PollChanges", Json::object(), "test-token");
+				const auto BeforeSourceUndoRevision = call("GetProjectState", Json::object(), "test-token")
+					["Result"]["AuthoritativeRevision"].get<std::uint64_t>();
+				auto UndoSource = call("Undo", Json::object(), "test-token");
+				(void)call("PollChanges", Json::object(), "test-token");
+				auto AfterUndoSource = call("GetScriptSource", {{"Object", ScriptId}}, "test-token");
+				auto RedoSource = call("Redo", Json::object(), "test-token");
+				(void)call("PollChanges", Json::object(), "test-token");
+				auto AfterRedoSource = call("GetScriptSource", {{"Object", ScriptId}}, "test-token");
+				Check(UndoSource["Ok"].get<bool>() &&
+					UndoSource["Result"]["ResultingRevision"] == BeforeSourceUndoRevision + 1 &&
+					AfterUndoSource["Result"]["Source"] == SourceA &&
+					RedoSource["Ok"].get<bool>() &&
+					RedoSource["Result"]["ResultingRevision"] == BeforeSourceUndoRevision + 2 &&
+					AfterRedoSource["Result"]["Source"] == MaximumSource,
+					"authoritative Undo and Redo restore exact script source state");
+				auto RestoreA = call("SetScriptSource", {
+					{"Object", ScriptId},
+					{"ExpectedSourceVersion", AfterRedoSource["Result"]["SourceVersion"]}, {"Source", SourceA}
+				}, "test-token");
+				Check(RestoreA["Ok"].get<bool>(), "representative source is restored before duplicate persistence proof");
+				(void)call("PollChanges", Json::object(), "test-token");
+				auto DuplicateScript = call("DuplicateInstance", {{"Object", ScriptId}}, "test-token");
+				Check(DuplicateScript["Ok"].get<bool>(), "script Duplicate captures authoritative source state");
+				(void)call("PollChanges", Json::object(), "test-token");
+				auto DuplicateSource = call("GetScriptSource", {{"Object", DuplicateScript["Result"]["Object"]}}, "test-token");
+				Check(call("SetProperty", {
+					{"Object", DuplicateScript["Result"]["Object"]}, {"Property", "Name"},
+					{"Value", {{"Type", "String"}, {"Value", "AuthoringScriptCopy"}}}
+				}, "test-token")["Ok"].get<bool>(), "duplicated script can be renamed independently");
+				const std::string SourceB = "local Duplicate = true\n";
+				auto EditDuplicate = call("SetScriptSource", {
+					{"Object", DuplicateScript["Result"]["Object"]},
+					{"ExpectedSourceVersion", DuplicateSource["Result"]["SourceVersion"]}, {"Source", SourceB}
+				}, "test-token");
+				Check(DuplicateSource["Result"]["Source"] == SourceA && EditDuplicate["Ok"].get<bool>() &&
+					call("GetScriptSource", {{"Object", ScriptId}}, "test-token")["Result"]["Source"] == SourceA,
+					"duplicated script source is independent from its original");
+				(void)call("PollChanges", Json::object(), "test-token");
+				Check(call("SaveProject", Json::object(), "test-token")["Ok"].get<bool>(),
+					"script source persists through normal project Save");
+				Check(call("OpenProject", {{"Root", CreatedRoot.string()}}, "test-token")["Ok"].get<bool>(),
+					"saved script project reopens");
+				auto ReopenedScriptSnapshot = call("GetSnapshot", Json::object(), "test-token");
+				auto OriginalReopened = std::find_if(
+					ReopenedScriptSnapshot["Result"]["Snapshot"]["Objects"].begin(),
+					ReopenedScriptSnapshot["Result"]["Snapshot"]["Objects"].end(),
+					[](const Json &Object) { return Object["Name"] == "AuthoringScript"; }
+				);
+				Check(OriginalReopened != ReopenedScriptSnapshot["Result"]["Snapshot"]["Objects"].end() &&
+					call("GetScriptSource", {{"Object", (*OriginalReopened)["Id"]}}, "test-token")["Result"]["Source"] == SourceA,
+					"project v4 Save/reopen preserves exact invalid Unicode, multiline, and trailing-newline source");
+				if (OriginalReopened != ReopenedScriptSnapshot["Result"]["Snapshot"]["Objects"].end()) {
+					const auto ReopenedId = (*OriginalReopened)["Id"];
+					const auto ReopenedSource = call("GetScriptSource", {{"Object", ReopenedId}}, "test-token");
+					Check(call("DestroyInstance", {{"Object", ReopenedId}}, "test-token")["Ok"].get<bool>(),
+						"script destruction succeeds before stale-generation source proof");
+					(void)call("PollChanges", Json::object(), "test-token");
+					const auto StaleRead = call("GetScriptSource", {{"Object", ReopenedId}}, "test-token");
+					const auto StaleMutation = call("SetScriptSource", {
+						{"Object", ReopenedId},
+						{"ExpectedSourceVersion", ReopenedSource["Result"]["SourceVersion"]},
+						{"Source", "must not target a reused slot"}
+					}, "test-token");
+					Check(!StaleRead["Ok"].get<bool>() && StaleRead["Error"]["Code"] == "StaleObject" &&
+						!StaleMutation["Ok"].get<bool>() && StaleMutation["Error"]["Code"] == "StaleObject",
+						"destroyed script generations cannot read or mutate a later slot occupant");
+				}
+			}
 		}
 		auto schema = call("GetSchema", Json::object(), "test-token");
 		Check(

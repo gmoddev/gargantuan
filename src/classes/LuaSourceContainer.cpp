@@ -1,4 +1,9 @@
 #include "gargantuan/classes/LuaSourceContainer.hpp"
+
+#include "gargantuan/classes/DataModel.hpp"
+#include "gargantuan/runtime/ProtocolInput.hpp"
+
+#include <limits>
 #include "gargantuan/classes/Instance.hpp"
 
 #include <cstdlib>
@@ -7,6 +12,41 @@
 #include <string>
 
 namespace gargantuan {
+	std::string LuaSourceContainer::GetSource() const {
+		return Source;
+	}
+
+	int LuaSourceContainer::GetSourceVersion() const {
+		return SourceVersion;
+	}
+
+	void LuaSourceContainer::SetSourceVersion(int Value) {
+		AssertCanMutate();
+		if (Value <= 0) throw std::invalid_argument("Script source version must be positive");
+		if (SourceVersion == Value) return;
+		SourceVersion = Value;
+		NotifyPropertyCommitted("SourceVersion");
+	}
+
+	void LuaSourceContainer::SetSource(std::string Value) {
+		AssertCanMutate();
+		ValidateProtocolString(Value, MaximumScriptSourceBytes, "Script source");
+		ValidatePropertyMutation("Source", Value);
+		if (Source == Value) return;
+		if (SourceVersion == std::numeric_limits<int>::max())
+			throw std::overflow_error("Script source version is exhausted");
+
+		Source = std::move(Value);
+		++SourceVersion;
+		Bytecode.clear();
+		BytecodeSize = 0;
+		BytecodeCompileStatus = BytecodeCompileStatus::Uncompiled;
+		BytecodeCompileError.reset();
+		NotifyPropertyCommitted("SourceVersion");
+		if (auto DataModelValue = GetDataModel()) DataModelValue->AdvanceAuthoritativeRevision();
+		GetPropertyChangedSignal("Source")->Fire({});
+	}
+
 	void LuaSourceContainer::CompileBytecode(lua_CompileOptions *options) {
 		if (BytecodeCompileStatus != BytecodeCompileStatus::Uncompiled) return;
 

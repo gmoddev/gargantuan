@@ -6,6 +6,7 @@
 #include "gargantuan/editor/EditorHost.hpp"
 
 #include "gargantuan/InstanceProperty.hpp"
+#include "gargantuan/classes/LuaSourceContainer.hpp"
 #include "gargantuan/filesystem/Project.hpp"
 #include "gargantuan/reflection/InstanceClassRegistry.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
@@ -25,6 +26,7 @@
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
+#include <limits>
 #include <stdexcept>
 #include <vector>
 
@@ -108,6 +110,7 @@ namespace gargantuan {
 				case MutationStatus::ReadOnly: return "ReadOnly";
 				case MutationStatus::Unauthorized: return "Unauthorized";
 				case MutationStatus::ValidationFailed: return "ValidationFailed";
+				case MutationStatus::Conflict: return "SourceConflict";
 				case MutationStatus::Rejected: return "Rejected";
 				case MutationStatus::InternalError: return "InternalError";
 			case MutationStatus::TransactionNotFound:
@@ -345,6 +348,7 @@ namespace gargantuan {
 					"CommitTransaction",
 					"AuthoritativeTransactions",
 					"Undo", "Redo", "AuthoritativeHistoryStatus",
+					"ReadScriptSource", "WriteScriptSource",
 					"ConfigureViewport", "SetViewportCamera", "CaptureViewport", "PickViewport"
 				};
 				Json viewportTransports = Json::array({{
@@ -899,6 +903,18 @@ namespace gargantuan {
 				}));
 			}
 
+			if (method == "GetScriptSource" &&
+				(!StudioSecurity.HasCapability(ScriptCapability::ReadDataModel) ||
+					!StudioSecurity.HasCapability(ScriptCapability::EditorCommands)))
+				return SerializeBoundedResponse(ErrorResponse(
+					requestId, "Unauthorized", "Script source access requires EditorCommands and ReadDataModel"
+				));
+			if (method == "SetScriptSource" &&
+				(!StudioSecurity.HasCapability(ScriptCapability::MutateDataModel) ||
+					!StudioSecurity.HasCapability(ScriptCapability::EditorCommands)))
+				return SerializeBoundedResponse(ErrorResponse(
+					requestId, "Unauthorized", "Script source mutation requires EditorCommands and MutateDataModel"
+				));
 			if (!World)
 				return SerializeBoundedResponse(ErrorResponse(requestId, "ProjectRequired", "OpenProject must succeed first"));
 			auto StudioMutationAuthority = [&] {
@@ -1077,6 +1093,87 @@ namespace gargantuan {
 						{"ProjectState", EncodeProjectState(World, PersistedRevision, CurrentProject)},
 					}
 				));
+			}
+
+			if (method == "GetScriptSource") {
+				if (!StudioSecurity.HasCapability(ScriptCapability::ReadDataModel) ||
+					!StudioSecurity.HasCapability(ScriptCapability::EditorCommands))
+					return SerializeBoundedResponse(ErrorResponse(
+						requestId, "Unauthorized", "Script source access requires EditorCommands and ReadDataModel"
+					));
+				if (!HasOnlyFields(parameters, {"Object"}) || !parameters.contains("Object"))
+					return SerializeBoundedResponse(ErrorResponse(
+						requestId, "MalformedRequest", "GetScriptSource requires an Object"
+					));
+				auto Object = JsonCodec::DecodeObjectId(parameters["Object"]);
+				if (!Object)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "ObjectId is invalid"));
+				auto Target = ObjectRegistry::Get().Lookup(Object->ToObjectId());
+				if (!Target || Target->GetReplicationScopeId() != World->GetObjectId())
+					return SerializeBoundedResponse(ErrorResponse(
+						requestId, "StaleObject", "Script identity is not live in the open project"
+					));
+				auto ScriptValue = std::dynamic_pointer_cast<LuaSourceContainer>(Target);
+				if (!ScriptValue)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "NotScript", "Object is not a supported script"));
+				return SerializeBoundedResponse(SuccessResponse(requestId, {
+					{"Object", JsonCodec::EncodeObjectId(*Object)},
+					{"Source", ScriptValue->GetSource()},
+					{"SourceVersion", ScriptValue->GetSourceVersion()},
+					{"AuthoritativeRevision", World->GetAuthoritativeRevision()},
+				}));
+			}
+
+			if (method == "SetScriptSource") {
+				if (!StudioSecurity.HasCapability(ScriptCapability::MutateDataModel) ||
+					!StudioSecurity.HasCapability(ScriptCapability::EditorCommands))
+					return SerializeBoundedResponse(ErrorResponse(
+						requestId, "Unauthorized", "Script source mutation requires EditorCommands and MutateDataModel"
+					));
+				if (!Cursor)
+					return SerializeBoundedResponse(ErrorResponse(
+						requestId, "SnapshotRequired", "GetSnapshot must establish a cursor"
+					));
+				if (!HasOnlyFields(parameters, {"Object", "ExpectedSourceVersion", "Source", "TransactionId"}) ||
+					!parameters.contains("Object") || !parameters.contains("ExpectedSourceVersion") ||
+					!parameters["ExpectedSourceVersion"].is_number_unsigned() ||
+					!parameters.contains("Source") || !parameters["Source"].is_string())
+					return SerializeBoundedResponse(ErrorResponse(
+						requestId, "MalformedRequest", "SetScriptSource fields are invalid"
+					));
+				auto Object = JsonCodec::DecodeObjectId(parameters["Object"]);
+				const auto EncodedVersion = parameters["ExpectedSourceVersion"].get<std::uint64_t>();
+				const auto &Source = parameters["Source"].get_ref<const std::string &>();
+				if (!Object || EncodedVersion == 0 || EncodedVersion > static_cast<std::uint64_t>(std::numeric_limits<int>::max()))
+					return SerializeBoundedResponse(ErrorResponse(
+						requestId, "MalformedRequest", "ObjectId or expected source version is invalid"
+					));
+				try {
+					ValidateProtocolString(Source, MaximumScriptSourceBytes, "Script source");
+				} catch (const std::invalid_argument &Error) {
+					return SerializeBoundedResponse(ErrorResponse(requestId, "InvalidSource", Error.what()));
+				}
+				auto Target = ObjectRegistry::Get().Lookup(Object->ToObjectId());
+				if (!Target || Target->GetReplicationScopeId() != World->GetObjectId())
+					return SerializeBoundedResponse(ErrorResponse(
+						requestId, "StaleObject", "Script identity is not live in the open project"
+					));
+				auto ScriptValue = std::dynamic_pointer_cast<LuaSourceContainer>(Target);
+				if (!ScriptValue)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "NotScript", "Object is not a supported script"));
+				auto Mutation = Mutations.Apply(UpdateScriptSourceCommand{
+					Object->ToObjectId(), static_cast<int>(EncodedVersion), Source
+				}, StudioMutationAuthority());
+				if (!Mutation.Succeeded())
+					return SerializeBoundedResponse(ErrorResponse(
+						requestId, MutationStatusName(Mutation.Status), Mutation.Message
+					));
+				return SerializeBoundedResponse(SuccessResponse(requestId, {
+					{"Status", MutationStatusName(Mutation.Status)},
+					{"Object", JsonCodec::EncodeObjectId(*Object)},
+					{"SourceVersion", ScriptValue->GetSourceVersion()},
+					{"AuthoritativeRevision", World->GetAuthoritativeRevision()},
+				}));
 			}
 
 			if (method == "SetProperty") {

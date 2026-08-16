@@ -12,11 +12,25 @@ return c({
 
 	properties = {
 		Source = {
-			description = "Lua source code of the shader",
+			description = "Authoritative Luau source code",
 			type = t.String,
 			unmodified = "std::string()",
+			overrideRead = "GetSource",
+			overrideWrite = "SetSource",
 			serializable = true,
+			editable = false,
+			readLevel = "Engine",
+			writeLevel = "Engine",
+		},
+		SourceVersion = {
+			description = "Transient source invalidation token",
+			type = t.Integer,
+			unmodified = "1",
+			overrideRead = "GetSourceVersion",
+			overrideWrite = "SetSourceVersion",
 			replicated = true,
+			editable = false,
+			writeLevel = "Engine",
 		},
 	},
 })

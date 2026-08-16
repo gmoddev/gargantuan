@@ -12,11 +12,18 @@
 #include <vector>
 
 namespace gargantuan {
+	inline constexpr std::size_t MaximumScriptSourceBytes = 64 * 1024;
+
 	enum class BytecodeCompileStatus : int { Uncompiled, Success, Error };
 
 	class LuaSourceContainer : public Instance {
 		I_LuaSourceContainer;
 
+	  private:
+		std::string Source;
+		int SourceVersion = 1;
+
+	  public:
 		std::string ChunkName = GetFullName();
 
 		std::vector<char> Bytecode;

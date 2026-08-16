@@ -51,6 +51,8 @@ namespace gargantuan {
 				if constexpr (std::is_same_v<ChangeType, PropertyTransactionChange>)
 					return sizeof(Typed) + Typed.PropertyName.size() + WireValueBytes(Typed.Before) +
 						   WireValueBytes(Typed.After);
+				else if constexpr (std::is_same_v<ChangeType, ScriptSourceTransactionChange>)
+					return sizeof(Typed) + Typed.Before.size() + Typed.After.size();
 				else if constexpr (std::is_same_v<ChangeType, AttributeTransactionChange>)
 					return sizeof(Typed) + Typed.AttributeName.size() +
 						   (Typed.Before ? WireValueBytes(*Typed.Before) : 0) +
@@ -188,6 +190,8 @@ namespace gargantuan {
 						using ChangeType = std::decay_t<decltype(Typed)>;
 						if constexpr (std::is_same_v<ChangeType, PropertyTransactionChange>) {
 							Referenced.insert(Typed.Object); IncludeWireReference(Typed.Before); IncludeWireReference(Typed.After);
+						} else if constexpr (std::is_same_v<ChangeType, ScriptSourceTransactionChange>) {
+							Referenced.insert(Typed.Object);
 						} else if constexpr (std::is_same_v<ChangeType, AttributeTransactionChange>) {
 							Referenced.insert(Typed.Object);
 							if (Typed.Before) IncludeWireReference(*Typed.Before);

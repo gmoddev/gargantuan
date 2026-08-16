@@ -3,6 +3,7 @@
 #include "gargantuan/assets/InstanceSerialization.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Instance.hpp"
+#include "gargantuan/classes/LuaSourceContainer.hpp"
 #include "gargantuan/reflection/InstanceClassRegistry.hpp"
 #include "gargantuan/runtime/ChangeJournal.hpp"
 #include "gargantuan/runtime/ExecutionDomain.hpp"
@@ -406,6 +407,10 @@ namespace gargantuan {
 						if (Authority.GetScope() && InstanceValue->GetReplicationScopeId() != *Authority.GetScope())
 							return {MutationStatus::Rejected, std::nullopt, "Object is outside the project scope"};
 						if constexpr (std::is_same_v<Command, UpdatePropertyCommand>) {
+							if (CommandValue.PropertyName == "Source" &&
+								std::dynamic_pointer_cast<LuaSourceContainer>(InstanceValue))
+								return {MutationStatus::Unauthorized, std::nullopt,
+									"Script source requires the dedicated source-authoring operation"};
 							auto DataModelValue = InstanceValue->GetDataModel();
 							auto *Property = InstanceValue->FindProperty(CommandValue.PropertyName);
 							auto Before = InstanceValue->ReadPropertyWireValue(CommandValue.PropertyName)
@@ -438,6 +443,35 @@ namespace gargantuan {
 														  .value_or(Committed.After);
 									return Committed;
 								}
+							);
+						} else if constexpr (std::is_same_v<Command, UpdateScriptSourceCommand>) {
+							auto ScriptValue = std::dynamic_pointer_cast<LuaSourceContainer>(InstanceValue);
+							if (!ScriptValue)
+								return {MutationStatus::InvalidClass, std::nullopt, "Object is not a supported script"};
+							if (CommandValue.ExpectedSourceVersion <= 0 ||
+								ScriptValue->GetSourceVersion() != CommandValue.ExpectedSourceVersion)
+								return {MutationStatus::Conflict, CommandValue.Object,
+									"Authoritative script source changed after it was loaded"};
+							auto *Definition = InstanceClassRegistry::GetDefinitionByName("LuaSourceContainer");
+							if (!Definition)
+								return {MutationStatus::InternalError, std::nullopt, "LuaSourceContainer schema is unavailable"};
+							auto DataModelValue = ScriptValue->GetDataModel();
+							ScriptSourceTransactionChange Change{
+								CommandValue.Object,
+								Definition->Id,
+								Definition->DefinitionVersion,
+								ScriptValue->GetSource(),
+								CommandValue.Source,
+							};
+							return ApplyAuthoringTransaction(
+								DataModelValue,
+								"Edit Script",
+								Change,
+								[&] {
+									ScriptValue->SetSource(std::move(CommandValue.Source));
+									return MutationResult{MutationStatus::Success, CommandValue.Object, {}};
+								},
+								[Change](const MutationResult &) -> TransactionChange { return Change; }
 							);
 						} else if constexpr (std::is_same_v<Command, UpdateAttributeCommand>) {
 							auto DataModelValue = InstanceValue->GetDataModel();
@@ -800,6 +834,22 @@ namespace gargantuan {
 						if (!Native) return {MutationStatus::ValidationFailed, {}, "History property value is unsupported"};
 						return Gateway.Apply(UpdatePropertyCommand{Object, Typed.PropertyName, std::move(*Native)},
 							MutationAuthorityContext::Local(SecurityContext));
+					} else if constexpr (std::is_same_v<ChangeType, ScriptSourceTransactionChange>) {
+						auto Object = History.ResolveIdentity(Typed.Object);
+						auto ScriptValue = std::dynamic_pointer_cast<LuaSourceContainer>(ObjectRegistry::Get().Lookup(Object));
+						if (!ScriptValue) return {MutationStatus::StaleObject, {}, "History script target is stale"};
+						auto *Definition = InstanceClassRegistry::GetDefinitionByName("LuaSourceContainer");
+						if (!Definition || Definition->Id != Typed.DeclaringSchemaId ||
+							Definition->DefinitionVersion != Typed.DefinitionVersion)
+							return {MutationStatus::ValidationFailed, {}, "History script schema is incompatible"};
+						const auto &Expected = Forward ? Typed.Before : Typed.After;
+						if (ScriptValue->GetSource() != Expected)
+							return {MutationStatus::ValidationFailed, {}, "History script source has diverged"};
+						return Gateway.Apply(UpdateScriptSourceCommand{
+							Object,
+							ScriptValue->GetSourceVersion(),
+							Forward ? Typed.After : Typed.Before,
+						}, MutationAuthorityContext::Local(SecurityContext));
 					} else if constexpr (std::is_same_v<ChangeType, AttributeTransactionChange>) {
 						auto Object = History.ResolveIdentity(Typed.Object);
 						auto InstanceValue = ObjectRegistry::Get().Lookup(Object);

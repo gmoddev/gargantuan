@@ -45,7 +45,8 @@ Responses contain the same version and request ID, an `Ok` boolean, and exactly
 one conceptual result or structured error. Unknown versions, methods, fields,
 invalid IDs, and malformed values fail closed. Input is drained with a 1 MiB
 limit before JSON parsing; responses are limited to 8 MiB. Journal batches are
-limited to 256 records.
+limited to 256 records. Script Source is additionally limited to 65,536 valid
+UTF-8 bytes with no NUL.
 
 ## v0 methods
 
@@ -53,6 +54,9 @@ limited to 256 records.
 | --- | --- |
 | `Handshake` | Returns engine identity, protocol version, and capabilities. |
 | `OpenProject` | Canonicalizes and loads a project root without executing gameplay scripts. |
+| `CreateProject` | Creates, initially persists, and adopts a minimum project without accepting serialized state or revision input. |
+| `GetProjectState` | Returns authoritative/persisted revisions, derived dirty state, destination, and bounded history status. |
+| `SaveProject` / `SaveProjectAs` | Atomically persist an exact authoritative revision; Save As adopts its validated destination only after success. |
 | `GetSchema` | Returns class compatibility metadata plus schema-discovery v4 definitions and registry generation. |
 | `GetSnapshot` | Returns snapshot v6 and establishes the session cursor. |
 | `PollChanges` | Returns scoped wire-journal v6 records after that cursor. |
@@ -67,6 +71,9 @@ limited to 256 records.
 | `ReparentInstance` | Atomically moves one stable target beneath another after scope/cycle/protection validation. |
 | `BeginTransaction` | Creates one engine-issued, session-owned commit-only authoring group with a bounded label. |
 | `CommitTransaction` | Commits the exact owned open group, advances one revision, and releases its journal batch. |
+| `Undo` / `Redo` | Traverses only the current engine history cursor entry and publishes ordinary authoritative journal state. |
+| `GetScriptSource` | Reads exact bounded Source plus its conflict token for one live supported script ObjectId. |
+| `SetScriptSource` | Commits bounded UTF-8 Source through MutationGateway using the exact expected SourceVersion. |
 | `ConfigureViewport` | Negotiates a bounded engine-owned RGB8 viewport. |
 | `SetViewportCamera` | Applies a finite absolute editor-camera pose and field of view. |
 | `OpenViewportTransport` | Explicitly selects shared-memory ring v1 and returns its fixed layout contract. |
@@ -82,8 +89,10 @@ DataModel; decoded request data never supplies capabilities or scope. Attribute
 state is delivered by snapshot and dedicated `AttributeUpdate` records rather
 than a second polling path. `AddTag` and `RemoveTag` use that same authority;
 snapshot membership and `TagAdded`/`TagRemoved` carry committed tag state.
-Object-reference and enum-item property mutation, Undo/Redo, source mounts,
-and play sessions are deliberately outside v0. Viewport methods
+Object-reference and enum-item property mutation, source mounts, and play
+sessions are deliberately outside v0. Script Source is intentionally excluded
+from generic `SetProperty`; its dedicated token-checked operation is the only
+Studio write path. Viewport methods
 are a compatible capability extension with their own `ViewportVersion = 1`.
 `Handshake.ViewportTransports` is authoritative: clients must negotiate rather
 than assuming shared memory. The current Windows host advertises
@@ -125,8 +134,10 @@ new or prior registry; a later `OpenProject` may construct a fresh document.
 ## Next interface increment
 
 The bounded shared-memory viewport transport is implemented in
-[EditorViewport.md](./EditorViewport.md). Authoritative scalar and structural
-mutation, persistence, and bounded enum/value decoding are implemented. The
-engine-owned commit-only transaction core and bounded semantic history are
-implemented. Undo/Redo execution remains the next authoring interface increment;
-project revision remains separate from transaction identity and journal sequence.
+[EditorViewport.md](./EditorViewport.md). Authoritative scalar/structural/source
+mutation, persistence, transactions, and Undo/Redo are implemented. Script
+authoring uses project-v4 persistence and a journaled SourceVersion invalidation
+without exposing Source through ordinary snapshots or gameplay replication.
+Minimal Play/Stop lifecycle remains the next creator-loop interface increment;
+project revision remains separate from transaction identity, source version,
+and journal sequence.

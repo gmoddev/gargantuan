@@ -26,6 +26,14 @@ context, including when a worker command is later drained on Main. Studio
 mutation remains an EditorHost command applied by the gateway; Studio never
 receives an authoritative `Instance` pointer.
 
+Dedicated script Source reads require EditorCommands plus ReadDataModel;
+Source writes require EditorCommands plus MutateDataModel and pass through the
+MutationGateway with project scope, stable identity, UTF-8/size validation, and
+the expected SourceVersion. `Source` itself is Engine-only reflection state and
+generic `SetProperty` rejects it. Server/Client code and ordinary project
+scripts do not receive the EditorHost session token or source operations, so
+Studio authoring does not create a gameplay source-disclosure path.
+
 The current context is thread-local and defaults to trusted Core for backwards
 compatibility with engine-owned call paths. New untrusted script entry points
 must establish a `ScriptSecurityScope` before dispatch. Treating the default as

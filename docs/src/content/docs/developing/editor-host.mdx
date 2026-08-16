@@ -42,12 +42,13 @@ method, and parameters.
 The initial protocol supports:
 
 - protocol handshake and capability discovery;
-- project open that runs no gameplay scripts (only bounded PreRun schema registration when configured);
+- project open/creation that runs no gameplay scripts (only bounded PreRun schema registration when configured);
 - reflected schema discovery;
 - deterministic snapshot capture;
 - ordered journal polling; and
-- scalar property mutation through the authoritative mutation gateway;
+- scalar, structural, and bounded script-Source mutation through the authoritative mutation gateway;
 - engine-owned project revision state plus atomic Save and Save As;
+- engine-owned bounded transactions plus Undo/Redo;
 - bounded offscreen RGB viewport capture;
 - absolute editor-camera commands; and
 - viewport picking that returns a stable `ObjectId`.
@@ -94,8 +95,9 @@ will own process lifecycle, IPC, windows, viewport presentation, filesystem
 dialogs, and Luau runtime bootstrap. Explorer, Properties, selection, commands,
 settings, and most workflows should consume explicit `DocumentService`,
 `SelectionService`, `ViewportService`, and `CommandService` APIs from Luau.
-Play sessions, reference-valued editing, structural editing, and multi-command
-transactions remain future interface work. Save and Save As persist an
+Play sessions and reference-valued editing remain future interface work.
+Structural editing, grouped transactions, Undo/Redo, and dedicated Script/
+ModuleScript Source authoring are implemented. Save and Save As persist an
 engine-captured project snapshot; Studio never serializes its document cache.
 The current private proof now uses an Avalonia C# host to bootstrap a restricted
 Studio-domain Luau VM. The public boundary exposes only stable IDs, schema,
@@ -116,3 +118,9 @@ Runtime schema-property edits use `SetExtensionProperty` or `SetCustomProperty`,
 snapshot/journal version 6, and the authoritative mutation gateway. Project definitions are created only
 by the engine's bounded PreRun candidate lifecycle. Studio receives neither
 the `DefineSchema` capability nor the registration facade.
+
+Script Source is saved project-v4 state but is not an ordinary replicated
+property. `GetScriptSource` and token-checked `SetScriptSource` require the
+trusted EditorHost grant and a live project-scoped ObjectId. Journal/snapshot
+traffic carries only the transient SourceVersion invalidation token; source
+text does not automatically enter gameplay replication.

@@ -46,6 +46,14 @@ namespace gargantuan {
 		WireValue After;
 	};
 
+	struct ScriptSourceTransactionChange {
+		ObjectId Object;
+		SchemaId DeclaringSchemaId{};
+		std::uint32_t DefinitionVersion = 0;
+		std::string Before;
+		std::string After;
+	};
+
 	struct AttributeTransactionChange {
 		ObjectId Object;
 		std::string AttributeName;
@@ -86,6 +94,7 @@ namespace gargantuan {
 
 	using TransactionChange = std::variant<
 		PropertyTransactionChange,
+		ScriptSourceTransactionChange,
 		AttributeTransactionChange,
 		TagTransactionChange,
 		ExtensionTransactionChange,

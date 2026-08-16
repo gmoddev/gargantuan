@@ -66,9 +66,11 @@ pointer, callback, backend handle, or Studio reference. Current categories are:
 - Class Extension before/after `WireValue`, extension `SchemaId`, and version;
 - Reparent object plus old/new parent `ObjectId`;
 - Create and Duplicate persistent subtree JSON plus every newly allocated
-  identity and the parent identity; and
+  identity and the parent identity;
 - Destroy persistent subtree JSON captured before destruction plus every
-  destroyed identity and the former parent identity.
+  destroyed identity and the former parent identity; and
+- Script Source before/after text with the exact `LuaSourceContainer` schema
+  identity/version; both strings count against semantic history byte bounds.
 
 The subtree representation reuses project JSON version 4, so it carries class
 and definition identity, saved properties, hierarchy, Attributes, Tags,
