@@ -148,6 +148,40 @@ namespace gargantuan {
 			return result;
 		}
 
+		Json EncodeProjectState(
+			const std::shared_ptr<DataModel> &world,
+			std::uint64_t persistedRevision,
+			const std::optional<Project> &project
+		) {
+			if (!world || !project) return {
+				{"AuthoritativeRevision", 0}, {"PersistedRevision", 0},
+				{"Dirty", false}, {"CurrentDestination", nullptr}
+			};
+			const auto authoritativeRevision = world->GetAuthoritativeRevision();
+			return {
+				{"AuthoritativeRevision", authoritativeRevision},
+				{"PersistedRevision", persistedRevision},
+				{"Dirty", authoritativeRevision != persistedRevision},
+				{"CurrentDestination", project->Root.generic_string()},
+			};
+		}
+
+		std::optional<std::filesystem::path> ValidateProjectDestination(const Json &value) {
+			if (!value.is_string()) return std::nullopt;
+			const auto &encoded = value.get_ref<const std::string &>();
+			if (encoded.empty() || encoded.size() > 32768 || encoded.find('\0') != std::string::npos ||
+				encoded.find("://") != std::string::npos)
+				return std::nullopt;
+			std::filesystem::path candidate(encoded);
+			if (!candidate.is_absolute() || candidate.filename().empty()) return std::nullopt;
+			std::error_code error;
+			auto normalized = std::filesystem::weakly_canonical(candidate, error);
+			if (error || normalized.empty() || !normalized.is_absolute()) return std::nullopt;
+			if (std::filesystem::exists(normalized, error) && !std::filesystem::is_directory(normalized, error))
+				return std::nullopt;
+			return normalized;
+		}
+
 		std::optional<glm::vec3> DecodeVector3(const Json &value) {
 			if (!value.is_array() || value.size() != 3) return std::nullopt;
 			glm::vec3 result;
@@ -231,7 +265,7 @@ namespace gargantuan {
 					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Handshake takes no parameters"));
 				Json capabilities = {
 					"OpenProject", "Schema", "Snapshot", "Journal", "SetProperty", "SetAttribute", "SetExtensionProperty",
-					"AddTag", "RemoveTag",
+					"AddTag", "RemoveTag", "SaveProject", "SaveProjectAs", "AuthoritativeRevision",
 					"ConfigureViewport", "SetViewportCamera", "CaptureViewport", "PickViewport"
 				};
 				Json viewportTransports = Json::array({{
@@ -314,6 +348,8 @@ namespace gargantuan {
 				if (World) World->Destroy();
 				World.reset();
 				Filesystem.reset();
+				CurrentProject.reset();
+				PersistedRevision = 0;
 				ViewportCamera.reset();
 				LastViewportSnapshot.reset();
 				Cursor.reset();
@@ -324,17 +360,93 @@ namespace gargantuan {
 				auto filesystem = std::make_unique<DiskFilesystem>(root);
 				auto project = Project::fromExisting(filesystem.get());
 				auto world = project.DeserializeGame();
+				world->InitializeLoadedProjectRevision();
 				Filesystem = std::move(filesystem);
+				CurrentProject = std::move(project);
 				World = std::move(world);
 				World->Filesystem = Filesystem.get();
+				PersistedRevision = World->GetAuthoritativeRevision();
 				auto workspace = std::dynamic_pointer_cast<Workspace>(World->GetService("Workspace"));
 				if (!workspace)
 					return SerializeBoundedResponse(ErrorResponse(requestId, "InvalidProject", "Project has no valid Workspace"));
 				ViewportCamera = RenderCameraInput{};
 				return SerializeBoundedResponse(SuccessResponse(
 					requestId,
-					{{"Root", JsonCodec::EncodeObjectId(WireObjectId::FromObjectId(World->GetObjectId()))}}
+					{
+						{"Root", JsonCodec::EncodeObjectId(WireObjectId::FromObjectId(World->GetObjectId()))},
+						{"ProjectState", EncodeProjectState(World, PersistedRevision, CurrentProject)},
+					}
 				));
+			}
+
+			if (method == "GetProjectState") {
+				if (!parameters.empty())
+					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "GetProjectState takes no parameters"));
+				if (!World || !CurrentProject)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "NoProjectLoaded", "No project is loaded"));
+				return SerializeBoundedResponse(SuccessResponse(
+					requestId, EncodeProjectState(World, PersistedRevision, CurrentProject)
+				));
+			}
+
+			if (method == "SaveProject" || method == "SaveProjectAs") {
+				if (!StudioSecurity.HasCapability(ScriptCapability::EditorCommands))
+					return SerializeBoundedResponse(ErrorResponse(requestId, "Unauthorized", "Project persistence requires EditorCommands"));
+				if (!World || !CurrentProject || !Filesystem)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "NoProjectLoaded", "No project is loaded"));
+				const bool saveAs = method == "SaveProjectAs";
+				if ((!saveAs && !parameters.empty()) ||
+					(saveAs && (!HasOnlyFields(parameters, {"Destination"}) || !parameters.contains("Destination"))))
+					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Project persistence parameters are invalid"));
+
+				std::unique_ptr<DiskFilesystem> destinationFilesystem;
+				std::optional<Project> destinationProject;
+				if (saveAs) {
+					auto destination = ValidateProjectDestination(parameters["Destination"]);
+					if (!destination)
+						return SerializeBoundedResponse(ErrorResponse(requestId, "InvalidDestination", "Save As destination is not a valid local project directory"));
+					destinationFilesystem = std::make_unique<DiskFilesystem>(*destination);
+					destinationProject.emplace(Project::forDestination(
+						destinationFilesystem.get(), CurrentProject->InstanceFileFormat
+					));
+				}
+				auto &project = saveAs ? *destinationProject : *CurrentProject;
+				Project::PersistenceSnapshot snapshot;
+				try {
+					snapshot = project.CaptureGame(World, World->GetAuthoritativeRevision());
+				} catch (const std::exception &) {
+					return SerializeBoundedResponse(ErrorResponse(
+						requestId, "SerializationFailure", "The authoritative project could not be serialized"
+					));
+				}
+				try {
+					if (saveAs && project.Root != CurrentProject->Root) {
+						const auto sourcePreRun = CurrentProject->RootConfiguration / "prerun.luau";
+						const auto destinationPreRun = project.RootConfiguration / "prerun.luau";
+						if (std::filesystem::is_regular_file(sourcePreRun)) {
+							std::filesystem::create_directories(project.RootConfiguration);
+							std::filesystem::copy_file(
+								sourcePreRun, destinationPreRun,
+								std::filesystem::copy_options::overwrite_existing
+							);
+						}
+					}
+					project.PersistGameAtomically(snapshot, PersistenceCheckpointForTesting);
+					PersistedRevision = snapshot.Revision;
+					if (saveAs) {
+						Filesystem = std::move(destinationFilesystem);
+						CurrentProject = std::move(destinationProject);
+						World->Root = CurrentProject->Root;
+						World->Filesystem = Filesystem.get();
+					}
+					Json result = EncodeProjectState(World, PersistedRevision, CurrentProject);
+					result["PersistedRevision"] = snapshot.Revision;
+					return SerializeBoundedResponse(SuccessResponse(requestId, std::move(result)));
+				} catch (const std::filesystem::filesystem_error &) {
+					return SerializeBoundedResponse(ErrorResponse(requestId, "FilesystemFailure", "The project destination could not be written atomically"));
+				} catch (const std::exception &) {
+					return SerializeBoundedResponse(ErrorResponse(requestId, "PersistenceFailure", "The project could not be persisted atomically"));
+				}
 			}
 
 			if (method == "GetSchema") {
@@ -593,11 +705,15 @@ namespace gargantuan {
 					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "GetSnapshot takes no parameters"));
 				if (!StudioSecurity.HasCapability(ScriptCapability::ReadDataModel))
 					return SerializeBoundedResponse(ErrorResponse(requestId, "Unauthorized", "Snapshot access requires ReadDataModel"));
+				if (!World) return SerializeBoundedResponse(ErrorResponse(requestId, "NoProjectLoaded", "No project is loaded"));
 				auto snapshot = CaptureSnapshot(World);
 				Cursor = snapshot.Cursor;
 				return SerializeBoundedResponse(SuccessResponse(
 					requestId,
-					{{"Snapshot", ParseGeneratedJson(SerializeSnapshot(snapshot), "Snapshot response")}}
+					{
+						{"Snapshot", ParseGeneratedJson(SerializeSnapshot(snapshot), "Snapshot response")},
+						{"ProjectState", EncodeProjectState(World, PersistedRevision, CurrentProject)},
+					}
 				));
 			}
 
@@ -626,7 +742,11 @@ namespace gargantuan {
 				auto wire = ParseGeneratedJson(SerializeWireJournalRecords(records), "Journal response");
 				return SerializeBoundedResponse(SuccessResponse(
 					requestId,
-					{{"Records", std::move(wire["Records"])}, {"Cursor", EncodeCursor(*Cursor)}}
+					{
+						{"Records", std::move(wire["Records"])},
+						{"Cursor", EncodeCursor(*Cursor)},
+						{"ProjectState", EncodeProjectState(World, PersistedRevision, CurrentProject)},
+					}
 				));
 			}
 

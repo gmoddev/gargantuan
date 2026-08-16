@@ -3398,6 +3398,50 @@ namespace {
 		}
 	}
 
+	void TestProjectRevisionPersistence() {
+		using namespace gargantuan;
+		const auto TemporaryRoot = std::filesystem::temp_directory_path() /
+			("gargantuan-project-revision-" + std::to_string(
+				std::chrono::steady_clock::now().time_since_epoch().count()
+			));
+		struct TemporaryProjectCleanup {
+			std::filesystem::path Root;
+			~TemporaryProjectCleanup() { std::filesystem::remove_all(Root); }
+		} Cleanup{TemporaryRoot};
+		std::filesystem::create_directories(TemporaryRoot);
+		DiskFilesystem Filesystem(TemporaryRoot);
+		auto ProjectState = Project::fromInit(&Filesystem, "RevisionWorld");
+		auto World = ProjectState.DeserializeGame();
+		World->InitializeLoadedProjectRevision();
+		Check(World->GetAuthoritativeRevision() == DataModel::InitialProjectRevision,
+			"loaded projects initialize the explicit authoritative revision");
+
+		for (int Revision = 2; Revision <= 10; ++Revision)
+			World->SetName("Revision" + std::to_string(Revision));
+		Check(World->GetAuthoritativeRevision() == 10,
+			"saved reflected mutations advance the project revision monotonically");
+		auto Captured = ProjectState.CaptureGame(World, World->GetAuthoritativeRevision());
+		ProjectState.PersistGameAtomically(Captured, [&] { World->SetName("Revision11"); });
+		Check(Captured.Revision == 10 && World->GetAuthoritativeRevision() == 11,
+			"mutation during persistence leaves the exact saved revision behind the authoritative revision");
+		auto PersistedWorld = ProjectState.DeserializeGame();
+		Check(PersistedWorld->GetName() == "Revision10" && World->GetName() == "Revision11",
+			"the persistence snapshot is coherent and excludes a later mutation");
+
+		const auto Original = Filesystem.ReadFileToString(ProjectState.InstanceFilePath);
+		bool FailedBeforeReplace = false;
+		try {
+			auto FailureSnapshot = ProjectState.CaptureGame(World, World->GetAuthoritativeRevision());
+			ProjectState.PersistGameAtomically(FailureSnapshot, [] {
+				throw std::runtime_error("deterministic pre-replacement failure");
+			});
+		} catch (const std::runtime_error &) {
+			FailedBeforeReplace = true;
+		}
+		Check(FailedBeforeReplace && Filesystem.ReadFileToString(ProjectState.InstanceFilePath) == Original,
+			"failure before atomic replacement preserves the prior valid project file");
+	}
+
 	void TestEditorHostProtocol() {
 		using Json = nlohmann::ordered_json;
 		using namespace gargantuan;
@@ -3491,6 +3535,15 @@ namespace {
 				}),
 			"EditorHost exposes the narrow Studio-domain capability grant"
 		);
+		Check(
+			std::ranges::contains(handshake["Result"]["Capabilities"], "SaveProject") &&
+				std::ranges::contains(handshake["Result"]["Capabilities"], "SaveProjectAs") &&
+				std::ranges::contains(handshake["Result"]["Capabilities"], "AuthoritativeRevision"),
+			"EditorHost advertises project revision and persistence capabilities"
+		);
+		auto SaveWithoutProject = call("SaveProject", Json::object(), "test-token");
+		Check(!SaveWithoutProject["Ok"].get<bool>() && SaveWithoutProject["Error"]["Code"] == "NoProjectLoaded",
+			"EditorHost returns a structured error when Save has no loaded project");
 		EditorHost restrictedHost("restricted-token", {
 			ScriptExecutionDomain::Studio,
 			{ScriptCapability::ReadDataModel},
@@ -3552,7 +3605,11 @@ namespace {
 		);
 
 		auto opened = call("OpenProject", {{"Root", temporaryRoot.string()}}, "test-token");
-		Check(opened["Ok"].get<bool>(), "EditorHost opens a project without starting the engine loop");
+		Check(opened["Ok"].get<bool>() &&
+			opened["Result"]["ProjectState"]["AuthoritativeRevision"] == DataModel::InitialProjectRevision &&
+			opened["Result"]["ProjectState"]["PersistedRevision"] == DataModel::InitialProjectRevision &&
+			!opened["Result"]["ProjectState"]["Dirty"].get<bool>(),
+			"EditorHost opens a project clean with coherent authoritative and persisted revisions");
 		auto projectSchema = call("GetSchema", Json::object(), "test-token");
 		auto discoveredEnum = std::find_if(
 			projectSchema["Result"]["Definitions"].begin(), projectSchema["Result"]["Definitions"].end(),
@@ -3636,7 +3693,10 @@ namespace {
 			auto changes = call("PollChanges", Json::object(), "test-token");
 			Check(
 				changes["Ok"].get<bool>() && changes["Result"]["Records"].size() == 1 &&
-					changes["Result"]["Records"][0]["Operation"] == "PropertyUpdate",
+					changes["Result"]["Records"][0]["Operation"] == "PropertyUpdate" &&
+					changes["Result"]["ProjectState"]["Dirty"].get<bool>() &&
+					changes["Result"]["ProjectState"]["AuthoritativeRevision"] >
+						changes["Result"]["ProjectState"]["PersistedRevision"],
 				"EditorHost publishes the committed mutation as one journal record"
 			);
 			auto attributeMutation = call("SetAttribute", {
@@ -3750,6 +3810,73 @@ namespace {
 				OversizedCustomVersion["Error"]["Code"] == "MalformedRequest" &&
 				call("PollChanges", Json::object(), "test-token")["Result"]["Records"].empty(),
 				"EditorHost rejects custom definition versions outside uint32 without mutation or journaling");
+		}
+
+		auto Save = call("SaveProject", Json::object(), "test-token");
+		Check(Save["Ok"].get<bool>() && !Save["Result"]["Dirty"].get<bool>() &&
+			Save["Result"]["PersistedRevision"] == Save["Result"]["AuthoritativeRevision"],
+			"Save records the exact persisted revision and leaves an unchanged project clean");
+		{
+			std::ifstream SavedProject(temporaryRoot / ".gargantuan" / "project.instance.json", std::ios::binary);
+			Json SavedDocument;
+			SavedProject >> SavedDocument;
+			Check(SavedDocument["Version"] == 4,
+				"Save preserves the current project instance format version");
+		}
+		const auto SaveAsRoot = temporaryRoot.parent_path() /
+			(temporaryRoot.filename().string() + "-save-as");
+		struct SaveAsCleanup {
+			std::filesystem::path Root;
+			~SaveAsCleanup() { std::filesystem::remove_all(Root); }
+		} SaveAsCleanupState{SaveAsRoot};
+		auto SaveAs = call("SaveProjectAs", {{"Destination", SaveAsRoot.string()}}, "test-token");
+		Check(SaveAs["Ok"].get<bool>() && SaveAs["Result"]["CurrentDestination"] == SaveAsRoot.generic_string() &&
+			std::filesystem::is_regular_file(SaveAsRoot / ".gargantuan" / "project.instance.json") &&
+			std::filesystem::is_regular_file(SaveAsRoot / ".gargantuan" / "prerun.luau"),
+			"Save As persists the existing project format and adopts the destination only after success");
+		if (editable != objects.end()) {
+			Check(call("SetProperty", {
+				{"Object", (*editable)["Id"]}, {"Property", "Name"},
+				{"Value", {{"Type", "String"}, {"Value", "DirtyAfterSaveAs"}}},
+			}, "test-token")["Ok"].get<bool>(), "post-Save-As mutation succeeds");
+			(void)call("PollChanges", Json::object(), "test-token");
+		}
+		auto StateBeforeFailedSaveAs = call("GetProjectState", Json::object(), "test-token");
+		const auto InvalidSaveAsDestination = SaveAsRoot / "not-a-directory";
+		{
+			std::ofstream InvalidDestinationFile(InvalidSaveAsDestination);
+			InvalidDestinationFile << "occupied";
+		}
+		auto FailedSaveAs = call("SaveProjectAs", {{"Destination", InvalidSaveAsDestination.string()}}, "test-token");
+		auto StateAfterFailedSaveAs = call("GetProjectState", Json::object(), "test-token");
+		Check(!FailedSaveAs["Ok"].get<bool>() && FailedSaveAs["Error"]["Code"] == "InvalidDestination" &&
+			StateAfterFailedSaveAs["Result"]["CurrentDestination"] == SaveAsRoot.generic_string() &&
+			StateAfterFailedSaveAs["Result"] == StateBeforeFailedSaveAs["Result"] &&
+			StateAfterFailedSaveAs["Result"]["Dirty"].get<bool>(),
+			"failed Save As preserves the prior destination, persisted revision, and dirty state");
+		if (editable != objects.end()) {
+			auto BeforeRaceState = call("GetProjectState", Json::object(), "test-token");
+			host.SetPersistenceCheckpointForTesting([&] {
+				auto DuringSaveMutation = call("SetProperty", {
+					{"Object", (*editable)["Id"]}, {"Property", "Name"},
+					{"Value", {{"Type", "String"}, {"Value", "MutationDuringSave"}}},
+				}, "test-token");
+				Check(DuringSaveMutation["Ok"].get<bool>(),
+					"deterministic mutation commits while the captured save is before replacement");
+			});
+			auto RacedSave = call("SaveProject", Json::object(), "test-token");
+			host.SetPersistenceCheckpointForTesting({});
+			const auto CapturedRevision = BeforeRaceState["Result"]["AuthoritativeRevision"].get<std::uint64_t>();
+			Check(RacedSave["Ok"].get<bool>() && RacedSave["Result"]["PersistedRevision"] == CapturedRevision &&
+				RacedSave["Result"]["AuthoritativeRevision"] == CapturedRevision + 1 &&
+				RacedSave["Result"]["Dirty"].get<bool>(),
+				"Save reports persisted revision N and remains dirty when a mutation commits at N+1");
+			std::ifstream RacedFile(SaveAsRoot / ".gargantuan" / "project.instance.json", std::ios::binary);
+			std::stringstream RacedContents;
+			RacedContents << RacedFile.rdbuf();
+			Check(RacedContents.str().find("MutationDuringSave") == std::string::npos,
+				"raced Save file contains exactly the captured revision rather than later state");
+			(void)call("PollChanges", Json::object(), "test-token");
 		}
 
 		auto captureBeforeConfiguration = call("CaptureViewport", Json::object(), "test-token");
@@ -4016,6 +4143,7 @@ int main() {
 	TestCustomClassRuntime();
 	TestSerializationGoldenFixtures();
 	TestProjectCreationJsonNames();
+	TestProjectRevisionPersistence();
 	TestEditorHostProtocol();
 	TestLuauExceptionBoundary();
 	TestLuauEmbeddingCompatibility();

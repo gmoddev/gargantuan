@@ -20,6 +20,13 @@ Each launch requires a random token supplied with `--editor-token`. Every
 request repeats that token. This is process association, not a claim of strong
 authentication against a hostile local user.
 
+Project persistence uses `SaveProject`, `SaveProjectAs`, and `GetProjectState`.
+State contains `AuthoritativeRevision`, `PersistedRevision`, derived `Dirty`,
+and `CurrentDestination`. Open and snapshot return it under `ProjectState`;
+journal polling carries it beside the independent cursor and records. Save
+accepts no revision or dirty input. Save As accepts only `Destination`, adopts
+it after successful atomic persistence, and preserves the instance format.
+
 ## Envelope and limits
 
 Requests have exactly these fields:

@@ -9,11 +9,13 @@
 #include "gargantuan/editor/EditorViewport.hpp"
 #include "gargantuan/editor/SharedFrameRing.hpp"
 #include "gargantuan/filesystem/DiskFilesystem.hpp"
+#include "gargantuan/filesystem/Project.hpp"
 #include "gargantuan/render/RenderExtractor.hpp"
 #include "gargantuan/runtime/ChangeJournal.hpp"
 #include "gargantuan/runtime/MutationGateway.hpp"
 
 #include <cstddef>
+#include <functional>
 #include <istream>
 #include <memory>
 #include <optional>
@@ -36,11 +38,17 @@ namespace gargantuan {
 
 		[[nodiscard]] std::string HandleRequest(std::string_view request);
 		int Run(std::istream &input, std::ostream &output);
+		void SetPersistenceCheckpointForTesting(std::function<void()> checkpoint) {
+			PersistenceCheckpointForTesting = std::move(checkpoint);
+		}
 
 	  private:
 		std::string SessionToken;
 		std::unique_ptr<DiskFilesystem> Filesystem;
+		std::optional<Project> CurrentProject;
 		std::shared_ptr<DataModel> World;
+		std::uint64_t PersistedRevision = 0;
+		std::function<void()> PersistenceCheckpointForTesting;
 		std::optional<ChangeCursor> Cursor;
 		MutationGateway Mutations;
 		ScriptSecurityContext StudioSecurity = ScriptSecurityContext::StudioCoreUi();

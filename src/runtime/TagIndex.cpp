@@ -1,5 +1,6 @@
 #include "gargantuan/runtime/TagIndex.hpp"
 
+#include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Instance.hpp"
 #include "gargantuan/runtime/ChangeJournal.hpp"
 #include "gargantuan/runtime/ExecutionDomain.hpp"
@@ -78,6 +79,8 @@ namespace gargantuan {
 		if (existingId != InvalidTagId && forward != ObjectToTags.end() && forward->second.contains(existingId)) return false;
 		if (forward != ObjectToTags.end() && forward->second.size() >= MaximumTagsPerInstance)
 			throw std::invalid_argument("Instance exceeds its tag count limit");
+		auto dataModel = std::dynamic_pointer_cast<DataModel>(ObjectRegistry::Get().Lookup(scope));
+		if (dataModel) dataModel->EnsureAuthoritativeRevisionAvailable();
 
 		const TagAddedChange change{std::string(name)};
 		const auto id = Intern(name);
@@ -112,6 +115,7 @@ namespace gargantuan {
 			ReleaseIfUnused(id);
 			throw;
 		}
+		if (dataModel) dataModel->AdvanceAuthoritativeRevision();
 		return true;
 	}
 
@@ -127,6 +131,8 @@ namespace gargantuan {
 		const auto id = Find(name);
 		auto forward = ObjectToTags.find(object);
 		if (id == InvalidTagId || forward == ObjectToTags.end() || !forward->second.contains(id)) return false;
+		auto dataModel = std::dynamic_pointer_cast<DataModel>(ObjectRegistry::Get().Lookup(scope));
+		if (dataModel) dataModel->EnsureAuthoritativeRevisionAvailable();
 		const TagRemovedChange change{std::string(name)};
 		auto reverse = TagToObjects.find(id);
 		if (reverse == TagToObjects.end() || !reverse->second.contains(object))
@@ -136,6 +142,7 @@ namespace gargantuan {
 		reverse->second.erase(object);
 		if (forward->second.empty()) ObjectToTags.erase(forward);
 		ReleaseIfUnused(id);
+		if (dataModel) dataModel->AdvanceAuthoritativeRevision();
 		return true;
 	}
 

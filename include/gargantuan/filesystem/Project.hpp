@@ -6,12 +6,19 @@
 #include "gargantuan/filesystem/BaseFilesystem.hpp"
 
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <string>
+#include <cstdint>
 
 namespace gargantuan {
 	class Project {
 	  public:
+		struct PersistenceSnapshot {
+			std::uint64_t Revision = 0;
+			std::string Contents;
+		};
+
 		std::filesystem::path Root;
 		std::filesystem::path RootConfiguration;
 		std::filesystem::path InstanceFilePath;
@@ -25,9 +32,17 @@ namespace gargantuan {
 		);
 
 		static Project fromExisting(BaseFilesystem *fs);
+		static Project forDestination(BaseFilesystem *fs, InstanceSerialization::InstanceFormat format);
 
 		std::shared_ptr<DataModel> DeserializeGame();
-		void SerializeGame(std::shared_ptr<DataModel> game);
+		[[nodiscard]] PersistenceSnapshot CaptureGame(
+			const std::shared_ptr<DataModel> &game,
+			std::uint64_t revision
+		) const;
+		void PersistGameAtomically(
+			const PersistenceSnapshot &snapshot,
+			const std::function<void()> &beforeReplace = {}
+		) const;
 
 	  private:
 		BaseFilesystem *Filesystem;

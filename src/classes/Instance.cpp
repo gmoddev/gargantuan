@@ -331,8 +331,10 @@ namespace gargantuan {
 	void Instance::Destroy() {
 		AssertAuthoritativeMutation("Instance::Destroy");
 		if (Destroyed || DestroyingState) return;
+		if (auto dataModel = GetDataModel()) dataModel->EnsureAuthoritativeRevisionAvailable();
 		DestroyingState = true;
 		Destroyed = true;
+		auto dataModel = GetDataModel();
 		const auto objectId = GetObjectId();
 		const auto scope = GetReplicationScopeId();
 		if (auto dataModel = GetDataModel()) dataModel->Tags.RemoveAll(scope, objectId);
@@ -353,6 +355,7 @@ namespace gargantuan {
 
 		SetParent(nullptr);
 		ChangeJournal::Get().Commit(scope, objectId, ObjectDestroyedChange{});
+		if (dataModel) dataModel->AdvanceAuthoritativeRevision();
 	}
 
 	void Instance::AssertIsAlive() const {
@@ -374,6 +377,8 @@ namespace gargantuan {
 				replicated,
 			}
 		);
+		if (propertyName == "Name" || property->PersistencePolicy == InstanceProperty::Persistence::Saved)
+			if (auto dataModel = GetDataModel()) dataModel->AdvanceAuthoritativeRevision();
 		GetPropertyChangedSignal(std::string(propertyName))->Fire({});
 	}
 
@@ -462,6 +467,8 @@ namespace gargantuan {
 		auto *property = const_cast<Instance *>(this)->FindProperty(std::string(propertyName));
 		if (!property) throw std::invalid_argument("Property does not exist");
 		if (property->Validate && !property->Validate(value)) throw std::invalid_argument("Property validation failed");
+		if (propertyName == "Name" || property->PersistencePolicy == InstanceProperty::Persistence::Saved)
+			if (auto dataModel = GetDataModel()) dataModel->EnsureAuthoritativeRevisionAvailable();
 	}
 
 	MutationStatus Instance::ApplyPropertyMutation(
@@ -503,6 +510,11 @@ namespace gargantuan {
 				),
 				securityContext
 			);
+		}
+		if (property->Read) {
+			auto current = EncodeNativeWireValue(property->Read(this));
+			auto requested = EncodeNativeWireValue(value);
+			if (current && requested && *current == *requested) return MutationStatus::Success;
 		}
 		property->Write(this, value);
 		return MutationStatus::Success;
@@ -565,6 +577,7 @@ namespace gargantuan {
 			candidate.erase(found);
 		}
 		(void)ValidateAttributeCollection(candidate);
+		if (auto dataModel = GetDataModel()) dataModel->EnsureAuthoritativeRevisionAvailable();
 		Attributes.swap(candidate);
 		try {
 			ChangeJournal::Get().Commit(GetReplicationScopeId(), GetObjectId(), AttributeUpdatedChange{
@@ -574,6 +587,7 @@ namespace gargantuan {
 			Attributes.swap(candidate);
 			throw;
 		}
+		if (auto dataModel = GetDataModel()) dataModel->AdvanceAuthoritativeRevision();
 		auto signal = AttributeChangedSignals.find(std::string(name));
 		if (signal != AttributeChangedSignals.end()) signal->second->Fire({});
 		return MutationStatus::Success;
@@ -650,6 +664,7 @@ namespace gargantuan {
 			candidate[extensionId][std::string(propertyName)] = value;
 		}
 		(void)ValidateExtensionOverrides(this, candidate);
+		if (auto dataModel = GetDataModel()) dataModel->EnsureAuthoritativeRevisionAvailable();
 		ExtensionValues.swap(candidate);
 		try {
 			ChangeJournal::Get().Commit(GetReplicationScopeId(), GetObjectId(), ExtensionPropertyUpdatedChange{
@@ -659,6 +674,7 @@ namespace gargantuan {
 			ExtensionValues.swap(candidate);
 			throw;
 		}
+		if (auto dataModel = GetDataModel()) dataModel->AdvanceAuthoritativeRevision();
 		return MutationStatus::Success;
 	}
 
@@ -725,6 +741,7 @@ namespace gargantuan {
 			}
 		} else candidate[declaringClassId][std::string(propertyName)] = value;
 		(void)ValidateCustomPropertyOverrides(this, candidate);
+		if (auto dataModel = GetDataModel()) dataModel->EnsureAuthoritativeRevisionAvailable();
 		CustomPropertyValues.swap(candidate);
 		try {
 			ChangeJournal::Get().Commit(GetReplicationScopeId(), GetObjectId(), PropertyUpdatedChange{
@@ -734,6 +751,7 @@ namespace gargantuan {
 			CustomPropertyValues.swap(candidate);
 			throw;
 		}
+		if (auto dataModel = GetDataModel()) dataModel->AdvanceAuthoritativeRevision();
 		GetPropertyChangedSignal(std::string(propertyName))->Fire({});
 		return MutationStatus::Success;
 	}
@@ -849,6 +867,12 @@ namespace gargantuan {
 		if (newParent) newParent->AssertIsAlive();
 		auto oldParent = ParentReference.lock();
 		if (oldParent == newParent) return;
+		auto oldDataModel = oldParent ? oldParent->GetDataModel() : nullptr;
+		auto newDataModel = newParent ? newParent->GetDataModel() : nullptr;
+		if (!DestroyingState) {
+			if (oldDataModel) oldDataModel->EnsureAuthoritativeRevisionAvailable();
+			if (newDataModel && newDataModel != oldDataModel) newDataModel->EnsureAuthoritativeRevisionAvailable();
+		}
 
 		std::shared_ptr<Instance> self = shared_from_this();
 		if (newParent == self) throw std::invalid_argument("An Instance cannot be parented to itself");
@@ -908,6 +932,10 @@ namespace gargantuan {
 		}
 
 		FireAncestryChanged(self, newParent);
+		if (!DestroyingState) {
+			if (oldDataModel) oldDataModel->AdvanceAuthoritativeRevision();
+			if (newDataModel && newDataModel != oldDataModel) newDataModel->AdvanceAuthoritativeRevision();
+		}
 	}
 
 	void Instance::ClearAllChildren() {

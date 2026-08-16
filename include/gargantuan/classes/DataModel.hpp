@@ -5,6 +5,7 @@
 #include "gargantuan/filesystem/BaseFilesystem.hpp"
 #include "gargantuan/runtime/TagIndex.hpp"
 
+#include <cstdint>
 #include <filesystem>
 
 namespace gargantuan {
@@ -16,5 +17,14 @@ namespace gargantuan {
 		std::filesystem::path Root;
 		BaseFilesystem *Filesystem = nullptr;
 		TagIndex Tags;
+
+		static constexpr std::uint64_t InitialProjectRevision = 1;
+		[[nodiscard]] std::uint64_t GetAuthoritativeRevision() const { return AuthoritativeRevision; }
+		void EnsureAuthoritativeRevisionAvailable() const;
+		void AdvanceAuthoritativeRevision();
+		void InitializeLoadedProjectRevision();
+
+	  private:
+		std::uint64_t AuthoritativeRevision = InitialProjectRevision;
 	};
 }

@@ -5,11 +5,18 @@
 
 #include <SDL3/SDL.h>
 #include <format>
+#include <fstream>
 #include <magic_enum/magic_enum.hpp>
+#include <chrono>
+#include <atomic>
 #include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <tuple>
+
+#if defined(_WIN32)
+#include <Windows.h>
+#endif
 
 namespace gargantuan {
 	using InstanceFormat = InstanceSerialization::InstanceFormat;
@@ -85,6 +92,13 @@ namespace gargantuan {
 		return self;
 	}
 
+	Project Project::forDestination(BaseFilesystem *fs, InstanceFormat format) {
+		Project self(fs);
+		self.InstanceFileFormat = format;
+		self.InstanceFilePath = self.RootConfiguration / GetProjectInstanceFilename(format);
+		return self;
+	}
+
 	std::shared_ptr<DataModel> Project::DeserializeGame() {
 		auto stream = Filesystem->ReadFileToStringStream(InstanceFilePath);
 
@@ -110,4 +124,54 @@ namespace gargantuan {
 			return game;
 		}
 	};
+
+	Project::PersistenceSnapshot Project::CaptureGame(
+		const std::shared_ptr<DataModel> &game,
+		std::uint64_t revision
+	) const {
+		if (!game) throw std::invalid_argument("Cannot persist a null DataModel");
+		if (revision == 0) throw std::invalid_argument("Cannot persist revision zero");
+		auto root = std::static_pointer_cast<Instance>(game);
+		return {revision, InstanceSerialization::Serialize(InstanceFileFormat, root)};
+	}
+
+	void Project::PersistGameAtomically(
+		const PersistenceSnapshot &snapshot,
+		const std::function<void()> &beforeReplace
+	) const {
+		if (snapshot.Revision == 0) throw std::invalid_argument("Cannot persist revision zero");
+		if (InstanceFileFormat == InstanceFormat::Binary)
+			throw std::runtime_error("Binary instance formats are not yet implemented");
+		std::filesystem::create_directories(RootConfiguration);
+		static std::atomic_uint64_t Counter = 1;
+		const auto suffix = std::format(
+			".saving-{}-{}",
+			std::chrono::steady_clock::now().time_since_epoch().count(),
+			Counter.fetch_add(1, std::memory_order_relaxed)
+		);
+		const auto temporary = std::filesystem::path(InstanceFilePath.string() + suffix);
+		try {
+			{
+				std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
+				if (!output) throw std::runtime_error("Could not open the temporary project file");
+				output.write(snapshot.Contents.data(), static_cast<std::streamsize>(snapshot.Contents.size()));
+				output.flush();
+				if (!output) throw std::runtime_error("Could not write the temporary project file");
+				output.close();
+				if (!output) throw std::runtime_error("Could not close the temporary project file");
+			}
+			if (beforeReplace) beforeReplace();
+#if defined(_WIN32)
+			if (!MoveFileExW(
+				temporary.c_str(), InstanceFilePath.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH
+			)) throw std::runtime_error(std::format("Atomic project replacement failed ({})", GetLastError()));
+#else
+			std::filesystem::rename(temporary, InstanceFilePath);
+#endif
+		} catch (...) {
+			std::error_code ignored;
+			std::filesystem::remove(temporary, ignored);
+			throw;
+		}
+	}
 }

@@ -47,6 +47,7 @@ The initial protocol supports:
 - deterministic snapshot capture;
 - ordered journal polling; and
 - scalar property mutation through the authoritative mutation gateway;
+- engine-owned project revision state plus atomic Save and Save As;
 - bounded offscreen RGB viewport capture;
 - absolute editor-camera commands; and
 - viewport picking that returns a stable `ObjectId`.
@@ -93,8 +94,9 @@ will own process lifecycle, IPC, windows, viewport presentation, filesystem
 dialogs, and Luau runtime bootstrap. Explorer, Properties, selection, commands,
 settings, and most workflows should consume explicit `DocumentService`,
 `SelectionService`, `ViewportService`, and `CommandService` APIs from Luau.
-Save operations, play sessions, reference-valued editing, and multi-command
-transactions remain future interface work.
+Play sessions, reference-valued editing, structural editing, and multi-command
+transactions remain future interface work. Save and Save As persist an
+engine-captured project snapshot; Studio never serializes its document cache.
 The current private proof now uses an Avalonia C# host to bootstrap a restricted
 Studio-domain Luau VM. The public boundary exposes only stable IDs, schema,
 snapshot/journal data, structured commands, and viewport pixels. Script domains
