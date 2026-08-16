@@ -184,5 +184,6 @@ it through both the simulator and the optional real GNS adapter. Identical
 simulator state, intent order, limits, and ticks produce identical submission traces.
 
 The scheduler is explicitly tick/flush driven; it does not own a thread or
-timer. `RemoteManager`, Luau remotes, authentication/tickets, Players, Node, and
-Studio play mode remain unimplemented.
+timer. `RemoteManager` now supplies bounded Luau application traffic without
+changing scheduler semantics. Authentication/tickets, Players, Node, and Studio
+play mode remain unimplemented.

@@ -328,11 +328,22 @@ if(BUILD_TESTING)
 	target_link_libraries(gargantuan_scheduler_contract_tests PRIVATE gargantuan_core)
 	add_executable(gargantuan_replication_tests "tests/ReplicationTests.cpp")
 	target_link_libraries(gargantuan_replication_tests PRIVATE gargantuan_core)
+	add_executable(gargantuan_remote_tests "tests/RemoteTests.cpp")
+	target_link_libraries(gargantuan_remote_tests PRIVATE gargantuan_core)
+	add_executable(gargantuan_remote_luau_tests "tests/RemoteLuauTests.cpp")
+	target_link_libraries(gargantuan_remote_luau_tests PRIVATE gargantuan_core)
 	add_executable(gargantuan_replication_benchmark "tests/ReplicationBenchmark.cpp")
 	target_link_libraries(gargantuan_replication_benchmark PRIVATE gargantuan_core)
+	add_executable(gargantuan_remote_benchmark "tests/RemoteBenchmark.cpp")
+	target_link_libraries(gargantuan_remote_benchmark PRIVATE gargantuan_core)
 	if(GARGANTUAN_WITH_GNS)
 		add_executable(gargantuan_real_transport_tests "tests/GameNetworkingSocketsTransportTests.cpp")
 		target_link_libraries(gargantuan_real_transport_tests PRIVATE
+			gargantuan_core
+			gargantuan_gns_transport
+		)
+		add_executable(gargantuan_remote_real_transport_tests "tests/RemoteGnsTests.cpp")
+		target_link_libraries(gargantuan_remote_real_transport_tests PRIVATE
 			gargantuan_core
 			gargantuan_gns_transport
 		)
@@ -395,10 +406,25 @@ if(BUILD_TESTING)
 				"$<TARGET_FILE:SDL3::SDL3>"
 				"$<TARGET_FILE_DIR:gargantuan_replication_tests>"
 		)
+		add_custom_command(TARGET gargantuan_remote_tests POST_BUILD
+			COMMAND ${CMAKE_COMMAND} -E copy_if_different
+				"$<TARGET_FILE:SDL3::SDL3>"
+				"$<TARGET_FILE_DIR:gargantuan_remote_tests>"
+		)
+		add_custom_command(TARGET gargantuan_remote_luau_tests POST_BUILD
+			COMMAND ${CMAKE_COMMAND} -E copy_if_different
+				"$<TARGET_FILE:SDL3::SDL3>"
+				"$<TARGET_FILE_DIR:gargantuan_remote_luau_tests>"
+		)
 		add_custom_command(TARGET gargantuan_replication_benchmark POST_BUILD
 			COMMAND ${CMAKE_COMMAND} -E copy_if_different
 				"$<TARGET_FILE:SDL3::SDL3>"
 				"$<TARGET_FILE_DIR:gargantuan_replication_benchmark>"
+		)
+		add_custom_command(TARGET gargantuan_remote_benchmark POST_BUILD
+			COMMAND ${CMAKE_COMMAND} -E copy_if_different
+				"$<TARGET_FILE:SDL3::SDL3>"
+				"$<TARGET_FILE_DIR:gargantuan_remote_benchmark>"
 		)
 		if(GARGANTUAN_BUILD_SERIALIZATION_BENCHMARKS)
 			add_custom_command(TARGET gargantuan_serialization_benchmark POST_BUILD
@@ -412,6 +438,11 @@ if(BUILD_TESTING)
 				COMMAND ${CMAKE_COMMAND} -E copy_if_different
 					"$<TARGET_FILE:SDL3::SDL3>"
 					"$<TARGET_FILE_DIR:gargantuan_real_transport_tests>"
+			)
+			add_custom_command(TARGET gargantuan_remote_real_transport_tests POST_BUILD
+				COMMAND ${CMAKE_COMMAND} -E copy_if_different
+					"$<TARGET_FILE:SDL3::SDL3>"
+					"$<TARGET_FILE_DIR:gargantuan_remote_real_transport_tests>"
 			)
 			set(GARGANTUAN_PROTOBUF_RUNTIMES "")
 			if(TARGET protobuf::libprotobuf)
@@ -430,6 +461,11 @@ if(BUILD_TESTING)
 					COMMAND ${CMAKE_COMMAND} -E copy_if_different
 						"${GARGANTUAN_PROTOBUF_RUNTIME}"
 						"$<TARGET_FILE_DIR:gargantuan_real_transport_tests>"
+				)
+				add_custom_command(TARGET gargantuan_remote_real_transport_tests POST_BUILD
+					COMMAND ${CMAKE_COMMAND} -E copy_if_different
+						"${GARGANTUAN_PROTOBUF_RUNTIME}"
+						"$<TARGET_FILE_DIR:gargantuan_remote_real_transport_tests>"
 				)
 			endforeach()
 		endif()
@@ -455,9 +491,13 @@ if(BUILD_TESTING)
 	add_test(NAME gargantuan_simulated_transport COMMAND gargantuan_simulated_transport_tests)
 	add_test(NAME gargantuan_scheduler_contract COMMAND gargantuan_scheduler_contract_tests)
 	add_test(NAME gargantuan_replication COMMAND gargantuan_replication_tests)
+	add_test(NAME gargantuan_remote COMMAND gargantuan_remote_tests)
+	add_test(NAME gargantuan_remote_luau COMMAND gargantuan_remote_luau_tests)
 	add_test(NAME gargantuan_replication_benchmark_smoke COMMAND gargantuan_replication_benchmark)
+	add_test(NAME gargantuan_remote_benchmark_smoke COMMAND gargantuan_remote_benchmark)
 	if(GARGANTUAN_WITH_GNS)
 		add_test(NAME gargantuan_real_transport COMMAND gargantuan_real_transport_tests)
+		add_test(NAME gargantuan_remote_real_transport COMMAND gargantuan_remote_real_transport_tests)
 	endif()
 	if(GARGANTUAN_WITH_FILAMENT)
 		add_test(NAME gargantuan_filament_renderer COMMAND gargantuan_filament_renderer_tests)

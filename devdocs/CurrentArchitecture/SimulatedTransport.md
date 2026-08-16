@@ -138,6 +138,6 @@ Bandwidth remains a clear per-direction serializer. The production
 backend.
 
 `NetworkScheduler`, `ReplicationCoordinator`, the basic binary replication
-codec, and reliable replica execution are implemented above this backend.
-`RemoteManager`, Luau remotes, authentication/tickets, Players, realtime
-replication, Node, and Studio play mode remain unimplemented.
+codec, reliable replica execution, and bounded Luau Remotes are implemented
+above this backend. Authentication/tickets, Players, realtime replication,
+Node, and Studio play mode remain unimplemented.

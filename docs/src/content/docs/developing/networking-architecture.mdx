@@ -24,7 +24,10 @@ GameNetworkingSockets adapter proves real localhost connection, message, limit,
 failure, teardown, and basic-replication behavior. Reliable basic client
 replication now provides a per-peer coordinator, versioned bounded binary codec,
 schema-compatible baseline, incremental application, and replica applicator.
-Luau remotes and realtime replication remain unfinished.
+Bounded Luau remotes now provide four schema-backed application primitives, a
+versioned binary codec, visibility-checked Object references, finite requests,
+Luau coroutine suspension, deterministic simulator coverage, and real localhost
+GNS coverage. Realtime replication remains unfinished.
 
 ## Context
 
@@ -149,15 +152,19 @@ unsafe or underspecified behavior. The required semantic primitives are:
 | Remote request | Reliable request/response | Correlated by request ID and always terminates |
 
 `RemoteEvent`, `UnreliableRemoteEvent`,
-`UnreliableSequencedRemoteEvent`, and `RemoteFunction` are preferred candidate
-public names because they are understandable to Roblox developers. The exact
-class surface remains provisional until the contracts are prototyped.
+`UnreliableSequencedRemoteEvent`, and `RemoteFunction` are the implemented
+public class names. Peer slot/generation arguments and RemoteFunction handler
+setter spelling remain provisional until the complete `Players` service exists;
+the delivery and boundedness contracts are implemented.
 
 A remote request suspends only its calling Luau coroutine. Every request has a
 finite deadline and terminates with a response, timeout, cancellation,
 disconnect, or structured error. Server-to-client requests never wait
 indefinitely on an untrusted client. The runtime enforces per-peer and per-remote
-concurrency, byte, call-rate, decode-cost, and handler-cost budgets.
+concurrency, byte, call-rate, decode-cost, and handler-cost budgets. Request
+continuations restore their original script security context, terminal requests
+discard every unsent materialization-dependent frame, and a fair aggregate
+dispatch ceiling prevents one peer from monopolizing the runtime safe point.
 
 No implicit causal ordering is promised between a remote and replicated state
 on another channel. When a remote requires a newly published object reference,
@@ -378,7 +385,7 @@ of the accepted decisions above.
   Tag, extension/custom-class, unpublish, and destroy operations. The production
   scheduler feeds both simulator and localhost GNS paths, and the client applies
   validated groups without an upstream authority path.
-- [ ] **Add bounded Luau remotes.** Preserve familiar event/request ergonomics over
+- [x] **Add bounded Luau remotes.** Preserve familiar event/request ergonomics over
    the tested scheduler and transport semantics.
 - [ ] **Add realtime replication when gameplay requires it.** Introduce sequenced
    transforms/physics, ownership leases, interpolation, and correction.

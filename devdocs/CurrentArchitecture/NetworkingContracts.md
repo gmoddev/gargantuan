@@ -16,21 +16,21 @@ related_adrs:
 
 ## Implemented contract boundary
 
-Gargantuan now has transport-independent native value contracts for future game
+Gargantuan has transport-independent native value contracts for game
 networking. They contain no socket, packet, backend handle, runtime pointer,
 thread, authentication ticket, or DataModel mutation authority.
 
 ```text
 authoritative DataModel -> ChangeJournal
-    -> future ReplicationCoordinator
+    -> ReplicationCoordinator
     -> ReplicationOperation values
-    -> future NetworkScheduler implementation
+    -> NetworkScheduler
     -> NetworkMessageIntent
     -> IGameTransport
 
-future Luau remotes -> future RemoteManager
-    -> remote request/event values
-    -> future NetworkScheduler implementation
+Luau remotes -> RemoteManager
+    -> bounded remote request/event values
+    -> NetworkScheduler
     -> NetworkMessageIntent
     -> IGameTransport
 ```
@@ -151,14 +151,14 @@ the production `NetworkScheduler`. See `NetworkSchedulerContract.md`.
 ## Deliberately not implemented
 
 There is now a versioned basic-replication binary codec, production scheduler,
-per-peer coordinator, and client replica applicator. Their reliable-only scope
-is documented in `BasicClientReplication.md`. There is no remote runtime,
-request timer, coroutine suspension, realtime replication,
-authentication/ticket validation, player model, spatial interest management,
-Node integration, or Studio play session. The deterministic in-memory
+per-peer coordinator, client replica applicator, and bounded Remote runtime.
+Their scopes are documented in `BasicClientReplication.md` and
+`LuauRemotes.md`. Realtime replication, authentication/ticket validation, the
+player model, spatial interest management, Node integration, and Studio play
+sessions remain unimplemented. The deterministic in-memory
 implementation is documented in `SimulatedTransport.md`; the opt-in real GNS
-adapter is documented in `RealGameTransport.md`. No contract type is exposed to
-Luau.
+adapter is documented in `RealGameTransport.md`. Backend contract types remain
+private; only the schema-backed Remote developer surface is exposed to Luau.
 
 Existing EditorHost request strings, `ChangeCursor`, `WireJournalRecord`, and
 `MutationCompletion` remain specific to IPC, authoritative history/debug

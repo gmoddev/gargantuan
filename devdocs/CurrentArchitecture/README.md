@@ -25,6 +25,9 @@
 - [Real game transport](RealGameTransport.md) defines the optional pinned
   GameNetworkingSockets adapter, handle isolation, lifecycle mapping, private
   compatibility envelope, limits, polling, statistics, and authority boundary.
+- [Bounded Luau remotes](LuauRemotes.md) defines schema-backed application
+  events and requests, the binary protocol, visibility/deadline/resource
+  policy, Luau coroutine boundary, and simulator/GNS verification.
 
 See [Runtime foundation](./FoundationRuntime.md) for the implemented ownership,
 ObjectId, JobSystem, execution-domain, reflection-schema, and committed-change
@@ -115,10 +118,11 @@ native definition map; the present DataModel registers only `ProcessService`,
 `RunService`, `UserInputService`, and `Workspace`
 (`src/classes/DataModel.cpp:9-16`). `Workspace` creates a current Camera
 (`src/services/Workspace.cpp:7-9`). A `ReplicatedStorage` class/source scaffold
-exists but is not registered. There is no gameplay replication system or
-production scheduler; the networking subsystem has pure contracts, an in-memory
-deterministic test transport, a validated scheduler policy contract, and an
-optional real GNS transport adapter.
+exists but is not registered. Basic reliable client replication, the production
+scheduler, and bounded Luau application remotes now exist as networking
+subsystem components. They are not yet wired into a complete multiplayer
+executable or `Players` service. The deterministic simulator and optional real
+GNS adapter exercise both replication and Remote paths.
 
 ## Frame execution model
 

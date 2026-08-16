@@ -49,6 +49,12 @@ const types = {
 	UDim2 = datatype("UDim2"),
 	Vector2 = datatype("Vector2"),
 	Vector3 = datatype("Vector3", "glm::vec3"),
+	RemoteSignal = type({
+		kind = literal("datatype"),
+		cType = "std::shared_ptr<gargantuan::BaseSignal>",
+		cIncludes = { "<memory>", '"gargantuan/datatypes/Signal.hpp"' },
+		luauType = "Signal<any...>",
+	}),
 }
 
 function types.Instance(className: string?): Type

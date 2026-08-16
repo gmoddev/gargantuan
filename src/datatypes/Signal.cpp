@@ -2,6 +2,7 @@
 // AI claude slop
 
 #include "gargantuan/datatypes/Signal.hpp"
+#include "gargantuan/scripting/ScriptSecurity.hpp"
 #include "gargantuan/scripting/StackGuard.hpp"
 #include "gargantuan/scripting/Userdata.hpp"
 #include "gargantuan/scripting/UserdataTag.hpp"
@@ -9,6 +10,7 @@
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_log.h>
 #include <algorithm>
+#include <exception>
 #include <lua.h>
 #include <lualib.h>
 #include <memory>
@@ -21,7 +23,9 @@ namespace gargantuan {
 		thread_local std::vector<std::pair<std::shared_ptr<BaseSignal>, BaseSignal::CallbackArgument>> DeferredSignals;
 	}
 
-	ScopedSignalDeferral::ScopedSignalDeferral() { ++SignalDeferralDepth; }
+	ScopedSignalDeferral::ScopedSignalDeferral() {
+		++SignalDeferralDepth;
+	}
 
 	ScopedSignalDeferral::~ScopedSignalDeferral() {
 		if (!Active) return;
@@ -137,10 +141,17 @@ namespace gargantuan {
 		auto connections = Connections;
 		FiringDepth++;
 
-		for (auto &connection : connections) {
-			if (connection && connection->Connected && connection->Callback) {
-				connection->Callback(value);
+		try {
+			for (auto &connection : connections) {
+				if (connection && connection->Connected && connection->Callback) connection->Callback(value);
 			}
+		} catch (...) {
+			FiringDepth--;
+			if (FiringDepth == 0)
+				std::erase_if(Connections, [](const SignalConnection::Pointer &connection) {
+					return !connection || !connection->Connected;
+				});
+			throw;
 		}
 
 		FiringDepth--;
@@ -194,14 +205,20 @@ namespace gargantuan {
 		int threadReference = lua_ref(L, -1);
 		lua_pop(L, 1);
 
+		const auto SecurityContext = GetCurrentScriptSecurityContext();
 		signal->Once(
-			[L, mainState, threadReference, signal](CallbackArgument value) {
-				int argumentCount = signal->LPushArgument(L, value);
-				int status = lua_resume(L, mainState, argumentCount);
-				if (status != LUA_OK && status != LUA_YIELD) {
-					SDL_Log("Failed to resume thread after signal: %s", lua_tostring(L, -1));
-					lua_pop(L, 1);
-				};
+			[L, mainState, threadReference, signal, SecurityContext](CallbackArgument value) {
+				ScriptSecurityScope SecurityScope(SecurityContext);
+				try {
+					int argumentCount = signal->LPushArgument(L, value);
+					int status = lua_resume(L, mainState, argumentCount);
+					if (status != LUA_OK && status != LUA_YIELD) {
+						SDL_Log("Failed to resume thread after signal: %s", lua_tostring(L, -1));
+						lua_pop(L, 1);
+					}
+				} catch (const std::exception &Error) {
+					SDL_Log("Failed to materialize signal arguments: %s", Error.what());
+				}
 
 				lua_unref(mainState, threadReference);
 			},
@@ -313,11 +330,13 @@ namespace gargantuan {
 		// }
 		// G_PROFILE_NAMED("Script", label.data(), label.size());
 
-		int arguments = signal->LPushArgument(thread, value);
-		int status = lua_resume(thread, mainState, arguments);
+		try {
+			int arguments = signal->LPushArgument(thread, value);
+			int status = lua_resume(thread, mainState, arguments);
 
-		if (status != LUA_OK && status != LUA_YIELD) {
-			SDL_Log("Signal error: %s", lua_tostring(thread, -1));
+			if (status != LUA_OK && status != LUA_YIELD) SDL_Log("Signal error: %s", lua_tostring(thread, -1));
+		} catch (const std::exception &Error) {
+			SDL_Log("Signal argument error: %s", Error.what());
 		}
 
 		lua_unref(mainState, threadReference);

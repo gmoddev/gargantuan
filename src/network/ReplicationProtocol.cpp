@@ -1,5 +1,6 @@
 #include "gargantuan/network/ReplicationProtocol.hpp"
 
+#include "gargantuan/network/BinaryCodec.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/runtime/AttributeValidation.hpp"
 #include "gargantuan/runtime/ProtocolInput.hpp"
@@ -20,121 +21,23 @@ namespace gargantuan::network {
 		constexpr std::size_t ReplicationSchemaEntryBytes = 21;
 		constexpr std::size_t MinimumReplicationOperationBytes = 9;
 
-		class Writer {
+		using Writer = GameBinaryWriter;
+		class Reader final : public GameBinaryReader {
 		  public:
-			explicit Writer(std::size_t MaximumBytes = std::numeric_limits<std::size_t>::max())
-				: MaximumBytes(MaximumBytes) {}
-
-			template <typename Value> void Integer(Value Number) {
-				if (!CanAppend(sizeof(Value))) return;
-				using Unsigned = std::make_unsigned_t<Value>;
-				auto Bits = static_cast<Unsigned>(Number);
-				for (std::size_t Index = 0; Index < sizeof(Value); ++Index)
-					Bytes.push_back(static_cast<std::byte>((Bits >> (Index * 8)) & 0xff));
-			}
-
-			void Float(float Value) {
-				Integer(std::bit_cast<std::uint32_t>(Value));
-			}
-			void Double(double Value) {
-				Integer(std::bit_cast<std::uint64_t>(Value));
-			}
-			void String(std::string_view Value) {
-				if (Value.size() > std::numeric_limits<std::uint32_t>::max() ||
-					!CanAppend(sizeof(std::uint32_t) + Value.size()))
-					return;
-				Integer(static_cast<std::uint32_t>(Value.size()));
-				Bytes.insert(
-					Bytes.end(),
-					reinterpret_cast<const std::byte *>(Value.data()),
-					reinterpret_cast<const std::byte *>(Value.data() + Value.size())
-				);
-			}
-			[[nodiscard]] bool Succeeded() const {
-				return !Failed;
-			}
-			std::vector<std::byte> Bytes;
-
-		  private:
-			bool CanAppend(std::size_t Count) {
-				if (Failed || Bytes.size() > MaximumBytes || Count > MaximumBytes - Bytes.size()) {
-					Failed = true;
-					return false;
-				}
-				return true;
-			}
-			std::size_t MaximumBytes;
-			bool Failed = false;
-		};
-
-		class Reader {
-		  public:
-			explicit Reader(std::span<const std::byte> Input) : Input(Input) {}
-
-			template <typename Value> bool Integer(Value &Number) {
-				if (Input.size() - Position < sizeof(Value)) return Fail("Replication frame is truncated");
-				using Unsigned = std::make_unsigned_t<Value>;
-				Unsigned Bits = 0;
-				for (std::size_t Index = 0; Index < sizeof(Value); ++Index)
-					Bits |= static_cast<Unsigned>(std::to_integer<unsigned char>(Input[Position++])) << (Index * 8);
-				Number = static_cast<Value>(Bits);
-				return true;
-			}
-
-			bool Float(float &Value) {
-				std::uint32_t Bits;
-				if (!Integer(Bits)) return false;
-				Value = std::bit_cast<float>(Bits);
-				return true;
-			}
-			bool Double(double &Value) {
-				std::uint64_t Bits;
-				if (!Integer(Bits)) return false;
-				Value = std::bit_cast<double>(Bits);
-				return true;
-			}
-			bool String(std::string &Value, std::size_t MaximumBytes) {
-				std::uint32_t Length;
-				if (!Integer(Length)) return false;
-				if (Length > MaximumBytes) return Fail("Replication string exceeds its limit");
-				if (Input.size() - Position < Length) return Fail("Replication string is truncated");
-				Value.assign(reinterpret_cast<const char *>(Input.data() + Position), Length);
-				Position += Length;
-				if (!IsValidProtocolUtf8(Value)) return Fail("Replication string is not valid UTF-8");
-				return true;
-			}
-			bool Fail(std::string Message) {
-				if (Error.empty()) Error = std::move(Message);
-				return false;
-			}
-			[[nodiscard]] bool Complete() const {
-				return Position == Input.size();
-			}
-			[[nodiscard]] std::size_t Remaining() const {
-				return Input.size() - Position;
-			}
-			std::string Error;
-
-		  private:
-			std::span<const std::byte> Input;
-			std::size_t Position = 0;
+			explicit Reader(std::span<const std::byte> Input) : GameBinaryReader(Input, "Replication frame") {}
 		};
 
 		void WriteObjectId(Writer &Output, ObjectId Id) {
-			Output.Integer(Id.Slot);
-			Output.Integer(Id.Generation);
+			WriteBinaryObjectId(Output, Id);
 		}
 		bool ReadObjectId(Reader &Input, ObjectId &Id) {
-			return Input.Integer(Id.Slot) && Input.Integer(Id.Generation) &&
-				   (Id.IsValid() || Input.Fail("Replication ObjectId is invalid"));
+			return ReadBinaryObjectId(Input, Id);
 		}
 		void WriteSchemaId(Writer &Output, SchemaId Id) {
-			Output.Integer(Id.High);
-			Output.Integer(Id.Low);
+			WriteBinarySchemaId(Output, Id);
 		}
 		bool ReadSchemaId(Reader &Input, SchemaId &Id) {
-			return Input.Integer(Id.High) && Input.Integer(Id.Low) &&
-				   (Id.IsValid() || Input.Fail("Replication SchemaId is invalid"));
+			return ReadBinarySchemaId(Input, Id);
 		}
 		void WriteOptionalObjectId(Writer &Output, const std::optional<ObjectId> &Id) {
 			Output.Integer<std::uint8_t>(Id ? 1 : 0);
@@ -154,170 +57,11 @@ namespace gargantuan::network {
 		}
 
 		void WriteWireValue(Writer &Output, const WireValue &Value) {
-			Output.Integer(static_cast<std::uint8_t>(Value.index()));
-			std::visit(
-				[&](const auto &Typed) {
-					using Type = std::decay_t<decltype(Typed)>;
-					if constexpr (std::is_same_v<Type, std::monostate>) {
-					} else if constexpr (std::is_same_v<Type, bool>)
-						Output.Integer<std::uint8_t>(Typed ? 1 : 0);
-					else if constexpr (std::is_same_v<Type, int>)
-						Output.Integer<std::int32_t>(Typed);
-					else if constexpr (std::is_same_v<Type, double>)
-						Output.Double(Typed);
-					else if constexpr (std::is_same_v<Type, WireFloat>)
-						Output.Float(Typed.Value);
-					else if constexpr (std::is_same_v<Type, std::string>)
-						Output.String(Typed);
-					else if constexpr (std::is_same_v<Type, WireVector2>) {
-						Output.Float(Typed.X);
-						Output.Float(Typed.Y);
-					} else if constexpr (std::is_same_v<Type, WireVector3>) {
-						Output.Float(Typed.X);
-						Output.Float(Typed.Y);
-						Output.Float(Typed.Z);
-					} else if constexpr (std::is_same_v<Type, WireColor3>) {
-						Output.Float(Typed.R);
-						Output.Float(Typed.G);
-						Output.Float(Typed.B);
-					} else if constexpr (std::is_same_v<Type, WireUDim>) {
-						Output.Float(Typed.Scale);
-						Output.Integer<std::int32_t>(Typed.Offset);
-					} else if constexpr (std::is_same_v<Type, WireUDim2>) {
-						Output.Float(Typed.X.Scale);
-						Output.Integer<std::int32_t>(Typed.X.Offset);
-						Output.Float(Typed.Y.Scale);
-						Output.Integer<std::int32_t>(Typed.Y.Offset);
-					} else if constexpr (std::is_same_v<Type, WireCFrame>) {
-						for (const auto Component : Typed.Components)
-							Output.Float(Component);
-					} else if constexpr (std::is_same_v<Type, WireEnumItem>) {
-						Output.String(Typed.EnumType);
-						Output.String(Typed.Item);
-					} else if constexpr (std::is_same_v<Type, WireSchemaEnumValue>) {
-						WriteSchemaId(Output, Typed.EnumSchemaId);
-						Output.Integer(Typed.DefinitionVersion);
-						Output.Integer(Typed.ItemValue);
-					} else if constexpr (std::is_same_v<Type, WireObjectReference>) {
-						WriteObjectId(Output, Typed.Object.ToObjectId());
-					}
-				},
-				Value
-			);
+			WriteBinaryWireValue(Output, Value);
 		}
 
 		bool ReadWireValue(Reader &Input, WireValue &Value) {
-			std::uint8_t Tag;
-			if (!Input.Integer(Tag) || Tag >= std::variant_size_v<WireValue>)
-				return Input.Fail("Replication WireValue tag is invalid");
-			switch (Tag) {
-			case 0:
-				Value = std::monostate{};
-				break;
-			case 1: {
-				std::uint8_t V;
-				if (!Input.Integer(V) || V > 1) return Input.Fail("Replication Boolean is invalid");
-				Value = V != 0;
-				break;
-			}
-			case 2: {
-				std::int32_t V;
-				if (!Input.Integer(V)) return false;
-				Value = static_cast<int>(V);
-				break;
-			}
-			case 3: {
-				double V;
-				if (!Input.Double(V)) return false;
-				Value = V;
-				break;
-			}
-			case 4: {
-				float V;
-				if (!Input.Float(V)) return false;
-				Value = WireFloat{V};
-				break;
-			}
-			case 5: {
-				std::string V;
-				if (!Input.String(V, MaximumProtocolStringBytes)) return false;
-				Value = std::move(V);
-				break;
-			}
-			case 6: {
-				WireVector2 V;
-				if (!Input.Float(V.X) || !Input.Float(V.Y)) return false;
-				Value = V;
-				break;
-			}
-			case 7: {
-				WireVector3 V;
-				if (!Input.Float(V.X) || !Input.Float(V.Y) || !Input.Float(V.Z)) return false;
-				Value = V;
-				break;
-			}
-			case 8: {
-				WireColor3 V;
-				if (!Input.Float(V.R) || !Input.Float(V.G) || !Input.Float(V.B)) return false;
-				Value = V;
-				break;
-			}
-			case 9: {
-				WireUDim V;
-				std::int32_t O;
-				if (!Input.Float(V.Scale) || !Input.Integer(O)) return false;
-				V.Offset = O;
-				Value = V;
-				break;
-			}
-			case 10: {
-				WireUDim2 V;
-				std::int32_t XO, YO;
-				if (!Input.Float(V.X.Scale) || !Input.Integer(XO) || !Input.Float(V.Y.Scale) || !Input.Integer(YO))
-					return false;
-				V.X.Offset = XO;
-				V.Y.Offset = YO;
-				Value = V;
-				break;
-			}
-			case 11: {
-				WireCFrame V;
-				for (auto &C : V.Components)
-					if (!Input.Float(C)) return false;
-				Value = V;
-				break;
-			}
-			case 12: {
-				WireEnumItem V;
-				if (!Input.String(V.EnumType, MaximumProtocolIdentifierBytes) ||
-					!Input.String(V.Item, MaximumProtocolIdentifierBytes))
-					return false;
-				Value = std::move(V);
-				break;
-			}
-			case 13: {
-				WireSchemaEnumValue V;
-				if (!ReadSchemaId(Input, V.EnumSchemaId) || !Input.Integer(V.DefinitionVersion) ||
-					!Input.Integer(V.ItemValue) || V.DefinitionVersion == 0)
-					return Input.Fail("Replication schema enum is invalid");
-				Value = V;
-				break;
-			}
-			case 14: {
-				ObjectId V;
-				if (!ReadObjectId(Input, V)) return false;
-				Value = WireObjectReference{WireObjectId::FromObjectId(V)};
-				break;
-			}
-			default:
-				return Input.Fail("Replication WireValue tag is unsupported");
-			}
-			try {
-				ValidateProtocolWireValue(Value);
-			} catch (const std::exception &Error) {
-				return Input.Fail(Error.what());
-			}
-			return true;
+			return ReadBinaryWireValue(Input, Value, MaximumProtocolStringBytes);
 		}
 
 		void WriteValueMap(Writer &Output, const std::map<std::string, WireValue> &Values) {
