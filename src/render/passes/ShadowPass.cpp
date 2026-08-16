@@ -1,11 +1,10 @@
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
 
 #include "gargantuan/Log.hpp"
-#include "gargantuan/render/MeshProvider.hpp"
-#include "gargantuan/render/PipelineBuilder.hpp"
-#include "gargantuan/render/RenderPass.hpp"
 #include "gargantuan/render/SDLRenderer.hpp"
-#include "gargantuan/render/Shader.hpp"
+#include "render/sdl/SDLMeshCache.hpp"
+#include "render/sdl/SDLPipelineBuilder.hpp"
+#include "render/sdl/SDLRenderPass.hpp"
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_error.h>
@@ -16,7 +15,7 @@
 
 namespace gargantuan {
 
-	class ShadowPass final : public RenderPass {
+	class ShadowPass final : public SDLRenderPass {
 	  public:
 		static constexpr std::string_view LABEL = "Shadow";
 
@@ -25,16 +24,13 @@ namespace gargantuan {
 			glm::mat4 PartMatrix;
 		};
 
-		FileShader Shader{
-			.VertexFilepath = GetShaderPath("shadow.vert"),
-			.VertexUniformBufferCount = 1,
-			.FragmentFilepath = GetShaderPath("shadow.frag"),
-			.FragmentUniformBufferCount = 0,
-		};
-
 		ShadowPass(SDL_GPUDevice *gpu, SDL_GPUTextureFormat swapchainFormat) {
+			(void)swapchainFormat;
+			Shader.VertexFilepath = GetSDLShaderPath("shadow.vert");
+			Shader.VertexUniformBufferCount = 1;
+			Shader.FragmentFilepath = GetSDLShaderPath("shadow.frag");
 			Shader.Init(gpu);
-			Pipeline = PipelineBuilder()
+			Pipeline = SDLPipelineBuilder()
 						   .SetVertexShader(Shader.VertexShader)
 						   .SetFragmentShader(Shader.FragmentShader)
 						   .SetColorEnabled(false)
@@ -43,7 +39,8 @@ namespace gargantuan {
 						   .Build(gpu);
 		};
 
-		SDL_GPURenderPass *Draw(SDL_GPUDevice *gpu, FrameContext &context) override {
+		SDL_GPURenderPass *Draw(SDL_GPUDevice *gpu, SDLFrameContext &context) override {
+			(void)gpu;
 			glm::mat4 shadowProjection = glm::ortho<float>(-30.0f, 30.0f, -30.0f, 30.0f, -50.0f, 150.0f);
 			glm::vec3 lightPosition = glm::normalize(context.Snapshot.LightDirection) * 40.0f;
 			glm::mat4 shadowView = glm::lookAt(lightPosition, glm::vec3(0), glm::vec3(0, 1, 0));
@@ -95,7 +92,7 @@ namespace gargantuan {
 		};
 	};
 
-	std::unique_ptr<RenderPass> CreateShadowPass(SDL_GPUDevice *gpu, SDL_GPUTextureFormat swapchainFormat) {
+	std::unique_ptr<SDLRenderPass> CreateShadowPass(SDL_GPUDevice *gpu, SDL_GPUTextureFormat swapchainFormat) {
 		return std::make_unique<ShadowPass>(gpu, swapchainFormat);
 	}
 

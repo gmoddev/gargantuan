@@ -13,6 +13,7 @@ description: Planned features for Gargantuan.
 - [x] RunService (thanks godmothersfire!)
 - [x] Workspace (thanks godmothersfire!)
 - [x] UserInputService (thanks godmothersfire!)
+- [x] Gargantuan-owned host/input event boundary with SDL isolated as an adapter
 - [ ] Lighting (needs more work)
 - [x] TweenInfo (thanks godmothersfire!)
 
@@ -46,7 +47,7 @@ Studio progress:
 - [x] `.instance.json` format (thanks godmothersfire!)
 - [x] Load projects by CLI (thanks godmothersfire!)
 - [x] Opens existing projects (thanks godmothersfire!)
-- [x] FileLink (NOTE: needs bugfixes and edge casing for Rojo init.luaus) (thanks godmothersfire!)
+- [x] Legacy startup-only `FileLink` directory import (thanks godmothersfire!)
 - [ ] New project flow
 - [ ] Implement UI primitives
 - [ ] Widgets
@@ -58,7 +59,68 @@ Studio progress:
 - [ ] Properties plugin
 - [ ] Console plugin
 - [ ] Building tool plugin
-- [ ] Run Rojo inside Gargantuan :)
+
+The legacy `FileLink` importer is not the future script-authoring architecture,
+and embedding Rojo is no longer planned. The replacement is the native workflow
+in [Native script synchronization and development integrations](./future-architecture/#native-script-synchronization-and-development-integrations).
+
+### Native development workflow
+
+This sequence follows the existing authority, EditorHost, and Studio boundaries.
+Later phases must not be pulled forward by exposing filesystem or MCP access in
+Player/server runtimes.
+
+#### 1. Contracts and identity
+
+- [ ] Accept a durable authoring-identity design distinct from session-scoped `ObjectId`
+- [ ] Specify bounded source revisions, hashes, synchronized-base retention, and stale-write behavior
+- [ ] Specify versioned, recoverable mapping metadata with project-root-confined paths
+- [ ] Specify source transaction, journal, undo/redo, save, deletion, rename, and recovery semantics
+- [ ] Define explicit Studio script-sync and DevBridge capabilities and denial behavior
+
+#### 2. Manual synchronization foundation
+
+- [ ] Add bounded authoritative source read/write commands with expected revisions
+- [ ] Extend EditorHost for source operations, transactions, and structured sync errors
+- [ ] Support manually mapping an existing script to a project-relative file
+- [ ] Implement explicit one-shot Studio-to-disk and disk-to-Studio synchronization
+- [ ] Prove atomic disk replacement, cancellation, rollback, and crash recovery
+
+#### 3. Automatic two-way synchronization
+
+- [ ] Add stable filesystem observation with debounce and rename/move detection
+- [ ] Propagate clean one-sided edits in both directions without watcher feedback loops
+- [ ] Preserve script authoring identity across file and Instance rename/move operations
+- [ ] Define explicit create/delete behavior before enabling automatic hierarchy mirroring
+
+#### 4. Conflict safety
+
+- [ ] Detect concurrent changes from the last mutually synchronized base
+- [ ] Persist base, Studio, and external versions behind bounded conflict retrieval
+- [ ] Add generation-safe conflict identities and atomic conditional resolution
+- [ ] Test stale conflicts, retry/restart recovery, large sources, encoding, and line endings
+
+#### 5. Studio authoring surfaces
+
+- [ ] Add the Studio-only `DeveloperService` facade over native coordination operations
+- [ ] Build sync status, mapping, suspension, resync, diff, and three-way conflict UI
+- [ ] Integrate source changes and resolutions with Studio transactions, undo/redo, and save
+- [ ] Define a compatibility/import path for existing `FileLink` or Rojo project layouts without retaining their authority model
+
+#### 6. Optional MCP DevBridge
+
+- [ ] Add an opt-in authenticated, project-scoped Studio DevBridge with bounded sessions and requests
+- [ ] Expose narrow revision-aware script inspect/read/write/sync/conflict tools
+- [ ] Route MCP and Studio UI through the same development coordination core
+- [ ] Ship agent guidance for expected-revision writes and explicit conflict handling
+- [ ] Prove the engine, Player, and production server have no MCP or host-sync dependency or exposed service
+
+#### 7. Hardening and exit criteria
+
+- [ ] Add path traversal, symlink/junction escape, stale identity, malformed metadata, and capability-denial tests
+- [ ] Bound watched roots, mappings, queued events, source bytes, conflicts, retained bases, requests, and timeouts
+- [ ] Add structured `[Studio:ScriptSync]` and `[Studio:DevBridge]` diagnostics without logging source or secrets
+- [ ] Demonstrate clean Studio edits, clean external edits, simultaneous edits, each resolution mode, rename/move, delete, restart recovery, and stale MCP writes end to end
 
 ### Scripting
 
@@ -99,6 +161,7 @@ Studio progress:
 - [ ] LightingEffects
 - [ ] Textures and decals
 - [ ] GlslSourceContainer, VertexShader, FragmentShader, ComputeShader classes
+- [x] SDL GPU resources confined behind the immutable renderer/backend boundary
 - [ ] Run the measured renderer technology decision checkpoint described in
   [Render Extraction](./render-extraction/#renderer-technology-decision-checkpoint)
   before committing to a mature material, lighting, and asset stack

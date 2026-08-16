@@ -2,8 +2,9 @@
 
 ## Implemented now
 
-EditorHost owns an offscreen SDL GPU renderer. Studio never receives a GPU
-handle or links against renderer internals. The viewport interface exposes six
+EditorHost owns an offscreen renderer whose current private implementation uses
+SDL GPU. `EditorViewport.hpp` exposes no SDL or GPU type, and Studio never
+receives a GPU handle or links against renderer internals. The viewport interface exposes six
 bounded protocol methods:
 
 | Method | Contract |

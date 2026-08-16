@@ -1,52 +1,64 @@
-#include "gargantuan/render/PipelineBuilder.hpp"
+#include "render/sdl/SDLPipelineBuilder.hpp"
 #include "gargantuan/render/Mesh.hpp"
 #include <SDL3/SDL_gpu.h>
+#include <array>
+#include <cstddef>
 
 namespace gargantuan {
-	PipelineBuilder &PipelineBuilder::SetVertexShader(SDL_GPUShader *shader) {
+	SDLPipelineBuilder &SDLPipelineBuilder::SetVertexShader(SDL_GPUShader *shader) {
 		VertexShader = shader;
 		return *this;
 	};
 
-	PipelineBuilder &PipelineBuilder::SetFragmentShader(SDL_GPUShader *shader) {
+	SDLPipelineBuilder &SDLPipelineBuilder::SetFragmentShader(SDL_GPUShader *shader) {
 		FragmentShader = shader;
 		return *this;
 	};
 
-	PipelineBuilder &PipelineBuilder::SetColorFormat(SDL_GPUTextureFormat format) {
+	SDLPipelineBuilder &SDLPipelineBuilder::SetColorFormat(SDL_GPUTextureFormat format) {
 		ColorFormat = format;
 		return *this;
 	};
 
-	PipelineBuilder &PipelineBuilder::SetColorEnabled(bool enabled) {
+	SDLPipelineBuilder &SDLPipelineBuilder::SetColorEnabled(bool enabled) {
 		ColorEnabled = enabled;
 		return *this;
 	};
 
-	PipelineBuilder &PipelineBuilder::SetBlendingEnabled(bool enabled) {
+	SDLPipelineBuilder &SDLPipelineBuilder::SetBlendingEnabled(bool enabled) {
 		BlendingEnabled = enabled;
 		return *this;
 	};
 
-	PipelineBuilder &PipelineBuilder::SetDepthFormat(SDL_GPUTextureFormat format) {
+	SDLPipelineBuilder &SDLPipelineBuilder::SetDepthFormat(SDL_GPUTextureFormat format) {
 		DepthFormat = format;
 		return *this;
 	};
 
-	PipelineBuilder &PipelineBuilder::SetDepthEnabled(bool enabled) {
+	SDLPipelineBuilder &SDLPipelineBuilder::SetDepthEnabled(bool enabled) {
 		DepthEnabled = enabled;
 		return *this;
 	};
 
-	SDL_GPUGraphicsPipelineCreateInfo PipelineBuilder::BuildInfo() {
+	SDL_GPUGraphicsPipelineCreateInfo SDLPipelineBuilder::BuildInfo() {
+		static const std::array<SDL_GPUVertexBufferDescription, 1> BufferDescriptions{{{
+			.slot = 0,
+			.pitch = sizeof(Vertex),
+			.input_rate = SDL_GPU_VERTEXINPUTRATE_VERTEX,
+		}}};
+		static const std::array<SDL_GPUVertexAttribute, 3> Attributes{{
+			{.location = 0, .buffer_slot = 0, .format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3, .offset = offsetof(Vertex, Position)},
+			{.location = 1, .buffer_slot = 0, .format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3, .offset = offsetof(Vertex, Normal)},
+			{.location = 2, .buffer_slot = 0, .format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT2, .offset = offsetof(Vertex, UV)},
+		}};
 		SDL_GPUGraphicsPipelineCreateInfo info{};
 		info.vertex_shader = VertexShader;
 		info.fragment_shader = FragmentShader;
 
-		info.vertex_input_state.vertex_attributes = Vertex::Attributes->data();
-		info.vertex_input_state.num_vertex_attributes = static_cast<Uint32>(Vertex::Attributes->size());
-		info.vertex_input_state.vertex_buffer_descriptions = Vertex::BufferDescriptions->data();
-		info.vertex_input_state.num_vertex_buffers = static_cast<Uint32>(Vertex::BufferDescriptions->size());
+		info.vertex_input_state.vertex_attributes = Attributes.data();
+		info.vertex_input_state.num_vertex_attributes = static_cast<Uint32>(Attributes.size());
+		info.vertex_input_state.vertex_buffer_descriptions = BufferDescriptions.data();
+		info.vertex_input_state.num_vertex_buffers = static_cast<Uint32>(BufferDescriptions.size());
 
 		info.primitive_type = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST;
 		info.rasterizer_state.fill_mode = SDL_GPU_FILLMODE_FILL;
@@ -90,7 +102,7 @@ namespace gargantuan {
 		return info;
 	}
 
-	SDL_GPUGraphicsPipeline *PipelineBuilder::Build(SDL_GPUDevice *gpu) {
+	SDL_GPUGraphicsPipeline *SDLPipelineBuilder::Build(SDL_GPUDevice *gpu) {
 		auto info = BuildInfo();
 		return SDL_CreateGPUGraphicsPipeline(gpu, &info);
 	}

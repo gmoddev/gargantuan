@@ -11,6 +11,7 @@
 #include "gargantuan/render/SDLRenderer.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/runtime/DataModelRoot.hpp"
+#include "platform/sdl/SDLHost.hpp"
 
 #include <SDL3/SDL.h>
 #include <argparse/argparse.hpp>
@@ -192,8 +193,16 @@ int main(int argc, char *argv[]) {
 
 	LOG_INFO(App, "Starting engine loop");
 	engine->ProcessService->Alive = true;
+	SDLHost Host;
 	try {
 		while (engine->ProcessService->Alive) {
+			HostEvent Event;
+			while (Host.PollEvent(Event)) {
+				auto Result = engine->ProcessEvent(Event);
+				if (Result.Command) Host.Apply(*Result.Command);
+				if (!engine->ProcessService->Alive) break;
+			}
+			if (!engine->ProcessService->Alive) break;
 			engine->Step();
 		}
 	} catch (std::exception &e) {

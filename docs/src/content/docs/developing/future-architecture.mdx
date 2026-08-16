@@ -174,6 +174,14 @@ unsupported combinations; arbitrary native ECS composition is not an initial API
 
 ## Replaceable platform systems
 
+The raw host/input foundation is implemented before the higher-level systems
+described here. SDL events are translated by a backend adapter into a closed,
+bounded Gargantuan `HostEvent` value model; engine, input service, input object,
+and camera code no longer accept SDL input structures. Likewise, SDL GPU
+resources are confined to renderer-private implementation code behind the
+existing immutable `RenderSnapshot` and `BaseRenderer` seam. These foundations
+do not implement the action system or select a replacement renderer.
+
 High-level features generally follow this layering:
 
 ```text
@@ -253,6 +261,105 @@ requesting the complete schema for every document or session.
 Studio should eventually expose where classes and extensions came from, native
 versus Core Luau behavior, components, reflected members, replication policy,
 schema version, and required capabilities.
+
+### Native script synchronization and development integrations
+
+**Status: planned direction.** Gargantuan should replace the current
+`FileLink`/Rojo-oriented workflow with Studio-owned, native two-way script
+synchronization. This section defines ownership and sequencing, not a public API
+or persisted-format commitment.
+
+The proposal fits the existing architecture when it extends the Studio and
+EditorHost boundaries instead of adding a second authority:
+
+```text
+external editor / project-confined filesystem
+    <-> Studio script-sync and development coordination core
+    <-> versioned EditorHost authoring operations
+    <-> authoritative DataModel mutation, transactions, and journal
+
+optional MCP client
+    <-> Studio DevBridge
+    <-> the same development coordination core
+```
+
+The engine continues to own script Instances, `LuaSourceContainer.Source`, live
+identity, validation, authoritative mutation, and committed history. Studio owns
+source mappings, filesystem observation, authoring revisions, synchronized-base
+content, conflicts, atomic disk writes, conflict UI, and the optional DevBridge
+lifecycle. MCP owns only protocol/session translation and never becomes an
+engine feature or a source of project authority. Player and production-server
+builds expose neither host-filesystem synchronization nor MCP.
+
+#### Comparison with the current implementation
+
+| Needed by the direction | What exists now | Required evolution |
+| --- | --- | --- |
+| Authoritative script source | `Script` and `ModuleScript` derive from `LuaSourceContainer`, whose reflected `Source` setter commits property changes | Define bounded source-edit commands and ensure they use normal authority, validation, transactions, undo, and journal semantics |
+| Stable mapping identity | Runtime `ObjectId` is generation-safe and independent of names and paths | Add a durable authoring identity or equivalent persisted mapping key; current `ObjectId` is scoped to a live source stream and is not by itself a durable project UUID |
+| Studio projection and edit path | EditorHost provides schema, snapshot, journal, and scalar mutation; Studio is explicitly non-authoritative | Version EditorHost with source read/write, expected-revision, mapping, conflict, transaction, save, and recovery operations |
+| Filesystem synchronization | `FileLink` imports a directory at engine startup, recreates owned siblings, has no watcher, and does not provide two-way or conflict-safe synchronization | Deprecate `FileLink` as the development architecture after compatibility/import needs are defined; do not grow it into the new authority model |
+| Development security | Studio has a narrow native-created capability grant without filesystem, process, or network access; project roots are confined | Add separate host-owned capabilities for source sync and the DevBridge, never ambient filesystem access for experience or plugin scripts |
+| Conflict and concurrency model | Snapshot/journal ordering and bounded failure behavior exist, but no per-source authoring revision or synchronized base exists | Persist revision, hash, and last mutually synchronized base; reject stale writes and expose generation-safe conflict identities with atomic resolution |
+| Studio Luau API | Future Studio services are planned; no `DeveloperService` contract exists | Add a Studio-only `DeveloperService` facade over the coordination core after native operations and security checks exist |
+| External/AI integration | EditorHost is a public versioned local process boundary; there is no MCP engine surface | Host an optional authenticated, project-scoped MCP DevBridge in Studio and translate its tools to the same revision-aware operations used by native UI |
+
+The existing `FileLink` behavior is useful migration evidence, not a sufficient
+foundation: it is engine-startup, directory-only, filesystem-to-DataModel
+materialization that destroys and recreates its generated siblings. Native sync
+must instead preserve authoring identity through ordinary moves and renames and
+must never silently use last-write-wins for concurrent source edits.
+
+#### Synchronization and conflict contract
+
+Each mapping conceptually relates a durable script authoring identity to one
+project-relative, root-confined path and retains the last mutually synchronized
+revision, content hash, and base source. The exact metadata location and hash
+algorithm remain implementation details until a persistence/protocol design is
+accepted. Paths are references, not identity, and the DataModel remains
+authoritative.
+
+A clean one-sided edit propagates in the other direction. If Studio and disk
+both change from the same base, synchronization creates a conflict containing
+base, authoritative Studio, and external versions. Resolution (`KeepStudio`,
+`KeepExternal`, or caller-supplied merged source) commits only if the conflict,
+mapping, script identity, and expected revisions are still current. Stale
+resolution fails without partial source, mapping, disk, journal, or undo state.
+Disk output uses same-directory temporary files plus atomic replacement where
+the platform supports it, and watcher feedback is suppressed by committed
+revision/hash rather than timing alone.
+
+Source creation, deletion, mapping changes, file or Instance moves, undo/redo,
+and recovery after interrupted writes require explicit semantics. A first slice
+should support manually mapped existing scripts and source-only edits; automatic
+hierarchy mirroring and collaborative text editing are later concerns.
+
+#### DeveloperService and MCP boundary
+
+`DeveloperService` is the intended Studio-only Luau facade for source mappings,
+sync status, conflicts, revision-aware writes, resolution, suspension, and
+manual resynchronization. It must not be a generic host-OS API, expose raw
+watcher events or absolute unrestricted paths, bypass EditorHost, or appear in
+Player/server DataModels. First-party Studio code receives only the specific
+development capabilities assigned by the native host; plugins require a
+separate permission decision and never inherit the first-party grant.
+
+The optional MCP DevBridge should call the native development coordination core
+directly rather than invoke Luau `DeveloperService` as an RPC transport. This
+keeps UI language choice separate from the integration contract and gives both
+surfaces the same bounds, expected-revision checks, conflict semantics, audit
+information, and errors. Initial tools should remain narrow: inspect scripts and
+sync state, read source with revision, write source with expected revision, list
+conflicts, resolve a current conflict, and request synchronization. Arbitrary
+filesystem, shell, process, network, raw engine, and unrestricted script
+execution tools are outside this boundary.
+
+Before implementation, accept designs for durable authoring identity, mapping
+persistence and recovery, source transaction/journal payloads and size limits,
+EditorHost protocol versioning, and the Studio/DevBridge capability grants.
+Every public boundary remains bounded, cancellation-aware, and fail-closed for
+authority while sync availability itself fails without corrupting authoritative
+source.
 
 ### Plugins
 

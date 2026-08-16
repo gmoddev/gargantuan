@@ -11,7 +11,7 @@
 #include "gargantuan/services/UserInputService.hpp"
 #include "gargantuan/services/Workspace.hpp"
 
-#include <SDL3/SDL.h>
+#include <chrono>
 #include <filesystem>
 #include <glm/glm.hpp>
 #include <lua.h>
@@ -66,49 +66,37 @@ namespace gargantuan {
 	}
 
 	float Engine::GetDeltaTime() {
-		return (CurrentTick - LastTick) / 1000.0f;
+		return std::chrono::duration<float>(CurrentTick - LastTick).count();
+	}
+
+	HostEventResult Engine::ProcessEvent(const HostEvent &Event) {
+		HostEventResult Result;
+		if (const auto *Resize = std::get_if<WindowResizeEvent>(&Event)) {
+			Renderer->Resize(static_cast<int>(Resize->Width), static_cast<int>(Resize->Height));
+			Workspace->GetCurrentCamera()->SetViewportSize(Vector2(Resize->Width, Resize->Height));
+			return Result;
+		}
+		if (std::holds_alternative<WindowCloseEvent>(Event)) {
+			LOG_INFO(App, "Stopping engine");
+			ProcessService->MarkExit(0);
+			return Result;
+		}
+
+		Result.Consumed = UserInputService->ProcessEvent(Event);
+		if (!Result.Consumed) Result.Command = Workspace->GetCurrentCamera()->ProcessEvent(Event);
+		return Result;
 	}
 
 	void Engine::Step() {
 		if (!ProcessService->Alive) return;
 		Mutations.Drain();
 
-		CurrentTick = SDL_GetTicks();
-		if (LastTick == 0) LastTick = CurrentTick;
+		CurrentTick = std::chrono::steady_clock::now();
+		if (LastTick.time_since_epoch().count() == 0) LastTick = CurrentTick;
 		float deltaTime = GetDeltaTime();
 
 		{
 			G_PROFILE("Main Thread");
-
-			{
-				G_PROFILE("Events");
-
-				SDL_Event event;
-				while (SDL_PollEvent(&event)) {
-					switch (event.type) {
-					case SDL_EVENT_WINDOW_RESIZED: {
-						auto window = SDL_GetWindowFromEvent(&event);
-						if (!window) break;
-
-						int width, height;
-						SDL_GetWindowSizeInPixels(window, &width, &height);
-						Renderer->Resize(width, height);
-
-						Workspace->GetCurrentCamera()->SetViewportSize(Vector2(width, height));
-
-						continue;
-					}
-
-					case SDL_EVENT_QUIT:
-						LOG_INFO(App, "Stopping engine");
-						ProcessService->MarkExit(0);
-						return;
-					}
-
-					UserInputService->ProcessEvent(event);
-					Workspace->GetCurrentCamera()->OnEvent(event);
-				}
-			}
 
 			{
 				G_PROFILE("Simulation");

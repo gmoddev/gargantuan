@@ -1,0 +1,118 @@
+---
+status: current
+owner: runtime
+last_verified: 2026-08-16
+related_code:
+  - include/gargantuan/platform/HostEvent.hpp
+  - src/platform/sdl/
+  - src/Engine.cpp
+  - src/services/UserInputService.cpp
+  - src/classes/Camera.cpp
+related_adrs: []
+---
+
+# Platform and input boundary
+
+## Implemented boundary
+
+The executable's SDL host adapter owns `SDL_Event` polling and translates one
+event at a time into the closed Gargantuan `HostEvent` variant. `Engine`,
+`UserInputService`, `InputObject`, and `Camera` consume only these engine-owned
+values:
+
+```text
+SDLHost / SDL_Event
+    -> TranslateSDLEvent
+    -> HostEvent value
+    -> Engine::ProcessEvent
+       |- UserInputService
+       `- Camera controller
+```
+
+The variant alternatives are `KeyEvent`, `PointerMoveEvent`,
+`PointerButtonEvent`, `WheelEvent`, `TextInputEvent`, `GamepadButtonEvent`,
+`GamepadAxisEvent`, `WindowResizeEvent`, `FocusEvent`, and
+`WindowCloseEvent`. Unknown SDL events and invalid key, pointer-button,
+gamepad-button, gamepad-axis, window, or device values are ignored without
+creating a partially initialized semantic event.
+
+There is no engine event queue in this slice. `SDLHost::PollEvent` drains SDL's
+platform queue and returns translated values synchronously, so the boundary
+does not add an unbounded second queue or a heap allocation for ordinary
+events. A future queued host must define and test an explicit capacity and
+overflow policy.
+
+## Key and text semantics
+
+`KeyEvent` deliberately carries both:
+
+- `PhysicalKey`, the keyboard position used by the current free-camera
+  controller; and
+- `LogicalKey`, the interpreted layout key that preserves the existing public
+  `KeyCode` values used by `InputObject` and `UserInputService`.
+
+It also carries press/release state, repeat state, modifiers, and a copied
+keyboard device identity. Unsupported physical positions become `Unknown`;
+an unsupported logical key is not published because existing developer-visible
+input has no representation for it.
+
+Committed text is a distinct `TextInputEvent`; key presses never synthesize
+text. `BoundedUtf8` validates UTF-8 and stores at most 63 bytes inline. Invalid
+or oversized payloads are rejected. SDL text-editing/composition events,
+candidate lists, selection ranges, and IME lifecycle are intentionally
+deferred. The current `InputObject` schema has no committed-text property, so
+`UserInputService` currently ignores the semantic text event while preserving
+the boundary for a future explicit text API.
+
+## Pointer, gamepad, and window behavior
+
+Pointer events contain engine-owned position/delta values and the closed
+`PointerButton` enum. SDL wheel direction is normalized before publication.
+Unknown pointer identity is represented by value zero and never carries an SDL
+pointer. The existing mouse-button, mouse-position, mouse-delta, and input
+signals remain developer-facing behavior.
+
+Gamepad input was not consumed by engine systems before this boundary. The SDL
+adapter now establishes the smallest future-safe semantic boundary: stable
+button/axis enums, a copied nonzero device identity, and axis values normalized
+to `[-1, 1]`. `UserInputService` does not yet expose gamepad events. Controller
+mapping and remapping policy remain deferred.
+
+The current runtime supports one presentation window, so events do not expose
+a speculative engine window identity. Resize carries validated nonzero pixel
+dimensions. Relative-pointer mode is an engine-owned `HostCommand` returned by
+camera routing and applied by `SDLHost`; `Camera` never receives or retains an
+SDL window pointer. SDLHost stores only the latest numeric SDL window ID and
+resolves it at command application, preventing a window pointer from escaping
+the adapter.
+
+## Routing and focus groundwork
+
+`Engine::ProcessEvent` handles window lifecycle, then routes input through
+`UserInputService` and only invokes the current camera controller when the
+event is not consumed. `HostEventResult::Consumed` is the minimal groundwork
+for a future UI/input router; it does not define camera-first precedence.
+`UserInputService` currently reports no event as consumed, matching previous
+behavior. Focus loss clears active service and camera key/button state and
+releases relative-pointer mode.
+
+The retained UI focus system, action/binding framework, touch/pen semantics,
+IME composition, gamepad remapping, and multi-window architecture are not part
+of this boundary.
+
+## Coupling audit
+
+Before this boundary, SDL input semantics leaked through:
+
+| Location | Previous coupling |
+| --- | --- |
+| `Engine.hpp` / `Engine.cpp` | Accepted and polled `SDL_Event`; interpreted resize and quit. |
+| `UserInputService.hpp/.cpp` | Accepted SDL events and interpreted focus. |
+| `InputObject.hpp/.cpp` | Exposed SDL key maps and constructed objects from `SDL_Event`. |
+| `Camera.hpp/.cpp` | Accepted SDL events, retained SDL relative-mouse policy, and polled SDL scancodes/modifiers. |
+
+After the change, SDL event and input types occur only in
+`src/platform/sdl/SDLHost.*`, backend-specific translation tests, other
+unrelated SDL implementation facilities such as logging/filesystem helpers,
+and explicit renderer implementations. A non-SDL host can construct and feed
+`HostEvent` values without SDL headers or `SDL_Event`.

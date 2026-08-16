@@ -5,13 +5,14 @@
 
 #include "gargantuan/editor/EditorViewport.hpp"
 
-#include "gargantuan/render/MeshProvider.hpp"
-#include "gargantuan/render/SDLRenderer.hpp"
+#include "render/sdl/SDLMeshCache.hpp"
+#include "render/sdl/SDLRenderPass.hpp"
 
 #include <SDL3/SDL.h>
+
 #include <algorithm>
-#include <cstring>
 #include <cmath>
+#include <cstring>
 #include <format>
 #include <glm/geometric.hpp>
 #include <limits>
@@ -24,257 +25,226 @@ namespace gargantuan {
 		);
 		constexpr SDL_GPUTextureFormat ColorFormat = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
 
-		std::optional<float> IntersectItem(
-			const RenderItem &item,
-			const glm::vec3 &origin,
-			const glm::vec3 &direction
-		) {
-			const auto localOrigin4 = item.InverseModelMatrix * glm::vec4(origin, 1.0f);
-			const auto localDirection4 = item.InverseModelMatrix * glm::vec4(direction, 0.0f);
-			const auto localOrigin = glm::vec3(localOrigin4);
-			const auto localDirection = glm::vec3(localDirection4);
-			constexpr glm::vec3 halfSize(0.5f);
-			float minimum = 0.0f;
-			float maximum = std::numeric_limits<float>::infinity();
-			for (int axis = 0; axis < 3; ++axis) {
-				if (std::abs(localDirection[axis]) < 1e-6f) {
-					if (localOrigin[axis] < -halfSize[axis] || localOrigin[axis] > halfSize[axis])
-						return std::nullopt;
+		std::optional<float> IntersectItem(const RenderItem &Item, const glm::vec3 &Origin, const glm::vec3 &Direction) {
+			const auto LocalOrigin = glm::vec3(Item.InverseModelMatrix * glm::vec4(Origin, 1.0f));
+			const auto LocalDirection = glm::vec3(Item.InverseModelMatrix * glm::vec4(Direction, 0.0f));
+			constexpr glm::vec3 HalfSize(0.5f);
+			float Minimum = 0.0f;
+			float Maximum = std::numeric_limits<float>::infinity();
+			for (int Axis = 0; Axis < 3; ++Axis) {
+				if (std::abs(LocalDirection[Axis]) < 1e-6f) {
+					if (LocalOrigin[Axis] < -HalfSize[Axis] || LocalOrigin[Axis] > HalfSize[Axis]) return std::nullopt;
 					continue;
 				}
-				float first = (-halfSize[axis] - localOrigin[axis]) / localDirection[axis];
-				float second = (halfSize[axis] - localOrigin[axis]) / localDirection[axis];
-				if (first > second) std::swap(first, second);
-				minimum = std::max(minimum, first);
-				maximum = std::min(maximum, second);
-				if (maximum < minimum) return std::nullopt;
+				float First = (-HalfSize[Axis] - LocalOrigin[Axis]) / LocalDirection[Axis];
+				float Second = (HalfSize[Axis] - LocalOrigin[Axis]) / LocalDirection[Axis];
+				if (First > Second) std::swap(First, Second);
+				Minimum = std::max(Minimum, First);
+				Maximum = std::min(Maximum, Second);
+				if (Maximum < Minimum) return std::nullopt;
 			}
-			return minimum;
+			return Minimum;
 		}
 	}
 
-	std::optional<EditorViewportPick> PickEditorViewport(
-		const RenderSnapshot &snapshot,
-		float x,
-		float y
-	) {
-		if (snapshot.Id == InvalidRenderSnapshotId || snapshot.ViewportWidth == 0 || snapshot.ViewportHeight == 0 ||
-			!std::isfinite(x) || !std::isfinite(y) || x < 0.0f || y < 0.0f ||
-			x >= snapshot.ViewportWidth || y >= snapshot.ViewportHeight)
-			return std::nullopt;
-		const auto &camera = snapshot.Camera;
-		const float tangent = std::tan(glm::radians(camera.VerticalFieldOfView) * 0.5f);
-		const float normalizedX = ((x + 0.5f) / static_cast<float>(snapshot.ViewportWidth)) * 2.0f - 1.0f;
-		const float normalizedY = 1.0f - ((y + 0.5f) / static_cast<float>(snapshot.ViewportHeight)) * 2.0f;
-		const float aspect = static_cast<float>(snapshot.ViewportWidth) / static_cast<float>(snapshot.ViewportHeight);
-		const auto direction = glm::normalize(
-			camera.LookDirection + camera.RightDirection * (normalizedX * tangent * aspect) +
-			camera.UpDirection * (normalizedY * tangent)
+	std::optional<EditorViewportPick> PickEditorViewport(const RenderSnapshot &Snapshot, float X, float Y) {
+		if (Snapshot.Id == InvalidRenderSnapshotId || Snapshot.ViewportWidth == 0 || Snapshot.ViewportHeight == 0 ||
+			!std::isfinite(X) || !std::isfinite(Y) || X < 0.0f || Y < 0.0f ||
+			X >= Snapshot.ViewportWidth || Y >= Snapshot.ViewportHeight) return std::nullopt;
+		const auto &Camera = Snapshot.Camera;
+		const float Tangent = std::tan(glm::radians(Camera.VerticalFieldOfView) * 0.5f);
+		const float NormalizedX = ((X + 0.5f) / static_cast<float>(Snapshot.ViewportWidth)) * 2.0f - 1.0f;
+		const float NormalizedY = 1.0f - ((Y + 0.5f) / static_cast<float>(Snapshot.ViewportHeight)) * 2.0f;
+		const float Aspect = static_cast<float>(Snapshot.ViewportWidth) / static_cast<float>(Snapshot.ViewportHeight);
+		const auto Direction = glm::normalize(
+			Camera.LookDirection + Camera.RightDirection * (NormalizedX * Tangent * Aspect) +
+			Camera.UpDirection * (NormalizedY * Tangent)
 		);
 
-		std::optional<EditorViewportPick> closest;
-		for (const auto &item : snapshot.Items) {
-			auto distance = IntersectItem(item, camera.Position, direction);
-			if (!distance || (closest && *distance >= closest->Distance)) continue;
-			closest = EditorViewportPick{item.Object, *distance};
+		std::optional<EditorViewportPick> Closest;
+		for (const auto &Item : Snapshot.Items) {
+			auto Distance = IntersectItem(Item, Camera.Position, Direction);
+			if (!Distance || (Closest && *Distance >= Closest->Distance)) continue;
+			Closest = EditorViewportPick{Item.Object, *Distance};
 		}
-		return closest;
+		return Closest;
 	}
 
-	EditorViewportRenderer::EditorViewportRenderer(std::uint32_t width, std::uint32_t height)
-		: Width(width), Height(height) {
+	struct EditorViewportRenderer::Backend final {
+		bool OwnsVideoSubsystem = false;
+		std::uint32_t Width = 0;
+		std::uint32_t Height = 0;
+		SDL_GPUDevice *Gpu = nullptr;
+		SDL_GPUTexture *ColorTexture = nullptr;
+		SDL_GPUTexture *DepthTexture = nullptr;
+		SDL_GPUTexture *ShadowMapTexture = nullptr;
+		SDL_GPUSampler *ShadowSampler = nullptr;
+		SDL_GPUTransferBuffer *DownloadBuffer = nullptr;
+		std::vector<std::unique_ptr<SDLRenderPass>> RenderPasses;
+		std::unique_ptr<SDLMeshCache> MeshResources;
+
+		void Destroy() {
+			if (Gpu) SDL_WaitForGPUIdle(Gpu);
+			if (MeshResources) { MeshResources->Destroy(); MeshResources.reset(); }
+			for (auto &Pass : RenderPasses) if (Pass) Pass->Destroy(Gpu);
+			RenderPasses.clear();
+			if (DownloadBuffer && Gpu) SDL_ReleaseGPUTransferBuffer(Gpu, DownloadBuffer);
+			if (ColorTexture && Gpu) SDL_ReleaseGPUTexture(Gpu, ColorTexture);
+			if (DepthTexture && Gpu) SDL_ReleaseGPUTexture(Gpu, DepthTexture);
+			if (ShadowMapTexture && Gpu) SDL_ReleaseGPUTexture(Gpu, ShadowMapTexture);
+			if (ShadowSampler && Gpu) SDL_ReleaseGPUSampler(Gpu, ShadowSampler);
+			DownloadBuffer = nullptr;
+			ColorTexture = nullptr;
+			DepthTexture = nullptr;
+			ShadowMapTexture = nullptr;
+			ShadowSampler = nullptr;
+			if (Gpu) SDL_DestroyGPUDevice(Gpu);
+			Gpu = nullptr;
+			if (OwnsVideoSubsystem) SDL_QuitSubSystem(SDL_INIT_VIDEO);
+			OwnsVideoSubsystem = false;
+		}
+
+		void RecreateTargets() {
+			if (!Gpu || Width == 0 || Height == 0) throw std::invalid_argument("Viewport dimensions must be nonzero");
+			const auto DownloadBytes = static_cast<std::uint64_t>(Width) * Height * 4;
+			if (DownloadBytes > std::numeric_limits<std::uint32_t>::max())
+				throw std::invalid_argument("Viewport dimensions exceed the GPU download buffer size limit");
+			SDL_WaitForGPUIdle(Gpu);
+			SDL_GPUTextureCreateInfo ColorInfo{
+				.type = SDL_GPU_TEXTURETYPE_2D, .format = ColorFormat, .usage = SDL_GPU_TEXTUREUSAGE_COLOR_TARGET,
+				.width = Width, .height = Height, .layer_count_or_depth = 1, .num_levels = 1,
+			};
+			SDL_GPUTextureCreateInfo DepthInfo{
+				.type = SDL_GPU_TEXTURETYPE_2D, .format = SDL_GPU_TEXTUREFORMAT_D16_UNORM,
+				.usage = SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET, .width = Width, .height = Height,
+				.layer_count_or_depth = 1, .num_levels = 1,
+			};
+			SDL_GPUTransferBufferCreateInfo DownloadInfo{
+				.usage = SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD, .size = static_cast<std::uint32_t>(DownloadBytes),
+			};
+			auto *ReplacementColor = SDL_CreateGPUTexture(Gpu, &ColorInfo);
+			auto *ReplacementDepth = SDL_CreateGPUTexture(Gpu, &DepthInfo);
+			auto *ReplacementDownload = SDL_CreateGPUTransferBuffer(Gpu, &DownloadInfo);
+			if (!ReplacementColor || !ReplacementDepth || !ReplacementDownload) {
+				if (ReplacementDownload) SDL_ReleaseGPUTransferBuffer(Gpu, ReplacementDownload);
+				if (ReplacementColor) SDL_ReleaseGPUTexture(Gpu, ReplacementColor);
+				if (ReplacementDepth) SDL_ReleaseGPUTexture(Gpu, ReplacementDepth);
+				throw std::runtime_error(std::format("Failed to create viewport targets: {}", SDL_GetError()));
+			}
+			if (DownloadBuffer) SDL_ReleaseGPUTransferBuffer(Gpu, DownloadBuffer);
+			if (ColorTexture) SDL_ReleaseGPUTexture(Gpu, ColorTexture);
+			if (DepthTexture) SDL_ReleaseGPUTexture(Gpu, DepthTexture);
+			ColorTexture = ReplacementColor;
+			DepthTexture = ReplacementDepth;
+			DownloadBuffer = ReplacementDownload;
+		}
+	};
+
+	EditorViewportRenderer::EditorViewportRenderer(std::uint32_t Width, std::uint32_t Height)
+		: State(std::make_unique<Backend>()) {
+		State->Width = Width;
+		State->Height = Height;
 		if ((SDL_WasInit(SDL_INIT_VIDEO) & SDL_INIT_VIDEO) == 0) {
 			if (!SDL_InitSubSystem(SDL_INIT_VIDEO))
 				throw std::runtime_error(std::format("Failed to initialize SDL video: {}", SDL_GetError()));
-			OwnsVideoSubsystem = true;
+			State->OwnsVideoSubsystem = true;
 		}
-
-		Gpu = SDL_CreateGPUDevice(ShaderFormats, true, nullptr);
-		if (!Gpu) {
-			if (OwnsVideoSubsystem) SDL_QuitSubSystem(SDL_INIT_VIDEO);
-			OwnsVideoSubsystem = false;
+		State->Gpu = SDL_CreateGPUDevice(ShaderFormats, true, nullptr);
+		if (!State->Gpu) {
+			State->Destroy();
 			throw std::runtime_error(std::format("Failed to create viewport GPU device: {}", SDL_GetError()));
 		}
-		MeshResources = std::make_unique<GpuMeshCache>(Gpu);
+		State->MeshResources = std::make_unique<SDLMeshCache>(State->Gpu);
 
-		SDL_GPUTextureCreateInfo shadowInfo{
-			.type = SDL_GPU_TEXTURETYPE_2D,
-			.format = SDL_GPU_TEXTUREFORMAT_D32_FLOAT,
+		SDL_GPUTextureCreateInfo ShadowInfo{
+			.type = SDL_GPU_TEXTURETYPE_2D, .format = SDL_GPU_TEXTUREFORMAT_D32_FLOAT,
 			.usage = SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER,
-			.width = 2048,
-			.height = 2048,
-			.layer_count_or_depth = 1,
-			.num_levels = 1,
+			.width = 2048, .height = 2048, .layer_count_or_depth = 1, .num_levels = 1,
 		};
-		ShadowMapTexture = SDL_CreateGPUTexture(Gpu, &shadowInfo);
-
-		SDL_GPUSamplerCreateInfo samplerInfo{
-			.min_filter = SDL_GPU_FILTER_LINEAR,
-			.mag_filter = SDL_GPU_FILTER_LINEAR,
+		State->ShadowMapTexture = SDL_CreateGPUTexture(State->Gpu, &ShadowInfo);
+		SDL_GPUSamplerCreateInfo SamplerInfo{
+			.min_filter = SDL_GPU_FILTER_LINEAR, .mag_filter = SDL_GPU_FILTER_LINEAR,
 			.mipmap_mode = SDL_GPU_SAMPLERMIPMAPMODE_LINEAR,
 			.address_mode_u = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE,
 			.address_mode_v = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE,
 			.address_mode_w = SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE,
-			.compare_op = SDL_GPU_COMPAREOP_LESS_OR_EQUAL,
-			.enable_compare = true,
+			.compare_op = SDL_GPU_COMPAREOP_LESS_OR_EQUAL, .enable_compare = true,
 		};
-		ShadowSampler = SDL_CreateGPUSampler(Gpu, &samplerInfo);
-		if (!ShadowMapTexture || !ShadowSampler) {
-			Destroy();
+		State->ShadowSampler = SDL_CreateGPUSampler(State->Gpu, &SamplerInfo);
+		if (!State->ShadowMapTexture || !State->ShadowSampler) {
+			State->Destroy();
 			throw std::runtime_error(std::format("Failed to create viewport shadow resources: {}", SDL_GetError()));
 		}
-
 		try {
-			RecreateTargets();
-			for (const auto &constructor : RENDER_PASS_CONSTRUCTORS) {
-				RenderPasses.push_back(constructor(Gpu, ColorFormat));
-			}
+			State->RecreateTargets();
+			for (const auto &Constructor : GetSDLRenderPassConstructors())
+				State->RenderPasses.push_back(Constructor(State->Gpu, ColorFormat));
 		} catch (...) {
-			Destroy();
+			State->Destroy();
 			throw;
 		}
 	}
 
-	EditorViewportRenderer::~EditorViewportRenderer() { Destroy(); }
+	EditorViewportRenderer::~EditorViewportRenderer() { if (State) State->Destroy(); }
 
-	void EditorViewportRenderer::Destroy() {
-		if (Gpu) SDL_WaitForGPUIdle(Gpu);
-		if (MeshResources) {
-			MeshResources->Destroy();
-			MeshResources.reset();
-		}
-		for (auto &pass : RenderPasses) pass->Destroy(Gpu);
-		RenderPasses.clear();
-		if (DownloadBuffer) SDL_ReleaseGPUTransferBuffer(Gpu, DownloadBuffer);
-		if (ColorTexture) SDL_ReleaseGPUTexture(Gpu, ColorTexture);
-		if (DepthTexture) SDL_ReleaseGPUTexture(Gpu, DepthTexture);
-		DownloadBuffer = nullptr;
-		ColorTexture = nullptr;
-		DepthTexture = nullptr;
-		if (ShadowMapTexture) SDL_ReleaseGPUTexture(Gpu, ShadowMapTexture);
-		if (ShadowSampler) SDL_ReleaseGPUSampler(Gpu, ShadowSampler);
-		ShadowMapTexture = nullptr;
-		ShadowSampler = nullptr;
-		if (Gpu) SDL_DestroyGPUDevice(Gpu);
-		Gpu = nullptr;
-		if (OwnsVideoSubsystem) SDL_QuitSubSystem(SDL_INIT_VIDEO);
-		OwnsVideoSubsystem = false;
+	void EditorViewportRenderer::Resize(std::uint32_t Width, std::uint32_t Height) {
+		if (!State || (Width == State->Width && Height == State->Height)) return;
+		const auto PreviousWidth = State->Width;
+		const auto PreviousHeight = State->Height;
+		State->Width = Width;
+		State->Height = Height;
+		try { State->RecreateTargets(); }
+		catch (...) { State->Width = PreviousWidth; State->Height = PreviousHeight; throw; }
 	}
 
-	void EditorViewportRenderer::RecreateTargets() {
-		if (!Gpu || Width == 0 || Height == 0) throw std::invalid_argument("Viewport dimensions must be nonzero");
-		SDL_WaitForGPUIdle(Gpu);
-		if (DownloadBuffer) SDL_ReleaseGPUTransferBuffer(Gpu, DownloadBuffer);
-		if (ColorTexture) SDL_ReleaseGPUTexture(Gpu, ColorTexture);
-		if (DepthTexture) SDL_ReleaseGPUTexture(Gpu, DepthTexture);
-
-		SDL_GPUTextureCreateInfo colorInfo{
-			.type = SDL_GPU_TEXTURETYPE_2D,
-			.format = ColorFormat,
-			.usage = SDL_GPU_TEXTUREUSAGE_COLOR_TARGET,
-			.width = Width,
-			.height = Height,
-			.layer_count_or_depth = 1,
-			.num_levels = 1,
-		};
-		ColorTexture = SDL_CreateGPUTexture(Gpu, &colorInfo);
-
-		SDL_GPUTextureCreateInfo depthInfo{
-			.type = SDL_GPU_TEXTURETYPE_2D,
-			.format = SDL_GPU_TEXTUREFORMAT_D16_UNORM,
-			.usage = SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET,
-			.width = Width,
-			.height = Height,
-			.layer_count_or_depth = 1,
-			.num_levels = 1,
-		};
-		DepthTexture = SDL_CreateGPUTexture(Gpu, &depthInfo);
-
-		SDL_GPUTransferBufferCreateInfo downloadInfo{
-			.usage = SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD,
-			.size = Width * Height * 4,
-		};
-		DownloadBuffer = SDL_CreateGPUTransferBuffer(Gpu, &downloadInfo);
-		if (!ColorTexture || !DepthTexture || !DownloadBuffer) {
-			if (DownloadBuffer) SDL_ReleaseGPUTransferBuffer(Gpu, DownloadBuffer);
-			if (ColorTexture) SDL_ReleaseGPUTexture(Gpu, ColorTexture);
-			if (DepthTexture) SDL_ReleaseGPUTexture(Gpu, DepthTexture);
-			DownloadBuffer = nullptr;
-			ColorTexture = nullptr;
-			DepthTexture = nullptr;
-			throw std::runtime_error(std::format("Failed to create viewport targets: {}", SDL_GetError()));
-		}
-	}
-
-	void EditorViewportRenderer::Resize(std::uint32_t width, std::uint32_t height) {
-		if (width == Width && height == Height) return;
-		const auto previousWidth = Width;
-		const auto previousHeight = Height;
-		Width = width;
-		Height = height;
-		try {
-			RecreateTargets();
-		} catch (...) {
-			Width = previousWidth;
-			Height = previousHeight;
-			throw;
-		}
-	}
-
-	EditorViewportFrame EditorViewportRenderer::Capture(RenderSnapshotPtr snapshot) {
-		if (!snapshot) throw std::invalid_argument("Viewport capture requires an immutable RenderSnapshot");
-		if (snapshot->ViewportWidth != Width || snapshot->ViewportHeight != Height)
+	EditorViewportFrame EditorViewportRenderer::Capture(RenderSnapshotPtr Snapshot) {
+		if (!State || !State->Gpu) throw std::logic_error("Viewport renderer is not initialized");
+		if (!Snapshot) throw std::invalid_argument("Viewport capture requires an immutable RenderSnapshot");
+		if (Snapshot->ViewportWidth != State->Width || Snapshot->ViewportHeight != State->Height)
 			throw std::invalid_argument("RenderSnapshot dimensions do not match the viewport target");
-		MeshResources->UploadToGpu();
-		auto *commands = SDL_AcquireGPUCommandBuffer(Gpu);
-		if (!commands) throw std::runtime_error(std::format("Failed to acquire viewport command buffer: {}", SDL_GetError()));
+		State->MeshResources->UploadToGpu();
+		auto *Commands = SDL_AcquireGPUCommandBuffer(State->Gpu);
+		if (!Commands) throw std::runtime_error(std::format("Failed to acquire viewport command buffer: {}", SDL_GetError()));
+		SDLFrameContext Frame(*Snapshot, *State->MeshResources);
+		Frame.Commands = Commands;
+		Frame.SwapchainTexture = State->ColorTexture;
+		Frame.DepthTexture = State->DepthTexture;
+		Frame.ShadowMapTexture = State->ShadowMapTexture;
+		Frame.ShadowSampler = State->ShadowSampler;
+		Frame.Width = State->Width;
+		Frame.Height = State->Height;
+		for (auto &Pass : State->RenderPasses) SDL_EndGPURenderPass(Pass->Draw(State->Gpu, Frame));
 
-		FrameContext frame(*snapshot, *MeshResources);
-		frame.Commands = commands;
-		frame.SwapchainTexture = ColorTexture;
-		frame.DepthTexture = DepthTexture;
-		frame.ShadowMapTexture = ShadowMapTexture;
-		frame.ShadowSampler = ShadowSampler;
-		frame.Width = Width;
-		frame.Height = Height;
-		for (auto &pass : RenderPasses) SDL_EndGPURenderPass(pass->Draw(Gpu, frame));
-
-		auto *copyPass = SDL_BeginGPUCopyPass(commands);
-		SDL_GPUTextureRegion source{
-			.texture = ColorTexture,
-			.w = Width,
-			.h = Height,
-			.d = 1,
+		auto *CopyPass = SDL_BeginGPUCopyPass(Commands);
+		if (!CopyPass) {
+			SDL_CancelGPUCommandBuffer(Commands);
+			throw std::runtime_error(std::format("Failed to begin viewport download: {}", SDL_GetError()));
+		}
+		SDL_GPUTextureRegion Source{.texture = State->ColorTexture, .w = State->Width, .h = State->Height, .d = 1};
+		SDL_GPUTextureTransferInfo Destination{
+			.transfer_buffer = State->DownloadBuffer, .pixels_per_row = State->Width, .rows_per_layer = State->Height,
 		};
-		SDL_GPUTextureTransferInfo destination{
-			.transfer_buffer = DownloadBuffer,
-			.pixels_per_row = Width,
-			.rows_per_layer = Height,
-		};
-		SDL_DownloadFromGPUTexture(copyPass, &source, &destination);
-		SDL_EndGPUCopyPass(copyPass);
-
-		auto *fence = SDL_SubmitGPUCommandBufferAndAcquireFence(commands);
-		if (!fence) throw std::runtime_error(std::format("Failed to submit viewport frame: {}", SDL_GetError()));
-		if (!SDL_WaitForGPUFences(Gpu, true, &fence, 1)) {
-			SDL_ReleaseGPUFence(Gpu, fence);
+		SDL_DownloadFromGPUTexture(CopyPass, &Source, &Destination);
+		SDL_EndGPUCopyPass(CopyPass);
+		auto *Fence = SDL_SubmitGPUCommandBufferAndAcquireFence(Commands);
+		if (!Fence) throw std::runtime_error(std::format("Failed to submit viewport frame: {}", SDL_GetError()));
+		if (!SDL_WaitForGPUFences(State->Gpu, true, &Fence, 1)) {
+			SDL_ReleaseGPUFence(State->Gpu, Fence);
 			throw std::runtime_error(std::format("Failed to wait for viewport frame: {}", SDL_GetError()));
 		}
-
-		auto *rgba = static_cast<const std::uint8_t *>(SDL_MapGPUTransferBuffer(Gpu, DownloadBuffer, false));
-		if (!rgba) {
-			SDL_ReleaseGPUFence(Gpu, fence);
+		auto *Rgba = static_cast<const std::uint8_t *>(SDL_MapGPUTransferBuffer(State->Gpu, State->DownloadBuffer, false));
+		if (!Rgba) {
+			SDL_ReleaseGPUFence(State->Gpu, Fence);
 			throw std::runtime_error(std::format("Failed to map viewport frame: {}", SDL_GetError()));
 		}
-		EditorViewportFrame result{.Width = Width, .Height = Height};
-		result.RgbPixels.resize(static_cast<std::size_t>(Width) * Height * 3);
-		for (std::size_t sourceIndex = 0, destinationIndex = 0;
-			 sourceIndex < static_cast<std::size_t>(Width) * Height * 4;
-			 sourceIndex += 4, destinationIndex += 3) {
-			std::memcpy(result.RgbPixels.data() + destinationIndex, rgba + sourceIndex, 3);
-		}
-		SDL_UnmapGPUTransferBuffer(Gpu, DownloadBuffer);
-		SDL_ReleaseGPUFence(Gpu, fence);
-		return result;
+		EditorViewportFrame Result{.Width = State->Width, .Height = State->Height};
+		Result.RgbPixels.resize(static_cast<std::size_t>(State->Width) * State->Height * 3);
+		for (std::size_t SourceIndex = 0, DestinationIndex = 0;
+			SourceIndex < static_cast<std::size_t>(State->Width) * State->Height * 4;
+			SourceIndex += 4, DestinationIndex += 3)
+			std::memcpy(Result.RgbPixels.data() + DestinationIndex, Rgba + SourceIndex, 3);
+		SDL_UnmapGPUTransferBuffer(State->Gpu, State->DownloadBuffer);
+		SDL_ReleaseGPUFence(State->Gpu, Fence);
+		return Result;
 	}
 }

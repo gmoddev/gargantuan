@@ -66,6 +66,7 @@ Authoritative DataModel / live Instance graph
 | Schema/reflection/custom enums/class extensions | `docs/src/content/docs/developing/runtime-schema.mdx` |
 | Attributes or tags | `instance-attributes.mdx` or `instance-tags.mdx` in the same directory |
 | Rendering or viewport picking | `render-extraction.mdx` and `devdocs/CurrentArchitecture/EditorViewport.md` |
+| Platform input or renderer backend isolation | `devdocs/CurrentArchitecture/PlatformInputBoundary.md` and `RendererBackendBoundary.md` |
 | Physics bodies, constraints, stepping, or touch events | `devdocs/CurrentArchitecture/PhysicsBackend.md` |
 | Studio, EditorHost, snapshots, journals, viewport IPC | `editor-host.mdx` plus the relevant `devdocs/CurrentArchitecture` protocol document |
 | Luau execution or permissions | `devdocs/CurrentArchitecture/ScriptSecurity.md` |

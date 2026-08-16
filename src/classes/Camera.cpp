@@ -1,7 +1,7 @@
 #include "gargantuan/classes/Camera.hpp"
 
-#include <SDL3/SDL.h>
 #include <glm/glm.hpp>
+#include <type_traits>
 
 namespace gargantuan {
 	float Camera::GetAspectRatio() const {
@@ -43,27 +43,39 @@ namespace gargantuan {
 		return glm::lookAt(position, position + CFrame.GetLookVector(), CFrame.GetUpVector());
 	}
 
-	void Camera::OnEvent(SDL_Event &event) {
+	std::optional<HostCommand> Camera::ProcessEvent(const HostEvent &Event) {
 		if (CameraType != Enums::CameraType::Freecam) {
-			return;
+			return std::nullopt;
 		}
 
-		if (event.type == SDL_EVENT_WINDOW_RESIZED) {
-			int width, height;
-			auto window = SDL_GetWindowFromEvent(&event);
-			SDL_GetWindowSizeInPixels(window, &width, &height);
-			SetViewportSize(Vector2(width, height));
-		} else if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN && event.button.button == SDL_BUTTON_RIGHT) {
-			auto window = SDL_GetWindowFromEvent(&event);
-			SDL_SetWindowRelativeMouseMode(window, true);
-		} else if (event.type == SDL_EVENT_MOUSE_BUTTON_UP && event.button.button == SDL_BUTTON_RIGHT) {
-			auto window = SDL_GetWindowFromEvent(&event);
-			SDL_SetWindowRelativeMouseMode(window, false);
-		} else if (event.type == SDL_EVENT_MOUSE_MOTION &&
-				   SDL_GetWindowRelativeMouseMode(SDL_GetWindowFromEvent(&event))) {
-			AccumulatedDeltaX += event.motion.xrel;
-			AccumulatedDeltaY += event.motion.yrel;
-		}
+		return std::visit([this](const auto &Value) -> std::optional<HostCommand> {
+			using EventType = std::decay_t<decltype(Value)>;
+			if constexpr (std::is_same_v<EventType, KeyEvent>) {
+				if (Value.Physical != PhysicalKey::Unknown) {
+					if (Value.State == ButtonState::Pressed) PressedKeys.insert(Value.Physical);
+					else PressedKeys.erase(Value.Physical);
+				}
+			} else if constexpr (std::is_same_v<EventType, PointerButtonEvent>) {
+				if (Value.Button == PointerButton::Right) {
+					RelativePointerMode = Value.State == ButtonState::Pressed;
+					return HostCommand{SetRelativePointerMode{RelativePointerMode}};
+				}
+			} else if constexpr (std::is_same_v<EventType, PointerMoveEvent>) {
+				if (RelativePointerMode) {
+					AccumulatedDeltaX += Value.Delta.X;
+					AccumulatedDeltaY += Value.Delta.Y;
+				}
+			} else if constexpr (std::is_same_v<EventType, FocusEvent>) {
+				if (!Value.Focused) {
+					PressedKeys.clear();
+					if (RelativePointerMode) {
+						RelativePointerMode = false;
+						return HostCommand{SetRelativePointerMode{false}};
+					}
+				}
+			}
+			return std::nullopt;
+		}, Event);
 	}
 
 	void Camera::Step(float deltaTime) {
@@ -84,35 +96,33 @@ namespace gargantuan {
 			SetCFrame(gargantuan::CFrame(CFrame.Position, rotation.Rotation));
 		}
 
-		auto keys = SDL_GetKeyboardState(nullptr);
-
 		auto lookVector = CFrame.GetLookVector();
 		auto rightVector = CFrame.GetRightVector();
 		auto upVector = CFrame.GetUpVector();
 
-		if (keys[SDL_SCANCODE_W]) {
+		if (PressedKeys.contains(PhysicalKey::W)) {
 			SetCFrame(gargantuan::CFrame(CFrame.Position + lookVector * FreecamSpeed * deltaTime, CFrame.Rotation));
 		}
 
-		if (keys[SDL_SCANCODE_S]) {
+		if (PressedKeys.contains(PhysicalKey::S)) {
 			SetCFrame(gargantuan::CFrame(CFrame.Position - lookVector * FreecamSpeed * deltaTime, CFrame.Rotation));
 		}
 
-		if (keys[SDL_SCANCODE_A]) {
+		if (PressedKeys.contains(PhysicalKey::A)) {
 			SetCFrame(gargantuan::CFrame(CFrame.Position - rightVector * FreecamSpeed * deltaTime, CFrame.Rotation));
 		}
 
-		if (keys[SDL_SCANCODE_D]) {
+		if (PressedKeys.contains(PhysicalKey::D)) {
 			SetCFrame(gargantuan::CFrame(CFrame.Position + rightVector * FreecamSpeed * deltaTime, CFrame.Rotation));
 		}
 
-		if (keys[SDL_SCANCODE_SPACE]) {
+		if (PressedKeys.contains(PhysicalKey::Space)) {
 			SetCFrame(gargantuan::CFrame(CFrame.Position + glm::vec3(0, FreecamSpeed * deltaTime, 0), CFrame.Rotation));
 		}
 
 		// complex and volatile so i can screenshot on macos
-		bool shiftPressed = keys[SDL_SCANCODE_LSHIFT] || keys[SDL_SCANCODE_RSHIFT];
-		bool guiPressed = (SDL_GetModState() & SDL_KMOD_GUI) != 0;
+		bool shiftPressed = PressedKeys.contains(PhysicalKey::LeftShift) || PressedKeys.contains(PhysicalKey::RightShift);
+		bool guiPressed = PressedKeys.contains(PhysicalKey::LeftMeta) || PressedKeys.contains(PhysicalKey::RightMeta);
 		if (shiftPressed && !guiPressed) {
 			SetCFrame(gargantuan::CFrame(CFrame.Position - glm::vec3(0, FreecamSpeed * deltaTime, 0), CFrame.Rotation));
 		}

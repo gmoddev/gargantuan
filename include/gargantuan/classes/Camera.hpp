@@ -1,8 +1,10 @@
 #pragma once
 
 #include "gargantuan/classes/generated/Camera.hpp"
+#include "gargantuan/platform/HostEvent.hpp"
 
-#include <SDL3/SDL.h>
+#include <optional>
+#include <unordered_set>
 
 namespace gargantuan {
 	G_ENUM(
@@ -34,11 +36,13 @@ namespace gargantuan {
 		float AccumulatedDeltaY = 0.0f;
 		float FreecamSpeed = 10.0f;
 		float FreecamSensitivity = 0.2f;
+		bool RelativePointerMode = false;
+		std::unordered_set<PhysicalKey> PressedKeys;
 
 		glm::mat4 GetProjectionMatrix();
 		glm::mat4 GetViewMatrix();
 
-		void OnEvent(SDL_Event &event);
+		[[nodiscard]] std::optional<HostCommand> ProcessEvent(const HostEvent &Event);
 		void Step(float deltaTime);
 	};
 }

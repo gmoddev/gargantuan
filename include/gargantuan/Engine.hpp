@@ -10,9 +10,9 @@
 #include "gargantuan/services/UserInputService.hpp"
 #include "gargantuan/services/Workspace.hpp"
 #include "gargantuan/runtime/MutationGateway.hpp"
+#include "gargantuan/platform/HostEvent.hpp"
 
-#include <SDL3/SDL.h>
-#include <SDL3/SDL_gpu.h>
+#include <chrono>
 #include <glm/gtc/matrix_transform.hpp>
 #include <lua.h>
 #include <memory>
@@ -41,12 +41,12 @@ namespace gargantuan {
 
 		void Step();
 		float GetDeltaTime();
-		void ProcessEvent(SDL_Event event);
+		[[nodiscard]] HostEventResult ProcessEvent(const HostEvent &Event);
 		void Destroy();
 
 	  private:
-		uint64_t CurrentTick = 0;
-		uint64_t LastTick = 0;
+		std::chrono::steady_clock::time_point CurrentTick{};
+		std::chrono::steady_clock::time_point LastTick{};
 
 		template <typename T>
 			requires std::is_base_of_v<Instance, T>

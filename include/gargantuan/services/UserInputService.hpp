@@ -1,6 +1,7 @@
 #pragma once
 
 #include "gargantuan/services/generated/UserInputService.hpp"
+#include "gargantuan/platform/HostEvent.hpp"
 
 #include <memory>
 #include <string_view>
@@ -17,7 +18,7 @@ namespace gargantuan {
 	class UserInputService : public Instance {
 		I_UserInputService;
 
-		void ProcessEvent(SDL_Event &event);
+		[[nodiscard]] bool ProcessEvent(const HostEvent &Event);
 
 	  protected:
 		std::unordered_map<Enums::KeyCode, std::shared_ptr<InputObject>> ActiveKeys;

@@ -1,8 +1,8 @@
 #pragma once
 
 #include "gargantuan/classes/generated/InputObject.hpp"
+#include "gargantuan/platform/HostEvent.hpp"
 
-#include <SDL3/SDL.h>
 #include <glm/glm.hpp>
 #include <magic_enum/magic_enum.hpp>
 
@@ -250,14 +250,12 @@ namespace gargantuan {
 
 	G_ENUM(ModifierKey, Shift, Ctrl, Alt, Meta);
 
-	extern const std::unordered_map<SDL_Keycode, Enums::KeyCode> SDL_TO_KEYCODE;
-	extern const std::unordered_map<Enums::KeyCode, std::unordered_set<SDL_Keycode>> KEYCODE_TO_SDL;
 	extern const std::unordered_map<Enums::ModifierKey, std::unordered_set<Enums::KeyCode>> MODIFIER_TO_KEYCODE;
 
 	class InputObject : public Instance {
 		I_InputObject;
 
-		[[nodiscard]] static std::shared_ptr<InputObject> fromEvent(SDL_Event &event);
+		[[nodiscard]] static std::shared_ptr<InputObject> FromHostEvent(const HostEvent &Event);
 	};
 }
 

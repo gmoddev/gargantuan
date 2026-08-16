@@ -1,51 +1,59 @@
 // #define GLM_FORCE_DEPTH_ZERO_TO_ONE
 
 #include "gargantuan/render/SDLRenderer.hpp"
+
 #include "gargantuan/Log.hpp"
-#include "gargantuan/render/MeshProvider.hpp"
-#include "gargantuan/render/RenderPass.hpp"
+#include "render/sdl/SDLMeshCache.hpp"
+#include "render/sdl/SDLRenderPass.hpp"
 
 #include <SDL3/SDL.h>
-#include <SDL3/SDL_error.h>
 #include <SDL3/SDL_gpu.h>
-#include <SDL3/SDL_video.h>
-#include <format>
-#include <glm/geometric.hpp>
-#include <glm/glm.hpp>
 
-#include <cstddef>
-#include <cstdint>
-#include <cstdlib>
-#include <cstring>
+#include <format>
 #include <stdexcept>
 #include <utility>
 #include <vector>
 
 namespace gargantuan {
-	static constexpr auto WINDOW_FLAGS = SDL_WINDOW_RESIZABLE | SDL_WINDOW_MAXIMIZED | SDL_WINDOW_HIGH_PIXEL_DENSITY;
-	static constexpr auto SHADER_FORMATS = SDL_GPU_SHADERFORMAT_SPIRV | SDL_GPU_SHADERFORMAT_METALLIB |
-										   SDL_GPU_SHADERFORMAT_MSL;
-
-	const std::vector<RenderPassConstructor> RENDER_PASS_CONSTRUCTORS{
-		CreateShadowPass,
-		CreateOpaquePass,
-		// CreateGuiPass,
+	struct SDLRenderer::Backend final {
+		int Width = 0;
+		int Height = 0;
+		SDL_Window *Window = nullptr;
+		SDL_GPUDevice *Gpu = nullptr;
+		SDL_GPUTextureFormat SwapchainFormat = SDL_GPU_TEXTUREFORMAT_INVALID;
+		bool WindowClaimed = false;
+		SDL_GPUTexture *DepthTexture = nullptr;
+		SDL_GPUTexture *ShadowMapTexture = nullptr;
+		SDL_GPUSampler *ShadowSampler = nullptr;
+		std::vector<std::unique_ptr<SDLRenderPass>> RenderPasses;
+		std::unique_ptr<SDLMeshCache> MeshResources;
 	};
 
-	SDLRenderer::SDLRenderer(const Vector2 &ViewportSize) : BaseRenderer(ViewportSize) {
-		Gpu = SDL_CreateGPUDevice(SHADER_FORMATS, true, nullptr);
-		if (!Gpu) throw std::runtime_error(std::format("Failed to create GPU device: {}", SDL_GetError()));
+	const std::vector<SDLRenderPassConstructor> &GetSDLRenderPassConstructors() {
+		static const std::vector<SDLRenderPassConstructor> Constructors{
+			CreateShadowPass,
+			CreateOpaquePass,
+		};
+		return Constructors;
+	}
+
+	SDLRenderer::SDLRenderer(const Vector2 &ViewportSize)
+		: BaseRenderer(ViewportSize), State(std::make_unique<Backend>()) {
+		static constexpr auto WindowFlags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_MAXIMIZED | SDL_WINDOW_HIGH_PIXEL_DENSITY;
+		static constexpr auto ShaderFormats = SDL_GPU_SHADERFORMAT_SPIRV | SDL_GPU_SHADERFORMAT_METALLIB |
+			SDL_GPU_SHADERFORMAT_MSL;
+
+		State->Gpu = SDL_CreateGPUDevice(ShaderFormats, true, nullptr);
+		if (!State->Gpu) throw std::runtime_error(std::format("Failed to create GPU device: {}", SDL_GetError()));
 
 		try {
-			Window = SDL_CreateWindow("Gargantuan", ViewportSize.GetX(), ViewportSize.GetY(), WINDOW_FLAGS);
-			if (!Window) throw std::runtime_error(std::format("Failed to create window: {}", SDL_GetError()));
-
-			if (!SDL_ClaimWindowForGPUDevice(Gpu, Window))
+			State->Window = SDL_CreateWindow("Gargantuan", ViewportSize.GetX(), ViewportSize.GetY(), WindowFlags);
+			if (!State->Window) throw std::runtime_error(std::format("Failed to create window: {}", SDL_GetError()));
+			if (!SDL_ClaimWindowForGPUDevice(State->Gpu, State->Window))
 				throw std::runtime_error(std::format("Failed to claim window for GPU: {}", SDL_GetError()));
-			WindowClaimed = true;
-
-			SwapchainFormat = SDL_GetGPUSwapchainTextureFormat(Gpu, Window);
-			MeshResources = std::make_unique<GpuMeshCache>(Gpu);
+			State->WindowClaimed = true;
+			State->SwapchainFormat = SDL_GetGPUSwapchainTextureFormat(State->Gpu, State->Window);
+			State->MeshResources = std::make_unique<SDLMeshCache>(State->Gpu);
 
 			SDL_GPUTextureCreateInfo ShadowMapInfo{
 				.type = SDL_GPU_TEXTURETYPE_2D,
@@ -56,8 +64,7 @@ namespace gargantuan {
 				.layer_count_or_depth = 1,
 				.num_levels = 1,
 			};
-			ShadowMapTexture = SDL_CreateGPUTexture(Gpu, &ShadowMapInfo);
-
+			State->ShadowMapTexture = SDL_CreateGPUTexture(State->Gpu, &ShadowMapInfo);
 			SDL_GPUSamplerCreateInfo SamplerInfo{
 				.min_filter = SDL_GPU_FILTER_LINEAR,
 				.mag_filter = SDL_GPU_FILTER_LINEAR,
@@ -68,20 +75,20 @@ namespace gargantuan {
 				.compare_op = SDL_GPU_COMPAREOP_LESS_OR_EQUAL,
 				.enable_compare = true,
 			};
-			ShadowSampler = SDL_CreateGPUSampler(Gpu, &SamplerInfo);
-			if (!ShadowMapTexture || !ShadowSampler)
+			State->ShadowSampler = SDL_CreateGPUSampler(State->Gpu, &SamplerInfo);
+			if (!State->ShadowMapTexture || !State->ShadowSampler)
 				throw std::runtime_error(std::format("Failed to create shadow resources: {}", SDL_GetError()));
 
 			int InitialWidth = 0;
 			int InitialHeight = 0;
-			if (!SDL_GetWindowSizeInPixels(Window, &InitialWidth, &InitialHeight))
+			if (!SDL_GetWindowSizeInPixels(State->Window, &InitialWidth, &InitialHeight))
 				throw std::runtime_error(std::format("Failed to query renderer window size: {}", SDL_GetError()));
 			Resize(InitialWidth, InitialHeight);
 
-			for (const auto &Constructor : RENDER_PASS_CONSTRUCTORS) {
-				auto Pass = Constructor(Gpu, SwapchainFormat);
+			for (const auto &Constructor : GetSDLRenderPassConstructors()) {
+				auto Pass = Constructor(State->Gpu, State->SwapchainFormat);
 				if (!Pass) throw std::runtime_error("Failed to construct renderer pass");
-				RenderPasses.push_back(std::move(Pass));
+				State->RenderPasses.push_back(std::move(Pass));
 			}
 		} catch (...) {
 			Destroy();
@@ -92,97 +99,76 @@ namespace gargantuan {
 	SDLRenderer::~SDLRenderer() { Destroy(); }
 
 	void SDLRenderer::Destroy() {
-		if (Gpu) SDL_WaitForGPUIdle(Gpu);
-
-		if (MeshResources) {
-			MeshResources->Destroy();
-			MeshResources.reset();
+		if (!State) return;
+		if (State->Gpu) SDL_WaitForGPUIdle(State->Gpu);
+		if (State->MeshResources) {
+			State->MeshResources->Destroy();
+			State->MeshResources.reset();
 		}
-		for (auto &Pass : RenderPasses) {
-			if (Pass) Pass->Destroy(Gpu);
-		}
-		RenderPasses.clear();
-
-		if (DepthTexture && Gpu) {
-			SDL_ReleaseGPUTexture(Gpu, DepthTexture);
-			DepthTexture = nullptr;
-		}
-
-		if (ShadowMapTexture && Gpu) {
-			SDL_ReleaseGPUTexture(Gpu, ShadowMapTexture);
-			ShadowMapTexture = nullptr;
-		}
-
-		if (ShadowSampler && Gpu) {
-			SDL_ReleaseGPUSampler(Gpu, ShadowSampler);
-			ShadowSampler = nullptr;
-		}
-
-		if (WindowClaimed && Gpu && Window) {
-			SDL_ReleaseWindowFromGPUDevice(Gpu, Window);
-			WindowClaimed = false;
-		}
-		if (Gpu) SDL_DestroyGPUDevice(Gpu);
-		Gpu = nullptr;
-		if (Window) SDL_DestroyWindow(Window);
-		Window = nullptr;
-		Width = 0;
-		Height = 0;
-		SwapchainFormat = SDL_GPU_TEXTUREFORMAT_INVALID;
+		for (auto &Pass : State->RenderPasses) if (Pass) Pass->Destroy(State->Gpu);
+		State->RenderPasses.clear();
+		if (State->DepthTexture && State->Gpu) SDL_ReleaseGPUTexture(State->Gpu, State->DepthTexture);
+		if (State->ShadowMapTexture && State->Gpu) SDL_ReleaseGPUTexture(State->Gpu, State->ShadowMapTexture);
+		if (State->ShadowSampler && State->Gpu) SDL_ReleaseGPUSampler(State->Gpu, State->ShadowSampler);
+		State->DepthTexture = nullptr;
+		State->ShadowMapTexture = nullptr;
+		State->ShadowSampler = nullptr;
+		if (State->WindowClaimed && State->Gpu && State->Window)
+			SDL_ReleaseWindowFromGPUDevice(State->Gpu, State->Window);
+		State->WindowClaimed = false;
+		if (State->Gpu) SDL_DestroyGPUDevice(State->Gpu);
+		State->Gpu = nullptr;
+		if (State->Window) SDL_DestroyWindow(State->Window);
+		State->Window = nullptr;
+		State->Width = 0;
+		State->Height = 0;
+		State->SwapchainFormat = SDL_GPU_TEXTUREFORMAT_INVALID;
 	}
 
 	void SDLRenderer::Draw(RenderSnapshotPtr Snapshot) {
 		if (!Snapshot) throw std::invalid_argument("SDLRenderer requires an immutable RenderSnapshot");
-		if (!Gpu || !Window || !MeshResources) throw std::logic_error("SDLRenderer is not initialized");
-		MeshResources->UploadToGpu();
+		if (!State || !State->Gpu || !State->Window || !State->MeshResources)
+			throw std::logic_error("SDLRenderer is not initialized");
+		State->MeshResources->UploadToGpu();
+		if (!State->DepthTexture || !State->ShadowMapTexture) return;
 
-		if (!DepthTexture || !ShadowMapTexture) return;
-
-		SDL_GPUCommandBuffer *Commands = SDL_AcquireGPUCommandBuffer(Gpu);
+		auto *Commands = SDL_AcquireGPUCommandBuffer(State->Gpu);
 		if (!Commands) {
-			SDL_Log("Failed to acquire command buffer: %s", SDL_GetError());
+			LOG_ERROR(App, "[Render:SDL] Failed to acquire command buffer: %s", SDL_GetError());
 			return;
 		}
 
-		FrameContext Frame(*Snapshot, *MeshResources);
+		SDLFrameContext Frame(*Snapshot, *State->MeshResources);
 		Frame.Commands = Commands;
-
-		Frame.DepthTexture = DepthTexture;
-		Frame.ShadowMapTexture = ShadowMapTexture;
-		Frame.ShadowSampler = ShadowSampler;
-
-		auto SwapchainResult = SDL_AcquireGPUSwapchainTexture(
-			Frame.Commands, Window, &Frame.SwapchainTexture, &Frame.Width, &Frame.Height
-		);
-		if (!SwapchainResult) {
-			LOG_TRACE(App, "Failed to acquire swapchain texture: %s", SDL_GetError());
-			if (Frame.Commands) SDL_CancelGPUCommandBuffer(Frame.Commands);
+		Frame.DepthTexture = State->DepthTexture;
+		Frame.ShadowMapTexture = State->ShadowMapTexture;
+		Frame.ShadowSampler = State->ShadowSampler;
+		if (!SDL_AcquireGPUSwapchainTexture(Frame.Commands, State->Window, &Frame.SwapchainTexture, &Frame.Width, &Frame.Height)) {
+			LOG_TRACE(App, "[Render:SDL] Failed to acquire swapchain texture: %s", SDL_GetError());
+			SDL_CancelGPUCommandBuffer(Frame.Commands);
 			return;
-		} else if (!Frame.SwapchainTexture) {
-			LOG_TRACE(App, "Acquired swapchain texture, but it is null");
-			if (Frame.Commands) SDL_CancelGPUCommandBuffer(Frame.Commands);
+		}
+		if (!Frame.SwapchainTexture) {
+			LOG_TRACE(App, "[Render:SDL] Acquired a null swapchain texture");
+			SDL_CancelGPUCommandBuffer(Frame.Commands);
 			return;
 		}
 		if (Frame.Width != Snapshot->ViewportWidth || Frame.Height != Snapshot->ViewportHeight) {
 			SDL_CancelGPUCommandBuffer(Frame.Commands);
-			LOG_TRACE(App, "RenderSnapshot viewport does not match the acquired swapchain target");
+			LOG_TRACE(App, "[Render:SDL] RenderSnapshot viewport does not match the acquired target");
 			return;
 		}
-
-		for (auto &Pass : RenderPasses) {
-			SDL_EndGPURenderPass(Pass->Draw(Gpu, Frame));
-		}
-
+		for (auto &Pass : State->RenderPasses) SDL_EndGPURenderPass(Pass->Draw(State->Gpu, Frame));
 		SDL_SubmitGPUCommandBuffer(Frame.Commands);
 	}
 
 	void SDLRenderer::Resize(int WidthValue, int HeightValue) {
 		if (WidthValue < 1 || HeightValue < 1) return;
-		if (!Gpu || !WindowClaimed) throw std::logic_error("Cannot resize an uninitialized SDLRenderer");
-
-		// SDL_SetGPUSwapchainParameters(Gpu, Window, SDL_GPU_SWAPCHAINCOMPOSITION_SDR, SDL_GPU_PRESENTMODE_IMMEDIATE);
-		if (!SDL_SetGPUSwapchainParameters(Gpu, Window, SDL_GPU_SWAPCHAINCOMPOSITION_SDR, SDL_GPU_PRESENTMODE_VSYNC))
-			throw std::runtime_error(std::format("Failed to configure renderer swapchain: {}", SDL_GetError()));
+		if (!State || !State->Gpu || !State->WindowClaimed)
+			throw std::logic_error("Cannot resize an uninitialized SDLRenderer");
+		if (!SDL_SetGPUSwapchainParameters(
+			State->Gpu, State->Window, SDL_GPU_SWAPCHAINCOMPOSITION_SDR, SDL_GPU_PRESENTMODE_VSYNC
+		)) throw std::runtime_error(std::format("Failed to configure renderer swapchain: {}", SDL_GetError()));
 
 		SDL_GPUTextureCreateInfo DepthInfo{
 			.type = SDL_GPU_TEXTURETYPE_2D,
@@ -193,18 +179,23 @@ namespace gargantuan {
 			.layer_count_or_depth = 1,
 			.num_levels = 1,
 		};
-		auto *ReplacementDepth = SDL_CreateGPUTexture(Gpu, &DepthInfo);
+		auto *ReplacementDepth = SDL_CreateGPUTexture(State->Gpu, &DepthInfo);
 		if (!ReplacementDepth)
 			throw std::runtime_error(std::format("Failed to create renderer depth target: {}", SDL_GetError()));
-		if (DepthTexture) SDL_ReleaseGPUTexture(Gpu, DepthTexture);
-		DepthTexture = ReplacementDepth;
-		Width = WidthValue;
-		Height = HeightValue;
+		if (State->DepthTexture) SDL_ReleaseGPUTexture(State->Gpu, State->DepthTexture);
+		State->DepthTexture = ReplacementDepth;
+		State->Width = WidthValue;
+		State->Height = HeightValue;
 	}
 
 	std::string SDLRenderer::GetDriverName() const {
-		if (!Gpu) return "destroyed";
-		const auto *Driver = SDL_GetGPUDeviceDriver(Gpu);
+		if (!State || !State->Gpu) return "destroyed";
+		const auto *Driver = SDL_GetGPUDeviceDriver(State->Gpu);
 		return Driver ? Driver : "unknown";
+	}
+
+	std::pair<std::uint32_t, std::uint32_t> SDLRenderer::GetViewportSize() const {
+		if (!State) return {0, 0};
+		return {static_cast<std::uint32_t>(State->Width), static_cast<std::uint32_t>(State->Height)};
 	}
 }

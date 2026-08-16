@@ -1,7 +1,5 @@
 #include "gargantuan/services/UserInputService.hpp"
 
-#include <SDL3/SDL.h>
-
 #include <memory>
 #include <vector>
 
@@ -49,16 +47,20 @@ namespace gargantuan {
 		return ActiveMouseButtons.contains(mouseType);
 	}
 
-	void UserInputService::ProcessEvent(SDL_Event &event) {
-		if (event.type == SDL_EVENT_WINDOW_FOCUS_GAINED) return WindowFocused->Fire({});
-		if (event.type == SDL_EVENT_WINDOW_FOCUS_LOST) {
+	bool UserInputService::ProcessEvent(const HostEvent &Event) {
+		if (const auto *Focus = std::get_if<FocusEvent>(&Event); Focus && Focus->Focused) {
+			WindowFocused->Fire({});
+			return false;
+		}
+		if (const auto *Focus = std::get_if<FocusEvent>(&Event); Focus && !Focus->Focused) {
 			ActiveKeys.clear();
 			ActiveMouseButtons.clear();
-			return WindowFocusReleased->Fire({});
+			WindowFocusReleased->Fire({});
+			return false;
 		};
 
-		auto input = InputObject::fromEvent(event);
-		if (!input) return;
+		auto input = InputObject::FromHostEvent(Event);
+		if (!input) return false;
 
 		auto inputType = input->GetUserInputType();
 		auto inputState = input->GetUserInputState();
@@ -74,22 +76,23 @@ namespace gargantuan {
 				if (input->GetKeyCode() == Enums::KeyCode::Space) JumpRequest->Fire({});
 			} else if (IsMouseButtonType(inputType)) {
 				if (!ActiveMouseButtons.contains(input->GetUserInputType()))
-					ActiveKeys.emplace(input->GetKeyCode(), input);
+					ActiveMouseButtons.emplace(input->GetUserInputType(), input);
 			}
 			InputBegan->Fire({input, false});
 		} else if (inputState == Enums::UserInputState::Change) {
 			if (inputType == Enums::UserInputType::MouseMovement) {
 				MouseDelta = Vector2(input->GetDelta());
-				MouseLocation = Vector2(input->GetDelta());
+				MouseLocation = Vector2(input->GetPosition());
 			}
 			InputChanged->Fire({input, false});
 		} else if (inputState == Enums::UserInputState::End) {
 			if (inputType == Enums::UserInputType::Keyboard) {
 				if (ActiveKeys.contains(input->GetKeyCode())) ActiveKeys.erase(input->GetKeyCode());
 			} else if (IsMouseButtonType(inputType)) {
-				if (ActiveMouseButtons.contains(input->GetUserInputType())) ActiveKeys.erase(input->GetKeyCode());
+				ActiveMouseButtons.erase(input->GetUserInputType());
 			}
 			InputEnded->Fire({input, false});
 		}
+		return false;
 	}
 }

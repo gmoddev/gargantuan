@@ -1,10 +1,10 @@
-#include "gargantuan/render/Shader.hpp"
+#include "render/sdl/SDLShader.hpp"
 #include "gargantuan/filesystem/Paths.hpp"
 
 #include <SDL3/SDL.h>
 
 namespace gargantuan {
-	std::filesystem::path GetShaderPath(const std::filesystem::path &relativePath) {
+	std::filesystem::path GetSDLShaderPath(const std::filesystem::path &relativePath) {
 		return Paths::GetExecutableDirectory() / "shaders" / relativePath;
 	}
 
@@ -26,7 +26,7 @@ namespace gargantuan {
 		}
 	}
 
-	void Shader::Destroy(SDL_GPUDevice *gpu) {
+	void SDLShader::Destroy(SDL_GPUDevice *gpu) {
 		if (VertexShader) {
 			SDL_ReleaseGPUShader(gpu, VertexShader);
 			VertexShader = nullptr;
@@ -39,7 +39,7 @@ namespace gargantuan {
 	}
 
 	SDL_GPUShader *
-	FileShader::CompileFile(SDL_GPUDevice *gpu, std::filesystem::path filepath, SDL_GPUShaderCreateInfo info) {
+	SDLFileShader::CompileFile(SDL_GPUDevice *gpu, const std::filesystem::path &filepath, SDL_GPUShaderCreateInfo info) {
 		size_t codeSize;
 		void *code = SDL_LoadFile(filepath.string().c_str(), &codeSize);
 		if (code == nullptr) {
@@ -61,7 +61,7 @@ namespace gargantuan {
 		return shader;
 	}
 
-	void FileShader::Init(SDL_GPUDevice *gpu) {
+	void SDLFileShader::Init(SDL_GPUDevice *gpu) {
 		SDL_GPUShaderFormat format = SDL_GPU_SHADERFORMAT_INVALID;
 		std::string extension, entrypoint;
 		GetShaderFormat(gpu, format, extension, entrypoint);

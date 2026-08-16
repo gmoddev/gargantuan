@@ -67,13 +67,15 @@ Fatal world/camera/viewport errors reject the whole candidate snapshot.
 Individual invalid items are skipped with explicit snapshot diagnostics.
 Unavailable GPU primitive resources are reported and skipped by the renderer.
 
-## Deliberately deferred
+## Backend resource boundary
 
-SDL GPU remains visible in the renderer and pass implementation. This work does
+SDL GPU types are confined to the current backend implementation and its
+private helpers. Public/general render headers, `BaseRenderer`, `Mesh`, and the
+EditorViewport semantic contract expose no SDL GPU handles. This boundary does
 not introduce `RenderDevice`, a generic graphics API, backend selection,
-materials, textures, render threading, or a new GUI pipeline. A later rendering
-pass can place SDL resources behind a backend-neutral device boundary now that
-renderer data requirements are explicit.
+materials, textures, render threading, or a new GUI pipeline. See
+`devdocs/CurrentArchitecture/RendererBackendBoundary.md` for the verified
+ownership and leakage audit.
 
 ## Renderer technology decision checkpoint
 

@@ -1,4 +1,4 @@
-#include "gargantuan/render/MeshProvider.hpp"
+#include "render/sdl/SDLMeshCache.hpp"
 #include "gargantuan/render/PrimitiveMeshes.hpp"
 
 #include <SDL3/SDL.h>
@@ -20,7 +20,7 @@ namespace gargantuan {
 		}
 	}
 
-	void GpuMeshCache::Destroy() {
+	void SDLMeshCache::Destroy() {
 		if (!Gpu) return;
 		for (auto &[geometry, gpuMesh] : Meshes) {
 			(void)geometry;
@@ -30,7 +30,7 @@ namespace gargantuan {
 		Uploaded = false;
 	}
 
-	void GpuMeshCache::UploadToGpu() {
+	void SDLMeshCache::UploadToGpu() {
 		if (Uploaded) return;
 		if (!Gpu) throw std::logic_error("Cannot upload primitive meshes without an SDL GPU device");
 		auto cmd = SDL_AcquireGPUCommandBuffer(Gpu);
@@ -42,7 +42,7 @@ namespace gargantuan {
 		}
 
 		for (auto &[geometry, mesh] : CreatePrimitiveMeshes()) {
-			auto gpuMesh = std::make_unique<GpuMesh>(std::move(mesh));
+			auto gpuMesh = std::make_unique<SDLGpuMesh>(std::move(mesh));
 			gpuMesh->Upload(Gpu, copyPass);
 			Meshes.emplace(geometry, std::move(gpuMesh));
 		}
@@ -55,7 +55,7 @@ namespace gargantuan {
 		Uploaded = true;
 	}
 
-	const GpuMesh *GpuMeshCache::Find(RenderGeometry geometry) const {
+	const SDLGpuMesh *SDLMeshCache::Find(RenderGeometry geometry) const {
 		auto mesh = Meshes.find(geometry);
 		return mesh == Meshes.end() ? nullptr : mesh->second.get();
 	}

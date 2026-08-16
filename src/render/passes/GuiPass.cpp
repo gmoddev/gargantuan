@@ -1,7 +1,7 @@
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
 
-#include "gargantuan/render/RenderPass.hpp"
 #include "gargantuan/render/SDLRenderer.hpp"
+#include "render/sdl/SDLRenderPass.hpp"
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_error.h>
@@ -10,18 +10,15 @@
 
 namespace gargantuan {
 
-	class GuiPass final : public RenderPass {
+	class GuiPass final : public SDLRenderPass {
 	  public:
 		static constexpr std::string_view LABEL = "Gui";
 
-		FileShader Shader{
-			.VertexFilepath = GetShaderPath("gui.vert"),
-			.VertexUniformBufferCount = 0,
-			.FragmentFilepath = GetShaderPath("gui.frag"),
-			.FragmentUniformBufferCount = 0,
-		};
-
 		GuiPass(SDL_GPUDevice *gpu, SDL_GPUTextureFormat swapchainFormat) {
+			(void)gpu;
+			(void)swapchainFormat;
+			Shader.VertexFilepath = GetSDLShaderPath("gui.vert");
+			Shader.FragmentFilepath = GetSDLShaderPath("gui.frag");
 			// Shader.Init(gpu);
 
 			// Pipeline = PipelineBuilder()
@@ -33,7 +30,8 @@ namespace gargantuan {
 			// 			   .Build(gpu);
 		};
 
-		SDL_GPURenderPass *Draw(SDL_GPUDevice *gpu, FrameContext &context) override {
+		SDL_GPURenderPass *Draw(SDL_GPUDevice *gpu, SDLFrameContext &context) override {
+			(void)gpu;
 			// glm::mat4 shadowProjection = glm::ortho<float>(-30.0f, 30.0f, -30.0f, 30.0f, -50.0f, 150.0f);
 			// glm::vec3 lightPosition = glm::normalize(context.LightDirection) * 40.0f;
 			// glm::mat4 shadowView = glm::lookAt(lightPosition, glm::vec3(0), glm::vec3(0, 1, 0));
@@ -56,7 +54,7 @@ namespace gargantuan {
 		};
 	};
 
-	std::unique_ptr<RenderPass> CreateGuiPass(SDL_GPUDevice *gpu, SDL_GPUTextureFormat swapchainFormat) {
+	std::unique_ptr<SDLRenderPass> CreateGuiPass(SDL_GPUDevice *gpu, SDL_GPUTextureFormat swapchainFormat) {
 		return std::make_unique<GuiPass>(gpu, swapchainFormat);
 	}
 

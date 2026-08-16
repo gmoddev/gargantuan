@@ -1,8 +1,9 @@
 #pragma once
 
-#include <SDL3/SDL.h>
-#include <array>
 #include <glm/glm.hpp>
+
+#include <cstdint>
+#include <vector>
 
 namespace gargantuan {
 	struct Vertex {
@@ -10,9 +11,6 @@ namespace gargantuan {
 		glm::vec3 Position;
 		glm::vec3 Normal;
 		glm::vec2 UV;
-
-		static std::array<SDL_GPUVertexBufferDescription, 1> BufferDescriptions[];
-		static std::array<SDL_GPUVertexAttribute, 3> Attributes[];
 	};
 
 	static constexpr int UI_SOLID_COLOR_INDEX = -1;
@@ -23,9 +21,6 @@ namespace gargantuan {
 		glm::vec2 UV;
 		glm::vec4 Color;
 		int TextureIndex = UI_SOLID_COLOR_INDEX;
-
-		static std::array<SDL_GPUVertexBufferDescription, 1> BufferDescriptions[];
-		static std::array<SDL_GPUVertexAttribute, 5> Attributes[];
 	};
 
 	struct Mesh {

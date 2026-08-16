@@ -316,6 +316,8 @@ if(BUILD_TESTING)
 	endif()
 	add_executable(gargantuan_physics_backend_tests "tests/PhysicsBackendTests.cpp")
 	target_link_libraries(gargantuan_physics_backend_tests PRIVATE gargantuan_core)
+	add_executable(gargantuan_platform_input_boundary_tests "tests/PlatformInputBoundaryTests.cpp")
+	target_link_libraries(gargantuan_platform_input_boundary_tests PRIVATE gargantuan_core)
 	add_executable(gargantuan_prerun_bootstrap_tests "tests/PreRunBootstrapTests.cpp")
 	target_link_libraries(gargantuan_prerun_bootstrap_tests PRIVATE gargantuan_core)
 	add_executable(gargantuan_attributes_tags_profile "tests/AttributesTagsProfile.cpp")
@@ -351,6 +353,8 @@ if(BUILD_TESTING)
 	if(GARGANTUAN_BUILD_RENDERER_BENCHMARKS)
 		add_executable(gargantuan_renderer_benchmark "tests/RendererBenchmark.cpp")
 		target_link_libraries(gargantuan_renderer_benchmark PRIVATE gargantuan_core)
+		add_executable(gargantuan_editor_viewport_smoke "tests/EditorViewportSmoke.cpp")
+		target_link_libraries(gargantuan_editor_viewport_smoke PRIVATE gargantuan_core)
 	endif()
 	if(GARGANTUAN_BUILD_SERIALIZATION_BENCHMARKS)
 		add_executable(gargantuan_serialization_benchmark "tests/SerializationBenchmark.cpp")
@@ -385,6 +389,11 @@ if(BUILD_TESTING)
 			COMMAND ${CMAKE_COMMAND} -E copy_if_different
 				"$<TARGET_FILE:SDL3::SDL3>"
 				"$<TARGET_FILE_DIR:gargantuan_physics_backend_tests>"
+		)
+		add_custom_command(TARGET gargantuan_platform_input_boundary_tests POST_BUILD
+			COMMAND ${CMAKE_COMMAND} -E copy_if_different
+				"$<TARGET_FILE:SDL3::SDL3>"
+				"$<TARGET_FILE_DIR:gargantuan_platform_input_boundary_tests>"
 		)
 		add_custom_command(TARGET gargantuan_networking_contract_tests POST_BUILD
 			COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -475,6 +484,11 @@ if(BUILD_TESTING)
 					"$<TARGET_FILE:SDL3::SDL3>"
 					"$<TARGET_FILE_DIR:gargantuan_renderer_benchmark>"
 			)
+			add_custom_command(TARGET gargantuan_editor_viewport_smoke POST_BUILD
+				COMMAND ${CMAKE_COMMAND} -E copy_if_different
+					"$<TARGET_FILE:SDL3::SDL3>"
+					"$<TARGET_FILE_DIR:gargantuan_editor_viewport_smoke>"
+			)
 		endif()
 		if(GARGANTUAN_WITH_FILAMENT)
 			add_custom_command(TARGET gargantuan_filament_renderer_tests POST_BUILD
@@ -486,6 +500,7 @@ if(BUILD_TESTING)
 	endif()
 	add_test(NAME gargantuan_foundation COMMAND gargantuan_foundation_tests)
 	add_test(NAME gargantuan_physics_backend COMMAND gargantuan_physics_backend_tests)
+	add_test(NAME gargantuan_platform_input_boundary COMMAND gargantuan_platform_input_boundary_tests)
 	add_test(NAME gargantuan_prerun_bootstrap COMMAND gargantuan_prerun_bootstrap_tests)
 	add_test(NAME gargantuan_networking_contracts COMMAND gargantuan_networking_contract_tests)
 	add_test(NAME gargantuan_simulated_transport COMMAND gargantuan_simulated_transport_tests)

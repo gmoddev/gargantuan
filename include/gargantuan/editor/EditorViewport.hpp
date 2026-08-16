@@ -5,10 +5,9 @@
 
 #pragma once
 
-#include "gargantuan/render/RenderPass.hpp"
+#include "gargantuan/render/RenderSnapshot.hpp"
 #include "gargantuan/runtime/ObjectId.hpp"
 
-#include <SDL3/SDL_gpu.h>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -27,36 +26,24 @@ namespace gargantuan {
 	};
 
 	[[nodiscard]] std::optional<EditorViewportPick> PickEditorViewport(
-		const RenderSnapshot &snapshot,
-		float x,
-		float y
+		const RenderSnapshot &Snapshot,
+		float X,
+		float Y
 	);
 
 	class EditorViewportRenderer final {
 	  public:
-		EditorViewportRenderer(std::uint32_t width, std::uint32_t height);
+		EditorViewportRenderer(std::uint32_t Width, std::uint32_t Height);
 		~EditorViewportRenderer();
 
 		EditorViewportRenderer(const EditorViewportRenderer &) = delete;
 		EditorViewportRenderer &operator=(const EditorViewportRenderer &) = delete;
 
-		void Resize(std::uint32_t width, std::uint32_t height);
-		[[nodiscard]] EditorViewportFrame Capture(RenderSnapshotPtr snapshot);
+		void Resize(std::uint32_t Width, std::uint32_t Height);
+		[[nodiscard]] EditorViewportFrame Capture(RenderSnapshotPtr Snapshot);
 
 	  private:
-		void Destroy();
-		void RecreateTargets();
-
-		bool OwnsVideoSubsystem = false;
-		std::uint32_t Width = 0;
-		std::uint32_t Height = 0;
-		SDL_GPUDevice *Gpu = nullptr;
-		SDL_GPUTexture *ColorTexture = nullptr;
-		SDL_GPUTexture *DepthTexture = nullptr;
-		SDL_GPUTexture *ShadowMapTexture = nullptr;
-		SDL_GPUSampler *ShadowSampler = nullptr;
-		SDL_GPUTransferBuffer *DownloadBuffer = nullptr;
-		std::vector<std::unique_ptr<RenderPass>> RenderPasses;
-		std::unique_ptr<GpuMeshCache> MeshResources;
+		struct Backend;
+		std::unique_ptr<Backend> State;
 	};
 }
