@@ -50,8 +50,8 @@ shader compilation tooling;
 the platform libraries required by SDL, rendering, fonts, and other native dependencies.
 
 Windows
-The project documentation currently targets Windows 10/11 and requires the Vulkan SDK for the supported graphics path.
-The Windows build environment must also provide CMake, Ninja, CCache, and the compiler toolchain.
+The project documentation currently targets Windows 10/11. Runtime requires a compatible Vulkan driver; build time requires `glslc`, supplied either by the Vulkan SDK or another trusted shaderc installation.
+The Windows build environment must also provide CMake, Ninja, CCache, and the compiler toolchain. A non-PATH shader compiler can be selected explicitly with `-DGARGANTUAN_GLSLC_EXECUTABLE=C:\path\to\glslc.exe`; `matc.exe` is only valid for the separate optional Filament configuration.
 Because the Just recipes invoke shell commands, Windows users may occasionally find it easier to execute the underlying CMake commands manually when shell behavior differs.
 Run manual compiler builds from a Visual Studio Developer PowerShell/Command
 Prompt (or invoke `VsDevCmd.bat`) so the MSVC standard-library include paths are
@@ -176,17 +176,13 @@ gargantuan --editor-host --editor-token <random-token>
 EditorHost expects bounded protocol messages on standard input. Use the private
 Studio client or a protocol test rather than treating it as an interactive shell.
 9. Run tests
-Gargantuan's current test suite uses Lest.
-Run all currently wired tests with:
-just test
+Run the complete CMake-registered suite from a configured build with:
+ctest --test-dir build --output-on-failure
 
-At present the Justfile defines test in terms of the core test target:
-just test_core
+The Release production checkpoint uses:
+ctest --test-dir build -C Release --output-on-failure
 
-which performs a build and then runs:
-lest run core
-
-Therefore, just test currently tests the core suite rather than representing a large collection of independent subsystem suites.
+The legacy `just test` recipe still invokes only `lest run core`; it is not equivalent to the current CTest suite and should not be used as the sole validation for foundational changes.
 When changing native runtime behavior, successful compilation alone should not be considered sufficient validation.
 10. Recommended development loop
 For normal C++ work:
@@ -348,7 +344,7 @@ The desired standard is:
 The current developer workflow is still evolving.
 Notable current limitations include:
 
-tests are concentrated in the core Lest suite;
+the `just test` wrapper has not caught up with the current CTest suite;
 no standardized headless CI target is yet exposed through the Justfile;
 sanitizer builds are not yet first-class recipes;
 the public development guide has minor command drift relative to the current .justfile;
