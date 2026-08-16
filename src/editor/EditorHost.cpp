@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <array>
+#include <charconv>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -107,6 +108,10 @@ namespace gargantuan {
 				case MutationStatus::ValidationFailed: return "ValidationFailed";
 				case MutationStatus::Rejected: return "Rejected";
 				case MutationStatus::InternalError: return "InternalError";
+			case MutationStatus::TransactionNotFound:
+				return "TransactionNotFound";
+			case MutationStatus::TransactionLimit:
+				return "TransactionLimit";
 			}
 			return "InternalError";
 		}
@@ -226,6 +231,14 @@ namespace gargantuan {
 			throw std::invalid_argument("EditorHost requires a nonempty bounded session token");
 	}
 
+	EditorHost::~EditorHost() {
+		try {
+			if (World) (void)World->Transactions.TerminateOwner(*World, TransactionOwner);
+		} catch (...) {
+			if (World) World->Transactions.Reset();
+		}
+	}
+
 	std::string EditorHost::HandleRequest(std::string_view request) {
 		Json requestId = nullptr;
 		try {
@@ -256,9 +269,26 @@ namespace gargantuan {
 			requestId = message["RequestId"];
 			if (message["SessionToken"].get<std::string>() != SessionToken)
 				return SerializeBoundedResponse(ErrorResponse(requestId, "Unauthorized", "Session token was rejected"));
+			if (World) (void)World->Transactions.ExpireOwner(*World, TransactionOwner);
 
 			const auto method = message["Method"].get<std::string>();
 			const auto &parameters = message["Params"];
+			std::optional<TransactionId> RequestTransaction;
+			if (parameters.contains("TransactionId")) {
+				if (!parameters["TransactionId"].is_string())
+					return SerializeBoundedResponse(
+						ErrorResponse(requestId, "MalformedRequest", "TransactionId must be a canonical decimal string")
+					);
+				const auto &Encoded = parameters["TransactionId"].get_ref<const std::string &>();
+				std::uint64_t Value = 0;
+				const auto [End, Error] = std::from_chars(Encoded.data(), Encoded.data() + Encoded.size(), Value);
+				if (Encoded.empty() || Encoded.front() == '0' || Error != std::errc{} ||
+					End != Encoded.data() + Encoded.size() || Value == 0)
+					return SerializeBoundedResponse(ErrorResponse(
+						requestId, "MalformedRequest", "TransactionId must be a canonical nonzero decimal string"
+					));
+				RequestTransaction = TransactionId{Value};
+			}
 			const bool viewportMethod = method == "OpenViewportTransport" || method == "CloseViewportTransport" ||
 				method == "ConfigureViewport" || method == "SetViewportCamera" ||
 				method == "CaptureViewport" || method == "PickViewport";
@@ -271,6 +301,9 @@ namespace gargantuan {
 					"OpenProject", "Schema", "Snapshot", "Journal", "SetProperty", "SetAttribute", "SetExtensionProperty",
 					"AddTag", "RemoveTag", "SaveProject", "SaveProjectAs", "AuthoritativeRevision",
 					"CreateInstance", "DestroyInstance", "DuplicateInstance", "ReparentInstance",
+					"BeginTransaction",
+					"CommitTransaction",
+					"AuthoritativeTransactions",
 					"ConfigureViewport", "SetViewportCamera", "CaptureViewport", "PickViewport"
 				};
 				Json viewportTransports = Json::array({{
@@ -350,7 +383,9 @@ namespace gargantuan {
 				auto root = std::filesystem::weakly_canonical(std::filesystem::path(parameters["Root"].get<std::string>()));
 				if (!std::filesystem::is_directory(root))
 					return SerializeBoundedResponse(ErrorResponse(requestId, "ProjectNotFound", "Project root is not a directory"));
-				if (World) World->Destroy();
+				if (World) {
+					(void)World->Transactions.TerminateOwner(*World, TransactionOwner); World->Destroy();
+				}
 				World.reset();
 				Filesystem.reset();
 				CurrentProject.reset();
@@ -394,11 +429,84 @@ namespace gargantuan {
 				));
 			}
 
+			if (method == "BeginTransaction") {
+				if (!StudioSecurity.HasCapability(ScriptCapability::MutateDataModel))
+					return SerializeBoundedResponse(
+						ErrorResponse(requestId, "Unauthorized", "Transactions require MutateDataModel")
+					);
+				if (!World || !CurrentProject)
+					return SerializeBoundedResponse(
+						ErrorResponse(requestId, "NoProjectLoaded", "No project is loaded")
+					);
+				if (!HasOnlyFields(parameters, {"Label"}) || !parameters.contains("Label") ||
+					!parameters["Label"].is_string())
+					return SerializeBoundedResponse(
+						ErrorResponse(requestId, "MalformedRequest", "BeginTransaction requires a bounded Label")
+					);
+				auto Result = World->Transactions.Begin(
+					*World, TransactionOwner, parameters["Label"].get<std::string>(), TransactionOrigin::Studio
+				);
+				if (!Result.Succeeded())
+					return SerializeBoundedResponse(ErrorResponse(
+						requestId,
+						Result.Status == TransactionStatus::LimitExceeded ? "TransactionLimit" : "TransactionRejected",
+						Result.Message
+					));
+				return SerializeBoundedResponse(SuccessResponse(
+					requestId,
+					{
+						{"TransactionId", std::to_string(Result.Id.Value)},
+						{"Status", "Open"},
+						{"StartingRevision", Result.StartingRevision},
+					}
+				));
+			}
+
+			if (method == "CommitTransaction") {
+				if (!StudioSecurity.HasCapability(ScriptCapability::MutateDataModel))
+					return SerializeBoundedResponse(
+						ErrorResponse(requestId, "Unauthorized", "Transactions require MutateDataModel")
+					);
+				if (!World || !CurrentProject)
+					return SerializeBoundedResponse(
+						ErrorResponse(requestId, "NoProjectLoaded", "No project is loaded")
+					);
+				if (!HasOnlyFields(parameters, {"TransactionId"}) || !RequestTransaction)
+					return SerializeBoundedResponse(
+						ErrorResponse(requestId, "MalformedRequest", "CommitTransaction requires TransactionId")
+					);
+				auto Result = World->Transactions.Commit(*World, *RequestTransaction, TransactionOwner);
+				if (!Result.Succeeded())
+					return SerializeBoundedResponse(ErrorResponse(
+						requestId,
+						Result.Status == TransactionStatus::NotFound			? "TransactionNotFound"
+						: Result.Status == TransactionStatus::WrongOwner		? "WrongTransactionOwner"
+						: Result.Status == TransactionStatus::RevisionExhausted ? "RevisionExhausted"
+																				: "TransactionRejected",
+						Result.Message
+					));
+				return SerializeBoundedResponse(SuccessResponse(
+					requestId,
+					{
+						{"TransactionId", std::to_string(Result.Id.Value)},
+						{"Status", Result.Status == TransactionStatus::NoChanges ? "NoChanges" : "Committed"},
+						{"StartingRevision", Result.StartingRevision},
+						{"ResultingRevision", Result.ResultingRevision},
+						{"ChangeCount", Result.ChangeCount},
+						{"ProjectState", EncodeProjectState(World, PersistedRevision, CurrentProject)},
+					}
+				));
+			}
+
 			if (method == "SaveProject" || method == "SaveProjectAs") {
 				if (!StudioSecurity.HasCapability(ScriptCapability::EditorCommands))
 					return SerializeBoundedResponse(ErrorResponse(requestId, "Unauthorized", "Project persistence requires EditorCommands"));
 				if (!World || !CurrentProject || !Filesystem)
-					return SerializeBoundedResponse(ErrorResponse(requestId, "NoProjectLoaded", "No project is loaded"));
+					return SerializeBoundedResponse(ErrorResponse(requestId, "NoProjectLoaded", "No project is loaded")
+					);
+				if (World->Transactions.GetOpenCount() != 0)
+					return SerializeBoundedResponse(ErrorResponse(
+						requestId, "TransactionOpen", "Commit the open authoring transaction before saving"));
 				const bool saveAs = method == "SaveProjectAs";
 				if ((!saveAs && !parameters.empty()) ||
 					(saveAs && (!HasOnlyFields(parameters, {"Destination"}) || !parameters.contains("Destination"))))
@@ -586,6 +694,11 @@ namespace gargantuan {
 
 			if (!World)
 				return SerializeBoundedResponse(ErrorResponse(requestId, "ProjectRequired", "OpenProject must succeed first"));
+			auto StudioMutationAuthority = [&] {
+				return MutationAuthorityContext::Studio(
+					StudioSecurity, World->GetObjectId(), RequestTransaction, TransactionOwner
+				);
+			};
 
 			auto workspace = std::dynamic_pointer_cast<Workspace>(World->GetService("Workspace"));
 			if (!workspace || !ViewportCamera)
@@ -764,7 +877,7 @@ namespace gargantuan {
 					return SerializeBoundedResponse(ErrorResponse(requestId, "Unauthorized", "SetProperty requires MutateDataModel"));
 				if (!Cursor)
 					return SerializeBoundedResponse(ErrorResponse(requestId, "SnapshotRequired", "GetSnapshot must establish a cursor"));
-				if (!HasOnlyFields(parameters, {"Object", "Property", "Value"}) ||
+				if (!HasOnlyFields(parameters, {"Object", "Property", "Value", "TransactionId"}) ||
 					!parameters.contains("Object") || !parameters.contains("Property") ||
 					!parameters["Property"].is_string() || parameters["Property"].get_ref<const std::string &>().empty() ||
 					parameters["Property"].get_ref<const std::string &>().size() > 256 || !parameters.contains("Value"))
@@ -781,7 +894,8 @@ namespace gargantuan {
 					return SerializeBoundedResponse(ErrorResponse(requestId, "UnsupportedValue", "EditorHost v0 accepts closed value properties only"));
 				auto mutation = Mutations.Apply(UpdatePropertyCommand{
 					object->ToObjectId(), parameters["Property"].get<std::string>(), std::move(*native)
-				}, MutationAuthorityContext::Studio(StudioSecurity, World->GetObjectId()));
+				},
+					StudioMutationAuthority());
 				Json result{
 					{"Status", MutationStatusName(mutation.Status)},
 					{"Message", mutation.Message},
@@ -798,7 +912,7 @@ namespace gargantuan {
 					return SerializeBoundedResponse(ErrorResponse(requestId, "Unauthorized", "SetAttribute requires MutateDataModel"));
 				if (!Cursor)
 					return SerializeBoundedResponse(ErrorResponse(requestId, "SnapshotRequired", "GetSnapshot must establish a cursor"));
-				if (!HasOnlyFields(parameters, {"Object", "Attribute", "Value"}) ||
+				if (!HasOnlyFields(parameters, {"Object", "Attribute", "Value", "TransactionId"}) ||
 					!parameters.contains("Object") || !parameters.contains("Attribute") ||
 					!parameters["Attribute"].is_string() || !parameters.contains("Value"))
 					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "SetAttribute fields are invalid"));
@@ -813,7 +927,8 @@ namespace gargantuan {
 				if (std::holds_alternative<std::monostate>(*attributeValue)) attributeValue.reset();
 				auto mutation = Mutations.Apply(UpdateAttributeCommand{
 					object->ToObjectId(), parameters["Attribute"].get<std::string>(), std::move(attributeValue)
-				}, MutationAuthorityContext::Studio(StudioSecurity, World->GetObjectId()));
+				},
+					StudioMutationAuthority());
 				Json result{{"Status", MutationStatusName(mutation.Status)}, {"Message", mutation.Message}};
 				if (mutation.Object) result["Object"] = JsonCodec::EncodeObjectId(WireObjectId::FromObjectId(*mutation.Object));
 				return SerializeBoundedResponse(
@@ -832,7 +947,7 @@ namespace gargantuan {
 						requestId, "SnapshotRequired", "GetSnapshot must establish a cursor"
 					));
 				if (!HasOnlyFields(parameters, {
-						"Object", "ExtensionSchemaId", "DefinitionVersion", "Property", "Value"
+						"Object", "ExtensionSchemaId", "DefinitionVersion", "Property", "Value", "TransactionId"
 					}) || !parameters.contains("Object") || !parameters.contains("ExtensionSchemaId") ||
 					!parameters["ExtensionSchemaId"].is_string() || !parameters.contains("DefinitionVersion") ||
 					!parameters["DefinitionVersion"].is_number_unsigned() || !parameters.contains("Property") ||
@@ -876,7 +991,8 @@ namespace gargantuan {
 					*version,
 					parameters["Property"].get<std::string>(),
 					std::move(*value),
-				}, MutationAuthorityContext::Studio(StudioSecurity, World->GetObjectId()));
+				},
+					StudioMutationAuthority());
 				Json result{{"Status", MutationStatusName(mutation.Status)}, {"Message", mutation.Message}};
 				if (mutation.Object) result["Object"] = JsonCodec::EncodeObjectId(WireObjectId::FromObjectId(*mutation.Object));
 				return SerializeBoundedResponse(
@@ -895,7 +1011,7 @@ namespace gargantuan {
 						requestId, "SnapshotRequired", "GetSnapshot must establish a cursor"
 					));
 				if (!HasOnlyFields(parameters, {
-						"Object", "DeclaringClassSchemaId", "DefinitionVersion", "Property", "Value"
+						"Object", "DeclaringClassSchemaId", "DefinitionVersion", "Property", "Value", "TransactionId"
 					}) || !parameters.contains("Object") || !parameters.contains("DeclaringClassSchemaId") ||
 					!parameters["DeclaringClassSchemaId"].is_string() || !parameters.contains("DefinitionVersion") ||
 					!parameters["DefinitionVersion"].is_number_unsigned() || !parameters.contains("Property") ||
@@ -943,7 +1059,8 @@ namespace gargantuan {
 					));
 				auto mutation = Mutations.Apply(UpdatePropertyCommand{
 					object->ToObjectId(), parameters["Property"].get<std::string>(), std::move(*native)
-				}, MutationAuthorityContext::Studio(StudioSecurity, World->GetObjectId()));
+				},
+					StudioMutationAuthority());
 				Json result{{"Status", MutationStatusName(mutation.Status)}, {"Message", mutation.Message}};
 				if (mutation.Object) result["Object"] = JsonCodec::EncodeObjectId(WireObjectId::FromObjectId(*mutation.Object));
 				return SerializeBoundedResponse(
@@ -960,7 +1077,7 @@ namespace gargantuan {
 					return SerializeBoundedResponse(ErrorResponse(requestId, "SnapshotRequired", "GetSnapshot must establish a cursor"));
 				MutationResult Mutation;
 				if (method == "CreateInstance") {
-					if (!HasOnlyFields(parameters, {"ClassSchemaId", "DefinitionVersion", "Parent", "Name"}) ||
+					if (!HasOnlyFields(parameters, {"ClassSchemaId", "DefinitionVersion", "Parent", "Name", "TransactionId"}) ||
 						!parameters.contains("ClassSchemaId") || !parameters["ClassSchemaId"].is_string() ||
 						!parameters.contains("DefinitionVersion") || !parameters["DefinitionVersion"].is_number_unsigned() ||
 						!parameters.contains("Parent") || (parameters.contains("Name") && !parameters["Name"].is_string()))
@@ -974,11 +1091,11 @@ namespace gargantuan {
 					std::optional<std::string> Name;
 					if (parameters.contains("Name")) Name = parameters["Name"].get<std::string>();
 					Mutation = Mutations.Apply(CreateObjectCommand{*ClassId, *Version, Parent->ToObjectId(), std::move(Name)},
-						MutationAuthorityContext::Studio(StudioSecurity, World->GetObjectId()));
+						StudioMutationAuthority());
 				} else {
 					const bool Reparent = method == "ReparentInstance";
-					if (!HasOnlyFields(parameters, Reparent ? std::initializer_list<std::string_view>{"Object", "Parent"}
-						: std::initializer_list<std::string_view>{"Object"}) || !parameters.contains("Object") ||
+					if (!HasOnlyFields(parameters, Reparent ? std::initializer_list<std::string_view>{"Object", "Parent", "TransactionId"}
+						: std::initializer_list<std::string_view>{"Object", "TransactionId"}) || !parameters.contains("Object") ||
 						(Reparent && !parameters.contains("Parent")))
 						return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Structural identity fields are invalid"));
 					auto Object = JsonCodec::DecodeObjectId(parameters["Object"]);
@@ -986,13 +1103,10 @@ namespace gargantuan {
 					if (!Object || (Reparent && !Parent))
 						return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Structural ObjectId is invalid"));
 					if (method == "DestroyInstance")
-						Mutation = Mutations.Apply(DestroyObjectCommand{Object->ToObjectId()},
-							MutationAuthorityContext::Studio(StudioSecurity, World->GetObjectId()));
+						Mutation = Mutations.Apply(DestroyObjectCommand{Object->ToObjectId()}, StudioMutationAuthority());
 					else if (method == "DuplicateInstance")
-						Mutation = Mutations.Apply(DuplicateObjectCommand{Object->ToObjectId()},
-							MutationAuthorityContext::Studio(StudioSecurity, World->GetObjectId()));
-					else Mutation = Mutations.Apply(ReparentObjectCommand{Object->ToObjectId(), Parent->ToObjectId()},
-						MutationAuthorityContext::Studio(StudioSecurity, World->GetObjectId()));
+						Mutation = Mutations.Apply(DuplicateObjectCommand{Object->ToObjectId()}, StudioMutationAuthority());
+					else Mutation = Mutations.Apply(ReparentObjectCommand{Object->ToObjectId(), Parent->ToObjectId()}, StudioMutationAuthority());
 				}
 				Json Result{{"Status", MutationStatusName(Mutation.Status)}, {"Message", Mutation.Message},
 					{"AuthoritativeRevision", World->GetAuthoritativeRevision()}};
@@ -1006,7 +1120,7 @@ namespace gargantuan {
 					return SerializeBoundedResponse(ErrorResponse(requestId, "Unauthorized", "Tag mutation requires MutateDataModel"));
 				if (!Cursor)
 					return SerializeBoundedResponse(ErrorResponse(requestId, "SnapshotRequired", "GetSnapshot must establish a cursor"));
-				if (!HasOnlyFields(parameters, {"Object", "Tag"}) || !parameters.contains("Object") ||
+				if (!HasOnlyFields(parameters, {"Object", "Tag", "TransactionId"}) || !parameters.contains("Object") ||
 					!parameters.contains("Tag") || !parameters["Tag"].is_string())
 					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Tag mutation fields are invalid"));
 				auto object = JsonCodec::DecodeObjectId(parameters["Object"]);
@@ -1017,9 +1131,9 @@ namespace gargantuan {
 					return SerializeBoundedResponse(ErrorResponse(requestId, "StaleObject", "Object is not live in the open project"));
 				MutationResult mutation = method == "AddTag"
 					? Mutations.Apply(AddTagCommand{object->ToObjectId(), parameters["Tag"].get<std::string>(), World->GetObjectId()},
-						MutationAuthorityContext::Studio(StudioSecurity, World->GetObjectId()))
+							  StudioMutationAuthority())
 					: Mutations.Apply(RemoveTagCommand{object->ToObjectId(), parameters["Tag"].get<std::string>(), World->GetObjectId()},
-						MutationAuthorityContext::Studio(StudioSecurity, World->GetObjectId()));
+							  StudioMutationAuthority());
 				Json result{{"Status", MutationStatusName(mutation.Status)}, {"Message", mutation.Message}};
 				if (mutation.Object) result["Object"] = JsonCodec::EncodeObjectId(WireObjectId::FromObjectId(*mutation.Object));
 				return SerializeBoundedResponse(

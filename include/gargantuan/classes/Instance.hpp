@@ -47,6 +47,7 @@ namespace gargantuan {
 		bool DestroyingState = false;
 
 		const InstanceProperty *FindProperty(std::string name);
+		[[nodiscard]] std::optional<WireValue> ReadPropertyWireValue(std::string_view PropertyName) const;
 		const Self::Method *FindMethod(std::string name);
 		static int LIndex(lua_State *L, Instance *instance);
 		static int LNewIndex(lua_State *L, Instance *instance);

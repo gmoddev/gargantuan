@@ -7,6 +7,7 @@
 #include "gargantuan/runtime/ChangeJournal.hpp"
 #include "gargantuan/runtime/ExecutionDomain.hpp"
 #include "gargantuan/runtime/ProtocolInput.hpp"
+#include "gargantuan/runtime/WireCodec.hpp"
 
 #include <algorithm>
 #include <exception>
@@ -56,20 +57,29 @@ namespace gargantuan {
 	MutationAuthorityContext::MutationAuthorityContext(
 		MutationCommandOrigin OriginValue,
 		ScriptSecurityContext SecurityContextValue,
-		std::optional<ObjectId> ScopeValue
+		std::optional<ObjectId> ScopeValue,
+		std::optional<TransactionId> TransactionValue,
+		std::uint64_t TransactionOwnerValue
 	)
-		: Origin(OriginValue), SecurityContext(std::move(SecurityContextValue)), Scope(ScopeValue) {
+		: Origin(OriginValue), SecurityContext(std::move(SecurityContextValue)), Scope(ScopeValue),
+		  Transaction(TransactionValue), TransactionOwner(TransactionOwnerValue) {
 		if (Scope && !Scope->IsValid()) throw std::invalid_argument("Mutation authority scope is invalid");
+		if (Transaction && (!Transaction->IsValid() || TransactionOwner == 0))
+			throw std::invalid_argument("Mutation transaction authority is invalid");
 	}
 
 	MutationAuthorityContext MutationAuthorityContext::Local(ScriptSecurityContext SecurityContext) {
 		return {MutationCommandOrigin::LocalInternal, std::move(SecurityContext), std::nullopt};
 	}
 
-	MutationAuthorityContext MutationAuthorityContext::Studio(ScriptSecurityContext SecurityContext, ObjectId Scope) {
+	MutationAuthorityContext MutationAuthorityContext::Studio(ScriptSecurityContext SecurityContext, ObjectId Scope,
+		std::optional<TransactionId> Transaction,
+		std::uint64_t TransactionOwner) {
 		if (SecurityContext.Domain != ScriptExecutionDomain::Studio)
 			throw std::invalid_argument("Studio mutation authority requires the Studio execution domain");
-		return {MutationCommandOrigin::Studio, std::move(SecurityContext), Scope};
+		return {MutationCommandOrigin::Studio, std::move(SecurityContext), Scope,
+			Transaction,
+			TransactionOwner,};
 	}
 
 	MutationAuthorityContext
@@ -143,6 +153,73 @@ namespace gargantuan {
 		if (!securityContext.HasCapability(ScriptCapability::MutateDataModel))
 			return {MutationStatus::Unauthorized, std::nullopt, "Mutation requires MutateDataModel"};
 
+		auto ApplyAuthoringTransaction = [&]<typename Operation, typename BuildChange>(
+											 const std::shared_ptr<DataModel> &World,
+											 std::string Label,
+											 TransactionChange Prototype,
+											 Operation &&ApplyOperation,
+											 BuildChange &&BuildCommittedChange
+										 ) -> MutationResult {
+			if (Authority.GetOrigin() != MutationCommandOrigin::Studio)
+				return std::forward<Operation>(ApplyOperation)();
+			if (!World) return {MutationStatus::Rejected, std::nullopt, "Authoring target has no DataModel"};
+
+			auto &Transactions = World->Transactions;
+			const auto Owner = Authority.GetTransactionOwner();
+			const bool Implicit = !Authority.GetTransactionId();
+			auto Begin = Implicit ? Transactions.BeginImplicit(*World, Owner, std::move(Label))
+								  : TransactionResult{
+										.Status = Transactions.IsOpen(*Authority.GetTransactionId(), Owner)
+													  ? TransactionStatus::Success
+													  : TransactionStatus::NotFound,
+										.Id = *Authority.GetTransactionId(),
+									};
+			if (!Begin.Succeeded())
+				return {
+					Begin.Status == TransactionStatus::LimitExceeded ? MutationStatus::TransactionLimit
+																	 : MutationStatus::TransactionNotFound,
+					std::nullopt,
+					Begin.Message.empty() ? "Transaction is not open for this session" : Begin.Message,
+				};
+			const auto Id = Begin.Id;
+			auto Admission = Transactions.ValidateMutation(Id, Owner, EstimateTransactionChangeBytes(Prototype));
+			if (!Admission.Succeeded()) {
+				if (Implicit) (void)Transactions.Commit(*World, Id, Owner);
+				return {MutationStatus::TransactionLimit, std::nullopt, Admission.Message};
+			}
+
+			MutationResult Result;
+			bool Changed = false;
+			std::vector<BufferedChangeRecord> JournalRecords;
+			{
+				ScopedAuthoritativeRevisionDeferral RevisionDeferral(*World, Changed);
+				ScopedChangeJournalCapture JournalCapture;
+				try {
+					Result = std::forward<Operation>(ApplyOperation)();
+				} catch (...) {
+					(void)JournalCapture.Take();
+					if (Implicit) (void)Transactions.Commit(*World, Id, Owner);
+					throw;
+				}
+				JournalRecords = JournalCapture.Take();
+			}
+			if (Result.Succeeded() && Changed)
+				Transactions.RecordMutation(
+					Id, Owner, std::forward<BuildChange>(BuildCommittedChange)(Result), std::move(JournalRecords)
+				);
+			if (Implicit) {
+				auto Commit = Transactions.Commit(*World, Id, Owner);
+				if (!Commit.Succeeded())
+					return {
+						Commit.Status == TransactionStatus::RevisionExhausted ? MutationStatus::RevisionExhausted
+																			  : MutationStatus::InternalError,
+						std::nullopt,
+						Commit.Message,
+					};
+			}
+			return Result;
+		};
+
 		try {
 			return std::visit(
 				[&](auto &CommandValue) -> MutationResult {
@@ -200,6 +277,27 @@ namespace gargantuan {
 								) != MutationStatus::Success)
 								return {MutationStatus::ValidationFailed, std::nullopt, "Initial Name is invalid"};
 						}
+						std::string Snapshot;
+						if (Authority.GetOrigin() == MutationCommandOrigin::Studio) {
+							Snapshot = InstanceSerialization::Serialize(
+								InstanceSerialization::InstanceFormat::Json, InstanceValue
+							);
+							if (Snapshot.size() > MaximumTransactionSubtreeBytes)
+								return {
+									MutationStatus::TransactionLimit,
+									std::nullopt,
+									"Created subtree exceeds transaction history limits"
+								};
+						}
+						SubtreeTransactionChange Prototype{
+							SubtreeTransactionKind::Create, {}, CommandValue.Parent, {}, Snapshot
+						};
+						Prototype.Objects.resize(1);
+						return ApplyAuthoringTransaction(
+							DataModelValue,
+							"Create Instance",
+							Prototype,
+							[&] {
 						DataModelValue->BeginAuthoritativeRevisionBatch();
 						try {
 							{
@@ -209,7 +307,7 @@ namespace gargantuan {
 							const auto Id = InstanceValue->GetObjectId();
 							InstanceValue->PublishReplicationSubtree(Scope);
 							DataModelValue->CommitAuthoritativeRevisionBatch();
-							return {MutationStatus::Success, Id, {}};
+							return MutationResult {MutationStatus::Success, Id, {}};
 						} catch (...) {
 							{
 								ScopedChangeJournalSuppression Suppression;
@@ -218,6 +316,18 @@ namespace gargantuan {
 							DataModelValue->CancelAuthoritativeRevisionBatch();
 							throw;
 						}
+							},
+							[&](const MutationResult &Result) -> TransactionChange {
+								auto Change = Prototype;
+								Change.Root = *Result.Object;
+								Change.Objects.clear();
+								std::vector<std::shared_ptr<Instance>> Nodes{InstanceValue};
+								InstanceValue->CollectDescendants(Nodes);
+								for (const auto &Node : Nodes)
+									Change.Objects.push_back(Node->GetObjectId());
+								return Change;
+							}
+						);
 					} else {
 						auto InstanceValue = ObjectRegistry::Get().Lookup(CommandValue.Object);
 						if (!InstanceValue)
@@ -225,24 +335,88 @@ namespace gargantuan {
 						if (Authority.GetScope() && InstanceValue->GetReplicationScopeId() != *Authority.GetScope())
 							return {MutationStatus::Rejected, std::nullopt, "Object is outside the project scope"};
 						if constexpr (std::is_same_v<Command, UpdatePropertyCommand>) {
+							auto DataModelValue = InstanceValue->GetDataModel();
+							auto *Property = InstanceValue->FindProperty(CommandValue.PropertyName);
+							auto Before = InstanceValue->ReadPropertyWireValue(CommandValue.PropertyName)
+											  .value_or(WireValue(std::monostate{}));
+							PropertyTransactionChange Prototype{
+								CommandValue.Object,
+								Property ? Property->DeclaringSchemaId : SchemaId{},
+								Property ? Property->DeclaringDefinitionVersion : 0,
+								CommandValue.PropertyName,
+								Before,
+								EncodeNativeWireValue(CommandValue.Value).value_or(Before),
+							};
+							return ApplyAuthoringTransaction(
+								DataModelValue,
+								"Set " + CommandValue.PropertyName,
+								Prototype,
+								[&] {
 							const auto Status = InstanceValue->ApplyPropertyMutation(
 								CommandValue.PropertyName, CommandValue.Value, Enums::Permission::None, securityContext
 							);
-							return {
+							return MutationResult {
 								Status,
 								CommandValue.Object,
 								Status == MutationStatus::Success ? "" : "Property mutation rejected"
 							};
+						},
+								[&](const MutationResult &) -> TransactionChange {
+									auto Committed = Prototype;
+									Committed.After = InstanceValue->ReadPropertyWireValue(CommandValue.PropertyName)
+														  .value_or(Committed.After);
+									return Committed;
+								}
+							);
 						} else if constexpr (std::is_same_v<Command, UpdateAttributeCommand>) {
+							auto DataModelValue = InstanceValue->GetDataModel();
+							AttributeTransactionChange Change{
+								CommandValue.Object,
+								CommandValue.AttributeName,
+								InstanceValue->GetAttributeValue(
+									CommandValue.AttributeName, ScriptSecurityContext::CoreTrusted()
+								),
+								CommandValue.Value,
+							};
+							return ApplyAuthoringTransaction(
+								DataModelValue,
+								"Set Attribute",
+								Change,
+								[&] {
 							const auto Status = InstanceValue->ApplyAttributeMutation(
 								CommandValue.AttributeName, std::move(CommandValue.Value), securityContext
 							);
-							return {
+							return MutationResult {
 								Status,
 								CommandValue.Object,
 								Status == MutationStatus::Success ? "" : "Attribute mutation rejected"
 							};
+						},
+								[Change](const MutationResult &) -> TransactionChange { return Change; }
+							);
 						} else if constexpr (std::is_same_v<Command, UpdateExtensionPropertyCommand>) {
+							auto DataModelValue = InstanceValue->GetDataModel();
+							WireValue BeforeExtension = CommandValue.Value;
+							try {
+								BeforeExtension = InstanceValue->GetExtensionPropertyValue(
+									CommandValue.ExtensionSchemaId,
+									CommandValue.PropertyName,
+									ScriptSecurityContext::CoreTrusted()
+								);
+							} catch (const std::invalid_argument &) {}
+							ExtensionTransactionChange Change{
+								CommandValue.Object,
+								CommandValue.ExtensionSchemaId,
+								CommandValue.DefinitionVersion,
+								CommandValue.PropertyName,
+								std::move(BeforeExtension),
+								CommandValue.Value,
+							};
+							return ApplyAuthoringTransaction(
+								DataModelValue,
+								"Set Extension Property",
+								Change,
+								[&] {
 							const auto Status = InstanceValue->ApplyExtensionPropertyMutation(
 								CommandValue.ExtensionSchemaId,
 								CommandValue.DefinitionVersion,
@@ -250,11 +424,14 @@ namespace gargantuan {
 								std::move(CommandValue.Value),
 								securityContext
 							);
-							return {
+							return MutationResult {
 								Status,
 								CommandValue.Object,
 								Status == MutationStatus::Success ? "" : "Extension property mutation rejected"
 							};
+								},
+								[Change](const MutationResult &) -> TransactionChange { return Change; }
+							);
 						} else if constexpr (std::is_same_v<Command, AddTagCommand> ||
 											 std::is_same_v<Command, RemoveTagCommand>) {
 							auto DataModelValue = InstanceValue->GetDataModel();
@@ -265,6 +442,16 @@ namespace gargantuan {
 								return {
 									MutationStatus::Rejected, std::nullopt, "Tag target is outside the expected scope"
 							};
+							const bool Before = DataModelValue->Tags.Has(
+								Scope, CommandValue.Object, CommandValue.TagName, ScriptSecurityContext::CoreTrusted()
+							);
+							const bool After = std::is_same_v<Command, AddTagCommand>;
+							TagTransactionChange Change{CommandValue.Object, CommandValue.TagName, Before, After};
+							return ApplyAuthoringTransaction(
+								DataModelValue,
+								After ? "Add Tag" : "Remove Tag",
+								Change,
+								[&] {
 							if constexpr (std::is_same_v<Command, AddTagCommand>)
 								(void)DataModelValue->Tags.Add(
 									Scope, CommandValue.Object, CommandValue.TagName, securityContext
@@ -273,7 +460,10 @@ namespace gargantuan {
 								(void)DataModelValue->Tags.Remove(
 									Scope, CommandValue.Object, CommandValue.TagName, securityContext
 								);
-							return {MutationStatus::Success, CommandValue.Object, {}};
+							return MutationResult {MutationStatus::Success, CommandValue.Object, {}};
+								},
+								[Change](const MutationResult &) -> TransactionChange { return Change; }
+							);
 						} else if constexpr (std::is_same_v<Command, ReparentObjectCommand>) {
 							if (!CommandValue.Parent)
 								return {
@@ -301,6 +491,17 @@ namespace gargantuan {
 									"Reparent would exceed the hierarchy depth limit"
 								};
 							ChangeJournal::Get().EnsureCanCommit(DataModelValue->GetObjectId(), 1);
+							auto OldParent = InstanceValue->GetParent();
+							ReparentTransactionChange Change{
+								CommandValue.Object,
+								OldParent ? std::optional((*OldParent)->GetObjectId()) : std::nullopt,
+								CommandValue.Parent,
+							};
+							return ApplyAuthoringTransaction(
+								DataModelValue,
+								"Reparent Instance",
+								Change,
+								[&] {
 							DataModelValue->BeginAuthoritativeRevisionBatch();
 							try {
 								InstanceValue->SetParent(Parent);
@@ -309,7 +510,10 @@ namespace gargantuan {
 								DataModelValue->CancelAuthoritativeRevisionBatch();
 								throw;
 							}
-							return {MutationStatus::Success, CommandValue.Object, {}};
+							return MutationResult {MutationStatus::Success, CommandValue.Object, {}};
+								},
+								[Change](const MutationResult &) -> TransactionChange { return Change; }
+							);
 						} else if constexpr (std::is_same_v<Command, DestroyObjectCommand>) {
 							auto DataModelValue = InstanceValue->GetDataModel();
 							if (IsProtectedStructuralObject(DataModelValue, InstanceValue))
@@ -330,6 +534,33 @@ namespace gargantuan {
 														  )
 														  .size();
 							ChangeJournal::Get().EnsureCanCommit(DataModelValue->GetObjectId(), DestroyRecords);
+							std::string Snapshot;
+							if (Authority.GetOrigin() == MutationCommandOrigin::Studio) {
+								Snapshot = InstanceSerialization::Serialize(
+									InstanceSerialization::InstanceFormat::Json, InstanceValue
+								);
+								if (Snapshot.size() > MaximumTransactionSubtreeBytes)
+									return {
+										MutationStatus::TransactionLimit,
+										std::nullopt,
+										"Destroyed subtree exceeds transaction history limits"
+									};
+							}
+							SubtreeTransactionChange Change{
+								SubtreeTransactionKind::Destroy,
+								CommandValue.Object,
+								InstanceValue->GetParent() ? std::optional((*InstanceValue->GetParent())->GetObjectId())
+														   : std::nullopt,
+								{},
+								std::move(Snapshot),
+							};
+							for (const auto &Node : DestroyedNodes)
+								Change.Objects.push_back(Node->GetObjectId());
+							return ApplyAuthoringTransaction(
+								DataModelValue,
+								"Delete Instance",
+								Change,
+								[&] {
 							DataModelValue->BeginAuthoritativeRevisionBatch();
 							try {
 								InstanceValue->Destroy();
@@ -338,7 +569,12 @@ namespace gargantuan {
 								DataModelValue->CancelAuthoritativeRevisionBatch();
 								throw;
 							}
-							return {MutationStatus::Success, CommandValue.Object, {}};
+							return MutationResult {MutationStatus::Success, CommandValue.Object, {}};
+								},
+								[Change](const MutationResult &) mutable -> TransactionChange {
+									return std::move(Change);
+								}
+							);
 						} else {
 							auto DataModelValue = InstanceValue->GetDataModel();
 							if (IsProtectedStructuralObject(DataModelValue, InstanceValue))
@@ -384,6 +620,26 @@ namespace gargantuan {
 								};
 							auto Clone = State.Instance;
 							Clone->MarkPersistenceSubtreeArchivable();
+							if (Authority.GetOrigin() == MutationCommandOrigin::Studio &&
+								Encoded.size() > MaximumTransactionSubtreeBytes)
+								return {
+									MutationStatus::TransactionLimit,
+									std::nullopt,
+									"Duplicated subtree exceeds transaction history limits"
+								};
+							SubtreeTransactionChange Prototype{
+								SubtreeTransactionKind::Duplicate,
+								{},
+								(*Parent)->GetObjectId(),
+								{},
+								Authority.GetOrigin() == MutationCommandOrigin::Studio ? Encoded : std::string{}
+							};
+							Prototype.Objects.resize(Required);
+							return ApplyAuthoringTransaction(
+								DataModelValue,
+								"Duplicate Instance",
+								Prototype,
+								[&] {
 							DataModelValue->BeginAuthoritativeRevisionBatch();
 							try {
 								{
@@ -401,7 +657,7 @@ namespace gargantuan {
 								const auto Id = Clone->GetObjectId();
 								Clone->PublishReplicationSubtree(DataModelValue->GetObjectId());
 								DataModelValue->CommitAuthoritativeRevisionBatch();
-								return {MutationStatus::Success, Id, {}};
+								return MutationResult {MutationStatus::Success, Id, {}};
 							} catch (...) {
 								{
 									ScopedChangeJournalSuppression Suppression;
@@ -410,6 +666,18 @@ namespace gargantuan {
 								DataModelValue->CancelAuthoritativeRevisionBatch();
 								throw;
 							}
+								},
+								[&](const MutationResult &Result) -> TransactionChange {
+									auto Change = Prototype;
+									Change.Root = *Result.Object;
+									Change.Objects.clear();
+									std::vector<std::shared_ptr<Instance>> Nodes{Clone};
+									Clone->CollectDescendants(Nodes);
+									for (const auto &Node : Nodes)
+										Change.Objects.push_back(Node->GetObjectId());
+									return Change;
+								}
+							);
 						}
 					}
 				},

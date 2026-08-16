@@ -6,6 +6,7 @@
 namespace gargantuan {
 	namespace {
 		thread_local std::size_t SuppressionDepth = 0;
+		thread_local std::vector<BufferedChangeRecord> *CapturedRecords = nullptr;
 	}
 
 	ChangeJournal &ChangeJournal::Get() {
@@ -20,6 +21,10 @@ namespace gargantuan {
 	std::uint64_t ChangeJournal::Commit(ObjectId scope, ObjectId object, ChangePayload payload) {
 		AssertAuthoritativeMutation("ChangeJournal::Commit");
 		if (SuppressionDepth != 0) return 0;
+		if (CapturedRecords) {
+			CapturedRecords->push_back({scope, object, std::move(payload)});
+			return 0;
+		}
 		std::scoped_lock lock(Mutex);
 		auto &stream = Streams[scope];
 		if (stream.NextSequence == std::numeric_limits<std::uint64_t>::max())
@@ -34,6 +39,11 @@ namespace gargantuan {
 	void ChangeJournal::CommitBatch(ObjectId scope, std::vector<std::pair<ObjectId, ChangePayload>> changes) {
 		AssertAuthoritativeMutation("ChangeJournal::CommitBatch");
 		if (SuppressionDepth != 0 || changes.empty()) return;
+		if (CapturedRecords) {
+			for (auto &[object, payload] : changes)
+				CapturedRecords->push_back({scope, object, std::move(payload)});
+			return;
+		}
 		std::scoped_lock lock(Mutex);
 		auto &stream = Streams[scope];
 		auto nextSequence = stream.NextSequence;
@@ -127,5 +137,19 @@ namespace gargantuan {
 
 	ScopedChangeJournalSuppression::~ScopedChangeJournalSuppression() {
 		--SuppressionDepth;
+	}
+
+	ScopedChangeJournalCapture::ScopedChangeJournalCapture() {
+		if (CapturedRecords) throw std::logic_error("Change journal capture is already active");
+		CapturedRecords = &Records;
+	}
+
+	ScopedChangeJournalCapture::~ScopedChangeJournalCapture() {
+		if (CapturedRecords == &Records) CapturedRecords = nullptr;
+	}
+
+	std::vector<BufferedChangeRecord> ScopedChangeJournalCapture::Take() {
+		if (CapturedRecords == &Records) CapturedRecords = nullptr;
+		return std::move(Records);
 	}
 }

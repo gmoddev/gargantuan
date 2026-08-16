@@ -25,13 +25,15 @@ and existing hierarchy/lifecycle changes. Rejected and detected no-op gateway
 mutations do not advance it. Transient properties, viewport/camera state,
 selection, diagnostics, networking, and Studio layout do not advance it.
 
-The project revision is neither an undo transaction identifier nor an alias for
+The project revision is neither a transaction identifier nor an alias for
 `ChangeJournal.Sequence`, network sequence state, or `ObjectId` generation.
 Create, recursive Delete, subtree Duplicate, and changed Reparent use a narrow
 revision batch so each logical structural operation advances this same counter
 once even when lifecycle work emits multiple journal records. Rejected
 structural operations and same-parent no-ops do not advance it. This revision
-batch is accounting, not a transaction or undo identifier.
+batch remains operation-level accounting for non-transactional internal callers.
+Explicit and implicit Studio transactions provide their enclosing single
+revision boundary and bounded semantic history.
 
 ## Persisted revision and dirty state
 
@@ -72,6 +74,10 @@ prior valid file.
 EditorHost normalizes missing project, invalid destination, serialization,
 filesystem, and persistence failures into structured errors. The instance JSON
 format remains version 4; no format or migration framework was added.
+
+Save rejects while an explicit authoring transaction is open. Successful Save
+does not clear transaction history; persistence revision and authoring history
+remain separate.
 
 ## Protocol propagation
 

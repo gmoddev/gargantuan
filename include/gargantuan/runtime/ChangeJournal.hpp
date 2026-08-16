@@ -62,6 +62,11 @@ namespace gargantuan {
 		ObjectId Object;
 		ChangePayload Payload;
 	};
+	struct BufferedChangeRecord {
+		ObjectId Scope;
+		ObjectId Object;
+		ChangePayload Payload;
+	};
 
 	struct ChangeCursor {
 		ObjectId Scope;
@@ -108,5 +113,17 @@ namespace gargantuan {
 		~ScopedChangeJournalSuppression();
 		ScopedChangeJournalSuppression(const ScopedChangeJournalSuppression &) = delete;
 		ScopedChangeJournalSuppression &operator=(const ScopedChangeJournalSuppression &) = delete;
+	};
+
+	class ScopedChangeJournalCapture {
+	  public:
+		ScopedChangeJournalCapture();
+		~ScopedChangeJournalCapture();
+		ScopedChangeJournalCapture(const ScopedChangeJournalCapture &) = delete;
+		ScopedChangeJournalCapture &operator=(const ScopedChangeJournalCapture &) = delete;
+		[[nodiscard]] std::vector<BufferedChangeRecord> Take();
+
+	  private:
+		std::vector<BufferedChangeRecord> Records;
 	};
 }

@@ -35,6 +35,7 @@ namespace gargantuan {
 	  public:
 		explicit EditorHost(std::string sessionToken);
 		EditorHost(std::string sessionToken, ScriptSecurityContext studioSecurity);
+		~EditorHost();
 
 		[[nodiscard]] std::string HandleRequest(std::string_view request);
 		int Run(std::istream &input, std::ostream &output);
@@ -44,6 +45,7 @@ namespace gargantuan {
 
 	  private:
 		std::string SessionToken;
+		static constexpr std::uint64_t TransactionOwner = 1;
 		std::unique_ptr<DiskFilesystem> Filesystem;
 		std::optional<Project> CurrentProject;
 		std::shared_ptr<DataModel> World;

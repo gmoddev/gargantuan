@@ -65,6 +65,8 @@ limited to 256 records.
 | `DestroyInstance` | Recursively destroys one generation-safe, non-protected project target. |
 | `DuplicateInstance` | Engine-clones one persistent subtree beside its source with fresh identities. |
 | `ReparentInstance` | Atomically moves one stable target beneath another after scope/cycle/protection validation. |
+| `BeginTransaction` | Creates one engine-issued, session-owned commit-only authoring group with a bounded label. |
+| `CommitTransaction` | Commits the exact owned open group, advances one revision, and releases its journal batch. |
 | `ConfigureViewport` | Negotiates a bounded engine-owned RGB8 viewport. |
 | `SetViewportCamera` | Applies a finite absolute editor-camera pose and field of view. |
 | `OpenViewportTransport` | Explicitly selects shared-memory ring v1 and returns its fixed layout contract. |
@@ -80,7 +82,7 @@ DataModel; decoded request data never supplies capabilities or scope. Attribute
 state is delivered by snapshot and dedicated `AttributeUpdate` records rather
 than a second polling path. `AddTag` and `RemoveTag` use that same authority;
 snapshot membership and `TagAdded`/`TagRemoved` carry committed tag state.
-Object-reference and enum-item property mutation, transactions, source mounts,
+Object-reference and enum-item property mutation, Undo/Redo, source mounts,
 and play sessions are deliberately outside v0. Viewport methods
 are a compatible capability extension with their own `ViewportVersion = 1`.
 `Handshake.ViewportTransports` is authoritative: clients must negotiate rather
@@ -125,5 +127,6 @@ new or prior registry; a later `OpenProject` may construct a fresh document.
 The bounded shared-memory viewport transport is implemented in
 [EditorViewport.md](./EditorViewport.md). Authoritative scalar and structural
 mutation, persistence, and bounded enum/value decoding are implemented. The
-next authoring interface increment is explicit engine-owned transaction and
-Undo/Redo semantics; project revision remains separate from that history.
+engine-owned commit-only transaction core and bounded semantic history are
+implemented. Undo/Redo execution remains the next authoring interface increment;
+project revision remains separate from transaction identity and journal sequence.

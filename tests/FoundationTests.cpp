@@ -3407,6 +3407,321 @@ namespace {
 		}
 	}
 
+	void TestAuthoritativeTransactions() {
+		using namespace gargantuan;
+		auto World = std::make_shared<DataModel>();
+		World->SetArchivable(true);
+		auto FirstParent = std::make_shared<Folder>();
+		FirstParent->SetArchivable(true);
+		FirstParent->SetParent(World);
+		auto SecondParent = std::make_shared<Folder>();
+		SecondParent->SetArchivable(true);
+		SecondParent->SetParent(World);
+		auto Target = std::make_shared<Part>();
+		Target->SetArchivable(true);
+		Target->SetName("Before");
+		Target->SetParent(FirstParent);
+		const auto Scope = World->GetObjectId();
+		const auto TargetId = Target->GetObjectId();
+		auto &Journal = ChangeJournal::Get();
+		auto Cursor = Journal.CreateCursor(Scope);
+		MutationGateway Gateway;
+		const auto StartingRevision = World->GetAuthoritativeRevision();
+
+		auto Began = World->Transactions.Begin(*World, 41, "Grouped Edit", TransactionOrigin::Studio);
+		Check(
+			Began.Succeeded() && Began.Id.IsValid() && Began.StartingRevision == StartingRevision,
+			"engine issues a nonzero project-local transaction identity"
+		);
+		auto Authority = MutationAuthorityContext::Studio(ScriptSecurityContext::StudioCoreUi(), Scope, Began.Id, 41);
+		Check(
+			Gateway.Apply(UpdatePropertyCommand{TargetId, "Name", std::string("After")}, Authority).Succeeded() &&
+				Gateway.Apply(UpdateAttributeCommand{TargetId, "Grouped", WireValue(7)}, Authority).Succeeded() &&
+				Gateway.Apply(ReparentObjectCommand{TargetId, SecondParent->GetObjectId()}, Authority).Succeeded(),
+			"current scalar, Attribute, and structural mutations participate in one explicit transaction"
+		);
+		Check(
+			World->GetAuthoritativeRevision() == StartingRevision && Journal.Read(Cursor).Records.empty(),
+			"open explicit transaction defers project revision and committed journal publication"
+		);
+		auto Committed = World->Transactions.Commit(*World, Began.Id, 41);
+		Check(
+			Committed.Succeeded() && Committed.ChangeCount == 3 &&
+				World->GetAuthoritativeRevision() == StartingRevision + 1,
+			"one grouped transaction advances the project revision exactly once"
+		);
+		auto Records = Journal.Read(Cursor);
+		Check(
+			Records.Records.size() == 3 && World->Transactions.GetCommitted().size() == 1 &&
+				World->Transactions.GetCommitted().back().Changes.size() == 3,
+			"transaction commit publishes all journal records and one semantic history entry"
+		);
+		Check(
+			World->Transactions.Commit(*World, Began.Id, 41).Status == TransactionStatus::NotFound,
+			"committed transaction identity cannot be committed twice"
+		);
+
+		const auto NoOpRevision = World->GetAuthoritativeRevision();
+		auto NoOp = World->Transactions.Begin(*World, 41, "No-op", TransactionOrigin::Studio);
+		auto NoOpAuthority = MutationAuthorityContext::Studio(
+			ScriptSecurityContext::StudioCoreUi(), Scope, NoOp.Id, 41
+		);
+		Check(
+			Gateway.Apply(UpdatePropertyCommand{TargetId, "Name", std::string("After")}, NoOpAuthority).Succeeded(),
+			"explicit transaction accepts a validated no-op mutation"
+		);
+		auto NoOpCommit = World->Transactions.Commit(*World, NoOp.Id, 41);
+		Check(
+			NoOpCommit.Status == TransactionStatus::NoChanges && World->GetAuthoritativeRevision() == NoOpRevision &&
+				World->Transactions.GetCommitted().size() == 1,
+			"no-op transaction creates no history and advances no revision"
+		);
+
+		auto Owned = World->Transactions.Begin(*World, 41, "Owner Guard", TransactionOrigin::Studio);
+		Check(
+			World->Transactions.Commit(*World, Owned.Id, 99).Status == TransactionStatus::WrongOwner &&
+				World->Transactions.Commit(*World, Owned.Id, 41).Status == TransactionStatus::NoChanges,
+			"another session cannot commit an engine-issued transaction identity"
+		);
+		auto Expiring = World->Transactions.Begin(*World, 41, "Lifetime Guard", TransactionOrigin::Studio);
+		Check(
+			World->Transactions
+						.ExpireOwner(*World, 41, std::chrono::steady_clock::now() + MaximumOpenTransactionLifetime)
+						.Status == TransactionStatus::NoChanges &&
+				!World->Transactions.IsOpen(Expiring.Id, 41),
+			"bounded transaction lifetime terminates an abandoned empty group"
+		);
+		const auto ExpiringRevision = World->GetAuthoritativeRevision();
+		auto ChangedExpiry = World->Transactions.Begin(*World, 41, "Changed Lifetime Guard", TransactionOrigin::Studio);
+		auto ChangedExpiryAuthority = MutationAuthorityContext::Studio(
+			ScriptSecurityContext::StudioCoreUi(), Scope, ChangedExpiry.Id, 41
+		);
+		Check(
+			Gateway
+				.Apply(UpdatePropertyCommand{TargetId, "Name", std::string("Expired Change")}, ChangedExpiryAuthority)
+				.Succeeded(),
+			"changed lifetime setup mutation succeeds"
+		);
+		auto ExpiredCommit = World->Transactions.ExpireOwner(
+			*World, 41, std::chrono::steady_clock::now() + MaximumOpenTransactionLifetime
+		);
+		Check(
+			ExpiredCommit.Status == TransactionStatus::Success &&
+				World->GetAuthoritativeRevision() == ExpiringRevision + 1 &&
+				!World->Transactions.IsOpen(ChangedExpiry.Id, 41),
+			"expired commit-only grouping commits already-applied changes instead of implying rollback"
+		);
+
+		const auto RejectedRevision = World->GetAuthoritativeRevision();
+		auto RejectedGroup = World->Transactions.Begin(*World, 41, "Rejected Later Change", TransactionOrigin::Studio);
+		auto RejectedAuthority = MutationAuthorityContext::Studio(
+			ScriptSecurityContext::StudioCoreUi(), Scope, RejectedGroup.Id, 41
+		);
+		Check(
+			Gateway.Apply(
+					   UpdatePropertyCommand{TargetId, "Name", std::string("Valid Before Rejection")}, RejectedAuthority
+			)
+					.Succeeded() &&
+				!Gateway
+					 .Apply(
+						 UpdatePropertyCommand{TargetId, "MissingProperty", std::string("Rejected")}, RejectedAuthority
+					 )
+					 .Succeeded(),
+			"a rejected later mutation leaves the explicit commit-only group open and deterministic"
+		);
+		auto RejectedCommit = World->Transactions.Commit(*World, RejectedGroup.Id, 41);
+		Check(
+			RejectedCommit.Status == TransactionStatus::Success && RejectedCommit.ChangeCount == 1 &&
+				World->GetAuthoritativeRevision() == RejectedRevision + 1,
+			"only successful changes enter and advance a commit-only transaction"
+		);
+
+		const auto ImplicitStart = World->GetAuthoritativeRevision();
+		Check(
+			Gateway.Apply(
+					   UpdatePropertyCommand{TargetId, "Name", std::string("Implicit")},
+					   MutationAuthorityContext::Studio(ScriptSecurityContext::StudioCoreUi(), Scope, std::nullopt, 41)
+			)
+					.Succeeded() &&
+				World->GetAuthoritativeRevision() == ImplicitStart + 1 &&
+				World->Transactions.GetCommitted().back().Label == "Set Name",
+			"one-shot Studio mutation creates and commits one implicit transaction"
+		);
+
+		for (std::size_t Index = 0; Index < MaximumRetainedTransactions + 4; ++Index)
+			Check(
+				Gateway
+					.Apply(
+						UpdatePropertyCommand{TargetId, "Name", std::string("Eviction-") + std::to_string(Index)},
+						MutationAuthorityContext::Studio(ScriptSecurityContext::StudioCoreUi(), Scope, std::nullopt, 41)
+					)
+					.Succeeded(),
+				"bounded history setup mutation succeeds"
+			);
+		Check(
+			World->Transactions.GetCommitted().size() == MaximumRetainedTransactions &&
+				World->Transactions.GetRetainedBytes() <= MaximumRetainedTransactionBytes,
+			"history evicts oldest entries deterministically at the exact count bound"
+		);
+
+		PropertyTransactionChange AggregatePrototype{
+			TargetId,
+			SchemaId::FromNativeName("Engine", "Instance"),
+			1,
+			"Name",
+			WireValue(std::string(192, 'a')),
+			WireValue(std::string(192, 'b')),
+		};
+		const auto AggregateChangeBytes = EstimateTransactionChangeBytes(AggregatePrototype);
+		AuthoritativeTransactionHistory AggregateHistory(16, AggregateChangeBytes * 2);
+		TransactionId FirstAggregateId;
+		for (std::size_t Index = 0; Index < 3; ++Index) {
+			auto Aggregate = AggregateHistory.Begin(
+				*World, 73, "Aggregate Bound", TransactionOrigin::InternalAuthoring
+			);
+			if (Index == 0) FirstAggregateId = Aggregate.Id;
+			AggregateHistory.RecordMutation(Aggregate.Id, 73, AggregatePrototype, {});
+			Check(
+				AggregateHistory.Commit(*World, Aggregate.Id, 73).Succeeded(),
+				"aggregate history fixture commits a bounded semantic record"
+			);
+		}
+		Check(
+			AggregateHistory.GetCommitted().size() == 2 &&
+				AggregateHistory.GetCommitted().front().Id != FirstAggregateId &&
+				AggregateHistory.GetRetainedBytes() == AggregateChangeBytes * 2,
+			"aggregate byte bound independently evicts the oldest transaction exactly"
+		);
+
+		auto DeleteRoot = std::make_shared<Folder>();
+		DeleteRoot->SetArchivable(true);
+		DeleteRoot->SetParent(FirstParent);
+		auto DeleteChild = std::make_shared<Folder>();
+		DeleteChild->SetArchivable(true);
+		DeleteChild->SetParent(DeleteRoot);
+		DeleteChild->ApplyAttributeMutation(
+			"State", WireValue(std::string("retained")), ScriptSecurityContext::CoreTrusted()
+		);
+		World->Tags.Add(Scope, DeleteChild->GetObjectId(), "HistoryTag", ScriptSecurityContext::CoreTrusted());
+		const auto DeleteStarted = std::chrono::steady_clock::now();
+		Check(
+			Gateway
+				.Apply(
+					DestroyObjectCommand{DeleteRoot->GetObjectId()},
+					MutationAuthorityContext::Studio(ScriptSecurityContext::StudioCoreUi(), Scope, std::nullopt, 41)
+				)
+				.Succeeded(),
+			"bounded subtree delete commits through an implicit transaction"
+		);
+		const auto DeleteElapsed =
+			std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - DeleteStarted).count();
+		const auto &DeleteRecord = World->Transactions.GetCommitted().back();
+		const auto *DeleteChange = std::get_if<SubtreeTransactionChange>(&DeleteRecord.Changes.front());
+		Check(
+			DeleteChange && DeleteChange->Kind == SubtreeTransactionKind::Destroy &&
+				DeleteChange->Objects.size() == 2 &&
+				DeleteChange->PersistentSnapshot.find("HistoryTag") != std::string::npos &&
+				DeleteChange->PersistentSnapshot.find("retained") != std::string::npos,
+			"delete history owns a bounded persistent subtree snapshot and stable destroyed identities"
+		);
+
+		const auto CustomClassId = SchemaId::FromCustomClassName("Game", "CombatFolder");
+		const auto ExtensionId = SchemaId::FromExtensionName("Game.Data", "FolderProperties");
+		auto CustomSource = InstanceClassRegistry::ConstructByName("Game.CombatFolder");
+		Check(CustomSource != nullptr, "transaction duplicate fixture constructs the active custom class");
+		if (CustomSource) {
+			CustomSource->SetArchivable(true);
+			CustomSource->SetName("TransactionCustomSource");
+			CustomSource->SetParent(FirstParent);
+			Check(
+				CustomSource->ApplyPropertyMutation(
+					"Health", 73, Enums::Permission::None, ScriptSecurityContext::CoreTrusted()
+				) == MutationStatus::Success &&
+					CustomSource->ApplyAttributeMutation(
+						"HistoryAttribute",
+						WireValue(std::string("attribute-state")),
+						ScriptSecurityContext::CoreTrusted()
+					) == MutationStatus::Success &&
+					CustomSource->ApplyExtensionPropertyMutation(
+						ExtensionId,
+						1,
+						"Label",
+						WireValue(std::string("extension-state")),
+						ScriptSecurityContext::CoreTrusted()
+					) == MutationStatus::Success,
+				"transaction duplicate fixture establishes custom, Attribute, and extension state"
+			);
+			World->Tags.Add(
+				Scope, CustomSource->GetObjectId(), "transaction-tag", ScriptSecurityContext::CoreTrusted()
+			);
+			auto CustomChild = std::make_shared<Folder>();
+			CustomChild->SetArchivable(true);
+			CustomChild->SetName("TransactionCustomChild");
+			CustomChild->SetParent(CustomSource);
+			const auto SourceId = CustomSource->GetObjectId();
+			const auto ChildId = CustomChild->GetObjectId();
+			auto Duplicated = Gateway.Apply(
+				DuplicateObjectCommand{SourceId},
+				MutationAuthorityContext::Studio(ScriptSecurityContext::StudioCoreUi(), Scope, std::nullopt, 41)
+			);
+			const auto &DuplicateRecord = World->Transactions.GetCommitted().back();
+			const auto *DuplicateChange = std::get_if<SubtreeTransactionChange>(&DuplicateRecord.Changes.front());
+			Check(
+				Duplicated.Succeeded() && Duplicated.Object && *Duplicated.Object != SourceId && DuplicateChange &&
+					DuplicateChange->Kind == SubtreeTransactionKind::Duplicate &&
+					DuplicateChange->Objects.size() == 2 &&
+					std::ranges::none_of(
+						DuplicateChange->Objects, [&](ObjectId Id) { return Id == SourceId || Id == ChildId; }
+					) &&
+					DuplicateChange->PersistentSnapshot.find(CustomClassId.ToString()) != std::string::npos &&
+					DuplicateChange->PersistentSnapshot.find("attribute-state") != std::string::npos &&
+					DuplicateChange->PersistentSnapshot.find("transaction-tag") != std::string::npos &&
+					DuplicateChange->PersistentSnapshot.find("extension-state") != std::string::npos &&
+					DuplicateChange->PersistentSnapshot.find("TransactionCustomChild") != std::string::npos,
+				"duplicate history captures fresh subtree identities plus custom, extension, Attribute, Tag, and "
+				"descendant state"
+			);
+		}
+
+		auto MeasurePropertyEdits = [&](std::size_t Count, bool Explicit) {
+			const auto Started = std::chrono::steady_clock::now();
+			std::optional<TransactionResult> Group;
+			if (Explicit)
+				Group = World->Transactions.Begin(*World, 41, "Performance Sanity", TransactionOrigin::Studio);
+			for (std::size_t Index = 0; Index < Count; ++Index) {
+				auto PerformanceAuthority = MutationAuthorityContext::Studio(
+					ScriptSecurityContext::StudioCoreUi(), Scope, Group ? std::optional(Group->Id) : std::nullopt, 41
+				);
+				Check(
+					Gateway
+						.Apply(
+							UpdatePropertyCommand{
+								TargetId,
+								"Name",
+								std::string("Performance-") + std::to_string(Count) + "-" + std::to_string(Index)
+							},
+							PerformanceAuthority
+						)
+						.Succeeded(),
+					"transaction performance sanity mutation succeeds"
+				);
+			}
+			if (Group)
+				Check(
+					World->Transactions.Commit(*World, Group->Id, 41).Succeeded(),
+					"transaction performance sanity group commits"
+				);
+			return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - Started).count();
+		};
+		const auto SinglePropertyElapsed = MeasurePropertyEdits(1, false);
+		const auto TenPropertyElapsed = MeasurePropertyEdits(10, true);
+		const auto HundredPropertyElapsed = MeasurePropertyEdits(100, true);
+		std::cout << "METRIC transaction_single_property_ms " << SinglePropertyElapsed << '\n'
+				  << "METRIC transaction_explicit_10_ms " << TenPropertyElapsed << '\n'
+				  << "METRIC transaction_explicit_100_ms " << HundredPropertyElapsed << '\n'
+				  << "METRIC transaction_delete_subtree_2_ms " << DeleteElapsed << '\n';
+	}
+
 	void TestProjectRevisionPersistence() {
 		using namespace gargantuan;
 		const auto TemporaryRoot = std::filesystem::temp_directory_path() /
@@ -3551,8 +3866,11 @@ namespace {
 				std::ranges::contains(handshake["Result"]["Capabilities"], "CreateInstance") &&
 				std::ranges::contains(handshake["Result"]["Capabilities"], "DestroyInstance") &&
 				std::ranges::contains(handshake["Result"]["Capabilities"], "DuplicateInstance") &&
-				std::ranges::contains(handshake["Result"]["Capabilities"], "ReparentInstance"),
-			"EditorHost advertises persistence and structural authoring capabilities"
+				std::ranges::contains(handshake["Result"]["Capabilities"], "ReparentInstance") &&
+				std::ranges::contains(handshake["Result"]["Capabilities"], "BeginTransaction") &&
+				std::ranges::contains(handshake["Result"]["Capabilities"], "CommitTransaction") &&
+				!std::ranges::contains(handshake["Result"]["Capabilities"], "AbortTransaction"),
+			"EditorHost advertises persistence, structural authoring, and honest commit-only transaction capabilities"
 		);
 		auto SaveWithoutProject = call("SaveProject", Json::object(), "test-token");
 		Check(!SaveWithoutProject["Ok"].get<bool>() && SaveWithoutProject["Error"]["Code"] == "NoProjectLoaded",
@@ -3811,6 +4129,92 @@ namespace {
 				"stale and protected structural requests fail atomically without revision or journal changes");
 		}
 		if (editable != objects.end()) {
+			if (!StructuralDestinationId.is_null()) {
+				auto BeforeTransaction = call("GetProjectState", Json::object(), "test-token");
+				auto OversizedLabel = call("BeginTransaction", {{"Label", std::string(129, 'x')}}, "test-token");
+				auto SpoofedTransaction = call(
+					"SetProperty",
+					{
+						{"Object", (*editable)["Id"]},
+						{"Property", "Name"},
+						{"Value", {{"Type", "String"}, {"Value", "Spoofed"}}},
+						{"TransactionId", "18446744073709551615"},
+					},
+					"test-token"
+				);
+				Check(
+					!OversizedLabel["Ok"].get<bool>() && OversizedLabel["Error"]["Code"] == "TransactionLimit" &&
+						!SpoofedTransaction["Ok"].get<bool>() &&
+						SpoofedTransaction["Error"]["Code"] == "TransactionNotFound" &&
+						call("GetProjectState", Json::object(), "test-token")["Result"] == BeforeTransaction["Result"],
+					"bounded labels and invented transaction identities fail without mutation authority"
+				);
+				auto BeganTransaction = call("BeginTransaction", {{"Label", "Protocol Group"}}, "test-token");
+				Check(
+					BeganTransaction["Ok"].get<bool>() && BeganTransaction["Result"]["Status"] == "Open",
+					"EditorHost issues an engine-owned explicit transaction identity"
+				);
+				const auto Transaction = BeganTransaction["Result"]["TransactionId"];
+				auto SaveWhileOpen = call("SaveProject", Json::object(), "test-token");
+				Check(
+					!SaveWhileOpen["Ok"].get<bool>() && SaveWhileOpen["Error"]["Code"] == "TransactionOpen",
+					"Save cannot persist an intermediate commit-only transaction state"
+				);
+				Check(
+					call(
+						"SetProperty",
+						{
+							{"Object", (*editable)["Id"]},
+							{"Property", "Name"},
+							{"Value", {{"Type", "String"}, {"Value", "GroupedThroughProtocol"}}},
+							{"TransactionId", Transaction},
+						},
+						"test-token"
+					)["Ok"]
+							.get<bool>() &&
+						call(
+							"SetAttribute",
+							{
+								{"Object", (*editable)["Id"]},
+								{"Attribute", "Grouped"},
+								{"Value", {{"Type", "Int"}, {"Value", 9}}},
+								{"TransactionId", Transaction},
+							},
+							"test-token"
+						)["Ok"]
+							.get<bool>() &&
+						call(
+							"ReparentInstance",
+							{
+								{"Object", (*editable)["Id"]},
+								{"Parent", StructuralDestinationId},
+								{"TransactionId", Transaction},
+							},
+							"test-token"
+						)["Ok"]
+							.get<bool>(),
+					"EditorHost routes property, Attribute, and reparent requests into one explicit transaction"
+				);
+				Check(
+					call("PollChanges", Json::object(), "test-token")["Result"]["Records"].empty() &&
+						call("GetProjectState", Json::object(), "test-token")["Result"]["AuthoritativeRevision"] ==
+							BeforeTransaction["Result"]["AuthoritativeRevision"],
+					"open protocol transaction publishes neither journal records nor a project revision"
+				);
+				auto CommittedTransaction = call("CommitTransaction", {{"TransactionId", Transaction}}, "test-token");
+				auto GroupedChanges = call("PollChanges", Json::object(), "test-token");
+				Check(
+					CommittedTransaction["Ok"].get<bool>() && CommittedTransaction["Result"]["ChangeCount"] == 3 &&
+						CommittedTransaction["Result"]["ResultingRevision"] ==
+							BeforeTransaction["Result"]["AuthoritativeRevision"].get<std::uint64_t>() + 1 &&
+						GroupedChanges["Result"]["Records"].size() == 3,
+					"CommitTransaction advances one revision and releases the grouped authoritative journal batch"
+				);
+				Check(
+					!call("CommitTransaction", {{"TransactionId", Transaction}}, "test-token")["Ok"].get<bool>(),
+					"EditorHost rejects duplicate transaction commit"
+				);
+			}
 			auto mutation = call("SetProperty", {
 				{"Object", (*editable)["Id"]},
 				{"Property", "Name"},
@@ -4076,6 +4480,15 @@ namespace {
 			"viewport picking returns the selected Part ObjectId"
 		);
 
+		auto Abandoned = call("BeginTransaction", {{"Label", "Replaced Session"}}, "test-token");
+		const auto AbandonedId = Abandoned["Result"]["TransactionId"];
+		Check(
+			Abandoned["Ok"].get<bool>() &&
+				call("OpenProject", {{"Root", SaveAsRoot.string()}}, "test-token")["Ok"].get<bool>() &&
+				!call("CommitTransaction", {{"TransactionId", AbandonedId}}, "test-token")["Ok"].get<bool>(),
+			"project replacement terminates an open transaction and its identity cannot affect the new project"
+		);
+
 		auto malformed = Json::parse(host.HandleRequest(std::string(EditorHostMaximumRequestBytes + 1, 'x')));
 		Check(!malformed["Ok"].get<bool>() && malformed["Error"]["Code"] == "MalformedRequest", "EditorHost rejects oversized direct requests before parsing");
 	}
@@ -4298,6 +4711,7 @@ int main() {
 	TestCustomClassRuntime();
 	TestSerializationGoldenFixtures();
 	TestProjectCreationJsonNames();
+	TestAuthoritativeTransactions();
 	TestProjectRevisionPersistence();
 	TestEditorHostProtocol();
 	TestLuauExceptionBoundary();

@@ -457,6 +457,12 @@ namespace gargantuan {
 		ChangeJournal::Get().CommitBatch(scope, std::move(Changes));
 	}
 
+	std::optional<WireValue> Instance::ReadPropertyWireValue(std::string_view PropertyName) const {
+		auto *Property = const_cast<Instance *>(this)->FindProperty(std::string(PropertyName));
+		if (!Property || !Property->Read) return std::nullopt;
+		return EncodeCommittedProperty(const_cast<Instance *>(this), *Property);
+	}
+
 	void Instance::MarkPersistenceSubtreeArchivable() {
 		Archivable = true;
 		for (const auto &Child : Children) Child->MarkPersistenceSubtreeArchivable();

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "gargantuan/runtime/AuthoritativeTransactions.hpp"
 #include "gargantuan/runtime/ObjectId.hpp"
 #include "gargantuan/runtime/WireValue.hpp"
 #include "gargantuan/scripting/ScriptSecurity.hpp"
@@ -24,7 +25,9 @@ namespace gargantuan {
 		[[nodiscard]] static MutationAuthorityContext Local(ScriptSecurityContext SecurityContext);
 		[[nodiscard]] static MutationAuthorityContext Studio(
 			ScriptSecurityContext SecurityContext,
-			ObjectId Scope
+			ObjectId Scope,
+			std::optional<TransactionId> Transaction = std::nullopt,
+			std::uint64_t TransactionOwner = 1
 		);
 		[[nodiscard]] static MutationAuthorityContext AuthenticatedPeer(
 			ScriptSecurityContext SecurityContext,
@@ -34,17 +37,23 @@ namespace gargantuan {
 		[[nodiscard]] const ScriptSecurityContext &GetSecurityContext() const { return SecurityContext; }
 		[[nodiscard]] MutationCommandOrigin GetOrigin() const { return Origin; }
 		[[nodiscard]] std::optional<ObjectId> GetScope() const { return Scope; }
+		[[nodiscard]] std::optional<TransactionId> GetTransactionId() const { return Transaction; }
+		[[nodiscard]] std::uint64_t GetTransactionOwner() const { return TransactionOwner; }
 
 	  private:
 		MutationAuthorityContext(
 			MutationCommandOrigin OriginValue,
 			ScriptSecurityContext SecurityContextValue,
-			std::optional<ObjectId> ScopeValue
+			std::optional<ObjectId> ScopeValue,
+			std::optional<TransactionId> TransactionValue = std::nullopt,
+			std::uint64_t TransactionOwnerValue = 0
 		);
 
 		MutationCommandOrigin Origin;
 		ScriptSecurityContext SecurityContext;
 		std::optional<ObjectId> Scope;
+		std::optional<TransactionId> Transaction;
+		std::uint64_t TransactionOwner = 0;
 	};
 
 	struct CreateObjectCommand {
@@ -94,6 +103,8 @@ namespace gargantuan {
 		ValidationFailed,
 		Rejected,
 		InternalError,
+		TransactionNotFound,
+		TransactionLimit,
 	};
 
 	struct MutationResult {

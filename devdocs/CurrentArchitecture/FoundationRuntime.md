@@ -112,8 +112,9 @@ it from the old stream and republishes its current baseline into the new stream.
 
 Records remain an in-process prototype. Retention is bounded per scope and cursor reads
 detect eviction with `ResnapshotRequired`; the default capacity is 4,096.
-Transaction IDs, compaction, rollback, and network transport are not yet
-implemented. Consumers must not treat this as an untrusted network protocol. See
+Authoring transaction identity and bounded semantic history are implemented
+separately from this sequence; see `AuthoritativeTransactions.md`. Compaction,
+rollback, and network transport are not implemented. Consumers must not treat this as an untrusted network protocol. See
 `MutationGateway.md` for the reader and authoritative apply contracts.
 
 ## Luau and checked type boundaries

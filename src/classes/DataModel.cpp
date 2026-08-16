@@ -11,6 +11,10 @@
 #include <stdexcept>
 
 namespace gargantuan {
+	namespace {
+		thread_local DataModel *DeferredRevisionWorld = nullptr;
+		thread_local bool *DeferredRevisionChanged = nullptr;
+	}
 	void DataModel::EnsureAuthoritativeRevisionAvailable() const {
 		if (AuthoritativeRevision == std::numeric_limits<std::uint64_t>::max())
 			throw std::overflow_error("Authoritative project revision is exhausted");
@@ -18,6 +22,10 @@ namespace gargantuan {
 
 	void DataModel::AdvanceAuthoritativeRevision() {
 		EnsureAuthoritativeRevisionAvailable();
+		if (DeferredRevisionWorld == this && DeferredRevisionChanged) {
+			*DeferredRevisionChanged = true;
+			return;
+		}
 		if (RevisionBatchActive) {
 			RevisionBatchChanged = true;
 			return;
@@ -37,7 +45,7 @@ namespace gargantuan {
 		const bool Changed = RevisionBatchChanged;
 		RevisionBatchActive = false;
 		RevisionBatchChanged = false;
-		if (Changed) ++AuthoritativeRevision;
+		if (Changed) AdvanceAuthoritativeRevision();
 	}
 
 	void DataModel::CancelAuthoritativeRevisionBatch() noexcept {
@@ -66,6 +74,21 @@ namespace gargantuan {
 
 	void DataModel::InitializeLoadedProjectRevision() {
 		AuthoritativeRevision = InitialProjectRevision;
+		Transactions.Reset();
+	}
+
+	ScopedAuthoritativeRevisionDeferral::ScopedAuthoritativeRevisionDeferral(DataModel &WorldValue, bool &Changed)
+		: World(&WorldValue) {
+		if (DeferredRevisionWorld) throw std::logic_error("Authoritative project revision deferral is already active");
+		DeferredRevisionWorld = World;
+		DeferredRevisionChanged = &Changed;
+	}
+
+	ScopedAuthoritativeRevisionDeferral::~ScopedAuthoritativeRevisionDeferral() {
+		if (DeferredRevisionWorld == World) {
+			DeferredRevisionWorld = nullptr;
+			DeferredRevisionChanged = nullptr;
+		}
 	}
 
 	const DataModel::ServiceDefinitions &DataModel::GetServiceDefinitions() const {
