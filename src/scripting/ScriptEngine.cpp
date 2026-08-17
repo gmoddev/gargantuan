@@ -182,6 +182,10 @@ namespace gargantuan {
 		return engine;
 	}
 
+	void ScriptEngine::EmitRuntimeDiagnostic(std::string Severity, std::string Message) const {
+		if (RuntimeDiagnostic) RuntimeDiagnostic(std::move(Severity), std::move(Message));
+	}
+
 	std::shared_ptr<Instance> ScriptEngine::FindRequiredInstanceByPath(const char *rawPath) {
 		LOG_INFO(App, "Attempting to find required instance %s", rawPath);
 

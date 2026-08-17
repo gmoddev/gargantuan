@@ -780,14 +780,6 @@ namespace gargantuan {
 								{
 									ScopedChangeJournalSuppression Suppression;
 									Clone->SetParent(*Parent);
-									for (const auto &[Node, Tags] : State.PendingTags)
-										for (const auto &Tag : Tags)
-											(void)DataModelValue->Tags.Add(
-												DataModelValue->GetObjectId(),
-												Node->GetObjectId(),
-												Tag,
-												ScriptSecurityContext::CoreTrusted()
-											);
 								}
 								const auto Id = Clone->GetObjectId();
 								Clone->PublishReplicationSubtree(DataModelValue->GetObjectId());

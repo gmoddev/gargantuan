@@ -60,6 +60,7 @@ namespace gargantuan {
 		std::unordered_map<std::string, std::shared_ptr<Instance>> RequirePathCache;
 		std::function<void(std::string, std::string)> RuntimeDiagnostic;
 		std::shared_ptr<Instance> FindRequiredInstanceByPath(const char *path);
+		void EmitRuntimeDiagnostic(std::string Severity, std::string Message) const;
 
 		void Step();
 

@@ -45,7 +45,12 @@ only while the runtime viewport is focused and sends focus release on blur.
 EditorHost returns relative-pointer commands to Studio so capture is released on
 button-up, focus loss, Stop, or disconnect. Runtime diagnostics are sequence-ordered, timestamped,
 severity/category/message records, capped at 256 records and 2,048 message bytes.
-Luau errors and lifecycle events use this sink and never become authoring mutations.
+Luau `print` uses `Information / Luau`, `warn` uses `Warning / Luau`, and runtime
+errors use `Error / Luau`. The bounded queue evicts its oldest record under
+pressure and never waits for Studio consumption. Formatting is UTF-8 checked,
+argument/message bounded, deterministic, and does not invoke user metamethods.
+Luau diagnostics and lifecycle events use this sink and never become authoring
+mutations.
 
 Stop destroys the exact runtime Engine/VM/graph/renderer and discards all runtime
 mutation. It never saves, changes persisted revision, advances authoritative

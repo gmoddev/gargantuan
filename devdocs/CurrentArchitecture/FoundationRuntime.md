@@ -29,6 +29,13 @@ count, ownership, and object-reference preflight. `Parent = nil` after adoption
 retains its DataModel association. An adopted Instance cannot migrate to another
 DataModel. See `PostPlayValidation.md` for the complete state matrix.
 
+`Instance:Clone()` creates a bounded, independent detached subtree through
+engine-owned semantic serialization. The root is unparented, internal hierarchy
+and object-reference topology are retained, and first adoption creates ordinary
+runtime subsystem state. Clone never copies signals, execution state, or backend
+resources and never routes through EditorHost authoring authority. See
+`LuauRuntimeSurface.md` for the copied-state contract.
+
 Hierarchy mutation is committed before ancestry notifications run. Callbacks
 therefore observe the new parent/child collections rather than a half-applied
 operation. Callbacks remain synchronous and can initiate a later mutation; a

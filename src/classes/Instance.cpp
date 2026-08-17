@@ -1,4 +1,5 @@
 #include "gargantuan/classes/Instance.hpp"
+#include "gargantuan/assets/InstanceSerialization.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/ServiceProvider.hpp"
 #include "gargantuan/InstanceProperty.hpp"
@@ -25,10 +26,13 @@
 #include <cmath>
 #include <cstddef>
 #include <format>
+#include <map>
 #include <limits>
 #include <memory>
 #include <optional>
+#include <set>
 #include <stdexcept>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <unordered_set>
@@ -306,6 +310,7 @@ namespace gargantuan {
 			{"__index", Method{&Instance::LIndex}},
 			{"__newindex", Method{&Instance::LNewIndex}},
 			{"__namecall", Method{&Instance::LNamecall}},
+			{"__eq", Method{&Instance::LEqual}},
 		}
 	);
 
@@ -484,6 +489,113 @@ namespace gargantuan {
 	void Instance::MarkPersistenceSubtreeArchivable() {
 		Archivable = true;
 		for (const auto &Child : Children) Child->MarkPersistenceSubtreeArchivable();
+	}
+
+	void Instance::SetDetachedTagsForAdoption(std::vector<std::string> Tags) {
+		if (GetDataModel()) throw std::invalid_argument("Detached tags can only be assigned before DataModel adoption");
+		if (Tags.size() > MaximumTagsPerInstance) throw std::length_error("Detached tag state exceeds its count limit");
+		std::sort(Tags.begin(), Tags.end());
+		if (std::adjacent_find(Tags.begin(), Tags.end()) != Tags.end())
+			throw std::invalid_argument("Detached tag state contains a duplicate tag");
+		for (const auto &Tag : Tags) ValidateTagName(Tag);
+		DetachedTags = std::move(Tags);
+	}
+
+	std::shared_ptr<Instance> Instance::Clone() {
+		AssertIsAlive();
+		auto SourceRoot = shared_from_this();
+		auto SourceDataModel = GetDataModel();
+		if (SourceDataModel && SourceDataModel->IsProtectedService(SourceRoot))
+			throw std::invalid_argument(std::format("Cannot clone {}: class is a protected service", GetClassName()));
+
+		std::vector<std::shared_ptr<Instance>> SourceNodes;
+		std::vector<std::pair<std::shared_ptr<Instance>, std::size_t>> Pending{{SourceRoot, 1}};
+		while (!Pending.empty()) {
+			auto [Source, Depth] = std::move(Pending.back());
+			Pending.pop_back();
+			if (Depth > MaximumProtocolJsonDepth)
+				throw std::length_error(std::format("Cannot clone {}: subtree exceeds maximum depth", GetClassName()));
+			if (SourceNodes.size() == MaximumPersistenceObjects)
+				throw std::length_error(std::format("Cannot clone {}: subtree exceeds maximum object count", GetClassName()));
+			Source->AssertIsAlive();
+			auto *Definition = InstanceClassRegistry::GetDefinition(Source.get());
+			if (!Definition || !Definition->EditorVisible || !InstanceClassRegistry::IsConstructible(*Definition))
+				throw std::invalid_argument(std::format("Cannot clone {}: class is not cloneable", Source->GetClassName()));
+			if (!Source->GetArchivable())
+				throw std::invalid_argument(std::format("Cannot clone {} '{}': Archivable is false", Source->GetClassName(), Source->GetName()));
+			SourceNodes.push_back(Source);
+			for (auto Child = Source->Children.rbegin(); Child != Source->Children.rend(); ++Child)
+				Pending.emplace_back(*Child, Depth + 1);
+		}
+
+		std::string Encoded = InstanceSerialization::Serialize(
+			InstanceSerialization::InstanceFormat::Json, SourceRoot
+		);
+		if (Encoded.size() > MaximumProtocolDocumentBytes)
+			throw std::length_error(std::format("Cannot clone {}: semantic state exceeds its byte limit", GetClassName()));
+		std::istringstream Input(std::move(Encoded));
+		InstanceSerialization::DeserializationState State;
+		{
+			ScopedChangeJournalSuppression Suppression;
+			State = InstanceSerialization::DeserializeDetached(InstanceSerialization::InstanceFormat::Json, Input);
+		}
+		if (!State.Ok || !State.Instance) {
+			const auto Reason = State.Errors.empty() ? std::string("persistent state could not be reconstructed") : State.Errors.front();
+			throw std::invalid_argument(std::format("Cannot clone {}: {}", GetClassName(), Reason));
+		}
+
+		auto CloneRoot = State.Instance;
+		std::vector<std::shared_ptr<Instance>> CloneNodes{CloneRoot};
+		CloneRoot->CollectDescendants(CloneNodes);
+		if (CloneNodes.size() != SourceNodes.size()) {
+			CloneRoot->Destroy();
+			throw std::runtime_error(std::format("Cannot clone {}: reconstructed subtree is inconsistent", GetClassName()));
+		}
+		std::unordered_map<const Instance *, std::shared_ptr<Instance>> Remapped;
+		Remapped.reserve(SourceNodes.size());
+		for (std::size_t Index = 0; Index < SourceNodes.size(); ++Index)
+			Remapped.emplace(SourceNodes[Index].get(), CloneNodes[Index]);
+
+		try {
+			ScopedChangeJournalSuppression Suppression;
+			for (std::size_t Index = 0; Index < SourceNodes.size(); ++Index) {
+				auto &Source = SourceNodes[Index];
+				auto &Copy = CloneNodes[Index];
+				auto *Definition = InstanceClassRegistry::GetDefinition(Source.get());
+				std::vector<std::string> PropertyNames;
+				PropertyNames.reserve(Definition->AllProperties.size());
+				for (const auto &[Name, Property] : Definition->AllProperties)
+					if (Name != "Parent" && Name != "Name" && !Property->Signal && Property->Read && Property->Write &&
+						Property->WritePermission != Enums::Permission::Never)
+						PropertyNames.push_back(Name);
+				std::sort(PropertyNames.begin(), PropertyNames.end());
+				for (const auto &Name : PropertyNames) {
+					auto *Property = Definition->AllProperties.at(Name);
+					if (Property->ReadObjectReference && Property->WriteObjectReference) {
+						auto Referenced = Property->ReadObjectReference(Source.get());
+						if (Referenced) if (auto Found = Remapped.find(Referenced.get()); Found != Remapped.end())
+							Referenced = Found->second;
+						Property->WriteObjectReference(Copy.get(), std::move(Referenced));
+					} else if (Property->PersistencePolicy != InstanceProperty::Persistence::Saved) {
+						const auto Status = Copy->ApplyPropertyMutation(
+							Name, Property->Read(Source.get()), Enums::Permission::Engine,
+							ScriptSecurityContext::CoreTrusted()
+						);
+						if (Status != MutationStatus::Success)
+							throw std::invalid_argument(std::format("property {} could not be copied", Name));
+					}
+				}
+			}
+		} catch (const std::exception &Error) {
+			auto Reason = std::string(Error.what());
+			if (Reason.size() > 512) Reason = Reason.substr(0, 499) + "...<truncated>";
+			CloneRoot->Destroy();
+			throw std::invalid_argument(std::format("Cannot clone {}: {}", GetClassName(), Reason));
+		} catch (...) {
+			CloneRoot->Destroy();
+			throw std::invalid_argument(std::format("Cannot clone {}: semantic state copy failed", GetClassName()));
+		}
+		return CloneRoot;
 	}
 
 	void Instance::AssertCanMutate() const {
@@ -941,6 +1053,7 @@ namespace gargantuan {
 			std::unordered_set<const Instance *> SubtreeNodes;
 			SubtreeNodes.reserve(subtree.size());
 			for (const auto &Node : subtree) SubtreeNodes.insert(Node.get());
+			std::set<std::string, std::less<>> NewTagNames;
 			for (const auto &Node : subtree) {
 				if (Node->GetDestroyed() || Node->IsDestroying())
 					throw std::invalid_argument("Cannot adopt a destroyed Instance subtree");
@@ -965,11 +1078,30 @@ namespace gargantuan {
 							InstanceClassName(Node.get()), PropertyName
 						));
 				}
+				if (Node->DetachedTags.size() > MaximumTagsPerInstance)
+					throw std::length_error("Cannot adopt an Instance with excessive detached tag state");
+				for (const auto &Tag : Node->DetachedTags) {
+					ValidateTagName(Tag);
+					if (newDataModel->Tags.Find(Tag) == InvalidTagId) NewTagNames.insert(Tag);
+				}
 				(void)Node->GetObjectId();
 			}
+			if (NewTagNames.size() > MaximumDistinctTagsPerDataModel - newDataModel->Tags.NameToId.size())
+				throw std::length_error("Cannot adopt Instance subtree: DataModel distinct tag limit would be exceeded");
+			std::vector<std::pair<ObjectId, std::vector<std::string>>> TagMemberships;
+			TagMemberships.reserve(subtree.size());
+			for (const auto &Node : subtree) if (!Node->DetachedTags.empty())
+				TagMemberships.emplace_back(Node->GetObjectId(), Node->DetachedTags);
 			newParent->Children.reserve(newParent->Children.size() + 1);
 			newDataModel->AdoptInstances(subtree.size());
 			for (const auto &Node : subtree) Node->OwningDataModel = newDataModel;
+			try { newDataModel->Tags.AdoptDetached(newDataModel->GetObjectId(), TagMemberships); }
+			catch (...) {
+				for (const auto &Node : subtree) Node->OwningDataModel.reset();
+				for (std::size_t Index = 0; Index < subtree.size(); ++Index) newDataModel->ReleaseInstance();
+				throw;
+			}
+			for (const auto &Node : subtree) Node->DetachedTags.clear();
 		}
 		const auto newScope = newDataModel ? newDataModel->GetObjectId() : ObjectId{};
 		const auto objectId = (oldScope.IsValid() || newScope.IsValid()) ? GetObjectId() : ObjectId{};
@@ -1183,6 +1315,13 @@ namespace gargantuan {
 			return 0;
 		});
 	};
+
+	int Instance::LEqual(lua_State *L, Instance *self) {
+		return InvokeNativeCallback(L, [L, self] {
+			auto Other = StackValue<std::shared_ptr<Instance>>::From(L, 2);
+			return StackValue<bool>::Push(L, self && Other && self->GetObjectId() == Other->GetObjectId());
+		});
+	}
 
 	std::string Instance::GetFullName() {
 		std::vector<std::string_view> path;

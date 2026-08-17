@@ -70,6 +70,10 @@ return c({
 	},
 
 	methods = {
+		Clone = {
+			description = "Returns an independent detached clone of this Instance and its descendants",
+			returns = t.Instance(),
+		},
 		SetAttribute = {
 			description = "Sets or removes a bounded runtime attribute through authoritative mutation",
 			asLuau = true,

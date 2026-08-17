@@ -80,13 +80,14 @@ and EditorHost disconnect also release capture and reset the motion baseline.
 
 | State transition | Result |
 | --- | --- |
-| constructed -> detached subtree | valid, unscoped |
+| constructed or cloned -> detached subtree | valid, unscoped |
 | detached subtree -> live parent | atomic first adoption |
 | adopted -> same DataModel parent | valid reparent |
 | adopted -> `Parent = nil` | unparented, still DataModel-owned |
 | DataModel A -> DataModel B | rejected |
 | live -> `Destroy()` | monotonic destroyed/stale state |
 
-`Instance:Clone()`, `print`, richer logging, edit-mode viewport navigation,
-character control, service expansion, assets, and networking expansion remain
-outside this correctness pass.
+The follow-up core Luau QoL pass added bounded `print`, normalized `warn`, and
+engine-owned detached `Clone`; see `LuauRuntimeSurface.md`. Richer logging,
+edit-mode viewport navigation, character control, service expansion, assets, and
+networking expansion remain outside this correctness pass.

@@ -4,9 +4,11 @@
 #include "gargantuan/classes/Frame.hpp"
 #include "gargantuan/classes/ModuleScript.hpp"
 #include "gargantuan/classes/Part.hpp"
+#include "gargantuan/classes/Script.hpp"
 #include "gargantuan/classes/WeldConstraint.hpp"
 #include "gargantuan/datatypes/Vector2.hpp"
 #include "gargantuan/editor/EditorHost.hpp"
+#include "gargantuan/editor/PlaySession.hpp"
 #include "gargantuan/editor/EditorViewport.hpp"
 #include "gargantuan/filesystem/DiskFilesystem.hpp"
 #include "gargantuan/filesystem/Project.hpp"
@@ -2545,6 +2547,14 @@ namespace {
 		distinctOverflow->SetParent(distinctGame);
 		Check(!distinctGateway.Apply(AddTagCommand{distinctOverflow->GetObjectId(), "DistinctOverflow"}).Succeeded(),
 			"distinct tag limit is enforced at the authoritative index");
+		auto DetachedTaggedOverflow = std::make_shared<Folder>();
+		DetachedTaggedOverflow->SetDetachedTagsForAdoption({"DetachedDistinctOverflow"});
+		const auto OwnedBeforeRejectedAdoption = distinctGame->GetOwnedInstanceCount();
+		CheckThrows<std::length_error>([&] { DetachedTaggedOverflow->SetParent(distinctGame); },
+			"detached tag adoption preflights the target DataModel distinct-tag limit");
+		Check(!DetachedTaggedOverflow->GetDataModel() && !DetachedTaggedOverflow->GetParent() &&
+			distinctGame->GetOwnedInstanceCount() == OwnedBeforeRejectedAdoption,
+			"rejected detached tag adoption leaves ownership, hierarchy, and object count unchanged");
 
 		ScriptSecurityContext readOnly{ScriptExecutionDomain::Studio, {ScriptCapability::ReadDataModel}};
 		ScriptSecurityContext writeOnly{ScriptExecutionDomain::Studio, {ScriptCapability::MutateDataModel}};
@@ -3206,6 +3216,7 @@ namespace {
 			Custom->IsA("Folder") && Custom->IsA("Instance") && !Custom->IsA("Part"),
 			"custom construction preserves real schema identity, host behavior, and ID-based IsA ancestry");
 		if (!Custom) return;
+		Custom->SetArchivable(true);
 		Custom->SetName("CustomCombatFolder");
 		Custom->SetParent(Game);
 		Check(std::get<int>(Custom->GetCustomClassPropertyValue(ParentId, "Health")) == 100 &&
@@ -3350,6 +3361,22 @@ namespace {
 		Check(Custom->ApplyExtensionPropertyMutation(FolderExtensionId, 1, "Label", WireValue(std::string("Network")),
 			ScriptSecurityContext::CoreTrusted()) == MutationStatus::Success,
 			"custom-class replication fixture commits extension state");
+		auto RuntimeCustomClone = Custom->Clone();
+		Check(RuntimeCustomClone && !RuntimeCustomClone->GetParent() &&
+			RuntimeCustomClone->GetClassName() == "Game.CombatFolder" &&
+			std::get<int>(RuntimeCustomClone->GetCustomClassPropertyValue(ParentId, "Health")) == 60 &&
+			std::get<std::string>(RuntimeCustomClone->GetExtensionPropertyValue(FolderExtensionId, "Label")) == "Network" &&
+			RuntimeCustomClone->GetAttributeValue("Health") == WireValue(12),
+			"runtime Clone preserves exact custom class identity, sparse custom state, extensions, and Attributes");
+		RuntimeCustomClone->SetParent(Game);
+		Check(Game->Tags.Has(Game->GetObjectId(), RuntimeCustomClone->GetObjectId(), "CustomEnemy",
+			ScriptSecurityContext::CoreTrusted()),
+			"runtime custom Clone publishes copied Tags during first adoption");
+		Check(RuntimeCustomClone->ApplyCustomClassPropertyMutation(ParentId, 1, "Health", WireValue(5),
+			ScriptSecurityContext::CoreTrusted()) == MutationStatus::Success &&
+			std::get<int>(Custom->GetCustomClassPropertyValue(ParentId, "Health")) == 60,
+			"runtime custom Clone state is independent from its source");
+		RuntimeCustomClone->Destroy();
 		network::ReplicationCoordinator NetworkCoordinator(Game);
 		auto NetworkBaseline = NetworkCoordinator.AddPeer({701, 1}, network::ReplicationEpoch(1));
 		network::ReplicaApplier NetworkReplica;
@@ -4363,7 +4390,12 @@ namespace {
 				}, "test-token");
 				Check(!GenericSourceWrite["Ok"].get<bool>() && GenericSourceWrite["Error"]["Code"] == "Unauthorized",
 					"generic property mutation cannot bypass source conflict semantics");
-				const std::string SourceA = "-- unicode: \xF0\x9F\x9A\x80\nlocal =\nlocal Value = [[exact\ntext]]\n";
+				const std::string SourceA =
+					"-- unicode: \xF0\x9F\x9A\x80\n"
+					"print(\"hello\")\n"
+					"print(\"value\", 123, true)\n"
+					"warn(\"warning\", 456)\n"
+					"error(\"runtime failure\")\n";
 				auto BeforeSourceState = call("GetProjectState", Json::object(), "test-token");
 				auto SetSourceA = call("SetScriptSource", {
 					{"Object", ScriptId}, {"ExpectedSourceVersion", InitialVersion}, {"Source", SourceA}
@@ -4437,10 +4469,25 @@ namespace {
 						return Diagnostic["Category"] == "Luau" && Diagnostic["Severity"] == "Error";
 					});
 				};
+				const auto HasDiagnostic = [](const Json &Diagnostics, std::string_view Severity, std::string_view Message) {
+					return std::ranges::any_of(Diagnostics, [&](const Json &Diagnostic) {
+						return Diagnostic["Category"] == "Luau" &&
+							Diagnostic["Severity"].get<std::string>() == Severity &&
+							Diagnostic["Message"].get<std::string>() == Message;
+					});
+				};
 				Check(PlayDiagnostics["Ok"].get<bool>() &&
 					(HasLuauError(StartPlay["Result"]["Diagnostics"]) ||
 						HasLuauError(PlayDiagnostics["Result"]["Diagnostics"])),
-					"invalid runtime Script source is contained and reported through bounded diagnostics");
+					"runtime Script errors are contained and reported through bounded diagnostics");
+				Check(
+					(HasDiagnostic(StartPlay["Result"]["Diagnostics"], "Information", "hello") ||
+						HasDiagnostic(PlayDiagnostics["Result"]["Diagnostics"], "Information", "hello")) &&
+					(HasDiagnostic(StartPlay["Result"]["Diagnostics"], "Information", "value\t123\ttrue") ||
+						HasDiagnostic(PlayDiagnostics["Result"]["Diagnostics"], "Information", "value\t123\ttrue")) &&
+					(HasDiagnostic(StartPlay["Result"]["Diagnostics"], "Warning", "warning\t456") ||
+						HasDiagnostic(PlayDiagnostics["Result"]["Diagnostics"], "Warning", "warning\t456")),
+					"Play transports print and warn through the ordered Luau diagnostic stream with distinct severity");
 				auto StaleStop = call("StopPlaySession", {{"PlaySessionId", "999999"}}, "test-token");
 				Check(!StaleStop["Ok"].get<bool>() && StaleStop["Error"]["Code"] == "StalePlaySession",
 					"stale PlaySessionId cannot stop the owned runtime");
@@ -5203,7 +5250,10 @@ namespace {
 		static_assert(std::is_same_v<LUA_VECTOR_TYPE, float>);
 
 		auto game = std::make_shared<DataModel>();
-		ScriptEngine engine(game);
+		std::vector<std::pair<std::string, std::string>> RuntimeDiagnostics;
+		ScriptEngine engine(game, [&](std::string Severity, std::string Message) {
+			RuntimeDiagnostics.emplace_back(std::move(Severity), std::move(Message));
+		});
 		lua_State *L = engine.L;
 		Check(engine.CompileOptions.vectorPrecision == 0,
 			"Luau compiler vector precision matches the float-vector VM");
@@ -5216,6 +5266,36 @@ namespace {
 			std::free(Bytecode);
 			return Status;
 		};
+
+		lua_settop(L, 0);
+		Check(Load(L, R"(
+			local Hostile = setmetatable({}, { __tostring = function() error("must not run") end })
+			print("hello")
+			print("value", 123, true, nil, game.Workspace, Vector3.new(1, 2, 3), Hostile)
+			warn("warning", 456)
+			print("unicode ✓\nsecond line")
+			print(string.rep("x", 4096))
+			print(string.char(255))
+			local Many = {}
+			for Index = 1, 70 do Many[Index] = Index end
+			print(table.unpack(Many))
+		)", "luau-runtime-diagnostics") == LUA_OK && lua_pcall(L, 0, 0, 0) == LUA_OK,
+			"print and warn format supported values without invoking hostile __tostring code");
+		const bool DiagnosticFormattingOk = RuntimeDiagnostics.size() == 7 && RuntimeDiagnostics[0] == std::pair(
+			std::string("Information"), std::string("hello")) &&
+			RuntimeDiagnostics[1].first == "Information" && RuntimeDiagnostics[1].second.find("value\t123\ttrue\tnil") == 0 &&
+			RuntimeDiagnostics[1].second.find("Vector3(1, 2, 3)") != std::string::npos &&
+			RuntimeDiagnostics[1].second.ends_with("<table>") &&
+			RuntimeDiagnostics[2] == std::pair(std::string("Warning"), std::string("warning\t456"));
+		if (!DiagnosticFormattingOk) for (const auto &[Severity, Message] : RuntimeDiagnostics)
+			std::cerr << "DIAGNOSTIC " << Severity << " | " << Message << '\n';
+		Check(DiagnosticFormattingOk,
+			"runtime diagnostics preserve Luau category formatting and print/warn severity");
+		Check(RuntimeDiagnostics[3].second == "unicode ✓\nsecond line" &&
+			RuntimeDiagnostics[4].second.size() <= 2048 && RuntimeDiagnostics[4].second.ends_with("...<truncated>") &&
+			RuntimeDiagnostics[5].second == "<invalid utf-8>" &&
+			RuntimeDiagnostics[6].second.ends_with("<arguments truncated>"),
+			"runtime diagnostics preserve multiline UTF-8 and bound or sanitize unsafe strings");
 
 		lua_settop(L, 0);
 		Check(Load(L, "return Vector3.new(1, 0, 0):Cross(Vector3.new(0, 1, 0)), type(Vector3.zero)",
@@ -5258,9 +5338,19 @@ namespace {
 			"Luau Vector2 Attribute access retains exact component values");
 
 		auto WorkspaceValue = std::dynamic_pointer_cast<Workspace>(game->GetService("Workspace"));
+		lua_settop(L, 0);
+		Check(Load(L, "print(game.Workspace, Enum.PartType.Block, Vector2.new(1, 2))", "luau-diagnostic-userdata") == LUA_OK &&
+			lua_pcall(L, 0, 0, 0) == LUA_OK && RuntimeDiagnostics.back().second == "<Instance>\t<EnumItem>\t<Vector2>",
+			"runtime diagnostics safely label Instance, EnumItem, and supported userdata values");
 		auto KnownPart = std::make_shared<Part>();
 		KnownPart->SetName("KnownPart");
+		KnownPart->SetArchivable(true);
+		KnownPart->SetSize({4.0f, 1.0f, 4.0f});
+		KnownPart->SetColor(Color3(0.2f, 0.4f, 0.8f));
 		KnownPart->SetParent(WorkspaceValue);
+		Check(KnownPart->ApplyAttributeMutation("CloneHealth", WireValue(75), ScriptSecurityContext::CoreTrusted()) ==
+			MutationStatus::Success && game->Tags.Add(game->GetObjectId(), KnownPart->GetObjectId(), "CloneTag",
+			ScriptSecurityContext::CoreTrusted()), "clone fixture carries Attribute and Tag state");
 		lua_settop(L, 0);
 		Check(Load(L, R"(
 			local Workspace = game.Workspace
@@ -5308,6 +5398,138 @@ namespace {
 		);
 		Check(AdoptedPart && std::ranges::contains(RuntimeSnapshot->Items, AdoptedPart->GetObjectId(), &RenderItem::Object),
 			"first-adopted Part enters runtime render extraction with stable identity");
+
+		lua_settop(L, 0);
+		const auto CloneLoadStatus = Load(L, R"(
+			local Original = game.Workspace.KnownPart
+			local Copy = Original:Clone()
+			assert(Copy ~= Original and Copy.Parent == nil)
+			assert(Copy.Name == Original.Name and Copy.Size == Original.Size)
+			assert(Copy.Color.R == Original.Color.R and Copy.Color.G == Original.Color.G and Copy.Color.B == Original.Color.B)
+			assert(Copy:GetAttribute("CloneHealth") == 75)
+			Copy.Name = "RuntimeCopy"
+			Copy.CFrame = CFrame.new(5, 3, 0)
+			Copy.Parent = game.Workspace
+			assert(game.Workspace:FindFirstChild("RuntimeCopy") == Copy)
+			return Copy
+		)", "luau-runtime-clone");
+		const auto CloneCallStatus = CloneLoadStatus == LUA_OK ? lua_pcall(L, 0, 1, 0) : CloneLoadStatus;
+		if (CloneCallStatus != LUA_OK) std::cerr << "CLONE ERROR: " << lua_tostring(L, -1) << '\n';
+		Check(CloneCallStatus == LUA_OK,
+			"Instance:Clone returns an independent detached Part that can be first-adopted");
+		auto RuntimeCopy = CloneCallStatus == LUA_OK ? StackValue<std::shared_ptr<Instance>>::From(L, -1) : nullptr;
+		Check(RuntimeCopy && RuntimeCopy != KnownPart && RuntimeCopy->GetObjectId() != KnownPart->GetObjectId() &&
+			KnownPart->GetName() == "KnownPart" && RuntimeCopy->GetName() == "RuntimeCopy" &&
+			RuntimeCopy->GetAttributeValue("CloneHealth") == WireValue(75) &&
+			game->Tags.Has(game->GetObjectId(), RuntimeCopy->GetObjectId(), "CloneTag",
+				ScriptSecurityContext::CoreTrusted()),
+			"adopted clone identity and mutable state are independent from the source");
+		auto CloneSnapshot = RuntimeExtractor.Extract(
+			*WorkspaceValue, MakeRenderCameraInput(*WorkspaceValue->GetCurrentCamera()), 320, 200
+		);
+		Check(std::ranges::contains(CloneSnapshot->Items, RuntimeCopy->GetObjectId(), &RenderItem::Object) &&
+			WorldRootTestAccess::BodyCount(*WorkspaceValue) == 3,
+			"adopted Part clone receives independent render and physics resources");
+
+		auto CloneFolder = std::make_shared<Folder>();
+		auto ClonePartA = std::make_shared<Part>();
+		auto ClonePartB = std::make_shared<Part>();
+		auto CloneWeld = std::make_shared<WeldConstraint>();
+		for (const auto &Node : std::vector<std::shared_ptr<Instance>>{CloneFolder, ClonePartA, ClonePartB, CloneWeld})
+			Node->SetArchivable(true);
+		CloneFolder->SetName("CloneFolder");
+		ClonePartA->SetName("A");
+		ClonePartB->SetName("B");
+		CloneWeld->SetName("Weld");
+		ClonePartA->SetParent(CloneFolder);
+		ClonePartB->SetParent(CloneFolder);
+		CloneWeld->SetPart0(ClonePartA);
+		CloneWeld->SetPart1(ClonePartB);
+		CloneWeld->SetParent(CloneFolder);
+		CloneFolder->SetParent(WorkspaceValue);
+		auto FolderCopy = CloneFolder->Clone();
+		Check(FolderCopy && !FolderCopy->GetParent() && FolderCopy->GetChildren().size() == 3,
+			"subtree Clone preserves descendants while leaving its root detached");
+		FolderCopy->SetParent(WorkspaceValue);
+		auto CopiedA = std::dynamic_pointer_cast<Part>(FolderCopy->FindFirstChild("A", false));
+		auto CopiedB = std::dynamic_pointer_cast<Part>(FolderCopy->FindFirstChild("B", false));
+		auto CopiedWeld = std::dynamic_pointer_cast<WeldConstraint>(FolderCopy->FindFirstChild("Weld", false));
+		Check(CopiedA && CopiedB && CopiedWeld && CopiedWeld->GetPart0() == CopiedA && CopiedWeld->GetPart1() == CopiedB &&
+			CopiedA != ClonePartA && CopiedB != ClonePartB,
+			"subtree Clone remaps internal object references to fresh descendants");
+		FolderCopy->Destroy();
+		Check(CloneFolder->FindFirstChild("A", false) == ClonePartA,
+			"destroying an adopted clone removes only the clone subtree");
+
+		auto ScriptSource = std::make_shared<Script>();
+		ScriptSource->SetArchivable(true);
+		ScriptSource->SetName("CloneScript");
+		ScriptSource->SetSource("return 42\n");
+		int SourceDestroyCallbacks = 0;
+		auto SourceConnection = ScriptSource->Destroying->Connect([&](std::monostate) { ++SourceDestroyCallbacks; });
+		auto ScriptCopy = std::dynamic_pointer_cast<Script>(ScriptSource->Clone());
+		Check(ScriptCopy && ScriptCopy->GetSource() == ScriptSource->GetSource() &&
+			ScriptCopy->GetSourceVersion() == ScriptSource->GetSourceVersion() && ScriptCopy->Thread == nullptr &&
+			ScriptCopy->Bytecode.empty(),
+			"Script Clone preserves source/version while resetting execution and bytecode state");
+		ScriptCopy->Destroy();
+		Check(SourceDestroyCallbacks == 0,
+			"Clone creates fresh signals and does not copy source subscribers");
+		SourceConnection->Disconnect();
+		auto ModuleSource = std::make_shared<ModuleScript>();
+		ModuleSource->SetArchivable(true);
+		ModuleSource->SetSource("return { Value = 42 }\n");
+		auto ModuleCopy = std::dynamic_pointer_cast<ModuleScript>(ModuleSource->Clone());
+		Check(ModuleCopy && ModuleCopy->GetSource() == ModuleSource->GetSource() && ModuleCopy->Bytecode.empty(),
+			"ModuleScript Clone preserves exact source without copying compiled runtime state");
+
+		auto MeasurePart = std::make_shared<Part>();
+		MeasurePart->SetArchivable(true);
+		auto PartCloneStart = std::chrono::steady_clock::now();
+		auto MeasuredPartCopy = MeasurePart->Clone();
+		const auto PartCloneMilliseconds = std::chrono::duration<double, std::milli>(
+			std::chrono::steady_clock::now() - PartCloneStart).count();
+		auto MeasureTree = std::make_shared<Folder>();
+		MeasureTree->SetArchivable(true);
+		for (int Index = 1; Index < 100; ++Index) {
+			auto Child = std::make_shared<Folder>();
+			Child->SetArchivable(true);
+			Child->SetParent(MeasureTree);
+		}
+		auto TreeCloneStart = std::chrono::steady_clock::now();
+		auto MeasuredTreeCopy = MeasureTree->Clone();
+		const auto TreeCloneMilliseconds = std::chrono::duration<double, std::milli>(
+			std::chrono::steady_clock::now() - TreeCloneStart).count();
+		Check(MeasuredPartCopy && MeasuredTreeCopy && MeasuredTreeCopy->GetDescendants().size() == 99,
+			"representative one-Part and 100-object Clone measurements produce complete detached results");
+		std::cout << "METRIC clone_part_ms " << PartCloneMilliseconds << '\n';
+		std::cout << "METRIC clone_subtree_100_ms " << TreeCloneMilliseconds << '\n';
+
+		lua_settop(L, 0);
+		Check(Load(L, R"(
+			local NonArchivable = Instance.new("Part")
+			local ArchivableOk, ArchivableError = pcall(function() NonArchivable:Clone() end)
+			local ProtectedOk, ProtectedError = pcall(function() game:Clone() end)
+			local Stale = Instance.new("Part")
+			Stale.Archivable = true
+			Stale:Destroy()
+			local StaleOk, StaleError = pcall(function() Stale:Clone() end)
+			return ArchivableOk, ArchivableError, ProtectedOk, ProtectedError, StaleOk, StaleError
+		)", "luau-clone-errors") == LUA_OK && lua_pcall(L, 0, 6, 0) == LUA_OK,
+			"Clone denial paths remain ordinary bounded Luau errors");
+		Check(!lua_toboolean(L, -6) && std::string_view(lua_tostring(L, -5)).find("Archivable") != std::string_view::npos &&
+			!lua_toboolean(L, -4) && std::string_view(lua_tostring(L, -3)).find("protected") != std::string_view::npos &&
+			!lua_toboolean(L, -2) && std::string_view(lua_tostring(L, -1)).find("destroyed") != std::string_view::npos,
+			"Clone explains non-archivable, protected, and stale source failures");
+		auto AtomicCloneSource = std::make_shared<Folder>();
+		AtomicCloneSource->SetArchivable(true);
+		auto NonArchivableDescendant = std::make_shared<Part>();
+		NonArchivableDescendant->SetParent(AtomicCloneSource);
+		CheckThrows<std::invalid_argument>([&] { (void)AtomicCloneSource->Clone(); },
+			"Clone rejects a non-Archivable descendant before constructing a partial result");
+		Check(AtomicCloneSource->GetChildren().size() == 1 &&
+			AtomicCloneSource->GetChildren()[0] == NonArchivableDescendant,
+			"failed subtree Clone leaves the complete source hierarchy unchanged");
 
 		lua_settop(L, 0);
 		Check(Load(L, R"(
@@ -5437,6 +5659,51 @@ namespace {
 		Check(lua_tonumber(L, -1) == 10, "Signal Connect, Once, Fire, and Disconnect preserve callback semantics");
 		lua_settop(L, 0);
 	}
+
+	void TestPlayDiagnosticBounds() {
+		using namespace gargantuan;
+		auto World = std::make_shared<DataModel>();
+		World->MarkPersistenceSubtreeArchivable();
+		auto SpamScript = std::make_shared<Script>();
+		SpamScript->SetArchivable(true);
+		SpamScript->SetName("DiagnosticSpam");
+		SpamScript->SetSource(R"(
+			for Index = 1, 300 do print("spam", Index) end
+			warn("warning after spam")
+			error("error after spam")
+		)");
+		auto Workspace = World->GetService("Workspace");
+		Workspace->SetArchivable(true);
+		SpamScript->SetParent(Workspace);
+		std::shared_ptr<Instance> Root = World;
+		const auto BeforePlay = InstanceSerialization::Serialize(InstanceSerialization::InstanceFormat::Json, Root);
+		PlaySession Session(
+			{7001}, BeforePlay, InstanceSerialization::InstanceFormat::Json,
+			std::filesystem::temp_directory_path(), 64, 64, 1
+		);
+		auto RuntimeSpam = std::dynamic_pointer_cast<Script>(Session.GetWorld()->FindFirstChild("DiagnosticSpam", true));
+		Check(RuntimeSpam && RuntimeSpam->GetEnabled() && RuntimeSpam->GetSource().find("warning after spam") != std::string::npos,
+			"Play diagnostic fixture retains its enabled Script source");
+		for (int Step = 0; Step < 4; ++Step) Session.Step();
+		auto Diagnostics = Session.DrainDiagnostics();
+		Check(Diagnostics.size() == PlaySession::MaximumDiagnostics &&
+			std::ranges::is_sorted(Diagnostics, {}, &PlayDiagnostic::Sequence) &&
+			Diagnostics.front().Sequence > 1,
+			"runtime diagnostic spam evicts oldest records from the bounded Play queue without blocking");
+		Check(std::ranges::any_of(Diagnostics, [](const PlayDiagnostic &Diagnostic) {
+			return Diagnostic.Severity == "Warning" && Diagnostic.Message == "warning after spam";
+		}) && std::ranges::any_of(Diagnostics, [](const PlayDiagnostic &Diagnostic) {
+			return Diagnostic.Severity == "Error" && Diagnostic.Message.find("error after spam") != std::string::npos;
+		}), "warning and runtime error diagnostics remain classified after bounded log pressure");
+		Session.Stop();
+		auto StopDiagnostics = Session.DrainDiagnostics();
+		Check(StopDiagnostics.size() == 1 && StopDiagnostics[0].Category == "Runtime" &&
+			StopDiagnostics[0].Message == "Play session stopped",
+			"stopped Play session retains only its own final queued lifecycle diagnostic after a drain");
+		const auto AfterPlay = InstanceSerialization::Serialize(InstanceSerialization::InstanceFormat::Json, Root);
+		Check(AfterPlay == BeforePlay,
+			"runtime diagnostics do not mutate authoring hierarchy or persistent state");
+	}
 }
 
 int main() {
@@ -5478,6 +5745,7 @@ int main() {
 	TestEditorHostProtocol();
 	TestLuauExceptionBoundary();
 	TestLuauEmbeddingCompatibility();
+	TestPlayDiagnosticBounds();
 	if (Failures == 0) std::cout << "All foundation tests passed\n";
 	return Failures == 0 ? 0 : 1;
 }

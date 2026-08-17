@@ -53,6 +53,7 @@ namespace gargantuan {
 
 	  private:
 		friend class Instance;
+		void AdoptDetached(ObjectId Scope, const std::vector<std::pair<ObjectId, std::vector<std::string>>> &Memberships);
 		std::vector<std::string> RemoveAll(ObjectId scope, ObjectId object, bool publishChanges = true);
 		TagId Intern(std::string_view name);
 		void ReleaseIfUnused(TagId id);

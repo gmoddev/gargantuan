@@ -186,6 +186,7 @@ namespace gargantuan::InstanceSerialization {
 			if (auto dataModel = instance->GetDataModel())
 				for (const auto &tag : dataModel->Tags.GetTags(dataModel->GetObjectId(), instance->GetObjectId(), ScriptSecurityContext::CoreTrusted()))
 					serialized["Tags"].push_back(tag);
+			else for (const auto &tag : instance->GetDetachedTagsForAdoption()) serialized["Tags"].push_back(tag);
 			serialized["Children"] = children;
 
 			state.InstanceMap.emplace(instance, serialized);
@@ -820,7 +821,10 @@ namespace gargantuan::InstanceSerialization {
 			if (maybeInstance.has_value()) {
 				try {
 					for (const auto &[instance, tags] : state.PendingTags) {
-						if (!ApplyPendingTags) continue;
+						if (!ApplyPendingTags) {
+							instance->SetDetachedTagsForAdoption(tags);
+							continue;
+						}
 						auto dataModel = instance->GetDataModel();
 						if (!dataModel && !tags.empty()) throw std::runtime_error("Tagged Instance is not owned by a DataModel");
 						if (dataModel) for (const auto &tag : tags)

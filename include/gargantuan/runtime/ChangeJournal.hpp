@@ -106,6 +106,7 @@ namespace gargantuan {
 	class ScopedChangeJournalSuppression {
 	  private:
 		friend class EditorHost;
+		friend class Instance;
 		friend class InProcessReplicationSession;
 		friend class MutationGateway;
 		friend class network::ReplicaApplier;

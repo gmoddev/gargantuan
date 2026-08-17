@@ -60,6 +60,62 @@ namespace gargantuan {
 		IdToName.erase(name);
 	}
 
+	void TagIndex::AdoptDetached(
+		ObjectId Scope,
+		const std::vector<std::pair<ObjectId, std::vector<std::string>>> &Memberships
+	) {
+		AssertAuthoritativeMutation("Detached tag adoption");
+		if (!Scope.IsValid()) throw std::invalid_argument("Detached tag adoption requires a valid DataModel scope");
+		std::vector<std::pair<ObjectId, TagId>> Inserted;
+		std::size_t MembershipCount = 0;
+		for (const auto &[Object, Names] : Memberships) {
+			if (!IsLiveInScope(Scope, Object))
+				throw std::invalid_argument("Detached tag target is stale or belongs to another DataModel");
+			for (const auto &Name : Names) ValidateTagName(Name);
+			MembershipCount += Names.size();
+		}
+		Inserted.reserve(MembershipCount);
+		try {
+			for (const auto &[Object, Names] : Memberships) for (const auto &Name : Names) {
+				const auto Id = Intern(Name);
+				bool ReverseInserted = false;
+				try {
+					auto [Reverse, CreatedReverse] = TagToObjects.try_emplace(Id);
+					(void)CreatedReverse;
+					if (!Reverse->second.insert(Object).second)
+						throw std::runtime_error("Detached tag reverse index is inconsistent");
+					ReverseInserted = true;
+					auto [Forward, CreatedForward] = ObjectToTags.try_emplace(Object);
+					(void)CreatedForward;
+					if (!Forward->second.insert(Id).second)
+						throw std::runtime_error("Detached tag forward index is inconsistent");
+					Inserted.emplace_back(Object, Id);
+				} catch (...) {
+					if (ReverseInserted) {
+						auto Reverse = TagToObjects.find(Id);
+						if (Reverse != TagToObjects.end()) Reverse->second.erase(Object);
+					}
+					auto Forward = ObjectToTags.find(Object);
+					if (Forward != ObjectToTags.end() && Forward->second.empty()) ObjectToTags.erase(Forward);
+					ReleaseIfUnused(Id);
+					throw;
+				}
+			}
+		} catch (...) {
+			for (auto It = Inserted.rbegin(); It != Inserted.rend(); ++It) {
+				auto Forward = ObjectToTags.find(It->first);
+				if (Forward != ObjectToTags.end()) {
+					Forward->second.erase(It->second);
+					if (Forward->second.empty()) ObjectToTags.erase(Forward);
+				}
+				auto Reverse = TagToObjects.find(It->second);
+				if (Reverse != TagToObjects.end()) Reverse->second.erase(It->first);
+				ReleaseIfUnused(It->second);
+			}
+			throw;
+		}
+	}
+
 	bool TagIndex::IsLiveInScope(ObjectId scope, ObjectId object) const {
 		auto instance = ObjectRegistry::Get().Lookup(object);
 		return instance && !instance->GetDestroyed() && instance->GetReplicationScopeId() == scope;

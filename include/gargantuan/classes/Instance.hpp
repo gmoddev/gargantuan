@@ -37,6 +37,7 @@ namespace gargantuan {
 		std::map<std::string, WireValue> Attributes;
 		std::map<SchemaId, std::map<std::string, WireValue>> ExtensionValues;
 		std::map<SchemaId, std::map<std::string, WireValue>> CustomPropertyValues;
+		std::vector<std::string> DetachedTags;
 		SchemaId RuntimeSchemaClassId{};
 		std::unordered_map<std::string, std::shared_ptr<Signal<std::monostate>>> AttributeChangedSignals;
 
@@ -53,6 +54,7 @@ namespace gargantuan {
 		static int LIndex(lua_State *L, Instance *instance);
 		static int LNewIndex(lua_State *L, Instance *instance);
 		static int LNamecall(lua_State *L, Instance *instance);
+		static int LEqual(lua_State *L, Instance *instance);
 
 		typedef std::function<void(std::shared_ptr<gargantuan::Instance> instance)> BindCallback;
 		std::function<void()> BindChildren(BindCallback callback);
@@ -66,6 +68,8 @@ namespace gargantuan {
 		[[nodiscard]] std::shared_ptr<DataModel> GetDataModel() const;
 		void PublishReplicationSubtree(ObjectId scope);
 		void MarkPersistenceSubtreeArchivable();
+		void SetDetachedTagsForAdoption(std::vector<std::string> Tags);
+		[[nodiscard]] const std::vector<std::string> &GetDetachedTagsForAdoption() const { return DetachedTags; }
 		void AssertCanMutate() const;
 		void ValidatePropertyMutation(std::string_view propertyName, const std::any &value) const;
 		MutationStatus ApplyPropertyMutation(
