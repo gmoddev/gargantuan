@@ -8,6 +8,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <cstddef>
 
 namespace gargantuan {
 	class ScopedAuthoritativeRevisionDeferral;
@@ -31,12 +32,17 @@ namespace gargantuan {
 		void InitializeLoadedProjectRevision();
 		[[nodiscard]] bool IsProtectedService(const std::shared_ptr<Instance> &InstanceValue) const;
 		[[nodiscard]] bool IsProtectedServiceClass(SchemaId ClassSchemaId) const;
+		[[nodiscard]] bool CanAdoptInstances(std::size_t Count) const;
+		void AdoptInstances(std::size_t Count);
+		void ReleaseInstance() noexcept;
+		[[nodiscard]] std::size_t GetOwnedInstanceCount() const { return OwnedInstanceCount; }
 
 	  private:
 		friend class ScopedAuthoritativeRevisionDeferral;
 		std::uint64_t AuthoritativeRevision = InitialProjectRevision;
 		bool RevisionBatchActive = false;
 		bool RevisionBatchChanged = false;
+		std::size_t OwnedInstanceCount = 1;
 	};
 
 	class ScopedAuthoritativeRevisionDeferral {

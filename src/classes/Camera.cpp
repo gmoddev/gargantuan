@@ -68,6 +68,8 @@ namespace gargantuan {
 			} else if constexpr (std::is_same_v<EventType, FocusEvent>) {
 				if (!Value.Focused) {
 					PressedKeys.clear();
+					AccumulatedDeltaX = 0.0f;
+					AccumulatedDeltaY = 0.0f;
 					if (RelativePointerMode) {
 						RelativePointerMode = false;
 						return HostCommand{SetRelativePointerMode{false}};

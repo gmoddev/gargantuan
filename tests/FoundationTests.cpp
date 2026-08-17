@@ -267,11 +267,16 @@ namespace {
 		Check(firstId != secondId, "reused slots receive a new generation");
 		Check(!ObjectRegistry::Get().Lookup(firstId), "stale generation remains invalid");
 
-		second->SetName("CommittedName");
 		auto parent = std::make_shared<Folder>();
+		auto game = std::make_shared<DataModel>();
+		auto workspace = std::dynamic_pointer_cast<Workspace>(game->GetService("Workspace"));
+		parent->SetParent(workspace);
+		ChangeJournal::Get().Clear();
+		auto cursor = ChangeJournal::Get().CreateCursor(game->GetObjectId());
 		second->SetParent(parent);
+		second->SetName("CommittedName");
 		second->Destroy();
-		auto records = ChangeJournal::Get().ReadSince(0);
+		auto records = ChangeJournal::Get().Read(cursor).Records;
 		bool sawProperty = false;
 		bool sawReparent = false;
 		bool sawDestroy = false;
@@ -284,6 +289,58 @@ namespace {
 			Check(records[i - 1].Sequence < records[i].Sequence, "change records are strictly ordered");
 		Check(!records.empty(), "committed mutations produce change records");
 		Check(sawProperty && sawReparent && sawDestroy, "journal represents property, reparent, and destroy commits");
+
+		auto foreignGame = std::make_shared<DataModel>();
+		auto foreignWorkspace = std::dynamic_pointer_cast<Workspace>(foreignGame->GetService("Workspace"));
+		auto owned = std::make_shared<Folder>();
+		owned->SetParent(workspace);
+		CheckThrows<std::invalid_argument>([&] { owned->SetParent(foreignWorkspace); },
+			"an adopted Instance cannot migrate to a different DataModel");
+		owned->SetParent(nullptr);
+		Check(owned->GetDataModel() == game, "Parent nil retains the originating DataModel association");
+		CheckThrows<std::invalid_argument>([&] { owned->SetParent(foreignWorkspace); },
+			"unparenting cannot turn an adopted Instance into a cross-DataModel migration loophole");
+
+		auto detachedRoot = std::make_shared<Folder>();
+		auto detachedPart0 = std::make_shared<Part>();
+		auto detachedPart1 = std::make_shared<Part>();
+		auto detachedWeld = std::make_shared<WeldConstraint>();
+		detachedPart0->SetParent(detachedRoot);
+		detachedPart1->SetParent(detachedRoot);
+		detachedWeld->SetPart0(detachedPart0);
+		detachedWeld->SetPart1(detachedPart1);
+		detachedWeld->SetParent(detachedRoot);
+		detachedRoot->SetParent(workspace);
+		Check(detachedPart0->GetDataModel() == game && detachedPart1->GetDataModel() == game &&
+			detachedWeld->GetDataModel() == game,
+			"first adoption validates and adopts a detached constraint subtree atomically");
+		const auto OwnedBeforeDetachedDestroy = game->GetOwnedInstanceCount();
+		detachedRoot->Destroy();
+		Check(game->GetOwnedInstanceCount() + 4 == OwnedBeforeDetachedDestroy &&
+			!detachedPart0->GetParent() && !detachedPart1->GetParent(),
+			"destroying an adopted subtree releases hierarchy and DataModel ownership for every node");
+
+		auto invalidRoot = std::make_shared<Folder>();
+		auto invalidWeld = std::make_shared<WeldConstraint>();
+		auto outsidePart = std::make_shared<Part>();
+		invalidWeld->SetPart0(outsidePart);
+		invalidWeld->SetParent(invalidRoot);
+		CheckThrows<std::invalid_argument>([&] { invalidRoot->SetParent(workspace); },
+			"first adoption rejects detached object references outside the adopted subtree");
+		Check(!invalidRoot->GetParent() && !invalidRoot->GetDataModel() && !invalidWeld->GetDataModel(),
+			"failed subtree adoption publishes no partial hierarchy ownership");
+
+		auto deepRoot = std::make_shared<Folder>();
+		auto deepLeaf = deepRoot;
+		for (std::size_t Depth = 1; Depth < MaximumProtocolJsonDepth; ++Depth) {
+			auto Child = std::make_shared<Folder>();
+			Child->SetParent(deepLeaf);
+			deepLeaf = std::move(Child);
+		}
+		CheckThrows<std::length_error>([&] { deepRoot->SetParent(workspace); },
+			"first adoption rejects a subtree that exceeds the hierarchy depth limit");
+		Check(!deepRoot->GetParent() && !deepRoot->GetDataModel(),
+			"depth-limit rejection leaves the detached subtree unowned and unpublished");
 	}
 
 	void TestWorldRootConstraintValidation() {
@@ -292,6 +349,19 @@ namespace {
 		auto workspace = std::dynamic_pointer_cast<Workspace>(game->GetService("Workspace"));
 		Check(workspace != nullptr, "WorldRoot regression fixture obtains Workspace");
 		if (!workspace) return;
+		auto adoptedPart = std::make_shared<Part>();
+		const auto bodyCountBeforeAdoption = WorldRootTestAccess::BodyCount(*workspace);
+		adoptedPart->SetParent(workspace);
+		Check(WorldRootTestAccess::BodyCount(*workspace) == bodyCountBeforeAdoption + 1,
+			"first-adopted Part establishes its physics body");
+		adoptedPart->SetParent(nullptr);
+		Check(!adoptedPart->GetParent() && adoptedPart->GetDataModel() == game &&
+			WorldRootTestAccess::BodyCount(*workspace) == bodyCountBeforeAdoption,
+			"Parent nil removes physics presence while retaining runtime DataModel ownership");
+		adoptedPart->SetParent(workspace);
+		Check(WorldRootTestAccess::BodyCount(*workspace) == bodyCountBeforeAdoption + 1,
+			"same-DataModel reparent restores physics presence");
+		adoptedPart->Destroy();
 
 		auto unrelated = std::make_shared<Folder>();
 		unrelated->SetParent(workspace);
@@ -1822,6 +1892,17 @@ namespace {
 		Check(reparented.Succeeded() && createdObject->GetParent() == otherParent, "reparent command applies on Main");
 		Check(journal.Read(ReparentCursor).Records.size() == 1,
 			"reparent command emits one committed record");
+		auto CycleResult = gateway.Apply(ReparentObjectCommand{otherParentId, *created.Object});
+		Check(CycleResult.Status == MutationStatus::InvalidParent &&
+			CycleResult.Message.find("hierarchy cycle") != std::string::npos,
+			"reparent diagnostics distinguish hierarchy cycles");
+		auto ForeignWorld = std::make_shared<DataModel>();
+		auto ForeignParent = std::make_shared<Folder>();
+		ForeignParent->SetParent(ForeignWorld);
+		auto CrossScopeResult = gateway.Apply(ReparentObjectCommand{*created.Object, ForeignParent->GetObjectId()});
+		Check(CrossScopeResult.Status == MutationStatus::InvalidParent &&
+			CrossScopeResult.Message.find("different DataModel") != std::string::npos,
+			"reparent diagnostics distinguish cross-DataModel targets");
 		journal.Clear();
 		auto destroyed = gateway.Apply(DestroyObjectCommand{*created.Object});
 		Check(destroyed.Succeeded() && createdObject->GetDestroyed(), "destroy command applies on Main");
@@ -2057,8 +2138,10 @@ namespace {
 		);
 
 		const auto secondWireId = WireObjectId::FromObjectId(second->GetObjectId());
-		second->SetParent(otherScope);
-		Check(session->ApplyAvailable().Succeeded(), "cross-scope removal applies in source order");
+		CheckThrows<std::invalid_argument>([&] { second->SetParent(otherScope); },
+			"replicated Instances cannot migrate across DataModels");
+		second->Destroy();
+		Check(session->ApplyAvailable().Succeeded(), "scoped destruction applies in source order");
 		Check(!session->ResolveReceiver(secondWireId), "leaving the scope invalidates receiver reference lookup");
 		WireJournalRecord staleReference{
 			.Sequence = session->GetCursor().NextSequence,
@@ -2527,10 +2610,10 @@ namespace {
 		const auto movingDescendantId = movingDescendant->GetObjectId();
 		Check(gateway.Apply(AddTagCommand{movingDescendantId, "OldWorld"}).Succeeded(),
 			"cross-scope subtree fixture is tagged");
-		movingAncestor->SetParent(otherGame);
-		movingAncestor->SetParent(game);
-		Check(!game->Tags.Has(scope, movingDescendantId, "OldWorld", ScriptSecurityContext::CoreTrusted()),
-			"moving a subtree between DataModels cleans descendant tag membership before it can resurface");
+		CheckThrows<std::invalid_argument>([&] { movingAncestor->SetParent(otherGame); },
+			"an adopted tagged subtree cannot migrate between DataModels");
+		Check(game->Tags.Has(scope, movingDescendantId, "OldWorld", ScriptSecurityContext::CoreTrusted()),
+			"rejected cross-DataModel parenting preserves the authoritative tag membership");
 
 		first->Destroy();
 		auto replacement = std::make_shared<Folder>();
@@ -4184,7 +4267,8 @@ namespace {
 		CreatedProjectStream.close();
 		Check(CreatedProjectDocument["Version"] == 4 && CreatedProjectDocument["Name"] == "Created Project" &&
 			CreatedProjectDocument["Children"].size() == 1 &&
-			CreatedProjectDocument["Children"][0]["ClassName"] == "Workspace",
+			CreatedProjectDocument["Children"][0]["ClassName"] == "Workspace" &&
+			CreatedProjectDocument["Children"][0]["Name"] == "Workspace",
 			"CreateProject immediately persists the minimal DataModel plus Workspace in project format v4");
 		auto ExistingProjectCreate = call("CreateProject", {
 			{"Destination", CreatedRoot.string()}, {"Name", "Overwrite Attempt"}
@@ -4315,6 +4399,31 @@ namespace {
 				Check(call("SendPlayInput", {
 					{"PlaySessionId", PlayId}, {"Type", "Focus"}, {"Focused", true}
 				}, "test-token")["Ok"].get<bool>(), "focused viewport input reaches the exact active Play session");
+				auto RightDown = call("SendPlayInput", {
+					{"PlaySessionId", PlayId}, {"Type", "PointerButton"},
+					{"Button", "Right"}, {"State", "Pressed"}, {"X", 10.0}, {"Y", 20.0}
+				}, "test-token");
+				Check(RightDown["Ok"].get<bool>() && RightDown["Result"]["RelativePointerMode"] == true,
+					"Play RMB down reaches the runtime camera and requests relative pointer capture");
+				Check(call("SendPlayInput", {
+					{"PlaySessionId", PlayId}, {"Type", "PointerMove"},
+					{"X", 12.0}, {"Y", 19.0}, {"DeltaX", 2.0}, {"DeltaY", -1.0}
+				}, "test-token")["Ok"].get<bool>(), "Play pointer movement reaches the active runtime exactly once");
+				auto RightUp = call("SendPlayInput", {
+					{"PlaySessionId", PlayId}, {"Type", "PointerButton"},
+					{"Button", "Right"}, {"State", "Released"}, {"X", 12.0}, {"Y", 19.0}
+				}, "test-token");
+				Check(RightUp["Ok"].get<bool>() && RightUp["Result"]["RelativePointerMode"] == false,
+					"Play RMB up reaches the runtime camera and releases relative pointer capture");
+				(void)call("SendPlayInput", {
+					{"PlaySessionId", PlayId}, {"Type", "PointerButton"},
+					{"Button", "Right"}, {"State", "Pressed"}, {"X", 12.0}, {"Y", 19.0}
+				}, "test-token");
+				auto FocusLoss = call("SendPlayInput", {
+					{"PlaySessionId", PlayId}, {"Type", "Focus"}, {"Focused", false}
+				}, "test-token");
+				Check(FocusLoss["Ok"].get<bool>() && FocusLoss["Result"]["RelativePointerMode"] == false,
+					"Play focus loss clears runtime input and releases relative pointer capture");
 				Check(!call("StartPlaySession", Json::object(), "test-token")["Ok"].get<bool>(),
 					"a second Play request cannot start another local session");
 				auto RejectedPlayMutation = call("SetScriptSource", {
@@ -5147,6 +5256,86 @@ namespace {
 		Check(lua_tonumber(L, -2) == 10.0 && lua_tonumber(L, -1) == 20.0 &&
 			Vector2AttributePart->GetAttributeValue("Offset") == std::optional<WireValue>(WireVector2{10.0f, 20.0f}),
 			"Luau Vector2 Attribute access retains exact component values");
+
+		auto WorkspaceValue = std::dynamic_pointer_cast<Workspace>(game->GetService("Workspace"));
+		auto KnownPart = std::make_shared<Part>();
+		KnownPart->SetName("KnownPart");
+		KnownPart->SetParent(WorkspaceValue);
+		lua_settop(L, 0);
+		Check(Load(L, R"(
+			local Workspace = game.Workspace
+			assert(Workspace ~= nil, "game.Workspace is missing")
+			local Missing = Workspace:FindFirstChild("DefinitelyMissing")
+			assert(Missing == nil and not Missing)
+			assert(Workspace:FindFirstChildOfClass("Folder") == nil)
+			assert(Workspace:FindFirstChildWhichIsA("Folder") == nil)
+			assert(Workspace:FindFirstDescendant("DefinitelyMissing") == nil)
+			assert(Workspace:FindFirstDescendantOfClass("Folder") == nil)
+			assert(Workspace:FindFirstDescendantWhichIsA("Folder") == nil)
+			assert(Workspace:FindFirstAncestor("DefinitelyMissing") == nil)
+			assert(Workspace:FindFirstAncestorOfClass("Folder") == nil)
+			assert(Workspace:FindFirstAncestorWhichIsA("Folder") == nil)
+			assert(Instance.new("Part").Parent == nil)
+			assert(Instance.new("WeldConstraint").Part0 == nil)
+			local Found = Workspace:FindFirstChild("KnownPart")
+			assert(Found ~= nil and Found:IsA("Part"))
+			Workspace.Name = "RenamedWorkspace"
+			assert(game.Workspace:IsA("Workspace"))
+		)", "luau-nullable-instance") == LUA_OK && lua_pcall(L, 0, 0, 0) == LUA_OK,
+			"nullable Instance-returning Luau APIs push nil and valid lookups remain usable");
+
+		lua_settop(L, 0);
+		Check(Load(L, R"(
+			local FolderValue = Instance.new("Folder")
+			local PartValue = Instance.new("Part")
+			PartValue.Name = "RuntimePart"
+			PartValue.Size = Vector3.new(4, 1, 4)
+			PartValue.CFrame = CFrame.new(0, 3, 0)
+			PartValue.Anchored = true
+			PartValue.Parent = FolderValue
+			FolderValue.Parent = game.Workspace
+			return PartValue, FolderValue
+		)", "luau-runtime-adoption") == LUA_OK && lua_pcall(L, 0, 2, 0) == LUA_OK,
+			"detached Luau Instance subtrees can be first-adopted into the runtime DataModel");
+		Check(WorkspaceValue->FindFirstChildOfClass("Folder", false) != nullptr,
+			"runtime first adoption publishes the detached subtree into Workspace");
+		Check(WorldRootTestAccess::BodyCount(*WorkspaceValue) == 2,
+			"first-adopted Part enters runtime physics alongside the known Part");
+		auto AdoptedPart = StackValue<std::shared_ptr<Instance>>::From(L, -2);
+		RenderExtractor RuntimeExtractor;
+		auto RuntimeSnapshot = RuntimeExtractor.Extract(
+			*WorkspaceValue, MakeRenderCameraInput(*WorkspaceValue->GetCurrentCamera()), 320, 200
+		);
+		Check(AdoptedPart && std::ranges::contains(RuntimeSnapshot->Items, AdoptedPart->GetObjectId(), &RenderItem::Object),
+			"first-adopted Part enters runtime render extraction with stable identity");
+
+		lua_settop(L, 0);
+		Check(Load(L, R"(
+			local WrongTypeOk, WrongTypeError = pcall(function()
+				game.Workspace.KnownPart.Size = "bad"
+			end)
+			local PartValue = Instance.new("Part")
+			PartValue.Parent = game.Workspace
+			PartValue:Destroy()
+			local StaleOk, StaleError = pcall(function() PartValue.Name = "AfterDestroy" end)
+			local InvalidClassOk, InvalidClassError = pcall(function()
+				Instance.new("DefinitelyNotAClass")
+			end)
+			local ProtectedClassOk, ProtectedClassError = pcall(function()
+				Instance.new("Workspace")
+			end)
+			return WrongTypeOk, WrongTypeError, StaleOk, StaleError,
+				InvalidClassOk, InvalidClassError, ProtectedClassOk, ProtectedClassError
+		)", "luau-instance-errors") == LUA_OK && lua_pcall(L, 0, 8, 0) == LUA_OK,
+			"Instance type, stale identity, and class-validation failures remain bounded Luau errors");
+		Check(!lua_toboolean(L, -8) && std::string_view(lua_tostring(L, -7)).find("Size") != std::string_view::npos,
+			"wrong property type identifies the property");
+		Check(!lua_toboolean(L, -6) && std::string_view(lua_tostring(L, -5)).find("destroyed") != std::string_view::npos,
+			"destroyed userdata reports stale lifetime rather than a contradictory type");
+		Check(!lua_toboolean(L, -4) && std::string_view(lua_tostring(L, -3)).find("Unknown instance class") != std::string_view::npos,
+			"Instance.new rejects unknown classes cleanly");
+		Check(!lua_toboolean(L, -2) && std::string_view(lua_tostring(L, -1)).find("cannot be constructed") != std::string_view::npos,
+			"Instance.new rejects protected service classes cleanly");
 
 		lua_settop(L, 0);
 		Check(Load(L, "local =", "luau-syntax-error") != LUA_OK, "Luau syntax errors fail during bytecode loading");

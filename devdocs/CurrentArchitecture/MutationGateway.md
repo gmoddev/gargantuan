@@ -48,6 +48,9 @@ lifecycle, and the optional schema validator before invoking the reflection
 writer. Luau property writes, reset-to-default, deserialization, and queued
 property commands use this path. Generated setters also validate schema values,
 which preserves synchronous native mutation without making the queue optional.
+Failure results retain a narrow `MutationStatus`; one bounded formatter converts
+that status into Luau and EditorHost diagnostics rather than collapsing it to a
+generic property-rejected message.
 Extension-property dispatch separately resolves the frozen extension
 identity/version, target applicability, property identity, and exact scalar
 type. It changes sparse Instance extension state and emits a dedicated journal

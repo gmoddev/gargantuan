@@ -6,6 +6,7 @@
 #include "gargantuan/services/Tags.hpp"
 #include "gargantuan/services/UserInputService.hpp"
 #include "gargantuan/services/Workspace.hpp"
+#include "gargantuan/runtime/ProtocolInput.hpp"
 
 #include <limits>
 #include <stdexcept>
@@ -70,6 +71,19 @@ namespace gargantuan {
 			if (ClassId == Id) return true;
 		}
 		return false;
+	}
+
+	bool DataModel::CanAdoptInstances(std::size_t Count) const {
+		return Count <= MaximumPersistenceObjects && OwnedInstanceCount <= MaximumPersistenceObjects - Count;
+	}
+
+	void DataModel::AdoptInstances(std::size_t Count) {
+		if (!CanAdoptInstances(Count)) throw std::length_error("DataModel object-count limit would be exceeded");
+		OwnedInstanceCount += Count;
+	}
+
+	void DataModel::ReleaseInstance() noexcept {
+		if (OwnedInstanceCount > 1) --OwnedInstanceCount;
 	}
 
 	void DataModel::InitializeLoadedProjectRevision() {

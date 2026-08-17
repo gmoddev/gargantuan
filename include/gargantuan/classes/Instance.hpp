@@ -42,6 +42,7 @@ namespace gargantuan {
 
 	  public:
 		std::weak_ptr<Instance> ParentReference;
+		std::weak_ptr<DataModel> OwningDataModel;
 		mutable ObjectId Id;
 		mutable std::mutex IdentityMutex;
 		bool DestroyingState = false;

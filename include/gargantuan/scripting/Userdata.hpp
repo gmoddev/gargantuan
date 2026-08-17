@@ -238,6 +238,8 @@ namespace gargantuan {
 							return 0;
 						}
 						if (!self) {
+							if (lua_userdatatag(L, 1) == static_cast<int>(ClassType::DEFINITION.Tag))
+								luaL_error(L, "%s is null or unavailable", ClassType::DEFINITION.Type.data());
 							luaL_typeerror(L, 1, ClassType::DEFINITION.Type.data());
 							return 0;
 						}
@@ -273,6 +275,12 @@ namespace gargantuan {
 		}
 
 		static int Push(lua_State *L, StoredAs value) {
+			if constexpr (requires(const StoredAs &Stored) { Stored.get(); }) {
+				if (!value) {
+					lua_pushnil(L);
+					return 1;
+				}
+			}
 			StoredAs *userdata = static_cast<StoredAs *>(
 				lua_newuserdatataggedwithmetatable(L, sizeof(StoredAs), static_cast<int>(Class::DEFINITION.Tag))
 			);

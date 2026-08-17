@@ -96,6 +96,12 @@ for a future UI/input router; it does not define camera-first precedence.
 behavior. Focus loss clears active service and camera key/button state and
 releases relative-pointer mode.
 
+The Studio Play viewport uses this same semantic boundary: Avalonia pointer
+press/release and motion become `PointerButtonEvent`/`PointerMoveEvent`, and the
+camera's relative-pointer `HostCommand` returns through EditorHost. Capture is
+restricted to the focused Play viewport and cleared on RMB up, focus loss, Stop,
+session disposal, or host disconnect.
+
 The retained UI focus system, action/binding framework, touch/pen semantics,
 IME composition, gamepad remapping, and multi-window architecture are not part
 of this boundary.

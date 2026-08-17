@@ -1,10 +1,12 @@
 #include "gargantuan/classes/Instance.hpp"
 #include "gargantuan/classes/DataModel.hpp"
+#include "gargantuan/classes/ServiceProvider.hpp"
 #include "gargantuan/InstanceProperty.hpp"
 #include "gargantuan/datatypes/Signal.hpp"
 #include "gargantuan/scripting/Userdata.hpp"
 #include "gargantuan/scripting/UserdataTag.hpp"
 #include "gargantuan/runtime/ChangeJournal.hpp"
+#include "gargantuan/runtime/ProtocolInput.hpp"
 #include "gargantuan/runtime/AttributeValidation.hpp"
 #include "gargantuan/runtime/ExecutionDomain.hpp"
 #include "gargantuan/runtime/ObjectId.hpp"
@@ -22,16 +24,30 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <format>
 #include <limits>
 #include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <vector>
 
 namespace gargantuan {
 	namespace {
+		std::string InstanceClassName(const Instance *InstanceValue) {
+			auto *Definition = InstanceClassRegistry::GetDefinition(const_cast<Instance *>(InstanceValue));
+			if (!Definition) return "Instance";
+			return Definition->ConstructionKind == SchemaClassConstructionKind::CustomData
+				? Definition->CanonicalName : Definition->ClassName;
+		}
+		std::shared_ptr<Instance> FindServiceInstance(Instance *InstanceValue, std::string_view Name) {
+			auto *Provider = dynamic_cast<ServiceProvider *>(InstanceValue);
+			if (!Provider) return nullptr;
+			auto Service = Provider->FindService(std::string(Name));
+			return Service ? *Service : nullptr;
+		}
 		bool IsNativeDataModelDefinition(const SchemaClassDefinition *definition) {
 			static const auto DataModelId = SchemaId::FromNativeName("Engine", "DataModel");
 			return definition && definition->Id == DataModelId;
@@ -307,6 +323,8 @@ namespace gargantuan {
 	}
 
 	Instance::~Instance() {
+		if (auto DataModelValue = OwningDataModel.lock(); DataModelValue && !Destroyed)
+			DataModelValue->ReleaseInstance();
 		ObjectRegistry::Get().Invalidate(Id);
 	}
 
@@ -318,7 +336,7 @@ namespace gargantuan {
 			Id = ObjectRegistry::Get().Register(self);
 			auto definition = InstanceClassRegistry::GetDefinition(const_cast<Instance *>(this));
 			const auto scope = IsNativeDataModelDefinition(definition) ? Id : GetReplicationScopeId();
-			ChangeJournal::Get().Commit(scope, Id, ObjectCreatedChange{
+			if (scope.IsValid()) ChangeJournal::Get().Commit(scope, Id, ObjectCreatedChange{
 				definition ? (definition->ConstructionKind == SchemaClassConstructionKind::CustomData
 					? definition->CanonicalName : definition->ClassName) : "Instance",
 				definition ? definition->Id : SchemaId{},
@@ -343,7 +361,8 @@ namespace gargantuan {
 		CustomPropertyValues.clear();
 		AttributeChangedSignals.clear();
 		ObjectRegistry::Get().Invalidate(objectId);
-		ChangeJournal::Get().Commit(scope, objectId, PropertyUpdatedChange{"Destroyed", true, true});
+		if (scope.IsValid())
+			ChangeJournal::Get().Commit(scope, objectId, PropertyUpdatedChange{"Destroyed", true, true});
 		GetPropertyChangedSignal("Destroyed")->Fire({});
 
 		Destroying->Fire({});
@@ -354,8 +373,12 @@ namespace gargantuan {
 		}
 
 		SetParent(nullptr);
-		ChangeJournal::Get().Commit(scope, objectId, ObjectDestroyedChange{});
+		if (scope.IsValid()) ChangeJournal::Get().Commit(scope, objectId, ObjectDestroyedChange{});
 		if (dataModel) dataModel->AdvanceAuthoritativeRevision();
+		if (dataModel && dataModel.get() != this) {
+			OwningDataModel.reset();
+			dataModel->ReleaseInstance();
+		}
 	}
 
 	void Instance::AssertIsAlive() const {
@@ -383,17 +406,12 @@ namespace gargantuan {
 	}
 
 	ObjectId Instance::GetReplicationScopeId() const {
-		const Instance *root = this;
-		std::shared_ptr<Instance> owner;
-		while (auto parent = root->ParentReference.lock()) {
-			owner = std::move(parent);
-			root = owner.get();
-		}
-		auto *definition = InstanceClassRegistry::GetDefinition(const_cast<Instance *>(root));
-		return IsNativeDataModelDefinition(definition) ? root->GetObjectId() : ObjectId{};
+		auto DataModelValue = GetDataModel();
+		return DataModelValue ? DataModelValue->GetObjectId() : ObjectId{};
 	}
 
 	std::shared_ptr<DataModel> Instance::GetDataModel() const {
+		if (auto Owner = OwningDataModel.lock()) return Owner;
 		std::shared_ptr<Instance> root = const_cast<Instance *>(this)->shared_from_this();
 		while (auto parent = root->ParentReference.lock()) root = std::move(parent);
 		return std::dynamic_pointer_cast<DataModel>(root);
@@ -487,6 +505,7 @@ namespace gargantuan {
 		Enums::Permission permission,
 		const ScriptSecurityContext &securityContext
 	) {
+		if (Destroyed || DestroyingState) return MutationStatus::StaleObject;
 		auto *property = FindProperty(std::string(propertyName));
 		if (!property) return MutationStatus::InvalidProperty;
 		if (!property->Write || property->WritePermission == Enums::Permission::Never) return MutationStatus::ReadOnly;
@@ -495,15 +514,14 @@ namespace gargantuan {
 		if (property->WriteAuthority == InstanceProperty::Authority::Main &&
 			GetCurrentExecutionDomain() != ExecutionDomain::Main)
 			return MutationStatus::WrongExecutionDomain;
-		AssertIsAlive();
 		if (property->Validate && !property->Validate(value)) return MutationStatus::ValidationFailed;
 		if (property->WriteObjectReference) {
 			if (!property->DecodeObjectReference) return MutationStatus::ValidationFailed;
 			try {
 				auto Referenced = property->DecodeObjectReference(value);
 				if (Referenced) {
-					Referenced->AssertIsAlive();
-					if (Referenced->GetReplicationScopeId() != GetReplicationScopeId())
+					if (Referenced->GetDestroyed() || Referenced->IsDestroying()) return MutationStatus::StaleObject;
+					if (propertyName != "Parent" && Referenced->GetReplicationScopeId() != GetReplicationScopeId())
 						return MutationStatus::ValidationFailed;
 				}
 			} catch (const std::exception &) {
@@ -877,8 +895,15 @@ namespace gargantuan {
 		if (newParent) newParent->AssertIsAlive();
 		auto oldParent = ParentReference.lock();
 		if (oldParent == newParent) return;
-		auto oldDataModel = oldParent ? oldParent->GetDataModel() : nullptr;
-		auto newDataModel = newParent ? newParent->GetDataModel() : nullptr;
+		auto oldDataModel = GetDataModel();
+		auto newDataModel = newParent ? newParent->GetDataModel() : oldDataModel;
+		if (oldDataModel && newParent && !newDataModel)
+			throw std::invalid_argument("Cannot parent a DataModel-owned Instance beneath a detached Instance");
+		if (oldDataModel && newParent && newDataModel != oldDataModel)
+			throw std::invalid_argument(std::format(
+				"Cannot parent {} '{}' to {} '{}': target belongs to a different DataModel",
+				GetClassName(), Name, newParent->GetClassName(), newParent->GetName()
+			));
 		if (!DestroyingState) {
 			if (oldDataModel) oldDataModel->EnsureAuthoritativeRevisionAvailable();
 			if (newDataModel && newDataModel != oldDataModel) newDataModel->EnsureAuthoritativeRevisionAvailable();
@@ -889,13 +914,67 @@ namespace gargantuan {
 		for (auto ancestor = newParent; ancestor; ancestor = ancestor->ParentReference.lock()) {
 			if (ancestor == self) throw std::invalid_argument("An Instance cannot be parented to its descendant");
 		}
-		std::vector<std::shared_ptr<Instance>> subtree = {self};
-		CollectDescendants(subtree);
-		const auto oldScope = GetReplicationScopeId();
-		const auto newScope = newParent ? newParent->GetReplicationScopeId() : ObjectId{};
-		const auto objectId = GetObjectId();
+		std::vector<std::shared_ptr<Instance>> subtree;
+		subtree.reserve(Children.size() + 1);
+		std::vector<std::pair<std::shared_ptr<Instance>, std::size_t>> pending = {{self, 1}};
+		std::size_t SubtreeDepth = 0;
+		while (!pending.empty()) {
+			auto [Node, Depth] = std::move(pending.back());
+			pending.pop_back();
+			SubtreeDepth = std::max(SubtreeDepth, Depth);
+			subtree.push_back(Node);
+			if (subtree.size() > MaximumPersistenceObjects)
+				throw std::length_error("Cannot set Parent: Instance subtree object-count limit would be exceeded");
+			if (Node->Children.size() > MaximumPersistenceObjects - subtree.size() - pending.size())
+				throw std::length_error("Cannot set Parent: Instance subtree object-count limit would be exceeded");
+			for (const auto &Child : Node->Children) pending.emplace_back(Child, Depth + 1);
+		}
+		const auto oldScope = oldDataModel ? oldDataModel->GetObjectId() : ObjectId{};
+		bool FirstAdoption = !oldDataModel && newDataModel;
+		if (FirstAdoption) {
+			std::size_t ParentDepth = 0;
+			for (auto Current = newParent; Current; Current = Current->ParentReference.lock()) ++ParentDepth;
+			if (ParentDepth + SubtreeDepth > MaximumProtocolJsonDepth)
+				throw std::length_error("Cannot set Parent: hierarchy depth limit would be exceeded");
+			if (!newDataModel->CanAdoptInstances(subtree.size()))
+				throw std::length_error("Cannot set Parent: DataModel object-count limit would be exceeded");
+			std::unordered_set<const Instance *> SubtreeNodes;
+			SubtreeNodes.reserve(subtree.size());
+			for (const auto &Node : subtree) SubtreeNodes.insert(Node.get());
+			for (const auto &Node : subtree) {
+				if (Node->GetDestroyed() || Node->IsDestroying())
+					throw std::invalid_argument("Cannot adopt a destroyed Instance subtree");
+				if (Node->GetDataModel())
+					throw std::invalid_argument("Cannot adopt a subtree containing a DataModel-owned Instance");
+				auto *Definition = InstanceClassRegistry::GetDefinition(Node.get());
+				if (!Definition)
+					throw std::invalid_argument("Cannot adopt an Instance with missing schema metadata");
+				for (const auto &[PropertyName, Property] : Definition->AllProperties) {
+					if (PropertyName == "Parent" || !Property->ReadObjectReference ||
+						(Property->PersistencePolicy != InstanceProperty::Persistence::Saved &&
+							Property->ReplicationPolicy != InstanceProperty::Replication::FutureReplicated)) continue;
+					auto Referenced = Property->ReadObjectReference(Node.get());
+					if (!Referenced) continue;
+					if (Referenced->GetDestroyed() || Referenced->IsDestroying())
+						throw std::invalid_argument("Cannot adopt a subtree containing a stale object reference");
+					auto ReferencedDataModel = Referenced->GetDataModel();
+					if ((ReferencedDataModel && ReferencedDataModel != newDataModel) ||
+						(!ReferencedDataModel && !SubtreeNodes.contains(Referenced.get())))
+						throw std::invalid_argument(std::format(
+							"Cannot adopt {}: object-reference property {} targets an Instance outside the target DataModel",
+							InstanceClassName(Node.get()), PropertyName
+						));
+				}
+				(void)Node->GetObjectId();
+			}
+			newParent->Children.reserve(newParent->Children.size() + 1);
+			newDataModel->AdoptInstances(subtree.size());
+			for (const auto &Node : subtree) Node->OwningDataModel = newDataModel;
+		}
+		const auto newScope = newDataModel ? newDataModel->GetObjectId() : ObjectId{};
+		const auto objectId = (oldScope.IsValid() || newScope.IsValid()) ? GetObjectId() : ObjectId{};
 		if (!DestroyingState && oldScope != newScope) {
-			if (auto oldDataModel = GetDataModel()) {
+			if (oldDataModel) {
 				for (const auto &node : subtree) oldDataModel->Tags.RemoveAll(oldScope, node->GetObjectId());
 			}
 		}
@@ -918,7 +997,7 @@ namespace gargantuan {
 
 		const auto newParentId = newParent ? std::optional(newParent->GetObjectId()) : std::nullopt;
 		if (!DestroyingState) {
-			if (oldScope == newScope) {
+			if (oldScope == newScope && newScope.IsValid()) {
 				ChangeJournal::Get().Commit(newScope, objectId, ObjectReparentedChange{newParentId});
 			} else {
 				if (oldScope.IsValid()) ChangeJournal::Get().Commit(oldScope, objectId, ObjectDestroyedChange{});
@@ -1023,6 +1102,9 @@ namespace gargantuan {
 	int Instance::LIndex(lua_State *L, Instance *self) {
 		return InvokeNativeCallback(L, [L, self] {
 			const char *key = luaL_checkstring(L, 2);
+			if (self && self->GetDestroyed() && std::string_view(key) != "Destroyed")
+				luaL_error(L, "Cannot read %s.%s on destroyed Instance '%s'",
+					InstanceClassName(self).c_str(), key, self->Name.c_str());
 
 			if (key && self) {
 				const auto *property = self->FindProperty(key);
@@ -1034,6 +1116,9 @@ namespace gargantuan {
 					} else {
 						luaL_error(L, "Property %s is write-only", key);
 					}
+				} else if (auto Service = FindServiceInstance(self, key)) {
+					StackValue<std::shared_ptr<Instance>>::Push(L, std::move(Service));
+					return 1;
 				} else if (auto child = self->FindFirstChild(key, std::nullopt)) {
 					StackValue<std::shared_ptr<Instance>>::Push(L, child);
 					return 1;
@@ -1047,6 +1132,9 @@ namespace gargantuan {
 	int Instance::LNewIndex(lua_State *L, Instance *self) {
 		return InvokeNativeCallback(L, [L, self] {
 			const char *key = luaL_checkstring(L, 2);
+			const auto ClassName = InstanceClassName(self);
+			if (self && self->GetDestroyed())
+				luaL_error(L, "Cannot set %s.%s on destroyed Instance '%s'", ClassName.c_str(), key, self->Name.c_str());
 
 			if (key && self) {
 				const auto *property = self->FindProperty(key);
@@ -1054,10 +1142,14 @@ namespace gargantuan {
 					if (property->Write && property->WritePermission != Enums::Permission::Never) {
 						if (!property->CanWrite(GetCurrentScriptSecurityContext()))
 							luaL_error(L, "Current script context cannot write property %s", key);
-						if (!property->IsStack(L, 3)) luaL_typeerrorL(L, 3, property->ReflectedTypedef.c_str());
+						if (!property->IsStack(L, 3))
+							luaL_error(L, "Cannot set %s.%s: expected %s, got %s",
+								ClassName.c_str(), key, property->ReflectedTypedef.c_str(), luaL_typename(L, 3));
 						auto value = property->FromStack(L, 3);
 						const auto status = self->ApplyPropertyMutation(key, value);
-						if (status != MutationStatus::Success) throw std::runtime_error("Property mutation rejected");
+						if (status != MutationStatus::Success)
+							luaL_error(L, "Cannot set %s.%s on '%s': %s",
+								ClassName.c_str(), key, self->Name.c_str(), GetMutationStatusDescription(status));
 						return 0;
 					} else {
 						luaL_error(L, "Property %s is read-only", key);
@@ -1074,6 +1166,9 @@ namespace gargantuan {
 	int Instance::LNamecall(lua_State *L, Instance *self) {
 		return InvokeNativeCallback(L, [L, self] {
 			const char *key = lua_namecallatom(L, nullptr);
+			if (self && self->GetDestroyed() && std::string_view(key) != "Destroy")
+				luaL_error(L, "Cannot call %s:%s() on destroyed Instance '%s'",
+					InstanceClassName(self).c_str(), key, self->Name.c_str());
 
 			if (key && self) {
 				const auto *method = self->FindMethod(key);

@@ -119,6 +119,7 @@ namespace gargantuan {
 		TransactionNotFound,
 		TransactionLimit,
 	};
+	[[nodiscard]] const char *GetMutationStatusDescription(MutationStatus Status);
 
 	struct MutationResult {
 		MutationStatus Status = MutationStatus::InternalError;

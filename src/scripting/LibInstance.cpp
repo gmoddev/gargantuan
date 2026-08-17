@@ -1,4 +1,5 @@
 #include "gargantuan/classes/Instance.hpp"
+#include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/reflection/InstanceClassRegistry.hpp"
 #include "gargantuan/scripting/ScriptEngine.hpp"
 
@@ -16,6 +17,13 @@ namespace gargantuan {
 
 		if (!InstanceClassRegistry::IsConstructible(*classDefinition)) {
 			luaL_error(L, "Instance class %s cannot be constructed", className);
+			return 0;
+		}
+
+		auto *ScriptEngineValue = ScriptEngine::Get(L);
+		if (classDefinition->ClassName == "DataModel" ||
+			(ScriptEngineValue->DataModel && ScriptEngineValue->DataModel->IsProtectedServiceClass(classDefinition->Id))) {
+			luaL_error(L, "Instance class %s is a protected service and cannot be constructed", className);
 			return 0;
 		}
 

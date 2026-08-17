@@ -39,9 +39,11 @@ exact `PlaySessionId`; Studio drops a mismatched or stale frame. After Stop, cap
 returns the authoring Workspace as `Mode: Edit`. Runtime selection and authoring
 camera mutation are intentionally unavailable during Play.
 
-Input is a closed `HostEvent` subset: focus, bounded key transitions, and finite
-pointer movement. Studio forwards keys only while the runtime viewport is focused and
-sends focus release on blur. Runtime diagnostics are sequence-ordered, timestamped,
+Input is a closed `HostEvent` subset: focus, bounded key transitions, finite
+pointer movement, and semantic pointer-button transitions. Studio forwards input
+only while the runtime viewport is focused and sends focus release on blur.
+EditorHost returns relative-pointer commands to Studio so capture is released on
+button-up, focus loss, Stop, or disconnect. Runtime diagnostics are sequence-ordered, timestamped,
 severity/category/message records, capped at 256 records and 2,048 message bytes.
 Luau errors and lifecycle events use this sink and never become authoring mutations.
 

@@ -70,15 +70,15 @@ namespace gargantuan {
 		}
 	}
 
-	void PlaySession::ProcessEvent(const HostEvent &Event) {
-		if (State != PlaySessionState::Running || !RuntimeEngine) return;
-		(void)RuntimeEngine->ProcessEvent(Event);
+	HostEventResult PlaySession::ProcessEvent(const HostEvent &Event) {
+		if (State != PlaySessionState::Running || !RuntimeEngine) return {};
+		return RuntimeEngine->ProcessEvent(Event);
 	}
 
 	void PlaySession::Resize(std::uint32_t Width, std::uint32_t Height) {
 		if (State != PlaySessionState::Running || !RuntimeRenderer) return;
 		RuntimeRenderer->Resize(static_cast<int>(Width), static_cast<int>(Height));
-		ProcessEvent(WindowResizeEvent{Width, Height});
+		(void)ProcessEvent(WindowResizeEvent{Width, Height});
 	}
 
 	void PlaySession::Stop() {

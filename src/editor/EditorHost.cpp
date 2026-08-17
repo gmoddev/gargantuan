@@ -504,17 +504,18 @@ namespace gargantuan {
 			if (method == "SendPlayInput") {
 				if (!StudioSecurity.HasCapability(ScriptCapability::ViewportControl))
 					return SerializeBoundedResponse(ErrorResponse(requestId, "Unauthorized", "Play input requires ViewportControl"));
-				if (!HasOnlyFields(parameters, {"PlaySessionId", "Type", "Focused", "Physical", "Logical", "State", "Repeat", "Modifiers", "X", "Y", "DeltaX", "DeltaY"}) ||
+				if (!HasOnlyFields(parameters, {"PlaySessionId", "Type", "Focused", "Physical", "Logical", "State", "Repeat", "Modifiers", "Button", "X", "Y", "DeltaX", "DeltaY"}) ||
 					!parameters.contains("PlaySessionId") || !parameters.contains("Type") || !parameters["Type"].is_string())
 					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "SendPlayInput fields are malformed"));
 				auto Id = DecodePlaySessionId(parameters["PlaySessionId"]);
 				if (!Id || !ActivePlaySession || ActivePlaySession->GetId().Value != Id->Value)
 					return SerializeBoundedResponse(ErrorResponse(requestId, "StalePlaySession", "PlaySessionId is not active"));
 				const auto Type = parameters["Type"].get<std::string>();
+				HostEventResult InputResult;
 				if (Type == "Focus") {
 					if (!parameters.contains("Focused") || !parameters["Focused"].is_boolean())
 						return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Focus input requires Focused"));
-					ActivePlaySession->ProcessEvent(FocusEvent{parameters["Focused"].get<bool>()});
+					InputResult = ActivePlaySession->ProcessEvent(FocusEvent{parameters["Focused"].get<bool>()});
 				} else if (Type == "Key") {
 					if (!parameters.contains("Physical") || !parameters["Physical"].is_number_unsigned() ||
 						!parameters.contains("Logical") || !parameters["Logical"].is_number_unsigned() ||
@@ -529,7 +530,7 @@ namespace gargantuan {
 						!magic_enum::enum_contains<LogicalKey>(static_cast<std::uint16_t>(*LogicalValue)) ||
 						(StateName != "Pressed" && StateName != "Released"))
 						return SerializeBoundedResponse(ErrorResponse(requestId, "InvalidPlayInput", "Key input is outside the closed HostEvent vocabulary"));
-					ActivePlaySession->ProcessEvent(KeyEvent{
+					InputResult = ActivePlaySession->ProcessEvent(KeyEvent{
 						{1}, static_cast<PhysicalKey>(*PhysicalValue), static_cast<LogicalKey>(*LogicalValue),
 						static_cast<KeyModifier>(*ModifierValue),
 						StateName == "Pressed" ? ButtonState::Pressed : ButtonState::Released,
@@ -539,15 +540,38 @@ namespace gargantuan {
 					for (const auto Field : {"X", "Y", "DeltaX", "DeltaY"})
 						if (!parameters.contains(Field) || !parameters[Field].is_number() || !std::isfinite(parameters[Field].get<float>()))
 							return SerializeBoundedResponse(ErrorResponse(requestId, "InvalidPlayInput", "Pointer input must be finite"));
-					ActivePlaySession->ProcessEvent(PointerMoveEvent{
+					InputResult = ActivePlaySession->ProcessEvent(PointerMoveEvent{
 						{1}, {parameters["X"].get<float>(), parameters["Y"].get<float>()},
 						{parameters["DeltaX"].get<float>(), parameters["DeltaY"].get<float>()},
+					});
+				} else if (Type == "PointerButton") {
+					if (!parameters.contains("Button") || !parameters["Button"].is_string() ||
+						!parameters.contains("State") || !parameters["State"].is_string() ||
+						!parameters.contains("X") || !parameters["X"].is_number() ||
+						!parameters.contains("Y") || !parameters["Y"].is_number())
+						return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Pointer-button input fields are malformed"));
+					const auto Button = magic_enum::enum_cast<PointerButton>(parameters["Button"].get<std::string>());
+					const auto StateName = parameters["State"].get<std::string>();
+					const auto X = parameters["X"].get<float>();
+					const auto Y = parameters["Y"].get<float>();
+					if (!Button || (StateName != "Pressed" && StateName != "Released") || !std::isfinite(X) || !std::isfinite(Y))
+						return SerializeBoundedResponse(ErrorResponse(requestId, "InvalidPlayInput", "Pointer-button input is outside the closed HostEvent vocabulary"));
+					InputResult = ActivePlaySession->ProcessEvent(PointerButtonEvent{
+						{1}, *Button,
+						StateName == "Pressed" ? ButtonState::Pressed : ButtonState::Released,
+						{X, Y},
 					});
 				} else {
 					return SerializeBoundedResponse(ErrorResponse(requestId, "InvalidPlayInput", "Input Type is unsupported"));
 				}
+				Json RelativePointerMode = nullptr;
+				if (InputResult.Command) {
+					if (const auto *Relative = std::get_if<SetRelativePointerMode>(&*InputResult.Command))
+						RelativePointerMode = Relative->Enabled;
+				}
 				return SerializeBoundedResponse(SuccessResponse(requestId, {
 					{"PlaySessionId", std::to_string(Id->Value)}, {"Accepted", true},
+					{"RelativePointerMode", std::move(RelativePointerMode)},
 				}));
 			}
 

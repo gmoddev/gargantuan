@@ -55,6 +55,7 @@ namespace gargantuan {
 		if (const auto *Focus = std::get_if<FocusEvent>(&Event); Focus && !Focus->Focused) {
 			ActiveKeys.clear();
 			ActiveMouseButtons.clear();
+			MouseDelta = Vector2(0.0f, 0.0f);
 			WindowFocusReleased->Fire({});
 			return false;
 		};

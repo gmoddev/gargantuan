@@ -118,15 +118,68 @@ namespace {
 		assert(!Service.ProcessEvent(Motion));
 		assert(Service.GetMouseLocation().GetX() == 30.0f && Service.GetMouseLocation().GetY() == 40.0f);
 		assert(Service.GetMouseDelta().GetX() == 3.0f && Service.GetMouseDelta().GetY() == 4.0f);
+
+		(void)Service.ProcessEvent(KeyDown);
+		(void)Service.ProcessEvent(PointerButtonEvent{
+			{1}, PointerButton::Right, ButtonState::Pressed, {30.0f, 40.0f}
+		});
+		assert(Service.IsKeyDown(Enums::KeyCode::Space));
+		assert(Service.IsMouseButtonPressed(Enums::UserInputType::MouseButton2));
+		(void)Service.ProcessEvent(FocusEvent{false});
+		assert(!Service.IsKeyDown(Enums::KeyCode::Space));
+		assert(!Service.IsMouseButtonPressed(Enums::UserInputType::MouseButton2));
+		assert(Service.GetMouseDelta().GetX() == 0.0f && Service.GetMouseDelta().GetY() == 0.0f);
 	}
 
 	void TestCameraHostCommands() {
-		Camera CameraValue;
+		auto CameraValue = std::make_shared<Camera>();
 		HostEvent RightDown = PointerButtonEvent{{1}, PointerButton::Right, ButtonState::Pressed, {0.0f, 0.0f}};
-		auto Command = CameraValue.ProcessEvent(RightDown);
+		auto Command = CameraValue->ProcessEvent(RightDown);
 		assert(Command && std::get<SetRelativePointerMode>(*Command).Enabled);
+		const auto BeforeLook = CameraValue->GetCFrame();
+		(void)CameraValue->ProcessEvent(PointerMoveEvent{{1}, {100.0f, 50.0f}, {10.0f, -5.0f}});
+		CameraValue->Step(0.0f);
+		assert(!CameraValue->GetCFrame().FuzzyEq(BeforeLook));
+		(void)CameraValue->ProcessEvent(KeyEvent{
+			.Device = {1}, .Physical = PhysicalKey::W, .Logical = LogicalKey::W,
+			.State = ButtonState::Pressed,
+		});
+		const auto BeforeMove = CameraValue->GetCFrame();
+		CameraValue->Step(0.1f);
+		assert(!CameraValue->GetCFrame().FuzzyEq(BeforeMove));
+		(void)CameraValue->ProcessEvent(KeyEvent{
+			.Device = {1}, .Physical = PhysicalKey::W, .Logical = LogicalKey::W,
+			.State = ButtonState::Released,
+		});
+		const auto CheckMovementKey = [&](PhysicalKey Physical, LogicalKey Logical) {
+			const auto Before = CameraValue->GetCFrame();
+			(void)CameraValue->ProcessEvent(KeyEvent{
+				.Device = {1}, .Physical = Physical, .Logical = Logical, .State = ButtonState::Pressed,
+			});
+			CameraValue->Step(0.1f);
+			(void)CameraValue->ProcessEvent(KeyEvent{
+				.Device = {1}, .Physical = Physical, .Logical = Logical, .State = ButtonState::Released,
+			});
+			assert(!CameraValue->GetCFrame().FuzzyEq(Before));
+		};
+		CheckMovementKey(PhysicalKey::A, LogicalKey::A);
+		CheckMovementKey(PhysicalKey::D, LogicalKey::D);
+		CheckMovementKey(PhysicalKey::Space, LogicalKey::Space);
+		CheckMovementKey(PhysicalKey::LeftShift, LogicalKey::LeftShift);
+		(void)CameraValue->ProcessEvent(KeyEvent{
+			.Device = {1}, .Physical = PhysicalKey::W, .Logical = LogicalKey::W,
+			.State = ButtonState::Pressed,
+		});
+		(void)CameraValue->ProcessEvent(PointerMoveEvent{{1}, {200.0f, 100.0f}, {8.0f, 4.0f}});
 		HostEvent LostFocus = FocusEvent{false};
-		Command = CameraValue.ProcessEvent(LostFocus);
+		Command = CameraValue->ProcessEvent(LostFocus);
+		assert(Command && !std::get<SetRelativePointerMode>(*Command).Enabled);
+		const auto AfterFocusLoss = CameraValue->GetCFrame();
+		CameraValue->Step(0.1f);
+		assert(CameraValue->GetCFrame().FuzzyEq(AfterFocusLoss));
+		Command = CameraValue->ProcessEvent(PointerButtonEvent{
+			{1}, PointerButton::Right, ButtonState::Released, {0.0f, 0.0f}
+		});
 		assert(Command && !std::get<SetRelativePointerMode>(*Command).Enabled);
 	}
 }

@@ -23,6 +23,12 @@ Parents own children with `shared_ptr`. A child now retains its parent with a
 parent cannot become a dangling pointer. `SetParent` rejects the object itself
 and every descendant as a new parent.
 
+Never-adopted Instances may form a detached subtree. Their first parent in a
+DataModel atomically adopts that bounded subtree after lifecycle, schema, depth,
+count, ownership, and object-reference preflight. `Parent = nil` after adoption
+retains its DataModel association. An adopted Instance cannot migrate to another
+DataModel. See `PostPlayValidation.md` for the complete state matrix.
+
 Hierarchy mutation is committed before ancestry notifications run. Callbacks
 therefore observe the new parent/child collections rather than a half-applied
 operation. Callbacks remain synchronous and can initiate a later mutation; a
@@ -107,8 +113,8 @@ code cannot register constructors, callbacks, methods, or lifecycle hooks.
 `ChangeJournal` assigns monotonic sequence numbers per DataModel scope while
 holding its journal lock. Its payload model represents object creation,
 reflected/extension/attribute updates, tag changes, reparenting, and destruction.
-Moving a subtree between scopes removes
-it from the old stream and republishes its current baseline into the new stream.
+First adoption publishes a detached subtree into one scope. Moving an already
+adopted subtree between DataModel scopes is rejected.
 
 Records remain an in-process prototype. Retention is bounded per scope and cursor reads
 detect eviction with `ResnapshotRequired`; the default capacity is 4,096.
@@ -126,7 +132,8 @@ their strings.
 
 Native userdata dispatch catches C++ exceptions at the Luau callback boundary
 and converts them into ordinary Luau errors. Generic dispatch rejects missing or
-wrong-tag receivers before invoking native methods. `Vector2` remains a
+wrong-tag receivers before invoking native methods. A null shared native object
+always pushes Luau `nil` and cannot become truthy tagged userdata. `Vector2` remains a
 `glm::vec2` value stored in tagged userdata; its binary arithmetic validates both
 operands explicitly, permits scalar-left multiplication only, and does not
 define ordering. Its library constants are readonly value userdata. Direct

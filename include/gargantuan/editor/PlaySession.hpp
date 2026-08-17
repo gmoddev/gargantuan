@@ -48,7 +48,7 @@ namespace gargantuan {
 
 		void Step();
 		void Resize(std::uint32_t Width, std::uint32_t Height);
-		void ProcessEvent(const HostEvent &Event);
+		[[nodiscard]] HostEventResult ProcessEvent(const HostEvent &Event);
 		void Stop();
 		[[nodiscard]] std::vector<PlayDiagnostic> DrainDiagnostics();
 		[[nodiscard]] std::shared_ptr<DataModel> GetWorld() const { return RuntimeWorld; }

@@ -17,6 +17,29 @@
 #include <utility>
 
 namespace gargantuan {
+	const char *GetMutationStatusDescription(MutationStatus Status) {
+		switch (Status) {
+		case MutationStatus::Success: return "success";
+		case MutationStatus::WrongExecutionDomain: return "the mutation can only run on the Main execution domain";
+		case MutationStatus::StaleObject: return "the target or referenced Instance has been destroyed or is stale";
+		case MutationStatus::InvalidClass: return "the Instance class is invalid";
+		case MutationStatus::InvalidProperty: return "the property does not exist";
+		case MutationStatus::InvalidParent: return "the Parent target is invalid";
+		case MutationStatus::ProtectedObject: return "the target is protected";
+		case MutationStatus::ResourceLimit: return "the mutation would exceed a resource limit";
+		case MutationStatus::RevisionExhausted: return "the authoritative revision is exhausted";
+		case MutationStatus::ReadOnly: return "the property is read-only";
+		case MutationStatus::Unauthorized: return "the current context is not authorized";
+		case MutationStatus::ValidationFailed: return "the value or object reference failed validation";
+		case MutationStatus::Conflict: return "the authoritative value changed";
+		case MutationStatus::Rejected: return "the mutation was rejected";
+		case MutationStatus::InternalError: return "an internal mutation error occurred";
+		case MutationStatus::TransactionNotFound: return "the transaction is stale or missing";
+		case MutationStatus::TransactionLimit: return "the transaction limit would be exceeded";
+		}
+		return "the mutation was rejected";
+	}
+
 	namespace {
 		std::size_t SubtreeSize(const std::shared_ptr<Instance> &Root) {
 			std::vector<std::shared_ptr<Instance>> Descendants;
@@ -434,7 +457,8 @@ namespace gargantuan {
 							return MutationResult {
 								Status,
 								CommandValue.Object,
-								Status == MutationStatus::Success ? "" : "Property mutation rejected"
+								Status == MutationStatus::Success ? "" :
+									std::format("Cannot set {}: {}", CommandValue.PropertyName, GetMutationStatusDescription(Status))
 							};
 						},
 								[&](const MutationResult &) -> TransactionChange {
@@ -583,11 +607,17 @@ namespace gargantuan {
 									std::nullopt,
 									"Protected project objects cannot be reparented"
 								};
-							if (Parent->GetDataModel() != DataModelValue || WouldCreateCycle(InstanceValue, Parent))
+							if (Parent->GetDataModel() != DataModelValue)
 								return {
 									MutationStatus::InvalidParent,
 									std::nullopt,
-									"Parent is outside scope or creates a hierarchy cycle"
+									"Parent belongs to a different DataModel"
+								};
+							if (WouldCreateCycle(InstanceValue, Parent))
+								return {
+									MutationStatus::InvalidParent,
+									std::nullopt,
+									"Parent would create a hierarchy cycle"
 								};
 							if (AncestryDepth(Parent) + SubtreeDepth(InstanceValue) > MaximumProtocolJsonDepth)
 								return {

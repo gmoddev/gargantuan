@@ -29,6 +29,7 @@ namespace gargantuan {
 				}
 
 				auto service = definition->Constructor();
+				service->SetName(name);
 				service->SetParent(this->shared_from_this());
 				Services.emplace(name, service);
 				return service;
