@@ -89,6 +89,44 @@ ordering, parent/hierarchy visibility during the callback, reparent versus
 Destroy behavior, subtree ordering, and reentrancy rules before adding the
 schema declaration, native signal, and tests.
 
+## KI-006: Play-mode relative pointer input is derived from absolute cursor position
+
+- Status: Open
+- Priority: High
+- Area: Studio Play input and host pointer semantics
+- Relevant code:
+  - `gargantuan-studio/src/GargantuanStudio/MainWindow.cs`
+  - `include/gargantuan/runtime/HostEvent.hpp`
+  - `src/editor/PlaySession.cpp`
+
+During Studio Play, pointer movement is synthesized from successive absolute
+viewport positions. This works only while the operating-system cursor can move
+inside the viewport/window. At a cursor boundary, one or both derived deltas
+become zero despite continued physical mouse movement.
+
+The engine consumes `PointerMoveEvent.Delta` correctly. The defect is in
+Studio's Play-mode forwarding: it derives those deltas from absolute positions
+instead of forwarding true platform-relative motion while relative-pointer mode
+is active. This can make RMB mouse-look stick on an axis, limit yaw by the
+cursor/window position, and prevent continuous first-person or custom
+mouse-look rotation.
+
+Resolution requires forwarding true physical relative pointer deltas whenever
+relative-pointer mode is active. Absolute viewport X/Y must not determine
+relative movement. Pointer capture, focus loss, Stop, and runtime exit must
+continue to release relative mode reliably, and edit-mode viewport navigation
+must remain unaffected. Cursor recentering/warping is acceptable only as a
+fallback where raw platform-relative input cannot be obtained cleanly.
+
+Acceptance criteria:
+
+- continuous yaw across multiple full revolutions;
+- pitch continues until the controller-defined clamp;
+- viewport or screen boundaries stop neither axis;
+- entering relative mode has no stale jump;
+- focus loss and Stop clear relative mode; and
+- re-entering relative mode begins with clean deltas.
+
 ## Maintenance rules
 
 - Record only issues verified against the current branch.
