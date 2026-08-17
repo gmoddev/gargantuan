@@ -565,7 +565,8 @@ namespace gargantuan {
 				std::vector<std::string> PropertyNames;
 				PropertyNames.reserve(Definition->AllProperties.size());
 				for (const auto &[Name, Property] : Definition->AllProperties)
-					if (Name != "Parent" && Name != "Name" && !Property->Signal && Property->Read && Property->Write &&
+					if (Name != "Parent" && Name != "Name" && Name != "SourceVersion" &&
+						!Property->Signal && Property->Read && Property->Write &&
 						Property->WritePermission != Enums::Permission::Never)
 						PropertyNames.push_back(Name);
 				std::sort(PropertyNames.begin(), PropertyNames.end());

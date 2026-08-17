@@ -97,9 +97,10 @@ bounded Instance methods and retain exact schema identity.
 snapshot run through the runtime scheduler. Runtime-created or newly adopted
 scripts are governed by the existing descendant scheduling behavior; this
 milestone does not add a dynamic-script-start contract. `Script` and
-`ModuleScript` clones preserve exact source but reset bytecode and execution
-state. Instance-backed `require` has partial relative/`@game` module resolution;
-filesystem configuration, aliases, and a broader module system are not complete.
+`ModuleScript` clones preserve exact source but reset source-version conflict
+tokens, bytecode, and execution state. Instance-backed `require` has partial
+relative/`@game` module resolution; filesystem configuration, aliases, and a
+broader module system are not complete.
 
 Remote event/function classes and bounded bindings exist for explicitly
 configured replication sessions. Local Studio Play has no peer topology, and

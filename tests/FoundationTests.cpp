@@ -5464,14 +5464,16 @@ namespace {
 		auto ScriptSource = std::make_shared<Script>();
 		ScriptSource->SetArchivable(true);
 		ScriptSource->SetName("CloneScript");
+		ScriptSource->SetSource("return 21\n");
 		ScriptSource->SetSource("return 42\n");
 		int SourceDestroyCallbacks = 0;
 		auto SourceConnection = ScriptSource->Destroying->Connect([&](std::monostate) { ++SourceDestroyCallbacks; });
 		auto ScriptCopy = std::dynamic_pointer_cast<Script>(ScriptSource->Clone());
 		Check(ScriptCopy && ScriptCopy->GetSource() == ScriptSource->GetSource() &&
-			ScriptCopy->GetSourceVersion() == ScriptSource->GetSourceVersion() && ScriptCopy->Thread == nullptr &&
+			ScriptCopy->GetSourceVersion() > 0 && ScriptCopy->GetSourceVersion() != ScriptSource->GetSourceVersion() &&
+			ScriptCopy->Thread == nullptr &&
 			ScriptCopy->Bytecode.empty(),
-			"Script Clone preserves source/version while resetting execution and bytecode state");
+			"Script Clone preserves source while resetting source-version, execution, and bytecode state");
 		ScriptCopy->Destroy();
 		Check(SourceDestroyCallbacks == 0,
 			"Clone creates fresh signals and does not copy source subscribers");
