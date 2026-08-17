@@ -8,9 +8,11 @@ in native code does not make an unlisted API available to scripts.
 
 ## Globals and libraries
 
-- `game` is the current runtime `DataModel`. Stable service properties currently
-  include `game.Workspace` and `game.Tags`; service access does not depend on the
-  visible service `Name`.
+- `game` is the current runtime `DataModel`. `game.Workspace` is a stable direct
+  service property and does not depend on the visible service `Name`. Direct access
+  to a registered lazy service only resolves it after construction; use
+  `game:GetService("Tags")` before relying on `game.Tags`. This construction-order
+  inconsistency is tracked by KI-004.
 - `Instance.new(className)` constructs an allowed detached runtime Instance.
 - `print(...)` emits an `Information / Luau` diagnostic. `warn(...)` emits a
   `Warning / Luau` diagnostic. Arguments are tab-separated.
@@ -86,7 +88,8 @@ never calls EditorHost structural Duplicate.
 Attributes support removal with nil and bounded boolean, number, string,
 `Vector2`, `Vector3`, `Color3`, `UDim`, `UDim2`, and `CFrame` values through
 `SetAttribute`, `GetAttribute`, `GetAttributes`, and
-`GetAttributeChangedSignal`. `game.Tags` provides `Add`, `Remove`, `Has`,
+`GetAttributeChangedSignal`. The `Tags` service returned by
+`game:GetService("Tags")` provides `Add`, `Remove`, `Has`,
 `GetTags`, `GetTagged`, and `GetTaggedAll`. Schema-defined extension properties
 and data-only custom class properties are available through their existing
 bounded Instance methods and retain exact schema identity.

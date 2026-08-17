@@ -44,6 +44,51 @@ cannot recursively import itself, reports malformed models with actionable
 paths, and has coverage for successful imports, malformed files, cycles or
 self-reference, and depth/count limits.
 
+## KI-004: Lazy built-in services are inconsistent through direct DataModel access
+
+- Status: Open
+- Priority: Medium
+- Area: Luau service access
+- Relevant code:
+  - `src/classes/Instance.cpp`
+  - `src/classes/ServiceProvider.cpp`
+  - `src/classes/DataModel.cpp`
+
+Direct DataModel service access resolves only an already-instantiated service,
+whereas `GetService` constructs a registered lazy service. Consequently, a new
+runtime can observe `game.Tags == nil`; after `game:GetService("Tags")`, direct
+access resolves the same canonical service and `game.Tags == Tags` is true.
+
+This makes stable built-in service access depend on construction order. It does
+not block a vertical slice because `GetService` is available and returns the
+correct scoped service.
+
+Resolution requires an explicit service-property contract. Either direct access
+must lazily construct registered canonical services, or the distinction from
+`GetService` must be intentionally documented and retained with regression
+coverage for both paths.
+
+## KI-005: Instance has no pre-removal DescendantRemoving lifecycle signal
+
+- Status: Open
+- Priority: Low
+- Area: Luau Instance lifecycle API
+- Relevant code:
+  - `assets/classes/Instance.luau`
+  - `include/gargantuan/classes/generated/Instance.hpp`
+  - `src/classes/Instance.cpp`
+
+The current hierarchy API exposes `DescendantRemoved` after removal, but no
+`DescendantRemoving` signal for observers that need to inspect the prior
+hierarchy state. This is an API-completeness gap, not a correctness defect: the
+engine does not currently promise the missing signal.
+
+Resolution requires deciding whether both pre- and post-removal descendant
+signals belong in the supported lifecycle surface. If adopted, define exact
+ordering, parent/hierarchy visibility during the callback, reparent versus
+Destroy behavior, subtree ordering, and reentrancy rules before adding the
+schema declaration, native signal, and tests.
+
 ## Maintenance rules
 
 - Record only issues verified against the current branch.
