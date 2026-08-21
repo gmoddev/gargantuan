@@ -42,8 +42,11 @@ camera mutation are intentionally unavailable during Play.
 Input is a closed `HostEvent` subset: focus, bounded key transitions, finite
 pointer movement, and semantic pointer-button transitions. Studio forwards input
 only while the runtime viewport is focused and sends focus release on blur.
-EditorHost returns relative-pointer commands to Studio so capture is released on
-button-up, focus loss, Stop, or disconnect. Runtime diagnostics are sequence-ordered, timestamped,
+`PointerMoveEvent.Delta` is relative motion regardless of host implementation;
+`PlaySession`, `Engine`, `UserInputService`, and gameplay never reconstruct it
+from absolute cursor positions. EditorHost returns relative-pointer commands to
+Studio, whose native host obtains physical relative motion and owns capture
+cleanup on button-up, focus loss, Stop, runtime exit, or disconnect. Runtime diagnostics are sequence-ordered, timestamped,
 severity/category/message records, capped at 256 records and 2,048 message bytes.
 Luau `print` uses `Information / Luau`, `warn` uses `Warning / Luau`, and runtime
 errors use `Error / Luau`. The bounded queue evicts its oldest record under
