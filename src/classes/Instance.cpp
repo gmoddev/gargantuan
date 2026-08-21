@@ -46,10 +46,10 @@ namespace gargantuan {
 			return Definition->ConstructionKind == SchemaClassConstructionKind::CustomData
 				? Definition->CanonicalName : Definition->ClassName;
 		}
-		std::shared_ptr<Instance> FindServiceInstance(Instance *InstanceValue, std::string_view Name) {
+		std::shared_ptr<Instance> ResolveServiceInstance(Instance *InstanceValue, std::string_view Name) {
 			auto *Provider = dynamic_cast<ServiceProvider *>(InstanceValue);
 			if (!Provider) return nullptr;
-			auto Service = Provider->FindService(std::string(Name));
+			auto Service = Provider->ResolveService(Name);
 			return Service ? *Service : nullptr;
 		}
 		bool IsNativeDataModelDefinition(const SchemaClassDefinition *definition) {
@@ -1249,7 +1249,7 @@ namespace gargantuan {
 					} else {
 						luaL_error(L, "Property %s is write-only", key);
 					}
-				} else if (auto Service = FindServiceInstance(self, key)) {
+				} else if (auto Service = ResolveServiceInstance(self, key)) {
 					StackValue<std::shared_ptr<Instance>>::Push(L, std::move(Service));
 					return 1;
 				} else if (auto child = self->FindFirstChild(key, std::nullopt)) {

@@ -2,7 +2,7 @@ const c, t, p = require("@tools/classes").unpack()
 
 return c({
 	name = "ServiceProvider",
-	description = "Abstract class that stores and provides singleton classes.",
+	description = "Abstract class that owns registered singleton services. Canonical direct member access and GetService lazily resolve the same service; FindService never constructs.",
 	abstract = true,
 	since = "0.1.0",
 

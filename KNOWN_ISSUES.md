@@ -44,30 +44,6 @@ cannot recursively import itself, reports malformed models with actionable
 paths, and has coverage for successful imports, malformed files, cycles or
 self-reference, and depth/count limits.
 
-## KI-004: Lazy built-in services are inconsistent through direct DataModel access
-
-- Status: Open
-- Priority: Medium
-- Area: Luau service access
-- Relevant code:
-  - `src/classes/Instance.cpp`
-  - `src/classes/ServiceProvider.cpp`
-  - `src/classes/DataModel.cpp`
-
-Direct DataModel service access resolves only an already-instantiated service,
-whereas `GetService` constructs a registered lazy service. Consequently, a new
-runtime can observe `game.Tags == nil`; after `game:GetService("Tags")`, direct
-access resolves the same canonical service and `game.Tags == Tags` is true.
-
-This makes stable built-in service access depend on construction order. It does
-not block a vertical slice because `GetService` is available and returns the
-correct scoped service.
-
-Resolution requires an explicit service-property contract. Either direct access
-must lazily construct registered canonical services, or the distinction from
-`GetService` must be intentionally documented and retained with regression
-coverage for both paths.
-
 ## KI-005: Instance has no pre-removal DescendantRemoving lifecycle signal
 
 - Status: Open
