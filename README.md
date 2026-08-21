@@ -275,21 +275,22 @@ Tags support:
 - membership queries;
 - tagged-instance queries.
 
-The Tags service currently has one known direct-access inconsistency:
+The registered `Tags` service is a DataModel-scoped lazy singleton. Either access
+form may occur first:
 
 ``` lua
-game.Tags
+local Tags = game.Tags
 ```
 
-may return `nil` before the lazy service has been constructed, while:
+or:
 
 ``` lua
 local Tags = game:GetService("Tags")
 ```
 
-constructs and returns it successfully.
-
-After construction, `game.Tags` resolves to the same service.
+Both construct when necessary and resolve the same canonical object. Repeated
+access and visible `Name` changes do not change that identity. `FindService`
+remains non-constructing.
 
 ### Tasks and runtime signals
 

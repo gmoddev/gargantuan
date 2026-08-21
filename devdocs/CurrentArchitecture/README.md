@@ -118,11 +118,13 @@ classDiagram
     WorldRoot o-- BasePart : Physics registry
 ```
 
-`DataModel` inherits `ServiceProvider`. Services are lazily constructed from a
-native definition map; the present DataModel registers only `ProcessService`,
-`RunService`, `UserInputService`, and `Workspace`
-(`src/classes/DataModel.cpp:9-16`). `Workspace` creates a current Camera
-(`src/services/Workspace.cpp:7-9`). A `ReplicatedStorage` class/source scaffold
+`DataModel` inherits `ServiceProvider`. Built-in service classes and their public
+API are supplied by the generated Luau schema, while the DataModel's canonical
+registration map owns lazy singleton construction and scope. Direct registered
+service members and `GetService` share that path; `FindService` only observes an
+already-live canonical singleton. The present DataModel registers
+`ProcessService`, `RunService`, `Tags`, `UserInputService`, and `Workspace`.
+`Workspace` creates a current Camera. A `ReplicatedStorage` class/source scaffold
 exists but is not registered. Basic reliable client replication, the production
 scheduler, and bounded Luau application remotes now exist as networking
 subsystem components. They are not yet wired into a complete multiplayer

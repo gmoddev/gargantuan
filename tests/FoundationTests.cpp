@@ -39,6 +39,7 @@
 #include "gargantuan/scripting/ModuleResolution.hpp"
 #include "gargantuan/scripting/NativeCallback.hpp"
 #include "gargantuan/scripting/ScriptEngine.hpp"
+#include "gargantuan/services/Tags.hpp"
 #include "gargantuan/services/Workspace.hpp"
 
 #include <algorithm>
@@ -253,6 +254,116 @@ namespace {
 			retainedChild->SetParent(temporaryParent);
 		}
 		Check(!retainedChild->GetParent().has_value(), "expired parent references do not dangle");
+	}
+
+	void TestServiceProviderSemantics() {
+		using namespace gargantuan;
+		auto Execute = [](const std::shared_ptr<DataModel> &World, std::string_view Source, const char *Name) {
+			ScriptEngine Engine(World);
+			size_t BytecodeSize = 0;
+			char *Bytecode = luau_compile(Source.data(), Source.size(), &Engine.CompileOptions, &BytecodeSize);
+			if (!Bytecode) return false;
+			const auto LoadStatus = luau_load(Engine.L, Name, Bytecode, BytecodeSize, 0);
+			std::free(Bytecode);
+			const auto Status = LoadStatus == LUA_OK ? lua_pcall(Engine.L, 0, 0, 0) : LoadStatus;
+			if (Status != LUA_OK)
+				std::cerr << "SERVICE LUAU ERROR: " <<
+					(lua_tostring(Engine.L, -1) ? lua_tostring(Engine.L, -1) : "unknown Luau error") << '\n';
+			return Status == LUA_OK;
+		};
+
+		auto DirectFirstWorld = std::make_shared<DataModel>();
+		Check(!DirectFirstWorld->FindService("Tags"), "FindService remains non-constructing before direct service access");
+		Check(Execute(DirectFirstWorld, R"(
+			local Direct = game.Tags
+			assert(Direct ~= nil and Direct:IsA("Tags"))
+			assert(game:FindService("Tags") == Direct)
+			assert(game:GetService("Tags") == Direct)
+			Direct.Name = "RenamedTags"
+			assert(game.Tags == Direct)
+		)", "service-direct-first"),
+			"direct DataModel access lazily constructs the canonical service and survives visible Name changes");
+		auto DirectFirstService = DirectFirstWorld->FindService("Tags");
+		Check(DirectFirstService && (*DirectFirstService)->GetName() == "RenamedTags" &&
+			DirectFirstWorld->GetService("Tags") == *DirectFirstService,
+			"direct-first, FindService, and GetService preserve canonical identity");
+
+		auto GetFirstWorld = std::make_shared<DataModel>();
+		Check(Execute(GetFirstWorld, R"(
+			local FromGet = game:GetService("Tags")
+			assert(FromGet ~= nil and FromGet:IsA("Tags"))
+			assert(game.Tags == FromGet)
+			assert(game:GetService("Tags") == FromGet)
+		)", "service-get-first"),
+			"GetService-first access and canonical direct access preserve identity");
+		auto GetFirstService = GetFirstWorld->FindService("Tags");
+		Check(GetFirstService && DirectFirstService && *GetFirstService != *DirectFirstService &&
+			(*GetFirstService)->GetDataModel() == GetFirstWorld && (*DirectFirstService)->GetDataModel() == DirectFirstWorld,
+			"service singletons are isolated between DataModels");
+
+		auto OrdinaryWorld = std::make_shared<DataModel>();
+		auto OrdinaryChild = std::make_shared<Folder>();
+		OrdinaryChild->SetName("ReplicatedStorage");
+		OrdinaryChild->SetParent(OrdinaryWorld);
+		auto ServiceNameDecoy = std::make_shared<Folder>();
+		ServiceNameDecoy->SetName("Tags");
+		ServiceNameDecoy->SetParent(OrdinaryWorld);
+		Check(Execute(OrdinaryWorld, R"(
+			local Ordinary = game.ReplicatedStorage
+			assert(Ordinary == game:FindFirstChild("ReplicatedStorage"))
+			assert(game:FindService("ReplicatedStorage") == nil)
+			assert(not pcall(function() game:GetService("ReplicatedStorage") end))
+			assert(game.DefinitelyUnknown == nil)
+			assert(game:FindService("DefinitelyUnknown") == nil)
+			assert(not pcall(function() game:GetService("DefinitelyUnknown") end))
+			local Decoy = game:FindFirstChild("Tags")
+			local Canonical = game.Tags
+			assert(Canonical:IsA("Tags") and Canonical ~= Decoy)
+		)", "service-unknown-and-decoy"),
+			"unknown names remain safe ordinary members while registered service identity ignores child Name decoys");
+		Check(!OrdinaryWorld->FindService("ReplicatedStorage") && OrdinaryWorld->FindService("Tags") &&
+			OrdinaryWorld->GetService("Tags") != ServiceNameDecoy,
+			"unregistered child names never enter the canonical service registry");
+
+		auto LoadedWorld = std::make_shared<DataModel>();
+		auto LoadedTags = std::make_shared<Tags>();
+		LoadedTags->SetName("LoadedTags");
+		LoadedTags->SetParent(LoadedWorld);
+		Check(!LoadedWorld->FindService("Tags") && LoadedWorld->GetService("Tags") == LoadedTags &&
+			LoadedWorld->ResolveService("Tags") == LoadedTags && LoadedTags->GetName() == "LoadedTags",
+			"an already-instantiated registered service in the provider scope becomes canonical by schema identity");
+
+		auto DetachedWorld = std::make_shared<DataModel>();
+		auto DetachedTags = std::make_shared<Tags>();
+		DetachedTags->SetName("Tags");
+		auto ConstructedTags = DetachedWorld->GetService("Tags");
+		Check(ConstructedTags != DetachedTags && ConstructedTags->GetDataModel() == DetachedWorld,
+			"a detached service object cannot become canonical by class or visible Name alone");
+		ConstructedTags->SetParent(nullptr);
+		Check(!DetachedWorld->FindService("Tags"), "detaching a canonical service clears non-constructing lookup state");
+		auto ReplacementTags = DetachedWorld->GetService("Tags");
+		Check(ReplacementTags != ConstructedTags && ReplacementTags->GetParent() &&
+			ReplacementTags->GetParent()->get() == DetachedWorld.get(),
+			"GetService replaces detached canonical state through the registered construction path");
+		ReplacementTags->Destroy();
+		Check(!DetachedWorld->FindService("Tags") && DetachedWorld->GetService("Tags") != ReplacementTags,
+			"destroyed service state is discarded before lazy reconstruction");
+
+		auto ForeignWorld = std::make_shared<DataModel>();
+		auto ForeignTags = ForeignWorld->GetService("Tags");
+		auto LocalWorld = std::make_shared<DataModel>();
+		CheckThrows<std::invalid_argument>([&] { ForeignTags->SetParent(LocalWorld); },
+			"a service owned by another DataModel cannot migrate into the local provider");
+		Check(LocalWorld->GetService("Tags") != ForeignTags,
+			"wrong-scope service objects cannot become canonical accidentally");
+
+		std::weak_ptr<Instance> ReleasedService;
+		{
+			auto LifetimeWorld = std::make_shared<DataModel>();
+			ReleasedService = LifetimeWorld->GetService("Tags");
+			Check(!ReleasedService.expired(), "the ServiceProvider owns its constructed service lifetime");
+		}
+		Check(ReleasedService.expired(), "destroying the DataModel releases its canonical service ownership");
 	}
 
 	void TestObjectIdsAndChanges() {
@@ -5717,6 +5828,7 @@ int main() {
 	}
 
 	TestHierarchyAndDestruction();
+	TestServiceProviderSemantics();
 	TestObjectIdsAndChanges();
 	TestWorldRootConstraintValidation();
 	TestCheckedResolutionAndOwnedPaths();
