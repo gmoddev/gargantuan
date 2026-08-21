@@ -67,6 +67,7 @@ Authoritative DataModel / live Instance graph
 | Attributes or tags | `instance-attributes.mdx` or `instance-tags.mdx` in the same directory |
 | Rendering or viewport picking | `render-extraction.mdx` and `devdocs/CurrentArchitecture/EditorViewport.md` |
 | Platform input or renderer backend isolation | `devdocs/CurrentArchitecture/PlatformInputBoundary.md` and `RendererBackendBoundary.md` |
+| Player input actions, LocalPlayer, character lifecycle, default controller/camera, or kinematic motion | `devdocs/CurrentArchitecture/PlayerRuntime.md`, then `PlatformInputBoundary.md` and `PhysicsBackend.md` as needed |
 | Physics bodies, constraints, stepping, or touch events | `devdocs/CurrentArchitecture/PhysicsBackend.md` |
 | Studio, EditorHost, snapshots, journals, viewport IPC | `editor-host.mdx` plus the relevant `devdocs/CurrentArchitecture` protocol document |
 | Luau execution or permissions | `devdocs/CurrentArchitecture/ScriptSecurity.md` |
@@ -91,6 +92,9 @@ Authoritative DataModel / live Instance graph
 - EditorHost is the public boundary to the separately authored private Studio.
   Studio sees versioned DTOs and pixels, not private headers, engine pointers,
   renderer objects, or shared-memory handles in Luau.
+- Runtime `Players`, `ActionMap`, and the bounded capsule query are native
+  contracts; engine-shipped Luau owns default binding, assembly, movement,
+  jump/step, and orbit-camera policy. Transport identity is not Player identity.
 
 ## Change rules
 

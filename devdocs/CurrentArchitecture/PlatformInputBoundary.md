@@ -6,6 +6,7 @@ related_code:
   - include/gargantuan/platform/HostEvent.hpp
   - src/platform/sdl/
   - src/Engine.cpp
+  - src/services/ActionMap.cpp
   - src/services/UserInputService.cpp
   - src/classes/Camera.cpp
 related_adrs: []
@@ -17,7 +18,7 @@ related_adrs: []
 
 The executable's SDL host adapter owns `SDL_Event` polling and translates one
 event at a time into the closed Gargantuan `HostEvent` variant. `Engine`,
-`UserInputService`, `InputObject`, and `Camera` consume only these engine-owned
+`UserInputService`, `ActionMap`, `InputObject`, and `Camera` consume only these engine-owned
 values:
 
 ```text
@@ -26,7 +27,8 @@ SDLHost / SDL_Event
     -> HostEvent value
     -> Engine::ProcessEvent
        |- UserInputService
-       `- Camera controller
+       |- ActionMap
+       `- native Camera controller when unconsumed
 ```
 
 The variant alternatives are `KeyEvent`, `PointerMoveEvent`,
@@ -72,29 +74,40 @@ Unknown pointer identity is represented by value zero and never carries an SDL
 pointer. The existing mouse-button, mouse-position, mouse-delta, and input
 signals remain developer-facing behavior.
 
-Gamepad input was not consumed by engine systems before this boundary. The SDL
-adapter now establishes the smallest future-safe semantic boundary: stable
+Gamepad input is not yet consumed by `ActionMap` or `UserInputService`. The SDL
+adapter establishes the smallest future-safe semantic boundary: stable
 button/axis enums, a copied nonzero device identity, and axis values normalized
 to `[-1, 1]`. `UserInputService` does not yet expose gamepad events. Controller
 mapping and remapping policy remain deferred.
 
 The current runtime supports one presentation window, so events do not expose
 a speculative engine window identity. Resize carries validated nonzero pixel
-dimensions. Relative-pointer mode is an engine-owned `HostCommand` returned by
-camera routing and applied by `SDLHost`; `Camera` never receives or retains an
-SDL window pointer. SDLHost stores only the latest numeric SDL window ID and
-resolves it at command application, preventing a window pointer from escaping
-the adapter.
+dimensions. Relative-pointer mode is an engine-owned `HostCommand` applied by
+`SDLHost`. The default Luau camera sets `UserInputService.MouseBehavior`; after
+synchronous semantic callbacks finish, `UserInputService` converts a changed
+behavior to that host command. The legacy native Camera path can still return
+the same command when defaults are disabled. Neither service receives or
+retains an SDL window pointer. SDLHost stores only the latest numeric SDL window
+ID and resolves it at command application, preventing a window pointer from
+escaping the adapter.
 
 ## Routing and focus groundwork
 
 `Engine::ProcessEvent` handles window lifecycle, then routes input through
-`UserInputService` and only invokes the current camera controller when the
-event is not consumed. `HostEventResult::Consumed` is the minimal groundwork
-for a future UI/input router; it does not define camera-first precedence.
-`UserInputService` currently reports no event as consumed, matching previous
-behavior. Focus loss clears active service and camera key/button state and
+`UserInputService`, `ActionMap`, and finally the current native Camera controller
+when the event is not consumed. Physical state is recorded before semantic
+mapping. A consuming ActionMap binding prevents only lower-level host/camera
+routing; it does not hide the event from `UserInputService`. Focus loss clears
+physical and semantic active state, fires the normal end/focus signals, and
 releases relative-pointer mode.
+
+`ActionMap` is the gameplay-semantic layer for keyboard, mouse-button, and
+relative pointer-delta bindings. Bindings are bounded, support multiple sources
+per action, carry priority/consumption metadata, and expose digital, scalar, and
+frame-transient vector state. The shipped default binding module declares
+movement, jump, orbit, and Look actions. Binding policy is not part of the host
+adapter and the low-level UserInputService route remains public. See
+[Player runtime](PlayerRuntime.md) for exact API and lifecycle semantics.
 
 The Studio Play viewport uses this same semantic boundary. Avalonia supplies
 pointer-button transitions and uncaptured absolute motion. Once the camera's
@@ -113,8 +126,8 @@ delta. EditorHost and `PlaySession` receive only semantic host events; engine
 services and gameplay code do not know about Avalonia coordinates, Win32 raw
 input, cursor boundaries, or capture implementation.
 
-The retained UI focus system, action/binding framework, touch/pen semantics,
-IME composition, gamepad remapping, non-Windows Studio relative-pointer
+The retained UI focus system, touch/pen semantics, IME composition, gamepad
+publication/default bindings, persisted remapping, non-Windows Studio relative-pointer
 backends, and multi-window architecture are not part of this boundary.
 
 ## Coupling audit

@@ -28,7 +28,10 @@ namespace gargantuan {
 		  Workspace(GetService<gargantuan::Workspace>()),
 		  WorldRoot(std::static_pointer_cast<gargantuan::WorldRoot>(Workspace)),
 		  RunService(GetService<gargantuan::RunService>()), ProcessService(GetService<gargantuan::ProcessService>()),
-		  UserInputService(GetService<gargantuan::UserInputService>()) {
+		  UserInputService(GetService<gargantuan::UserInputService>()), ActionMap(GetService<gargantuan::ActionMap>()),
+		  Players(GetService<gargantuan::Players>()) {
+		ActionMap->AttachInputService(UserInputService);
+		Players->InitializeLocalPlayer();
 
 		DataModel->BindDescendants([this](std::shared_ptr<Instance> inst) {
 			if (auto script = std::dynamic_pointer_cast<gargantuan::Script>(inst)) {
@@ -60,6 +63,8 @@ namespace gargantuan {
 			}
 		});
 
+		Players->StartDefaultRuntime();
+
 		LOG_INFO(App, "Constructed engine");
 	}
 
@@ -69,6 +74,8 @@ namespace gargantuan {
 		if (Destroyed) return;
 		Destroyed = true;
 		LOG_INFO(App, "Destroying engine");
+		if (Players) Players->ShutdownRuntime();
+		if (ActionMap) ActionMap->Reset();
 		if (Renderer) Renderer->Destroy();
 		if (WorldRoot) WorldRoot->Destroy();
 		Script.reset();
@@ -92,7 +99,9 @@ namespace gargantuan {
 		}
 
 		Result.Consumed = UserInputService->ProcessEvent(Event);
+		Result.Consumed = ActionMap->ProcessEvent(Event) || Result.Consumed;
 		if (!Result.Consumed) Result.Command = Workspace->GetCurrentCamera()->ProcessEvent(Event);
+		if (auto InputCommand = UserInputService->SynchronizeMouseBehavior()) Result.Command = InputCommand;
 		return Result;
 	}
 
@@ -119,6 +128,9 @@ namespace gargantuan {
 				G_PROFILE("PreRender");
 				RunService->PreRender->Fire(deltaTime);
 			}
+
+			ActionMap->EndFrame();
+			UserInputService->EndFrame();
 
 			{
 				G_PROFILE("Draw");

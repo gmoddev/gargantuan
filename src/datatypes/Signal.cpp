@@ -166,10 +166,13 @@ namespace gargantuan {
 		int callbackReference = LReferenceCallback(L, 2);
 		lua_State *mainState = lua_mainthread(L);
 
+		const auto SecurityContext = GetCurrentScriptSecurityContext();
+
 		return StackValue<SignalConnection::Pointer>::Push(
 			L,
 			signal->Connect(
-				[mainState, callbackReference, signal](CallbackArgument value) {
+				[mainState, callbackReference, signal, SecurityContext](CallbackArgument value) {
+					ScriptSecurityScope SecurityScope(SecurityContext);
 					LRunCallback(mainState, signal, callbackReference, value);
 				},
 				mainState,
@@ -182,10 +185,13 @@ namespace gargantuan {
 		int callbackReference = LReferenceCallback(L, 2);
 		lua_State *mainState = lua_mainthread(L);
 
+		const auto SecurityContext = GetCurrentScriptSecurityContext();
+
 		return StackValue<SignalConnection::Pointer>::Push(
 			L,
 			signal->Once(
-				[mainState, callbackReference, signal](CallbackArgument value) {
+				[mainState, callbackReference, signal, SecurityContext](CallbackArgument value) {
+					ScriptSecurityScope SecurityScope(SecurityContext);
 					LRunCallback(mainState, signal, callbackReference, value);
 				},
 				mainState,

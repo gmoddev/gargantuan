@@ -1,3 +1,16 @@
+---
+status: current
+owner: runtime
+last_verified: 2026-08-21
+related_code:
+  - assets/classes/
+  - assets/runtime/
+  - assets/services/
+  - src/scripting/
+  - tests/PlayerRuntimeTests.cpp
+related_adrs: []
+---
+
 # Current Luau runtime surface
 
 ## Scope
@@ -17,7 +30,8 @@ in native code does not make an unlisted API available to scripts.
 - `print(...)` emits an `Information / Luau` diagnostic. `warn(...)` emits a
   `Warning / Luau` diagnostic. Arguments are tab-separated.
 - `task.defer`, `task.delay`, `task.spawn`, and `task.wait` use the runtime task
-  scheduler and retain the originating script security context.
+  scheduler and retain the originating script security context. Luau Signal
+  Connect, Once, and Wait callbacks retain that context as well.
 - The sandboxed standard Luau libraries are opened by the matching Luau VM.
 - Registered constructors/globals are `Axes`, `CFrame`, `Color3`, `Enum`,
   `Instance`, `Random`, `Signal`, `TweenInfo`, `UDim`, `Vector2`, and `Vector3`.
@@ -94,6 +108,31 @@ Attributes support removal with nil and bounded boolean, number, string,
 and data-only custom class properties are available through their existing
 bounded Instance methods and retain exact schema identity.
 
+## Player input, Players, and kinematic characters
+
+`UserInputService` remains the physical device service. `ActionMap` is the
+canonical semantic gameplay layer with bounded key, mouse-button, and pointer-
+delta binding/unbinding; `IsDown`, scalar, and transient vector reads; and
+begin/change/end signals. Focus loss and frame boundaries clear active/transient
+state as described in [Player runtime](PlayerRuntime.md).
+
+The canonical `Players` service exposes nullable `LocalPlayer`, deterministic
+`GetPlayers`, opt-out properties for default controller/camera/autoload, and
+Player-added/removing signals. A runtime Player exposes immutable `PlayerId`,
+nullable `Character`, load/reset/remove methods, and character lifecycle signals.
+`KinematicCharacter` exposes the root, position, velocity, ground/floor state,
+and capsule dimensions used by replaceable controllers.
+
+`Workspace:MoveKinematicCapsule` is the current scripted world query. It returns
+only bounded owned value data for collision resolution. There is no broad
+raycast/overlap/filter surface yet.
+
+The executable carries engine-shipped `DefaultActionMap`,
+`DefaultPlayerController`, and `DefaultCamera` Luau modules. They start in a
+runtime-only unarchivable subtree and clean up on Stop. Games can serialize the
+Players opt-out flags and continue using the low-level input, RunService, Camera,
+and kinematic query APIs.
+
 ## Scripts, modules, and networking
 
 `Script` source is authored through Studio and scripts present in the Play
@@ -101,9 +140,10 @@ snapshot run through the runtime scheduler. Runtime-created or newly adopted
 scripts are governed by the existing descendant scheduling behavior; this
 milestone does not add a dynamic-script-start contract. `Script` and
 `ModuleScript` clones preserve exact source but reset source-version conflict
-tokens, bytecode, and execution state. Instance-backed `require` has partial
-relative/`@game` module resolution; filesystem configuration, aliases, and a
-broader module system are not complete.
+tokens, bytecode, and execution state. Instance-backed `require` restores the
+requiring Instance from its live full path and supports the `@game` alias used
+by shipped modules. Filesystem configuration, additional aliases,
+duplicate-name disambiguation, and a broader module system are not complete.
 
 Remote event/function classes and bounded bindings exist for explicitly
 configured replication sessions. Local Studio Play has no peer topology, and
@@ -111,7 +151,8 @@ this inventory makes no general gameplay networking guarantee.
 
 ## Major intentional gaps
 
-Players, character control, a broader RunService API, TweenService service
-semantics, input actions, DataStore/HTTP services, assets, debugger/profiler/LSP,
-full module execution/configuration, edit-mode orbit/pan/zoom/focus, and broad
-gameplay service compatibility remain outside the current surface.
+Final multiplayer Players behavior, Humanoid compatibility, animation, a
+broader RunService API, TweenService service semantics, gamepad action sources,
+DataStore/HTTP services, assets, debugger/profiler/LSP, full module
+configuration, edit-mode orbit/pan/zoom/focus, and broad gameplay service
+compatibility remain outside the current surface.

@@ -1,5 +1,8 @@
 # Current architecture
 
+- [Player runtime](PlayerRuntime.md) defines semantic gameplay input,
+  Players/LocalPlayer and character lifetimes, the bounded kinematic query,
+  engine-shipped Luau defaults, and custom-controller replacement path.
 - [Script security](ScriptSecurity.md) defines enforceable execution domains
   and explicit native-boundary capabilities.
 - [Runtime schema](RuntimeSchema.md) defines stable native schema identity, the
@@ -62,7 +65,7 @@ flowchart TD
     Target --> Loader["Project or source loader"]
     Loader --> DataModel["DataModel / service tree"]
     DataModel --> Engine["Engine coordinator"]
-    Engine --> Input["SDL events + UserInputService"]
+    Engine --> Input["SDL events + UserInputService + ActionMap"]
     Engine --> Physics["WorldRoot + Box3D"]
     Engine --> Render["SDL GPU renderer"]
     Engine --> Script["ScriptEngine + one Luau VM"]
@@ -123,12 +126,13 @@ API are supplied by the generated Luau schema, while the DataModel's canonical
 registration map owns lazy singleton construction and scope. Direct registered
 service members and `GetService` share that path; `FindService` only observes an
 already-live canonical singleton. The present DataModel registers
-`ProcessService`, `RunService`, `Tags`, `UserInputService`, and `Workspace`.
+`ActionMap`, `Players`, `ProcessService`, `RunService`, `Tags`,
+`UserInputService`, and `Workspace`.
 `Workspace` creates a current Camera. A `ReplicatedStorage` class/source scaffold
 exists but is not registered. Basic reliable client replication, the production
 scheduler, and bounded Luau application remotes now exist as networking
 subsystem components. They are not yet wired into a complete multiplayer
-executable or `Players` service. The deterministic simulator and optional real
+executable or final multiplayer `Players` behavior. The deterministic simulator and optional real
 GNS adapter exercise both replication and Remote paths.
 
 ## Frame execution model
@@ -138,6 +142,7 @@ sequenceDiagram
     participant Main
     participant SDL
     participant Input as UserInputService
+    participant Actions as ActionMap
     participant Run as RunService signals
     participant Physics as WorldRoot
     participant Camera
@@ -146,7 +151,8 @@ sequenceDiagram
 
     Main->>SDL: Poll all events
     SDL->>Input: ProcessEvent(event)
-    SDL->>Camera: OnEvent(event)
+    Input->>Actions: Refresh semantic bindings
+    SDL->>Camera: OnEvent(event) when unconsumed
     Main->>Run: PreSimulation(delta)
     Main->>Physics: StepPhysics(delta)
     Main->>Camera: Step(delta)
@@ -167,10 +173,12 @@ during explicit transport polling.
 
 | Service | Present behavior | Reality check |
 |---|---|---|
-| `Workspace` | Owns current Camera and inherits `WorldRoot`, which coordinates the neutral rigid physics world. | Useful primitive world root; no streaming, raycast API, terrain, characters, or network ownership. |
+| `Workspace` | Owns current Camera, neutral rigid physics, and the bounded kinematic capsule motion query. | No streaming, broad raycast/overlap API, terrain, or network ownership. |
 | `RunService` | Signal container used by `Engine`. | `src/services/RunService.cpp` is empty; semantics are hard-coded in the frame loop. |
-| `UserInputService` | Converts a subset of SDL events, tracks keys, emits signals. | Mouse state has map/update bugs and unsupported buttons can throw. No action mapping, gamepads, touch, text input, routing, or UI focus. |
-| `ProcessService` | Controls process lifetime and stdout/stderr. | Exposed to every script without a capability check; inappropriate for untrusted experiences. |
+| `UserInputService` | Owns physical key/button state, pointer delta, focus reset, and mouse-behavior host synchronization. | Gamepad publication, touch, text input, and retained UI focus remain incomplete. |
+| `ActionMap` | Maps bounded keyboard, mouse-button, and pointer-delta bindings to semantic action state. | Default gamepad bindings and a persisted remapping UI are deferred. |
+| `Players` | Owns one local runtime Player, character relation, and replaceable engine-shipped Luau defaults. | Final server/client membership, transport association, and replication are deferred. |
+| `ProcessService` | Controls process lifetime and stdout/stderr. | Process operations require explicit `ProcessControl`; ordinary player runtime scripts are not granted it. |
 | `ReplicatedStorage` | Class/source scaffold only. | Not registered in `DataModel`; the name promises replication that does not exist. |
 | `TweenService` | Headers and commented implementation. | Dead/scaffold only; not registered in `DataModel`. |
 

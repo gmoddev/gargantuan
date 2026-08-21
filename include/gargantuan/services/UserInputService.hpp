@@ -20,6 +20,12 @@ namespace gargantuan {
 
 		[[nodiscard]] bool ProcessEvent(const HostEvent &Event);
 
+		[[nodiscard]] std::optional<HostCommand> SynchronizeMouseBehavior();
+		void EndFrame();
+		bool RelativePointerMode = false;
+
+		friend class Engine;
+
 	  protected:
 		std::unordered_map<Enums::KeyCode, std::shared_ptr<InputObject>> ActiveKeys;
 		std::unordered_map<Enums::UserInputType, std::shared_ptr<InputObject>> ActiveMouseButtons;

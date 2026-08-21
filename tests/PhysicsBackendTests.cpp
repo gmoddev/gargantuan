@@ -82,6 +82,14 @@ namespace {
 		std::optional<gargantuan::PhysicsBodyState> GetBodyState(gargantuan::PhysicsBodyId) const override {
 			return std::nullopt;
 		}
+		gargantuan::PhysicsKinematicMotionResult
+		MoveKinematicCapsule(const gargantuan::PhysicsKinematicMotionRequest &Request) const override {
+			return {
+				.Position = Request.Position + Request.Translation,
+				.AppliedTranslation = Request.Translation,
+				.Velocity = Request.Velocity,
+			};
+		}
 		gargantuan::PhysicsStepResult Step(const gargantuan::PhysicsStepConfig &) override {
 			++StepCalls;
 			return {};
@@ -131,6 +139,70 @@ namespace {
 		Check(Joint.IsValid() && World.IsConstraintValid(Joint), "constraint uses neutral body identities");
 		Check(World.DestroyBody(Second).Succeeded() && !World.IsConstraintValid(Joint),
 			"body destruction invalidates attached constraints safely");
+	}
+
+	void TestKinematicWorldQueries() {
+		using namespace gargantuan;
+		PhysicsWorld World(PhysicsWorldConfig{.Gravity = {0.0f, 0.0f, 0.0f}});
+		PhysicsBodyDesc Floor;
+		Floor.Anchored = true;
+		Floor.Transform = CFrame(0.0f, -1.0f, 0.0f);
+		Floor.Shape.Size = {40.0f, 2.0f, 40.0f};
+		Check(World.CreateBody(Floor).IsValid(), "kinematic query fixture creates real floor geometry");
+
+		auto Ground = World.MoveKinematicCapsule({
+			.Position = {0.0f, 2.25f, 0.0f},
+			.Radius = 1.0f,
+			.Height = 4.0f,
+			.Translation = {0.0f, -1.0f, 0.0f},
+			.Velocity = {0.0f, -10.0f, 0.0f},
+		});
+		Check(
+			Ground.Succeeded() && Ground.Collided && Ground.HasFloor,
+			"capsule grounding comes from world collision instead of a constant height"
+		);
+		Check(
+			Ground.Position.y >= 1.99f && Ground.FloorNormal.y > 0.9f && Ground.Velocity.y >= -0.001f,
+			"ground query returns bounded position, floor normal, and clipped velocity"
+		);
+		auto GroundSlide = World.MoveKinematicCapsule({
+			.Position = {0.0f, 2.0f, 0.0f},
+			.Radius = 1.0f,
+			.Height = 4.0f,
+			.Translation = {2.0f, -0.25f, 0.0f},
+			.Velocity = {8.0f, -1.0f, 0.0f},
+		});
+		Check(
+			GroundSlide.Succeeded() && GroundSlide.HasFloor && GroundSlide.Position.x > 1.9f,
+			"bounded mover iterations preserve tangential motion while grounding clips gravity"
+		);
+
+		PhysicsBodyDesc Wall;
+		Wall.Anchored = true;
+		Wall.Transform = CFrame(4.0f, 2.0f, 0.0f);
+		Wall.Shape.Size = {2.0f, 4.0f, 8.0f};
+		Check(World.CreateBody(Wall).IsValid(), "kinematic query fixture creates obstacle geometry");
+		auto Blocked = World.MoveKinematicCapsule({
+			.Position = {0.0f, 2.01f, 0.0f},
+			.Radius = 1.0f,
+			.Height = 4.0f,
+			.Translation = {8.0f, 0.0f, 0.0f},
+			.Velocity = {16.0f, 0.0f, 0.0f},
+		});
+		Check(
+			Blocked.Succeeded() && Blocked.Collided && Blocked.Position.x < 3.0f,
+			"horizontal capsule motion collides with world obstacles"
+		);
+		Check(
+			Blocked.AppliedTranslation.x < 8.0f && Blocked.Velocity.x < 0.01f,
+			"obstacle result bounds translation and removes velocity into the contact plane"
+		);
+
+		auto Invalid = World.MoveKinematicCapsule({.Radius = 0.0f, .Height = 4.0f});
+		Check(
+			!Invalid.Succeeded() && Invalid.Status == PhysicsOperationStatus::InvalidDescription,
+			"invalid capsule descriptions fail closed"
+		);
 	}
 
 	std::shared_ptr<gargantuan::Workspace> MakeWorkspace() {
@@ -280,6 +352,7 @@ int main() {
 	}
 	TestNeutralContract();
 	TestBackendIdentityAndLifecycle();
+	TestKinematicWorldQueries();
 	TestCommittedBodyUpdates();
 	TestConstraintAndPendingDestroy();
 	TestSimulationPublicationAndImpulse();

@@ -81,6 +81,30 @@ namespace gargantuan {
 		};
 	}
 
+	ScriptSecurityContext ScriptSecurityContext::ServerRuntime() {
+		return {
+			ScriptExecutionDomain::Server,
+			{
+				ScriptCapability::ReadDataModel,
+				ScriptCapability::MutateDataModel,
+				ScriptCapability::NetworkSend,
+				ScriptCapability::NetworkReceive,
+			},
+		};
+	}
+
+	ScriptSecurityContext ScriptSecurityContext::ClientRuntime() {
+		return {
+			ScriptExecutionDomain::Client,
+			{
+				ScriptCapability::ReadDataModel,
+				ScriptCapability::MutateDataModel,
+				ScriptCapability::NetworkSend,
+				ScriptCapability::NetworkReceive,
+			},
+		};
+	}
+
 	ScriptSecurityScope::ScriptSecurityScope(ScriptSecurityContext context) : Previous(CurrentContext) {
 		CurrentContext = std::move(context);
 	}

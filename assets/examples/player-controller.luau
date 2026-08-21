@@ -1,62 +1,40 @@
-local RunService = game:GetService("RunService")
-local UserInputService = game:GetService("UserInputService")
+-- Productized player-runtime fixture. The engine-owned Luau modules provide
+-- input mapping, character assembly, movement, and camera policy; this game
+-- script only supplies world geometry and observes the public contracts.
+local ActionMap = game:GetService("ActionMap")
+local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
 
-local baseplate = Instance.new("Part")
-baseplate.Name = "Baseplate"
-baseplate.Anchored = true
-baseplate.Color = Color3.fromHSV(0, 0, 0.5)
-baseplate.Position = Vector3.new(0, -10, 0)
-baseplate.Size = Vector3.new(2000, 20, 2000)
-baseplate.Transparency = 0
-baseplate.Parent = Workspace
-
-local hrp = Instance.new("Part")
-hrp.Name = "HumanoidRootPart"
-hrp.Anchored = true
-hrp.Size = Vector3.new(2, 4, 1)
-hrp.Position = Vector3.new(0, 2, 0)
-hrp.Color = Color3.new(1, 1, 1)
-hrp.Parent = Workspace
-
-do
-	local part = Instance.new("Part")
-	part.Anchored = true
-	part.Color = Color3.fromHSV(1, 0.5, 1)
-	part.Position = Vector3.new(0, 2.5, 10)
-	part.Parent = Workspace
-	part.Size = Vector3.new(5, 5, 5)
-
-	local wedge = Instance.new("Part")
-	wedge.Anchored = true
-	wedge.Color = Color3.fromHSV(0.3, 0.5, 1)
-	wedge.CFrame = CFrame.new(Vector3.new(5, 1, -5), Vector3.new(10, 1, -5))
-	wedge.Parent = Workspace
-	wedge.Shape = Enum.PartType.Wedge
-	wedge.Size = Vector3.new(5, 2, 2)
+local function MakePart(Name: string, Position: Vector3, Size: Vector3, Color: Color3)
+	local Part = Instance.new("Part")
+	Part.Name = Name
+	Part.Anchored = true
+	Part.Color = Color
+	Part.Position = Position
+	Part.Size = Size
+	Part.Parent = Workspace
+	return Part
 end
 
-Workspace.CurrentCamera.CameraType = Enum.CameraType.Scriptable
-Workspace.CurrentCamera.CFrame = CFrame.new((hrp.CFrame * CFrame.new(0, 20, 0)).Position, hrp.Position)
+MakePart("Baseplate", Vector3.new(0, -1, 0), Vector3.new(200, 2, 200), Color3.fromHSV(0, 0, 0.5))
+MakePart("CollisionWall", Vector3.new(0, 3, -12), Vector3.new(16, 6, 2), Color3.fromHSV(1, 0.5, 1))
+MakePart("ControllerStep", Vector3.new(5, 0.5, 0), Vector3.new(4, 1, 6), Color3.fromHSV(0.12, 0.6, 1))
 
-RunService.PreRender:Connect(function(dt: number)
-	local walkDirection = Vector3.zero
-	if UserInputService:IsKeyDown(Enum.KeyCode.W) then
-		walkDirection += Vector3.new(0, 0, 0.5)
-	end
-	if UserInputService:IsKeyDown(Enum.KeyCode.S) then
-		walkDirection -= Vector3.new(0, 0, 0.5)
-	end
-	if UserInputService:IsKeyDown(Enum.KeyCode.A) then
-		walkDirection += Vector3.new(0.5, 0, 0)
-	end
-	if UserInputService:IsKeyDown(Enum.KeyCode.D) then
-		walkDirection -= Vector3.new(0.5, 0, 0)
+local Slope = MakePart("ControllerSlope", Vector3.new(-7, 1, -4), Vector3.new(8, 2, 6), Color3.fromHSV(0.3, 0.5, 1))
+Slope.Shape = Enum.PartType.Wedge
+
+task.defer(function()
+	local LocalPlayer = Players.LocalPlayer
+	assert(LocalPlayer ~= nil, "[Player:Fixture] Players.LocalPlayer must exist during Play")
+	assert(ActionMap:GetBindingCount() > 0, "[Player:Fixture] default semantic bindings must start automatically")
+
+	local function ReportCharacter(Character)
+		print("[Player:Fixture] Character ready", Character.Name)
 	end
 
-	walkDirection *= 16 * dt
-	hrp.CFrame = CFrame.new(hrp.Position + walkDirection, hrp.Position)
-
-	local lookCFrame = CFrame.new((hrp.CFrame * CFrame.new(0, 20, 0)).Position, hrp.Position)
-	Workspace.CurrentCamera.CFrame = Workspace.CurrentCamera.CFrame:Lerp(lookCFrame, dt * 2)
+	if LocalPlayer.Character ~= nil then
+		ReportCharacter(LocalPlayer.Character)
+	else
+		LocalPlayer.CharacterAdded:Connect(ReportCharacter)
+	end
 end)

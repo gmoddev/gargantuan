@@ -12,6 +12,9 @@
 namespace gargantuan {
 	inline constexpr std::size_t MaximumPhysicsEventsPerStep = 65536;
 
+	inline constexpr std::size_t MaximumKinematicCollisionPlanes = 32;
+	inline constexpr std::size_t MaximumKinematicMotionIterations = 5;
+
 	struct PhysicsBodyId {
 		std::uint32_t Slot = 0;
 		std::uint32_t Generation = 0;
@@ -82,6 +85,14 @@ namespace gargantuan {
 		CFrame Transform{};
 	};
 
+	struct PhysicsKinematicMotionRequest {
+		glm::vec3 Position{0.0f};
+		float Radius = 1.0f;
+		float Height = 4.0f;
+		glm::vec3 Translation{0.0f};
+		glm::vec3 Velocity{0.0f};
+	};
+
 	enum class PhysicsContactPhase : std::uint8_t {
 		Began,
 		Ended,
@@ -109,6 +120,21 @@ namespace gargantuan {
 	struct PhysicsOperationResult {
 		PhysicsOperationStatus Status = PhysicsOperationStatus::Success;
 		std::string Message;
+
+		[[nodiscard]] bool Succeeded() const { return Status == PhysicsOperationStatus::Success; }
+	};
+
+	struct PhysicsKinematicMotionResult {
+		PhysicsOperationStatus Status = PhysicsOperationStatus::Success;
+		std::string Message;
+		glm::vec3 Position{0.0f};
+		glm::vec3 AppliedTranslation{0.0f};
+		glm::vec3 Velocity{0.0f};
+		glm::vec3 ContactNormal{0.0f};
+		glm::vec3 FloorNormal{0.0f};
+		bool Collided = false;
+		bool HasFloor = false;
+		bool PlanesTruncated = false;
 
 		[[nodiscard]] bool Succeeded() const { return Status == PhysicsOperationStatus::Success; }
 	};

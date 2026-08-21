@@ -43,6 +43,8 @@ namespace gargantuan {
 		bool PublishingPhysicsState = false;
 		bool ShuttingDownPhysics = false;
 
+		[[nodiscard]] PhysicsKinematicMotionResult ResolveKinematicMotion(const PhysicsKinematicMotionRequest &Request);
+
 	  private:
 		friend struct WorldRootTestAccess;
 		[[nodiscard]] PhysicsBodyDesc DescribePart(const BasePart &Part) const;

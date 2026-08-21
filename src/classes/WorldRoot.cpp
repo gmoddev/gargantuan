@@ -1,7 +1,11 @@
 #include "gargantuan/classes/WorldRoot.hpp"
 #include "gargantuan/Log.hpp"
 
+#include "gargantuan/scripting/ScriptSecurity.hpp"
+#include "gargantuan/scripting/StackValue.hpp"
+
 #include <algorithm>
+#include <lua.h>
 #include <memory>
 #include <optional>
 #include <string_view>
@@ -292,6 +296,48 @@ namespace gargantuan {
 
 	WorldRoot::~WorldRoot() {
 		ShutdownPhysics();
+	}
+
+	PhysicsKinematicMotionResult WorldRoot::ResolveKinematicMotion(const PhysicsKinematicMotionRequest &Request) {
+		ApplyPendingPhysicsChanges();
+		return Physics.MoveKinematicCapsule(Request);
+	}
+
+	int WorldRoot::MoveKinematicCapsule(lua_State *L, Instance *InstanceValue) {
+		if (!GetCurrentScriptSecurityContext().HasCapability(ScriptCapability::ReadDataModel))
+			throw std::runtime_error("Kinematic world queries require ReadDataModel");
+		auto *World = dynamic_cast<WorldRoot *>(InstanceValue);
+		if (!World || World->GetDestroyed() || World->IsDestroying())
+			throw std::runtime_error("MoveKinematicCapsule requires a live WorldRoot");
+		PhysicsKinematicMotionRequest Request{
+			.Position = CheckStackValue<glm::vec3>(L, 2),
+			.Radius = static_cast<float>(luaL_checknumber(L, 3)),
+			.Height = static_cast<float>(luaL_checknumber(L, 4)),
+			.Translation = CheckStackValue<glm::vec3>(L, 5),
+			.Velocity = CheckStackValue<glm::vec3>(L, 6),
+		};
+		auto Result = World->ResolveKinematicMotion(Request);
+		if (!Result.Succeeded())
+			throw std::runtime_error(Result.Message.empty() ? "Kinematic capsule query failed" : Result.Message);
+
+		lua_createtable(L, 0, 8);
+		auto SetVector = [L](const char *Name, const glm::vec3 &Value) {
+			StackValue<glm::vec3>::Push(L, Value);
+			lua_setfield(L, -2, Name);
+		};
+		auto SetBoolean = [L](const char *Name, bool Value) {
+			lua_pushboolean(L, Value);
+			lua_setfield(L, -2, Name);
+		};
+		SetVector("Position", Result.Position);
+		SetVector("AppliedTranslation", Result.AppliedTranslation);
+		SetVector("Velocity", Result.Velocity);
+		SetVector("ContactNormal", Result.ContactNormal);
+		SetVector("FloorNormal", Result.FloorNormal);
+		SetBoolean("Collided", Result.Collided);
+		SetBoolean("HasFloor", Result.HasFloor);
+		SetBoolean("PlanesTruncated", Result.PlanesTruncated);
+		return 1;
 	}
 
 	void WorldRoot::StepPhysics(

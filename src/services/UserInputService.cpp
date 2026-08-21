@@ -56,6 +56,10 @@ namespace gargantuan {
 			ActiveKeys.clear();
 			ActiveMouseButtons.clear();
 			MouseDelta = Vector2(0.0f, 0.0f);
+			if (MouseBehavior != Enums::MouseBehavior::Default) {
+				MouseBehavior = Enums::MouseBehavior::Default;
+				NotifyPropertyCommitted("MouseBehavior");
+			}
 			WindowFocusReleased->Fire({});
 			return false;
 		};
@@ -95,5 +99,15 @@ namespace gargantuan {
 			InputEnded->Fire({input, false});
 		}
 		return false;
+	}
+	std::optional<HostCommand> UserInputService::SynchronizeMouseBehavior() {
+		const bool Requested = MouseBehavior != Enums::MouseBehavior::Default;
+		if (Requested == RelativePointerMode) return std::nullopt;
+		RelativePointerMode = Requested;
+		return HostCommand{SetRelativePointerMode{Requested}};
+	}
+
+	void UserInputService::EndFrame() {
+		MouseDelta = Vector2();
 	}
 }

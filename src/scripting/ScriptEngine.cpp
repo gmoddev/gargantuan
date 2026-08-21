@@ -189,21 +189,20 @@ namespace gargantuan {
 	std::shared_ptr<Instance> ScriptEngine::FindRequiredInstanceByPath(const char *rawPath) {
 		LOG_INFO(App, "Attempting to find required instance %s", rawPath);
 
-		if (!rawPath || !DataModel || std::strcmp(rawPath, "\0") == 0) return nullptr;
-
-		std::string path(rawPath);
-		std::vector<const char *> segments;
-		std::string currentSegment;
-		for (char &currentCharacter : path) {
-			if (currentCharacter == '/' || currentCharacter == '\\') {
-				segments.emplace_back(currentSegment.c_str());
-				currentSegment.clear();
-			} else {
-				currentSegment += currentCharacter;
-			}
+		if (!rawPath || !*rawPath || !DataModel) return nullptr;
+		const std::string Path(rawPath);
+		if (auto Cached = RequirePathCache.find(Path); Cached != RequirePathCache.end()) {
+			const auto &Value = Cached->second;
+			if (Value && !Value->GetDestroyed() && !Value->IsDestroying() && Value->GetFullName() == Path) return Value;
+			RequirePathCache.erase(Cached);
 		}
 
-		std::shared_ptr<Instance> currentInstance;
+		if (DataModel->GetFullName() == Path) return DataModel;
+		for (const auto &Candidate : DataModel->GetDescendants()) {
+			if (Candidate->GetFullName() != Path) continue;
+			RequirePathCache.insert_or_assign(Path, Candidate);
+			return Candidate;
+		}
 		return nullptr;
 	}
 

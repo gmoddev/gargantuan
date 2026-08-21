@@ -61,6 +61,8 @@ namespace gargantuan {
 		[[nodiscard]] static ScriptSecurityContext CoreTrusted();
 		[[nodiscard]] static ScriptSecurityContext PreRunRegistration();
 		[[nodiscard]] static ScriptSecurityContext StudioCoreUi();
+		[[nodiscard]] static ScriptSecurityContext ServerRuntime();
+		[[nodiscard]] static ScriptSecurityContext ClientRuntime();
 	};
 
 	class ScriptSecurityScope {

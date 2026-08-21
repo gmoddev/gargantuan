@@ -1,6 +1,8 @@
 #include "gargantuan/classes/Script.hpp"
 #include "gargantuan/scripting/ScriptEngine.hpp"
 
+#include "gargantuan/scripting/ScriptSecurity.hpp"
+
 #include <lua.h>
 
 namespace gargantuan {
@@ -50,6 +52,11 @@ namespace gargantuan {
 	ScriptStatus Script::Step(lua_State *L) {
 		if (!ShouldStep() || Thread) return Status;
 		Status = ScriptStatus::Running;
+
+		ScriptSecurityScope SecurityScope(
+			GetRunContext() == Enums::RunContext::Client ? ScriptSecurityContext::ClientRuntime()
+														 : ScriptSecurityContext::ServerRuntime()
+		);
 
 		auto scriptEngine = ScriptEngine::Get(L);
 		CompileBytecode(&scriptEngine->CompileOptions);

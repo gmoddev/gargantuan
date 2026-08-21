@@ -39,6 +39,7 @@
 #include "gargantuan/scripting/ModuleResolution.hpp"
 #include "gargantuan/scripting/NativeCallback.hpp"
 #include "gargantuan/scripting/ScriptEngine.hpp"
+#include "gargantuan/services/ProcessService.hpp"
 #include "gargantuan/services/Tags.hpp"
 #include "gargantuan/services/Workspace.hpp"
 
@@ -1892,6 +1893,29 @@ namespace {
 			!clientProcessOnly.HasCapability(ScriptCapability::ReadDataModel),
 			"capabilities are independent rather than a numeric privilege hierarchy"
 		);
+
+		for (const auto Runtime : {ScriptSecurityContext::ServerRuntime(), ScriptSecurityContext::ClientRuntime()}) {
+			Check(
+				Runtime.HasCapability(ScriptCapability::ReadDataModel) &&
+					Runtime.HasCapability(ScriptCapability::MutateDataModel),
+				"ordinary runtime scripts receive gameplay DataModel capabilities"
+			);
+			Check(
+				!Runtime.HasCapability(ScriptCapability::EditorCommands) &&
+					!Runtime.HasCapability(ScriptCapability::FilesystemRead) &&
+					!Runtime.HasCapability(ScriptCapability::FilesystemWrite) &&
+					!Runtime.HasCapability(ScriptCapability::ProcessControl) &&
+					!Runtime.HasCapability(ScriptCapability::DefineSchema),
+				"runtime scripts do not inherit editor, filesystem, process, or schema authority"
+			);
+		}
+		auto Process = std::make_shared<ProcessService>();
+		{
+			ScriptSecurityScope RuntimeScope(ScriptSecurityContext::ClientRuntime());
+			CheckThrows<std::runtime_error>(
+				[&] { Process->FlushStdout(); }, "ProcessService enforces ProcessControl for ordinary runtime scripts"
+			);
+		}
 
 		auto folder = std::make_shared<Folder>();
 		const auto id = folder->GetObjectId();
@@ -5746,6 +5770,44 @@ namespace {
 			Check(!lua_toboolean(L, -1), "task continuation preserves its originating restricted capability context");
 			lua_pop(L, 1);
 		}
+
+		lua_settop(L, 0);
+		lua_pushcfunction(
+			L,
+			[](lua_State *State) {
+				lua_pushboolean(
+					State, GetCurrentScriptSecurityContext().HasCapability(ScriptCapability::MutateDataModel)
+				);
+				return 1;
+			},
+			"HasSignalMutationAuthority"
+		);
+		lua_setglobal(L, "HasSignalMutationAuthority");
+		{
+			ScriptSecurityScope Scope({ScriptExecutionDomain::Client, {ScriptCapability::NetworkReceive}});
+			Check(
+				Load(
+					L,
+					R"(
+				SecuritySignal = Signal.new()
+				SignalCallbackCanMutate = nil
+				SecuritySignal:Connect(function()
+					SignalCallbackCanMutate = HasSignalMutationAuthority()
+				end)
+			)",
+					"luau-signal-security-connect"
+				) == LUA_OK &&
+					lua_pcall(L, 0, 0, 0) == LUA_OK,
+				"restricted signal callback source connects"
+			);
+		}
+		Check(
+			Load(L, "SecuritySignal:Fire()", "luau-signal-security-fire") == LUA_OK && lua_pcall(L, 0, 0, 0) == LUA_OK,
+			"restricted signal callback fires from a trusted native entry"
+		);
+		lua_getglobal(L, "SignalCallbackCanMutate");
+		Check(!lua_toboolean(L, -1), "signal callback preserves its originating restricted capability context");
+		lua_pop(L, 1);
 
 		lua_settop(L, 0);
 		const auto SignalLoadStatus = Load(L, R"(

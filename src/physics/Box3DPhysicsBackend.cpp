@@ -7,6 +7,7 @@
 #include <box3d/types.h>
 
 #include <algorithm>
+#include <cfloat>
 #include <cmath>
 #include <limits>
 #include <memory>
@@ -226,6 +227,159 @@ namespace gargantuan {
 					.LinearVelocity = Box3DConversions::FromBox3(b3Body_GetLinearVelocity(Record->Body)),
 					.Description = Record->Description,
 				};
+			}
+
+			[[nodiscard]] PhysicsKinematicMotionResult
+			MoveKinematicCapsule(const PhysicsKinematicMotionRequest &Request) const override {
+				PhysicsKinematicMotionResult Result{
+					.Position = Request.Position,
+					.Velocity = Request.Velocity,
+				};
+				if (!b3World_IsValid(World)) {
+					Result.Status = PhysicsOperationStatus::BackendFailure;
+					Result.Message = "Physics world is unavailable";
+					return Result;
+				}
+				if (!IsFinite(Request.Position) || !IsFinite(Request.Translation) || !IsFinite(Request.Velocity) ||
+					!std::isfinite(Request.Radius) || !std::isfinite(Request.Height) || Request.Radius <= 0.0f ||
+					Request.Height < Request.Radius * 2.0f) {
+					Result.Status = PhysicsOperationStatus::InvalidDescription;
+					Result.Message = "Kinematic capsule request is invalid";
+					return Result;
+				}
+
+				const float HalfSegment = std::max(0.0f, Request.Height * 0.5f - Request.Radius);
+				const b3Capsule Mover{
+					.center1 = {0.0f, -HalfSegment, 0.0f},
+					.center2 = {0.0f, HalfSegment, 0.0f},
+					.radius = Request.Radius,
+				};
+				auto AcceptCollidable = [](b3ShapeId Shape, void *Context) {
+					auto *Self = static_cast<const Box3DPhysicsBackend *>(Context);
+					auto Owner = Self->FindShapeOwner(Shape);
+					if (!Owner) return false;
+					const auto *Record = Self->FindBody(*Owner);
+					return Record && Record->Description.CanCollide;
+				};
+				struct PlaneContext {
+					const Box3DPhysicsBackend *Self = nullptr;
+					std::vector<b3CollisionPlane> Planes;
+					glm::vec3 ContactNormal{0.0f};
+					glm::vec3 FloorNormal{0.0f};
+					float ContactScore = 1.0f;
+					float FloorScore = 0.0f;
+					glm::vec3 MotionDirection{0.0f};
+					bool Truncated = false;
+				} Context;
+				Context.Self = this;
+				Context.Planes.reserve(MaximumKinematicCollisionPlanes);
+				Context.MotionDirection = Request.Translation == glm::vec3(0.0f) ? glm::vec3(0.0f)
+																				 : glm::normalize(Request.Translation);
+
+				auto CollectPlanes =
+					[](b3ShapeId Shape, const b3PlaneResult *Planes, int PlaneCount, void *RawContext) {
+						auto *Context = static_cast<PlaneContext *>(RawContext);
+						auto Owner = Context->Self->FindShapeOwner(Shape);
+						if (!Owner) return true;
+						const auto *Record = Context->Self->FindBody(*Owner);
+						if (!Record || !Record->Description.CanCollide) return true;
+						for (int Index = 0; Index < PlaneCount; ++Index) {
+							if (Context->Planes.size() == MaximumKinematicCollisionPlanes) {
+								Context->Truncated = true;
+								return false;
+							}
+							Context->Planes.push_back({
+								.plane = Planes[Index].plane,
+								.pushLimit = FLT_MAX,
+								.push = 0.0f,
+								.clipVelocity = true,
+							});
+							const auto Normal = Box3DConversions::FromBox3(Planes[Index].plane.normal);
+							if (Normal.y > Context->FloorScore) {
+								Context->FloorScore = Normal.y;
+								Context->FloorNormal = Normal;
+							}
+							const float Score = glm::dot(Normal, Context->MotionDirection);
+							if (Score < Context->ContactScore) {
+								Context->ContactScore = Score;
+								Context->ContactNormal = Normal;
+							}
+						}
+						return true;
+					};
+				auto GatherPlanes = [&](const glm::vec3 &Position) {
+					Context.Planes.clear();
+					Context.ContactNormal = {};
+					Context.FloorNormal = {};
+					Context.ContactScore = 1.0f;
+					Context.FloorScore = 0.0f;
+					Context.Truncated = false;
+					const b3Pos Origin{Position.x, Position.y, Position.z};
+					b3World_CollideMover(World, Origin, &Mover, b3DefaultQueryFilter(), CollectPlanes, &Context);
+				};
+
+				const glm::vec3 TargetPosition = Request.Position + Request.Translation;
+				glm::vec3 CurrentPosition = Request.Position;
+				bool Collided = false;
+				bool PlanesTruncated = false;
+				constexpr float MotionToleranceSquared = 0.0001f;
+				for (std::size_t Iteration = 0; Iteration < MaximumKinematicMotionIterations; ++Iteration) {
+					GatherPlanes(CurrentPosition);
+					Collided = Collided || !Context.Planes.empty();
+					PlanesTruncated = PlanesTruncated || Context.Truncated;
+					const auto TargetDelta = TargetPosition - CurrentPosition;
+					const auto SolvedDelta = Box3DConversions::FromBox3(
+						b3SolvePlanes(
+							Box3DConversions::ToBox3(TargetDelta),
+							Context.Planes.data(),
+							static_cast<int>(Context.Planes.size())
+						).delta
+					);
+					if (glm::dot(SolvedDelta, SolvedDelta) < MotionToleranceSquared) break;
+
+					const b3Pos Origin{CurrentPosition.x, CurrentPosition.y, CurrentPosition.z};
+					const auto Box3Delta = Box3DConversions::ToBox3(SolvedDelta);
+					const float Fraction = std::clamp(
+						b3World_CastMover(
+							World,
+							Origin,
+							&Mover,
+							Box3Delta,
+							b3DefaultQueryFilter(),
+							AcceptCollidable,
+							const_cast<Box3DPhysicsBackend *>(this)
+						),
+						0.0f,
+						1.0f
+					);
+					Collided = Collided || Fraction < 1.0f;
+					const auto AppliedDelta = SolvedDelta * Fraction;
+					CurrentPosition += AppliedDelta;
+					if (glm::dot(AppliedDelta, AppliedDelta) < MotionToleranceSquared) break;
+				}
+
+				GatherPlanes(CurrentPosition);
+				Collided = Collided || !Context.Planes.empty();
+				PlanesTruncated = PlanesTruncated || Context.Truncated;
+				if (!Context.Planes.empty()) {
+					const auto Correction = Box3DConversions::FromBox3(
+						b3SolvePlanes(b3Vec3_zero, Context.Planes.data(), static_cast<int>(Context.Planes.size())).delta
+					);
+					CurrentPosition += Correction;
+					Result.Velocity = Box3DConversions::FromBox3(b3ClipVector(
+						Box3DConversions::ToBox3(Request.Velocity),
+						Context.Planes.data(),
+						static_cast<int>(Context.Planes.size())
+					));
+				}
+				Result.Position = CurrentPosition;
+				Result.AppliedTranslation = CurrentPosition - Request.Position;
+				Result.ContactNormal = Context.ContactNormal;
+				Result.FloorNormal = Context.FloorNormal;
+				Result.HasFloor = Context.FloorScore > 0.0f;
+				Result.Collided = Collided;
+				Result.PlanesTruncated = PlanesTruncated;
+				return Result;
 			}
 
 			[[nodiscard]] PhysicsStepResult Step(const PhysicsStepConfig &Config) override {

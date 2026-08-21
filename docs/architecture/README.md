@@ -99,6 +99,7 @@ The following documents describe recently implemented, source-verified slices:
 - [Runtime schema](../src/content/docs/developing/runtime-schema.mdx)
 - [Render extraction](../src/content/docs/developing/render-extraction.mdx)
 - [Platform and input boundary](../../devdocs/CurrentArchitecture/PlatformInputBoundary.md)
+- [Player runtime](../../devdocs/CurrentArchitecture/PlayerRuntime.md)
 - [Renderer backend boundary](../../devdocs/CurrentArchitecture/RendererBackendBoundary.md)
 - [Physics backend](../../devdocs/CurrentArchitecture/PhysicsBackend.md)
 - [Instance attributes](../src/content/docs/developing/instance-attributes.mdx)

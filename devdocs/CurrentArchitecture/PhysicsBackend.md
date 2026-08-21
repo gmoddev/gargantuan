@@ -1,7 +1,7 @@
 ---
 status: current
 owner: physics
-last_verified: 2026-08-15
+last_verified: 2026-08-21
 related_code:
   - include/gargantuan/physics/
   - src/physics/
@@ -43,11 +43,14 @@ The engine-facing contract is defined by `PhysicsTypes.hpp` and
 - `PhysicsBodyDesc` describes transform, shape, anchoring, collision, touch, and density;
 - `PhysicsConstraintDesc` currently describes only a weld between neutral body IDs;
 - `PhysicsWorldConfig` and `PhysicsStepConfig` define gravity and explicit fixed-step input;
-- `PhysicsBodyMotion` and `PhysicsContactEvent` are owned post-step results; and
+- `PhysicsBodyMotion` and `PhysicsContactEvent` are owned post-step results;
+- `PhysicsKinematicMotionRequest` and `PhysicsKinematicMotionResult` describe a
+  bounded capsule translation, collision resolution, velocity clipping, and
+  floor/contact normals; and
 - `PhysicsOperationResult` reports neutral success, invalid-ID,
   invalid-description, or backend-failure states.
 
-The contract intentionally has no mesh collider, character motor, projectile,
+The contract intentionally has no mesh collider, controller policy, projectile,
 network ownership, prediction, rollback, or deformable vocabulary.
 
 ## Identity and mapping
@@ -150,11 +153,29 @@ Instance.
 
 ## Queries
 
-There is no implemented `WorldRoot` raycast or active scripted raycast API in the
-current source. Foundation 1 therefore does not add a speculative query method
-to the backend contract. Any first query implementation must return neutral
-Gargantuan identity/value results and keep Box3D callbacks and hit structures
-inside the adapter.
+The first active gameplay query is
+`Workspace:MoveKinematicCapsule(Position, Radius, Height, Translation,
+Velocity)`. `WorldRoot` flushes pending body changes before the query and passes
+only the neutral request to `PhysicsWorld`. The returned Luau table owns its
+position, applied translation, clipped velocity, contact/floor normals, and
+collision/floor/truncation flags. It contains no body handle or borrowed backend
+memory.
+
+The Box3D adapter uses `b3World_CollideMover`, `b3SolvePlanes`,
+`b3World_CastMover`, and `b3ClipVector`. It resolves contact planes toward the
+requested target before each cast, which preserves tangential horizontal motion
+while gravity is clipped by a floor. Work is bounded at five mover iterations
+and 32 collision planes per collection. Reaching the plane bound is explicit in
+`PlanesTruncated`. Current `CanCollide` state filters both plane collection and
+casts. Non-finite positions/translations/velocities, non-positive radii, and
+heights below the capsule diameter fail closed.
+
+This primitive supplies collision authority rather than movement policy. The
+engine-shipped Luau controller decides gravity integration, walk speed, floor
+slope acceptance, jump/air-jump rules, and bounded step attempts. A replacement
+controller can call the same method directly. Raycasts, overlap APIs, arbitrary
+filters, ignored-character sets, moving-platform metadata, and hit Instance
+identity are not implemented.
 
 ## Failure and lifetime behavior
 
@@ -185,7 +206,7 @@ physics implementation choice.
 ## Deliberately deferred
 
 This boundary does not implement another physics engine, advanced constraints,
-mesh collision, a character motor redesign, projectiles, terrain physics,
+mesh collision, a native character motor, projectiles, terrain physics,
 deformation, physics networking, ownership, interpolation, prediction, or
 rollback. Current rendering still reads the engine-owned `WorldRoot::Parts`
 collection and has no dependency on physics backend handles.

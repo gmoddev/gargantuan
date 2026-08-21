@@ -51,6 +51,14 @@ namespace gargantuan {
 	std::optional<PhysicsBodyState> PhysicsWorld::GetBodyState(PhysicsBodyId Body) const {
 		return Backend ? Backend->GetBodyState(Body) : std::nullopt;
 	}
+	PhysicsKinematicMotionResult
+	PhysicsWorld::MoveKinematicCapsule(const PhysicsKinematicMotionRequest &Request) const {
+		return Backend ? Backend->MoveKinematicCapsule(Request)
+					   : PhysicsKinematicMotionResult{
+							 .Status = PhysicsOperationStatus::BackendFailure,
+							 .Message = "Physics backend is unavailable",
+						 };
+	}
 	PhysicsStepResult PhysicsWorld::Step(const PhysicsStepConfig &Config) {
 		return Backend ? Backend->Step(Config) : PhysicsStepResult{};
 	}

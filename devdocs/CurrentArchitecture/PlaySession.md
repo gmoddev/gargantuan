@@ -1,3 +1,16 @@
+---
+status: current
+owner: editor-runtime
+last_verified: 2026-08-21
+related_code:
+  - src/editor/PlaySession.cpp
+  - src/Engine.cpp
+  - src/services/Players.cpp
+  - tests/FoundationTests.cpp
+  - tests/PlayerRuntimeTests.cpp
+related_adrs: []
+---
+
 # Minimal local Play session
 
 ## Accepted ownership model
@@ -58,6 +71,24 @@ mutations.
 Stop destroys the exact runtime Engine/VM/graph/renderer and discards all runtime
 mutation. It never saves, changes persisted revision, advances authoritative
 revision, dirties the project, or adds Undo/Redo history.
+
+## Player runtime startup and teardown
+
+The runtime Engine initializes the canonical Players service with exactly one
+local Player, attaches ActionMap to the runtime UserInputService, and creates the
+unarchivable shipped-Luau player module subtree. On the first Script step those
+modules install default semantic bindings, assemble the Player character, and
+connect controller/camera policy to `PreSimulation` and `PreRender`. The subtree
+exists only in the deserialized runtime graph; it is never copied back to the
+authoring graph.
+
+Stop destroys the shipped modules first so their Luau cleanup releases pointer
+capture, signal connections, ActionMap bindings, camera state, and character
+Instances. Players then removes LocalPlayer, and Engine destroys the remaining
+runtime world/VM. Focus loss and Stop both clear physical and semantic input.
+Repeated Play/Stop tests verify that authoring descendants, revision, dirty
+state, and history remain unchanged while runtime actions, Players, characters,
+modules, and connections are recreated and discarded per session.
 
 ## Deliberately deferred
 
