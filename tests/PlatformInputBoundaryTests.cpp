@@ -166,6 +166,21 @@ namespace {
 		CheckMovementKey(PhysicalKey::D, LogicalKey::D);
 		CheckMovementKey(PhysicalKey::Space, LogicalKey::Space);
 		CheckMovementKey(PhysicalKey::LeftShift, LogicalKey::LeftShift);
+		const auto BeforeRepeatedX = CameraValue->GetCFrame();
+		for (int Index = 0; Index < 4050; ++Index)
+			(void)CameraValue->ProcessEvent(PointerMoveEvent{{1}, {0.0f, 0.0f}, {1.0f, 0.0f}});
+		CameraValue->Step(0.0f);
+		assert(!CameraValue->GetCFrame().FuzzyEq(BeforeRepeatedX));
+		const auto BeforeRepeatedY = CameraValue->GetCFrame();
+		for (int Index = 0; Index < 1000; ++Index)
+			(void)CameraValue->ProcessEvent(PointerMoveEvent{{1}, {0.0f, 0.0f}, {0.0f, 1.0f}});
+		CameraValue->Step(0.0f);
+		assert(!CameraValue->GetCFrame().FuzzyEq(BeforeRepeatedY));
+		const auto AtPitchClamp = CameraValue->GetCFrame();
+		for (int Index = 0; Index < 1000; ++Index)
+			(void)CameraValue->ProcessEvent(PointerMoveEvent{{1}, {0.0f, 0.0f}, {0.0f, 1.0f}});
+		CameraValue->Step(0.0f);
+		assert(CameraValue->GetCFrame().FuzzyEq(AtPitchClamp));
 		(void)CameraValue->ProcessEvent(KeyEvent{
 			.Device = {1}, .Physical = PhysicalKey::W, .Logical = LogicalKey::W,
 			.State = ButtonState::Pressed,
@@ -177,6 +192,18 @@ namespace {
 		const auto AfterFocusLoss = CameraValue->GetCFrame();
 		CameraValue->Step(0.1f);
 		assert(CameraValue->GetCFrame().FuzzyEq(AfterFocusLoss));
+		Command = CameraValue->ProcessEvent(PointerButtonEvent{
+			{1}, PointerButton::Right, ButtonState::Released, {0.0f, 0.0f}
+		});
+		assert(Command && !std::get<SetRelativePointerMode>(*Command).Enabled);
+		Command = CameraValue->ProcessEvent(RightDown);
+		assert(Command && std::get<SetRelativePointerMode>(*Command).Enabled);
+		const auto BeforeCleanReentry = CameraValue->GetCFrame();
+		CameraValue->Step(0.0f);
+		assert(CameraValue->GetCFrame().FuzzyEq(BeforeCleanReentry));
+		(void)CameraValue->ProcessEvent(PointerMoveEvent{{1}, {0.0f, 0.0f}, {0.0f, -10.0f}});
+		CameraValue->Step(0.0f);
+		assert(!CameraValue->GetCFrame().FuzzyEq(BeforeCleanReentry));
 		Command = CameraValue->ProcessEvent(PointerButtonEvent{
 			{1}, PointerButton::Right, ButtonState::Released, {0.0f, 0.0f}
 		});

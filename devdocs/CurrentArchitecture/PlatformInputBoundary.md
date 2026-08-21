@@ -1,7 +1,7 @@
 ---
 status: current
 owner: runtime
-last_verified: 2026-08-16
+last_verified: 2026-08-21
 related_code:
   - include/gargantuan/platform/HostEvent.hpp
   - src/platform/sdl/
@@ -96,15 +96,26 @@ for a future UI/input router; it does not define camera-first precedence.
 behavior. Focus loss clears active service and camera key/button state and
 releases relative-pointer mode.
 
-The Studio Play viewport uses this same semantic boundary: Avalonia pointer
-press/release and motion become `PointerButtonEvent`/`PointerMoveEvent`, and the
-camera's relative-pointer `HostCommand` returns through EditorHost. Capture is
-restricted to the focused Play viewport and cleared on RMB up, focus loss, Stop,
-session disposal, or host disconnect.
+The Studio Play viewport uses this same semantic boundary. Avalonia supplies
+pointer-button transitions and uncaptured absolute motion. Once the camera's
+relative-pointer `HostCommand` returns through EditorHost, the supported Windows
+Studio host reads physical relative mouse motion from `WM_INPUT`; it forwards
+those raw X/Y deltas as `PointerMoveEvent.Delta` without reconstructing them from
+cursor positions, clamping them to the viewport, or warping the cursor. The
+position carried beside a captured move remains the fixed capture anchor and
+does not determine motion. Pre-activation raw packets are discarded.
+
+Studio owns the focused Play viewport capture and its forwarding lifecycle.
+Capture and pending motion are cleared on RMB up, viewport or window focus loss,
+Stop, unexpected runtime exit, viewport failure, session disposal, or host
+disconnect. Re-entry establishes a new capture generation with no retained
+delta. EditorHost and `PlaySession` receive only semantic host events; engine
+services and gameplay code do not know about Avalonia coordinates, Win32 raw
+input, cursor boundaries, or capture implementation.
 
 The retained UI focus system, action/binding framework, touch/pen semantics,
-IME composition, gamepad remapping, and multi-window architecture are not part
-of this boundary.
+IME composition, gamepad remapping, non-Windows Studio relative-pointer
+backends, and multi-window architecture are not part of this boundary.
 
 ## Coupling audit
 
