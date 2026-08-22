@@ -481,6 +481,7 @@ namespace {
 	void TestUnreliableSequencedVisibilityAndLimits() {
 		SimulatedTransportConfiguration Lossy;
 		Lossy.UnreliableLossProbability = 1.0;
+		std::vector<RemoteRequestTerminalStatus> Terminals;
 		RemoteFixture Fixture(Lossy, TestLimits(2));
 		const ObjectId Unreliable{201, 1};
 		const ObjectId Sequenced{202, 1};
@@ -581,7 +582,6 @@ namespace {
 			"guessed hidden ObjectId fails before scheduler submission"
 		);
 
-		std::vector<RemoteRequestTerminalStatus> Terminals;
 		for (int Index = 0; Index < 3; ++Index) {
 			auto Result = Fixture.Client->StartRequest(
 				Fixture.ClientConnection,

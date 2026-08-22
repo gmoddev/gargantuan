@@ -9,8 +9,11 @@
 #include <format>
 #include <lua.h>
 #include <lualib.h>
+#include <mutex>
+#include <string>
 #include <string_view>
 #include <type_traits>
+#include <unordered_set>
 #include <utility>
 
 #define G_USERDATA_IMPL(classType, ...) const classType::Definition classType::DEFINITION{__VA_ARGS__};
@@ -219,12 +222,15 @@ namespace gargantuan {
 			return instance;
 		}
 
-		static void PushMethodAsClosure(lua_State *L, std::string_view name, const Method &method) {
+		static void PushMethodAsClosure(lua_State *L, std::string_view Name, const Method &MethodDefinition) {
 			const Definition &definition = ClassType::DEFINITION;
-
-			std::string typeString(definition.Type.data(), definition.Type.size());
-			std::string methodName(name.data(), name.size());
-			std::string debugString = std::format("{}.{}", typeString, methodName.data());
+			static std::mutex DebugNameMutex;
+			static std::unordered_set<std::string> DebugNames;
+			const char *DebugName = nullptr;
+			{
+				std::scoped_lock Lock(DebugNameMutex);
+				DebugName = DebugNames.emplace(std::format("{}.{}", definition.Type, Name)).first->c_str();
+			}
 
 			auto closure = [](lua_State *L) -> int {
 				auto *methodPointer = static_cast<Method *>(lua_touserdata(L, lua_upvalueindex(1)));
@@ -248,8 +254,8 @@ namespace gargantuan {
 				);
 			};
 
-			lua_pushlightuserdata(L, const_cast<Method *>(&method));
-			lua_pushcclosure(L, closure, debugString.c_str(), 1);
+			lua_pushlightuserdata(L, const_cast<Method *>(&MethodDefinition));
+			lua_pushcclosure(L, closure, DebugName, 1);
 		}
 	};
 
