@@ -5403,8 +5403,10 @@ namespace {
 			std::filesystem::path Root;
 			~SaveAsCleanup() { std::filesystem::remove_all(Root); }
 		} SaveAsCleanupState{SaveAsRoot};
+		const auto ExpectedSaveAsRoot = std::filesystem::weakly_canonical(SaveAsRoot);
 		auto SaveAs = call("SaveProjectAs", {{"Destination", SaveAsRoot.string()}}, "test-token");
-		Check(SaveAs["Ok"].get<bool>() && SaveAs["Result"]["CurrentDestination"] == SaveAsRoot.generic_string() &&
+		Check(SaveAs["Ok"].get<bool>() &&
+			SaveAs["Result"]["CurrentDestination"] == ExpectedSaveAsRoot.generic_string() &&
 			std::filesystem::is_regular_file(SaveAsRoot / ".gargantuan" / "project.instance.json") &&
 			std::filesystem::is_regular_file(SaveAsRoot / ".gargantuan" / "prerun.luau"),
 			"Save As persists the existing project format and adopts the destination only after success");
@@ -5424,7 +5426,7 @@ namespace {
 		auto FailedSaveAs = call("SaveProjectAs", {{"Destination", InvalidSaveAsDestination.string()}}, "test-token");
 		auto StateAfterFailedSaveAs = call("GetProjectState", Json::object(), "test-token");
 		Check(!FailedSaveAs["Ok"].get<bool>() && FailedSaveAs["Error"]["Code"] == "InvalidDestination" &&
-			StateAfterFailedSaveAs["Result"]["CurrentDestination"] == SaveAsRoot.generic_string() &&
+			StateAfterFailedSaveAs["Result"]["CurrentDestination"] == ExpectedSaveAsRoot.generic_string() &&
 			StateAfterFailedSaveAs["Result"] == StateBeforeFailedSaveAs["Result"] &&
 			StateAfterFailedSaveAs["Result"]["Dirty"].get<bool>(),
 			"failed Save As preserves the prior destination, persisted revision, and dirty state");
