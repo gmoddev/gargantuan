@@ -1,0 +1,170 @@
+name: Native engine CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-native:
+    name: Windows x64 / MSVC 19.50+ / Release
+    runs-on: windows-2025-vs2026
+    timeout-minutes: 90
+    env:
+      CMAKE_BUILD_PARALLEL_LEVEL: 4
+      VULKAN_SDK_CHOCOLATEY_VERSION: 1.4.350
+
+    steps:
+      - name: Checkout recursive dependencies
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: recursive
+
+      - name: Verify recursive dependency checkout
+        shell: pwsh
+        run: |
+          $Status = git submodule status --recursive
+          if ($LASTEXITCODE -ne 0) {
+            throw "Unable to inspect Git submodules. Ensure Git is installed and the checkout includes recursive submodules."
+          }
+          $Invalid = @($Status -split "`n" | Where-Object { $_ -match '^[\-+U]' })
+          if ($Invalid.Count -ne 0) {
+            throw "Submodules are missing, conflicted, or not at their pinned revisions:`n$($Invalid -join "`n")"
+          }
+          $Status
+
+      - name: Install pinned repository tools
+        uses: paradoxum-games/setup-rokit@c6a9749169e3a0146019b899cd0342556f773908 # v3
+        with:
+          version: 1.2.0
+          cache: true
+
+      - name: Locate class-generator formatter
+        shell: pwsh
+        run: |
+          $ClangFormatCommand = Get-Command clang-format.exe -ErrorAction SilentlyContinue
+          $ClangFormatPath = if ($ClangFormatCommand) { $ClangFormatCommand.Source } else { $null }
+          if (-not $ClangFormatPath) {
+            $VsWhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+            if (Test-Path -LiteralPath $VsWhere -PathType Leaf) {
+              $Installation = & $VsWhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+              $VisualStudioLlvm = if ($Installation) { Join-Path $Installation 'VC\Tools\Llvm' } else { $null }
+              if ($VisualStudioLlvm -and (Test-Path -LiteralPath $VisualStudioLlvm)) {
+                $ClangFormatPath = Get-ChildItem -LiteralPath $VisualStudioLlvm -Filter clang-format.exe -File -Recurse |
+                  Select-Object -First 1 -ExpandProperty FullName
+              }
+            }
+          }
+          if (-not $ClangFormatPath) {
+            throw "clang-format is required by tools/classgen.luau but was not found on PATH or in Visual Studio's LLVM tools."
+          }
+          $ClangFormatDirectory = Split-Path -Parent $ClangFormatPath
+          $ClangFormatDirectory | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          & $ClangFormatPath --version
+
+      - name: Generate native class and reflection sources
+        shell: pwsh
+        run: |
+          if (-not $env:HOME) {
+            throw "The runner HOME environment variable is required by Lute but is not defined."
+          }
+          lute tools/classgen
+          if ($LASTEXITCODE -ne 0) {
+            throw "Class generation failed. Verify the pinned Lute installation and clang-format availability."
+          }
+          $RequiredGeneratedFiles = @(
+            'include/gargantuan/classes/generated/Instance.hpp',
+            'src/classes/generated/Instance.cpp',
+            'include/gargantuan/services/generated/Workspace.hpp',
+            'src/services/generated/Workspace.cpp'
+          )
+          $Missing = @($RequiredGeneratedFiles | Where-Object { -not (Test-Path -LiteralPath $_ -PathType Leaf) })
+          if ($Missing.Count -ne 0) {
+            throw "Class generation completed without required outputs: $($Missing -join ', ')"
+          }
+
+      - name: Install shader compiler
+        shell: pwsh
+        run: |
+          choco install vulkan-sdk --version=$env:VULKAN_SDK_CHOCOLATEY_VERSION --yes --no-progress
+          if ($LASTEXITCODE -notin @(0, 1641, 3010)) {
+            throw "Vulkan SDK installation failed with exit code $LASTEXITCODE. Gargantuan requires glslc to compile its SPIR-V shaders."
+          }
+          $Glslc = Get-ChildItem -LiteralPath 'C:\VulkanSDK' -Filter glslc.exe -File -Recurse -ErrorAction SilentlyContinue |
+            Where-Object { $_.DirectoryName -match '[\\/]Bin$' } |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1
+          if (-not $Glslc) {
+            throw "The Vulkan SDK installed, but glslc.exe was not found beneath C:\VulkanSDK."
+          }
+          & $Glslc.FullName --version
+          if ($LASTEXITCODE -ne 0) {
+            throw "The discovered glslc executable could not report its version: $($Glslc.FullName)"
+          }
+          "GLSLC_EXECUTABLE=$($Glslc.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Locate supported MSVC toolchain
+        shell: pwsh
+        run: |
+          $VsWhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          if (-not (Test-Path -LiteralPath $VsWhere -PathType Leaf)) {
+            throw "vswhere.exe is missing; the supported Visual Studio 2026 C++ toolchain cannot be located."
+          }
+          $Installation = & $VsWhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if ($LASTEXITCODE -ne 0 -or -not $Installation) {
+            throw "Visual Studio with the x64 C++ build tools is required but was not found."
+          }
+          $DevCmd = Join-Path $Installation 'Common7\Tools\VsDevCmd.bat'
+          if (-not (Test-Path -LiteralPath $DevCmd -PathType Leaf)) {
+            throw "Visual Studio was found, but its developer environment script is missing: $DevCmd"
+          }
+          "VSDEVCMD=$DevCmd" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          if (-not $env:VCPKG_INSTALLATION_ROOT) {
+            throw "VCPKG_INSTALLATION_ROOT is not defined; the pinned GameNetworkingSockets Protobuf manifest cannot be restored."
+          }
+          $VcpkgToolchain = Join-Path $env:VCPKG_INSTALLATION_ROOT 'scripts\buildsystems\vcpkg.cmake'
+          if (-not (Test-Path -LiteralPath $VcpkgToolchain -PathType Leaf)) {
+            throw "The vcpkg CMake toolchain is missing: $VcpkgToolchain"
+          }
+          "VCPKG_TOOLCHAIN=$VcpkgToolchain" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Configure Release engine and tests
+        shell: cmd
+        run: |
+          call "%VSDEVCMD%" -arch=x64 -host_arch=x64
+          if errorlevel 1 exit /b %errorlevel%
+          where cl || (echo ERROR: MSVC cl.exe is unavailable after VsDevCmd initialization. & exit /b 1)
+          where cmake || (echo ERROR: CMake is required to configure Gargantuan but is not installed or on PATH. & exit /b 1)
+          where ninja || (echo ERROR: Ninja is required by the supported CI configuration but is not installed or on PATH. & exit /b 1)
+          cl /Bv
+          cmake --version
+          ninja --version
+          cmake -S . -B build-ci -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON -DGARGANTUAN_TRACY=OFF -DGARGANTUAN_WITH_GNS=ON -DGARGANTUAN_BUILD_RENDERER_BENCHMARKS=ON -DGARGANTUAN_BUILD_SERIALIZATION_BENCHMARKS=ON -DGARGANTUAN_BUILD_GLAZE_SERIALIZATION_PROTOTYPE=OFF -DGARGANTUAN_GLSLC_EXECUTABLE="%GLSLC_EXECUTABLE%" -DCMAKE_TOOLCHAIN_FILE="%VCPKG_TOOLCHAIN%" -DVCPKG_MANIFEST_DIR="%CD%\cmake\gns" -DVCPKG_INSTALLED_DIR="%CD%\build-ci\vcpkg_installed" -DVCPKG_TARGET_TRIPLET=x64-windows -DFETCHCONTENT_BASE_DIR="%CD%\build-ci\_deps"
+
+      - name: Build engine and registered test targets
+        shell: cmd
+        run: |
+          call "%VSDEVCMD%" -arch=x64 -host_arch=x64
+          if errorlevel 1 exit /b %errorlevel%
+          cmake --build build-ci --config Release --parallel %CMAKE_BUILD_PARALLEL_LEVEL%
+
+      - name: Run complete headless CTest contract
+        shell: pwsh
+        run: |
+          ctest --test-dir build-ci -C Release --parallel 2 --timeout 300 --output-on-failure --no-tests=error --output-junit build-ci/ctest-results.xml
+
+      - name: Upload native CI diagnostics
+        if: failure()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: native-ci-diagnostics
+          if-no-files-found: ignore
+          path: |
+            build-ci/CMakeFiles/CMakeConfigureLog.yaml
+            build-ci/Testing/Temporary/LastTest.log
+            build-ci/ctest-results.xml
