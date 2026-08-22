@@ -421,7 +421,7 @@ namespace gargantuan {
 							return {ReplicationApplyStatus::ApplyRejected, 0, "Wire enum identity is unknown"};
 					} else {
 						auto Native = DecodeNativeWireValue(*Record.Value);
-						if (!Native || (ReflectedProperty->Validate && !ReflectedProperty->Validate(*Native)))
+						if (!Native || !ReflectedProperty->IsValueValid(*Native))
 							return {ReplicationApplyStatus::ApplyRejected, 0, "Receiver rejected the WireValue"};
 					}
 				} catch (const std::exception &Error) {

@@ -124,7 +124,7 @@ namespace gargantuan {
 							throw std::invalid_argument("Snapshot enum identity is unknown");
 					} else {
 						auto Native = DecodeNativeValue(Value);
-						if (!Native || (Property->Validate && !Property->Validate(*Native)))
+						if (!Native || !Property->IsValueValid(*Native))
 							throw std::invalid_argument("Snapshot property value is invalid");
 					}
 				}

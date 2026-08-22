@@ -44,8 +44,10 @@
 #include "gargantuan/services/Workspace.hpp"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -58,6 +60,7 @@
 #include <nlohmann/json.hpp>
 #include <stdexcept>
 #include <sstream>
+#include <set>
 #include <thread>
 #include <type_traits>
 #include <vector>
@@ -4723,7 +4726,7 @@ namespace {
 		}
 		auto schema = call("GetSchema", Json::object(), "test-token");
 		Check(
-			schema["Ok"].get<bool>() && schema["Result"]["SchemaDiscoveryVersion"] == 4 &&
+			schema["Ok"].get<bool>() && schema["Result"]["SchemaDiscoveryVersion"] == 5 &&
 				!schema["Result"]["Classes"].empty() && !schema["Result"]["Definitions"].empty(),
 			"EditorHost exposes versioned frozen schema discovery without removing the class adapter"
 		);
@@ -4747,6 +4750,60 @@ namespace {
 			projectSchema["Result"]["Definitions"].begin(), projectSchema["Result"]["Definitions"].end(),
 			[](const Json &Definition) { return Definition["CanonicalName"] == "Game.StudioFolder"; }
 		);
+		auto FindSchemaDefinition = [&](std::string_view CanonicalName) {
+			return std::find_if(projectSchema["Result"]["Definitions"].begin(),
+				projectSchema["Result"]["Definitions"].end(), [&](const Json &Definition) {
+					return Definition["CanonicalName"].get<std::string>() == CanonicalName;
+				});
+		};
+		auto PartSchema = FindSchemaDefinition("Engine.Part");
+		auto BasePartSchema = FindSchemaDefinition("Engine.BasePart");
+		auto CameraSchema = FindSchemaDefinition("Engine.Camera");
+		auto WorkspaceSchema = FindSchemaDefinition("Engine.Workspace");
+		auto FindProperty = [](const Json &Definition, std::string_view Name) -> const Json * {
+			if (!Definition.contains("Properties")) return nullptr;
+			auto Property = std::find_if(Definition["Properties"].begin(), Definition["Properties"].end(),
+				[&](const Json &Candidate) { return Candidate["Name"].get<std::string>() == Name; });
+			return Property == Definition["Properties"].end() ? nullptr : &*Property;
+		};
+		const auto *ShapeMetadata = PartSchema == projectSchema["Result"]["Definitions"].end()
+			? nullptr : FindProperty(*PartSchema, "Shape");
+		const auto *TransparencyMetadata = BasePartSchema == projectSchema["Result"]["Definitions"].end()
+			? nullptr : FindProperty(*BasePartSchema, "Transparency");
+		const auto *ColorMetadata = BasePartSchema == projectSchema["Result"]["Definitions"].end()
+			? nullptr : FindProperty(*BasePartSchema, "Color");
+		const auto *CFrameMetadata = BasePartSchema == projectSchema["Result"]["Definitions"].end()
+			? nullptr : FindProperty(*BasePartSchema, "CFrame");
+		const auto *CameraFieldOfView = CameraSchema == projectSchema["Result"]["Definitions"].end()
+			? nullptr : FindProperty(*CameraSchema, "FieldOfView");
+		const auto *CameraViewport = CameraSchema == projectSchema["Result"]["Definitions"].end()
+			? nullptr : FindProperty(*CameraSchema, "ViewportSize");
+		const auto *CurrentCameraMetadata = WorkspaceSchema == projectSchema["Result"]["Definitions"].end()
+			? nullptr : FindProperty(*WorkspaceSchema, "CurrentCamera");
+		std::set<std::string> NativeDataTypes;
+		for (const auto &Definition : projectSchema["Result"]["Definitions"])
+			if (Definition.value("Kind", "") == "Class")
+				for (const auto &Property : Definition["Properties"])
+					NativeDataTypes.insert(Property["DataType"].get<std::string>());
+		Check(ShapeMetadata && (*ShapeMetadata)["DataType"] == "NativeEnum" &&
+			(*ShapeMetadata)["WireType"] == "EnumItem" && (*ShapeMetadata)["EnumKind"] == "Native" &&
+			(*ShapeMetadata)["EnumType"] == "PartType" && (*ShapeMetadata)["EnumItems"].size() >= 5 &&
+			TransparencyMetadata && (*TransparencyMetadata)["NumericRange"]["Minimum"] == 0.0 &&
+			(*TransparencyMetadata)["NumericRange"]["Maximum"] == 1.0 &&
+			ColorMetadata && (*ColorMetadata)["CompoundType"] == "Color3" &&
+			CFrameMetadata && (*CFrameMetadata)["EditorHint"] == "CFrameComponents" &&
+			CameraFieldOfView && (*CameraFieldOfView)["Editable"].get<bool>() &&
+			CameraViewport && !(*CameraViewport)["Editable"].get<bool>() &&
+			CurrentCameraMetadata && (*CurrentCameraMetadata)["DataType"] == "ObjectReference" &&
+			!(*CurrentCameraMetadata)["Editable"].get<bool>() && (*CurrentCameraMetadata)["Nullable"].get<bool>() &&
+			(*CurrentCameraMetadata)["ObjectReferenceClassSchemaId"] ==
+				SchemaId::FromNativeName("Engine", "Camera").ToString(),
+			"EditorHost round-trips native editor semantics, ranges, exact enum identity, and safe reference constraints");
+		Check(std::ranges::all_of(std::array{
+			"Bool", "Integer", "Number", "String", "Vector2", "Vector3", "Color3", "CFrame",
+			"NativeEnum", "ObjectReference",
+		}, [&](std::string_view Type) { return NativeDataTypes.contains(std::string(Type)); }),
+			"the frozen native schema emits metadata for the primitive and compound datatypes it currently declares");
 		Check(
 			projectSchema["Ok"].get<bool>() && discoveredEnum != projectSchema["Result"]["Definitions"].end() &&
 				(*discoveredEnum)["Kind"] == "Enum" && (*discoveredEnum)["Provenance"] == "Game" &&
@@ -4760,7 +4817,7 @@ namespace {
 					SchemaId::FromNativeName("Engine", "BasePart").ToString() &&
 				(*discoveredExtension)["Properties"].size() == 1 &&
 				(*discoveredExtension)["Properties"][0]["Default"]["Type"] == "Int",
-			"EditorHost schema discovery v4 exposes immutable bounded extension metadata"
+			"EditorHost schema discovery v5 exposes immutable bounded extension metadata"
 		);
 		Check(DiscoveredCustomClass != projectSchema["Result"]["Definitions"].end() &&
 			(*DiscoveredCustomClass)["Kind"] == "Class" &&
@@ -4811,6 +4868,94 @@ namespace {
 			(*CustomEditable)["ClassSchemaId"] == SchemaId::FromCustomClassName("Game", "StudioFolder").ToString(),
 			"EditorHost snapshot carries stable custom class identity/version");
 		Check(WorkspaceObject != objects.end(), "EditorHost snapshot contains the protected Workspace service");
+		Check(snapshot["Result"]["Snapshot"]["EditorPropertyValuesVersion"] == 1 &&
+			extensionTarget != objects.end() && (*extensionTarget).contains("EditorProperties") &&
+			(*extensionTarget)["EditorProperties"].contains("Shape") &&
+			(*extensionTarget)["EditorProperties"].contains("CFrame"),
+			"EditorHost snapshot carries a versioned authoritative native-property projection");
+		if (extensionTarget != objects.end() && WorkspaceObject != objects.end() && ShapeMetadata &&
+			PartSchema != projectSchema["Result"]["Definitions"].end() &&
+			BasePartSchema != projectSchema["Result"]["Definitions"].end() &&
+			WorkspaceSchema != projectSchema["Result"]["Definitions"].end()) {
+			auto SetNative = [&](std::string_view Property, const Json &Value, const Json &DeclaringId,
+				std::uint32_t DeclaringVersion = 1) {
+				return call("SetProperty", {
+					{"Object", (*extensionTarget)["Id"]}, {"ClassSchemaId", (*PartSchema)["SchemaId"]},
+					{"ClassDefinitionVersion", (*PartSchema)["DefinitionVersion"]},
+					{"DeclaringClassSchemaId", DeclaringId},
+					{"DeclaringDefinitionVersion", DeclaringVersion},
+					{"Property", Property}, {"Value", Value},
+				}, "test-token");
+			};
+			const auto BeforeRejectedNative = (*extensionTarget)["EditorProperties"];
+			auto StaleNative = SetNative("Shape", {{"Type", "EnumItem"}, {"Enum", "PartType"}, {"Value", "Ball"}},
+				(*PartSchema)["SchemaId"], 2);
+			auto MalformedNative = SetNative("CFrame", {{"Type", "CFrame"}, {"Value", {1.0, 2.0}}},
+				(*BasePartSchema)["SchemaId"]);
+			auto OutOfRangeNative = SetNative("Transparency", {{"Type", "Float"}, {"Value", 2.0}},
+				(*BasePartSchema)["SchemaId"]);
+			auto ReadOnlyNative = SetNative("Position", {{"Type", "Vector3"}, {"Value", {1.0, 2.0, 3.0}}},
+				(*BasePartSchema)["SchemaId"]);
+			auto WrongEnumType = SetNative("Shape",
+				{{"Type", "EnumItem"}, {"Enum", "CameraType"}, {"Value", "Ball"}},
+				(*PartSchema)["SchemaId"]);
+			auto DisplayEnumIdentity = SetNative("Shape",
+				{{"Type", "EnumItem"}, {"Enum", "PartType"}, {"Value", "Ball (1)"}},
+				(*PartSchema)["SchemaId"]);
+			auto ReadOnlyReference = call("SetProperty", {
+				{"Object", (*WorkspaceObject)["Id"]},
+				{"ClassSchemaId", (*WorkspaceSchema)["SchemaId"]},
+				{"ClassDefinitionVersion", (*WorkspaceSchema)["DefinitionVersion"]},
+				{"DeclaringClassSchemaId", (*WorkspaceSchema)["SchemaId"]},
+				{"DeclaringDefinitionVersion", (*WorkspaceSchema)["DefinitionVersion"]},
+				{"Property", "CurrentCamera"}, {"Value", {{"Type", "Null"}}},
+			}, "test-token");
+			auto AfterRejectedSnapshot = call("GetSnapshot", Json::object(), "test-token");
+			auto AfterRejectedPart = std::find_if(AfterRejectedSnapshot["Result"]["Snapshot"]["Objects"].begin(),
+				AfterRejectedSnapshot["Result"]["Snapshot"]["Objects"].end(), [&](const Json &Object) {
+					return Object["Id"] == (*extensionTarget)["Id"];
+				});
+			Check(!StaleNative["Ok"].get<bool>() && StaleNative["Error"]["Code"] == "StaleSchema" &&
+				!MalformedNative["Ok"].get<bool>() && !OutOfRangeNative["Ok"].get<bool>() &&
+				!ReadOnlyNative["Ok"].get<bool>() && ReadOnlyNative["Error"]["Code"] == "ReadOnly" &&
+				!WrongEnumType["Ok"].get<bool>() && !DisplayEnumIdentity["Ok"].get<bool>() &&
+				!ReadOnlyReference["Ok"].get<bool>() && ReadOnlyReference["Error"]["Code"] == "ReadOnly" &&
+				AfterRejectedPart != AfterRejectedSnapshot["Result"]["Snapshot"]["Objects"].end() &&
+				(*AfterRejectedPart)["EditorProperties"] == BeforeRejectedNative &&
+				call("PollChanges", Json::object(), "test-token")["Result"]["Records"].empty(),
+				"malformed, out-of-range, stale, display-enum, and read-only native edits preserve authoritative state");
+
+			Check(SetNative("Anchored", {{"Type", "Bool"}, {"Value", true}},
+				(*BasePartSchema)["SchemaId"])["Ok"].get<bool>(), "Studio edits native Bool values");
+			Check(SetNative("Transparency", {{"Type", "Float"}, {"Value", 0.25}},
+				(*BasePartSchema)["SchemaId"])["Ok"].get<bool>(), "Studio edits bounded finite Number values");
+			Check(SetNative("Size", {{"Type", "Vector3"}, {"Value", {2.0, 3.0, 4.0}}},
+				(*BasePartSchema)["SchemaId"])["Ok"].get<bool>(), "Studio edits native Vector3 values");
+			Check(SetNative("Color", {{"Type", "Color3"}, {"Value", {0.2, 0.4, 0.6}}},
+				(*BasePartSchema)["SchemaId"])["Ok"].get<bool>(), "Studio edits bounded native Color3 values");
+			Check(SetNative("CFrame", {{"Type", "CFrame"},
+				{"Value", {0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0}}},
+				(*BasePartSchema)["SchemaId"])["Ok"].get<bool>(), "Studio edits bounded-component native CFrame values");
+			Check(SetNative("Shape", {{"Type", "EnumItem"}, {"Enum", "PartType"}, {"Value", "Ball"}},
+				(*PartSchema)["SchemaId"])["Ok"].get<bool>(), "Studio mutates native enums by canonical item identity");
+			auto NativeChanges = call("PollChanges", Json::object(), "test-token");
+			Check(NativeChanges["Result"]["Records"].size() == 6 &&
+				std::ranges::all_of(NativeChanges["Result"]["Records"], [](const Json &Record) {
+					return Record["Operation"] == "PropertyUpdate";
+				}) && NativeChanges["Result"]["Records"].back()["Value"] ==
+					Json{{"Type", "EnumItem"}, {"Enum", "PartType"}, {"Value", "Ball"}},
+				"native editor mutations reconcile only through canonical journal WireValues");
+			auto UndoNativeEnum = call("Undo", Json::object(), "test-token");
+			auto UndoNativeChanges = call("PollChanges", Json::object(), "test-token");
+			auto RedoNativeEnum = call("Redo", Json::object(), "test-token");
+			auto RedoNativeChanges = call("PollChanges", Json::object(), "test-token");
+			Check(UndoNativeEnum["Ok"].get<bool>() && RedoNativeEnum["Ok"].get<bool>() &&
+				UndoNativeChanges["Result"]["Records"].size() == 1 &&
+				UndoNativeChanges["Result"]["Records"][0]["Value"]["Value"] == "Block" &&
+				RedoNativeChanges["Result"]["Records"].size() == 1 &&
+				RedoNativeChanges["Result"]["Records"][0]["Value"]["Value"] == "Ball",
+				"Undo and Redo restore exact native enum identity through the authoritative journal");
+		}
 		Json StructuralDestinationId;
 		Json StructuralDuplicateId;
 		if (WorkspaceObject != objects.end() && DiscoveredCustomClass != projectSchema["Result"]["Definitions"].end()) {
@@ -5234,6 +5379,7 @@ namespace {
 			auto ReopenedWorld = ReopenProject.DeserializeGame();
 			auto Destination = ReopenedWorld->FindFirstDescendant("StructuralDestination");
 			auto SurvivingDuplicate = Destination ? Destination->FindFirstChild("StructuralSource", false) : nullptr;
+			auto ReopenedPart = std::dynamic_pointer_cast<Part>(ReopenedWorld->FindFirstDescendant("PickTarget"));
 			Check(Destination && SurvivingDuplicate &&
 				SurvivingDuplicate->GetAttributeValue("Health", ScriptSecurityContext::CoreTrusted()) ==
 					std::optional<WireValue>(std::int32_t{42}) &&
@@ -5241,6 +5387,14 @@ namespace {
 					"StructuralTag", ScriptSecurityContext::CoreTrusted()) &&
 				SurvivingDuplicate->FindFirstChild("StructuralChild", false),
 				"Save/reopen preserves duplicate subtree, reparent, state, and prior deletion");
+			Check(ReopenedPart && ReopenedPart->GetAnchored(),
+				"Save/reopen preserves authoritative native Bool edits");
+			Check(ReopenedPart && std::abs(ReopenedPart->GetTransparency() - 0.25f) < 0.0001f,
+				"Save/reopen preserves authoritative native Number edits");
+			Check(ReopenedPart && ReopenedPart->GetSize() == glm::vec3(2.0f, 3.0f, 4.0f),
+				"Save/reopen preserves authoritative native compound edits");
+			Check(ReopenedPart && ReopenedPart->GetShape() == Enums::PartType::Ball,
+				"Save/reopen preserves authoritative native enum edits");
 			ReopenedWorld->Destroy();
 		}
 		const auto SaveAsRoot = temporaryRoot.parent_path() /

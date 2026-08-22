@@ -429,31 +429,48 @@ namespace gargantuan {
 							return {MutationStatus::StaleObject, std::nullopt, "Object identity is stale"};
 						if (Authority.GetScope() && InstanceValue->GetReplicationScopeId() != *Authority.GetScope())
 							return {MutationStatus::Rejected, std::nullopt, "Object is outside the project scope"};
-						if constexpr (std::is_same_v<Command, UpdatePropertyCommand>) {
+						if constexpr (std::is_same_v<Command, UpdatePropertyCommand> ||
+							std::is_same_v<Command, UpdateWirePropertyCommand>) {
 							if (CommandValue.PropertyName == "Source" &&
 								std::dynamic_pointer_cast<LuaSourceContainer>(InstanceValue))
 								return {MutationStatus::Unauthorized, std::nullopt,
 									"Script source requires the dedicated source-authoring operation"};
 							auto DataModelValue = InstanceValue->GetDataModel();
 							auto *Property = InstanceValue->FindProperty(CommandValue.PropertyName);
+							if (Authority.GetOrigin() == MutationCommandOrigin::Studio &&
+								(!Property || !Property->Editable ||
+								 Property->SemanticType == InstanceProperty::DataType::Unsupported ||
+								 Property->SemanticType == InstanceProperty::DataType::ObjectReference))
+								return {MutationStatus::ReadOnly, CommandValue.Object,
+									"Property is not exposed for Studio editing by the frozen schema"};
 							auto Before = InstanceValue->ReadPropertyWireValue(CommandValue.PropertyName)
-											  .value_or(WireValue(std::monostate{}));
+										  .value_or(WireValue(std::monostate{}));
+							auto Requested = [&]() -> WireValue {
+								if constexpr (std::is_same_v<Command, UpdateWirePropertyCommand>) return CommandValue.Value;
+								else return EncodeNativeWireValue(CommandValue.Value).value_or(Before);
+							}();
 							PropertyTransactionChange Prototype{
 								CommandValue.Object,
 								Property ? Property->DeclaringSchemaId : SchemaId{},
 								Property ? Property->DeclaringDefinitionVersion : 0,
 								CommandValue.PropertyName,
 								Before,
-								EncodeNativeWireValue(CommandValue.Value).value_or(Before),
+								Requested,
 							};
 							return ApplyAuthoringTransaction(
 								DataModelValue,
 								"Set " + CommandValue.PropertyName,
 								Prototype,
 								[&] {
-							const auto Status = InstanceValue->ApplyPropertyMutation(
-								CommandValue.PropertyName, CommandValue.Value, Enums::Permission::None, securityContext
-							);
+							const auto Status = [&] {
+								if constexpr (std::is_same_v<Command, UpdateWirePropertyCommand>)
+									return InstanceValue->ApplyPropertyWireMutation(
+										CommandValue.PropertyName, CommandValue.Value, Enums::Permission::None, securityContext
+									);
+								else return InstanceValue->ApplyPropertyMutation(
+									CommandValue.PropertyName, CommandValue.Value, Enums::Permission::None, securityContext
+								);
+							}();
 							return MutationResult {
 								Status,
 								CommandValue.Object,
@@ -852,9 +869,8 @@ namespace gargantuan {
 						const auto Expected = ResolveWireReferences(Forward ? Typed.Before : Typed.After, History);
 						if (InstanceValue->ReadPropertyWireValue(Typed.PropertyName) != std::optional<WireValue>(Expected))
 							return {MutationStatus::ValidationFailed, {}, "History property state has diverged"};
-						auto Native = DecodeNativeWireValue(ResolveWireReferences(Forward ? Typed.After : Typed.Before, History));
-						if (!Native) return {MutationStatus::ValidationFailed, {}, "History property value is unsupported"};
-						return Gateway.Apply(UpdatePropertyCommand{Object, Typed.PropertyName, std::move(*Native)},
+						auto Value = ResolveWireReferences(Forward ? Typed.After : Typed.Before, History);
+						return Gateway.Apply(UpdateWirePropertyCommand{Object, Typed.PropertyName, std::move(Value)},
 							MutationAuthorityContext::Local(SecurityContext));
 					} else if constexpr (std::is_same_v<ChangeType, ScriptSourceTransactionChange>) {
 						auto Object = History.ResolveIdentity(Typed.Object);

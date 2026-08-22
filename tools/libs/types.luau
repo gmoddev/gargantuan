@@ -5,6 +5,13 @@ export type Type = {
 	read cIncludes: { string }?,
 	read cForwardStatement: string?,
 	read luauType: string,
+	read editorDataType: string?,
+	read wireType: string?,
+	read compoundType: string?,
+	read enumName: string?,
+	read objectClassName: string?,
+	read nullable: boolean?,
+	read optionalValue: Type?,
 }
 
 const function type(x: Type): Type
@@ -15,27 +22,43 @@ const function literal<T>(x: T | ""): T
 	return x
 end
 
+
+const EDITOR_DATATYPES = table.freeze({
+	CFrame = true,
+	Color3 = true,
+	UDim = true,
+	UDim2 = true,
+	Vector2 = true,
+	Vector3 = true,
+})
+
 const function datatype(typename: string, cType: string?): Type
+	const editorDataType = if EDITOR_DATATYPES[typename] then typename else nil
 	return {
 		kind = literal("datatype"),
 		cType = cType or "gargantuan::" .. typename,
 		cIncludes = { `"gargantuan/datatypes/{typename}.hpp"` },
 		luauType = typename,
+		editorDataType = editorDataType,
+		wireType = editorDataType,
+		compoundType = editorDataType,
 	}
 end
 
 const types = {
-	Bool = type({ kind = literal("c"), cType = "bool", luauType = "boolean" }),
-	Double = type({ kind = literal("c"), cType = "double", luauType = "number" }),
-	Float = type({ kind = literal("c"), cType = "float", luauType = "number" }),
-	Integer = type({ kind = literal("c"), cType = "int", luauType = "number" }),
-	String = type({ kind = literal("c"), cType = "std::string", cIncludes = { "<string>" }, luauType = "string" }),
-	StringPointer = type({ kind = literal("c"), cType = "const char *", luauType = "string" }),
+	Bool = type({ kind = literal("c"), cType = "bool", luauType = "boolean", editorDataType = "Bool", wireType = "Bool" }),
+	Double = type({ kind = literal("c"), cType = "double", luauType = "number", editorDataType = "Number", wireType = "Double" }),
+	Float = type({ kind = literal("c"), cType = "float", luauType = "number", editorDataType = "Number", wireType = "Float" }),
+	Integer = type({ kind = literal("c"), cType = "int", luauType = "number", editorDataType = "Integer", wireType = "Int" }),
+	String = type({ kind = literal("c"), cType = "std::string", cIncludes = { "<string>" }, luauType = "string", editorDataType = "String", wireType = "String" }),
+	StringPointer = type({ kind = literal("c"), cType = "const char *", luauType = "string", editorDataType = "String", wireType = "String" }),
 	StringView = type({
 		kind = literal("c"),
 		cType = "std::string_view",
 		cIncludes = { "<string_view>" },
 		luauType = "string",
+		editorDataType = "String",
+		wireType = "String",
 	}),
 
 	Axes = datatype("Axes"),
@@ -66,6 +89,10 @@ function types.Instance(className: string?): Type
 		cIncludes = { `"gargantuan/classes/{className}.hpp"` },
 		cForwardStatement = `class {className};`,
 		luauType = className,
+		editorDataType = "ObjectReference",
+		wireType = "ObjectReference",
+		objectClassName = className,
+		nullable = true,
 	}
 end
 
@@ -128,6 +155,9 @@ function types.EnumItem(enumName: string?): Type
 			cIncludes = { `"gargantuan/reflection/Enums.hpp"` },
 			cForwardStatement = `namespace Enums \{ enum {enumName}; };`,
 			luauType = `Enum.{enumName}`,
+			editorDataType = "NativeEnum",
+			wireType = "EnumItem",
+			enumName = enumName,
 		}
 	end
 end
@@ -142,6 +172,12 @@ function types.Optional(base: Type): Type
 		cIncludes = cIncludes,
 		luauType = `{base.luauType}?`,
 		optionalValue = base,
+		editorDataType = base.editorDataType,
+		wireType = base.wireType,
+		compoundType = base.compoundType,
+		enumName = base.enumName,
+		objectClassName = base.objectClassName,
+		nullable = true,
 	}
 end
 

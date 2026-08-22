@@ -58,10 +58,10 @@ UTF-8 bytes with no NUL.
 | `CreateProject` | Creates, initially persists, and adopts a minimum project without accepting serialized state or revision input. |
 | `GetProjectState` | Returns authoritative/persisted revisions, derived dirty state, destination, and bounded history status. |
 | `SaveProject` / `SaveProjectAs` | Atomically persist an exact authoritative revision; Save As adopts its validated destination only after success. |
-| `GetSchema` | Returns class compatibility metadata plus schema-discovery v4 definitions and registry generation. |
-| `GetSnapshot` | Returns snapshot v6 and establishes the session cursor. |
+| `GetSchema` | Returns class compatibility metadata plus schema-discovery v5 definitions, native property semantics, and registry generation. |
+| `GetSnapshot` | Returns snapshot v6 plus editor-property projection v1 and establishes the session cursor. |
 | `PollChanges` | Returns scoped wire-journal v6 records after that cursor. |
-| `SetProperty` | Applies a closed non-reference `WireValue` through `MutationGateway`. |
+| `SetProperty` | Applies a schema-identified closed native-property `WireValue` through `MutationGateway`; legacy Name remains compatible. |
 | `SetAttribute` | Applies or removes a bounded attribute through `MutationGateway`. |
 | `SetExtensionProperty` | Applies a schema-resolved extension property through `MutationGateway`. |
 | `SetCustomProperty` | Applies a schema-resolved custom class property through `MutationGateway`. |
@@ -93,8 +93,10 @@ DataModel; decoded request data never supplies capabilities or scope. Attribute
 state is delivered by snapshot and dedicated `AttributeUpdate` records rather
 than a second polling path. `AddTag` and `RemoveTag` use that same authority;
 snapshot membership and `TagAdded`/`TagRemoved` carry committed tag state.
-Object-reference and enum-item property mutation, source mounts, and play
-sessions are deliberately outside v0. Script Source is intentionally excluded
+Native enum mutation uses canonical enum type and item identity. Object-reference
+metadata is exposed with stable class constraints but reference editing remains
+read-only. Source mounts and play sessions are otherwise deliberately outside
+the native property contract. Script Source is intentionally excluded
 from generic `SetProperty`; its dedicated token-checked operation is the only
 Studio write path. Viewport methods
 are a compatible capability extension with their own `ViewportVersion = 1`.
@@ -112,10 +114,11 @@ mutation gateway check it at their native boundaries. Every viewport method
 also checks `ViewportControl`. It does not grant
 process, filesystem, network, or arbitrary engine-native access.
 
-Schema discovery is read-only. Version 4 returns stable class/enum/extension
+Schema discovery is read-only. Version 5 returns stable class/enum/extension
 identity, definition kind and version, provenance, class-base and extension-target
 IDs, class construction/subclass policy and native host identity, ordered
-custom-enum items, and ordered declarative schema properties. Studio
+custom-enum items, ordered declarative schema properties, and native property
+datatype/access/category/range/hint/compound/enum/reference/nullability semantics. Studio
 does not receive `DefineSchema`, the PreRun facade, candidate registry access,
 or mutable native metadata. The top-level EditorHost protocol remains version
 1; schema discovery is independently versioned.

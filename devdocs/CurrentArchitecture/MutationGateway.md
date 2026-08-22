@@ -66,6 +66,7 @@ distinct from both Attributes and extension state.
 | Path | Current rule |
 | --- | --- |
 | Generated property setters | Main/lifecycle assertion, schema validation, assignment, one committed property record |
+| EditorHost native property writes | Exact class/declaring-schema identity, closed `WireValue`, canonical metadata validation, assignment, one committed property record |
 | Custom `BasePart` position/rotation setters | Validate alias, then use canonical `CFrame` setter and record `CFrame` |
 | Custom camera FOV setters | Validate alias, then use canonical `FieldOfView` setter and record `FieldOfView` |
 | Camera simulation movement | Uses `SetCFrame`/`SetViewportSize`; no direct reflected-field writes |

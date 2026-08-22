@@ -100,6 +100,11 @@ metadata for:
 - future replication (`None` or `FutureReplicated`);
 - write authority (`Main` or `Any`);
 - editability;
+- semantic editor datatype and closed wire type;
+- category/group, optional numeric range, and optional editor hint;
+- compound datatype identity;
+- stable native-enum type/item identity;
+- nullable object-reference class constraints;
 - an optional native validation predicate;
 - existing read/write permission levels.
 

@@ -91,9 +91,41 @@ namespace gargantuan {
 		enum class Persistence { Transient, Saved };
 		enum class Replication { None, FutureReplicated };
 		enum class Authority { Main, Any };
+		enum class DataType {
+			Unsupported,
+			Bool,
+			Integer,
+			Number,
+			String,
+			Vector2,
+			Vector3,
+			Color3,
+			UDim,
+			UDim2,
+			CFrame,
+			NativeEnum,
+			SchemaEnum,
+			ObjectReference,
+		};
+		struct NumericRange {
+			std::optional<double> Minimum;
+			std::optional<double> Maximum;
+			auto operator<=>(const NumericRange &) const = default;
+		};
 
 		std::string Name{};
 		std::string ReflectedTypedef{};
+		DataType SemanticType = DataType::Unsupported;
+		std::string WireType{};
+		std::string Category = "Data";
+		std::optional<NumericRange> Range{};
+		std::optional<std::string> EditorHint{};
+		std::optional<std::string> CompoundType{};
+		std::optional<std::string> NativeEnumType{};
+		std::optional<SchemaId> EnumSchemaId{};
+		std::uint32_t EnumDefinitionVersion = 0;
+		std::optional<SchemaId> ObjectReferenceClassSchemaId{};
+		bool Nullable = false;
 		std::any Unmodified{};
 		bool Signal{false};
 		Persistence PersistencePolicy = Persistence::Transient;
@@ -114,6 +146,7 @@ namespace gargantuan {
 		std::function<std::any(Instance *self)> Read;
 		std::function<std::shared_ptr<Instance>(Instance *self)> ReadObjectReference;
 		std::function<std::pair<std::string, int>(Instance *self)> ReadEnumValue;
+		std::function<std::optional<int>(const std::any &value)> ReadEncodedEnumValue;
 		std::function<int(lua_State *L, std::any value)> PushStack;
 
 		Enums::Permission WritePermission = Enums::Permission::None;
@@ -130,6 +163,53 @@ namespace gargantuan {
 			ReflectedTypedef = type;
 			return *this;
 		}
+
+		InstanceProperty &SetDataType(DataType type, std::string wireType) {
+			SemanticType = type;
+			WireType = std::move(wireType);
+			switch (type) {
+				case DataType::Vector2: CompoundType = "Vector2"; break;
+				case DataType::Vector3: CompoundType = "Vector3"; break;
+				case DataType::Color3: CompoundType = "Color3"; break;
+				case DataType::UDim: CompoundType = "UDim"; break;
+				case DataType::UDim2: CompoundType = "UDim2"; break;
+				case DataType::CFrame: CompoundType = "CFrame"; break;
+				default: CompoundType.reset(); break;
+			}
+			return *this;
+		}
+
+		InstanceProperty &SetCategory(std::string category) {
+			Category = std::move(category);
+			return *this;
+		}
+
+		InstanceProperty &SetNumericRange(std::optional<double> minimum, std::optional<double> maximum) {
+			Range = NumericRange{minimum, maximum};
+			return *this;
+		}
+
+		InstanceProperty &SetEditorHint(std::string hint) {
+			EditorHint = std::move(hint);
+			return *this;
+		}
+
+		InstanceProperty &SetNativeEnumType(std::string enumType) {
+			SemanticType = DataType::NativeEnum;
+			WireType = "EnumItem";
+			NativeEnumType = std::move(enumType);
+			return *this;
+		}
+
+		InstanceProperty &SetObjectReferenceType(SchemaId classSchemaId, bool nullable) {
+			SemanticType = DataType::ObjectReference;
+			WireType = "ObjectReference";
+			ObjectReferenceClassSchemaId = classSchemaId;
+			Nullable = nullable;
+			return *this;
+		}
+
+		[[nodiscard]] bool IsValueValid(const std::any &value) const;
 
 		InstanceProperty &SetUnmodified(std::any unmodified) {
 			Unmodified = unmodified;
@@ -259,6 +339,10 @@ namespace gargantuan {
 					if constexpr (std::is_member_function_pointer_v<decltype(Pointer)>) value = (obj->*Pointer)();
 					else value = obj->*Pointer;
 					return std::pair(std::string(magic_enum::enum_type_name<MemberType>()), static_cast<int>(value));
+				};
+				ReadEncodedEnumValue = [](const std::any &value) -> std::optional<int> {
+					if (auto typed = std::any_cast<MemberType>(&value)) return static_cast<int>(*typed);
+					return std::nullopt;
 				};
 			}
 

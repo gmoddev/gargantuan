@@ -114,6 +114,19 @@ namespace gargantuan::InstanceSerialization {
 					!property.Read || !property.Write)
 					continue;
 
+				if (property.ReadEnumValue) {
+					auto [EnumTypeName, EnumValue] = property.ReadEnumValue(instance.get());
+					auto EnumType = Enums::GetEnums().find(EnumTypeName);
+					auto EnumItemValue = EnumType == Enums::GetEnums().end()
+						? std::optional<EnumItem>{} : EnumType->second->FromValue(EnumValue);
+					if (!EnumItemValue)
+						throw std::runtime_error("Persisted native enum property has an unknown canonical value");
+					properties[key] = json::object({SerializedPair{
+						"EnumItem", {EnumTypeName, EnumItemValue->Name}
+					}});
+					continue;
+				}
+
 				auto value = property.Read(instance.get());
 				if (auto serialized = TrySerializeValue(value); serialized.has_value()) {
 					properties[key] = json::object({serialized.value()});
@@ -605,7 +618,19 @@ namespace gargantuan::InstanceSerialization {
 			auto deserialized = maybeDeserialized.value();
 
 			try {
-				if (property->Validate && !property->Validate(deserialized)) {
+				if (auto *EnumValue = std::any_cast<EnumItem>(&deserialized)) {
+					if (!EnumValue->EnumType || instance->ApplyPropertyWireMutation(
+							key,
+							WireEnumItem{std::string(EnumValue->EnumType->Name), std::string(EnumValue->Name)},
+							Enums::Permission::Engine,
+							ScriptSecurityContext::CoreTrusted()
+						) != MutationStatus::Success) {
+						instance->Destroy();
+						return state.ReturnError("Validation failed for enum property '{}' in {}", key, state.FormatCurrentPath());
+					}
+					continue;
+				}
+				if (!property->IsValueValid(deserialized)) {
 					instance->Destroy();
 					return state.ReturnError("Validation failed for property '{}' in {}", key, state.FormatCurrentPath());
 				}

@@ -12,6 +12,9 @@ export type ClassProperty = {
 	read editable: boolean?,
 	read authority: "Main" | "Any"?,
 	read writable: boolean?,
+	read category: string?,
+	read editorHint: string?,
+	read range: { minimum: number?, maximum: number? }?,
 
 	read overrideRead: string?,
 	read overrideWrite: string?,

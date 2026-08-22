@@ -12,6 +12,8 @@ return c({
 			type = t.Instance("Camera"),
 			unmodified = "nullptr",
 			writeLevel = "Never",
+			category = "Camera",
+			editable = false,
 		},
 	},
 })

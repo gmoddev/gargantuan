@@ -12,12 +12,15 @@ return c({
 			description = "Whether this instance can be archived through clones and saves",
 			type = t.Bool,
 			unmodified = "false",
+			category = "Data",
+			editable = false,
 		},
 		ClassName = {
 			description = "The class this instance belongs to",
 			type = t.String,
 			unmodified = "CLASS_DEFINITION.ClassName",
 			overrideRead = "GetClassName",
+			category = "Identity",
 		},
 		Destroyed = {
 			description = "Whether this instance has been destroyed",
@@ -26,12 +29,14 @@ return c({
 			writeLevel = "Never",
 			editable = false,
 			writable = false,
+			category = "State",
 		},
 		Name = {
 			description = "Non-unique identifier of the instance",
 			type = t.String,
 			unmodified = "CLASS_DEFINITION.ClassName",
 			replicated = true,
+			category = "Identity",
 		},
 		Parent = {
 			description = "Hierarchical parent of the instance, instances are unparented on destruction",
@@ -39,6 +44,8 @@ return c({
 			unmodified = "std::nullopt",
 			overrideRead = "GetParent",
 			overrideWrite = "SetParent",
+			category = "Hierarchy",
+			editable = false,
 		},
 	},
 

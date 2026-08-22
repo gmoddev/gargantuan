@@ -112,11 +112,20 @@ unknown item. General migrations are not implemented, so exact version equality
 is the current policy. Attributes still reject enum values and Tags are
 unchanged.
 
-EditorHost `GetSchema` exposes schema-discovery version 4, active registry
+EditorHost `GetSchema` exposes schema-discovery version 5, active registry
 generation, and deterministic class/enum/extension definitions while retaining its old
 `Classes` DTO. Studio caches immutable definitions by `SchemaId` plus
 definition version and selects the active set by registry generation. Studio
 has read-only discovery; it cannot register or modify definitions.
+
+Native `InstanceProperty` metadata is part of those class definitions rather
+than a parallel editor schema. Supported properties declare semantic datatype,
+closed `WireValue` type, effective Studio access, category, optional finite
+range and editor hint, compound identity, native enum type/items, or nullable
+object-reference class constraints. `SetProperty` requires exact object-class
+and declaring-class schema identity/version for these native edits. EditorHost
+validates through `MutationGateway`, and Studio reconciles only from journal
+state. Object references are described accurately but remain read-only.
 
 Extension values are sparse per-Instance runtime state distinct from Attributes.
 Missing overrides read the frozen default. Each Instance is limited to 128

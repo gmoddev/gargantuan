@@ -74,6 +74,25 @@ const function assembleProperties(state: GenerationState)
 			:line(`InstanceProperty({keyString})`)
 			:tab()
 			:line(`.SetReflectedTypedef({string.format("%q", property.type.luauType)})`)
+		if property.type.editorDataType then
+			state.definitionProperties:line(`.SetDataType(InstanceProperty::DataType::{property.type.editorDataType}, {string.format("%q", property.type.wireType or "")})`)
+		end
+		state.definitionProperties:line(`.SetCategory({string.format("%q", property.category or "Data")})`)
+		if property.editorHint then
+			state.definitionProperties:line(`.SetEditorHint({string.format("%q", property.editorHint)})`)
+		end
+		if property.range then
+			const minimum = if property.range.minimum ~= nil then tostring(property.range.minimum) else "std::nullopt"
+			const maximum = if property.range.maximum ~= nil then tostring(property.range.maximum) else "std::nullopt"
+			state.definitionProperties:line(`.SetNumericRange({minimum}, {maximum})`)
+		end
+		if property.type.enumName then
+			state.definitionProperties:line(`.SetNativeEnumType({string.format("%q", property.type.enumName)})`)
+		end
+		if property.type.objectClassName then
+			state.definitionProperties:line(`.SetObjectReferenceType(SchemaId::FromNativeName("Engine", {string.format("%q", property.type.objectClassName)}), {tostring(property.type.nullable == true)})`)
+		end
+		state.definitionProperties
 			:line(`.SetUnmodified({property.unmodified})`)
 		if property.serializable then
 			state.definitionProperties:line(`.SetSerializable()`)

@@ -264,6 +264,14 @@ namespace gargantuan {
 		InstanceProperty result(property.Name);
 		result.ReflectedTypedef = property.Type == SchemaExtensionPropertyType::Boolean ? "boolean" :
 			property.Type == SchemaExtensionPropertyType::String ? "string" : "number";
+		result.SemanticType = property.Type == SchemaExtensionPropertyType::Boolean ? InstanceProperty::DataType::Bool :
+			property.Type == SchemaExtensionPropertyType::Integer ? InstanceProperty::DataType::Integer :
+			property.Type == SchemaExtensionPropertyType::Number ? InstanceProperty::DataType::Number :
+			InstanceProperty::DataType::String;
+		result.WireType = property.Type == SchemaExtensionPropertyType::Boolean ? "Bool" :
+			property.Type == SchemaExtensionPropertyType::Integer ? "Int" :
+			property.Type == SchemaExtensionPropertyType::Number ? "Double" : "String";
+		result.Category = "Data";
 		result.Unmodified = CustomWireValueToAny(property.DefaultValue);
 		result.PersistencePolicy = InstanceProperty::Persistence::Saved;
 		result.ReplicationPolicy = InstanceProperty::Replication::FutureReplicated;
@@ -607,7 +615,7 @@ namespace gargantuan {
 	void Instance::ValidatePropertyMutation(std::string_view propertyName, const std::any &value) const {
 		auto *property = const_cast<Instance *>(this)->FindProperty(std::string(propertyName));
 		if (!property) throw std::invalid_argument("Property does not exist");
-		if (property->Validate && !property->Validate(value)) throw std::invalid_argument("Property validation failed");
+		if (!property->IsValueValid(value)) throw std::invalid_argument("Property validation failed");
 		if (propertyName == "Name" || property->PersistencePolicy == InstanceProperty::Persistence::Saved)
 			if (auto dataModel = GetDataModel()) dataModel->EnsureAuthoritativeRevisionAvailable();
 	}
@@ -627,7 +635,7 @@ namespace gargantuan {
 		if (property->WriteAuthority == InstanceProperty::Authority::Main &&
 			GetCurrentExecutionDomain() != ExecutionDomain::Main)
 			return MutationStatus::WrongExecutionDomain;
-		if (property->Validate && !property->Validate(value)) return MutationStatus::ValidationFailed;
+		if (!property->IsValueValid(value)) return MutationStatus::ValidationFailed;
 		if (property->WriteObjectReference) {
 			if (!property->DecodeObjectReference) return MutationStatus::ValidationFailed;
 			try {
@@ -659,6 +667,68 @@ namespace gargantuan {
 		}
 		property->Write(this, value);
 		return MutationStatus::Success;
+	}
+
+	MutationStatus Instance::ApplyPropertyWireMutation(
+		std::string_view PropertyName,
+		const WireValue &Value,
+		Enums::Permission Permission,
+		const ScriptSecurityContext &SecurityContext
+	) {
+		if (Destroyed || DestroyingState) return MutationStatus::StaleObject;
+		auto *Property = FindProperty(std::string(PropertyName));
+		if (!Property) return MutationStatus::InvalidProperty;
+		if (!Property->Write || Property->WritePermission == Enums::Permission::Never) return MutationStatus::ReadOnly;
+		if (!Property->CanWrite(SecurityContext)) return MutationStatus::Unauthorized;
+		if (static_cast<int>(Permission) < static_cast<int>(Property->WritePermission)) return MutationStatus::Unauthorized;
+		if (Property->WriteAuthority == InstanceProperty::Authority::Main &&
+			GetCurrentExecutionDomain() != ExecutionDomain::Main)
+			return MutationStatus::WrongExecutionDomain;
+
+		if (const auto *EnumValue = std::get_if<WireEnumItem>(&Value)) {
+			if (Property->SemanticType != InstanceProperty::DataType::NativeEnum ||
+				!Property->NativeEnumType || *Property->NativeEnumType != EnumValue->EnumType ||
+				!Property->WriteEnumValue || !Property->ReadEnumValue)
+				return MutationStatus::ValidationFailed;
+			auto EnumType = Enums::GetEnums().find(*Property->NativeEnumType);
+			if (EnumType == Enums::GetEnums().end()) return MutationStatus::ValidationFailed;
+			auto Item = EnumType->second->FromName(EnumValue->Item);
+			if (!Item) return MutationStatus::ValidationFailed;
+			auto [CurrentType, CurrentValue] = Property->ReadEnumValue(this);
+			if (CurrentType == EnumValue->EnumType && CurrentValue == Item->Value) return MutationStatus::Success;
+			Property->WriteEnumValue(this, Item->Value);
+			return MutationStatus::Success;
+		}
+
+		const auto *Reference = std::get_if<WireObjectReference>(&Value);
+		if (std::holds_alternative<std::monostate>(Value) || Reference) {
+			if (Property->SemanticType != InstanceProperty::DataType::ObjectReference ||
+				!Property->WriteObjectReference || !Property->ObjectReferenceClassSchemaId)
+				return MutationStatus::ValidationFailed;
+			std::shared_ptr<Instance> Referenced;
+			if (Reference) {
+				Referenced = ObjectRegistry::Get().Lookup(Reference->Object.ToObjectId());
+				if (!Referenced || Referenced->GetDestroyed() || Referenced->IsDestroying())
+					return MutationStatus::StaleObject;
+				auto *ReferencedClass = InstanceClassRegistry::GetDefinition(Referenced.get());
+				if (!ReferencedClass || !GetActiveRuntimeSchemaRegistry().IsClassDerivedFrom(
+						ReferencedClass->Id, *Property->ObjectReferenceClassSchemaId
+					)) return MutationStatus::ValidationFailed;
+				if (PropertyName != "Parent" && Referenced->GetReplicationScopeId() != GetReplicationScopeId())
+					return MutationStatus::ValidationFailed;
+			} else if (!Property->Nullable) return MutationStatus::ValidationFailed;
+			if (Property->ReadObjectReference(this) == Referenced) return MutationStatus::Success;
+			Property->WriteObjectReference(this, Referenced);
+			return MutationStatus::Success;
+		}
+
+		if (Property->SemanticType == InstanceProperty::DataType::NativeEnum ||
+			Property->SemanticType == InstanceProperty::DataType::SchemaEnum ||
+			Property->SemanticType == InstanceProperty::DataType::ObjectReference)
+			return MutationStatus::ValidationFailed;
+		auto Native = DecodeNativeWireValue(Value);
+		if (!Native) return MutationStatus::ValidationFailed;
+		return ApplyPropertyMutation(PropertyName, *Native, Permission, SecurityContext);
 	}
 
 	std::optional<WireValue> Instance::GetAttributeValue(

@@ -29,6 +29,7 @@
 #include <limits>
 #include <magic_enum/magic_enum.hpp>
 #include <stdexcept>
+#include <unordered_set>
 #include <vector>
 
 namespace gargantuan {
@@ -141,6 +142,180 @@ namespace gargantuan {
 				if (domains.Contains(domain)) result.push_back(GetScriptExecutionDomainName(domain));
 			}
 			return result;
+		}
+
+		std::string_view GetEditorDataTypeName(InstanceProperty::DataType Type) {
+			switch (Type) {
+				case InstanceProperty::DataType::Unsupported: return "Unsupported";
+				case InstanceProperty::DataType::Bool: return "Bool";
+				case InstanceProperty::DataType::Integer: return "Integer";
+				case InstanceProperty::DataType::Number: return "Number";
+				case InstanceProperty::DataType::String: return "String";
+				case InstanceProperty::DataType::Vector2: return "Vector2";
+				case InstanceProperty::DataType::Vector3: return "Vector3";
+				case InstanceProperty::DataType::Color3: return "Color3";
+				case InstanceProperty::DataType::UDim: return "UDim";
+				case InstanceProperty::DataType::UDim2: return "UDim2";
+				case InstanceProperty::DataType::CFrame: return "CFrame";
+				case InstanceProperty::DataType::NativeEnum: return "NativeEnum";
+				case InstanceProperty::DataType::SchemaEnum: return "SchemaEnum";
+				case InstanceProperty::DataType::ObjectReference: return "ObjectReference";
+			}
+			return "Unsupported";
+		}
+
+		std::optional<WireValue> EncodePropertyDefault(const InstanceProperty &Property) {
+			if (Property.SemanticType == InstanceProperty::DataType::NativeEnum &&
+				Property.NativeEnumType && Property.ReadEncodedEnumValue) {
+				auto Value = Property.ReadEncodedEnumValue(Property.Unmodified);
+				auto Type = Enums::GetEnums().find(*Property.NativeEnumType);
+				if (!Value || Type == Enums::GetEnums().end()) return std::nullopt;
+				auto Item = Type->second->FromValue(*Value);
+				if (!Item) return std::nullopt;
+				return WireEnumItem{*Property.NativeEnumType, std::string(Item->Name)};
+			}
+			if (Property.SemanticType == InstanceProperty::DataType::ObjectReference)
+				return Property.Nullable ? std::optional<WireValue>(std::monostate{}) : std::nullopt;
+			return EncodeNativeWireValue(Property.Unmodified);
+		}
+
+		Json EncodeNativePropertyMetadata(
+			const SchemaClassDefinition &Owner,
+			const InstanceProperty &Property,
+			const ScriptSecurityContext &Security
+		) {
+			const auto Permission = static_cast<int>(Enums::Permission::None);
+			const bool Readable = Property.Read && Property.CanRead(Security) &&
+				Permission >= static_cast<int>(Property.ReadPermission);
+			const bool Writable = Property.Write && Property.CanWrite(Security) &&
+				Property.WritePermission != Enums::Permission::Never &&
+				Permission >= static_cast<int>(Property.WritePermission);
+			const bool Supported = Property.SemanticType != InstanceProperty::DataType::Unsupported;
+			Json Encoded{
+				{"Name", Property.Name},
+				{"CanonicalName", Owner.CanonicalName + "." + Property.Name},
+				{"Type", Property.ReflectedTypedef},
+				{"DataType", GetEditorDataTypeName(Property.SemanticType)},
+				{"WireType", Property.WireType},
+				{"Readable", Readable},
+				{"Writable", Writable},
+				{"Editable", Supported && Property.SemanticType != InstanceProperty::DataType::ObjectReference &&
+					Property.Editable && Readable && Writable},
+				{"Category", Property.Category},
+				{"NumericRange", nullptr},
+				{"EditorHint", Property.EditorHint ? Json(*Property.EditorHint) : Json(nullptr)},
+				{"CompoundType", Property.CompoundType ? Json(*Property.CompoundType) : Json(nullptr)},
+				{"EnumKind", nullptr},
+				{"EnumType", nullptr},
+				{"EnumSchemaId", Property.EnumSchemaId ? Json(Property.EnumSchemaId->ToString()) : Json(nullptr)},
+				{"EnumDefinitionVersion", Property.EnumDefinitionVersion == 0 ? Json(nullptr) : Json(Property.EnumDefinitionVersion)},
+				{"EnumItems", Json::array()},
+				{"ObjectReferenceClassSchemaId", Property.ObjectReferenceClassSchemaId
+					? Json(Property.ObjectReferenceClassSchemaId->ToString()) : Json(nullptr)},
+				{"Nullable", Property.Nullable},
+				{"Persistence", Property.PersistencePolicy == InstanceProperty::Persistence::Saved ? "Saved" : "Transient"},
+				{"Replication", Property.ReplicationPolicy == InstanceProperty::Replication::FutureReplicated ? "Replicated" : "None"},
+				{"Authority", Property.WriteAuthority == InstanceProperty::Authority::Main ? "Main" : "Any"},
+				{"HasValidator", static_cast<bool>(Property.Validate) || Property.Range.has_value()},
+				{"ReadDomains", EncodeDomains(Property.ReadDomains)},
+				{"WriteDomains", EncodeDomains(Property.WriteDomains)},
+				{"RequiredReadCapability", GetScriptCapabilityName(Property.RequiredReadCapability)},
+				{"RequiredWriteCapability", GetScriptCapabilityName(Property.RequiredWriteCapability)},
+			};
+			if (Property.Range) Encoded["NumericRange"] = {
+				{"Minimum", Property.Range->Minimum ? Json(*Property.Range->Minimum) : Json(nullptr)},
+				{"Maximum", Property.Range->Maximum ? Json(*Property.Range->Maximum) : Json(nullptr)},
+			};
+			if (Property.SemanticType == InstanceProperty::DataType::NativeEnum && Property.NativeEnumType) {
+				Encoded["EnumKind"] = "Native";
+				Encoded["EnumType"] = *Property.NativeEnumType;
+				if (auto Type = Enums::GetEnums().find(*Property.NativeEnumType); Type != Enums::GetEnums().end()) {
+					std::vector<EnumItem> Items = Type->second->Items;
+					std::ranges::sort(Items, {}, [](const EnumItem &Item) { return Item.Name; });
+					for (const auto &Item : Items)
+						Encoded["EnumItems"].push_back({{"Name", Item.Name}, {"Value", Item.Value}});
+				}
+			} else if (Property.SemanticType == InstanceProperty::DataType::SchemaEnum) {
+				Encoded["EnumKind"] = "Schema";
+			}
+			if (auto Default = EncodePropertyDefault(Property))
+				Encoded["Default"] = JsonCodec::EncodeWireValue(*Default);
+			return Encoded;
+		}
+
+		Json EncodeSchemaScalarPropertyMetadata(
+			std::string_view Name,
+			std::string_view CanonicalName,
+			SchemaExtensionPropertyType Type,
+			const WireValue &Default,
+			bool Editable
+		) {
+			const auto DataType = Type == SchemaExtensionPropertyType::Boolean ? "Bool" :
+				Type == SchemaExtensionPropertyType::Integer ? "Integer" :
+				Type == SchemaExtensionPropertyType::Number ? "Number" : "String";
+			const auto WireType = Type == SchemaExtensionPropertyType::Boolean ? "Bool" :
+				Type == SchemaExtensionPropertyType::Integer ? "Int" :
+				Type == SchemaExtensionPropertyType::Number ? "Double" : "String";
+			return {
+				{"Name", Name}, {"CanonicalName", CanonicalName},
+				{"Type", GetSchemaExtensionPropertyTypeName(Type)},
+				{"DataType", DataType}, {"WireType", WireType},
+				{"Default", JsonCodec::EncodeWireValue(Default)},
+				{"Readable", true}, {"Writable", true}, {"Editable", Editable},
+				{"Category", "Data"}, {"NumericRange", nullptr}, {"EditorHint", nullptr},
+				{"CompoundType", nullptr}, {"EnumKind", nullptr}, {"EnumType", nullptr},
+				{"EnumSchemaId", nullptr}, {"EnumDefinitionVersion", nullptr}, {"EnumItems", Json::array()},
+				{"ObjectReferenceClassSchemaId", nullptr}, {"Nullable", false},
+				{"Persistence", "Saved"}, {"Replication", "Replicated"}, {"Authority", "Main"},
+				{"HasValidator", true},
+				{"ReadDomains", Json::array({"Core", "PreRun", "Studio", "Server", "Client"})},
+				{"WriteDomains", Json::array({"Core", "PreRun", "Studio", "Server", "Client"})},
+				{"RequiredReadCapability", "ReadDataModel"},
+				{"RequiredWriteCapability", "MutateDataModel"},
+			};
+		}
+
+		void AddEditorPropertyValues(
+			Json &Snapshot,
+			const ScriptSecurityContext &Security,
+			ObjectId Scope
+		) {
+			if (!Snapshot.contains("Objects") || !Snapshot["Objects"].is_array())
+				throw std::runtime_error("Editor snapshot object collection is malformed");
+			std::unordered_set<WireObjectId> Visible;
+			for (const auto &Encoded : Snapshot["Objects"]) {
+				auto Id = JsonCodec::DecodeObjectId(Encoded["Id"]);
+				if (!Id) throw std::runtime_error("Editor snapshot object identity is malformed");
+				Visible.insert(*Id);
+			}
+			for (auto &Encoded : Snapshot["Objects"]) {
+				auto Id = JsonCodec::DecodeObjectId(Encoded["Id"]);
+				auto InstanceValue = Id ? ObjectRegistry::Get().Lookup(Id->ToObjectId()) : nullptr;
+				auto *Definition = InstanceValue ? InstanceClassRegistry::GetDefinition(InstanceValue.get()) : nullptr;
+				if (!InstanceValue || !Definition || InstanceValue->GetReplicationScopeId() != Scope)
+					throw std::runtime_error("Editor snapshot object is not live in the requested scope");
+				Json Values = Json::object();
+				std::vector<std::string> Names;
+				Names.reserve(Definition->AllProperties.size());
+				for (const auto &[Name, Property] : Definition->AllProperties) {
+					if (!Property->Signal && !Property->CustomSchemaPropertyType &&
+						Property->SemanticType != InstanceProperty::DataType::Unsupported)
+						Names.push_back(Name);
+				}
+				std::ranges::sort(Names);
+				for (const auto &Name : Names) {
+					const auto *Property = Definition->AllProperties.at(Name);
+					if (!Property->Read || !Property->CanRead(Security) ||
+						static_cast<int>(Enums::Permission::None) < static_cast<int>(Property->ReadPermission)) continue;
+					auto Value = InstanceValue->ReadPropertyWireValue(Name);
+					if (!Value) continue;
+					if (const auto *Reference = std::get_if<WireObjectReference>(&*Value);
+						Reference && !Visible.contains(Reference->Object)) continue;
+					Values[Name] = JsonCodec::EncodeWireValue(*Value);
+				}
+				Encoded["EditorProperties"] = std::move(Values);
+			}
+			Snapshot["EditorPropertyValuesVersion"] = 1;
 		}
 
 		Json EncodeCapabilities(const ScriptCapabilitySet &capabilities) {
@@ -1004,7 +1179,7 @@ namespace gargantuan {
 							{"Persistence", property->PersistencePolicy == InstanceProperty::Persistence::Saved ? "Saved" : "Transient"},
 							{"Replication", property->ReplicationPolicy == InstanceProperty::Replication::FutureReplicated ? "Replicated" : "None"},
 							{"Authority", property->WriteAuthority == InstanceProperty::Authority::Main ? "Main" : "Any"},
-							{"HasValidator", static_cast<bool>(property->Validate)},
+							{"HasValidator", static_cast<bool>(property->Validate) || property->Range.has_value()},
 							{"ReadDomains", EncodeDomains(property->ReadDomains)},
 							{"WriteDomains", EncodeDomains(property->WriteDomains)},
 							{"RequiredReadCapability", GetScriptCapabilityName(property->RequiredReadCapability)},
@@ -1047,21 +1222,24 @@ namespace gargantuan {
 							? Json(classDefinition->NativeHostClassId.ToString()) : Json(nullptr);
 					encoded["Constructible"] = IsEditorConstructible(*classDefinition);
 						Json properties = Json::array();
-						for (const auto &property : classDefinition->DeclaredCustomProperties) {
-							properties.push_back({
-								{"Name", property.Name},
-								{"CanonicalName", property.CanonicalName},
-								{"Type", GetSchemaExtensionPropertyTypeName(property.Type)},
-								{"Default", JsonCodec::EncodeWireValue(property.DefaultValue)},
-								{"Readable", true},
-								{"Writable", true},
-								{"Editable", property.Editable},
-								{"Persistence", "Saved"},
-								{"Replication", "Replicated"},
-								{"Authority", "Main"},
-								{"RequiredReadCapability", "ReadDataModel"},
-								{"RequiredWriteCapability", "MutateDataModel"},
-							});
+						if (classDefinition->ConstructionKind == SchemaClassConstructionKind::Native) {
+							std::vector<std::string> Names;
+							Names.reserve(classDefinition->Properties.size());
+							for (const auto &[Name, Property] : classDefinition->Properties) {
+								(void)Property;
+								Names.push_back(Name);
+							}
+							std::ranges::sort(Names);
+							for (const auto &Name : Names)
+								properties.push_back(EncodeNativePropertyMetadata(
+									*classDefinition, classDefinition->Properties.at(Name), StudioSecurity
+								));
+						} else {
+							for (const auto &property : classDefinition->DeclaredCustomProperties)
+								properties.push_back(EncodeSchemaScalarPropertyMetadata(
+									property.Name, property.CanonicalName, property.Type,
+									property.DefaultValue, property.Editable
+								));
 						}
 						encoded["Properties"] = std::move(properties);
 					} else if (const auto *enumDefinition = std::get_if<SchemaEnumDefinition>(entry)) {
@@ -1072,28 +1250,17 @@ namespace gargantuan {
 					} else if (const auto *extension = std::get_if<SchemaExtensionDefinition>(entry)) {
 						encoded["TargetClassSchemaId"] = extension->TargetClassId.ToString();
 						Json properties = Json::array();
-						for (const auto &property : extension->Properties) {
-							properties.push_back({
-								{"Name", property.Name},
-								{"CanonicalName", property.CanonicalName},
-								{"Type", GetSchemaExtensionPropertyTypeName(property.Type)},
-								{"Default", JsonCodec::EncodeWireValue(property.DefaultValue)},
-								{"Readable", true},
-								{"Writable", true},
-								{"Editable", property.Editable},
-								{"Persistence", "Saved"},
-								{"Replication", "Replicated"},
-								{"Authority", "Main"},
-								{"RequiredReadCapability", "ReadDataModel"},
-								{"RequiredWriteCapability", "MutateDataModel"},
-							});
-						}
+						for (const auto &property : extension->Properties)
+							properties.push_back(EncodeSchemaScalarPropertyMetadata(
+								property.Name, property.CanonicalName, property.Type,
+								property.DefaultValue, property.Editable
+							));
 						encoded["Properties"] = std::move(properties);
 					}
 					definitions.push_back(std::move(encoded));
 				}
 				return SerializeBoundedResponse(SuccessResponse(requestId, {
-					{"SchemaDiscoveryVersion", 4},
+					{"SchemaDiscoveryVersion", 5},
 					{"RegistryGeneration", GetRuntimeSchemaLifecycle().GetActiveGeneration()},
 					{"Definitions", std::move(definitions)},
 					{"Classes", std::move(classes)},
@@ -1275,10 +1442,12 @@ namespace gargantuan {
 				if (!World) return SerializeBoundedResponse(ErrorResponse(requestId, "NoProjectLoaded", "No project is loaded"));
 				auto snapshot = CaptureSnapshot(World);
 				Cursor = snapshot.Cursor;
+				auto EncodedSnapshot = ParseGeneratedJson(SerializeSnapshot(snapshot), "Snapshot response");
+				AddEditorPropertyValues(EncodedSnapshot, StudioSecurity, World->GetObjectId());
 				return SerializeBoundedResponse(SuccessResponse(
 					requestId,
 					{
-						{"Snapshot", ParseGeneratedJson(SerializeSnapshot(snapshot), "Snapshot response")},
+						{"Snapshot", std::move(EncodedSnapshot)},
 						{"ProjectState", EncodeProjectState(World, PersistedRevision, CurrentProject)},
 					}
 				));
@@ -1403,7 +1572,10 @@ namespace gargantuan {
 					return SerializeBoundedResponse(ErrorResponse(requestId, "Unauthorized", "SetProperty requires MutateDataModel"));
 				if (!Cursor)
 					return SerializeBoundedResponse(ErrorResponse(requestId, "SnapshotRequired", "GetSnapshot must establish a cursor"));
-				if (!HasOnlyFields(parameters, {"Object", "Property", "Value", "TransactionId"}) ||
+				if (!HasOnlyFields(parameters, {
+						"Object", "ClassSchemaId", "ClassDefinitionVersion", "DeclaringClassSchemaId",
+						"DeclaringDefinitionVersion", "Property", "Value", "TransactionId"
+					}) ||
 					!parameters.contains("Object") || !parameters.contains("Property") ||
 					!parameters["Property"].is_string() || parameters["Property"].get_ref<const std::string &>().empty() ||
 					parameters["Property"].get_ref<const std::string &>().size() > 256 || !parameters.contains("Value"))
@@ -1415,11 +1587,42 @@ namespace gargantuan {
 				auto target = ObjectRegistry::Get().Lookup(object->ToObjectId());
 				if (!target || target->GetReplicationScopeId() != World->GetObjectId())
 					return SerializeBoundedResponse(ErrorResponse(requestId, "StaleObject", "Object is not live in the open project"));
-				auto native = DecodeNativeWireValue(*value);
-				if (!native)
-					return SerializeBoundedResponse(ErrorResponse(requestId, "UnsupportedValue", "EditorHost v0 accepts closed value properties only"));
-				auto mutation = Mutations.Apply(UpdatePropertyCommand{
-					object->ToObjectId(), parameters["Property"].get<std::string>(), std::move(*native)
+				const auto &PropertyName = parameters["Property"].get_ref<const std::string &>();
+				if (PropertyName == "Source" && std::dynamic_pointer_cast<LuaSourceContainer>(target))
+					return SerializeBoundedResponse(ErrorResponse(
+						requestId, "Unauthorized", "Script source requires the dedicated source-authoring operation"
+					));
+				const bool SemanticRequest = parameters.contains("ClassSchemaId") ||
+					parameters.contains("ClassDefinitionVersion") || parameters.contains("DeclaringClassSchemaId") ||
+					parameters.contains("DeclaringDefinitionVersion");
+				if (!SemanticRequest && PropertyName != "Name")
+					return SerializeBoundedResponse(ErrorResponse(
+						requestId, "StaleSchema", "Native property editing requires exact class and declaring-schema identity"
+					));
+				if (SemanticRequest) {
+					if (!parameters.contains("ClassSchemaId") || !parameters.contains("ClassDefinitionVersion") ||
+						!parameters.contains("DeclaringClassSchemaId") || !parameters.contains("DeclaringDefinitionVersion") ||
+						!parameters["ClassSchemaId"].is_string() || !parameters["DeclaringClassSchemaId"].is_string())
+						return SerializeBoundedResponse(ErrorResponse(
+							requestId, "MalformedRequest", "SetProperty semantic identity fields are incomplete"
+						));
+					auto ClassId = SchemaId::Parse(parameters["ClassSchemaId"].get<std::string>());
+					auto DeclaringId = SchemaId::Parse(parameters["DeclaringClassSchemaId"].get<std::string>());
+					auto ClassVersion = JsonCodec::DecodeUnsigned32(parameters["ClassDefinitionVersion"]);
+					auto DeclaringVersion = JsonCodec::DecodeUnsigned32(parameters["DeclaringDefinitionVersion"]);
+					auto *TargetClass = InstanceClassRegistry::GetDefinition(target.get());
+					auto *Property = target->FindProperty(PropertyName);
+					if (!ClassId || !DeclaringId || !ClassVersion || !DeclaringVersion ||
+						*ClassVersion == 0 || *DeclaringVersion == 0 || !TargetClass || !Property ||
+						TargetClass->Id != *ClassId || TargetClass->DefinitionVersion != *ClassVersion ||
+						Property->DeclaringSchemaId != *DeclaringId ||
+						Property->DeclaringDefinitionVersion != *DeclaringVersion)
+						return SerializeBoundedResponse(ErrorResponse(
+							requestId, "StaleSchema", "SetProperty schema identity or version is incompatible"
+						));
+				}
+				auto mutation = Mutations.Apply(UpdateWirePropertyCommand{
+					object->ToObjectId(), PropertyName, std::move(*value)
 				},
 					StudioMutationAuthority());
 				Json result{

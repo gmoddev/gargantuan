@@ -13,6 +13,7 @@ return c({
 			unmodified = "false",
 			serializable = true,
 			replicated = true,
+			category = "Behavior",
 		},
 		CanCollide = {
 			description = "Whether other BaseParts can collide with this instance",
@@ -20,6 +21,7 @@ return c({
 			unmodified = "true",
 			serializable = true,
 			replicated = true,
+			category = "Collision",
 		},
 		CastShadow = {
 			description = "Whether to cast a shadow from this instance",
@@ -27,6 +29,7 @@ return c({
 			unmodified = "true",
 			serializable = true,
 			replicated = true,
+			category = "Appearance",
 		},
 		CanTouch = {
 			description = "Whether this instance can register touched events.",
@@ -34,6 +37,7 @@ return c({
 			unmodified = "true",
 			serializable = true,
 			replicated = true,
+			category = "Collision",
 		},
 		CFrame = {
 			description = "The world transform of this instance",
@@ -41,6 +45,8 @@ return c({
 			unmodified = "gargantuan::CFrame()",
 			serializable = true,
 			replicated = true,
+			category = "Transform",
+			editorHint = "CFrameComponents",
 		},
 		Color = {
 			description = "The visual color of this instance",
@@ -48,6 +54,9 @@ return c({
 			unmodified = "gargantuan::Color3(1.0f, 1.0f, 1.0f)",
 			serializable = true,
 			replicated = true,
+			category = "Appearance",
+			editorHint = "ColorComponents",
+			range = { minimum = 0, maximum = 1 },
 		},
 		Size = {
 			description = "The world size of this instance",
@@ -55,6 +64,7 @@ return c({
 			unmodified = "glm::vec3(1.0f, 1.0f, 1.0f)",
 			serializable = true,
 			replicated = true,
+			category = "Transform",
 		},
 		Position = {
 			description = "The world position of this instance",
@@ -62,6 +72,8 @@ return c({
 			unmodified = "glm::vec3(0.0f, 0.0f, 0.0f)",
 			overrideRead = "GetPosition",
 			overrideWrite = "SetPosition",
+			category = "Transform",
+			editable = false,
 		},
 		Rotation = {
 			description = "The world rotation of this instance",
@@ -69,6 +81,8 @@ return c({
 			unmodified = "glm::vec3(0.0f, 0.0f, 0.0f)",
 			overrideRead = "GetRotation",
 			overrideWrite = "SetRotation",
+			category = "Transform",
+			editable = false,
 		},
 		Transparency = {
 			description = "The visual transparency of this instance",
@@ -76,6 +90,8 @@ return c({
 			unmodified = "0.0f",
 			serializable = true,
 			replicated = true,
+			category = "Appearance",
+			range = { minimum = 0, maximum = 1 },
 		},
 	},
 

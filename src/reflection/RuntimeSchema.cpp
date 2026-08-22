@@ -208,9 +208,25 @@ namespace gargantuan {
 				InvalidDefinition(definition, "replicated property is not readable and writable");
 			if (property.Editable && (!property.Write || property.WritePermission == Enums::Permission::Never))
 				InvalidDefinition(definition, "editable property has no write path");
+			if (property.SemanticType != InstanceProperty::DataType::Unsupported && property.WireType.empty())
+				InvalidDefinition(definition, "semantic property has no wire type");
+			if (property.Range &&
+				((property.Range->Minimum && !std::isfinite(*property.Range->Minimum)) ||
+				 (property.Range->Maximum && !std::isfinite(*property.Range->Maximum)) ||
+				 (property.Range->Minimum && property.Range->Maximum &&
+				  *property.Range->Minimum > *property.Range->Maximum)))
+				InvalidDefinition(definition, "property numeric range is invalid");
+			if (property.SemanticType == InstanceProperty::DataType::NativeEnum &&
+				(!property.NativeEnumType || !property.ReadEnumValue || !property.WriteEnumValue))
+				InvalidDefinition(definition, "native enum property has incomplete identity or access metadata");
+			if (property.SemanticType == InstanceProperty::DataType::ObjectReference &&
+				(!property.ObjectReferenceClassSchemaId || !property.ObjectReferenceClassSchemaId->IsValid() ||
+				 !property.ReadObjectReference))
+				InvalidDefinition(definition, "object-reference property has incomplete constraint metadata");
 			if (property.DeclaringSchemaId.IsValid() && property.DeclaringSchemaId != definition.Id)
 				InvalidDefinition(definition, "property declares a different owner");
 			property.DeclaringSchemaId = definition.Id;
+			property.DeclaringDefinitionVersion = definition.DefinitionVersion;
 		}
 
 		for (auto &[name, method] : definition.Methods) {

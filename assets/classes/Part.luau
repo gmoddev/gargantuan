@@ -11,6 +11,9 @@ return c({
 			description = "Primitive shape of this instance",
 			type = t.EnumItem("PartType"),
 			unmodified = "Enums::PartType::Block",
+			serializable = true,
+			replicated = true,
+			category = "Appearance",
 		},
 	},
 })

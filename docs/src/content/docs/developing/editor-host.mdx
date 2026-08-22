@@ -97,7 +97,7 @@ will own process lifecycle, IPC, windows, viewport presentation, filesystem
 dialogs, and Luau runtime bootstrap. Explorer, Properties, selection, commands,
 settings, and most workflows should consume explicit `DocumentService`,
 `SelectionService`, `ViewportService`, and `CommandService` APIs from Luau.
-Reference-valued editing remains future interface work. Minimal Play sessions are
+Reference-valued editing remains future interface work; reference metadata is exposed read-only. Minimal Play sessions are
 implemented with a separate runtime DataModel and VM; multiplayer, debugging,
 live-edit synchronization, and applying runtime changes back remain deferred.
 Structural editing, grouped transactions, Undo/Redo, and dedicated Script/
@@ -113,11 +113,15 @@ The implemented Luau viewport adapter adds `ViewportControl`; it does not infer
 that permission from the `Studio` domain. Process, filesystem, and network
 access remain ungranted.
 
-`GetSchema` schema-discovery version 4 exposes the frozen registry generation
+`GetSchema` schema-discovery version 5 exposes the frozen registry generation
 and immutable class/enum/extension metadata. Project classes include stable
 base and native-host IDs, construction/subclass policy, constructibility, and
-ordered declarative properties. Extension and custom class properties carry
-stable owner/target identity, exact version, type, default, and editability metadata.
+ordered declarative properties. Native properties carry datatype and wire type,
+effective read/write/editable state, category, optional range and editor hint,
+compound identity, exact enum items, and nullable object-reference constraints.
+Extension and custom class properties carry the same presentation contract where applicable.
+`GetSnapshot` adds `EditorPropertyValuesVersion = 1` and an authoritative
+`EditorProperties` projection per object without changing gameplay snapshot v6.
 Runtime schema-property edits use `SetExtensionProperty` or `SetCustomProperty`,
 snapshot/journal version 6, and the authoritative mutation gateway. Project definitions are created only
 by the engine's bounded PreRun candidate lifecycle. Studio receives neither
