@@ -71,7 +71,10 @@ jobs:
         shell: pwsh
         run: |
           if (-not $env:HOME) {
-            throw "The runner HOME environment variable is required by Lute but is not defined."
+            if (-not $env:USERPROFILE) {
+              throw "Lute requires HOME, but neither HOME nor USERPROFILE is defined by the runner."
+            }
+            $env:HOME = $env:USERPROFILE
           }
           lute tools/classgen
           if ($LASTEXITCODE -ne 0) {
