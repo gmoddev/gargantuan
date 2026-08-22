@@ -222,11 +222,13 @@ jobs:
             libxss-dev \
             libxtst-dev \
             libclang-rt-19-dev \
-            libc++-19-dev \
-            libc++abi-19-dev \
+            g++-14 \
             llvm-19 \
             ninja-build
           clang-19 --version
+          g++-14 --version
+          test -d /usr/lib/gcc/x86_64-linux-gnu/14
+          clang++-19 --gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/14 -v -E -x c++ /dev/null
           llvm-symbolizer-19 --version
           glslc --version
 
@@ -250,13 +252,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          SanitizerFlags="-stdlib=libc++ -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all"
+          GccInstallDir=/usr/lib/gcc/x86_64-linux-gnu/14
+          SanitizerFlags="--gcc-install-dir=$GccInstallDir -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all"
           cmake -S . -B build-sanitizers -G Ninja \
             -DCMAKE_BUILD_TYPE=RelWithDebInfo \
             -DCMAKE_C_COMPILER=clang-19 \
             -DCMAKE_CXX_COMPILER=clang++-19 \
             -DCMAKE_CXX_FLAGS="$SanitizerFlags" \
-            -DCMAKE_EXE_LINKER_FLAGS="-stdlib=libc++ -fsanitize=address,undefined" \
+            -DCMAKE_EXE_LINKER_FLAGS="--gcc-install-dir=$GccInstallDir -fsanitize=address,undefined" \
             -DBUILD_TESTING=ON \
             -DGARGANTUAN_TRACY=OFF \
             -DGARGANTUAN_WITH_GNS=OFF \
