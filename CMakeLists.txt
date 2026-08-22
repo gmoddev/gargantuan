@@ -397,93 +397,37 @@ if(BUILD_TESTING)
 		target_link_libraries(gargantuan_filament_renderer_tests PRIVATE gargantuan_core)
 	endif()
 	if(WIN32)
-		add_custom_command(TARGET gargantuan_foundation_tests POST_BUILD
+		add_custom_target(gargantuan_stage_sdl_runtime
 			COMMAND ${CMAKE_COMMAND} -E copy_if_different
 				"$<TARGET_FILE:SDL3::SDL3>"
-				"$<TARGET_FILE_DIR:gargantuan_foundation_tests>"
+				"$<TARGET_FILE_DIR:gargantuan>"
+			COMMENT "Staging the shared SDL3 runtime once for Windows executables"
+			VERBATIM
 		)
-		add_custom_command(TARGET gargantuan_prerun_bootstrap_tests POST_BUILD
-			COMMAND ${CMAKE_COMMAND} -E copy_if_different
-				"$<TARGET_FILE:SDL3::SDL3>"
-				"$<TARGET_FILE_DIR:gargantuan_prerun_bootstrap_tests>"
-		)
-		add_custom_command(TARGET gargantuan_attributes_tags_profile POST_BUILD
-			COMMAND ${CMAKE_COMMAND} -E copy_if_different
-				"$<TARGET_FILE:SDL3::SDL3>"
-				"$<TARGET_FILE_DIR:gargantuan_attributes_tags_profile>"
-		)
-		add_custom_command(TARGET gargantuan_physics_backend_tests POST_BUILD
-			COMMAND ${CMAKE_COMMAND} -E copy_if_different
-				"$<TARGET_FILE:SDL3::SDL3>"
-				"$<TARGET_FILE_DIR:gargantuan_physics_backend_tests>"
-		)
-		add_custom_command(TARGET gargantuan_platform_input_boundary_tests POST_BUILD
-			COMMAND ${CMAKE_COMMAND} -E copy_if_different
-				"$<TARGET_FILE:SDL3::SDL3>"
-				"$<TARGET_FILE_DIR:gargantuan_platform_input_boundary_tests>"
-		)
-		add_custom_command(TARGET gargantuan_player_runtime_tests POST_BUILD
-			COMMAND ${CMAKE_COMMAND} -E copy_if_different
-				"$<TARGET_FILE:SDL3::SDL3>"
-				"$<TARGET_FILE_DIR:gargantuan_player_runtime_tests>"
-		)
-		add_custom_command(TARGET gargantuan_networking_contract_tests POST_BUILD
-			COMMAND ${CMAKE_COMMAND} -E copy_if_different
-				"$<TARGET_FILE:SDL3::SDL3>"
-				"$<TARGET_FILE_DIR:gargantuan_networking_contract_tests>"
-		)
-		add_custom_command(TARGET gargantuan_simulated_transport_tests POST_BUILD
-			COMMAND ${CMAKE_COMMAND} -E copy_if_different
-				"$<TARGET_FILE:SDL3::SDL3>"
-				"$<TARGET_FILE_DIR:gargantuan_simulated_transport_tests>"
-		)
-		add_custom_command(TARGET gargantuan_scheduler_contract_tests POST_BUILD
-			COMMAND ${CMAKE_COMMAND} -E copy_if_different
-				"$<TARGET_FILE:SDL3::SDL3>"
-				"$<TARGET_FILE_DIR:gargantuan_scheduler_contract_tests>"
-		)
-		add_custom_command(TARGET gargantuan_replication_tests POST_BUILD
-			COMMAND ${CMAKE_COMMAND} -E copy_if_different
-				"$<TARGET_FILE:SDL3::SDL3>"
-				"$<TARGET_FILE_DIR:gargantuan_replication_tests>"
-		)
-		add_custom_command(TARGET gargantuan_remote_tests POST_BUILD
-			COMMAND ${CMAKE_COMMAND} -E copy_if_different
-				"$<TARGET_FILE:SDL3::SDL3>"
-				"$<TARGET_FILE_DIR:gargantuan_remote_tests>"
-		)
-		add_custom_command(TARGET gargantuan_remote_luau_tests POST_BUILD
-			COMMAND ${CMAKE_COMMAND} -E copy_if_different
-				"$<TARGET_FILE:SDL3::SDL3>"
-				"$<TARGET_FILE_DIR:gargantuan_remote_luau_tests>"
-		)
-		add_custom_command(TARGET gargantuan_replication_benchmark POST_BUILD
-			COMMAND ${CMAKE_COMMAND} -E copy_if_different
-				"$<TARGET_FILE:SDL3::SDL3>"
-				"$<TARGET_FILE_DIR:gargantuan_replication_benchmark>"
-		)
-		add_custom_command(TARGET gargantuan_remote_benchmark POST_BUILD
-			COMMAND ${CMAKE_COMMAND} -E copy_if_different
-				"$<TARGET_FILE:SDL3::SDL3>"
-				"$<TARGET_FILE_DIR:gargantuan_remote_benchmark>"
+		set(GARGANTUAN_SDL_RUNTIME_TARGETS
+			gargantuan
+			gargantuan_foundation_tests
+			gargantuan_prerun_bootstrap_tests
+			gargantuan_attributes_tags_profile
+			gargantuan_physics_backend_tests
+			gargantuan_platform_input_boundary_tests
+			gargantuan_player_runtime_tests
+			gargantuan_networking_contract_tests
+			gargantuan_simulated_transport_tests
+			gargantuan_scheduler_contract_tests
+			gargantuan_replication_tests
+			gargantuan_remote_tests
+			gargantuan_remote_luau_tests
+			gargantuan_replication_benchmark
+			gargantuan_remote_benchmark
 		)
 		if(GARGANTUAN_BUILD_SERIALIZATION_BENCHMARKS)
-			add_custom_command(TARGET gargantuan_serialization_benchmark POST_BUILD
-				COMMAND ${CMAKE_COMMAND} -E copy_if_different
-					"$<TARGET_FILE:SDL3::SDL3>"
-					"$<TARGET_FILE_DIR:gargantuan_serialization_benchmark>"
-			)
+			list(APPEND GARGANTUAN_SDL_RUNTIME_TARGETS gargantuan_serialization_benchmark)
 		endif()
 		if(GARGANTUAN_WITH_GNS)
-			add_custom_command(TARGET gargantuan_real_transport_tests POST_BUILD
-				COMMAND ${CMAKE_COMMAND} -E copy_if_different
-					"$<TARGET_FILE:SDL3::SDL3>"
-					"$<TARGET_FILE_DIR:gargantuan_real_transport_tests>"
-			)
-			add_custom_command(TARGET gargantuan_remote_real_transport_tests POST_BUILD
-				COMMAND ${CMAKE_COMMAND} -E copy_if_different
-					"$<TARGET_FILE:SDL3::SDL3>"
-					"$<TARGET_FILE_DIR:gargantuan_remote_real_transport_tests>"
+			list(APPEND GARGANTUAN_SDL_RUNTIME_TARGETS
+				gargantuan_real_transport_tests
+				gargantuan_remote_real_transport_tests
 			)
 			set(GARGANTUAN_PROTOBUF_RUNTIMES "")
 			if(TARGET protobuf::libprotobuf)
@@ -511,24 +455,17 @@ if(BUILD_TESTING)
 			endforeach()
 		endif()
 		if(GARGANTUAN_BUILD_RENDERER_BENCHMARKS)
-			add_custom_command(TARGET gargantuan_renderer_benchmark POST_BUILD
-				COMMAND ${CMAKE_COMMAND} -E copy_if_different
-					"$<TARGET_FILE:SDL3::SDL3>"
-					"$<TARGET_FILE_DIR:gargantuan_renderer_benchmark>"
-			)
-			add_custom_command(TARGET gargantuan_editor_viewport_smoke POST_BUILD
-				COMMAND ${CMAKE_COMMAND} -E copy_if_different
-					"$<TARGET_FILE:SDL3::SDL3>"
-					"$<TARGET_FILE_DIR:gargantuan_editor_viewport_smoke>"
+			list(APPEND GARGANTUAN_SDL_RUNTIME_TARGETS
+				gargantuan_renderer_benchmark
+				gargantuan_editor_viewport_smoke
 			)
 		endif()
 		if(GARGANTUAN_WITH_FILAMENT)
-			add_custom_command(TARGET gargantuan_filament_renderer_tests POST_BUILD
-				COMMAND ${CMAKE_COMMAND} -E copy_if_different
-					"$<TARGET_FILE:SDL3::SDL3>"
-					"$<TARGET_FILE_DIR:gargantuan_filament_renderer_tests>"
-			)
+			list(APPEND GARGANTUAN_SDL_RUNTIME_TARGETS gargantuan_filament_renderer_tests)
 		endif()
+		foreach(GARGANTUAN_SDL_RUNTIME_TARGET IN LISTS GARGANTUAN_SDL_RUNTIME_TARGETS)
+			add_dependencies(${GARGANTUAN_SDL_RUNTIME_TARGET} gargantuan_stage_sdl_runtime)
+		endforeach()
 	endif()
 	add_test(NAME gargantuan_foundation COMMAND gargantuan_foundation_tests)
 	add_test(NAME gargantuan_physics_backend COMMAND gargantuan_physics_backend_tests)
@@ -559,7 +496,7 @@ add_custom_command(TARGET gargantuan POST_BUILD
 	COMMENT "Copying engine-shipped Luau runtime modules next to Gargantuan"
 )
 
-if(WIN32)
+if(WIN32 AND NOT BUILD_TESTING)
 	add_custom_command(TARGET gargantuan POST_BUILD
 		COMMAND ${CMAKE_COMMAND} -E copy_if_different
 			"$<TARGET_FILE:SDL3::SDL3>"
