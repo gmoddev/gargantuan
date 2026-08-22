@@ -4,7 +4,7 @@
 #include "gargantuan/scripting/ScriptSecurity.hpp"
 
 #include <lualib.h>
-#include <ranges>
+#include <algorithm>
 #include <string>
 
 namespace gargantuan {
