@@ -221,6 +221,7 @@ jobs:
             libxrandr-dev \
             libxss-dev \
             libxtst-dev \
+            libclang-rt-19-dev \
             libc++-19-dev \
             libc++abi-19-dev \
             llvm-19 \
