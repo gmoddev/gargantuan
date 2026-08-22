@@ -463,9 +463,9 @@ namespace gargantuan {
 				b3JointId Joint{};
 			};
 
-			template <typename Record> struct SlotEntry {
+			template <typename RecordType> struct SlotEntry {
 				std::uint32_t Generation = 1;
-				std::unique_ptr<Record> Record;
+				std::unique_ptr<RecordType> Record;
 			};
 
 			b3WorldId World{};
