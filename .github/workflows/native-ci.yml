@@ -171,3 +171,120 @@ jobs:
             build-ci/CMakeFiles/CMakeConfigureLog.yaml
             build-ci/Testing/Temporary/LastTest.log
             build-ci/ctest-results.xml
+
+  linux-sanitizers:
+    name: Ubuntu 24.04 / Clang / ASan + UBSan / Headless
+    needs: windows-native
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      CMAKE_BUILD_PARALLEL_LEVEL: 4
+      ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+      UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+      SDL_VIDEODRIVER: dummy
+
+    steps:
+      - name: Checkout recursive dependencies
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: recursive
+
+      - name: Verify recursive dependency checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          git submodule status --recursive | tee /tmp/gargantuan-submodules.txt
+          if grep -Eq '^[\-+U]' /tmp/gargantuan-submodules.txt; then
+            echo "Submodules are missing, conflicted, or not at their pinned revisions."
+            exit 1
+          fi
+
+      - name: Install Clang and headless build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            clang \
+            clang-format \
+            cmake \
+            glslc \
+            libfreetype-dev \
+            libx11-dev \
+            libxcursor-dev \
+            libxext-dev \
+            libxfixes-dev \
+            libxi-dev \
+            libxrandr-dev \
+            libxss-dev \
+            libxtst-dev \
+            llvm \
+            ninja-build
+          clang --version
+          llvm-symbolizer --version
+          glslc --version
+
+      - name: Install pinned repository tools
+        uses: paradoxum-games/setup-rokit@c6a9749169e3a0146019b899cd0342556f773908 # v3
+        with:
+          version: 1.2.0
+          cache: true
+
+      - name: Generate native class and reflection sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          lute tools/classgen
+          test -f include/gargantuan/classes/generated/Instance.hpp
+          test -f src/classes/generated/Instance.cpp
+          test -f include/gargantuan/services/generated/Workspace.hpp
+          test -f src/services/generated/Workspace.cpp
+
+      - name: Configure Clang ASan and UBSan headless tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          SanitizerFlags="-fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all"
+          cmake -S . -B build-sanitizers -G Ninja \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_C_COMPILER=clang \
+            -DCMAKE_CXX_COMPILER=clang++ \
+            -DCMAKE_C_FLAGS="$SanitizerFlags" \
+            -DCMAKE_CXX_FLAGS="$SanitizerFlags" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined" \
+            -DCMAKE_SHARED_LINKER_FLAGS="-fsanitize=address,undefined" \
+            -DBUILD_TESTING=ON \
+            -DGARGANTUAN_TRACY=OFF \
+            -DGARGANTUAN_WITH_GNS=OFF \
+            -DGARGANTUAN_BUILD_RENDERER_BENCHMARKS=OFF \
+            -DGARGANTUAN_BUILD_SERIALIZATION_BENCHMARKS=ON \
+            -DGARGANTUAN_BUILD_GLAZE_SERIALIZATION_PROTOTYPE=OFF \
+            -DGARGANTUAN_GLSLC_EXECUTABLE="$(command -v glslc)"
+
+      - name: Build sanitizer-instrumented engine and headless tests
+        shell: bash
+        run: cmake --build build-sanitizers --parallel "$CMAKE_BUILD_PARALLEL_LEVEL"
+
+      - name: Run complete sanitizer headless CTest contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          ctest --test-dir build-sanitizers \
+            --parallel 1 \
+            --timeout 300 \
+            --output-on-failure \
+            --no-tests=error \
+            --output-junit build-sanitizers/ctest-results.xml
+
+      - name: Upload sanitizer diagnostics
+        if: failure()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: sanitizer-ci-diagnostics
+          if-no-files-found: ignore
+          path: |
+            build-sanitizers/CMakeFiles/CMakeConfigureLog.yaml
+            build-sanitizers/Testing/Temporary/LastTest.log
+            build-sanitizers/ctest-results.xml
