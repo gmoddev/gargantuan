@@ -220,6 +220,8 @@ jobs:
             libxrandr-dev \
             libxss-dev \
             libxtst-dev \
+            libc++-18-dev \
+            libc++abi-18-dev \
             llvm \
             ninja-build
           clang --version
@@ -246,13 +248,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          SanitizerFlags="-fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all"
+          SanitizerFlags="-stdlib=libc++ -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all"
           cmake -S . -B build-sanitizers -G Ninja \
             -DCMAKE_BUILD_TYPE=RelWithDebInfo \
             -DCMAKE_C_COMPILER=clang \
             -DCMAKE_CXX_COMPILER=clang++ \
             -DCMAKE_CXX_FLAGS="$SanitizerFlags" \
-            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined" \
+            -DCMAKE_EXE_LINKER_FLAGS="-stdlib=libc++ -fsanitize=address,undefined" \
             -DBUILD_TESTING=ON \
             -DGARGANTUAN_TRACY=OFF \
             -DGARGANTUAN_WITH_GNS=OFF \
