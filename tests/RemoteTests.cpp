@@ -3,6 +3,7 @@
 #include "gargantuan/network/SimulatedTransport.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstddef>
@@ -10,7 +11,6 @@
 #include <cstdlib>
 #include <iostream>
 #include <memory>
-#include <ranges>
 #include <set>
 #include <string>
 #include <vector>
