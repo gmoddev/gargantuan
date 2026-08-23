@@ -21,9 +21,11 @@
   editable text/IME state, and the measured Foundation 2 performance contract.
 - [Physics backend](PhysicsBackend.md) defines neutral rigid-body semantics,
   generation-safe physics identity, safe-point updates, and Box3D confinement.
-- [Soft-body Physics Foundation 1](SoftBodyPhysicsFoundation.md) defines the
-  sibling XPBD deformable backend, public cloth/rubber semantics, fixed-step and
-  renderer integration, budgets, lifecycle, benchmarks, and follow-up gate.
+- [Soft-body Physics Foundation 2](SoftBodyPhysicsFoundation2.md) defines the
+  bounded independent-body job boundary, deterministic merge/backpressure,
+  deformable collider broadphase, improved primitive contacts, rotation-aware
+  rubber/volume behavior, and two-machine evidence. [Foundation 1](SoftBodyPhysicsFoundation.md)
+  remains the semantic and renderer-integration baseline.
 - [Instance attributes](InstanceAttributes.md) defines bounded dynamic state,
   authority, persistence, journal, replication, and Studio contracts.
 - [Instance tags](InstanceTags.md) defines scoped indexed membership,

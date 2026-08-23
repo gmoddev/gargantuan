@@ -99,5 +99,9 @@ return c({
 			description = "Queues a finite world-space impulse for the next fixed deformable step.",
 			params = { p("impulse", t.Vector3) },
 		},
+		ApplyImpulseAtPosition = {
+			description = "Queues a finite world-space impulse at a world-space point for the next fixed deformable step.",
+			params = { p("impulse", t.Vector3), p("position", t.Vector3) },
+		},
 	},
 })

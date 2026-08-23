@@ -22,8 +22,15 @@ namespace gargantuan {
 		virtual PhysicsOperationResult DestroyBody(SoftBodyId Body) = 0;
 		virtual PhysicsOperationResult ApplyForce(SoftBodyId Body, glm::vec3 Force) = 0;
 		virtual PhysicsOperationResult ApplyImpulse(SoftBodyId Body, glm::vec3 Impulse) = 0;
+		virtual PhysicsOperationResult ApplyImpulseAtPosition(
+			SoftBodyId Body,
+			glm::vec3 Impulse,
+			glm::vec3 Position
+		) = 0;
 		[[nodiscard]] virtual std::optional<SoftBodyState> GetBodyState(SoftBodyId Body) const = 0;
 		[[nodiscard]] virtual SoftBodyStepResult Step(const SoftBodyStepConfig &Config) = 0;
+		[[nodiscard]] virtual bool HasInFlightStep() const = 0;
+		virtual void Shutdown() = 0;
 		[[nodiscard]] virtual const SoftBodyWorldLimits &GetLimits() const = 0;
 	};
 
@@ -47,8 +54,11 @@ namespace gargantuan {
 		PhysicsOperationResult DestroyBody(SoftBodyId Body);
 		PhysicsOperationResult ApplyForce(SoftBodyId Body, glm::vec3 Force);
 		PhysicsOperationResult ApplyImpulse(SoftBodyId Body, glm::vec3 Impulse);
+		PhysicsOperationResult ApplyImpulseAtPosition(SoftBodyId Body, glm::vec3 Impulse, glm::vec3 Position);
 		[[nodiscard]] std::optional<SoftBodyState> GetBodyState(SoftBodyId Body) const;
 		[[nodiscard]] SoftBodyStepResult Step(const SoftBodyStepConfig &Config);
+		[[nodiscard]] bool HasInFlightStep() const;
+		void Shutdown();
 		[[nodiscard]] const SoftBodyWorldLimits &GetLimits() const;
 
 	  private:

@@ -19,7 +19,9 @@ namespace gargantuan {
 			throw std::invalid_argument("[Physics:SoftBody] SoftBodyWorld requires a valid backend");
 	}
 
-	SoftBodyWorld::~SoftBodyWorld() = default;
+	SoftBodyWorld::~SoftBodyWorld() {
+		Shutdown();
+	}
 	SoftBodyWorld::SoftBodyWorld(SoftBodyWorld &&) noexcept = default;
 	SoftBodyWorld &SoftBodyWorld::operator=(SoftBodyWorld &&) noexcept = default;
 
@@ -44,11 +46,23 @@ namespace gargantuan {
 		return Backend ? Backend->ApplyImpulse(Body, Impulse)
 			: PhysicsOperationResult{PhysicsOperationStatus::BackendFailure, "Soft-body backend is unavailable"};
 	}
+	PhysicsOperationResult SoftBodyWorld::ApplyImpulseAtPosition(
+		SoftBodyId Body,
+		glm::vec3 Impulse,
+		glm::vec3 Position
+	) {
+		return Backend ? Backend->ApplyImpulseAtPosition(Body, Impulse, Position)
+			: PhysicsOperationResult{PhysicsOperationStatus::BackendFailure, "Soft-body backend is unavailable"};
+	}
 	std::optional<SoftBodyState> SoftBodyWorld::GetBodyState(SoftBodyId Body) const {
 		return Backend ? Backend->GetBodyState(Body) : std::nullopt;
 	}
 	SoftBodyStepResult SoftBodyWorld::Step(const SoftBodyStepConfig &Config) {
 		return Backend ? Backend->Step(Config) : SoftBodyStepResult{};
+	}
+	bool SoftBodyWorld::HasInFlightStep() const { return Backend && Backend->HasInFlightStep(); }
+	void SoftBodyWorld::Shutdown() {
+		if (Backend) Backend->Shutdown();
 	}
 	const SoftBodyWorldLimits &SoftBodyWorld::GetLimits() const {
 		if (!Backend) throw std::logic_error("Soft-body backend is unavailable");

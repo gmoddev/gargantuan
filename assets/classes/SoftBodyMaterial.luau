@@ -43,7 +43,16 @@ return c({
 			range = { minimum = 0, maximum = 1 },
 		},
 		ShapeCompliance = {
-			description = "XPBD rest-shape compliance used by rubber bodies.",
+			description = "Rotation-aware rest-shape compliance used by rubber bodies.",
+			type = t.Float,
+			unmodified = "0.00001f",
+			serializable = true,
+			replicated = true,
+			category = "Material",
+			range = { minimum = 0, maximum = 1 },
+		},
+		VolumeCompliance = {
+			description = "XPBD local-volume compliance used by rubber bodies; zero is maximally preserving.",
 			type = t.Float,
 			unmodified = "0.00001f",
 			serializable = true,

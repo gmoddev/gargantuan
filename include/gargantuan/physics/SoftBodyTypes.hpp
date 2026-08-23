@@ -23,6 +23,12 @@ namespace gargantuan {
 	inline constexpr std::size_t MaximumSoftBodyAttachments = 4096;
 	inline constexpr std::size_t MaximumSoftBodyColliders = 4096;
 	inline constexpr std::size_t MaximumSoftBodyStepsPerFrame = 4;
+	inline constexpr std::size_t MaximumSoftBodyWorkers = 8;
+	inline constexpr std::size_t MaximumSoftBodyBodiesPerBatch = MaximumSoftBodies;
+	inline constexpr std::size_t MaximumSoftBodyBatchVertices = MaximumSoftBodyWorldVertices;
+	inline constexpr std::size_t MaximumSoftBodyBatchConstraints = MaximumSoftBodyConstraints;
+	inline constexpr std::size_t MaximumSoftBodyQueuedResultBytes = 8 * 1024 * 1024;
+	inline constexpr std::size_t MaximumSoftBodyPointImpulsesPerStep = 64;
 	inline constexpr float SoftBodyStepInterval = 1.0f / 60.0f;
 
 	struct SoftBodyId {
@@ -36,6 +42,8 @@ namespace gargantuan {
 	enum class SoftBodyKind : std::uint8_t { Cloth, Rubber };
 	enum class SoftBodyQuality : std::uint8_t { Automatic, Low, Medium, High };
 	enum class SoftBodyCollisionMode : std::uint8_t { None, RigidPrimitives };
+	enum class SoftBodyExecutionMode : std::uint8_t { Jobified, SynchronousReference };
+	enum class SoftBodyBroadphaseMode : std::uint8_t { DeterministicSweep, BruteForceReference };
 
 	struct SoftBodyMaterialDesc {
 		float ParticleMass = 0.1f;
@@ -43,6 +51,7 @@ namespace gargantuan {
 		float StretchCompliance = 0.000001f;
 		float BendCompliance = 0.0001f;
 		float ShapeCompliance = 0.00001f;
+		float VolumeCompliance = 0.00001f;
 		float Friction = 0.2f;
 		float Thickness = 0.05f;
 	};
@@ -71,6 +80,11 @@ namespace gargantuan {
 		CFrame Transform;
 	};
 
+	struct SoftBodyPointImpulse {
+		glm::vec3 Impulse{0.0f};
+		glm::vec3 Position{0.0f};
+	};
+
 	struct SoftBodyState {
 		SoftBodyId Body;
 		std::uint64_t TopologyRevision = 0;
@@ -87,23 +101,46 @@ namespace gargantuan {
 		std::size_t MaximumConstraints = MaximumSoftBodyConstraints;
 		std::size_t MaximumAttachments = MaximumSoftBodyAttachments;
 		std::size_t MaximumColliders = MaximumSoftBodyColliders;
+		std::size_t MaximumWorkers = MaximumSoftBodyWorkers;
+		std::size_t MaximumBodiesPerBatch = MaximumSoftBodyBodiesPerBatch;
+		std::size_t MaximumBatchVertices = MaximumSoftBodyBatchVertices;
+		std::size_t MaximumBatchConstraints = MaximumSoftBodyBatchConstraints;
+		std::size_t MaximumQueuedResultBytes = MaximumSoftBodyQueuedResultBytes;
+		std::size_t MaximumPointImpulsesPerStep = MaximumSoftBodyPointImpulsesPerStep;
 	};
 
 	struct SoftBodyStepConfig {
 		float DeltaTime = SoftBodyStepInterval;
 		glm::vec3 Gravity{0.0f, -196.2f, 0.0f};
 		std::vector<SoftBodyCollider> Colliders;
+		SoftBodyExecutionMode ExecutionMode = SoftBodyExecutionMode::Jobified;
+		SoftBodyBroadphaseMode BroadphaseMode = SoftBodyBroadphaseMode::DeterministicSweep;
 	};
 
 	struct SoftBodyStepProfile {
 		std::uint64_t IntegrationNanoseconds = 0;
 		std::uint64_t ConstraintNanoseconds = 0;
+		std::uint64_t SnapshotNanoseconds = 0;
+		std::uint64_t DispatchNanoseconds = 0;
+		std::uint64_t WorkerWaitNanoseconds = 0;
+		std::uint64_t BroadphaseConstructionNanoseconds = 0;
+		std::uint64_t BroadphaseQueryNanoseconds = 0;
 		std::uint64_t CollisionNanoseconds = 0;
+		std::uint64_t ResultMergeNanoseconds = 0;
 		std::uint64_t ExtractionNanoseconds = 0;
 		std::size_t SimulatedBodies = 0;
 		std::size_t SimulatedVertices = 0;
 		std::size_t ConstraintCount = 0;
+		std::size_t JobsDispatched = 0;
+		std::size_t WorkerCount = 0;
+		std::size_t ColliderQueries = 0;
+		std::size_t CandidateColliders = 0;
+		std::size_t FrozenBodies = 0;
+		std::size_t BacklogDrops = 0;
+		std::size_t StaleResults = 0;
+		std::size_t QueuedResultBytes = 0;
 		std::size_t EstimatedBytes = 0;
+		double WorkerUtilization = 0.0;
 	};
 
 	struct SoftBodyStepResult {

@@ -104,6 +104,7 @@ The following documents describe recently implemented, source-verified slices:
 - [Renderer Foundation 2 accepted architecture](../../devdocs/CurrentArchitecture/RendererFoundation2.md)
 - [Renderer Foundation 2C final backend decision](../../devdocs/CurrentArchitecture/RendererFoundation2C.md)
 - [Physics backend](../../devdocs/CurrentArchitecture/PhysicsBackend.md)
+- [Soft-body Physics Foundation 2](../../devdocs/CurrentArchitecture/SoftBodyPhysicsFoundation2.md)
 - [Soft-body Physics Foundation 1](../../devdocs/CurrentArchitecture/SoftBodyPhysicsFoundation.md)
 - [Instance attributes](../src/content/docs/developing/instance-attributes.mdx)
 - [Instance tags](../src/content/docs/developing/instance-tags.mdx)

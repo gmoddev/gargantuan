@@ -26,6 +26,7 @@ namespace gargantuan {
 		friend class WorldRoot;
 		glm::vec3 AccumulatedForce{0.0f};
 		glm::vec3 AccumulatedImpulse{0.0f};
+		std::vector<SoftBodyPointImpulse> AccumulatedPointImpulses;
 
 	  protected:
 		[[nodiscard]] virtual SoftBodyKind GetSoftBodyKind() const = 0;

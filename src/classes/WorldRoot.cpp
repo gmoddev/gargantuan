@@ -63,6 +63,7 @@ namespace gargantuan {
 				.StretchCompliance = (*MaterialValue)->GetStretchCompliance(),
 				.BendCompliance = (*MaterialValue)->GetBendCompliance(),
 				.ShapeCompliance = (*MaterialValue)->GetShapeCompliance(),
+				.VolumeCompliance = (*MaterialValue)->GetVolumeCompliance(),
 				.Friction = (*MaterialValue)->GetFriction(),
 				.Thickness = (*MaterialValue)->GetThickness(),
 			};
@@ -245,7 +246,7 @@ namespace gargantuan {
 		auto &Connections = PhysicsConnections[Id];
 		for (const std::string_view Name : {
 				 "ParticleMass", "Damping", "StretchCompliance", "BendCompliance", "ShapeCompliance",
-				 "Friction", "Thickness"
+				 "VolumeCompliance", "Friction", "Thickness"
 			})
 			Connections.push_back(Material->GetPropertyChangedSignal(std::string(Name))->Connect(MarkUsersDirty));
 	}
@@ -492,6 +493,22 @@ namespace gargantuan {
 				if (Result.Succeeded()) Body->AccumulatedImpulse = {};
 				else LOG_ERROR(App, "[Physics:SoftBody] Impulse application failed: %s", Result.Message.c_str());
 			}
+			std::size_t AppliedPointImpulses = 0;
+			for (const auto &PointImpulse : Body->AccumulatedPointImpulses) {
+				auto Result = Deformables.ApplyImpulseAtPosition(
+					Found->second, PointImpulse.Impulse, PointImpulse.Position
+				);
+				if (!Result.Succeeded()) {
+					LOG_ERROR(App, "[Physics:SoftBody] Point impulse application failed: %s", Result.Message.c_str());
+					break;
+				}
+				++AppliedPointImpulses;
+			}
+			if (AppliedPointImpulses != 0)
+				Body->AccumulatedPointImpulses.erase(
+					Body->AccumulatedPointImpulses.begin(),
+					Body->AccumulatedPointImpulses.begin() + static_cast<std::ptrdiff_t>(AppliedPointImpulses)
+				);
 		}
 	}
 
@@ -518,6 +535,7 @@ namespace gargantuan {
 	void WorldRoot::ShutdownPhysics() {
 		if (ShuttingDownPhysics) return;
 		ShuttingDownPhysics = true;
+		Deformables.Shutdown();
 		if (UnbindDescendants) UnbindDescendants();
 		if (DescendantRemovedConnection) DescendantRemovedConnection->Disconnect();
 		if (DestroyingConnection) DestroyingConnection->Disconnect();

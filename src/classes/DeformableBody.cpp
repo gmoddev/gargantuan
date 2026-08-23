@@ -25,4 +25,13 @@ namespace gargantuan {
 			throw std::invalid_argument("[Physics:SoftBody] ApplyImpulse requires a finite bounded value");
 		AccumulatedImpulse = Candidate;
 	}
+
+	void DeformableBody::ApplyImpulseAtPosition(glm::vec3 Impulse, glm::vec3 Position) {
+		AssertCanMutate();
+		if (!IsFinite(Impulse) || !IsFinite(Position))
+			throw std::invalid_argument("[Physics:SoftBody] ApplyImpulseAtPosition requires finite values");
+		if (AccumulatedPointImpulses.size() == MaximumSoftBodyPointImpulsesPerStep)
+			throw std::runtime_error("[Physics:SoftBody] Point impulse limit reached for this fixed step");
+		AccumulatedPointImpulses.push_back({Impulse, Position});
+	}
 }

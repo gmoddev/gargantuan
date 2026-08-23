@@ -20,8 +20,10 @@ Gargantuan uses Box3D for rigid-body simulation and a sibling engine-owned XPBD
 backend for deformable simulation. Box3D remains an implementation behind an
 engine-owned rigid contract; it is not an engine object model, identity system,
 or public API. This document describes the rigid boundary and its coordination
-with deformation. See [Soft-body Physics Foundation 1](SoftBodyPhysicsFoundation.md)
-for the deformable contract, solver, tiers, renderer flow, and evidence.
+with deformation. See [Soft-body Physics Foundation 2](SoftBodyPhysicsFoundation2.md)
+for the current deformable job, collision, and rubber architecture, and
+[Foundation 1](SoftBodyPhysicsFoundation.md) for the original semantic,
+renderer, and persistence baseline.
 
 ```text
 BasePart / Constraint semantics
@@ -36,6 +38,7 @@ Cloth / RubberBody semantics
         -> SoftBodyWorld
         -> ISoftBodyBackend
         -> XpbdSoftBodyBackend
+        -> existing bounded JobSystem workers
 ```
 
 `WorldRoot` owns one `PhysicsWorld` and one `SoftBodyWorld`. Each world owns one

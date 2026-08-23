@@ -22,6 +22,10 @@ related_adrs: []
 
 # Soft-body Physics Foundation 1
 
+Foundation 1 is the accepted semantic, persistence, and renderer-integration
+baseline. [Foundation 2](SoftBodyPhysicsFoundation2.md) is the current job,
+broadphase, primitive-contact, and rubber architecture.
+
 ## Outcome and decision gate
 
 Foundation 1 selects **Option B: a Gargantuan-owned, CPU XPBD deformable
