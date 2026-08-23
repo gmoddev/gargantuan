@@ -14,6 +14,7 @@
 #include <optional>
 #include <string>
 #include <variant>
+#include <vector>
 
 namespace gargantuan {
 	inline constexpr std::size_t MaximumPendingMutations = 4096;
@@ -56,11 +57,20 @@ namespace gargantuan {
 		std::uint64_t TransactionOwner = 0;
 	};
 
+	inline constexpr std::size_t MaximumCreateInitialProperties = 32;
+	struct InitialPropertyMutation {
+		SchemaId DeclaringClassSchemaId;
+		std::uint32_t DeclaringDefinitionVersion = 0;
+		std::string PropertyName;
+		WireValue Value;
+	};
+
 	struct CreateObjectCommand {
 		SchemaId ClassSchemaId;
 		std::uint32_t DefinitionVersion = 0;
 		ObjectId Parent;
 		std::optional<std::string> Name;
+		std::vector<InitialPropertyMutation> InitialProperties;
 	};
 	struct UpdatePropertyCommand { ObjectId Object; std::string PropertyName; std::any Value; };
 	struct UpdateWirePropertyCommand { ObjectId Object; std::string PropertyName; WireValue Value; };

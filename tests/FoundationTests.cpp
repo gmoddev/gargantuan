@@ -4559,7 +4559,10 @@ namespace {
 				std::ranges::contains(handshake["Result"]["Capabilities"], "SaveProject") &&
 				std::ranges::contains(handshake["Result"]["Capabilities"], "SaveProjectAs") &&
 				std::ranges::contains(handshake["Result"]["Capabilities"], "AuthoritativeRevision") &&
+				std::ranges::contains(handshake["Result"]["Capabilities"], "OptimisticProjectRevision") &&
 				std::ranges::contains(handshake["Result"]["Capabilities"], "CreateInstance") &&
+				std::ranges::contains(handshake["Result"]["Capabilities"], "CreateInstanceInitialProperties") &&
+				std::ranges::contains(handshake["Result"]["Capabilities"], "SetCustomProperty") &&
 				std::ranges::contains(handshake["Result"]["Capabilities"], "DestroyInstance") &&
 				std::ranges::contains(handshake["Result"]["Capabilities"], "DuplicateInstance") &&
 				std::ranges::contains(handshake["Result"]["Capabilities"], "ReparentInstance") &&
@@ -5272,6 +5275,63 @@ namespace {
 		Json StructuralDestinationId;
 		Json StructuralDuplicateId;
 		if (WorkspaceObject != objects.end() && DiscoveredCustomClass != projectSchema["Result"]["Definitions"].end()) {
+			auto BeforeConflict = call("GetProjectState", Json::object(), "test-token");
+			const auto ConflictRevision = BeforeConflict["Result"]["AuthoritativeRevision"].get<std::uint64_t>();
+			auto StaleCreate = call("CreateInstance", {
+				{"ClassSchemaId", (*DiscoveredCustomClass)["SchemaId"]},
+				{"DefinitionVersion", 1}, {"Parent", (*WorkspaceObject)["Id"]},
+				{"Name", "MustNotExist"}, {"ExpectedRevision", ConflictRevision + 1},
+			}, "test-token");
+			Check(!StaleCreate["Ok"].get<bool>() && StaleCreate["Error"]["Code"] == "Conflict" &&
+				call("PollChanges", Json::object(), "test-token")["Result"]["Records"].empty() &&
+				call("GetProjectState", Json::object(), "test-token")["Result"] == BeforeConflict["Result"],
+				"ExpectedRevision rejects a stale structural mutation without state or journal changes");
+
+			auto Initialized = call("CreateInstance", {
+				{"ClassSchemaId", (*DiscoveredCustomClass)["SchemaId"]},
+				{"DefinitionVersion", 1}, {"Parent", (*WorkspaceObject)["Id"]},
+				{"Name", "AtomicInitialized"}, {"ExpectedRevision", ConflictRevision},
+				{"InitialProperties", Json::array({Json{
+					{"DeclaringClassSchemaId", (*DiscoveredCustomClass)["SchemaId"]},
+					{"DeclaringDefinitionVersion", 1}, {"Property", "Score"},
+					{"Value", {{"Type", "Int"}, {"Value", 314}}},
+				}})},
+			}, "test-token");
+			auto InitializedChanges = call("PollChanges", Json::object(), "test-token");
+			Check(Initialized["Ok"].get<bool>() &&
+				Initialized["Result"]["AuthoritativeRevision"] == ConflictRevision + 1 &&
+				std::ranges::any_of(InitializedChanges["Result"]["Records"], [&](const Json &Record) {
+					return Record["Operation"] == "PropertyUpdate" &&
+						Record["ObjectId"] == Initialized["Result"]["Object"] &&
+						Record.value("DeclaringClassSchemaId", "") == (*DiscoveredCustomClass)["SchemaId"] &&
+						Record["PropertyName"] == "Score" && Record["Value"]["Value"] == 314;
+				}),
+				"CreateInstance validates and commits initialized custom properties with one authoritative revision");
+
+			auto BeforeRejectedInitialization = call("GetProjectState", Json::object(), "test-token");
+			auto SnapshotBeforeRejectedInitialization = call("GetSnapshot", Json::object(), "test-token");
+			auto RejectedInitialization = call("CreateInstance", {
+				{"ClassSchemaId", (*DiscoveredCustomClass)["SchemaId"]},
+				{"DefinitionVersion", 1}, {"Parent", (*WorkspaceObject)["Id"]},
+				{"Name", "PartialObjectMustNotExist"},
+				{"ExpectedRevision", BeforeRejectedInitialization["Result"]["AuthoritativeRevision"]},
+				{"InitialProperties", Json::array({Json{
+					{"DeclaringClassSchemaId", (*DiscoveredCustomClass)["SchemaId"]},
+					{"DeclaringDefinitionVersion", 1}, {"Property", "Score"},
+					{"Value", {{"Type", "String"}, {"Value", "Wrong type"}}},
+				}})},
+			}, "test-token");
+			auto SnapshotAfterRejectedInitialization = call("GetSnapshot", Json::object(), "test-token");
+			Check(!RejectedInitialization["Ok"].get<bool>() &&
+				SnapshotBeforeRejectedInitialization["Result"]["Snapshot"]["Objects"].size() ==
+					SnapshotAfterRejectedInitialization["Result"]["Snapshot"]["Objects"].size() &&
+				std::ranges::none_of(
+					SnapshotAfterRejectedInitialization["Result"]["Snapshot"]["Objects"],
+					[](const Json &Object) { return Object["Name"] == "PartialObjectMustNotExist"; }) &&
+				call("GetProjectState", Json::object(), "test-token")["Result"] ==
+					BeforeRejectedInitialization["Result"],
+				"failed initialized creation exposes no partial object and advances no revision");
+
 			auto BeforeCreate = call("GetProjectState", Json::object(), "test-token");
 			auto Created = call("CreateInstance", {
 				{"ClassSchemaId", (*DiscoveredCustomClass)["SchemaId"]},

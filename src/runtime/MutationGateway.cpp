@@ -320,6 +320,21 @@ namespace gargantuan {
 							throw;
 						}
 					} else if constexpr (std::is_same_v<Command, CreateObjectCommand>) {
+						if (CommandValue.InitialProperties.size() > MaximumCreateInitialProperties)
+							return {
+								MutationStatus::ResourceLimit,
+								std::nullopt,
+								"Create initial-property count exceeds its bound"
+							};
+						for (std::size_t Left = 0; Left < CommandValue.InitialProperties.size(); ++Left)
+							for (std::size_t Right = Left + 1; Right < CommandValue.InitialProperties.size(); ++Right)
+								if (CommandValue.InitialProperties[Left].PropertyName ==
+									CommandValue.InitialProperties[Right].PropertyName)
+									return {
+										MutationStatus::ValidationFailed,
+										std::nullopt,
+										"Create initial properties contain a duplicate name"
+									};
 						auto *Definition = InstanceClassRegistry::GetDefinitionBySchemaId(CommandValue.ClassSchemaId);
 						if (!Definition || Definition->DefinitionVersion != CommandValue.DefinitionVersion ||
 							!InstanceClassRegistry::IsConstructible(*Definition) || !Definition->EditorVisible ||
@@ -371,6 +386,33 @@ namespace gargantuan {
 									"Name", *CommandValue.Name, Enums::Permission::Engine, securityContext
 								) != MutationStatus::Success)
 								return {MutationStatus::ValidationFailed, std::nullopt, "Initial Name is invalid"};
+							for (const auto &Initial : CommandValue.InitialProperties) {
+								auto *Property = InstanceValue->FindProperty(Initial.PropertyName);
+								if (!Property || Property->DeclaringSchemaId != Initial.DeclaringClassSchemaId ||
+									Property->DeclaringDefinitionVersion != Initial.DeclaringDefinitionVersion ||
+									!Property->Editable ||
+									Property->SemanticType == InstanceProperty::DataType::Unsupported ||
+									Property->SemanticType == InstanceProperty::DataType::ObjectReference ||
+									Initial.PropertyName == "Source")
+									return {
+										MutationStatus::ReadOnly,
+										std::nullopt,
+										"Create initial property is absent, stale, or not editor-writable"
+									};
+								const auto Status = InstanceValue->ApplyPropertyWireMutation(
+									Initial.PropertyName, Initial.Value, Enums::Permission::None, securityContext
+								);
+								if (Status != MutationStatus::Success)
+									return {
+										Status,
+										std::nullopt,
+										std::format(
+											"Cannot initialize {}: {}",
+											Initial.PropertyName,
+											GetMutationStatusDescription(Status)
+										)
+									};
+							}
 						}
 						std::string Snapshot;
 						if (Authority.GetOrigin() == MutationCommandOrigin::Studio) {

@@ -546,6 +546,22 @@ namespace gargantuan {
 					));
 				RequestTransaction = TransactionId{Value};
 			}
+			std::optional<std::uint64_t> ExpectedRevision;
+			if (parameters.contains("ExpectedRevision")) {
+				if (!parameters["ExpectedRevision"].is_number_unsigned())
+					return SerializeBoundedResponse(ErrorResponse(
+						requestId, "MalformedRequest", "ExpectedRevision must be a positive unsigned integer"
+					));
+				const auto Value = parameters["ExpectedRevision"].get<std::uint64_t>();
+				if (Value == 0)
+					return SerializeBoundedResponse(ErrorResponse(
+						requestId, "MalformedRequest", "ExpectedRevision must be a positive unsigned integer"
+					));
+				ExpectedRevision = Value;
+			}
+			auto HasRevisionConflict = [&] {
+				return ExpectedRevision && World && World->GetAuthoritativeRevision() != *ExpectedRevision;
+			};
 			const bool viewportMethod = method == "OpenViewportTransport" || method == "CloseViewportTransport" ||
 				method == "ConfigureViewport" || method == "SetViewportCamera" ||
 				method == "CaptureViewport" || method == "PickViewport";
@@ -555,13 +571,14 @@ namespace gargantuan {
 				if (!parameters.empty())
 					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Handshake takes no parameters"));
 				Json capabilities = {
-					"OpenProject", "CreateProject", "Schema", "Snapshot", "Journal", "SetProperty", "SetAttribute", "SetExtensionProperty",
+					"OpenProject", "CreateProject", "Schema", "Snapshot", "Journal", "SetProperty", "SetAttribute", "SetExtensionProperty", "SetCustomProperty",
 					"AddTag", "RemoveTag", "SaveProject", "SaveProjectAs", "AuthoritativeRevision",
 					"CreateInstance", "DestroyInstance", "DuplicateInstance", "ReparentInstance",
 					"BeginTransaction",
 					"CommitTransaction",
 					"AuthoritativeTransactions",
 					"Undo", "Redo", "AuthoritativeHistoryStatus",
+					"OptimisticProjectRevision", "CreateInstanceInitialProperties",
 					"ReadScriptSource", "WriteScriptSource",
 					"PlaySession", "DiagnosticStream", "SendPlayInput",
 					"ConfigureViewport", "SetViewportCamera", "CaptureViewport", "PickViewport"
@@ -1106,9 +1123,9 @@ namespace gargantuan {
 			}
 
 			if (method == "Undo" || method == "Redo") {
-				if (!parameters.empty())
+				if (!HasOnlyFields(parameters, {"ExpectedRevision"}))
 					return SerializeBoundedResponse(ErrorResponse(
-						requestId, "MalformedRequest", "Undo and Redo take no parameters"
+						requestId, "MalformedRequest", "Undo and Redo accept only ExpectedRevision"
 					));
 				if (!StudioSecurity.HasCapability(ScriptCapability::MutateDataModel))
 					return SerializeBoundedResponse(ErrorResponse(
@@ -1119,6 +1136,10 @@ namespace gargantuan {
 				if (!Cursor)
 					return SerializeBoundedResponse(ErrorResponse(
 						requestId, "SnapshotRequired", "GetSnapshot must establish a journal cursor"
+					));
+				if (HasRevisionConflict())
+					return SerializeBoundedResponse(ErrorResponse(
+						requestId, "Conflict", "The authoritative project revision changed before history execution"
 					));
 				auto Result = method == "Undo" ? Mutations.Undo(*World, StudioSecurity) : Mutations.Redo(*World, StudioSecurity);
 				if (!Result.Succeeded()) {
@@ -1149,9 +1170,13 @@ namespace gargantuan {
 					return SerializeBoundedResponse(ErrorResponse(
 						requestId, "TransactionOpen", "Commit the open authoring transaction before saving"));
 				const bool saveAs = method == "SaveProjectAs";
-				if ((!saveAs && !parameters.empty()) ||
+				if ((!saveAs && !HasOnlyFields(parameters, {"ExpectedRevision"})) ||
 					(saveAs && (!HasOnlyFields(parameters, {"Destination"}) || !parameters.contains("Destination"))))
 					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Project persistence parameters are invalid"));
+				if (HasRevisionConflict())
+					return SerializeBoundedResponse(ErrorResponse(
+						requestId, "Conflict", "The authoritative project revision changed before persistence"
+					));
 
 				std::unique_ptr<DiskFilesystem> destinationFilesystem;
 				std::optional<Project> destinationProject;
@@ -1640,7 +1665,7 @@ namespace gargantuan {
 					return SerializeBoundedResponse(ErrorResponse(requestId, "SnapshotRequired", "GetSnapshot must establish a cursor"));
 				if (!HasOnlyFields(parameters, {
 						"Object", "ClassSchemaId", "ClassDefinitionVersion", "DeclaringClassSchemaId",
-						"DeclaringDefinitionVersion", "Property", "Value", "TransactionId"
+						"DeclaringDefinitionVersion", "Property", "Value", "TransactionId", "ExpectedRevision"
 					}) ||
 					!parameters.contains("Object") || !parameters.contains("Property") ||
 					!parameters["Property"].is_string() || parameters["Property"].get_ref<const std::string &>().empty() ||
@@ -1650,6 +1675,10 @@ namespace gargantuan {
 				auto value = JsonCodec::DecodeWireValue(parameters["Value"]);
 				if (!object || !value)
 					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "SetProperty Object or WireValue is invalid"));
+				if (HasRevisionConflict())
+					return SerializeBoundedResponse(ErrorResponse(
+						requestId, "Conflict", "The authoritative project revision changed before property mutation"
+					));
 				auto target = ObjectRegistry::Get().Lookup(object->ToObjectId());
 				if (!target || target->GetReplicationScopeId() != World->GetObjectId())
 					return SerializeBoundedResponse(ErrorResponse(requestId, "StaleObject", "Object is not live in the open project"));
@@ -1742,7 +1771,7 @@ namespace gargantuan {
 						requestId, "SnapshotRequired", "GetSnapshot must establish a cursor"
 					));
 				if (!HasOnlyFields(parameters, {
-						"Object", "ExtensionSchemaId", "DefinitionVersion", "Property", "Value", "TransactionId"
+						"Object", "ExtensionSchemaId", "DefinitionVersion", "Property", "Value", "TransactionId", "ExpectedRevision"
 					}) || !parameters.contains("Object") || !parameters.contains("ExtensionSchemaId") ||
 					!parameters["ExtensionSchemaId"].is_string() || !parameters.contains("DefinitionVersion") ||
 					!parameters["DefinitionVersion"].is_number_unsigned() || !parameters.contains("Property") ||
@@ -1757,6 +1786,10 @@ namespace gargantuan {
 				if (!object || !extensionId || extensionId->ToString() != encodedId || !value)
 					return SerializeBoundedResponse(ErrorResponse(
 						requestId, "MalformedRequest", "SetExtensionProperty identity or value is invalid"
+					));
+				if (HasRevisionConflict())
+					return SerializeBoundedResponse(ErrorResponse(
+						requestId, "Conflict", "The authoritative project revision changed before extension mutation"
 					));
 				auto target = ObjectRegistry::Get().Lookup(object->ToObjectId());
 				if (!target || target->GetReplicationScopeId() != World->GetObjectId())
@@ -1806,7 +1839,7 @@ namespace gargantuan {
 						requestId, "SnapshotRequired", "GetSnapshot must establish a cursor"
 					));
 				if (!HasOnlyFields(parameters, {
-						"Object", "DeclaringClassSchemaId", "DefinitionVersion", "Property", "Value", "TransactionId"
+						"Object", "DeclaringClassSchemaId", "DefinitionVersion", "Property", "Value", "TransactionId", "ExpectedRevision"
 					}) || !parameters.contains("Object") || !parameters.contains("DeclaringClassSchemaId") ||
 					!parameters["DeclaringClassSchemaId"].is_string() || !parameters.contains("DefinitionVersion") ||
 					!parameters["DefinitionVersion"].is_number_unsigned() || !parameters.contains("Property") ||
@@ -1821,6 +1854,10 @@ namespace gargantuan {
 				if (!object || !declaringId || declaringId->ToString() != encodedId || !value)
 					return SerializeBoundedResponse(ErrorResponse(
 						requestId, "MalformedRequest", "SetCustomProperty identity or value is invalid"
+					));
+				if (HasRevisionConflict())
+					return SerializeBoundedResponse(ErrorResponse(
+						requestId, "Conflict", "The authoritative project revision changed before custom property mutation"
 					));
 				auto target = ObjectRegistry::Get().Lookup(object->ToObjectId());
 				if (!target || target->GetReplicationScopeId() != World->GetObjectId())
@@ -1872,7 +1909,7 @@ namespace gargantuan {
 					return SerializeBoundedResponse(ErrorResponse(requestId, "SnapshotRequired", "GetSnapshot must establish a cursor"));
 				MutationResult Mutation;
 				if (method == "CreateInstance") {
-					if (!HasOnlyFields(parameters, {"ClassSchemaId", "DefinitionVersion", "Parent", "Name", "TransactionId"}) ||
+					if (!HasOnlyFields(parameters, {"ClassSchemaId", "DefinitionVersion", "Parent", "Name", "InitialProperties", "TransactionId", "ExpectedRevision"}) ||
 						!parameters.contains("ClassSchemaId") || !parameters["ClassSchemaId"].is_string() ||
 						!parameters.contains("DefinitionVersion") || !parameters["DefinitionVersion"].is_number_unsigned() ||
 						!parameters.contains("Parent") || (parameters.contains("Name") && !parameters["Name"].is_string()))
@@ -1885,18 +1922,65 @@ namespace gargantuan {
 						return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "CreateInstance identity is invalid"));
 					std::optional<std::string> Name;
 					if (parameters.contains("Name")) Name = parameters["Name"].get<std::string>();
-					Mutation = Mutations.Apply(CreateObjectCommand{*ClassId, *Version, Parent->ToObjectId(), std::move(Name)},
+					std::vector<InitialPropertyMutation> InitialProperties;
+					if (parameters.contains("InitialProperties")) {
+						if (!parameters["InitialProperties"].is_array() ||
+							parameters["InitialProperties"].size() > MaximumCreateInitialProperties)
+							return SerializeBoundedResponse(ErrorResponse(
+								requestId, "ResourceLimit", "Create initial-property count exceeds its bound"
+							));
+						for (const auto &Initial : parameters["InitialProperties"]) {
+							if (!Initial.is_object() || !HasOnlyFields(Initial, {
+									"DeclaringClassSchemaId", "DeclaringDefinitionVersion", "Property", "Value"
+								}) || !Initial.contains("DeclaringClassSchemaId") ||
+								!Initial["DeclaringClassSchemaId"].is_string() ||
+								!Initial.contains("DeclaringDefinitionVersion") ||
+								!Initial.contains("Property") || !Initial["Property"].is_string() ||
+								Initial["Property"].get_ref<const std::string &>().empty() ||
+								Initial["Property"].get_ref<const std::string &>().size() > 256 ||
+								!Initial.contains("Value"))
+								return SerializeBoundedResponse(ErrorResponse(
+									requestId, "MalformedRequest", "Create initial property is malformed"
+								));
+							const auto EncodedDeclaring = Initial["DeclaringClassSchemaId"].get<std::string>();
+							auto Declaring = SchemaId::Parse(EncodedDeclaring);
+							auto DeclaringVersion = JsonCodec::DecodeUnsigned32(Initial["DeclaringDefinitionVersion"]);
+							auto Value = JsonCodec::DecodeWireValue(Initial["Value"]);
+							if (!Declaring || Declaring->ToString() != EncodedDeclaring || !DeclaringVersion ||
+								*DeclaringVersion == 0 || !Value)
+								return SerializeBoundedResponse(ErrorResponse(
+									requestId, "MalformedRequest", "Create initial property identity or value is invalid"
+								));
+							InitialProperties.push_back({
+								*Declaring,
+								*DeclaringVersion,
+								Initial["Property"].get<std::string>(),
+								std::move(*Value),
+							});
+						}
+					}
+					if (HasRevisionConflict())
+						return SerializeBoundedResponse(ErrorResponse(
+							requestId, "Conflict", "The authoritative project revision changed before create"
+						));
+					Mutation = Mutations.Apply(CreateObjectCommand{
+						*ClassId, *Version, Parent->ToObjectId(), std::move(Name), std::move(InitialProperties)
+					},
 						StudioMutationAuthority());
 				} else {
 					const bool Reparent = method == "ReparentInstance";
-					if (!HasOnlyFields(parameters, Reparent ? std::initializer_list<std::string_view>{"Object", "Parent", "TransactionId"}
-						: std::initializer_list<std::string_view>{"Object", "TransactionId"}) || !parameters.contains("Object") ||
+					if (!HasOnlyFields(parameters, Reparent ? std::initializer_list<std::string_view>{"Object", "Parent", "TransactionId", "ExpectedRevision"}
+						: std::initializer_list<std::string_view>{"Object", "TransactionId", "ExpectedRevision"}) || !parameters.contains("Object") ||
 						(Reparent && !parameters.contains("Parent")))
 						return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Structural identity fields are invalid"));
 					auto Object = JsonCodec::DecodeObjectId(parameters["Object"]);
 					auto Parent = Reparent ? JsonCodec::DecodeObjectId(parameters["Parent"]) : std::optional<WireObjectId>{};
 					if (!Object || (Reparent && !Parent))
 						return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Structural ObjectId is invalid"));
+					if (HasRevisionConflict())
+						return SerializeBoundedResponse(ErrorResponse(
+							requestId, "Conflict", "The authoritative project revision changed before structural mutation"
+						));
 					if (method == "DestroyInstance")
 						Mutation = Mutations.Apply(DestroyObjectCommand{Object->ToObjectId()}, StudioMutationAuthority());
 					else if (method == "DuplicateInstance")
