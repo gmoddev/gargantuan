@@ -59,9 +59,11 @@ return c({
 			replicated = true,
 		},
 		FontFace = {
-			description = "Logical font face identity resolved by the GUI font provider",
+			description = "Strict AssetService font reference",
 			type = t.String,
-			unmodified = '"GargantuanSans"',
+			unmodified = '"builtin://font/default"',
+			overrideRead = "GetFontFace",
+			overrideWrite = "SetFontFace",
 			serializable = true,
 			replicated = true,
 		},

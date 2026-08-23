@@ -4,6 +4,7 @@
 #include "gargantuan/gui/GuiResources.hpp"
 
 #include "gargantuan/gui/GuiLimits.hpp"
+#include "gargantuan/services/AssetService.hpp"
 
 #include <SDL3/SDL.h>
 #include <SDL3_ttf/SDL_textengine.h>
@@ -109,6 +110,8 @@ namespace gargantuan {
 		}
 
 		struct FontKey {
+			std::string Reference;
+			std::uint64_t ContentRevision = 0;
 			int Size64 = 0;
 			int Dpi64 = 0;
 			int Alignment = 0;
@@ -117,8 +120,9 @@ namespace gargantuan {
 
 		struct FontKeyHash {
 			std::size_t operator()(const FontKey &Key) const noexcept {
-				return std::hash<int>{}(Key.Size64) ^ (std::hash<int>{}(Key.Dpi64) << 1) ^
-					(std::hash<int>{}(Key.Alignment) << 2);
+				return std::hash<std::string>{}(Key.Reference) ^ (std::hash<std::uint64_t>{}(Key.ContentRevision) << 1) ^
+					(std::hash<int>{}(Key.Size64) << 2) ^ (std::hash<int>{}(Key.Dpi64) << 3) ^
+					(std::hash<int>{}(Key.Alignment) << 4);
 			}
 		};
 
@@ -137,6 +141,7 @@ namespace gargantuan {
 		struct ShapeKey {
 			std::string Text;
 			std::string FontFace;
+			std::uint64_t FontRevision = 0;
 			int Size64 = 0;
 			int Dpi64 = 0;
 			int WrapWidth = 0;
@@ -150,12 +155,13 @@ namespace gargantuan {
 			std::size_t operator()(const ShapeKey &Key) const noexcept {
 				std::size_t Result = std::hash<std::string>{}(Key.Text);
 				Result ^= std::hash<std::string>{}(Key.FontFace) << 1;
-				Result ^= std::hash<int>{}(Key.Size64) << 2;
-				Result ^= std::hash<int>{}(Key.Dpi64) << 3;
-				Result ^= std::hash<int>{}(Key.WrapWidth) << 4;
-				Result ^= std::hash<int>{}(Key.Alignment) << 5;
-				Result ^= std::hash<bool>{}(Key.Wrapped) << 6;
-				Result ^= std::hash<bool>{}(Key.EditableMetrics) << 7;
+				Result ^= std::hash<std::uint64_t>{}(Key.FontRevision) << 2;
+				Result ^= std::hash<int>{}(Key.Size64) << 3;
+				Result ^= std::hash<int>{}(Key.Dpi64) << 4;
+				Result ^= std::hash<int>{}(Key.WrapWidth) << 5;
+				Result ^= std::hash<int>{}(Key.Alignment) << 6;
+				Result ^= std::hash<bool>{}(Key.Wrapped) << 7;
+				Result ^= std::hash<bool>{}(Key.EditableMetrics) << 8;
 				return Result;
 			}
 		};
@@ -194,9 +200,13 @@ namespace gargantuan {
 	}
 
 	struct GuiTextSystem::Impl {
-		std::filesystem::path FontPath;
+		struct OpenFont {
+			TTF_Font *Font = nullptr;
+			std::shared_ptr<const std::vector<std::uint8_t>> Bytes;
+		};
+		std::shared_ptr<AssetService> Assets;
 		TTF_TextEngine Engine{};
-		std::unordered_map<FontKey, TTF_Font *, FontKeyHash> Fonts;
+		std::unordered_map<FontKey, OpenFont, FontKeyHash> Fonts;
 		std::unordered_map<GlyphKey, AtlasEntry, GlyphKeyHash> Glyphs;
 		std::vector<AtlasPage> Pages;
 		std::unordered_map<ShapeKey, std::pair<std::shared_ptr<const GuiShapedText>, std::uint64_t>, ShapeKeyHash> ShapeCache;
@@ -204,7 +214,8 @@ namespace gargantuan {
 		std::size_t FrameTextureBudget = 0;
 		GuiRuntimeProfile Profile;
 
-		explicit Impl(std::filesystem::path Path) : FontPath(std::move(Path)) {
+		explicit Impl(std::shared_ptr<AssetService> AssetsValue) : Assets(std::move(AssetsValue)) {
+			if (!Assets) throw std::invalid_argument("GUI text requires AssetService");
 			RetainTtf();
 			SDL_INIT_INTERFACE(&Engine);
 			Engine.userdata = this;
@@ -219,22 +230,25 @@ namespace gargantuan {
 
 		~Impl() {
 			ShapeCache.clear();
-			for (const auto &[Key, Font] : Fonts) {
+			for (const auto &[Key, Opened] : Fonts) {
 				(void)Key;
-				if (Font) TTF_CloseFont(Font);
+				if (Opened.Font) TTF_CloseFont(Opened.Font);
 			}
 			ReleaseTtf();
 		}
 
-		TTF_Font *GetFont(const GuiTextRequest &Request) {
+		TTF_Font *GetFont(const GuiTextRequest &Request, const AssetFontResource &Source) {
 			const FontKey Key{
+				Request.FontFace.empty() ? "builtin://font/default" : Request.FontFace,
+				Source.ContentRevision,
 				static_cast<int>(std::lround(Request.LogicalSize * 64.0f)),
 				static_cast<int>(std::lround(Request.DpiScale * 64.0f)),
 				std::clamp(Request.HorizontalAlignment, 0, 2),
 			};
-			if (auto Existing = Fonts.find(Key); Existing != Fonts.end()) return Existing->second;
-			if (Fonts.size() >= GuiLimits::MaximumFontInstances || FontPath.empty()) return nullptr;
-			auto *Font = TTF_OpenFont(FontPath.string().c_str(), Request.LogicalSize);
+			if (auto Existing = Fonts.find(Key); Existing != Fonts.end()) return Existing->second.Font;
+			if (Fonts.size() >= GuiLimits::MaximumFontInstances || !Source.Bytes || Source.Bytes->empty()) return nullptr;
+			auto *Stream = SDL_IOFromConstMem(Source.Bytes->data(), Source.Bytes->size());
+			auto *Font = Stream ? TTF_OpenFontIO(Stream, true, Request.LogicalSize) : nullptr;
 			if (!Font) return nullptr;
 			const int Dpi = std::max(1, static_cast<int>(std::lround(72.0f * Request.DpiScale)));
 			if (!TTF_SetFontSizeDPI(Font, Request.LogicalSize, Dpi, Dpi)) {
@@ -244,7 +258,7 @@ namespace gargantuan {
 			const TTF_HorizontalAlignment Alignment = Key.Alignment == 0 ? TTF_HORIZONTAL_ALIGN_LEFT :
 				Key.Alignment == 2 ? TTF_HORIZONTAL_ALIGN_RIGHT : TTF_HORIZONTAL_ALIGN_CENTER;
 			TTF_SetFontWrapAlignment(Font, Alignment);
-			Fonts.emplace(Key, Font);
+			Fonts.emplace(Key, OpenFont{Font, Source.Bytes});
 			return Font;
 		}
 
@@ -366,15 +380,17 @@ namespace gargantuan {
 		}
 	};
 
-	GuiTextSystem::GuiTextSystem(std::filesystem::path DefaultFontPath)
-		: State(std::make_unique<Impl>(std::move(DefaultFontPath))) {}
+	GuiTextSystem::GuiTextSystem(std::shared_ptr<AssetService> Assets)
+		: State(std::make_unique<Impl>(std::move(Assets))) {}
 	GuiTextSystem::~GuiTextSystem() = default;
 
 	std::shared_ptr<const GuiShapedText> GuiTextSystem::Shape(const GuiTextRequest &Request) {
 		const auto Sanitized = SanitizeUtf8(Request.Text);
+		const auto FontSource = State->Assets->ResolveFont(Request.FontFace);
 		const ShapeKey Key{
 			Sanitized.Bytes,
 			Request.FontFace,
+			FontSource ? FontSource->ContentRevision : 0,
 			static_cast<int>(std::lround(Request.LogicalSize * 64.0f)),
 			static_cast<int>(std::lround(Request.DpiScale * 64.0f)),
 			Request.Wrapped ? std::max(0, static_cast<int>(std::lround(Request.LogicalWrapWidth * Request.DpiScale))) : 0,
@@ -392,7 +408,7 @@ namespace gargantuan {
 		Result->InputBytes = Request.Text.size();
 		Result->ReplacedInvalidUtf8 = Sanitized.ReplacedInvalid;
 		Result->TruncatedInput = Sanitized.Truncated;
-		auto *Font = State->GetFont(Request);
+		auto *Font = FontSource ? State->GetFont(Request, *FontSource) : nullptr;
 		if (!Font || Sanitized.Bytes.empty()) {
 			if (Request.EditableMetrics) Result->CaretOffsets.push_back(0.0f);
 			State->Profile.TextShapingNanoseconds += Nanoseconds(Clock::now() - ShapeStart);
@@ -499,123 +515,5 @@ namespace gargantuan {
 	void GuiTextSystem::ResetFrameBudget(std::size_t ReservedUploadBytes) {
 		State->FrameTextureBudget = std::min(ReservedUploadBytes, GuiLimits::MaximumTextureUploadBytesPerFrame);
 	}
-	bool GuiTextSystem::HasFont() const { return !State->FontPath.empty() && std::filesystem::is_regular_file(State->FontPath); }
-
-	struct GuiImageStore::Impl {
-		struct StoredImage {
-			GuiImageResource Resource;
-			std::uint64_t Revision = 1;
-			std::shared_ptr<const std::vector<std::uint8_t>> Pixels;
-			bool Published = false;
-		};
-
-		std::unordered_map<std::string, StoredImage> Images;
-		std::vector<RenderTextureCreate> Creates;
-		std::vector<RenderTextureUpdate> Updates;
-		std::vector<RenderTextureRemove> Removes;
-		std::uint64_t NextSlot = 1;
-		std::size_t TotalBytes = 0;
-		std::size_t PendingBytes = 0;
-	};
-
-	GuiImageStore::GuiImageStore() : State(std::make_unique<Impl>()) {}
-	GuiImageStore::~GuiImageStore() = default;
-
-	void GuiImageStore::Register(
-		std::string LogicalId,
-		std::uint32_t Width,
-		std::uint32_t Height,
-		std::span<const std::uint8_t> Rgba8
-	) {
-		if (LogicalId.empty() || LogicalId.size() > 256) throw std::invalid_argument("GUI image identity is empty or oversized");
-		if (Width == 0 || Height == 0 || Width > GuiLimits::MaximumImageDimension || Height > GuiLimits::MaximumImageDimension)
-			throw std::length_error("GUI image dimensions exceed the Foundation 1 bound");
-		const std::size_t Bytes = static_cast<std::size_t>(Width) * Height * 4;
-		if (Rgba8.size() != Bytes) throw std::invalid_argument("GUI image RGBA byte count does not match dimensions");
-		auto Pixels = std::make_shared<const std::vector<std::uint8_t>>(Rgba8.begin(), Rgba8.end());
-		if (auto Existing = State->Images.find(LogicalId); Existing != State->Images.end()) {
-			auto PendingCreate = std::ranges::find(State->Creates, Existing->second.Resource.Texture, &RenderTextureCreate::Texture);
-			auto PendingUpdate = std::ranges::find(State->Updates, Existing->second.Resource.Texture, &RenderTextureUpdate::Texture);
-			const std::size_t ReplacedPendingBytes = PendingCreate != State->Creates.end() && PendingCreate->Pixels ? PendingCreate->Pixels->size() :
-				PendingUpdate != State->Updates.end() && PendingUpdate->Pixels ? PendingUpdate->Pixels->size() : 0;
-			const auto PreviousBytes = Existing->second.Pixels->size();
-			if (State->TotalBytes - PreviousBytes + Bytes > GuiLimits::MaximumImageBytes)
-				throw std::length_error("GUI image memory bound would be exceeded");
-			if (State->PendingBytes - ReplacedPendingBytes + Bytes > GuiLimits::MaximumTextureUploadBytesPerFrame)
-				throw std::length_error("GUI image upload would exceed the Foundation 1 per-frame bound");
-			State->TotalBytes = State->TotalBytes - PreviousBytes + Bytes;
-			if (Existing->second.Resource.Width == Width && Existing->second.Resource.Height == Height) {
-				Existing->second.Pixels = Pixels;
-				++Existing->second.Revision;
-				if (!Existing->second.Published) {
-					PendingCreate->Revision = Existing->second.Revision;
-					PendingCreate->Pixels = Pixels;
-				} else if (PendingUpdate != State->Updates.end()) {
-					PendingUpdate->Revision = Existing->second.Revision;
-					PendingUpdate->Pixels = Pixels;
-				} else {
-					State->Updates.push_back({Existing->second.Resource.Texture, Existing->second.Revision, 0, 0, Width, Height, Pixels});
-				}
-				State->PendingBytes = State->PendingBytes - ReplacedPendingBytes + Bytes;
-				return;
-			}
-			if (!Existing->second.Published) {
-				Existing->second.Resource.Width = Width;
-				Existing->second.Resource.Height = Height;
-				Existing->second.Pixels = Pixels;
-				++Existing->second.Revision;
-				PendingCreate->Revision = Existing->second.Revision;
-				PendingCreate->Width = Width;
-				PendingCreate->Height = Height;
-				PendingCreate->Pixels = Pixels;
-				State->PendingBytes = State->PendingBytes - ReplacedPendingBytes + Bytes;
-				return;
-			}
-			if (PendingUpdate != State->Updates.end()) State->Updates.erase(PendingUpdate);
-			State->Removes.push_back({Existing->second.Resource.Texture});
-			++Existing->second.Resource.Texture.Generation;
-			Existing->second.Resource.Width = Width;
-			Existing->second.Resource.Height = Height;
-			Existing->second.Revision = 1;
-			Existing->second.Pixels = Pixels;
-			Existing->second.Published = false;
-			State->Creates.push_back({Existing->second.Resource.Texture, 1, Width, Height, RenderTextureFormat::Rgba8Unorm, Pixels});
-			State->PendingBytes = State->PendingBytes - ReplacedPendingBytes + Bytes;
-			return;
-		}
-		if (State->Images.size() >= GuiLimits::MaximumImages || State->TotalBytes + Bytes > GuiLimits::MaximumImageBytes)
-			throw std::length_error("GUI image resource bound would be exceeded");
-		if (State->PendingBytes + Bytes > GuiLimits::MaximumTextureUploadBytesPerFrame)
-			throw std::length_error("GUI image upload would exceed the Foundation 1 per-frame bound");
-		const RenderTextureIdentity Texture{0x4755492000000000ULL + State->NextSlot++, 1};
-		State->Images.emplace(LogicalId, Impl::StoredImage{{Texture, Width, Height}, 1, Pixels, false});
-		State->Creates.push_back({Texture, 1, Width, Height, RenderTextureFormat::Rgba8Unorm, Pixels});
-		State->TotalBytes += Bytes;
-		State->PendingBytes += Bytes;
-	}
-
-	std::optional<GuiImageResource> GuiImageStore::Find(const std::string &LogicalId) const {
-		if (auto Existing = State->Images.find(LogicalId); Existing != State->Images.end()) return Existing->second.Resource;
-		return std::nullopt;
-	}
-
-	std::size_t GuiImageStore::PendingUploadBytes() const { return State->PendingBytes; }
-
-	GuiTextureChanges GuiImageStore::DrainTextureChanges() {
-		GuiTextureChanges Result;
-		Result.Creates = std::move(State->Creates);
-		Result.Updates = std::move(State->Updates);
-		Result.Removes = std::move(State->Removes);
-		State->Creates.clear();
-		State->Updates.clear();
-		State->Removes.clear();
-		for (auto &[LogicalId, Image] : State->Images) {
-			(void)LogicalId;
-			Image.Published = true;
-		}
-		for (const auto &Create : Result.Creates) Result.UploadBytes += Create.Pixels ? Create.Pixels->size() : 0;
-		for (const auto &Update : Result.Updates) Result.UploadBytes += Update.Pixels ? Update.Pixels->size() : 0;
-		State->PendingBytes = 0;
-		return Result;
-	}
+	bool GuiTextSystem::HasFont() const { return State->Assets->ResolveFont("builtin://font/default").has_value(); }
 }

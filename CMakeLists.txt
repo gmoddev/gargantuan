@@ -418,6 +418,17 @@ if(BUILD_TESTING)
 	endif()
 	add_executable(gargantuan_foundation_tests "tests/FoundationTests.cpp")
 	target_link_libraries(gargantuan_foundation_tests PRIVATE gargantuan_core nlohmann_json)
+	add_executable(gargantuan_asset_foundation_tests "tests/AssetFoundationTests.cpp")
+	target_link_libraries(gargantuan_asset_foundation_tests PRIVATE gargantuan_core nlohmann_json)
+	target_compile_definitions(gargantuan_asset_foundation_tests PRIVATE
+		GARGANTUAN_ASSET_TEST_FONT_PATH="${CMAKE_CURRENT_SOURCE_DIR}/vendor/sdl_ttf/external/harfbuzz/perf/fonts/Roboto-Regular.ttf"
+		GARGANTUAN_ASSET_TEST_PNG_PATH="${CMAKE_CURRENT_SOURCE_DIR}/assets/github/ross.png"
+	)
+	add_executable(gargantuan_asset_foundation_benchmark "tests/AssetFoundationBenchmark.cpp")
+	target_link_libraries(gargantuan_asset_foundation_benchmark PRIVATE gargantuan_core)
+	target_compile_definitions(gargantuan_asset_foundation_benchmark PRIVATE
+		GARGANTUAN_ASSET_TEST_FONT_PATH="${CMAKE_CURRENT_SOURCE_DIR}/vendor/sdl_ttf/external/harfbuzz/perf/fonts/Roboto-Regular.ttf"
+	)
 	add_executable(gargantuan_renderer_publication_tests "tests/RendererPublicationTests.cpp")
 	target_link_libraries(gargantuan_renderer_publication_tests PRIVATE gargantuan_core)
 	add_library(gargantuan_fake_telemetry SHARED "tests/telemetry/FakeTelemetryLibrary.cpp")
@@ -529,6 +540,8 @@ if(BUILD_TESTING)
 		set(GARGANTUAN_SDL_RUNTIME_TARGETS
 			gargantuan
 			gargantuan_foundation_tests
+			gargantuan_asset_foundation_tests
+			gargantuan_asset_foundation_benchmark
 			gargantuan_renderer_publication_tests
 			gargantuan_prerun_bootstrap_tests
 			gargantuan_attributes_tags_profile
@@ -596,6 +609,7 @@ if(BUILD_TESTING)
 		endforeach()
 	endif()
 	add_test(NAME gargantuan_foundation COMMAND gargantuan_foundation_tests)
+	add_test(NAME gargantuan_asset_foundation COMMAND gargantuan_asset_foundation_tests)
 	add_test(NAME gargantuan_renderer_publication COMMAND gargantuan_renderer_publication_tests)
 	add_test(NAME gargantuan_optional_telemetry
 		COMMAND gargantuan_optional_telemetry_tests
@@ -621,6 +635,9 @@ if(BUILD_TESTING)
 	set_tests_properties(gargantuan_shader_tool_validation PROPERTIES LABELS "build;shader" TIMEOUT 60)
 	set_tests_properties(gargantuan_foundation PROPERTIES
 		LABELS "foundation;runtime;serialization;editorhost;protocol;renderer" TIMEOUT 300
+	)
+	set_tests_properties(gargantuan_asset_foundation PROPERTIES
+		LABELS "assets;runtime;serialization;editorhost;renderer;headless" TIMEOUT 180
 	)
 	set_tests_properties(gargantuan_renderer_publication PROPERTIES LABELS "renderer;runtime;headless" TIMEOUT 120)
 	set_tests_properties(gargantuan_optional_telemetry PROPERTIES LABELS "telemetry;runtime;fail-open" TIMEOUT 60)

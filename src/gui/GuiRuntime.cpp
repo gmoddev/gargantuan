@@ -7,6 +7,7 @@
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Frame.hpp"
 #include "gargantuan/classes/ImageLabel.hpp"
+#include "gargantuan/services/AssetService.hpp"
 #include "gargantuan/classes/LayerCollector.hpp"
 #include "gargantuan/classes/ScreenGui.hpp"
 #include "gargantuan/classes/ScrollingFrame.hpp"
@@ -183,7 +184,7 @@ namespace gargantuan {
 			GuiRect TransformedBounds;
 			std::optional<GuiRect> Clip;
 			std::shared_ptr<const GuiShapedText> Text;
-			std::optional<GuiImageResource> Image;
+			std::optional<AssetImageResource> Image;
 			float AutoWidth = std::numeric_limits<float>::quiet_NaN();
 			float AutoHeight = std::numeric_limits<float>::quiet_NaN();
 		};
@@ -227,9 +228,9 @@ namespace gargantuan {
 		};
 
 		std::shared_ptr<DataModel> World;
+		std::shared_ptr<AssetService> Assets;
 		GuiViewportConfiguration Viewport;
 		GuiTextSystem Text;
-		GuiImageStore Images;
 		std::function<void()> DescendantBinding;
 		SignalConnection::Pointer DescendantRemovedConnection;
 		std::unordered_map<ObjectId, std::vector<SignalConnection::Pointer>> Observers;
@@ -262,6 +263,7 @@ namespace gargantuan {
 		std::uint64_t NextLayoutGeneration = 1;
 		std::uint64_t NextPresentationGeneration = 1;
 		std::uint64_t NextAccessibilityGeneration = 1;
+		std::uint64_t AssetChangeSequence = 1;
 		std::size_t PresentationVertices = 0;
 		std::size_t PresentationIndices = 0;
 		std::size_t LayoutPassesThisFrame = 0;
@@ -272,8 +274,19 @@ namespace gargantuan {
 		bool StructureDirty = true;
 		bool PresentationDirty = true;
 
+		static std::shared_ptr<AssetService> PrepareAssets(
+			const std::shared_ptr<DataModel> &World,
+			const std::filesystem::path &FontPath
+		) {
+			if (!World) throw std::invalid_argument("GuiRuntime requires a DataModel");
+			auto Service = std::dynamic_pointer_cast<AssetService>(World->GetService("AssetService"));
+			if (!Service) throw std::runtime_error("AssetService schema resolved to an incompatible service");
+			Service->ConfigureBuiltInFont(FontPath);
+			return Service;
+		}
+
 		Impl(std::shared_ptr<DataModel> WorldValue, std::filesystem::path FontPath)
-			: World(std::move(WorldValue)), Text(std::move(FontPath)) {
+			: World(std::move(WorldValue)), Assets(PrepareAssets(World, FontPath)), Text(Assets) {
 			if (!World) throw std::invalid_argument("GuiRuntime requires a DataModel");
 			Viewport = {1, 1, 1.0f, {}};
 			DescendantBinding = World->BindDescendants([this](std::shared_ptr<Instance> Object) {
@@ -646,7 +659,7 @@ namespace gargantuan {
 					DesiredWidth = Node.Text ? Node.Text->Width : 0.0f;
 					DesiredHeight = Node.Text ? Node.Text->Height : 0.0f;
 				} else if (auto Image = std::dynamic_pointer_cast<ImageLabel>(Node.Object)) {
-					Node.Image = Images.Find(Image->GetImage());
+					Node.Image = Assets->ResolveImage(Image->GetImage());
 					if (Node.Image) {
 						DesiredWidth = static_cast<float>(Node.Image->Width) / Viewport.DpiScale;
 						DesiredHeight = static_cast<float>(Node.Image->Height) / Viewport.DpiScale;
@@ -865,7 +878,7 @@ namespace gargantuan {
 					Working.Object = Object;
 					Working.Bounds = Node.Bounds;
 					Working.Text = Node.Presentation.Text;
-					if (auto Image = std::dynamic_pointer_cast<ImageLabel>(Object)) Working.Image = Images.Find(Image->GetImage());
+					if (auto Image = std::dynamic_pointer_cast<ImageLabel>(Object)) Working.Image = Assets->ResolveImage(Image->GetImage());
 					Node.Presentation = ResolvePresentation(Working);
 					if (!SameVisualPresentation(Previous, Node.Presentation)) {
 						Result.VisualChanged = true;
@@ -939,7 +952,7 @@ namespace gargantuan {
 				Working.Object = Object;
 				Working.Bounds = Bounds;
 				Working.Text = Existing.Presentation.Text;
-				if (auto Image = std::dynamic_pointer_cast<ImageLabel>(Object)) Working.Image = Images.Find(Image->GetImage());
+				if (auto Image = std::dynamic_pointer_cast<ImageLabel>(Object)) Working.Image = Assets->ResolveImage(Image->GetImage());
 				Next.Presentation = ResolvePresentation(Working);
 				const bool NodeVisualChanged = !SameVisualPresentation(Existing.Presentation, Next.Presentation) ||
 					Existing.Bounds.X != Next.Bounds.X || Existing.Bounds.Y != Next.Bounds.Y ||
@@ -1789,7 +1802,27 @@ namespace gargantuan {
 		State->SelectionOperationsThisFrame = 0;
 		State->MeasuredTextThisFrame.clear();
 		State->PendingVisualObjects.clear();
-		State->Text.ResetFrameBudget(State->Images.PendingUploadBytes());
+		auto AssetChanges = State->Assets->ReadChanges(State->AssetChangeSequence);
+		State->AssetChangeSequence = AssetChanges.NextSequence;
+		if (AssetChanges.RescanRequired || !AssetChanges.Changes.empty()) {
+			for (const auto &[Object, Connections] : State->Observers) {
+				(void)Connections;
+				auto InstanceValue = ObjectRegistry::Get().Lookup(Object);
+				if (auto Image = std::dynamic_pointer_cast<ImageLabel>(InstanceValue)) {
+					const bool Affected = AssetChanges.RescanRequired || std::ranges::any_of(AssetChanges.Changes, [&](const AssetChange &Change) {
+						return Change.Kind == AssetKind::Image && Change.Reference == Image->GetImage();
+					});
+					if (Affected) State->Mark(Object, DirtyLayout | DirtyPresentation | DirtyAccessibility);
+				}
+				if (auto Text = std::dynamic_pointer_cast<TextLabel>(InstanceValue)) {
+					const bool Affected = AssetChanges.RescanRequired || std::ranges::any_of(AssetChanges.Changes, [&](const AssetChange &Change) {
+						return Change.Kind == AssetKind::Font && Change.Reference == Text->GetFontFace();
+					});
+					if (Affected) State->Mark(Object, DirtyLayout | DirtyText | DirtyPresentation | DirtyAccessibility);
+				}
+			}
+		}
+		State->Text.ResetFrameBudget();
 		bool StructureChanged = false;
 		if (State->StructureDirty) {
 			State->Roots = State->DiscoverRoots();
@@ -1889,7 +1922,7 @@ namespace gargantuan {
 		}
 
 		auto TextChanges = State->Text.DrainTextureChanges();
-		auto ImageChanges = State->Images.DrainTextureChanges();
+		auto ImageChanges = State->Assets->DrainTextureChanges();
 		State->PendingTextures.Creates.insert(State->PendingTextures.Creates.end(),
 			std::make_move_iterator(TextChanges.Creates.begin()), std::make_move_iterator(TextChanges.Creates.end()));
 		State->PendingTextures.Creates.insert(State->PendingTextures.Creates.end(),
@@ -2175,18 +2208,19 @@ namespace gargantuan {
 		for (const auto Object : Changed) State->RefreshInteraction(Object);
 	}
 
-	void GuiRuntime::RegisterImage(
+	std::string GuiRuntime::RegisterImage(
 		std::string LogicalId,
 		std::uint32_t Width,
 		std::uint32_t Height,
 		std::span<const std::uint8_t> Rgba8
 	) {
-		State->Images.Register(std::move(LogicalId), Width, Height, Rgba8);
+		auto Reference = State->Assets->RegisterMemoryImage(std::move(LogicalId), Width, Height, Rgba8);
 		for (const auto &[Root, Cache] : State->RootCaches) {
 			(void)Cache;
 			State->RootDirty[Root] |= DirtyLayout | DirtyPresentation;
 		}
 		State->PresentationDirty = true;
+		return Reference;
 	}
 
 	std::shared_ptr<const GuiLayoutSnapshot> GuiRuntime::GetCommittedLayout() const { return State->Layout; }

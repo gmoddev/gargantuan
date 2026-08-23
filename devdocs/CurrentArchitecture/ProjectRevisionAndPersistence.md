@@ -21,7 +21,8 @@ represented by project serialization. Exhaustion throws and never wraps.
 
 Current revision-bearing mutations are saved reflected properties (including
 `Name`), Attributes, Tags, class-extension values, custom-class property state,
-and existing hierarchy/lifecycle changes. Rejected and detected no-op gateway
+existing hierarchy/lifecycle changes, and committed asset import/reimport/delete
+state. Rejected and detected no-op gateway
 mutations do not advance it. Transient properties, viewport/camera state,
 selection, diagnostics, networking, and Studio layout do not advance it.
 
@@ -46,6 +47,11 @@ A save serializes one coherent authoritative state into an in-memory
 successful atomic persistence operation assigns that value to
 `PersistedRevision`; failure leaves it unchanged.
 
+The snapshot contains scene JSON plus Asset Foundation 1 catalog JSON and the
+deduplicated canonical artifact set required by that catalog. Asset bytes do not
+enter the scene document. Local Play consumes this same in-memory asset snapshot,
+so unsaved authoring content is isolated at the exact launch revision.
+
 If revision N is captured, a later mutation advances the live project to N+1,
 and the write succeeds, the result remains persisted N, authoritative N+1, and
 dirty. Synchronous EditorHost persistence currently runs at its authoritative
@@ -65,11 +71,13 @@ Failure leaves the old destination, persisted revision, and dirty state intact.
 
 ## Atomic persistence and errors
 
-Persistence serializes before touching the target, writes a unique temporary
-file beside it, flushes and closes it, then atomically replaces the target
+Persistence serializes before touching the target. Asset artifacts are installed
+first, then `.gargantuan/assets/catalog.json`, then the scene document. Each file
+uses a unique temporary file beside it, flushes and closes it, then atomically replaces the target
 (`MoveFileExW` with replace/write-through on Windows, same-filesystem rename
 elsewhere). A pre-replacement failure removes the temporary and preserves the
-prior valid file.
+prior valid file. Foundation 1 does not yet provide one directory-wide atomic
+transaction or garbage collection of artifacts made unreachable by a later save.
 
 EditorHost normalizes missing project, invalid destination, serialization,
 filesystem, and persistence failures into structured errors. The instance JSON

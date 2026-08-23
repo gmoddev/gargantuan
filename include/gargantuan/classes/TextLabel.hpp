@@ -9,6 +9,9 @@ namespace gargantuan {
 	class TextLabel : public GuiObject {
 		I_TextLabel;
 
+	  private:
+		std::string FontFace = "builtin://font/default";
+
 	  public:
 		TextLabel();
 	};

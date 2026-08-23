@@ -7,6 +7,7 @@ related_code:
   - include/gargantuan/filesystem/SourceMount.hpp
   - src/filesystem/SourceMount.cpp
   - src/classes/FileLink.cpp
+  - src/services/AssetService.cpp
   - src/Engine.cpp
 related_adrs: []
 ---
@@ -19,12 +20,14 @@ related_adrs: []
 helper. `Project` and `DataModel` retain the backend and project-root association.
 For source import, `SourceMount` is the single semantic policy layer above that
 backend: it owns one canonical project/source root and is the only facility that
-`FileLink` uses to resolve, enumerate, or read source content.
+`FileLink` and `AssetService` use to resolve, enumerate, or read project source
+content.
 
 `SourceMount` uses host path facilities only to canonicalize and verify paths.
 Actual metadata, enumeration, and file reads pass through `BaseFilesystem`.
-`FileLink` does not call SDL file APIs, open host streams, or enumerate with
-`std::filesystem`. This decision is intentionally limited to the source-import
+Neither consumer calls SDL file APIs or opens a user-selected path directly.
+`AssetService` receives only project-relative provenance and reads it through a
+mount before dispatching bounded bytes to a private importer. This decision is intentionally limited to the source-import
 path; existing persistence and explicitly selected CLI file operations are not
 being rewritten as part of this boundary.
 
@@ -99,6 +102,10 @@ execution inside synchronization.
 Current visible compatibility remains startup-time, directory-to-sibling import
 for folders, `.luau`, `.client.luau`, `.server.luau`, and `.instance.json`.
 Unknown file suffixes remain ignored.
+
+Asset Foundation 1 separately uses the same boundary for explicit PNG, BMP, OBJ,
+TTF, and OTF import/reimport. Its canonical artifacts are loaded for runtime
+consumption; source access is required only for trusted authoring reimport.
 
 This boundary does not add filesystem watching, two-way synchronization,
 incremental diffs, rename tracking, conflict resolution, collaboration,

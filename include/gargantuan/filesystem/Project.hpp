@@ -1,6 +1,7 @@
 #pragma once
 
 #include "gargantuan/assets/InstanceSerialization.hpp"
+#include "gargantuan/assets/AssetTypes.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Instance.hpp"
 #include "gargantuan/filesystem/BaseFilesystem.hpp"
@@ -17,6 +18,7 @@ namespace gargantuan {
 		struct PersistenceSnapshot {
 			std::uint64_t Revision = 0;
 			std::string Contents;
+			AssetProjectSnapshot Assets;
 		};
 
 		std::filesystem::path Root;

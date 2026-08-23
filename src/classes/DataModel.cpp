@@ -2,6 +2,7 @@
 
 #include "gargantuan/reflection/InstanceClassRegistry.hpp"
 #include "gargantuan/services/ActionMap.hpp"
+#include "gargantuan/services/AssetService.hpp"
 #include "gargantuan/services/Players.hpp"
 #include "gargantuan/services/ProcessService.hpp"
 #include "gargantuan/services/RunService.hpp"
@@ -110,6 +111,7 @@ namespace gargantuan {
 	const DataModel::ServiceDefinitions &DataModel::GetServiceDefinitions() const {
 		static const DataModel::ServiceDefinitions CONSTRUCTORS = {
 			{"ActionMap", SchemaId::FromNativeName("Engine", "ActionMap")},
+			{"AssetService", SchemaId::FromNativeName("Engine", "AssetService")},
 			{"Players", SchemaId::FromNativeName("Engine", "Players")},
 			{"ProcessService", SchemaId::FromNativeName("Engine", "ProcessService")},
 			{"RunService", SchemaId::FromNativeName("Engine", "RunService")},

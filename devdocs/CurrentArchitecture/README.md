@@ -19,6 +19,10 @@
 - [GUI Foundation 2](GuiFoundation2.md) defines epoch-based incremental
   invalidation, sibling stacking contexts, retained display spans, scrolling,
   editable text/IME state, and the measured Foundation 2 performance contract.
+- [Asset Foundation 1](AssetFoundation1.md) defines the single public
+  `AssetService`, strict stable references, content-addressed image/mesh/font
+  artifacts, bounded import/cache behavior, GUI/render residency, persistence,
+  Play cloning, and Studio/EditorHost commands.
 - [Physics backend](PhysicsBackend.md) defines neutral rigid-body semantics,
   generation-safe physics identity, safe-point updates, and Box3D confinement.
 - [Soft-body Physics Foundation 2](SoftBodyPhysicsFoundation2.md) defines the
@@ -94,6 +98,9 @@ flowchart TD
     DataModel --> ProjectFilesystem["BaseFilesystem + canonical project root"]
     ProjectFilesystem --> SourceMount["bounded root-confined SourceMount"]
     SourceMount --> FileLink["FileLink compatibility import"]
+	SourceMount --> Assets["AssetService importer registry"]
+	Assets --> GUI
+	Assets --> Render
     FileLink --> Script
 ```
 
@@ -159,7 +166,7 @@ API are supplied by the generated Luau schema, while the DataModel's canonical
 registration map owns lazy singleton construction and scope. Direct registered
 service members and `GetService` share that path; `FindService` only observes an
 already-live canonical singleton. The present DataModel registers
-`ActionMap`, `Players`, `ProcessService`, `RunService`, `Tags`,
+`ActionMap`, `AssetService`, `Players`, `ProcessService`, `RunService`, `Tags`,
 `UserInputService`, and `Workspace`.
 `Workspace` creates a current Camera. A `ReplicatedStorage` class/source scaffold
 exists but is not registered. Basic reliable client replication, the production
@@ -198,10 +205,11 @@ sequenceDiagram
     Main->>Luau: Step tasks and Scripts
 ```
 
-Everything shown executes on the main thread. `thread_local` state in
-`ScriptEngine.cpp:71` is bookkeeping, not parallel execution. There are no
-Gargantuan-owned job workers, render thread, async I/O workers, network workers,
-or deterministic simulation lanes. When the optional real transport is enabled,
+Everything shown except bounded asset decode and independent soft-body jobs
+executes on the main thread. `AssetService` owns two `JobSystem` workers for
+decode/validation, then commits on the authoritative caller domain; its current
+EditorHost request waits synchronously for that bounded worker result. There is
+no render thread, async I/O worker, or deterministic simulation lane. When the optional real transport is enabled,
 GNS may run its internal service thread; Gargantuan observes its callbacks only
 during explicit transport polling.
 
@@ -213,6 +221,7 @@ during explicit transport polling.
 | `RunService` | Signal container used by `Engine`. | `src/services/RunService.cpp` is empty; semantics are hard-coded in the frame loop. |
 | `UserInputService` | Owns physical key/button state, pointer delta, focus reset, and mouse/text-input host synchronization, then feeds the retained GUI router. | SDL touch and preedit/committed-text adaptation feed GUI Foundation 2; gamepad publication, candidate UI, complete bidi editing, and physical mobile validation remain incomplete. |
 | `ActionMap` | Maps bounded keyboard, mouse-button, and pointer-delta bindings to semantic action state. | Default gamepad bindings and a persisted remapping UI are deferred. |
+| `AssetService` | Owns strict stable image/mesh/font references, versioned content-addressed artifacts, bounded import/cache state, runtime resolution, and renderer-neutral residency changes. | Explicit reimport exists; watching, LRU/pins, glTF/materials/audio, packaging, and a full asset browser are deferred. |
 | `Players` | Owns one local runtime Player, character relation, and replaceable engine-shipped Luau defaults. | Final server/client membership, transport association, and replication are deferred. |
 | `ProcessService` | Controls process lifetime and stdout/stderr. | Process operations require explicit `ProcessControl`; ordinary player runtime scripts are not granted it. |
 | `ReplicatedStorage` | Class/source scaffold only. | Not registered in `DataModel`; the name promises replication that does not exist. |

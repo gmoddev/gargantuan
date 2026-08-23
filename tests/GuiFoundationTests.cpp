@@ -147,11 +147,11 @@ namespace {
 			255, 0, 0, 255, 0, 255, 0, 255,
 			0, 0, 255, 255, 255, 255, 255, 255,
 		};
-		Runtime.RegisterImage("test/checker", 2, 2, Pixels);
+		const auto ImageReference = Runtime.RegisterImage("test/checker", 2, 2, Pixels);
 		Pixels[0] = 240;
 		Runtime.RegisterImage("test/checker", 2, 2, Pixels);
 		auto Image = std::make_shared<ImageLabel>();
-		Image->SetImage("test/checker");
+		Image->SetImage(ImageReference);
 		Image->SetSize(UDim2::fromOffset(32, 32));
 		Image->SetParent(Tree.Panel);
 		(void)Runtime.Reconcile();

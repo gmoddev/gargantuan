@@ -12,6 +12,11 @@ Art may be deliberately simple. The milestone proves the workflow and contracts,
 not visual breadth. A developer must build it entirely through documented public
 APIs and project assets—no game-specific engine C++.
 
+Asset Foundation 1 now closes the stable image/mesh/font identity, bounded
+import/reimport, canonical artifact persistence, relocation, GUI image/font, and
+renderer residency groundwork. A public mesh-consuming scene object, materials,
+audio, packaging, and the polished asset-browser workflow remain milestone work.
+
 ## Required player-visible slice
 
 - one Windows desktop target first, with headless tests; Linux/macOS follow once

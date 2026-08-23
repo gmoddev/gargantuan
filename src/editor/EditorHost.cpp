@@ -8,12 +8,14 @@
 #include "gargantuan/InstanceProperty.hpp"
 #include "gargantuan/classes/LuaSourceContainer.hpp"
 #include "gargantuan/filesystem/Project.hpp"
+#include "gargantuan/filesystem/SourceMount.hpp"
 #include "gargantuan/reflection/InstanceClassRegistry.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/runtime/ProtocolInput.hpp"
 #include "gargantuan/runtime/Snapshot.hpp"
 #include "gargantuan/runtime/WireCodec.hpp"
 #include "gargantuan/runtime/WireJournal.hpp"
+#include "gargantuan/services/AssetService.hpp"
 #include "gargantuan/services/Workspace.hpp"
 #include "serialization/JsonCodec.hpp"
 
@@ -29,6 +31,7 @@
 #include <limits>
 #include <magic_enum/magic_enum.hpp>
 #include <stdexcept>
+#include <type_traits>
 #include <unordered_set>
 #include <vector>
 
@@ -345,7 +348,8 @@ namespace gargantuan {
 				Method == "SetProperty" || Method == "SetAttribute" || Method == "SetExtensionProperty" ||
 				Method == "SetCustomProperty" || Method == "AddTag" || Method == "RemoveTag" ||
 				Method == "CreateInstance" || Method == "DestroyInstance" ||
-				Method == "DuplicateInstance" || Method == "ReparentInstance";
+				Method == "DuplicateInstance" || Method == "ReparentInstance" ||
+				Method == "ImportAsset" || Method == "ReimportAsset" || Method == "DeleteAsset";
 		}
 
 		std::optional<PlaySessionId> DecodePlaySessionId(const Json &Value) {
@@ -391,6 +395,38 @@ namespace gargantuan {
 					{"RedoLabel", History.RedoLabel ? Json(*History.RedoLabel) : Json(nullptr)},
 					{"RetainedCount", History.RetainedCount}, {"SemanticBytes", History.SemanticBytes}
 				}},
+			};
+		}
+
+		Json EncodeAssetRecord(const AssetRecord &Record) {
+			Json Diagnostic = nullptr;
+			if (Record.Diagnostic)
+				Diagnostic = {{"Code", Record.Diagnostic->Code}, {"Message", Record.Diagnostic->Message}};
+			Json Dependencies = Json::array();
+			for (const auto &Dependency : Record.Dependencies) Dependencies.push_back(Dependency.ToString());
+			Json Metadata = Json::object();
+			if (Record.Asset) std::visit([&](const auto &Asset) {
+				using T = std::decay_t<decltype(Asset)>;
+				if constexpr (std::is_same_v<T, ImportedImage>) {
+					Metadata["Width"] = Asset.Width;
+					Metadata["Height"] = Asset.Height;
+				} else if constexpr (std::is_same_v<T, ImportedMesh>) {
+					Metadata["VertexCount"] = Asset.Vertices ? Asset.Vertices->size() : 0;
+					Metadata["IndexCount"] = Asset.Indices ? Asset.Indices->size() : 0;
+					Metadata["SubmeshCount"] = Asset.SubmeshCount;
+				} else {
+					Metadata["FaceCount"] = Asset.FaceCount;
+				}
+			}, *Record.Asset);
+			return {
+				{"AssetId", Record.Id.ToString()}, {"Reference", Record.Reference.Value},
+				{"Kind", GetAssetKindName(Record.Kind)}, {"Name", Record.Name}, {"Source", Record.Source},
+				{"ContentId", Record.ContentId.IsValid() ? Json(Record.ContentId.ToString()) : Json(nullptr)},
+				{"ContentRevision", Record.ContentRevision}, {"State", GetAssetStateName(Record.State)},
+				{"Available", static_cast<bool>(Record.Asset) &&
+					(Record.State == AssetState::Ready || Record.State == AssetState::Stale)},
+				{"BuiltIn", Record.BuiltIn}, {"Diagnostic", std::move(Diagnostic)},
+				{"Dependencies", std::move(Dependencies)}, {"Metadata", std::move(Metadata)},
 			};
 		}
 
@@ -581,6 +617,7 @@ namespace gargantuan {
 					"OptimisticProjectRevision", "CreateInstanceInitialProperties",
 					"ReadScriptSource", "WriteScriptSource",
 					"PlaySession", "DiagnosticStream", "SendPlayInput",
+					"AssetCatalog", "ImportAsset", "ReimportAsset", "DeleteAsset", "StrictAssetReferences",
 					"ConfigureViewport", "SetViewportCamera", "CaptureViewport", "PickViewport"
 				};
 				Json viewportTransports = Json::array({{
@@ -630,7 +667,7 @@ namespace gargantuan {
 					ActivePlaySession = std::make_unique<PlaySession>(
 						Id, std::move(Snapshot.Contents), CurrentProject->InstanceFileFormat,
 						CurrentProject->Root, ViewportWidth == 0 ? 720 : ViewportWidth,
-						ViewportHeight == 0 ? 540 : ViewportHeight, Snapshot.Revision
+						ViewportHeight == 0 ? 540 : ViewportHeight, Snapshot.Revision, std::move(Snapshot.Assets)
 					);
 					LastPlaySessionId = Id;
 					LastPlaySessionState = ActivePlaySession->GetState();
@@ -1051,6 +1088,100 @@ namespace gargantuan {
 				return SerializeBoundedResponse(SuccessResponse(
 					requestId, EncodeProjectState(World, PersistedRevision, CurrentProject)
 				));
+			}
+
+			if (method == "GetAssetCatalog") {
+				if (!HasOnlyFields(parameters, {"IncludeBuiltIns"}) ||
+					(parameters.contains("IncludeBuiltIns") && !parameters["IncludeBuiltIns"].is_boolean()))
+					return SerializeBoundedResponse(ErrorResponse(
+						requestId, "MalformedRequest", "GetAssetCatalog accepts only optional IncludeBuiltIns"
+					));
+				if (!StudioSecurity.HasCapability(ScriptCapability::ReadDataModel))
+					return SerializeBoundedResponse(ErrorResponse(
+						requestId, "Unauthorized", "Asset catalog access requires ReadDataModel"
+					));
+				if (!World || !CurrentProject)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "NoProjectLoaded", "No project is loaded"));
+				auto Assets = std::dynamic_pointer_cast<AssetService>(World->GetService("AssetService"));
+				if (!Assets)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "AssetServiceFailure", "AssetService is unavailable"));
+				Json Records = Json::array();
+				for (const auto &Record : Assets->GetCatalog(parameters.value("IncludeBuiltIns", true)))
+					Records.push_back(EncodeAssetRecord(Record));
+				return SerializeBoundedResponse(SuccessResponse(requestId, {
+					{"CatalogVersion", 1}, {"Assets", std::move(Records)},
+					{"ProjectState", EncodeProjectState(World, PersistedRevision, CurrentProject)},
+				}));
+			}
+
+			if (method == "ImportAsset" || method == "ReimportAsset" || method == "DeleteAsset") {
+				if (!StudioSecurity.HasCapability(ScriptCapability::EditorCommands))
+					return SerializeBoundedResponse(ErrorResponse(
+						requestId, "Unauthorized", "Asset authoring requires EditorCommands"
+					));
+				if (!World || !CurrentProject || !Filesystem)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "NoProjectLoaded", "No project is loaded"));
+				if (World->Transactions.GetOpenCount() != 0)
+					return SerializeBoundedResponse(ErrorResponse(
+						requestId, "TransactionOpen", "Commit the open transaction before changing the asset catalog"
+					));
+				if (HasRevisionConflict())
+					return SerializeBoundedResponse(ErrorResponse(
+						requestId, "Conflict", "The authoritative project revision changed before asset authoring"
+					));
+
+				auto Assets = std::dynamic_pointer_cast<AssetService>(World->GetService("AssetService"));
+				if (!Assets)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "AssetServiceFailure", "AssetService is unavailable"));
+				AssetOperationResult Result;
+				if (method == "ImportAsset") {
+					if (!HasOnlyFields(parameters, {"Source", "Kind", "Name", "ExpectedRevision"}) ||
+						!parameters.contains("Source") || !parameters["Source"].is_string() ||
+						(parameters.contains("Kind") && !parameters["Kind"].is_string()) ||
+						(parameters.contains("Name") && !parameters["Name"].is_string()))
+						return SerializeBoundedResponse(ErrorResponse(
+							requestId, "MalformedRequest", "ImportAsset requires Source and accepts Kind, Name, and ExpectedRevision"
+						));
+					std::optional<AssetKind> Kind;
+					if (parameters.contains("Kind")) {
+						Kind = ParseAssetKind(parameters["Kind"].get_ref<const std::string &>());
+						if (!Kind)
+							return SerializeBoundedResponse(ErrorResponse(requestId, "InvalidAssetKind", "Asset kind is unsupported"));
+					}
+					SourceMount Mount(*Filesystem);
+					Result = Assets->ImportProjectAsset(
+						Mount, parameters["Source"].get<std::string>(), Kind, parameters.value("Name", std::string{})
+					);
+				} else {
+					if (!HasOnlyFields(parameters, {"Reference", "ExpectedRevision"}) ||
+						!parameters.contains("Reference") || !parameters["Reference"].is_string())
+						return SerializeBoundedResponse(ErrorResponse(
+							requestId, "MalformedRequest", "Asset mutation requires Reference and accepts ExpectedRevision"
+						));
+					const auto &Reference = parameters["Reference"].get_ref<const std::string &>();
+					if (!AssetReference::Parse(Reference))
+						return SerializeBoundedResponse(ErrorResponse(requestId, "InvalidAssetReference", "Asset reference is not canonical"));
+					if (method == "ReimportAsset") {
+						SourceMount Mount(*Filesystem);
+						Result = Assets->ReimportProjectAsset(Mount, Reference);
+					} else Result = Assets->DeleteProjectAsset(Reference);
+				}
+				if (!Result.Record)
+					return SerializeBoundedResponse(ErrorResponse(
+						requestId, Result.Diagnostic.Code.empty() ? "AssetOperationFailed" : Result.Diagnostic.Code,
+						Result.Diagnostic.Message.empty() ? "Asset operation returned no record" : Result.Diagnostic.Message
+					));
+				Json Diagnostic = nullptr;
+				if (!Result.Ok) Diagnostic = {
+					{"Code", Result.Diagnostic.Code.empty() ? "AssetOperationFailed" : Result.Diagnostic.Code},
+					{"Message", Result.Diagnostic.Message.empty() ? "Asset operation failed" : Result.Diagnostic.Message},
+				};
+				return SerializeBoundedResponse(SuccessResponse(requestId, {
+					{"OperationSucceeded", Result.Ok},
+					{"Asset", EncodeAssetRecord(*Result.Record)},
+					{"Diagnostic", std::move(Diagnostic)},
+					{"ProjectState", EncodeProjectState(World, PersistedRevision, CurrentProject)},
+				}));
 			}
 
 			if (method == "BeginTransaction") {

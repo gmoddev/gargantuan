@@ -8,6 +8,9 @@ namespace gargantuan {
 	class ImageLabel : public GuiObject {
 		I_ImageLabel;
 
+	  private:
+		std::string Image;
+
 	  public:
 		ImageLabel();
 	};

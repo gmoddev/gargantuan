@@ -111,7 +111,8 @@ scene state.
    history, undo/redo, dirty state, and atomic save.
 4. Luau editor with parser/type analysis, module navigation, completion,
    diagnostics, formatting, and source-to-runtime stack locations.
-5. Asset browser/import status and drag/drop through `AssetService`.
+5. Complete the Asset Foundation 1 Studio seam with a browsable asset panel,
+   thumbnails, drag/drop copy-in, reimport/delete selection, and property assignment.
 6. Local server/client play, pause/stop, multiple clients, isolated logs/profilers,
    and edit-world restoration.
 7. GUI layout inspection and device/safe-area emulation.
@@ -135,7 +136,8 @@ All of the following must be demonstrated through engine APIs:
 - working runtime GUI layout/render/input/text primitives;
 - deterministic edit-world cloning into a separate play server/client;
 - structured diagnostics, script source maps, stack traces, profiling, and logs;
-- asset identity/import/cache APIs; and
+- asset identity/import/cache APIs (Foundation 1 complete; browser UX and
+  asynchronous progress remain); and
 - project trust plus an isolated plugin capability broker.
 
 Until these pass, Studio work should be limited to a diagnostic harness that

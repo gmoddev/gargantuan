@@ -5,6 +5,7 @@
 #include "gargantuan/editor/PlaySession.hpp"
 
 #include "gargantuan/classes/DataModel.hpp"
+#include "gargantuan/services/AssetService.hpp"
 
 #include <chrono>
 #include <sstream>
@@ -29,7 +30,8 @@ namespace gargantuan {
 		std::filesystem::path ProjectRoot,
 		std::uint32_t Width,
 		std::uint32_t Height,
-		std::uint64_t AuthoringRevision
+		std::uint64_t AuthoringRevision,
+		AssetProjectSnapshot Assets
 	) : Id(SessionId), State(PlaySessionState::Starting), LaunchAuthoringRevision(AuthoringRevision) {
 		if (Id.Value == 0 || AuthoringRevision == 0) throw std::invalid_argument("Play session identity and revision must be nonzero");
 		std::istringstream Input(std::move(LaunchContents));
@@ -45,6 +47,12 @@ namespace gargantuan {
 		}
 		RuntimeWorld->MarkPersistenceSubtreeArchivable();
 		RuntimeWorld->Root = std::move(ProjectRoot);
+		auto RuntimeAssets = std::dynamic_pointer_cast<AssetService>(RuntimeWorld->GetService("AssetService"));
+		if (!RuntimeAssets) {
+			State = PlaySessionState::Failed;
+			throw std::runtime_error("Play launch snapshot has no canonical AssetService");
+		}
+		RuntimeAssets->LoadProjectAssetSnapshot(Assets);
 		RuntimeRenderer = std::make_unique<HeadlessRenderer>(Vector2(Width, Height));
 		RuntimeEngine = std::make_unique<Engine>(
 			RuntimeWorld,

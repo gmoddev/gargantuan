@@ -5,6 +5,7 @@
 #pragma once
 
 #include "gargantuan/Engine.hpp"
+#include "gargantuan/assets/AssetTypes.hpp"
 #include "gargantuan/assets/InstanceSerialization.hpp"
 #include "gargantuan/platform/HostEvent.hpp"
 
@@ -39,7 +40,8 @@ namespace gargantuan {
 			std::filesystem::path ProjectRoot,
 			std::uint32_t Width,
 			std::uint32_t Height,
-			std::uint64_t AuthoringRevision
+			std::uint64_t AuthoringRevision,
+			AssetProjectSnapshot Assets = {}
 		);
 		~PlaySession();
 

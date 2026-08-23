@@ -46,6 +46,13 @@ geometry remains a semantic `RenderGeometry` value. Generation-safe mesh,
 material, and texture identities are renderer-neutral values; their device
 residency and handles remain backend-owned.
 
+Asset Foundation 1 feeds canonical image and mesh residency into this existing
+seam. `AssetService` derives generation-safe render identities and publishes
+texture create/update/remove plus mesh create/remove values. `RenderPublisher`
+retains asset mesh state for full resync. The renderer receives canonical bytes,
+vertices, indices, bounds, and revisions; it never receives source paths,
+importers, `AssetId`, or catalog authority.
+
 ## SDL backend ownership
 
 The explicit `SDLRenderer` public entry point uses an incomplete private
@@ -141,6 +148,6 @@ PIMPL, not a Studio or EditorHost contract change.
 SDL remains the selected platform and rendering implementation. GLM remains an
 accepted foundational C++ value representation, Luau remains product
 semantics, and the STL is not abstracted. Renderer replacement, a generic RHI,
-the final asset system, advanced lighting, retained UI paint production, render
+advanced asset material/mesh-consumer semantics, advanced lighting, retained UI paint production, render
 threading, and advanced Play rendering remain deferred. Minimal Play reuses the
 current offscreen EditorHost renderer through the publication boundary.

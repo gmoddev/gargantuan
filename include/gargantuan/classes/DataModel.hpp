@@ -12,6 +12,7 @@
 
 namespace gargantuan {
 	class ScopedAuthoritativeRevisionDeferral;
+	class AssetService;
 	class DataModel : public ServiceProvider {
 		I_DataModel;
 
@@ -39,6 +40,7 @@ namespace gargantuan {
 
 	  private:
 		friend class ScopedAuthoritativeRevisionDeferral;
+		friend class AssetService;
 		std::uint64_t AuthoritativeRevision = InitialProjectRevision;
 		bool RevisionBatchActive = false;
 		bool RevisionBatchChanged = false;

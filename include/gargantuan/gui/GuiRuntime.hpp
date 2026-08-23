@@ -49,7 +49,7 @@ namespace gargantuan {
 		void ReleasePointer(int PointerId, ObjectId Object);
 		void ClearTransientState();
 
-		void RegisterImage(std::string LogicalId, std::uint32_t Width, std::uint32_t Height,
+		[[nodiscard]] std::string RegisterImage(std::string LogicalId, std::uint32_t Width, std::uint32_t Height,
 			std::span<const std::uint8_t> Rgba8);
 
 		[[nodiscard]] std::shared_ptr<const GuiLayoutSnapshot> GetCommittedLayout() const;

@@ -30,9 +30,10 @@ namespace gargantuan {
 		  WorldRoot(std::static_pointer_cast<gargantuan::WorldRoot>(Workspace)),
 		  RunService(GetService<gargantuan::RunService>()), ProcessService(GetService<gargantuan::ProcessService>()),
 		  UserInputService(GetService<gargantuan::UserInputService>()), ActionMap(GetService<gargantuan::ActionMap>()),
-		  Players(GetService<gargantuan::Players>()) {
+		  Assets(GetService<gargantuan::AssetService>()), Players(GetService<gargantuan::Players>()) {
 		ActionMap->AttachInputService(UserInputService);
 		Players->InitializeLocalPlayer();
+		Assets->ConfigureBuiltInFont(std::filesystem::path(DefaultGuiFontPath));
 		Gui = std::make_unique<GuiRuntime>(DataModel, std::filesystem::path(DefaultGuiFontPath));
 		if (Renderer) {
 			const auto [Width, Height] = Renderer->GetViewportSize();
@@ -143,6 +144,9 @@ namespace gargantuan {
 				G_PROFILE("PreRender");
 				RunService->PreRender->Fire(deltaTime);
 				if (Gui) {
+					auto MeshChanges = Assets->DrainMeshChanges();
+					if (!MeshChanges.Creates.empty() || !MeshChanges.Removes.empty())
+						RenderPublishing.SetAssetMeshChanges(std::move(MeshChanges.Creates), std::move(MeshChanges.Removes));
 					(void)Gui->Reconcile();
 					Gui->Publish(RenderPublishing);
 				}

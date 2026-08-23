@@ -417,6 +417,31 @@ namespace gargantuan {
 		if (Scope.IsValid()) Dirty->MarkUi(Scope, PendingTextureBytes);
 	}
 
+	void RenderPublisher::SetAssetMeshChanges(
+		std::vector<RenderMeshCreate> Creates,
+		std::vector<RenderMeshRemove> Removes
+	) {
+		if (!PendingAssetMeshCreates.empty() || !PendingAssetMeshRemoves.empty())
+			throw std::logic_error("Render publisher accepts one coherent asset mesh change set per publication");
+		for (const auto &Remove : Removes) {
+			if (!Remove.Mesh.IsValid() || !PublishedAssetMeshes.erase(Remove.Mesh))
+				throw std::invalid_argument("Render publisher rejects a stale asset mesh removal");
+			PendingAssetMeshRemoves.push_back(Remove);
+		}
+		for (const auto &Create : Creates) {
+			if (!Create.Mesh.IsValid() || Create.TopologyRevision == 0 || Create.VertexRevision == 0 ||
+				!Create.Vertices || Create.Vertices->empty() || !Create.Indices || Create.Indices->empty() ||
+				PublishedAssetMeshes.contains(Create.Mesh))
+				throw std::invalid_argument("Render publisher rejects an invalid or duplicate asset mesh creation");
+			for (const auto Index : *Create.Indices) if (Index >= Create.Vertices->size())
+				throw std::invalid_argument("Render publisher rejects an out-of-range asset mesh index");
+			PublishedAssetMeshes.emplace(Create.Mesh, PublishedAssetMesh{
+				Create.TopologyRevision, Create.VertexRevision, Create.Vertices, Create.Indices, Create.Bounds
+			});
+			PendingAssetMeshCreates.push_back(Create);
+		}
+	}
+
 	RenderPublicationPtr RenderPublisher::Publish(
 		const WorldRoot &World,
 		const RenderCameraInput &CameraInput,
@@ -498,6 +523,12 @@ namespace gargantuan {
 					PublishedDeformable{Extracted->Mesh, Extracted->TopologyRevision, Extracted->VertexRevision}
 				);
 			}
+			std::vector<std::pair<RenderMeshIdentity, PublishedAssetMesh>> OrderedAssetMeshes(
+				PublishedAssetMeshes.begin(), PublishedAssetMeshes.end());
+			std::ranges::sort(OrderedAssetMeshes, {}, &std::pair<RenderMeshIdentity, PublishedAssetMesh>::first);
+			for (const auto &[Identity, Mesh] : OrderedAssetMeshes)
+				Result->MeshCreates.push_back({Identity, Mesh.TopologyRevision, Mesh.VertexRevision,
+					Mesh.Vertices, Mesh.Indices, Mesh.Bounds});
 			Result->UiChanged = true;
 			Result->SharedUi = CommittedUi;
 			std::vector<std::pair<RenderTextureIdentity, PublishedTexture>> OrderedTextures(
@@ -519,6 +550,8 @@ namespace gargantuan {
 			PendingTextureCreates.clear();
 			PendingTextureUpdates.clear();
 			PendingTextureRemoves.clear();
+			PendingAssetMeshCreates.clear();
+			PendingAssetMeshRemoves.clear();
 			PendingUiGeometryBytes = 0;
 			PendingTextureBytes = 0;
 			return std::shared_ptr<const RenderPublication>(std::move(Result));
@@ -686,6 +719,8 @@ namespace gargantuan {
 			Result->UiChanged = true;
 			Result->SharedUi = PendingUi;
 		}
+		Result->MeshCreates.insert(Result->MeshCreates.end(), PendingAssetMeshCreates.begin(), PendingAssetMeshCreates.end());
+		Result->MeshRemoves.insert(Result->MeshRemoves.end(), PendingAssetMeshRemoves.begin(), PendingAssetMeshRemoves.end());
 		Result->TextureCreates = PendingTextureCreates;
 		Result->TextureUpdates = PendingTextureUpdates;
 		Result->TextureRemoves = PendingTextureRemoves;
@@ -720,6 +755,8 @@ namespace gargantuan {
 		PendingTextureCreates.clear();
 		PendingTextureUpdates.clear();
 		PendingTextureRemoves.clear();
+		PendingAssetMeshCreates.clear();
+		PendingAssetMeshRemoves.clear();
 		PendingUiGeometryBytes = 0;
 		PendingTextureBytes = 0;
 		return std::shared_ptr<const RenderPublication>(std::move(Result));

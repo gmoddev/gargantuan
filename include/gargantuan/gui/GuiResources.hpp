@@ -9,11 +9,11 @@
 #include <filesystem>
 #include <memory>
 #include <optional>
-#include <span>
 #include <string>
 #include <vector>
 
 namespace gargantuan {
+	class AssetService;
 	struct GuiTextureChanges {
 		std::vector<RenderTextureCreate> Creates;
 		std::vector<RenderTextureUpdate> Updates;
@@ -34,7 +34,7 @@ namespace gargantuan {
 
 	class GuiTextSystem final {
 	  public:
-		explicit GuiTextSystem(std::filesystem::path DefaultFontPath);
+		explicit GuiTextSystem(std::shared_ptr<AssetService> Assets);
 		~GuiTextSystem();
 		GuiTextSystem(const GuiTextSystem &) = delete;
 		GuiTextSystem &operator=(const GuiTextSystem &) = delete;
@@ -50,26 +50,4 @@ namespace gargantuan {
 		std::unique_ptr<Impl> State;
 	};
 
-	struct GuiImageResource {
-		RenderTextureIdentity Texture;
-		std::uint32_t Width = 0;
-		std::uint32_t Height = 0;
-	};
-
-	class GuiImageStore final {
-	  public:
-		GuiImageStore();
-		~GuiImageStore();
-		GuiImageStore(const GuiImageStore &) = delete;
-		GuiImageStore &operator=(const GuiImageStore &) = delete;
-
-		void Register(std::string LogicalId, std::uint32_t Width, std::uint32_t Height, std::span<const std::uint8_t> Rgba8);
-		[[nodiscard]] std::optional<GuiImageResource> Find(const std::string &LogicalId) const;
-		[[nodiscard]] std::size_t PendingUploadBytes() const;
-		[[nodiscard]] GuiTextureChanges DrainTextureChanges();
-
-	  private:
-		struct Impl;
-		std::unique_ptr<Impl> State;
-	};
 }

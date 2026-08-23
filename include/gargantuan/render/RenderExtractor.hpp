@@ -88,6 +88,7 @@ namespace gargantuan {
 			std::vector<RenderTextureUpdate> Updates,
 			std::vector<RenderTextureRemove> Removes
 		);
+		void SetAssetMeshChanges(std::vector<RenderMeshCreate> Creates, std::vector<RenderMeshRemove> Removes);
 		[[nodiscard]] RenderPublicationId GetLastPublicationId() const { return LastPublicationId; }
 		[[nodiscard]] std::size_t GetPublishedObjectCount() const { return PublishedItems.size(); }
 		[[nodiscard]] std::size_t GetFullResyncCount() const { return FullResyncCount; }
@@ -107,6 +108,13 @@ namespace gargantuan {
 			RenderTextureFormat Format = RenderTextureFormat::Rgba8Unorm;
 			std::shared_ptr<const std::vector<std::uint8_t>> Pixels;
 		};
+		struct PublishedAssetMesh {
+			std::uint64_t TopologyRevision = 0;
+			std::uint64_t VertexRevision = 0;
+			std::shared_ptr<const std::vector<RenderVertex>> Vertices;
+			std::shared_ptr<const std::vector<std::uint32_t>> Indices;
+			RenderBounds Bounds;
+		};
 
 		RenderExtractor FullExtractor;
 		RenderDirtyAccumulator *Dirty = nullptr;
@@ -117,6 +125,7 @@ namespace gargantuan {
 		std::unordered_map<ObjectId, RenderItem> PublishedItems;
 		std::unordered_map<ObjectId, PublishedDeformable> PublishedDeformables;
 		std::unordered_map<RenderTextureIdentity, PublishedTexture, RenderTextureIdentityHash> PublishedTextures;
+		std::unordered_map<RenderMeshIdentity, PublishedAssetMesh, RenderMeshIdentityHash> PublishedAssetMeshes;
 		std::shared_ptr<const RenderUiFrame> PendingUi;
 		std::shared_ptr<const RenderUiFrame> CommittedUi = std::make_shared<const RenderUiFrame>();
 		ObjectId UiSource;
@@ -124,6 +133,8 @@ namespace gargantuan {
 		std::vector<RenderTextureCreate> PendingTextureCreates;
 		std::vector<RenderTextureUpdate> PendingTextureUpdates;
 		std::vector<RenderTextureRemove> PendingTextureRemoves;
+		std::vector<RenderMeshCreate> PendingAssetMeshCreates;
+		std::vector<RenderMeshRemove> PendingAssetMeshRemoves;
 		std::size_t PendingUiGeometryBytes = 0;
 		std::size_t PendingTextureBytes = 0;
 		std::size_t FullResyncCount = 0;

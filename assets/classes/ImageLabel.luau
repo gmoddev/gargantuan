@@ -8,9 +8,11 @@ return c({
 
 	properties = {
 		Image = {
-			description = "Logical image identity resolved by the GUI image provider",
+			description = "Strict AssetService image reference",
 			type = t.String,
 			unmodified = '""',
+			overrideRead = "GetImage",
+			overrideWrite = "SetImage",
 			serializable = true,
 			replicated = true,
 		},

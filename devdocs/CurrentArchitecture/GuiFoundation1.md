@@ -68,11 +68,11 @@ where future themes, classes, variants, contrast, and reduced-motion policy can
 replace the current local-property resolver without teaching `GuiPass` widget
 class names.
 
-`ImageLabel.Image` and `TextLabel.FontFace` are logical identities. Foundation 1
-has a bounded native image registration seam and a controlled default font
-provider; neither property exposes paths, SDL objects, or
-`RenderTextureIdentity` to game Luau. AssetService can replace those providers
-later without changing the public objects.
+`ImageLabel.Image` and `TextLabel.FontFace` are strict logical asset references.
+[Asset Foundation 1](AssetFoundation1.md) replaced the temporary image/font
+providers with the canonical `AssetService`; neither property exposes paths,
+SDL objects, importer handles, or `RenderTextureIdentity` to game Luau. Image
+and font content-revision changes invalidate only GUI nodes using that reference.
 
 ## Coordinates, layout, clipping, and alpha
 
