@@ -46,6 +46,7 @@ namespace gargantuan {
 			case AssetKind::Image: return "Image";
 			case AssetKind::Mesh: return "Mesh";
 			case AssetKind::Font: return "Font";
+			case AssetKind::Material: return "Material";
 		}
 		return "Unknown";
 	}
@@ -54,6 +55,7 @@ namespace gargantuan {
 		if (Value == "Image") return AssetKind::Image;
 		if (Value == "Mesh") return AssetKind::Mesh;
 		if (Value == "Font") return AssetKind::Font;
+		if (Value == "Material") return AssetKind::Material;
 		return std::nullopt;
 	}
 

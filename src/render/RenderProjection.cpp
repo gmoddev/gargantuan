@@ -42,6 +42,19 @@ namespace gargantuan {
 				OpacityModeValid && std::isfinite(Material.AlphaCutoff) && Material.AlphaCutoff >= 0.0f &&
 				Material.AlphaCutoff <= 1.0f;
 		}
+		bool AreValid(const std::shared_ptr<const std::vector<RenderPrimitiveMaterialState>> &Primitives) {
+			if (!Primitives) return true;
+			if (Primitives->empty()) return false;
+			std::uint64_t PreviousEnd = 0;
+			for (const auto &Primitive : *Primitives) {
+				const auto End = static_cast<std::uint64_t>(Primitive.FirstIndex) + Primitive.IndexCount;
+				if (Primitive.IndexCount == 0 || Primitive.IndexCount % 3 != 0 ||
+					Primitive.FirstIndex < PreviousEnd || End > std::numeric_limits<std::uint32_t>::max() ||
+					!IsValid(Primitive.Material)) return false;
+				PreviousEnd = End;
+			}
+			return true;
+		}
 		bool IsValid(const RenderVertex &Vertex) {
 			return IsFinite(Vertex.Position) && IsFinite(Vertex.Normal) && IsFinite(Vertex.Tangent) &&
 				IsFinite(Vertex.TextureCoordinate);
@@ -99,7 +112,8 @@ namespace gargantuan {
 			if (!Remove.Object.IsValid() || !TouchedObjects.insert(Remove.Object).second)
 				throw std::invalid_argument("Render publication contains an invalid or duplicate object operation");
 		for (const auto &Create : Publication.Creates)
-			if (!IsValid(Create.Item) || !IsValid(Create.Material) || (Create.Mesh && !Create.Mesh->IsValid()) ||
+			if (!IsValid(Create.Item) || !IsValid(Create.Material) || !AreValid(Create.Primitives) ||
+				(Create.Mesh && !Create.Mesh->IsValid()) ||
 				!TouchedObjects.insert(Create.Item.Object).second)
 				throw std::invalid_argument("Render publication contains an invalid or duplicate object operation");
 		for (const auto &Update : Publication.Updates) {
@@ -110,7 +124,7 @@ namespace gargantuan {
 				static_cast<std::uint32_t>(RenderUpdateDomain::DeformableVertices) |
 				static_cast<std::uint32_t>(RenderUpdateDomain::Hierarchy);
 			if (!Update.Object.IsValid() || Update.Item.Object != Update.Object || !IsValid(Update.Item) ||
-				!IsValid(Update.Material) || (Update.Mesh && !Update.Mesh->IsValid()) ||
+				!IsValid(Update.Material) || !AreValid(Update.Primitives) || (Update.Mesh && !Update.Mesh->IsValid()) ||
 				Update.Domains == RenderUpdateDomain::None ||
 				(static_cast<std::uint32_t>(Update.Domains) & ~ValidUpdateDomains) != 0 ||
 				!TouchedObjects.insert(Update.Object).second)
@@ -175,14 +189,23 @@ namespace gargantuan {
 			return (!Material.BaseColorTexture || TextureExistsAfterPublication(*Material.BaseColorTexture)) &&
 				(!Material.NormalTexture || TextureExistsAfterPublication(*Material.NormalTexture));
 		};
-		for (const auto &Create : Publication.Creates) if (!MaterialTexturesExist(Create.Material))
+		const auto ObjectTexturesExist = [&](const auto &Object) {
+			if (!MaterialTexturesExist(Object.Material)) return false;
+			return !Object.Primitives || std::ranges::all_of(*Object.Primitives, [&](const auto &Primitive) {
+				return MaterialTexturesExist(Primitive.Material);
+			});
+		};
+		for (const auto &Create : Publication.Creates) if (!ObjectTexturesExist(Create))
 			throw std::invalid_argument("Render publication material references a texture without residency");
-		for (const auto &Update : Publication.Updates) if (!MaterialTexturesExist(Update.Material))
+		for (const auto &Update : Publication.Updates) if (!ObjectTexturesExist(Update))
 			throw std::invalid_argument("Render publication material references a texture without residency");
 		if (!Publication.FullResync && !Publication.TextureRemoves.empty()) {
 			for (const auto &[Object, Existing] : Entries) {
 				if (TouchedObjects.contains(Object)) continue;
-				if (!MaterialTexturesExist(Existing.Material))
+				if (!MaterialTexturesExist(Existing.Material) ||
+					(Existing.Primitives && !std::ranges::all_of(*Existing.Primitives, [&](const auto &Primitive) {
+						return MaterialTexturesExist(Primitive.Material);
+					})))
 					throw std::invalid_argument("Render publication removes a texture that remains referenced by a material");
 			}
 		}
@@ -220,11 +243,25 @@ namespace gargantuan {
 			if (CreatedMeshes.contains(Mesh)) return true;
 			return !Publication.FullResync && Meshes.contains(Mesh) && !RemovedMeshes.contains(Mesh);
 		};
+		const auto MeshIndexCountAfterPublication = [&](const RenderMeshIdentity &Mesh) -> std::optional<std::size_t> {
+			for (const auto &Create : Publication.MeshCreates) if (Create.Mesh == Mesh) return Create.Indices->size();
+			if (!Publication.FullResync) if (const auto Existing = Meshes.find(Mesh); Existing != Meshes.end() &&
+				!RemovedMeshes.contains(Mesh)) return Existing->second.IndexCount;
+			return std::nullopt;
+		};
+		const auto PrimitiveRangesFit = [&](const auto &Object) {
+			if (!Object.Primitives) return true;
+			if (!Object.Mesh) return false;
+			const auto Count = MeshIndexCountAfterPublication(*Object.Mesh);
+			return Count && std::ranges::all_of(*Object.Primitives, [&](const auto &Primitive) {
+				return Primitive.FirstIndex <= *Count && Primitive.IndexCount <= *Count - Primitive.FirstIndex;
+			});
+		};
 		for (const auto &Create : Publication.Creates)
-			if (Create.Mesh && !MeshExistsAfterPublication(*Create.Mesh))
+			if ((Create.Mesh && !MeshExistsAfterPublication(*Create.Mesh)) || !PrimitiveRangesFit(Create))
 				throw std::invalid_argument("Render publication object creation references a missing mesh");
 		for (const auto &Update : Publication.Updates)
-			if (Update.Mesh && !MeshExistsAfterPublication(*Update.Mesh))
+			if ((Update.Mesh && !MeshExistsAfterPublication(*Update.Mesh)) || !PrimitiveRangesFit(Update))
 				throw std::invalid_argument("Render publication object update references a missing mesh");
 
 		if (!Publication.FullResync && !Publication.MeshRemoves.empty()) {
@@ -280,12 +317,16 @@ namespace gargantuan {
 		for (const auto &Remove : Publication.MeshRemoves) { Meshes.erase(Remove.Mesh); ++Changes.MeshesRemoved; }
 		Entries.reserve(Entries.size() + Publication.Creates.size());
 		for (const auto &Create : Publication.Creates) {
-			Entries.emplace(Create.Item.Object, RenderProjectedObject{Create.Item, Create.Mesh, Create.Material, Create.Visible});
+			Entries.emplace(Create.Item.Object, RenderProjectedObject{
+				Create.Item, Create.Mesh, Create.Material, Create.Visible, Create.Primitives
+			});
 			++Changes.Created;
 		}
 		for (const auto &Update : Publication.Updates) {
 			auto &EntryValue = Entries.at(Update.Object);
-			EntryValue = RenderProjectedObject{Update.Item, Update.Mesh, Update.Material, Update.Visible};
+			EntryValue = RenderProjectedObject{
+				Update.Item, Update.Mesh, Update.Material, Update.Visible, Update.Primitives
+			};
 			++Changes.Updated;
 		}
 		Meshes.reserve(Meshes.size() + Publication.MeshCreates.size());

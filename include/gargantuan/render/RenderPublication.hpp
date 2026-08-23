@@ -99,6 +99,13 @@ namespace gargantuan {
 		float Roughness = 1.0f;
 		RenderOpacityMode OpacityMode = RenderOpacityMode::Opaque;
 		float AlphaCutoff = 0.5f;
+		bool DoubleSided = false;
+	};
+
+	struct RenderPrimitiveMaterialState {
+		std::uint32_t FirstIndex = 0;
+		std::uint32_t IndexCount = 0;
+		RenderMaterialState Material;
 	};
 
 	struct RenderObjectCreate {
@@ -106,6 +113,7 @@ namespace gargantuan {
 		std::optional<RenderMeshIdentity> Mesh;
 		RenderMaterialState Material;
 		bool Visible = true;
+		std::shared_ptr<const std::vector<RenderPrimitiveMaterialState>> Primitives;
 	};
 	struct RenderObjectUpdate {
 		ObjectId Object;
@@ -114,6 +122,7 @@ namespace gargantuan {
 		std::optional<RenderMeshIdentity> Mesh;
 		RenderMaterialState Material;
 		bool Visible = true;
+		std::shared_ptr<const std::vector<RenderPrimitiveMaterialState>> Primitives;
 	};
 	struct RenderObjectRemove { ObjectId Object; };
 

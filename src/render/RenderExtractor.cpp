@@ -6,6 +6,7 @@
 #include "gargantuan/render/RenderExtractor.hpp"
 
 #include "gargantuan/classes/Camera.hpp"
+#include "gargantuan/classes/MeshPart.hpp"
 #include "gargantuan/classes/Part.hpp"
 #include "gargantuan/classes/WorldRoot.hpp"
 #include "gargantuan/runtime/ExecutionDomain.hpp"
@@ -174,6 +175,9 @@ namespace gargantuan {
 				continue;
 			}
 
+			// RenderPublisher owns the asset-aware MeshPart projection. The legacy
+			// compatibility snapshot has no renderer-resource identity surface.
+			if (std::dynamic_pointer_cast<MeshPart>(basePart)) continue;
 			auto part = std::dynamic_pointer_cast<Part>(basePart);
 			if (!part) {
 				candidate->Diagnostics.push_back({

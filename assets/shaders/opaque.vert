@@ -14,12 +14,15 @@ layout(set = 1, binding = 0) uniform WorldUniforms {
 layout(set = 1, binding = 1) uniform PartUniforms {
     mat4 ModelMatrix;
     vec4 Color;
+    vec4 MaterialValues;
 } part;
 
 layout(location = 0) out vec3 FragmentNormal;
 layout(location = 1) out vec4 FragmentColor;
 layout(location = 2) out vec4 WorldPosition;
 layout(location = 3) out vec4 ShadowPosition;
+layout(location = 4) out vec2 FragmentUV;
+layout(location = 5) out vec4 FragmentMaterialValues;
 
 void main() {
     // NOTE: if u define ANY of the output variables before gl_Position, it
@@ -30,4 +33,6 @@ void main() {
     FragmentColor = part.Color;
     WorldPosition = (part.ModelMatrix * vec4(VertexPosition, 1.0f)).xyzw;
     ShadowPosition = world.ShadowBiasMatrix * WorldPosition;
+    FragmentUV = VertexUV;
+    FragmentMaterialValues = part.MaterialValues;
 }

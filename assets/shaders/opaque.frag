@@ -4,6 +4,8 @@ layout(location = 0) in vec3 FragmentNormal;
 layout(location = 1) in vec4 FragmentColor;
 layout(location = 2) in vec4 WorldPosition;
 layout(location = 3) in vec4 ShadowPosition;
+layout(location = 4) in vec2 FragmentUV;
+layout(location = 5) in vec4 FragmentMaterialValues;
 
 layout(location = 0) out vec4 OutputColor;
 
@@ -15,6 +17,7 @@ layout(set = 3, binding = 0) uniform WorldUniforms {
 } world;
 
 layout(set = 2, binding = 0) uniform sampler2DShadow ShadowMap;
+layout(set = 2, binding = 1) uniform sampler2D BaseColorTexture;
 
 float SHADOW_SPREAD = 2.0;
 vec2 SHADOW_TEXEL_SIZE = vec2(1.0 / 2048.0);
@@ -50,5 +53,8 @@ void main() {
     float ambient = 0.2;
     float lighting = ambient + (nDotL * shadowFactor);
 
-    OutputColor = vec4(FragmentColor.rgb * lighting, FragmentColor.a);
+    vec4 baseColor = FragmentColor * texture(BaseColorTexture, FragmentUV);
+    if (FragmentMaterialValues.y == 1.0 && baseColor.a < FragmentMaterialValues.x) discard;
+    if (FragmentMaterialValues.y == 0.0) baseColor.a = 1.0;
+    OutputColor = vec4(baseColor.rgb * lighting, baseColor.a);
 }

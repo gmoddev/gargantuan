@@ -425,7 +425,7 @@ if(BUILD_TESTING)
 		GARGANTUAN_ASSET_TEST_PNG_PATH="${CMAKE_CURRENT_SOURCE_DIR}/assets/github/ross.png"
 	)
 	add_executable(gargantuan_asset_foundation_benchmark "tests/AssetFoundationBenchmark.cpp")
-	target_link_libraries(gargantuan_asset_foundation_benchmark PRIVATE gargantuan_core)
+	target_link_libraries(gargantuan_asset_foundation_benchmark PRIVATE gargantuan_core nlohmann_json)
 	target_compile_definitions(gargantuan_asset_foundation_benchmark PRIVATE
 		GARGANTUAN_ASSET_TEST_FONT_PATH="${CMAKE_CURRENT_SOURCE_DIR}/vendor/sdl_ttf/external/harfbuzz/perf/fonts/Roboto-Regular.ttf"
 	)

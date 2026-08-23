@@ -20,8 +20,17 @@
 #include <vector>
 
 namespace gargantuan {
-	enum class AssetKind : std::uint8_t { Image, Mesh, Font };
+	enum class AssetKind : std::uint8_t { Image, Mesh, Font, Material };
 	enum class AssetState : std::uint8_t { Missing, Importing, Ready, Failed, Stale };
+	enum class AssetMaterialAlphaMode : std::uint8_t { Opaque, Mask, Blend };
+	enum class AssetChangeKind : std::uint8_t {
+		Added,
+		Removed,
+		ContentChanged,
+		MetadataChanged,
+		DependencyChanged,
+		StateChanged,
+	};
 
 	[[nodiscard]] std::string_view GetAssetKindName(AssetKind Kind);
 	[[nodiscard]] std::optional<AssetKind> ParseAssetKind(std::string_view Value);
@@ -72,11 +81,18 @@ namespace gargantuan {
 		std::shared_ptr<const std::vector<std::uint8_t>> Rgba8;
 	};
 
+	struct ImportedMeshPrimitive {
+		std::uint32_t FirstIndex = 0;
+		std::uint32_t IndexCount = 0;
+		std::optional<AssetId> Material;
+	};
+
 	struct ImportedMesh {
 		std::shared_ptr<const std::vector<RenderVertex>> Vertices;
 		std::shared_ptr<const std::vector<std::uint32_t>> Indices;
 		RenderBounds Bounds;
 		std::uint32_t SubmeshCount = 1;
+		std::shared_ptr<const std::vector<ImportedMeshPrimitive>> Primitives;
 	};
 
 	struct ImportedFont {
@@ -84,7 +100,18 @@ namespace gargantuan {
 		std::uint32_t FaceCount = 1;
 	};
 
-	using ImportedAsset = std::variant<ImportedImage, ImportedMesh, ImportedFont>;
+	struct ImportedMaterial {
+		glm::vec4 BaseColorFactor{1.0f};
+		std::optional<AssetId> BaseColorTexture;
+		float MetallicFactor = 1.0f;
+		float RoughnessFactor = 1.0f;
+		std::optional<AssetId> NormalTexture;
+		AssetMaterialAlphaMode AlphaMode = AssetMaterialAlphaMode::Opaque;
+		float AlphaCutoff = 0.5f;
+		bool DoubleSided = false;
+	};
+
+	using ImportedAsset = std::variant<ImportedImage, ImportedMesh, ImportedFont, ImportedMaterial>;
 
 	struct AssetDiagnostic {
 		std::string Code;
@@ -104,6 +131,9 @@ namespace gargantuan {
 		std::vector<AssetId> Dependencies;
 		std::shared_ptr<const ImportedAsset> Asset;
 		bool BuiltIn = false;
+		AssetId SourceGroupId;
+		std::string LogicalKey = "asset";
+		bool PrimarySourceAsset = true;
 	};
 
 	struct AssetImageResource {
@@ -117,6 +147,18 @@ namespace gargantuan {
 		std::shared_ptr<const std::vector<std::uint8_t>> Bytes;
 		std::uint64_t ContentRevision = 0;
 		std::uint32_t FaceCount = 0;
+	};
+
+	struct AssetMeshResource {
+		RenderMeshIdentity Mesh;
+		ImportedMesh Value;
+		std::uint64_t ContentRevision = 0;
+	};
+
+	struct AssetMaterialResource {
+		ImportedMaterial Value;
+		RenderMaterialState RenderState;
+		std::uint64_t ContentRevision = 0;
 	};
 
 	struct AssetTextureChanges {
@@ -137,6 +179,7 @@ namespace gargantuan {
 		AssetKind Kind = AssetKind::Image;
 		std::uint64_t ContentRevision = 0;
 		AssetState State = AssetState::Missing;
+		AssetChangeKind ChangeKind = AssetChangeKind::StateChanged;
 	};
 
 	struct AssetChangeBatch {
@@ -163,7 +206,22 @@ namespace gargantuan {
 		static constexpr std::size_t MaximumNameBytes = 256;
 		static constexpr std::size_t MaximumSourcePathBytes = 4096;
 		static constexpr std::size_t MaximumDiagnosticBytes = 1024;
+		static constexpr std::size_t MaximumImportDiagnostics = 64;
 		static constexpr std::size_t MaximumDependencies = 256;
+		static constexpr std::size_t MaximumGraphDependencies = 8192;
+		static constexpr std::size_t MaximumGeneratedAssets = 1024;
+		static constexpr std::size_t MaximumExternalResources = 256;
+		static constexpr std::size_t MaximumGltfJsonBytes = 4 * 1024 * 1024;
+		static constexpr std::size_t MaximumGltfBuffers = 256;
+		static constexpr std::size_t MaximumGltfBufferViews = 4096;
+		static constexpr std::size_t MaximumGltfAccessors = 4096;
+		static constexpr std::size_t MaximumGltfMeshes = 1024;
+		static constexpr std::size_t MaximumGltfPrimitives = 4096;
+		static constexpr std::size_t MaximumGltfMaterials = 1024;
+		static constexpr std::size_t MaximumGltfImages = 1024;
+		static constexpr std::size_t MaximumGltfTextures = 1024;
+		static constexpr std::size_t MaximumGltfChunks = 8;
+		static constexpr std::size_t MaximumGltfDataUriBytes = 8 * 1024 * 1024;
 		static constexpr std::size_t MaximumChangeRecords = 512;
 		static constexpr std::size_t MaximumInFlightImports = 4;
 		static constexpr std::uint32_t MaximumImageDimension = 1024;
@@ -184,5 +242,6 @@ namespace gargantuan {
 		bool Ok = false;
 		std::optional<AssetRecord> Record;
 		AssetDiagnostic Diagnostic;
+		std::vector<AssetRecord> Records;
 	};
 }

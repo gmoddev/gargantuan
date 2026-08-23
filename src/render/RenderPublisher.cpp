@@ -6,9 +6,12 @@
 #include "gargantuan/render/RenderExtractor.hpp"
 
 #include "gargantuan/classes/Part.hpp"
+#include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/DeformableBody.hpp"
+#include "gargantuan/classes/MeshPart.hpp"
 #include "gargantuan/classes/WorldRoot.hpp"
 #include "gargantuan/runtime/ExecutionDomain.hpp"
+#include "gargantuan/services/AssetService.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -142,6 +145,82 @@ namespace gargantuan {
 			Material.BaseColorFactor = Item.Color;
 			Material.OpacityMode = Item.Color.a < 1.0f ? RenderOpacityMode::Transparent : RenderOpacityMode::Opaque;
 			return Material;
+		}
+
+		struct ExtractedMeshPart {
+			RenderItem Item;
+			RenderMeshIdentity Mesh;
+			RenderMaterialState Material;
+			std::shared_ptr<const std::vector<RenderPrimitiveMaterialState>> Primitives;
+		};
+
+		std::optional<ExtractedMeshPart> ExtractMeshPart(
+			const WorldRoot &World,
+			const std::shared_ptr<MeshPart> &PartValue,
+			RenderExtractionDiagnostic &Diagnostic
+		) {
+			const auto Object = PartValue ? PartValue->GetObjectId() : ObjectId{};
+			if (!PartValue || PartValue->GetDestroyed() || PartValue->IsDestroying()) {
+				Diagnostic = {RenderExtractionIssue::DeadObject, Object, "Skipped a dead MeshPart"};
+				return std::nullopt;
+			}
+			if (!Object.IsValid() || ObjectRegistry::Get().Lookup(Object).get() != PartValue.get()) {
+				Diagnostic = {RenderExtractionIssue::StaleObjectId, Object, "Skipped a MeshPart with stale identity"};
+				return std::nullopt;
+			}
+			const auto Frame = PartValue->GetCFrame();
+			const auto Size = PartValue->GetSize();
+			if (!IsFinite(Frame.Position) || !IsFinite(glm::vec4(Frame.Rotation[0], 0.0f)) ||
+				!IsFinite(glm::vec4(Frame.Rotation[1], 0.0f)) || !IsFinite(glm::vec4(Frame.Rotation[2], 0.0f)) ||
+				!IsFinite(Size) || std::abs(Size.x) < 1e-6f || std::abs(Size.y) < 1e-6f || std::abs(Size.z) < 1e-6f) {
+				Diagnostic = {RenderExtractionIssue::InvalidTransform, Object, "Skipped a MeshPart with an invalid transform"};
+				return std::nullopt;
+			}
+			const auto ColorValue = static_cast<glm::vec3>(PartValue->GetColor());
+			const glm::vec4 Color(ColorValue, 1.0f - PartValue->GetTransparency());
+			if (!IsFinite(Color)) {
+				Diagnostic = {RenderExtractionIssue::InvalidVisualState, Object, "Skipped a MeshPart with invalid visual state"};
+				return std::nullopt;
+			}
+			const auto Model = glm::translate(glm::mat4(1.0f), Frame.Position) * glm::mat4(Frame.Rotation) *
+				glm::scale(glm::mat4(1.0f), Size);
+			const auto Inverse = glm::inverse(Model);
+			if (!IsFinite(Model) || !IsFinite(Inverse)) {
+				Diagnostic = {RenderExtractionIssue::InvalidTransform, Object, "Skipped a MeshPart with a non-invertible transform"};
+				return std::nullopt;
+			}
+			auto WorldValue = World.GetDataModel();
+			auto Assets = WorldValue ? std::dynamic_pointer_cast<AssetService>(WorldValue->GetService("AssetService")) : nullptr;
+			auto Mesh = Assets ? Assets->ResolveMeshResource(PartValue->GetMesh()) : std::nullopt;
+			if (!Mesh || !Mesh->Value.Indices || Mesh->Value.Indices->empty()) {
+				Diagnostic = {RenderExtractionIssue::UnsupportedGeometry, Object,
+					"Skipped a MeshPart whose Mesh asset is missing or unavailable"};
+				return std::nullopt;
+			}
+
+			const RenderItem Item{Object, RenderGeometry::Block, Model, Inverse, Color, PartValue->GetCastShadow()};
+			auto ResolveMaterial = [&](std::string_view Reference) {
+				auto Resolved = Assets->ResolveMaterial(Reference);
+				auto Material = Resolved ? Resolved->RenderState : RenderMaterialState{};
+				Material.BaseColorFactor *= Color;
+				if (Material.OpacityMode == RenderOpacityMode::Opaque && Material.BaseColorFactor.a < 1.0f)
+					Material.OpacityMode = RenderOpacityMode::Transparent;
+				return Material;
+			};
+			auto PrimitiveStates = std::make_shared<std::vector<RenderPrimitiveMaterialState>>();
+			if (!PartValue->GetMaterial().empty()) {
+				PrimitiveStates->push_back({0, static_cast<std::uint32_t>(Mesh->Value.Indices->size()),
+					ResolveMaterial(PartValue->GetMaterial())});
+			} else if (Mesh->Value.Primitives && !Mesh->Value.Primitives->empty()) {
+				PrimitiveStates->reserve(Mesh->Value.Primitives->size());
+				for (const auto &Primitive : *Mesh->Value.Primitives) {
+					const auto Reference = Primitive.Material ? AssetReference::FromAssetId(*Primitive.Material).Value : std::string{};
+					PrimitiveStates->push_back({
+						Primitive.FirstIndex, Primitive.IndexCount, ResolveMaterial(Reference),
+					});
+				}
+			} else PrimitiveStates->push_back({0, static_cast<std::uint32_t>(Mesh->Value.Indices->size()), ResolveMaterial({})});
+			return ExtractedMeshPart{Item, Mesh->Mesh, PrimitiveStates->front().Material, PrimitiveStates};
 		}
 
 		struct ExtractedDeformable {
@@ -494,6 +573,19 @@ namespace gargantuan {
 				Result->Creates.push_back({Item, std::nullopt, BuildMaterial(Item)});
 				Replacement.emplace(Item.Object, Item);
 			}
+			for (const auto &BasePartValue : World.Parts) {
+				auto MeshPartValue = std::dynamic_pointer_cast<MeshPart>(BasePartValue);
+				if (!MeshPartValue) continue;
+				RenderExtractionDiagnostic Diagnostic;
+				auto Extracted = ExtractMeshPart(World, MeshPartValue, Diagnostic);
+				if (!Extracted) {
+					Result->Diagnostics.push_back(std::move(Diagnostic));
+					continue;
+				}
+				Result->Creates.push_back({Extracted->Item, Extracted->Mesh, Extracted->Material, true,
+					Extracted->Primitives});
+				Replacement.emplace(Extracted->Item.Object, Extracted->Item);
+			}
 			std::vector<std::shared_ptr<DeformableBody>> OrderedDeformables;
 			OrderedDeformables.reserve(World.SoftBodies.size());
 			for (const auto &Body : World.SoftBodies)
@@ -576,6 +668,7 @@ namespace gargantuan {
 				if (!Root) continue;
 				auto AddRenderable = [&](const std::shared_ptr<Instance> &Candidate) {
 					if (!std::dynamic_pointer_cast<Part>(Candidate) &&
+						!std::dynamic_pointer_cast<MeshPart>(Candidate) &&
 						!std::dynamic_pointer_cast<DeformableBody>(Candidate)) return;
 					const auto Object = Candidate->GetObjectId();
 					Expanded[Object] = Expanded[Object] | RenderUpdateDomain::Transform | RenderUpdateDomain::Material |
@@ -608,6 +701,7 @@ namespace gargantuan {
 			auto Previous = PublishedItems.find(Object);
 			auto InstanceValue = ObjectRegistry::Get().Lookup(Object);
 			auto PartValue = std::dynamic_pointer_cast<Part>(InstanceValue);
+			auto MeshPartValue = std::dynamic_pointer_cast<MeshPart>(InstanceValue);
 			auto DeformableValue = std::dynamic_pointer_cast<DeformableBody>(InstanceValue);
 			if (DeformableValue) {
 				const bool ShouldRender = !DeformableValue->GetDestroyed() && !DeformableValue->IsDestroying() &&
@@ -665,6 +759,34 @@ namespace gargantuan {
 				DeformableCacheUpdates.emplace_back(
 					Object, PublishedDeformable{Extracted->Mesh, Extracted->TopologyRevision, Extracted->VertexRevision}
 				);
+				if (ProfilingEnabled)
+					LastProfile.PublicationConstructionNanoseconds +=
+						ProfileNanoseconds(ProfileClock::now() - OperationStart);
+				continue;
+			}
+			if (MeshPartValue) {
+				const bool ShouldRender = !MeshPartValue->GetDestroyed() && !MeshPartValue->IsDestroying() &&
+					MeshPartValue->FindFirstAncestorWhichIsA("WorldRoot").get() == &World;
+				RenderExtractionDiagnostic Diagnostic;
+				auto Extracted = ShouldRender ? ExtractMeshPart(World, MeshPartValue, Diagnostic) : std::nullopt;
+				if (ProfilingEnabled)
+					LastProfile.FinalStateExtractionNanoseconds +=
+						ProfileNanoseconds(ProfileClock::now() - ExtractionStart);
+				const auto OperationStart = ProfilingEnabled ? ProfileClock::now() : ProfileClock::time_point{};
+				if (!Extracted) {
+					if (ShouldRender) Result->Diagnostics.push_back(std::move(Diagnostic));
+					if (Previous != PublishedItems.end()) Result->Removes.push_back({Object});
+					if (ProfilingEnabled)
+						LastProfile.PublicationConstructionNanoseconds +=
+							ProfileNanoseconds(ProfileClock::now() - OperationStart);
+					continue;
+				}
+				if (Previous == PublishedItems.end()) Result->Creates.push_back({
+					Extracted->Item, Extracted->Mesh, Extracted->Material, true, Extracted->Primitives
+				});
+				else Result->Updates.push_back({
+					Object, Domains, Extracted->Item, Extracted->Mesh, Extracted->Material, true, Extracted->Primitives
+				});
 				if (ProfilingEnabled)
 					LastProfile.PublicationConstructionNanoseconds +=
 						ProfileNanoseconds(ProfileClock::now() - OperationStart);

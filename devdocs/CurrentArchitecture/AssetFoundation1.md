@@ -23,9 +23,9 @@ Gargantuan exposes one canonical, lazy `AssetService` DataModel service for all
 asset kinds. It owns semantic identity, the project catalog, provenance,
 canonical content, import state, diagnostics, change sequencing, bounded CPU
 ownership, and renderer-neutral consumer resolution. Image, mesh, and font
-importers implement the private `IAssetImporter` contract; adding audio,
-animation, or materials extends the kind and importer registries rather than
-adding another public service.
+importers implement the private `IAssetImporter` contract. Foundation 2A now
+extends the same service with Material, compound glTF, dependencies, and
+MeshPart; see `AssetFoundation2A.md` for the current architecture.
 
 ```text
 trusted project-relative source
@@ -63,8 +63,9 @@ GPU identities, and ambient extension lookup are rejected. `ImageLabel.Image`
 may additionally be empty to mean no image; `TextLabel.FontFace` always requires
 a strict asset reference.
 
-The implemented built-ins are `builtin://image/missing` and
-`builtin://font/default`. They pass through the same catalog and resolver paths
+The implemented built-ins are `builtin://image/missing`,
+`builtin://font/default`, and Foundation 2A's `builtin://material/default`.
+They pass through the same catalog and resolver paths
 as project assets.
 
 ## Public surface
@@ -90,8 +91,9 @@ provenance are not exposed to ordinary runtime Luau.
 Every project record contains `AssetId`, strict reference, kind, display name,
 project-relative source, content identity and monotonically increasing content
 revision, explicit state, optional bounded diagnostic, dependencies, and the
-current canonical value. Foundation 1 dependencies are empty but bounded in the
-type so later importers do not need a catalog redesign.
+current canonical value. Foundation 1 dependencies are empty. Foundation 2A
+activates the bounded field for Mesh -> Material -> Image edges and writes
+catalog version 2.
 
 The state model is:
 
@@ -295,16 +297,14 @@ The 2026-08-23 Release benchmark on the development Windows machine measured:
 This is a regression baseline, not a cross-machine performance promise. The
 benchmark does not treat filesystem cache timing as deterministic.
 
-## Foundation 2 priorities and accepted gaps
+## Superseded and remaining gaps
 
 - add an asynchronous EditorHost job/progress/cancellation protocol rather than
   waiting synchronously for the worker result;
 - add usage epochs/pins and evict disposable residency before rejecting canonical
   admission, with memory telemetry;
-- add a public mesh-consuming Instance such as `MeshPart`; Foundation 1 proves
-  mesh normalization and renderer residency but does not add scene semantics;
-- add glTF/GLB, material slots/tangents, dependency extraction, and then audio,
-  animation, and material kinds through the same service;
+- MeshPart, glTF/GLB, Material, tangents, primitive slots, and explicit dependency
+  extraction are implemented by Asset Foundation 2A;
 - add an asset browser with status, reimport/delete, thumbnail, copy-in, and
   property-assignment workflows;
 - add filesystem watching/debounced source-change detection; Foundation 1 hot

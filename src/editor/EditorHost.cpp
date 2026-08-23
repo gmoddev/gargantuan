@@ -414,13 +414,36 @@ namespace gargantuan {
 					Metadata["VertexCount"] = Asset.Vertices ? Asset.Vertices->size() : 0;
 					Metadata["IndexCount"] = Asset.Indices ? Asset.Indices->size() : 0;
 					Metadata["SubmeshCount"] = Asset.SubmeshCount;
-				} else {
+					Json Primitives = Json::array();
+					if (Asset.Primitives) for (const auto &Primitive : *Asset.Primitives) Primitives.push_back({
+							{"FirstIndex", Primitive.FirstIndex}, {"IndexCount", Primitive.IndexCount},
+							{"Material", Primitive.Material ? Json(Primitive.Material->ToString()) : Json(nullptr)},
+						});
+					Metadata["Primitives"] = std::move(Primitives);
+				} else if constexpr (std::is_same_v<T, ImportedFont>) {
 					Metadata["FaceCount"] = Asset.FaceCount;
+				} else if constexpr (std::is_same_v<T, ImportedMaterial>) {
+					Metadata["BaseColorFactor"] = {
+						Asset.BaseColorFactor[0], Asset.BaseColorFactor[1],
+						Asset.BaseColorFactor[2], Asset.BaseColorFactor[3]
+					};
+					Metadata["BaseColorTexture"] = Asset.BaseColorTexture ?
+						Json(Asset.BaseColorTexture->ToString()) : Json(nullptr);
+					Metadata["MetallicFactor"] = Asset.MetallicFactor;
+					Metadata["RoughnessFactor"] = Asset.RoughnessFactor;
+					Metadata["NormalTexture"] = Asset.NormalTexture ?
+						Json(Asset.NormalTexture->ToString()) : Json(nullptr);
+					Metadata["AlphaMode"] = Asset.AlphaMode == AssetMaterialAlphaMode::Opaque ? "Opaque" :
+						Asset.AlphaMode == AssetMaterialAlphaMode::Mask ? "Mask" : "Blend";
+					Metadata["AlphaCutoff"] = Asset.AlphaCutoff;
+					Metadata["DoubleSided"] = Asset.DoubleSided;
 				}
 			}, *Record.Asset);
 			return {
 				{"AssetId", Record.Id.ToString()}, {"Reference", Record.Reference.Value},
 				{"Kind", GetAssetKindName(Record.Kind)}, {"Name", Record.Name}, {"Source", Record.Source},
+				{"SourceGroupId", Record.SourceGroupId.ToString()}, {"LogicalKey", Record.LogicalKey},
+				{"PrimarySourceAsset", Record.PrimarySourceAsset},
 				{"ContentId", Record.ContentId.IsValid() ? Json(Record.ContentId.ToString()) : Json(nullptr)},
 				{"ContentRevision", Record.ContentRevision}, {"State", GetAssetStateName(Record.State)},
 				{"Available", static_cast<bool>(Record.Asset) &&
@@ -1109,7 +1132,7 @@ namespace gargantuan {
 				for (const auto &Record : Assets->GetCatalog(parameters.value("IncludeBuiltIns", true)))
 					Records.push_back(EncodeAssetRecord(Record));
 				return SerializeBoundedResponse(SuccessResponse(requestId, {
-					{"CatalogVersion", 1}, {"Assets", std::move(Records)},
+					{"CatalogVersion", 2}, {"Assets", std::move(Records)},
 					{"ProjectState", EncodeProjectState(World, PersistedRevision, CurrentProject)},
 				}));
 			}
@@ -1166,19 +1189,18 @@ namespace gargantuan {
 						Result = Assets->ReimportProjectAsset(Mount, Reference);
 					} else Result = Assets->DeleteProjectAsset(Reference);
 				}
-				if (!Result.Record)
-					return SerializeBoundedResponse(ErrorResponse(
-						requestId, Result.Diagnostic.Code.empty() ? "AssetOperationFailed" : Result.Diagnostic.Code,
-						Result.Diagnostic.Message.empty() ? "Asset operation returned no record" : Result.Diagnostic.Message
-					));
 				Json Diagnostic = nullptr;
 				if (!Result.Ok) Diagnostic = {
 					{"Code", Result.Diagnostic.Code.empty() ? "AssetOperationFailed" : Result.Diagnostic.Code},
 					{"Message", Result.Diagnostic.Message.empty() ? "Asset operation failed" : Result.Diagnostic.Message},
 				};
+				Json Records = Json::array();
+				for (const auto &Record : Result.Records) Records.push_back(EncodeAssetRecord(Record));
+				if (Records.empty() && Result.Record) Records.push_back(EncodeAssetRecord(*Result.Record));
 				return SerializeBoundedResponse(SuccessResponse(requestId, {
 					{"OperationSucceeded", Result.Ok},
-					{"Asset", EncodeAssetRecord(*Result.Record)},
+					{"Asset", Result.Record ? Json(EncodeAssetRecord(*Result.Record)) : Json(nullptr)},
+					{"Assets", std::move(Records)},
 					{"Diagnostic", std::move(Diagnostic)},
 					{"ProjectState", EncodeProjectState(World, PersistedRevision, CurrentProject)},
 				}));

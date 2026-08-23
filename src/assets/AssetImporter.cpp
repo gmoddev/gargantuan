@@ -24,7 +24,8 @@
 namespace gargantuan {
 	namespace {
 		constexpr std::array<std::uint8_t, 8> ArtifactMagic{'G', 'A', 'R', 'G', 'A', 'S', '0', '1'};
-		constexpr std::uint32_t ArtifactVersion = 1;
+		constexpr std::uint32_t ArtifactVersion1 = 1;
+		constexpr std::uint32_t ArtifactVersion2 = 2;
 
 		AssetDiagnostic Error(std::string Code, std::string Message) {
 			if (Message.size() > AssetLimits::MaximumDiagnosticBytes) Message.resize(AssetLimits::MaximumDiagnosticBytes);
@@ -39,12 +40,25 @@ namespace gargantuan {
 			for (std::size_t Index = 0; Index < 4; ++Index) Output.push_back(static_cast<std::uint8_t>(Value >> (Index * 8)));
 		}
 
+		void AppendU64(std::vector<std::uint8_t> &Output, std::uint64_t Value) {
+			for (std::size_t Index = 0; Index < 8; ++Index)
+				Output.push_back(static_cast<std::uint8_t>(Value >> (Index * 8)));
+		}
+
 		void AppendFloat(std::vector<std::uint8_t> &Output, float Value) { AppendU32(Output, std::bit_cast<std::uint32_t>(Value)); }
 
 		std::optional<std::uint32_t> ReadU32(std::span<const std::uint8_t> Bytes, std::size_t &Offset) {
 			if (Offset > Bytes.size() || Bytes.size() - Offset < 4) return std::nullopt;
 			std::uint32_t Value = 0;
 			for (std::size_t Index = 0; Index < 4; ++Index) Value |= static_cast<std::uint32_t>(Bytes[Offset++]) << (Index * 8);
+			return Value;
+		}
+
+		std::optional<std::uint64_t> ReadU64(std::span<const std::uint8_t> Bytes, std::size_t &Offset) {
+			if (Offset > Bytes.size() || Bytes.size() - Offset < 8) return std::nullopt;
+			std::uint64_t Value = 0;
+			for (std::size_t Index = 0; Index < 8; ++Index)
+				Value |= static_cast<std::uint64_t>(Bytes[Offset++]) << (Index * 8);
 			return Value;
 		}
 
@@ -55,9 +69,9 @@ namespace gargantuan {
 			return std::isfinite(Result) ? std::optional(Result) : std::nullopt;
 		}
 
-		std::vector<std::uint8_t> BeginArtifact(AssetKind Kind) {
+		std::vector<std::uint8_t> BeginArtifact(AssetKind Kind, std::uint32_t Version = ArtifactVersion1) {
 			std::vector<std::uint8_t> Result(ArtifactMagic.begin(), ArtifactMagic.end());
-			AppendU32(Result, ArtifactVersion);
+			AppendU32(Result, Version);
 			Result.push_back(static_cast<std::uint8_t>(Kind));
 			return Result;
 		}
@@ -351,12 +365,120 @@ namespace gargantuan {
 		};
 	}
 
+	std::expected<std::vector<std::string>, AssetDiagnostic> IAssetImporter::DiscoverExternalResources(
+		std::span<const std::uint8_t>,
+		const AssetImportContext &
+	) const {
+		return std::vector<std::string>{};
+	}
+
+	std::expected<AssetImportGraphCandidate, AssetDiagnostic> IAssetImporter::ImportGraph(
+		std::span<const std::uint8_t> Source,
+		const AssetImportContext &Context
+	) const {
+		auto Candidate = Import(Source, Context);
+		if (!Candidate) return std::unexpected(Candidate.error());
+		AssetImportNodeCandidate Node;
+		Node.LogicalKey = "asset";
+		Node.Kind = GetKind();
+		Node.Asset = std::move(Candidate->Asset);
+		Node.Artifact = std::move(Candidate->Artifact);
+		Node.ContentId = Candidate->ContentId;
+		return AssetImportGraphCandidate{{std::move(Node)}, "asset"};
+	}
+
 	std::vector<std::unique_ptr<IAssetImporter>> CreateFoundationAssetImporters() {
 		std::vector<std::unique_ptr<IAssetImporter>> Result;
 		Result.push_back(std::make_unique<ImageImporter>());
 		Result.push_back(std::make_unique<MeshImporter>());
 		Result.push_back(std::make_unique<FontImporter>());
+		Result.push_back(CreateGltfImporter());
 		return Result;
+	}
+
+	std::expected<std::shared_ptr<const std::vector<std::uint8_t>>, AssetDiagnostic> EncodeAssetArtifact(
+		const ImportedAsset &Asset,
+		AssetKind Kind
+	) {
+		if ((Kind == AssetKind::Image && !std::holds_alternative<ImportedImage>(Asset)) ||
+			(Kind == AssetKind::Mesh && !std::holds_alternative<ImportedMesh>(Asset)) ||
+			(Kind == AssetKind::Font && !std::holds_alternative<ImportedFont>(Asset)) ||
+			(Kind == AssetKind::Material && !std::holds_alternative<ImportedMaterial>(Asset)))
+			return std::unexpected(Error("ArtifactKindMismatch", "Canonical value does not match its asset kind"));
+		auto Artifact = BeginArtifact(Kind, ArtifactVersion2);
+		if (const auto *Image = std::get_if<ImportedImage>(&Asset)) {
+			if (!Image->Rgba8 || Image->Width == 0 || Image->Height == 0 ||
+				Image->Rgba8->size() != static_cast<std::size_t>(Image->Width) * Image->Height * 4)
+				return std::unexpected(Error("MalformedImage", "Canonical image value is invalid"));
+			AppendU32(Artifact, Image->Width);
+			AppendU32(Artifact, Image->Height);
+			Artifact.insert(Artifact.end(), Image->Rgba8->begin(), Image->Rgba8->end());
+		} else if (const auto *Font = std::get_if<ImportedFont>(&Asset)) {
+			if (!Font->Bytes || Font->Bytes->empty() || Font->Bytes->size() > AssetLimits::MaximumFontBytes ||
+				Font->FaceCount == 0 || Font->FaceCount > 64)
+				return std::unexpected(Error("MalformedFont", "Canonical font value is invalid"));
+			AppendU32(Artifact, Font->FaceCount);
+			AppendU32(Artifact, static_cast<std::uint32_t>(Font->Bytes->size()));
+			Artifact.insert(Artifact.end(), Font->Bytes->begin(), Font->Bytes->end());
+		} else if (const auto *Mesh = std::get_if<ImportedMesh>(&Asset)) {
+			if (!Mesh->Vertices || !Mesh->Indices || Mesh->Vertices->empty() || Mesh->Indices->empty() ||
+				Mesh->Vertices->size() > AssetLimits::MaximumMeshVertices ||
+				Mesh->Indices->size() > AssetLimits::MaximumMeshIndices)
+				return std::unexpected(Error("MalformedMesh", "Canonical mesh value is invalid"));
+			auto Primitives = Mesh->Primitives;
+			if (!Primitives) Primitives = std::make_shared<const std::vector<ImportedMeshPrimitive>>(
+				std::vector<ImportedMeshPrimitive>{{0, static_cast<std::uint32_t>(Mesh->Indices->size()), std::nullopt}}
+			);
+			if (Primitives->empty() || Primitives->size() > AssetLimits::MaximumMeshSubmeshes)
+				return std::unexpected(Error("MalformedTopology", "Canonical mesh primitive count is invalid"));
+			AppendU32(Artifact, static_cast<std::uint32_t>(Mesh->Vertices->size()));
+			AppendU32(Artifact, static_cast<std::uint32_t>(Mesh->Indices->size()));
+			AppendU32(Artifact, static_cast<std::uint32_t>(Primitives->size()));
+			for (const auto Component : {Mesh->Bounds.Minimum.x, Mesh->Bounds.Minimum.y, Mesh->Bounds.Minimum.z,
+				Mesh->Bounds.Maximum.x, Mesh->Bounds.Maximum.y, Mesh->Bounds.Maximum.z}) AppendFloat(Artifact, Component);
+			for (const auto &Vertex : *Mesh->Vertices)
+				for (const auto Component : {Vertex.Position.x, Vertex.Position.y, Vertex.Position.z, Vertex.Normal.x,
+					Vertex.Normal.y, Vertex.Normal.z, Vertex.Tangent.x, Vertex.Tangent.y, Vertex.Tangent.z,
+					Vertex.Tangent.w, Vertex.TextureCoordinate.x, Vertex.TextureCoordinate.y}) AppendFloat(Artifact, Component);
+			for (const auto Index : *Mesh->Indices) {
+				if (Index >= Mesh->Vertices->size()) return std::unexpected(Error("InvalidMeshIndex", "Canonical mesh index is invalid"));
+				AppendU32(Artifact, Index);
+			}
+			for (const auto &Primitive : *Primitives) {
+				if (Primitive.IndexCount == 0 || Primitive.IndexCount % 3 != 0 ||
+					Primitive.FirstIndex > Mesh->Indices->size() ||
+					Primitive.IndexCount > Mesh->Indices->size() - Primitive.FirstIndex)
+					return std::unexpected(Error("MalformedTopology", "Canonical mesh primitive range is invalid"));
+				AppendU32(Artifact, Primitive.FirstIndex);
+				AppendU32(Artifact, Primitive.IndexCount);
+				Artifact.push_back(Primitive.Material.has_value() ? 1 : 0);
+				if (Primitive.Material) {
+					if (!Primitive.Material->IsValid()) return std::unexpected(Error("InvalidDependency", "Mesh material dependency is invalid"));
+					AppendU64(Artifact, Primitive.Material->High);
+					AppendU64(Artifact, Primitive.Material->Low);
+				}
+			}
+		} else if (const auto *Material = std::get_if<ImportedMaterial>(&Asset)) {
+			for (const auto Component : {Material->BaseColorFactor.x, Material->BaseColorFactor.y,
+				Material->BaseColorFactor.z, Material->BaseColorFactor.w, Material->MetallicFactor,
+				Material->RoughnessFactor, Material->AlphaCutoff})
+				if (!std::isfinite(Component)) return std::unexpected(Error("MalformedMaterial", "Material factor is non-finite"));
+			for (const auto Component : {Material->BaseColorFactor.x, Material->BaseColorFactor.y,
+				Material->BaseColorFactor.z, Material->BaseColorFactor.w, Material->MetallicFactor,
+				Material->RoughnessFactor}) AppendFloat(Artifact, Component);
+			auto AppendReference = [&](const std::optional<AssetId> &Reference) {
+				Artifact.push_back(Reference.has_value() ? 1 : 0);
+				if (Reference) { AppendU64(Artifact, Reference->High); AppendU64(Artifact, Reference->Low); }
+			};
+			AppendReference(Material->BaseColorTexture);
+			AppendReference(Material->NormalTexture);
+			Artifact.push_back(static_cast<std::uint8_t>(Material->AlphaMode));
+			AppendFloat(Artifact, Material->AlphaCutoff);
+			Artifact.push_back(Material->DoubleSided ? 1 : 0);
+		}
+		if (Artifact.size() > AssetLimits::MaximumArtifactBytes)
+			return std::unexpected(Error("ArtifactLimit", "Canonical artifact exceeds its byte limit"));
+		return std::make_shared<const std::vector<std::uint8_t>>(std::move(Artifact));
 	}
 
 	std::expected<AssetImportCandidate, AssetDiagnostic> DecodeAssetArtifact(
@@ -371,7 +493,7 @@ namespace gargantuan {
 			return std::unexpected(Error("IntegrityFailure", "Asset artifact content hash does not match the catalog"));
 		std::size_t Offset = ArtifactMagic.size();
 		auto Version = ReadU32(Artifact, Offset);
-		if (!Version || *Version != ArtifactVersion || Offset >= Artifact.size() ||
+		if (!Version || (*Version != ArtifactVersion1 && *Version != ArtifactVersion2) || Offset >= Artifact.size() ||
 			Artifact[Offset++] != static_cast<std::uint8_t>(ExpectedKind))
 			return std::unexpected(Error("UnsupportedArtifact", "Asset artifact version or kind is unsupported"));
 
@@ -395,6 +517,47 @@ namespace gargantuan {
 				return std::unexpected(Error("MalformedArtifact", "Font artifact metadata is invalid"));
 			auto Bytes = std::make_shared<const std::vector<std::uint8_t>>(Artifact.begin() + Offset, Artifact.end());
 			return AssetImportCandidate{ImportedFont{Bytes, *Faces},
+				std::make_shared<const std::vector<std::uint8_t>>(Artifact.begin(), Artifact.end()), ExpectedContentId};
+		}
+
+		if (ExpectedKind == AssetKind::Material) {
+			if (*Version != ArtifactVersion2)
+				return std::unexpected(Error("UnsupportedArtifact", "Material assets require artifact version 2"));
+			ImportedMaterial Material;
+			std::array<float *, 6> Factors{&Material.BaseColorFactor.x, &Material.BaseColorFactor.y,
+				&Material.BaseColorFactor.z, &Material.BaseColorFactor.w, &Material.MetallicFactor,
+				&Material.RoughnessFactor};
+			for (auto *Destination : Factors) {
+				auto Value = ReadFloat(Artifact, Offset);
+				if (!Value) return std::unexpected(Error("MalformedArtifact", "Material artifact factor is invalid"));
+				*Destination = *Value;
+			}
+			auto ReadReference = [&]() -> std::expected<std::optional<AssetId>, AssetDiagnostic> {
+				if (Offset >= Artifact.size() || Artifact[Offset] > 1)
+					return std::unexpected(Error("MalformedArtifact", "Material artifact dependency flag is invalid"));
+				if (Artifact[Offset++] == 0) return std::optional<AssetId>{};
+				auto High = ReadU64(Artifact, Offset), Low = ReadU64(Artifact, Offset);
+				if (!High || !Low || !AssetId{*High, *Low}.IsValid())
+					return std::unexpected(Error("MalformedArtifact", "Material artifact dependency is invalid"));
+				return std::optional(AssetId{*High, *Low});
+			};
+			auto BaseColorTexture = ReadReference();
+			if (!BaseColorTexture) return std::unexpected(BaseColorTexture.error());
+			auto NormalTexture = ReadReference();
+			if (!NormalTexture) return std::unexpected(NormalTexture.error());
+			Material.BaseColorTexture = *BaseColorTexture;
+			Material.NormalTexture = *NormalTexture;
+			if (Offset >= Artifact.size() || Artifact[Offset] > static_cast<std::uint8_t>(AssetMaterialAlphaMode::Blend))
+				return std::unexpected(Error("MalformedArtifact", "Material artifact alpha mode is invalid"));
+			Material.AlphaMode = static_cast<AssetMaterialAlphaMode>(Artifact[Offset++]);
+			auto AlphaCutoff = ReadFloat(Artifact, Offset);
+			if (!AlphaCutoff || Offset >= Artifact.size() || Artifact[Offset] > 1)
+				return std::unexpected(Error("MalformedArtifact", "Material artifact alpha state is invalid"));
+			Material.AlphaCutoff = *AlphaCutoff;
+			Material.DoubleSided = Artifact[Offset++] != 0;
+			if (Offset != Artifact.size())
+				return std::unexpected(Error("MalformedArtifact", "Material artifact has trailing bytes"));
+			return AssetImportCandidate{Material,
 				std::make_shared<const std::vector<std::uint8_t>>(Artifact.begin(), Artifact.end()), ExpectedContentId};
 		}
 
@@ -431,8 +594,31 @@ namespace gargantuan {
 			if (!Value || *Value >= *VertexCount) return std::unexpected(Error("MalformedArtifact", "Mesh artifact index is invalid"));
 			Indices->push_back(*Value);
 		}
+		auto Primitives = std::make_shared<std::vector<ImportedMeshPrimitive>>();
+		if (*Version == ArtifactVersion1) {
+			if (*SubmeshCount != 1)
+				return std::unexpected(Error("UnsupportedArtifact", "Version 1 mesh artifacts support exactly one primitive"));
+			Primitives->push_back({0, *IndexCount, std::nullopt});
+		} else {
+			Primitives->reserve(*SubmeshCount);
+			for (std::uint32_t PrimitiveIndex = 0; PrimitiveIndex < *SubmeshCount; ++PrimitiveIndex) {
+				auto FirstIndex = ReadU32(Artifact, Offset), PrimitiveIndexCount = ReadU32(Artifact, Offset);
+				if (!FirstIndex || !PrimitiveIndexCount || *PrimitiveIndexCount == 0 || *PrimitiveIndexCount % 3 != 0 ||
+					*FirstIndex > *IndexCount || *PrimitiveIndexCount > *IndexCount - *FirstIndex ||
+					Offset >= Artifact.size() || Artifact[Offset] > 1)
+					return std::unexpected(Error("MalformedArtifact", "Mesh artifact primitive range is invalid"));
+				std::optional<AssetId> Material;
+				if (Artifact[Offset++] != 0) {
+					auto High = ReadU64(Artifact, Offset), Low = ReadU64(Artifact, Offset);
+					if (!High || !Low || !AssetId{*High, *Low}.IsValid())
+						return std::unexpected(Error("MalformedArtifact", "Mesh artifact material dependency is invalid"));
+					Material = AssetId{*High, *Low};
+				}
+				Primitives->push_back({*FirstIndex, *PrimitiveIndexCount, Material});
+			}
+		}
 		if (Offset != Artifact.size()) return std::unexpected(Error("MalformedArtifact", "Mesh artifact has trailing bytes"));
-		return AssetImportCandidate{ImportedMesh{Vertices, Indices, Bounds, *SubmeshCount},
+		return AssetImportCandidate{ImportedMesh{Vertices, Indices, Bounds, *SubmeshCount, Primitives},
 			std::make_shared<const std::vector<std::uint8_t>>(Artifact.begin(), Artifact.end()), ExpectedContentId};
 	}
 }

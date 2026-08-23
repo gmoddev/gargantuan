@@ -48,7 +48,8 @@ namespace gargantuan {
 		if (Property->PropertyName == "Color" || Property->PropertyName == "Transparency" ||
 			Property->PropertyName == "CastShadow")
 			return RenderUpdateDomain::Material;
-		if (Property->PropertyName == "Shape") return RenderUpdateDomain::Geometry;
+		if (Property->PropertyName == "Shape" || Property->PropertyName == "Mesh") return RenderUpdateDomain::Geometry;
+		if (Property->PropertyName == "Material") return RenderUpdateDomain::Material;
 		if (Property->PropertyName == "Destroyed" || Property->PropertyName == "Visible")
 			return RenderUpdateDomain::Visibility;
 		return RenderUpdateDomain::None;

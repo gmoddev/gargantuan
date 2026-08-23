@@ -6,11 +6,13 @@
 #include "assets/AssetImporter.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/ImageLabel.hpp"
+#include "gargantuan/classes/MeshPart.hpp"
 #include "gargantuan/classes/TextLabel.hpp"
 #include "gargantuan/filesystem/BaseFilesystem.hpp"
 #include "gargantuan/filesystem/Paths.hpp"
 #include "gargantuan/filesystem/SourceMount.hpp"
 #include "gargantuan/runtime/JobSystem.hpp"
+#include "gargantuan/render/RenderDirtyAccumulator.hpp"
 #include "serialization/JsonCodec.hpp"
 
 #include <lua.h>
@@ -33,11 +35,13 @@
 namespace gargantuan {
 	namespace {
 		using Json = nlohmann::ordered_json;
-		constexpr std::uint32_t CatalogVersion = 1;
+		constexpr std::uint32_t CatalogVersion = 2;
+		constexpr std::uint32_t LegacyCatalogVersion = 1;
 		constexpr std::string_view CatalogPath = ".gargantuan/assets/catalog.json";
 		constexpr std::string_view ArtifactDirectory = ".gargantuan/assets/artifacts";
 		constexpr std::string_view DefaultFontReference = "builtin://font/default";
 		constexpr std::string_view MissingImageReference = "builtin://image/missing";
+		constexpr std::string_view DefaultMaterialReference = "builtin://material/default";
 
 		AssetDiagnostic Error(std::string Code, std::string Message) {
 			if (Message.size() > AssetLimits::MaximumDiagnosticBytes) Message.resize(AssetLimits::MaximumDiagnosticBytes);
@@ -66,10 +70,163 @@ namespace gargantuan {
 					return Value.Rgba8 ? Value.Rgba8->size() : 0;
 				else if constexpr (std::is_same_v<T, ImportedFont>)
 					return Value.Bytes ? Value.Bytes->size() : 0;
-				else
+				else if constexpr (std::is_same_v<T, ImportedMesh>)
 					return (Value.Vertices ? Value.Vertices->size() * sizeof(RenderVertex) : 0) +
-						(Value.Indices ? Value.Indices->size() * sizeof(std::uint32_t) : 0);
+						(Value.Indices ? Value.Indices->size() * sizeof(std::uint32_t) : 0) +
+						(Value.Primitives ? Value.Primitives->size() * sizeof(ImportedMeshPrimitive) : 0);
+				else return sizeof(ImportedMaterial);
 			}, Asset);
+		}
+
+		AssetId StableChildId(AssetId Group, std::string_view LogicalKey) {
+			std::vector<std::uint8_t> Identity;
+			Identity.reserve(16 + LogicalKey.size());
+			for (std::size_t Shift = 0; Shift < 8; ++Shift) Identity.push_back(static_cast<std::uint8_t>(Group.High >> (Shift * 8)));
+			for (std::size_t Shift = 0; Shift < 8; ++Shift) Identity.push_back(static_cast<std::uint8_t>(Group.Low >> (Shift * 8)));
+			Identity.insert(Identity.end(), LogicalKey.begin(), LogicalKey.end());
+			const auto Hash = AssetContentId::Hash(Identity);
+			AssetId Result;
+			for (std::size_t Index = 0; Index < 8; ++Index) Result.High = (Result.High << 8) | Hash.Bytes[Index];
+			for (std::size_t Index = 8; Index < 16; ++Index) Result.Low = (Result.Low << 8) | Hash.Bytes[Index];
+			if (!Result.IsValid()) Result.Low = 1;
+			return Result;
+		}
+
+		struct PreparedGraph {
+			std::vector<AssetRecord> Records;
+			std::unordered_map<std::string, std::shared_ptr<const std::vector<std::uint8_t>>> Artifacts;
+			std::size_t CpuBytes = 0;
+		};
+
+		std::expected<PreparedGraph, AssetDiagnostic> PrepareGraph(
+			AssetImportGraphCandidate Candidate,
+			AssetId GroupId,
+			const std::string &Source,
+			const std::string &RequestedName,
+			const std::unordered_map<std::string, AssetRecord> &ExistingByKey
+		) {
+			if (!GroupId.IsValid() || Candidate.Nodes.empty() ||
+				Candidate.Nodes.size() > AssetLimits::MaximumGeneratedAssets ||
+				Candidate.Nodes.size() > AssetLimits::MaximumCatalogRecords ||
+				Candidate.Diagnostics.size() > AssetLimits::MaximumImportDiagnostics)
+				return std::unexpected(Error("GeneratedAssetLimit", "Import graph asset count is invalid or oversized"));
+			std::unordered_map<std::string, AssetId> Ids;
+			std::unordered_map<std::string, AssetKind> Kinds;
+			Ids.reserve(Candidate.Nodes.size());
+			Kinds.reserve(Candidate.Nodes.size());
+			std::unordered_set<AssetId, AssetIdHash> UniqueIds;
+			for (const auto &Node : Candidate.Nodes) {
+				if (Node.LogicalKey.empty() || Node.LogicalKey.size() > AssetLimits::MaximumNameBytes ||
+					!Kinds.emplace(Node.LogicalKey, Node.Kind).second)
+					return std::unexpected(Error("InvalidLogicalKey", "Import graph contains an invalid or duplicate logical child key"));
+				const auto Existing = ExistingByKey.find(Node.LogicalKey);
+				const auto Id = Existing != ExistingByKey.end() ? Existing->second.Id :
+					(Candidate.Nodes.size() == 1 && Node.LogicalKey == "asset" ? GroupId : StableChildId(GroupId, Node.LogicalKey));
+				if (!Id.IsValid() || !UniqueIds.insert(Id).second)
+					return std::unexpected(Error("AssetIdentityCollision", "Import graph produced a duplicate semantic AssetId"));
+				Ids.emplace(Node.LogicalKey, Id);
+			}
+			if (!Ids.contains(Candidate.PrimaryLogicalKey))
+				return std::unexpected(Error("InvalidImportGraph", "Import graph primary logical key is missing"));
+
+			std::unordered_map<std::string, std::vector<std::string>> DependencyKeys;
+			std::size_t DependencyCount = 0;
+			for (const auto &Node : Candidate.Nodes) {
+				auto &Edges = DependencyKeys[Node.LogicalKey];
+				for (const auto &Binding : Node.Bindings) {
+					if (!Ids.contains(Binding.LogicalKey) || Binding.LogicalKey == Node.LogicalKey)
+						return std::unexpected(Error("InvalidDependency", "Import graph dependency target is missing or self-referential"));
+					if (Binding.Kind == AssetImportBindingKind::MeshPrimitiveMaterial &&
+						(Node.Kind != AssetKind::Mesh || Kinds.at(Binding.LogicalKey) != AssetKind::Material))
+						return std::unexpected(Error("InvalidDependency", "Mesh primitive dependency must target a Material asset"));
+					if ((Binding.Kind == AssetImportBindingKind::MaterialBaseColorTexture ||
+						Binding.Kind == AssetImportBindingKind::MaterialNormalTexture) &&
+						(Node.Kind != AssetKind::Material || Kinds.at(Binding.LogicalKey) != AssetKind::Image))
+						return std::unexpected(Error("InvalidDependency", "Material texture dependency must target an Image asset"));
+					if (!std::ranges::contains(Edges, Binding.LogicalKey)) Edges.push_back(Binding.LogicalKey);
+				}
+				if (Edges.size() > AssetLimits::MaximumDependencies)
+					return std::unexpected(Error("DependencyLimit", "Import graph dependency count exceeds its limit"));
+				if (Edges.size() > AssetLimits::MaximumGraphDependencies -
+					std::min(DependencyCount, AssetLimits::MaximumGraphDependencies))
+					return std::unexpected(Error("DependencyLimit", "Import graph aggregate dependency count exceeds its limit"));
+				DependencyCount += Edges.size();
+			}
+			std::unordered_map<std::string, std::uint8_t> Visit;
+			std::function<bool(const std::string &)> IsAcyclic = [&](const std::string &Key) {
+				auto &StateValue = Visit[Key];
+				if (StateValue == 1) return false;
+				if (StateValue == 2) return true;
+				StateValue = 1;
+				for (const auto &Dependency : DependencyKeys[Key]) if (!IsAcyclic(Dependency)) return false;
+				StateValue = 2;
+				return true;
+			};
+			for (const auto &[Key, Id] : Ids) { (void)Id; if (!IsAcyclic(Key))
+				return std::unexpected(Error("DependencyCycle", "Import graph dependency cycle is not allowed")); }
+
+			PreparedGraph Result;
+			Result.Records.reserve(Candidate.Nodes.size());
+			std::size_t ArtifactBytes = 0;
+			for (auto &Node : Candidate.Nodes) {
+				for (const auto &Binding : Node.Bindings) {
+					const auto DependencyId = Ids.at(Binding.LogicalKey);
+					if (Binding.Kind == AssetImportBindingKind::MeshPrimitiveMaterial) {
+						auto *Mesh = std::get_if<ImportedMesh>(&Node.Asset);
+						if (!Mesh || !Mesh->Primitives || Binding.TargetIndex >= Mesh->Primitives->size())
+							return std::unexpected(Error("InvalidDependency", "Mesh material binding target is invalid"));
+						auto Primitives = std::make_shared<std::vector<ImportedMeshPrimitive>>(*Mesh->Primitives);
+						(*Primitives)[Binding.TargetIndex].Material = DependencyId;
+						Mesh->Primitives = std::move(Primitives);
+					} else {
+						auto *Material = std::get_if<ImportedMaterial>(&Node.Asset);
+						if (!Material) return std::unexpected(Error("InvalidDependency", "Material texture binding target is invalid"));
+						if (Binding.Kind == AssetImportBindingKind::MaterialBaseColorTexture)
+							Material->BaseColorTexture = DependencyId;
+						else Material->NormalTexture = DependencyId;
+					}
+				}
+				auto Artifact = EncodeAssetArtifact(Node.Asset, Node.Kind);
+				if (!Artifact) return std::unexpected(Artifact.error());
+				if (!*Artifact || (*Artifact)->size() > AssetLimits::MaximumArtifactBytes ||
+					ArtifactBytes > AssetLimits::MaximumArtifactBytes - (*Artifact)->size())
+					return std::unexpected(Error("ArtifactLimit", "Import graph canonical artifacts exceed their aggregate byte limit"));
+				ArtifactBytes += (*Artifact)->size();
+				const auto ContentId = AssetContentId::Hash(**Artifact);
+				std::vector<AssetId> Dependencies;
+				for (const auto &Key : DependencyKeys[Node.LogicalKey]) Dependencies.push_back(Ids.at(Key));
+				const auto Existing = ExistingByKey.find(Node.LogicalKey);
+				const bool Primary = Node.LogicalKey == Candidate.PrimaryLogicalKey;
+				std::string Name = Existing != ExistingByKey.end() ? Existing->second.Name : Node.Name;
+				if (Primary && Existing == ExistingByKey.end() && !RequestedName.empty()) Name = RequestedName;
+				if (Name.empty()) Name = Primary ? DefaultName(Source) : "Generated Asset";
+				if (Name.size() > AssetLimits::MaximumNameBytes) Name.resize(AssetLimits::MaximumNameBytes);
+				const bool SameContent = Existing != ExistingByKey.end() && Existing->second.ContentId == ContentId;
+				const bool SameDependencies = Existing != ExistingByKey.end() && Existing->second.Dependencies == Dependencies;
+				std::uint64_t Revision = Existing == ExistingByKey.end() ? 1 : Existing->second.ContentRevision;
+				if (Existing != ExistingByKey.end() && (!SameContent || !SameDependencies)) {
+					if (Revision == std::numeric_limits<std::uint64_t>::max())
+						return std::unexpected(Error("RevisionExhausted", "Asset content revision is exhausted"));
+					++Revision;
+				}
+				auto Asset = std::make_shared<const ImportedAsset>(std::move(Node.Asset));
+				AssetRecord Record{Ids.at(Node.LogicalKey), AssetReference::FromAssetId(Ids.at(Node.LogicalKey)), Node.Kind,
+					std::move(Name), Source, ContentId, Revision, AssetState::Ready, std::nullopt,
+					std::move(Dependencies), std::move(Asset), false};
+				Record.SourceGroupId = GroupId;
+				Record.LogicalKey = Node.LogicalKey;
+				Record.PrimarySourceAsset = Primary;
+				if (Primary && !Candidate.Diagnostics.empty()) Record.Diagnostic = Candidate.Diagnostics.front();
+				const auto Bytes = AssetBytes(*Record.Asset);
+				if (Bytes > AssetLimits::MaximumCpuCacheBytes ||
+					Result.CpuBytes > AssetLimits::MaximumCpuCacheBytes - Bytes)
+					return std::unexpected(Error("CacheLimit", "Import graph exceeds the bounded CPU cache"));
+				Result.CpuBytes += Bytes;
+				Result.Artifacts.insert_or_assign(ContentId.ToString(), *Artifact);
+				Result.Records.push_back(std::move(Record));
+			}
+			std::ranges::sort(Result.Records, {}, [](const AssetRecord &Record) { return Record.Reference.Value; });
+			return Result;
 		}
 
 		RenderTextureIdentity TextureIdentity(AssetId Id, std::uint32_t Generation = 1) {
@@ -139,8 +296,9 @@ namespace gargantuan {
 		std::uint64_t NextChangeSequence = 1;
 		std::size_t CpuBytes = 0;
 		std::size_t InFlight = 0;
+		std::unordered_set<AssetId, AssetIdHash> InFlightGroups;
 
-		Impl() { RegisterMissingImage(); }
+		Impl() { RegisterMissingImage(); RegisterDefaultMaterial(); }
 
 		void RegisterMissingImage() {
 			static constexpr std::array<std::uint8_t, 16> Pixels{
@@ -151,6 +309,7 @@ namespace gargantuan {
 			auto Asset = std::make_shared<const ImportedAsset>(ImportedImage{2, 2, PixelBytes});
 			AssetRecord Record{Id, *AssetReference::Parse(MissingImageReference), AssetKind::Image, "Missing Image",
 				"engine-package", {}, 1, AssetState::Ready, std::nullopt, {}, Asset, true};
+			Record.SourceGroupId = Id;
 			Records.emplace(Record.Reference.Value, Record);
 			TextureResidency Residency{TextureIdentity(Id), 1, 2, 2, PixelBytes};
 			Textures.emplace(Record.Reference.Value, Residency);
@@ -159,10 +318,21 @@ namespace gargantuan {
 			PendingTextures.UploadBytes += PixelBytes->size();
 		}
 
-		void PublishChange(const AssetRecord &Record) {
+		void RegisterDefaultMaterial() {
+			const auto Id = AssetId::FromBuiltInName(DefaultMaterialReference);
+			auto Asset = std::make_shared<const ImportedAsset>(ImportedMaterial{});
+			AssetRecord Record{Id, *AssetReference::Parse(DefaultMaterialReference), AssetKind::Material,
+				"Default Material", "engine-package", {}, 1, AssetState::Ready, std::nullopt, {}, Asset, true};
+			Record.SourceGroupId = Id;
+			Records.emplace(Record.Reference.Value, std::move(Record));
+			CpuBytes += sizeof(ImportedMaterial);
+		}
+
+		void PublishChange(const AssetRecord &Record, AssetChangeKind ChangeKind = AssetChangeKind::StateChanged) {
 			if (NextChangeSequence == 0) throw std::overflow_error("Asset change sequence is exhausted");
 			if (Changes.size() == AssetLimits::MaximumChangeRecords) Changes.pop_front();
-			Changes.push_back({NextChangeSequence++, Record.Reference.Value, Record.Kind, Record.ContentRevision, Record.State});
+			Changes.push_back({NextChangeSequence++, Record.Reference.Value, Record.Kind,
+				Record.ContentRevision, Record.State, ChangeKind});
 		}
 
 		IAssetImporter *FindImporter(AssetKind Kind, std::string_view Extension) const {
@@ -180,19 +350,23 @@ namespace gargantuan {
 			return Result;
 		}
 
-		std::expected<AssetImportCandidate, AssetDiagnostic> Decode(
+		std::expected<AssetImportGraphCandidate, AssetDiagnostic> Decode(
 			AssetKind Kind,
 			std::string Extension,
 			std::shared_ptr<const std::vector<std::uint8_t>> Source,
+			std::shared_ptr<const std::unordered_map<std::string,
+				std::shared_ptr<const std::vector<std::uint8_t>>>> ExternalResources,
 			const AssetCancellationToken &Cancellation
 		) {
 			auto *Importer = FindImporter(Kind, Extension);
 			if (!Importer) return std::unexpected(Error("UnsupportedFormat", "No bounded importer supports the requested kind and extension"));
-			std::expected<AssetImportCandidate, AssetDiagnostic> Result = std::unexpected(Error("InternalFailure", "Import job did not run"));
+			std::expected<AssetImportGraphCandidate, AssetDiagnostic> Result = std::unexpected(Error("InternalFailure", "Import job did not run"));
 			auto Group = std::make_shared<JobGroup>();
-			Jobs.Submit([&Result, Importer, Kind, Extension = std::move(Extension), Source = std::move(Source), Cancellation] {
+			Jobs.Submit([&Result, Importer, Kind, Extension = std::move(Extension), Source = std::move(Source),
+				ExternalResources = std::move(ExternalResources), Cancellation] {
 				try {
-					Result = Importer->Import(*Source, {Kind, Extension, Cancellation, std::chrono::steady_clock::now() + std::chrono::seconds(2)});
+					Result = Importer->ImportGraph(*Source, {Kind, Extension, Cancellation,
+						std::chrono::steady_clock::now() + std::chrono::seconds(5), ExternalResources});
 				} catch (const std::exception &Failure) {
 					Result = std::unexpected(Error("ImporterFailure", Failure.what()));
 				} catch (...) {
@@ -206,6 +380,41 @@ namespace gargantuan {
 				catch (...) { return std::unexpected(Error("ImporterFailure", "Importer worker failed")); }
 			}
 			return Result;
+		}
+
+		std::expected<AssetImportGraphCandidate, AssetDiagnostic> DecodeFromMount(
+			SourceMount &Mount,
+			const std::string &SourcePath,
+			AssetKind Kind,
+			const AssetCancellationToken &Cancellation
+		) {
+			const auto Extension = LowerExtension(SourcePath);
+			auto *Importer = FindImporter(Kind, Extension);
+			if (!Importer) return std::unexpected(Error("UnsupportedFormat", "No bounded importer supports the requested source"));
+			SourceMountBudget Budget;
+			auto Read = Mount.ReadFile(std::filesystem::path(SourcePath), AssetLimits::MaximumSourceBytes, Budget);
+			if (!Read) return std::unexpected(Error(std::string(GetSourceMountErrorCodeName(Read.error().Code)), Read.error().Format()));
+			auto Bytes = std::make_shared<const std::vector<std::uint8_t>>(Read->begin(), Read->end());
+			AssetImportContext DiscoveryContext{Kind, Extension, Cancellation,
+				std::chrono::steady_clock::now() + std::chrono::seconds(2), {}};
+			auto ResourceUris = Importer->DiscoverExternalResources(*Bytes, DiscoveryContext);
+			if (!ResourceUris) return std::unexpected(ResourceUris.error());
+			if (ResourceUris->size() > AssetLimits::MaximumExternalResources)
+				return std::unexpected(Error("ExternalResourceLimit", "Import external resource count exceeds its limit"));
+			auto Resources = std::make_shared<std::unordered_map<std::string,
+				std::shared_ptr<const std::vector<std::uint8_t>>>>();
+			Resources->reserve(ResourceUris->size());
+			const auto SourceDirectory = std::filesystem::path(SourcePath).parent_path();
+			for (const auto &Uri : *ResourceUris) {
+				auto External = Mount.ReadFile(SourceDirectory / std::filesystem::u8path(Uri),
+					AssetLimits::MaximumSourceBytes, Budget);
+				if (!External) return std::unexpected(Error(
+					std::string(GetSourceMountErrorCodeName(External.error().Code)), External.error().Format()
+				));
+				auto ExternalBytes = std::make_shared<const std::vector<std::uint8_t>>(External->begin(), External->end());
+				Resources->emplace(Uri, std::move(ExternalBytes));
+			}
+			return Decode(Kind, Extension, std::move(Bytes), std::move(Resources), Cancellation);
 		}
 
 		void QueueResidency(const AssetRecord &Record, bool Replacing) {
@@ -273,10 +482,13 @@ namespace gargantuan {
 
 		void LoadCatalog(std::string_view Text, const ArtifactReader &ReadArtifact) {
 			auto Parsed = JsonCodec::Parse(Text, 1024 * 1024, "asset catalog");
-			if (!Parsed || !Parsed->is_object() || Parsed->size() != 2 ||
-				Parsed->value("Version", 0u) != CatalogVersion || !Parsed->contains("Assets") ||
+			if (!Parsed || !Parsed->is_object() || Parsed->size() != 2 || !Parsed->contains("Version") ||
+				!(*Parsed)["Version"].is_number_unsigned() || !Parsed->contains("Assets") ||
 				!(*Parsed)["Assets"].is_array() || (*Parsed)["Assets"].size() > AssetLimits::MaximumCatalogRecords)
 				throw std::runtime_error("Asset catalog format is invalid or unsupported");
+			const auto Version = (*Parsed)["Version"].get<std::uint32_t>();
+			if (Version != LegacyCatalogVersion && Version != CatalogVersion)
+				throw std::runtime_error("Asset catalog version is unsupported");
 			std::scoped_lock StateLock(Mutex);
 			for (const auto &[Reference, Record] : Records) {
 				(void)Reference;
@@ -285,14 +497,19 @@ namespace gargantuan {
 
 			std::unordered_set<std::string> Seen;
 			for (const auto &Encoded : (*Parsed)["Assets"]) {
-				if (!Encoded.is_object() || Encoded.size() != 9 || !Encoded.contains("AssetId") || !Encoded["AssetId"].is_string() ||
+				const auto ExpectedFields = Version == LegacyCatalogVersion ? 9u : 13u;
+				if (!Encoded.is_object() || Encoded.size() != ExpectedFields || !Encoded.contains("AssetId") || !Encoded["AssetId"].is_string() ||
 					!Encoded.contains("Reference") || !Encoded["Reference"].is_string() ||
 					!Encoded.contains("Kind") || !Encoded["Kind"].is_string() ||
 					!Encoded.contains("Name") || !Encoded["Name"].is_string() ||
 					!Encoded.contains("Source") || !Encoded["Source"].is_string() ||
 					!Encoded.contains("ContentId") || (!Encoded["ContentId"].is_null() && !Encoded["ContentId"].is_string()) ||
 					!Encoded.contains("ContentRevision") || !Encoded["ContentRevision"].is_number_unsigned() ||
-					!Encoded.contains("State") || !Encoded["State"].is_string() || !Encoded.contains("Diagnostic"))
+					!Encoded.contains("State") || !Encoded["State"].is_string() || !Encoded.contains("Diagnostic") ||
+					(Version == CatalogVersion && (!Encoded.contains("SourceGroupId") || !Encoded["SourceGroupId"].is_string() ||
+						!Encoded.contains("LogicalKey") || !Encoded["LogicalKey"].is_string() ||
+						!Encoded.contains("PrimarySourceAsset") || !Encoded["PrimarySourceAsset"].is_boolean() ||
+						!Encoded.contains("Dependencies") || !Encoded["Dependencies"].is_array())))
 					throw std::runtime_error("Asset catalog record is malformed");
 				auto Id = AssetId::Parse(Encoded["AssetId"].get_ref<const std::string &>());
 				auto Reference = AssetReference::Parse(Encoded["Reference"].get_ref<const std::string &>());
@@ -314,6 +531,25 @@ namespace gargantuan {
 					throw std::runtime_error("Asset catalog record identity or bounds are invalid");
 
 				AssetRecord Record{*Id, *Reference, *Kind, Name, Source, ContentId.value_or(AssetContentId{}), Revision, AssetState::Missing};
+				Record.SourceGroupId = *Id;
+				if (Version == CatalogVersion) {
+					auto GroupId = AssetId::Parse(Encoded["SourceGroupId"].get_ref<const std::string &>());
+					const auto LogicalKey = Encoded["LogicalKey"].get<std::string>();
+					if (!GroupId || LogicalKey.empty() || LogicalKey.size() > AssetLimits::MaximumNameBytes ||
+						Encoded["Dependencies"].size() > AssetLimits::MaximumDependencies)
+						throw std::runtime_error("Asset catalog source grouping is invalid");
+					Record.SourceGroupId = *GroupId;
+					Record.LogicalKey = LogicalKey;
+					Record.PrimarySourceAsset = Encoded["PrimarySourceAsset"].get<bool>();
+					std::unordered_set<AssetId, AssetIdHash> UniqueDependencies;
+					for (const auto &DependencyValue : Encoded["Dependencies"]) {
+						if (!DependencyValue.is_string()) throw std::runtime_error("Asset catalog dependency is malformed");
+						auto Dependency = AssetId::Parse(DependencyValue.get_ref<const std::string &>());
+						if (!Dependency || *Dependency == *Id || !UniqueDependencies.insert(*Dependency).second)
+							throw std::runtime_error("Asset catalog dependency identity is invalid");
+						Record.Dependencies.push_back(*Dependency);
+					}
+				}
 				if (!Encoded["Diagnostic"].is_null()) {
 					if (!Encoded["Diagnostic"].is_object() || Encoded["Diagnostic"].size() != 2 ||
 						!Encoded["Diagnostic"].contains("Code") || !Encoded["Diagnostic"]["Code"].is_string() ||
@@ -354,6 +590,52 @@ namespace gargantuan {
 					}
 				}
 				Records.emplace(Record.Reference.Value, Record);
+			}
+
+			std::unordered_map<AssetId, const AssetRecord *, AssetIdHash> ById;
+			std::unordered_map<AssetId, std::size_t, AssetIdHash> PrimaryCounts;
+			std::unordered_map<AssetId, std::string, AssetIdHash> GroupSources;
+			for (const auto &[Reference, Record] : Records) if (!Record.BuiltIn) {
+				(void)Reference;
+				if (!ById.emplace(Record.Id, &Record).second) throw std::runtime_error("Asset catalog contains duplicate AssetIds");
+				if (Record.PrimarySourceAsset) ++PrimaryCounts[Record.SourceGroupId];
+				auto [Source, Inserted] = GroupSources.emplace(Record.SourceGroupId, Record.Source);
+				if (!Inserted && Source->second != Record.Source) throw std::runtime_error("Asset source group has inconsistent provenance");
+			}
+			for (const auto &[Group, Source] : GroupSources) {
+				(void)Source;
+				if (PrimaryCounts[Group] != 1) throw std::runtime_error("Asset source group must contain exactly one primary record");
+			}
+			std::unordered_map<AssetId, std::uint8_t, AssetIdHash> Visit;
+			std::function<bool(AssetId)> IsAcyclic = [&](AssetId Id) {
+				auto &StateValue = Visit[Id];
+				if (StateValue == 1) return false;
+				if (StateValue == 2) return true;
+				StateValue = 1;
+				for (const auto Dependency : ById.at(Id)->Dependencies) {
+					if (!ById.contains(Dependency) || !IsAcyclic(Dependency)) return false;
+				}
+				StateValue = 2;
+				return true;
+			};
+			for (const auto &[Id, Record] : ById) {
+				if (!IsAcyclic(Id)) throw std::runtime_error("Asset catalog dependency graph is missing a target or cyclic");
+				std::vector<AssetId> SemanticDependencies;
+				if (Record->Asset) {
+					if (const auto *Material = std::get_if<ImportedMaterial>(Record->Asset.get())) {
+						if (Material->BaseColorTexture) SemanticDependencies.push_back(*Material->BaseColorTexture);
+						if (Material->NormalTexture && !std::ranges::contains(SemanticDependencies, *Material->NormalTexture))
+							SemanticDependencies.push_back(*Material->NormalTexture);
+					} else if (const auto *Mesh = std::get_if<ImportedMesh>(Record->Asset.get()); Mesh && Mesh->Primitives) {
+						for (const auto &Primitive : *Mesh->Primitives) if (Primitive.Material &&
+							!std::ranges::contains(SemanticDependencies, *Primitive.Material)) SemanticDependencies.push_back(*Primitive.Material);
+					}
+				}
+				if (SemanticDependencies != Record->Dependencies)
+					throw std::runtime_error("Asset artifact dependencies disagree with the catalog graph");
+			}
+			for (const auto &[Reference, Record] : Records) {
+				(void)Reference;
 				if (Record.Asset) QueueResidency(Record, false);
 			}
 		}
@@ -380,65 +662,70 @@ namespace gargantuan {
 		if (Name.empty() || Name.size() > AssetLimits::MaximumNameBytes)
 			return {false, std::nullopt, Error("InvalidName", "Asset display name is empty or oversized")};
 
-		AssetId Id;
-		AssetRecord Initial;
+		const bool Compound = State->FindImporter(*Kind, Extension)->IsCompound();
+		AssetId GroupId;
 		{
 			std::scoped_lock Lock(State->Mutex);
 			if (State->Records.size() >= AssetLimits::MaximumCatalogRecords)
 				return {false, std::nullopt, Error("CatalogLimit", "Asset catalog record limit is reached")};
 			if (State->InFlight >= AssetLimits::MaximumInFlightImports)
 				return {false, std::nullopt, Error("ImportQueueFull", "Asset import concurrency limit is reached")};
-			do Id = AssetId::New(); while (State->Records.contains(AssetReference::FromAssetId(Id).Value));
-			Initial = {Id, AssetReference::FromAssetId(Id), *Kind, Name, Source, {}, 0, AssetState::Importing};
-			State->Records.emplace(Initial.Reference.Value, Initial);
+			do GroupId = AssetId::New(); while (State->InFlightGroups.contains(GroupId) ||
+				State->Records.contains(AssetReference::FromAssetId(GroupId).Value));
 			++State->InFlight;
-			State->PublishChange(Initial);
+			State->InFlightGroups.insert(GroupId);
 		}
 
-		SourceMountBudget Budget;
-		auto Read = Mount.ReadFile(std::filesystem::path(Source), AssetLimits::MaximumSourceBytes, Budget);
-		std::expected<AssetImportCandidate, AssetDiagnostic> Candidate = std::unexpected(Error("Missing", "Asset source is unavailable"));
-		if (!Read) Candidate = std::unexpected(Error(std::string(GetSourceMountErrorCodeName(Read.error().Code)), Read.error().Format()));
-		else {
-			auto Bytes = std::make_shared<const std::vector<std::uint8_t>>(Read->begin(), Read->end());
-			Candidate = State->Decode(*Kind, Extension, Bytes, Cancellation);
-		}
-
-		AssetRecord Result;
-		bool Changed = false;
+		auto Candidate = State->DecodeFromMount(Mount, Source, *Kind, Cancellation);
+		std::expected<PreparedGraph, AssetDiagnostic> Prepared = std::unexpected(
+			Candidate ? Error("InternalFailure", "Import graph preparation did not run") : Candidate.error()
+		);
+		if (Candidate) Prepared = PrepareGraph(std::move(*Candidate), GroupId, Source, Name, {});
+		AssetOperationResult Operation;
+		bool Mutated = false;
 		{
 			std::scoped_lock Lock(State->Mutex);
 			--State->InFlight;
-			auto &Record = State->Records.at(Initial.Reference.Value);
-			if (!Candidate) {
-				Record.State = AssetState::Failed;
-				Record.Diagnostic = Candidate.error();
-				State->PublishChange(Record);
-				Result = Record;
+			State->InFlightGroups.erase(GroupId);
+			if (!Prepared) {
+				Operation.Diagnostic = Prepared.error();
+				if (!Compound) {
+					AssetRecord Failed{GroupId, AssetReference::FromAssetId(GroupId), *Kind, Name, Source, {}, 0,
+						AssetState::Failed, Prepared.error()};
+					Failed.SourceGroupId = GroupId;
+					State->Records.emplace(Failed.Reference.Value, Failed);
+					State->PublishChange(Failed, AssetChangeKind::Added);
+					Operation.Record = Failed;
+					Operation.Records = {Failed};
+					Mutated = true;
+				}
+			} else if (Prepared->Records.size() > AssetLimits::MaximumCatalogRecords - State->Records.size() ||
+				Prepared->CpuBytes > AssetLimits::MaximumCpuCacheBytes - State->CpuBytes) {
+				Operation.Diagnostic = Error("CacheLimit", "Import graph would exceed catalog or CPU cache limits");
 			} else {
-				const auto Bytes = AssetBytes(Candidate->Asset);
-				if (Bytes > AssetLimits::MaximumCpuCacheBytes || State->CpuBytes > AssetLimits::MaximumCpuCacheBytes - Bytes) {
-					Record.State = AssetState::Failed;
-					Record.Diagnostic = Error("CacheLimit", "Canonical asset would exceed the bounded CPU cache");
-					State->PublishChange(Record);
-					Result = Record;
-				} else {
-					Record.ContentId = Candidate->ContentId;
-					Record.ContentRevision = 1;
-					Record.State = AssetState::Ready;
-					Record.Diagnostic.reset();
-					Record.Asset = std::make_shared<const ImportedAsset>(std::move(Candidate->Asset));
-					State->Artifacts.insert_or_assign(Record.ContentId.ToString(), Candidate->Artifact);
-					State->CpuBytes += Bytes;
-					State->QueueResidency(Record, false);
-					State->PublishChange(Record);
-					Result = Record;
-					Changed = true;
+				for (const auto &Record : Prepared->Records)
+					if (State->Records.contains(Record.Reference.Value)) {
+						Operation.Diagnostic = Error("AssetIdentityCollision", "Import graph AssetId collides with an existing record");
+						break;
+					}
+				if (Operation.Diagnostic.Code.empty()) {
+					for (const auto &[Content, Artifact] : Prepared->Artifacts)
+						State->Artifacts.insert_or_assign(Content, Artifact);
+					for (const auto &Record : Prepared->Records) {
+						State->Records.emplace(Record.Reference.Value, Record);
+						State->QueueResidency(Record, false);
+						State->PublishChange(Record, AssetChangeKind::Added);
+						if (Record.PrimarySourceAsset) Operation.Record = Record;
+					}
+					State->CpuBytes += Prepared->CpuBytes;
+					Operation.Ok = true;
+					Operation.Records = Prepared->Records;
+					Mutated = true;
 				}
 			}
 		}
-		if (auto World = GetDataModel(); World && (Changed || Result.State == AssetState::Failed)) World->AdvanceAuthoritativeRevision();
-		return {Result.State == AssetState::Ready, Result, Result.Diagnostic.value_or(AssetDiagnostic{})};
+		if (auto World = GetDataModel(); World && Mutated) World->AdvanceAuthoritativeRevision();
+		return Operation;
 	}
 
 	AssetOperationResult AssetService::ReimportProjectAsset(
@@ -446,97 +733,249 @@ namespace gargantuan {
 		std::string_view Reference,
 		const AssetCancellationToken &Cancellation
 	) {
-		AssetRecord Previous;
+		AssetRecord Requested;
+		AssetKind SourceKind = AssetKind::Image;
+		std::vector<AssetRecord> PreviousRecords;
+		std::unordered_map<std::string, AssetRecord> PreviousByKey;
 		{
 			std::scoped_lock Lock(State->Mutex);
 			auto Existing = State->Records.find(std::string(Reference));
 			if (Existing == State->Records.end() || Existing->second.BuiltIn)
 				return {false, std::nullopt, Error("UnknownAsset", "Project asset reference is unknown")};
-			if (State->InFlight >= AssetLimits::MaximumInFlightImports)
+			Requested = Existing->second;
+			if (State->InFlight >= AssetLimits::MaximumInFlightImports || State->InFlightGroups.contains(Requested.SourceGroupId))
 				return {false, Existing->second, Error("ImportQueueFull", "Asset import concurrency limit is reached")};
-			Previous = Existing->second;
-			Existing->second.State = AssetState::Importing;
+			for (auto &[RecordReference, Record] : State->Records) if (!Record.BuiltIn && Record.SourceGroupId == Requested.SourceGroupId) {
+				(void)RecordReference;
+				PreviousRecords.push_back(Record);
+				PreviousByKey.emplace(Record.LogicalKey, Record);
+				if (Record.PrimarySourceAsset) SourceKind = Record.Kind;
+				Record.State = AssetState::Importing;
+				State->PublishChange(Record, AssetChangeKind::StateChanged);
+			}
+			if (PreviousRecords.empty()) return {false, Existing->second, Error("InvalidImportGroup", "Asset source group is empty")};
 			++State->InFlight;
-			State->PublishChange(Existing->second);
+			State->InFlightGroups.insert(Requested.SourceGroupId);
 		}
 
-		SourceMountBudget Budget;
-		auto Read = Mount.ReadFile(std::filesystem::path(Previous.Source), AssetLimits::MaximumSourceBytes, Budget);
-		std::expected<AssetImportCandidate, AssetDiagnostic> Candidate = std::unexpected(Error("Missing", "Asset source is unavailable"));
-		if (!Read) Candidate = std::unexpected(Error(std::string(GetSourceMountErrorCodeName(Read.error().Code)), Read.error().Format()));
-		else {
-			auto Bytes = std::make_shared<const std::vector<std::uint8_t>>(Read->begin(), Read->end());
-			Candidate = State->Decode(Previous.Kind, LowerExtension(Previous.Source), Bytes, Cancellation);
-		}
-
-		AssetRecord Result;
+		auto Candidate = State->DecodeFromMount(Mount, Requested.Source, SourceKind, Cancellation);
+		std::expected<PreparedGraph, AssetDiagnostic> Prepared = std::unexpected(
+			Candidate ? Error("InternalFailure", "Reimport graph preparation did not run") : Candidate.error()
+		);
+		if (Candidate) Prepared = PrepareGraph(std::move(*Candidate), Requested.SourceGroupId,
+			Requested.Source, {}, PreviousByKey);
+		AssetOperationResult Operation;
+		std::unordered_set<AssetId, AssetIdHash> ContentChanged;
+		std::unordered_set<AssetId, AssetIdHash> SemanticallyChanged;
 		{
 			std::scoped_lock Lock(State->Mutex);
 			--State->InFlight;
-			auto &Record = State->Records.at(std::string(Reference));
-			if (!Candidate) {
-				Record = Previous;
-				Record.State = Record.Asset ? AssetState::Stale : AssetState::Failed;
-				Record.Diagnostic = Candidate.error();
-				State->PublishChange(Record);
-				Result = Record;
-			} else if (Candidate->ContentId == Previous.ContentId) {
-				Record = Previous;
-				Record.State = AssetState::Ready;
-				Record.Diagnostic.reset();
-				State->PublishChange(Record);
-				Result = Record;
-			} else {
-				const auto PreviousBytes = Previous.Asset ? AssetBytes(*Previous.Asset) : 0;
-				const auto NextBytes = AssetBytes(Candidate->Asset);
-				if (NextBytes > AssetLimits::MaximumCpuCacheBytes ||
-					State->CpuBytes - PreviousBytes > AssetLimits::MaximumCpuCacheBytes - NextBytes) {
-					Record = Previous;
-					Record.State = AssetState::Stale;
-					Record.Diagnostic = Error("CacheLimit", "Reimport candidate would exceed the bounded CPU cache");
-				} else {
-					Record = Previous;
-					Record.ContentId = Candidate->ContentId;
-					++Record.ContentRevision;
-					Record.State = AssetState::Ready;
-					Record.Diagnostic.reset();
-					Record.Asset = std::make_shared<const ImportedAsset>(std::move(Candidate->Asset));
-					State->Artifacts.insert_or_assign(Record.ContentId.ToString(), Candidate->Artifact);
-					State->CpuBytes = State->CpuBytes - PreviousBytes + NextBytes;
-					State->QueueResidency(Record, true);
+			State->InFlightGroups.erase(Requested.SourceGroupId);
+			if (!Prepared) {
+				for (const auto &Previous : PreviousRecords) {
+					auto Restored = Previous;
+					Restored.State = Restored.Asset ? AssetState::Stale : AssetState::Failed;
+					Restored.Diagnostic = Prepared.error();
+					State->Records.insert_or_assign(Restored.Reference.Value, Restored);
+					State->PublishChange(Restored, AssetChangeKind::StateChanged);
+					Operation.Records.push_back(Restored);
+					if (Restored.PrimarySourceAsset) Operation.Record = Restored;
 				}
-				State->PublishChange(Record);
-				Result = Record;
+				Operation.Diagnostic = Prepared.error();
+			} else {
+				std::unordered_set<AssetId, AssetIdHash> OldIds;
+				std::unordered_set<AssetId, AssetIdHash> NextIds;
+				std::size_t PreviousBytes = 0;
+				for (const auto &Previous : PreviousRecords) {
+					OldIds.insert(Previous.Id);
+					if (Previous.Asset) PreviousBytes += AssetBytes(*Previous.Asset);
+				}
+				for (const auto &Next : Prepared->Records) NextIds.insert(Next.Id);
+				AssetDiagnostic CommitFailure;
+				for (const auto &Next : Prepared->Records) {
+					auto Collision = State->Records.find(Next.Reference.Value);
+					if (Collision != State->Records.end() && !OldIds.contains(Collision->second.Id)) {
+						CommitFailure = Error("AssetIdentityCollision", "Reimport generated AssetId collides with another source group");
+						break;
+					}
+				}
+				for (const auto &Previous : PreviousRecords) if (!NextIds.contains(Previous.Id) && CommitFailure.Code.empty()) {
+					for (const auto &[OtherReference, Other] : State->Records) {
+						(void)OtherReference;
+						if (OldIds.contains(Other.Id)) continue;
+						if (std::ranges::contains(Other.Dependencies, Previous.Id)) {
+							CommitFailure = Error("AssetReferenced", "Removed generated asset still has a catalog dependent");
+							break;
+						}
+					}
+					if (CommitFailure.Code.empty()) if (auto World = GetDataModel()) {
+						const auto RemovedReference = Previous.Reference.Value;
+						for (const auto &Object : World->GetDescendants()) {
+							if (auto Image = std::dynamic_pointer_cast<ImageLabel>(Object); Image && Image->GetImage() == RemovedReference) {
+								CommitFailure = Error("AssetReferenced", "Removed generated asset is referenced by ImageLabel");
+								break;
+							}
+							if (auto Text = std::dynamic_pointer_cast<TextLabel>(Object); Text && Text->GetFontFace() == RemovedReference) {
+								CommitFailure = Error("AssetReferenced", "Removed generated asset is referenced by a text object");
+								break;
+							}
+							if (auto Mesh = std::dynamic_pointer_cast<MeshPart>(Object); Mesh &&
+								(Mesh->GetMesh() == RemovedReference || Mesh->GetMaterial() == RemovedReference)) {
+								CommitFailure = Error("AssetReferenced", "Removed generated asset is referenced by MeshPart");
+								break;
+							}
+						}
+					}
+				}
+				if (Prepared->CpuBytes > AssetLimits::MaximumCpuCacheBytes ||
+					State->CpuBytes - PreviousBytes > AssetLimits::MaximumCpuCacheBytes - Prepared->CpuBytes)
+					CommitFailure = Error("CacheLimit", "Reimport graph would exceed the bounded CPU cache");
+				if (!CommitFailure.Code.empty()) {
+					for (const auto &Previous : PreviousRecords) {
+						auto Restored = Previous;
+						Restored.State = AssetState::Stale;
+						Restored.Diagnostic = CommitFailure;
+						State->Records.insert_or_assign(Restored.Reference.Value, Restored);
+						State->PublishChange(Restored, AssetChangeKind::StateChanged);
+						Operation.Records.push_back(Restored);
+						if (Restored.PrimarySourceAsset) Operation.Record = Restored;
+					}
+					Operation.Diagnostic = CommitFailure;
+				} else {
+					for (auto &Next : Prepared->Records) {
+						auto Previous = PreviousByKey.find(Next.LogicalKey);
+						if (Previous == PreviousByKey.end() || Previous->second.ContentId != Next.ContentId)
+							ContentChanged.insert(Next.Id);
+						if (Previous == PreviousByKey.end() || Previous->second.ContentId != Next.ContentId ||
+							Previous->second.Dependencies != Next.Dependencies) SemanticallyChanged.insert(Next.Id);
+					}
+					bool Propagated = true;
+					while (Propagated) {
+						Propagated = false;
+						for (auto &Next : Prepared->Records) {
+							if (SemanticallyChanged.contains(Next.Id) ||
+								!std::ranges::any_of(Next.Dependencies, [&](AssetId Id) { return SemanticallyChanged.contains(Id); })) continue;
+							if (Next.ContentRevision == std::numeric_limits<std::uint64_t>::max()) {
+								CommitFailure = Error("RevisionExhausted", "Dependency revision propagation is exhausted");
+								break;
+							}
+							++Next.ContentRevision;
+							SemanticallyChanged.insert(Next.Id);
+							Propagated = true;
+						}
+						if (!CommitFailure.Code.empty()) break;
+					}
+					if (!CommitFailure.Code.empty()) {
+						for (const auto &Previous : PreviousRecords) {
+							auto Restored = Previous;
+							Restored.State = AssetState::Stale;
+							Restored.Diagnostic = CommitFailure;
+							State->Records.insert_or_assign(Restored.Reference.Value, Restored);
+							State->PublishChange(Restored, AssetChangeKind::StateChanged);
+							Operation.Records.push_back(Restored);
+							if (Restored.PrimarySourceAsset) Operation.Record = Restored;
+						}
+						Operation.Diagnostic = CommitFailure;
+					} else {
+						for (const auto &Previous : PreviousRecords) if (!NextIds.contains(Previous.Id)) {
+							State->RemoveResidency(Previous);
+							State->Records.erase(Previous.Reference.Value);
+							auto Removed = Previous;
+							Removed.State = AssetState::Missing;
+							State->PublishChange(Removed, AssetChangeKind::Removed);
+						}
+						for (const auto &[Content, Artifact] : Prepared->Artifacts)
+							State->Artifacts.insert_or_assign(Content, Artifact);
+						for (const auto &Next : Prepared->Records) {
+							auto Previous = PreviousByKey.find(Next.LogicalKey);
+							const bool NewRecord = Previous == PreviousByKey.end();
+							if (!NewRecord && ContentChanged.contains(Next.Id)) State->QueueResidency(Next, true);
+							else if (NewRecord) State->QueueResidency(Next, false);
+							State->Records.insert_or_assign(Next.Reference.Value, Next);
+							const auto ChangeKind = NewRecord ? AssetChangeKind::Added :
+								(ContentChanged.contains(Next.Id) ? AssetChangeKind::ContentChanged :
+								(SemanticallyChanged.contains(Next.Id) ? AssetChangeKind::DependencyChanged : AssetChangeKind::StateChanged));
+							State->PublishChange(Next, ChangeKind);
+							if (Next.PrimarySourceAsset) Operation.Record = Next;
+						}
+						State->CpuBytes = State->CpuBytes - PreviousBytes + Prepared->CpuBytes;
+						Operation.Ok = true;
+						Operation.Records = Prepared->Records;
+					}
+				}
 			}
 		}
-		if (auto World = GetDataModel(); World) World->AdvanceAuthoritativeRevision();
-		return {Result.State == AssetState::Ready, Result, Result.Diagnostic.value_or(AssetDiagnostic{})};
+		if (auto World = GetDataModel()) {
+			World->AdvanceAuthoritativeRevision();
+			if (Operation.Ok && !SemanticallyChanged.empty()) {
+				for (const auto &Object : World->GetDescendants()) if (auto Mesh = std::dynamic_pointer_cast<MeshPart>(Object)) {
+					auto MeshReference = AssetReference::Parse(Mesh->GetMesh());
+					auto MaterialReference = AssetReference::Parse(Mesh->GetMaterial());
+					RenderUpdateDomain Domains = RenderUpdateDomain::None;
+					if (MeshReference && MeshReference->ProjectAsset && SemanticallyChanged.contains(*MeshReference->ProjectAsset))
+						Domains = Domains | (ContentChanged.contains(*MeshReference->ProjectAsset) ?
+							RenderUpdateDomain::Geometry : RenderUpdateDomain::Material);
+					if (MaterialReference && MaterialReference->ProjectAsset && SemanticallyChanged.contains(*MaterialReference->ProjectAsset))
+						Domains = Domains | RenderUpdateDomain::Material;
+					if (Domains != RenderUpdateDomain::None)
+						RenderDirtyAccumulator::Get().Mark(World->GetReplicationScopeId(), Mesh->GetObjectId(), Domains);
+				}
+			}
+		}
+		return Operation;
 	}
 
 	AssetOperationResult AssetService::DeleteProjectAsset(std::string_view Reference) {
-		AssetRecord Removed;
+		AssetOperationResult Operation;
 		{
 			std::scoped_lock Lock(State->Mutex);
 			auto Existing = State->Records.find(std::string(Reference));
 			if (Existing == State->Records.end() || Existing->second.BuiltIn)
 				return {false, std::nullopt, Error("UnknownAsset", "Project asset reference is unknown")};
+			if (State->InFlightGroups.contains(Existing->second.SourceGroupId))
+				return {false, Existing->second, Error("ImportInProgress", "Asset source group is being imported")};
+			std::vector<AssetRecord> Group;
+			std::unordered_set<AssetId, AssetIdHash> GroupIds;
+			for (const auto &[RecordReference, Record] : State->Records) if (!Record.BuiltIn &&
+				Record.SourceGroupId == Existing->second.SourceGroupId) {
+				(void)RecordReference;
+				Group.push_back(Record);
+				GroupIds.insert(Record.Id);
+			}
+			for (const auto &[RecordReference, Record] : State->Records) {
+				(void)RecordReference;
+				if (GroupIds.contains(Record.Id)) continue;
+				for (const auto Dependency : Record.Dependencies) if (GroupIds.contains(Dependency))
+					return {false, Existing->second, Error("AssetReferenced", "Asset source group has a live catalog dependent")};
+			}
 			if (auto World = GetDataModel()) {
 				for (const auto &Object : World->GetDescendants()) {
-					if (auto Image = std::dynamic_pointer_cast<ImageLabel>(Object); Image && Image->GetImage() == Reference)
-						return {false, Existing->second, Error("AssetReferenced", "Asset is referenced by ImageLabel")};
-					if (auto Text = std::dynamic_pointer_cast<TextLabel>(Object); Text && Text->GetFontFace() == Reference)
-						return {false, Existing->second, Error("AssetReferenced", "Asset is referenced by a text object")};
+					auto IsGroupReference = [&](std::string_view Value) {
+						auto Parsed = AssetReference::Parse(Value);
+						return Parsed && Parsed->ProjectAsset && GroupIds.contains(*Parsed->ProjectAsset);
+					};
+					if (auto Image = std::dynamic_pointer_cast<ImageLabel>(Object); Image && IsGroupReference(Image->GetImage()))
+						return {false, Existing->second, Error("AssetReferenced", "Asset source group is referenced by ImageLabel")};
+					if (auto Text = std::dynamic_pointer_cast<TextLabel>(Object); Text && IsGroupReference(Text->GetFontFace()))
+						return {false, Existing->second, Error("AssetReferenced", "Asset source group is referenced by a text object")};
+					if (auto Mesh = std::dynamic_pointer_cast<MeshPart>(Object); Mesh &&
+						(IsGroupReference(Mesh->GetMesh()) || IsGroupReference(Mesh->GetMaterial())))
+						return {false, Existing->second, Error("AssetReferenced", "Asset source group is referenced by MeshPart")};
 				}
 			}
-			Removed = Existing->second;
-			if (Removed.Asset) State->CpuBytes -= AssetBytes(*Removed.Asset);
-			State->RemoveResidency(Removed);
-			State->Records.erase(Existing);
-			Removed.State = AssetState::Missing;
-			State->PublishChange(Removed);
+			for (auto Removed : Group) {
+				if (Removed.Asset) State->CpuBytes -= AssetBytes(*Removed.Asset);
+				State->RemoveResidency(Removed);
+				State->Records.erase(Removed.Reference.Value);
+				Removed.State = AssetState::Missing;
+				State->PublishChange(Removed, AssetChangeKind::Removed);
+				Operation.Records.push_back(Removed);
+				if (Removed.PrimarySourceAsset) Operation.Record = Removed;
+			}
+			Operation.Ok = true;
 		}
 		if (auto World = GetDataModel()) World->AdvanceAuthoritativeRevision();
-		return {true, Removed, {}};
+		return Operation;
 	}
 
 	std::optional<AssetRecord> AssetService::GetAsset(std::string_view Reference) const {
@@ -592,6 +1031,49 @@ namespace gargantuan {
 		return Mesh ? std::optional(*Mesh) : std::nullopt;
 	}
 
+	std::optional<AssetMeshResource> AssetService::ResolveMeshResource(std::string_view Reference) const {
+		std::scoped_lock Lock(State->Mutex);
+		auto Record = State->Records.find(std::string(Reference));
+		if (Record == State->Records.end() || !IsAvailableRecord(Record->second) || !Record->second.Asset)
+			return std::nullopt;
+		const auto *Mesh = std::get_if<ImportedMesh>(Record->second.Asset.get());
+		const auto Residency = State->Meshes.find(Record->first);
+		if (!Mesh || Residency == State->Meshes.end()) return std::nullopt;
+		return AssetMeshResource{Residency->second.Identity, *Mesh, Record->second.ContentRevision};
+	}
+
+	std::optional<AssetMaterialResource> AssetService::ResolveMaterial(std::string_view Reference) {
+		std::scoped_lock Lock(State->Mutex);
+		if (Reference.empty()) Reference = DefaultMaterialReference;
+		auto Record = State->Records.find(std::string(Reference));
+		if (Record == State->Records.end() || !IsAvailableRecord(Record->second) || !Record->second.Asset ||
+			!std::holds_alternative<ImportedMaterial>(*Record->second.Asset))
+			Record = State->Records.find(std::string(DefaultMaterialReference));
+		if (Record == State->Records.end() || !Record->second.Asset) return std::nullopt;
+		const auto *Material = std::get_if<ImportedMaterial>(Record->second.Asset.get());
+		if (!Material) return std::nullopt;
+		RenderMaterialState Render;
+		Render.Revision = Record->second.ContentRevision;
+		Render.BaseColorFactor = Material->BaseColorFactor;
+		Render.Metallic = Material->MetallicFactor;
+		Render.Roughness = Material->RoughnessFactor;
+		Render.AlphaCutoff = Material->AlphaCutoff;
+		Render.DoubleSided = Material->DoubleSided;
+		switch (Material->AlphaMode) {
+			case AssetMaterialAlphaMode::Opaque: Render.OpacityMode = RenderOpacityMode::Opaque; break;
+			case AssetMaterialAlphaMode::Mask: Render.OpacityMode = RenderOpacityMode::Masked; break;
+			case AssetMaterialAlphaMode::Blend: Render.OpacityMode = RenderOpacityMode::Transparent; break;
+		}
+		auto ResolveTexture = [&](const std::optional<AssetId> &Id) -> std::optional<RenderTextureIdentity> {
+			if (!Id) return std::nullopt;
+			const auto Texture = State->Textures.find(AssetReference::FromAssetId(*Id).Value);
+			return Texture == State->Textures.end() ? std::nullopt : std::optional(Texture->second.Identity);
+		};
+		Render.BaseColorTexture = ResolveTexture(Material->BaseColorTexture);
+		Render.NormalTexture = ResolveTexture(Material->NormalTexture);
+		return AssetMaterialResource{*Material, Render, Record->second.ContentRevision};
+	}
+
 	AssetTextureChanges AssetService::DrainTextureChanges() {
 		std::scoped_lock Lock(State->Mutex);
 		auto Result = std::move(State->PendingTextures);
@@ -635,6 +1117,7 @@ namespace gargantuan {
 		auto Asset = std::make_shared<const ImportedAsset>(std::move(Candidate->Asset));
 		AssetRecord Record{Id, *AssetReference::Parse(DefaultFontReference), AssetKind::Font, "Gargantuan Sans",
 			"engine-package", Candidate->ContentId, 1, AssetState::Ready, std::nullopt, {}, Asset, true};
+		Record.SourceGroupId = Id;
 		auto Existing = State->Records.find(Record.Reference.Value);
 		const auto PreviousBytes = Existing != State->Records.end() && Existing->second.Asset
 			? AssetBytes(*Existing->second.Asset) : 0;
@@ -694,6 +1177,7 @@ namespace gargantuan {
 		const auto Id = AssetId::New();
 		AssetRecord Record{Id, AssetReference::FromAssetId(Id), AssetKind::Image, std::move(Name), "memory", ContentId, 1,
 			AssetState::Ready, std::nullopt, {}, Asset, true};
+		Record.SourceGroupId = Id;
 		State->Records.emplace(Record.Reference.Value, Record);
 		State->CpuBytes += Pixels->size();
 		State->QueueResidency(Record, false);
@@ -764,12 +1248,16 @@ namespace gargantuan {
 		for (const auto *Record : Ordered) {
 			Json Diagnostic = nullptr;
 			if (Record->Diagnostic) Diagnostic = {{"Code", Record->Diagnostic->Code}, {"Message", Record->Diagnostic->Message}};
+			Json Dependencies = Json::array();
+			for (const auto Dependency : Record->Dependencies) Dependencies.push_back(Dependency.ToString());
 			Assets.push_back({
 				{"AssetId", Record->Id.ToString()}, {"Reference", Record->Reference.Value},
 				{"Kind", GetAssetKindName(Record->Kind)}, {"Name", Record->Name}, {"Source", Record->Source},
 				{"ContentId", Record->ContentId.IsValid() ? Json(Record->ContentId.ToString()) : Json(nullptr)},
 				{"ContentRevision", Record->ContentRevision},
 				{"State", GetAssetStateName(Record->State)}, {"Diagnostic", std::move(Diagnostic)},
+				{"SourceGroupId", Record->SourceGroupId.ToString()}, {"LogicalKey", Record->LogicalKey},
+				{"PrimarySourceAsset", Record->PrimarySourceAsset}, {"Dependencies", std::move(Dependencies)},
 			});
 			if (Record->ContentId.IsValid()) RequiredArtifacts.insert(Record->ContentId.ToString());
 		}
@@ -823,8 +1311,12 @@ namespace gargantuan {
 			} else if constexpr (std::is_same_v<T, ImportedMesh>) {
 				lua_pushnumber(L, Asset.Vertices ? Asset.Vertices->size() : 0); lua_setfield(L, -2, "VertexCount");
 				lua_pushnumber(L, Asset.Indices ? Asset.Indices->size() : 0); lua_setfield(L, -2, "IndexCount");
-			} else {
+			} else if constexpr (std::is_same_v<T, ImportedFont>) {
 				lua_pushnumber(L, Asset.FaceCount); lua_setfield(L, -2, "FaceCount");
+			} else {
+				lua_pushnumber(L, Asset.MetallicFactor); lua_setfield(L, -2, "MetallicFactor");
+				lua_pushnumber(L, Asset.RoughnessFactor); lua_setfield(L, -2, "RoughnessFactor");
+				lua_pushboolean(L, Asset.DoubleSided); lua_setfield(L, -2, "DoubleSided");
 			}
 		}, *Record->Asset);
 		return 1;

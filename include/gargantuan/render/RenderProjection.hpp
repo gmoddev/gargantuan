@@ -17,6 +17,7 @@ namespace gargantuan {
 		std::optional<RenderMeshIdentity> Mesh;
 		RenderMaterialState Material;
 		bool Visible = true;
+		std::shared_ptr<const std::vector<RenderPrimitiveMaterialState>> Primitives;
 	};
 
 	struct RenderProjectionChanges {
