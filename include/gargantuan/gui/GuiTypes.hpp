@@ -63,7 +63,7 @@ namespace gargantuan {
 		auto operator<=>(const GuiViewportConfiguration &) const = default;
 	};
 
-	enum class GuiPresentationKind : std::uint8_t { None, Rectangle, Text, Image, Button };
+	enum class GuiPresentationKind : std::uint8_t { None, Rectangle, Text, Image, Button, ScrollView, TextInput };
 
 	struct GuiTextGlyph {
 		RenderTextureIdentity Texture;
@@ -75,6 +75,9 @@ namespace gargantuan {
 		float Width = 0.0f;
 		float Height = 0.0f;
 		std::vector<GuiTextGlyph> Glyphs;
+		// Logical x coordinates at Unicode code-point boundaries. Editable text
+		// uses SDL_ttf's shaped substring mapping rather than byte offsets.
+		std::vector<float> CaretOffsets;
 		std::size_t InputBytes = 0;
 		bool ReplacedInvalidUtf8 = false;
 		bool TruncatedInput = false;
@@ -92,6 +95,17 @@ namespace gargantuan {
 		std::shared_ptr<const GuiShapedText> Text;
 		float TextOffsetX = 0.0f;
 		float TextOffsetY = 0.0f;
+		bool Hovered = false;
+		bool Pressed = false;
+		bool Focused = false;
+		bool Enabled = true;
+		bool Selected = false;
+		bool Editable = false;
+		bool ReadOnly = false;
+		bool DrawCaret = false;
+		float CaretX = 0.0f;
+		float SelectionX = 0.0f;
+		float SelectionWidth = 0.0f;
 	};
 
 	struct GuiLayoutNode {
@@ -104,6 +118,7 @@ namespace gargantuan {
 		std::optional<GuiRect> EffectiveClip;
 		std::int64_t EffectiveLayer = 0;
 		std::uint32_t TreeOrder = 0;
+		std::uint32_t PaintOrder = 0;
 		std::uint32_t Depth = 0;
 		int LayoutOrder = 0;
 		bool EffectiveVisible = false;
@@ -111,6 +126,9 @@ namespace gargantuan {
 		bool Interactable = false;
 		bool FocusEligible = false;
 		Enums::InputSink InputSink = Enums::InputSink::None;
+		bool ScrollContainer = false;
+		Vector2 ScrollOffset;
+		Vector2 ContentExtent;
 		GuiResolvedPresentation Presentation;
 	};
 
@@ -139,11 +157,21 @@ namespace gargantuan {
 		bool Focused = false;
 		bool Pressed = false;
 		bool Selected = false;
+		bool Editable = false;
+		bool ReadOnly = false;
+		std::uint32_t Caret = 0;
+		std::uint32_t SelectionStart = 0;
+		std::uint32_t SelectionLength = 0;
+		float ScrollPositionX = 0.0f;
+		float ScrollPositionY = 0.0f;
+		float ScrollMaximumX = 0.0f;
+		float ScrollMaximumY = 0.0f;
 	};
 
 	struct GuiAccessibilitySnapshot {
 		std::uint64_t Generation = 0;
 		std::vector<GuiAccessibilityNode> Nodes;
+		std::unordered_map<ObjectId, std::size_t> NodeByObject;
 	};
 
 	struct GuiPresentationSnapshot {
@@ -153,17 +181,29 @@ namespace gargantuan {
 
 	struct GuiRuntimeProfile {
 		std::uint64_t SemanticDirtyNanoseconds = 0;
+		std::uint64_t ObservationNanoseconds = 0;
+		std::uint64_t DirtyMarkingNanoseconds = 0;
 		std::uint64_t MeasureNanoseconds = 0;
 		std::uint64_t ArrangeNanoseconds = 0;
 		std::uint64_t TextShapingNanoseconds = 0;
 		std::uint64_t GlyphLookupNanoseconds = 0;
 		std::uint64_t GlyphRasterizationNanoseconds = 0;
 		std::uint64_t AtlasUpdateNanoseconds = 0;
+		std::uint64_t PresentationResolutionNanoseconds = 0;
 		std::uint64_t DisplayListNanoseconds = 0;
 		std::uint64_t BatchingNanoseconds = 0;
+		std::uint64_t AccessibilityNanoseconds = 0;
+		std::uint64_t InteractionNanoseconds = 0;
+		std::uint64_t SnapshotCommitNanoseconds = 0;
+		std::uint64_t FrameConstructionNanoseconds = 0;
+		std::uint64_t FrameCopyNanoseconds = 0;
 		std::uint64_t PublicationNanoseconds = 0;
 		std::uint64_t HitTestNanoseconds = 0;
 		std::size_t LayoutRoots = 0;
+		std::size_t LayoutNodes = 0;
+		std::size_t DirtyObjects = 0;
+		std::size_t PresentationNodes = 0;
+		std::size_t AccessibilityNodes = 0;
 		std::size_t ShapedGlyphs = 0;
 		std::size_t DisplayPrimitives = 0;
 		std::size_t BatchCount = 0;

@@ -6,7 +6,9 @@
 #include "gargantuan/classes/Frame.hpp"
 #include "gargantuan/classes/Part.hpp"
 #include "gargantuan/classes/ScreenGui.hpp"
+#include "gargantuan/classes/ScrollingFrame.hpp"
 #include "gargantuan/classes/TextButton.hpp"
+#include "gargantuan/classes/TextBox.hpp"
 #include "gargantuan/classes/TextLabel.hpp"
 #include "gargantuan/classes/UIListLayout.hpp"
 #include "gargantuan/gui/GuiRuntime.hpp"
@@ -52,9 +54,15 @@ namespace {
 		std::size_t Nodes = 0;
 		Distribution TotalMicroseconds;
 		Distribution SemanticMicroseconds;
+		Distribution ObservationMicroseconds;
 		Distribution LayoutMicroseconds;
 		Distribution TextMicroseconds;
+		Distribution PresentationMicroseconds;
+		Distribution AccessibilityMicroseconds;
+		Distribution SnapshotCommitMicroseconds;
 		Distribution DisplayMicroseconds;
+		Distribution FrameConstructionMicroseconds;
+		Distribution FrameCopyMicroseconds;
 		Distribution PublicationMicroseconds;
 		Distribution ProjectionMicroseconds;
 		std::size_t Batches = 0;
@@ -118,9 +126,15 @@ namespace {
 		using namespace gargantuan;
 		std::vector<double> Total;
 		std::vector<double> Semantic;
+		std::vector<double> Observation;
 		std::vector<double> Layout;
 		std::vector<double> Text;
+		std::vector<double> Presentation;
+		std::vector<double> Accessibility;
+		std::vector<double> SnapshotCommit;
 		std::vector<double> Display;
+		std::vector<double> FrameConstruction;
+		std::vector<double> FrameCopy;
 		std::vector<double> Publication;
 		std::vector<double> Projection;
 		Total.reserve(Frames);
@@ -139,10 +153,16 @@ namespace {
 			const auto PublisherProfile = Value.Publisher.GetLastProfile();
 			Total.push_back(std::chrono::duration<double, std::micro>(End - Start).count());
 			Semantic.push_back(static_cast<double>(GuiProfile.SemanticDirtyNanoseconds) / 1000.0);
+			Observation.push_back(static_cast<double>(GuiProfile.ObservationNanoseconds + GuiProfile.DirtyMarkingNanoseconds) / 1000.0);
 			Layout.push_back(static_cast<double>(GuiProfile.MeasureNanoseconds + GuiProfile.ArrangeNanoseconds) / 1000.0);
 			Text.push_back(static_cast<double>(GuiProfile.TextShapingNanoseconds + GuiProfile.GlyphLookupNanoseconds +
 				GuiProfile.GlyphRasterizationNanoseconds + GuiProfile.AtlasUpdateNanoseconds) / 1000.0);
+			Presentation.push_back(static_cast<double>(GuiProfile.PresentationResolutionNanoseconds) / 1000.0);
+			Accessibility.push_back(static_cast<double>(GuiProfile.AccessibilityNanoseconds) / 1000.0);
+			SnapshotCommit.push_back(static_cast<double>(GuiProfile.SnapshotCommitNanoseconds) / 1000.0);
 			Display.push_back(static_cast<double>(GuiProfile.DisplayListNanoseconds + GuiProfile.BatchingNanoseconds) / 1000.0);
+			FrameConstruction.push_back(static_cast<double>(GuiProfile.FrameConstructionNanoseconds) / 1000.0);
+			FrameCopy.push_back(static_cast<double>(GuiProfile.FrameCopyNanoseconds) / 1000.0);
 			Publication.push_back(static_cast<double>(GuiProfile.PublicationNanoseconds +
 				PublisherProfile.PublicationConstructionNanoseconds) / 1000.0);
 			Projection.push_back(std::chrono::duration<double, std::micro>(End - ProjectionStart).count());
@@ -151,8 +171,10 @@ namespace {
 		const auto PresentationValue = Value.Runtime.GetCommittedPresentation();
 		std::size_t PrimitiveCount = 0;
 		for (const auto &Batch : PresentationValue->Frame.Batches) PrimitiveCount += Batch.Indices.size() / 6;
-		return {std::move(Name), Value.Nodes.size(), Summarize(std::move(Total)), Summarize(std::move(Semantic)), Summarize(std::move(Layout)),
-			Summarize(std::move(Text)), Summarize(std::move(Display)), Summarize(std::move(Publication)),
+		return {std::move(Name), Value.Nodes.size(), Summarize(std::move(Total)), Summarize(std::move(Semantic)),
+			Summarize(std::move(Observation)), Summarize(std::move(Layout)), Summarize(std::move(Text)),
+			Summarize(std::move(Presentation)), Summarize(std::move(Accessibility)), Summarize(std::move(SnapshotCommit)),
+			Summarize(std::move(Display)), Summarize(std::move(FrameConstruction)), Summarize(std::move(FrameCopy)), Summarize(std::move(Publication)),
 			Summarize(std::move(Projection)), PresentationValue->Frame.Batches.size(), PrimitiveCount,
 			Profile.TextureUpdates, Profile.TextureUploadBytes};
 	}
@@ -207,6 +229,109 @@ namespace {
 			(void)Value.Runtime.ProcessPointer({3, gargantuan::Enums::GuiPointerType::Mouse,
 				gargantuan::Enums::GuiPointerButton::None, gargantuan::GuiPointerAction::Move, {X, Y}});
 		});
+	}
+
+	ScenarioResult StaticButtonScenario(std::string Name, std::size_t Count, std::size_t Frames) {
+		Scene Value;
+		AddButtons(Value, Count);
+		Value.CommitInitial();
+		return Run(std::move(Name), Value, Frames, [](std::size_t) {});
+	}
+
+	ScenarioResult PressedButtonScenario(std::size_t Count, std::size_t Frames) {
+		Scene Value;
+		AddButtons(Value, Count);
+		Value.CommitInitial();
+		return Run("one_hovered_pressed_button", Value, Frames, [&](std::size_t Frame) {
+			const auto Node = std::dynamic_pointer_cast<gargantuan::TextButton>(Value.Nodes[Frame % Count]);
+			const auto Position = Node->GetAbsolutePosition() + Node->GetAbsoluteSize() / 2.0f;
+			(void)Value.Runtime.ProcessPointer({6, gargantuan::Enums::GuiPointerType::Mouse,
+				gargantuan::Enums::GuiPointerButton::Primary, gargantuan::GuiPointerAction::Down, Position});
+			(void)Value.Runtime.ProcessPointer({6, gargantuan::Enums::GuiPointerType::Mouse,
+				gargantuan::Enums::GuiPointerButton::Primary, gargantuan::GuiPointerAction::Up, Position});
+		});
+	}
+
+	ScenarioResult ScrollingScenario(std::string Name, std::size_t Count, std::size_t Frames, bool Nested) {
+		using namespace gargantuan;
+		Scene Value;
+		auto Scroll = std::make_shared<ScrollingFrame>();
+		Scroll->SetSize(UDim2::fromOffset(1800, 900));
+		Scroll->SetCanvasSize(UDim2::fromOffset(1800, static_cast<int>(Count / 20 * 18 + 900)));
+		Scroll->SetAutomaticCanvasSize(Enums::AutomaticSize::None);
+		Scroll->SetParent(Value.Root);
+		Value.Nodes.push_back(Scroll);
+		std::shared_ptr<ScrollingFrame> Inner;
+		std::shared_ptr<Instance> Parent = Scroll;
+		if (Nested) {
+			Inner = std::make_shared<ScrollingFrame>();
+			Inner->SetPosition(UDim2::fromOffset(40, 40));
+			Inner->SetSize(UDim2::fromOffset(1600, 700));
+			Inner->SetCanvasSize(UDim2::fromOffset(1600, static_cast<int>(Count / 20 * 18 + 700)));
+			Inner->SetAutomaticCanvasSize(Enums::AutomaticSize::None);
+			Inner->SetParent(Scroll);
+			Parent = Inner;
+			Value.Nodes.push_back(Inner);
+		}
+		for (std::size_t Index = 0; Index < Count; ++Index) {
+			auto FrameValue = std::make_shared<Frame>();
+			FrameValue->SetSize(UDim2::fromOffset(70, 14));
+			FrameValue->SetPosition(UDim2::fromOffset(static_cast<int>(Index % 20) * 76,
+				static_cast<int>(Index / 20) * 18));
+			FrameValue->SetParent(Parent);
+			Value.Nodes.push_back(std::move(FrameValue));
+		}
+		Value.CommitInitial();
+		return Run(std::move(Name), Value, Frames, [&](std::size_t Frame) {
+			auto Target = Inner ? Inner : Scroll;
+			Target->SetCanvasPosition({0.0f, static_cast<float>((Frame * 37) % 500)});
+		});
+	}
+
+	ScenarioResult TextEditScenario(std::size_t Frames) {
+		using namespace gargantuan;
+		Scene Value;
+		auto Input = std::make_shared<TextBox>();
+		Input->SetSize(UDim2::fromOffset(400, 36));
+		Input->SetText("Editable UTF-8");
+		Input->SetParent(Value.Root);
+		Value.Nodes.push_back(Input);
+		Value.CommitInitial();
+		Input->CaptureFocus();
+		(void)Value.Runtime.ProcessEvent(KeyEvent{{1}, PhysicalKey::Right, LogicalKey::End,
+			KeyModifier::None, ButtonState::Pressed, false});
+		return Run("text_edit_insert_delete", Value, Frames, [&](std::size_t Frame) {
+			if (Frame & 1) {
+				(void)Value.Runtime.ProcessEvent(KeyEvent{{1}, PhysicalKey::Backspace, LogicalKey::Backspace,
+					KeyModifier::None, ButtonState::Pressed, false});
+			} else if (auto Text = BoundedUtf8::From("\xCE\xA9")) {
+				(void)Value.Runtime.ProcessEvent(TextInputEvent{{1}, *Text});
+			}
+		});
+	}
+
+	ScenarioResult SiblingScenario(std::size_t Count, std::size_t Frames) {
+		using namespace gargantuan;
+		Scene Value;
+		Value.Root->SetZIndexBehavior(Enums::ZIndexBehavior::Sibling);
+		const std::size_t Contexts = 100;
+		for (std::size_t Context = 0; Context < Contexts; ++Context) {
+			auto Parent = std::make_shared<Frame>();
+			Parent->SetZIndex(static_cast<int>(Context % 8));
+			Parent->SetParent(Value.Root);
+			Value.Nodes.push_back(Parent);
+			for (std::size_t Child = 0; Child < Count / Contexts; ++Child) {
+				auto ValueNode = std::make_shared<Frame>();
+				ValueNode->SetSize(UDim2::fromOffset(8, 8));
+				ValueNode->SetPosition(UDim2::fromOffset(static_cast<int>(Child % 50) * 9,
+					static_cast<int>(Child / 50) * 9));
+				ValueNode->SetZIndex(static_cast<int>(Child % 32));
+				ValueNode->SetParent(Parent);
+				Value.Nodes.push_back(std::move(ValueNode));
+			}
+		}
+		Value.CommitInitial();
+		return Run("sibling_stacking_stress", Value, Frames, [](std::size_t) {});
 	}
 
 	ScenarioResult ClipScenario(std::size_t Count, std::size_t Frames) {
@@ -311,9 +436,15 @@ namespace {
 		std::cout << Result.Name << ',' << Result.Nodes << ',';
 		Part(Result.TotalMicroseconds); std::cout << ',';
 		Part(Result.SemanticMicroseconds); std::cout << ',';
+		Part(Result.ObservationMicroseconds); std::cout << ',';
 		Part(Result.LayoutMicroseconds); std::cout << ',';
 		Part(Result.TextMicroseconds); std::cout << ',';
+		Part(Result.PresentationMicroseconds); std::cout << ',';
+		Part(Result.AccessibilityMicroseconds); std::cout << ',';
+		Part(Result.SnapshotCommitMicroseconds); std::cout << ',';
 		Part(Result.DisplayMicroseconds); std::cout << ',';
+		Part(Result.FrameConstructionMicroseconds); std::cout << ',';
+		Part(Result.FrameCopyMicroseconds); std::cout << ',';
 		Part(Result.PublicationMicroseconds); std::cout << ',';
 		Part(Result.ProjectionMicroseconds);
 		std::cout << ',' << Result.Batches << ',' << Result.Primitives << ',' << Result.TextureUpdates << ',' << Result.UploadedBytes << '\n';
@@ -331,12 +462,19 @@ int main(int ArgumentCount, char **Arguments) {
 		Results.push_back(FrameScenario("frames_1000_static", Small, Frames, 0));
 		Results.push_back(FrameScenario("frames_10000_static", Large, Frames, 0));
 		Results.push_back(FrameScenario("frames_10000_1pct_presentation", Large, Frames, 1));
+		Results.push_back(FrameScenario("frames_10000_100_isolated_presentation_writes", Large, Frames, 1));
 		Results.push_back(FrameScenario("frames_10000_1pct_layout", Large, Frames, 2));
 		Results.push_back(ClipScenario(Large, Frames));
 		Results.push_back(TextScenario("text_repeated", Quick ? 40 : 1'000, Frames, false));
 		Results.push_back(TextScenario("text_unique", Quick ? 40 : 1'000, Frames, true));
-		Results.push_back(ButtonScenario("buttons_5000_and_hit_test", Quick ? 100 : 5'000, Frames));
-		Results.push_back(ButtonScenario("buttons_10000_and_hit_test", Quick ? 300 : 10'000, Frames));
+		Results.push_back(StaticButtonScenario("buttons_5000_static", Quick ? 100 : 5'000, Frames));
+		Results.push_back(StaticButtonScenario("buttons_10000_static", Quick ? 300 : 10'000, Frames));
+		Results.push_back(ButtonScenario("buttons_10000_moving_hover", Quick ? 300 : 10'000, Frames));
+		Results.push_back(PressedButtonScenario(Quick ? 300 : 10'000, Frames));
+		Results.push_back(ScrollingScenario("nested_scrolling", Quick ? 100 : 1'000, Frames, true));
+		Results.push_back(ScrollingScenario("scrolling_10000_children", Quick ? 300 : 10'000, Frames, false));
+		Results.push_back(TextEditScenario(Frames));
+		Results.push_back(SiblingScenario(Large, Frames));
 		Results.push_back(HitScenario("hit_test_1000", Small, Quick ? 30 : 1'000));
 		Results.push_back(HitScenario("hit_test_10000", Large, Quick ? 30 : 1'000));
 		Results.push_back(AutomaticListScenario(Quick ? 100 : 5'000, Frames));
@@ -344,9 +482,15 @@ int main(int ArgumentCount, char **Arguments) {
 		Results.push_back(MixedScenario(Small, Frames));
 		std::cout << "scenario,nodes,total_mean_us,total_p50_us,total_p95_us,total_p99_us,"
 			"semantic_mean_us,semantic_p50_us,semantic_p95_us,semantic_p99_us,"
+			"observation_mean_us,observation_p50_us,observation_p95_us,observation_p99_us,"
 			"layout_mean_us,layout_p50_us,layout_p95_us,layout_p99_us,"
 			"text_mean_us,text_p50_us,text_p95_us,text_p99_us,"
+			"presentation_mean_us,presentation_p50_us,presentation_p95_us,presentation_p99_us,"
+			"accessibility_mean_us,accessibility_p50_us,accessibility_p95_us,accessibility_p99_us,"
+			"snapshot_commit_mean_us,snapshot_commit_p50_us,snapshot_commit_p95_us,snapshot_commit_p99_us,"
 			"display_mean_us,display_p50_us,display_p95_us,display_p99_us,"
+			"frame_construction_mean_us,frame_construction_p50_us,frame_construction_p95_us,frame_construction_p99_us,"
+			"frame_copy_mean_us,frame_copy_p50_us,frame_copy_p95_us,frame_copy_p99_us,"
 			"publication_mean_us,publication_p50_us,publication_p95_us,publication_p99_us,"
 			"projection_mean_us,projection_p50_us,projection_p95_us,projection_p99_us,"
 			"batches,primitives,texture_updates,uploaded_bytes\n";

@@ -157,22 +157,34 @@ namespace {
 		Batch.Opacity = 0.75f;
 		Batch.Vertices.resize(4);
 		Batch.Indices = {0, 1, 2, 2, 3, 0};
-		Delta.Ui = {640, 360, 1.5f, {Batch}};
+		Delta.SharedUi = std::make_shared<const RenderUiFrame>(RenderUiFrame{640, 360, 1.5f, {Batch}});
+		Delta.UiChanged = true;
 		Changes = Projection.Apply(Delta);
 		Check(
 			Changes.MeshesUpdated == 1 && Changes.VertexUploadBytes == 2 * sizeof(RenderVertex),
 			"bounded deformable dirty ranges upload only the published vertex slice"
 		);
 		Check(
-			Changes.UiBatches == 1 && Changes.UiVertices == 4 && Changes.UiIndices == 6,
-			"renderer-neutral GUI batches preserve clipping, layering, texture, and geometry"
+			Changes.UiBatches == 1 && Changes.UiVertices == 4 && Changes.UiIndices == 6 &&
+			&Projection.GetUi() == Delta.SharedUi.get(),
+			"renderer-neutral immutable GUI frames preserve geometry and shared ownership without copying"
 		);
 		Check(
 			Changes.TexturesUpdated == 1 && Changes.TextureUploadBytes == AtlasPatch->size(),
 			"atlas-like subregion updates preserve texture identity and report exact upload bytes"
 		);
+		RenderPublication NoUiDelta{.Id = 4, .BaseId = 3, .Frame = MakeFrame()};
+		Changes = Projection.Apply(NoUiDelta);
+		Check(
+			Changes.UiBatches == 0 && Projection.GetUi().Batches.size() == 1,
+			"an incremental publication without a UI update preserves committed UI state"
+		);
+		RenderPublication ClearUi{.Id = 5, .BaseId = 4, .Frame = MakeFrame(), .UiChanged = true};
+		ClearUi.Ui = {640, 360, 1.5f, {}};
+		Changes = Projection.Apply(ClearUi);
+		Check(Changes.UiBatches == 0 && Projection.GetUi().Batches.empty(), "an explicit empty UI update clears committed UI state");
 
-		RenderPublication OutOfRange{.Id = 4, .BaseId = 3, .Frame = MakeFrame()};
+		RenderPublication OutOfRange{.Id = 6, .BaseId = 5, .Frame = MakeFrame()};
 		OutOfRange.MeshVertexUpdates.push_back({
 			{1, 1}, 3, 7, DirtyVertices, {glm::vec3(-1.0f), glm::vec3(1.0f)},
 		});
@@ -180,21 +192,21 @@ namespace {
 
 		auto InvalidVertices = std::vector<RenderVertex>(1);
 		InvalidVertices[0].Position.x = std::numeric_limits<float>::quiet_NaN();
-		RenderPublication Invalid{.Id = 4, .BaseId = 3, .Frame = MakeFrame()};
+		RenderPublication Invalid{.Id = 6, .BaseId = 5, .Frame = MakeFrame()};
 		Invalid.MeshVertexUpdates.push_back({
 			{1, 1}, 3, 0, std::make_shared<const std::vector<RenderVertex>>(std::move(InvalidVertices)),
 			{glm::vec3(0.0f), glm::vec3(1.0f)},
 		});
 		CheckThrows<std::invalid_argument>([&] { (void)Projection.Apply(Invalid); }, "NaN deformable geometry is rejected");
 
-		RenderPublication InvalidTexture{.Id = 4, .BaseId = 3, .Frame = MakeFrame()};
+		RenderPublication InvalidTexture{.Id = 6, .BaseId = 5, .Frame = MakeFrame()};
 		InvalidTexture.TextureUpdates.push_back({{7, 1}, 3, 3, 3, 2, 2, AtlasPatch});
 		CheckThrows<std::invalid_argument>(
 			[&] { (void)Projection.Apply(InvalidTexture); },
 			"out-of-range texture updates are rejected atomically"
 		);
 
-		RenderPublication TopologyChange{.Id = 4, .BaseId = 3, .Frame = MakeFrame()};
+		RenderPublication TopologyChange{.Id = 6, .BaseId = 5, .Frame = MakeFrame()};
 		TopologyChange.MeshRemoves.push_back({{1, 1}});
 		TopologyChange.MeshCreates.push_back({
 			{1, 2}, 2, 1, Vertices, Indices, {glm::vec3(-1.0f), glm::vec3(1.0f)},

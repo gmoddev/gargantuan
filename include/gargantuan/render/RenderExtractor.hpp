@@ -74,7 +74,15 @@ namespace gargantuan {
 			glm::vec3 LightDirection = {0.75f, 1.0f, 0.5f}
 		);
 		void RequestFullResync() { FullResyncRequested = true; }
-		void SetUiFrame(RenderUiFrame UiFrame);
+		void SetUiFrame(RenderUiFrame UiFrame, ObjectId Source = {}, std::uint64_t SourceGeneration = 0);
+		void SetUiFrame(
+			std::shared_ptr<const RenderUiFrame> UiFrame,
+			ObjectId Source = {},
+			std::uint64_t SourceGeneration = 0
+		);
+		[[nodiscard]] bool HasUiFrame(ObjectId Source, std::uint64_t SourceGeneration) const {
+			return UiSource == Source && UiSourceGeneration == SourceGeneration;
+		}
 		void SetUiTextureChanges(
 			std::vector<RenderTextureCreate> Creates,
 			std::vector<RenderTextureUpdate> Updates,
@@ -109,8 +117,10 @@ namespace gargantuan {
 		std::unordered_map<ObjectId, RenderItem> PublishedItems;
 		std::unordered_map<ObjectId, PublishedDeformable> PublishedDeformables;
 		std::unordered_map<RenderTextureIdentity, PublishedTexture, RenderTextureIdentityHash> PublishedTextures;
-		std::optional<RenderUiFrame> PendingUi;
-		RenderUiFrame CommittedUi;
+		std::shared_ptr<const RenderUiFrame> PendingUi;
+		std::shared_ptr<const RenderUiFrame> CommittedUi = std::make_shared<const RenderUiFrame>();
+		ObjectId UiSource;
+		std::uint64_t UiSourceGeneration = 0;
 		std::vector<RenderTextureCreate> PendingTextureCreates;
 		std::vector<RenderTextureUpdate> PendingTextureUpdates;
 		std::vector<RenderTextureRemove> PendingTextureRemoves;

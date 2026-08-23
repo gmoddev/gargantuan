@@ -21,6 +21,10 @@ namespace {
 		assert(!BoundedUtf8::From(std::string("\xc0\x80", 2)));
 		auto Unicode = BoundedUtf8::From("Gargantuan \xf0\x9f\xa6\x96");
 		assert(Unicode && Unicode->View() == "Gargantuan \xf0\x9f\xa6\x96");
+		auto MaximumComposition = BoundedCompositionUtf8::From(std::string(MAX_COMPOSITION_INPUT_BYTES, 'a'));
+		assert(MaximumComposition && MaximumComposition->View().size() == MAX_COMPOSITION_INPUT_BYTES);
+		assert(!BoundedCompositionUtf8::From(std::string(MAX_COMPOSITION_INPUT_BYTES + 1, 'a')));
+		assert(!BoundedCompositionUtf8::From(std::string("\xc0\x80", 2)));
 	}
 
 	void TestSDLTranslation() {
@@ -70,6 +74,20 @@ namespace {
 		Event = TranslateSDLEvent(Backend);
 		assert(Event && std::get<TextInputEvent>(*Event).Text.View() == "typed");
 		Backend.text.text = "\xc0\x80";
+		assert(!TranslateSDLEvent(Backend));
+
+		Backend = {};
+		Backend.type = SDL_EVENT_TEXT_EDITING;
+		Backend.edit.type = SDL_EVENT_TEXT_EDITING;
+		Backend.edit.text = "\xe3\x81\x82";
+		Backend.edit.start = 1;
+		Backend.edit.length = 2;
+		Event = TranslateSDLEvent(Backend);
+		assert(Event && std::holds_alternative<TextEditingEvent>(*Event));
+		const auto &Editing = std::get<TextEditingEvent>(*Event);
+		assert(Editing.Text.View() == "\xe3\x81\x82");
+		assert(Editing.SelectionStart == 1 && Editing.SelectionLength == 2);
+		Backend.edit.text = "\xc0\x80";
 		assert(!TranslateSDLEvent(Backend));
 
 		Backend = {};

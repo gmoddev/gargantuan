@@ -37,4 +37,12 @@ namespace gargantuan {
 		Result.Size = static_cast<std::uint8_t>(Text.size());
 		return Result;
 	}
+
+	std::optional<BoundedCompositionUtf8> BoundedCompositionUtf8::From(std::string_view Text) {
+		if (Text.size() > MAX_COMPOSITION_INPUT_BYTES || !IsValidUtf8(Text)) return std::nullopt;
+		BoundedCompositionUtf8 Result;
+		std::copy(Text.begin(), Text.end(), Result.Bytes.begin());
+		Result.Size = static_cast<std::uint16_t>(Text.size());
+		return Result;
+	}
 }

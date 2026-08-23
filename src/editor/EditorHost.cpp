@@ -683,7 +683,7 @@ namespace gargantuan {
 			if (method == "SendPlayInput") {
 				if (!StudioSecurity.HasCapability(ScriptCapability::ViewportControl))
 					return SerializeBoundedResponse(ErrorResponse(requestId, "Unauthorized", "Play input requires ViewportControl"));
-				if (!HasOnlyFields(parameters, {"PlaySessionId", "Type", "Focused", "Physical", "Logical", "State", "Repeat", "Modifiers", "Button", "X", "Y", "DeltaX", "DeltaY"}) ||
+				if (!HasOnlyFields(parameters, {"PlaySessionId", "Type", "Focused", "Physical", "Logical", "State", "Repeat", "Modifiers", "Button", "X", "Y", "DeltaX", "DeltaY", "PointerId", "Action", "Text", "SelectionStart", "SelectionLength"}) ||
 					!parameters.contains("PlaySessionId") || !parameters.contains("Type") || !parameters["Type"].is_string())
 					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "SendPlayInput fields are malformed"));
 				auto Id = DecodePlaySessionId(parameters["PlaySessionId"]);
@@ -740,17 +740,67 @@ namespace gargantuan {
 						StateName == "Pressed" ? ButtonState::Pressed : ButtonState::Released,
 						{X, Y},
 					});
+				} else if (Type == "Wheel") {
+					for (const auto Field : {"X", "Y", "DeltaX", "DeltaY"})
+						if (!parameters.contains(Field) || !parameters[Field].is_number() || !std::isfinite(parameters[Field].get<float>()))
+							return SerializeBoundedResponse(ErrorResponse(requestId, "InvalidPlayInput", "Wheel input must be finite"));
+					InputResult = ActivePlaySession->ProcessEvent(WheelEvent{
+						{1}, {parameters["X"].get<float>(), parameters["Y"].get<float>()},
+						{parameters["DeltaX"].get<float>(), parameters["DeltaY"].get<float>()},
+					});
+				} else if (Type == "Touch") {
+					if (!parameters.contains("PointerId") || !parameters["PointerId"].is_number_unsigned() ||
+						!parameters.contains("Action") || !parameters["Action"].is_string())
+						return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Touch input fields are malformed"));
+					for (const auto Field : {"X", "Y", "DeltaX", "DeltaY"})
+						if (!parameters.contains(Field) || !parameters[Field].is_number() || !std::isfinite(parameters[Field].get<float>()))
+							return SerializeBoundedResponse(ErrorResponse(requestId, "InvalidPlayInput", "Touch input must be finite"));
+					const auto Pointer = JsonCodec::DecodeUnsigned32(parameters["PointerId"]);
+					const auto Action = magic_enum::enum_cast<TouchPointerAction>(parameters["Action"].get<std::string>());
+					if (!Pointer || *Pointer == 0 || !Action)
+						return SerializeBoundedResponse(ErrorResponse(requestId, "InvalidPlayInput", "Touch identity or action is invalid"));
+					InputResult = ActivePlaySession->ProcessEvent(TouchPointerEvent{
+						{*Pointer}, {parameters["X"].get<float>(), parameters["Y"].get<float>()},
+						{parameters["DeltaX"].get<float>(), parameters["DeltaY"].get<float>()}, *Action,
+					});
+				} else if (Type == "TextInput") {
+					if (!parameters.contains("Text") || !parameters["Text"].is_string())
+						return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "TextInput requires Text"));
+					auto Text = BoundedUtf8::From(parameters["Text"].get<std::string>());
+					if (!Text)
+						return SerializeBoundedResponse(ErrorResponse(requestId, "InvalidPlayInput", "TextInput is invalid UTF-8 or exceeds its bound"));
+					InputResult = ActivePlaySession->ProcessEvent(TextInputEvent{{1}, *Text});
+				} else if (Type == "TextEditing") {
+					if (!parameters.contains("Text") || !parameters["Text"].is_string() ||
+						!parameters.contains("SelectionStart") || !parameters["SelectionStart"].is_number_integer() ||
+						!parameters.contains("SelectionLength") || !parameters["SelectionLength"].is_number_integer())
+						return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "TextEditing fields are malformed"));
+					auto Text = BoundedCompositionUtf8::From(parameters["Text"].get<std::string>());
+					const auto SelectionStart = parameters["SelectionStart"].get<std::int64_t>();
+					const auto SelectionLength = parameters["SelectionLength"].get<std::int64_t>();
+					if (!Text || SelectionStart < 0 || SelectionStart > std::numeric_limits<std::int32_t>::max() ||
+						SelectionLength < 0 || SelectionLength > std::numeric_limits<std::int32_t>::max())
+						return SerializeBoundedResponse(ErrorResponse(requestId, "InvalidPlayInput", "TextEditing is outside the bounded composition vocabulary"));
+					InputResult = ActivePlaySession->ProcessEvent(TextEditingEvent{
+						{1}, *Text, static_cast<std::int32_t>(SelectionStart), static_cast<std::int32_t>(SelectionLength),
+					});
 				} else {
 					return SerializeBoundedResponse(ErrorResponse(requestId, "InvalidPlayInput", "Input Type is unsupported"));
 				}
 				Json RelativePointerMode = nullptr;
+				Json TextInputState = nullptr;
 				if (InputResult.Command) {
 					if (const auto *Relative = std::get_if<SetRelativePointerMode>(&*InputResult.Command))
 						RelativePointerMode = Relative->Enabled;
+					if (const auto *TextInput = std::get_if<SetTextInputState>(&*InputResult.Command))
+						TextInputState = {
+							{"Active", TextInput->Active}, {"X", TextInput->X}, {"Y", TextInput->Y},
+							{"Width", TextInput->Width}, {"Height", TextInput->Height}, {"Cursor", TextInput->Cursor},
+						};
 				}
 				return SerializeBoundedResponse(SuccessResponse(requestId, {
 					{"PlaySessionId", std::to_string(Id->Value)}, {"Accepted", true},
-					{"RelativePointerMode", std::move(RelativePointerMode)},
+					{"RelativePointerMode", std::move(RelativePointerMode)}, {"TextInputState", std::move(TextInputState)},
 				}));
 			}
 

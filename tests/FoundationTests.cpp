@@ -4877,6 +4877,21 @@ namespace {
 					{"PlaySessionId", PlayId}, {"Type", "PointerMove"},
 					{"X", 12.0}, {"Y", 19.0}, {"DeltaX", 2.0}, {"DeltaY", -1.0}
 				}, "test-token")["Ok"].get<bool>(), "Play pointer movement reaches the active runtime exactly once");
+				Check(call("SendPlayInput", {
+					{"PlaySessionId", PlayId}, {"Type", "Wheel"},
+					{"X", 12.0}, {"Y", 19.0}, {"DeltaX", 0.0}, {"DeltaY", -1.0}
+				}, "test-token")["Ok"].get<bool>(), "Play wheel input follows the semantic HostEvent path");
+				Check(call("SendPlayInput", {
+					{"PlaySessionId", PlayId}, {"Type", "Touch"}, {"PointerId", 42}, {"Action", "Down"},
+					{"X", 12.0}, {"Y", 19.0}, {"DeltaX", 0.0}, {"DeltaY", 0.0}
+				}, "test-token")["Ok"].get<bool>(), "Play touch input preserves its pointer identity through HostEvent");
+				Check(call("SendPlayInput", {
+					{"PlaySessionId", PlayId}, {"Type", "TextInput"}, {"Text", "\xCF\x89"}
+				}, "test-token")["Ok"].get<bool>(), "Play UTF-8 text input follows the bounded semantic path");
+				Check(call("SendPlayInput", {
+					{"PlaySessionId", PlayId}, {"Type", "TextEditing"}, {"Text", "\xE3\x81\x82"},
+					{"SelectionStart", 0}, {"SelectionLength", 1}
+				}, "test-token")["Ok"].get<bool>(), "Play IME preedit input follows the bounded semantic path");
 				auto RightUp = call("SendPlayInput", {
 					{"PlaySessionId", PlayId}, {"Type", "PointerButton"},
 					{"Button", "Right"}, {"State", "Released"}, {"X", 12.0}, {"Y", 19.0}

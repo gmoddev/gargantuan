@@ -31,5 +31,13 @@ namespace gargantuan {
 		static constexpr std::size_t MaximumTextureUploadBytesPerFrame = 8 * 1024 * 1024;
 		static constexpr std::size_t MaximumDiagnostics = 64;
 		static constexpr std::size_t MaximumDiagnosticBytes = 1024;
+		static constexpr std::size_t MaximumScrollNesting = 16;
+		static constexpr float MaximumScrollExtent = 1'000'000.0f;
+		static constexpr std::size_t MaximumEditableTextBytes = 16 * 1024;
+		static constexpr std::size_t MaximumEditableCodePoints = 4096;
+		static constexpr std::size_t MaximumSelectionOperationsPerFrame = 1024;
+		static constexpr std::size_t MaximumCompositionBytes = 4095;
+		static constexpr std::size_t MaximumClipboardBytes = 64 * 1024;
+		static constexpr std::size_t MaximumTextInputEditsPerFrame = 256;
 	};
 }

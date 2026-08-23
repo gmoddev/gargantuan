@@ -89,6 +89,9 @@ namespace gargantuan {
 			throw std::invalid_argument("A full RenderPublication may contain only complete create state");
 		if (!IsValid(Publication.Frame))
 			throw std::invalid_argument("Render publication frame state is invalid");
+		const auto &PublishedUi = Publication.GetUi();
+		const bool HasUiUpdate = Publication.FullResync || Publication.UiChanged || Publication.SharedUi ||
+			PublishedUi.ViewportWidth != 0 || PublishedUi.ViewportHeight != 0 || !PublishedUi.Batches.empty();
 
 		std::unordered_set<ObjectId> TouchedObjects;
 		TouchedObjects.reserve(Publication.Creates.size() + Publication.Updates.size() + Publication.Removes.size());
@@ -184,12 +187,13 @@ namespace gargantuan {
 			}
 		}
 
-		if (Publication.Ui.ViewportWidth != 0 || Publication.Ui.ViewportHeight != 0 || !Publication.Ui.Batches.empty()) {
-			if (Publication.Ui.ViewportWidth != Publication.Frame.ViewportWidth ||
-				Publication.Ui.ViewportHeight != Publication.Frame.ViewportHeight ||
-				!std::isfinite(Publication.Ui.DpiScale) || Publication.Ui.DpiScale <= 0.0f)
+		if (HasUiUpdate && (PublishedUi.ViewportWidth != 0 || PublishedUi.ViewportHeight != 0 ||
+			!PublishedUi.Batches.empty())) {
+			if (PublishedUi.ViewportWidth != Publication.Frame.ViewportWidth ||
+				PublishedUi.ViewportHeight != Publication.Frame.ViewportHeight ||
+				!std::isfinite(PublishedUi.DpiScale) || PublishedUi.DpiScale <= 0.0f)
 				throw std::invalid_argument("Render publication UI frame does not match frame state");
-			for (const auto &Batch : Publication.Ui.Batches) {
+			for (const auto &Batch : PublishedUi.Batches) {
 				if ((Batch.Texture && (!Batch.Texture->IsValid() || !TextureExistsAfterPublication(*Batch.Texture))) ||
 					!std::isfinite(Batch.Opacity) ||
 					Batch.Opacity < 0.0f || Batch.Opacity > 1.0f)
@@ -313,13 +317,15 @@ namespace gargantuan {
 			++Changes.TexturesUpdated;
 			Changes.TextureUploadBytes += Update.Pixels->size();
 		}
-		Changes.UiBatches = Publication.Ui.Batches.size();
-		for (const auto &Batch : Publication.Ui.Batches) {
-			Changes.UiVertices += Batch.Vertices.size();
-			Changes.UiIndices += Batch.Indices.size();
+		if (HasUiUpdate) {
+			Changes.UiBatches = PublishedUi.Batches.size();
+			for (const auto &Batch : PublishedUi.Batches) {
+				Changes.UiVertices += Batch.Vertices.size();
+				Changes.UiIndices += Batch.Indices.size();
+			}
+			Ui = Publication.SharedUi ? Publication.SharedUi : std::make_shared<const RenderUiFrame>(PublishedUi);
 		}
 		Frame = Publication.Frame;
-		Ui = Publication.Ui;
 		LastPublicationId = Publication.Id;
 		return Changes;
 	}
@@ -367,7 +373,7 @@ namespace gargantuan {
 		Frame.ViewportHeight = Snapshot.ViewportHeight;
 		Frame.Camera = Snapshot.Camera;
 		Frame.LightDirection = Snapshot.LightDirection;
-		Ui = {};
+		Ui = std::make_shared<const RenderUiFrame>();
 		return Changes;
 	}
 
@@ -377,7 +383,7 @@ namespace gargantuan {
 		Textures.clear();
 		LastPublicationId = InvalidRenderPublicationId;
 		Frame = {};
-		Ui = {};
+		Ui = std::make_shared<const RenderUiFrame>();
 	}
 
 	const RenderItem *RenderProjection::GetItem(ObjectId Object) const {

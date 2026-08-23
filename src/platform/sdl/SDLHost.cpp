@@ -133,6 +133,35 @@ namespace gargantuan {
 			if (!Text) return std::nullopt;
 			return TextInputEvent{{0}, *Text};
 		}
+		case SDL_EVENT_TEXT_EDITING: {
+			if (!Event.edit.text) return std::nullopt;
+			auto Text = BoundedCompositionUtf8::From(Event.edit.text);
+			if (!Text) return std::nullopt;
+			return TextEditingEvent{{0}, *Text, Event.edit.start, Event.edit.length};
+		}
+		case SDL_EVENT_FINGER_DOWN:
+		case SDL_EVENT_FINGER_MOTION:
+		case SDL_EVENT_FINGER_UP:
+		case SDL_EVENT_FINGER_CANCELED: {
+			auto *Window = SDL_GetWindowFromID(Event.tfinger.windowID);
+			int Width = 0;
+			int Height = 0;
+			if (!Window || !SDL_GetWindowSizeInPixels(Window, &Width, &Height) || Width < 1 || Height < 1)
+				return std::nullopt;
+			const std::uint64_t Contact = static_cast<std::uint64_t>(Event.tfinger.touchID) ^
+				(static_cast<std::uint64_t>(Event.tfinger.fingerID) * 0x9E3779B97F4A7C15ULL);
+			std::uint32_t Pointer = static_cast<std::uint32_t>(Contact ^ (Contact >> 32)) & 0x7fffffffu;
+			if (Pointer == 0) Pointer = 1;
+			const auto Action = Event.type == SDL_EVENT_FINGER_DOWN ? TouchPointerAction::Down :
+				Event.type == SDL_EVENT_FINGER_MOTION ? TouchPointerAction::Move :
+				Event.type == SDL_EVENT_FINGER_UP ? TouchPointerAction::Up : TouchPointerAction::Cancel;
+			return TouchPointerEvent{
+				{Pointer},
+				{Event.tfinger.x * Width, Event.tfinger.y * Height},
+				{Event.tfinger.dx * Width, Event.tfinger.dy * Height},
+				Action,
+			};
+		}
 		case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
 		case SDL_EVENT_GAMEPAD_BUTTON_UP: {
 			if (Event.gbutton.which == 0) return std::nullopt;
@@ -173,6 +202,12 @@ namespace gargantuan {
 			case SDL_EVENT_MOUSE_MOTION: ActiveWindowId = BackendEvent.motion.windowID; break;
 			case SDL_EVENT_MOUSE_BUTTON_DOWN: case SDL_EVENT_MOUSE_BUTTON_UP: ActiveWindowId = BackendEvent.button.windowID; break;
 			case SDL_EVENT_MOUSE_WHEEL: ActiveWindowId = BackendEvent.wheel.windowID; break;
+			case SDL_EVENT_TEXT_INPUT: ActiveWindowId = BackendEvent.text.windowID; break;
+			case SDL_EVENT_TEXT_EDITING: ActiveWindowId = BackendEvent.edit.windowID; break;
+			case SDL_EVENT_FINGER_DOWN: case SDL_EVENT_FINGER_MOTION:
+			case SDL_EVENT_FINGER_UP: case SDL_EVENT_FINGER_CANCELED:
+				ActiveWindowId = BackendEvent.tfinger.windowID;
+				break;
 			case SDL_EVENT_WINDOW_FOCUS_GAINED: case SDL_EVENT_WINDOW_FOCUS_LOST:
 			case SDL_EVENT_WINDOW_RESIZED: case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
 				ActiveWindowId = BackendEvent.window.windowID; break;
@@ -192,6 +227,16 @@ namespace gargantuan {
 			if constexpr (std::is_same_v<CommandType, SetRelativePointerMode>) {
 				auto *Window = ActiveWindowId == 0 ? nullptr : SDL_GetWindowFromID(ActiveWindowId);
 				if (Window) SDL_SetWindowRelativeMouseMode(Window, Value.Enabled);
+			} else if constexpr (std::is_same_v<CommandType, SetTextInputState>) {
+				auto *Window = ActiveWindowId == 0 ? SDL_GetKeyboardFocus() : SDL_GetWindowFromID(ActiveWindowId);
+				if (!Window) return;
+				if (!Value.Active) {
+					SDL_StopTextInput(Window);
+					return;
+				}
+				const SDL_Rect Area{Value.X, Value.Y, std::max(Value.Width, 1), std::max(Value.Height, 1)};
+				SDL_SetTextInputArea(Window, &Area, std::max(Value.Cursor, 0));
+				SDL_StartTextInput(Window);
 			}
 		}, Command);
 	}

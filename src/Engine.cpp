@@ -116,6 +116,7 @@ namespace gargantuan {
 		else Result.Consumed = true;
 		if (!Result.Consumed) Result.Command = Workspace->GetCurrentCamera()->ProcessEvent(Event);
 		if (auto InputCommand = UserInputService->SynchronizeMouseBehavior()) Result.Command = InputCommand;
+		if (Gui) if (auto TextInputCommand = Gui->SynchronizeTextInput()) Result.Command = TextInputCommand;
 		return Result;
 	}
 

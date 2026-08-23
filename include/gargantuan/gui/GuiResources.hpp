@@ -29,6 +29,7 @@ namespace gargantuan {
 		float LogicalWrapWidth = 0.0f;
 		bool Wrapped = false;
 		int HorizontalAlignment = 1;
+		bool EditableMetrics = false;
 	};
 
 	class GuiTextSystem final {

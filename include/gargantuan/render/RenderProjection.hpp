@@ -49,7 +49,7 @@ namespace gargantuan {
 		[[nodiscard]] std::size_t GetTextureCount() const { return Textures.size(); }
 		[[nodiscard]] RenderPublicationId GetLastPublicationId() const { return LastPublicationId; }
 		[[nodiscard]] const RenderFrameState &GetFrame() const { return Frame; }
-		[[nodiscard]] const RenderUiFrame &GetUi() const { return Ui; }
+		[[nodiscard]] const RenderUiFrame &GetUi() const { return *Ui; }
 		[[nodiscard]] const std::unordered_map<ObjectId, RenderProjectedObject> &GetObjects() const { return Entries; }
 		[[nodiscard]] RenderSnapshotPtr BuildCompatibilitySnapshot() const;
 
@@ -72,6 +72,6 @@ namespace gargantuan {
 		std::unordered_map<RenderTextureIdentity, TextureEntry, RenderTextureIdentityHash> Textures;
 		RenderPublicationId LastPublicationId = InvalidRenderPublicationId;
 		RenderFrameState Frame;
-		RenderUiFrame Ui;
+		std::shared_ptr<const RenderUiFrame> Ui = std::make_shared<const RenderUiFrame>();
 	};
 } // namespace gargantuan

@@ -46,6 +46,7 @@ namespace gargantuan {
 
 		struct SanitizedText {
 			std::string Bytes;
+			std::vector<std::size_t> ByteBoundaries{0};
 			bool ReplacedInvalid = false;
 			bool Truncated = false;
 			std::size_t Codepoints = 0;
@@ -55,6 +56,7 @@ namespace gargantuan {
 			if (Result.Bytes.size() + 3 <= GuiLimits::MaximumTextBytesPerObject) Result.Bytes.append("\xEF\xBF\xBD", 3);
 			Result.ReplacedInvalid = true;
 			++Result.Codepoints;
+			Result.ByteBoundaries.push_back(Result.Bytes.size());
 		}
 
 		SanitizedText SanitizeUtf8(std::string_view Input) {
@@ -100,6 +102,7 @@ namespace gargantuan {
 				Result.Bytes.append(Input.substr(Index, Length));
 				Index += Length;
 				++Result.Codepoints;
+				Result.ByteBoundaries.push_back(Result.Bytes.size());
 			}
 			Result.Truncated = Index < Input.size();
 			return Result;
@@ -139,6 +142,7 @@ namespace gargantuan {
 			int WrapWidth = 0;
 			int Alignment = 0;
 			bool Wrapped = false;
+			bool EditableMetrics = false;
 			bool operator==(const ShapeKey &) const = default;
 		};
 
@@ -151,6 +155,7 @@ namespace gargantuan {
 				Result ^= std::hash<int>{}(Key.WrapWidth) << 4;
 				Result ^= std::hash<int>{}(Key.Alignment) << 5;
 				Result ^= std::hash<bool>{}(Key.Wrapped) << 6;
+				Result ^= std::hash<bool>{}(Key.EditableMetrics) << 7;
 				return Result;
 			}
 		};
@@ -375,6 +380,7 @@ namespace gargantuan {
 			Request.Wrapped ? std::max(0, static_cast<int>(std::lround(Request.LogicalWrapWidth * Request.DpiScale))) : 0,
 			std::clamp(Request.HorizontalAlignment, 0, 2),
 			Request.Wrapped,
+			Request.EditableMetrics,
 		};
 		if (auto Existing = State->ShapeCache.find(Key); Existing != State->ShapeCache.end()) {
 			Existing->second.second = ++State->CacheTick;
@@ -388,6 +394,7 @@ namespace gargantuan {
 		Result->TruncatedInput = Sanitized.Truncated;
 		auto *Font = State->GetFont(Request);
 		if (!Font || Sanitized.Bytes.empty()) {
+			if (Request.EditableMetrics) Result->CaretOffsets.push_back(0.0f);
 			State->Profile.TextShapingNanoseconds += Nanoseconds(Clock::now() - ShapeStart);
 			State->EvictShapeCacheIfNeeded();
 			State->ShapeCache.emplace(Key, std::pair(std::shared_ptr<const GuiShapedText>(Result), ++State->CacheTick));
@@ -402,6 +409,17 @@ namespace gargantuan {
 		if (TTF_GetTextSize(Text, &Width, &Height)) {
 			Result->Width = static_cast<float>(Width) / Request.DpiScale;
 			Result->Height = static_cast<float>(Height) / Request.DpiScale;
+			if (Request.EditableMetrics) {
+				Result->CaretOffsets.reserve(Sanitized.ByteBoundaries.size());
+				for (const auto Boundary : Sanitized.ByteBoundaries) {
+					TTF_SubString SubString{};
+					if (TTF_GetTextSubString(Text, static_cast<int>(Boundary), &SubString)) {
+						const float X = (SubString.flags & TTF_SUBSTRING_TEXT_END) != 0 ?
+							static_cast<float>(SubString.rect.x + SubString.rect.w) : static_cast<float>(SubString.rect.x);
+						Result->CaretOffsets.push_back(X / Request.DpiScale);
+					} else Result->CaretOffsets.push_back(Result->CaretOffsets.empty() ? 0.0f : Result->CaretOffsets.back());
+				}
+			}
 			if (const auto *Data = static_cast<const EngineTextData *>(Text->internal->engine_text)) {
 				Result->UsedMissingGlyph = Data->MissingGlyph;
 				Result->TruncatedInput = Result->TruncatedInput || Data->Truncated;

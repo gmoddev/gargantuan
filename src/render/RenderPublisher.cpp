@@ -281,7 +281,7 @@ namespace gargantuan {
 				if (Create.Pixels) Result = AddBounded(Result, Create.Pixels->size());
 			for (const auto &Update : Publication.TextureUpdates)
 				if (Update.Pixels) Result = AddBounded(Result, Update.Pixels->size());
-			for (const auto &Batch : Publication.Ui.Batches)
+			for (const auto &Batch : Publication.GetUi().Batches)
 				Result = AddBounded(
 					Result,
 					AddBounded(
@@ -306,9 +306,18 @@ namespace gargantuan {
 		if (Dirty) Dirty->ReleaseConsumer(DirtyConsumer);
 	}
 
-	void RenderPublisher::SetUiFrame(RenderUiFrame UiFrame) {
+	void RenderPublisher::SetUiFrame(RenderUiFrame UiFrame, ObjectId Source, std::uint64_t SourceGeneration) {
+		SetUiFrame(std::make_shared<const RenderUiFrame>(std::move(UiFrame)), Source, SourceGeneration);
+	}
+
+	void RenderPublisher::SetUiFrame(
+		std::shared_ptr<const RenderUiFrame> UiFrame,
+		ObjectId Source,
+		std::uint64_t SourceGeneration
+	) {
+		if (!UiFrame) throw std::invalid_argument("Render publisher requires an immutable UI frame");
 		std::size_t Bytes = 0;
-		for (const auto &Batch : UiFrame.Batches)
+		for (const auto &Batch : UiFrame->Batches)
 			Bytes = AddBounded(
 				Bytes,
 				AddBounded(
@@ -320,6 +329,8 @@ namespace gargantuan {
 				)
 			);
 		CommittedUi = UiFrame;
+		UiSource = Source;
+		UiSourceGeneration = SourceGeneration;
 		PendingUi = std::move(UiFrame);
 		PendingUiGeometryBytes = Bytes;
 		if (Scope.IsValid()) Dirty->MarkUi(Scope, Bytes);
@@ -487,7 +498,8 @@ namespace gargantuan {
 					PublishedDeformable{Extracted->Mesh, Extracted->TopologyRevision, Extracted->VertexRevision}
 				);
 			}
-			Result->Ui = CommittedUi;
+			Result->UiChanged = true;
+			Result->SharedUi = CommittedUi;
 			std::vector<std::pair<RenderTextureIdentity, PublishedTexture>> OrderedTextures(
 				PublishedTextures.begin(), PublishedTextures.end());
 			std::ranges::sort(OrderedTextures, {}, &std::pair<RenderTextureIdentity, PublishedTexture>::first);
@@ -670,7 +682,10 @@ namespace gargantuan {
 					ProfileNanoseconds(ProfileClock::now() - OperationStart);
 		}
 		const auto FinalConstructionStart = ProfilingEnabled ? ProfileClock::now() : ProfileClock::time_point{};
-		if (PendingUi) Result->Ui = *PendingUi;
+		if (PendingUi) {
+			Result->UiChanged = true;
+			Result->SharedUi = PendingUi;
+		}
 		Result->TextureCreates = PendingTextureCreates;
 		Result->TextureUpdates = PendingTextureUpdates;
 		Result->TextureRemoves = PendingTextureRemoves;

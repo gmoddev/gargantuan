@@ -197,7 +197,15 @@ namespace gargantuan {
 		std::vector<RenderTextureCreate> TextureCreates;
 		std::vector<RenderTextureUpdate> TextureUpdates;
 		std::vector<RenderTextureRemove> TextureRemoves;
+		// A UI frame is complete state when present. Incremental publications leave
+		// the projection's committed UI untouched unless this bit is set.
+		bool UiChanged = false;
 		RenderUiFrame Ui;
+		// Foundation 2 can publish the same immutable complete frame through the
+		// runtime, publisher, projection, and renderer without copying its geometry.
+		// Ui remains the value-form compatibility surface for direct producers.
+		std::shared_ptr<const RenderUiFrame> SharedUi;
+		[[nodiscard]] const RenderUiFrame &GetUi() const { return SharedUi ? *SharedUi : Ui; }
 		std::vector<RenderExtractionDiagnostic> Diagnostics;
 	};
 

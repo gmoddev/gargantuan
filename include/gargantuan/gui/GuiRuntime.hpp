@@ -42,6 +42,7 @@ namespace gargantuan {
 		void Publish(RenderPublisher &Publisher);
 		[[nodiscard]] bool ProcessEvent(const HostEvent &Event);
 		[[nodiscard]] bool ProcessPointer(const GuiPointerInput &Input);
+		[[nodiscard]] std::optional<HostCommand> SynchronizeTextInput();
 		void RequestFocus(ObjectId Object);
 		void ReleaseFocus(ObjectId Object);
 		void CapturePointer(int PointerId, ObjectId Object);

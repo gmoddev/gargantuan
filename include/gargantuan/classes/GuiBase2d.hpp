@@ -4,7 +4,7 @@
 #include "gargantuan/classes/generated/GuiBase2d.hpp"
 
 namespace gargantuan {
-	G_ENUM(AccessibilityRole, Automatic, None, Group, Text, Image, Button);
+	G_ENUM(AccessibilityRole, Automatic, None, Group, Text, Image, Button, TextBox, ScrollView);
 
 	class GuiRuntime;
 	class GuiBase2d : public GuiBase {

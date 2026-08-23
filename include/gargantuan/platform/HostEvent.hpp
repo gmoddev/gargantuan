@@ -9,6 +9,7 @@
 
 namespace gargantuan {
 	inline constexpr std::size_t MAX_TEXT_INPUT_BYTES = 63;
+	inline constexpr std::size_t MAX_COMPOSITION_INPUT_BYTES = 4095;
 
 	enum class ButtonState : std::uint8_t { Released, Pressed };
 
@@ -152,6 +153,31 @@ namespace gargantuan {
 
 	struct TextInputEvent { KeyboardDeviceId Device; BoundedUtf8 Text; };
 
+	class BoundedCompositionUtf8 final {
+	  public:
+		[[nodiscard]] static std::optional<BoundedCompositionUtf8> From(std::string_view Text);
+		[[nodiscard]] std::string_view View() const { return {Bytes.data(), Size}; }
+
+	  private:
+		std::array<char, MAX_COMPOSITION_INPUT_BYTES> Bytes{};
+		std::uint16_t Size = 0;
+	};
+
+	struct TextEditingEvent {
+		KeyboardDeviceId Device;
+		BoundedCompositionUtf8 Text;
+		std::int32_t SelectionStart = 0;
+		std::int32_t SelectionLength = 0;
+	};
+
+	enum class TouchPointerAction : std::uint8_t { Down, Move, Up, Cancel };
+	struct TouchPointerEvent {
+		PointerDeviceId Pointer;
+		HostPoint Position;
+		HostPoint Delta;
+		TouchPointerAction Action = TouchPointerAction::Move;
+	};
+
 	enum class GamepadButton : std::uint8_t {
 		South, East, West, North, Back, Guide, Start, LeftStick, RightStick,
 		LeftShoulder, RightShoulder, DPadUp, DPadDown, DPadLeft, DPadRight,
@@ -173,12 +199,20 @@ namespace gargantuan {
 	struct WindowCloseEvent {};
 
 	using HostEvent = std::variant<
-		KeyEvent, PointerMoveEvent, PointerButtonEvent, WheelEvent, TextInputEvent,
+		KeyEvent, PointerMoveEvent, PointerButtonEvent, WheelEvent, TextInputEvent, TextEditingEvent, TouchPointerEvent,
 		GamepadButtonEvent, GamepadAxisEvent, WindowResizeEvent, FocusEvent, WindowCloseEvent
 	>;
 
 	struct SetRelativePointerMode { bool Enabled = false; };
-	using HostCommand = std::variant<SetRelativePointerMode>;
+	struct SetTextInputState {
+		bool Active = false;
+		std::int32_t X = 0;
+		std::int32_t Y = 0;
+		std::int32_t Width = 0;
+		std::int32_t Height = 0;
+		std::int32_t Cursor = 0;
+	};
+	using HostCommand = std::variant<SetRelativePointerMode, SetTextInputState>;
 	struct HostEventResult {
 		bool Consumed = false;
 		std::optional<HostCommand> Command;
