@@ -8,6 +8,65 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+set(GARGANTUAN_REQUIRED_DEPENDENCY_FILES
+	"vendor/argparse/CMakeLists.txt"
+	"vendor/box3d/CMakeLists.txt"
+	"vendor/glaze/CMakeLists.txt"
+	"vendor/glm/CMakeLists.txt"
+	"vendor/json/CMakeLists.txt"
+	"vendor/luau/CMakeLists.txt"
+	"vendor/magicenum/include/magic_enum/magic_enum.hpp"
+	"vendor/sdl/CMakeLists.txt"
+	"vendor/sdl_image/CMakeLists.txt"
+	"vendor/sdl_ttf/CMakeLists.txt"
+	"vendor/tracy/CMakeLists.txt"
+)
+set(GARGANTUAN_MISSING_DEPENDENCY_FILES "")
+foreach(GARGANTUAN_REQUIRED_DEPENDENCY_FILE IN LISTS GARGANTUAN_REQUIRED_DEPENDENCY_FILES)
+	if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${GARGANTUAN_REQUIRED_DEPENDENCY_FILE}")
+		list(APPEND GARGANTUAN_MISSING_DEPENDENCY_FILES "${GARGANTUAN_REQUIRED_DEPENDENCY_FILE}")
+	endif()
+endforeach()
+
+if(GARGANTUAN_MISSING_DEPENDENCY_FILES)
+	list(JOIN GARGANTUAN_MISSING_DEPENDENCY_FILES ", " GARGANTUAN_MISSING_DEPENDENCY_DIAGNOSTIC)
+	message(FATAL_ERROR
+		"Required dependency content is missing: ${GARGANTUAN_MISSING_DEPENDENCY_DIAGNOSTIC}. "
+		"Clone with --recursive or run 'git submodule update --init --recursive', then configure again."
+	)
+endif()
+
+set(GARGANTUAN_REQUIRED_GENERATED_FILES "")
+foreach(GARGANTUAN_GENERATED_KIND classes services)
+	file(GLOB GARGANTUAN_GENERATED_DEFINITIONS CONFIGURE_DEPENDS
+		"${CMAKE_CURRENT_SOURCE_DIR}/assets/${GARGANTUAN_GENERATED_KIND}/*.luau"
+	)
+	foreach(GARGANTUAN_GENERATED_DEFINITION IN LISTS GARGANTUAN_GENERATED_DEFINITIONS)
+		get_filename_component(GARGANTUAN_GENERATED_NAME "${GARGANTUAN_GENERATED_DEFINITION}" NAME_WE)
+		if(NOT GARGANTUAN_GENERATED_NAME OR GARGANTUAN_GENERATED_NAME STREQUAL ".config")
+			continue()
+		endif()
+		list(APPEND GARGANTUAN_REQUIRED_GENERATED_FILES
+			"include/gargantuan/${GARGANTUAN_GENERATED_KIND}/generated/${GARGANTUAN_GENERATED_NAME}.hpp"
+			"src/${GARGANTUAN_GENERATED_KIND}/generated/${GARGANTUAN_GENERATED_NAME}.cpp"
+		)
+	endforeach()
+endforeach()
+set(GARGANTUAN_MISSING_GENERATED_FILES "")
+foreach(GARGANTUAN_REQUIRED_GENERATED_FILE IN LISTS GARGANTUAN_REQUIRED_GENERATED_FILES)
+	if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${GARGANTUAN_REQUIRED_GENERATED_FILE}")
+		list(APPEND GARGANTUAN_MISSING_GENERATED_FILES "${GARGANTUAN_REQUIRED_GENERATED_FILE}")
+	endif()
+endforeach()
+if(GARGANTUAN_MISSING_GENERATED_FILES)
+	list(JOIN GARGANTUAN_MISSING_GENERATED_FILES ", " GARGANTUAN_MISSING_GENERATED_DIAGNOSTIC)
+	message(FATAL_ERROR
+		"Required generated class/reflection sources are missing: ${GARGANTUAN_MISSING_GENERATED_DIAGNOSTIC}. "
+		"Install the pinned tools with 'rokit install', ensure clang-format is on PATH, run "
+		"'lute tools/classgen', then configure again."
+	)
+endif()
+
 set(GARGANTUAN_RUNTIME_LUAU_MODULES
 	"DefaultActionMap.luau"
 	"DefaultPlayerController.luau"
@@ -85,6 +144,8 @@ foreach(SHADER IN LISTS SHADER_SOURCES)
 		list(APPEND SHADER_OUTPUTS ${METALLIB_OUTPUT})
 	endif()
 endforeach()
+
+add_custom_target(gargantuan_shaders DEPENDS ${SHADER_OUTPUTS})
 
 ################################################################################
 # Vendors
@@ -186,14 +247,18 @@ file(GLOB_RECURSE GARGANTUAN_SOURCES CONFIGURE_DEPENDS
 )
 list(REMOVE_ITEM GARGANTUAN_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/Main.cpp")
 list(REMOVE_ITEM GARGANTUAN_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/serialization/GlazePrototype.cpp")
+set(GARGANTUAN_TELEMETRY_HOST_SOURCES
+	"${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/OptionalTelemetry.cpp"
+)
+list(REMOVE_ITEM GARGANTUAN_SOURCES ${GARGANTUAN_TELEMETRY_HOST_SOURCES})
 if(NOT GARGANTUAN_WITH_FILAMENT)
 	list(REMOVE_ITEM GARGANTUAN_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/render/FilamentRenderer.cpp")
 endif()
 list(REMOVE_ITEM GARGANTUAN_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/network/GameNetworkingSocketsTransport.cpp")
 
 add_library(gargantuan_core OBJECT ${GARGANTUAN_SOURCES})
-add_executable(gargantuan "src/Main.cpp" ${SHADER_OUTPUTS})
-target_link_libraries(gargantuan PRIVATE gargantuan_core)
+add_executable(gargantuan "src/Main.cpp" ${GARGANTUAN_TELEMETRY_HOST_SOURCES} ${SHADER_OUTPUTS})
+target_link_libraries(gargantuan PRIVATE gargantuan_core ${CMAKE_DL_LIBS})
 
 if(MSVC)
 	target_compile_options(gargantuan_core PUBLIC /EHsc)
@@ -335,12 +400,31 @@ if(BUILD_TESTING)
 	endif()
 	add_executable(gargantuan_foundation_tests "tests/FoundationTests.cpp")
 	target_link_libraries(gargantuan_foundation_tests PRIVATE gargantuan_core nlohmann_json)
+	add_executable(gargantuan_renderer_publication_tests "tests/RendererPublicationTests.cpp")
+	target_link_libraries(gargantuan_renderer_publication_tests PRIVATE gargantuan_core)
+	add_library(gargantuan_fake_telemetry SHARED "tests/telemetry/FakeTelemetryLibrary.cpp")
+	target_include_directories(gargantuan_fake_telemetry PRIVATE "src")
+	add_library(gargantuan_fake_telemetry_missing_export SHARED "tests/telemetry/FakeTelemetryMissingExport.cpp")
+	add_executable(gargantuan_optional_telemetry_tests
+		"tests/OptionalTelemetryTests.cpp"
+		${GARGANTUAN_TELEMETRY_HOST_SOURCES}
+	)
+	target_include_directories(gargantuan_optional_telemetry_tests PRIVATE "src")
+	target_link_libraries(gargantuan_optional_telemetry_tests PRIVATE ${CMAKE_DL_LIBS})
+	if(MSVC)
+		target_compile_options(gargantuan_fake_telemetry PRIVATE /EHsc)
+		target_compile_options(gargantuan_optional_telemetry_tests PRIVATE /EHsc)
+	endif()
 	if(GARGANTUAN_BUILD_GLAZE_SERIALIZATION_PROTOTYPE)
 		target_compile_definitions(gargantuan_foundation_tests PRIVATE GARGANTUAN_WITH_GLAZE_SERIALIZATION_PROTOTYPE=1)
 		target_link_libraries(gargantuan_foundation_tests PRIVATE gargantuan_glaze_serialization_prototype)
 	endif()
 	add_executable(gargantuan_physics_backend_tests "tests/PhysicsBackendTests.cpp")
 	target_link_libraries(gargantuan_physics_backend_tests PRIVATE gargantuan_core)
+	add_executable(gargantuan_soft_body_physics_tests "tests/SoftBodyPhysicsTests.cpp")
+	target_link_libraries(gargantuan_soft_body_physics_tests PRIVATE gargantuan_core)
+	add_executable(gargantuan_soft_body_physics_benchmark "tests/SoftBodyPhysicsBenchmark.cpp")
+	target_link_libraries(gargantuan_soft_body_physics_benchmark PRIVATE gargantuan_core nlohmann_json)
 	add_executable(gargantuan_platform_input_boundary_tests "tests/PlatformInputBoundaryTests.cpp")
 	target_link_libraries(gargantuan_platform_input_boundary_tests PRIVATE gargantuan_core)
 	add_executable(gargantuan_player_runtime_tests "tests/PlayerRuntimeTests.cpp")
@@ -380,8 +464,24 @@ if(BUILD_TESTING)
 	if(GARGANTUAN_BUILD_RENDERER_BENCHMARKS)
 		add_executable(gargantuan_renderer_benchmark "tests/RendererBenchmark.cpp")
 		target_link_libraries(gargantuan_renderer_benchmark PRIVATE gargantuan_core)
+		add_executable(gargantuan_renderer_foundation2_benchmark "tests/RendererFoundation2Benchmark.cpp")
+		target_link_libraries(gargantuan_renderer_foundation2_benchmark PRIVATE gargantuan_core)
+		add_executable(gargantuan_renderer_foundation2_gpu_benchmark "tests/RendererFoundation2GpuBenchmark.cpp")
+		target_link_libraries(gargantuan_renderer_foundation2_gpu_benchmark PRIVATE gargantuan_core)
+		add_dependencies(gargantuan_renderer_foundation2_gpu_benchmark gargantuan_shaders)
 		add_executable(gargantuan_editor_viewport_smoke "tests/EditorViewportSmoke.cpp")
 		target_link_libraries(gargantuan_editor_viewport_smoke PRIVATE gargantuan_core)
+		add_dependencies(gargantuan_editor_viewport_smoke gargantuan_shaders)
+		add_test(NAME gargantuan_renderer_projection_headless
+			COMMAND gargantuan_renderer_benchmark
+				--backend=projection --scenario=mixed --count=3 --frames=2 --warmup=1
+				--width=320 --height=180 --shadows=off
+		)
+		add_test(NAME gargantuan_renderer_backend_headless
+			COMMAND gargantuan_renderer_benchmark
+				--backend=headless --scenario=mixed --count=3 --frames=2 --warmup=1
+				--width=320 --height=180 --shadows=off
+		)
 	endif()
 	if(GARGANTUAN_BUILD_SERIALIZATION_BENCHMARKS)
 		add_executable(gargantuan_serialization_benchmark "tests/SerializationBenchmark.cpp")
@@ -407,9 +507,12 @@ if(BUILD_TESTING)
 		set(GARGANTUAN_SDL_RUNTIME_TARGETS
 			gargantuan
 			gargantuan_foundation_tests
+			gargantuan_renderer_publication_tests
 			gargantuan_prerun_bootstrap_tests
 			gargantuan_attributes_tags_profile
 			gargantuan_physics_backend_tests
+			gargantuan_soft_body_physics_tests
+			gargantuan_soft_body_physics_benchmark
 			gargantuan_platform_input_boundary_tests
 			gargantuan_player_runtime_tests
 			gargantuan_networking_contract_tests
@@ -457,6 +560,7 @@ if(BUILD_TESTING)
 		if(GARGANTUAN_BUILD_RENDERER_BENCHMARKS)
 			list(APPEND GARGANTUAN_SDL_RUNTIME_TARGETS
 				gargantuan_renderer_benchmark
+				gargantuan_renderer_foundation2_benchmark
 				gargantuan_editor_viewport_smoke
 			)
 		endif()
@@ -468,7 +572,15 @@ if(BUILD_TESTING)
 		endforeach()
 	endif()
 	add_test(NAME gargantuan_foundation COMMAND gargantuan_foundation_tests)
+	add_test(NAME gargantuan_renderer_publication COMMAND gargantuan_renderer_publication_tests)
+	add_test(NAME gargantuan_optional_telemetry
+		COMMAND gargantuan_optional_telemetry_tests
+			"$<TARGET_FILE:gargantuan_fake_telemetry>"
+			"$<TARGET_FILE:gargantuan_fake_telemetry_missing_export>"
+	)
 	add_test(NAME gargantuan_physics_backend COMMAND gargantuan_physics_backend_tests)
+	add_test(NAME gargantuan_soft_body_physics COMMAND gargantuan_soft_body_physics_tests)
+	add_test(NAME gargantuan_soft_body_physics_benchmark_smoke COMMAND gargantuan_soft_body_physics_benchmark --quick)
 	add_test(NAME gargantuan_platform_input_boundary COMMAND gargantuan_platform_input_boundary_tests)
 	add_test(NAME gargantuan_player_runtime COMMAND gargantuan_player_runtime_tests)
 	add_test(NAME gargantuan_prerun_bootstrap COMMAND gargantuan_prerun_bootstrap_tests)
@@ -480,12 +592,43 @@ if(BUILD_TESTING)
 	add_test(NAME gargantuan_remote_luau COMMAND gargantuan_remote_luau_tests)
 	add_test(NAME gargantuan_replication_benchmark_smoke COMMAND gargantuan_replication_benchmark)
 	add_test(NAME gargantuan_remote_benchmark_smoke COMMAND gargantuan_remote_benchmark)
+	set_tests_properties(gargantuan_shader_tool_validation PROPERTIES LABELS "build;shader" TIMEOUT 60)
+	set_tests_properties(gargantuan_foundation PROPERTIES
+		LABELS "foundation;runtime;serialization;editorhost;protocol;renderer" TIMEOUT 300
+	)
+	set_tests_properties(gargantuan_renderer_publication PROPERTIES LABELS "renderer;runtime;headless" TIMEOUT 120)
+	set_tests_properties(gargantuan_optional_telemetry PROPERTIES LABELS "telemetry;runtime;fail-open" TIMEOUT 60)
+	set_tests_properties(gargantuan_physics_backend PROPERTIES LABELS "physics;runtime" TIMEOUT 120)
+	set_tests_properties(gargantuan_soft_body_physics PROPERTIES LABELS "physics;deformable;renderer;serialization;headless" TIMEOUT 180)
+	set_tests_properties(gargantuan_soft_body_physics_benchmark_smoke PROPERTIES LABELS "physics;deformable;benchmark;headless" TIMEOUT 120)
+	set_tests_properties(gargantuan_platform_input_boundary PROPERTIES LABELS "platform;input;runtime" TIMEOUT 120)
+	set_tests_properties(gargantuan_player_runtime PROPERTIES LABELS "player;runtime;headless" TIMEOUT 180)
+	set_tests_properties(gargantuan_prerun_bootstrap PROPERTIES LABELS "prerun;runtime" TIMEOUT 120)
+	set_tests_properties(gargantuan_networking_contracts gargantuan_simulated_transport gargantuan_scheduler_contract
+		gargantuan_replication gargantuan_remote gargantuan_remote_luau gargantuan_replication_benchmark_smoke
+		gargantuan_remote_benchmark_smoke PROPERTIES LABELS "networking;runtime" TIMEOUT 180
+	)
+	if(GARGANTUAN_BUILD_RENDERER_BENCHMARKS)
+		set_tests_properties(gargantuan_renderer_projection_headless gargantuan_renderer_backend_headless PROPERTIES
+			LABELS "renderer;headless" TIMEOUT 120
+		)
+	endif()
+	if(GARGANTUAN_BUILD_SERIALIZATION_BENCHMARKS)
+		set_tests_properties(SerializationBenchmarkSmoke PROPERTIES LABELS "serialization;runtime" TIMEOUT 180)
+	endif()
+	if(GARGANTUAN_BUILD_GLAZE_SERIALIZATION_PROTOTYPE)
+		set_tests_properties(GlazeSerializationTests PROPERTIES LABELS "serialization;experimental" TIMEOUT 180)
+	endif()
 	if(GARGANTUAN_WITH_GNS)
 		add_test(NAME gargantuan_real_transport COMMAND gargantuan_real_transport_tests)
 		add_test(NAME gargantuan_remote_real_transport COMMAND gargantuan_remote_real_transport_tests)
+		set_tests_properties(gargantuan_real_transport gargantuan_remote_real_transport PROPERTIES
+			LABELS "networking;transport;optional" TIMEOUT 180
+		)
 	endif()
 	if(GARGANTUAN_WITH_FILAMENT)
 		add_test(NAME gargantuan_filament_renderer COMMAND gargantuan_filament_renderer_tests)
+		set_tests_properties(gargantuan_filament_renderer PROPERTIES LABELS "renderer;gpu;optional" TIMEOUT 180)
 	endif()
 endif()
 

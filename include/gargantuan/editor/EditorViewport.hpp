@@ -5,6 +5,8 @@
 
 #pragma once
 
+#include "gargantuan/render/RenderProjection.hpp"
+#include "gargantuan/render/RenderPublication.hpp"
 #include "gargantuan/render/RenderSnapshot.hpp"
 #include "gargantuan/runtime/ObjectId.hpp"
 
@@ -30,6 +32,11 @@ namespace gargantuan {
 		float X,
 		float Y
 	);
+	[[nodiscard]] std::optional<EditorViewportPick> PickEditorViewport(
+		const RenderProjection &Projection,
+		float X,
+		float Y
+	);
 
 	class EditorViewportRenderer final {
 	  public:
@@ -40,7 +47,9 @@ namespace gargantuan {
 		EditorViewportRenderer &operator=(const EditorViewportRenderer &) = delete;
 
 		void Resize(std::uint32_t Width, std::uint32_t Height);
-		[[nodiscard]] EditorViewportFrame Capture(RenderSnapshotPtr Snapshot);
+		void ApplyPublication(RenderPublicationPtr Publication);
+		[[nodiscard]] EditorViewportFrame Capture(RenderPublicationPtr Publication);
+		[[nodiscard]] std::optional<EditorViewportPick> Pick(float X, float Y) const;
 
 	  private:
 		struct Backend;

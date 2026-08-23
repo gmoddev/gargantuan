@@ -4,15 +4,16 @@
 
 The original audit covered repository commit
 `e4fca3575cc84c0d5fa4a946b88bf528aac2223b`. This document was reconciled on
-2026-08-13 against current `main` plus the WorldRoot hardening in this change.
+2026-08-21 against current `main`, including the root-confined SourceMount
+compatibility path.
 This is not a new exhaustive audit: each original finding was checked against
 current implementation and tests, and stale evidence was corrected.
 
-Across the 33 validated findings, 10 are resolved, 4 are partially resolved,
-and 19 remain open. Across the 14 original proof-needed candidates, 2 are now
+Across the 33 validated findings, 11 are resolved, 4 are partially resolved,
+and 18 remain open. Across the 14 original proof-needed candidates, 2 are now
 resolved, 11 remain deferred, and 1 is no longer applicable. Overall status
-counts are therefore: **Resolved 12**, **Partially resolved 4**,
-**Still open 19**, **Deferred 11**, and **No longer applicable 1**.
+counts are therefore: **Resolved 13**, **Partially resolved 4**,
+**Still open 18**, **Deferred 11**, and **No longer applicable 1**.
 
 Severity describes the current local prototype boundary, not a future networked
 service. “High” generally means a trusted-looking project/source operation can
@@ -47,7 +48,7 @@ trust decision or capability boundary.
 
 | ID | Status | Current evidence and remaining action |
 |---|---|---|
-| SEC-001 | Still open | `src/classes/FileLink.cpp` and normal `Engine` project startup still lack a canonical project trust/confinement boundary. EditorHost avoids execution but does not close the game-runtime path. |
+| SEC-001 | Resolved | `SourceMount` owns a canonical project root, rejects absolute/traversal/link escapes with component containment, bounds reads/enumeration/imports, and is the only filesystem path used by `FileLink`; adversarial lifecycle tests preserve last-known-good content. Explicit project trust before automatic runtime script execution remains separately open as SEC-024. |
 | SEC-002 | Resolved | `InstanceSerialization::TryDeserializeProperty` materializes JSON strings as owned `std::string`; regression coverage exercises nested project loading. Retained Luau-origin `string_view` properties remain tracked separately in the deferred table. |
 | SEC-003 | Resolved | `src/scripting/ModuleResolution.cpp` uses `dynamic_pointer_cast<ModuleScript>` and wrong-type tests in `FoundationTests.cpp` require rejection. |
 | SEC-004 | Resolved | `src/runtime/DataModelRoot.cpp::PrepareDataModelRoot` checks `DataModel` and otherwise parents a standalone root beneath `Workspace`; both paths have foundation coverage. |
@@ -131,8 +132,9 @@ Deferred does not mean safe. Each belongs in the pre-alpha verification backlog.
 
 ## Security release gates
 
-Do not open arbitrary downloaded projects until SEC-001 through SEC-014 are fixed
-and regression-tested. Do not enable public multiplayer until the future threat
+Do not open arbitrary downloaded projects until every still-open or partially
+resolved project-input finding in SEC-002 through SEC-014 and the project-trust
+boundary in SEC-024 are fixed and regression-tested. Do not enable public multiplayer until the future threat
 model, authority checks, schema validation, rate limits, fuzzing, and operational
 abuse controls in
 [`../FutureArchitecture/NetworkingAndSecurity.md`](../FutureArchitecture/NetworkingAndSecurity.md)

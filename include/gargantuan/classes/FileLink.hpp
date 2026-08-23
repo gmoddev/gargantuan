@@ -6,8 +6,8 @@
 #pragma once
 
 #include "gargantuan/classes/generated/FileLink.hpp"
+#include "gargantuan/filesystem/SourceMount.hpp"
 
-#include <filesystem>
 #include <vector>
 
 namespace gargantuan {
@@ -17,9 +17,7 @@ namespace gargantuan {
 		std::vector<std::shared_ptr<Instance>> OwnedSiblings;
 		bool Synchronizing = false;
 
-		// TODO: This syncs on engine start up. We should implement file
-		// watching. Also use the Filesystem classes
-		void Synchronize(const std::filesystem::path absolutePath);
+		[[nodiscard]] SourceMountResult<std::size_t> Synchronize(SourceMount &Mount);
 
 		FileLink();
 	};

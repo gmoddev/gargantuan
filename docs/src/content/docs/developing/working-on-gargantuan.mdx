@@ -7,9 +7,10 @@ import { Aside, Tabs, TabItem } from "@astrojs/starlight/components"
 
 Are you interested in working _on_ Gargantuan? This guide walks through how to compile and work on your own homegrown Gargantuans.
 ## Supported Platforms
-Gargantuan works across most major operating systems, which include the latest versions of **Windows, MacOS and Linux.**
-
-However, older OS versions may lack support for the libraries necessary for Gargantuan to run, and we do not guarantee support nor flawless installation for any of them.
+Gargantuan's primary continuously validated development platform is **Windows
+x64 with Visual Studio 2026/MSVC 19.50 or newer**. macOS and Linux remain
+development targets, but they are not part of the current required CI gate and
+should not yet be treated as continuously supported configurations.
 ## Prerequisites
 ### Windows
 - Windows 10 and/or 11
@@ -161,9 +162,15 @@ just fresh_example cube.luau
 just fresh_testbed
 ```
 
-Tests are written using the [Lest](https://lest-luau.github.io/lest/writing-tests) framework. To run the test suite, use the `test` recipe:
+The native regression suite is registered with CTest. Run the complete suite
+from a configured build with:
 ```
-just test
+ctest --test-dir build --output-on-failure --no-tests=error
 ```
+
+The legacy `just test` recipe currently runs only the Lest Luau core suite and
+is not a replacement for CTest. The required Windows Release CI contract is
+documented in
+[Continuous native build and test contract](../../../../../devdocs/CurrentArchitecture/ContinuousIntegration.md).
 
 **You're now fully ready to work on Gargantuan!** Make sure to [follow our guidelines & best practices](./contributing-to-gargantuan) for submitting contributions, and have at it :D

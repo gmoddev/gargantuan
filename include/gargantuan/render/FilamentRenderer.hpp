@@ -34,7 +34,8 @@ namespace gargantuan {
 		);
 		~FilamentRenderer() override;
 
-		void Draw(RenderSnapshotPtr Snapshot) override;
+		using BaseRenderer::Draw;
+		void Draw(RenderPublicationPtr Publication) override;
 		void Resize(int WidthValue, int HeightValue) override;
 		void Destroy() override;
 		[[nodiscard]] std::pair<std::uint32_t, std::uint32_t> GetViewportSize() const override;
@@ -50,5 +51,6 @@ namespace gargantuan {
 	  private:
 		struct Impl;
 		std::unique_ptr<Impl> Implementation;
+		RenderProjection Projection;
 	};
 } // namespace gargantuan

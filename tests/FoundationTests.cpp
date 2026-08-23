@@ -1,5 +1,6 @@
 #include "gargantuan/assets/InstanceSerialization.hpp"
 #include "gargantuan/classes/DataModel.hpp"
+#include "gargantuan/classes/FileLink.hpp"
 #include "gargantuan/classes/Folder.hpp"
 #include "gargantuan/classes/Frame.hpp"
 #include "gargantuan/classes/ModuleScript.hpp"
@@ -12,6 +13,7 @@
 #include "gargantuan/editor/EditorViewport.hpp"
 #include "gargantuan/filesystem/DiskFilesystem.hpp"
 #include "gargantuan/filesystem/Project.hpp"
+#include "gargantuan/filesystem/SourceMount.hpp"
 #include "gargantuan/network/ReplicaApplier.hpp"
 #include "gargantuan/network/ReplicationCoordinator.hpp"
 #include "gargantuan/render/RenderExtractor.hpp"
@@ -111,6 +113,41 @@ namespace {
 		}
 		Check(false, message);
 	}
+
+	class FaultingSourceFilesystem final : public gargantuan::BaseFilesystem {
+	  public:
+		explicit FaultingSourceFilesystem(const std::filesystem::path &Root)
+			: BaseFilesystem(Root), Backend(Root) {}
+
+		bool FailEnumeration = false;
+
+		[[nodiscard]] gargantuan::FileMetadata Metadata(const std::filesystem::path &Path) const override {
+			return Backend.Metadata(Path);
+		}
+		[[nodiscard]] bool Exists(const std::filesystem::path &Path) const override { return Backend.Exists(Path); }
+		[[nodiscard]] std::unique_ptr<gargantuan::FileHandle> Open(
+			const std::filesystem::path &Path,
+			const gargantuan::FileOpen &Mode = gargantuan::FileOpen::Read
+		) override {
+			return Backend.Open(Path, Mode);
+		}
+		void CreateDirectory(const std::filesystem::path &Path) override { Backend.CreateDirectory(Path); }
+		void Remove(const std::filesystem::path &Path) override { Backend.Remove(Path); }
+		[[nodiscard]] std::vector<gargantuan::DirectoryEntry> GetChildren(
+			const std::filesystem::path &Path
+		) override {
+			if (FailEnumeration) throw std::runtime_error("injected enumeration failure");
+			return Backend.GetChildren(Path);
+		}
+		[[nodiscard]] std::vector<gargantuan::DirectoryEntry> GetDescendants(
+			const std::filesystem::path &Path
+		) override {
+			return Backend.GetDescendants(Path);
+		}
+
+	  private:
+		gargantuan::DiskFilesystem Backend;
+	};
 
 	struct SchemaTestTypeA {};
 	struct SchemaTestTypeB {};
@@ -3256,7 +3293,8 @@ namespace {
 		using namespace gargantuan;
 		class RecordingRenderer final : public BaseRenderer {
 		  public:
-			void Draw(RenderSnapshotPtr Snapshot) override { LastSnapshot = std::move(Snapshot); }
+			using BaseRenderer::Draw;
+			void Draw(RenderPublicationPtr Publication) override { LastPublication = std::move(Publication); }
 			void Resize(int WidthValue, int HeightValue) override {
 				Width = WidthValue;
 				Height = HeightValue;
@@ -3266,7 +3304,7 @@ namespace {
 				return {static_cast<std::uint32_t>(Width), static_cast<std::uint32_t>(Height)};
 			}
 
-			RenderSnapshotPtr LastSnapshot;
+			RenderPublicationPtr LastPublication;
 			int Width = 0;
 			int Height = 0;
 			bool Destroyed = false;
@@ -3282,9 +3320,11 @@ namespace {
 		Renderer.Draw(Immutable);
 		Renderer.Destroy();
 		Check(
-			Renderer.LastSnapshot == Immutable && Renderer.GetViewportSize() == std::pair<std::uint32_t, std::uint32_t>{320, 200} &&
+			Renderer.LastPublication && Renderer.LastPublication->FullResync &&
+			Renderer.LastPublication->Creates.size() == Immutable->Items.size() &&
+			Renderer.GetViewportSize() == std::pair<std::uint32_t, std::uint32_t>{320, 200} &&
 				Renderer.Destroyed,
-			"backend-neutral renderer receives immutable snapshots and owns resize/shutdown behavior"
+			"backend-neutral renderer receives immutable publications and owns resize/shutdown behavior"
 		);
 
 		RenderProjection Projection;
@@ -3628,6 +3668,261 @@ namespace {
 			Host.HandleRequest(ReadSerializationFixture("editorhost_v1_request.json")) ==
 				ReadSerializationFixture("editorhost_v1_response.json"),
 			"EditorHost request and response fixtures preserve the versioned JSON envelope"
+		);
+	}
+
+	void TestSourceMountAndFileLink() {
+		using namespace gargantuan;
+		const auto Unique = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+		const auto TemporaryRoot = std::filesystem::temp_directory_path() / ("gargantuan-source-mount-" + Unique);
+		const auto ExternalRoot = std::filesystem::temp_directory_path() / ("gargantuan-source-external-" + Unique);
+		struct TemporarySourceCleanup {
+			std::filesystem::path Root;
+			std::filesystem::path External;
+			~TemporarySourceCleanup() {
+				std::error_code Error;
+				std::filesystem::remove_all(Root, Error);
+				Error.clear();
+				std::filesystem::remove_all(External, Error);
+			}
+		} Cleanup{TemporaryRoot, ExternalRoot};
+
+		auto WriteFile = [](const std::filesystem::path &Path, std::string_view Contents) {
+			std::filesystem::create_directories(Path.parent_path());
+			std::ofstream Output(Path, std::ios::binary | std::ios::trunc);
+			if (!Output) throw std::runtime_error("source-mount test could not open fixture file");
+			Output.write(Contents.data(), static_cast<std::streamsize>(Contents.size()));
+			if (!Output) throw std::runtime_error("source-mount test could not write fixture file");
+		};
+		auto WriteModel = [&](const std::filesystem::path &Path, const std::shared_ptr<Instance> &Root) {
+			auto SerializableRoot = Root;
+			WriteFile(Path, InstanceSerialization::Serialize(InstanceSerialization::InstanceFormat::Json, SerializableRoot));
+		};
+
+		std::filesystem::create_directories(TemporaryRoot / "Source" / "Package");
+		std::filesystem::create_directories(ExternalRoot);
+		WriteFile(TemporaryRoot / "Source" / "old.luau", "return 'old'");
+		WriteFile(TemporaryRoot / "Source" / "Package" / "utility.luau", "return 1");
+		WriteFile(ExternalRoot / "outside.luau", "error('outside mount')");
+
+		auto NestedRoot = std::make_shared<Folder>();
+		NestedRoot->SetArchivable(true);
+		NestedRoot->SetName("NestedModel");
+		auto NestedPart = std::make_shared<Part>();
+		NestedPart->SetArchivable(true);
+		NestedPart->SetName("NestedPart");
+		NestedPart->SetParent(NestedRoot);
+		WriteModel(TemporaryRoot / "Source" / "model.instance.json", NestedRoot);
+
+		FaultingSourceFilesystem Filesystem(TemporaryRoot);
+		SourceMount Mount(Filesystem);
+		auto Parent = std::make_shared<Folder>();
+		Parent->SetName("LinkedParent");
+		auto Link = std::make_shared<FileLink>();
+		Link->SetName("Sources");
+		Link->SetPath("Source");
+		Link->SetParent(Parent);
+
+		auto Initial = Link->Synchronize(Mount);
+		auto Old = Parent->FindFirstChild("old", false);
+		auto Package = Parent->FindFirstChild("Package", false);
+		auto ImportedModel = Parent->FindFirstChild("NestedModel", false);
+		Check(
+			Initial && *Initial == 3 && std::dynamic_pointer_cast<ModuleScript>(Old) && Package &&
+				std::dynamic_pointer_cast<ModuleScript>(Package->FindFirstChild("utility", false)) && ImportedModel &&
+				std::dynamic_pointer_cast<Part>(ImportedModel->FindFirstChild("NestedPart", false)),
+			"SourceMount imports normal linked directories, scripts, and bounded nested Instance models"
+		);
+
+		Link->SetPath("Missing");
+		auto Missing = Link->Synchronize(Mount);
+		Check(
+			!Missing && Missing.error().Code == SourceMountErrorCode::Missing && Old && !Old->GetDestroyed() &&
+				Old->GetParent() == Parent,
+			"missing source returns structured failure and preserves the last-known-good linked tree"
+		);
+		Link->SetPath("Source/old.luau");
+		auto FileAsDirectory = Link->Synchronize(Mount);
+		Check(
+			!FileAsDirectory && FileAsDirectory.error().Code == SourceMountErrorCode::WrongType,
+			"FileLink rejects a file where a source directory is required"
+		);
+		Link->SetPath("../" + ExternalRoot.filename().string());
+		auto Traversal = Link->Synchronize(Mount);
+		Check(
+			!Traversal && Traversal.error().Code == SourceMountErrorCode::PathEscape,
+			"SourceMount rejects parent traversal before host filesystem access"
+		);
+		Link->SetPath(ExternalRoot.string());
+		auto Absolute = Link->Synchronize(Mount);
+		Check(
+			!Absolute && Absolute.error().Code == SourceMountErrorCode::AbsolutePath,
+			"SourceMount rejects absolute FileLink paths"
+		);
+
+		std::error_code SymlinkError;
+		std::filesystem::create_directory_symlink(ExternalRoot, TemporaryRoot / "Escape", SymlinkError);
+		if (!SymlinkError) {
+			Link->SetPath("Escape");
+			auto LinkEscape = Link->Synchronize(Mount);
+			Check(
+				!LinkEscape && LinkEscape.error().Code == SourceMountErrorCode::LinkNotAllowed &&
+					!Parent->FindFirstChild("outside", false),
+				"SourceMount rejects symlink or reparse-point escapes without importing outside content"
+			);
+		} else {
+			std::cerr << "SourceMount symlink/reparse policy test skipped: " << SymlinkError.message() << '\n';
+		}
+
+		Link->SetPath("Source");
+		Filesystem.FailEnumeration = true;
+		auto TransientFailure = Link->Synchronize(Mount);
+		Check(
+			!TransientFailure && TransientFailure.error().Code == SourceMountErrorCode::Inaccessible && Old &&
+				!Old->GetDestroyed() && Old->GetParent() == Parent,
+			"transient backend enumeration failure preserves linked content and returns structured failure"
+		);
+		Filesystem.FailEnumeration = false;
+		std::filesystem::remove(TemporaryRoot / "Source" / "old.luau");
+		WriteFile(TemporaryRoot / "Source" / "new.luau", "return 'new'");
+		bool ObservedOldDuringCommit = false;
+		auto AddedConnection = Parent->ChildAdded->Connect([&](std::shared_ptr<Instance> Added) {
+			if (Added->GetName() == "new")
+				ObservedOldDuringCommit = Old && !Old->GetDestroyed() && Old->GetParent() == Parent;
+		});
+		auto Recovered = Link->Synchronize(Mount);
+		auto New = Parent->FindFirstChild("new", false);
+		Check(
+			Recovered && New && std::dynamic_pointer_cast<ModuleScript>(New) && ObservedOldDuringCommit &&
+				Old->GetDestroyed() && !Parent->FindFirstChild("old", false),
+			"later synchronization succeeds after failure and removes old linked state only after candidate publication"
+		);
+		AddedConnection->Disconnect();
+
+		std::filesystem::create_directories(TemporaryRoot / "Malformed");
+		WriteFile(TemporaryRoot / "Malformed" / "a.luau", "return 'candidate'");
+		WriteFile(TemporaryRoot / "Malformed" / "z.instance.json", "{not valid json");
+		Link->SetPath("Malformed");
+		auto Malformed = Link->Synchronize(Mount);
+		Check(
+			!Malformed && Malformed.error().Code == SourceMountErrorCode::MalformedInstance && New &&
+				!New->GetDestroyed() && New->GetParent() == Parent && !Parent->FindFirstChild("a", false),
+			"malformed nested model publishes no partial candidate and preserves authoritative linked state"
+		);
+
+		std::filesystem::create_directories(TemporaryRoot / "Recursive");
+		auto RecursiveLink = std::make_shared<FileLink>();
+		RecursiveLink->SetArchivable(true);
+		RecursiveLink->SetName("RecursiveLink");
+		RecursiveLink->SetPath("Recursive");
+		WriteModel(TemporaryRoot / "Recursive" / "recursive.instance.json", RecursiveLink);
+		Link->SetPath("Recursive");
+		auto Recursive = Link->Synchronize(Mount);
+		Check(
+			!Recursive && Recursive.error().Code == SourceMountErrorCode::RecursiveMount && New &&
+				!New->GetDestroyed(),
+			"nested Instance models reject FileLink self-reference before publication"
+		);
+
+		auto DepthPath = TemporaryRoot / "Depth";
+		for (int Index = 0; Index < 4; ++Index) DepthPath /= std::format("Level{}", Index);
+		std::filesystem::create_directories(DepthPath);
+		WriteFile(DepthPath / "deep.luau", "return true");
+		SourceMountLimits DepthLimits;
+		DepthLimits.TraversalDepth = 2;
+		SourceMount DepthMount(Filesystem, DepthLimits);
+		Link->SetPath("Depth");
+		auto TooDeep = Link->Synchronize(DepthMount);
+		Check(
+			!TooDeep && TooDeep.error().Code == SourceMountErrorCode::TraversalDepthLimit,
+			"SourceMount enforces its directory traversal depth limit"
+		);
+
+		std::filesystem::create_directories(TemporaryRoot / "Entries");
+		for (int Index = 0; Index < 3; ++Index)
+			WriteFile(TemporaryRoot / "Entries" / std::format("{}.txt", Index), "ignored");
+		SourceMountLimits EntryLimits;
+		EntryLimits.Entries = 2;
+		SourceMount EntryMount(Filesystem, EntryLimits);
+		Link->SetPath("Entries");
+		auto TooManyEntries = Link->Synchronize(EntryMount);
+		Check(
+			!TooManyEntries && TooManyEntries.error().Code == SourceMountErrorCode::EntryLimit,
+			"SourceMount bounds enumerated entries even when their types are not imported"
+		);
+
+		std::filesystem::create_directories(TemporaryRoot / "Objects");
+		WriteFile(TemporaryRoot / "Objects" / "first.luau", "return 1");
+		WriteFile(TemporaryRoot / "Objects" / "second.luau", "return 2");
+		SourceMountLimits ObjectLimits;
+		ObjectLimits.Objects = 1;
+		SourceMount ObjectMount(Filesystem, ObjectLimits);
+		Link->SetPath("Objects");
+		auto TooManyObjects = Link->Synchronize(ObjectMount);
+		Check(
+			!TooManyObjects && TooManyObjects.error().Code == SourceMountErrorCode::ObjectLimit &&
+				!Parent->FindFirstChild("first", false),
+			"SourceMount bounds aggregate candidate objects without partial publication"
+		);
+
+		std::filesystem::create_directories(TemporaryRoot / "Bytes");
+		WriteFile(TemporaryRoot / "Bytes" / "first.luau", "1234");
+		WriteFile(TemporaryRoot / "Bytes" / "second.luau", "5678");
+		SourceMountLimits ByteLimits;
+		ByteLimits.AggregateBytes = 6;
+		SourceMount ByteMount(Filesystem, ByteLimits);
+		Link->SetPath("Bytes");
+		auto TooManyBytes = Link->Synchronize(ByteMount);
+		Check(
+			!TooManyBytes && TooManyBytes.error().Code == SourceMountErrorCode::AggregateByteLimit,
+			"SourceMount enforces aggregate imported byte limits"
+		);
+		SourceMountLimits FileLimits;
+		FileLimits.FileBytes = 3;
+		SourceMount FileMount(Filesystem, FileLimits);
+		auto OversizedFile = Link->Synchronize(FileMount);
+		Check(
+			!OversizedFile && OversizedFile.error().Code == SourceMountErrorCode::FileSizeLimit,
+			"SourceMount enforces individual source file size limits"
+		);
+
+		std::filesystem::create_directories(TemporaryRoot / "NestedDepth");
+		auto ModelRoot = std::make_shared<Folder>();
+		ModelRoot->SetArchivable(true);
+		ModelRoot->SetName("ModelRoot");
+		auto ModelMiddle = std::make_shared<Folder>();
+		ModelMiddle->SetArchivable(true);
+		ModelMiddle->SetName("ModelMiddle");
+		ModelMiddle->SetParent(ModelRoot);
+		auto ModelLeaf = std::make_shared<Folder>();
+		ModelLeaf->SetArchivable(true);
+		ModelLeaf->SetName("ModelLeaf");
+		ModelLeaf->SetParent(ModelMiddle);
+		WriteModel(TemporaryRoot / "NestedDepth" / "deep.instance.json", ModelRoot);
+		SourceMountLimits NestedLimits;
+		NestedLimits.NestedInstanceDepth = 2;
+		SourceMount NestedMount(Filesystem, NestedLimits);
+		Link->SetPath("NestedDepth");
+		auto NestedTooDeep = Link->Synchronize(NestedMount);
+		Check(
+			!NestedTooDeep && NestedTooDeep.error().Code == SourceMountErrorCode::NestedInstanceDepthLimit,
+			"SourceMount bounds recursion inside nested Instance JSON models"
+		);
+
+		SourceMountLimits PathLimits;
+		PathLimits.PathBytes = 4;
+		SourceMount PathMount(Filesystem, PathLimits);
+		Link->SetPath("Source");
+		auto LongPath = Link->Synchronize(PathMount);
+		Check(
+			!LongPath && LongPath.error().Code == SourceMountErrorCode::PathTooLong,
+			"SourceMount enforces mount-relative path byte limits"
+		);
+
+		auto FinalRecovery = Link->Synchronize(Mount);
+		Check(
+			FinalRecovery && Parent->FindFirstChild("new", false),
+			"RAII synchronization state resets after every prior failure path"
 		);
 	}
 
@@ -4134,8 +4429,11 @@ namespace {
 		auto ProjectState = Project::fromInit(&Filesystem, "RevisionWorld");
 		auto World = ProjectState.DeserializeGame();
 		World->InitializeLoadedProjectRevision();
-		Check(World->GetAuthoritativeRevision() == DataModel::InitialProjectRevision,
-			"loaded projects initialize the explicit authoritative revision");
+		Check(
+			World->GetAuthoritativeRevision() == DataModel::InitialProjectRevision &&
+				World->Filesystem == &Filesystem && World->Root == TemporaryRoot,
+			"loaded projects initialize revision and retain their explicit project filesystem/root ownership"
+		);
 
 		for (int Revision = 2; Revision <= 10; ++Revision)
 			World->SetName("Revision" + std::to_string(Revision));
@@ -5491,6 +5789,11 @@ namespace {
 		auto pickTarget = std::find_if(objects.begin(), objects.end(), [](const Json &object) {
 			return object["Name"] == "PickTarget";
 		});
+		if (!picked["Ok"].get<bool>() || pickTarget == objects.end() ||
+			picked["Result"]["Object"] != (*pickTarget)["Id"])
+			std::cerr << "[Renderer:ViewportTest] Expected "
+				<< (pickTarget == objects.end() ? Json(nullptr) : (*pickTarget)["Id"])
+				<< ", received " << picked.dump() << '\n';
 		Check(
 			picked["Ok"].get<bool>() && pickTarget != objects.end() &&
 				picked["Result"]["Object"] == (*pickTarget)["Id"],
@@ -6071,6 +6374,7 @@ int main() {
 	TestClassExtensionRuntime();
 	TestCustomClassRuntime();
 	TestSerializationGoldenFixtures();
+	TestSourceMountAndFileLink();
 	TestProjectCreationJsonNames();
 	TestAuthoritativeTransactions();
 	TestProjectRevisionPersistence();

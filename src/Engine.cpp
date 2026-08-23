@@ -5,7 +5,7 @@
 #include "gargantuan/classes/FileLink.hpp"
 #include "gargantuan/classes/Instance.hpp"
 #include "gargantuan/classes/Script.hpp"
-#include "gargantuan/filesystem/Paths.hpp"
+#include "gargantuan/filesystem/SourceMount.hpp"
 #include "gargantuan/render/Renderer.hpp"
 #include "gargantuan/scripting/ScriptEngine.hpp"
 #include "gargantuan/services/UserInputService.hpp"
@@ -32,6 +32,7 @@ namespace gargantuan {
 		  Players(GetService<gargantuan::Players>()) {
 		ActionMap->AttachInputService(UserInputService);
 		Players->InitializeLocalPlayer();
+		if (DataModel->Filesystem) ProjectSources = std::make_unique<SourceMount>(*DataModel->Filesystem);
 
 		DataModel->BindDescendants([this](std::shared_ptr<Instance> inst) {
 			if (auto script = std::dynamic_pointer_cast<gargantuan::Script>(inst)) {
@@ -42,17 +43,18 @@ namespace gargantuan {
 			}
 
 			if (auto link = std::dynamic_pointer_cast<gargantuan::FileLink>(inst)) {
-				auto relativePath = link->GetPath();
-				auto absolutePath = std::filesystem::absolute(this->DataModel->Root / relativePath);
-				LOG_INFO(
-					App,
-					"Got file link: %s, %s %s %s",
-					inst->GetClassName().c_str(),
-					inst->GetFullName().c_str(),
-					Paths::ToUtf8(absolutePath).c_str(),
-					relativePath.c_str()
+				if (!ProjectSources) {
+					LOG_WARN(
+						App, "[Project:SourceMount] FileLink '%s' has no project filesystem mount",
+						inst->GetFullName().c_str()
+					);
+					return;
+				}
+				auto Result = link->Synchronize(*ProjectSources);
+				if (!Result) LOG_WARN(
+					App, "[Project:SourceMount] FileLink '%s' failed: %s",
+					inst->GetFullName().c_str(), Result.error().Format().c_str()
 				);
-				link->Synchronize(absolutePath);
 			}
 		});
 
@@ -89,6 +91,7 @@ namespace gargantuan {
 		HostEventResult Result;
 		if (const auto *Resize = std::get_if<WindowResizeEvent>(&Event)) {
 			Renderer->Resize(static_cast<int>(Resize->Width), static_cast<int>(Resize->Height));
+			RenderPublishing.RequestFullResync();
 			Workspace->GetCurrentCamera()->SetViewportSize(Vector2(Resize->Width, Resize->Height));
 			return Result;
 		}
@@ -136,10 +139,15 @@ namespace gargantuan {
 				G_PROFILE("Draw");
 				const auto [viewportWidth, viewportHeight] = Renderer->GetViewportSize();
 				auto camera = Workspace->GetCurrentCamera();
-				auto snapshot = RenderExtraction.Extract(
+				auto Publication = RenderPublishing.Publish(
 					*WorldRoot, MakeRenderCameraInput(*camera), viewportWidth, viewportHeight
 				);
-				Renderer->Draw(std::move(snapshot));
+				try {
+					Renderer->Draw(std::move(Publication));
+				} catch (...) {
+					RenderPublishing.RequestFullResync();
+					throw;
+				}
 			}
 
 			{

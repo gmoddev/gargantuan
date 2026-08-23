@@ -122,6 +122,7 @@ namespace gargantuan {
 			if (!game) throw std::runtime_error("Project root has inconsistent DataModel type metadata");
 			game->MarkPersistenceSubtreeArchivable();
 			game->Root = Root;
+			game->Filesystem = Filesystem;
 			return game;
 		}
 	};

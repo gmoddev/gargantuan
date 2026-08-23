@@ -7,6 +7,7 @@
 
 #include "render/sdl/SDLMeshCache.hpp"
 #include "render/sdl/SDLRenderPass.hpp"
+#include "render/sdl/SDLTextureCache.hpp"
 
 #include <SDL3/SDL.h>
 
@@ -70,6 +71,32 @@ namespace gargantuan {
 		return Closest;
 	}
 
+	std::optional<EditorViewportPick> PickEditorViewport(const RenderProjection &Projection, float X, float Y) {
+		const auto &Frame = Projection.GetFrame();
+		if (Projection.GetLastPublicationId() == InvalidRenderPublicationId || Frame.ViewportWidth == 0 ||
+			Frame.ViewportHeight == 0 || !std::isfinite(X) || !std::isfinite(Y) || X < 0.0f || Y < 0.0f ||
+			X >= Frame.ViewportWidth || Y >= Frame.ViewportHeight) return std::nullopt;
+		const auto &Camera = Frame.Camera;
+		const float Tangent = std::tan(glm::radians(Camera.VerticalFieldOfView) * 0.5f);
+		const float NormalizedX = ((X + 0.5f) / static_cast<float>(Frame.ViewportWidth)) * 2.0f - 1.0f;
+		const float NormalizedY = 1.0f - ((Y + 0.5f) / static_cast<float>(Frame.ViewportHeight)) * 2.0f;
+		const float Aspect = static_cast<float>(Frame.ViewportWidth) / static_cast<float>(Frame.ViewportHeight);
+		const auto Direction = glm::normalize(
+			Camera.LookDirection + Camera.RightDirection * (NormalizedX * Tangent * Aspect) +
+			Camera.UpDirection * (NormalizedY * Tangent)
+		);
+
+		std::optional<EditorViewportPick> Closest;
+		for (const auto &[Object, Projected] : Projection.GetObjects()) {
+			(void)Object;
+			if (!Projected.Visible) continue;
+			auto Distance = IntersectItem(Projected.Item, Camera.Position, Direction);
+			if (!Distance || (Closest && *Distance >= Closest->Distance)) continue;
+			Closest = EditorViewportPick{Projected.Item.Object, *Distance};
+		}
+		return Closest;
+	}
+
 	struct EditorViewportRenderer::Backend final {
 		bool OwnsVideoSubsystem = false;
 		std::uint32_t Width = 0;
@@ -82,10 +109,13 @@ namespace gargantuan {
 		SDL_GPUTransferBuffer *DownloadBuffer = nullptr;
 		std::vector<std::unique_ptr<SDLRenderPass>> RenderPasses;
 		std::unique_ptr<SDLMeshCache> MeshResources;
+		std::unique_ptr<SDLTextureCache> TextureResources;
+		RenderProjection Projection;
 
 		void Destroy() {
 			if (Gpu) SDL_WaitForGPUIdle(Gpu);
 			if (MeshResources) { MeshResources->Destroy(); MeshResources.reset(); }
+			if (TextureResources) { TextureResources->Destroy(); TextureResources.reset(); }
 			for (auto &Pass : RenderPasses) if (Pass) Pass->Destroy(Gpu);
 			RenderPasses.clear();
 			if (DownloadBuffer && Gpu) SDL_ReleaseGPUTransferBuffer(Gpu, DownloadBuffer);
@@ -155,6 +185,7 @@ namespace gargantuan {
 			throw std::runtime_error(std::format("Failed to create viewport GPU device: {}", SDL_GetError()));
 		}
 		State->MeshResources = std::make_unique<SDLMeshCache>(State->Gpu);
+		State->TextureResources = std::make_unique<SDLTextureCache>(State->Gpu);
 
 		SDL_GPUTextureCreateInfo ShadowInfo{
 			.type = SDL_GPU_TEXTURETYPE_2D, .format = SDL_GPU_TEXTUREFORMAT_D32_FLOAT,
@@ -193,24 +224,33 @@ namespace gargantuan {
 		const auto PreviousHeight = State->Height;
 		State->Width = Width;
 		State->Height = Height;
-		try { State->RecreateTargets(); }
+		try { State->RecreateTargets(); State->Projection.Clear(); }
 		catch (...) { State->Width = PreviousWidth; State->Height = PreviousHeight; throw; }
 	}
 
-	EditorViewportFrame EditorViewportRenderer::Capture(RenderSnapshotPtr Snapshot) {
+	void EditorViewportRenderer::ApplyPublication(RenderPublicationPtr Publication) {
 		if (!State || !State->Gpu) throw std::logic_error("Viewport renderer is not initialized");
-		if (!Snapshot) throw std::invalid_argument("Viewport capture requires an immutable RenderSnapshot");
-		if (Snapshot->ViewportWidth != State->Width || Snapshot->ViewportHeight != State->Height)
-			throw std::invalid_argument("RenderSnapshot dimensions do not match the viewport target");
+		if (!Publication) throw std::invalid_argument("Viewport requires an immutable RenderPublication");
+		(void)State->Projection.Apply(*Publication);
+		State->MeshResources->ApplyPublication(*Publication);
+		State->TextureResources->ApplyPublication(*Publication);
+	}
+
+	EditorViewportFrame EditorViewportRenderer::Capture(RenderPublicationPtr Publication) {
+		ApplyPublication(std::move(Publication));
+		const auto &FrameState = State->Projection.GetFrame();
+		if (FrameState.ViewportWidth != State->Width || FrameState.ViewportHeight != State->Height)
+			throw std::invalid_argument("RenderPublication dimensions do not match the viewport target");
 		State->MeshResources->UploadToGpu();
 		auto *Commands = SDL_AcquireGPUCommandBuffer(State->Gpu);
 		if (!Commands) throw std::runtime_error(std::format("Failed to acquire viewport command buffer: {}", SDL_GetError()));
-		SDLFrameContext Frame(*Snapshot, *State->MeshResources);
+		SDLFrameContext Frame(State->Projection, *State->MeshResources);
 		Frame.Commands = Commands;
 		Frame.SwapchainTexture = State->ColorTexture;
 		Frame.DepthTexture = State->DepthTexture;
 		Frame.ShadowMapTexture = State->ShadowMapTexture;
 		Frame.ShadowSampler = State->ShadowSampler;
+		Frame.TextureResources = State->TextureResources.get();
 		Frame.Width = State->Width;
 		Frame.Height = State->Height;
 		for (auto &Pass : State->RenderPasses) SDL_EndGPURenderPass(Pass->Draw(State->Gpu, Frame));
@@ -246,5 +286,10 @@ namespace gargantuan {
 		SDL_UnmapGPUTransferBuffer(State->Gpu, State->DownloadBuffer);
 		SDL_ReleaseGPUFence(State->Gpu, Fence);
 		return Result;
+	}
+
+	std::optional<EditorViewportPick> EditorViewportRenderer::Pick(float X, float Y) const {
+		if (!State) return std::nullopt;
+		return PickEditorViewport(State->Projection, X, Y);
 	}
 }

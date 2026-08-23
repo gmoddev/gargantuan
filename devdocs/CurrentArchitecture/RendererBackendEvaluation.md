@@ -18,6 +18,23 @@ related_adrs: []
 
 # Renderer backend evaluation
 
+> **Superseded by Foundation 2C (2026-08-22):** equivalent deformable, GUI,
+> texture, and mixed workloads on the incremental publication path resolve the
+> backend checkpoint as **Decision A — keep SDL GPU**. See
+> [Renderer Foundation 2C](RendererFoundation2C.md). The Foundation 1 results
+> below remain historical evidence about the former full-snapshot path.
+
+> **Foundation 2 update (2026-08-22):** this document records the Foundation 1
+> full-snapshot experiment. The accepted next decision is **C: retain SDL
+> temporarily, implement immutable incremental publication first, and defer a
+> backend migration until SDL and any alternative can run equivalent rigid,
+> deformable, GUI, and mixed GPU workloads.** Foundation 2B now drives the
+> supported SDL runtime and EditorViewport, and its semantic dirty accumulator
+> publishes 50,000-object dynamic frames without journal-overrun resync. See
+> [Renderer Foundation 2](RendererFoundation2.md). The
+> original evidence below remains historical input and is not a current order
+> to keep SDL permanently.
+
 ## Decision
 
 **KEEP SDL CUSTOM RENDERER**

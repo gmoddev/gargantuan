@@ -15,7 +15,7 @@ C++; it does not mean API-complete.
 | Modules | Scaffold | Luau require callbacks and `ModuleScript` type exist. | Instance path lookup is unfinished; unchecked static casts can reinterpret arbitrary Instances; cache/lifetime behavior is not robust. Do not count `require` as implemented. |
 | Scheduling | Partial | Scheduled, delayed, spawned, and deferred work queues. | No quotas, cancellation, ownership, fairness, observability, or shutdown semantics; self-defer can monopolize a frame and recursive spawn consumes native stack. |
 | Serialization | Partial | Versioned JSON tree format with tagged property values and `Archivable` filtering. | Binary enum is unimplemented; no stable object/reference IDs, limits, unknown-field preservation, atomic save, robust diagnostics, or network schema. Malformed input can throw or read invalid array elements. |
-| Projects and source sync | Partial | `.gargantuan/project.instance.json`, recursive `FileLink` import, suffix-based Script/ModuleScript creation. | No live watch, trust prompt, root confinement, conflict handling, deterministic source map, import database, or working editor save loop. Nested `.instance.json` handling is disabled. |
+| Projects and source sync | Partial | `.gargantuan/project.instance.json`; canonical root-confined, bounded `SourceMount`; transactional `FileLink` compatibility import for scripts, directories, and nested Instance JSON. | No live watch, trust prompt, conflict handling, deterministic source map, import database, or working editor save loop. |
 | Rendering | Prototype | SDL GPU device, primitive mesh upload, opaque pass, directional shadow pass, free camera. | No asset/material pipeline, lighting service, textures, text, batching, culling, transparency model, post-processing, device recovery, or useful diagnostics. Several primitive visuals are placeholders. |
 | Physics | Prototype | Box3D world, fixed-step accumulator, primitive bodies, anchoring, sensors, contacts mapped to touch signals, basic constraints. | Property edits do not reliably rebuild/synchronize bodies; geometry and constraint validation are weak; no queries, characters, collision groups, streaming, deterministic network state, or ownership model. |
 | Input | Prototype | SDL keyboard, mouse, focus/window events and Luau signals. | Incorrect mouse collections/location, exceptions for unknown buttons, no text/gamepad/touch/action layer, consumption, focus routing, remapping, or accessibility. |
@@ -87,11 +87,13 @@ future threading or replication unsafe without an extraction/command boundary.
 
 ### Projects and serialization
 
-Project loading is filesystem-oriented: `FileLink` recursively mirrors suffix-
-recognized files into the Instance tree. It performs an initial sync only. Both
-client and server filename suffixes create Script objects, without a proven
-execution-domain separation. Path composition is not confined to the project
-root, so opening untrusted projects can read and execute files outside it.
+Project loading is filesystem-oriented: `FileLink` performs one initial
+compatibility import through the canonical, bounded `SourceMount` owned by the
+project filesystem. Absolute paths, root traversal, symlinks, and Windows
+reparse points are rejected. Candidate scripts, directories, and nested Instance
+JSON remain detached until the complete candidate validates, so failure retains
+last-known-good linked content. Client and server filename suffixes still create
+Script objects without a complete multiplayer execution-domain separation.
 
 The JSON format is useful for bootstrapping, but represents a recursive tree
 rather than a graph with durable identity. It cannot safely express shared
@@ -118,7 +120,7 @@ the future GUI contract and editor prerequisites are defined in the future docs.
 | Tasks/signals | `src/scripting/ThreadEngine.cpp`, `src/scripting/LibTask.cpp`, `src/datatypes/Signal.cpp`, `LibSignal.cpp` | Luau coroutine API, frame loop, Instance events | Bounded phase queues, cancellation/ownership, safe reentrancy, connection cleanup and profiling. |
 | Modules/require | `src/scripting/LibRequire.cpp`, `ScriptEngine` require callbacks, `src/classes/ModuleScript.cpp` | Luau require library, Instance paths, filesystem/source identity | Complete resolver, checked targets, per-domain graph/cache, cycles/errors, trust policy. |
 | Serialization | `src/assets/InstanceSerialization.cpp`, `include/gargantuan/assets/InstanceSerialization.hpp` | nlohmann/json, reflection, datatype codecs | Stable IDs/references, strict limits/schema/migrations, atomic round trip and fuzzing. |
-| Project/filesystem | `src/filesystem/Project.cpp`, `DiskFilesystem.cpp`, `BaseFilesystem.cpp`, `PathResolver.cpp`, `src/classes/FileLink.cpp` | `std::filesystem`, JSON/TOML/Glaze surfaces, Script creation | Confined `SourceMount`, trust, watcher/conflicts, safe reads/writes and actionable diagnostics. |
+| Project/filesystem | `src/filesystem/Project.cpp`, `DiskFilesystem.cpp`, `BaseFilesystem.cpp`, `SourceMount.cpp`, `src/classes/FileLink.cpp` | `std::filesystem`, JSON/TOML/Glaze surfaces, Script creation | Project trust, watcher/conflicts, deterministic mappings, and broader persistence diagnostics. |
 | Renderer | `src/render/Renderer.cpp`, `RenderPass.cpp`, `GpuMesh.cpp`, `PipelineBuilder.cpp`, `Shader.cpp` | SDL3 GPU, GLM, compiled shaders | Resource handles/lifetimes, extract/submit boundary, culling/batching, device recovery and render tests. |
 | Camera | `src/classes/Camera.cpp`, `assets/classes/Camera.luau`, `Engine::Step` | input events, GLM transforms/projection, renderer | Player camera modes/subject, resize/aspect correctness, constraints and scriptable controls. |
 | Lighting/shadows | `src/render/passes/ShadowPass.cpp`, `OpaquePass.cpp`, shadow/opaque shaders | renderer, fixed directional light, camera/world geometry | Lighting schema/service, configurable lights/shadows, materials, culling and quality budgets. |
@@ -177,8 +179,8 @@ make the code-generation dependency graph explicit before packaging releases.
 
 Before distributing builds that open third-party projects, at minimum:
 
-1. Confine all project and `FileLink` paths to explicit roots, reject traversal
-   and link escapes, and disable automatic script execution until trust is given.
+1. Preserve SourceMount confinement regression coverage and disable automatic
+   project script execution until an explicit trust decision is given.
 2. Remove unsafe Instance/ModuleScript/DataModel static casts and borrowed string
    lifetimes at the native boundary.
 3. Replace raw parent lifetime assumptions and reject hierarchy cycles.

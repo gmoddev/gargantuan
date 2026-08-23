@@ -11,8 +11,13 @@
 - [Render extraction](RenderExtraction.md) defines the immutable frame snapshot,
   runtime/editor extraction timing, picking identity, and renderer-owned
   primitive resources.
+- [Renderer Foundation 2C](RendererFoundation2C.md) records the two-hardware
+  deformable/GUI evaluation, final SDL GPU selection, and GUI start contract.
 - [Physics backend](PhysicsBackend.md) defines neutral rigid-body semantics,
   generation-safe physics identity, safe-point updates, and Box3D confinement.
+- [Soft-body Physics Foundation 1](SoftBodyPhysicsFoundation.md) defines the
+  sibling XPBD deformable backend, public cloth/rubber semantics, fixed-step and
+  renderer integration, budgets, lifecycle, benchmarks, and follow-up gate.
 - [Instance attributes](InstanceAttributes.md) defines bounded dynamic state,
   authority, persistence, journal, replication, and Studio contracts.
 - [Instance tags](InstanceTags.md) defines scoped indexed membership,
@@ -31,6 +36,12 @@
 - [Bounded Luau remotes](LuauRemotes.md) defines schema-backed application
   events and requests, the binary protocol, visibility/deadline/resource
   policy, Luau coroutine boundary, and simulator/GNS verification.
+- [SourceMount and FileLink compatibility](SourceMount.md) defines the canonical
+  project-root ownership, backend boundary, confinement policy, import limits,
+  and transactional replacement lifecycle.
+- [Continuous native build and test contract](ContinuousIntegration.md) defines
+  the Windows x64 toolchain, fresh-checkout bootstrap, headless CTest gate, and
+  explicit CI exclusions.
 
 See [Runtime foundation](./FoundationRuntime.md) for the implemented ownership,
 ObjectId, JobSystem, execution-domain, reflection-schema, and committed-change
@@ -66,12 +77,14 @@ flowchart TD
     Loader --> DataModel["DataModel / service tree"]
     DataModel --> Engine["Engine coordinator"]
     Engine --> Input["SDL events + UserInputService + ActionMap"]
-    Engine --> Physics["WorldRoot + Box3D"]
+    Engine --> Physics["WorldRoot + Box3D + sibling XPBD deformables"]
     Engine --> Render["SDL GPU renderer"]
     Engine --> Script["ScriptEngine + one Luau VM"]
     Script --> Tasks["ThreadEngine task queues"]
     Script --> Signals["Native/Luau Signals"]
-    DataModel --> FileLink["FileLink recursive source import"]
+    DataModel --> ProjectFilesystem["BaseFilesystem + canonical project root"]
+    ProjectFilesystem --> SourceMount["bounded root-confined SourceMount"]
+    SourceMount --> FileLink["FileLink compatibility import"]
     FileLink --> Script
 ```
 
@@ -83,8 +96,9 @@ flowchart TD
    `SDLRenderer` (`src/Main.cpp:150-168`).
 3. A loader constructs the DataModel from a project, a standalone script, or an
    Instance file (`src/Main.cpp:26-102`).
-4. `Engine` obtains services, binds DataModel descendants, queues Scripts, and
-   synchronizes FileLinks (`src/Engine.cpp:23-60`).
+4. `Engine` obtains services, creates one SourceMount from the loaded project
+   filesystem, binds DataModel descendants, queues Scripts, and synchronizes
+   FileLinks through that mount (`src/Engine.cpp`).
 5. The loop runs until `ProcessService.Alive` becomes false. Every frame polls
    events, fires simulation hooks, steps Box3D and the camera, draws, and then
    steps scripts (`src/Main.cpp:174-186`, `src/Engine.cpp:73-143`).
@@ -118,7 +132,8 @@ classDiagram
     GuiObject <|-- Frame
     DataModel o-- Instance : Children
     Instance o-- Signal : Events
-    WorldRoot o-- BasePart : Physics registry
+    WorldRoot o-- BasePart : Rigid physics registry
+    WorldRoot o-- DeformableBody : Soft-body registry
 ```
 
 `DataModel` inherits `ServiceProvider`. Built-in service classes and their public
@@ -173,7 +188,7 @@ during explicit transport polling.
 
 | Service | Present behavior | Reality check |
 |---|---|---|
-| `Workspace` | Owns current Camera, neutral rigid physics, and the bounded kinematic capsule motion query. | No streaming, broad raycast/overlap API, terrain, or network ownership. |
+| `Workspace` | Owns current Camera, neutral rigid physics, the bounded kinematic capsule query, and sibling cloth/rubber deformable physics. | No streaming, broad raycast/overlap API, terrain, soft/self collision, or networked deformation. |
 | `RunService` | Signal container used by `Engine`. | `src/services/RunService.cpp` is empty; semantics are hard-coded in the frame loop. |
 | `UserInputService` | Owns physical key/button state, pointer delta, focus reset, and mouse-behavior host synchronization. | Gamepad publication, touch, text input, and retained UI focus remain incomplete. |
 | `ActionMap` | Maps bounded keyboard, mouse-button, and pointer-delta bindings to semantic action state. | Default gamepad bindings and a persisted remapping UI are deferred. |
@@ -193,12 +208,16 @@ during explicit transport polling.
   `shared_ptr`; children store raw `ParentPointer` (`include/gargantuan/classes/Instance.hpp:19-24`).
 - **Synchronous events.** Signals resume callbacks immediately; tasks and Scripts
   share the same VM and host thread.
-- **Bounded subsystem coupling.** `Engine` knows concrete services and the renderer
-  reads `WorldRoot::Parts`. Physics publishes post-step transforms through the
-  authoritative setter path, while Box3D mechanics remain behind the documented
-  [physics backend boundary](PhysicsBackend.md).
-- **Local filesystem is part of loading.** Project and FileLink data resolve
-  directly to host paths without a capability-oriented asset layer.
+- **Bounded subsystem coupling.** `Engine` knows concrete services. Rigid physics
+  publishes post-step transforms through the authoritative setter path, while
+  deformables publish engine-owned position/topology values through the immutable
+  render-publication path. Box3D and XPBD mechanics remain behind the documented
+  [physics backend](PhysicsBackend.md) and
+  [soft-body](SoftBodyPhysicsFoundation.md) boundaries.
+- **Project filesystem and source policy are separate layers.** `BaseFilesystem`
+  is the engine backend. FileLink source access is confined by one canonical,
+  bounded `SourceMount`; project trust prompts and a capability-oriented asset
+  layer remain deferred.
 
 ## Readiness conclusion
 

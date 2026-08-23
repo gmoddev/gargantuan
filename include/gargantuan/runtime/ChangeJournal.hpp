@@ -2,9 +2,10 @@
 
 #include "gargantuan/runtime/ObjectId.hpp"
 
+#include <atomic>
 #include <cstdint>
+#include <deque>
 #include <limits>
-#include <list>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -79,6 +80,12 @@ namespace gargantuan {
 		std::vector<ChangeRecord> Records;
 	};
 
+	struct ChangeJournalProfile {
+		std::uint64_t CommitCount = 0;
+		std::uint64_t EvictedRecordCount = 0;
+		std::uint64_t JournalNanoseconds = 0;
+	};
+
 	class ChangeJournal {
 	  public:
 		static ChangeJournal &Get();
@@ -92,15 +99,22 @@ namespace gargantuan {
 		void SetCapacity(std::size_t capacity);
 		[[nodiscard]] std::size_t GetCapacity() const;
 		void Clear();
+		void SetProfilingEnabled(bool Enabled) { ProfilingEnabled.store(Enabled, std::memory_order_relaxed); }
+		void ResetProfile();
+		[[nodiscard]] ChangeJournalProfile GetProfile() const;
 
 	  private:
 		struct Stream {
 			std::uint64_t NextSequence = 1;
-			std::list<ChangeRecord> Records;
+			std::deque<ChangeRecord> Records;
 		};
 		mutable std::mutex Mutex;
 		std::size_t Capacity = 4096;
 		std::unordered_map<ObjectId, Stream> Streams;
+		std::atomic<bool> ProfilingEnabled = false;
+		std::atomic<std::uint64_t> ProfileCommitCount = 0;
+		std::atomic<std::uint64_t> ProfileEvictedRecordCount = 0;
+		std::atomic<std::uint64_t> ProfileJournalNanoseconds = 0;
 	};
 
 	class ScopedChangeJournalSuppression {

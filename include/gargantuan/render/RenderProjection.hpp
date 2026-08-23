@@ -6,31 +6,72 @@
 #pragma once
 
 #include "gargantuan/render/RenderSnapshot.hpp"
+#include "gargantuan/render/RenderPublication.hpp"
 
 #include <cstddef>
 #include <unordered_map>
 
 namespace gargantuan {
+	struct RenderProjectedObject {
+		RenderItem Item;
+		std::optional<RenderMeshIdentity> Mesh;
+		RenderMaterialState Material;
+		bool Visible = true;
+	};
+
 	struct RenderProjectionChanges {
 		std::size_t Created = 0;
 		std::size_t Updated = 0;
 		std::size_t Removed = 0;
 		std::size_t Unchanged = 0;
+		std::size_t MeshesCreated = 0;
+		std::size_t MeshesUpdated = 0;
+		std::size_t MeshesRemoved = 0;
+		std::size_t TexturesCreated = 0;
+		std::size_t TexturesUpdated = 0;
+		std::size_t TexturesRemoved = 0;
+		std::size_t VertexUploadBytes = 0;
+		std::size_t TextureUploadBytes = 0;
+		std::size_t UiBatches = 0;
+		std::size_t UiVertices = 0;
+		std::size_t UiIndices = 0;
 	};
 
 	class RenderProjection final {
 	  public:
 		[[nodiscard]] RenderProjectionChanges Apply(const RenderSnapshot &Snapshot);
+		[[nodiscard]] RenderProjectionChanges Apply(const RenderPublication &Publication);
 		void Clear();
 
 		[[nodiscard]] const RenderItem *GetItem(ObjectId Object) const;
 		[[nodiscard]] std::size_t GetSize() const { return Entries.size(); }
+		[[nodiscard]] std::size_t GetMeshCount() const { return Meshes.size(); }
+		[[nodiscard]] std::size_t GetTextureCount() const { return Textures.size(); }
+		[[nodiscard]] RenderPublicationId GetLastPublicationId() const { return LastPublicationId; }
+		[[nodiscard]] const RenderFrameState &GetFrame() const { return Frame; }
+		[[nodiscard]] const RenderUiFrame &GetUi() const { return Ui; }
+		[[nodiscard]] const std::unordered_map<ObjectId, RenderProjectedObject> &GetObjects() const { return Entries; }
+		[[nodiscard]] RenderSnapshotPtr BuildCompatibilitySnapshot() const;
 
 	  private:
-		struct Entry {
-			RenderItem Item;
+		std::unordered_map<ObjectId, RenderProjectedObject> Entries;
+		struct MeshEntry {
+			std::uint64_t TopologyRevision = 0;
+			std::uint64_t VertexRevision = 0;
+			std::size_t VertexCount = 0;
+			std::size_t IndexCount = 0;
+			RenderBounds Bounds;
 		};
-
-		std::unordered_map<ObjectId, Entry> Entries;
+		std::unordered_map<RenderMeshIdentity, MeshEntry, RenderMeshIdentityHash> Meshes;
+		struct TextureEntry {
+			std::uint64_t Revision = 0;
+			std::uint32_t Width = 0;
+			std::uint32_t Height = 0;
+			RenderTextureFormat Format = RenderTextureFormat::Rgba8Unorm;
+		};
+		std::unordered_map<RenderTextureIdentity, TextureEntry, RenderTextureIdentityHash> Textures;
+		RenderPublicationId LastPublicationId = InvalidRenderPublicationId;
+		RenderFrameState Frame;
+		RenderUiFrame Ui;
 	};
 } // namespace gargantuan

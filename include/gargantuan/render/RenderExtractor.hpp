@@ -5,9 +5,13 @@
 
 #pragma once
 
+#include "gargantuan/render/RenderDirtyAccumulator.hpp"
+#include "gargantuan/render/RenderPublication.hpp"
 #include "gargantuan/render/RenderSnapshot.hpp"
 
 #include <cstdint>
+#include <optional>
+#include <unordered_map>
 
 #include <glm/glm.hpp>
 
@@ -46,5 +50,57 @@ namespace gargantuan {
 
 	  private:
 		RenderSnapshotId LastSnapshotId = InvalidRenderSnapshotId;
+	};
+
+	struct RenderPublisherProfile {
+		std::uint64_t DirtyCaptureNanoseconds = 0;
+		std::uint64_t DirtyExpansionNanoseconds = 0;
+		std::uint64_t FinalStateExtractionNanoseconds = 0;
+		std::uint64_t PublicationConstructionNanoseconds = 0;
+		std::uint64_t StateCacheReconciliationNanoseconds = 0;
+	};
+
+	class RenderPublisher final {
+	  public:
+		explicit RenderPublisher(RenderDirtyAccumulator *DirtyAccumulator = nullptr);
+		~RenderPublisher();
+		RenderPublisher(const RenderPublisher &) = delete;
+		RenderPublisher &operator=(const RenderPublisher &) = delete;
+		[[nodiscard]] RenderPublicationPtr Publish(
+			const WorldRoot &World,
+			const RenderCameraInput &Camera,
+			std::uint32_t ViewportWidth,
+			std::uint32_t ViewportHeight,
+			glm::vec3 LightDirection = {0.75f, 1.0f, 0.5f}
+		);
+		void RequestFullResync() { FullResyncRequested = true; }
+		void SetUiFrame(RenderUiFrame UiFrame);
+		[[nodiscard]] RenderPublicationId GetLastPublicationId() const { return LastPublicationId; }
+		[[nodiscard]] std::size_t GetPublishedObjectCount() const { return PublishedItems.size(); }
+		[[nodiscard]] std::size_t GetFullResyncCount() const { return FullResyncCount; }
+		void SetProfilingEnabled(bool Enabled) { ProfilingEnabled = Enabled; }
+		[[nodiscard]] RenderPublisherProfile GetLastProfile() const { return LastProfile; }
+
+	  private:
+		struct PublishedDeformable {
+			RenderMeshIdentity Mesh;
+			std::uint64_t TopologyRevision = 0;
+			std::uint64_t VertexRevision = 0;
+		};
+
+		RenderExtractor FullExtractor;
+		RenderDirtyAccumulator *Dirty = nullptr;
+		RenderDirtyConsumerId DirtyConsumer = InvalidRenderDirtyConsumerId;
+		RenderPublicationId LastPublicationId = InvalidRenderPublicationId;
+		ObjectId Scope;
+		const WorldRoot *PublishedWorld = nullptr;
+		std::unordered_map<ObjectId, RenderItem> PublishedItems;
+		std::unordered_map<ObjectId, PublishedDeformable> PublishedDeformables;
+		std::optional<RenderUiFrame> PendingUi;
+		std::size_t PendingUiBytes = 0;
+		std::size_t FullResyncCount = 0;
+		bool FullResyncRequested = true;
+		bool ProfilingEnabled = false;
+		RenderPublisherProfile LastProfile;
 	};
 }

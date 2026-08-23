@@ -42,7 +42,7 @@ namespace gargantuan {
 		SDL_GPURenderPass *Draw(SDL_GPUDevice *gpu, SDLFrameContext &context) override {
 			(void)gpu;
 			glm::mat4 shadowProjection = glm::ortho<float>(-30.0f, 30.0f, -30.0f, 30.0f, -50.0f, 150.0f);
-			glm::vec3 lightPosition = glm::normalize(context.Snapshot.LightDirection) * 40.0f;
+			glm::vec3 lightPosition = glm::normalize(context.Projection.GetFrame().LightDirection) * 40.0f;
 			glm::mat4 shadowView = glm::lookAt(lightPosition, glm::vec3(0), glm::vec3(0, 1, 0));
 			glm::mat4 shadowMatrix = shadowProjection * shadowView;
 			context.ShadowMatrix = shadowMatrix;
@@ -58,18 +58,23 @@ namespace gargantuan {
 
 			SDL_GPURenderPass *pass = SDL_BeginGPURenderPass(context.Commands, nullptr, 0, &depthTarget);
 			SDL_BindGPUGraphicsPipeline(pass, Pipeline);
+			if (context.Metrics) ++context.Metrics->PipelineSwitches;
 
-			for (const auto &item : context.Snapshot.Items) {
+			for (const auto &[Object, Projected] : context.Projection.GetObjects()) {
+				(void)Object;
+				if (!Projected.Visible) continue;
+				const auto &item = Projected.Item;
 				if (!item.CastShadow) {
 					continue;
 				}
 
-				const auto *mesh = context.MeshResources.Find(item.Geometry);
+				const auto *mesh = Projected.Mesh
+					? context.MeshResources.Find(*Projected.Mesh) : context.MeshResources.Find(item.Geometry);
 				if (!mesh || !mesh->VertexBuffer || !mesh->IndexBuffer) {
 					LOG_WARN(
 						App,
-						"RenderSnapshot %llu shadow skipped ObjectId %u:%u because its primitive GPU resource is unavailable",
-						static_cast<unsigned long long>(context.Snapshot.Id),
+						"RenderPublication %llu shadow skipped ObjectId %u:%u because its GPU resource is unavailable",
+						static_cast<unsigned long long>(context.Projection.GetLastPublicationId()),
 						item.Object.Slot,
 						item.Object.Generation
 					);
@@ -86,6 +91,7 @@ namespace gargantuan {
 				SDL_BindGPUIndexBuffer(pass, &indexBinding, SDL_GPU_INDEXELEMENTSIZE_32BIT);
 
 				SDL_DrawGPUIndexedPrimitives(pass, mesh->IndexCount, 1, 0, 0, 0);
+				if (context.Metrics) ++context.Metrics->DrawCalls;
 			}
 
 			return pass;

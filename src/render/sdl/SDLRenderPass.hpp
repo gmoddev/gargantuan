@@ -1,6 +1,6 @@
 #pragma once
 
-#include "gargantuan/render/RenderSnapshot.hpp"
+#include "gargantuan/render/RenderProjection.hpp"
 #include "render/sdl/SDLShader.hpp"
 
 #include <SDL3/SDL_gpu.h>
@@ -12,13 +12,17 @@
 
 namespace gargantuan {
 	class SDLMeshCache;
+	class SDLTextureCache;
+	struct SDLRendererMetrics;
 
 	struct SDLFrameContext {
-		SDLFrameContext(const RenderSnapshot &RenderState, SDLMeshCache &MeshResourcesValue)
-			: Snapshot(RenderState), MeshResources(MeshResourcesValue) {}
+		SDLFrameContext(const RenderProjection &RenderState, SDLMeshCache &MeshResourcesValue)
+			: Projection(RenderState), MeshResources(MeshResourcesValue) {}
 
-		const RenderSnapshot &Snapshot;
+		const RenderProjection &Projection;
 		SDLMeshCache &MeshResources;
+		SDLTextureCache *TextureResources = nullptr;
+		SDLRendererMetrics *Metrics = nullptr;
 		SDL_GPUCommandBuffer *Commands = nullptr;
 		SDL_GPUTexture *SwapchainTexture = nullptr;
 		SDL_GPUTexture *DepthTexture = nullptr;

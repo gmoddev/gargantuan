@@ -13,6 +13,7 @@
 #include "gargantuan/services/Workspace.hpp"
 #include "gargantuan/runtime/MutationGateway.hpp"
 #include "gargantuan/platform/HostEvent.hpp"
+#include "gargantuan/filesystem/SourceMount.hpp"
 
 #include <chrono>
 #include <functional>
@@ -29,7 +30,8 @@ namespace gargantuan {
 		BaseRenderer *Renderer;
 		std::unique_ptr<ScriptEngine> Script;
 		MutationGateway Mutations;
-		RenderExtractor RenderExtraction;
+		RenderPublisher RenderPublishing;
+		std::unique_ptr<SourceMount> ProjectSources;
 
 		std::shared_ptr<Workspace> Workspace;
 		std::shared_ptr<WorldRoot> WorldRoot;

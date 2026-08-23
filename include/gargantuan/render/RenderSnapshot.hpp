@@ -54,6 +54,7 @@ namespace gargantuan {
 		UnsupportedGeometry,
 		InvalidTransform,
 		InvalidVisualState,
+		PublicationOverflow,
 	};
 
 	struct RenderExtractionDiagnostic {

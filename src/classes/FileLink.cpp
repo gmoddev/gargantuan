@@ -1,128 +1,238 @@
 #include "gargantuan/classes/FileLink.hpp"
+
 #include "gargantuan/Log.hpp"
+#include "gargantuan/assets/InstanceSerialization.hpp"
+#include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Folder.hpp"
-#include "gargantuan/classes/Instance.hpp"
 #include "gargantuan/classes/ModuleScript.hpp"
 #include "gargantuan/classes/Script.hpp"
 #include "gargantuan/filesystem/Paths.hpp"
 
-#include <SDL3/SDL.h>
-
-#include <exception>
-#include <filesystem>
+#include <algorithm>
+#include <format>
 #include <memory>
+#include <optional>
+#include <sstream>
 #include <string>
+#include <unordered_set>
+#include <utility>
+#include <vector>
 
 namespace gargantuan {
-	template <typename T>
-	std::shared_ptr<T> TryCreateScript(
-		const std::string &extensionSuffix,
-		const std::string &debugNoun,
-		const std::string &filename,
-		const std::filesystem::path &absolutePath
-	) {
-		auto extension = extensionSuffix + ".luau";
-		if (filename.ends_with(extension)) {
-			try {
-				auto script = ScriptFromFile<T>(Paths::ToUtf8(absolutePath).c_str());
-				script->SetName(filename.substr(0, filename.size() - extension.size()));
-				return script;
-			} catch (std::exception &err) {
-				LOG_WARN(
-					App,
-					"Failed to create %s %s: %s",
-					debugNoun.c_str(),
-					Paths::ToUtf8(absolutePath).c_str(),
-					err.what()
-				);
-			}
+	namespace {
+		using CandidateResult = SourceMountResult<std::optional<std::shared_ptr<Instance>>>;
+
+		struct SynchronizingGuard {
+			bool &Synchronizing;
+			~SynchronizingGuard() { Synchronizing = false; }
+		};
+
+		SourceMountError CandidateError(
+			SourceMountErrorCode Code,
+			const std::filesystem::path &Path,
+			std::string Message
+		) {
+			return {Code, Path, std::move(Message)};
 		}
-		return nullptr;
+
+		std::string FormatDeserializationErrors(const InstanceSerialization::DeserializationState &State) {
+			std::string Result;
+			const auto Count = std::min<std::size_t>(State.Errors.size(), 4);
+			for (std::size_t Index = 0; Index < Count; ++Index) {
+				if (!Result.empty()) Result += "; ";
+				Result += State.Errors[Index];
+				if (Result.size() > 1024) {
+					Result.resize(1024);
+					Result += "...";
+					break;
+				}
+			}
+			return Result.empty() ? "nested Instance model is invalid" : Result;
+		}
+
+		SourceMountStatus ValidateNestedInstance(
+			const std::shared_ptr<Instance> &Root,
+			const std::filesystem::path &Path,
+			SourceMount &Mount,
+			SourceMountBudget &Budget
+		) {
+			std::vector<std::pair<std::shared_ptr<Instance>, std::size_t>> Pending{{Root, 1}};
+			std::unordered_set<const Instance *> Visited;
+			while (!Pending.empty()) {
+				auto [Node, Depth] = std::move(Pending.back());
+				Pending.pop_back();
+				if (!Node || !Visited.insert(Node.get()).second)
+					return std::unexpected(CandidateError(
+						SourceMountErrorCode::RecursiveMount, Path, "nested Instance model contains a hierarchy cycle"
+					));
+				if (auto Status = Mount.ValidateNestedInstanceDepth(Path, Depth); !Status) return Status;
+				if (std::dynamic_pointer_cast<FileLink>(Node))
+					return std::unexpected(CandidateError(
+						SourceMountErrorCode::RecursiveMount, Path,
+						"nested Instance models cannot contain FileLink mounts"
+					));
+				if (std::dynamic_pointer_cast<DataModel>(Node) || Node->GetDataModel())
+					return std::unexpected(CandidateError(
+						SourceMountErrorCode::MalformedInstance, Path,
+						"nested Instance model must be a detached non-DataModel subtree"
+					));
+				if (auto Status = Mount.ReserveObjects(Path, 1, Budget); !Status) return Status;
+				for (const auto &Child : Node->GetChildren()) Pending.emplace_back(Child, Depth + 1);
+			}
+			return {};
+		}
+
+		template <typename ScriptType>
+		CandidateResult BuildScript(
+			SourceMount &Mount,
+			const SourceMountEntry &Entry,
+			std::string_view Suffix,
+			SourceMountBudget &Budget
+		) {
+			auto Source = Mount.ReadFile(Entry.RelativePath, MaximumScriptSourceBytes, Budget);
+			if (!Source) return std::unexpected(Source.error());
+			if (auto Status = Mount.ReserveObjects(Entry.RelativePath, 1, Budget); !Status)
+				return std::unexpected(Status.error());
+			auto Result = std::make_shared<ScriptType>();
+			Result->SetName(Entry.Name.substr(0, Entry.Name.size() - Suffix.size()));
+			Result->ChunkName = std::format("@SourceMount/{}", Paths::ToUtf8(Entry.RelativePath));
+			Result->SetSource(std::move(*Source));
+			return std::optional<std::shared_ptr<Instance>>(Result);
+		}
+
+		CandidateResult BuildCandidate(
+			SourceMount &Mount,
+			const SourceMountEntry &Entry,
+			std::size_t Depth,
+			SourceMountBudget &Budget
+		) {
+			if (Entry.Type == FileType::Directory) {
+				if (auto Status = Mount.ReserveObjects(Entry.RelativePath, 1, Budget); !Status)
+					return std::unexpected(Status.error());
+				auto FolderValue = std::make_shared<Folder>();
+				FolderValue->SetName(Entry.Name);
+				auto Children = Mount.GetChildren(Entry.RelativePath, Depth, Budget);
+				if (!Children) return std::unexpected(Children.error());
+				for (const auto &ChildEntry : *Children) {
+					auto Child = BuildCandidate(Mount, ChildEntry, Depth + 1, Budget);
+					if (!Child) return std::unexpected(Child.error());
+					if (*Child) (**Child)->SetParent(FolderValue);
+				}
+				return std::optional<std::shared_ptr<Instance>>(FolderValue);
+			}
+
+			if (Entry.Type != FileType::File) return std::optional<std::shared_ptr<Instance>>{};
+			if (Entry.Name.ends_with(".instance.json")) {
+				auto Contents = Mount.ReadFile(Entry.RelativePath, MaximumProtocolDocumentBytes, Budget);
+				if (!Contents) return std::unexpected(Contents.error());
+				std::istringstream Stream(*Contents);
+				auto State = InstanceSerialization::DeserializeDetached(
+					InstanceSerialization::InstanceFormat::Json, Stream
+				);
+				if (!State.Ok || !State.Instance)
+					return std::unexpected(CandidateError(
+						SourceMountErrorCode::MalformedInstance, Entry.RelativePath,
+						FormatDeserializationErrors(State)
+					));
+				if (auto Status = ValidateNestedInstance(State.Instance, Entry.RelativePath, Mount, Budget); !Status)
+					return std::unexpected(Status.error());
+				return std::optional<std::shared_ptr<Instance>>(std::move(State.Instance));
+			}
+			if (Entry.Name.ends_with(".client.luau")) {
+				auto Result = BuildScript<Script>(Mount, Entry, ".client.luau", Budget);
+				if (Result && *Result) std::dynamic_pointer_cast<Script>(**Result)->SetRunContext(Enums::RunContext::Client);
+				return Result;
+			}
+			if (Entry.Name.ends_with(".server.luau")) {
+				auto Result = BuildScript<Script>(Mount, Entry, ".server.luau", Budget);
+				if (Result && *Result) std::dynamic_pointer_cast<Script>(**Result)->SetRunContext(Enums::RunContext::Server);
+				return Result;
+			}
+			if (Entry.Name.ends_with(".luau")) return BuildScript<ModuleScript>(Mount, Entry, ".luau", Budget);
+			return std::optional<std::shared_ptr<Instance>>{};
+		}
 	}
 
 	FileLink::FileLink() {
-		GetPropertyChangedSignal("Path")->Connect([this](std::monostate _) {
-			LOG_DEBUG(App, "Source -> %s", this->GetPath().c_str());
+		GetPropertyChangedSignal("Path")->Connect([this](std::monostate) {
+			LOG_DEBUG(App, "[Project:SourceMount] FileLink path changed to %s", this->GetPath().c_str());
 		});
 	}
 
-	std::shared_ptr<Instance> InstanceFromPath(const std::filesystem::path absolutePath) {
-		SDL_PathInfo pathInfo;
-		if (!SDL_GetPathInfo(Paths::ToUtf8(absolutePath).c_str(), &pathInfo)) {
-			LOG_WARN(App, "Failed to synchronize %s: %s", Paths::ToUtf8(absolutePath).c_str(), SDL_GetError());
-			return nullptr;
-		};
-
-		if (pathInfo.type == SDL_PATHTYPE_FILE) {
-			auto filename = absolutePath.filename().string();
-			if (filename.ends_with(".instance.json")) {
-				// FIXME: self recursion
-				// std::ifstream input(absolutePath.string());
-				// auto state = InstanceSerialization::Deserialize(InstanceSerialization::InstanceFormat::Json, input);
-				// if (state.Ok) {
-				// 	return state.Instance;
-				// } else {
-				// 	LOG_WARN(App, "Failed to deserialize %s:", absolutePath.c_str());
-				// 	for (auto &error : state.Errors) {
-				// 		LOG_WARN(App, "* %s", error.c_str());
-				// 	}
-				// 	return nullptr;
-				// }
-				return nullptr;
-			} else if (auto script = TryCreateScript<Script>(".client", "client script", filename, absolutePath)) {
-				script->SetRunContext(Enums::RunContext::Client);
-				return script;
-			} else if (auto script = TryCreateScript<Script>(".server", "server script", filename, absolutePath)) {
-				script->SetRunContext(Enums::RunContext::Server);
-				return script;
-			} else if (auto script = TryCreateScript<ModuleScript>("", "module script", filename, absolutePath)) {
-				return script;
-			}
-		} else if (pathInfo.type == SDL_PATHTYPE_DIRECTORY) {
-			auto container = std::make_shared<Folder>();
-			container->SetName(absolutePath.filename().string());
-			for (const auto &entry : std::filesystem::directory_iterator(absolutePath)) {
-				auto child = InstanceFromPath(entry.path());
-				if (!child) continue;
-				child->SetParent(container);
-			}
-			return container;
+	SourceMountResult<std::size_t> FileLink::Synchronize(SourceMount &Mount) {
+		std::filesystem::path RelativePath;
+		try {
+			RelativePath = std::filesystem::u8path(GetPath());
+		} catch (...) {
+			return std::unexpected(CandidateError(
+				SourceMountErrorCode::InvalidPath, {}, "FileLink path is not valid UTF-8"
+			));
 		}
+		auto Parent = GetParent();
+		if (!Parent)
+			return std::unexpected(CandidateError(
+				SourceMountErrorCode::MissingParent, RelativePath, "FileLink must have a parent before synchronization"
+			));
+		if (Synchronizing)
+			return std::unexpected(CandidateError(
+				SourceMountErrorCode::SynchronizationInProgress, RelativePath,
+				"FileLink synchronization is already in progress"
+			));
 
-		return nullptr;
-	}
-
-	void FileLink::Synchronize(const std::filesystem::path absolutePath) {
-		auto parent = GetParent();
-		if (!parent || Synchronizing) return;
 		Synchronizing = true;
+		SynchronizingGuard Guard{Synchronizing};
+		LOG_INFO(App, "[Project:SourceMount] Synchronizing FileLink '%s'", GetPath().c_str());
 
-		LOG_INFO(App, "Synchronizing FileLink path: %s", Paths::ToUtf8(absolutePath).c_str());
+		SourceMountBudget Budget;
+		auto Entries = Mount.GetChildren(RelativePath, 0, Budget);
+		if (!Entries) return std::unexpected(Entries.error());
 
-		for (auto &child : OwnedSiblings) {
-			child->Destroy();
+		std::vector<std::shared_ptr<Instance>> CandidateSiblings;
+		try {
+			for (const auto &Entry : *Entries) {
+				auto Candidate = BuildCandidate(Mount, Entry, 1, Budget);
+				if (!Candidate) return std::unexpected(Candidate.error());
+				if (*Candidate) {
+					(**Candidate)->SetArchivable(false);
+					CandidateSiblings.push_back(std::move(**Candidate));
+				}
+			}
+		} catch (const std::exception &Error) {
+			return std::unexpected(CandidateError(
+				SourceMountErrorCode::MalformedInstance, RelativePath,
+				std::string("candidate construction failed: ") + Error.what()
+			));
+		} catch (...) {
+			return std::unexpected(CandidateError(
+				SourceMountErrorCode::MalformedInstance, RelativePath, "candidate construction failed"
+			));
 		}
-		OwnedSiblings.clear();
 
-		SDL_PathInfo pathInfo;
-		if (!SDL_GetPathInfo(Paths::ToUtf8(absolutePath).c_str(), &pathInfo)) {
-			LOG_WARN(
-				App, "Failed to get path information for %s: %s", Paths::ToUtf8(absolutePath).c_str(), SDL_GetError()
-			);
-			return;
-		} else if (pathInfo.type != SDL_PATHTYPE_DIRECTORY) {
-			LOG_WARN(App, "FileLinks (for now) can only be used with directories");
-			return;
-		};
-
-		for (const auto &entry : std::filesystem::directory_iterator(absolutePath)) {
-			auto child = InstanceFromPath(entry.path());
-			if (!child) continue;
-			child->SetArchivable(false);
-			child->SetParent(*parent);
-			OwnedSiblings.push_back(child);
+		std::vector<std::shared_ptr<Instance>> Published;
+		Published.reserve(CandidateSiblings.size());
+		try {
+			for (const auto &Candidate : CandidateSiblings) {
+				Published.push_back(Candidate);
+				Candidate->SetParent(*Parent);
+			}
+		} catch (...) {
+			for (auto Iterator = Published.rbegin(); Iterator != Published.rend(); ++Iterator) {
+				try {
+					if (!(*Iterator)->GetDestroyed()) (*Iterator)->Destroy();
+				} catch (...) {
+				}
+			}
+			return std::unexpected(CandidateError(
+				SourceMountErrorCode::CommitFailure, RelativePath,
+				"candidate subtree could not be committed to the DataModel"
+			));
 		}
 
-		Synchronizing = false;
-	};
+		auto Superseded = std::move(OwnedSiblings);
+		OwnedSiblings = std::move(CandidateSiblings);
+		for (const auto &Child : Superseded) {
+			if (!Child->GetDestroyed()) Child->Destroy();
+		}
+		return OwnedSiblings.size();
+	}
 }

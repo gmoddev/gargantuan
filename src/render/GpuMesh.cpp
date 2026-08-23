@@ -1,12 +1,24 @@
 #include "render/sdl/SDLGpuMesh.hpp"
 #include "gargantuan/render/Mesh.hpp"
+#include "gargantuan/render/SDLRenderer.hpp"
 #include <cstring>
 #include <format>
 #include <limits>
 #include <stdexcept>
 
 namespace gargantuan {
-	SDLGpuMesh::SDLGpuMesh(Mesh mesh) {
+	namespace {
+		Mesh ConvertMesh(const RenderMeshCreate &MeshData) {
+			Mesh Result;
+			Result.Vertices.reserve(MeshData.Vertices->size());
+			for (const auto &Source : *MeshData.Vertices)
+				Result.Vertices.push_back({Source.Position, Source.Normal, Source.TextureCoordinate});
+			Result.Indices = *MeshData.Indices;
+			return Result;
+		}
+	}
+
+	SDLGpuMesh::SDLGpuMesh(Mesh mesh, SDLRendererMetrics *MetricsValue) : Metrics(MetricsValue) {
 		this->Vertices = mesh.Vertices;
 		this->Indices = mesh.Indices;
 		constexpr auto MaximumBufferSize = std::numeric_limits<std::uint32_t>::max();
@@ -25,6 +37,9 @@ namespace gargantuan {
 		this->IndexBufferSize = static_cast<std::uint32_t>(IndexBytes);
 	}
 
+	SDLGpuMesh::SDLGpuMesh(const RenderMeshCreate &MeshData, SDLRendererMetrics *MetricsValue)
+		: SDLGpuMesh(ConvertMesh(MeshData), MetricsValue) {}
+
 	SDL_GPUBuffer *SDLGpuMesh::CreateVertexBuffer(SDL_GPUDevice *gpu) {
 		if (VertexBuffer) {
 			return VertexBuffer;
@@ -33,6 +48,7 @@ namespace gargantuan {
 		SDL_GPUBufferCreateInfo info = {.usage = SDL_GPU_BUFFERUSAGE_VERTEX, .size = VertexBufferSize};
 		VertexBuffer = SDL_CreateGPUBuffer(gpu, &info);
 		if (!VertexBuffer) throw std::runtime_error(std::format("Failed to create vertex buffer: {}", SDL_GetError()));
+		if (Metrics) ++Metrics->VertexBufferCreations;
 
 		return VertexBuffer;
 	}
@@ -45,6 +61,7 @@ namespace gargantuan {
 		SDL_GPUBufferCreateInfo info = {.usage = SDL_GPU_BUFFERUSAGE_INDEX, .size = IndexBufferSize};
 		IndexBuffer = SDL_CreateGPUBuffer(gpu, &info);
 		if (!IndexBuffer) throw std::runtime_error(std::format("Failed to create index buffer: {}", SDL_GetError()));
+		if (Metrics) ++Metrics->IndexBufferCreations;
 
 		return IndexBuffer;
 	}
@@ -62,6 +79,7 @@ namespace gargantuan {
 		TransferBuffer = SDL_CreateGPUTransferBuffer(gpu, &info);
 		if (!TransferBuffer)
 			throw std::runtime_error(std::format("Failed to create mesh transfer buffer: {}", SDL_GetError()));
+		if (Metrics) ++Metrics->TransferBufferCreations;
 
 		void *pointer = SDL_MapGPUTransferBuffer(gpu, TransferBuffer, false);
 		if (!pointer) {
@@ -93,8 +111,50 @@ namespace gargantuan {
 		SDL_GPUTransferBufferLocation indexSource{.transfer_buffer = transferBuffer, .offset = VertexBufferSize};
 		SDL_GPUBufferRegion indexDestination{.buffer = CreateIndexBuffer(gpu), .offset = 0, .size = IndexBufferSize};
 		SDL_UploadToGPUBuffer(copyPass, &indexSource, &indexDestination, false);
+		if (Metrics) {
+			Metrics->UploadOperations += 2;
+			Metrics->UploadedBytes += static_cast<std::uint64_t>(VertexBufferSize) + IndexBufferSize;
+		}
+	}
 
-		DestroyTransferBuffer(gpu);
+	void SDLGpuMesh::UploadVertices(
+		SDL_GPUDevice *Gpu,
+		SDL_GPUCopyPass *CopyPass,
+		std::uint32_t FirstVertex,
+		const std::vector<RenderVertex> &UpdatedVertices
+	) {
+		if (static_cast<std::size_t>(FirstVertex) > Vertices.size() ||
+			UpdatedVertices.size() > Vertices.size() - FirstVertex)
+			throw std::out_of_range("Dynamic mesh vertex update exceeds its persistent buffer");
+		if (UpdatedVertices.size() > std::numeric_limits<std::uint32_t>::max() / sizeof(Vertex))
+			throw std::length_error("Dynamic mesh vertex update exceeds the SDL transfer limit");
+		for (std::size_t Index = 0; Index < UpdatedVertices.size(); ++Index) {
+			const auto &Source = UpdatedVertices[Index];
+			Vertices[FirstVertex + Index] = {Source.Position, Source.Normal, Source.TextureCoordinate};
+		}
+		const auto Bytes = static_cast<std::uint32_t>(UpdatedVertices.size() * sizeof(Vertex));
+		auto *RangeTransfer = CreateTransferBuffer(Gpu);
+		auto *Mapped = SDL_MapGPUTransferBuffer(Gpu, RangeTransfer, true);
+		if (!Mapped)
+			throw std::runtime_error(std::format("Failed to map dynamic mesh transfer buffer: {}", SDL_GetError()));
+		std::memcpy(Mapped, Vertices.data() + FirstVertex, Bytes);
+		SDL_UnmapGPUTransferBuffer(Gpu, RangeTransfer);
+		SDL_GPUTransferBufferLocation Source{.transfer_buffer = RangeTransfer, .offset = 0};
+		SDL_GPUBufferRegion Destination{
+			.buffer = VertexBuffer,
+			.offset = FirstVertex * static_cast<std::uint32_t>(sizeof(Vertex)),
+			.size = Bytes,
+		};
+		const bool FullReplacement = FirstVertex == 0 && UpdatedVertices.size() == Vertices.size();
+		// Cycling the destination is only valid when every byte is replaced. A partial
+		// deformable update must preserve the untouched regions of the current backing.
+		SDL_UploadToGPUBuffer(CopyPass, &Source, &Destination, FullReplacement);
+		if (Metrics) {
+			++Metrics->BufferCycleRequests;
+			if (FullReplacement) ++Metrics->BufferCycleRequests;
+			++Metrics->UploadOperations;
+			Metrics->UploadedBytes += Bytes;
+		}
 	}
 
 	void SDLGpuMesh::Destroy(SDL_GPUDevice *gpu) {

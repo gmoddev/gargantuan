@@ -86,7 +86,7 @@ them in scope rather than silently selecting one source.
 | Replication | State projection and transfer to a receiver or peer | Authoritative gameplay decisions, direct unvalidated mutation |
 | Scripting | Luau VMs, execution contexts, native bindings, scheduling | Ambient host authority not explicitly granted |
 | Rendering | Immutable extracted render state, renderer-owned GPU resources | DataModel traversal or mutation, retained Instance pointers |
-| Physics | Neutral rigid-body semantics, safe-point updates, backend identity and events | Backend-native handles outside the adapter |
+| Physics | Neutral rigid and deformable semantics, safe-point updates, backend identities, owned step results and events | Backend-native handles or writable solver storage outside its adapter |
 | EditorHost | Versioned editor-facing engine boundary, commands, snapshots, journals, viewport transport | First-party Studio UX state, private engine pointer exposure |
 | Studio | Editor UX and non-authoritative document projections | Authoritative DataModel state, raw engine/GPU ownership |
 | Game networking | Connection, scheduling, delivery, remotes, peer-specific replication intent | Authoritative source history or platform-service policy |
@@ -101,7 +101,10 @@ The following documents describe recently implemented, source-verified slices:
 - [Platform and input boundary](../../devdocs/CurrentArchitecture/PlatformInputBoundary.md)
 - [Player runtime](../../devdocs/CurrentArchitecture/PlayerRuntime.md)
 - [Renderer backend boundary](../../devdocs/CurrentArchitecture/RendererBackendBoundary.md)
+- [Renderer Foundation 2 accepted architecture](../../devdocs/CurrentArchitecture/RendererFoundation2.md)
+- [Renderer Foundation 2C final backend decision](../../devdocs/CurrentArchitecture/RendererFoundation2C.md)
 - [Physics backend](../../devdocs/CurrentArchitecture/PhysicsBackend.md)
+- [Soft-body Physics Foundation 1](../../devdocs/CurrentArchitecture/SoftBodyPhysicsFoundation.md)
 - [Instance attributes](../src/content/docs/developing/instance-attributes.mdx)
 - [Instance tags](../src/content/docs/developing/instance-tags.mdx)
 - [EditorHost and Studio boundary](../src/content/docs/developing/editor-host.mdx)
@@ -116,6 +119,9 @@ The following documents describe recently implemented, source-verified slices:
 - [Real game transport](../../devdocs/CurrentArchitecture/RealGameTransport.md)
 - [Serialization codec boundary](../../devdocs/CurrentArchitecture/SerializationCodecBoundary.md)
 - [Script security](../../devdocs/CurrentArchitecture/ScriptSecurity.md)
+- [SourceMount and FileLink compatibility](../../devdocs/CurrentArchitecture/SourceMount.md)
+- [Continuous native build and test contract](../../devdocs/CurrentArchitecture/ContinuousIntegration.md)
+- [Optional telemetry host integration](../../devdocs/CurrentArchitecture/TelemetryIntegration.md)
 - [EditorHost protocol](../../devdocs/CurrentArchitecture/EditorHostProtocol.md)
 - [Editor viewport](../../devdocs/CurrentArchitecture/EditorViewport.md)
 

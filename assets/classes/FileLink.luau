@@ -2,12 +2,12 @@ const c, t, p = require("@tools/classes").unpack()
 
 return c({
 	name = "FileLink",
-	description = "Class that synchronizes a filesystem directory into the DataModel",
+	description = "Compatibility class that imports a project-relative source directory through SourceMount",
 	since = "0.1.0",
 
 	properties = {
 		Path = {
-			description = "Path of the directory to synchronize from",
+			description = "Project-relative path of the source directory to import",
 			type = t.String,
 			unmodified = '""',
 			serializable = true,

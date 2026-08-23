@@ -22,7 +22,7 @@ invariant, protocol, or accepted-design documents.
 Authoritative DataModel / live Instance graph
     <- validated commands -> MutationGateway on Main
     -> committed ChangeJournal -> snapshots, replication, EditorHost
-    -> RenderExtractor -> immutable RenderSnapshot -> renderer
+    -> RenderDirtyAccumulator -> immutable RenderPublication -> renderer
 ```
 
 - `DataModel` owns the live object graph, identity scope, authoritative
@@ -50,7 +50,7 @@ Authoritative DataModel / live Instance graph
 | Runtime schema | Stable native/custom class, enum, and extension identity and reflection policy | Build candidate, validate, then freeze atomically |
 | Mutation | Validated authoritative commands | Does not own transport or Studio projection state |
 | Change journal | Ordered committed history per DataModel scope | Not a packet, peer, render, or RPC sequence |
-| Rendering | Immutable extracted state and GPU resources | Never traverses/mutates DataModel; no Instance pointers in snapshots |
+| Rendering | Immutable publication state and GPU resources | Never traverses/mutates DataModel; no Instance pointers in publications |
 | EditorHost | Public versioned engine/editor IPC boundary | DTOs, stable IDs, schema, journals, commands, pixels only |
 | Studio | Private editor UX and replicated document projection | Returns mutations through EditorHost; no engine pointers/GPU handles |
 | Scripting | Luau VMs, contexts, bindings, scheduling | Capability checks remain at native/reflection boundaries |
@@ -68,9 +68,13 @@ Authoritative DataModel / live Instance graph
 | Rendering or viewport picking | `render-extraction.mdx` and `devdocs/CurrentArchitecture/EditorViewport.md` |
 | Platform input or renderer backend isolation | `devdocs/CurrentArchitecture/PlatformInputBoundary.md` and `RendererBackendBoundary.md` |
 | Player input actions, LocalPlayer, character lifecycle, default controller/camera, or kinematic motion | `devdocs/CurrentArchitecture/PlayerRuntime.md`, then `PlatformInputBoundary.md` and `PhysicsBackend.md` as needed |
-| Physics bodies, constraints, stepping, or touch events | `devdocs/CurrentArchitecture/PhysicsBackend.md` |
+| Rigid physics bodies, constraints, stepping, or touch events | `devdocs/CurrentArchitecture/PhysicsBackend.md` |
+| Cloth, rubber, deformable physics, soft-body materials/attachments, or deformable tiers | `devdocs/CurrentArchitecture/SoftBodyPhysicsFoundation.md`, then `PhysicsBackend.md` and `render-extraction.mdx` as needed |
 | Studio, EditorHost, snapshots, journals, viewport IPC | `editor-host.mdx` plus the relevant `devdocs/CurrentArchitecture` protocol document |
 | Luau execution or permissions | `devdocs/CurrentArchitecture/ScriptSecurity.md` |
+| Project filesystem or FileLink source import | `devdocs/CurrentArchitecture/SourceMount.md` |
+| Native build, generated sources, tests, or CI | `devdocs/CurrentArchitecture/ContinuousIntegration.md`, then `devdocs/Compiling.md` |
+| Optional process telemetry | `devdocs/CurrentArchitecture/TelemetryIntegration.md` |
 | Game networking | `devdocs/CurrentArchitecture/ProtocolInputHardening.md`, `NetworkingContracts.md`, `SimulatedTransport.md`, `NetworkSchedulerContract.md`, `NetworkingFoundationValidation.md`, `RealGameTransport.md`, and `BasicClientReplication.md`, then `networking-architecture.mdx`; Foundations 1–6 include a production scheduler, pinned GNS adapter, and reliable basic client replication |
 
 ## Current implementation landmarks
@@ -87,8 +91,12 @@ Authoritative DataModel / live Instance graph
   project code cannot register native behavior callbacks.
 - Attributes and tags are bounded dynamic Instance state, not schema changes.
   Their writes use mutation authority; tags maintain generation-safe indexes.
-- Render extraction happens after simulation and `PreRender`; snapshots are
-  immutable value data and use stable `ObjectId` for picking.
+- Render publication happens after simulation and `PreRender`; incremental
+  publications are immutable value data and use stable `ObjectId` for picking.
+  Complete snapshots remain recovery/compatibility scaffolding.
+- `WorldRoot` owns separate neutral rigid and deformable worlds. Box3D remains
+  confined to the rigid adapter; the sibling CPU XPBD backend publishes owned
+  fixed-topology cloth/rubber states into the same immutable render path.
 - EditorHost is the public boundary to the separately authored private Studio.
   Studio sees versioned DTOs and pixels, not private headers, engine pointers,
   renderer objects, or shared-memory handles in Luau.

@@ -39,7 +39,7 @@ namespace gargantuan {
 		~EditorHost();
 
 		[[nodiscard]] std::string HandleRequest(std::string_view request);
-		int Run(std::istream &input, std::ostream &output);
+		int Run(std::istream &input, std::ostream &output, std::function<void()> ProcessObserver = {});
 		void SetPersistenceCheckpointForTesting(std::function<void()> checkpoint) {
 			PersistenceCheckpointForTesting = std::move(checkpoint);
 		}
@@ -56,8 +56,9 @@ namespace gargantuan {
 		MutationGateway Mutations;
 		ScriptSecurityContext StudioSecurity = ScriptSecurityContext::StudioCoreUi();
 		std::optional<RenderCameraInput> ViewportCamera;
-		RenderExtractor ViewportExtractor;
-		RenderSnapshotPtr LastViewportSnapshot;
+		RenderPublisher ViewportPublisher;
+		RenderPublicationPtr LastViewportPublication;
+		RenderProjection ViewportProjection;
 		std::unique_ptr<EditorViewportRenderer> ViewportRenderer;
 		std::unique_ptr<SharedFrameRing> ViewportFrameRing;
 		std::uint32_t ViewportWidth = 0;

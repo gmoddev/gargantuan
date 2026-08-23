@@ -7,6 +7,11 @@
 #include <memory>
 #include <stdexcept>
 
+#if defined(_WIN32)
+#include <Windows.h>
+#undef CreateDirectory
+#endif
+
 namespace gargantuan {
 	struct DiskFileHandle final : public FileHandle {
 		bool Closed = false;
@@ -68,9 +73,17 @@ namespace gargantuan {
 	}
 
 	FileType MapDirectoryEntryType(const std::filesystem::directory_entry &entry) {
-		if (entry.is_regular_file()) {
+#if defined(_WIN32)
+		const auto Attributes = GetFileAttributesW(entry.path().c_str());
+		if (Attributes != INVALID_FILE_ATTRIBUTES && (Attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0)
+			return FileType::Unknown;
+#endif
+		std::error_code Error;
+		const auto Status = entry.symlink_status(Error);
+		if (Error || std::filesystem::is_symlink(Status)) return FileType::Unknown;
+		if (std::filesystem::is_regular_file(Status)) {
 			return FileType::File;
-		} else if (entry.is_directory()) {
+		} else if (std::filesystem::is_directory(Status)) {
 			return FileType::Directory;
 		} else {
 			return FileType::Unknown;
@@ -92,7 +105,7 @@ namespace gargantuan {
 
 	std::unique_ptr<FileHandle> DiskFilesystem::Open(const std::filesystem::path &path, const FileOpen &mode) {
 		auto stream = SDL_IOFromFile(path.string().c_str(), MapFileOpen(mode));
-		if (!stream) throw SDL_GetError();
+		if (!stream) throw std::runtime_error(SDL_GetError());
 		return std::make_unique<DiskFileHandle>(stream);
 	};
 

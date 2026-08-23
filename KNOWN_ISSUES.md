@@ -24,26 +24,6 @@ verifying that representative Box3D warnings are emitted once at the intended
 severity. The upstream abbreviated `B3D` category should be adapted to the
 repository's subsystem-oriented logging convention rather than copied verbatim.
 
-## KI-003: FileLink silently skips nested Instance JSON files
-
-- Status: Open
-- Priority: Medium
-- Area: Projects and source synchronization
-- Relevant code:
-  - `src/classes/FileLink.cpp`
-  - `src/assets/InstanceSerialization.cpp`
-
-`InstanceFromPath` recognizes filenames ending in `.instance.json`, but the
-deserialization block is disabled under a `FIXME: self recursion` comment and
-the function returns `nullptr`. A recursive `FileLink` import therefore omits
-nested model files without creating an Instance or returning a structured
-failure to the caller.
-
-Resolution requires a bounded, root-confined nested-model import path that
-cannot recursively import itself, reports malformed models with actionable
-paths, and has coverage for successful imports, malformed files, cycles or
-self-reference, and depth/count limits.
-
 ## KI-005: Instance has no pre-removal DescendantRemoving lifecycle signal
 
 - Status: Open

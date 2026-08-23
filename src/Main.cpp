@@ -12,11 +12,12 @@
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/runtime/DataModelRoot.hpp"
 #include "platform/sdl/SDLHost.hpp"
+#include "telemetry/OptionalTelemetry.hpp"
 
 #include <SDL3/SDL.h>
 #include <argparse/argparse.hpp>
-#include <magic_enum/magic_enum.hpp>
-
+#include <algorithm>
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <exception>
@@ -24,9 +25,28 @@
 #include <fstream>
 #include <iostream>
 #include <memory>
+#include <stdexcept>
 #include <string>
 
 using namespace gargantuan;
+
+namespace {
+	constexpr std::uint64_t RuntimeSchemaFatalCode = 0x1001;
+	constexpr std::uint64_t EditorHostFatalCode = 0x1002;
+	constexpr std::uint64_t RuntimeConstructionFatalCode = 0x1003;
+	constexpr std::uint64_t EngineLoopFatalCode = 0x1004;
+
+	[[nodiscard]] bool IsStudioEditorToken(std::string_view Token) {
+		return Token.size() == 64 && std::ranges::all_of(Token, [](unsigned char Character) {
+			return (Character >= '0' && Character <= '9') || (Character >= 'a' && Character <= 'f');
+		});
+	}
+
+	[[nodiscard]] bool EnabledEnvironmentPolicy(const char *Name) {
+		const auto *Value = std::getenv(Name);
+		return Value && std::string_view(Value) == "1";
+	}
+}
 
 Engine *ConstructProject(std::string path, BaseRenderer *renderer) {
 	auto root = std::filesystem::path(path);
@@ -37,7 +57,7 @@ Engine *ConstructProject(std::string path, BaseRenderer *renderer) {
 		return new Engine(game, renderer);
 	} catch (std::exception &e) {
 		LOG_CRITICAL(App, "%s", e.what());
-		std::exit(1);
+		throw;
 	}
 }
 
@@ -52,20 +72,16 @@ Engine *ConstructScript(std::string path, BaseRenderer *renderer) {
 		return engine;
 	} catch (std::exception &e) {
 		LOG_CRITICAL(App, "%s", e.what());
-		std::exit(1);
+		throw;
 	}
 }
 
 Engine *ConstructInstance(std::string path, BaseRenderer *renderer) {
 	SDL_PathInfo pathInfo;
 	if (!SDL_GetPathInfo(path.c_str(), &pathInfo)) {
-		LOG_CRITICAL(App, "Failed to get path info for %s: %s", path.c_str(), SDL_GetError());
-		std::exit(1);
+		throw std::runtime_error("Failed to inspect the requested Instance file");
 	} else if (pathInfo.type != SDL_PATHTYPE_FILE) {
-		auto typeNameView = magic_enum::enum_name(pathInfo.type);
-		auto typeName = std::string(typeNameView.data(), typeNameView.size());
-		LOG_CRITICAL(App, "Expected %s to be an instance file, got %s", path.c_str(), typeName.c_str());
-		std::exit(1);
+		throw std::runtime_error("The requested Instance target is not a file");
 	}
 
 	InstanceSerialization::InstanceFormat format;
@@ -74,14 +90,12 @@ Engine *ConstructInstance(std::string path, BaseRenderer *renderer) {
 	} else if (path.ends_with(".instance.bin")) {
 		format = InstanceSerialization::InstanceFormat::Binary;
 	} else {
-		LOG_CRITICAL(App, "Unable to infer instance format of %s", path.c_str());
-		std::exit(1);
+		throw std::runtime_error("Unable to infer the requested Instance file format");
 	}
 
 	std::ifstream fileStream(path);
 	if (!fileStream.is_open()) {
-		LOG_CRITICAL(App, "Failed to open instance file %s", path.c_str());
-		std::exit(1);
+		throw std::runtime_error("Failed to open the requested Instance file");
 	}
 
 	auto deserialized = InstanceSerialization::Deserialize(format, fileStream);
@@ -90,7 +104,7 @@ Engine *ConstructInstance(std::string path, BaseRenderer *renderer) {
 		for (auto &reason : deserialized.Errors) {
 			LOG_CRITICAL(App, "* %s", reason.c_str());
 		}
-		std::exit(1);
+		throw std::runtime_error("Failed to deserialize the requested Instance file");
 	}
 
 	auto instance = deserialized.Instance;
@@ -111,6 +125,8 @@ int main(int argc, char *argv[]) {
 	program.add_argument("--enable_roblox_compat").flag().help("use roblox api compatibility (overrides projects)");
 	program.add_argument("--editor-host").flag().help("run the versioned local EditorHost protocol over standard I/O");
 	program.add_argument("--editor-token").help("per-launch EditorHost session token").default_value("");
+	program.add_argument("--telemetry-crashes").flag().help("enable optional sanitized crash reporting for this process");
+	program.add_argument("--telemetry-performance").flag().help("enable optional coarse performance snapshots for this process");
 	program.add_group("Logging");
 	program.add_argument("--no_ansi").flag().help("disable ansi logs");
 	program.add_argument("--no_pretty").flag().help("whether to print json structured logs");
@@ -136,25 +152,61 @@ int main(int argc, char *argv[]) {
 
 	LOG_INFO(App, "Gargantuan start");
 
+	const auto EditorHostMode = program.is_used("--editor-host");
+	const auto EditorToken = program.get<std::string>("--editor-token");
+	telemetry::Consent TelemetryConsent{
+		.CrashReportsEnabled = program.is_used("--telemetry-crashes"),
+		.PerformanceSnapshotsEnabled = program.is_used("--telemetry-performance"),
+	};
+	std::optional<std::array<std::uint8_t, 16>> ParentLaunchId;
+	if (EditorHostMode && IsStudioEditorToken(EditorToken)) {
+		TelemetryConsent.CrashReportsEnabled = TelemetryConsent.CrashReportsEnabled ||
+			EnabledEnvironmentPolicy("GARGANTUAN_TELEMETRY_CRASHES");
+		TelemetryConsent.PerformanceSnapshotsEnabled = TelemetryConsent.PerformanceSnapshotsEnabled ||
+			EnabledEnvironmentPolicy("GARGANTUAN_TELEMETRY_PERFORMANCE");
+		if (const auto *LaunchId = std::getenv("GARGANTUAN_TELEMETRY_LAUNCH_ID"))
+			ParentLaunchId = telemetry::OptionalTelemetry::ParseLaunchId(LaunchId);
+	}
+#if defined(NDEBUG)
+	const std::string TelemetryBuildConfiguration = "release";
+#else
+	const std::string TelemetryBuildConfiguration = "debug";
+#endif
+	auto Telemetry = telemetry::OptionalTelemetry::Load({
+		.HostComponent = EditorHostMode ? telemetry::Component::EditorHost : telemetry::Component::Engine,
+		.CategoryConsent = TelemetryConsent,
+		.LibraryPath = telemetry::OptionalTelemetry::DefaultLibraryPath(),
+		.StorageDirectory = telemetry::OptionalTelemetry::DefaultStorageDirectory(),
+		.ApplicationVersion = "0.0.0",
+		.BuildId = "gargantuan-main",
+		.BuildConfiguration = TelemetryBuildConfiguration,
+		.ParentLaunchId = ParentLaunchId,
+	});
+	Telemetry.SetPhase(telemetry::Phase::Startup);
+
 	int hasProject = program.is_used("--project");
 	int hasScript = program.is_used("--script");
 	int hasInstance = program.is_used("--instance");
+	Telemetry.SetPhase(telemetry::Phase::RuntimeSchemaBootstrap);
 	try {
 		if (hasProject) BootstrapProjectRuntimeSchema(program.get<std::string>("--project"));
 		else BootstrapNativeRuntimeSchema();
 	} catch (const std::exception &exception) {
+		Telemetry.ReportControlledFatal(RuntimeSchemaFatalCode);
 		std::cerr << "Runtime schema bootstrap failed: " << exception.what() << std::endl;
 		return 1;
 	}
-	if (program.is_used("--editor-host")) {
+	if (EditorHostMode) {
 		if (hasProject + hasScript + hasInstance != 0) {
 			LOG_CRITICAL(App, "EditorHost opens projects through its protocol and cannot accept a target argument");
 			return 1;
 		}
 		try {
-			EditorHost host(program.get<std::string>("--editor-token"));
-			return host.Run(std::cin, std::cout);
+			Telemetry.SetPhase(telemetry::Phase::EditorHostLoop);
+			EditorHost host(EditorToken);
+			return host.Run(std::cin, std::cout, [&Telemetry] { Telemetry.PollPerformance(); });
 		} catch (const std::exception &error) {
+			Telemetry.ReportControlledFatal(EditorHostFatalCode);
 			LOG_CRITICAL(App, "%s", error.what());
 			return 1;
 		}
@@ -182,18 +234,30 @@ int main(int argc, char *argv[]) {
 		try {
 			renderer = new SDLRenderer(viewportSize);
 		} catch (std::exception &e) {
+			Telemetry.ReportControlledFatal(RuntimeConstructionFatalCode);
 			LOG_CRITICAL(App, "Failed to construct SDL3 renderer: %s", e.what());
-			std::exit(1);
+			return 1;
 		}
 	}
 
-	auto engine = hasProject  ? ConstructProject(program.get<std::string>("--project"), renderer)
-				  : hasScript ? ConstructScript(program.get<std::string>("--script"), renderer)
-							  : ConstructInstance(program.get<std::string>("--instance"), renderer);
+	Engine *engine = nullptr;
+	Telemetry.SetPhase(telemetry::Phase::ProjectOpen);
+	try {
+		engine = hasProject  ? ConstructProject(program.get<std::string>("--project"), renderer)
+				 : hasScript ? ConstructScript(program.get<std::string>("--script"), renderer)
+							 : ConstructInstance(program.get<std::string>("--instance"), renderer);
+	} catch (const std::exception &Error) {
+		Telemetry.ReportControlledFatal(RuntimeConstructionFatalCode);
+		LOG_CRITICAL(App, "%s", Error.what());
+		delete renderer;
+		return 1;
+	}
 
 	LOG_INFO(App, "Starting engine loop");
+	Telemetry.SetPhase(telemetry::Phase::EngineLoop);
 	engine->ProcessService->Alive = true;
 	SDLHost Host;
+	auto PreviousFrame = std::chrono::steady_clock::now();
 	try {
 		while (engine->ProcessService->Alive) {
 			HostEvent Event;
@@ -203,11 +267,18 @@ int main(int argc, char *argv[]) {
 				if (!engine->ProcessService->Alive) break;
 			}
 			if (!engine->ProcessService->Alive) break;
+			const auto CurrentFrame = std::chrono::steady_clock::now();
+			Telemetry.ObserveFrame(CurrentFrame - PreviousFrame);
+			PreviousFrame = CurrentFrame;
 			engine->Step();
 		}
 	} catch (std::exception &e) {
+		Telemetry.ReportControlledFatal(EngineLoopFatalCode);
 		std::cerr << e.what() << std::endl;
-		std::exit(1);
+		engine->Destroy();
+		delete engine;
+		delete renderer;
+		return 1;
 	}
 
 	auto exitCode = engine->ProcessService->ExitCode;

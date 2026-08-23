@@ -1,11 +1,13 @@
 #include "gargantuan/classes/WorldRoot.hpp"
 #include "gargantuan/Log.hpp"
+#include "gargantuan/render/RenderDirtyAccumulator.hpp"
 
 #include "gargantuan/scripting/ScriptSecurity.hpp"
 #include "gargantuan/scripting/StackValue.hpp"
 
 #include <algorithm>
 #include <lua.h>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string_view>
@@ -16,6 +18,21 @@ namespace gargantuan {
 	namespace {
 		[[nodiscard]] bool HasImpulse(const glm::vec3 &Impulse) {
 			return Impulse.x != 0.0f || Impulse.y != 0.0f || Impulse.z != 0.0f;
+		}
+
+		[[nodiscard]] SoftBodyQuality ToSoftBodyQuality(Enums::DeformableQuality Quality) {
+			switch (Quality) {
+				case Enums::DeformableQuality::Low: return SoftBodyQuality::Low;
+				case Enums::DeformableQuality::Medium: return SoftBodyQuality::Medium;
+				case Enums::DeformableQuality::High: return SoftBodyQuality::High;
+				case Enums::DeformableQuality::Automatic: return SoftBodyQuality::Automatic;
+			}
+			return SoftBodyQuality::Automatic;
+		}
+
+		[[nodiscard]] SoftBodyCollisionMode ToSoftBodyCollisionMode(Enums::DeformableCollisionMode Mode) {
+			return Mode == Enums::DeformableCollisionMode::None ? SoftBodyCollisionMode::None :
+				SoftBodyCollisionMode::RigidPrimitives;
 		}
 
 		[[nodiscard]] std::vector<ObjectId> SortedIds(const std::unordered_set<ObjectId> &Ids) {
@@ -36,6 +53,52 @@ namespace gargantuan {
 		};
 	}
 
+	SoftBodyDefinition WorldRoot::DescribeDeformable(DeformableBody &Body) const {
+		SoftBodyMaterialDesc Material;
+		if (const auto MaterialValue = Body.GetMaterial(); MaterialValue && *MaterialValue &&
+			!(*MaterialValue)->GetDestroyed() && !(*MaterialValue)->IsDestroying()) {
+			Material = {
+				.ParticleMass = (*MaterialValue)->GetParticleMass(),
+				.Damping = (*MaterialValue)->GetDamping(),
+				.StretchCompliance = (*MaterialValue)->GetStretchCompliance(),
+				.BendCompliance = (*MaterialValue)->GetBendCompliance(),
+				.ShapeCompliance = (*MaterialValue)->GetShapeCompliance(),
+				.Friction = (*MaterialValue)->GetFriction(),
+				.Thickness = (*MaterialValue)->GetThickness(),
+			};
+		}
+
+		std::map<std::uint32_t, std::pair<ObjectId, glm::vec3>> AttachmentPositions;
+		for (const auto &Candidate : Body.GetDescendants()) {
+			auto Attachment = std::dynamic_pointer_cast<SoftBodyAttachment>(Candidate);
+			if (!Attachment || !Attachment->GetEnabled() || Attachment->GetVertexIndex() < 0 ||
+				Attachment->GetDestroyed() || Attachment->IsDestroying()) continue;
+			const auto Vertex = static_cast<std::uint32_t>(Attachment->GetVertexIndex());
+			const auto Position = AttachmentPositions.find(Vertex);
+			if (Position == AttachmentPositions.end() || Attachment->GetObjectId() < Position->second.first)
+				AttachmentPositions[Vertex] = {Attachment->GetObjectId(), Attachment->GetPosition()};
+		}
+		std::vector<SoftBodyAttachmentDesc> Attachments;
+		Attachments.reserve(AttachmentPositions.size());
+		for (const auto &[Vertex, Entry] : AttachmentPositions)
+			Attachments.push_back({Vertex, Entry.second});
+
+		const auto Resolution = Body.GetSoftBodyResolution();
+		return {
+			.Kind = Body.GetSoftBodyKind(),
+			.Position = Body.GetPosition(),
+			.Size = Body.GetSize(),
+			.ResolutionX = Resolution.x,
+			.ResolutionY = Resolution.y,
+			.ResolutionZ = Resolution.z,
+			.Material = Material,
+			.Quality = ToSoftBodyQuality(Body.GetQuality()),
+			.CollisionMode = ToSoftBodyCollisionMode(Body.GetCollisionMode()),
+			.Enabled = Body.GetEnabled(),
+			.Attachments = std::move(Attachments),
+		};
+	}
+
 	PhysicsBodyId WorldRoot::CreatePartBody(const std::shared_ptr<BasePart> &Part) {
 		if (!Part || Part->GetDestroyed() || Part->IsDestroying() || !Physics.IsValid()) return {};
 		const auto Object = Part->GetObjectId();
@@ -53,6 +116,33 @@ namespace gargantuan {
 		PartBodies[Object] = Body;
 		BodyParts[Body] = Part;
 		return Body;
+	}
+
+	SoftBodyId WorldRoot::CreateDeformableBody(const std::shared_ptr<DeformableBody> &Body) {
+		if (!Body || Body->GetDestroyed() || Body->IsDestroying() || !Deformables.IsValid()) return {};
+		const auto Object = Body->GetObjectId();
+		if (auto Existing = DeformableIds.find(Object); Existing != DeformableIds.end()) {
+			if (Deformables.IsBodyValid(Existing->second)) return Existing->second;
+			IdDeformables.erase(Existing->second);
+			DeformableIds.erase(Existing);
+		}
+		const auto Id = Deformables.CreateBody(DescribeDeformable(*Body));
+		if (!Id.IsValid()) {
+			LOG_ERROR(App, "[Physics:SoftBody] Failed to create deformable body for %s", Body->GetFullName().c_str());
+			return {};
+		}
+		if (std::find(SoftBodies.begin(), SoftBodies.end(), Body) == SoftBodies.end()) SoftBodies.push_back(Body);
+		DeformableIds[Object] = Id;
+		IdDeformables[Id] = Body;
+		if (auto State = Deformables.GetBodyState(Id)) DeformableStates[Object] = std::move(*State);
+		RenderDirtyAccumulator::Get().Mark(
+			GetReplicationScopeId(), Object,
+			RenderUpdateDomain::Transform | RenderUpdateDomain::Material | RenderUpdateDomain::Visibility |
+				RenderUpdateDomain::Geometry | RenderUpdateDomain::DeformableVertices | RenderUpdateDomain::Hierarchy,
+			DeformableStates.contains(Object) && DeformableStates.at(Object).Positions ?
+				DeformableStates.at(Object).Positions->size() * sizeof(glm::vec3) * 4 : 0
+		);
+		return Id;
 	}
 
 	PhysicsConstraintId WorldRoot::CreateConstraintJoint(const std::shared_ptr<Constraint> &Constraint) {
@@ -96,6 +186,70 @@ namespace gargantuan {
 			Connections.push_back(Part->GetPropertyChangedSignal("Shape")->Connect(MarkDirty));
 	}
 
+	void WorldRoot::TrackDeformable(const std::shared_ptr<DeformableBody> &Body) {
+		if (!Body || Body->GetDestroyed() || Body->IsDestroying()) return;
+		const auto Id = Body->GetObjectId();
+		TrackedDeformables[Id] = Body;
+		if (PhysicsConnections.contains(Id)) return;
+		auto MarkDirty = [this, Id](std::monostate) {
+			if (!ShuttingDownPhysics && TrackedDeformables.contains(Id)) DirtyDeformables.insert(Id);
+		};
+		auto &Connections = PhysicsConnections[Id];
+		for (const std::string_view Name : {
+				 "Enabled", "Position", "Size", "Quality", "CollisionMode", "Material", "ResolutionX",
+				 "ResolutionY", "ResolutionZ"
+			})
+			if (Body->FindProperty(std::string(Name)))
+				Connections.push_back(Body->GetPropertyChangedSignal(std::string(Name))->Connect(MarkDirty));
+		Connections.push_back(Body->DescendantAdded->Connect([MarkDirty](std::shared_ptr<Instance>) {
+			MarkDirty(std::monostate{});
+		}));
+		Connections.push_back(Body->DescendantRemoved->Connect([MarkDirty](std::shared_ptr<Instance>) {
+			MarkDirty(std::monostate{});
+		}));
+	}
+
+	void WorldRoot::TrackSoftBodyAttachment(const std::shared_ptr<SoftBodyAttachment> &Attachment) {
+		if (!Attachment || Attachment->GetDestroyed() || Attachment->IsDestroying()) return;
+		auto Owner = std::dynamic_pointer_cast<DeformableBody>(Attachment->FindFirstAncestorWhichIsA("DeformableBody"));
+		if (!Owner) return;
+		const auto Id = Attachment->GetObjectId();
+		const auto OwnerId = Owner->GetObjectId();
+		SoftBodyAttachmentOwners[Id] = OwnerId;
+		DirtyDeformables.insert(OwnerId);
+		if (PhysicsConnections.contains(Id)) return;
+		auto MarkDirty = [this, Id](std::monostate) {
+			auto Found = SoftBodyAttachmentOwners.find(Id);
+			if (!ShuttingDownPhysics && Found != SoftBodyAttachmentOwners.end())
+				DirtyDeformables.insert(Found->second);
+		};
+		auto &Connections = PhysicsConnections[Id];
+		for (const std::string_view Name : {"Enabled", "VertexIndex", "Position"})
+			Connections.push_back(Attachment->GetPropertyChangedSignal(std::string(Name))->Connect(MarkDirty));
+	}
+
+	void WorldRoot::TrackSoftBodyMaterial(const std::shared_ptr<SoftBodyMaterial> &Material) {
+		if (!Material || Material->GetDestroyed() || Material->IsDestroying()) return;
+		const auto Id = Material->GetObjectId();
+		TrackedSoftBodyMaterials[Id] = Material;
+		if (PhysicsConnections.contains(Id)) return;
+		auto MarkUsersDirty = [this, Id](std::monostate) {
+			if (ShuttingDownPhysics) return;
+			for (const auto &[BodyId, WeakBody] : TrackedDeformables) {
+				auto Body = WeakBody.lock();
+				const auto BodyMaterial = Body ? Body->GetMaterial() : std::nullopt;
+				if (BodyMaterial && *BodyMaterial && (*BodyMaterial)->GetObjectId() == Id)
+					DirtyDeformables.insert(BodyId);
+			}
+		};
+		auto &Connections = PhysicsConnections[Id];
+		for (const std::string_view Name : {
+				 "ParticleMass", "Damping", "StretchCompliance", "BendCompliance", "ShapeCompliance",
+				 "Friction", "Thickness"
+			})
+			Connections.push_back(Material->GetPropertyChangedSignal(std::string(Name))->Connect(MarkUsersDirty));
+	}
+
 	void WorldRoot::TrackConstraint(const std::shared_ptr<Constraint> &Constraint) {
 		if (!Constraint || Constraint->GetDestroyed() || Constraint->IsDestroying()) return;
 		const auto Id = Constraint->GetObjectId();
@@ -132,6 +286,58 @@ namespace gargantuan {
 		}
 		RemoveInvalidConstraintMappings();
 		for (const auto &[Id, _] : TrackedConstraints) DirtyConstraints.insert(Id);
+	}
+
+	void WorldRoot::RemoveDeformable(const std::shared_ptr<DeformableBody> &Body) {
+		if (!Body) return;
+		const auto Object = Body->GetObjectId();
+		std::erase(SoftBodies, Body);
+		DirtyDeformables.erase(Object);
+		TrackedDeformables.erase(Object);
+		if (auto Connections = PhysicsConnections.find(Object); Connections != PhysicsConnections.end()) {
+			for (const auto &Connection : Connections->second) Connection->Disconnect();
+			PhysicsConnections.erase(Connections);
+		}
+		if (auto Found = DeformableIds.find(Object); Found != DeformableIds.end()) {
+			IdDeformables.erase(Found->second);
+			if (Deformables.IsBodyValid(Found->second)) {
+				auto Result = Deformables.DestroyBody(Found->second);
+				if (!Result.Succeeded())
+					LOG_ERROR(App, "[Physics:SoftBody] Body destruction failed: %s", Result.Message.c_str());
+			}
+			DeformableIds.erase(Found);
+		}
+		DeformableStates.erase(Object);
+		std::erase_if(SoftBodyAttachmentOwners, [Object](const auto &Entry) { return Entry.second == Object; });
+	}
+
+	void WorldRoot::RemoveSoftBodyAttachment(const std::shared_ptr<SoftBodyAttachment> &Attachment) {
+		if (!Attachment) return;
+		const auto Id = Attachment->GetObjectId();
+		if (auto Found = SoftBodyAttachmentOwners.find(Id); Found != SoftBodyAttachmentOwners.end()) {
+			DirtyDeformables.insert(Found->second);
+			SoftBodyAttachmentOwners.erase(Found);
+		}
+		if (auto Connections = PhysicsConnections.find(Id); Connections != PhysicsConnections.end()) {
+			for (const auto &Connection : Connections->second) Connection->Disconnect();
+			PhysicsConnections.erase(Connections);
+		}
+	}
+
+	void WorldRoot::RemoveSoftBodyMaterial(const std::shared_ptr<SoftBodyMaterial> &Material) {
+		if (!Material) return;
+		const auto Id = Material->GetObjectId();
+		for (const auto &[BodyId, WeakBody] : TrackedDeformables) {
+			auto Body = WeakBody.lock();
+			const auto BodyMaterial = Body ? Body->GetMaterial() : std::nullopt;
+			if (BodyMaterial && *BodyMaterial && (*BodyMaterial)->GetObjectId() == Id)
+				DirtyDeformables.insert(BodyId);
+		}
+		TrackedSoftBodyMaterials.erase(Id);
+		if (auto Connections = PhysicsConnections.find(Id); Connections != PhysicsConnections.end()) {
+			for (const auto &Connection : Connections->second) Connection->Disconnect();
+			PhysicsConnections.erase(Connections);
+		}
 	}
 
 	void WorldRoot::RemoveConstraint(const std::shared_ptr<Constraint> &Constraint) {
@@ -213,6 +419,44 @@ namespace gargantuan {
 			}
 		}
 
+		const auto DeformableUpdates = SortedIds(DirtyDeformables);
+		DirtyDeformables.clear();
+		for (const auto Object : DeformableUpdates) {
+			auto Tracked = TrackedDeformables.find(Object);
+			auto Body = Tracked == TrackedDeformables.end() ? nullptr : Tracked->second.lock();
+			if (!Body || Body->GetDestroyed() || Body->IsDestroying() ||
+				Body->FindFirstAncestorWhichIsA("WorldRoot").get() != this) continue;
+			auto Found = DeformableIds.find(Object);
+			if (Found == DeformableIds.end() || !Deformables.IsBodyValid(Found->second)) {
+				if (!CreateDeformableBody(Body).IsValid()) DirtyDeformables.insert(Object);
+				continue;
+			}
+			const auto Previous = Deformables.GetBodyState(Found->second);
+			auto Result = Deformables.UpdateBody(Found->second, DescribeDeformable(*Body));
+			if (!Result.Succeeded()) {
+				LOG_ERROR(
+					App, "[Physics:SoftBody] Body update failed for %s: %s", Body->GetFullName().c_str(),
+					Result.Message.c_str()
+				);
+				DirtyDeformables.insert(Object);
+				continue;
+			}
+			if (auto State = Deformables.GetBodyState(Found->second)) {
+				const auto TopologyChanged = Previous && Previous->TopologyRevision != State->TopologyRevision;
+				DeformableStates[Object] = *State;
+				if (TopologyChanged)
+					RenderDirtyAccumulator::Get().RequestFullResync(
+						GetReplicationScopeId(), "Deformable topology changed; stable mesh residency was rebuilt"
+					);
+				RenderDirtyAccumulator::Get().Mark(
+					GetReplicationScopeId(), Object,
+					RenderUpdateDomain::Transform | RenderUpdateDomain::Material | RenderUpdateDomain::Visibility |
+						RenderUpdateDomain::Geometry | RenderUpdateDomain::DeformableVertices,
+					State->Positions ? State->Positions->size() * sizeof(glm::vec3) * 4 : 0
+				);
+			}
+		}
+
 		const auto ConstraintUpdates = SortedIds(DirtyConstraints);
 		DirtyConstraints.clear();
 		for (const auto Object : ConstraintUpdates) {
@@ -233,6 +477,38 @@ namespace gargantuan {
 		}
 	}
 
+	void WorldRoot::ApplyPendingDeformableForces() {
+		for (const auto &Body : SoftBodies) {
+			if (!Body || Body->GetDestroyed() || Body->IsDestroying()) continue;
+			auto Found = DeformableIds.find(Body->GetObjectId());
+			if (Found == DeformableIds.end()) continue;
+			if (HasImpulse(Body->AccumulatedForce)) {
+				auto Result = Deformables.ApplyForce(Found->second, Body->AccumulatedForce);
+				if (Result.Succeeded()) Body->AccumulatedForce = {};
+				else LOG_ERROR(App, "[Physics:SoftBody] Force application failed: %s", Result.Message.c_str());
+			}
+			if (HasImpulse(Body->AccumulatedImpulse)) {
+				auto Result = Deformables.ApplyImpulse(Found->second, Body->AccumulatedImpulse);
+				if (Result.Succeeded()) Body->AccumulatedImpulse = {};
+				else LOG_ERROR(App, "[Physics:SoftBody] Impulse application failed: %s", Result.Message.c_str());
+			}
+		}
+	}
+
+	std::vector<SoftBodyCollider> WorldRoot::BuildSoftBodyColliders() const {
+		std::vector<std::shared_ptr<BasePart>> Ordered;
+		Ordered.reserve(Parts.size());
+		for (const auto &Part : Parts)
+			if (Part && !Part->GetDestroyed() && !Part->IsDestroying() && Part->GetCanCollide())
+				Ordered.push_back(Part);
+		std::ranges::sort(Ordered, {}, [](const std::shared_ptr<BasePart> &Part) { return Part->GetObjectId(); });
+		std::vector<SoftBodyCollider> Result;
+		Result.reserve(Ordered.size());
+		for (const auto &Part : Ordered)
+			Result.push_back({Part->GetPhysicsShape(), Part->GetCFrame()});
+		return Result;
+	}
+
 	void WorldRoot::RemoveInvalidConstraintMappings() {
 		std::erase_if(ConstraintJoints, [this](const auto &Entry) {
 			return !Physics.IsConstraintValid(Entry.second);
@@ -250,13 +526,22 @@ namespace gargantuan {
 			for (const auto &Connection : Connections) Connection->Disconnect();
 		PhysicsConnections.clear();
 		DirtyBodies.clear();
+		DirtyDeformables.clear();
 		DirtyConstraints.clear();
 		TrackedParts.clear();
+		TrackedDeformables.clear();
+		TrackedSoftBodyMaterials.clear();
+		SoftBodyAttachmentOwners.clear();
 		TrackedConstraints.clear();
 		ConstraintJoints.clear();
 		PartBodies.clear();
 		BodyParts.clear();
+		DeformableIds.clear();
+		IdDeformables.clear();
+		DeformableStates.clear();
+		LastSoftBodyProfile = {};
 		Parts.clear();
+		SoftBodies.clear();
 	}
 
 	std::shared_ptr<BasePart> WorldRoot::ResolvePart(PhysicsBodyId Body) const {
@@ -266,6 +551,11 @@ namespace gargantuan {
 		if (!Part || Part->GetDestroyed() || Part->IsDestroying()) return nullptr;
 		auto Current = PartBodies.find(Part->GetObjectId());
 		return Current != PartBodies.end() && Current->second == Body ? Part : nullptr;
+	}
+
+	std::optional<SoftBodyState> WorldRoot::GetDeformableState(ObjectId Object) const {
+		auto Found = DeformableStates.find(Object);
+		return Found == DeformableStates.end() ? std::nullopt : std::optional(Found->second);
 	}
 
 	WorldRoot::WorldRoot() : Physics(PhysicsWorldConfig{.Gravity = {0.0f, -Gravity, 0.0f}}) {
@@ -280,6 +570,13 @@ namespace gargantuan {
 				TrackPart(Part);
 				(void)CreatePartBody(Part);
 				for (const auto &[Id, _] : TrackedConstraints) DirtyConstraints.insert(Id);
+			} else if (auto Body = std::dynamic_pointer_cast<DeformableBody>(Instance)) {
+				TrackDeformable(Body);
+				(void)CreateDeformableBody(Body);
+			} else if (auto Attachment = std::dynamic_pointer_cast<SoftBodyAttachment>(Instance)) {
+				TrackSoftBodyAttachment(Attachment);
+			} else if (auto Material = std::dynamic_pointer_cast<SoftBodyMaterial>(Instance)) {
+				TrackSoftBodyMaterial(Material);
 			} else if (auto Constraint = std::dynamic_pointer_cast<gargantuan::Constraint>(Instance)) {
 				TrackConstraint(Constraint);
 				(void)CreateConstraintJoint(Constraint);
@@ -289,6 +586,11 @@ namespace gargantuan {
 		DescendantRemovedConnection = DescendantRemoved->Connect([this](std::shared_ptr<Instance> Instance) {
 			if (ShuttingDownPhysics) return;
 			if (auto Part = std::dynamic_pointer_cast<BasePart>(Instance)) RemovePart(Part);
+			else if (auto Body = std::dynamic_pointer_cast<DeformableBody>(Instance)) RemoveDeformable(Body);
+			else if (auto Attachment = std::dynamic_pointer_cast<SoftBodyAttachment>(Instance))
+				RemoveSoftBodyAttachment(Attachment);
+			else if (auto Material = std::dynamic_pointer_cast<SoftBodyMaterial>(Instance))
+				RemoveSoftBodyMaterial(Material);
 			else if (auto Constraint = std::dynamic_pointer_cast<gargantuan::Constraint>(Instance))
 				RemoveConstraint(Constraint);
 		});
@@ -350,6 +652,7 @@ namespace gargantuan {
 		int Steps = 0;
 		while (StepAccumulator >= STEP_INTERVAL && Steps < MAX_STEPS_PER_FRAME) {
 			ApplyPendingImpulses();
+			ApplyPendingDeformableForces();
 			auto Result = Physics.Step({.DeltaTime = STEP_INTERVAL, .SubStepCount = SUB_STEP_COUNT});
 			if (Result.EventsTruncated)
 				LOG_ERROR(App, "[Physics:Backend] Step event limit reached; excess events were rejected");
@@ -377,6 +680,27 @@ namespace gargantuan {
 					if (PartA->GetCanTouch()) PartA->TouchEnded->Fire(PartB);
 					if (PartB->GetCanTouch()) PartB->TouchEnded->Fire(PartA);
 				}
+			}
+
+			auto SoftResult = Deformables.Step({
+				.DeltaTime = STEP_INTERVAL,
+				.Gravity = {0.0f, -GetGravity(), 0.0f},
+				.Colliders = BuildSoftBodyColliders(),
+			});
+			LastSoftBodyProfile = SoftResult.Profile;
+			if (SoftResult.CollidersTruncated)
+				LOG_ERROR(App, "[Physics:SoftBody] Collider limit reached; excess colliders were rejected");
+			for (auto &State : SoftResult.States) {
+				auto Found = IdDeformables.find(State.Body);
+				auto Body = Found == IdDeformables.end() ? nullptr : Found->second.lock();
+				if (!Body || Body->GetDestroyed() || Body->IsDestroying()) continue;
+				const auto Object = Body->GetObjectId();
+				DeformableStates[Object] = State;
+				if (!State.Simulated) continue;
+				RenderDirtyAccumulator::Get().Mark(
+					GetReplicationScopeId(), Object, RenderUpdateDomain::DeformableVertices,
+					State.Positions ? State.Positions->size() * sizeof(glm::vec3) * 4 : 0
+				);
 			}
 			StepAccumulator -= STEP_INTERVAL;
 			++Steps;

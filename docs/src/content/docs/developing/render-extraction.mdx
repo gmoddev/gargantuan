@@ -1,14 +1,16 @@
 ---
-title: Render Extraction
-description: The immutable frame-state boundary between Gargantuan's runtime and SDL renderer.
+title: Render Publication
+description: The immutable incremental-state boundary between Gargantuan's runtime and renderer.
 ---
 
 Gargantuan renders immutable extracted state:
 
 ```text
 DataModel / Instances
-    -> RenderExtractor
-    -> shared_ptr<const RenderSnapshot>
+    -> render-dirty classification
+    -> RenderDirtyAccumulator
+    -> RenderPublisher
+    -> shared_ptr<const RenderPublication>
     -> renderer and render passes
     -> current SDL GPU implementation
 ```
@@ -18,39 +20,58 @@ The governing dependency rule is:
 > Renderer/pass code consumes immutable extracted state and does not traverse
 > the DataModel.
 
-## Snapshot contract
+## Publication contract
 
-A `RenderSnapshot` owns its extraction identity, viewport dimensions, complete
-camera matrices and directions, lighting direction, render items, and
-extraction diagnostics. A render item contains only stable `ObjectId`, logical
-primitive geometry, transform/inverse transform, color/opacity, and its current
-shadow flag.
+A `RenderPublication` owns its sequence/base identity, viewport/camera/light
+state, deterministic object creates/updates/removes, dynamic mesh lifecycle and
+dirty ranges, transient UI batches, and diagnostics. Render values contain only
+stable generational identities, logical geometry, transforms, materials,
+visibility, and shadows.
 
-Snapshots contain no Instance, WorldRoot, Camera, callback, or runtime-owned
+Publications contain no Instance, WorldRoot, Camera, callback, or runtime-owned
 container pointers. They are published as const shared ownership, so later
 runtime mutation or destruction cannot change or invalidate a frame already
 being rendered.
 
-Items are ordered by `ObjectId`. The same identity is used for frame-local
-viewport picking. If an object is destroyed after extraction, the displayed
-snapshot remains internally valid while normal `ObjectRegistry` lookup rejects
-the stale ID; the next extraction omits it.
+The renderer applies each publication atomically to a disposable persistent
+projection. Incremental bases must be exact; a full-resync publication can
+reconstruct that projection independently. The same projected `ObjectId` is
+used for viewport picking. Normal `ObjectRegistry` lookup rejects an identity
+whose generation is stale.
+
+## Dirty accumulation and coalescing
+
+Committed authoritative mutations are classified into transform, material,
+visibility, geometry, deformable, and hierarchy/render-presence domains. One
+bounded accumulator entry exists per dirty `ObjectId`, regardless of how many
+times a property was written. Publication reads only the final authoritative
+state: repeated writes become one update, create plus updates becomes one final
+create, create plus destroy disappears, and update plus destroy becomes remove.
+Irrelevant properties do not dirty rendering.
+
+Accumulator capture is retried until a complete publication is successfully
+constructed and acknowledged. Hard limits bound scopes, live consumers, distinct identities,
+deformable bytes, UI bytes, publication bytes, and diagnostics. Limit failure
+requests an exceptional full resync; it never emits a partial delta. The
+general `ChangeJournal` remains independently bounded and is not the renderer's
+volume queue.
 
 ## Timing and identity
 
-The runtime extracts after simulation and `PreRender`, immediately before its
-draw call. EditorHost extracts on viewport capture and uses the same snapshot
-for offscreen rendering. Picking uses the displayed snapshot when one exists.
+The runtime publishes after simulation and `PreRender`, immediately before its
+draw call. EditorHost uses a separate accumulator consumer and publisher for
+offscreen capture. It keeps a CPU-only projection of those same publications
+for picking, so selection remains headless and never requires GPU startup.
 
-Extraction currently runs on the authoritative Main domain and rendering is
-synchronous. The value-only snapshot contract is suitable for later
+Publication currently runs on the authoritative Main domain and rendering is
+synchronous. The value-only publication contract is suitable for later
 main-to-render-thread publication, but this pass does not add a render thread.
 
-Snapshot identity is a session-local unsigned 64-bit extraction sequence. Zero
-is invalid, the first successful extraction is 1, fatal failures do not consume
-a value, and exhaustion fails instead of wrapping. It is separate from
-`ObjectId`, schema generation, journal cursor, and viewport presentation frame
-numbers.
+Publication identity is a session-local unsigned 64-bit sequence. Zero is
+invalid, the first successful publication is 1, and exhaustion fails instead of
+wrapping. Incremental values name their exact base. It is separate from
+`ObjectId`, schema generation, journal sequence, and viewport presentation
+frame numbers.
 
 ## Camera and resources
 
@@ -59,12 +80,13 @@ Runtime Camera Instances and EditorHost's plain camera state both become one
 during extraction; passes never read a Camera Instance.
 
 Parts expose logical `PartType`, not `GpuMesh`. Each SDL renderer owns a
-device-local primitive mesh cache and resolves the snapshot's `RenderGeometry`
-keys below the extraction boundary. This preserves current primitive behavior
-without introducing an asset or general resource system.
+device-local primitive/dynamic mesh cache and resolves the publication's
+`RenderGeometry` and mesh identities below the boundary. Dynamic topology is
+uploaded once and stable-topology deformable publications update only the
+validated vertex range.
 
-Fatal world/camera/viewport errors reject the whole candidate snapshot.
-Individual invalid items are skipped with explicit snapshot diagnostics.
+Fatal world/camera/viewport errors reject the whole candidate publication.
+Individual invalid items are skipped with explicit extraction diagnostics.
 Unavailable GPU primitive resources are reported and skipped by the renderer.
 
 ## Backend resource boundary
@@ -72,10 +94,19 @@ Unavailable GPU primitive resources are reported and skipped by the renderer.
 SDL GPU types are confined to the current backend implementation and its
 private helpers. Public/general render headers, `BaseRenderer`, `Mesh`, and the
 EditorViewport semantic contract expose no SDL GPU handles. This boundary does
-not introduce `RenderDevice`, a generic graphics API, backend selection,
-materials, textures, render threading, or a new GUI pipeline. See
+not introduce `RenderDevice`, a generic graphics API, backend selection, or
+render threading. Foundation 2C adds renderer-neutral material/texture
+lifecycle values and an SDL-private GUI pipeline with persistent buffers,
+scissors, alpha blending, and atlas sampling. See
 `devdocs/CurrentArchitecture/RendererBackendBoundary.md` for the verified
 ownership and leakage audit.
+
+The hard soft-body flow is solver-owned simulation to engine-owned deformable
+render values to `RenderDirtyAccumulator` and immutable `RenderPublication`,
+then a renderer-owned persistent mesh. Physics solver objects and writable raw
+solver memory never cross the seam. The first producer is now the sibling CPU
+XPBD cloth/rubber backend documented in
+[`SoftBodyPhysicsFoundation.md`](../../../../../devdocs/CurrentArchitecture/SoftBodyPhysicsFoundation.md).
 
 ## Renderer technology decision checkpoint
 
@@ -112,12 +143,21 @@ authoritative DataModel
     -> renderer-owned scene and GPU resources
 ```
 
+Renderer Foundation 2B uses incremental immutable publication in the supported
+runtime and EditorViewport. `RenderSnapshot` remains compatibility/full-state
+scaffolding, not the normal renderer path. See
+[`RendererFoundation2.md`](../../../../../devdocs/CurrentArchitecture/RendererFoundation2.md)
+for the accepted delta/full-resync contract, deformable and GUI boundaries,
+benchmarks, backend decision, and bounded migration sequence.
+
+Foundation 2C selected SDL GPU after real 300-frame fence-complete and
+1,800-frame queued deformable/GUI tests on AMD and NVIDIA hardware. It
+authorizes GUI Foundation 1 to publish engine-owned layout/text/atlas results as
+`RenderTexture` lifecycle plus `RenderUiFrame` values. See
+[`RendererFoundation2C.md`](../../../../../devdocs/CurrentArchitecture/RendererFoundation2C.md).
+
 Any persistent render scene is a disposable `ObjectId`-indexed projection, not
-game state. It must never become authoritative or retain live `Instance`
-pointers. As scene scale makes full per-frame traversal, transform inversion,
-sorting, and snapshot reconstruction materially expensive, evaluate an
-incremental `RenderProjection` fed from committed changes. Publication to the
-renderer must remain immutable even if its construction becomes incremental.
+game state. It never becomes authoritative or retains live `Instance` pointers.
 
 Renderer benchmarks must also separate GPU rendering from Studio viewport
 presentation. GPU-to-CPU readback, pixel conversion, shared-memory transfer,

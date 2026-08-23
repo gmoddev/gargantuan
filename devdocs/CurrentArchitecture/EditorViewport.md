@@ -20,7 +20,7 @@ The renderer reuses the normal shadow and opaque passes against engine-owned
 color/depth textures, downloads only after a GPU fence, and contains GPU/setup
 failures as structured `ViewportUnavailable` errors. Capture remains on the
 serialized EditorHost domain. In Edit it never executes scripts. In Play it steps
-only the isolated session Engine before extracting the runtime Workspace. Responses
+only the isolated session Engine before publishing the runtime Workspace. Responses
 carry `Mode` and an exact `PlaySessionId`; Studio rejects stale runtime frames.
 Capture never permits Studio to mutate project source outside existing validated commands.
 All six viewport methods require the explicit `ViewportControl` capability at
@@ -30,7 +30,14 @@ handle, renderer pointer, SDL/Vulkan object, or IPC stream to Luau.
 
 Camera pose, field of view, and viewport size belong to an EditorHost-owned
 session camera. They are not persisted in the project or published to the
-document change journal.
+document change journal. The viewport owns one `RenderPublisher` consumer and
+two disposable projections of the same publication: an EditorHost CPU
+projection for picking and the offscreen renderer's GPU-resource projection.
+Construction/recreation requests full resync, normal committed changes are
+incremental, and resize updates frame-global publication while replacing only
+offscreen targets. Picking therefore uses the same semantic publication as
+capture without initializing SDL video or a GPU device; this preserves the
+headless CI contract.
 
 ## Shared-memory frame ring v1
 

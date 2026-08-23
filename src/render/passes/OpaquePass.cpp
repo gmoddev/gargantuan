@@ -92,24 +92,29 @@ namespace gargantuan {
 
 			auto pass = SDL_BeginGPURenderPass(context.Commands, &colorTarget, 1, &depthTarget);
 			SDL_BindGPUGraphicsPipeline(pass, Pipeline);
+			if (context.Metrics) ++context.Metrics->PipelineSwitches;
 			SDL_BindGPUFragmentSamplers(pass, 0, &shadowBinding, 1);
 
 			WorldUniforms worldUniforms{
-				.ViewMatrix = context.Snapshot.Camera.ViewMatrix,
-				.ProjectionMatrix = context.Snapshot.Camera.ProjectionMatrix,
+				.ViewMatrix = context.Projection.GetFrame().Camera.ViewMatrix,
+				.ProjectionMatrix = context.Projection.GetFrame().Camera.ProjectionMatrix,
 				.ShadowBiasMatrix = SHADOW_BIAS_MATRIX * context.ShadowMatrix,
-				.LightDirection = glm::vec4(context.Snapshot.LightDirection, 0.0f),
+				.LightDirection = glm::vec4(context.Projection.GetFrame().LightDirection, 0.0f),
 			};
 			SDL_PushGPUVertexUniformData(context.Commands, 0, &worldUniforms, sizeof(WorldUniforms));
 			SDL_PushGPUFragmentUniformData(context.Commands, 0, &worldUniforms, sizeof(WorldUniforms));
 
-			for (const auto &item : context.Snapshot.Items) {
-				const auto *mesh = context.MeshResources.Find(item.Geometry);
+			for (const auto &[Object, Projected] : context.Projection.GetObjects()) {
+				(void)Object;
+				if (!Projected.Visible) continue;
+				const auto &item = Projected.Item;
+				const auto *mesh = Projected.Mesh
+					? context.MeshResources.Find(*Projected.Mesh) : context.MeshResources.Find(item.Geometry);
 				if (!mesh || !mesh->VertexBuffer || !mesh->IndexBuffer) {
 					LOG_WARN(
 						App,
-						"RenderSnapshot %llu skipped ObjectId %u:%u because its primitive GPU resource is unavailable",
-						static_cast<unsigned long long>(context.Snapshot.Id),
+						"RenderPublication %llu skipped ObjectId %u:%u because its GPU resource is unavailable",
+						static_cast<unsigned long long>(context.Projection.GetLastPublicationId()),
 						item.Object.Slot,
 						item.Object.Generation
 					);
@@ -129,6 +134,7 @@ namespace gargantuan {
 				SDL_BindGPUIndexBuffer(pass, &indexBinding, SDL_GPU_INDEXELEMENTSIZE_32BIT);
 
 				SDL_DrawGPUIndexedPrimitives(pass, mesh->IndexCount, 1, 0, 0, 0);
+				if (context.Metrics) ++context.Metrics->DrawCalls;
 			}
 
 			return pass;

@@ -82,9 +82,10 @@ implementation should wait for the model, save, command, and GUI contracts.
   uncaught exceptions.
 - Save atomically through temporary files and rename; preserve user source files
   and separate generated/imported data.
-- Replace `FileLink` with a `SourceMount`: canonical root, include rules, symlink
-  policy, client/server/shared execution domain, watcher, conflict handling, and
-  deterministic mapping.
+- Keep the root-confined, bounded `SourceMount` beneath the `FileLink`
+  compatibility importer. A future manifest-owned source system still needs
+  include rules, client/server/shared execution domains, watching, conflict
+  handling, and deterministic mapping before replacing that compatibility surface.
 - Add round-trip, corrupted-file, migration, large-scene, and link-escape tests.
 
 ### Player-facing runtime
@@ -128,13 +129,13 @@ compatibility as a separate adapter package, not branches throughout the engine.
 
 | Claim or implication | Source-backed reality | Action |
 |---|---|---|
-| Feature-rich 2D/3D platform | Primitive 3D rendering/physics and non-rendering GUI scaffold. | Reword README around prototype status until exit tests pass. |
+| Feature-rich 2D/3D platform | Primitive 3D rendering/physics and a renderer-backed GUI batch/atlas foundation; no complete UI producer. | Reword README around prototype status until exit tests pass. |
 | Desktop, mobile, and VR support | SDL desktop-oriented path; no mobile/VR lifecycle, device, input, build, or CI evidence. | List only tested targets and publish a platform matrix. |
 | `require` is implemented | Callbacks exist, but Instance path resolution is unfinished and type handling is unsafe. | Reopen roadmap item and add module conformance tests. |
 | Roblox compatibility can be enabled | CLI flag is parsed but not consumed; documented spelling/config disagree with code. | Remove claim or implement one canonical compatibility profile and tests. |
 | Project configuration is available | Studio config exists but no effective runtime consumer was found. | Define schema, loader, precedence, validation, and diagnostics. |
 | `ReplicatedStorage` implies shared client/server content | Its class/source scaffold is not registered; no networking exists. | Rename now or clearly mark it reserved. |
-| GUI/Studio sample demonstrates UI | GUI pass is disabled/commented; Studio is a one-Frame Luau concept. | Label it a scaffold until pixels and input are tested. |
+| GUI/Studio sample demonstrates UI | SDL now renders neutral UI batches with atlases, scissors, and blending; retained layout/text/input production is still absent. | Label it a renderer foundation until GUI Foundation 1 pixels and input are tested. |
 | Binary Instance format | An enum/value exists; implementation is explicitly absent. | Do not document it as supported. |
 | File linking is a development sync workflow | Only an unsafe initial recursive import exists; no watcher or conflict model. | Replace with `SourceMount` contract. |
 
@@ -147,8 +148,9 @@ These are inferences, not commitments:
 - Client/server filename suffixes, `ReplicatedStorage`, and security-level fields
   indicate planned execution separation and networking, but there is no working
   authority or replication layer.
-- GUI class metadata, a UI render pass, Fluid, SDL_image, and SDL_ttf indicate a
-  retained-mode UI/editor direction.
+- GUI class metadata, the active renderer batch pass, Fluid, SDL_image, and
+  SDL_ttf indicate the accepted retained-mode UI/editor direction; semantic
+  layout/text/input production remains future work.
 - `FileLink`, project manifests, serialization hooks, and the Studio directory
   indicate an intended filesystem-driven editor/source workflow.
 - Box3D constraints, contact signals, camera types, mesh enums, and renderer

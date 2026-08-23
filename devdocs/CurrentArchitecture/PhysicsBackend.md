@@ -1,13 +1,14 @@
 ---
 status: current
 owner: physics
-last_verified: 2026-08-21
+last_verified: 2026-08-23
 related_code:
   - include/gargantuan/physics/
   - src/physics/
   - include/gargantuan/classes/WorldRoot.hpp
   - src/classes/WorldRoot.cpp
   - tests/PhysicsBackendTests.cpp
+  - tests/SoftBodyPhysicsTests.cpp
 related_adrs: []
 ---
 
@@ -15,10 +16,12 @@ related_adrs: []
 
 ## Scope
 
-Gargantuan currently uses Box3D for rigid-body simulation. Box3D is an
-implementation behind an engine-owned contract; it is not an engine object model,
-identity system, or public API. This document describes the implemented boundary,
-not a decision to replace Box3D or a specification for future deformables.
+Gargantuan uses Box3D for rigid-body simulation and a sibling engine-owned XPBD
+backend for deformable simulation. Box3D remains an implementation behind an
+engine-owned rigid contract; it is not an engine object model, identity system,
+or public API. This document describes the rigid boundary and its coordination
+with deformation. See [Soft-body Physics Foundation 1](SoftBodyPhysicsFoundation.md)
+for the deformable contract, solver, tiers, renderer flow, and evidence.
 
 ```text
 BasePart / Constraint semantics
@@ -27,11 +30,18 @@ BasePart / Constraint semantics
         -> IPhysicsBackend
         -> Box3DPhysicsBackend
         -> Box3D
+
+Cloth / RubberBody semantics
+        -> WorldRoot coordination and safe points
+        -> SoftBodyWorld
+        -> ISoftBodyBackend
+        -> XpbdSoftBodyBackend
 ```
 
-`WorldRoot` owns one `PhysicsWorld`. `PhysicsWorld` owns one backend instance, and
-the backend privately owns the Box3D world, bodies, shapes, joints, transient
-event arrays, and backend-handle mappings.
+`WorldRoot` owns one `PhysicsWorld` and one `SoftBodyWorld`. Each world owns one
+backend instance. The rigid backend privately owns the Box3D world, bodies,
+shapes, joints, transient event arrays, and backend-handle mappings. Neither
+backend can expose its native storage through the other contract.
 
 ## Neutral semantic vocabulary
 
@@ -50,8 +60,9 @@ The engine-facing contract is defined by `PhysicsTypes.hpp` and
 - `PhysicsOperationResult` reports neutral success, invalid-ID,
   invalid-description, or backend-failure states.
 
-The contract intentionally has no mesh collider, controller policy, projectile,
-network ownership, prediction, rollback, or deformable vocabulary.
+The rigid contract intentionally has no mesh collider, controller policy,
+projectile, network ownership, prediction, rollback, or deformable vocabulary.
+Deformable vocabulary lives in the separate `SoftBodyTypes.hpp` contract.
 
 ## Identity and mapping
 
@@ -205,8 +216,8 @@ physics implementation choice.
 
 ## Deliberately deferred
 
-This boundary does not implement another physics engine, advanced constraints,
-mesh collision, a native character motor, projectiles, terrain physics,
-deformation, physics networking, ownership, interpolation, prediction, or
-rollback. Current rendering still reads the engine-owned `WorldRoot::Parts`
-collection and has no dependency on physics backend handles.
+This rigid boundary does not implement another rigid engine, advanced rigid
+constraints, mesh collision, a native character motor, projectiles, terrain
+physics, physics networking, ownership, interpolation, prediction, or rollback.
+Deformation is implemented only through the sibling boundary documented above.
+Rendering has no dependency on either physics backend's native handles.

@@ -649,10 +649,11 @@ namespace gargantuan {
 
 	FilamentRenderer::~FilamentRenderer() { Destroy(); }
 
-	void FilamentRenderer::Draw(RenderSnapshotPtr Snapshot) {
-		if (!Snapshot) throw std::invalid_argument("FilamentRenderer requires an immutable RenderSnapshot");
+	void FilamentRenderer::Draw(RenderPublicationPtr Publication) {
+		if (!Publication) throw std::invalid_argument("FilamentRenderer requires an immutable RenderPublication");
 		if (!Implementation) throw std::logic_error("FilamentRenderer is destroyed");
-		Implementation->Draw(*Snapshot);
+		(void)Projection.Apply(*Publication);
+		Implementation->Draw(*Projection.BuildCompatibilitySnapshot());
 	}
 
 	void FilamentRenderer::Resize(int WidthValue, int HeightValue) {

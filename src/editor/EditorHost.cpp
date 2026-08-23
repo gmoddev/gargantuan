@@ -617,7 +617,9 @@ namespace gargantuan {
 					);
 					LastPlaySessionId = Id;
 					LastPlaySessionState = ActivePlaySession->GetState();
-					LastViewportSnapshot.reset();
+					LastViewportPublication.reset();
+					ViewportProjection.Clear();
+					ViewportPublisher.RequestFullResync();
 					return SerializeBoundedResponse(SuccessResponse(requestId, {
 						{"PlaySessionId", std::to_string(Id.Value)},
 						{"State", GetPlaySessionStateName(LastPlaySessionState)},
@@ -645,7 +647,9 @@ namespace gargantuan {
 				LastPlaySessionId = *Id;
 				LastPlaySessionState = PlaySessionState::Stopped;
 				ActivePlaySession.reset();
-				LastViewportSnapshot.reset();
+				LastViewportPublication.reset();
+				ViewportProjection.Clear();
+				ViewportPublisher.RequestFullResync();
 				return SerializeBoundedResponse(SuccessResponse(requestId, {
 					{"PlaySessionId", std::to_string(Id->Value)}, {"State", "Stopped"},
 					{"Diagnostics", EncodePlayDiagnostics(std::move(Diagnostics))},
@@ -808,7 +812,9 @@ namespace gargantuan {
 				CurrentProject.reset();
 				PersistedRevision = 0;
 				ViewportCamera.reset();
-				LastViewportSnapshot.reset();
+				LastViewportPublication.reset();
+				ViewportProjection.Clear();
+				ViewportPublisher.RequestFullResync();
 				Cursor.reset();
 				ViewportWidth = 0;
 				ViewportHeight = 0;
@@ -929,7 +935,9 @@ namespace gargantuan {
 					CurrentProject.reset();
 					PersistedRevision = 0;
 					ViewportCamera.reset();
-					LastViewportSnapshot.reset();
+					LastViewportPublication.reset();
+					ViewportProjection.Clear();
+					ViewportPublisher.RequestFullResync();
 					Cursor.reset();
 					ViewportWidth = 0;
 					ViewportHeight = 0;
@@ -1313,7 +1321,9 @@ namespace gargantuan {
 						{0.0f, 1.0f, 0.0f},
 						camera.VerticalFieldOfView
 					);
-				LastViewportSnapshot.reset();
+				LastViewportPublication.reset();
+				ViewportProjection.Clear();
+				ViewportPublisher.RequestFullResync();
 				if (ViewportRenderer) {
 					try {
 						ViewportRenderer->Resize(*width, *height);
@@ -1345,7 +1355,7 @@ namespace gargantuan {
 						return SerializeBoundedResponse(ErrorResponse(requestId, "InvalidCamera", "FieldOfView is out of range"));
 				}
 				camera = MakeLookAtRenderCameraInput(*position, *target, {0.0f, 1.0f, 0.0f}, fieldOfView);
-				LastViewportSnapshot.reset();
+				LastViewportPublication.reset();
 				return SerializeBoundedResponse(SuccessResponse(requestId, {
 					{"Position", {position->x, position->y, position->z}},
 					{"Target", {target->x, target->y, target->z}},
@@ -1359,8 +1369,10 @@ namespace gargantuan {
 				if (ViewportWidth == 0 || ViewportHeight == 0)
 					return SerializeBoundedResponse(ErrorResponse(requestId, "ViewportRequired", "ConfigureViewport must succeed first"));
 				try {
-					if (!ViewportRenderer)
+					if (!ViewportRenderer) {
 						ViewportRenderer = std::make_unique<EditorViewportRenderer>(ViewportWidth, ViewportHeight);
+						ViewportPublisher.RequestFullResync();
+					}
 					Json PlayIdentity = nullptr;
 					const char *Mode = "Edit";
 					if (ActivePlaySession && ActivePlaySession->GetState() == PlaySessionState::Running) {
@@ -1371,15 +1383,16 @@ namespace gargantuan {
 						auto RuntimeWorkspace = RuntimeWorld ? std::dynamic_pointer_cast<Workspace>(RuntimeWorld->GetService("Workspace")) : nullptr;
 						if (!RuntimeWorkspace || !RuntimeWorkspace->GetCurrentCamera())
 							return SerializeBoundedResponse(ErrorResponse(requestId, "PlaySessionFailed", "Runtime has no valid Workspace camera"));
-						LastViewportSnapshot = ViewportExtractor.Extract(
+						LastViewportPublication = ViewportPublisher.Publish(
 							*RuntimeWorkspace, MakeRenderCameraInput(*RuntimeWorkspace->GetCurrentCamera()), ViewportWidth, ViewportHeight
 						);
 						PlayIdentity = std::to_string(ActivePlaySession->GetId().Value);
 						Mode = "Play";
 					} else {
-						LastViewportSnapshot = ViewportExtractor.Extract(*workspace, camera, ViewportWidth, ViewportHeight);
+						LastViewportPublication = ViewportPublisher.Publish(*workspace, camera, ViewportWidth, ViewportHeight);
 					}
-					auto frame = ViewportRenderer->Capture(LastViewportSnapshot);
+					(void)ViewportProjection.Apply(*LastViewportPublication);
+					auto frame = ViewportRenderer->Capture(LastViewportPublication);
 					if (ViewportFrameRing) {
 						const auto timestamp = static_cast<std::uint64_t>(
 							std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -1404,6 +1417,9 @@ namespace gargantuan {
 						{"Mode", Mode}, {"PlaySessionId", PlayIdentity},
 					}));
 				} catch (const std::exception &error) {
+					ViewportPublisher.RequestFullResync();
+					LastViewportPublication.reset();
+					ViewportProjection.Clear();
 					if (ActivePlaySession) {
 						ActivePlaySession->Stop();
 						LastPlaySessionState = PlaySessionState::Failed;
@@ -1421,12 +1437,12 @@ namespace gargantuan {
 					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "PickViewport requires numeric X and Y"));
 				if (ViewportWidth == 0 || ViewportHeight == 0)
 					return SerializeBoundedResponse(ErrorResponse(requestId, "ViewportRequired", "ConfigureViewport must succeed first"));
-				if (!LastViewportSnapshot)
-					LastViewportSnapshot = ViewportExtractor.Extract(
-						*workspace, camera, ViewportWidth, ViewportHeight
-					);
+				if (!LastViewportPublication)
+					LastViewportPublication = ViewportPublisher.Publish(*workspace, camera, ViewportWidth, ViewportHeight);
+				if (ViewportProjection.GetLastPublicationId() != LastViewportPublication->Id)
+					(void)ViewportProjection.Apply(*LastViewportPublication);
 				auto pick = PickEditorViewport(
-					*LastViewportSnapshot, parameters["X"].get<float>(), parameters["Y"].get<float>()
+					ViewportProjection, parameters["X"].get<float>(), parameters["Y"].get<float>()
 				);
 				return SerializeBoundedResponse(SuccessResponse(requestId, {
 					{"Object", pick ? Json(JsonCodec::EncodeObjectId(WireObjectId::FromObjectId(pick->Object))) : Json(nullptr)},
@@ -1882,7 +1898,7 @@ namespace gargantuan {
 		}
 	}
 
-	int EditorHost::Run(std::istream &input, std::ostream &output) {
+	int EditorHost::Run(std::istream &input, std::ostream &output, std::function<void()> ProcessObserver) {
 		std::string line;
 		for (;;) {
 			const auto status = ReadBoundedLine(input, line);
@@ -1893,6 +1909,13 @@ namespace gargantuan {
 			output << EditorHostResponsePrefix << response << '\n';
 			output.flush();
 			if (!output) return 1;
+			if (ProcessObserver) {
+				try {
+					ProcessObserver();
+				} catch (...) {
+					// Process observers are optional and cannot affect the protocol loop.
+				}
+			}
 		}
 	}
 }

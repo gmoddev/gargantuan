@@ -184,10 +184,18 @@ ctest --test-dir build -C Release --output-on-failure
 
 The legacy `just test` recipe still invokes only `lest run core`; it is not equivalent to the current CTest suite and should not be used as the sole validation for foundational changes.
 When changing native runtime behavior, successful compilation alone should not be considered sufficient validation.
+
+The required continuous contract is documented in
+`devdocs/CurrentArchitecture/ContinuousIntegration.md`. Every push and pull
+request performs a fresh recursive checkout, generates native reflection
+sources, configures and builds Release on Windows x64/Visual Studio 2026, and
+runs all 20 tests registered by the CI configuration. The workflow invokes
+CTest as a whole with `--no-tests=error`; it does not maintain a second list of
+test binaries.
 10. Recommended development loop
 For normal C++ work:
 just build
-just test
+ctest --test-dir build --output-on-failure --no-tests=error
 
 Then exercise the affected runtime path:
 just run_example <example>.luau
@@ -283,21 +291,22 @@ just test
 
 but this command does not currently exist and should not be documented as working until added to the build system.
 13. Headless testing
-The audit recommends separating enough engine functionality from graphical startup that core tests can run without creating an SDL GPU device or display.
-This is important for:
+The CMake-registered CI suite is headless. Foundation, serialization,
+scripting, physics, platform input, player runtime, networking, EditorHost, and
+protocol tests do not create a display or GPU device. Player tests use
+`HeadlessRenderer`; the renderer CI smokes use the existing benchmark's
+`projection` and `headless` backends, neither of which initializes SDL video.
 
-CI;
-server builds;
-serialization tests;
-scripting tests;
-JobSystem tests;
-networking protocol tests;
-Linux build agents;
-sanitizer/fuzzing jobs.
-
-A future headless target should not require shader compilation or GPU availability merely to test the object model.
+The engine target still compiles its required shaders and renderer source. That
+is a build requirement, not graphical test initialization. The
+`gargantuan_editor_viewport_smoke` executable is built but not run by headless
+CI because offscreen pixel capture currently creates a real SDL GPU device.
+Optional SDL/Filament GPU execution requires a separate GPU-capable job and must
+not be reported as covered by the headless gate.
 14. Debug versus Release
-Both configurations should eventually be tested continuously.
+Release is the first continuous configuration because it matches the validated
+Windows production checkpoint. Debug remains the recommended local development
+configuration and is the next matrix expansion after the first gate is stable.
 Use Debug during normal engine development:
 just configure build_type=Debug
 just build
@@ -305,7 +314,7 @@ just build
 Use Release to catch configuration-dependent failures:
 just configure build_type=Release
 just build
-just test
+ctest --test-dir build -C Release --output-on-failure --no-tests=error
 
 This matters because release-only differences have already caused issues in the repository, including code paths affected by NDEBUG.
 15. Tracy profiling
@@ -328,7 +337,7 @@ For the JobSystem specifically, give worker jobs profiler-visible names/categori
 16. Before committing foundational changes
 For low-level runtime changes, the minimum local verification should be:
 just build
-just test
+ctest --test-dir build --output-on-failure --no-tests=error
 
 Then manually or automatically execute the affected runtime path.
 For changes to Instance lifetime, serialization, scripting boundaries, JobSystem behavior, or eventual replication infrastructure, add regression tests before considering the change complete.
@@ -345,11 +354,11 @@ The current developer workflow is still evolving.
 Notable current limitations include:
 
 the `just test` wrapper has not caught up with the current CTest suite;
-no standardized headless CI target is yet exposed through the Justfile;
 sanitizer builds are not yet first-class recipes;
+the first CI gate does not include Glaze, Filament, or GPU execution;
+Debug and non-Windows configurations are not yet continuous gates;
 the public development guide has minor command drift relative to the current .justfile;
-some platform claims are broader than the currently demonstrated CI coverage;
-build/test infrastructure is one of the explicit targets of the new architecture roadmap.
+the ignored generated source trees still require a pre-CMake Lute step rather than a CMake generation target.
 
 When documentation and the Justfile disagree, treat the checked-in build scripts and CMake configuration at the commit being built as the source of truth.
 Quick reference
@@ -363,7 +372,7 @@ Build:
 just build
 
 Test:
-just test
+ctest --test-dir build --output-on-failure --no-tests=error
 
 Run an example:
 just run_example cube.luau

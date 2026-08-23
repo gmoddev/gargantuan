@@ -1,0 +1,73 @@
+const c, t = require("@tools/classes").unpack()
+
+return c({
+	name = "SoftBodyMaterial",
+	description = "Serializable material controls shared by deformable bodies.",
+	since = "0.1.0",
+
+	properties = {
+		ParticleMass = {
+			description = "Mass assigned to each simulation vertex.",
+			type = t.Float,
+			unmodified = "0.1f",
+			serializable = true,
+			replicated = true,
+			category = "Material",
+			range = { minimum = 0.0001, maximum = 1000 },
+		},
+		Damping = {
+			description = "Fraction of velocity removed during each fixed simulation step.",
+			type = t.Float,
+			unmodified = "0.04f",
+			serializable = true,
+			replicated = true,
+			category = "Material",
+			range = { minimum = 0, maximum = 1 },
+		},
+		StretchCompliance = {
+			description = "XPBD stretch compliance; zero is maximally stiff.",
+			type = t.Float,
+			unmodified = "0.000001f",
+			serializable = true,
+			replicated = true,
+			category = "Material",
+			range = { minimum = 0, maximum = 1 },
+		},
+		BendCompliance = {
+			description = "XPBD bend compliance used by cloth.",
+			type = t.Float,
+			unmodified = "0.0001f",
+			serializable = true,
+			replicated = true,
+			category = "Material",
+			range = { minimum = 0, maximum = 1 },
+		},
+		ShapeCompliance = {
+			description = "XPBD rest-shape compliance used by rubber bodies.",
+			type = t.Float,
+			unmodified = "0.00001f",
+			serializable = true,
+			replicated = true,
+			category = "Material",
+			range = { minimum = 0, maximum = 1 },
+		},
+		Friction = {
+			description = "Fraction of tangential motion removed after rigid-primitive contact.",
+			type = t.Float,
+			unmodified = "0.2f",
+			serializable = true,
+			replicated = true,
+			category = "Collision",
+			range = { minimum = 0, maximum = 1 },
+		},
+		Thickness = {
+			description = "Collision thickness around each simulation vertex.",
+			type = t.Float,
+			unmodified = "0.05f",
+			serializable = true,
+			replicated = true,
+			category = "Collision",
+			range = { minimum = 0, maximum = 10 },
+		},
+	},
+})
