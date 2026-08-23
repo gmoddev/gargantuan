@@ -319,9 +319,91 @@ namespace gargantuan {
 					)
 				)
 			);
+		CommittedUi = UiFrame;
 		PendingUi = std::move(UiFrame);
-		PendingUiBytes = Bytes;
+		PendingUiGeometryBytes = Bytes;
 		if (Scope.IsValid()) Dirty->MarkUi(Scope, Bytes);
+	}
+
+	void RenderPublisher::SetUiTextureChanges(
+		std::vector<RenderTextureCreate> Creates,
+		std::vector<RenderTextureUpdate> Updates,
+		std::vector<RenderTextureRemove> Removes
+	) {
+		if (!PendingTextureCreates.empty() || !PendingTextureUpdates.empty() || !PendingTextureRemoves.empty())
+			throw std::logic_error("Render publisher accepts one coherent UI texture change set per publication");
+		const auto PreviousTextures = PublishedTextures;
+		auto NextTextures = PublishedTextures;
+		std::unordered_set<RenderTextureIdentity, RenderTextureIdentityHash> TouchedTextures;
+		std::unordered_map<RenderTextureIdentity, std::size_t, RenderTextureIdentityHash> OperationCounts;
+		std::unordered_map<RenderTextureIdentity, RenderTextureUpdate, RenderTextureIdentityHash> LastUpdates;
+		TouchedTextures.reserve(Creates.size() + Updates.size() + Removes.size());
+		for (const auto &Create : Creates) {
+			const auto Expected = static_cast<std::size_t>(Create.Width) * Create.Height * 4;
+			if (!Create.Texture.IsValid() || Create.Revision == 0 || Create.Width == 0 || Create.Height == 0 ||
+				Create.Format != RenderTextureFormat::Rgba8Unorm || !Create.Pixels || Create.Pixels->size() != Expected ||
+				NextTextures.contains(Create.Texture))
+				throw std::invalid_argument("Render publisher rejects an invalid or duplicate UI texture creation");
+			NextTextures.emplace(Create.Texture, PublishedTexture{
+				Create.Revision, Create.Width, Create.Height, Create.Format, Create.Pixels});
+			TouchedTextures.insert(Create.Texture);
+			++OperationCounts[Create.Texture];
+		}
+		for (const auto &Update : Updates) {
+			auto Existing = NextTextures.find(Update.Texture);
+			const auto Expected = static_cast<std::size_t>(Update.Width) * Update.Height * 4;
+			if (Existing == NextTextures.end() || Update.Revision <= Existing->second.Revision ||
+				Update.X > Existing->second.Width || Update.Y > Existing->second.Height ||
+				Update.Width > Existing->second.Width - Update.X || Update.Height > Existing->second.Height - Update.Y ||
+				!Update.Pixels || Update.Pixels->size() != Expected)
+				throw std::invalid_argument("Render publisher rejects an invalid UI texture update");
+			auto Pixels = std::make_shared<std::vector<std::uint8_t>>(*Existing->second.Pixels);
+			for (std::uint32_t Row = 0; Row < Update.Height; ++Row) {
+				const auto SourceOffset = static_cast<std::size_t>(Row) * Update.Width * 4;
+				const auto DestinationOffset =
+					(static_cast<std::size_t>(Update.Y + Row) * Existing->second.Width + Update.X) * 4;
+				std::copy_n(Update.Pixels->data() + SourceOffset, static_cast<std::size_t>(Update.Width) * 4,
+					Pixels->data() + DestinationOffset);
+			}
+			Existing->second.Revision = Update.Revision;
+			Existing->second.Pixels = std::shared_ptr<const std::vector<std::uint8_t>>(std::move(Pixels));
+			TouchedTextures.insert(Update.Texture);
+			++OperationCounts[Update.Texture];
+			LastUpdates[Update.Texture] = Update;
+		}
+		for (const auto &Remove : Removes) {
+			if (!NextTextures.erase(Remove.Texture))
+				throw std::invalid_argument("Render publisher rejects a stale UI texture removal");
+			TouchedTextures.insert(Remove.Texture);
+			++OperationCounts[Remove.Texture];
+		}
+
+		std::vector<RenderTextureIdentity> OrderedTouched(TouchedTextures.begin(), TouchedTextures.end());
+		std::ranges::sort(OrderedTouched);
+		std::size_t Bytes = 0;
+		for (const auto Texture : OrderedTouched) {
+			const auto Previous = PreviousTextures.find(Texture);
+			const auto Next = NextTextures.find(Texture);
+			if (Previous == PreviousTextures.end() && Next != NextTextures.end()) {
+				const auto &Value = Next->second;
+				PendingTextureCreates.push_back({Texture, Value.Revision, Value.Width, Value.Height, Value.Format, Value.Pixels});
+				Bytes = AddBounded(Bytes, Value.Pixels ? Value.Pixels->size() : 0);
+			} else if (Previous != PreviousTextures.end() && Next == NextTextures.end()) {
+				PendingTextureRemoves.push_back({Texture});
+			} else if (Previous != PreviousTextures.end() && Next != NextTextures.end()) {
+				if (OperationCounts.at(Texture) == 1 && LastUpdates.contains(Texture)) {
+					PendingTextureUpdates.push_back(LastUpdates.at(Texture));
+					Bytes = AddBounded(Bytes, LastUpdates.at(Texture).Pixels ? LastUpdates.at(Texture).Pixels->size() : 0);
+				} else {
+					const auto &Value = Next->second;
+					PendingTextureUpdates.push_back({Texture, Value.Revision, 0, 0, Value.Width, Value.Height, Value.Pixels});
+					Bytes = AddBounded(Bytes, Value.Pixels ? Value.Pixels->size() : 0);
+				}
+			}
+		}
+		PublishedTextures = std::move(NextTextures);
+		PendingTextureBytes = Bytes;
+		if (Scope.IsValid()) Dirty->MarkUi(Scope, PendingTextureBytes);
 	}
 
 	RenderPublicationPtr RenderPublisher::Publish(
@@ -353,7 +435,7 @@ namespace gargantuan {
 		const auto DirtyBatch = Dirty->Capture(Scope, DirtyConsumer);
 		if (ProfilingEnabled)
 			LastProfile.DirtyCaptureNanoseconds = ProfileNanoseconds(ProfileClock::now() - CaptureStart);
-		if (PendingUiBytes > Dirty->GetLimits().MaximumUiBytes) {
+		if (AddBounded(PendingUiGeometryBytes, PendingTextureBytes) > Dirty->GetLimits().MaximumUiBytes) {
 			Dirty->RequestFullResync(Scope, "Pending render UI exceeds its byte limit");
 			throw std::length_error("Pending render UI exceeds its byte limit");
 		}
@@ -405,7 +487,12 @@ namespace gargantuan {
 					PublishedDeformable{Extracted->Mesh, Extracted->TopologyRevision, Extracted->VertexRevision}
 				);
 			}
-			if (PendingUi) Result->Ui = *PendingUi;
+			Result->Ui = CommittedUi;
+			std::vector<std::pair<RenderTextureIdentity, PublishedTexture>> OrderedTextures(
+				PublishedTextures.begin(), PublishedTextures.end());
+			std::ranges::sort(OrderedTextures, {}, &std::pair<RenderTextureIdentity, PublishedTexture>::first);
+			for (const auto &[Texture, State] : OrderedTextures)
+				Result->TextureCreates.push_back({Texture, State.Revision, State.Width, State.Height, State.Format, State.Pixels});
 			if (EstimatePublicationBytes(*Result) > Dirty->GetLimits().MaximumPublicationBytes) {
 				Dirty->RequestFullResync(Scope, "Render full-resync publication exceeds its byte limit");
 				throw std::length_error("Render full-resync publication exceeds its byte limit");
@@ -417,7 +504,11 @@ namespace gargantuan {
 			++FullResyncCount;
 			Dirty->Acknowledge(DirtyBatch);
 			PendingUi.reset();
-			PendingUiBytes = 0;
+			PendingTextureCreates.clear();
+			PendingTextureUpdates.clear();
+			PendingTextureRemoves.clear();
+			PendingUiGeometryBytes = 0;
+			PendingTextureBytes = 0;
 			return std::shared_ptr<const RenderPublication>(std::move(Result));
 		};
 
@@ -580,6 +671,9 @@ namespace gargantuan {
 		}
 		const auto FinalConstructionStart = ProfilingEnabled ? ProfileClock::now() : ProfileClock::time_point{};
 		if (PendingUi) Result->Ui = *PendingUi;
+		Result->TextureCreates = PendingTextureCreates;
+		Result->TextureUpdates = PendingTextureUpdates;
+		Result->TextureRemoves = PendingTextureRemoves;
 		if (EstimatePublicationBytes(*Result) > Dirty->GetLimits().MaximumPublicationBytes) {
 			Dirty->RequestFullResync(Scope, "Incremental render publication exceeds its byte limit");
 			throw std::length_error("Incremental render publication exceeds its byte limit");
@@ -608,7 +702,11 @@ namespace gargantuan {
 		LastPublicationId = Result->Id;
 		Dirty->Acknowledge(DirtyBatch);
 		PendingUi.reset();
-		PendingUiBytes = 0;
+		PendingTextureCreates.clear();
+		PendingTextureUpdates.clear();
+		PendingTextureRemoves.clear();
+		PendingUiGeometryBytes = 0;
+		PendingTextureBytes = 0;
 		return std::shared_ptr<const RenderPublication>(std::move(Result));
 	}
 }

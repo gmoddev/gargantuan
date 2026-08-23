@@ -1,3 +1,5 @@
+#pragma once
+
 #include "gargantuan/datatypes/UDim.hpp"
 
 #include <glm/glm.hpp>

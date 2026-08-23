@@ -386,6 +386,19 @@ namespace gargantuan {
 		}
 
 		SetParent(nullptr);
+		if (auto Definition = InstanceClassRegistry::GetDefinition(this)) {
+			for (const auto &[Name, Property] : Definition->AllProperties) {
+				(void)Name;
+				if (Property && Property->Signal && Property->ReadSignal) {
+					if (auto Signal = Property->ReadSignal(this)) Signal->DisconnectAll();
+				}
+			}
+		}
+		for (auto &[Name, Signal] : PropertyChangedSignals) {
+			(void)Name;
+			if (Signal) Signal->DisconnectAll();
+		}
+		PropertyChangedSignals.clear();
 		if (scope.IsValid()) ChangeJournal::Get().Commit(scope, objectId, ObjectDestroyedChange{});
 		if (dataModel) dataModel->AdvanceAuthoritativeRevision();
 		if (dataModel && dataModel.get() != this) {

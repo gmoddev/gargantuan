@@ -19,6 +19,8 @@ namespace gargantuan {
 
 	UDim2::UDim2(UDim x, UDim y) : X(x), Y(y) {};
 	UDim2::UDim2(float xScale, int xOffset, float yScale, int yOffset) : X(xScale, xOffset), Y(yScale, yOffset) {};
+	UDim2 UDim2::fromScale(float x, float y) { return {x, 0, y, 0}; }
+	UDim2 UDim2::fromOffset(int x, int y) { return {0.0f, x, 0.0f, y}; }
 
 	UDim2 UDim2::Lerp(const UDim2 &goal, float alpha) const {
 		return UDim2(X.Lerp(goal.X, alpha), Y.Lerp(goal.Y, alpha));

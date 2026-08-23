@@ -1,3 +1,5 @@
+#pragma once
+
 #include "gargantuan/scripting/Userdata.hpp"
 #include <glm/glm.hpp>
 #include <lua.h>

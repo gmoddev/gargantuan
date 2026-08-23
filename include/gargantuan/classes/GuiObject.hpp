@@ -7,14 +7,18 @@
 namespace gargantuan {
 	G_ENUM(GuiState, Idle, Hover, Press, NonInteractable);
 	G_ENUM(InputSink, None, Activate, All = 100);
-	G_ENUM(SizeConstaint, RelativeXX, RelativeXY, RelativeYY);
 	G_ENUM(AutomaticSize, None, X, Y, XY);
 
+	class GuiRuntime;
 	class GuiObject : public GuiBase2d {
 		I_GuiObject;
 
-		Rect AbsoluteBounds{};
-		bool AbsoluteBoundsDirty{true};
-		Rect CalculateAbsoluteBounds();
+		friend class GuiRuntime;
+
+	  public:
+		void CommitRuntimeInteraction(bool ActiveValue, Enums::GuiState StateValue) {
+			Active = ActiveValue;
+			GuiState = StateValue;
+		}
 	};
 }

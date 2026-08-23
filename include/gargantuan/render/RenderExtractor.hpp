@@ -75,6 +75,11 @@ namespace gargantuan {
 		);
 		void RequestFullResync() { FullResyncRequested = true; }
 		void SetUiFrame(RenderUiFrame UiFrame);
+		void SetUiTextureChanges(
+			std::vector<RenderTextureCreate> Creates,
+			std::vector<RenderTextureUpdate> Updates,
+			std::vector<RenderTextureRemove> Removes
+		);
 		[[nodiscard]] RenderPublicationId GetLastPublicationId() const { return LastPublicationId; }
 		[[nodiscard]] std::size_t GetPublishedObjectCount() const { return PublishedItems.size(); }
 		[[nodiscard]] std::size_t GetFullResyncCount() const { return FullResyncCount; }
@@ -87,6 +92,13 @@ namespace gargantuan {
 			std::uint64_t TopologyRevision = 0;
 			std::uint64_t VertexRevision = 0;
 		};
+		struct PublishedTexture {
+			std::uint64_t Revision = 0;
+			std::uint32_t Width = 0;
+			std::uint32_t Height = 0;
+			RenderTextureFormat Format = RenderTextureFormat::Rgba8Unorm;
+			std::shared_ptr<const std::vector<std::uint8_t>> Pixels;
+		};
 
 		RenderExtractor FullExtractor;
 		RenderDirtyAccumulator *Dirty = nullptr;
@@ -96,8 +108,14 @@ namespace gargantuan {
 		const WorldRoot *PublishedWorld = nullptr;
 		std::unordered_map<ObjectId, RenderItem> PublishedItems;
 		std::unordered_map<ObjectId, PublishedDeformable> PublishedDeformables;
+		std::unordered_map<RenderTextureIdentity, PublishedTexture, RenderTextureIdentityHash> PublishedTextures;
 		std::optional<RenderUiFrame> PendingUi;
-		std::size_t PendingUiBytes = 0;
+		RenderUiFrame CommittedUi;
+		std::vector<RenderTextureCreate> PendingTextureCreates;
+		std::vector<RenderTextureUpdate> PendingTextureUpdates;
+		std::vector<RenderTextureRemove> PendingTextureRemoves;
+		std::size_t PendingUiGeometryBytes = 0;
+		std::size_t PendingTextureBytes = 0;
 		std::size_t FullResyncCount = 0;
 		bool FullResyncRequested = true;
 		bool ProfilingEnabled = false;

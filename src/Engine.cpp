@@ -6,6 +6,7 @@
 #include "gargantuan/classes/Instance.hpp"
 #include "gargantuan/classes/Script.hpp"
 #include "gargantuan/filesystem/SourceMount.hpp"
+#include "gargantuan/GuiRuntimeConfig.hpp"
 #include "gargantuan/render/Renderer.hpp"
 #include "gargantuan/scripting/ScriptEngine.hpp"
 #include "gargantuan/services/UserInputService.hpp"
@@ -32,6 +33,11 @@ namespace gargantuan {
 		  Players(GetService<gargantuan::Players>()) {
 		ActionMap->AttachInputService(UserInputService);
 		Players->InitializeLocalPlayer();
+		Gui = std::make_unique<GuiRuntime>(DataModel, std::filesystem::path(DefaultGuiFontPath));
+		if (Renderer) {
+			const auto [Width, Height] = Renderer->GetViewportSize();
+			Gui->SetViewport({Width, Height, 1.0f, {}});
+		}
 		if (DataModel->Filesystem) ProjectSources = std::make_unique<SourceMount>(*DataModel->Filesystem);
 
 		DataModel->BindDescendants([this](std::shared_ptr<Instance> inst) {
@@ -78,6 +84,8 @@ namespace gargantuan {
 		LOG_INFO(App, "Destroying engine");
 		if (Players) Players->ShutdownRuntime();
 		if (ActionMap) ActionMap->Reset();
+		if (Gui) Gui->ClearTransientState();
+		Gui.reset();
 		if (Renderer) Renderer->Destroy();
 		if (WorldRoot) WorldRoot->Destroy();
 		Script.reset();
@@ -92,6 +100,7 @@ namespace gargantuan {
 		if (const auto *Resize = std::get_if<WindowResizeEvent>(&Event)) {
 			Renderer->Resize(static_cast<int>(Resize->Width), static_cast<int>(Resize->Height));
 			RenderPublishing.RequestFullResync();
+			if (Gui) Gui->SetViewport({Resize->Width, Resize->Height, 1.0f, {}});
 			Workspace->GetCurrentCamera()->SetViewportSize(Vector2(Resize->Width, Resize->Height));
 			return Result;
 		}
@@ -102,7 +111,9 @@ namespace gargantuan {
 		}
 
 		Result.Consumed = UserInputService->ProcessEvent(Event);
-		Result.Consumed = ActionMap->ProcessEvent(Event) || Result.Consumed;
+		const bool GuiConsumed = Gui && Gui->ProcessEvent(Event);
+		if (!GuiConsumed) Result.Consumed = ActionMap->ProcessEvent(Event) || Result.Consumed;
+		else Result.Consumed = true;
 		if (!Result.Consumed) Result.Command = Workspace->GetCurrentCamera()->ProcessEvent(Event);
 		if (auto InputCommand = UserInputService->SynchronizeMouseBehavior()) Result.Command = InputCommand;
 		return Result;
@@ -130,6 +141,10 @@ namespace gargantuan {
 			{
 				G_PROFILE("PreRender");
 				RunService->PreRender->Fire(deltaTime);
+				if (Gui) {
+					(void)Gui->Reconcile();
+					Gui->Publish(RenderPublishing);
+				}
 			}
 
 			ActionMap->EndFrame();

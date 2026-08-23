@@ -1,0 +1,10 @@
+// Copyright (c) 2026 Team Fireworks
+// This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+
+#pragma once
+
+#include <string_view>
+
+namespace gargantuan {
+	inline constexpr std::string_view DefaultGuiFontPath = R"(@GARGANTUAN_DEFAULT_GUI_FONT_PATH@)";
+}

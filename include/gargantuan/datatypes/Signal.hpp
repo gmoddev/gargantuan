@@ -72,6 +72,7 @@ namespace gargantuan {
 		);
 
 		void Fire(CallbackArgument argument);
+		void DisconnectAll();
 
 		virtual int LPushArgument(lua_State *L, CallbackArgument value) = 0;
 

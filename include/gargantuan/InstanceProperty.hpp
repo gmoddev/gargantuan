@@ -48,6 +48,7 @@ namespace gargantuan {
 	#undef DEBUG_ENUM_ENTRY
 
 	class Instance;
+	class BaseSignal;
 
 	class InstanceProperty {
 	  private:
@@ -78,6 +79,9 @@ namespace gargantuan {
 			: std::bool_constant<std::is_base_of_v<Instance, T>> {
 			using Element = T;
 		};
+		template <typename T> struct SharedSignalPointer : std::false_type {};
+		template <typename T>
+		struct SharedSignalPointer<std::shared_ptr<T>> : std::bool_constant<std::is_base_of_v<BaseSignal, T>> {};
 
 		template <typename Class, typename Return, typename... Args>
 		struct MemberPointerTraits<Return (Class::*)(Args...) const> {
@@ -145,6 +149,7 @@ namespace gargantuan {
 		Enums::Permission ReadPermission = Enums::Permission::None;
 		std::function<std::any(Instance *self)> Read;
 		std::function<std::shared_ptr<Instance>(Instance *self)> ReadObjectReference;
+		std::function<std::shared_ptr<BaseSignal>(Instance *self)> ReadSignal;
 		std::function<std::pair<std::string, int>(Instance *self)> ReadEnumValue;
 		std::function<std::optional<int>(const std::any &value)> ReadEncodedEnumValue;
 		std::function<int(lua_State *L, std::any value)> PushStack;
@@ -315,7 +320,14 @@ namespace gargantuan {
 				};
 			}
 
-			if constexpr (SharedInstancePointer<MemberType>::value) {
+			if constexpr (SharedSignalPointer<MemberType>::value) {
+				ReadSignal = [](Instance *self) {
+					ClassType *obj = reinterpret_cast<ClassType *>(self);
+					if constexpr (std::is_member_function_pointer_v<decltype(Pointer)>)
+						return std::static_pointer_cast<BaseSignal>((obj->*Pointer)());
+					else return std::static_pointer_cast<BaseSignal>(obj->*Pointer);
+				};
+			} else if constexpr (SharedInstancePointer<MemberType>::value) {
 				ReadObjectReference = [](Instance *self) {
 					ClassType *obj = reinterpret_cast<ClassType *>(self);
 					if constexpr (std::is_member_function_pointer_v<decltype(Pointer)>) {

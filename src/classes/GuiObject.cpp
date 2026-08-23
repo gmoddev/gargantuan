@@ -1,15 +1,20 @@
 #include "gargantuan/classes/GuiObject.hpp"
+#include "gargantuan/gui/GuiRuntime.hpp"
 
 namespace gargantuan {
-	Rect GuiObject::CalculateAbsoluteBounds() {
-		if (!AbsoluteBoundsDirty) return AbsoluteBounds;
+	void GuiObject::CaptureFocus() {
+		if (auto *Runtime = GuiRuntime::Find(*this)) Runtime->RequestFocus(GetObjectId());
+	}
 
-		auto parent = FindFirstAncestorWhichIsA("GuiBase2d");
-		if (parent) {
-			// ???????
-		}
+	void GuiObject::ReleaseFocus() {
+		if (auto *Runtime = GuiRuntime::Find(*this)) Runtime->ReleaseFocus(GetObjectId());
+	}
 
-		AbsoluteBoundsDirty = false;
-		return AbsoluteBounds;
+	void GuiObject::CapturePointer(int PointerId) {
+		if (auto *Runtime = GuiRuntime::Find(*this)) Runtime->CapturePointer(PointerId, GetObjectId());
+	}
+
+	void GuiObject::ReleasePointer(int PointerId) {
+		if (auto *Runtime = GuiRuntime::Find(*this)) Runtime->ReleasePointer(PointerId, GetObjectId());
 	}
 }

@@ -69,6 +69,13 @@ return c({
 			serializable = true,
 			replicated = true,
 		},
+		Selectable = {
+			description = "Whether this object can participate in focus traversal",
+			type = t.Bool,
+			unmodified = "false",
+			serializable = true,
+			replicated = true,
+		},
 		LayoutOrder = {
 			description = "Controls the sort order when used with UI layouts",
 			type = t.Integer,
@@ -110,6 +117,23 @@ return c({
 			unmodified = "0",
 			serializable = true,
 			replicated = true,
+		},
+	},
+
+	methods = {
+		CaptureFocus = {
+			description = "Requests focus in this object's screen GUI scope",
+		},
+		ReleaseFocus = {
+			description = "Releases focus if this object currently owns it",
+		},
+		CapturePointer = {
+			description = "Captures the specified pointer identity to this object",
+			params = { p("pointerId", t.Integer) },
+		},
+		ReleasePointer = {
+			description = "Releases the specified pointer identity from this object",
+			params = { p("pointerId", t.Integer) },
 		},
 	},
 })

@@ -12,6 +12,7 @@
 #include "gargantuan/datatypes/Signal.hpp"
 #include "gargantuan/datatypes/TweenInfo.hpp"
 #include "gargantuan/datatypes/UDim.hpp"
+#include "gargantuan/datatypes/UDim2.hpp"
 #include "gargantuan/datatypes/Vector2.hpp"
 #include "gargantuan/scripting/ThreadEngine.hpp"
 #include "gargantuan/scripting/UserdataTag.hpp"
@@ -60,7 +61,7 @@ namespace gargantuan {
 		{"Rect", nullptr, Rect::CreateUserdataMetatable},
 		// {"Region3", OpenLibRegion3, Region3::CreateUserdataMetatable},
 		{"UDim", OpenLibUDim, UDim::CreateUserdataMetatable},
-		// {"UDim2", OpenLibUDim2, UDim2::CreateUserdataMetatable},
+		{"UDim2", OpenLibUDim2, UDim2::CreateUserdataMetatable},
 		{"Signal", OpenLibSignal, BaseSignal::CreateUserdataMetatable},
 		{"SignalConnection", nullptr, SignalConnection::CreateUserdataMetatable},
 		{"TweenInfo", OpenLibTweenInfo, TweenInfo::CreateUserdataMetatable},

@@ -162,6 +162,12 @@ namespace gargantuan {
 		}
 	}
 
+	void BaseSignal::DisconnectAll() {
+		for (auto &Connection : Connections)
+			if (Connection) Connection->Disconnect();
+		Connections.clear();
+	}
+
 	int BaseSignal::LConnect(lua_State *L, BaseSignal *signal) {
 		int callbackReference = LReferenceCallback(L, 2);
 		lua_State *mainState = lua_mainthread(L);

@@ -163,6 +163,9 @@ set(SDLIMAGE_AVIF OFF CACHE BOOL "" FORCE) #was giving me compile issues (don't 
 # out-of-source configure. The stb backend already provides the PNG support the
 # engine uses, so keep that support without configuring the mutating libpng path.
 set(SDLIMAGE_PNG_LIBPNG OFF CACHE BOOL "" FORCE)
+set(SDLTTF_VENDORED ON CACHE BOOL "" FORCE)
+set(SDLTTF_HARFBUZZ ON CACHE BOOL "" FORCE)
+set(SDLTTF_PLUTOSVG OFF CACHE BOOL "" FORCE)
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 
 add_subdirectory(vendor/argparse SYSTEM)
@@ -174,6 +177,20 @@ add_subdirectory(vendor/luau SYSTEM)
 add_subdirectory(vendor/sdl SYSTEM)
 add_subdirectory(vendor/sdl_image SYSTEM)
 add_subdirectory(vendor/sdl_ttf SYSTEM)
+
+set(GARGANTUAN_GUI_RUNTIME_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/runtime")
+file(MAKE_DIRECTORY "${GARGANTUAN_GUI_RUNTIME_DIRECTORY}")
+set(GARGANTUAN_DEFAULT_GUI_FONT_PATH "${GARGANTUAN_GUI_RUNTIME_DIRECTORY}/GargantuanSans.ttf")
+configure_file(
+	"${CMAKE_CURRENT_SOURCE_DIR}/vendor/sdl_ttf/external/harfbuzz/perf/fonts/Roboto-Regular.ttf"
+	"${GARGANTUAN_DEFAULT_GUI_FONT_PATH}"
+	COPYONLY
+)
+configure_file(
+	"${CMAKE_CURRENT_SOURCE_DIR}/cmake/GuiRuntimeConfig.hpp.in"
+	"${CMAKE_CURRENT_BINARY_DIR}/generated/gargantuan/GuiRuntimeConfig.hpp"
+	@ONLY
+)
 
 ################################################################################
 # Tracy
@@ -273,6 +290,7 @@ endif()
 target_include_directories(gargantuan_core PUBLIC
 	"src"
 	"include"
+	"${CMAKE_CURRENT_BINARY_DIR}/generated"
 )
 
 if(GARGANTUAN_WITH_FILAMENT)
@@ -429,6 +447,10 @@ if(BUILD_TESTING)
 	target_link_libraries(gargantuan_platform_input_boundary_tests PRIVATE gargantuan_core)
 	add_executable(gargantuan_player_runtime_tests "tests/PlayerRuntimeTests.cpp")
 	target_link_libraries(gargantuan_player_runtime_tests PRIVATE gargantuan_core)
+	add_executable(gargantuan_gui_foundation_tests "tests/GuiFoundationTests.cpp")
+	target_link_libraries(gargantuan_gui_foundation_tests PRIVATE gargantuan_core)
+	add_executable(gargantuan_gui_foundation_benchmark "tests/GuiFoundationBenchmark.cpp")
+	target_link_libraries(gargantuan_gui_foundation_benchmark PRIVATE gargantuan_core)
 	add_executable(gargantuan_prerun_bootstrap_tests "tests/PreRunBootstrapTests.cpp")
 	target_link_libraries(gargantuan_prerun_bootstrap_tests PRIVATE gargantuan_core)
 	add_executable(gargantuan_attributes_tags_profile "tests/AttributesTagsProfile.cpp")
@@ -515,6 +537,8 @@ if(BUILD_TESTING)
 			gargantuan_soft_body_physics_benchmark
 			gargantuan_platform_input_boundary_tests
 			gargantuan_player_runtime_tests
+			gargantuan_gui_foundation_tests
+			gargantuan_gui_foundation_benchmark
 			gargantuan_networking_contract_tests
 			gargantuan_simulated_transport_tests
 			gargantuan_scheduler_contract_tests
@@ -583,6 +607,8 @@ if(BUILD_TESTING)
 	add_test(NAME gargantuan_soft_body_physics_benchmark_smoke COMMAND gargantuan_soft_body_physics_benchmark --quick)
 	add_test(NAME gargantuan_platform_input_boundary COMMAND gargantuan_platform_input_boundary_tests)
 	add_test(NAME gargantuan_player_runtime COMMAND gargantuan_player_runtime_tests)
+	add_test(NAME gargantuan_gui_foundation COMMAND gargantuan_gui_foundation_tests)
+	add_test(NAME gargantuan_gui_foundation_benchmark_smoke COMMAND gargantuan_gui_foundation_benchmark --quick)
 	add_test(NAME gargantuan_prerun_bootstrap COMMAND gargantuan_prerun_bootstrap_tests)
 	add_test(NAME gargantuan_networking_contracts COMMAND gargantuan_networking_contract_tests)
 	add_test(NAME gargantuan_simulated_transport COMMAND gargantuan_simulated_transport_tests)

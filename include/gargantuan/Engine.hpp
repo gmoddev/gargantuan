@@ -14,6 +14,7 @@
 #include "gargantuan/runtime/MutationGateway.hpp"
 #include "gargantuan/platform/HostEvent.hpp"
 #include "gargantuan/filesystem/SourceMount.hpp"
+#include "gargantuan/gui/GuiRuntime.hpp"
 
 #include <chrono>
 #include <functional>
@@ -31,6 +32,7 @@ namespace gargantuan {
 		std::unique_ptr<ScriptEngine> Script;
 		MutationGateway Mutations;
 		RenderPublisher RenderPublishing;
+		std::unique_ptr<GuiRuntime> Gui;
 		std::unique_ptr<SourceMount> ProjectSources;
 
 		std::shared_ptr<Workspace> Workspace;
