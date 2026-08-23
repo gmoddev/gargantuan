@@ -133,14 +133,15 @@ Player/server runtimes.
 
 ### UI
 
-- [ ] Render GuiObjects
-- [ ] Render Frames
-- [ ] Render TextLabels
-- [ ] Render ImageLabels
-- [ ] UIListLayou
+- [x] Retained `ScreenGui` tree, immutable committed layout, and shared render/input geometry
+- [x] Render GuiObjects and Frames through Renderer Foundation 2C UI batches
+- [x] Shape/rasterize UTF-8 TextLabels through a bounded glyph atlas
+- [x] Render logical ImageLabels through renderer-owned texture residency
+- [x] Deterministic horizontal/vertical UIListLayout
 - [ ] UICorners, UIGradients, UIPaddings, UIStroke, etc
 - [ ] UISizeConstraint, UIGridLayouts, UIPageLayouts, UIFlexItem etc
-- [ ] TextButtons and ImageButtons receive input
+- [x] TextButtons receive routed pointer/focus/keyboard input
+- [ ] ImageButtons receive input
 - [ ] TextBoxes are stateful
 - [ ] Render ScrollingFrames
 - [ ] Render EditableImages

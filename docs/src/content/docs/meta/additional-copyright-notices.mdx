@@ -2,3 +2,26 @@
 title: Additional Copyright Notices
 description: Code license of Gargantuan
 ---
+
+## SDL_ttf text stack
+
+Gargantuan pins SDL_ttf through the `vendor/sdl_ttf` submodule at commit
+`a42434b8c96daaf7650dbd0befe480c090d1c2eb` and builds its vendored text stack:
+
+- SDL_ttf is distributed under the zlib license in
+  `vendor/sdl_ttf/LICENSE.txt`.
+- FreeType is distributed under the FreeType License or GPLv2; Gargantuan uses
+  the FreeType License described in
+  `vendor/sdl_ttf/external/freetype/LICENSE.TXT`.
+- HarfBuzz is distributed under the Old MIT license in
+  `vendor/sdl_ttf/external/harfbuzz/COPYING`.
+
+The controlled build/test font is copied from the pinned HarfBuzz fixture
+`vendor/sdl_ttf/external/harfbuzz/perf/fonts/Roboto-Regular.ttf`. Roboto is
+Copyright Google and distributed under the Apache License 2.0. The font is not
+modified or separately vendored by Gargantuan; the build copies it from the
+already-pinned submodule into the runtime directory as `GargantuanSans.ttf`.
+
+These dependencies and the font are open-source licensed and compatible with
+distribution alongside Gargantuan's MPL-2.0-covered source. Their notices and
+license terms remain independently applicable.

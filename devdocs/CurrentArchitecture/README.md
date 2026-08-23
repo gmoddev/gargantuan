@@ -13,6 +13,9 @@
   primitive resources.
 - [Renderer Foundation 2C](RendererFoundation2C.md) records the two-hardware
   deformable/GUI evaluation, final SDL GPU selection, and GUI start contract.
+- [GUI Foundation 1](GuiFoundation1.md) defines the retained screen-space object
+  model, deterministic committed layout, text/image resources, routed input,
+  accessibility projection, renderer publication, limits, and benchmark.
 - [Physics backend](PhysicsBackend.md) defines neutral rigid-body semantics,
   generation-safe physics identity, safe-point updates, and Box3D confinement.
 - [Soft-body Physics Foundation 1](SoftBodyPhysicsFoundation.md) defines the
@@ -77,6 +80,7 @@ flowchart TD
     Loader --> DataModel["DataModel / service tree"]
     DataModel --> Engine["Engine coordinator"]
     Engine --> Input["SDL events + UserInputService + ActionMap"]
+	Engine --> GUI["GuiRuntime layout, input, accessibility, and UI publication"]
     Engine --> Physics["WorldRoot + Box3D + sibling XPBD deformables"]
     Engine --> Render["SDL GPU renderer"]
     Engine --> Script["ScriptEngine + one Luau VM"]
@@ -100,8 +104,10 @@ flowchart TD
    filesystem, binds DataModel descendants, queues Scripts, and synchronizes
    FileLinks through that mount (`src/Engine.cpp`).
 5. The loop runs until `ProcessService.Alive` becomes false. Every frame polls
-   events, fires simulation hooks, steps Box3D and the camera, draws, and then
-   steps scripts (`src/Main.cpp:174-186`, `src/Engine.cpp:73-143`).
+   events, routes normalized input through UserInputService and GUI before
+   gameplay actions/camera, fires simulation hooks, steps Box3D and the camera,
+   reconciles GUI after `PreRender`, publishes/draws, and then steps scripts
+   (`src/Main.cpp`, `src/Engine.cpp`).
 6. Shutdown destroys renderer resources and the WorldRoot, then exits the process
    (`src/Engine.cpp:63-67`, `src/Main.cpp:185-187`).
 
@@ -130,6 +136,11 @@ classDiagram
     GuiBase <|-- GuiBase2d
     GuiBase2d <|-- GuiObject
     GuiObject <|-- Frame
+	GuiObject <|-- TextLabel
+	TextLabel <|-- TextButton
+	GuiObject <|-- ImageLabel
+	GuiBase2d <|-- LayerCollector
+	LayerCollector <|-- ScreenGui
     DataModel o-- Instance : Children
     Instance o-- Signal : Events
     WorldRoot o-- BasePart : Rigid physics registry
@@ -158,6 +169,7 @@ sequenceDiagram
     participant SDL
     participant Input as UserInputService
     participant Actions as ActionMap
+	participant GUI as GuiRuntime
     participant Run as RunService signals
     participant Physics as WorldRoot
     participant Camera
@@ -165,15 +177,17 @@ sequenceDiagram
     participant Luau as ScriptEngine
 
     Main->>SDL: Poll all events
-    SDL->>Input: ProcessEvent(event)
-    Input->>Actions: Refresh semantic bindings
-    SDL->>Camera: OnEvent(event) when unconsumed
+    SDL->>Input: Update physical state
+	Input->>GUI: Route against committed layout
+	GUI->>Actions: Continue only when GUI does not consume
+    Actions->>Camera: Continue only when unconsumed
     Main->>Run: PreSimulation(delta)
     Main->>Physics: StepPhysics(delta)
     Main->>Camera: Step(delta)
     Main->>Run: PostSimulation(delta)
     Main->>Run: PreRender(delta)
-    Main->>Renderer: Draw(world, camera)
+	Main->>GUI: Reconcile and publish UI
+    Main->>Renderer: Publish and draw world + UI
     Main->>Luau: Step tasks and Scripts
 ```
 
@@ -190,7 +204,7 @@ during explicit transport polling.
 |---|---|---|
 | `Workspace` | Owns current Camera, neutral rigid physics, the bounded kinematic capsule query, and sibling cloth/rubber deformable physics. | No streaming, broad raycast/overlap API, terrain, soft/self collision, or networked deformation. |
 | `RunService` | Signal container used by `Engine`. | `src/services/RunService.cpp` is empty; semantics are hard-coded in the frame loop. |
-| `UserInputService` | Owns physical key/button state, pointer delta, focus reset, and mouse-behavior host synchronization. | Gamepad publication, touch, text input, and retained UI focus remain incomplete. |
+| `UserInputService` | Owns physical key/button state, pointer delta, focus reset, and mouse-behavior host synchronization, then feeds the retained GUI router. | Gamepad publication, native touch adaptation, text input, and IME remain incomplete; GUI's normalized identity model already supports tested touch contacts. |
 | `ActionMap` | Maps bounded keyboard, mouse-button, and pointer-delta bindings to semantic action state. | Default gamepad bindings and a persisted remapping UI are deferred. |
 | `Players` | Owns one local runtime Player, character relation, and replaceable engine-shipped Luau defaults. | Final server/client membership, transport association, and replication are deferred. |
 | `ProcessService` | Controls process lifetime and stdout/stderr. | Process operations require explicit `ProcessControl`; ordinary player runtime scripts are not granted it. |

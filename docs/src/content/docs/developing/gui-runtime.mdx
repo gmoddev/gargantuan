@@ -1,0 +1,66 @@
+---
+title: Runtime GUI
+description: Build screen-space interfaces with Gargantuan's retained-mode GUI foundation.
+---
+
+Gargantuan's runtime GUI is an ordinary schema-backed `Instance` hierarchy. A
+`ScreenGui` is the screen-space root; `Frame`, `TextLabel`, `TextButton`, and
+`ImageLabel` provide the first presentation controls, while `UIListLayout`
+arranges direct siblings horizontally or vertically.
+
+```luau
+local Root = Instance.new("ScreenGui")
+
+local Panel = Instance.new("Frame")
+Panel.Position = UDim2.fromScale(0.5, 0.5)
+Panel.Size = UDim2.fromOffset(400, 260)
+Panel.AnchorPoint = Vector2.new(0.5, 0.5)
+Panel.BackgroundColor3 = Color3.fromRGB(30, 34, 42)
+Panel.Parent = Root
+
+local Title = Instance.new("TextLabel")
+Title.Text = "Gargantuan"
+Title.Size = UDim2.new(1, -24, 0, 48)
+Title.Position = UDim2.fromOffset(12, 12)
+Title.Parent = Panel
+
+local Button = Instance.new("TextButton")
+Button.Text = "Play"
+Button.Size = UDim2.fromOffset(160, 44)
+Button.Position = UDim2.fromOffset(12, 80)
+Button.Parent = Panel
+
+Button.Activated:Connect(function()
+    print("[Game:Menu] Play activated")
+end)
+
+Root.Parent = game
+```
+
+`UDim2` scale is relative to the arranged parent and offset is in logical pixels.
+`AnchorPoint` subtracts a fraction of the resolved size, so `(0.5, 0.5)` centers
+the object at its position. Physical viewport dimensions are divided by DPI
+scale, then logical safe-area insets are applied to the root.
+
+Set `AutomaticSize` to `X`, `Y`, or `XY` to measure text, intrinsic registered
+image dimensions, or child extents. A `UIListLayout` sorts direct siblings by
+`LayoutOrder` and stable tree order. Foundation 1 supports `Stretch` images and
+rectangular nested clips; grids, rounded masks, scrolling, text input, and a full
+theme system are later work.
+
+Pointer events route through capture, target, and bubble phases. Their
+`GuiInputEvent` exposes `Target`, `CurrentTarget`, `PointerId`, `PointerType`,
+`Position`, `Button`, and `Phase`; call `Event:Consume()` to stop propagation.
+`CaptureFocus`, `ReleaseFocus`, `CapturePointer`, and `ReleasePointer` provide
+explicit control. `TextButton` supports pointer activation and focused
+Space/Return activation. Input routes against the last coherent committed layout,
+and mutations made by callbacks are reconciled before render publication.
+
+Accessibility is semantic rather than pixel-derived. Use `AccessibleName`,
+`AccessibilityRole`, and `AccessibilitySelected`; buttons and visible text have
+useful automatic roles, while frames and images remain decorative unless given
+explicit semantics.
+
+Authored properties persist and clone through the normal schema system. Absolute
+geometry, focus, hover, pressed state, pointer capture, glyph atlases, and GPU
+texture identities are derived runtime state and are never serialized.
