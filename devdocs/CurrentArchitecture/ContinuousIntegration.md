@@ -1,7 +1,7 @@
 ---
 status: current
 owner: build-and-test
-last_verified: 2026-08-22
+last_verified: 2026-08-23
 related_code:
   - .github/workflows/native-ci.yml
   - CMakeLists.txt
@@ -79,7 +79,12 @@ ctest --test-dir build-ci -C Release --parallel 2 --timeout 300
       --output-on-failure --no-tests=error
 ```
 
-The configured contract contains 21 tests:
+The Windows production contract contains 25 tests. A local configuration with
+`GARGANTUAN_WITH_GNS=OFF` and renderer benchmarks disabled omits the two
+real-transport and two renderer-headless entries and therefore contains 21;
+that reduced matrix is not the complete Windows gate. The task's earlier
+23-test count predates the registered soft-body and GUI benchmark smokes; current
+CMake and this document are authoritative.
 
 | Coverage | Existing CTest entries |
 | --- | --- |
@@ -87,8 +92,10 @@ The configured contract contains 21 tests:
 | Foundation/runtime, persistence and serialization, EditorHost/protocol, render extraction and backend boundary | `gargantuan_foundation` |
 | Optional telemetry dynamic loading, ABI negotiation, consent, privacy, and fail-open lifecycle | `gargantuan_optional_telemetry` |
 | Physics | `gargantuan_physics_backend` |
+| Soft-body runtime and bounded Release smoke | `gargantuan_soft_body_physics`, `gargantuan_soft_body_physics_benchmark_smoke` |
 | Platform input | `gargantuan_platform_input_boundary` |
 | Player runtime | `gargantuan_player_runtime` |
+| GUI retained runtime and bounded Release smoke | `gargantuan_gui_foundation`, `gargantuan_gui_foundation_benchmark_smoke` |
 | PreRun bootstrap | `gargantuan_prerun_bootstrap` |
 | Serialization smoke | `SerializationBenchmarkSmoke` |
 | Networking contracts and deterministic transport | `gargantuan_networking_contracts`, `gargantuan_simulated_transport`, `gargantuan_scheduler_contract` |

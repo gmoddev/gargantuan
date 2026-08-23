@@ -77,7 +77,7 @@ UTF-8 bytes with no NUL.
 | `SetScriptSource` | Commits bounded UTF-8 Source through MutationGateway using the exact expected SourceVersion. |
 | `StartPlaySession` / `StopPlaySession` | Starts or destroys the one isolated local runtime from current authoritative in-memory state using an exact engine-issued session identity. |
 | `GetPlaySessionState` / `PollPlayDiagnostics` | Observes bounded lifecycle and runtime diagnostics without granting mutation authority. |
-| `SendPlayInput` | Sends a closed focus/key/pointer `HostEvent` subset to the exact active runtime. |
+| `SendPlayInput` | Sends the closed focus/key/pointer/wheel/touch/committed-text/preedit `HostEvent` subset to the exact active runtime and returns any bounded relative-pointer or text-input host state. |
 | `ConfigureViewport` | Negotiates a bounded engine-owned RGB8 viewport. |
 | `SetViewportCamera` | Applies a finite absolute editor-camera pose and field of view. |
 | `OpenViewportTransport` | Explicitly selects shared-memory ring v1 and returns its fixed layout contract. |

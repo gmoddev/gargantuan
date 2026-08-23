@@ -16,6 +16,10 @@ related_code:
 
 # GUI Foundation 1
 
+> Foundation 1 is the accepted base architecture and historical performance
+> baseline. [GUI Foundation 2](GuiFoundation2.md) now defines current
+> invalidation, stacking, scrolling, editable-text, and UI-publication behavior.
+
 ## Accepted architecture
 
 The first complete runtime GUI foundation is an engine-owned retained-mode
@@ -37,9 +41,10 @@ There is one `GuiRuntime` per active `DataModel`. It discovers at most eight
 `ScreenGui` roots, observes reflected property/hierarchy changes, and keeps
 separate layout, text, presentation, input, resource, and accessibility dirty
 domains. A static root reuses committed layout, shaped text, atlas allocations,
-and display data. The current Renderer 2C UI field is a complete-frame value, so
-`GuiRuntime::Publish` still copies the already-committed `RenderUiFrame` into each
-render publication; omission would intentionally clear the renderer projection.
+and display data. Foundation 2 retains the complete-frame renderer contract but
+shares its immutable frame across runtime, publisher, and projection; an absent
+UI update preserves the current projection while an explicit empty update clears
+it.
 
 `GuiLayoutSnapshot` stores `ObjectId` identities and values, not mutable
 `GuiObject` pointers. Display generation and hit testing consume this same
@@ -57,7 +62,7 @@ and non-writable.
 
 `TextButton` is deliberately small: it supplies button accessibility semantics,
 focusability, hover/press state, pointer activation, and Space/Return activation.
-Its modest state tint is resolved before display generation. There is no widget
+Interaction state is resolved before display generation. There is no widget
 library or CSS-like style engine. `GuiResolvedPresentation` is the narrow seam
 where future themes, classes, variants, contrast, and reduced-motion policy can
 replace the current local-property resolver without teaching `GuiPass` widget
@@ -109,11 +114,11 @@ explicit bounded compromise: nested clips are intersections of axis-aligned
 transformed bounds and publish through the existing SDL scissor rectangle. It
 does not promise arbitrary rotated mask/stencil clipping.
 
-Roots are ordered by `(DisplayOrder, ObjectId)` and nodes by effective global
-layer then stable tree order. `ZIndexBehavior.Global` is the operational model.
-The existing `Sibling` value currently receives a bounded `ZIndexFallback`
-diagnostic and the same deterministic global resolution; it is not silently
-misrepresented as full sibling-context semantics.
+Foundation 1 originally operated as global Z ordering. Foundation 2 implements
+the current contract: roots use `(DisplayOrder, ObjectId)`, `Global` sorts all
+descendants by effective Z/tree order, and `Sibling` recursively sorts direct
+siblings while keeping each descendant subtree inside its ancestor's stacking
+position. Drawing and hit testing consume the same committed order.
 
 Opacity uses one convention:
 
@@ -144,8 +149,10 @@ indices and positions, and FreeType-backed `TTF_GetGlyphImageForIndex` supplies
 the raster. Invalid UTF-8 is replaced deterministically with U+FFFD. Missing
 glyph index zero renders the font's `.notdef` glyph and is recorded in shaped
 state instead of being silently dropped. This is real shaping and rasterization,
-but Foundation 1 does not claim a complete bidi algorithm, grapheme editing,
-IME, or a global font fallback/discovery chain.
+but Foundation 1 does not claim a complete bidi algorithm, grapheme editing, or
+a global font fallback/discovery chain. Foundation 2 adds bounded code-point-safe
+editing and SDL preedit/commit integration without claiming grapheme or complete
+bidi cursor behavior.
 
 Glyphs live in at most four 1024x1024 RGBA atlas pages with deterministic shelf
 allocation. Dirty glyph rectangles on one page are coalesced to one subregion
@@ -162,10 +169,10 @@ Only unconsumed events continue to ActionMap/camera behavior. Consumption never
 rewrites physical input state.
 
 Pointer identity is an integer plus Mouse/Touch/Pen type; capture is keyed per
-pointer, not by a singleton cursor. Native SDL host input currently supplies the
-mouse path. The direct normalized pointer seam and tests supply touch contacts;
-physical Android/iOS touch event adaptation remains to be validated rather than
-being claimed by desktop semantic tests.
+pointer, not by a singleton cursor. Foundation 2 translates SDL touch contacts
+through this same route and tests touch scrolling/capture. Physical Android/iOS
+behavior remains to be validated rather than inferred from desktop semantic
+tests.
 
 Hit testing scans committed nodes from highest paint order and rejects invisible,
 clipped, non-interactable, or geometrically missed nodes. The boundary permits a
@@ -259,8 +266,10 @@ benchmark remains the backend-only measurement and is not compared as equivalent
 semantic work.
 
 A fresh local Windows x64 Release run (120 sustained frames per scenario) produced
-the following end-to-end timings in microseconds. Phase-level timings and resource
-counts remain available in the benchmark CSV output.
+the following historical Foundation 1 end-to-end timings in microseconds.
+Foundation 2 measurements supersede these results for current performance;
+phase-level Foundation 1 timings and resource counts remain available in the
+benchmark CSV output.
 
 | Scenario | Mean | P50 | P95 | P99 |
 | --- | ---: | ---: | ---: | ---: |
@@ -280,6 +289,7 @@ counts remain available in the benchmark CSV output.
 | Mixed world/UI publication, 1K nodes | 41.78 | 41.00 | 45.50 | 52.20 |
 
 Phone-sized deterministic layouts and the multi-pointer model establish mobile
-intent, not physical mobile validation. Remaining device work includes actual
-Android/iOS touch adaptation, font quality/atlas pressure, DPI changes, thermal
-and memory pressure, and real GPU draw/upload performance.
+intent, not physical mobile validation. SDL touch adaptation now exists, but
+remaining device work includes actual Android/iOS validation, font quality/atlas
+pressure, DPI changes, thermal and memory pressure, and real GPU draw/upload
+performance.

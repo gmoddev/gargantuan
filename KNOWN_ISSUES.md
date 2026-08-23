@@ -45,26 +45,6 @@ ordering, parent/hierarchy visibility during the callback, reparent versus
 Destroy behavior, subtree ordering, and reentrancy rules before adding the
 schema declaration, native signal, and tests.
 
-## KI-006: ScreenGui sibling Z-index contexts are not implemented
-
-- Status: Open
-- Priority: Medium
-- Area: Runtime GUI ordering
-- Relevant code:
-  - `assets/classes/LayerCollector.luau`
-  - `src/gui/GuiRuntime.cpp`
-  - `devdocs/CurrentArchitecture/GuiFoundation1.md`
-
-GUI Foundation 1 implements deterministic global ordering across roots and
-descendants. The pre-existing `ZIndexBehavior.Sibling` enum remains accepted for
-schema/persistence compatibility, but currently emits a bounded
-`ZIndexFallback` diagnostic and resolves with the global model. This is explicit
-and deterministic, but it is not full sibling-context stacking behavior.
-
-Resolution requires defining stacking-context semantics for descendants, clips,
-and routed hit order, implementing the same committed order for display and hit
-testing, and adding overlap tests that distinguish `Sibling` from `Global`.
-
 ## Maintenance rules
 
 - Record only issues verified against the current branch.

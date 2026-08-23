@@ -16,6 +16,9 @@
 - [GUI Foundation 1](GuiFoundation1.md) defines the retained screen-space object
   model, deterministic committed layout, text/image resources, routed input,
   accessibility projection, renderer publication, limits, and benchmark.
+- [GUI Foundation 2](GuiFoundation2.md) defines epoch-based incremental
+  invalidation, sibling stacking contexts, retained display spans, scrolling,
+  editable text/IME state, and the measured Foundation 2 performance contract.
 - [Physics backend](PhysicsBackend.md) defines neutral rigid-body semantics,
   generation-safe physics identity, safe-point updates, and Box3D confinement.
 - [Soft-body Physics Foundation 1](SoftBodyPhysicsFoundation.md) defines the
@@ -138,7 +141,9 @@ classDiagram
     GuiObject <|-- Frame
 	GuiObject <|-- TextLabel
 	TextLabel <|-- TextButton
+	TextLabel <|-- TextBox
 	GuiObject <|-- ImageLabel
+	Frame <|-- ScrollingFrame
 	GuiBase2d <|-- LayerCollector
 	LayerCollector <|-- ScreenGui
     DataModel o-- Instance : Children
@@ -204,7 +209,7 @@ during explicit transport polling.
 |---|---|---|
 | `Workspace` | Owns current Camera, neutral rigid physics, the bounded kinematic capsule query, and sibling cloth/rubber deformable physics. | No streaming, broad raycast/overlap API, terrain, soft/self collision, or networked deformation. |
 | `RunService` | Signal container used by `Engine`. | `src/services/RunService.cpp` is empty; semantics are hard-coded in the frame loop. |
-| `UserInputService` | Owns physical key/button state, pointer delta, focus reset, and mouse-behavior host synchronization, then feeds the retained GUI router. | Gamepad publication, native touch adaptation, text input, and IME remain incomplete; GUI's normalized identity model already supports tested touch contacts. |
+| `UserInputService` | Owns physical key/button state, pointer delta, focus reset, and mouse/text-input host synchronization, then feeds the retained GUI router. | SDL touch and preedit/committed-text adaptation feed GUI Foundation 2; gamepad publication, candidate UI, complete bidi editing, and physical mobile validation remain incomplete. |
 | `ActionMap` | Maps bounded keyboard, mouse-button, and pointer-delta bindings to semantic action state. | Default gamepad bindings and a persisted remapping UI are deferred. |
 | `Players` | Owns one local runtime Player, character relation, and replaceable engine-shipped Luau defaults. | Final server/client membership, transport association, and replication are deferred. |
 | `ProcessService` | Controls process lifetime and stdout/stderr. | Process operations require explicit `ProcessControl`; ordinary player runtime scripts are not granted it. |

@@ -1,7 +1,7 @@
 ---
 status: current
 owner: runtime
-last_verified: 2026-08-21
+last_verified: 2026-08-23
 related_code:
   - include/gargantuan/platform/HostEvent.hpp
   - src/platform/sdl/
@@ -26,15 +26,17 @@ SDLHost / SDL_Event
     -> TranslateSDLEvent
     -> HostEvent value
     -> Engine::ProcessEvent
-       |- UserInputService
+       |- UserInputService physical state
+       |- GuiRuntime routed input
        |- ActionMap
        `- native Camera controller when unconsumed
 ```
 
 The variant alternatives are `KeyEvent`, `PointerMoveEvent`,
-`PointerButtonEvent`, `WheelEvent`, `TextInputEvent`, `GamepadButtonEvent`,
-`GamepadAxisEvent`, `WindowResizeEvent`, `FocusEvent`, and
-`WindowCloseEvent`. Unknown SDL events and invalid key, pointer-button,
+`PointerButtonEvent`, `TouchPointerEvent`, `WheelEvent`, `TextInputEvent`,
+`TextEditingEvent`, `GamepadButtonEvent`, `GamepadAxisEvent`,
+`WindowResizeEvent`, `FocusEvent`, and `WindowCloseEvent`. Unknown SDL events
+and invalid key, pointer-button,
 gamepad-button, gamepad-axis, window, or device values are ignored without
 creating a partially initialized semantic event.
 
@@ -60,19 +62,24 @@ input has no representation for it.
 
 Committed text is a distinct `TextInputEvent`; key presses never synthesize
 text. `BoundedUtf8` validates UTF-8 and stores at most 63 bytes inline. Invalid
-or oversized payloads are rejected. SDL text-editing/composition events,
-candidate lists, selection ranges, and IME lifecycle are intentionally
-deferred. The current `InputObject` schema has no committed-text property, so
-`UserInputService` currently ignores the semantic text event while preserving
-the boundary for a future explicit text API.
+or oversized payloads are rejected. SDL preedit becomes a bounded
+`TextEditingEvent` with copied text plus selection start/length; it is not
+published as an `InputObject` or confused with committed device state.
+`GuiRuntime` consumes both forms for a focused `TextBox` after
+`UserInputService` records physical state. A `SetTextInputState` host command
+explicitly starts/stops SDL text input and supplies the physical caret rectangle.
+Candidate-list UI and a complete cross-platform IME lifecycle remain deferred.
 
 ## Pointer, gamepad, and window behavior
 
 Pointer events contain engine-owned position/delta values and the closed
 `PointerButton` enum. SDL wheel direction is normalized before publication.
-Unknown pointer identity is represented by value zero and never carries an SDL
-pointer. The existing mouse-button, mouse-position, mouse-delta, and input
-signals remain developer-facing behavior.
+SDL finger down/motion/up values become `TouchPointerEvent` with a copied,
+nonzero contact identity and normalized action; `GuiRuntime` converts them into
+the same per-pointer logical route used by mouse and future pen input. Unknown
+pointer identity is represented by value zero and never carries an SDL pointer.
+The existing mouse-button, mouse-position, mouse-delta, and input signals remain
+developer-facing behavior.
 
 Gamepad input is not yet consumed by `ActionMap` or `UserInputService`. The SDL
 adapter establishes the smallest future-safe semantic boundary: stable
@@ -82,8 +89,9 @@ mapping and remapping policy remain deferred.
 
 The current runtime supports one presentation window, so events do not expose
 a speculative engine window identity. Resize carries validated nonzero pixel
-dimensions. Relative-pointer mode is an engine-owned `HostCommand` applied by
-`SDLHost`. The default Luau camera sets `UserInputService.MouseBehavior`; after
+dimensions. Relative-pointer mode and text-input state are engine-owned
+`HostCommand` values applied by `SDLHost`. The default Luau camera sets
+`UserInputService.MouseBehavior`; after
 synchronous semantic callbacks finish, `UserInputService` converts a changed
 behavior to that host command. The legacy native Camera path can still return
 the same command when defaults are disabled. Neither service receives or
@@ -93,13 +101,14 @@ escaping the adapter.
 
 ## Routing and focus groundwork
 
-`Engine::ProcessEvent` handles window lifecycle, then routes input through
-`UserInputService`, `ActionMap`, and finally the current native Camera controller
-when the event is not consumed. Physical state is recorded before semantic
-mapping. A consuming ActionMap binding prevents only lower-level host/camera
-routing; it does not hide the event from `UserInputService`. Focus loss clears
-physical and semantic active state, fires the normal end/focus signals, and
-releases relative-pointer mode.
+`Engine::ProcessEvent` handles window lifecycle, records physical state in
+`UserInputService`, routes against the last coherent `GuiRuntime` snapshot, then
+continues to `ActionMap` and the current native Camera controller only when the
+GUI did not consume the event. A consuming ActionMap binding prevents only
+lower-level host/camera routing; it does not hide the event from
+`UserInputService`. Focus loss clears physical and semantic active state, fires
+the normal end/focus signals, retires GUI capture/composition, and releases
+relative-pointer and native text-input modes.
 
 `ActionMap` is the gameplay-semantic layer for keyboard, mouse-button, and
 relative pointer-delta bindings. Bindings are bounded, support multiple sources
@@ -126,9 +135,11 @@ delta. EditorHost and `PlaySession` receive only semantic host events; engine
 services and gameplay code do not know about Avalonia coordinates, Win32 raw
 input, cursor boundaries, or capture implementation.
 
-The retained UI focus system, touch/pen semantics, IME composition, gamepad
-publication/default bindings, persisted remapping, non-Windows Studio relative-pointer
-backends, and multi-window architecture are not part of this boundary.
+Pen host adaptation, candidate-list/advanced IME policy, gamepad
+publication/default bindings, persisted remapping, non-Windows Studio
+relative-pointer backends, and multi-window architecture are not part of this
+boundary. SDL touch and preedit adaptation are implemented, but physical
+phone/tablet behavior has not been validated.
 
 ## Coupling audit
 

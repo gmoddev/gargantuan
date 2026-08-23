@@ -23,6 +23,11 @@ serialized EditorHost domain. In Edit it never executes scripts. In Play it step
 only the isolated session Engine before publishing the runtime Workspace. Responses
 carry `Mode` and an exact `PlaySessionId`; Studio rejects stale runtime frames.
 Capture never permits Studio to mutate project source outside existing validated commands.
+The Play runtime's `GuiRuntime` publishes through the same `RenderPublication`
+and `RenderUiFrame` consumed by the normal GUI pass, so game GUI is visible in
+the captured viewport without a Studio-only widget renderer. Studio forwards
+wheel, touch, committed text, and preedit through `SendPlayInput`; it never calls
+widget callbacks directly.
 All six viewport methods require the explicit `ViewportControl` capability at
 EditorHost dispatch. The private Studio service may expose camera, size, copied
 frame metadata, and picked ObjectIds, but never the shared mapping name, native

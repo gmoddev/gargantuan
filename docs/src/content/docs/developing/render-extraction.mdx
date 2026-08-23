@@ -24,7 +24,10 @@ The governing dependency rule is:
 
 A `RenderPublication` owns its sequence/base identity, viewport/camera/light
 state, deterministic object creates/updates/removes, dynamic mesh lifecycle and
-dirty ranges, transient UI batches, and diagnostics. Render values contain only
+dirty ranges, a complete immutable UI frame when UI changed, and diagnostics.
+The UI frame may be shared as `shared_ptr<const RenderUiFrame>` through publisher
+and projection to avoid repeated geometry copies. An absent UI update preserves
+the current projection; an explicit empty frame clears it. Render values contain only
 stable generational identities, logical geometry, transforms, materials,
 visibility, and shadows.
 
@@ -152,8 +155,10 @@ benchmarks, backend decision, and bounded migration sequence.
 
 Foundation 2C selected SDL GPU after real 300-frame fence-complete and
 1,800-frame queued deformable/GUI tests on AMD and NVIDIA hardware. It
-authorizes GUI Foundation 1 to publish engine-owned layout/text/atlas results as
-`RenderTexture` lifecycle plus `RenderUiFrame` values. See
+authorizes the GUI runtime to publish engine-owned layout/text/atlas results as
+`RenderTexture` lifecycle plus complete `RenderUiFrame` values. GUI Foundation 2
+retains that renderer-neutral contract and adds shared immutable ownership rather
+than a speculative UI delta. See
 [`RendererFoundation2C.md`](../../../../../devdocs/CurrentArchitecture/RendererFoundation2C.md).
 
 Any persistent render scene is a disposable `ObjectId`-indexed projection, not

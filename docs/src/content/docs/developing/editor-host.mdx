@@ -53,7 +53,8 @@ The initial protocol supports:
 - absolute editor-camera commands; and
 - viewport picking that returns a stable `ObjectId`;
 - one explicit isolated local Play/Stop lifecycle from current in-memory state; and
-- bounded runtime diagnostics and focused input forwarding.
+- bounded runtime diagnostics and focused key, pointer, wheel, touch, committed
+  text, and preedit forwarding.
 
 The handshake advertises supported viewport transports. On Windows, Studio can
 explicitly negotiate shared-memory ring version 1 for RGB8 frames. The ring has
