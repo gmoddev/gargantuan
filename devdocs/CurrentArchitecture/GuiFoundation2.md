@@ -175,7 +175,11 @@ mapping visual caret navigation for bidirectional text is not claimed.
 Secure fields preserve plaintext only as authored semantic state. Display,
 shaping, renderer frames, and accessibility values receive a same-length masked
 string. Plaintext can still be read by game code with normal property authority;
-this is presentation privacy, not secret storage.
+this is presentation privacy, not secret storage. The platform-neutral text-input
+command also carries secure, multiline, and autocorrect policy. SDL maps secure
+fields to hidden-password input with capitalization and autocorrect disabled where
+the platform supports those hints; this does not claim secrecy beyond SDL and the
+host operating system.
 
 SDL text input is explicitly started/stopped from focused `TextBox` state and is
 given the physical caret rectangle. `TextEditingEvent` carries bounded preedit
@@ -196,6 +200,14 @@ fields with deterministic Tab traversal. Return inserts/submits while a
 resolved presentation record carries hover, pressed, focused, disabled, and
 selected state independently of widget class. Selection and caret are ordinary
 solid display primitives, so SDL has no widget policy.
+
+`InputSink` and `Interactable` are separate. A non-interactable node may remain a
+hit target solely to consume input according to its sink, but it never becomes
+pressed, captures for activation, edits text, or emits `Activated`. Every pointer
+and keyboard release rechecks live interactability, including callback-time and
+down/up transitions. Focus is retained when a widget is disabled so re-enabling
+restores the stable navigation position, but disabled focused widgets cannot
+activate and a disabled `TextBox` stops native text input.
 
 Pointer capture remains keyed by normalized pointer identity. Button presses,
 text selection, and scrolling all negotiate through the one router. A scroll drag
@@ -238,7 +250,8 @@ The headless GUI suite covers dirty-domain selectivity and coalescing, unrelated
 roots, coherent failure retention, sibling/global overlap and callback-time tree
 changes, scroll wheel/touch/nesting/clipping/hit/destruction/resize/focus,
 code-point editing and invalid UTF-8 normalization, caret/selection/navigation,
-secure masking, IME state, persistence, Play isolation, accessibility, and shared
+secure native-input policy and masking, disabled/sink activation denial, IME
+state, persistence, Play isolation, accessibility, and shared
 UI publication. Desktop semantic touch translation is present, but no physical
 Android/iOS performance or IME claim is made.
 

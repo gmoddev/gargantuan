@@ -14,6 +14,8 @@
 #include "gargantuan/services/AssetService.hpp"
 #include "gargantuan/services/Workspace.hpp"
 
+#include <SDL3/SDL.h>
+
 #include <algorithm>
 #include <array>
 #include <bit>
@@ -210,7 +212,17 @@ namespace {
 
 int main() {
 	using namespace gargantuan;
+	struct SdlProcessCleanup final { ~SdlProcessCleanup() { SDL_Quit(); } } SdlCleanup;
 	BootstrapNativeRuntimeSchema();
+
+	auto NewProjectWorld = std::make_shared<DataModel>();
+	(void)NewProjectWorld->GetService("Workspace");
+	NewProjectWorld->InitializeLoadedProjectRevision();
+	const auto NewProjectRevision = NewProjectWorld->GetAuthoritativeRevision();
+	Check(NewProjectRevision == 1 && NewProjectWorld->GetService("AssetService") &&
+		NewProjectWorld->GetAuthoritativeRevision() == NewProjectRevision,
+		"canonical AssetService establishment is complete before new-project revision 1 is visible");
+	NewProjectWorld->Destroy();
 
 	Check(AssetReference::Parse("asset://0123456789abcdef0123456789abcdef").has_value(),
 		"canonical project asset references are accepted");

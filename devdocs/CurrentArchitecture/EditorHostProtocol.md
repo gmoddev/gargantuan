@@ -24,9 +24,11 @@ authentication against a hostile local user.
 Project persistence uses `SaveProject`, `SaveProjectAs`, and `GetProjectState`.
 State contains `AuthoritativeRevision`, `PersistedRevision`, derived `Dirty`,
 and `CurrentDestination`. Open and snapshot return it under `ProjectState`;
-journal polling carries it beside the independent cursor and records. Save
-accepts no revision or dirty input. Save As accepts only `Destination`, adopts
-it after successful atomic persistence, and preserves the instance format.
+journal polling carries it beside the independent cursor and records. Save accepts
+optional `ExpectedRevision` and no dirty input. Save As accepts `Destination` plus
+optional `ExpectedRevision`, rejects a mismatch before snapshot/write, adopts its
+destination only after successful atomic persistence, and preserves the instance
+format. Studio supplies its observed revision for Save As; MCP exposes no Save As.
 
 ## Envelope and limits
 
@@ -57,7 +59,7 @@ UTF-8 bytes with no NUL.
 | `OpenProject` | Canonicalizes and loads a project root without executing gameplay scripts. |
 | `CreateProject` | Creates, initially persists, and adopts a minimum project without accepting serialized state or revision input. |
 | `GetProjectState` | Returns authoritative/persisted revisions, derived dirty state, destination, and bounded history status. |
-| `SaveProject` / `SaveProjectAs` | Atomically persist an exact authoritative revision; Save As adopts its validated destination only after success. |
+| `SaveProject` / `SaveProjectAs` | Optionally compare `ExpectedRevision`, then atomically persist an exact authoritative revision; Save As adopts its validated destination only after success. |
 | `GetSchema` | Returns class compatibility metadata plus schema-discovery v5 definitions, native property semantics, and registry generation. |
 | `GetSnapshot` | Returns snapshot v6 plus editor-property projection v1 and establishes the session cursor. |
 | `PollChanges` | Returns scoped wire-journal v6 records after that cursor. |
@@ -77,7 +79,7 @@ UTF-8 bytes with no NUL.
 | `SetScriptSource` | Commits bounded UTF-8 Source through MutationGateway using the exact expected SourceVersion. |
 | `StartPlaySession` / `StopPlaySession` | Starts or destroys the one isolated local runtime from current authoritative in-memory state using an exact engine-issued session identity. |
 | `GetPlaySessionState` / `PollPlayDiagnostics` | Observes bounded lifecycle and runtime diagnostics without granting mutation authority. |
-| `SendPlayInput` | Sends the closed focus/key/pointer/wheel/touch/committed-text/preedit `HostEvent` subset to the exact active runtime and returns any bounded relative-pointer or text-input host state. |
+| `SendPlayInput` | Sends the closed focus/key/pointer/wheel/touch/committed-text/preedit `HostEvent` subset to the exact active runtime and returns any bounded relative-pointer or text-input host state, including secure/multiline/autocorrect policy without text contents. |
 | `ConfigureViewport` | Negotiates a bounded engine-owned RGB8 viewport. |
 | `SetViewportCamera` | Applies a finite absolute editor-camera pose and field of view. |
 | `OpenViewportTransport` | Explicitly selects shared-memory ring v1 and returns its fixed layout contract. |

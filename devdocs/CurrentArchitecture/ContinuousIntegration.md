@@ -79,6 +79,13 @@ ctest --test-dir build-ci -C Release --parallel 2 --timeout 300
       --output-on-failure --no-tests=error
 ```
 
+Shader compilation and runtime staging are distinct build obligations. The
+default `gargantuan_stage_shaders` target copies every generated shader into the
+executable's `shaders` directory on every incremental build, even when the
+executable does not relink. `gargantuan_packaged_shaders` compares that runtime
+directory with the complete source shader set and fails when a compiled output
+is missing.
+
 The Windows production contract contains 25 tests. A local configuration with
 `GARGANTUAN_WITH_GNS=OFF` and renderer benchmarks disabled omits the two
 real-transport and two renderer-headless entries and therefore contains 21;
@@ -89,6 +96,7 @@ CMake and this document are authoritative.
 | Coverage | Existing CTest entries |
 | --- | --- |
 | Shader requirement | `gargantuan_shader_tool_validation` |
+| Runtime shader package completeness | `gargantuan_packaged_shaders` |
 | Foundation/runtime, persistence and serialization, EditorHost/protocol, render extraction and backend boundary | `gargantuan_foundation` |
 | Optional telemetry dynamic loading, ABI negotiation, consent, privacy, and fail-open lifecycle | `gargantuan_optional_telemetry` |
 | Physics | `gargantuan_physics_backend` |

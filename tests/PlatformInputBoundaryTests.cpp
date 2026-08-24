@@ -102,6 +102,32 @@ namespace {
 		assert(!TranslateSDLEvent(Backend));
 	}
 
+	void TestSDLTextInputPrivacyProperties() {
+		SetTextInputState Secure{
+			.Active = true,
+			.Secure = true,
+			.Multiline = true,
+			.AutocorrectEnabled = false,
+		};
+		const auto SecureProperties = SDL_CreateProperties();
+		assert(ConfigureSDLTextInputProperties(SecureProperties, Secure));
+		assert(SDL_GetNumberProperty(SecureProperties, SDL_PROP_TEXTINPUT_TYPE_NUMBER, -1) ==
+			SDL_TEXTINPUT_TYPE_TEXT_PASSWORD_HIDDEN);
+		assert(SDL_GetNumberProperty(SecureProperties, SDL_PROP_TEXTINPUT_CAPITALIZATION_NUMBER, -1) ==
+			SDL_CAPITALIZE_NONE);
+		assert(!SDL_GetBooleanProperty(SecureProperties, SDL_PROP_TEXTINPUT_AUTOCORRECT_BOOLEAN, true));
+		assert(SDL_GetBooleanProperty(SecureProperties, SDL_PROP_TEXTINPUT_MULTILINE_BOOLEAN, false));
+		SDL_DestroyProperties(SecureProperties);
+
+		SetTextInputState Ordinary{.Active = true, .AutocorrectEnabled = true};
+		const auto OrdinaryProperties = SDL_CreateProperties();
+		assert(ConfigureSDLTextInputProperties(OrdinaryProperties, Ordinary));
+		assert(SDL_GetNumberProperty(OrdinaryProperties, SDL_PROP_TEXTINPUT_TYPE_NUMBER, -1) == SDL_TEXTINPUT_TYPE_TEXT);
+		assert(SDL_GetBooleanProperty(OrdinaryProperties, SDL_PROP_TEXTINPUT_AUTOCORRECT_BOOLEAN, false));
+		assert(!SDL_GetBooleanProperty(OrdinaryProperties, SDL_PROP_TEXTINPUT_MULTILINE_BOOLEAN, true));
+		SDL_DestroyProperties(OrdinaryProperties);
+	}
+
 	void TestEngineOwnedInputObjects() {
 		HostEvent KeyDown = KeyEvent{
 			.Device = {1}, .Physical = PhysicalKey::Space, .Logical = LogicalKey::Space,
@@ -233,6 +259,7 @@ int main() {
 	BootstrapNativeRuntimeSchema();
 	TestBoundedText();
 	TestSDLTranslation();
+	TestSDLTextInputPrivacyProperties();
 	TestEngineOwnedInputObjects();
 	TestCameraHostCommands();
 	return 0;

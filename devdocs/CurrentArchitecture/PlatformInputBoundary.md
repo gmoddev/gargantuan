@@ -67,7 +67,12 @@ or oversized payloads are rejected. SDL preedit becomes a bounded
 published as an `InputObject` or confused with committed device state.
 `GuiRuntime` consumes both forms for a focused `TextBox` after
 `UserInputService` records physical state. A `SetTextInputState` host command
-explicitly starts/stops SDL text input and supplies the physical caret rectangle.
+explicitly starts/stops SDL text input, supplies the physical caret rectangle,
+and carries secure, multiline, and autocorrect policy. `SDLHost` translates that
+state with `SDL_StartTextInputWithProperties`: secure input requests SDL's hidden
+password type and disables capitalization/autocorrect, while ordinary input keeps
+the declared autocorrect policy. These are platform hints rather than a claim of
+OS-level secrecy.
 Candidate-list UI and a complete cross-platform IME lifecycle remain deferred.
 
 ## Pointer, gamepad, and window behavior

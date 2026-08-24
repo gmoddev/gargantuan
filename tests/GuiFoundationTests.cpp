@@ -18,6 +18,8 @@
 #include "gargantuan/render/RenderProjection.hpp"
 #include "gargantuan/services/Workspace.hpp"
 
+#include <SDL3/SDL.h>
+
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
@@ -390,6 +392,78 @@ namespace {
 			"destroying a captured target retires its pointer state before a later release event");
 	}
 
+	void TestDisabledButtonNeverActivates() {
+		using namespace gargantuan;
+		auto Game = std::make_shared<DataModel>();
+		GuiRuntime Runtime(Game, std::filesystem::path(DefaultGuiFontPath));
+		Runtime.SetViewport({800, 600, 1.0f, {}});
+		auto Root = std::make_shared<ScreenGui>();
+		Root->SetParent(Game);
+		auto Button = std::make_shared<TextButton>();
+		Button->SetPosition(UDim2::fromOffset(20, 20));
+		Button->SetSize(UDim2::fromOffset(160, 44));
+		Button->SetParent(Root);
+		const Vector2 Center{100.0f, 42.0f};
+		int Activations = 0;
+		Button->Activated->Connect([&](std::monostate) { ++Activations; });
+		auto Pointer = [&](GuiPointerAction Action) {
+			return Runtime.ProcessPointer({31, Enums::GuiPointerType::Mouse, Enums::GuiPointerButton::Primary,
+				Action, Center});
+		};
+		auto Key = [&](LogicalKey Logical, ButtonState State) {
+			return Runtime.ProcessEvent(KeyEvent{{1}, PhysicalKey::Space, Logical, KeyModifier::None, State, false});
+		};
+
+		Button->SetInteractable(false);
+		Button->SetInputSink(Enums::InputSink::None);
+		(void)Runtime.Reconcile();
+		Check(!Pointer(GuiPointerAction::Down) && !Pointer(GuiPointerAction::Up) && Activations == 0,
+			"a disabled button without InputSink neither consumes nor activates");
+
+		Button->SetInputSink(Enums::InputSink::All);
+		(void)Runtime.Reconcile();
+		const bool SinkDown = Pointer(GuiPointerAction::Down);
+		const bool SinkUp = Pointer(GuiPointerAction::Up);
+		Check(SinkDown, "a disabled InputSink consumes pointer down without becoming pressed");
+		Check(SinkUp, "a disabled InputSink consumes pointer up without activating");
+		Check(Activations == 0, "InputSink may consume pointer input without activating a disabled button");
+
+		Button->SetInteractable(true);
+		(void)Runtime.Reconcile();
+		(void)Pointer(GuiPointerAction::Down);
+		Button->SetInteractable(false);
+		(void)Pointer(GuiPointerAction::Up);
+		(void)Runtime.Reconcile();
+		Check(Activations == 0 && !Button->GetActive() && Button->GetGuiState() == Enums::GuiState::NonInteractable,
+			"disabling between captured pointer down/up cancels activation and pressed presentation");
+
+		Button->SetInteractable(true);
+		(void)Runtime.Reconcile();
+		auto DisableOnUp = Button->PointerUp->Connect([&](std::shared_ptr<GuiInputEvent>) {
+			Button->SetInteractable(false);
+		});
+		(void)Pointer(GuiPointerAction::Down);
+		(void)Pointer(GuiPointerAction::Up);
+		DisableOnUp->Disconnect();
+		Check(Activations == 0, "pointer-up callbacks can disable a button before activation is decided");
+
+		Button->SetInteractable(true);
+		(void)Runtime.Reconcile();
+		Button->CaptureFocus();
+		(void)Key(LogicalKey::Space, ButtonState::Pressed);
+		Button->SetInteractable(false);
+		(void)Key(LogicalKey::Space, ButtonState::Released);
+		(void)Key(LogicalKey::Return, ButtonState::Pressed);
+		(void)Key(LogicalKey::Return, ButtonState::Released);
+		Check(Activations == 0, "stale keyboard focus cannot activate a button after it becomes disabled");
+
+		Button->SetInteractable(true);
+		(void)Runtime.Reconcile();
+		(void)Key(LogicalKey::Return, ButtonState::Pressed);
+		(void)Key(LogicalKey::Return, ButtonState::Released);
+		Check(Activations == 1, "re-enabling a retained focused button restores keyboard activation");
+	}
+
 	void TestPersistencePlayIsolationAndSignalRetirement() {
 		using namespace gargantuan;
 		auto Game = std::make_shared<DataModel>();
@@ -690,7 +764,8 @@ namespace {
 			"SDL-compatible IME preedit updates the bounded semantic composition state");
 		auto TextCommand = Runtime.SynchronizeTextInput();
 		Check(TextCommand && std::get_if<SetTextInputState>(&*TextCommand) &&
-			std::get<SetTextInputState>(*TextCommand).Active,
+			std::get<SetTextInputState>(*TextCommand).Active && !std::get<SetTextInputState>(*TextCommand).Secure &&
+			std::get<SetTextInputState>(*TextCommand).AutocorrectEnabled,
 			"focused TextBox requests native text input with a committed caret area");
 		(void)Runtime.Reconcile();
 		const auto Access = Runtime.GetAccessibilitySnapshot();
@@ -702,7 +777,19 @@ namespace {
 		Check(ScrollAccess != Access->Nodes.end() && ScrollAccess->Role == Enums::AccessibilityRole::ScrollView &&
 			ScrollAccess->ScrollMaximumY > 0.0f,
 			"accessibility exposes renderer-independent scroll position and range semantics");
+		Input->SetSecureTextEntry(true);
+		Input->SetMultiLine(true);
+		(void)Runtime.Reconcile();
+		auto SecureTextCommand = Runtime.SynchronizeTextInput();
+		Check(SecureTextCommand && std::get_if<SetTextInputState>(&*SecureTextCommand) &&
+			std::get<SetTextInputState>(*SecureTextCommand).Secure &&
+			std::get<SetTextInputState>(*SecureTextCommand).Multiline &&
+			!std::get<SetTextInputState>(*SecureTextCommand).AutocorrectEnabled,
+			"secure TextBox changes reconfigure native input as hidden-password with autocorrect disabled");
 		Input->ReleaseFocus();
+		auto StoppedTextCommand = Runtime.SynchronizeTextInput();
+		Check(StoppedTextCommand && !std::get<SetTextInputState>(*StoppedTextCommand).Active,
+			"releasing secure TextBox focus stops native text input");
 		Input->SetText(std::string("\xC0\x80", 2));
 		(void)Runtime.Reconcile();
 		Check(Input->GetText() == "\xEF\xBF\xBD\xEF\xBF\xBD",
@@ -720,13 +807,14 @@ namespace {
 		using namespace gargantuan;
 		auto Game = std::make_shared<DataModel>();
 		std::vector<std::pair<std::string, std::string>> Diagnostics;
-		HeadlessRenderer Renderer(Vector2(800.0f, 600.0f));
-		Engine Runtime(Game, &Renderer, [&](std::string Severity, std::string Message) {
-			Diagnostics.emplace_back(std::move(Severity), std::move(Message));
-		});
-		auto Source = std::make_shared<Script>();
-		Source->SetName("GuiFoundationVerticalSlice");
-		Source->SetSource(R"(
+		{
+			HeadlessRenderer Renderer(Vector2(800.0f, 600.0f));
+			Engine Runtime(Game, &Renderer, [&](std::string Severity, std::string Message) {
+				Diagnostics.emplace_back(std::move(Severity), std::move(Message));
+			});
+			auto Source = std::make_shared<Script>();
+			Source->SetName("GuiFoundationVerticalSlice");
+			Source->SetSource(R"(
 local Root = Instance.new("ScreenGui")
 Root.Name = "LuauGui"
 Root.Parent = game
@@ -755,34 +843,38 @@ Button.Activated:Connect(function()
 	Button.Name = "LuauActivated"
 end)
 )");
-		Source->SetParent(Game);
-		Runtime.Script->Step();
-		(void)Runtime.Gui->Reconcile();
-		auto Button = std::dynamic_pointer_cast<TextButton>(Game->FindFirstChild("LuauPlayButton", true));
-		Check(Button != nullptr, "Luau can construct the complete ScreenGui, Frame, TextLabel, and TextButton hierarchy");
-		if (Button) {
-			const Vector2 Center(Button->GetAbsolutePosition() + Button->GetAbsoluteSize() / 2.0f);
-			(void)Runtime.ProcessEvent(PointerButtonEvent{{2}, PointerButton::Left, ButtonState::Pressed,
-				{Center.GetX(), Center.GetY()}});
-			(void)Runtime.ProcessEvent(PointerButtonEvent{{2}, PointerButton::Left, ButtonState::Released,
-				{Center.GetX(), Center.GetY()}});
-			Check(Button->GetName() == "LuauActivated", "Luau Activated callbacks receive centralized routed input");
+			Source->SetParent(Game);
+			Runtime.Script->Step();
+			(void)Runtime.Gui->Reconcile();
+			auto Button = std::dynamic_pointer_cast<TextButton>(Game->FindFirstChild("LuauPlayButton", true));
+			Check(Button != nullptr, "Luau can construct the complete ScreenGui, Frame, TextLabel, and TextButton hierarchy");
+			if (Button) {
+				const Vector2 Center(Button->GetAbsolutePosition() + Button->GetAbsoluteSize() / 2.0f);
+				(void)Runtime.ProcessEvent(PointerButtonEvent{{2}, PointerButton::Left, ButtonState::Pressed,
+					{Center.GetX(), Center.GetY()}});
+				(void)Runtime.ProcessEvent(PointerButtonEvent{{2}, PointerButton::Left, ButtonState::Released,
+					{Center.GetX(), Center.GetY()}});
+				Check(Button->GetName() == "LuauActivated", "Luau Activated callbacks receive centralized routed input");
+			}
+			const bool ScriptError = std::ranges::any_of(Diagnostics, [](const auto &Diagnostic) {
+				return Diagnostic.first == "Error" && Diagnostic.second.find("GuiFoundationVerticalSlice") != std::string::npos;
+			});
+			Check(!ScriptError, "the Foundation 1 Luau vertical slice executes without a runtime diagnostic");
+			Runtime.Destroy();
 		}
-		const bool ScriptError = std::ranges::any_of(Diagnostics, [](const auto &Diagnostic) {
-			return Diagnostic.first == "Error" && Diagnostic.second.find("GuiFoundationVerticalSlice") != std::string::npos;
-		});
-		Check(!ScriptError, "the Foundation 1 Luau vertical slice executes without a runtime diagnostic");
-		Runtime.Destroy();
+		Game->Destroy();
 	}
 }
 
 int main() {
+	struct SdlProcessCleanup final { ~SdlProcessCleanup() { SDL_Quit(); } } SdlCleanup;
 	try {
 		gargantuan::BootstrapNativeRuntimeSchema();
 		TestLayoutTextPresentationAndResources();
 		TestAutomaticSizeListAndClipping();
 		TestRotationOrderingAndAlpha();
 		TestInputRoutingFocusAndMutationSafety();
+		TestDisabledButtonNeverActivates();
 		TestPersistencePlayIsolationAndSignalRetirement();
 		TestIncrementalInvalidationAndUiRetention();
 		TestSiblingStackingContexts();

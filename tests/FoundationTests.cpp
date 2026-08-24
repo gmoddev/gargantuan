@@ -585,6 +585,44 @@ namespace {
 		Check(state.CurrentPath.back() == "Owned", "deserialization paths own retained strings");
 	}
 
+	void TestDiskFilesystemRecursiveHardening() {
+		using namespace gargantuan;
+		const auto Unique = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+		const auto Root = std::filesystem::temp_directory_path() / ("gargantuan-disk-recursion-" + Unique);
+		const auto Outside = std::filesystem::temp_directory_path() / ("gargantuan-disk-outside-" + Unique);
+		struct Cleanup final {
+			std::filesystem::path Root;
+			std::filesystem::path Outside;
+			~Cleanup() {
+				std::error_code Ignored;
+				std::filesystem::remove_all(Root, Ignored);
+				std::filesystem::remove_all(Outside, Ignored);
+			}
+		} CleanupValue{Root, Outside};
+		std::filesystem::create_directories(Root / "safe");
+		std::filesystem::create_directories(Outside);
+		std::ofstream(Outside / "escaped.txt") << "outside";
+		std::error_code LinkError;
+		std::filesystem::create_directory_symlink(Outside, Root / "safe" / "link", LinkError);
+		if (!LinkError) {
+			DiskFilesystem Filesystem(Root);
+			const auto Entries = Filesystem.GetDescendants(Root);
+			Check(std::ranges::none_of(Entries, [](const DirectoryEntry &Entry) {
+				return Entry.Name == "escaped.txt";
+			}), "DiskFilesystem recursive enumeration followed a directory link outside its root");
+		}
+
+		auto Deep = Root / "deep";
+		std::filesystem::create_directories(Deep);
+		for (std::size_t Depth = 0; Depth <= DiskFilesystem::MaximumDescendantDepth; ++Depth) {
+			Deep /= "d";
+			std::filesystem::create_directory(Deep);
+		}
+		DiskFilesystem Filesystem(Root);
+		CheckThrows<std::length_error>([&] { (void)Filesystem.GetDescendants(Root / "deep"); },
+			"DiskFilesystem recursive enumeration did not enforce its depth bound");
+	}
+
 	void TestJobSystem() {
 		using namespace gargantuan;
 		JobSystem jobs(3);
@@ -4732,17 +4770,21 @@ namespace {
 		const auto CreatedProjectDocument = Json::parse(CreatedProjectStream);
 		CreatedProjectStream.close();
 		Check(CreatedProjectDocument["Version"] == 4 && CreatedProjectDocument["Name"] == "Created Project" &&
-			CreatedProjectDocument["Children"].size() == 1 &&
-			CreatedProjectDocument["Children"][0]["ClassName"] == "Workspace" &&
-			CreatedProjectDocument["Children"][0]["Name"] == "Workspace",
-			"CreateProject immediately persists the minimal DataModel plus Workspace in project format v4");
+			CreatedProjectDocument["Children"].size() == 2 &&
+			std::ranges::any_of(CreatedProjectDocument["Children"], [](const Json &Child) {
+				return Child["ClassName"] == "Workspace" && Child["Name"] == "Workspace";
+			}) &&
+			std::ranges::any_of(CreatedProjectDocument["Children"], [](const Json &Child) {
+				return Child["ClassName"] == "AssetService" && Child["Name"] == "AssetService";
+			}),
+			"CreateProject immediately persists the canonical Workspace and AssetService in project format v4");
 		auto ExistingProjectCreate = call("CreateProject", {
 			{"Destination", CreatedRoot.string()}, {"Name", "Overwrite Attempt"}
 		}, "test-token");
 		Check(!ExistingProjectCreate["Ok"].get<bool>() && ExistingProjectCreate["Error"]["Code"] == "ExistingProject",
 			"CreateProject never overwrites an existing Gargantuan project");
 		auto CreatedSnapshot = call("GetSnapshot", Json::object(), "test-token");
-		Check(CreatedSnapshot["Ok"].get<bool>() && CreatedSnapshot["Result"]["Snapshot"]["Objects"].size() == 2,
+		Check(CreatedSnapshot["Ok"].get<bool>() && CreatedSnapshot["Result"]["Snapshot"]["Objects"].size() == 3,
 			"the minimum new project is immediately available through the normal authoritative snapshot path");
 		auto CreatedWorkspace = std::find_if(
 			CreatedSnapshot["Result"]["Snapshot"]["Objects"].begin(),
@@ -5777,7 +5819,44 @@ namespace {
 			~SaveAsCleanup() { std::filesystem::remove_all(Root); }
 		} SaveAsCleanupState{SaveAsRoot};
 		const auto ExpectedSaveAsRoot = std::filesystem::weakly_canonical(SaveAsRoot);
-		auto SaveAs = call("SaveProjectAs", {{"Destination", SaveAsRoot.string()}}, "test-token");
+		const auto MatchingSaveAsRevision =
+			call("GetProjectState", Json::object(), "test-token")["Result"]["AuthoritativeRevision"].get<std::uint64_t>();
+		if (editable != objects.end()) {
+			const auto StaleSaveAsRoot = temporaryRoot.parent_path() /
+				(temporaryRoot.filename().string() + "-stale-save-as");
+			struct StaleSaveAsCleanup {
+				std::filesystem::path Root;
+				~StaleSaveAsCleanup() { std::filesystem::remove_all(Root); }
+			} StaleSaveAsCleanupState{StaleSaveAsRoot};
+			const auto StaleDocument = StaleSaveAsRoot / ".gargantuan" / "project.instance.json";
+			std::filesystem::create_directories(StaleDocument.parent_path());
+			{
+				std::ofstream Sentinel(StaleDocument, std::ios::binary);
+				Sentinel << "destination-must-remain-unchanged";
+			}
+			Check(call("SetProperty", {
+				{"Object", (*editable)["Id"]}, {"Property", "Name"},
+				{"Value", {{"Type", "String"}, {"Value", "ChangedBeforeStaleSaveAs"}}},
+			}, "test-token")["Ok"].get<bool>(), "mutation after Save As revision observation succeeds");
+			(void)call("PollChanges", Json::object(), "test-token");
+			const auto StateBeforeStaleSaveAs = call("GetProjectState", Json::object(), "test-token");
+			auto StaleSaveAs = call("SaveProjectAs", {
+				{"Destination", StaleSaveAsRoot.string()}, {"ExpectedRevision", MatchingSaveAsRevision},
+			}, "test-token");
+			const auto StateAfterStaleSaveAs = call("GetProjectState", Json::object(), "test-token");
+			std::ifstream Sentinel(StaleDocument, std::ios::binary);
+			std::stringstream SentinelContents;
+			SentinelContents << Sentinel.rdbuf();
+			Check(!StaleSaveAs["Ok"].get<bool>() && StaleSaveAs["Error"]["Code"] == "Conflict" &&
+				StateAfterStaleSaveAs["Result"] == StateBeforeStaleSaveAs["Result"] &&
+				SentinelContents.str() == "destination-must-remain-unchanged",
+				"stale Save As rejects before writing or adopting its destination");
+		}
+		const auto CurrentSaveAsRevision =
+			call("GetProjectState", Json::object(), "test-token")["Result"]["AuthoritativeRevision"].get<std::uint64_t>();
+		auto SaveAs = call("SaveProjectAs", {
+			{"Destination", SaveAsRoot.string()}, {"ExpectedRevision", CurrentSaveAsRevision},
+		}, "test-token");
 		Check(SaveAs["Ok"].get<bool>() &&
 			SaveAs["Result"]["CurrentDestination"] == ExpectedSaveAsRoot.generic_string() &&
 			std::filesystem::is_regular_file(SaveAsRoot / ".gargantuan" / "project.instance.json") &&
@@ -6428,6 +6507,7 @@ int main() {
 	TestObjectIdsAndChanges();
 	TestWorldRootConstraintValidation();
 	TestCheckedResolutionAndOwnedPaths();
+	TestDiskFilesystemRecursiveHardening();
 	TestJobSystem();
 	TestSchemaMetadata();
 	TestRuntimeSchemaRegistry();

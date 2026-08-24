@@ -206,6 +206,9 @@ namespace gargantuan {
 	struct SetRelativePointerMode { bool Enabled = false; };
 	struct SetTextInputState {
 		bool Active = false;
+		bool Secure = false;
+		bool Multiline = false;
+		bool AutocorrectEnabled = true;
 		std::int32_t X = 0;
 		std::int32_t Y = 0;
 		std::int32_t Width = 0;

@@ -41,12 +41,9 @@ namespace gargantuan {
 		}
 		if (DataModel->Filesystem) ProjectSources = std::make_unique<SourceMount>(*DataModel->Filesystem);
 
-		DataModel->BindDescendants([this](std::shared_ptr<Instance> inst) {
+		UnbindDescendants = DataModel->BindDescendants([this](std::shared_ptr<Instance> inst) {
 			if (auto script = std::dynamic_pointer_cast<gargantuan::Script>(inst)) {
 				this->Script->ScriptQueue.insert(script);
-				inst->Destroying->Once([ScriptEngine = this->Script.get(), script](std::monostate _) {
-					if (ScriptEngine->ScriptQueue.contains(script)) ScriptEngine->ScriptQueue.erase(script);
-				});
 			}
 
 			if (auto link = std::dynamic_pointer_cast<gargantuan::FileLink>(inst)) {
@@ -65,7 +62,7 @@ namespace gargantuan {
 			}
 		});
 
-		DataModel->DescendantRemoved->Connect([this](std::shared_ptr<Instance> inst) {
+		DescendantRemovedConnection = DataModel->DescendantRemoved->Connect([this](std::shared_ptr<Instance> inst) {
 			if (auto script = std::dynamic_pointer_cast<gargantuan::Script>(inst);
 				script && Script->ScriptQueue.contains(script)) {
 				Script->ScriptQueue.erase(script);
@@ -89,6 +86,14 @@ namespace gargantuan {
 		Gui.reset();
 		if (Renderer) Renderer->Destroy();
 		if (WorldRoot) WorldRoot->Destroy();
+		if (UnbindDescendants) {
+			UnbindDescendants();
+			UnbindDescendants = {};
+		}
+		if (DescendantRemovedConnection) {
+			DescendantRemovedConnection->Disconnect();
+			DescendantRemovedConnection.reset();
+		}
 		Script.reset();
 	}
 

@@ -221,6 +221,17 @@ namespace gargantuan {
 		return false;
 	}
 
+	bool ConfigureSDLTextInputProperties(SDL_PropertiesID Properties, const SetTextInputState &State) {
+		if (Properties == 0 || !State.Active) return false;
+		return SDL_SetNumberProperty(Properties, SDL_PROP_TEXTINPUT_TYPE_NUMBER,
+			State.Secure ? SDL_TEXTINPUT_TYPE_TEXT_PASSWORD_HIDDEN : SDL_TEXTINPUT_TYPE_TEXT) &&
+			SDL_SetNumberProperty(Properties, SDL_PROP_TEXTINPUT_CAPITALIZATION_NUMBER,
+				State.Secure ? SDL_CAPITALIZE_NONE : SDL_CAPITALIZE_SENTENCES) &&
+			SDL_SetBooleanProperty(Properties, SDL_PROP_TEXTINPUT_AUTOCORRECT_BOOLEAN,
+				State.AutocorrectEnabled && !State.Secure) &&
+			SDL_SetBooleanProperty(Properties, SDL_PROP_TEXTINPUT_MULTILINE_BOOLEAN, State.Multiline);
+	}
+
 	void SDLHost::Apply(const HostCommand &Command) const {
 		std::visit([this](const auto &Value) {
 			using CommandType = std::decay_t<decltype(Value)>;
@@ -236,7 +247,10 @@ namespace gargantuan {
 				}
 				const SDL_Rect Area{Value.X, Value.Y, std::max(Value.Width, 1), std::max(Value.Height, 1)};
 				SDL_SetTextInputArea(Window, &Area, std::max(Value.Cursor, 0));
-				SDL_StartTextInput(Window);
+				const auto Properties = SDL_CreateProperties();
+				if (ConfigureSDLTextInputProperties(Properties, Value))
+					SDL_StartTextInputWithProperties(Window, Properties);
+				if (Properties != 0) SDL_DestroyProperties(Properties);
 			}
 		}, Command);
 	}

@@ -108,8 +108,10 @@ forwarded as arbitrary environment data.
 Engine command-line category choices last for that process. `SetConsent`
 remains a narrow adapter operation so a host-owned preference surface can apply
 revocation without exposing the ABI elsewhere; V1 performs its queue/spool
-purge. Studio owns its separate persisted preferences and invokes the same ABI
-transition before saving a revoked choice.
+purge. An adapter that has already degraded still applies consent reductions to
+its local collection gates and forwards them to the initialized V1 library; it
+never re-enables a category from that state. Studio owns its separate persisted
+preferences and invokes the same ABI transition before saving a revoked choice.
 
 A distribution opts in by placing the correctly named library beside the
 corresponding executable and establishing explicit local consent. The Engine
@@ -123,6 +125,20 @@ ordinary paths.
 `gargantuan_optional_telemetry` builds host-independent fake dynamic libraries
 and covers all-disabled, absent, valid, wrong ABI, short table, missing export,
 initialization failure, runtime submission failure, shutdown failure,
-independent categories, revocation, repeated phase/Play-style lifecycle, fixed
+independent categories, revocation after runtime degradation, repeated
+phase/Play-style lifecycle, fixed
 crash/performance structures, and forbidden-data canaries. The fake libraries
 are test targets only and are never deployed with the Engine.
+
+## Deferred cross-repository ABI manifest
+
+The host tests and telemetry repository's C/C#/Rust harnesses independently
+exercise ABI V1, but no release artifact mechanically binds the two repositories.
+A later contract-release milestone should have `gargantuan-telemetry` publish
+`contracts/telemetry-abi-v1.json` beside its library. The deterministic manifest
+must contain the export name, ABI version, status/enum values, API-table slot
+order, and every public structure's size, alignment, field name, type, offset,
+and array extent. Telemetry CI should generate and compare it from the normative
+C header; Engine CI should compile a tiny consumer that compares its C++ view
+against the pinned manifest for the telemetry release it packages. This is a
+conformance artifact, not a runtime dependency or replacement for ABI negotiation.

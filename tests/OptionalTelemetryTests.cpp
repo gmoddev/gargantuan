@@ -264,6 +264,18 @@ int main(int ArgumentCount, char **Arguments) {
 				RuntimeFailure.GetAvailability() == Availability::Failed,
 				"runtime submit failure did not degrade telemetry alone to no-op"
 			);
+			RuntimeFailure.SetConsent({.CrashReportsEnabled = false, .PerformanceSnapshotsEnabled = false});
+			Check(
+				Inspector.State().SetConsentCount == 1 && Inspector.State().LastCrashConsent == 0 &&
+					Inspector.State().LastPerformanceConsent == 0,
+				"consent revocation was not forwarded after host-side telemetry degradation"
+			);
+			RuntimeFailure.SetConsent({.CrashReportsEnabled = false, .PerformanceSnapshotsEnabled = false});
+			Check(
+				Inspector.State().SetConsentCount == 2 && Inspector.State().LastCrashConsent == 0 &&
+					Inspector.State().LastPerformanceConsent == 0,
+				"repeated revocation was not forwarded for bounded cleanup retry after degradation"
+			);
 		}
 
 		SetMode("shutdown_failure");

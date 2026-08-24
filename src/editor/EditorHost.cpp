@@ -871,7 +871,9 @@ namespace gargantuan {
 						RelativePointerMode = Relative->Enabled;
 					if (const auto *TextInput = std::get_if<SetTextInputState>(&*InputResult.Command))
 						TextInputState = {
-							{"Active", TextInput->Active}, {"X", TextInput->X}, {"Y", TextInput->Y},
+							{"Active", TextInput->Active}, {"Secure", TextInput->Secure},
+							{"Multiline", TextInput->Multiline}, {"AutocorrectEnabled", TextInput->AutocorrectEnabled},
+							{"X", TextInput->X}, {"Y", TextInput->Y},
 							{"Width", TextInput->Width}, {"Height", TextInput->Height}, {"Cursor", TextInput->Cursor},
 						};
 				}
@@ -1324,7 +1326,8 @@ namespace gargantuan {
 						requestId, "TransactionOpen", "Commit the open authoring transaction before saving"));
 				const bool saveAs = method == "SaveProjectAs";
 				if ((!saveAs && !HasOnlyFields(parameters, {"ExpectedRevision"})) ||
-					(saveAs && (!HasOnlyFields(parameters, {"Destination"}) || !parameters.contains("Destination"))))
+					(saveAs && (!HasOnlyFields(parameters, {"Destination", "ExpectedRevision"}) ||
+						!parameters.contains("Destination"))))
 					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Project persistence parameters are invalid"));
 				if (HasRevisionConflict())
 					return SerializeBoundedResponse(ErrorResponse(

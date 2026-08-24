@@ -1,7 +1,7 @@
 ---
 status: current
 owner: editor-host
-last_verified: 2026-08-16
+last_verified: 2026-08-23
 related_code:
   - include/gargantuan/classes/DataModel.hpp
   - include/gargantuan/filesystem/Project.hpp
@@ -18,6 +18,11 @@ Each loaded `DataModel` owns an explicitly initialized unsigned 64-bit
 `AuthoritativeRevision`. A successfully loaded existing project starts at 1.
 The counter advances once when a committed authoring mutation changes state
 represented by project serialization. Exhaustion throws and never wraps.
+
+Initialization establishes the canonical `Workspace` and `AssetService` before
+revision 1 becomes observable. Lazy service lookup after a new project is
+published therefore cannot manufacture project state and advance a pristine
+project to revision 2.
 
 Current revision-bearing mutations are saved reflected properties (including
 `Name`), Attributes, Tags, class-extension values, custom-class property state,
@@ -59,15 +64,19 @@ safe point; the snapshot contract preserves this rule if scheduling broadens.
 
 ## Save and Save As
 
-`SaveProject` takes no caller-supplied revision or dirty state and persists to
-the engine-owned destination. `SaveProjectAs` accepts one absolute local
-project-root destination. EditorHost rejects malformed, URI-like, non-absolute,
+`SaveProject` and `SaveProjectAs` accept an optional optimistic
+`ExpectedRevision`; neither accepts caller-supplied dirty state. Save persists to
+the engine-owned destination. Save As additionally requires one absolute local
+project-root destination. EditorHost rejects a stale revision before capturing or
+writing the authoritative snapshot, and rejects malformed, URI-like, non-absolute,
 or file destinations after bounded normalization.
 
 Save As constructs a candidate destination, preserves the existing instance
 format, copies the PreRun schema file when present, and persists the snapshot.
 The live destination and `DataModel` filesystem/root change only after success.
-Failure leaves the old destination, persisted revision, and dirty state intact.
+Failure or revision conflict leaves the target contents, old destination,
+persisted revision, and dirty state intact. Studio supplies the revision it has
+observed; Save As remains a Studio-only operation and is not exposed through MCP.
 
 ## Atomic persistence and errors
 

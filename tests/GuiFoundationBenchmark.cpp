@@ -17,6 +17,8 @@
 #include "gargantuan/render/RenderProjection.hpp"
 #include "gargantuan/services/Workspace.hpp"
 
+#include <SDL3/SDL.h>
+
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -85,6 +87,10 @@ namespace {
 			Runtime.SetViewport({1920, 1080, 1.0f, {}});
 			Root->SetParent(Game);
 			Publisher.SetProfilingEnabled(true);
+		}
+
+		~Scene() {
+			if (Game && !Game->GetDestroyed()) Game->Destroy();
 		}
 
 		void CommitInitial() {
@@ -452,6 +458,7 @@ namespace {
 }
 
 int main(int ArgumentCount, char **Arguments) {
+	struct SdlProcessCleanup final { ~SdlProcessCleanup() { SDL_Quit(); } } SdlCleanup;
 	const bool Quick = ArgumentCount > 1 && std::string_view(Arguments[1]) == "--quick";
 	try {
 		gargantuan::BootstrapNativeRuntimeSchema();

@@ -366,7 +366,24 @@ namespace gargantuan::telemetry {
 	}
 
 	void OptionalTelemetry::SetConsent(Consent CategoryConsent) noexcept {
-		if (!State || State->CurrentAvailability != Availability::Active) return;
+		if (!State || !State->Initialized || State->ShutdownRequested) return;
+		if (State->CurrentAvailability != Availability::Active) {
+			CategoryConsent.CrashReportsEnabled =
+				CategoryConsent.CrashReportsEnabled && State->CategoryConsent.CrashReportsEnabled;
+			CategoryConsent.PerformanceSnapshotsEnabled =
+				CategoryConsent.PerformanceSnapshotsEnabled && State->CategoryConsent.PerformanceSnapshotsEnabled;
+		}
+		const auto Changed = CategoryConsent.CrashReportsEnabled != State->CategoryConsent.CrashReportsEnabled ||
+							 CategoryConsent.PerformanceSnapshotsEnabled != State->CategoryConsent.PerformanceSnapshotsEnabled;
+		// A repeated disabled state is still meaningful after degradation: the
+		// runtime may be retaining bounded cleanup state from an earlier purge
+		// failure and must be given another chance to remove it.
+		if (!Changed && State->CurrentAvailability == Availability::Active) return;
+		State->CategoryConsent = CategoryConsent;
+		if (!CategoryConsent.PerformanceSnapshotsEnabled) {
+			State->ResetFrames();
+			State->NextDueUptimeMilliseconds = std::numeric_limits<std::uint64_t>::max();
+		}
 		try {
 			const auto Status = State->Api.SetConsent(
 				CategoryConsent.CrashReportsEnabled ? 1u : 0u, CategoryConsent.PerformanceSnapshotsEnabled ? 1u : 0u
@@ -375,8 +392,6 @@ namespace gargantuan::telemetry {
 				State->Fail();
 				return;
 			}
-			State->CategoryConsent = CategoryConsent;
-			if (!CategoryConsent.PerformanceSnapshotsEnabled) State->ResetFrames();
 			State->RefreshSchedule();
 		} catch (...) {
 			State->Fail();

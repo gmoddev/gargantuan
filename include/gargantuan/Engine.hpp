@@ -2,6 +2,7 @@
 
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/WorldRoot.hpp"
+#include "gargantuan/datatypes/Signal.hpp"
 #include "gargantuan/render/Renderer.hpp"
 #include "gargantuan/render/RenderExtractor.hpp"
 #include "gargantuan/scripting/ScriptEngine.hpp"
@@ -63,6 +64,8 @@ namespace gargantuan {
 		std::chrono::steady_clock::time_point CurrentTick{};
 		std::chrono::steady_clock::time_point LastTick{};
 		bool Destroyed = false;
+		std::function<void()> UnbindDescendants;
+		SignalConnection::Pointer DescendantRemovedConnection;
 
 		template <typename T>
 			requires std::is_base_of_v<Instance, T>

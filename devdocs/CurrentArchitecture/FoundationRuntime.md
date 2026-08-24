@@ -152,6 +152,13 @@ define ordering. Its library constants are readonly value userdata. Direct
 library callbacks that do not pass through userdata dispatch still need a
 complete boundary inventory in a later hardening pass.
 
+`Engine` owns every DataModel descendant subscription it installs. Teardown
+unbinds the descendant-added callback and disconnects the descendant-removed
+connection before releasing `ScriptEngine`; no Instance signal may retain a raw
+runtime pointer after `Engine::Destroy`. Tests destroy their DataModel only after
+runtime teardown and then perform process-level SDL cleanup, so leak checking
+observes the same explicit ownership boundary as production shutdown.
+
 ## Remaining blockers before network replication
 
 Snapshot baseline, serialized references, scoped journal records, isolated

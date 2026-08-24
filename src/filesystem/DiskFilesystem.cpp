@@ -129,21 +129,34 @@ namespace gargantuan {
 		return entries;
 	};
 
-	void CollectDescendants(std::vector<DirectoryEntry> &entries, const std::filesystem::path &path) {
-		for (const auto &entry : std::filesystem::directory_iterator(path)) {
-			entries.push_back({
-				.Name = std::move(entry.path().filename().string()),
-				.Path = entry.path(),
-				.Type = MapDirectoryEntryType(entry),
+	void CollectDescendants(
+		std::vector<DirectoryEntry> &Entries,
+		const std::filesystem::path &Path,
+		std::size_t Depth
+	) {
+		for (const auto &Entry : std::filesystem::directory_iterator(Path)) {
+			if (Entries.size() == DiskFilesystem::MaximumDescendantEntries)
+				throw std::length_error("DiskFilesystem descendant enumeration exceeds its entry bound");
+			const auto Type = MapDirectoryEntryType(Entry);
+			Entries.push_back({
+				.Name = Entry.path().filename().string(),
+				.Path = Entry.path(),
+				.Type = Type,
 			});
 
-			if (entry.is_directory()) CollectDescendants(entries, entry.path());
+			// MapDirectoryEntryType uses symlink_status and rejects Windows reparse
+			// points. Never make a second following type query for recursion.
+			if (Type == FileType::Directory) {
+				if (Depth == DiskFilesystem::MaximumDescendantDepth)
+					throw std::length_error("DiskFilesystem descendant enumeration exceeds its depth bound");
+				CollectDescendants(Entries, Entry.path(), Depth + 1);
+			}
 		}
 	};
 
 	std::vector<DirectoryEntry> DiskFilesystem::GetDescendants(const std::filesystem::path &path) {
 		std::vector<DirectoryEntry> entries;
-		CollectDescendants(entries, path);
+		CollectDescendants(entries, path, 0);
 		return entries;
 	};
 

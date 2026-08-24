@@ -90,6 +90,11 @@ namespace gargantuan {
 	}
 
 	void DataModel::InitializeLoadedProjectRevision() {
+		// Canonical services required to inspect an ordinary project are part of
+		// project establishment, not a later authoring mutation. Construct them
+		// before publishing the initial revision.
+		(void)GetService("Workspace");
+		(void)GetService("AssetService");
 		AuthoritativeRevision = InitialProjectRevision;
 		Transactions.Reset();
 	}

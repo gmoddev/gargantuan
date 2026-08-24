@@ -35,6 +35,13 @@ The filesystem backend and mount are native engine implementation details. They
 are not exposed to experience Luau, and `FileLink.Path` remains a project-relative
 compatibility value rather than host-path authority.
 
+The generic `DiskFilesystem::GetDescendants` helper also treats symbolic links
+and Windows reparse points as non-directories and enforces the same 32-level and
+16,384-entry traversal ceilings. This is defense in depth for future backend
+callers; current source-import authority continues to flow through
+`SourceMount`, which performs the stronger per-operation confinement checks
+below.
+
 ## Root confinement
 
 Construction canonicalizes an existing directory owned by the project

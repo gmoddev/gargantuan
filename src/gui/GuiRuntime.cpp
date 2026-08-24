@@ -871,6 +871,11 @@ namespace gargantuan {
 					Node.Interactable = Object->GetInteractable();
 					Node.FocusEligible = Object->GetInteractable() && Object->GetSelectable();
 					Node.InputSink = Object->GetInputSink();
+					if (!Node.Interactable) {
+						std::erase_if(Pressed, [&](const auto &Entry) { return Entry.second == ObjectIdValue; });
+						if (KeyboardPressed == ObjectIdValue) KeyboardPressed = {};
+					}
+					RefreshInteraction(ObjectIdValue);
 				}
 				if ((Domains & DirtyPresentation) != 0) {
 					const auto Previous = Node.Presentation;
@@ -1485,7 +1490,8 @@ namespace gargantuan {
 			if (!Gui) return;
 			const bool WasPressed = Gui->GetActive();
 			const auto PreviousState = Gui->GetGuiState();
-			const bool IsPressed = std::ranges::any_of(Pressed, [&](const auto &Entry) { return Entry.second == Object; });
+			const bool IsPressed = Gui->GetInteractable() &&
+				std::ranges::any_of(Pressed, [&](const auto &Entry) { return Entry.second == Object; });
 			const bool IsHovered = std::ranges::any_of(Hovered, [&](const auto &Entry) { return Entry.second == Object; });
 			const auto StateValue = !Gui->GetInteractable() ? Enums::GuiState::NonInteractable :
 				IsPressed ? Enums::GuiState::Press : IsHovered ? Enums::GuiState::Hover : Enums::GuiState::Idle;
@@ -1630,7 +1636,7 @@ namespace gargantuan {
 		bool HandleTextKey(const KeyEvent &Key) {
 			if (Key.State != ButtonState::Pressed) return false;
 			auto Input = std::dynamic_pointer_cast<TextBox>(ObjectRegistry::Get().Lookup(KeyboardFocus()));
-			if (!Input) return false;
+			if (!Input || !Input->GetInteractable()) return false;
 			auto &Editing = TextEditing[Input->GetObjectId()];
 			const auto Boundaries = Utf8Boundaries(Input->GetText());
 			const auto Count = Boundaries.size() - 1;
@@ -2000,11 +2006,11 @@ namespace gargantuan {
 		}
 		if (const auto *Text = std::get_if<TextInputEvent>(&Event)) {
 			auto Input = std::dynamic_pointer_cast<TextBox>(ObjectRegistry::Get().Lookup(State->KeyboardFocus()));
-			return Input && State->ReplaceTextSelection(Input, Text->Text.View());
+			return Input && Input->GetInteractable() && State->ReplaceTextSelection(Input, Text->Text.View());
 		}
 		if (const auto *Composition = std::get_if<TextEditingEvent>(&Event)) {
 			auto Input = std::dynamic_pointer_cast<TextBox>(ObjectRegistry::Get().Lookup(State->KeyboardFocus()));
-			if (!Input) return false;
+			if (!Input || !Input->GetInteractable()) return false;
 			auto &Editing = State->TextEditing[Input->GetObjectId()];
 			Editing.Composition.assign(Composition->Text.View());
 			Editing.CompositionSelectionStart = static_cast<std::size_t>(std::max(0, Composition->SelectionStart));
@@ -2027,6 +2033,14 @@ namespace gargantuan {
 			const ObjectId Focused = State->KeyboardFocus();
 			auto Button = std::dynamic_pointer_cast<TextButton>(ObjectRegistry::Get().Lookup(Focused));
 			if (!Button) return false;
+			if (!Button->GetInteractable()) {
+				if (State->KeyboardPressed == Focused) {
+					State->KeyboardPressed = {};
+					Button->CommitRuntimeInteraction(false, Enums::GuiState::NonInteractable);
+					State->Mark(Focused, DirtyPresentation | DirtyAccessibility);
+				}
+				return false;
+			}
 			if (Key->State == ButtonState::Pressed) {
 				State->KeyboardPressed = Focused;
 				Button->CommitRuntimeInteraction(true, Enums::GuiState::Press);
@@ -2099,14 +2113,18 @@ namespace gargantuan {
 		const auto Node = State->Layout->NodeByObject.find(Target);
 		const auto Sink = Node == State->Layout->NodeByObject.end() ? Enums::InputSink::None :
 			State->Layout->Nodes[Node->second].InputSink;
+		const auto TargetObject = std::dynamic_pointer_cast<GuiObject>(ObjectRegistry::Get().Lookup(Target));
+		const bool Interactable = TargetObject && TargetObject->GetInteractable();
 		bool Handled = false;
 		if (Input.Action == GuiPointerAction::Move) Handled = State->Dispatch(Target, Input, Impl::RoutedSignal::Move);
 		else if (Input.Action == GuiPointerAction::Down) {
-			if (Node != State->Layout->NodeByObject.end() && State->Layout->Nodes[Node->second].FocusEligible) State->Focus(Target);
-			State->PlaceTextCaret(Target, Logical, false);
-			if (State->Captured.size() < GuiLimits::MaximumCapturedPointers) State->Captured[Input.PointerId] = Target;
-			State->Pressed[Input.PointerId] = Target;
-			State->RefreshInteraction(Target);
+			if (Interactable) {
+				if (Node != State->Layout->NodeByObject.end() && State->Layout->Nodes[Node->second].FocusEligible) State->Focus(Target);
+				State->PlaceTextCaret(Target, Logical, false);
+				if (State->Captured.size() < GuiLimits::MaximumCapturedPointers) State->Captured[Input.PointerId] = Target;
+				State->Pressed[Input.PointerId] = Target;
+				State->RefreshInteraction(Target);
+			}
 			Handled = State->Dispatch(Target, Input, Impl::RoutedSignal::Down);
 		} else if (Input.Action == GuiPointerAction::Up || Input.Action == GuiPointerAction::Cancel) {
 			Handled = State->Dispatch(Target, Input, Impl::RoutedSignal::Up);
@@ -2115,7 +2133,8 @@ namespace gargantuan {
 			State->Captured.erase(Input.PointerId);
 			State->RefreshInteraction(Pressed);
 			if (Input.Action == GuiPointerAction::Up && Hit && *Hit == Pressed) {
-				if (auto Button = std::dynamic_pointer_cast<TextButton>(ObjectRegistry::Get().Lookup(Pressed)))
+				if (auto Button = std::dynamic_pointer_cast<TextButton>(ObjectRegistry::Get().Lookup(Pressed));
+					Button && Button->GetInteractable())
 					Button->Activated->Fire({});
 			}
 		}
@@ -2132,7 +2151,7 @@ namespace gargantuan {
 		const auto Focused = State->KeyboardFocus();
 		auto Input = std::dynamic_pointer_cast<TextBox>(ObjectRegistry::Get().Lookup(Focused));
 		auto Node = State->Layout->NodeByObject.find(Focused);
-		if (!Input || Node == State->Layout->NodeByObject.end()) {
+		if (!Input || Node == State->Layout->NodeByObject.end() || !State->Layout->Nodes[Node->second].FocusEligible) {
 			if (!State->TextInputWasActive) return std::nullopt;
 			State->TextInputWasActive = false;
 			return HostCommand{SetTextInputState{}};
@@ -2142,6 +2161,9 @@ namespace gargantuan {
 		State->TextInputWasActive = true;
 		return HostCommand{SetTextInputState{
 			.Active = true,
+			.Secure = Input->GetSecureTextEntry(),
+			.Multiline = Input->GetMultiLine(),
+			.AutocorrectEnabled = !Input->GetSecureTextEntry(),
 			.X = static_cast<std::int32_t>(std::lround(LayoutNode.Bounds.X * State->Viewport.DpiScale)),
 			.Y = static_cast<std::int32_t>(std::lround(LayoutNode.Bounds.Y * State->Viewport.DpiScale)),
 			.Width = static_cast<std::int32_t>(std::lround(LayoutNode.Bounds.Width * State->Viewport.DpiScale)),

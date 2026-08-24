@@ -277,6 +277,18 @@ add_library(gargantuan_core OBJECT ${GARGANTUAN_SOURCES})
 add_executable(gargantuan "src/Main.cpp" ${GARGANTUAN_TELEMETRY_HOST_SOURCES} ${SHADER_OUTPUTS})
 target_link_libraries(gargantuan PRIVATE gargantuan_core ${CMAKE_DL_LIBS})
 
+# Shader generation and executable-local staging are separate dependencies.
+# Keep staging in ALL so an incremental build that adds a shader refreshes the
+# runtime directory even when the executable itself does not relink.
+add_custom_target(gargantuan_stage_shaders ALL
+	COMMAND ${CMAKE_COMMAND} -E copy_directory
+		"${CMAKE_CURRENT_BINARY_DIR}/shaders"
+		"$<TARGET_FILE_DIR:gargantuan>/shaders"
+	DEPENDS gargantuan gargantuan_shaders
+	COMMENT "Staging shaders next to the Gargantuan executable"
+	VERBATIM
+)
+
 if(MSVC)
 	target_compile_options(gargantuan_core PUBLIC /EHsc)
 endif()
@@ -396,6 +408,13 @@ if(BUILD_TESTING)
 			-DGARGANTUAN_GLSLC_EXECUTABLE=${GARGANTUAN_GLSLC_EXECUTABLE}
 			-P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/ShaderToolValidationTests.cmake
 	)
+	add_test(NAME gargantuan_packaged_shaders
+		COMMAND ${CMAKE_COMMAND}
+			-DGARGANTUAN_SHADER_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders
+			-DGARGANTUAN_SHADER_RUNTIME_DIR=$<TARGET_FILE_DIR:gargantuan>/shaders
+			-P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/VerifyRuntimeShaders.cmake
+	)
+	set_tests_properties(gargantuan_packaged_shaders PROPERTIES LABELS "build;shader;packaging")
 	if(GARGANTUAN_BUILD_GLAZE_SERIALIZATION_PROTOTYPE)
 		if(MSVC AND MSVC_VERSION LESS 1950)
 			message(FATAL_ERROR "The pinned Glaze prototype requires MSVC 19.50 or newer")
@@ -690,10 +709,4 @@ if(WIN32 AND NOT BUILD_TESTING)
 		COMMENT "Copying SDL3.dll next to gargantuan.exe"
 	)
 
-	add_custom_command(TARGET gargantuan POST_BUILD
-		COMMAND ${CMAKE_COMMAND} -E copy_directory
-			"${CMAKE_CURRENT_BINARY_DIR}/shaders"
-			"$<TARGET_FILE_DIR:gargantuan>/shaders"
-		COMMENT "Copying shaders next to gargantuan.exe"
-	)
 endif()

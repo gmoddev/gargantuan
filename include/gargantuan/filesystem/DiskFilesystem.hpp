@@ -7,6 +7,9 @@
 namespace gargantuan {
 	class DiskFilesystem final : public BaseFilesystem {
 	  public:
+		static constexpr std::size_t MaximumDescendantDepth = 32;
+		static constexpr std::size_t MaximumDescendantEntries = 16'384;
+
 		DiskFilesystem(std::filesystem::path root) : BaseFilesystem(root) {};
 
 		[[nodiscard]] FileMetadata Metadata(const std::filesystem::path &path) const override;
