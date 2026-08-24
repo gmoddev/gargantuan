@@ -21,6 +21,7 @@
 #include <Luau/Compiler.h>
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_log.h>
+#include <algorithm>
 #include <cstring>
 #include <lua.h>
 #include <luacode.h>
@@ -166,10 +167,26 @@ namespace gargantuan {
 
 	ScriptEngine::~ScriptEngine() {
 		if (L) {
+			for (auto &WeakScript : ManagedScripts)
+				if (auto ScriptValue = WeakScript.lock()) ScriptValue->Cleanup();
+			ManagedScripts.clear();
+			for (auto &WeakConnection : SignalConnections)
+				if (auto Connection = WeakConnection.lock()) Connection->Disconnect();
+			SignalConnections.clear();
 			lua_close(L);
 			L = nullptr;
 			CurrentState = nullptr;
 		}
+	}
+
+	void ScriptEngine::TrackSignalConnection(const std::shared_ptr<SignalConnection> &Connection) {
+		if (!Connection) return;
+		if (SignalConnections.size() >= 256 && SignalConnections.size() % 256 == 0)
+			std::erase_if(SignalConnections, [](const auto &WeakConnection) {
+				auto Existing = WeakConnection.lock();
+				return !Existing || !Existing->Connected;
+			});
+		SignalConnections.emplace_back(Connection);
 	}
 
 	ScriptEngine *ScriptEngine::Get(lua_State *L) {
@@ -212,6 +229,7 @@ namespace gargantuan {
 
 		for (auto it = ScriptQueue.begin(); it != ScriptQueue.end();) {
 			auto script = *it;
+			ManagedScripts.emplace_back(script);
 			auto status = script->Step(L);
 
 			switch (status) {

@@ -3,6 +3,7 @@
 
 #include "gargantuan/datatypes/Signal.hpp"
 #include "gargantuan/scripting/ScriptSecurity.hpp"
+#include "gargantuan/scripting/ScriptEngine.hpp"
 #include "gargantuan/scripting/StackGuard.hpp"
 #include "gargantuan/scripting/Userdata.hpp"
 #include "gargantuan/scripting/UserdataTag.hpp"
@@ -69,11 +70,10 @@ namespace gargantuan {
 
 	void SignalConnection::Disconnect() {
 		Connected = false;
-		if (L && CallbackReference != LUA_NOREF && CallbackReference != LUA_REFNIL) {
+		if (L && CallbackReference != LUA_NOREF && CallbackReference != LUA_REFNIL)
 			lua_unref(L, CallbackReference);
-			CallbackReference = LUA_NOREF;
-			L = nullptr;
-		}
+		CallbackReference = LUA_NOREF;
+		L = nullptr;
 	}
 
 	int SignalConnection::LGarbageCollect(lua_State *L, SignalConnection *self) {
@@ -174,17 +174,16 @@ namespace gargantuan {
 
 		const auto SecurityContext = GetCurrentScriptSecurityContext();
 
-		return StackValue<SignalConnection::Pointer>::Push(
-			L,
-			signal->Connect(
+		auto Connection = signal->Connect(
 				[mainState, callbackReference, signal, SecurityContext](CallbackArgument value) {
 					ScriptSecurityScope SecurityScope(SecurityContext);
 					LRunCallback(mainState, signal, callbackReference, value);
 				},
 				mainState,
 				callbackReference
-			)
-		);
+			);
+		ScriptEngine::Get(mainState)->TrackSignalConnection(Connection);
+		return StackValue<SignalConnection::Pointer>::Push(L, std::move(Connection));
 	}
 
 	int BaseSignal::LOnce(lua_State *L, BaseSignal *signal) {
@@ -193,17 +192,16 @@ namespace gargantuan {
 
 		const auto SecurityContext = GetCurrentScriptSecurityContext();
 
-		return StackValue<SignalConnection::Pointer>::Push(
-			L,
-			signal->Once(
+		auto Connection = signal->Once(
 				[mainState, callbackReference, signal, SecurityContext](CallbackArgument value) {
 					ScriptSecurityScope SecurityScope(SecurityContext);
 					LRunCallback(mainState, signal, callbackReference, value);
 				},
 				mainState,
 				callbackReference
-			)
-		);
+			);
+		ScriptEngine::Get(mainState)->TrackSignalConnection(Connection);
+		return StackValue<SignalConnection::Pointer>::Push(L, std::move(Connection));
 	}
 
 	int BaseSignal::LWait(lua_State *L, BaseSignal *signal) {
@@ -218,7 +216,7 @@ namespace gargantuan {
 		lua_pop(L, 1);
 
 		const auto SecurityContext = GetCurrentScriptSecurityContext();
-		signal->Once(
+		auto Connection = signal->Once(
 			[L, mainState, threadReference, signal, SecurityContext](CallbackArgument value) {
 				ScriptSecurityScope SecurityScope(SecurityContext);
 				try {
@@ -237,6 +235,7 @@ namespace gargantuan {
 			L,
 			LUA_NOREF
 		);
+		ScriptEngine::Get(mainState)->TrackSignalConnection(Connection);
 		return lua_yield(L, 0);
 	}
 

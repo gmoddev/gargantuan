@@ -68,6 +68,7 @@ namespace gargantuan {
 				Script->ScriptQueue.erase(script);
 			}
 		});
+		DataModelDestroyingConnection = DataModel->Destroying->Once([this](std::monostate) { Destroy(); });
 
 		Players->StartDefaultRuntime();
 
@@ -80,12 +81,16 @@ namespace gargantuan {
 		if (Destroyed) return;
 		Destroyed = true;
 		LOG_INFO(App, "Destroying engine");
-		if (Players) Players->ShutdownRuntime();
-		if (ActionMap) ActionMap->Reset();
+		if (DataModelDestroyingConnection) {
+			DataModelDestroyingConnection->Disconnect();
+			DataModelDestroyingConnection.reset();
+		}
+		if (Players && !Players->GetDestroyed()) Players->ShutdownRuntime();
+		if (ActionMap && !ActionMap->GetDestroyed()) ActionMap->Reset();
 		if (Gui) Gui->ClearTransientState();
 		Gui.reset();
 		if (Renderer) Renderer->Destroy();
-		if (WorldRoot) WorldRoot->Destroy();
+		if (WorldRoot && !WorldRoot->GetDestroyed()) WorldRoot->Destroy();
 		if (UnbindDescendants) {
 			UnbindDescendants();
 			UnbindDescendants = {};

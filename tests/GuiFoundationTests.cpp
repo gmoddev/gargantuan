@@ -42,6 +42,12 @@ namespace {
 		return std::abs(Left - Right) <= Epsilon;
 	}
 
+	void RunTest(const char *Name, void (*Test)()) {
+		std::cerr << "[Gui:FoundationTest] BEGIN " << Name << std::endl;
+		Test();
+		std::cerr << "[Gui:FoundationTest] PASS " << Name << std::endl;
+	}
+
 	const gargantuan::GuiLayoutNode *FindNode(
 		const std::shared_ptr<const gargantuan::GuiLayoutSnapshot> &Snapshot,
 		gargantuan::ObjectId Object
@@ -807,12 +813,14 @@ namespace {
 		using namespace gargantuan;
 		auto Game = std::make_shared<DataModel>();
 		std::vector<std::pair<std::string, std::string>> Diagnostics;
+		std::shared_ptr<Script> Source;
+		SignalConnection::Pointer ActivatedConnection;
 		{
 			HeadlessRenderer Renderer(Vector2(800.0f, 600.0f));
 			Engine Runtime(Game, &Renderer, [&](std::string Severity, std::string Message) {
 				Diagnostics.emplace_back(std::move(Severity), std::move(Message));
 			});
-			auto Source = std::make_shared<Script>();
+			Source = std::make_shared<Script>();
 			Source->SetName("GuiFoundationVerticalSlice");
 			Source->SetSource(R"(
 local Root = Instance.new("ScreenGui")
@@ -855,14 +863,49 @@ end)
 				(void)Runtime.ProcessEvent(PointerButtonEvent{{2}, PointerButton::Left, ButtonState::Released,
 					{Center.GetX(), Center.GetY()}});
 				Check(Button->GetName() == "LuauActivated", "Luau Activated callbacks receive centralized routed input");
+				if (!Button->Activated->Connections.empty()) ActivatedConnection = Button->Activated->Connections.front();
 			}
 			const bool ScriptError = std::ranges::any_of(Diagnostics, [](const auto &Diagnostic) {
 				return Diagnostic.first == "Error" && Diagnostic.second.find("GuiFoundationVerticalSlice") != std::string::npos;
 			});
 			Check(!ScriptError, "the Foundation 1 Luau vertical slice executes without a runtime diagnostic");
 			Runtime.Destroy();
+			Check(Source->Thread == nullptr && Source->ThreadReference == LUA_NOREF,
+				"Engine teardown retires Script coroutine state before closing its Luau VM");
+			Check(ActivatedConnection && !ActivatedConnection->Connected && ActivatedConnection->L == nullptr,
+				"Engine teardown retires Luau signal subscriptions before closing their Luau VM");
 		}
 		Game->Destroy();
+	}
+
+	void TestDataModelBeforeEngineTeardown() {
+		using namespace gargantuan;
+		auto Game = std::make_shared<DataModel>();
+		HeadlessRenderer Renderer(Vector2(800.0f, 600.0f));
+		Engine Runtime(Game, &Renderer);
+		auto Source = std::make_shared<Script>();
+		Source->SetName("DataModelFirstTeardown");
+		Source->SetSource(R"(
+local Root = Instance.new("ScreenGui")
+Root.Parent = game
+local Button = Instance.new("TextButton")
+Button.Name = "DataModelFirstButton"
+Button.Parent = Root
+Button.Activated:Connect(function() end)
+)");
+		Source->SetParent(Game);
+		Runtime.Script->Step();
+		(void)Runtime.Gui->Reconcile();
+		auto Button = std::dynamic_pointer_cast<TextButton>(Game->FindFirstChild("DataModelFirstButton", true));
+		SignalConnection::Pointer Connection;
+		if (Button && !Button->Activated->Connections.empty()) Connection = Button->Activated->Connections.front();
+
+		Game->Destroy();
+		Check(Source->Thread == nullptr && Source->ThreadReference == LUA_NOREF,
+			"DataModel-first teardown retires Script coroutine state while the Luau VM is alive");
+		Check(Connection && !Connection->Connected && Connection->L == nullptr,
+			"DataModel-first teardown retires Luau signal subscriptions while GuiRuntime is alive");
+		Runtime.Destroy();
 	}
 }
 
@@ -870,16 +913,17 @@ int main() {
 	struct SdlProcessCleanup final { ~SdlProcessCleanup() { SDL_Quit(); } } SdlCleanup;
 	try {
 		gargantuan::BootstrapNativeRuntimeSchema();
-		TestLayoutTextPresentationAndResources();
-		TestAutomaticSizeListAndClipping();
-		TestRotationOrderingAndAlpha();
-		TestInputRoutingFocusAndMutationSafety();
-		TestDisabledButtonNeverActivates();
-		TestPersistencePlayIsolationAndSignalRetirement();
-		TestIncrementalInvalidationAndUiRetention();
-		TestSiblingStackingContexts();
-		TestScrollingAndEditableText();
-		TestLuauVerticalSlice();
+		RunTest("LayoutTextPresentationAndResources", TestLayoutTextPresentationAndResources);
+		RunTest("AutomaticSizeListAndClipping", TestAutomaticSizeListAndClipping);
+		RunTest("RotationOrderingAndAlpha", TestRotationOrderingAndAlpha);
+		RunTest("InputRoutingFocusAndMutationSafety", TestInputRoutingFocusAndMutationSafety);
+		RunTest("DisabledButtonNeverActivates", TestDisabledButtonNeverActivates);
+		RunTest("PersistencePlayIsolationAndSignalRetirement", TestPersistencePlayIsolationAndSignalRetirement);
+		RunTest("IncrementalInvalidationAndUiRetention", TestIncrementalInvalidationAndUiRetention);
+		RunTest("SiblingStackingContexts", TestSiblingStackingContexts);
+		RunTest("ScrollingAndEditableText", TestScrollingAndEditableText);
+		RunTest("LuauVerticalSlice", TestLuauVerticalSlice);
+		RunTest("DataModelBeforeEngineTeardown", TestDataModelBeforeEngineTeardown);
 	} catch (const std::exception &Exception) {
 		std::cerr << "[Gui:FoundationTest] unexpected exception: " << Exception.what() << '\n';
 		return 1;

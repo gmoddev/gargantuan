@@ -17,6 +17,7 @@
 namespace gargantuan {
 	class Script;
 	class ModuleScript;
+	class SignalConnection;
 
 	int OpenLibBase(lua_State *L);
 	int OpenLibRequire(lua_State *L);
@@ -54,13 +55,16 @@ namespace gargantuan {
 		ThreadEngine Threads;
 		lua_CompileOptions CompileOptions;
 		std::unordered_set<std::shared_ptr<Script>> ScriptQueue;
+		std::vector<std::weak_ptr<Script>> ManagedScripts;
 
 		std::shared_ptr<gargantuan::DataModel> DataModel;
 		std::shared_ptr<Instance> RequireCurrentInstance = nullptr;
 		std::unordered_map<std::string, std::shared_ptr<Instance>> RequirePathCache;
 		std::function<void(std::string, std::string)> RuntimeDiagnostic;
+		std::vector<std::weak_ptr<SignalConnection>> SignalConnections;
 		std::shared_ptr<Instance> FindRequiredInstanceByPath(const char *path);
 		void EmitRuntimeDiagnostic(std::string Severity, std::string Message) const;
+		void TrackSignalConnection(const std::shared_ptr<SignalConnection> &Connection);
 
 		void Step();
 

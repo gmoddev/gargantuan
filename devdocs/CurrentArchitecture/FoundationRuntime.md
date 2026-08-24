@@ -155,9 +155,13 @@ complete boundary inventory in a later hardening pass.
 `Engine` owns every DataModel descendant subscription it installs. Teardown
 unbinds the descendant-added callback and disconnects the descendant-removed
 connection before releasing `ScriptEngine`; no Instance signal may retain a raw
-runtime pointer after `Engine::Destroy`. Tests destroy their DataModel only after
-runtime teardown and then perform process-level SDL cleanup, so leak checking
-observes the same explicit ownership boundary as production shutdown.
+runtime pointer after `Engine::Destroy`. `ScriptEngine` tracks every Script it
+steps and every Luau-backed signal connection it creates. It retires coroutine
+and callback registry references while the VM is still alive, before
+`lua_close`. A live Engine also observes DataModel destruction and performs this
+runtime teardown before the DataModel destroys its services and descendants.
+Both Engine-first and DataModel-first destruction orders have regression
+coverage, followed by process-level SDL cleanup.
 
 ## Remaining blockers before network replication
 

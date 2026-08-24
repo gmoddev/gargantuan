@@ -28,12 +28,12 @@ namespace gargantuan {
 	}
 
 	void Script::Cleanup() {
-		if (Thread && ThreadReference) {
+		if (Thread && ThreadReference != LUA_NOREF && ThreadReference != LUA_REFNIL) {
 			auto L = lua_mainthread(Thread);
 			lua_unref(L, ThreadReference);
-			ThreadReference = LUA_NOREF;
-			Thread = nullptr;
 		}
+		ThreadReference = LUA_NOREF;
+		Thread = nullptr;
 	}
 
 	bool Script::ShouldStep() {

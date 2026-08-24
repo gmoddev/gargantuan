@@ -66,6 +66,7 @@ namespace gargantuan {
 		bool Destroyed = false;
 		std::function<void()> UnbindDescendants;
 		SignalConnection::Pointer DescendantRemovedConnection;
+		SignalConnection::Pointer DataModelDestroyingConnection;
 
 		template <typename T>
 			requires std::is_base_of_v<Instance, T>
