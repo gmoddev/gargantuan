@@ -13,6 +13,7 @@
 #include <chrono>
 #include <filesystem>
 #include <iostream>
+#include <iterator>
 #include <nlohmann/json.hpp>
 #include <ranges>
 #include <string>
@@ -71,7 +72,24 @@ namespace {
 		for (const auto &Diagnostic : Source) Destination.push_back(Diagnostic);
 	}
 
-	void ProveDefaultPlayerLoop(const std::filesystem::path &Root) {
+	struct RuntimeEvidence {
+		std::vector<PlayDiagnostic> Diagnostics;
+		double RepresentativeFrameMilliseconds = 0.0;
+	};
+
+	bool HasDiagnostic(const std::vector<PlayDiagnostic> &Diagnostics, std::string_view Text) {
+		return std::ranges::any_of(Diagnostics, [&](const PlayDiagnostic &Diagnostic) {
+			return Diagnostic.Message.find(Text) != std::string::npos;
+		});
+	}
+
+	void AppendDiagnostics(std::vector<PlayDiagnostic> &Destination, std::vector<PlayDiagnostic> Source) {
+		Destination.insert(
+			Destination.end(), std::make_move_iterator(Source.begin()), std::make_move_iterator(Source.end())
+		);
+	}
+
+	RuntimeEvidence ProveDefaultPlayerLoop(const std::filesystem::path &Root) {
 		DiskFilesystem Filesystem(Root);
 		auto ProjectValue = Project::fromExisting(&Filesystem);
 		auto AuthoringWorld = ProjectValue.DeserializeGame();
@@ -83,6 +101,14 @@ namespace {
 			{901}, std::move(Launch.Contents), ProjectValue.InstanceFileFormat, Root,
 			320, 200, Launch.Revision, std::move(Launch.Assets)
 		);
+		RuntimeEvidence Evidence;
+		AppendDiagnostics(Evidence.Diagnostics, Session.DrainDiagnostics());
+		auto InitialPublication = Session.TakeRenderPublication();
+		Require(InitialPublication && InitialPublication->FullResync &&
+			InitialPublication->Frame.ViewportWidth == 320 && InitialPublication->Frame.ViewportHeight == 200,
+			"headless runtime did not publish its initial complete frame");
+		Require(InitialPublication->UiChanged && !InitialPublication->GetUi().Batches.empty(),
+			"headless runtime publication omitted the authored GUI");
 		auto RuntimeWorld = Session.GetWorld();
 		auto PlayersValue = RuntimeWorld ? std::dynamic_pointer_cast<Players>(RuntimeWorld->GetService("Players")) : nullptr;
 		auto WorkspaceValue = RuntimeWorld ? std::dynamic_pointer_cast<Workspace>(RuntimeWorld->GetService("Workspace")) : nullptr;
@@ -103,9 +129,40 @@ namespace {
 		(void)Session.ProcessEvent(ForwardUp);
 		Require(glm::length(Character->GetPosition() - Start) > 0.05f,
 			"ActionMap input did not produce default kinematic motion through physics");
+
+		Session.Resize(640, 360);
+		const auto FrameStart = std::chrono::steady_clock::now();
+		Session.Step();
+		Evidence.RepresentativeFrameMilliseconds = std::chrono::duration<double, std::milli>(
+			std::chrono::steady_clock::now() - FrameStart
+		).count();
+		auto ResizedPublication = Session.TakeRenderPublication();
+		Require(ResizedPublication && ResizedPublication->Frame.ViewportWidth == 640 &&
+			ResizedPublication->Frame.ViewportHeight == 360 &&
+			ResizedPublication->GetUi().ViewportWidth == 640 && ResizedPublication->GetUi().ViewportHeight == 360,
+			"headless runtime publication did not follow viewport resize");
+
+		const auto CompleteDown = KeyEvent{{1}, PhysicalKey::K, LogicalKey::K, KeyModifier::None, ButtonState::Pressed};
+		const auto CompleteUp = KeyEvent{{1}, PhysicalKey::K, LogicalKey::K, KeyModifier::None, ButtonState::Released};
+		(void)Session.ProcessEvent(CompleteDown);
+		(void)Session.ProcessEvent(CompleteUp);
+		Session.Step();
+		Require(Session.TakeRenderPublication() != nullptr,
+			"completion did not produce a headless runtime publication");
+		(void)Session.ProcessEvent(PointerButtonEvent{{1}, PointerButton::Left, ButtonState::Pressed, {320.0f, 241.0f}});
+		(void)Session.ProcessEvent(PointerButtonEvent{{1}, PointerButton::Left, ButtonState::Released, {320.0f, 241.0f}});
+		Session.Step();
+		Require(Session.TakeRenderPublication() != nullptr,
+			"GUI Restart activation did not produce a headless runtime publication");
+		AppendDiagnostics(Evidence.Diagnostics, Session.DrainDiagnostics());
 		Session.Stop();
+		AppendDiagnostics(Evidence.Diagnostics, Session.DrainDiagnostics());
+		Require(!std::ranges::any_of(Evidence.Diagnostics, [](const PlayDiagnostic &Diagnostic) {
+			return Diagnostic.Severity == "Error";
+		}), "headless runtime emitted an error diagnostic");
 		RuntimeWorld.reset();
 		AuthoringWorld->Destroy();
+		return Evidence;
 	}
 }
 
@@ -113,7 +170,7 @@ int main() {
 	try {
 		BootstrapNativeRuntimeSchema();
 		TestWorkspace Workspace;
-		ProveDefaultPlayerLoop(Workspace.Root);
+		auto HeadlessRuntimeEvidence = ProveDefaultPlayerLoop(Workspace.Root);
 		EditorHost Host("first-complete-game-gate");
 		std::size_t RequestNumber = 0;
 		auto Call = [&](std::string Method, Json Parameters = Json::object()) {
@@ -181,8 +238,11 @@ int main() {
 
 		Require(Call("ConfigureViewport", {{"Width", 320u}, {"Height", 200u}})["Ok"],
 			"initial runtime viewport configuration failed");
+		// This CTest target is deliberately headless. Runtime world/UI publication,
+		// resize, completion, and pointer activation are exercised above through
+		// PlaySession's HeadlessRenderer; the separate editor viewport smoke owns
+		// the real SDL GPU capture contract.
 		Json FirstCycleDiagnostics = Json::array();
-		double RepresentativeFrameMilliseconds = 0.0;
 		for (int Cycle = 0; Cycle < 10; ++Cycle) {
 			auto Started = Call("StartPlaySession");
 			Require(Started["Ok"] && Started["Result"]["State"] == "Running", "Play did not start");
@@ -191,44 +251,6 @@ int main() {
 			Require(Call("SendPlayInput", {
 				{"PlaySessionId", PlaySessionId}, {"Type", "Focus"}, {"Focused", true},
 			})["Ok"], "runtime focus input failed");
-
-			const auto FrameStart = std::chrono::steady_clock::now();
-			auto Frame = Call("CaptureViewport");
-			RepresentativeFrameMilliseconds = std::chrono::duration<double, std::milli>(
-				std::chrono::steady_clock::now() - FrameStart
-			).count();
-			if (!Frame["Ok"] || Frame["Result"]["Mode"] != "Play")
-				throw std::runtime_error("runtime viewport frame failed: " + Frame.dump());
-
-			if (Cycle == 0) {
-				Require(Call("SendPlayInput", {
-					{"PlaySessionId", PlaySessionId}, {"Type", "Key"},
-					{"Physical", static_cast<std::uint16_t>(PhysicalKey::W)},
-					{"Logical", static_cast<std::uint16_t>(LogicalKey::W)}, {"State", "Pressed"},
-				})["Ok"], "default movement input was rejected");
-				Require(Call("CaptureViewport")["Ok"], "movement frame failed");
-				Require(Call("SendPlayInput", {
-					{"PlaySessionId", PlaySessionId}, {"Type", "Key"},
-					{"Physical", static_cast<std::uint16_t>(PhysicalKey::W)},
-					{"Logical", static_cast<std::uint16_t>(LogicalKey::W)}, {"State", "Released"},
-				})["Ok"], "default movement release was rejected");
-				Require(Call("ConfigureViewport", {{"Width", 640u}, {"Height", 360u}})["Ok"],
-					"runtime viewport resize failed");
-				Require(Call("SendPlayInput", {
-					{"PlaySessionId", PlaySessionId}, {"Type", "Key"},
-					{"Physical", static_cast<std::uint16_t>(PhysicalKey::K)},
-					{"Logical", static_cast<std::uint16_t>(LogicalKey::K)}, {"State", "Pressed"},
-				})["Ok"], "deterministic completion action was rejected");
-				Require(Call("CaptureViewport")["Ok"], "completion frame failed");
-				Require(Call("SendPlayInput", {
-					{"PlaySessionId", PlaySessionId}, {"Type", "PointerButton"},
-					{"Button", "Left"}, {"State", "Pressed"}, {"X", 320.0}, {"Y", 241.0},
-				})["Ok"], "restart button press was rejected");
-				Require(Call("SendPlayInput", {
-					{"PlaySessionId", PlaySessionId}, {"Type", "PointerButton"},
-					{"Button", "Left"}, {"State", "Released"}, {"X", 320.0}, {"Y", 241.0},
-				})["Ok"], "restart button release was rejected");
-			}
 
 			auto Polled = Call("PollPlayDiagnostics", {{"PlaySessionId", PlaySessionId}});
 			Require(Polled["Ok"], "Play diagnostics could not be polled");
@@ -244,9 +266,9 @@ int main() {
 
 		Require(HasDiagnostic(FirstCycleDiagnostics, "[Game:FirstCompleteGame] Ready\t3"),
 			"game manager did not start or register three collectibles");
-		Require(HasDiagnostic(FirstCycleDiagnostics, "[Game:FirstCompleteGame] Round complete"),
+		Require(HasDiagnostic(HeadlessRuntimeEvidence.Diagnostics, "[Game:FirstCompleteGame] Round complete"),
 			"deterministic completion logic did not run");
-		Require(HasDiagnostic(FirstCycleDiagnostics, "[Game:FirstCompleteGame] Round reset"),
+		Require(HasDiagnostic(HeadlessRuntimeEvidence.Diagnostics, "[Game:FirstCompleteGame] Round reset"),
 			"GUI Restart activation did not reset the round");
 
 		auto AfterPlay = Call("GetSnapshot");
@@ -261,7 +283,8 @@ int main() {
 		});
 		std::cout << "[Game:FirstCompleteGameTest] objects=" << ReopenedObjects.size()
 			<< " gui=" << GuiCount << " importedAssets=" << Assets.size()
-			<< " representativeFrameMs=" << RepresentativeFrameMilliseconds << " playStopCycles=10\n";
+			<< " representativeFrameMs=" << HeadlessRuntimeEvidence.RepresentativeFrameMilliseconds
+			<< " playStopCycles=10\n";
 		return 0;
 	} catch (const std::exception &Error) {
 		std::cerr << "[Game:FirstCompleteGameTest] FAIL: " << Error.what() << '\n';

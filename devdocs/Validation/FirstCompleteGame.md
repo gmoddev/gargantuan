@@ -33,8 +33,11 @@ not added.
    diagnostics before Save.
 5. Save, destroy the authoritative session, reopen, and compare hierarchy,
    scripts, asset catalog, authored transforms, and GUI layout.
-6. Play through EditorHost/Studio semantics, send semantic host input, resize
-   the viewport, complete and restart the round, then Stop. Repeat ten times.
+6. Play through EditorHost/Studio semantics and repeat Start/Stop ten times.
+   The headless gate separately drives the same launch snapshot through
+   `PlaySession`, sends semantic host input, resizes the runtime publication,
+   completes and restarts the round, and inspects the immutable world/UI
+   publication without requiring a physical GPU backend.
 7. Launch the unchanged project outside Studio with the supported standalone
    command below.
 
@@ -64,9 +67,12 @@ honest claim of an entirely GUI-authored workflow.
 - isolated Play/Stop, GUI/runtime mutation discard, and standalone execution.
 
 The persisted project has 23 Instances, 9 GUI Instances, and 4 imported asset
-records. The automated gate's cold offscreen capture is approximately 250 ms on
-the validation machine; this includes renderer/GPU initialization and is not a
-steady-state frame-time benchmark. The gate observed no Error diagnostics.
+records. A representative headless runtime composition step is approximately
+0.1 ms on the validation machine; this is not a frame-time benchmark. A local
+real-GPU cold offscreen capture was approximately 250 ms, including renderer
+and GPU initialization. Real SDL GPU capture remains in the separate viewport
+smoke and is intentionally not part of headless CTest. The game gate observed
+no Error diagnostics.
 
 ## Native engine changes required
 
@@ -97,7 +103,7 @@ Findings use the requested A-F categories.
 | B - API ergonomics | Basic interaction requires manual distance thresholds, per-item state, and lifecycle cleanup. Asset references are durable but difficult to assign without copying opaque `asset://` values. |
 | C - Studio UX | No transform gizmos or compound property editors; limited scalar Properties support; no bridge tools for Assets or Play; one hidden relaunch failed to establish a project session; no Run Standalone command. |
 | D - documentation/discoverability | A developer currently needs CMake/build-tree knowledge, adjacent runtime modules/DLL knowledge, and internal awareness of asset references to run the project outside Studio. |
-| E - architecture defect | `UDim2` persistence loss and the split Play-viewport resource publication were real cross-system defects; both are fixed and regression-tested here. |
+| E - architecture defect | `UDim2` persistence loss and the split Play-viewport resource publication were real cross-system defects. The gate covers `UDim2` and coherent runtime world/UI publication; the separate real-GPU viewport smoke covers device consumption. |
 | F - game-specific need | The course geometry, crystal art, obstacle tuning, counter copy, and win-panel styling do not justify engine work. |
 
 Audio and animation would improve presentation, but neither blocked this game's
