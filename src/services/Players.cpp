@@ -56,6 +56,7 @@ namespace gargantuan {
 		if (LocalPlayerValue && !LocalPlayerValue->GetDestroyed() && !LocalPlayerValue->IsDestroying()) return;
 		auto Value = std::make_shared<Player>();
 		Value->InitializeIdentity(1);
+		Value->InitializeAuthenticationIdentity({"local", "player-1"});
 		Value->SetName("Player1");
 		Value->SetParent(shared_from_this());
 		LocalPlayerValue = Value;

@@ -96,7 +96,10 @@ players in deterministic identity order.
 `PlayerId` is gameplay identity. It is not an EditorHost connection ID,
 transport peer ID, socket, authentication identity, or object address. No
 current code connects `Player` to gargantuan-node, PlayerAuth, matchmaking, or
-replication ownership.
+replication ownership. A separate native-only, immutable `PlayerIdentity`
+(`Provider`, `Subject`) seam now supplies EntitlementService checks. Local Play
+initializes `(local, player-1)`; a future authenticated server bootstrap may
+initialize the same engine-owned type. Luau cannot submit or mutate it.
 
 `Player.Character` is nullable and currently accepts only a live
 `KinematicCharacter` in the same DataModel. The lifecycle is:

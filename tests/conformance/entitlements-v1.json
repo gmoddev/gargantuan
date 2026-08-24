@@ -1,0 +1,65 @@
+{
+  "version": 1,
+  "limits": {
+    "maximum_identity_provider_bytes": 64,
+    "maximum_identity_subject_bytes": 256,
+    "maximum_entitlement_id_bytes": 128,
+    "maximum_batch_count": 32
+  },
+  "identity": {
+    "provider": "steam",
+    "subject": "76561198000000001"
+  },
+  "checks": [
+    {
+      "name": "granted",
+      "entitlement_id": "game.base",
+      "expected_status": "Granted"
+    },
+    {
+      "name": "denied",
+      "entitlement_id": "dlc.missing_pack",
+      "expected_status": "Denied"
+    },
+    {
+      "name": "provider_unavailable",
+      "entitlement_id": "feature.provider_unavailable",
+      "expected_status": "Unavailable"
+    },
+    {
+      "name": "expiring_grant",
+      "entitlement_id": "feature.trial",
+      "expected_status": "Granted",
+      "expires_unix_seconds": 4102444800
+    }
+  ],
+  "malformed_entitlement_ids": [
+    "",
+    "game",
+    ".game",
+    "game.",
+    "game..base",
+    "Game.base",
+    "game/base"
+  ],
+  "provider_mismatch": {
+    "identity": {
+      "provider": "custom-development",
+      "subject": "example-player"
+    },
+    "entitlement_id": "game.base",
+    "expected_status": "Unavailable"
+  },
+  "batch": {
+    "entitlement_ids": [
+      "game.base",
+      "dlc.missing_pack",
+      "feature.provider_unavailable"
+    ],
+    "expected_statuses": [
+      "Granted",
+      "Denied",
+      "Unavailable"
+    ]
+  }
+}

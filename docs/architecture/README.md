@@ -100,6 +100,7 @@ The following documents describe recently implemented, source-verified slices:
 - [Render extraction](../src/content/docs/developing/render-extraction.mdx)
 - [Platform and input boundary](../../devdocs/CurrentArchitecture/PlatformInputBoundary.md)
 - [Player runtime](../../devdocs/CurrentArchitecture/PlayerRuntime.md)
+- [Entitlement service](../../devdocs/CurrentArchitecture/EntitlementService.md)
 - [Renderer backend boundary](../../devdocs/CurrentArchitecture/RendererBackendBoundary.md)
 - [Renderer Foundation 2 accepted architecture](../../devdocs/CurrentArchitecture/RendererFoundation2.md)
 - [Renderer Foundation 2C final backend decision](../../devdocs/CurrentArchitecture/RendererFoundation2C.md)

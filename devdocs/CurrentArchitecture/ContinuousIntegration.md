@@ -86,23 +86,25 @@ executable does not relink. `gargantuan_packaged_shaders` compares that runtime
 directory with the complete source shader set and fails when a compiled output
 is missing.
 
-The Windows production contract contains 25 tests. A local configuration with
+The Windows production contract contains 28 tests. A local configuration with
 `GARGANTUAN_WITH_GNS=OFF` and renderer benchmarks disabled omits the two
-real-transport and two renderer-headless entries and therefore contains 21;
+real-transport and two renderer-headless entries and therefore contains 24;
 that reduced matrix is not the complete Windows gate. The task's earlier
-23-test count predates the registered soft-body and GUI benchmark smokes; current
-CMake and this document are authoritative.
+23-test count predates the registered Asset Foundation, soft-body and GUI
+benchmark coverage; current CMake and this document are authoritative.
 
 | Coverage | Existing CTest entries |
 | --- | --- |
 | Shader requirement | `gargantuan_shader_tool_validation` |
 | Runtime shader package completeness | `gargantuan_packaged_shaders` |
 | Foundation/runtime, persistence and serialization, EditorHost/protocol, render extraction and backend boundary | `gargantuan_foundation` |
+| Asset import, canonical artifact, dependency graph, and runtime materialization | `gargantuan_asset_foundation` |
 | Optional telemetry dynamic loading, ABI negotiation, consent, privacy, and fail-open lifecycle | `gargantuan_optional_telemetry` |
 | Physics | `gargantuan_physics_backend` |
 | Soft-body runtime and bounded Release smoke | `gargantuan_soft_body_physics`, `gargantuan_soft_body_physics_benchmark_smoke` |
 | Platform input | `gargantuan_platform_input_boundary` |
 | Player runtime | `gargantuan_player_runtime` |
+| Provider-neutral entitlement semantics, Luau authority, vectors, and headless lifecycle | `gargantuan_entitlement_service` |
 | GUI retained runtime and bounded Release smoke | `gargantuan_gui_foundation`, `gargantuan_gui_foundation_benchmark_smoke` |
 | PreRun bootstrap | `gargantuan_prerun_bootstrap` |
 | Serialization smoke | `SerializationBenchmarkSmoke` |

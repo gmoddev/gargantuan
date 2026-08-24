@@ -477,6 +477,11 @@ if(BUILD_TESTING)
 	target_link_libraries(gargantuan_platform_input_boundary_tests PRIVATE gargantuan_core)
 	add_executable(gargantuan_player_runtime_tests "tests/PlayerRuntimeTests.cpp")
 	target_link_libraries(gargantuan_player_runtime_tests PRIVATE gargantuan_core)
+	add_executable(gargantuan_entitlement_service_tests "tests/EntitlementServiceTests.cpp")
+	target_link_libraries(gargantuan_entitlement_service_tests PRIVATE gargantuan_core nlohmann_json)
+	target_compile_definitions(gargantuan_entitlement_service_tests PRIVATE
+		GARGANTUAN_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+	)
 	add_executable(gargantuan_gui_foundation_tests "tests/GuiFoundationTests.cpp")
 	target_link_libraries(gargantuan_gui_foundation_tests PRIVATE gargantuan_core)
 	add_executable(gargantuan_gui_foundation_benchmark "tests/GuiFoundationBenchmark.cpp")
@@ -569,6 +574,7 @@ if(BUILD_TESTING)
 			gargantuan_soft_body_physics_benchmark
 			gargantuan_platform_input_boundary_tests
 			gargantuan_player_runtime_tests
+			gargantuan_entitlement_service_tests
 			gargantuan_gui_foundation_tests
 			gargantuan_gui_foundation_benchmark
 			gargantuan_networking_contract_tests
@@ -640,6 +646,7 @@ if(BUILD_TESTING)
 	add_test(NAME gargantuan_soft_body_physics_benchmark_smoke COMMAND gargantuan_soft_body_physics_benchmark --quick)
 	add_test(NAME gargantuan_platform_input_boundary COMMAND gargantuan_platform_input_boundary_tests)
 	add_test(NAME gargantuan_player_runtime COMMAND gargantuan_player_runtime_tests)
+	add_test(NAME gargantuan_entitlement_service COMMAND gargantuan_entitlement_service_tests)
 	add_test(NAME gargantuan_gui_foundation COMMAND gargantuan_gui_foundation_tests)
 	add_test(NAME gargantuan_gui_foundation_benchmark_smoke COMMAND gargantuan_gui_foundation_benchmark --quick)
 	add_test(NAME gargantuan_prerun_bootstrap COMMAND gargantuan_prerun_bootstrap_tests)
@@ -665,6 +672,7 @@ if(BUILD_TESTING)
 	set_tests_properties(gargantuan_soft_body_physics_benchmark_smoke PROPERTIES LABELS "physics;deformable;benchmark;headless" TIMEOUT 120)
 	set_tests_properties(gargantuan_platform_input_boundary PROPERTIES LABELS "platform;input;runtime" TIMEOUT 120)
 	set_tests_properties(gargantuan_player_runtime PROPERTIES LABELS "player;runtime;headless" TIMEOUT 180)
+	set_tests_properties(gargantuan_entitlement_service PROPERTIES LABELS "entitlements;runtime;security;headless" TIMEOUT 120)
 	set_tests_properties(gargantuan_prerun_bootstrap PROPERTIES LABELS "prerun;runtime" TIMEOUT 120)
 	set_tests_properties(gargantuan_networking_contracts gargantuan_simulated_transport gargantuan_scheduler_contract
 		gargantuan_replication gargantuan_remote gargantuan_remote_luau gargantuan_replication_benchmark_smoke

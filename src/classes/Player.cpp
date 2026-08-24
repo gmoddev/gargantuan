@@ -27,6 +27,13 @@ namespace gargantuan {
 		NotifyPropertyCommitted("PlayerId");
 	}
 
+	void Player::InitializeAuthenticationIdentity(PlayerIdentity Identity) {
+		ValidatePlayerIdentity(Identity);
+		if (AuthenticationIdentity)
+			throw std::logic_error("Player authentication identity is immutable once initialized");
+		AuthenticationIdentity = std::move(Identity);
+	}
+
 	std::optional<std::shared_ptr<KinematicCharacter>> Player::GetCharacter() const {
 		return CharacterValue ? std::optional(CharacterValue) : std::nullopt;
 	}

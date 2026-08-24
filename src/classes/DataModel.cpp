@@ -1,15 +1,16 @@
 #include "gargantuan/classes/DataModel.hpp"
 
 #include "gargantuan/reflection/InstanceClassRegistry.hpp"
+#include "gargantuan/runtime/ProtocolInput.hpp"
 #include "gargantuan/services/ActionMap.hpp"
 #include "gargantuan/services/AssetService.hpp"
+#include "gargantuan/services/EntitlementService.hpp"
 #include "gargantuan/services/Players.hpp"
 #include "gargantuan/services/ProcessService.hpp"
 #include "gargantuan/services/RunService.hpp"
 #include "gargantuan/services/Tags.hpp"
 #include "gargantuan/services/UserInputService.hpp"
 #include "gargantuan/services/Workspace.hpp"
-#include "gargantuan/runtime/ProtocolInput.hpp"
 
 #include <limits>
 #include <stdexcept>
@@ -117,6 +118,7 @@ namespace gargantuan {
 		static const DataModel::ServiceDefinitions CONSTRUCTORS = {
 			{"ActionMap", SchemaId::FromNativeName("Engine", "ActionMap")},
 			{"AssetService", SchemaId::FromNativeName("Engine", "AssetService")},
+			{"EntitlementService", SchemaId::FromNativeName("Engine", "EntitlementService")},
 			{"Players", SchemaId::FromNativeName("Engine", "Players")},
 			{"ProcessService", SchemaId::FromNativeName("Engine", "ProcessService")},
 			{"RunService", SchemaId::FromNativeName("Engine", "RunService")},
