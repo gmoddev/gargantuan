@@ -41,6 +41,12 @@ project-relative .gltf/.glb
 No importer type, glTF JSON object, source path, SDL object, or GPU handle enters
 the public semantic model. Import and metadata resolution remain headless.
 
+SDL-backed importers run on Gargantuan-owned `std::thread` workers rather than
+SDL-created threads. The import job boundary calls `SDL_CleanupTLS` after every
+decoder invocation. SDL's pthread TLS key has no thread-exit destructor;
+`SDL_Quit` only cleans the calling thread and cannot retire error state left by
+an import worker.
+
 ## Mesh asset semantics
 
 The canonical mesh is platform-neutral indexed triangle data: finite positions,

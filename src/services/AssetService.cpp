@@ -15,6 +15,7 @@
 #include "gargantuan/render/RenderDirtyAccumulator.hpp"
 #include "serialization/JsonCodec.hpp"
 
+#include <SDL3/SDL.h>
 #include <lua.h>
 #include <nlohmann/json.hpp>
 
@@ -42,6 +43,10 @@ namespace gargantuan {
 		constexpr std::string_view DefaultFontReference = "builtin://font/default";
 		constexpr std::string_view MissingImageReference = "builtin://image/missing";
 		constexpr std::string_view DefaultMaterialReference = "builtin://material/default";
+
+		struct AssetImportThreadCleanup final {
+			~AssetImportThreadCleanup() { SDL_CleanupTLS(); }
+		};
 
 		AssetDiagnostic Error(std::string Code, std::string Message) {
 			if (Message.size() > AssetLimits::MaximumDiagnosticBytes) Message.resize(AssetLimits::MaximumDiagnosticBytes);
@@ -364,6 +369,7 @@ namespace gargantuan {
 			auto Group = std::make_shared<JobGroup>();
 			Jobs.Submit([&Result, Importer, Kind, Extension = std::move(Extension), Source = std::move(Source),
 				ExternalResources = std::move(ExternalResources), Cancellation] {
+				AssetImportThreadCleanup ThreadCleanup;
 				try {
 					Result = Importer->ImportGraph(*Source, {Kind, Extension, Cancellation,
 						std::chrono::steady_clock::now() + std::chrono::seconds(5), ExternalResources});

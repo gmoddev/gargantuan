@@ -274,8 +274,13 @@ namespace gargantuan {
 			const auto RasterStart = Clock::now();
 			TTF_ImageType ImageType = TTF_IMAGE_INVALID;
 			auto *Surface = TTF_GetGlyphImageForIndex(Font, GlyphIndex, &ImageType);
-			if (!Surface || Surface->w <= 0 || Surface->h <= 0) return std::nullopt;
+			if (!Surface) return std::nullopt;
+			if (Surface->w <= 0 || Surface->h <= 0) {
+				SDL_DestroySurface(Surface);
+				return std::nullopt;
+			}
 			auto *Converted = SDL_ConvertSurface(Surface, SDL_PIXELFORMAT_RGBA32);
+			SDL_DestroySurface(Surface);
 			if (!Converted) return std::nullopt;
 			Profile.GlyphRasterizationNanoseconds += Nanoseconds(Clock::now() - RasterStart);
 

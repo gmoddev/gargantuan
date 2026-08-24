@@ -39,6 +39,12 @@ renderer-neutral vertices, indices, logical texture identities, rectangular
 clips, layers, and opacity. It does not know about `TextButton`, `TextBox`,
 `ScrollingFrame`, or stacking behavior.
 
+The text system owns SDL_ttf through its guarded process-local retain count and
+releases cached fonts before its final `TTF_Quit`. Glyph rasterization also owns
+the surface returned by `TTF_GetGlyphImageForIndex`: it converts that surface to
+the atlas format and destroys the source immediately, while the converted
+surface remains owned until the atlas copy completes.
+
 ## Incremental invalidation
 
 Foundation 1 had distinct dirty concepts but converted any live root change into
