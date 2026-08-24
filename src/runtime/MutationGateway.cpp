@@ -371,6 +371,13 @@ namespace gargantuan {
 						auto InstanceValue = InstanceClassRegistry::Construct(*Definition);
 						if (!InstanceValue)
 							return {MutationStatus::InternalError, std::nullopt, "Class constructor returned null"};
+						auto ScriptValue = std::dynamic_pointer_cast<LuaSourceContainer>(InstanceValue);
+						if (CommandValue.InitialSource && !ScriptValue)
+							return {
+								MutationStatus::InvalidClass,
+								std::nullopt,
+								"Initial script source requires a LuaSourceContainer class"
+							};
 						{
 							ScopedChangeJournalSuppression Suppression;
 							if (InstanceValue->ApplyPropertyMutation(
@@ -386,6 +393,7 @@ namespace gargantuan {
 									"Name", *CommandValue.Name, Enums::Permission::Engine, securityContext
 								) != MutationStatus::Success)
 								return {MutationStatus::ValidationFailed, std::nullopt, "Initial Name is invalid"};
+							if (CommandValue.InitialSource) ScriptValue->SetSource(*CommandValue.InitialSource);
 							for (const auto &Initial : CommandValue.InitialProperties) {
 								auto *Property = InstanceValue->FindProperty(Initial.PropertyName);
 								if (!Property || Property->DeclaringSchemaId != Initial.DeclaringClassSchemaId ||

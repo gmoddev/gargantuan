@@ -71,6 +71,7 @@ namespace gargantuan {
 		ObjectId Parent;
 		std::optional<std::string> Name;
 		std::vector<InitialPropertyMutation> InitialProperties;
+		std::optional<std::string> InitialSource;
 	};
 	struct UpdatePropertyCommand { ObjectId Object; std::string PropertyName; std::any Value; };
 	struct UpdateWirePropertyCommand { ObjectId Object; std::string PropertyName; WireValue Value; };

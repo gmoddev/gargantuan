@@ -637,7 +637,7 @@ namespace gargantuan {
 					"CommitTransaction",
 					"AuthoritativeTransactions",
 					"Undo", "Redo", "AuthoritativeHistoryStatus",
-					"OptimisticProjectRevision", "CreateInstanceInitialProperties",
+					"OptimisticProjectRevision", "CreateInstanceInitialProperties", "CreateScriptWithSource",
 					"ReadScriptSource", "WriteScriptSource",
 					"PlaySession", "DiagnosticStream", "SendPlayInput",
 					"AssetCatalog", "ImportAsset", "ReimportAsset", "DeleteAsset", "StrictAssetReferences",
@@ -1772,7 +1772,7 @@ namespace gargantuan {
 					return SerializeBoundedResponse(ErrorResponse(
 						requestId, "SnapshotRequired", "GetSnapshot must establish a cursor"
 					));
-				if (!HasOnlyFields(parameters, {"Object", "ExpectedSourceVersion", "Source", "TransactionId"}) ||
+				if (!HasOnlyFields(parameters, {"Object", "ExpectedSourceVersion", "ExpectedRevision", "Source", "TransactionId"}) ||
 					!parameters.contains("Object") || !parameters.contains("ExpectedSourceVersion") ||
 					!parameters["ExpectedSourceVersion"].is_number_unsigned() ||
 					!parameters.contains("Source") || !parameters["Source"].is_string())
@@ -1795,6 +1795,10 @@ namespace gargantuan {
 				if (!Target || Target->GetReplicationScopeId() != World->GetObjectId())
 					return SerializeBoundedResponse(ErrorResponse(
 						requestId, "StaleObject", "Script identity is not live in the open project"
+					));
+				if (HasRevisionConflict())
+					return SerializeBoundedResponse(ErrorResponse(
+						requestId, "Conflict", "The authoritative project revision changed before script mutation"
 					));
 				auto ScriptValue = std::dynamic_pointer_cast<LuaSourceContainer>(Target);
 				if (!ScriptValue)
@@ -2065,7 +2069,7 @@ namespace gargantuan {
 					return SerializeBoundedResponse(ErrorResponse(requestId, "SnapshotRequired", "GetSnapshot must establish a cursor"));
 				MutationResult Mutation;
 				if (method == "CreateInstance") {
-					if (!HasOnlyFields(parameters, {"ClassSchemaId", "DefinitionVersion", "Parent", "Name", "InitialProperties", "TransactionId", "ExpectedRevision"}) ||
+					if (!HasOnlyFields(parameters, {"ClassSchemaId", "DefinitionVersion", "Parent", "Name", "InitialProperties", "InitialSource", "TransactionId", "ExpectedRevision"}) ||
 						!parameters.contains("ClassSchemaId") || !parameters["ClassSchemaId"].is_string() ||
 						!parameters.contains("DefinitionVersion") || !parameters["DefinitionVersion"].is_number_unsigned() ||
 						!parameters.contains("Parent") || (parameters.contains("Name") && !parameters["Name"].is_string()))
@@ -2078,6 +2082,19 @@ namespace gargantuan {
 						return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "CreateInstance identity is invalid"));
 					std::optional<std::string> Name;
 					if (parameters.contains("Name")) Name = parameters["Name"].get<std::string>();
+					std::optional<std::string> InitialSource;
+					if (parameters.contains("InitialSource")) {
+						if (!parameters["InitialSource"].is_string())
+							return SerializeBoundedResponse(ErrorResponse(
+								requestId, "MalformedRequest", "CreateInstance InitialSource must be a string"
+							));
+						InitialSource = parameters["InitialSource"].get<std::string>();
+						try {
+							ValidateProtocolString(*InitialSource, MaximumScriptSourceBytes, "Initial script source");
+						} catch (const std::invalid_argument &Error) {
+							return SerializeBoundedResponse(ErrorResponse(requestId, "InvalidSource", Error.what()));
+						}
+					}
 					std::vector<InitialPropertyMutation> InitialProperties;
 					if (parameters.contains("InitialProperties")) {
 						if (!parameters["InitialProperties"].is_array() ||
@@ -2120,7 +2137,8 @@ namespace gargantuan {
 							requestId, "Conflict", "The authoritative project revision changed before create"
 						));
 					Mutation = Mutations.Apply(CreateObjectCommand{
-						*ClassId, *Version, Parent->ToObjectId(), std::move(Name), std::move(InitialProperties)
+						*ClassId, *Version, Parent->ToObjectId(), std::move(Name), std::move(InitialProperties),
+						std::move(InitialSource)
 					},
 						StudioMutationAuthority());
 				} else {

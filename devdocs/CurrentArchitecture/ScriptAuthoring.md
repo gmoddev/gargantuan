@@ -45,6 +45,14 @@ UTF-8, and the exact current token. A stale token returns `SourceConflict`
 without mutation. Non-scripts, stale generations, invalid input, missing
 project state, and transaction limits use structured protocol errors.
 
+`SetScriptSource` also accepts an optional `ExpectedRevision` for callers that
+need source-local and project-wide optimistic concurrency together.
+`CreateInstance` accepts optional `InitialSource` only when the requested
+constructible class derives from `LuaSourceContainer`; class construction,
+Name, exact initial Source, parent publication, one project revision, and one
+shared history entry then commit atomically. Supplying `InitialSource` for a
+non-script class fails before identity publication.
+
 The generic `SetProperty` route rejects Source. This prevents callers from
 bypassing optimistic concurrency. Gameplay scripts and network peers have no
 EditorHost token/capability and cannot invoke either source method.

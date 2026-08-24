@@ -68,7 +68,7 @@ UTF-8 bytes with no NUL.
 | `SetExtensionProperty` | Applies a schema-resolved extension property through `MutationGateway`. |
 | `SetCustomProperty` | Applies a schema-resolved custom class property through `MutationGateway`. |
 | `AddTag` / `RemoveTag` | Applies bounded tag membership through `MutationGateway`. |
-| `CreateInstance` | Creates an editor-constructible active schema identity under a stable parent; engine returns the allocated ObjectId. |
+| `CreateInstance` | Creates an editor-constructible active schema identity under a stable parent; optional `InitialSource` is accepted only for a `LuaSourceContainer` class and commits atomically with Name and parent publication. |
 | `DestroyInstance` | Recursively destroys one generation-safe, non-protected project target. |
 | `DuplicateInstance` | Engine-clones one persistent subtree beside its source with fresh identities. |
 | `ReparentInstance` | Atomically moves one stable target beneath another after scope/cycle/protection validation. |
@@ -76,7 +76,7 @@ UTF-8 bytes with no NUL.
 | `CommitTransaction` | Commits the exact owned open group, advances one revision, and releases its journal batch. |
 | `Undo` / `Redo` | Traverses only the current engine history cursor entry and publishes ordinary authoritative journal state. |
 | `GetScriptSource` | Reads exact bounded Source plus its conflict token for one live supported script ObjectId. |
-| `SetScriptSource` | Commits bounded UTF-8 Source through MutationGateway using the exact expected SourceVersion. |
+| `SetScriptSource` | Commits bounded UTF-8 Source through MutationGateway using the exact expected SourceVersion and optional project `ExpectedRevision`. |
 | `StartPlaySession` / `StopPlaySession` | Starts or destroys the one isolated local runtime from current authoritative in-memory state using an exact engine-issued session identity. |
 | `GetPlaySessionState` / `PollPlayDiagnostics` | Observes bounded lifecycle and runtime diagnostics without granting mutation authority. |
 | `SendPlayInput` | Sends the closed focus/key/pointer/wheel/touch/committed-text/preedit `HostEvent` subset to the exact active runtime and returns any bounded relative-pointer or text-input host state, including secure/multiline/autocorrect policy without text contents. |

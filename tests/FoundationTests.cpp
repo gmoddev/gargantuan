@@ -4843,6 +4843,36 @@ namespace {
 			Check(ScriptWorkspace != ScriptSnapshot["Result"]["Snapshot"]["Objects"].end(),
 				"script authoring fixture resolves the authoritative Workspace");
 			if (ScriptWorkspace != ScriptSnapshot["Result"]["Snapshot"]["Objects"].end()) {
+				auto BeforeAtomicCreate = call("GetProjectState", Json::object(), "test-token");
+				auto AtomicScript = call("CreateInstance", {
+					{"ClassSchemaId", SchemaId::FromNativeName("Engine", "ModuleScript").ToString()},
+					{"DefinitionVersion", 1}, {"Parent", (*ScriptWorkspace)["Id"]},
+					{"Name", "AtomicModule"}, {"InitialSource", "return 1\n"},
+					{"ExpectedRevision", BeforeAtomicCreate["Result"]["AuthoritativeRevision"]}
+				}, "test-token");
+				Check(AtomicScript["Ok"].get<bool>() &&
+					AtomicScript["Result"]["AuthoritativeRevision"] ==
+						BeforeAtomicCreate["Result"]["AuthoritativeRevision"].get<std::uint64_t>() + 1,
+					"script create commits identity, name, and initial source in one authoritative revision");
+				const auto AtomicScriptId = AtomicScript["Result"]["Object"];
+				auto AtomicSource = call("GetScriptSource", {{"Object", AtomicScriptId}}, "test-token");
+				Check(AtomicSource["Ok"].get<bool>() && AtomicSource["Result"]["Source"] == "return 1\n" &&
+					AtomicSource["Result"]["SourceVersion"].get<int>() > 1,
+					"atomic script create publishes exact source with a generation-safe source revision");
+				(void)call("PollChanges", Json::object(), "test-token");
+				auto BeforeRejectedAtomicCreate = call("GetProjectState", Json::object(), "test-token");
+				auto RejectedAtomicCreate = call("CreateInstance", {
+					{"ClassSchemaId", SchemaId::FromNativeName("Engine", "Part").ToString()},
+					{"DefinitionVersion", 1}, {"Parent", (*ScriptWorkspace)["Id"]},
+					{"Name", "NotAScript"}, {"InitialSource", "return 2\n"},
+					{"ExpectedRevision", BeforeRejectedAtomicCreate["Result"]["AuthoritativeRevision"]}
+				}, "test-token");
+				Check(!RejectedAtomicCreate["Ok"].get<bool>() &&
+					RejectedAtomicCreate["Error"]["Code"] == "InvalidClass" &&
+					call("GetProjectState", Json::object(), "test-token")["Result"]["AuthoritativeRevision"] ==
+						BeforeRejectedAtomicCreate["Result"]["AuthoritativeRevision"] &&
+					call("PollChanges", Json::object(), "test-token")["Result"]["Records"].empty(),
+					"initial source on a non-script class rejects without a partial object or revision");
 				auto CreatedScript = call("CreateInstance", {
 					{"ClassSchemaId", SchemaId::FromNativeName("Engine", "Script").ToString()},
 					{"DefinitionVersion", 1}, {"Parent", (*ScriptWorkspace)["Id"]}, {"Name", "AuthoringScript"}
@@ -4895,6 +4925,14 @@ namespace {
 					SourceChanges["Result"]["Records"][0].dump().find(SourceA) == std::string::npos,
 					"source commit journals only its invalidation token, never source text");
 				const auto SourceAVersion = SetSourceA["Result"]["SourceVersion"].get<int>();
+				auto StaleProjectSourceWrite = call("SetScriptSource", {
+					{"Object", ScriptId}, {"ExpectedSourceVersion", SourceAVersion}, {"Source", "project stale"},
+					{"ExpectedRevision", BeforeSourceState["Result"]["AuthoritativeRevision"]}
+				}, "test-token");
+				Check(!StaleProjectSourceWrite["Ok"].get<bool>() &&
+					StaleProjectSourceWrite["Error"]["Code"] == "Conflict" &&
+					call("GetScriptSource", {{"Object", ScriptId}}, "test-token")["Result"]["Source"] == SourceA,
+					"optional project revision conflicts before script source mutation");
 				auto StaleWrite = call("SetScriptSource", {
 					{"Object", ScriptId}, {"ExpectedSourceVersion", InitialVersion}, {"Source", "stale overwrite"}
 				}, "test-token");
