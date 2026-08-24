@@ -695,6 +695,7 @@ namespace gargantuan {
 					LastPlaySessionId = Id;
 					LastPlaySessionState = ActivePlaySession->GetState();
 					LastViewportPublication.reset();
+					ViewportRenderer.reset();
 					ViewportProjection.Clear();
 					ViewportPublisher.RequestFullResync();
 					return SerializeBoundedResponse(SuccessResponse(requestId, {
@@ -725,6 +726,7 @@ namespace gargantuan {
 				LastPlaySessionState = PlaySessionState::Stopped;
 				ActivePlaySession.reset();
 				LastViewportPublication.reset();
+				ViewportRenderer.reset();
 				ViewportProjection.Clear();
 				ViewportPublisher.RequestFullResync();
 				return SerializeBoundedResponse(SuccessResponse(requestId, {
@@ -1607,22 +1609,23 @@ namespace gargantuan {
 					Json PlayIdentity = nullptr;
 					const char *Mode = "Edit";
 					if (ActivePlaySession && ActivePlaySession->GetState() == PlaySessionState::Running) {
+						if (auto InitialPublication = ActivePlaySession->TakeRenderPublication()) {
+							ViewportRenderer->ApplyPublication(InitialPublication);
+							(void)ViewportProjection.Apply(*InitialPublication);
+						}
 						ActivePlaySession->Step();
 						if (ActivePlaySession->GetState() != PlaySessionState::Running)
 							return SerializeBoundedResponse(ErrorResponse(requestId, "PlaySessionExited", "Runtime exited while capturing the viewport"));
-						auto RuntimeWorld = ActivePlaySession->GetWorld();
-						auto RuntimeWorkspace = RuntimeWorld ? std::dynamic_pointer_cast<Workspace>(RuntimeWorld->GetService("Workspace")) : nullptr;
-						if (!RuntimeWorkspace || !RuntimeWorkspace->GetCurrentCamera())
-							return SerializeBoundedResponse(ErrorResponse(requestId, "PlaySessionFailed", "Runtime has no valid Workspace camera"));
-						LastViewportPublication = ViewportPublisher.Publish(
-							*RuntimeWorkspace, MakeRenderCameraInput(*RuntimeWorkspace->GetCurrentCamera()), ViewportWidth, ViewportHeight
-						);
+						LastViewportPublication = ActivePlaySession->TakeRenderPublication();
+						if (!LastViewportPublication)
+							return SerializeBoundedResponse(ErrorResponse(requestId, "PlaySessionFailed", "Runtime produced no render publication"));
 						PlayIdentity = std::to_string(ActivePlaySession->GetId().Value);
 						Mode = "Play";
 					} else {
 						LastViewportPublication = ViewportPublisher.Publish(*workspace, camera, ViewportWidth, ViewportHeight);
 					}
-					(void)ViewportProjection.Apply(*LastViewportPublication);
+					if (ViewportProjection.GetLastPublicationId() != LastViewportPublication->Id)
+						(void)ViewportProjection.Apply(*LastViewportPublication);
 					auto frame = ViewportRenderer->Capture(LastViewportPublication);
 					if (ViewportFrameRing) {
 						const auto timestamp = static_cast<std::uint64_t>(

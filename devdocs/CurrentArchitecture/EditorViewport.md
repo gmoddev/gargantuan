@@ -20,7 +20,10 @@ The renderer reuses the normal shadow and opaque passes against engine-owned
 color/depth textures, downloads only after a GPU fence, and contains GPU/setup
 failures as structured `ViewportUnavailable` errors. Capture remains on the
 serialized EditorHost domain. In Edit it never executes scripts. In Play it steps
-only the isolated session Engine before publishing the runtime Workspace. Responses
+only the isolated session Engine, then consumes that Engine's exact
+`RenderPublication` rather than re-extracting the runtime Workspace through the
+resource-empty edit publisher. Mesh, texture, material, font-atlas, and UI
+residency therefore cross the viewport boundary as one coherent stream. Responses
 carry `Mode` and an exact `PlaySessionId`; Studio rejects stale runtime frames.
 Capture never permits Studio to mutate project source outside existing validated commands.
 The Play runtime's `GuiRuntime` publishes through the same `RenderPublication`
@@ -38,11 +41,13 @@ session camera. They are not persisted in the project or published to the
 document change journal. The viewport owns one `RenderPublisher` consumer and
 two disposable projections of the same publication: an EditorHost CPU
 projection for picking and the offscreen renderer's GPU-resource projection.
-Construction/recreation requests full resync, normal committed changes are
-incremental, and resize updates frame-global publication while replacing only
-offscreen targets. Picking therefore uses the same semantic publication as
-capture without initializing SDL video or a GPU device; this preserves the
-headless CI contract.
+Edit capture uses the EditorHost publisher. Play capture uses the isolated
+runtime publisher and replaces both projections at Start/Stop so publication
+identities and residency cannot cross modes or sessions. Construction/recreation
+requests full resync, normal committed changes are incremental, and resize
+updates frame-global publication while replacing only offscreen targets.
+Picking therefore uses the same semantic publication as capture without
+initializing SDL video or a GPU device; this preserves the headless CI contract.
 
 ## Shared-memory frame ring v1
 

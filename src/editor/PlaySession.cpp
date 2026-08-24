@@ -113,6 +113,10 @@ namespace gargantuan {
 		return Result;
 	}
 
+	RenderPublicationPtr PlaySession::TakeRenderPublication() {
+		return RuntimeRenderer ? RuntimeRenderer->TakeLastPublication() : nullptr;
+	}
+
 	void PlaySession::AddDiagnostic(std::string Severity, std::string Category, std::string Message) {
 		if (Message.size() > MaximumDiagnosticBytes) Message.resize(MaximumDiagnosticBytes);
 		if (Diagnostics.size() == MaximumDiagnostics) Diagnostics.pop_front();

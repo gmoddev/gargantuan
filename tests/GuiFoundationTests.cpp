@@ -503,11 +503,19 @@ namespace {
 			std::dynamic_pointer_cast<ScrollingFrame>(Loaded.Instance->FindFirstChild("PersistentScroll", true)) : nullptr;
 		auto LoadedInput = Loaded.Instance ?
 			std::dynamic_pointer_cast<TextBox>(Loaded.Instance->FindFirstChild("PersistentTextBox", true)) : nullptr;
-		Check(Loaded.Ok && Loaded.Instance && Loaded.Instance->FindFirstChild("PlayButton", true) && LoadedScroll && LoadedInput &&
+		auto LoadedPanel = Loaded.Instance ?
+			std::dynamic_pointer_cast<Frame>(Loaded.Instance->FindFirstChild("Panel", true)) : nullptr;
+		auto LoadedButton = Loaded.Instance ?
+			std::dynamic_pointer_cast<TextButton>(Loaded.Instance->FindFirstChild("PlayButton", true)) : nullptr;
+		Check(Loaded.Ok && Loaded.Instance && LoadedPanel && LoadedButton && LoadedScroll && LoadedInput &&
+			LoadedPanel->GetPosition().X.Scale == 0.5f && LoadedPanel->GetPosition().Y.Scale == 0.5f &&
+			LoadedPanel->GetSize().X.Offset == 400 && LoadedPanel->GetSize().Y.Offset == 260 &&
+			LoadedButton->GetPosition().X.Offset == 120 && LoadedButton->GetPosition().Y.Offset == 150 &&
+			LoadedButton->GetSize().X.Offset == 160 && LoadedButton->GetSize().Y.Offset == 44 &&
 			LoadedScroll->GetCanvasPosition() == Vector2(12.0f, 34.0f) && LoadedScroll->GetScrollBarThickness() == 9.0f &&
 			LoadedInput->GetText() == "authored UTF-8 \xCE\xA9" && LoadedInput->GetPlaceholderText() == "Type here" &&
 			LoadedInput->GetReadOnly() && LoadedInput->GetMaxLength() == 2048,
-			"GUI semantic state and hierarchy reconstruct through the ordinary project format");
+			"GUI layout, semantic state, and hierarchy reconstruct through the ordinary project format");
 
 		PlaySession Session({7301}, Serialized, InstanceSerialization::InstanceFormat::Json,
 			std::filesystem::temp_directory_path(), 800, 600, Game->GetAuthoritativeRevision());

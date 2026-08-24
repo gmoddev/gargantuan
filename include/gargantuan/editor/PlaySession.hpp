@@ -53,6 +53,7 @@ namespace gargantuan {
 		[[nodiscard]] HostEventResult ProcessEvent(const HostEvent &Event);
 		void Stop();
 		[[nodiscard]] std::vector<PlayDiagnostic> DrainDiagnostics();
+		[[nodiscard]] RenderPublicationPtr TakeRenderPublication();
 		[[nodiscard]] std::shared_ptr<DataModel> GetWorld() const { return RuntimeWorld; }
 		[[nodiscard]] PlaySessionId GetId() const { return Id; }
 		[[nodiscard]] PlaySessionState GetState() const { return State; }

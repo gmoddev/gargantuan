@@ -484,6 +484,11 @@ if(BUILD_TESTING)
 	)
 	add_executable(gargantuan_gui_foundation_tests "tests/GuiFoundationTests.cpp")
 	target_link_libraries(gargantuan_gui_foundation_tests PRIVATE gargantuan_core)
+	add_executable(gargantuan_first_complete_game_tests "tests/FirstCompleteGameTests.cpp")
+	target_link_libraries(gargantuan_first_complete_game_tests PRIVATE gargantuan_core nlohmann_json)
+	target_compile_definitions(gargantuan_first_complete_game_tests PRIVATE
+		GARGANTUAN_FIRST_COMPLETE_GAME_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/samples/FirstCompleteGame"
+	)
 	add_executable(gargantuan_gui_foundation_benchmark "tests/GuiFoundationBenchmark.cpp")
 	target_link_libraries(gargantuan_gui_foundation_benchmark PRIVATE gargantuan_core)
 	add_executable(gargantuan_prerun_bootstrap_tests "tests/PreRunBootstrapTests.cpp")
@@ -576,6 +581,7 @@ if(BUILD_TESTING)
 			gargantuan_player_runtime_tests
 			gargantuan_entitlement_service_tests
 			gargantuan_gui_foundation_tests
+			gargantuan_first_complete_game_tests
 			gargantuan_gui_foundation_benchmark
 			gargantuan_networking_contract_tests
 			gargantuan_simulated_transport_tests
@@ -648,6 +654,7 @@ if(BUILD_TESTING)
 	add_test(NAME gargantuan_player_runtime COMMAND gargantuan_player_runtime_tests)
 	add_test(NAME gargantuan_entitlement_service COMMAND gargantuan_entitlement_service_tests)
 	add_test(NAME gargantuan_gui_foundation COMMAND gargantuan_gui_foundation_tests)
+	add_test(NAME gargantuan_first_complete_game COMMAND gargantuan_first_complete_game_tests)
 	add_test(NAME gargantuan_gui_foundation_benchmark_smoke COMMAND gargantuan_gui_foundation_benchmark --quick)
 	add_test(NAME gargantuan_prerun_bootstrap COMMAND gargantuan_prerun_bootstrap_tests)
 	add_test(NAME gargantuan_networking_contracts COMMAND gargantuan_networking_contract_tests)
@@ -673,6 +680,9 @@ if(BUILD_TESTING)
 	set_tests_properties(gargantuan_platform_input_boundary PROPERTIES LABELS "platform;input;runtime" TIMEOUT 120)
 	set_tests_properties(gargantuan_player_runtime PROPERTIES LABELS "player;runtime;headless" TIMEOUT 180)
 	set_tests_properties(gargantuan_entitlement_service PROPERTIES LABELS "entitlements;runtime;security;headless" TIMEOUT 120)
+	set_tests_properties(gargantuan_first_complete_game PROPERTIES
+		LABELS "game;sample;studio;assets;player;physics;gui;headless" TIMEOUT 180
+	)
 	set_tests_properties(gargantuan_prerun_bootstrap PROPERTIES LABELS "prerun;runtime" TIMEOUT 120)
 	set_tests_properties(gargantuan_networking_contracts gargantuan_simulated_transport gargantuan_scheduler_contract
 		gargantuan_replication gargantuan_remote gargantuan_remote_luau gargantuan_replication_benchmark_smoke

@@ -6,6 +6,7 @@
 #include "gargantuan/datatypes/Color3.hpp"
 #include "gargantuan/datatypes/Enum.hpp"
 #include "gargantuan/datatypes/UDim.hpp"
+#include "gargantuan/datatypes/UDim2.hpp"
 #include "gargantuan/datatypes/Vector2.hpp"
 #include "gargantuan/reflection/InstanceClassRegistry.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
@@ -38,7 +39,7 @@ namespace gargantuan::InstanceSerialization {
 	// Serialization
 
 	using Serializable =
-		std::variant<bool, CFrame, Color3, double, EnumItem, float, glm::vec3, int, std::string_view, UDim, Vector2>;
+		std::variant<bool, CFrame, Color3, double, EnumItem, float, glm::vec3, int, std::string_view, UDim, UDim2, Vector2>;
 
 	namespace Json {
 		// NOTE: InstanceFormat is based off Rojo's model format with a few exceptions:
@@ -95,6 +96,8 @@ namespace gargantuan::InstanceSerialization {
 				return SerializedPair{"String", std::string(value->data(), value->size())};
 			} else if (auto *value = std::any_cast<UDim>(&unknown)) {
 				return SerializedPair{"UDim", {value->Scale, value->Offset}};
+			} else if (auto *value = std::any_cast<UDim2>(&unknown)) {
+				return SerializedPair{"UDim2", {value->X.Scale, value->X.Offset, value->Y.Scale, value->Y.Offset}};
 			} else if (auto *value = std::any_cast<Vector2>(&unknown)) {
 				return SerializedPair{"Vector2", {value->GetX(), value->GetY()}};
 			} else {
@@ -451,6 +454,18 @@ namespace gargantuan::InstanceSerialization {
 			auto Scale = DecodeFloat(scale); auto Offset = DecodeInt(offset);
 			if (!Scale || !Offset) return state.ReturnError("UDim contains a non-finite or out-of-range component");
 			return UDim(*Scale, *Offset);
+		} else if (unknown.contains("UDim2")) {
+			auto value = unknown["UDim2"];
+			if (!value.is_array() || value.size() != 4)
+				return state.ReturnError("Expected UDim2 to be an array of 4 components");
+
+			auto XScale = DecodeFloat(value[0]);
+			auto XOffset = DecodeInt(value[1]);
+			auto YScale = DecodeFloat(value[2]);
+			auto YOffset = DecodeInt(value[3]);
+			if (!XScale || !XOffset || !YScale || !YOffset)
+				return state.ReturnError("UDim2 contains a non-finite or out-of-range component");
+			return UDim2(*XScale, *XOffset, *YScale, *YOffset);
 		} else if (unknown.contains("Vector2")) {
 			auto value = unknown["Vector2"];
 			if (!value.is_array() || value.size() != 2) return state.ReturnError("Expected Vector2 to be an array of 2 components");

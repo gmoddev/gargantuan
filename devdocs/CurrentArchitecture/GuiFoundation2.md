@@ -229,10 +229,12 @@ range. Stable accessibility identity remains the engine `ObjectId` and does not
 change for layout-only work or renderer restart.
 
 Ordinary schema persistence stores authored scroll policy/canvas position and
-text value/placeholder/read-only/multiline/secure/max-length semantics. It does
-not store caret, selection, composition, gesture capture, hover, focus, or atlas
-state. Play clones get independent runtime editing/scroll state and Stop cannot
-contaminate the authoring tree.
+text value/placeholder/read-only/multiline/secure/max-length semantics. It also
+round-trips the `UDim2` values used by authored GUI `Position`, `Size`, canvas,
+and layout properties through project format v4. It does not store caret,
+selection, composition, gesture capture, hover, focus, or atlas state. Play
+clones get independent runtime editing/scroll state and Stop cannot contaminate
+the authoring tree.
 
 Foundation 1 bounds remain in force. Foundation 2 additionally enforces:
 

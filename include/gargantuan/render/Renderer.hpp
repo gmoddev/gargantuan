@@ -36,6 +36,7 @@ namespace gargantuan {
 		void Draw(RenderPublicationPtr Publication) override {
 			if (!Publication) throw std::invalid_argument("HeadlessRenderer requires an immutable RenderPublication");
 			LastChanges = Projection.Apply(*Publication);
+			LastPublication = std::move(Publication);
 		};
 		void Resize(int WidthValue, int HeightValue) override {
 			if (WidthValue < 1 || HeightValue < 1) return;
@@ -48,11 +49,13 @@ namespace gargantuan {
 		}
 		[[nodiscard]] const RenderProjection &GetProjection() const { return Projection; }
 		[[nodiscard]] RenderProjectionChanges GetLastChanges() const { return LastChanges; }
+		[[nodiscard]] RenderPublicationPtr TakeLastPublication() { return std::move(LastPublication); }
 
 	  private:
 		std::uint32_t Width = 0;
 		std::uint32_t Height = 0;
 		RenderProjection Projection;
 		RenderProjectionChanges LastChanges;
+		RenderPublicationPtr LastPublication;
 	};
 } // namespace gargantuan

@@ -1,7 +1,7 @@
 ---
 status: current
 owner: editor-runtime
-last_verified: 2026-08-21
+last_verified: 2026-08-24
 related_code:
   - src/editor/PlaySession.cpp
   - src/Engine.cpp
@@ -46,11 +46,15 @@ at the host boundary. Natural runtime exit and step exceptions become a controll
 
 ## Viewport, input, and diagnostics
 
-The existing EditorHost viewport renderer renders an extracted snapshot from the
-runtime Workspace while Running. Each response is labelled `Mode: Play` with the
-exact `PlaySessionId`; Studio drops a mismatched or stale frame. After Stop, capture
-returns the authoring Workspace as `Mode: Edit`. Runtime selection and authoring
-camera mutation are intentionally unavailable during Play.
+The existing EditorHost viewport renderer consumes the exact immutable
+`RenderPublication` produced by the runtime Engine while Running. The initial
+full publication and later deltas carry the same mesh, material, texture, GUI,
+and font-atlas residency used by the session's headless renderer; EditorHost
+does not re-extract the runtime through its edit publisher. Each response is
+labelled `Mode: Play` with the exact `PlaySessionId`; Studio drops a mismatched
+or stale frame. Start and Stop replace the viewport projections, and after Stop
+capture returns the authoring Workspace as `Mode: Edit`. Runtime selection and
+authoring camera mutation are intentionally unavailable during Play.
 
 Input is a closed `HostEvent` subset: focus, bounded key transitions, finite
 pointer movement, and semantic pointer-button transitions. Studio forwards input
