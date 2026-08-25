@@ -627,6 +627,10 @@ if(BUILD_TESTING)
 		add_executable(gargantuan_editor_viewport_smoke "tests/EditorViewportSmoke.cpp")
 		target_link_libraries(gargantuan_editor_viewport_smoke PRIVATE gargantuan_core)
 		add_dependencies(gargantuan_editor_viewport_smoke gargantuan_shaders)
+		add_executable(gargantuan_editor_viewport_presentation_benchmark
+			"tests/EditorViewportPresentationBenchmark.cpp")
+		target_link_libraries(gargantuan_editor_viewport_presentation_benchmark PRIVATE gargantuan_core)
+		add_dependencies(gargantuan_editor_viewport_presentation_benchmark gargantuan_shaders)
 		add_test(NAME gargantuan_renderer_projection_headless
 			COMMAND gargantuan_renderer_benchmark
 				--backend=projection --scenario=mixed --count=3 --frames=2 --warmup=1

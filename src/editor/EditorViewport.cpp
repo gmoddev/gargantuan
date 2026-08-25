@@ -111,6 +111,7 @@ namespace gargantuan {
 		std::unique_ptr<SDLMeshCache> MeshResources;
 		std::unique_ptr<SDLTextureCache> TextureResources;
 		RenderProjection Projection;
+		std::vector<std::uint8_t> BgraPixels;
 
 		void Destroy() {
 			if (Gpu) SDL_WaitForGPUIdle(Gpu);
@@ -132,6 +133,7 @@ namespace gargantuan {
 			Gpu = nullptr;
 			if (OwnsVideoSubsystem) SDL_QuitSubSystem(SDL_INIT_VIDEO);
 			OwnsVideoSubsystem = false;
+			BgraPixels.clear();
 		}
 
 		void RecreateTargets() {
@@ -167,6 +169,7 @@ namespace gargantuan {
 			ColorTexture = ReplacementColor;
 			DepthTexture = ReplacementDepth;
 			DownloadBuffer = ReplacementDownload;
+			BgraPixels.resize(static_cast<std::size_t>(Width) * Height * 4);
 		}
 	};
 
@@ -231,12 +234,14 @@ namespace gargantuan {
 	void EditorViewportRenderer::ApplyPublication(RenderPublicationPtr Publication) {
 		if (!State || !State->Gpu) throw std::logic_error("Viewport renderer is not initialized");
 		if (!Publication) throw std::invalid_argument("Viewport requires an immutable RenderPublication");
+		if (State->Projection.GetLastPublicationId() == Publication->Id) return;
 		(void)State->Projection.Apply(*Publication);
 		State->MeshResources->ApplyPublication(*Publication);
 		State->TextureResources->ApplyPublication(*Publication);
 	}
 
-	EditorViewportFrame EditorViewportRenderer::Capture(RenderPublicationPtr Publication) {
+	EditorViewportCaptureView EditorViewportRenderer::CaptureBgra(RenderPublicationPtr Publication) {
+		const auto TotalStart = std::chrono::steady_clock::now();
 		ApplyPublication(std::move(Publication));
 		const auto &FrameState = State->Projection.GetFrame();
 		if (FrameState.ViewportWidth != State->Width || FrameState.ViewportHeight != State->Height)
@@ -254,6 +259,7 @@ namespace gargantuan {
 		Frame.Width = State->Width;
 		Frame.Height = State->Height;
 		for (auto &Pass : State->RenderPasses) SDL_EndGPURenderPass(Pass->Draw(State->Gpu, Frame));
+		const auto RenderSubmitted = std::chrono::steady_clock::now();
 
 		auto *CopyPass = SDL_BeginGPUCopyPass(Commands);
 		if (!CopyPass) {
@@ -272,19 +278,42 @@ namespace gargantuan {
 			SDL_ReleaseGPUFence(State->Gpu, Fence);
 			throw std::runtime_error(std::format("Failed to wait for viewport frame: {}", SDL_GetError()));
 		}
+		const auto ReadbackComplete = std::chrono::steady_clock::now();
 		auto *Rgba = static_cast<const std::uint8_t *>(SDL_MapGPUTransferBuffer(State->Gpu, State->DownloadBuffer, false));
 		if (!Rgba) {
 			SDL_ReleaseGPUFence(State->Gpu, Fence);
 			throw std::runtime_error(std::format("Failed to map viewport frame: {}", SDL_GetError()));
 		}
-		EditorViewportFrame Result{.Width = State->Width, .Height = State->Height};
-		Result.RgbPixels.resize(static_cast<std::size_t>(State->Width) * State->Height * 3);
-		for (std::size_t SourceIndex = 0, DestinationIndex = 0;
-			SourceIndex < static_cast<std::size_t>(State->Width) * State->Height * 4;
-			SourceIndex += 4, DestinationIndex += 3)
-			std::memcpy(Result.RgbPixels.data() + DestinationIndex, Rgba + SourceIndex, 3);
+		for (std::size_t Index = 0; Index < State->BgraPixels.size(); Index += 4) {
+			State->BgraPixels[Index] = Rgba[Index + 2];
+			State->BgraPixels[Index + 1] = Rgba[Index + 1];
+			State->BgraPixels[Index + 2] = Rgba[Index];
+			State->BgraPixels[Index + 3] = Rgba[Index + 3];
+		}
 		SDL_UnmapGPUTransferBuffer(State->Gpu, State->DownloadBuffer);
 		SDL_ReleaseGPUFence(State->Gpu, Fence);
+		const auto Extracted = std::chrono::steady_clock::now();
+		return {
+			.Width = State->Width,
+			.Height = State->Height,
+			.BgraPixels = State->BgraPixels,
+			.RenderSubmission = std::chrono::duration_cast<std::chrono::microseconds>(RenderSubmitted - TotalStart),
+			.GpuReadbackWait = std::chrono::duration_cast<std::chrono::microseconds>(ReadbackComplete - RenderSubmitted),
+			.CpuExtraction = std::chrono::duration_cast<std::chrono::microseconds>(Extracted - ReadbackComplete),
+			.Total = std::chrono::duration_cast<std::chrono::microseconds>(Extracted - TotalStart),
+		};
+	}
+
+	EditorViewportFrame EditorViewportRenderer::Capture(RenderPublicationPtr Publication) {
+		const auto Captured = CaptureBgra(std::move(Publication));
+		EditorViewportFrame Result{.Width = Captured.Width, .Height = Captured.Height};
+		Result.RgbPixels.resize(static_cast<std::size_t>(Captured.Width) * Captured.Height * 3);
+		for (std::size_t SourceIndex = 0, DestinationIndex = 0;
+			SourceIndex < Captured.BgraPixels.size(); SourceIndex += 4, DestinationIndex += 3) {
+			Result.RgbPixels[DestinationIndex] = Captured.BgraPixels[SourceIndex + 2];
+			Result.RgbPixels[DestinationIndex + 1] = Captured.BgraPixels[SourceIndex + 1];
+			Result.RgbPixels[DestinationIndex + 2] = Captured.BgraPixels[SourceIndex];
+		}
 		return Result;
 	}
 

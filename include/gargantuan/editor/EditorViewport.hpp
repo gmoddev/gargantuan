@@ -11,8 +11,10 @@
 #include "gargantuan/runtime/ObjectId.hpp"
 
 #include <cstdint>
+#include <chrono>
 #include <memory>
 #include <optional>
+#include <span>
 #include <vector>
 
 namespace gargantuan {
@@ -20,6 +22,16 @@ namespace gargantuan {
 		std::uint32_t Width = 0;
 		std::uint32_t Height = 0;
 		std::vector<std::uint8_t> RgbPixels;
+	};
+
+	struct EditorViewportCaptureView {
+		std::uint32_t Width = 0;
+		std::uint32_t Height = 0;
+		std::span<const std::uint8_t> BgraPixels;
+		std::chrono::microseconds RenderSubmission{};
+		std::chrono::microseconds GpuReadbackWait{};
+		std::chrono::microseconds CpuExtraction{};
+		std::chrono::microseconds Total{};
 	};
 
 	struct EditorViewportPick {
@@ -48,6 +60,7 @@ namespace gargantuan {
 
 		void Resize(std::uint32_t Width, std::uint32_t Height);
 		void ApplyPublication(RenderPublicationPtr Publication);
+		[[nodiscard]] EditorViewportCaptureView CaptureBgra(RenderPublicationPtr Publication);
 		[[nodiscard]] EditorViewportFrame Capture(RenderPublicationPtr Publication);
 		[[nodiscard]] std::optional<EditorViewportPick> Pick(float X, float Y) const;
 

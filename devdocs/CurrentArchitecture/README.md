@@ -17,6 +17,9 @@
   primitive resources.
 - [Renderer Foundation 2C](RendererFoundation2C.md) records the two-hardware
   deformable/GUI evaluation, final SDL GPU selection, and GUI start contract.
+- [Editor Viewport Presentation Foundation 2](EditorViewportPresentation2.md)
+  defines continuous latest-frame production, bounded shared-memory transport,
+  generation-safe Edit/Play presentation, and explicit capture fallback.
 - [GUI Foundation 1](GuiFoundation1.md) defines the retained screen-space object
   model, deterministic committed layout, text/image resources, routed input,
   accessibility projection, renderer publication, limits, and benchmark.
@@ -71,8 +74,9 @@ in-process receiver.
 See [EditorHost v0](./EditorHostProtocol.md) for the implemented process boundary
 between the public MPL-2.0 engine and independently authored Studio clients.
 
-See [Editor viewport v1](./EditorViewport.md) for offscreen frame capture,
-camera commands, ObjectId picking, and the future Luau Studio UI service boundary.
+See [Editor viewport capture and picking](./EditorViewport.md) for the explicit
+screenshot fallback, camera commands, ObjectId picking, and the Luau Studio UI
+service boundary.
 
 See [minimal local Play](./PlaySession.md) for the EditorHost-owned isolated runtime
 graph, exact lifecycle identity, diagnostics/input boundary, and teardown contract.

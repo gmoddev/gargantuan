@@ -27,9 +27,11 @@
 #include <atomic>
 #include <charconv>
 #include <chrono>
+#include <condition_variable>
 #include <cctype>
 #include <cmath>
 #include <cstdint>
+#include <deque>
 #include <filesystem>
 #include <limits>
 #include <magic_enum/magic_enum.hpp>
@@ -596,6 +598,8 @@ namespace gargantuan {
 	}
 
 	EditorHost::~EditorHost() {
+		ViewportPresentationActive = false;
+		ViewportLatestFrameMailbox.reset();
 		if (ActivePackageJob) {
 			ActivePackageJob->Cancellation.Cancel();
 			ActivePackageJob.reset();
@@ -609,6 +613,123 @@ namespace gargantuan {
 		} catch (...) {
 			if (World) World->Transactions.Reset();
 		}
+	}
+
+	void EditorHost::AdvanceViewportGeneration() {
+		ViewportGeneration = ViewportGeneration == std::numeric_limits<std::uint64_t>::max()
+			? 1 : ViewportGeneration + 1;
+		ViewportFrameNumber = 0;
+		ViewportLastPlaySessionId = 0;
+		ViewportLastCameraRevision = 0;
+		ViewportLastSourceRevision = 0;
+		ViewportLastMode = LatestFrameMailboxLayout::Mode::Edit;
+		LastViewportPublication.reset();
+		ViewportProjection.Clear();
+		ViewportPublisher.RequestFullResync();
+		NextViewportFrame = std::chrono::steady_clock::now();
+	}
+
+	void EditorHost::ConsumePlayRenderPublications() {
+		if (!ActivePlaySession || ActivePlaySession->GetState() != PlaySessionState::Running ||
+			ViewportWidth == 0 || ViewportHeight == 0) return;
+		auto Publications = ActivePlaySession->TakeRenderPublications();
+		if (Publications.empty()) return;
+		if (!ViewportRenderer)
+			ViewportRenderer = std::make_unique<EditorViewportRenderer>(ViewportWidth, ViewportHeight);
+		for (auto &Publication : Publications) {
+			if (!Publication) continue;
+			ViewportRenderer->ApplyPublication(Publication);
+			if (ViewportProjection.GetLastPublicationId() != Publication->Id)
+				(void)ViewportProjection.Apply(*Publication);
+			LastViewportPublication = std::move(Publication);
+		}
+	}
+
+	void EditorHost::PumpPlaySession() {
+		if (!ActivePlaySession || ActivePlaySession->GetState() != PlaySessionState::Running) return;
+		const auto Now = std::chrono::steady_clock::now();
+		if (NextPlayStep != std::chrono::steady_clock::time_point{} && Now < NextPlayStep) return;
+		NextPlayStep = Now + std::chrono::microseconds(8333);
+		ActivePlaySession->Step();
+		if (ActivePlaySession->GetState() != PlaySessionState::Running)
+			LastPlaySessionState = ActivePlaySession->GetState();
+	}
+
+	void EditorHost::PumpViewportPresentation() {
+		if (!ViewportPresentationActive || !ViewportLatestFrameMailbox || !World || !ViewportCamera ||
+			ViewportWidth == 0 || ViewportHeight == 0) return;
+		const auto Now = std::chrono::steady_clock::now();
+		if (NextViewportFrame != std::chrono::steady_clock::time_point{} && Now < NextViewportFrame) return;
+		NextViewportFrame = Now + ViewportFrameInterval;
+		try {
+			if (ViewportPresentationCheckpointForTesting)
+				ViewportPresentationCheckpointForTesting("BeforeCapture");
+			if (!ViewportRenderer) {
+				ViewportRenderer = std::make_unique<EditorViewportRenderer>(ViewportWidth, ViewportHeight);
+				ViewportPublisher.RequestFullResync();
+			}
+			auto WorkspaceService = std::dynamic_pointer_cast<Workspace>(World->GetService("Workspace"));
+			if (!WorkspaceService) throw std::runtime_error("Project has no Workspace for viewport presentation");
+
+			LatestViewportFrameMetadata Metadata{.Generation = ViewportGeneration};
+			if (ActivePlaySession && ActivePlaySession->GetState() == PlaySessionState::Running) {
+				ConsumePlayRenderPublications();
+				if (!LastViewportPublication) return;
+				Metadata.Mode = LatestFrameMailboxLayout::Mode::Play;
+				Metadata.PlaySessionId = ActivePlaySession->GetId().Value;
+			} else {
+				SynchronizeEditorViewportAssets(World, ViewportPublisher);
+				LastViewportPublication = ViewportPublisher.Publish(
+					*WorkspaceService, *ViewportCamera, ViewportWidth, ViewportHeight
+				);
+				Metadata.Mode = LatestFrameMailboxLayout::Mode::Edit;
+			}
+			if (ViewportProjection.GetLastPublicationId() != LastViewportPublication->Id)
+				(void)ViewportProjection.Apply(*LastViewportPublication);
+			const auto Captured = ViewportRenderer->CaptureBgra(LastViewportPublication);
+			if (ViewportPresentationCheckpointForTesting)
+				ViewportPresentationCheckpointForTesting("AfterCapture");
+			Metadata.CameraRevision = ViewportCameraRevision;
+			Metadata.SourceRevision = LastViewportPublication->Id;
+			Metadata.RenderSubmission = Captured.RenderSubmission;
+			Metadata.GpuReadbackWait = Captured.GpuReadbackWait;
+			Metadata.CpuExtraction = Captured.CpuExtraction;
+			if (ViewportPresentationCheckpointForTesting)
+				ViewportPresentationCheckpointForTesting("BeforePublish");
+			ViewportFrameNumber = ViewportLatestFrameMailbox->Publish(
+				Captured.Width, Captured.Height, Captured.BgraPixels, Metadata
+			);
+			++ViewportProducedFrames;
+			ViewportLastRenderSubmissionUs = static_cast<std::uint64_t>(Captured.RenderSubmission.count());
+			ViewportLastGpuReadbackUs = static_cast<std::uint64_t>(Captured.GpuReadbackWait.count());
+			ViewportLastCpuExtractionUs = static_cast<std::uint64_t>(Captured.CpuExtraction.count());
+			ViewportLastMode = Metadata.Mode;
+			ViewportLastPlaySessionId = Metadata.PlaySessionId;
+			ViewportLastCameraRevision = Metadata.CameraRevision;
+			ViewportLastSourceRevision = Metadata.SourceRevision;
+			ViewportLastFailure.clear();
+		} catch (const std::exception &Error) {
+			++ViewportPresentationFailures;
+			ViewportLastFailure = Error.what();
+			ViewportMostRecentFailure = Error.what();
+			ViewportRenderer.reset();
+			LastViewportPublication.reset();
+			ViewportProjection.Clear();
+			ViewportPublisher.RequestFullResync();
+			if (ActivePlaySession) ActivePlaySession->RequestRenderFullResync();
+		}
+	}
+
+	void EditorHost::PumpViewportPresentationForTesting() {
+		NextPlayStep = {};
+		NextViewportFrame = {};
+		PumpPlaySession();
+		PumpViewportPresentation();
+	}
+
+	void EditorHost::PumpPlaySessionForTesting() {
+		NextPlayStep = {};
+		PumpPlaySession();
 	}
 
 	std::string EditorHost::HandleRequest(std::string_view request) {
@@ -683,7 +804,8 @@ namespace gargantuan {
 			};
 			const bool viewportMethod = method == "OpenViewportTransport" || method == "CloseViewportTransport" ||
 				method == "ConfigureViewport" || method == "SetViewportCamera" ||
-				method == "CaptureViewport" || method == "PickViewport";
+				method == "StartViewportPresentation" || method == "StopViewportPresentation" ||
+				method == "GetViewportPresentationState" || method == "CaptureViewport" || method == "PickViewport";
 			if (viewportMethod && !StudioSecurity.HasCapability(ScriptCapability::ViewportControl))
 				return SerializeBoundedResponse(ErrorResponse(requestId, "Unauthorized", "Viewport access requires ViewportControl"));
 			if (method == "Handshake") {
@@ -702,7 +824,8 @@ namespace gargantuan {
 					"PlaySession", "DiagnosticStream", "SendPlayInput",
 					"AssetCatalog", "ImportAsset", "ReimportAsset", "DeleteAsset", "StrictAssetReferences",
 					"PackageBuild", "PackageBuildProgress", "PackageBuildCancellation",
-					"ConfigureViewport", "SetViewportCamera", "CaptureViewport", "PickViewport"
+					"ConfigureViewport", "SetViewportCamera", "CaptureViewport", "PickViewport",
+					"ViewportLatestFrame", "ViewportPresentationDiagnostics"
 				};
 				Json viewportTransports = Json::array({{
 					{"Name", "Base64"}, {"Version", 1}, {"PixelFormats", {"RGB8"}}
@@ -716,13 +839,22 @@ namespace gargantuan {
 						{"SlotCount", SharedFrameRingLayout::SlotCount},
 					});
 				}
+				if (LatestFrameMailbox::IsSupported()) {
+					capabilities.push_back("SharedMemoryViewportV2");
+					viewportTransports.push_back({
+						{"Name", "LatestFrameMailbox"},
+						{"Version", LatestFrameMailboxLayout::Version},
+						{"PixelFormats", {"BGRA8"}},
+						{"SlotCount", LatestFrameMailboxLayout::SlotCount},
+					});
+				}
 				return SerializeBoundedResponse(SuccessResponse(
 					requestId,
 					{
 						{"Engine", "Gargantuan"},
 						{"ProtocolVersion", EditorHostProtocolVersion},
 						{"Capabilities", std::move(capabilities)},
-						{"ViewportWireVersion", 1},
+						{"ViewportWireVersion", 2},
 						{"ViewportTransports", std::move(viewportTransports)},
 						{"ScriptSecurityVersion", 1},
 						{"StudioExecutionDomain", GetScriptExecutionDomainName(StudioSecurity.Domain)},
@@ -905,14 +1037,15 @@ namespace gargantuan {
 					);
 					LastPlaySessionId = Id;
 					LastPlaySessionState = ActivePlaySession->GetState();
-					LastViewportPublication.reset();
+					AdvanceViewportGeneration();
+					NextPlayStep = std::chrono::steady_clock::now();
 					ViewportRenderer.reset();
-					ViewportProjection.Clear();
-					ViewportPublisher.RequestFullResync();
+					if (ViewportWidth != 0 && ViewportHeight != 0) ConsumePlayRenderPublications();
 					return SerializeBoundedResponse(SuccessResponse(requestId, {
 						{"PlaySessionId", std::to_string(Id.Value)},
 						{"State", GetPlaySessionStateName(LastPlaySessionState)},
 						{"LaunchAuthoritativeRevision", Snapshot.Revision},
+						{"ViewportGeneration", ViewportGeneration},
 						{"Diagnostics", EncodePlayDiagnostics(ActivePlaySession->DrainDiagnostics())},
 					}));
 				} catch (const std::exception &Error) {
@@ -936,12 +1069,11 @@ namespace gargantuan {
 				LastPlaySessionId = *Id;
 				LastPlaySessionState = PlaySessionState::Stopped;
 				ActivePlaySession.reset();
-				LastViewportPublication.reset();
+				AdvanceViewportGeneration();
 				ViewportRenderer.reset();
-				ViewportProjection.Clear();
-				ViewportPublisher.RequestFullResync();
 				return SerializeBoundedResponse(SuccessResponse(requestId, {
 					{"PlaySessionId", std::to_string(Id->Value)}, {"State", "Stopped"},
+					{"ViewportGeneration", ViewportGeneration},
 					{"Diagnostics", EncodePlayDiagnostics(std::move(Diagnostics))},
 				}));
 			}
@@ -1097,10 +1229,45 @@ namespace gargantuan {
 			}
 
 			if (method == "OpenViewportTransport") {
-				if (!HasOnlyFields(parameters, {"Transport", "Version", "PixelFormat"}) ||
-					parameters.value("Transport", "") != "SharedMemoryRing" ||
-					parameters.value("Version", 0u) != SharedFrameRingLayout::Version ||
-					parameters.value("PixelFormat", "") != "RGB8")
+				if (!HasOnlyFields(parameters, {"Transport", "Version", "PixelFormat"}))
+					return SerializeBoundedResponse(ErrorResponse(
+						requestId, "UnsupportedViewportTransport", "Requested viewport transport contract is unsupported"
+					));
+				const auto Transport = parameters.value("Transport", "");
+				const auto Version = parameters.value("Version", 0u);
+				const auto PixelFormat = parameters.value("PixelFormat", "");
+				if (Transport == "LatestFrameMailbox" && Version == LatestFrameMailboxLayout::Version &&
+					PixelFormat == "BGRA8") {
+					if (!LatestFrameMailbox::IsSupported())
+						return SerializeBoundedResponse(ErrorResponse(
+							requestId, "UnsupportedViewportTransport", "Latest-frame viewport transport is unavailable"
+						));
+					try {
+						const bool ReplacingCompatibilityTransport = ViewportFrameRing != nullptr;
+						ViewportFrameRing.reset();
+						if (!ViewportLatestFrameMailbox) ViewportLatestFrameMailbox = std::make_unique<LatestFrameMailbox>();
+						if (ReplacingCompatibilityTransport) AdvanceViewportGeneration();
+						return SerializeBoundedResponse(SuccessResponse(requestId, {
+							{"Transport", "LatestFrameMailbox"},
+							{"Version", LatestFrameMailboxLayout::Version},
+							{"Name", ViewportLatestFrameMailbox->GetName()},
+							{"EventName", ViewportLatestFrameMailbox->GetEventName()},
+							{"MappingBytes", ViewportLatestFrameMailbox->GetMappingBytes()},
+							{"HeaderBytes", LatestFrameMailboxLayout::HeaderBytes},
+							{"SlotCount", LatestFrameMailboxLayout::SlotCount},
+							{"SlotHeaderBytes", LatestFrameMailboxLayout::SlotHeaderBytes},
+							{"SlotStride", LatestFrameMailboxLayout::SlotStride},
+							{"MaximumPayloadBytes", LatestFrameMailboxLayout::MaximumPayloadBytes},
+							{"MaximumWidth", LatestFrameMailboxLayout::MaximumWidth},
+							{"MaximumHeight", LatestFrameMailboxLayout::MaximumHeight},
+							{"PixelFormat", "BGRA8"},
+						}));
+					} catch (const std::exception &Error) {
+						ViewportLatestFrameMailbox.reset();
+						return SerializeBoundedResponse(ErrorResponse(requestId, "ViewportTransportUnavailable", Error.what()));
+					}
+				}
+				if (Transport != "SharedMemoryRing" || Version != SharedFrameRingLayout::Version || PixelFormat != "RGB8")
 					return SerializeBoundedResponse(ErrorResponse(
 						requestId, "UnsupportedViewportTransport", "Requested viewport transport contract is unsupported"
 					));
@@ -1109,7 +1276,11 @@ namespace gargantuan {
 						requestId, "UnsupportedViewportTransport", "Shared-memory viewport transport is unavailable"
 					));
 				try {
+					const bool ReplacingLatestTransport = ViewportLatestFrameMailbox != nullptr;
+					ViewportPresentationActive = false;
+					ViewportLatestFrameMailbox.reset();
 					if (!ViewportFrameRing) ViewportFrameRing = std::make_unique<SharedFrameRing>();
+					if (ReplacingLatestTransport) AdvanceViewportGeneration();
 					return SerializeBoundedResponse(SuccessResponse(requestId, {
 						{"Transport", "SharedMemoryRing"},
 						{"Version", SharedFrameRingLayout::Version},
@@ -1133,8 +1304,90 @@ namespace gargantuan {
 					return SerializeBoundedResponse(ErrorResponse(
 						requestId, "MalformedRequest", "CloseViewportTransport takes no parameters"
 					));
+				const bool HadTransport = ViewportPresentationActive || ViewportLatestFrameMailbox || ViewportFrameRing;
+				ViewportPresentationActive = false;
+				ViewportLatestFrameMailbox.reset();
 				ViewportFrameRing.reset();
+				if (HadTransport) AdvanceViewportGeneration();
 				return SerializeBoundedResponse(SuccessResponse(requestId, {{"Closed", true}}));
+			}
+
+			if (method == "StartViewportPresentation") {
+				if (!HasOnlyFields(parameters, {"FrameRateMode"}) || !parameters.contains("FrameRateMode") ||
+					!parameters["FrameRateMode"].is_string())
+					return SerializeBoundedResponse(ErrorResponse(
+						requestId, "MalformedRequest", "StartViewportPresentation requires FrameRateMode"
+					));
+				if (!ViewportLatestFrameMailbox)
+					return SerializeBoundedResponse(ErrorResponse(
+						requestId, "ViewportTransportRequired", "Open the latest-frame viewport transport first"
+					));
+				if (!World || ViewportWidth == 0 || ViewportHeight == 0)
+					return SerializeBoundedResponse(ErrorResponse(
+						requestId, "ViewportRequired", "Open a project and configure the viewport first"
+					));
+				const auto &Mode = parameters["FrameRateMode"].get_ref<const std::string &>();
+				if (Mode == "Adaptive" || Mode == "144") ViewportFrameInterval = std::chrono::microseconds(6944);
+				else if (Mode == "120") ViewportFrameInterval = std::chrono::microseconds(8333);
+				else if (Mode == "60") ViewportFrameInterval = std::chrono::microseconds(16667);
+				else if (Mode == "30") ViewportFrameInterval = std::chrono::microseconds(33333);
+				else if (Mode == "Uncapped") ViewportFrameInterval = std::chrono::microseconds(1000);
+				else return SerializeBoundedResponse(ErrorResponse(
+					requestId, "InvalidFrameRateMode", "FrameRateMode must be Adaptive, 30, 60, 120, 144, or Uncapped"
+				));
+				const bool WasActive = ViewportPresentationActive;
+				ViewportPresentationActive = true;
+				if (!WasActive && ActivePlaySession) {
+					ActivePlaySession->RequestRenderFullResync();
+					LastViewportPublication.reset();
+					ViewportProjection.Clear();
+					ViewportRenderer.reset();
+				}
+				NextViewportFrame = std::chrono::steady_clock::now();
+				return SerializeBoundedResponse(SuccessResponse(requestId, {
+					{"Active", true}, {"Generation", ViewportGeneration}, {"FrameRateMode", Mode},
+					{"FrameIntervalUs", ViewportFrameInterval.count()},
+				}));
+			}
+
+			if (method == "StopViewportPresentation") {
+				if (!parameters.empty())
+					return SerializeBoundedResponse(ErrorResponse(
+						requestId, "MalformedRequest", "StopViewportPresentation takes no parameters"
+					));
+				if (ViewportPresentationActive) {
+					ViewportPresentationActive = false;
+					AdvanceViewportGeneration();
+				}
+				return SerializeBoundedResponse(SuccessResponse(requestId, {
+					{"Active", false}, {"Generation", ViewportGeneration},
+				}));
+			}
+
+			if (method == "GetViewportPresentationState") {
+				if (!parameters.empty())
+					return SerializeBoundedResponse(ErrorResponse(
+						requestId, "MalformedRequest", "GetViewportPresentationState takes no parameters"
+					));
+				return SerializeBoundedResponse(SuccessResponse(requestId, {
+					{"Active", ViewportPresentationActive},
+					{"Generation", ViewportGeneration},
+					{"LatestSequence", ViewportLatestFrameMailbox ? ViewportLatestFrameMailbox->GetLatestSequence() : 0},
+					{"ProducedFrames", ViewportProducedFrames},
+					{"PresentationFailures", ViewportPresentationFailures},
+					{"ResizeCount", ViewportResizeCount},
+					{"RenderSubmissionUs", ViewportLastRenderSubmissionUs},
+					{"GpuReadbackUs", ViewportLastGpuReadbackUs},
+					{"CpuExtractionUs", ViewportLastCpuExtractionUs},
+					{"Mode", ViewportLastMode == LatestFrameMailboxLayout::Mode::Play ? "Play" : "Edit"},
+					{"PlaySessionId", ViewportLastPlaySessionId == 0
+						? Json(nullptr) : Json(std::to_string(ViewportLastPlaySessionId))},
+					{"CameraRevision", ViewportLastCameraRevision},
+					{"SourceRevision", ViewportLastSourceRevision},
+					{"LastFailure", ViewportLastFailure.empty() ? Json(nullptr) : Json(ViewportLastFailure)},
+					{"MostRecentFailure", ViewportMostRecentFailure.empty()
+						? Json(nullptr) : Json(ViewportMostRecentFailure)},
+				}));
 			}
 
 			if (method == "OpenProject") {
@@ -1160,7 +1413,8 @@ namespace gargantuan {
 				Cursor.reset();
 				ViewportWidth = 0;
 				ViewportHeight = 0;
-				ViewportFrameNumber = 0;
+				ViewportPresentationActive = false;
+				AdvanceViewportGeneration();
 				BootstrapProjectRuntimeSchema(root);
 				auto filesystem = std::make_unique<DiskFilesystem>(root);
 				auto project = Project::fromExisting(filesystem.get());
@@ -1283,7 +1537,8 @@ namespace gargantuan {
 					Cursor.reset();
 					ViewportWidth = 0;
 					ViewportHeight = 0;
-					ViewportFrameNumber = 0;
+					ViewportPresentationActive = false;
+					AdvanceViewportGeneration();
 					BootstrapProjectRuntimeSchema(*Destination);
 					auto NewFilesystem = std::make_unique<DiskFilesystem>(*Destination);
 					auto NewProject = Project::fromExisting(NewFilesystem.get());
@@ -1752,11 +2007,15 @@ namespace gargantuan {
 					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Viewport dimensions must be unsigned"));
 				auto width = JsonCodec::DecodeUnsigned32(parameters["Width"]);
 				auto height = JsonCodec::DecodeUnsigned32(parameters["Height"]);
+				const bool UsesCompatibilityCapture = !ViewportLatestFrameMailbox;
 				if (!width || !height || *width == 0 || *height == 0 ||
-					*width > EditorHostMaximumViewportDimension || *height > EditorHostMaximumViewportDimension ||
-					static_cast<std::uint64_t>(*width) * *height > EditorHostMaximumViewportPixels)
+					*width > EditorHostMaximumViewportWidth || *height > EditorHostMaximumViewportHeight ||
+					static_cast<std::uint64_t>(*width) * *height > EditorHostMaximumViewportPixels ||
+					(UsesCompatibilityCapture && (*width > 1024 || *height > 1024 ||
+						static_cast<std::uint64_t>(*width) * *height > 1024ull * 1024ull)))
 					return SerializeBoundedResponse(ErrorResponse(requestId, "ViewportTooLarge", "Viewport dimensions exceed protocol limits"));
 				const bool firstConfiguration = ViewportWidth == 0 || ViewportHeight == 0;
+				const bool DimensionsChanged = ViewportWidth != *width || ViewportHeight != *height;
 				ViewportWidth = *width;
 				ViewportHeight = *height;
 				if (firstConfiguration)
@@ -1766,10 +2025,11 @@ namespace gargantuan {
 						{0.0f, 1.0f, 0.0f},
 						camera.VerticalFieldOfView
 					);
-				LastViewportPublication.reset();
-				ViewportProjection.Clear();
-				ViewportPublisher.RequestFullResync();
-				if (ViewportRenderer) {
+				if (DimensionsChanged) {
+					AdvanceViewportGeneration();
+					++ViewportResizeCount;
+				}
+				if (DimensionsChanged && ViewportRenderer) {
 					try {
 						ViewportRenderer->Resize(*width, *height);
 					} catch (const std::exception &error) {
@@ -1777,14 +2037,19 @@ namespace gargantuan {
 						return SerializeBoundedResponse(ErrorResponse(requestId, "ViewportUnavailable", error.what()));
 					}
 				}
-				if (ActivePlaySession) ActivePlaySession->Resize(*width, *height);
+				if (DimensionsChanged && ActivePlaySession) {
+					ActivePlaySession->Resize(*width, *height);
+					ActivePlaySession->RequestRenderFullResync();
+				}
 				return SerializeBoundedResponse(SuccessResponse(requestId, {
-					{"ViewportVersion", 1}, {"Width", *width}, {"Height", *height}, {"Format", "RGB8"}
+					{"ViewportVersion", ViewportLatestFrameMailbox ? 2 : 1},
+					{"Generation", ViewportGeneration}, {"Width", *width}, {"Height", *height},
+					{"Format", ViewportLatestFrameMailbox ? "BGRA8" : "RGB8"},
 				}));
 			}
 
 			if (method == "SetViewportCamera") {
-				if (!HasOnlyFields(parameters, {"Position", "Target", "FieldOfView"}) ||
+				if (!HasOnlyFields(parameters, {"Position", "Target", "FieldOfView", "CameraRevision"}) ||
 					!parameters.contains("Position") || !parameters.contains("Target"))
 					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Camera Position and Target are required"));
 				auto position = DecodeVector3(parameters["Position"]);
@@ -1799,12 +2064,30 @@ namespace gargantuan {
 					if (!std::isfinite(fieldOfView) || fieldOfView < 1.0f || fieldOfView > 120.0f)
 						return SerializeBoundedResponse(ErrorResponse(requestId, "InvalidCamera", "FieldOfView is out of range"));
 				}
+				std::optional<std::uint64_t> RequestedCameraRevision;
+				if (parameters.contains("CameraRevision")) {
+					if (!parameters["CameraRevision"].is_number_unsigned() ||
+						parameters["CameraRevision"].get<std::uint64_t>() == 0)
+						return SerializeBoundedResponse(ErrorResponse(
+							requestId, "InvalidCamera", "CameraRevision must be a nonzero unsigned integer"
+						));
+					RequestedCameraRevision = parameters["CameraRevision"].get<std::uint64_t>();
+					if (*RequestedCameraRevision < ViewportCameraRevision)
+						return SerializeBoundedResponse(ErrorResponse(
+							requestId, "StaleCamera", "CameraRevision is older than the accepted editor camera state"
+						));
+				}
 				camera = MakeLookAtRenderCameraInput(*position, *target, {0.0f, 1.0f, 0.0f}, fieldOfView);
+				if (RequestedCameraRevision) ViewportCameraRevision = *RequestedCameraRevision;
+				else if (ViewportCameraRevision != std::numeric_limits<std::uint64_t>::max()) {
+					++ViewportCameraRevision;
+				}
 				LastViewportPublication.reset();
+				NextViewportFrame = std::chrono::steady_clock::now();
 				return SerializeBoundedResponse(SuccessResponse(requestId, {
 					{"Position", {position->x, position->y, position->z}},
 					{"Target", {target->x, target->y, target->z}},
-					{"FieldOfView", fieldOfView},
+					{"FieldOfView", fieldOfView}, {"CameraRevision", ViewportCameraRevision},
 				}));
 			}
 
@@ -1821,14 +2104,11 @@ namespace gargantuan {
 					Json PlayIdentity = nullptr;
 					const char *Mode = "Edit";
 					if (ActivePlaySession && ActivePlaySession->GetState() == PlaySessionState::Running) {
-						if (auto InitialPublication = ActivePlaySession->TakeRenderPublication()) {
-							ViewportRenderer->ApplyPublication(InitialPublication);
-							(void)ViewportProjection.Apply(*InitialPublication);
-						}
+						ConsumePlayRenderPublications();
 						ActivePlaySession->Step();
 						if (ActivePlaySession->GetState() != PlaySessionState::Running)
 							return SerializeBoundedResponse(ErrorResponse(requestId, "PlaySessionExited", "Runtime exited while capturing the viewport"));
-						LastViewportPublication = ActivePlaySession->TakeRenderPublication();
+						ConsumePlayRenderPublications();
 						if (!LastViewportPublication)
 							return SerializeBoundedResponse(ErrorResponse(requestId, "PlaySessionFailed", "Runtime produced no render publication"));
 						PlayIdentity = std::to_string(ActivePlaySession->GetId().Value);
@@ -2476,22 +2756,90 @@ namespace gargantuan {
 	}
 
 	int EditorHost::Run(std::istream &input, std::ostream &output, std::function<void()> ProcessObserver) {
-		std::string line;
+		struct PendingLine {
+			LineReadStatus Status = LineReadStatus::Complete;
+			std::string Value;
+		};
+		struct RequestQueue {
+			std::mutex Mutex;
+			std::condition_variable Changed;
+			std::condition_variable SpaceAvailable;
+			std::deque<PendingLine> Lines;
+			bool End = false;
+			bool Stop = false;
+		};
+		constexpr std::size_t MaximumQueuedRequests = 64;
+		auto Queue = std::make_shared<RequestQueue>();
+		std::thread Reader([Queue, &input] {
+			for (;;) {
+				PendingLine Pending;
+				Pending.Status = ReadBoundedLine(input, Pending.Value);
+				std::unique_lock Lock(Queue->Mutex);
+				Queue->SpaceAvailable.wait(Lock, [&] {
+					return Queue->Stop || Queue->Lines.size() < MaximumQueuedRequests;
+				});
+				if (Queue->Stop) return;
+				if (Pending.Status == LineReadStatus::End) {
+					Queue->End = true;
+					Lock.unlock();
+					Queue->Changed.notify_one();
+					return;
+				}
+				Queue->Lines.push_back(std::move(Pending));
+				Lock.unlock();
+				Queue->Changed.notify_one();
+			}
+		});
+		auto NextObserver = std::chrono::steady_clock::now();
 		for (;;) {
-			const auto status = ReadBoundedLine(input, line);
-			if (status == LineReadStatus::End) return 0;
-			const auto response = status == LineReadStatus::Oversized
-				? SerializeBoundedResponse(ErrorResponse(nullptr, "RequestTooLarge", "Request exceeded its byte limit"))
-				: HandleRequest(line);
-			output << EditorHostResponsePrefix << response << '\n';
-			output.flush();
-			if (!output) return 1;
-			if (ProcessObserver) {
+			std::optional<PendingLine> Pending;
+			{
+				std::unique_lock Lock(Queue->Mutex);
+				auto Wake = std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
+				if (ViewportPresentationActive && NextViewportFrame != std::chrono::steady_clock::time_point{})
+					Wake = std::min(Wake, NextViewportFrame);
+				if (ActivePlaySession && NextPlayStep != std::chrono::steady_clock::time_point{})
+					Wake = std::min(Wake, NextPlayStep);
+				Queue->Changed.wait_until(Lock, Wake, [&] { return Queue->End || !Queue->Lines.empty(); });
+				if (!Queue->Lines.empty()) {
+					Pending = std::move(Queue->Lines.front());
+					Queue->Lines.pop_front();
+					Queue->SpaceAvailable.notify_one();
+				} else if (Queue->End) {
+					Queue->Stop = true;
+					Lock.unlock();
+					Queue->SpaceAvailable.notify_all();
+					Reader.join();
+					return 0;
+				}
+			}
+
+			PumpPlaySession();
+			PumpViewportPresentation();
+			if (Pending) {
+				const auto Response = Pending->Status == LineReadStatus::Oversized
+					? SerializeBoundedResponse(ErrorResponse(nullptr, "RequestTooLarge", "Request exceeded its byte limit"))
+					: HandleRequest(Pending->Value);
+				output << EditorHostResponsePrefix << Response << '\n';
+				output.flush();
+				if (!output) {
+					{
+						std::scoped_lock Lock(Queue->Mutex);
+						Queue->Stop = true;
+					}
+					Queue->SpaceAvailable.notify_all();
+					Reader.detach();
+					return 1;
+				}
+			}
+			const auto Now = std::chrono::steady_clock::now();
+			if (ProcessObserver && Now >= NextObserver) {
 				try {
 					ProcessObserver();
 				} catch (...) {
 					// Process observers are optional and cannot affect the protocol loop.
 				}
+				NextObserver = Now + std::chrono::milliseconds(100);
 			}
 		}
 	}

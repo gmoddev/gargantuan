@@ -53,7 +53,8 @@ namespace gargantuan {
 		[[nodiscard]] HostEventResult ProcessEvent(const HostEvent &Event);
 		void Stop();
 		[[nodiscard]] std::vector<PlayDiagnostic> DrainDiagnostics();
-		[[nodiscard]] RenderPublicationPtr TakeRenderPublication();
+		[[nodiscard]] std::vector<RenderPublicationPtr> TakeRenderPublications();
+		void RequestRenderFullResync();
 		[[nodiscard]] std::shared_ptr<DataModel> GetWorld() const { return RuntimeWorld; }
 		[[nodiscard]] PlaySessionId GetId() const { return Id; }
 		[[nodiscard]] PlaySessionState GetState() const { return State; }
@@ -69,7 +70,10 @@ namespace gargantuan {
 		std::unique_ptr<HeadlessRenderer> RuntimeRenderer;
 		std::unique_ptr<Engine> RuntimeEngine;
 		std::deque<PlayDiagnostic> Diagnostics;
+		std::deque<RenderPublicationPtr> PendingRenderPublications;
+		bool AwaitingRenderFullResync = false;
 		std::uint64_t NextDiagnosticSequence = 1;
+		static constexpr std::size_t MaximumPendingRenderPublications = 32;
 	};
 
 	[[nodiscard]] const char *GetPlaySessionStateName(PlaySessionState State);

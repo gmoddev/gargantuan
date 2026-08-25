@@ -1,4 +1,9 @@
-# Editor viewport v1
+# Editor viewport capture and picking
+
+> Live Studio presentation is now defined by
+> [Editor Viewport Presentation Foundation 2](EditorViewportPresentation2.md).
+> This document retains the explicit version-1 capture/screenshot fallback and
+> picking contract; it is no longer the production presentation cadence.
 
 ## Implemented now
 
@@ -112,11 +117,10 @@ picked `ObjectId` values through the Studio document model. Frame bytes remain
 in the C# presentation layer; Luau receives only bounded dimensions and
 sequence metadata.
 
-## Remaining work
+## Remaining capture/picking work
 
-- add a continuous capture/presentation loop and measure 30/60 FPS latency;
 - implement the same named-ring contract on non-Windows platforms;
 - add camera orbit/pan helpers above the absolute-pose command;
 - define mesh-accurate picking and editor-gizmo precedence;
-- make renderer lifetime/device-loss tests part of automated GPU CI; and
+- make explicit-capture renderer lifetime/device-loss tests part of automated GPU CI; and
 - add camera orbit/pan policy in the Luau editor layer without widening the native service.

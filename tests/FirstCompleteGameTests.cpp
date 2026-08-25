@@ -89,6 +89,12 @@ namespace {
 		);
 	}
 
+	RenderPublicationPtr TakeLatestRenderPublication(PlaySession &Session) {
+		auto Publications = Session.TakeRenderPublications();
+		if (Publications.empty()) return nullptr;
+		return std::move(Publications.back());
+	}
+
 	RuntimeEvidence ProveDefaultPlayerLoop(const std::filesystem::path &Root) {
 		DiskFilesystem Filesystem(Root);
 		auto ProjectValue = Project::fromExisting(&Filesystem);
@@ -103,7 +109,7 @@ namespace {
 		);
 		RuntimeEvidence Evidence;
 		AppendDiagnostics(Evidence.Diagnostics, Session.DrainDiagnostics());
-		auto InitialPublication = Session.TakeRenderPublication();
+		auto InitialPublication = TakeLatestRenderPublication(Session);
 		Require(InitialPublication && InitialPublication->FullResync &&
 			InitialPublication->Frame.ViewportWidth == 320 && InitialPublication->Frame.ViewportHeight == 200,
 			"headless runtime did not publish its initial complete frame");
@@ -136,7 +142,7 @@ namespace {
 		Evidence.RepresentativeFrameMilliseconds = std::chrono::duration<double, std::milli>(
 			std::chrono::steady_clock::now() - FrameStart
 		).count();
-		auto ResizedPublication = Session.TakeRenderPublication();
+		auto ResizedPublication = TakeLatestRenderPublication(Session);
 		Require(ResizedPublication && ResizedPublication->Frame.ViewportWidth == 640 &&
 			ResizedPublication->Frame.ViewportHeight == 360 &&
 			ResizedPublication->GetUi().ViewportWidth == 640 && ResizedPublication->GetUi().ViewportHeight == 360,
@@ -147,12 +153,12 @@ namespace {
 		(void)Session.ProcessEvent(CompleteDown);
 		(void)Session.ProcessEvent(CompleteUp);
 		Session.Step();
-		Require(Session.TakeRenderPublication() != nullptr,
+		Require(TakeLatestRenderPublication(Session) != nullptr,
 			"completion did not produce a headless runtime publication");
 		(void)Session.ProcessEvent(PointerButtonEvent{{1}, PointerButton::Left, ButtonState::Pressed, {320.0f, 241.0f}});
 		(void)Session.ProcessEvent(PointerButtonEvent{{1}, PointerButton::Left, ButtonState::Released, {320.0f, 241.0f}});
 		Session.Step();
-		Require(Session.TakeRenderPublication() != nullptr,
+		Require(TakeLatestRenderPublication(Session) != nullptr,
 			"GUI Restart activation did not produce a headless runtime publication");
 		AppendDiagnostics(Evidence.Diagnostics, Session.DrainDiagnostics());
 		Session.Stop();

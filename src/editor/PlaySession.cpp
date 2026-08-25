@@ -72,6 +72,18 @@ namespace gargantuan {
 	void PlaySession::Step() {
 		if (State != PlaySessionState::Running || !RuntimeEngine) return;
 		RuntimeEngine->Step();
+		if (auto Publication = RuntimeRenderer->TakeLastPublication()) {
+			if (AwaitingRenderFullResync && !Publication->FullResync) {
+				// The requested full publication has not reached the renderer yet.
+			} else if (PendingRenderPublications.size() == MaximumPendingRenderPublications) {
+				PendingRenderPublications.clear();
+				AwaitingRenderFullResync = true;
+				RuntimeEngine->RenderPublishing.RequestFullResync();
+			} else {
+				if (Publication->FullResync) AwaitingRenderFullResync = false;
+				PendingRenderPublications.push_back(std::move(Publication));
+			}
+		}
 		if (!RuntimeEngine->ProcessService->Alive) {
 			AddDiagnostic("Information", "Runtime", "Runtime requested exit");
 			Stop();
@@ -87,6 +99,8 @@ namespace gargantuan {
 		if (State != PlaySessionState::Running || !RuntimeRenderer) return;
 		RuntimeRenderer->Resize(static_cast<int>(Width), static_cast<int>(Height));
 		(void)ProcessEvent(WindowResizeEvent{Width, Height});
+		PendingRenderPublications.clear();
+		AwaitingRenderFullResync = true;
 	}
 
 	void PlaySession::Stop() {
@@ -113,8 +127,20 @@ namespace gargantuan {
 		return Result;
 	}
 
-	RenderPublicationPtr PlaySession::TakeRenderPublication() {
-		return RuntimeRenderer ? RuntimeRenderer->TakeLastPublication() : nullptr;
+	std::vector<RenderPublicationPtr> PlaySession::TakeRenderPublications() {
+		std::vector<RenderPublicationPtr> Result;
+		Result.reserve(PendingRenderPublications.size());
+		while (!PendingRenderPublications.empty()) {
+			Result.push_back(std::move(PendingRenderPublications.front()));
+			PendingRenderPublications.pop_front();
+		}
+		return Result;
+	}
+
+	void PlaySession::RequestRenderFullResync() {
+		PendingRenderPublications.clear();
+		AwaitingRenderFullResync = true;
+		if (RuntimeEngine) RuntimeEngine->RenderPublishing.RequestFullResync();
 	}
 
 	void PlaySession::AddDiagnostic(std::string Severity, std::string Category, std::string Message) {

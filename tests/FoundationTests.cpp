@@ -6109,7 +6109,7 @@ namespace {
 				captureBeforeConfiguration["Error"]["Code"] == "ViewportRequired",
 			"viewport capture requires bounded configuration"
 		);
-		auto oversizedViewport = call("ConfigureViewport", {{"Width", 2048}, {"Height", 2048}}, "test-token");
+		auto oversizedViewport = call("ConfigureViewport", {{"Width", 4096}, {"Height", 2160}}, "test-token");
 		Check(
 			!oversizedViewport["Ok"].get<bool>() && oversizedViewport["Error"]["Code"] == "ViewportTooLarge",
 			"viewport configuration enforces dimension and pixel bounds"
@@ -6149,6 +6149,157 @@ namespace {
 				picked["Result"]["Object"] == (*pickTarget)["Id"],
 			"viewport picking returns the selected Part ObjectId"
 		);
+		if (LatestFrameMailbox::IsSupported()) {
+			auto LatestTransport = call("OpenViewportTransport", {
+				{"Transport", "LatestFrameMailbox"}, {"Version", 2}, {"PixelFormat", "BGRA8"}
+			}, "test-token");
+			Check(
+				LatestTransport["Ok"].get<bool>() &&
+					LatestTransport["Result"]["SlotCount"] == LatestFrameMailboxLayout::SlotCount &&
+					LatestTransport["Result"]["MappingBytes"] == LatestFrameMailboxLayout::MappingBytes,
+				"EditorHost opens the bounded latest-frame viewport mailbox"
+			);
+			auto LargeViewport = call("ConfigureViewport", {{"Width", 1280}, {"Height", 720}}, "test-token");
+			Check(
+				LargeViewport["Ok"].get<bool>() && LargeViewport["Result"]["ViewportVersion"] == 2 &&
+					LargeViewport["Result"]["Format"] == "BGRA8" && LargeViewport["Result"]["Generation"] > 0,
+				"latest-frame viewport supports a normal 1280 by 720 editor surface"
+			);
+			const auto LargeGeneration = LargeViewport["Result"]["Generation"].get<std::uint64_t>();
+			auto SameLargeViewport = call("ConfigureViewport", {{"Width", 1280}, {"Height", 720}}, "test-token");
+			Check(
+				SameLargeViewport["Ok"].get<bool>() &&
+					SameLargeViewport["Result"]["Generation"].get<std::uint64_t>() == LargeGeneration,
+				"an unchanged viewport size does not churn presentation generations"
+			);
+			auto SmallViewport = call("ConfigureViewport", {{"Width", 320}, {"Height", 200}}, "test-token");
+			Check(
+				SmallViewport["Ok"].get<bool>() &&
+					SmallViewport["Result"]["Generation"].get<std::uint64_t>() != LargeGeneration,
+				"viewport resize retires the prior generation"
+			);
+			auto CameraRevision = call("SetViewportCamera", {
+				{"Position", {1.0, 2.0, 10.0}}, {"Target", {0.0, 0.0, 0.0}},
+				{"FieldOfView", 70.0}, {"CameraRevision", 10}
+			}, "test-token");
+			auto StaleCamera = call("SetViewportCamera", {
+				{"Position", {2.0, 2.0, 10.0}}, {"Target", {0.0, 0.0, 0.0}},
+				{"FieldOfView", 70.0}, {"CameraRevision", 9}
+			}, "test-token");
+			Check(
+				CameraRevision["Ok"].get<bool>() && CameraRevision["Result"]["CameraRevision"] == 10 &&
+					!StaleCamera["Ok"].get<bool>() && StaleCamera["Error"]["Code"] == "StaleCamera",
+				"coalesced camera state cannot be replaced by an older revision"
+			);
+			auto InvalidCadence = call("StartViewportPresentation", {{"FrameRateMode", "20"}}, "test-token");
+			Check(
+				!InvalidCadence["Ok"].get<bool>() && InvalidCadence["Error"]["Code"] == "InvalidFrameRateMode",
+				"live viewport cadence rejects unsupported timer-style polling rates"
+			);
+			auto StartedPresentation = call("StartViewportPresentation", {{"FrameRateMode", "Adaptive"}}, "test-token");
+			const auto StartedGeneration = StartedPresentation["Result"]["Generation"].get<std::uint64_t>();
+			auto RepeatedStart = call("StartViewportPresentation", {{"FrameRateMode", "Adaptive"}}, "test-token");
+			Check(
+				RepeatedStart["Ok"].get<bool>() &&
+					RepeatedStart["Result"]["Generation"].get<std::uint64_t>() == StartedGeneration,
+				"starting an already-active presentation session is idempotent"
+			);
+			host.PumpViewportPresentationForTesting();
+			auto FirstPresentationState = call("GetViewportPresentationState", Json::object(), "test-token");
+			host.PumpViewportPresentationForTesting();
+			auto SecondPresentationState = call("GetViewportPresentationState", Json::object(), "test-token");
+			Check(
+				StartedPresentation["Ok"].get<bool>() && FirstPresentationState["Result"]["LatestSequence"] > 0 &&
+					SecondPresentationState["Result"]["LatestSequence"] > FirstPresentationState["Result"]["LatestSequence"] &&
+					SecondPresentationState["Result"]["PresentationFailures"] == 0,
+				"latest-frame presentation replaces frames monotonically without a capture request"
+			);
+			bool InjectViewportFailure = true;
+			host.SetViewportPresentationCheckpointForTesting([&](std::string_view Stage) {
+				if (InjectViewportFailure && Stage == "BeforePublish") {
+					InjectViewportFailure = false;
+					throw std::runtime_error("injected viewport publish failure");
+				}
+			});
+			host.PumpViewportPresentationForTesting();
+			auto FailedPresentationState = call("GetViewportPresentationState", Json::object(), "test-token");
+			host.SetViewportPresentationCheckpointForTesting({});
+			host.PumpViewportPresentationForTesting();
+			auto RecoveredPresentationState = call("GetViewportPresentationState", Json::object(), "test-token");
+			Check(
+				FailedPresentationState["Result"]["PresentationFailures"] == 1 &&
+					FailedPresentationState["Result"]["LastFailure"] == "injected viewport publish failure" &&
+					FailedPresentationState["Result"]["MostRecentFailure"] == "injected viewport publish failure" &&
+					RecoveredPresentationState["Result"]["LatestSequence"] >
+						FailedPresentationState["Result"]["LatestSequence"] &&
+					RecoveredPresentationState["Result"]["LastFailure"].is_null() &&
+					RecoveredPresentationState["Result"]["MostRecentFailure"] == "injected viewport publish failure",
+				"a presentation-stage fault retires renderer state and the next frame recovers"
+			);
+			auto RecoveryState = RecoveredPresentationState;
+			for (const std::string InjectedStage : {"BeforeCapture", "AfterCapture"}) {
+				bool InjectStage = true;
+				host.SetViewportPresentationCheckpointForTesting(
+					[&](std::string_view Stage) {
+						if (InjectStage && Stage == InjectedStage) {
+							InjectStage = false;
+							throw std::runtime_error("injected viewport " + InjectedStage + " failure");
+						}
+					}
+				);
+				host.PumpViewportPresentationForTesting();
+				auto StageFailureState = call("GetViewportPresentationState", Json::object(), "test-token");
+				host.SetViewportPresentationCheckpointForTesting({});
+				host.PumpViewportPresentationForTesting();
+				auto StageRecoveryState = call("GetViewportPresentationState", Json::object(), "test-token");
+				Check(
+					StageFailureState["Result"]["PresentationFailures"].get<std::uint64_t>() ==
+						RecoveryState["Result"]["PresentationFailures"].get<std::uint64_t>() + 1 &&
+						StageFailureState["Result"]["LastFailure"] ==
+							"injected viewport " + InjectedStage + " failure" &&
+						StageRecoveryState["Result"]["LatestSequence"] >
+							StageFailureState["Result"]["LatestSequence"] &&
+						StageRecoveryState["Result"]["LastFailure"].is_null(),
+					"render/readback fault injection retires the broken viewport state and recovers"
+				);
+				RecoveryState = std::move(StageRecoveryState);
+			}
+			const auto FailuresBeforePlay = RecoveryState["Result"]["PresentationFailures"];
+			auto PresentationPlay = call("StartPlaySession", Json::object(), "test-token");
+			const auto PresentationPlayId = PresentationPlay["Result"]["PlaySessionId"];
+			for (int Step = 0; Step < 8; ++Step) host.PumpPlaySessionForTesting();
+			host.PumpViewportPresentationForTesting();
+			auto BatchedPlayPresentationState = call("GetViewportPresentationState", Json::object(), "test-token");
+			Check(
+				PresentationPlay["Ok"].get<bool>() &&
+					BatchedPlayPresentationState["Result"]["Mode"] == "Play" &&
+					BatchedPlayPresentationState["Result"]["PlaySessionId"] == PresentationPlayId &&
+					BatchedPlayPresentationState["Result"]["PresentationFailures"] == FailuresBeforePlay &&
+					BatchedPlayPresentationState["Result"]["LastFailure"].is_null(),
+				"Play simulation publications remain ordered when presentation consumes only the newest visual frame"
+			);
+			auto PresentationStop = call(
+				"StopPlaySession", {{"PlaySessionId", PresentationPlayId}}, "test-token"
+			);
+			host.PumpViewportPresentationForTesting();
+			auto EditAfterPlayPresentationState = call("GetViewportPresentationState", Json::object(), "test-token");
+			Check(
+				PresentationStop["Ok"].get<bool>() &&
+					EditAfterPlayPresentationState["Result"]["Mode"] == "Edit" &&
+					EditAfterPlayPresentationState["Result"]["PlaySessionId"].is_null() &&
+					EditAfterPlayPresentationState["Result"]["PresentationFailures"] == FailuresBeforePlay,
+				"Play to Edit retires the runtime generation without flashing a stale Play frame"
+			);
+			auto StoppedPresentation = call("StopViewportPresentation", Json::object(), "test-token");
+			auto RepeatedStop = call("StopViewportPresentation", Json::object(), "test-token");
+			Check(
+				StoppedPresentation["Ok"].get<bool>() &&
+					StoppedPresentation["Result"]["Generation"].get<std::uint64_t>() != StartedGeneration &&
+					RepeatedStop["Result"]["Generation"] == StoppedPresentation["Result"]["Generation"],
+				"stopping presentation retires the active viewport generation exactly once"
+			);
+			(void)call("CloseViewportTransport", Json::object(), "test-token");
+		}
 
 		auto Abandoned = call("BeginTransaction", {{"Label", "Replaced Session"}}, "test-token");
 		const auto AbandonedId = Abandoned["Result"]["TransactionId"];
