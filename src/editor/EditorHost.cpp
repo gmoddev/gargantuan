@@ -202,8 +202,7 @@ namespace gargantuan {
 				{"WireType", Property.WireType},
 				{"Readable", Readable},
 				{"Writable", Writable},
-				{"Editable", Supported && Property.SemanticType != InstanceProperty::DataType::ObjectReference &&
-					Property.Editable && Readable && Writable},
+				{"Editable", Supported && Property.Editable && Readable && Writable},
 				{"Category", Property.Category},
 				{"NumericRange", nullptr},
 				{"EditorHint", Property.EditorHint ? Json(*Property.EditorHint) : Json(nullptr)},
@@ -509,6 +508,21 @@ namespace gargantuan {
 				result[index] = static_cast<float>(component);
 			}
 			return result;
+		}
+
+		void SynchronizeEditorViewportAssets(const std::shared_ptr<DataModel> &World, RenderPublisher &Publisher) {
+			if (!World) return;
+			auto Assets = std::dynamic_pointer_cast<AssetService>(World->GetService("AssetService"));
+			if (!Assets) throw std::runtime_error("Editor viewport has no canonical AssetService");
+
+			auto Textures = Assets->DrainTextureChanges();
+			if (!Textures.Creates.empty() || !Textures.Updates.empty() || !Textures.Removes.empty())
+				Publisher.SetUiTextureChanges(
+					std::move(Textures.Creates), std::move(Textures.Updates), std::move(Textures.Removes)
+				);
+			auto Meshes = Assets->DrainMeshChanges();
+			if (!Meshes.Creates.empty() || !Meshes.Removes.empty())
+				Publisher.SetAssetMeshChanges(std::move(Meshes.Creates), std::move(Meshes.Removes));
 		}
 
 		std::string EncodeBase64(const std::vector<std::uint8_t> &bytes) {
@@ -1501,7 +1515,7 @@ namespace gargantuan {
 					definitions.push_back(std::move(encoded));
 				}
 				return SerializeBoundedResponse(SuccessResponse(requestId, {
-					{"SchemaDiscoveryVersion", 5},
+					{"SchemaDiscoveryVersion", 6},
 					{"RegistryGeneration", GetRuntimeSchemaLifecycle().GetActiveGeneration()},
 					{"Definitions", std::move(definitions)},
 					{"Classes", std::move(classes)},
@@ -1622,6 +1636,7 @@ namespace gargantuan {
 						PlayIdentity = std::to_string(ActivePlaySession->GetId().Value);
 						Mode = "Play";
 					} else {
+						SynchronizeEditorViewportAssets(World, ViewportPublisher);
 						LastViewportPublication = ViewportPublisher.Publish(*workspace, camera, ViewportWidth, ViewportHeight);
 					}
 					if (ViewportProjection.GetLastPublicationId() != LastViewportPublication->Id)
@@ -1671,8 +1686,10 @@ namespace gargantuan {
 					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "PickViewport requires numeric X and Y"));
 				if (ViewportWidth == 0 || ViewportHeight == 0)
 					return SerializeBoundedResponse(ErrorResponse(requestId, "ViewportRequired", "ConfigureViewport must succeed first"));
-				if (!LastViewportPublication)
+				if (!LastViewportPublication) {
+					SynchronizeEditorViewportAssets(World, ViewportPublisher);
 					LastViewportPublication = ViewportPublisher.Publish(*workspace, camera, ViewportWidth, ViewportHeight);
+				}
 				if (ViewportProjection.GetLastPublicationId() != LastViewportPublication->Id)
 					(void)ViewportProjection.Apply(*LastViewportPublication);
 				auto pick = PickEditorViewport(

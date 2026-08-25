@@ -238,6 +238,9 @@ int main() {
 
 		Require(Call("ConfigureViewport", {{"Width", 320u}, {"Height", 200u}})["Ok"],
 			"initial runtime viewport configuration failed");
+		auto EditViewportPick = Call("PickViewport", {{"X", 159.5}, {"Y", 99.5}});
+		Require(EditViewportPick["Ok"],
+			"edit viewport could not publish the sample's mesh, material, and texture resources");
 		// This CTest target is deliberately headless. Runtime world/UI publication,
 		// resize, completion, and pointer activation are exercised above through
 		// PlaySession's HeadlessRenderer; the separate editor viewport smoke owns

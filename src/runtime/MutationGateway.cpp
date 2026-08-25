@@ -489,8 +489,7 @@ namespace gargantuan {
 							auto *Property = InstanceValue->FindProperty(CommandValue.PropertyName);
 							if (Authority.GetOrigin() == MutationCommandOrigin::Studio &&
 								(!Property || !Property->Editable ||
-								 Property->SemanticType == InstanceProperty::DataType::Unsupported ||
-								 Property->SemanticType == InstanceProperty::DataType::ObjectReference))
+								 Property->SemanticType == InstanceProperty::DataType::Unsupported))
 								return {MutationStatus::ReadOnly, CommandValue.Object,
 									"Property is not exposed for Studio editing by the frozen schema"};
 							auto Before = InstanceValue->ReadPropertyWireValue(CommandValue.PropertyName)

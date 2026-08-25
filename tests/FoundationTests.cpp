@@ -5122,7 +5122,7 @@ namespace {
 		}
 		auto schema = call("GetSchema", Json::object(), "test-token");
 		Check(
-			schema["Ok"].get<bool>() && schema["Result"]["SchemaDiscoveryVersion"] == 5 &&
+			schema["Ok"].get<bool>() && schema["Result"]["SchemaDiscoveryVersion"] == 6 &&
 				!schema["Result"]["Classes"].empty() && !schema["Result"]["Definitions"].empty(),
 			"EditorHost exposes versioned frozen schema discovery without removing the class adapter"
 		);
@@ -5156,6 +5156,8 @@ namespace {
 		auto BasePartSchema = FindSchemaDefinition("Engine.BasePart");
 		auto CameraSchema = FindSchemaDefinition("Engine.Camera");
 		auto WorkspaceSchema = FindSchemaDefinition("Engine.Workspace");
+		auto DeformableBodySchema = FindSchemaDefinition("Engine.DeformableBody");
+		auto WeldConstraintSchema = FindSchemaDefinition("Engine.WeldConstraint");
 		auto FindProperty = [](const Json &Definition, std::string_view Name) -> const Json * {
 			if (!Definition.contains("Properties")) return nullptr;
 			auto Property = std::find_if(Definition["Properties"].begin(), Definition["Properties"].end(),
@@ -5176,6 +5178,10 @@ namespace {
 			? nullptr : FindProperty(*CameraSchema, "ViewportSize");
 		const auto *CurrentCameraMetadata = WorkspaceSchema == projectSchema["Result"]["Definitions"].end()
 			? nullptr : FindProperty(*WorkspaceSchema, "CurrentCamera");
+		const auto *SoftBodyMaterialMetadata = DeformableBodySchema == projectSchema["Result"]["Definitions"].end()
+			? nullptr : FindProperty(*DeformableBodySchema, "Material");
+		const auto *WeldPartMetadata = WeldConstraintSchema == projectSchema["Result"]["Definitions"].end()
+			? nullptr : FindProperty(*WeldConstraintSchema, "Part0");
 		std::set<std::string> NativeDataTypes;
 		for (const auto &Definition : projectSchema["Result"]["Definitions"])
 			if (Definition.value("Kind", "") == "Class")
@@ -5193,7 +5199,14 @@ namespace {
 			CurrentCameraMetadata && (*CurrentCameraMetadata)["DataType"] == "ObjectReference" &&
 			!(*CurrentCameraMetadata)["Editable"].get<bool>() && (*CurrentCameraMetadata)["Nullable"].get<bool>() &&
 			(*CurrentCameraMetadata)["ObjectReferenceClassSchemaId"] ==
-				SchemaId::FromNativeName("Engine", "Camera").ToString(),
+				SchemaId::FromNativeName("Engine", "Camera").ToString() &&
+			SoftBodyMaterialMetadata && (*SoftBodyMaterialMetadata)["DataType"] == "ObjectReference" &&
+			(*SoftBodyMaterialMetadata)["Editable"].get<bool>() && (*SoftBodyMaterialMetadata)["Nullable"].get<bool>() &&
+			(*SoftBodyMaterialMetadata)["ObjectReferenceClassSchemaId"] ==
+				SchemaId::FromNativeName("Engine", "SoftBodyMaterial").ToString() &&
+			WeldPartMetadata && (*WeldPartMetadata)["Editable"].get<bool>() && (*WeldPartMetadata)["Nullable"].get<bool>() &&
+			(*WeldPartMetadata)["ObjectReferenceClassSchemaId"] ==
+				SchemaId::FromNativeName("Engine", "BasePart").ToString(),
 			"EditorHost round-trips native editor semantics, ranges, exact enum identity, and safe reference constraints");
 		Check(std::ranges::all_of(std::array{
 			"Bool", "Integer", "Number", "String", "Vector2", "Vector3", "Color3", "CFrame",
@@ -5351,6 +5364,58 @@ namespace {
 				RedoNativeChanges["Result"]["Records"].size() == 1 &&
 				RedoNativeChanges["Result"]["Records"][0]["Value"]["Value"] == "Ball",
 				"Undo and Redo restore exact native enum identity through the authoritative journal");
+		}
+		if (extensionTarget != objects.end() && WorkspaceObject != objects.end() &&
+			WeldConstraintSchema != projectSchema["Result"]["Definitions"].end()) {
+			auto CreatedWeld = call("CreateInstance", {
+				{"ClassSchemaId", (*WeldConstraintSchema)["SchemaId"]},
+				{"DefinitionVersion", (*WeldConstraintSchema)["DefinitionVersion"]},
+				{"Parent", (*WorkspaceObject)["Id"]}, {"Name", "ReferenceAuthoringProof"},
+			}, "test-token");
+			Check(CreatedWeld["Ok"].get<bool>(), "EditorHost creates an object-reference authoring target");
+			(void)call("PollChanges", Json::object(), "test-token");
+			auto SetReference = [&](const Json &Value) {
+				return call("SetProperty", {
+					{"Object", CreatedWeld["Result"]["Object"]},
+					{"ClassSchemaId", (*WeldConstraintSchema)["SchemaId"]},
+					{"ClassDefinitionVersion", (*WeldConstraintSchema)["DefinitionVersion"]},
+					{"DeclaringClassSchemaId", (*WeldConstraintSchema)["SchemaId"]},
+					{"DeclaringDefinitionVersion", (*WeldConstraintSchema)["DefinitionVersion"]},
+					{"Property", "Part0"}, {"Value", Value},
+				}, "test-token");
+			};
+			auto CompatibleReference = SetReference(
+				{{"Type", "ObjectReference"}, {"Value", (*extensionTarget)["Id"]}}
+			);
+			const auto CompatibleReferenceMessage =
+				"EditorHost applies a compatible editable object reference: " + CompatibleReference.dump();
+			Check(CompatibleReference["Ok"].get<bool>(),
+				CompatibleReferenceMessage.c_str());
+			auto ReferenceChanges = call("PollChanges", Json::object(), "test-token");
+			Check(ReferenceChanges["Result"]["Records"].size() == 1 &&
+				ReferenceChanges["Result"]["Records"][0]["Operation"] == "PropertyUpdate" &&
+				ReferenceChanges["Result"]["Records"][0]["Value"]["Type"] == "ObjectReference" &&
+				ReferenceChanges["Result"]["Records"][0]["Value"]["Value"] == (*extensionTarget)["Id"],
+				"editable object reference reconciles through one typed journal mutation");
+			Check(!SetReference({{"Type", "ObjectReference"}, {"Value", (*WorkspaceObject)["Id"]}})["Ok"].get<bool>() &&
+				call("PollChanges", Json::object(), "test-token")["Result"]["Records"].empty(),
+				"editable object reference rejects an incompatible target without a journal record");
+			auto ClearReference = SetReference({{"Type", "Null"}});
+			const auto ClearReferenceMessage =
+				"nullable object-reference authoring accepts a clear operation: " + ClearReference.dump();
+			Check(ClearReference["Ok"].get<bool>(),
+				ClearReferenceMessage.c_str());
+			(void)call("PollChanges", Json::object(), "test-token");
+			auto UndoReferenceClear = call("Undo", Json::object(), "test-token");
+			auto UndoReferenceChanges = call("PollChanges", Json::object(), "test-token");
+			auto RedoReferenceClear = call("Redo", Json::object(), "test-token");
+			auto RedoReferenceChanges = call("PollChanges", Json::object(), "test-token");
+			Check(UndoReferenceClear["Ok"].get<bool>() && RedoReferenceClear["Ok"].get<bool>() &&
+				UndoReferenceChanges["Result"]["Records"].size() == 1 &&
+				UndoReferenceChanges["Result"]["Records"][0]["Value"]["Type"] == "ObjectReference" &&
+				RedoReferenceChanges["Result"]["Records"].size() == 1 &&
+				RedoReferenceChanges["Result"]["Records"][0]["Value"]["Type"] == "Null",
+				"Undo and Redo preserve typed nullable object-reference identity through the shared history");
 		}
 		Json StructuralDestinationId;
 		Json StructuralDuplicateId;
