@@ -198,6 +198,12 @@ representations without changing authoring authority.
 `--startup-smoke --max-frames N` exercises the real Windows SDL renderer. These
 flags do not weaken validation.
 
+The CTest package smoke enables that graphical launch only when configured with
+`-DGARGANTUAN_RUN_GRAPHICAL_PACKAGE_SMOKE=ON`. The default remains headless
+because generic hosted runners do not guarantee an SDL GPU backend. Graphical
+coverage belongs on a GPU-capable host and a missing backend remains a hard
+failure whenever the opt-in is enabled.
+
 Runtime modules, font, and shaders resolve only under executable-relative
 `runtime/` and `shaders/`. There is no parent/build/source fallback. Linux uses
 `$ORIGIN` and macOS uses `@loader_path` for adjacent shared libraries.

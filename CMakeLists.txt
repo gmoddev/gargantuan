@@ -217,6 +217,7 @@ option(GARGANTUAN_BUILD_RENDERER_BENCHMARKS "Build the manual renderer feasibili
 option(GARGANTUAN_BUILD_SERIALIZATION_BENCHMARKS "Build the serialization baseline benchmark" ON)
 option(GARGANTUAN_BUILD_GLAZE_SERIALIZATION_PROTOTYPE "Build the private Glaze codec evaluation targets" OFF)
 option(GARGANTUAN_WITH_GNS "Build the optional GameNetworkingSockets transport adapter" OFF)
+option(GARGANTUAN_RUN_GRAPHICAL_PACKAGE_SMOKE "Run the packaged player smoke on a GPU-capable test host" OFF)
 set(GARGANTUAN_FILAMENT_ROOT "" CACHE PATH "External Filament SDK root for the experimental renderer benchmark")
 set(GARGANTUAN_WITH_FILAMENT OFF)
 if(GARGANTUAN_FILAMENT_ROOT)
@@ -758,7 +759,7 @@ if(BUILD_TESTING)
 			-DGARGANTUAN_PACKAGER=$<TARGET_FILE:gargantuan_packager>
 			-DGARGANTUAN_PROJECT_ROOT=${CMAKE_CURRENT_SOURCE_DIR}/samples/FirstCompleteGame
 			-DGARGANTUAN_PACKAGE_TEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/package-tests
-			-DGARGANTUAN_RUN_GRAPHICAL_SMOKE=$<BOOL:${WIN32}>
+			-DGARGANTUAN_RUN_GRAPHICAL_SMOKE=$<BOOL:${GARGANTUAN_RUN_GRAPHICAL_PACKAGE_SMOKE}>
 			-P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/FirstCompleteGamePackageTests.cmake
 	)
 	add_test(NAME gargantuan_gui_foundation_benchmark_smoke COMMAND gargantuan_gui_foundation_benchmark --quick)
