@@ -333,6 +333,14 @@ namespace gargantuan {
 			Output.flush();
 			if (!Input.eof() || !Output || Total != Size)
 				throw std::runtime_error("Could not stage complete runtime content");
+			Output.close();
+			if (!Output) throw std::runtime_error("Could not close staged runtime content");
+#if !defined(_WIN32)
+			constexpr auto PortablePermissions = std::filesystem::perms::owner_all | std::filesystem::perms::group_all |
+												 std::filesystem::perms::others_all;
+			const auto SourcePermissions = std::filesystem::status(Source).permissions() & PortablePermissions;
+			std::filesystem::permissions(Destination, SourcePermissions, std::filesystem::perm_options::replace);
+#endif
 			return {std::move(Relative), Size, Hash.Final(), std::move(Category)};
 		}
 

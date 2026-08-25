@@ -245,6 +245,17 @@ int main() {
 			Inspection && Inspection->PlayerExecutable == Relocated / PlayerFileName,
 			"relocated package did not derive its player from the package root"
 		);
+#if !defined(_WIN32)
+		constexpr auto ExecutePermissions = std::filesystem::perms::owner_exec | std::filesystem::perms::group_exec |
+											std::filesystem::perms::others_exec;
+		Require(
+			(std::filesystem::status(ReleaseA / PlayerFileName).permissions() & ExecutePermissions) ==
+					(std::filesystem::status(Runtime / PlayerFileName).permissions() & ExecutePermissions) &&
+				(std::filesystem::status(ReleaseA / PlayerFileName).permissions() & ExecutePermissions) !=
+					std::filesystem::perms::none,
+			"package staging did not preserve the player executable permissions"
+		);
+#endif
 
 		const auto Manifest = Json::parse(ReadText(ReleaseA / "game.package.json"));
 		Require(

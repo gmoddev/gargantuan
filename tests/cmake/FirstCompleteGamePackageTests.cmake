@@ -81,7 +81,7 @@ execute_process(
 	TIMEOUT 60
 )
 if(NOT GARGANTUAN_HEADLESS_RESULT EQUAL 0)
-	GargantuanPackageFailure("Relocated headless player smoke failed: ${GARGANTUAN_HEADLESS_OUTPUT}${GARGANTUAN_HEADLESS_ERROR}")
+	GargantuanPackageFailure("Relocated headless player smoke failed (${GARGANTUAN_HEADLESS_RESULT}): ${GARGANTUAN_HEADLESS_OUTPUT}${GARGANTUAN_HEADLESS_ERROR}")
 endif()
 
 if(WIN32)
