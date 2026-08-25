@@ -346,9 +346,9 @@ namespace gargantuan::InstanceSerialization {
 			return CFrame(
 				glm::vec3(*X, *Y, *Z),
 				glm::mat3(
-					glm::vec3(*R00, *R10, *R20),
-					glm::vec3(*R01, *R11, *R21),
-					glm::vec3(*R02, *R12, *R22)
+					glm::vec3(*R00, *R01, *R02),
+					glm::vec3(*R10, *R11, *R12),
+					glm::vec3(*R20, *R21, *R22)
 				)
 			);
 		} else if (unknown.contains("Color3")) {

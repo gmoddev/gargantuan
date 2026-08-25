@@ -93,7 +93,7 @@ namespace gargantuan {
 						const auto &c = typed.Components;
 						return StackValue<CFrame>::Push(L, CFrame(
 							glm::vec3(c[0], c[1], c[2]),
-							glm::mat3(glm::vec3(c[3], c[6], c[9]), glm::vec3(c[4], c[7], c[10]), glm::vec3(c[5], c[8], c[11]))
+							glm::mat3(glm::vec3(c[3], c[4], c[5]), glm::vec3(c[6], c[7], c[8]), glm::vec3(c[9], c[10], c[11]))
 						));
 					} else throw std::runtime_error("Stored attribute value type is unsupported");
 				},
@@ -688,8 +688,39 @@ namespace gargantuan {
 		Enums::Permission Permission,
 		const ScriptSecurityContext &SecurityContext
 	) {
-		if (Destroyed || DestroyingState) return MutationStatus::StaleObject;
+		const auto Validation = ValidatePropertyWireMutation(PropertyName, Value, Permission, SecurityContext);
+		if (Validation != MutationStatus::Success) return Validation;
 		auto *Property = FindProperty(std::string(PropertyName));
+
+		if (const auto *EnumValue = std::get_if<WireEnumItem>(&Value)) {
+			auto Item = Enums::GetEnums().at(*Property->NativeEnumType)->FromName(EnumValue->Item);
+			auto [CurrentType, CurrentValue] = Property->ReadEnumValue(this);
+			if (CurrentType == EnumValue->EnumType && CurrentValue == Item->Value) return MutationStatus::Success;
+			Property->WriteEnumValue(this, Item->Value);
+			return MutationStatus::Success;
+		}
+
+		const auto *Reference = std::get_if<WireObjectReference>(&Value);
+		if (std::holds_alternative<std::monostate>(Value) || Reference) {
+			std::shared_ptr<Instance> Referenced;
+			if (Reference) Referenced = ObjectRegistry::Get().Lookup(Reference->Object.ToObjectId());
+			if (Property->ReadObjectReference(this) == Referenced) return MutationStatus::Success;
+			Property->WriteObjectReference(this, Referenced);
+			return MutationStatus::Success;
+		}
+
+		auto Native = DecodeNativeWireValue(Value);
+		return ApplyPropertyMutation(PropertyName, *Native, Permission, SecurityContext);
+	}
+
+	MutationStatus Instance::ValidatePropertyWireMutation(
+		std::string_view PropertyName,
+		const WireValue &Value,
+		Enums::Permission Permission,
+		const ScriptSecurityContext &SecurityContext
+	) const {
+		if (Destroyed || DestroyingState) return MutationStatus::StaleObject;
+		auto *Property = const_cast<Instance *>(this)->FindProperty(std::string(PropertyName));
 		if (!Property) return MutationStatus::InvalidProperty;
 		if (!Property->Write || Property->WritePermission == Enums::Permission::Never) return MutationStatus::ReadOnly;
 		if (!Property->CanWrite(SecurityContext)) return MutationStatus::Unauthorized;
@@ -707,9 +738,6 @@ namespace gargantuan {
 			if (EnumType == Enums::GetEnums().end()) return MutationStatus::ValidationFailed;
 			auto Item = EnumType->second->FromName(EnumValue->Item);
 			if (!Item) return MutationStatus::ValidationFailed;
-			auto [CurrentType, CurrentValue] = Property->ReadEnumValue(this);
-			if (CurrentType == EnumValue->EnumType && CurrentValue == Item->Value) return MutationStatus::Success;
-			Property->WriteEnumValue(this, Item->Value);
 			return MutationStatus::Success;
 		}
 
@@ -730,8 +758,6 @@ namespace gargantuan {
 				if (PropertyName != "Parent" && Referenced->GetReplicationScopeId() != GetReplicationScopeId())
 					return MutationStatus::ValidationFailed;
 			} else if (!Property->Nullable) return MutationStatus::ValidationFailed;
-			if (Property->ReadObjectReference(this) == Referenced) return MutationStatus::Success;
-			Property->WriteObjectReference(this, Referenced);
 			return MutationStatus::Success;
 		}
 
@@ -741,7 +767,7 @@ namespace gargantuan {
 			return MutationStatus::ValidationFailed;
 		auto Native = DecodeNativeWireValue(Value);
 		if (!Native) return MutationStatus::ValidationFailed;
-		return ApplyPropertyMutation(PropertyName, *Native, Permission, SecurityContext);
+		return Property->IsValueValid(*Native) ? MutationStatus::Success : MutationStatus::ValidationFailed;
 	}
 
 	std::optional<WireValue> Instance::GetAttributeValue(

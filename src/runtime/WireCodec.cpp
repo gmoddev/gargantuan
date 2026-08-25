@@ -146,9 +146,9 @@ namespace gargantuan {
 					return CFrame(
 						glm::vec3(c[0], c[1], c[2]),
 						glm::mat3(
-							glm::vec3(c[3], c[6], c[9]),
-							glm::vec3(c[4], c[7], c[10]),
-							glm::vec3(c[5], c[8], c[11])
+							glm::vec3(c[3], c[4], c[5]),
+							glm::vec3(c[6], c[7], c[8]),
+							glm::vec3(c[9], c[10], c[11])
 						)
 					);
 				} else {

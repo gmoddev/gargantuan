@@ -75,6 +75,9 @@ namespace gargantuan {
 	};
 	struct UpdatePropertyCommand { ObjectId Object; std::string PropertyName; std::any Value; };
 	struct UpdateWirePropertyCommand { ObjectId Object; std::string PropertyName; WireValue Value; };
+	inline constexpr std::size_t MaximumAtomicPropertyMutations = 8;
+	struct WirePropertyMutation { std::string PropertyName; WireValue Value; };
+	struct UpdateWirePropertiesCommand { ObjectId Object; std::vector<WirePropertyMutation> Properties; };
 	struct UpdateScriptSourceCommand {
 		ObjectId Object;
 		int ExpectedSourceVersion = 0;
@@ -102,6 +105,7 @@ namespace gargantuan {
 		CreateObjectCommand,
 		UpdatePropertyCommand,
 		UpdateWirePropertyCommand,
+		UpdateWirePropertiesCommand,
 		UpdateScriptSourceCommand,
 		UpdateAttributeCommand,
 		UpdateExtensionPropertyCommand,

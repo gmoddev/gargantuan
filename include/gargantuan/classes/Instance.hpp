@@ -84,6 +84,12 @@ namespace gargantuan {
 			Enums::Permission Permission = Enums::Permission::None,
 			const ScriptSecurityContext &SecurityContext = GetCurrentScriptSecurityContext()
 		);
+		[[nodiscard]] MutationStatus ValidatePropertyWireMutation(
+			std::string_view PropertyName,
+			const WireValue &Value,
+			Enums::Permission Permission = Enums::Permission::None,
+			const ScriptSecurityContext &SecurityContext = GetCurrentScriptSecurityContext()
+		) const;
 		[[nodiscard]] std::optional<WireValue> GetAttributeValue(
 			std::string_view name,
 			const ScriptSecurityContext &securityContext = GetCurrentScriptSecurityContext()

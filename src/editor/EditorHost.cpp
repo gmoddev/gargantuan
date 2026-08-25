@@ -6,6 +6,7 @@
 #include "gargantuan/editor/EditorHost.hpp"
 
 #include "gargantuan/InstanceProperty.hpp"
+#include "gargantuan/classes/BasePart.hpp"
 #include "gargantuan/classes/LuaSourceContainer.hpp"
 #include "gargantuan/filesystem/Project.hpp"
 #include "gargantuan/filesystem/Paths.hpp"
@@ -348,7 +349,7 @@ namespace gargantuan {
 			return Method == "OpenProject" || Method == "CreateProject" || Method == "SaveProject" ||
 				Method == "SaveProjectAs" || Method == "BeginTransaction" || Method == "CommitTransaction" ||
 				Method == "Undo" || Method == "Redo" || Method == "SetScriptSource" ||
-				Method == "SetProperty" || Method == "SetAttribute" || Method == "SetExtensionProperty" ||
+				Method == "SetProperty" || Method == "SetTransform" || Method == "SetAttribute" || Method == "SetExtensionProperty" ||
 				Method == "SetCustomProperty" || Method == "AddTag" || Method == "RemoveTag" ||
 				Method == "CreateInstance" || Method == "DestroyInstance" ||
 				Method == "DuplicateInstance" || Method == "ReparentInstance" ||
@@ -689,7 +690,7 @@ namespace gargantuan {
 				if (!parameters.empty())
 					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Handshake takes no parameters"));
 				Json capabilities = {
-					"OpenProject", "CreateProject", "Schema", "Snapshot", "Journal", "SetProperty", "SetAttribute", "SetExtensionProperty", "SetCustomProperty",
+					"OpenProject", "CreateProject", "Schema", "Snapshot", "Journal", "SetProperty", "SetTransform", "SetAttribute", "SetExtensionProperty", "SetCustomProperty",
 					"AddTag", "RemoveTag", "SaveProject", "SaveProjectAs", "AuthoritativeRevision",
 					"CreateInstance", "DestroyInstance", "DuplicateInstance", "ReparentInstance",
 					"BeginTransaction",
@@ -2033,6 +2034,57 @@ namespace gargantuan {
 					{"SourceVersion", ScriptValue->GetSourceVersion()},
 					{"AuthoritativeRevision", World->GetAuthoritativeRevision()},
 				}));
+			}
+
+			if (method == "SetTransform") {
+				if (!StudioSecurity.HasCapability(ScriptCapability::MutateDataModel))
+					return SerializeBoundedResponse(ErrorResponse(requestId, "Unauthorized", "SetTransform requires MutateDataModel"));
+				if (!Cursor)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "SnapshotRequired", "GetSnapshot must establish a cursor"));
+				if (!HasOnlyFields(parameters, {"Object", "CFrame", "Size", "TransactionId", "ExpectedRevision"}) ||
+					!parameters.contains("Object") ||
+					(!parameters.contains("CFrame") && !parameters.contains("Size")))
+					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "SetTransform fields are invalid"));
+				auto Object = JsonCodec::DecodeObjectId(parameters["Object"]);
+				if (!Object)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "SetTransform Object is invalid"));
+				if (HasRevisionConflict())
+					return SerializeBoundedResponse(ErrorResponse(
+						requestId, "Conflict", "The authoritative project revision changed before transform mutation"
+					));
+				auto Target = ObjectRegistry::Get().Lookup(Object->ToObjectId());
+				if (!Target || Target->GetReplicationScopeId() != World->GetObjectId())
+					return SerializeBoundedResponse(ErrorResponse(requestId, "StaleObject", "Object is not live in the open project"));
+				if (!std::dynamic_pointer_cast<BasePart>(Target))
+					return SerializeBoundedResponse(ErrorResponse(requestId, "InvalidClass", "SetTransform requires a BasePart target"));
+				std::vector<WirePropertyMutation> Properties;
+				if (parameters.contains("CFrame")) {
+					auto Value = JsonCodec::DecodeWireValue(parameters["CFrame"]);
+					if (!Value || !std::holds_alternative<WireCFrame>(*Value))
+						return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "SetTransform CFrame is invalid"));
+					Properties.push_back({"CFrame", std::move(*Value)});
+				}
+				if (parameters.contains("Size")) {
+					auto Value = JsonCodec::DecodeWireValue(parameters["Size"]);
+					if (!Value || !std::holds_alternative<WireVector3>(*Value))
+						return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "SetTransform Size is invalid"));
+					const auto &Size = std::get<WireVector3>(*Value);
+					if (!std::isfinite(Size.X) || !std::isfinite(Size.Y) || !std::isfinite(Size.Z) ||
+						Size.X < 0.01f || Size.Y < 0.01f || Size.Z < 0.01f)
+						return SerializeBoundedResponse(ErrorResponse(
+							requestId, "ValidationFailed", "SetTransform Size must be finite and at least 0.01 on every axis"
+						));
+					Properties.push_back({"Size", std::move(*Value)});
+				}
+				auto Mutation = Mutations.Apply(UpdateWirePropertiesCommand{
+					Object->ToObjectId(), std::move(Properties)
+				}, StudioMutationAuthority());
+				Json Result{{"Status", MutationStatusName(Mutation.Status)}, {"Message", Mutation.Message}};
+				if (Mutation.Object)
+					Result["Object"] = JsonCodec::EncodeObjectId(WireObjectId::FromObjectId(*Mutation.Object));
+				return SerializeBoundedResponse(Mutation.Succeeded()
+					? SuccessResponse(requestId, std::move(Result))
+					: ErrorResponse(requestId, MutationStatusName(Mutation.Status), Mutation.Message));
 			}
 
 			if (method == "SetProperty") {

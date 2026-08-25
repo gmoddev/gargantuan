@@ -28,7 +28,7 @@ authoritative internal callers, but returns `WrongExecutionDomain` outside
 `Main`. Arbitrary Luau is not scheduled on workers.
 
 The typed command set is create, reflected-property update (including custom
-class declarative properties), bounded attribute
+class declarative properties), bounded atomic wire-property update, bounded attribute
 update, class-extension property update, tag add/remove, reparent, and destroy.
 Commands address existing objects with generation-checked `ObjectId` values.
 Stale or destroyed targets fail before mutation. Creation currently requires an
@@ -51,6 +51,12 @@ which preserves synchronous native mutation without making the queue optional.
 Failure results retain a narrow `MutationStatus`; one bounded formatter converts
 that status into Luau and EditorHost diagnostics rather than collapsing it to a
 generic property-rejected message.
+The atomic wire-property command is restricted to Studio authority and at most
+eight distinct properties. It validates every target property and history bound
+before changing state, applies under one implicit authoritative transaction,
+and rolls back if an unexpected later application failure occurs. EditorHost's
+`SetTransform` narrows this generic mechanism further to `BasePart.CFrame` and
+`BasePart.Size`; normal runtime and gameplay schema gain no resize operation.
 Extension-property dispatch separately resolves the frozen extension
 identity/version, target applicability, property identity, and exact scalar
 type. It changes sparse Instance extension state and emits a dedicated journal
@@ -67,6 +73,7 @@ distinct from both Attributes and extension state.
 | --- | --- |
 | Generated property setters | Main/lifecycle assertion, schema validation, assignment, one committed property record |
 | EditorHost native property writes | Exact class/declaring-schema identity, closed `WireValue`, canonical metadata validation, assignment, one committed property record |
+| EditorHost atomic transform writes | Preflight all supplied `CFrame`/`Size` values, apply one bounded Studio-only command, publish one transaction/revision and one Undo entry |
 | Custom `BasePart` position/rotation setters | Validate alias, then use canonical `CFrame` setter and record `CFrame` |
 | Custom camera FOV setters | Validate alias, then use canonical `FieldOfView` setter and record `FieldOfView` |
 | Camera simulation movement | Uses `SetCFrame`/`SetViewportSize`; no direct reflected-field writes |

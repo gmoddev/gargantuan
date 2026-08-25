@@ -64,6 +64,7 @@ UTF-8 bytes with no NUL.
 | `GetSnapshot` | Returns snapshot v6 plus editor-property projection v1 and establishes the session cursor. |
 | `PollChanges` | Returns scoped wire-journal v6 records after that cursor. |
 | `SetProperty` | Applies a schema-identified closed native-property `WireValue` through `MutationGateway`; legacy Name remains compatible. |
+| `SetTransform` | Atomically applies optional canonical `CFrame` and `Size` values to one `BasePart` through one implicit authoring transaction. |
 | `SetAttribute` | Applies or removes a bounded attribute through `MutationGateway`. |
 | `SetExtensionProperty` | Applies a schema-resolved extension property through `MutationGateway`. |
 | `SetCustomProperty` | Applies a schema-resolved custom class property through `MutationGateway`. |
@@ -89,6 +90,16 @@ UTF-8 bytes with no NUL.
 
 `SetProperty` accepts only live objects whose replication scope is the open
 DataModel. The committed setter path remains responsible for journal emission.
+`SetTransform` is the bounded editor-authoring compound operation used by
+face-based resize. It accepts at least one and at most the canonical `CFrame`
+and `Size` properties, preflights both values before mutation, enforces finite
+components and the `0.01` minimum part extent, and either commits all supplied
+values as one Undo entry or applies neither. Its journal may contain one record
+per changed property, but all records share the one resulting project revision
+and are released as one transaction batch.
+The CFrame wire and project formats both encode the three rotation basis columns
+contiguously as Right, Up, and Back. Decode, Undo/Redo, and save/reopen preserve
+that orientation rather than transposing the matrix.
 `SetAttribute` uses the same live-object and `MutateDataModel` checks. Every
 mutation carries a host-created Studio authority context scoped to the open
 DataModel; decoded request data never supplies capabilities or scope. Attribute

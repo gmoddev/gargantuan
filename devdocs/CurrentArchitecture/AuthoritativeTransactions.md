@@ -49,6 +49,12 @@ preserving the previous one-shot behavior. Studio-origin authoring enters this
 history. Runtime/internal mutation paths remain outside Studio undo history and
 retain their established revision/journal behavior.
 
+`SetTransform` is a narrow atomic compound request inside this model. Its
+`CFrame` and `Size` mutations are fully preflighted before either is applied,
+then captured and published through one implicit transaction. Failure therefore
+applies neither value, while Undo and Redo restore both values together. This
+does not change explicit transactions into general abortable staging.
+
 Save and Save As reject while an explicit transaction is open. This prevents a
 persistence snapshot from observing applied group state before its revision
 boundary. Save never clears retained history and transaction commit never

@@ -479,7 +479,146 @@ namespace gargantuan {
 							return {MutationStatus::StaleObject, std::nullopt, "Object identity is stale"};
 						if (Authority.GetScope() && InstanceValue->GetReplicationScopeId() != *Authority.GetScope())
 							return {MutationStatus::Rejected, std::nullopt, "Object is outside the project scope"};
-						if constexpr (std::is_same_v<Command, UpdatePropertyCommand> ||
+						if constexpr (std::is_same_v<Command, UpdateWirePropertiesCommand>) {
+							if (Authority.GetOrigin() != MutationCommandOrigin::Studio)
+								return {MutationStatus::Unauthorized, CommandValue.Object,
+									"Atomic property authoring is Studio-only"};
+							if (CommandValue.Properties.empty() ||
+								CommandValue.Properties.size() > MaximumAtomicPropertyMutations)
+								return {MutationStatus::ResourceLimit, CommandValue.Object,
+									"Atomic property mutation count is out of range"};
+							for (std::size_t Left = 0; Left < CommandValue.Properties.size(); ++Left)
+								for (std::size_t Right = Left + 1; Right < CommandValue.Properties.size(); ++Right)
+									if (CommandValue.Properties[Left].PropertyName ==
+										CommandValue.Properties[Right].PropertyName)
+										return {MutationStatus::ValidationFailed, CommandValue.Object,
+											"Atomic property mutation contains a duplicate property"};
+
+							auto DataModelValue = InstanceValue->GetDataModel();
+							if (!DataModelValue)
+								return {MutationStatus::Rejected, CommandValue.Object,
+									"Atomic property target has no DataModel"};
+							std::vector<PropertyTransactionChange> Changes;
+							Changes.reserve(CommandValue.Properties.size());
+							std::size_t SemanticBytes = 0;
+							for (const auto &Requested : CommandValue.Properties) {
+								if (Requested.PropertyName == "Source" &&
+									std::dynamic_pointer_cast<LuaSourceContainer>(InstanceValue))
+									return {MutationStatus::Unauthorized, CommandValue.Object,
+										"Script source requires the dedicated source-authoring operation"};
+								auto *Property = InstanceValue->FindProperty(Requested.PropertyName);
+								if (!Property || !Property->Editable ||
+									Property->SemanticType == InstanceProperty::DataType::Unsupported)
+									return {MutationStatus::ReadOnly, CommandValue.Object,
+										"Property is not exposed for Studio editing by the frozen schema"};
+								const auto Validation = InstanceValue->ValidatePropertyWireMutation(
+									Requested.PropertyName, Requested.Value, Enums::Permission::None, securityContext
+								);
+								if (Validation != MutationStatus::Success)
+									return {Validation, CommandValue.Object,
+										std::format("Cannot set {}: {}", Requested.PropertyName,
+											GetMutationStatusDescription(Validation))};
+								auto Before = InstanceValue->ReadPropertyWireValue(Requested.PropertyName)
+									.value_or(WireValue(std::monostate{}));
+								if (Before == Requested.Value) continue;
+								PropertyTransactionChange Change{
+									CommandValue.Object, Property->DeclaringSchemaId,
+									Property->DeclaringDefinitionVersion, Requested.PropertyName,
+									std::move(Before), Requested.Value,
+								};
+								SemanticBytes += EstimateTransactionChangeBytes(Change);
+								Changes.push_back(std::move(Change));
+							}
+							if (Changes.empty()) return {MutationStatus::Success, CommandValue.Object, {}};
+
+							auto &Transactions = DataModelValue->Transactions;
+							const auto Owner = Authority.GetTransactionOwner();
+							const bool Implicit = !Authority.GetTransactionId();
+							auto Begin = Implicit
+								? Transactions.BeginImplicit(*DataModelValue, Owner, "Set Transform")
+								: TransactionResult{
+									.Status = Transactions.IsOpen(*Authority.GetTransactionId(), Owner)
+										? TransactionStatus::Success : TransactionStatus::NotFound,
+									.Id = *Authority.GetTransactionId(),
+								};
+							if (!Begin.Succeeded())
+								return {
+									Begin.Status == TransactionStatus::LimitExceeded ? MutationStatus::TransactionLimit
+										: MutationStatus::TransactionNotFound,
+									CommandValue.Object,
+									Begin.Message.empty() ? "Transaction is not open for this session" : Begin.Message,
+								};
+							const auto Transaction = Begin.Id;
+							auto Admission = Transactions.ValidateMutation(
+								Transaction, Owner, SemanticBytes, Changes.size()
+							);
+							if (!Admission.Succeeded()) {
+								if (Implicit) (void)Transactions.Commit(*DataModelValue, Transaction, Owner);
+								return {MutationStatus::TransactionLimit, CommandValue.Object, Admission.Message};
+							}
+
+							MutationResult Result{MutationStatus::Success, CommandValue.Object, {}};
+							bool Changed = false;
+							std::vector<BufferedChangeRecord> JournalRecords;
+							std::size_t Applied = 0;
+							{
+								ScopedAuthoritativeRevisionDeferral RevisionDeferral(*DataModelValue, Changed);
+								ScopedChangeJournalCapture JournalCapture;
+								auto RollBack = [&] {
+									ScopedChangeJournalSuppression Suppression;
+									while (Applied > 0) {
+										--Applied;
+										const auto Status = InstanceValue->ApplyPropertyWireMutation(
+											Changes[Applied].PropertyName, Changes[Applied].Before,
+											Enums::Permission::None, securityContext
+										);
+										if (Status != MutationStatus::Success)
+											throw std::logic_error("Atomic property rollback failed");
+									}
+								};
+								try {
+									for (const auto &Change : Changes) {
+										const auto Status = InstanceValue->ApplyPropertyWireMutation(
+											Change.PropertyName, Change.After, Enums::Permission::None, securityContext
+										);
+										if (Status != MutationStatus::Success) {
+											Result = {Status, CommandValue.Object,
+												std::format("Cannot set {}: {}", Change.PropertyName,
+													GetMutationStatusDescription(Status))};
+											RollBack();
+											break;
+										}
+										++Applied;
+									}
+								} catch (...) {
+									RollBack();
+									(void)JournalCapture.Take();
+									if (Implicit) (void)Transactions.Commit(*DataModelValue, Transaction, Owner);
+									throw;
+								}
+								JournalRecords = JournalCapture.Take();
+							}
+							if (Result.Succeeded()) {
+								for (std::size_t Index = 0; Index < Changes.size(); ++Index) {
+									Changes[Index].After = InstanceValue->ReadPropertyWireValue(Changes[Index].PropertyName)
+										.value_or(Changes[Index].After);
+									Transactions.RecordMutation(
+										Transaction, Owner, Changes[Index],
+										Index == 0 ? std::move(JournalRecords) : std::vector<BufferedChangeRecord>{}
+									);
+								}
+							}
+							if (Implicit) {
+								auto Commit = Transactions.Commit(*DataModelValue, Transaction, Owner);
+								if (!Commit.Succeeded())
+									return {
+										Commit.Status == TransactionStatus::RevisionExhausted
+											? MutationStatus::RevisionExhausted : MutationStatus::InternalError,
+										CommandValue.Object, Commit.Message,
+									};
+							}
+							return Result;
+						} else if constexpr (std::is_same_v<Command, UpdatePropertyCommand> ||
 							std::is_same_v<Command, UpdateWirePropertyCommand>) {
 							if (CommandValue.PropertyName == "Source" &&
 								std::dynamic_pointer_cast<LuaSourceContainer>(InstanceValue))

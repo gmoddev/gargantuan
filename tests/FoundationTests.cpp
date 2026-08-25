@@ -5364,6 +5364,91 @@ namespace {
 				RedoNativeChanges["Result"]["Records"].size() == 1 &&
 				RedoNativeChanges["Result"]["Records"][0]["Value"]["Value"] == "Ball",
 				"Undo and Redo restore exact native enum identity through the authoritative journal");
+
+			auto BeforeTransformSnapshot = call("GetSnapshot", Json::object(), "test-token");
+			auto FindTransformTarget = [&](const Json &SnapshotResult) {
+				return std::find_if(
+					SnapshotResult["Result"]["Snapshot"]["Objects"].begin(),
+					SnapshotResult["Result"]["Snapshot"]["Objects"].end(),
+					[&](const Json &Object) { return Object["Id"] == (*extensionTarget)["Id"]; }
+				);
+			};
+			auto BeforeTransformTarget = FindTransformTarget(BeforeTransformSnapshot);
+			Check(BeforeTransformTarget != BeforeTransformSnapshot["Result"]["Snapshot"]["Objects"].end(),
+				"Atomic transform target disappeared before the test");
+			const auto BeforeCFrame = (*BeforeTransformTarget)["EditorProperties"]["CFrame"];
+			const auto BeforeSize = (*BeforeTransformTarget)["EditorProperties"]["Size"];
+			auto BeforeTransformState = call("GetProjectState", Json::object(), "test-token")["Result"];
+			const auto TransformRevision = BeforeTransformState["AuthoritativeRevision"].get<std::uint64_t>();
+			const Json AtomicCFrame{
+				{"Type", "CFrame"},
+				{"Value", {5.0, 2.0, -3.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}},
+			};
+			const Json AtomicSize{{"Type", "Vector3"}, {"Value", {6.0, 3.0, 4.0}}};
+			auto AtomicTransform = call("SetTransform", {
+				{"Object", (*extensionTarget)["Id"]}, {"CFrame", AtomicCFrame}, {"Size", AtomicSize},
+				{"ExpectedRevision", TransformRevision},
+			}, "test-token");
+			auto AtomicChanges = call("PollChanges", Json::object(), "test-token");
+			auto AfterTransformState = call("GetProjectState", Json::object(), "test-token")["Result"];
+			Check(AtomicTransform["Ok"].get<bool>() &&
+				AfterTransformState["AuthoritativeRevision"] == TransformRevision + 1 &&
+				AtomicChanges["Result"]["Records"].size() == 2 &&
+				AtomicChanges["Result"]["Records"][0]["PropertyName"] == "CFrame" &&
+				AtomicChanges["Result"]["Records"][1]["PropertyName"] == "Size",
+				"SetTransform did not commit CFrame+Size as one revision with coherent ordered journal records");
+			auto UndoTransform = call("Undo", Json::object(), "test-token");
+			auto UndoTransformChanges = call("PollChanges", Json::object(), "test-token");
+			auto RedoTransform = call("Redo", Json::object(), "test-token");
+			auto RedoTransformChanges = call("PollChanges", Json::object(), "test-token");
+			auto FindPropertyRecord = [](const Json &Records, std::string_view Name) {
+				return std::find_if(Records.begin(), Records.end(), [&](const Json &Record) {
+					return Record["PropertyName"].get<std::string>() == Name;
+				});
+			};
+			auto UndoCFrame = FindPropertyRecord(UndoTransformChanges["Result"]["Records"], "CFrame");
+			auto UndoSize = FindPropertyRecord(UndoTransformChanges["Result"]["Records"], "Size");
+			auto RedoCFrame = FindPropertyRecord(RedoTransformChanges["Result"]["Records"], "CFrame");
+			auto RedoSize = FindPropertyRecord(RedoTransformChanges["Result"]["Records"], "Size");
+			Check(UndoTransform["Ok"].get<bool>() && RedoTransform["Ok"].get<bool>() &&
+				UndoTransformChanges["Result"]["Records"].size() == 2 &&
+				UndoCFrame != UndoTransformChanges["Result"]["Records"].end() && (*UndoCFrame)["Value"] == BeforeCFrame &&
+				UndoSize != UndoTransformChanges["Result"]["Records"].end() && (*UndoSize)["Value"] == BeforeSize &&
+				RedoTransformChanges["Result"]["Records"].size() == 2 &&
+				RedoCFrame != RedoTransformChanges["Result"]["Records"].end() && (*RedoCFrame)["Value"] == AtomicCFrame &&
+				RedoSize != RedoTransformChanges["Result"]["Records"].end() && (*RedoSize)["Value"] == AtomicSize,
+				"One transform Undo/Redo did not restore both CFrame and Size without a partial state");
+
+			auto BeforeRejectedTransform = call("GetSnapshot", Json::object(), "test-token");
+			auto RejectedTransformTarget = FindTransformTarget(BeforeRejectedTransform);
+			const auto RejectedProperties = (*RejectedTransformTarget)["EditorProperties"];
+			const auto RejectedRevision = call("GetProjectState", Json::object(), "test-token")
+				["Result"]["AuthoritativeRevision"].get<std::uint64_t>();
+			auto InvalidTransform = call("SetTransform", {
+				{"Object", (*extensionTarget)["Id"]},
+				{"CFrame", Json{{"Type", "CFrame"},
+					{"Value", {99.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}}}},
+				{"Size", Json{{"Type", "Vector3"}, {"Value", {-1.0, 3.0, 4.0}}}},
+				{"ExpectedRevision", RejectedRevision},
+			}, "test-token");
+			auto AfterRejectedTransform = call("GetSnapshot", Json::object(), "test-token");
+			auto AfterRejectedTransformTarget = FindTransformTarget(AfterRejectedTransform);
+			Check(!InvalidTransform["Ok"].get<bool>() &&
+				(*AfterRejectedTransformTarget)["EditorProperties"] == RejectedProperties &&
+				call("GetProjectState", Json::object(), "test-token")["Result"]["AuthoritativeRevision"] == RejectedRevision &&
+				call("PollChanges", Json::object(), "test-token")["Result"]["Records"].empty(),
+				"Rejected SetTransform partially applied CFrame, advanced revision, or emitted journal state");
+			auto StaleTransform = call("SetTransform", {
+				{"Object", (*extensionTarget)["Id"]}, {"Size", AtomicSize},
+				{"ExpectedRevision", RejectedRevision - 1},
+			}, "test-token");
+			Check(!StaleTransform["Ok"].get<bool>() && StaleTransform["Error"]["Code"] == "Conflict",
+				"SetTransform did not reject a stale drag revision before mutation");
+			auto RestoreTransform = call("Undo", Json::object(), "test-token");
+			auto RestoreTransformChanges = call("PollChanges", Json::object(), "test-token");
+			Check(RestoreTransform["Ok"].get<bool>() &&
+				RestoreTransformChanges["Result"]["Records"].size() == 2,
+				"Atomic transform test did not restore the pre-test authoring state");
 		}
 		if (extensionTarget != objects.end() && WorkspaceObject != objects.end() &&
 			WeldConstraintSchema != projectSchema["Result"]["Definitions"].end()) {
@@ -5911,6 +5996,14 @@ namespace {
 				"Save/reopen preserves authoritative native Number edits");
 			Check(ReopenedPart && ReopenedPart->GetSize() == glm::vec3(2.0f, 3.0f, 4.0f),
 				"Save/reopen preserves authoritative native compound edits");
+			Check(ReopenedPart && ReopenedPart->GetCFrame().FuzzyEq(CFrame(
+				glm::vec3(0.0f),
+				glm::mat3(
+					glm::vec3(0.0f, -1.0f, 0.0f),
+					glm::vec3(1.0f, 0.0f, 0.0f),
+					glm::vec3(0.0f, 0.0f, 1.0f)
+				)
+			)), "Save/reopen preserves canonical CFrame rotation columns without transposition");
 			Check(ReopenedPart && ReopenedPart->GetShape() == Enums::PartType::Ball,
 				"Save/reopen preserves authoritative native enum edits");
 			ReopenedWorld->Destroy();
