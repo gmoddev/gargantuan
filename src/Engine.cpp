@@ -6,7 +6,7 @@
 #include "gargantuan/classes/Instance.hpp"
 #include "gargantuan/classes/Script.hpp"
 #include "gargantuan/filesystem/SourceMount.hpp"
-#include "gargantuan/GuiRuntimeConfig.hpp"
+#include "gargantuan/filesystem/Paths.hpp"
 #include "gargantuan/render/Renderer.hpp"
 #include "gargantuan/scripting/ScriptEngine.hpp"
 #include "gargantuan/services/UserInputService.hpp"
@@ -31,10 +31,11 @@ namespace gargantuan {
 		  RunService(GetService<gargantuan::RunService>()), ProcessService(GetService<gargantuan::ProcessService>()),
 		  UserInputService(GetService<gargantuan::UserInputService>()), ActionMap(GetService<gargantuan::ActionMap>()),
 		  Assets(GetService<gargantuan::AssetService>()), Players(GetService<gargantuan::Players>()) {
+		const auto DefaultGuiFont = Paths::GetExecutableDirectory() / "runtime" / "GargantuanSans.ttf";
 		ActionMap->AttachInputService(UserInputService);
 		Players->InitializeLocalPlayer();
-		Assets->ConfigureBuiltInFont(std::filesystem::path(DefaultGuiFontPath));
-		Gui = std::make_unique<GuiRuntime>(DataModel, std::filesystem::path(DefaultGuiFontPath));
+		Assets->ConfigureBuiltInFont(DefaultGuiFont);
+		Gui = std::make_unique<GuiRuntime>(DataModel, DefaultGuiFont);
 		if (Renderer) {
 			const auto [Width, Height] = Renderer->GetViewportSize();
 			Gui->SetViewport({Width, Height, 1.0f, {}});

@@ -64,6 +64,8 @@ namespace gargantuan {
 		void LoadProjectAssets(BaseFilesystem &Filesystem);
 		void LoadProjectAssetSnapshot(const AssetProjectSnapshot &Snapshot);
 		[[nodiscard]] AssetProjectSnapshot CaptureProjectAssets() const;
+		void LoadRuntimeAssetSnapshot(const AssetRuntimeSnapshot &Snapshot);
+		[[nodiscard]] AssetRuntimeSnapshot CaptureRuntimeAssets() const;
 
 	  private:
 		struct Impl;

@@ -43,10 +43,50 @@ namespace gargantuan {
 		constexpr std::string_view DefaultFontReference = "builtin://font/default";
 		constexpr std::string_view MissingImageReference = "builtin://image/missing";
 		constexpr std::string_view DefaultMaterialReference = "builtin://material/default";
+		constexpr std::string_view RuntimeCatalogFormat = "GargantuanRuntimeAssets";
+		constexpr std::uint32_t RuntimeCatalogVersion = 1;
 
 		struct AssetImportThreadCleanup final {
 			~AssetImportThreadCleanup() { SDL_CleanupTLS(); }
 		};
+
+		std::string ExpandRuntimeCatalog(std::string_view Text) {
+			auto Parsed = JsonCodec::Parse(Text, 1024 * 1024, "runtime asset catalog");
+			if (!Parsed || !Parsed->is_object() || Parsed->size() != 3 ||
+				!Parsed->contains("Format") || !(*Parsed)["Format"].is_string() ||
+				(*Parsed)["Format"].get_ref<const std::string &>() != RuntimeCatalogFormat ||
+				!Parsed->contains("Version") || !(*Parsed)["Version"].is_number_unsigned() ||
+				(*Parsed)["Version"].get<std::uint32_t>() != RuntimeCatalogVersion ||
+				!Parsed->contains("Assets") || !(*Parsed)["Assets"].is_array() ||
+				(*Parsed)["Assets"].size() > AssetLimits::MaximumCatalogRecords)
+				throw std::runtime_error("Runtime asset catalog format is invalid or unsupported");
+
+			Json Expanded = Json::array();
+			for (const auto &Record : (*Parsed)["Assets"]) {
+				if (!Record.is_object() || Record.size() != 8 ||
+					!Record.contains("AssetId") || !Record["AssetId"].is_string() ||
+					!Record.contains("Reference") || !Record["Reference"].is_string() ||
+					!Record.contains("Kind") || !Record["Kind"].is_string() ||
+					!Record.contains("Name") || !Record["Name"].is_string() ||
+					!Record.contains("ContentId") || !Record["ContentId"].is_string() ||
+					!Record.contains("ContentRevision") || !Record["ContentRevision"].is_number_unsigned() ||
+					!Record.contains("State") || !Record["State"].is_string() ||
+					!Record.contains("Dependencies") || !Record["Dependencies"].is_array())
+					throw std::runtime_error("Runtime asset catalog record is malformed");
+				const auto Id = Record["AssetId"].get<std::string>();
+				const auto State = Record["State"].get<std::string>();
+				if (State != "Ready" && State != "Stale")
+					throw std::runtime_error("Runtime asset catalog contains unavailable content");
+				Expanded.push_back({
+					{"AssetId", Id}, {"Reference", Record["Reference"]}, {"Kind", Record["Kind"]},
+					{"Name", Record["Name"]}, {"Source", "runtime"}, {"ContentId", Record["ContentId"]},
+					{"ContentRevision", Record["ContentRevision"]}, {"State", Record["State"]},
+					{"Diagnostic", nullptr}, {"SourceGroupId", Id}, {"LogicalKey", "asset"},
+					{"PrimarySourceAsset", true}, {"Dependencies", Record["Dependencies"]},
+				});
+			}
+			return Json({{"Version", CatalogVersion}, {"Assets", std::move(Expanded)}}).dump();
+		}
 
 		AssetDiagnostic Error(std::string Code, std::string Message) {
 			if (Message.size() > AssetLimits::MaximumDiagnosticBytes) Message.resize(AssetLimits::MaximumDiagnosticBytes);
@@ -1272,6 +1312,56 @@ namespace gargantuan {
 			auto Artifact = State->Artifacts.find(Content);
 			if (Artifact == State->Artifacts.end()) throw std::runtime_error("Asset catalog references a missing in-memory artifact");
 			Result.Artifacts.push_back({std::string(ArtifactDirectory) + "/" + Content + ".gasset", Artifact->second});
+		}
+		std::ranges::sort(Result.Artifacts, {}, &AssetArtifactFile::RelativePath);
+		return Result;
+	}
+
+	void AssetService::LoadRuntimeAssetSnapshot(const AssetRuntimeSnapshot &Snapshot) {
+		AssetProjectSnapshot Expanded{
+			.CatalogJson = ExpandRuntimeCatalog(Snapshot.CatalogJson),
+			.Artifacts = {},
+		};
+		Expanded.Artifacts.reserve(Snapshot.Artifacts.size());
+		for (const auto &Artifact : Snapshot.Artifacts)
+			Expanded.Artifacts.push_back({".gargantuan/" + Artifact.RelativePath, Artifact.Bytes});
+		LoadProjectAssetSnapshot(Expanded);
+	}
+
+	AssetRuntimeSnapshot AssetService::CaptureRuntimeAssets() const {
+		std::scoped_lock Lock(State->Mutex);
+		Json Assets = Json::array();
+		std::vector<const AssetRecord *> Ordered;
+		for (const auto &[Reference, Record] : State->Records) {
+			(void)Reference;
+			if (Record.BuiltIn) continue;
+			if ((Record.State != AssetState::Ready && Record.State != AssetState::Stale) ||
+				!Record.ContentId.IsValid() || !Record.Asset)
+				throw std::runtime_error("Runtime packaging requires every project asset to have canonical content");
+			Ordered.push_back(&Record);
+		}
+		std::ranges::sort(Ordered, {}, [](const AssetRecord *Record) { return Record->Reference.Value; });
+		std::unordered_set<std::string> RequiredArtifacts;
+		for (const auto *Record : Ordered) {
+			Json Dependencies = Json::array();
+			for (const auto Dependency : Record->Dependencies) Dependencies.push_back(Dependency.ToString());
+			Assets.push_back({
+				{"AssetId", Record->Id.ToString()}, {"Reference", Record->Reference.Value},
+				{"Kind", GetAssetKindName(Record->Kind)}, {"Name", Record->Name},
+				{"ContentId", Record->ContentId.ToString()}, {"ContentRevision", Record->ContentRevision},
+				{"State", GetAssetStateName(Record->State)}, {"Dependencies", std::move(Dependencies)},
+			});
+			RequiredArtifacts.insert(Record->ContentId.ToString());
+		}
+		AssetRuntimeSnapshot Result{
+			Json({{"Format", RuntimeCatalogFormat}, {"Version", RuntimeCatalogVersion}, {"Assets", std::move(Assets)}}).dump(),
+			{},
+		};
+		for (const auto &Content : RequiredArtifacts) {
+			auto Artifact = State->Artifacts.find(Content);
+			if (Artifact == State->Artifacts.end())
+				throw std::runtime_error("Runtime asset catalog references a missing in-memory artifact");
+			Result.Artifacts.push_back({"assets/artifacts/" + Content + ".gasset", Artifact->second});
 		}
 		std::ranges::sort(Result.Artifacts, {}, &AssetArtifactFile::RelativePath);
 		return Result;

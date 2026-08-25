@@ -5,6 +5,7 @@
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Instance.hpp"
 #include "gargantuan/filesystem/BaseFilesystem.hpp"
+#include "gargantuan/filesystem/ProjectIdentity.hpp"
 
 #include <filesystem>
 #include <functional>
@@ -25,6 +26,7 @@ namespace gargantuan {
 		std::filesystem::path RootConfiguration;
 		std::filesystem::path InstanceFilePath;
 		InstanceSerialization::InstanceFormat InstanceFileFormat;
+		ProjectId Identity;
 
 		static Project fromInit(
 			BaseFilesystem *fs,

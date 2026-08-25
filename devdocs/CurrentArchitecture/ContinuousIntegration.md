@@ -86,12 +86,12 @@ executable does not relink. `gargantuan_packaged_shaders` compares that runtime
 directory with the complete source shader set and fails when a compiled output
 is missing.
 
-The Windows production contract contains 28 tests. A local configuration with
+The Windows production contract contains 33 tests. A local configuration with
 `GARGANTUAN_WITH_GNS=OFF` and renderer benchmarks disabled omits the two
-real-transport and two renderer-headless entries and therefore contains 24;
+real-transport and two renderer-headless entries and therefore contains 29;
 that reduced matrix is not the complete Windows gate. The task's earlier
-23-test count predates the registered Asset Foundation, soft-body and GUI
-benchmark coverage; current CMake and this document are authoritative.
+28-test count predates the standalone packaging contract; current CMake and
+this document are authoritative.
 
 | Coverage | Existing CTest entries |
 | --- | --- |
@@ -114,6 +114,10 @@ benchmark coverage; current CMake and this document are authoritative.
 | Real transport lifecycle and remotes | `gargantuan_real_transport`, `gargantuan_remote_real_transport` |
 | Renderer extraction/projection and renderer interface | `gargantuan_renderer_projection_headless`, `gargantuan_renderer_backend_headless` |
 | Renderer Foundation 2B dirty coalescing/bounds, publication lifecycle, deformable ranges, and UI batches | `gargantuan_renderer_publication` |
+| Package format, integrity, relocation, atomicity, cancellation, asset closure, shared packaged-world bootstrap, and packaged gameplay | `gargantuan_packaging` |
+| EditorHost package authority, revision, conflict, Play exclusion, progress, and cancellation | `gargantuan_packaging_editor_host` |
+| Package capture/build bounded-load smoke | `gargantuan_packaging_benchmark_smoke` |
+| FirstCompleteGame CLI build/validate/inspect, relocation, dedicated player startup, and corruption rejection | `gargantuan_first_complete_game_package` |
 
 CTest labels mirror those coverage groups so developers can select a subsystem,
 but CI runs the complete registered set rather than maintaining a second list of

@@ -16,13 +16,11 @@ namespace gargantuan {
 	namespace {
 		std::string ReadRuntimeModule(std::string_view Name) {
 			const auto ExecutableDirectory = Paths::GetExecutableDirectory();
-			const std::array Candidates = {
-				ExecutableDirectory / "runtime" / Name,
-				ExecutableDirectory.parent_path() / "runtime" / Name,
-			};
-			for (const auto &Candidate : Candidates) {
+			const auto Candidate = ExecutableDirectory / "runtime" / Name;
+			{
 				std::ifstream Input(Candidate, std::ios::binary);
-				if (!Input.is_open()) continue;
+				if (!Input.is_open())
+					throw std::runtime_error("[Player:Runtime] Missing shipped Luau module: " + std::string(Name));
 				Input.seekg(0, std::ios::end);
 				const auto Size = Input.tellg();
 				if (Size < 0 || static_cast<std::size_t>(Size) > MaximumScriptSourceBytes)
@@ -33,7 +31,6 @@ namespace gargantuan {
 				if (!Input) throw std::runtime_error("[Player:Runtime] Failed to read shipped Luau module");
 				return Source;
 			}
-			throw std::runtime_error("[Player:Runtime] Missing shipped Luau module: " + std::string(Name));
 		}
 	}
 

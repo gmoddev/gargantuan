@@ -147,7 +147,7 @@ ctest --test-dir build-production-checkpoint -C Release -R "^gargantuan_first_co
 Each test process copies the sample to a unique temporary workspace and removes
 only that owned directory, so the gate remains safe under parallel CTest.
 
-## Standalone run
+## Standalone run (superseded by Packaging Foundation 1)
 
 From the repository root:
 
@@ -162,19 +162,23 @@ layers were unavailable and continued normally. The validation harness stopped
 its exact process after observing Ready because the sample deliberately has no
 quit menu.
 
-This is a development invocation, not distribution. It requires a compatible
-Release executable plus its adjacent `runtime` modules, SDL runtime, and shader
-products. Requiring CMake/build-tree knowledge is the packaging gap; a full
-packager is outside this task.
+The command above records the original vertical-slice evidence. Standalone
+Packaging Foundation 1 supersedes it with a visible Studio package command and
+the canonical CLI documented in the sample README. The resulting directory owns
+its player, SDL runtime, default modules/font, shaders, canonical assets, and
+notices and launches after relocation from an unrelated current working
+directory. The ordinary standalone flow no longer requires CMake or build-tree
+knowledge after the package has been produced.
 
 ## Next three priorities from this evidence
 
 1. **Studio manipulation and property editing.** Add transform gizmos and
    schema-driven compound editors first. Their absence affected nearly every
    authored object and is the largest barrier to a GUI-only workflow.
-2. **Packaging and standalone project launch.** Provide an installed/dev
-   launcher that finds runtime modules, shaders, and DLLs without exposing the
-   CMake tree, plus a Studio Run Standalone action.
+2. **Packaging and standalone project launch (completed by Standalone Packaging
+   Foundation 1).** Studio and CLI share PackageBuilder; Build and Run launches
+   the produced package, whose runtime modules, shaders, DLL, and assets are
+   executable-relative.
 3. **Interaction/proximity semantics and diagnostics.** Add the smallest
    public proximity/interact primitive with clear Studio/Luau diagnostics so
    ordinary games do not each rebuild polling, threshold, and cleanup policy.

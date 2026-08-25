@@ -45,6 +45,7 @@ namespace gargantuan {
 		}
 
 	  private:
+		struct PackageJob;
 		std::string SessionToken;
 		static constexpr std::uint64_t TransactionOwner = 1;
 		std::unique_ptr<DiskFilesystem> Filesystem;
@@ -68,5 +69,7 @@ namespace gargantuan {
 		PlaySessionId LastPlaySessionId;
 		PlaySessionState LastPlaySessionState = PlaySessionState::Stopped;
 		std::uint64_t NextPlaySessionId = 1;
+		std::unique_ptr<PackageJob> ActivePackageJob;
+		std::uint64_t NextPackageJobId = 1;
 	};
 }

@@ -178,6 +178,22 @@ add_subdirectory(vendor/sdl SYSTEM)
 add_subdirectory(vendor/sdl_image SYSTEM)
 add_subdirectory(vendor/sdl_ttf SYSTEM)
 
+# SDL expands __FILE__ into diagnostics that ship in its runtime library. Keep
+# those strings independent of the developer checkout without changing codegen
+# for Gargantuan or the rest of the dependency graph.
+if(MSVC)
+	target_compile_options(SDL3-shared PRIVATE
+		/experimental:deterministic
+		"/pathmap:${CMAKE_CURRENT_SOURCE_DIR}=."
+		"/pathmap:${CMAKE_CURRENT_BINARY_DIR}=."
+	)
+else()
+	target_compile_options(SDL3-shared PRIVATE
+		"-ffile-prefix-map=${CMAKE_CURRENT_SOURCE_DIR}=."
+		"-ffile-prefix-map=${CMAKE_CURRENT_BINARY_DIR}=."
+	)
+endif()
+
 set(GARGANTUAN_GUI_RUNTIME_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/runtime")
 file(MAKE_DIRECTORY "${GARGANTUAN_GUI_RUNTIME_DIRECTORY}")
 set(GARGANTUAN_DEFAULT_GUI_FONT_PATH "${GARGANTUAN_GUI_RUNTIME_DIRECTORY}/GargantuanSans.ttf")
@@ -263,6 +279,7 @@ file(GLOB_RECURSE GARGANTUAN_SOURCES CONFIGURE_DEPENDS
 	"src/*.hpp"
 )
 list(REMOVE_ITEM GARGANTUAN_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/Main.cpp")
+list(REMOVE_ITEM GARGANTUAN_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/player/PlayerMain.cpp")
 list(REMOVE_ITEM GARGANTUAN_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/serialization/GlazePrototype.cpp")
 set(GARGANTUAN_TELEMETRY_HOST_SOURCES
 	"${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry/OptionalTelemetry.cpp"
@@ -276,6 +293,17 @@ list(REMOVE_ITEM GARGANTUAN_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/network/Gam
 add_library(gargantuan_core OBJECT ${GARGANTUAN_SOURCES})
 add_executable(gargantuan "src/Main.cpp" ${GARGANTUAN_TELEMETRY_HOST_SOURCES} ${SHADER_OUTPUTS})
 target_link_libraries(gargantuan PRIVATE gargantuan_core ${CMAKE_DL_LIBS})
+add_executable(gargantuan_player "src/player/PlayerMain.cpp")
+set_target_properties(gargantuan_player PROPERTIES OUTPUT_NAME "GargantuanPlayer")
+if(APPLE)
+	set_target_properties(gargantuan_player PROPERTIES BUILD_RPATH "@loader_path" INSTALL_RPATH "@loader_path")
+elseif(UNIX)
+	set_target_properties(gargantuan_player PROPERTIES BUILD_RPATH "$ORIGIN" INSTALL_RPATH "$ORIGIN")
+endif()
+target_link_libraries(gargantuan_player PRIVATE gargantuan_core ${CMAKE_DL_LIBS})
+add_executable(gargantuan_packager "tools/PackagerMain.cpp")
+set_target_properties(gargantuan_packager PROPERTIES OUTPUT_NAME "gargantuan-packager")
+target_link_libraries(gargantuan_packager PRIVATE gargantuan_core ${CMAKE_DL_LIBS})
 
 # Shader generation and executable-local staging are separate dependencies.
 # Keep staging in ALL so an incremental build that adds a shader refreshes the
@@ -288,6 +316,50 @@ add_custom_target(gargantuan_stage_shaders ALL
 	COMMENT "Staging shaders next to the Gargantuan executable"
 	VERBATIM
 )
+
+# This is the one authoritative redistributable runtime input consumed by the
+# CLI and EditorHost packaging paths. The manifest is deliberately closed: the
+# packager copies only files named here and validates every staged byte.
+set(GARGANTUAN_SDL_SONAME_ARGUMENT)
+if(NOT WIN32)
+	list(APPEND GARGANTUAN_SDL_SONAME_ARGUMENT
+		-DGARGANTUAN_SDL_SONAME_FILE=$<TARGET_SONAME_FILE:SDL3::SDL3>)
+endif()
+set(GARGANTUAN_SYSTEM_RUNTIME_ARGUMENTS)
+if(MSVC)
+	set(CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS_SKIP TRUE)
+	include(InstallRequiredSystemLibraries)
+	if(NOT CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS)
+		message(FATAL_ERROR "MSVC runtime redistribution files could not be resolved")
+	endif()
+	set(GARGANTUAN_SYSTEM_RUNTIME_COUNT 0)
+	foreach(GARGANTUAN_SYSTEM_RUNTIME_FILE IN LISTS CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS)
+		if(NOT EXISTS "${GARGANTUAN_SYSTEM_RUNTIME_FILE}")
+			message(FATAL_ERROR "Required MSVC runtime redistribution file is unavailable")
+		endif()
+		list(APPEND GARGANTUAN_SYSTEM_RUNTIME_ARGUMENTS
+			"-DGARGANTUAN_SYSTEM_RUNTIME_FILE_${GARGANTUAN_SYSTEM_RUNTIME_COUNT}=${GARGANTUAN_SYSTEM_RUNTIME_FILE}")
+		math(EXPR GARGANTUAN_SYSTEM_RUNTIME_COUNT "${GARGANTUAN_SYSTEM_RUNTIME_COUNT} + 1")
+	endforeach()
+	list(APPEND GARGANTUAN_SYSTEM_RUNTIME_ARGUMENTS
+		-DGARGANTUAN_SYSTEM_RUNTIME_COUNT=${GARGANTUAN_SYSTEM_RUNTIME_COUNT})
+endif()
+add_custom_target(gargantuan_runtime_distribution ALL
+	COMMAND ${CMAKE_COMMAND}
+		-DGARGANTUAN_RUNTIME_DISTRIBUTION_ROOT=$<TARGET_FILE_DIR:gargantuan_player>/RuntimeDistribution
+		-DGARGANTUAN_PLAYER_FILE=$<TARGET_FILE:gargantuan_player>
+		-DGARGANTUAN_SDL_FILE=$<TARGET_FILE:SDL3::SDL3>
+		${GARGANTUAN_SDL_SONAME_ARGUMENT}
+		${GARGANTUAN_SYSTEM_RUNTIME_ARGUMENTS}
+		-DGARGANTUAN_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}
+		-DGARGANTUAN_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+		-DGARGANTUAN_PLATFORM=${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCESSOR}
+		-P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/StageRuntimeDistribution.cmake
+	DEPENDS gargantuan_player gargantuan_shaders
+	COMMENT "Staging the canonical Gargantuan player runtime distribution"
+	VERBATIM
+)
+add_dependencies(gargantuan_packager gargantuan_runtime_distribution)
 
 if(MSVC)
 	target_compile_options(gargantuan_core PUBLIC /EHsc)
@@ -489,6 +561,26 @@ if(BUILD_TESTING)
 	target_compile_definitions(gargantuan_first_complete_game_tests PRIVATE
 		GARGANTUAN_FIRST_COMPLETE_GAME_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/samples/FirstCompleteGame"
 	)
+	add_executable(gargantuan_packaging_tests "tests/PackagingTests.cpp")
+	target_link_libraries(gargantuan_packaging_tests PRIVATE gargantuan_core nlohmann_json)
+	target_compile_definitions(gargantuan_packaging_tests PRIVATE
+		GARGANTUAN_FIRST_COMPLETE_GAME_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/samples/FirstCompleteGame"
+		GARGANTUAN_RUNTIME_DISTRIBUTION_ROOT="$<TARGET_FILE_DIR:gargantuan_player>/RuntimeDistribution"
+	)
+	add_dependencies(gargantuan_packaging_tests gargantuan_packager gargantuan_runtime_distribution)
+	add_executable(gargantuan_packaging_editor_host_tests "tests/PackagingEditorHostTests.cpp")
+	target_link_libraries(gargantuan_packaging_editor_host_tests PRIVATE gargantuan_core nlohmann_json)
+	target_compile_definitions(gargantuan_packaging_editor_host_tests PRIVATE
+		GARGANTUAN_FIRST_COMPLETE_GAME_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/samples/FirstCompleteGame"
+	)
+	add_dependencies(gargantuan_packaging_editor_host_tests gargantuan_runtime_distribution)
+	add_executable(gargantuan_packaging_benchmark "tests/PackagingBenchmark.cpp")
+	target_link_libraries(gargantuan_packaging_benchmark PRIVATE gargantuan_core nlohmann_json)
+	target_compile_definitions(gargantuan_packaging_benchmark PRIVATE
+		GARGANTUAN_FIRST_COMPLETE_GAME_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/samples/FirstCompleteGame"
+		GARGANTUAN_RUNTIME_DISTRIBUTION_ROOT="$<TARGET_FILE_DIR:gargantuan_player>/RuntimeDistribution"
+	)
+	add_dependencies(gargantuan_packaging_benchmark gargantuan_runtime_distribution)
 	add_executable(gargantuan_gui_foundation_benchmark "tests/GuiFoundationBenchmark.cpp")
 	target_link_libraries(gargantuan_gui_foundation_benchmark PRIVATE gargantuan_core)
 	add_executable(gargantuan_prerun_bootstrap_tests "tests/PreRunBootstrapTests.cpp")
@@ -582,6 +674,9 @@ if(BUILD_TESTING)
 			gargantuan_entitlement_service_tests
 			gargantuan_gui_foundation_tests
 			gargantuan_first_complete_game_tests
+			gargantuan_packaging_tests
+			gargantuan_packaging_editor_host_tests
+			gargantuan_packaging_benchmark
 			gargantuan_gui_foundation_benchmark
 			gargantuan_networking_contract_tests
 			gargantuan_simulated_transport_tests
@@ -655,6 +750,17 @@ if(BUILD_TESTING)
 	add_test(NAME gargantuan_entitlement_service COMMAND gargantuan_entitlement_service_tests)
 	add_test(NAME gargantuan_gui_foundation COMMAND gargantuan_gui_foundation_tests)
 	add_test(NAME gargantuan_first_complete_game COMMAND gargantuan_first_complete_game_tests)
+	add_test(NAME gargantuan_packaging COMMAND gargantuan_packaging_tests)
+	add_test(NAME gargantuan_packaging_editor_host COMMAND gargantuan_packaging_editor_host_tests)
+	add_test(NAME gargantuan_packaging_benchmark_smoke COMMAND gargantuan_packaging_benchmark --quick)
+	add_test(NAME gargantuan_first_complete_game_package_smoke
+		COMMAND ${CMAKE_COMMAND}
+			-DGARGANTUAN_PACKAGER=$<TARGET_FILE:gargantuan_packager>
+			-DGARGANTUAN_PROJECT_ROOT=${CMAKE_CURRENT_SOURCE_DIR}/samples/FirstCompleteGame
+			-DGARGANTUAN_PACKAGE_TEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/package-tests
+			-DGARGANTUAN_RUN_GRAPHICAL_SMOKE=$<BOOL:${WIN32}>
+			-P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/FirstCompleteGamePackageTests.cmake
+	)
 	add_test(NAME gargantuan_gui_foundation_benchmark_smoke COMMAND gargantuan_gui_foundation_benchmark --quick)
 	add_test(NAME gargantuan_prerun_bootstrap COMMAND gargantuan_prerun_bootstrap_tests)
 	add_test(NAME gargantuan_networking_contracts COMMAND gargantuan_networking_contract_tests)
@@ -682,6 +788,18 @@ if(BUILD_TESTING)
 	set_tests_properties(gargantuan_entitlement_service PROPERTIES LABELS "entitlements;runtime;security;headless" TIMEOUT 120)
 	set_tests_properties(gargantuan_first_complete_game PROPERTIES
 		LABELS "game;sample;studio;assets;player;physics;gui;headless" TIMEOUT 180
+	)
+	set_tests_properties(gargantuan_packaging PROPERTIES
+		LABELS "packaging;runtime;assets;security;headless" TIMEOUT 240
+	)
+	set_tests_properties(gargantuan_packaging_editor_host PROPERTIES
+		LABELS "packaging;editorhost;protocol;studio;runtime;headless" TIMEOUT 120
+	)
+	set_tests_properties(gargantuan_packaging_benchmark_smoke PROPERTIES
+		LABELS "packaging;benchmark;runtime;headless" TIMEOUT 120
+	)
+	set_tests_properties(gargantuan_first_complete_game_package_smoke PROPERTIES
+		LABELS "packaging;game;runtime;relocation;headless" TIMEOUT 180
 	)
 	set_tests_properties(gargantuan_prerun_bootstrap PROPERTIES LABELS "prerun;runtime" TIMEOUT 120)
 	set_tests_properties(gargantuan_networking_contracts gargantuan_simulated_transport gargantuan_scheduler_contract

@@ -198,6 +198,11 @@ namespace gargantuan {
 		std::vector<AssetArtifactFile> Artifacts;
 	};
 
+	struct AssetRuntimeSnapshot {
+		std::string CatalogJson;
+		std::vector<AssetArtifactFile> Artifacts;
+	};
+
 	struct AssetLimits {
 		static constexpr std::size_t MaximumCatalogRecords = 4096;
 		static constexpr std::size_t MaximumSourceBytes = 8 * 1024 * 1024;

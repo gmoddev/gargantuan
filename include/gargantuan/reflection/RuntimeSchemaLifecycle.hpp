@@ -11,6 +11,8 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <optional>
+#include <string>
 #include <string_view>
 #include <typeindex>
 
@@ -96,6 +98,7 @@ namespace gargantuan {
 	void RegisterNativeSchemaSeed(std::type_index nativeType, SchemaClassDefinition definition);
 	void BootstrapNativeRuntimeSchema();
 	void BootstrapProjectRuntimeSchema(const std::filesystem::path &projectRoot);
+	void BootstrapPackagedRuntimeSchema(const std::optional<std::string> &PreRunSource);
 	void RequireFrozenRuntimeSchema(std::string_view operation);
 
 	[[nodiscard]] const RuntimeSchemaBootstrapAuthority &GetRuntimeSchemaBootstrapAuthority();

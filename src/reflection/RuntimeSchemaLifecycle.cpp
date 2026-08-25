@@ -268,6 +268,40 @@ namespace gargantuan {
 	}
 
 	void BootstrapProjectRuntimeSchema(const std::filesystem::path &projectRoot) {
+		auto Source = ReadProjectPreRunSource(projectRoot);
+		if (Source) {
+			auto &lifecycle = GetMutableRuntimeSchemaLifecycle();
+			const auto &authority = GetRuntimeSchemaBootstrapAuthority();
+			std::vector<NativeSchemaSeed> nativeDefinitions;
+			{
+				std::scoped_lock lock(GetNativeSchemaSeedMutex());
+				nativeDefinitions = GetNativeSchemaSeeds();
+			}
+			if (nativeDefinitions.empty()) throw std::logic_error("Native schema seeds are unavailable for project registration");
+			std::sort(nativeDefinitions.begin(), nativeDefinitions.end(), [](const auto &left, const auto &right) {
+				return CanonicalName(left.Definition) < CanonicalName(right.Definition);
+			});
+			lifecycle.BeginCandidate(authority);
+			try {
+				for (auto &seed : nativeDefinitions)
+					lifecycle.RegisterNative(authority, seed.NativeType, std::move(seed.Definition));
+				lifecycle.AdvanceRegistrationPhase(authority, RuntimeSchemaLifecyclePhase::CoreRegistration);
+				lifecycle.AdvanceRegistrationPhase(authority, RuntimeSchemaLifecyclePhase::PreRunRegistration);
+				ExecutePreRunRegistration(lifecycle, authority, *Source, GetProjectPreRunPath(projectRoot).string());
+				lifecycle.AdvanceRegistrationPhase(authority, RuntimeSchemaLifecyclePhase::Validation);
+				lifecycle.ValidateCandidate(authority);
+				lifecycle.FreezeCandidate(authority);
+				lifecycle.PublishCandidate(authority);
+			} catch (...) {
+				if (lifecycle.HasCandidate()) lifecycle.AbortCandidate(authority);
+				throw;
+			}
+			return;
+		}
+		BootstrapPackagedRuntimeSchema(std::nullopt);
+	}
+
+	void BootstrapPackagedRuntimeSchema(const std::optional<std::string> &PreRunSource) {
 		auto &lifecycle = GetMutableRuntimeSchemaLifecycle();
 		const auto &authority = GetRuntimeSchemaBootstrapAuthority();
 
@@ -287,8 +321,8 @@ namespace gargantuan {
 				lifecycle.RegisterNative(authority, seed.NativeType, std::move(seed.Definition));
 			lifecycle.AdvanceRegistrationPhase(authority, RuntimeSchemaLifecyclePhase::CoreRegistration);
 			lifecycle.AdvanceRegistrationPhase(authority, RuntimeSchemaLifecyclePhase::PreRunRegistration);
-			if (auto source = ReadProjectPreRunSource(projectRoot))
-				ExecutePreRunRegistration(lifecycle, authority, *source, GetProjectPreRunPath(projectRoot).string());
+			if (PreRunSource)
+				ExecutePreRunRegistration(lifecycle, authority, *PreRunSource, "package://content/prerun.luau");
 			lifecycle.AdvanceRegistrationPhase(authority, RuntimeSchemaLifecyclePhase::Validation);
 			lifecycle.ValidateCandidate(authority);
 			lifecycle.FreezeCandidate(authority);

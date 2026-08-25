@@ -1,5 +1,9 @@
 # Current architecture
 
+- [Standalone Packaging Foundation 1](StandalonePackagingFoundation1.md) defines
+  ProjectId, immutable GamePayload capture, the canonical RuntimeDistribution,
+  strict hashed directory packages, GargantuanPlayer, CLI/EditorHost workflows,
+  atomic replacement, and current Windows validation scope.
 - [Player runtime](PlayerRuntime.md) defines semantic gameplay input,
   Players/LocalPlayer and character lifetimes, the bounded kinematic query,
   engine-shipped Luau defaults, and custom-controller replacement path.

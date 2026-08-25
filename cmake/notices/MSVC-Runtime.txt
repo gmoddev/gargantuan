@@ -1,0 +1,9 @@
+Microsoft Visual C++ Runtime
+
+Windows packages built with Microsoft Visual C++ may include the Microsoft C and
+C++ runtime redistributable files selected by CMake's
+InstallRequiredSystemLibraries module. These files are redistributed under the
+Microsoft Visual Studio license terms applicable to the toolchain used to build
+the package.
+
+License terms: https://visualstudio.microsoft.com/license-terms/

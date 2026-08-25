@@ -4,6 +4,18 @@ This roadmap optimizes for a dependable creator loop, not checkbox parity. Phase
 have exit tests; dates should be assigned only after Phase 0 measures build and
 defect throughput.
 
+## Evidence updates
+
+- Standalone Packaging Foundation 1 closes the Windows x64 build-tree/CMake
+  usability gap for produced games: Studio and CLI share one PackageBuilder,
+  FirstCompleteGame packages into a self-contained hashed directory, and the
+  relocated player passes headless and real-renderer startup from an unrelated
+  working directory. This completes the package/smoke deliverable within Phase 2
+  and the package portion of the Phase 4 exit; it does not claim either broader
+  phase complete.
+- Phase 5 remains the home for Linux/macOS distribution claims, signing,
+  provenance/SBOM, installed-tool distribution, and public creator packaging.
+
 ## Priority conventions
 
 - **P0:** blocks safe continued development or invalidates higher layers.

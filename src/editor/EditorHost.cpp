@@ -8,7 +8,9 @@
 #include "gargantuan/InstanceProperty.hpp"
 #include "gargantuan/classes/LuaSourceContainer.hpp"
 #include "gargantuan/filesystem/Project.hpp"
+#include "gargantuan/filesystem/Paths.hpp"
 #include "gargantuan/filesystem/SourceMount.hpp"
+#include "gargantuan/packaging/PackageBuilder.hpp"
 #include "gargantuan/reflection/InstanceClassRegistry.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/runtime/ProtocolInput.hpp"
@@ -30,7 +32,9 @@
 #include <filesystem>
 #include <limits>
 #include <magic_enum/magic_enum.hpp>
+#include <mutex>
 #include <stdexcept>
+#include <thread>
 #include <type_traits>
 #include <unordered_set>
 #include <vector>
@@ -348,7 +352,32 @@ namespace gargantuan {
 				Method == "SetCustomProperty" || Method == "AddTag" || Method == "RemoveTag" ||
 				Method == "CreateInstance" || Method == "DestroyInstance" ||
 				Method == "DuplicateInstance" || Method == "ReparentInstance" ||
-				Method == "ImportAsset" || Method == "ReimportAsset" || Method == "DeleteAsset";
+				Method == "ImportAsset" || Method == "ReimportAsset" || Method == "DeleteAsset" ||
+				Method == "StartPackageBuild";
+		}
+
+		std::optional<std::uint64_t> DecodeCanonicalJobId(const Json &Value) {
+			if (!Value.is_string()) return std::nullopt;
+			const auto &Encoded = Value.get_ref<const std::string &>();
+			std::uint64_t Parsed = 0;
+			const auto [End, Error] = std::from_chars(Encoded.data(), Encoded.data() + Encoded.size(), Parsed);
+			if (Encoded.empty() || Encoded.front() == '0' || Error != std::errc{} ||
+				End != Encoded.data() + Encoded.size() || Parsed == 0) return std::nullopt;
+			return Parsed;
+		}
+
+		Json EncodePackageDiagnostics(const std::vector<PackageDiagnostic> &Diagnostics) {
+			Json Result = Json::array();
+			for (const auto &Diagnostic : Diagnostics) {
+				std::string_view Severity = "Info";
+				if (Diagnostic.Severity == PackageDiagnosticSeverity::Warning) Severity = "Warning";
+				else if (Diagnostic.Severity == PackageDiagnosticSeverity::Error) Severity = "Error";
+				Result.push_back({
+					{"Severity", Severity}, {"Category", Diagnostic.Category}, {"Code", Diagnostic.Code},
+					{"Message", Diagnostic.Message}, {"Item", Diagnostic.Item},
+				});
+			}
+			return Result;
 		}
 
 		std::optional<PlaySessionId> DecodePlaySessionId(const Json &Value) {
@@ -544,6 +573,18 @@ namespace gargantuan {
 		}
 	}
 
+	struct EditorHost::PackageJob final {
+		std::uint64_t Id = 0;
+		std::uint64_t CapturedRevision = 0;
+		bool CapturedUnsavedChanges = false;
+		std::atomic<PackagePhase> Phase{PackagePhase::Snapshot};
+		std::atomic_bool Complete{false};
+		PackageCancellationToken Cancellation;
+		std::mutex ResultMutex;
+		std::optional<PackageBuildResult> Result;
+		std::jthread Worker;
+	};
+
 	EditorHost::EditorHost(std::string sessionToken) :
 		EditorHost(std::move(sessionToken), ScriptSecurityContext::StudioCoreUi()) {}
 
@@ -554,6 +595,10 @@ namespace gargantuan {
 	}
 
 	EditorHost::~EditorHost() {
+		if (ActivePackageJob) {
+			ActivePackageJob->Cancellation.Cancel();
+			ActivePackageJob.reset();
+		}
 		if (ActivePlaySession) {
 			ActivePlaySession->Stop();
 			ActivePlaySession.reset();
@@ -655,6 +700,7 @@ namespace gargantuan {
 					"ReadScriptSource", "WriteScriptSource",
 					"PlaySession", "DiagnosticStream", "SendPlayInput",
 					"AssetCatalog", "ImportAsset", "ReimportAsset", "DeleteAsset", "StrictAssetReferences",
+					"PackageBuild", "PackageBuildProgress", "PackageBuildCancellation",
 					"ConfigureViewport", "SetViewportCamera", "CaptureViewport", "PickViewport"
 				};
 				Json viewportTransports = Json::array({{
@@ -682,6 +728,156 @@ namespace gargantuan {
 						{"StudioCapabilities", EncodeCapabilities(StudioSecurity.Capabilities)},
 					}
 				));
+			}
+
+			if (method == "StartPackageBuild") {
+				if (!StudioSecurity.HasCapability(ScriptCapability::EditorCommands) ||
+					!StudioSecurity.HasCapability(ScriptCapability::ReadDataModel))
+					return SerializeBoundedResponse(ErrorResponse(
+						requestId, "Unauthorized", "Packaging requires EditorCommands and ReadDataModel"
+					));
+				if (!HasOnlyFields(parameters, {"OutputDirectory", "Configuration", "ExpectedRevision"}) ||
+					!parameters.contains("OutputDirectory") || !parameters["OutputDirectory"].is_string() ||
+					parameters["OutputDirectory"].get_ref<const std::string &>().empty() ||
+					parameters["OutputDirectory"].get_ref<const std::string &>().size() > 32768 ||
+					!parameters.contains("Configuration") || !parameters["Configuration"].is_string())
+					return SerializeBoundedResponse(ErrorResponse(
+						requestId, "MalformedRequest", "StartPackageBuild requires a bounded output directory and configuration"
+					));
+				if (!World || !CurrentProject)
+					return SerializeBoundedResponse(ErrorResponse(requestId, "ProjectRequired", "OpenProject must succeed first"));
+				if (World->Transactions.GetOpenCount() != 0)
+					return SerializeBoundedResponse(ErrorResponse(
+						requestId, "TransactionOpen", "Commit the open authoring transaction before packaging"
+					));
+				if (HasRevisionConflict())
+					return SerializeBoundedResponse(ErrorResponse(
+						requestId, "Conflict", "The authoritative project revision changed before package capture"
+					));
+				auto Configuration = ParsePackageConfiguration(parameters["Configuration"].get_ref<const std::string &>());
+				if (!Configuration)
+					return SerializeBoundedResponse(ErrorResponse(
+						requestId, "InvalidConfiguration", "Package configuration must be Development or Release"
+					));
+				if (ActivePackageJob && !ActivePackageJob->Complete.load(std::memory_order_acquire))
+					return SerializeBoundedResponse(ErrorResponse(
+						requestId, "PackageBuildActive", "One package build is already active"
+					));
+				if (NextPackageJobId == 0)
+					return SerializeBoundedResponse(ErrorResponse(
+						requestId, "PackageJobExhausted", "Package job identity is exhausted"
+					));
+
+				GamePayload Payload;
+				try {
+					Payload = PackageBuilder::Capture(
+						*CurrentProject, World, World->GetAuthoritativeRevision(), PersistedRevision
+					);
+				} catch (const std::exception &) {
+					return SerializeBoundedResponse(ErrorResponse(
+						requestId, "PackageCaptureFailed", "The authoritative project snapshot could not be captured for packaging"
+					));
+				}
+				auto Job = std::make_unique<PackageJob>();
+				Job->Id = NextPackageJobId++;
+				Job->CapturedRevision = Payload.AuthoritativeRevision;
+				Job->CapturedUnsavedChanges = Payload.UnsavedChanges;
+				auto *JobPointer = Job.get();
+				auto OutputDirectory = std::filesystem::path(parameters["OutputDirectory"].get<std::string>());
+				auto RuntimeDistribution = Paths::GetExecutableDirectory() / "RuntimeDistribution";
+				Job->Worker = std::jthread([
+					JobPointer,
+					Payload = std::move(Payload),
+					OutputDirectory = std::move(OutputDirectory),
+					RuntimeDistribution = std::move(RuntimeDistribution),
+					Configuration = *Configuration
+				]() mutable {
+					PackageBuildResult BuildResult;
+					try {
+						BuildResult = PackageBuilder::Build({
+							.Payload = std::move(Payload),
+							.RuntimeDistributionRoot = std::move(RuntimeDistribution),
+							.OutputDirectory = std::move(OutputDirectory),
+							.Configuration = Configuration,
+							.Cancellation = JobPointer->Cancellation,
+							.Progress = [JobPointer](PackagePhase Phase) {
+								JobPointer->Phase.store(Phase, std::memory_order_release);
+							},
+						});
+					} catch (...) {
+						BuildResult.Diagnostics.push_back({
+							PackageDiagnosticSeverity::Error, "Packaging", "InternalFailure",
+							"The package build stopped because an internal bounded operation failed.", {}
+						});
+					}
+					{
+						std::scoped_lock Lock(JobPointer->ResultMutex);
+						JobPointer->Result = std::move(BuildResult);
+					}
+					JobPointer->Phase.store(PackagePhase::Complete, std::memory_order_release);
+					JobPointer->Complete.store(true, std::memory_order_release);
+				});
+				const auto JobId = Job->Id;
+				const auto Revision = Job->CapturedRevision;
+				const auto UnsavedChanges = Job->CapturedUnsavedChanges;
+				ActivePackageJob = std::move(Job);
+				return SerializeBoundedResponse(SuccessResponse(requestId, {
+					{"JobId", std::to_string(JobId)}, {"CapturedRevision", Revision},
+					{"CapturedUnsavedChanges", UnsavedChanges}, {"Phase", "Snapshot"},
+				}));
+			}
+
+			if (method == "GetPackageBuildState" || method == "CancelPackageBuild") {
+				if (!StudioSecurity.HasCapability(ScriptCapability::EditorCommands) ||
+					!StudioSecurity.HasCapability(ScriptCapability::ReadDataModel))
+					return SerializeBoundedResponse(ErrorResponse(
+						requestId, "Unauthorized", "Package job access requires EditorCommands and ReadDataModel"
+					));
+				if (!HasOnlyFields(parameters, {"JobId"}) || !parameters.contains("JobId"))
+					return SerializeBoundedResponse(ErrorResponse(
+						requestId, "MalformedRequest", "Package job requests require JobId"
+					));
+				auto JobId = DecodeCanonicalJobId(parameters["JobId"]);
+				if (!JobId || !ActivePackageJob || ActivePackageJob->Id != *JobId)
+					return SerializeBoundedResponse(ErrorResponse(
+						requestId, "PackageJobNotFound", "Package job is missing or no longer retained"
+					));
+				if (method == "CancelPackageBuild") {
+					ActivePackageJob->Cancellation.Cancel();
+					return SerializeBoundedResponse(SuccessResponse(requestId, {
+						{"JobId", std::to_string(*JobId)}, {"CancellationRequested", true},
+					}));
+				}
+				Json Result{
+					{"JobId", std::to_string(*JobId)},
+					{"CapturedRevision", ActivePackageJob->CapturedRevision},
+					{"CapturedUnsavedChanges", ActivePackageJob->CapturedUnsavedChanges},
+					{"Phase", GetPackagePhaseName(ActivePackageJob->Phase.load(std::memory_order_acquire))},
+					{"Complete", ActivePackageJob->Complete.load(std::memory_order_acquire)},
+				};
+				if (Result["Complete"].get<bool>()) {
+					std::scoped_lock Lock(ActivePackageJob->ResultMutex);
+					if (ActivePackageJob->Result) {
+						const auto &BuildResult = *ActivePackageJob->Result;
+						Json Timings = Json::array();
+						for (const auto &Timing : BuildResult.Timings) Timings.push_back({
+							{"Phase", GetPackagePhaseName(Timing.Phase)}, {"Microseconds", Timing.Duration.count()},
+						});
+						Result["Ok"] = BuildResult.Ok;
+						Result["Cancelled"] = BuildResult.Cancelled;
+						Result["OutputDirectory"] = BuildResult.OutputDirectory.generic_string();
+						Result["PlayerExecutable"] = BuildResult.PlayerExecutable.empty()
+							? Json(nullptr) : Json(BuildResult.PlayerExecutable.generic_string());
+						Result["Size"] = {
+							{"TotalBytes", BuildResult.Size.TotalBytes}, {"RuntimeBytes", BuildResult.Size.RuntimeBytes},
+							{"ProjectBytes", BuildResult.Size.ProjectBytes}, {"AssetBytes", BuildResult.Size.AssetBytes},
+							{"ShaderBytes", BuildResult.Size.ShaderBytes}, {"OtherBytes", BuildResult.Size.OtherBytes},
+						};
+						Result["Timings"] = std::move(Timings);
+						Result["Diagnostics"] = EncodePackageDiagnostics(BuildResult.Diagnostics);
+					}
+				}
+				return SerializeBoundedResponse(SuccessResponse(requestId, std::move(Result)));
 			}
 
 			if (method == "StartPlaySession") {
@@ -1360,6 +1556,7 @@ namespace gargantuan {
 					destinationProject.emplace(Project::forDestination(
 						destinationFilesystem.get(), CurrentProject->InstanceFileFormat
 					));
+					destinationProject->Identity = CurrentProject->Identity;
 				}
 				auto &project = saveAs ? *destinationProject : *CurrentProject;
 				Project::PersistenceSnapshot snapshot;

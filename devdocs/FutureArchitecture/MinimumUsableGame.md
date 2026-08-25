@@ -14,8 +14,10 @@ APIs and project assets—no game-specific engine C++.
 
 Asset Foundation 1 now closes the stable image/mesh/font identity, bounded
 import/reimport, canonical artifact persistence, relocation, GUI image/font, and
-renderer residency groundwork. A public mesh-consuming scene object, materials,
-audio, packaging, and the polished asset-browser workflow remain milestone work.
+renderer residency groundwork. Standalone Packaging Foundation 1 now closes the
+Windows x64 deterministic package command, self-contained directory package,
+relocated player, strict validation, and Studio Build and Run workflow. Audio and
+cross-platform published distributions remain milestone work.
 
 ## Required player-visible slice
 
@@ -34,6 +36,10 @@ audio, packaging, and the polished asset-browser workflow remain milestone work.
 - structured console, script stack traces/source locations, frame/physics/script/
   render counters, and clear load/import errors; and
 - deterministic build/package command plus a smoke test that launches the result.
+
+The final packaging bullet is implemented for Windows x64 by
+`gargantuan-packager`, `GargantuanPlayer`, and the FirstCompleteGame isolated
+package smoke. Linux/macOS distribution claims remain intentionally deferred.
 
 Animation can begin with transform/tween tracks sufficient for pickups and UI.
 Rigged character animation may be the first follow-on if it would otherwise delay
