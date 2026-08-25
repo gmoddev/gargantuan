@@ -117,7 +117,7 @@ this document are authoritative.
 | Package format, integrity, relocation, atomicity, cancellation, asset closure, shared packaged-world bootstrap, and packaged gameplay | `gargantuan_packaging` |
 | EditorHost package authority, revision, conflict, Play exclusion, progress, and cancellation | `gargantuan_packaging_editor_host` |
 | Package capture/build bounded-load smoke | `gargantuan_packaging_benchmark_smoke` |
-| FirstCompleteGame CLI build/validate/inspect, relocation, dedicated player startup, and corruption rejection | `gargantuan_first_complete_game_package` |
+| FirstCompleteGame CLI build/validate/inspect, relocation, dedicated player startup, and corruption rejection | `gargantuan_first_complete_game_package_smoke` |
 
 CTest labels mirror those coverage groups so developers can select a subsystem,
 but CI runs the complete registered set rather than maintaining a second list of
