@@ -254,6 +254,8 @@ int main() {
 		Json FirstCycleDiagnostics = Json::array();
 		for (int Cycle = 0; Cycle < 10; ++Cycle) {
 			auto Started = Call("StartPlaySession");
+			if (!(Started["Ok"] && Started["Result"]["State"] == "Running"))
+				std::cerr << "[Game:FirstCompleteGameTest] StartPlaySession response: " << Started.dump() << '\n';
 			Require(Started["Ok"] && Started["Result"]["State"] == "Running", "Play did not start");
 			const auto PlaySessionId = Started["Result"]["PlaySessionId"];
 			Json CycleDiagnostics = Started["Result"]["Diagnostics"];

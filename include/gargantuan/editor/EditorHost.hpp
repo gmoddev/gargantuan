@@ -51,6 +51,11 @@ namespace gargantuan {
 		void SetViewportPresentationCheckpointForTesting(std::function<void(std::string_view)> Checkpoint) {
 			ViewportPresentationCheckpointForTesting = std::move(Checkpoint);
 		}
+		void SetViewportCaptureForTesting(
+			std::function<EditorViewportCaptureView(RenderPublicationPtr)> Capture
+		) {
+			ViewportCaptureForTesting = std::move(Capture);
+		}
 
 	  private:
 		struct PackageJob;
@@ -62,6 +67,7 @@ namespace gargantuan {
 		std::uint64_t PersistedRevision = 0;
 		std::function<void()> PersistenceCheckpointForTesting;
 		std::function<void(std::string_view)> ViewportPresentationCheckpointForTesting;
+		std::function<EditorViewportCaptureView(RenderPublicationPtr)> ViewportCaptureForTesting;
 		std::optional<ChangeCursor> Cursor;
 		MutationGateway Mutations;
 		ScriptSecurityContext StudioSecurity = ScriptSecurityContext::StudioCoreUi();

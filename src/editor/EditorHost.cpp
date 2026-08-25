@@ -634,11 +634,8 @@ namespace gargantuan {
 			ViewportWidth == 0 || ViewportHeight == 0) return;
 		auto Publications = ActivePlaySession->TakeRenderPublications();
 		if (Publications.empty()) return;
-		if (!ViewportRenderer)
-			ViewportRenderer = std::make_unique<EditorViewportRenderer>(ViewportWidth, ViewportHeight);
 		for (auto &Publication : Publications) {
 			if (!Publication) continue;
-			ViewportRenderer->ApplyPublication(Publication);
 			if (ViewportProjection.GetLastPublicationId() != Publication->Id)
 				(void)ViewportProjection.Apply(*Publication);
 			LastViewportPublication = std::move(Publication);
@@ -664,7 +661,7 @@ namespace gargantuan {
 		try {
 			if (ViewportPresentationCheckpointForTesting)
 				ViewportPresentationCheckpointForTesting("BeforeCapture");
-			if (!ViewportRenderer) {
+			if (!ViewportCaptureForTesting && !ViewportRenderer) {
 				ViewportRenderer = std::make_unique<EditorViewportRenderer>(ViewportWidth, ViewportHeight);
 				ViewportPublisher.RequestFullResync();
 			}
@@ -686,7 +683,9 @@ namespace gargantuan {
 			}
 			if (ViewportProjection.GetLastPublicationId() != LastViewportPublication->Id)
 				(void)ViewportProjection.Apply(*LastViewportPublication);
-			const auto Captured = ViewportRenderer->CaptureBgra(LastViewportPublication);
+			const auto Captured = ViewportCaptureForTesting
+				? ViewportCaptureForTesting(LastViewportPublication)
+				: ViewportRenderer->CaptureBgra(LastViewportPublication);
 			if (ViewportPresentationCheckpointForTesting)
 				ViewportPresentationCheckpointForTesting("AfterCapture");
 			Metadata.CameraRevision = ViewportCameraRevision;

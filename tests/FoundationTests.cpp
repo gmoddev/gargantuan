@@ -6191,6 +6191,22 @@ namespace {
 					!StaleCamera["Ok"].get<bool>() && StaleCamera["Error"]["Code"] == "StaleCamera",
 				"coalesced camera state cannot be replaced by an older revision"
 			);
+			std::vector<std::uint8_t> TestPresentationPixels;
+			host.SetViewportCaptureForTesting([&](RenderPublicationPtr Publication) {
+				if (!Publication) throw std::invalid_argument("test viewport capture requires a publication");
+				const auto Width = Publication->Frame.ViewportWidth;
+				const auto Height = Publication->Frame.ViewportHeight;
+				TestPresentationPixels.assign(static_cast<std::size_t>(Width) * Height * 4, 0x7f);
+				return EditorViewportCaptureView{
+					.Width = Width,
+					.Height = Height,
+					.BgraPixels = std::span<const std::uint8_t>(TestPresentationPixels),
+					.RenderSubmission = std::chrono::microseconds(7),
+					.GpuReadbackWait = std::chrono::microseconds(11),
+					.CpuExtraction = std::chrono::microseconds(5),
+					.Total = std::chrono::microseconds(23),
+				};
+			});
 			auto InvalidCadence = call("StartViewportPresentation", {{"FrameRateMode", "20"}}, "test-token");
 			Check(
 				!InvalidCadence["Ok"].get<bool>() && InvalidCadence["Error"]["Code"] == "InvalidFrameRateMode",
@@ -6208,6 +6224,11 @@ namespace {
 			auto FirstPresentationState = call("GetViewportPresentationState", Json::object(), "test-token");
 			host.PumpViewportPresentationForTesting();
 			auto SecondPresentationState = call("GetViewportPresentationState", Json::object(), "test-token");
+			if (!(StartedPresentation["Ok"].get<bool>() && FirstPresentationState["Result"]["LatestSequence"] > 0 &&
+				SecondPresentationState["Result"]["LatestSequence"] > FirstPresentationState["Result"]["LatestSequence"] &&
+				SecondPresentationState["Result"]["PresentationFailures"] == 0))
+				std::cerr << "[Renderer:ViewportPresentationTest] first=" << FirstPresentationState.dump()
+					<< " second=" << SecondPresentationState.dump() << '\n';
 			Check(
 				StartedPresentation["Ok"].get<bool>() && FirstPresentationState["Result"]["LatestSequence"] > 0 &&
 					SecondPresentationState["Result"]["LatestSequence"] > FirstPresentationState["Result"]["LatestSequence"] &&
@@ -6298,6 +6319,7 @@ namespace {
 					RepeatedStop["Result"]["Generation"] == StoppedPresentation["Result"]["Generation"],
 				"stopping presentation retires the active viewport generation exactly once"
 			);
+			host.SetViewportCaptureForTesting({});
 			(void)call("CloseViewportTransport", Json::object(), "test-token");
 		}
 

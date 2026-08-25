@@ -192,6 +192,14 @@ recovery, batched Play publications, and Play/Edit retirement. Explicit capture,
 headless rendering, GUI, soft body, package/player, sequential and parallel
 Release CTest remain separate gates.
 
+The first hosted Windows run exposed a headless ownership regression. Consuming
+Play render publications constructed an SDL GPU renderer whenever a viewport size
+had been configured, even when live presentation was inactive, so a runner with
+no usable GPU could not start Play. Publication consumption is now renderer-free;
+renderer creation belongs only to explicit capture or active presentation. The
+mailbox/state-machine test uses a deterministic injected CPU frame source, while
+the separate GPU viewport tests continue to own real renderer/readback coverage.
+
 Remaining work is not a return to capture polling: remove synchronous GPU fence
 readback with supported asynchronous transfer primitives, obtain display-paced
 callbacks from Avalonia rather than treating Adaptive as 144 Hz, add renderer
