@@ -535,7 +535,8 @@ namespace {
 			assert(not pcall(function() Params.FilterDescendantsInstances = TooMany end))
 			assert(not pcall(function() Params.FilterDescendantsInstances = { [1] = Workspace.RayTarget, [3] = Workspace.RayTarget } end))
 			assert(not pcall(function() Params.FilterDescendantsInstances = { ["1"] = Workspace.RayTarget } end))
-			assert(not pcall(function() Params.FilterDescendantsInstances = { [1e300] = Workspace.RayTarget } end))
+			assert(not pcall(function() Params.FilterDescendantsInstances = { [129] = Workspace.RayTarget } end))
+			assert(not pcall(function() Params.FilterDescendantsInstances = { [1.5] = Workspace.RayTarget } end))
 			assert(not pcall(function() Params.FilterType = Enum.PartType.Block end))
 			Params.FilterDescendantsInstances = { Workspace.RayTarget, Workspace.RayTarget }
 			assert(Workspace:Raycast(Vector3.zero, Vector3.new(10, 0, 0), Params) == nil)
