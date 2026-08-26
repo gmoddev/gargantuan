@@ -1,17 +1,27 @@
 #include "gargantuan/classes/DataModel.hpp"
+#include "gargantuan/classes/Folder.hpp"
 #include "gargantuan/classes/Part.hpp"
 #include "gargantuan/classes/WeldConstraint.hpp"
 #include "gargantuan/classes/WorldRoot.hpp"
+#include "gargantuan/datatypes/RaycastParams.hpp"
 #include "gargantuan/physics/PhysicsBackend.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
+#include "gargantuan/scripting/ScriptEngine.hpp"
+#include "gargantuan/scripting/ScriptSecurity.hpp"
 #include "gargantuan/services/Workspace.hpp"
 
+#include <array>
 #include <cmath>
 #include <iostream>
 #include <memory>
 #include <optional>
+#include <string>
 #include <utility>
 #include <vector>
+
+#include <Luau/Compiler.h>
+#include <lua.h>
+#include <luacode.h>
 
 namespace gargantuan {
 	struct WorldRootTestAccess {
@@ -38,6 +48,8 @@ namespace gargantuan {
 }
 
 namespace {
+	using namespace gargantuan;
+
 	int Failures = 0;
 
 	void Check(bool Condition, const char *Message) {
@@ -89,6 +101,9 @@ namespace {
 				.AppliedTranslation = Request.Translation,
 				.Velocity = Request.Velocity,
 			};
+		}
+		gargantuan::PhysicsRaycastResult Raycast(const gargantuan::PhysicsRaycastRequest &) const override {
+			return {};
 		}
 		gargantuan::PhysicsStepResult Step(const gargantuan::PhysicsStepConfig &) override {
 			++StepCalls;
@@ -341,6 +356,212 @@ namespace {
 		Workspace->StepPhysics(1.0 / 60.0, std::nullopt);
 		Check(Touches == 1, "committed CanTouch false disables later sensor events");
 	}
+
+	std::shared_ptr<Part> MakeRayPart(
+		const std::shared_ptr<Workspace> &WorkspaceValue,
+		std::string Name,
+		glm::vec3 Position,
+		glm::vec3 Size = {2.0f, 2.0f, 2.0f},
+		Enums::PartType Shape = Enums::PartType::Block
+	) {
+		auto Value = std::make_shared<Part>();
+		Value->SetName(std::move(Name));
+		Value->SetAnchored(true);
+		Value->SetCFrame(CFrame(Position));
+		Value->SetSize(Size);
+		Value->SetShape(Shape);
+		Value->SetParent(WorkspaceValue);
+		return Value;
+	}
+
+	void TestSemanticRaycastContract() {
+		using namespace gargantuan;
+		auto WorkspaceValue = MakeWorkspace();
+		auto NearPart = MakeRayPart(WorkspaceValue, "Near", {5.0f, 0.0f, 0.0f});
+		auto FarPart = MakeRayPart(WorkspaceValue, "Far", {9.0f, 0.0f, 0.0f});
+		auto Hit = WorkspaceValue->ResolveRaycast({0.0f, 0.0f, 0.0f}, {12.0f, 0.0f, 0.0f});
+		Check(Hit.Succeeded() && Hit.Instance == NearPart, "semantic raycast returns the closest authoritative Part");
+		Check(
+			Hit.HasHit() && Near(Hit.Distance, 4.0f) && Near(Hit.Position.x, 4.0f) && Hit.Normal.x < -0.99f,
+			"semantic raycast returns world impact position, normalized normal, and direction-derived distance"
+		);
+		auto Miss = WorkspaceValue->ResolveRaycast({0.0f, 10.0f, 0.0f}, {12.0f, 0.0f, 0.0f});
+		Check(Miss.Succeeded() && !Miss.HasHit(), "valid ray miss returns no semantic result");
+		auto Exact = WorkspaceValue->ResolveRaycast({0.0f, 0.0f, 0.0f}, {4.0f, 0.0f, 0.0f});
+		Check(
+			Exact.Succeeded() && Exact.Instance == NearPart && Near(Exact.Distance, 4.0f),
+			"raycast includes a hit exactly at Direction magnitude"
+		);
+		auto Grazing = WorkspaceValue->ResolveRaycast({0.0f, 0.999f, 0.0f}, {12.0f, 0.0f, 0.0f});
+		Check(
+			Grazing.Succeeded() && Grazing.Instance == NearPart,
+			"raycast uses the real collider for a finite grazing hit"
+		);
+		NearPart->SetCanCollide(false);
+		auto NonColliding = WorkspaceValue->ResolveRaycast({}, {12.0f, 0.0f, 0.0f});
+		Check(
+			NonColliding.Succeeded() && NonColliding.Instance == FarPart,
+			"non-colliding rigid bodies do not participate in raycasts"
+		);
+		NearPart->SetCanCollide(true);
+
+		Check(
+			WorkspaceValue->ResolveRaycast({}, {}).Status == PhysicsOperationStatus::InvalidDescription,
+			"zero direction fails the bounded native contract"
+		);
+		Check(
+			WorkspaceValue->ResolveRaycast({}, {MinimumRaycastDistance * 0.5f, 0.0f, 0.0f}).Status ==
+				PhysicsOperationStatus::InvalidDescription,
+			"near-zero direction fails the bounded native contract"
+		);
+		Check(
+			WorkspaceValue->ResolveRaycast({std::numeric_limits<float>::quiet_NaN(), 0.0f, 0.0f}, {1.0f, 0.0f, 0.0f})
+					.Status == PhysicsOperationStatus::InvalidDescription,
+			"non-finite origin fails the bounded native contract"
+		);
+		Check(
+			WorkspaceValue->ResolveRaycast({}, {std::numeric_limits<float>::infinity(), 0.0f, 0.0f}).Status ==
+				PhysicsOperationStatus::InvalidDescription,
+			"non-finite direction fails the bounded native contract"
+		);
+		Check(
+			WorkspaceValue->ResolveRaycast({}, {MaximumRaycastDistance + 1.0f, 0.0f, 0.0f}).Status ==
+				PhysicsOperationStatus::InvalidDescription,
+			"oversized ray distance fails the bounded native contract"
+		);
+
+		auto FolderValue = std::make_shared<Folder>();
+		FolderValue->SetName("FilterRoot");
+		FolderValue->SetParent(WorkspaceValue);
+		NearPart->SetParent(FolderValue);
+		RaycastParams Exclude;
+		Exclude.FilterDescendantsInstances.Values = {FolderValue, FolderValue};
+		auto Excluded = WorkspaceValue->ResolveRaycast({}, {12.0f, 0.0f, 0.0f}, Exclude);
+		Check(
+			Excluded.Succeeded() && Excluded.Instance == FarPart,
+			"exclude filtering deduplicates roots and applies descendant semantics"
+		);
+		RaycastParams Include;
+		Include.FilterType = Enums::RaycastFilterType::Include;
+		Include.FilterDescendantsInstances.Values = {FolderValue};
+		auto Included = WorkspaceValue->ResolveRaycast({}, {12.0f, 0.0f, 0.0f}, Include);
+		Check(
+			Included.Succeeded() && Included.Instance == NearPart,
+			"include filtering admits only colliders under semantic roots"
+		);
+
+		auto ForeignWorkspace = MakeWorkspace();
+		auto Foreign = MakeRayPart(ForeignWorkspace, "Foreign", {3.0f, 0.0f, 0.0f});
+		RaycastParams CrossWorld;
+		CrossWorld.FilterDescendantsInstances.Values = {Foreign};
+		Check(
+			WorkspaceValue->ResolveRaycast({}, {12.0f, 0.0f, 0.0f}, CrossWorld).Status ==
+				PhysicsOperationStatus::InvalidDescription,
+			"cross-world filter roots fail closed"
+		);
+		RaycastParams Destroyed;
+		Destroyed.FilterDescendantsInstances.Values = {NearPart};
+		NearPart->Destroy();
+		Check(
+			WorkspaceValue->ResolveRaycast({}, {12.0f, 0.0f, 0.0f}, Destroyed).Status ==
+				PhysicsOperationStatus::InvalidDescription,
+			"destroyed filter roots fail without dereferencing stale identity"
+		);
+		auto Replacement = MakeRayPart(WorkspaceValue, "Replacement", {5.0f, 0.0f, 0.0f});
+		auto ReplacementHit = WorkspaceValue->ResolveRaycast({}, {12.0f, 0.0f, 0.0f});
+		Check(
+			ReplacementHit.Succeeded() && ReplacementHit.Instance == Replacement && ReplacementHit.Instance != NearPart,
+			"destroyed collider identity cannot resolve to replacement storage"
+		);
+
+		Replacement->SetCFrame(CFrame(glm::vec3{20.0f, 0.0f, 0.0f}) * CFrame::Angles(0.0f, 0.785398163f, 0.0f));
+		Replacement->SetSize({8.0f, 2.0f, 2.0f});
+		auto MovedMiss = WorkspaceValue->ResolveRaycast({}, {12.0f, 0.0f, 0.0f});
+		Check(
+			MovedMiss.Succeeded() && MovedMiss.Instance == FarPart,
+			"query safe point observes committed CFrame and Size together before casting"
+		);
+		auto RotatedHit = WorkspaceValue->ResolveRaycast({}, {30.0f, 0.0f, 0.0f});
+		Check(
+			RotatedHit.Succeeded() && RotatedHit.HasHit() && std::isfinite(RotatedHit.Distance) &&
+				Near(glm::length(RotatedHit.Normal), 1.0f),
+			"rotated Box3D collider produces a finite normalized semantic hit"
+		);
+	}
+
+	void TestPrimitiveRaycastsAndDeterministicTie() {
+		using namespace gargantuan;
+		for (const auto [Shape, Name] : std::array{
+				 std::pair{Enums::PartType::Block, "box"},
+				 std::pair{Enums::PartType::Ball, "ball"},
+				 std::pair{Enums::PartType::Cylinder, "cylinder"},
+				 std::pair{Enums::PartType::Wedge, "wedge"},
+				 std::pair{Enums::PartType::CornerWedge, "corner wedge"}
+			 }) {
+			auto WorkspaceValue = MakeWorkspace();
+			auto PartValue = MakeRayPart(WorkspaceValue, Name, {5.0f, 0.0f, 0.0f}, {2.0f, 2.0f, 2.0f}, Shape);
+			auto Hit = WorkspaceValue->ResolveRaycast({}, {10.0f, 0.0f, 0.0f});
+			Check(
+				Hit.Succeeded() && Hit.Instance == PartValue && std::isfinite(Hit.Distance),
+				"canonical rigid primitive participates in the real Box3D raycast"
+			);
+		}
+
+		auto WorkspaceValue = MakeWorkspace();
+		auto First = MakeRayPart(WorkspaceValue, "TieFirst", {5.0f, 0.0f, 0.0f});
+		auto Second = MakeRayPart(WorkspaceValue, "TieSecond", {5.0f, 0.0f, 0.0f});
+		auto Expected = First->GetObjectId() < Second->GetObjectId() ? First : Second;
+		for (int Iteration = 0; Iteration < 64; ++Iteration) {
+			auto Hit = WorkspaceValue->ResolveRaycast({}, {10.0f, 0.0f, 0.0f});
+			Check(Hit.Instance == Expected, "equal-distance ray hits use stable generation-safe identity ordering");
+		}
+	}
+
+	void TestGameplayLuauRaycastStress() {
+		using namespace gargantuan;
+		auto Game = std::make_shared<DataModel>();
+		auto WorkspaceValue = std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
+		auto Target = MakeRayPart(WorkspaceValue, "RayTarget", {5.0f, 0.0f, 0.0f});
+		ScriptEngine Engine(Game);
+		const std::string Source = R"(
+			local Workspace = game:GetService("Workspace")
+			local Params = RaycastParams.new()
+			Params.FilterType = Enum.RaycastFilterType.Exclude
+			Params.FilterDescendantsInstances = {}
+			local TooMany = {}
+			for Index = 1, 129 do
+				TooMany[Index] = Workspace.RayTarget
+			end
+			assert(not pcall(function() Params.FilterDescendantsInstances = TooMany end))
+			assert(not pcall(function() Params.FilterDescendantsInstances = { [1] = Workspace.RayTarget, [3] = Workspace.RayTarget } end))
+			assert(not pcall(function() Params.FilterDescendantsInstances = { ["1"] = Workspace.RayTarget } end))
+			assert(not pcall(function() Params.FilterDescendantsInstances = { [1e300] = Workspace.RayTarget } end))
+			assert(not pcall(function() Params.FilterType = Enum.PartType.Block end))
+			Params.FilterDescendantsInstances = { Workspace.RayTarget, Workspace.RayTarget }
+			assert(Workspace:Raycast(Vector3.zero, Vector3.new(10, 0, 0), Params) == nil)
+			Params.FilterType = Enum.RaycastFilterType.Include
+			assert(Workspace:Raycast(Vector3.zero, Vector3.new(10, 0, 0), Params).Instance == Workspace.RayTarget)
+			Params.FilterType = Enum.RaycastFilterType.Exclude
+			Params.FilterDescendantsInstances = {}
+			for Index = 1, 2000 do
+				local Result = Workspace:Raycast(Vector3.zero, Vector3.new(10, 0, 0), Params)
+				assert(Result and Result.Instance == Workspace.RayTarget)
+				assert(math.abs(Result.Distance - 4) < 0.01)
+				if Index == 1 then
+					assert(not pcall(function() Result.Distance = 2 end))
+				end
+			end
+			assert(Workspace:Raycast(Vector3.new(0, 10, 0), Vector3.new(10, 0, 0), Params) == nil)
+		)";
+		auto Bytecode = Luau::compile(Source);
+		const int Loaded = luau_load(Engine.L, "physics-query-stress", Bytecode.data(), Bytecode.size(), 0);
+		ScriptSecurityScope Security(ScriptSecurityContext::ClientRuntime());
+		const int Status = Loaded == LUA_OK ? lua_pcall(Engine.L, 0, 0, 0) : Loaded;
+		if (Status != LUA_OK)
+			std::cerr << "LUAU ERROR: " << (lua_tostring(Engine.L, -1) ? lua_tostring(Engine.L, -1) : "unknown")
+					  << '\n';
+		Check(Status == LUA_OK, "normal gameplay Luau can issue repeated bounded immutable semantic raycasts");
+	}
 }
 
 int main() {
@@ -357,6 +578,9 @@ int main() {
 	TestConstraintAndPendingDestroy();
 	TestSimulationPublicationAndImpulse();
 	TestTouchAndSensorUpdates();
+	TestSemanticRaycastContract();
+	TestPrimitiveRaycastsAndDeterministicTie();
+	TestGameplayLuauRaycastStress();
 	if (Failures == 0) std::cout << "All physics backend tests passed\n";
 	return Failures == 0 ? 0 : 1;
 }

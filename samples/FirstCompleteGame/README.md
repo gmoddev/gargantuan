@@ -5,6 +5,10 @@ third-person collection course, not a showcase: collect three cyan shards,
 avoid the moving obstacle, and use the on-screen button to restart after the
 win panel appears.
 
+The second collectible requires an unobstructed rigid-physics line of sight.
+Its prompt exercises the same general `Workspace:Raycast` boundary available
+to gameplay rather than a sample-specific visibility shortcut.
+
 ## Controls
 
 - `W`, `A`, `S`, `D`: move through the default `ActionMap` and

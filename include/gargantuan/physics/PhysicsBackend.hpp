@@ -23,6 +23,7 @@ namespace gargantuan {
 		[[nodiscard]] virtual std::optional<PhysicsBodyState> GetBodyState(PhysicsBodyId Body) const = 0;
 		[[nodiscard]] virtual PhysicsKinematicMotionResult
 		MoveKinematicCapsule(const PhysicsKinematicMotionRequest &Request) const = 0;
+		[[nodiscard]] virtual PhysicsRaycastResult Raycast(const PhysicsRaycastRequest &Request) const = 0;
 		[[nodiscard]] virtual PhysicsStepResult Step(const PhysicsStepConfig &Config) = 0;
 	};
 
@@ -52,6 +53,7 @@ namespace gargantuan {
 		[[nodiscard]] std::optional<PhysicsBodyState> GetBodyState(PhysicsBodyId Body) const;
 		[[nodiscard]] PhysicsKinematicMotionResult
 		MoveKinematicCapsule(const PhysicsKinematicMotionRequest &Request) const;
+		[[nodiscard]] PhysicsRaycastResult Raycast(const PhysicsRaycastRequest &Request) const;
 		[[nodiscard]] PhysicsStepResult Step(const PhysicsStepConfig &Config);
 
 	  private:

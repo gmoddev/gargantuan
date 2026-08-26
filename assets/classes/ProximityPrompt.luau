@@ -52,6 +52,14 @@ return c({
 			category = "Interaction",
 			range = { minimum = 0, maximum = 30 },
 		},
+		RequiresLineOfSight = {
+			description = "Whether rigid world geometry must leave the resolved prompt anchor visible.",
+			type = t.Bool,
+			unmodified = "false",
+			serializable = true,
+			replicated = true,
+			category = "Interaction",
+		},
 	},
 
 	signals = {

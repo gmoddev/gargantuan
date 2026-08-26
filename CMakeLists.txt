@@ -543,6 +543,8 @@ if(BUILD_TESTING)
 	endif()
 	add_executable(gargantuan_physics_backend_tests "tests/PhysicsBackendTests.cpp")
 	target_link_libraries(gargantuan_physics_backend_tests PRIVATE gargantuan_core)
+	add_executable(gargantuan_physics_query_benchmark "tests/PhysicsQueryBenchmark.cpp")
+	target_link_libraries(gargantuan_physics_query_benchmark PRIVATE gargantuan_core nlohmann_json)
 	add_executable(gargantuan_soft_body_physics_tests "tests/SoftBodyPhysicsTests.cpp")
 	target_link_libraries(gargantuan_soft_body_physics_tests PRIVATE gargantuan_core)
 	add_executable(gargantuan_soft_body_physics_benchmark "tests/SoftBodyPhysicsBenchmark.cpp")
@@ -680,6 +682,7 @@ if(BUILD_TESTING)
 			gargantuan_prerun_bootstrap_tests
 			gargantuan_attributes_tags_profile
 			gargantuan_physics_backend_tests
+			gargantuan_physics_query_benchmark
 			gargantuan_soft_body_physics_tests
 			gargantuan_soft_body_physics_benchmark
 			gargantuan_platform_input_boundary_tests
@@ -758,6 +761,7 @@ if(BUILD_TESTING)
 			"$<TARGET_FILE:gargantuan_fake_telemetry_missing_export>"
 	)
 	add_test(NAME gargantuan_physics_backend COMMAND gargantuan_physics_backend_tests)
+	add_test(NAME gargantuan_physics_query_benchmark_smoke COMMAND gargantuan_physics_query_benchmark --quick)
 	add_test(NAME gargantuan_soft_body_physics COMMAND gargantuan_soft_body_physics_tests)
 	add_test(NAME gargantuan_soft_body_physics_benchmark_smoke COMMAND gargantuan_soft_body_physics_benchmark --quick)
 	add_test(NAME gargantuan_platform_input_boundary COMMAND gargantuan_platform_input_boundary_tests)
@@ -799,6 +803,9 @@ if(BUILD_TESTING)
 	set_tests_properties(gargantuan_renderer_publication PROPERTIES LABELS "renderer;runtime;headless" TIMEOUT 120)
 	set_tests_properties(gargantuan_optional_telemetry PROPERTIES LABELS "telemetry;runtime;fail-open" TIMEOUT 60)
 	set_tests_properties(gargantuan_physics_backend PROPERTIES LABELS "physics;runtime" TIMEOUT 120)
+	set_tests_properties(gargantuan_physics_query_benchmark_smoke PROPERTIES
+		LABELS "physics;query;benchmark;headless" TIMEOUT 180
+	)
 	set_tests_properties(gargantuan_soft_body_physics PROPERTIES LABELS "physics;deformable;renderer;serialization;headless" TIMEOUT 180)
 	set_tests_properties(gargantuan_soft_body_physics_benchmark_smoke PROPERTIES LABELS "physics;deformable;benchmark;headless" TIMEOUT 120)
 	set_tests_properties(gargantuan_platform_input_boundary PROPERTIES LABELS "platform;input;runtime" TIMEOUT 120)

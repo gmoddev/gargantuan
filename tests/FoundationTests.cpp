@@ -5397,6 +5397,21 @@ namespace {
 				AtomicChanges["Result"]["Records"][0]["PropertyName"] == "CFrame" &&
 				AtomicChanges["Result"]["Records"][1]["PropertyName"] == "Size",
 				"SetTransform did not commit CFrame+Size as one revision with coherent ordered journal records");
+			const ObjectId LiveWorkspaceId{
+				(*WorkspaceObject)["Id"]["Slot"].get<std::uint32_t>(),
+				(*WorkspaceObject)["Id"]["Generation"].get<std::uint32_t>(),
+			};
+			const ObjectId LiveTargetId{
+				(*extensionTarget)["Id"]["Slot"].get<std::uint32_t>(),
+				(*extensionTarget)["Id"]["Generation"].get<std::uint32_t>(),
+			};
+			auto LiveWorkspace = std::dynamic_pointer_cast<Workspace>(ObjectRegistry::Get().Lookup(LiveWorkspaceId));
+			auto LiveTarget = std::dynamic_pointer_cast<BasePart>(ObjectRegistry::Get().Lookup(LiveTargetId));
+			const auto AtomicColliderHit = LiveWorkspace ?
+				LiveWorkspace->ResolveRaycast({-10.0f, 2.0f, -3.0f}, {30.0f, 0.0f, 0.0f}) : WorldRaycastResult{};
+			Check(LiveWorkspace && LiveTarget && AtomicColliderHit.Succeeded() &&
+				AtomicColliderHit.Instance == LiveTarget && std::abs(AtomicColliderHit.Distance - 13.5f) < 0.001f,
+				"atomic SetTransform did not publish the combined CFrame+Size collider before raycast");
 			auto UndoTransform = call("Undo", Json::object(), "test-token");
 			auto UndoTransformChanges = call("PollChanges", Json::object(), "test-token");
 			auto RedoTransform = call("Redo", Json::object(), "test-token");

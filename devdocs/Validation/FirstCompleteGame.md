@@ -1,6 +1,6 @@
 # First complete game validation
 
-Status: interaction slice revalidated locally on 2026-08-25. This document records a vertical-slice
+Status: physics-query and interaction LOS slice revalidated locally on 2026-08-26. This document records a vertical-slice
 falsification exercise; it does not claim that Gargantuan is generally usable.
 
 ## Game design and scope
@@ -63,7 +63,8 @@ honest claim of an entirely GUI-authored workflow.
 - `ActionMap`, `DefaultPlayerController`, `DefaultCamera`, and
   `DefaultPlayerRuntime`;
 - `ProximityPrompt`, `InteractionService`, keyboard/gamepad semantic bindings,
-  touch presentation, zero-duration activation, and hold activation;
+  touch presentation, zero-duration activation, hold activation, and semantic
+  rigid-physics line of sight;
 - kinematic player motion, physics stepping, camera, and renderer publication;
 - ordinary Luau scripts, services, signals, cleanup, and structured output;
 - `ScreenGui`, `Frame`, `ImageLabel`, `TextLabel`, `TextButton`, layout, input,
@@ -105,13 +106,21 @@ while `RoundManager` contains only three `Prompt.Triggered` connections and
 game-specific collection behavior. The prior per-frame Luau distance loop was
 removed rather than left as a fallback.
 
+Physics Query Foundation 1 now supplies the general `Workspace:Raycast`
+boundary used by interaction LOS. `Collectible2` persists
+`RequiresLineOfSight=true`. The deterministic headless gate first proves the
+prompt is available with a clear path, inserts a rigid wall between the player
+and exact prompt anchor and proves it becomes unavailable, then destroys the
+wall and proves availability returns. This uses the same query/filter/identity
+path available to ordinary gameplay; there is no sample-specific LOS helper.
+
 ## Studio and API findings
 
 Findings use the requested A-F categories.
 
 | Category | Evidence |
 | --- | --- |
-| A - missing feature | The original proximity primitive and packaged launcher gaps are now closed. LOS remains intentionally unavailable until the physics boundary has a semantic raycast. |
+| A - missing feature | The original proximity primitive, semantic rigid raycast, working interaction LOS, and packaged launcher gaps are now closed. Shape/overlap queries and soft-body participation remain future work. |
 | B - API ergonomics | Basic prompt interaction now requires an authored prompt plus `Triggered` handler. Device-aware/rebindable hints and custom prompt presentation remain future ergonomics; AssetReference assignment remains the larger content concern. |
 | C - Studio UX | No transform gizmos or compound property editors; limited scalar Properties support; no bridge tools for Assets or Play; one hidden relaunch failed to establish a project session; no Run Standalone command. |
 | D - documentation/discoverability | A developer currently needs CMake/build-tree knowledge, adjacent runtime modules/DLL knowledge, and internal awareness of asset references to run the project outside Studio. |
@@ -147,7 +156,7 @@ modules appear in the authoring snapshot.
 The same gate saves a unique per-process copy, reopens it from disk, verifies
 all required hierarchy/classes and Script source, checks four Ready assets and
 their dependencies, and asserts every authored GUI `Position` and `Size`
-remains a four-component `UDim2`. It also verifies all five authored properties
+remains a four-component `UDim2`. It also verifies all six authored properties
 of the three prompts, including the 0.4-second hold prompt. The real sample was also closed/recreated and
 reopened during authoring. Runtime-only state does not persist.
 

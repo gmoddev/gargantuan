@@ -59,6 +59,13 @@ namespace gargantuan {
 							 .Message = "Physics backend is unavailable",
 						 };
 	}
+	PhysicsRaycastResult PhysicsWorld::Raycast(const PhysicsRaycastRequest &Request) const {
+		return Backend ? Backend->Raycast(Request)
+					   : PhysicsRaycastResult{
+							 .Status = PhysicsOperationStatus::BackendFailure,
+							 .Message = "Physics backend is unavailable",
+						 };
+	}
 	PhysicsStepResult PhysicsWorld::Step(const PhysicsStepConfig &Config) {
 		return Backend ? Backend->Step(Config) : PhysicsStepResult{};
 	}

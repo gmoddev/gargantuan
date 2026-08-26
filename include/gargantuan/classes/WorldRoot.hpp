@@ -6,6 +6,7 @@
 #include "gargantuan/classes/SoftBodyAttachment.hpp"
 #include "gargantuan/classes/SoftBodyMaterial.hpp"
 #include "gargantuan/classes/generated/WorldRoot.hpp"
+#include "gargantuan/datatypes/RaycastParams.hpp"
 #include "gargantuan/physics/PhysicsBackend.hpp"
 #include "gargantuan/physics/SoftBodyBackend.hpp"
 
@@ -18,12 +19,29 @@
 namespace gargantuan {
 	struct WorldRootTestAccess;
 
+	struct WorldRaycastResult {
+		PhysicsOperationStatus Status = PhysicsOperationStatus::Success;
+		std::string Message;
+		std::shared_ptr<BasePart> Instance;
+		glm::vec3 Position{0.0f};
+		glm::vec3 Normal{0.0f};
+		float Distance = 0.0f;
+
+		[[nodiscard]] bool Succeeded() const {
+			return Status == PhysicsOperationStatus::Success;
+		}
+		[[nodiscard]] bool HasHit() const {
+			return Instance != nullptr;
+		}
+	};
+
 	class WorldRoot : public Instance {
 		I_WorldRoot;
 
 		static constexpr int MAX_STEPS_PER_FRAME = 4;
 		static constexpr float STEP_INTERVAL = 1.0f / 60.0f;
 		static constexpr int SUB_STEP_COUNT = 4;
+		static constexpr std::size_t MaximumRaycastFilterTraversal = 16'384;
 
 		WorldRoot();
 		~WorldRoot() override;
@@ -56,8 +74,11 @@ namespace gargantuan {
 		bool GravityDirty = false;
 		bool PublishingPhysicsState = false;
 		bool ShuttingDownPhysics = false;
+		bool RaycastFailureLogged = false;
 
 		[[nodiscard]] PhysicsKinematicMotionResult ResolveKinematicMotion(const PhysicsKinematicMotionRequest &Request);
+		[[nodiscard]] WorldRaycastResult
+		ResolveRaycast(glm::vec3 Origin, glm::vec3 Direction, const RaycastParams &Params = {});
 		[[nodiscard]] std::optional<SoftBodyState> GetDeformableState(ObjectId Object) const;
 		[[nodiscard]] const SoftBodyStepProfile &GetLastSoftBodyProfile() const { return LastSoftBodyProfile; }
 
@@ -86,5 +107,7 @@ namespace gargantuan {
 		void RemoveInvalidConstraintMappings();
 		void ShutdownPhysics();
 		[[nodiscard]] std::shared_ptr<BasePart> ResolvePart(PhysicsBodyId Body) const;
+		[[nodiscard]] PhysicsOperationResult
+		BuildRaycastFilter(const RaycastParams &Params, PhysicsQueryFilter &Filter) const;
 	};
 }

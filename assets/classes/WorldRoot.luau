@@ -15,6 +15,11 @@ return c({
 	},
 
 	methods = {
+		Raycast = {
+			description = "Casts a bounded rigid-physics ray whose Direction magnitude is its maximum distance.",
+			asLuau = true,
+			luauSignature = "(self: WorldRoot, Origin: Vector3, Direction: Vector3, Params: RaycastParams?) -> { Instance: BasePart, Position: Vector3, Normal: Vector3, Distance: number }?",
+		},
 		MoveKinematicCapsule = {
 			description = "Moves a bounded capsule through real world geometry and returns neutral collision resolution data.",
 			asLuau = true,

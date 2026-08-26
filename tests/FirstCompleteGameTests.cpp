@@ -191,6 +191,36 @@ namespace {
 				"validated prompt activation did not collect and retire the prompt");
 		};
 		ActivateCollectible("Collectible1", std::chrono::milliseconds(0));
+		auto LosItem = std::dynamic_pointer_cast<Part>(WorkspaceValue->FindFirstChild("Collectible2", true));
+		auto LosPrompt = LosItem ? std::dynamic_pointer_cast<ProximityPrompt>(
+									   LosItem->FindFirstChildOfClass("ProximityPrompt", false)
+								   )
+								 : nullptr;
+		Require(
+			LosItem && LosPrompt && LosPrompt->GetRequiresLineOfSight(),
+			"sample must author Collectible2 as its LOS-enabled interaction"
+		);
+		Character->SetPosition(LosItem->GetPosition() + glm::vec3(0.0f, 1.0f, 0.0f));
+		std::this_thread::sleep_for(std::chrono::milliseconds(40));
+		Session.Step();
+		Require(InteractionValue->GetActivePrompt() == std::optional(LosPrompt),
+			"clear path did not expose the LOS-enabled sample prompt");
+		auto LosBlocker = std::make_shared<Part>();
+		LosBlocker->SetName("RuntimeLosProof");
+		LosBlocker->SetAnchored(true);
+		LosBlocker->SetCFrame(CFrame(LosItem->GetPosition() + glm::vec3(0.0f, 0.85f, 0.0f)));
+		LosBlocker->SetSize({2.0f, 0.1f, 2.0f});
+		LosBlocker->SetParent(WorkspaceValue);
+		std::this_thread::sleep_for(std::chrono::milliseconds(40));
+		Session.Step();
+		Require(!InteractionValue->GetAvailable(), "runtime rigid blocker did not hide the LOS-enabled sample prompt");
+		LosBlocker->Destroy();
+		std::this_thread::sleep_for(std::chrono::milliseconds(40));
+		Session.Step();
+		Require(
+			InteractionValue->GetActivePrompt() == std::optional(LosPrompt),
+			"removing the runtime blocker did not restore the LOS-enabled sample prompt"
+		);
 		ActivateCollectible("Collectible2", std::chrono::milliseconds(400));
 		Character->SetPosition({100.0f, 6.0f, 100.0f});
 		std::this_thread::sleep_for(std::chrono::milliseconds(40));
@@ -254,7 +284,7 @@ int main() {
 			"ProximityPrompt is not available to Studio's schema-driven Insert Object path"
 		);
 		for (const auto PropertyName : {
-			"Enabled", "ActionText", "ObjectText", "MaxActivationDistance", "HoldDuration"
+			"Enabled", "ActionText", "ObjectText", "MaxActivationDistance", "HoldDuration", "RequiresLineOfSight"
 		})
 			Require(std::ranges::any_of((*PromptDefinition)["Properties"], [&](const Json &Property) {
 				return Property.value("Name", "") == PropertyName && Property.value("Editable", false);
@@ -355,6 +385,7 @@ int main() {
 		const auto ReopenedProjectState = Reopened["Result"]["ProjectState"];
 		std::vector<std::string> ReopenedPromptLabels;
 		bool FoundHoldPrompt = false;
+		bool FoundLineOfSightPrompt = false;
 		for (const auto &Object : ReopenedObjects) {
 			if (Object.value("ClassName", "") != "ProximityPrompt") continue;
 			const auto &Properties = Object["EditorProperties"];
@@ -363,17 +394,20 @@ int main() {
 				Properties.contains("ActionText") && Properties["ActionText"].value("Value", "") == "Collect" &&
 				Properties.contains("ObjectText") && Properties.contains("MaxActivationDistance") &&
 				Properties["MaxActivationDistance"].value("Value", 0.0) == 4.0 &&
-				Properties.contains("HoldDuration"),
+				Properties.contains("HoldDuration") && Properties.contains("RequiresLineOfSight"),
 				"ProximityPrompt authored properties did not survive save/reopen"
 			);
 			ReopenedPromptLabels.push_back(Properties["ObjectText"].value("Value", ""));
 			FoundHoldPrompt = FoundHoldPrompt ||
 				std::abs(Properties["HoldDuration"].value("Value", 0.0) - 0.4) < 1e-6;
+			FoundLineOfSightPrompt = FoundLineOfSightPrompt ||
+									 (Properties["ObjectText"].value("Value", "") == "Collectible2" &&
+									  Properties["RequiresLineOfSight"].value("Value", false));
 		}
 		std::ranges::sort(ReopenedPromptLabels);
 		Require(
 			ReopenedPromptLabels == std::vector<std::string>{"Collectible1", "Collectible2", "Collectible3"} &&
-				FoundHoldPrompt,
+				FoundHoldPrompt && FoundLineOfSightPrompt,
 			"reopened prompt labels or hold semantics differ from the authored game"
 		);
 		for (const auto Name : {"Hud", "Badge", "Progress", "Hint", "WinPanel", "WinTitle", "WinDetail", "RestartButton"}) {

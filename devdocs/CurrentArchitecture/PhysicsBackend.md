@@ -1,7 +1,7 @@
 ---
 status: current
 owner: physics
-last_verified: 2026-08-23
+last_verified: 2026-08-26
 related_code:
   - include/gargantuan/physics/
   - src/physics/
@@ -167,13 +167,14 @@ Instance.
 
 ## Queries
 
-The first active gameplay query is
-`Workspace:MoveKinematicCapsule(Position, Radius, Height, Translation,
-Velocity)`. `WorldRoot` flushes pending body changes before the query and passes
-only the neutral request to `PhysicsWorld`. The returned Luau table owns its
-position, applied translation, clipped velocity, contact/floor normals, and
-collision/floor/truncation flags. It contains no body handle or borrowed backend
-memory.
+The two active gameplay queries are `Workspace:Raycast(Origin, Direction,
+Params?)` and `Workspace:MoveKinematicCapsule(Position, Radius, Height,
+Translation, Velocity)`. `WorldRoot` flushes pending body changes before either
+query and passes only neutral requests to `PhysicsWorld`. Returned Luau values
+own copied semantic results and contain no body handle or borrowed backend
+memory. See [Physics Query Foundation 1](PhysicsQueryFoundation1.md) for the
+raycast API, filter, identity, ordering, timing, limits, LOS integration, and
+benchmark evidence.
 
 The Box3D adapter uses `b3World_CollideMover`, `b3SolvePlanes`,
 `b3World_CastMover`, and `b3ClipVector`. It resolves contact planes toward the
@@ -187,9 +188,8 @@ heights below the capsule diameter fail closed.
 This primitive supplies collision authority rather than movement policy. The
 engine-shipped Luau controller decides gravity integration, walk speed, floor
 slope acceptance, jump/air-jump rules, and bounded step attempts. A replacement
-controller can call the same method directly. Raycasts, overlap APIs, arbitrary
-filters, ignored-character sets, moving-platform metadata, and hit Instance
-identity are not implemented.
+controller can call the same method directly. Shape casts, overlap APIs,
+moving-platform metadata, and soft-body query participation are not implemented.
 
 ## Failure and lifetime behavior
 

@@ -382,6 +382,109 @@ namespace gargantuan {
 				return Result;
 			}
 
+			[[nodiscard]] PhysicsRaycastResult Raycast(const PhysicsRaycastRequest &Request) const override {
+				PhysicsRaycastResult Result;
+				if (!b3World_IsValid(World)) {
+					Result.Status = PhysicsOperationStatus::BackendFailure;
+					Result.Message = "Physics world is unavailable";
+					return Result;
+				}
+				const float Distance = glm::length(Request.Direction);
+				if (!IsFinite(Request.Origin) || !IsFinite(Request.Direction) || !std::isfinite(Distance) ||
+					Distance < MinimumRaycastDistance || Distance > MaximumRaycastDistance ||
+					Request.Filter.Bodies.size() > MaximumRaycastFilterBodies) {
+					Result.Status = PhysicsOperationStatus::InvalidDescription;
+					Result.Message = "Physics raycast request is invalid or exceeds a query bound";
+					return Result;
+				}
+
+				struct RayHit {
+					PhysicsBodyId Body{};
+					glm::vec3 Position{0.0f};
+					glm::vec3 Normal{0.0f};
+					float Fraction = 0.0f;
+				};
+				struct RayContext {
+					const Box3DPhysicsBackend *Self = nullptr;
+					const PhysicsQueryFilter *Filter = nullptr;
+					std::vector<RayHit> Hits;
+					bool Truncated = false;
+				} Context{.Self = this, .Filter = &Request.Filter};
+				Context.Hits.reserve(std::min<std::size_t>(BodySlots.size(), MaximumRaycastCandidates));
+
+				auto CollectHit = [](b3ShapeId Shape,
+									 b3Pos Point,
+									 b3Vec3 Normal,
+									 float Fraction,
+									 std::uint64_t,
+									 int,
+									 int,
+									 void *RawContext) {
+					auto *Context = static_cast<RayContext *>(RawContext);
+					auto Owner = Context->Self->FindShapeOwner(Shape);
+					if (!Owner) return 1.0f;
+					const auto *Record = Context->Self->FindBody(*Owner);
+					if (!Record || !Record->Description.CanCollide) return 1.0f;
+					const bool Listed = std::binary_search(
+						Context->Filter->Bodies.begin(), Context->Filter->Bodies.end(), *Owner
+					);
+					const bool Accepted = Context->Filter->Type == PhysicsQueryFilterType::Include ? Listed : !Listed;
+					if (!Accepted) return 1.0f;
+					if (Context->Hits.size() == MaximumRaycastCandidates) {
+						Context->Truncated = true;
+						return 0.0f;
+					}
+					Context->Hits.push_back({
+						.Body = *Owner,
+						.Position =
+							{static_cast<float>(Point.x), static_cast<float>(Point.y), static_cast<float>(Point.z)},
+						.Normal = Box3DConversions::FromBox3(Normal),
+						.Fraction = Fraction,
+					});
+					return 1.0f;
+				};
+
+				(void)b3World_CastRay(
+					World,
+					b3Pos{Request.Origin.x, Request.Origin.y, Request.Origin.z},
+					Box3DConversions::ToBox3(Request.Direction),
+					b3DefaultQueryFilter(),
+					CollectHit,
+					&Context
+				);
+				if (Context.Truncated) {
+					Result.Status = PhysicsOperationStatus::BackendFailure;
+					Result.Message = "Physics raycast candidate limit reached";
+					Result.CandidatesTruncated = true;
+					return Result;
+				}
+				if (Context.Hits.empty()) return Result;
+
+				std::ranges::sort(Context.Hits, [](const RayHit &Left, const RayHit &Right) {
+					if (Left.Fraction != Right.Fraction) return Left.Fraction < Right.Fraction;
+					return Left.Body < Right.Body;
+				});
+				Result.Candidates.reserve(Context.Hits.size());
+				for (const auto &Hit : Context.Hits) {
+					const float NormalLength = glm::length(Hit.Normal);
+					if (!IsFinite(Hit.Position) || !IsFinite(Hit.Normal) || !std::isfinite(Hit.Fraction) ||
+						Hit.Fraction < 0.0f || Hit.Fraction > 1.0f || !std::isfinite(NormalLength) ||
+						NormalLength < MinimumRaycastDistance) {
+						Result.Status = PhysicsOperationStatus::BackendFailure;
+						Result.Message = "Physics backend returned an invalid raycast hit";
+						Result.Candidates.clear();
+						return Result;
+					}
+					Result.Candidates.push_back({
+						.Body = Hit.Body,
+						.Position = Hit.Position,
+						.Normal = Hit.Normal / NormalLength,
+						.Distance = Hit.Fraction * Distance,
+					});
+				}
+				return Result;
+			}
+
 			[[nodiscard]] PhysicsStepResult Step(const PhysicsStepConfig &Config) override {
 				PhysicsStepResult Result;
 				if (!b3World_IsValid(World) || !std::isfinite(Config.DeltaTime) || Config.DeltaTime <= 0.0f ||

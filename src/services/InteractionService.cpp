@@ -6,16 +6,17 @@
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/KinematicCharacter.hpp"
 #include "gargantuan/classes/Script.hpp"
+#include "gargantuan/datatypes/RaycastParams.hpp"
 #include "gargantuan/filesystem/Paths.hpp"
 #include "gargantuan/services/ActionMap.hpp"
 #include "gargantuan/services/Players.hpp"
+#include "gargantuan/services/Workspace.hpp"
 
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
-#include <limits>
 #include <stdexcept>
 #include <string_view>
 #include <utility>
@@ -135,6 +136,7 @@ namespace gargantuan {
 		World = WorldValue;
 		PlayerService = PlayersValue;
 		Actions = ActionMapValue;
+		PhysicsWorkspace = std::dynamic_pointer_cast<Workspace>(WorldValue->GetService("Workspace"));
 		DefaultPresentationEnabledValue = EnableDefaultPresentation;
 		RuntimeAttached = true;
 
@@ -200,6 +202,7 @@ namespace gargantuan {
 		World.reset();
 		PlayerService.reset();
 		Actions.reset();
+		PhysicsWorkspace.reset();
 		PresentedPrompt = {};
 		PresentedAvailable = false;
 		PresentedActionText.clear();
@@ -238,7 +241,8 @@ namespace gargantuan {
 		auto MarkDirty = [WeakSelf, PromptId](std::monostate) {
 			if (auto Self = WeakSelf.lock()) Self->MarkPromptDirty(PromptId);
 		};
-		for (const auto Name : {"Enabled", "ActionText", "ObjectText", "MaxActivationDistance", "HoldDuration"})
+		for (const auto Name :
+			 {"Enabled", "ActionText", "ObjectText", "MaxActivationDistance", "HoldDuration", "RequiresLineOfSight"})
 			Record.PromptConnections.push_back(Prompt->GetPropertyChangedSignal(Name)->Connect(MarkDirty));
 		Record.PromptConnections.push_back(Prompt->AncestryChanged->Connect(
 			[WeakSelf, PromptId](std::tuple<std::shared_ptr<Instance>, std::shared_ptr<Instance>>) {
@@ -390,12 +394,22 @@ namespace gargantuan {
 		return IsFiniteVector(Position) ? std::optional(Position) : std::nullopt;
 	}
 
-	InteractionService::QueryResult InteractionService::QueryNearest(const glm::vec3 &Origin) const {
+	InteractionService::QueryResult
+	InteractionService::QueryNearest(const glm::vec3 &Origin, const std::shared_ptr<Player> &PlayerValue) const {
 		QueryResult Result;
 		auto Center = PositionToCell(Origin);
 		if (!Center) return Result;
 		constexpr std::int64_t CellRadius = 4;
-		float BestDistance = std::numeric_limits<float>::infinity();
+		struct Candidate {
+			ObjectId Prompt;
+			float DistanceSquared = 0.0f;
+		};
+		auto CandidateLess = [](const Candidate &Left, const Candidate &Right) {
+			if (Left.DistanceSquared != Right.DistanceSquared) return Left.DistanceSquared < Right.DistanceSquared;
+			return Left.Prompt < Right.Prompt;
+		};
+		std::array<Candidate, MaximumLineOfSightRaycastsPerQuery> Candidates;
+		std::size_t CandidateCount = 0;
 		for (std::int64_t X = Center->X - CellRadius; X <= Center->X + CellRadius; ++X)
 			for (std::int64_t Y = Center->Y - CellRadius; Y <= Center->Y + CellRadius; ++Y)
 				for (std::int64_t Z = Center->Z - CellRadius; Z <= Center->Z + CellRadius; ++Z) {
@@ -413,15 +427,62 @@ namespace gargantuan {
 						const float Limit = Prompt->GetMaxActivationDistance();
 						if (!std::isfinite(CandidateDistanceSquared) || CandidateDistanceSquared > Limit * Limit)
 							continue;
-						if (!Result.Prompt.IsValid() || CandidateDistanceSquared < BestDistance ||
-							(CandidateDistanceSquared == BestDistance && PromptId < Result.Prompt)) {
-							Result.Prompt = PromptId;
-							Result.DistanceSquared = CandidateDistanceSquared;
-							BestDistance = CandidateDistanceSquared;
-						}
+						const Candidate Value{PromptId, CandidateDistanceSquared};
+						std::size_t InsertAt = 0;
+						while (InsertAt < CandidateCount && CandidateLess(Candidates[InsertAt], Value)) ++InsertAt;
+						if (InsertAt == Candidates.size()) continue;
+						if (CandidateCount < Candidates.size()) ++CandidateCount;
+						for (std::size_t Index = CandidateCount - 1; Index > InsertAt; --Index)
+							Candidates[Index] = Candidates[Index - 1];
+						Candidates[InsertAt] = Value;
 					}
 				}
+		for (std::size_t Index = 0; Index < CandidateCount; ++Index) {
+			const auto &Candidate = Candidates[Index];
+			auto Found = Prompts.find(Candidate.Prompt);
+			auto Prompt = Found == Prompts.end() ? nullptr : Found->second.Prompt.lock();
+			if (!Prompt || Prompt->GetDestroyed() || Prompt->IsDestroying() || !Prompt->GetEnabled()) continue;
+			if (Prompt->GetRequiresLineOfSight()) {
+				if (Result.Raycasts == MaximumLineOfSightRaycastsPerQuery) break;
+				++Result.Raycasts;
+				if (!PlayerValue || !HasLineOfSight(PlayerValue, Prompt, Origin, Found->second.Position)) continue;
+			}
+			Result.Prompt = Candidate.Prompt;
+			Result.DistanceSquared = Candidate.DistanceSquared;
+			break;
+		}
 		return Result;
+	}
+
+	bool InteractionService::HasLineOfSight(
+		const std::shared_ptr<Player> &PlayerValue,
+		const std::shared_ptr<ProximityPrompt> &Prompt,
+		const glm::vec3 &Origin,
+		const glm::vec3 &Anchor
+	) const {
+		if (!Prompt || !Prompt->GetRequiresLineOfSight()) return true;
+		auto WorkspaceValue = PhysicsWorkspace.lock();
+		if (!WorkspaceValue || WorkspaceValue->GetDestroyed() || WorkspaceValue->IsDestroying()) return false;
+		auto Character = PlayerValue ? PlayerValue->GetCharacter() : std::nullopt;
+		if (!Character || !*Character || (*Character)->GetDestroyed() || (*Character)->IsDestroying()) return false;
+		const auto Direction = Anchor - Origin;
+		if (!IsFiniteVector(Direction) ||
+			glm::dot(Direction, Direction) < MinimumRaycastDistance * MinimumRaycastDistance)
+			return true;
+		RaycastParams Params;
+		Params.FilterType = Enums::RaycastFilterType::Exclude;
+		Params.FilterDescendantsInstances.Values.emplace_back(*Character);
+		++LastLineOfSightRaycasts;
+		auto Result = WorkspaceValue->ResolveRaycast(Origin, Direction, Params);
+		if (!Result.Succeeded()) return false;
+		if (!Result.HasHit()) return true;
+		auto Current = Prompt->GetParent();
+		while (Current && *Current) {
+			if (*Current == Result.Instance) return true;
+			if (Current->get() == WorkspaceValue.get()) break;
+			Current = (*Current)->GetParent();
+		}
+		return false;
 	}
 
 	bool InteractionService::IsActivationValid(
@@ -438,6 +499,7 @@ namespace gargantuan {
 		const float CandidateDistanceSquared = DistanceSquared(*Origin, *Anchor);
 		const float Limit = Prompt->GetMaxActivationDistance();
 		if (!std::isfinite(CandidateDistanceSquared) || CandidateDistanceSquared > Limit * Limit) return false;
+		if (!HasLineOfSight(PlayerValue, Prompt, *Origin, *Anchor)) return false;
 		if (ResolvedPrompt) *ResolvedPrompt = std::move(Prompt);
 		return true;
 	}
@@ -461,7 +523,8 @@ namespace gargantuan {
 		bool InputDown
 	) {
 		auto Origin = ResolvePlayerOrigin(PlayerValue);
-		const auto Candidate = Origin ? QueryNearest(*Origin).Prompt : ObjectId{};
+		const auto CandidateQuery = Origin ? QueryNearest(*Origin, PlayerValue) : QueryResult{};
+		const auto Candidate = CandidateQuery.Prompt;
 		if (State.ActivePrompt != Candidate) {
 			State.ActivePrompt = Candidate;
 			State.HoldingPrompt = {};
@@ -506,6 +569,7 @@ namespace gargantuan {
 
 	void InteractionService::Step(Clock::time_point Now) {
 		if (!RuntimeAttached) return;
+		LastLineOfSightRaycasts = 0;
 		const bool HasPendingInput = ActivationPressed || ActivationReleased;
 		if (!HasPendingInput && DirtyPrompts.empty() && LastEvaluation.time_since_epoch().count() != 0 &&
 			Now >= LastEvaluation && Now - LastEvaluation < EvaluationInterval)

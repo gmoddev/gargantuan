@@ -6,10 +6,13 @@
 #include "gargantuan/scripting/StackValue.hpp"
 
 #include <algorithm>
+#include <cmath>
+#include <limits>
 #include <lua.h>
 #include <map>
 #include <memory>
 #include <optional>
+#include <stdexcept>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -621,6 +624,143 @@ namespace gargantuan {
 	PhysicsKinematicMotionResult WorldRoot::ResolveKinematicMotion(const PhysicsKinematicMotionRequest &Request) {
 		ApplyPendingPhysicsChanges();
 		return Physics.MoveKinematicCapsule(Request);
+	}
+
+	PhysicsOperationResult
+	WorldRoot::BuildRaycastFilter(const RaycastParams &Params, PhysicsQueryFilter &Filter) const {
+		Filter.Type = Params.FilterType == Enums::RaycastFilterType::Include ? PhysicsQueryFilterType::Include
+																			 : PhysicsQueryFilterType::Exclude;
+		if (Params.FilterDescendantsInstances.Values.size() > RaycastParams::MaximumFilterRoots)
+			return {PhysicsOperationStatus::InvalidDescription, "RaycastParams exceeds the 128-root limit"};
+
+		std::vector<std::shared_ptr<Instance>> Pending;
+		Pending.reserve(Params.FilterDescendantsInstances.Values.size());
+		std::unordered_set<ObjectId> Seen;
+		for (const auto &WeakRoot : Params.FilterDescendantsInstances.Values) {
+			auto Root = WeakRoot.lock();
+			if (!Root || Root->GetDestroyed() || Root->IsDestroying())
+				return {PhysicsOperationStatus::InvalidDescription, "RaycastParams contains a destroyed filter root"};
+			bool InThisWorld = false;
+			auto Current = std::optional<std::shared_ptr<Instance>>(Root);
+			while (Current && *Current) {
+				if (Current->get() == this) {
+					InThisWorld = true;
+					break;
+				}
+				Current = (*Current)->GetParent();
+			}
+			if (!InThisWorld)
+				return {
+					PhysicsOperationStatus::InvalidDescription, "RaycastParams filter root belongs to another world"
+				};
+			if (Seen.insert(Root->GetObjectId()).second) Pending.push_back(std::move(Root));
+		}
+
+		std::size_t Traversed = 0;
+		while (!Pending.empty()) {
+			auto Value = std::move(Pending.back());
+			Pending.pop_back();
+			if (!Value || Value->GetDestroyed() || Value->IsDestroying())
+				return {
+					PhysicsOperationStatus::InvalidDescription,
+					"RaycastParams filter hierarchy changed during query preparation"
+				};
+			if (++Traversed > MaximumRaycastFilterTraversal)
+				return {PhysicsOperationStatus::InvalidDescription, "RaycastParams descendant traversal limit reached"};
+			if (auto Part = std::dynamic_pointer_cast<BasePart>(Value)) {
+				auto Found = PartBodies.find(Part->GetObjectId());
+				if (Found != PartBodies.end() && Physics.IsBodyValid(Found->second)) {
+					Filter.Bodies.push_back(Found->second);
+					if (Filter.Bodies.size() > MaximumRaycastFilterBodies)
+						return {PhysicsOperationStatus::InvalidDescription, "RaycastParams collider limit reached"};
+				}
+			}
+			for (const auto &Child : Value->Children) {
+				if (!Child || Child->GetDestroyed() || Child->IsDestroying()) continue;
+				if (!Seen.insert(Child->GetObjectId()).second) continue;
+				if (Seen.size() > MaximumRaycastFilterTraversal)
+					return {
+						PhysicsOperationStatus::InvalidDescription, "RaycastParams descendant traversal limit reached"
+					};
+				Pending.push_back(Child);
+			}
+		}
+		std::ranges::sort(Filter.Bodies);
+		Filter.Bodies.erase(std::unique(Filter.Bodies.begin(), Filter.Bodies.end()), Filter.Bodies.end());
+		return {};
+	}
+
+	WorldRaycastResult WorldRoot::ResolveRaycast(glm::vec3 Origin, glm::vec3 Direction, const RaycastParams &Params) {
+		ApplyPendingPhysicsChanges();
+		PhysicsQueryFilter Filter;
+		if (auto Prepared = BuildRaycastFilter(Params, Filter); !Prepared.Succeeded())
+			return {.Status = Prepared.Status, .Message = std::move(Prepared.Message)};
+		auto Fail = [this](PhysicsOperationStatus Status, std::string Message) {
+			if (Status == PhysicsOperationStatus::BackendFailure && !RaycastFailureLogged) {
+				RaycastFailureLogged = true;
+				LOG_ERROR(App, "[Physics:Query] Raycast failed: %s", Message.c_str());
+			}
+			return WorldRaycastResult{.Status = Status, .Message = std::move(Message)};
+		};
+		auto BackendResult = Physics.Raycast({
+			.Origin = Origin,
+			.Direction = Direction,
+			.Filter = std::move(Filter),
+		});
+		if (!BackendResult.Succeeded()) return Fail(BackendResult.Status, std::move(BackendResult.Message));
+		if (!BackendResult.HasHit()) return {};
+		const float NearestDistance = BackendResult.Candidates.front().Distance;
+		const float TieEpsilon = std::max(
+			0.00001f, 8.0f * std::numeric_limits<float>::epsilon() * std::max(1.0f, std::abs(NearestDistance))
+		);
+		const PhysicsRaycastHit *SelectedHit = nullptr;
+		std::shared_ptr<BasePart> SelectedPart;
+		for (const auto &Candidate : BackendResult.Candidates) {
+			if (Candidate.Distance - NearestDistance > TieEpsilon) break;
+			auto CandidatePart = ResolvePart(Candidate.Body);
+			if (!CandidatePart)
+				return Fail(PhysicsOperationStatus::BackendFailure, "Physics raycast hit has no live semantic owner");
+			if (!SelectedPart || CandidatePart->GetObjectId() < SelectedPart->GetObjectId()) {
+				SelectedHit = &Candidate;
+				SelectedPart = std::move(CandidatePart);
+			}
+		}
+		if (!SelectedPart || !SelectedHit)
+			return Fail(PhysicsOperationStatus::BackendFailure, "Physics raycast hit has no live semantic owner");
+		return {
+			.Instance = std::move(SelectedPart),
+			.Position = SelectedHit->Position,
+			.Normal = SelectedHit->Normal,
+			.Distance = SelectedHit->Distance,
+		};
+	}
+
+	int WorldRoot::Raycast(lua_State *L, Instance *InstanceValue) {
+		if (!GetCurrentScriptSecurityContext().HasCapability(ScriptCapability::ReadDataModel))
+			throw std::runtime_error("Physics world queries require ReadDataModel");
+		auto *World = dynamic_cast<WorldRoot *>(InstanceValue);
+		if (!World || World->GetDestroyed() || World->IsDestroying())
+			throw std::runtime_error("Raycast requires a live WorldRoot");
+		RaycastParams Params;
+		if (!lua_isnoneornil(L, 4)) Params = CheckStackValue<RaycastParams>(L, 4);
+		auto Result = World->ResolveRaycast(CheckStackValue<glm::vec3>(L, 2), CheckStackValue<glm::vec3>(L, 3), Params);
+		if (!Result.Succeeded())
+			throw std::runtime_error(Result.Message.empty() ? "Physics raycast failed" : Result.Message);
+		if (!Result.HasHit()) {
+			lua_pushnil(L);
+			return 1;
+		}
+		lua_createtable(L, 0, 4);
+		StackValue<std::shared_ptr<Instance>>::Push(L, Result.Instance);
+		lua_setfield(L, -2, "Instance");
+		StackValue<glm::vec3>::Push(L, Result.Position);
+		lua_setfield(L, -2, "Position");
+		StackValue<glm::vec3>::Push(L, Result.Normal);
+		lua_setfield(L, -2, "Normal");
+		lua_pushnumber(L, Result.Distance);
+		lua_setfield(L, -2, "Distance");
+		lua_setreadonly(L, -1, true);
+		return 1;
 	}
 
 	int WorldRoot::MoveKinematicCapsule(lua_State *L, Instance *InstanceValue) {

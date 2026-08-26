@@ -22,6 +22,7 @@ namespace gargantuan {
 	class DataModel;
 	class Players;
 	class Script;
+	class Workspace;
 	struct InteractionServiceTestAccess;
 
 	class InteractionService : public Instance {
@@ -32,6 +33,7 @@ namespace gargantuan {
 		static constexpr std::size_t MaximumPrompts = 16'384;
 		static constexpr std::size_t MaximumPlayers = 64;
 		static constexpr std::size_t MaximumPromptsConsideredPerQuery = MaximumPrompts;
+		static constexpr std::size_t MaximumLineOfSightRaycastsPerQuery = 8;
 		static constexpr float SpatialCellSize = 16.0f;
 		static constexpr float MaximumSpatialCoordinate = 10'000'000.0f;
 		static constexpr auto EvaluationInterval = std::chrono::milliseconds(33);
@@ -74,11 +76,13 @@ namespace gargantuan {
 			ObjectId Prompt;
 			float DistanceSquared = 0.0f;
 			std::size_t Considered = 0;
+			std::size_t Raycasts = 0;
 		};
 
 		std::weak_ptr<DataModel> World;
 		std::weak_ptr<Players> PlayerService;
 		std::weak_ptr<ActionMap> Actions;
+		std::weak_ptr<Workspace> PhysicsWorkspace;
 		std::unordered_map<ObjectId, PromptRecord> Prompts;
 		std::unordered_map<CellKey, std::vector<ObjectId>, CellKeyHash> SpatialCells;
 		std::unordered_set<ObjectId> DirtyPrompts;
@@ -102,6 +106,7 @@ namespace gargantuan {
 		bool ActivationReleased = false;
 		bool RejectionLogged = false;
 		bool RuntimeAttached = false;
+		mutable std::size_t LastLineOfSightRaycasts = 0;
 
 		void AttachRuntime(
 			const std::shared_ptr<DataModel> &WorldValue,
@@ -126,7 +131,14 @@ namespace gargantuan {
 			const std::shared_ptr<ProximityPrompt> &Prompt, std::vector<std::shared_ptr<Instance>> *Observed = nullptr
 		);
 		[[nodiscard]] static std::optional<glm::vec3> ResolvePlayerOrigin(const std::shared_ptr<Player> &PlayerValue);
-		[[nodiscard]] QueryResult QueryNearest(const glm::vec3 &Origin) const;
+		[[nodiscard]] QueryResult
+		QueryNearest(const glm::vec3 &Origin, const std::shared_ptr<Player> &PlayerValue = nullptr) const;
+		[[nodiscard]] bool HasLineOfSight(
+			const std::shared_ptr<Player> &PlayerValue,
+			const std::shared_ptr<ProximityPrompt> &Prompt,
+			const glm::vec3 &Origin,
+			const glm::vec3 &Anchor
+		) const;
 		[[nodiscard]] bool IsActivationValid(
 			const std::shared_ptr<Player> &PlayerValue,
 			ObjectId PromptId,

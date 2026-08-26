@@ -8,6 +8,7 @@
 #include "gargantuan/datatypes/Color3.hpp"
 #include "gargantuan/datatypes/Enum.hpp"
 #include "gargantuan/datatypes/Random.hpp"
+#include "gargantuan/datatypes/RaycastParams.hpp"
 #include "gargantuan/datatypes/Rect.hpp"
 #include "gargantuan/datatypes/Signal.hpp"
 #include "gargantuan/datatypes/TweenInfo.hpp"
@@ -58,7 +59,7 @@ namespace gargantuan {
 		// {"NumberSequence", OpenLibNumberSequence, NumberSequence::CreateUserdataMetatable},
 		// {"NumberSequenceKeypoint", OpenLibNumberSequenceKeypoint, NumberSequenceKeypoint::CreateUserdataMetatable},
 		{"Random", OpenLibRandom, Random::CreateUserdataMetatable},
-		// {"RaycastParams", OpenLibRaycastParams},
+		{"RaycastParams", OpenLibRaycastParams, RaycastParams::CreateUserdataMetatable},
 		{"Rect", nullptr, Rect::CreateUserdataMetatable},
 		// {"Region3", OpenLibRegion3, Region3::CreateUserdataMetatable},
 		{"UDim", OpenLibUDim, UDim::CreateUserdataMetatable},

@@ -14,6 +14,10 @@ namespace gargantuan {
 
 	inline constexpr std::size_t MaximumKinematicCollisionPlanes = 32;
 	inline constexpr std::size_t MaximumKinematicMotionIterations = 5;
+	inline constexpr std::size_t MaximumRaycastFilterBodies = 4096;
+	inline constexpr std::size_t MaximumRaycastCandidates = 4096;
+	inline constexpr float MaximumRaycastDistance = 100'000.0f;
+	inline constexpr float MinimumRaycastDistance = 0.0001f;
 
 	struct PhysicsBodyId {
 		std::uint32_t Slot = 0;
@@ -93,6 +97,22 @@ namespace gargantuan {
 		glm::vec3 Velocity{0.0f};
 	};
 
+	enum class PhysicsQueryFilterType : std::uint8_t {
+		Exclude,
+		Include,
+	};
+
+	struct PhysicsQueryFilter {
+		PhysicsQueryFilterType Type = PhysicsQueryFilterType::Exclude;
+		std::vector<PhysicsBodyId> Bodies;
+	};
+
+	struct PhysicsRaycastRequest {
+		glm::vec3 Origin{0.0f};
+		glm::vec3 Direction{0.0f};
+		PhysicsQueryFilter Filter;
+	};
+
 	enum class PhysicsContactPhase : std::uint8_t {
 		Began,
 		Ended,
@@ -137,6 +157,27 @@ namespace gargantuan {
 		bool PlanesTruncated = false;
 
 		[[nodiscard]] bool Succeeded() const { return Status == PhysicsOperationStatus::Success; }
+	};
+
+	struct PhysicsRaycastHit {
+		PhysicsBodyId Body{};
+		glm::vec3 Position{0.0f};
+		glm::vec3 Normal{0.0f};
+		float Distance = 0.0f;
+	};
+
+	struct PhysicsRaycastResult {
+		PhysicsOperationStatus Status = PhysicsOperationStatus::Success;
+		std::string Message;
+		std::vector<PhysicsRaycastHit> Candidates;
+		bool CandidatesTruncated = false;
+
+		[[nodiscard]] bool Succeeded() const {
+			return Status == PhysicsOperationStatus::Success;
+		}
+		[[nodiscard]] bool HasHit() const {
+			return !Candidates.empty();
+		}
 	};
 }
 

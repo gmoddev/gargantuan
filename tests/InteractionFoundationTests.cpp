@@ -39,6 +39,9 @@ namespace gargantuan {
 		static std::size_t RegisteredPromptCount(const InteractionService &Service) {
 			return Service.Prompts.size();
 		}
+		static std::size_t LastLineOfSightRaycasts(const InteractionService &Service) {
+			return Service.LastLineOfSightRaycasts;
+		}
 	};
 }
 
@@ -453,6 +456,88 @@ namespace {
 		);
 	}
 
+	void TestRigidLineOfSight() {
+		Fixture Value;
+		Value.Character->SetPosition({0.0f, 0.0f, 0.0f});
+		auto CharacterPart = std::make_shared<Part>();
+		CharacterPart->SetName("CharacterQueryPart");
+		CharacterPart->SetAnchored(true);
+		CharacterPart->SetCFrame(CFrame(1.0f, 0.0f, 0.0f));
+		CharacterPart->SetSize({0.5f, 0.5f, 0.5f});
+		CharacterPart->SetParent(Value.Character);
+		auto [TargetPart, Prompt] = Value.MakePrompt("VisibleTarget", {4.0f, 0.0f, 0.0f}, 6.0f, 0.2f);
+		Prompt->SetRequiresLineOfSight(true);
+		int Triggers = 0;
+		Prompt->Triggered->Connect([&](std::shared_ptr<Player>) { ++Triggers; });
+		Value.Advance();
+		Check(
+			Value.Runtime->Interaction->GetAvailable(),
+			"LOS excludes the player's character and accepts the target owning Part"
+		);
+		Check(
+			InteractionServiceTestAccess::LastLineOfSightRaycasts(*Value.Runtime->Interaction) == 1,
+			"one narrowed LOS prompt produces one candidate raycast"
+		);
+
+		auto Occluder = std::make_shared<Part>();
+		Occluder->SetName("Occluder");
+		Occluder->SetAnchored(true);
+		Occluder->SetCFrame(CFrame(2.0f, 0.0f, 0.0f));
+		Occluder->SetSize({0.5f, 3.0f, 3.0f});
+		Occluder->SetParent(Value.Runtime->Workspace);
+		Value.Advance();
+		Check(!Value.Runtime->Interaction->GetAvailable(), "rigid geometry blocks an opted-in prompt");
+		Prompt->SetRequiresLineOfSight(false);
+		Value.Advance();
+		Check(
+			Value.Runtime->Interaction->GetAvailable(), "RequiresLineOfSight false preserves distance-only interaction"
+		);
+		Prompt->SetRequiresLineOfSight(true);
+		Occluder->SetParent(nullptr);
+		Value.Advance();
+
+		Value.Runtime->Interaction->BeginActivation();
+		Value.Advance(std::chrono::milliseconds(1));
+		Value.Advance(std::chrono::milliseconds(80));
+		Occluder->SetParent(Value.Runtime->Workspace);
+		Value.Advance(std::chrono::milliseconds(140));
+		Check(
+			Triggers == 0 && Value.Runtime->Interaction->GetHoldProgress() == 0.0f,
+			"occluder appearing during a hold cancels before Triggered"
+		);
+		Value.Runtime->Interaction->EndActivation();
+		Value.Advance();
+
+		Occluder->SetParent(nullptr);
+		Value.Advance();
+		Check(Value.Runtime->Interaction->GetAvailable(), "clearing rigid geometry restores LOS availability");
+		Prompt->SetHoldDuration(0.0f);
+		Occluder->SetParent(Value.Runtime->Workspace);
+		Value.Runtime->Interaction->BeginActivation();
+		Value.Advance(std::chrono::milliseconds(1));
+		Check(Triggers == 0, "zero-time press edge revalidates LOS rather than trusting prior presentation");
+		Value.Runtime->Interaction->EndActivation();
+		Value.Advance();
+
+		Prompt->SetEnabled(false);
+		Occluder->SetParent(nullptr);
+		auto AttachmentValue = std::make_shared<Attachment>();
+		AttachmentValue->SetCFrame(CFrame(-1.0f, 0.0f, 0.0f));
+		AttachmentValue->SetParent(TargetPart);
+		auto AttachedPrompt = std::make_shared<ProximityPrompt>();
+		AttachedPrompt->SetMaxActivationDistance(6.0f);
+		AttachedPrompt->SetRequiresLineOfSight(true);
+		AttachedPrompt->SetParent(AttachmentValue);
+		Value.Advance();
+		Check(
+			Value.Runtime->Interaction->GetActivePrompt() == std::optional(AttachedPrompt),
+			"prompt under Attachment raycasts to its exact resolved anchor and accepts the ancestor collider"
+		);
+		TargetPart->SetCFrame(CFrame(20.0f, 0.0f, 0.0f));
+		Value.Advance();
+		Check(!Value.Runtime->Interaction->GetAvailable(), "target movement during eligibility is revalidated");
+	}
+
 	void TestRendererUnavailable() {
 		auto Game = std::make_shared<DataModel>();
 		auto PlayersValue = std::dynamic_pointer_cast<Players>(Game->GetService("Players"));
@@ -499,6 +584,7 @@ int main() {
 	TestSemanticInputAndTextFocus();
 	TestDefaultTouchPresentation();
 	TestValidationAndLifetimeBounds();
+	TestRigidLineOfSight();
 	TestRendererUnavailable();
 	if (Failures == 0) std::cout << "[Interaction:Test] All interaction foundation tests passed\n";
 	return Failures == 0 ? 0 : 1;
