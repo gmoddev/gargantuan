@@ -8,6 +8,7 @@
 #include "gargantuan/scripting/ScriptEngine.hpp"
 #include "gargantuan/services/ActionMap.hpp"
 #include "gargantuan/services/AssetService.hpp"
+#include "gargantuan/services/InteractionService.hpp"
 #include "gargantuan/services/Players.hpp"
 #include "gargantuan/services/ProcessService.hpp"
 #include "gargantuan/services/RunService.hpp"
@@ -44,6 +45,7 @@ namespace gargantuan {
 		std::shared_ptr<UserInputService> UserInputService;
 		std::shared_ptr<ActionMap> ActionMap;
 		std::shared_ptr<AssetService> Assets;
+		std::shared_ptr<InteractionService> Interaction;
 		std::shared_ptr<Players> Players;
 
 		bool IsRunning = true;

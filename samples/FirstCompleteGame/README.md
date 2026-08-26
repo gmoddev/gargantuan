@@ -11,6 +11,8 @@ win panel appears.
   `DefaultPlayerRuntime` stack.
 - Mouse/right mouse: default third-person camera controls.
 - Space: default jump action.
+- `E` or gamepad South / `A`: activate the nearest visible collectible prompt.
+- Touch/click the prompt panel: use the same validated interaction path.
 - `K`: deterministic completion action used by the automated gate.
 - **Restart round**: resets collectibles, GUI state, and the runtime character.
 

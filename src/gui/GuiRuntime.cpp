@@ -2028,6 +2028,10 @@ namespace gargantuan {
 				return true;
 			}
 			if (State->HandleTextKey(*Key)) return true;
+			if (auto Input = std::dynamic_pointer_cast<TextBox>(
+					ObjectRegistry::Get().Lookup(State->KeyboardFocus())
+				); Input && Input->GetInteractable())
+				return true;
 			if (State->HandleScrollKey(*Key)) return true;
 			if (Key->Logical != LogicalKey::Space && Key->Logical != LogicalKey::Return) return false;
 			const ObjectId Focused = State->KeyboardFocus();

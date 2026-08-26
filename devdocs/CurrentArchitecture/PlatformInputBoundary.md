@@ -86,11 +86,14 @@ pointer identity is represented by value zero and never carries an SDL pointer.
 The existing mouse-button, mouse-position, mouse-delta, and input signals remain
 developer-facing behavior.
 
-Gamepad input is not yet consumed by `ActionMap` or `UserInputService`. The SDL
-adapter establishes the smallest future-safe semantic boundary: stable
-button/axis enums, a copied nonzero device identity, and axis values normalized
-to `[-1, 1]`. `UserInputService` does not yet expose gamepad events. Controller
-mapping and remapping policy remain deferred.
+Gamepad button input uses the same host boundary: stable button enums and a
+copied nonzero device identity. `InputObject` maps supported buttons to the
+closed `KeyCode` gamepad domain, `UserInputService` tracks their begin/end
+state, and `ActionMap.BindKey` can bind them without SDL types. Interaction
+Foundation uses South / `ButtonA` for the semantic `Interact` action. Axis
+values remain normalized to `[-1, 1]` at the host boundary, but ActionMap axis
+binding, complete controller mapping, hot-plug policy, and persisted remapping
+remain deferred.
 
 The current runtime supports one presentation window, so events do not expose
 a speculative engine window identity. Resize carries validated nonzero pixel
@@ -115,8 +118,8 @@ lower-level host/camera routing; it does not hide the event from
 the normal end/focus signals, retires GUI capture/composition, and releases
 relative-pointer and native text-input modes.
 
-`ActionMap` is the gameplay-semantic layer for keyboard, mouse-button, and
-relative pointer-delta bindings. Bindings are bounded, support multiple sources
+`ActionMap` is the gameplay-semantic layer for keyboard, normalized gamepad
+buttons, mouse buttons, and relative pointer-delta bindings. Bindings are bounded, support multiple sources
 per action, carry priority/consumption metadata, and expose digital, scalar, and
 frame-transient vector state. The shipped default binding module declares
 movement, jump, orbit, and Look actions. Binding policy is not part of the host

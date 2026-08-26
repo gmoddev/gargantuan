@@ -1,6 +1,6 @@
 # First complete game validation
 
-Status: validated locally on 2026-08-24. This document records a vertical-slice
+Status: interaction slice revalidated locally on 2026-08-25. This document records a vertical-slice
 falsification exercise; it does not claim that Gargantuan is generally usable.
 
 ## Game design and scope
@@ -8,8 +8,10 @@ falsification exercise; it does not claim that Gargantuan is generally usable.
 `samples/FirstCompleteGame` is a small third-person collection/obstacle game.
 The default player spawns over an authored floor, three cyan Parts act as
 collectibles, an anchored obstacle moves across the course, and an imported
-textured MeshPart marks the far end. Ordinary client Luau owns proximity
-collection, round state, obstacle motion, completion, and reset. A `ScreenGui`
+textured MeshPart marks the far end. Three authored `ProximityPrompt` Instances
+use `InteractionService` for proximity, hold timing, semantic input, and final
+validation. Ordinary client Luau listens to `Triggered` and owns collection,
+round state, obstacle motion, completion, and reset. A `ScreenGui`
 shows an imported badge, imported-font progress text, a completion panel, and a
 real `TextButton` restart action.
 
@@ -60,13 +62,15 @@ honest claim of an entirely GUI-authored workflow.
 - imported 512 x 512 PNG and imported Roboto font resolution;
 - `ActionMap`, `DefaultPlayerController`, `DefaultCamera`, and
   `DefaultPlayerRuntime`;
+- `ProximityPrompt`, `InteractionService`, keyboard/gamepad semantic bindings,
+  touch presentation, zero-duration activation, and hold activation;
 - kinematic player motion, physics stepping, camera, and renderer publication;
 - ordinary Luau scripts, services, signals, cleanup, and structured output;
 - `ScreenGui`, `Frame`, `ImageLabel`, `TextLabel`, `TextButton`, layout, input,
   activation, visibility, and viewport resize;
 - isolated Play/Stop, GUI/runtime mutation discard, and standalone execution.
 
-The persisted project has 23 Instances, 9 GUI Instances, and 4 imported asset
+The persisted project has 26 Instances, 9 authored GUI Instances, and 4 imported asset
 records. A representative headless runtime composition step is approximately
 0.1 ms on the validation machine; this is not a frame-time benchmark. A local
 real-GPU cold offscreen capture was approximately 250 ms, including renderer
@@ -76,7 +80,7 @@ no Error diagnostics.
 
 ## Native engine changes required
 
-Two composition defects were exposed and fixed.
+The original vertical slice exposed and fixed two composition defects.
 
 1. `GuiObject.Position` and `GuiObject.Size` were declared serializable but the
    project codec omitted `UDim2`. Studio Save silently dropped every authored
@@ -93,14 +97,22 @@ Two composition defects were exposed and fixed.
 No native gameplay code, sanitizer suppression, broad test serialization, or
 new foundation was added.
 
+Interaction Foundation 1 subsequently replaced the game's remaining semantic
+workaround. Engine now owns a bounded spatial prompt index, per-player
+candidate/hold state, final range validation, and read-only presentation state.
+The default visual composition remains engine-shipped Luau on ordinary GUI,
+while `RoundManager` contains only three `Prompt.Triggered` connections and
+game-specific collection behavior. The prior per-frame Luau distance loop was
+removed rather than left as a fallback.
+
 ## Studio and API findings
 
 Findings use the requested A-F categories.
 
 | Category | Evidence |
 | --- | --- |
-| A - missing feature | No semantic proximity/interact primitive is available, so Luau polls character/item distance during `PreSimulation`. There is also no packaged project launcher. |
-| B - API ergonomics | Basic interaction requires manual distance thresholds, per-item state, and lifecycle cleanup. Asset references are durable but difficult to assign without copying opaque `asset://` values. |
+| A - missing feature | The original proximity primitive and packaged launcher gaps are now closed. LOS remains intentionally unavailable until the physics boundary has a semantic raycast. |
+| B - API ergonomics | Basic prompt interaction now requires an authored prompt plus `Triggered` handler. Device-aware/rebindable hints and custom prompt presentation remain future ergonomics; AssetReference assignment remains the larger content concern. |
 | C - Studio UX | No transform gizmos or compound property editors; limited scalar Properties support; no bridge tools for Assets or Play; one hidden relaunch failed to establish a project session; no Run Standalone command. |
 | D - documentation/discoverability | A developer currently needs CMake/build-tree knowledge, adjacent runtime modules/DLL knowledge, and internal awareness of asset references to run the project outside Studio. |
 | E - architecture defect | `UDim2` persistence loss and the split Play-viewport resource publication were real cross-system defects. The gate covers `UDim2` and coherent runtime world/UI publication; the separate real-GPU viewport smoke covers device consumption. |
@@ -135,7 +147,8 @@ modules appear in the authoring snapshot.
 The same gate saves a unique per-process copy, reopens it from disk, verifies
 all required hierarchy/classes and Script source, checks four Ready assets and
 their dependencies, and asserts every authored GUI `Position` and `Size`
-remains a four-component `UDim2`. The real sample was also closed/recreated and
+remains a four-component `UDim2`. It also verifies all five authored properties
+of the three prompts, including the 0.4-second hold prompt. The real sample was also closed/recreated and
 reopened during authoring. Runtime-only state does not persist.
 
 Run the gate with:
@@ -179,9 +192,9 @@ knowledge after the package has been produced.
    Foundation 1).** Studio and CLI share PackageBuilder; Build and Run launches
    the produced package, whose runtime modules, shaders, DLL, and assets are
    executable-relative.
-3. **Interaction/proximity semantics and diagnostics.** Add the smallest
-   public proximity/interact primitive with clear Studio/Luau diagnostics so
-   ordinary games do not each rebuild polling, threshold, and cleanup policy.
+3. **Interaction/proximity semantics and diagnostics (completed by Interaction
+   Foundation 1).** `ProximityPrompt` and `InteractionService` replace the
+   per-game polling, threshold, hold, semantic input, and cleanup policy.
 
 Audio Foundation, Animation Foundation, lighting/material improvements,
 debugging/profiling, and GUI Foundation 3 remain candidates, but this slice did

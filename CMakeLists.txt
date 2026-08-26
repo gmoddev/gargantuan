@@ -69,6 +69,7 @@ endif()
 
 set(GARGANTUAN_RUNTIME_LUAU_MODULES
 	"DefaultActionMap.luau"
+	"DefaultInteractionRuntime.luau"
 	"DefaultPlayerController.luau"
 	"DefaultCamera.luau"
 	"DefaultPlayerRuntime.luau"
@@ -550,6 +551,10 @@ if(BUILD_TESTING)
 	target_link_libraries(gargantuan_platform_input_boundary_tests PRIVATE gargantuan_core)
 	add_executable(gargantuan_player_runtime_tests "tests/PlayerRuntimeTests.cpp")
 	target_link_libraries(gargantuan_player_runtime_tests PRIVATE gargantuan_core)
+	add_executable(gargantuan_interaction_foundation_tests "tests/InteractionFoundationTests.cpp")
+	target_link_libraries(gargantuan_interaction_foundation_tests PRIVATE gargantuan_core)
+	add_executable(gargantuan_interaction_foundation_benchmark "tests/InteractionFoundationBenchmark.cpp")
+	target_link_libraries(gargantuan_interaction_foundation_benchmark PRIVATE gargantuan_core nlohmann_json)
 	add_executable(gargantuan_entitlement_service_tests "tests/EntitlementServiceTests.cpp")
 	target_link_libraries(gargantuan_entitlement_service_tests PRIVATE gargantuan_core nlohmann_json)
 	target_compile_definitions(gargantuan_entitlement_service_tests PRIVATE
@@ -660,7 +665,10 @@ if(BUILD_TESTING)
 			COMMAND ${CMAKE_COMMAND} -E copy_if_different
 				"$<TARGET_FILE:SDL3::SDL3>"
 				"$<TARGET_FILE_DIR:gargantuan>"
-			COMMENT "Staging the shared SDL3 runtime once for Windows executables"
+			COMMAND ${CMAKE_COMMAND} -E copy_directory
+				"${CMAKE_CURRENT_BINARY_DIR}/runtime"
+				"$<TARGET_FILE_DIR:gargantuan>/runtime"
+			COMMENT "Staging the shared SDL3 and Luau runtimes once for Windows executables"
 			VERBATIM
 		)
 		set(GARGANTUAN_SDL_RUNTIME_TARGETS
@@ -676,6 +684,8 @@ if(BUILD_TESTING)
 			gargantuan_soft_body_physics_benchmark
 			gargantuan_platform_input_boundary_tests
 			gargantuan_player_runtime_tests
+			gargantuan_interaction_foundation_tests
+			gargantuan_interaction_foundation_benchmark
 			gargantuan_entitlement_service_tests
 			gargantuan_gui_foundation_tests
 			gargantuan_first_complete_game_tests
@@ -752,6 +762,9 @@ if(BUILD_TESTING)
 	add_test(NAME gargantuan_soft_body_physics_benchmark_smoke COMMAND gargantuan_soft_body_physics_benchmark --quick)
 	add_test(NAME gargantuan_platform_input_boundary COMMAND gargantuan_platform_input_boundary_tests)
 	add_test(NAME gargantuan_player_runtime COMMAND gargantuan_player_runtime_tests)
+	add_test(NAME gargantuan_interaction_foundation COMMAND gargantuan_interaction_foundation_tests)
+	add_test(NAME gargantuan_interaction_foundation_benchmark_smoke
+		COMMAND gargantuan_interaction_foundation_benchmark --quick)
 	add_test(NAME gargantuan_entitlement_service COMMAND gargantuan_entitlement_service_tests)
 	add_test(NAME gargantuan_gui_foundation COMMAND gargantuan_gui_foundation_tests)
 	add_test(NAME gargantuan_first_complete_game COMMAND gargantuan_first_complete_game_tests)
@@ -790,9 +803,15 @@ if(BUILD_TESTING)
 	set_tests_properties(gargantuan_soft_body_physics_benchmark_smoke PROPERTIES LABELS "physics;deformable;benchmark;headless" TIMEOUT 120)
 	set_tests_properties(gargantuan_platform_input_boundary PROPERTIES LABELS "platform;input;runtime" TIMEOUT 120)
 	set_tests_properties(gargantuan_player_runtime PROPERTIES LABELS "player;runtime;headless" TIMEOUT 180)
+	set_tests_properties(gargantuan_interaction_foundation PROPERTIES
+		LABELS "interaction;player;input;gui;runtime;headless" TIMEOUT 180
+	)
+	set_tests_properties(gargantuan_interaction_foundation_benchmark_smoke PROPERTIES
+		LABELS "interaction;benchmark;runtime;headless" TIMEOUT 180
+	)
 	set_tests_properties(gargantuan_entitlement_service PROPERTIES LABELS "entitlements;runtime;security;headless" TIMEOUT 120)
 	set_tests_properties(gargantuan_first_complete_game PROPERTIES
-		LABELS "game;sample;studio;assets;player;physics;gui;headless" TIMEOUT 180
+		LABELS "game;sample;studio;assets;player;physics;gui;interaction;headless" TIMEOUT 180
 	)
 	set_tests_properties(gargantuan_packaging PROPERTIES
 		LABELS "packaging;runtime;assets;security;headless" TIMEOUT 240
@@ -804,7 +823,7 @@ if(BUILD_TESTING)
 		LABELS "packaging;benchmark;runtime;headless" TIMEOUT 120
 	)
 	set_tests_properties(gargantuan_first_complete_game_package_smoke PROPERTIES
-		LABELS "packaging;game;runtime;relocation;headless" TIMEOUT 180
+		LABELS "packaging;game;runtime;interaction;relocation;headless" TIMEOUT 180
 	)
 	set_tests_properties(gargantuan_prerun_bootstrap PROPERTIES LABELS "prerun;runtime" TIMEOUT 120)
 	set_tests_properties(gargantuan_networking_contracts gargantuan_simulated_transport gargantuan_scheduler_contract

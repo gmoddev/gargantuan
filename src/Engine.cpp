@@ -30,10 +30,14 @@ namespace gargantuan {
 		  WorldRoot(std::static_pointer_cast<gargantuan::WorldRoot>(Workspace)),
 		  RunService(GetService<gargantuan::RunService>()), ProcessService(GetService<gargantuan::ProcessService>()),
 		  UserInputService(GetService<gargantuan::UserInputService>()), ActionMap(GetService<gargantuan::ActionMap>()),
-		  Assets(GetService<gargantuan::AssetService>()), Players(GetService<gargantuan::Players>()) {
+		  Assets(GetService<gargantuan::AssetService>()), Interaction(GetService<gargantuan::InteractionService>()),
+		  Players(GetService<gargantuan::Players>()) {
 		const auto DefaultGuiFont = Paths::GetExecutableDirectory() / "runtime" / "GargantuanSans.ttf";
 		ActionMap->AttachInputService(UserInputService);
 		Players->InitializeLocalPlayer();
+		Interaction->AttachRuntime(
+			DataModel, Players, ActionMap, Renderer && dynamic_cast<HeadlessRenderer *>(Renderer) == nullptr
+		);
 		Assets->ConfigureBuiltInFont(DefaultGuiFont);
 		Gui = std::make_unique<GuiRuntime>(DataModel, DefaultGuiFont);
 		if (Renderer) {
@@ -72,6 +76,7 @@ namespace gargantuan {
 		DataModelDestroyingConnection = DataModel->Destroying->Once([this](std::monostate) { Destroy(); });
 
 		Players->StartDefaultRuntime();
+		Interaction->StartDefaultRuntime();
 
 		LOG_INFO(App, "Constructed engine");
 	}
@@ -86,6 +91,7 @@ namespace gargantuan {
 			DataModelDestroyingConnection->Disconnect();
 			DataModelDestroyingConnection.reset();
 		}
+		if (Interaction && !Interaction->GetDestroyed()) Interaction->ShutdownRuntime();
 		if (Players && !Players->GetDestroyed()) Players->ShutdownRuntime();
 		if (ActionMap && !ActionMap->GetDestroyed()) ActionMap->Reset();
 		if (Gui) Gui->ClearTransientState();
@@ -121,11 +127,16 @@ namespace gargantuan {
 			ProcessService->MarkExit(0);
 			return Result;
 		}
+		if (const auto *Focus = std::get_if<FocusEvent>(&Event); Focus && !Focus->Focused && Interaction)
+			Interaction->CancelInput();
 
 		Result.Consumed = UserInputService->ProcessEvent(Event);
 		const bool GuiConsumed = Gui && Gui->ProcessEvent(Event);
 		if (!GuiConsumed) Result.Consumed = ActionMap->ProcessEvent(Event) || Result.Consumed;
-		else Result.Consumed = true;
+		else {
+			ActionMap->ProcessConsumedRelease(Event);
+			Result.Consumed = true;
+		}
 		if (!Result.Consumed) Result.Command = Workspace->GetCurrentCamera()->ProcessEvent(Event);
 		if (auto InputCommand = UserInputService->SynchronizeMouseBehavior()) Result.Command = InputCommand;
 		if (Gui) if (auto TextInputCommand = Gui->SynchronizeTextInput()) Result.Command = TextInputCommand;
@@ -149,6 +160,7 @@ namespace gargantuan {
 				WorldRoot->StepPhysics(deltaTime, std::nullopt);
 				Workspace->GetCurrentCamera()->Step(deltaTime);
 				RunService->PostSimulation->Fire(deltaTime);
+				Interaction->Step(CurrentTick);
 			}
 
 			{

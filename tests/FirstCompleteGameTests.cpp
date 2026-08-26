@@ -1,16 +1,21 @@
 #include "gargantuan/editor/EditorHost.hpp"
 #include "gargantuan/editor/PlaySession.hpp"
 #include "gargantuan/classes/KinematicCharacter.hpp"
+#include "gargantuan/classes/Part.hpp"
+#include "gargantuan/classes/ProximityPrompt.hpp"
 #include "gargantuan/filesystem/DiskFilesystem.hpp"
 #include "gargantuan/filesystem/Project.hpp"
 #include "gargantuan/platform/HostEvent.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
+#include "gargantuan/reflection/SchemaId.hpp"
+#include "gargantuan/services/InteractionService.hpp"
 #include "gargantuan/services/Players.hpp"
 #include "gargantuan/services/Workspace.hpp"
 
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <filesystem>
 #include <iostream>
 #include <iterator>
@@ -18,6 +23,7 @@
 #include <ranges>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace {
 	using Json = nlohmann::json;
@@ -59,6 +65,12 @@ namespace {
 			return Object.value("Name", "") == Name;
 		});
 		if (Match == Objects.end()) throw std::runtime_error("Missing authored object: " + std::string(Name));
+		return *Match;
+	}
+
+	const Json &GetObjectById(const Json &Objects, const Json &Id) {
+		auto Match = std::ranges::find_if(Objects, [&](const Json &Object) { return Object["Id"] == Id; });
+		if (Match == Objects.end()) throw std::runtime_error("Missing authored object identity");
 		return *Match;
 	}
 
@@ -118,12 +130,18 @@ namespace {
 		auto RuntimeWorld = Session.GetWorld();
 		auto PlayersValue = RuntimeWorld ? std::dynamic_pointer_cast<Players>(RuntimeWorld->GetService("Players")) : nullptr;
 		auto WorkspaceValue = RuntimeWorld ? std::dynamic_pointer_cast<Workspace>(RuntimeWorld->GetService("Workspace")) : nullptr;
+		auto InteractionValue = RuntimeWorld ? std::dynamic_pointer_cast<InteractionService>(
+			RuntimeWorld->GetService("InteractionService")
+		) : nullptr;
 		Require(PlayersValue && PlayersValue->GetLocalPlayer(), "default Players runtime did not create LocalPlayer");
 		auto LocalPlayer = *PlayersValue->GetLocalPlayer();
 		Require(LocalPlayer->GetCharacter().has_value(), "default player runtime did not assemble a character");
 		auto Character = *LocalPlayer->GetCharacter();
 		Require(std::dynamic_pointer_cast<KinematicCharacter>(Character) && WorkspaceValue && WorkspaceValue->GetCurrentCamera(),
 			"default kinematic character or camera did not initialize");
+		Require(InteractionValue && !InteractionValue->GetDefaultPresentationEnabled() &&
+			!RuntimeWorld->FindFirstChild("DefaultInteractionGui", false),
+			"headless runtime did not keep default prompt presentation absent");
 		const auto Start = Character->GetPosition();
 		const auto ForwardDown = KeyEvent{{1}, PhysicalKey::W, LogicalKey::W, KeyModifier::None, ButtonState::Pressed};
 		const auto ForwardUp = KeyEvent{{1}, PhysicalKey::W, LogicalKey::W, KeyModifier::None, ButtonState::Released};
@@ -147,6 +165,37 @@ namespace {
 			ResizedPublication->Frame.ViewportHeight == 360 &&
 			ResizedPublication->GetUi().ViewportWidth == 640 && ResizedPublication->GetUi().ViewportHeight == 360,
 			"headless runtime publication did not follow viewport resize");
+
+		auto ActivateCollectible = [&](std::string_view Name, std::chrono::milliseconds Hold) {
+			auto Item = std::dynamic_pointer_cast<Part>(WorkspaceValue->FindFirstChild(std::string(Name), true));
+			auto Prompt = Item ? std::dynamic_pointer_cast<ProximityPrompt>(
+				Item->FindFirstChildOfClass("ProximityPrompt", false)
+			) : nullptr;
+			Require(Item && Prompt, "sample collectible is missing its authored ProximityPrompt");
+			Character->SetPosition(Item->GetPosition() + glm::vec3(0.0f, 1.0f, 0.0f));
+			std::this_thread::sleep_for(std::chrono::milliseconds(40));
+			Session.Step();
+			Require(InteractionValue->GetActivePrompt() == std::optional(Prompt),
+				"entering range did not publish the expected active prompt");
+			const auto Down = KeyEvent{{1}, PhysicalKey::E, LogicalKey::E, KeyModifier::None, ButtonState::Pressed};
+			const auto Up = KeyEvent{{1}, PhysicalKey::E, LogicalKey::E, KeyModifier::None, ButtonState::Released};
+			(void)Session.ProcessEvent(Down);
+			const auto End = std::chrono::steady_clock::now() + Hold + std::chrono::milliseconds(80);
+			do {
+				std::this_thread::sleep_for(std::chrono::milliseconds(35));
+				Session.Step();
+			} while (std::chrono::steady_clock::now() < End);
+			(void)Session.ProcessEvent(Up);
+			Session.Step();
+			Require(!Prompt->GetEnabled() && !InteractionValue->GetAvailable(),
+				"validated prompt activation did not collect and retire the prompt");
+		};
+		ActivateCollectible("Collectible1", std::chrono::milliseconds(0));
+		ActivateCollectible("Collectible2", std::chrono::milliseconds(400));
+		Character->SetPosition({100.0f, 6.0f, 100.0f});
+		std::this_thread::sleep_for(std::chrono::milliseconds(40));
+		Session.Step();
+		Require(!InteractionValue->GetAvailable(), "leaving range did not hide interaction availability");
 
 		const auto CompleteDown = KeyEvent{{1}, PhysicalKey::K, LogicalKey::K, KeyModifier::None, ButtonState::Pressed};
 		const auto CompleteUp = KeyEvent{{1}, PhysicalKey::K, LogicalKey::K, KeyModifier::None, ButtonState::Released};
@@ -193,6 +242,23 @@ int main() {
 		Require(Call("Handshake")["Ok"], "EditorHost handshake failed");
 		auto Opened = Call("OpenProject", {{"Root", Workspace.Root.generic_string()}});
 		Require(Opened["Ok"], "sample project did not open");
+		auto Schema = Call("GetSchema");
+		Require(Schema["Ok"], "runtime schema could not be discovered for generic authoring");
+		auto PromptDefinition = std::ranges::find_if(
+			Schema["Result"]["Definitions"],
+			[](const Json &Definition) { return Definition.value("CanonicalName", "") == "Engine.ProximityPrompt"; }
+		);
+		Require(
+			PromptDefinition != Schema["Result"]["Definitions"].end() &&
+				PromptDefinition->value("Constructible", false),
+			"ProximityPrompt is not available to Studio's schema-driven Insert Object path"
+		);
+		for (const auto PropertyName : {
+			"Enabled", "ActionText", "ObjectText", "MaxActivationDistance", "HoldDuration"
+		})
+			Require(std::ranges::any_of((*PromptDefinition)["Properties"], [&](const Json &Property) {
+				return Property.value("Name", "") == PropertyName && Property.value("Editable", false);
+			}), "a ProximityPrompt property is not available to Studio's schema-driven inspector");
 		auto Snapshot = Call("GetSnapshot");
 		Require(Snapshot["Ok"], "sample project snapshot failed");
 		const auto ObjectsBeforePlay = Snapshot["Result"]["Snapshot"]["Objects"];
@@ -206,13 +272,65 @@ int main() {
 		}};
 		for (const auto &Expected : ExpectedObjects)
 			Require(HasObject(ObjectsBeforePlay, Expected.first, Expected.second), "authored hierarchy is incomplete");
+		Require(std::ranges::count_if(ObjectsBeforePlay, [](const Json &Object) {
+			return Object.value("ClassName", "") == "ProximityPrompt";
+		}) == 3, "sample must author exactly one ProximityPrompt under each collectible");
 
 		const auto &RoundManager = GetObject(ObjectsBeforePlay, "RoundManager");
 		auto Source = Call("GetScriptSource", {{"Object", RoundManager["Id"]}});
 		Require(Source["Ok"], "RoundManager source could not be read");
 		const auto &SourceText = Source["Result"]["Source"].get_ref<const std::string &>();
-		for (const auto RequiredText : {"ActionMap", "Players", "RunService", "RestartButton.Activated", "CompleteRound"})
+		for (const auto RequiredText : {
+			"ActionMap", "Players", "RunService", "RestartButton.Activated", "CompleteRound", "ProximityPrompt", "Prompt.Triggered"
+		})
 			Require(SourceText.find(RequiredText) != std::string::npos, "RoundManager omits a required public gameplay API");
+		Require(SourceText.find("(Character.Position - Item.Position).Magnitude") == std::string::npos,
+			"FirstCompleteGame still contains its removed Luau distance-polling workaround");
+
+		const auto &Collectible1 = GetObject(ObjectsBeforePlay, "Collectible1");
+		const auto &Collectible2 = GetObject(ObjectsBeforePlay, "Collectible2");
+		auto CreatedPrompt = Call("CreateInstance", {
+			{"ClassSchemaId", SchemaId::FromNativeName("Engine", "ProximityPrompt").ToString()},
+			{"DefinitionVersion", 1}, {"Parent", Collectible1["Id"]}, {"Name", "AuthoringProbe"},
+		});
+		Require(CreatedPrompt["Ok"], "generic Studio command path could not insert a ProximityPrompt");
+		const auto CreatedPromptId = CreatedPrompt["Result"]["Object"];
+		Require(Call("SetProperty", {
+			{"Object", CreatedPromptId},
+			{"ClassSchemaId", (*PromptDefinition)["SchemaId"]},
+			{"ClassDefinitionVersion", (*PromptDefinition)["DefinitionVersion"]},
+			{"DeclaringClassSchemaId", (*PromptDefinition)["SchemaId"]},
+			{"DeclaringDefinitionVersion", (*PromptDefinition)["DefinitionVersion"]},
+			{"Property", "ActionText"},
+			{"Value", {{"Type", "String"}, {"Value", "Inspect"}}},
+		})["Ok"], "generic Studio property command could not edit a ProximityPrompt");
+		Require(Call("Undo")["Ok"], "generic Studio Undo could not restore the prompt property");
+		auto UndoSnapshot = Call("GetSnapshot");
+		Require(
+			UndoSnapshot["Ok"] && GetObjectById(
+				UndoSnapshot["Result"]["Snapshot"]["Objects"], CreatedPromptId
+			)["EditorProperties"]["ActionText"].value("Value", "") == "Interact",
+			"prompt property Undo did not restore its authoritative default"
+		);
+		Require(Call("Redo")["Ok"], "generic Studio Redo could not reapply the prompt property");
+		auto RedoSnapshot = Call("GetSnapshot");
+		Require(
+			RedoSnapshot["Ok"] && GetObjectById(
+				RedoSnapshot["Result"]["Snapshot"]["Objects"], CreatedPromptId
+			)["EditorProperties"]["ActionText"].value("Value", "") == "Inspect",
+			"prompt property Redo did not restore its authoritative edit"
+		);
+		auto DuplicatedPrompt = Call("DuplicateInstance", {{"Object", CreatedPromptId}});
+		Require(DuplicatedPrompt["Ok"], "generic Studio command path could not duplicate a ProximityPrompt");
+		const auto DuplicatedPromptId = DuplicatedPrompt["Result"]["Object"];
+		Require(Call("ReparentInstance", {
+			{"Object", DuplicatedPromptId}, {"Parent", Collectible2["Id"]},
+		})["Ok"], "generic Studio hierarchy command could not reparent a ProximityPrompt");
+		Require(
+			Call("DestroyInstance", {{"Object", CreatedPromptId}})["Ok"] &&
+				Call("DestroyInstance", {{"Object", DuplicatedPromptId}})["Ok"],
+			"generic Studio hierarchy command could not delete temporary prompt authoring probes"
+		);
 
 		auto Catalog = Call("GetAssetCatalog", {{"IncludeBuiltIns", false}});
 		Require(Catalog["Ok"], "AssetService catalog could not be read");
@@ -235,6 +353,29 @@ int main() {
 		Require(Reopened["Ok"], "reopened sample snapshot failed");
 		const auto ReopenedObjects = Reopened["Result"]["Snapshot"]["Objects"];
 		const auto ReopenedProjectState = Reopened["Result"]["ProjectState"];
+		std::vector<std::string> ReopenedPromptLabels;
+		bool FoundHoldPrompt = false;
+		for (const auto &Object : ReopenedObjects) {
+			if (Object.value("ClassName", "") != "ProximityPrompt") continue;
+			const auto &Properties = Object["EditorProperties"];
+			Require(
+				Properties.contains("Enabled") && Properties["Enabled"].value("Value", false) &&
+				Properties.contains("ActionText") && Properties["ActionText"].value("Value", "") == "Collect" &&
+				Properties.contains("ObjectText") && Properties.contains("MaxActivationDistance") &&
+				Properties["MaxActivationDistance"].value("Value", 0.0) == 4.0 &&
+				Properties.contains("HoldDuration"),
+				"ProximityPrompt authored properties did not survive save/reopen"
+			);
+			ReopenedPromptLabels.push_back(Properties["ObjectText"].value("Value", ""));
+			FoundHoldPrompt = FoundHoldPrompt ||
+				std::abs(Properties["HoldDuration"].value("Value", 0.0) - 0.4) < 1e-6;
+		}
+		std::ranges::sort(ReopenedPromptLabels);
+		Require(
+			ReopenedPromptLabels == std::vector<std::string>{"Collectible1", "Collectible2", "Collectible3"} &&
+				FoundHoldPrompt,
+			"reopened prompt labels or hold semantics differ from the authored game"
+		);
 		for (const auto Name : {"Hud", "Badge", "Progress", "Hint", "WinPanel", "WinTitle", "WinDetail", "RestartButton"}) {
 			const auto &Object = GetObject(ReopenedObjects, Name);
 			Require(Object["EditorProperties"].contains("Position") && Object["EditorProperties"].contains("Size") &&

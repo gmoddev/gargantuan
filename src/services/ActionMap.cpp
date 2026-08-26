@@ -170,6 +170,11 @@ namespace gargantuan {
 			const auto KeyCode = static_cast<Enums::KeyCode>(Key->Logical);
 			for (const auto &Value : Bindings)
 				if (Value.Kind == BindingKind::Key && Value.KeyCode == KeyCode) Matching.push_back(&Value);
+		} else if (const auto *Gamepad = std::get_if<GamepadButtonEvent>(&Event)) {
+			auto KeyCode = InputObject::GetGamepadKeyCode(Gamepad->Button);
+			if (!KeyCode) return false;
+			for (const auto &Value : Bindings)
+				if (Value.Kind == BindingKind::Key && Value.KeyCode == *KeyCode) Matching.push_back(&Value);
 		} else if (const auto *Button = std::get_if<PointerButtonEvent>(&Event)) {
 			Enums::UserInputType InputType = Enums::UserInputType::None;
 			if (Button->Button == PointerButton::Left)
@@ -216,6 +221,38 @@ namespace gargantuan {
 		for (const auto &ActionName : Actions)
 			RefreshAction(ActionName);
 		return Consumed;
+	}
+
+	void ActionMap::ProcessConsumedRelease(const HostEvent &Event) {
+		std::optional<Enums::KeyCode> ReleasedKey;
+		std::optional<Enums::UserInputType> ReleasedMouseButton;
+		if (const auto *Key = std::get_if<KeyEvent>(&Event);
+			Key && Key->State == ButtonState::Released && Key->Logical != LogicalKey::Unknown)
+			ReleasedKey = static_cast<Enums::KeyCode>(Key->Logical);
+		else if (const auto *Gamepad = std::get_if<GamepadButtonEvent>(&Event);
+				 Gamepad && Gamepad->State == ButtonState::Released)
+			ReleasedKey = InputObject::GetGamepadKeyCode(Gamepad->Button);
+		else if (const auto *Button = std::get_if<PointerButtonEvent>(&Event);
+				 Button && Button->State == ButtonState::Released) {
+			if (Button->Button == PointerButton::Left)
+				ReleasedMouseButton = Enums::UserInputType::MouseButton1;
+			else if (Button->Button == PointerButton::Right)
+				ReleasedMouseButton = Enums::UserInputType::MouseButton2;
+			else if (Button->Button == PointerButton::Middle)
+				ReleasedMouseButton = Enums::UserInputType::MouseButton3;
+		}
+		if (!ReleasedKey && !ReleasedMouseButton) return;
+		std::vector<std::string> Actions;
+		for (const auto &Binding : Bindings) {
+			const bool MatchesKey = ReleasedKey && Binding.Kind == BindingKind::Key && Binding.KeyCode == *ReleasedKey;
+			const bool MatchesButton = ReleasedMouseButton && Binding.Kind == BindingKind::MouseButton &&
+									   Binding.InputType == *ReleasedMouseButton;
+			if ((MatchesKey || MatchesButton) && !std::ranges::contains(Actions, Binding.ActionName))
+				Actions.push_back(Binding.ActionName);
+		}
+		std::ranges::sort(Actions);
+		for (const auto &ActionName : Actions)
+			RefreshAction(ActionName);
 	}
 
 	void ActionMap::EndFrame() {

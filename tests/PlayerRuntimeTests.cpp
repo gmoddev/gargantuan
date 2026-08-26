@@ -203,7 +203,8 @@ namespace {
 		});
 		Check(!DefaultError, "engine-shipped default Luau modules start without runtime errors");
 		Check(
-			Runtime.ActionMap->GetBindingCount() == 7, "engine-shipped input policy installs semantic default bindings"
+			Runtime.ActionMap->GetBindingCount() == 9,
+			"engine-shipped player and interaction policies install semantic default bindings"
 		);
 		Check(LocalPlayer->GetCharacter().has_value(), "default Luau assembly responds to the Player spawn contract");
 		if (!LocalPlayer->GetCharacter()) {
@@ -348,9 +349,9 @@ namespace {
 		Engine Runtime(Game, &Renderer);
 		Runtime.Script->Step();
 		Check(
-			Runtime.ActionMap->GetBindingCount() == 0 && !(*Runtime.Players->GetLocalPlayer())->GetCharacter() &&
+			Runtime.ActionMap->GetBindingCount() == 2 && !(*Runtime.Players->GetLocalPlayer())->GetCharacter() &&
 				!Runtime.Players->FindFirstChild("PlayerRuntimeModules", std::nullopt),
-			"games can disable Gargantuan defaults and their module payload without losing Players or low-level services"
+			"games can disable player defaults while retaining the independent semantic interaction bindings"
 		);
 		auto Capture = Runtime.ProcessEvent(
 			PointerButtonEvent{{1}, PointerButton::Right, ButtonState::Pressed, {0.0f, 0.0f}}

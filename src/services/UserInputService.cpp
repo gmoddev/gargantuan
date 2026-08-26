@@ -9,6 +9,10 @@ namespace gargantuan {
 			   inputType == Enums::UserInputType::MouseButton3;
 	}
 
+	bool IsGamepadType(Enums::UserInputType InputType) {
+		return InputType >= Enums::UserInputType::Gamepad1 && InputType <= Enums::UserInputType::Gamepad8;
+	}
+
 	std::vector<std::shared_ptr<InputObject>> UserInputService::GetKeysPressed() {
 		std::vector<std::shared_ptr<InputObject>> result;
 		result.reserve(ActiveKeys.size());
@@ -76,9 +80,10 @@ namespace gargantuan {
 		}
 
 		if (inputState == Enums::UserInputState::Begin) {
-			if (inputType == Enums::UserInputType::Keyboard) {
+			if (inputType == Enums::UserInputType::Keyboard || IsGamepadType(inputType)) {
 				if (!ActiveKeys.contains(input->GetKeyCode())) ActiveKeys.emplace(input->GetKeyCode(), input);
-				if (input->GetKeyCode() == Enums::KeyCode::Space) JumpRequest->Fire({});
+				if (inputType == Enums::UserInputType::Keyboard && input->GetKeyCode() == Enums::KeyCode::Space)
+					JumpRequest->Fire({});
 			} else if (IsMouseButtonType(inputType)) {
 				if (!ActiveMouseButtons.contains(input->GetUserInputType()))
 					ActiveMouseButtons.emplace(input->GetUserInputType(), input);
@@ -91,7 +96,7 @@ namespace gargantuan {
 			}
 			InputChanged->Fire({input, false});
 		} else if (inputState == Enums::UserInputState::End) {
-			if (inputType == Enums::UserInputType::Keyboard) {
+			if (inputType == Enums::UserInputType::Keyboard || IsGamepadType(inputType)) {
 				if (ActiveKeys.contains(input->GetKeyCode())) ActiveKeys.erase(input->GetKeyCode());
 			} else if (IsMouseButtonType(inputType)) {
 				ActiveMouseButtons.erase(input->GetUserInputType());

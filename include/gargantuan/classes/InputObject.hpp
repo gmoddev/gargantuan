@@ -255,6 +255,7 @@ namespace gargantuan {
 	class InputObject : public Instance {
 		I_InputObject;
 
+		[[nodiscard]] static std::optional<Enums::KeyCode> GetGamepadKeyCode(GamepadButton Button);
 		[[nodiscard]] static std::shared_ptr<InputObject> FromHostEvent(const HostEvent &Event);
 	};
 }

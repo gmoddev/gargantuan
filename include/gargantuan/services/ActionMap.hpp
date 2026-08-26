@@ -52,6 +52,7 @@ namespace gargantuan {
 		friend struct ActionMapTestAccess;
 		void AttachInputService(const std::shared_ptr<UserInputService> &Service);
 		[[nodiscard]] bool ProcessEvent(const HostEvent &Event);
+		void ProcessConsumedRelease(const HostEvent &Event);
 		void EndFrame();
 		void Reset();
 		[[nodiscard]] int AddBinding(Binding Value);

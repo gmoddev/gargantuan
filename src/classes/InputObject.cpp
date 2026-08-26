@@ -17,6 +17,26 @@ namespace gargantuan {
 	static_assert(static_cast<int>(LogicalKey::Undo) == static_cast<int>(Enums::KeyCode::Undo));
 	static_assert(static_cast<int>(LogicalKey::Unknown) == static_cast<int>(Enums::KeyCode::None));
 
+	std::optional<Enums::KeyCode> InputObject::GetGamepadKeyCode(GamepadButton Button) {
+		switch (Button) {
+		case GamepadButton::South: return Enums::KeyCode::ButtonA;
+		case GamepadButton::East: return Enums::KeyCode::ButtonB;
+		case GamepadButton::West: return Enums::KeyCode::ButtonX;
+		case GamepadButton::North: return Enums::KeyCode::ButtonY;
+		case GamepadButton::Back: return Enums::KeyCode::ButtonSelect;
+		case GamepadButton::Start: return Enums::KeyCode::ButtonStart;
+		case GamepadButton::LeftStick: return Enums::KeyCode::ButtonL3;
+		case GamepadButton::RightStick: return Enums::KeyCode::ButtonR3;
+		case GamepadButton::LeftShoulder: return Enums::KeyCode::ButtonL1;
+		case GamepadButton::RightShoulder: return Enums::KeyCode::ButtonR1;
+		case GamepadButton::DPadUp: return Enums::KeyCode::DPadUp;
+		case GamepadButton::DPadDown: return Enums::KeyCode::DPadDown;
+		case GamepadButton::DPadLeft: return Enums::KeyCode::DPadLeft;
+		case GamepadButton::DPadRight: return Enums::KeyCode::DPadRight;
+		default: return std::nullopt;
+		}
+	}
+
 	bool InputObject::IsModifierKeyDown(Enums::ModifierKey ModifierKey) {
 		return MODIFIER_TO_KEYCODE.at(ModifierKey).contains(KeyCode);
 	}
@@ -54,6 +74,14 @@ namespace gargantuan {
 				Input->UserInputState = Enums::UserInputState::Change;
 				Input->Delta = glm::vec3(Value.Delta.X, Value.Delta.Y, 0.0f);
 				Input->Position = glm::vec3(Value.Position.X, Value.Position.Y, 0.0f);
+				return Input;
+			} else if constexpr (std::is_same_v<EventType, GamepadButtonEvent>) {
+				auto KeyCode = GetGamepadKeyCode(Value.Button);
+				if (!KeyCode) return nullptr;
+				Input->UserInputType = Enums::UserInputType::Gamepad1;
+				Input->UserInputState = Value.State == ButtonState::Pressed ? Enums::UserInputState::Begin
+					: Enums::UserInputState::End;
+				Input->KeyCode = *KeyCode;
 				return Input;
 			} else {
 				return nullptr;

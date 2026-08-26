@@ -56,7 +56,7 @@ not replace physical input signals or device state. Its public methods are:
 
 | API | Current contract |
 | --- | --- |
-| `BindKey(ActionName, KeyCode, Scale, Priority, Consume)` | Add one keyboard binding and return a positive runtime binding ID. |
+| `BindKey(ActionName, KeyCode, Scale, Priority, Consume)` | Add one keyboard or normalized gamepad-button binding and return a positive runtime binding ID. |
 | `BindMouseButton(ActionName, InputType, Scale, Priority, Consume)` | Add one of the three supported mouse-button bindings. |
 | `BindPointerDelta(ActionName, Scale, Priority, Consume)` | Add scaled frame-accumulated relative pointer delta. |
 | `Unbind(BindingId)` / `UnbindAction(ActionName)` | Remove one binding or every binding for an action. |
@@ -76,14 +76,16 @@ also reset at the engine frame boundary. The native service accepts at most 128
 action names, 512 bindings, and 64 UTF-8 bytes per action name. Mutation requires
 `MutateDataModel`.
 
-The shipped `DefaultActionMap.luau` is the only default-policy location that
-names W, A, S, D, Space, and RMB. It declares `MoveForward`, `MoveBackward`,
+The shipped `DefaultActionMap.luau` is the player-policy location that names W,
+A, S, D, Space, and RMB. It declares `MoveForward`, `MoveBackward`,
 `MoveLeft`, `MoveRight`, `Jump`, `CameraOrbit`, and `Look`. The controller itself
 depends only on those semantic names. While the shipped camera is enabled,
 these bindings consume the legacy native-camera route without hiding physical
 state from `UserInputService`. Binding shape, priority, and multiplicity
-leave room for later remapping and gamepad sources without claiming a final
-gamepad policy.
+leave room for later remapping. Interaction Foundation separately ships
+`DefaultInteractionRuntime.luau`, which maps keyboard E and normalized gamepad
+South / `ButtonA` to the `Interact` semantic action. It does not add a second
+input map.
 
 ## Players and character lifecycle
 

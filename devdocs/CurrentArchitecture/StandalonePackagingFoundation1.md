@@ -73,7 +73,7 @@ The current Windows distribution contains:
   set (the player's direct compiler-runtime imports are `msvcp140.dll`,
   `vcruntime140.dll`, and `vcruntime140_1.dll`; CMake also selects their bounded
   companion runtime family for the validated toolchain);
-- the four default player/controller/camera/ActionMap Luau modules;
+- the five default player/controller/camera/ActionMap/interaction Luau modules;
 - the engine default font;
 - GUI, opaque, and shadow vertex/fragment SPIR-V shaders;
 - deterministic Gargantuan and redistributed dependency notices.
@@ -102,6 +102,7 @@ MyGame/
     runtime/
         DefaultActionMap.luau
         DefaultCamera.luau
+        DefaultInteractionRuntime.luau
         DefaultPlayerController.luau
         DefaultPlayerRuntime.luau
         GargantuanSans.ttf

@@ -64,6 +64,7 @@ endif()
 
 foreach(GARGANTUAN_RUNTIME_MODULE
 	DefaultActionMap.luau
+	DefaultInteractionRuntime.luau
 	DefaultCamera.luau
 	DefaultPlayerController.luau
 	DefaultPlayerRuntime.luau

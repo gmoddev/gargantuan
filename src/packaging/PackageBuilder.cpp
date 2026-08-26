@@ -49,6 +49,7 @@ namespace gargantuan {
 		constexpr std::size_t MaximumDiagnostics = 128;
 		constexpr std::array RequiredRuntimeFiles{
 			"runtime/DefaultActionMap.luau",
+			"runtime/DefaultInteractionRuntime.luau",
 			"runtime/DefaultPlayerController.luau",
 			"runtime/DefaultCamera.luau",
 			"runtime/DefaultPlayerRuntime.luau",

@@ -5,6 +5,7 @@
 #include "gargantuan/services/ActionMap.hpp"
 #include "gargantuan/services/AssetService.hpp"
 #include "gargantuan/services/EntitlementService.hpp"
+#include "gargantuan/services/InteractionService.hpp"
 #include "gargantuan/services/Players.hpp"
 #include "gargantuan/services/ProcessService.hpp"
 #include "gargantuan/services/RunService.hpp"
@@ -119,6 +120,7 @@ namespace gargantuan {
 			{"ActionMap", SchemaId::FromNativeName("Engine", "ActionMap")},
 			{"AssetService", SchemaId::FromNativeName("Engine", "AssetService")},
 			{"EntitlementService", SchemaId::FromNativeName("Engine", "EntitlementService")},
+			{"InteractionService", SchemaId::FromNativeName("Engine", "InteractionService")},
 			{"Players", SchemaId::FromNativeName("Engine", "Players")},
 			{"ProcessService", SchemaId::FromNativeName("Engine", "ProcessService")},
 			{"RunService", SchemaId::FromNativeName("Engine", "RunService")},
