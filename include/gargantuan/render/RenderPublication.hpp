@@ -5,6 +5,7 @@
 
 #pragma once
 
+#include "gargantuan/render/RenderEnvironment.hpp"
 #include "gargantuan/render/RenderSnapshot.hpp"
 
 #include <cstddef>
@@ -24,7 +25,7 @@ namespace gargantuan {
 		std::uint32_t ViewportHeight = 0;
 		float DpiScale = 1.0f;
 		RenderCameraSnapshot Camera;
-		glm::vec3 LightDirection{0.0f, 1.0f, 0.0f};
+		RenderEnvironmentState Environment;
 	};
 
 	enum class RenderUpdateDomain : std::uint32_t {
@@ -35,6 +36,7 @@ namespace gargantuan {
 		Geometry = 1u << 3,
 		DeformableVertices = 1u << 4,
 		Hierarchy = 1u << 5,
+		Environment = 1u << 6,
 	};
 
 	[[nodiscard]] constexpr RenderUpdateDomain operator|(RenderUpdateDomain Left, RenderUpdateDomain Right) {
@@ -50,19 +52,6 @@ namespace gargantuan {
 		std::uint32_t Generation = 0;
 		auto operator<=>(const RenderMeshIdentity &) const = default;
 		[[nodiscard]] bool IsValid() const { return Slot != 0 && Generation != 0; }
-	};
-
-	struct RenderTextureIdentity {
-		std::uint64_t Slot = 0;
-		std::uint32_t Generation = 0;
-		auto operator<=>(const RenderTextureIdentity &) const = default;
-		[[nodiscard]] bool IsValid() const { return Slot != 0 && Generation != 0; }
-	};
-
-	struct RenderTextureIdentityHash {
-		std::size_t operator()(const RenderTextureIdentity &Value) const noexcept {
-			return std::hash<std::uint64_t>{}(Value.Slot) ^ (std::hash<std::uint32_t>{}(Value.Generation) << 1);
-		}
 	};
 
 	enum class RenderTextureFormat : std::uint8_t { Rgba8Unorm };
@@ -197,6 +186,7 @@ namespace gargantuan {
 		RenderPublicationId BaseId = InvalidRenderPublicationId;
 		bool FullResync = false;
 		RenderFrameState Frame;
+		bool EnvironmentChanged = false;
 		std::vector<RenderObjectCreate> Creates;
 		std::vector<RenderObjectUpdate> Updates;
 		std::vector<RenderObjectRemove> Removes;

@@ -6,10 +6,13 @@
 #include "gargantuan/render/RenderExtractor.hpp"
 
 #include "gargantuan/classes/Camera.hpp"
+#include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/MeshPart.hpp"
 #include "gargantuan/classes/Part.hpp"
 #include "gargantuan/classes/WorldRoot.hpp"
+#include "gargantuan/environment/EnvironmentSemantics.hpp"
 #include "gargantuan/runtime/ExecutionDomain.hpp"
+#include "gargantuan/services/Lighting.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -100,6 +103,32 @@ namespace gargantuan {
 				throw std::invalid_argument("RenderSnapshot camera matrices are not finite");
 			return camera;
 		}
+
+		RenderEnvironmentState BuildBasicEnvironment(const WorldRoot &World) {
+			RenderEnvironmentState Result;
+			auto DataModelValue = World.GetDataModel();
+			if (!DataModelValue) return Result;
+			auto Service = DataModelValue->FindService("Lighting");
+			auto LightingValue = Service ? std::dynamic_pointer_cast<Lighting>(*Service) : nullptr;
+			if (!LightingValue) return Result;
+
+			const auto Sun = ComputeEnvironmentSunState(
+				LightingValue->GetClockTime(), LightingValue->GetBrightness(), LightingValue->GetSunColor()
+			);
+			Result.AmbientColor = static_cast<glm::vec3>(LightingValue->GetAmbient());
+			Result.SunDirection = Sun.Direction;
+			Result.SunColor = Sun.Color;
+			Result.SunIntensity = Sun.Intensity;
+			Result.ExposureMultiplier = ComputeEnvironmentExposure(LightingValue->GetExposureCompensation());
+			Result.EnvironmentColor = static_cast<glm::vec3>(LightingValue->GetEnvironmentColor());
+			Result.Fog = {
+				.Enabled = LightingValue->GetFogEnabled(),
+				.Color = static_cast<glm::vec3>(LightingValue->GetFogColor()),
+				.Start = LightingValue->GetFogStart(),
+				.End = LightingValue->GetFogEnd(),
+			};
+			return Result;
+		}
 	}
 
 	RenderCameraInput MakeRenderCameraInput(const Camera &camera) {
@@ -137,14 +166,11 @@ namespace gargantuan {
 		const WorldRoot &world,
 		const RenderCameraInput &cameraInput,
 		std::uint32_t viewportWidth,
-		std::uint32_t viewportHeight,
-		glm::vec3 lightDirection
+		std::uint32_t viewportHeight
 	) {
 		AssertAuthoritativeMutation("RenderSnapshot extraction");
 		if (world.GetDestroyed() || world.IsDestroying())
 			throw std::invalid_argument("Cannot extract a RenderSnapshot from a dead WorldRoot");
-		if (!IsFinite(lightDirection) || glm::length(lightDirection) < 1e-6f)
-			throw std::invalid_argument("RenderSnapshot light direction must be finite and nonzero");
 		if (LastSnapshotId == std::numeric_limits<RenderSnapshotId>::max())
 			throw std::overflow_error("RenderSnapshot identity exhausted and will not roll over");
 
@@ -153,7 +179,7 @@ namespace gargantuan {
 		candidate->ViewportWidth = viewportWidth;
 		candidate->ViewportHeight = viewportHeight;
 		candidate->Camera = BuildCameraSnapshot(cameraInput, viewportWidth, viewportHeight);
-		candidate->LightDirection = glm::normalize(lightDirection);
+		candidate->Environment = BuildBasicEnvironment(world);
 		candidate->Items.reserve(world.Parts.size());
 
 		for (const auto &basePart : world.Parts) {

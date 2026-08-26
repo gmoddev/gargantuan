@@ -7,6 +7,7 @@
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/ImageLabel.hpp"
 #include "gargantuan/classes/MeshPart.hpp"
+#include "gargantuan/classes/Sky.hpp"
 #include "gargantuan/classes/Sound.hpp"
 #include "gargantuan/classes/TextLabel.hpp"
 #include "gargantuan/filesystem/BaseFilesystem.hpp"
@@ -878,6 +879,16 @@ namespace gargantuan {
 								CommitFailure = Error("AssetReferenced", "Removed generated asset is referenced by Sound");
 								break;
 							}
+							if (auto SkyValue = std::dynamic_pointer_cast<Sky>(Object); SkyValue &&
+								(SkyValue->GetSkyboxPositiveX() == RemovedReference ||
+								 SkyValue->GetSkyboxNegativeX() == RemovedReference ||
+								 SkyValue->GetSkyboxPositiveY() == RemovedReference ||
+								 SkyValue->GetSkyboxNegativeY() == RemovedReference ||
+								 SkyValue->GetSkyboxPositiveZ() == RemovedReference ||
+								 SkyValue->GetSkyboxNegativeZ() == RemovedReference)) {
+								CommitFailure = Error("AssetReferenced", "Removed generated asset is referenced by Sky");
+								break;
+							}
 						}
 					}
 				}
@@ -974,6 +985,24 @@ namespace gargantuan {
 					if (Domains != RenderUpdateDomain::None)
 						RenderDirtyAccumulator::Get().Mark(World->GetReplicationScopeId(), Mesh->GetObjectId(), Domains);
 				}
+				for (const auto &Object : World->GetDescendants()) if (auto SkyValue = std::dynamic_pointer_cast<Sky>(Object)) {
+					const std::array References{
+						SkyValue->GetSkyboxPositiveX(),
+						SkyValue->GetSkyboxNegativeX(),
+						SkyValue->GetSkyboxPositiveY(),
+						SkyValue->GetSkyboxNegativeY(),
+						SkyValue->GetSkyboxPositiveZ(),
+						SkyValue->GetSkyboxNegativeZ(),
+					};
+					const bool Changed = std::ranges::any_of(References, [&](const std::string &Reference) {
+						auto Parsed = AssetReference::Parse(Reference);
+						return Parsed && Parsed->ProjectAsset && SemanticallyChanged.contains(*Parsed->ProjectAsset);
+					});
+					if (Changed)
+						RenderDirtyAccumulator::Get().Mark(
+							World->GetReplicationScopeId(), SkyValue->GetObjectId(), RenderUpdateDomain::Environment
+						);
+				}
 			}
 		}
 		return Operation;
@@ -1018,6 +1047,14 @@ namespace gargantuan {
 					if (auto SoundValue = std::dynamic_pointer_cast<Sound>(Object); SoundValue &&
 						IsGroupReference(SoundValue->GetSoundId()))
 						return {false, Existing->second, Error("AssetReferenced", "Asset source group is referenced by Sound")};
+					if (auto SkyValue = std::dynamic_pointer_cast<Sky>(Object); SkyValue &&
+						(IsGroupReference(SkyValue->GetSkyboxPositiveX()) ||
+						 IsGroupReference(SkyValue->GetSkyboxNegativeX()) ||
+						 IsGroupReference(SkyValue->GetSkyboxPositiveY()) ||
+						 IsGroupReference(SkyValue->GetSkyboxNegativeY()) ||
+						 IsGroupReference(SkyValue->GetSkyboxPositiveZ()) ||
+						 IsGroupReference(SkyValue->GetSkyboxNegativeZ())))
+						return {false, Existing->second, Error("AssetReferenced", "Asset source group is referenced by Sky")};
 				}
 			}
 			for (auto Removed : Group) {

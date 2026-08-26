@@ -191,7 +191,8 @@ the geometry/material domains that changed.
 
 Deletion is source-group atomic. It rejects built-ins, in-flight groups, any
 outside catalog dependent, and exact scene references from ImageLabel,
-TextLabel/font use, or MeshPart mesh/material properties. A disappearing child
+TextLabel/font use, MeshPart mesh/material properties, or any of a Sky's six
+Image face properties. A disappearing child
 during reimport applies the same checks. There is no force-delete path and no
 silent dangling reference. Destroying or duplicating a MeshPart affects only
 scene ownership; it never deletes shared asset records.
@@ -225,6 +226,8 @@ rather than being copied into each object every frame.
 Full resync recreates retained mesh/texture resources and all MeshPart objects.
 Incremental mesh reimport updates affected geometry users; image -> material ->
 mesh propagation updates only affected presentation and shared texture state.
+Image content changes also mark exact Sky consumers in the environment domain;
+the environment publisher admits only one coherent six-face revision set.
 Stop and renderer teardown release disposable object/GPU ownership while the
 authoring catalog remains intact.
 

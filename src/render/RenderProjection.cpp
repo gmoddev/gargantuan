@@ -6,6 +6,7 @@
 #include "gargantuan/render/RenderProjection.hpp"
 
 #include <algorithm>
+#include <glm/geometric.hpp>
 #include <limits>
 #include <stdexcept>
 #include <unordered_set>
@@ -59,11 +60,30 @@ namespace gargantuan {
 			return IsFinite(Vertex.Position) && IsFinite(Vertex.Normal) && IsFinite(Vertex.Tangent) &&
 				IsFinite(Vertex.TextureCoordinate);
 		}
+		bool IsUnitColor(const glm::vec3 &Value) {
+			return IsFinite(Value) && Value.x >= 0.0f && Value.x <= 1.0f && Value.y >= 0.0f &&
+				Value.y <= 1.0f && Value.z >= 0.0f && Value.z <= 1.0f;
+		}
+		bool IsValid(const RenderEnvironmentState &Environment) {
+			if (!IsUnitColor(Environment.AmbientColor) || !IsFinite(Environment.SunDirection) ||
+				!IsUnitColor(Environment.SunColor) || !std::isfinite(Environment.SunIntensity) ||
+				Environment.SunIntensity < 0.0f || Environment.SunIntensity > 8.0f ||
+				!std::isfinite(Environment.ExposureMultiplier) || Environment.ExposureMultiplier < (1.0f / 256.0f) ||
+				Environment.ExposureMultiplier > 256.0f || !IsUnitColor(Environment.EnvironmentColor) ||
+				!IsUnitColor(Environment.Fog.Color) || !std::isfinite(Environment.Fog.Start) ||
+				!std::isfinite(Environment.Fog.End) || Environment.Fog.Start < 0.0f ||
+				Environment.Fog.End < Environment.Fog.Start || Environment.Fog.End > 100000.0f ||
+				std::abs(glm::length(Environment.SunDirection) - 1.0f) > 1e-4f) return false;
+			if (!Environment.Sky) return true;
+			if (Environment.Sky->FaceDimension == 0 || Environment.Sky->FaceDimension > 1024) return false;
+			for (const auto &Face : Environment.Sky->Faces)
+				if (!Face.Texture.IsValid() || Face.ContentRevision == 0) return false;
+			return true;
+		}
 		bool IsValid(const RenderFrameState &Frame) {
 			const auto &Camera = Frame.Camera;
 			return Frame.ViewportWidth != 0 && Frame.ViewportHeight != 0 && std::isfinite(Frame.DpiScale) &&
-				Frame.DpiScale > 0.0f && IsFinite(Frame.LightDirection) &&
-				(Frame.LightDirection.x != 0.0f || Frame.LightDirection.y != 0.0f || Frame.LightDirection.z != 0.0f) &&
+				Frame.DpiScale > 0.0f && IsValid(Frame.Environment) &&
 				IsFinite(Camera.Position) && IsFinite(Camera.RightDirection) && IsFinite(Camera.UpDirection) &&
 				IsFinite(Camera.LookDirection) && std::isfinite(Camera.VerticalFieldOfView) &&
 				Camera.VerticalFieldOfView > 0.0f && Camera.VerticalFieldOfView < 180.0f &&
@@ -122,7 +142,8 @@ namespace gargantuan {
 				static_cast<std::uint32_t>(RenderUpdateDomain::Visibility) |
 				static_cast<std::uint32_t>(RenderUpdateDomain::Geometry) |
 				static_cast<std::uint32_t>(RenderUpdateDomain::DeformableVertices) |
-				static_cast<std::uint32_t>(RenderUpdateDomain::Hierarchy);
+				static_cast<std::uint32_t>(RenderUpdateDomain::Hierarchy) |
+				static_cast<std::uint32_t>(RenderUpdateDomain::Environment);
 			if (!Update.Object.IsValid() || Update.Item.Object != Update.Object || !IsValid(Update.Item) ||
 				!IsValid(Update.Material) || !AreValid(Update.Primitives) || (Update.Mesh && !Update.Mesh->IsValid()) ||
 				Update.Domains == RenderUpdateDomain::None ||
@@ -185,6 +206,22 @@ namespace gargantuan {
 			if (CreatedTextures.contains(Texture)) return true;
 			return !Publication.FullResync && Textures.contains(Texture) && !RemovedTextures.contains(Texture);
 		};
+		const auto TextureMatchesSkyFace = [&](const RenderSkyFaceState &Face, std::uint32_t Dimension) {
+			for (const auto &Create : Publication.TextureCreates)
+				if (Create.Texture == Face.Texture)
+					return Create.Revision == Face.ContentRevision && Create.Width == Dimension && Create.Height == Dimension;
+			if (Publication.FullResync || RemovedTextures.contains(Face.Texture)) return false;
+			const auto Existing = Textures.find(Face.Texture);
+			if (Existing == Textures.end() || Existing->second.Width != Dimension || Existing->second.Height != Dimension)
+				return false;
+			for (const auto &Update : Publication.TextureUpdates)
+				if (Update.Texture == Face.Texture) return Update.Revision == Face.ContentRevision;
+			return Existing->second.Revision == Face.ContentRevision;
+		};
+		if (Publication.Frame.Environment.Sky)
+			for (const auto &Face : Publication.Frame.Environment.Sky->Faces)
+				if (!TextureMatchesSkyFace(Face, Publication.Frame.Environment.Sky->FaceDimension))
+					throw std::invalid_argument("Render publication Sky references an unavailable or incoherent texture");
 		const auto MaterialTexturesExist = [&](const RenderMaterialState &Material) {
 			return (!Material.BaseColorTexture || TextureExistsAfterPublication(*Material.BaseColorTexture)) &&
 				(!Material.NormalTexture || TextureExistsAfterPublication(*Material.NormalTexture));
@@ -366,6 +403,7 @@ namespace gargantuan {
 			}
 			Ui = Publication.SharedUi ? Publication.SharedUi : std::make_shared<const RenderUiFrame>(PublishedUi);
 		}
+		if (Publication.FullResync || Publication.EnvironmentChanged) ++Changes.EnvironmentsUpdated;
 		Frame = Publication.Frame;
 		LastPublicationId = Publication.Id;
 		return Changes;
@@ -413,7 +451,8 @@ namespace gargantuan {
 		Frame.ViewportWidth = Snapshot.ViewportWidth;
 		Frame.ViewportHeight = Snapshot.ViewportHeight;
 		Frame.Camera = Snapshot.Camera;
-		Frame.LightDirection = Snapshot.LightDirection;
+		Frame.Environment = Snapshot.Environment;
+		++Changes.EnvironmentsUpdated;
 		Ui = std::make_shared<const RenderUiFrame>();
 		return Changes;
 	}
@@ -438,7 +477,7 @@ namespace gargantuan {
 		Snapshot->ViewportWidth = Frame.ViewportWidth;
 		Snapshot->ViewportHeight = Frame.ViewportHeight;
 		Snapshot->Camera = Frame.Camera;
-		Snapshot->LightDirection = Frame.LightDirection;
+		Snapshot->Environment = Frame.Environment;
 		std::vector<const RenderProjectedObject *> Ordered;
 		Ordered.reserve(Entries.size());
 		for (const auto &[Object, EntryValue] : Entries) {

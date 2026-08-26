@@ -84,6 +84,8 @@ foreach(GARGANTUAN_SHADER
 	opaque.vert.spv
 	shadow.frag.spv
 	shadow.vert.spv
+	sky.frag.spv
+	sky.vert.spv
 )
 	GargantuanStageRuntimeFile(
 		"${GARGANTUAN_BINARY_DIR}/shaders/${GARGANTUAN_SHADER}"

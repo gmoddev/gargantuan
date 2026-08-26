@@ -34,13 +34,16 @@ namespace gargantuan {
 	}
 
 	RenderUpdateDomain RenderDirtyAccumulator::Classify(const ChangePayload &Payload) {
-		if (std::holds_alternative<ObjectCreatedChange>(Payload))
+		if (const auto *Created = std::get_if<ObjectCreatedChange>(&Payload)) {
+			if (Created->ClassName == "Lighting" || Created->ClassName == "Sky")
+				return RenderUpdateDomain::Environment | RenderUpdateDomain::Hierarchy;
 			return RenderUpdateDomain::Transform | RenderUpdateDomain::Material | RenderUpdateDomain::Visibility |
 				RenderUpdateDomain::Geometry | RenderUpdateDomain::Hierarchy;
+		}
 		if (std::holds_alternative<ObjectDestroyedChange>(Payload))
-			return RenderUpdateDomain::Visibility | RenderUpdateDomain::Hierarchy;
+			return RenderUpdateDomain::Visibility | RenderUpdateDomain::Hierarchy | RenderUpdateDomain::Environment;
 		if (std::holds_alternative<ObjectReparentedChange>(Payload))
-			return RenderUpdateDomain::Visibility | RenderUpdateDomain::Hierarchy;
+			return RenderUpdateDomain::Visibility | RenderUpdateDomain::Hierarchy | RenderUpdateDomain::Environment;
 		const auto *Property = std::get_if<PropertyUpdatedChange>(&Payload);
 		if (!Property) return RenderUpdateDomain::None;
 		if (Property->PropertyName == "CFrame" || Property->PropertyName == "Size")
@@ -52,6 +55,13 @@ namespace gargantuan {
 		if (Property->PropertyName == "Material") return RenderUpdateDomain::Material;
 		if (Property->PropertyName == "Destroyed" || Property->PropertyName == "Visible")
 			return RenderUpdateDomain::Visibility;
+		if (Property->PropertyName == "Ambient" || Property->PropertyName == "SunColor" ||
+			Property->PropertyName == "Brightness" || Property->PropertyName == "ClockTime" ||
+			Property->PropertyName == "ExposureCompensation" || Property->PropertyName == "EnvironmentColor" ||
+			Property->PropertyName == "FogEnabled" || Property->PropertyName == "FogColor" ||
+			Property->PropertyName == "FogStart" || Property->PropertyName == "FogEnd" ||
+			Property->PropertyName == "Enabled" || Property->PropertyName.starts_with("Skybox"))
+			return RenderUpdateDomain::Environment;
 		return RenderUpdateDomain::None;
 	}
 

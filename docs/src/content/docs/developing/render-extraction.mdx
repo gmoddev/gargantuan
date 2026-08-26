@@ -22,7 +22,7 @@ The governing dependency rule is:
 
 ## Publication contract
 
-A `RenderPublication` owns its sequence/base identity, viewport/camera/light
+A `RenderPublication` owns its sequence/base identity, viewport/camera/complete environment
 state, deterministic object creates/updates/removes, dynamic mesh lifecycle and
 dirty ranges, a complete immutable UI frame when UI changed, and diagnostics.
 The UI frame may be shared as `shared_ptr<const RenderUiFrame>` through publisher
@@ -45,7 +45,7 @@ whose generation is stale.
 ## Dirty accumulation and coalescing
 
 Committed authoritative mutations are classified into transform, material,
-visibility, geometry, deformable, and hierarchy/render-presence domains. One
+visibility, geometry, deformable, hierarchy/render-presence, and environment domains. One
 bounded accumulator entry exists per dirty `ObjectId`, regardless of how many
 times a property was written. Publication reads only the final authoritative
 state: repeated writes become one update, create plus updates becomes one final
@@ -91,6 +91,14 @@ validated vertex range.
 Fatal world/camera/viewport errors reject the whole candidate publication.
 Individual invalid items are skipped with explicit extraction diagnostics.
 Unavailable GPU primitive resources are reported and skipped by the renderer.
+
+Canonical `Lighting` and direct `Sky` children extract into one complete
+renderer-neutral `RenderEnvironmentState`. Many property writes coalesce into
+one environment-only publication, while static frames reuse projected state.
+Six square matching Image faces are resolved through AssetService as texture
+identities and revisions; invalid edits retain only the same Sky instance's
+last-known-good coherent set. See
+[`EnvironmentLightingFoundation1.md`](../../../../../devdocs/CurrentArchitecture/EnvironmentLightingFoundation1.md).
 
 ## Backend resource boundary
 

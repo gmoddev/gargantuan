@@ -5,6 +5,7 @@
 
 #pragma once
 
+#include "gargantuan/render/RenderEnvironment.hpp"
 #include "gargantuan/runtime/ObjectId.hpp"
 
 #include <cstdint>
@@ -54,6 +55,8 @@ namespace gargantuan {
 		UnsupportedGeometry,
 		InvalidTransform,
 		InvalidVisualState,
+		InvalidEnvironment,
+		InvalidSky,
 		PublicationOverflow,
 	};
 
@@ -68,7 +71,7 @@ namespace gargantuan {
 		std::uint32_t ViewportWidth = 0;
 		std::uint32_t ViewportHeight = 0;
 		RenderCameraSnapshot Camera;
-		glm::vec3 LightDirection{0.0f, 1.0f, 0.0f};
+		RenderEnvironmentState Environment;
 		std::vector<RenderItem> Items;
 		std::vector<RenderExtractionDiagnostic> Diagnostics;
 	};

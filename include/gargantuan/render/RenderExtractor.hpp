@@ -42,8 +42,7 @@ namespace gargantuan {
 			const WorldRoot &world,
 			const RenderCameraInput &camera,
 			std::uint32_t viewportWidth,
-			std::uint32_t viewportHeight,
-			glm::vec3 lightDirection = {0.75f, 1.0f, 0.5f}
+			std::uint32_t viewportHeight
 		);
 
 		[[nodiscard]] RenderSnapshotId GetLastSnapshotId() const { return LastSnapshotId; }
@@ -70,8 +69,7 @@ namespace gargantuan {
 			const WorldRoot &World,
 			const RenderCameraInput &Camera,
 			std::uint32_t ViewportWidth,
-			std::uint32_t ViewportHeight,
-			glm::vec3 LightDirection = {0.75f, 1.0f, 0.5f}
+			std::uint32_t ViewportHeight
 		);
 		void RequestFullResync() { FullResyncRequested = true; }
 		void SetUiFrame(RenderUiFrame UiFrame, ObjectId Source = {}, std::uint64_t SourceGeneration = 0);
@@ -115,6 +113,15 @@ namespace gargantuan {
 			std::shared_ptr<const std::vector<std::uint32_t>> Indices;
 			RenderBounds Bounds;
 		};
+		struct PublishedSky {
+			ObjectId Source;
+			RenderSkyState State;
+		};
+
+		[[nodiscard]] RenderEnvironmentState BuildEnvironmentState(
+			const WorldRoot &World,
+			std::vector<RenderExtractionDiagnostic> &Diagnostics
+		);
 
 		RenderExtractor FullExtractor;
 		RenderDirtyAccumulator *Dirty = nullptr;
@@ -126,6 +133,9 @@ namespace gargantuan {
 		std::unordered_map<ObjectId, PublishedDeformable> PublishedDeformables;
 		std::unordered_map<RenderTextureIdentity, PublishedTexture, RenderTextureIdentityHash> PublishedTextures;
 		std::unordered_map<RenderMeshIdentity, PublishedAssetMesh, RenderMeshIdentityHash> PublishedAssetMeshes;
+		RenderEnvironmentState PublishedEnvironment;
+		std::optional<PublishedSky> LastKnownGoodSky;
+		bool HasPublishedEnvironment = false;
 		std::shared_ptr<const RenderUiFrame> PendingUi;
 		std::shared_ptr<const RenderUiFrame> CommittedUi = std::make_shared<const RenderUiFrame>();
 		ObjectId UiSource;

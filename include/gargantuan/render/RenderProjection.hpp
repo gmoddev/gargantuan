@@ -33,6 +33,7 @@ namespace gargantuan {
 		std::size_t TexturesRemoved = 0;
 		std::size_t VertexUploadBytes = 0;
 		std::size_t TextureUploadBytes = 0;
+		std::size_t EnvironmentsUpdated = 0;
 		std::size_t UiBatches = 0;
 		std::size_t UiVertices = 0;
 		std::size_t UiIndices = 0;

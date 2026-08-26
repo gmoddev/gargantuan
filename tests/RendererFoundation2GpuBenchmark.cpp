@@ -15,6 +15,7 @@
 #include <iomanip>
 #include <iostream>
 #include <memory>
+#include <numbers>
 #include <numeric>
 #include <optional>
 #include <stdexcept>
@@ -103,7 +104,7 @@ namespace {
 			if (Argument == "--help") {
 				std::cout << "Usage: gargantuan_renderer_foundation2_gpu_benchmark "
 					"[--scenario=all|cloth-full-4k|cloth-full-16k|cloth-full-64k|cloth-partial-16k|"
-					"cloth-partial-64k|rubber|topology|gui|mixed|texture-lifecycle] "
+					"cloth-partial-64k|rubber|topology|gui|mixed|texture-lifecycle|environment] "
 					"[--frames=N] [--warmup=N] [--width=N] [--height=N] [--synchronize=on|off]\n";
 				std::exit(0);
 			} else if (const auto Parsed = Value("--scenario=")) Result.Scenario = *Parsed;
@@ -297,6 +298,8 @@ namespace {
 			<< ',' << Final.ScissorChanges - Baseline.ScissorChanges
 			<< ',' << Final.PipelineSwitches - Baseline.PipelineSwitches
 			<< ',' << Final.FullResyncs - Baseline.FullResyncs
+			<< ',' << Final.EnvironmentApplications - Baseline.EnvironmentApplications
+			<< ',' << Final.SkyDraws - Baseline.SkyDraws
 			<< ',' << StabilityGate << ',' << RestartGate << ",NA,"
 			<< (Settings.Synchronize ? "FenceCompletionLatency" : "QueuedCpuPacing") << '\n';
 	}
@@ -416,6 +419,87 @@ namespace {
 		Resync.TextureCreates.push_back({{9, 2}, 1, 4, 4, RenderTextureFormat::Rgba8Unorm, MakeAtlas(4, 4, 19)});
 		Restarted.Draw(std::make_shared<const RenderPublication>(Resync));
 	}
+
+	RenderEnvironmentState MakeEnvironment(std::size_t Frame, bool SkyEnabled) {
+		RenderEnvironmentState Environment;
+		const float Angle = (static_cast<float>(Frame % 24) - 6.0f) * 2.0f * std::numbers::pi_v<float> / 24.0f;
+		Environment.AmbientColor = {0.18f, 0.2f, 0.24f};
+		Environment.SunDirection = {std::cos(Angle), std::sin(Angle), 0.0f};
+		Environment.SunColor = {1.0f, 0.92f, 0.8f};
+		Environment.SunIntensity = 2.0f * std::max(Environment.SunDirection.y, 0.0f);
+		Environment.ExposureMultiplier = Frame % 2 == 0 ? 1.0f : 2.0f;
+		Environment.EnvironmentColor = {0.025f, 0.055f, 0.12f};
+		Environment.Fog = {.Enabled = Frame % 2 != 0, .Color = {0.35f, 0.42f, 0.5f}, .Start = 8.0f, .End = 120.0f};
+		if (SkyEnabled) {
+			RenderSkyState Sky{.FaceDimension = 4};
+			for (std::size_t Index = 0; Index < Sky.Faces.size(); ++Index)
+				Sky.Faces[Index] = {{20 + Index, 1}, 1};
+			Environment.Sky = Sky;
+		}
+		return Environment;
+	}
+
+	void RunEnvironment(const Options &Settings) {
+		{
+			RenderPublication Initial{.Id = 1, .FullResync = true, .Frame = MakeFrame(Settings)};
+			Initial.Frame.Environment = MakeEnvironment(0, false);
+			auto CurrentId = RenderPublicationId{1};
+			const auto MakeNext = [=](std::size_t) mutable {
+				RenderPublication Publication{.Id = ++CurrentId, .BaseId = CurrentId - 1, .Frame = MakeFrame(Settings)};
+				Publication.Frame.Environment = MakeEnvironment(0, false);
+				return Publication;
+			};
+			Run("environment-fallback-static", Settings, std::move(Initial), MakeNext, true);
+		}
+
+		RenderPublication Initial{
+			.Id = 1, .FullResync = true, .Frame = MakeFrame(Settings), .EnvironmentChanged = true
+		};
+		Initial.Frame.Environment = MakeEnvironment(0, true);
+		for (std::size_t Index = 0; Index < 6; ++Index)
+			Initial.TextureCreates.push_back(
+				{{20 + Index, 1},
+				 1,
+				 4,
+				 4,
+				 RenderTextureFormat::Rgba8Unorm,
+				 MakeAtlas(4, 4, static_cast<std::uint8_t>(31 + Index * 29))}
+			);
+
+		// A fresh backend must recreate disposable texture state and apply the complete
+		// semantic environment without any DataModel mutation.
+		{
+			SDLRenderer Restarted(
+				Vector2(static_cast<float>(Settings.Width), static_cast<float>(Settings.Height)),
+				{.Offscreen = true, .WaitForGpuCompletion = true, .DebugDevice = false}
+			);
+			Restarted.Draw(std::make_shared<const RenderPublication>(Initial));
+			const auto Metrics = Restarted.GetMetrics();
+			if (Metrics.FullResyncs != 1 || Metrics.EnvironmentApplications != 1 || Metrics.SkyDraws != 1)
+				throw std::runtime_error("environment renderer restart did not apply the complete Sky state");
+		}
+
+		auto CurrentId = RenderPublicationId{1};
+		auto FaceRevision = std::uint64_t{1};
+		const auto MakeNext = [=](std::size_t Frame) mutable {
+			RenderPublication Publication{
+				.Id = ++CurrentId,
+				.BaseId = CurrentId - 1,
+				.Frame = MakeFrame(Settings),
+				.EnvironmentChanged = true,
+			};
+			Publication.Frame.Environment = MakeEnvironment(Frame + 1, true);
+			if (Frame % 10 == 0) {
+				++FaceRevision;
+				Publication.TextureUpdates.push_back(
+					{{20, 1}, FaceRevision, 0, 0, 4, 4, MakeAtlas(4, 4, static_cast<std::uint8_t>(Frame + 97))}
+				);
+			}
+			Publication.Frame.Environment.Sky->Faces[0].ContentRevision = FaceRevision;
+			return Publication;
+		};
+		Run("environment-sky-fog-clock-exposure", Settings, std::move(Initial), MakeNext, true, "PASS");
+	}
 }
 
 int main(int ArgumentCount, char **Arguments) {
@@ -428,7 +512,8 @@ int main(int ArgumentCount, char **Arguments) {
 			std::cout << ',' << Stage << "MeanMs," << Stage << "P50Ms," << Stage << "P95Ms," << Stage << "P99Ms," << Stage << "MaxMs";
 		std::cout << ",UploadBytesPerFrame,UploadOperations,VertexBufferCreations,IndexBufferCreations,TransferBufferCreations,BufferReallocations,"
 			"BufferCycleRequests,TextureCreations,TextureUpdates,TextureReleases,DrawCalls,UiBatches,ScissorChanges,"
-			"PipelineSwitches,FullResyncs,StableResourceGate,RestartGate,GpuTimestampMeanMs,GpuTimingSource\n";
+			"PipelineSwitches,FullResyncs,EnvironmentApplications,SkyDraws,StableResourceGate,RestartGate,"
+			"GpuTimestampMeanMs,GpuTimingSource\n";
 		const auto Selected = [&](std::string_view Name) { return Settings.Scenario == "all" || Settings.Scenario == Name; };
 		if (Selected("cloth-full-4k")) RunDeformable(Settings, "cloth-full-4096", 64, false, false, false);
 		if (Selected("cloth-full-16k")) RunDeformable(Settings, "cloth-full-16384", 128, false, false, false);
@@ -440,6 +525,7 @@ int main(int ArgumentCount, char **Arguments) {
 		if (Selected("gui")) RunGui(Settings, false);
 		if (Selected("mixed")) RunGui(Settings, true);
 		if (Selected("texture-lifecycle")) RunTextureLifecycle(Settings);
+		if (Selected("environment")) RunEnvironment(Settings);
 		return 0;
 	} catch (const std::exception &Error) {
 		std::cerr << "[Render:Foundation2GpuBenchmark] " << Error.what() << '\n';

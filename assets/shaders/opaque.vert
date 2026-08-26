@@ -8,11 +8,16 @@ layout(set = 1, binding = 0) uniform WorldUniforms {
     mat4 ViewMatrix;
     mat4 ProjectionMatrix;
     mat4 ShadowBiasMatrix;
-    vec4 LightDirection;
+    vec4 SunDirectionIntensity;
+    vec4 AmbientExposure;
+    vec4 SunColorFogEnabled;
+    vec4 FogColorStart;
+    vec4 CameraPositionFogEnd;
 } world;
 
 layout(set = 1, binding = 1) uniform PartUniforms {
     mat4 ModelMatrix;
+    mat4 NormalMatrix;
     vec4 Color;
     vec4 MaterialValues;
 } part;
@@ -29,7 +34,7 @@ void main() {
     // renders black. This shit tookw ay too long to debug
     gl_Position = world.ProjectionMatrix * world.ViewMatrix * part.ModelMatrix * vec4(VertexPosition, 1.0f);
 
-    FragmentNormal = normalize(mat3(part.ModelMatrix) * VertexNormal);
+    FragmentNormal = normalize(mat3(part.NormalMatrix) * VertexNormal);
     FragmentColor = part.Color;
     WorldPosition = (part.ModelMatrix * vec4(VertexPosition, 1.0f)).xyzw;
     ShadowPosition = world.ShadowBiasMatrix * WorldPosition;

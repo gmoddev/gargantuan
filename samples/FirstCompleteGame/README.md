@@ -49,5 +49,11 @@ Each collectible plays the clip positionally while round completion plays it
 as a non-positional UI sound. Gameplay Luau does not read source asset files,
 and hearing the cues is never required for game correctness.
 
+The saved fixture also authors the canonical `Lighting` service with afternoon
+sun, ambient light, exposure, bounded fog, and a direct six-face `Sky`. All six
+faces reuse the packaged square Collection Badge Image so save/reopen, local
+Play, headless publication, renderer restart, and package inspection exercise
+the complete environment resource path without adding another source asset.
+
 See [FirstCompleteGame.md](../../devdocs/Validation/FirstCompleteGame.md) for
 the authoring record, automated evidence, and gaps found by this slice.

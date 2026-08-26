@@ -11,6 +11,7 @@
 #include "gargantuan/services/AssetService.hpp"
 #include "gargantuan/services/EntitlementService.hpp"
 #include "gargantuan/services/InteractionService.hpp"
+#include "gargantuan/services/Lighting.hpp"
 #include "gargantuan/services/Players.hpp"
 #include "gargantuan/services/ProcessService.hpp"
 #include "gargantuan/services/RunService.hpp"
@@ -51,6 +52,7 @@ namespace gargantuan {
 		std::unique_ptr<AudioRuntime> Audio;
 		std::shared_ptr<EntitlementService> Entitlements;
 		std::shared_ptr<InteractionService> Interaction;
+		std::shared_ptr<Lighting> Lighting;
 		std::shared_ptr<Players> Players;
 
 		bool IsRunning = true;

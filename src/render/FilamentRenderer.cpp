@@ -515,7 +515,11 @@ namespace gargantuan {
 
 			auto &Lights = Engine->getLightManager();
 			const auto Light = Lights.getInstance(LightEntity);
-			if (Light) Lights.setDirection(Light, ToFilament(-Snapshot.LightDirection));
+			if (Light) {
+				Lights.setDirection(Light, ToFilament(-Snapshot.Environment.SunDirection));
+				Lights.setColor(Light, ToFilament(Snapshot.Environment.SunColor));
+				Lights.setIntensity(Light, 100000.0f * Snapshot.Environment.SunIntensity);
+			}
 		}
 
 		void Draw(const RenderSnapshot &Snapshot) {

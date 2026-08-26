@@ -86,9 +86,9 @@ executable does not relink. `gargantuan_packaged_shaders` compares that runtime
 directory with the complete source shader set and fails when a compiled output
 is missing.
 
-The Windows production contract contains 37 tests. A local configuration with
+The Windows production contract contains 38 tests. A local configuration with
 `GARGANTUAN_WITH_GNS=OFF` and renderer benchmarks disabled omits the two
-real-transport and two renderer-headless entries and therefore contains 33;
+real-transport and two renderer-headless entries and therefore contains 34;
 that reduced matrix is not the complete Windows gate. Current CMake and this
 document are authoritative.
 
@@ -113,6 +113,7 @@ document are authoritative.
 | Real transport lifecycle and remotes | `gargantuan_real_transport`, `gargantuan_remote_real_transport` |
 | Renderer extraction/projection and renderer interface | `gargantuan_renderer_projection_headless`, `gargantuan_renderer_backend_headless` |
 | Renderer Foundation 2B dirty coalescing/bounds, publication lifecycle, deformable ranges, and UI batches | `gargantuan_renderer_publication` |
+| Environment publication/application scaling, ClockTime, fog, exposure, and Sky reimport smoke | `gargantuan_environment_lighting_benchmark_smoke` |
 | Package format, integrity, relocation, atomicity, cancellation, asset closure, shared packaged-world bootstrap, and packaged gameplay | `gargantuan_packaging` |
 | EditorHost package authority, revision, conflict, Play exclusion, progress, and cancellation | `gargantuan_packaging_editor_host` |
 | Package capture/build bounded-load smoke | `gargantuan_packaging_benchmark_smoke` |

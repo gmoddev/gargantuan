@@ -6,6 +6,11 @@ defect throughput.
 
 ## Evidence updates
 
+- Environment / Lighting Foundation 1 establishes canonical saved Lighting and
+  Sky semantics, renderer-neutral incremental publication, AssetService-owned
+  coherent face residency, and the SDL shadow/Sky/opaque/GUI pipeline. Local
+  lights, atmosphere, probes, HDR color management, and advanced shadows remain
+  Phase 2 renderer expansion rather than implied completion.
 - Standalone Packaging Foundation 1 closes the Windows x64 build-tree/CMake
   usability gap for produced games: Studio and CLI share one PackageBuilder,
   FirstCompleteGame packages into a self-contained hashed directory, and the

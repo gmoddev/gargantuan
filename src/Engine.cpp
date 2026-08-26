@@ -42,7 +42,8 @@ namespace gargantuan {
 			  }
 		  )),
 		  Entitlements(GetService<gargantuan::EntitlementService>()),
-		  Interaction(GetService<gargantuan::InteractionService>()), Players(GetService<gargantuan::Players>()) {
+		  Interaction(GetService<gargantuan::InteractionService>()), Lighting(GetService<gargantuan::Lighting>()),
+		  Players(GetService<gargantuan::Players>()) {
 		if (ProviderConfiguration.Entitlements &&
 			!Entitlements->ConfigureProvider(std::move(ProviderConfiguration.Entitlements)))
 			LOG_WARN(

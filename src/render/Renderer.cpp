@@ -33,8 +33,9 @@ namespace gargantuan {
 		Publication->Id = Snapshot->Id;
 		Publication->FullResync = true;
 		Publication->Frame = {
-			Snapshot->ViewportWidth, Snapshot->ViewportHeight, 1.0f, Snapshot->Camera, Snapshot->LightDirection,
+			Snapshot->ViewportWidth, Snapshot->ViewportHeight, 1.0f, Snapshot->Camera, Snapshot->Environment,
 		};
+		Publication->EnvironmentChanged = true;
 		Publication->Diagnostics = Snapshot->Diagnostics;
 		Publication->Creates.reserve(Snapshot->Items.size());
 		for (const auto &Item : Snapshot->Items) {
@@ -69,6 +70,7 @@ namespace gargantuan {
 	const std::vector<SDLRenderPassConstructor> &GetSDLRenderPassConstructors() {
 		static const std::vector<SDLRenderPassConstructor> Constructors{
 			CreateShadowPass,
+			CreateSkyPass,
 			CreateOpaquePass,
 			CreateGuiPass,
 		};
@@ -190,7 +192,8 @@ namespace gargantuan {
 		State->Metrics.LastGpuCompletionWaitNanoseconds = 0;
 		try {
 			const auto ProjectionStart = Clock::now();
-			(void)State->Projection.Apply(*Publication);
+			const auto Changes = State->Projection.Apply(*Publication);
+			State->Metrics.EnvironmentApplications += Changes.EnvironmentsUpdated;
 			State->Metrics.LastProjectionNanoseconds = Nanoseconds(Clock::now() - ProjectionStart);
 			State->Metrics.CpuProjectionNanoseconds += State->Metrics.LastProjectionNanoseconds;
 			const auto MeshStart = Clock::now();

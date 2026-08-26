@@ -60,6 +60,8 @@ namespace gargantuan {
 			"shaders/opaque.vert.spv",
 			"shaders/shadow.frag.spv",
 			"shaders/shadow.vert.spv",
+			"shaders/sky.frag.spv",
+			"shaders/sky.vert.spv",
 			"notices/Gargantuan.txt",
 			"notices/SDL3.txt",
 			"notices/SDL3_image.txt",

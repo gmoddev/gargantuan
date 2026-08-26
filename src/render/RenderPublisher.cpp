@@ -5,13 +5,16 @@
 
 #include "gargantuan/render/RenderExtractor.hpp"
 
-#include "gargantuan/classes/Part.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/DeformableBody.hpp"
 #include "gargantuan/classes/MeshPart.hpp"
+#include "gargantuan/classes/Part.hpp"
+#include "gargantuan/classes/Sky.hpp"
 #include "gargantuan/classes/WorldRoot.hpp"
+#include "gargantuan/environment/EnvironmentSemantics.hpp"
 #include "gargantuan/runtime/ExecutionDomain.hpp"
 #include "gargantuan/services/AssetService.hpp"
+#include "gargantuan/services/Lighting.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -47,6 +50,27 @@ namespace gargantuan {
 		bool IsFinite(const glm::mat4 &Value) {
 			for (glm::length_t Column = 0; Column < 4; ++Column)
 				if (!IsFinite(Value[Column])) return false;
+			return true;
+		}
+
+		bool Equal(const glm::vec3 &Left, const glm::vec3 &Right) {
+			return Left.x == Right.x && Left.y == Right.y && Left.z == Right.z;
+		}
+
+		bool Equal(const RenderEnvironmentState &Left, const RenderEnvironmentState &Right) {
+			if (!Equal(Left.AmbientColor, Right.AmbientColor) || !Equal(Left.SunDirection, Right.SunDirection) ||
+				!Equal(Left.SunColor, Right.SunColor) || Left.SunIntensity != Right.SunIntensity ||
+				Left.ExposureMultiplier != Right.ExposureMultiplier ||
+				!Equal(Left.EnvironmentColor, Right.EnvironmentColor) || Left.Fog.Enabled != Right.Fog.Enabled ||
+				!Equal(Left.Fog.Color, Right.Fog.Color) || Left.Fog.Start != Right.Fog.Start ||
+				Left.Fog.End != Right.Fog.End || Left.Sky.has_value() != Right.Sky.has_value())
+				return false;
+			if (!Left.Sky) return true;
+			if (Left.Sky->FaceDimension != Right.Sky->FaceDimension) return false;
+			for (std::size_t Index = 0; Index < Left.Sky->Faces.size(); ++Index)
+				if (Left.Sky->Faces[Index].Texture != Right.Sky->Faces[Index].Texture ||
+					Left.Sky->Faces[Index].ContentRevision != Right.Sky->Faces[Index].ContentRevision)
+					return false;
 			return true;
 		}
 
@@ -385,6 +409,114 @@ namespace gargantuan {
 		if (Dirty) Dirty->ReleaseConsumer(DirtyConsumer);
 	}
 
+	RenderEnvironmentState RenderPublisher::BuildEnvironmentState(
+		const WorldRoot &World, std::vector<RenderExtractionDiagnostic> &Diagnostics
+	) {
+		RenderEnvironmentState Result;
+		auto DataModelValue = World.GetDataModel();
+		if (!DataModelValue) return Result;
+
+		auto LightingService = DataModelValue->FindService("Lighting");
+		auto LightingValue = LightingService ? std::dynamic_pointer_cast<Lighting>(*LightingService) : nullptr;
+		if (!LightingValue) return Result;
+
+		const auto Sun = ComputeEnvironmentSunState(
+			LightingValue->GetClockTime(), LightingValue->GetBrightness(), LightingValue->GetSunColor()
+		);
+		Result.AmbientColor = static_cast<glm::vec3>(LightingValue->GetAmbient());
+		Result.SunDirection = Sun.Direction;
+		Result.SunColor = Sun.Color;
+		Result.SunIntensity = Sun.Intensity;
+		Result.ExposureMultiplier = ComputeEnvironmentExposure(LightingValue->GetExposureCompensation());
+		Result.EnvironmentColor = static_cast<glm::vec3>(LightingValue->GetEnvironmentColor());
+		Result.Fog = {
+			.Enabled = LightingValue->GetFogEnabled(),
+			.Color = static_cast<glm::vec3>(LightingValue->GetFogColor()),
+			.Start = LightingValue->GetFogStart(),
+			.End = LightingValue->GetFogEnd(),
+		};
+
+		std::vector<std::shared_ptr<Sky>> EnabledSkies;
+		for (const auto &Child : LightingValue->GetChildren()) {
+			auto SkyValue = std::dynamic_pointer_cast<Sky>(Child);
+			if (SkyValue && !SkyValue->GetDestroyed() && !SkyValue->IsDestroying() && SkyValue->GetEnabled())
+				EnabledSkies.push_back(std::move(SkyValue));
+		}
+		std::ranges::sort(EnabledSkies, {}, [](const auto &Value) { return Value->GetObjectId(); });
+		if (EnabledSkies.empty()) {
+			LastKnownGoodSky.reset();
+			return Result;
+		}
+		const auto &EffectiveSky = EnabledSkies.front();
+		if (EnabledSkies.size() > 1)
+			Diagnostics.push_back({
+				.Issue = RenderExtractionIssue::InvalidSky,
+				.Object = EffectiveSky->GetObjectId(),
+				.Message =
+					"[Environment:Sky] Multiple enabled direct Sky children found; the lowest ObjectId is effective",
+			});
+
+		auto AssetServiceValue = DataModelValue->FindService("AssetService");
+		auto Assets = AssetServiceValue ? std::dynamic_pointer_cast<AssetService>(*AssetServiceValue) : nullptr;
+		const std::array<std::string, 6> References{
+			EffectiveSky->GetSkyboxPositiveX(),
+			EffectiveSky->GetSkyboxNegativeX(),
+			EffectiveSky->GetSkyboxPositiveY(),
+			EffectiveSky->GetSkyboxNegativeY(),
+			EffectiveSky->GetSkyboxPositiveZ(),
+			EffectiveSky->GetSkyboxNegativeZ(),
+		};
+		RenderSkyState Candidate;
+		bool Valid = Assets != nullptr;
+		for (std::size_t Index = 0; Valid && Index < References.size(); ++Index) {
+			const auto Record = Assets->GetAsset(References[Index]);
+			const auto *Image = Record && Record->Asset ? std::get_if<ImportedImage>(Record->Asset.get()) : nullptr;
+			const auto Available = Record && (Record->State == AssetState::Ready || Record->State == AssetState::Stale);
+			const auto Resource = Record && Record->Kind == AssetKind::Image && Available && Image &&
+										  Image->Width != 0 && Image->Width == Image->Height
+									  ? Assets->ResolveImage(References[Index])
+									  : std::nullopt;
+			if (!Resource || !Resource->Texture.IsValid() || Resource->ContentRevision == 0 ||
+				Resource->Width != Resource->Height || Resource->Width != Image->Width ||
+				(Candidate.FaceDimension != 0 && Candidate.FaceDimension != Resource->Width)) {
+				Valid = false;
+				break;
+			}
+			Candidate.FaceDimension = Resource->Width;
+			Candidate.Faces[Index] = {Resource->Texture, Resource->ContentRevision};
+		}
+
+		if (Valid) {
+			Result.Sky = Candidate;
+			LastKnownGoodSky = PublishedSky{EffectiveSky->GetObjectId(), Candidate};
+			return Result;
+		}
+
+		Diagnostics.push_back({
+			.Issue = RenderExtractionIssue::InvalidSky,
+			.Object = EffectiveSky->GetObjectId(),
+			.Message =
+				"[Environment:Sky] Effective Sky is incomplete, unavailable, non-square, or dimension-mismatched",
+		});
+		const bool LastKnownGoodResident =
+			LastKnownGoodSky && std::ranges::all_of(LastKnownGoodSky->State.Faces, [&](const RenderSkyFaceState &Face) {
+				const auto Existing = PublishedTextures.find(Face.Texture);
+				return Existing != PublishedTextures.end() && Existing->second.Revision == Face.ContentRevision &&
+					   Existing->second.Width == LastKnownGoodSky->State.FaceDimension &&
+					   Existing->second.Height == LastKnownGoodSky->State.FaceDimension;
+			});
+		if (LastKnownGoodResident && LastKnownGoodSky->Source == EffectiveSky->GetObjectId()) {
+			Result.Sky = LastKnownGoodSky->State;
+			Diagnostics.push_back({
+				.Issue = RenderExtractionIssue::InvalidSky,
+				.Object = EffectiveSky->GetObjectId(),
+				.Message = "[Environment:Sky] Retaining the last-known-good coherent Sky",
+			});
+		} else
+			LastKnownGoodSky.reset();
+		return Result;
+	}
+
 	void RenderPublisher::SetUiFrame(RenderUiFrame UiFrame, ObjectId Source, std::uint64_t SourceGeneration) {
 		SetUiFrame(std::make_shared<const RenderUiFrame>(std::move(UiFrame)), Source, SourceGeneration);
 	}
@@ -525,8 +657,7 @@ namespace gargantuan {
 		const WorldRoot &World,
 		const RenderCameraInput &CameraInput,
 		std::uint32_t ViewportWidth,
-		std::uint32_t ViewportHeight,
-		glm::vec3 LightDirection
+		std::uint32_t ViewportHeight
 	) {
 		AssertAuthoritativeMutation("RenderPublication extraction");
 		LastProfile = {};
@@ -534,8 +665,6 @@ namespace gargantuan {
 			throw std::overflow_error("RenderPublication identity exhausted and will not roll over");
 		const auto CurrentScope = World.GetReplicationScopeId();
 		if (!CurrentScope.IsValid()) throw std::invalid_argument("RenderPublication requires a live DataModel scope");
-		if (!IsFinite(LightDirection) || glm::length(LightDirection) < 1e-6f)
-			throw std::invalid_argument("RenderPublication light direction must be finite and nonzero");
 		const auto Camera = BuildCamera(CameraInput, ViewportWidth, ViewportHeight);
 
 		if (PublishedWorld != &World || Scope != CurrentScope) {
@@ -545,6 +674,8 @@ namespace gargantuan {
 			FullResyncRequested = true;
 			PublishedItems.clear();
 			PublishedDeformables.clear();
+			HasPublishedEnvironment = false;
+			LastKnownGoodSky.reset();
 		}
 		const auto CaptureStart = ProfilingEnabled ? ProfileClock::now() : ProfileClock::time_point{};
 		const auto DirtyBatch = Dirty->Capture(Scope, DirtyConsumer);
@@ -555,13 +686,15 @@ namespace gargantuan {
 			throw std::length_error("Pending render UI exceeds its byte limit");
 		}
 
-			auto FullResync = [&]() -> RenderPublicationPtr {
-			auto Snapshot = FullExtractor.Extract(World, CameraInput, ViewportWidth, ViewportHeight, LightDirection);
+		auto FullResync = [&]() -> RenderPublicationPtr {
+			auto Snapshot = FullExtractor.Extract(World, CameraInput, ViewportWidth, ViewportHeight);
 			auto Result = std::make_shared<RenderPublication>();
 			Result->Id = LastPublicationId + 1;
 			Result->FullResync = true;
-			Result->Frame = {ViewportWidth, ViewportHeight, 1.0f, Camera, glm::normalize(LightDirection)};
 			Result->Diagnostics = Snapshot->Diagnostics;
+			const auto Environment = BuildEnvironmentState(World, Result->Diagnostics);
+			Result->Frame = {ViewportWidth, ViewportHeight, 1.0f, Camera, Environment};
+			Result->EnvironmentChanged = true;
 			for (const auto &Diagnostic : DirtyBatch.Diagnostics)
 				Result->Diagnostics.push_back({RenderExtractionIssue::PublicationOverflow, {}, Diagnostic});
 			Result->Creates.reserve(Snapshot->Items.size() + World.SoftBodies.size());
@@ -634,6 +767,8 @@ namespace gargantuan {
 			}
 			PublishedItems = std::move(Replacement);
 			PublishedDeformables = std::move(DeformableReplacement);
+			PublishedEnvironment = Environment;
+			HasPublishedEnvironment = true;
 			FullResyncRequested = false;
 			LastPublicationId = Result->Id;
 			++FullResyncCount;
@@ -687,7 +822,20 @@ namespace gargantuan {
 		auto Result = std::make_shared<RenderPublication>();
 		Result->Id = LastPublicationId + 1;
 		Result->BaseId = LastPublicationId;
-		Result->Frame = {ViewportWidth, ViewportHeight, 1.0f, Camera, glm::normalize(LightDirection)};
+		const bool EnvironmentDirty = !HasPublishedEnvironment || !PendingTextureCreates.empty() ||
+									  !PendingTextureUpdates.empty() || !PendingTextureRemoves.empty() ||
+									  std::ranges::any_of(DirtyBatch.Records, [](const RenderDirtyRecord &Record) {
+										  return HasRenderUpdateDomain(Record.Domains, RenderUpdateDomain::Environment);
+									  });
+		auto Environment = PublishedEnvironment;
+		if (EnvironmentDirty) {
+			auto Candidate = BuildEnvironmentState(World, Result->Diagnostics);
+			if (!HasPublishedEnvironment || !Equal(Candidate, PublishedEnvironment)) {
+				Environment = std::move(Candidate);
+				Result->EnvironmentChanged = true;
+			}
+		}
+		Result->Frame = {ViewportWidth, ViewportHeight, 1.0f, Camera, Environment};
 		for (const auto &Diagnostic : DirtyBatch.Diagnostics)
 			Result->Diagnostics.push_back({RenderExtractionIssue::PublicationOverflow, {}, Diagnostic});
 		Result->Updates.reserve(DirtyObjects.size());
@@ -862,6 +1010,8 @@ namespace gargantuan {
 			for (const auto Object : DeformableCacheRemoves) PublishedDeformables.erase(Object);
 			for (const auto &[Object, State] : DeformableCacheUpdates)
 				PublishedDeformables.insert_or_assign(Object, State);
+			if (Result->EnvironmentChanged) PublishedEnvironment = Result->Frame.Environment;
+			HasPublishedEnvironment = true;
 		} catch (...) {
 			PublishedItems.clear();
 			PublishedDeformables.clear();

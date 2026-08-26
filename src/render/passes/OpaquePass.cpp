@@ -46,11 +46,16 @@ namespace gargantuan {
 			glm::mat4 ViewMatrix;
 			glm::mat4 ProjectionMatrix;
 			glm::mat4 ShadowBiasMatrix;
-			glm::vec4 LightDirection;
+			glm::vec4 SunDirectionIntensity;
+			glm::vec4 AmbientExposure;
+			glm::vec4 SunColorFogEnabled;
+			glm::vec4 FogColorStart;
+			glm::vec4 CameraPositionFogEnd;
 		};
 
 		struct alignas(16) PartUniforms {
 			glm::mat4 ModelMatrix;
+			glm::mat4 NormalMatrix;
 			glm::vec4 Color;
 			glm::vec4 MaterialValues;
 		};
@@ -107,8 +112,7 @@ namespace gargantuan {
 		SDL_GPURenderPass *Draw(SDL_GPUDevice *gpu, SDLFrameContext &context) override {
 			SDL_GPUColorTargetInfo colorTarget = {
 				.texture = context.SwapchainTexture,
-				.clear_color = SDL_FColor{0.0f, 0.0f, 0.0f, 1.0f},
-				.load_op = SDL_GPU_LOADOP_CLEAR,
+				.load_op = SDL_GPU_LOADOP_LOAD,
 				.store_op = SDL_GPU_STOREOP_STORE,
 			};
 
@@ -131,11 +135,17 @@ namespace gargantuan {
 			SDL_BindGPUGraphicsPipeline(pass, Pipeline);
 			if (context.Metrics) ++context.Metrics->PipelineSwitches;
 
+			const auto &Frame = context.Projection.GetFrame();
+			const auto &Environment = Frame.Environment;
 			WorldUniforms worldUniforms{
-				.ViewMatrix = context.Projection.GetFrame().Camera.ViewMatrix,
-				.ProjectionMatrix = context.Projection.GetFrame().Camera.ProjectionMatrix,
+				.ViewMatrix = Frame.Camera.ViewMatrix,
+				.ProjectionMatrix = Frame.Camera.ProjectionMatrix,
 				.ShadowBiasMatrix = SHADOW_BIAS_MATRIX * context.ShadowMatrix,
-				.LightDirection = glm::vec4(context.Projection.GetFrame().LightDirection, 0.0f),
+				.SunDirectionIntensity = glm::vec4(Environment.SunDirection, Environment.SunIntensity),
+				.AmbientExposure = glm::vec4(Environment.AmbientColor, Environment.ExposureMultiplier),
+				.SunColorFogEnabled = glm::vec4(Environment.SunColor, Environment.Fog.Enabled ? 1.0f : 0.0f),
+				.FogColorStart = glm::vec4(Environment.Fog.Color, Environment.Fog.Start),
+				.CameraPositionFogEnd = glm::vec4(Frame.Camera.Position, Environment.Fog.End),
 			};
 			SDL_PushGPUVertexUniformData(context.Commands, 0, &worldUniforms, sizeof(WorldUniforms));
 			SDL_PushGPUFragmentUniformData(context.Commands, 0, &worldUniforms, sizeof(WorldUniforms));
@@ -178,6 +188,7 @@ namespace gargantuan {
 					SDL_BindGPUFragmentSamplers(pass, 0, TextureBindings.data(), TextureBindings.size());
 					PartUniforms Uniforms{
 						.ModelMatrix = item.ModelMatrix,
+						.NormalMatrix = glm::transpose(item.InverseModelMatrix),
 						.Color = Material.BaseColorFactor,
 						.MaterialValues = {Material.AlphaCutoff, static_cast<float>(Material.OpacityMode),
 							Material.Metallic, Material.Roughness},

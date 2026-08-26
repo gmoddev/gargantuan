@@ -35,6 +35,8 @@ namespace gargantuan {
 		std::uint64_t UiBatches = 0;
 		std::uint64_t ScissorChanges = 0;
 		std::uint64_t PipelineSwitches = 0;
+		std::uint64_t EnvironmentApplications = 0;
+		std::uint64_t SkyDraws = 0;
 		std::uint64_t CpuProjectionNanoseconds = 0;
 		std::uint64_t CpuMeshTransferNanoseconds = 0;
 		std::uint64_t CpuTextureTransferNanoseconds = 0;

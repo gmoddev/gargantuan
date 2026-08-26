@@ -68,7 +68,7 @@ helpers live under `src/render/sdl/`:
 | `SDLPipelineBuilder` | SDL vertex layout and graphics-pipeline creation info. |
 | `SDLRenderPass` / `SDLFrameContext` | SDL command, target, sampler, pipeline, and pass state. |
 
-The opaque, shadow, and active GUI pass implementations are SDL backend code.
+The shadow, Sky/background, opaque, and active GUI pass implementations are SDL backend code.
 Their generic-looking former names did not establish engine semantics. Shader
 and pipeline resources are now released by the shared private pass base; this
 also closes the previous hidden-member lifetime leak where a derived pass's
@@ -79,6 +79,12 @@ Unchanged objects perform no publication/application work. Transform, material,
 and visibility updates preserve geometry resources. Mesh create/remove follows
 generation-safe publication identities; stable-topology deformable updates copy
 only the requested vertex range.
+
+Environment Foundation 1 adds only renderer-neutral colors, derived sun/fog/
+exposure values, and six optional texture identities to the publication. SDL
+owns the Sky sampler/pass and lighting shader implementation. The pass order is
+shadow, Sky, opaque, GUI; GUI therefore remains independent of world exposure
+and fog. No Lighting or Sky Instance crosses this boundary.
 
 The GUI pass consumes renderer-neutral ordered batches and owns growth-only
 vertex/index/upload buffers, atlas bindings, alpha blending, scissors, and draw
@@ -148,6 +154,6 @@ PIMPL, not a Studio or EditorHost contract change.
 SDL remains the selected platform and rendering implementation. GLM remains an
 accepted foundational C++ value representation, Luau remains product
 semantics, and the STL is not abstracted. Renderer replacement, a generic RHI,
-advanced asset material/mesh-consumer semantics, advanced lighting, retained UI paint production, render
+advanced asset material/mesh-consumer semantics, local lights and advanced environment rendering, retained UI paint production, render
 threading, and advanced Play rendering remain deferred. Minimal Play reuses the
 current offscreen EditorHost renderer through the publication boundary.

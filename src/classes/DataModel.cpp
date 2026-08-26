@@ -6,6 +6,7 @@
 #include "gargantuan/services/AssetService.hpp"
 #include "gargantuan/services/EntitlementService.hpp"
 #include "gargantuan/services/InteractionService.hpp"
+#include "gargantuan/services/Lighting.hpp"
 #include "gargantuan/services/Players.hpp"
 #include "gargantuan/services/ProcessService.hpp"
 #include "gargantuan/services/RunService.hpp"
@@ -97,6 +98,7 @@ namespace gargantuan {
 		// before publishing the initial revision.
 		(void)GetService("Workspace");
 		(void)GetService("AssetService");
+		(void)GetService("Lighting");
 		AuthoritativeRevision = InitialProjectRevision;
 		Transactions.Reset();
 	}
@@ -121,6 +123,7 @@ namespace gargantuan {
 			{"AssetService", SchemaId::FromNativeName("Engine", "AssetService")},
 			{"EntitlementService", SchemaId::FromNativeName("Engine", "EntitlementService")},
 			{"InteractionService", SchemaId::FromNativeName("Engine", "InteractionService")},
+			{"Lighting", SchemaId::FromNativeName("Engine", "Lighting")},
 			{"Players", SchemaId::FromNativeName("Engine", "Players")},
 			{"ProcessService", SchemaId::FromNativeName("Engine", "ProcessService")},
 			{"RunService", SchemaId::FromNativeName("Engine", "RunService")},

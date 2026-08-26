@@ -5,11 +5,16 @@
 
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Part.hpp"
+#include "gargantuan/classes/Sky.hpp"
+#include "gargantuan/environment/EnvironmentSemantics.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/render/RenderExtractor.hpp"
 #include "gargantuan/render/RenderProjection.hpp"
+#include "gargantuan/services/AssetService.hpp"
+#include "gargantuan/services/Lighting.hpp"
 #include "gargantuan/services/Workspace.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <iostream>
 #include <limits>
@@ -447,6 +452,196 @@ namespace {
 		Accumulator.ReleaseConsumer(FirstConsumer);
 		Accumulator.ReleaseConsumer(SecondConsumer);
 	}
+
+	void TestEnvironmentLightingFoundation() {
+		using namespace gargantuan;
+		ChangeJournal::Get().Clear();
+		RenderDirtyAccumulator::Get().Clear();
+		auto Game = std::make_shared<DataModel>();
+		auto World = std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
+		auto LightingValue = std::dynamic_pointer_cast<Lighting>(Game->GetService("Lighting"));
+		auto Assets = std::dynamic_pointer_cast<AssetService>(Game->GetService("AssetService"));
+		Check(
+			LightingValue && Game->FindService("Lighting") && *Game->FindService("Lighting") == LightingValue,
+			"Lighting is one discoverable canonical service"
+		);
+		const Color3 DefaultAmbient = LightingValue->GetAmbient();
+		Check(
+			LightingValue->GetClockTime() == 12.0f && LightingValue->GetBrightness() == 1.0f &&
+				DefaultAmbient.R == 0.2f && DefaultAmbient.G == 0.2f && DefaultAmbient.B == 0.2f,
+			"Lighting defaults are deterministic"
+		);
+		CheckThrows<std::invalid_argument>(
+			[&] { LightingValue->SetClockTime(24.0f); }, "ClockTime rejects the excluded upper bound"
+		);
+		CheckThrows<std::invalid_argument>(
+			[&] { LightingValue->SetBrightness(9.0f); }, "Brightness rejects out-of-range values"
+		);
+		CheckThrows<std::invalid_argument>(
+			[&] { LightingValue->SetExposureCompensation(std::numeric_limits<float>::quiet_NaN()); },
+			"environment properties reject NaN"
+		);
+		CheckThrows<std::invalid_argument>(
+			[&] { LightingValue->SetFogStart(1001.0f); }, "FogStart rejects an inverted fog interval"
+		);
+
+		const auto Sunrise = ComputeEnvironmentSunState(6.0f, 2.0f, Color3(1.0f, 0.5f, 0.25f));
+		const auto Noon = ComputeEnvironmentSunState(12.0f, 2.0f, Color3(1.0f, 0.5f, 0.25f));
+		const auto Sunset = ComputeEnvironmentSunState(18.0f, 2.0f, Color3(1.0f, 0.5f, 0.25f));
+		Check(
+			std::abs(Sunrise.Direction.x - 1.0f) < 1e-5f && std::abs(Noon.Direction.y - 1.0f) < 1e-5f &&
+				std::abs(Sunset.Direction.x + 1.0f) < 1e-5f && Noon.Intensity == 2.0f,
+			"ClockTime derives the documented sunrise, noon, and sunset vectors"
+		);
+		Check(
+			ComputeEnvironmentExposure(-2.0f) == 0.25f && ComputeEnvironmentExposure(2.0f) == 4.0f,
+			"exposure compensation uses powers of two"
+		);
+
+		const std::vector<std::uint8_t> RedPixels(4 * 4 * 4, 64);
+		const std::vector<std::uint8_t> BluePixels(4 * 4 * 4, 192);
+		const auto Red = Assets->RegisterMemoryImage("EnvironmentRed", 4, 4, RedPixels);
+		const auto Blue = Assets->RegisterMemoryImage("EnvironmentBlue", 4, 4, BluePixels);
+		auto FirstSky = std::make_shared<Sky>();
+		FirstSky->SetSkyboxPositiveX(Red);
+		FirstSky->SetSkyboxNegativeX(Red);
+		FirstSky->SetSkyboxPositiveY(Red);
+		FirstSky->SetSkyboxNegativeY(Red);
+		FirstSky->SetSkyboxPositiveZ(Red);
+		FirstSky->SetSkyboxNegativeZ(Red);
+		FirstSky->SetParent(LightingValue);
+
+		RenderPublisher Publisher;
+		auto TextureChanges = Assets->DrainTextureChanges();
+		Publisher.SetUiTextureChanges(
+			std::move(TextureChanges.Creates), std::move(TextureChanges.Updates), std::move(TextureChanges.Removes)
+		);
+		const auto Camera = MakeLookAtRenderCameraInput(
+			glm::vec3(0.0f, 0.0f, 10.0f), glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f)
+		);
+		auto Initial = Publisher.Publish(*World, Camera, 640, 360);
+		Check(
+			Initial->FullResync && Initial->EnvironmentChanged && Initial->Frame.Environment.Sky &&
+				Initial->Frame.Environment.Sky->FaceDimension == 4,
+			"a coherent six-face Sky is included in the initial immutable publication"
+		);
+		RenderProjection Projection;
+		Check(
+			Projection.Apply(*Initial).EnvironmentsUpdated == 1,
+			"projection applies initial environment state with resident Sky textures"
+		);
+
+		for (std::size_t Index = 0; Index < 100; ++Index)
+			LightingValue->SetClockTime(static_cast<float>(Index % 24));
+		LightingValue->SetAmbient(Color3(0.1f, 0.15f, 0.2f));
+		LightingValue->SetExposureCompensation(1.0f);
+		LightingValue->SetFogEnabled(true);
+		LightingValue->SetFogStart(10.0f);
+		LightingValue->SetFogEnd(100.0f);
+		auto Animated = Publisher.Publish(*World, Camera, 640, 360);
+		Check(
+			Animated->EnvironmentChanged && Animated->Creates.empty() && Animated->Updates.empty() &&
+				Animated->Removes.empty() && Animated->Frame.Environment.ExposureMultiplier == 2.0f &&
+				Animated->Frame.Environment.Fog.Enabled,
+			"many environment edits coalesce into one environment-only final-state publication"
+		);
+		(void)Projection.Apply(*Animated);
+		auto Static = Publisher.Publish(*World, Camera, 640, 360);
+		Check(
+			!Static->EnvironmentChanged && Static->Creates.empty() && Static->Updates.empty(),
+			"static environment frames publish no environment or object delta"
+		);
+		(void)Projection.Apply(*Static);
+
+		const auto Missing = AssetReference::FromAssetId(AssetId::New()).Value;
+		FirstSky->SetSkyboxPositiveX(Missing);
+		auto Broken = Publisher.Publish(*World, Camera, 640, 360);
+		Check(
+			!Broken->EnvironmentChanged && Broken->Frame.Environment.Sky && Broken->Diagnostics.size() >= 2,
+			"an incoherent Sky retains its same-source last-known-good state with bounded diagnostics"
+		);
+		(void)Projection.Apply(*Broken);
+
+		FirstSky->SetEnabled(false);
+		auto Fallback = Publisher.Publish(*World, Camera, 640, 360);
+		Check(
+			Fallback->EnvironmentChanged && !Fallback->Frame.Environment.Sky,
+			"disabling the effective Sky publishes the authored background fallback"
+		);
+		(void)Projection.Apply(*Fallback);
+
+		auto SecondSky = std::make_shared<Sky>();
+		SecondSky->SetSkyboxPositiveX(Blue);
+		SecondSky->SetSkyboxNegativeX(Blue);
+		SecondSky->SetSkyboxPositiveY(Blue);
+		SecondSky->SetSkyboxNegativeY(Blue);
+		SecondSky->SetSkyboxPositiveZ(Blue);
+		SecondSky->SetSkyboxNegativeZ(Blue);
+		SecondSky->SetParent(LightingValue);
+		FirstSky->SetSkyboxPositiveX(Red);
+		FirstSky->SetEnabled(true);
+		auto Multiple = Publisher.Publish(*World, Camera, 640, 360);
+		const auto RedResource = Assets->ResolveImage(Red);
+		Check(
+			Multiple->Frame.Environment.Sky && RedResource &&
+				Multiple->Frame.Environment.Sky->Faces[0].Texture == RedResource->Texture &&
+				std::ranges::any_of(
+					Multiple->Diagnostics,
+					[](const auto &Diagnostic) {
+						return Diagnostic.Message.find("Multiple enabled") != std::string::npos;
+					}
+				),
+			"multiple enabled Skies select the lowest ObjectId and emit a diagnostic"
+		);
+		(void)Projection.Apply(*Multiple);
+
+		const auto PreviousFaceRevision = Multiple->Frame.Environment.Sky->Faces[0].ContentRevision;
+		const std::vector<std::uint8_t> ReimportedRedPixels(4 * 4 * 4, 80);
+		Check(
+			Assets->RegisterMemoryImage("EnvironmentRed", 4, 4, ReimportedRedPixels) == Red,
+			"memory-image reimport preserves the Sky AssetId"
+		);
+		TextureChanges = Assets->DrainTextureChanges();
+		Publisher.SetUiTextureChanges(
+			std::move(TextureChanges.Creates), std::move(TextureChanges.Updates), std::move(TextureChanges.Removes)
+		);
+		auto Reimported = Publisher.Publish(*World, Camera, 640, 360);
+		Check(
+			Reimported->EnvironmentChanged && Reimported->TextureCreates.empty() &&
+				Reimported->TextureUpdates.size() == 1 && Reimported->Creates.empty() && Reimported->Updates.empty() &&
+				Reimported->Removes.empty() && Reimported->Frame.Environment.Sky &&
+				Reimported->Frame.Environment.Sky->Faces[0].ContentRevision == PreviousFaceRevision + 1,
+			"successful Sky face reimport publishes one texture/environment update and no object work"
+		);
+		(void)Projection.Apply(*Reimported);
+
+		const std::vector<std::uint8_t> InvalidPixels(4, 0);
+		CheckThrows<std::invalid_argument>(
+			[&] { (void)Assets->RegisterMemoryImage("EnvironmentRed", 4, 4, InvalidPixels); },
+			"failed Sky reimport rejects invalid image bytes"
+		);
+		auto FailedReimport = Publisher.Publish(*World, Camera, 640, 360);
+		Check(
+			!FailedReimport->EnvironmentChanged && FailedReimport->TextureUpdates.empty(),
+			"failed Sky reimport leaves the published environment and resources unchanged"
+		);
+		(void)Projection.Apply(*FailedReimport);
+
+		Publisher.RequestFullResync();
+		auto Restart = Publisher.Publish(*World, Camera, 640, 360);
+		Check(
+			Restart->FullResync && Restart->EnvironmentChanged && Restart->Frame.Environment.Sky &&
+				Restart->Frame.Environment.Sky->Faces[0].ContentRevision == PreviousFaceRevision + 1 &&
+				Restart->TextureCreates.size() >= 2,
+			"renderer restart full resync recreates current environment and Sky residency without a DataModel mutation"
+		);
+		RenderProjection RestartedProjection;
+		Check(
+			RestartedProjection.Apply(*Restart).EnvironmentsUpdated == 1,
+			"fresh renderer projection accepts the complete environment resync"
+		);
+		Game->Destroy();
+	}
 }
 
 static_assert(std::is_same_v<gargantuan::RenderPublicationPtr, std::shared_ptr<const gargantuan::RenderPublication>>);
@@ -459,6 +654,7 @@ int main() {
 		TestDeformableAndGuiContracts();
 		TestIncrementalPublisher();
 		TestDirtyAccumulatorBoundsAndConsumers();
+		TestEnvironmentLightingFoundation();
 	} catch (const std::exception &Error) {
 		std::cerr << "[Render:PublicationTest] unexpected exception: " << Error.what() << '\n';
 		return 1;

@@ -528,6 +528,8 @@ if(BUILD_TESTING)
 	target_link_libraries(gargantuan_audio_foundation_benchmark PRIVATE gargantuan_core)
 	add_executable(gargantuan_renderer_publication_tests "tests/RendererPublicationTests.cpp")
 	target_link_libraries(gargantuan_renderer_publication_tests PRIVATE gargantuan_core)
+	add_executable(gargantuan_environment_lighting_benchmark "tests/EnvironmentLightingBenchmark.cpp")
+	target_link_libraries(gargantuan_environment_lighting_benchmark PRIVATE gargantuan_core)
 	add_library(gargantuan_fake_telemetry SHARED "tests/telemetry/FakeTelemetryLibrary.cpp")
 	target_include_directories(gargantuan_fake_telemetry PRIVATE "src")
 	add_library(gargantuan_fake_telemetry_missing_export SHARED "tests/telemetry/FakeTelemetryMissingExport.cpp")
@@ -687,6 +689,7 @@ if(BUILD_TESTING)
 			gargantuan_audio_foundation_tests
 			gargantuan_audio_foundation_benchmark
 			gargantuan_renderer_publication_tests
+			gargantuan_environment_lighting_benchmark
 			gargantuan_prerun_bootstrap_tests
 			gargantuan_attributes_tags_profile
 			gargantuan_physics_backend_tests
@@ -766,6 +769,8 @@ if(BUILD_TESTING)
 	add_test(NAME gargantuan_audio_foundation COMMAND gargantuan_audio_foundation_tests)
 	add_test(NAME gargantuan_audio_foundation_benchmark_smoke COMMAND gargantuan_audio_foundation_benchmark --quick)
 	add_test(NAME gargantuan_renderer_publication COMMAND gargantuan_renderer_publication_tests)
+	add_test(NAME gargantuan_environment_lighting_benchmark_smoke
+		COMMAND gargantuan_environment_lighting_benchmark --quick)
 	add_test(NAME gargantuan_optional_telemetry
 		COMMAND gargantuan_optional_telemetry_tests
 			"$<TARGET_FILE:gargantuan_fake_telemetry>"
@@ -820,6 +825,8 @@ if(BUILD_TESTING)
 		LABELS "audio;assets;runtime;benchmark;headless" TIMEOUT 180
 	)
 	set_tests_properties(gargantuan_renderer_publication PROPERTIES LABELS "renderer;runtime;headless" TIMEOUT 120)
+	set_tests_properties(gargantuan_environment_lighting_benchmark_smoke PROPERTIES
+		LABELS "environment;renderer;benchmark;headless" TIMEOUT 120)
 	set_tests_properties(gargantuan_optional_telemetry PROPERTIES LABELS "telemetry;runtime;fail-open" TIMEOUT 60)
 	set_tests_properties(gargantuan_physics_backend PROPERTIES LABELS "physics;runtime" TIMEOUT 120)
 	set_tests_properties(gargantuan_physics_query_benchmark_smoke PROPERTIES

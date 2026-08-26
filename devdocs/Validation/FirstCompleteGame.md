@@ -16,6 +16,8 @@ positional `Sound`, while a non-spatial Sound under `GameScripts` marks round
 completion. A `ScreenGui`
 shows an imported badge, imported-font progress text, a completion panel, and a
 real `TextButton` restart action.
+The canonical `Lighting` service authors afternoon sun, ambient color, exposure,
+bounded fog, and one direct six-face `Sky` that reuses the imported square Image.
 
 The deterministic `K` action completes the round for automation. It is a test
 hook implemented through the public `ActionMap`, not a native gameplay bypass.
@@ -70,12 +72,14 @@ honest claim of an entirely GUI-authored workflow.
   touch presentation, zero-duration activation, hold activation, and semantic
   rigid-physics line of sight;
 - kinematic player motion, physics stepping, camera, and renderer publication;
+- saved Lighting/Sky authoring, coherent Image residency, environment-only
+  publication, sun/shadow/fog/exposure state, and package shader inclusion;
 - ordinary Luau scripts, services, signals, cleanup, and structured output;
 - `ScreenGui`, `Frame`, `ImageLabel`, `TextLabel`, `TextButton`, layout, input,
   activation, visibility, and viewport resize;
 - isolated Play/Stop, GUI/runtime mutation discard, and standalone execution.
 
-The persisted project has 30 Instances, 9 authored GUI Instances, and 5 imported asset
+The persisted project has 32 Instances, 9 authored GUI Instances, and 5 imported asset
 records. A representative headless runtime composition step is approximately
 0.1 ms on the validation machine; this is not a frame-time benchmark. A local
 real-GPU cold offscreen capture was approximately 250 ms, including renderer
@@ -101,6 +105,12 @@ The original vertical slice exposed and fixed two composition defects.
 
 No native gameplay code, sanitizer suppression, broad test serialization, or
 new foundation was added.
+
+Environment / Lighting Foundation 1 later extended the same fixture without
+adding gameplay code. Save/reopen and package gates now preserve the canonical
+Lighting/Sky hierarchy, and the packaged 512 x 512 Image is reused for all six
+faces so the environment exercises AssetService and renderer publication without
+expanding the source asset set.
 
 Interaction Foundation 1 subsequently replaced the game's remaining semantic
 workaround. Engine now owns a bounded spatial prompt index, per-player
@@ -139,7 +149,7 @@ optional cues that remain fail-open and irrelevant to gameplay correctness.
 
 The five project records reopen as `Ready`: Mesh, Material, Image, Font, and Audio.
 The Mesh depends on Material, Material depends on Image, and the authored
-`MeshPart`, `ImageLabel`, `TextLabel`, and all four Sounds resolve only
+`MeshPart`, `ImageLabel`, `TextLabel`, all six Sky faces, and all four Sounds resolve only
 `asset://` references.
 The PNG was reduced from 1024 to 512 pixels after standalone validation showed
 that the larger image plus font atlas exceeded the bounded per-frame GUI upload

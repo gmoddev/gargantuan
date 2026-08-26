@@ -9,6 +9,7 @@
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_error.h>
 #include <SDL3/SDL_gpu.h>
+#include <cmath>
 #include <glm/ext/matrix_clip_space.hpp>
 #include <glm/ext/matrix_transform.hpp>
 #include <memory>
@@ -41,9 +42,14 @@ namespace gargantuan {
 
 		SDL_GPURenderPass *Draw(SDL_GPUDevice *gpu, SDLFrameContext &context) override {
 			(void)gpu;
+			const auto &Environment = context.Projection.GetFrame().Environment;
 			glm::mat4 shadowProjection = glm::ortho<float>(-30.0f, 30.0f, -30.0f, 30.0f, -50.0f, 150.0f);
-			glm::vec3 lightPosition = glm::normalize(context.Projection.GetFrame().LightDirection) * 40.0f;
-			glm::mat4 shadowView = glm::lookAt(lightPosition, glm::vec3(0), glm::vec3(0, 1, 0));
+			const auto SunDirection = glm::normalize(Environment.SunDirection);
+			const auto Up = std::abs(glm::dot(SunDirection, glm::vec3(0.0f, 1.0f, 0.0f))) > 0.99f
+								? glm::vec3(0.0f, 0.0f, 1.0f)
+								: glm::vec3(0.0f, 1.0f, 0.0f);
+			glm::vec3 lightPosition = SunDirection * 40.0f;
+			glm::mat4 shadowView = glm::lookAt(lightPosition, glm::vec3(0), Up);
 			glm::mat4 shadowMatrix = shadowProjection * shadowView;
 			context.ShadowMatrix = shadowMatrix;
 
@@ -57,6 +63,7 @@ namespace gargantuan {
 			};
 
 			SDL_GPURenderPass *pass = SDL_BeginGPURenderPass(context.Commands, nullptr, 0, &depthTarget);
+			if (Environment.SunIntensity <= 0.0f) return pass;
 			SDL_BindGPUGraphicsPipeline(pass, Pipeline);
 			if (context.Metrics) ++context.Metrics->PipelineSwitches;
 
