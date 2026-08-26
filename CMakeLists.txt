@@ -562,6 +562,8 @@ if(BUILD_TESTING)
 	target_compile_definitions(gargantuan_entitlement_service_tests PRIVATE
 		GARGANTUAN_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
 	)
+	add_executable(gargantuan_entitlement_provider_benchmark "tests/EntitlementProviderBenchmark.cpp")
+	target_link_libraries(gargantuan_entitlement_provider_benchmark PRIVATE gargantuan_core nlohmann_json)
 	add_executable(gargantuan_gui_foundation_tests "tests/GuiFoundationTests.cpp")
 	target_link_libraries(gargantuan_gui_foundation_tests PRIVATE gargantuan_core)
 	add_executable(gargantuan_first_complete_game_tests "tests/FirstCompleteGameTests.cpp")
@@ -690,6 +692,7 @@ if(BUILD_TESTING)
 			gargantuan_interaction_foundation_tests
 			gargantuan_interaction_foundation_benchmark
 			gargantuan_entitlement_service_tests
+			gargantuan_entitlement_provider_benchmark
 			gargantuan_gui_foundation_tests
 			gargantuan_first_complete_game_tests
 			gargantuan_packaging_tests
@@ -770,6 +773,8 @@ if(BUILD_TESTING)
 	add_test(NAME gargantuan_interaction_foundation_benchmark_smoke
 		COMMAND gargantuan_interaction_foundation_benchmark --quick)
 	add_test(NAME gargantuan_entitlement_service COMMAND gargantuan_entitlement_service_tests)
+	add_test(NAME gargantuan_entitlement_provider_benchmark_smoke
+		COMMAND gargantuan_entitlement_provider_benchmark --quick)
 	add_test(NAME gargantuan_gui_foundation COMMAND gargantuan_gui_foundation_tests)
 	add_test(NAME gargantuan_first_complete_game COMMAND gargantuan_first_complete_game_tests)
 	add_test(NAME gargantuan_packaging COMMAND gargantuan_packaging_tests)
@@ -817,6 +822,7 @@ if(BUILD_TESTING)
 		LABELS "interaction;benchmark;runtime;headless" TIMEOUT 180
 	)
 	set_tests_properties(gargantuan_entitlement_service PROPERTIES LABELS "entitlements;runtime;security;headless" TIMEOUT 120)
+	set_tests_properties(gargantuan_entitlement_provider_benchmark_smoke PROPERTIES LABELS "entitlements;benchmark" TIMEOUT 120)
 	set_tests_properties(gargantuan_first_complete_game PROPERTIES
 		LABELS "game;sample;studio;assets;player;physics;gui;interaction;headless" TIMEOUT 180
 	)

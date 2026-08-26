@@ -55,9 +55,10 @@ namespace gargantuan {
 	struct EntitlementRequestContext {
 		EntitlementCancellationToken Cancellation;
 		std::chrono::steady_clock::time_point Deadline;
+		EntitlementCancellationToken ProviderCancellation;
 
 		[[nodiscard]] bool IsCancelled() const {
-			return Cancellation.IsCancelled();
+			return Cancellation.IsCancelled() || ProviderCancellation.IsCancelled();
 		}
 		[[nodiscard]] bool IsExpired() const {
 			return std::chrono::steady_clock::now() >= Deadline;
@@ -77,11 +78,19 @@ namespace gargantuan {
 
 	using EntitlementProviderResult = std::expected<EntitlementDecision, EntitlementProviderError>;
 	using EntitlementProviderBatchResult = std::expected<std::vector<EntitlementDecision>, EntitlementProviderError>;
+	using EntitlementProviderLifecycleResult = std::expected<void, EntitlementProviderError>;
+
+	enum class EntitlementProviderHealth : std::uint8_t { Unavailable, Ready, Degraded };
+
+	[[nodiscard]] std::string_view GetEntitlementProviderHealthName(EntitlementProviderHealth Health);
 
 	class IEntitlementProvider {
 	  public:
 		virtual ~IEntitlementProvider() = default;
 		[[nodiscard]] virtual std::string_view Name() const = 0;
+		[[nodiscard]] virtual EntitlementProviderLifecycleResult Start(const EntitlementRequestContext &Context);
+		virtual void Stop(const EntitlementRequestContext &Context) noexcept;
+		[[nodiscard]] virtual EntitlementProviderHealth GetHealth() const noexcept;
 		[[nodiscard]] virtual EntitlementProviderResult Check(
 			const EntitlementRequestContext &Context, const PlayerIdentity &Identity, const EntitlementId &Entitlement
 		) = 0;

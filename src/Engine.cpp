@@ -23,15 +23,22 @@ namespace gargantuan {
 	Engine::Engine(
 		std::shared_ptr<gargantuan::DataModel> game,
 		BaseRenderer *renderer,
-		std::function<void(std::string, std::string)> RuntimeDiagnostic
+		std::function<void(std::string, std::string)> RuntimeDiagnostic,
+		EngineProviderConfiguration ProviderConfiguration
 	)
-		: DataModel(game), Renderer(renderer), Script(std::make_unique<class ScriptEngine>(game, std::move(RuntimeDiagnostic))),
+		: DataModel(game), Renderer(renderer),
+		  Script(std::make_unique<class ScriptEngine>(game, std::move(RuntimeDiagnostic))),
 		  Workspace(GetService<gargantuan::Workspace>()),
 		  WorldRoot(std::static_pointer_cast<gargantuan::WorldRoot>(Workspace)),
 		  RunService(GetService<gargantuan::RunService>()), ProcessService(GetService<gargantuan::ProcessService>()),
 		  UserInputService(GetService<gargantuan::UserInputService>()), ActionMap(GetService<gargantuan::ActionMap>()),
-		  Assets(GetService<gargantuan::AssetService>()), Interaction(GetService<gargantuan::InteractionService>()),
-		  Players(GetService<gargantuan::Players>()) {
+		  Assets(GetService<gargantuan::AssetService>()), Entitlements(GetService<gargantuan::EntitlementService>()),
+		  Interaction(GetService<gargantuan::InteractionService>()), Players(GetService<gargantuan::Players>()) {
+		if (ProviderConfiguration.Entitlements &&
+			!Entitlements->ConfigureProvider(std::move(ProviderConfiguration.Entitlements)))
+			LOG_WARN(
+				App, "[Backend:Entitlements] configured provider did not become ready; offline semantics remain active"
+			);
 		const auto DefaultGuiFont = Paths::GetExecutableDirectory() / "runtime" / "GargantuanSans.ttf";
 		ActionMap->AttachInputService(UserInputService);
 		Players->InitializeLocalPlayer();
@@ -106,6 +113,10 @@ namespace gargantuan {
 			DescendantRemovedConnection->Disconnect();
 			DescendantRemovedConnection.reset();
 		}
+		if (Entitlements && !Entitlements->GetDestroyed()) {
+			Entitlements->DetachAsyncRuntime();
+			Entitlements->ShutdownProviderRuntime();
+		}
 		Script.reset();
 	}
 
@@ -141,6 +152,10 @@ namespace gargantuan {
 		if (auto InputCommand = UserInputService->SynchronizeMouseBehavior()) Result.Command = InputCommand;
 		if (Gui) if (auto TextInputCommand = Gui->SynchronizeTextInput()) Result.Command = TextInputCommand;
 		return Result;
+	}
+
+	bool Engine::ReplaceEntitlementProvider(std::shared_ptr<IEntitlementProvider> Provider) {
+		return Entitlements && !Entitlements->GetDestroyed() && Entitlements->ConfigureProvider(std::move(Provider));
 	}
 
 	void Engine::Step() {
@@ -195,6 +210,7 @@ namespace gargantuan {
 
 			{
 				G_PROFILE("Scripts");
+				if (Entitlements) (void)Entitlements->PumpAsyncCompletions();
 				Script->Step();
 			}
 		}

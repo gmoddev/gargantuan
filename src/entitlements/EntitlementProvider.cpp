@@ -50,6 +50,32 @@ namespace gargantuan {
 		return "Unavailable";
 	}
 
+	std::string_view GetEntitlementProviderHealthName(EntitlementProviderHealth Health) {
+		switch (Health) {
+		case EntitlementProviderHealth::Unavailable:
+			return "Unavailable";
+		case EntitlementProviderHealth::Ready:
+			return "Ready";
+		case EntitlementProviderHealth::Degraded:
+			return "Degraded";
+		}
+		return "Unavailable";
+	}
+
+	EntitlementProviderLifecycleResult IEntitlementProvider::Start(const EntitlementRequestContext &Context) {
+		if (Context.IsCancelled())
+			return std::unexpected(EntitlementProviderError{EntitlementProviderErrorCode::Cancelled});
+		if (Context.IsExpired())
+			return std::unexpected(EntitlementProviderError{EntitlementProviderErrorCode::DeadlineExceeded});
+		return {};
+	}
+
+	void IEntitlementProvider::Stop(const EntitlementRequestContext &) noexcept {}
+
+	EntitlementProviderHealth IEntitlementProvider::GetHealth() const noexcept {
+		return EntitlementProviderHealth::Ready;
+	}
+
 	EntitlementProviderBatchResult IEntitlementProvider::CheckMany(
 		const EntitlementRequestContext &Context,
 		const PlayerIdentity &Identity,

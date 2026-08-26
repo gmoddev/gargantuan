@@ -1,15 +1,19 @@
+#include "gargantuan/Engine.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Folder.hpp"
 #include "gargantuan/classes/Player.hpp"
 #include "gargantuan/entitlements/EntitlementProvider.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
+#include "gargantuan/render/Renderer.hpp"
 #include "gargantuan/scripting/ScriptEngine.hpp"
 #include "gargantuan/services/EntitlementService.hpp"
+#include "support/EntitlementProviderConformance.hpp"
 
 #include <Luau/Compiler.h>
 #include <lua.h>
 #include <nlohmann/json.hpp>
 
+#include <atomic>
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
@@ -19,6 +23,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -29,6 +34,10 @@ namespace {
 		if (Condition) return;
 		std::cerr << "FAIL: " << Message << '\n';
 		++Failures;
+	}
+
+	void Check(bool Condition, const std::string &Message) {
+		Check(Condition, Message.c_str());
 	}
 
 	template <typename Exception, typename Function> void CheckThrows(Function &&Callback, const char *Message) {
@@ -99,6 +108,93 @@ namespace {
 		}
 	};
 
+	class StartFailureProvider final : public VectorProvider {
+	  public:
+		[[nodiscard]] std::string_view Name() const override {
+			return "start-failure";
+		}
+		[[nodiscard]] gargantuan::EntitlementProviderLifecycleResult
+		Start(const gargantuan::EntitlementRequestContext &) override {
+			return std::unexpected(
+				gargantuan::EntitlementProviderError{gargantuan::EntitlementProviderErrorCode::Unavailable}
+			);
+		}
+		[[nodiscard]] gargantuan::EntitlementProviderHealth GetHealth() const noexcept override {
+			return gargantuan::EntitlementProviderHealth::Unavailable;
+		}
+	};
+
+	class DeadlineFailureProvider final : public VectorProvider {
+	  public:
+		[[nodiscard]] std::string_view Name() const override {
+			return "deadline-failure";
+		}
+		[[nodiscard]] gargantuan::EntitlementProviderResult Check(
+			const gargantuan::EntitlementRequestContext &,
+			const gargantuan::PlayerIdentity &,
+			const gargantuan::EntitlementId &
+		) override {
+			return std::unexpected(
+				gargantuan::EntitlementProviderError{gargantuan::EntitlementProviderErrorCode::DeadlineExceeded}
+			);
+		}
+	};
+
+	class CountingProvider final : public VectorProvider {
+	  public:
+		explicit CountingProvider(std::string ProviderName, gargantuan::EntitlementStatus GameBaseStatus)
+			: ProviderName(std::move(ProviderName)), GameBaseStatus(GameBaseStatus) {}
+
+		[[nodiscard]] std::string_view Name() const override {
+			return ProviderName;
+		}
+		[[nodiscard]] gargantuan::EntitlementProviderResult Check(
+			const gargantuan::EntitlementRequestContext &Context,
+			const gargantuan::PlayerIdentity &Identity,
+			const gargantuan::EntitlementId &Entitlement
+		) override {
+			Calls.fetch_add(1);
+			if (Context.IsCancelled())
+				return std::unexpected(
+					gargantuan::EntitlementProviderError{gargantuan::EntitlementProviderErrorCode::Cancelled}
+				);
+			if (Entitlement.Value() == "game.base")
+				return gargantuan::EntitlementDecision{GameBaseStatus, Entitlement, Identity, std::nullopt};
+			return VectorProvider::Check(Context, Identity, Entitlement);
+		}
+
+		std::atomic<std::uint64_t> Calls{0};
+
+	  private:
+		std::string ProviderName;
+		gargantuan::EntitlementStatus GameBaseStatus;
+	};
+
+	class BlockingProvider final : public VectorProvider {
+	  public:
+		[[nodiscard]] std::string_view Name() const override {
+			return "blocking-custom";
+		}
+		[[nodiscard]] gargantuan::EntitlementProviderResult Check(
+			const gargantuan::EntitlementRequestContext &Context,
+			const gargantuan::PlayerIdentity &Identity,
+			const gargantuan::EntitlementId &Entitlement
+		) override {
+			Entered.fetch_add(1);
+			while (!Context.IsCancelled() && !Context.IsExpired())
+				std::this_thread::sleep_for(1ms);
+			return gargantuan::EntitlementDecision{
+				gargantuan::EntitlementStatus::Granted, Entitlement, Identity, std::nullopt
+			};
+		}
+		void Stop(const gargantuan::EntitlementRequestContext &) noexcept override {
+			Stopped.store(true);
+		}
+
+		std::atomic<std::uint64_t> Entered{0};
+		std::atomic<bool> Stopped{false};
+	};
+
 	std::shared_ptr<gargantuan::Player> MakePlayer(
 		const std::shared_ptr<gargantuan::DataModel> &World,
 		gargantuan::PlayerIdentity Identity,
@@ -111,17 +207,31 @@ namespace {
 		return PlayerValue;
 	}
 
-	bool ExecuteLuau(const std::shared_ptr<gargantuan::DataModel> &World, std::string_view Source) {
+	bool ExecuteAsyncLuau(
+		const std::shared_ptr<gargantuan::DataModel> &World,
+		const std::shared_ptr<gargantuan::EntitlementService> &Service,
+		std::string_view Source
+	) {
 		gargantuan::ScriptEngine Engine(World);
+		lua_State *Thread = lua_newthread(Engine.L);
+		const auto ThreadReference = lua_ref(Engine.L, -1);
+		lua_pop(Engine.L, 1);
 		size_t BytecodeSize = 0;
 		char *Bytecode = luau_compile(Source.data(), Source.size(), &Engine.CompileOptions, &BytecodeSize);
 		if (!Bytecode) return false;
-		const auto LoadStatus = luau_load(Engine.L, "entitlement-service-test", Bytecode, BytecodeSize, 0);
+		const auto LoadStatus = luau_load(Thread, "entitlement-service-test", Bytecode, BytecodeSize, 0);
 		std::free(Bytecode);
-		const auto Status = LoadStatus == LUA_OK ? lua_pcall(Engine.L, 0, 0, 0) : LoadStatus;
+		int Status = LoadStatus == LUA_OK ? lua_resume(Thread, Engine.L, 0) : LoadStatus;
+		const auto Deadline = std::chrono::steady_clock::now() + 5s;
+		while (Status == LUA_YIELD && std::chrono::steady_clock::now() < Deadline) {
+			Service->PumpAsyncCompletions();
+			Status = lua_status(Thread);
+			if (Status == LUA_YIELD) std::this_thread::sleep_for(1ms);
+		}
 		if (Status != LUA_OK)
-			std::cerr << "LUAU ERROR: " << (lua_tostring(Engine.L, -1) ? lua_tostring(Engine.L, -1) : "unknown")
-					  << '\n';
+			std::cerr << "LUAU ERROR: " << (lua_tostring(Thread, -1) ? lua_tostring(Thread, -1) : "timeout") << '\n';
+		lua_unref(Engine.L, ThreadReference);
+		Service->DetachAsyncRuntime();
 		return Status == LUA_OK;
 	}
 
@@ -173,10 +283,22 @@ namespace {
 
 		const auto InitialGeneration = Service->GetProviderGeneration();
 		CheckThrows<std::invalid_argument>(
-			[&] { Service->ConfigureProvider(std::make_shared<InvalidNameProvider>()); },
+			[&] { (void)Service->ConfigureProvider(std::make_shared<InvalidNameProvider>()); },
 			"trusted provider names must be canonical"
 		);
-		Service->ConfigureProvider(std::make_shared<VectorProvider>());
+		VectorProvider ConformanceProvider;
+		testing::RunEntitlementProviderConformance(
+			ConformanceProvider,
+			{
+				{"steam", "76561198000000001"},
+				GameBase,
+				*EntitlementId::Parse("dlc.missing_pack"),
+				*EntitlementId::Parse("feature.provider_unavailable"),
+				*EntitlementId::Parse("feature.trial"),
+			},
+			[](std::string Failure) { Check(false, "provider conformance: " + Failure); }
+		);
+		Check(Service->ConfigureProvider(std::make_shared<VectorProvider>()), "valid provider candidate commits");
 		Check(
 			Service->GetProviderGeneration() == InitialGeneration + 1 && Service->GetProviderName() == "vector",
 			"trusted provider replacement advances the provider generation"
@@ -217,13 +339,23 @@ namespace {
 			Service->Check(PlayerValue, GameBase, Cancellation).Status == EntitlementStatus::Unavailable,
 			"cancellation cannot become a denial or grant"
 		);
-		Service->ConfigureProvider(std::make_shared<InvalidProvider>());
+		Check(Service->ConfigureProvider(std::make_shared<DeadlineFailureProvider>()), "deadline provider commits");
+		const auto MetricsBeforeDeadline = Service->GetProviderMetrics();
+		Check(
+			Service->Check(PlayerValue, GameBase).Status == EntitlementStatus::Unavailable &&
+				Service->GetProviderMetrics().Timeouts == MetricsBeforeDeadline.Timeouts + 1,
+			"provider deadline failure becomes Unavailable and increments timeout metrics"
+		);
+		Check(
+			Service->ConfigureProvider(std::make_shared<InvalidProvider>()),
+			"malformed provider can start for validation"
+		);
 		Check(
 			Service->Check(PlayerValue, GameBase).Status == EntitlementStatus::Unavailable,
 			"malformed provider output fails closed as Unavailable"
 		);
 
-		Service->ConfigureProvider(nullptr);
+		Check(Service->ConfigureProvider(nullptr), "explicit None provider replacement commits");
 		Check(
 			Service->GetProviderName() == "none" &&
 				Service->Check(PlayerValue, GameBase).Status == EntitlementStatus::Unavailable,
@@ -237,13 +369,16 @@ namespace {
 		auto Service = std::dynamic_pointer_cast<EntitlementService>(World->GetService("EntitlementService"));
 		auto PlayerValue = MakePlayer(World, {"custom-development", "player.one"});
 		const auto GameBase = *EntitlementId::Parse("game.base");
-		Service->ConfigureProvider(
-			std::make_shared<LocalEntitlementProvider>(std::vector<LocalEntitlementGrant>{
-				{{"custom-development", "player.one"}, GameBase, std::nullopt},
-				{{"custom-development", "player.one"},
-				 *EntitlementId::Parse("feature.expired"),
-				 std::chrono::system_clock::now() - 1s},
-			})
+		Check(
+			Service->ConfigureProvider(
+				std::make_shared<LocalEntitlementProvider>(std::vector<LocalEntitlementGrant>{
+					{{"custom-development", "player.one"}, GameBase, std::nullopt},
+					{{"custom-development", "player.one"},
+					 *EntitlementId::Parse("feature.expired"),
+					 std::chrono::system_clock::now() - 1s},
+				})
+			),
+			"local provider candidate commits"
 		);
 		Check(
 			Service->Check(PlayerValue, GameBase).Status == EntitlementStatus::Granted,
@@ -269,7 +404,7 @@ namespace {
 		);
 
 		Check(
-			ExecuteLuau(World, R"(
+			ExecuteAsyncLuau(World, Service, R"(
 				local Entitlements = game:GetService("EntitlementService")
 				local Player = game:FindFirstChild("EntitlementPlayer")
 				assert(Entitlements.ConfigureProvider == nil)
@@ -287,6 +422,35 @@ namespace {
 			)"),
 			"Luau can ask but cannot replace providers, supply identity, or bypass semantic validation"
 		);
+	}
+
+	void TestTrustedEngineBootstrapComposition() {
+		using namespace gargantuan;
+		auto World = std::make_shared<DataModel>();
+		HeadlessRenderer Renderer(Vector2(320, 180));
+		auto Provider = std::make_shared<CountingProvider>("custom-license-v3", EntitlementStatus::Granted);
+		Engine Runtime(World, &Renderer, {}, {.Entitlements = Provider});
+		auto PlayerValue = MakePlayer(World, {"steam", "76561198000000001"}, "BootstrapPlayer");
+		const auto GameBase = *EntitlementId::Parse("game.base");
+		Check(
+			Runtime.Entitlements->GetProviderName() == "custom-license-v3" &&
+				Runtime.Entitlements->Check(PlayerValue, GameBase).Status == EntitlementStatus::Granted,
+			"trusted Engine bootstrap composes an unrelated custom provider before gameplay"
+		);
+		Runtime.Destroy();
+
+		auto FailedWorld = std::make_shared<DataModel>();
+		HeadlessRenderer FailedRenderer(Vector2(320, 180));
+		Engine FailedRuntime(
+			FailedWorld, &FailedRenderer, {}, {.Entitlements = std::make_shared<StartFailureProvider>()}
+		);
+		auto FailedPlayer = MakePlayer(FailedWorld, {"steam", "76561198000000002"}, "FailedBootstrapPlayer");
+		Check(
+			FailedRuntime.Entitlements->GetProviderName() == "none" &&
+				FailedRuntime.Entitlements->Check(FailedPlayer, GameBase).Status == EntitlementStatus::Unavailable,
+			"failed optional bootstrap provider preserves no-backend semantics"
+		);
+		FailedRuntime.Destroy();
 	}
 
 	void TestHeadlessRepeatedDataModelLifecycle() {
@@ -312,25 +476,180 @@ namespace {
 		);
 	}
 
+	void TestGenerationSafeReplacementAndBounds() {
+		using namespace gargantuan;
+		auto World = std::make_shared<DataModel>();
+		auto Service = std::dynamic_pointer_cast<EntitlementService>(World->GetService("EntitlementService"));
+		auto PlayerValue = MakePlayer(World, {"steam", "76561198000000001"}, "SwapPlayer");
+		const auto GameBase = *EntitlementId::Parse("game.base");
+
+		auto First = std::make_shared<CountingProvider>("custom-license-v3", EntitlementStatus::Granted);
+		Check(Service->ConfigureProvider(First), "custom backend provider commits through the public contract");
+		const auto FirstGeneration = Service->GetProviderGeneration();
+		Check(Service->Check(PlayerValue, GameBase).Status == EntitlementStatus::Granted, "custom provider grants");
+		Check(
+			Service->Check(PlayerValue, GameBase).Status == EntitlementStatus::Granted, "semantic cache preserves grant"
+		);
+		Check(First->Calls.load() == 1, "semantic cache avoids duplicate provider dispatch");
+
+		Check(
+			!Service->ConfigureProvider(std::make_shared<StartFailureProvider>()), "failed candidate does not commit"
+		);
+		Check(
+			Service->GetProviderGeneration() == FirstGeneration && Service->GetProviderName() == "custom-license-v3",
+			"failed candidate leaves the working generation published"
+		);
+
+		auto Second = std::make_shared<CountingProvider>("replacement-authority", EntitlementStatus::Denied);
+		Check(Service->ConfigureProvider(Second), "healthy replacement commits");
+		Check(Service->GetProviderGeneration() == FirstGeneration + 1, "generation advances exactly once on commit");
+		Check(
+			Service->Check(PlayerValue, GameBase).Status == EntitlementStatus::Denied && Second->Calls.load() == 1,
+			"replacement invalidates cached grants"
+		);
+
+		auto Blocking = std::make_shared<BlockingProvider>();
+		Check(Service->ConfigureProvider(Blocking), "blocking test provider commits");
+		std::atomic<EntitlementStatus> OldCompletion{EntitlementStatus::Granted};
+		Check(
+			Service->BeginCheck(
+				PlayerValue, GameBase, [&](EntitlementDecision Decision) { OldCompletion.store(Decision.Status); }
+			),
+			"in-flight request is admitted"
+		);
+		const auto EnterDeadline = std::chrono::steady_clock::now() + 2s;
+		while (Blocking->Entered.load() == 0 && std::chrono::steady_clock::now() < EnterDeadline)
+			std::this_thread::sleep_for(1ms);
+		Check(Blocking->Entered.load() == 1, "old-generation request entered provider");
+		Check(Service->ConfigureProvider(Second), "replacement during an in-flight request commits");
+		const auto CompletionDeadline = std::chrono::steady_clock::now() + 2s;
+		while (OldCompletion.load() == EntitlementStatus::Granted &&
+			   std::chrono::steady_clock::now() < CompletionDeadline)
+			std::this_thread::sleep_for(1ms);
+		Check(OldCompletion.load() == EntitlementStatus::Unavailable, "old in-flight completion fails closed");
+		Check(Blocking->Stopped.load(), "old provider receives bounded stop after publication");
+		Check(
+			Service->Check(PlayerValue, GameBase).Status == EntitlementStatus::Denied,
+			"old completion cannot contaminate cache"
+		);
+
+		auto Saturated = std::make_shared<BlockingProvider>();
+		Check(Service->ConfigureProvider(Saturated), "in-flight bound provider commits");
+		std::atomic<std::uint64_t> BoundedCompletions{0};
+		for (std::size_t Index = 0; Index < EntitlementService::MaximumInFlightRequests; ++Index)
+			Check(
+				Service->BeginCheck(
+					PlayerValue,
+					GameBase,
+					[&](EntitlementDecision Decision) {
+						if (Decision.Status == EntitlementStatus::Unavailable) BoundedCompletions.fetch_add(1);
+					}
+				),
+				"request within the in-flight bound is admitted"
+			);
+		Check(
+			!Service->BeginCheck(
+				PlayerValue,
+				GameBase,
+				[&](EntitlementDecision Decision) {
+					if (Decision.Status == EntitlementStatus::Unavailable) BoundedCompletions.fetch_add(1);
+				}
+			),
+			"request beyond the in-flight bound fails closed"
+		);
+		Check(
+			Service->GetProviderMetrics().InFlightRequests == EntitlementService::MaximumInFlightRequests,
+			"in-flight metrics expose the bounded admission ceiling"
+		);
+		Check(Service->ConfigureProvider(Second), "replacement cancels the saturated generation");
+		const auto BoundedDeadline = std::chrono::steady_clock::now() + 5s;
+		while (BoundedCompletions.load() < EntitlementService::MaximumInFlightRequests + 1 &&
+			   std::chrono::steady_clock::now() < BoundedDeadline)
+			std::this_thread::sleep_for(1ms);
+		Check(
+			BoundedCompletions.load() == EntitlementService::MaximumInFlightRequests + 1 &&
+				Service->GetProviderMetrics().InFlightRequests == 0,
+			"bounded requests drain as Unavailable after generation replacement"
+		);
+
+		for (int Iteration = 0; Iteration < 32; ++Iteration) {
+			auto Status = Iteration % 2 == 0 ? EntitlementStatus::Granted : EntitlementStatus::Denied;
+			Check(
+				Service->ConfigureProvider(
+					std::make_shared<CountingProvider>("repeat-" + std::to_string(Iteration), Status)
+				),
+				"repeated bounded replacement commits"
+			);
+			Check(
+				Service->Check(PlayerValue, GameBase).Status == Status,
+				"repeated replacement publishes only the new authority"
+			);
+		}
+		const auto Metrics = Service->GetProviderMetrics();
+		Check(
+			Metrics.ReplacementAttempts == Metrics.ReplacementCommits + Metrics.ReplacementFailures,
+			"replacement metrics account for every bounded attempt"
+		);
+		Check(Metrics.InFlightRequests == 0, "replacement stress drains in-flight accounting");
+	}
+
+	void TestShutdownCancelsProviderWork() {
+		using namespace gargantuan;
+		auto World = std::make_shared<DataModel>();
+		auto Service = std::dynamic_pointer_cast<EntitlementService>(World->GetService("EntitlementService"));
+		auto PlayerValue = MakePlayer(World, {"steam", "76561198000000001"}, "ShutdownPlayer");
+		const auto GameBase = *EntitlementId::Parse("game.base");
+		auto Blocking = std::make_shared<BlockingProvider>();
+		Check(Service->ConfigureProvider(Blocking), "shutdown test provider commits");
+		std::atomic<EntitlementStatus> Completion{EntitlementStatus::Granted};
+		Check(
+			Service->BeginCheck(
+				PlayerValue, GameBase, [&](EntitlementDecision Decision) { Completion.store(Decision.Status); }
+			),
+			"shutdown test request is admitted"
+		);
+		const auto EnterDeadline = std::chrono::steady_clock::now() + 2s;
+		while (Blocking->Entered.load() == 0 && std::chrono::steady_clock::now() < EnterDeadline)
+			std::this_thread::sleep_for(1ms);
+		const auto StartedAt = std::chrono::steady_clock::now();
+		Service->ShutdownProviderRuntime();
+		Check(std::chrono::steady_clock::now() - StartedAt < 2s, "cooperative shutdown is bounded");
+		Check(Completion.load() == EntitlementStatus::Unavailable, "shutdown work fails closed");
+		Check(Blocking->Stopped.load(), "shutdown stops the active provider");
+		Check(!Service->ConfigureProvider(std::make_shared<VectorProvider>()), "stopped runtime rejects replacement");
+	}
+
 	void TestPublicHeadersHaveNoNodeTransportDependency() {
-		const auto Root = std::filesystem::path(GARGANTUAN_SOURCE_DIR) / "include/gargantuan";
+		const auto SourceRoot = std::filesystem::path(GARGANTUAN_SOURCE_DIR);
+		const auto Root = SourceRoot / "include/gargantuan";
 		for (const auto &Path : {
 				 Root / "identity/PlayerIdentity.hpp",
 				 Root / "entitlements/EntitlementProvider.hpp",
 				 Root / "services/EntitlementService.hpp",
+				 Root / "runtime/EngineProviderConfiguration.hpp",
 				 Root / "classes/Player.hpp",
+				 Root / "Engine.hpp",
+				 SourceRoot / "src/entitlements/EntitlementProvider.cpp",
+				 SourceRoot / "src/services/EntitlementService.cpp",
+				 SourceRoot / "src/Engine.cpp",
 			 }) {
 			std::ifstream Input(Path, std::ios::binary);
+			Check(Input.good(), "public architecture guard source is readable");
+			if (!Input) continue;
 			const std::string Contents((std::istreambuf_iterator<char>(Input)), std::istreambuf_iterator<char>());
-			Check(
-				Contents.find("protobuf") == std::string::npos,
-				"public entitlement headers contain no protobuf dependency"
-			);
-			Check(
-				Contents.find("gargantuan-node") == std::string::npos,
-				"public entitlement headers contain no Node dependency"
-			);
-			Check(Contents.find("grpc") == std::string::npos, "public entitlement headers contain no gRPC dependency");
+			for (const auto Forbidden : {
+					 "gargantuan.node",
+					 "gargantuan-node",
+					 "NodeEntitlementProvider",
+					 "entitlements.grpc.pb",
+					 "entitlements.check",
+					 "#include <grpc",
+					 "#include \"grpc",
+				 })
+				Check(
+					Contents.find(Forbidden) == std::string::npos,
+					"public Engine semantic code contains no private backend transport dependency"
+				);
 		}
 	}
 }
@@ -345,7 +664,10 @@ int main() {
 	TestSemanticValidationAndVectors();
 	TestProviderConformanceAndService();
 	TestLocalProviderIdentityAndLuauAuthority();
+	TestTrustedEngineBootstrapComposition();
 	TestHeadlessRepeatedDataModelLifecycle();
+	TestGenerationSafeReplacementAndBounds();
+	TestShutdownCancelsProviderWork();
 	TestPublicHeadersHaveNoNodeTransportDependency();
 	if (Failures != 0) {
 		std::cerr << Failures << " entitlement foundation test(s) failed\n";

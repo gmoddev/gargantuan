@@ -189,9 +189,9 @@ The required continuous contract is documented in
 `devdocs/CurrentArchitecture/ContinuousIntegration.md`. Every push and pull
 request performs a fresh recursive checkout, generates native reflection
 sources, configures and builds Release on Windows x64/Visual Studio 2026, and
-runs all 20 tests registered by the CI configuration. The workflow invokes
-CTest as a whole with `--no-tests=error`; it does not maintain a second list of
-test binaries.
+runs the complete test set registered by the CI configuration. The workflow
+invokes CTest as a whole with `--no-tests=error`; it does not maintain a second
+list of test binaries.
 10. Recommended development loop
 For normal C++ work:
 just build

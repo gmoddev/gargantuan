@@ -86,12 +86,11 @@ executable does not relink. `gargantuan_packaged_shaders` compares that runtime
 directory with the complete source shader set and fails when a compiled output
 is missing.
 
-The Windows production contract contains 33 tests. A local configuration with
+The Windows production contract contains 37 tests. A local configuration with
 `GARGANTUAN_WITH_GNS=OFF` and renderer benchmarks disabled omits the two
-real-transport and two renderer-headless entries and therefore contains 29;
-that reduced matrix is not the complete Windows gate. The task's earlier
-28-test count predates the standalone packaging contract; current CMake and
-this document are authoritative.
+real-transport and two renderer-headless entries and therefore contains 33;
+that reduced matrix is not the complete Windows gate. Current CMake and this
+document are authoritative.
 
 | Coverage | Existing CTest entries |
 | --- | --- |
@@ -104,7 +103,7 @@ this document are authoritative.
 | Soft-body runtime and bounded Release smoke | `gargantuan_soft_body_physics`, `gargantuan_soft_body_physics_benchmark_smoke` |
 | Platform input | `gargantuan_platform_input_boundary` |
 | Player runtime | `gargantuan_player_runtime` |
-| Provider-neutral entitlement semantics, Luau authority, vectors, and headless lifecycle | `gargantuan_entitlement_service` |
+| Provider-neutral entitlement semantics, Luau authority, vectors, headless lifecycle, and provider overhead smoke | `gargantuan_entitlement_service`, `gargantuan_entitlement_provider_benchmark_smoke` |
 | GUI retained runtime and bounded Release smoke | `gargantuan_gui_foundation`, `gargantuan_gui_foundation_benchmark_smoke` |
 | PreRun bootstrap | `gargantuan_prerun_bootstrap` |
 | Serialization smoke | `SerializationBenchmarkSmoke` |

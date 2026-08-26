@@ -8,12 +8,14 @@
 #include "gargantuan/scripting/ScriptEngine.hpp"
 #include "gargantuan/services/ActionMap.hpp"
 #include "gargantuan/services/AssetService.hpp"
+#include "gargantuan/services/EntitlementService.hpp"
 #include "gargantuan/services/InteractionService.hpp"
 #include "gargantuan/services/Players.hpp"
 #include "gargantuan/services/ProcessService.hpp"
 #include "gargantuan/services/RunService.hpp"
 #include "gargantuan/services/UserInputService.hpp"
 #include "gargantuan/services/Workspace.hpp"
+#include "gargantuan/runtime/EngineProviderConfiguration.hpp"
 #include "gargantuan/runtime/MutationGateway.hpp"
 #include "gargantuan/platform/HostEvent.hpp"
 #include "gargantuan/filesystem/SourceMount.hpp"
@@ -45,6 +47,7 @@ namespace gargantuan {
 		std::shared_ptr<UserInputService> UserInputService;
 		std::shared_ptr<ActionMap> ActionMap;
 		std::shared_ptr<AssetService> Assets;
+		std::shared_ptr<EntitlementService> Entitlements;
 		std::shared_ptr<InteractionService> Interaction;
 		std::shared_ptr<Players> Players;
 
@@ -53,13 +56,15 @@ namespace gargantuan {
 		Engine(
 			std::shared_ptr<gargantuan::DataModel> game,
 			BaseRenderer *renderer,
-			std::function<void(std::string, std::string)> RuntimeDiagnostic = {}
+			std::function<void(std::string, std::string)> RuntimeDiagnostic = {},
+			EngineProviderConfiguration ProviderConfiguration = {}
 		);
 		~Engine();
 
 		void Step();
 		float GetDeltaTime();
 		[[nodiscard]] HostEventResult ProcessEvent(const HostEvent &Event);
+		[[nodiscard]] bool ReplaceEntitlementProvider(std::shared_ptr<IEntitlementProvider> Provider);
 		void Destroy();
 
 	  private:

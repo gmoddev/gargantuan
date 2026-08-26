@@ -100,6 +100,23 @@ namespace {
 	void ExpectInvalid(const std::filesystem::path &Root, std::string_view Message) {
 		Require(HasError(PackageBuilder::Validate(Root)), Message);
 	}
+
+	void RequireNoPrivateBackendArtifacts(const std::filesystem::path &Root) {
+		for (const auto &Entry : std::filesystem::recursive_directory_iterator(Root)) {
+			auto Relative = Entry.path().lexically_relative(Root).generic_string();
+			std::ranges::transform(Relative, Relative.begin(), [](unsigned char Character) {
+				return static_cast<char>(std::tolower(Character));
+			});
+			Require(
+				Relative.find("gargantuan-node") == std::string::npos &&
+					Relative.find("nodeentitlement") == std::string::npos &&
+					Relative.find("node_entitlement") == std::string::npos &&
+					Relative.find("private-node-entitlements") == std::string::npos &&
+					Relative.find("entitlements.grpc.pb") == std::string::npos && !Relative.ends_with(".proto"),
+				"generic package included a private backend adapter, schema, or configuration artifact"
+			);
+		}
+	}
 }
 
 int main() {
@@ -168,6 +185,7 @@ int main() {
 			"package size breakdown does not sum to total bytes"
 		);
 		Require(!HasError(PackageBuilder::Validate(ReleaseA)), "fresh package did not validate");
+		RequireNoPrivateBackendArtifacts(ReleaseA);
 		std::vector<PackageDiagnostic> LoadDiagnostics;
 		auto Loaded = PackageBuilder::Load(ReleaseA, LoadDiagnostics);
 		Require(

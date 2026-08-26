@@ -1,146 +1,81 @@
 ---
 status: current
 owner: runtime
-last_verified: 2026-08-24
+last_verified: 2026-08-26
 related_code:
   - assets/services/EntitlementService.luau
   - include/gargantuan/entitlements/
-  - include/gargantuan/identity/PlayerIdentity.hpp
+  - include/gargantuan/runtime/EngineProviderConfiguration.hpp
   - include/gargantuan/services/EntitlementService.hpp
-  - src/entitlements/
   - src/services/EntitlementService.cpp
   - tests/EntitlementServiceTests.cpp
 related_adrs: []
 ---
 
-# EntitlementService Foundation 1
+# EntitlementService
 
-## Ownership and public semantics
-
-`EntitlementService` is the one canonical, headless, DataModel-scoped game
-service for durable rights such as a base-game license, DLC, feature access, or
-a subscription tier. It is not authentication, commerce, inventory, or a
-generic backend RPC surface.
-
-Normal Luau supplies a runtime-owned `Player`, never provider/subject strings:
+`EntitlementService` is the canonical headless, DataModel-scoped gameplay
+service for durable rights. It owns backend-neutral `Granted`, `Denied`, and
+`Unavailable` semantics; it is not authentication, commerce, inventory, or a
+generic RPC surface.
 
 ```luau
 local Entitlements = game:GetService("EntitlementService")
 local Decision = Entitlements:CheckAsync(Player, "game.base")
+local Many = Entitlements:CheckManyAsync(Player, { "game.base", "dlc.pack_1" })
 ```
 
-`CheckManyAsync(Player, EntitlementIds)` accepts 1 through 32 identifiers and
-returns one ordered decision per identifier. Foundation 1 providers complete
-through the native bounded call contract; the `Async` public name reserves the
-external-authority behavior expected of later adapters without exposing a
-transport or callback protocol to gameplay.
+Both calls require a yieldable Luau coroutine. Native provider work runs on a
+fixed two-worker pool, and Engine resumes completion on Main during its Scripts
+phase. `CheckManyAsync` accepts 1 through 32 identifiers and preserves order.
+The same call works with None, Local, a game-defined provider, or an optional
+private adapter.
 
-An entitlement identifier contains 1 through 128 ASCII bytes in two or more
-dot-separated segments. Every segment starts with `a-z`; the remaining bytes
-may be `a-z`, `0-9`, `_`, or `-`. `game.base`, `dlc.expansion_1`, and
-`feature.private_servers` are valid. Platform AppIDs, database row IDs, and Node
-RPC names are not entitlement identifiers.
+An ID contains 1 through 128 ASCII bytes in two or more dot-separated segments.
+Every segment starts with `a-z`; remaining bytes may be `a-z`, `0-9`, `_`, or
+`-`. The runtime-owned `Player` supplies an immutable provider-qualified
+identity. Luau cannot supply identity, replace authority, or access deployment
+configuration.
 
-The closed decision is:
+`Denied` means an authority answered that the identity lacks the entitlement.
+`Unavailable` means no authority/identity, admission failure, cancellation,
+deadline, replacement, shutdown, provider/transport failure, or malformed
+provider output. Infrastructure failure never becomes a denial or grant.
 
-```text
-Status: Granted | Denied | Unavailable
-EntitlementId: canonical semantic ID
-Identity: immutable provider-qualified Player identity
-ExpiresUnixMilliseconds?: neutral optional expiry
-```
+## Provider contract
 
-`Denied` is an authoritative lack of a grant. `Unavailable` means no authority
-is configured, an identity is not established, cancellation/deadline occurred,
-the provider failed, or its result violated the semantic contract. Provider
-exceptions and private diagnostics are never returned to Luau. A provider does
-not invent expiry for a permanent grant.
+`IEntitlementProvider` consumes only Engine request context, identity, and IDs.
+It exposes `Start`, `Stop`, `GetHealth`, `Check`, and `CheckMany`. Its closed
+health state is `Unavailable | Ready | Degraded`; provider-specific diagnostics
+and transport types do not cross the interface.
 
-## Player identity and authority
+Trusted configuration uses `EngineProviderConfiguration` at construction or
+`Engine::ReplaceEntitlementProvider` at runtime. These APIs are native-only and
+absent from reflection. Candidate replacement is start/ready-before-commit.
+Successful commit publishes generation N+1, clears cache, cancels generation N,
+then stops N. Old completion is deterministically `Unavailable` and cannot
+affect N+1. Failed candidates leave the old provider and generation untouched.
 
-`PlayerIdentity { Provider, Subject }` is distinct from runtime `PlayerId`, a
-transport connection, and an authentication flow. Provider names are canonical
-bounded lowercase ASCII; subjects are bounded valid UTF-8. A trusted native
-bootstrap initializes the identity once. Luau cannot read or mutate an identity
-property, submit a replacement identity, configure credentials, grant rights,
-or replace the provider. The current local runtime initializes
-`(local, player-1)`; a future authenticated server bootstrap can initialize the
-same engine-owned type without changing entitlement gameplay calls.
+None is explicit and requires no network. Local holds immutable trusted
+development grants. A custom game provider may wrap an unrelated REST,
+protobuf, platform, database, or other schema without changing gameplay.
 
-## Provider boundary and lifecycle
+## Bounds, cache, and metrics
 
-`IEntitlementProvider` is engine-owned. It consumes only:
+The service accepts at most 256 queued/active provider calls, has a five-second
+deadline, and caches at most 1,024 semantic decisions for five seconds. Cache
+key is identity, entitlement, and provider generation. Grant expiry shortens
+cache lifetime; `Unavailable` is never cached. Replacement clears all entries.
 
-- `EntitlementRequestContext` with cancellation and a steady-clock deadline;
-- the canonical `PlayerIdentity`; and
-- one or a bounded span of `EntitlementId` values.
+Metrics are saturating and bounded: semantic checks, provider calls,
+Granted/Denied/Unavailable, timeout, cache hit/miss, replacement
+attempt/commit/failure, provider latency, and current in-flight count. They do
+not contain endpoint, credential, tenant, or private response data.
 
-It returns engine-owned `EntitlementDecision` values or a closed provider error
-category. No protobuf, gRPC, HTTP, Steamworks, Node capability, credential,
-database, or transport type crosses this boundary. The default batch
-implementation checks each item in order and treats a provider error as a
-whole-batch failure; the service then returns `Unavailable` for every item.
+Provider selection, endpoint, TLS roots, token references, and protocol config
+are host/deployment state, never DataModel/project serialization. Generic
+packages contain no optional adapter artifact and boot with None semantics.
 
-`ConfigureProvider` is native-only trusted application/bootstrap
-configuration and is absent from reflection/Luau. Replacement increments a
-monotonic provider generation. The generation is the required invalidation
-component for any future cache key. Foundation 1 deliberately has no decision
-cache, persistent cache, or background work.
-
-The included providers are:
-
-- `NoneEntitlementProvider`: always `Unavailable`, requiring no network;
-- `LocalEntitlementProvider`: immutable trusted development grants; absent or
-  expired grants are `Denied`.
-
-Local grants are runtime/bootstrap inputs and are not project serialization.
-Provider mappings and secrets must remain deployment state.
-
-## Custom backends and Node non-dependence
-
-A game application may implement `MyBackendEntitlementProvider :
-IEntitlementProvider` around REST, custom protobuf, WebSocket, SQLite, a platform
-SDK, or another private protocol. That adapter owns its credentials, mapping,
-timeouts, response bounds, and error translation. `EntitlementService`, Player
-identity, and gameplay Luau do not change.
-
-Private Gargantuan Node integrates later through an optional
-`NodeEntitlementProvider : IEntitlementProvider` in a private integration module:
-
-```text
-PUBLIC ENGINE
-
-    EntitlementService
-           |
-    IEntitlementProvider
-       /      |       \
-    None    Custom    Private Node adapter
-
-PRIVATE NODE
-
-    Entitlements V1
-          |
-    EntitlementProvider
-       /          \
-    Steam       First-party Custom
-```
-
-No core engine header, schema, generated source, service, or test depends on
-gargantuan-node or its protobuf. The neutral JSON vectors under
-`tests/conformance/entitlements-v1.json` describe shared behavior without a
-binary or schema dependency.
-
-## Failure, bounds, and deferred work
-
-Identity provider, identity subject, entitlement ID, batch count, deadline, and
-provider output are bounded. Providers must propagate cancellation and must not
-continue indefinite background work. The engine deadline is five seconds in
-Foundation 1. The service is renderer-, Studio-, and network-independent and is
-therefore available on a dedicated/headless DataModel.
-
-Foundation 1 does not implement a Node adapter, authentication transport,
-commerce, inventory, purchase flows, billing, persisted grants, provider
-credentials, entitlement management UI, or a cache. The first adapter milestone
-is to implement the private protobuf client entirely behind
-`IEntitlementProvider`, translate all Node statuses/errors into the engine
-contract, pass the neutral vectors, and inject it from trusted server bootstrap.
+See [Backend Provider Integration Foundation 1](BackendProviderIntegration1.md)
+for composition, private-boundary, packaging, security, and future-extension
+decisions.
