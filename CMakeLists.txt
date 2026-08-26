@@ -522,6 +522,10 @@ if(BUILD_TESTING)
 	target_compile_definitions(gargantuan_asset_foundation_benchmark PRIVATE
 		GARGANTUAN_ASSET_TEST_FONT_PATH="${CMAKE_CURRENT_SOURCE_DIR}/vendor/sdl_ttf/external/harfbuzz/perf/fonts/Roboto-Regular.ttf"
 	)
+	add_executable(gargantuan_audio_foundation_tests "tests/AudioFoundationTests.cpp")
+	target_link_libraries(gargantuan_audio_foundation_tests PRIVATE gargantuan_core)
+	add_executable(gargantuan_audio_foundation_benchmark "tests/AudioFoundationBenchmark.cpp")
+	target_link_libraries(gargantuan_audio_foundation_benchmark PRIVATE gargantuan_core)
 	add_executable(gargantuan_renderer_publication_tests "tests/RendererPublicationTests.cpp")
 	target_link_libraries(gargantuan_renderer_publication_tests PRIVATE gargantuan_core)
 	add_library(gargantuan_fake_telemetry SHARED "tests/telemetry/FakeTelemetryLibrary.cpp")
@@ -680,6 +684,8 @@ if(BUILD_TESTING)
 			gargantuan_foundation_tests
 			gargantuan_asset_foundation_tests
 			gargantuan_asset_foundation_benchmark
+			gargantuan_audio_foundation_tests
+			gargantuan_audio_foundation_benchmark
 			gargantuan_renderer_publication_tests
 			gargantuan_prerun_bootstrap_tests
 			gargantuan_attributes_tags_profile
@@ -757,6 +763,8 @@ if(BUILD_TESTING)
 	endif()
 	add_test(NAME gargantuan_foundation COMMAND gargantuan_foundation_tests)
 	add_test(NAME gargantuan_asset_foundation COMMAND gargantuan_asset_foundation_tests)
+	add_test(NAME gargantuan_audio_foundation COMMAND gargantuan_audio_foundation_tests)
+	add_test(NAME gargantuan_audio_foundation_benchmark_smoke COMMAND gargantuan_audio_foundation_benchmark --quick)
 	add_test(NAME gargantuan_renderer_publication COMMAND gargantuan_renderer_publication_tests)
 	add_test(NAME gargantuan_optional_telemetry
 		COMMAND gargantuan_optional_telemetry_tests
@@ -805,6 +813,12 @@ if(BUILD_TESTING)
 	set_tests_properties(gargantuan_asset_foundation PROPERTIES
 		LABELS "assets;runtime;serialization;editorhost;renderer;headless" TIMEOUT 180
 	)
+	set_tests_properties(gargantuan_audio_foundation PROPERTIES
+		LABELS "audio;assets;runtime;serialization;headless;lifecycle" TIMEOUT 180
+	)
+	set_tests_properties(gargantuan_audio_foundation_benchmark_smoke PROPERTIES
+		LABELS "audio;assets;runtime;benchmark;headless" TIMEOUT 180
+	)
 	set_tests_properties(gargantuan_renderer_publication PROPERTIES LABELS "renderer;runtime;headless" TIMEOUT 120)
 	set_tests_properties(gargantuan_optional_telemetry PROPERTIES LABELS "telemetry;runtime;fail-open" TIMEOUT 60)
 	set_tests_properties(gargantuan_physics_backend PROPERTIES LABELS "physics;runtime" TIMEOUT 120)
@@ -824,10 +838,10 @@ if(BUILD_TESTING)
 	set_tests_properties(gargantuan_entitlement_service PROPERTIES LABELS "entitlements;runtime;security;headless" TIMEOUT 120)
 	set_tests_properties(gargantuan_entitlement_provider_benchmark_smoke PROPERTIES LABELS "entitlements;benchmark" TIMEOUT 120)
 	set_tests_properties(gargantuan_first_complete_game PROPERTIES
-		LABELS "game;sample;studio;assets;player;physics;gui;interaction;headless" TIMEOUT 180
+		LABELS "game;sample;studio;assets;audio;player;physics;gui;interaction;headless" TIMEOUT 180
 	)
 	set_tests_properties(gargantuan_packaging PROPERTIES
-		LABELS "packaging;runtime;assets;security;headless" TIMEOUT 240
+		LABELS "packaging;runtime;assets;audio;security;headless" TIMEOUT 240
 	)
 	set_tests_properties(gargantuan_packaging_editor_host PROPERTIES
 		LABELS "packaging;editorhost;protocol;studio;runtime;headless" TIMEOUT 120

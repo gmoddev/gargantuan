@@ -163,6 +163,10 @@ int main() {
 					Asset.size() == 8,
 				"runtime asset catalog leaked authoring provenance"
 			);
+		Require(std::ranges::any_of(RuntimeCatalog["Assets"], [](const Json &Asset) {
+			return Asset.value("Kind", "") == "Audio" &&
+				Asset.value("Reference", "") == "asset://a0d10f78c368437daac002a4e59fdd64";
+		}), "FirstCompleteGame canonical Audio asset is missing from the runtime package closure");
 
 		const auto ReleaseA = Workspace.Root / "ReleaseA";
 		const auto ReleaseB = Workspace.Root / "ReleaseB";

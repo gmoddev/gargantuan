@@ -20,7 +20,7 @@
 #include <vector>
 
 namespace gargantuan {
-	enum class AssetKind : std::uint8_t { Image, Mesh, Font, Material };
+	enum class AssetKind : std::uint8_t { Image, Mesh, Font, Material, Audio };
 	enum class AssetState : std::uint8_t { Missing, Importing, Ready, Failed, Stale };
 	enum class AssetMaterialAlphaMode : std::uint8_t { Opaque, Mask, Blend };
 	enum class AssetChangeKind : std::uint8_t {
@@ -111,7 +111,14 @@ namespace gargantuan {
 		bool DoubleSided = false;
 	};
 
-	using ImportedAsset = std::variant<ImportedImage, ImportedMesh, ImportedFont, ImportedMaterial>;
+	struct ImportedAudio {
+		std::uint32_t SampleRate = 0;
+		std::uint8_t Channels = 0;
+		std::uint32_t FrameCount = 0;
+		std::shared_ptr<const std::vector<std::int16_t>> Pcm16;
+	};
+
+	using ImportedAsset = std::variant<ImportedImage, ImportedMesh, ImportedFont, ImportedMaterial, ImportedAudio>;
 
 	struct AssetDiagnostic {
 		std::string Code;
@@ -158,6 +165,11 @@ namespace gargantuan {
 	struct AssetMaterialResource {
 		ImportedMaterial Value;
 		RenderMaterialState RenderState;
+		std::uint64_t ContentRevision = 0;
+	};
+
+	struct AssetAudioResource {
+		ImportedAudio Value;
 		std::uint64_t ContentRevision = 0;
 	};
 
@@ -235,6 +247,14 @@ namespace gargantuan {
 		static constexpr std::size_t MaximumMeshIndices = 1048576;
 		static constexpr std::size_t MaximumMeshSubmeshes = 256;
 		static constexpr std::size_t MaximumFontBytes = 8 * 1024 * 1024;
+		static constexpr std::uint32_t MinimumAudioSampleRate = 8'000;
+		static constexpr std::uint32_t MaximumAudioSampleRate = 48'000;
+		static constexpr std::uint8_t MaximumAudioChannels = 2;
+		static constexpr std::uint32_t MaximumAudioDurationSeconds = 30;
+		static constexpr std::uint32_t MaximumAudioFrames = MaximumAudioSampleRate * MaximumAudioDurationSeconds;
+		static constexpr std::size_t MaximumAudioPcmBytes = static_cast<std::size_t>(MaximumAudioFrames) *
+			MaximumAudioChannels * sizeof(std::int16_t);
+		static constexpr std::size_t MaximumWaveChunks = 128;
 	};
 
 	struct AssetCancellationToken {

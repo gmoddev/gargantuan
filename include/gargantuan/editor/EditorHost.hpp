@@ -38,6 +38,7 @@ namespace gargantuan {
 	class EditorHost {
 	  public:
 		explicit EditorHost(std::string sessionToken);
+		EditorHost(std::string sessionToken, bool AudioEnabled);
 		EditorHost(std::string sessionToken, ScriptSecurityContext studioSecurity);
 		~EditorHost();
 
@@ -71,6 +72,7 @@ namespace gargantuan {
 		std::optional<ChangeCursor> Cursor;
 		MutationGateway Mutations;
 		ScriptSecurityContext StudioSecurity = ScriptSecurityContext::StudioCoreUi();
+		bool AudioEnabled = false;
 		std::optional<RenderCameraInput> ViewportCamera;
 		RenderPublisher ViewportPublisher;
 		RenderPublicationPtr LastViewportPublication;

@@ -44,8 +44,10 @@ shaders, SDL, canonical assets, and notices are already inside the package; CMak
 the repository, Studio, and asset source files are not runtime dependencies.
 
 All gameplay content resolves through `AssetService`. The project imports one
-glTF mesh, its material/image dependency graph, and one font; gameplay Luau
-does not read source asset files.
+glTF mesh, its material/image dependency graph, one font, and one PCM16 WAV.
+Each collectible plays the clip positionally while round completion plays it
+as a non-positional UI sound. Gameplay Luau does not read source asset files,
+and hearing the cues is never required for game correctness.
 
 See [FirstCompleteGame.md](../../devdocs/Validation/FirstCompleteGame.md) for
 the authoring record, automated evidence, and gaps found by this slice.

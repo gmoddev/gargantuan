@@ -280,7 +280,8 @@ path traversal/absolute/case/duplicate/version/count/string/path bounds, modifie
 project/asset content, missing shaders, stale/failed/missing assets, and isolated
 per-ProjectId user data.
 
-The FirstCompleteGame subprocess smoke builds with the CLI, validates and
+The FirstCompleteGame subprocess smoke builds with the CLI, validates its
+canonical Audio catalog/artifact alongside its other generic assets, and
 inspects, copies the package to another system-temp directory, launches headless
 from an arbitrary working directory and a minimal system-only `PATH`, and launches
 with the real Windows renderer. The player verifies SDL and the MSVC runtime were

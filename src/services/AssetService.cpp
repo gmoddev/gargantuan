@@ -7,6 +7,7 @@
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/ImageLabel.hpp"
 #include "gargantuan/classes/MeshPart.hpp"
+#include "gargantuan/classes/Sound.hpp"
 #include "gargantuan/classes/TextLabel.hpp"
 #include "gargantuan/filesystem/BaseFilesystem.hpp"
 #include "gargantuan/filesystem/Paths.hpp"
@@ -119,6 +120,8 @@ namespace gargantuan {
 					return (Value.Vertices ? Value.Vertices->size() * sizeof(RenderVertex) : 0) +
 						(Value.Indices ? Value.Indices->size() * sizeof(std::uint32_t) : 0) +
 						(Value.Primitives ? Value.Primitives->size() * sizeof(ImportedMeshPrimitive) : 0);
+				else if constexpr (std::is_same_v<T, ImportedAudio>)
+					return Value.Pcm16 ? Value.Pcm16->size() * sizeof(std::int16_t) : 0;
 				else return sizeof(ImportedMaterial);
 			}, Asset);
 		}
@@ -870,6 +873,11 @@ namespace gargantuan {
 								CommitFailure = Error("AssetReferenced", "Removed generated asset is referenced by MeshPart");
 								break;
 							}
+							if (auto SoundValue = std::dynamic_pointer_cast<Sound>(Object); SoundValue &&
+								SoundValue->GetSoundId() == RemovedReference) {
+								CommitFailure = Error("AssetReferenced", "Removed generated asset is referenced by Sound");
+								break;
+							}
 						}
 					}
 				}
@@ -1007,6 +1015,9 @@ namespace gargantuan {
 					if (auto Mesh = std::dynamic_pointer_cast<MeshPart>(Object); Mesh &&
 						(IsGroupReference(Mesh->GetMesh()) || IsGroupReference(Mesh->GetMaterial())))
 						return {false, Existing->second, Error("AssetReferenced", "Asset source group is referenced by MeshPart")};
+					if (auto SoundValue = std::dynamic_pointer_cast<Sound>(Object); SoundValue &&
+						IsGroupReference(SoundValue->GetSoundId()))
+						return {false, Existing->second, Error("AssetReferenced", "Asset source group is referenced by Sound")};
 				}
 			}
 			for (auto Removed : Group) {
@@ -1118,6 +1129,13 @@ namespace gargantuan {
 		Render.BaseColorTexture = ResolveTexture(Material->BaseColorTexture);
 		Render.NormalTexture = ResolveTexture(Material->NormalTexture);
 		return AssetMaterialResource{*Material, Render, Record->second.ContentRevision};
+	}
+
+	std::optional<AssetAudioResource> AssetService::ResolveAudio(std::string_view Reference) const {
+		auto Record = GetAsset(Reference);
+		if (!Record || !IsAvailableRecord(*Record) || !Record->Asset) return std::nullopt;
+		const auto *Audio = std::get_if<ImportedAudio>(Record->Asset.get());
+		return Audio ? std::optional(AssetAudioResource{*Audio, Record->ContentRevision}) : std::nullopt;
 	}
 
 	AssetTextureChanges AssetService::DrainTextureChanges() {
@@ -1409,10 +1427,15 @@ namespace gargantuan {
 				lua_pushnumber(L, Asset.Indices ? Asset.Indices->size() : 0); lua_setfield(L, -2, "IndexCount");
 			} else if constexpr (std::is_same_v<T, ImportedFont>) {
 				lua_pushnumber(L, Asset.FaceCount); lua_setfield(L, -2, "FaceCount");
-			} else {
+			} else if constexpr (std::is_same_v<T, ImportedMaterial>) {
 				lua_pushnumber(L, Asset.MetallicFactor); lua_setfield(L, -2, "MetallicFactor");
 				lua_pushnumber(L, Asset.RoughnessFactor); lua_setfield(L, -2, "RoughnessFactor");
 				lua_pushboolean(L, Asset.DoubleSided); lua_setfield(L, -2, "DoubleSided");
+			} else {
+				lua_pushnumber(L, Asset.SampleRate); lua_setfield(L, -2, "SampleRate");
+				lua_pushnumber(L, Asset.Channels); lua_setfield(L, -2, "Channels");
+				lua_pushnumber(L, Asset.FrameCount); lua_setfield(L, -2, "FrameCount");
+				lua_pushnumber(L, static_cast<double>(Asset.FrameCount) / Asset.SampleRate); lua_setfield(L, -2, "Duration");
 			}
 		}, *Record->Asset);
 		return 1;

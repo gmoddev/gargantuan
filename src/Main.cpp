@@ -48,23 +48,23 @@ namespace {
 	}
 }
 
-Engine *ConstructProject(std::string path, BaseRenderer *renderer) {
+Engine *ConstructProject(std::string path, BaseRenderer *renderer, bool AudioEnabled) {
 	auto root = std::filesystem::path(path);
 	try {
 		auto fs = new DiskFilesystem(root);
 		auto project = Project::fromExisting(fs);
 		auto game = project.DeserializeGame();
-		return new Engine(game, renderer);
+		return new Engine(game, renderer, {}, {.AudioEnabled = AudioEnabled});
 	} catch (std::exception &e) {
 		LOG_CRITICAL(App, "%s", e.what());
 		throw;
 	}
 }
 
-Engine *ConstructScript(std::string path, BaseRenderer *renderer) {
+Engine *ConstructScript(std::string path, BaseRenderer *renderer, bool AudioEnabled) {
 	try {
 		auto game = std::make_shared<DataModel>();
-		auto engine = new Engine(game, renderer);
+		auto engine = new Engine(game, renderer, {}, {.AudioEnabled = AudioEnabled});
 
 		auto script = ScriptFromFile<Script>(path.c_str());
 		script->SetParent(engine->Workspace);
@@ -76,7 +76,7 @@ Engine *ConstructScript(std::string path, BaseRenderer *renderer) {
 	}
 }
 
-Engine *ConstructInstance(std::string path, BaseRenderer *renderer) {
+Engine *ConstructInstance(std::string path, BaseRenderer *renderer, bool AudioEnabled) {
 	SDL_PathInfo pathInfo;
 	if (!SDL_GetPathInfo(path.c_str(), &pathInfo)) {
 		throw std::runtime_error("Failed to inspect the requested Instance file");
@@ -110,7 +110,7 @@ Engine *ConstructInstance(std::string path, BaseRenderer *renderer) {
 	auto instance = deserialized.Instance;
 	auto game = PrepareDataModelRoot(instance);
 
-	return new Engine(game, renderer);
+	return new Engine(game, renderer, {}, {.AudioEnabled = AudioEnabled});
 }
 
 int main(int argc, char *argv[]) {
@@ -203,7 +203,7 @@ int main(int argc, char *argv[]) {
 		}
 		try {
 			Telemetry.SetPhase(telemetry::Phase::EditorHostLoop);
-			EditorHost host(EditorToken);
+			EditorHost host(EditorToken, true);
 			return host.Run(std::cin, std::cout, [&Telemetry] { Telemetry.PollPerformance(); });
 		} catch (const std::exception &error) {
 			Telemetry.ReportControlledFatal(EditorHostFatalCode);
@@ -243,9 +243,10 @@ int main(int argc, char *argv[]) {
 	Engine *engine = nullptr;
 	Telemetry.SetPhase(telemetry::Phase::ProjectOpen);
 	try {
-		engine = hasProject  ? ConstructProject(program.get<std::string>("--project"), renderer)
-				 : hasScript ? ConstructScript(program.get<std::string>("--script"), renderer)
-							 : ConstructInstance(program.get<std::string>("--instance"), renderer);
+		const bool AudioEnabled = !program.is_used("--headless");
+		engine = hasProject  ? ConstructProject(program.get<std::string>("--project"), renderer, AudioEnabled)
+				 : hasScript ? ConstructScript(program.get<std::string>("--script"), renderer, AudioEnabled)
+							 : ConstructInstance(program.get<std::string>("--instance"), renderer, AudioEnabled);
 	} catch (const std::exception &Error) {
 		Telemetry.ReportControlledFatal(RuntimeConstructionFatalCode);
 		LOG_CRITICAL(App, "%s", Error.what());

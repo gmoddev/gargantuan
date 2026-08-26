@@ -591,6 +591,11 @@ namespace gargantuan {
 	EditorHost::EditorHost(std::string sessionToken) :
 		EditorHost(std::move(sessionToken), ScriptSecurityContext::StudioCoreUi()) {}
 
+	EditorHost::EditorHost(std::string sessionToken, bool AudioEnabledValue) :
+		EditorHost(std::move(sessionToken), ScriptSecurityContext::StudioCoreUi()) {
+		AudioEnabled = AudioEnabledValue;
+	}
+
 	EditorHost::EditorHost(std::string sessionToken, ScriptSecurityContext studioSecurity) :
 		SessionToken(std::move(sessionToken)), StudioSecurity(std::move(studioSecurity)) {
 		if (SessionToken.empty() || SessionToken.size() > 256)
@@ -1032,7 +1037,8 @@ namespace gargantuan {
 					ActivePlaySession = std::make_unique<PlaySession>(
 						Id, std::move(Snapshot.Contents), CurrentProject->InstanceFileFormat,
 						CurrentProject->Root, ViewportWidth == 0 ? 720 : ViewportWidth,
-						ViewportHeight == 0 ? 540 : ViewportHeight, Snapshot.Revision, std::move(Snapshot.Assets)
+						ViewportHeight == 0 ? 540 : ViewportHeight, Snapshot.Revision, std::move(Snapshot.Assets),
+						AudioEnabled
 					);
 					LastPlaySessionId = Id;
 					LastPlaySessionState = ActivePlaySession->GetState();

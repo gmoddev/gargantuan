@@ -40,6 +40,11 @@ namespace gargantuan {
 			for (std::size_t Index = 0; Index < 4; ++Index) Output.push_back(static_cast<std::uint8_t>(Value >> (Index * 8)));
 		}
 
+		void AppendU16(std::vector<std::uint8_t> &Output, std::uint16_t Value) {
+			Output.push_back(static_cast<std::uint8_t>(Value));
+			Output.push_back(static_cast<std::uint8_t>(Value >> 8));
+		}
+
 		void AppendU64(std::vector<std::uint8_t> &Output, std::uint64_t Value) {
 			for (std::size_t Index = 0; Index < 8; ++Index)
 				Output.push_back(static_cast<std::uint8_t>(Value >> (Index * 8)));
@@ -51,6 +56,14 @@ namespace gargantuan {
 			if (Offset > Bytes.size() || Bytes.size() - Offset < 4) return std::nullopt;
 			std::uint32_t Value = 0;
 			for (std::size_t Index = 0; Index < 4; ++Index) Value |= static_cast<std::uint32_t>(Bytes[Offset++]) << (Index * 8);
+			return Value;
+		}
+
+		std::optional<std::uint16_t> ReadU16(std::span<const std::uint8_t> Bytes, std::size_t &Offset) {
+			if (Offset > Bytes.size() || Bytes.size() - Offset < 2) return std::nullopt;
+			const auto Value = static_cast<std::uint16_t>(Bytes[Offset]) |
+				(static_cast<std::uint16_t>(Bytes[Offset + 1]) << 8);
+			Offset += 2;
 			return Value;
 		}
 
@@ -363,6 +376,128 @@ namespace gargantuan {
 				};
 			}
 		};
+
+		class WaveImporter final : public IAssetImporter {
+		  public:
+			AssetKind GetKind() const override {
+				return AssetKind::Audio;
+			}
+			bool SupportsExtension(std::string_view Extension) const override {
+				return Extension == ".wav";
+			}
+
+			std::expected<AssetImportCandidate, AssetDiagnostic>
+			Import(std::span<const std::uint8_t> Source, const AssetImportContext &Context) const override {
+				if (Cancelled(Context))
+					return std::unexpected(Error("Cancelled", "Audio import was cancelled or exceeded its deadline"));
+				if (Source.size() < 44 || std::memcmp(Source.data(), "RIFF", 4) != 0 ||
+					std::memcmp(Source.data() + 8, "WAVE", 4) != 0)
+					return std::unexpected(Error("MalformedAudio", "WAV RIFF/WAVE header is invalid"));
+
+				std::size_t HeaderOffset = 4;
+				auto RiffBytes = ReadU32(Source, HeaderOffset);
+				if (!RiffBytes || static_cast<std::uint64_t>(*RiffBytes) + 8 != Source.size())
+					return std::unexpected(Error("MalformedAudio", "WAV RIFF size does not match the source"));
+
+				std::optional<std::uint16_t> Channels;
+				std::optional<std::uint32_t> SampleRate;
+				std::optional<std::span<const std::uint8_t>> Data;
+				std::size_t Offset = 12;
+				std::size_t ChunkCount = 0;
+				while (Offset < Source.size()) {
+					if (++ChunkCount > AssetLimits::MaximumWaveChunks || Source.size() - Offset < 8)
+						return std::unexpected(
+							Error("MalformedAudio", "WAV chunk table is invalid or exceeds its limit")
+						);
+					const auto *ChunkId = Source.data() + Offset;
+					Offset += 4;
+					auto ChunkBytes = ReadU32(Source, Offset);
+					if (!ChunkBytes || Offset > Source.size() || *ChunkBytes > Source.size() - Offset)
+						return std::unexpected(Error("MalformedAudio", "WAV chunk length exceeds the source"));
+					const auto Chunk = Source.subspan(Offset, *ChunkBytes);
+
+					if (std::memcmp(ChunkId, "fmt ", 4) == 0) {
+						if (Channels || Chunk.size() < 16)
+							return std::unexpected(
+								Error("MalformedAudio", "WAV must contain one complete format chunk")
+							);
+						std::size_t FormatOffset = 0;
+						auto Format = ReadU16(Chunk, FormatOffset);
+						Channels = ReadU16(Chunk, FormatOffset);
+						SampleRate = ReadU32(Chunk, FormatOffset);
+						auto ByteRate = ReadU32(Chunk, FormatOffset);
+						auto BlockAlign = ReadU16(Chunk, FormatOffset);
+						auto BitsPerSample = ReadU16(Chunk, FormatOffset);
+						if (!Format || !Channels || !SampleRate || !ByteRate || !BlockAlign || !BitsPerSample ||
+							*Format != 1 || *BitsPerSample != 16 || *Channels == 0 ||
+							*Channels > AssetLimits::MaximumAudioChannels ||
+							*SampleRate < AssetLimits::MinimumAudioSampleRate ||
+							*SampleRate > AssetLimits::MaximumAudioSampleRate ||
+							*BlockAlign != static_cast<std::uint16_t>(*Channels * sizeof(std::int16_t)) ||
+							static_cast<std::uint64_t>(*SampleRate) * *BlockAlign != *ByteRate)
+							return std::unexpected(Error(
+								"UnsupportedAudio",
+								"Foundation 1 WAV requires mono/stereo little-endian PCM16 at 8-48 kHz"
+							));
+					} else if (std::memcmp(ChunkId, "data", 4) == 0) {
+						if (Data) return std::unexpected(Error("MalformedAudio", "WAV contains multiple data chunks"));
+						Data = Chunk;
+					}
+
+					Offset += *ChunkBytes;
+					if ((*ChunkBytes & 1u) != 0) {
+						if (Offset >= Source.size())
+							return std::unexpected(Error("MalformedAudio", "WAV chunk padding is missing"));
+						++Offset;
+					}
+				}
+				if (!Channels || !SampleRate || !Data || Data->empty())
+					return std::unexpected(Error("MalformedAudio", "WAV format or sample data is missing"));
+
+				const auto BlockAlign = static_cast<std::size_t>(*Channels) * sizeof(std::int16_t);
+				if (Data->size() % BlockAlign != 0)
+					return std::unexpected(Error("MalformedAudio", "WAV sample data is not frame-aligned"));
+				const auto FrameCount64 = Data->size() / BlockAlign;
+				const auto DurationFrameLimit = static_cast<std::uint64_t>(*SampleRate) *
+												AssetLimits::MaximumAudioDurationSeconds;
+				if (FrameCount64 == 0 || FrameCount64 > AssetLimits::MaximumAudioFrames ||
+					FrameCount64 > DurationFrameLimit || Data->size() > AssetLimits::MaximumAudioPcmBytes)
+					return std::unexpected(
+						Error("AudioLimit", "Decoded audio exceeds the 30-second resident PCM limit")
+					);
+
+				auto Pcm = std::make_shared<std::vector<std::int16_t>>();
+				Pcm->reserve(Data->size() / sizeof(std::int16_t));
+				for (std::size_t SampleOffset = 0; SampleOffset < Data->size(); SampleOffset += 2) {
+					const auto Bits = static_cast<std::uint16_t>(
+						static_cast<std::uint16_t>((*Data)[SampleOffset]) |
+						(static_cast<std::uint16_t>((*Data)[SampleOffset + 1]) << 8)
+					);
+					Pcm->push_back(std::bit_cast<std::int16_t>(Bits));
+				}
+				if (Cancelled(Context))
+					return std::unexpected(Error("Cancelled", "Audio import was cancelled before commit"));
+
+				auto Artifact = BeginArtifact(AssetKind::Audio, ArtifactVersion2);
+				AppendU32(Artifact, *SampleRate);
+				Artifact.push_back(static_cast<std::uint8_t>(*Channels));
+				AppendU32(Artifact, static_cast<std::uint32_t>(FrameCount64));
+				for (const auto Sample : *Pcm)
+					AppendU16(Artifact, std::bit_cast<std::uint16_t>(Sample));
+				auto ImmutablePcm = std::shared_ptr<const std::vector<std::int16_t>>(std::move(Pcm));
+				auto ImmutableArtifact = std::make_shared<const std::vector<std::uint8_t>>(std::move(Artifact));
+				return AssetImportCandidate{
+					ImportedAudio{
+						*SampleRate,
+						static_cast<std::uint8_t>(*Channels),
+						static_cast<std::uint32_t>(FrameCount64),
+						ImmutablePcm
+					},
+					ImmutableArtifact,
+					AssetContentId::Hash(*ImmutableArtifact),
+				};
+			}
+		};
 	}
 
 	std::expected<std::vector<std::string>, AssetDiagnostic> IAssetImporter::DiscoverExternalResources(
@@ -392,6 +527,7 @@ namespace gargantuan {
 		Result.push_back(std::make_unique<ImageImporter>());
 		Result.push_back(std::make_unique<MeshImporter>());
 		Result.push_back(std::make_unique<FontImporter>());
+		Result.push_back(std::make_unique<WaveImporter>());
 		Result.push_back(CreateGltfImporter());
 		return Result;
 	}
@@ -403,7 +539,8 @@ namespace gargantuan {
 		if ((Kind == AssetKind::Image && !std::holds_alternative<ImportedImage>(Asset)) ||
 			(Kind == AssetKind::Mesh && !std::holds_alternative<ImportedMesh>(Asset)) ||
 			(Kind == AssetKind::Font && !std::holds_alternative<ImportedFont>(Asset)) ||
-			(Kind == AssetKind::Material && !std::holds_alternative<ImportedMaterial>(Asset)))
+			(Kind == AssetKind::Material && !std::holds_alternative<ImportedMaterial>(Asset)) ||
+			(Kind == AssetKind::Audio && !std::holds_alternative<ImportedAudio>(Asset)))
 			return std::unexpected(Error("ArtifactKindMismatch", "Canonical value does not match its asset kind"));
 		auto Artifact = BeginArtifact(Kind, ArtifactVersion2);
 		if (const auto *Image = std::get_if<ImportedImage>(&Asset)) {
@@ -475,6 +612,21 @@ namespace gargantuan {
 			Artifact.push_back(static_cast<std::uint8_t>(Material->AlphaMode));
 			AppendFloat(Artifact, Material->AlphaCutoff);
 			Artifact.push_back(Material->DoubleSided ? 1 : 0);
+		} else if (const auto *Audio = std::get_if<ImportedAudio>(&Asset)) {
+			const auto SampleCount = static_cast<std::uint64_t>(Audio->FrameCount) * Audio->Channels;
+			if (!Audio->Pcm16 || Audio->Channels == 0 || Audio->Channels > AssetLimits::MaximumAudioChannels ||
+				Audio->SampleRate < AssetLimits::MinimumAudioSampleRate ||
+				Audio->SampleRate > AssetLimits::MaximumAudioSampleRate || Audio->FrameCount == 0 ||
+				Audio->FrameCount > AssetLimits::MaximumAudioFrames ||
+				Audio->FrameCount > Audio->SampleRate * AssetLimits::MaximumAudioDurationSeconds ||
+				SampleCount != Audio->Pcm16->size() ||
+				SampleCount * sizeof(std::int16_t) > AssetLimits::MaximumAudioPcmBytes)
+				return std::unexpected(Error("MalformedAudio", "Canonical audio value is invalid"));
+			AppendU32(Artifact, Audio->SampleRate);
+			Artifact.push_back(Audio->Channels);
+			AppendU32(Artifact, Audio->FrameCount);
+			for (const auto Sample : *Audio->Pcm16)
+				AppendU16(Artifact, std::bit_cast<std::uint16_t>(Sample));
 		}
 		if (Artifact.size() > AssetLimits::MaximumArtifactBytes)
 			return std::unexpected(Error("ArtifactLimit", "Canonical artifact exceeds its byte limit"));
@@ -559,6 +711,41 @@ namespace gargantuan {
 				return std::unexpected(Error("MalformedArtifact", "Material artifact has trailing bytes"));
 			return AssetImportCandidate{Material,
 				std::make_shared<const std::vector<std::uint8_t>>(Artifact.begin(), Artifact.end()), ExpectedContentId};
+		}
+
+		if (ExpectedKind == AssetKind::Audio) {
+			if (*Version != ArtifactVersion2)
+				return std::unexpected(Error("UnsupportedArtifact", "Audio assets require artifact version 2"));
+			auto SampleRate = ReadU32(Artifact, Offset);
+			if (!SampleRate || Offset >= Artifact.size())
+				return std::unexpected(Error("MalformedArtifact", "Audio artifact metadata is incomplete"));
+			const auto Channels = Artifact[Offset++];
+			auto FrameCount = ReadU32(Artifact, Offset);
+			if (!FrameCount || Channels == 0 || Channels > AssetLimits::MaximumAudioChannels ||
+				*SampleRate < AssetLimits::MinimumAudioSampleRate ||
+				*SampleRate > AssetLimits::MaximumAudioSampleRate || *FrameCount == 0 ||
+				*FrameCount > AssetLimits::MaximumAudioFrames ||
+				*FrameCount > *SampleRate * AssetLimits::MaximumAudioDurationSeconds)
+				return std::unexpected(Error("MalformedArtifact", "Audio artifact metadata is outside its limits"));
+			const auto SampleCount = static_cast<std::uint64_t>(*FrameCount) * Channels;
+			const auto PcmBytes = SampleCount * sizeof(std::int16_t);
+			if (PcmBytes > AssetLimits::MaximumAudioPcmBytes || Offset > Artifact.size() ||
+				Artifact.size() - Offset != PcmBytes)
+				return std::unexpected(Error("MalformedArtifact", "Audio artifact sample payload is invalid"));
+			auto Pcm = std::make_shared<std::vector<std::int16_t>>();
+			Pcm->reserve(static_cast<std::size_t>(SampleCount));
+			while (Offset < Artifact.size()) {
+				auto Sample = ReadU16(Artifact, Offset);
+				if (!Sample) return std::unexpected(Error("MalformedArtifact", "Audio artifact sample is truncated"));
+				Pcm->push_back(std::bit_cast<std::int16_t>(*Sample));
+			}
+			return AssetImportCandidate{
+				ImportedAudio{
+					*SampleRate, Channels, *FrameCount, std::shared_ptr<const std::vector<std::int16_t>>(std::move(Pcm))
+				},
+				std::make_shared<const std::vector<std::uint8_t>>(Artifact.begin(), Artifact.end()),
+				ExpectedContentId,
+			};
 		}
 
 		auto VertexCount = ReadU32(Artifact, Offset), IndexCount = ReadU32(Artifact, Offset), SubmeshCount = ReadU32(Artifact, Offset);

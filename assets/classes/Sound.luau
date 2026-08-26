@@ -1,0 +1,101 @@
+const c, t = require("@tools/classes").unpack()
+
+return c({
+	name = "Sound",
+	description = "Plays one canonical AssetService Audio asset as a 2D or hierarchy-anchored 3D voice.",
+	since = "0.4.0",
+
+	properties = {
+		SoundId = {
+			description = "Strict Audio asset reference; empty means no clip.",
+			type = t.String,
+			unmodified = '""',
+			overrideRead = "GetSoundId",
+			overrideWrite = "SetSoundId",
+			serializable = true,
+			replicated = true,
+			category = "Audio",
+			editorHint = "AssetReference:Audio",
+		},
+		Volume = {
+			description = "Linear voice gain before positional attenuation.",
+			type = t.Float,
+			unmodified = "1.0f",
+			serializable = true,
+			replicated = true,
+			category = "Audio",
+			range = { minimum = 0, maximum = 1 },
+		},
+		PlaybackSpeed = {
+			description = "Simple sample-rate multiplier that changes speed and pitch together.",
+			type = t.Float,
+			unmodified = "1.0f",
+			serializable = true,
+			replicated = true,
+			category = "Playback",
+			range = { minimum = 0.25, maximum = 4 },
+		},
+		Looped = {
+			description = "Whether playback wraps at the canonical clip boundary.",
+			type = t.Bool,
+			unmodified = "false",
+			serializable = true,
+			replicated = true,
+			category = "Playback",
+		},
+		TimePosition = {
+			description = "Transient playback position in seconds; writes seek the current voice.",
+			type = t.Float,
+			unmodified = "0.0f",
+			overrideRead = "GetTimePosition",
+			overrideWrite = "SetTimePosition",
+			category = "Playback",
+			editorHint = "RuntimeOnly",
+			editable = false,
+			range = { minimum = 0, maximum = 30 },
+		},
+		PlaybackState = {
+			description = "Authoritative runtime state: Stopped, Playing, or Paused.",
+			type = t.EnumItem("SoundPlaybackState"),
+			unmodified = "Enums::SoundPlaybackState::Stopped",
+			category = "Playback",
+			writeLevel = "Never",
+			editable = false,
+		},
+		RollOffMinDistance = {
+			description = "Distance at or below which a positional sound has full gain.",
+			type = t.Float,
+			unmodified = "10.0f",
+			overrideRead = "GetRollOffMinDistance",
+			overrideWrite = "SetRollOffMinDistance",
+			serializable = true,
+			replicated = true,
+			category = "Spatial",
+			range = { minimum = 0, maximum = 100000 },
+		},
+		RollOffMaxDistance = {
+			description = "Distance at or above which a positional sound is silent.",
+			type = t.Float,
+			unmodified = "100.0f",
+			overrideRead = "GetRollOffMaxDistance",
+			overrideWrite = "SetRollOffMaxDistance",
+			serializable = true,
+			replicated = true,
+			category = "Spatial",
+			range = { minimum = 0.01, maximum = 100000 },
+		},
+	},
+
+	signals = {
+		Ended = {
+			description = "Fired once when non-looped playback reaches the clip boundary.",
+		},
+	},
+
+	methods = {
+		Play = { description = "Starts or replaces this Sound's one voice." },
+		Pause = { description = "Pauses this Sound while preserving TimePosition." },
+		Resume = { description = "Continues a paused Sound." },
+		Stop = { description = "Releases this Sound's voice and resets TimePosition to zero." },
+	},
+})

@@ -41,7 +41,8 @@ namespace gargantuan {
 			std::uint32_t Width,
 			std::uint32_t Height,
 			std::uint64_t AuthoringRevision,
-			AssetProjectSnapshot Assets = {}
+			AssetProjectSnapshot Assets = {},
+			bool AudioEnabled = false
 		);
 		~PlaySession();
 

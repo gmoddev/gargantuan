@@ -1,5 +1,6 @@
 #pragma once
 
+#include "gargantuan/audio/AudioRuntime.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/WorldRoot.hpp"
 #include "gargantuan/datatypes/Signal.hpp"
@@ -47,6 +48,7 @@ namespace gargantuan {
 		std::shared_ptr<UserInputService> UserInputService;
 		std::shared_ptr<ActionMap> ActionMap;
 		std::shared_ptr<AssetService> Assets;
+		std::unique_ptr<AudioRuntime> Audio;
 		std::shared_ptr<EntitlementService> Entitlements;
 		std::shared_ptr<InteractionService> Interaction;
 		std::shared_ptr<Players> Players;

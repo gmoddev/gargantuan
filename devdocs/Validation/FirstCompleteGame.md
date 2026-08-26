@@ -11,13 +11,15 @@ collectibles, an anchored obstacle moves across the course, and an imported
 textured MeshPart marks the far end. Three authored `ProximityPrompt` Instances
 use `InteractionService` for proximity, hold timing, semantic input, and final
 validation. Ordinary client Luau listens to `Triggered` and owns collection,
-round state, obstacle motion, completion, and reset. A `ScreenGui`
+round state, obstacle motion, completion, and reset. Each collectible has a
+positional `Sound`, while a non-spatial Sound under `GameScripts` marks round
+completion. A `ScreenGui`
 shows an imported badge, imported-font progress text, a completion panel, and a
 real `TextButton` restart action.
 
 The deterministic `K` action completes the round for automation. It is a test
 hook implemented through the public `ActionMap`, not a native gameplay bypass.
-Networking, combat, audio, animation, VFX, and soft bodies were intentionally
+Networking, combat, animation, VFX, and soft bodies were intentionally
 not added.
 
 ## Authoring workflow used
@@ -25,8 +27,8 @@ not added.
 1. Build the current Studio and Engine Release binaries.
 2. Create the project with Studio's `CreateProject` workflow (the automated
    equivalent of File -> New Project), then reopen the created project.
-3. Import `assets/collection-beacon.gltf` and
-   `assets/Roboto-Regular.ttf` through the same EditorHost asset operations
+3. Import `assets/collection-beacon.gltf`, `assets/Roboto-Regular.ttf`, and
+   `assets/collection-tone.wav` through the same EditorHost asset operations
    used by Studio's Assets panel. The glTF import creates the Mesh, Material,
    and Image records as one dependency group.
 4. Through Studio's authenticated project-scoped bridge, use the normal
@@ -60,6 +62,8 @@ honest claim of an entirely GUI-authored workflow.
 - Asset Foundation 2A compound glTF import and Mesh -> Material -> Image
   dependencies;
 - imported 512 x 512 PNG and imported Roboto font resolution;
+- canonical PCM16 WAV import, positional pickup playback, and non-positional
+  completion playback through schema-backed Sound Instances;
 - `ActionMap`, `DefaultPlayerController`, `DefaultCamera`, and
   `DefaultPlayerRuntime`;
 - `ProximityPrompt`, `InteractionService`, keyboard/gamepad semantic bindings,
@@ -71,7 +75,7 @@ honest claim of an entirely GUI-authored workflow.
   activation, visibility, and viewport resize;
 - isolated Play/Stop, GUI/runtime mutation discard, and standalone execution.
 
-The persisted project has 26 Instances, 9 authored GUI Instances, and 4 imported asset
+The persisted project has 30 Instances, 9 authored GUI Instances, and 5 imported asset
 records. A representative headless runtime composition step is approximately
 0.1 ms on the validation machine; this is not a frame-time benchmark. A local
 real-GPU cold offscreen capture was approximately 250 ms, including renderer
@@ -127,15 +131,16 @@ Findings use the requested A-F categories.
 | E - architecture defect | `UDim2` persistence loss and the split Play-viewport resource publication were real cross-system defects. The gate covers `UDim2` and coherent runtime world/UI publication; the separate real-GPU viewport smoke covers device consumption. |
 | F - game-specific need | The course geometry, crystal art, obstacle tuning, counter copy, and win-panel styling do not justify engine work. |
 
-Audio and animation would improve presentation, but neither blocked this game's
-complete loop. They therefore rank below the workflow and interaction evidence
-found here.
+Animation would further improve presentation, but it does not block this game's
+complete loop. Audio Foundation 1 now closes the earlier presentation gap with
+optional cues that remain fail-open and irrelevant to gameplay correctness.
 
 ## Asset evidence
 
-The four project records reopen as `Ready`: Mesh, Material, Image, and Font.
+The five project records reopen as `Ready`: Mesh, Material, Image, Font, and Audio.
 The Mesh depends on Material, Material depends on Image, and the authored
-`MeshPart`, `ImageLabel`, and `TextLabel` resolve only `asset://` references.
+`MeshPart`, `ImageLabel`, `TextLabel`, and all four Sounds resolve only
+`asset://` references.
 The PNG was reduced from 1024 to 512 pixels after standalone validation showed
 that the larger image plus font atlas exceeded the bounded per-frame GUI upload
 budget. Reimporting the compound group through AssetService retained stable
@@ -205,6 +210,6 @@ knowledge after the package has been produced.
    Foundation 1).** `ProximityPrompt` and `InteractionService` replace the
    per-game polling, threshold, hold, semantic input, and cleanup policy.
 
-Audio Foundation, Animation Foundation, lighting/material improvements,
+Audio Foundation 2, Animation Foundation, lighting/material improvements,
 debugging/profiling, and GUI Foundation 3 remain candidates, but this slice did
 not produce stronger blocking evidence for them than the three items above.

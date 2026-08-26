@@ -3,6 +3,7 @@
 #include "gargantuan/classes/KinematicCharacter.hpp"
 #include "gargantuan/classes/Part.hpp"
 #include "gargantuan/classes/ProximityPrompt.hpp"
+#include "gargantuan/classes/Sound.hpp"
 #include "gargantuan/filesystem/DiskFilesystem.hpp"
 #include "gargantuan/filesystem/Project.hpp"
 #include "gargantuan/platform/HostEvent.hpp"
@@ -171,7 +172,11 @@ namespace {
 			auto Prompt = Item ? std::dynamic_pointer_cast<ProximityPrompt>(
 				Item->FindFirstChildOfClass("ProximityPrompt", false)
 			) : nullptr;
-			Require(Item && Prompt, "sample collectible is missing its authored ProximityPrompt");
+			auto SoundValue = Item ? std::dynamic_pointer_cast<Sound>(
+				Item->FindFirstChildOfClass("Sound", false)
+			) : nullptr;
+			Require(Item && Prompt && SoundValue && !SoundValue->GetSoundId().empty(),
+				"sample collectible is missing its authored prompt or positional audio cue");
 			Character->SetPosition(Item->GetPosition() + glm::vec3(0.0f, 1.0f, 0.0f));
 			std::this_thread::sleep_for(std::chrono::milliseconds(40));
 			Session.Step();
@@ -289,29 +294,45 @@ int main() {
 			Require(std::ranges::any_of((*PromptDefinition)["Properties"], [&](const Json &Property) {
 				return Property.value("Name", "") == PropertyName && Property.value("Editable", false);
 			}), "a ProximityPrompt property is not available to Studio's schema-driven inspector");
+		auto SoundDefinition = std::ranges::find_if(
+			Schema["Result"]["Definitions"],
+			[](const Json &Definition) { return Definition.value("CanonicalName", "") == "Engine.Sound"; }
+		);
+		Require(SoundDefinition != Schema["Result"]["Definitions"].end() &&
+			SoundDefinition->value("Constructible", false),
+			"Sound is not available to Studio's schema-driven Insert Object path");
+		for (const auto PropertyName : {"SoundId", "Volume", "PlaybackSpeed", "Looped", "RollOffMinDistance", "RollOffMaxDistance"})
+			Require(std::ranges::any_of((*SoundDefinition)["Properties"], [&](const Json &Property) {
+				return Property.value("Name", "") == PropertyName && Property.value("Editable", false);
+			}), "a Sound property is not available to Studio's schema-driven inspector");
 		auto Snapshot = Call("GetSnapshot");
 		Require(Snapshot["Ok"], "sample project snapshot failed");
 		const auto ObjectsBeforePlay = Snapshot["Result"]["Snapshot"]["Objects"];
 
-		const std::array<std::pair<std::string_view, std::string_view>, 15> ExpectedObjects{{
+		const std::array<std::pair<std::string_view, std::string_view>, 16> ExpectedObjects{{
 			{"CollectionCourse", "Folder"}, {"Ground", "Part"}, {"MovingObstacle", "Part"},
 			{"ImportedBeacon", "MeshPart"}, {"Collectibles", "Folder"}, {"Collectible1", "Part"},
 			{"Collectible2", "Part"}, {"Collectible3", "Part"}, {"CollectionGui", "ScreenGui"},
 			{"Hud", "Frame"}, {"Badge", "ImageLabel"}, {"Progress", "TextLabel"},
-			{"WinPanel", "Frame"}, {"RestartButton", "TextButton"}, {"RoundManager", "Script"},
+			{"WinPanel", "Frame"}, {"RestartButton", "TextButton"}, {"RoundCompleteSound", "Sound"},
+			{"RoundManager", "Script"},
 		}};
 		for (const auto &Expected : ExpectedObjects)
 			Require(HasObject(ObjectsBeforePlay, Expected.first, Expected.second), "authored hierarchy is incomplete");
 		Require(std::ranges::count_if(ObjectsBeforePlay, [](const Json &Object) {
 			return Object.value("ClassName", "") == "ProximityPrompt";
 		}) == 3, "sample must author exactly one ProximityPrompt under each collectible");
+		Require(std::ranges::count_if(ObjectsBeforePlay, [](const Json &Object) {
+			return Object.value("ClassName", "") == "Sound";
+		}) == 4, "sample must author three positional pickup sounds and one non-positional completion sound");
 
 		const auto &RoundManager = GetObject(ObjectsBeforePlay, "RoundManager");
 		auto Source = Call("GetScriptSource", {{"Object", RoundManager["Id"]}});
 		Require(Source["Ok"], "RoundManager source could not be read");
 		const auto &SourceText = Source["Result"]["Source"].get_ref<const std::string &>();
 		for (const auto RequiredText : {
-			"ActionMap", "Players", "RunService", "RestartButton.Activated", "CompleteRound", "ProximityPrompt", "Prompt.Triggered"
+			"ActionMap", "Players", "RunService", "RestartButton.Activated", "CompleteRound", "ProximityPrompt",
+			"Prompt.Triggered", "GetSound(Item):Play()", "RoundCompleteSound:Play()"
 		})
 			Require(SourceText.find(RequiredText) != std::string::npos, "RoundManager omits a required public gameplay API");
 		Require(SourceText.find("(Character.Position - Item.Position).Magnitude") == std::string::npos,
@@ -365,7 +386,7 @@ int main() {
 		auto Catalog = Call("GetAssetCatalog", {{"IncludeBuiltIns", false}});
 		Require(Catalog["Ok"], "AssetService catalog could not be read");
 		const auto &Assets = Catalog["Result"]["Assets"];
-		for (const auto Kind : {"Mesh", "Material", "Image", "Font"})
+		for (const auto Kind : {"Mesh", "Material", "Image", "Font", "Audio"})
 			Require(std::ranges::any_of(Assets, [&](const Json &Asset) {
 				return Asset.value("Kind", "") == Kind && Asset.value("State", "") == "Ready";
 			}), "a required imported asset is not Ready");
@@ -386,7 +407,15 @@ int main() {
 		std::vector<std::string> ReopenedPromptLabels;
 		bool FoundHoldPrompt = false;
 		bool FoundLineOfSightPrompt = false;
+		std::size_t ReopenedSoundCount = 0;
 		for (const auto &Object : ReopenedObjects) {
+			if (Object.value("ClassName", "") == "Sound") {
+				++ReopenedSoundCount;
+				const auto &Properties = Object["EditorProperties"];
+				Require(Properties.contains("SoundId") &&
+					Properties["SoundId"].value("Value", "") == "asset://a0d10f78c368437daac002a4e59fdd64",
+					"SoundId did not survive sample save/reopen");
+			}
 			if (Object.value("ClassName", "") != "ProximityPrompt") continue;
 			const auto &Properties = Object["EditorProperties"];
 			Require(
@@ -407,7 +436,7 @@ int main() {
 		std::ranges::sort(ReopenedPromptLabels);
 		Require(
 			ReopenedPromptLabels == std::vector<std::string>{"Collectible1", "Collectible2", "Collectible3"} &&
-				FoundHoldPrompt && FoundLineOfSightPrompt,
+				FoundHoldPrompt && FoundLineOfSightPrompt && ReopenedSoundCount == 4,
 			"reopened prompt labels or hold semantics differ from the authored game"
 		);
 		for (const auto Name : {"Hud", "Badge", "Progress", "Hint", "WinPanel", "WinTitle", "WinDetail", "RestartButton"}) {

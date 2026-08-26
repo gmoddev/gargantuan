@@ -5,6 +5,7 @@
 #include "gargantuan/classes/FileLink.hpp"
 #include "gargantuan/classes/Instance.hpp"
 #include "gargantuan/classes/Script.hpp"
+#include "gargantuan/classes/Sound.hpp"
 #include "gargantuan/filesystem/SourceMount.hpp"
 #include "gargantuan/filesystem/Paths.hpp"
 #include "gargantuan/render/Renderer.hpp"
@@ -32,7 +33,15 @@ namespace gargantuan {
 		  WorldRoot(std::static_pointer_cast<gargantuan::WorldRoot>(Workspace)),
 		  RunService(GetService<gargantuan::RunService>()), ProcessService(GetService<gargantuan::ProcessService>()),
 		  UserInputService(GetService<gargantuan::UserInputService>()), ActionMap(GetService<gargantuan::ActionMap>()),
-		  Assets(GetService<gargantuan::AssetService>()), Entitlements(GetService<gargantuan::EntitlementService>()),
+		  Assets(GetService<gargantuan::AssetService>()),
+		  Audio(std::make_unique<AudioRuntime>(
+			  Assets,
+			  ProviderConfiguration.AudioEnabled ? CreateSdlAudioBackend() : nullptr,
+			  [](std::string Code, std::string Message) {
+				  LOG_WARN(App, "[Audio:Runtime] %s: %s", Code.c_str(), Message.c_str());
+			  }
+		  )),
+		  Entitlements(GetService<gargantuan::EntitlementService>()),
 		  Interaction(GetService<gargantuan::InteractionService>()), Players(GetService<gargantuan::Players>()) {
 		if (ProviderConfiguration.Entitlements &&
 			!Entitlements->ConfigureProvider(std::move(ProviderConfiguration.Entitlements)))
@@ -57,6 +66,7 @@ namespace gargantuan {
 			if (auto script = std::dynamic_pointer_cast<gargantuan::Script>(inst)) {
 				this->Script->ScriptQueue.insert(script);
 			}
+			if (auto SoundValue = std::dynamic_pointer_cast<gargantuan::Sound>(inst)) Audio->RegisterSound(SoundValue);
 
 			if (auto link = std::dynamic_pointer_cast<gargantuan::FileLink>(inst)) {
 				if (!ProjectSources) {
@@ -101,6 +111,7 @@ namespace gargantuan {
 		if (Interaction && !Interaction->GetDestroyed()) Interaction->ShutdownRuntime();
 		if (Players && !Players->GetDestroyed()) Players->ShutdownRuntime();
 		if (ActionMap && !ActionMap->GetDestroyed()) ActionMap->Reset();
+		if (Audio) Audio->Shutdown();
 		if (Gui) Gui->ClearTransientState();
 		Gui.reset();
 		if (Renderer) Renderer->Destroy();
@@ -212,6 +223,7 @@ namespace gargantuan {
 				G_PROFILE("Scripts");
 				if (Entitlements) (void)Entitlements->PumpAsyncCompletions();
 				Script->Step();
+				if (Audio) Audio->Step(Workspace->GetCurrentCamera()->GetCFrame());
 			}
 		}
 

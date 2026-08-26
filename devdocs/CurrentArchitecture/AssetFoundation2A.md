@@ -22,8 +22,9 @@ related_code:
 
 Foundation 2A extends the single schema-backed `AssetService`; it does not add
 type-specific public services. The exact stable `AssetKind : uint8_t` values are
-`Image = 0`, `Mesh = 1`, `Font = 2`, and `Material = 3`. Retaining the first
-three numeric values is part of artifact version 1 compatibility.
+`Image = 0`, `Mesh = 1`, `Font = 2`, `Material = 3`, and `Audio = 4`. Retaining
+the first three numeric values is part of artifact version 1 compatibility.
+Audio's bounded PCM16/WAV contract is documented in `AudioFoundation1.md`.
 
 One glTF source is a source group containing separately addressable semantic
 assets:
@@ -251,7 +252,7 @@ primary status without vertices or pixels. Compound mutations return nullable
 primary `Asset` plus the complete `Assets` list. Atomic first-import failure has
 no partial asset record; stale reimport returns the previous complete group.
 
-Studio's one Asset Catalog accepts Image, Mesh, Font, and Material. Import now
+Studio's one Asset Catalog accepts Image, Mesh, Font, Material, and Audio. Import now
 offers `.gltf`/`.glb`; Catalog groups generated children by source, shows kind,
 logical key, dependencies, and diagnostics, and reimports/deletes the complete
 source group through the shared command runner. Schema asset-reference editors

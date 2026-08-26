@@ -106,7 +106,9 @@ int main(int argc, char *argv[]) {
 		else
 			Renderer = std::make_unique<SDLRenderer>(ViewportSize);
 		auto World = PackageBuilder::LoadWorld(*Payload, PackageRoot);
-		Runtime = std::make_unique<Engine>(World, Renderer.get());
+		Runtime = std::make_unique<Engine>(
+			World, Renderer.get(), nullptr, EngineProviderConfiguration{.AudioEnabled = !Headless}
+		);
 		Runtime->ProcessService->Alive = true;
 		const auto UserDataRoot = GetPackageUserDataRoot(Payload->Inspection.Identity);
 		LOG_INFO(
