@@ -136,6 +136,8 @@ a goal; each migration must verify claims against current code and tests.
 
 - [Future architecture](../src/content/docs/developing/future-architecture.mdx)
   is the broad accepted direction, with implementation status stated per section.
+- [Future architecture concerns](../src/content/docs/developing/future-architecture-concerns.mdx)
+  is a non-normative, evidence-backed risk register for the five-repository system.
 - [Game networking architecture](../src/content/docs/developing/networking-architecture.mdx)
   records accepted boundaries and the evidence-backed GNS transport selection;
   gameplay networking layers remain deferred.

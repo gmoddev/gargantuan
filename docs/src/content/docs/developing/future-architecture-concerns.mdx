@@ -1,0 +1,364 @@
+---
+title: Future architecture concerns
+description: Validated cross-repository risks, tradeoffs, and decision points for Gargantuan's future architecture.
+---
+
+This document is a non-normative risk register for the five-repository
+Gargantuan system. It records concerns that may influence future architecture;
+it does not describe accepted APIs, prove defects, or replace the current
+architecture, invariant, protocol, and decision documents.
+
+The register began with an external AI architecture review and was validated
+against implementation, tests, workflows, and current documentation on
+August 26, 2026 at these revisions:
+
+| Repository | Inspected revision |
+| --- | --- |
+| `gargantuan-main` | `cee239d36a72e29082aa5aa80d421af1ce2aea1c` |
+| `gargantuan-studio` | `962b307431285dc91b442ec53998d83397947916` |
+| `gargantuan-node` | `543c7c5d9fb1987ece1a14254f4e27ada5411e29` |
+| `gargantuan-mcp` | `508ea244ebdf6e975c30f4279fa0db74cd68c447` |
+| `gargantuan-telemetry` | `66841e6ab1eff8fd66ad5f9d092bae84a6f2a22b` |
+
+The validation was static. No build or test result is claimed by this review.
+Revalidate an item before turning it into an implementation milestone or ADR.
+
+## System direction confirmed by the review
+
+The five repositories form a creator and runtime platform, not only a game
+engine:
+
+```text
+external MCP client
+    -> gargantuan-mcp
+    -> authenticated Studio bridge
+    -> Gargantuan Studio
+    -> EditorHost
+    -> authoritative engine DataModel
+
+packaged player or server
+    -> engine runtime and replication
+    -> Gargantuan Node platform services
+
+engine, Studio, and other hosts
+    -> optional Gargantuan Telemetry C ABI
+```
+
+The current repository boundaries are defensible. Engine owns authoritative
+world state, Studio owns editor UX and a non-authoritative projection, MCP owns
+least-privilege tool semantics, Node owns platform services, and Telemetry is an
+optional replaceable native boundary. Future consolidation should reduce
+duplicated contracts without collapsing these ownership or security boundaries.
+
+## Validation labels
+
+| Label | Meaning |
+| --- | --- |
+| Confirmed | The implementation contains the stated condition. It may still be intentional. |
+| Partly mitigated | The risk exists, but current controls materially reduce it. |
+| Conditional | The concern depends on product scale, deployment topology, or future requirements. |
+| Reclassified | The review's ambiguity is resolved by current documentation or implementation. |
+
+Priority below expresses architectural attention, not vulnerability severity.
+No item in this document is, by itself, a verified correctness or security bug.
+
+## High-priority decision areas
+
+### Canonical authoring contracts
+
+**Validation: Confirmed.** Engine and Studio independently implement the
+EditorHost JSON envelope and semantic payloads. Studio independently recognizes
+snapshot format 6, editor property projection 1, EditorHost protocol 1,
+shared-frame ring 1, and latest-frame mailbox 2. Studio and MCP separately
+implement bridge protocol 2, including matching envelopes, bounds, DTOs, and
+capability names. The Python regression harness is a third EditorHost parser.
+
+The existence of several protocol versions is not itself a smell: snapshots,
+viewport memory, game replication, Node protobuf services, and the Telemetry C
+ABI have different compatibility domains. The concern is handwritten
+duplication of the same authoring semantics across languages and processes.
+
+Future direction should:
+
+- define one normative semantic contract for Engine-to-Studio authoring;
+- generate DTOs, validators, or conformance fixtures where generation is a net
+  reduction in risk;
+- derive Studio-to-MCP authoring operations from the same semantic model while
+  retaining MCP-specific capability and disclosure policy;
+- publish a compatibility matrix and unknown-field/version behavior; and
+- avoid forcing unrelated game-network, shared-memory, Node, or Telemetry
+  contracts into one universal IDL.
+
+An ADR is required before selecting an IDL or changing a public wire format.
+
+### Studio projection correctness and scale
+
+**Validation: Confirmed and partly mitigated.** Studio retains a mutable
+`Dictionary<ObjectId, StudioObject>` projection with hierarchy, properties,
+attributes, tags, and custom/extension state. It tracks journal position,
+authoritative revision, local snapshot version, and invalid identities. The
+projection is bounded to 65,536 objects; journal application is bounded to
+4,096 records per batch. The engine journal retains 4,096 records per scope by
+default and requests a resnapshot when a cursor falls behind.
+
+This is the necessary cost of a responsive process-separated editor, not a
+second authority in the accepted model. Current reconciliation work includes a
+100/1K/10K/50K benchmark, incremental invalidation, fail-closed session
+retirement, and reported zero full resyncs in the recorded steady-state test.
+Those controls do not settle production scale or long-running edit behavior.
+
+Before raising product scale, define and test:
+
+- whether 65,536 objects is a product limit or an implementation milestone;
+- initial snapshot and incremental edit budgets at the supported maximum;
+- journal sizing from measured burst rates and maximum poll interruption;
+- resnapshot frequency, time, memory, cancellation, and user-visible recovery;
+- hierarchy virtualization and query paths that do not require full-tree UI
+  reconstruction; and
+- fault matrices for stale cursors, partial reads, process loss, cancellation,
+  concurrent MCP edits, and save/play transitions.
+
+### Journal ownership and suppression
+
+**Validation: Confirmed.** `ChangeJournal::Get()` is a process-global singleton
+with logically partitioned per-scope streams. `ScopedChangeJournalSuppression`
+uses a thread-local depth counter and is available to a restricted friend set,
+with call sites in Instance internals, the mutation gateway, in-process
+replication, and replica application.
+
+Suppression is legitimate when restoring state or applying a replica without
+echoing it. It is also a privileged mechanism capable of producing a state
+change that observers never receive if used at the wrong boundary. Logical
+scope partitioning does not provide the lifecycle, test isolation, or ownership
+clarity of a journal physically owned by a DataModel or world runtime.
+
+The current Core invariant says a DataModel owns its committed change stream.
+The singleton can implement that logical rule today, but the physical ownership
+model should be made explicit rather than left as an accidental dependency.
+
+Future direction should:
+
+- inventory and test every suppression site and its intended replacement
+  publication behavior;
+- prefer operation-specific restore/replica/capture APIs over a general silent
+  suppression scope;
+- make journal access an explicit DataModel or world-runtime dependency;
+- prove teardown, multiple simultaneous worlds, isolated Play sessions, and
+  test parallelism; and
+- preserve per-scope sequence meaning during any ownership migration.
+
+Moving the journal requires an ADR because it changes foundational ownership
+and lifecycle.
+
+### Structural mutation authority
+
+**Validation: Confirmed.** Authoritative mutation checks a thread-local
+`ExecutionDomain`, and a newly participating thread defaults to `Main`. Worker,
+render, simulation, and IO scopes are explicitly marked, but the marker proves
+logical context rather than identity of a canonical world executor.
+
+This is an effective assertion layer, not a complete structural authority
+model. A forgotten scope on a new thread can be misclassified as authoritative.
+
+Future direction should evaluate:
+
+- a non-authoritative or unregistered default for new threads;
+- explicit registration of the authoritative world executor;
+- an executor, queue, or lifetime-bound world token for committed mutation;
+- preservation of the exact captured security context when work is deferred;
+  and
+- negative tests for unregistered threads, stale world tokens, teardown, and
+  multiple worlds.
+
+The internal `UpdatePropertyCommand` also carries `std::any` beside the
+wire-closed `UpdateWirePropertyCommand`. This is not an external deserialization
+hole: the gateway validates reflection type and authority. It nevertheless
+creates a type-erased internal command path. Keep its internal-only role
+explicit, restrict construction to trusted adapters, and consider typed command
+variants if the reflection boundary becomes difficult to audit.
+
+### Protocol evolution and mixed-version operation
+
+**Validation: Confirmed.** Basic replication accepts a baseline only when the
+remote schema manifest exactly equals the local sorted manifest, including
+schema identity, definition version, and kind. Exact equality is a safe first
+policy, but it does not provide rolling upgrades or mixed-client compatibility.
+
+Before promising network compatibility, define:
+
+- the supported server/client and package/runtime version window;
+- compatible additive schema changes versus hard incompatibilities;
+- required, optional, ignored, and receiver-unknown definitions;
+- downgrade, migration, and reconnect/resnapshot behavior; and
+- conformance tests containing old/new manifests and persisted packages.
+
+Do not weaken exact matching ad hoc. Compatibility policy should be accepted in
+an ADR and then implemented in the shared schema and protocol contracts.
+
+## Medium-priority engineering risks
+
+### Studio implementation concentration
+
+**Validation: Confirmed.** At the inspected revision, `MainWindow.cs` is about
+136 KB, `Program.cs` 82 KB, `StudioDocument.cs` 76 KB, and `StudioSession.cs`
+51 KB. MCP bridge/session files are also large. File size alone does not prove
+poor cohesion, but these units sit at the convergence of UX, process lifecycle,
+command orchestration, projection state, Play, viewport, and MCP behavior.
+
+Decompose by owned state and independently testable lifecycle, not by arbitrary
+line-count targets. Candidate boundaries include application bootstrap and
+smoke harnesses, session lifecycle, document reconciliation, command/history
+coordination, viewport/Play coordination, and MCP bridge adaptation. Preserve
+the single authoritative command lane and atomic failure behavior while doing
+so.
+
+### End-to-end CI for Studio and MCP
+
+**Validation: Confirmed.** Engine, Node, and Telemetry have repository workflows.
+Studio and MCP have no workflow files at their inspected revisions. Studio has
+substantial embedded C# self-tests, Python tests, smoke modes, and reconciliation
+benchmarks; MCP has a conventional test solution. Local test presence is not a
+substitute for compulsory change validation.
+
+Future CI should cover, with pinned dependencies:
+
+- Studio build, embedded self-tests, Python regression tests, and bounded
+  reconciliation benchmarks;
+- MCP build and tests with default-deny capability discovery;
+- a version-pinned Engine/Studio/MCP contract vertical;
+- malformed, oversized, stale-token, disconnect, and post-commit failure cases;
+  and
+- artifact/runtime compatibility for supported distribution targets.
+
+### Supported Studio runtime
+
+**Validation: Confirmed and already documented.** Studio targets framework-
+dependent `net7.0`, which is end-of-support. This is a distribution and security
+maintenance risk, not an architectural failure.
+
+Move to a supported .NET target before treating Studio as a supported
+distribution. Validate Avalonia, Luau hosting, native telemetry loading,
+single-file or framework-dependent packaging choices, and clean-machine launch
+behavior as part of that milestone.
+
+### Reliable backlog budget
+
+**Validation: Confirmed.** The scheduler's manager-wide aggregate reliable
+backlog ceiling is 256 MiB. The queue is bounded and accounting has contract
+tests, so this is not an unbounded-memory defect. Under sustained congestion,
+however, a large reliable queue can convert transport pressure into memory use
+and very old delivery.
+
+Use mixed replication/remote/editor-independent network load tests to choose the
+budget from supported peer counts and latency objectives. Consider per-peer and
+per-traffic-class shares, admission telemetry, age limits where semantics allow,
+and fail-closed behavior that cannot starve control traffic.
+
+### Post-commit ambiguity
+
+**Validation: Partly mitigated.** Studio has bounded post-commit recovery,
+distinguishes engine acceptance from projection availability, retires an
+unrecoverable session, and includes a launch-only fault hook for the MCP script
+write path. It does not falsely report rollback after an authoritative commit.
+
+Extend fault injection across every durable command at each boundary between
+commit, response delivery, journal observation, local projection, history, and
+save state. Verify idempotency or explicit non-idempotency for request retry and
+make user recovery instructions consistent across GUI and MCP clients.
+
+### Test organization
+
+**Validation: Confirmed as a maintainability concern.** Many Studio tests are
+compiled into the production application and dispatched by `--self-test`.
+This gives useful coverage but increases the production unit's size and couples
+test discovery to application bootstrap.
+
+Move pure unit and contract tests into conventional test projects where that
+improves isolation and CI reporting. Retain executable smoke modes only for
+behavior that genuinely requires the production process boundary.
+
+## Intentional tradeoffs to preserve
+
+### MCP's additional process hop
+
+**Validation: Confirmed and intentional.** An MCP write passes through MCP DTOs,
+the authenticated Studio bridge, Studio command semantics, EditorHost, and the
+engine mutation path. This adds translation and failure surfaces, but it keeps
+MCP from acquiring EditorHost clients, raw DataModel access, or ambient Studio
+authority.
+
+Consolidate semantic contracts and generated adapters, but do not bypass Studio
+or merge capability layers merely to reduce hop count. Measure request latency
+and batch only operations whose transaction and authorization semantics are
+explicit.
+
+### Node service infrastructure
+
+**Validation: Conditional.** Node implements registration, leases, readiness,
+tenant/scope identity, authorization policy, admission control, and connection
+caching. This is appropriate for multiple independently deployed services; it
+may be operationally premature if supported deployments remain one local Node
+beside one server.
+
+Define supported deployment topologies and service-level objectives before
+expanding the control plane. Each new distributed mechanism should be justified
+by a required topology, failure mode, or measured scale rather than platform
+aspiration alone.
+
+The engine-specific C++ adapter under Node's `integration/gargantuan` is
+deliberately documented as a private first-party boundary and keeps generated
+gRPC types out of public Engine headers. Revisit its packaging only when there
+is a concrete independent SDK or deployment consumer.
+
+### Node transport and bootstrap identity
+
+**Validation: The original concern was overstated.** TLS is optional for the
+default loopback listener, but configuration rejects non-loopback plaintext
+unless the operator explicitly enables `tls.insecure_remote`. The private Engine
+adapter requires TLS. Static bearer principals are loaded from environment or
+files and compared as constant-time keyed hashes.
+
+The remaining future concern is production identity, not an accidental open
+listener. Define production profiles that prohibit the danger flag, support
+certificate verification and rotation, and replace static bootstrap credentials
+with mTLS or short-lived workload identity when deployment requirements justify
+it.
+
+### Python Studio implementation
+
+**Validation: Reclassified.** Studio's README explicitly defines the Python
+client as a protocol regression harness, not a second supported editor product.
+Keep that status explicit. Its independent parser remains useful only while it
+shares normative fixtures and participates in protocol conformance tests; do
+not let it acquire separate product semantics.
+
+### Telemetry repository boundary
+
+**Validation: No concern found with the split.** Telemetry has a normative
+versioned C ABI, size/version negotiation, bounded inputs and queues, no-op
+failure behavior, and Windows/Linux/macOS ABI validation plus a C# smoke test.
+Its independent repository is justified by the multi-language host boundary.
+
+Keep the ABI narrow and optional. Do not fold general application logging,
+arbitrary payloads, project contents, or host authority into it.
+
+## Ongoing invariant audits
+
+These questions remain valuable audits but were not validated as defects:
+
+1. Do all external authoritative mutations pass validation, capability checks,
+   and `MutationGateway`, while trusted internal mutation remains explicit and
+   journal-correct?
+2. Does every journal-suppressed mutation have an intentional replacement
+   publication or a proven non-authoritative receiver scope?
+3. Can commit/response/projection failures always distinguish not-committed,
+   committed-and-observed, and committed-but-projection-unavailable states?
+4. Do 65,536-object documents, 4,096-record journal windows, replication frames,
+   and network queues remain usable under one combined end-to-end workload?
+5. Can supported rolling upgrades preserve schema, package, replication, Node,
+   Studio, MCP, and Telemetry compatibility without treating their versions as
+   one global version?
+
+The numeric architecture score, maturity label, and product-success prediction
+from the source review are opinions, not repository facts, and are intentionally
+not adopted as architecture requirements.
