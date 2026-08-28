@@ -8,6 +8,7 @@
 #include "gargantuan/render/RenderEnvironment.hpp"
 #include "gargantuan/render/RenderSnapshot.hpp"
 
+#include <array>
 #include <cstddef>
 #include <compare>
 #include <cstdint>
@@ -37,6 +38,7 @@ namespace gargantuan {
 		DeformableVertices = 1u << 4,
 		Hierarchy = 1u << 5,
 		Environment = 1u << 6,
+		AnimationPose = 1u << 7,
 	};
 
 	[[nodiscard]] constexpr RenderUpdateDomain operator|(RenderUpdateDomain Left, RenderUpdateDomain Right) {
@@ -133,10 +135,38 @@ namespace gargantuan {
 		glm::vec3 Maximum{0.0f};
 	};
 
+	struct RenderSkinInfluence {
+		std::array<std::uint16_t, 4> Joints{};
+		glm::vec4 Weights{0.0f};
+	};
+
 	struct RenderMeshCreate {
 		RenderMeshIdentity Mesh;
 		std::uint64_t TopologyRevision = 0;
 		std::uint64_t VertexRevision = 0;
+		std::shared_ptr<const std::vector<RenderVertex>> Vertices;
+		std::shared_ptr<const std::vector<std::uint32_t>> Indices;
+		RenderBounds Bounds;
+		std::shared_ptr<const std::vector<RenderSkinInfluence>> SkinInfluences;
+	};
+
+	struct RenderAnimationPoseUpdate {
+		ObjectId Object;
+		RenderMeshIdentity SourceMesh;
+		RenderMeshIdentity PosedMesh;
+		std::uint64_t PoseRevision = 0;
+		std::shared_ptr<const std::vector<glm::mat4>> BonePalette;
+	};
+
+	struct RenderAnimationPoseRemove { ObjectId Object; };
+
+	// Complete renderer-neutral state handed from animation evaluation to the
+	// publisher. The publication separates the semantic palette update from the
+	// temporary CPU-skinned mesh upload so a future backend can consume the
+	// static source mesh and palette directly.
+	struct RenderAnimationPoseState {
+		RenderAnimationPoseUpdate Pose;
+		std::uint64_t TopologyRevision = 0;
 		std::shared_ptr<const std::vector<RenderVertex>> Vertices;
 		std::shared_ptr<const std::vector<std::uint32_t>> Indices;
 		RenderBounds Bounds;
@@ -193,6 +223,8 @@ namespace gargantuan {
 		std::vector<RenderMeshCreate> MeshCreates;
 		std::vector<RenderMeshVertexUpdate> MeshVertexUpdates;
 		std::vector<RenderMeshRemove> MeshRemoves;
+		std::vector<RenderAnimationPoseUpdate> AnimationPoseUpdates;
+		std::vector<RenderAnimationPoseRemove> AnimationPoseRemoves;
 		std::vector<RenderTextureCreate> TextureCreates;
 		std::vector<RenderTextureUpdate> TextureUpdates;
 		std::vector<RenderTextureRemove> TextureRemoves;

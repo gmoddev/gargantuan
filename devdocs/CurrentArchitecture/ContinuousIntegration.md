@@ -86,11 +86,11 @@ executable does not relink. `gargantuan_packaged_shaders` compares that runtime
 directory with the complete source shader set and fails when a compiled output
 is missing.
 
-The Windows production contract contains 38 tests. A local configuration with
-`GARGANTUAN_WITH_GNS=OFF` and renderer benchmarks disabled omits the two
-real-transport and two renderer-headless entries and therefore contains 34;
-that reduced matrix is not the complete Windows gate. Current CMake and this
-document are authoritative.
+The Windows production contract contains 42 tests. The Linux sanitizer
+configuration with `GARGANTUAN_WITH_GNS=OFF` and renderer benchmarks disabled
+omits the two real-transport and two renderer-headless entries and therefore
+contains 38; that reduced matrix is not the complete Windows gate. Current
+CMake and this document are authoritative.
 
 | Coverage | Existing CTest entries |
 | --- | --- |
@@ -98,6 +98,7 @@ document are authoritative.
 | Runtime shader package completeness | `gargantuan_packaged_shaders` |
 | Foundation/runtime, persistence and serialization, EditorHost/protocol, render extraction and backend boundary | `gargantuan_foundation` |
 | Asset import, canonical artifact, dependency graph, and runtime materialization | `gargantuan_asset_foundation` |
+| Skeletal import/artifacts, playback/blending, CPU skinning, pose publication, lifecycle, and bounded Release smoke | `gargantuan_animation_foundation`, `gargantuan_animation_foundation_benchmark_smoke` |
 | Optional telemetry dynamic loading, ABI negotiation, consent, privacy, and fail-open lifecycle | `gargantuan_optional_telemetry` |
 | Physics | `gargantuan_physics_backend` |
 | Soft-body runtime and bounded Release smoke | `gargantuan_soft_body_physics`, `gargantuan_soft_body_physics_benchmark_smoke` |

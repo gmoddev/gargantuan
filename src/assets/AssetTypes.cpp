@@ -48,6 +48,7 @@ namespace gargantuan {
 			case AssetKind::Font: return "Font";
 			case AssetKind::Material: return "Material";
 			case AssetKind::Audio: return "Audio";
+			case AssetKind::Animation: return "Animation";
 		}
 		return "Unknown";
 	}
@@ -58,6 +59,7 @@ namespace gargantuan {
 		if (Value == "Font") return AssetKind::Font;
 		if (Value == "Material") return AssetKind::Material;
 		if (Value == "Audio") return AssetKind::Audio;
+		if (Value == "Animation") return AssetKind::Animation;
 		return std::nullopt;
 	}
 

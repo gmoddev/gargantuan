@@ -18,14 +18,17 @@
 #include <string>
 #include <tuple>
 #include <unordered_map>
+#include <unordered_set>
 
 #include <glm/geometric.hpp>
+#include <glm/gtc/matrix_inverse.hpp>
 
 namespace gargantuan {
 	namespace {
 		constexpr std::array<std::uint8_t, 8> ArtifactMagic{'G', 'A', 'R', 'G', 'A', 'S', '0', '1'};
 		constexpr std::uint32_t ArtifactVersion1 = 1;
 		constexpr std::uint32_t ArtifactVersion2 = 2;
+		constexpr std::uint32_t ArtifactVersion3 = 3;
 
 		AssetDiagnostic Error(std::string Code, std::string Message) {
 			if (Message.size() > AssetLimits::MaximumDiagnosticBytes) Message.resize(AssetLimits::MaximumDiagnosticBytes);
@@ -87,6 +90,25 @@ namespace gargantuan {
 			AppendU32(Result, Version);
 			Result.push_back(static_cast<std::uint8_t>(Kind));
 			return Result;
+		}
+
+		AssetContentId CalculateSkeletonCompatibilityId(std::span<const ImportedSkeletonJoint> Joints) {
+			std::vector<std::uint8_t> Bytes;
+			Bytes.reserve(Joints.size() * 128);
+			for (const auto &Joint : Joints) {
+				Bytes.insert(Bytes.end(), Joint.Path.begin(), Joint.Path.end());
+				Bytes.push_back(0);
+				AppendU32(Bytes, std::bit_cast<std::uint32_t>(Joint.Parent));
+				for (const auto Component : {Joint.BindTranslation.x, Joint.BindTranslation.y,
+					Joint.BindTranslation.z, Joint.BindRotation.x, Joint.BindRotation.y,
+					Joint.BindRotation.z, Joint.BindRotation.w, Joint.BindScale.x,
+					Joint.BindScale.y, Joint.BindScale.z})
+					AppendU32(Bytes, std::bit_cast<std::uint32_t>(Component));
+				for (glm::length_t Column = 0; Column < 4; ++Column)
+					for (glm::length_t Row = 0; Row < 4; ++Row)
+						AppendU32(Bytes, std::bit_cast<std::uint32_t>(Joint.InverseBindMatrix[Column][Row]));
+			}
+			return AssetContentId::Hash(Bytes);
 		}
 
 		std::expected<std::pair<std::uint32_t, std::uint32_t>, AssetDiagnostic> ReadImageDimensions(
@@ -528,7 +550,8 @@ namespace gargantuan {
 		Result.push_back(std::make_unique<MeshImporter>());
 		Result.push_back(std::make_unique<FontImporter>());
 		Result.push_back(std::make_unique<WaveImporter>());
-		Result.push_back(CreateGltfImporter());
+		Result.push_back(CreateGltfImporter(AssetKind::Mesh));
+		Result.push_back(CreateGltfImporter(AssetKind::Animation));
 		return Result;
 	}
 
@@ -540,9 +563,13 @@ namespace gargantuan {
 			(Kind == AssetKind::Mesh && !std::holds_alternative<ImportedMesh>(Asset)) ||
 			(Kind == AssetKind::Font && !std::holds_alternative<ImportedFont>(Asset)) ||
 			(Kind == AssetKind::Material && !std::holds_alternative<ImportedMaterial>(Asset)) ||
-			(Kind == AssetKind::Audio && !std::holds_alternative<ImportedAudio>(Asset)))
+			(Kind == AssetKind::Audio && !std::holds_alternative<ImportedAudio>(Asset)) ||
+			(Kind == AssetKind::Animation && !std::holds_alternative<ImportedAnimation>(Asset)))
 			return std::unexpected(Error("ArtifactKindMismatch", "Canonical value does not match its asset kind"));
-		auto Artifact = BeginArtifact(Kind, ArtifactVersion2);
+		const auto *MeshValue = std::get_if<ImportedMesh>(&Asset);
+		const auto Version = Kind == AssetKind::Animation || (MeshValue && MeshValue->Skeleton)
+			? ArtifactVersion3 : ArtifactVersion2;
+		auto Artifact = BeginArtifact(Kind, Version);
 		if (const auto *Image = std::get_if<ImportedImage>(&Asset)) {
 			if (!Image->Rgba8 || Image->Width == 0 || Image->Height == 0 ||
 				Image->Rgba8->size() != static_cast<std::size_t>(Image->Width) * Image->Height * 4)
@@ -595,6 +622,65 @@ namespace gargantuan {
 					AppendU64(Artifact, Primitive.Material->Low);
 				}
 			}
+			if (Version == ArtifactVersion3) {
+				if (!Mesh->Skeleton || !Mesh->Skeleton->Joints || Mesh->Skeleton->Joints->empty() ||
+					Mesh->Skeleton->Joints->size() > AssetLimits::MaximumSkeletonBones ||
+					!Mesh->Skeleton->CompatibilityId.IsValid() || !Mesh->SkinInfluences ||
+					Mesh->SkinInfluences->size() != Mesh->Vertices->size())
+					return std::unexpected(Error("MalformedSkeleton", "Canonical skinned mesh skeleton or influences are invalid"));
+				Artifact.push_back(1);
+				Artifact.insert(Artifact.end(), Mesh->Skeleton->CompatibilityId.Bytes.begin(),
+					Mesh->Skeleton->CompatibilityId.Bytes.end());
+				AppendU32(Artifact, static_cast<std::uint32_t>(Mesh->Skeleton->Joints->size()));
+				std::unordered_set<std::string> JointPaths;
+				for (std::size_t JointIndex = 0; JointIndex < Mesh->Skeleton->Joints->size(); ++JointIndex) {
+					const auto &Joint = (*Mesh->Skeleton->Joints)[JointIndex];
+					if (Joint.Path.empty() || Joint.Path.size() > AssetLimits::MaximumJointPathBytes ||
+						!JointPaths.insert(Joint.Path).second || Joint.Parent < -1 ||
+						(Joint.Parent >= 0 && static_cast<std::size_t>(Joint.Parent) >= JointIndex))
+						return std::unexpected(Error("MalformedSkeleton", "Canonical skeleton joint identity or hierarchy is invalid"));
+					if (Joint.Path.size() > std::numeric_limits<std::uint16_t>::max())
+						return std::unexpected(Error("MalformedSkeleton", "Canonical skeleton joint path is oversized"));
+					AppendU16(Artifact, static_cast<std::uint16_t>(Joint.Path.size()));
+					Artifact.insert(Artifact.end(), Joint.Path.begin(), Joint.Path.end());
+					AppendU32(Artifact, std::bit_cast<std::uint32_t>(Joint.Parent));
+					for (const auto Component : {Joint.BindTranslation.x, Joint.BindTranslation.y, Joint.BindTranslation.z,
+						Joint.BindRotation.x, Joint.BindRotation.y, Joint.BindRotation.z, Joint.BindRotation.w,
+						Joint.BindScale.x, Joint.BindScale.y, Joint.BindScale.z})
+						if (!std::isfinite(Component)) return std::unexpected(Error("MalformedSkeleton", "Canonical skeleton transform is non-finite"));
+					if (glm::length(Joint.BindRotation) < 1.0e-6f ||
+						std::abs(glm::length(Joint.BindRotation) - 1.0f) > 1.0e-4f ||
+						std::abs(Joint.BindScale.x) < 1.0e-8f || std::abs(Joint.BindScale.y) < 1.0e-8f ||
+						std::abs(Joint.BindScale.z) < 1.0e-8f)
+						return std::unexpected(Error("MalformedSkeleton", "Canonical skeleton bind transform is singular or invalid"));
+					for (const auto Component : {Joint.BindTranslation.x, Joint.BindTranslation.y, Joint.BindTranslation.z,
+						Joint.BindRotation.x, Joint.BindRotation.y, Joint.BindRotation.z, Joint.BindRotation.w,
+						Joint.BindScale.x, Joint.BindScale.y, Joint.BindScale.z}) AppendFloat(Artifact, Component);
+					for (glm::length_t Column = 0; Column < 4; ++Column)
+						for (glm::length_t Row = 0; Row < 4; ++Row) {
+							const auto Component = Joint.InverseBindMatrix[Column][Row];
+							if (!std::isfinite(Component)) return std::unexpected(Error("MalformedSkeleton", "Canonical inverse bind matrix is non-finite"));
+							AppendFloat(Artifact, Component);
+						}
+					if (std::abs(glm::determinant(Joint.InverseBindMatrix)) < 1.0e-12f)
+						return std::unexpected(Error("MalformedSkeleton", "Canonical inverse bind matrix is singular"));
+				}
+				if (CalculateSkeletonCompatibilityId(*Mesh->Skeleton->Joints) != Mesh->Skeleton->CompatibilityId)
+					return std::unexpected(Error("MalformedSkeleton", "Canonical skeleton compatibility identity does not match its contents"));
+				for (const auto &Influence : *Mesh->SkinInfluences) {
+					float Sum = 0.0f;
+					for (std::size_t Index = 0; Index < 4; ++Index) {
+						if (Influence.Joints[Index] >= Mesh->Skeleton->Joints->size() ||
+							!std::isfinite(Influence.Weights[Index]) || Influence.Weights[Index] < 0.0f)
+							return std::unexpected(Error("MalformedSkinWeights", "Canonical skin influence is invalid"));
+						AppendU16(Artifact, Influence.Joints[Index]);
+						AppendFloat(Artifact, Influence.Weights[Index]);
+						Sum += Influence.Weights[Index];
+					}
+					if (std::abs(Sum - 1.0f) > 1.0e-4f)
+						return std::unexpected(Error("MalformedSkinWeights", "Canonical skin weights are not normalized"));
+				}
+			}
 		} else if (const auto *Material = std::get_if<ImportedMaterial>(&Asset)) {
 			for (const auto Component : {Material->BaseColorFactor.x, Material->BaseColorFactor.y,
 				Material->BaseColorFactor.z, Material->BaseColorFactor.w, Material->MetallicFactor,
@@ -627,6 +713,85 @@ namespace gargantuan {
 			AppendU32(Artifact, Audio->FrameCount);
 			for (const auto Sample : *Audio->Pcm16)
 				AppendU16(Artifact, std::bit_cast<std::uint16_t>(Sample));
+		} else if (const auto *Animation = std::get_if<ImportedAnimation>(&Asset)) {
+			if (!std::isfinite(Animation->Duration) || Animation->Duration <= 0.0f ||
+				Animation->Duration > AssetLimits::MaximumAnimationDurationSeconds ||
+				!Animation->SkeletonCompatibilityId.IsValid() || !Animation->SkeletonAsset ||
+				!Animation->SkeletonAsset->IsValid() || !Animation->Tracks || Animation->Tracks->empty() ||
+				Animation->Tracks->size() > AssetLimits::MaximumAnimationTracks)
+				return std::unexpected(Error("MalformedAnimation", "Canonical animation metadata is invalid"));
+			AppendFloat(Artifact, Animation->Duration);
+			Artifact.insert(Artifact.end(), Animation->SkeletonCompatibilityId.Bytes.begin(),
+				Animation->SkeletonCompatibilityId.Bytes.end());
+			AppendU64(Artifact, Animation->SkeletonAsset->High);
+			AppendU64(Artifact, Animation->SkeletonAsset->Low);
+			AppendU32(Artifact, static_cast<std::uint32_t>(Animation->Tracks->size()));
+			std::unordered_set<std::string> Paths;
+			std::size_t TotalKeys = 0;
+			for (const auto &Track : *Animation->Tracks) {
+				if (Track.JointPath.empty() || Track.JointPath.size() > AssetLimits::MaximumJointPathBytes ||
+					Track.JointPath.size() > std::numeric_limits<std::uint16_t>::max() ||
+					!Paths.insert(Track.JointPath).second)
+					return std::unexpected(Error("MalformedAnimation", "Animation track joint identity is invalid or duplicated"));
+				AppendU16(Artifact, static_cast<std::uint16_t>(Track.JointPath.size()));
+				Artifact.insert(Artifact.end(), Track.JointPath.begin(), Track.JointPath.end());
+				for (const auto Interpolation : {Track.TranslationInterpolation, Track.RotationInterpolation,
+					Track.ScaleInterpolation}) {
+					if (Interpolation != AssetAnimationInterpolation::Step && Interpolation != AssetAnimationInterpolation::Linear)
+						return std::unexpected(Error("MalformedAnimation", "Animation interpolation mode is invalid"));
+					Artifact.push_back(static_cast<std::uint8_t>(Interpolation));
+				}
+				auto EncodeVectorKeys = [&](const std::shared_ptr<const std::vector<ImportedAnimationVectorKey>> &Keys,
+					bool IsScale, AssetAnimationInterpolation Interpolation) -> bool {
+					const auto Count = Keys ? Keys->size() : 0;
+					if (Count > AssetLimits::MaximumAnimationKeyframesPerTrack ||
+						Count > AssetLimits::MaximumAnimationKeyframes - std::min(TotalKeys, AssetLimits::MaximumAnimationKeyframes))
+						return false;
+					TotalKeys += Count;
+					AppendU32(Artifact, static_cast<std::uint32_t>(Count));
+					float Previous = -1.0f;
+					std::optional<glm::vec3> PreviousValue;
+					if (Keys) for (const auto &Key : *Keys) {
+						if (!std::isfinite(Key.Time) || Key.Time < 0.0f || Key.Time <= Previous ||
+							Key.Time > Animation->Duration || !std::isfinite(Key.Value.x) ||
+							!std::isfinite(Key.Value.y) || !std::isfinite(Key.Value.z)) return false;
+						if (IsScale && (std::abs(Key.Value.x) < 1.0e-8f || std::abs(Key.Value.y) < 1.0e-8f ||
+							std::abs(Key.Value.z) < 1.0e-8f)) return false;
+						if (IsScale && Interpolation == AssetAnimationInterpolation::Linear && PreviousValue &&
+							(PreviousValue->x * Key.Value.x < 0.0f || PreviousValue->y * Key.Value.y < 0.0f ||
+							PreviousValue->z * Key.Value.z < 0.0f)) return false;
+						Previous = Key.Time;
+						PreviousValue = Key.Value;
+						AppendFloat(Artifact, Key.Time); AppendFloat(Artifact, Key.Value.x);
+						AppendFloat(Artifact, Key.Value.y); AppendFloat(Artifact, Key.Value.z);
+					}
+					return true;
+				};
+				if (!EncodeVectorKeys(Track.TranslationKeys, false, Track.TranslationInterpolation))
+					return std::unexpected(Error("MalformedAnimation", "Animation translation keys are invalid"));
+				const auto RotationCount = Track.RotationKeys ? Track.RotationKeys->size() : 0;
+				if (RotationCount > AssetLimits::MaximumAnimationKeyframesPerTrack ||
+					RotationCount > AssetLimits::MaximumAnimationKeyframes - std::min(TotalKeys, AssetLimits::MaximumAnimationKeyframes))
+					return std::unexpected(Error("AnimationLimit", "Animation rotation key count exceeds its limit"));
+				TotalKeys += RotationCount;
+				AppendU32(Artifact, static_cast<std::uint32_t>(RotationCount));
+				float PreviousRotationTime = -1.0f;
+				if (Track.RotationKeys) for (const auto &Key : *Track.RotationKeys) {
+					if (!std::isfinite(Key.Time) || Key.Time < 0.0f || Key.Time <= PreviousRotationTime ||
+						Key.Time > Animation->Duration || !std::isfinite(Key.Value.x) || !std::isfinite(Key.Value.y) ||
+						!std::isfinite(Key.Value.z) || !std::isfinite(Key.Value.w) || glm::length(Key.Value) < 1.0e-6f)
+						return std::unexpected(Error("MalformedAnimation", "Animation rotation keys are invalid"));
+					PreviousRotationTime = Key.Time;
+					const auto Rotation = glm::normalize(Key.Value);
+					AppendFloat(Artifact, Key.Time); AppendFloat(Artifact, Rotation.x); AppendFloat(Artifact, Rotation.y);
+					AppendFloat(Artifact, Rotation.z); AppendFloat(Artifact, Rotation.w);
+				}
+				if (!EncodeVectorKeys(Track.ScaleKeys, true, Track.ScaleInterpolation))
+					return std::unexpected(Error("MalformedAnimation", "Animation scale keys are invalid"));
+				if ((!Track.TranslationKeys || Track.TranslationKeys->empty()) &&
+					(!Track.RotationKeys || Track.RotationKeys->empty()) && (!Track.ScaleKeys || Track.ScaleKeys->empty()))
+					return std::unexpected(Error("MalformedAnimation", "Animation track contains no channels"));
+			}
 		}
 		if (Artifact.size() > AssetLimits::MaximumArtifactBytes)
 			return std::unexpected(Error("ArtifactLimit", "Canonical artifact exceeds its byte limit"));
@@ -645,7 +810,7 @@ namespace gargantuan {
 			return std::unexpected(Error("IntegrityFailure", "Asset artifact content hash does not match the catalog"));
 		std::size_t Offset = ArtifactMagic.size();
 		auto Version = ReadU32(Artifact, Offset);
-		if (!Version || (*Version != ArtifactVersion1 && *Version != ArtifactVersion2) || Offset >= Artifact.size() ||
+		if (!Version || (*Version != ArtifactVersion1 && *Version != ArtifactVersion2 && *Version != ArtifactVersion3) || Offset >= Artifact.size() ||
 			Artifact[Offset++] != static_cast<std::uint8_t>(ExpectedKind))
 			return std::unexpected(Error("UnsupportedArtifact", "Asset artifact version or kind is unsupported"));
 
@@ -748,6 +913,117 @@ namespace gargantuan {
 			};
 		}
 
+		if (ExpectedKind == AssetKind::Animation) {
+			if (*Version != ArtifactVersion3)
+				return std::unexpected(Error("UnsupportedArtifact", "Animation assets require artifact version 3"));
+			auto Duration = ReadFloat(Artifact, Offset);
+			if (!Duration || *Duration <= 0.0f || *Duration > AssetLimits::MaximumAnimationDurationSeconds ||
+				Offset > Artifact.size() || Artifact.size() - Offset < 32)
+				return std::unexpected(Error("MalformedArtifact", "Animation artifact metadata is invalid"));
+			AssetContentId Compatibility;
+			std::copy_n(Artifact.begin() + Offset, Compatibility.Bytes.size(), Compatibility.Bytes.begin());
+			Offset += Compatibility.Bytes.size();
+			auto SkeletonHigh = ReadU64(Artifact, Offset), SkeletonLow = ReadU64(Artifact, Offset);
+			auto TrackCount = ReadU32(Artifact, Offset);
+			if (!Compatibility.IsValid() || !SkeletonHigh || !SkeletonLow ||
+				!AssetId{*SkeletonHigh, *SkeletonLow}.IsValid() || !TrackCount || *TrackCount == 0 ||
+				*TrackCount > AssetLimits::MaximumAnimationTracks)
+				return std::unexpected(Error("MalformedArtifact", "Animation artifact identity or track count is invalid"));
+			auto Tracks = std::make_shared<std::vector<ImportedAnimationTrack>>();
+			Tracks->reserve(*TrackCount);
+			std::unordered_set<std::string> Paths;
+			std::size_t TotalKeys = 0;
+			for (std::uint32_t TrackIndex = 0; TrackIndex < *TrackCount; ++TrackIndex) {
+				auto PathBytes = ReadU16(Artifact, Offset);
+				if (!PathBytes || *PathBytes == 0 || *PathBytes > AssetLimits::MaximumJointPathBytes ||
+					Offset > Artifact.size() || *PathBytes > Artifact.size() - Offset)
+					return std::unexpected(Error("MalformedArtifact", "Animation artifact joint path is invalid"));
+				ImportedAnimationTrack Track;
+				Track.JointPath.assign(reinterpret_cast<const char *>(Artifact.data() + Offset), *PathBytes);
+				Offset += *PathBytes;
+				if (!Paths.insert(Track.JointPath).second || Offset > Artifact.size() || Artifact.size() - Offset < 3)
+					return std::unexpected(Error("MalformedArtifact", "Animation artifact contains duplicate tracks"));
+				auto ReadInterpolation = [&]() -> std::optional<AssetAnimationInterpolation> {
+					if (Offset >= Artifact.size() || Artifact[Offset] > static_cast<std::uint8_t>(AssetAnimationInterpolation::Linear))
+						return std::nullopt;
+					return static_cast<AssetAnimationInterpolation>(Artifact[Offset++]);
+				};
+				auto TranslationInterpolation = ReadInterpolation(), RotationInterpolation = ReadInterpolation(),
+					ScaleInterpolation = ReadInterpolation();
+				if (!TranslationInterpolation || !RotationInterpolation || !ScaleInterpolation)
+					return std::unexpected(Error("MalformedArtifact", "Animation artifact interpolation is invalid"));
+				Track.TranslationInterpolation = *TranslationInterpolation;
+				Track.RotationInterpolation = *RotationInterpolation;
+				Track.ScaleInterpolation = *ScaleInterpolation;
+				auto DecodeVectorKeys = [&](bool IsScale, AssetAnimationInterpolation Interpolation) -> std::expected<
+					std::shared_ptr<const std::vector<ImportedAnimationVectorKey>>, AssetDiagnostic> {
+					auto Count = ReadU32(Artifact, Offset);
+					if (!Count || *Count > AssetLimits::MaximumAnimationKeyframesPerTrack ||
+						*Count > AssetLimits::MaximumAnimationKeyframes - std::min(TotalKeys, AssetLimits::MaximumAnimationKeyframes))
+						return std::unexpected(Error("AnimationLimit", "Animation artifact key count exceeds its limit"));
+					TotalKeys += *Count;
+					auto Keys = std::make_shared<std::vector<ImportedAnimationVectorKey>>();
+					Keys->reserve(*Count);
+					float Previous = -1.0f;
+					std::optional<glm::vec3> PreviousValue;
+					for (std::uint32_t Index = 0; Index < *Count; ++Index) {
+						auto Time = ReadFloat(Artifact, Offset), X = ReadFloat(Artifact, Offset),
+							Y = ReadFloat(Artifact, Offset), Z = ReadFloat(Artifact, Offset);
+						if (!Time || !X || !Y || !Z || *Time < 0.0f || *Time <= Previous || *Time > *Duration)
+							return std::unexpected(Error("MalformedArtifact", "Animation artifact vector key is invalid"));
+						const glm::vec3 Value{*X, *Y, *Z};
+						if (IsScale && (std::abs(Value.x) < 1.0e-8f || std::abs(Value.y) < 1.0e-8f ||
+							std::abs(Value.z) < 1.0e-8f))
+							return std::unexpected(Error("MalformedArtifact", "Animation artifact scale key is singular"));
+						if (IsScale && Interpolation == AssetAnimationInterpolation::Linear && PreviousValue &&
+							(PreviousValue->x * Value.x < 0.0f || PreviousValue->y * Value.y < 0.0f ||
+							PreviousValue->z * Value.z < 0.0f))
+							return std::unexpected(Error("MalformedArtifact", "Animation artifact scale interpolation becomes singular"));
+						Previous = *Time;
+						PreviousValue = Value;
+						Keys->push_back({*Time, Value});
+					}
+					return std::shared_ptr<const std::vector<ImportedAnimationVectorKey>>(std::move(Keys));
+				};
+				auto TranslationKeys = DecodeVectorKeys(false, Track.TranslationInterpolation);
+				if (!TranslationKeys) return std::unexpected(TranslationKeys.error());
+				Track.TranslationKeys = *TranslationKeys;
+				auto RotationCount = ReadU32(Artifact, Offset);
+				if (!RotationCount || *RotationCount > AssetLimits::MaximumAnimationKeyframesPerTrack ||
+					*RotationCount > AssetLimits::MaximumAnimationKeyframes - std::min(TotalKeys, AssetLimits::MaximumAnimationKeyframes))
+					return std::unexpected(Error("AnimationLimit", "Animation artifact rotation count exceeds its limit"));
+				TotalKeys += *RotationCount;
+				auto RotationKeys = std::make_shared<std::vector<ImportedAnimationRotationKey>>();
+				RotationKeys->reserve(*RotationCount);
+				float PreviousRotation = -1.0f;
+				for (std::uint32_t Index = 0; Index < *RotationCount; ++Index) {
+					auto Time = ReadFloat(Artifact, Offset), X = ReadFloat(Artifact, Offset), Y = ReadFloat(Artifact, Offset),
+						Z = ReadFloat(Artifact, Offset), W = ReadFloat(Artifact, Offset);
+					if (!Time || !X || !Y || !Z || !W || *Time < 0.0f || *Time <= PreviousRotation || *Time > *Duration)
+						return std::unexpected(Error("MalformedArtifact", "Animation artifact rotation key is invalid"));
+					glm::quat Rotation(*W, *X, *Y, *Z);
+					if (glm::length(Rotation) < 1.0e-6f)
+						return std::unexpected(Error("MalformedArtifact", "Animation artifact rotation is near zero"));
+					PreviousRotation = *Time;
+					RotationKeys->push_back({*Time, glm::normalize(Rotation)});
+				}
+				Track.RotationKeys = std::move(RotationKeys);
+				auto ScaleKeys = DecodeVectorKeys(true, Track.ScaleInterpolation);
+				if (!ScaleKeys) return std::unexpected(ScaleKeys.error());
+				Track.ScaleKeys = *ScaleKeys;
+				if (Track.TranslationKeys->empty() && Track.RotationKeys->empty() && Track.ScaleKeys->empty())
+					return std::unexpected(Error("MalformedArtifact", "Animation artifact track contains no keys"));
+				Tracks->push_back(std::move(Track));
+			}
+			if (Offset != Artifact.size())
+				return std::unexpected(Error("MalformedArtifact", "Animation artifact has trailing bytes"));
+			return AssetImportCandidate{
+				ImportedAnimation{*Duration, Compatibility, AssetId{*SkeletonHigh, *SkeletonLow},
+					std::shared_ptr<const std::vector<ImportedAnimationTrack>>(std::move(Tracks))},
+				std::make_shared<const std::vector<std::uint8_t>>(Artifact.begin(), Artifact.end()), ExpectedContentId,
+			};
+		}
+
 		auto VertexCount = ReadU32(Artifact, Offset), IndexCount = ReadU32(Artifact, Offset), SubmeshCount = ReadU32(Artifact, Offset);
 		if (!VertexCount || !IndexCount || !SubmeshCount || *VertexCount == 0 || *IndexCount == 0 ||
 			*VertexCount > AssetLimits::MaximumMeshVertices || *IndexCount > AssetLimits::MaximumMeshIndices ||
@@ -804,8 +1080,85 @@ namespace gargantuan {
 				Primitives->push_back({*FirstIndex, *PrimitiveIndexCount, Material});
 			}
 		}
+		std::shared_ptr<const ImportedSkeleton> Skeleton;
+		std::shared_ptr<const std::vector<ImportedSkinInfluence>> SkinInfluences;
+		if (*Version == ArtifactVersion3) {
+			if (Offset >= Artifact.size() || Artifact[Offset++] != 1 || Artifact.size() - Offset < 32)
+				return std::unexpected(Error("MalformedArtifact", "Skinned mesh artifact skeleton marker is invalid"));
+			AssetContentId Compatibility;
+			std::copy_n(Artifact.begin() + Offset, Compatibility.Bytes.size(), Compatibility.Bytes.begin());
+			Offset += Compatibility.Bytes.size();
+			auto JointCount = ReadU32(Artifact, Offset);
+			if (!Compatibility.IsValid() || !JointCount || *JointCount == 0 ||
+				*JointCount > AssetLimits::MaximumSkeletonBones)
+				return std::unexpected(Error("MalformedArtifact", "Skinned mesh artifact joint count is invalid"));
+			auto Joints = std::make_shared<std::vector<ImportedSkeletonJoint>>();
+			Joints->reserve(*JointCount);
+			std::unordered_set<std::string> Paths;
+			for (std::uint32_t JointIndex = 0; JointIndex < *JointCount; ++JointIndex) {
+				auto PathBytes = ReadU16(Artifact, Offset);
+				if (!PathBytes || *PathBytes == 0 || *PathBytes > AssetLimits::MaximumJointPathBytes ||
+					Offset > Artifact.size() || *PathBytes > Artifact.size() - Offset)
+					return std::unexpected(Error("MalformedArtifact", "Skinned mesh artifact joint path is invalid"));
+				ImportedSkeletonJoint Joint;
+				Joint.Path.assign(reinterpret_cast<const char *>(Artifact.data() + Offset), *PathBytes);
+				Offset += *PathBytes;
+				auto ParentBits = ReadU32(Artifact, Offset);
+				if (!ParentBits || !Paths.insert(Joint.Path).second)
+					return std::unexpected(Error("MalformedArtifact", "Skinned mesh artifact joint identity is duplicated"));
+				Joint.Parent = std::bit_cast<std::int32_t>(*ParentBits);
+				if (Joint.Parent < -1 || (Joint.Parent >= 0 && static_cast<std::uint32_t>(Joint.Parent) >= JointIndex))
+					return std::unexpected(Error("MalformedArtifact", "Skinned mesh artifact hierarchy is invalid"));
+				std::array<float *, 10> TransformValues{&Joint.BindTranslation.x, &Joint.BindTranslation.y,
+					&Joint.BindTranslation.z, &Joint.BindRotation.x, &Joint.BindRotation.y, &Joint.BindRotation.z,
+					&Joint.BindRotation.w, &Joint.BindScale.x, &Joint.BindScale.y, &Joint.BindScale.z};
+				for (auto *Destination : TransformValues) {
+					auto Value = ReadFloat(Artifact, Offset);
+					if (!Value) return std::unexpected(Error("MalformedArtifact", "Skinned mesh artifact bind transform is invalid"));
+					*Destination = *Value;
+				}
+				if (glm::length(Joint.BindRotation) < 1.0e-6f ||
+					std::abs(glm::length(Joint.BindRotation) - 1.0f) > 1.0e-4f ||
+					std::abs(Joint.BindScale.x) < 1.0e-8f || std::abs(Joint.BindScale.y) < 1.0e-8f ||
+					std::abs(Joint.BindScale.z) < 1.0e-8f)
+					return std::unexpected(Error("MalformedArtifact", "Skinned mesh artifact bind transform is singular or invalid"));
+				for (glm::length_t Column = 0; Column < 4; ++Column)
+					for (glm::length_t Row = 0; Row < 4; ++Row) {
+						auto Value = ReadFloat(Artifact, Offset);
+						if (!Value) return std::unexpected(Error("MalformedArtifact", "Skinned mesh inverse bind matrix is invalid"));
+						Joint.InverseBindMatrix[Column][Row] = *Value;
+					}
+				if (std::abs(glm::determinant(Joint.InverseBindMatrix)) < 1.0e-12f)
+					return std::unexpected(Error("MalformedArtifact", "Skinned mesh inverse bind matrix is singular"));
+				Joints->push_back(std::move(Joint));
+			}
+			if (CalculateSkeletonCompatibilityId(*Joints) != Compatibility)
+				return std::unexpected(Error("MalformedArtifact", "Skinned mesh compatibility identity does not match its skeleton"));
+			for (auto &Joint : *Joints) Joint.BindRotation = glm::normalize(Joint.BindRotation);
+			auto Influences = std::make_shared<std::vector<ImportedSkinInfluence>>();
+			Influences->reserve(*VertexCount);
+			for (std::uint32_t VertexIndex = 0; VertexIndex < *VertexCount; ++VertexIndex) {
+				ImportedSkinInfluence Influence;
+				float Sum = 0.0f;
+				for (std::size_t Index = 0; Index < 4; ++Index) {
+					auto Joint = ReadU16(Artifact, Offset);
+					auto Weight = ReadFloat(Artifact, Offset);
+					if (!Joint || !Weight || *Joint >= *JointCount || *Weight < 0.0f)
+						return std::unexpected(Error("MalformedArtifact", "Skinned mesh influence is invalid"));
+					Influence.Joints[Index] = *Joint;
+					Influence.Weights[Index] = *Weight;
+					Sum += *Weight;
+				}
+				if (std::abs(Sum - 1.0f) > 1.0e-4f)
+					return std::unexpected(Error("MalformedArtifact", "Skinned mesh weights are not normalized"));
+				Influences->push_back(Influence);
+			}
+			Skeleton = std::make_shared<const ImportedSkeleton>(ImportedSkeleton{
+				Compatibility, std::shared_ptr<const std::vector<ImportedSkeletonJoint>>(std::move(Joints))});
+			SkinInfluences = std::move(Influences);
+		}
 		if (Offset != Artifact.size()) return std::unexpected(Error("MalformedArtifact", "Mesh artifact has trailing bytes"));
-		return AssetImportCandidate{ImportedMesh{Vertices, Indices, Bounds, *SubmeshCount, Primitives},
+		return AssetImportCandidate{ImportedMesh{Vertices, Indices, Bounds, *SubmeshCount, Primitives, Skeleton, SkinInfluences},
 			std::make_shared<const std::vector<std::uint8_t>>(Artifact.begin(), Artifact.end()), ExpectedContentId};
 	}
 }

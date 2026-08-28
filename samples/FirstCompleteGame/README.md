@@ -43,11 +43,18 @@ player may be launched from any current working directory. Runtime modules,
 shaders, SDL, canonical assets, and notices are already inside the package; CMake,
 the repository, Studio, and asset source files are not runtime dependencies.
 
-All gameplay content resolves through `AssetService`. The project imports one
-glTF mesh, its material/image dependency graph, one font, and one PCM16 WAV.
+All gameplay content resolves through `AssetService`. The project imports a
+static glTF mesh with its material/image dependency graph, a two-bone skinned
+glTF mesh with a looping `BeaconPulse` Animation, one font, and one PCM16 WAV.
 Each collectible plays the clip positionally while round completion plays it
 as a non-positional UI sound. Gameplay Luau does not read source asset files,
 and hearing the cues is never required for game correctness.
+
+`AnimatedBeacon` authors an `Animator` directly under its `MeshPart`. The
+`BeaconAnimation` gameplay script loads the canonical Animation asset, enables
+looping, and starts it in Play. Stopping Play discards the `AnimationTrack` and
+pose while leaving the authored rig, Animator, script reference, and canonical
+package artifacts unchanged.
 
 The saved fixture also authors the canonical `Lighting` service with afternoon
 sun, ambient light, exposure, bounded fog, and a direct six-face `Sky`. All six

@@ -1,6 +1,7 @@
 #include "gargantuan/Engine.hpp"
 #include "gargantuan/Log.hpp"
 #include "gargantuan/Profiler.hpp"
+#include "gargantuan/classes/Animator.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/FileLink.hpp"
 #include "gargantuan/classes/Instance.hpp"
@@ -34,6 +35,12 @@ namespace gargantuan {
 		  RunService(GetService<gargantuan::RunService>()), ProcessService(GetService<gargantuan::ProcessService>()),
 		  UserInputService(GetService<gargantuan::UserInputService>()), ActionMap(GetService<gargantuan::ActionMap>()),
 		  Assets(GetService<gargantuan::AssetService>()),
+		  Animation(std::make_unique<AnimationRuntime>(
+			  Assets,
+			  [](std::string Code, std::string Message) {
+				  LOG_WARN(App, "[Animation:Runtime] %s: %s", Code.c_str(), Message.c_str());
+			  }
+		  )),
 		  Audio(std::make_unique<AudioRuntime>(
 			  Assets,
 			  ProviderConfiguration.AudioEnabled ? CreateSdlAudioBackend() : nullptr,
@@ -68,6 +75,8 @@ namespace gargantuan {
 				this->Script->ScriptQueue.insert(script);
 			}
 			if (auto SoundValue = std::dynamic_pointer_cast<gargantuan::Sound>(inst)) Audio->RegisterSound(SoundValue);
+			if (auto AnimatorValue = std::dynamic_pointer_cast<gargantuan::Animator>(inst))
+				Animation->RegisterAnimator(AnimatorValue);
 
 			if (auto link = std::dynamic_pointer_cast<gargantuan::FileLink>(inst)) {
 				if (!ProjectSources) {
@@ -112,6 +121,7 @@ namespace gargantuan {
 		if (Interaction && !Interaction->GetDestroyed()) Interaction->ShutdownRuntime();
 		if (Players && !Players->GetDestroyed()) Players->ShutdownRuntime();
 		if (ActionMap && !ActionMap->GetDestroyed()) ActionMap->Reset();
+		if (Animation) Animation->Shutdown();
 		if (Audio) Audio->Shutdown();
 		if (Gui) Gui->ClearTransientState();
 		Gui.reset();
@@ -193,6 +203,12 @@ namespace gargantuan {
 			{
 				G_PROFILE("PreRender");
 				RunService->PreRender->Fire(deltaTime);
+				if (Animation) {
+					Animation->Step(deltaTime);
+					RenderPublishing.SetAnimationPoseChanges(
+						Animation->GetPoseUpdates(), Animation->GetPoseRemoves());
+					Animation->ClearChanges();
+				}
 				if (Gui) {
 					auto MeshChanges = Assets->DrainMeshChanges();
 					if (!MeshChanges.Creates.empty() || !MeshChanges.Removes.empty())

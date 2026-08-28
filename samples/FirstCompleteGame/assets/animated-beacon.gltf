@@ -1,0 +1,145 @@
+{
+  "asset": {
+    "version": "2.0",
+    "generator": "Gargantuan Animation Foundation 1 sample"
+  },
+  "scene": 0,
+  "scenes": [
+    {
+      "name": "Animated Beacon",
+      "nodes": [0, 2]
+    }
+  ],
+  "nodes": [
+    {
+      "name": "BeaconRoot",
+      "children": [1]
+    },
+    {
+      "name": "BeaconTip",
+      "translation": [0.0, 0.75, 0.0]
+    },
+    {
+      "name": "AnimatedBeaconMesh",
+      "mesh": 0,
+      "skin": 0
+    }
+  ],
+  "skins": [
+    {
+      "name": "AnimatedBeaconRig",
+      "joints": [0, 1],
+      "skeleton": 0,
+      "inverseBindMatrices": 5
+    }
+  ],
+  "meshes": [
+    {
+      "name": "Animated Beacon Mesh",
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 0,
+            "NORMAL": 1,
+            "JOINTS_0": 2,
+            "WEIGHTS_0": 3
+          },
+          "indices": 4
+        }
+      ]
+    }
+  ],
+  "animations": [
+    {
+      "name": "BeaconPulse",
+      "samplers": [
+        {
+          "input": 6,
+          "output": 7,
+          "interpolation": "LINEAR"
+        },
+        {
+          "input": 6,
+          "output": 8,
+          "interpolation": "LINEAR"
+        }
+      ],
+      "channels": [
+        {
+          "sampler": 0,
+          "target": {
+            "node": 1,
+            "path": "rotation"
+          }
+        },
+        {
+          "sampler": 1,
+          "target": {
+            "node": 1,
+            "path": "scale"
+          }
+        }
+      ]
+    }
+  ],
+  "buffers": [
+    {
+      "byteLength": 36,
+      "uri": "data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAgD8AAAAA"
+    },
+    {
+      "byteLength": 36,
+      "uri": "data:application/octet-stream;base64,AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/"
+    },
+    {
+      "byteLength": 12,
+      "uri": "data:application/octet-stream;base64,AAAAAAABAAAAAQAA"
+    },
+    {
+      "byteLength": 48,
+      "uri": "data:application/octet-stream;base64,AACAPwAAAAAAAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAAA/AAAAPwAAAAAAAAAA"
+    },
+    {
+      "byteLength": 6,
+      "uri": "data:application/octet-stream;base64,AAABAAIA"
+    },
+    {
+      "byteLength": 128,
+      "uri": "data:application/octet-stream;base64,AACAPwAAAAAAAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAAAAAAAAACAPwAAgD8AAAAAAAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAEC/AAAAAAAAgD8="
+    },
+    {
+      "byteLength": 12,
+      "uri": "data:application/octet-stream;base64,AAAAAAAAgD8AAABA"
+    },
+    {
+      "byteLength": 48,
+      "uri": "data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAA8wQ1P/MENT8AAAAAAAAAAAAAAAAAAIA/"
+    },
+    {
+      "byteLength": 36,
+      "uri": "data:application/octet-stream;base64,AACAPwAAgD8AAIA/ZmamP2Zmpj9mZqY/AACAPwAAgD8AAIA/"
+    }
+  ],
+  "bufferViews": [
+    {"buffer": 0, "byteOffset": 0, "byteLength": 36},
+    {"buffer": 1, "byteOffset": 0, "byteLength": 36},
+    {"buffer": 2, "byteOffset": 0, "byteLength": 12},
+    {"buffer": 3, "byteOffset": 0, "byteLength": 48},
+    {"buffer": 4, "byteOffset": 0, "byteLength": 6},
+    {"buffer": 5, "byteOffset": 0, "byteLength": 128},
+    {"buffer": 6, "byteOffset": 0, "byteLength": 12},
+    {"buffer": 7, "byteOffset": 0, "byteLength": 48},
+    {"buffer": 8, "byteOffset": 0, "byteLength": 36}
+  ],
+  "accessors": [
+    {"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3"},
+    {"bufferView": 1, "componentType": 5126, "count": 3, "type": "VEC3"},
+    {"bufferView": 2, "componentType": 5121, "count": 3, "type": "VEC4"},
+    {"bufferView": 3, "componentType": 5126, "count": 3, "type": "VEC4"},
+    {"bufferView": 4, "componentType": 5123, "count": 3, "type": "SCALAR"},
+    {"bufferView": 5, "componentType": 5126, "count": 2, "type": "MAT4"},
+    {"bufferView": 6, "componentType": 5126, "count": 3, "type": "SCALAR"},
+    {"bufferView": 7, "componentType": 5126, "count": 3, "type": "VEC4"},
+    {"bufferView": 8, "componentType": 5126, "count": 3, "type": "VEC3"}
+  ]
+}

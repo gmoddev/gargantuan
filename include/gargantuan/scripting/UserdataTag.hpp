@@ -3,6 +3,7 @@
 namespace gargantuan {
 	enum class UserdataTag : int {
 		Invalid,
+		AnimationTrack,
 		Axes,
 		CFrame,
 		Color3,

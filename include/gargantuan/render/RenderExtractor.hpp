@@ -11,6 +11,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <unordered_map>
 
 #include <glm/glm.hpp>
@@ -87,6 +88,10 @@ namespace gargantuan {
 			std::vector<RenderTextureRemove> Removes
 		);
 		void SetAssetMeshChanges(std::vector<RenderMeshCreate> Creates, std::vector<RenderMeshRemove> Removes);
+		void SetAnimationPoseChanges(
+			std::span<const RenderAnimationPoseState> Updates,
+			std::span<const RenderAnimationPoseRemove> Removes
+		);
 		[[nodiscard]] RenderPublicationId GetLastPublicationId() const { return LastPublicationId; }
 		[[nodiscard]] std::size_t GetPublishedObjectCount() const { return PublishedItems.size(); }
 		[[nodiscard]] std::size_t GetFullResyncCount() const { return FullResyncCount; }
@@ -112,6 +117,7 @@ namespace gargantuan {
 			std::shared_ptr<const std::vector<RenderVertex>> Vertices;
 			std::shared_ptr<const std::vector<std::uint32_t>> Indices;
 			RenderBounds Bounds;
+			std::shared_ptr<const std::vector<RenderSkinInfluence>> SkinInfluences;
 		};
 		struct PublishedSky {
 			ObjectId Source;
@@ -133,6 +139,9 @@ namespace gargantuan {
 		std::unordered_map<ObjectId, PublishedDeformable> PublishedDeformables;
 		std::unordered_map<RenderTextureIdentity, PublishedTexture, RenderTextureIdentityHash> PublishedTextures;
 		std::unordered_map<RenderMeshIdentity, PublishedAssetMesh, RenderMeshIdentityHash> PublishedAssetMeshes;
+		std::unordered_map<ObjectId, RenderAnimationPoseState> AnimationPoses;
+		std::unordered_map<ObjectId, RenderAnimationPoseState> CommittedAnimationPoses;
+		std::vector<ObjectId> PendingAnimationObjects;
 		RenderEnvironmentState PublishedEnvironment;
 		std::optional<PublishedSky> LastKnownGoodSky;
 		bool HasPublishedEnvironment = false;

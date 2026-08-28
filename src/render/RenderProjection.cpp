@@ -118,7 +118,8 @@ namespace gargantuan {
 			throw std::invalid_argument("Render projection requires publication identities to increase");
 		if (Publication.FullResync && (!Publication.Updates.empty() || !Publication.Removes.empty() ||
 			!Publication.MeshVertexUpdates.empty() || !Publication.MeshRemoves.empty() ||
-			!Publication.TextureUpdates.empty() || !Publication.TextureRemoves.empty()))
+			!Publication.AnimationPoseRemoves.empty() || !Publication.TextureUpdates.empty() ||
+			!Publication.TextureRemoves.empty()))
 			throw std::invalid_argument("A full RenderPublication may contain only complete create state");
 		if (!IsValid(Publication.Frame))
 			throw std::invalid_argument("Render publication frame state is invalid");
@@ -143,7 +144,8 @@ namespace gargantuan {
 				static_cast<std::uint32_t>(RenderUpdateDomain::Geometry) |
 				static_cast<std::uint32_t>(RenderUpdateDomain::DeformableVertices) |
 				static_cast<std::uint32_t>(RenderUpdateDomain::Hierarchy) |
-				static_cast<std::uint32_t>(RenderUpdateDomain::Environment);
+				static_cast<std::uint32_t>(RenderUpdateDomain::Environment) |
+				static_cast<std::uint32_t>(RenderUpdateDomain::AnimationPose);
 			if (!Update.Object.IsValid() || Update.Item.Object != Update.Object || !IsValid(Update.Item) ||
 				!IsValid(Update.Material) || !AreValid(Update.Primitives) || (Update.Mesh && !Update.Mesh->IsValid()) ||
 				Update.Domains == RenderUpdateDomain::None ||
@@ -166,6 +168,21 @@ namespace gargantuan {
 				throw std::invalid_argument("Render publication rejects non-finite mesh vertices");
 			for (const auto Index : *Create.Indices) if (Index >= Create.Vertices->size())
 				throw std::invalid_argument("Render publication rejects out-of-range mesh indices");
+			if (Create.SkinInfluences) {
+				if (Create.SkinInfluences->size() != Create.Vertices->size())
+					throw std::invalid_argument("Render publication skin influence count differs from vertices");
+				for (const auto &Influence : *Create.SkinInfluences) {
+					float Sum = 0.0f;
+					for (std::size_t Index = 0; Index < 4; ++Index) {
+						if (Influence.Joints[Index] >= 256 || !std::isfinite(Influence.Weights[Index]) ||
+							Influence.Weights[Index] < 0.0f)
+							throw std::invalid_argument("Render publication rejects malformed skin weights");
+						Sum += Influence.Weights[Index];
+					}
+					if (std::abs(Sum - 1.0f) > 1.0e-4f)
+						throw std::invalid_argument("Render publication rejects non-normalized skin weights");
+				}
+			}
 		}
 		for (const auto &Update : Publication.MeshVertexUpdates) {
 			if (!Update.Mesh.IsValid() || Update.VertexRevision == 0 || !Update.Vertices || Update.Vertices->empty() ||
@@ -294,6 +311,58 @@ namespace gargantuan {
 				return Primitive.FirstIndex <= *Count && Primitive.IndexCount <= *Count - Primitive.FirstIndex;
 			});
 		};
+		const auto ObjectMeshAfterPublication = [&](ObjectId Object) -> std::optional<RenderMeshIdentity> {
+			for (const auto &Create : Publication.Creates)
+				if (Create.Item.Object == Object) return Create.Mesh;
+			for (const auto &Update : Publication.Updates)
+				if (Update.Object == Object) return Update.Mesh;
+			for (const auto &Remove : Publication.Removes)
+				if (Remove.Object == Object) return std::nullopt;
+			if (!Publication.FullResync) {
+				const auto Existing = Entries.find(Object);
+				if (Existing != Entries.end()) return Existing->second.Mesh;
+			}
+			return std::nullopt;
+		};
+		const auto SkinInfluencesAfterPublication = [&](RenderMeshIdentity Mesh)
+			-> std::shared_ptr<const std::vector<RenderSkinInfluence>> {
+			for (const auto &Create : Publication.MeshCreates)
+				if (Create.Mesh == Mesh) return Create.SkinInfluences;
+			if (!Publication.FullResync) {
+				const auto Existing = Meshes.find(Mesh);
+				if (Existing != Meshes.end()) return Existing->second.SkinInfluences;
+			}
+			return nullptr;
+		};
+		std::unordered_set<ObjectId> TouchedPoses;
+		TouchedPoses.reserve(Publication.AnimationPoseUpdates.size() + Publication.AnimationPoseRemoves.size());
+		for (const auto &Remove : Publication.AnimationPoseRemoves) {
+			if (!Remove.Object.IsValid() || !TouchedPoses.insert(Remove.Object).second ||
+				(!Publication.FullResync && !AnimationPoses.contains(Remove.Object)))
+				throw std::invalid_argument("Render publication contains an invalid or stale animation pose removal");
+		}
+		for (const auto &Update : Publication.AnimationPoseUpdates) {
+			if (!Update.Object.IsValid() || !Update.SourceMesh.IsValid() || !Update.PosedMesh.IsValid() ||
+				Update.SourceMesh == Update.PosedMesh || Update.PoseRevision == 0 || !Update.BonePalette ||
+				Update.BonePalette->empty() || Update.BonePalette->size() > 256 ||
+				!TouchedPoses.insert(Update.Object).second || !MeshExistsAfterPublication(Update.SourceMesh) ||
+				!MeshExistsAfterPublication(Update.PosedMesh) ||
+				ObjectMeshAfterPublication(Update.Object) != std::optional(Update.PosedMesh))
+				throw std::invalid_argument("Render publication animation pose update is invalid or incoherent");
+			for (const auto &Matrix : *Update.BonePalette) if (!IsFinite(Matrix))
+				throw std::invalid_argument("Render publication rejects a non-finite animation pose palette");
+			const auto Influences = SkinInfluencesAfterPublication(Update.SourceMesh);
+			if (!Influences || std::ranges::any_of(*Influences, [&](const auto &Influence) {
+				for (std::size_t Index = 0; Index < 4; ++Index)
+					if (Influence.Weights[Index] > 0.0f && Influence.Joints[Index] >= Update.BonePalette->size())
+						return true;
+				return false;
+			}))
+				throw std::invalid_argument("Render publication animation palette does not cover source skin influences");
+			if (!Publication.FullResync) if (const auto Existing = AnimationPoses.find(Update.Object);
+				Existing != AnimationPoses.end() && Update.PoseRevision <= Existing->second.PoseRevision)
+				throw std::invalid_argument("Render publication rejects a stale animation pose update");
+		}
 		for (const auto &Create : Publication.Creates)
 			if ((Create.Mesh && !MeshExistsAfterPublication(*Create.Mesh)) || !PrimitiveRangesFit(Create))
 				throw std::invalid_argument("Render publication object creation references a missing mesh");
@@ -306,6 +375,11 @@ namespace gargantuan {
 				if (!Existing.Mesh || TouchedObjects.contains(Object)) continue;
 				if (!MeshExistsAfterPublication(*Existing.Mesh))
 					throw std::invalid_argument("Render publication removes a mesh that remains referenced");
+			}
+			for (const auto &[Object, Pose] : AnimationPoses) {
+				if (TouchedPoses.contains(Object)) continue;
+				if (!MeshExistsAfterPublication(Pose.SourceMesh) || !MeshExistsAfterPublication(Pose.PosedMesh))
+					throw std::invalid_argument("Render publication removes a mesh that remains referenced by an animation pose");
 			}
 		}
 
@@ -346,9 +420,11 @@ namespace gargantuan {
 			Changes.Removed = Entries.size();
 			Changes.MeshesRemoved = Meshes.size();
 			Changes.TexturesRemoved = Textures.size();
+			Changes.AnimationPosesRemoved = AnimationPoses.size();
 			Entries.clear();
 			Meshes.clear();
 			Textures.clear();
+			AnimationPoses.clear();
 		}
 		for (const auto &Remove : Publication.Removes) { Entries.erase(Remove.Object); ++Changes.Removed; }
 		for (const auto &Remove : Publication.MeshRemoves) { Meshes.erase(Remove.Mesh); ++Changes.MeshesRemoved; }
@@ -368,7 +444,8 @@ namespace gargantuan {
 		}
 		Meshes.reserve(Meshes.size() + Publication.MeshCreates.size());
 		for (const auto &Create : Publication.MeshCreates) {
-			Meshes.emplace(Create.Mesh, MeshEntry{Create.TopologyRevision, Create.VertexRevision, Create.Vertices->size(), Create.Indices->size(), Create.Bounds});
+			Meshes.emplace(Create.Mesh, MeshEntry{Create.TopologyRevision, Create.VertexRevision,
+				Create.Vertices->size(), Create.Indices->size(), Create.Bounds, Create.SkinInfluences});
 			++Changes.MeshesCreated;
 			Changes.VertexUploadBytes += Create.Vertices->size() * sizeof(RenderVertex) + Create.Indices->size() * sizeof(std::uint32_t);
 		}
@@ -378,6 +455,15 @@ namespace gargantuan {
 			Existing.Bounds = Update.Bounds;
 			++Changes.MeshesUpdated;
 			Changes.VertexUploadBytes += Update.Vertices->size() * sizeof(RenderVertex);
+		}
+		for (const auto &Remove : Publication.AnimationPoseRemoves) {
+			AnimationPoses.erase(Remove.Object);
+			++Changes.AnimationPosesRemoved;
+		}
+		AnimationPoses.reserve(AnimationPoses.size() + Publication.AnimationPoseUpdates.size());
+		for (const auto &Update : Publication.AnimationPoseUpdates) {
+			AnimationPoses.insert_or_assign(Update.Object, Update);
+			++Changes.AnimationPosesUpdated;
 		}
 		for (const auto &Remove : Publication.TextureRemoves) {
 			Textures.erase(Remove.Texture);
@@ -461,6 +547,7 @@ namespace gargantuan {
 		Entries.clear();
 		Meshes.clear();
 		Textures.clear();
+		AnimationPoses.clear();
 		LastPublicationId = InvalidRenderPublicationId;
 		Frame = {};
 		Ui = std::make_shared<const RenderUiFrame>();
@@ -469,6 +556,11 @@ namespace gargantuan {
 	const RenderItem *RenderProjection::GetItem(ObjectId Object) const {
 		const auto Existing = Entries.find(Object);
 		return Existing == Entries.end() ? nullptr : &Existing->second.Item;
+	}
+
+	const RenderAnimationPoseUpdate *RenderProjection::GetAnimationPose(ObjectId Object) const {
+		const auto Existing = AnimationPoses.find(Object);
+		return Existing == AnimationPoses.end() ? nullptr : &Existing->second;
 	}
 
 	RenderSnapshotPtr RenderProjection::BuildCompatibilitySnapshot() const {

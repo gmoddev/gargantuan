@@ -19,10 +19,13 @@
 #include <variant>
 #include <vector>
 
+#include <glm/gtc/quaternion.hpp>
+
 namespace gargantuan {
-	enum class AssetKind : std::uint8_t { Image, Mesh, Font, Material, Audio };
+	enum class AssetKind : std::uint8_t { Image, Mesh, Font, Material, Audio, Animation };
 	enum class AssetState : std::uint8_t { Missing, Importing, Ready, Failed, Stale };
 	enum class AssetMaterialAlphaMode : std::uint8_t { Opaque, Mask, Blend };
+	enum class AssetAnimationInterpolation : std::uint8_t { Step, Linear };
 	enum class AssetChangeKind : std::uint8_t {
 		Added,
 		Removed,
@@ -87,12 +90,60 @@ namespace gargantuan {
 		std::optional<AssetId> Material;
 	};
 
+	struct ImportedSkeletonJoint {
+		std::string Path;
+		std::int32_t Parent = -1;
+		glm::vec3 BindTranslation{0.0f};
+		glm::quat BindRotation{1.0f, 0.0f, 0.0f, 0.0f};
+		glm::vec3 BindScale{1.0f};
+		glm::mat4 InverseBindMatrix{1.0f};
+	};
+
+	struct ImportedSkeleton {
+		AssetContentId CompatibilityId;
+		std::shared_ptr<const std::vector<ImportedSkeletonJoint>> Joints;
+	};
+
+	struct ImportedSkinInfluence {
+		std::array<std::uint16_t, 4> Joints{};
+		glm::vec4 Weights{0.0f};
+	};
+
 	struct ImportedMesh {
 		std::shared_ptr<const std::vector<RenderVertex>> Vertices;
 		std::shared_ptr<const std::vector<std::uint32_t>> Indices;
 		RenderBounds Bounds;
 		std::uint32_t SubmeshCount = 1;
 		std::shared_ptr<const std::vector<ImportedMeshPrimitive>> Primitives;
+		std::shared_ptr<const ImportedSkeleton> Skeleton;
+		std::shared_ptr<const std::vector<ImportedSkinInfluence>> SkinInfluences;
+	};
+
+	struct ImportedAnimationVectorKey {
+		float Time = 0.0f;
+		glm::vec3 Value{0.0f};
+	};
+
+	struct ImportedAnimationRotationKey {
+		float Time = 0.0f;
+		glm::quat Value{1.0f, 0.0f, 0.0f, 0.0f};
+	};
+
+	struct ImportedAnimationTrack {
+		std::string JointPath;
+		AssetAnimationInterpolation TranslationInterpolation = AssetAnimationInterpolation::Linear;
+		AssetAnimationInterpolation RotationInterpolation = AssetAnimationInterpolation::Linear;
+		AssetAnimationInterpolation ScaleInterpolation = AssetAnimationInterpolation::Linear;
+		std::shared_ptr<const std::vector<ImportedAnimationVectorKey>> TranslationKeys;
+		std::shared_ptr<const std::vector<ImportedAnimationRotationKey>> RotationKeys;
+		std::shared_ptr<const std::vector<ImportedAnimationVectorKey>> ScaleKeys;
+	};
+
+	struct ImportedAnimation {
+		float Duration = 0.0f;
+		AssetContentId SkeletonCompatibilityId;
+		std::optional<AssetId> SkeletonAsset;
+		std::shared_ptr<const std::vector<ImportedAnimationTrack>> Tracks;
 	};
 
 	struct ImportedFont {
@@ -118,7 +169,8 @@ namespace gargantuan {
 		std::shared_ptr<const std::vector<std::int16_t>> Pcm16;
 	};
 
-	using ImportedAsset = std::variant<ImportedImage, ImportedMesh, ImportedFont, ImportedMaterial, ImportedAudio>;
+	using ImportedAsset = std::variant<ImportedImage, ImportedMesh, ImportedFont, ImportedMaterial, ImportedAudio,
+		ImportedAnimation>;
 
 	struct AssetDiagnostic {
 		std::string Code;
@@ -170,6 +222,11 @@ namespace gargantuan {
 
 	struct AssetAudioResource {
 		ImportedAudio Value;
+		std::uint64_t ContentRevision = 0;
+	};
+
+	struct AssetAnimationResource {
+		ImportedAnimation Value;
 		std::uint64_t ContentRevision = 0;
 	};
 
@@ -237,6 +294,10 @@ namespace gargantuan {
 		static constexpr std::size_t MaximumGltfMaterials = 1024;
 		static constexpr std::size_t MaximumGltfImages = 1024;
 		static constexpr std::size_t MaximumGltfTextures = 1024;
+		static constexpr std::size_t MaximumGltfNodes = 4096;
+		static constexpr std::size_t MaximumGltfSkins = 256;
+		static constexpr std::size_t MaximumGltfAnimations = 256;
+		static constexpr std::size_t MaximumGltfAnimationChannels = 4096;
 		static constexpr std::size_t MaximumGltfChunks = 8;
 		static constexpr std::size_t MaximumGltfDataUriBytes = 8 * 1024 * 1024;
 		static constexpr std::size_t MaximumChangeRecords = 512;
@@ -246,6 +307,12 @@ namespace gargantuan {
 		static constexpr std::size_t MaximumMeshVertices = 262144;
 		static constexpr std::size_t MaximumMeshIndices = 1048576;
 		static constexpr std::size_t MaximumMeshSubmeshes = 256;
+		static constexpr std::size_t MaximumSkeletonBones = 256;
+		static constexpr std::size_t MaximumJointPathBytes = 256;
+		static constexpr std::size_t MaximumAnimationTracks = 256;
+		static constexpr std::size_t MaximumAnimationKeyframesPerTrack = 65'536;
+		static constexpr std::size_t MaximumAnimationKeyframes = 1'048'576;
+		static constexpr float MaximumAnimationDurationSeconds = 3'600.0f;
 		static constexpr std::size_t MaximumFontBytes = 8 * 1024 * 1024;
 		static constexpr std::uint32_t MinimumAudioSampleRate = 8'000;
 		static constexpr std::uint32_t MaximumAudioSampleRate = 48'000;

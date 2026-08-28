@@ -16,6 +16,7 @@
 #include <cstring>
 #include <expected>
 #include <format>
+#include <functional>
 #include <limits>
 #include <ranges>
 #include <set>
@@ -24,6 +25,9 @@
 #include <unordered_set>
 
 #include <glm/geometric.hpp>
+#include <glm/gtc/matrix_inverse.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/quaternion.hpp>
 
 namespace gargantuan {
 	namespace {
@@ -114,9 +118,6 @@ namespace gargantuan {
 			if (Parsed->contains("extensionsRequired") &&
 				(!(*Parsed)["extensionsRequired"].is_array() || !(*Parsed)["extensionsRequired"].empty()))
 				return std::unexpected(Error("UnsupportedGltfFeature", "Required glTF extensions are not supported"));
-			if ((Parsed->contains("skins") && !(*Parsed)["skins"].empty()) ||
-				(Parsed->contains("animations") && !(*Parsed)["animations"].empty()))
-				return std::unexpected(Error("UnsupportedGltfFeature", "Skins and animations are outside Asset Foundation 2A"));
 			return ParsedGltf{std::move(*Parsed), std::move(Binary)};
 		}
 
@@ -252,6 +253,7 @@ namespace gargantuan {
 			if (Type == "VEC2") return 2;
 			if (Type == "VEC3") return 3;
 			if (Type == "VEC4") return 4;
+			if (Type == "MAT4") return 16;
 			return 0;
 		}
 
@@ -458,9 +460,13 @@ namespace gargantuan {
 				return std::unexpected(Error("GltfLimit", "glTF images array exceeds its limit"));
 			if (Root.contains("textures") && (!Root["textures"].is_array() || Root["textures"].size() > AssetLimits::MaximumGltfTextures))
 				return std::unexpected(Error("GltfLimit", "glTF textures array exceeds its limit"));
-			if ((Root.contains("skins") && (!Root["skins"].is_array() || !Root["skins"].empty())) ||
-				(Root.contains("animations") && (!Root["animations"].is_array() || !Root["animations"].empty())))
-				return std::unexpected(Error("UnsupportedGltfFeature", "Skins and animations are not supported by Foundation 2A"));
+			if (Root.contains("nodes") && (!Root["nodes"].is_array() || Root["nodes"].size() > AssetLimits::MaximumGltfNodes))
+				return std::unexpected(Error("GltfLimit", "glTF nodes array is invalid or exceeds its limit"));
+			if (Root.contains("skins") && (!Root["skins"].is_array() || Root["skins"].size() > AssetLimits::MaximumGltfSkins))
+				return std::unexpected(Error("GltfLimit", "glTF skins array is invalid or exceeds its limit"));
+			if (Root.contains("animations") && (!Root["animations"].is_array() ||
+				Root["animations"].size() > AssetLimits::MaximumGltfAnimations))
+				return std::unexpected(Error("GltfLimit", "glTF animations array is invalid or exceeds its limit"));
 			if (Root.contains("textures")) for (const auto &Texture : Root["textures"]) {
 				if (!Texture.is_object() || !Texture.contains("source"))
 					return std::unexpected(Error("MalformedGltf", "glTF texture must contain an image source"));
@@ -469,6 +475,239 @@ namespace gargantuan {
 			}
 			auto Buffers = LoadBuffers(Document, Context);
 			if (!Buffers) return std::unexpected(Buffers.error());
+
+			const auto NodeCount = Root.contains("nodes") ? Root["nodes"].size() : 0;
+			std::vector<std::int32_t> NodeParents(NodeCount, -1);
+			if (Root.contains("nodes")) {
+				for (std::size_t NodeIndex = 0; NodeIndex < NodeCount; ++NodeIndex) {
+					const auto &Node = Root["nodes"][NodeIndex];
+					if (!Node.is_object()) return std::unexpected(Error("MalformedSkeleton", "glTF node must be an object"));
+					if (!Node.contains("children")) continue;
+					if (!Node["children"].is_array() || Node["children"].size() > AssetLimits::MaximumGltfNodes)
+						return std::unexpected(Error("MalformedSkeleton", "glTF node children are invalid or oversized"));
+					std::unordered_set<std::size_t> LocalChildren;
+					for (const auto &ChildValue : Node["children"]) {
+						auto Child = Unsigned(ChildValue);
+						if (!Child || *Child >= NodeCount || *Child == NodeIndex || !LocalChildren.insert(*Child).second ||
+							NodeParents[*Child] != -1)
+							return std::unexpected(Error("MalformedSkeleton", "glTF node hierarchy has an invalid or multiply-parented child"));
+						NodeParents[*Child] = static_cast<std::int32_t>(NodeIndex);
+					}
+				}
+				std::vector<std::uint8_t> NodeVisit(NodeCount);
+				std::function<bool(std::size_t)> VisitNode = [&](std::size_t NodeIndex) {
+					if (NodeVisit[NodeIndex] == 1) return false;
+					if (NodeVisit[NodeIndex] == 2) return true;
+					NodeVisit[NodeIndex] = 1;
+					const auto Parent = NodeParents[NodeIndex];
+					if (Parent >= 0 && !VisitNode(static_cast<std::size_t>(Parent))) return false;
+					NodeVisit[NodeIndex] = 2;
+					return true;
+				};
+				for (std::size_t NodeIndex = 0; NodeIndex < NodeCount; ++NodeIndex)
+					if (!VisitNode(NodeIndex)) return std::unexpected(Error("MalformedSkeleton", "glTF node hierarchy is cyclic"));
+			}
+
+			struct NodeTransform {
+				glm::vec3 Translation{0.0f};
+				glm::quat Rotation{1.0f, 0.0f, 0.0f, 0.0f};
+				glm::vec3 Scale{1.0f};
+			};
+			const glm::mat4 Handedness = [] {
+				glm::mat4 Value(1.0f);
+				Value[2][2] = -1.0f;
+				return Value;
+			}();
+			auto ReadNodeTransform = [&](std::size_t NodeIndex) -> std::expected<NodeTransform, AssetDiagnostic> {
+				if (NodeIndex >= NodeCount) return std::unexpected(Error("MalformedSkeleton", "glTF joint node index is invalid"));
+				const auto &Node = Root["nodes"][NodeIndex];
+				NodeTransform Result;
+				auto ReadArray = [&](std::string_view Name, std::size_t Count) -> std::expected<std::vector<float>, AssetDiagnostic> {
+					if (!Node.contains(Name)) return std::vector<float>{};
+					if (!Node[Name].is_array() || Node[Name].size() != Count)
+						return std::unexpected(Error("MalformedSkeleton", "glTF node transform component has invalid length"));
+					std::vector<float> Values;
+					Values.reserve(Count);
+					for (const auto &Value : Node[Name]) {
+						if (!Value.is_number()) return std::unexpected(Error("MalformedSkeleton", "glTF node transform component is not numeric"));
+						const auto Component = Value.get<float>();
+						if (!std::isfinite(Component)) return std::unexpected(Error("MalformedSkeleton", "glTF node transform component is non-finite"));
+						Values.push_back(Component);
+					}
+					return Values;
+				};
+				if (Node.contains("matrix")) {
+					if (Node.contains("translation") || Node.contains("rotation") || Node.contains("scale"))
+						return std::unexpected(Error("MalformedSkeleton", "glTF node cannot mix matrix and TRS transforms"));
+					auto Values = ReadArray("matrix", 16);
+					if (!Values) return std::unexpected(Values.error());
+					glm::mat4 Source(1.0f);
+					for (glm::length_t Column = 0; Column < 4; ++Column)
+						for (glm::length_t Row = 0; Row < 4; ++Row) Source[Column][Row] = (*Values)[Column * 4 + Row];
+					const auto Converted = Handedness * Source * Handedness;
+					if (std::abs(Converted[0][3]) > 1.0e-6f || std::abs(Converted[1][3]) > 1.0e-6f ||
+						std::abs(Converted[2][3]) > 1.0e-6f || std::abs(Converted[3][3] - 1.0f) > 1.0e-6f)
+						return std::unexpected(Error("UnsupportedGltfFeature", "Joint matrices with shear or perspective are unsupported"));
+					Result.Translation = glm::vec3(Converted[3]);
+					glm::vec3 BasisX(Converted[0]), BasisY(Converted[1]), BasisZ(Converted[2]);
+					Result.Scale = {glm::length(BasisX), glm::length(BasisY), glm::length(BasisZ)};
+					if (Result.Scale.x < 1.0e-8f || Result.Scale.y < 1.0e-8f || Result.Scale.z < 1.0e-8f)
+						return std::unexpected(Error("MalformedSkeleton", "glTF joint matrix is singular"));
+					BasisX /= Result.Scale.x; BasisY /= Result.Scale.y; BasisZ /= Result.Scale.z;
+					if (std::abs(glm::dot(BasisX, BasisY)) > 1.0e-5f ||
+						std::abs(glm::dot(BasisX, BasisZ)) > 1.0e-5f || std::abs(glm::dot(BasisY, BasisZ)) > 1.0e-5f)
+						return std::unexpected(Error("UnsupportedGltfFeature", "Joint matrices with shear or perspective are unsupported"));
+					if (glm::dot(glm::cross(BasisX, BasisY), BasisZ) < 0.0f) {
+						Result.Scale.x = -Result.Scale.x;
+						BasisX = -BasisX;
+					}
+					const glm::mat3 RotationMatrix(BasisX, BasisY, BasisZ);
+					if (std::abs(glm::determinant(RotationMatrix) - 1.0f) > 1.0e-4f)
+						return std::unexpected(Error("MalformedSkeleton", "glTF joint matrix has an invalid rotation basis"));
+					Result.Rotation = glm::quat_cast(RotationMatrix);
+				} else {
+					auto Translation = ReadArray("translation", 3), Rotation = ReadArray("rotation", 4), Scale = ReadArray("scale", 3);
+					if (!Translation) return std::unexpected(Translation.error());
+					if (!Rotation) return std::unexpected(Rotation.error());
+					if (!Scale) return std::unexpected(Scale.error());
+					if (!Translation->empty()) Result.Translation = {(*Translation)[0], (*Translation)[1], -(*Translation)[2]};
+					if (!Rotation->empty()) Result.Rotation = {(*Rotation)[3], -(*Rotation)[0], -(*Rotation)[1], (*Rotation)[2]};
+					if (!Scale->empty()) Result.Scale = {(*Scale)[0], (*Scale)[1], (*Scale)[2]};
+				}
+				if (glm::length(Result.Rotation) < 1.0e-6f || std::abs(Result.Scale.x) < 1.0e-8f ||
+					std::abs(Result.Scale.y) < 1.0e-8f || std::abs(Result.Scale.z) < 1.0e-8f)
+					return std::unexpected(Error("MalformedSkeleton", "glTF joint transform is singular"));
+				Result.Rotation = glm::normalize(Result.Rotation);
+				return Result;
+			};
+
+			struct SkinData {
+				ImportedSkeleton Skeleton;
+				std::vector<std::size_t> JointNodes;
+				std::vector<std::uint16_t> SourceJointToCanonical;
+				std::unordered_map<std::size_t, std::uint16_t> NodeToCanonical;
+			};
+			std::vector<SkinData> Skins;
+			const auto SkinCount = Root.contains("skins") ? Root["skins"].size() : 0;
+			Skins.reserve(SkinCount);
+			for (std::size_t SkinIndex = 0; SkinIndex < SkinCount; ++SkinIndex) {
+				const auto &Skin = Root["skins"][SkinIndex];
+				if (!Skin.is_object() || !Skin.contains("joints") || !Skin["joints"].is_array() || Skin["joints"].empty() ||
+					Skin["joints"].size() > AssetLimits::MaximumSkeletonBones || NodeCount == 0)
+					return std::unexpected(Error("MalformedSkeleton", "glTF skin joints are missing or exceed the bone limit"));
+				SkinData Data;
+				std::unordered_map<std::size_t, std::size_t> SourceJointOrder;
+				for (std::size_t SourceIndex = 0; SourceIndex < Skin["joints"].size(); ++SourceIndex) {
+					auto Node = Unsigned(Skin["joints"][SourceIndex]);
+					if (!Node || *Node >= NodeCount || !SourceJointOrder.emplace(*Node, SourceIndex).second)
+						return std::unexpected(Error("MalformedSkeleton", "glTF skin contains an invalid or duplicate joint"));
+					Data.JointNodes.push_back(*Node);
+				}
+				for (const auto Node : Data.JointNodes) {
+					const auto Parent = NodeParents[Node];
+					if (Parent >= 0 && !SourceJointOrder.contains(static_cast<std::size_t>(Parent)))
+						return std::unexpected(Error("UnsupportedGltfFeature", "A glTF joint parent must also be a joint in Foundation 1"));
+				}
+				std::vector<std::size_t> OrderedNodes;
+				std::function<void(std::size_t)> AppendSubtree = [&](std::size_t Node) {
+					OrderedNodes.push_back(Node);
+					std::vector<std::size_t> Children;
+					for (const auto Candidate : Data.JointNodes)
+						if (NodeParents[Candidate] == static_cast<std::int32_t>(Node)) Children.push_back(Candidate);
+					std::ranges::sort(Children);
+					for (const auto Child : Children) AppendSubtree(Child);
+				};
+				std::vector<std::size_t> Roots;
+				for (const auto Node : Data.JointNodes) if (NodeParents[Node] < 0) Roots.push_back(Node);
+				std::ranges::sort(Roots);
+				for (const auto RootNode : Roots) AppendSubtree(RootNode);
+				if (OrderedNodes.size() != Data.JointNodes.size())
+					return std::unexpected(Error("MalformedSkeleton", "glTF skin hierarchy could not be ordered"));
+				for (std::size_t Canonical = 0; Canonical < OrderedNodes.size(); ++Canonical)
+					Data.NodeToCanonical.emplace(OrderedNodes[Canonical], static_cast<std::uint16_t>(Canonical));
+				Data.SourceJointToCanonical.resize(Data.JointNodes.size());
+				for (std::size_t SourceIndex = 0; SourceIndex < Data.JointNodes.size(); ++SourceIndex)
+					Data.SourceJointToCanonical[SourceIndex] = Data.NodeToCanonical.at(Data.JointNodes[SourceIndex]);
+
+				std::vector<glm::mat4> InverseBinds(Data.JointNodes.size(), glm::mat4(1.0f));
+				if (Skin.contains("inverseBindMatrices")) {
+					auto Accessor = Unsigned(Skin["inverseBindMatrices"]);
+					if (!Accessor) return std::unexpected(Error("InvalidAccessor", "glTF inverse bind accessor is invalid"));
+					auto Values = ReadAccessor(Root, *Buffers, *Accessor, "MAT4", 5126);
+					if (!Values) return std::unexpected(Values.error());
+					if (Values->size() != Data.JointNodes.size() * 16)
+						return std::unexpected(Error("MalformedSkeleton", "glTF inverse bind matrix count differs from joints"));
+					for (std::size_t SourceIndex = 0; SourceIndex < Data.JointNodes.size(); ++SourceIndex) {
+						glm::mat4 Matrix(1.0f);
+						for (glm::length_t Column = 0; Column < 4; ++Column)
+							for (glm::length_t Row = 0; Row < 4; ++Row)
+								Matrix[Column][Row] = static_cast<float>((*Values)[SourceIndex * 16 + Column * 4 + Row]);
+						Matrix = Handedness * Matrix * Handedness;
+						if (std::abs(glm::determinant(Matrix)) < 1.0e-12f)
+							return std::unexpected(Error("MalformedSkeleton", "glTF inverse bind matrix is singular"));
+						InverseBinds[SourceIndex] = Matrix;
+					}
+				}
+
+				auto Joints = std::make_shared<std::vector<ImportedSkeletonJoint>>();
+				Joints->reserve(OrderedNodes.size());
+				std::unordered_set<std::string> Paths;
+				std::vector<std::uint8_t> CompatibilityBytes;
+				auto AppendCompatibilityU32 = [&](std::uint32_t Value) {
+					for (std::size_t Byte = 0; Byte < 4; ++Byte)
+						CompatibilityBytes.push_back(static_cast<std::uint8_t>(Value >> (Byte * 8)));
+				};
+				for (std::size_t Canonical = 0; Canonical < OrderedNodes.size(); ++Canonical) {
+					const auto NodeIndex = OrderedNodes[Canonical];
+					const auto &Node = Root["nodes"][NodeIndex];
+					if (!Node.contains("name") || !Node["name"].is_string())
+						return std::unexpected(Error("MalformedSkeleton", "Every glTF joint requires a stable name"));
+					const auto Name = Node["name"].get<std::string>();
+					if (Name.empty() || Name.size() > AssetLimits::MaximumJointPathBytes ||
+						Name.find('/') != std::string::npos || Name.find('\\') != std::string::npos)
+						return std::unexpected(Error("MalformedSkeleton", "glTF joint name is empty, oversized, or contains a path separator"));
+					const auto ParentNode = NodeParents[NodeIndex];
+					const auto Parent = ParentNode < 0 ? -1 : static_cast<std::int32_t>(Data.NodeToCanonical.at(ParentNode));
+					const auto Path = Parent < 0 ? Name : (*Joints)[Parent].Path + "/" + Name;
+					if (Path.size() > AssetLimits::MaximumJointPathBytes || !Paths.insert(Path).second)
+						return std::unexpected(Error("MalformedSkeleton", "glTF joint paths are duplicate or oversized"));
+					auto Transform = ReadNodeTransform(NodeIndex);
+					if (!Transform) return std::unexpected(Transform.error());
+					const auto SourceIndex = SourceJointOrder.at(NodeIndex);
+					Joints->push_back({Path, Parent, Transform->Translation, Transform->Rotation, Transform->Scale,
+						InverseBinds[SourceIndex]});
+					CompatibilityBytes.insert(CompatibilityBytes.end(), Path.begin(), Path.end());
+					CompatibilityBytes.push_back(0);
+					AppendCompatibilityU32(std::bit_cast<std::uint32_t>(Parent));
+					for (const auto Component : {Transform->Translation.x, Transform->Translation.y, Transform->Translation.z,
+						Transform->Rotation.x, Transform->Rotation.y, Transform->Rotation.z, Transform->Rotation.w,
+						Transform->Scale.x, Transform->Scale.y, Transform->Scale.z})
+						AppendCompatibilityU32(std::bit_cast<std::uint32_t>(Component));
+					for (glm::length_t Column = 0; Column < 4; ++Column)
+						for (glm::length_t Row = 0; Row < 4; ++Row)
+							AppendCompatibilityU32(std::bit_cast<std::uint32_t>(InverseBinds[SourceIndex][Column][Row]));
+				}
+				Data.Skeleton = {AssetContentId::Hash(CompatibilityBytes),
+					std::shared_ptr<const std::vector<ImportedSkeletonJoint>>(std::move(Joints))};
+				Skins.push_back(std::move(Data));
+			}
+
+			std::vector<std::optional<std::size_t>> MeshSkins(Root["meshes"].size());
+			if (Root.contains("nodes")) for (const auto &Node : Root["nodes"]) {
+				if (Node.contains("skin") && !Node.contains("mesh"))
+					return std::unexpected(Error("MalformedSkeleton", "glTF node with a skin must also reference a mesh"));
+				if (!Node.contains("mesh")) continue;
+				auto MeshIndex = Unsigned(Node["mesh"]);
+				if (!MeshIndex || *MeshIndex >= Root["meshes"].size())
+					return std::unexpected(Error("MalformedGltf", "glTF node mesh index is invalid"));
+				if (!Node.contains("skin")) continue;
+				auto SkinIndex = Unsigned(Node["skin"]);
+				if (!SkinIndex || *SkinIndex >= Skins.size())
+					return std::unexpected(Error("MalformedSkeleton", "glTF node skin index is invalid"));
+				if (MeshSkins[*MeshIndex] && *MeshSkins[*MeshIndex] != *SkinIndex)
+					return std::unexpected(Error("UnsupportedGltfFeature", "One glTF mesh cannot bind to multiple distinct skins"));
+				MeshSkins[*MeshIndex] = *SkinIndex;
+			}
 
 			std::vector<std::string> MeshKeys(Root["meshes"].size());
 			std::unordered_map<std::string, std::size_t> DuplicateMeshKeys;
@@ -487,6 +726,184 @@ namespace gargantuan {
 				auto Base = KeyHash("mesh/", Signature);
 				const auto Rank = DuplicateMeshKeys[Base]++;
 				MeshKeys[MeshIndex] = Rank == 0 ? Base : Base + "/" + std::to_string(Rank);
+			}
+
+			struct AnimationData {
+				std::string LogicalKey;
+				std::string Name;
+				ImportedAnimation Animation;
+				std::string SkeletonMeshKey;
+			};
+			std::vector<AnimationData> Animations;
+			std::size_t SourceAnimationChannels = 0;
+			std::size_t SourceAnimationKeys = 0;
+			std::unordered_map<std::string, std::size_t> DuplicateAnimationKeys;
+			if (Root.contains("animations")) {
+				Animations.reserve(Root["animations"].size());
+				for (std::size_t AnimationIndex = 0; AnimationIndex < Root["animations"].size(); ++AnimationIndex) {
+					const auto &SourceAnimation = Root["animations"][AnimationIndex];
+					if (!SourceAnimation.is_object() || !SourceAnimation.contains("channels") ||
+						!SourceAnimation["channels"].is_array() || SourceAnimation["channels"].empty() ||
+						!SourceAnimation.contains("samplers") || !SourceAnimation["samplers"].is_array() ||
+						SourceAnimation["samplers"].empty())
+						return std::unexpected(Error("MalformedAnimation", "glTF animation channels or samplers are missing"));
+					if (SourceAnimation.contains("extensions") && !SourceAnimation["extensions"].empty())
+						return std::unexpected(Error("UnsupportedGltfFeature", "glTF animation extensions are unsupported"));
+					if (SourceAnimation["channels"].size() > AssetLimits::MaximumGltfAnimationChannels -
+						std::min(SourceAnimationChannels, AssetLimits::MaximumGltfAnimationChannels))
+						return std::unexpected(Error("AnimationLimit", "glTF animation channel count exceeds its limit"));
+					SourceAnimationChannels += SourceAnimation["channels"].size();
+
+					std::vector<std::size_t> TargetNodes;
+					TargetNodes.reserve(SourceAnimation["channels"].size());
+					for (const auto &Channel : SourceAnimation["channels"]) {
+						if (!Channel.is_object() || !Channel.contains("sampler") || !Channel.contains("target") ||
+							!Channel["target"].is_object() || !Channel["target"].contains("node") ||
+							!Channel["target"].contains("path") || !Channel["target"]["path"].is_string() ||
+							(Channel.contains("extensions") && !Channel["extensions"].empty()) ||
+							(Channel["target"].contains("extensions") && !Channel["target"]["extensions"].empty()))
+							return std::unexpected(Error("MalformedAnimation", "glTF animation channel metadata is invalid"));
+						auto TargetNode = Unsigned(Channel["target"]["node"]);
+						if (!TargetNode || *TargetNode >= NodeCount)
+							return std::unexpected(Error("MalformedAnimation", "glTF animation targets an invalid node"));
+						const auto &Path = Channel["target"]["path"].get_ref<const std::string &>();
+						if (Path != "translation" && Path != "rotation" && Path != "scale")
+							return std::unexpected(Error("UnsupportedGltfFeature", "Only translation, rotation, and scale animation channels are supported"));
+						TargetNodes.push_back(*TargetNode);
+					}
+
+					std::optional<std::size_t> CompatibleSkin;
+					for (std::size_t SkinIndex = 0; SkinIndex < Skins.size(); ++SkinIndex) {
+						const bool ContainsAll = std::ranges::all_of(TargetNodes, [&](const auto Node) {
+							return Skins[SkinIndex].NodeToCanonical.contains(Node);
+						});
+						if (!ContainsAll) continue;
+						if (CompatibleSkin && Skins[*CompatibleSkin].Skeleton.CompatibilityId !=
+							Skins[SkinIndex].Skeleton.CompatibilityId)
+							return std::unexpected(Error("IncompatibleSkeleton", "glTF animation channels ambiguously match distinct skeletons"));
+						if (!CompatibleSkin) CompatibleSkin = SkinIndex;
+					}
+					if (!CompatibleSkin)
+						return std::unexpected(Error("IncompatibleSkeleton", "glTF animation channels do not target one imported skeleton"));
+
+					std::optional<std::size_t> SkeletonMesh;
+					for (std::size_t MeshIndex = 0; MeshIndex < MeshSkins.size(); ++MeshIndex)
+						if (MeshSkins[MeshIndex] && Skins[*MeshSkins[MeshIndex]].Skeleton.CompatibilityId ==
+							Skins[*CompatibleSkin].Skeleton.CompatibilityId) {
+							SkeletonMesh = MeshIndex;
+							break;
+						}
+					if (!SkeletonMesh)
+						return std::unexpected(Error("IncompatibleSkeleton", "glTF animation has no skinned mesh dependency"));
+
+					std::vector<std::optional<ImportedAnimationTrack>> TrackSlots(
+						Skins[*CompatibleSkin].Skeleton.Joints->size());
+					float Duration = 0.0f;
+					for (const auto &Channel : SourceAnimation["channels"]) {
+						auto SamplerIndex = Unsigned(Channel["sampler"]);
+						if (!SamplerIndex || *SamplerIndex >= SourceAnimation["samplers"].size())
+							return std::unexpected(Error("MalformedAnimation", "glTF animation sampler index is invalid"));
+						const auto &Sampler = SourceAnimation["samplers"][*SamplerIndex];
+						if (!Sampler.is_object() || !Sampler.contains("input") || !Sampler.contains("output") ||
+							(Sampler.contains("extensions") && !Sampler["extensions"].empty()))
+							return std::unexpected(Error("MalformedAnimation", "glTF animation sampler metadata is invalid"));
+						auto InputAccessor = Unsigned(Sampler["input"]), OutputAccessor = Unsigned(Sampler["output"]);
+						if (!InputAccessor || !OutputAccessor)
+							return std::unexpected(Error("MalformedAnimation", "glTF animation accessor index is invalid"));
+						const auto InterpolationName = Sampler.value("interpolation", std::string("LINEAR"));
+						AssetAnimationInterpolation Interpolation;
+						if (InterpolationName == "LINEAR") Interpolation = AssetAnimationInterpolation::Linear;
+						else if (InterpolationName == "STEP") Interpolation = AssetAnimationInterpolation::Step;
+						else if (InterpolationName == "CUBICSPLINE")
+							return std::unexpected(Error("UnsupportedInterpolation", "glTF CUBICSPLINE animation is deferred in Foundation 1"));
+						else return std::unexpected(Error("MalformedAnimation", "glTF animation interpolation is invalid"));
+						auto Times = ReadAccessor(Root, *Buffers, *InputAccessor, "SCALAR", 5126);
+						if (!Times) return std::unexpected(Times.error());
+						if (Times->empty() || Times->size() > AssetLimits::MaximumAnimationKeyframesPerTrack ||
+							Times->size() > AssetLimits::MaximumAnimationKeyframes -
+							std::min(SourceAnimationKeys, AssetLimits::MaximumAnimationKeyframes))
+							return std::unexpected(Error("AnimationLimit", "glTF animation key count exceeds its limit"));
+						SourceAnimationKeys += Times->size();
+						float PreviousTime = -1.0f;
+						for (const auto TimeValue : *Times) {
+							const auto Time = static_cast<float>(TimeValue);
+							if (Time < 0.0f || Time <= PreviousTime || Time > AssetLimits::MaximumAnimationDurationSeconds)
+								return std::unexpected(Error("MalformedAnimation", "glTF animation times must be finite, increasing, and bounded"));
+							PreviousTime = Time;
+							Duration = std::max(Duration, Time);
+						}
+
+						const auto TargetNode = *Unsigned(Channel["target"]["node"]);
+						const auto JointIndex = Skins[*CompatibleSkin].NodeToCanonical.at(TargetNode);
+						auto &TrackSlot = TrackSlots[JointIndex];
+						if (!TrackSlot) TrackSlot = ImportedAnimationTrack{
+							.JointPath = (*Skins[*CompatibleSkin].Skeleton.Joints)[JointIndex].Path};
+						auto &Track = *TrackSlot;
+						const auto &Path = Channel["target"]["path"].get_ref<const std::string &>();
+						if (Path == "rotation") {
+							if (Track.RotationKeys)
+								return std::unexpected(Error("MalformedAnimation", "glTF animation duplicates a joint rotation channel"));
+							auto Values = ReadAccessor(Root, *Buffers, *OutputAccessor, "VEC4", 5126);
+							if (!Values) return std::unexpected(Values.error());
+							if (Values->size() != Times->size() * 4)
+								return std::unexpected(Error("MalformedAnimation", "glTF animation rotation key count differs from input"));
+							auto Keys = std::make_shared<std::vector<ImportedAnimationRotationKey>>();
+							Keys->reserve(Times->size());
+							for (std::size_t KeyIndex = 0; KeyIndex < Times->size(); ++KeyIndex) {
+								glm::quat Rotation(static_cast<float>((*Values)[KeyIndex * 4 + 3]),
+									-static_cast<float>((*Values)[KeyIndex * 4]),
+									-static_cast<float>((*Values)[KeyIndex * 4 + 1]),
+									static_cast<float>((*Values)[KeyIndex * 4 + 2]));
+								if (glm::length(Rotation) < 1.0e-6f)
+									return std::unexpected(Error("MalformedAnimation", "glTF animation contains a near-zero quaternion"));
+								Keys->push_back({static_cast<float>((*Times)[KeyIndex]), glm::normalize(Rotation)});
+							}
+							Track.RotationInterpolation = Interpolation;
+							Track.RotationKeys = std::move(Keys);
+						} else {
+							auto Values = ReadAccessor(Root, *Buffers, *OutputAccessor, "VEC3", 5126);
+							if (!Values) return std::unexpected(Values.error());
+							if (Values->size() != Times->size() * 3)
+								return std::unexpected(Error("MalformedAnimation", "glTF animation vector key count differs from input"));
+							auto Keys = std::make_shared<std::vector<ImportedAnimationVectorKey>>();
+							Keys->reserve(Times->size());
+							for (std::size_t KeyIndex = 0; KeyIndex < Times->size(); ++KeyIndex) {
+								glm::vec3 Value(static_cast<float>((*Values)[KeyIndex * 3]),
+									static_cast<float>((*Values)[KeyIndex * 3 + 1]),
+									static_cast<float>((*Values)[KeyIndex * 3 + 2]));
+								if (Path == "translation") Value.z = -Value.z;
+								Keys->push_back({static_cast<float>((*Times)[KeyIndex]), Value});
+							}
+							if (Path == "translation") {
+								if (Track.TranslationKeys)
+									return std::unexpected(Error("MalformedAnimation", "glTF animation duplicates a joint translation channel"));
+								Track.TranslationInterpolation = Interpolation;
+								Track.TranslationKeys = std::move(Keys);
+							} else {
+								if (Track.ScaleKeys)
+									return std::unexpected(Error("MalformedAnimation", "glTF animation duplicates a joint scale channel"));
+								Track.ScaleInterpolation = Interpolation;
+								Track.ScaleKeys = std::move(Keys);
+							}
+						}
+					}
+					if (Duration <= 0.0f)
+						return std::unexpected(Error("MalformedAnimation", "glTF animation duration must be greater than zero"));
+					auto Tracks = std::make_shared<std::vector<ImportedAnimationTrack>>();
+					for (auto &Track : TrackSlots) if (Track) Tracks->push_back(std::move(*Track));
+					if (Tracks->empty() || Tracks->size() > AssetLimits::MaximumAnimationTracks)
+						return std::unexpected(Error("AnimationLimit", "glTF animation track count is invalid or oversized"));
+					const auto Name = BoundedName(SourceAnimation, "Animation " + std::to_string(AnimationIndex));
+					std::string Identity = SourceAnimation.contains("name") && SourceAnimation["name"].is_string()
+						? SourceAnimation["name"].get<std::string>() : "clip/" + std::to_string(AnimationIndex);
+					for (const auto &Track : *Tracks) Identity += ";" + Track.JointPath;
+					auto Base = KeyHash("animation/", Identity);
+					const auto Rank = DuplicateAnimationKeys[Base]++;
+					Animations.push_back({Rank == 0 ? Base : Base + "/" + std::to_string(Rank), Name,
+						ImportedAnimation{Duration, Skins[*CompatibleSkin].Skeleton.CompatibilityId, std::nullopt,
+							std::shared_ptr<const std::vector<ImportedAnimationTrack>>(std::move(Tracks))},
+						MeshKeys[*SkeletonMesh]});
+				}
 			}
 
 			const auto MaterialCount = Root.contains("materials") ? Root["materials"].size() : 0;
@@ -569,7 +986,7 @@ namespace gargantuan {
 
 			AssetImportGraphCandidate Graph;
 			Graph.PrimaryLogicalKey = MeshKeys.front();
-			Graph.Nodes.reserve(ImageCount + MaterialCount + Root["meshes"].size());
+			Graph.Nodes.reserve(ImageCount + MaterialCount + Root["meshes"].size() + Animations.size());
 			for (std::size_t Index = 0; Index < ImageCount; ++Index) {
 				if (Cancelled(Context)) return std::unexpected(Error("Cancelled", "glTF import was cancelled"));
 				const auto &Image = Root["images"][Index];
@@ -682,6 +1099,9 @@ namespace gargantuan {
 				auto Vertices = std::make_shared<std::vector<RenderVertex>>();
 				auto Indices = std::make_shared<std::vector<std::uint32_t>>();
 				auto Primitives = std::make_shared<std::vector<ImportedMeshPrimitive>>();
+				auto SkinInfluences = MeshSkins[MeshIndex]
+					? std::make_shared<std::vector<ImportedSkinInfluence>>() : nullptr;
+				const auto *Skin = MeshSkins[MeshIndex] ? &Skins[*MeshSkins[MeshIndex]] : nullptr;
 				std::vector<AssetImportBinding> Bindings;
 				for (std::size_t PrimitiveIndex = 0; PrimitiveIndex < SourceMesh["primitives"].size(); ++PrimitiveIndex) {
 					const auto &Primitive = SourceMesh["primitives"][PrimitiveIndex];
@@ -693,9 +1113,13 @@ namespace gargantuan {
 					const auto &Attributes = Primitive["attributes"];
 					for (const auto &[Semantic, Accessor] : Attributes.items()) {
 						(void)Accessor;
-						if (Semantic != "POSITION" && Semantic != "NORMAL" && Semantic != "TANGENT" && Semantic != "TEXCOORD_0")
+						if (Semantic != "POSITION" && Semantic != "NORMAL" && Semantic != "TANGENT" &&
+							Semantic != "TEXCOORD_0" && Semantic != "JOINTS_0" && Semantic != "WEIGHTS_0")
 							return std::unexpected(Error("UnsupportedGltfFeature", "glTF vertex semantic " + Semantic + " is not represented in Foundation 2A"));
 					}
+					if (Attributes.contains("JOINTS_0") != Attributes.contains("WEIGHTS_0") ||
+						(Skin && !Attributes.contains("JOINTS_0")) || (!Skin && Attributes.contains("JOINTS_0")))
+						return std::unexpected(Error("MalformedSkinWeights", "glTF skinned primitives require matching JOINTS_0, WEIGHTS_0, and skin binding"));
 					if (!Attributes.contains("POSITION")) return std::unexpected(Error("MalformedTopology", "glTF primitive has no POSITION accessor"));
 					auto PositionAccessor = Unsigned(Attributes["POSITION"]);
 					if (!PositionAccessor) return std::unexpected(Error("InvalidAccessor", "glTF POSITION accessor is invalid"));
@@ -704,7 +1128,7 @@ namespace gargantuan {
 					const auto VertexCount = Positions->size() / 3;
 					if (VertexCount == 0 || VertexCount > AssetLimits::MaximumMeshVertices - Vertices->size())
 						return std::unexpected(Error("MeshLimit", "glTF canonical vertex count exceeds its limit"));
-					std::optional<std::vector<double>> Normals, Tangents, TextureCoordinates;
+					std::optional<std::vector<double>> Normals, Tangents, TextureCoordinates, JointValues, WeightValues;
 					if (Attributes.contains("NORMAL")) {
 						auto Accessor = Unsigned(Attributes["NORMAL"]);
 						if (!Accessor) return std::unexpected(Error("InvalidAccessor", "glTF NORMAL accessor is invalid"));
@@ -736,6 +1160,27 @@ namespace gargantuan {
 						TextureCoordinates = std::move(*Values);
 						if (TextureCoordinates->size() / 2 != VertexCount) return std::unexpected(Error("MalformedTopology", "glTF TEXCOORD_0 count differs from POSITION"));
 					}
+					if (Skin) {
+						auto JointAccessor = Unsigned(Attributes["JOINTS_0"]), WeightAccessor = Unsigned(Attributes["WEIGHTS_0"]);
+						if (!JointAccessor || !WeightAccessor)
+							return std::unexpected(Error("InvalidAccessor", "glTF skin influence accessor is invalid"));
+						const auto JointComponent = AccessorComponentType(Root, *JointAccessor);
+						const auto WeightComponent = AccessorComponentType(Root, *WeightAccessor);
+						if (!JointComponent || (*JointComponent != 5121 && *JointComponent != 5123) ||
+							AccessorIsNormalized(Root, *JointAccessor))
+							return std::unexpected(Error("UnsupportedAccessor", "glTF JOINTS_0 must use non-normalized unsigned byte or short"));
+						if (!WeightComponent || (*WeightComponent != 5126 &&
+							((*WeightComponent != 5121 && *WeightComponent != 5123) || !AccessorIsNormalized(Root, *WeightAccessor))))
+							return std::unexpected(Error("UnsupportedAccessor", "glTF WEIGHTS_0 must use float or normalized unsigned byte or short"));
+						auto ReadJoints = ReadAccessor(Root, *Buffers, *JointAccessor, "VEC4");
+						auto ReadWeights = ReadAccessor(Root, *Buffers, *WeightAccessor, "VEC4");
+						if (!ReadJoints) return std::unexpected(ReadJoints.error());
+						if (!ReadWeights) return std::unexpected(ReadWeights.error());
+						JointValues = std::move(*ReadJoints);
+						WeightValues = std::move(*ReadWeights);
+						if (JointValues->size() / 4 != VertexCount || WeightValues->size() / 4 != VertexCount)
+							return std::unexpected(Error("MalformedSkinWeights", "glTF skin influence count differs from POSITION"));
+					}
 					const auto VertexBase = static_cast<std::uint32_t>(Vertices->size());
 					for (std::size_t VertexIndex = 0; VertexIndex < VertexCount; ++VertexIndex) {
 						RenderVertex Vertex;
@@ -750,6 +1195,24 @@ namespace gargantuan {
 						if (TextureCoordinates) Vertex.TextureCoordinate = {static_cast<float>((*TextureCoordinates)[VertexIndex * 2]),
 							static_cast<float>((*TextureCoordinates)[VertexIndex * 2 + 1])};
 						Vertices->push_back(Vertex);
+						if (Skin) {
+							ImportedSkinInfluence Influence;
+							float WeightSum = 0.0f;
+							for (std::size_t InfluenceIndex = 0; InfluenceIndex < 4; ++InfluenceIndex) {
+								const auto Joint = (*JointValues)[VertexIndex * 4 + InfluenceIndex];
+								const auto Weight = (*WeightValues)[VertexIndex * 4 + InfluenceIndex];
+								if (!std::isfinite(Joint) || Joint < 0.0 || std::floor(Joint) != Joint ||
+									Joint >= Skin->SourceJointToCanonical.size() || !std::isfinite(Weight) || Weight < 0.0)
+									return std::unexpected(Error("MalformedSkinWeights", "glTF skin influence contains an invalid joint or weight"));
+								Influence.Joints[InfluenceIndex] = Skin->SourceJointToCanonical[static_cast<std::size_t>(Joint)];
+								Influence.Weights[InfluenceIndex] = static_cast<float>(Weight);
+								WeightSum += static_cast<float>(Weight);
+							}
+							if (!std::isfinite(WeightSum) || WeightSum <= 1.0e-8f)
+								return std::unexpected(Error("MalformedSkinWeights", "glTF skin weights have a zero or non-finite sum"));
+							Influence.Weights /= WeightSum;
+							SkinInfluences->push_back(Influence);
+						}
 					}
 					std::vector<std::uint32_t> LocalIndices;
 					if (Primitive.contains("indices")) {
@@ -862,9 +1325,17 @@ namespace gargantuan {
 					Bounds.Minimum = glm::min(Bounds.Minimum, Vertex.Position);
 					Bounds.Maximum = glm::max(Bounds.Maximum, Vertex.Position);
 				}
-				ImportedMesh Mesh{Vertices, Indices, Bounds, static_cast<std::uint32_t>(Primitives->size()), Primitives};
+				ImportedMesh Mesh{Vertices, Indices, Bounds, static_cast<std::uint32_t>(Primitives->size()), Primitives,
+					Skin ? std::make_shared<const ImportedSkeleton>(Skin->Skeleton) : nullptr,
+					Skin ? std::shared_ptr<const std::vector<ImportedSkinInfluence>>(std::move(SkinInfluences)) : nullptr};
 				Graph.Nodes.push_back({MeshKeys[MeshIndex], AssetKind::Mesh,
 					BoundedName(SourceMesh, "Mesh " + std::to_string(MeshIndex)), Mesh, {}, {}, std::move(Bindings)});
+			}
+			for (auto &Animation : Animations) {
+				std::vector<AssetImportBinding> Bindings{{AssetImportBindingKind::AnimationSkeletonMesh, 0,
+					Animation.SkeletonMeshKey}};
+				Graph.Nodes.push_back({std::move(Animation.LogicalKey), AssetKind::Animation,
+					std::move(Animation.Name), std::move(Animation.Animation), {}, {}, std::move(Bindings)});
 			}
 			if (Graph.Nodes.size() > AssetLimits::MaximumGeneratedAssets)
 				return std::unexpected(Error("GeneratedAssetLimit", "glTF generated asset count exceeds its limit"));
@@ -873,7 +1344,9 @@ namespace gargantuan {
 
 		class GltfImporter final : public IAssetImporter {
 		  public:
-			AssetKind GetKind() const override { return AssetKind::Mesh; }
+			explicit GltfImporter(AssetKind Kind) : Kind(Kind) {}
+
+			AssetKind GetKind() const override { return Kind; }
 			bool SupportsExtension(std::string_view Extension) const override { return Extension == ".gltf" || Extension == ".glb"; }
 			bool IsCompound() const override { return true; }
 
@@ -913,10 +1386,23 @@ namespace gargantuan {
 				if (Cancelled(Context)) return std::unexpected(Error("Cancelled", "glTF import was cancelled or exceeded its deadline"));
 				auto Document = ParseGltf(Source, Context.SourceExtension);
 				if (!Document) return std::unexpected(Document.error());
-				return ImportDocument(*Document, Context);
+				auto Graph = ImportDocument(*Document, Context);
+				if (!Graph) return std::unexpected(Graph.error());
+				if (Kind == AssetKind::Animation) {
+					auto Primary = std::ranges::find_if(Graph->Nodes, [](const auto &Node) {
+						return Node.Kind == AssetKind::Animation;
+					});
+					if (Primary == Graph->Nodes.end())
+						return std::unexpected(Error("MissingAnimation", "glTF source contains no animation clips"));
+					Graph->PrimaryLogicalKey = Primary->LogicalKey;
+				}
+				return Graph;
 			}
+
+		  private:
+			AssetKind Kind;
 		};
 	}
 
-	std::unique_ptr<IAssetImporter> CreateGltfImporter() { return std::make_unique<GltfImporter>(); }
+	std::unique_ptr<IAssetImporter> CreateGltfImporter(AssetKind Kind) { return std::make_unique<GltfImporter>(Kind); }
 }

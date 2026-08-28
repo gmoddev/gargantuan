@@ -1,5 +1,9 @@
 # Current architecture
 
+- [Animation Foundation 1](AnimationFoundation1.md) defines canonical glTF
+  skeleton/clip assets, asset-owned Bones, schema-backed Animator plus
+  runtime-only tracks, deterministic blending, CPU skinning, renderer-neutral
+  pose publication, packaging/headless behavior, limits, and benchmarks.
 - [Standalone Packaging Foundation 1](StandalonePackagingFoundation1.md) defines
   ProjectId, immutable GamePayload capture, the canonical RuntimeDistribution,
   strict hashed directory packages, GargantuanPlayer, CLI/EditorHost workflows,

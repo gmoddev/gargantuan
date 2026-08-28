@@ -33,6 +33,8 @@ namespace gargantuan {
 		std::size_t TexturesRemoved = 0;
 		std::size_t VertexUploadBytes = 0;
 		std::size_t TextureUploadBytes = 0;
+		std::size_t AnimationPosesUpdated = 0;
+		std::size_t AnimationPosesRemoved = 0;
 		std::size_t EnvironmentsUpdated = 0;
 		std::size_t UiBatches = 0;
 		std::size_t UiVertices = 0;
@@ -46,6 +48,7 @@ namespace gargantuan {
 		void Clear();
 
 		[[nodiscard]] const RenderItem *GetItem(ObjectId Object) const;
+		[[nodiscard]] const RenderAnimationPoseUpdate *GetAnimationPose(ObjectId Object) const;
 		[[nodiscard]] std::size_t GetSize() const { return Entries.size(); }
 		[[nodiscard]] std::size_t GetMeshCount() const { return Meshes.size(); }
 		[[nodiscard]] std::size_t GetTextureCount() const { return Textures.size(); }
@@ -63,6 +66,7 @@ namespace gargantuan {
 			std::size_t VertexCount = 0;
 			std::size_t IndexCount = 0;
 			RenderBounds Bounds;
+			std::shared_ptr<const std::vector<RenderSkinInfluence>> SkinInfluences;
 		};
 		std::unordered_map<RenderMeshIdentity, MeshEntry, RenderMeshIdentityHash> Meshes;
 		struct TextureEntry {
@@ -72,6 +76,7 @@ namespace gargantuan {
 			RenderTextureFormat Format = RenderTextureFormat::Rgba8Unorm;
 		};
 		std::unordered_map<RenderTextureIdentity, TextureEntry, RenderTextureIdentityHash> Textures;
+		std::unordered_map<ObjectId, RenderAnimationPoseUpdate> AnimationPoses;
 		RenderPublicationId LastPublicationId = InvalidRenderPublicationId;
 		RenderFrameState Frame;
 		std::shared_ptr<const RenderUiFrame> Ui = std::make_shared<const RenderUiFrame>();

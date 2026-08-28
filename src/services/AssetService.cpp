@@ -120,10 +120,22 @@ namespace gargantuan {
 				else if constexpr (std::is_same_v<T, ImportedMesh>)
 					return (Value.Vertices ? Value.Vertices->size() * sizeof(RenderVertex) : 0) +
 						(Value.Indices ? Value.Indices->size() * sizeof(std::uint32_t) : 0) +
-						(Value.Primitives ? Value.Primitives->size() * sizeof(ImportedMeshPrimitive) : 0);
+						(Value.Primitives ? Value.Primitives->size() * sizeof(ImportedMeshPrimitive) : 0) +
+						(Value.SkinInfluences ? Value.SkinInfluences->size() * sizeof(ImportedSkinInfluence) : 0) +
+						(Value.Skeleton && Value.Skeleton->Joints
+							? Value.Skeleton->Joints->size() * sizeof(ImportedSkeletonJoint) : 0);
 				else if constexpr (std::is_same_v<T, ImportedAudio>)
 					return Value.Pcm16 ? Value.Pcm16->size() * sizeof(std::int16_t) : 0;
-				else return sizeof(ImportedMaterial);
+				else if constexpr (std::is_same_v<T, ImportedAnimation>) {
+					std::size_t Bytes = sizeof(ImportedAnimation);
+					if (Value.Tracks) for (const auto &Track : *Value.Tracks) {
+						Bytes += sizeof(ImportedAnimationTrack) + Track.JointPath.size();
+						if (Track.TranslationKeys) Bytes += Track.TranslationKeys->size() * sizeof(ImportedAnimationVectorKey);
+						if (Track.RotationKeys) Bytes += Track.RotationKeys->size() * sizeof(ImportedAnimationRotationKey);
+						if (Track.ScaleKeys) Bytes += Track.ScaleKeys->size() * sizeof(ImportedAnimationVectorKey);
+					}
+					return Bytes;
+				} else return sizeof(ImportedMaterial);
 			}, Asset);
 		}
 
@@ -192,6 +204,9 @@ namespace gargantuan {
 						Binding.Kind == AssetImportBindingKind::MaterialNormalTexture) &&
 						(Node.Kind != AssetKind::Material || Kinds.at(Binding.LogicalKey) != AssetKind::Image))
 						return std::unexpected(Error("InvalidDependency", "Material texture dependency must target an Image asset"));
+					if (Binding.Kind == AssetImportBindingKind::AnimationSkeletonMesh &&
+						(Node.Kind != AssetKind::Animation || Kinds.at(Binding.LogicalKey) != AssetKind::Mesh))
+						return std::unexpected(Error("InvalidDependency", "Animation skeleton dependency must target a Mesh asset"));
 					if (!std::ranges::contains(Edges, Binding.LogicalKey)) Edges.push_back(Binding.LogicalKey);
 				}
 				if (Edges.size() > AssetLimits::MaximumDependencies)
@@ -227,6 +242,10 @@ namespace gargantuan {
 						auto Primitives = std::make_shared<std::vector<ImportedMeshPrimitive>>(*Mesh->Primitives);
 						(*Primitives)[Binding.TargetIndex].Material = DependencyId;
 						Mesh->Primitives = std::move(Primitives);
+					} else if (Binding.Kind == AssetImportBindingKind::AnimationSkeletonMesh) {
+						auto *Animation = std::get_if<ImportedAnimation>(&Node.Asset);
+						if (!Animation) return std::unexpected(Error("InvalidDependency", "Animation skeleton binding target is invalid"));
+						Animation->SkeletonAsset = DependencyId;
 					} else {
 						auto *Material = std::get_if<ImportedMaterial>(&Node.Asset);
 						if (!Material) return std::unexpected(Error("InvalidDependency", "Material texture binding target is invalid"));
@@ -393,7 +412,12 @@ namespace gargantuan {
 		std::optional<AssetKind> DetectKind(std::string_view Extension) const {
 			std::optional<AssetKind> Result;
 			for (const auto &Importer : Importers) if (Importer->SupportsExtension(Extension)) {
-				if (Result && *Result != Importer->GetKind()) return std::nullopt;
+				if (Result && *Result != Importer->GetKind()) {
+					if ((Extension == ".gltf" || Extension == ".glb") &&
+						(*Result == AssetKind::Mesh || Importer->GetKind() == AssetKind::Mesh))
+						return AssetKind::Mesh;
+					return std::nullopt;
+				}
 				Result = Importer->GetKind();
 			}
 			return Result;
@@ -510,8 +534,17 @@ namespace gargantuan {
 					Existing = Meshes.emplace(Record.Reference.Value, MeshResidency{MeshIdentity(Record.Id), Record.ContentRevision, *Mesh}).first;
 				}
 				const auto &Residency = Existing->second;
+				std::shared_ptr<const std::vector<RenderSkinInfluence>> RenderInfluences;
+				if (Residency.Mesh.SkinInfluences) {
+					auto Values = std::make_shared<std::vector<RenderSkinInfluence>>();
+					Values->reserve(Residency.Mesh.SkinInfluences->size());
+					for (const auto &Influence : *Residency.Mesh.SkinInfluences)
+						Values->push_back({Influence.Joints, Influence.Weights});
+					RenderInfluences = std::move(Values);
+				}
 				PendingMeshes.Creates.push_back({Residency.Identity, Residency.Revision, Residency.Revision,
-					Residency.Mesh.Vertices, Residency.Mesh.Indices, Residency.Mesh.Bounds});
+					Residency.Mesh.Vertices, Residency.Mesh.Indices, Residency.Mesh.Bounds,
+					std::move(RenderInfluences)});
 			}
 		}
 
@@ -679,6 +712,15 @@ namespace gargantuan {
 					} else if (const auto *Mesh = std::get_if<ImportedMesh>(Record->Asset.get()); Mesh && Mesh->Primitives) {
 						for (const auto &Primitive : *Mesh->Primitives) if (Primitive.Material &&
 							!std::ranges::contains(SemanticDependencies, *Primitive.Material)) SemanticDependencies.push_back(*Primitive.Material);
+					} else if (const auto *Animation = std::get_if<ImportedAnimation>(Record->Asset.get());
+						Animation && Animation->SkeletonAsset) {
+						SemanticDependencies.push_back(*Animation->SkeletonAsset);
+						const auto Dependency = ById.find(*Animation->SkeletonAsset);
+						const auto *Mesh = Dependency != ById.end() && Dependency->second->Asset
+							? std::get_if<ImportedMesh>(Dependency->second->Asset.get()) : nullptr;
+						if (!Mesh || !Mesh->Skeleton ||
+							Mesh->Skeleton->CompatibilityId != Animation->SkeletonCompatibilityId)
+							throw std::runtime_error("Animation artifact skeleton is incompatible with its Mesh dependency");
 					}
 				}
 				if (SemanticDependencies != Record->Dependencies)
@@ -1175,6 +1217,13 @@ namespace gargantuan {
 		return Audio ? std::optional(AssetAudioResource{*Audio, Record->ContentRevision}) : std::nullopt;
 	}
 
+	std::optional<AssetAnimationResource> AssetService::ResolveAnimation(std::string_view Reference) const {
+		auto Record = GetAsset(Reference);
+		if (!Record || !IsAvailableRecord(*Record) || !Record->Asset) return std::nullopt;
+		const auto *Animation = std::get_if<ImportedAnimation>(Record->Asset.get());
+		return Animation ? std::optional(AssetAnimationResource{*Animation, Record->ContentRevision}) : std::nullopt;
+	}
+
 	AssetTextureChanges AssetService::DrainTextureChanges() {
 		std::scoped_lock Lock(State->Mutex);
 		auto Result = std::move(State->PendingTextures);
@@ -1468,11 +1517,14 @@ namespace gargantuan {
 				lua_pushnumber(L, Asset.MetallicFactor); lua_setfield(L, -2, "MetallicFactor");
 				lua_pushnumber(L, Asset.RoughnessFactor); lua_setfield(L, -2, "RoughnessFactor");
 				lua_pushboolean(L, Asset.DoubleSided); lua_setfield(L, -2, "DoubleSided");
-			} else {
+			} else if constexpr (std::is_same_v<T, ImportedAudio>) {
 				lua_pushnumber(L, Asset.SampleRate); lua_setfield(L, -2, "SampleRate");
 				lua_pushnumber(L, Asset.Channels); lua_setfield(L, -2, "Channels");
 				lua_pushnumber(L, Asset.FrameCount); lua_setfield(L, -2, "FrameCount");
 				lua_pushnumber(L, static_cast<double>(Asset.FrameCount) / Asset.SampleRate); lua_setfield(L, -2, "Duration");
+			} else {
+				lua_pushnumber(L, Asset.Duration); lua_setfield(L, -2, "Duration");
+				lua_pushnumber(L, Asset.Tracks ? Asset.Tracks->size() : 0); lua_setfield(L, -2, "TrackCount");
 			}
 		}, *Record->Asset);
 		return 1;

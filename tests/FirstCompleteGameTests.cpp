@@ -1,6 +1,8 @@
 #include "gargantuan/editor/EditorHost.hpp"
 #include "gargantuan/editor/PlaySession.hpp"
+#include "gargantuan/classes/Animator.hpp"
 #include "gargantuan/classes/KinematicCharacter.hpp"
+#include "gargantuan/classes/MeshPart.hpp"
 #include "gargantuan/classes/Part.hpp"
 #include "gargantuan/classes/ProximityPrompt.hpp"
 #include "gargantuan/classes/Sound.hpp"
@@ -88,6 +90,7 @@ namespace {
 	struct RuntimeEvidence {
 		std::vector<PlayDiagnostic> Diagnostics;
 		double RepresentativeFrameMilliseconds = 0.0;
+		bool SawAnimationPose = false;
 	};
 
 	bool HasDiagnostic(const std::vector<PlayDiagnostic> &Diagnostics, std::string_view Text) {
@@ -128,12 +131,21 @@ namespace {
 			"headless runtime did not publish its initial complete frame");
 		Require(InitialPublication->UiChanged && !InitialPublication->GetUi().Batches.empty(),
 			"headless runtime publication omitted the authored GUI");
+		Evidence.SawAnimationPose = !InitialPublication->AnimationPoseUpdates.empty();
 		auto RuntimeWorld = Session.GetWorld();
 		auto PlayersValue = RuntimeWorld ? std::dynamic_pointer_cast<Players>(RuntimeWorld->GetService("Players")) : nullptr;
 		auto WorkspaceValue = RuntimeWorld ? std::dynamic_pointer_cast<Workspace>(RuntimeWorld->GetService("Workspace")) : nullptr;
 		auto InteractionValue = RuntimeWorld ? std::dynamic_pointer_cast<InteractionService>(
 			RuntimeWorld->GetService("InteractionService")
 		) : nullptr;
+		auto AnimatedBeacon = WorkspaceValue ? std::dynamic_pointer_cast<MeshPart>(
+			WorkspaceValue->FindFirstChild("AnimatedBeacon", true)
+		) : nullptr;
+		auto BeaconAnimator = AnimatedBeacon ? std::dynamic_pointer_cast<Animator>(
+			AnimatedBeacon->FindFirstChildOfClass("Animator", false)
+		) : nullptr;
+		Require(AnimatedBeacon && BeaconAnimator,
+			"headless Play did not preserve the authored animated beacon hierarchy");
 		Require(PlayersValue && PlayersValue->GetLocalPlayer(), "default Players runtime did not create LocalPlayer");
 		auto LocalPlayer = *PlayersValue->GetLocalPlayer();
 		Require(LocalPlayer->GetCharacter().has_value(), "default player runtime did not assemble a character");
@@ -151,6 +163,12 @@ namespace {
 			std::this_thread::sleep_for(std::chrono::milliseconds(10));
 			Session.Step();
 		}
+		auto AnimationPublication = TakeLatestRenderPublication(Session);
+		Evidence.SawAnimationPose = Evidence.SawAnimationPose || (AnimationPublication &&
+			std::ranges::any_of(AnimationPublication->AnimationPoseUpdates, [&](const auto &Pose) {
+				return Pose.Object == AnimatedBeacon->GetObjectId();
+			}));
+		Require(Evidence.SawAnimationPose, "headless Play did not publish the authored animated beacon pose");
 		(void)Session.ProcessEvent(ForwardUp);
 		Require(glm::length(Character->GetPosition() - Start) > 0.05f,
 			"ActionMap input did not produce default kinematic motion through physics");
@@ -162,6 +180,7 @@ namespace {
 			std::chrono::steady_clock::now() - FrameStart
 		).count();
 		auto ResizedPublication = TakeLatestRenderPublication(Session);
+		if (ResizedPublication && !ResizedPublication->AnimationPoseUpdates.empty()) Evidence.SawAnimationPose = true;
 		Require(ResizedPublication && ResizedPublication->Frame.ViewportWidth == 640 &&
 			ResizedPublication->Frame.ViewportHeight == 360 &&
 			ResizedPublication->GetUi().ViewportWidth == 640 && ResizedPublication->GetUi().ViewportHeight == 360,
@@ -250,6 +269,7 @@ namespace {
 		Require(!std::ranges::any_of(Evidence.Diagnostics, [](const PlayDiagnostic &Diagnostic) {
 			return Diagnostic.Severity == "Error";
 		}), "headless runtime emitted an error diagnostic");
+		Require(Evidence.SawAnimationPose, "FirstCompleteGame never produced a transient animation pose publication");
 		RuntimeWorld.reset();
 		AuthoringWorld->Destroy();
 		return Evidence;
@@ -301,6 +321,13 @@ int main() {
 		Require(SoundDefinition != Schema["Result"]["Definitions"].end() &&
 			SoundDefinition->value("Constructible", false),
 			"Sound is not available to Studio's schema-driven Insert Object path");
+		auto AnimatorDefinition = std::ranges::find_if(
+			Schema["Result"]["Definitions"],
+			[](const Json &Definition) { return Definition.value("CanonicalName", "") == "Engine.Animator"; }
+		);
+		Require(AnimatorDefinition != Schema["Result"]["Definitions"].end() &&
+			AnimatorDefinition->value("Constructible", false),
+			"Animator is not available to Studio's schema-driven Insert Object path");
 		for (const auto PropertyName : {"SoundId", "Volume", "PlaybackSpeed", "Looped", "RollOffMinDistance", "RollOffMaxDistance"})
 			Require(std::ranges::any_of((*SoundDefinition)["Properties"], [&](const Json &Property) {
 				return Property.value("Name", "") == PropertyName && Property.value("Editable", false);
@@ -309,13 +336,14 @@ int main() {
 		Require(Snapshot["Ok"], "sample project snapshot failed");
 		const auto ObjectsBeforePlay = Snapshot["Result"]["Snapshot"]["Objects"];
 
-		const std::array<std::pair<std::string_view, std::string_view>, 16> ExpectedObjects{{
+		const std::array<std::pair<std::string_view, std::string_view>, 19> ExpectedObjects{{
 			{"CollectionCourse", "Folder"}, {"Ground", "Part"}, {"MovingObstacle", "Part"},
-			{"ImportedBeacon", "MeshPart"}, {"Collectibles", "Folder"}, {"Collectible1", "Part"},
+			{"ImportedBeacon", "MeshPart"}, {"AnimatedBeacon", "MeshPart"}, {"BeaconAnimator", "Animator"},
+			{"Collectibles", "Folder"}, {"Collectible1", "Part"},
 			{"Collectible2", "Part"}, {"Collectible3", "Part"}, {"CollectionGui", "ScreenGui"},
 			{"Hud", "Frame"}, {"Badge", "ImageLabel"}, {"Progress", "TextLabel"},
 			{"WinPanel", "Frame"}, {"RestartButton", "TextButton"}, {"RoundCompleteSound", "Sound"},
-			{"RoundManager", "Script"},
+			{"RoundManager", "Script"}, {"BeaconAnimation", "Script"},
 		}};
 		for (const auto &Expected : ExpectedObjects)
 			Require(HasObject(ObjectsBeforePlay, Expected.first, Expected.second), "authored hierarchy is incomplete");
@@ -337,6 +365,12 @@ int main() {
 			Require(SourceText.find(RequiredText) != std::string::npos, "RoundManager omits a required public gameplay API");
 		Require(SourceText.find("(Character.Position - Item.Position).Magnitude") == std::string::npos,
 			"FirstCompleteGame still contains its removed Luau distance-polling workaround");
+		const auto &BeaconAnimation = GetObject(ObjectsBeforePlay, "BeaconAnimation");
+		auto BeaconSource = Call("GetScriptSource", {{"Object", BeaconAnimation["Id"]}});
+		Require(BeaconSource["Ok"] &&
+			BeaconSource["Result"]["Source"].get<std::string>().find("Animator:LoadAnimation") != std::string::npos &&
+			BeaconSource["Result"]["Source"].get<std::string>().find("Track.Looped = true") != std::string::npos,
+			"FirstCompleteGame animation script does not use the public Animator/AnimationTrack API");
 
 		const auto &Collectible1 = GetObject(ObjectsBeforePlay, "Collectible1");
 		const auto &Collectible2 = GetObject(ObjectsBeforePlay, "Collectible2");
@@ -386,7 +420,7 @@ int main() {
 		auto Catalog = Call("GetAssetCatalog", {{"IncludeBuiltIns", false}});
 		Require(Catalog["Ok"], "AssetService catalog could not be read");
 		const auto &Assets = Catalog["Result"]["Assets"];
-		for (const auto Kind : {"Mesh", "Material", "Image", "Font", "Audio"})
+		for (const auto Kind : {"Mesh", "Material", "Image", "Font", "Audio", "Animation"})
 			Require(std::ranges::any_of(Assets, [&](const Json &Asset) {
 				return Asset.value("Kind", "") == Kind && Asset.value("State", "") == "Ready";
 			}), "a required imported asset is not Ready");
@@ -396,6 +430,9 @@ int main() {
 		Require(std::ranges::any_of(Assets, [](const Json &Asset) {
 			return Asset.value("Kind", "") == "Material" && Asset.contains("Dependencies") && !Asset["Dependencies"].empty();
 		}), "imported material dependency graph is missing");
+		Require(std::ranges::any_of(Assets, [](const Json &Asset) {
+			return Asset.value("Kind", "") == "Animation" && Asset.contains("Dependencies") && Asset["Dependencies"].size() == 1;
+		}), "Animation-to-skeleton-Mesh package dependency is missing");
 
 		auto Saved = Call("SaveProject");
 		Require(Saved["Ok"] && !Saved["Result"].value("Dirty", true), "sample project did not save cleanly");
@@ -481,6 +518,8 @@ int main() {
 
 		Require(HasDiagnostic(FirstCycleDiagnostics, "[Game:FirstCompleteGame] Ready\t3"),
 			"game manager did not start or register three collectibles");
+		Require(HasDiagnostic(FirstCycleDiagnostics, "[Game:FirstCompleteGame] Animation ready"),
+			"authored Animator script did not start in generic Play");
 		Require(HasDiagnostic(HeadlessRuntimeEvidence.Diagnostics, "[Game:FirstCompleteGame] Round complete"),
 			"deterministic completion logic did not run");
 		Require(HasDiagnostic(HeadlessRuntimeEvidence.Diagnostics, "[Game:FirstCompleteGame] Round reset"),

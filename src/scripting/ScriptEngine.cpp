@@ -1,5 +1,6 @@
 #include "gargantuan/scripting/ScriptEngine.hpp"
 #include "gargantuan/Log.hpp"
+#include "gargantuan/animation/AnimationTrack.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Instance.hpp"
 #include "gargantuan/classes/Script.hpp"
@@ -45,6 +46,7 @@ namespace gargantuan {
 	};
 
 	static const Lib SCRIPT_LIBS[] = {
+		{"AnimationTrack", nullptr, AnimationTrack::CreateUserdataMetatable},
 		{"Axes", OpenLibAxes, Axes::CreateUserdataMetatable},
 		{"CFrame", OpenLibCFrame, CFrame::CreateUserdataMetatable},
 		{"Color3", OpenLibColor3, Color3::CreateUserdataMetatable},

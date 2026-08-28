@@ -167,6 +167,15 @@ int main() {
 			return Asset.value("Kind", "") == "Audio" &&
 				Asset.value("Reference", "") == "asset://a0d10f78c368437daac002a4e59fdd64";
 		}), "FirstCompleteGame canonical Audio asset is missing from the runtime package closure");
+		auto AnimationAsset = std::ranges::find_if(RuntimeCatalog["Assets"], [](const Json &Asset) {
+			return Asset.value("Kind", "") == "Animation";
+		});
+		Require(AnimationAsset != RuntimeCatalog["Assets"].end() &&
+			(*AnimationAsset)["Dependencies"].size() == 1 &&
+			std::ranges::any_of(RuntimeCatalog["Assets"], [&](const Json &Asset) {
+				return Asset.value("Kind", "") == "Mesh" &&
+				Asset.value("AssetId", "") == (*AnimationAsset)["Dependencies"][0].get<std::string>();
+			}), "FirstCompleteGame Animation and its compatible skinned Mesh are not a closed package dependency");
 
 		const auto ReleaseA = Workspace.Root / "ReleaseA";
 		const auto ReleaseB = Workspace.Root / "ReleaseB";
@@ -210,10 +219,15 @@ int main() {
 		Engine RuntimeEngine(PackagedWorld, &Renderer);
 		RuntimeEngine.ProcessService->Alive = true;
 		RuntimeEngine.Step();
+		auto InitialRuntimePublication = Renderer.TakeLastPublication();
 		Require(
-			Renderer.TakeLastPublication() != nullptr,
+			InitialRuntimePublication != nullptr,
 			"packaged runtime did not publish its initial assets/scene/GUI frame"
 		);
+		RuntimeEngine.Step();
+		auto AnimationRuntimePublication = Renderer.TakeLastPublication();
+		Require(AnimationRuntimePublication && AnimationRuntimePublication->AnimationPoseUpdates.size() == 1,
+			"packaged runtime did not start and publish the canonical animated beacon");
 		(void)RuntimeEngine.ProcessEvent(
 			KeyEvent{{1}, PhysicalKey::W, LogicalKey::W, KeyModifier::None, ButtonState::Pressed}
 		);

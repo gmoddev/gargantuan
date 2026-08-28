@@ -380,6 +380,13 @@ namespace gargantuan {
 			for (const auto &Update : Publication.MeshVertexUpdates)
 				if (Update.Vertices)
 					Result = AddBounded(Result, MultiplyBounded(Update.Vertices->size(), sizeof(RenderVertex)));
+			Result = AddBounded(Result, MultiplyBounded(Publication.AnimationPoseUpdates.size(),
+				sizeof(RenderAnimationPoseUpdate)));
+			Result = AddBounded(Result, MultiplyBounded(Publication.AnimationPoseRemoves.size(),
+				sizeof(RenderAnimationPoseRemove)));
+			for (const auto &Update : Publication.AnimationPoseUpdates)
+				if (Update.BonePalette) Result = AddBounded(Result,
+					MultiplyBounded(Update.BonePalette->size(), sizeof(glm::mat4)));
 			for (const auto &Create : Publication.TextureCreates)
 				if (Create.Pixels) Result = AddBounded(Result, Create.Pixels->size());
 			for (const auto &Update : Publication.TextureUpdates)
@@ -403,7 +410,9 @@ namespace gargantuan {
 
 	RenderPublisher::RenderPublisher(RenderDirtyAccumulator *DirtyAccumulator)
 		: Dirty(DirtyAccumulator ? DirtyAccumulator : &RenderDirtyAccumulator::Get()),
-		  DirtyConsumer(Dirty->CreateConsumer()) {}
+		  DirtyConsumer(Dirty->CreateConsumer()) {
+		PendingAnimationObjects.reserve(64);
+	}
 
 	RenderPublisher::~RenderPublisher() {
 		if (Dirty) Dirty->ReleaseConsumer(DirtyConsumer);
@@ -647,9 +656,54 @@ namespace gargantuan {
 			for (const auto Index : *Create.Indices) if (Index >= Create.Vertices->size())
 				throw std::invalid_argument("Render publisher rejects an out-of-range asset mesh index");
 			PublishedAssetMeshes.emplace(Create.Mesh, PublishedAssetMesh{
-				Create.TopologyRevision, Create.VertexRevision, Create.Vertices, Create.Indices, Create.Bounds
+				Create.TopologyRevision, Create.VertexRevision, Create.Vertices, Create.Indices, Create.Bounds,
+				Create.SkinInfluences
 			});
 			PendingAssetMeshCreates.push_back(Create);
+		}
+	}
+
+	void RenderPublisher::SetAnimationPoseChanges(
+		std::span<const RenderAnimationPoseState> Updates,
+		std::span<const RenderAnimationPoseRemove> Removes
+	) {
+		auto HasPending = [&](ObjectId Object) {
+			const auto Position = std::lower_bound(
+				PendingAnimationObjects.begin(), PendingAnimationObjects.end(), Object);
+			return Position != PendingAnimationObjects.end() && *Position == Object;
+		};
+		auto AddPending = [&](ObjectId Object) {
+			PendingAnimationObjects.insert(std::lower_bound(
+				PendingAnimationObjects.begin(), PendingAnimationObjects.end(), Object), Object);
+		};
+		for (const auto &Update : Updates) {
+			const auto &Pose = Update.Pose;
+			if (!Pose.Object.IsValid() || !Pose.SourceMesh.IsValid() || !Pose.PosedMesh.IsValid() ||
+				Pose.SourceMesh == Pose.PosedMesh || Pose.PoseRevision == 0 || Update.TopologyRevision == 0 ||
+				!Pose.BonePalette || Pose.BonePalette->empty() ||
+				Pose.BonePalette->size() > AssetLimits::MaximumSkeletonBones || !Update.Vertices ||
+				Update.Vertices->empty() || !Update.Indices || Update.Indices->empty() ||
+				HasPending(Pose.Object))
+				throw std::invalid_argument("Render publisher rejects an invalid or duplicate animation pose update");
+			for (const auto &Matrix : *Pose.BonePalette) if (!IsFinite(Matrix))
+				throw std::invalid_argument("Render publisher rejects a non-finite animation palette");
+			for (const auto &Vertex : *Update.Vertices)
+				if (!IsFinite(Vertex.Position) || !IsFinite(Vertex.Normal) || !IsFinite(Vertex.Tangent))
+					throw std::invalid_argument("Render publisher rejects non-finite CPU-skinned vertices");
+			for (const auto Index : *Update.Indices) if (Index >= Update.Vertices->size())
+				throw std::invalid_argument("Render publisher rejects an out-of-range animated mesh index");
+			if (const auto Existing = AnimationPoses.find(Pose.Object); Existing != AnimationPoses.end() &&
+				Pose.PoseRevision <= Existing->second.Pose.PoseRevision)
+				throw std::invalid_argument("Render publisher rejects a stale animation pose revision");
+			AnimationPoses.insert_or_assign(Pose.Object, Update);
+			AddPending(Pose.Object);
+		}
+		for (const auto &Remove : Removes) {
+			if (!Remove.Object.IsValid() || HasPending(Remove.Object))
+				throw std::invalid_argument("Render publisher rejects an invalid or duplicate animation pose removal");
+			if (AnimationPoses.erase(Remove.Object) == 0 && !CommittedAnimationPoses.contains(Remove.Object))
+				continue;
+			AddPending(Remove.Object);
 		}
 	}
 
@@ -674,6 +728,7 @@ namespace gargantuan {
 			FullResyncRequested = true;
 			PublishedItems.clear();
 			PublishedDeformables.clear();
+			CommittedAnimationPoses.clear();
 			HasPublishedEnvironment = false;
 			LastKnownGoodSky.reset();
 		}
@@ -715,7 +770,11 @@ namespace gargantuan {
 					Result->Diagnostics.push_back(std::move(Diagnostic));
 					continue;
 				}
-				Result->Creates.push_back({Extracted->Item, Extracted->Mesh, Extracted->Material, true,
+				auto DisplayMesh = Extracted->Mesh;
+				if (const auto Animated = AnimationPoses.find(Extracted->Item.Object);
+					Animated != AnimationPoses.end() && Animated->second.Pose.SourceMesh == Extracted->Mesh)
+					DisplayMesh = Animated->second.Pose.PosedMesh;
+				Result->Creates.push_back({Extracted->Item, DisplayMesh, Extracted->Material, true,
 					Extracted->Primitives});
 				Replacement.emplace(Extracted->Item.Object, Extracted->Item);
 			}
@@ -753,7 +812,17 @@ namespace gargantuan {
 			std::ranges::sort(OrderedAssetMeshes, {}, &std::pair<RenderMeshIdentity, PublishedAssetMesh>::first);
 			for (const auto &[Identity, Mesh] : OrderedAssetMeshes)
 				Result->MeshCreates.push_back({Identity, Mesh.TopologyRevision, Mesh.VertexRevision,
-					Mesh.Vertices, Mesh.Indices, Mesh.Bounds});
+					Mesh.Vertices, Mesh.Indices, Mesh.Bounds, Mesh.SkinInfluences});
+			std::vector<std::pair<ObjectId, RenderAnimationPoseState>> OrderedAnimationPoses(
+				AnimationPoses.begin(), AnimationPoses.end());
+			std::ranges::sort(OrderedAnimationPoses, {},
+				&std::pair<ObjectId, RenderAnimationPoseState>::first);
+			for (const auto &[Object, State] : OrderedAnimationPoses) {
+				(void)Object;
+				Result->MeshCreates.push_back({State.Pose.PosedMesh, State.TopologyRevision,
+					State.Pose.PoseRevision, State.Vertices, State.Indices, State.Bounds});
+				Result->AnimationPoseUpdates.push_back(State.Pose);
+			}
 			Result->UiChanged = true;
 			Result->SharedUi = CommittedUi;
 			std::vector<std::pair<RenderTextureIdentity, PublishedTexture>> OrderedTextures(
@@ -767,6 +836,7 @@ namespace gargantuan {
 			}
 			PublishedItems = std::move(Replacement);
 			PublishedDeformables = std::move(DeformableReplacement);
+			CommittedAnimationPoses = AnimationPoses;
 			PublishedEnvironment = Environment;
 			HasPublishedEnvironment = true;
 			FullResyncRequested = false;
@@ -779,6 +849,7 @@ namespace gargantuan {
 			PendingTextureRemoves.clear();
 			PendingAssetMeshCreates.clear();
 			PendingAssetMeshRemoves.clear();
+			PendingAnimationObjects.clear();
 			PendingUiGeometryBytes = 0;
 			PendingTextureBytes = 0;
 			return std::shared_ptr<const RenderPublication>(std::move(Result));
@@ -788,11 +859,11 @@ namespace gargantuan {
 
 		const auto ExpansionStart = ProfilingEnabled ? ProfileClock::now() : ProfileClock::time_point{};
 		std::vector<std::pair<ObjectId, RenderUpdateDomain>> DirtyObjects;
+		DirtyObjects.reserve(DirtyBatch.Records.size() + PendingAnimationObjects.size());
 		const bool HasHierarchyChanges = std::ranges::any_of(DirtyBatch.Records, [](const RenderDirtyRecord &Record) {
 			return HasRenderUpdateDomain(Record.Domains, RenderUpdateDomain::Hierarchy);
 		});
 		if (!HasHierarchyChanges) {
-			DirtyObjects.reserve(DirtyBatch.Records.size());
 			for (const auto &Record : DirtyBatch.Records) DirtyObjects.emplace_back(Record.Object, Record.Domains);
 		} else {
 			std::map<ObjectId, RenderUpdateDomain> Expanded;
@@ -813,6 +884,17 @@ namespace gargantuan {
 				for (const auto &Descendant : Root->GetDescendants()) AddRenderable(Descendant);
 			}
 			DirtyObjects.assign(Expanded.begin(), Expanded.end());
+			DirtyObjects.reserve(DirtyObjects.size() + PendingAnimationObjects.size());
+		}
+		if (!PendingAnimationObjects.empty()) {
+			std::ranges::sort(DirtyObjects, {}, &std::pair<ObjectId, RenderUpdateDomain>::first);
+			for (const auto Object : PendingAnimationObjects) {
+				const auto Position = std::lower_bound(DirtyObjects.begin(), DirtyObjects.end(), Object,
+					[](const auto &Entry, ObjectId Value) { return Entry.first < Value; });
+				if (Position != DirtyObjects.end() && Position->first == Object)
+					Position->second = Position->second | RenderUpdateDomain::AnimationPose;
+				else DirtyObjects.insert(Position, {Object, RenderUpdateDomain::AnimationPose});
+			}
 		}
 		if (ProfilingEnabled)
 			LastProfile.DirtyExpansionNanoseconds = ProfileNanoseconds(ProfileClock::now() - ExpansionStart);
@@ -929,11 +1011,15 @@ namespace gargantuan {
 							ProfileNanoseconds(ProfileClock::now() - OperationStart);
 					continue;
 				}
+				auto DisplayMesh = Extracted->Mesh;
+				if (const auto Animated = AnimationPoses.find(Object);
+					Animated != AnimationPoses.end() && Animated->second.Pose.SourceMesh == Extracted->Mesh)
+					DisplayMesh = Animated->second.Pose.PosedMesh;
 				if (Previous == PublishedItems.end()) Result->Creates.push_back({
-					Extracted->Item, Extracted->Mesh, Extracted->Material, true, Extracted->Primitives
+					Extracted->Item, DisplayMesh, Extracted->Material, true, Extracted->Primitives
 				});
 				else Result->Updates.push_back({
-					Object, Domains, Extracted->Item, Extracted->Mesh, Extracted->Material, true, Extracted->Primitives
+					Object, Domains, Extracted->Item, DisplayMesh, Extracted->Material, true, Extracted->Primitives
 				});
 				if (ProfilingEnabled)
 					LastProfile.PublicationConstructionNanoseconds +=
@@ -989,6 +1075,35 @@ namespace gargantuan {
 			Result->UiChanged = true;
 			Result->SharedUi = PendingUi;
 		}
+		for (const auto Object : PendingAnimationObjects) {
+			const auto PreviousPose = CommittedAnimationPoses.find(Object);
+			const auto CurrentPose = AnimationPoses.find(Object);
+			if (PreviousPose == CommittedAnimationPoses.end() && CurrentPose != AnimationPoses.end()) {
+				const auto &State = CurrentPose->second;
+				Result->MeshCreates.push_back({State.Pose.PosedMesh, State.TopologyRevision,
+					State.Pose.PoseRevision, State.Vertices, State.Indices, State.Bounds});
+				Result->AnimationPoseUpdates.push_back(State.Pose);
+			} else if (PreviousPose != CommittedAnimationPoses.end() && CurrentPose == AnimationPoses.end()) {
+				Result->MeshRemoves.push_back({PreviousPose->second.Pose.PosedMesh});
+				Result->AnimationPoseRemoves.push_back({Object});
+			} else if (PreviousPose != CommittedAnimationPoses.end() && CurrentPose != AnimationPoses.end()) {
+				const auto &PreviousState = PreviousPose->second;
+				const auto &State = CurrentPose->second;
+				if (PreviousState.Pose.PosedMesh != State.Pose.PosedMesh ||
+					PreviousState.Pose.SourceMesh != State.Pose.SourceMesh ||
+					PreviousState.TopologyRevision != State.TopologyRevision ||
+					PreviousState.Vertices->size() != State.Vertices->size() ||
+					PreviousState.Indices->size() != State.Indices->size()) {
+					FullResyncRequested = true;
+					return FullResync();
+				}
+				if (State.Pose.PoseRevision > PreviousState.Pose.PoseRevision) {
+					Result->MeshVertexUpdates.push_back({State.Pose.PosedMesh, State.Pose.PoseRevision,
+						0, State.Vertices, State.Bounds});
+					Result->AnimationPoseUpdates.push_back(State.Pose);
+				}
+			}
+		}
 		Result->MeshCreates.insert(Result->MeshCreates.end(), PendingAssetMeshCreates.begin(), PendingAssetMeshCreates.end());
 		Result->MeshRemoves.insert(Result->MeshRemoves.end(), PendingAssetMeshRemoves.begin(), PendingAssetMeshRemoves.end());
 		Result->TextureCreates = PendingTextureCreates;
@@ -1010,11 +1125,17 @@ namespace gargantuan {
 			for (const auto Object : DeformableCacheRemoves) PublishedDeformables.erase(Object);
 			for (const auto &[Object, State] : DeformableCacheUpdates)
 				PublishedDeformables.insert_or_assign(Object, State);
+			for (const auto Object : PendingAnimationObjects) {
+				if (const auto Current = AnimationPoses.find(Object); Current != AnimationPoses.end())
+					CommittedAnimationPoses.insert_or_assign(Object, Current->second);
+				else CommittedAnimationPoses.erase(Object);
+			}
 			if (Result->EnvironmentChanged) PublishedEnvironment = Result->Frame.Environment;
 			HasPublishedEnvironment = true;
 		} catch (...) {
 			PublishedItems.clear();
 			PublishedDeformables.clear();
+			CommittedAnimationPoses.clear();
 			FullResyncRequested = true;
 			throw;
 		}
@@ -1029,6 +1150,7 @@ namespace gargantuan {
 		PendingTextureRemoves.clear();
 		PendingAssetMeshCreates.clear();
 		PendingAssetMeshRemoves.clear();
+		PendingAnimationObjects.clear();
 		PendingUiGeometryBytes = 0;
 		PendingTextureBytes = 0;
 		return std::shared_ptr<const RenderPublication>(std::move(Result));
