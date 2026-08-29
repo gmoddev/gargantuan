@@ -47,6 +47,11 @@ time, load clips, interpolate keys, invoke Luau, inspect Animator Instances, or
 mutate the DataModel. `RenderUpdateDomain::AnimationPose` now means a semantic
 rig palette update; it does not imply dynamic vertex replacement.
 
+[Foundation 2B semantic anchors](AnimationFoundation2SemanticAnchors.md) are the
+second consumer of the same CPU joint model transforms. They do not consume
+this GPU palette, a framebuffer, or skinned vertices, and renderer capability
+cannot affect gameplay-space Attachment results.
+
 ## Renderer-neutral contract
 
 `RenderMeshCreate` carries immutable positions, normals, tangents, UVs, four
@@ -220,13 +225,16 @@ normal-palette gate           PASS
 owner-transform gate          PASS
 ```
 
-FirstCompleteGame's existing `AnimatedBeacon` is the application fixture. The
+FirstCompleteGame's `AnimatedBeacon` is the application fixture. A canonical
+`BeaconRoot/BeaconTip` Attachment now carries a quiet positional Sound and a
+ProximityPrompt. The
 GPU proof builds and validates a Release package, deletes the source project,
 loads the relocated packaged world, and runs its ordinary Engine and SDL
-renderer. Twelve steady frames produced 12 palette uploads (3,072 bytes), one
+renderer. It compares the animated Attachment against the same joint model
+transform and GPU-palette socket. Twelve steady frames produced 12 palette uploads (3,072 bytes), one
 skinned source resource, zero CPU-skinned vertex uploads, no resource growth,
 and no main/shadow mismatch. Replacing the renderer mid-clip consumed a current
-full-resync pose and passed. The normal packaging and headless tests separately
+full-resync pose while the semantic revision continued. The normal packaging and headless tests separately
 assert that the package publishes a semantic palette with no posed mesh or
 dynamic vertex update.
 

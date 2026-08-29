@@ -1,6 +1,7 @@
 #include "gargantuan/Engine.hpp"
 #include "gargantuan/Log.hpp"
 #include "gargantuan/Profiler.hpp"
+#include "gargantuan/classes/Attachment.hpp"
 #include "gargantuan/classes/Animator.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/FileLink.hpp"
@@ -45,12 +46,20 @@ namespace gargantuan {
 					  !Renderer->GetCapabilities().GpuSkinning,
 			  }
 		  )),
+		  Spatial(std::make_shared<SemanticSpatialResolver>(
+			  Assets,
+			  Animation.get(),
+			  [](std::string Code, std::string Message) {
+				  LOG_WARN(App, "[Spatial:Semantic] %s: %s", Code.c_str(), Message.c_str());
+			  }
+		  )),
 		  Audio(std::make_unique<AudioRuntime>(
 			  Assets,
 			  ProviderConfiguration.AudioEnabled ? CreateSdlAudioBackend() : nullptr,
 			  [](std::string Code, std::string Message) {
 				  LOG_WARN(App, "[Audio:Runtime] %s: %s", Code.c_str(), Message.c_str());
-			  }
+			  },
+			  Spatial
 		  )),
 		  Entitlements(GetService<gargantuan::EntitlementService>()),
 		  Interaction(GetService<gargantuan::InteractionService>()), Lighting(GetService<gargantuan::Lighting>()),
@@ -64,7 +73,8 @@ namespace gargantuan {
 		ActionMap->AttachInputService(UserInputService);
 		Players->InitializeLocalPlayer();
 		Interaction->AttachRuntime(
-			DataModel, Players, ActionMap, Renderer && dynamic_cast<HeadlessRenderer *>(Renderer) == nullptr
+			DataModel, Players, ActionMap, Spatial,
+			Renderer && dynamic_cast<HeadlessRenderer *>(Renderer) == nullptr
 		);
 		Assets->ConfigureBuiltInFont(DefaultGuiFont);
 		Gui = std::make_unique<GuiRuntime>(DataModel, DefaultGuiFont);
@@ -81,6 +91,8 @@ namespace gargantuan {
 			if (auto SoundValue = std::dynamic_pointer_cast<gargantuan::Sound>(inst)) Audio->RegisterSound(SoundValue);
 			if (auto AnimatorValue = std::dynamic_pointer_cast<gargantuan::Animator>(inst))
 				Animation->RegisterAnimator(AnimatorValue);
+			if (auto AttachmentValue = std::dynamic_pointer_cast<gargantuan::Attachment>(inst))
+				Spatial->RegisterAttachment(AttachmentValue);
 
 			if (auto link = std::dynamic_pointer_cast<gargantuan::FileLink>(inst)) {
 				if (!ProjectSources) {
@@ -125,8 +137,9 @@ namespace gargantuan {
 		if (Interaction && !Interaction->GetDestroyed()) Interaction->ShutdownRuntime();
 		if (Players && !Players->GetDestroyed()) Players->ShutdownRuntime();
 		if (ActionMap && !ActionMap->GetDestroyed()) ActionMap->Reset();
-		if (Animation) Animation->Shutdown();
 		if (Audio) Audio->Shutdown();
+		if (Spatial) Spatial->Shutdown();
+		if (Animation) Animation->Shutdown();
 		if (Gui) Gui->ClearTransientState();
 		Gui.reset();
 		if (Renderer) Renderer->Destroy();
@@ -201,7 +214,6 @@ namespace gargantuan {
 				WorldRoot->StepPhysics(deltaTime, std::nullopt);
 				Workspace->GetCurrentCamera()->Step(deltaTime);
 				RunService->PostSimulation->Fire(deltaTime);
-				Interaction->Step(CurrentTick);
 			}
 
 			{
@@ -213,6 +225,8 @@ namespace gargantuan {
 						Animation->GetPoseUpdates(), Animation->GetPoseRemoves());
 					Animation->ClearChanges();
 				}
+				if (Spatial) Spatial->Step();
+				Interaction->Step(CurrentTick);
 				if (Gui) {
 					auto MeshChanges = Assets->DrainMeshChanges();
 					if (!MeshChanges.Creates.empty() || !MeshChanges.Removes.empty())

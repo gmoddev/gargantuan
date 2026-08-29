@@ -1,5 +1,6 @@
 #include "gargantuan/editor/EditorHost.hpp"
 #include "gargantuan/editor/PlaySession.hpp"
+#include "gargantuan/classes/Attachment.hpp"
 #include "gargantuan/classes/Animator.hpp"
 #include "gargantuan/classes/KinematicCharacter.hpp"
 #include "gargantuan/classes/MeshPart.hpp"
@@ -144,8 +145,18 @@ namespace {
 		auto BeaconAnimator = AnimatedBeacon ? std::dynamic_pointer_cast<Animator>(
 			AnimatedBeacon->FindFirstChildOfClass("Animator", false)
 		) : nullptr;
-		Require(AnimatedBeacon && BeaconAnimator,
-			"headless Play did not preserve the authored animated beacon hierarchy");
+		auto BeaconAnchor = AnimatedBeacon ? std::dynamic_pointer_cast<Attachment>(
+			AnimatedBeacon->FindFirstChild("BeaconTipAnchor", false)
+		) : nullptr;
+		auto BeaconSound = BeaconAnchor ? std::dynamic_pointer_cast<Sound>(
+			BeaconAnchor->FindFirstChildOfClass("Sound", false)
+		) : nullptr;
+		auto BeaconPrompt = BeaconAnchor ? std::dynamic_pointer_cast<ProximityPrompt>(
+			BeaconAnchor->FindFirstChildOfClass("ProximityPrompt", false)
+		) : nullptr;
+		Require(AnimatedBeacon && BeaconAnimator && BeaconAnchor && BeaconSound && BeaconPrompt &&
+			BeaconAnchor->GetJointPath() == "BeaconRoot/BeaconTip" && BeaconSound->GetLooped(),
+			"headless Play did not preserve the authored animated semantic beacon hierarchy");
 		Require(PlayersValue && PlayersValue->GetLocalPlayer(), "default Players runtime did not create LocalPlayer");
 		auto LocalPlayer = *PlayersValue->GetLocalPlayer();
 		Require(LocalPlayer->GetCharacter().has_value(), "default player runtime did not assemble a character");
@@ -155,6 +166,22 @@ namespace {
 		Require(InteractionValue && !InteractionValue->GetDefaultPresentationEnabled() &&
 			!RuntimeWorld->FindFirstChild("DefaultInteractionGui", false),
 			"headless runtime did not keep default prompt presentation absent");
+		const auto FirstAnchorPosition = BeaconAnchor->GetWorldCFrame().Position;
+		for (int Frame = 0; Frame < 16; ++Frame) {
+			std::this_thread::sleep_for(std::chrono::milliseconds(10));
+			Session.Step();
+		}
+		const auto SecondAnchorPosition = BeaconAnchor->GetWorldCFrame().Position;
+		Require(glm::length(SecondAnchorPosition - FirstAnchorPosition) > 0.12f,
+			"animation did not move the semantic prompt anchor");
+		Character->SetPosition(SecondAnchorPosition);
+		Session.Step();
+		Require(InteractionValue->GetActivePrompt() == std::optional(BeaconPrompt),
+			"the sample prompt did not follow the animated Attachment position");
+		Character->SetPosition(FirstAnchorPosition);
+		Session.Step();
+		Require(InteractionValue->GetActivePrompt() != std::optional(BeaconPrompt),
+			"the moving semantic prompt remained at its stale prior position");
 		const auto Start = Character->GetPosition();
 		const auto ForwardDown = KeyEvent{{1}, PhysicalKey::W, LogicalKey::W, KeyModifier::None, ButtonState::Pressed};
 		const auto ForwardUp = KeyEvent{{1}, PhysicalKey::W, LogicalKey::W, KeyModifier::None, ButtonState::Released};
@@ -337,6 +364,18 @@ int main() {
 		Require(AnimatorDefinition != Schema["Result"]["Definitions"].end() &&
 			AnimatorDefinition->value("Constructible", false),
 			"Animator is not available to Studio's schema-driven Insert Object path");
+		auto AttachmentDefinition = std::ranges::find_if(
+			Schema["Result"]["Definitions"],
+			[](const Json &Definition) { return Definition.value("CanonicalName", "") == "Engine.Attachment"; }
+		);
+		Require(AttachmentDefinition != Schema["Result"]["Definitions"].end() &&
+			AttachmentDefinition->value("Constructible", false),
+			"Attachment is not available to Studio's schema-driven Insert Object path");
+		Require(std::ranges::any_of((*AttachmentDefinition)["Properties"], [](const Json &Property) {
+			return Property.value("Name", "") == "JointPath" && Property.value("Editable", false);
+		}) && std::ranges::any_of((*AttachmentDefinition)["Properties"], [](const Json &Property) {
+			return Property.value("Name", "") == "WorldCFrame" && !Property.value("Editable", true);
+		}), "Studio must expose JointPath as authored state and WorldCFrame as read-only runtime state");
 		for (const auto PropertyName : {"SoundId", "Volume", "PlaybackSpeed", "Looped", "RollOffMinDistance", "RollOffMaxDistance"})
 			Require(std::ranges::any_of((*SoundDefinition)["Properties"], [&](const Json &Property) {
 				return Property.value("Name", "") == PropertyName && Property.value("Editable", false);
@@ -345,9 +384,11 @@ int main() {
 		Require(Snapshot["Ok"], "sample project snapshot failed");
 		const auto ObjectsBeforePlay = Snapshot["Result"]["Snapshot"]["Objects"];
 
-		const std::array<std::pair<std::string_view, std::string_view>, 19> ExpectedObjects{{
+		const std::array<std::pair<std::string_view, std::string_view>, 22> ExpectedObjects{{
 			{"CollectionCourse", "Folder"}, {"Ground", "Part"}, {"MovingObstacle", "Part"},
 			{"ImportedBeacon", "MeshPart"}, {"AnimatedBeacon", "MeshPart"}, {"BeaconAnimator", "Animator"},
+			{"BeaconTipAnchor", "Attachment"}, {"BeaconTipSound", "Sound"},
+			{"BeaconTipPrompt", "ProximityPrompt"},
 			{"Collectibles", "Folder"}, {"Collectible1", "Part"},
 			{"Collectible2", "Part"}, {"Collectible3", "Part"}, {"CollectionGui", "ScreenGui"},
 			{"Hud", "Frame"}, {"Badge", "ImageLabel"}, {"Progress", "TextLabel"},
@@ -358,10 +399,10 @@ int main() {
 			Require(HasObject(ObjectsBeforePlay, Expected.first, Expected.second), "authored hierarchy is incomplete");
 		Require(std::ranges::count_if(ObjectsBeforePlay, [](const Json &Object) {
 			return Object.value("ClassName", "") == "ProximityPrompt";
-		}) == 3, "sample must author exactly one ProximityPrompt under each collectible");
+		}) == 4, "sample must author three collectible prompts and one animated semantic prompt");
 		Require(std::ranges::count_if(ObjectsBeforePlay, [](const Json &Object) {
 			return Object.value("ClassName", "") == "Sound";
-		}) == 4, "sample must author three positional pickup sounds and one non-positional completion sound");
+		}) == 5, "sample must author three pickup sounds, one animated sound, and one completion sound");
 
 		const auto &RoundManager = GetObject(ObjectsBeforePlay, "RoundManager");
 		auto Source = Call("GetScriptSource", {{"Object", RoundManager["Id"]}});
@@ -378,8 +419,10 @@ int main() {
 		auto BeaconSource = Call("GetScriptSource", {{"Object", BeaconAnimation["Id"]}});
 		Require(BeaconSource["Ok"] &&
 			BeaconSource["Result"]["Source"].get<std::string>().find("Animator:LoadAnimation") != std::string::npos &&
-			BeaconSource["Result"]["Source"].get<std::string>().find("Track.Looped = true") != std::string::npos,
-			"FirstCompleteGame animation script does not use the public Animator/AnimationTrack API");
+			BeaconSource["Result"]["Source"].get<std::string>().find("Track.Looped = true") != std::string::npos &&
+			BeaconSource["Result"]["Source"].get<std::string>().find("BeaconTipAnchor") != std::string::npos &&
+			BeaconSource["Result"]["Source"].get<std::string>().find("Sound:Play()") != std::string::npos,
+			"FirstCompleteGame animation script does not use the public Animator and semantic Sound APIs");
 
 		const auto &Collectible1 = GetObject(ObjectsBeforePlay, "Collectible1");
 		const auto &Collectible2 = GetObject(ObjectsBeforePlay, "Collectible2");
@@ -425,6 +468,29 @@ int main() {
 				Call("DestroyInstance", {{"Object", DuplicatedPromptId}})["Ok"],
 			"generic Studio hierarchy command could not delete temporary prompt authoring probes"
 		);
+		const auto &AnimatedBeaconObject = GetObject(ObjectsBeforePlay, "AnimatedBeacon");
+		auto CreatedAttachment = Call("CreateInstance", {
+			{"ClassSchemaId", SchemaId::FromNativeName("Engine", "Attachment").ToString()},
+			{"DefinitionVersion", 1}, {"Parent", AnimatedBeaconObject["Id"]}, {"Name", "SemanticAnchorProbe"},
+		});
+		Require(CreatedAttachment["Ok"], "generic Studio command path could not insert an Attachment");
+		const auto CreatedAttachmentId = CreatedAttachment["Result"]["Object"];
+		Require(Call("SetProperty", {
+			{"Object", CreatedAttachmentId},
+			{"ClassSchemaId", (*AttachmentDefinition)["SchemaId"]},
+			{"ClassDefinitionVersion", (*AttachmentDefinition)["DefinitionVersion"]},
+			{"DeclaringClassSchemaId", (*AttachmentDefinition)["SchemaId"]},
+			{"DeclaringDefinitionVersion", (*AttachmentDefinition)["DefinitionVersion"]},
+			{"Property", "JointPath"},
+			{"Value", {{"Type", "String"}, {"Value", "BeaconRoot/BeaconTip"}}},
+		})["Ok"], "generic Studio property command could not author Attachment.JointPath");
+		auto AttachmentSnapshot = Call("GetSnapshot");
+		Require(AttachmentSnapshot["Ok"] && GetObjectById(
+			AttachmentSnapshot["Result"]["Snapshot"]["Objects"], CreatedAttachmentId
+		)["EditorProperties"]["JointPath"].value("Value", "") == "BeaconRoot/BeaconTip",
+			"Studio snapshot did not preserve the authored semantic joint path");
+		Require(Call("DestroyInstance", {{"Object", CreatedAttachmentId}})["Ok"],
+			"generic Studio hierarchy command could not delete the temporary Attachment probe");
 
 		auto Catalog = Call("GetAssetCatalog", {{"IncludeBuiltIns", false}});
 		Require(Catalog["Ok"], "AssetService catalog could not be read");
@@ -453,6 +519,8 @@ int main() {
 		std::vector<std::string> ReopenedPromptLabels;
 		bool FoundHoldPrompt = false;
 		bool FoundLineOfSightPrompt = false;
+		bool FoundBeaconPrompt = false;
+		bool FoundBeaconAnchor = false;
 		std::size_t ReopenedSoundCount = 0;
 		for (const auto &Object : ReopenedObjects) {
 			if (Object.value("ClassName", "") == "Sound") {
@@ -462,8 +530,25 @@ int main() {
 					Properties["SoundId"].value("Value", "") == "asset://a0d10f78c368437daac002a4e59fdd64",
 					"SoundId did not survive sample save/reopen");
 			}
+			if (Object.value("Name", "") == "BeaconTipAnchor" &&
+				Object.value("ClassName", "") == "Attachment") {
+				const auto &Properties = Object["EditorProperties"];
+				FoundBeaconAnchor = Properties.contains("CFrame") && Properties.contains("JointPath") &&
+					Properties["JointPath"].value("Value", "") == "BeaconRoot/BeaconTip";
+			}
 			if (Object.value("ClassName", "") != "ProximityPrompt") continue;
 			const auto &Properties = Object["EditorProperties"];
+			if (Object.value("Name", "") == "BeaconTipPrompt") {
+				FoundBeaconPrompt = Properties.contains("Enabled") && Properties["Enabled"].value("Value", false) &&
+					Properties.contains("ActionText") && Properties["ActionText"].value("Value", "") == "Observe" &&
+					Properties.contains("ObjectText") &&
+					Properties["ObjectText"].value("Value", "") == "Animated beacon tip" &&
+					Properties.contains("MaxActivationDistance") &&
+					std::abs(Properties["MaxActivationDistance"].value("Value", 0.0) - 0.12) < 1e-6 &&
+					Properties.contains("RequiresLineOfSight") &&
+					!Properties["RequiresLineOfSight"].value("Value", true);
+				continue;
+			}
 			Require(
 				Properties.contains("Enabled") && Properties["Enabled"].value("Value", false) &&
 				Properties.contains("ActionText") && Properties["ActionText"].value("Value", "") == "Collect" &&
@@ -482,8 +567,9 @@ int main() {
 		std::ranges::sort(ReopenedPromptLabels);
 		Require(
 			ReopenedPromptLabels == std::vector<std::string>{"Collectible1", "Collectible2", "Collectible3"} &&
-				FoundHoldPrompt && FoundLineOfSightPrompt && ReopenedSoundCount == 4,
-			"reopened prompt labels or hold semantics differ from the authored game"
+				FoundHoldPrompt && FoundLineOfSightPrompt && FoundBeaconPrompt && FoundBeaconAnchor &&
+				ReopenedSoundCount == 5,
+			"reopened collectible or animated semantic anchor state differs from the authored game"
 		);
 		for (const auto Name : {"Hud", "Badge", "Progress", "Hint", "WinPanel", "WinTitle", "WinDetail", "RestartButton"}) {
 			const auto &Object = GetObject(ReopenedObjects, Name);
@@ -527,8 +613,8 @@ int main() {
 
 		Require(HasDiagnostic(FirstCycleDiagnostics, "[Game:FirstCompleteGame] Ready\t3"),
 			"game manager did not start or register three collectibles");
-		Require(HasDiagnostic(FirstCycleDiagnostics, "[Game:FirstCompleteGame] Animation ready"),
-			"authored Animator script did not start in generic Play");
+		Require(HasDiagnostic(FirstCycleDiagnostics, "[Game:FirstCompleteGame] Animated semantic beacon ready"),
+			"authored semantic Animator/Sound script did not start in generic Play");
 		Require(HasDiagnostic(HeadlessRuntimeEvidence.Diagnostics, "[Game:FirstCompleteGame] Round complete"),
 			"deterministic completion logic did not run");
 		Require(HasDiagnostic(HeadlessRuntimeEvidence.Diagnostics, "[Game:FirstCompleteGame] Round reset"),

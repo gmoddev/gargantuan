@@ -61,6 +61,7 @@ namespace gargantuan {
 		typedef std::function<void(CallbackArgument)> CallbackType;
 
 		std::vector<SignalConnection::Pointer> Connections;
+		std::vector<SignalConnection::Pointer> FiringSnapshot;
 		int FiringDepth = 0;
 
 		virtual SignalConnection::Pointer Connect(

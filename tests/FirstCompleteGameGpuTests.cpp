@@ -1,4 +1,6 @@
 #include "gargantuan/Engine.hpp"
+#include "gargantuan/assets/AssetTypes.hpp"
+#include "gargantuan/classes/Attachment.hpp"
 #include "gargantuan/classes/MeshPart.hpp"
 #include "gargantuan/filesystem/DiskFilesystem.hpp"
 #include "gargantuan/filesystem/Project.hpp"
@@ -8,9 +10,11 @@
 #include "gargantuan/services/Workspace.hpp"
 
 #include <SDL3/SDL.h>
+#include <glm/gtc/matrix_transform.hpp>
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <filesystem>
 #include <iostream>
 #include <memory>
@@ -54,6 +58,23 @@ namespace {
 
 	void Require(bool Condition, std::string_view Message) {
 		if (!Condition) throw std::runtime_error(std::string(Message));
+	}
+
+	bool Near(const glm::mat4 &Left, const glm::mat4 &Right, float Epsilon = 2e-3f) {
+		for (std::size_t Column = 0; Column < 4; ++Column)
+			for (std::size_t Row = 0; Row < 4; ++Row)
+				if (std::abs(Left[Column][Row] - Right[Column][Row]) > Epsilon) return false;
+		return true;
+	}
+
+	bool Near(const glm::vec3 &Left, const glm::vec3 &Right, float Epsilon = 2e-3f) {
+		return glm::length(Left - Right) <= Epsilon;
+	}
+
+	glm::mat4 FrameMatrix(const CFrame &Frame) {
+		auto Matrix = glm::mat4(Frame.Rotation);
+		Matrix[3] = glm::vec4(Frame.Position, 1.0f);
+		return Matrix;
 	}
 
 	const RenderAnimationPoseUpdate *FindPose(const RenderPublication &Publication, ObjectId Object) {
@@ -138,7 +159,10 @@ int main() {
 			std::dynamic_pointer_cast<Workspace>(RuntimeWorld->GetService("Workspace")) : nullptr;
 		auto AnimatedBeacon = WorkspaceValue ? std::dynamic_pointer_cast<MeshPart>(
 			WorkspaceValue->FindFirstChild("AnimatedBeacon", true)) : nullptr;
-		Require(AnimatedBeacon != nullptr, "FirstCompleteGame GPU proof could not find AnimatedBeacon");
+		auto BeaconAnchor = AnimatedBeacon ? std::dynamic_pointer_cast<Attachment>(
+			AnimatedBeacon->FindFirstChild("BeaconTipAnchor", false)) : nullptr;
+		Require(AnimatedBeacon && BeaconAnchor && BeaconAnchor->GetJointPath() == "BeaconRoot/BeaconTip",
+			"FirstCompleteGame GPU proof could not find the semantic AnimatedBeacon anchor");
 		const auto BeaconObject = AnimatedBeacon->GetObjectId();
 
 		auto Renderer = std::make_unique<InspectingRenderer>(Vector2(320.0f, 200.0f));
@@ -158,6 +182,33 @@ int main() {
 			}
 		}
 		Require(InitialRevision != 0, "packaged AnimatedBeacon never published a GPU palette pose");
+		auto InitialSemantic = RuntimeEngine.Spatial->ResolveAttachment(BeaconAnchor);
+		auto InitialPose = RuntimeEngine.Animation->GetPose(BeaconObject);
+		auto MeshResource = RuntimeEngine.Assets->ResolveMeshResource(AnimatedBeacon->GetMesh());
+		Require(InitialSemantic && InitialSemantic->Animated && InitialPose &&
+			InitialPose->JointModelTransforms && InitialPose->SkinPalette && MeshResource &&
+			MeshResource->Value.Skeleton && MeshResource->Value.Skeleton->Joints,
+			"packaged GPU proof did not retain the renderer-independent semantic pose");
+		const auto &Joints = *MeshResource->Value.Skeleton->Joints;
+		const auto Joint = std::ranges::find_if(Joints, [](const auto &Value) {
+			return Value.Path == "BeaconRoot/BeaconTip";
+		});
+		Require(Joint != Joints.end(), "packaged Mesh artifact omitted the canonical BeaconTip joint path");
+		const auto JointIndex = static_cast<std::size_t>(std::distance(Joints.begin(), Joint));
+		Require(JointIndex < InitialPose->JointModelTransforms->size() &&
+			JointIndex < InitialPose->SkinPalette->size(),
+			"packaged semantic joint index exceeded the evaluated pose");
+		const auto OwnerMatrix = FrameMatrix(AnimatedBeacon->GetCFrame()) *
+			glm::scale(glm::mat4(1.0f), AnimatedBeacon->GetSize());
+		const auto LocalMatrix = FrameMatrix(BeaconAnchor->GetCFrame());
+		const auto ExpectedSemantic = OwnerMatrix * (*InitialPose->JointModelTransforms)[JointIndex] * LocalMatrix;
+		const auto BindSocket = glm::inverse(Joint->InverseBindMatrix) *
+			glm::vec4(BeaconAnchor->GetCFrame().Position, 1.0f);
+		const auto GpuSocket = OwnerMatrix *
+			((*InitialPose->SkinPalette)[JointIndex].PositionMatrix * BindSocket);
+		Require(Near(InitialSemantic->Matrix, ExpectedSemantic) &&
+			Near(InitialSemantic->WorldCFrame.Position, glm::vec3(GpuSocket)),
+			"semantic anchor diverged from the packaged GPU palette's skinned socket");
 		const auto Baseline = Renderer->GetMetrics();
 		Require(Baseline.GpuSkinningRigs >= 1 && Baseline.CpuFallbackRigs == 0 &&
 			Baseline.SkinnedSourceResourceCreations == 1 && Baseline.CpuSkinnedVertexUploads == 0,
@@ -191,6 +242,11 @@ int main() {
 			Steady.PaletteScratchAllocations == Baseline.PaletteScratchAllocations &&
 			Steady.CpuSkinnedVertexUploads == 0 && Steady.MainShadowPoseMismatches == 0,
 			"FirstCompleteGame GPU animation created resources or CPU vertex uploads after warmup");
+		auto SteadySemantic = RuntimeEngine.Spatial->ResolveAttachment(BeaconAnchor);
+		Require(SteadySemantic && SteadySemantic->Animated &&
+			SteadySemantic->Revision > InitialSemantic->Revision &&
+			glm::length(SteadySemantic->WorldCFrame.Position - InitialSemantic->WorldCFrame.Position) > 0.01f,
+			"packaged semantic anchor did not follow the advancing GPU-skinned pose");
 
 		auto RestartedRenderer = std::make_unique<InspectingRenderer>(Vector2(320.0f, 200.0f));
 		RuntimeEngine.Renderer = RestartedRenderer.get();
@@ -202,6 +258,10 @@ int main() {
 		const auto *RestartPose = FindPose(*CurrentFullPose, BeaconObject);
 		Require(CurrentFullPose->FullResync && RestartPose && RestartPose->PoseRevision > LatestRevision,
 			"requesting renderer resync restarted or regressed animation time");
+		auto RestartSemantic = RuntimeEngine.Spatial->ResolveAttachment(BeaconAnchor);
+		Require(RestartSemantic && RestartSemantic->Animated &&
+			RestartSemantic->Revision > SteadySemantic->Revision,
+			"renderer replacement interrupted the renderer-independent semantic anchor pose");
 		const auto Restarted = RestartedRenderer->GetMetrics();
 		Require(Restarted.GpuSkinningRigs >= 1 && Restarted.PaletteUploads >= 1 &&
 			Restarted.PaletteBufferCreations >= 1 && Restarted.SkinnedSourceResourceCreations == 1 &&

@@ -8,6 +8,7 @@
 #include "gargantuan/classes/Script.hpp"
 #include "gargantuan/datatypes/RaycastParams.hpp"
 #include "gargantuan/filesystem/Paths.hpp"
+#include "gargantuan/runtime/SemanticSpatialResolver.hpp"
 #include "gargantuan/services/ActionMap.hpp"
 #include "gargantuan/services/Players.hpp"
 #include "gargantuan/services/Workspace.hpp"
@@ -128,15 +129,19 @@ namespace gargantuan {
 		const std::shared_ptr<DataModel> &WorldValue,
 		const std::shared_ptr<Players> &PlayersValue,
 		const std::shared_ptr<ActionMap> &ActionMapValue,
+		const std::shared_ptr<SemanticSpatialResolver> &SpatialValue,
 		bool EnableDefaultPresentation
 	) {
 		if (RuntimeAttached) return;
-		if (!WorldValue || !PlayersValue || !ActionMapValue)
+		if (!WorldValue || !PlayersValue || !ActionMapValue || !SpatialValue)
 			throw std::invalid_argument("InteractionService runtime dependencies must be present");
 		World = WorldValue;
 		PlayerService = PlayersValue;
 		Actions = ActionMapValue;
+		SpatialRuntime = SpatialValue;
 		PhysicsWorkspace = std::dynamic_pointer_cast<Workspace>(WorldValue->GetService("Workspace"));
+		DirtyPrompts.reserve(MaximumPrompts);
+		ProcessingDirtyPrompts.reserve(MaximumPrompts);
 		DefaultPresentationEnabledValue = EnableDefaultPresentation;
 		RuntimeAttached = true;
 
@@ -198,11 +203,13 @@ namespace gargantuan {
 		Prompts.clear();
 		SpatialCells.clear();
 		DirtyPrompts.clear();
+		ProcessingDirtyPrompts.clear();
 		PlayerStates.clear();
 		World.reset();
 		PlayerService.reset();
 		Actions.reset();
 		PhysicsWorkspace.reset();
+		SpatialRuntime.reset();
 		PresentedPrompt = {};
 		PresentedAvailable = false;
 		PresentedActionText.clear();
@@ -246,7 +253,7 @@ namespace gargantuan {
 			Record.PromptConnections.push_back(Prompt->GetPropertyChangedSignal(Name)->Connect(MarkDirty));
 		Record.PromptConnections.push_back(Prompt->AncestryChanged->Connect(
 			[WeakSelf, PromptId](std::tuple<std::shared_ptr<Instance>, std::shared_ptr<Instance>>) {
-				if (auto Self = WeakSelf.lock()) Self->MarkPromptDirty(PromptId);
+				if (auto Self = WeakSelf.lock()) Self->MarkPromptDirty(PromptId, true);
 			}
 		));
 		Record.PromptConnections.push_back(Prompt->Destroying->Once([WeakSelf, PromptId](std::monostate) {
@@ -265,13 +272,19 @@ namespace gargantuan {
 		for (auto &Connection : Found->second.AnchorConnections)
 			if (Connection) Connection->Disconnect();
 		Prompts.erase(Found);
-		DirtyPrompts.erase(PromptId);
+		std::erase(DirtyPrompts, PromptId);
 		InvalidatePromptStates(PromptId);
 	}
 
-	void InteractionService::MarkPromptDirty(ObjectId PromptId) {
-		if (!RuntimeAttached || !Prompts.contains(PromptId)) return;
-		DirtyPrompts.insert(PromptId);
+	void InteractionService::MarkPromptDirty(ObjectId PromptId, bool AnchorDependencies) {
+		if (!RuntimeAttached) return;
+		auto Found = Prompts.find(PromptId);
+		if (Found == Prompts.end()) return;
+		Found->second.AnchorDependenciesDirty = Found->second.AnchorDependenciesDirty || AnchorDependencies;
+		if (!Found->second.Dirty) {
+			Found->second.Dirty = true;
+			DirtyPrompts.push_back(PromptId);
+		}
 		auto Prompt = std::dynamic_pointer_cast<ProximityPrompt>(ObjectRegistry::Get().Lookup(PromptId));
 		if (!Prompt || Prompt->GetDestroyed() || Prompt->IsDestroying() || !Prompt->GetEnabled())
 			InvalidatePromptStates(PromptId);
@@ -279,11 +292,13 @@ namespace gargantuan {
 
 	void InteractionService::ProcessDirtyPrompts() {
 		if (DirtyPrompts.empty()) return;
-		std::vector<ObjectId> Ordered(DirtyPrompts.begin(), DirtyPrompts.end());
-		DirtyPrompts.clear();
-		std::ranges::sort(Ordered);
-		for (const auto PromptId : Ordered)
+		DirtyPrompts.swap(ProcessingDirtyPrompts);
+		std::ranges::sort(ProcessingDirtyPrompts);
+		for (const auto PromptId : ProcessingDirtyPrompts) {
+			if (auto Found = Prompts.find(PromptId); Found != Prompts.end()) Found->second.Dirty = false;
 			RefreshPrompt(PromptId);
+		}
+		ProcessingDirtyPrompts.clear();
 	}
 
 	void InteractionService::RemoveFromCell(PromptRecord &Record, ObjectId PromptId) {
@@ -299,47 +314,69 @@ namespace gargantuan {
 		auto Found = Prompts.find(PromptId);
 		if (Found == Prompts.end()) return;
 		auto &Record = Found->second;
-		RemoveFromCell(Record, PromptId);
-		for (auto &Connection : Record.AnchorConnections)
-			if (Connection) Connection->Disconnect();
-		Record.AnchorConnections.clear();
 
 		auto Prompt = Record.Prompt.lock();
 		if (!Prompt || Prompt->GetDestroyed() || Prompt->IsDestroying() || !Prompt->GetEnabled()) {
+			RemoveFromCell(Record, PromptId);
 			InvalidatePromptStates(PromptId);
 			return;
 		}
 		std::vector<std::shared_ptr<Instance>> Observed;
-		auto Position = ResolveAnchor(Prompt, &Observed);
+		auto Position = ResolveAnchor(Prompt, Record.AnchorDependenciesDirty ? &Observed : nullptr);
 		if (!Position) {
+			RemoveFromCell(Record, PromptId);
 			InvalidatePromptStates(PromptId);
 			return;
 		}
 		auto Cell = PositionToCell(*Position);
 		if (!Cell) {
+			RemoveFromCell(Record, PromptId);
 			InvalidatePromptStates(PromptId);
 			return;
 		}
 
-		auto WeakSelf = std::weak_ptr<InteractionService>(
-			std::dynamic_pointer_cast<InteractionService>(shared_from_this())
-		);
-		for (const auto &Object : Observed) {
-			Record.AnchorConnections.push_back(
-				Object->GetPropertyChangedSignal("CFrame")->Connect([WeakSelf, PromptId](std::monostate) {
-					if (auto Self = WeakSelf.lock()) Self->MarkPromptDirty(PromptId);
-				})
+		if (Record.AnchorDependenciesDirty) {
+			for (auto &Connection : Record.AnchorConnections)
+				if (Connection) Connection->Disconnect();
+			Record.AnchorConnections.clear();
+			auto WeakSelf = std::weak_ptr<InteractionService>(
+				std::dynamic_pointer_cast<InteractionService>(shared_from_this())
 			);
-			Record.AnchorConnections.push_back(Object->Destroying->Once([WeakSelf, PromptId](std::monostate) {
-				if (auto Self = WeakSelf.lock()) Self->MarkPromptDirty(PromptId);
-			}));
+			for (const auto &Object : Observed) {
+				auto ObserveProperty = [&](std::string Name) {
+					Record.AnchorConnections.push_back(
+						Object->GetPropertyChangedSignal(std::move(Name))->Connect([WeakSelf, PromptId](std::monostate) {
+							if (auto Self = WeakSelf.lock()) Self->MarkPromptDirty(PromptId);
+						})
+					);
+				};
+				ObserveProperty("CFrame");
+				if (std::dynamic_pointer_cast<Attachment>(Object)) {
+					ObserveProperty("JointPath");
+					ObserveProperty("WorldCFrame");
+				} else if (std::dynamic_pointer_cast<BasePart>(Object)) {
+					ObserveProperty("Size");
+				}
+				Record.AnchorConnections.push_back(Object->AncestryChanged->Connect(
+					[WeakSelf, PromptId](std::tuple<std::shared_ptr<Instance>, std::shared_ptr<Instance>>) {
+						if (auto Self = WeakSelf.lock()) Self->MarkPromptDirty(PromptId, true);
+					}
+				));
+				Record.AnchorConnections.push_back(Object->Destroying->Once([WeakSelf, PromptId](std::monostate) {
+					if (auto Self = WeakSelf.lock()) Self->MarkPromptDirty(PromptId, true);
+				}));
+			}
+			Record.AnchorDependenciesDirty = false;
 		}
+		if (Record.Indexed && Record.Cell != *Cell) RemoveFromCell(Record, PromptId);
 		Record.Position = *Position;
 		Record.Cell = *Cell;
-		Record.Indexed = true;
-		auto &Bucket = SpatialCells[*Cell];
-		auto PositionInBucket = std::ranges::lower_bound(Bucket, PromptId);
-		Bucket.insert(PositionInBucket, PromptId);
+		if (!Record.Indexed) {
+			Record.Indexed = true;
+			auto &Bucket = SpatialCells[*Cell];
+			auto PositionInBucket = std::ranges::lower_bound(Bucket, PromptId);
+			Bucket.insert(PositionInBucket, PromptId);
+		}
 	}
 
 	void InteractionService::InvalidatePromptStates(ObjectId PromptId) {
@@ -365,24 +402,12 @@ namespace gargantuan {
 
 	std::optional<glm::vec3> InteractionService::ResolveAnchor(
 		const std::shared_ptr<ProximityPrompt> &Prompt, std::vector<std::shared_ptr<Instance>> *Observed
-	) {
+	) const {
 		if (!Prompt || Prompt->GetDestroyed() || Prompt->IsDestroying()) return std::nullopt;
-		CFrame LocalOffset;
-		auto Current = Prompt->GetParent();
-		while (Current) {
-			auto Object = *Current;
-			if (!Object || Object->GetDestroyed() || Object->IsDestroying()) return std::nullopt;
-			if (auto AttachmentValue = std::dynamic_pointer_cast<Attachment>(Object)) {
-				LocalOffset = AttachmentValue->GetCFrame() * LocalOffset;
-				if (Observed) Observed->push_back(AttachmentValue);
-			} else if (auto Part = std::dynamic_pointer_cast<BasePart>(Object)) {
-				if (Observed) Observed->push_back(Part);
-				const auto Position = (Part->GetCFrame() * LocalOffset).Position;
-				return IsFiniteVector(Position) ? std::optional(Position) : std::nullopt;
-			}
-			Current = Object->GetParent();
-		}
-		return std::nullopt;
+		auto Transform = SpatialRuntime ? SpatialRuntime->ResolveWorldTransform(Prompt, Observed)
+			: SemanticSpatialResolver::ResolveStaticWorldTransform(Prompt);
+		if (!Transform || !IsFiniteVector(Transform->WorldCFrame.Position)) return std::nullopt;
+		return Transform->WorldCFrame.Position;
 	}
 
 	std::optional<glm::vec3> InteractionService::ResolvePlayerOrigin(const std::shared_ptr<Player> &PlayerValue) {

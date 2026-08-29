@@ -52,8 +52,14 @@ and hearing the cues is never required for game correctness.
 
 `AnimatedBeacon` authors an `Animator` directly under its `MeshPart`. The
 `BeaconAnimation` gameplay script loads the canonical Animation asset, enables
-looping, and starts it in Play. Stopping Play discards the `AnimationTrack` and
-pose while leaving the authored rig, Animator, script reference, and canonical
+looping, and starts it in Play. `BeaconTipAnchor` binds the canonical
+`BeaconRoot/BeaconTip` joint path with a local socket offset. Its quiet looping
+positional `BeaconTipSound` and small `BeaconTipPrompt` use that same animated
+world position; no script copies a bone position into either consumer. The
+prompt deliberately has a tiny activation range so it demonstrates the moving
+semantic endpoint without competing with the collectible interaction. Stopping
+Play discards the `AnimationTrack` and transient `WorldCFrame` while leaving the
+authored CFrame/JointPath, rig, Animator, script reference, and canonical
 package artifacts unchanged.
 
 On a graphical renderer with GPU-skinning capability, the canonical skinned
@@ -62,7 +68,9 @@ uploads; it does not publish a CPU-deformed vertex array every frame. Headless
 Play evaluates the same track and publishes its semantic palette without
 initializing SDL video or deforming the full mesh. Unsupported graphical
 backends use the retained CPU reference/fallback path without a gameplay API
-difference.
+difference. The packaged GPU gate compares the semantic socket against the
+current joint-model transform and GPU palette oracle, and renderer replacement
+does not reset the socket or track.
 
 The saved fixture also authors the canonical `Lighting` service with afternoon
 sun, ambient light, exposure, bounded fog, and a direct six-face `Sky`. All six

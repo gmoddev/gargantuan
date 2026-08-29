@@ -1,7 +1,7 @@
 ---
 status: current
 owner: build-and-test
-last_verified: 2026-08-23
+last_verified: 2026-08-29
 related_code:
   - .github/workflows/native-ci.yml
   - CMakeLists.txt
@@ -98,7 +98,7 @@ CMake and this document are authoritative.
 | Runtime shader package completeness | `gargantuan_packaged_shaders` |
 | Foundation/runtime, persistence and serialization, EditorHost/protocol, render extraction and backend boundary | `gargantuan_foundation` |
 | Asset import, canonical artifact, dependency graph, and runtime materialization | `gargantuan_asset_foundation` |
-| Skeletal import/artifacts, playback/blending, CPU skinning, pose publication, lifecycle, and bounded Release smoke | `gargantuan_animation_foundation`, `gargantuan_animation_foundation_benchmark_smoke` |
+| Skeletal import/artifacts, playback/blending, CPU/GPU/headless pose equivalence, semantic Attachment/Sound/Prompt anchors, reimport/lifecycle/journal behavior, and bounded Release scaling/50K smokes | `gargantuan_animation_foundation`, `gargantuan_animation_foundation_benchmark_smoke` |
 | Optional telemetry dynamic loading, ABI negotiation, consent, privacy, and fail-open lifecycle | `gargantuan_optional_telemetry` |
 | Physics | `gargantuan_physics_backend` |
 | Soft-body runtime and bounded Release smoke | `gargantuan_soft_body_physics`, `gargantuan_soft_body_physics_benchmark_smoke` |
@@ -118,7 +118,8 @@ CMake and this document are authoritative.
 | Package format, integrity, relocation, atomicity, cancellation, asset closure, shared packaged-world bootstrap, and packaged gameplay | `gargantuan_packaging` |
 | EditorHost package authority, revision, conflict, Play exclusion, progress, and cancellation | `gargantuan_packaging_editor_host` |
 | Package capture/build bounded-load smoke | `gargantuan_packaging_benchmark_smoke` |
-| FirstCompleteGame CLI build/validate/inspect, relocation, dedicated player startup, and corruption rejection | `gargantuan_first_complete_game_package_smoke` |
+| FirstCompleteGame headless Play/Stop and semantic animated-anchor proof | `gargantuan_first_complete_game` |
+| FirstCompleteGame CLI build/validate/inspect, relocation, dedicated player startup, animated-anchor asset closure, and corruption rejection | `gargantuan_first_complete_game_package_smoke` |
 
 CTest labels mirror those coverage groups so developers can select a subsystem,
 but CI runs the complete registered set rather than maintaining a second list of

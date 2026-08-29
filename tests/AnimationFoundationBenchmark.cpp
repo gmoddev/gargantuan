@@ -1,30 +1,42 @@
 #include "gargantuan/animation/AnimationRuntime.hpp"
 #include "gargantuan/animation/AnimationTrack.hpp"
+#include "gargantuan/audio/AudioRuntime.hpp"
+#include "gargantuan/classes/Attachment.hpp"
 #include "gargantuan/classes/Animator.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/MeshPart.hpp"
 #include "gargantuan/classes/Part.hpp"
+#include "gargantuan/classes/ProximityPrompt.hpp"
+#include "gargantuan/classes/Sound.hpp"
 #include "gargantuan/filesystem/DiskFilesystem.hpp"
 #include "gargantuan/filesystem/SourceMount.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/render/RenderExtractor.hpp"
 #include "gargantuan/render/RenderProjection.hpp"
+#include "gargantuan/runtime/ChangeJournal.hpp"
+#include "gargantuan/runtime/SemanticSpatialResolver.hpp"
+#include "gargantuan/services/ActionMap.hpp"
 #include "gargantuan/services/AssetService.hpp"
+#include "gargantuan/services/InteractionService.hpp"
+#include "gargantuan/services/Players.hpp"
 #include "gargantuan/services/Workspace.hpp"
 
 #include <SDL3/SDL.h>
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <bit>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <memory>
+#include <new>
 #include <nlohmann/json.hpp>
 #include <span>
 #include <stdexcept>
@@ -35,6 +47,44 @@
 #include <vector>
 
 #include <glm/gtc/matrix_transform.hpp>
+
+namespace {
+	std::atomic<std::uint64_t> SemanticBenchmarkAllocations = 0;
+}
+
+void *operator new(std::size_t Size) {
+	SemanticBenchmarkAllocations.fetch_add(1, std::memory_order_relaxed);
+	if (auto *Value = std::malloc(Size)) return Value;
+	throw std::bad_alloc();
+}
+
+void operator delete(void *Value) noexcept {
+	std::free(Value);
+}
+
+void operator delete(void *Value, std::size_t) noexcept {
+	std::free(Value);
+}
+
+namespace gargantuan {
+	struct InteractionServiceTestAccess {
+		static void Attach(
+			InteractionService &Service,
+			const std::shared_ptr<DataModel> &World,
+			const std::shared_ptr<Players> &PlayersValue,
+			const std::shared_ptr<ActionMap> &Actions,
+			const std::shared_ptr<SemanticSpatialResolver> &Spatial
+		) {
+			Service.AttachRuntime(World, PlayersValue, Actions, Spatial, false);
+		}
+		static void ProcessDirty(InteractionService &Service) {
+			Service.ProcessDirtyPrompts();
+		}
+		static void Shutdown(InteractionService &Service) {
+			Service.ShutdownRuntime();
+		}
+	};
+}
 
 namespace {
 	using Json = nlohmann::ordered_json;
@@ -50,9 +100,75 @@ namespace {
 			std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - Started).count());
 	}
 
+	struct Percentiles {
+		double P50 = 0.0;
+		double P95 = 0.0;
+		double P99 = 0.0;
+	};
+
+	Percentiles Summarize(std::vector<std::uint64_t> Samples) {
+		if (Samples.empty()) return {};
+		std::ranges::sort(Samples);
+		auto At = [&](double Fraction) {
+			const auto Position = std::min(
+				Samples.size() - 1,
+				static_cast<std::size_t>(std::ceil(Fraction * static_cast<double>(Samples.size())) - 1.0));
+			return static_cast<double>(Samples[Position]) / 1'000.0;
+		};
+		return {At(0.50), At(0.95), At(0.99)};
+	}
+
+	class BenchmarkAudioBackend final : public IAudioBackend {
+	  public:
+		[[nodiscard]] bool IsAvailable() const override { return true; }
+		[[nodiscard]] std::uint32_t GetSampleRate() const override { return 48'000; }
+		[[nodiscard]] std::size_t GetQueuedFrames() override { return 0; }
+		[[nodiscard]] bool Submit(std::span<const float> InterleavedStereo) override {
+			Metrics.SubmittedFrames += InterleavedStereo.size() / 2;
+			return true;
+		}
+		void Clear() override {}
+		void Shutdown() override {}
+		[[nodiscard]] std::string GetDiagnostic() const override { return {}; }
+		[[nodiscard]] AudioBackendMetrics GetMetrics() const override { return Metrics; }
+
+	  private:
+		AudioBackendMetrics Metrics;
+	};
+
 	void AppendU16(std::vector<std::uint8_t> &Bytes, std::uint16_t Value) {
 		Bytes.push_back(static_cast<std::uint8_t>(Value));
 		Bytes.push_back(static_cast<std::uint8_t>(Value >> 8));
+	}
+
+	void AppendU32(std::vector<std::uint8_t> &Bytes, std::uint32_t Value) {
+		for (std::size_t Shift = 0; Shift < 4; ++Shift)
+			Bytes.push_back(static_cast<std::uint8_t>(Value >> (Shift * 8)));
+	}
+
+	std::vector<std::uint8_t> MakeWave() {
+		constexpr std::uint32_t Frames = 48'000;
+		constexpr std::uint32_t SampleRate = 48'000;
+		const auto DataBytes = Frames * sizeof(std::int16_t);
+		std::vector<std::uint8_t> Bytes;
+		Bytes.reserve(44 + DataBytes);
+		Bytes.insert(Bytes.end(), {'R', 'I', 'F', 'F'});
+		AppendU32(Bytes, 36 + DataBytes);
+		Bytes.insert(Bytes.end(), {'W', 'A', 'V', 'E', 'f', 'm', 't', ' '});
+		AppendU32(Bytes, 16);
+		AppendU16(Bytes, 1);
+		AppendU16(Bytes, 1);
+		AppendU32(Bytes, SampleRate);
+		AppendU32(Bytes, SampleRate * sizeof(std::int16_t));
+		AppendU16(Bytes, sizeof(std::int16_t));
+		AppendU16(Bytes, 16);
+		Bytes.insert(Bytes.end(), {'d', 'a', 't', 'a'});
+		AppendU32(Bytes, DataBytes);
+		for (std::uint32_t Frame = 0; Frame < Frames; ++Frame) {
+			const auto Phase = static_cast<double>(Frame) * 440.0 * 6.283185307179586 / SampleRate;
+			AppendU16(Bytes, static_cast<std::uint16_t>(static_cast<std::int16_t>(std::sin(Phase) * 8'192.0)));
+		}
+		return Bytes;
 	}
 
 	void AppendFloat(std::vector<std::uint8_t> &Bytes, float Value) {
@@ -216,6 +332,14 @@ namespace {
 		std::size_t ArtifactBytes = 0;
 	};
 
+	std::string ImportAudio(AssetService &Assets, SourceMount &Mount) {
+		auto Result = Assets.ImportProjectAsset(Mount, "assets/semantic-tone.wav",
+			AssetKind::Audio, "Semantic Anchor Tone");
+		Require(Result.Ok && Result.Records.size() == 1,
+			"semantic anchor benchmark audio fixture did not import");
+		return Result.Records.front().Reference.Value;
+	}
+
 	ImportedRig ImportRig(
 		AssetService &Assets,
 		SourceMount &Mount,
@@ -250,26 +374,52 @@ namespace {
 		double PoseBuildMillisecondsPerFrame = 0.0;
 		double PublisherMillisecondsPerFrame = 0.0;
 		double ProjectionMillisecondsPerFrame = 0.0;
+		double BindingBookkeepingMicrosecondsPerFrame = 0.0;
+		double TransformResolutionMicrosecondsPerFrame = 0.0;
+		Percentiles SemanticStepMicroseconds;
+		Percentiles SoundUpdateMicroseconds;
+		Percentiles InteractionUpdateMicroseconds;
+		Percentiles TotalSemanticMicroseconds;
 		std::uint64_t RuntimeBufferAllocationDelta = 0;
+		std::uint64_t SemanticAllocationDelta = 0;
+		std::uint64_t SpatialAllocationDelta = 0;
+		std::uint64_t SoundAllocationDelta = 0;
+		std::uint64_t InteractionAllocationDelta = 0;
+		std::uint64_t AnchorResolutionDelta = 0;
+		std::uint64_t RigVisitDelta = 0;
 	};
 
 	ScenarioResult RunScenario(
+		const std::shared_ptr<DataModel> &World,
 		const std::shared_ptr<Workspace> &WorkspaceValue,
 		const std::shared_ptr<AssetService> &Assets,
 		const ImportedRig &Asset,
 		std::span<const RenderMeshCreate> SourceMeshes,
+		const std::string &AudioReference,
 		std::size_t RigCount,
 		std::size_t BoneCount,
 		std::size_t TrackCount,
-		std::size_t Frames
+		std::size_t AnchorsPerRig,
+		std::size_t Frames,
+		std::size_t AnchorJointOffset = 0
 	) {
 		std::vector<std::shared_ptr<MeshPart>> Rigs;
 		std::vector<std::shared_ptr<Animator>> Animators;
 		std::vector<std::shared_ptr<AnimationTrack>> Tracks;
+		std::vector<std::shared_ptr<Attachment>> Anchors;
+		std::vector<std::shared_ptr<ProximityPrompt>> Prompts;
 		Rigs.reserve(RigCount);
 		Animators.reserve(RigCount);
 		Tracks.reserve(RigCount * TrackCount);
+		Anchors.reserve(RigCount * AnchorsPerRig);
+		Prompts.reserve(AnchorsPerRig == 0 ? 0 : RigCount);
 		AnimationRuntime Runtime(Assets);
+		auto Spatial = std::make_shared<SemanticSpatialResolver>(Assets, &Runtime);
+		auto PlayersValue = std::dynamic_pointer_cast<Players>(World->GetService("Players"));
+		auto Actions = std::dynamic_pointer_cast<ActionMap>(World->GetService("ActionMap"));
+		auto Interaction = std::dynamic_pointer_cast<InteractionService>(World->GetService("InteractionService"));
+		InteractionServiceTestAccess::Attach(*Interaction, World, PlayersValue, Actions, Spatial);
+		std::shared_ptr<Sound> SemanticSound;
 		for (std::size_t RigIndex = 0; RigIndex < RigCount; ++RigIndex) {
 			auto Rig = std::make_shared<MeshPart>();
 			Rig->SetName("BenchmarkRig" + std::to_string(RigIndex));
@@ -286,14 +436,44 @@ namespace {
 				Track->Play();
 				Tracks.push_back(std::move(Track));
 			}
+			for (std::size_t AnchorIndex = 0; AnchorIndex < AnchorsPerRig; ++AnchorIndex) {
+				auto Anchor = std::make_shared<Attachment>();
+				const auto JointIndex = (AnchorIndex + AnchorJointOffset) % BoneCount;
+				Anchor->SetJointPath(JointIndex == 0 ? "B0" : "B0/B" + std::to_string(JointIndex));
+				Anchor->SetCFrame(CFrame(static_cast<float>(AnchorIndex) * 0.001f, 0.0f, 0.0f));
+				Anchor->SetParent(Rig);
+				Spatial->RegisterAttachment(Anchor);
+				if (AnchorIndex == 0) {
+					auto Prompt = std::make_shared<ProximityPrompt>();
+					Prompt->SetMaxActivationDistance(64.0f);
+					Prompt->SetParent(Anchor);
+					Prompts.push_back(std::move(Prompt));
+					if (!SemanticSound) {
+						SemanticSound = std::make_shared<Sound>();
+						SemanticSound->SetSoundId(AudioReference);
+						SemanticSound->SetLooped(true);
+						SemanticSound->SetParent(Anchor);
+					}
+				}
+				Anchors.push_back(std::move(Anchor));
+			}
 			Rigs.push_back(std::move(Rig));
 			Animators.push_back(std::move(AnimatorValue));
+		}
+		auto Audio = std::make_unique<AudioRuntime>(
+			Assets, std::make_unique<BenchmarkAudioBackend>(), AudioRuntime::DiagnosticCallback{}, Spatial);
+		if (SemanticSound) {
+			Audio->RegisterSound(SemanticSound);
+			SemanticSound->Play();
 		}
 
 		RenderPublisher Publisher;
 		Publisher.SetAssetMeshChanges(std::vector<RenderMeshCreate>(SourceMeshes.begin(), SourceMeshes.end()), {});
 		RenderProjection Projection;
 		Runtime.Step(0.0f);
+		Spatial->Step();
+		InteractionServiceTestAccess::ProcessDirty(*Interaction);
+		if (SemanticSound) Audio->Step(CFrame());
 		Publisher.SetAnimationPoseChanges(Runtime.GetPoseUpdates(), Runtime.GetPoseRemoves());
 		Runtime.ClearChanges();
 		auto Initial = Publisher.Publish(*WorkspaceValue, RenderCameraInput{}, 640, 360);
@@ -301,17 +481,64 @@ namespace {
 		(void)Projection.Apply(*Initial);
 		for (std::size_t Warmup = 0; Warmup < 5; ++Warmup) {
 			Runtime.Step(1.0f / 60.0f);
+			Spatial->Step();
+			InteractionServiceTestAccess::ProcessDirty(*Interaction);
+			if (SemanticSound) Audio->Step(CFrame());
 			Publisher.SetAnimationPoseChanges(Runtime.GetPoseUpdates(), Runtime.GetPoseRemoves());
 			Runtime.ClearChanges();
 			(void)Projection.Apply(*Publisher.Publish(*WorkspaceValue, RenderCameraInput{}, 640, 360));
 		}
 		const auto MetricsBefore = Runtime.GetMetrics();
+		const auto SpatialBefore = Spatial->GetMetrics();
 		std::uint64_t TotalNanoseconds = 0;
 		std::uint64_t PublisherNanoseconds = 0;
 		std::uint64_t ProjectionNanoseconds = 0;
+		std::uint64_t SemanticAllocations = 0;
+		std::uint64_t SpatialAllocations = 0;
+		std::uint64_t SoundAllocations = 0;
+		std::uint64_t InteractionAllocations = 0;
+		std::vector<std::uint64_t> SemanticSamples;
+		std::vector<std::uint64_t> SoundSamples;
+		std::vector<std::uint64_t> InteractionSamples;
+		std::vector<std::uint64_t> TotalSemanticSamples;
+		SemanticSamples.reserve(Frames);
+		SoundSamples.reserve(Frames);
+		InteractionSamples.reserve(Frames);
+		TotalSemanticSamples.reserve(Frames);
 		for (std::size_t Frame = 0; Frame < Frames; ++Frame) {
 			const auto FrameStarted = Clock::now();
 			Runtime.Step(1.0f / 60.0f);
+			const auto SemanticStarted = Clock::now();
+			auto AllocationsBefore = SemanticBenchmarkAllocations.load(std::memory_order_relaxed);
+			Spatial->Step();
+			const auto SpatialAllocationCount =
+				SemanticBenchmarkAllocations.load(std::memory_order_relaxed) - AllocationsBefore;
+			SemanticAllocations += SpatialAllocationCount;
+			SpatialAllocations += SpatialAllocationCount;
+			const auto SemanticNanoseconds = Nanoseconds(SemanticStarted);
+			SemanticSamples.push_back(SemanticNanoseconds);
+			const auto InteractionStarted = Clock::now();
+			AllocationsBefore = SemanticBenchmarkAllocations.load(std::memory_order_relaxed);
+			InteractionServiceTestAccess::ProcessDirty(*Interaction);
+			const auto InteractionAllocationCount =
+				SemanticBenchmarkAllocations.load(std::memory_order_relaxed) - AllocationsBefore;
+			SemanticAllocations += InteractionAllocationCount;
+			InteractionAllocations += InteractionAllocationCount;
+			const auto InteractionNanoseconds = Nanoseconds(InteractionStarted);
+			InteractionSamples.push_back(InteractionNanoseconds);
+			std::uint64_t SoundNanoseconds = 0;
+			if (SemanticSound) {
+				const auto SoundStarted = Clock::now();
+				AllocationsBefore = SemanticBenchmarkAllocations.load(std::memory_order_relaxed);
+				Audio->Step(CFrame());
+				const auto SoundAllocationCount =
+					SemanticBenchmarkAllocations.load(std::memory_order_relaxed) - AllocationsBefore;
+				SemanticAllocations += SoundAllocationCount;
+				SoundAllocations += SoundAllocationCount;
+				SoundNanoseconds = Nanoseconds(SoundStarted);
+			}
+			SoundSamples.push_back(SoundNanoseconds);
+			TotalSemanticSamples.push_back(SemanticNanoseconds + InteractionNanoseconds + SoundNanoseconds);
 			const auto PublisherStarted = Clock::now();
 			Publisher.SetAnimationPoseChanges(Runtime.GetPoseUpdates(), Runtime.GetPoseRemoves());
 			Runtime.ClearChanges();
@@ -327,6 +554,7 @@ namespace {
 			TotalNanoseconds += Nanoseconds(FrameStarted);
 		}
 		const auto MetricsAfter = Runtime.GetMetrics();
+		const auto SpatialAfter = Spatial->GetMetrics();
 		const auto PerFrameMilliseconds = [Frames](std::uint64_t NanosecondTotal) {
 			return static_cast<double>(NanosecondTotal) / 1'000'000.0 / static_cast<double>(Frames);
 		};
@@ -344,16 +572,47 @@ namespace {
 				MetricsAfter.PosePublicationCpuNanoseconds - MetricsBefore.PosePublicationCpuNanoseconds),
 			.PublisherMillisecondsPerFrame = PerFrameMilliseconds(PublisherNanoseconds),
 			.ProjectionMillisecondsPerFrame = PerFrameMilliseconds(ProjectionNanoseconds),
+			.BindingBookkeepingMicrosecondsPerFrame = static_cast<double>(
+				SpatialAfter.BindingBookkeepingCpuNanoseconds - SpatialBefore.BindingBookkeepingCpuNanoseconds) /
+				1'000.0 / static_cast<double>(Frames),
+			.TransformResolutionMicrosecondsPerFrame = static_cast<double>(
+				SpatialAfter.TransformResolutionCpuNanoseconds - SpatialBefore.TransformResolutionCpuNanoseconds) /
+				1'000.0 / static_cast<double>(Frames),
+			.SemanticStepMicroseconds = Summarize(std::move(SemanticSamples)),
+			.SoundUpdateMicroseconds = Summarize(std::move(SoundSamples)),
+			.InteractionUpdateMicroseconds = Summarize(std::move(InteractionSamples)),
+			.TotalSemanticMicroseconds = Summarize(std::move(TotalSemanticSamples)),
 			.RuntimeBufferAllocationDelta = MetricsAfter.BufferAllocations - MetricsBefore.BufferAllocations,
+			.SemanticAllocationDelta = SemanticAllocations,
+			.SpatialAllocationDelta = SpatialAllocations,
+			.SoundAllocationDelta = SoundAllocations,
+			.InteractionAllocationDelta = InteractionAllocations,
+			.AnchorResolutionDelta = SpatialAfter.AnchorResolutions - SpatialBefore.AnchorResolutions,
+			.RigVisitDelta = SpatialAfter.RigsVisited - SpatialBefore.RigsVisited,
 		};
+		if (AnchorsPerRig == 0) {
+			Require(SpatialAfter.IndexedRigs == 0 && Result.AnchorResolutionDelta == 0 && Result.RigVisitDelta == 0,
+				"zero-anchor scenario performed semantic rig or Attachment work");
+		} else {
+			Require(SpatialAfter.IndexedSemanticAnchors == RigCount * AnchorsPerRig,
+				"semantic anchor scenario registration count is incomplete");
+		}
+		Audio->Shutdown();
+		InteractionServiceTestAccess::Shutdown(*Interaction);
+		Spatial->Shutdown();
 		Runtime.Shutdown();
 		for (auto &AnimatorValue : Animators) AnimatorValue->Destroy();
 		for (auto &Rig : Rigs) Rig->Destroy();
 		Tracks.clear();
 		Animators.clear();
+		Prompts.clear();
+		Anchors.clear();
+		SemanticSound.reset();
 		Rigs.clear();
 		std::cout << "[Animation:Benchmark] scenario rigs=" << RigCount << " bones=" << BoneCount
-			<< " tracks=" << TrackCount << " totalMs=" << Result.TotalMillisecondsPerFrame
+			<< " tracks=" << TrackCount << " anchorsPerRig=" << AnchorsPerRig
+			<< " anchorJointOffset=" << AnchorJointOffset
+			<< " totalMs=" << Result.TotalMillisecondsPerFrame
 			<< " sampleBlendMs=" << Result.SamplingBlendMillisecondsPerFrame
 			<< " hierarchyMs=" << Result.HierarchyMillisecondsPerFrame
 			<< " skinMatrixMs=" << Result.SkinMatrixMillisecondsPerFrame
@@ -361,7 +620,27 @@ namespace {
 			<< " poseBuildMs=" << Result.PoseBuildMillisecondsPerFrame
 			<< " publisherMs=" << Result.PublisherMillisecondsPerFrame
 			<< " projectionMs=" << Result.ProjectionMillisecondsPerFrame
-			<< " runtimeBufferAllocations=" << Result.RuntimeBufferAllocationDelta << '\n';
+			<< " bindingBookkeepingUs=" << Result.BindingBookkeepingMicrosecondsPerFrame
+			<< " transformResolutionUs=" << Result.TransformResolutionMicrosecondsPerFrame
+			<< " semanticStepUsP50=" << Result.SemanticStepMicroseconds.P50
+			<< " semanticStepUsP95=" << Result.SemanticStepMicroseconds.P95
+			<< " semanticStepUsP99=" << Result.SemanticStepMicroseconds.P99
+			<< " soundUpdateUsP50=" << Result.SoundUpdateMicroseconds.P50
+			<< " soundUpdateUsP95=" << Result.SoundUpdateMicroseconds.P95
+			<< " soundUpdateUsP99=" << Result.SoundUpdateMicroseconds.P99
+			<< " interactionUpdateUsP50=" << Result.InteractionUpdateMicroseconds.P50
+			<< " interactionUpdateUsP95=" << Result.InteractionUpdateMicroseconds.P95
+			<< " interactionUpdateUsP99=" << Result.InteractionUpdateMicroseconds.P99
+			<< " totalSemanticUsP50=" << Result.TotalSemanticMicroseconds.P50
+			<< " totalSemanticUsP95=" << Result.TotalSemanticMicroseconds.P95
+			<< " totalSemanticUsP99=" << Result.TotalSemanticMicroseconds.P99
+			<< " anchorResolutions=" << Result.AnchorResolutionDelta
+			<< " rigVisits=" << Result.RigVisitDelta
+			<< " runtimeBufferAllocations=" << Result.RuntimeBufferAllocationDelta
+			<< " semanticAllocations=" << Result.SemanticAllocationDelta
+			<< " spatialAllocations=" << Result.SpatialAllocationDelta
+			<< " soundAllocations=" << Result.SoundAllocationDelta
+			<< " interactionAllocations=" << Result.InteractionAllocationDelta << '\n';
 		return Result;
 	}
 
@@ -404,14 +683,22 @@ namespace {
 	}
 
 	void RunStaticWorldRegression(
+		const std::shared_ptr<DataModel> &World,
 		const std::shared_ptr<Workspace> &WorkspaceValue,
 		const std::shared_ptr<AssetService> &Assets,
 		const ImportedRig &Asset,
-		std::span<const RenderMeshCreate> SourceMeshes
+		std::span<const RenderMeshCreate> SourceMeshes,
+		const std::string &AudioReference
 	) {
 		constexpr std::size_t StaticObjectCount = 50'000;
 		std::vector<std::shared_ptr<Part>> StaticObjects;
 		StaticObjects.reserve(StaticObjectCount);
+		auto Runtime = std::make_unique<AnimationRuntime>(Assets);
+		auto Spatial = std::make_shared<SemanticSpatialResolver>(Assets, Runtime.get());
+		auto PlayersValue = std::dynamic_pointer_cast<Players>(World->GetService("Players"));
+		auto Actions = std::dynamic_pointer_cast<ActionMap>(World->GetService("ActionMap"));
+		auto Interaction = std::dynamic_pointer_cast<InteractionService>(World->GetService("InteractionService"));
+		InteractionServiceTestAccess::Attach(*Interaction, World, PlayersValue, Actions, Spatial);
 		for (std::size_t Index = 0; Index < StaticObjectCount; ++Index) {
 			auto Object = std::make_shared<Part>();
 			Object->SetAnchored(true);
@@ -426,8 +713,22 @@ namespace {
 		Rig->SetParent(WorkspaceValue);
 		auto AnimatorValue = std::make_shared<Animator>();
 		AnimatorValue->SetParent(Rig);
-		auto Runtime = std::make_unique<AnimationRuntime>(Assets);
 		Runtime->RegisterAnimator(AnimatorValue);
+		auto Anchor = std::make_shared<Attachment>();
+		Anchor->SetJointPath("B0/B1");
+		Anchor->SetParent(Rig);
+		Spatial->RegisterAttachment(Anchor);
+		auto Prompt = std::make_shared<ProximityPrompt>();
+		Prompt->SetMaxActivationDistance(64.0f);
+		Prompt->SetParent(Anchor);
+		auto SoundValue = std::make_shared<Sound>();
+		SoundValue->SetSoundId(AudioReference);
+		SoundValue->SetLooped(true);
+		SoundValue->SetParent(Anchor);
+		auto Audio = std::make_unique<AudioRuntime>(
+			Assets, std::make_unique<BenchmarkAudioBackend>(), AudioRuntime::DiagnosticCallback{}, Spatial);
+		Audio->RegisterSound(SoundValue);
+		SoundValue->Play();
 		auto Track = AnimatorValue->CreateTrack(Asset.Animation);
 		Track->SetLooped(true);
 		Track->Play();
@@ -435,15 +736,36 @@ namespace {
 		Publisher.SetAssetMeshChanges(std::vector<RenderMeshCreate>(SourceMeshes.begin(), SourceMeshes.end()), {});
 		RenderProjection Projection;
 		Runtime->Step(0.0f);
+		Spatial->Step();
+		InteractionServiceTestAccess::ProcessDirty(*Interaction);
+		Audio->Step(CFrame());
 		Publisher.SetAnimationPoseChanges(Runtime->GetPoseUpdates(), Runtime->GetPoseRemoves());
 		Runtime->ClearChanges();
 		(void)Projection.Apply(*Publisher.Publish(*WorkspaceValue, RenderCameraInput{}, 640, 360));
+		for (std::size_t Warmup = 0; Warmup < 5; ++Warmup) {
+			Runtime->Step(1.0f / 60.0f);
+			Spatial->Step();
+			InteractionServiceTestAccess::ProcessDirty(*Interaction);
+			Audio->Step(CFrame());
+			Runtime->ClearChanges();
+		}
+		ChangeJournal::Get().Clear();
+		const auto SpatialBefore = Spatial->GetMetrics();
 		Runtime->Step(1.0f / 60.0f);
+		const auto AllocationsAfterRuntime = SemanticBenchmarkAllocations.load(std::memory_order_relaxed);
+		Spatial->Step();
+		const auto AllocationsAfterSpatial = SemanticBenchmarkAllocations.load(std::memory_order_relaxed);
+		InteractionServiceTestAccess::ProcessDirty(*Interaction);
+		const auto AllocationsAfterInteraction = SemanticBenchmarkAllocations.load(std::memory_order_relaxed);
+		Audio->Step(CFrame());
+		const auto AllocationsAfterAudio = SemanticBenchmarkAllocations.load(std::memory_order_relaxed);
+		const auto SemanticAllocationDelta = AllocationsAfterAudio - AllocationsAfterRuntime;
 		Publisher.SetAnimationPoseChanges(Runtime->GetPoseUpdates(), Runtime->GetPoseRemoves());
 		Runtime->ClearChanges();
 		const auto Started = Clock::now();
 		auto Incremental = Publisher.Publish(*WorkspaceValue, RenderCameraInput{}, 640, 360);
 		const auto PublishNanoseconds = Nanoseconds(Started);
+		const auto SpatialAfter = Spatial->GetMetrics();
 		const auto StaticUpdateCount = std::ranges::count_if(Incremental->Updates, [&](const auto &Update) {
 			return Update.Object != Rig->GetObjectId();
 		});
@@ -451,14 +773,104 @@ namespace {
 			Incremental->MeshCreates.empty() && StaticUpdateCount == 0 && Incremental->Creates.empty() &&
 			Incremental->Removes.empty() && !Incremental->FullResync,
 			"50K static world animation publication touched static objects");
-		std::cout << "[Animation:Benchmark] staticWorld=50000 animatedRigs=1 poseUpdates=1 staticUpdates=0 "
+		Require(SpatialAfter.RegisteredAttachments == 1 &&
+			SpatialAfter.IndexedSemanticAnchors == 1 && SpatialAfter.IndexedRigs == 1 &&
+			SpatialAfter.AnchorResolutions - SpatialBefore.AnchorResolutions == 1 &&
+			SpatialAfter.RigsVisited - SpatialBefore.RigsVisited == 1,
+			"the one semantic anchor was not updated exactly once in the 50K Part world");
+		Require(ChangeJournal::Get().ReadSince(0).empty(),
+			"semantic pose movement emitted ChangeJournal document work in the 50K world");
+		if (SemanticAllocationDelta != 0)
+			std::cerr << "[Animation:Benchmark] staticWorld semantic allocations spatial="
+				<< AllocationsAfterSpatial - AllocationsAfterRuntime << " interaction="
+				<< AllocationsAfterInteraction - AllocationsAfterSpatial << " audio="
+				<< AllocationsAfterAudio - AllocationsAfterInteraction << '\n';
+		Require(SemanticAllocationDelta == 0,
+			"50K static world semantic steady state allocated after warmup");
+		std::cout << "[Animation:Benchmark] staticWorld=50000 animatedRigs=1 semanticAnchors=1 "
+			"poseUpdates=1 anchorResolutions=1 staticUpdates=0 "
+			"changeJournalRecords=0 documentReconciliation=0 semanticAllocations=0 "
 			"cpuDynamicVertexUpdates=0 fullResyncs=0 publisherMs="
 			<< static_cast<double>(PublishNanoseconds) / 1'000'000.0 << '\n';
+		Audio->Shutdown();
+		InteractionServiceTestAccess::Shutdown(*Interaction);
+		Spatial->Shutdown();
 		Runtime->Shutdown();
 		AnimatorValue->Destroy();
 		Rig->Destroy();
 		for (auto &Object : StaticObjects) Object->Destroy();
 		StaticObjects.clear();
+		ChangeJournal::Get().Clear();
+	}
+
+	void RunStaticAttachmentRegression(
+		const std::shared_ptr<Workspace> &WorkspaceValue,
+		const std::shared_ptr<AssetService> &Assets,
+		const ImportedRig &Asset
+	) {
+		constexpr std::size_t StaticAttachmentCount = 50'000;
+		auto StaticOwner = std::make_shared<Part>();
+		StaticOwner->SetAnchored(true);
+		StaticOwner->SetParent(WorkspaceValue);
+		std::vector<std::shared_ptr<Attachment>> StaticAttachments;
+		StaticAttachments.reserve(StaticAttachmentCount);
+		auto Runtime = std::make_unique<AnimationRuntime>(Assets);
+		auto Spatial = std::make_shared<SemanticSpatialResolver>(Assets, Runtime.get());
+		for (std::size_t Index = 0; Index < StaticAttachmentCount; ++Index) {
+			auto AttachmentValue = std::make_shared<Attachment>();
+			AttachmentValue->SetCFrame(CFrame(0.0f, static_cast<float>(Index % 8) * 0.01f, 0.0f));
+			AttachmentValue->SetParent(StaticOwner);
+			Spatial->RegisterAttachment(AttachmentValue);
+			StaticAttachments.push_back(std::move(AttachmentValue));
+		}
+		auto Rig = std::make_shared<MeshPart>();
+		Rig->SetMesh(Asset.Mesh);
+		Rig->SetAnchored(true);
+		Rig->SetParent(WorkspaceValue);
+		auto AnimatorValue = std::make_shared<Animator>();
+		AnimatorValue->SetParent(Rig);
+		Runtime->RegisterAnimator(AnimatorValue);
+		auto Anchor = std::make_shared<Attachment>();
+		Anchor->SetJointPath("B0/B1");
+		Anchor->SetParent(Rig);
+		Spatial->RegisterAttachment(Anchor);
+		auto Track = AnimatorValue->CreateTrack(Asset.Animation);
+		Track->SetLooped(true);
+		Track->Play();
+		Runtime->Step(0.0f);
+		Spatial->Step();
+		for (std::size_t Warmup = 0; Warmup < 5; ++Warmup) {
+			Runtime->Step(1.0f / 60.0f);
+			Spatial->Step();
+			Runtime->ClearChanges();
+		}
+		ChangeJournal::Get().Clear();
+		const auto Before = Spatial->GetMetrics();
+		Runtime->Step(1.0f / 60.0f);
+		const auto AllocationsAfterRuntime = SemanticBenchmarkAllocations.load(std::memory_order_relaxed);
+		Spatial->Step();
+		const auto AllocationsAfterSpatial = SemanticBenchmarkAllocations.load(std::memory_order_relaxed);
+		const auto AllocationDelta = AllocationsAfterSpatial - AllocationsAfterRuntime;
+		const auto After = Spatial->GetMetrics();
+		Require(After.RegisteredAttachments == StaticAttachmentCount + 1 &&
+			After.IndexedSemanticAnchors == 1 && After.IndexedRigs == 1 &&
+			After.AnchorResolutions - Before.AnchorResolutions == 1 &&
+			After.RigsVisited - Before.RigsVisited == 1,
+			"one animated anchor scanned or updated any of the 50K ordinary Attachments");
+		if (AllocationDelta != 0)
+			std::cerr << "[Animation:Benchmark] staticAttachments semantic allocations spatial="
+				<< AllocationsAfterSpatial - AllocationsAfterRuntime << '\n';
+		Require(ChangeJournal::Get().ReadSince(0).empty() && AllocationDelta == 0,
+			"50K ordinary Attachment steady state journaled or allocated");
+		std::cout << "[Animation:Benchmark] staticAttachments=50000 animatedRigs=1 semanticAnchors=1 "
+			"anchorResolutions=1 staticAttachmentScans=0 changeJournalRecords=0 semanticAllocations=0\n";
+		Spatial->Shutdown();
+		Runtime->Shutdown();
+		AnimatorValue->Destroy();
+		Rig->Destroy();
+		StaticOwner->Destroy();
+		StaticAttachments.clear();
+		ChangeJournal::Get().Clear();
 	}
 
 	void ReportMemory(std::size_t Bones, std::size_t ArtifactBytes) {
@@ -487,6 +899,7 @@ int main(int ArgumentCount, char **Arguments) {
 		} CleanupValue{Root};
 		std::filesystem::create_directories(Root / "assets");
 		for (const auto Bones : {16u, 64u, 128u, 256u}) WriteRigFixture(Root, Bones, 999);
+		WriteBytes(Root / "assets" / "semantic-tone.wav", MakeWave());
 		DiskFilesystem Filesystem(Root);
 		SourceMount Mount(Filesystem);
 		auto World = std::make_shared<DataModel>();
@@ -496,24 +909,38 @@ int main(int ArgumentCount, char **Arguments) {
 		auto WorkspaceValue = std::dynamic_pointer_cast<Workspace>(World->GetService("Workspace"));
 		std::unordered_map<std::size_t, ImportedRig> Imported;
 		for (const auto Bones : {16u, 64u, 128u, 256u}) Imported.emplace(Bones, ImportRig(*Assets, Mount, Bones));
+		const auto AudioReference = ImportAudio(*Assets, Mount);
 		auto MeshChanges = Assets->DrainMeshChanges();
 		const auto SourceMeshes = MeshChanges.Creates;
 		const auto Frames = Quick ? 2u : 10u;
 		std::cout << std::fixed << std::setprecision(4);
 		for (const auto Rigs : {1u, 10u, 100u, 500u})
-			Require(RunScenario(WorkspaceValue, Assets, Imported.at(64), SourceMeshes,
-				Rigs, 64, 1, Frames).RuntimeBufferAllocationDelta == 0,
-				"rig-scaling scenario allocated after warmup");
-		for (const auto Bones : {16u, 64u, 128u, 256u})
-			Require(RunScenario(WorkspaceValue, Assets, Imported.at(Bones), SourceMeshes,
-				10, Bones, 1, Frames).RuntimeBufferAllocationDelta == 0,
+			for (const auto AnchorsPerRig : {0u, 1u, 4u, 16u, 64u}) {
+				auto Result = RunScenario(World, WorkspaceValue, Assets, Imported.at(64), SourceMeshes, AudioReference,
+					Rigs, 64, 1, AnchorsPerRig, Frames);
+				Require(Result.RuntimeBufferAllocationDelta == 0 && Result.SemanticAllocationDelta == 0,
+					"rig/anchor-scaling scenario allocated after warmup");
+			}
+		for (const auto Bones : {16u, 64u, 128u, 256u}) {
+			auto Result = RunScenario(World, WorkspaceValue, Assets, Imported.at(Bones), SourceMeshes, AudioReference,
+				10, Bones, 1, 0, Frames);
+			Require(Result.RuntimeBufferAllocationDelta == 0 && Result.SemanticAllocationDelta == 0,
 				"bone-scaling scenario allocated after warmup");
-		for (const auto Tracks : {1u, 2u, 4u})
-			Require(RunScenario(WorkspaceValue, Assets, Imported.at(64), SourceMeshes,
-				10, 64, Tracks, Frames).RuntimeBufferAllocationDelta == 0,
+		}
+		auto SparseBinding = RunScenario(World, WorkspaceValue, Assets, Imported.at(256), SourceMeshes,
+			AudioReference, 1, 256, 1, 1, Frames, 200);
+		Require(SparseBinding.AnchorResolutionDelta == Frames && SparseBinding.RigVisitDelta == Frames &&
+			SparseBinding.RuntimeBufferAllocationDelta == 0 && SparseBinding.SemanticAllocationDelta == 0,
+			"one sparse joint-200 binding scaled with skeleton/world size instead of one registered anchor");
+		for (const auto Tracks : {1u, 2u, 4u}) {
+			auto Result = RunScenario(World, WorkspaceValue, Assets, Imported.at(64), SourceMeshes, AudioReference,
+				10, 64, Tracks, 0, Frames);
+			Require(Result.RuntimeBufferAllocationDelta == 0 && Result.SemanticAllocationDelta == 0,
 				"track-scaling scenario allocated after warmup");
+		}
 		RunCpuSkinningScaling(Quick);
-		RunStaticWorldRegression(WorkspaceValue, Assets, Imported.at(64), SourceMeshes);
+		RunStaticWorldRegression(World, WorkspaceValue, Assets, Imported.at(64), SourceMeshes, AudioReference);
+		RunStaticAttachmentRegression(WorkspaceValue, Assets, Imported.at(64));
 		for (const auto Bones : {64u, 128u, 256u}) ReportMemory(Bones, Imported.at(Bones).ArtifactBytes);
 		Assets.reset();
 		WorkspaceValue.reset();

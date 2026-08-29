@@ -11,6 +11,7 @@
 
 namespace gargantuan {
 	class AssetService;
+	class SemanticSpatialResolver;
 	class Sound;
 
 	struct AudioRuntimeMetrics {
@@ -19,6 +20,8 @@ namespace gargantuan {
 		std::uint64_t VoiceRejections = 0;
 		std::uint64_t MixedFrames = 0;
 		std::uint64_t MixCpuNanoseconds = 0;
+		std::uint64_t SemanticSourceResolutions = 0;
+		std::uint64_t SemanticSourceCpuNanoseconds = 0;
 		AudioBackendMetrics Backend;
 	};
 
@@ -34,7 +37,8 @@ namespace gargantuan {
 		AudioRuntime(
 			std::shared_ptr<AssetService> Assets,
 			std::unique_ptr<IAudioBackend> Backend,
-			DiagnosticCallback Diagnostic = {}
+			DiagnosticCallback Diagnostic = {},
+			std::shared_ptr<SemanticSpatialResolver> Spatial = {}
 		);
 		~AudioRuntime();
 		AudioRuntime(const AudioRuntime &) = delete;

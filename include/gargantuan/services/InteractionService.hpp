@@ -11,7 +11,6 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
-#include <unordered_set>
 #include <vector>
 
 #include <glm/glm.hpp>
@@ -21,6 +20,7 @@ namespace gargantuan {
 	class Attachment;
 	class DataModel;
 	class Players;
+	class SemanticSpatialResolver;
 	class Script;
 	class Workspace;
 	struct InteractionServiceTestAccess;
@@ -62,6 +62,8 @@ namespace gargantuan {
 			bool Indexed = false;
 			std::vector<SignalConnection::Pointer> PromptConnections;
 			std::vector<SignalConnection::Pointer> AnchorConnections;
+			bool Dirty = false;
+			bool AnchorDependenciesDirty = true;
 		};
 
 		struct PlayerState {
@@ -83,9 +85,11 @@ namespace gargantuan {
 		std::weak_ptr<Players> PlayerService;
 		std::weak_ptr<ActionMap> Actions;
 		std::weak_ptr<Workspace> PhysicsWorkspace;
+		std::shared_ptr<SemanticSpatialResolver> SpatialRuntime;
 		std::unordered_map<ObjectId, PromptRecord> Prompts;
 		std::unordered_map<CellKey, std::vector<ObjectId>, CellKeyHash> SpatialCells;
-		std::unordered_set<ObjectId> DirtyPrompts;
+		std::vector<ObjectId> DirtyPrompts;
+		std::vector<ObjectId> ProcessingDirtyPrompts;
 		std::unordered_map<ObjectId, PlayerState> PlayerStates;
 		std::function<void()> UnbindDescendants;
 		SignalConnection::Pointer DescendantRemovedConnection;
@@ -112,6 +116,7 @@ namespace gargantuan {
 			const std::shared_ptr<DataModel> &WorldValue,
 			const std::shared_ptr<Players> &PlayersValue,
 			const std::shared_ptr<ActionMap> &ActionMapValue,
+			const std::shared_ptr<SemanticSpatialResolver> &SpatialValue,
 			bool EnableDefaultPresentation
 		);
 		void StartDefaultRuntime();
@@ -121,15 +126,15 @@ namespace gargantuan {
 		void SetInputSource(bool &Source, bool Down);
 		void RegisterPrompt(const std::shared_ptr<ProximityPrompt> &Prompt);
 		void UnregisterPrompt(ObjectId PromptId);
-		void MarkPromptDirty(ObjectId PromptId);
+		void MarkPromptDirty(ObjectId PromptId, bool AnchorDependencies = false);
 		void ProcessDirtyPrompts();
 		void RefreshPrompt(ObjectId PromptId);
 		void RemoveFromCell(PromptRecord &Record, ObjectId PromptId);
 		void InvalidatePromptStates(ObjectId PromptId);
 		[[nodiscard]] static std::optional<CellKey> PositionToCell(const glm::vec3 &Position);
-		[[nodiscard]] static std::optional<glm::vec3> ResolveAnchor(
+		[[nodiscard]] std::optional<glm::vec3> ResolveAnchor(
 			const std::shared_ptr<ProximityPrompt> &Prompt, std::vector<std::shared_ptr<Instance>> *Observed = nullptr
-		);
+		) const;
 		[[nodiscard]] static std::optional<glm::vec3> ResolvePlayerOrigin(const std::shared_ptr<Player> &PlayerValue);
 		[[nodiscard]] QueryResult
 		QueryNearest(const glm::vec3 &Origin, const std::shared_ptr<Player> &PlayerValue = nullptr) const;

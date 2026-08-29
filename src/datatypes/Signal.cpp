@@ -138,15 +138,23 @@ namespace gargantuan {
 		// over a snapshot rather than the live list. The snapshot holds owning
 		// pointers, so a handler that clears Connections outright -- which
 		// Instance::Destroy does -- cannot pull entries out from under the loop.
-		auto connections = Connections;
+		std::vector<SignalConnection::Pointer> NestedSnapshot;
+		auto *ConnectionsToFire = &FiringSnapshot;
+		if (FiringDepth == 0)
+			FiringSnapshot.assign(Connections.begin(), Connections.end());
+		else {
+			NestedSnapshot = Connections;
+			ConnectionsToFire = &NestedSnapshot;
+		}
 		FiringDepth++;
 
 		try {
-			for (auto &connection : connections) {
+			for (auto &connection : *ConnectionsToFire) {
 				if (connection && connection->Connected && connection->Callback) connection->Callback(value);
 			}
 		} catch (...) {
 			FiringDepth--;
+			if (FiringDepth == 0) FiringSnapshot.clear();
 			if (FiringDepth == 0)
 				std::erase_if(Connections, [](const SignalConnection::Pointer &connection) {
 					return !connection || !connection->Connected;
@@ -155,6 +163,7 @@ namespace gargantuan {
 		}
 
 		FiringDepth--;
+		if (FiringDepth == 0) FiringSnapshot.clear();
 		if (FiringDepth == 0) {
 			std::erase_if(Connections, [](const SignalConnection::Pointer &connection) {
 				return !connection || !connection->Connected;

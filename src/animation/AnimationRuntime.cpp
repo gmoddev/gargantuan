@@ -126,6 +126,7 @@ namespace gargantuan {
 		std::shared_ptr<AssetService> Assets;
 		DiagnosticCallback Diagnostic;
 		std::map<ObjectId, TrackedAnimator> Animators;
+		std::map<ObjectId, AnimationPoseSnapshot> Poses;
 		std::set<std::pair<ObjectId, std::string>> EmittedDiagnostics;
 		std::vector<RenderAnimationPoseState> PoseUpdates;
 		std::vector<RenderAnimationPoseRemove> PoseRemoves;
@@ -152,8 +153,10 @@ namespace gargantuan {
 		}
 
 		void RemovePose(TrackedAnimator &Tracked) {
-			if (Tracked.Published && Tracked.TargetObject.IsValid())
+			if (Tracked.Published && Tracked.TargetObject.IsValid()) {
 				PoseRemoves.push_back({Tracked.TargetObject});
+				Poses.erase(Tracked.TargetObject);
+			}
 			Tracked.Published = false;
 			Tracked.Snapshot = {};
 		}
@@ -450,6 +453,7 @@ namespace gargantuan {
 			Tracked.ObservedTrackRevisions = Tracked.CurrentTrackRevisions;
 			Tracked.Published = true;
 			Tracked.Snapshot = {Compatibility, Tracked.PoseRevision, ModelTransforms, Palette};
+			State->Poses.insert_or_assign(TargetObject, Tracked.Snapshot);
 			State->PoseUpdates.push_back({
 				.Pose = {
 					.Object = TargetObject,
@@ -494,6 +498,7 @@ namespace gargantuan {
 			if (auto AnimatorValue = Tracked.Value.lock()) AnimatorValue->InvalidateTracks();
 		}
 		State->Animators.clear();
+		State->Poses.clear();
 		State->Metrics.TrackedAnimators = 0;
 		State->Metrics.ActiveRigs = 0;
 		State->Metrics.ActiveTracks = 0;
@@ -517,11 +522,8 @@ namespace gargantuan {
 
 	std::optional<AnimationPoseSnapshot> AnimationRuntime::GetPose(ObjectId Object) const {
 		if (!State) return std::nullopt;
-		for (const auto &[AnimatorObject, Tracked] : State->Animators) {
-			(void)AnimatorObject;
-			if (Tracked.Published && Tracked.TargetObject == Object) return Tracked.Snapshot;
-		}
-		return std::nullopt;
+		auto Found = State->Poses.find(Object);
+		return Found == State->Poses.end() ? std::nullopt : std::optional(Found->second);
 	}
 
 	AnimationRuntimeMetrics AnimationRuntime::GetMetrics() const {

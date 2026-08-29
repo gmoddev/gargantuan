@@ -1,9 +1,8 @@
 #include "gargantuan/audio/AudioRuntime.hpp"
 
 #include "gargantuan/assets/AssetTypes.hpp"
-#include "gargantuan/classes/Attachment.hpp"
-#include "gargantuan/classes/BasePart.hpp"
 #include "gargantuan/classes/Sound.hpp"
+#include "gargantuan/runtime/SemanticSpatialResolver.hpp"
 #include "gargantuan/services/AssetService.hpp"
 
 #include <algorithm>
@@ -26,21 +25,14 @@ namespace gargantuan {
 			return std::isfinite(Value.x) && std::isfinite(Value.y) && std::isfinite(Value.z);
 		}
 
-		std::optional<glm::vec3> ResolveSoundPosition(const std::shared_ptr<Sound> &SoundValue) {
-			CFrame LocalOffset;
-			auto Current = SoundValue ? SoundValue->GetParent() : std::nullopt;
-			while (Current) {
-				auto Object = *Current;
-				if (!Object || Object->GetDestroyed() || Object->IsDestroying()) return std::nullopt;
-				if (auto AttachmentValue = std::dynamic_pointer_cast<Attachment>(Object))
-					LocalOffset = AttachmentValue->GetCFrame() * LocalOffset;
-				else if (auto Part = std::dynamic_pointer_cast<BasePart>(Object)) {
-					const auto Position = (Part->GetCFrame() * LocalOffset).Position;
-					return IsFinite(Position) ? std::optional(Position) : std::nullopt;
-				}
-				Current = Object->GetParent();
-			}
-			return std::nullopt;
+		std::optional<glm::vec3> ResolveSoundPosition(
+			const std::shared_ptr<Sound> &SoundValue,
+			const std::shared_ptr<SemanticSpatialResolver> &Spatial
+		) {
+			auto Transform = Spatial ? Spatial->ResolveWorldTransform(SoundValue)
+				: SemanticSpatialResolver::ResolveStaticWorldTransform(SoundValue);
+			if (!Transform || !IsFinite(Transform->WorldCFrame.Position)) return std::nullopt;
+			return Transform->WorldCFrame.Position;
 		}
 	}
 
@@ -59,6 +51,7 @@ namespace gargantuan {
 		};
 
 		std::shared_ptr<AssetService> Assets;
+		std::shared_ptr<SemanticSpatialResolver> Spatial;
 		std::unique_ptr<IAudioBackend> Backend;
 		DiagnosticCallback Diagnostic;
 		std::map<ObjectId, TrackedSound> Sounds;
@@ -66,15 +59,20 @@ namespace gargantuan {
 		std::array<float, AudioRuntime::MixBlockFrames * 2> MixBuffer{};
 		std::vector<ObjectId> Completed;
 		AudioRuntimeMetrics Metrics;
+		std::uint64_t AssetChangeSequence = 1;
 		bool ShutDown = false;
 
 		Impl(
 			std::shared_ptr<AssetService> AssetsValue,
 			std::unique_ptr<IAudioBackend> BackendValue,
-			DiagnosticCallback DiagnosticValue
+			DiagnosticCallback DiagnosticValue,
+			std::shared_ptr<SemanticSpatialResolver> SpatialValue
 		)
-			: Assets(std::move(AssetsValue)), Backend(std::move(BackendValue)), Diagnostic(std::move(DiagnosticValue)) {
+			: Assets(std::move(AssetsValue)),
+			  Spatial(SpatialValue ? std::move(SpatialValue) : std::make_shared<SemanticSpatialResolver>(Assets)),
+			  Backend(std::move(BackendValue)), Diagnostic(std::move(DiagnosticValue)) {
 			Completed.reserve(AudioRuntime::MaximumVoices);
+			if (Assets) AssetChangeSequence = Assets->ReadChanges(0).NextSequence;
 			if (Backend && !Backend->IsAvailable() && Diagnostic)
 				Diagnostic(
 					"DeviceUnavailable",
@@ -130,6 +128,8 @@ namespace gargantuan {
 		}
 
 		void Reconcile() {
+			auto AssetChanges = Assets ? Assets->ReadChanges(AssetChangeSequence) : AssetChangeBatch{};
+			AssetChangeSequence = AssetChanges.NextSequence;
 			for (auto Iterator = Sounds.begin(); Iterator != Sounds.end();) {
 				auto SoundValue = Iterator->second.Value.lock();
 				if (!SoundValue || SoundValue->GetDestroyed() || SoundValue->IsDestroying()) {
@@ -153,7 +153,11 @@ namespace gargantuan {
 					);
 				}
 
-				if (Tracked.ActiveVoice) {
+				const bool AudioChanged = Tracked.ActiveVoice && (AssetChanges.RescanRequired ||
+					std::ranges::any_of(AssetChanges.Changes, [&](const AssetChange &Change) {
+						return Change.Kind == AssetKind::Audio && Change.Reference == Tracked.ActiveVoice->Reference;
+					}));
+				if (AudioChanged) {
 					auto Latest = Assets->ResolveAudio(Tracked.ActiveVoice->Reference);
 					if (!Latest) {
 						Tracked.ActiveVoice.reset();
@@ -207,7 +211,12 @@ namespace gargantuan {
 				const auto Step = static_cast<double>(Audio.SampleRate) / OutputRate * SoundValue->GetPlaybackSpeed();
 				float LeftGain = SoundValue->GetVolume();
 				float RightGain = SoundValue->GetVolume();
-				const auto Position = ResolveSoundPosition(SoundValue);
+				const auto SemanticStarted = std::chrono::steady_clock::now();
+				const auto Position = ResolveSoundPosition(SoundValue, Spatial);
+				++Metrics.SemanticSourceResolutions;
+				Metrics.SemanticSourceCpuNanoseconds += static_cast<std::uint64_t>(
+					std::chrono::duration_cast<std::chrono::nanoseconds>(
+						std::chrono::steady_clock::now() - SemanticStarted).count());
 				if (Position) {
 					const auto Offset = *Position - ListenerPosition;
 					const auto Distance = glm::length(Offset);
@@ -277,9 +286,13 @@ namespace gargantuan {
 	};
 
 	AudioRuntime::AudioRuntime(
-		std::shared_ptr<AssetService> Assets, std::unique_ptr<IAudioBackend> Backend, DiagnosticCallback Diagnostic
+		std::shared_ptr<AssetService> Assets,
+		std::unique_ptr<IAudioBackend> Backend,
+		DiagnosticCallback Diagnostic,
+		std::shared_ptr<SemanticSpatialResolver> Spatial
 	)
-		: State(std::make_unique<Impl>(std::move(Assets), std::move(Backend), std::move(Diagnostic))) {}
+		: State(std::make_unique<Impl>(
+			std::move(Assets), std::move(Backend), std::move(Diagnostic), std::move(Spatial))) {}
 
 	AudioRuntime::~AudioRuntime() {
 		Shutdown();

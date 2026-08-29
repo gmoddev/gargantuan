@@ -1,6 +1,6 @@
 # First complete game validation
 
-Status: Animation Foundation 2A GPU path revalidated locally on 2026-08-29. This document records a vertical-slice
+Status: Animation Foundation 2B semantic anchors revalidated locally on 2026-08-29. This document records a vertical-slice
 falsification exercise; it does not claim that Gargantuan is generally usable.
 
 ## Game design and scope
@@ -23,7 +23,10 @@ The deterministic `K` action completes the round for automation. It is a test
 hook implemented through the public `ActionMap`, not a native gameplay bypass.
 Networking, combat, VFX, and soft bodies were intentionally not added. The
 authored `AnimatedBeacon` is a two-joint skinned MeshPart driven by the looping
-`BeaconPulse` clip through the public Animator/AnimationTrack API.
+`BeaconPulse` clip through the public Animator/AnimationTrack API. Its
+`BeaconTipAnchor` binds `BeaconRoot/BeaconTip`; a quiet positional Sound and a
+small ProximityPrompt beneath it follow the same renderer-independent semantic
+world transform.
 
 ## Authoring workflow used
 
@@ -77,12 +80,15 @@ honest claim of an entirely GUI-authored workflow.
   publication, sun/shadow/fog/exposure state, and package shader inclusion;
 - canonical skinned Mesh/Animation assets, renderer-neutral palette
   publication, GPU opaque/shadow skinning, CPU fallback, and renderer restart;
+- canonical Attachment joint binding, transient `WorldCFrame`, bind-pose
+  fallback, animated positional Sound, animated prompt range/LOS/hold
+  validation, and zero-journal semantic movement;
 - ordinary Luau scripts, services, signals, cleanup, and structured output;
 - `ScreenGui`, `Frame`, `ImageLabel`, `TextLabel`, `TextButton`, layout, input,
   activation, visibility, and viewport resize;
 - isolated Play/Stop, GUI/runtime mutation discard, and standalone execution.
 
-The persisted project has 32 Instances, 9 authored GUI Instances, and 7 imported asset
+The persisted project has 38 Instances, 9 authored GUI Instances, and 7 imported asset
 records. A representative headless runtime composition step is approximately
 0.1 ms on the validation machine; this is not a frame-time benchmark. A local
 real-GPU cold offscreen capture was approximately 250 ms, including renderer
@@ -141,14 +147,25 @@ the track. The headless and packaged gates assert palette-only publication with
 no posed mesh or dynamic vertex update. Opaque and shadow passes bind the same
 palette resource/revision.
 
+Animation Foundation 2B adds no second pose evaluation. Engine now resolves the
+authored `BeaconTipAnchor` from the CPU joint-model transform before Sound and
+Interaction update. The deterministic headless gate records pose A, advances
+the clip, observes a changed `Attachment.WorldCFrame`, proves the prompt is
+available at pose B and unavailable at the stale pose-A point, and verifies the
+quiet looping Sound hierarchy. Save/reopen preserves only CFrame/JointPath;
+ten Play/Stop cycles preserve the complete authoring snapshot. The relocated
+Release/Vulkan package proof compares the same socket with the GPU palette
+oracle, observes 12 palette uploads and zero CPU vertex uploads, then replaces
+the renderer while semantic revision continues.
+
 ## Studio and API findings
 
 Findings use the requested A-F categories.
 
 | Category | Evidence |
 | --- | --- |
-| A - missing feature | The original proximity primitive, semantic rigid raycast, working interaction LOS, and packaged launcher gaps are now closed. Shape/overlap queries and soft-body participation remain future work. |
-| B - API ergonomics | Basic prompt interaction now requires an authored prompt plus `Triggered` handler. Device-aware/rebindable hints and custom prompt presentation remain future ergonomics; AssetReference assignment remains the larger content concern. |
+| A - missing feature | The original proximity primitive, semantic rigid raycast, animated joint anchor, working interaction LOS, and packaged launcher gaps are now closed. Shape/overlap queries and soft-body-to-anchor participation remain future work. |
+| B - API ergonomics | Basic prompt interaction now requires an authored prompt plus `Triggered` handler. `Attachment.JointPath` is a bounded generic string; an asset-backed canonical-joint picker, device-aware/rebindable hints, and custom prompt presentation remain future ergonomics. |
 | C - Studio UX | No transform gizmos or compound property editors; limited scalar Properties support; no bridge tools for Assets or Play; one hidden relaunch failed to establish a project session; no Run Standalone command. |
 | D - documentation/discoverability | A developer currently needs CMake/build-tree knowledge, adjacent runtime modules/DLL knowledge, and internal awareness of asset references to run the project outside Studio. |
 | E - architecture defect | `UDim2` persistence loss and the split Play-viewport resource publication were real cross-system defects. The gate covers `UDim2` and coherent runtime world/UI publication; the separate real-GPU viewport smoke covers device consumption. |
@@ -163,7 +180,7 @@ optional cues that remain fail-open and irrelevant to gameplay correctness.
 The seven project records reopen as `Ready`: two Mesh assets, Material, Image,
 Font, Audio, and Animation. The static Mesh depends on Material, Material
 depends on Image, and Animation depends on its compatible skinned Mesh. The authored
-`MeshPart`, `ImageLabel`, `TextLabel`, all six Sky faces, and all four Sounds resolve only
+`MeshPart`, `ImageLabel`, `TextLabel`, all six Sky faces, and all five Sounds resolve only
 `asset://` references.
 The PNG was reduced from 1024 to 512 pixels after standalone validation showed
 that the larger image plus font atlas exceeded the bounded per-frame GUI upload
@@ -183,10 +200,11 @@ obstacle motion, GUI text/visibility, runtime Players, or default runtime
 modules appear in the authoring snapshot.
 
 The same gate saves a unique per-process copy, reopens it from disk, verifies
-all required hierarchy/classes and Script source, checks four Ready assets and
+all required hierarchy/classes and Script source, checks all seven Ready assets and
 their dependencies, and asserts every authored GUI `Position` and `Size`
 remains a four-component `UDim2`. It also verifies all six authored properties
-of the three prompts, including the 0.4-second hold prompt. The real sample was also closed/recreated and
+of the three collectible prompts, including the 0.4-second hold prompt, plus
+the animated prompt, its Sound, and the Attachment CFrame/JointPath. The real sample was also closed/recreated and
 reopened during authoring. Runtime-only state does not persist.
 
 Run the gate with:

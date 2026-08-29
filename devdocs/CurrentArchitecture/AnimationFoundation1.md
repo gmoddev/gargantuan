@@ -245,13 +245,12 @@ compatibility checks, palette publication, projection, and resync all run
 without SDL video or a GPU. Headless evaluation does not deform every source
 vertex; CPU skinning is invoked only by an explicit reference/query consumer.
 
-Foundation 1 does not add a semantic animated-bone anchor. An Attachment, Sound,
-or ProximityPrompt under the MeshPart still follows the authored MeshPart and
-ordinary Attachment CFrame, not a visual bone. Audio and Interaction therefore
-cannot silently disagree about a supposedly animated anchor: the feature is
-explicitly unsupported. Skinned visual triangles also do not replace the
-BasePart collision/query shape; Workspace raycasts do not test every skinned
-triangle.
+Foundation 1 did not add a semantic animated-bone anchor. [Foundation 2B](AnimationFoundation2SemanticAnchors.md)
+now consumes these renderer-free joint model transforms through a canonical
+`Attachment.JointPath`; Attachment, Sound, and ProximityPrompt share that one
+world-transform resolver without changing Foundation 1 pose authority. Skinned
+visual triangles still do not replace the BasePart collision/query shape;
+Workspace raycasts do not test every skinned triangle.
 
 Root-joint translation remains mesh-local visual pose. It does not change the
 MeshPart CFrame, player root, physics body, or network authority. Root-motion

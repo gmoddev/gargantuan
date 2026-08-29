@@ -1,12 +1,14 @@
 ---
 status: current
 owner: runtime
-last_verified: 2026-08-26
+last_verified: 2026-08-29
 related_code:
   - assets/classes/ProximityPrompt.luau
   - assets/services/InteractionService.luau
   - assets/runtime/DefaultInteractionRuntime.luau
   - include/gargantuan/services/InteractionService.hpp
+  - include/gargantuan/runtime/SemanticSpatialResolver.hpp
+  - src/runtime/SemanticSpatialResolver.cpp
   - src/services/InteractionService.cpp
   - tests/InteractionFoundationTests.cpp
   - tests/InteractionFoundationBenchmark.cpp
@@ -43,13 +45,15 @@ the `Interact` semantic action, times holds, performs final validation, fires
 normally listens to `Prompt.Triggered`; it does not scan or call a targeting
 API each frame.
 
-A prompt resolves its anchor by walking upward through zero or more
-`Attachment.CFrame` transforms to the first ancestor `BasePart.CFrame`.
-Attachment transforms are composed locally and the BasePart supplies the world
-transform. A prompt with no live BasePart ancestor is inert. Transform,
-ancestry, enablement, and destruction signals dirty only that prompt record.
-Renderer geometry, picking data, and physics backend handles are not location
-authority.
+A prompt resolves its anchor through the shared semantic spatial resolver.
+Ordinary chains still compose zero or more `Attachment.CFrame` transforms to
+the first ancestor `BasePart.CFrame`. A `JointPath`-bound Attachment beneath a
+skinned MeshPart instead contributes the final renderer-independent animation
+pose, owner CFrame/Size, and local offset described by [Animation Foundation 2B](AnimationFoundation2SemanticAnchors.md).
+A prompt with no live BasePart ancestor is inert. Transform, transient
+`WorldCFrame`, ancestry, enablement, and destruction signals dirty only that
+prompt record. Renderer geometry, palettes, picking data, and physics backend
+handles are not location authority.
 
 The interaction origin is the authoritative `Player.Character`, which must be
 a live `KinematicCharacter`; its current `Position` is read at query and final
@@ -78,7 +82,8 @@ LOS. Selection retains only the best eight candidates in a fixed native array,
 and at most those eight are raycast for one player query.
 
 LOS starts at the authoritative character position and ends at the exact
-resolved prompt anchor, including Attachment offsets. `RaycastParams` excludes
+current resolved prompt anchor, including animated joint and Attachment
+offsets. `RaycastParams` excludes
 the interacting player's own character. A miss reaches the target, and a hit
 on a Part in the prompt's parent/anchor hierarchy is accepted; another closest
 rigid hit blocks it. `RequiresLineOfSight=false` performs no raycast. See
@@ -114,6 +119,15 @@ loss, disable/destruction, focus loss, runtime Stop, or world teardown. Size and
 state are changed before `Triggered`, so a callback may disable, destroy, or
 reparent the prompt, destroy its parent, or tear down runtime state without
 leaving an iterator or raw pointer live.
+
+Animated `WorldCFrame` changes coalesce in a reused dirty vector. They refresh
+the prompt position/cell without rebuilding its ancestor subscriptions unless
+topology changed. An arm moving out of range therefore cancels a hold and final
+validation rejects a stale displayed prompt. Moving the animated endpoint
+behind a rigid blocker changes the ray destination, but the skinned Mesh itself
+does not become raycast geometry. The normal 33 ms cadence remains; a dirty
+animated prompt may request immediate semantic reevaluation without tying the
+service to GPU frame rate.
 
 ## Presentation boundary
 

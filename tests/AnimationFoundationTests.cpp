@@ -1,10 +1,17 @@
 #include "gargantuan/animation/AnimationRuntime.hpp"
 #include "gargantuan/animation/AnimationTrack.hpp"
 #include "gargantuan/assets/AssetTypes.hpp"
+#include "gargantuan/assets/InstanceSerialization.hpp"
+#include "gargantuan/audio/AudioRuntime.hpp"
+#include "gargantuan/Engine.hpp"
+#include "gargantuan/classes/Attachment.hpp"
 #include "gargantuan/classes/Animator.hpp"
 #include "gargantuan/classes/DataModel.hpp"
+#include "gargantuan/classes/KinematicCharacter.hpp"
 #include "gargantuan/classes/MeshPart.hpp"
 #include "gargantuan/classes/Part.hpp"
+#include "gargantuan/classes/ProximityPrompt.hpp"
+#include "gargantuan/classes/Sound.hpp"
 #include "gargantuan/editor/PlaySession.hpp"
 #include "gargantuan/filesystem/DiskFilesystem.hpp"
 #include "gargantuan/filesystem/Project.hpp"
@@ -12,7 +19,13 @@
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/render/RenderExtractor.hpp"
 #include "gargantuan/render/RenderProjection.hpp"
+#include "gargantuan/render/Renderer.hpp"
+#include "gargantuan/runtime/ChangeJournal.hpp"
+#include "gargantuan/runtime/SemanticSpatialResolver.hpp"
+#include "gargantuan/services/ActionMap.hpp"
 #include "gargantuan/services/AssetService.hpp"
+#include "gargantuan/services/InteractionService.hpp"
+#include "gargantuan/services/Players.hpp"
 #include "gargantuan/services/Workspace.hpp"
 #include "../src/assets/AssetImporter.hpp"
 
@@ -27,6 +40,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <sstream>
 #include <limits>
 #include <numbers>
 #include <nlohmann/json.hpp>
@@ -39,6 +53,14 @@
 #include <glm/geometric.hpp>
 #include <glm/gtc/matrix_inverse.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+
+namespace gargantuan {
+	struct InteractionServiceTestAccess {
+		static void Step(InteractionService &Service, InteractionService::Clock::time_point Now) {
+			Service.Step(Now);
+		}
+	};
+}
 
 namespace {
 	using Json = nlohmann::ordered_json;
@@ -315,6 +337,48 @@ namespace {
 		if (!Output) throw std::runtime_error("Could not write animation test fixture");
 	}
 
+	std::vector<std::uint8_t> MakeWave(std::uint32_t FrameCount = 4'800) {
+		constexpr std::uint32_t SampleRate = 48'000;
+		constexpr std::uint16_t Channels = 1;
+		const auto DataBytes = FrameCount * sizeof(std::int16_t);
+		std::vector<std::uint8_t> Bytes;
+		Bytes.reserve(44 + DataBytes);
+		Bytes.insert(Bytes.end(), {'R', 'I', 'F', 'F'});
+		AppendU32(Bytes, 36 + DataBytes);
+		Bytes.insert(Bytes.end(), {'W', 'A', 'V', 'E', 'f', 'm', 't', ' '});
+		AppendU32(Bytes, 16);
+		AppendU16(Bytes, 1);
+		AppendU16(Bytes, Channels);
+		AppendU32(Bytes, SampleRate);
+		AppendU32(Bytes, SampleRate * Channels * sizeof(std::int16_t));
+		AppendU16(Bytes, Channels * sizeof(std::int16_t));
+		AppendU16(Bytes, 16);
+		Bytes.insert(Bytes.end(), {'d', 'a', 't', 'a'});
+		AppendU32(Bytes, DataBytes);
+		for (std::uint32_t Frame = 0; Frame < FrameCount; ++Frame) AppendU16(Bytes, 16'384);
+		return Bytes;
+	}
+
+	class CapturingSemanticAudioBackend final : public gargantuan::IAudioBackend {
+	  public:
+		std::vector<float> LastSubmission;
+		gargantuan::AudioBackendMetrics Metrics;
+		bool Available = true;
+
+		[[nodiscard]] bool IsAvailable() const override { return Available; }
+		[[nodiscard]] std::uint32_t GetSampleRate() const override { return 48'000; }
+		std::size_t GetQueuedFrames() override { return 0; }
+		bool Submit(std::span<const float> Samples) override {
+			LastSubmission.assign(Samples.begin(), Samples.end());
+			Metrics.SubmittedFrames += Samples.size() / 2;
+			return true;
+		}
+		void Clear() override { LastSubmission.clear(); }
+		void Shutdown() override { Available = false; }
+		[[nodiscard]] std::string GetDiagnostic() const override { return {}; }
+		[[nodiscard]] gargantuan::AudioBackendMetrics GetMetrics() const override { return Metrics; }
+	};
+
 	std::shared_ptr<gargantuan::AssetService> GetAssets(const std::shared_ptr<gargantuan::DataModel> &World) {
 		return std::dynamic_pointer_cast<gargantuan::AssetService>(World->GetService("AssetService"));
 	}
@@ -405,6 +469,393 @@ namespace {
 		Check(!AnimationRuntime::SkinMeshCpu(Mesh, Singular, Output, Bounds),
 			"CPU skinning fails closed on an invalid normal transform");
 	}
+
+	void TestSemanticAnimatedAnchors(
+		const gargantuan::AssetProjectSnapshot &ProjectAssets,
+		const std::string &MeshReference,
+		const std::string &AnimationReference,
+		const std::string &CounterAnimationReference,
+		const std::string &AudioReference
+	) {
+		using namespace gargantuan;
+		auto World = std::make_shared<DataModel>();
+		auto Assets = GetAssets(World);
+		Assets->LoadProjectAssetSnapshot(ProjectAssets);
+		auto PlayersValue = std::dynamic_pointer_cast<Players>(World->GetService("Players"));
+		PlayersValue->SetDefaultControllerEnabled(false);
+		PlayersValue->SetDefaultCameraEnabled(false);
+		HeadlessRenderer Renderer(Vector2(640.0f, 360.0f));
+		Engine Runtime(World, &Renderer, {}, EngineProviderConfiguration{.AudioEnabled = false});
+
+		auto Rig = std::make_shared<MeshPart>();
+		Rig->SetName("SemanticRig");
+		Rig->SetMesh(MeshReference);
+		Rig->SetAnchored(true);
+		Rig->SetCFrame(CFrame(glm::vec3(3.0f, 1.0f, -2.0f),
+			glm::mat3(glm::rotate(glm::mat4(1.0f), 0.37f, glm::vec3(0.0f, 0.0f, 1.0f)))));
+		Rig->SetSize({2.0f, 3.0f, 0.5f});
+		Rig->SetParent(Runtime.Workspace);
+		auto AnimatorValue = std::make_shared<Animator>();
+		AnimatorValue->SetParent(Rig);
+		auto Anchor = std::make_shared<Attachment>();
+		Anchor->SetName("LowerSocket");
+		Anchor->SetJointPath("Root/Upper/Lower");
+		Anchor->SetCFrame(CFrame(0.25f, 0.5f, -0.25f));
+		Anchor->SetParent(Rig);
+		auto ChildAnchor = std::make_shared<Attachment>();
+		ChildAnchor->SetCFrame(CFrame(-0.1f, 0.2f, 0.3f));
+		ChildAnchor->SetParent(Anchor);
+		auto SpatialSound = std::make_shared<Sound>();
+		SpatialSound->SetSoundId(AudioReference);
+		SpatialSound->SetRollOffMinDistance(0.1f);
+		SpatialSound->SetRollOffMaxDistance(100.0f);
+		SpatialSound->SetParent(Anchor);
+		auto Prompt = std::make_shared<ProximityPrompt>();
+		Prompt->SetActionText("Inspect");
+		Prompt->SetObjectText("Animated socket");
+		Prompt->SetParent(Anchor);
+
+		auto Track = AnimatorValue->CreateTrack(AnimationReference);
+		Track->SetLooped(true);
+		Track->Play();
+		Track->SetTimePosition(0.5f);
+		Runtime.Animation->Step(0.0f);
+		Runtime.Spatial->Step();
+		auto Pose = Runtime.Animation->GetPose(Rig->GetObjectId());
+		auto Transform = Runtime.Spatial->ResolveAttachment(Anchor);
+		auto Mesh = Assets->ResolveMeshResource(MeshReference);
+		const auto OwnerMatrix = glm::translate(glm::mat4(1.0f), Rig->GetCFrame().Position) *
+			glm::mat4(Rig->GetCFrame().Rotation) * glm::scale(glm::mat4(1.0f), Rig->GetSize());
+		const auto LocalMatrix = glm::translate(glm::mat4(1.0f), Anchor->GetCFrame().Position) *
+			glm::mat4(Anchor->GetCFrame().Rotation);
+		const bool PoseReady = Pose && Pose->JointModelTransforms && Pose->JointModelTransforms->size() == 3 &&
+			Pose->SkinPalette && Pose->SkinPalette->size() == 3;
+		Check(PoseReady && Transform && Transform->Animated,
+			"semantic resolver consumes a current renderer-independent joint model pose");
+		if (PoseReady && Transform) {
+			const auto Expected = OwnerMatrix * (*Pose->JointModelTransforms)[2] * LocalMatrix;
+			Check(Near(Transform->Matrix, Expected) &&
+				Near(Transform->WorldCFrame.Position, glm::vec3(Expected[3])),
+				"bound Attachment composes owner CFrame, nonuniform Size, current joint model transform, and local CFrame");
+			Check(Near(Anchor->GetWorldCFrame().Position, Transform->WorldCFrame.Position),
+				"Attachment.WorldCFrame exposes the transient semantic pose to ordinary reads");
+			const auto BindModel = glm::inverse(Mesh->Value.Skeleton->Joints->at(2).InverseBindMatrix);
+			const auto BindSocket = BindModel * glm::vec4(Anchor->GetCFrame().Position, 1.0f);
+			const auto CpuSkinnedSocket = OwnerMatrix *
+				((*Pose->SkinPalette)[2].PositionMatrix * BindSocket);
+			Check(Near(glm::vec3(CpuSkinnedSocket), Transform->WorldCFrame.Position),
+				"semantic socket matches the CPU reference-skinned location under asymmetric owner scale");
+			Check(!Runtime.Animation->GetPoseUpdates().empty() &&
+				Runtime.Animation->GetPoseUpdates().front().Pose.Mode == RenderAnimationSkinningMode::GpuPalette &&
+				Runtime.Animation->GetPoseUpdates().front().Pose.Palette.Entries == Pose->SkinPalette,
+				"the GPU publication and semantic resolver share one evaluated pose without GPU readback");
+			auto ChildTransform = Runtime.Spatial->ResolveAttachment(ChildAnchor);
+			const auto ChildLocal = glm::translate(glm::mat4(1.0f), ChildAnchor->GetCFrame().Position) *
+				glm::mat4(ChildAnchor->GetCFrame().Rotation);
+			Check(ChildTransform && ChildTransform->Animated && Near(ChildTransform->Matrix, Expected * ChildLocal),
+				"an unbound child Attachment inherits its animated parent semantic transform");
+		}
+		auto BlendTrack = AnimatorValue->CreateTrack(CounterAnimationReference);
+		Track->SetWeight(0.5f);
+		BlendTrack->SetWeight(0.5f);
+		BlendTrack->Play();
+		BlendTrack->SetTimePosition(0.5f);
+		Runtime.Animation->Step(0.0f);
+		Runtime.Spatial->Step();
+		auto BlendedSemanticPose = Runtime.Animation->GetPose(Rig->GetObjectId());
+		auto BlendedSemantic = Runtime.Spatial->ResolveAttachment(Anchor);
+		Check(BlendedSemanticPose && BlendedSemanticPose->JointModelTransforms && BlendedSemantic &&
+			Near(BlendedSemantic->Matrix,
+				OwnerMatrix * (*BlendedSemanticPose->JointModelTransforms)[2] * LocalMatrix),
+			"semantic Attachment consumes the final two-track blended pose without duplicating blending");
+		BlendTrack->Stop();
+		Track->SetWeight(1.0f);
+		Runtime.Animation->Step(0.0f);
+		Runtime.Spatial->Step();
+		auto PeerAnchor = std::make_shared<Attachment>();
+		PeerAnchor->SetJointPath("Root/Upper/Lower");
+		PeerAnchor->SetParent(Rig);
+		Runtime.Spatial->Step();
+		const auto BeforePeerDestroy = Runtime.Spatial->GetMetrics();
+		Check(Runtime.Spatial->ResolveAttachment(PeerAnchor)->Animated,
+			"multiple Attachments may bind deterministically to the same canonical joint path");
+		PeerAnchor->Destroy();
+		Runtime.Spatial->Step();
+		Check(Runtime.Spatial->GetMetrics().IndexedSemanticAnchors + 1 ==
+			BeforePeerDestroy.IndexedSemanticAnchors,
+			"destroying a bound Attachment removes exactly its rig registration");
+		ChildAnchor->SetParent(Rig);
+		Runtime.Spatial->Step();
+		Check(!Runtime.Spatial->ResolveAttachment(ChildAnchor)->Animated,
+			"reparenting an unbound nested Attachment away from its bound parent restores static semantics");
+		ChildAnchor->SetParent(Anchor);
+		Runtime.Spatial->Step();
+		Check(Runtime.Spatial->ResolveAttachment(ChildAnchor)->Animated,
+			"reparenting beneath the bound Attachment rebuilds the semantic chain without stale identity");
+
+		auto JointPathProperty = Anchor->FindProperty("JointPath");
+		auto WorldCFrameProperty = Anchor->FindProperty("WorldCFrame");
+		Check(JointPathProperty && JointPathProperty->PersistencePolicy == InstanceProperty::Persistence::Saved &&
+			JointPathProperty->ReplicationPolicy == InstanceProperty::Replication::FutureReplicated &&
+			WorldCFrameProperty && WorldCFrameProperty->PersistencePolicy == InstanceProperty::Persistence::Transient &&
+			!WorldCFrameProperty->Editable && !WorldCFrameProperty->Write,
+			"schema persists only the authored JointPath and keeps WorldCFrame transient and read-only");
+		for (const auto Malformed : {"/Root", "Root/", "Root//Hand", "Root\\Hand", "Root/../Hand", "Root/./Hand"}) {
+			bool Rejected = false;
+			try { Anchor->SetJointPath(Malformed); }
+			catch (const std::invalid_argument &) { Rejected = true; }
+			Check(Rejected && Anchor->GetJointPath() == "Root/Upper/Lower",
+				"JointPath rejects malformed separators and traversal-like segments without changing authored state");
+		}
+		bool OversizedRejected = false;
+		try { Anchor->SetJointPath(std::string(AssetLimits::MaximumJointPathBytes + 1, 'a')); }
+		catch (const std::invalid_argument &) { OversizedRejected = true; }
+		Check(OversizedRejected && Anchor->GetJointPath() == "Root/Upper/Lower",
+			"JointPath enforces the canonical Mesh artifact byte bound");
+		auto Persisted = std::make_shared<Attachment>();
+		Persisted->SetArchivable(true);
+		Persisted->SetCFrame(CFrame(1.0f, 2.0f, 3.0f));
+		Persisted->SetJointPath("Root/Upper/Lower");
+		std::shared_ptr<Instance> PersistedRoot = Persisted;
+		const auto Serialized = InstanceSerialization::Serialize(
+			InstanceSerialization::InstanceFormat::Json, PersistedRoot);
+		std::istringstream Input(Serialized);
+		auto RestoredState = InstanceSerialization::Deserialize(
+			InstanceSerialization::InstanceFormat::Json, Input);
+		auto Restored = std::dynamic_pointer_cast<Attachment>(RestoredState.Instance);
+		Check(RestoredState.Ok && Restored && Restored->GetJointPath() == "Root/Upper/Lower" &&
+			Near(Restored->GetCFrame().Position, glm::vec3(1.0f, 2.0f, 3.0f)) &&
+			Serialized.find("WorldCFrame") == std::string::npos &&
+			Serialized.find("PoseRevision") == std::string::npos,
+			"save/reopen preserves Attachment CFrame and canonical path without transient pose state");
+
+		std::size_t TransientSignals = 0;
+		auto WorldChanged = Anchor->GetPropertyChangedSignal("WorldCFrame")->Connect(
+			[&](std::monostate) { ++TransientSignals; });
+		ChangeJournal::Get().Clear();
+		Track->SetTimePosition(0.75f);
+		Runtime.Animation->Step(0.0f);
+		Runtime.Spatial->Step();
+		Check(TransientSignals > 0 && ChangeJournal::Get().ReadSince(0).empty(),
+			"pose changes use a transient WorldCFrame dirty signal and emit zero ChangeJournal records");
+		const auto BeforeIdle = Runtime.Spatial->GetMetrics();
+		Runtime.Spatial->Step();
+		const auto AfterIdle = Runtime.Spatial->GetMetrics();
+		Check(AfterIdle.AnchorResolutions == BeforeIdle.AnchorResolutions,
+			"an unchanged pose performs no semantic Attachment resolution work");
+		ChangeJournal::Get().Clear();
+		const auto BindingCursor = ChangeJournal::Get().CreateCursor(World->GetObjectId());
+		Anchor->SetJointPath("Root/Upper");
+		auto BindingRecords = ChangeJournal::Get().Read(BindingCursor).Records;
+		Runtime.Spatial->Step();
+		auto Rebound = Runtime.Spatial->ResolveAttachment(Anchor);
+		auto ReboundPose = Runtime.Animation->GetPose(Rig->GetObjectId());
+		Check(BindingRecords.size() == 1 &&
+			std::holds_alternative<PropertyUpdatedChange>(BindingRecords.front().Payload) &&
+			std::get<PropertyUpdatedChange>(BindingRecords.front().Payload).PropertyName == "JointPath",
+			"authored JointPath mutation journals exactly one scoped property record");
+		Check(Rebound && ReboundPose && ReboundPose->JointModelTransforms &&
+			Near(Rebound->Matrix, OwnerMatrix * (*ReboundPose->JointModelTransforms)[1] * LocalMatrix),
+			"authored JointPath mutation unregisters the old joint and resolves the new current joint");
+		Anchor->SetJointPath("Root/Upper/Lower");
+		Runtime.Spatial->Step();
+		ChangeJournal::Get().Clear();
+		Track->SetTimePosition(0.25f);
+		Runtime.Animation->Step(0.0f);
+		Runtime.Spatial->Step();
+		auto BeforePause = Runtime.Spatial->ResolveAttachment(Anchor);
+		Track->Pause();
+		Runtime.Animation->Step(0.25f);
+		Runtime.Spatial->Step();
+		auto WhilePaused = Runtime.Spatial->ResolveAttachment(Anchor);
+		Track->Resume();
+		Runtime.Animation->Step(0.25f);
+		Runtime.Spatial->Step();
+		auto AfterResume = Runtime.Spatial->ResolveAttachment(Anchor);
+		Check(BeforePause && WhilePaused && AfterResume && Near(BeforePause->Matrix, WhilePaused->Matrix) &&
+			!Near(WhilePaused->Matrix, AfterResume->Matrix),
+			"paused animation freezes the semantic Attachment/Sound source pose and Resume continues from that pose");
+
+		Anchor->SetJointPath("Missing/Hand");
+		Runtime.Spatial->Step();
+		Transform = Runtime.Spatial->ResolveAttachment(Anchor);
+		const auto StaticExpected = glm::translate(glm::mat4(1.0f), Rig->GetCFrame().Position) *
+			glm::mat4(Rig->GetCFrame().Rotation) * LocalMatrix;
+		Check(Transform && !Transform->Animated && Near(Transform->Matrix, StaticExpected),
+			"an invalid canonical joint path fails closed to ordinary static Attachment semantics");
+		Anchor->SetJointPath("Root/Upper/Lower");
+		Track->Stop();
+		Runtime.Animation->Step(0.0f);
+		Runtime.Spatial->Step();
+		Transform = Runtime.Spatial->ResolveAttachment(Anchor);
+		const auto BindModel = glm::inverse(Mesh->Value.Skeleton->Joints->at(2).InverseBindMatrix);
+		Check(Transform && Transform->Animated && Near(Transform->Matrix, OwnerMatrix * BindModel * LocalMatrix),
+			"a valid skeleton with no playing track resolves the joint bind pose");
+
+		Track->Play();
+		Track->SetTimePosition(0.5f);
+		Runtime.Animation->Step(0.0f);
+		Runtime.Spatial->Step();
+		const auto GpuSemantic = Runtime.Spatial->ResolveAttachment(Anchor);
+		auto CpuRig = std::make_shared<MeshPart>();
+		CpuRig->SetMesh(MeshReference);
+		CpuRig->SetAnchored(true);
+		CpuRig->SetCFrame(Rig->GetCFrame());
+		CpuRig->SetSize(Rig->GetSize());
+		CpuRig->SetParent(Runtime.Workspace);
+		auto CpuAnimator = std::make_shared<Animator>();
+		CpuAnimator->SetParent(CpuRig);
+		auto CpuAnchor = std::make_shared<Attachment>();
+		CpuAnchor->SetJointPath("Root/Upper/Lower");
+		CpuAnchor->SetCFrame(Anchor->GetCFrame());
+		CpuAnchor->SetParent(CpuRig);
+		auto CpuTrack = CpuAnimator->CreateTrack(AnimationReference);
+		CpuTrack->SetLooped(true);
+		CpuTrack->Play();
+		CpuTrack->SetTimePosition(0.5f);
+		AnimationRuntime CpuRuntime(Assets, {}, AnimationRuntimeOptions{.CpuSkinningFallback = true});
+		CpuRuntime.RegisterAnimator(CpuAnimator);
+		auto CpuSpatial = std::make_shared<SemanticSpatialResolver>(Assets, &CpuRuntime);
+		CpuSpatial->RegisterAttachment(CpuAnchor);
+		CpuRuntime.Step(0.0f);
+		CpuSpatial->Step();
+		auto CpuSemantic = CpuSpatial->ResolveAttachment(CpuAnchor);
+		Check(GpuSemantic && CpuSemantic && Near(GpuSemantic->Matrix, CpuSemantic->Matrix) &&
+			CpuRuntime.GetPoseUpdates().front().Pose.Mode == RenderAnimationSkinningMode::CpuFallback,
+			"GPU-palette, CPU-fallback, and headless semantic anchors resolve identically");
+
+		Rig->SetCFrame(CFrame());
+		Rig->SetSize({4.0f, 1.0f, 1.0f});
+		Anchor->SetCFrame(CFrame());
+		Track->SetTimePosition(0.0f);
+		Runtime.Animation->Step(0.0f);
+		Runtime.Spatial->Step();
+		auto PoseZero = Runtime.Spatial->ResolveAttachment(Anchor);
+		Track->SetTimePosition(1.0f);
+		Runtime.Animation->Step(0.0f);
+		Runtime.Spatial->Step();
+		auto PoseOne = Runtime.Spatial->ResolveAttachment(Anchor);
+		Check(PoseZero && PoseOne && glm::distance(PoseZero->WorldCFrame.Position, PoseOne->WorldCFrame.Position) > 2.0f &&
+			Near(Rig->GetCFrame().Position, glm::vec3(0.0f)),
+			"joint animation moves the semantic socket locally without applying physics root motion to MeshPart");
+
+		auto LocalPlayer = *Runtime.Players->GetLocalPlayer();
+		auto Character = std::make_shared<KinematicCharacter>();
+		Character->SetParent(Runtime.Workspace);
+		Character->SetPosition(PoseZero->WorldCFrame.Position);
+		LocalPlayer->SetCharacter(Character);
+		Prompt->SetMaxActivationDistance(1.0f);
+		Prompt->SetHoldDuration(0.5f);
+		Prompt->SetRequiresLineOfSight(false);
+		auto Now = InteractionService::Clock::time_point(std::chrono::seconds(10));
+		Track->SetTimePosition(0.0f);
+		Runtime.Animation->Step(0.0f);
+		Runtime.Spatial->Step();
+		InteractionServiceTestAccess::Step(*Runtime.Interaction, Now);
+		Check(Runtime.Interaction->GetAvailable(), "prompt enters range at the current animated socket");
+		std::size_t Triggered = 0;
+		auto TriggerConnection = Prompt->Triggered->Connect(
+			[&](std::shared_ptr<Player>) { ++Triggered; });
+		Runtime.Interaction->BeginActivation();
+		Now += std::chrono::milliseconds(1);
+		InteractionServiceTestAccess::Step(*Runtime.Interaction, Now);
+		Track->SetTimePosition(1.0f);
+		Runtime.Animation->Step(0.0f);
+		Runtime.Spatial->Step();
+		Now += std::chrono::milliseconds(100);
+		InteractionServiceTestAccess::Step(*Runtime.Interaction, Now);
+		Check(!Runtime.Interaction->GetAvailable() && Runtime.Interaction->GetHoldProgress() == 0.0f && Triggered == 0,
+			"animated range leave cancels an in-progress hold before final validation");
+		Runtime.Interaction->EndActivation();
+		Now += std::chrono::milliseconds(40);
+		InteractionServiceTestAccess::Step(*Runtime.Interaction, Now);
+
+		Prompt->SetMaxActivationDistance(64.0f);
+		Prompt->SetRequiresLineOfSight(true);
+		auto Wall = std::make_shared<Part>();
+		Wall->SetAnchored(true);
+		Wall->SetCFrame(CFrame((PoseZero->WorldCFrame.Position + PoseOne->WorldCFrame.Position) * 0.5f));
+		Wall->SetSize({0.25f, 8.0f, 8.0f});
+		Wall->SetParent(Runtime.Workspace);
+		Now += std::chrono::milliseconds(40);
+		InteractionServiceTestAccess::Step(*Runtime.Interaction, Now);
+		Check(!Runtime.Interaction->GetAvailable(),
+			"line of sight raycasts toward the current animated endpoint rather than the rigid MeshPart origin");
+		Track->SetTimePosition(0.0f);
+		Runtime.Animation->Step(0.0f);
+		Runtime.Spatial->Step();
+		Now += std::chrono::milliseconds(40);
+		InteractionServiceTestAccess::Step(*Runtime.Interaction, Now);
+		Check(Runtime.Interaction->GetAvailable(),
+			"moving the semantic endpoint away from an occluder immediately restores prompt visibility");
+		Wall->Destroy();
+
+		auto Backend = std::make_unique<CapturingSemanticAudioBackend>();
+		auto *BackendView = Backend.get();
+		AudioRuntime Audio(Assets, std::move(Backend), {}, Runtime.Spatial);
+		Audio.RegisterSound(SpatialSound);
+		const auto ListenerPosition = (PoseZero->WorldCFrame.Position + PoseOne->WorldCFrame.Position) * 0.5f;
+		auto ChannelEnergy = [](std::span<const float> Samples, std::size_t Channel) {
+			double Result = 0.0;
+			for (std::size_t Index = Channel; Index < Samples.size(); Index += 2) Result += std::abs(Samples[Index]);
+			return Result;
+		};
+		SpatialSound->Play();
+		Audio.Step(CFrame(ListenerPosition));
+		const auto ZeroLeft = ChannelEnergy(BackendView->LastSubmission, 0);
+		const auto ZeroRight = ChannelEnergy(BackendView->LastSubmission, 1);
+		SpatialSound->Stop();
+		Track->SetTimePosition(1.0f);
+		Runtime.Animation->Step(0.0f);
+		Runtime.Spatial->Step();
+		SpatialSound->Play();
+		Audio.Step(CFrame(ListenerPosition));
+		const auto OneLeft = ChannelEnergy(BackendView->LastSubmission, 0);
+		const auto OneRight = ChannelEnergy(BackendView->LastSubmission, 1);
+		Check(ZeroRight > ZeroLeft && OneLeft > OneRight && Audio.GetMetrics().SemanticSourceResolutions > 0,
+			"positional Sound panning follows copied semantic source state across animated joint movement");
+
+		Track->Stop();
+		auto EndedAnchor = std::make_shared<Attachment>();
+		EndedAnchor->SetJointPath("Root/Upper");
+		EndedAnchor->SetParent(Rig);
+		auto EndedTrack = AnimatorValue->CreateTrack(AnimationReference);
+		auto EndedDestroysAnchor = EndedTrack->Ended->Once(
+			[EndedAnchor](std::monostate) { EndedAnchor->Destroy(); });
+		Runtime.Animation->Step(0.0f);
+		Runtime.Spatial->Step();
+		const auto BeforeEndedDestroy = Runtime.Spatial->GetMetrics().IndexedSemanticAnchors;
+		EndedTrack->Play();
+		Runtime.Animation->Step(1.0f);
+		Runtime.Spatial->Step();
+		Check(EndedAnchor->GetDestroyed() &&
+			Runtime.Spatial->GetMetrics().IndexedSemanticAnchors + 1 == BeforeEndedDestroy,
+			"Ended callback may destroy a bound Attachment reentrantly without leaving a stale rig registration");
+
+		AnimatorValue->Destroy();
+		Runtime.Animation->Step(0.0f);
+		Runtime.Spatial->Step();
+		Transform = Runtime.Spatial->ResolveAttachment(Anchor);
+		const auto BindOwner = glm::scale(glm::mat4(1.0f), Rig->GetSize());
+		Check(Transform && Transform->Animated && Near(Transform->Matrix, BindOwner * BindModel),
+			"destroying Animator returns a still-valid joint binding to skeleton bind pose");
+		auto ReplacementAnimator = std::make_shared<Animator>();
+		ReplacementAnimator->SetParent(Rig);
+		auto ReplacementTrack = ReplacementAnimator->CreateTrack(AnimationReference);
+		ReplacementTrack->Play();
+		ReplacementTrack->SetTimePosition(0.5f);
+		Runtime.Animation->Step(0.0f);
+		Runtime.Spatial->Step();
+		Check(Runtime.Spatial->ResolveAttachment(Anchor)->Animated,
+			"Animator replacement reuses the authored skeleton binding without stale runtime identity");
+
+		Audio.Shutdown();
+		CpuSpatial->Shutdown();
+		CpuRuntime.Shutdown();
+		Runtime.Destroy();
+		if (!World->GetDestroyed()) World->Destroy();
+		ChangeJournal::Get().Clear();
+	}
 }
 
 int main() {
@@ -423,9 +874,13 @@ int main() {
 
 	auto ValidFixture = MakeAnimationGltfFixture();
 	WriteBytes(Root / "assets" / "animated-rig.glb", MakeGlb(ValidFixture));
+	WriteBytes(Root / "assets" / "semantic-tone.wav", MakeWave());
 	auto IncompatibleFixture = MakeAnimationGltfFixture();
 	IncompatibleFixture.Document["nodes"][2]["name"] = "DifferentLower";
 	WriteBytes(Root / "assets" / "incompatible.glb", MakeGlb(IncompatibleFixture));
+	auto DuplicateLeafFixture = MakeAnimationGltfFixture();
+	DuplicateLeafFixture.Document["nodes"][2]["name"] = "Upper";
+	WriteBytes(Root / "assets" / "duplicate-leaf.glb", MakeGlb(DuplicateLeafFixture));
 	auto InvalidJoints = MakeAnimationGltfFixture();
 	InvalidJoints.Document["skins"][0]["joints"][2] = 99;
 	WriteBytes(Root / "assets" / "invalid-joints.glb", MakeGlb(InvalidJoints));
@@ -473,6 +928,10 @@ int main() {
 		"one glTF source imports one skinned Mesh and one Animation asset per clip");
 	auto MeshResource = MeshRecord ? Assets->ResolveMeshResource(MeshRecord->Reference.Value) : std::nullopt;
 	auto WaveResource = WaveRecord ? Assets->ResolveAnimation(WaveRecord->Reference.Value) : std::nullopt;
+	auto AudioImport = Assets->ImportProjectAsset(
+		Mount, "assets/semantic-tone.wav", AssetKind::Audio, "Semantic Tone");
+	auto AudioRecord = FindRecord(AudioImport, AssetKind::Audio);
+	Check(AudioImport.Ok && AudioRecord, "semantic anchor integration fixture imports positional Audio");
 	Check(MeshResource && MeshResource->Value.Skeleton && MeshResource->Value.Skeleton->Joints &&
 		MeshResource->Value.Skeleton->Joints->size() == 3 && MeshResource->Value.SkinInfluences &&
 		MeshResource->Value.SkinInfluences->size() == 3 && WaveResource && WaveResource->Value.Tracks &&
@@ -488,7 +947,16 @@ int main() {
 			Near(Normalized.y, 0.25f) && Near(Normalized.z, 0.75f),
 			"import preserves four bounded normalized joint influences");
 	}
-
+	auto DuplicateLeafImport = Assets->ImportProjectAsset(
+		Mount, "assets/duplicate-leaf.glb", AssetKind::Mesh, "Duplicate Leaf Rig");
+	auto DuplicateLeafMeshRecord = FindRecord(DuplicateLeafImport, AssetKind::Mesh);
+	auto DuplicateLeafMesh = DuplicateLeafMeshRecord
+		? Assets->ResolveMeshResource(DuplicateLeafMeshRecord->Reference.Value) : std::nullopt;
+	Check(DuplicateLeafImport.Ok && DuplicateLeafMesh && DuplicateLeafMesh->Value.Skeleton &&
+		DuplicateLeafMesh->Value.Skeleton->Joints &&
+		DuplicateLeafMesh->Value.Skeleton->Joints->at(1).Path == "Root/Upper" &&
+		DuplicateLeafMesh->Value.Skeleton->Joints->at(2).Path == "Root/Upper/Upper",
+		"canonical full paths distinguish duplicate joint leaf names");
 	const auto ProjectAssets = Assets->CaptureProjectAssets();
 	auto ReloadedAssets = std::make_shared<AssetService>();
 	ReloadedAssets->LoadProjectAssetSnapshot(ProjectAssets);
@@ -749,6 +1217,18 @@ int main() {
 	for (std::size_t Frame = 0; Frame < 128; ++Frame) Runtime.Step(1.0f / 60.0f);
 	Check(Runtime.GetMetrics().BufferAllocations == AllocationsAfterWarmup,
 		"steady-state GPU animation evaluation performs no new model-transform or palette allocations");
+	auto ReimportAnchor = std::make_shared<Attachment>();
+	ReimportAnchor->SetName("ReimportSocket");
+	ReimportAnchor->SetJointPath("Root/Upper/Lower");
+	ReimportAnchor->SetCFrame(CFrame(0.25f, 0.0f, 0.0f));
+	ReimportAnchor->SetParent(Rig);
+	std::vector<std::string> SpatialDiagnosticCodes;
+	auto ReimportSpatial = std::make_shared<SemanticSpatialResolver>(Assets, &Runtime,
+		[&](std::string Code, std::string) { SpatialDiagnosticCodes.push_back(std::move(Code)); });
+	ReimportSpatial->RegisterAttachment(ReimportAnchor);
+	ReimportSpatial->Step();
+	Check(ReimportSpatial->ResolveAttachment(ReimportAnchor)->Animated,
+		"semantic binding is active before Mesh source-group reimport");
 
 	auto ModifiedFixture = MakeAnimationGltfFixture(2.0f, 120.0f);
 	WriteBytes(Root / "assets" / "animated-rig.glb", MakeGlb(ModifiedFixture));
@@ -758,6 +1238,9 @@ int main() {
 	auto Reimport = Assets->ReimportProjectAsset(Mount, WaveRecord->Reference.Value);
 	Check(Reimport.Ok, "animation source group reimports atomically during playback");
 	Runtime.Step(0.0f);
+	ReimportSpatial->Step();
+	Check(ReimportSpatial->ResolveAttachment(ReimportAnchor)->Animated,
+		"compatible Mesh reimport preserves canonical JointPath binding");
 	auto OldRevisionPose = Runtime.GetPose(Rig->GetObjectId());
 	Check(OldRevisionPose && OldRevisionPose->JointModelTransforms &&
 		Near(glm::vec3((*OldRevisionPose->JointModelTransforms)[2][3]), glm::vec3(-1.0f, 2.0f, 0.0f)),
@@ -774,6 +1257,22 @@ int main() {
 		"tracks loaded after reimport resolve the new canonical clip revision");
 	NewWaveTrack->Stop();
 	Runtime.Step(0.0f);
+	WriteBytes(Root / "assets" / "animated-rig.glb", MakeGlb(IncompatibleFixture));
+	auto IncompatibleReimport = Assets->ReimportProjectAsset(Mount, MeshRecord->Reference.Value);
+	Check(IncompatibleReimport.Ok, "incompatible Mesh skeleton reimport commits atomically");
+	Runtime.Step(0.0f);
+	ReimportSpatial->Step();
+	auto IncompatibleAnchor = ReimportSpatial->ResolveAttachment(ReimportAnchor);
+	Check(IncompatibleAnchor && !IncompatibleAnchor->Animated &&
+		std::ranges::contains(SpatialDiagnosticCodes, std::string("IncompatibleSkeleton")),
+		"incompatible Mesh reimport invalidates the cached skeleton identity and falls back statically with one diagnostic");
+	WriteBytes(Root / "assets" / "animated-rig.glb", MakeGlb(ModifiedFixture));
+	auto CompatibleRestore = Assets->ReimportProjectAsset(Mount, MeshRecord->Reference.Value);
+	Check(CompatibleRestore.Ok, "compatible Mesh skeleton can be restored after an incompatible revision");
+	Runtime.Step(0.0f);
+	ReimportSpatial->Step();
+	Check(ReimportSpatial->ResolveAttachment(ReimportAnchor)->Animated,
+		"restoring the original compatibility identity recovers the authored canonical path without a numeric-index bind");
 
 	auto IncompatibleImport = Assets->ImportProjectAsset(Mount, "assets/incompatible.glb", AssetKind::Animation, "Incompatible");
 	auto IncompatibleAnimation = FindRecord(IncompatibleImport, AssetKind::Animation);
@@ -791,15 +1290,20 @@ int main() {
 		640, 360, AuthoredSnapshot.Revision, AuthoredSnapshot.Assets);
 	auto PlayRig = std::dynamic_pointer_cast<MeshPart>(Session.GetWorld()->FindFirstDescendant("AnimatedRig"));
 	auto PlayAnimator = std::dynamic_pointer_cast<Animator>(Session.GetWorld()->FindFirstDescendant("RigAnimator"));
+	auto PlayAnchor = std::dynamic_pointer_cast<Attachment>(Session.GetWorld()->FindFirstDescendant("ReimportSocket"));
 	auto PlayAssets = GetAssets(Session.GetWorld());
 	AnimationRuntime PlayRuntime(PlayAssets);
-	if (PlayRig && PlayAnimator) {
+	if (PlayRig && PlayAnimator && PlayAnchor) {
 		PlayRuntime.RegisterAnimator(PlayAnimator);
+		auto PlaySpatial = std::make_shared<SemanticSpatialResolver>(PlayAssets, &PlayRuntime);
+		PlaySpatial->RegisterAttachment(PlayAnchor);
 		auto PlayTrack = PlayAnimator->CreateTrack(WaveRecord->Reference.Value);
 		PlayTrack->Play();
 		PlayRuntime.Step(0.5f);
-		Check(PlayRuntime.GetPose(PlayRig->GetObjectId()).has_value(),
-			"saved authoring hierarchy clones into Play and evaluates headlessly");
+		PlaySpatial->Step();
+		Check(PlayRuntime.GetPose(PlayRig->GetObjectId()).has_value() &&
+			PlaySpatial->ResolveAttachment(PlayAnchor)->Animated,
+			"saved authoring hierarchy and canonical Attachment binding clone into Play and evaluate headlessly");
 		PlayAnimator->Destroy();
 		PlayTrack->Play();
 		Check(PlayTrack->GetPlaybackState() == Enums::AnimationPlaybackState::Stopped,
@@ -807,11 +1311,43 @@ int main() {
 		PlayRuntime.Step(0.0f);
 		Check(!PlayRuntime.GetPose(PlayRig->GetObjectId()) && PlayTrack->GetPlaybackState() == Enums::AnimationPlaybackState::Stopped,
 			"destroying Animator during playback invalidates tracks and removes its transient pose");
-	} else Check(false, "Play clone preserves MeshPart and authored Animator instances");
+		PlaySpatial->Step();
+		Check(PlaySpatial->ResolveAttachment(PlayAnchor)->Animated,
+			"Play clone falls back to skeleton bind pose after Animator destruction");
+		PlaySpatial->Shutdown();
+	} else Check(false, "Play clone preserves MeshPart, Animator, and authored semantic Attachment instances");
 	Session.Stop();
 	Check(Session.GetState() == PlaySessionState::Stopped && AnimatorValue->GetParent().has_value() &&
-		AnimatorValue->GetName() == "RigAnimator",
-		"Stop discards runtime tracks while preserving the authored rig and Animator");
+		AnimatorValue->GetName() == "RigAnimator" && ReimportAnchor->GetJointPath() == "Root/Upper/Lower",
+		"Stop discards runtime pose state while preserving the authored rig, Animator, and canonical binding");
+	for (std::size_t Cycle = 0; Cycle < 10; ++Cycle) {
+		PlaySession CycleSession({static_cast<std::uint64_t>(Cycle + 2)}, AuthoredSnapshot.Contents,
+			InstanceSerialization::InstanceFormat::Json, Root, 320, 180,
+			AuthoredSnapshot.Revision, AuthoredSnapshot.Assets);
+		auto CycleRig = std::dynamic_pointer_cast<MeshPart>(CycleSession.GetWorld()->FindFirstDescendant("AnimatedRig"));
+		auto CycleAnimator = std::dynamic_pointer_cast<Animator>(
+			CycleSession.GetWorld()->FindFirstDescendant("RigAnimator"));
+		auto CycleAnchor = std::dynamic_pointer_cast<Attachment>(
+			CycleSession.GetWorld()->FindFirstDescendant("ReimportSocket"));
+		auto CycleAssets = GetAssets(CycleSession.GetWorld());
+		AnimationRuntime CycleRuntime(CycleAssets);
+		auto CycleSpatial = std::make_shared<SemanticSpatialResolver>(CycleAssets, &CycleRuntime);
+		if (CycleRig && CycleAnimator && CycleAnchor) {
+			CycleRuntime.RegisterAnimator(CycleAnimator);
+			CycleSpatial->RegisterAttachment(CycleAnchor);
+			auto CycleTrack = CycleAnimator->CreateTrack(WaveRecord->Reference.Value);
+			CycleTrack->Play();
+			CycleRuntime.Step(0.25f);
+			CycleSpatial->Step();
+			Check(CycleSpatial->ResolveAttachment(CycleAnchor)->Animated,
+				"repeated Play clone resolves the semantic binding without stale registration");
+		} else Check(false, "repeated Play clone preserves the semantic rig hierarchy");
+		CycleSpatial->Shutdown();
+		CycleRuntime.Shutdown();
+		CycleSession.Stop();
+		Check(CycleSession.GetState() == PlaySessionState::Stopped,
+			"repeated Stop tears down semantic resolver state deterministically");
+	}
 
 	auto RuntimeAssets = Assets->CaptureRuntimeAssets();
 	auto PackagedWorld = std::make_shared<DataModel>();
@@ -857,10 +1393,72 @@ int main() {
 	ValidateFailure("assets/singular-scale.glb", "MalformedAnimation");
 	ValidateFailure("assets/crossing-scale.glb", "MalformedAnimation");
 	ValidateFailure("assets/oversized.glb", "GltfLimit");
+	if (MeshRecord && WaveRecord && CounterRecord && AudioRecord)
+		TestSemanticAnimatedAnchors(
+			ProjectAssets, MeshRecord->Reference.Value, WaveRecord->Reference.Value,
+			CounterRecord->Reference.Value, AudioRecord->Reference.Value);
+
+	if (DuplicateLeafMeshRecord) {
+		auto DuplicateLeafRig = std::make_shared<MeshPart>();
+		DuplicateLeafRig->SetMesh(DuplicateLeafMeshRecord->Reference.Value);
+		DuplicateLeafRig->SetParent(WorkspaceValue);
+		auto UpperAnchor = std::make_shared<Attachment>();
+		UpperAnchor->SetJointPath("Root/Upper");
+		UpperAnchor->SetParent(DuplicateLeafRig);
+		auto NestedUpperAnchor = std::make_shared<Attachment>();
+		NestedUpperAnchor->SetJointPath("Root/Upper/Upper");
+		NestedUpperAnchor->SetParent(DuplicateLeafRig);
+		auto DuplicateLeafSpatial = std::make_shared<SemanticSpatialResolver>(Assets);
+		DuplicateLeafSpatial->RegisterAttachment(UpperAnchor);
+		DuplicateLeafSpatial->RegisterAttachment(NestedUpperAnchor);
+		DuplicateLeafSpatial->Step();
+		auto UpperTransform = DuplicateLeafSpatial->ResolveAttachment(UpperAnchor);
+		auto NestedUpperTransform = DuplicateLeafSpatial->ResolveAttachment(NestedUpperAnchor);
+		Check(UpperTransform && NestedUpperTransform && UpperTransform->Animated &&
+			NestedUpperTransform->Animated &&
+			!Near(UpperTransform->WorldCFrame.Position, NestedUpperTransform->WorldCFrame.Position),
+			"full canonical JointPath resolves duplicate leaf names to distinct skeleton joints");
+		DuplicateLeafSpatial->Shutdown();
+		DuplicateLeafRig->Destroy();
+	}
+
+	if (MeshRecord) {
+		auto LimitRig = std::make_shared<MeshPart>();
+		LimitRig->SetMesh(MeshRecord->Reference.Value);
+		LimitRig->SetParent(WorkspaceValue);
+		std::vector<std::string> LimitDiagnostics;
+		auto LimitSpatial = std::make_shared<SemanticSpatialResolver>(Assets, nullptr,
+			[&](std::string Code, std::string) { LimitDiagnostics.push_back(std::move(Code)); });
+		std::vector<std::shared_ptr<Attachment>> LimitAnchors;
+		LimitAnchors.reserve(SemanticSpatialResolver::MaximumSemanticAnchorsPerRig + 1);
+		for (std::size_t Index = 0;
+			Index <= SemanticSpatialResolver::MaximumSemanticAnchorsPerRig; ++Index) {
+			auto LimitAnchor = std::make_shared<Attachment>();
+			LimitAnchor->SetJointPath("Root/Upper");
+			LimitAnchor->SetParent(LimitRig);
+			LimitSpatial->RegisterAttachment(LimitAnchor);
+			LimitAnchors.push_back(std::move(LimitAnchor));
+		}
+		LimitSpatial->Step();
+		auto FirstLimitTransform = LimitSpatial->ResolveAttachment(LimitAnchors.front());
+		auto LastAcceptedTransform = LimitSpatial->ResolveAttachment(
+			LimitAnchors[SemanticSpatialResolver::MaximumSemanticAnchorsPerRig - 1]);
+		auto OverflowTransform = LimitSpatial->ResolveAttachment(LimitAnchors.back());
+		Check(LimitSpatial->GetMetrics().IndexedSemanticAnchors ==
+				SemanticSpatialResolver::MaximumSemanticAnchorsPerRig &&
+			FirstLimitTransform && FirstLimitTransform->Animated &&
+			LastAcceptedTransform && LastAcceptedTransform->Animated &&
+			OverflowTransform && !OverflowTransform->Animated &&
+			std::ranges::contains(LimitDiagnostics, std::string("RigAnchorLimit")),
+			"the per-rig semantic anchor bound accepts the first 1,024 registrations and fails the overflow statically");
+		LimitSpatial->Shutdown();
+		LimitRig->Destroy();
+	}
 
 	ValidationWorld->Destroy();
 	PackagedRuntime.Shutdown();
 	PackagedWorld->Destroy();
+	ReimportSpatial->Shutdown();
 	Runtime.Shutdown();
 	ReloadedAssets.reset();
 	Assets.reset();

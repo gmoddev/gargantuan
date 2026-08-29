@@ -20,6 +20,7 @@
 #include "gargantuan/services/Workspace.hpp"
 #include "gargantuan/runtime/EngineProviderConfiguration.hpp"
 #include "gargantuan/runtime/MutationGateway.hpp"
+#include "gargantuan/runtime/SemanticSpatialResolver.hpp"
 #include "gargantuan/platform/HostEvent.hpp"
 #include "gargantuan/filesystem/SourceMount.hpp"
 #include "gargantuan/gui/GuiRuntime.hpp"
@@ -51,6 +52,7 @@ namespace gargantuan {
 		std::shared_ptr<ActionMap> ActionMap;
 		std::shared_ptr<AssetService> Assets;
 		std::unique_ptr<AnimationRuntime> Animation;
+		std::shared_ptr<SemanticSpatialResolver> Spatial;
 		std::unique_ptr<AudioRuntime> Audio;
 		std::shared_ptr<EntitlementService> Entitlements;
 		std::shared_ptr<InteractionService> Interaction;

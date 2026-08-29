@@ -1,6 +1,6 @@
 ---
 status: current
-date: 2026-08-26
+date: 2026-08-29
 owner: runtime-audio
 related_code:
   - assets/classes/Sound.luau
@@ -10,6 +10,7 @@ related_code:
   - src/assets/AssetImporter.cpp
   - src/audio/AudioRuntime.cpp
   - src/audio/SdlAudioBackend.cpp
+  - src/runtime/SemanticSpatialResolver.cpp
   - tests/AudioFoundationTests.cpp
   - tests/AudioFoundationBenchmark.cpp
 ---
@@ -126,11 +127,23 @@ The one gameplay listener is the current runtime `Workspace.CurrentCamera`
 transform. Standalone and Studio Play use the runtime camera. Edit-mode/editor
 camera preview is not implemented and cannot leak into Play.
 
-A Sound is positional only when walking its parent chain finds an `Attachment`
-chain anchored by a `BasePart`. Attachment CFrames are accumulated into the
-first BasePart CFrame. A Sound directly under a BasePart is at that part's world
-position. Sounds under folders, GUI, the DataModel, or any other non-spatial
-chain are 2D and retain source stereo. There is no redundant `Sound.Position`.
+A Sound is positional only when the shared semantic spatial resolver finds an
+`Attachment` chain anchored by a `BasePart`. Ordinary Attachment CFrames retain
+their static composition. A `JointPath`-bound Attachment beneath a skinned
+MeshPart instead resolves the current renderer-independent joint model pose,
+owner CFrame/Size, and local offset as defined by [Animation Foundation 2B](AnimationFoundation2SemanticAnchors.md).
+A Sound directly under a BasePart is at that part's world position. Sounds
+under folders, GUI, the DataModel, or any other non-spatial chain are 2D and
+retain source stereo. There is no redundant `Sound.Position`, per-frame
+`Sound.Position` mutation, or Animator logic in AudioRuntime.
+
+The runtime thread resolves the latest semantic source position while producing
+its fixed copied mix block. SDL's device side still drains only SDL-owned float
+samples and never touches Animator, Attachment, the DataModel, or animation
+locks. Paused animation freezes the source; resume, owner movement, binding
+changes, bind-pose fallback, and Animator destruction all follow the same
+resolver automatically. Headless/no-device execution can still prove the
+semantic source transform without audible hardware.
 
 Positional stereo clips are downmixed to mono before panning. Distance gain is
 the deterministic linear curve:
@@ -220,7 +233,10 @@ rejection, canonical save/reopen, property validation, 2D stereo, volume,
 speed, play/pause/resume/stop/seek, looping, `Ended`, attenuation/pan, moving
 Part and Attachment anchors, missing/reimported/deleted assets, Sound/parent
 destruction, 256-voice admission, device unavailable/loss, repeated lifecycle,
-and shutdown. FirstCompleteGame adds three positional pickup cues and one 2D
+and shutdown. Animation Foundation 2B additionally inspects a copied backend
+mix and proves that pan changes with the same animated Attachment used by
+Interaction, without per-pose allocation. FirstCompleteGame adds three
+positional pickup cues, one quiet looping joint-bound cue, and one 2D
 round-completion cue without making gameplay depend on hearing them.
 
 ## Explicit deferrals
