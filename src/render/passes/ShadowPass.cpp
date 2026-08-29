@@ -5,6 +5,7 @@
 #include "render/sdl/SDLMeshCache.hpp"
 #include "render/sdl/SDLPipelineBuilder.hpp"
 #include "render/sdl/SDLRenderPass.hpp"
+#include "render/sdl/SDLSkinPaletteCache.hpp"
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_error.h>
@@ -25,19 +26,20 @@ namespace gargantuan {
 			glm::mat4 PartMatrix;
 		};
 
-		ShadowPass(SDL_GPUDevice *gpu, SDL_GPUTextureFormat swapchainFormat) {
+		ShadowPass(SDL_GPUDevice *gpu, SDL_GPUTextureFormat swapchainFormat, SDLRendererMetrics *Metrics) {
 			(void)swapchainFormat;
 			Shader.VertexFilepath = GetSDLShaderPath("shadow.vert");
 			Shader.VertexUniformBufferCount = 1;
+			Shader.VertexStorageBufferCount = 1;
 			Shader.FragmentFilepath = GetSDLShaderPath("shadow.frag");
-			Shader.Init(gpu);
+			Shader.Init(gpu, Metrics);
 			Pipeline = SDLPipelineBuilder()
 						   .SetVertexShader(Shader.VertexShader)
 						   .SetFragmentShader(Shader.FragmentShader)
 						   .SetColorEnabled(false)
 						   .SetDepthEnabled(true)
 						   .SetDepthFormat(SDL_GPU_TEXTUREFORMAT_D32_FLOAT)
-						   .Build(gpu);
+						   .Build(gpu, Metrics);
 		};
 
 		SDL_GPURenderPass *Draw(SDL_GPUDevice *gpu, SDLFrameContext &context) override {
@@ -96,6 +98,11 @@ namespace gargantuan {
 
 				SDL_GPUBufferBinding indexBinding{.buffer = mesh->IndexBuffer, .offset = 0};
 				SDL_BindGPUIndexBuffer(pass, &indexBinding, SDL_GPU_INDEXELEMENTSIZE_32BIT);
+				const auto Palette = context.SkinPalettes.Find(
+					item.Object, context.Projection.GetAnimationPose(item.Object));
+				auto *PaletteBuffer = Palette.Buffer;
+				SDL_BindGPUVertexStorageBuffers(pass, 0, &PaletteBuffer, 1);
+				context.ShadowPoseRevisions.insert_or_assign(item.Object, Palette.PoseRevision);
 
 				SDL_DrawGPUIndexedPrimitives(pass, mesh->IndexCount, 1, 0, 0, 0);
 				if (context.Metrics) ++context.Metrics->DrawCalls;
@@ -105,8 +112,10 @@ namespace gargantuan {
 		};
 	};
 
-	std::unique_ptr<SDLRenderPass> CreateShadowPass(SDL_GPUDevice *gpu, SDL_GPUTextureFormat swapchainFormat) {
-		return std::make_unique<ShadowPass>(gpu, swapchainFormat);
+	std::unique_ptr<SDLRenderPass> CreateShadowPass(
+		SDL_GPUDevice *gpu, SDL_GPUTextureFormat swapchainFormat, SDLRendererMetrics *Metrics
+	) {
+		return std::make_unique<ShadowPass>(gpu, swapchainFormat, Metrics);
 	}
 
 } // namespace gargantuan

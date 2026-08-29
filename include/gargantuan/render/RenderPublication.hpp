@@ -8,6 +8,7 @@
 #include "gargantuan/render/RenderEnvironment.hpp"
 #include "gargantuan/render/RenderSnapshot.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <compare>
@@ -140,6 +141,32 @@ namespace gargantuan {
 		glm::vec4 Weights{0.0f};
 	};
 
+	struct RenderSkeletonIdentity {
+		std::array<std::uint8_t, 32> Bytes{};
+		auto operator<=>(const RenderSkeletonIdentity &) const = default;
+		[[nodiscard]] bool IsValid() const {
+			return std::ranges::any_of(Bytes, [](std::uint8_t Value) { return Value != 0; });
+		}
+	};
+
+	struct alignas(16) RenderSkinPaletteEntry {
+		glm::mat4 PositionMatrix{1.0f};
+		glm::mat4 NormalMatrix{1.0f};
+	};
+	static_assert(sizeof(RenderSkinPaletteEntry) == 128,
+		"The renderer-neutral skin palette must remain two tightly packed mat4 values");
+	inline constexpr std::uint32_t MaximumRenderSkinPaletteEntries = 256;
+
+	struct RenderSkinPalette {
+		RenderSkeletonIdentity Skeleton;
+		std::shared_ptr<const std::vector<RenderSkinPaletteEntry>> Entries;
+	};
+
+	enum class RenderAnimationSkinningMode : std::uint8_t {
+		GpuPalette,
+		CpuFallback,
+	};
+
 	struct RenderMeshCreate {
 		RenderMeshIdentity Mesh;
 		std::uint64_t TopologyRevision = 0;
@@ -148,6 +175,8 @@ namespace gargantuan {
 		std::shared_ptr<const std::vector<std::uint32_t>> Indices;
 		RenderBounds Bounds;
 		std::shared_ptr<const std::vector<RenderSkinInfluence>> SkinInfluences;
+		RenderSkeletonIdentity Skeleton;
+		std::uint32_t SkeletonJointCount = 0;
 	};
 
 	struct RenderAnimationPoseUpdate {
@@ -155,15 +184,16 @@ namespace gargantuan {
 		RenderMeshIdentity SourceMesh;
 		RenderMeshIdentity PosedMesh;
 		std::uint64_t PoseRevision = 0;
-		std::shared_ptr<const std::vector<glm::mat4>> BonePalette;
+		RenderSkinPalette Palette;
+		RenderAnimationSkinningMode Mode = RenderAnimationSkinningMode::GpuPalette;
 	};
 
 	struct RenderAnimationPoseRemove { ObjectId Object; };
 
 	// Complete renderer-neutral state handed from animation evaluation to the
 	// publisher. The publication separates the semantic palette update from the
-	// temporary CPU-skinned mesh upload so a future backend can consume the
-	// static source mesh and palette directly.
+	// optional CPU-skinned mesh fallback. GPU-capable backends consume only the
+	// static source mesh and final position/normal palette.
 	struct RenderAnimationPoseState {
 		RenderAnimationPoseUpdate Pose;
 		std::uint64_t TopologyRevision = 0;

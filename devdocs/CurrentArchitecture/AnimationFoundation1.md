@@ -1,7 +1,7 @@
 ---
 status: current
 owner: runtime-animation
-last_verified: 2026-08-28
+last_verified: 2026-08-29
 related_code:
   - assets/classes/Animator.luau
   - include/gargantuan/animation/AnimationRuntime.hpp
@@ -102,8 +102,10 @@ the sum deterministically, and rejects a zero sum or invalid joint. Mesh and
 artifact decode revalidate the result to a `1e-4` sum tolerance.
 
 The canonical maximum is 256 joints per rig and four influences per vertex.
-Renderer-neutral mesh publication can carry static skin influences even though
-the current production backend consumes CPU-skinned dynamic vertices. No
+Renderer-neutral mesh publication carries those static skin influences. As of
+[Animation Foundation 2A](AnimationFoundation2GpuSkinning.md), a capable
+graphical backend consumes them from the immutable source mesh while CPU-
+skinned dynamic vertices are reserved for the reference/fallback path. No
 palette is truncated.
 
 ## Animator public model
@@ -182,8 +184,8 @@ advance track time
     -> sample and blend joint-local T/R/S
     -> solve parent-before-child model transforms
     -> modelTransform * inverseBindMatrix per joint
-    -> CPU skin immutable source vertices
-    -> publish latest transient pose and dynamic mesh
+    -> publish latest transient palette
+    -> GPU skin immutable source vertices, or CPU-skin only for explicit fallback/reference use
     -> fire pending Ended callbacks
 ```
 
@@ -206,13 +208,14 @@ then normalize the weighted result. Singular/non-finite palette transforms fail
 the pose rather than injecting NaN. CPU skinning never overwrites the canonical
 source Mesh.
 
-CPU skinning is the Foundation 1 production path and the correctness oracle.
-It writes a pooled transient dynamic Mesh used by the existing rendering path.
-The neutral publication simultaneously carries source mesh identity, posed mesh
-identity, pose revision, and bone palette. A future GPU backend can therefore
-keep the static skinned source resident, upload the palette, and skin in the
-vertex shader without changing Animator, clip, time, or publication semantics.
-CPU crowd skinning is not the permanent architecture.
+CPU skinning was the Foundation 1 production path and remains the correctness
+oracle. It writes a pooled transient dynamic Mesh only when an explicitly
+unsupported graphical backend requests fallback or a native test/query requests
+the reference result. Foundation 2A keeps the static skinned source resident,
+uploads the final position/normal palette, and skins in the vertex shader
+without changing Animator, clip, time, or publication semantics. The complete
+current backend contract is recorded in
+[Animation Foundation 2A](AnimationFoundation2GpuSkinning.md).
 
 ## Renderer-neutral publication, shadows, and lighting
 
@@ -223,22 +226,24 @@ latest pose revision for that MeshPart. Publications contain immutable bounded
 values and no Animator pointer, AssetId, SDL object, shader buffer, or callback.
 
 The projection validates increasing pose revisions, finite palettes, existing
-source/posed meshes, exact object-to-posed-mesh binding, and a 256-matrix limit.
-Full resync recreates source and posed residency plus the current pose. Stop or
-destruction removes the posed residency and restores the source Mesh.
+source meshes, exact skeleton identity/joint count, mode-specific object/mesh
+binding, and a 256-entry limit. GPU mode forbids a posed mesh; CPU fallback
+requires one. Full resync recreates source residency and the current pose plus
+posed residency only when fallback is active. Stop or destruction retires the
+per-rig pose state.
 
-Both the opaque and shadow passes resolve the MeshPart's same posed dynamic mesh
-identity, so the production CPU path cannot render current geometry in the main
-pass and stale bind geometry in the shadow pass. Lighting remains view/render
-state over the posed normals; environment-only changes do not dirty or recompute
-animation pose state.
+Both the opaque and shadow passes bind the same per-rig palette resource and
+revision in GPU mode, or the same posed dynamic mesh identity in CPU fallback.
+Lighting remains view/render state over the posed normals; environment-only
+changes do not dirty or recompute animation pose state.
 
 ## Headless semantics and non-render consumers
 
 `AnimationRuntime::GetPose` exposes renderer-free joint model transforms and
 the palette to trusted native systems. Track advancement, hierarchical solve,
-compatibility checks, CPU skinning, pose publication, projection, and resync all
-run without SDL video or a GPU.
+compatibility checks, palette publication, projection, and resync all run
+without SDL video or a GPU. Headless evaluation does not deform every source
+vertex; CPU skinning is invoked only by an explicit reference/query consumer.
 
 Foundation 1 does not add a semantic animated-bone anchor. An Attachment, Sound,
 or ProximityPrompt under the MeshPart still follows the authored MeshPart and
@@ -256,8 +261,9 @@ extraction is a separate future gameplay contract.
 
 Persistence includes the MeshPart asset reference, authored Animator Instance,
 gameplay script Animation reference, and canonical catalog/artifacts. Active
-tracks, playback state, time, local/model poses, palettes, and dynamic vertices
-are transient and absent from scene serialization and replication.
+tracks, playback state, time, local/model poses, palettes, GPU resources, and
+fallback dynamic vertices are transient and absent from scene serialization and
+replication.
 
 Studio Play clones authored Instances and the canonical runtime asset snapshot,
 then creates a new AnimationRuntime and tracks. Stop shuts the runtime down,
@@ -276,8 +282,10 @@ to an unrelated joint.
 ## Packaging, generic Studio authoring, and sample proof
 
 Runtime snapshots and packages contain version-3 Mesh/Animation `.gasset`
-files and the explicit dependency edge; source glTF is unnecessary. Package
-validation rejects a missing dependency or artifact before standalone startup.
+files, the explicit dependency edge, and compiled opaque/shadow skinning shader
+artifacts; source glTF and shader source are unnecessary. Package validation
+rejects a missing dependency, canonical artifact, or compiled shader before
+standalone startup.
 
 The generic EditorHost/Studio workflow imports animated glTF through the common
 asset catalog, exposes Animation metadata/dependencies, inserts the schema-
@@ -316,6 +324,9 @@ dependencies never produce a per-frame log.
 
 ## Performance and memory evidence
 
+The following table is the preserved Foundation 1 CPU-production baseline;
+Foundation 2A measurements and direct comparisons are in
+[Animation Foundation 2A](AnimationFoundation2GpuSkinning.md).
 `gargantuan_animation_foundation_benchmark` uses imported 999-vertex rigs and
 measures sampling/blending, hierarchy solve, skin matrices, CPU skinning, pose
 construction, publication, projection, and animation-owned transient-buffer
@@ -364,7 +375,7 @@ Foundation 2 priorities.
 | Where does skeleton identity live? | In the canonical skinned Mesh artifact; Animation carries its compatibility ID and Mesh dependency. |
 | How are clips matched to rigs? | Stable joint paths plus a hash of hierarchy, bind TRS, and inverse binds; never index or file name alone. |
 | Are multiple clips per source supported? | Yes; import creates one Animation asset per clip. |
-| Is CPU or GPU skinning production? | CPU is production/reference in Foundation 1; neutral source/palette publication is the GPU seam. |
+| Is CPU or GPU skinning production? | Foundation 1 introduced CPU production/reference; Foundation 2A selects GPU skinning for capable graphical backends and retains CPU as oracle/fallback. |
 | Bone palette limit? | 256, checked at import, runtime, publisher, and projection. |
 | Interpolation modes? | glTF `STEP` and `LINEAR`; vector linear and shortest-path normalized quaternion slerp. |
 | How does blending work? | Deterministic creation order, weighted absolute per-channel blend, normalized above weight one, bind fallback below one. |
@@ -391,10 +402,9 @@ cloth-to-bone coupling, network animation protocol, semantic animated
 attachments/hitboxes/audio/interaction anchors, animation LOD/update
 throttling, timeline/keyframe authoring, and mobile performance claims.
 
-Animation Foundation 2 should first implement backend GPU skinning from the
-existing source-mesh/palette seam and benchmark palette upload/draw/fence
-completion separately. Next priorities are multi-Mesh rig binding, measured
-distance/visibility LOD and jobification, then semantic animated anchors and
-root-motion extraction with explicit physics/network authority. Retargeting,
+Animation Foundation 2A now implements backend GPU skinning from the existing
+source-mesh/palette seam and separately measures palette upload, draw submission,
+and fence completion. The measured 2B/2C priorities are maintained in
+[Animation Foundation 2A](AnimationFoundation2GpuSkinning.md). Retargeting,
 graphs, and authoring tools should build only after those runtime contracts are
 proven.

@@ -51,14 +51,14 @@ namespace gargantuan {
 			glm::vec4 Values{1.0f, 0.0f, 0.0f, 0.0f};
 		};
 
-		GuiPass(SDL_GPUDevice *Gpu, SDL_GPUTextureFormat SwapchainFormat) {
+		GuiPass(SDL_GPUDevice *Gpu, SDL_GPUTextureFormat SwapchainFormat, SDLRendererMetrics *Metrics) {
 			try {
 				Shader.VertexFilepath = GetSDLShaderPath("gui.vert");
 				Shader.VertexUniformBufferCount = 1;
 				Shader.FragmentFilepath = GetSDLShaderPath("gui.frag");
 				Shader.FragmentUniformBufferCount = 1;
 				Shader.FragmentSamplerCount = 1;
-				Shader.Init(Gpu);
+				Shader.Init(Gpu, Metrics);
 
 				static const std::array<SDL_GPUVertexBufferDescription, 1> BufferDescriptions{{{
 					.slot = 0,
@@ -95,6 +95,7 @@ namespace gargantuan {
 				PipelineInfo.target_info.color_target_descriptions = &ColorTarget;
 				PipelineInfo.target_info.num_color_targets = 1;
 				Pipeline = SDL_CreateGPUGraphicsPipeline(Gpu, &PipelineInfo);
+				if (Pipeline && Metrics) ++Metrics->PipelineCreations;
 				if (!Pipeline)
 					throw std::runtime_error(std::format("Failed to create GUI pipeline: {}", SDL_GetError()));
 
@@ -347,7 +348,9 @@ namespace gargantuan {
 		bool Uploaded = false;
 	};
 
-	std::unique_ptr<SDLRenderPass> CreateGuiPass(SDL_GPUDevice *Gpu, SDL_GPUTextureFormat SwapchainFormat) {
-		return std::make_unique<GuiPass>(Gpu, SwapchainFormat);
+	std::unique_ptr<SDLRenderPass> CreateGuiPass(
+		SDL_GPUDevice *Gpu, SDL_GPUTextureFormat SwapchainFormat, SDLRendererMetrics *Metrics
+	) {
+		return std::make_unique<GuiPass>(Gpu, SwapchainFormat, Metrics);
 	}
 }

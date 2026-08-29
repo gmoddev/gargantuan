@@ -5,6 +5,7 @@
 #include "render/sdl/SDLMeshCache.hpp"
 #include "render/sdl/SDLPipelineBuilder.hpp"
 #include "render/sdl/SDLRenderPass.hpp"
+#include "render/sdl/SDLSkinPaletteCache.hpp"
 #include "render/sdl/SDLTextureCache.hpp"
 
 #include <SDL3/SDL.h>
@@ -60,14 +61,15 @@ namespace gargantuan {
 			glm::vec4 MaterialValues;
 		};
 
-		OpaquePass(SDL_GPUDevice *gpu, SDL_GPUTextureFormat swapchainFormat) {
+		OpaquePass(SDL_GPUDevice *gpu, SDL_GPUTextureFormat swapchainFormat, SDLRendererMetrics *Metrics) {
 			try {
 				Shader.VertexFilepath = GetSDLShaderPath("opaque.vert");
 				Shader.VertexUniformBufferCount = 2;
+				Shader.VertexStorageBufferCount = 1;
 				Shader.FragmentFilepath = GetSDLShaderPath("opaque.frag");
 				Shader.FragmentUniformBufferCount = 1;
 				Shader.FragmentSamplerCount = 2;
-				Shader.Init(gpu);
+				Shader.Init(gpu, Metrics);
 				auto Builder = SDLPipelineBuilder()
 					.SetVertexShader(Shader.VertexShader)
 					.SetFragmentShader(Shader.FragmentShader)
@@ -76,10 +78,11 @@ namespace gargantuan {
 					.SetBlendingEnabled(true)
 					.SetDepthEnabled(true)
 					.SetDepthFormat(SDL_GPU_TEXTUREFORMAT_D16_UNORM);
-				Pipeline = Builder.Build(gpu);
+				Pipeline = Builder.Build(gpu, Metrics);
 				auto DoubleSidedInfo = Builder.BuildInfo();
 				DoubleSidedInfo.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_NONE;
 				DoubleSidedPipeline = SDL_CreateGPUGraphicsPipeline(gpu, &DoubleSidedInfo);
+				if (DoubleSidedPipeline && Metrics) ++Metrics->PipelineCreations;
 				SDL_GPUSamplerCreateInfo SamplerInfo{
 					.min_filter = SDL_GPU_FILTER_LINEAR,
 					.mag_filter = SDL_GPU_FILTER_LINEAR,
@@ -172,6 +175,18 @@ namespace gargantuan {
 
 				SDL_GPUBufferBinding indexBinding{.buffer = mesh->IndexBuffer, .offset = 0};
 				SDL_BindGPUIndexBuffer(pass, &indexBinding, SDL_GPU_INDEXELEMENTSIZE_32BIT);
+				const auto Palette = context.SkinPalettes.Find(
+					item.Object, context.Projection.GetAnimationPose(item.Object));
+				auto *PaletteBuffer = Palette.Buffer;
+				SDL_BindGPUVertexStorageBuffers(pass, 0, &PaletteBuffer, 1);
+				if (item.CastShadow && Environment.SunIntensity > 0.0f) {
+					const auto ShadowRevision = context.ShadowPoseRevisions.find(item.Object);
+					if (ShadowRevision == context.ShadowPoseRevisions.end() ||
+						ShadowRevision->second != Palette.PoseRevision) {
+						if (context.Metrics) ++context.Metrics->MainShadowPoseMismatches;
+						throw std::logic_error("Opaque and shadow passes resolved different animation pose revisions");
+					}
+				}
 
 				auto DrawPrimitive = [&](std::uint32_t FirstIndex, std::uint32_t IndexCount,
 					const RenderMaterialState &Material) {
@@ -254,7 +269,9 @@ namespace gargantuan {
 		SDL_GPUSampler *MaterialSampler = nullptr;
 	};
 
-	std::unique_ptr<SDLRenderPass> CreateOpaquePass(SDL_GPUDevice *gpu, SDL_GPUTextureFormat swapchainFormat) {
-		return std::make_unique<OpaquePass>(gpu, swapchainFormat);
+	std::unique_ptr<SDLRenderPass> CreateOpaquePass(
+		SDL_GPUDevice *gpu, SDL_GPUTextureFormat swapchainFormat, SDLRendererMetrics *Metrics
+	) {
+		return std::make_unique<OpaquePass>(gpu, swapchainFormat, Metrics);
 	}
 } // namespace gargantuan

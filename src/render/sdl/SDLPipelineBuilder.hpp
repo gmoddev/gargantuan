@@ -3,6 +3,7 @@
 #include <SDL3/SDL_gpu.h>
 
 namespace gargantuan {
+	struct SDLRendererMetrics;
 	struct SDLPipelineBuilder final {
 		SDL_GPUShader *VertexShader = nullptr;
 		SDL_GPUShader *FragmentShader = nullptr;
@@ -20,7 +21,7 @@ namespace gargantuan {
 		SDLPipelineBuilder &SetDepthFormat(SDL_GPUTextureFormat Format);
 		SDLPipelineBuilder &SetDepthEnabled(bool Enabled);
 		SDL_GPUGraphicsPipelineCreateInfo BuildInfo();
-		SDL_GPUGraphicsPipeline *Build(SDL_GPUDevice *Gpu);
+		SDL_GPUGraphicsPipeline *Build(SDL_GPUDevice *Gpu, SDLRendererMetrics *Metrics = nullptr);
 
 	  private:
 		SDL_GPUColorTargetDescription ColorTarget{};

@@ -7,6 +7,7 @@
 
 #include "render/sdl/SDLMeshCache.hpp"
 #include "render/sdl/SDLRenderPass.hpp"
+#include "render/sdl/SDLSkinPaletteCache.hpp"
 #include "render/sdl/SDLTextureCache.hpp"
 
 #include <SDL3/SDL.h>
@@ -110,13 +111,16 @@ namespace gargantuan {
 		std::vector<std::unique_ptr<SDLRenderPass>> RenderPasses;
 		std::unique_ptr<SDLMeshCache> MeshResources;
 		std::unique_ptr<SDLTextureCache> TextureResources;
+		std::unique_ptr<SDLSkinPaletteCache> SkinPalettes;
 		RenderProjection Projection;
+		std::unordered_map<ObjectId, std::uint64_t> ShadowPoseRevisions;
 		std::vector<std::uint8_t> BgraPixels;
 
 		void Destroy() {
 			if (Gpu) SDL_WaitForGPUIdle(Gpu);
 			if (MeshResources) { MeshResources->Destroy(); MeshResources.reset(); }
 			if (TextureResources) { TextureResources->Destroy(); TextureResources.reset(); }
+			if (SkinPalettes) { SkinPalettes->Destroy(); SkinPalettes.reset(); }
 			for (auto &Pass : RenderPasses) if (Pass) Pass->Destroy(Gpu);
 			RenderPasses.clear();
 			if (DownloadBuffer && Gpu) SDL_ReleaseGPUTransferBuffer(Gpu, DownloadBuffer);
@@ -134,6 +138,7 @@ namespace gargantuan {
 			if (OwnsVideoSubsystem) SDL_QuitSubSystem(SDL_INIT_VIDEO);
 			OwnsVideoSubsystem = false;
 			BgraPixels.clear();
+			ShadowPoseRevisions.clear();
 		}
 
 		void RecreateTargets() {
@@ -189,6 +194,7 @@ namespace gargantuan {
 		}
 		State->MeshResources = std::make_unique<SDLMeshCache>(State->Gpu);
 		State->TextureResources = std::make_unique<SDLTextureCache>(State->Gpu);
+		State->SkinPalettes = std::make_unique<SDLSkinPaletteCache>(State->Gpu);
 
 		SDL_GPUTextureCreateInfo ShadowInfo{
 			.type = SDL_GPU_TEXTURETYPE_2D, .format = SDL_GPU_TEXTUREFORMAT_D32_FLOAT,
@@ -212,7 +218,7 @@ namespace gargantuan {
 		try {
 			State->RecreateTargets();
 			for (const auto &Constructor : GetSDLRenderPassConstructors())
-				State->RenderPasses.push_back(Constructor(State->Gpu, ColorFormat));
+				State->RenderPasses.push_back(Constructor(State->Gpu, ColorFormat, nullptr));
 		} catch (...) {
 			State->Destroy();
 			throw;
@@ -238,6 +244,10 @@ namespace gargantuan {
 		(void)State->Projection.Apply(*Publication);
 		State->MeshResources->ApplyPublication(*Publication);
 		State->TextureResources->ApplyPublication(*Publication);
+		State->SkinPalettes->ApplyPublication(*Publication);
+		if (Publication->FullResync) State->ShadowPoseRevisions.clear();
+		for (const auto &Remove : Publication->Removes)
+			State->ShadowPoseRevisions.erase(Remove.Object);
 	}
 
 	EditorViewportCaptureView EditorViewportRenderer::CaptureBgra(RenderPublicationPtr Publication) {
@@ -249,7 +259,8 @@ namespace gargantuan {
 		State->MeshResources->UploadToGpu();
 		auto *Commands = SDL_AcquireGPUCommandBuffer(State->Gpu);
 		if (!Commands) throw std::runtime_error(std::format("Failed to acquire viewport command buffer: {}", SDL_GetError()));
-		SDLFrameContext Frame(State->Projection, *State->MeshResources);
+		SDLFrameContext Frame(
+			State->Projection, *State->MeshResources, *State->SkinPalettes, State->ShadowPoseRevisions);
 		Frame.Commands = Commands;
 		Frame.SwapchainTexture = State->ColorTexture;
 		Frame.DepthTexture = State->DepthTexture;

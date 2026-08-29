@@ -39,6 +39,10 @@ namespace gargantuan {
 			  Assets,
 			  [](std::string Code, std::string Message) {
 				  LOG_WARN(App, "[Animation:Runtime] %s: %s", Code.c_str(), Message.c_str());
+			  },
+			  AnimationRuntimeOptions{
+				  .CpuSkinningFallback = Renderer && Renderer->GetCapabilities().Graphical &&
+					  !Renderer->GetCapabilities().GpuSkinning,
 			  }
 		  )),
 		  Audio(std::make_unique<AudioRuntime>(

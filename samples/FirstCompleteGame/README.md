@@ -56,6 +56,14 @@ looping, and starts it in Play. Stopping Play discards the `AnimationTrack` and
 pose while leaving the authored rig, Animator, script reference, and canonical
 package artifacts unchanged.
 
+On a graphical renderer with GPU-skinning capability, the canonical skinned
+source mesh is uploaded once and `AnimatedBeacon` advances by bounded palette
+uploads; it does not publish a CPU-deformed vertex array every frame. Headless
+Play evaluates the same track and publishes its semantic palette without
+initializing SDL video or deforming the full mesh. Unsupported graphical
+backends use the retained CPU reference/fallback path without a gameplay API
+difference.
+
 The saved fixture also authors the canonical `Lighting` service with afternoon
 sun, ambient light, exposure, bounded fog, and a direct six-face `Sky`. All six
 faces reuse the packaged square Collection Badge Image so save/reopen, local

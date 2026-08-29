@@ -10,6 +10,11 @@
 #include <utility>
 
 namespace gargantuan {
+	struct RendererCapabilities {
+		bool Graphical = true;
+		bool GpuSkinning = false;
+	};
+
 	class BaseRenderer {
 	  public:
 		BaseRenderer() = default;
@@ -23,6 +28,7 @@ namespace gargantuan {
 		void Draw(RenderSnapshotPtr Snapshot);
 		virtual void Resize(int WidthValue, int HeightValue) = 0;
 		virtual void Destroy() = 0;
+		[[nodiscard]] virtual RendererCapabilities GetCapabilities() const { return {}; }
 		[[nodiscard]] virtual std::pair<std::uint32_t, std::uint32_t> GetViewportSize() const = 0;
 	};
 
@@ -44,6 +50,7 @@ namespace gargantuan {
 			Height = static_cast<std::uint32_t>(HeightValue);
 		};
 		void Destroy() override {};
+		[[nodiscard]] RendererCapabilities GetCapabilities() const override { return {false, false}; }
 		[[nodiscard]] std::pair<std::uint32_t, std::uint32_t> GetViewportSize() const override {
 			return {Width, Height};
 		}

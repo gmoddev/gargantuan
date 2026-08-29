@@ -20,7 +20,11 @@ namespace gargantuan {
 		AssetContentId SkeletonCompatibilityId;
 		std::uint64_t PoseRevision = 0;
 		std::shared_ptr<const std::vector<glm::mat4>> JointModelTransforms;
-		std::shared_ptr<const std::vector<glm::mat4>> BonePalette;
+		std::shared_ptr<const std::vector<RenderSkinPaletteEntry>> SkinPalette;
+	};
+
+	struct AnimationRuntimeOptions {
+		bool CpuSkinningFallback = false;
 	};
 
 	struct AnimationRuntimeMetrics {
@@ -46,7 +50,11 @@ namespace gargantuan {
 		static constexpr std::size_t MaximumAnimators = 4096;
 		static constexpr std::size_t MaximumBonesPerRig = AssetLimits::MaximumSkeletonBones;
 
-		AnimationRuntime(std::shared_ptr<AssetService> Assets, DiagnosticCallback Diagnostic = {});
+		AnimationRuntime(
+			std::shared_ptr<AssetService> Assets,
+			DiagnosticCallback Diagnostic = {},
+			AnimationRuntimeOptions Options = {}
+		);
 		~AnimationRuntime();
 		AnimationRuntime(const AnimationRuntime &) = delete;
 		AnimationRuntime &operator=(const AnimationRuntime &) = delete;
@@ -63,7 +71,7 @@ namespace gargantuan {
 
 		[[nodiscard]] static bool SkinMeshCpu(
 			const ImportedMesh &Mesh,
-			std::span<const glm::mat4> BonePalette,
+			std::span<const RenderSkinPaletteEntry> SkinPalette,
 			std::vector<RenderVertex> &Output,
 			RenderBounds &Bounds
 		);

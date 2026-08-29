@@ -11,8 +11,16 @@ namespace gargantuan {
 		Mesh ConvertMesh(const RenderMeshCreate &MeshData) {
 			Mesh Result;
 			Result.Vertices.reserve(MeshData.Vertices->size());
-			for (const auto &Source : *MeshData.Vertices)
-				Result.Vertices.push_back({Source.Position, Source.Normal, Source.TextureCoordinate});
+			for (std::size_t Index = 0; Index < MeshData.Vertices->size(); ++Index) {
+				const auto &Source = MeshData.Vertices->at(Index);
+				Vertex Converted{Source.Position, Source.Normal, Source.TextureCoordinate};
+				Converted.Tangent = Source.Tangent;
+				if (MeshData.SkinInfluences) {
+					Converted.Joints = MeshData.SkinInfluences->at(Index).Joints;
+					Converted.Weights = MeshData.SkinInfluences->at(Index).Weights;
+				}
+				Result.Vertices.push_back(Converted);
+			}
 			Result.Indices = *MeshData.Indices;
 			return Result;
 		}
@@ -38,7 +46,9 @@ namespace gargantuan {
 	}
 
 	SDLGpuMesh::SDLGpuMesh(const RenderMeshCreate &MeshData, SDLRendererMetrics *MetricsValue)
-		: SDLGpuMesh(ConvertMesh(MeshData), MetricsValue) {}
+		: SDLGpuMesh(ConvertMesh(MeshData), MetricsValue) {
+		if (Metrics && MeshData.SkinInfluences) ++Metrics->SkinnedSourceResourceCreations;
+	}
 
 	SDL_GPUBuffer *SDLGpuMesh::CreateVertexBuffer(SDL_GPUDevice *gpu) {
 		if (VertexBuffer) {
@@ -130,7 +140,11 @@ namespace gargantuan {
 			throw std::length_error("Dynamic mesh vertex update exceeds the SDL transfer limit");
 		for (std::size_t Index = 0; Index < UpdatedVertices.size(); ++Index) {
 			const auto &Source = UpdatedVertices[Index];
-			Vertices[FirstVertex + Index] = {Source.Position, Source.Normal, Source.TextureCoordinate};
+			auto &Destination = Vertices[FirstVertex + Index];
+			Destination.Position = Source.Position;
+			Destination.Normal = Source.Normal;
+			Destination.UV = Source.TextureCoordinate;
+			Destination.Tangent = Source.Tangent;
 		}
 		const auto Bytes = static_cast<std::uint32_t>(UpdatedVertices.size() * sizeof(Vertex));
 		auto *RangeTransfer = CreateTransferBuffer(Gpu);
@@ -150,7 +164,6 @@ namespace gargantuan {
 		// deformable update must preserve the untouched regions of the current backing.
 		SDL_UploadToGPUBuffer(CopyPass, &Source, &Destination, FullReplacement);
 		if (Metrics) {
-			++Metrics->BufferCycleRequests;
 			if (FullReplacement) ++Metrics->BufferCycleRequests;
 			++Metrics->UploadOperations;
 			Metrics->UploadedBytes += Bytes;

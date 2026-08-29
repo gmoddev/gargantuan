@@ -5,6 +5,7 @@
 #include "gargantuan/Log.hpp"
 #include "render/sdl/SDLMeshCache.hpp"
 #include "render/sdl/SDLRenderPass.hpp"
+#include "render/sdl/SDLSkinPaletteCache.hpp"
 #include "render/sdl/SDLTextureCache.hpp"
 
 #include <SDL3/SDL.h>
@@ -62,8 +63,13 @@ namespace gargantuan {
 		std::vector<std::unique_ptr<SDLRenderPass>> RenderPasses;
 		std::unique_ptr<SDLMeshCache> MeshResources;
 		std::unique_ptr<SDLTextureCache> TextureResources;
+		std::unique_ptr<SDLSkinPaletteCache> SkinPalettes;
 		RenderProjection Projection;
+		std::unordered_map<ObjectId, std::uint64_t> ShadowPoseRevisions;
 		SDLRendererMetrics Metrics;
+		std::uint32_t RemainingPaletteUploadFailures = 0;
+		std::uint32_t RemainingShaderCreationFailures = 0;
+		std::uint32_t RemainingPipelineCreationFailures = 0;
 		bool RequiresFullResync = false;
 	};
 
@@ -86,6 +92,9 @@ namespace gargantuan {
 			SDL_GPU_SHADERFORMAT_MSL;
 
 		State->Options = Options;
+		State->RemainingPaletteUploadFailures = Options.InjectPaletteUploadFailures;
+		State->RemainingShaderCreationFailures = Options.InjectShaderCreationFailures;
+		State->RemainingPipelineCreationFailures = Options.InjectPipelineCreationFailures;
 		State->Gpu = SDL_CreateGPUDevice(ShaderFormats, Options.DebugDevice, nullptr);
 		if (!State->Gpu) throw std::runtime_error(std::format("Failed to create GPU device: {}", SDL_GetError()));
 
@@ -100,6 +109,8 @@ namespace gargantuan {
 			} else State->SwapchainFormat = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
 			State->MeshResources = std::make_unique<SDLMeshCache>(State->Gpu, &State->Metrics);
 			State->TextureResources = std::make_unique<SDLTextureCache>(State->Gpu, &State->Metrics);
+			State->SkinPalettes = std::make_unique<SDLSkinPaletteCache>(
+				State->Gpu, &State->Metrics, &State->RemainingPaletteUploadFailures);
 
 			SDL_GPUTextureCreateInfo ShadowMapInfo{
 				.type = SDL_GPU_TEXTURETYPE_2D,
@@ -132,8 +143,17 @@ namespace gargantuan {
 			Resize(InitialWidth, InitialHeight);
 
 			for (const auto &Constructor : GetSDLRenderPassConstructors()) {
-				auto Pass = Constructor(State->Gpu, State->SwapchainFormat);
+				if (State->RemainingShaderCreationFailures > 0) {
+					--State->RemainingShaderCreationFailures;
+					throw std::runtime_error("[Render:Shader] injected shader creation failure");
+				}
+				auto Pass = Constructor(State->Gpu, State->SwapchainFormat, &State->Metrics);
 				if (!Pass) throw std::runtime_error("Failed to construct renderer pass");
+				if (State->RemainingPipelineCreationFailures > 0) {
+					--State->RemainingPipelineCreationFailures;
+					Pass->Destroy(State->Gpu);
+					throw std::runtime_error("[Render:Pipeline] injected pipeline creation failure");
+				}
 				State->RenderPasses.push_back(std::move(Pass));
 			}
 		} catch (...) {
@@ -154,6 +174,10 @@ namespace gargantuan {
 		if (State->TextureResources) {
 			State->TextureResources->Destroy();
 			State->TextureResources.reset();
+		}
+		if (State->SkinPalettes) {
+			State->SkinPalettes->Destroy();
+			State->SkinPalettes.reset();
 		}
 		for (auto &Pass : State->RenderPasses) if (Pass) Pass->Destroy(State->Gpu);
 		State->RenderPasses.clear();
@@ -180,7 +204,7 @@ namespace gargantuan {
 	void SDLRenderer::Draw(RenderPublicationPtr Publication) {
 		if (!Publication) throw std::invalid_argument("SDLRenderer requires an immutable RenderPublication");
 		if (!State || !State->Gpu || (!State->Options.Offscreen && !State->Window) || !State->MeshResources ||
-			!State->TextureResources)
+			!State->TextureResources || !State->SkinPalettes)
 			throw std::logic_error("SDLRenderer is not initialized");
 		if (State->RequiresFullResync && !Publication->FullResync)
 			throw std::logic_error("SDLRenderer requires a full RenderPublication after resource recovery");
@@ -191,6 +215,11 @@ namespace gargantuan {
 		State->Metrics.LastSubmissionNanoseconds = 0;
 		State->Metrics.LastGpuCompletionWaitNanoseconds = 0;
 		try {
+			if (!Publication->FullResync) for (const auto &Update : Publication->AnimationPoseUpdates) {
+				const auto *Existing = State->Projection.GetAnimationPose(Update.Object);
+				if (Existing && Update.PoseRevision <= Existing->PoseRevision)
+					++State->Metrics.StalePoseDrops;
+			}
 			const auto ProjectionStart = Clock::now();
 			const auto Changes = State->Projection.Apply(*Publication);
 			State->Metrics.EnvironmentApplications += Changes.EnvironmentsUpdated;
@@ -199,6 +228,7 @@ namespace gargantuan {
 			const auto MeshStart = Clock::now();
 			State->MeshResources->ApplyPublication(*Publication);
 			State->MeshResources->UploadToGpu();
+			State->SkinPalettes->ApplyPublication(*Publication);
 			State->Metrics.LastMeshTransferNanoseconds = Nanoseconds(Clock::now() - MeshStart);
 			State->Metrics.CpuMeshTransferNanoseconds += State->Metrics.LastMeshTransferNanoseconds;
 			const auto TextureStart = Clock::now();
@@ -206,10 +236,15 @@ namespace gargantuan {
 			State->Metrics.LastTextureTransferNanoseconds = Nanoseconds(Clock::now() - TextureStart);
 			State->Metrics.CpuTextureTransferNanoseconds += State->Metrics.LastTextureTransferNanoseconds;
 			State->RequiresFullResync = false;
+			if (Publication->FullResync) State->ShadowPoseRevisions.clear();
+			for (const auto &Remove : Publication->Removes)
+				State->ShadowPoseRevisions.erase(Remove.Object);
 		} catch (...) {
 			State->Projection.Clear();
 			State->MeshResources->Destroy();
 			State->TextureResources->Destroy();
+			State->SkinPalettes->Destroy();
+			State->ShadowPoseRevisions.clear();
 			State->RequiresFullResync = true;
 			throw;
 		}
@@ -222,7 +257,14 @@ namespace gargantuan {
 			return;
 		}
 
-		SDLFrameContext Frame(State->Projection, *State->MeshResources);
+		State->Metrics.GpuSkinningRigs = State->SkinPalettes->GetGpuRigCount();
+		State->Metrics.CpuFallbackRigs = 0;
+		for (const auto &[Object, Pose] : State->Projection.GetAnimationPoses()) {
+			(void)Object;
+			if (Pose.Mode == RenderAnimationSkinningMode::CpuFallback) ++State->Metrics.CpuFallbackRigs;
+		}
+		SDLFrameContext Frame(
+			State->Projection, *State->MeshResources, *State->SkinPalettes, State->ShadowPoseRevisions);
 		Frame.Commands = Commands;
 		Frame.DepthTexture = State->DepthTexture;
 		Frame.ShadowMapTexture = State->ShadowMapTexture;

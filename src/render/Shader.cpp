@@ -1,4 +1,5 @@
 #include "gargantuan/filesystem/Paths.hpp"
+#include "gargantuan/render/SDLRenderer.hpp"
 #include "render/sdl/SDLShader.hpp"
 
 #include <SDL3/SDL.h>
@@ -66,7 +67,7 @@ namespace gargantuan {
 		return shader;
 	}
 
-	void SDLFileShader::Init(SDL_GPUDevice *gpu) {
+	void SDLFileShader::Init(SDL_GPUDevice *gpu, SDLRendererMetrics *Metrics) {
 		SDL_GPUShaderFormat format = SDL_GPU_SHADERFORMAT_INVALID;
 		std::string extension, entrypoint;
 		GetShaderFormat(gpu, format, extension, entrypoint);
@@ -82,10 +83,11 @@ namespace gargantuan {
 					.stage = SDL_GPU_SHADERSTAGE_VERTEX,
 					.num_samplers = VertexSamplerCount,
 					.num_storage_textures = 0,
-					.num_storage_buffers = 0,
+					.num_storage_buffers = VertexStorageBufferCount,
 					.num_uniform_buffers = VertexUniformBufferCount,
 				}
 			);
+			if (Metrics) ++Metrics->ShaderCreations;
 		}
 
 		if (!FragmentShader) {
@@ -99,10 +101,11 @@ namespace gargantuan {
 					.stage = SDL_GPU_SHADERSTAGE_FRAGMENT,
 					.num_samplers = FragmentSamplerCount,
 					.num_storage_textures = 0,
-					.num_storage_buffers = 0,
+					.num_storage_buffers = FragmentStorageBufferCount,
 					.num_uniform_buffers = FragmentUniformBufferCount,
 				}
 			);
+			if (Metrics) ++Metrics->ShaderCreations;
 		}
 	}
 } // namespace gargantuan

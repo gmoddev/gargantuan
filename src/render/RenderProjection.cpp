@@ -169,12 +169,15 @@ namespace gargantuan {
 			for (const auto Index : *Create.Indices) if (Index >= Create.Vertices->size())
 				throw std::invalid_argument("Render publication rejects out-of-range mesh indices");
 			if (Create.SkinInfluences) {
-				if (Create.SkinInfluences->size() != Create.Vertices->size())
+				if (!Create.Skeleton.IsValid() || Create.SkeletonJointCount == 0 ||
+					Create.SkeletonJointCount > MaximumRenderSkinPaletteEntries ||
+					Create.SkinInfluences->size() != Create.Vertices->size())
 					throw std::invalid_argument("Render publication skin influence count differs from vertices");
 				for (const auto &Influence : *Create.SkinInfluences) {
 					float Sum = 0.0f;
 					for (std::size_t Index = 0; Index < 4; ++Index) {
-						if (Influence.Joints[Index] >= 256 || !std::isfinite(Influence.Weights[Index]) ||
+						if (Influence.Joints[Index] >= Create.SkeletonJointCount ||
+							!std::isfinite(Influence.Weights[Index]) ||
 							Influence.Weights[Index] < 0.0f)
 							throw std::invalid_argument("Render publication rejects malformed skin weights");
 						Sum += Influence.Weights[Index];
@@ -182,6 +185,8 @@ namespace gargantuan {
 					if (std::abs(Sum - 1.0f) > 1.0e-4f)
 						throw std::invalid_argument("Render publication rejects non-normalized skin weights");
 				}
+			} else if (Create.Skeleton.IsValid() || Create.SkeletonJointCount != 0) {
+				throw std::invalid_argument("Render publication rejects skeleton metadata without skin influences");
 			}
 		}
 		for (const auto &Update : Publication.MeshVertexUpdates) {
@@ -324,45 +329,62 @@ namespace gargantuan {
 			}
 			return std::nullopt;
 		};
-		const auto SkinInfluencesAfterPublication = [&](RenderMeshIdentity Mesh)
-			-> std::shared_ptr<const std::vector<RenderSkinInfluence>> {
+		const auto SkeletonAfterPublication = [&](RenderMeshIdentity Mesh) -> std::optional<RenderSkeletonIdentity> {
 			for (const auto &Create : Publication.MeshCreates)
-				if (Create.Mesh == Mesh) return Create.SkinInfluences;
-			if (!Publication.FullResync) {
-				const auto Existing = Meshes.find(Mesh);
-				if (Existing != Meshes.end()) return Existing->second.SkinInfluences;
-			}
-			return nullptr;
+				if (Create.Mesh == Mesh && Create.SkinInfluences) return Create.Skeleton;
+			if (!Publication.FullResync) if (const auto Existing = Meshes.find(Mesh);
+				Existing != Meshes.end() && Existing->second.SkinInfluences) return Existing->second.Skeleton;
+			return std::nullopt;
 		};
-		std::unordered_set<ObjectId> TouchedPoses;
-		TouchedPoses.reserve(Publication.AnimationPoseUpdates.size() + Publication.AnimationPoseRemoves.size());
+		const auto SkeletonJointCountAfterPublication = [&](RenderMeshIdentity Mesh) -> std::uint32_t {
+			for (const auto &Create : Publication.MeshCreates)
+				if (Create.Mesh == Mesh) return Create.SkeletonJointCount;
+			if (!Publication.FullResync) if (const auto Existing = Meshes.find(Mesh); Existing != Meshes.end())
+				return Existing->second.SkeletonJointCount;
+			return 0;
+		};
+		TouchedPoseScratch.clear();
+		TouchedPoseScratch.reserve(Publication.AnimationPoseUpdates.size() + Publication.AnimationPoseRemoves.size());
 		for (const auto &Remove : Publication.AnimationPoseRemoves) {
-			if (!Remove.Object.IsValid() || !TouchedPoses.insert(Remove.Object).second ||
+			if (!Remove.Object.IsValid() ||
 				(!Publication.FullResync && !AnimationPoses.contains(Remove.Object)))
 				throw std::invalid_argument("Render publication contains an invalid or stale animation pose removal");
+			TouchedPoseScratch.push_back(Remove.Object);
 		}
 		for (const auto &Update : Publication.AnimationPoseUpdates) {
-			if (!Update.Object.IsValid() || !Update.SourceMesh.IsValid() || !Update.PosedMesh.IsValid() ||
-				Update.SourceMesh == Update.PosedMesh || Update.PoseRevision == 0 || !Update.BonePalette ||
-				Update.BonePalette->empty() || Update.BonePalette->size() > 256 ||
-				!TouchedPoses.insert(Update.Object).second || !MeshExistsAfterPublication(Update.SourceMesh) ||
-				!MeshExistsAfterPublication(Update.PosedMesh) ||
-				ObjectMeshAfterPublication(Update.Object) != std::optional(Update.PosedMesh))
+			const auto SourceSkeleton = SkeletonAfterPublication(Update.SourceMesh);
+			const auto SourceJointCount = SkeletonJointCountAfterPublication(Update.SourceMesh);
+			if (!Update.Object.IsValid() || !Update.SourceMesh.IsValid() || Update.PoseRevision == 0 ||
+				!Update.Palette.Skeleton.IsValid() || !Update.Palette.Entries || Update.Palette.Entries->empty() ||
+				Update.Palette.Entries->size() > MaximumRenderSkinPaletteEntries ||
+				!MeshExistsAfterPublication(Update.SourceMesh) ||
+				!SourceSkeleton || *SourceSkeleton != Update.Palette.Skeleton ||
+				SourceJointCount != Update.Palette.Entries->size())
 				throw std::invalid_argument("Render publication animation pose update is invalid or incoherent");
-			for (const auto &Matrix : *Update.BonePalette) if (!IsFinite(Matrix))
-				throw std::invalid_argument("Render publication rejects a non-finite animation pose palette");
-			const auto Influences = SkinInfluencesAfterPublication(Update.SourceMesh);
-			if (!Influences || std::ranges::any_of(*Influences, [&](const auto &Influence) {
-				for (std::size_t Index = 0; Index < 4; ++Index)
-					if (Influence.Weights[Index] > 0.0f && Influence.Joints[Index] >= Update.BonePalette->size())
-						return true;
-				return false;
-			}))
-				throw std::invalid_argument("Render publication animation palette does not cover source skin influences");
+			TouchedPoseScratch.push_back(Update.Object);
+			if (Update.Mode == RenderAnimationSkinningMode::GpuPalette) {
+				if (Update.PosedMesh.IsValid() ||
+					ObjectMeshAfterPublication(Update.Object) != std::optional(Update.SourceMesh))
+					throw std::invalid_argument("Render publication GPU pose must retain the source mesh binding");
+			} else if (!Update.PosedMesh.IsValid() || Update.SourceMesh == Update.PosedMesh ||
+				!MeshExistsAfterPublication(Update.PosedMesh) ||
+				ObjectMeshAfterPublication(Update.Object) != std::optional(Update.PosedMesh)) {
+				throw std::invalid_argument("Render publication CPU fallback pose must bind its posed mesh");
+			}
+			for (const auto &Entry : *Update.Palette.Entries)
+				if (!IsFinite(Entry.PositionMatrix) || !IsFinite(Entry.NormalMatrix))
+					throw std::invalid_argument("Render publication rejects a non-finite animation pose palette");
+			// Source influences were validated against SkeletonJointCount at mesh
+			// creation, and the palette count is required to match that exact count.
+			// Re-walking shared source vertices here would multiply validation cost by
+			// the number of rigs without strengthening the shader bounds guarantee.
 			if (!Publication.FullResync) if (const auto Existing = AnimationPoses.find(Update.Object);
 				Existing != AnimationPoses.end() && Update.PoseRevision <= Existing->second.PoseRevision)
 				throw std::invalid_argument("Render publication rejects a stale animation pose update");
 		}
+		std::ranges::sort(TouchedPoseScratch);
+		if (std::ranges::adjacent_find(TouchedPoseScratch) != TouchedPoseScratch.end())
+			throw std::invalid_argument("Render publication contains duplicate animation pose operations");
 		for (const auto &Create : Publication.Creates)
 			if ((Create.Mesh && !MeshExistsAfterPublication(*Create.Mesh)) || !PrimitiveRangesFit(Create))
 				throw std::invalid_argument("Render publication object creation references a missing mesh");
@@ -377,8 +399,10 @@ namespace gargantuan {
 					throw std::invalid_argument("Render publication removes a mesh that remains referenced");
 			}
 			for (const auto &[Object, Pose] : AnimationPoses) {
-				if (TouchedPoses.contains(Object)) continue;
-				if (!MeshExistsAfterPublication(Pose.SourceMesh) || !MeshExistsAfterPublication(Pose.PosedMesh))
+				if (std::ranges::binary_search(TouchedPoseScratch, Object)) continue;
+				if (!MeshExistsAfterPublication(Pose.SourceMesh) ||
+					(Pose.Mode == RenderAnimationSkinningMode::CpuFallback &&
+						!MeshExistsAfterPublication(Pose.PosedMesh)))
 					throw std::invalid_argument("Render publication removes a mesh that remains referenced by an animation pose");
 			}
 		}
@@ -445,7 +469,8 @@ namespace gargantuan {
 		Meshes.reserve(Meshes.size() + Publication.MeshCreates.size());
 		for (const auto &Create : Publication.MeshCreates) {
 			Meshes.emplace(Create.Mesh, MeshEntry{Create.TopologyRevision, Create.VertexRevision,
-				Create.Vertices->size(), Create.Indices->size(), Create.Bounds, Create.SkinInfluences});
+				Create.Vertices->size(), Create.Indices->size(), Create.Bounds, Create.SkinInfluences,
+				Create.Skeleton, Create.SkeletonJointCount});
 			++Changes.MeshesCreated;
 			Changes.VertexUploadBytes += Create.Vertices->size() * sizeof(RenderVertex) + Create.Indices->size() * sizeof(std::uint32_t);
 		}
@@ -464,6 +489,7 @@ namespace gargantuan {
 		for (const auto &Update : Publication.AnimationPoseUpdates) {
 			AnimationPoses.insert_or_assign(Update.Object, Update);
 			++Changes.AnimationPosesUpdated;
+			Changes.PaletteUploadBytes += Update.Palette.Entries->size() * sizeof(RenderSkinPaletteEntry);
 		}
 		for (const auto &Remove : Publication.TextureRemoves) {
 			Textures.erase(Remove.Texture);

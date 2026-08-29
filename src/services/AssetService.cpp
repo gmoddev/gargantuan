@@ -544,7 +544,11 @@ namespace gargantuan {
 				}
 				PendingMeshes.Creates.push_back({Residency.Identity, Residency.Revision, Residency.Revision,
 					Residency.Mesh.Vertices, Residency.Mesh.Indices, Residency.Mesh.Bounds,
-					std::move(RenderInfluences)});
+					std::move(RenderInfluences),
+					Residency.Mesh.Skeleton ? RenderSkeletonIdentity{Residency.Mesh.Skeleton->CompatibilityId.Bytes}
+						: RenderSkeletonIdentity{},
+					Residency.Mesh.Skeleton && Residency.Mesh.Skeleton->Joints
+						? static_cast<std::uint32_t>(Residency.Mesh.Skeleton->Joints->size()) : 0u});
 			}
 		}
 

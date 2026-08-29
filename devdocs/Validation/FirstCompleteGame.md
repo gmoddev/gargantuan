@@ -1,6 +1,6 @@
 # First complete game validation
 
-Status: physics-query and interaction LOS slice revalidated locally on 2026-08-26. This document records a vertical-slice
+Status: Animation Foundation 2A GPU path revalidated locally on 2026-08-29. This document records a vertical-slice
 falsification exercise; it does not claim that Gargantuan is generally usable.
 
 ## Game design and scope
@@ -21,8 +21,9 @@ bounded fog, and one direct six-face `Sky` that reuses the imported square Image
 
 The deterministic `K` action completes the round for automation. It is a test
 hook implemented through the public `ActionMap`, not a native gameplay bypass.
-Networking, combat, animation, VFX, and soft bodies were intentionally
-not added.
+Networking, combat, VFX, and soft bodies were intentionally not added. The
+authored `AnimatedBeacon` is a two-joint skinned MeshPart driven by the looping
+`BeaconPulse` clip through the public Animator/AnimationTrack API.
 
 ## Authoring workflow used
 
@@ -74,12 +75,14 @@ honest claim of an entirely GUI-authored workflow.
 - kinematic player motion, physics stepping, camera, and renderer publication;
 - saved Lighting/Sky authoring, coherent Image residency, environment-only
   publication, sun/shadow/fog/exposure state, and package shader inclusion;
+- canonical skinned Mesh/Animation assets, renderer-neutral palette
+  publication, GPU opaque/shadow skinning, CPU fallback, and renderer restart;
 - ordinary Luau scripts, services, signals, cleanup, and structured output;
 - `ScreenGui`, `Frame`, `ImageLabel`, `TextLabel`, `TextButton`, layout, input,
   activation, visibility, and viewport resize;
 - isolated Play/Stop, GUI/runtime mutation discard, and standalone execution.
 
-The persisted project has 32 Instances, 9 authored GUI Instances, and 5 imported asset
+The persisted project has 32 Instances, 9 authored GUI Instances, and 7 imported asset
 records. A representative headless runtime composition step is approximately
 0.1 ms on the validation machine; this is not a frame-time benchmark. A local
 real-GPU cold offscreen capture was approximately 250 ms, including renderer
@@ -128,6 +131,16 @@ and exact prompt anchor and proves it becomes unavailable, then destroys the
 wall and proves availability returns. This uses the same query/filter/identity
 path available to ordinary gameplay; there is no sample-specific LOS helper.
 
+Animation Foundation 2A keeps Animator sampling, blending, hierarchy solving,
+and the current semantic pose in the runtime. Graphical FirstCompleteGame GPU
+validation consumes that publication with one stable skinned source resource
+and a per-rig palette, observes advancing pose revisions and palette uploads,
+and observes zero CPU-skinned vertex uploads. A fresh renderer full resync
+recreates the source/palette resources from the current pose without restarting
+the track. The headless and packaged gates assert palette-only publication with
+no posed mesh or dynamic vertex update. Opaque and shadow passes bind the same
+palette resource/revision.
+
 ## Studio and API findings
 
 Findings use the requested A-F categories.
@@ -141,14 +154,15 @@ Findings use the requested A-F categories.
 | E - architecture defect | `UDim2` persistence loss and the split Play-viewport resource publication were real cross-system defects. The gate covers `UDim2` and coherent runtime world/UI publication; the separate real-GPU viewport smoke covers device consumption. |
 | F - game-specific need | The course geometry, crystal art, obstacle tuning, counter copy, and win-panel styling do not justify engine work. |
 
-Animation would further improve presentation, but it does not block this game's
-complete loop. Audio Foundation 1 now closes the earlier presentation gap with
+Animation Foundation 1 and 2A now animate the authored beacon without changing
+the game loop. Audio Foundation 1 closes the earlier presentation gap with
 optional cues that remain fail-open and irrelevant to gameplay correctness.
 
 ## Asset evidence
 
-The five project records reopen as `Ready`: Mesh, Material, Image, Font, and Audio.
-The Mesh depends on Material, Material depends on Image, and the authored
+The seven project records reopen as `Ready`: two Mesh assets, Material, Image,
+Font, Audio, and Animation. The static Mesh depends on Material, Material
+depends on Image, and Animation depends on its compatible skinned Mesh. The authored
 `MeshPart`, `ImageLabel`, `TextLabel`, all six Sky faces, and all four Sounds resolve only
 `asset://` references.
 The PNG was reduced from 1024 to 512 pixels after standalone validation showed

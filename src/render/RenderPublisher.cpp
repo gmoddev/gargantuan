@@ -385,8 +385,8 @@ namespace gargantuan {
 			Result = AddBounded(Result, MultiplyBounded(Publication.AnimationPoseRemoves.size(),
 				sizeof(RenderAnimationPoseRemove)));
 			for (const auto &Update : Publication.AnimationPoseUpdates)
-				if (Update.BonePalette) Result = AddBounded(Result,
-					MultiplyBounded(Update.BonePalette->size(), sizeof(glm::mat4)));
+				if (Update.Palette.Entries) Result = AddBounded(Result,
+					MultiplyBounded(Update.Palette.Entries->size(), sizeof(RenderSkinPaletteEntry)));
 			for (const auto &Create : Publication.TextureCreates)
 				if (Create.Pixels) Result = AddBounded(Result, Create.Pixels->size());
 			for (const auto &Update : Publication.TextureUpdates)
@@ -655,9 +655,17 @@ namespace gargantuan {
 				throw std::invalid_argument("Render publisher rejects an invalid or duplicate asset mesh creation");
 			for (const auto Index : *Create.Indices) if (Index >= Create.Vertices->size())
 				throw std::invalid_argument("Render publisher rejects an out-of-range asset mesh index");
+			if (Create.SkinInfluences) {
+				if (!Create.Skeleton.IsValid() || Create.SkeletonJointCount == 0 ||
+					Create.SkeletonJointCount > MaximumRenderSkinPaletteEntries ||
+					Create.SkinInfluences->size() != Create.Vertices->size())
+					throw std::invalid_argument("Render publisher rejects incoherent asset skin metadata");
+			} else if (Create.Skeleton.IsValid() || Create.SkeletonJointCount != 0) {
+				throw std::invalid_argument("Render publisher rejects skeleton metadata without skin influences");
+			}
 			PublishedAssetMeshes.emplace(Create.Mesh, PublishedAssetMesh{
 				Create.TopologyRevision, Create.VertexRevision, Create.Vertices, Create.Indices, Create.Bounds,
-				Create.SkinInfluences
+				Create.SkinInfluences, Create.Skeleton, Create.SkeletonJointCount
 			});
 			PendingAssetMeshCreates.push_back(Create);
 		}
@@ -678,20 +686,27 @@ namespace gargantuan {
 		};
 		for (const auto &Update : Updates) {
 			const auto &Pose = Update.Pose;
-			if (!Pose.Object.IsValid() || !Pose.SourceMesh.IsValid() || !Pose.PosedMesh.IsValid() ||
-				Pose.SourceMesh == Pose.PosedMesh || Pose.PoseRevision == 0 || Update.TopologyRevision == 0 ||
-				!Pose.BonePalette || Pose.BonePalette->empty() ||
-				Pose.BonePalette->size() > AssetLimits::MaximumSkeletonBones || !Update.Vertices ||
-				Update.Vertices->empty() || !Update.Indices || Update.Indices->empty() ||
+			if (!Pose.Object.IsValid() || !Pose.SourceMesh.IsValid() || Pose.PoseRevision == 0 ||
+				Update.TopologyRevision == 0 || !Pose.Palette.Skeleton.IsValid() || !Pose.Palette.Entries ||
+				Pose.Palette.Entries->empty() || Pose.Palette.Entries->size() > MaximumRenderSkinPaletteEntries ||
 				HasPending(Pose.Object))
 				throw std::invalid_argument("Render publisher rejects an invalid or duplicate animation pose update");
-			for (const auto &Matrix : *Pose.BonePalette) if (!IsFinite(Matrix))
+			for (const auto &Entry : *Pose.Palette.Entries)
+				if (!IsFinite(Entry.PositionMatrix) || !IsFinite(Entry.NormalMatrix))
 				throw std::invalid_argument("Render publisher rejects a non-finite animation palette");
-			for (const auto &Vertex : *Update.Vertices)
-				if (!IsFinite(Vertex.Position) || !IsFinite(Vertex.Normal) || !IsFinite(Vertex.Tangent))
-					throw std::invalid_argument("Render publisher rejects non-finite CPU-skinned vertices");
-			for (const auto Index : *Update.Indices) if (Index >= Update.Vertices->size())
-				throw std::invalid_argument("Render publisher rejects an out-of-range animated mesh index");
+			if (Pose.Mode == RenderAnimationSkinningMode::GpuPalette) {
+				if (Pose.PosedMesh.IsValid() || Update.Vertices || Update.Indices)
+					throw std::invalid_argument("Render publisher rejects CPU mesh data in a GPU palette pose");
+			} else {
+				if (!Pose.PosedMesh.IsValid() || Pose.SourceMesh == Pose.PosedMesh || !Update.Vertices ||
+					Update.Vertices->empty() || !Update.Indices || Update.Indices->empty())
+					throw std::invalid_argument("Render publisher rejects an incomplete CPU fallback pose");
+				for (const auto &Vertex : *Update.Vertices)
+					if (!IsFinite(Vertex.Position) || !IsFinite(Vertex.Normal) || !IsFinite(Vertex.Tangent))
+						throw std::invalid_argument("Render publisher rejects non-finite CPU-skinned vertices");
+				for (const auto Index : *Update.Indices) if (Index >= Update.Vertices->size())
+					throw std::invalid_argument("Render publisher rejects an out-of-range animated mesh index");
+			}
 			if (const auto Existing = AnimationPoses.find(Pose.Object); Existing != AnimationPoses.end() &&
 				Pose.PoseRevision <= Existing->second.Pose.PoseRevision)
 				throw std::invalid_argument("Render publisher rejects a stale animation pose revision");
@@ -773,7 +788,8 @@ namespace gargantuan {
 				auto DisplayMesh = Extracted->Mesh;
 				if (const auto Animated = AnimationPoses.find(Extracted->Item.Object);
 					Animated != AnimationPoses.end() && Animated->second.Pose.SourceMesh == Extracted->Mesh)
-					DisplayMesh = Animated->second.Pose.PosedMesh;
+					DisplayMesh = Animated->second.Pose.Mode == RenderAnimationSkinningMode::CpuFallback
+						? Animated->second.Pose.PosedMesh : Animated->second.Pose.SourceMesh;
 				Result->Creates.push_back({Extracted->Item, DisplayMesh, Extracted->Material, true,
 					Extracted->Primitives});
 				Replacement.emplace(Extracted->Item.Object, Extracted->Item);
@@ -812,15 +828,17 @@ namespace gargantuan {
 			std::ranges::sort(OrderedAssetMeshes, {}, &std::pair<RenderMeshIdentity, PublishedAssetMesh>::first);
 			for (const auto &[Identity, Mesh] : OrderedAssetMeshes)
 				Result->MeshCreates.push_back({Identity, Mesh.TopologyRevision, Mesh.VertexRevision,
-					Mesh.Vertices, Mesh.Indices, Mesh.Bounds, Mesh.SkinInfluences});
+					Mesh.Vertices, Mesh.Indices, Mesh.Bounds, Mesh.SkinInfluences, Mesh.Skeleton,
+					Mesh.SkeletonJointCount});
 			std::vector<std::pair<ObjectId, RenderAnimationPoseState>> OrderedAnimationPoses(
 				AnimationPoses.begin(), AnimationPoses.end());
 			std::ranges::sort(OrderedAnimationPoses, {},
 				&std::pair<ObjectId, RenderAnimationPoseState>::first);
 			for (const auto &[Object, State] : OrderedAnimationPoses) {
 				(void)Object;
-				Result->MeshCreates.push_back({State.Pose.PosedMesh, State.TopologyRevision,
-					State.Pose.PoseRevision, State.Vertices, State.Indices, State.Bounds});
+				if (State.Pose.Mode == RenderAnimationSkinningMode::CpuFallback)
+					Result->MeshCreates.push_back({State.Pose.PosedMesh, State.TopologyRevision,
+						State.Pose.PoseRevision, State.Vertices, State.Indices, State.Bounds});
 				Result->AnimationPoseUpdates.push_back(State.Pose);
 			}
 			Result->UiChanged = true;
@@ -1014,7 +1032,8 @@ namespace gargantuan {
 				auto DisplayMesh = Extracted->Mesh;
 				if (const auto Animated = AnimationPoses.find(Object);
 					Animated != AnimationPoses.end() && Animated->second.Pose.SourceMesh == Extracted->Mesh)
-					DisplayMesh = Animated->second.Pose.PosedMesh;
+					DisplayMesh = Animated->second.Pose.Mode == RenderAnimationSkinningMode::CpuFallback
+						? Animated->second.Pose.PosedMesh : Animated->second.Pose.SourceMesh;
 				if (Previous == PublishedItems.end()) Result->Creates.push_back({
 					Extracted->Item, DisplayMesh, Extracted->Material, true, Extracted->Primitives
 				});
@@ -1080,26 +1099,33 @@ namespace gargantuan {
 			const auto CurrentPose = AnimationPoses.find(Object);
 			if (PreviousPose == CommittedAnimationPoses.end() && CurrentPose != AnimationPoses.end()) {
 				const auto &State = CurrentPose->second;
-				Result->MeshCreates.push_back({State.Pose.PosedMesh, State.TopologyRevision,
-					State.Pose.PoseRevision, State.Vertices, State.Indices, State.Bounds});
+				if (State.Pose.Mode == RenderAnimationSkinningMode::CpuFallback)
+					Result->MeshCreates.push_back({State.Pose.PosedMesh, State.TopologyRevision,
+						State.Pose.PoseRevision, State.Vertices, State.Indices, State.Bounds});
 				Result->AnimationPoseUpdates.push_back(State.Pose);
 			} else if (PreviousPose != CommittedAnimationPoses.end() && CurrentPose == AnimationPoses.end()) {
-				Result->MeshRemoves.push_back({PreviousPose->second.Pose.PosedMesh});
+				if (PreviousPose->second.Pose.Mode == RenderAnimationSkinningMode::CpuFallback)
+					Result->MeshRemoves.push_back({PreviousPose->second.Pose.PosedMesh});
 				Result->AnimationPoseRemoves.push_back({Object});
 			} else if (PreviousPose != CommittedAnimationPoses.end() && CurrentPose != AnimationPoses.end()) {
 				const auto &PreviousState = PreviousPose->second;
 				const auto &State = CurrentPose->second;
-				if (PreviousState.Pose.PosedMesh != State.Pose.PosedMesh ||
+				const bool CpuFallback = State.Pose.Mode == RenderAnimationSkinningMode::CpuFallback;
+				if (PreviousState.Pose.Mode != State.Pose.Mode ||
 					PreviousState.Pose.SourceMesh != State.Pose.SourceMesh ||
+					PreviousState.Pose.Palette.Skeleton != State.Pose.Palette.Skeleton ||
 					PreviousState.TopologyRevision != State.TopologyRevision ||
-					PreviousState.Vertices->size() != State.Vertices->size() ||
-					PreviousState.Indices->size() != State.Indices->size()) {
+					PreviousState.Pose.Palette.Entries->size() != State.Pose.Palette.Entries->size() ||
+					(CpuFallback && (PreviousState.Pose.PosedMesh != State.Pose.PosedMesh ||
+						PreviousState.Vertices->size() != State.Vertices->size() ||
+						PreviousState.Indices->size() != State.Indices->size()))) {
 					FullResyncRequested = true;
 					return FullResync();
 				}
 				if (State.Pose.PoseRevision > PreviousState.Pose.PoseRevision) {
-					Result->MeshVertexUpdates.push_back({State.Pose.PosedMesh, State.Pose.PoseRevision,
-						0, State.Vertices, State.Bounds});
+					if (CpuFallback)
+						Result->MeshVertexUpdates.push_back({State.Pose.PosedMesh, State.Pose.PoseRevision,
+							0, State.Vertices, State.Bounds});
 					Result->AnimationPoseUpdates.push_back(State.Pose);
 				}
 			}

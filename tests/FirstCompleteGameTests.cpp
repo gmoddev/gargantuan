@@ -164,11 +164,20 @@ namespace {
 			Session.Step();
 		}
 		auto AnimationPublication = TakeLatestRenderPublication(Session);
-		Evidence.SawAnimationPose = Evidence.SawAnimationPose || (AnimationPublication &&
-			std::ranges::any_of(AnimationPublication->AnimationPoseUpdates, [&](const auto &Pose) {
+		const auto BeaconPose = AnimationPublication
+			? std::ranges::find_if(AnimationPublication->AnimationPoseUpdates, [&](const auto &Pose) {
 				return Pose.Object == AnimatedBeacon->GetObjectId();
-			}));
+			})
+			: decltype(AnimationPublication->AnimationPoseUpdates)::const_iterator{};
+		const bool HasBeaconPose = AnimationPublication && BeaconPose != AnimationPublication->AnimationPoseUpdates.end();
+		Evidence.SawAnimationPose = Evidence.SawAnimationPose || HasBeaconPose;
 		Require(Evidence.SawAnimationPose, "headless Play did not publish the authored animated beacon pose");
+		if (HasBeaconPose) Require(
+			BeaconPose->Mode == RenderAnimationSkinningMode::GpuPalette && !BeaconPose->PosedMesh.IsValid() &&
+				BeaconPose->Palette.Entries && !BeaconPose->Palette.Entries->empty() &&
+				AnimationPublication->MeshVertexUpdates.empty(),
+			"headless Play must retain the current semantic palette without CPU-skinned vertex data"
+		);
 		(void)Session.ProcessEvent(ForwardUp);
 		Require(glm::length(Character->GetPosition() - Start) > 0.05f,
 			"ActionMap input did not produce default kinematic motion through physics");

@@ -344,8 +344,8 @@ namespace {
 		const auto Sine = std::sin(Angle);
 		const glm::vec3 ExpectedUpperAxis(Cosine, Sine, 0.0f);
 		const glm::vec3 ExpectedLowerOrigin(Cosine * Fraction - Sine, 1.0f + Sine * Fraction + Cosine, 0.0f);
-		const bool Valid = Pose && Pose->JointModelTransforms && Pose->BonePalette &&
-			Pose->JointModelTransforms->size() == 3 && Pose->BonePalette->size() == 3;
+		const bool Valid = Pose && Pose->JointModelTransforms && Pose->SkinPalette &&
+			Pose->JointModelTransforms->size() == 3 && Pose->SkinPalette->size() == 3;
 		Check(Valid, "headless runtime publishes a complete three-joint pose");
 		if (!Valid) return;
 		const auto UpperAxis = glm::vec3((*Pose->JointModelTransforms)[1] * glm::vec4(1.0f, 0.0f, 0.0f, 0.0f));
@@ -370,12 +370,17 @@ namespace {
 		ImportedMesh Mesh;
 		Mesh.Vertices = Vertices;
 		Mesh.SkinInfluences = Influences;
-		std::array<glm::mat4, 2> Palette{
+		const std::array<glm::mat4, 2> PositionMatrices{
 			glm::translate(glm::mat4(1.0f), glm::vec3(2.0f, 0.0f, 0.0f)) *
 				glm::rotate(glm::mat4(1.0f), std::numbers::pi_v<float> * 0.5f, glm::vec3(0.0f, 0.0f, 1.0f)),
 			glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 2.0f, 0.0f)) *
 				glm::scale(glm::mat4(1.0f), glm::vec3(2.0f, 1.0f, 0.5f)),
 		};
+		std::array<RenderSkinPaletteEntry, 2> Palette;
+		for (std::size_t Index = 0; Index < Palette.size(); ++Index) {
+			Palette[Index].PositionMatrix = PositionMatrices[Index];
+			Palette[Index].NormalMatrix = glm::mat4(glm::transpose(glm::inverse(glm::mat3(PositionMatrices[Index]))));
+		}
 		std::vector<RenderVertex> Output;
 		RenderBounds Bounds;
 		Check(AnimationRuntime::SkinMeshCpu(Mesh, Palette, Output, Bounds),
@@ -389,15 +394,16 @@ namespace {
 			"two-bone weighted skinning produces the golden position");
 		const auto SourceNormal = (*Vertices)[1].Normal;
 		const auto ExpectedNormal = glm::normalize(
-			glm::transpose(glm::inverse(glm::mat3(Palette[0]))) * SourceNormal * 0.25f +
-			glm::transpose(glm::inverse(glm::mat3(Palette[1]))) * SourceNormal * 0.75f
+			glm::mat3(Palette[0].NormalMatrix) * SourceNormal * 0.25f +
+			glm::mat3(Palette[1].NormalMatrix) * SourceNormal * 0.75f
 		);
 		Check(Near(Output[1].Normal, ExpectedNormal),
 			"skinned normals use the inverse-transpose under rotation and nonuniform scale");
 		auto Singular = Palette;
-		Singular[1] = glm::scale(glm::mat4(1.0f), glm::vec3(1.0f, 0.0f, 1.0f));
+		Singular[0].NormalMatrix = glm::mat4(0.0f);
+		Singular[1].NormalMatrix = glm::mat4(0.0f);
 		Check(!AnimationRuntime::SkinMeshCpu(Mesh, Singular, Output, Bounds),
-			"CPU skinning fails closed on a singular weighted transform");
+			"CPU skinning fails closed on an invalid normal transform");
 	}
 }
 
@@ -667,38 +673,74 @@ int main() {
 	Check(FirstPublication->FullResync && FirstPublication->AnimationPoseUpdates.size() == 1 &&
 		FirstPublication->AnimationPoseUpdates[0].Object == Rig->GetObjectId() &&
 		FirstAnimatedObject != FirstPublication->Creates.end() && FirstAnimatedObject->Mesh &&
-		*FirstAnimatedObject->Mesh == FirstPublication->AnimationPoseUpdates[0].PosedMesh,
-		"full publication binds the posed dynamic mesh to the MeshPart render identity");
+		*FirstAnimatedObject->Mesh == FirstPublication->AnimationPoseUpdates[0].SourceMesh &&
+		!FirstPublication->AnimationPoseUpdates[0].PosedMesh.IsValid() &&
+		FirstPublication->AnimationPoseUpdates[0].Mode == RenderAnimationSkinningMode::GpuPalette &&
+		FirstPublication->AnimationPoseUpdates[0].Palette.Entries &&
+		FirstPublication->AnimationPoseUpdates[0].Palette.Entries->size() == 3,
+		"full GPU publication retains the immutable source mesh and carries only the final palette");
 	RenderProjection Projection;
 	auto FirstApplied = Projection.Apply(*FirstPublication);
-	Check(FirstApplied.AnimationPosesUpdated == 1 && Projection.GetAnimationPose(Rig->GetObjectId()),
-		"headless render projection accepts renderer-neutral pose plus CPU-skinned geometry");
+	Check(FirstApplied.AnimationPosesUpdated == 1 &&
+		FirstApplied.PaletteUploadBytes == 3 * sizeof(RenderSkinPaletteEntry) &&
+		Projection.GetAnimationPose(Rig->GetObjectId()),
+		"headless render projection accepts the renderer-neutral source mesh and palette contract");
 	Runtime.Step(0.1f);
 	Publisher.SetAnimationPoseChanges(Runtime.GetPoseUpdates(), Runtime.GetPoseRemoves());
 	Runtime.ClearChanges();
 	auto Incremental = Publisher.Publish(*WorkspaceValue, RenderCameraInput{}, 640, 360);
 	Check(!Incremental->FullResync && Incremental->AnimationPoseUpdates.size() == 1 &&
-		Incremental->MeshVertexUpdates.size() == 1 && Incremental->Creates.empty() &&
+		Incremental->MeshVertexUpdates.empty() && Incremental->MeshCreates.empty() && Incremental->Creates.empty() &&
 		std::ranges::none_of(Incremental->Updates, [&](const auto &Update) {
 			return Update.Object == StaticPart->GetObjectId();
-		}), "one animated rig publishes one pose/vertex update and zero static-object updates");
+		}), "one GPU animated rig publishes one palette update, no dynamic vertices, and zero static-object updates");
 	(void)Projection.Apply(*Incremental);
+	auto CpuFallbackAnimator = std::make_shared<Animator>();
+	CpuFallbackAnimator->SetParent(Rig);
+	auto CpuFallbackTrack = CpuFallbackAnimator->CreateTrack(WaveRecord->Reference.Value);
+	CpuFallbackTrack->SetLooped(true);
+	CpuFallbackTrack->Play();
+	CpuFallbackTrack->SetTimePosition(WaveTrack->GetTimePosition());
+	AnimationRuntime CpuFallbackRuntime(
+		Assets, {}, AnimationRuntimeOptions{.CpuSkinningFallback = true});
+	CpuFallbackRuntime.RegisterAnimator(CpuFallbackAnimator);
+	CpuFallbackRuntime.Step(0.0f);
+	const auto &CpuFallbackUpdates = CpuFallbackRuntime.GetPoseUpdates();
+	Check(CpuFallbackUpdates.size() == 1 &&
+		CpuFallbackUpdates[0].Pose.Mode == RenderAnimationSkinningMode::CpuFallback &&
+		CpuFallbackUpdates[0].Pose.PosedMesh.IsValid() && CpuFallbackUpdates[0].Vertices &&
+		CpuFallbackUpdates[0].Vertices->size() == MeshResource->Value.Vertices->size() &&
+		CpuFallbackRuntime.GetMetrics().SkinnedVertices == MeshResource->Value.Vertices->size(),
+		"an explicitly unsupported graphical backend retains the pooled CPU-skinned fallback path");
+	RenderPublisher CpuFallbackPublisher;
+	CpuFallbackPublisher.SetAssetMeshChanges(FirstPublication->MeshCreates, {});
+	CpuFallbackPublisher.SetAnimationPoseChanges(CpuFallbackUpdates, CpuFallbackRuntime.GetPoseRemoves());
+	auto CpuFallbackPublication = CpuFallbackPublisher.Publish(
+		*WorkspaceValue, RenderCameraInput{}, 640, 360);
+	RenderProjection CpuFallbackProjection;
+	Check(CpuFallbackPublication->MeshCreates.size() == FirstPublication->MeshCreates.size() + 1 &&
+		CpuFallbackProjection.Apply(*CpuFallbackPublication).AnimationPosesUpdated == 1 &&
+		CpuFallbackProjection.GetAnimationPose(Rig->GetObjectId())->Mode ==
+			RenderAnimationSkinningMode::CpuFallback,
+		"CPU fallback publication reconstructs its private posed mesh through the same projection contract");
+	CpuFallbackRuntime.Shutdown();
+	CpuFallbackAnimator->Destroy();
 	Publisher.RequestFullResync();
 	auto RestartPublication = Publisher.Publish(*WorkspaceValue, RenderCameraInput{}, 640, 360);
 	RenderProjection RestartedProjection;
 	Check(RestartPublication->FullResync && RestartPublication->AnimationPoseUpdates.size() == 1 &&
 		RestartedProjection.Apply(*RestartPublication).AnimationPosesUpdated == 1 &&
 		RestartedProjection.GetAnimationPose(Rig->GetObjectId()),
-		"renderer restart reconstructs current dynamic mesh and semantic bone palette");
+		"renderer restart reconstructs current source residency and semantic palette without restarting playback");
 	WaveTrack->Stop();
 	Runtime.Step(0.0f);
 	Publisher.SetAnimationPoseChanges(Runtime.GetPoseUpdates(), Runtime.GetPoseRemoves());
 	Runtime.ClearChanges();
 	auto RemovalPublication = Publisher.Publish(*WorkspaceValue, RenderCameraInput{}, 640, 360);
 	Check(RemovalPublication->AnimationPoseRemoves.size() == 1 &&
-		RemovalPublication->MeshRemoves.size() == 1 &&
+		RemovalPublication->MeshRemoves.empty() &&
 		RemovalPublication->AnimationPoseRemoves[0].Object == Rig->GetObjectId(),
-		"Stop removes only the transient posed residency and restores source-mesh rendering");
+		"Stop retires only the GPU palette state because source-mesh residency remains shared");
 
 	WaveTrack->SetLooped(true);
 	WaveTrack->Play();
@@ -706,7 +748,7 @@ int main() {
 	auto AllocationsAfterWarmup = Runtime.GetMetrics().BufferAllocations;
 	for (std::size_t Frame = 0; Frame < 128; ++Frame) Runtime.Step(1.0f / 60.0f);
 	Check(Runtime.GetMetrics().BufferAllocations == AllocationsAfterWarmup,
-		"steady-state animation evaluation performs no new pose, palette, or skinned-vertex buffer allocations");
+		"steady-state GPU animation evaluation performs no new model-transform or palette allocations");
 
 	auto ModifiedFixture = MakeAnimationGltfFixture(2.0f, 120.0f);
 	WriteBytes(Root / "assets" / "animated-rig.glb", MakeGlb(ModifiedFixture));
@@ -827,9 +869,9 @@ int main() {
 	World.reset();
 
 	if (Failures == 0) {
-		std::cout << "All Animation Foundation 1 tests passed\n";
+		std::cout << "All Animation Foundation 1 and GPU publication tests passed\n";
 		return 0;
 	}
-	std::cerr << Failures << " Animation Foundation 1 test(s) failed\n";
+	std::cerr << Failures << " Animation Foundation test(s) failed\n";
 	return 1;
 }

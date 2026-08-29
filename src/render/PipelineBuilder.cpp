@@ -1,5 +1,6 @@
 #include "render/sdl/SDLPipelineBuilder.hpp"
 #include "gargantuan/render/Mesh.hpp"
+#include "gargantuan/render/SDLRenderer.hpp"
 #include <SDL3/SDL_gpu.h>
 #include <array>
 #include <cstddef>
@@ -46,10 +47,13 @@ namespace gargantuan {
 			.pitch = sizeof(Vertex),
 			.input_rate = SDL_GPU_VERTEXINPUTRATE_VERTEX,
 		}}};
-		static const std::array<SDL_GPUVertexAttribute, 3> Attributes{{
+		static const std::array<SDL_GPUVertexAttribute, 6> Attributes{{
 			{.location = 0, .buffer_slot = 0, .format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3, .offset = offsetof(Vertex, Position)},
 			{.location = 1, .buffer_slot = 0, .format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3, .offset = offsetof(Vertex, Normal)},
-			{.location = 2, .buffer_slot = 0, .format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT2, .offset = offsetof(Vertex, UV)},
+			{.location = 2, .buffer_slot = 0, .format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4, .offset = offsetof(Vertex, Tangent)},
+			{.location = 3, .buffer_slot = 0, .format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT2, .offset = offsetof(Vertex, UV)},
+			{.location = 4, .buffer_slot = 0, .format = SDL_GPU_VERTEXELEMENTFORMAT_USHORT4, .offset = offsetof(Vertex, Joints)},
+			{.location = 5, .buffer_slot = 0, .format = SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4, .offset = offsetof(Vertex, Weights)},
 		}};
 		SDL_GPUGraphicsPipelineCreateInfo info{};
 		info.vertex_shader = VertexShader;
@@ -102,8 +106,10 @@ namespace gargantuan {
 		return info;
 	}
 
-	SDL_GPUGraphicsPipeline *SDLPipelineBuilder::Build(SDL_GPUDevice *gpu) {
+	SDL_GPUGraphicsPipeline *SDLPipelineBuilder::Build(SDL_GPUDevice *gpu, SDLRendererMetrics *Metrics) {
 		auto info = BuildInfo();
-		return SDL_CreateGPUGraphicsPipeline(gpu, &info);
+		auto *Pipeline = SDL_CreateGPUGraphicsPipeline(gpu, &info);
+		if (Pipeline && Metrics) ++Metrics->PipelineCreations;
+		return Pipeline;
 	}
 } // namespace gargantuan

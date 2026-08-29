@@ -228,6 +228,13 @@ int main() {
 		auto AnimationRuntimePublication = Renderer.TakeLastPublication();
 		Require(AnimationRuntimePublication && AnimationRuntimePublication->AnimationPoseUpdates.size() == 1,
 			"packaged runtime did not start and publish the canonical animated beacon");
+		const auto &PackagedPose = AnimationRuntimePublication->AnimationPoseUpdates.front();
+		Require(
+			PackagedPose.Mode == RenderAnimationSkinningMode::GpuPalette &&
+				!PackagedPose.PosedMesh.IsValid() && PackagedPose.Palette.Entries &&
+				!PackagedPose.Palette.Entries->empty() && AnimationRuntimePublication->MeshVertexUpdates.empty(),
+			"headless packaged runtime must publish a semantic palette without CPU-skinned vertex data"
+		);
 		(void)RuntimeEngine.ProcessEvent(
 			KeyEvent{{1}, PhysicalKey::W, LogicalKey::W, KeyModifier::None, ButtonState::Pressed}
 		);

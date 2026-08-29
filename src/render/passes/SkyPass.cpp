@@ -24,14 +24,14 @@ namespace gargantuan {
 			glm::vec4 EnvironmentColorHasSky;
 		};
 
-		SkyPass(SDL_GPUDevice *Gpu, SDL_GPUTextureFormat SwapchainFormat) {
+		SkyPass(SDL_GPUDevice *Gpu, SDL_GPUTextureFormat SwapchainFormat, SDLRendererMetrics *Metrics) {
 			try {
 				Shader.VertexFilepath = GetSDLShaderPath("sky.vert");
 				Shader.VertexUniformBufferCount = 1;
 				Shader.FragmentFilepath = GetSDLShaderPath("sky.frag");
 				Shader.FragmentUniformBufferCount = 1;
 				Shader.FragmentSamplerCount = 6;
-				Shader.Init(Gpu);
+				Shader.Init(Gpu, Metrics);
 				auto PipelineInfo = SDLPipelineBuilder()
 										.SetVertexShader(Shader.VertexShader)
 										.SetFragmentShader(Shader.FragmentShader)
@@ -41,6 +41,7 @@ namespace gargantuan {
 				PipelineInfo.vertex_input_state = {};
 				PipelineInfo.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_NONE;
 				Pipeline = SDL_CreateGPUGraphicsPipeline(Gpu, &PipelineInfo);
+				if (Pipeline && Metrics) ++Metrics->PipelineCreations;
 				SDL_GPUSamplerCreateInfo SamplerInfo{
 					.min_filter = SDL_GPU_FILTER_LINEAR,
 					.mag_filter = SDL_GPU_FILTER_LINEAR,
@@ -169,7 +170,9 @@ namespace gargantuan {
 		SDL_GPUSampler *Sampler = nullptr;
 	};
 
-	std::unique_ptr<SDLRenderPass> CreateSkyPass(SDL_GPUDevice *Gpu, SDL_GPUTextureFormat SwapchainFormat) {
-		return std::make_unique<SkyPass>(Gpu, SwapchainFormat);
+	std::unique_ptr<SDLRenderPass> CreateSkyPass(
+		SDL_GPUDevice *Gpu, SDL_GPUTextureFormat SwapchainFormat, SDLRendererMetrics *Metrics
+	) {
+		return std::make_unique<SkyPass>(Gpu, SwapchainFormat, Metrics);
 	}
 }

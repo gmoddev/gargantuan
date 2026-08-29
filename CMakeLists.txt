@@ -105,6 +105,7 @@ file(GLOB_RECURSE SHADER_SOURCES CONFIGURE_DEPENDS
 	"assets/shaders/*.vert"
 	"assets/shaders/*.frag"
 )
+file(GLOB_RECURSE SHADER_INCLUDE_SOURCES CONFIGURE_DEPENDS "assets/shaders/*.glsl")
 
 set(SHADER_OUTPUTS "")
 file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/shaders")
@@ -115,7 +116,7 @@ foreach(SHADER IN LISTS SHADER_SOURCES)
 	add_custom_command(
 		OUTPUT ${SPIRV_OUTPUT}
 		COMMAND ${GARGANTUAN_GLSLC_EXECUTABLE} ${SHADER} -o ${SPIRV_OUTPUT}
-		DEPENDS ${SHADER}
+		DEPENDS ${SHADER} ${SHADER_INCLUDE_SOURCES}
 		COMMENT "Compiling SPIR-V ${SHADER_NAME}"
 	)
 	list(APPEND SHADER_OUTPUTS ${SPIRV_OUTPUT})
@@ -643,6 +644,14 @@ if(BUILD_TESTING)
 		add_executable(gargantuan_renderer_foundation2_gpu_benchmark "tests/RendererFoundation2GpuBenchmark.cpp")
 		target_link_libraries(gargantuan_renderer_foundation2_gpu_benchmark PRIVATE gargantuan_core)
 		add_dependencies(gargantuan_renderer_foundation2_gpu_benchmark gargantuan_shaders)
+		add_executable(gargantuan_first_complete_game_gpu_tests "tests/FirstCompleteGameGpuTests.cpp")
+		target_link_libraries(gargantuan_first_complete_game_gpu_tests PRIVATE gargantuan_core)
+		target_compile_definitions(gargantuan_first_complete_game_gpu_tests PRIVATE
+			GARGANTUAN_FIRST_COMPLETE_GAME_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/samples/FirstCompleteGame"
+			GARGANTUAN_RUNTIME_DISTRIBUTION_ROOT="$<TARGET_FILE_DIR:gargantuan_player>/RuntimeDistribution"
+		)
+		add_dependencies(gargantuan_first_complete_game_gpu_tests
+			gargantuan_shaders gargantuan_packager gargantuan_runtime_distribution)
 		add_executable(gargantuan_editor_viewport_smoke "tests/EditorViewportSmoke.cpp")
 		target_link_libraries(gargantuan_editor_viewport_smoke PRIVATE gargantuan_core)
 		add_dependencies(gargantuan_editor_viewport_smoke gargantuan_shaders)
@@ -760,7 +769,10 @@ if(BUILD_TESTING)
 			list(APPEND GARGANTUAN_SDL_RUNTIME_TARGETS
 				gargantuan_renderer_benchmark
 				gargantuan_renderer_foundation2_benchmark
+				gargantuan_renderer_foundation2_gpu_benchmark
+				gargantuan_first_complete_game_gpu_tests
 				gargantuan_editor_viewport_smoke
+				gargantuan_editor_viewport_presentation_benchmark
 			)
 		endif()
 		if(GARGANTUAN_WITH_FILAMENT)

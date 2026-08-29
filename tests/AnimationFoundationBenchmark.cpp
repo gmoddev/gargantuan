@@ -319,6 +319,8 @@ namespace {
 			PublisherNanoseconds += Nanoseconds(PublisherStarted);
 			Require(Publication->AnimationPoseUpdates.size() == RigCount,
 				"scenario incremental publication count differs from animated rig count");
+			Require(Publication->MeshVertexUpdates.empty() && Publication->MeshCreates.empty(),
+				"GPU animation scenario unexpectedly published CPU-skinned dynamic vertices");
 			const auto ProjectionStarted = Clock::now();
 			(void)Projection.Apply(*Publication);
 			ProjectionNanoseconds += Nanoseconds(ProjectionStarted);
@@ -379,9 +381,10 @@ namespace {
 			ImportedMesh Mesh;
 			Mesh.Vertices = Vertices;
 			Mesh.SkinInfluences = Influences;
-			std::vector<glm::mat4> Palette(64, glm::mat4(1.0f));
+			std::vector<RenderSkinPaletteEntry> Palette(64);
 			for (std::size_t Bone = 0; Bone < Palette.size(); ++Bone)
-				Palette[Bone] = glm::translate(glm::mat4(1.0f), glm::vec3(static_cast<float>(Bone) * 0.001f, 0.0f, 0.0f));
+				Palette[Bone].PositionMatrix = glm::translate(
+					glm::mat4(1.0f), glm::vec3(static_cast<float>(Bone) * 0.001f, 0.0f, 0.0f));
 			std::vector<RenderVertex> Output;
 			RenderBounds Bounds;
 			Require(AnimationRuntime::SkinMeshCpu(Mesh, Palette, Output, Bounds), "CPU skinning benchmark warmup failed");
@@ -444,10 +447,12 @@ namespace {
 		const auto StaticUpdateCount = std::ranges::count_if(Incremental->Updates, [&](const auto &Update) {
 			return Update.Object != Rig->GetObjectId();
 		});
-		Require(Incremental->AnimationPoseUpdates.size() == 1 && Incremental->MeshVertexUpdates.size() == 1 &&
-			StaticUpdateCount == 0 && Incremental->Creates.empty() && Incremental->Removes.empty(),
+		Require(Incremental->AnimationPoseUpdates.size() == 1 && Incremental->MeshVertexUpdates.empty() &&
+			Incremental->MeshCreates.empty() && StaticUpdateCount == 0 && Incremental->Creates.empty() &&
+			Incremental->Removes.empty() && !Incremental->FullResync,
 			"50K static world animation publication touched static objects");
-		std::cout << "[Animation:Benchmark] staticWorld=50000 animatedRigs=1 poseUpdates=1 staticUpdates=0 publisherMs="
+		std::cout << "[Animation:Benchmark] staticWorld=50000 animatedRigs=1 poseUpdates=1 staticUpdates=0 "
+			"cpuDynamicVertexUpdates=0 fullResyncs=0 publisherMs="
 			<< static_cast<double>(PublishNanoseconds) / 1'000'000.0 << '\n';
 		Runtime->Shutdown();
 		AnimatorValue->Destroy();
@@ -459,12 +464,12 @@ namespace {
 	void ReportMemory(std::size_t Bones, std::size_t ArtifactBytes) {
 		const auto SkeletonBytes = Bones * (sizeof(ImportedSkeletonJoint) + 16);
 		const auto AnimatorPoseBytes = Bones * (sizeof(glm::mat4) * 2 + sizeof(glm::vec3) * 2 + sizeof(glm::quat));
-		const auto PaletteBytes = Bones * sizeof(glm::mat4);
+		const auto PaletteBytes = Bones * sizeof(RenderSkinPaletteEntry);
 		const auto TrackBytes = sizeof(AnimationTrack) + Bones * sizeof(std::int32_t);
 		const auto RendererBytes = sizeof(RenderAnimationPoseUpdate) + PaletteBytes;
 		std::cout << "[Animation:Memory] bones=" << Bones << " canonicalArtifactsBytes=" << ArtifactBytes
 			<< " skeletonEstimateBytes=" << SkeletonBytes << " animatorPoseEstimateBytes=" << AnimatorPoseBytes
-			<< " activeTrackEstimateBytes=" << TrackBytes << " paletteBytes=" << PaletteBytes
+			<< " activeTrackEstimateBytes=" << TrackBytes << " positionNormalPaletteBytes=" << PaletteBytes
 			<< " rendererPoseEstimateBytes=" << RendererBytes << '\n';
 	}
 }

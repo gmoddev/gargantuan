@@ -16,6 +16,9 @@ namespace gargantuan {
 		bool Offscreen = false;
 		bool WaitForGpuCompletion = false;
 		bool DebugDevice = true;
+		std::uint32_t InjectPaletteUploadFailures = 0;
+		std::uint32_t InjectShaderCreationFailures = 0;
+		std::uint32_t InjectPipelineCreationFailures = 0;
 	};
 
 	struct SDLRendererMetrics {
@@ -35,8 +38,23 @@ namespace gargantuan {
 		std::uint64_t UiBatches = 0;
 		std::uint64_t ScissorChanges = 0;
 		std::uint64_t PipelineSwitches = 0;
+		std::uint64_t PipelineCreations = 0;
+		std::uint64_t ShaderCreations = 0;
 		std::uint64_t EnvironmentApplications = 0;
 		std::uint64_t SkyDraws = 0;
+		std::uint64_t GpuSkinningRigs = 0;
+		std::uint64_t CpuFallbackRigs = 0;
+		std::uint64_t PaletteBufferCreations = 0;
+		std::uint64_t PaletteTransferBufferCreations = 0;
+		std::uint64_t PaletteUploads = 0;
+		std::uint64_t PaletteUploadBytes = 0;
+		std::uint64_t PaletteResourceReleases = 0;
+		std::uint64_t PaletteScratchAllocations = 0;
+		std::uint64_t FallbackTransitions = 0;
+		std::uint64_t StalePoseDrops = 0;
+		std::uint64_t SkinnedSourceResourceCreations = 0;
+		std::uint64_t CpuSkinnedVertexUploads = 0;
+		std::uint64_t MainShadowPoseMismatches = 0;
 		std::uint64_t CpuProjectionNanoseconds = 0;
 		std::uint64_t CpuMeshTransferNanoseconds = 0;
 		std::uint64_t CpuTextureTransferNanoseconds = 0;
@@ -61,6 +79,7 @@ namespace gargantuan {
 		void Draw(RenderPublicationPtr Publication) override;
 		void Resize(int WidthValue, int HeightValue) override;
 		void Destroy() override;
+		[[nodiscard]] RendererCapabilities GetCapabilities() const override { return {true, true}; }
 		[[nodiscard]] std::string GetDriverName() const;
 		[[nodiscard]] SDLRendererMetrics GetMetrics() const;
 		void WaitForIdle();

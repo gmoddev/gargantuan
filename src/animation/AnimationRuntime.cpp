@@ -118,7 +118,7 @@ namespace gargantuan {
 			std::vector<std::pair<std::uint64_t, std::uint64_t>> CurrentTrackRevisions;
 			std::vector<LocalPose> LocalPoses;
 			std::vector<std::shared_ptr<std::vector<glm::mat4>>> ModelPools;
-			std::vector<std::shared_ptr<std::vector<glm::mat4>>> PalettePools;
+			std::vector<std::shared_ptr<std::vector<RenderSkinPaletteEntry>>> PalettePools;
 			std::vector<std::shared_ptr<std::vector<RenderVertex>>> VertexPools;
 			AnimationPoseSnapshot Snapshot;
 		};
@@ -131,11 +131,15 @@ namespace gargantuan {
 		std::vector<RenderAnimationPoseRemove> PoseRemoves;
 		std::vector<ObjectId> ClaimedTargets;
 		AnimationRuntimeMetrics Metrics;
+		AnimationRuntimeOptions Options;
 		std::uint64_t NextPoseRevision = 0;
 		bool ShutDown = false;
 
-		Impl(std::shared_ptr<AssetService> AssetsValue, DiagnosticCallback DiagnosticValue)
-			: Assets(std::move(AssetsValue)), Diagnostic(std::move(DiagnosticValue)) {
+		Impl(
+			std::shared_ptr<AssetService> AssetsValue,
+			DiagnosticCallback DiagnosticValue,
+			AnimationRuntimeOptions OptionsValue
+		) : Assets(std::move(AssetsValue)), Diagnostic(std::move(DiagnosticValue)), Options(OptionsValue) {
 			PoseUpdates.reserve(64);
 			PoseRemoves.reserve(64);
 			ClaimedTargets.reserve(AnimationRuntime::MaximumAnimators);
@@ -159,8 +163,11 @@ namespace gargantuan {
 		}
 	};
 
-	AnimationRuntime::AnimationRuntime(std::shared_ptr<AssetService> Assets, DiagnosticCallback Diagnostic)
-		: State(std::make_unique<Impl>(std::move(Assets), std::move(Diagnostic))) {}
+	AnimationRuntime::AnimationRuntime(
+		std::shared_ptr<AssetService> Assets,
+		DiagnosticCallback Diagnostic,
+		AnimationRuntimeOptions Options
+	) : State(std::make_unique<Impl>(std::move(Assets), std::move(Diagnostic), Options)) {}
 
 	AnimationRuntime::~AnimationRuntime() {
 		Shutdown();
@@ -388,10 +395,19 @@ namespace gargantuan {
 
 			const auto SkinMatrixStarted = std::chrono::steady_clock::now();
 			for (std::size_t JointIndex = 0; JointIndex < Joints.size(); ++JointIndex) {
-				(*Palette)[JointIndex] = (*ModelTransforms)[JointIndex] * Joints[JointIndex].InverseBindMatrix;
-				if (!IsFinite((*Palette)[JointIndex])) {
+				auto &Entry = (*Palette)[JointIndex];
+				Entry.PositionMatrix = (*ModelTransforms)[JointIndex] * Joints[JointIndex].InverseBindMatrix;
+				const glm::mat3 Linear(Entry.PositionMatrix);
+				if (!IsFinite(Entry.PositionMatrix) || std::abs(glm::determinant(Linear)) < 1.0e-12f) {
 					State->RemovePose(Tracked);
-					State->Emit(Object, "InvalidPose", "Animation pose produced a non-finite bone palette");
+					State->Emit(Object, "InvalidPose", "Animation pose produced a singular or non-finite skin palette");
+					PoseValid = false;
+					break;
+				}
+				Entry.NormalMatrix = glm::mat4(glm::transpose(glm::inverse(Linear)));
+				if (!IsFinite(Entry.NormalMatrix)) {
+					State->RemovePose(Tracked);
+					State->Emit(Object, "InvalidPose", "Animation pose produced a non-finite normal palette");
 					PoseValid = false;
 					break;
 				}
@@ -405,22 +421,25 @@ namespace gargantuan {
 				continue;
 			}
 
-			auto Vertices = AcquireBuffer(Tracked.VertexPools, Mesh->Value.Vertices->size(), State->Metrics);
-			RenderBounds Bounds;
-			const auto SkinningStarted = std::chrono::steady_clock::now();
-			if (!SkinMeshCpu(Mesh->Value, *Palette, *Vertices, Bounds)) {
+			std::shared_ptr<std::vector<RenderVertex>> Vertices;
+			RenderBounds Bounds = Mesh->Value.Bounds;
+			if (State->Options.CpuSkinningFallback) {
+				Vertices = AcquireBuffer(Tracked.VertexPools, Mesh->Value.Vertices->size(), State->Metrics);
+				const auto SkinningStarted = std::chrono::steady_clock::now();
+				if (!SkinMeshCpu(Mesh->Value, *Palette, *Vertices, Bounds)) {
+					State->Metrics.SkinningCpuNanoseconds += static_cast<std::uint64_t>(
+						std::chrono::duration_cast<std::chrono::nanoseconds>(
+							std::chrono::steady_clock::now() - SkinningStarted).count());
+					State->RemovePose(Tracked);
+					State->Emit(Object, "SkinningFailure", "CPU skinning rejected a singular or non-finite pose");
+					State->FireEnded(Tracked.TrackSnapshot);
+					++Iterator;
+					continue;
+				}
 				State->Metrics.SkinningCpuNanoseconds += static_cast<std::uint64_t>(
 					std::chrono::duration_cast<std::chrono::nanoseconds>(
 						std::chrono::steady_clock::now() - SkinningStarted).count());
-				State->RemovePose(Tracked);
-				State->Emit(Object, "SkinningFailure", "CPU skinning rejected a singular or non-finite pose");
-				State->FireEnded(Tracked.TrackSnapshot);
-				++Iterator;
-				continue;
 			}
-			State->Metrics.SkinningCpuNanoseconds += static_cast<std::uint64_t>(
-				std::chrono::duration_cast<std::chrono::nanoseconds>(
-					std::chrono::steady_clock::now() - SkinningStarted).count());
 			const auto PublicationStarted = std::chrono::steady_clock::now();
 			if (State->NextPoseRevision == std::numeric_limits<std::uint64_t>::max())
 				throw std::overflow_error("[Animation:Runtime] pose revision is exhausted");
@@ -432,15 +451,23 @@ namespace gargantuan {
 			Tracked.Published = true;
 			Tracked.Snapshot = {Compatibility, Tracked.PoseRevision, ModelTransforms, Palette};
 			State->PoseUpdates.push_back({
-				.Pose = {TargetObject, Mesh->Mesh, Tracked.PosedMesh, Tracked.PoseRevision, Palette},
+				.Pose = {
+					.Object = TargetObject,
+					.SourceMesh = Mesh->Mesh,
+					.PosedMesh = State->Options.CpuSkinningFallback ? Tracked.PosedMesh : RenderMeshIdentity{},
+					.PoseRevision = Tracked.PoseRevision,
+					.Palette = {RenderSkeletonIdentity{Compatibility.Bytes}, Palette},
+					.Mode = State->Options.CpuSkinningFallback
+						? RenderAnimationSkinningMode::CpuFallback : RenderAnimationSkinningMode::GpuPalette,
+				},
 				.TopologyRevision = Mesh->ContentRevision,
 				.Vertices = Vertices,
-				.Indices = Mesh->Value.Indices,
+				.Indices = State->Options.CpuSkinningFallback ? Mesh->Value.Indices : nullptr,
 				.Bounds = Bounds,
 			});
 			++State->Metrics.ActiveRigs;
 			State->Metrics.EvaluatedBones += Joints.size();
-			State->Metrics.SkinnedVertices += Vertices->size();
+			if (Vertices) State->Metrics.SkinnedVertices += Vertices->size();
 			++State->Metrics.PoseUpdates;
 			State->Metrics.PosePublicationCpuNanoseconds += static_cast<std::uint64_t>(
 				std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -503,13 +530,13 @@ namespace gargantuan {
 
 	bool AnimationRuntime::SkinMeshCpu(
 		const ImportedMesh &Mesh,
-		std::span<const glm::mat4> BonePalette,
+		std::span<const RenderSkinPaletteEntry> SkinPalette,
 		std::vector<RenderVertex> &Output,
 		RenderBounds &Bounds
 	) {
 		if (!Mesh.Vertices || !Mesh.SkinInfluences || Mesh.Vertices->empty() ||
-			Mesh.SkinInfluences->size() != Mesh.Vertices->size() || BonePalette.empty() ||
-			BonePalette.size() > MaximumBonesPerRig) return false;
+			Mesh.SkinInfluences->size() != Mesh.Vertices->size() || SkinPalette.empty() ||
+			SkinPalette.size() > MaximumBonesPerRig) return false;
 		Output.resize(Mesh.Vertices->size());
 		for (std::size_t VertexIndex = 0; VertexIndex < Mesh.Vertices->size(); ++VertexIndex) {
 			const auto &Source = (*Mesh.Vertices)[VertexIndex];
@@ -520,16 +547,13 @@ namespace gargantuan {
 			for (std::size_t InfluenceIndex = 0; InfluenceIndex < 4; ++InfluenceIndex) {
 				const auto Weight = Influence.Weights[InfluenceIndex];
 				const auto Joint = Influence.Joints[InfluenceIndex];
-				if (!std::isfinite(Weight) || Weight < 0.0f || Joint >= BonePalette.size()) return false;
+				if (!std::isfinite(Weight) || Weight < 0.0f || Joint >= SkinPalette.size()) return false;
 				if (Weight == 0.0f) continue;
-				const auto &Matrix = BonePalette[Joint];
-				if (!IsFinite(Matrix)) return false;
-				const glm::mat3 Linear(Matrix);
-				if (std::abs(glm::determinant(Linear)) < 1.0e-12f) return false;
-				const auto NormalMatrix = glm::transpose(glm::inverse(Linear));
-				Position += (Matrix * glm::vec4(Source.Position, 1.0f)) * Weight;
-				Normal += (NormalMatrix * Source.Normal) * Weight;
-				Tangent += (NormalMatrix * glm::vec3(Source.Tangent)) * Weight;
+				const auto &Entry = SkinPalette[Joint];
+				if (!IsFinite(Entry.PositionMatrix) || !IsFinite(Entry.NormalMatrix)) return false;
+				Position += (Entry.PositionMatrix * glm::vec4(Source.Position, 1.0f)) * Weight;
+				Normal += glm::vec3(Entry.NormalMatrix * glm::vec4(Source.Normal, 0.0f)) * Weight;
+				Tangent += glm::vec3(Entry.NormalMatrix * glm::vec4(glm::vec3(Source.Tangent), 0.0f)) * Weight;
 				WeightSum += Weight;
 			}
 			if (std::abs(WeightSum - 1.0f) > 1.0e-4f || std::abs(Position.w) < 1.0e-8f ||

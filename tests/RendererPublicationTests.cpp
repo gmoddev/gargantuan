@@ -453,6 +453,104 @@ namespace {
 		Accumulator.ReleaseConsumer(SecondConsumer);
 	}
 
+	void TestAnimationPaletteContracts() {
+		using namespace gargantuan;
+		const ObjectId Object{30, 1};
+		const RenderMeshIdentity SourceMesh{30, 1};
+		auto Vertices = std::make_shared<const std::vector<RenderVertex>>(std::vector<RenderVertex>(3));
+		auto Indices = std::make_shared<const std::vector<std::uint32_t>>(
+			std::vector<std::uint32_t>{0, 1, 2});
+		auto Influences = std::make_shared<std::vector<RenderSkinInfluence>>(3);
+		for (std::size_t Index = 0; Index < Influences->size(); ++Index) {
+			Influences->at(Index).Joints = {0, 1, 0, 0};
+			Influences->at(Index).Weights = {0.25f, 0.75f, 0.0f, 0.0f};
+		}
+		RenderSkeletonIdentity Skeleton;
+		Skeleton.Bytes[0] = 1;
+		auto Palette = std::make_shared<std::vector<RenderSkinPaletteEntry>>(2);
+		Palette->at(1).PositionMatrix[3].x = 0.5f;
+
+		RenderProjection Projection;
+		RenderPublication Initial{.Id = 1, .FullResync = true, .Frame = MakeFrame()};
+		Initial.MeshCreates.push_back({SourceMesh, 1, 1, Vertices, Indices,
+			{glm::vec3(0.0f), glm::vec3(1.0f)}, Influences, Skeleton, 2});
+		Initial.Creates.push_back({MakeItem(Object), SourceMesh});
+		Initial.AnimationPoseUpdates.push_back({
+			.Object = Object,
+			.SourceMesh = SourceMesh,
+			.PoseRevision = 1,
+			.Palette = {Skeleton, Palette},
+		});
+		const auto Changes = Projection.Apply(Initial);
+		Check(Changes.AnimationPosesUpdated == 1 &&
+			Changes.PaletteUploadBytes == 2 * sizeof(RenderSkinPaletteEntry) &&
+			Projection.GetAnimationPose(Object) &&
+			Projection.GetAnimationPose(Object)->PoseRevision == 1,
+			"GPU pose projection retains one coherent source mesh and exact palette bytes");
+
+		auto InvalidUpdate = [&](std::uint64_t Id = 2) {
+			RenderPublication Publication{.Id = Id, .BaseId = 1, .Frame = MakeFrame()};
+			Publication.AnimationPoseUpdates.push_back({
+				.Object = Object,
+				.SourceMesh = SourceMesh,
+				.PoseRevision = 2,
+				.Palette = {Skeleton, Palette},
+			});
+			return Publication;
+		};
+
+		auto Oversized = InvalidUpdate();
+		Oversized.AnimationPoseUpdates[0].Palette.Entries =
+			std::make_shared<const std::vector<RenderSkinPaletteEntry>>(
+				MaximumRenderSkinPaletteEntries + 1);
+		CheckThrows<std::invalid_argument>([&] { (void)Projection.Apply(Oversized); },
+			"projection rejects palettes above the 256-joint contract");
+
+		auto CountMismatch = InvalidUpdate();
+		CountMismatch.AnimationPoseUpdates[0].Palette.Entries =
+			std::make_shared<const std::vector<RenderSkinPaletteEntry>>(1);
+		CheckThrows<std::invalid_argument>([&] { (void)Projection.Apply(CountMismatch); },
+			"projection rejects palette counts that differ from source skeleton topology");
+
+		auto NonFinite = InvalidUpdate();
+		auto NonFiniteEntries = std::make_shared<std::vector<RenderSkinPaletteEntry>>(*Palette);
+		NonFiniteEntries->at(1).NormalMatrix[0][0] = std::numeric_limits<float>::quiet_NaN();
+		NonFinite.AnimationPoseUpdates[0].Palette.Entries = NonFiniteEntries;
+		CheckThrows<std::invalid_argument>([&] { (void)Projection.Apply(NonFinite); },
+			"projection rejects non-finite position or normal palette matrices");
+
+		auto Stale = InvalidUpdate();
+		Stale.AnimationPoseUpdates[0].PoseRevision = 1;
+		CheckThrows<std::invalid_argument>([&] { (void)Projection.Apply(Stale); },
+			"projection rejects stale per-rig pose revisions");
+
+		auto MissingSource = InvalidUpdate();
+		MissingSource.AnimationPoseUpdates[0].SourceMesh = {99, 1};
+		CheckThrows<std::invalid_argument>([&] { (void)Projection.Apply(MissingSource); },
+			"projection rejects a palette whose source mesh residency is missing");
+
+		auto Incompatible = InvalidUpdate();
+		Incompatible.AnimationPoseUpdates[0].Palette.Skeleton.Bytes[0] = 2;
+		CheckThrows<std::invalid_argument>([&] { (void)Projection.Apply(Incompatible); },
+			"projection rejects a palette whose skeleton identity is incompatible with its mesh");
+
+		auto UnexpectedPosedMesh = InvalidUpdate();
+		UnexpectedPosedMesh.AnimationPoseUpdates[0].PosedMesh = {31, 1};
+		CheckThrows<std::invalid_argument>([&] { (void)Projection.Apply(UnexpectedPosedMesh); },
+			"GPU palette mode rejects transient CPU posed-mesh identities");
+
+		RenderProjection MalformedMeshProjection;
+		auto MalformedInfluences = std::make_shared<std::vector<RenderSkinInfluence>>(*Influences);
+		MalformedInfluences->at(0).Joints[0] = 2;
+		RenderPublication MalformedMesh{.Id = 1, .FullResync = true, .Frame = MakeFrame()};
+		MalformedMesh.MeshCreates.push_back({SourceMesh, 1, 1, Vertices, Indices,
+			{glm::vec3(0.0f), glm::vec3(1.0f)}, MalformedInfluences, Skeleton, 2});
+		CheckThrows<std::invalid_argument>([&] { (void)MalformedMeshProjection.Apply(MalformedMesh); },
+			"renderer validation rejects integer joint indices outside the declared palette range");
+		Check(Projection.GetAnimationPose(Object) && Projection.GetAnimationPose(Object)->PoseRevision == 1,
+			"rejected animation publications leave the previous coherent pose atomically intact");
+	}
+
 	void TestEnvironmentLightingFoundation() {
 		using namespace gargantuan;
 		ChangeJournal::Get().Clear();
@@ -652,6 +750,7 @@ int main() {
 		gargantuan::BootstrapNativeRuntimeSchema();
 		TestProjectionOrderingAndIdentity();
 		TestDeformableAndGuiContracts();
+		TestAnimationPaletteContracts();
 		TestIncrementalPublisher();
 		TestDirtyAccumulatorBoundsAndConsumers();
 		TestEnvironmentLightingFoundation();

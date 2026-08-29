@@ -118,6 +118,8 @@ namespace gargantuan {
 			std::shared_ptr<const std::vector<std::uint32_t>> Indices;
 			RenderBounds Bounds;
 			std::shared_ptr<const std::vector<RenderSkinInfluence>> SkinInfluences;
+			RenderSkeletonIdentity Skeleton;
+			std::uint32_t SkeletonJointCount = 0;
 		};
 		struct PublishedSky {
 			ObjectId Source;

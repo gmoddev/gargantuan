@@ -3,6 +3,7 @@
 #include "gargantuan/render/SDLRenderer.hpp"
 
 #include <SDL3/SDL.h>
+#include <algorithm>
 #include <format>
 #include <memory>
 #include <stdexcept>
@@ -62,9 +63,14 @@ namespace gargantuan {
 		bool SubmitAttempted = false;
 		try {
 			for (const auto &Create : Publication.MeshCreates) {
+				const bool CpuSkinned = std::ranges::any_of(Publication.AnimationPoseUpdates,
+					[&](const auto &Pose) {
+						return Pose.Mode == RenderAnimationSkinningMode::CpuFallback && Pose.PosedMesh == Create.Mesh;
+					});
 				auto Mesh = std::make_unique<SDLGpuMesh>(Create, Metrics);
 				try {
 					Mesh->Upload(Gpu, CopyPass);
+					if (Metrics && CpuSkinned) ++Metrics->CpuSkinnedVertexUploads;
 					const auto [Position, Inserted] = DynamicMeshes.emplace(Create.Mesh, std::move(Mesh));
 					(void)Position;
 					if (!Inserted) throw std::logic_error("Mesh publication attempted duplicate SDL residency");
@@ -73,8 +79,12 @@ namespace gargantuan {
 					throw;
 				}
 			}
-			for (const auto &Update : Publication.MeshVertexUpdates)
+			for (const auto &Update : Publication.MeshVertexUpdates) {
 				DynamicMeshes.at(Update.Mesh)->UploadVertices(Gpu, CopyPass, Update.FirstVertex, *Update.Vertices);
+				if (Metrics && std::ranges::any_of(Publication.AnimationPoseUpdates, [&](const auto &Pose) {
+					return Pose.Mode == RenderAnimationSkinningMode::CpuFallback && Pose.PosedMesh == Update.Mesh;
+				})) ++Metrics->CpuSkinnedVertexUploads;
+			}
 			SDL_EndGPUCopyPass(CopyPass);
 			CopyPassOpen = false;
 			SubmitAttempted = true;
