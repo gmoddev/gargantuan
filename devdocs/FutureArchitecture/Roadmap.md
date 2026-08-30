@@ -195,6 +195,13 @@ mobile, VR, deeper rendering, economy/marketplace integrations, voice/social, an
 cloud services. Each new capability requires schemas, budgets, threat modeling,
 cross-platform tests, and a deprecation/versioning story.
 
+Non-Euclidean world topology is a possible Phase 6 expansion after semantic
+spatial addressing, region streaming, renderer multi-view costs, and
+authoritative multiplayer interest are measured. If creator demand justifies
+it, follow the staged, bounded design in
+[Spatial regions and portal topology](SpatialRegionsAndPortalTopology.md) rather
+than introducing renderer-only portals or a second source of spatial authority.
+
 ## Cross-phase workstreams
 
 | Workstream | Continuous requirement |
