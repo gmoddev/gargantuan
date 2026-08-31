@@ -183,11 +183,14 @@ was retained after policy rather than assumed before it.
 
 The selected granularity is a bounded contiguous batch of independent rigs. Fewer
 than 32 pending rig evaluations remain inline. At 32 or more, at most one batch per
-available worker and never more than 64 batches is submitted. A step snapshots at
-most 4096 rigs, waits synchronously, and merges before semantic resolution or
-render publication, so the design has no multi-frame backlog and no seconds-old
-animation debt. The `JobSystem` queue has 64 preallocated ring slots and expands
-only for generic callers that exceed that capacity; Animation 2C never exceeds it.
+available worker and never more than 64 batches is submitted. The scheduler targets
+at least 16 pending rig evaluations per batch; this prevents a small crowd from
+waking every logical worker for only three or four rigs while still saturating the
+pool for 500/1000-rig work. A step snapshots at most 4096 rigs, waits synchronously,
+and merges before semantic resolution or render publication, so the design has no
+multi-frame backlog and no seconds-old animation debt. The `JobSystem` queue has 64
+preallocated ring slots and expands only for generic callers that exceed that
+capacity; Animation 2C never exceeds it.
 
 Worker input consists only of immutable clip/skeleton/mesh revisions, shared
 immutable key arrays, copied scalar track sample state, and exclusive runtime-owned
@@ -218,15 +221,15 @@ Release, 64 bones, one track, 60 frames, identical full-rate work:
 
 | Rigs | Serial runtime ms | Normal-pool runtime ms | Runtime speedup | Submit ms | Wait ms | Merge ms | Summed evaluator CPU ms | Batches/frame |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 10 | 0.0800 | 0.0801 | 1.00x | 0 | 0 | 0.0025 | 0.0738 | 0 (inline) |
-| 100 | 0.8177 | 0.2508 | 3.26x | 0.0622 | 0.1001 | 0.0369 | 1.6883 | 32 |
-| 500 | 4.4217 | 1.0500 | 4.21x | 0.0772 | 0.4312 | 0.2096 | 9.6902 | 32 |
-| 1000 | 9.7585 | 2.9129 | 3.35x | 0.1122 | 0.8831 | 0.7391 | 20.4501 | 32 |
+| 10 | 0.0796 | 0.0787 | 1.01x | 0 | 0 | 0.0025 | 0.0723 | 0 (inline) |
+| 100 | 0.7956 | 0.3552 | 2.24x | 0.0111 | 0.2649 | 0.0328 | 1.0007 | 7 |
+| 500 | 4.5015 | 1.0448 | 4.31x | 0.0798 | 0.4367 | 0.2038 | 9.6477 | 32 |
+| 1000 | 10.2816 | 3.0901 | 3.33x | 0.1293 | 0.8763 | 0.7843 | 19.8856 | 32 |
 
 `runtime` is wall time observed by Main and includes synchronous wait. `Summed
 evaluator CPU` adds each rig evaluator duration and therefore can exceed wall time
-when jobs overlap. End-to-end serial/parallel wall time was 0.1067/0.1070,
-1.0750/0.5168, 6.1247/2.5877, and 14.0271/7.2996 ms respectively. Stable runs had
+when jobs overlap. End-to-end serial/parallel wall time was 0.1061/0.1064,
+1.0456/0.6174, 6.2553/2.5838, and 15.1000/7.9005 ms respectively. Stable runs had
 zero stale drops and zero steady-state buffer or general allocations.
 
 The 10-rig threshold result is intentionally neutral: constructing or waking a
@@ -234,18 +237,39 @@ pool for that batch did not earn its overhead. The current default uses the
 existing `JobSystem` normal count (32 logical workers on the primary machine), not
 a 7950X3D-specific authored quality setting.
 
+### 5900X worker scaling
+
+The genuine secondary run used a Ryzen 9 5900X host, an Alpine 3.24 container,
+Clang 22.1.3, Release, a 24-logical-CPU quota, and 12 GiB of memory. It is useful as
+a scheduling crossover check, not an exact operating-system/compiler comparison
+with the MSVC primary run.
+
+| Rigs | Serial runtime ms | Normal-pool runtime ms | Runtime speedup | Submit ms | Wait ms | Merge ms | Summed evaluator CPU ms | Batches/frame |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 10 | 0.0564 | 0.0601 | 0.94x | 0 | 0 | 0.0029 | 0.0521 | 0 (inline) |
+| 100 | 0.5673 | 0.4176 | 1.36x | 0.1743 | 0.1518 | 0.0396 | 0.6085 | 7 |
+| 500 | 2.8200 | 1.3430 | 2.10x | 0.6804 | 0.1943 | 0.1971 | 3.8155 | 24 |
+| 1000 | 6.2681 | 2.1959 | 2.85x | 0.6939 | 0.4398 | 0.4484 | 8.7548 | 24 |
+
+End-to-end serial/parallel wall time was 0.0974/0.0989, 0.8099/0.6582,
+3.9268/2.5764, and 9.1831/5.0551 ms. The first 5900X pass used one batch per
+logical worker and regressed the 100-rig runtime to 0.69x. Requiring approximately
+16 evaluations per batch converted that row to a measured 1.36x while preserving
+the 500/1000-rig wins. All final rows had zero stale drops and zero steady-state
+buffer or general allocations.
+
 ### 500-rig policy scenarios on 7950X3D
 
 Release, 64 bones, one track, 240 measured frames after grace/warmup:
 
 | Scenario | Class average | Poses/frame | Runtime p50/p95/p99 us | Total p50/p95/p99 us | Anchors/frame |
 | --- | --- | ---: | --- | --- | ---: |
-| A: all near/visible | 500 full | 500.0 | 1091.7 / 1317.0 / 1415.2 | 2703.8 / 3057.0 / 3288.6 | 0 |
-| B: 100 near + 400 far visible | 100 full, 400 reduced | 200.0 | 550.2 / 671.4 / 736.1 | 1121.3 / 1270.5 / 1328.9 | 0 |
-| C: 50 visible + 450 offscreen | 50 full, 450 frozen | 50.0 | 290.0 / 322.8 / 372.6 | 424.7 / 463.8 / 512.7 | 0 |
-| D: all offscreen visual-only | 500 frozen | 0.0 | 134.5 / 137.3 / 146.4 | 136.0 / 138.9 / 148.6 | 0 |
-| E: all offscreen semantic | 500 semantic | 500.0 | 1352.4 / 1781.2 / 1940.8 | 3887.6 / 4628.2 / 5220.2 | 500 |
-| F: 50 semantic + 450 far visible | 50 semantic, 450 reduced | 162.5 | 732.3 / 1007.2 / 1139.3 | 1453.7 / 1879.3 / 2321.2 | 50 |
+| A: all near/visible | 500 full | 500.0 | 1043.3 / 1262.5 / 1441.1 | 2556.3 / 2927.6 / 3117.9 | 0 |
+| B: 100 near + 400 far visible | 100 full, 400 reduced | 200.0 | 659.0 / 866.0 / 965.4 | 1255.4 / 1526.9 / 1861.0 | 0 |
+| C: 50 visible + 450 offscreen | 50 full, 450 frozen | 50.0 | 291.0 / 505.7 / 691.1 | 426.0 / 642.4 / 851.0 | 0 |
+| D: all offscreen visual-only | 500 frozen | 0.0 | 137.9 / 141.8 / 144.6 | 139.6 / 143.5 / 146.2 | 0 |
+| E: all offscreen semantic | 500 semantic | 500.0 | 1387.2 / 1850.1 / 2069.6 | 4102.0 / 5161.6 / 5801.0 | 500 |
+| F: 50 semantic + 450 far visible | 50 semantic, 450 reduced | 162.5 | 599.4 / 982.2 / 1140.7 | 1149.1 / 1751.8 / 1932.3 | 50 |
 
 Far-visible rigs in B average 15 Hz at a 60 Hz input (100 evaluations/frame), and
 the far-visible portion of F contributes 112.5 evaluations/frame. Every evaluated
@@ -253,6 +277,24 @@ pose publishes once; frozen poses publish zero times. Track advancement remains
 about 0.01-0.02 ms for all 500 logical tracks even when scenario D performs no
 pose work. All A-F scenarios retained zero animation-buffer growth and zero general
 runtime allocations after warmup.
+
+### 500-rig policy scenarios on 5900X
+
+The same tuned Release binary and 240-frame scenarios on the secondary host
+produced:
+
+| Scenario | Class average | Poses/frame | Runtime p50/p95/p99 us | Total p50/p95/p99 us | Anchors/frame |
+| --- | --- | ---: | --- | --- | ---: |
+| A: all near/visible | 500 full | 500.0 | 1336.9 / 1507.3 / 1575.6 | 2536.7 / 2807.4 / 3076.0 | 0 |
+| B: 100 near + 400 far visible | 100 full, 400 reduced | 200.0 | 793.1 / 889.0 / 1063.4 | 1293.3 / 1464.8 / 1696.7 | 0 |
+| C: 50 visible + 450 offscreen | 50 full, 450 frozen | 50.0 | 363.8 / 453.6 / 507.6 | 471.9 / 575.2 / 669.9 | 0 |
+| D: all offscreen visual-only | 500 frozen | 0.0 | 143.0 / 160.3 / 173.9 | 144.4 / 163.6 / 177.2 | 0 |
+| E: all offscreen semantic | 500 semantic | 500.0 | 1339.4 / 1482.0 / 1586.4 | 2845.7 / 3184.8 / 3328.8 | 500 |
+| F: 50 semantic + 450 far visible | 50 semantic, 450 reduced | 162.5 | 700.2 / 772.0 / 845.6 | 1155.9 / 1248.2 / 1380.1 | 50 |
+
+Every secondary A-F row likewise reported zero animation-buffer growth, zero
+general runtime allocations, zero stale job drops, and pose/publication counts
+equal to the policy demand.
 
 ## Static-world, memory, and diagnostics
 
@@ -262,6 +304,13 @@ rig. One measured step produced 51 pose and animated-object updates, one semanti
 anchor resolution, zero static-object updates, zero ChangeJournal records, zero
 full resyncs, zero CPU dynamic-vertex updates, and zero steady-state animation or
 semantic allocations.
+
+The Linux/libstdc++ CI gate initially found four general allocations that MSVC's
+larger `std::function` small-buffer optimization had hidden. Each submitted lambda
+captured three machine words. The runtime now uses 64 preallocated batch records
+and each callable captures only one pointer. The final 5900X/Clang 50K run also
+reported zero runtime and semantic allocations, independently covering that
+portability fix.
 
 Per-Animator policy state is approximately 40 bytes of scalar class, band, grace,
 and cadence data. Pending job snapshots use a fixed 16-track array and retain only
