@@ -503,6 +503,12 @@ namespace gargantuan {
 		std::vector<ObjectId> ClaimedTargets;
 		std::vector<ObjectId> RefreshRequests;
 		std::vector<PendingEvaluation> PendingEvaluations;
+		struct PoseJobBatch {
+			Impl *Runtime = nullptr;
+			std::size_t Begin = 0;
+			std::size_t End = 0;
+		};
+		std::array<PoseJobBatch, 64> PoseJobBatches;
 		std::unique_ptr<JobSystem> PoseJobs;
 		std::shared_ptr<JobGroup> PoseJobGroup = std::make_shared<JobGroup>();
 		std::function<void()> BeforePoseMergeForTesting;
@@ -925,7 +931,7 @@ namespace gargantuan {
 			const auto BatchCount = std::min({
 				State->PendingEvaluations.size(),
 				State->PoseJobs->GetWorkerCount(),
-				static_cast<std::size_t>(64),
+				State->PoseJobBatches.size(),
 			});
 			State->Metrics.ActivePoseJobs = BatchCount;
 			State->Metrics.PoseJobsScheduled += State->PendingEvaluations.size();
@@ -934,10 +940,12 @@ namespace gargantuan {
 			for (std::size_t Batch = 0; Batch < BatchCount; ++Batch) {
 				const auto Begin = State->PendingEvaluations.size() * Batch / BatchCount;
 				const auto End = State->PendingEvaluations.size() * (Batch + 1) / BatchCount;
+				auto &JobBatch = State->PoseJobBatches[Batch];
+				JobBatch = {State.get(), Begin, End};
 				State->PoseJobs->Submit(
-					[State = State.get(), Begin, End] {
-						for (auto Index = Begin; Index < End; ++Index)
-							EvaluatePose(State->PendingEvaluations[Index].Work);
+					[JobBatch = &JobBatch] {
+						for (auto Index = JobBatch->Begin; Index < JobBatch->End; ++Index)
+							EvaluatePose(JobBatch->Runtime->PendingEvaluations[Index].Work);
 					},
 					State->PoseJobGroup
 				);
