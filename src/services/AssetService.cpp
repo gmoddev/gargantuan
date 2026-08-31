@@ -1172,8 +1172,12 @@ namespace gargantuan {
 	}
 
 	std::optional<AssetMeshResource> AssetService::ResolveMeshResource(std::string_view Reference) const {
+		return ResolveMeshResource(std::string(Reference));
+	}
+
+	std::optional<AssetMeshResource> AssetService::ResolveMeshResource(const std::string &Reference) const {
 		std::scoped_lock Lock(State->Mutex);
-		auto Record = State->Records.find(std::string(Reference));
+		auto Record = State->Records.find(Reference);
 		if (Record == State->Records.end() || !IsAvailableRecord(Record->second) || !Record->second.Asset)
 			return std::nullopt;
 		const auto *Mesh = std::get_if<ImportedMesh>(Record->second.Asset.get());

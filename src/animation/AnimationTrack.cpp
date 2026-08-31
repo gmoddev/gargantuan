@@ -48,16 +48,19 @@ namespace gargantuan {
 		std::uint64_t CreationSequenceValue
 	)
 		: Owner(std::move(OwnerValue)), Resource(std::move(ResourceValue)),
-		  JointTrackIndices(std::move(JointTrackIndicesValue)), CreationSequence(CreationSequenceValue) {
+		  JointTrackIndices(std::make_shared<const std::vector<std::int32_t>>(std::move(JointTrackIndicesValue))),
+		  CreationSequence(CreationSequenceValue) {
 		if (!Resource.Value.Tracks || Resource.Value.Tracks->empty() || Resource.Value.Duration <= 0.0f ||
-			JointTrackIndices.empty() || CreationSequence == 0)
+			!JointTrackIndices || JointTrackIndices->empty() || CreationSequence == 0)
 			throw std::invalid_argument("[Animation:Track] canonical track construction is invalid");
 	}
 
-	void AnimationTrack::MarkChanged() {
-		if (Revision == std::numeric_limits<std::uint64_t>::max())
+	void AnimationTrack::MarkChanged(bool ControlChange) {
+		if (Revision == std::numeric_limits<std::uint64_t>::max() ||
+			(ControlChange && ControlRevision == std::numeric_limits<std::uint64_t>::max()))
 			throw std::overflow_error("[Animation:Track] runtime revision is exhausted");
 		++Revision;
+		if (ControlChange) ++ControlRevision;
 	}
 
 	void AnimationTrack::SetLooped(bool Value) {
@@ -136,7 +139,7 @@ namespace gargantuan {
 		if (Looped) {
 			TimePosition = static_cast<float>(std::fmod(Advanced, Duration));
 			NaturalEndPose = false;
-			MarkChanged();
+			MarkChanged(false);
 			return true;
 		}
 		if (Advanced >= Duration) {
@@ -144,11 +147,11 @@ namespace gargantuan {
 			PlaybackState = Enums::AnimationPlaybackState::Stopped;
 			NaturalEndPose = true;
 			PendingEnded = true;
-			MarkChanged();
+			MarkChanged(false);
 			return true;
 		}
 		TimePosition = static_cast<float>(Advanced);
-		MarkChanged();
+		MarkChanged(false);
 		return true;
 	}
 

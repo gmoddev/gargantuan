@@ -56,12 +56,14 @@ namespace gargantuan {
 		std::uint64_t CpuSkinnedVertexUploads = 0;
 		std::uint64_t MainShadowPoseMismatches = 0;
 		std::uint64_t CpuProjectionNanoseconds = 0;
+		std::uint64_t CpuVisibilityNanoseconds = 0;
 		std::uint64_t CpuMeshTransferNanoseconds = 0;
 		std::uint64_t CpuTextureTransferNanoseconds = 0;
 		std::uint64_t CpuUiPreparationNanoseconds = 0;
 		std::uint64_t CpuSubmissionNanoseconds = 0;
 		std::uint64_t GpuCompletionWaitNanoseconds = 0;
 		std::uint64_t LastProjectionNanoseconds = 0;
+		std::uint64_t LastVisibilityNanoseconds = 0;
 		std::uint64_t LastMeshTransferNanoseconds = 0;
 		std::uint64_t LastTextureTransferNanoseconds = 0;
 		std::uint64_t LastUiPreparationNanoseconds = 0;
@@ -80,6 +82,7 @@ namespace gargantuan {
 		void Resize(int WidthValue, int HeightValue) override;
 		void Destroy() override;
 		[[nodiscard]] RendererCapabilities GetCapabilities() const override { return {true, true}; }
+		[[nodiscard]] RenderAnimationVisibilityFeedback GetAnimationVisibilityFeedback() const override;
 		[[nodiscard]] std::string GetDriverName() const;
 		[[nodiscard]] SDLRendererMetrics GetMetrics() const;
 		void WaitForIdle();

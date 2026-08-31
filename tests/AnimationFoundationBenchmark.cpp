@@ -42,6 +42,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -367,11 +368,23 @@ namespace {
 
 	struct ScenarioResult {
 		double TotalMillisecondsPerFrame = 0.0;
+		double RuntimeMillisecondsPerFrame = 0.0;
+		double TrackAdvanceMillisecondsPerFrame = 0.0;
+		double KeyframeLookupMillisecondsPerFrame = 0.0;
+		double InterpolationMillisecondsPerFrame = 0.0;
+		double TrackBlendingMillisecondsPerFrame = 0.0;
+		double BindPoseFallbackMillisecondsPerFrame = 0.0;
 		double SamplingBlendMillisecondsPerFrame = 0.0;
 		double HierarchyMillisecondsPerFrame = 0.0;
 		double SkinMatrixMillisecondsPerFrame = 0.0;
 		double SkinningMillisecondsPerFrame = 0.0;
+		double SemanticJointCacheMillisecondsPerFrame = 0.0;
 		double PoseBuildMillisecondsPerFrame = 0.0;
+		double PolicyMillisecondsPerFrame = 0.0;
+		double PoseWorkerCpuMillisecondsPerFrame = 0.0;
+		double PoseJobSchedulingMillisecondsPerFrame = 0.0;
+		double PoseJobWaitMillisecondsPerFrame = 0.0;
+		double PoseMergeMillisecondsPerFrame = 0.0;
 		double PublisherMillisecondsPerFrame = 0.0;
 		double ProjectionMillisecondsPerFrame = 0.0;
 		double BindingBookkeepingMicrosecondsPerFrame = 0.0;
@@ -381,12 +394,18 @@ namespace {
 		Percentiles InteractionUpdateMicroseconds;
 		Percentiles TotalSemanticMicroseconds;
 		std::uint64_t RuntimeBufferAllocationDelta = 0;
+		std::uint64_t RuntimeSteadyStateAllocationDelta = 0;
 		std::uint64_t SemanticAllocationDelta = 0;
 		std::uint64_t SpatialAllocationDelta = 0;
 		std::uint64_t SoundAllocationDelta = 0;
 		std::uint64_t InteractionAllocationDelta = 0;
 		std::uint64_t AnchorResolutionDelta = 0;
 		std::uint64_t RigVisitDelta = 0;
+		std::uint64_t PoseEvaluationDelta = 0;
+		std::uint64_t PoseJobsScheduledDelta = 0;
+		std::uint64_t PoseJobBatchDelta = 0;
+		std::uint64_t StalePoseJobDropDelta = 0;
+		std::size_t PoseWorkerCapacity = 0;
 	};
 
 	ScenarioResult RunScenario(
@@ -401,7 +420,9 @@ namespace {
 		std::size_t TrackCount,
 		std::size_t AnchorsPerRig,
 		std::size_t Frames,
-		std::size_t AnchorJointOffset = 0
+		std::size_t AnchorJointOffset = 0,
+		bool DetailedProfiling = false,
+		std::size_t PoseWorkerCount = 1
 	) {
 		std::vector<std::shared_ptr<MeshPart>> Rigs;
 		std::vector<std::shared_ptr<Animator>> Animators;
@@ -413,7 +434,15 @@ namespace {
 		Tracks.reserve(RigCount * TrackCount);
 		Anchors.reserve(RigCount * AnchorsPerRig);
 		Prompts.reserve(AnchorsPerRig == 0 ? 0 : RigCount);
-		AnimationRuntime Runtime(Assets);
+		AnimationRuntime Runtime(
+			Assets,
+			{},
+			AnimationRuntimeOptions{
+				.DetailedProfiling = DetailedProfiling,
+				.ParallelPoseEvaluation = PoseWorkerCount != 1,
+				.PoseWorkerCount = PoseWorkerCount,
+			}
+		);
 		auto Spatial = std::make_shared<SemanticSpatialResolver>(Assets, &Runtime);
 		auto PlayersValue = std::dynamic_pointer_cast<Players>(World->GetService("Players"));
 		auto Actions = std::dynamic_pointer_cast<ActionMap>(World->GetService("ActionMap"));
@@ -491,6 +520,7 @@ namespace {
 		const auto MetricsBefore = Runtime.GetMetrics();
 		const auto SpatialBefore = Spatial->GetMetrics();
 		std::uint64_t TotalNanoseconds = 0;
+		std::uint64_t RuntimeSteadyStateAllocations = 0;
 		std::uint64_t PublisherNanoseconds = 0;
 		std::uint64_t ProjectionNanoseconds = 0;
 		std::uint64_t SemanticAllocations = 0;
@@ -507,7 +537,10 @@ namespace {
 		TotalSemanticSamples.reserve(Frames);
 		for (std::size_t Frame = 0; Frame < Frames; ++Frame) {
 			const auto FrameStarted = Clock::now();
+			const auto RuntimeAllocationsBefore = SemanticBenchmarkAllocations.load(std::memory_order_relaxed);
 			Runtime.Step(1.0f / 60.0f);
+			RuntimeSteadyStateAllocations += SemanticBenchmarkAllocations.load(std::memory_order_relaxed) -
+											 RuntimeAllocationsBefore;
 			const auto SemanticStarted = Clock::now();
 			auto AllocationsBefore = SemanticBenchmarkAllocations.load(std::memory_order_relaxed);
 			Spatial->Step();
@@ -560,35 +593,78 @@ namespace {
 		};
 		ScenarioResult Result{
 			.TotalMillisecondsPerFrame = PerFrameMilliseconds(TotalNanoseconds),
+			.RuntimeMillisecondsPerFrame =
+				PerFrameMilliseconds(MetricsAfter.EvaluationCpuNanoseconds - MetricsBefore.EvaluationCpuNanoseconds),
+			.TrackAdvanceMillisecondsPerFrame = PerFrameMilliseconds(
+				MetricsAfter.TrackAdvanceCpuNanoseconds - MetricsBefore.TrackAdvanceCpuNanoseconds
+			),
+			.KeyframeLookupMillisecondsPerFrame = PerFrameMilliseconds(
+				MetricsAfter.KeyframeLookupCpuNanoseconds - MetricsBefore.KeyframeLookupCpuNanoseconds
+			),
+			.InterpolationMillisecondsPerFrame = PerFrameMilliseconds(
+				MetricsAfter.InterpolationCpuNanoseconds - MetricsBefore.InterpolationCpuNanoseconds
+			),
+			.TrackBlendingMillisecondsPerFrame = PerFrameMilliseconds(
+				MetricsAfter.TrackBlendingCpuNanoseconds - MetricsBefore.TrackBlendingCpuNanoseconds
+			),
+			.BindPoseFallbackMillisecondsPerFrame = PerFrameMilliseconds(
+				MetricsAfter.BindPoseFallbackCpuNanoseconds - MetricsBefore.BindPoseFallbackCpuNanoseconds
+			),
 			.SamplingBlendMillisecondsPerFrame = PerFrameMilliseconds(
-				MetricsAfter.SamplingAndBlendingCpuNanoseconds - MetricsBefore.SamplingAndBlendingCpuNanoseconds),
-			.HierarchyMillisecondsPerFrame = PerFrameMilliseconds(
-				MetricsAfter.HierarchyCpuNanoseconds - MetricsBefore.HierarchyCpuNanoseconds),
-			.SkinMatrixMillisecondsPerFrame = PerFrameMilliseconds(
-				MetricsAfter.SkinMatrixCpuNanoseconds - MetricsBefore.SkinMatrixCpuNanoseconds),
-			.SkinningMillisecondsPerFrame = PerFrameMilliseconds(
-				MetricsAfter.SkinningCpuNanoseconds - MetricsBefore.SkinningCpuNanoseconds),
+				MetricsAfter.SamplingAndBlendingCpuNanoseconds - MetricsBefore.SamplingAndBlendingCpuNanoseconds
+			),
+			.HierarchyMillisecondsPerFrame =
+				PerFrameMilliseconds(MetricsAfter.HierarchyCpuNanoseconds - MetricsBefore.HierarchyCpuNanoseconds),
+			.SkinMatrixMillisecondsPerFrame =
+				PerFrameMilliseconds(MetricsAfter.SkinMatrixCpuNanoseconds - MetricsBefore.SkinMatrixCpuNanoseconds),
+			.SkinningMillisecondsPerFrame =
+				PerFrameMilliseconds(MetricsAfter.SkinningCpuNanoseconds - MetricsBefore.SkinningCpuNanoseconds),
+			.SemanticJointCacheMillisecondsPerFrame = PerFrameMilliseconds(
+				MetricsAfter.SemanticJointCacheCpuNanoseconds - MetricsBefore.SemanticJointCacheCpuNanoseconds
+			),
 			.PoseBuildMillisecondsPerFrame = PerFrameMilliseconds(
-				MetricsAfter.PosePublicationCpuNanoseconds - MetricsBefore.PosePublicationCpuNanoseconds),
+				MetricsAfter.PosePublicationCpuNanoseconds - MetricsBefore.PosePublicationCpuNanoseconds
+			),
+			.PolicyMillisecondsPerFrame =
+				PerFrameMilliseconds(MetricsAfter.PolicyCpuNanoseconds - MetricsBefore.PolicyCpuNanoseconds),
+			.PoseWorkerCpuMillisecondsPerFrame =
+				PerFrameMilliseconds(MetricsAfter.PoseWorkerCpuNanoseconds - MetricsBefore.PoseWorkerCpuNanoseconds),
+			.PoseJobSchedulingMillisecondsPerFrame = PerFrameMilliseconds(
+				MetricsAfter.PoseJobSchedulingCpuNanoseconds - MetricsBefore.PoseJobSchedulingCpuNanoseconds
+			),
+			.PoseJobWaitMillisecondsPerFrame =
+				PerFrameMilliseconds(MetricsAfter.PoseJobWaitNanoseconds - MetricsBefore.PoseJobWaitNanoseconds),
+			.PoseMergeMillisecondsPerFrame =
+				PerFrameMilliseconds(MetricsAfter.PoseMergeCpuNanoseconds - MetricsBefore.PoseMergeCpuNanoseconds),
 			.PublisherMillisecondsPerFrame = PerFrameMilliseconds(PublisherNanoseconds),
 			.ProjectionMillisecondsPerFrame = PerFrameMilliseconds(ProjectionNanoseconds),
 			.BindingBookkeepingMicrosecondsPerFrame = static_cast<double>(
-				SpatialAfter.BindingBookkeepingCpuNanoseconds - SpatialBefore.BindingBookkeepingCpuNanoseconds) /
-				1'000.0 / static_cast<double>(Frames),
+														  SpatialAfter.BindingBookkeepingCpuNanoseconds -
+														  SpatialBefore.BindingBookkeepingCpuNanoseconds
+													  ) /
+													  1'000.0 / static_cast<double>(Frames),
 			.TransformResolutionMicrosecondsPerFrame = static_cast<double>(
-				SpatialAfter.TransformResolutionCpuNanoseconds - SpatialBefore.TransformResolutionCpuNanoseconds) /
-				1'000.0 / static_cast<double>(Frames),
+														   SpatialAfter.TransformResolutionCpuNanoseconds -
+														   SpatialBefore.TransformResolutionCpuNanoseconds
+													   ) /
+													   1'000.0 / static_cast<double>(Frames),
 			.SemanticStepMicroseconds = Summarize(std::move(SemanticSamples)),
 			.SoundUpdateMicroseconds = Summarize(std::move(SoundSamples)),
 			.InteractionUpdateMicroseconds = Summarize(std::move(InteractionSamples)),
 			.TotalSemanticMicroseconds = Summarize(std::move(TotalSemanticSamples)),
 			.RuntimeBufferAllocationDelta = MetricsAfter.BufferAllocations - MetricsBefore.BufferAllocations,
+			.RuntimeSteadyStateAllocationDelta = RuntimeSteadyStateAllocations,
 			.SemanticAllocationDelta = SemanticAllocations,
 			.SpatialAllocationDelta = SpatialAllocations,
 			.SoundAllocationDelta = SoundAllocations,
 			.InteractionAllocationDelta = InteractionAllocations,
 			.AnchorResolutionDelta = SpatialAfter.AnchorResolutions - SpatialBefore.AnchorResolutions,
 			.RigVisitDelta = SpatialAfter.RigsVisited - SpatialBefore.RigsVisited,
+			.PoseEvaluationDelta = MetricsAfter.PoseEvaluations - MetricsBefore.PoseEvaluations,
+			.PoseJobsScheduledDelta = MetricsAfter.PoseJobsScheduled - MetricsBefore.PoseJobsScheduled,
+			.PoseJobBatchDelta = MetricsAfter.PoseJobBatches - MetricsBefore.PoseJobBatches,
+			.StalePoseJobDropDelta = MetricsAfter.StalePoseJobDrops - MetricsBefore.StalePoseJobDrops,
+			.PoseWorkerCapacity = MetricsAfter.PoseWorkerCapacity,
 		};
 		if (AnchorsPerRig == 0) {
 			Require(SpatialAfter.IndexedRigs == 0 && Result.AnchorResolutionDelta == 0 && Result.RigVisitDelta == 0,
@@ -610,38 +686,365 @@ namespace {
 		SemanticSound.reset();
 		Rigs.clear();
 		std::cout << "[Animation:Benchmark] scenario rigs=" << RigCount << " bones=" << BoneCount
-			<< " tracks=" << TrackCount << " anchorsPerRig=" << AnchorsPerRig
-			<< " anchorJointOffset=" << AnchorJointOffset
-			<< " totalMs=" << Result.TotalMillisecondsPerFrame
-			<< " sampleBlendMs=" << Result.SamplingBlendMillisecondsPerFrame
-			<< " hierarchyMs=" << Result.HierarchyMillisecondsPerFrame
-			<< " skinMatrixMs=" << Result.SkinMatrixMillisecondsPerFrame
-			<< " cpuSkinMs=" << Result.SkinningMillisecondsPerFrame
-			<< " poseBuildMs=" << Result.PoseBuildMillisecondsPerFrame
-			<< " publisherMs=" << Result.PublisherMillisecondsPerFrame
-			<< " projectionMs=" << Result.ProjectionMillisecondsPerFrame
-			<< " bindingBookkeepingUs=" << Result.BindingBookkeepingMicrosecondsPerFrame
-			<< " transformResolutionUs=" << Result.TransformResolutionMicrosecondsPerFrame
-			<< " semanticStepUsP50=" << Result.SemanticStepMicroseconds.P50
-			<< " semanticStepUsP95=" << Result.SemanticStepMicroseconds.P95
-			<< " semanticStepUsP99=" << Result.SemanticStepMicroseconds.P99
-			<< " soundUpdateUsP50=" << Result.SoundUpdateMicroseconds.P50
-			<< " soundUpdateUsP95=" << Result.SoundUpdateMicroseconds.P95
-			<< " soundUpdateUsP99=" << Result.SoundUpdateMicroseconds.P99
-			<< " interactionUpdateUsP50=" << Result.InteractionUpdateMicroseconds.P50
-			<< " interactionUpdateUsP95=" << Result.InteractionUpdateMicroseconds.P95
-			<< " interactionUpdateUsP99=" << Result.InteractionUpdateMicroseconds.P99
-			<< " totalSemanticUsP50=" << Result.TotalSemanticMicroseconds.P50
-			<< " totalSemanticUsP95=" << Result.TotalSemanticMicroseconds.P95
-			<< " totalSemanticUsP99=" << Result.TotalSemanticMicroseconds.P99
-			<< " anchorResolutions=" << Result.AnchorResolutionDelta
-			<< " rigVisits=" << Result.RigVisitDelta
-			<< " runtimeBufferAllocations=" << Result.RuntimeBufferAllocationDelta
-			<< " semanticAllocations=" << Result.SemanticAllocationDelta
-			<< " spatialAllocations=" << Result.SpatialAllocationDelta
-			<< " soundAllocations=" << Result.SoundAllocationDelta
-			<< " interactionAllocations=" << Result.InteractionAllocationDelta << '\n';
+				  << " tracks=" << TrackCount << " anchorsPerRig=" << AnchorsPerRig
+				  << " anchorJointOffset=" << AnchorJointOffset << " totalMs=" << Result.TotalMillisecondsPerFrame
+				  << " runtimeMs=" << Result.RuntimeMillisecondsPerFrame
+				  << " trackAdvanceMs=" << Result.TrackAdvanceMillisecondsPerFrame
+				  << " keyframeLookupMs=" << Result.KeyframeLookupMillisecondsPerFrame
+				  << " interpolationMs=" << Result.InterpolationMillisecondsPerFrame
+				  << " trackBlendingMs=" << Result.TrackBlendingMillisecondsPerFrame
+				  << " bindFallbackMs=" << Result.BindPoseFallbackMillisecondsPerFrame
+				  << " sampleBlendMs=" << Result.SamplingBlendMillisecondsPerFrame
+				  << " hierarchyMs=" << Result.HierarchyMillisecondsPerFrame
+				  << " skinMatrixMs=" << Result.SkinMatrixMillisecondsPerFrame
+				  << " cpuSkinMs=" << Result.SkinningMillisecondsPerFrame
+				  << " semanticJointCacheMs=" << Result.SemanticJointCacheMillisecondsPerFrame
+				  << " poseBuildMs=" << Result.PoseBuildMillisecondsPerFrame
+				  << " policyMs=" << Result.PolicyMillisecondsPerFrame
+				  << " poseWorkerCpuMs=" << Result.PoseWorkerCpuMillisecondsPerFrame
+				  << " poseJobSchedulingMs=" << Result.PoseJobSchedulingMillisecondsPerFrame
+				  << " poseJobWaitMs=" << Result.PoseJobWaitMillisecondsPerFrame
+				  << " poseMergeMs=" << Result.PoseMergeMillisecondsPerFrame
+				  << " publisherMs=" << Result.PublisherMillisecondsPerFrame
+				  << " projectionMs=" << Result.ProjectionMillisecondsPerFrame
+				  << " bindingBookkeepingUs=" << Result.BindingBookkeepingMicrosecondsPerFrame
+				  << " transformResolutionUs=" << Result.TransformResolutionMicrosecondsPerFrame
+				  << " semanticStepUsP50=" << Result.SemanticStepMicroseconds.P50
+				  << " semanticStepUsP95=" << Result.SemanticStepMicroseconds.P95
+				  << " semanticStepUsP99=" << Result.SemanticStepMicroseconds.P99
+				  << " soundUpdateUsP50=" << Result.SoundUpdateMicroseconds.P50
+				  << " soundUpdateUsP95=" << Result.SoundUpdateMicroseconds.P95
+				  << " soundUpdateUsP99=" << Result.SoundUpdateMicroseconds.P99
+				  << " interactionUpdateUsP50=" << Result.InteractionUpdateMicroseconds.P50
+				  << " interactionUpdateUsP95=" << Result.InteractionUpdateMicroseconds.P95
+				  << " interactionUpdateUsP99=" << Result.InteractionUpdateMicroseconds.P99
+				  << " totalSemanticUsP50=" << Result.TotalSemanticMicroseconds.P50
+				  << " totalSemanticUsP95=" << Result.TotalSemanticMicroseconds.P95
+				  << " totalSemanticUsP99=" << Result.TotalSemanticMicroseconds.P99
+				  << " anchorResolutions=" << Result.AnchorResolutionDelta << " rigVisits=" << Result.RigVisitDelta
+				  << " poseEvaluations=" << Result.PoseEvaluationDelta
+				  << " poseJobsScheduled=" << Result.PoseJobsScheduledDelta
+				  << " poseJobBatches=" << Result.PoseJobBatchDelta
+				  << " stalePoseJobDrops=" << Result.StalePoseJobDropDelta
+				  << " poseWorkerCapacity=" << Result.PoseWorkerCapacity
+				  << " runtimeBufferAllocations=" << Result.RuntimeBufferAllocationDelta
+				  << " runtimeSteadyStateAllocations=" << Result.RuntimeSteadyStateAllocationDelta
+				  << " semanticAllocations=" << Result.SemanticAllocationDelta
+				  << " spatialAllocations=" << Result.SpatialAllocationDelta
+				  << " soundAllocations=" << Result.SoundAllocationDelta
+				  << " interactionAllocations=" << Result.InteractionAllocationDelta << '\n';
 		return Result;
+	}
+
+	enum class PolicyBenchmarkScenario : std::uint8_t {
+		AllNearVisible,
+		NearAndFarVisible,
+		VisibleAndOffscreen,
+		AllOffscreenVisual,
+		AllOffscreenSemantic,
+		SemanticAndFarVisual,
+	};
+
+	const char *PolicyScenarioName(PolicyBenchmarkScenario Scenario) {
+		switch (Scenario) {
+		case PolicyBenchmarkScenario::AllNearVisible:
+			return "A-all-near-visible";
+		case PolicyBenchmarkScenario::NearAndFarVisible:
+			return "B-100-near-400-far";
+		case PolicyBenchmarkScenario::VisibleAndOffscreen:
+			return "C-50-visible-450-offscreen";
+		case PolicyBenchmarkScenario::AllOffscreenVisual:
+			return "D-all-offscreen-visual";
+		case PolicyBenchmarkScenario::AllOffscreenSemantic:
+			return "E-all-offscreen-semantic";
+		case PolicyBenchmarkScenario::SemanticAndFarVisual:
+			return "F-50-semantic-450-far";
+		}
+		return "unknown";
+	}
+
+	void RunPolicyScenario(
+		const std::shared_ptr<DataModel> &World,
+		const std::shared_ptr<Workspace> &WorkspaceValue,
+		const std::shared_ptr<AssetService> &Assets,
+		const ImportedRig &Asset,
+		std::span<const RenderMeshCreate> SourceMeshes,
+		PolicyBenchmarkScenario Scenario,
+		bool Quick
+	) {
+		constexpr std::size_t RigCount = 500;
+		const auto Frames = Quick ? 60u : 240u;
+		std::vector<std::shared_ptr<MeshPart>> Rigs;
+		std::vector<std::shared_ptr<Animator>> Animators;
+		std::vector<std::shared_ptr<AnimationTrack>> Tracks;
+		std::vector<std::shared_ptr<Attachment>> Anchors;
+		std::vector<ObjectId> VisibleObjects;
+		Rigs.reserve(RigCount);
+		Animators.reserve(RigCount);
+		Tracks.reserve(RigCount);
+		Anchors.reserve(RigCount);
+		VisibleObjects.reserve(RigCount);
+		AnimationRuntime Runtime(Assets);
+		auto Spatial = std::make_shared<SemanticSpatialResolver>(Assets, &Runtime);
+		for (std::size_t RigIndex = 0; RigIndex < RigCount; ++RigIndex) {
+			bool NearVisible = false;
+			bool FarVisible = false;
+			bool Semantic = false;
+			switch (Scenario) {
+			case PolicyBenchmarkScenario::AllNearVisible:
+				NearVisible = true;
+				break;
+			case PolicyBenchmarkScenario::NearAndFarVisible:
+				NearVisible = RigIndex < 100;
+				FarVisible = !NearVisible;
+				break;
+			case PolicyBenchmarkScenario::VisibleAndOffscreen:
+				NearVisible = RigIndex < 50;
+				break;
+			case PolicyBenchmarkScenario::AllOffscreenVisual:
+				break;
+			case PolicyBenchmarkScenario::AllOffscreenSemantic:
+				Semantic = true;
+				break;
+			case PolicyBenchmarkScenario::SemanticAndFarVisual:
+				Semantic = RigIndex < 50;
+				FarVisible = !Semantic;
+				break;
+			}
+			auto Rig = std::make_shared<MeshPart>();
+			Rig->SetMesh(Asset.Mesh);
+			Rig->SetAnchored(true);
+			Rig->SetCFrame(CFrame(NearVisible ? 24.0f : 240.0f, static_cast<float>(RigIndex % 20) * 0.01f, 0.0f));
+			Rig->SetParent(WorkspaceValue);
+			auto AnimatorValue = std::make_shared<Animator>();
+			AnimatorValue->SetParent(Rig);
+			Runtime.RegisterAnimator(AnimatorValue);
+			auto Track = AnimatorValue->CreateTrack(Asset.Animation);
+			Track->SetLooped(true);
+			Track->Play();
+			if (NearVisible || FarVisible) VisibleObjects.push_back(Rig->GetObjectId());
+			if (Semantic) {
+				auto Anchor = std::make_shared<Attachment>();
+				Anchor->SetJointPath("B0/B1");
+				Anchor->SetParent(Rig);
+				Spatial->RegisterAttachment(Anchor);
+				Anchors.push_back(std::move(Anchor));
+			}
+			Tracks.push_back(std::move(Track));
+			Animators.push_back(std::move(AnimatorValue));
+			Rigs.push_back(std::move(Rig));
+		}
+		std::ranges::sort(VisibleObjects);
+		std::uint64_t VisibilityPublication = 1;
+		auto StepRuntime = [&](float DeltaTime) {
+			Spatial->PrepareAnimationRequirements();
+			AnimationUpdateContext Context{
+				.Environment = AnimationRuntimeEnvironment::Graphical,
+				.ViewOrigin = glm::vec3(0.0f),
+				.HasViewOrigin = true,
+				.VisibilityGeneration = 1,
+				.VisibilityPublication = VisibilityPublication++,
+				.VisibilityComplete = true,
+				.VisibleObjects = VisibleObjects,
+				.SemanticRequirementsComplete = Spatial->AreAnimationRequirementsComplete(),
+				.SemanticRequiredObjects = Spatial->GetAnimationRequiredRigs(),
+			};
+			Runtime.Step(DeltaTime, Context);
+		};
+
+		RenderPublisher Publisher;
+		Publisher.SetAssetMeshChanges(std::vector<RenderMeshCreate>(SourceMeshes.begin(), SourceMeshes.end()), {});
+		RenderProjection Projection;
+		StepRuntime(0.0f);
+		Spatial->Step();
+		Publisher.SetAnimationPoseChanges(Runtime.GetPoseUpdates(), Runtime.GetPoseRemoves());
+		Runtime.ClearChanges();
+		auto Initial = Publisher.Publish(*WorkspaceValue, RenderCameraInput{}, 640, 360);
+		Require(Initial->AnimationPoseUpdates.size() == RigCount, "policy scenario initial publication omitted a rig");
+		(void)Projection.Apply(*Initial);
+		for (std::size_t Warmup = 0; Warmup < 90; ++Warmup) {
+			StepRuntime(1.0f / 60.0f);
+			Spatial->Step();
+			Publisher.SetAnimationPoseChanges(Runtime.GetPoseUpdates(), Runtime.GetPoseRemoves());
+			Runtime.ClearChanges();
+			(void)Projection.Apply(*Publisher.Publish(*WorkspaceValue, RenderCameraInput{}, 640, 360));
+		}
+
+		const auto MetricsBefore = Runtime.GetMetrics();
+		const auto SpatialBefore = Spatial->GetMetrics();
+		std::uint64_t RuntimeAllocations = 0;
+		std::uint64_t PosePublications = 0;
+		std::uint64_t FullRateAnimatorFrames = 0;
+		std::uint64_t ReducedAnimatorFrames = 0;
+		std::uint64_t FrozenAnimatorFrames = 0;
+		std::uint64_t SemanticAnimatorFrames = 0;
+		std::vector<std::uint64_t> TotalSamples;
+		std::vector<std::uint64_t> RuntimeSamples;
+		TotalSamples.reserve(Frames);
+		RuntimeSamples.reserve(Frames);
+		for (std::size_t Frame = 0; Frame < Frames; ++Frame) {
+			const auto TotalStarted = Clock::now();
+			const auto RuntimeBefore = Runtime.GetMetrics().EvaluationCpuNanoseconds;
+			const auto AllocationsBefore = SemanticBenchmarkAllocations.load(std::memory_order_relaxed);
+			StepRuntime(1.0f / 60.0f);
+			RuntimeAllocations += SemanticBenchmarkAllocations.load(std::memory_order_relaxed) - AllocationsBefore;
+			const auto CurrentMetrics = Runtime.GetMetrics();
+			RuntimeSamples.push_back(CurrentMetrics.EvaluationCpuNanoseconds - RuntimeBefore);
+			FullRateAnimatorFrames += CurrentMetrics.FullRateAnimators;
+			ReducedAnimatorFrames += CurrentMetrics.ReducedRateAnimators;
+			FrozenAnimatorFrames += CurrentMetrics.FrozenVisualAnimators;
+			SemanticAnimatorFrames += CurrentMetrics.SemanticRequiredAnimators;
+			Spatial->Step();
+			Publisher.SetAnimationPoseChanges(Runtime.GetPoseUpdates(), Runtime.GetPoseRemoves());
+			PosePublications += Runtime.GetPoseUpdates().size();
+			Runtime.ClearChanges();
+			auto Publication = Publisher.Publish(*WorkspaceValue, RenderCameraInput{}, 640, 360);
+			Require(
+				Publication->AnimationPoseUpdates.size() <= RigCount,
+				"policy scenario published an unbounded pose count"
+			);
+			(void)Projection.Apply(*Publication);
+			TotalSamples.push_back(Nanoseconds(TotalStarted));
+		}
+		const auto MetricsAfter = Runtime.GetMetrics();
+		const auto SpatialAfter = Spatial->GetMetrics();
+		const auto PerFrameMilliseconds = [Frames](std::uint64_t Value) {
+			return static_cast<double>(Value) / 1'000'000.0 / static_cast<double>(Frames);
+		};
+		const auto TotalPercentiles = Summarize(std::move(TotalSamples));
+		const auto RuntimePercentiles = Summarize(std::move(RuntimeSamples));
+		const auto PoseEvaluations = MetricsAfter.PoseEvaluations - MetricsBefore.PoseEvaluations;
+		Require(
+			MetricsAfter.BufferAllocations == MetricsBefore.BufferAllocations,
+			"policy scenario grew animation pose buffers after warmup"
+		);
+		std::cout
+			<< "[Animation:PolicyBenchmark] scenario=" << PolicyScenarioName(Scenario) << " frames=" << Frames
+			<< " fullRateAvg=" << static_cast<double>(FullRateAnimatorFrames) / Frames
+			<< " reducedAvg=" << static_cast<double>(ReducedAnimatorFrames) / Frames
+			<< " frozenAvg=" << static_cast<double>(FrozenAnimatorFrames) / Frames
+			<< " semanticAvg=" << static_cast<double>(SemanticAnimatorFrames) / Frames
+			<< " poseEvaluationsPerFrame=" << static_cast<double>(PoseEvaluations) / Frames
+			<< " posePublicationsPerFrame=" << static_cast<double>(PosePublications) / Frames << " trackAdvanceMs="
+			<< PerFrameMilliseconds(MetricsAfter.TrackAdvanceCpuNanoseconds - MetricsBefore.TrackAdvanceCpuNanoseconds)
+			<< " policyMs="
+			<< PerFrameMilliseconds(MetricsAfter.PolicyCpuNanoseconds - MetricsBefore.PolicyCpuNanoseconds)
+			<< " sampleBlendMs="
+			<< PerFrameMilliseconds(
+				   MetricsAfter.SamplingAndBlendingCpuNanoseconds - MetricsBefore.SamplingAndBlendingCpuNanoseconds
+			   )
+			<< " hierarchyMs="
+			<< PerFrameMilliseconds(MetricsAfter.HierarchyCpuNanoseconds - MetricsBefore.HierarchyCpuNanoseconds)
+			<< " skinMatrixMs="
+			<< PerFrameMilliseconds(MetricsAfter.SkinMatrixCpuNanoseconds - MetricsBefore.SkinMatrixCpuNanoseconds)
+			<< " poseWorkerCpuMs="
+			<< PerFrameMilliseconds(MetricsAfter.PoseWorkerCpuNanoseconds - MetricsBefore.PoseWorkerCpuNanoseconds)
+			<< " poseJobSchedulingMs="
+			<< PerFrameMilliseconds(
+				   MetricsAfter.PoseJobSchedulingCpuNanoseconds - MetricsBefore.PoseJobSchedulingCpuNanoseconds
+			   )
+			<< " poseJobWaitMs="
+			<< PerFrameMilliseconds(MetricsAfter.PoseJobWaitNanoseconds - MetricsBefore.PoseJobWaitNanoseconds)
+			<< " poseMergeMs="
+			<< PerFrameMilliseconds(MetricsAfter.PoseMergeCpuNanoseconds - MetricsBefore.PoseMergeCpuNanoseconds)
+			<< " poseJobsPerFrame="
+			<< static_cast<double>(MetricsAfter.PoseJobsScheduled - MetricsBefore.PoseJobsScheduled) / Frames
+			<< " poseJobBatchesPerFrame="
+			<< static_cast<double>(MetricsAfter.PoseJobBatches - MetricsBefore.PoseJobBatches) / Frames
+			<< " stalePoseJobDrops=" << MetricsAfter.StalePoseJobDrops - MetricsBefore.StalePoseJobDrops
+			<< " poseWorkerCapacity=" << MetricsAfter.PoseWorkerCapacity << " anchorUpdatesPerFrame="
+			<< static_cast<double>(SpatialAfter.AnchorResolutions - SpatialBefore.AnchorResolutions) / Frames
+			<< " totalUsP50=" << TotalPercentiles.P50 << " totalUsP95=" << TotalPercentiles.P95
+			<< " totalUsP99=" << TotalPercentiles.P99 << " runtimeUsP50=" << RuntimePercentiles.P50
+			<< " runtimeUsP95=" << RuntimePercentiles.P95 << " runtimeUsP99=" << RuntimePercentiles.P99
+			<< " runtimeBufferAllocations=" << MetricsAfter.BufferAllocations - MetricsBefore.BufferAllocations
+			<< " runtimeGeneralAllocations=" << RuntimeAllocations << '\n';
+
+		Spatial->Shutdown();
+		Runtime.Shutdown();
+		for (auto &AnimatorValue : Animators)
+			AnimatorValue->Destroy();
+		for (auto &Rig : Rigs)
+			Rig->Destroy();
+		Tracks.clear();
+		Anchors.clear();
+		Animators.clear();
+		Rigs.clear();
+	}
+
+	void RunJobScaling(
+		const std::shared_ptr<DataModel> &World,
+		const std::shared_ptr<Workspace> &WorkspaceValue,
+		const std::shared_ptr<AssetService> &Assets,
+		const ImportedRig &Asset,
+		std::span<const RenderMeshCreate> SourceMeshes,
+		const std::string &AudioReference,
+		bool Quick
+	) {
+		const auto Frames = Quick ? 10u : 60u;
+		const auto NormalWorkerCapacity = std::max(1u, std::thread::hardware_concurrency());
+		for (const auto RigCount : {10u, 100u, 500u, 1000u}) {
+			auto Serial = RunScenario(
+				World,
+				WorkspaceValue,
+				Assets,
+				Asset,
+				SourceMeshes,
+				AudioReference,
+				RigCount,
+				64,
+				1,
+				0,
+				Frames,
+				0,
+				false,
+				1
+			);
+			auto Parallel = RunScenario(
+				World,
+				WorkspaceValue,
+				Assets,
+				Asset,
+				SourceMeshes,
+				AudioReference,
+				RigCount,
+				64,
+				1,
+				0,
+				Frames,
+				0,
+				false,
+				0
+			);
+			Require(
+				Serial.RuntimeBufferAllocationDelta == 0 && Serial.RuntimeSteadyStateAllocationDelta == 0 &&
+					Parallel.RuntimeBufferAllocationDelta == 0 && Parallel.RuntimeSteadyStateAllocationDelta == 0,
+				"pose job scaling allocated runtime buffers or general storage after warmup"
+			);
+			Require(
+				Serial.StalePoseJobDropDelta == 0 && Parallel.StalePoseJobDropDelta == 0,
+				"stable pose job scaling unexpectedly dropped a result"
+			);
+			const auto Speedup = Serial.RuntimeMillisecondsPerFrame /
+								 std::max(Parallel.RuntimeMillisecondsPerFrame, 1.0e-9);
+			std::cout << "[Animation:JobBenchmark] rigs=" << RigCount << " bones=64 tracks=1 frames=" << Frames
+					  << " serialWorkers=1"
+					  << " normalWorkerCapacity=" << NormalWorkerCapacity
+					  << " activeWorkerCapacity=" << Parallel.PoseWorkerCapacity
+					  << " serialMainThreadWallMs=" << Serial.RuntimeMillisecondsPerFrame
+					  << " parallelMainThreadWallMs=" << Parallel.RuntimeMillisecondsPerFrame
+					  << " parallelMainThreadActiveMs="
+					  << std::max(0.0, Parallel.RuntimeMillisecondsPerFrame - Parallel.PoseJobWaitMillisecondsPerFrame)
+					  << " serialTotalWallMs=" << Serial.TotalMillisecondsPerFrame
+					  << " parallelTotalWallMs=" << Parallel.TotalMillisecondsPerFrame << " runtimeSpeedup=" << Speedup
+					  << " workerCpuMs=" << Parallel.PoseWorkerCpuMillisecondsPerFrame
+					  << " schedulingMs=" << Parallel.PoseJobSchedulingMillisecondsPerFrame
+					  << " waitMs=" << Parallel.PoseJobWaitMillisecondsPerFrame
+					  << " mergeMs=" << Parallel.PoseMergeMillisecondsPerFrame
+					  << " jobsPerFrame=" << static_cast<double>(Parallel.PoseJobsScheduledDelta) / Frames
+					  << " batchesPerFrame=" << static_cast<double>(Parallel.PoseJobBatchDelta) / Frames
+					  << " staleDrops=" << Parallel.StalePoseJobDropDelta << '\n';
+		}
 	}
 
 	void RunCpuSkinningScaling(bool Quick) {
@@ -691,8 +1094,18 @@ namespace {
 		const std::string &AudioReference
 	) {
 		constexpr std::size_t StaticObjectCount = 50'000;
+		constexpr std::size_t AnimatedRigCount = 500;
+		constexpr std::size_t VisibleRigCount = 50;
 		std::vector<std::shared_ptr<Part>> StaticObjects;
+		std::vector<std::shared_ptr<MeshPart>> Rigs;
+		std::vector<std::shared_ptr<Animator>> Animators;
+		std::vector<std::shared_ptr<AnimationTrack>> Tracks;
+		std::vector<ObjectId> VisibleObjects;
 		StaticObjects.reserve(StaticObjectCount);
+		Rigs.reserve(AnimatedRigCount);
+		Animators.reserve(AnimatedRigCount);
+		Tracks.reserve(AnimatedRigCount);
+		VisibleObjects.reserve(VisibleRigCount);
 		auto Runtime = std::make_unique<AnimationRuntime>(Assets);
 		auto Spatial = std::make_shared<SemanticSpatialResolver>(Assets, Runtime.get());
 		auto PlayersValue = std::dynamic_pointer_cast<Players>(World->GetService("Players"));
@@ -707,52 +1120,93 @@ namespace {
 			Object->SetParent(WorkspaceValue);
 			StaticObjects.push_back(std::move(Object));
 		}
-		auto Rig = std::make_shared<MeshPart>();
-		Rig->SetMesh(Asset.Mesh);
-		Rig->SetAnchored(true);
-		Rig->SetParent(WorkspaceValue);
-		auto AnimatorValue = std::make_shared<Animator>();
-		AnimatorValue->SetParent(Rig);
-		Runtime->RegisterAnimator(AnimatorValue);
-		auto Anchor = std::make_shared<Attachment>();
-		Anchor->SetJointPath("B0/B1");
-		Anchor->SetParent(Rig);
-		Spatial->RegisterAttachment(Anchor);
-		auto Prompt = std::make_shared<ProximityPrompt>();
-		Prompt->SetMaxActivationDistance(64.0f);
-		Prompt->SetParent(Anchor);
-		auto SoundValue = std::make_shared<Sound>();
-		SoundValue->SetSoundId(AudioReference);
-		SoundValue->SetLooped(true);
-		SoundValue->SetParent(Anchor);
+		std::shared_ptr<Attachment> Anchor;
+		std::shared_ptr<ProximityPrompt> Prompt;
+		std::shared_ptr<Sound> SoundValue;
+		for (std::size_t RigIndex = 0; RigIndex < AnimatedRigCount; ++RigIndex) {
+			auto Rig = std::make_shared<MeshPart>();
+			Rig->SetMesh(Asset.Mesh);
+			Rig->SetAnchored(true);
+			Rig->SetCFrame(
+				CFrame(RigIndex < VisibleRigCount ? 24.0f : 240.0f, static_cast<float>(RigIndex % 20) * 0.01f, 0.0f)
+			);
+			Rig->SetParent(WorkspaceValue);
+			auto AnimatorValue = std::make_shared<Animator>();
+			AnimatorValue->SetParent(Rig);
+			Runtime->RegisterAnimator(AnimatorValue);
+			auto Track = AnimatorValue->CreateTrack(Asset.Animation);
+			Track->SetLooped(true);
+			Track->Play();
+			if (RigIndex < VisibleRigCount) VisibleObjects.push_back(Rig->GetObjectId());
+			if (RigIndex + 1 == AnimatedRigCount) {
+				Anchor = std::make_shared<Attachment>();
+				Anchor->SetJointPath("B0/B1");
+				Anchor->SetParent(Rig);
+				Spatial->RegisterAttachment(Anchor);
+				Prompt = std::make_shared<ProximityPrompt>();
+				Prompt->SetMaxActivationDistance(64.0f);
+				Prompt->SetParent(Anchor);
+				SoundValue = std::make_shared<Sound>();
+				SoundValue->SetSoundId(AudioReference);
+				SoundValue->SetLooped(true);
+				SoundValue->SetParent(Anchor);
+			}
+			Tracks.push_back(std::move(Track));
+			Animators.push_back(std::move(AnimatorValue));
+			Rigs.push_back(std::move(Rig));
+		}
+		std::ranges::sort(VisibleObjects);
 		auto Audio = std::make_unique<AudioRuntime>(
 			Assets, std::make_unique<BenchmarkAudioBackend>(), AudioRuntime::DiagnosticCallback{}, Spatial);
 		Audio->RegisterSound(SoundValue);
 		SoundValue->Play();
-		auto Track = AnimatorValue->CreateTrack(Asset.Animation);
-		Track->SetLooped(true);
-		Track->Play();
+		std::uint64_t VisibilityPublication = 1;
+		auto StepRuntime = [&](float DeltaTime) {
+			Spatial->PrepareAnimationRequirements();
+			AnimationUpdateContext Context{
+				.Environment = AnimationRuntimeEnvironment::Graphical,
+				.ViewOrigin = glm::vec3(0.0f),
+				.HasViewOrigin = true,
+				.VisibilityGeneration = 1,
+				.VisibilityPublication = VisibilityPublication++,
+				.VisibilityComplete = true,
+				.VisibleObjects = VisibleObjects,
+				.SemanticRequirementsComplete = Spatial->AreAnimationRequirementsComplete(),
+				.SemanticRequiredObjects = Spatial->GetAnimationRequiredRigs(),
+			};
+			Runtime->Step(DeltaTime, Context);
+		};
 		RenderPublisher Publisher;
 		Publisher.SetAssetMeshChanges(std::vector<RenderMeshCreate>(SourceMeshes.begin(), SourceMeshes.end()), {});
 		RenderProjection Projection;
-		Runtime->Step(0.0f);
+		StepRuntime(0.0f);
 		Spatial->Step();
 		InteractionServiceTestAccess::ProcessDirty(*Interaction);
 		Audio->Step(CFrame());
 		Publisher.SetAnimationPoseChanges(Runtime->GetPoseUpdates(), Runtime->GetPoseRemoves());
 		Runtime->ClearChanges();
-		(void)Projection.Apply(*Publisher.Publish(*WorkspaceValue, RenderCameraInput{}, 640, 360));
-		for (std::size_t Warmup = 0; Warmup < 5; ++Warmup) {
-			Runtime->Step(1.0f / 60.0f);
+		auto Initial = Publisher.Publish(*WorkspaceValue, RenderCameraInput{}, 640, 360);
+		Require(
+			Initial->AnimationPoseUpdates.size() == AnimatedRigCount,
+			"50K world initial publication omitted an animated rig"
+		);
+		(void)Projection.Apply(*Initial);
+		for (std::size_t Warmup = 0; Warmup < 90; ++Warmup) {
+			StepRuntime(1.0f / 60.0f);
 			Spatial->Step();
 			InteractionServiceTestAccess::ProcessDirty(*Interaction);
 			Audio->Step(CFrame());
+			Publisher.SetAnimationPoseChanges(Runtime->GetPoseUpdates(), Runtime->GetPoseRemoves());
 			Runtime->ClearChanges();
+			(void)Projection.Apply(*Publisher.Publish(*WorkspaceValue, RenderCameraInput{}, 640, 360));
 		}
 		ChangeJournal::Get().Clear();
+		const auto RuntimeBefore = Runtime->GetMetrics();
 		const auto SpatialBefore = Spatial->GetMetrics();
-		Runtime->Step(1.0f / 60.0f);
+		const auto AllocationsBeforeRuntime = SemanticBenchmarkAllocations.load(std::memory_order_relaxed);
+		StepRuntime(1.0f / 60.0f);
 		const auto AllocationsAfterRuntime = SemanticBenchmarkAllocations.load(std::memory_order_relaxed);
+		const auto PoseUpdateCount = Runtime->GetPoseUpdates().size();
 		Spatial->Step();
 		const auto AllocationsAfterSpatial = SemanticBenchmarkAllocations.load(std::memory_order_relaxed);
 		InteractionServiceTestAccess::ProcessDirty(*Interaction);
@@ -760,19 +1214,47 @@ namespace {
 		Audio->Step(CFrame());
 		const auto AllocationsAfterAudio = SemanticBenchmarkAllocations.load(std::memory_order_relaxed);
 		const auto SemanticAllocationDelta = AllocationsAfterAudio - AllocationsAfterRuntime;
+		std::vector<ObjectId> EvaluatedObjects;
+		EvaluatedObjects.reserve(PoseUpdateCount);
+		for (const auto &Update : Runtime->GetPoseUpdates())
+			EvaluatedObjects.push_back(Update.Pose.Object);
+		std::ranges::sort(EvaluatedObjects);
 		Publisher.SetAnimationPoseChanges(Runtime->GetPoseUpdates(), Runtime->GetPoseRemoves());
 		Runtime->ClearChanges();
 		const auto Started = Clock::now();
 		auto Incremental = Publisher.Publish(*WorkspaceValue, RenderCameraInput{}, 640, 360);
 		const auto PublishNanoseconds = Nanoseconds(Started);
+		const auto RuntimeAfter = Runtime->GetMetrics();
 		const auto SpatialAfter = Spatial->GetMetrics();
+		const auto ExpectedPoseUpdates = VisibleRigCount + 1;
 		const auto StaticUpdateCount = std::ranges::count_if(Incremental->Updates, [&](const auto &Update) {
-			return Update.Object != Rig->GetObjectId();
+			return !std::ranges::binary_search(EvaluatedObjects, Update.Object);
 		});
-		Require(Incremental->AnimationPoseUpdates.size() == 1 && Incremental->MeshVertexUpdates.empty() &&
-			Incremental->MeshCreates.empty() && StaticUpdateCount == 0 && Incremental->Creates.empty() &&
-			Incremental->Removes.empty() && !Incremental->FullResync,
-			"50K static world animation publication touched static objects");
+		if (PoseUpdateCount != ExpectedPoseUpdates || Incremental->AnimationPoseUpdates.size() != ExpectedPoseUpdates ||
+			!Incremental->MeshVertexUpdates.empty() || !Incremental->MeshCreates.empty() ||
+			Incremental->Updates.size() != ExpectedPoseUpdates || StaticUpdateCount != 0 ||
+			!Incremental->Creates.empty() || !Incremental->Removes.empty() || Incremental->FullResync)
+			std::cerr << "[Animation:Benchmark] staticWorld publication mismatch runtimePoseUpdates=" << PoseUpdateCount
+					  << " publishedPoseUpdates=" << Incremental->AnimationPoseUpdates.size()
+					  << " meshVertexUpdates=" << Incremental->MeshVertexUpdates.size()
+					  << " meshCreates=" << Incremental->MeshCreates.size()
+					  << " objectUpdates=" << Incremental->Updates.size() << " staticUpdates=" << StaticUpdateCount
+					  << " creates=" << Incremental->Creates.size() << " removes=" << Incremental->Removes.size()
+					  << " fullResync=" << Incremental->FullResync << '\n';
+		Require(
+			PoseUpdateCount == ExpectedPoseUpdates && Incremental->AnimationPoseUpdates.size() == ExpectedPoseUpdates &&
+				Incremental->MeshVertexUpdates.empty() && Incremental->MeshCreates.empty() &&
+				Incremental->Updates.size() == ExpectedPoseUpdates && StaticUpdateCount == 0 &&
+				Incremental->Creates.empty() && Incremental->Removes.empty() && !Incremental->FullResync,
+			"50K static world policy publication touched static objects or evaluated a frozen rig"
+		);
+		Require(
+			RuntimeAfter.PoseEvaluations - RuntimeBefore.PoseEvaluations == ExpectedPoseUpdates &&
+				RuntimeAfter.FullRateAnimators == VisibleRigCount &&
+				RuntimeAfter.FrozenVisualAnimators == AnimatedRigCount - VisibleRigCount - 1 &&
+				RuntimeAfter.SemanticRequiredAnimators == 1,
+			"50K static world policy classes did not produce exactly 50 visible plus one semantic evaluation"
+		);
 		Require(SpatialAfter.RegisteredAttachments == 1 &&
 			SpatialAfter.IndexedSemanticAnchors == 1 && SpatialAfter.IndexedRigs == 1 &&
 			SpatialAfter.AnchorResolutions - SpatialBefore.AnchorResolutions == 1 &&
@@ -780,25 +1262,34 @@ namespace {
 			"the one semantic anchor was not updated exactly once in the 50K Part world");
 		Require(ChangeJournal::Get().ReadSince(0).empty(),
 			"semantic pose movement emitted ChangeJournal document work in the 50K world");
-		if (SemanticAllocationDelta != 0)
-			std::cerr << "[Animation:Benchmark] staticWorld semantic allocations spatial="
-				<< AllocationsAfterSpatial - AllocationsAfterRuntime << " interaction="
-				<< AllocationsAfterInteraction - AllocationsAfterSpatial << " audio="
-				<< AllocationsAfterAudio - AllocationsAfterInteraction << '\n';
-		Require(SemanticAllocationDelta == 0,
-			"50K static world semantic steady state allocated after warmup");
-		std::cout << "[Animation:Benchmark] staticWorld=50000 animatedRigs=1 semanticAnchors=1 "
-			"poseUpdates=1 anchorResolutions=1 staticUpdates=0 "
-			"changeJournalRecords=0 documentReconciliation=0 semanticAllocations=0 "
-			"cpuDynamicVertexUpdates=0 fullResyncs=0 publisherMs="
-			<< static_cast<double>(PublishNanoseconds) / 1'000'000.0 << '\n';
+		if (SemanticAllocationDelta != 0 || AllocationsAfterRuntime != AllocationsBeforeRuntime)
+			std::cerr << "[Animation:Benchmark] staticWorld allocations runtime="
+					  << AllocationsAfterRuntime - AllocationsBeforeRuntime
+					  << " spatial=" << AllocationsAfterSpatial - AllocationsAfterRuntime
+					  << " interaction=" << AllocationsAfterInteraction - AllocationsAfterSpatial
+					  << " audio=" << AllocationsAfterAudio - AllocationsAfterInteraction << '\n';
+		Require(
+			SemanticAllocationDelta == 0 && AllocationsAfterRuntime == AllocationsBeforeRuntime &&
+				RuntimeAfter.BufferAllocations == RuntimeBefore.BufferAllocations,
+			"50K static world animation or semantic steady state allocated after warmup"
+		);
+		std::cout << "[Animation:Benchmark] staticWorld=50000 animatedRigs=500 visibleRigs=50 "
+					 "semanticRigs=1 frozenVisualRigs=449 poseUpdates=51 anchorResolutions=1 staticUpdates=0 "
+					 "changeJournalRecords=0 documentReconciliation=0 runtimeAllocations=0 semanticAllocations=0 "
+					 "cpuDynamicVertexUpdates=0 fullResyncs=0 publisherMs="
+				  << static_cast<double>(PublishNanoseconds) / 1'000'000.0 << '\n';
 		Audio->Shutdown();
 		InteractionServiceTestAccess::Shutdown(*Interaction);
 		Spatial->Shutdown();
 		Runtime->Shutdown();
-		AnimatorValue->Destroy();
-		Rig->Destroy();
+		for (auto &AnimatorValue : Animators)
+			AnimatorValue->Destroy();
+		for (auto &Rig : Rigs)
+			Rig->Destroy();
 		for (auto &Object : StaticObjects) Object->Destroy();
+		Tracks.clear();
+		Animators.clear();
+		Rigs.clear();
 		StaticObjects.clear();
 		ChangeJournal::Get().Clear();
 	}
@@ -889,7 +1380,29 @@ namespace {
 int main(int ArgumentCount, char **Arguments) {
 	struct SdlProcessCleanup final { ~SdlProcessCleanup() { SDL_Quit(); } } SdlCleanup;
 	try {
-		const bool Quick = ArgumentCount > 1 && std::string_view(Arguments[1]) == "--quick";
+		bool Quick = false;
+		bool ProfileMatrix = false;
+		bool PolicyScenarios = false;
+		bool JobScaling = false;
+		bool StaticWorld = false;
+		bool DetailedProfiling = false;
+		for (int ArgumentIndex = 1; ArgumentIndex < ArgumentCount; ++ArgumentIndex) {
+			const std::string_view Argument(Arguments[ArgumentIndex]);
+			if (Argument == "--quick")
+				Quick = true;
+			else if (Argument == "--profile-matrix")
+				ProfileMatrix = true;
+			else if (Argument == "--policy-scenarios")
+				PolicyScenarios = true;
+			else if (Argument == "--job-scaling")
+				JobScaling = true;
+			else if (Argument == "--static-world")
+				StaticWorld = true;
+			else if (Argument == "--detailed-profile")
+				DetailedProfiling = true;
+			else
+				throw std::invalid_argument("[Animation:Benchmark] unsupported argument");
+		}
 		BootstrapNativeRuntimeSchema();
 		const auto Unique = std::to_string(Clock::now().time_since_epoch().count());
 		const auto Root = std::filesystem::temp_directory_path() / ("gargantuan-animation-benchmark-" + Unique);
@@ -914,33 +1427,117 @@ int main(int ArgumentCount, char **Arguments) {
 		const auto SourceMeshes = MeshChanges.Creates;
 		const auto Frames = Quick ? 2u : 10u;
 		std::cout << std::fixed << std::setprecision(4);
-		for (const auto Rigs : {1u, 10u, 100u, 500u})
-			for (const auto AnchorsPerRig : {0u, 1u, 4u, 16u, 64u}) {
-				auto Result = RunScenario(World, WorkspaceValue, Assets, Imported.at(64), SourceMeshes, AudioReference,
-					Rigs, 64, 1, AnchorsPerRig, Frames);
-				Require(Result.RuntimeBufferAllocationDelta == 0 && Result.SemanticAllocationDelta == 0,
-					"rig/anchor-scaling scenario allocated after warmup");
+		if (ProfileMatrix) {
+			std::cout << "[Animation:Benchmark] matrix=prePolicy frames=" << Frames
+					  << " detailedProfiling=" << DetailedProfiling << '\n';
+			for (const auto Rigs : {1u, 10u, 100u, 500u, 1000u})
+				for (const auto Bones : {16u, 64u, 128u, 256u})
+					for (const auto Tracks : {1u, 2u, 4u}) {
+						auto Result = RunScenario(
+							World,
+							WorkspaceValue,
+							Assets,
+							Imported.at(Bones),
+							SourceMeshes,
+							AudioReference,
+							Rigs,
+							Bones,
+							Tracks,
+							0,
+							Frames,
+							0,
+							DetailedProfiling
+						);
+						Require(
+							Result.RuntimeBufferAllocationDelta == 0 && Result.SemanticAllocationDelta == 0,
+							"pre-policy profile matrix allocated after warmup"
+						);
+					}
+		} else if (StaticWorld) {
+			RunStaticWorldRegression(World, WorkspaceValue, Assets, Imported.at(64), SourceMeshes, AudioReference);
+		} else if (JobScaling) {
+			RunJobScaling(World, WorkspaceValue, Assets, Imported.at(64), SourceMeshes, AudioReference, Quick);
+		} else if (PolicyScenarios) {
+			for (const auto Scenario : {
+					 PolicyBenchmarkScenario::AllNearVisible,
+					 PolicyBenchmarkScenario::NearAndFarVisible,
+					 PolicyBenchmarkScenario::VisibleAndOffscreen,
+					 PolicyBenchmarkScenario::AllOffscreenVisual,
+					 PolicyBenchmarkScenario::AllOffscreenSemantic,
+					 PolicyBenchmarkScenario::SemanticAndFarVisual,
+				 })
+				RunPolicyScenario(World, WorkspaceValue, Assets, Imported.at(64), SourceMeshes, Scenario, Quick);
+		} else {
+			for (const auto Rigs : {1u, 10u, 100u, 500u})
+				for (const auto AnchorsPerRig : {0u, 1u, 4u, 16u, 64u}) {
+					auto Result = RunScenario(
+						World,
+						WorkspaceValue,
+						Assets,
+						Imported.at(64),
+						SourceMeshes,
+						AudioReference,
+						Rigs,
+						64,
+						1,
+						AnchorsPerRig,
+						Frames
+					);
+					Require(
+						Result.RuntimeBufferAllocationDelta == 0 && Result.SemanticAllocationDelta == 0,
+						"rig/anchor-scaling scenario allocated after warmup"
+					);
+				}
+			for (const auto Bones : {16u, 64u, 128u, 256u}) {
+				auto Result = RunScenario(
+					World,
+					WorkspaceValue,
+					Assets,
+					Imported.at(Bones),
+					SourceMeshes,
+					AudioReference,
+					10,
+					Bones,
+					1,
+					0,
+					Frames
+				);
+				Require(
+					Result.RuntimeBufferAllocationDelta == 0 && Result.SemanticAllocationDelta == 0,
+					"bone-scaling scenario allocated after warmup"
+				);
 			}
-		for (const auto Bones : {16u, 64u, 128u, 256u}) {
-			auto Result = RunScenario(World, WorkspaceValue, Assets, Imported.at(Bones), SourceMeshes, AudioReference,
-				10, Bones, 1, 0, Frames);
-			Require(Result.RuntimeBufferAllocationDelta == 0 && Result.SemanticAllocationDelta == 0,
-				"bone-scaling scenario allocated after warmup");
+			auto SparseBinding = RunScenario(
+				World, WorkspaceValue, Assets, Imported.at(256), SourceMeshes, AudioReference, 1, 256, 1, 1, Frames, 200
+			);
+			Require(
+				SparseBinding.AnchorResolutionDelta == Frames && SparseBinding.RigVisitDelta == Frames &&
+					SparseBinding.RuntimeBufferAllocationDelta == 0 && SparseBinding.SemanticAllocationDelta == 0,
+				"one sparse joint-200 binding scaled with skeleton/world size instead of one registered anchor"
+			);
+			for (const auto Tracks : {1u, 2u, 4u}) {
+				auto Result = RunScenario(
+					World,
+					WorkspaceValue,
+					Assets,
+					Imported.at(64),
+					SourceMeshes,
+					AudioReference,
+					10,
+					64,
+					Tracks,
+					0,
+					Frames
+				);
+				Require(
+					Result.RuntimeBufferAllocationDelta == 0 && Result.SemanticAllocationDelta == 0,
+					"track-scaling scenario allocated after warmup"
+				);
+			}
+			RunCpuSkinningScaling(Quick);
+			RunStaticWorldRegression(World, WorkspaceValue, Assets, Imported.at(64), SourceMeshes, AudioReference);
+			RunStaticAttachmentRegression(WorkspaceValue, Assets, Imported.at(64));
 		}
-		auto SparseBinding = RunScenario(World, WorkspaceValue, Assets, Imported.at(256), SourceMeshes,
-			AudioReference, 1, 256, 1, 1, Frames, 200);
-		Require(SparseBinding.AnchorResolutionDelta == Frames && SparseBinding.RigVisitDelta == Frames &&
-			SparseBinding.RuntimeBufferAllocationDelta == 0 && SparseBinding.SemanticAllocationDelta == 0,
-			"one sparse joint-200 binding scaled with skeleton/world size instead of one registered anchor");
-		for (const auto Tracks : {1u, 2u, 4u}) {
-			auto Result = RunScenario(World, WorkspaceValue, Assets, Imported.at(64), SourceMeshes, AudioReference,
-				10, 64, Tracks, 0, Frames);
-			Require(Result.RuntimeBufferAllocationDelta == 0 && Result.SemanticAllocationDelta == 0,
-				"track-scaling scenario allocated after warmup");
-		}
-		RunCpuSkinningScaling(Quick);
-		RunStaticWorldRegression(World, WorkspaceValue, Assets, Imported.at(64), SourceMeshes, AudioReference);
-		RunStaticAttachmentRegression(WorkspaceValue, Assets, Imported.at(64));
 		for (const auto Bones : {64u, 128u, 256u}) ReportMemory(Bones, Imported.at(Bones).ArtifactBytes);
 		Assets.reset();
 		WorkspaceValue.reset();

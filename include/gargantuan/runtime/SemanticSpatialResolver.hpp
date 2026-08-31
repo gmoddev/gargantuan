@@ -8,6 +8,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -63,6 +64,7 @@ namespace gargantuan {
 		SemanticSpatialResolver &operator=(const SemanticSpatialResolver &) = delete;
 
 		void RegisterAttachment(const std::shared_ptr<Attachment> &AttachmentValue);
+		void PrepareAnimationRequirements();
 		void Step();
 		void Shutdown();
 
@@ -73,6 +75,9 @@ namespace gargantuan {
 			std::vector<std::shared_ptr<Instance>> *Observed = nullptr
 		);
 		[[nodiscard]] SemanticSpatialMetrics GetMetrics() const;
+
+		[[nodiscard]] std::span<const ObjectId> GetAnimationRequiredRigs() const;
+		[[nodiscard]] bool AreAnimationRequirementsComplete() const;
 
 		[[nodiscard]] static std::optional<SemanticSpatialTransform>
 		ResolveStaticAttachment(const std::shared_ptr<Attachment> &AttachmentValue);

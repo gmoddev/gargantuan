@@ -154,9 +154,11 @@ hierarchy. Its public surface is:
 Natural completion enters Stopped, holds the final pose, and fires `Ended` once.
 A subsequent Stop or Play clears that held state. Looping uses `fmod` so a large
 delta can cross many loops in one step without event storms; Looped tracks do
-not fire Ended. Event callbacks run after semantic evaluation on the main
-runtime thread and may safely call Play again. Animator destruction
-synchronously invalidates externally retained tracks.
+not fire Ended. [Foundation 2C](AnimationFoundation2UpdatePolicy.md) keeps this
+lightweight time/event phase active while a visual pose is reduced or frozen.
+Event callbacks run on the main runtime thread after deterministic pose merge
+and may safely call Play again. Animator destruction synchronously invalidates
+externally retained tracks.
 
 Time advances from Engine's monotonic frame delta after `PreRender`; it does
 not read wall-clock time or count presented frames. The same `Step(delta)` path
@@ -240,10 +242,12 @@ changes do not dirty or recompute animation pose state.
 ## Headless semantics and non-render consumers
 
 `AnimationRuntime::GetPose` exposes renderer-free joint model transforms and
-the palette to trusted native systems. Track advancement, hierarchical solve,
-compatibility checks, palette publication, projection, and resync all run
-without SDL video or a GPU. Headless evaluation does not deform every source
-vertex; CPU skinning is invoked only by an explicit reference/query consumer.
+the palette to trusted native systems. Track advancement and compatibility
+checks run without SDL video or a GPU. Foundation 2C evaluates the hierarchy and
+palette headlessly only for a semantic-required rig or an explicit native pose
+request; visual-only headless rigs continue logical time without GPU-oriented
+pose work. Headless evaluation never deforms every source vertex by default;
+CPU skinning is invoked only by an explicit reference/query consumer.
 
 Foundation 1 did not add a semantic animated-bone anchor. [Foundation 2B](AnimationFoundation2SemanticAnchors.md)
 now consumes these renderer-free joint model transforms through a canonical
@@ -380,9 +384,9 @@ Foundation 2 priorities.
 | How does blending work? | Deterministic creation order, weighted absolute per-channel blend, normalized above weight one, bind fallback below one. |
 | Is priority implemented? | No; weights and deterministic creation order are sufficient for Foundation 1. |
 | What happens to root translation? | It stays mesh-local visual pose; it does not move authored/physics/world roots. |
-| Can Attachments follow animated bones? | No semantic bone attachments exist yet. |
-| Can Audio/Interaction anchors follow bones? | No; they follow ordinary BasePart/Attachment authored transforms only. |
-| Are animated shadows correct? | Yes for the production CPU path: opaque and shadow passes share the same posed dynamic Mesh identity. |
+| Can Attachments follow animated bones? | Yes. Foundation 2B resolves canonical `Attachment.JointPath` bindings from the accepted renderer-free pose. |
+| Can Audio/Interaction anchors follow bones? | Yes. Positional Sound and ProximityPrompt consume that shared semantic transform. |
+| Are animated shadows correct? | Yes. Opaque and shadow passes share one accepted GPU palette revision, or one CPU-fallback posed Mesh identity. |
 | What happens on reimport during playback? | An active track keeps its captured immutable clip revision; new tracks use the new revision, and incompatible Mesh reimport removes the pose. |
 
 ## Replication and explicit deferrals
@@ -397,13 +401,12 @@ Deferred work includes IK, inverse dynamics, retargeting, humanoid abstraction,
 state machines, blend trees/editor, priorities until use cases justify them,
 additive layers, markers/events, root-motion authority, ragdoll, procedural
 graphs, compression research, motion matching, facial/morph animation,
-cloth-to-bone coupling, network animation protocol, semantic animated
-attachments/hitboxes/audio/interaction anchors, animation LOD/update
-throttling, timeline/keyframe authoring, and mobile performance claims.
+cloth-to-bone coupling, network animation protocol, semantic animated hitboxes,
+timeline/keyframe authoring, and physical mobile performance claims.
 
 Animation Foundation 2A now implements backend GPU skinning from the existing
-source-mesh/palette seam and separately measures palette upload, draw submission,
-and fence completion. The measured 2B/2C priorities are maintained in
-[Animation Foundation 2A](AnimationFoundation2GpuSkinning.md). Retargeting,
-graphs, and authoring tools should build only after those runtime contracts are
-proven.
+source-mesh/palette seam, Foundation 2B implements semantic animated anchors,
+and [Foundation 2C](AnimationFoundation2UpdatePolicy.md) implements the internal
+visibility/distance policy plus measured pose jobs. Retargeting, graphs, and
+authoring tools should build only on these proven authority and scheduling
+contracts.

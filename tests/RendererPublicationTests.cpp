@@ -487,9 +487,31 @@ namespace {
 			Projection.GetAnimationPose(Object) &&
 			Projection.GetAnimationPose(Object)->PoseRevision == 1,
 			"GPU pose projection retains one coherent source mesh and exact palette bytes");
+		std::vector<ObjectId> VisibleAnimationObjects;
+		Check(
+			Projection.BuildAnimationVisibilityFeedback(VisibleAnimationObjects, 1) &&
+				VisibleAnimationObjects == std::vector<ObjectId>{Object},
+			"animation visibility feedback includes a posed rig intersecting the accepted view"
+		);
+		Check(
+			!Projection.BuildAnimationVisibilityFeedback(VisibleAnimationObjects, 0) && VisibleAnimationObjects.empty(),
+			"animation visibility feedback fails closed when its bounded identity capacity is exceeded"
+		);
+		RenderPublication Offscreen{.Id = 2, .BaseId = 1, .Frame = MakeFrame()};
+		Offscreen.Updates.push_back({
+			Object,
+			RenderUpdateDomain::Transform,
+			MakeItem(Object, 100.0f),
+			SourceMesh,
+		});
+		(void)Projection.Apply(Offscreen);
+		Check(
+			Projection.BuildAnimationVisibilityFeedback(VisibleAnimationObjects, 1) && VisibleAnimationObjects.empty(),
+			"animation visibility feedback excludes a posed rig wholly outside the accepted view"
+		);
 
-		auto InvalidUpdate = [&](std::uint64_t Id = 2) {
-			RenderPublication Publication{.Id = Id, .BaseId = 1, .Frame = MakeFrame()};
+		auto InvalidUpdate = [&](std::uint64_t Id = 3) {
+			RenderPublication Publication{.Id = Id, .BaseId = 2, .Frame = MakeFrame()};
 			Publication.AnimationPoseUpdates.push_back({
 				.Object = Object,
 				.SourceMesh = SourceMesh,
@@ -547,8 +569,26 @@ namespace {
 			{glm::vec3(0.0f), glm::vec3(1.0f)}, MalformedInfluences, Skeleton, 2});
 		CheckThrows<std::invalid_argument>([&] { (void)MalformedMeshProjection.Apply(MalformedMesh); },
 			"renderer validation rejects integer joint indices outside the declared palette range");
-		Check(Projection.GetAnimationPose(Object) && Projection.GetAnimationPose(Object)->PoseRevision == 1,
-			"rejected animation publications leave the previous coherent pose atomically intact");
+		Check(
+			Projection.GetAnimationPose(Object) && Projection.GetAnimationPose(Object)->PoseRevision == 1,
+			"rejected animation publications leave the previous coherent pose atomically intact"
+		);
+		auto DeformedPalette = std::make_shared<std::vector<RenderSkinPaletteEntry>>(*Palette);
+		for (auto &Entry : *DeformedPalette)
+			Entry.PositionMatrix[3].x = -100.0f;
+		RenderPublication Deformed{.Id = 3, .BaseId = 2, .Frame = MakeFrame()};
+		Deformed.AnimationPoseUpdates.push_back({
+			.Object = Object,
+			.SourceMesh = SourceMesh,
+			.PoseRevision = 2,
+			.Palette = {Skeleton, DeformedPalette},
+		});
+		(void)Projection.Apply(Deformed);
+		Check(
+			Projection.BuildAnimationVisibilityFeedback(VisibleAnimationObjects, 1) &&
+				VisibleAnimationObjects == std::vector<ObjectId>{Object},
+			"GPU visibility bounds conservatively include palette deformation outside the bind-pose bounds"
+		);
 	}
 
 	void TestEnvironmentLightingFoundation() {

@@ -48,6 +48,7 @@ namespace gargantuan {
 		[[nodiscard]] std::optional<AssetFontResource> ResolveFont(std::string_view Reference) const;
 		[[nodiscard]] std::optional<ImportedMesh> ResolveMesh(std::string_view Reference) const;
 		[[nodiscard]] std::optional<AssetMeshResource> ResolveMeshResource(std::string_view Reference) const;
+		[[nodiscard]] std::optional<AssetMeshResource> ResolveMeshResource(const std::string &Reference) const;
 		[[nodiscard]] std::optional<AssetMaterialResource> ResolveMaterial(std::string_view Reference);
 		[[nodiscard]] std::optional<AssetAudioResource> ResolveAudio(std::string_view Reference) const;
 		[[nodiscard]] std::optional<AssetAnimationResource> ResolveAnimation(std::string_view Reference) const;

@@ -589,6 +589,62 @@ namespace gargantuan {
 		return Existing == AnimationPoses.end() ? nullptr : &Existing->second;
 	}
 
+	bool RenderProjection::BuildAnimationVisibilityFeedback(
+		std::vector<ObjectId> &VisibleObjects, std::size_t MaximumObjects
+	) const {
+		VisibleObjects.clear();
+		if (AnimationPoses.size() > MaximumObjects) return false;
+		for (const auto &[Object, Pose] : AnimationPoses) {
+			const auto Projected = Entries.find(Object);
+			if (Projected == Entries.end() || !Projected->second.Visible || !Projected->second.Mesh) continue;
+			const auto Mesh = Meshes.find(*Projected->second.Mesh);
+			if (Mesh == Meshes.end()) {
+				VisibleObjects.push_back(Object);
+				continue;
+			}
+			bool AllLeft = true;
+			bool AllRight = true;
+			bool AllBottom = true;
+			bool AllTop = true;
+			bool AllNear = true;
+			bool AllFar = true;
+			bool Finite = true;
+			auto IncludeCorner = [&](const glm::mat4 &PoseMatrix, const glm::vec3 &Corner) {
+				const auto Clip = Frame.Camera.ViewProjectionMatrix * Projected->second.Item.ModelMatrix * PoseMatrix *
+								  glm::vec4(Corner, 1.0f);
+				if (!IsFinite(Clip)) {
+					Finite = false;
+					return;
+				}
+				AllLeft = AllLeft && Clip.x < -Clip.w;
+				AllRight = AllRight && Clip.x > Clip.w;
+				AllBottom = AllBottom && Clip.y < -Clip.w;
+				AllTop = AllTop && Clip.y > Clip.w;
+				AllNear = AllNear && Clip.z < -Clip.w;
+				AllFar = AllFar && Clip.z > Clip.w;
+			};
+			auto IncludeBounds = [&](const glm::mat4 &PoseMatrix) {
+				for (std::uint32_t CornerIndex = 0; CornerIndex < 8; ++CornerIndex) {
+					const glm::vec3 Corner{
+						(CornerIndex & 1u) ? Mesh->second.Bounds.Maximum.x : Mesh->second.Bounds.Minimum.x,
+						(CornerIndex & 2u) ? Mesh->second.Bounds.Maximum.y : Mesh->second.Bounds.Minimum.y,
+						(CornerIndex & 4u) ? Mesh->second.Bounds.Maximum.z : Mesh->second.Bounds.Minimum.z,
+					};
+					IncludeCorner(PoseMatrix, Corner);
+				}
+			};
+			if (Pose.Mode == RenderAnimationSkinningMode::GpuPalette && Pose.Palette.Entries)
+				for (const auto &Entry : *Pose.Palette.Entries)
+					IncludeBounds(Entry.PositionMatrix);
+			else
+				IncludeBounds(glm::mat4(1.0f));
+			if (!Finite || !(AllLeft || AllRight || AllBottom || AllTop || AllNear || AllFar))
+				VisibleObjects.push_back(Object);
+		}
+		std::ranges::sort(VisibleObjects);
+		return true;
+	}
+
 	RenderSnapshotPtr RenderProjection::BuildCompatibilitySnapshot() const {
 		auto Snapshot = std::make_shared<RenderSnapshot>();
 		Snapshot->Id = LastPublicationId;

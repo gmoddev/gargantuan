@@ -11,6 +11,7 @@
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_gpu.h>
 
+#include <atomic>
 #include <chrono>
 #include <format>
 #include <stdexcept>
@@ -25,6 +26,13 @@ namespace gargantuan {
 			return static_cast<std::uint64_t>(
 				std::chrono::duration_cast<std::chrono::nanoseconds>(Duration).count()
 			);
+		}
+
+		std::uint64_t NextVisibilityGeneration() {
+			static std::atomic<std::uint64_t> Next{1};
+			const auto Result = Next.fetch_add(1, std::memory_order_relaxed);
+			if (Result == 0) throw std::overflow_error("Renderer visibility generation exhausted");
+			return Result;
 		}
 	}
 
@@ -65,6 +73,10 @@ namespace gargantuan {
 		std::unique_ptr<SDLTextureCache> TextureResources;
 		std::unique_ptr<SDLSkinPaletteCache> SkinPalettes;
 		RenderProjection Projection;
+		std::vector<ObjectId> VisibleAnimationObjects;
+		std::uint64_t VisibilityGeneration = 0;
+		RenderPublicationId VisibilityPublication = InvalidRenderPublicationId;
+		bool VisibilityComplete = false;
 		std::unordered_map<ObjectId, std::uint64_t> ShadowPoseRevisions;
 		SDLRendererMetrics Metrics;
 		std::uint32_t RemainingPaletteUploadFailures = 0;
@@ -92,6 +104,8 @@ namespace gargantuan {
 			SDL_GPU_SHADERFORMAT_MSL;
 
 		State->Options = Options;
+		State->VisibilityGeneration = NextVisibilityGeneration();
+		State->VisibleAnimationObjects.reserve(4'096);
 		State->RemainingPaletteUploadFailures = Options.InjectPaletteUploadFailures;
 		State->RemainingShaderCreationFailures = Options.InjectShaderCreationFailures;
 		State->RemainingPipelineCreationFailures = Options.InjectPipelineCreationFailures;
@@ -166,6 +180,8 @@ namespace gargantuan {
 
 	void SDLRenderer::Destroy() {
 		if (!State) return;
+		State->VisibilityComplete = false;
+		State->VisibleAnimationObjects.clear();
 		if (State->Gpu) SDL_WaitForGPUIdle(State->Gpu);
 		if (State->MeshResources) {
 			State->MeshResources->Destroy();
@@ -209,6 +225,7 @@ namespace gargantuan {
 		if (State->RequiresFullResync && !Publication->FullResync)
 			throw std::logic_error("SDLRenderer requires a full RenderPublication after resource recovery");
 		State->Metrics.LastProjectionNanoseconds = 0;
+		State->Metrics.LastVisibilityNanoseconds = 0;
 		State->Metrics.LastMeshTransferNanoseconds = 0;
 		State->Metrics.LastTextureTransferNanoseconds = 0;
 		State->Metrics.LastUiPreparationNanoseconds = 0;
@@ -245,9 +262,18 @@ namespace gargantuan {
 			State->TextureResources->Destroy();
 			State->SkinPalettes->Destroy();
 			State->ShadowPoseRevisions.clear();
+			State->VisibilityComplete = false;
+			State->VisibleAnimationObjects.clear();
 			State->RequiresFullResync = true;
 			throw;
 		}
+		const auto VisibilityStart = Clock::now();
+		State->VisibilityComplete = State->Projection.BuildAnimationVisibilityFeedback(
+			State->VisibleAnimationObjects, 4'096
+		);
+		State->VisibilityPublication = State->Projection.GetLastPublicationId();
+		State->Metrics.LastVisibilityNanoseconds = Nanoseconds(Clock::now() - VisibilityStart);
+		State->Metrics.CpuVisibilityNanoseconds += State->Metrics.LastVisibilityNanoseconds;
 		if (!State->DepthTexture || !State->ShadowMapTexture) return;
 
 		const auto SubmissionStart = Clock::now();
@@ -367,6 +393,16 @@ namespace gargantuan {
 
 	SDLRendererMetrics SDLRenderer::GetMetrics() const {
 		return State ? State->Metrics : SDLRendererMetrics{};
+	}
+
+	RenderAnimationVisibilityFeedback SDLRenderer::GetAnimationVisibilityFeedback() const {
+		if (!State) return {};
+		return {
+			State->VisibilityGeneration,
+			State->VisibilityPublication,
+			State->VisibilityComplete,
+			State->VisibleAnimationObjects,
+		};
 	}
 
 	void SDLRenderer::WaitForIdle() {

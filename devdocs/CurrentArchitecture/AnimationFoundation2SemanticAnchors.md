@@ -25,7 +25,9 @@ Foundation 2B makes one evaluated animation pose serve two independent
 consumers:
 
 ```text
-AnimationTrack sampling and blending
+AnimationTrack logical advance
+    -> AnimationUpdatePolicy
+    -> optional bounded pose jobs and deterministic Main merge
     -> CPU joint model transforms
        -> skin matrices -> RenderPublication -> GPU or CPU rendering
        -> SemanticSpatialResolver -> Attachment.WorldCFrame
@@ -317,27 +319,22 @@ ordinary Attachments plus one animated anchor resolved exactly that one anchor,
 visited one rig, scanned zero static Attachments, journaled nothing, and
 allocated nothing after warmup.
 
-## Animation 2C priorities from the measurements
+## Foundation 2C scheduling integration
 
-1. Replace per-anchor ordered-map/weak-pointer lookup with a generation-safe
-   contiguous per-rig/SoA solve and group same-joint consumers. Transform
-   resolution, not Sound or Interaction, dominates the 500 x 64 case at 26.28
-   ms mean and 31.85 ms P95.
-2. Jobify deterministic rig/anchor chunks with a bounded ordered merge. The
-   zero-anchor 500-rig Animator baseline is already 6.43 ms and 32,000 semantic
-   anchors raise the complete frame to 35.30 ms; the work has enough independent
-   rig granularity to justify jobs.
-3. Add visual Animation LOD/server pose policy around an explicit
-   `has semantic consumers` contract. Zero-anchor semantic overhead is only
-   1.6 us P50 at 500 rigs, so offscreen visual work may be throttled, but rigs
-   feeding prompts, sounds, gameplay sockets, server logic, future XPBD cloth,
-   or effects must keep the required pose authoritative.
+`PrepareAnimationRequirements` now refreshes only dirty Attachment topology and
+publishes a bounded sorted set of rigs with semantic anchors before animation.
+[Foundation 2C](AnimationFoundation2UpdatePolicy.md) treats every member as
+`SemanticRequired`: renderer visibility and distance cannot freeze its pose.
+After a bounded worker result is accepted on Main, the pose revision becomes
+visible to this resolver; Sound and Interaction never observe a half-computed
+worker buffer.
 
-Interaction P95 remains below 0.952 ms for 500 prompt-bearing rigs and the one-
-Sound update remains below 22.7 us P95, so separate prompt/audio animation
-resolvers, GPU readback, particles, cloth coupling, root motion, IK,
-retargeting, animation graphs, replication, and a rig/timeline editor are not
-2C performance priorities.
+Visual-only rigs may reduce or freeze pose work, while semantic rigs retain a
+full-skeleton, full logical cadence. Owner CFrame changes still recompose the
+cached joint model transforms without clip sampling or hierarchy solve. The
+measured future optimization is selective required-joint-plus-ancestor solving
+for genuinely large semantic crowds, not separate prompt/audio resolvers or GPU
+readback.
 
 ## Future network, effects, and cloth constraints
 

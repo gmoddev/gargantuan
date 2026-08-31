@@ -23,9 +23,10 @@ namespace gargantuan {
 	  private:
 		std::weak_ptr<Animator> Owner;
 		AssetAnimationResource Resource;
-		std::vector<std::int32_t> JointTrackIndices;
+		std::shared_ptr<const std::vector<std::int32_t>> JointTrackIndices;
 		std::uint64_t CreationSequence = 0;
 		std::uint64_t Revision = 1;
+		std::uint64_t ControlRevision = 1;
 		float TimePosition = 0.0f;
 		float Speed = 1.0f;
 		float Weight = 1.0f;
@@ -35,7 +36,7 @@ namespace gargantuan {
 		bool PendingEnded = false;
 		bool Invalidated = false;
 
-		void MarkChanged();
+		void MarkChanged(bool ControlChange = true);
 		[[nodiscard]] bool AdvanceRuntime(float DeltaTime);
 		void FirePendingEndedRuntime();
 		void InvalidateRuntime();

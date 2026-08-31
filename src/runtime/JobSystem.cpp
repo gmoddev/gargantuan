@@ -2,7 +2,6 @@
 #include "gargantuan/runtime/ExecutionDomain.hpp"
 
 #include <algorithm>
-#include <deque>
 #include <stdexcept>
 #include <thread>
 #include <vector>
@@ -41,7 +40,9 @@ namespace gargantuan {
 		std::mutex Mutex;
 		std::condition_variable Available;
 		std::condition_variable Drained;
-		std::deque<Job> Queue;
+		std::vector<Job> Queue;
+		std::size_t QueueHead = 0;
+		std::size_t QueueSize = 0;
 		std::vector<std::thread> Workers;
 		std::size_t Active = 0;
 		bool Accepting = true;
@@ -49,6 +50,7 @@ namespace gargantuan {
 	};
 
 	JobSystem::JobSystem(std::size_t workerCount) : State(std::make_unique<Impl>()) {
+		State->Queue.resize(64);
 		if (workerCount == 0) workerCount = std::max(1u, std::thread::hardware_concurrency());
 		for (std::size_t i = 0; i < workerCount; ++i) {
 			State->Workers.emplace_back([this] {
@@ -57,10 +59,12 @@ namespace gargantuan {
 					Impl::Job job;
 					{
 						std::unique_lock lock(State->Mutex);
-						State->Available.wait(lock, [this] { return State->Stopping || !State->Queue.empty(); });
-						if (State->Stopping && State->Queue.empty()) return;
-						job = std::move(State->Queue.front());
-						State->Queue.pop_front();
+						State->Available.wait(lock, [this] { return State->Stopping || State->QueueSize != 0; });
+						if (State->Stopping && State->QueueSize == 0) return;
+						job = std::move(State->Queue[State->QueueHead]);
+						State->Queue[State->QueueHead] = {};
+						State->QueueHead = (State->QueueHead + 1) % State->Queue.size();
+						--State->QueueSize;
 						++State->Active;
 					}
 					std::exception_ptr exception;
@@ -72,7 +76,7 @@ namespace gargantuan {
 					if (job.Group) job.Group->Complete(exception);
 					{
 						std::scoped_lock lock(State->Mutex);
-						if (--State->Active == 0 && State->Queue.empty()) State->Drained.notify_all();
+						if (--State->Active == 0 && State->QueueSize == 0) State->Drained.notify_all();
 					}
 				}
 			});
@@ -88,13 +92,22 @@ namespace gargantuan {
 		std::scoped_lock lock(State->Mutex);
 		if (!State->Accepting) throw std::runtime_error("JobSystem is shutting down");
 		if (group) group->Add();
-		State->Queue.push_back({std::move(job), group});
+		if (State->QueueSize == State->Queue.size()) {
+			std::vector<Impl::Job> Expanded(State->Queue.size() * 2);
+			for (std::size_t Index = 0; Index < State->QueueSize; ++Index)
+				Expanded[Index] = std::move(State->Queue[(State->QueueHead + Index) % State->Queue.size()]);
+			State->Queue = std::move(Expanded);
+			State->QueueHead = 0;
+		}
+		const auto Position = (State->QueueHead + State->QueueSize) % State->Queue.size();
+		State->Queue[Position] = {std::move(job), group};
+		++State->QueueSize;
 		State->Available.notify_one();
 	}
 
 	void JobSystem::Drain() {
 		std::unique_lock lock(State->Mutex);
-		State->Drained.wait(lock, [this] { return State->Queue.empty() && State->Active == 0; });
+		State->Drained.wait(lock, [this] { return State->QueueSize == 0 && State->Active == 0; });
 	}
 
 	void JobSystem::Shutdown(bool drain) {
@@ -104,10 +117,13 @@ namespace gargantuan {
 			if (!State->Accepting && State->Stopping) return;
 			State->Accepting = false;
 			if (!drain) {
-				for (auto &job : State->Queue) {
-					if (job.Group) job.Group->Complete(nullptr);
+				for (std::size_t Index = 0; Index < State->QueueSize; ++Index) {
+					auto &Job = State->Queue[(State->QueueHead + Index) % State->Queue.size()];
+					if (Job.Group) Job.Group->Complete(nullptr);
+					Job = {};
 				}
-				State->Queue.clear();
+				State->QueueHead = 0;
+				State->QueueSize = 0;
 			}
 			State->Stopping = true;
 		}

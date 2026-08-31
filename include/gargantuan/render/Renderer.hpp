@@ -6,6 +6,7 @@
 #include "gargantuan/render/RenderSnapshot.hpp"
 
 #include <cstdint>
+#include <span>
 #include <stdexcept>
 #include <utility>
 
@@ -13,6 +14,13 @@ namespace gargantuan {
 	struct RendererCapabilities {
 		bool Graphical = true;
 		bool GpuSkinning = false;
+	};
+
+	struct RenderAnimationVisibilityFeedback {
+		std::uint64_t Generation = 0;
+		RenderPublicationId Publication = InvalidRenderPublicationId;
+		bool Complete = false;
+		std::span<const ObjectId> VisibleObjects;
 	};
 
 	class BaseRenderer {
@@ -29,6 +37,7 @@ namespace gargantuan {
 		virtual void Resize(int WidthValue, int HeightValue) = 0;
 		virtual void Destroy() = 0;
 		[[nodiscard]] virtual RendererCapabilities GetCapabilities() const { return {}; }
+		[[nodiscard]] virtual RenderAnimationVisibilityFeedback GetAnimationVisibilityFeedback() const { return {}; }
 		[[nodiscard]] virtual std::pair<std::uint32_t, std::uint32_t> GetViewportSize() const = 0;
 	};
 

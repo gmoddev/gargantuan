@@ -50,6 +50,8 @@ namespace gargantuan {
 
 		[[nodiscard]] const RenderItem *GetItem(ObjectId Object) const;
 		[[nodiscard]] const RenderAnimationPoseUpdate *GetAnimationPose(ObjectId Object) const;
+		[[nodiscard]] bool
+		BuildAnimationVisibilityFeedback(std::vector<ObjectId> &VisibleObjects, std::size_t MaximumObjects) const;
 		[[nodiscard]] const std::unordered_map<ObjectId, RenderAnimationPoseUpdate> &GetAnimationPoses() const {
 			return AnimationPoses;
 		}

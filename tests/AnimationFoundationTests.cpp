@@ -55,6 +55,11 @@
 #include <glm/gtc/matrix_transform.hpp>
 
 namespace gargantuan {
+	struct AnimationRuntimeTestAccess {
+		static void BeforePoseMerge(AnimationRuntime &Runtime, std::function<void()> Callback) {
+			Runtime.SetBeforePoseMergeForTesting(std::move(Callback));
+		}
+	};
 	struct InteractionServiceTestAccess {
 		static void Step(InteractionService &Service, InteractionService::Clock::time_point Now) {
 			Service.Step(Now);
@@ -534,9 +539,11 @@ namespace {
 			"semantic resolver consumes a current renderer-independent joint model pose");
 		if (PoseReady && Transform) {
 			const auto Expected = OwnerMatrix * (*Pose->JointModelTransforms)[2] * LocalMatrix;
-			Check(Near(Transform->Matrix, Expected) &&
-				Near(Transform->WorldCFrame.Position, glm::vec3(Expected[3])),
-				"bound Attachment composes owner CFrame, nonuniform Size, current joint model transform, and local CFrame");
+			Check(
+				Near(Transform->Matrix, Expected) && Near(Transform->WorldCFrame.Position, glm::vec3(Expected[3])),
+				"bound Attachment composes owner CFrame, nonuniform Size, current joint model transform, and local "
+				"CFrame"
+			);
 			Check(Near(Anchor->GetWorldCFrame().Position, Transform->WorldCFrame.Position),
 				"Attachment.WorldCFrame exposes the transient semantic pose to ordinary reads");
 			const auto BindModel = glm::inverse(Mesh->Value.Skeleton->Joints->at(2).InverseBindMatrix);
@@ -855,6 +862,515 @@ namespace {
 		Runtime.Destroy();
 		if (!World->GetDestroyed()) World->Destroy();
 		ChangeJournal::Get().Clear();
+	}
+
+	struct AnimationPolicyFixture {
+		std::shared_ptr<gargantuan::MeshPart> Rig;
+		std::shared_ptr<gargantuan::Animator> AnimatorValue;
+		std::shared_ptr<gargantuan::AnimationTrack> Track;
+		std::unique_ptr<gargantuan::AnimationRuntime> Runtime;
+		std::vector<gargantuan::ObjectId> VisibleObjects;
+		std::vector<gargantuan::ObjectId> SemanticObjects;
+		std::uint64_t Publication = 1;
+
+		AnimationPolicyFixture(
+			const std::shared_ptr<gargantuan::AssetService> &Assets,
+			const std::shared_ptr<gargantuan::Workspace> &WorkspaceValue,
+			const std::string &MeshReference,
+			const std::string &AnimationReference,
+			float Distance
+		) {
+			Rig = std::make_shared<gargantuan::MeshPart>();
+			Rig->SetMesh(MeshReference);
+			Rig->SetCFrame(gargantuan::CFrame(Distance, 0.0f, 0.0f));
+			Rig->SetParent(WorkspaceValue);
+			AnimatorValue = std::make_shared<gargantuan::Animator>();
+			AnimatorValue->SetParent(Rig);
+			Runtime = std::make_unique<gargantuan::AnimationRuntime>(Assets);
+			Runtime->RegisterAnimator(AnimatorValue);
+			Track = AnimatorValue->CreateTrack(AnimationReference);
+			Track->SetLooped(true);
+			Track->Play();
+			VisibleObjects.reserve(1);
+			SemanticObjects.reserve(1);
+		}
+
+		~AnimationPolicyFixture() {
+			if (Runtime) Runtime->Shutdown();
+			if (Rig && !Rig->GetDestroyed()) Rig->Destroy();
+		}
+
+		void SetDistance(float Distance) {
+			Rig->SetCFrame(gargantuan::CFrame(Distance, 0.0f, 0.0f));
+		}
+
+		void Step(
+			float DeltaTime,
+			bool Visible,
+			bool Semantic,
+			gargantuan::AnimationRuntimeEnvironment Environment = gargantuan::AnimationRuntimeEnvironment::Graphical
+		) {
+			VisibleObjects.clear();
+			SemanticObjects.clear();
+			if (Visible) VisibleObjects.push_back(Rig->GetObjectId());
+			if (Semantic) SemanticObjects.push_back(Rig->GetObjectId());
+			gargantuan::AnimationUpdateContext Context;
+			Context.Environment = Environment;
+			Context.ViewOrigin = glm::vec3(0.0f);
+			Context.HasViewOrigin = Environment == gargantuan::AnimationRuntimeEnvironment::Graphical;
+			if (Environment == gargantuan::AnimationRuntimeEnvironment::Graphical) {
+				Context.VisibilityGeneration = 1;
+				Context.VisibilityPublication = Publication++;
+				Context.VisibilityComplete = true;
+				Context.VisibleObjects = VisibleObjects;
+			}
+			Context.SemanticRequiredObjects = SemanticObjects;
+			Runtime->Step(DeltaTime, Context);
+		}
+	};
+
+	void TestAnimationUpdatePolicy(
+		const std::shared_ptr<gargantuan::AssetService> &Assets,
+		const std::shared_ptr<gargantuan::Workspace> &WorkspaceValue,
+		const std::string &MeshReference,
+		const std::string &AnimationReference
+	) {
+		using namespace gargantuan;
+		AnimationPolicyFixture NearFixture(Assets, WorkspaceValue, MeshReference, AnimationReference, 10.0f);
+		NearFixture.Step(0.0f, true, false);
+		const auto NearInitialEvaluations = NearFixture.Runtime->GetMetrics().PoseEvaluations;
+		for (std::size_t Frame = 0; Frame < 12; ++Frame)
+			NearFixture.Step(1.0f / 60.0f, true, false);
+		Check(
+			NearFixture.Runtime->GetMetrics().PoseEvaluations == NearInitialEvaluations + 12 &&
+				NearFixture.Runtime->GetMetrics().FullRateAnimators == 1,
+			"near visible rigs evaluate at full rate"
+		);
+
+		const auto BeforeGrace = NearFixture.Runtime->GetMetrics().PoseEvaluations;
+		for (std::size_t Frame = 0; Frame < 12; ++Frame)
+			NearFixture.Step(1.0f / 60.0f, false, false);
+		Check(
+			NearFixture.Runtime->GetMetrics().PoseEvaluations == BeforeGrace + 12,
+			"recently visible rigs remain current throughout the transition grace window"
+		);
+		for (std::size_t Frame = 0; Frame < 6; ++Frame)
+			NearFixture.Step(1.0f / 60.0f, false, false);
+		const auto FrozenEvaluations = NearFixture.Runtime->GetMetrics().PoseEvaluations;
+		const auto FrozenTime = NearFixture.Track->GetTimePosition();
+		const auto FrozenAllocations = NearFixture.Runtime->GetMetrics().BufferAllocations;
+		for (std::size_t Frame = 0; Frame < 30; ++Frame)
+			NearFixture.Step(1.0f / 60.0f, false, false);
+		Check(
+			NearFixture.Runtime->GetMetrics().PoseEvaluations == FrozenEvaluations &&
+				NearFixture.Runtime->GetMetrics().FrozenVisualAnimators == 1 &&
+				!Near(NearFixture.Track->GetTimePosition(), FrozenTime) &&
+				NearFixture.Runtime->GetMetrics().BufferAllocations == FrozenAllocations,
+			"offscreen visual-only rigs freeze pose work without freezing logical time or allocating"
+		);
+		const auto RevisionBeforeReturn = NearFixture.Runtime->GetPose(NearFixture.Rig->GetObjectId())->PoseRevision;
+		NearFixture.Step(0.0f, true, false);
+		auto ReturnedPose = NearFixture.Runtime->GetPose(NearFixture.Rig->GetObjectId());
+		Check(
+			ReturnedPose && ReturnedPose->PoseRevision > RevisionBeforeReturn &&
+				NearFixture.Runtime->GetMetrics().PoseEvaluations == FrozenEvaluations + 1,
+			"visibility re-entry immediately publishes the current logical pose without replaying skipped frames"
+		);
+
+		for (std::size_t Frame = 0; Frame < 20; ++Frame)
+			NearFixture.Step(1.0f / 60.0f, false, false);
+		const auto BeforeSeek = NearFixture.Runtime->GetMetrics().PoseEvaluations;
+		NearFixture.Track->SetTimePosition(0.75f);
+		NearFixture.Step(0.0f, false, false);
+		Check(
+			NearFixture.Runtime->GetMetrics().PoseEvaluations == BeforeSeek + 1 &&
+				NearFixture.Runtime->GetMetrics().ImmediatePoseRefreshes > 0,
+			"explicit track control changes refresh a graphically frozen pose immediately"
+		);
+		const auto BeforeSemantic = NearFixture.Runtime->GetMetrics().PoseEvaluations;
+		NearFixture.Step(1.0f / 60.0f, false, true);
+		NearFixture.Step(1.0f / 60.0f, false, true);
+		Check(
+			NearFixture.Runtime->GetMetrics().PoseEvaluations == BeforeSemantic + 2 &&
+				NearFixture.Runtime->GetMetrics().SemanticRequiredAnimators == 1,
+			"semantic-required rigs override visibility and update every logical step"
+		);
+		const auto BeforeSemanticRemoval = NearFixture.Runtime->GetMetrics().PoseEvaluations;
+		NearFixture.Step(1.0f / 60.0f, false, false);
+		Check(
+			NearFixture.Runtime->GetMetrics().PoseEvaluations == BeforeSemanticRemoval &&
+				NearFixture.Runtime->GetMetrics().FrozenVisualAnimators == 1,
+			"removing the final semantic requirement returns an offscreen rig to visual freeze"
+		);
+
+		std::size_t EndedCount = 0;
+		auto EndedConnection = NearFixture.Track->Ended->Connect([&](std::monostate) { ++EndedCount; });
+		NearFixture.Track->SetLooped(false);
+		NearFixture.Track->Play();
+		NearFixture.Track->SetTimePosition(0.0f);
+		NearFixture.Step(0.0f, false, false);
+		const auto BeforeFrozenEnd = NearFixture.Runtime->GetMetrics().PoseEvaluations;
+		NearFixture.Step(1.25f, false, false);
+		Check(
+			EndedCount == 1 && NearFixture.Track->GetPlaybackState() == Enums::AnimationPlaybackState::Stopped &&
+				NearFixture.Track->HoldsNaturalEndPose() &&
+				NearFixture.Runtime->GetMetrics().PoseEvaluations == BeforeFrozenEnd,
+			"a non-looping offscreen track completes and fires Ended exactly once without forcing pose work"
+		);
+		NearFixture.Step(0.0f, true, false);
+		const auto FinalPose = NearFixture.Runtime->GetPose(NearFixture.Rig->GetObjectId());
+		Check(
+			EndedCount == 1 && FinalPose && Near(NearFixture.Track->GetTimePosition(), 1.0f),
+			"a completed offscreen track publishes its held final pose on visibility return"
+		);
+
+		AnimationPolicyFixture ControlFixture(Assets, WorkspaceValue, MeshReference, AnimationReference, 10.0f);
+		ControlFixture.Step(0.0f, true, false);
+		for (std::size_t Frame = 0; Frame < 20; ++Frame)
+			ControlFixture.Step(1.0f / 60.0f, false, false);
+		const auto BeforeSpeed = ControlFixture.Runtime->GetMetrics().PoseEvaluations;
+		ControlFixture.Track->SetSpeed(2.0f);
+		ControlFixture.Step(0.0f, false, false);
+		const auto BeforeWeight = ControlFixture.Runtime->GetMetrics().PoseEvaluations;
+		ControlFixture.Track->SetWeight(0.5f);
+		ControlFixture.Step(0.0f, false, false);
+		const auto BeforePause = ControlFixture.Runtime->GetMetrics().PoseEvaluations;
+		ControlFixture.Track->Pause();
+		ControlFixture.Step(0.0f, false, false);
+		Check(
+			BeforeWeight == BeforeSpeed + 1 && BeforePause == BeforeWeight + 1 &&
+				ControlFixture.Runtime->GetMetrics().PoseEvaluations == BeforePause + 1,
+			"speed, weight, and pause controls each force one current pose while graphically frozen"
+		);
+		const auto PausedEvaluations = ControlFixture.Runtime->GetMetrics().PoseEvaluations;
+		const auto PausedTime = ControlFixture.Track->GetTimePosition();
+		for (std::size_t Frame = 0; Frame < 30; ++Frame)
+			ControlFixture.Step(1.0f / 60.0f, false, false);
+		Check(
+			ControlFixture.Runtime->GetMetrics().PoseEvaluations == PausedEvaluations &&
+				Near(ControlFixture.Track->GetTimePosition(), PausedTime),
+			"a paused frozen track performs no repeated pose solve or logical advancement"
+		);
+		ControlFixture.Track->Resume();
+		ControlFixture.Step(0.0f, false, false);
+		Check(
+			ControlFixture.Runtime->GetMetrics().PoseEvaluations == PausedEvaluations + 1,
+			"resume refreshes one current pose before returning to visual freeze"
+		);
+		ControlFixture.Track->Stop();
+		ControlFixture.Step(0.0f, false, false);
+		const auto StoppedEvaluations = ControlFixture.Runtime->GetMetrics().PoseEvaluations;
+		for (std::size_t Frame = 0; Frame < 10; ++Frame)
+			ControlFixture.Step(1.0f / 60.0f, false, false);
+		Check(
+			!ControlFixture.Runtime->GetPose(ControlFixture.Rig->GetObjectId()) &&
+				ControlFixture.Runtime->GetMetrics().PoseEvaluations == StoppedEvaluations,
+			"a stopped Animator retires its pose and no longer enters expensive scheduling"
+		);
+		ControlFixture.Track->Play();
+		ControlFixture.Step(0.0f, false, false);
+		Check(
+			ControlFixture.Runtime->GetPose(ControlFixture.Rig->GetObjectId()).has_value() &&
+				ControlFixture.Runtime->GetMetrics().PoseEvaluations == StoppedEvaluations + 1,
+			"Play publishes one initial current pose even while the visual policy remains frozen"
+		);
+
+		AnimationPolicyFixture HeadlessFixture(Assets, WorkspaceValue, MeshReference, AnimationReference, 10.0f);
+		HeadlessFixture.Step(0.25f, false, false, AnimationRuntimeEnvironment::Headless);
+		Check(
+			HeadlessFixture.Runtime->GetMetrics().PoseEvaluations == 0 &&
+				HeadlessFixture.Runtime->GetMetrics().HeadlessVisualPoseSkips > 0 &&
+				!HeadlessFixture.Runtime->GetPose(HeadlessFixture.Rig->GetObjectId()) &&
+				Near(HeadlessFixture.Track->GetTimePosition(), 0.25f),
+			"headless visual-only rigs advance logical state while producing no visual pose work"
+		);
+		HeadlessFixture.Runtime->RequestPoseRefresh(HeadlessFixture.Rig->GetObjectId());
+		HeadlessFixture.Step(0.0f, false, false, AnimationRuntimeEnvironment::Headless);
+		Check(
+			HeadlessFixture.Runtime->GetMetrics().PoseEvaluations == 1,
+			"an explicit headless pose request performs one bounded refresh"
+		);
+		HeadlessFixture.Step(1.0f / 60.0f, false, true, AnimationRuntimeEnvironment::Headless);
+		Check(
+			HeadlessFixture.Runtime->GetMetrics().PoseEvaluations == 2 &&
+				HeadlessFixture.Runtime->GetMetrics().SemanticRequiredAnimators == 1,
+			"headless semantic rigs continue evaluating without renderer feedback"
+		);
+
+		for (const auto FrameRate : {30.0f, 60.0f, 144.0f}) {
+			AnimationPolicyFixture ReducedFixture(Assets, WorkspaceValue, MeshReference, AnimationReference, 100.0f);
+			ReducedFixture.Step(0.0f, true, false);
+			const auto Initial = ReducedFixture.Runtime->GetMetrics().PoseEvaluations;
+			const auto FrameCount = static_cast<std::size_t>(std::lround(FrameRate * 2.0f));
+			for (std::size_t Frame = 0; Frame < FrameCount; ++Frame)
+				ReducedFixture.Step(1.0f / FrameRate, true, false);
+			const auto Evaluations = ReducedFixture.Runtime->GetMetrics().PoseEvaluations - Initial;
+			Check(
+				Evaluations >= 58 && Evaluations <= 62 &&
+					ReducedFixture.Runtime->GetMetrics().ReducedRateAnimators == 1,
+				"mid-distance cadence remains approximately 30 Hz across render frame rates"
+			);
+		}
+
+		AnimationPolicyFixture VariableFixture(Assets, WorkspaceValue, MeshReference, AnimationReference, 100.0f);
+		VariableFixture.Step(0.0f, true, false);
+		const auto VariableInitial = VariableFixture.Runtime->GetMetrics().PoseEvaluations;
+		constexpr std::array VariableDeltas{1.0f / 144.0f, 1.0f / 30.0f, 1.0f / 60.0f, 1.0f / 120.0f};
+		float Elapsed = 0.0f;
+		std::size_t VariableFrame = 0;
+		while (Elapsed < 2.0f) {
+			const auto Delta = VariableDeltas[VariableFrame++ % VariableDeltas.size()];
+			Elapsed += Delta;
+			VariableFixture.Step(Delta, true, false);
+		}
+		const auto VariableEvaluations = VariableFixture.Runtime->GetMetrics().PoseEvaluations - VariableInitial;
+		Check(
+			VariableEvaluations >= 58 && VariableEvaluations <= 62,
+			"mid-distance cadence follows elapsed time under variable frame delivery"
+		);
+
+		VariableFixture.SetDistance(161.0f);
+		VariableFixture.Step(1.0f / 60.0f, true, false);
+		Check(
+			VariableFixture.Runtime->GetMetrics().ReducedRateAnimators == 1,
+			"crossing the mid exit threshold enters the far reduced-rate band"
+		);
+		VariableFixture.SetDistance(150.0f);
+		VariableFixture.Step(1.0f / 60.0f, true, false);
+		Check(
+			VariableFixture.Runtime->GetMetrics().ReducedRateAnimators == 1,
+			"distance hysteresis retains the far band above its enter threshold"
+		);
+		VariableFixture.SetDistance(140.0f);
+		VariableFixture.Step(1.0f / 60.0f, true, false);
+		Check(
+			VariableFixture.Runtime->GetMetrics().ReducedRateAnimators == 1,
+			"distance hysteresis returns to the mid band only after its enter threshold"
+		);
+
+		AnimationUpdateContext StaleContext;
+		StaleContext.Environment = AnimationRuntimeEnvironment::Graphical;
+		StaleContext.ViewOrigin = glm::vec3(0.0f);
+		StaleContext.HasViewOrigin = true;
+		StaleContext.VisibilityComplete = true;
+		StaleContext.VisibilityGeneration = 1;
+		StaleContext.VisibilityPublication = 1;
+		const auto BeforeStale = VariableFixture.Runtime->GetMetrics().PoseEvaluations;
+		VariableFixture.Runtime->Step(1.0f / 60.0f, StaleContext);
+		Check(
+			VariableFixture.Runtime->GetMetrics().VisibilityFeedbackDrops > 0 &&
+				VariableFixture.Runtime->GetMetrics().FullRateAnimators == 1 &&
+				VariableFixture.Runtime->GetMetrics().PoseEvaluations == BeforeStale + 1,
+			"stale renderer feedback is rejected and falls back conservatively to full-rate evaluation"
+		);
+		const auto DropsBeforeRestart = VariableFixture.Runtime->GetMetrics().VisibilityFeedbackDrops;
+		const auto EvaluationsBeforeRestart = VariableFixture.Runtime->GetMetrics().PoseEvaluations;
+		const std::array RestartVisible{VariableFixture.Rig->GetObjectId()};
+		AnimationUpdateContext RestartContext = StaleContext;
+		RestartContext.VisibilityGeneration = 2;
+		RestartContext.VisibilityPublication = 1;
+		RestartContext.VisibleObjects = RestartVisible;
+		VariableFixture.Runtime->Step(0.0f, RestartContext);
+		Check(
+			VariableFixture.Runtime->GetMetrics().VisibilityFeedbackDrops == DropsBeforeRestart &&
+				VariableFixture.Runtime->GetMetrics().ReducedRateAnimators == 1 &&
+				VariableFixture.Runtime->GetMetrics().PoseEvaluations == EvaluationsBeforeRestart,
+			"a new renderer generation accepts a restarted publication sequence without forcing an unchanged pose"
+		);
+
+		auto SemanticAnchor = std::make_shared<Attachment>();
+		SemanticAnchor->SetJointPath("Root/Upper");
+		SemanticAnchor->SetParent(HeadlessFixture.Rig);
+		auto Spatial = std::make_shared<SemanticSpatialResolver>(Assets, HeadlessFixture.Runtime.get());
+		Spatial->RegisterAttachment(SemanticAnchor);
+		Spatial->PrepareAnimationRequirements();
+		Check(
+			Spatial->AreAnimationRequirementsComplete() &&
+				std::ranges::binary_search(Spatial->GetAnimationRequiredRigs(), HeadlessFixture.Rig->GetObjectId()),
+			"semantic resolver publishes a complete sorted rig requirement before animation evaluation"
+		);
+		SemanticAnchor->SetJointPath("");
+		Spatial->PrepareAnimationRequirements();
+		Check(
+			!std::ranges::binary_search(Spatial->GetAnimationRequiredRigs(), HeadlessFixture.Rig->GetObjectId()),
+			"removing the final joint binding removes the rig from the next animation requirement summary"
+		);
+		Spatial->Shutdown();
+	}
+
+	void TestAnimationPoseJobs(
+		const std::shared_ptr<gargantuan::AssetService> &Assets,
+		const std::shared_ptr<gargantuan::Workspace> &WorkspaceValue,
+		const std::string &MeshReference,
+		const std::string &AnimationReference,
+		const std::filesystem::path &Root,
+		gargantuan::SourceMount &Mount,
+		const AnimationGltfFixture &CompatibleFixture,
+		const AnimationGltfFixture &IncompatibleFixture
+	) {
+		using namespace gargantuan;
+		constexpr std::size_t RigCount = 64;
+		std::vector<std::shared_ptr<MeshPart>> Rigs;
+		std::vector<std::shared_ptr<Animator>> Animators;
+		std::vector<std::shared_ptr<AnimationTrack>> Tracks;
+		Rigs.reserve(RigCount);
+		Animators.reserve(RigCount);
+		Tracks.reserve(RigCount);
+		AnimationRuntime Runtime(Assets, {}, AnimationRuntimeOptions{.PoseWorkerCount = 4});
+		for (std::size_t Index = 0; Index < RigCount; ++Index) {
+			auto Rig = std::make_shared<MeshPart>();
+			Rig->SetMesh(MeshReference);
+			Rig->SetParent(WorkspaceValue);
+			auto AnimatorValue = std::make_shared<Animator>();
+			AnimatorValue->SetParent(Rig);
+			Runtime.RegisterAnimator(AnimatorValue);
+			auto Track = AnimatorValue->CreateTrack(AnimationReference);
+			Track->SetLooped(true);
+			Track->Play();
+			Rigs.push_back(std::move(Rig));
+			Animators.push_back(std::move(AnimatorValue));
+			Tracks.push_back(std::move(Track));
+		}
+		Runtime.Step(0.0f);
+		auto InitialMetrics = Runtime.GetMetrics();
+		Check(
+			InitialMetrics.PoseEvaluations == RigCount && InitialMetrics.PoseJobsScheduled == RigCount &&
+				InitialMetrics.PoseJobBatches > 0 && InitialMetrics.PoseJobBatches <= 4 &&
+				InitialMetrics.PoseWorkerCapacity == 4 && InitialMetrics.ActivePoseJobs == 0 &&
+				Runtime.GetPoseUpdates().size() == RigCount,
+			"bounded pose jobs evaluate one independent rig each and retire before deterministic Main merge"
+		);
+		std::vector<std::pair<ObjectId, std::uint64_t>> MergeOrder;
+		MergeOrder.reserve(RigCount);
+		for (std::size_t Index = 0; Index < RigCount; ++Index)
+			MergeOrder.emplace_back(
+				Animators[Index]->GetObjectId(), Runtime.GetPose(Rigs[Index]->GetObjectId())->PoseRevision
+			);
+		std::ranges::sort(MergeOrder, {}, &std::pair<ObjectId, std::uint64_t>::first);
+		for (std::size_t Index = 1; Index < MergeOrder.size(); ++Index)
+			Check(
+				MergeOrder[Index - 1].second < MergeOrder[Index].second,
+				"pose job merge follows stable Animator ObjectId order instead of worker completion order"
+			);
+
+		const auto TrackPoseBefore = Runtime.GetPose(Rigs[0]->GetObjectId())->PoseRevision;
+		const auto StaleBeforeTrackChange = Runtime.GetMetrics().StalePoseJobDrops;
+		AnimationRuntimeTestAccess::BeforePoseMerge(Runtime, [&] { Tracks[0]->SetTimePosition(0.75f); });
+		Runtime.Step(1.0f / 60.0f);
+		auto TrackPoseAfterStale = Runtime.GetPose(Rigs[0]->GetObjectId());
+		Check(
+			Runtime.GetMetrics().StalePoseJobDrops == StaleBeforeTrackChange + 1 && TrackPoseAfterStale &&
+				TrackPoseAfterStale->PoseRevision == TrackPoseBefore,
+			"a track control revision changed before merge rejects exactly its stale worker result"
+		);
+		Runtime.Step(0.0f);
+		auto TrackPoseAfterRefresh = Runtime.GetPose(Rigs[0]->GetObjectId());
+		Check(
+			TrackPoseAfterRefresh && TrackPoseAfterRefresh->PoseRevision > TrackPoseBefore,
+			"the stale track result is replaced by one current pose without replaying old work"
+		);
+
+		const auto StaleBeforeDestroy = Runtime.GetMetrics().StalePoseJobDrops;
+		AnimationRuntimeTestAccess::BeforePoseMerge(Runtime, [&] { Animators[1]->Destroy(); });
+		Runtime.Step(1.0f / 60.0f);
+		Check(
+			Runtime.GetMetrics().StalePoseJobDrops == StaleBeforeDestroy + 1,
+			"destroying an Animator before merge rejects its completed pose job"
+		);
+		Runtime.Step(0.0f);
+		Check(
+			!Runtime.GetPose(Rigs[1]->GetObjectId()),
+			"a destroyed Animator's prior pose retires instead of surviving a stale job completion"
+		);
+
+		const auto ActiveBeforeReimport = Runtime.GetMetrics().TrackedAnimators;
+		const auto StaleBeforeReimport = Runtime.GetMetrics().StalePoseJobDrops;
+		const auto PoseBeforeReimport = Runtime.GetPose(Rigs[2]->GetObjectId())->PoseRevision;
+		bool IncompatibleReimportOk = false;
+		AnimationRuntimeTestAccess::BeforePoseMerge(Runtime, [&] {
+			WriteBytes(Root / "assets" / "animated-rig.glb", MakeGlb(IncompatibleFixture));
+			IncompatibleReimportOk = Assets->ReimportProjectAsset(Mount, MeshReference).Ok;
+		});
+		Runtime.Step(1.0f / 60.0f);
+		auto PoseAfterReimportDrop = Runtime.GetPose(Rigs[2]->GetObjectId());
+		Check(
+			IncompatibleReimportOk &&
+				Runtime.GetMetrics().StalePoseJobDrops == StaleBeforeReimport + ActiveBeforeReimport &&
+				PoseAfterReimportDrop && PoseAfterReimportDrop->PoseRevision == PoseBeforeReimport,
+			"an incompatible source-group reimport rejects every old-content pose result before Main apply"
+		);
+		Runtime.Step(0.0f);
+		Check(
+			!Runtime.GetPose(Rigs[2]->GetObjectId()),
+			"the incompatible skeleton revision invalidates the previously committed pose"
+		);
+		WriteBytes(Root / "assets" / "animated-rig.glb", MakeGlb(CompatibleFixture));
+		const auto CompatibleRestore = Assets->ReimportProjectAsset(Mount, MeshReference);
+		Check(CompatibleRestore.Ok, "pose job stale-result test restores the compatible source group");
+		Runtime.Step(0.0f);
+		Check(
+			Runtime.GetPose(Rigs[2]->GetObjectId()).has_value(),
+			"compatible content restoration schedules one current pose after stale reimport work was dropped"
+		);
+
+		AnimationRuntimeTestAccess::BeforePoseMerge(Runtime, [&] { Runtime.Shutdown(); });
+		Runtime.Step(1.0f / 60.0f);
+		Check(
+			Runtime.GetMetrics().TrackedAnimators == 0 && Runtime.GetMetrics().ActivePoseJobs == 0 &&
+				Runtime.GetMetrics().PoseWorkerCapacity == 0,
+			"Play shutdown at the pre-merge boundary drains workers and discards all pending results"
+		);
+		for (auto &AnimatorValue : Animators)
+			if (!AnimatorValue->GetDestroyed()) AnimatorValue->Destroy();
+		for (auto &Rig : Rigs)
+			if (!Rig->GetDestroyed()) Rig->Destroy();
+		Tracks.clear();
+		Animators.clear();
+		Rigs.clear();
+
+		constexpr std::size_t LifecycleRigCount = 500;
+		for (std::size_t Cycle = 0; Cycle < 10; ++Cycle) {
+			AnimationRuntime CycleRuntime(Assets, {}, AnimationRuntimeOptions{.PoseWorkerCount = 4});
+			std::vector<std::shared_ptr<MeshPart>> CycleRigs;
+			std::vector<std::shared_ptr<Animator>> CycleAnimators;
+			std::vector<std::shared_ptr<AnimationTrack>> CycleTracks;
+			CycleRigs.reserve(LifecycleRigCount);
+			CycleAnimators.reserve(LifecycleRigCount);
+			CycleTracks.reserve(LifecycleRigCount);
+			for (std::size_t Index = 0; Index < LifecycleRigCount; ++Index) {
+				auto Rig = std::make_shared<MeshPart>();
+				Rig->SetMesh(MeshReference);
+				Rig->SetParent(WorkspaceValue);
+				auto AnimatorValue = std::make_shared<Animator>();
+				AnimatorValue->SetParent(Rig);
+				CycleRuntime.RegisterAnimator(AnimatorValue);
+				auto Track = AnimatorValue->CreateTrack(AnimationReference);
+				Track->SetLooped(true);
+				Track->Play();
+				CycleRigs.push_back(std::move(Rig));
+				CycleAnimators.push_back(std::move(AnimatorValue));
+				CycleTracks.push_back(std::move(Track));
+			}
+			CycleRuntime.Step(0.0f);
+			const auto ActiveMetrics = CycleRuntime.GetMetrics();
+			Check(
+				ActiveMetrics.TrackedAnimators == LifecycleRigCount &&
+					ActiveMetrics.PoseEvaluations == LifecycleRigCount &&
+					ActiveMetrics.PoseJobsScheduled == LifecycleRigCount && ActiveMetrics.ActivePoseJobs == 0,
+				"500-Animator Play cycle completes all bounded pose jobs before publication"
+			);
+			CycleRuntime.Shutdown();
+			Check(
+				CycleRuntime.GetMetrics().TrackedAnimators == 0 && CycleRuntime.GetMetrics().ActivePoseJobs == 0 &&
+					CycleRuntime.GetMetrics().PoseWorkerCapacity == 0,
+				"500-Animator Stop cycle retires all scheduler, worker, and pose state"
+			);
+			for (auto &AnimatorValue : CycleAnimators)
+				AnimatorValue->Destroy();
+			for (auto &Rig : CycleRigs)
+				Rig->Destroy();
+			ChangeJournal::Get().Clear();
+		}
 	}
 }
 
@@ -1263,16 +1779,22 @@ int main() {
 	Runtime.Step(0.0f);
 	ReimportSpatial->Step();
 	auto IncompatibleAnchor = ReimportSpatial->ResolveAttachment(ReimportAnchor);
-	Check(IncompatibleAnchor && !IncompatibleAnchor->Animated &&
-		std::ranges::contains(SpatialDiagnosticCodes, std::string("IncompatibleSkeleton")),
-		"incompatible Mesh reimport invalidates the cached skeleton identity and falls back statically with one diagnostic");
+	Check(
+		IncompatibleAnchor && !IncompatibleAnchor->Animated &&
+			std::ranges::contains(SpatialDiagnosticCodes, std::string("IncompatibleSkeleton")),
+		"incompatible Mesh reimport invalidates the cached skeleton identity and falls back statically with one "
+		"diagnostic"
+	);
 	WriteBytes(Root / "assets" / "animated-rig.glb", MakeGlb(ModifiedFixture));
 	auto CompatibleRestore = Assets->ReimportProjectAsset(Mount, MeshRecord->Reference.Value);
 	Check(CompatibleRestore.Ok, "compatible Mesh skeleton can be restored after an incompatible revision");
 	Runtime.Step(0.0f);
 	ReimportSpatial->Step();
-	Check(ReimportSpatial->ResolveAttachment(ReimportAnchor)->Animated,
-		"restoring the original compatibility identity recovers the authored canonical path without a numeric-index bind");
+	Check(
+		ReimportSpatial->ResolveAttachment(ReimportAnchor)->Animated,
+		"restoring the original compatibility identity recovers the authored canonical path without a numeric-index "
+		"bind"
+	);
 
 	auto IncompatibleImport = Assets->ImportProjectAsset(Mount, "assets/incompatible.glb", AssetKind::Animation, "Incompatible");
 	auto IncompatibleAnimation = FindRecord(IncompatibleImport, AssetKind::Animation);
@@ -1454,6 +1976,19 @@ int main() {
 		LimitSpatial->Shutdown();
 		LimitRig->Destroy();
 	}
+	if (MeshRecord && WaveRecord)
+		TestAnimationUpdatePolicy(Assets, WorkspaceValue, MeshRecord->Reference.Value, WaveRecord->Reference.Value);
+	if (MeshRecord && WaveRecord)
+		TestAnimationPoseJobs(
+			Assets,
+			WorkspaceValue,
+			MeshRecord->Reference.Value,
+			WaveRecord->Reference.Value,
+			Root,
+			Mount,
+			ModifiedFixture,
+			IncompatibleFixture
+		);
 
 	ValidationWorld->Destroy();
 	PackagedRuntime.Shutdown();

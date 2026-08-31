@@ -219,8 +219,28 @@ namespace gargantuan {
 			{
 				G_PROFILE("PreRender");
 				RunService->PreRender->Fire(deltaTime);
+				if (Spatial) Spatial->PrepareAnimationRequirements();
 				if (Animation) {
-					Animation->Step(deltaTime);
+					AnimationUpdateContext UpdateContext;
+					const auto Capabilities = Renderer ? Renderer->GetCapabilities()
+													   : RendererCapabilities{false, false};
+					UpdateContext.Environment = Capabilities.Graphical ? AnimationRuntimeEnvironment::Graphical
+																	   : AnimationRuntimeEnvironment::Headless;
+					if (Capabilities.Graphical) {
+						const auto CameraValue = Workspace->GetCurrentCamera();
+						UpdateContext.ViewOrigin = CameraValue->GetCFrame().Position;
+						UpdateContext.HasViewOrigin = true;
+						const auto Visibility = Renderer->GetAnimationVisibilityFeedback();
+						UpdateContext.VisibilityGeneration = Visibility.Generation;
+						UpdateContext.VisibilityPublication = Visibility.Publication;
+						UpdateContext.VisibilityComplete = Visibility.Complete;
+						UpdateContext.VisibleObjects = Visibility.VisibleObjects;
+					}
+					if (Spatial) {
+						UpdateContext.SemanticRequirementsComplete = Spatial->AreAnimationRequirementsComplete();
+						UpdateContext.SemanticRequiredObjects = Spatial->GetAnimationRequiredRigs();
+					}
+					Animation->Step(deltaTime, UpdateContext);
 					RenderPublishing.SetAnimationPoseChanges(
 						Animation->GetPoseUpdates(), Animation->GetPoseRemoves());
 					Animation->ClearChanges();

@@ -96,10 +96,12 @@ Graphical && !GpuSkinning
 ```
 
 Therefore normal SDL graphical execution uses palette-only GPU skinning. An
-unsupported graphical backend uses the retained pooled posed-mesh path. Headless
-execution still samples, blends, solves the hierarchy, and generates the
-renderer-neutral palette, but does not initialize a GPU and does not deform all
-vertices. Native correctness tests and explicit consumers can call the CPU
+unsupported graphical backend uses the retained pooled posed-mesh path.
+[Foundation 2C](AnimationFoundation2UpdatePolicy.md) advances every headless
+track but samples, blends, solves the hierarchy, and generates a renderer-neutral
+palette only when a native semantic consumer or explicit pose request requires
+it. Headless visual-only rigs initialize no GPU and generate no redundant skin
+matrices. Native correctness tests and explicit consumers can still call the CPU
 reference implementation when they need vertex results. Gameplay uses the same
 Animator and AnimationTrack API in all three cases.
 
@@ -357,19 +359,13 @@ Cloth attached to a future animated rig must consume semantic animated anchors,
 not renderer palette resources.
 
 Also deferred are IK, retargeting, animation graphs, ragdolls/bone physics,
-animation replication, timeline tools, animation LOD, jobified evaluation,
-crowd instancing, and palette atlases.
+animation replication, timeline tools, authored animation LOD controls, crowd
+instancing, and palette atlases. Internal update policy and measured jobified
+evaluation are now implemented by Foundation 2C.
 
-The measured next priorities are:
-
-1. **Animation 2B: semantic animated anchors.** This closes the visual/gameplay
-   spatial gap for attachments, audio, prompts, effects, and later cloth without
-   exposing GPU buffers to simulation.
-2. **Animation 2C: visibility/distance update policy, then parallel pose solve.**
-   At 500 rigs CPU sampling/hierarchy/palette work is 5.84 ms and GPU completion
-   is 4.67 ms. Measure visibility and update-rate reduction first; jobify the
-   remaining CPU solve only after its authority/snapshot boundary is explicit.
-3. **Renderer scalability after 2C evidence.** The 50K fixture and 500-rig draw
-   counts point to submission/instancing as a renderer problem. Palette atlases
-   or crowd instancing should follow measured workloads, not be folded into the
-   Animator contract.
+The measured 2A priorities were completed in order: [Foundation 2B](AnimationFoundation2SemanticAnchors.md)
+closed the semantic anchor gap, then [Foundation 2C](AnimationFoundation2UpdatePolicy.md)
+reduced visual-only work before jobifying the still-expensive full/semantic rig
+solve. Renderer scalability remains separate: palette atlases or crowd
+instancing should follow measured draw/submission workloads rather than becoming
+part of the Animator contract.

@@ -143,11 +143,13 @@ namespace gargantuan {
 		std::set<std::pair<ObjectId, std::string>> EmittedDiagnostics;
 		std::vector<ObjectId> ChangedRigs;
 		std::vector<ObjectId> WorkAttachments;
+		std::vector<ObjectId> AnimationRequiredRigs;
 		SemanticSpatialMetrics Metrics;
 		std::uint64_t NextRevision = 0;
 		std::uint64_t AssetChangeSequence = 1;
 		std::size_t IndexedSemanticAnchors = 0;
 		bool ShutDown = false;
+		bool AnimationRequirementsComplete = true;
 
 		Impl(
 			std::shared_ptr<AssetService> AssetsValue,
@@ -156,6 +158,7 @@ namespace gargantuan {
 		) : Assets(std::move(AssetsValue)), Animation(AnimationValue), Diagnostic(std::move(DiagnosticValue)) {
 			ChangedRigs.reserve(64);
 			WorkAttachments.reserve(256);
+			AnimationRequiredRigs.reserve(AnimationRuntime::MaximumAnimators);
 			if (Assets) AssetChangeSequence = Assets->ReadChanges(0).NextSequence;
 		}
 
@@ -520,6 +523,22 @@ namespace gargantuan {
 		State->DirtyAttachments.insert(Object);
 	}
 
+	void SemanticSpatialResolver::PrepareAnimationRequirements() {
+		if (!State || State->ShutDown) return;
+		for (auto Iterator = State->DirtyAttachments.begin(); Iterator != State->DirtyAttachments.end();) {
+			const auto Object = *Iterator++;
+			auto Found = State->Entries.find(Object);
+			if (Found != State->Entries.end() && Found->second.TopologyDirty) State->RefreshTopology(Object);
+		}
+		State->AnimationRequiredRigs.clear();
+		State->AnimationRequirementsComplete = State->Rigs.size() <= AnimationRuntime::MaximumAnimators;
+		for (const auto &[Object, Rig] : State->Rigs) {
+			(void)Rig;
+			if (State->AnimationRequiredRigs.size() >= AnimationRuntime::MaximumAnimators) break;
+			State->AnimationRequiredRigs.push_back(Object);
+		}
+	}
+
 	void SemanticSpatialResolver::Step() {
 		if (!State || State->ShutDown) return;
 		const auto Started = std::chrono::steady_clock::now();
@@ -600,6 +619,8 @@ namespace gargantuan {
 		State->AttachmentChildren.clear();
 		State->Rigs.clear();
 		State->DirtyAttachments.clear();
+		State->AnimationRequiredRigs.clear();
+		State->AnimationRequirementsComplete = true;
 		State->IndexedSemanticAnchors = 0;
 	}
 
@@ -674,6 +695,14 @@ namespace gargantuan {
 		Result.IndexedSemanticAnchors = State->IndexedSemanticAnchors;
 		Result.IndexedRigs = State->Rigs.size();
 		return Result;
+	}
+
+	std::span<const ObjectId> SemanticSpatialResolver::GetAnimationRequiredRigs() const {
+		return State ? std::span<const ObjectId>(State->AnimationRequiredRigs) : std::span<const ObjectId>{};
+	}
+
+	bool SemanticSpatialResolver::AreAnimationRequirementsComplete() const {
+		return !State || State->AnimationRequirementsComplete;
 	}
 
 	std::optional<SemanticSpatialTransform>

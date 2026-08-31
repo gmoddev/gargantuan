@@ -1,5 +1,6 @@
 #pragma once
 
+#include "gargantuan/animation/AnimationUpdatePolicy.hpp"
 #include "gargantuan/assets/AssetTypes.hpp"
 #include "gargantuan/render/RenderPublication.hpp"
 
@@ -13,6 +14,7 @@
 #include <vector>
 
 namespace gargantuan {
+	struct AnimationRuntimeTestAccess;
 	class Animator;
 	class AssetService;
 
@@ -25,6 +27,9 @@ namespace gargantuan {
 
 	struct AnimationRuntimeOptions {
 		bool CpuSkinningFallback = false;
+		bool DetailedProfiling = false;
+		bool ParallelPoseEvaluation = true;
+		std::size_t PoseWorkerCount = 0;
 	};
 
 	struct AnimationRuntimeMetrics {
@@ -35,12 +40,38 @@ namespace gargantuan {
 		std::uint64_t SkinnedVertices = 0;
 		std::uint64_t PoseUpdates = 0;
 		std::uint64_t EvaluationCpuNanoseconds = 0;
+		std::uint64_t TrackAdvanceCpuNanoseconds = 0;
+		std::uint64_t KeyframeLookupCpuNanoseconds = 0;
+		std::uint64_t InterpolationCpuNanoseconds = 0;
+		std::uint64_t TrackBlendingCpuNanoseconds = 0;
+		std::uint64_t BindPoseFallbackCpuNanoseconds = 0;
 		std::uint64_t SamplingAndBlendingCpuNanoseconds = 0;
 		std::uint64_t HierarchyCpuNanoseconds = 0;
 		std::uint64_t SkinMatrixCpuNanoseconds = 0;
 		std::uint64_t SkinningCpuNanoseconds = 0;
+		std::uint64_t SemanticJointCacheCpuNanoseconds = 0;
 		std::uint64_t PosePublicationCpuNanoseconds = 0;
+		std::uint64_t PolicyCpuNanoseconds = 0;
 		std::uint64_t BufferAllocations = 0;
+		std::size_t FullRateAnimators = 0;
+		std::size_t ReducedRateAnimators = 0;
+		std::size_t FrozenVisualAnimators = 0;
+		std::size_t SemanticRequiredAnimators = 0;
+		std::uint64_t PoseEvaluations = 0;
+		std::uint64_t SkippedPoseEvaluations = 0;
+		std::uint64_t ImmediatePoseRefreshes = 0;
+		std::uint64_t PolicyTransitions = 0;
+		std::uint64_t VisibilityFeedbackDrops = 0;
+		std::uint64_t HeadlessVisualPoseSkips = 0;
+		std::uint64_t PoseJobsScheduled = 0;
+		std::uint64_t PoseJobBatches = 0;
+		std::uint64_t StalePoseJobDrops = 0;
+		std::uint64_t PoseWorkerCpuNanoseconds = 0;
+		std::uint64_t PoseJobSchedulingCpuNanoseconds = 0;
+		std::uint64_t PoseJobWaitNanoseconds = 0;
+		std::uint64_t PoseMergeCpuNanoseconds = 0;
+		std::size_t ActivePoseJobs = 0;
+		std::size_t PoseWorkerCapacity = 0;
 	};
 
 	class AnimationRuntime final {
@@ -61,6 +92,8 @@ namespace gargantuan {
 
 		void RegisterAnimator(const std::shared_ptr<Animator> &AnimatorValue);
 		void Step(float DeltaTime);
+		void Step(float DeltaTime, const AnimationUpdateContext &Context);
+		void RequestPoseRefresh(ObjectId Object);
 		void Shutdown();
 
 		[[nodiscard]] const std::vector<RenderAnimationPoseState> &GetPoseUpdates() const;
@@ -77,6 +110,8 @@ namespace gargantuan {
 		);
 
 	  private:
+		friend struct AnimationRuntimeTestAccess;
+		void SetBeforePoseMergeForTesting(std::function<void()> Callback);
 		struct Impl;
 		std::unique_ptr<Impl> State;
 	};
