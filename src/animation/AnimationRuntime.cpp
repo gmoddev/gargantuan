@@ -922,14 +922,18 @@ namespace gargantuan {
 		}
 
 		constexpr std::size_t MinimumParallelPoseEvaluations = 32;
+		constexpr std::size_t MinimumPoseEvaluationsPerBatch = 16;
 		if (State->Options.ParallelPoseEvaluation && State->Options.PoseWorkerCount != 1 &&
 			State->PendingEvaluations.size() >= MinimumParallelPoseEvaluations) {
 			if (!State->PoseJobs) {
 				State->PoseJobs = std::make_unique<JobSystem>(State->Options.PoseWorkerCount);
 				State->Metrics.PoseWorkerCapacity = State->PoseJobs->GetWorkerCount();
 			}
+			const auto DesiredBatchCount =
+				(State->PendingEvaluations.size() + MinimumPoseEvaluationsPerBatch - 1) /
+				MinimumPoseEvaluationsPerBatch;
 			const auto BatchCount = std::min({
-				State->PendingEvaluations.size(),
+				DesiredBatchCount,
 				State->PoseJobs->GetWorkerCount(),
 				State->PoseJobBatches.size(),
 			});
