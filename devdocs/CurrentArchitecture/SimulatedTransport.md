@@ -138,6 +138,8 @@ Bandwidth remains a clear per-direction serializer. The production
 backend.
 
 `NetworkScheduler`, `ReplicationCoordinator`, the basic binary replication
-codec, reliable replica execution, and bounded Luau Remotes are implemented
-above this backend. Authentication/tickets, Players, realtime replication,
-Node, and Studio play mode remain unimplemented.
+codec, reliable replica execution, bounded Luau Remotes, and the dedicated
+Character realtime/prediction protocol are implemented above this backend.
+The Character gate uses seeded latency, loss, duplication, and reorder here.
+Authentication/tickets, general realtime physics ownership, Node, and Studio
+play mode remain unimplemented.

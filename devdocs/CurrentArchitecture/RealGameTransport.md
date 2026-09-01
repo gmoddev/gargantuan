@@ -164,7 +164,9 @@ metrics; it does not promise deterministic timing or injected faults through
 this adapter.
 
 The production `NetworkScheduler`, `ReplicationCoordinator`, versioned basic
-replication codec, client applicator, and bounded `RemoteManager` now run over
-the localhost GNS test path. Authentication/tickets, negotiated-limit exchange,
-Players, realtime replication, Node, spatial interest management, and Studio
-play mode remain unimplemented.
+replication codec, client applicator, bounded `RemoteManager`, and dedicated
+Character realtime managers now run over localhost GNS tests. The Character
+test carries reliable bind/action identity, semantic input, sequenced
+authoritative state, and reconciliation. Authentication/tickets,
+negotiated-limit exchange, general realtime physics/ownership, Node, spatial
+interest management, and Studio play mode remain unimplemented.

@@ -10,9 +10,20 @@ defect throughput.
   engine-shipped replaceable Luau assembly/locomotion, renderer-neutral root
   extraction, and collision-authoritative main-thread admission. Headless,
   offscreen semantic scheduling, loop accumulation, stale jobs, package
-  closure, and 1/10/100/500 plus mixed-policy benchmarks are covered. Network
-  action identity/prediction, motion warping, IK/retargeting, animation graphs,
-  and portal transfer remain future work. The non-normative
+  closure, and 1/10/100/500 plus mixed-policy benchmarks are covered. Motion
+  warping, IK/retargeting, animation graphs, and portal transfer remain future
+  work.
+- Character / Animation Foundation 3B completes the first dedicated realtime
+  Character vertical: connection/control-epoch binding, semantic input and
+  action sequences, server-derived movement and pinned root action content,
+  reliable action decisions, sequenced authoritative state/acknowledgement,
+  64-entry prediction/replay, collision correction, NPC/remote state, custom
+  Luau policy, simulated adverse transport, localhost GNS, FirstCompleteGame
+  catalog identity, malformed protocol, lifecycle, Release performance/
+  bandwidth/allocation, and sanitizer gates. Character state remains separate
+  from structural replication and Remote Instances. 3C prioritizes measured
+  compression/cadence, interpolation/presentation, production session/Luau
+  bridges, spatial relevance, and Animator presentation readiness. The non-normative
   `SpatialRegionsAndPortalTopology.md` is unchanged.
 - Environment / Lighting Foundation 1 establishes canonical saved Lighting and
   Sky semantics, renderer-neutral incremental publication, AssetService-owned

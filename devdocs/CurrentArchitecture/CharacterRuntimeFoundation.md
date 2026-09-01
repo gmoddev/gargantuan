@@ -10,6 +10,8 @@ related_code:
   - assets/runtime/DefaultLocomotion.luau
   - include/gargantuan/classes/Character.hpp
   - src/classes/Character.cpp
+  - src/classes/KinematicCharacter.cpp
+  - include/gargantuan/network/CharacterNetwork.hpp
   - src/services/Players.cpp
   - tests/PlayerRuntimeTests.cpp
 related_adrs: []
@@ -35,7 +37,7 @@ contracts exist.
 
 | Member | Contract | Why native |
 | --- | --- | --- |
-| `CFrame` | Saved, future-replicated authoritative transform. Authored writes use the normal mutation and journal path. | Physics, render, semantic, persistence, and future replication need one canonical state. |
+| `CFrame` | Saved, structurally replicated authored transform. Authored writes use the normal mutation and journal path; realtime simulation uses a transient native commit. | Physics, render, semantic, persistence, and realtime Character networking need one canonical state. |
 | `Position` | Non-persisted alias of `CFrame.Position`. | Preserves a small ergonomic read/write seam without duplicating state. |
 | `RootPart` | Optional saved, future-replicated descendant `BasePart`; synchronized to accepted Character transforms. | A generation-safe reference is required to publish accepted spatial state. |
 | `Move(Translation, Velocity?)` | Luau request for bounded collision-authoritative movement; returns accepted position, translation, velocity, contact/floor data, and truncation flags. | Luau cannot safely mutate the physics backend or serialize a main-thread controller query. |
@@ -47,6 +49,12 @@ no supported native movement specialization. The C++-only
 for Animation Foundation 3A. The C++-only result distinguishes requested and
 applied motion and records controller/physics time. Those types are an internal
 authority seam, not a second transform API.
+
+Foundation 3B adds C++-only `ApplyRuntimeTransform` and
+`ApplyRuntimeControllerFacts` for server state and client correction. They
+validate live finite state, synchronize RootPart/runtime observers, and emit no
+committed authoring property change. They are not Luau methods and do not accept
+client authority.
 
 Native `Character` is responsible only for:
 
@@ -136,7 +144,7 @@ Character descendant. ObjectId plus generation/liveness checks reject stale
 animation work, and teardown invalidates tracks and connections before their
 VM or DataModel disappears.
 
-## Persistence, packaging, headless, and future networking
+## Persistence, packaging, headless, and realtime networking
 
 Characters are ordinary schema Instances. Their authored hierarchy, CFrame,
 RootPart reference, Mesh assets, Animator, and project scripts pass through the
@@ -146,10 +154,12 @@ closure. They are resolved relative to the executable, so relocated packages
 do not depend on the source tree.
 
 Headless/server execution owns the same Character admission path and requires
-no renderer. A future replication layer can publish accepted Character state
-plus animation AssetId/content revision, action identity/start time, and
-control revision. Client prediction and correction must reconcile to accepted
-Character state, never accept a client-supplied root position as authority.
+no renderer. `AuthoritativeCharacterNetwork` now publishes accepted Character
+state plus animation AssetId/content revision, action identity/start tick,
+control epoch, and acknowledged input. `PredictedCharacterNetwork` restores
+that state and replays at most 64 still-pending semantic inputs. Client messages
+contain no CFrame, velocity, or root-motion delta. See
+`CharacterNetworkingFoundation.md` for protocol, delivery, bounds, and evidence.
 The same boundary can later hand accepted motion to region/portal transfer
 without teaching Animator about global topology.
 
@@ -161,7 +171,10 @@ must be finite. Physics contact iteration and planes retain their existing
 bounds. Root-motion request storage is capped by the 4,096-Animator runtime
 bound and reused after warmup.
 
-Foundation 3A does not add Humanoid, health, a native locomotion graph, IK,
-retargeting, motion warping, ragdoll, climbing/vaulting/combat systems, root
-motion prediction, a replication protocol, portal transfer, a Character
-editor, or an animation graph/timeline UI.
+Foundations 3A/3B do not add Humanoid, health, a native locomotion graph, IK,
+retargeting, motion warping, ragdoll, climbing/vaulting/combat systems,
+distributed physics ownership, remote presentation interpolation, portal
+transfer, a Character editor, or an animation graph/timeline UI. Humanoid is a
+permanent architectural exclusion, not a milestone deferral; `Character` plus
+narrow native primitives and replaceable Luau composition is the supported
+direction.

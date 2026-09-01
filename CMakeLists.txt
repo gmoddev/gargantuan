@@ -621,6 +621,13 @@ if(BUILD_TESTING)
 	target_link_libraries(gargantuan_remote_tests PRIVATE gargantuan_core)
 	add_executable(gargantuan_remote_luau_tests "tests/RemoteLuauTests.cpp")
 	target_link_libraries(gargantuan_remote_luau_tests PRIVATE gargantuan_core)
+	add_executable(gargantuan_character_networking_tests "tests/CharacterNetworkingTests.cpp")
+	target_link_libraries(gargantuan_character_networking_tests PRIVATE gargantuan_core nlohmann_json)
+	target_compile_definitions(gargantuan_character_networking_tests PRIVATE
+		GARGANTUAN_FIRST_COMPLETE_GAME_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/samples/FirstCompleteGame"
+	)
+	add_executable(gargantuan_character_networking_benchmark "tests/CharacterNetworkingBenchmark.cpp")
+	target_link_libraries(gargantuan_character_networking_benchmark PRIVATE gargantuan_core)
 	add_executable(gargantuan_replication_benchmark "tests/ReplicationBenchmark.cpp")
 	target_link_libraries(gargantuan_replication_benchmark PRIVATE gargantuan_core)
 	add_executable(gargantuan_remote_benchmark "tests/RemoteBenchmark.cpp")
@@ -633,6 +640,11 @@ if(BUILD_TESTING)
 		)
 		add_executable(gargantuan_remote_real_transport_tests "tests/RemoteGnsTests.cpp")
 		target_link_libraries(gargantuan_remote_real_transport_tests PRIVATE
+			gargantuan_core
+			gargantuan_gns_transport
+		)
+		add_executable(gargantuan_character_real_transport_tests "tests/CharacterNetworkGnsTests.cpp")
+		target_link_libraries(gargantuan_character_real_transport_tests PRIVATE
 			gargantuan_core
 			gargantuan_gns_transport
 		)
@@ -730,6 +742,8 @@ if(BUILD_TESTING)
 			gargantuan_replication_tests
 			gargantuan_remote_tests
 			gargantuan_remote_luau_tests
+			gargantuan_character_networking_tests
+			gargantuan_character_networking_benchmark
 			gargantuan_replication_benchmark
 			gargantuan_remote_benchmark
 		)
@@ -740,6 +754,7 @@ if(BUILD_TESTING)
 			list(APPEND GARGANTUAN_SDL_RUNTIME_TARGETS
 				gargantuan_real_transport_tests
 				gargantuan_remote_real_transport_tests
+				gargantuan_character_real_transport_tests
 			)
 			set(GARGANTUAN_PROTOBUF_RUNTIMES "")
 			if(TARGET protobuf::libprotobuf)
@@ -763,6 +778,11 @@ if(BUILD_TESTING)
 					COMMAND ${CMAKE_COMMAND} -E copy_if_different
 						"${GARGANTUAN_PROTOBUF_RUNTIME}"
 						"$<TARGET_FILE_DIR:gargantuan_remote_real_transport_tests>"
+				)
+				add_custom_command(TARGET gargantuan_character_real_transport_tests POST_BUILD
+					COMMAND ${CMAKE_COMMAND} -E copy_if_different
+						"${GARGANTUAN_PROTOBUF_RUNTIME}"
+						"$<TARGET_FILE_DIR:gargantuan_character_real_transport_tests>"
 				)
 			endforeach()
 		endif()
@@ -831,6 +851,8 @@ if(BUILD_TESTING)
 	add_test(NAME gargantuan_replication COMMAND gargantuan_replication_tests)
 	add_test(NAME gargantuan_remote COMMAND gargantuan_remote_tests)
 	add_test(NAME gargantuan_remote_luau COMMAND gargantuan_remote_luau_tests)
+	add_test(NAME gargantuan_character_networking COMMAND gargantuan_character_networking_tests)
+	add_test(NAME gargantuan_character_networking_benchmark_smoke COMMAND gargantuan_character_networking_benchmark)
 	add_test(NAME gargantuan_replication_benchmark_smoke COMMAND gargantuan_replication_benchmark)
 	add_test(NAME gargantuan_remote_benchmark_smoke COMMAND gargantuan_remote_benchmark)
 	set_tests_properties(gargantuan_shader_tool_validation PROPERTIES LABELS "build;shader" TIMEOUT 60)
@@ -883,7 +905,9 @@ if(BUILD_TESTING)
 	)
 	set_tests_properties(gargantuan_prerun_bootstrap PROPERTIES LABELS "prerun;runtime" TIMEOUT 120)
 	set_tests_properties(gargantuan_networking_contracts gargantuan_simulated_transport gargantuan_scheduler_contract
-		gargantuan_replication gargantuan_remote gargantuan_remote_luau gargantuan_replication_benchmark_smoke
+		gargantuan_replication gargantuan_remote gargantuan_remote_luau gargantuan_character_networking
+		gargantuan_character_networking_benchmark_smoke
+		gargantuan_replication_benchmark_smoke
 		gargantuan_remote_benchmark_smoke PROPERTIES LABELS "networking;runtime" TIMEOUT 180
 	)
 	if(GARGANTUAN_BUILD_RENDERER_BENCHMARKS)
@@ -900,7 +924,9 @@ if(BUILD_TESTING)
 	if(GARGANTUAN_WITH_GNS)
 		add_test(NAME gargantuan_real_transport COMMAND gargantuan_real_transport_tests)
 		add_test(NAME gargantuan_remote_real_transport COMMAND gargantuan_remote_real_transport_tests)
-		set_tests_properties(gargantuan_real_transport gargantuan_remote_real_transport PROPERTIES
+		add_test(NAME gargantuan_character_real_transport COMMAND gargantuan_character_real_transport_tests)
+		set_tests_properties(gargantuan_real_transport gargantuan_remote_real_transport
+			gargantuan_character_real_transport PROPERTIES
 			LABELS "networking;transport;optional" TIMEOUT 180
 		)
 	endif()

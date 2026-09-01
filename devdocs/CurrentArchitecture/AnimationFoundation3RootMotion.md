@@ -181,9 +181,16 @@ The 64-joint memory estimates were 87,006 canonical artifact bytes, 10,240
 skeleton bytes, 10,752 Animator-pose bytes, 480 active-track bytes, and 8,192
 palette bytes per represented rig where applicable.
 
-Foundation 3B priorities are action identity/control revision across
-replication, server-authoritative playback start and correction, explicit
-requested/accepted telemetry for opt-in motion warping, and production game
-clip/controller integration. Motion warping, prediction, arbitrary root
-rotation, IK, retargeting, graphs, ragdoll, portals, and editor tooling remain
-deferred until their authority contracts are specified.
+Foundation 3B now carries control/input/action identity, pinned AssetId/content
+revision, reliable action decisions, server-evaluated root motion, bounded local
+prediction, and authoritative restore/replay through the dedicated Character
+protocol. Its correction composition test retains the residual pose and
+re-resolves animated Attachment, Sound, and Prompt state from the corrected
+RootPart without ChangeJournal work. See `CharacterNetworkingFoundation.md`.
+
+Foundation 3C first addresses measured state batching/quantization/cadence,
+remote interpolation and presentation smoothing, production session/Luau
+bridges, spatial relevance, and authoritative Animator presentation/content
+readiness. Motion warping, arbitrary root rotation, IK, retargeting, graphs,
+ragdoll, portals, and editor tooling remain deferred until those lower network
+and action-presentation contracts are measured.

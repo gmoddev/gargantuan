@@ -1,7 +1,7 @@
 ---
 status: current
 owner: networking
-last_verified: 2026-08-15
+last_verified: 2026-09-01
 related_code:
   - include/gargantuan/network/
   - src/network/
@@ -33,6 +33,14 @@ Luau remotes -> RemoteManager
     -> NetworkScheduler
     -> NetworkMessageIntent
     -> IGameTransport
+
+semantic Character input/action -> AuthoritativeCharacterNetwork
+    -> Character admission and server-known root motion
+    -> CharacterAuthoritativeState
+    -> NetworkScheduler -> NetworkMessageIntent -> IGameTransport
+
+received CharacterAuthoritativeState
+    -> PredictedCharacterNetwork reconciliation
 ```
 
 The types are internal foundation contracts, not a public API or wire-format
@@ -90,10 +98,12 @@ wait is the sole outcome representation.
 ## Sequence domains
 
 `ReplicationEpoch`, `ReliableReplicationSequence`, `RealtimeStateSequence`,
-`RemoteEventSequence`, and `RemoteRequestId` are distinct template
-specializations and cannot be implicitly interchanged. Zero is invalid. Local
-increment refuses `uint64_t` exhaustion rather than wrapping. Network width,
-acknowledgement, and wrap protocols remain deferred.
+`CharacterControlEpoch`, `CharacterInputSequence`,
+`CharacterActionSequence`, `RemoteEventSequence`, and `RemoteRequestId` are
+distinct template specializations and cannot be implicitly interchanged. Zero
+is invalid. Local increment refuses `uint64_t` exhaustion rather than wrapping.
+Character state explicitly acknowledges incorporated Character input. A
+session-rekey policy before sequence exhaustion remains deferred.
 
 `ChangeJournal.Sequence` is not used by any of these types.
 
@@ -151,11 +161,12 @@ the production `NetworkScheduler`. See `NetworkSchedulerContract.md`.
 ## Deliberately not implemented
 
 There is now a versioned basic-replication binary codec, production scheduler,
-per-peer coordinator, client replica applicator, and bounded Remote runtime.
-Their scopes are documented in `BasicClientReplication.md` and
-`LuauRemotes.md`. Realtime replication, authentication/ticket validation, the
-player model, spatial interest management, Node integration, and Studio play
-sessions remain unimplemented. The deterministic in-memory
+per-peer coordinator, client replica applicator, bounded Remote runtime, and a
+dedicated authoritative Character realtime protocol. Their scopes are
+documented in `BasicClientReplication.md`, `LuauRemotes.md`, and
+`CharacterNetworkingFoundation.md`. General realtime physics replication,
+authentication/ticket validation, spatial interest management, Node
+integration, and Studio play sessions remain unimplemented. The deterministic in-memory
 implementation is documented in `SimulatedTransport.md`; the opt-in real GNS
 adapter is documented in `RealGameTransport.md`. Backend contract types remain
 private; only the schema-backed Remote developer surface is exposed to Luau.

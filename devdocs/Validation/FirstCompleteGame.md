@@ -1,6 +1,6 @@
 # First complete game validation
 
-Status: Animation Foundation 3A Character/root-motion authority revalidated locally on 2026-09-01. This document records a vertical-slice
+Status: Character / Animation Foundation 3B network authority revalidated locally on 2026-09-01. This document records a vertical-slice
 falsification exercise; it does not claim that Gargantuan is generally usable.
 
 ## Game design and scope
@@ -21,7 +21,9 @@ bounded fog, and one direct six-face `Sky` that reuses the imported square Image
 
 The deterministic `K` action completes the round for automation. It is a test
 hook implemented through the public `ActionMap`, not a native gameplay bypass.
-Networking, combat, VFX, and soft bodies were intentionally not added. The
+Authored multiplayer gameplay, combat, VFX, and soft bodies were intentionally
+not added. A separate headless gate now uses the sample's real BeaconLunge
+catalog identity as the Character-network action proof. The
 authored `AnimatedBeacon` is a two-joint skinned MeshPart driven by the looping
 `BeaconPulse` clip through the public Animator/AnimationTrack API. Its
 `BeaconTipAnchor` binds `BeaconRoot/BeaconTip`; a quiet positional Sound and a
@@ -35,6 +37,14 @@ ordinary MeshPart/Animator/RootPart children. One lunges in open space; the
 other meets a rigid barrier. Animator submits root deltas, while Character and
 the existing capsule solver accept about 0.50 m and collision-clip the blocked
 proof to about 0.155 m during the deterministic headless observation interval.
+
+Foundation 3B reads the Ready `BeaconLunge` AssetId and immutable ContentId
+from this sample's catalog, registers that known action on a headless server and
+client, requests only its semantic token, evaluates movement on the server, and
+reconciles the client over deterministic simulated transport. The client sends
+no transform or root delta. The production GNS opt-in gate repeats the same
+control/input/action/state boundary on localhost without making networking part
+of the authored game scripts.
 
 ## Authoring workflow used
 
@@ -61,6 +71,8 @@ proof to about 0.155 m during the deterministic headless observation interval.
    `RootMotionShowcase` through generic Script authoring before Save/reopen.
 8. Launch the unchanged project outside Studio with the supported standalone
    command below.
+9. Run the deterministic Character-network gate against the copied sample
+   catalog and the optional localhost GNS Character transport gate.
 
 This could not be authored efficiently through the visible Studio GUI alone.
 Studio lacks compound-value editors and transform gizmos for the required
@@ -93,6 +105,9 @@ honest claim of an entirely GUI-authored workflow.
   publication, GPU opaque/shadow skinning, CPU fallback, and renderer restart;
 - canonical Character/RootPart authority, headless root extraction, open-space
   acceptance, collision clipping, and Player-independent NPC composition;
+- actual BeaconLunge AssetId/content pinning, semantic action request,
+  server-derived root movement, bounded prediction, acknowledgement, and
+  reconciliation over the dedicated Character protocol;
 - canonical Attachment joint binding, transient `WorldCFrame`, bind-pose
   fallback, animated positional Sound, animated prompt range/LOS/hold
   validation, and zero-journal semantic movement;
@@ -178,6 +193,14 @@ open movement from the barrier-clipped result. RootPart follows accepted
 Character state; the requested-but-blocked remainder is discarded. Ten
 Play/Stop cycles leave the complete authoring snapshot unchanged, and no
 runtime Character movement enters the authoring journal.
+
+Character / Animation Foundation 3B leaves those scripts and the project schema
+unchanged. Its test resolves this sample's exact `BeaconLunge` catalog
+AssetId/content revision, carries a semantic action through the production
+scheduler and deterministic transport, and converges the predicted replica to
+server-derived movement. The independent real-GNS target proves the equivalent
+localhost path. No Remote Instance, Node process, Player-only assumption,
+Humanoid, renderer, or source-tree-only runtime module is introduced.
 
 ## Studio and API findings
 

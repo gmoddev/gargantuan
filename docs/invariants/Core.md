@@ -134,6 +134,28 @@ Tests should enforce them where practical.
 5. Backend-internal body or shape reconstruction does not unexpectedly change
    Gargantuan physics identity or leave dangling constraint identity.
 
+## Character and gameplay actors
+
+1. `Character` is Gargantuan's permanent canonical gameplay-actor type.
+   `KinematicCharacter : Character` is the current native movement
+   specialization, `Player.Character` is an optional `Character` reference,
+   and an NPC never requires a fake `Player`.
+2. Gargantuan will not introduce `Humanoid`, `HumanoidController`,
+   `HumanoidStateMachine`, or an equivalent health/traversal/combat/locomotion
+   aggregate under another name. Character behavior remains composed from
+   narrow native authority primitives and replaceable game Luau policy.
+3. Native Character code may own identity, validation, control lifetimes,
+   movement admission, physics/controller facts, bounded prediction and
+   reconciliation, and protocol bookkeeping. Walk/run/jump/attack/vault state,
+   action selection, animation selection, health, traversal, combat, and other
+   game semantics remain Luau or game-owned composition.
+4. A client may request bounded semantic movement or actions, but never supplies
+   an authoritative Character transform, velocity, collision result, or
+   root-motion displacement. The server derives and admits those values.
+5. Runtime Character movement and network correction are transient simulation
+   state. They must not create authoring journal records, structural replication
+   property streams, save dirtying, or document reconciliation work.
+
 ## EditorHost and Studio
 
 1. EditorHost is the versioned public process boundary between Studio and the engine.

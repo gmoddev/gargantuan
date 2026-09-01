@@ -207,4 +207,10 @@ Node integration, Studio play mode, realtime transform replication, physics
 ownership, interpolation, prediction, rollback, streaming/interest management,
 voice, HTTP/service networking, or backend service messaging.
 
+Subsequent Character / Animation Foundation 3B implements the narrow
+Character realtime/prediction slice as a sibling protocol. That later evidence
+is recorded in `CharacterNetworkingFoundation.md`; it does not retroactively
+expand this Foundations 1–7 checkpoint into general realtime physics or
+ownership.
+
 The next milestone is `PLATFORM FOUNDATION 1 — HOST / INPUT EVENT BOUNDARY`.

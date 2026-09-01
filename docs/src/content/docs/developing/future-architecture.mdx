@@ -144,7 +144,7 @@ has a session-local generation that changes whenever a different complete
 registry is installed. Definition versions drive compatibility and migration;
 the registry generation invalidates runtime and Studio caches without acting as
 a persisted schema version. Examples include `Engine.Material`,
-`Game.CombatState`, and `MyPackage.CustomHumanoid`. Provenance identifies native
+`Game.CombatState`, and `MyPackage.StatusEffect`. Provenance identifies native
 engine, Core Luau, game, package, plugin, or tooling origins, including package
 version and source module where relevant. This supports inspectability, conflict
 detection, and package management without letting load order decide collisions.
@@ -157,7 +157,7 @@ bypass reflection or security, or silently collide. The target retains its
 original identity.
 
 A custom class has a distinct reflected identity, such as
-`CustomHumanoid : Model`. It may declare properties, attributes, methods,
+`StatusEffect : Folder`. It may declare properties, attributes, methods,
 signals, validation, editor metadata, replication, serialization, and approved
 native components. It participates in `IsA`, reflection, Studio, persistence,
 and replication. Serialized objects identify their class by stable `SchemaId`
@@ -201,7 +201,8 @@ defaults should not create hidden assumptions that prevent replacement.
 The native character contract remains small: root transform, collision,
 ownership, input target, rig/animation interface, and an optional character
 motor. Core Luau and approved native components provide a removable default
-controller. Block, humanoid, custom, vehicle, and mech rigs should all be viable.
+controller. Block, custom, vehicle, and mech `Character` rigs should all be viable.
+`Humanoid` and equivalent native gameplay aggregates remain permanently excluded.
 
 Animation compatibility belongs in importers and rig adapters rather than the
 internal clip format. An `AnimationClip` uses stable joint or bone identity,

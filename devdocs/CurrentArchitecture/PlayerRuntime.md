@@ -218,8 +218,9 @@ protocol or persistent account identifier.
 ## Deliberately deferred
 
 This slice does not add matchmaking, gargantuan-node integration, PlayerAuth,
-DataStore, prediction, final Players replication, Humanoid compatibility,
-motion warping, UI, gamepad defaults, moving platforms, one-way collision, arbitrary
-query filtering, or a full-featured slope/step motor. The shipped runtime
+DataStore, prediction, final Players replication, motion warping, UI, gamepad
+defaults, moving platforms, one-way collision, arbitrary query filtering, or a
+full-featured slope/step motor. Humanoid compatibility is permanently excluded;
+`Character` remains the canonical actor type. The shipped runtime
 resources currently remain external payload files beside the executable; build
 and distribution flows must preserve that runtime directory.

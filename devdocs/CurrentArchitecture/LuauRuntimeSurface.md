@@ -151,8 +151,10 @@ this inventory makes no general gameplay networking guarantee.
 
 ## Major intentional gaps
 
-Final multiplayer Players behavior, Humanoid compatibility, animation, a
-broader RunService API, TweenService service semantics, gamepad action sources,
+Final multiplayer Players behavior, animation, a broader RunService API,
+TweenService service semantics, gamepad action sources,
 DataStore/HTTP services, assets, debugger/profiler/LSP, full module
 configuration, edit-mode orbit/pan/zoom/focus, and broad gameplay service
-compatibility remain outside the current surface.
+compatibility remain outside the current surface. Humanoid compatibility is
+permanently excluded: canonical `Character` plus narrow native primitives and
+replaceable Luau composition is the supported actor model.

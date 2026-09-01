@@ -128,20 +128,24 @@ gargantuan --compat-roblox --script=src/Main.luau
 
     ```luau
     -- TODO: gotta design this to support C++ and Luau classes
-    local Humanoid = InstanceClass.new("Humanoid")
-    Humanoid.Properties = { ... }
-    Humanoid.Methods = { ... }
-    Humanoid:Register()
+    local CharacterStatus = InstanceClass.new("CharacterStatus")
+    CharacterStatus.Properties = { ... }
+    CharacterStatus.Methods = { ... }
+    CharacterStatus:Register()
 
-    local humanoid = Instance.new("Humanoid")
-    humanoid.Parent = Players.LocalPlayer
+    local status = Instance.new("CharacterStatus")
+    status.Parent = Players.LocalPlayer.Character
     ```
 
     It's recommended to write a type definition file for your declared classes:
 
     ```luau
-    declare extern type Humanoid: Instance
-    	Health: number
-     	-- ...
+    declare extern type CharacterStatus: Instance
+        Health: number
+        -- ...
     end
     ```
+
+    Gargantuan will not add a `Humanoid` compatibility aggregate. The canonical
+    gameplay actor is `Character`; game-specific health, combat, traversal, and
+    locomotion state should be composed as narrow game-owned systems.

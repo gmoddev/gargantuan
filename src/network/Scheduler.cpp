@@ -180,8 +180,7 @@ namespace gargantuan::network {
 		if (Iterator == State->Connections.end() || !Iterator->second.Active)
 			return {SchedulerSubmitStatus::InvalidConnection};
 		auto &Connection = Iterator->second;
-		if (!MakeNetworkMessageIntent(Message.Destination(), Message.Delivery(), Message.Traffic(),
-			Message.Order(), Message.Payload(), Connection.Limits)) {
+		if (!IsNetworkMessageIntentValid(Message, Connection.Limits)) {
 			++Connection.Statistics.IntentsRejected;
 			return {SchedulerSubmitStatus::IntentRejected};
 		}

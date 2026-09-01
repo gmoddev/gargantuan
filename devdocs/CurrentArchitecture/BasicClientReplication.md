@@ -40,8 +40,9 @@ authoritative DataModel + ChangeJournal
 The authoritative graph is never mutated by received replication bytes. The
 coordinator is a server-side projection only. The applicator has no upstream
 mutation API and operates on a distinct client graph under change-journal
-suppression. Application remotes, ownership, prediction, and realtime physics
-remain separate future protocols.
+suppression. Application remotes and Character realtime prediction use separate
+implemented protocols; general physics ownership remains future work. See
+`LuauRemotes.md` and `CharacterNetworkingFoundation.md`.
 
 ## Per-peer state and baselines
 
@@ -128,7 +129,9 @@ Serializer errors are normalized through Gargantuan's `SerializationError`.
 
 The current layout favors a small auditable foundation over final compression.
 It intentionally repeats property names and schema identities. Compact indexes,
-property masks, quantization, and realtime state are future versioned work.
+property masks and compression are future versions of this structural format.
+Character realtime state is implemented by the separate bounded `GCHR`
+protocol and never enters a `ReplicationFrame`.
 
 ## Application and transaction semantics
 
@@ -208,7 +211,9 @@ without equivalent workloads.
 ## Deliberately deferred
 
 The following are not part of basic client replication: bounded Luau remotes,
-unreliable/realtime replication, transform or physics replication, prediction,
-ownership leases, correction/interpolation, spatial interest management,
+Character realtime state/prediction/reconciliation, general transform or physics
+replication, ownership leases, interpolation, spatial interest management,
 authentication tickets, negotiated schema-index tables, compression,
-production Node integration, and Studio play-session orchestration.
+production Node integration, and Studio play-session orchestration. The first
+two are now implemented as sibling protocols; their existence does not expand
+this structural layer's authority.

@@ -397,7 +397,7 @@ server-authoritative gameplay pose only where required and client visual
 evaluation elsewhere. Full bone matrices are not the default network design,
 and not every client should receive every distant NPC pose.
 
-Deferred work includes IK, inverse dynamics, retargeting, humanoid abstraction,
+Deferred work includes IK, inverse dynamics, retargeting, Character rig adapters,
 state machines, blend trees/editor, priorities until use cases justify them,
 additive layers, markers/events, root-motion authority, ragdoll, procedural
 graphs, compression research, motion matching, facial/morph animation,

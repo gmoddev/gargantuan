@@ -69,4 +69,8 @@ namespace gargantuan::network {
 		std::vector<std::byte> Payload,
 		const NetworkLimits &Limits
 	);
+	[[nodiscard]] bool IsNetworkMessageIntentValid(
+		const NetworkMessageIntent &Intent,
+		const NetworkLimits &Limits
+	);
 }

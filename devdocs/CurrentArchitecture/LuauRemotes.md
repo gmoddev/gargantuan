@@ -19,11 +19,18 @@ Application messaging
     -> RemoteMessage
     -> NetworkScheduler
     -> IGameTransport
+
+Character realtime control/state
+    -> AuthoritativeCharacterNetwork / PredictedCharacterNetwork
+    -> NetworkScheduler
+    -> IGameTransport
 ```
 
 A decoded Remote message is application data. It is never interpreted as a
 DataModel mutation, schema update, capability grant, execution-domain change,
-or authority transfer.
+or authority transfer. Core Character input, action identity, authoritative
+state, and reconciliation never use RemoteEvent/RemoteFunction messages; see
+`CharacterNetworkingFoundation.md`.
 
 ## Instance classes and identity
 
@@ -390,7 +397,9 @@ uses no Internet service.
 
 ## Deliberately deferred
 
-This milestone does not implement a complete `Players` service, matchmaking,
-Node integration, Studio play mode, realtime transform/physics replication,
-network ownership, interpolation, prediction, rollback, streaming/interest
-management, voice, HTTP/service networking, or backend messaging.
+This Remote milestone does not implement matchmaking, Node integration, Studio
+play mode, Character or general transform/physics replication, network
+ownership, interpolation, prediction, rollback, streaming/interest management,
+voice, HTTP/service networking, or backend messaging. Character realtime
+prediction/reconciliation is now a sibling native protocol and deliberately
+does not expand Remote authority.

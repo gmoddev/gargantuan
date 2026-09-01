@@ -46,6 +46,9 @@ int main() {
 	static_assert(!std::is_convertible_v<ReplicationEpoch, ReliableReplicationSequence>);
 	static_assert(!std::is_convertible_v<ReliableReplicationSequence, RealtimeStateSequence>);
 	static_assert(!std::is_convertible_v<RealtimeStateSequence, RemoteEventSequence>);
+	static_assert(!std::is_convertible_v<RealtimeStateSequence, CharacterInputSequence>);
+	static_assert(!std::is_convertible_v<CharacterInputSequence, CharacterActionSequence>);
+	static_assert(!std::is_convertible_v<CharacterActionSequence, CharacterControlEpoch>);
 	static_assert(!std::is_convertible_v<RemoteEventSequence, RemoteRequestId>);
 	static_assert(!std::is_convertible_v<RemotePublicationId, RemoteEventSequence>);
 	static_assert(!std::is_constructible_v<RemoteRequestId, ReplicationEpoch>);

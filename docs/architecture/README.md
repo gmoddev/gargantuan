@@ -120,6 +120,7 @@ The following documents describe recently implemented, source-verified slices:
 - [Network scheduler contract](../../devdocs/CurrentArchitecture/NetworkSchedulerContract.md)
 - [Networking foundation validation](../../devdocs/CurrentArchitecture/NetworkingFoundationValidation.md)
 - [Real game transport](../../devdocs/CurrentArchitecture/RealGameTransport.md)
+- [Character networking foundation](../../devdocs/CurrentArchitecture/CharacterNetworkingFoundation.md)
 - [Serialization codec boundary](../../devdocs/CurrentArchitecture/SerializationCodecBoundary.md)
 - [Script security](../../devdocs/CurrentArchitecture/ScriptSecurity.md)
 - [SourceMount and FileLink compatibility](../../devdocs/CurrentArchitecture/SourceMount.md)

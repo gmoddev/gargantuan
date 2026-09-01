@@ -1,0 +1,114 @@
+#pragma once
+
+#include "gargantuan/assets/AssetTypes.hpp"
+#include "gargantuan/datatypes/CFrame.hpp"
+#include "gargantuan/network/Sequence.hpp"
+#include "gargantuan/runtime/ObjectId.hpp"
+#include "gargantuan/serialization/SerializationError.hpp"
+
+#include <cstddef>
+#include <cstdint>
+#include <optional>
+#include <span>
+#include <variant>
+#include <vector>
+
+namespace gargantuan::network {
+	inline constexpr std::uint16_t CharacterProtocolVersion = 1;
+	inline constexpr std::size_t MaximumCharacterFrameBytes = 256;
+	inline constexpr float MaximumCharacterCommandInterval = 0.25f;
+	inline constexpr float MaximumCharacterMoveIntentMagnitude = 1.001f;
+
+	enum class CharacterMessageKind : std::uint8_t {
+		ControlBind,
+		ControlUnbind,
+		Input,
+		ActionRequest,
+		State,
+	};
+
+	enum class CharacterInputFlag : std::uint8_t {
+		JumpRequested = 1 << 0,
+	};
+
+	enum class CharacterStateFlag : std::uint8_t {
+		Grounded = 1 << 0,
+		Teleport = 1 << 1,
+	};
+
+	struct CharacterControlTransition {
+		ObjectId Character;
+		CharacterControlEpoch ControlEpoch;
+		StateChannelId Channel;
+		std::uint64_t AuthoritativeTick = 0;
+		bool Bound = false;
+
+		[[nodiscard]] bool IsValid() const;
+	};
+
+	struct CharacterInputCommand {
+		ObjectId Character;
+		CharacterControlEpoch ControlEpoch;
+		CharacterInputSequence InputSequence;
+		std::uint64_t SimulationTick = 0;
+		float DeltaSeconds = 0.0f;
+		glm::vec2 MoveIntent{0.0f};
+		float FacingYawRadians = 0.0f;
+		std::uint8_t Flags = 0;
+
+		[[nodiscard]] bool IsValid() const;
+		[[nodiscard]] bool JumpRequested() const {
+			return (Flags & static_cast<std::uint8_t>(CharacterInputFlag::JumpRequested)) != 0;
+		}
+	};
+
+	struct CharacterActionRequest {
+		ObjectId Character;
+		CharacterControlEpoch ControlEpoch;
+		CharacterActionSequence ActionSequence;
+		CharacterInputSequence BasedOnInput;
+		std::uint32_t RequestedActionToken = 0;
+
+		[[nodiscard]] bool IsValid() const;
+	};
+
+	struct CharacterActionState {
+		CharacterActionSequence ActionSequence;
+		std::uint32_t ActionToken = 0;
+		AssetId Animation;
+		AssetContentId ContentRevision;
+		std::uint64_t StartTick = 0;
+		std::uint32_t DurationTicks = 0;
+
+		[[nodiscard]] bool IsValid() const;
+	};
+
+	struct CharacterAuthoritativeState {
+		ObjectId Character;
+		CharacterControlEpoch ControlEpoch;
+		RealtimeStateSequence StateSequence;
+		CharacterInputSequence AcknowledgedInput;
+		CharacterActionSequence ResolvedAction;
+		std::uint64_t AuthoritativeTick = 0;
+		CFrame Transform;
+		glm::vec3 Velocity{0.0f};
+		glm::vec3 FloorNormal{0.0f};
+		std::uint8_t Flags = 0;
+		std::optional<CharacterActionState> ActiveAction;
+
+		[[nodiscard]] bool IsValid() const;
+		[[nodiscard]] bool Grounded() const {
+			return (Flags & static_cast<std::uint8_t>(CharacterStateFlag::Grounded)) != 0;
+		}
+		[[nodiscard]] bool Teleport() const {
+			return (Flags & static_cast<std::uint8_t>(CharacterStateFlag::Teleport)) != 0;
+		}
+	};
+
+	using CharacterMessage = std::
+		variant<CharacterControlTransition, CharacterInputCommand, CharacterActionRequest, CharacterAuthoritativeState>;
+
+	[[nodiscard]] CharacterMessageKind GetCharacterMessageKind(const CharacterMessage &Message);
+	[[nodiscard]] SerializationResult<std::vector<std::byte>> EncodeCharacterMessage(const CharacterMessage &Message);
+	[[nodiscard]] SerializationResult<CharacterMessage> DecodeCharacterMessage(std::span<const std::byte> Bytes);
+}

@@ -6,5 +6,8 @@
 namespace gargantuan {
 	class KinematicCharacter : public Character {
 		I_KinematicCharacter;
+
+	  public:
+		void ApplyRuntimeControllerFacts(glm::vec3 NewVelocity, glm::vec3 NewFloorNormal, bool NewGrounded);
 	};
 }

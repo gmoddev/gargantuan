@@ -85,6 +85,15 @@ Vulkan proof independently observes full-versus-clipped displacement while GPU
 palette animation continues. The requested clip delta never writes either
 Character CFrame directly.
 
+The headless Character-network acceptance gate reads this sample's actual
+`BeaconLunge` AssetId and immutable catalog content revision, registers that
+known action on a simulated server and client, requests it by semantic token,
+derives its root movement on the server, and reconciles the predicted Character.
+The client never sends CFrame or root displacement. This network proof uses the
+production Character codec/scheduler over deterministic simulated transport;
+the optional localhost gate repeats the same bind/input/action/state path over
+GameNetworkingSockets. No sample-only RemoteEvent or Humanoid is involved.
+
 The saved fixture also authors the canonical `Lighting` service with afternoon
 sun, ambient light, exposure, bounded fog, and a direct six-face `Sky`. All six
 faces reuse the packaged square Collection Badge Image so save/reopen, local

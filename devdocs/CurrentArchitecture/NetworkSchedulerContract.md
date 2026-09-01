@@ -194,5 +194,7 @@ simulator state, intent order, limits, and ticks produce identical submission tr
 
 The scheduler is explicitly tick/flush driven; it does not own a thread or
 timer. `RemoteManager` now supplies bounded Luau application traffic without
-changing scheduler semantics. Authentication/tickets, Players, Node, and Studio
-play mode remain unimplemented.
+changing scheduler semantics. The Character managers likewise supply reliable
+control/action decisions and unreliable-sequenced input/state without adding a
+lane or timer. Authentication/tickets, Node, and Studio play mode remain
+unimplemented.

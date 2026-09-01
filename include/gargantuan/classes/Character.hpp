@@ -57,5 +57,6 @@ namespace gargantuan {
 			WorldRoot &World,
 			const CharacterMotionRequest &Request
 		);
+		void ApplyRuntimeTransform(const CFrame &Value);
 	};
 }

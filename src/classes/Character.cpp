@@ -105,6 +105,12 @@ namespace gargantuan {
 		SynchronizeRootPart(true);
 	}
 
+	void Character::ApplyRuntimeTransform(const CFrame &Value) {
+		if (GetDestroyed() || IsDestroying() || !IsFinite(Value))
+			throw std::invalid_argument("[Character:Authority] runtime transform must be finite and target a live Character");
+		CommitSimulationTransform(Value);
+	}
+
 	CharacterMotionResult Character::AdmitMotion(WorldRoot &World, const CharacterMotionRequest &Request) {
 		CharacterMotionResult Result{
 			.RequestedTranslation = Request.Translation,

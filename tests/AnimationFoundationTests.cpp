@@ -618,6 +618,27 @@ namespace {
 		} else
 			Check(false, "root-motion semantic anchor publishes a complete accepted world transform");
 
+		if (RootPose && RootPose->JointModelTransforms) {
+			auto Corrected = CharacterValue->GetCFrame();
+			Corrected.Position += glm::vec3(-0.5f, 0.25f, 0.75f);
+			ScopedChangeJournalCapture JournalCapture;
+			CharacterValue->ApplyRuntimeTransform(Corrected);
+			Spatial->Step();
+			const auto CorrectedAnchor = Spatial->ResolveAttachment(Anchor);
+			const auto CorrectedSound = Spatial->ResolveWorldTransform(SpatialSound);
+			const auto CorrectedPrompt = Spatial->ResolveWorldTransform(Prompt);
+			const auto OwnerMatrix = glm::translate(glm::mat4(1.0f), Rig->GetCFrame().Position) *
+				glm::mat4(Rig->GetCFrame().Rotation) * glm::scale(glm::mat4(1.0f), Rig->GetSize());
+			const auto LocalMatrix = glm::translate(glm::mat4(1.0f), Anchor->GetCFrame().Position) *
+				glm::mat4(Anchor->GetCFrame().Rotation);
+			const auto Expected = OwnerMatrix * RootPose->JointModelTransforms->at(2) * LocalMatrix;
+			Check(CorrectedAnchor && CorrectedSound && CorrectedPrompt && CorrectedAnchor->Animated &&
+				Near(CorrectedAnchor->Matrix, Expected) && Near(CorrectedSound->Matrix, Expected) &&
+				Near(CorrectedPrompt->Matrix, Expected) && JournalCapture.Take().empty(),
+				"network-style Character correction recomposes animated Attachment, Sound, and Prompt without journal work");
+		} else
+			Check(false, "network-style semantic correction retains the residual animated pose");
+
 		Track->Pause();
 		Runtime.Step(0.5f, HeadlessContext);
 		Check(Runtime.GetRootMotionRequests().empty(), "paused root motion produces no movement request");
