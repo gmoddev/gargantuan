@@ -1,4 +1,5 @@
 #include "gargantuan/classes/DataModel.hpp"
+#include "gargantuan/classes/Attachment.hpp"
 #include "gargantuan/classes/KinematicCharacter.hpp"
 #include "gargantuan/classes/Part.hpp"
 #include "gargantuan/classes/WorldRoot.hpp"
@@ -176,6 +177,19 @@ namespace {
 		}
 	};
 
+	ReceivedMessageEvent StateFrameEvent(
+		ConnectionId Connection, StateChannelId Channel, const CharacterStateFrame &Frame
+	) {
+		auto Bytes = EncodeCharacterMessage(CharacterMessage(Frame));
+		return {
+			Connection,
+			DeliveryMode::UnreliableSequenced,
+			TrafficClass::RealtimeState,
+			RealtimeStateOrder{Channel, RealtimeStateSequence(Frame.FrameSequence.Value())},
+			Bytes ? std::move(*Bytes) : std::vector<std::byte>{},
+		};
+	}
+
 	void TestCodec() {
 		const ObjectId Character{99, 7};
 		const auto Definition = Action(12, 3);
@@ -267,9 +281,91 @@ namespace {
 			"client displacement and over-length movement intent cannot enter the Character protocol"
 		);
 
+		CharacterStateFrame Frame{
+			.ServerTick = 60,
+			.FrameSequence = CharacterStateFrameSequence(7),
+			.StateCount = 2,
+		};
+		Frame.States[0] = {
+			.Character = ObjectId{100, 1},
+			.ControlEpoch = CharacterControlEpoch(2),
+			.StateSequence = RealtimeStateSequence(10),
+			.AcknowledgedInput = CharacterInputSequence(8),
+			.AuthoritativeTick = 60,
+			.Transform = CFrame::fromEulerAnglesYXZ(0.1f, 0.2f, -0.1f),
+			.Velocity = {4.125f, -2.25f, 0.0f},
+			.FloorNormal = {0.0f, 1.0f, 0.0f},
+			.Flags = static_cast<std::uint8_t>(CharacterStateFlag::Grounded),
+		};
+		Frame.States[0].Transform.Position = {1000000.25f, 2.0f, -1000000.5f};
+		Frame.States[1] = Frame.States[0];
+		Frame.States[1].Character = ObjectId{101, 1};
+		Frame.States[1].StateSequence = RealtimeStateSequence(11);
+		Frame.States[1].Transform.Position = {-3.0f, 4.0f, 5.0f};
+		auto FrameBytes = EncodeCharacterMessage(CharacterMessage(Frame));
+		Check(
+			FrameBytes && FrameBytes->size() == CharacterStateFrameHeaderBytes + 2 * CompactCharacterStateBytes,
+			"GCHR v2 batches two compact absolute states with an exact ABI-independent size"
+		);
+		if (FrameBytes) {
+			auto Decoded = DecodeCharacterMessage(*FrameBytes);
+			auto *DecodedFrame = Decoded ? std::get_if<CharacterStateFrame>(&*Decoded) : nullptr;
+			Check(
+				DecodedFrame && DecodedFrame->StateCount == 2 &&
+					Near(DecodedFrame->States[0].Transform.Position, Frame.States[0].Transform.Position, 0.001f) &&
+					Near(DecodedFrame->States[0].Velocity, Frame.States[0].Velocity, 0.008f) &&
+					DecodedFrame->States[0].Transform.AngleBetween(Frame.States[0].Transform) < 0.001,
+				"compact state preserves full-range position and bounded rotation/velocity error"
+			);
+			for (std::size_t Boundary = 0; Boundary < FrameBytes->size(); ++Boundary)
+				Check(
+					!DecodeCharacterMessage(std::span<const std::byte>(*FrameBytes).first(Boundary)),
+					"every GCHR v2 truncation boundary fails closed"
+				);
+			auto Duplicate = *FrameBytes;
+			std::copy_n(Duplicate.begin() + 28, 8, Duplicate.begin() + 102);
+			Check(!DecodeCharacterMessage(Duplicate), "GCHR v2 rejects duplicate Character identities");
+			auto BadCount = *FrameBytes;
+			BadCount[24] = std::byte{16};
+			BadCount[25] = std::byte{0};
+			Check(!DecodeCharacterMessage(BadCount), "GCHR v2 rejects excessive state counts before decode");
+			auto BadQuantizedRotation = *FrameBytes;
+			BadQuantizedRotation[80] = std::byte{0};
+			BadQuantizedRotation[81] = std::byte{0x80};
+			Check(!DecodeCharacterMessage(BadQuantizedRotation), "reserved int16 minimum quantized values fail closed");
+			auto BadFlags = *FrameBytes;
+			BadFlags[100] = std::byte{0x80};
+			Check(!DecodeCharacterMessage(BadFlags), "undefined compact Character state flags fail closed");
+			auto Trailing = *FrameBytes;
+			Trailing.push_back(std::byte{0});
+			Check(!DecodeCharacterMessage(Trailing), "GCHR v2 rejects trailing bytes");
+		}
+		CharacterStateFrame MaximumFrame{
+			.ServerTick = 61,
+			.FrameSequence = CharacterStateFrameSequence(8),
+			.StateCount = static_cast<std::uint16_t>(MaximumCharacterStatesPerFrame),
+		};
+		for (std::size_t Index = 0; Index < MaximumFrame.StateCount; ++Index) {
+			MaximumFrame.States[Index] = Frame.States[0];
+			MaximumFrame.States[Index].Character = ObjectId{static_cast<std::uint32_t>(200 + Index), 1};
+			MaximumFrame.States[Index].StateSequence = RealtimeStateSequence(Index + 1);
+			MaximumFrame.States[Index].AuthoritativeTick = MaximumFrame.ServerTick;
+		}
+		auto MaximumBytes = EncodeCharacterMessage(CharacterMessage(MaximumFrame));
+		Check(
+			MaximumBytes && MaximumBytes->size() == 1138 && MaximumBytes->size() <= MaximumCharacterStateFrameBytes,
+			"the fixed 15-state compact batch remains below the 1200-byte protocol ceiling"
+		);
+		auto OutOfRange = Frame.States[0];
+		OutOfRange.Velocity.x = MaximumCompactCharacterVelocity + CompactCharacterVelocityResolution;
+		Check(
+			GetCompactCharacterStateEncodedBytes(OutOfRange) == 0,
+			"out-of-range velocity fails before compact encode rather than silently clamping or wrapping"
+		);
+
 		std::mt19937 Random(0x3b);
 		for (std::size_t Case = 0; Case < 5000; ++Case) {
-			const auto Size = Random() % (MaximumCharacterFrameBytes + 16);
+			const auto Size = Random() % (MaximumCharacterStateFrameBytes + 16);
 			std::vector<std::byte> Bytes(Size);
 			for (auto &Byte : Bytes)
 				Byte = static_cast<std::byte>(Random() & 0xff);
@@ -364,7 +460,7 @@ namespace {
 				Server->BindControl(ServerConnection, SourceCharacter, Tick).has_value(),
 				"server reliably binds one controlling connection and epoch"
 			);
-			for (int Index = 0; Index < 30 && !Client->GetControl(ClientConnection); ++Index)
+			for (int Index = 0; Index < 120 && !Client->GetControl(ClientConnection); ++Index)
 				Cycle();
 			Check(Client->GetControl(ClientConnection).has_value(), "client receives reliable control bind");
 		}
@@ -380,6 +476,7 @@ namespace {
 				(void)Client->HandleTransportEvent(Event);
 			Server->Step(*ServerWorld, Tick);
 			Client->Reconcile(*ClientWorld);
+			Client->UpdatePresentation(Tick);
 			++Tick;
 		}
 
@@ -1021,6 +1118,56 @@ namespace {
 		Check(true, "destroyed Characters and managers with active network history tear down without stale mutation");
 	}
 
+	void TestRemotePresentationFaultMatrix() {
+		std::size_t Scenarios = 0;
+		for (const auto Latency : {0ms, 50ms, 100ms, 200ms})
+			for (const auto Jitter : {0ms, 10ms, 30ms})
+				for (const auto Loss : {0.0, 0.01, 0.05, 0.10}) {
+					Fixture Value({
+						.Seed = 0x3c + Scenarios,
+						.BaseLatency = Latency,
+						.MaximumJitter = Jitter,
+						.MaximumReorderDelay = Jitter,
+						.UnreliableLossProbability = Loss,
+						.UnreliableDuplicationProbability = Jitter == 30ms ? 0.05 : 0.0,
+						.UnreliableReorderProbability = Jitter == 0ms ? 0.0 : (Jitter == 10ms ? 0.10 : 0.30),
+					});
+					++Scenarios;
+					auto ServerNpc = std::make_shared<KinematicCharacter>();
+					auto ClientNpc = std::make_shared<KinematicCharacter>();
+					ServerNpc->SetPosition({0.0f, 6.0f, 0.0f});
+					ClientNpc->SetPosition({0.0f, 6.0f, 0.0f});
+					ServerNpc->SetParent(Value.ServerWorld);
+					ClientNpc->SetParent(Value.ClientWorld);
+					const auto NpcId = ServerNpc->GetObjectId();
+					Check(
+						Value.Server->RegisterCharacter(ServerNpc) &&
+							Value.Server->MarkMaterialized(Value.ServerConnection, NpcId, StateChannelId(701)) &&
+							Value.Client->MarkMaterialized(NpcId, ClientNpc),
+						"fault-matrix remote NPC materializes without a Player"
+					);
+					float MaximumPresentationError = 0.0f;
+					for (int Tick = 0; Tick < 60; ++Tick) {
+						auto Transform = ServerNpc->GetCFrame();
+						Transform.Position.x += 0.05f;
+						ServerNpc->ApplyRuntimeTransform(Transform);
+						Value.Cycle(16ms);
+						MaximumPresentationError = std::max(
+							MaximumPresentationError,
+							glm::distance(ClientNpc->GetPresentationCFrame().Position, ClientNpc->GetPosition())
+						);
+					}
+					for (int Tick = 0; Tick < 100; ++Tick) Value.Cycle(16ms);
+					Check(
+						MaximumPresentationError < MaximumHardCorrectionDistance &&
+							Near(ClientNpc->GetPosition(), ServerNpc->GetPosition(), 0.1f) &&
+							Near(ClientNpc->GetPresentationCFrame().Position, ServerNpc->GetPosition(), 0.1f),
+						"bounded interpolation converges under the latency/jitter/loss/reorder matrix"
+					);
+				}
+		Check(Scenarios == 48, "remote presentation covers all 4x3x4 deterministic fault combinations");
+	}
+
 	void TestRepeatedManagerChurn() {
 		for (std::uint64_t Cycle = 1; Cycle <= 10; ++Cycle) {
 			RecordingScheduler Scheduler;
@@ -1040,6 +1187,273 @@ namespace {
 			Server.Step(World, Cycle + 1);
 		}
 		Check(true, "ten active-action Character destruction and manager teardown cycles remain generation-safe");
+	}
+
+	void TestStateBatchingCadenceAndSuppression() {
+		RecordingScheduler Scheduler;
+		const ConnectionId Connection{40, 1};
+		AuthoritativeCharacterNetwork Server(Scheduler, TestLimits(), Movement);
+		WorldRoot World;
+		Check(Server.AddPeer(Connection), "3C batching fixture registers one peer");
+		std::vector<std::shared_ptr<KinematicCharacter>> Characters;
+		for (std::size_t Index = 0; Index < 32; ++Index) {
+			auto Character = std::make_shared<KinematicCharacter>();
+			Character->SetPosition({static_cast<float>(Index), 6.0f, 0.0f});
+			Check(
+				Server.RegisterCharacter(Character) &&
+					Server.MarkMaterialized(Connection, Character->GetObjectId(), StateChannelId(Index + 1)),
+				"3C batching fixture materializes each NPC without a Player"
+			);
+			Characters.push_back(std::move(Character));
+		}
+		Server.Step(World, 1);
+		Check(Scheduler.Messages.size() == 3, "32 Character states become three scheduler submissions, not 32");
+		std::array<std::uint16_t, 3> Counts{};
+		for (std::size_t Index = 0; Index < Scheduler.Messages.size(); ++Index) {
+			auto Decoded = DecodeCharacterMessage(Scheduler.Messages[Index].Payload());
+			auto *Frame = Decoded ? std::get_if<CharacterStateFrame>(&*Decoded) : nullptr;
+			Counts[Index] = Frame ? Frame->StateCount : 0;
+			Check(
+				Frame && Scheduler.Messages[Index].Payload().size() <= MaximumCharacterStateFrameBytes,
+				"every scheduler submission is one bounded GCHR v2 state frame"
+			);
+		}
+		Check(Counts == std::array<std::uint16_t, 3>{15, 15, 2}, "ObjectId ordering splits 32 states as 15/15/2");
+		Scheduler.Messages.clear();
+		Server.Step(World, 2);
+		Server.Step(World, 3);
+		Server.Step(World, 4);
+		Check(Scheduler.Messages.empty(), "20 Hz cadence and stationary suppression emit no redundant state frame");
+		auto Metrics = Server.GetMetrics();
+		Check(
+			Metrics.StatesConsidered == 64 && Metrics.StatesSuppressedUnchanged == 32 &&
+				Metrics.StateFramesEmitted == 3 && Metrics.BatchSplits == 2,
+			"bounded 3C metrics expose consideration, suppression, batching, and split counts"
+		);
+		Server.Step(World, 61);
+		Check(Scheduler.Messages.size() == 3, "one-second periodic absolute refresh recovers stationary streams");
+		Scheduler.Messages.clear();
+		Characters[20]->ApplyRuntimeTransform(CFrame(100.0f, 6.0f, 0.0f));
+		Server.Step(World, 64);
+		Check(Scheduler.Messages.size() == 1, "one changed Character emits one compact batch at the next 20 Hz tick");
+		if (!Scheduler.Messages.empty()) {
+			auto Decoded = DecodeCharacterMessage(Scheduler.Messages.front().Payload());
+			auto *Frame = Decoded ? std::get_if<CharacterStateFrame>(&*Decoded) : nullptr;
+			Check(
+				Frame && Frame->StateCount == 1 && Frame->States[0].Character == Characters[20]->GetObjectId(),
+				"stationary suppression retains deterministic per-Character newest state"
+			);
+			const auto QueuedCharacter = Characters[20]->GetObjectId();
+			Characters[20]->Destroy();
+			Characters[20].reset();
+			Decoded = DecodeCharacterMessage(Scheduler.Messages.front().Payload());
+			Frame = Decoded ? std::get_if<CharacterStateFrame>(&*Decoded) : nullptr;
+			Check(
+				Frame && Frame->StateCount == 1 && Frame->States[0].Character == QueuedCharacter,
+				"queued state batches own their bytes across source Character destruction"
+			);
+		}
+
+		RecordingScheduler SmallScheduler;
+		CharacterNetworkConfiguration SmallFrames;
+		SmallFrames.MaximumStateFrameBytes = 250;
+		AuthoritativeCharacterNetwork SmallServer(SmallScheduler, TestLimits(), Movement, {}, SmallFrames);
+		Check(SmallServer.AddPeer(Connection), "low-datagram fixture registers one peer");
+		std::vector<std::shared_ptr<KinematicCharacter>> SmallCharacters;
+		for (std::size_t Index = 0; Index < 10; ++Index) {
+			auto Character = std::make_shared<KinematicCharacter>();
+			SmallServer.RegisterCharacter(Character);
+			SmallServer.MarkMaterialized(Connection, Character->GetObjectId(), StateChannelId(100 + Index));
+			SmallCharacters.push_back(std::move(Character));
+		}
+		SmallServer.Step(World, 1);
+		Check(SmallScheduler.Messages.size() == 4, "250-byte datagram policy splits ten states into four frames");
+		for (const auto &Message : SmallScheduler.Messages)
+			Check(Message.Payload().size() <= 250, "low negotiated datagram frames never rely on fragmentation");
+	}
+
+	void TestBatchLossAndRemoteInterpolation() {
+		RecordingScheduler Scheduler;
+		const ConnectionId Connection{41, 1};
+		PredictedCharacterNetwork Client(Scheduler, TestLimits(), Movement);
+		Check(Client.AddPeer(Connection), "remote interpolation fixture registers one server peer");
+		const ObjectId SourceA{1000, 1};
+		const ObjectId SourceB{1001, 1};
+		auto ReplicaA = std::make_shared<KinematicCharacter>();
+		auto ReplicaB = std::make_shared<KinematicCharacter>();
+		Client.MarkMaterialized(SourceA, ReplicaA);
+		Client.MarkMaterialized(SourceB, ReplicaB);
+		WorldRoot World;
+		auto MakeState = [](ObjectId Character, std::uint64_t Sequence, std::uint64_t Tick, float X) {
+			return CharacterAuthoritativeState{
+				.Character = Character,
+				.ControlEpoch = CharacterControlEpoch(1),
+				.StateSequence = RealtimeStateSequence(Sequence),
+				.AuthoritativeTick = Tick,
+				.Transform = CFrame(X, 6.0f, 0.0f),
+			};
+		};
+		CharacterStateFrame Dropped{
+			.ServerTick = 1,
+			.FrameSequence = CharacterStateFrameSequence(1),
+			.StateCount = 1,
+		};
+		Dropped.States[0] = MakeState(SourceA, 1, 1, 1.0f);
+		CharacterStateFrame Delivered{
+			.ServerTick = 1,
+			.FrameSequence = CharacterStateFrameSequence(2),
+			.StateCount = 1,
+		};
+		Delivered.States[0] = MakeState(SourceB, 1, 1, 2.0f);
+		Check(
+			Client.HandleTransportEvent(TransportEvent(StateFrameEvent(Connection, StateChannelId(2), Delivered))),
+			"a later independently delivered batch is accepted when an earlier batch is lost"
+		);
+		Client.Reconcile(World);
+		Check(
+			Near(ReplicaA->GetPosition(), {0.0f, 6.0f, 0.0f}) && Near(ReplicaB->GetPosition(), {2.0f, 6.0f, 0.0f}),
+			"batch loss affects only Characters in the lost batch"
+		);
+
+		CharacterStateFrame Mixed{
+			.ServerTick = 4,
+			.FrameSequence = CharacterStateFrameSequence(3),
+			.StateCount = 2,
+		};
+		Mixed.States[0] = MakeState(SourceA, 1, 4, 4.0f);
+		Mixed.States[1] = MakeState(SourceB, 1, 4, 99.0f);
+		Check(
+			Client.HandleTransportEvent(TransportEvent(StateFrameEvent(Connection, StateChannelId(1), Mixed))),
+			"a valid frame remains independently applicable when one enclosed Character state is stale"
+		);
+		Client.Reconcile(World);
+		Check(
+			Near(ReplicaA->GetPosition(), {4.0f, 6.0f, 0.0f}) && Near(ReplicaB->GetPosition(), {2.0f, 6.0f, 0.0f}),
+			"per-Character sequence validation prevents a newer frame from reviving stale Character state"
+		);
+
+		for (const auto [Sequence, Tick, X] : std::array<std::array<std::uint64_t, 3>, 2>{
+				std::array<std::uint64_t, 3>{2, 7, 7}, std::array<std::uint64_t, 3>{3, 10, 10}}) {
+			CharacterStateFrame Frame{
+				.ServerTick = Tick,
+				.FrameSequence = CharacterStateFrameSequence(Sequence + 2),
+				.StateCount = 1,
+			};
+			Frame.States[0] = MakeState(SourceA, Sequence, Tick, static_cast<float>(X));
+			Client.HandleTransportEvent(TransportEvent(StateFrameEvent(Connection, StateChannelId(1), Frame)));
+			Client.Reconcile(World);
+		}
+		Check(Client.GetPresentationSnapshotCount(SourceA) == 3, "remote interpolation retains at most bounded samples");
+		Client.UpdatePresentation(10);
+		Check(
+			Near(ReplicaA->GetPosition(), {10.0f, 6.0f, 0.0f}) &&
+				Near(ReplicaA->GetPresentationCFrame().Position, {4.0f, 6.0f, 0.0f}),
+			"remote semantic state is newest immediately while presentation renders 100 ms behind"
+		);
+		Client.UpdatePresentation(13);
+		Check(
+			Near(ReplicaA->GetPresentationCFrame().Position, {7.0f, 6.0f, 0.0f}),
+			"remote presentation interpolates between authoritative samples without moving semantic authority"
+		);
+		Client.UpdatePresentation(100);
+		Check(
+			Near(ReplicaA->GetPresentationCFrame().Position, {10.0f, 6.0f, 0.0f}),
+			"remote presentation holds the newest state instead of extrapolating indefinitely"
+		);
+		Check(
+			Client.MarkUnmaterialized(SourceA) && Client.GetPresentationSnapshotCount(SourceA) == 0,
+			"unmaterialization clears remote interpolation and presentation state"
+		);
+	}
+
+	void TestLocalPresentationCorrectionMatrix() {
+		struct Case {
+			float Divergence;
+			bool Teleport;
+			bool Smooth;
+			const char *Name;
+		};
+		const std::array Cases{
+			Case{0.0f, false, false, "exact"},
+			Case{0.01f, false, true, "one centimetre"},
+			Case{0.05f, false, true, "five centimetres"},
+			Case{0.25f, false, true, "collision divergence"},
+			Case{1.0f, false, true, "one metre"},
+			Case{8.0f, false, false, "eight metre reset"},
+			Case{0.05f, true, false, "teleport"},
+		};
+		for (std::size_t Index = 0; Index < Cases.size(); ++Index) {
+			const auto &Value = Cases[Index];
+			RecordingScheduler Scheduler;
+			const ConnectionId Connection{static_cast<std::uint32_t>(50 + Index), 1};
+			PredictedCharacterNetwork Client(Scheduler, TestLimits(), Movement);
+			Client.AddPeer(Connection);
+			const ObjectId Source{static_cast<std::uint32_t>(2000 + Index), 1};
+			auto Replica = std::make_shared<KinematicCharacter>();
+			Replica->SetPosition({Value.Divergence, 6.0f, 0.0f});
+			auto Root = std::make_shared<Part>();
+			Root->SetParent(Replica);
+			Replica->SetRootPart(Root);
+			auto Anchor = std::make_shared<Attachment>();
+			Anchor->SetParent(Root);
+			Client.MarkMaterialized(Source, Replica);
+			CharacterControlTransition Bind{Source, CharacterControlEpoch(2), StateChannelId(90), 1, true};
+			auto BindBytes = EncodeCharacterMessage(CharacterMessage(Bind));
+			Client.HandleTransportEvent(TransportEvent(ReceivedMessageEvent{
+				Connection,
+				DeliveryMode::ReliableOrdered,
+				TrafficClass::Control,
+				{},
+				BindBytes ? std::move(*BindBytes) : std::vector<std::byte>{},
+			}));
+			CharacterStateFrame Frame{
+				.ServerTick = 10,
+				.FrameSequence = CharacterStateFrameSequence(1),
+				.StateCount = 1,
+			};
+			Frame.States[0] = {
+				.Character = Source,
+				.ControlEpoch = CharacterControlEpoch(2),
+				.StateSequence = RealtimeStateSequence(1),
+				.AuthoritativeTick = 10,
+				.Transform = CFrame(0.0f, 6.0f, 0.0f),
+				.Flags = static_cast<std::uint8_t>(
+					Value.Teleport ? CharacterStateFlag::Teleport : static_cast<CharacterStateFlag>(0)),
+			};
+			const auto Before = Client.GetMetrics();
+			ChangeJournal::Get().Clear();
+			Client.HandleTransportEvent(TransportEvent(StateFrameEvent(Connection, StateChannelId(90), Frame)));
+			WorldRoot World;
+			Client.Reconcile(World);
+			const auto After = Client.GetMetrics();
+			Check(Near(Replica->GetPosition(), {0.0f, 6.0f, 0.0f}), "semantic correction applies immediately");
+			Check(
+				Near(Root->GetCFrame().Position, {0.0f, 6.0f, 0.0f}) &&
+					Near(Anchor->GetWorldCFrame().Position, {0.0f, 6.0f, 0.0f}),
+				"RootPart and Attachment gameplay semantics remain at the corrected Character transform"
+			);
+			Check(
+				Value.Smooth
+					? Near(Root->GetRenderCFrame().Position, {Value.Divergence, 6.0f, 0.0f})
+					: Near(Root->GetRenderCFrame().Position, {0.0f, 6.0f, 0.0f}),
+				Value.Name
+			);
+			Check(
+				After.LocalSmoothCorrections - Before.LocalSmoothCorrections == (Value.Smooth ? 1u : 0u),
+				"only eligible correction magnitudes create presentation smoothing state"
+			);
+			Client.UpdatePresentation(10);
+			Client.UpdatePresentation(16);
+			Check(
+				Near(Root->GetRenderCFrame().Position, {0.0f, 6.0f, 0.0f}),
+				"local visual correction converges to semantic authority within 100 ms"
+			);
+			Check(
+				ChangeJournal::Get().ReadSince(0).empty(),
+				"semantic correction and presentation offsets create no authoring journal records"
+			);
+			Check(Client.MarkUnmaterialized(Source), "unmaterialization clears local correction presentation state");
+		}
 	}
 
 	void TestCustomLuauPolicy() {
@@ -1165,7 +1579,11 @@ int main() {
 		TestClientPolicyCannotChangeAuthority();
 		TestPredictionBoundsAndContentMismatch();
 		TestLossReorderAndLifecycle();
+		TestRemotePresentationFaultMatrix();
 		TestRepeatedManagerChurn();
+		TestStateBatchingCadenceAndSuppression();
+		TestBatchLossAndRemoteInterpolation();
+		TestLocalPresentationCorrectionMatrix();
 		TestCustomLuauPolicy();
 	} catch (const std::exception &Error) {
 		std::cerr << "UNCAUGHT: " << Error.what() << '\n';

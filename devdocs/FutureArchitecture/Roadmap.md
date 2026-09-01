@@ -21,10 +21,16 @@ defect throughput.
   Luau policy, simulated adverse transport, localhost GNS, FirstCompleteGame
   catalog identity, malformed protocol, lifecycle, Release performance/
   bandwidth/allocation, and sanitizer gates. Character state remains separate
-  from structural replication and Remote Instances. 3C prioritizes measured
-  compression/cadence, interpolation/presentation, production session/Luau
-  bridges, spatial relevance, and Animator presentation readiness. The non-normative
-  `SpatialRegionsAndPortalTopology.md` is unchanged.
+  from structural replication and Remote Instances.
+- Character Networking Foundation 3C replaces per-Character 60 Hz state
+  messages with deterministic bounded GCHR v2 absolute-state frames, a measured
+  20 Hz default, compact rotation/controller encoding, unchanged suppression
+  with periodic recovery, four-snapshot remote interpolation, and renderer-only
+  local correction smoothing. At 500 continuously moving Characters it reduces
+  the state stream from 3.36 MB/s and 30,000 state messages/s to 759,040 B/s and
+  680 state frames/s. Production session/Luau bridges, spatial relevance,
+  adaptive cadence, and deeper Animator content-readiness remain future work.
+  The non-normative `SpatialRegionsAndPortalTopology.md` is unchanged.
 - Environment / Lighting Foundation 1 establishes canonical saved Lighting and
   Sky semantics, renderer-neutral incremental publication, AssetService-owned
   coherent face residency, and the SDL shadow/Sky/opaque/GUI pipeline. Local

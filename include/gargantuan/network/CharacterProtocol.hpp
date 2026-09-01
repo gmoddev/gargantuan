@@ -6,6 +6,7 @@
 #include "gargantuan/runtime/ObjectId.hpp"
 #include "gargantuan/serialization/SerializationError.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -14,8 +15,17 @@
 #include <vector>
 
 namespace gargantuan::network {
-	inline constexpr std::uint16_t CharacterProtocolVersion = 1;
+	inline constexpr std::uint16_t LegacyCharacterProtocolVersion = 1;
+	inline constexpr std::uint16_t CharacterProtocolVersion = 2;
 	inline constexpr std::size_t MaximumCharacterFrameBytes = 256;
+	inline constexpr std::size_t MaximumCharacterStateFrameBytes = 1200;
+	inline constexpr std::size_t MaximumCharacterStatesPerFrame = 15;
+	inline constexpr std::size_t CompactCharacterStateBytes = 74;
+	inline constexpr std::size_t CompactCharacterActionStateBytes = 72;
+	inline constexpr std::size_t CharacterStateFrameHeaderBytes = 28;
+	inline constexpr float CompactCharacterVelocityResolution = 1.0f / 64.0f;
+	inline constexpr float MaximumCompactCharacterVelocity = 32767.0f / 64.0f;
+	inline constexpr float CompactCharacterUnitResolution = 1.0f / 32767.0f;
 	inline constexpr float MaximumCharacterCommandInterval = 0.25f;
 	inline constexpr float MaximumCharacterMoveIntentMagnitude = 1.001f;
 
@@ -25,6 +35,7 @@ namespace gargantuan::network {
 		Input,
 		ActionRequest,
 		State,
+		StateFrame,
 	};
 
 	enum class CharacterInputFlag : std::uint8_t {
@@ -105,10 +116,24 @@ namespace gargantuan::network {
 		}
 	};
 
+	struct CharacterStateFrame {
+		std::uint64_t ServerTick = 0;
+		CharacterStateFrameSequence FrameSequence;
+		std::array<CharacterAuthoritativeState, MaximumCharacterStatesPerFrame> States{};
+		std::uint16_t StateCount = 0;
+
+		[[nodiscard]] bool IsValid() const;
+		[[nodiscard]] std::span<const CharacterAuthoritativeState> GetStates() const {
+			return std::span<const CharacterAuthoritativeState>(States.data(), StateCount);
+		}
+	};
+
 	using CharacterMessage = std::
-		variant<CharacterControlTransition, CharacterInputCommand, CharacterActionRequest, CharacterAuthoritativeState>;
+		variant<CharacterControlTransition, CharacterInputCommand, CharacterActionRequest, CharacterAuthoritativeState,
+			CharacterStateFrame>;
 
 	[[nodiscard]] CharacterMessageKind GetCharacterMessageKind(const CharacterMessage &Message);
+	[[nodiscard]] std::size_t GetCompactCharacterStateEncodedBytes(const CharacterAuthoritativeState &State);
 	[[nodiscard]] SerializationResult<std::vector<std::byte>> EncodeCharacterMessage(const CharacterMessage &Message);
 	[[nodiscard]] SerializationResult<CharacterMessage> DecodeCharacterMessage(std::span<const std::byte> Bytes);
 }

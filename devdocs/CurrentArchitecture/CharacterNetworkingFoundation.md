@@ -1,7 +1,8 @@
 ---
-status: current
+status: superseded
 owner: networking
 last_verified: 2026-09-01
+superseded_by: devdocs/CurrentArchitecture/CharacterNetworkingFoundation3C.md
 related_code:
   - include/gargantuan/network/CharacterProtocol.hpp
   - include/gargantuan/network/CharacterNetwork.hpp
@@ -19,7 +20,11 @@ related_adrs:
   - docs/src/content/docs/developing/networking-architecture.mdx
 ---
 
-# Character networking foundation
+# Character networking foundation 3B
+
+This document preserves the verified Foundation 3B authority and performance
+baseline. Foundation 3C supersedes its realtime publication and presentation
+sections; see [CharacterNetworkingFoundation3C.md](CharacterNetworkingFoundation3C.md).
 
 ## Implemented boundary
 

@@ -75,7 +75,7 @@ Authoritative DataModel / live Instance graph
 | Project filesystem or FileLink source import | `devdocs/CurrentArchitecture/SourceMount.md` |
 | Native build, generated sources, tests, or CI | `devdocs/CurrentArchitecture/ContinuousIntegration.md`, then `devdocs/Compiling.md` |
 | Optional process telemetry | `devdocs/CurrentArchitecture/TelemetryIntegration.md` |
-| Game networking | `devdocs/CurrentArchitecture/ProtocolInputHardening.md`, `NetworkingContracts.md`, `SimulatedTransport.md`, `NetworkSchedulerContract.md`, `NetworkingFoundationValidation.md`, `RealGameTransport.md`, `BasicClientReplication.md`, and `CharacterNetworkingFoundation.md`, then `networking-architecture.mdx`; current foundations include a production scheduler, pinned GNS adapter, reliable structural replication, bounded Remotes, and authoritative Character prediction/reconciliation |
+| Game networking | `devdocs/CurrentArchitecture/ProtocolInputHardening.md`, `NetworkingContracts.md`, `SimulatedTransport.md`, `NetworkSchedulerContract.md`, `NetworkingFoundationValidation.md`, `RealGameTransport.md`, `BasicClientReplication.md`, and `CharacterNetworkingFoundation3C.md`, then `networking-architecture.mdx`; current foundations include a production scheduler, pinned GNS adapter, reliable structural replication, bounded Remotes, and batched authoritative Character prediction/reconciliation with bounded presentation |
 
 ## Current implementation landmarks
 

@@ -223,7 +223,7 @@ namespace gargantuan {
 				continue;
 			}
 
-			const auto frame = part->GetCFrame();
+			const auto frame = part->GetRenderCFrame();
 			const auto size = part->GetSize();
 			if (!IsFinite(frame.Position) || !IsFinite(glm::vec4(frame.Rotation[0], 0.0f)) ||
 				!IsFinite(glm::vec4(frame.Rotation[1], 0.0f)) || !IsFinite(glm::vec4(frame.Rotation[2], 0.0f)) ||

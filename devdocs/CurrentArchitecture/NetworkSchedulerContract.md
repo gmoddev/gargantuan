@@ -157,12 +157,14 @@ vocabulary is introduced.
 
 ## Batching and budgets
 
-Batching is an allowed optimization after a game codec/framing contract exists.
-It may combine eligible small messages only when delivery mode, logical ordering
-domain, and application boundaries remain recoverable. It cannot merge reliable
-and unreliable semantics, fragment one oversized unreliable message, change
-application meaning, or carry authority. This milestone defines no packet frame
-or codec and produces no batches.
+The scheduler itself does not merge opaque application messages. Character
+Networking Foundation 3C now supplies the first game-owned batching contract
+above it: one GCHR v2 unreliable-sequenced intent contains up to 15 independently
+sequenced compact absolute Character states. The Character manager preserves
+application boundaries and negotiated datagram limits before `Submit`; the
+scheduler still cannot merge reliable and unreliable semantics, fragment one
+oversized unreliable message, change application meaning, or carry authority.
+Other codecs remain unbatched unless they define an equally explicit frame.
 
 `SchedulerTickBudget` is valid only against validated negotiated
 `NetworkLimits`. It is nonzero, fits the session's per-tick bytes/messages
@@ -193,8 +195,8 @@ it through both the simulator and the optional real GNS adapter. Identical
 simulator state, intent order, limits, and ticks produce identical submission traces.
 
 The scheduler is explicitly tick/flush driven; it does not own a thread or
-timer. `RemoteManager` now supplies bounded Luau application traffic without
-changing scheduler semantics. The Character managers likewise supply reliable
-control/action decisions and unreliable-sequenced input/state without adding a
-lane or timer. Authentication/tickets, Node, and Studio play mode remain
-unimplemented.
+timer. `RemoteManager` supplies bounded Luau application traffic without
+changing scheduler semantics. The Character manager selects its own measured
+20 Hz publication cadence and submits already-framed unreliable state, while
+reliable control/action decisions and client input retain their 3B lanes.
+Authentication/tickets, Node, and Studio play mode remain unimplemented.

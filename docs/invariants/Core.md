@@ -155,6 +155,10 @@ Tests should enforce them where practical.
 5. Runtime Character movement and network correction are transient simulation
    state. They must not create authoring journal records, structural replication
    property streams, save dirtying, or document reconciliation work.
+6. Character interpolation and correction smoothing are presentation-only.
+   They never alter semantic Character/RootPart transforms, physics, collision,
+   gameplay queries, Attachment/Sound/Prompt anchors, action admission, or
+   server authority, and remote presentation never reapplies root motion.
 
 ## EditorHost and Studio
 

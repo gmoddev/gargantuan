@@ -32,6 +32,7 @@ namespace gargantuan::network {
 	struct CharacterControlEpochDomain;
 	struct CharacterInputSequenceDomain;
 	struct CharacterActionSequenceDomain;
+	struct CharacterStateFrameSequenceDomain;
 	struct RemoteEventSequenceDomain;
 	struct RemotePublicationIdDomain;
 	struct RemoteRequestIdDomain;
@@ -43,6 +44,7 @@ namespace gargantuan::network {
 	using CharacterControlEpoch = MonotonicSequence<CharacterControlEpochDomain>;
 	using CharacterInputSequence = MonotonicSequence<CharacterInputSequenceDomain>;
 	using CharacterActionSequence = MonotonicSequence<CharacterActionSequenceDomain>;
+	using CharacterStateFrameSequence = MonotonicSequence<CharacterStateFrameSequenceDomain>;
 	using RemoteEventSequence = MonotonicSequence<RemoteEventSequenceDomain>;
 	using RemotePublicationId = MonotonicSequence<RemotePublicationIdDomain>;
 	using RemoteRequestId = MonotonicSequence<RemoteRequestIdDomain>;

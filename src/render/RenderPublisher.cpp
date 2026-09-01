@@ -140,7 +140,7 @@ namespace gargantuan {
 				Diagnostic = {RenderExtractionIssue::UnsupportedGeometry, Object, "Skipped a Part with unsupported geometry"};
 				return std::nullopt;
 			}
-			const auto Frame = PartValue->GetCFrame();
+			const auto Frame = PartValue->GetRenderCFrame();
 			const auto Size = PartValue->GetSize();
 			if (!IsFinite(Frame.Position) || !IsFinite(glm::vec4(Frame.Rotation[0], 0.0f)) ||
 				!IsFinite(glm::vec4(Frame.Rotation[1], 0.0f)) || !IsFinite(glm::vec4(Frame.Rotation[2], 0.0f)) ||
@@ -192,7 +192,7 @@ namespace gargantuan {
 				Diagnostic = {RenderExtractionIssue::StaleObjectId, Object, "Skipped a MeshPart with stale identity"};
 				return std::nullopt;
 			}
-			const auto Frame = PartValue->GetCFrame();
+			const auto Frame = PartValue->GetRenderCFrame();
 			const auto Size = PartValue->GetSize();
 			if (!IsFinite(Frame.Position) || !IsFinite(glm::vec4(Frame.Rotation[0], 0.0f)) ||
 				!IsFinite(glm::vec4(Frame.Rotation[1], 0.0f)) || !IsFinite(glm::vec4(Frame.Rotation[2], 0.0f)) ||

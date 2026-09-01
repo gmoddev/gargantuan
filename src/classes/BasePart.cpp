@@ -41,4 +41,17 @@ namespace gargantuan {
 			Found->second->Fire({});
 	}
 
+	gargantuan::CFrame BasePart::GetRenderCFrame() const {
+		return CharacterPresentationOffset ? GetCFrame() * *CharacterPresentationOffset : GetCFrame();
+	}
+
+	void BasePart::SetCharacterPresentationOffset(std::optional<gargantuan::CFrame> Value) {
+		if ((!CharacterPresentationOffset && !Value) ||
+			(CharacterPresentationOffset && Value && CharacterPresentationOffset->FuzzyEq(*Value)))
+			return;
+		CharacterPresentationOffset = std::move(Value);
+		RenderDirtyAccumulator::Get().Mark(
+			GetReplicationScopeId(), GetObjectId(), RenderUpdateDomain::Transform);
+	}
+
 }

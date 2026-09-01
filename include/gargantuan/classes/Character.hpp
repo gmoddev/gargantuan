@@ -5,6 +5,7 @@
 #include "gargantuan/physics/PhysicsTypes.hpp"
 
 #include <cstdint>
+#include <optional>
 
 namespace gargantuan {
 	class WorldRoot;
@@ -44,6 +45,7 @@ namespace gargantuan {
 		I_Character;
 
 		CFrame Transform{0.0f, 6.0f, 0.0f};
+		std::optional<CFrame> PresentationOffset;
 		std::shared_ptr<BasePart> RootPartValue;
 
 		void SynchronizeRootPart(bool Simulation = false);
@@ -58,5 +60,7 @@ namespace gargantuan {
 			const CharacterMotionRequest &Request
 		);
 		void ApplyRuntimeTransform(const CFrame &Value);
+		void ApplyRuntimePresentationOffset(std::optional<CFrame> Value);
+		[[nodiscard]] CFrame GetPresentationCFrame() const;
 	};
 }

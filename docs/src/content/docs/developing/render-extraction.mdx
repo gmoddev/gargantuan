@@ -52,6 +52,13 @@ state: repeated writes become one update, create plus updates becomes one final
 create, create plus destroy disappears, and update plus destroy becomes remove.
 Irrelevant properties do not dirty rendering.
 
+Character Networking Foundation 3C adds one transient exception to committed
+property dirtiness: a Character RootPart may carry an engine-only presentation
+offset. `BasePart::GetCFrame` remains semantic, while render extraction consumes
+`GetRenderCFrame`, which composes that offset. Updating it marks only the render
+transform domain and creates no property commit, journal entry, structural
+replication state, physics state, or schema surface.
+
 Accumulator capture is retried until a complete publication is successfully
 constructed and acknowledged. Hard limits bound scopes, live consumers, distinct identities,
 deformable bytes, UI bytes, publication bytes, and diagnostics. Limit failure

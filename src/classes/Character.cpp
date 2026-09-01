@@ -79,6 +79,8 @@ namespace gargantuan {
 				throw std::invalid_argument("[Character:Authority] RootPart must be a Character descendant");
 		}
 		if (RootPartValue == Replacement) return;
+		if (RootPartValue && !RootPartValue->GetDestroyed() && !RootPartValue->IsDestroying())
+			RootPartValue->SetCharacterPresentationOffset(std::nullopt);
 		RootPartValue = std::move(Replacement);
 		NotifyPropertyCommitted("RootPart");
 		SynchronizeRootPart();
@@ -86,11 +88,13 @@ namespace gargantuan {
 
 	void Character::SynchronizeRootPart(bool Simulation) {
 		if (!RootPartValue || RootPartValue->GetDestroyed() || RootPartValue->IsDestroying()) return;
-		if (RootPartValue->GetCFrame().FuzzyEq(Transform)) return;
-		if (Simulation)
-			RootPartValue->SetCharacterSimulationCFrame(Transform);
-		else
-			RootPartValue->SetCFrame(Transform);
+		if (!RootPartValue->GetCFrame().FuzzyEq(Transform)) {
+			if (Simulation)
+				RootPartValue->SetCharacterSimulationCFrame(Transform);
+			else
+				RootPartValue->SetCFrame(Transform);
+		}
+		RootPartValue->SetCharacterPresentationOffset(PresentationOffset);
 	}
 
 	void Character::CommitSimulationTransform(const CFrame &Value) {
@@ -109,6 +113,23 @@ namespace gargantuan {
 		if (GetDestroyed() || IsDestroying() || !IsFinite(Value))
 			throw std::invalid_argument("[Character:Authority] runtime transform must be finite and target a live Character");
 		CommitSimulationTransform(Value);
+	}
+
+	void Character::ApplyRuntimePresentationOffset(std::optional<CFrame> Value) {
+		if (GetDestroyed() || IsDestroying() || (Value && !IsFinite(*Value)))
+			throw std::invalid_argument(
+				"[Character:Presentation] runtime presentation offset must be finite and target a live Character"
+			);
+		if ((!PresentationOffset && !Value) ||
+			(PresentationOffset && Value && PresentationOffset->FuzzyEq(*Value)))
+			return;
+		PresentationOffset = std::move(Value);
+		if (RootPartValue && !RootPartValue->GetDestroyed() && !RootPartValue->IsDestroying())
+			RootPartValue->SetCharacterPresentationOffset(PresentationOffset);
+	}
+
+	CFrame Character::GetPresentationCFrame() const {
+		return PresentationOffset ? Transform * *PresentationOffset : Transform;
 	}
 
 	CharacterMotionResult Character::AdmitMotion(WorldRoot &World, const CharacterMotionRequest &Request) {
