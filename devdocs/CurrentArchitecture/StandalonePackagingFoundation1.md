@@ -103,7 +103,8 @@ MyGame/
         DefaultActionMap.luau
         DefaultCamera.luau
         DefaultInteractionRuntime.luau
-        DefaultPlayerController.luau
+        DefaultCharacterRuntime.luau
+        DefaultLocomotion.luau
         DefaultPlayerRuntime.luau
         GargantuanSans.ttf
     content/

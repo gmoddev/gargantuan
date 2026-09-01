@@ -2,21 +2,11 @@ const c, t = require("@tools/classes").unpack()
 
 return c({
 	name = "KinematicCharacter",
-	extends = "Folder",
-	description = "Runtime character state driven by a Luau kinematic controller.",
+	extends = "Character",
+	description = "Character specialization using the bounded native capsule movement primitive.",
 	since = "0.1.0",
 
 	properties = {
-		RootPart = {
-			description = "Optional visible root assembled for this character.",
-			type = t.Optional(t.Instance("BasePart")),
-			unmodified = "std::nullopt",
-		},
-		Position = {
-			description = "World-space center of the character capsule.",
-			type = t.Vector3,
-			unmodified = "glm::vec3(0.0f, 6.0f, 0.0f)",
-		},
 		Velocity = {
 			description = "Current controller-owned world-space velocity.",
 			type = t.Vector3,

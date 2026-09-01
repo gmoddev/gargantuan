@@ -257,4 +257,23 @@ namespace gargantuan {
 			}
 		}
 	}
+
+	void ScriptEngine::RunBootstrapScript(const std::shared_ptr<Script> &ScriptValue) {
+		if (!ScriptValue || ScriptValue->GetDestroyed() || ScriptValue->IsDestroying()) return;
+		ManagedScripts.emplace_back(ScriptValue);
+		const auto Status = ScriptValue->Step(L);
+		if (Status == ScriptStatus::Error) {
+			LOG_CRITICAL(
+				Lua,
+				"[Runtime:Luau] [%s] %s",
+				ScriptValue->GetFullName().c_str(),
+				ScriptValue->ErrorMessage.c_str()
+			);
+			if (RuntimeDiagnostic)
+				RuntimeDiagnostic(
+					"Error", "[" + ScriptValue->GetFullName() + "] " + ScriptValue->ErrorMessage);
+		} else if (Status == ScriptStatus::Finished && RuntimeDiagnostic)
+			RuntimeDiagnostic("Information", "[" + ScriptValue->GetFullName() + "] completed");
+		ScriptQueue.erase(ScriptValue);
+	}
 } // namespace gargantuan

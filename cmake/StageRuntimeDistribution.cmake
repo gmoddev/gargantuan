@@ -66,7 +66,8 @@ foreach(GARGANTUAN_RUNTIME_MODULE
 	DefaultActionMap.luau
 	DefaultInteractionRuntime.luau
 	DefaultCamera.luau
-	DefaultPlayerController.luau
+	DefaultCharacterRuntime.luau
+	DefaultLocomotion.luau
 	DefaultPlayerRuntime.luau
 	GargantuanSans.ttf
 )

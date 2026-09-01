@@ -3,9 +3,11 @@
 #include "gargantuan/Profiler.hpp"
 #include "gargantuan/classes/Attachment.hpp"
 #include "gargantuan/classes/Animator.hpp"
+#include "gargantuan/classes/Character.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/FileLink.hpp"
 #include "gargantuan/classes/Instance.hpp"
+#include "gargantuan/classes/KinematicCharacter.hpp"
 #include "gargantuan/classes/Script.hpp"
 #include "gargantuan/classes/Sound.hpp"
 #include "gargantuan/filesystem/SourceMount.hpp"
@@ -118,7 +120,7 @@ namespace gargantuan {
 		});
 		DataModelDestroyingConnection = DataModel->Destroying->Once([this](std::monostate) { Destroy(); });
 
-		Players->StartDefaultRuntime();
+		Script->RunBootstrapScript(Players->StartDefaultRuntime());
 		Interaction->StartDefaultRuntime();
 
 		LOG_INFO(App, "Constructed engine");
@@ -241,6 +243,44 @@ namespace gargantuan {
 						UpdateContext.SemanticRequiredObjects = Spatial->GetAnimationRequiredRigs();
 					}
 					Animation->Step(deltaTime, UpdateContext);
+					for (const auto &Request : Animation->GetRootMotionRequests()) {
+						const auto AdmissionStarted = std::chrono::steady_clock::now();
+						++RootMotionMetrics.Requests;
+						auto CharacterValue = Request.Target.lock();
+						if (!CharacterValue || CharacterValue->GetDestroyed() || CharacterValue->IsDestroying() ||
+							CharacterValue->GetObjectId() != Request.TargetCharacter ||
+							CharacterValue->GetDataModel() != DataModel) {
+							++RootMotionMetrics.Rejected;
+							RootMotionMetrics.AdmissionCpuNanoseconds += static_cast<std::uint64_t>(
+								std::chrono::duration_cast<std::chrono::nanoseconds>(
+									std::chrono::steady_clock::now() - AdmissionStarted
+								).count()
+							);
+							continue;
+						}
+						const auto Kinematic = std::dynamic_pointer_cast<KinematicCharacter>(CharacterValue);
+						const auto RequestedWorld = CharacterValue->GetCFrame().Rotation * Request.Delta.Translation;
+						auto Result = CharacterValue->AdmitMotion(*WorldRoot, {
+							.Translation = Request.Delta.Translation,
+							.Velocity = Kinematic ? Kinematic->GetVelocity() : glm::vec3(0.0f),
+							.YawRadians = Request.Delta.YawRadians,
+							.Source = CharacterMotionSource::Animation,
+							.LocalSpace = true,
+						});
+						RootMotionMetrics.PhysicsCpuNanoseconds += Result.PhysicsCpuNanoseconds;
+						if (!Result.Succeeded())
+							++RootMotionMetrics.Rejected;
+						else {
+							++RootMotionMetrics.Accepted;
+							if (glm::length(Result.AppliedTranslation - RequestedWorld) > 1.0e-4f)
+								++RootMotionMetrics.Clipped;
+						}
+						RootMotionMetrics.AdmissionCpuNanoseconds += static_cast<std::uint64_t>(
+							std::chrono::duration_cast<std::chrono::nanoseconds>(
+								std::chrono::steady_clock::now() - AdmissionStarted
+							).count()
+						);
+					}
 					RenderPublishing.SetAnimationPoseChanges(
 						Animation->GetPoseUpdates(), Animation->GetPoseRemoves());
 					Animation->ClearChanges();

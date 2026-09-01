@@ -1,9 +1,11 @@
 #include "gargantuan/Engine.hpp"
 #include "gargantuan/classes/Camera.hpp"
+#include "gargantuan/classes/Character.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/KinematicCharacter.hpp"
 #include "gargantuan/classes/Part.hpp"
 #include "gargantuan/classes/Player.hpp"
+#include "gargantuan/classes/Script.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/render/Renderer.hpp"
 #include "gargantuan/services/ActionMap.hpp"
@@ -177,6 +179,18 @@ namespace {
 		auto Floor = MakePart(WorkspaceValue, "Floor", {0.0f, -1.0f, 0.0f}, {60.0f, 2.0f, 60.0f});
 		auto Wall = MakePart(WorkspaceValue, "Wall", {0.0f, 2.0f, -8.0f}, {20.0f, 4.0f, 2.0f});
 		auto Step = MakePart(WorkspaceValue, "Step", {4.0f, 0.5f, 0.0f}, {4.0f, 1.0f, 6.0f});
+		auto BootstrapObserver = std::make_shared<Script>();
+		BootstrapObserver->SetName("CharacterBootstrapObserver");
+		BootstrapObserver->SetSource(R"(
+local Players = game:GetService("Players")
+if Players.LocalPlayer == nil or Players.LocalPlayer.Character == nil then
+	error("default Character runtime did not precede project scripts")
+end
+local Witness = Instance.new("Folder")
+Witness.Name = "CharacterBootstrapObserved"
+Witness.Parent = game
+)" );
+		BootstrapObserver->SetParent(Game);
 		(void)Floor;
 		(void)Wall;
 		(void)Step;
@@ -198,24 +212,42 @@ namespace {
 		);
 
 		Runtime.Script->Step();
+		Runtime.Script->Step();
 		const bool DefaultError = std::ranges::any_of(Diagnostics, [](const auto &Diagnostic) {
 			return Diagnostic.first == "Error" && Diagnostic.second.find("DefaultPlayerRuntime") != std::string::npos;
 		});
 		Check(!DefaultError, "engine-shipped default Luau modules start without runtime errors");
 		Check(
+			Game->FindFirstChild("CharacterBootstrapObserved", std::nullopt) != nullptr,
+			"engine Character bootstrap runs exactly once before ordinary project scripts"
+		);
+		Check(
 			Runtime.ActionMap->GetBindingCount() == 9,
-			"engine-shipped player and interaction policies install semantic default bindings"
+			"engine-shipped Character modules initialize once without duplicating semantic bindings"
 		);
 		Check(LocalPlayer->GetCharacter().has_value(), "default Luau assembly responds to the Player spawn contract");
 		if (!LocalPlayer->GetCharacter()) {
 			Runtime.Destroy();
 			return;
 		}
-		auto Character = *LocalPlayer->GetCharacter();
+		auto Character = std::dynamic_pointer_cast<KinematicCharacter>(*LocalPlayer->GetCharacter());
 		Check(
-			Character->GetRootPart().has_value() && (*Character->GetRootPart())->GetParent()->get() == Character.get(),
+			Character && Character->IsA("Character") && !Character->IsA("Humanoid") &&
+				Character->GetRootPart().has_value() && (*Character->GetRootPart())->GetParent()->get() == Character.get(),
 			"default character assembly owns a visible root under KinematicCharacter state"
 		);
+		if (!Character) {
+			Runtime.Destroy();
+			return;
+		}
+		auto NpcCharacter = std::make_shared<KinematicCharacter>();
+		NpcCharacter->SetName("UnownedNpcCharacter");
+		NpcCharacter->SetParent(Runtime.Workspace);
+		Check(
+			NpcCharacter->IsA("Character") && *LocalPlayer->GetCharacter() != NpcCharacter,
+			"canonical Character semantics support an NPC with no synthetic Player relationship"
+		);
+		NpcCharacter->Destroy();
 
 		for (int Frame = 0; Frame < 120; ++Frame)
 			Runtime.RunService->PreSimulation->Fire(1.0f / 60.0f);
@@ -316,7 +348,12 @@ namespace {
 			LocalPlayer->GetCharacter().has_value(),
 			"character spawn remains reusable after external character destruction"
 		);
-		Character = *LocalPlayer->GetCharacter();
+		Character = std::dynamic_pointer_cast<KinematicCharacter>(*LocalPlayer->GetCharacter());
+		Check(Character != nullptr, "reloaded default Character retains the kinematic movement specialization");
+		if (!Character) {
+			Runtime.Destroy();
+			return;
+		}
 
 		auto PreviousCharacter = Character;
 		LocalPlayer->ResetCharacter();
@@ -346,12 +383,48 @@ namespace {
 		PlayersValue->SetDefaultControllerEnabled(false);
 		PlayersValue->SetDefaultCameraEnabled(false);
 		HeadlessRenderer Renderer(Vector2(320.0f, 240.0f));
-		Engine Runtime(Game, &Renderer);
+		std::vector<std::pair<std::string, std::string>> Diagnostics;
+		Engine Runtime(Game, &Renderer, [&](std::string Severity, std::string Message) {
+			Diagnostics.emplace_back(std::move(Severity), std::move(Message));
+		});
+		auto CustomRuntime = std::make_shared<Script>();
+		CustomRuntime->SetName("CustomCharacterRuntime");
+		CustomRuntime->SetSource(R"(
+local Players = game:GetService("Players")
+local Workspace = game:GetService("Workspace")
+local Player = Players.LocalPlayer
+local Character = Instance.new("KinematicCharacter")
+Character.Name = "CustomCharacter"
+Character.Position = Vector3.new(100, 6, 0)
+Character.Parent = Workspace
+local Root = Instance.new("Part")
+Root.Name = "CustomRoot"
+Root.Size = Vector3.new(2, 4, 2)
+Root.Parent = Character
+Character.RootPart = Root
+Player.Character = Character
+Character:Move(Vector3.new(1, 0, 0))
+)" );
+		CustomRuntime->SetParent(Game);
 		Runtime.Script->Step();
+		auto CustomCharacter = std::dynamic_pointer_cast<KinematicCharacter>(
+			Game->FindFirstDescendant("CustomCharacter"));
+		const bool CustomError = std::ranges::any_of(Diagnostics, [](const auto &Diagnostic) {
+			return Diagnostic.first == "Error" && Diagnostic.second.find("CustomCharacterRuntime") != std::string::npos;
+		});
 		Check(
-			Runtime.ActionMap->GetBindingCount() == 2 && !(*Runtime.Players->GetLocalPlayer())->GetCharacter() &&
+			Runtime.ActionMap->GetBindingCount() == 2 && CustomCharacter &&
+				(*Runtime.Players->GetLocalPlayer())->GetCharacter() == CustomCharacter &&
+				Near(CustomCharacter->GetPosition().x, 101.0f) && !CustomError &&
 				!Runtime.Players->FindFirstChild("PlayerRuntimeModules", std::nullopt),
-			"games can disable player defaults while retaining the independent semantic interaction bindings"
+			"a game-provided Luau Character controller replaces disabled defaults and uses only native movement admission"
+		);
+		const auto PositionAfterCustomPolicy = CustomCharacter ? CustomCharacter->GetPosition() : glm::vec3(0.0f);
+		for (int Frame = 0; Frame < 10; ++Frame)
+			Runtime.RunService->PreSimulation->Fire(1.0f / 60.0f);
+		Check(
+			CustomCharacter && Near(CustomCharacter->GetPosition().x, PositionAfterCustomPolicy.x),
+			"native Character has no hidden default locomotion policy after the Luau defaults are disabled"
 		);
 		auto Capture = Runtime.ProcessEvent(
 			PointerButtonEvent{{1}, PointerButton::Right, ButtonState::Pressed, {0.0f, 0.0f}}
@@ -367,6 +440,35 @@ namespace {
 		);
 		Runtime.Destroy();
 	}
+
+	void TestCharacterSchema() {
+		using namespace gargantuan;
+		const auto *CharacterDefinition = InstanceClassRegistry::GetDefinitionByName("Character");
+		const auto *KinematicDefinition = InstanceClassRegistry::GetDefinitionByName("KinematicCharacter");
+		auto FindCharacterProperty = [CharacterDefinition](std::string_view Name) {
+			if (!CharacterDefinition) return static_cast<const InstanceProperty *>(nullptr);
+			auto Found = CharacterDefinition->AllProperties.find(std::string(Name));
+			return Found == CharacterDefinition->AllProperties.end() ? nullptr : Found->second;
+		};
+		auto CFrameProperty = FindCharacterProperty("CFrame");
+		auto PositionProperty = FindCharacterProperty("Position");
+		auto RootPartProperty = FindCharacterProperty("RootPart");
+		Check(
+			CharacterDefinition && CharacterDefinition->ClassName == "Character" &&
+				CharacterDefinition->Superclass == std::optional<std::string>("Folder") &&
+				KinematicDefinition && KinematicDefinition->Superclass == std::optional<std::string>("Character") &&
+				CFrameProperty && PositionProperty && RootPartProperty,
+			"runtime schema exposes Character as the canonical Folder-based semantic above KinematicCharacter"
+		);
+		Check(
+			CFrameProperty && CFrameProperty->ReplicationPolicy == InstanceProperty::Replication::FutureReplicated &&
+				CFrameProperty->PersistencePolicy == InstanceProperty::Persistence::Saved &&
+				RootPartProperty && RootPartProperty->ReplicationPolicy == InstanceProperty::Replication::FutureReplicated &&
+				RootPartProperty->PersistencePolicy == InstanceProperty::Persistence::Saved &&
+				!InstanceClassRegistry::GetDefinitionByName("Humanoid"),
+			"Character persists and future-replicates authority state without introducing a Humanoid aggregate"
+		);
+	}
 }
 
 int main() {
@@ -377,6 +479,7 @@ int main() {
 		return 1;
 	}
 	TestActionMapContract();
+	TestCharacterSchema();
 	TestDefaultPlayerRuntime();
 	TestCustomControllerPath();
 	if (Failures == 0) std::cout << "All player runtime tests passed\n";

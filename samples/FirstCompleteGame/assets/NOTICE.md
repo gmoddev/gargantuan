@@ -14,6 +14,10 @@ Foundation 2A's compound mesh, material, and image dependency path is exercised.
 `collection-tone.wav` is an original deterministic two-note PCM16 tone generated
 for this sample. It contains no third-party recording or synthesized sample.
 
+`animated-beacon.gltf` is an original deterministic two-joint test rig created
+for this sample. Its `BeaconPulse` and `BeaconLunge` tracks exercise semantic
+joint animation and Character root-motion admission without third-party art.
+
 `Roboto-Regular.ttf` is the Roboto Regular test font already vendored with
 HarfBuzz in this repository. Roboto is distributed under the Apache License,
 Version 2.0: <https://www.apache.org/licenses/LICENSE-2.0>.

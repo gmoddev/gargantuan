@@ -1,6 +1,6 @@
 # First complete game validation
 
-Status: Animation Foundation 2B semantic anchors revalidated locally on 2026-08-29. This document records a vertical-slice
+Status: Animation Foundation 3A Character/root-motion authority revalidated locally on 2026-09-01. This document records a vertical-slice
 falsification exercise; it does not claim that Gargantuan is generally usable.
 
 ## Game design and scope
@@ -28,6 +28,14 @@ authored `AnimatedBeacon` is a two-joint skinned MeshPart driven by the looping
 small ProximityPrompt beneath it follow the same renderer-independent semantic
 world transform.
 
+Animation Foundation 3A adds the one-shot `BeaconLunge` clip and a persisted
+`RootMotionShowcase` game Script through the generic EditorHost source path.
+The Script composes two Player-independent `KinematicCharacter` NPCs with
+ordinary MeshPart/Animator/RootPart children. One lunges in open space; the
+other meets a rigid barrier. Animator submits root deltas, while Character and
+the existing capsule solver accept about 0.50 m and collision-clip the blocked
+proof to about 0.155 m during the deterministic headless observation interval.
+
 ## Authoring workflow used
 
 1. Build the current Studio and Engine Release binaries.
@@ -48,7 +56,10 @@ world transform.
    `PlaySession`, sends semantic host input, resizes the runtime publication,
    completes and restarts the round, and inspects the immutable world/UI
    publication without requiring a physical GPU backend.
-7. Launch the unchanged project outside Studio with the supported standalone
+7. Reimport `animated-beacon.gltf`, retain the original animation/mesh
+   identities, add the `BeaconLunge` subresource, and create
+   `RootMotionShowcase` through generic Script authoring before Save/reopen.
+8. Launch the unchanged project outside Studio with the supported standalone
    command below.
 
 This could not be authored efficiently through the visible Studio GUI alone.
@@ -70,7 +81,7 @@ honest claim of an entirely GUI-authored workflow.
 - imported 512 x 512 PNG and imported Roboto font resolution;
 - canonical PCM16 WAV import, positional pickup playback, and non-positional
   completion playback through schema-backed Sound Instances;
-- `ActionMap`, `DefaultPlayerController`, `DefaultCamera`, and
+- `ActionMap`, `DefaultCharacterRuntime`, `DefaultLocomotion`, `DefaultCamera`, and
   `DefaultPlayerRuntime`;
 - `ProximityPrompt`, `InteractionService`, keyboard/gamepad semantic bindings,
   touch presentation, zero-duration activation, hold activation, and semantic
@@ -80,6 +91,8 @@ honest claim of an entirely GUI-authored workflow.
   publication, sun/shadow/fog/exposure state, and package shader inclusion;
 - canonical skinned Mesh/Animation assets, renderer-neutral palette
   publication, GPU opaque/shadow skinning, CPU fallback, and renderer restart;
+- canonical Character/RootPart authority, headless root extraction, open-space
+  acceptance, collision clipping, and Player-independent NPC composition;
 - canonical Attachment joint binding, transient `WorldCFrame`, bind-pose
   fallback, animated positional Sound, animated prompt range/LOS/hold
   validation, and zero-journal semantic movement;
@@ -88,9 +101,9 @@ honest claim of an entirely GUI-authored workflow.
   activation, visibility, and viewport resize;
 - isolated Play/Stop, GUI/runtime mutation discard, and standalone execution.
 
-The persisted project has 38 Instances, 9 authored GUI Instances, and 7 imported asset
+The persisted project has 39 Instances, 9 authored GUI Instances, and 8 imported asset
 records. A representative headless runtime composition step is approximately
-0.1 ms on the validation machine; this is not a frame-time benchmark. A local
+0.145 ms on the validation machine; this is not a frame-time benchmark. A local
 real-GPU cold offscreen capture was approximately 250 ms, including renderer
 and GPU initialization. Real SDL GPU capture remains in the separate viewport
 smoke and is intentionally not part of headless CTest. The game gate observed
@@ -158,6 +171,14 @@ Release/Vulkan package proof compares the same socket with the GPU palette
 oracle, observes 12 palette uploads and zero CPU vertex uploads, then replaces
 the renderer while semantic revision continues.
 
+Animation Foundation 3A keeps Animator renderer-neutral and request-only. The
+same sample launch now creates two NPC Characters from ordinary Luau, and both
+headless PlaySession and the relocated graphical Release package distinguish
+open movement from the barrier-clipped result. RootPart follows accepted
+Character state; the requested-but-blocked remainder is discarded. Ten
+Play/Stop cycles leave the complete authoring snapshot unchanged, and no
+runtime Character movement enters the authoring journal.
+
 ## Studio and API findings
 
 Findings use the requested A-F categories.
@@ -177,9 +198,9 @@ optional cues that remain fail-open and irrelevant to gameplay correctness.
 
 ## Asset evidence
 
-The seven project records reopen as `Ready`: two Mesh assets, Material, Image,
-Font, Audio, and Animation. The static Mesh depends on Material, Material
-depends on Image, and Animation depends on its compatible skinned Mesh. The authored
+The eight project records reopen as `Ready`: two Mesh assets, Material, Image,
+Font, Audio, and two Animations. The static Mesh depends on Material, Material
+depends on Image, and both Animations depend on their compatible skinned Mesh. The authored
 `MeshPart`, `ImageLabel`, `TextLabel`, all six Sky faces, and all five Sounds resolve only
 `asset://` references.
 The PNG was reduced from 1024 to 512 pixels after standalone validation showed
@@ -200,7 +221,7 @@ obstacle motion, GUI text/visibility, runtime Players, or default runtime
 modules appear in the authoring snapshot.
 
 The same gate saves a unique per-process copy, reopens it from disk, verifies
-all required hierarchy/classes and Script source, checks all seven Ready assets and
+all required hierarchy/classes and Script source, checks all eight Ready assets and
 their dependencies, and asserts every authored GUI `Position` and `Size`
 remains a four-component `UDim2`. It also verifies all six authored properties
 of the three collectible prompts, including the 0.4-second hold prompt, plus

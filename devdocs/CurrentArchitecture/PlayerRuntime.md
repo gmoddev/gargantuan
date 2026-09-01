@@ -1,7 +1,7 @@
 ---
 status: current
 owner: runtime
-last_verified: 2026-08-21
+last_verified: 2026-09-01
 related_code:
   - assets/classes/KinematicCharacter.luau
   - assets/classes/Player.luau
@@ -103,8 +103,10 @@ replication ownership. A separate native-only, immutable `PlayerIdentity`
 initializes `(local, player-1)`; a future authenticated server bootstrap may
 initialize the same engine-owned type. Luau cannot submit or mutate it.
 
-`Player.Character` is nullable and currently accepts only a live
-`KinematicCharacter` in the same DataModel. The lifecycle is:
+`Player.Character` is nullable and accepts any live canonical `Character` in
+the same DataModel. The default assembly chooses `KinematicCharacter`, but an
+NPC can use Character semantics without a Player and future movement
+specializations do not require changing the Player schema. The lifecycle is:
 
 1. `LoadCharacter` or `ResetCharacter` removes the old character.
 2. `CharacterSpawnRequested` fires synchronously for replaceable Luau assembly.
@@ -114,11 +116,14 @@ initialize the same engine-owned type. Luau cannot submit or mutate it.
    teardown, or Engine Stop fires `CharacterRemoving` and clears the relation.
 5. Player-owned removal/replacement destroys the old character exactly once.
 
-`KinematicCharacter` is a small schema container, not Humanoid compatibility.
-It exposes `RootPart`, `Position`, `Velocity`, `Grounded`, `FloorNormal`,
-`CapsuleRadius`, and `CapsuleHeight`. Default assembly creates one non-colliding
-anchored Part for rendering and leaves collision authority with the capsule
-query.
+`Character` is a Folder-based semantic root with authoritative `CFrame`, its
+`Position` alias, an optional descendant `RootPart`, and the bounded
+`Character:Move` admission method. `KinematicCharacter : Character` adds only
+`Velocity`, `Grounded`, `FloorNormal`, `CapsuleRadius`, and `CapsuleHeight`.
+This is explicitly not Humanoid compatibility. Default assembly creates one
+non-colliding anchored Part for rendering and leaves collision authority with
+the capsule query. Animation root motion submits to the same Character
+authority rather than setting MeshPart CFrame.
 
 Engine shutdown destroys shipped modules first so their cleanup functions can
 disconnect signals, unbind actions, release pointer capture, restore camera
@@ -152,17 +157,20 @@ progress, and accepts the result only when it finds a higher walkable floor.
 
 ## Engine-shipped Luau defaults
 
-CMake copies four bounded source resources to the runtime payload next to the
+CMake copies five bounded source resources to the runtime payload next to the
 executable:
 
 - `DefaultActionMap.luau` — default physical-to-semantic bindings;
-- `DefaultPlayerController.luau` — assembly, movement, gravity, jump, landing,
-  collision, and step policy;
+- `DefaultCharacterRuntime.luau` — Player spawn assembly and cleanup;
+- `DefaultLocomotion.luau` — movement, gravity, jump, landing, collision, and
+  step policy through `Character:Move`;
 - `DefaultCamera.luau` — relative RMB orbit and character follow; and
 - `DefaultPlayerRuntime.luau` — startup and reverse-order cleanup.
 
 At runtime `Players` creates an unarchivable `PlayerRuntimeModules` Folder with
-three ModuleScripts and one client-context bootstrap Script. Game projects do
+four ModuleScripts and one client-context bootstrap Script. Engine executes the
+bootstrap once before the ordinary project Script queue, after true
+schema-only PreRun and DataModel/LocalPlayer construction. Game projects do
 not copy these sources, and the runtime-only subtree is not part of the
 authoring snapshot. `DefaultControllerEnabled`, `DefaultCameraEnabled`, and
 `CharacterAutoLoads` are serializable opt-out switches that can be set before
@@ -211,7 +219,7 @@ protocol or persistent account identifier.
 
 This slice does not add matchmaking, gargantuan-node integration, PlayerAuth,
 DataStore, prediction, final Players replication, Humanoid compatibility,
-animation, UI, gamepad defaults, moving platforms, one-way collision, arbitrary
+motion warping, UI, gamepad defaults, moving platforms, one-way collision, arbitrary
 query filtering, or a full-featured slope/step motor. The shipped runtime
 resources currently remain external payload files beside the executable; build
 and distribution flows must preserve that runtime directory.

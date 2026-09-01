@@ -1,6 +1,7 @@
 #pragma once
 
 #include "gargantuan/animation/AnimationUpdatePolicy.hpp"
+#include "gargantuan/animation/RootMotion.hpp"
 #include "gargantuan/assets/AssetTypes.hpp"
 #include "gargantuan/render/RenderPublication.hpp"
 
@@ -70,6 +71,11 @@ namespace gargantuan {
 		std::uint64_t PoseJobSchedulingCpuNanoseconds = 0;
 		std::uint64_t PoseJobWaitNanoseconds = 0;
 		std::uint64_t PoseMergeCpuNanoseconds = 0;
+		std::uint64_t RootMotionExtractionCpuNanoseconds = 0;
+		std::uint64_t RootMotionRequestCpuNanoseconds = 0;
+		std::uint64_t RootMotionRequests = 0;
+		std::uint64_t RootMotionRequestDrops = 0;
+		std::size_t RootMotionRequiredAnimators = 0;
 		std::size_t ActivePoseJobs = 0;
 		std::size_t PoseWorkerCapacity = 0;
 	};
@@ -98,6 +104,7 @@ namespace gargantuan {
 
 		[[nodiscard]] const std::vector<RenderAnimationPoseState> &GetPoseUpdates() const;
 		[[nodiscard]] const std::vector<RenderAnimationPoseRemove> &GetPoseRemoves() const;
+		[[nodiscard]] const std::vector<CharacterRootMotionRequest> &GetRootMotionRequests() const;
 		void ClearChanges();
 		[[nodiscard]] std::optional<AnimationPoseSnapshot> GetPose(ObjectId Object) const;
 		[[nodiscard]] AnimationRuntimeMetrics GetMetrics() const;

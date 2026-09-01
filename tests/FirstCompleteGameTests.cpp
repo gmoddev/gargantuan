@@ -92,6 +92,8 @@ namespace {
 		std::vector<PlayDiagnostic> Diagnostics;
 		double RepresentativeFrameMilliseconds = 0.0;
 		bool SawAnimationPose = false;
+		float OpenRootMotionDistance = 0.0f;
+		float BlockedRootMotionDistance = 0.0f;
 	};
 
 	bool HasDiagnostic(const std::vector<PlayDiagnostic> &Diagnostics, std::string_view Text) {
@@ -154,9 +156,23 @@ namespace {
 		auto BeaconPrompt = BeaconAnchor ? std::dynamic_pointer_cast<ProximityPrompt>(
 			BeaconAnchor->FindFirstChildOfClass("ProximityPrompt", false)
 		) : nullptr;
+		auto OpenRootMotionNpc = WorkspaceValue ? std::dynamic_pointer_cast<KinematicCharacter>(
+			WorkspaceValue->FindFirstChild("RootMotionOpenNpc", true)
+		) : nullptr;
+		auto BlockedRootMotionNpc = WorkspaceValue ? std::dynamic_pointer_cast<KinematicCharacter>(
+			WorkspaceValue->FindFirstChild("RootMotionBlockedNpc", true)
+		) : nullptr;
+		auto RootMotionBarrier = WorkspaceValue ? std::dynamic_pointer_cast<Part>(
+			WorkspaceValue->FindFirstChild("RootMotionBarrier", true)
+		) : nullptr;
 		Require(AnimatedBeacon && BeaconAnimator && BeaconAnchor && BeaconSound && BeaconPrompt &&
 			BeaconAnchor->GetJointPath() == "BeaconRoot/BeaconTip" && BeaconSound->GetLooped(),
 			"headless Play did not preserve the authored animated semantic beacon hierarchy");
+		Require(OpenRootMotionNpc && BlockedRootMotionNpc && RootMotionBarrier &&
+			OpenRootMotionNpc->GetRootPart().has_value() && BlockedRootMotionNpc->GetRootPart().has_value(),
+			"headless Play did not assemble both scripted root-motion Characters and their blocker");
+		const auto OpenRootMotionStart = OpenRootMotionNpc->GetPosition();
+		const auto BlockedRootMotionStart = BlockedRootMotionNpc->GetPosition();
 		Require(PlayersValue && PlayersValue->GetLocalPlayer(), "default Players runtime did not create LocalPlayer");
 		auto LocalPlayer = *PlayersValue->GetLocalPlayer();
 		Require(LocalPlayer->GetCharacter().has_value(), "default player runtime did not assemble a character");
@@ -172,6 +188,17 @@ namespace {
 			Session.Step();
 		}
 		const auto SecondAnchorPosition = BeaconAnchor->GetWorldCFrame().Position;
+		Evidence.OpenRootMotionDistance = glm::length(OpenRootMotionNpc->GetPosition() - OpenRootMotionStart);
+		Evidence.BlockedRootMotionDistance = glm::length(
+			BlockedRootMotionNpc->GetPosition() - BlockedRootMotionStart
+		);
+		Require(Evidence.OpenRootMotionDistance > 0.12f &&
+			Evidence.BlockedRootMotionDistance + 0.08f < Evidence.OpenRootMotionDistance &&
+			Evidence.BlockedRootMotionDistance < 0.20f,
+			"headless root motion did not produce distinct full and collision-clipped displacement");
+		Require((*OpenRootMotionNpc->GetRootPart())->GetCFrame().FuzzyEq(OpenRootMotionNpc->GetCFrame()) &&
+			(*BlockedRootMotionNpc->GetRootPart())->GetCFrame().FuzzyEq(BlockedRootMotionNpc->GetCFrame()),
+			"Character authority did not synchronize accepted root motion to each RootPart");
 		Require(glm::length(SecondAnchorPosition - FirstAnchorPosition) > 0.12f,
 			"animation did not move the semantic prompt anchor");
 		Character->SetPosition(SecondAnchorPosition);
@@ -384,7 +411,7 @@ int main() {
 		Require(Snapshot["Ok"], "sample project snapshot failed");
 		const auto ObjectsBeforePlay = Snapshot["Result"]["Snapshot"]["Objects"];
 
-		const std::array<std::pair<std::string_view, std::string_view>, 22> ExpectedObjects{{
+		const std::array<std::pair<std::string_view, std::string_view>, 23> ExpectedObjects{{
 			{"CollectionCourse", "Folder"}, {"Ground", "Part"}, {"MovingObstacle", "Part"},
 			{"ImportedBeacon", "MeshPart"}, {"AnimatedBeacon", "MeshPart"}, {"BeaconAnimator", "Animator"},
 			{"BeaconTipAnchor", "Attachment"}, {"BeaconTipSound", "Sound"},
@@ -393,7 +420,7 @@ int main() {
 			{"Collectible2", "Part"}, {"Collectible3", "Part"}, {"CollectionGui", "ScreenGui"},
 			{"Hud", "Frame"}, {"Badge", "ImageLabel"}, {"Progress", "TextLabel"},
 			{"WinPanel", "Frame"}, {"RestartButton", "TextButton"}, {"RoundCompleteSound", "Sound"},
-			{"RoundManager", "Script"}, {"BeaconAnimation", "Script"},
+			{"RoundManager", "Script"}, {"BeaconAnimation", "Script"}, {"RootMotionShowcase", "Script"},
 		}};
 		for (const auto &Expected : ExpectedObjects)
 			Require(HasObject(ObjectsBeforePlay, Expected.first, Expected.second), "authored hierarchy is incomplete");
@@ -423,6 +450,18 @@ int main() {
 			BeaconSource["Result"]["Source"].get<std::string>().find("BeaconTipAnchor") != std::string::npos &&
 			BeaconSource["Result"]["Source"].get<std::string>().find("Sound:Play()") != std::string::npos,
 			"FirstCompleteGame animation script does not use the public Animator and semantic Sound APIs");
+		const auto &RootMotionShowcase = GetObject(ObjectsBeforePlay, "RootMotionShowcase");
+		auto RootMotionSource = Call("GetScriptSource", {{"Object", RootMotionShowcase["Id"]}});
+		Require(RootMotionSource["Ok"], "RootMotionShowcase source could not be read");
+		const auto &RootMotionText = RootMotionSource["Result"]["Source"].get_ref<const std::string &>();
+		for (const auto RequiredText : {
+			"Instance.new(\"KinematicCharacter\")", "Character.RootPart = Rig", "Animator:LoadAnimation",
+			"Track.RootMotionEnabled = true", "RootMotionOpenNpc", "RootMotionBlockedNpc", "RootMotionBarrier"
+		})
+			Require(RootMotionText.find(RequiredText) != std::string::npos,
+				"RootMotionShowcase omits a required generic gameplay API or proof fixture");
+		Require(RootMotionText.find("Character.CFrame +=") == std::string::npos,
+			"RootMotionShowcase bypasses animation-driven Character authority");
 
 		const auto &Collectible1 = GetObject(ObjectsBeforePlay, "Collectible1");
 		const auto &Collectible2 = GetObject(ObjectsBeforePlay, "Collectible2");
@@ -508,6 +547,12 @@ int main() {
 		Require(std::ranges::any_of(Assets, [](const Json &Asset) {
 			return Asset.value("Kind", "") == "Animation" && Asset.contains("Dependencies") && Asset["Dependencies"].size() == 1;
 		}), "Animation-to-skeleton-Mesh package dependency is missing");
+		Require(std::ranges::count_if(Assets, [](const Json &Asset) {
+			return Asset.value("Kind", "") == "Animation" && Asset.value("State", "") == "Ready";
+		}) == 2 && std::ranges::any_of(Assets, [](const Json &Asset) {
+			return Asset.value("Name", "") == "BeaconLunge" &&
+				Asset.value("AssetId", "") == "d9d9e9649adbad59588d137c2a642e1d";
+		}), "sample catalog does not contain the Ready BeaconLunge root-motion clip");
 
 		auto Saved = Call("SaveProject");
 		Require(Saved["Ok"] && !Saved["Result"].value("Dirty", true), "sample project did not save cleanly");
@@ -615,6 +660,9 @@ int main() {
 			"game manager did not start or register three collectibles");
 		Require(HasDiagnostic(FirstCycleDiagnostics, "[Game:FirstCompleteGame] Animated semantic beacon ready"),
 			"authored semantic Animator/Sound script did not start in generic Play");
+		Require(HasDiagnostic(FirstCycleDiagnostics,
+			"[Game:RootMotionShowcase] Open and collision-clipped lunges started"),
+			"authored root-motion showcase did not start in generic Play");
 		Require(HasDiagnostic(HeadlessRuntimeEvidence.Diagnostics, "[Game:FirstCompleteGame] Round complete"),
 			"deterministic completion logic did not run");
 		Require(HasDiagnostic(HeadlessRuntimeEvidence.Diagnostics, "[Game:FirstCompleteGame] Round reset"),
@@ -633,6 +681,8 @@ int main() {
 		std::cout << "[Game:FirstCompleteGameTest] objects=" << ReopenedObjects.size()
 			<< " gui=" << GuiCount << " importedAssets=" << Assets.size()
 			<< " representativeFrameMs=" << HeadlessRuntimeEvidence.RepresentativeFrameMilliseconds
+			<< " openRootMotion=" << HeadlessRuntimeEvidence.OpenRootMotionDistance
+			<< " blockedRootMotion=" << HeadlessRuntimeEvidence.BlockedRootMotionDistance
 			<< " playStopCycles=10\n";
 		return 0;
 	} catch (const std::exception &Error) {

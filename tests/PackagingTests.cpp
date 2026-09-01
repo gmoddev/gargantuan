@@ -1,5 +1,6 @@
 #include "gargantuan/Engine.hpp"
 #include "gargantuan/classes/DataModel.hpp"
+#include "gargantuan/classes/MeshPart.hpp"
 #include "gargantuan/filesystem/DiskFilesystem.hpp"
 #include "gargantuan/filesystem/Project.hpp"
 #include "gargantuan/packaging/PackageBuilder.hpp"
@@ -226,13 +227,21 @@ int main() {
 		);
 		RuntimeEngine.Step();
 		auto AnimationRuntimePublication = Renderer.TakeLastPublication();
-		Require(AnimationRuntimePublication && AnimationRuntimePublication->AnimationPoseUpdates.size() == 1,
+		auto PackagedAnimatedBeacon = std::dynamic_pointer_cast<MeshPart>(
+			PackagedWorld->FindFirstDescendant("AnimatedBeacon")
+		);
+		auto PackagedPose = AnimationRuntimePublication && PackagedAnimatedBeacon
+			? std::ranges::find_if(AnimationRuntimePublication->AnimationPoseUpdates, [&](const auto &Pose) {
+				return Pose.Object == PackagedAnimatedBeacon->GetObjectId();
+			})
+			: decltype(AnimationRuntimePublication->AnimationPoseUpdates)::const_iterator{};
+		Require(AnimationRuntimePublication && PackagedAnimatedBeacon &&
+			PackagedPose != AnimationRuntimePublication->AnimationPoseUpdates.end(),
 			"packaged runtime did not start and publish the canonical animated beacon");
-		const auto &PackagedPose = AnimationRuntimePublication->AnimationPoseUpdates.front();
 		Require(
-			PackagedPose.Mode == RenderAnimationSkinningMode::GpuPalette &&
-				!PackagedPose.PosedMesh.IsValid() && PackagedPose.Palette.Entries &&
-				!PackagedPose.Palette.Entries->empty() && AnimationRuntimePublication->MeshVertexUpdates.empty(),
+			PackagedPose->Mode == RenderAnimationSkinningMode::GpuPalette &&
+				!PackagedPose->PosedMesh.IsValid() && PackagedPose->Palette.Entries &&
+				!PackagedPose->Palette.Entries->empty() && AnimationRuntimePublication->MeshVertexUpdates.empty(),
 			"headless packaged runtime must publish a semantic palette without CPU-skinned vertex data"
 		);
 		(void)RuntimeEngine.ProcessEvent(

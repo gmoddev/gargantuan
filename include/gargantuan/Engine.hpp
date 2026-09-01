@@ -33,6 +33,15 @@
 #include <type_traits>
 
 namespace gargantuan {
+	struct CharacterRootMotionMetrics {
+		std::uint64_t Requests = 0;
+		std::uint64_t Accepted = 0;
+		std::uint64_t Clipped = 0;
+		std::uint64_t Rejected = 0;
+		std::uint64_t AdmissionCpuNanoseconds = 0;
+		std::uint64_t PhysicsCpuNanoseconds = 0;
+	};
+
 	// TODO: Move much of this into DataModel
 	struct Engine {
 	  public:
@@ -73,12 +82,14 @@ namespace gargantuan {
 		float GetDeltaTime();
 		[[nodiscard]] HostEventResult ProcessEvent(const HostEvent &Event);
 		[[nodiscard]] bool ReplaceEntitlementProvider(std::shared_ptr<IEntitlementProvider> Provider);
+		[[nodiscard]] CharacterRootMotionMetrics GetCharacterRootMotionMetrics() const { return RootMotionMetrics; }
 		void Destroy();
 
 	  private:
 		std::chrono::steady_clock::time_point CurrentTick{};
 		std::chrono::steady_clock::time_point LastTick{};
 		bool Destroyed = false;
+		CharacterRootMotionMetrics RootMotionMetrics;
 		std::function<void()> UnbindDescendants;
 		SignalConnection::Pointer DescendantRemovedConnection;
 		SignalConnection::Pointer DataModelDestroyingConnection;

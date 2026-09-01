@@ -80,6 +80,25 @@
           }
         }
       ]
+    },
+    {
+      "name": "BeaconLunge",
+      "samplers": [
+        {
+          "input": 6,
+          "output": 9,
+          "interpolation": "LINEAR"
+        }
+      ],
+      "channels": [
+        {
+          "sampler": 0,
+          "target": {
+            "node": 0,
+            "path": "translation"
+          }
+        }
+      ]
     }
   ],
   "buffers": [
@@ -118,6 +137,10 @@
     {
       "byteLength": 36,
       "uri": "data:application/octet-stream;base64,AACAPwAAgD8AAIA/ZmamP2Zmpj9mZqY/AACAPwAAgD8AAIA/"
+    },
+    {
+      "byteLength": 36,
+      "uri": "data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAQAAAAAAAAAAA"
     }
   ],
   "bufferViews": [
@@ -129,7 +152,8 @@
     {"buffer": 5, "byteOffset": 0, "byteLength": 128},
     {"buffer": 6, "byteOffset": 0, "byteLength": 12},
     {"buffer": 7, "byteOffset": 0, "byteLength": 48},
-    {"buffer": 8, "byteOffset": 0, "byteLength": 36}
+    {"buffer": 8, "byteOffset": 0, "byteLength": 36},
+    {"buffer": 9, "byteOffset": 0, "byteLength": 36}
   ],
   "accessors": [
     {"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3"},
@@ -140,6 +164,7 @@
     {"bufferView": 5, "componentType": 5126, "count": 2, "type": "MAT4"},
     {"bufferView": 6, "componentType": 5126, "count": 3, "type": "SCALAR"},
     {"bufferView": 7, "componentType": 5126, "count": 3, "type": "VEC4"},
-    {"bufferView": 8, "componentType": 5126, "count": 3, "type": "VEC3"}
+    {"bufferView": 8, "componentType": 5126, "count": 3, "type": "VEC3"},
+    {"bufferView": 9, "componentType": 5126, "count": 3, "type": "VEC3"}
   ]
 }

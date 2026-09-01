@@ -65,6 +65,7 @@ namespace gargantuan {
 		std::shared_ptr<Instance> FindRequiredInstanceByPath(const char *path);
 		void EmitRuntimeDiagnostic(std::string Severity, std::string Message) const;
 		void TrackSignalConnection(const std::shared_ptr<SignalConnection> &Connection);
+		void RunBootstrapScript(const std::shared_ptr<Script> &ScriptValue);
 
 		void Step();
 

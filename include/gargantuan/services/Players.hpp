@@ -7,6 +7,7 @@
 namespace gargantuan {
 	class Engine;
 	class Folder;
+	class Script;
 
 	class Players : public Instance {
 		I_Players;
@@ -17,7 +18,7 @@ namespace gargantuan {
 		bool RuntimeStarted = false;
 
 		void InitializeLocalPlayer();
-		void StartDefaultRuntime();
+		std::shared_ptr<Script> StartDefaultRuntime();
 		void ShutdownRuntime();
 
 	  public:

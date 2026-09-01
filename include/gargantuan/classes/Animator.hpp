@@ -16,11 +16,14 @@ namespace gargantuan {
 		I_Animator;
 
 		friend class AnimationRuntime;
+		friend class AnimationTrack;
 
 		std::vector<std::shared_ptr<AnimationTrack>> Tracks;
+		std::weak_ptr<AnimationTrack> RootMotionTrack;
 		std::uint64_t NextCreationSequence = 1;
 
 		void InvalidateTracks();
+		void SetRootMotionSource(AnimationTrack &Track, bool Enabled);
 
 	  public:
 		static constexpr std::size_t MaximumTracks = 16;

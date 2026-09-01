@@ -4,6 +4,7 @@
 #include "gargantuan/classes/Attachment.hpp"
 #include "gargantuan/classes/Animator.hpp"
 #include "gargantuan/classes/DataModel.hpp"
+#include "gargantuan/classes/KinematicCharacter.hpp"
 #include "gargantuan/classes/MeshPart.hpp"
 #include "gargantuan/classes/Part.hpp"
 #include "gargantuan/classes/ProximityPrompt.hpp"
@@ -332,6 +333,166 @@ namespace {
 		std::string Animation;
 		std::size_t ArtifactBytes = 0;
 	};
+
+	void RunRootMotionScenario(
+		const std::shared_ptr<Workspace> &WorkspaceValue,
+		const std::shared_ptr<AssetService> &Assets,
+		const ImportedRig &Asset,
+		std::size_t CharacterRigCount,
+		std::size_t RootMotionCount,
+		std::size_t VisualOnlyRigCount,
+		std::size_t Frames
+	) {
+		Require(RootMotionCount <= CharacterRigCount, "root-motion benchmark source count exceeds Character count");
+		std::vector<std::shared_ptr<KinematicCharacter>> Characters;
+		std::vector<std::shared_ptr<MeshPart>> Rigs;
+		std::vector<std::shared_ptr<Animator>> Animators;
+		std::vector<std::shared_ptr<AnimationTrack>> Tracks;
+		std::vector<std::shared_ptr<Attachment>> Anchors;
+		Characters.reserve(CharacterRigCount);
+		Rigs.reserve(CharacterRigCount + VisualOnlyRigCount);
+		Animators.reserve(CharacterRigCount + VisualOnlyRigCount);
+		Tracks.reserve(CharacterRigCount + VisualOnlyRigCount);
+		Anchors.reserve(CharacterRigCount);
+		AnimationRuntime Runtime(Assets);
+		auto Spatial = std::make_shared<SemanticSpatialResolver>(Assets, &Runtime);
+
+		for (std::size_t Index = 0; Index < CharacterRigCount + VisualOnlyRigCount; ++Index) {
+			std::shared_ptr<KinematicCharacter> CharacterValue;
+			if (Index < CharacterRigCount) {
+				CharacterValue = std::make_shared<KinematicCharacter>();
+				CharacterValue->SetPosition({static_cast<float>(Index) * 5.0f, 6.0f, 0.0f});
+				CharacterValue->SetParent(WorkspaceValue);
+				Characters.push_back(CharacterValue);
+			}
+			auto Rig = std::make_shared<MeshPart>();
+			Rig->SetMesh(Asset.Mesh);
+			Rig->SetCanCollide(false);
+			Rig->SetParent(CharacterValue ? std::static_pointer_cast<Instance>(CharacterValue)
+				: std::static_pointer_cast<Instance>(WorkspaceValue));
+			auto AnimatorValue = std::make_shared<Animator>();
+			AnimatorValue->SetParent(Rig);
+			Runtime.RegisterAnimator(AnimatorValue);
+			auto Track = AnimatorValue->CreateTrack(Asset.Animation);
+			Track->SetLooped(true);
+			if (Index < RootMotionCount) Track->SetRootMotionEnabled(true);
+			Track->Play();
+			if (CharacterValue) {
+				auto Anchor = std::make_shared<Attachment>();
+				Anchor->SetJointPath("B0");
+				Anchor->SetParent(Rig);
+				Spatial->RegisterAttachment(Anchor);
+				Anchors.push_back(std::move(Anchor));
+			}
+			Rigs.push_back(std::move(Rig));
+			Animators.push_back(std::move(AnimatorValue));
+			Tracks.push_back(std::move(Track));
+		}
+
+		auto RunFrame = [&](std::uint64_t Publication, std::uint64_t &AdmissionNanoseconds,
+			std::uint64_t &PhysicsNanoseconds, std::uint64_t *RuntimeAllocations = nullptr,
+			std::uint64_t *AdmissionAllocations = nullptr, std::uint64_t *SpatialAllocations = nullptr) {
+			Spatial->PrepareAnimationRequirements();
+			const AnimationUpdateContext Context{
+				.Environment = AnimationRuntimeEnvironment::Graphical,
+				.ViewOrigin = {0.0f, 6.0f, 0.0f},
+				.HasViewOrigin = true,
+				.VisibilityGeneration = 1,
+				.VisibilityPublication = Publication,
+				.VisibilityComplete = true,
+				.SemanticRequirementsComplete = Spatial->AreAnimationRequirementsComplete(),
+				.SemanticRequiredObjects = Spatial->GetAnimationRequiredRigs(),
+			};
+			const auto RuntimeAllocationsBefore = SemanticBenchmarkAllocations.load(std::memory_order_relaxed);
+			Runtime.Step(1.0f / 60.0f, Context);
+			const auto RuntimeAllocationsAfter = SemanticBenchmarkAllocations.load(std::memory_order_relaxed);
+			if (RuntimeAllocations) *RuntimeAllocations += RuntimeAllocationsAfter - RuntimeAllocationsBefore;
+			for (const auto &Request : Runtime.GetRootMotionRequests()) {
+				auto CharacterValue = std::dynamic_pointer_cast<KinematicCharacter>(Request.Target.lock());
+				Require(CharacterValue != nullptr, "root-motion benchmark request lost its Character");
+				const auto Started = Clock::now();
+				auto Result = CharacterValue->AdmitMotion(*WorkspaceValue, {
+					.Translation = Request.Delta.Translation,
+					.Velocity = CharacterValue->GetVelocity(),
+					.YawRadians = Request.Delta.YawRadians,
+					.Source = CharacterMotionSource::Animation,
+					.LocalSpace = true,
+				});
+				AdmissionNanoseconds += Nanoseconds(Started);
+				PhysicsNanoseconds += Result.PhysicsCpuNanoseconds;
+				Require(Result.Succeeded(), "root-motion benchmark Character admission failed");
+			}
+			const auto AdmissionAllocationsAfter = SemanticBenchmarkAllocations.load(std::memory_order_relaxed);
+			if (AdmissionAllocations) *AdmissionAllocations += AdmissionAllocationsAfter - RuntimeAllocationsAfter;
+			Spatial->Step();
+			Runtime.ClearChanges();
+			const auto SpatialAllocationsAfter = SemanticBenchmarkAllocations.load(std::memory_order_relaxed);
+			if (SpatialAllocations) *SpatialAllocations += SpatialAllocationsAfter - AdmissionAllocationsAfter;
+		};
+
+		std::uint64_t IgnoredAdmission = 0;
+		std::uint64_t IgnoredPhysics = 0;
+		for (std::size_t Warmup = 0; Warmup < 6; ++Warmup)
+			RunFrame(Warmup + 1, IgnoredAdmission, IgnoredPhysics);
+		const auto RuntimeBefore = Runtime.GetMetrics();
+		const auto SpatialBefore = Spatial->GetMetrics();
+		const auto AllocationsBefore = SemanticBenchmarkAllocations.load(std::memory_order_relaxed);
+		std::uint64_t AdmissionNanoseconds = 0;
+		std::uint64_t PhysicsNanoseconds = 0;
+		std::uint64_t RuntimeAllocations = 0;
+		std::uint64_t AdmissionAllocations = 0;
+		std::uint64_t SpatialAllocations = 0;
+		const auto Started = Clock::now();
+		for (std::size_t Frame = 0; Frame < Frames; ++Frame)
+			RunFrame(Frame + 7, AdmissionNanoseconds, PhysicsNanoseconds, &RuntimeAllocations,
+				&AdmissionAllocations, &SpatialAllocations);
+		const auto TotalNanoseconds = Nanoseconds(Started);
+		const auto AllocationDelta = SemanticBenchmarkAllocations.load(std::memory_order_relaxed) - AllocationsBefore;
+		const auto RuntimeAfter = Runtime.GetMetrics();
+		const auto SpatialAfter = Spatial->GetMetrics();
+		const auto PerFrameMilliseconds = [Frames](std::uint64_t Value) {
+			return static_cast<double>(Value) / 1'000'000.0 / static_cast<double>(Frames);
+		};
+		Require(
+			RuntimeAfter.RootMotionRequests - RuntimeBefore.RootMotionRequests == RootMotionCount * Frames,
+			"root-motion benchmark request count differs from enabled Character count"
+		);
+		Require(
+			RuntimeAfter.BufferAllocations == RuntimeBefore.BufferAllocations,
+			"root-motion benchmark allocated animation pose buffers after warmup"
+		);
+		if (VisualOnlyRigCount != 0)
+			Require(
+				RuntimeAfter.RootMotionRequiredAnimators == RootMotionCount &&
+					RuntimeAfter.FrozenVisualAnimators == VisualOnlyRigCount,
+				"mixed root-motion policy escalated visual-only offscreen rigs"
+			);
+		std::cout << "[Animation:RootMotionBenchmark] characters=" << CharacterRigCount
+			<< " rootMotion=" << RootMotionCount << " visualOnly=" << VisualOnlyRigCount
+			<< " totalMs=" << PerFrameMilliseconds(TotalNanoseconds)
+			<< " trackAdvanceMs=" << PerFrameMilliseconds(
+				RuntimeAfter.TrackAdvanceCpuNanoseconds - RuntimeBefore.TrackAdvanceCpuNanoseconds)
+			<< " poseMs=" << PerFrameMilliseconds(
+				RuntimeAfter.PoseWorkerCpuNanoseconds - RuntimeBefore.PoseWorkerCpuNanoseconds)
+			<< " rootExtractionMs=" << PerFrameMilliseconds(
+				RuntimeAfter.RootMotionExtractionCpuNanoseconds - RuntimeBefore.RootMotionExtractionCpuNanoseconds)
+			<< " requestMs=" << PerFrameMilliseconds(
+				RuntimeAfter.RootMotionRequestCpuNanoseconds - RuntimeBefore.RootMotionRequestCpuNanoseconds)
+			<< " admissionMs=" << PerFrameMilliseconds(AdmissionNanoseconds)
+			<< " physicsMs=" << PerFrameMilliseconds(PhysicsNanoseconds)
+			<< " anchorMs=" << PerFrameMilliseconds(
+				SpatialAfter.TransformResolutionCpuNanoseconds - SpatialBefore.TransformResolutionCpuNanoseconds)
+			<< " allocations=" << AllocationDelta
+			<< " runtimeAllocations=" << RuntimeAllocations
+			<< " admissionAllocations=" << AdmissionAllocations
+			<< " spatialAllocations=" << SpatialAllocations << '\n';
+
+		Spatial->Shutdown();
+		Runtime.Shutdown();
+		for (auto &CharacterValue : Characters) CharacterValue->Destroy();
+		for (std::size_t Index = CharacterRigCount; Index < Rigs.size(); ++Index) Rigs[Index]->Destroy();
+		ChangeJournal::Get().Clear();
+	}
 
 	std::string ImportAudio(AssetService &Assets, SourceMount &Mount) {
 		auto Result = Assets.ImportProjectAsset(Mount, "assets/semantic-tone.wav",
@@ -1386,6 +1547,7 @@ int main(int ArgumentCount, char **Arguments) {
 		bool JobScaling = false;
 		bool StaticWorld = false;
 		bool DetailedProfiling = false;
+		bool RootMotionOnly = false;
 		for (int ArgumentIndex = 1; ArgumentIndex < ArgumentCount; ++ArgumentIndex) {
 			const std::string_view Argument(Arguments[ArgumentIndex]);
 			if (Argument == "--quick")
@@ -1400,6 +1562,8 @@ int main(int ArgumentCount, char **Arguments) {
 				StaticWorld = true;
 			else if (Argument == "--detailed-profile")
 				DetailedProfiling = true;
+			else if (Argument == "--root-motion")
+				RootMotionOnly = true;
 			else
 				throw std::invalid_argument("[Animation:Benchmark] unsupported argument");
 		}
@@ -1427,7 +1591,16 @@ int main(int ArgumentCount, char **Arguments) {
 		const auto SourceMeshes = MeshChanges.Creates;
 		const auto Frames = Quick ? 2u : 10u;
 		std::cout << std::fixed << std::setprecision(4);
-		if (ProfileMatrix) {
+		if (RootMotionOnly) {
+			const auto RootMotionFrames = Quick ? 2u : 60u;
+			for (const auto Characters : {1u, 10u, 100u, 500u}) {
+				RunRootMotionScenario(WorkspaceValue, Assets, Imported.at(64), Characters, 0, 0, RootMotionFrames);
+				RunRootMotionScenario(
+					WorkspaceValue, Assets, Imported.at(64), Characters, Characters, 0, RootMotionFrames
+				);
+			}
+			RunRootMotionScenario(WorkspaceValue, Assets, Imported.at(64), 50, 50, 450, RootMotionFrames);
+		} else if (ProfileMatrix) {
 			std::cout << "[Animation:Benchmark] matrix=prePolicy frames=" << Frames
 					  << " detailedProfiling=" << DetailedProfiling << '\n';
 			for (const auto Rigs : {1u, 10u, 100u, 500u, 1000u})
@@ -1537,6 +1710,11 @@ int main(int ArgumentCount, char **Arguments) {
 			RunCpuSkinningScaling(Quick);
 			RunStaticWorldRegression(World, WorkspaceValue, Assets, Imported.at(64), SourceMeshes, AudioReference);
 			RunStaticAttachmentRegression(WorkspaceValue, Assets, Imported.at(64));
+			for (const auto Characters : {1u, 10u, 100u, 500u}) {
+				RunRootMotionScenario(WorkspaceValue, Assets, Imported.at(64), Characters, 0, 0, Frames);
+				RunRootMotionScenario(WorkspaceValue, Assets, Imported.at(64), Characters, Characters, 0, Frames);
+			}
+			RunRootMotionScenario(WorkspaceValue, Assets, Imported.at(64), 50, 50, 450, Frames);
 		}
 		for (const auto Bones : {64u, 128u, 256u}) ReportMemory(Bones, Imported.at(Bones).ArtifactBytes);
 		Assets.reset();

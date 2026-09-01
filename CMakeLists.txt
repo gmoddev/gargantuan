@@ -70,7 +70,8 @@ endif()
 set(GARGANTUAN_RUNTIME_LUAU_MODULES
 	"DefaultActionMap.luau"
 	"DefaultInteractionRuntime.luau"
-	"DefaultPlayerController.luau"
+	"DefaultCharacterRuntime.luau"
+	"DefaultLocomotion.luau"
 	"DefaultCamera.luau"
 	"DefaultPlayerRuntime.luau"
 )

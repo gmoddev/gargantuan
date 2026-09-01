@@ -1,6 +1,6 @@
 #include "gargantuan/classes/Player.hpp"
 
-#include "gargantuan/classes/KinematicCharacter.hpp"
+#include "gargantuan/classes/Character.hpp"
 #include "gargantuan/scripting/ScriptSecurity.hpp"
 
 #include <stdexcept>
@@ -34,11 +34,11 @@ namespace gargantuan {
 		AuthenticationIdentity = std::move(Identity);
 	}
 
-	std::optional<std::shared_ptr<KinematicCharacter>> Player::GetCharacter() const {
+	std::optional<std::shared_ptr<Character>> Player::GetCharacter() const {
 		return CharacterValue ? std::optional(CharacterValue) : std::nullopt;
 	}
 
-	void Player::SetCharacter(std::optional<std::shared_ptr<KinematicCharacter>> Value) {
+	void Player::SetCharacter(std::optional<std::shared_ptr<Character>> Value) {
 		RequireCharacterMutationCapability();
 		AssertCanMutate();
 		ValidatePropertyMutation("Character", Value);
@@ -63,7 +63,7 @@ namespace gargantuan {
 
 		auto WeakSelf = std::weak_ptr<Player>(std::dynamic_pointer_cast<Player>(shared_from_this()));
 		CharacterDestroyingConnection = Replacement->Destroying->Once(
-			[WeakSelf, WeakCharacter = std::weak_ptr<KinematicCharacter>(Replacement)](std::monostate) {
+			[WeakSelf, WeakCharacter = std::weak_ptr<Character>(Replacement)](std::monostate) {
 				auto Self = WeakSelf.lock();
 				auto Character = WeakCharacter.lock();
 				if (!Self || !Character || Self->CharacterValue != Character || Self->ShuttingDownCharacter) return;

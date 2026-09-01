@@ -37,6 +37,7 @@ namespace gargantuan {
 
 	class WorldRoot : public Instance {
 		I_WorldRoot;
+		friend class Character;
 
 		static constexpr int MAX_STEPS_PER_FRAME = 4;
 		static constexpr float STEP_INTERVAL = 1.0f / 60.0f;

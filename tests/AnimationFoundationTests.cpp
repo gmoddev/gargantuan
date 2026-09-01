@@ -131,6 +131,8 @@ namespace {
 		std::size_t InverseBindOffset = 0;
 		std::size_t TimeOffset = 0;
 		std::size_t ScaleOffset = 0;
+		std::size_t RootTranslationOffset = 0;
+		std::size_t RootRotationOffset = 0;
 	};
 
 	std::size_t AddFloatView(
@@ -239,12 +241,19 @@ namespace {
 		std::vector<float> CounterRotations;
 		std::vector<float> LowerTranslations;
 		std::vector<float> LowerScales;
+		std::vector<float> RootTranslations;
+		std::vector<float> RootRotations;
 		for (const auto Time : Times) {
 			const auto Angle = WaveDegrees * Time * std::numbers::pi_v<float> / 180.0f;
+			const auto RootAngle = WaveDegrees / 3.0f * Time * std::numbers::pi_v<float> / 180.0f;
 			WaveRotations.insert(WaveRotations.end(), {0.0f, 0.0f, std::sin(Angle * 0.5f), std::cos(Angle * 0.5f)});
 			CounterRotations.insert(CounterRotations.end(), {0.0f, 0.0f, -std::sin(Angle * 0.5f), std::cos(Angle * 0.5f)});
 			LowerTranslations.insert(LowerTranslations.end(), {WaveDistance * Time, 1.0f, 0.0f});
 			LowerScales.insert(LowerScales.end(), {1.0f + Time, 1.0f, 1.0f - Time * 0.5f});
+			RootTranslations.insert(RootTranslations.end(), {WaveDistance * 2.0f * Time, WaveDistance * 0.5f * Time, 0.0f});
+			RootRotations.insert(RootRotations.end(), {
+				0.0f, std::sin(RootAngle * 0.5f), 0.0f, std::cos(RootAngle * 0.5f),
+			});
 		}
 		const auto WaveRotationView = AddFloatView(Result, Views, WaveRotations);
 		const auto CounterRotationView = AddFloatView(Result, Views, CounterRotations);
@@ -252,6 +261,12 @@ namespace {
 		AlignFour(Result.Binary);
 		Result.ScaleOffset = Result.Binary.size();
 		const auto ScaleView = AddFloatView(Result, Views, LowerScales);
+		AlignFour(Result.Binary);
+		Result.RootTranslationOffset = Result.Binary.size();
+		const auto RootTranslationView = AddFloatView(Result, Views, RootTranslations);
+		AlignFour(Result.Binary);
+		Result.RootRotationOffset = Result.Binary.size();
+		const auto RootRotationView = AddFloatView(Result, Views, RootRotations);
 		AlignFour(Result.Binary);
 
 		const auto PositionAccessor = AddAccessor(Accessors, PositionView, 5126, 3, "VEC3");
@@ -265,6 +280,8 @@ namespace {
 		const auto CounterRotationAccessor = AddAccessor(Accessors, CounterRotationView, 5126, Times.size(), "VEC4");
 		const auto TranslationAccessor = AddAccessor(Accessors, TranslationView, 5126, Times.size(), "VEC3");
 		const auto ScaleAccessor = AddAccessor(Accessors, ScaleView, 5126, Times.size(), "VEC3");
+		const auto RootTranslationAccessor = AddAccessor(Accessors, RootTranslationView, 5126, Times.size(), "VEC3");
+		const auto RootRotationAccessor = AddAccessor(Accessors, RootRotationView, 5126, Times.size(), "VEC4");
 
 		auto &Root = Result.Document;
 		Root["asset"] = {{"version", "2.0"}, {"generator", "Gargantuan Animation Foundation 1 test"}};
@@ -310,6 +327,17 @@ namespace {
 				})},
 				{"channels", Json::array({
 					{{"sampler", 0}, {"target", {{"node", 1}, {"path", "rotation"}}}},
+				})},
+			},
+			{
+				{"name", "RootMotion"},
+				{"samplers", Json::array({
+					{{"input", TimeAccessor}, {"output", RootTranslationAccessor}, {"interpolation", "LINEAR"}},
+					{{"input", TimeAccessor}, {"output", RootRotationAccessor}, {"interpolation", "LINEAR"}},
+				})},
+				{"channels", Json::array({
+					{{"sampler", 0}, {"target", {{"node", 0}, {"path", "translation"}}}},
+					{{"sampler", 1}, {"target", {{"node", 0}, {"path", "rotation"}}}},
 				})},
 			},
 		});
@@ -473,6 +501,366 @@ namespace {
 		Singular[1].NormalMatrix = glm::mat4(0.0f);
 		Check(!AnimationRuntime::SkinMeshCpu(Mesh, Singular, Output, Bounds),
 			"CPU skinning fails closed on an invalid normal transform");
+	}
+
+	void TestCharacterRootMotion(
+		const std::shared_ptr<gargantuan::AssetService> &Assets,
+		const std::shared_ptr<gargantuan::Workspace> &WorkspaceValue,
+		const std::string &MeshReference,
+		const std::string &RootAnimationReference,
+		const std::string &HugeRootAnimationReference,
+		const std::string &MultipleRootMeshReference,
+		const std::string &MultipleRootAnimationReference,
+		const std::string &VisualAnimationReference
+	) {
+		using namespace gargantuan;
+		std::vector<std::string> Diagnostics;
+		AnimationRuntime Runtime(Assets, [&](std::string Code, std::string) {
+			Diagnostics.push_back(std::move(Code));
+		});
+		const AnimationUpdateContext HeadlessContext{
+			.Environment = AnimationRuntimeEnvironment::Headless,
+			.VisibilityComplete = true,
+			.SemanticRequirementsComplete = true,
+		};
+		const AnimationUpdateContext OffscreenContext{
+			.Environment = AnimationRuntimeEnvironment::Graphical,
+			.ViewOrigin = {0.0f, 6.0f, 0.0f},
+			.HasViewOrigin = true,
+			.VisibilityGeneration = 1,
+			.VisibilityPublication = 1,
+			.VisibilityComplete = true,
+			.SemanticRequirementsComplete = true,
+		};
+
+		auto CharacterValue = std::make_shared<KinematicCharacter>();
+		CharacterValue->SetName("RootMotionNpc");
+		CharacterValue->SetPosition({0.0f, 6.0f, 0.0f});
+		CharacterValue->SetParent(WorkspaceValue);
+		auto Rig = std::make_shared<MeshPart>();
+		Rig->SetName("RootMotionRig");
+		Rig->SetMesh(MeshReference);
+		Rig->SetCanCollide(false);
+		Rig->SetParent(CharacterValue);
+		CharacterValue->SetRootPart(Rig);
+		auto AnimatorValue = std::make_shared<Animator>();
+		AnimatorValue->SetParent(Rig);
+		Runtime.RegisterAnimator(AnimatorValue);
+		auto Track = AnimatorValue->CreateTrack(RootAnimationReference);
+		Track->SetRootMotionEnabled(true);
+		Track->SetLooped(true);
+		Track->Play();
+
+		auto Anchor = std::make_shared<Attachment>();
+		Anchor->SetJointPath("Root/Upper/Lower");
+		Anchor->SetCFrame(CFrame(0.25f, 0.0f, 0.0f));
+		Anchor->SetParent(Rig);
+		auto SpatialSound = std::make_shared<Sound>();
+		SpatialSound->SetParent(Anchor);
+		auto Prompt = std::make_shared<ProximityPrompt>();
+		Prompt->SetParent(Anchor);
+		auto Spatial = std::make_shared<SemanticSpatialResolver>(Assets, &Runtime);
+		Spatial->RegisterAttachment(Anchor);
+
+		Runtime.Step(0.0f, HeadlessContext);
+		Spatial->Step();
+		const auto InitialAnchor = Spatial->ResolveAttachment(Anchor);
+		const auto InitialCharacterTransform = CharacterValue->GetCFrame();
+		Runtime.Step(0.5f, HeadlessContext);
+		const auto &HalfRequests = Runtime.GetRootMotionRequests();
+		Check(
+			HalfRequests.size() == 1 && Near(HalfRequests.front().Delta.Translation, {1.0f, 0.25f, 0.0f}) &&
+				Near(HalfRequests.front().Delta.YawRadians, -std::numbers::pi_v<float> / 12.0f, 1.0e-3f),
+			"root extraction preserves horizontal, vertical, and world-up yaw interval motion"
+		);
+		Check(
+			CharacterValue->GetCFrame().FuzzyEq(InitialCharacterTransform),
+			"Animator evaluation emits a request without directly mutating Character authority"
+		);
+		auto RootPose = Runtime.GetPose(Rig->GetObjectId());
+		Check(
+			RootPose && RootPose->JointModelTransforms &&
+				Near(glm::vec3(RootPose->JointModelTransforms->at(0)[3]), glm::vec3(0.0f)) &&
+				Near(glm::mat4(RootPose->JointModelTransforms->at(0)), glm::mat4(1.0f), 2.0e-3f),
+			"visual root translation and world-up yaw are removed from the residual pose"
+		);
+		if (!HalfRequests.empty()) {
+			ScopedChangeJournalCapture JournalCapture;
+			auto Accepted = CharacterValue->AdmitMotion(*WorkspaceValue, {
+				.Translation = HalfRequests.front().Delta.Translation,
+				.YawRadians = HalfRequests.front().Delta.YawRadians,
+				.Source = CharacterMotionSource::Animation,
+				.LocalSpace = true,
+			});
+			auto MovementRecords = JournalCapture.Take();
+			Check(
+				Accepted.Succeeded() && Near(Accepted.AppliedTranslation, glm::vec3(1.0f, 0.25f, 0.0f)) &&
+					Near(CharacterValue->GetPosition(), glm::vec3(1.0f, 6.25f, 0.0f)) &&
+					Rig->GetCFrame().FuzzyEq(CharacterValue->GetCFrame()) && MovementRecords.empty(),
+				"generic Character admission commits accepted root motion through the KinematicCharacter controller"
+			);
+		}
+		Spatial->Step();
+		auto MovedAnchor = Spatial->ResolveAttachment(Anchor);
+		RootPose = Runtime.GetPose(Rig->GetObjectId());
+		if (MovedAnchor && RootPose && RootPose->JointModelTransforms) {
+			const auto OwnerMatrix = glm::translate(glm::mat4(1.0f), Rig->GetCFrame().Position) *
+				glm::mat4(Rig->GetCFrame().Rotation) * glm::scale(glm::mat4(1.0f), Rig->GetSize());
+			const auto LocalMatrix = glm::translate(glm::mat4(1.0f), Anchor->GetCFrame().Position) *
+				glm::mat4(Anchor->GetCFrame().Rotation);
+			const auto Expected = OwnerMatrix * RootPose->JointModelTransforms->at(2) * LocalMatrix;
+			Check(
+				Near(MovedAnchor->Matrix, Expected) && InitialAnchor &&
+					!Near(MovedAnchor->WorldCFrame.Position, InitialAnchor->WorldCFrame.Position) &&
+					SpatialSound->GetParent()->get() == Anchor.get() && Prompt->GetParent()->get() == Anchor.get(),
+				"Attachment, positional Sound, and Prompt compose from accepted Character motion plus residual joint pose"
+			);
+		} else
+			Check(false, "root-motion semantic anchor publishes a complete accepted world transform");
+
+		Track->Pause();
+		Runtime.Step(0.5f, HeadlessContext);
+		Check(Runtime.GetRootMotionRequests().empty(), "paused root motion produces no movement request");
+		Track->Resume();
+		Runtime.Step(0.25f, HeadlessContext);
+		Check(
+			Runtime.GetRootMotionRequests().size() == 1 &&
+				Near(Runtime.GetRootMotionRequests().front().Delta.IntervalStart, 0.5f) &&
+				Near(Runtime.GetRootMotionRequests().front().Delta.IntervalEnd, 0.75f) &&
+				Near(glm::length(Runtime.GetRootMotionRequests().front().Delta.Translation),
+					glm::length(glm::vec3(0.5f, 0.125f, 0.0f)), 2.0e-3f),
+			"resume continues from the paused extraction baseline"
+		);
+		Track->SetTimePosition(0.75f);
+		Runtime.Step(0.0f, HeadlessContext);
+		Check(Runtime.GetRootMotionRequests().empty(), "seek resets the extraction baseline without a phantom delta");
+		Runtime.Step(0.5f, HeadlessContext);
+		Check(
+			Runtime.GetRootMotionRequests().size() == 1 &&
+				Near(Runtime.GetRootMotionRequests().front().Delta.IntervalStart, 0.75f) &&
+				Near(Runtime.GetRootMotionRequests().front().Delta.IntervalEnd, 1.25f),
+			"loop-boundary extraction uses an unwrapped logical interval"
+		);
+		Track->SetTimePosition(0.5f);
+		Track->SetSpeed(2.0f);
+		Runtime.Step(1.0f, HeadlessContext);
+		Check(
+			Runtime.GetRootMotionRequests().size() == 1 &&
+				Near(Runtime.GetRootMotionRequests().front().Delta.IntervalStart, 0.5f) &&
+				Near(Runtime.GetRootMotionRequests().front().Delta.IntervalEnd, 2.5f) &&
+				glm::length(Runtime.GetRootMotionRequests().front().Delta.Translation) > 3.5f,
+			"multi-loop accumulation is arithmetic, bounded, and preserves cycle displacement"
+		);
+		Track->SetSpeed(0.5f);
+		Track->SetTimePosition(0.0f);
+		Runtime.Step(0.5f, HeadlessContext);
+		Check(
+			Runtime.GetRootMotionRequests().size() == 1 &&
+				Near(Runtime.GetRootMotionRequests().front().Delta.Translation, {0.5f, 0.125f, 0.0f}),
+			"half-speed playback scales the sampled root interval"
+		);
+		Track->Stop();
+		Runtime.Step(1.0f, HeadlessContext);
+		Check(Runtime.GetRootMotionRequests().empty(), "Stop clears root-motion extraction state");
+		Track->SetSpeed(1.0f);
+		Track->Play();
+		Runtime.Step(0.25f, OffscreenContext);
+		Check(
+			Runtime.GetMetrics().RootMotionRequiredAnimators == 1 &&
+				Runtime.GetMetrics().SemanticRequiredAnimators == 1 &&
+				Runtime.GetRootMotionRequests().size() == 1,
+			"offscreen and headless root-motion rigs remain semantic-required"
+		);
+		Track->SetRootMotionEnabled(false);
+		Runtime.Step(0.25f, OffscreenContext);
+		Check(
+			Runtime.GetMetrics().RootMotionRequiredAnimators == 0 &&
+				Runtime.GetMetrics().FrozenVisualAnimators == 1 && Runtime.GetRootMotionRequests().empty(),
+			"removing the root source returns an offscreen visual-only rig to Animation 2C freezing"
+		);
+
+		auto AlternateTrack = AnimatorValue->CreateTrack(RootAnimationReference);
+		AlternateTrack->SetRootMotionEnabled(true);
+		Check(
+			AlternateTrack->GetRootMotionEnabled() && !Track->GetRootMotionEnabled(),
+			"one Animator selects exactly one root-motion source and resets the displaced source"
+		);
+		AlternateTrack->SetLooped(true);
+		AlternateTrack->Play();
+		Runtime.Step(0.25f, HeadlessContext);
+		Check(Runtime.GetRootMotionRequests().size() == 1, "switching root tracks starts from a clean source baseline");
+		AlternateTrack->Stop();
+
+		auto VisualTrack = AnimatorValue->CreateTrack(VisualAnimationReference);
+		VisualTrack->SetRootMotionEnabled(true);
+		VisualTrack->Play();
+		Runtime.Step(0.25f, HeadlessContext);
+		Check(
+			Runtime.GetRootMotionRequests().empty() &&
+				std::ranges::contains(Diagnostics, std::string("RootMotionJoint")),
+			"a clip without a canonical root channel cannot create partial movement"
+		);
+		VisualTrack->Stop();
+		auto HugeTrack = AnimatorValue->CreateTrack(HugeRootAnimationReference);
+		HugeTrack->SetRootMotionEnabled(true);
+		HugeTrack->Play();
+		Runtime.Step(1.0f, HeadlessContext);
+		Check(
+			Runtime.GetRootMotionRequests().empty() && Runtime.GetMetrics().RootMotionRequestDrops > 0,
+			"an enormous finite root trajectory is rejected at the bounded movement-request boundary"
+		);
+		HugeTrack->Stop();
+
+		auto PlainCharacter = std::make_shared<Character>();
+		PlainCharacter->SetParent(WorkspaceValue);
+		Check(
+			!PlainCharacter->AdmitMotion(*WorkspaceValue, {.Translation = {1.0f, 0.0f, 0.0f}}).Succeeded(),
+			"Character without an installed kinematic movement specialization fails closed"
+		);
+		Check(
+			!CharacterValue->AdmitMotion(*WorkspaceValue, {
+				.Translation = {std::numeric_limits<float>::quiet_NaN(), 0.0f, 0.0f},
+			}).Succeeded() &&
+				!CharacterValue->AdmitMotion(*WorkspaceValue, {
+					.Translation = {std::numeric_limits<float>::infinity(), 0.0f, 0.0f},
+				}).Succeeded() &&
+				!CharacterValue->AdmitMotion(*WorkspaceValue, {.Translation = {17.0f, 0.0f, 0.0f}}).Succeeded(),
+			"Character admission rejects NaN, Inf, and over-bound motion without partial movement"
+		);
+		PlainCharacter->Destroy();
+
+		auto CollisionCharacter = std::make_shared<KinematicCharacter>();
+		CollisionCharacter->SetPosition({30.0f, 3.0f, 0.0f});
+		CollisionCharacter->SetParent(WorkspaceValue);
+		auto Wall = std::make_shared<Part>();
+		Wall->SetAnchored(true);
+		Wall->SetPosition({33.0f, 3.0f, 0.0f});
+		Wall->SetSize({2.0f, 8.0f, 20.0f});
+		Wall->SetParent(WorkspaceValue);
+		auto Blocked = CollisionCharacter->AdmitMotion(*WorkspaceValue, {
+			.Translation = {6.0f, 0.0f, 0.0f},
+			.Source = CharacterMotionSource::Animation,
+		});
+		Check(
+			Blocked.Succeeded() && Blocked.Collided && Blocked.AppliedTranslation.x < 2.0f,
+			"root-motion Character admission clips against rigid obstacle geometry"
+		);
+		CollisionCharacter->SetPosition({30.0f, 3.0f, 0.0f});
+		auto Slid = CollisionCharacter->AdmitMotion(*WorkspaceValue, {
+			.Translation = {6.0f, 0.0f, 4.0f},
+			.Source = CharacterMotionSource::Animation,
+		});
+		Check(
+			Slid.Succeeded() && Slid.Collided && Slid.AppliedTranslation.x < 2.0f &&
+				Slid.AppliedTranslation.z > 3.0f,
+			"root motion uses the existing bounded multi-plane capsule slide response"
+		);
+		Wall->Destroy();
+		const auto BeforeDiscardProof = CollisionCharacter->GetPosition();
+		auto DiscardProof = CollisionCharacter->AdmitMotion(*WorkspaceValue, {
+			.Translation = {0.0f, 0.0f, 1.0f},
+			.Source = CharacterMotionSource::Animation,
+		});
+		Check(
+			DiscardProof.Succeeded() && Near(DiscardProof.AppliedTranslation, {0.0f, 0.0f, 1.0f}) &&
+				Near(CollisionCharacter->GetPosition(), BeforeDiscardProof + glm::vec3(0.0f, 0.0f, 1.0f)),
+			"blocked root motion is discarded rather than accumulated as future movement debt"
+		);
+		CollisionCharacter->Destroy();
+
+		HugeTrack->SetRootMotionEnabled(false);
+		auto MultipleRootCharacter = std::make_shared<KinematicCharacter>();
+		MultipleRootCharacter->SetPosition({50.0f, 6.0f, 0.0f});
+		MultipleRootCharacter->SetParent(WorkspaceValue);
+		auto MultipleRootRig = std::make_shared<MeshPart>();
+		MultipleRootRig->SetMesh(MultipleRootMeshReference);
+		MultipleRootRig->SetCanCollide(false);
+		MultipleRootRig->SetParent(MultipleRootCharacter);
+		MultipleRootCharacter->SetRootPart(MultipleRootRig);
+		auto MultipleRootAnimator = std::make_shared<Animator>();
+		MultipleRootAnimator->SetParent(MultipleRootRig);
+		Runtime.RegisterAnimator(MultipleRootAnimator);
+		auto MultipleRootTrack = MultipleRootAnimator->CreateTrack(MultipleRootAnimationReference);
+		MultipleRootTrack->SetRootMotionEnabled(true);
+		MultipleRootTrack->Play();
+		Runtime.Step(0.25f, HeadlessContext);
+		Check(
+			Runtime.GetRootMotionRequests().empty() &&
+				std::ranges::contains(Diagnostics, std::string("RootMotionTopology")),
+			"multiple canonical skeleton roots reject root motion without partial movement"
+		);
+		MultipleRootCharacter->Destroy();
+
+		auto IntegrateAtIntervals = [&](std::span<const float> Intervals, float StartX) {
+			AnimationRuntime IntervalRuntime(Assets);
+			auto IntervalCharacter = std::make_shared<KinematicCharacter>();
+			IntervalCharacter->SetPosition({StartX, 100.0f, 0.0f});
+			IntervalCharacter->SetParent(WorkspaceValue);
+			auto IntervalRig = std::make_shared<MeshPart>();
+			IntervalRig->SetMesh(MeshReference);
+			IntervalRig->SetCanCollide(false);
+			IntervalRig->SetParent(IntervalCharacter);
+			IntervalCharacter->SetRootPart(IntervalRig);
+			auto IntervalAnimator = std::make_shared<Animator>();
+			IntervalAnimator->SetParent(IntervalRig);
+			IntervalRuntime.RegisterAnimator(IntervalAnimator);
+			auto IntervalTrack = IntervalAnimator->CreateTrack(RootAnimationReference);
+			IntervalTrack->SetRootMotionEnabled(true);
+			IntervalTrack->SetLooped(true);
+			IntervalTrack->Play();
+			IntervalRuntime.Step(0.0f, HeadlessContext);
+			for (const auto DeltaTime : Intervals) {
+				IntervalRuntime.Step(DeltaTime, HeadlessContext);
+				for (const auto &Request : IntervalRuntime.GetRootMotionRequests())
+					Check(IntervalCharacter->AdmitMotion(*WorkspaceValue, {
+						.Translation = Request.Delta.Translation,
+						.YawRadians = Request.Delta.YawRadians,
+						.Source = CharacterMotionSource::Animation,
+						.LocalSpace = true,
+					}).Succeeded(), "frame-rate root-motion request is admitted");
+			}
+			const auto Result = IntervalCharacter->GetCFrame();
+			IntervalCharacter->Destroy();
+			IntervalRuntime.Shutdown();
+			return Result;
+		};
+		auto ConstantIntervals = [](std::size_t Frequency) {
+			return std::vector<float>(Frequency, 1.0f / static_cast<float>(Frequency));
+		};
+		const auto Intervals30 = ConstantIntervals(30);
+		const auto Intervals60 = ConstantIntervals(60);
+		const auto Intervals120 = ConstantIntervals(120);
+		const auto Intervals144 = ConstantIntervals(144);
+		const std::array VariableIntervals{0.07f, 0.11f, 0.013f, 0.2f, 0.001f, 0.3f, 0.306f};
+		const auto Result30 = IntegrateAtIntervals(Intervals30, 100.0f);
+		const auto Result60 = IntegrateAtIntervals(Intervals60, 120.0f);
+		const auto Result120 = IntegrateAtIntervals(Intervals120, 140.0f);
+		const auto Result144 = IntegrateAtIntervals(Intervals144, 160.0f);
+		const auto VariableResult = IntegrateAtIntervals(VariableIntervals, 180.0f);
+		auto RelativeFrame = [](const CFrame &Value, float StartX) {
+			return CFrame(Value.Position - glm::vec3(StartX, 100.0f, 0.0f), Value.Rotation);
+		};
+		const auto ReferenceFrame = RelativeFrame(Result60, 120.0f);
+		Check(
+			RelativeFrame(Result30, 100.0f).FuzzyEq(ReferenceFrame, 3.0e-3) &&
+			RelativeFrame(Result120, 140.0f).FuzzyEq(ReferenceFrame, 3.0e-3) &&
+			RelativeFrame(Result144, 160.0f).FuzzyEq(ReferenceFrame, 3.0e-3) &&
+			RelativeFrame(VariableResult, 180.0f).FuzzyEq(ReferenceFrame, 3.0e-3),
+			"logical root-motion integration is equivalent at 30/60/120/144 Hz and variable delta"
+		);
+
+		Track->SetRootMotionEnabled(true);
+		Track->Play();
+		AnimationRuntimeTestAccess::BeforePoseMerge(Runtime, [&] { CharacterValue->Destroy(); });
+		Runtime.Step(0.25f, HeadlessContext);
+		Check(
+			Runtime.GetRootMotionRequests().empty() && Runtime.GetMetrics().StalePoseJobDrops > 0,
+			"destroying Character and Animator before merge rejects the generation-bound root candidate"
+		);
+
+		Spatial->Shutdown();
+		Runtime.Shutdown();
+		ChangeJournal::Get().Clear();
 	}
 
 	void TestSemanticAnimatedAnchors(
@@ -1420,6 +1808,20 @@ int main() {
 	CrossingScale.Document["animations"][0]["samplers"][2]["interpolation"] = "LINEAR";
 	StoreFloat(CrossingScale.Binary, CrossingScale.ScaleOffset + 3 * sizeof(float), -1.0f);
 	WriteBytes(Root / "assets" / "crossing-scale.glb", MakeGlb(CrossingScale));
+	auto NanRoot = MakeAnimationGltfFixture();
+	StoreFloat(NanRoot.Binary, NanRoot.RootTranslationOffset + 3 * sizeof(float),
+		std::numeric_limits<float>::quiet_NaN());
+	WriteBytes(Root / "assets" / "nan-root.glb", MakeGlb(NanRoot));
+	auto InfiniteRoot = MakeAnimationGltfFixture();
+	StoreFloat(InfiniteRoot.Binary, InfiniteRoot.RootRotationOffset + 5 * sizeof(float),
+		std::numeric_limits<float>::infinity());
+	WriteBytes(Root / "assets" / "infinite-root.glb", MakeGlb(InfiniteRoot));
+	auto HugeRoot = MakeAnimationGltfFixture();
+	StoreFloat(HugeRoot.Binary, HugeRoot.RootTranslationOffset + 12 * sizeof(float), 1'000.0f);
+	WriteBytes(Root / "assets" / "huge-root.glb", MakeGlb(HugeRoot));
+	auto MultipleRoots = MakeAnimationGltfFixture();
+	MultipleRoots.Document["nodes"][0].erase("children");
+	WriteBytes(Root / "assets" / "multiple-roots.glb", MakeGlb(MultipleRoots));
 	auto Oversized = MakeAnimationGltfFixture();
 	const auto OneAnimation = Oversized.Document["animations"][0];
 	Oversized.Document["animations"] = Json::array();
@@ -1440,10 +1842,13 @@ int main() {
 	auto MeshRecord = FindRecord(Import, AssetKind::Mesh);
 	auto WaveRecord = FindRecord(Import, AssetKind::Animation, "Wave");
 	auto CounterRecord = FindRecord(Import, AssetKind::Animation, "Counter");
-	Check(Import.Ok && Import.Records.size() == 3 && MeshRecord && WaveRecord && CounterRecord,
+	auto RootMotionRecord = FindRecord(Import, AssetKind::Animation, "RootMotion");
+	Check(Import.Ok && Import.Records.size() == 4 && MeshRecord && WaveRecord && CounterRecord && RootMotionRecord,
 		"one glTF source imports one skinned Mesh and one Animation asset per clip");
 	auto MeshResource = MeshRecord ? Assets->ResolveMeshResource(MeshRecord->Reference.Value) : std::nullopt;
 	auto WaveResource = WaveRecord ? Assets->ResolveAnimation(WaveRecord->Reference.Value) : std::nullopt;
+	auto RootMotionResource = RootMotionRecord
+		? Assets->ResolveAnimation(RootMotionRecord->Reference.Value) : std::nullopt;
 	auto AudioImport = Assets->ImportProjectAsset(
 		Mount, "assets/semantic-tone.wav", AssetKind::Audio, "Semantic Tone");
 	auto AudioRecord = FindRecord(AudioImport, AssetKind::Audio);
@@ -1457,12 +1862,25 @@ int main() {
 		WaveResource && WaveResource->Value.SkeletonAsset == MeshRecord->Id &&
 		WaveResource->Value.SkeletonCompatibilityId == MeshResource->Value.Skeleton->CompatibilityId,
 		"Animation artifacts carry a closed Mesh dependency and deterministic skeleton compatibility identity");
+	Check(RootMotionResource && RootMotionResource->Value.Tracks && RootMotionResource->Value.Tracks->size() == 1,
+		"canonical RootMotion clip targets the single topology-derived skeleton root");
 	if (MeshResource && MeshResource->Value.SkinInfluences) {
 		const auto &Normalized = MeshResource->Value.SkinInfluences->at(2).Weights;
 		Check(Near(Normalized.x + Normalized.y + Normalized.z + Normalized.w, 1.0f) &&
 			Near(Normalized.y, 0.25f) && Near(Normalized.z, 0.75f),
 			"import preserves four bounded normalized joint influences");
 	}
+	auto HugeRootImport = Assets->ImportProjectAsset(
+		Mount, "assets/huge-root.glb", AssetKind::Animation, "Huge Root Motion");
+	auto HugeRootRecord = FindRecord(HugeRootImport, AssetKind::Animation, "RootMotion");
+	Check(HugeRootImport.Ok && HugeRootRecord,
+		"finite but over-bound root trajectory imports for bounded runtime rejection");
+	auto MultipleRootImport = Assets->ImportProjectAsset(
+		Mount, "assets/multiple-roots.glb", AssetKind::Animation, "Multiple Root Motion");
+	auto MultipleRootMeshRecord = FindRecord(MultipleRootImport, AssetKind::Mesh);
+	auto MultipleRootRecord = FindRecord(MultipleRootImport, AssetKind::Animation, "RootMotion");
+	Check(MultipleRootImport.Ok && MultipleRootMeshRecord && MultipleRootRecord,
+		"multiple-root skeleton imports for runtime topology rejection");
 	auto DuplicateLeafImport = Assets->ImportProjectAsset(
 		Mount, "assets/duplicate-leaf.glb", AssetKind::Mesh, "Duplicate Leaf Rig");
 	auto DuplicateLeafMeshRecord = FindRecord(DuplicateLeafImport, AssetKind::Mesh);
@@ -1641,6 +2059,17 @@ int main() {
 		"the lower-identity Animator deterministically reclaims its target");
 	DuplicateAnimator->Destroy();
 	Runtime.Step(0.0f);
+	if (MeshRecord && RootMotionRecord && HugeRootRecord && MultipleRootMeshRecord && MultipleRootRecord && WaveRecord)
+		TestCharacterRootMotion(
+			Assets,
+			WorkspaceValue,
+			MeshRecord->Reference.Value,
+			RootMotionRecord->Reference.Value,
+			HugeRootRecord->Reference.Value,
+			MultipleRootMeshRecord->Reference.Value,
+			MultipleRootRecord->Reference.Value,
+			WaveRecord->Reference.Value
+		);
 
 	auto MeshChanges = Assets->DrainMeshChanges();
 	RenderPublisher Publisher;
@@ -1914,6 +2343,8 @@ int main() {
 	ValidateFailure("assets/bad-times.glb", "MalformedAnimation");
 	ValidateFailure("assets/singular-scale.glb", "MalformedAnimation");
 	ValidateFailure("assets/crossing-scale.glb", "MalformedAnimation");
+	ValidateFailure("assets/nan-root.glb", "NonFiniteGltf");
+	ValidateFailure("assets/infinite-root.glb", "NonFiniteGltf");
 	ValidateFailure("assets/oversized.glb", "GltfLimit");
 	if (MeshRecord && WaveRecord && CounterRecord && AudioRecord)
 		TestSemanticAnimatedAnchors(

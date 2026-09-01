@@ -72,7 +72,32 @@ namespace gargantuan {
 
 	void Animator::InvalidateTracks() {
 		for (auto &Track : Tracks) if (Track) Track->InvalidateRuntime();
+		RootMotionTrack.reset();
 		Tracks.clear();
+	}
+
+	void Animator::SetRootMotionSource(AnimationTrack &Track, bool Enabled) {
+		auto Found = std::ranges::find_if(Tracks, [&](const auto &Candidate) { return Candidate.get() == &Track; });
+		if (Found == Tracks.end()) throw std::invalid_argument("[Animation:Animator] root-motion track is not owned");
+		auto Current = RootMotionTrack.lock();
+		if (!Enabled) {
+			if (Current.get() != &Track) return;
+			Track.RootMotionEnabled = false;
+			Track.RootMotionBaselineValid = false;
+			Track.MarkChanged();
+			RootMotionTrack.reset();
+			return;
+		}
+		if (Current && Current.get() != &Track) {
+			Current->RootMotionEnabled = false;
+			Current->RootMotionBaselineValid = false;
+			Current->MarkChanged();
+		}
+		Track.RootMotionEnabled = true;
+		Track.RootMotionSampleTime = Track.LogicalTimePosition;
+		Track.RootMotionBaselineValid = true;
+		Track.MarkChanged();
+		RootMotionTrack = *Found;
 	}
 
 	int Animator::LoadAnimation(lua_State *L, Instance *InstanceValue) {

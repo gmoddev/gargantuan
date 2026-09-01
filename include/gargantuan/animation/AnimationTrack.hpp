@@ -28,12 +28,16 @@ namespace gargantuan {
 		std::uint64_t Revision = 1;
 		std::uint64_t ControlRevision = 1;
 		float TimePosition = 0.0f;
+		double LogicalTimePosition = 0.0;
+		double RootMotionSampleTime = 0.0;
 		float Speed = 1.0f;
 		float Weight = 1.0f;
 		bool Looped = false;
 		Enums::AnimationPlaybackState PlaybackState = Enums::AnimationPlaybackState::Stopped;
 		bool NaturalEndPose = false;
 		bool PendingEnded = false;
+		bool RootMotionEnabled = false;
+		bool RootMotionBaselineValid = false;
 		bool Invalidated = false;
 
 		void MarkChanged(bool ControlChange = true);
@@ -54,6 +58,8 @@ namespace gargantuan {
 		[[nodiscard]] float GetDuration() const { return Resource.Value.Duration; }
 		[[nodiscard]] bool GetLooped() const { return Looped; }
 		void SetLooped(bool Value);
+		[[nodiscard]] bool GetRootMotionEnabled() const { return RootMotionEnabled; }
+		void SetRootMotionEnabled(bool Value);
 		[[nodiscard]] Enums::AnimationPlaybackState GetPlaybackState() const { return PlaybackState; }
 		[[nodiscard]] float GetSpeed() const { return Speed; }
 		void SetSpeed(float Value);

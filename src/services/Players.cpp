@@ -61,10 +61,10 @@ namespace gargantuan {
 		PlayerAdded->Fire(Value);
 	}
 
-	void Players::StartDefaultRuntime() {
-		if (RuntimeStarted) return;
-		if (!GetDefaultControllerEnabled() && !GetDefaultCameraEnabled()) return;
-		constexpr std::array Names = {"DefaultActionMap", "DefaultPlayerController", "DefaultCamera"};
+	std::shared_ptr<Script> Players::StartDefaultRuntime() {
+		if (RuntimeStarted) return nullptr;
+		if (!GetDefaultControllerEnabled() && !GetDefaultCameraEnabled()) return nullptr;
+		constexpr std::array Names = {"DefaultActionMap", "DefaultCharacterRuntime", "DefaultLocomotion", "DefaultCamera"};
 		std::array<std::string, Names.size()> Sources;
 		for (std::size_t Index = 0; Index < Names.size(); ++Index)
 			Sources[Index] = ReadRuntimeModule(std::string(Names[Index]) + ".luau");
@@ -91,6 +91,7 @@ namespace gargantuan {
 		Bootstrap->SetSource(BootstrapSource);
 		Bootstrap->SetParent(Container);
 		RuntimeStarted = true;
+		return Bootstrap;
 	}
 
 	void Players::ShutdownRuntime() {

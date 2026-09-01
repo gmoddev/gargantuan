@@ -6,6 +6,14 @@ defect throughput.
 
 ## Evidence updates
 
+- Animation Foundation 3A establishes a canonical non-Humanoid `Character`,
+  engine-shipped replaceable Luau assembly/locomotion, renderer-neutral root
+  extraction, and collision-authoritative main-thread admission. Headless,
+  offscreen semantic scheduling, loop accumulation, stale jobs, package
+  closure, and 1/10/100/500 plus mixed-policy benchmarks are covered. Network
+  action identity/prediction, motion warping, IK/retargeting, animation graphs,
+  and portal transfer remain future work. The non-normative
+  `SpatialRegionsAndPortalTopology.md` is unchanged.
 - Environment / Lighting Foundation 1 establishes canonical saved Lighting and
   Sky semantics, renderer-neutral incremental publication, AssetService-owned
   coherent face residency, and the SDL shadow/Sky/opaque/GUI pipeline. Local

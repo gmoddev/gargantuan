@@ -21,6 +21,9 @@ namespace gargantuan {
 				[](AnimationTrack *self) { return self->GetLooped(); },
 				[](AnimationTrack *self, bool Value) { self->SetLooped(Value); })},
 			{"PlaybackState", Property::fromRead([](AnimationTrack *self) { return self->GetPlaybackState(); })},
+			{"RootMotionEnabled", Property::fromReadWrite<bool>(
+				[](AnimationTrack *self) { return self->GetRootMotionEnabled(); },
+				[](AnimationTrack *self, bool Value) { self->SetRootMotionEnabled(Value); })},
 			{"Speed", Property::fromReadWrite<float>(
 				[](AnimationTrack *self) { return self->GetSpeed(); },
 				[](AnimationTrack *self, float Value) { self->SetSpeed(Value); })},
@@ -66,7 +69,16 @@ namespace gargantuan {
 	void AnimationTrack::SetLooped(bool Value) {
 		if (Invalidated || Looped == Value) return;
 		Looped = Value;
+		RootMotionSampleTime = LogicalTimePosition;
+		RootMotionBaselineValid = RootMotionEnabled;
 		MarkChanged();
+	}
+
+	void AnimationTrack::SetRootMotionEnabled(bool Value) {
+		if (Invalidated || RootMotionEnabled == Value) return;
+		auto OwnerValue = Owner.lock();
+		if (!OwnerValue || OwnerValue->GetDestroyed() || OwnerValue->IsDestroying()) return;
+		OwnerValue->SetRootMotionSource(*this, Value);
 	}
 
 	void AnimationTrack::SetSpeed(float Value) {
@@ -84,6 +96,9 @@ namespace gargantuan {
 		Value = std::clamp(Value, 0.0f, GetDuration());
 		if (TimePosition == Value && !NaturalEndPose) return;
 		TimePosition = Value;
+		LogicalTimePosition = static_cast<double>(Value);
+		RootMotionSampleTime = LogicalTimePosition;
+		RootMotionBaselineValid = RootMotionEnabled;
 		NaturalEndPose = false;
 		PendingEnded = false;
 		MarkChanged();
@@ -101,6 +116,9 @@ namespace gargantuan {
 		auto OwnerValue = Owner.lock();
 		if (Invalidated || !OwnerValue || OwnerValue->GetDestroyed() || OwnerValue->IsDestroying()) return;
 		TimePosition = 0.0f;
+		LogicalTimePosition = 0.0;
+		RootMotionSampleTime = 0.0;
+		RootMotionBaselineValid = RootMotionEnabled;
 		NaturalEndPose = false;
 		PendingEnded = false;
 		PlaybackState = Enums::AnimationPlaybackState::Playing;
@@ -126,6 +144,9 @@ namespace gargantuan {
 		if (PlaybackState == Enums::AnimationPlaybackState::Stopped && TimePosition == 0.0f && !NaturalEndPose) return;
 		PlaybackState = Enums::AnimationPlaybackState::Stopped;
 		TimePosition = 0.0f;
+		LogicalTimePosition = 0.0;
+		RootMotionSampleTime = 0.0;
+		RootMotionBaselineValid = false;
 		NaturalEndPose = false;
 		PendingEnded = false;
 		MarkChanged();
@@ -135,8 +156,10 @@ namespace gargantuan {
 		if (Invalidated || PlaybackState != Enums::AnimationPlaybackState::Playing ||
 			!std::isfinite(DeltaTime) || DeltaTime <= 0.0f || Speed == 0.0f) return false;
 		const auto Duration = static_cast<double>(GetDuration());
-		const auto Advanced = static_cast<double>(TimePosition) + static_cast<double>(DeltaTime) * Speed;
+		const auto Advance = static_cast<double>(DeltaTime) * Speed;
+		const auto Advanced = LogicalTimePosition + Advance;
 		if (Looped) {
+			LogicalTimePosition = Advanced;
 			TimePosition = static_cast<float>(std::fmod(Advanced, Duration));
 			NaturalEndPose = false;
 			MarkChanged(false);
@@ -144,12 +167,14 @@ namespace gargantuan {
 		}
 		if (Advanced >= Duration) {
 			TimePosition = GetDuration();
+			LogicalTimePosition = Duration;
 			PlaybackState = Enums::AnimationPlaybackState::Stopped;
 			NaturalEndPose = true;
 			PendingEnded = true;
 			MarkChanged(false);
 			return true;
 		}
+		LogicalTimePosition = Advanced;
 		TimePosition = static_cast<float>(Advanced);
 		MarkChanged(false);
 		return true;
@@ -166,6 +191,10 @@ namespace gargantuan {
 		Invalidated = true;
 		PlaybackState = Enums::AnimationPlaybackState::Stopped;
 		TimePosition = 0.0f;
+		LogicalTimePosition = 0.0;
+		RootMotionSampleTime = 0.0;
+		RootMotionEnabled = false;
+		RootMotionBaselineValid = false;
 		NaturalEndPose = false;
 		PendingEnded = false;
 		Owner.reset();

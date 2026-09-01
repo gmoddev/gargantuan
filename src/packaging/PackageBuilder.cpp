@@ -14,6 +14,7 @@
 #include <bit>
 #include <cctype>
 #include <chrono>
+#include <cstdlib>
 #include <format>
 #include <fstream>
 #include <limits>
@@ -50,7 +51,8 @@ namespace gargantuan {
 		constexpr std::array RequiredRuntimeFiles{
 			"runtime/DefaultActionMap.luau",
 			"runtime/DefaultInteractionRuntime.luau",
-			"runtime/DefaultPlayerController.luau",
+			"runtime/DefaultCharacterRuntime.luau",
+			"runtime/DefaultLocomotion.luau",
 			"runtime/DefaultCamera.luau",
 			"runtime/DefaultPlayerRuntime.luau",
 			"runtime/GargantuanSans.ttf",
@@ -801,9 +803,26 @@ namespace gargantuan {
 	std::filesystem::path GetPackageUserDataRoot(ProjectId Identity) {
 		if (!Identity.IsValid()) throw std::invalid_argument("UserDataRoot requires a valid ProjectId");
 		char *Raw = SDL_GetPrefPath("Gargantuan", Identity.ToString().c_str());
-		if (!Raw) throw std::runtime_error("Could not resolve the Gargantuan user-data root");
-		std::filesystem::path Result(Raw);
-		SDL_free(Raw);
+		if (Raw) {
+			std::filesystem::path Result(Raw);
+			SDL_free(Raw);
+			return Result;
+		}
+		const std::string SdlError = SDL_GetError();
+		std::filesystem::path Result;
+#if defined(_WIN32)
+		if (const auto *ApplicationData = _wgetenv(L"APPDATA")) Result = ApplicationData;
+		else if (const auto *LocalApplicationData = _wgetenv(L"LOCALAPPDATA")) Result = LocalApplicationData;
+#else
+		if (const auto *DataHome = std::getenv("XDG_DATA_HOME")) Result = DataHome;
+		else if (const auto *UserHome = std::getenv("HOME")) Result = std::filesystem::path(UserHome) / ".local/share";
+#endif
+		if (Result.empty())
+			throw std::runtime_error(std::format(
+				"Could not resolve the Gargantuan user-data root: {}", SdlError
+			));
+		Result /= "Gargantuan";
+		Result /= Identity.ToString();
 		return Result;
 	}
 

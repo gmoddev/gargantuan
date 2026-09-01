@@ -14,7 +14,7 @@ return c({
 		},
 		Character = {
 			description = "The current runtime character, or nil while no character is spawned.",
-			type = t.Optional(t.Instance("KinematicCharacter")),
+			type = t.Optional(t.Instance("Character")),
 			unmodified = "std::nullopt",
 			overrideRead = "GetCharacter",
 			overrideWrite = "SetCharacter",
@@ -24,11 +24,11 @@ return c({
 	signals = {
 		CharacterAdded = {
 			description = "Fired after a new character relationship is committed.",
-			args = { t.Instance("KinematicCharacter") },
+			args = { t.Instance("Character") },
 		},
 		CharacterRemoving = {
 			description = "Fired before the old character is destroyed or externally removed.",
-			args = { t.Instance("KinematicCharacter") },
+			args = { t.Instance("Character") },
 		},
 		CharacterSpawnRequested = {
 			description = "Fired synchronously so replaceable Luau assembly policy can create a character.",

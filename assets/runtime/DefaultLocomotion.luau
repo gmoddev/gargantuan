@@ -1,9 +1,4 @@
-return function(Players, ActionMap, Workspace, RunService)
-	local LocalPlayer = Players.LocalPlayer
-	if LocalPlayer == nil then
-		error("[Player:Controller] Players.LocalPlayer is unavailable")
-	end
-
+return function(LocalPlayer, ActionMap, Workspace, RunService)
 	local JumpRequested = false
 	local WalkSpeed = 16
 	local JumpSpeed = 50
@@ -12,41 +7,19 @@ return function(Players, ActionMap, Workspace, RunService)
 	local StepForwardInset = 1
 	local GroundProbeDistance = 0.2
 
-	local function AssembleCharacter()
-		local Character = Instance.new("KinematicCharacter")
-		Character.Name = LocalPlayer.Name .. "Character"
-		Character.Position = Vector3.new(0, 6, 0)
-		Character.Parent = Workspace
-
-		local RootPart = Instance.new("Part")
-		RootPart.Name = "CharacterRoot"
-		RootPart.Anchored = true
-		RootPart.CanCollide = false
-		RootPart.CanTouch = false
-		RootPart.Size = Vector3.new(2, 4, 2)
-		RootPart.Position = Character.Position
-		RootPart.Parent = Character
-		Character.RootPart = RootPart
-		LocalPlayer.Character = Character
-	end
-
-	local SpawnConnection = LocalPlayer.CharacterSpawnRequested:Connect(AssembleCharacter)
 	local ActionConnection = ActionMap.ActionBegan:Connect(function(ActionName)
 		if ActionName == "Jump" then
 			JumpRequested = true
 		end
 	end)
 
-	if Players.CharacterAutoLoads then
-		LocalPlayer:LoadCharacter()
-	end
-
 	local SimulationConnection = RunService.PreSimulation:Connect(function(DeltaTime)
 		local Character = LocalPlayer.Character
-		if Character == nil or DeltaTime <= 0 then
+		if Character == nil or not Character:IsA("KinematicCharacter") or DeltaTime <= 0 then
 			JumpRequested = false
 			return
 		end
+		DeltaTime = math.min(DeltaTime, 0.1)
 
 		local Camera = Workspace.CurrentCamera
 		local Forward = Camera.CFrame.LookVector
@@ -83,17 +56,11 @@ return function(Players, ActionMap, Workspace, RunService)
 		JumpRequested = false
 
 		local Translation = Velocity * DeltaTime
-		local Motion = Workspace:MoveKinematicCapsule(
-			Character.Position,
-			Character.CapsuleRadius,
-			Character.CapsuleHeight,
-			Translation,
-			Velocity
-		)
+		local Motion = Character:Move(Translation, Velocity)
 
-		-- Step policy stays in Luau: the native boundary only supplies bounded
-		-- capsule motion and contact data. At most three extra queries are made,
-		-- and only when grounded horizontal motion loses tangential progress.
+		-- Preview-only capsule queries keep step selection in Luau. Accepted
+		-- segments still commit through Character:Move, so Character remains the
+		-- sole transform owner and the native primitive remains game-neutral.
 		local DesiredHorizontal = Vector3.new(Translation.X, 0, Translation.Z)
 		local AppliedHorizontal = Vector3.new(Motion.AppliedTranslation.X, 0, Motion.AppliedTranslation.Z)
 		if WasGrounded
@@ -101,8 +68,9 @@ return function(Players, ActionMap, Workspace, RunService)
 			and Motion.Collided
 			and AppliedHorizontal.Magnitude + 0.01 < DesiredHorizontal.Magnitude
 		then
+			local StepOrigin = Character.Position
 			local StepUp = Workspace:MoveKinematicCapsule(
-				Character.Position,
+				StepOrigin,
 				Character.CapsuleRadius,
 				Character.CapsuleHeight,
 				Vector3.new(0, StepHeight, 0),
@@ -125,37 +93,32 @@ return function(Players, ActionMap, Workspace, RunService)
 					StepForward.Velocity
 				)
 				local SteppedHorizontal = Vector3.new(
-					StepDown.Position.X - Character.Position.X,
+					StepDown.Position.X - StepOrigin.X,
 					0,
-					StepDown.Position.Z - Character.Position.Z
+					StepDown.Position.Z - StepOrigin.Z
 				)
 				if StepDown.HasFloor
 					and StepDown.FloorNormal.Y >= WalkableFloorY
-					and StepDown.Position.Y > Character.Position.Y + 0.1
-					and SteppedHorizontal.Magnitude > AppliedHorizontal.Magnitude + 0.01
+					and StepDown.Position.Y > StepOrigin.Y + 0.1
+					and SteppedHorizontal.Magnitude > 0.01
 				then
-					Motion = StepDown
+					Character:Move(StepUp.AppliedTranslation, Velocity)
+					Character:Move(StepForward.AppliedTranslation, StepForward.Velocity)
+					Motion = Character:Move(StepDown.AppliedTranslation, StepDown.Velocity)
 				end
 			end
 		end
-		Character.Position = Motion.Position
+
 		Character.Velocity = Motion.Velocity
 		Character.FloorNormal = Motion.FloorNormal
 		Character.Grounded = Motion.HasFloor and Motion.FloorNormal.Y >= WalkableFloorY and Character.Velocity.Y <= 0
 		if Character.Grounded and Character.Velocity.Y < 0 then
 			Character.Velocity = Vector3.new(Character.Velocity.X, 0, Character.Velocity.Z)
 		end
-
-		local RootPart = Character.RootPart
-		if RootPart ~= nil then
-			RootPart.CFrame = CFrame.new(Character.Position)
-		end
 	end)
 
 	return function()
 		SimulationConnection:Disconnect()
 		ActionConnection:Disconnect()
-		SpawnConnection:Disconnect()
-		LocalPlayer:RemoveCharacter()
 	end
 end

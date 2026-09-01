@@ -12,7 +12,7 @@ if Players.DefaultControllerEnabled or Players.DefaultCameraEnabled then
 	)
 end
 if Players.DefaultControllerEnabled then
-	table.insert(Cleanups, require("@game/Players/PlayerRuntimeModules/DefaultPlayerController")(Players, ActionMap, Workspace, RunService))
+	table.insert(Cleanups, require("@game/Players/PlayerRuntimeModules/DefaultCharacterRuntime")(Players, ActionMap, Workspace, RunService))
 end
 if Players.DefaultCameraEnabled then
 	table.insert(Cleanups, require("@game/Players/PlayerRuntimeModules/DefaultCamera")(Players, ActionMap, UserInputService, Workspace, RunService))

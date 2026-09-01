@@ -2,6 +2,7 @@
 
 #include "gargantuan/animation/AnimationTrack.hpp"
 #include "gargantuan/classes/Animator.hpp"
+#include "gargantuan/classes/Character.hpp"
 #include "gargantuan/classes/MeshPart.hpp"
 #include "gargantuan/runtime/JobSystem.hpp"
 #include "gargantuan/services/AssetService.hpp"
@@ -257,6 +258,32 @@ namespace gargantuan {
 			std::uint64_t ControlRevision = 0;
 			float TimePosition = 0.0f;
 			float Weight = 0.0f;
+			bool RootMotionSource = false;
+		};
+
+		struct RootMotionEvaluationInput {
+			std::shared_ptr<const std::vector<ImportedAnimationTrack>> ClipTracks;
+			std::int32_t ClipTrackIndex = -1;
+			std::size_t JointIndex = 0;
+			ImportedSkeletonJoint Joint;
+			double IntervalStart = 0.0;
+			double IntervalEnd = 0.0;
+			float Duration = 0.0f;
+			bool Looped = false;
+			bool Enabled = false;
+			ObjectId SourceAnimator;
+			ObjectId SourceRig;
+			std::uint64_t SourceTrackSequence = 0;
+			std::uint64_t AnimationRevision = 0;
+			std::uint64_t ControlRevision = 0;
+		};
+
+		struct RootMotionEvaluationOutput {
+			RootMotionDelta Delta;
+			glm::vec3 StartTranslation{0.0f};
+			glm::quat StartRotation{1.0f, 0.0f, 0.0f, 0.0f};
+			bool BaselineValid = false;
+			bool DeltaValid = false;
 		};
 
 		struct PoseEvaluationWork {
@@ -269,14 +296,130 @@ namespace gargantuan {
 			std::shared_ptr<std::vector<RenderVertex>> Vertices;
 			RenderBounds Bounds;
 			AnimationRuntimeMetrics Timing;
+			RootMotionEvaluationInput RootMotion;
+			RootMotionEvaluationOutput RootMotionOutput;
 			PoseEvaluationFailure Failure = PoseEvaluationFailure::None;
 			std::uint64_t WorkerCpuNanoseconds = 0;
 			bool CpuSkinningFallback = false;
 			bool DetailedProfiling = false;
 		};
 
+		struct RootTrajectoryPose {
+			glm::vec3 Translation{0.0f};
+			glm::quat Rotation{1.0f, 0.0f, 0.0f, 0.0f};
+		};
+
+		std::optional<float> ExtractWorldUpYaw(const glm::quat &Rotation) {
+			if (!std::isfinite(Rotation.x) || !std::isfinite(Rotation.y) || !std::isfinite(Rotation.z) ||
+				!std::isfinite(Rotation.w) || glm::dot(Rotation, Rotation) < 1.0e-12f)
+				return std::nullopt;
+			const auto Forward = glm::normalize(Rotation) * glm::vec3(0.0f, 0.0f, -1.0f);
+			const auto HorizontalSquared = Forward.x * Forward.x + Forward.z * Forward.z;
+			if (!IsFinite(Forward) || HorizontalSquared < 1.0e-10f) return std::nullopt;
+			return std::atan2(-Forward.x, -Forward.z);
+		}
+
+		std::optional<RootTrajectoryPose> SampleRootPose(
+			const RootMotionEvaluationInput &Input,
+			float Time
+		) {
+			if (!Input.ClipTracks || Input.ClipTrackIndex < 0 ||
+				static_cast<std::size_t>(Input.ClipTrackIndex) >= Input.ClipTracks->size())
+				return std::nullopt;
+			const auto &Track = Input.ClipTracks->at(static_cast<std::size_t>(Input.ClipTrackIndex));
+			auto Translation = SampleVector(Track.TranslationKeys, Track.TranslationInterpolation, Time, nullptr)
+				.value_or(Input.Joint.BindTranslation);
+			auto Rotation = SampleRotation(Track.RotationKeys, Track.RotationInterpolation, Time, nullptr)
+				.value_or(Input.Joint.BindRotation);
+			if (!IsFinite(Translation) || !std::isfinite(Rotation.x) || !std::isfinite(Rotation.y) ||
+				!std::isfinite(Rotation.z) || !std::isfinite(Rotation.w) || glm::dot(Rotation, Rotation) < 1.0e-12f)
+				return std::nullopt;
+			return RootTrajectoryPose{Translation, glm::normalize(Rotation)};
+		}
+
+		CFrame PowTransform(CFrame Base, std::uint64_t Exponent) {
+			CFrame Result;
+			while (Exponent != 0) {
+				if ((Exponent & 1u) != 0) Result = Result * Base;
+				Exponent >>= 1u;
+				if (Exponent != 0) Base = Base * Base;
+			}
+			return Result;
+		}
+
+		std::optional<CFrame> RootTrajectoryAt(
+			const RootMotionEvaluationInput &Input,
+			double LogicalTime,
+			const RootTrajectoryPose &Start
+		) {
+			if (!std::isfinite(LogicalTime) || LogicalTime < 0.0 || !std::isfinite(Input.Duration) ||
+				Input.Duration <= 0.0f)
+				return std::nullopt;
+			auto RelativeAt = [&](float Time) -> std::optional<CFrame> {
+				auto Current = SampleRootPose(Input, Time);
+				if (!Current) return std::nullopt;
+				const auto RelativeRotation = glm::normalize(glm::inverse(Start.Rotation) * Current->Rotation);
+				const auto Yaw = ExtractWorldUpYaw(RelativeRotation);
+				if (!Yaw) return std::nullopt;
+				const auto Translation = glm::inverse(Start.Rotation) * (Current->Translation - Start.Translation);
+				return CFrame(
+					Translation,
+					glm::mat3_cast(glm::angleAxis(*Yaw, glm::vec3(0.0f, 1.0f, 0.0f)))
+				);
+			};
+			if (!Input.Looped) return RelativeAt(static_cast<float>(std::min<double>(LogicalTime, Input.Duration)));
+			const auto CycleCountValue = std::floor(LogicalTime / Input.Duration);
+			if (CycleCountValue < 0.0 ||
+				CycleCountValue > static_cast<double>(std::numeric_limits<std::uint64_t>::max()))
+				return std::nullopt;
+			const auto CycleCount = static_cast<std::uint64_t>(CycleCountValue);
+			const auto Remainder = static_cast<float>(LogicalTime - CycleCountValue * Input.Duration);
+			auto Cycle = RelativeAt(Input.Duration);
+			auto Tail = RelativeAt(std::clamp(Remainder, 0.0f, Input.Duration));
+			if (!Cycle || !Tail) return std::nullopt;
+			return PowTransform(*Cycle, CycleCount) * *Tail;
+		}
+
+		RootMotionEvaluationOutput EvaluateRootMotion(const RootMotionEvaluationInput &Input) {
+			RootMotionEvaluationOutput Output;
+			if (!Input.Enabled) return Output;
+			auto StartPose = SampleRootPose(Input, 0.0f);
+			if (!StartPose) return Output;
+			Output.StartTranslation = StartPose->Translation;
+			Output.StartRotation = StartPose->Rotation;
+			Output.BaselineValid = true;
+			auto From = RootTrajectoryAt(Input, Input.IntervalStart, *StartPose);
+			auto To = RootTrajectoryAt(Input, Input.IntervalEnd, *StartPose);
+			if (!From || !To) return Output;
+			const auto DeltaTransform = From->Inverse() * *To;
+			const auto Yaw = ExtractWorldUpYaw(DeltaTransform.ToQuaternion());
+			if (!Yaw || !IsFinite(DeltaTransform.Position) ||
+				glm::length(DeltaTransform.Position) > Character::MaximumMotionTranslation ||
+				std::abs(*Yaw) > Character::MaximumMotionYawRadians)
+				return Output;
+			Output.Delta = {
+				.Translation = DeltaTransform.Position,
+				.YawRadians = *Yaw,
+				.SourceAnimator = Input.SourceAnimator,
+				.SourceRig = Input.SourceRig,
+				.SourceTrackSequence = Input.SourceTrackSequence,
+				.AnimationRevision = Input.AnimationRevision,
+				.IntervalStart = Input.IntervalStart,
+				.IntervalEnd = Input.IntervalEnd,
+			};
+			Output.DeltaValid = true;
+			return Output;
+		}
+
 		void EvaluatePose(PoseEvaluationWork &Work) {
 			const auto WorkerStarted = std::chrono::steady_clock::now();
+			const auto RootMotionStarted = std::chrono::steady_clock::now();
+			Work.RootMotionOutput = EvaluateRootMotion(Work.RootMotion);
+			Work.Timing.RootMotionExtractionCpuNanoseconds = static_cast<std::uint64_t>(
+				std::chrono::duration_cast<std::chrono::nanoseconds>(
+					std::chrono::steady_clock::now() - RootMotionStarted
+				).count()
+			);
 			const auto &Joints = *Work.Mesh.Skeleton->Joints;
 			auto *DetailedMetrics = Work.DetailedProfiling ? &Work.Timing : nullptr;
 			const auto SamplingStarted = std::chrono::steady_clock::now();
@@ -307,6 +450,9 @@ namespace gargantuan {
 							Track.TimePosition,
 							DetailedMetrics
 						)) {
+						if (Track.RootMotionSource && JointIndex == Work.RootMotion.JointIndex &&
+							Work.RootMotionOutput.BaselineValid)
+							*Value = Work.RootMotionOutput.StartTranslation;
 						TranslationSum += *Value * Track.Weight;
 						TranslationWeight += Track.Weight;
 					}
@@ -319,6 +465,18 @@ namespace gargantuan {
 					if (auto Value = SampleRotation(
 							ClipTrack.RotationKeys, ClipTrack.RotationInterpolation, Track.TimePosition, DetailedMetrics
 						)) {
+						if (Track.RootMotionSource && JointIndex == Work.RootMotion.JointIndex &&
+							Work.RootMotionOutput.BaselineValid) {
+							const auto Relative = glm::normalize(
+								glm::inverse(Work.RootMotionOutput.StartRotation) * *Value
+							);
+							if (const auto Yaw = ExtractWorldUpYaw(Relative)) {
+								const auto YawRotation = glm::angleAxis(*Yaw, glm::vec3(0.0f, 1.0f, 0.0f));
+								*Value = glm::normalize(
+									Work.RootMotionOutput.StartRotation * glm::inverse(YawRotation) * Relative
+								);
+							}
+						}
 						RotationSamples[RotationSampleCount++] = {*Value, Track.Weight};
 						RotationWeight += Track.Weight;
 					}
@@ -485,6 +643,8 @@ namespace gargantuan {
 		struct PendingEvaluation {
 			ObjectId AnimatorObject;
 			ObjectId TargetObject;
+			ObjectId CharacterObject;
+			std::weak_ptr<Character> CharacterValue;
 			TrackedAnimator *Tracked = nullptr;
 			RenderMeshIdentity SourceMesh;
 			std::uint64_t SourceContentRevision = 0;
@@ -500,7 +660,9 @@ namespace gargantuan {
 		std::set<std::pair<ObjectId, std::string>> EmittedDiagnostics;
 		std::vector<RenderAnimationPoseState> PoseUpdates;
 		std::vector<RenderAnimationPoseRemove> PoseRemoves;
+		std::vector<CharacterRootMotionRequest> RootMotionRequests;
 		std::vector<ObjectId> ClaimedTargets;
+		std::vector<ObjectId> ClaimedRootMotionCharacters;
 		std::vector<ObjectId> RefreshRequests;
 		std::vector<PendingEvaluation> PendingEvaluations;
 		struct PoseJobBatch {
@@ -529,7 +691,9 @@ namespace gargantuan {
 			: Assets(std::move(AssetsValue)), Diagnostic(std::move(DiagnosticValue)), Options(OptionsValue) {
 			PoseUpdates.reserve(64);
 			PoseRemoves.reserve(64);
+			RootMotionRequests.reserve(64);
 			ClaimedTargets.reserve(AnimationRuntime::MaximumAnimators);
+			ClaimedRootMotionCharacters.reserve(AnimationRuntime::MaximumAnimators);
 			RefreshRequests.reserve(AnimationRuntime::MaximumAnimators);
 			PendingEvaluations.reserve(64);
 		}
@@ -596,7 +760,9 @@ namespace gargantuan {
 		const auto Started = std::chrono::steady_clock::now();
 		State->PoseUpdates.clear();
 		State->PoseRemoves.clear();
+		State->RootMotionRequests.clear();
 		if (!std::isfinite(DeltaTime) || DeltaTime < 0.0f) DeltaTime = 0.0f;
+		DeltaTime = std::min(DeltaTime, 60.0f);
 		const auto DeltaNanoseconds = static_cast<std::uint64_t>(
 			std::llround(std::min(static_cast<double>(DeltaTime), 60.0) * 1'000'000'000.0)
 		);
@@ -612,8 +778,10 @@ namespace gargantuan {
 		State->Metrics.ReducedRateAnimators = 0;
 		State->Metrics.FrozenVisualAnimators = 0;
 		State->Metrics.SemanticRequiredAnimators = 0;
+		State->Metrics.RootMotionRequiredAnimators = 0;
 		State->Metrics.ActivePoseJobs = 0;
 		State->ClaimedTargets.clear();
+		State->ClaimedRootMotionCharacters.clear();
 		State->PendingEvaluations.clear();
 
 		const bool SemanticSummaryValid = Context.SemanticRequirementsComplete &&
@@ -670,6 +838,21 @@ namespace gargantuan {
 
 			Tracked.CurrentTrackRevisions.clear();
 			Tracked.CurrentControlRevisions.clear();
+			auto RootMotionTrack = AnimatorValue->RootMotionTrack.lock();
+			const bool RootMotionRequired = RootMotionTrack && RootMotionTrack->RootMotionEnabled &&
+				!RootMotionTrack->Invalidated &&
+				(RootMotionTrack->PlaybackState == Enums::AnimationPlaybackState::Playing ||
+				 RootMotionTrack->NaturalEndPose);
+			double RootMotionIntervalStart = 0.0;
+			double RootMotionIntervalEnd = 0.0;
+			bool RootMotionHasBaseline = false;
+			if (RootMotionRequired) {
+				RootMotionIntervalStart = RootMotionTrack->RootMotionSampleTime;
+				RootMotionIntervalEnd = RootMotionTrack->LogicalTimePosition;
+				RootMotionHasBaseline = RootMotionTrack->RootMotionBaselineValid;
+				RootMotionTrack->RootMotionSampleTime = RootMotionIntervalEnd;
+				RootMotionTrack->RootMotionBaselineValid = true;
+			}
 			std::size_t VisibleTrackCount = 0;
 			for (const auto &Track : Tracked.TrackSnapshot) {
 				if (!Track || Track->Invalidated) continue;
@@ -680,8 +863,8 @@ namespace gargantuan {
 					Track->Weight > 0.0f)
 					++VisibleTrackCount;
 			}
-			State->Metrics.ActiveTracks += VisibleTrackCount;
-			if (VisibleTrackCount == 0) {
+			State->Metrics.ActiveTracks += VisibleTrackCount + (RootMotionRequired && RootMotionTrack->Weight <= 0.0f ? 1 : 0);
+			if (VisibleTrackCount == 0 && !RootMotionRequired) {
 				State->RemovePose(Tracked);
 				if (Tracked.TargetObject.IsValid()) std::erase(State->RefreshRequests, Tracked.TargetObject);
 				Tracked.ObservedTrackRevisions = Tracked.CurrentTrackRevisions;
@@ -750,6 +933,28 @@ namespace gargantuan {
 				++Iterator;
 				continue;
 			}
+			std::size_t RootJointIndex = 0;
+			std::size_t RootJointCount = 0;
+			for (std::size_t JointIndex = 0; JointIndex < Mesh->Value.Skeleton->Joints->size(); ++JointIndex)
+				if (Mesh->Value.Skeleton->Joints->at(JointIndex).Parent < 0) {
+					RootJointIndex = JointIndex;
+					++RootJointCount;
+				}
+			std::shared_ptr<Character> RootMotionCharacter;
+			if (RootMotionRequired) {
+				auto Current = MeshPartValue->GetParent();
+				while (Current && *Current) {
+					if (auto Candidate = std::dynamic_pointer_cast<Character>(*Current)) {
+						RootMotionCharacter = std::move(Candidate);
+						break;
+					}
+					Current = (*Current)->GetParent();
+				}
+				if (RootJointCount != 1)
+					State->Emit(Object, "RootMotionTopology", "Root motion requires exactly one skeleton root joint");
+				else if (!RootMotionCharacter)
+					State->Emit(Object, "RootMotionCharacter", "Root-motion Animator is not under a live Character");
+			}
 
 			const auto PolicyStarted = std::chrono::steady_clock::now();
 
@@ -758,8 +963,9 @@ namespace gargantuan {
 			const bool RigChanged = Tracked.SourceContentRevision != Mesh->ContentRevision ||
 									Tracked.SourceMesh != Mesh->Mesh || Tracked.Compatibility != Compatibility ||
 									TargetChanged;
-			const bool SemanticRequired = !SemanticSummaryValid ||
+			const bool SemanticRequired = RootMotionRequired || !SemanticSummaryValid ||
 										  ContainsIdentity(Context.SemanticRequiredObjects, TargetObject);
+			if (RootMotionRequired) ++State->Metrics.RootMotionRequiredAnimators;
 			AnimationUpdatePolicyClass NextPolicy = AnimationUpdatePolicyClass::FullRate;
 			std::uint64_t CadenceNanoseconds = 0;
 			if (SemanticRequired)
@@ -885,6 +1091,8 @@ namespace gargantuan {
 			auto &Pending = State->PendingEvaluations.emplace_back();
 			Pending.AnimatorObject = Object;
 			Pending.TargetObject = TargetObject;
+			Pending.CharacterObject = RootMotionCharacter ? RootMotionCharacter->GetObjectId() : ObjectId{};
+			Pending.CharacterValue = RootMotionCharacter;
 			Pending.Tracked = &Tracked;
 			Pending.SourceMesh = Mesh->Mesh;
 			Pending.SourceContentRevision = Mesh->ContentRevision;
@@ -897,6 +1105,31 @@ namespace gargantuan {
 			Pending.Work.Bounds = Mesh->Value.Bounds;
 			Pending.Work.CpuSkinningFallback = State->Options.CpuSkinningFallback;
 			Pending.Work.DetailedProfiling = State->Options.DetailedProfiling;
+			if (RootMotionRequired && RootMotionHasBaseline && RootJointCount == 1 && RootMotionCharacter) {
+				const auto RootClipTrackIndex = RootMotionTrack->JointTrackIndices &&
+					RootJointIndex < RootMotionTrack->JointTrackIndices->size()
+					? RootMotionTrack->JointTrackIndices->at(RootJointIndex)
+					: -1;
+				if (RootClipTrackIndex < 0)
+					State->Emit(Object, "RootMotionJoint", "Root-motion clip does not animate the canonical skeleton root");
+				else
+					Pending.Work.RootMotion = {
+						.ClipTracks = RootMotionTrack->Resource.Value.Tracks,
+						.ClipTrackIndex = RootClipTrackIndex,
+						.JointIndex = RootJointIndex,
+						.Joint = Joints[RootJointIndex],
+						.IntervalStart = RootMotionIntervalStart,
+						.IntervalEnd = RootMotionIntervalEnd,
+						.Duration = RootMotionTrack->Resource.Value.Duration,
+						.Looped = RootMotionTrack->Looped,
+						.Enabled = true,
+						.SourceAnimator = Object,
+						.SourceRig = TargetObject,
+						.SourceTrackSequence = RootMotionTrack->CreationSequence,
+						.AnimationRevision = RootMotionTrack->Revision,
+						.ControlRevision = RootMotionTrack->ControlRevision,
+					};
+			}
 			if (State->Options.CpuSkinningFallback)
 				Pending.Work.Vertices = AcquireBuffer(
 					Tracked.VertexPools, Mesh->Value.Vertices->size(), State->Metrics
@@ -916,6 +1149,7 @@ namespace gargantuan {
 				Input.ControlRevision = Track->ControlRevision;
 				Input.TimePosition = Track->TimePosition;
 				Input.Weight = Track->Weight;
+				Input.RootMotionSource = Track == RootMotionTrack;
 			}
 			++Iterator;
 			continue;
@@ -990,6 +1224,7 @@ namespace gargantuan {
 			State->Metrics.HierarchyCpuNanoseconds += Work.Timing.HierarchyCpuNanoseconds;
 			State->Metrics.SkinMatrixCpuNanoseconds += Work.Timing.SkinMatrixCpuNanoseconds;
 			State->Metrics.SkinningCpuNanoseconds += Work.Timing.SkinningCpuNanoseconds;
+			State->Metrics.RootMotionExtractionCpuNanoseconds += Work.Timing.RootMotionExtractionCpuNanoseconds;
 			State->Metrics.PoseWorkerCpuNanoseconds += Work.WorkerCpuNanoseconds;
 			const auto Found = State->Animators.find(Pending.AnimatorObject);
 			auto AnimatorValue = Pending.Tracked ? Pending.Tracked->Value.lock() : nullptr;
@@ -1015,6 +1250,14 @@ namespace gargantuan {
 					}
 				}
 			InputCurrent = InputCurrent && CurrentTrackCount == Work.TrackCount;
+			if (InputCurrent && Work.RootMotion.Enabled) {
+				auto CurrentRootMotionTrack = AnimatorValue->RootMotionTrack.lock();
+				InputCurrent = CurrentRootMotionTrack && CurrentRootMotionTrack->RootMotionEnabled &&
+					!CurrentRootMotionTrack->Invalidated &&
+					CurrentRootMotionTrack->CreationSequence == Work.RootMotion.SourceTrackSequence &&
+					CurrentRootMotionTrack->Revision == Work.RootMotion.AnimationRevision &&
+					CurrentRootMotionTrack->ControlRevision == Work.RootMotion.ControlRevision;
+			}
 			if (InputCurrent) {
 				const auto Parent = AnimatorValue->GetParent();
 				auto MeshPartValue = Parent ? std::dynamic_pointer_cast<MeshPart>(*Parent) : nullptr;
@@ -1025,6 +1268,21 @@ namespace gargantuan {
 							   CurrentMesh->ContentRevision == Pending.SourceContentRevision &&
 							   CurrentMesh->Value.Skeleton &&
 							   CurrentMesh->Value.Skeleton->CompatibilityId == Pending.Compatibility;
+				if (InputCurrent && Work.RootMotion.Enabled) {
+					auto CharacterValue = Pending.CharacterValue.lock();
+					bool CharacterIsAncestor = false;
+					auto Current = MeshPartValue ? MeshPartValue->GetParent() : std::nullopt;
+					while (Current && *Current) {
+						if (Current->get() == CharacterValue.get()) {
+							CharacterIsAncestor = true;
+							break;
+						}
+						Current = (*Current)->GetParent();
+					}
+					InputCurrent = CharacterValue && !CharacterValue->GetDestroyed() &&
+						!CharacterValue->IsDestroying() && CharacterValue->GetObjectId() == Pending.CharacterObject &&
+						CharacterValue->GetDataModel() == AnimatorValue->GetDataModel() && CharacterIsAncestor;
+				}
 			}
 			if (!InputCurrent) {
 				++State->Metrics.StalePoseJobDrops;
@@ -1095,6 +1353,43 @@ namespace gargantuan {
 				)
 					.count()
 			);
+			if (Work.RootMotion.Enabled) {
+				const auto RequestStarted = std::chrono::steady_clock::now();
+				const bool IntervalAdvanced = Work.RootMotion.IntervalEnd > Work.RootMotion.IntervalStart;
+				const bool HasMotion = Work.RootMotionOutput.DeltaValid &&
+					(glm::length(Work.RootMotionOutput.Delta.Translation) > 1.0e-7f ||
+					 std::abs(Work.RootMotionOutput.Delta.YawRadians) > 1.0e-7f);
+				if (IntervalAdvanced && !Work.RootMotionOutput.DeltaValid)
+					++State->Metrics.RootMotionRequestDrops;
+				else if (HasMotion) {
+					auto Claim = std::ranges::lower_bound(
+						State->ClaimedRootMotionCharacters, Pending.CharacterObject
+					);
+					if (Claim != State->ClaimedRootMotionCharacters.end() && *Claim == Pending.CharacterObject) {
+						++State->Metrics.RootMotionRequestDrops;
+						State->Emit(
+							Pending.AnimatorObject,
+							"DuplicateRootMotionSource",
+							"Only one Animator may submit root motion to a Character in one runtime step"
+						);
+					} else if (State->RootMotionRequests.size() >= MaximumAnimators)
+						++State->Metrics.RootMotionRequestDrops;
+					else {
+						State->ClaimedRootMotionCharacters.insert(Claim, Pending.CharacterObject);
+						State->RootMotionRequests.push_back({
+							.Target = Pending.CharacterValue,
+							.TargetCharacter = Pending.CharacterObject,
+							.Delta = Work.RootMotionOutput.Delta,
+						});
+						++State->Metrics.RootMotionRequests;
+					}
+				}
+				State->Metrics.RootMotionRequestCpuNanoseconds += static_cast<std::uint64_t>(
+					std::chrono::duration_cast<std::chrono::nanoseconds>(
+						std::chrono::steady_clock::now() - RequestStarted
+					).count()
+				);
+			}
 			if (Pending.ExplicitRefresh) {
 				const auto Refresh = std::ranges::lower_bound(State->RefreshRequests, Pending.TargetObject);
 				if (Refresh != State->RefreshRequests.end() && *Refresh == Pending.TargetObject)
@@ -1135,6 +1430,7 @@ namespace gargantuan {
 		State->Animators.clear();
 		State->Poses.clear();
 		State->RefreshRequests.clear();
+		State->RootMotionRequests.clear();
 		State->PendingEvaluations.clear();
 		State->Metrics.TrackedAnimators = 0;
 		State->Metrics.ActiveRigs = 0;
@@ -1157,6 +1453,11 @@ namespace gargantuan {
 	const std::vector<RenderAnimationPoseRemove> &AnimationRuntime::GetPoseRemoves() const {
 		static const std::vector<RenderAnimationPoseRemove> Empty;
 		return State ? State->PoseRemoves : Empty;
+	}
+
+	const std::vector<CharacterRootMotionRequest> &AnimationRuntime::GetRootMotionRequests() const {
+		static const std::vector<CharacterRootMotionRequest> Empty;
+		return State ? State->RootMotionRequests : Empty;
 	}
 
 	void AnimationRuntime::ClearChanges() {

@@ -45,7 +45,8 @@ the repository, Studio, and asset source files are not runtime dependencies.
 
 All gameplay content resolves through `AssetService`. The project imports a
 static glTF mesh with its material/image dependency graph, a two-bone skinned
-glTF mesh with a looping `BeaconPulse` Animation, one font, and one PCM16 WAV.
+glTF mesh with looping `BeaconPulse` and one-shot `BeaconLunge` Animations, one
+font, and one PCM16 WAV.
 Each collectible plays the clip positionally while round completion plays it
 as a non-positional UI sound. Gameplay Luau does not read source asset files,
 and hearing the cues is never required for game correctness.
@@ -71,6 +72,18 @@ backends use the retained CPU reference/fallback path without a gameplay API
 difference. The packaged GPU gate compares the semantic socket against the
 current joint-model transform and GPU palette oracle, and renderer replacement
 does not reset the socket or track.
+
+`RootMotionShowcase` is ordinary persisted game Luau authored through the
+generic EditorHost Script path. At Play it composes two NPC
+`KinematicCharacter` Instances from the same skinned Mesh and `BeaconLunge`
+clip, opts each track into `RootMotionEnabled`, and assigns a descendant
+`RootPart`. The open NPC completes its lunge, while a rigid authored-at-runtime
+barrier clips the second NPC through the same Character/capsule authority.
+Neither NPC has a Player or Humanoid. Headless validation observes roughly
+0.50 m versus 0.155 m during its fixed observation interval; the packaged
+Vulkan proof independently observes full-versus-clipped displacement while GPU
+palette animation continues. The requested clip delta never writes either
+Character CFrame directly.
 
 The saved fixture also authors the canonical `Lighting` service with afternoon
 sun, ambient light, exposure, bounded fog, and a direct six-face `Sky`. All six

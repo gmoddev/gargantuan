@@ -2,6 +2,7 @@
 
 #include "gargantuan/classes/BasePart.hpp"
 #include "gargantuan/datatypes/CFrame.hpp"
+#include "gargantuan/render/RenderDirtyAccumulator.hpp"
 
 #include <glm/gtx/euler_angles.hpp>
 
@@ -29,6 +30,15 @@ namespace gargantuan {
 
 	void BasePart::ApplyImpulse(glm::vec3 impulse) {
 		AccumulatedImpulse += impulse;
+	}
+
+	void BasePart::SetCharacterSimulationCFrame(const gargantuan::CFrame &Value) {
+		if (CFrame.FuzzyEq(Value)) return;
+		CFrame = Value;
+		RenderDirtyAccumulator::Get().Mark(
+			GetReplicationScopeId(), GetObjectId(), RenderUpdateDomain::Transform);
+		if (auto Found = PropertyChangedSignals.find("CFrame"); Found != PropertyChangedSignals.end() && Found->second)
+			Found->second->Fire({});
 	}
 
 }

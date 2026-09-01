@@ -7,12 +7,13 @@
 
 namespace gargantuan {
 	class Players;
+	class Character;
 
 	class Player : public Instance {
 		I_Player;
 
 		friend class Players;
-		std::shared_ptr<KinematicCharacter> CharacterValue;
+		std::shared_ptr<Character> CharacterValue;
 		std::optional<PlayerIdentity> AuthenticationIdentity;
 		SignalConnection::Pointer CharacterDestroyingConnection;
 		bool ShuttingDownCharacter = false;

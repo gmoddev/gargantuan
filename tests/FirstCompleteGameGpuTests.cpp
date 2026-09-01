@@ -1,6 +1,7 @@
 #include "gargantuan/Engine.hpp"
 #include "gargantuan/assets/AssetTypes.hpp"
 #include "gargantuan/classes/Attachment.hpp"
+#include "gargantuan/classes/KinematicCharacter.hpp"
 #include "gargantuan/classes/MeshPart.hpp"
 #include "gargantuan/filesystem/DiskFilesystem.hpp"
 #include "gargantuan/filesystem/Project.hpp"
@@ -182,6 +183,14 @@ int main() {
 			}
 		}
 		Require(InitialRevision != 0, "packaged AnimatedBeacon never published a GPU palette pose");
+		auto OpenRootMotionNpc = WorkspaceValue ? std::dynamic_pointer_cast<KinematicCharacter>(
+			WorkspaceValue->FindFirstChild("RootMotionOpenNpc", true)) : nullptr;
+		auto BlockedRootMotionNpc = WorkspaceValue ? std::dynamic_pointer_cast<KinematicCharacter>(
+			WorkspaceValue->FindFirstChild("RootMotionBlockedNpc", true)) : nullptr;
+		Require(OpenRootMotionNpc && BlockedRootMotionNpc,
+			"packaged graphical runtime did not assemble the root-motion proof Characters");
+		const auto OpenRootMotionStart = OpenRootMotionNpc->GetPosition();
+		const auto BlockedRootMotionStart = BlockedRootMotionNpc->GetPosition();
 		auto InitialSemantic = RuntimeEngine.Spatial->ResolveAttachment(BeaconAnchor);
 		auto InitialPose = RuntimeEngine.Animation->GetPose(BeaconObject);
 		auto MeshResource = RuntimeEngine.Assets->ResolveMeshResource(AnimatedBeacon->GetMesh());
@@ -230,6 +239,13 @@ int main() {
 			}
 		}
 		const auto Steady = Renderer->GetMetrics();
+		const auto OpenRootMotionDistance = glm::length(OpenRootMotionNpc->GetPosition() - OpenRootMotionStart);
+		const auto BlockedRootMotionDistance = glm::length(
+			BlockedRootMotionNpc->GetPosition() - BlockedRootMotionStart
+		);
+		Require(OpenRootMotionDistance > 0.08f &&
+			BlockedRootMotionDistance + 0.05f < OpenRootMotionDistance && BlockedRootMotionDistance < 0.20f,
+			"packaged graphical root motion did not distinguish full movement from collision clipping");
 		Require(BeaconPaletteUpdates > 0 && LatestRevision > InitialRevision &&
 			Steady.PaletteUploads - Baseline.PaletteUploads >= BeaconPaletteUpdates &&
 			Steady.VertexBufferCreations == Baseline.VertexBufferCreations &&
@@ -274,6 +290,8 @@ int main() {
 			<< " paletteBytes=" << Steady.PaletteUploadBytes - Baseline.PaletteUploadBytes
 			<< " skinnedSourceResources=" << Steady.SkinnedSourceResourceCreations
 			<< " cpuVertexUploads=" << Steady.CpuSkinnedVertexUploads
+			<< " openRootMotion=" << OpenRootMotionDistance
+			<< " blockedRootMotion=" << BlockedRootMotionDistance
 			<< " rendererRestart=PASS\n";
 		RuntimeEngine.Destroy();
 		RestartedRenderer.reset();

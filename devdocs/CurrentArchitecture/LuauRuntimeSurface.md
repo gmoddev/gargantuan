@@ -128,7 +128,7 @@ only bounded owned value data for collision resolution. There is no broad
 raycast/overlap/filter surface yet.
 
 The executable carries engine-shipped `DefaultActionMap`,
-`DefaultPlayerController`, and `DefaultCamera` Luau modules. They start in a
+`DefaultCharacterRuntime`, `DefaultLocomotion`, and `DefaultCamera` Luau modules. They start in a
 runtime-only unarchivable subtree and clean up on Stop. Games can serialize the
 Players opt-out flags and continue using the low-level input, RunService, Camera,
 and kinematic query APIs.

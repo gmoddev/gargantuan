@@ -7,6 +7,7 @@
 #include <box3d/types.h>
 
 #include <algorithm>
+#include <array>
 #include <cfloat>
 #include <cmath>
 #include <limits>
@@ -263,7 +264,8 @@ namespace gargantuan {
 				};
 				struct PlaneContext {
 					const Box3DPhysicsBackend *Self = nullptr;
-					std::vector<b3CollisionPlane> Planes;
+					std::array<b3CollisionPlane, MaximumKinematicCollisionPlanes> Planes{};
+					std::size_t PlaneCount = 0;
 					glm::vec3 ContactNormal{0.0f};
 					glm::vec3 FloorNormal{0.0f};
 					float ContactScore = 1.0f;
@@ -272,7 +274,6 @@ namespace gargantuan {
 					bool Truncated = false;
 				} Context;
 				Context.Self = this;
-				Context.Planes.reserve(MaximumKinematicCollisionPlanes);
 				Context.MotionDirection = Request.Translation == glm::vec3(0.0f) ? glm::vec3(0.0f)
 																				 : glm::normalize(Request.Translation);
 
@@ -284,16 +285,16 @@ namespace gargantuan {
 						const auto *Record = Context->Self->FindBody(*Owner);
 						if (!Record || !Record->Description.CanCollide) return true;
 						for (int Index = 0; Index < PlaneCount; ++Index) {
-							if (Context->Planes.size() == MaximumKinematicCollisionPlanes) {
+							if (Context->PlaneCount == MaximumKinematicCollisionPlanes) {
 								Context->Truncated = true;
 								return false;
 							}
-							Context->Planes.push_back({
+							Context->Planes[Context->PlaneCount++] = {
 								.plane = Planes[Index].plane,
 								.pushLimit = FLT_MAX,
 								.push = 0.0f,
 								.clipVelocity = true,
-							});
+							};
 							const auto Normal = Box3DConversions::FromBox3(Planes[Index].plane.normal);
 							if (Normal.y > Context->FloorScore) {
 								Context->FloorScore = Normal.y;
@@ -308,7 +309,7 @@ namespace gargantuan {
 						return true;
 					};
 				auto GatherPlanes = [&](const glm::vec3 &Position) {
-					Context.Planes.clear();
+					Context.PlaneCount = 0;
 					Context.ContactNormal = {};
 					Context.FloorNormal = {};
 					Context.ContactScore = 1.0f;
@@ -325,14 +326,14 @@ namespace gargantuan {
 				constexpr float MotionToleranceSquared = 0.0001f;
 				for (std::size_t Iteration = 0; Iteration < MaximumKinematicMotionIterations; ++Iteration) {
 					GatherPlanes(CurrentPosition);
-					Collided = Collided || !Context.Planes.empty();
+					Collided = Collided || Context.PlaneCount != 0;
 					PlanesTruncated = PlanesTruncated || Context.Truncated;
 					const auto TargetDelta = TargetPosition - CurrentPosition;
 					const auto SolvedDelta = Box3DConversions::FromBox3(
 						b3SolvePlanes(
 							Box3DConversions::ToBox3(TargetDelta),
 							Context.Planes.data(),
-							static_cast<int>(Context.Planes.size())
+							static_cast<int>(Context.PlaneCount)
 						).delta
 					);
 					if (glm::dot(SolvedDelta, SolvedDelta) < MotionToleranceSquared) break;
@@ -359,17 +360,17 @@ namespace gargantuan {
 				}
 
 				GatherPlanes(CurrentPosition);
-				Collided = Collided || !Context.Planes.empty();
+				Collided = Collided || Context.PlaneCount != 0;
 				PlanesTruncated = PlanesTruncated || Context.Truncated;
-				if (!Context.Planes.empty()) {
+				if (Context.PlaneCount != 0) {
 					const auto Correction = Box3DConversions::FromBox3(
-						b3SolvePlanes(b3Vec3_zero, Context.Planes.data(), static_cast<int>(Context.Planes.size())).delta
+						b3SolvePlanes(b3Vec3_zero, Context.Planes.data(), static_cast<int>(Context.PlaneCount)).delta
 					);
 					CurrentPosition += Correction;
 					Result.Velocity = Box3DConversions::FromBox3(b3ClipVector(
 						Box3DConversions::ToBox3(Request.Velocity),
 						Context.Planes.data(),
-						static_cast<int>(Context.Planes.size())
+						static_cast<int>(Context.PlaneCount)
 					));
 				}
 				Result.Position = CurrentPosition;
