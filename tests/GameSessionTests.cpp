@@ -731,6 +731,12 @@ end)
 			EngineProviderConfiguration{.AudioEnabled = false, .Mode = RuntimeMode::NetworkServer}
 		);
 		ServerRuntime.ProcessService->Alive = true;
+		auto SpatialPlacement = ServerRuntime.Players->PlayerAdded->Connect([](std::shared_ptr<Player> PlayerValue) {
+			if (!PlayerValue || !PlayerValue->GetCharacter()) return;
+			auto CharacterValue = std::dynamic_pointer_cast<KinematicCharacter>(*PlayerValue->GetCharacter());
+			if (CharacterValue)
+				CharacterValue->SetPosition({static_cast<float>(PlayerValue->GetPlayerId() - 1) * 1000.0f, 6.0f, 0.0f});
+		});
 		GameSession Server(
 			ServerTransport, Configuration(GameSessionRole::Server, "two-client-session"), &ServerRuntime
 		);
@@ -805,6 +811,80 @@ end)
 			if (SecondLocal && PlayerValue->GetPlayerId() == (*SecondLocal)->GetPlayerId())
 				SecondCharacter = CharacterValue;
 		}
+		const auto FirstConnection = First.GetPrimaryConnection();
+		for (std::uint64_t Tick = 161; Tick <= 180; ++Tick) {
+			if (FirstRuntime) FirstRuntime->Step();
+			if (SecondRuntime) SecondRuntime->Step();
+			ServerRuntime.Step();
+			Network->Pump();
+			(void)Server.Poll();
+			(void)First.Poll();
+			(void)Second.Poll();
+			Server.Step(Tick);
+			First.Step(Tick);
+			Second.Step(Tick);
+			(void)Network->Advance(20ms);
+		}
+		auto FindClientCharacter = [](Engine *RuntimeValue, std::uint32_t PlayerId) {
+			if (!RuntimeValue) return std::shared_ptr<KinematicCharacter>{};
+			for (const auto &PlayerValue : RuntimeValue->Players->GetPlayers())
+				if (PlayerValue->GetPlayerId() == PlayerId && PlayerValue->GetCharacter())
+					return std::dynamic_pointer_cast<KinematicCharacter>(*PlayerValue->GetCharacter());
+			return std::shared_ptr<KinematicCharacter>{};
+		};
+		auto FirstOwnReplica = FirstLocal
+								   ? FindClientCharacter(
+										 FirstRuntime.get(), static_cast<std::uint32_t>((*FirstLocal)->GetPlayerId())
+									 )
+								   : nullptr;
+		auto FirstRemoteReplica =
+			SecondLocal
+				? FindClientCharacter(FirstRuntime.get(), static_cast<std::uint32_t>((*SecondLocal)->GetPlayerId()))
+				: nullptr;
+		auto SecondOwnReplica = SecondLocal
+									? FindClientCharacter(
+										  SecondRuntime.get(), static_cast<std::uint32_t>((*SecondLocal)->GetPlayerId())
+									  )
+									: nullptr;
+		auto SecondRemoteReplica =
+			FirstLocal
+				? FindClientCharacter(SecondRuntime.get(), static_cast<std::uint32_t>((*FirstLocal)->GetPlayerId()))
+				: nullptr;
+		Check(
+			FirstOwnReplica && FirstOwnReplica->GetRootPart() && SecondOwnReplica && SecondOwnReplica->GetRootPart() &&
+				FirstRemoteReplica && !FirstRemoteReplica->GetRootPart() && SecondRemoteReplica &&
+				!SecondRemoteReplica->GetRootPart(),
+			"two peers keep their owner Character pinned while distant remote Character descendants unpublish"
+		);
+		if (SecondCharacter) SecondCharacter->SetPosition({100.0f, 6.0f, 0.0f});
+		for (std::uint64_t Tick = 181; Tick <= 200; ++Tick) {
+			if (FirstRuntime) FirstRuntime->Step();
+			if (SecondRuntime) SecondRuntime->Step();
+			ServerRuntime.Step();
+			Network->Pump();
+			(void)Server.Poll();
+			(void)First.Poll();
+			(void)Second.Poll();
+			Server.Step(Tick);
+			First.Step(Tick);
+			Second.Step(Tick);
+			(void)Network->Advance(20ms);
+		}
+		FirstRemoteReplica = SecondLocal
+								 ? FindClientCharacter(
+									   FirstRuntime.get(), static_cast<std::uint32_t>((*SecondLocal)->GetPlayerId())
+								   )
+								 : nullptr;
+		SecondRemoteReplica = FirstLocal
+								  ? FindClientCharacter(
+										SecondRuntime.get(), static_cast<std::uint32_t>((*FirstLocal)->GetPlayerId())
+									)
+								  : nullptr;
+		Check(
+			FirstRemoteReplica && FirstRemoteReplica->GetRootPart() && SecondRemoteReplica &&
+				SecondRemoteReplica->GetRootPart(),
+			"remote Characters reenter both client materialization views at current authoritative position"
+		);
 		const auto FirstStart = FirstCharacter ? FirstCharacter->GetPosition() : glm::vec3{};
 		const auto SecondStart = SecondCharacter ? SecondCharacter->GetPosition() : glm::vec3{};
 		if (FirstRuntime)
@@ -816,7 +896,7 @@ end)
 					.State = ButtonState::Pressed,
 				}
 			);
-		for (std::uint64_t Tick = 161; Tick <= 210; ++Tick) {
+		for (std::uint64_t Tick = 201; Tick <= 250; ++Tick) {
 			if (FirstRuntime) FirstRuntime->Step();
 			if (SecondRuntime) SecondRuntime->Step();
 			ServerRuntime.Step();
@@ -838,12 +918,11 @@ end)
 			"first connection cannot move the other Player's Character"
 		);
 
-		const auto FirstConnection = First.GetPrimaryConnection();
 		if (FirstConnection)
 			(void)FirstTransport->Disconnect(
 				*FirstConnection, {DisconnectReason::LocalShutdown, "two-client isolation disconnect"}
 			);
-		for (std::uint64_t Tick = 211; Tick <= 225; ++Tick) {
+		for (std::uint64_t Tick = 251; Tick <= 265; ++Tick) {
 			Network->Pump();
 			(void)Server.Poll();
 			(void)First.Poll();
@@ -932,7 +1011,7 @@ int main() {
 		TestPreAcceptanceAndTimeoutRejection();
 		TestSpoofedReadyPlayerRejection();
 		TestAcceptedConnectionChurn();
-		for (int Cycle = 0; Cycle < 10; ++Cycle)
+		for (int Cycle = 0; Cycle < 100; ++Cycle)
 			TestProductionLifecycleComposition();
 		TestTwoClientIdentityAndControlIsolation();
 		TestServerCharacterAutoLoadsPolicy();

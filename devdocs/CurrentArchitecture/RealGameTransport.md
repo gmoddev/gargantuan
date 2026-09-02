@@ -76,6 +76,12 @@ and reliable ordering after it accepts the message. `UnreliableUnordered` and
 rejection remains scheduler policy; the adapter carries the strong order/channel
 metadata without interpreting application state.
 
+Peer relevance remains above this adapter. The production `GameSession` uses
+the same accepted `ConnectionId` with server-owned relevance to queue bounded
+structural Publish/Unpublish frames and relevant GCHR state; GNS transports
+those frames without accepting focus, pin, region, or ObjectId requests from a
+client. No 3E-specific backend or envelope field was required.
+
 The adapter adds a private 32-byte compatibility envelope to each GNS message.
 It carries a fixed magic, adapter-envelope version, validated delivery mode,
 traffic class, order-domain kind, state channel, and strong sequence. It contains

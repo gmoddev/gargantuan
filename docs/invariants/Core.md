@@ -187,6 +187,18 @@ Tests should enforce them where practical.
    bounded. Congestion cannot cause unbounded memory growth.
 7. Runtime schema is frozen before gameplay replication begins, and clients never
    receive runtime schema-definition authority.
+8. The authoritative server owns peer relevance. Client Luau cannot force an
+   arbitrary Instance, Character, focus, region, or pin into materialization.
+9. Desired relevance, dependency closure, queued structural work, and known
+   client materialization are distinct states. GCHR publication uses the same
+   Character relevance result and stale materialization lifetimes cannot apply
+   after leave/reentry.
+10. A relevant child retains valid ancestry. Only schema-declared hard or
+    non-nullable references expand dependency closure; nullable soft references
+    may be unresolved without retaining arbitrary reference graphs.
+11. Peer unpublish is not server destruction. Reentry publishes current
+    authoritative state, never historical off-interest backlog, and ObjectId
+    generation rules remain authoritative in both cases.
 
 ## Changes requiring architecture review
 

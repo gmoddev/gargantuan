@@ -73,6 +73,12 @@ namespace gargantuan::network {
 				   Order->Sequence.Value() == Sequence.Value();
 		}
 
+		std::optional<CharacterMaterializationEpoch> NextMaterializationEpoch(CharacterMaterializationEpoch Current) {
+			if (!Current.IsValid()) return CharacterMaterializationEpoch(1);
+			if (Current.Value() >= std::numeric_limits<std::uint16_t>::max()) return std::nullopt;
+			return Current.TryNext();
+		}
+
 		void HashWord(std::uint64_t &Hash, std::uint64_t Value) {
 			for (std::size_t Index = 0; Index < sizeof(Value); ++Index) {
 				Hash ^= static_cast<std::uint8_t>(Value >> (Index * 8));
@@ -145,6 +151,7 @@ namespace gargantuan::network {
 		std::map<ObjectId, StateChannelId> Materialized;
 		std::map<ObjectId, PublicationState> Published;
 		CharacterStateFrameSequence NextFrameSequence{1};
+		CharacterMaterializationEpoch MaterializationEpoch;
 	};
 
 	struct AuthoritativeCharacterNetwork::CharacterState {
@@ -223,9 +230,16 @@ namespace gargantuan::network {
 	bool AuthoritativeCharacterNetwork::UnregisterCharacter(ObjectId Character, std::uint64_t AuthoritativeTick) {
 		auto Found = Characters.find(Character);
 		if (Found == Characters.end()) return false;
+		for (const auto &[Connection, Peer] : Peers) {
+			(void)Connection;
+			if (Peer.Materialized.contains(Character) && !NextMaterializationEpoch(Peer.MaterializationEpoch))
+				return false;
+		}
 		(void)RevokeControl(Character, AuthoritativeTick);
 		for (auto &[Connection, Peer] : Peers) {
-			Peer.Materialized.erase(Character);
+			(void)Connection;
+			if (Peer.Materialized.erase(Character))
+				Peer.MaterializationEpoch = *NextMaterializationEpoch(Peer.MaterializationEpoch);
 			Peer.Published.erase(Character);
 		}
 		Characters.erase(Found);
@@ -236,16 +250,22 @@ namespace gargantuan::network {
 		ConnectionId Connection, ObjectId Character, StateChannelId Channel
 	) {
 		auto Peer = Peers.find(Connection);
-		if (Peer == Peers.end() || !Characters.contains(Character) || !Channel.IsValid() ||
+		auto NextEpoch = Peer == Peers.end() ? std::nullopt
+											 : NextMaterializationEpoch(Peer->second.MaterializationEpoch);
+		if (Peer == Peers.end() || !Characters.contains(Character) || !Channel.IsValid() || !NextEpoch ||
 			!Peer->second.Materialized.emplace(Character, Channel).second)
 			return false;
+		Peer->second.MaterializationEpoch = *NextEpoch;
 		Peer->second.Published.erase(Character);
 		return true;
 	}
 
 	bool AuthoritativeCharacterNetwork::MarkUnmaterialized(ConnectionId Connection, ObjectId Character) {
 		auto Peer = Peers.find(Connection);
-		if (Peer == Peers.end() || !Peer->second.Materialized.erase(Character)) return false;
+		auto NextEpoch = Peer == Peers.end() ? std::nullopt
+											 : NextMaterializationEpoch(Peer->second.MaterializationEpoch);
+		if (Peer == Peers.end() || !NextEpoch || !Peer->second.Materialized.erase(Character)) return false;
+		Peer->second.MaterializationEpoch = *NextEpoch;
 		Peer->second.Published.erase(Character);
 		auto Found = Characters.find(Character);
 		if (Found != Characters.end() && Found->second.Controller == Connection)
@@ -718,6 +738,7 @@ namespace gargantuan::network {
 				CharacterStateFrame Frame{
 					.ServerTick = AuthoritativeTick,
 					.FrameSequence = Peer.NextFrameSequence,
+					.MaterializationEpoch = Peer.MaterializationEpoch,
 					.StateCount = 1,
 				};
 				Frame.States[0] = *State;
@@ -777,7 +798,10 @@ namespace gargantuan::network {
 		const auto AssemblyStarted = std::chrono::steady_clock::now();
 		const auto ByteLimit = std::min(Configuration.MaximumStateFrameBytes, Limits.MaximumUnreliableMessageBytes);
 		for (auto &[Connection, Peer] : Peers) {
-			CharacterStateFrame Frame{.ServerTick = AuthoritativeTick};
+			CharacterStateFrame Frame{
+				.ServerTick = AuthoritativeTick,
+				.MaterializationEpoch = Peer.MaterializationEpoch,
+			};
 			std::size_t EncodedBytes = CharacterStateFrameHeaderBytes;
 			StateChannelId FrameChannel;
 			std::uint64_t PeerBatchCount = 0;
@@ -797,7 +821,10 @@ namespace gargantuan::network {
 						SaturatingIncrement(Metrics.SemanticStateBytes, SemanticStateBytes(State));
 					}
 				}
-				Frame = CharacterStateFrame{.ServerTick = AuthoritativeTick};
+				Frame = CharacterStateFrame{
+					.ServerTick = AuthoritativeTick,
+					.MaterializationEpoch = Peer.MaterializationEpoch,
+				};
 				EncodedBytes = CharacterStateFrameHeaderBytes;
 				FrameChannel = {};
 			};
@@ -878,6 +905,7 @@ namespace gargantuan::network {
 		std::size_t PendingActionCount = 0;
 		std::uint64_t LastActionEvaluationTick = 0;
 		bool PredictionSuspended = false;
+		CharacterMaterializationEpoch MaterializationEpoch;
 	};
 
 	PredictedCharacterNetwork::~PredictedCharacterNetwork() = default;
@@ -921,28 +949,40 @@ namespace gargantuan::network {
 		if (!Character.IsValid() || !Replica || Replica->GetDestroyed() || Replica->IsDestroying() ||
 			Replicas.size() >= MaximumNetworkCharacters || Replicas.contains(Character))
 			return false;
+		for (const auto &[Connection, Peer] : Peers) {
+			(void)Connection;
+			if (!NextMaterializationEpoch(Peer.MaterializationEpoch)) return false;
+		}
 		Replicas.emplace(Character, ReplicaState{.Character = Replica});
-		for (auto &[Connection, Peer] : Peers)
+		for (auto &[Connection, Peer] : Peers) {
+			Peer.MaterializationEpoch = *NextMaterializationEpoch(Peer.MaterializationEpoch);
 			if (Peer.PendingControl && Peer.PendingControl->Character == Character) {
 				Peer.Control = Peer.PendingControl;
 				Peer.PendingControl.reset();
 				HardReset(Peer);
 			}
+		}
 		return true;
 	}
 
 	bool PredictedCharacterNetwork::MarkUnmaterialized(ObjectId Character) {
 		auto Replica = Replicas.find(Character);
 		if (Replica == Replicas.end()) return false;
+		for (const auto &[Connection, Peer] : Peers) {
+			(void)Connection;
+			if (!NextMaterializationEpoch(Peer.MaterializationEpoch)) return false;
+		}
 		if (auto CharacterValue = Replica->second.Character.lock();
 			CharacterValue && !CharacterValue->GetDestroyed() && !CharacterValue->IsDestroying())
 			CharacterValue->ApplyRuntimePresentationOffset(std::nullopt);
 		Replicas.erase(Replica);
-		for (auto &[Connection, Peer] : Peers)
+		for (auto &[Connection, Peer] : Peers) {
+			Peer.MaterializationEpoch = *NextMaterializationEpoch(Peer.MaterializationEpoch);
 			if (Peer.Control && Peer.Control->Character == Character) {
 				Peer.Control.reset();
 				HardReset(Peer);
 			}
+		}
 		return true;
 	}
 
@@ -1064,6 +1104,10 @@ namespace gargantuan::network {
 		}
 		if (auto *Frame = std::get_if<CharacterStateFrame>(&Message)) {
 			if (!IsExpectedStateFrameOrder(Event, Frame->FrameSequence)) return false;
+			if (Frame->MaterializationEpoch != Peer.MaterializationEpoch) {
+				SaturatingIncrement(Metrics.StaleStatesDropped, static_cast<std::uint64_t>(Frame->StateCount));
+				return true;
+			}
 			for (const auto &State : Frame->GetStates()) {
 				if (!Replicas.contains(State.Character)) continue;
 				(void)HandleState(Peer, Event, State, false, true);

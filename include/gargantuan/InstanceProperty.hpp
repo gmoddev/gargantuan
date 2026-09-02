@@ -94,6 +94,7 @@ namespace gargantuan {
 	  public:
 		enum class Persistence { Transient, Saved };
 		enum class Replication { None, FutureReplicated };
+		enum class MaterializationDependency { Soft, Hard };
 		enum class Authority { Main, Any };
 		enum class DataType {
 			Unsupported,
@@ -134,6 +135,7 @@ namespace gargantuan {
 		bool Signal{false};
 		Persistence PersistencePolicy = Persistence::Transient;
 		Replication ReplicationPolicy = Replication::None;
+		MaterializationDependency MaterializationDependencyPolicy = MaterializationDependency::Soft;
 		Authority WriteAuthority = Authority::Main;
 		bool Editable = true;
 		ScriptDomainSet ReadDomains = ScriptDomainSet::All();
@@ -233,6 +235,11 @@ namespace gargantuan {
 
 		InstanceProperty &SetReplication(Replication replication) {
 			ReplicationPolicy = replication;
+			return *this;
+		}
+
+		InstanceProperty &SetMaterializationDependency(MaterializationDependency Dependency) {
+			MaterializationDependencyPolicy = Dependency;
 			return *this;
 		}
 

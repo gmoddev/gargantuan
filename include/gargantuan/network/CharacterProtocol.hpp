@@ -16,7 +16,7 @@
 
 namespace gargantuan::network {
 	inline constexpr std::uint16_t LegacyCharacterProtocolVersion = 1;
-	inline constexpr std::uint16_t CharacterProtocolVersion = 2;
+	inline constexpr std::uint16_t CharacterProtocolVersion = 3;
 	inline constexpr std::size_t MaximumCharacterFrameBytes = 256;
 	inline constexpr std::size_t MaximumCharacterStateFrameBytes = 1200;
 	inline constexpr std::size_t MaximumCharacterStatesPerFrame = 15;
@@ -119,6 +119,7 @@ namespace gargantuan::network {
 	struct CharacterStateFrame {
 		std::uint64_t ServerTick = 0;
 		CharacterStateFrameSequence FrameSequence;
+		CharacterMaterializationEpoch MaterializationEpoch{1};
 		std::array<CharacterAuthoritativeState, MaximumCharacterStatesPerFrame> States{};
 		std::uint16_t StateCount = 0;
 
@@ -128,9 +129,12 @@ namespace gargantuan::network {
 		}
 	};
 
-	using CharacterMessage = std::
-		variant<CharacterControlTransition, CharacterInputCommand, CharacterActionRequest, CharacterAuthoritativeState,
-			CharacterStateFrame>;
+	using CharacterMessage = std::variant<
+		CharacterControlTransition,
+		CharacterInputCommand,
+		CharacterActionRequest,
+		CharacterAuthoritativeState,
+		CharacterStateFrame>;
 
 	[[nodiscard]] CharacterMessageKind GetCharacterMessageKind(const CharacterMessage &Message);
 	[[nodiscard]] std::size_t GetCompactCharacterStateEncodedBytes(const CharacterAuthoritativeState &State);

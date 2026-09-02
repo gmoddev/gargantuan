@@ -63,6 +63,14 @@ proves Character replacement, two-client isolation,
 timeout. A separate real-GNS gate proves input, action/state, and explicit
 disconnect cleanup over localhost transport.
 
+Foundation 3E extends that same packaged process gate without adding a sample
+API: authoritative server Luau moves `RootMotionOpenNpc` from outside interest
+to the player's area, back outside, and inside again. The client must observe
+absence, structural enter, peer unpublish, and fresh reentry before the package
+smoke completes. The localhost GNS session independently performs the same
+far/near/far/near lifecycle with a Player-independent NPC and verifies current
+transform, RootPart closure, server survival after unpublish, and disconnect.
+
 ## Authoring workflow used
 
 1. Build the current Studio and Engine Release binaries.
@@ -126,6 +134,9 @@ honest claim of an entirely GUI-authored workflow.
 - actual BeaconLunge AssetId/content pinning, semantic action request,
   server-derived root movement, bounded prediction, acknowledgement, and
   reconciliation over the dedicated Character protocol;
+- server-owned peer relevance through packaged and localhost-GNS sessions,
+  including NPC structural enter, peer unpublish, current-state reentry, and
+  owner Character retention;
 - canonical Attachment joint binding, transient `WorldCFrame`, bind-pose
   fallback, animated positional Sound, animated prompt range/LOS/hold
   validation, and zero-journal semantic movement;

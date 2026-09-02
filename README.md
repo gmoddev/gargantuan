@@ -477,7 +477,8 @@ The networking architecture currently includes:
 - server-created Players with trusted client `LocalPlayer` association;
 - server-authoritative `Player.Character` control binding;
 - replaceable client/server Luau Character movement and action policy;
-- GCHR v2 prediction, reconciliation, interpolation, and batched 20 Hz state;
+- GCHR v3 prediction, reconciliation, interpolation, batched 20 Hz state, and stale-materialization rejection;
+- server-owned spatial relevance with bounded structural enter/leave/reentry and owner Character pinning;
 - finite deadlines;
 - per-peer and aggregate resource limits.
 

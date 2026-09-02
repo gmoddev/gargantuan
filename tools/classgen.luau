@@ -100,6 +100,9 @@ const function assembleProperties(state: GenerationState)
 		if property.replicated then
 			state.definitionProperties:line(`.SetReplication(InstanceProperty::Replication::FutureReplicated)`)
 		end
+		if property.materializationDependency then
+			state.definitionProperties:line(`.SetMaterializationDependency(InstanceProperty::MaterializationDependency::{property.materializationDependency})`)
+		end
 		if not isEditable then
 			state.definitionProperties:line(`.SetEditable(false)`)
 		end

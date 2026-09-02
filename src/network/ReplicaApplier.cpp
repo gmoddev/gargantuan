@@ -438,7 +438,11 @@ namespace gargantuan::network {
 							} else {
 								auto InstanceValue = Receiver.Resolve(WireObjectId::FromObjectId(Value.Object));
 								if (!InstanceValue)
-									throw std::invalid_argument("Replica operation target is not materialized");
+									throw std::invalid_argument(
+										"Replica operation target is not materialized: " +
+										std::to_string(Value.Object.Slot) + ":" +
+										std::to_string(Value.Object.Generation)
+									);
 								if constexpr (std::is_same_v<Type, PropertyReplicationUpdate>)
 									ApplyPropertyToReplica(Value, InstanceValue, Receiver);
 								else if constexpr (std::is_same_v<Type, ExtensionPropertyReplicationUpdate>) {

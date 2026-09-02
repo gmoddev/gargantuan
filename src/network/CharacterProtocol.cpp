@@ -14,7 +14,7 @@ namespace gargantuan::network {
 		constexpr std::uint32_t CharacterMagic = 0x52484347; // "GCHR" in little endian.
 		constexpr std::uint8_t ValidInputFlags = static_cast<std::uint8_t>(CharacterInputFlag::JumpRequested);
 		constexpr std::uint8_t ValidStateFlags = static_cast<std::uint8_t>(CharacterStateFlag::Grounded) |
-											 static_cast<std::uint8_t>(CharacterStateFlag::Teleport);
+												 static_cast<std::uint8_t>(CharacterStateFlag::Teleport);
 
 		bool IsFinite(const glm::vec2 &Value) {
 			return std::isfinite(Value.x) && std::isfinite(Value.y);
@@ -122,9 +122,12 @@ namespace gargantuan::network {
 			Output.Float(State.Transform.Position.x);
 			Output.Float(State.Transform.Position.y);
 			Output.Float(State.Transform.Position.z);
-			for (const auto Value : Rotation) Output.Integer(Value);
-			for (const auto Value : Velocity) Output.Integer(Value);
-			for (const auto Value : FloorNormal) Output.Integer(Value);
+			for (const auto Value : Rotation)
+				Output.Integer(Value);
+			for (const auto Value : Velocity)
+				Output.Integer(Value);
+			for (const auto Value : FloorNormal)
+				Output.Integer(Value);
 			Output.Integer(State.Flags);
 			Output.Integer<std::uint8_t>(State.ActiveAction ? 1 : 0);
 			if (State.ActiveAction) {
@@ -227,10 +230,8 @@ namespace gargantuan::network {
 		if (!State.IsValid()) return 0;
 		std::int16_t Quantized = 0;
 		const auto Rotation = State.Transform.ToQuaternion();
-		if (!QuantizeSigned(Rotation.x, 32767.0f, Quantized) ||
-			!QuantizeSigned(Rotation.y, 32767.0f, Quantized) ||
-			!QuantizeSigned(Rotation.z, 32767.0f, Quantized) ||
-			!QuantizeSigned(Rotation.w, 32767.0f, Quantized))
+		if (!QuantizeSigned(Rotation.x, 32767.0f, Quantized) || !QuantizeSigned(Rotation.y, 32767.0f, Quantized) ||
+			!QuantizeSigned(Rotation.z, 32767.0f, Quantized) || !QuantizeSigned(Rotation.w, 32767.0f, Quantized))
 			return 0;
 		for (std::size_t Axis = 0; Axis < 3; ++Axis)
 			if (!QuantizeSigned(State.Velocity[Axis], 64.0f, Quantized) ||
@@ -240,7 +241,10 @@ namespace gargantuan::network {
 	}
 
 	bool CharacterStateFrame::IsValid() const {
-		if (ServerTick == 0 || !FrameSequence.IsValid() || StateCount == 0 || StateCount > States.size()) return false;
+		if (ServerTick == 0 || !FrameSequence.IsValid() || !MaterializationEpoch.IsValid() ||
+			MaterializationEpoch.Value() > std::numeric_limits<std::uint16_t>::max() || StateCount == 0 ||
+			StateCount > States.size())
+			return false;
 		ObjectId Previous;
 		for (std::size_t Index = 0; Index < StateCount; ++Index) {
 			const auto &State = States[Index];
@@ -285,7 +289,7 @@ namespace gargantuan::network {
 						Output.Integer(Value.ServerTick);
 						Output.Integer(Value.FrameSequence.Value());
 						Output.Integer(Value.StateCount);
-						Output.Integer<std::uint16_t>(0);
+						Output.Integer(static_cast<std::uint16_t>(Value.MaterializationEpoch.Value()));
 						for (const auto &State : Value.GetStates())
 							if (!WriteCompactState(Output, State)) return;
 					} else {
@@ -350,7 +354,8 @@ namespace gargantuan::network {
 			std::uint32_t Magic = 0;
 			std::uint16_t Version = 0;
 			std::uint8_t KindValue = 0, Reserved = 0;
-			if (!Input.Integer(Magic) || !Input.Integer(Version) || !Input.Integer(KindValue) || !Input.Integer(Reserved))
+			if (!Input.Integer(Magic) || !Input.Integer(Version) || !Input.Integer(KindValue) ||
+				!Input.Integer(Reserved))
 				return SerializationFailure(SerializationErrorCode::TruncatedInput, Input.Error);
 			if (Magic != CharacterMagic)
 				return SerializationFailure(SerializationErrorCode::InvalidSyntax, "Character frame magic is invalid");
@@ -359,16 +364,20 @@ namespace gargantuan::network {
 
 			if (Version == CharacterProtocolVersion) {
 				if (KindValue != static_cast<std::uint8_t>(CharacterMessageKind::StateFrame))
-					return SerializationFailure(SerializationErrorCode::InvalidValue, "Character v2 opcode is invalid");
+					return SerializationFailure(SerializationErrorCode::InvalidValue, "Character v3 opcode is invalid");
 				CharacterStateFrame Frame;
 				std::uint64_t FrameSequence = 0;
-				std::uint16_t ReservedTail = 0;
-				if (!Input.Integer(Frame.ServerTick) || !Input.Integer(FrameSequence) || !Input.Integer(Frame.StateCount) ||
-					!Input.Integer(ReservedTail))
+				std::uint16_t MaterializationEpoch = 0;
+				if (!Input.Integer(Frame.ServerTick) || !Input.Integer(FrameSequence) ||
+					!Input.Integer(Frame.StateCount) || !Input.Integer(MaterializationEpoch))
 					return SerializationFailure(SerializationErrorCode::TruncatedInput, Input.Error);
-				if (ReservedTail != 0 || Frame.StateCount == 0 || Frame.StateCount > Frame.States.size())
-					return SerializationFailure(SerializationErrorCode::InvalidValue, "Character state-frame count is invalid");
+				if (MaterializationEpoch == 0 || Frame.StateCount == 0 || Frame.StateCount > Frame.States.size())
+					return SerializationFailure(
+						SerializationErrorCode::InvalidValue,
+						"Character state-frame materialization epoch or count is invalid"
+					);
 				Frame.FrameSequence = CharacterStateFrameSequence(FrameSequence);
+				Frame.MaterializationEpoch = CharacterMaterializationEpoch(MaterializationEpoch);
 				for (std::size_t Index = 0; Index < Frame.StateCount; ++Index)
 					if (!ReadCompactState(Input, Frame.ServerTick, Frame.States[Index]))
 						return SerializationFailure(SerializationErrorCode::InvalidValue, Input.Error);
@@ -452,7 +461,9 @@ namespace gargantuan::network {
 					!Input.Integer(Flags) || !Input.Integer(HasAction) || !Input.Integer(ReservedTail))
 					return SerializationFailure(SerializationErrorCode::TruncatedInput, Input.Error);
 				if (HasAction > 1 || ReservedTail != 0)
-					return SerializationFailure(SerializationErrorCode::InvalidValue, "Character state flags are invalid");
+					return SerializationFailure(
+						SerializationErrorCode::InvalidValue, "Character state flags are invalid"
+					);
 				Value.StateSequence = RealtimeStateSequence(StateSequence);
 				Value.AcknowledgedInput = CharacterInputSequence(Acknowledged);
 				Value.ResolvedAction = CharacterActionSequence(Resolved);

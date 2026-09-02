@@ -28,6 +28,9 @@ sections; see [CharacterNetworkingFoundation3C.md](CharacterNetworkingFoundation
 Foundation 3D now composes these managers into the packaged game-session and
 Player lifecycle; see
 [CharacterNetworkingFoundation3D.md](CharacterNetworkingFoundation3D.md).
+Foundation 3E now gates structural replicas and GCHR publication through one
+server-owned peer relevance result; see
+[CharacterReplicationFoundation3E.md](CharacterReplicationFoundation3E.md).
 
 ## Implemented boundary
 

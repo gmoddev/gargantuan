@@ -22,6 +22,7 @@ return c({
 			overrideRead = "GetCharacter",
 			overrideWrite = "SetCharacter",
 			replicated = true,
+			materializationDependency = "Hard",
 		},
 	},
 

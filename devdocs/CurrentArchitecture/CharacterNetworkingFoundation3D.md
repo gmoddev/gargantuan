@@ -355,9 +355,8 @@ implemented. `gargantuan-node`, `gargantuan-studio`, `gargantuan-mcp`, and
 `gargantuan-telemetry` required no 3D change. Realtime movement remains entirely
 inside the game server.
 
-Foundation 3E should first introduce peer-specific spatial relevance for
-Characters and global structural baselines, then measure relevance churn and
-adaptive publication cadence without delta dependency chains. Region/portal
-handoff, distributed ownership, matchmaking, and account tickets remain later
-layers and must reuse this accepted-peer/Player/control lifetime rather than
-invent another connection identity.
+Foundation 3E is implemented by `CharacterReplicationFoundation3E.md`: the
+accepted-peer/Player/control lifetime now drives server-owned spatial relevance,
+bounded structural materialization, and GCHR visibility without another
+connection identity. Adaptive publication cadence, region/portal handoff,
+distributed ownership, matchmaking, and account tickets remain later layers.

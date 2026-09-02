@@ -63,6 +63,7 @@ namespace gargantuan {
 	};
 
 	Snapshot CaptureSnapshot(const std::shared_ptr<Instance> &root);
+	SnapshotObject CaptureSnapshotObject(const std::shared_ptr<Instance> &Object);
 	std::string SerializeSnapshot(const Snapshot &snapshot);
 	SnapshotParseResult DeserializeSnapshot(std::string_view serialized);
 	SnapshotLoadResult LoadSnapshot(const Snapshot &snapshot);

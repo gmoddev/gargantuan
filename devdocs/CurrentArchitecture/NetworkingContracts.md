@@ -99,7 +99,8 @@ wait is the sole outcome representation.
 
 `ReplicationEpoch`, `ReliableReplicationSequence`, `RealtimeStateSequence`,
 `CharacterControlEpoch`, `CharacterInputSequence`,
-`CharacterActionSequence`, `RemoteEventSequence`, and `RemoteRequestId` are
+`CharacterActionSequence`, `CharacterStateFrameSequence`,
+`CharacterMaterializationEpoch`, `RemoteEventSequence`, and `RemoteRequestId` are
 distinct template specializations and cannot be implicitly interchanged. Zero
 is invalid. Local increment refuses `uint64_t` exhaustion rather than wrapping.
 Character state explicitly acknowledges incorporated Character input. A
@@ -115,6 +116,14 @@ and optional latest realtime sequences keyed by both `ObjectId` and strong
 overwrite each other's sequence knowledge. Forgetting a known replica clears
 all of its channel sequence entries but removes only peer knowledge; it does not
 destroy the authoritative object or erase relevance intent.
+
+Production peer relevance is server-owned. `ReplicationRelevance` emits a
+deterministic desired set from mandatory/global objects, owner-required
+Character membership, and bounded spatial queries. `ReplicationCoordinator`
+owns the separate ancestor/hard-reference closure and Publish/Unpublish
+mechanism. GCHR consumes the same Character membership; it does not run an
+independent distance policy. No client protocol or Luau API can request an
+arbitrary object, focus, region, or pin.
 
 `ReplicationOperation` is an epoch-scoped variant for publish, property update,
 extension-property update, reparent, attribute update, tag add/remove, and
@@ -166,10 +175,11 @@ dedicated authoritative Character realtime protocol, and the bounded `GSES`
 game-session acceptance protocol. `GameSession` composes them over one
 generation-safe `ConnectionId` and does not add a second transport identity.
 Their scopes are
-documented in `BasicClientReplication.md`, `LuauRemotes.md`, and
-`CharacterNetworkingFoundation3D.md`. General realtime physics replication,
-external account authentication/ticket validation, spatial interest management, Node
-integration, and Studio play sessions remain unimplemented. The deterministic in-memory
+documented in `BasicClientReplication.md`, `LuauRemotes.md`,
+`CharacterNetworkingFoundation3D.md`, and
+`CharacterReplicationFoundation3E.md`. General realtime physics replication,
+external account authentication/ticket validation, adaptive state cadence, Node
+integration, and multiplayer Studio orchestration remain unimplemented. The deterministic in-memory
 implementation is documented in `SimulatedTransport.md`; the opt-in real GNS
 adapter is documented in `RealGameTransport.md`. Backend contract types remain
 private; only the schema-backed Remote developer surface is exposed to Luau.

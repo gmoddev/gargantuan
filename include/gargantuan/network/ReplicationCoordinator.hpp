@@ -1,12 +1,14 @@
 #pragma once
 
 #include "gargantuan/network/ReplicationProtocol.hpp"
+#include "gargantuan/network/ReplicationRelevance.hpp"
 #include "gargantuan/runtime/ProtocolInput.hpp"
 
 #include <functional>
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 
 namespace gargantuan {
@@ -14,6 +16,8 @@ namespace gargantuan {
 }
 
 namespace gargantuan::network {
+	inline constexpr std::size_t MaximumRelevanceTransitionsPerFrame = 4'096;
+
 	struct ReplicationMetrics {
 		std::uint64_t ObjectsPublished = 0;
 		std::uint64_t ObjectsUnpublished = 0;
@@ -25,6 +29,17 @@ namespace gargantuan::network {
 		std::uint64_t BaselineObjects = 0;
 		std::uint64_t RejectedInvalidReferences = 0;
 		std::uint64_t ReplicationBacklog = 0;
+		std::uint64_t SnapshotCaptureCpuNanoseconds = 0;
+		std::uint64_t BaselineDiscoveryCpuNanoseconds = 0;
+		std::uint64_t BaselineEncodeCpuNanoseconds = 0;
+		std::uint64_t CatalogObjects = 0;
+		std::uint64_t CatalogRefreshes = 0;
+		std::uint64_t DependencyObjects = 0;
+		std::uint64_t DependencyLimitFailures = 0;
+		std::uint64_t SoftReferenceFixups = 0;
+		std::uint64_t RelevanceTransitions = 0;
+		std::uint64_t RelevanceTransitionCpuNanoseconds = 0;
+		std::uint64_t MaterializationBacklog = 0;
 	};
 
 	struct ReplicationProduceResult {
@@ -44,10 +59,15 @@ namespace gargantuan::network {
 
 		[[nodiscard]] ReplicationProduceResult AddPeer(ConnectionId Connection, ReplicationEpoch Epoch);
 		[[nodiscard]] ReplicationProduceResult
+		AddPeer(ConnectionId Connection, ReplicationEpoch Epoch, const PeerRelevanceSelection &Selection);
+		[[nodiscard]] ReplicationProduceResult
+		UpdateRelevance(ConnectionId Connection, const PeerRelevanceSelection &Selection);
+		[[nodiscard]] ReplicationProduceResult
 		ProduceIncremental(ConnectionId Connection, std::size_t MaximumJournalRecords = MaximumWireJournalRecords);
 		[[nodiscard]] ReplicationProduceResult SetRelevant(ConnectionId Connection, ObjectId Object, bool Relevant);
 		bool RemovePeer(ConnectionId Connection);
 		[[nodiscard]] const ReplicationView *GetView(ConnectionId Connection) const;
+		[[nodiscard]] bool HasPendingRelevance(ConnectionId Connection) const;
 		[[nodiscard]] const ReplicationMetrics &GetMetrics() const {
 			return Metrics;
 		}
@@ -57,10 +77,25 @@ namespace gargantuan::network {
 			ReplicationView View;
 			ChangeCursor JournalCursor;
 			ReliableReplicationSequence NextSequence{1};
+			std::set<ObjectId> DesiredObjects;
+			std::size_t PendingRelevanceTransitions = 0;
+			bool PolicyManaged = false;
 		};
 		std::shared_ptr<Instance> SourceRoot;
 		InitialRelevancePolicy IsInitiallyRelevant;
+		std::map<ObjectId, SnapshotObject> Catalog;
+		std::set<ObjectId> RetiredObjects;
+		ChangeCursor CatalogCursor;
 		std::map<ConnectionId, PeerState> Peers;
 		ReplicationMetrics Metrics;
+
+		bool RefreshCatalog(std::string &Error);
+		bool BuildDependencyClosure(
+			const PeerRelevanceSelection &Selection, std::set<ObjectId> &Closure, std::string &Error
+		);
+		PublishReplication MakePeerPublish(const SnapshotObject &Object, const std::set<ObjectId> &Known) const;
+		ReplicationProduceResult ProduceRelevanceFrame(
+			ConnectionId Connection, const PeerRelevanceSelection &Selection, ReplicationMessageKind Kind
+		);
 	};
 }

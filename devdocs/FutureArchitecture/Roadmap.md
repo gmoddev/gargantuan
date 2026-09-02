@@ -40,6 +40,13 @@ defect throughput.
   default server assembly and shared movement policy; game Luau can replace
   movement/action policy through `CharacterControlService`. This does not claim
   external account authentication or Node integration.
+- Character / Replication Foundation 3E makes one server-owned relevance result
+  feed structural materialization and GCHR. It adds a bounded replaceable
+  uniform grid, owner-required Character pinning, ancestor/hard-reference
+  closure, soft-reference fixups, safe unpublish/reentry, and a GCHR v3
+  materialization epoch without changing the 28-byte batch header. Player
+  identity remains globally visible; remote Character descendants are spatial.
+  Adaptive cadence and full SpatialAddress/region topology remain future work.
 - Environment / Lighting Foundation 1 establishes canonical saved Lighting and
   Sky semantics, renderer-neutral incremental publication, AssetService-owned
   coherent face residency, and the SDL shadow/Sky/opaque/GUI pipeline. Local

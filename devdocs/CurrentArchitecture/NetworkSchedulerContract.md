@@ -159,7 +159,7 @@ vocabulary is introduced.
 
 The scheduler itself does not merge opaque application messages. Character
 Networking Foundation 3C now supplies the first game-owned batching contract
-above it: one GCHR v2 unreliable-sequenced intent contains up to 15 independently
+above it: one GCHR v3 unreliable-sequenced intent contains up to 15 independently
 sequenced compact absolute Character states. The Character manager preserves
 application boundaries and negotiated datagram limits before `Submit`; the
 scheduler still cannot merge reliable and unreliable semantics, fragment one

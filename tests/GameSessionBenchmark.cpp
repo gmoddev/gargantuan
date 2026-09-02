@@ -1,12 +1,18 @@
 #include "gargantuan/Engine.hpp"
 #include "gargantuan/classes/DataModel.hpp"
+#include "gargantuan/classes/Folder.hpp"
 #include "gargantuan/classes/KinematicCharacter.hpp"
+#include "gargantuan/classes/Part.hpp"
+#include "gargantuan/classes/Player.hpp"
 #include "gargantuan/network/GameSession.hpp"
 #include "gargantuan/network/GameSessionProtocol.hpp"
+#include "gargantuan/network/ReplicationCoordinator.hpp"
+#include "gargantuan/network/ReplicationRelevance.hpp"
 #include "gargantuan/network/SimulatedTransport.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/render/Renderer.hpp"
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -55,7 +61,7 @@ namespace {
 		return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - Started).count();
 	}
 
-	void RunAdmission(std::size_t PeerCount) {
+	void RunAdmission(std::size_t PeerCount, std::size_t SpatialObjectCount = 0) {
 		struct RawPeer {
 			std::shared_ptr<SimulatedTransport> Transport;
 			ConnectionId Connection;
@@ -77,6 +83,20 @@ namespace {
 			nullptr,
 			EngineProviderConfiguration{.AudioEnabled = false, .Mode = RuntimeMode::NetworkServer}
 		);
+		std::vector<std::shared_ptr<Part>> SpatialObjects;
+		SpatialObjects.reserve(SpatialObjectCount);
+		for (std::size_t Index = 0; Index < SpatialObjectCount; ++Index) {
+			auto Object = std::make_shared<Part>();
+			Object->SetCFrame(CFrame(10'000.0f + static_cast<float>(Index) * 512.0f, 0.0f, 0.0f));
+			Object->SetParent(World);
+			SpatialObjects.push_back(std::move(Object));
+		}
+		auto SpatialPlacement = Runtime.Players->PlayerAdded->Connect([](std::shared_ptr<Player> PlayerValue) {
+			if (!PlayerValue || !PlayerValue->GetCharacter()) return;
+			auto CharacterValue = std::dynamic_pointer_cast<KinematicCharacter>(*PlayerValue->GetCharacter());
+			if (CharacterValue)
+				CharacterValue->SetPosition({static_cast<float>(PlayerValue->GetPlayerId() - 1) * 1024.0f, 6.0f, 0.0f});
+		});
 		const auto ServerConfiguration = Configuration(GameSessionRole::Server);
 		const auto ClientConfiguration = Configuration(GameSessionRole::Client);
 		GameSession Server(ServerTransport, ServerConfiguration, &Runtime);
@@ -160,13 +180,94 @@ namespace {
 		const auto Allocations = GameSessionBenchmarkAllocations.load(std::memory_order_relaxed) - AllocationsBefore;
 		const auto Metrics = Server.GetMetrics();
 		if (Metrics.ReadyPeers != PeerCount) throw std::runtime_error("session benchmark did not activate every peer");
-		std::cout << "Admission," << PeerCount << ',' << Duration << ',' << Duration / static_cast<double>(PeerCount)
-				  << ',' << Tick - 1 << ',' << Metrics.PlayersCreated << ',' << Metrics.CharacterControlBindings << ','
-				  << Allocations << '\n';
+		std::cout << (SpatialObjectCount == 0 ? "Admission," : "WorldAdmission,")
+				  << (SpatialObjectCount == 0 ? PeerCount : SpatialObjectCount) << ',' << Duration << ','
+				  << Duration / static_cast<double>(PeerCount) << ',' << Tick - 1 << ',' << Metrics.PlayersCreated
+				  << ',' << Metrics.CharacterControlBindings << ',' << Allocations << ','
+				  << Metrics.SessionAcceptanceCpuNanoseconds << ',' << Metrics.PlayerCreationCpuNanoseconds << ','
+				  << Metrics.ServerGraphSynchronizationCpuNanoseconds << ',' << Metrics.BaselineSnapshotCpuNanoseconds
+				  << ',' << Metrics.BaselineDiscoveryCpuNanoseconds << ',' << Metrics.BaselineEncodeCpuNanoseconds
+				  << ',' << Metrics.GameplayRegistrationCpuNanoseconds << ',' << Metrics.RelevantObjects << ','
+				  << Metrics.RelevanceEnters << ',' << Metrics.RelevanceLeaves << ',' << Metrics.RelevanceQueries << ','
+				  << Metrics.RelevanceCandidates << ',' << Metrics.RelevanceCpuNanoseconds << ','
+				  << Metrics.MaterializedObjects << ',' << Metrics.MaterializedCharacters << ','
+				  << Metrics.RelevanceInitializationCpuNanoseconds << ',' << Metrics.MaterializationBacklog << ','
+				  << Metrics.MaterializationTransitions << ',' << Metrics.MaterializationCpuNanoseconds << '\n';
 		for (auto &Peer : Peers)
 			(void)Peer.Transport->Stop({DisconnectReason::LocalShutdown, "session benchmark complete"});
 		Server.Stop();
 		Runtime.Destroy();
+	}
+
+	void RunInterestMaterialization(std::size_t InterestSize) {
+		auto World = std::make_shared<DataModel>();
+		std::vector<std::shared_ptr<Folder>> Objects;
+		Objects.reserve(InterestSize);
+		PeerRelevanceSelection Selection{
+			.RequiredObjects = {World->GetObjectId()},
+			.DesiredObjects = {World->GetObjectId()},
+		};
+		for (std::size_t Index = 0; Index < InterestSize; ++Index) {
+			auto Object = std::make_shared<Folder>();
+			Object->SetParent(World);
+			Selection.DesiredObjects.push_back(Object->GetObjectId());
+			Objects.push_back(std::move(Object));
+		}
+		std::ranges::sort(Selection.DesiredObjects);
+		ReplicationCoordinator Coordinator(World);
+		const auto AllocationsBefore = GameSessionBenchmarkAllocations.load(std::memory_order_relaxed);
+		const auto Started = std::chrono::steady_clock::now();
+		auto Baseline = Coordinator.AddPeer({1, 1}, ReplicationEpoch(1), Selection);
+		const auto Duration = Milliseconds(Started);
+		const auto Allocations = GameSessionBenchmarkAllocations.load(std::memory_order_relaxed) - AllocationsBefore;
+		if (!Baseline.Succeeded()) throw std::runtime_error("interest materialization benchmark failed");
+		const auto &Metrics = Coordinator.GetMetrics();
+		std::cout << "InterestMaterialization," << InterestSize << ',' << Duration << ','
+				  << Duration / static_cast<double>(InterestSize) << ",1," << Baseline.Frame->Operations.size() << ",0,"
+				  << Allocations << ",0,0,0," << Metrics.SnapshotCaptureCpuNanoseconds << ','
+				  << Metrics.BaselineDiscoveryCpuNanoseconds << ',' << Metrics.BaselineEncodeCpuNanoseconds
+				  << ",0,0,0,0,0,0,0," << Baseline.Frame->Operations.size() << ",0,0," << Metrics.MaterializationBacklog
+				  << ',' << Metrics.RelevanceTransitions << ',' << Metrics.RelevanceTransitionCpuNanoseconds << '\n';
+	}
+
+	void RunRelevanceUpdate(std::size_t PeerCount) {
+		auto World = std::make_shared<DataModel>();
+		std::vector<std::shared_ptr<KinematicCharacter>> Characters;
+		Characters.reserve(PeerCount);
+		for (std::size_t Index = 0; Index < PeerCount; ++Index) {
+			auto CharacterValue = std::make_shared<KinematicCharacter>();
+			CharacterValue->SetPosition({static_cast<float>(Index) * 64.0f, 6.0f, 0.0f});
+			CharacterValue->SetParent(World);
+			Characters.push_back(std::move(CharacterValue));
+		}
+		ReplicationRelevance Relevance(World);
+		for (std::size_t Index = 0; Index < PeerCount; ++Index) {
+			const ConnectionId Connection{static_cast<std::uint32_t>(Index + 1), 1};
+			const auto Character = Characters[Index]->GetObjectId();
+			if (!Relevance.AddPeer(Connection, Character, Character))
+				throw std::runtime_error("relevance update benchmark peer registration failed");
+		}
+		for (std::size_t Index = PeerCount / 2; Index < PeerCount; ++Index) {
+			const ConnectionId Connection{static_cast<std::uint32_t>(Index + 1), 1};
+			const float Offset = Index < PeerCount * 4 / 5 ? 128.0f : 32'000.0f;
+			const std::array Focus{glm::vec3(static_cast<float>(Index) * 64.0f + Offset, 6.0f, 0.0f)};
+			if (!Relevance.SetTrustedFocus(Connection, Focus))
+				throw std::runtime_error("relevance update benchmark focus assignment failed");
+		}
+		const auto Before = Relevance.GetMetrics();
+		const auto AllocationsBefore = GameSessionBenchmarkAllocations.load(std::memory_order_relaxed);
+		const auto Started = std::chrono::steady_clock::now();
+		if (!Relevance.Update(6)) throw std::runtime_error("relevance update benchmark failed");
+		const auto Duration = Milliseconds(Started);
+		const auto Allocations = GameSessionBenchmarkAllocations.load(std::memory_order_relaxed) - AllocationsBefore;
+		const auto After = Relevance.GetMetrics();
+		std::cout << "RelevanceUpdate," << PeerCount << ',' << Duration << ','
+				  << Duration / static_cast<double>(PeerCount) << ",1," << After.DesiredObjects << ",0," << Allocations
+				  << ",0,0,0,0,0,0,0," << After.DesiredObjects << ',' << After.RelevanceEnters - Before.RelevanceEnters
+				  << ',' << After.RelevanceLeaves - Before.RelevanceLeaves << ','
+				  << After.SpatialQueries - Before.SpatialQueries << ','
+				  << After.CandidateObjects - Before.CandidateObjects << ','
+				  << After.UpdateCpuNanoseconds - Before.UpdateCpuNanoseconds << ",0,0,0,0,0,0\n";
 	}
 
 	void RunCommandBridge(std::size_t CharacterCount) {
@@ -212,7 +313,8 @@ namespace {
 		const auto Allocations = GameSessionBenchmarkAllocations.load(std::memory_order_relaxed) - AllocationsBefore;
 		const auto Calls = static_cast<double>(CharacterCount * Ticks);
 		std::cout << "CommandBridge," << CharacterCount << ',' << Duration << ',' << Duration * 1000.0 / Calls << ','
-				  << Ticks << ',' << static_cast<std::uint64_t>(Calls) << ",0," << Allocations << '\n';
+				  << Ticks << ',' << static_cast<std::uint64_t>(Calls) << ",0," << Allocations
+				  << ",0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0\n";
 		Runtime.Destroy();
 	}
 }
@@ -220,9 +322,19 @@ namespace {
 int main() {
 	try {
 		gargantuan::BootstrapNativeRuntimeSchema();
-		std::cout << "Kind,Count,DurationMs,MicrosecondsPerUnit,Ticks,ResultCount,ControlBindings,Allocations\n";
+		std::cout << "Kind,Count,DurationMs,MillisecondsPerUnit,Ticks,ResultCount,ControlBindings,Allocations,"
+					 "SessionAcceptanceNs,PlayerCreationNs,ServerGraphSynchronizationNs,BaselineSnapshotNs,"
+					 "BaselineDiscoveryNs,BaselineEncodeNs,GameplayRegistrationNs,RelevantObjects,RelevanceEnters,"
+					 "RelevanceLeaves,RelevanceQueries,RelevanceCandidates,RelevanceCpuNs,MaterializedObjects,"
+					 "MaterializedCharacters,RelevanceInitializationNs,MaterializationBacklog,"
+					 "MaterializationTransitions,MaterializationCpuNs\n";
 		for (const auto Count : {1u, 32u, 100u, 500u})
 			RunAdmission(Count);
+		for (const auto WorldSize : {1'000u, 10'000u, 50'000u})
+			RunAdmission(1, WorldSize);
+		for (const auto InterestSize : {50u, 500u, 5'000u})
+			RunInterestMaterialization(InterestSize);
+		RunRelevanceUpdate(500);
 		for (const auto Count : {1u, 10u, 100u, 500u})
 			RunCommandBridge(Count);
 		return 0;

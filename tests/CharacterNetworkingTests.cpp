@@ -304,7 +304,7 @@ namespace {
 		auto FrameBytes = EncodeCharacterMessage(CharacterMessage(Frame));
 		Check(
 			FrameBytes && FrameBytes->size() == CharacterStateFrameHeaderBytes + 2 * CompactCharacterStateBytes,
-			"GCHR v2 batches two compact absolute states with an exact ABI-independent size"
+			"GCHR v3 batches two compact absolute states with an exact ABI-independent size"
 		);
 		if (FrameBytes) {
 			auto Decoded = DecodeCharacterMessage(*FrameBytes);
@@ -319,15 +319,15 @@ namespace {
 			for (std::size_t Boundary = 0; Boundary < FrameBytes->size(); ++Boundary)
 				Check(
 					!DecodeCharacterMessage(std::span<const std::byte>(*FrameBytes).first(Boundary)),
-					"every GCHR v2 truncation boundary fails closed"
+					"every GCHR v3 truncation boundary fails closed"
 				);
 			auto Duplicate = *FrameBytes;
 			std::copy_n(Duplicate.begin() + 28, 8, Duplicate.begin() + 102);
-			Check(!DecodeCharacterMessage(Duplicate), "GCHR v2 rejects duplicate Character identities");
+			Check(!DecodeCharacterMessage(Duplicate), "GCHR v3 rejects duplicate Character identities");
 			auto BadCount = *FrameBytes;
 			BadCount[24] = std::byte{16};
 			BadCount[25] = std::byte{0};
-			Check(!DecodeCharacterMessage(BadCount), "GCHR v2 rejects excessive state counts before decode");
+			Check(!DecodeCharacterMessage(BadCount), "GCHR v3 rejects excessive state counts before decode");
 			auto BadQuantizedRotation = *FrameBytes;
 			BadQuantizedRotation[80] = std::byte{0};
 			BadQuantizedRotation[81] = std::byte{0x80};
@@ -337,7 +337,7 @@ namespace {
 			Check(!DecodeCharacterMessage(BadFlags), "undefined compact Character state flags fail closed");
 			auto Trailing = *FrameBytes;
 			Trailing.push_back(std::byte{0});
-			Check(!DecodeCharacterMessage(Trailing), "GCHR v2 rejects trailing bytes");
+			Check(!DecodeCharacterMessage(Trailing), "GCHR v3 rejects trailing bytes");
 		}
 		CharacterStateFrame MaximumFrame{
 			.ServerTick = 61,
@@ -1282,7 +1282,7 @@ namespace {
 			Counts[Index] = Frame ? Frame->StateCount : 0;
 			Check(
 				Frame && Scheduler.Messages[Index].Payload().size() <= MaximumCharacterStateFrameBytes,
-				"every scheduler submission is one bounded GCHR v2 state frame"
+				"every scheduler submission is one bounded GCHR v3 state frame"
 			);
 		}
 		Check(Counts == std::array<std::uint16_t, 3>{15, 15, 2}, "ObjectId ordering splits 32 states as 15/15/2");
@@ -1344,6 +1344,8 @@ namespace {
 		const ConnectionId Connection{41, 1};
 		PredictedCharacterNetwork Client(Scheduler, TestLimits(), Movement);
 		Check(Client.AddPeer(Connection), "remote interpolation fixture registers one server peer");
+		const auto ReentryAction = Action(7, 44);
+		Check(Client.RegisterAction(ReentryAction), "remote interpolation fixture registers its action content");
 		const ObjectId SourceA{1000, 1};
 		const ObjectId SourceB{1001, 1};
 		auto ReplicaA = std::make_shared<KinematicCharacter>();
@@ -1363,12 +1365,14 @@ namespace {
 		CharacterStateFrame Dropped{
 			.ServerTick = 1,
 			.FrameSequence = CharacterStateFrameSequence(1),
+			.MaterializationEpoch = CharacterMaterializationEpoch(2),
 			.StateCount = 1,
 		};
 		Dropped.States[0] = MakeState(SourceA, 1, 1, 1.0f);
 		CharacterStateFrame Delivered{
 			.ServerTick = 1,
 			.FrameSequence = CharacterStateFrameSequence(2),
+			.MaterializationEpoch = CharacterMaterializationEpoch(2),
 			.StateCount = 1,
 		};
 		Delivered.States[0] = MakeState(SourceB, 1, 1, 2.0f);
@@ -1385,6 +1389,7 @@ namespace {
 		CharacterStateFrame Mixed{
 			.ServerTick = 4,
 			.FrameSequence = CharacterStateFrameSequence(3),
+			.MaterializationEpoch = CharacterMaterializationEpoch(2),
 			.StateCount = 2,
 		};
 		Mixed.States[0] = MakeState(SourceA, 1, 4, 4.0f);
@@ -1405,6 +1410,7 @@ namespace {
 			CharacterStateFrame Frame{
 				.ServerTick = Tick,
 				.FrameSequence = CharacterStateFrameSequence(Sequence + 2),
+				.MaterializationEpoch = CharacterMaterializationEpoch(2),
 				.StateCount = 1,
 			};
 			Frame.States[0] = MakeState(SourceA, Sequence, Tick, static_cast<float>(X));
@@ -1433,6 +1439,55 @@ namespace {
 		Check(
 			Client.MarkUnmaterialized(SourceA) && Client.GetPresentationSnapshotCount(SourceA) == 0,
 			"unmaterialization clears remote interpolation and presentation state"
+		);
+		Check(Client.MarkMaterialized(SourceA, ReplicaA), "same ObjectId can begin a fresh materialization lifetime");
+		CharacterStateFrame StaleMaterialization{
+			.ServerTick = 13,
+			.FrameSequence = CharacterStateFrameSequence(6),
+			.MaterializationEpoch = CharacterMaterializationEpoch(2),
+			.StateCount = 1,
+		};
+		StaleMaterialization.States[0] = MakeState(SourceA, 4, 13, 99.0f);
+		const auto StaleBefore = Client.GetMetrics().StaleStatesDropped;
+		Check(
+			Client.HandleTransportEvent(
+				TransportEvent(StateFrameEvent(Connection, StateChannelId(1), StaleMaterialization))
+			),
+			"delayed state from an earlier materialization lifetime is safely consumed"
+		);
+		Client.Reconcile(World);
+		Check(
+			Near(ReplicaA->GetPosition(), {10.0f, 6.0f, 0.0f}) &&
+				Client.GetMetrics().StaleStatesDropped == StaleBefore + 1,
+			"stale materialization epoch cannot mutate a reentered Character replica"
+		);
+		CharacterStateFrame ReentryState{
+			.ServerTick = 16,
+			.FrameSequence = CharacterStateFrameSequence(7),
+			.MaterializationEpoch = CharacterMaterializationEpoch(4),
+			.StateCount = 1,
+		};
+		ReentryState.States[0] = MakeState(SourceA, 5, 16, 16.0f);
+		ReentryState.States[0].ResolvedAction = CharacterActionSequence(1);
+		ReentryState.States[0].ActiveAction = CharacterActionState{
+			CharacterActionSequence(1),
+			ReentryAction.Token,
+			ReentryAction.Animation,
+			ReentryAction.ContentRevision,
+			14,
+			ReentryAction.DurationTicks,
+		};
+		Check(
+			Client.HandleTransportEvent(TransportEvent(StateFrameEvent(Connection, StateChannelId(1), ReentryState))),
+			"current state is accepted for the fresh materialization epoch"
+		);
+		Client.Reconcile(World);
+		const auto ReenteredAction = Client.GetAuthoritativeAction(SourceA);
+		const auto ReenteredPresentation = Client.GetPresentationAction(SourceA);
+		Check(
+			ReenteredAction && ReenteredAction->StartTick == 14 && ReenteredPresentation &&
+				ReenteredPresentation->PhaseTick == 16 && !ReenteredPresentation->Predicted,
+			"reentry establishes the authoritative action at its current phase instead of replaying its start"
 		);
 	}
 

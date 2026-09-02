@@ -223,6 +223,10 @@ namespace gargantuan {
 				(!property.ObjectReferenceClassSchemaId || !property.ObjectReferenceClassSchemaId->IsValid() ||
 				 !property.ReadObjectReference))
 				InvalidDefinition(definition, "object-reference property has incomplete constraint metadata");
+			if (property.MaterializationDependencyPolicy == InstanceProperty::MaterializationDependency::Hard &&
+				(property.SemanticType != InstanceProperty::DataType::ObjectReference ||
+				 property.ReplicationPolicy != InstanceProperty::Replication::FutureReplicated))
+				InvalidDefinition(definition, "hard materialization dependency is not a replicated object reference");
 			if (property.DeclaringSchemaId.IsValid() && property.DeclaringSchemaId != definition.Id)
 				InvalidDefinition(definition, "property declares a different owner");
 			property.DeclaringSchemaId = definition.Id;

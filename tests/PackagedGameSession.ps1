@@ -46,6 +46,14 @@ try {
 local CharacterControl = game:GetService("CharacterControlService")
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
+
+local RelevanceTick = 0
+local RelevanceNpc = nil
+local RelevancePrimed = false
+local RelevanceEntered = false
+local RelevanceLeft = false
+local RelevanceReentered = false
 
 assert(CharacterControl:RegisterAction(
 	"PackageLunge",
@@ -91,6 +99,23 @@ for _, Player in Players:GetPlayers() do
 	PreparePlayer(Player)
 end
 RunService.PostSimulation:Connect(function()
+	RelevanceTick += 1
+	RelevanceNpc = RelevanceNpc or Workspace:FindFirstChild("RootMotionOpenNpc", true)
+	local SessionPlayers = Players:GetPlayers()
+	local SessionCharacter = #SessionPlayers > 0 and SessionPlayers[1].Character or nil
+	if RelevanceNpc and not RelevancePrimed then
+		RelevanceNpc.Position = Vector3.new(5000, 6, 0)
+		RelevancePrimed = true
+	elseif RelevanceNpc and SessionCharacter and RelevanceTick >= 60 and not RelevanceEntered then
+		RelevanceNpc.Position = SessionCharacter.Position + Vector3.new(64, 0, 0)
+		RelevanceEntered = true
+	elseif RelevanceNpc and RelevanceEntered and RelevanceTick >= 100 and not RelevanceLeft then
+		RelevanceNpc.Position = Vector3.new(6000, 6, 0)
+		RelevanceLeft = true
+	elseif RelevanceNpc and SessionCharacter and RelevanceLeft and RelevanceTick >= 140 and not RelevanceReentered then
+		RelevanceNpc.Position = SessionCharacter.Position + Vector3.new(64, 0, 0)
+		RelevanceReentered = true
+	end
 	for _, Player in Players:GetPlayers() do
 		local Character = Player.Character
 		if Character and Character:FindFirstChild("PackageSessionRig") == nil then
@@ -124,6 +149,7 @@ local Ended = false
 local Requested = false
 local Reported = false
 local InitialPosition = nil
+local RelevanceStage = 0
 CharacterControl.ActionResolved:Connect(function(_, ActionName, Accepted)
 	if ActionName == "PackageLunge" and Accepted then
 		Resolved = true
@@ -143,6 +169,16 @@ RunService.PostSimulation:Connect(function()
 	InitialPosition = InitialPosition or Character.Position
 	if not Requested and Character:GetAttribute("PackageServerMoved") == true then
 		Requested = CharacterControl:RequestAction("PackageLunge")
+	end
+	local RelevanceNpc = Workspace:FindFirstChild("RootMotionOpenNpc", true)
+	if RelevanceStage == 0 and RelevanceNpc == nil then
+		RelevanceStage = 1
+	elseif RelevanceStage == 1 and RelevanceNpc ~= nil then
+		RelevanceStage = 2
+	elseif RelevanceStage == 2 and RelevanceNpc == nil then
+		RelevanceStage = 3
+	elseif RelevanceStage == 3 and RelevanceNpc ~= nil then
+		RelevanceStage = 4
 	end
 	local RemoteCharacters = 0
 	for _, Object in Workspace:GetDescendants() do
@@ -168,7 +204,7 @@ RunService.PostSimulation:Connect(function()
 					if Character.Position.X > InitialPosition.X + 0.4 then
 						Step = 5
 						Step = 6
-						if RemoteCharacters >= 2 then
+						if RemoteCharacters >= 2 and RelevanceStage == 4 then
 							Step = 7
 						end
 					end

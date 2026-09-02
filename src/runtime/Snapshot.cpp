@@ -229,6 +229,84 @@ namespace gargantuan {
 		return found == Objects.end() || !found->second || found->second->GetDestroyed() ? nullptr : found->second;
 	}
 
+	SnapshotObject CaptureSnapshotObject(const std::shared_ptr<Instance> &Object) {
+		AssertAuthoritativeMutation("CaptureSnapshotObject");
+		if (!Object || Object->GetDestroyed() || Object->IsDestroying())
+			throw std::runtime_error("Snapshot object must be live");
+		auto DataModelValue = Object->GetDataModel();
+		if (!DataModelValue || Object->GetReplicationScopeId() != DataModelValue->GetObjectId())
+			throw std::runtime_error("Snapshot object must belong to one DataModel scope");
+		auto *Definition = InstanceClassRegistry::GetDefinition(Object.get());
+		if (!Definition) throw std::runtime_error("Snapshot object has no class definition");
+		SnapshotObject Result{
+			.Id = WireObjectId::FromObjectId(Object->GetObjectId()),
+			.ClassSchemaId = Definition->Id,
+			.ClassDefinitionVersion = Definition->DefinitionVersion,
+			.ClassName = Definition->ConstructionKind == SchemaClassConstructionKind::CustomData
+							 ? Definition->CanonicalName
+							 : Definition->ClassName,
+			.Name = Object->GetName(),
+		};
+		if (auto Parent = Object->GetParent()) {
+			if ((*Parent)->GetDataModel() != DataModelValue)
+				throw std::runtime_error("Snapshot object has an external parent");
+			Result.Parent = WireObjectId::FromObjectId((*Parent)->GetObjectId());
+		}
+		for (const auto &[Name, Property] : Definition->AllProperties) {
+			if (Property->CustomSchemaPropertyType || Name == "Name" ||
+				Property->ReplicationPolicy != InstanceProperty::Replication::FutureReplicated || !Property->Read ||
+				!Property->Write)
+				continue;
+			if (Property->ReadObjectReference) {
+				auto Referenced = Property->ReadObjectReference(Object.get());
+				if (!Referenced)
+					Result.Properties.emplace(Name, std::monostate{});
+				else {
+					if (Referenced->GetDestroyed() || Referenced->IsDestroying() ||
+						Referenced->GetDataModel() != DataModelValue)
+						throw std::runtime_error("Snapshot property references a stale or external object");
+					Result.Properties.emplace(
+						Name, WireObjectReference{WireObjectId::FromObjectId(Referenced->GetObjectId())}
+					);
+				}
+			} else if (Property->ReadEnumValue) {
+				auto [EnumName, EnumValue] = Property->ReadEnumValue(Object.get());
+				auto EnumType = Enums::GetEnums().find(EnumName);
+				if (EnumType == Enums::GetEnums().end())
+					throw std::runtime_error("Snapshot enum type is not registered");
+				auto Item = EnumType->second->FromValue(EnumValue);
+				if (!Item) throw std::runtime_error("Snapshot enum value is not registered");
+				Result.Properties.emplace(Name, WireEnumItem{EnumName, std::string(Item->Name)});
+			} else {
+				auto Encoded = EncodeNativeValue(Property->Read(Object.get()));
+				if (!Encoded) throw std::runtime_error("Snapshot property has no wire encoding: " + Name);
+				Result.Properties.emplace(Name, std::move(*Encoded));
+			}
+		}
+		Result.Attributes = Object->GetAttributeValues(ScriptSecurityContext::CoreTrusted());
+		(void)ValidateAttributeCollection(Result.Attributes);
+		for (const auto &[ExtensionId, Properties] :
+			 Object->GetExtensionPropertyOverrides(ScriptSecurityContext::CoreTrusted())) {
+			auto *Extension = GetActiveRuntimeSchemaRegistry().FindExtensionById(ExtensionId);
+			if (!Extension) throw std::runtime_error("Snapshot extension definition is missing");
+			Result.Extensions.push_back({ExtensionId, Extension->DefinitionVersion, Properties});
+		}
+		for (const auto &[DeclaringClassId, Properties] :
+			 Object->GetCustomClassPropertyOverrides(ScriptSecurityContext::CoreTrusted())) {
+			auto *DeclaringClass = GetActiveRuntimeSchemaRegistry().FindClassById(DeclaringClassId);
+			if (!DeclaringClass) throw std::runtime_error("Snapshot custom class definition is missing");
+			Result.CustomProperties.push_back({
+				DeclaringClassId,
+				DeclaringClass->DefinitionVersion,
+				Properties,
+			});
+		}
+		Result.Tags = DataModelValue->Tags.GetTags(
+			DataModelValue->GetObjectId(), Object->GetObjectId(), ScriptSecurityContext::CoreTrusted()
+		);
+		return Result;
+	}
+
 	Snapshot CaptureSnapshot(const std::shared_ptr<Instance> &root) {
 		AssertAuthoritativeMutation("CaptureSnapshot");
 		std::vector<std::shared_ptr<Instance>> instances;

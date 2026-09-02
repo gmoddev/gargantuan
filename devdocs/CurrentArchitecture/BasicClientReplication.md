@@ -47,11 +47,12 @@ implemented protocols; general physics ownership remains future work. See
 ## Per-peer state and baselines
 
 `ReplicationCoordinator` owns one `PeerState` per generation-safe
-`ConnectionId`. Each state contains a `ReplicationView`, an authoritative
-`ChangeCursor`, and a reliable replication sequence. `AddPeer` captures a
-Snapshot-derived complete baseline and the active runtime-schema compatibility
-manifest. A baseline always starts at reliable sequence 1 and is identified by
-a nonzero `ReplicationEpoch`.
+`ConnectionId`. Each state contains policy-desired objects, a `ReplicationView`,
+an authoritative `ChangeCursor`, and a reliable replication sequence. The
+coordinator maintains one journal-refreshed authoritative object catalog;
+`AddPeer` projects the peer selection plus bounded dependency closure instead
+of recapturing the whole DataModel per peer. A baseline always starts at
+reliable sequence 1 and is identified by a nonzero `ReplicationEpoch`.
 
 The receiver accepts a baseline only when its schema manifest exactly equals
 the active ordered set of `(SchemaId, DefinitionVersion, definition kind)`.
@@ -60,9 +61,11 @@ before object publication. Reconnect establishes a strictly newer epoch and a
 fresh baseline. Old-epoch operations, replayed baselines, stale sequences, and
 out-of-order reliable sequences cannot mutate the replica.
 
-The initial implementation publishes the whole source scope by default.
-`SetRelevant` provides the minimal explicit view transition needed to prove
-publish/unpublish semantics; it is not spatial interest management.
+The legacy direct coordinator API still publishes the whole source scope by
+default for isolated callers. Production `GameSession` supplies the server-only
+selection from `ReplicationRelevance`. See
+`CharacterReplicationFoundation3E.md` for spatial policy, owner requirements,
+dependency closure, and transition bounds.
 
 ## Replication operations
 
@@ -85,10 +88,12 @@ state, coalescing later records for that object in the same batch. The
 `Destroyed` property journal notification is coalesced with its terminal
 `ObjectDestroyedChange` into the one `Destroy` opcode.
 
-References may name only objects already known to that peer. Unpublishing an
-object also unpublishes its descendants and any currently published dependents
-that reference it, reaching a fixed point rather than manufacturing nil
-references. Republishing sends complete current state.
+Hard references and non-nullable references enter dependency closure and may
+name only objects in the resulting materialized view. Nullable soft references
+outside the view encode nil and receive deterministic fixups on target
+enter/leave. Unpublishing removes the peer replica but not authoritative state;
+republishing sends complete current state and never an off-interest journal
+backlog.
 
 ## Binary protocol contract
 

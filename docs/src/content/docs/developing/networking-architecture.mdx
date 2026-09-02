@@ -400,8 +400,12 @@ of the accepted decisions above.
   trusted LocalPlayer identity, structural materialization, and Character control.
   The accepted identity is deliberately development-local; account tickets and
   discovery remain later control-plane work.
-- [ ] **Add interest and streaming when world scale requires it.** Expand
-    per-client views, priorities, relevance, and bandwidth policy.
+- [x] **Add bounded interest and structural streaming.** Server-owned relevance
+  now combines global/mandatory identity, owner-required Character membership,
+  and a bounded replaceable spatial grid. The resulting desired set feeds
+  dependency-closed structural Publish/Unpublish and GCHR materialization.
+  Client Luau cannot request arbitrary objects or pins. Adaptive cadence,
+  priority, and full region topology remain later work.
 
 Node integration for discovery and join tickets can proceed independently once
 the handshake contract exists. Collaborative editing remains later work.
@@ -417,7 +421,7 @@ The following are intentionally not fixed by this ADR:
 - scheduler tick rate, traffic lane count, weights, and default budgets;
 - transport-specific certificate or key distribution;
 - prediction, rollback, physics ownership, and reconciliation algorithms;
-- interest rules and spatial data structures; and
+- later game-facing relevance policy and full region/portal topology; and
 - collaborative editing transport and conflict resolution.
 
 These choices require measurements or later gameplay requirements. Implementations

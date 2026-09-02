@@ -68,6 +68,12 @@ not Character simulation CPU.
 
 ## GCHR versioning and state frames
 
+Foundation 3E advances server state frames to GCHR v3. It consumes the former
+16-bit reserved tail as a bounded peer materialization epoch while retaining
+the exact 28-byte header and compact-state sizes described below. GCHR v3 drops
+delayed state from a pre-leave lifetime after the same ObjectId reenters. The v2
+layout below remains the historical 3C baseline.
+
 GCHR v1 remains unambiguously decodable for control bind/unbind, semantic
 input, action request, and legacy singular state. Server realtime publication
 uses the new v2 `StateFrame` opcode. A v2 header cannot be interpreted as a v1

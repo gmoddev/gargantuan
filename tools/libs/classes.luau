@@ -9,6 +9,7 @@ export type ClassProperty = {
 	read unmodified: string,
 	read serializable: boolean?,
 	read replicated: boolean?,
+	read materializationDependency: "Soft" | "Hard"?,
 	read editable: boolean?,
 	read authority: "Main" | "Any"?,
 	read writable: boolean?,

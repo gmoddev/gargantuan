@@ -1,5 +1,9 @@
 # Current architecture
 
+- [Character / Replication Foundation 3E](CharacterReplicationFoundation3E.md)
+  defines server-owned peer relevance, the bounded replaceable spatial grid,
+  dependency closure, stable remote Player/Character-shell semantics,
+  structural enter/leave/reentry, and the shared GCHR materialization lifetime.
 - [Character Networking Foundation 3D](CharacterNetworkingFoundation3D.md)
   defines the packaged client/server game-session owner, accepted-peer and
   trusted LocalPlayer bootstrap, authoritative Player/Character control

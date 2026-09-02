@@ -1,6 +1,7 @@
 #include "gargantuan/Engine.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/KinematicCharacter.hpp"
+#include "gargantuan/classes/Part.hpp"
 #include "gargantuan/classes/Script.hpp"
 #include "gargantuan/filesystem/DiskFilesystem.hpp"
 #include "gargantuan/network/GameNetworkingSocketsTransport.hpp"
@@ -102,6 +103,14 @@ RunService.PreSimulation:Connect(function()
 end)
 )");
 	ClientActionPolicy->SetParent(ServerWorld);
+	auto RelevanceNpc = std::make_shared<KinematicCharacter>();
+	RelevanceNpc->SetName("GnsRelevanceNpc");
+	auto RelevanceRoot = std::make_shared<Part>();
+	RelevanceRoot->SetName("GnsRelevanceRoot");
+	RelevanceRoot->SetParent(RelevanceNpc);
+	RelevanceNpc->SetRootPart(RelevanceRoot);
+	RelevanceNpc->SetPosition({5'000.0f, 6.0f, 0.0f});
+	RelevanceNpc->SetParent(ServerWorld);
 	HeadlessRenderer ServerRenderer(Vector2(320, 240));
 	Engine ServerRuntime(
 		ServerWorld,
@@ -184,6 +193,22 @@ end)
 
 	if (ClientRuntime && !ServerPlayers.empty() && ServerPlayers.front()->GetCharacter()) {
 		auto CharacterValue = std::dynamic_pointer_cast<KinematicCharacter>(*ServerPlayers.front()->GetCharacter());
+		auto FindClientRelevanceNpc = [&]() {
+			return ClientRuntime ? std::dynamic_pointer_cast<KinematicCharacter>(
+							   ClientRuntime->DataModel->FindFirstChild("GnsRelevanceNpc", true)
+						   )
+						 : nullptr;
+		};
+		auto StepNetwork = [&]() {
+			ClientRuntime->Step();
+			ServerRuntime.Step();
+			(void)Server->Poll();
+			(void)Client.Poll();
+			Server->Step(Tick);
+			Client.Step(Tick);
+			++Tick;
+			std::this_thread::sleep_for(1ms);
+		};
 		const auto InitialPosition = CharacterValue ? CharacterValue->GetPosition() : glm::vec3{};
 		(void)ClientRuntime->ProcessEvent(
 			KeyEvent{
@@ -236,6 +261,37 @@ end)
 		Check(
 			CharacterValue && CharacterValue->GetPosition().x > BeforeAction.x + 0.4f,
 			"real GNS action state applies server-owned pinned root motion"
+		);
+
+		Check(!FindClientRelevanceNpc(), "real GNS initial materialization excludes a distant NPC");
+		const auto FirstNpcTarget = CharacterValue->GetPosition() + glm::vec3(96.0f, 0.0f, 0.0f);
+		RelevanceNpc->SetPosition(FirstNpcTarget);
+		const auto FirstNpcDeadline = std::chrono::steady_clock::now() + 10s;
+		while (std::chrono::steady_clock::now() < FirstNpcDeadline && !FindClientRelevanceNpc())
+			StepNetwork();
+		auto FirstNpcReplica = FindClientRelevanceNpc();
+		Check(
+			FirstNpcReplica && FirstNpcReplica->GetRootPart() &&
+				glm::distance(FirstNpcReplica->GetPosition(), FirstNpcTarget) < 1.0f,
+			"real GNS materializes an entering NPC with its RootPart and current authoritative transform"
+		);
+
+		RelevanceNpc->SetPosition({6'000.0f, 6.0f, 0.0f});
+		const auto NpcLeaveDeadline = std::chrono::steady_clock::now() + 10s;
+		while (std::chrono::steady_clock::now() < NpcLeaveDeadline && FindClientRelevanceNpc()) StepNetwork();
+		Check(
+			!FindClientRelevanceNpc() && !RelevanceNpc->GetDestroyed(),
+			"real GNS peer unpublish removes the NPC replica without destroying server authority"
+		);
+		const auto ReentryNpcTarget = CharacterValue->GetPosition() + glm::vec3(128.0f, 0.0f, 0.0f);
+		RelevanceNpc->SetPosition(ReentryNpcTarget);
+		const auto NpcReentryDeadline = std::chrono::steady_clock::now() + 10s;
+		while (std::chrono::steady_clock::now() < NpcReentryDeadline && !FindClientRelevanceNpc()) StepNetwork();
+		auto ReenteredNpcReplica = FindClientRelevanceNpc();
+		Check(
+			ReenteredNpcReplica && ReenteredNpcReplica->GetRootPart() &&
+				glm::distance(ReenteredNpcReplica->GetPosition(), ReentryNpcTarget) < 1.0f,
+			"real GNS reentry uses the NPC's current state rather than replaying off-interest motion"
 		);
 
 		const auto ClientConnection = Client.GetPrimaryConnection();

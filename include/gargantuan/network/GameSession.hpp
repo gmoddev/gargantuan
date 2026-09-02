@@ -2,6 +2,7 @@
 
 #include "gargantuan/network/Limits.hpp"
 #include "gargantuan/network/Outcome.hpp"
+#include "gargantuan/network/ReplicationRelevance.hpp"
 #include "gargantuan/network/Transport.hpp"
 #include "gargantuan/runtime/ObjectId.hpp"
 
@@ -9,6 +10,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 
 namespace gargantuan {
@@ -30,6 +32,7 @@ namespace gargantuan::network {
 		NetworkLimits Limits;
 		std::uint64_t HandshakeTimeoutTicks = DefaultGameSessionHandshakeTimeoutTicks;
 		std::uint64_t ClientNonce = 0;
+		ReplicationRelevanceConfiguration Relevance;
 
 		[[nodiscard]] bool IsValid() const;
 		[[nodiscard]] static NetworkLimits DefaultLimits();
@@ -50,6 +53,25 @@ namespace gargantuan::network {
 		std::uint64_t ActionsPresented = 0;
 		std::uint64_t ActionPresentationStops = 0;
 		std::uint64_t ActionPresentationDeferrals = 0;
+		std::uint64_t SessionAcceptanceCpuNanoseconds = 0;
+		std::uint64_t PlayerCreationCpuNanoseconds = 0;
+		std::uint64_t ServerGraphSynchronizationCpuNanoseconds = 0;
+		std::uint64_t BaselineSnapshotCpuNanoseconds = 0;
+		std::uint64_t BaselineDiscoveryCpuNanoseconds = 0;
+		std::uint64_t BaselineEncodeCpuNanoseconds = 0;
+		std::uint64_t GameplayRegistrationCpuNanoseconds = 0;
+		std::uint64_t RelevanceInitializationCpuNanoseconds = 0;
+		std::uint64_t RelevantObjects = 0;
+		std::uint64_t RelevanceEnters = 0;
+		std::uint64_t RelevanceLeaves = 0;
+		std::uint64_t RelevanceQueries = 0;
+		std::uint64_t RelevanceCandidates = 0;
+		std::uint64_t RelevanceCpuNanoseconds = 0;
+		std::uint64_t MaterializedObjects = 0;
+		std::uint64_t MaterializedCharacters = 0;
+		std::uint64_t MaterializationBacklog = 0;
+		std::uint64_t MaterializationTransitions = 0;
+		std::uint64_t MaterializationCpuNanoseconds = 0;
 	};
 
 	class GameSession final {
@@ -76,6 +98,7 @@ namespace gargantuan::network {
 		[[nodiscard]] std::shared_ptr<DataModel> GetClientDataModel() const;
 		[[nodiscard]] std::optional<ConnectionId> GetPrimaryConnection() const;
 		[[nodiscard]] std::shared_ptr<Player> GetAcceptedPlayer(ConnectionId Connection) const;
+		bool SetTrustedReplicationFocus(ConnectionId Connection, std::span<const glm::vec3> FocusPoints);
 
 	  private:
 		struct Implementation;
