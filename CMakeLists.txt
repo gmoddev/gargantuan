@@ -693,6 +693,9 @@ if(BUILD_TESTING)
 			gargantuan_core
 			gargantuan_gns_transport
 		)
+		target_compile_definitions(gargantuan_game_session_real_transport_tests PRIVATE
+			GARGANTUAN_FIRST_COMPLETE_GAME_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/samples/FirstCompleteGame"
+		)
 	endif()
 	if(GARGANTUAN_BUILD_RENDERER_BENCHMARKS)
 		add_executable(gargantuan_renderer_benchmark "tests/RendererBenchmark.cpp")

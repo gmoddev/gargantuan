@@ -92,7 +92,11 @@ derives its root movement on the server, and reconciles the predicted Character.
 The client never sends CFrame or root displacement. This network proof uses the
 production Character codec/scheduler over deterministic simulated transport;
 the optional localhost gate repeats the same bind/input/action/state path over
-GameNetworkingSockets. No sample-only RemoteEvent or Humanoid is involved.
+GameNetworkingSockets and verifies disconnect cleanup. The package gate overlays
+role-specific proof Scripts onto a temporary copy, then exercises the same
+default input, movement, action presentation, remote-NPC, camera (graphical),
+and teardown path in separate packaged processes without changing this saved
+fixture. No sample-only RemoteEvent or Humanoid is involved.
 
 The saved fixture also authors the canonical `Lighting` service with afternoon
 sun, ambient light, exposure, bounded fog, and a direct six-face `Sky`. All six

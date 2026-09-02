@@ -86,6 +86,7 @@ int main(int argc, char *argv[]) {
 	Program.add_description("Gargantuan standalone game runtime");
 	Program.add_argument("--headless").flag().help("disable the graphical renderer");
 	Program.add_argument("--startup-smoke").flag().help("exit after a bounded runtime startup smoke");
+	Program.add_argument("--session-smoke").flag().help("require a bounded packaged game-session acceptance proof");
 	Program.add_argument("--max-frames").scan<'i', int>().default_value(0).help("bounded test-only frame count");
 	Program.add_argument("--server-bind").default_value(std::string()).help("host:port for a network game server");
 	Program.add_argument("--connect").default_value(std::string()).help("host:port for a network game client");
@@ -99,7 +100,8 @@ int main(int argc, char *argv[]) {
 	const auto ServerText = Program.get<std::string>("--server-bind");
 	const auto ClientText = Program.get<std::string>("--connect");
 	if ((!ServerText.empty() && !ClientText.empty()) || (!ServerText.empty() && !ParseEndpoint(ServerText)) ||
-		(!ClientText.empty() && !ParseEndpoint(ClientText))) {
+		(!ClientText.empty() && !ParseEndpoint(ClientText)) ||
+		(Program.is_used("--session-smoke") && ServerText.empty() && ClientText.empty())) {
 		std::cerr << "GargantuanPlayer network endpoint arguments are invalid.\n";
 		return 2;
 	}
@@ -199,7 +201,13 @@ int main(int argc, char *argv[]) {
 							  ? RuntimeMode::NetworkServer
 							  : (!ClientText.empty() ? RuntimeMode::NetworkClient : RuntimeMode::Offline);
 		Runtime = std::make_unique<Engine>(
-			World, Renderer.get(), nullptr, EngineProviderConfiguration{.AudioEnabled = !Headless, .Mode = Mode}
+			World,
+			Renderer.get(),
+			[](std::string Code, std::string Message) {
+				if (Code == "Information") return;
+				std::cerr << "[Runtime:Diagnostic] [" << Code << "] " << Message << '\n';
+			},
+			EngineProviderConfiguration{.AudioEnabled = !Headless, .Mode = Mode}
 		);
 #if defined(GARGANTUAN_WITH_GNS)
 		if (!ServerText.empty()) {
@@ -231,8 +239,10 @@ int main(int argc, char *argv[]) {
 		const auto RequestedFrames = Program.get<int>("--max-frames");
 		const auto MaximumFrames = RequestedFrames > 0 ? RequestedFrames
 													   : (Program.is_used("--startup-smoke") ? 12 : 0);
+		const bool SessionSmoke = Program.is_used("--session-smoke");
+		bool SessionMovementInjected = false;
 		int Frames = 0;
-		auto DedicatedServerDeadline = std::chrono::steady_clock::now();
+		auto NetworkFrameDeadline = std::chrono::steady_clock::now();
 		while (Runtime->ProcessService->Alive) {
 			if (Session) (void)Session->Poll();
 			HostEvent Event;
@@ -242,24 +252,93 @@ int main(int argc, char *argv[]) {
 				if (!Runtime->ProcessService->Alive) break;
 			}
 			if (!Runtime->ProcessService->Alive) break;
+			if (SessionSmoke && !ClientText.empty() && !SessionMovementInjected) {
+				if (auto LocalPlayer = Runtime->Players->GetLocalPlayer();
+					LocalPlayer && (*LocalPlayer)->GetCharacter()) {
+					(void)Runtime->ProcessEvent(
+						KeyEvent{
+							.Device = {1},
+							.Physical = PhysicalKey::W,
+							.Logical = LogicalKey::W,
+							.State = ButtonState::Pressed,
+						}
+					);
+					SessionMovementInjected = true;
+				}
+			}
 			Runtime->Step();
 			if (Session) {
 				Session->Step(Runtime->GetSimulationTick());
 				if (Session->GetStatus() == network::GameSessionStatus::Failed)
 					throw std::runtime_error(Session->GetFailure());
+				if (SessionSmoke) {
+					const auto Metrics = Session->GetMetrics();
+					const bool CameraReady = Headless || Runtime->Workspace->GetCurrentCamera()->GetCameraType() ==
+															 Enums::CameraType::Scriptable;
+					const bool Satisfied =
+						Session->GetRole() == network::GameSessionRole::Server
+							? Metrics.PlayersRemoved >= 1 && Runtime->Players->GetPlayers().empty()
+							: Runtime->CharacterControl->GetAttributeValue("SessionSmokeComplete").has_value() &&
+								  Metrics.ActionsPresented >= 1 && Metrics.ActionPresentationStops >= 1 && CameraReady;
+					if (Satisfied) Runtime->ProcessService->MarkExit(0);
+				}
 			}
-			if (MaximumFrames > 0 && ++Frames >= MaximumFrames) Runtime->ProcessService->MarkExit(0);
-			if (Headless && !ServerText.empty()) {
-				DedicatedServerDeadline += std::chrono::microseconds(16'667);
+			if (MaximumFrames > 0 && ++Frames >= MaximumFrames) {
+				int ExitCode = SessionSmoke ? 8 : 0;
+				if (SessionSmoke && !ClientText.empty()) {
+					if (!Runtime->Players->GetLocalPlayer())
+						ExitCode = 10;
+					else if (!Runtime->Players->GetLocalPlayer().value()->GetCharacter())
+						ExitCode = 11;
+					else if (auto Value = Runtime->CharacterControl->GetAttributeValue("SessionSmokeStep"))
+						if (const auto *Step = std::get_if<int>(&*Value))
+							ExitCode = 20 + *Step;
+						else if (const auto *Step = std::get_if<double>(&*Value))
+							ExitCode = 20 + static_cast<int>(*Step);
+						else
+							ExitCode = 13;
+					else
+						ExitCode = 12;
+					if (ExitCode != 0)
+						if (const auto LocalPlayer = Runtime->Players->GetLocalPlayer();
+							LocalPlayer && (*LocalPlayer)->GetCharacter()) {
+							const auto Position = (*LocalPlayer)->GetCharacter().value()->GetPosition();
+							std::cerr << "[Package:Session] client proof stopped at Character position " << Position.x
+									  << ", " << Position.y << ", " << Position.z << " with CameraType "
+									  << static_cast<int>(Runtime->Workspace->GetCurrentCamera()->GetCameraType())
+									  << '\n';
+						}
+				}
+				Runtime->ProcessService->MarkExit(ExitCode);
+			}
+			if (!ServerText.empty() || !ClientText.empty()) {
+				NetworkFrameDeadline += std::chrono::microseconds(16'667);
 				const auto Now = std::chrono::steady_clock::now();
-				if (DedicatedServerDeadline > Now)
-					std::this_thread::sleep_until(DedicatedServerDeadline);
-				else if (Now - DedicatedServerDeadline > std::chrono::milliseconds(250))
-					DedicatedServerDeadline = Now;
+				if (NetworkFrameDeadline > Now)
+					std::this_thread::sleep_until(NetworkFrameDeadline);
+				else if (Now - NetworkFrameDeadline > std::chrono::milliseconds(250))
+					NetworkFrameDeadline = Now;
 			}
 		}
 		const auto ExitCode = Runtime->ProcessService->ExitCode;
-		if (Session) Session->Stop();
+		if (Session) {
+			const auto Metrics = Session->GetMetrics();
+			LOG_INFO(
+				App,
+				"[Network:Session] role=%s accepted=%llu ready=%llu playersCreated=%llu playersRemoved=%llu "
+				"controlBindings=%llu controlRevocations=%llu actionsPresented=%llu actionStops=%llu",
+				Session->GetRole() == network::GameSessionRole::Server ? "server" : "client",
+				static_cast<unsigned long long>(Metrics.AcceptedPeers),
+				static_cast<unsigned long long>(Metrics.ReadyPeers),
+				static_cast<unsigned long long>(Metrics.PlayersCreated),
+				static_cast<unsigned long long>(Metrics.PlayersRemoved),
+				static_cast<unsigned long long>(Metrics.CharacterControlBindings),
+				static_cast<unsigned long long>(Metrics.CharacterControlRevocations),
+				static_cast<unsigned long long>(Metrics.ActionsPresented),
+				static_cast<unsigned long long>(Metrics.ActionPresentationStops)
+			);
+			Session->Stop();
+		}
 		Session.reset();
 		Runtime->Destroy();
 		Runtime.reset();

@@ -1,10 +1,14 @@
 #include "gargantuan/Engine.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/KinematicCharacter.hpp"
+#include "gargantuan/classes/Script.hpp"
+#include "gargantuan/filesystem/DiskFilesystem.hpp"
 #include "gargantuan/network/GameNetworkingSocketsTransport.hpp"
 #include "gargantuan/network/GameSession.hpp"
+#include "gargantuan/packaging/PackageBuilder.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/render/Renderer.hpp"
+#include "gargantuan/services/AssetService.hpp"
 #include "gargantuan/services/Players.hpp"
 
 #include <chrono>
@@ -44,6 +48,60 @@ int main() {
 	gargantuan::BootstrapNativeRuntimeSchema();
 
 	auto ServerWorld = std::make_shared<DataModel>();
+	DiskFilesystem SampleFilesystem(std::filesystem::path(GARGANTUAN_FIRST_COMPLETE_GAME_ROOT));
+	auto ServerAssets = std::dynamic_pointer_cast<AssetService>(ServerWorld->GetService("AssetService"));
+	ServerAssets->LoadProjectAssets(SampleFilesystem);
+	const auto RuntimeAssets = ServerAssets->CaptureRuntimeAssets();
+	auto ServerActionPolicy = std::make_shared<Script>();
+	ServerActionPolicy->SetName("GnsActionPolicy");
+	ServerActionPolicy->SetRunContext(Enums::RunContext::Server);
+	ServerActionPolicy->SetSource(R"(
+local CharacterControl = game:GetService("CharacterControlService")
+assert(CharacterControl:RegisterAction(
+	"GnsLunge",
+	"asset://d9d9e9649adbad59588d137c2a642e1d",
+	0.5,
+	Vector3.new(0.9, 0, 0),
+	0,
+	true
+))
+CharacterControl:SetActionPolicy(function(Player, Character, ActionName)
+	local Accepted = ActionName == "GnsLunge" and Player.Character == Character
+	if Accepted then
+		Character:SetAttribute("GnsActionAuthorized", true)
+	end
+	return Accepted
+end)
+)");
+	ServerActionPolicy->SetParent(ServerWorld);
+	auto ClientActionPolicy = std::make_shared<Script>();
+	ClientActionPolicy->SetName("GnsActionRequest");
+	ClientActionPolicy->SetRunContext(Enums::RunContext::Client);
+	ClientActionPolicy->SetSource(R"(
+local CharacterControl = game:GetService("CharacterControlService")
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+assert(CharacterControl:RegisterAction(
+	"GnsLunge",
+	"asset://d9d9e9649adbad59588d137c2a642e1d",
+	0.5,
+	Vector3.new(0.9, 0, 0),
+	0,
+	true
+))
+CharacterControl.ActionResolved:Connect(function(Character, ActionName, Accepted)
+	if ActionName == "GnsLunge" and Accepted then
+		Character:SetAttribute("GnsActionResolved", true)
+	end
+end)
+local Requested = false
+RunService.PreSimulation:Connect(function()
+	if not Requested and Players.LocalPlayer and Players.LocalPlayer.Character then
+		Requested = CharacterControl:RequestAction("GnsLunge")
+	end
+end)
+)");
+	ClientActionPolicy->SetParent(ServerWorld);
 	HeadlessRenderer ServerRenderer(Vector2(320, 240));
 	Engine ServerRuntime(
 		ServerWorld,
@@ -84,6 +142,14 @@ int main() {
 		(void)Server->Poll();
 		(void)Client.Poll();
 		if (!ClientRuntime && Client.GetClientDataModel()) {
+			auto ClientAssets = std::dynamic_pointer_cast<AssetService>(
+				Client.GetClientDataModel()->GetService("AssetService")
+			);
+			ClientAssets->LoadRuntimeAssetSnapshot(RuntimeAssets);
+			Check(
+				PackageBuilder::HydrateClientCode(ServerWorld, Client.GetClientDataModel()) >= 1,
+				"real GNS client hydrates trusted packaged client policy"
+			);
 			ClientRenderer = std::make_unique<HeadlessRenderer>(Vector2(320, 240));
 			ClientRuntime = std::make_unique<Engine>(
 				Client.GetClientDataModel(),
@@ -142,6 +208,61 @@ int main() {
 		Check(
 			CharacterValue && glm::distance(CharacterValue->GetPosition(), InitialPosition) > 0.25f,
 			"real GNS carries ordinary Luau semantic input to authoritative Character movement"
+		);
+
+		const auto BeforeAction = CharacterValue ? CharacterValue->GetPosition() : glm::vec3{};
+		const auto ActionDeadline = std::chrono::steady_clock::now() + 10s;
+		bool ActionResolved = false;
+		while (std::chrono::steady_clock::now() < ActionDeadline &&
+			   (!ActionResolved || !CharacterValue || CharacterValue->GetPosition().x <= BeforeAction.x + 0.4f)) {
+			ClientRuntime->Step();
+			ServerRuntime.Step();
+			(void)Server->Poll();
+			(void)Client.Poll();
+			Server->Step(Tick);
+			Client.Step(Tick);
+			++Tick;
+			if (auto LocalPlayer = ClientRuntime->Players->GetLocalPlayer();
+				LocalPlayer && (*LocalPlayer)->GetCharacter())
+				ActionResolved =
+					(*LocalPlayer)->GetCharacter().value()->GetAttributeValue("GnsActionResolved").has_value();
+			std::this_thread::sleep_for(1ms);
+		}
+		Check(
+			CharacterValue && CharacterValue->GetAttributeValue("GnsActionAuthorized").has_value(),
+			"real GNS action reaches generic server Luau authorization"
+		);
+		Check(ActionResolved, "real GNS authoritative action state resolves to client Luau");
+		Check(
+			CharacterValue && CharacterValue->GetPosition().x > BeforeAction.x + 0.4f,
+			"real GNS action state applies server-owned pinned root motion"
+		);
+
+		const auto ClientConnection = Client.GetPrimaryConnection();
+		Check(ClientConnection.has_value(), "real GNS client retains its session connection identity");
+		if (ClientConnection)
+			(void)ClientTransport->Disconnect(
+				*ClientConnection, {DisconnectReason::LocalShutdown, "real GNS lifecycle test disconnect"}
+			);
+		const auto DisconnectDeadline = std::chrono::steady_clock::now() + 10s;
+		while (std::chrono::steady_clock::now() < DisconnectDeadline && !ServerRuntime.Players->GetPlayers().empty()) {
+			(void)Server->Poll();
+			(void)Client.Poll();
+			Server->Step(Tick);
+			Client.Step(Tick);
+			++Tick;
+			std::this_thread::sleep_for(1ms);
+		}
+		Check(
+			ServerRuntime.Players->GetPlayers().empty() && Server->GetMetrics().PlayersRemoved == 1,
+			"real GNS disconnect revokes control and removes the authoritative Player"
+		);
+		Check(
+			CharacterValue && CharacterValue->GetDestroyed(), "real GNS disconnect destroys default Character policy"
+		);
+		Check(
+			Client.GetStatus() == GameSessionStatus::Failed && !ClientRuntime->Players->GetLocalPlayer().has_value(),
+			"real GNS hard disconnect stops client control and clears trusted LocalPlayer"
 		);
 	}
 

@@ -46,15 +46,22 @@ no transform or root delta. The production GNS opt-in gate repeats the same
 control/input/action/state boundary on localhost without making networking part
 of the authored game scripts.
 
-Foundation 3D additionally packages and launches separate headless server/client
-processes through `--server-bind` and `--connect`. Its session test hydrates a
-client Script from trusted package content, registers a game-defined semantic
-`SessionLunge`, requests it through `CharacterControlService`, validates it in
-server Luau against the authoritative `Player.Character`, observes 0.87 m of
-server-derived root motion, and receives the accepted action resolution. The
-same session path proves default ActionMap movement, Character replacement,
-two-client isolation, `CharacterAutoLoads=false`, disconnect teardown, hostile
-pre-acceptance rejection, handshake timeout, and localhost GNS transport.
+Foundation 3D additionally packages and launches separate server/client
+processes through `--server-bind` and `--connect`. The package gate runs both a
+graphical and a headless client against a headless server. It hydrates a client
+Script from trusted package content, drives a real `W` event through the
+default ActionMap, registers the game-defined semantic `PackageLunge`, requests
+it through `CharacterControlService`, validates it in server Luau against the
+authoritative `Player.Character`, observes 0.87 m of server-derived root
+motion, observes action resolution/expiry and presentation start/stop, retains
+both Player-independent sample Characters, verifies the graphical default
+camera, and requires server-observed Player/Character teardown after client
+exit. The test adds its role-specific proof Scripts to a temporary copy; it
+does not alter the saved sample. The deterministic session path additionally
+proves Character replacement, two-client isolation,
+`CharacterAutoLoads=false`, hostile pre-acceptance rejection, and handshake
+timeout. A separate real-GNS gate proves input, action/state, and explicit
+disconnect cleanup over localhost transport.
 
 ## Authoring workflow used
 
@@ -82,7 +89,8 @@ pre-acceptance rejection, handshake timeout, and localhost GNS transport.
 8. Launch the unchanged project outside Studio with the supported standalone
    command below.
 9. Run the deterministic Character-network gate against the copied sample
-   catalog and the optional localhost GNS Character transport gate.
+   catalog, the localhost GNS lifecycle gate, and the packaged headless and
+   graphical server/client process gates.
 
 This could not be authored efficiently through the visible Studio GUI alone.
 Studio lacks compound-value editors and transform gizmos for the required

@@ -39,11 +39,11 @@ GargantuanPlayer --server-bind HOST:PORT [--headless]
 GargantuanPlayer --connect HOST:PORT [--headless]
 ```
 
-The GNS-enabled player runs `Poll -> Engine::Step -> GameSession::Step` and a
-headless dedicated server paces that loop to 60 Hz. Offline launch remains the
-default and still creates its trusted local Player without a transport. A
-future listen server can compose the same server/client roles without changing
-Character policy; 3D does not add listen-server UX.
+The GNS-enabled player runs `Poll -> Engine::Step -> GameSession::Step`; both
+network roles pace that loop to 60 Hz, including a headless dedicated server.
+Offline launch remains the default and still creates its trusted local Player
+without a transport. A future listen server can compose the same server/client
+roles without changing Character policy; 3D does not add listen-server UX.
 
 ## Admission and identity
 
@@ -286,22 +286,39 @@ Existing Character tests retain the 48-case latency/jitter/loss/reorder matrix,
 delayed materialization/control, stale generation/epoch, action replay/content
 mismatch, collision reconciliation, and NPC state.
 
+The optional real-GNS gate now loads the sample's actual Animation catalog,
+hydrates trusted client code, carries a real `W` platform event through the
+default ActionMap into authoritative Character movement, resolves a generic
+Luau-authorized action with pinned root motion, then performs a transport
+disconnect and verifies control revocation, Player removal, default Character
+destruction, failed client status, and cleared `LocalPlayer`.
+
+The packaged gate makes a temporary copy of `FirstCompleteGame` and adds only
+role-specific proof Scripts to that copy; the saved sample stays unchanged. It
+builds one canonical package and launches separate GNS server/client processes
+for both graphical and headless clients. Both variants require trusted
+`LocalPlayer`/Character materialization, default ActionMap movement observed on
+the server, generic server Luau action authorization, authoritative action
+resolution and expiry, 0.87 m pinned root motion, presentation start/stop,
+both sample NPC Characters, and server-observed disconnect teardown. The
+graphical variant additionally requires the shipped camera to be Scriptable.
+
 One requested-host MSVC Release admission run, including Player creation,
 baseline registration, default server Character assembly, ClientReady,
 Remote/GCHR peer registration, and control binding, measured:
 
 | Ready peers | Total ms | ms/peer | allocator calls | control binds |
 | ---: | ---: | ---: | ---: | ---: |
-| 1 | 0.424 | 0.424 | 2,020 | 1 |
-| 32 | 26.563 | 0.830 | 404,364 | 32 |
-| 100 | 290.053 | 2.901 | 3,613,481 | 100 |
-| 500 | 12,787.7 | 25.575 | 43,649,262 | 500 |
+| 1 | 0.439 | 0.439 | 2,020 | 1 |
+| 32 | 29.005 | 0.906 | 404,364 | 32 |
+| 100 | 306.422 | 3.064 | 3,613,481 | 100 |
+| 500 | 13,077.4 | 26.155 | 43,649,262 | 500 |
 
 The 500-peer admission figure intentionally includes the current all-peer
 structural baseline, so it exposes the expected quadratic pressure that future
 3E relevance must remove rather than hiding it as socket latency. Admission is
 bounded lifecycle work, not steady state. After warmup, the Luau command bridge
-measured 0.376/0.557/0.408/0.398 microseconds per call for 1/10/100/500
+measured 0.369/0.374/0.365/0.389 microseconds per call for 1/10/100/500
 Characters across 120 ticks and recorded zero general allocator calls for all
 60,000 calls at 500 Characters. This is one bounded policy read per active
 Character, not 30,000 scheduled Luau tasks per second.
