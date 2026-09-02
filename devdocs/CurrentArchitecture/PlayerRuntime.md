@@ -201,24 +201,35 @@ when disabled.
 The older native free-camera remains active when the default camera is disabled,
 preserving the proven custom-controller path and host capture behavior.
 
-## Play isolation and future multiplayer compatibility
+## Play isolation and network session ownership
 
 The entire Players tree, character, action state, runtime modules, connections,
 and tasks live in the PlaySession runtime DataModel/VM. Repeated Stop destroys
 them and does not mutate, dirty, save, revise, or add history to authoring state.
 
-The current model deliberately does not claim final multiplayer semantics. A
-future split can preserve these contracts by making server session code own
-authoritative Player membership and character state while client DataModels
-expose the appropriate replicated Players plus one `LocalPlayer`. Transport
-connections can authenticate or carry a Player identity without becoming that
-identity. No current `PlayerId = 1` behavior should be interpreted as a network
-protocol or persistent account identifier.
+Offline Play retains the local `PlayerId = 1` lifecycle above. In a networked
+runtime, `GameSession` now owns the split: an accepted server connection creates
+one authoritative Player, structural replication publishes it, and GSES names
+that exact Player ObjectId and session-scoped PlayerId to establish
+`Players.LocalPlayer`. The client never chooses or uploads its Player object.
+`ConnectionId` remains native-only and is not Player identity. Disconnect,
+replacement, or generation change removes the association and cannot inherit
+the previous control epoch.
+
+Network server defaults run `DefaultCharacterAssembly`,
+`DefaultNetworkLocomotion`, and `DefaultNetworkServerRuntime`; network client
+defaults run `DefaultActionMap`, the same locomotion policy,
+`DefaultNetworkCharacterRuntime`, `DefaultCamera`, and
+`DefaultNetworkClientRuntime`. Only the server responds to automatic spawn
+requests. The client materializes `Player.Character` and submits semantic intent
+through `CharacterControlService`. Packaged client Script and ModuleScript source
+is hydrated from the already-validated local package into matching replicated
+objects because Script source is deliberately not sent by structural replication.
 
 ## Deliberately deferred
 
 This slice does not add matchmaking, gargantuan-node integration, PlayerAuth,
-DataStore, prediction, final Players replication, motion warping, UI, gamepad
+DataStore, persistent account identity, motion warping, UI, gamepad
 defaults, moving platforms, one-way collision, arbitrary query filtering, or a
 full-featured slope/step motor. Humanoid compatibility is permanently excluded;
 `Character` remains the canonical actor type. The shipped runtime

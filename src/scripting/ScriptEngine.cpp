@@ -81,9 +81,11 @@ namespace gargantuan {
 
 	ScriptEngine::ScriptEngine(
 		std::shared_ptr<gargantuan::DataModel> game,
-		std::function<void(std::string, std::string)> RuntimeDiagnosticValue
+		std::function<void(std::string, std::string)> RuntimeDiagnosticValue,
+		RuntimeMode ModeValue
 	)
-		: L(luaL_newstate()), Threads(L), DataModel(game), RuntimeDiagnostic(std::move(RuntimeDiagnosticValue)) {
+		: L(luaL_newstate()), Threads(L), DataModel(game), RuntimeDiagnostic(std::move(RuntimeDiagnosticValue)),
+		  Mode(ModeValue) {
 		if (L == nullptr) {
 			throw std::runtime_error("Failed to instantiate Luau VM");
 		}
@@ -232,12 +234,18 @@ namespace gargantuan {
 
 		for (auto it = ScriptQueue.begin(); it != ScriptQueue.end();) {
 			auto script = *it;
+			if (!CanRunScript(*script)) {
+				it = ScriptQueue.erase(it);
+				continue;
+			}
 			ManagedScripts.emplace_back(script);
 			auto status = script->Step(L);
 
 			switch (status) {
 			case ScriptStatus::Error:
-				LOG_CRITICAL(Lua, "[Runtime:Luau] [%s] %s", script->GetFullName().c_str(), script->ErrorMessage.c_str());
+				LOG_CRITICAL(
+					Lua, "[Runtime:Luau] [%s] %s", script->GetFullName().c_str(), script->ErrorMessage.c_str()
+				);
 				if (RuntimeDiagnostic)
 					RuntimeDiagnostic("Error", "[" + script->GetFullName() + "] " + script->ErrorMessage);
 				[[fallthrough]];
@@ -258,20 +266,23 @@ namespace gargantuan {
 		}
 	}
 
+	bool ScriptEngine::CanRunScript(const Script &ScriptValue) const {
+		if (Mode == RuntimeMode::Offline) return true;
+		if (Mode == RuntimeMode::NetworkClient) return ScriptValue.GetRunContext() == Enums::RunContext::Client;
+		return ScriptValue.GetRunContext() != Enums::RunContext::Client;
+	}
+
 	void ScriptEngine::RunBootstrapScript(const std::shared_ptr<Script> &ScriptValue) {
-		if (!ScriptValue || ScriptValue->GetDestroyed() || ScriptValue->IsDestroying()) return;
+		if (!ScriptValue || ScriptValue->GetDestroyed() || ScriptValue->IsDestroying() || !CanRunScript(*ScriptValue))
+			return;
 		ManagedScripts.emplace_back(ScriptValue);
 		const auto Status = ScriptValue->Step(L);
 		if (Status == ScriptStatus::Error) {
 			LOG_CRITICAL(
-				Lua,
-				"[Runtime:Luau] [%s] %s",
-				ScriptValue->GetFullName().c_str(),
-				ScriptValue->ErrorMessage.c_str()
+				Lua, "[Runtime:Luau] [%s] %s", ScriptValue->GetFullName().c_str(), ScriptValue->ErrorMessage.c_str()
 			);
 			if (RuntimeDiagnostic)
-				RuntimeDiagnostic(
-					"Error", "[" + ScriptValue->GetFullName() + "] " + ScriptValue->ErrorMessage);
+				RuntimeDiagnostic("Error", "[" + ScriptValue->GetFullName() + "] " + ScriptValue->ErrorMessage);
 		} else if (Status == ScriptStatus::Finished && RuntimeDiagnostic)
 			RuntimeDiagnostic("Information", "[" + ScriptValue->GetFullName() + "] completed");
 		ScriptQueue.erase(ScriptValue);

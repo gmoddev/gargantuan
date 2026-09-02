@@ -22,9 +22,24 @@ namespace gargantuan {
 	}
 
 	void Player::InitializeIdentity(int Value) {
-		if (Value <= 0 || PlayerId != 0) throw std::logic_error("Player identity must be initialized exactly once");
-		PlayerId = Value;
+		if (Value <= 0 || PlayerIdValue != 0)
+			throw std::logic_error("Player identity must be initialized exactly once");
+		PlayerIdValue = Value;
 		NotifyPropertyCommitted("PlayerId");
+	}
+
+	void Player::SetReplicatedPlayerId(int Value) {
+		if (GetCurrentScriptSecurityContext().Domain != ScriptExecutionDomain::Core)
+			throw std::runtime_error("PlayerId is session-owned");
+		if (Value <= 0 || (PlayerIdValue != 0 && PlayerIdValue != Value))
+			throw std::invalid_argument("PlayerId must be nonzero and immutable");
+		if (PlayerIdValue == Value) return;
+		PlayerIdValue = Value;
+		NotifyPropertyCommitted("PlayerId");
+	}
+
+	int Player::GetPlayerId() const {
+		return PlayerIdValue;
 	}
 
 	void Player::InitializeAuthenticationIdentity(PlayerIdentity Identity) {

@@ -1,7 +1,7 @@
 ---
 status: current
 owner: networking
-last_verified: 2026-08-15
+last_verified: 2026-09-02
 related_code:
   - include/gargantuan/network/Replication.hpp
   - include/gargantuan/network/ReplicationProtocol.hpp
@@ -217,3 +217,11 @@ authentication tickets, negotiated schema-index tables, compression,
 production Node integration, and Studio play-session orchestration. The first
 two are now implemented as sibling protocols; their existence does not expand
 this structural layer's authority.
+
+Foundation 3D composes this unchanged one-way structural layer into
+`GameSession`. The server publishes the exact accepted Player identity and
+`Player.Character`; the client applies the baseline before trusted
+`LocalPlayer` selection and GCHR control activation. Runtime Character motion
+still bypasses structural commits, and engine runtime-module source is excluded
+from the replicated graph. This composition does not make client replica
+mutation an upstream replication path.

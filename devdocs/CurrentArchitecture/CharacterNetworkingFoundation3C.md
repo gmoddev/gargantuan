@@ -353,27 +353,27 @@ reconnect, destruction, ten lifecycle cycles, custom Luau policy,
 FirstCompleteGame BeaconLunge identity, optional localhost GNS, package closure,
 and structural-replication isolation.
 
-## Explicit deferrals and Foundation 3D priorities
+## Explicit deferrals and Foundation 3D result
 
-Foundation 3C does not implement delta compression, production spatial
+Foundation 3C did not itself implement delta compression, production spatial
 interest, regions/portals, production session bootstrap, default Luau network
 bridges, distributed ownership, server migration, adaptive network-quality
 estimation, remote gameplay prediction, combat rollback, ragdoll networking,
 motion warping, IK, retargeting, animation graphs, Node realtime routing, Studio
 network tuning UI, or a final long-term compatibility promise.
 
-Foundation 3D priorities are:
+Foundation 3D completed priority 1 through the packaged `GameSession`, GSES
+admission protocol, trusted `LocalPlayer` association, server-owned Player and
+Character lifecycle, and `CharacterControlService`; see
+`CharacterNetworkingFoundation3D.md`. Remaining priorities are:
 
-1. integrate the native managers with production server/client session and
-   Player/connection lifecycle bootstrap, plus narrow Luau semantic input/action
-   bridges;
-2. add measured peer-specific spatial relevance upstream of the existing
+1. add measured peer-specific spatial relevance upstream of the existing
    materialized-Character selection seam;
-3. complete Animator action-phase/content-readiness presentation without
+2. complete Animator action-phase/content-readiness presentation without
    replicating pose or applying root motion remotely;
-4. evaluate per-peer cadence/priority only from observed bandwidth and quality
+3. evaluate per-peer cadence/priority only from observed bandwidth and quality
    pressure; and
-5. reconsider explicit-baseline, periodically absolute delta states only if
+4. reconsider explicit-baseline, periodically absolute delta states only if
    future measurements show enough benefit to justify their loss behavior.
 
 Future ownership remains a server-issued control-epoch lease. It never grants

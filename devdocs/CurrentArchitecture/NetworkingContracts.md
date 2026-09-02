@@ -1,7 +1,7 @@
 ---
 status: current
 owner: networking
-last_verified: 2026-09-01
+last_verified: 2026-09-02
 related_code:
   - include/gargantuan/network/
   - src/network/
@@ -161,11 +161,14 @@ the production `NetworkScheduler`. See `NetworkSchedulerContract.md`.
 ## Deliberately not implemented
 
 There is now a versioned basic-replication binary codec, production scheduler,
-per-peer coordinator, client replica applicator, bounded Remote runtime, and a
-dedicated authoritative Character realtime protocol. Their scopes are
+per-peer coordinator, client replica applicator, bounded Remote runtime, a
+dedicated authoritative Character realtime protocol, and the bounded `GSES`
+game-session acceptance protocol. `GameSession` composes them over one
+generation-safe `ConnectionId` and does not add a second transport identity.
+Their scopes are
 documented in `BasicClientReplication.md`, `LuauRemotes.md`, and
-`CharacterNetworkingFoundation.md`. General realtime physics replication,
-authentication/ticket validation, spatial interest management, Node
+`CharacterNetworkingFoundation3D.md`. General realtime physics replication,
+external account authentication/ticket validation, spatial interest management, Node
 integration, and Studio play sessions remain unimplemented. The deterministic in-memory
 implementation is documented in `SimulatedTransport.md`; the opt-in real GNS
 adapter is documented in `RealGameTransport.md`. Backend contract types remain

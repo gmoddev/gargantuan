@@ -21,13 +21,12 @@ namespace gargantuan::network {
 		std::size_t MaximumSendBytesPerTick = 0;
 		std::size_t MaximumReceiveBytesPerTick = 0;
 		std::uint32_t MaximumMessagesPerTick = 0;
+		auto operator<=>(const NetworkLimits &) const = default;
 
 		[[nodiscard]] bool IsValid() const;
 		[[nodiscard]] static NetworkLimits NativeCeilings();
 	};
 
-	[[nodiscard]] std::optional<NetworkLimits> NegotiateNetworkLimits(
-		const NetworkLimits &First,
-		const NetworkLimits &Second
-	);
+	[[nodiscard]] std::optional<NetworkLimits>
+	NegotiateNetworkLimits(const NetworkLimits &First, const NetworkLimits &Second);
 }

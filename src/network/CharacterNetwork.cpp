@@ -89,9 +89,11 @@ namespace gargantuan::network {
 			HashWord(Hash, State.ControlEpoch.Value());
 			HashWord(Hash, State.AcknowledgedInput.Value());
 			HashWord(Hash, State.ResolvedAction.Value());
-			for (std::size_t Axis = 0; Axis < 3; ++Axis) HashFloat(Hash, State.Transform.Position[Axis]);
+			for (std::size_t Axis = 0; Axis < 3; ++Axis)
+				HashFloat(Hash, State.Transform.Position[Axis]);
 			for (std::size_t Column = 0; Column < 3; ++Column)
-				for (std::size_t Row = 0; Row < 3; ++Row) HashFloat(Hash, State.Transform.Rotation[Column][Row]);
+				for (std::size_t Row = 0; Row < 3; ++Row)
+					HashFloat(Hash, State.Transform.Rotation[Column][Row]);
 			for (std::size_t Axis = 0; Axis < 3; ++Axis) {
 				HashFloat(Hash, State.Velocity[Axis]);
 				HashFloat(Hash, State.FloorNormal[Axis]);
@@ -103,7 +105,8 @@ namespace gargantuan::network {
 				HashWord(Hash, State.ActiveAction->ActionToken);
 				HashWord(Hash, State.ActiveAction->Animation.High);
 				HashWord(Hash, State.ActiveAction->Animation.Low);
-				for (const auto Byte : State.ActiveAction->ContentRevision.Bytes) HashWord(Hash, Byte);
+				for (const auto Byte : State.ActiveAction->ContentRevision.Bytes)
+					HashWord(Hash, Byte);
 				HashWord(Hash, State.ActiveAction->StartTick);
 				HashWord(Hash, State.ActiveAction->DurationTicks);
 			}
@@ -119,8 +122,9 @@ namespace gargantuan::network {
 		return SimulationTicksPerSecond != 0 && StateUpdatesPerSecond != 0 &&
 			   StateUpdatesPerSecond <= SimulationTicksPerSecond &&
 			   SimulationTicksPerSecond % StateUpdatesPerSecond == 0 && AbsoluteRefreshTicks != 0 &&
-			   RemoteInterpolationDelayTicks != 0 && MaximumStateFrameBytes >=
-					   CharacterStateFrameHeaderBytes + CompactCharacterStateBytes + CompactCharacterActionStateBytes &&
+			   RemoteInterpolationDelayTicks != 0 && InputFreshnessTicks != 0 &&
+			   MaximumStateFrameBytes >=
+				   CharacterStateFrameHeaderBytes + CompactCharacterStateBytes + CompactCharacterActionStateBytes &&
 			   MaximumStateFrameBytes <= MaximumCharacterStateFrameBytes;
 	}
 
@@ -150,6 +154,8 @@ namespace gargantuan::network {
 		CharacterInputSequence LastReceivedInput;
 		CharacterInputSequence AcknowledgedInput;
 		std::optional<CharacterInputCommand> PendingInput;
+		std::uint64_t LastInputArrivalTick = 0;
+		bool InputTimedOut = false;
 		std::uint64_t RateTick = 0;
 		std::uint32_t CommandsAtRateTick = 0;
 		std::array<CharacterActionRequest, MaximumPendingCharacterActions> PendingActions{};
@@ -264,6 +270,8 @@ namespace gargantuan::network {
 		State.LastReceivedInput = {};
 		State.AcknowledgedInput = {};
 		State.PendingInput.reset();
+		State.LastInputArrivalTick = 0;
+		State.InputTimedOut = false;
 		State.LastReceivedAction = {};
 		State.ResolvedAction = {};
 		State.PendingActionCount = 0;
@@ -287,6 +295,8 @@ namespace gargantuan::network {
 		Found->second.ControlEpoch = Epoch.value_or(CharacterControlEpoch{});
 		Found->second.Controller.reset();
 		Found->second.PendingInput.reset();
+		Found->second.LastInputArrivalTick = 0;
+		Found->second.InputTimedOut = false;
 		Found->second.PendingActionCount = 0;
 		Found->second.ActiveAction.reset();
 		return true;
@@ -489,6 +499,8 @@ namespace gargantuan::network {
 			}
 			State.LastReceivedInput = Command->InputSequence;
 			State.PendingInput = *Command;
+			State.LastInputArrivalTick = AdmissionTick;
+			State.InputTimedOut = false;
 			FinishAdmission();
 			return true;
 		}
@@ -562,9 +574,24 @@ namespace gargantuan::network {
 			State.PendingActionCount = 0;
 
 			if (State.PendingInput) {
-				const auto Command = *State.PendingInput;
-				State.PendingInput.reset();
-				if (Command.SimulationTick <= AuthoritativeTick + MaximumCharacterCommandTickLead) {
+				auto Command = *State.PendingInput;
+				const bool TickAdmissible = Command.SimulationTick <=
+											AuthoritativeTick + MaximumCharacterCommandTickLead;
+				const bool Fresh = AuthoritativeTick >= State.LastInputArrivalTick &&
+								   AuthoritativeTick - State.LastInputArrivalTick <= Configuration.InputFreshnessTicks;
+				const bool NewCommand = State.AcknowledgedInput != Command.InputSequence;
+				if (!NewCommand) Command.Flags &= ~static_cast<std::uint8_t>(CharacterInputFlag::JumpRequested);
+				if (!Fresh) {
+					Command.MoveIntent = {};
+					Command.Flags = 0;
+					if (!State.InputTimedOut) {
+						State.InputTimedOut = true;
+						SaturatingIncrement(Metrics.InputFreshnessTimeouts);
+					}
+				}
+				Command.SimulationTick = AuthoritativeTick;
+				Command.DeltaSeconds = 1.0f / static_cast<float>(Configuration.SimulationTicksPerSecond);
+				if (TickAdmissible) {
 					const auto MovementStarted = std::chrono::steady_clock::now();
 					try {
 						auto Request = MovementPolicy(Command, *CharacterValue);
@@ -575,11 +602,11 @@ namespace gargantuan::network {
 									Result.Velocity, Result.FloorNormal, Result.HasFloor
 								);
 								State.AcknowledgedInput = Command.InputSequence;
-								SaturatingIncrement(Metrics.CommandsAccepted);
+								if (NewCommand) SaturatingIncrement(Metrics.CommandsAccepted);
 							}
 						}
 					} catch (...) {
-						SaturatingIncrement(Metrics.ProtocolRejects);
+						SaturatingIncrement(Metrics.MovementPolicyErrors);
 					}
 					SaturatingIncrement(
 						Metrics.MovementCpuNanoseconds,
@@ -640,16 +667,15 @@ namespace gargantuan::network {
 			++Iterator;
 		}
 		const auto Interval = Configuration.PublicationIntervalTicks();
-		if (LastStatePublicationTick == 0 ||
-			(AuthoritativeTick > LastStatePublicationTick && AuthoritativeTick - LastStatePublicationTick >= Interval)) {
+		if (LastStatePublicationTick == 0 || (AuthoritativeTick > LastStatePublicationTick &&
+											  AuthoritativeTick - LastStatePublicationTick >= Interval)) {
 			PublishStateFrames(AuthoritativeTick);
 			LastStatePublicationTick = AuthoritativeTick;
 		}
 	}
 
-	std::optional<CharacterAuthoritativeState> AuthoritativeCharacterNetwork::BuildState(
-		ObjectId Character, std::uint64_t AuthoritativeTick, bool Teleport
-	) {
+	std::optional<CharacterAuthoritativeState>
+	AuthoritativeCharacterNetwork::BuildState(ObjectId Character, std::uint64_t AuthoritativeTick, bool Teleport) {
 		auto Found = Characters.find(Character);
 		if (Found == Characters.end() || AuthoritativeTick == 0 || !Found->second.NextStateSequence.IsValid())
 			return std::nullopt;
@@ -706,8 +732,7 @@ namespace gargantuan::network {
 				SaturatingIncrement(Metrics.SemanticStateBytes, SemanticStateBytes(*State));
 			}
 		}
-		Found->second.NextStateSequence =
-			Found->second.NextStateSequence.TryNext().value_or(RealtimeStateSequence{});
+		Found->second.NextStateSequence = Found->second.NextStateSequence.TryNext().value_or(RealtimeStateSequence{});
 		return Sent;
 	}
 
@@ -728,8 +753,9 @@ namespace gargantuan::network {
 				SaturatingIncrement(Metrics.StatesConsidered);
 				auto Previous = Peer.Published.find(Id);
 				const bool Refresh = Previous == Peer.Published.end() ||
-					AuthoritativeTick < Previous->second.LastAbsoluteTick ||
-					AuthoritativeTick - Previous->second.LastAbsoluteTick >= Configuration.AbsoluteRefreshTicks;
+									 AuthoritativeTick < Previous->second.LastAbsoluteTick ||
+									 AuthoritativeTick - Previous->second.LastAbsoluteTick >=
+										 Configuration.AbsoluteRefreshTicks;
 				if (Refresh || Previous->second.Fingerprint != Fingerprint)
 					Needed = true;
 				else
@@ -743,8 +769,9 @@ namespace gargantuan::network {
 		SaturatingIncrement(
 			Metrics.StateChangeDetectionCpuNanoseconds,
 			static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
-				std::chrono::steady_clock::now() - DetectionStarted
-			).count())
+										   std::chrono::steady_clock::now() - DetectionStarted
+			)
+										   .count())
 		);
 
 		const auto AssemblyStarted = std::chrono::steady_clock::now();
@@ -764,8 +791,7 @@ namespace gargantuan::network {
 					for (const auto &State : Frame.GetStates()) {
 						auto Runtime = Characters.find(State.Character);
 						if (Runtime != Characters.end())
-							Peer.Published[State.Character] = {
-								Runtime->second.PreparedFingerprint, AuthoritativeTick};
+							Peer.Published[State.Character] = {Runtime->second.PreparedFingerprint, AuthoritativeTick};
 						SaturatingIncrement(Metrics.AuthoritativeStatesSent);
 						SaturatingIncrement(Metrics.AbsoluteStatesSent);
 						SaturatingIncrement(Metrics.SemanticStateBytes, SemanticStateBytes(State));
@@ -782,8 +808,9 @@ namespace gargantuan::network {
 				if (Visible == Peer.Materialized.end()) continue;
 				auto Previous = Peer.Published.find(Id);
 				const bool Refresh = Previous == Peer.Published.end() ||
-					AuthoritativeTick < Previous->second.LastAbsoluteTick ||
-					AuthoritativeTick - Previous->second.LastAbsoluteTick >= Configuration.AbsoluteRefreshTicks;
+									 AuthoritativeTick < Previous->second.LastAbsoluteTick ||
+									 AuthoritativeTick - Previous->second.LastAbsoluteTick >=
+										 Configuration.AbsoluteRefreshTicks;
 				if (!Refresh && Previous->second.Fingerprint == Runtime.PreparedFingerprint) continue;
 				const auto StateBytes = GetCompactCharacterStateEncodedBytes(*Runtime.PreparedState);
 				if (StateBytes == 0 || CharacterStateFrameHeaderBytes + StateBytes > ByteLimit) {
@@ -798,12 +825,14 @@ namespace gargantuan::network {
 			Flush();
 			if (PeerBatchCount > 1) SaturatingIncrement(Metrics.BatchSplits, PeerBatchCount - 1);
 		}
-		for (auto &[Id, Runtime] : Characters) Runtime.PreparedState.reset();
+		for (auto &[Id, Runtime] : Characters)
+			Runtime.PreparedState.reset();
 		SaturatingIncrement(
 			Metrics.StateFrameAssemblyCpuNanoseconds,
-			static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
-				std::chrono::steady_clock::now() - AssemblyStarted
-			).count())
+			static_cast<std::uint64_t>(
+				std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - AssemblyStarted)
+					.count()
+			)
 		);
 	}
 
@@ -816,6 +845,7 @@ namespace gargantuan::network {
 		CharacterControlEpoch Epoch;
 		RealtimeStateSequence LastState;
 		CharacterActionSequence LastResolvedAction;
+		std::uint64_t LastAuthoritativeTick = 0;
 		std::optional<CharacterAuthoritativeState> PendingState;
 		std::optional<CharacterActionState> ActiveAction;
 		std::array<PresentationSnapshot, MaximumRemoteCharacterSnapshots> PresentationSnapshots{};
@@ -830,6 +860,10 @@ namespace gargantuan::network {
 	};
 
 	struct PredictedCharacterNetwork::PeerState {
+		struct PendingAction {
+			CharacterActionSequence Sequence;
+			std::uint32_t Token = 0;
+		};
 		ConnectionId Connection;
 		std::optional<CharacterControlTransition> Control;
 		std::optional<CharacterControlTransition> PendingControl;
@@ -840,6 +874,8 @@ namespace gargantuan::network {
 		std::size_t HistoryStart = 0;
 		std::size_t HistoryCount = 0;
 		std::optional<CharacterActionState> PredictedAction;
+		std::array<PendingAction, MaximumPendingCharacterActions> PendingActions{};
+		std::size_t PendingActionCount = 0;
 		std::uint64_t LastActionEvaluationTick = 0;
 		bool PredictionSuspended = false;
 	};
@@ -866,8 +902,8 @@ namespace gargantuan::network {
 	bool PredictedCharacterNetwork::RemovePeer(ConnectionId Connection) {
 		if (!Peers.erase(Connection)) return false;
 		for (auto &[Id, Replica] : Replicas) {
-			if (auto CharacterValue = Replica.Character.lock(); CharacterValue && !CharacterValue->GetDestroyed() &&
-				!CharacterValue->IsDestroying())
+			if (auto CharacterValue = Replica.Character.lock();
+				CharacterValue && !CharacterValue->GetDestroyed() && !CharacterValue->IsDestroying())
 				CharacterValue->ApplyRuntimePresentationOffset(std::nullopt);
 			Replica.PendingState.reset();
 			Replica.PresentationSnapshotStart = 0;
@@ -898,8 +934,8 @@ namespace gargantuan::network {
 	bool PredictedCharacterNetwork::MarkUnmaterialized(ObjectId Character) {
 		auto Replica = Replicas.find(Character);
 		if (Replica == Replicas.end()) return false;
-		if (auto CharacterValue = Replica->second.Character.lock(); CharacterValue && !CharacterValue->GetDestroyed() &&
-			!CharacterValue->IsDestroying())
+		if (auto CharacterValue = Replica->second.Character.lock();
+			CharacterValue && !CharacterValue->GetDestroyed() && !CharacterValue->IsDestroying())
 			CharacterValue->ApplyRuntimePresentationOffset(std::nullopt);
 		Replicas.erase(Replica);
 		for (auto &[Connection, Peer] : Peers)
@@ -987,12 +1023,11 @@ namespace gargantuan::network {
 			if (!ReliableControl(Event)) return false;
 			if (!Transition->Bound) {
 				const bool MatchesControl = Peer.Control && Peer.Control->Character == Transition->Character &&
-									Peer.Control->ControlEpoch == Transition->ControlEpoch;
+											Peer.Control->ControlEpoch == Transition->ControlEpoch;
 				const bool MatchesPending = Peer.PendingControl &&
-									Peer.PendingControl->Character == Transition->Character &&
-									Peer.PendingControl->ControlEpoch == Transition->ControlEpoch;
-				if (!MatchesControl && !MatchesPending)
-					return false;
+											Peer.PendingControl->Character == Transition->Character &&
+											Peer.PendingControl->ControlEpoch == Transition->ControlEpoch;
+				if (!MatchesControl && !MatchesPending) return false;
 				if (auto Replica = Replicas.find(Transition->Character); Replica != Replicas.end()) {
 					Replica->second.LocalCorrectionStart.reset();
 					Replica->second.PresentationSnapshotStart = 0;
@@ -1004,8 +1039,7 @@ namespace gargantuan::network {
 				HardReset(Peer);
 				return true;
 			}
-			if (Peer.LastControlEpoch.IsValid() &&
-				!Transition->ControlEpoch.IsNewerThan(Peer.LastControlEpoch))
+			if (Peer.LastControlEpoch.IsValid() && !Transition->ControlEpoch.IsNewerThan(Peer.LastControlEpoch))
 				return false;
 			Peer.LastControlEpoch = Transition->ControlEpoch;
 			if (Replicas.contains(Transition->Character)) {
@@ -1092,14 +1126,16 @@ namespace gargantuan::network {
 		const bool LocallyControlled = Peer.Control && Peer.Control->Character == State.Character;
 		if (!LocallyControlled) {
 			auto &Presentation = Replica->second;
-			bool Reset = State.Teleport() ||
-				(Presentation.PresentationEpoch.IsValid() && State.ControlEpoch != Presentation.PresentationEpoch);
+			bool Reset = State.Teleport() || (Presentation.PresentationEpoch.IsValid() &&
+											  State.ControlEpoch != Presentation.PresentationEpoch);
 			if (Presentation.PresentationSnapshotCount != 0) {
 				const auto LastIndex = (Presentation.PresentationSnapshotStart +
-					Presentation.PresentationSnapshotCount - 1) % Presentation.PresentationSnapshots.size();
+										Presentation.PresentationSnapshotCount - 1) %
+									   Presentation.PresentationSnapshots.size();
 				const auto &Last = Presentation.PresentationSnapshots[LastIndex];
 				Reset = Reset || State.AuthoritativeTick < Last.Tick ||
-					glm::distance(State.Transform.Position, Last.Transform.Position) >= MaximumHardCorrectionDistance;
+						glm::distance(State.Transform.Position, Last.Transform.Position) >=
+							MaximumHardCorrectionDistance;
 				if (!Reset && State.AuthoritativeTick == Last.Tick) {
 					Presentation.PresentationSnapshots[LastIndex] = {State.AuthoritativeTick, State.Transform};
 					Presentation.PresentationEpoch = State.ControlEpoch;
@@ -1114,22 +1150,21 @@ namespace gargantuan::network {
 				SaturatingIncrement(Metrics.InterpolationResets);
 			}
 			while (Presentation.PresentationSnapshotCount != 0) {
-				const auto &Oldest =
-					Presentation.PresentationSnapshots[Presentation.PresentationSnapshotStart];
+				const auto &Oldest = Presentation.PresentationSnapshots[Presentation.PresentationSnapshotStart];
 				if (State.AuthoritativeTick <= Oldest.Tick ||
 					State.AuthoritativeTick - Oldest.Tick <= MaximumRemoteCharacterSnapshotWindowTicks)
 					break;
-				Presentation.PresentationSnapshotStart =
-					(Presentation.PresentationSnapshotStart + 1) % Presentation.PresentationSnapshots.size();
+				Presentation.PresentationSnapshotStart = (Presentation.PresentationSnapshotStart + 1) %
+														 Presentation.PresentationSnapshots.size();
 				--Presentation.PresentationSnapshotCount;
 			}
 			if (Presentation.PresentationSnapshotCount == Presentation.PresentationSnapshots.size()) {
-				Presentation.PresentationSnapshotStart =
-					(Presentation.PresentationSnapshotStart + 1) % Presentation.PresentationSnapshots.size();
+				Presentation.PresentationSnapshotStart = (Presentation.PresentationSnapshotStart + 1) %
+														 Presentation.PresentationSnapshots.size();
 				--Presentation.PresentationSnapshotCount;
 			}
 			const auto Insert = (Presentation.PresentationSnapshotStart + Presentation.PresentationSnapshotCount) %
-				Presentation.PresentationSnapshots.size();
+								Presentation.PresentationSnapshots.size();
 			Presentation.PresentationSnapshots[Insert] = {State.AuthoritativeTick, State.Transform};
 			++Presentation.PresentationSnapshotCount;
 			Presentation.PresentationEpoch = State.ControlEpoch;
@@ -1204,7 +1239,7 @@ namespace gargantuan::network {
 	) {
 		auto Found = Peers.find(Connection);
 		if (Found == Peers.end() || !Found->second.Control || !Found->second.NextInput.IsValid() ||
-			Found->second.PredictionSuspended)
+			(PredictionEnabled && Found->second.PredictionSuspended))
 			return false;
 		auto &Peer = Found->second;
 		CharacterInputCommand Command{
@@ -1219,7 +1254,7 @@ namespace gargantuan::network {
 				JumpRequested ? static_cast<std::uint8_t>(CharacterInputFlag::JumpRequested) : 0
 			),
 		};
-		if (!Command.IsValid() || !Predict(Peer, World, Command, true)) return false;
+		if (!Command.IsValid() || (PredictionEnabled && !Predict(Peer, World, Command, true))) return false;
 		if (!Queue(Connection, CharacterMessage(Command), Peer.Control->Channel, false)) return false;
 		Peer.NextInput = Peer.NextInput.TryNext().value_or(CharacterInputSequence{});
 		return true;
@@ -1233,7 +1268,7 @@ namespace gargantuan::network {
 			Found->second.PredictionSuspended)
 			return false;
 		auto Definition = Actions.find(ActionToken);
-		if (Definition == Actions.end() || SimulationTick == 0) return false;
+		if (SimulationTick == 0 || Found->second.PendingActionCount >= MaximumPendingCharacterActions) return false;
 		auto &Peer = Found->second;
 		const auto BasedOn = Peer.NextInput.Value() > 1 ? CharacterInputSequence(Peer.NextInput.Value() - 1)
 														: CharacterInputSequence{};
@@ -1245,17 +1280,29 @@ namespace gargantuan::network {
 			ActionToken,
 		};
 		if (!Queue(Connection, CharacterMessage(Request), {}, true)) return false;
-		Peer.PredictedAction = CharacterActionState{
-			Request.ActionSequence,
-			Definition->second.Token,
-			Definition->second.Animation,
-			Definition->second.ContentRevision,
-			SimulationTick,
-			Definition->second.DurationTicks,
-		};
-		Peer.LastActionEvaluationTick = SimulationTick;
+		Peer.PendingActions[Peer.PendingActionCount++] = {Request.ActionSequence, ActionToken};
+		if (PredictionEnabled && Definition != Actions.end()) {
+			Peer.PredictedAction = CharacterActionState{
+				Request.ActionSequence,
+				Definition->second.Token,
+				Definition->second.Animation,
+				Definition->second.ContentRevision,
+				SimulationTick,
+				Definition->second.DurationTicks,
+			};
+			Peer.LastActionEvaluationTick = SimulationTick;
+		}
 		Peer.NextAction = Peer.NextAction.TryNext().value_or(CharacterActionSequence{});
 		return true;
+	}
+
+	void PredictedCharacterNetwork::SetPredictionEnabled(bool Enabled) {
+		PredictionEnabled = Enabled;
+		if (Enabled) return;
+		for (auto &[Connection, Peer] : Peers) {
+			(void)Connection;
+			HardReset(Peer);
+		}
 	}
 
 	void PredictedCharacterNetwork::Reconcile(WorldRoot &World) {
@@ -1263,6 +1310,14 @@ namespace gargantuan::network {
 		for (auto &[Id, Replica] : Replicas) {
 			if (!Replica.PendingState) continue;
 			const auto State = *Replica.PendingState;
+			const auto PreviousActiveAction = Replica.ActiveAction;
+			auto RecordActionEnd = [&] {
+				if (PreviousActiveAction &&
+					(!Replica.ActiveAction ||
+					 Replica.ActiveAction->ActionSequence != PreviousActiveAction->ActionSequence) &&
+					ActionEndings.size() < MaximumCharacterPredictionHistory)
+					ActionEndings.push_back({Id, PreviousActiveAction->ActionToken});
+			};
 			Replica.PendingState.reset();
 			auto CharacterValue = Replica.Character.lock();
 			if (!CharacterValue || CharacterValue->GetDestroyed() || CharacterValue->IsDestroying()) continue;
@@ -1285,18 +1340,12 @@ namespace gargantuan::network {
 					Replica.PresentationResetRequired = false;
 					SaturatingIncrement(Metrics.HardPresentationResets);
 				}
-				Replica.ActiveAction.reset();
-				if (State.ActiveAction) {
-					auto Definition = Actions.find(State.ActiveAction->ActionToken);
-					if (Definition != Actions.end() && Definition->second.Animation == State.ActiveAction->Animation &&
-						Definition->second.ContentRevision == State.ActiveAction->ContentRevision)
-						Replica.ActiveAction = State.ActiveAction;
-					else
-						SaturatingIncrement(Metrics.ProtocolRejects);
-				}
+				Replica.ActiveAction = State.ActiveAction;
+				RecordActionEnd();
 				Replica.Epoch = State.ControlEpoch;
 				Replica.LastState = State.StateSequence;
 				Replica.LastResolvedAction = State.ResolvedAction;
+				Replica.LastAuthoritativeTick = State.AuthoritativeTick;
 				continue;
 			}
 			auto &Peer = *LocalPeer;
@@ -1320,6 +1369,24 @@ namespace gargantuan::network {
 			if (State.AcknowledgedInput.IsValid() && Peer.NextInput.IsValid() &&
 				State.AcknowledgedInput.Value() >= Peer.NextInput.Value())
 				Reset = true;
+			if (State.ResolvedAction.IsValid()) {
+				std::size_t Write = 0;
+				for (std::size_t Index = 0; Index < Peer.PendingActionCount; ++Index) {
+					const auto Pending = Peer.PendingActions[Index];
+					if (Pending.Sequence.Value() <= State.ResolvedAction.Value()) {
+						const bool Accepted = State.ActiveAction &&
+											  State.ActiveAction->ActionSequence == Pending.Sequence &&
+											  State.ActiveAction->ActionToken == Pending.Token;
+						if (ActionResolutions.size() < MaximumCharacterPredictionHistory)
+							ActionResolutions.push_back(
+								{Id, Pending.Token, Accepted, Accepted ? State.ActiveAction : std::nullopt}
+							);
+					} else {
+						Peer.PendingActions[Write++] = Pending;
+					}
+				}
+				Peer.PendingActionCount = Write;
+			}
 			const auto PreviousPredictedAction = Peer.PredictedAction;
 			const auto PreviousActionTick = Peer.LastActionEvaluationTick;
 			Peer.PredictedAction.reset();
@@ -1328,7 +1395,7 @@ namespace gargantuan::network {
 				 PreviousPredictedAction->ActionSequence.IsNewerThan(State.ResolvedAction))) {
 				Peer.PredictedAction = PreviousPredictedAction;
 				Peer.LastActionEvaluationTick = PreviousActionTick;
-			} else if (State.ActiveAction) {
+			} else if (State.ActiveAction && PredictionEnabled) {
 				auto Definition = Actions.find(State.ActiveAction->ActionToken);
 				if (Definition == Actions.end() || Definition->second.Animation != State.ActiveAction->Animation ||
 					Definition->second.ContentRevision != State.ActiveAction->ContentRevision) {
@@ -1338,7 +1405,7 @@ namespace gargantuan::network {
 					Peer.LastActionEvaluationTick = State.AuthoritativeTick;
 				}
 			}
-			if (Reset) {
+			if (Reset || !PredictionEnabled) {
 				HardReset(Peer);
 			} else {
 				const auto Count = Peer.HistoryCount;
@@ -1356,14 +1423,15 @@ namespace gargantuan::network {
 												   .count())
 				);
 			}
-			const auto PresentationError =
-				glm::distance(PreviousPresentation.Position, CharacterValue->GetCFrame().Position);
+			const auto PresentationError = glm::distance(
+				PreviousPresentation.Position, CharacterValue->GetCFrame().Position
+			);
 			if (!Reset && PresentationError > 1.0e-4f &&
 				PresentationError <= MaximumSmoothPresentationCorrectionDistance) {
 				Replica.LocalCorrectionStart = CharacterValue->GetCFrame().ToObjectSpace(PreviousPresentation);
-				Replica.LocalCorrectionDurationTicks =
-					PresentationError <= TinyPresentationCorrectionDistance ? TinyCorrectionSmoothingTicks
-															   : SmallCorrectionSmoothingTicks;
+				Replica.LocalCorrectionDurationTicks = PresentationError <= TinyPresentationCorrectionDistance
+														   ? TinyCorrectionSmoothingTicks
+														   : SmallCorrectionSmoothingTicks;
 				Replica.LocalCorrectionElapsedTicks = 0;
 				Replica.LastPresentationTick = 0;
 				CharacterValue->ApplyRuntimePresentationOffset(Replica.LocalCorrectionStart);
@@ -1381,10 +1449,12 @@ namespace gargantuan::network {
 				Replica.ActiveAction.reset();
 			else
 				Replica.ActiveAction = State.ActiveAction;
+			RecordActionEnd();
 			Peer.PredictionSuspended = false;
 			Replica.Epoch = State.ControlEpoch;
 			Replica.LastState = State.StateSequence;
 			Replica.LastResolvedAction = State.ResolvedAction;
+			Replica.LastAuthoritativeTick = State.AuthoritativeTick;
 		}
 		SaturatingIncrement(
 			Metrics.ReconciliationCpuNanoseconds,
@@ -1424,13 +1494,16 @@ namespace gargantuan::network {
 				if (PresentationTick > Replica.LastPresentationTick) {
 					const auto Delta = PresentationTick - Replica.LastPresentationTick;
 					const auto Remaining = Replica.LocalCorrectionDurationTicks -
-						std::min(Replica.LocalCorrectionDurationTicks, Replica.LocalCorrectionElapsedTicks);
+										   std::min(
+											   Replica.LocalCorrectionDurationTicks, Replica.LocalCorrectionElapsedTicks
+										   );
 					Replica.LocalCorrectionElapsedTicks += std::min(Remaining, Delta);
 					Replica.LastPresentationTick = PresentationTick;
 				}
-				const auto Alpha = Replica.LocalCorrectionDurationTicks == 0 ? 1.0
-					: static_cast<double>(Replica.LocalCorrectionElapsedTicks) /
-						static_cast<double>(Replica.LocalCorrectionDurationTicks);
+				const auto Alpha = Replica.LocalCorrectionDurationTicks == 0
+									   ? 1.0
+									   : static_cast<double>(Replica.LocalCorrectionElapsedTicks) /
+											 static_cast<double>(Replica.LocalCorrectionDurationTicks);
 				if (Alpha >= 1.0) {
 					CharacterValue->ApplyRuntimePresentationOffset(std::nullopt);
 					Replica.LocalCorrectionStart.reset();
@@ -1445,11 +1518,11 @@ namespace gargantuan::network {
 				continue;
 			}
 			const auto TargetTick = PresentationTick > Configuration.RemoteInterpolationDelayTicks
-				? PresentationTick - Configuration.RemoteInterpolationDelayTicks
-				: 0;
+										? PresentationTick - Configuration.RemoteInterpolationDelayTicks
+										: 0;
 			const auto SnapshotAt = [&](std::size_t Index) -> const ReplicaState::PresentationSnapshot & {
-				return Replica.PresentationSnapshots[
-					(Replica.PresentationSnapshotStart + Index) % Replica.PresentationSnapshots.size()];
+				return Replica.PresentationSnapshots
+					[(Replica.PresentationSnapshotStart + Index) % Replica.PresentationSnapshots.size()];
 			};
 			CFrame Presented = SnapshotAt(0).Transform;
 			if (Replica.PresentationSnapshotCount == 1 || TargetTick <= SnapshotAt(0).Tick) {
@@ -1467,7 +1540,8 @@ namespace gargantuan::network {
 						const auto &Left = SnapshotAt(Index - 1);
 						const auto Span = Right.Tick - Left.Tick;
 						const auto Alpha = Span == 0 ? 1.0
-							: static_cast<double>(TargetTick - Left.Tick) / static_cast<double>(Span);
+													 : static_cast<double>(TargetTick - Left.Tick) /
+														   static_cast<double>(Span);
 						Presented = Left.Transform.Lerp(Right.Transform, Alpha);
 						break;
 					}
@@ -1483,15 +1557,16 @@ namespace gargantuan::network {
 				continue;
 			}
 			const auto Offset = Semantic.ToObjectSpace(Presented);
-			CharacterValue->ApplyRuntimePresentationOffset(Offset.FuzzyEq(Identity) ? std::nullopt
-																			 : std::optional<CFrame>(Offset));
+			CharacterValue->ApplyRuntimePresentationOffset(
+				Offset.FuzzyEq(Identity) ? std::nullopt : std::optional<CFrame>(Offset)
+			);
 			Replica.LastPresentationTick = PresentationTick;
 		}
 		SaturatingIncrement(
 			Metrics.InterpolationCpuNanoseconds,
-			static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
-				std::chrono::steady_clock::now() - Started
-			).count())
+			static_cast<std::uint64_t>(
+				std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - Started).count()
+			)
 		);
 	}
 
@@ -1514,6 +1589,22 @@ namespace gargantuan::network {
 		return Found == Replicas.end() ? std::nullopt : Found->second.ActiveAction;
 	}
 
+	std::optional<CharacterActionPresentation>
+	PredictedCharacterNetwork::GetPresentationAction(ObjectId Character) const {
+		for (const auto &[Connection, Peer] : Peers) {
+			(void)Connection;
+			if (Peer.Control && Peer.Control->Character == Character && Peer.PredictedAction)
+				return CharacterActionPresentation{*Peer.PredictedAction, Peer.LastActionEvaluationTick, true};
+		}
+		auto Found = Replicas.find(Character);
+		if (Found == Replicas.end() || !Found->second.ActiveAction) return std::nullopt;
+		return CharacterActionPresentation{
+			*Found->second.ActiveAction,
+			std::max(Found->second.LastAuthoritativeTick, Found->second.ActiveAction->StartTick),
+			false,
+		};
+	}
+
 	std::size_t PredictedCharacterNetwork::GetPredictionHistorySize(ConnectionId Connection) const {
 		auto Found = Peers.find(Connection);
 		return Found == Peers.end() ? 0 : Found->second.HistoryCount;
@@ -1522,5 +1613,17 @@ namespace gargantuan::network {
 	std::size_t PredictedCharacterNetwork::GetPresentationSnapshotCount(ObjectId Character) const {
 		auto Found = Replicas.find(Character);
 		return Found == Replicas.end() ? 0 : Found->second.PresentationSnapshotCount;
+	}
+
+	std::vector<CharacterActionResolution> PredictedCharacterNetwork::DrainActionResolutions() {
+		auto Result = std::move(ActionResolutions);
+		ActionResolutions.clear();
+		return Result;
+	}
+
+	std::vector<CharacterActionEnded> PredictedCharacterNetwork::DrainActionEndings() {
+		auto Result = std::move(ActionEndings);
+		ActionEndings.clear();
+		return Result;
 	}
 }

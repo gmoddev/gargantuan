@@ -1,8 +1,8 @@
 #include "gargantuan/Engine.hpp"
 #include "gargantuan/Log.hpp"
 #include "gargantuan/Profiler.hpp"
-#include "gargantuan/classes/Attachment.hpp"
 #include "gargantuan/classes/Animator.hpp"
+#include "gargantuan/classes/Attachment.hpp"
 #include "gargantuan/classes/Character.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/FileLink.hpp"
@@ -10,8 +10,8 @@
 #include "gargantuan/classes/KinematicCharacter.hpp"
 #include "gargantuan/classes/Script.hpp"
 #include "gargantuan/classes/Sound.hpp"
-#include "gargantuan/filesystem/SourceMount.hpp"
 #include "gargantuan/filesystem/Paths.hpp"
+#include "gargantuan/filesystem/SourceMount.hpp"
 #include "gargantuan/render/Renderer.hpp"
 #include "gargantuan/scripting/ScriptEngine.hpp"
 #include "gargantuan/services/UserInputService.hpp"
@@ -20,6 +20,7 @@
 #include <chrono>
 #include <filesystem>
 #include <glm/glm.hpp>
+#include <limits>
 #include <lua.h>
 #include <memory>
 #include <optional>
@@ -32,37 +33,44 @@ namespace gargantuan {
 		EngineProviderConfiguration ProviderConfiguration
 	)
 		: DataModel(game), Renderer(renderer),
-		  Script(std::make_unique<class ScriptEngine>(game, std::move(RuntimeDiagnostic))),
+		  Script(std::make_unique<class ScriptEngine>(game, std::move(RuntimeDiagnostic), ProviderConfiguration.Mode)),
 		  Workspace(GetService<gargantuan::Workspace>()),
 		  WorldRoot(std::static_pointer_cast<gargantuan::WorldRoot>(Workspace)),
 		  RunService(GetService<gargantuan::RunService>()), ProcessService(GetService<gargantuan::ProcessService>()),
 		  UserInputService(GetService<gargantuan::UserInputService>()), ActionMap(GetService<gargantuan::ActionMap>()),
 		  Assets(GetService<gargantuan::AssetService>()),
-		  Animation(std::make_unique<AnimationRuntime>(
-			  Assets,
-			  [](std::string Code, std::string Message) {
-				  LOG_WARN(App, "[Animation:Runtime] %s: %s", Code.c_str(), Message.c_str());
-			  },
-			  AnimationRuntimeOptions{
-				  .CpuSkinningFallback = Renderer && Renderer->GetCapabilities().Graphical &&
-					  !Renderer->GetCapabilities().GpuSkinning,
-			  }
-		  )),
-		  Spatial(std::make_shared<SemanticSpatialResolver>(
-			  Assets,
-			  Animation.get(),
-			  [](std::string Code, std::string Message) {
-				  LOG_WARN(App, "[Spatial:Semantic] %s: %s", Code.c_str(), Message.c_str());
-			  }
-		  )),
-		  Audio(std::make_unique<AudioRuntime>(
-			  Assets,
-			  ProviderConfiguration.AudioEnabled ? CreateSdlAudioBackend() : nullptr,
-			  [](std::string Code, std::string Message) {
-				  LOG_WARN(App, "[Audio:Runtime] %s: %s", Code.c_str(), Message.c_str());
-			  },
-			  Spatial
-		  )),
+		  CharacterControl(GetService<gargantuan::CharacterControlService>()),
+		  Animation(
+			  std::make_unique<AnimationRuntime>(
+				  Assets,
+				  [](std::string Code, std::string Message) {
+					  LOG_WARN(App, "[Animation:Runtime] %s: %s", Code.c_str(), Message.c_str());
+				  },
+				  AnimationRuntimeOptions{
+					  .CpuSkinningFallback = Renderer && Renderer->GetCapabilities().Graphical &&
+											 !Renderer->GetCapabilities().GpuSkinning,
+				  }
+			  )
+		  ),
+		  Spatial(
+			  std::make_shared<SemanticSpatialResolver>(
+				  Assets,
+				  Animation.get(),
+				  [](std::string Code, std::string Message) {
+					  LOG_WARN(App, "[Spatial:Semantic] %s: %s", Code.c_str(), Message.c_str());
+				  }
+			  )
+		  ),
+		  Audio(
+			  std::make_unique<AudioRuntime>(
+				  Assets,
+				  ProviderConfiguration.AudioEnabled ? CreateSdlAudioBackend() : nullptr,
+				  [](std::string Code, std::string Message) {
+					  LOG_WARN(App, "[Audio:Runtime] %s: %s", Code.c_str(), Message.c_str());
+				  },
+				  Spatial
+			  )
+		  ),
 		  Entitlements(GetService<gargantuan::EntitlementService>()),
 		  Interaction(GetService<gargantuan::InteractionService>()), Lighting(GetService<gargantuan::Lighting>()),
 		  Players(GetService<gargantuan::Players>()) {
@@ -71,12 +79,17 @@ namespace gargantuan {
 			LOG_WARN(
 				App, "[Backend:Entitlements] configured provider did not become ready; offline semantics remain active"
 			);
+		CharacterControl->ConfigureRuntime(ProviderConfiguration.Mode);
 		const auto DefaultGuiFont = Paths::GetExecutableDirectory() / "runtime" / "GargantuanSans.ttf";
 		ActionMap->AttachInputService(UserInputService);
-		Players->InitializeLocalPlayer();
+		if (ProviderConfiguration.Mode == RuntimeMode::Offline)
+			Players->InitializeLocalPlayer();
+		else if (ProviderConfiguration.Mode == RuntimeMode::NetworkClient && !Players->GetLocalPlayer())
+			throw std::runtime_error(
+				"[Player:Session] Network client runtime requires a trusted LocalPlayer association"
+			);
 		Interaction->AttachRuntime(
-			DataModel, Players, ActionMap, Spatial,
-			Renderer && dynamic_cast<HeadlessRenderer *>(Renderer) == nullptr
+			DataModel, Players, ActionMap, Spatial, Renderer && dynamic_cast<HeadlessRenderer *>(Renderer) == nullptr
 		);
 		Assets->ConfigureBuiltInFont(DefaultGuiFont);
 		Gui = std::make_unique<GuiRuntime>(DataModel, DefaultGuiFont);
@@ -99,16 +112,20 @@ namespace gargantuan {
 			if (auto link = std::dynamic_pointer_cast<gargantuan::FileLink>(inst)) {
 				if (!ProjectSources) {
 					LOG_WARN(
-						App, "[Project:SourceMount] FileLink '%s' has no project filesystem mount",
+						App,
+						"[Project:SourceMount] FileLink '%s' has no project filesystem mount",
 						inst->GetFullName().c_str()
 					);
 					return;
 				}
 				auto Result = link->Synchronize(*ProjectSources);
-				if (!Result) LOG_WARN(
-					App, "[Project:SourceMount] FileLink '%s' failed: %s",
-					inst->GetFullName().c_str(), Result.error().Format().c_str()
-				);
+				if (!Result)
+					LOG_WARN(
+						App,
+						"[Project:SourceMount] FileLink '%s' failed: %s",
+						inst->GetFullName().c_str(),
+						Result.error().Format().c_str()
+					);
 			}
 		});
 
@@ -120,13 +137,15 @@ namespace gargantuan {
 		});
 		DataModelDestroyingConnection = DataModel->Destroying->Once([this](std::monostate) { Destroy(); });
 
-		Script->RunBootstrapScript(Players->StartDefaultRuntime());
+		Script->RunBootstrapScript(Players->StartDefaultRuntime(ProviderConfiguration.Mode));
 		Interaction->StartDefaultRuntime();
 
 		LOG_INFO(App, "Constructed engine");
 	}
 
-	Engine::~Engine() { Destroy(); }
+	Engine::~Engine() {
+		Destroy();
+	}
 
 	void Engine::Destroy() {
 		if (Destroyed) return;
@@ -138,6 +157,7 @@ namespace gargantuan {
 		}
 		if (Interaction && !Interaction->GetDestroyed()) Interaction->ShutdownRuntime();
 		if (Players && !Players->GetDestroyed()) Players->ShutdownRuntime();
+		if (CharacterControl && !CharacterControl->GetDestroyed()) CharacterControl->DetachRuntime();
 		if (ActionMap && !ActionMap->GetDestroyed()) ActionMap->Reset();
 		if (Audio) Audio->Shutdown();
 		if (Spatial) Spatial->Shutdown();
@@ -184,14 +204,16 @@ namespace gargantuan {
 
 		Result.Consumed = UserInputService->ProcessEvent(Event);
 		const bool GuiConsumed = Gui && Gui->ProcessEvent(Event);
-		if (!GuiConsumed) Result.Consumed = ActionMap->ProcessEvent(Event) || Result.Consumed;
+		if (!GuiConsumed)
+			Result.Consumed = ActionMap->ProcessEvent(Event) || Result.Consumed;
 		else {
 			ActionMap->ProcessConsumedRelease(Event);
 			Result.Consumed = true;
 		}
 		if (!Result.Consumed) Result.Command = Workspace->GetCurrentCamera()->ProcessEvent(Event);
 		if (auto InputCommand = UserInputService->SynchronizeMouseBehavior()) Result.Command = InputCommand;
-		if (Gui) if (auto TextInputCommand = Gui->SynchronizeTextInput()) Result.Command = TextInputCommand;
+		if (Gui)
+			if (auto TextInputCommand = Gui->SynchronizeTextInput()) Result.Command = TextInputCommand;
 		return Result;
 	}
 
@@ -206,6 +228,9 @@ namespace gargantuan {
 		CurrentTick = std::chrono::steady_clock::now();
 		if (LastTick.time_since_epoch().count() == 0) LastTick = CurrentTick;
 		float deltaTime = GetDeltaTime();
+		if (SimulationTick != std::numeric_limits<std::uint64_t>::max()) ++SimulationTick;
+		if (SimulationTick == 0) SimulationTick = 1;
+		if (CharacterControl) CharacterControl->BeginSimulationFrame(SimulationTick, deltaTime);
 
 		{
 			G_PROFILE("Main Thread");
@@ -254,19 +279,23 @@ namespace gargantuan {
 							RootMotionMetrics.AdmissionCpuNanoseconds += static_cast<std::uint64_t>(
 								std::chrono::duration_cast<std::chrono::nanoseconds>(
 									std::chrono::steady_clock::now() - AdmissionStarted
-								).count()
+								)
+									.count()
 							);
 							continue;
 						}
 						const auto Kinematic = std::dynamic_pointer_cast<KinematicCharacter>(CharacterValue);
 						const auto RequestedWorld = CharacterValue->GetCFrame().Rotation * Request.Delta.Translation;
-						auto Result = CharacterValue->AdmitMotion(*WorldRoot, {
-							.Translation = Request.Delta.Translation,
-							.Velocity = Kinematic ? Kinematic->GetVelocity() : glm::vec3(0.0f),
-							.YawRadians = Request.Delta.YawRadians,
-							.Source = CharacterMotionSource::Animation,
-							.LocalSpace = true,
-						});
+						auto Result = CharacterValue->AdmitMotion(
+							*WorldRoot,
+							{
+								.Translation = Request.Delta.Translation,
+								.Velocity = Kinematic ? Kinematic->GetVelocity() : glm::vec3(0.0f),
+								.YawRadians = Request.Delta.YawRadians,
+								.Source = CharacterMotionSource::Animation,
+								.LocalSpace = true,
+							}
+						);
 						RootMotionMetrics.PhysicsCpuNanoseconds += Result.PhysicsCpuNanoseconds;
 						if (!Result.Succeeded())
 							++RootMotionMetrics.Rejected;
@@ -278,11 +307,11 @@ namespace gargantuan {
 						RootMotionMetrics.AdmissionCpuNanoseconds += static_cast<std::uint64_t>(
 							std::chrono::duration_cast<std::chrono::nanoseconds>(
 								std::chrono::steady_clock::now() - AdmissionStarted
-							).count()
+							)
+								.count()
 						);
 					}
-					RenderPublishing.SetAnimationPoseChanges(
-						Animation->GetPoseUpdates(), Animation->GetPoseRemoves());
+					RenderPublishing.SetAnimationPoseChanges(Animation->GetPoseUpdates(), Animation->GetPoseRemoves());
 					Animation->ClearChanges();
 				}
 				if (Spatial) Spatial->Step();
@@ -290,7 +319,9 @@ namespace gargantuan {
 				if (Gui) {
 					auto MeshChanges = Assets->DrainMeshChanges();
 					if (!MeshChanges.Creates.empty() || !MeshChanges.Removes.empty())
-						RenderPublishing.SetAssetMeshChanges(std::move(MeshChanges.Creates), std::move(MeshChanges.Removes));
+						RenderPublishing.SetAssetMeshChanges(
+							std::move(MeshChanges.Creates), std::move(MeshChanges.Removes)
+						);
 					(void)Gui->Reconcile();
 					Gui->Publish(RenderPublishing);
 				}

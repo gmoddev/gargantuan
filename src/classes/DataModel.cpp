@@ -4,6 +4,7 @@
 #include "gargantuan/runtime/ProtocolInput.hpp"
 #include "gargantuan/services/ActionMap.hpp"
 #include "gargantuan/services/AssetService.hpp"
+#include "gargantuan/services/CharacterControlService.hpp"
 #include "gargantuan/services/EntitlementService.hpp"
 #include "gargantuan/services/InteractionService.hpp"
 #include "gargantuan/services/Lighting.hpp"
@@ -121,6 +122,7 @@ namespace gargantuan {
 		static const DataModel::ServiceDefinitions CONSTRUCTORS = {
 			{"ActionMap", SchemaId::FromNativeName("Engine", "ActionMap")},
 			{"AssetService", SchemaId::FromNativeName("Engine", "AssetService")},
+			{"CharacterControlService", SchemaId::FromNativeName("Engine", "CharacterControlService")},
 			{"EntitlementService", SchemaId::FromNativeName("Engine", "EntitlementService")},
 			{"InteractionService", SchemaId::FromNativeName("Engine", "InteractionService")},
 			{"Lighting", SchemaId::FromNativeName("Engine", "Lighting")},

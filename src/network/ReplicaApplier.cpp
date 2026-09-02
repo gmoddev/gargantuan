@@ -162,6 +162,11 @@ namespace gargantuan::network {
 			SnapshotLoadResult &Receiver
 		) {
 			InstanceValue->SetName(Publish.Name);
+			if (Publish.Parent) {
+				auto Parent = Receiver.Resolve(WireObjectId::FromObjectId(*Publish.Parent));
+				if (!Parent) throw std::invalid_argument("Replica publish parent is not materialized");
+				InstanceValue->SetParent(Parent);
+			}
 			for (const auto &[Name, Value] : Publish.Properties)
 				ApplyPropertyToReplica(PropertyReplicationUpdate{Publish.Object, Name, Value}, InstanceValue, Receiver);
 			for (const auto &[Name, Value] : Publish.Attributes)
@@ -198,27 +203,27 @@ namespace gargantuan::network {
 						ScriptSecurityContext::CoreTrusted()
 					))
 					throw std::invalid_argument("Replica rejected published Tag");
-			if (Publish.Parent) {
-				auto Parent = Receiver.Resolve(WireObjectId::FromObjectId(*Publish.Parent));
-				if (!Parent) throw std::invalid_argument("Replica publish parent is not materialized");
-				InstanceValue->SetParent(Parent);
-			}
 		}
 
 		void RemoveReplicaObject(
 			SnapshotLoadResult &Receiver, ObjectId Object, std::map<const Instance *, WireObjectId> &ReplicaIds
 		) {
-			auto Target = Receiver.Resolve(WireObjectId::FromObjectId(Object));
-			if (!Target) throw std::invalid_argument("Replica removal target is not materialized");
-			std::vector<std::shared_ptr<Instance>> Removed{Target};
-			for (std::size_t Index = 0; Index < Removed.size(); ++Index)
-				Removed.insert(Removed.end(), Removed[Index]->Children.begin(), Removed[Index]->Children.end());
+			const auto WireId = WireObjectId::FromObjectId(Object);
+			auto Found = Receiver.Objects.find(WireId);
+			// An earlier authoritative relationship update may have synchronously destroyed
+			// the same replica subtree. The semantic candidate already proved that this
+			// lifecycle operation targets a published object, so live commit only needs to
+			// retire any mappings which remain.
+			if (Found == Receiver.Objects.end() || !Found->second) return;
+			auto Target = Found->second;
 			Target->Destroy();
-			for (const auto &Value : Removed) {
-				auto Id = ReplicaIds.find(Value.get());
-				if (Id == ReplicaIds.end()) throw std::logic_error("Replica identity index is incomplete");
-				Receiver.Objects.erase(Id->second);
-				ReplicaIds.erase(Id);
+			for (auto Iterator = Receiver.Objects.begin(); Iterator != Receiver.Objects.end();) {
+				if (!Iterator->second || !Iterator->second->GetDestroyed()) {
+					++Iterator;
+					continue;
+				}
+				ReplicaIds.erase(Iterator->second.get());
+				Iterator = Receiver.Objects.erase(Iterator);
 			}
 		}
 	}
@@ -404,6 +409,20 @@ namespace gargantuan::network {
 						if (!InstanceValue || !Receiver.Objects.emplace(WireId, InstanceValue).second ||
 							!ReplicaIds.emplace(InstanceValue.get(), WireId).second)
 							throw std::invalid_argument("Replica publish construction failed");
+					}
+				// Establish the entire published ancestry before applying properties. A
+				// relationship such as Character.RootPart may validate ancestry while
+				// referring to another object published later in the same frame.
+				for (const auto &Operation : Frame.Operations)
+					if (const auto *Publish = std::get_if<PublishReplication>(&Operation.Intent)) {
+						auto InstanceValue = Receiver.Resolve(WireObjectId::FromObjectId(Publish->Object));
+						if (!InstanceValue) throw std::invalid_argument("Replica publish target is unavailable");
+						InstanceValue->SetName(Publish->Name);
+						if (Publish->Parent) {
+							auto Parent = Receiver.Resolve(WireObjectId::FromObjectId(*Publish->Parent));
+							if (!Parent) throw std::invalid_argument("Replica publish parent is not materialized");
+							InstanceValue->SetParent(Parent);
+						}
 					}
 				for (const auto &Operation : Frame.Operations)
 					std::visit(

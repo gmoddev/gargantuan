@@ -146,7 +146,7 @@ namespace gargantuan {
 			};
 			auto Result = Manager->StartRequest(
 				Connection,
-				Function->GetObjectId(),
+				Function->GetNetworkObjectId(),
 				network::ReadRemoteLuauArguments(L, FirstArgument),
 				std::move(Completion),
 				Deadline
@@ -185,7 +185,7 @@ namespace gargantuan {
 	void RemoteFunction::BindRequestHandler() {
 		if (!Manager) return;
 		Manager->SetRequestHandler(
-			GetObjectId(),
+			GetNetworkObjectId(),
 			[this](const network::RemoteInvocation &Invocation, network::RemoteManager::RequestReply Reply) {
 				auto *BoundManager = GetRemoteManager();
 				if (!BoundManager) {

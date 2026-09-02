@@ -3,8 +3,8 @@
 #include "gargantuan/network/RemoteLuau.hpp"
 #include "gargantuan/scripting/ScriptSecurity.hpp"
 
-#include <lualib.h>
 #include <algorithm>
+#include <lualib.h>
 #include <string>
 
 namespace gargantuan {
@@ -42,7 +42,7 @@ namespace gargantuan {
 	void RemoteEventBase::BindEventHandler() {
 		if (!Manager) return;
 		auto Resolver = [Manager = Manager](ObjectId Object) { return Manager->ResolveObject(Object); };
-		Manager->SetEventHandler(GetObjectId(), [this, Resolver](const network::RemoteInvocation &Invocation) {
+		Manager->SetEventHandler(GetNetworkObjectId(), [this, Resolver](const network::RemoteInvocation &Invocation) {
 			ScriptSecurityContext Context{
 				Manager->GetRole() == network::RemoteManagerRole::Server ? ScriptExecutionDomain::Server
 																		 : ScriptExecutionDomain::Client,
@@ -70,7 +70,7 @@ namespace gargantuan {
 		const auto Connection = Event->GetDefaultServerConnection();
 		if (!Connection) throw std::runtime_error("FireServer has no active server connection");
 		auto Result = Event->Manager->SendEvent(
-			*Connection, Event->GetObjectId(), network::ReadRemoteLuauArguments(L, 2)
+			*Connection, Event->GetNetworkObjectId(), network::ReadRemoteLuauArguments(L, 2)
 		);
 		if (!Result.Accepted())
 			throw std::runtime_error(
@@ -93,7 +93,7 @@ namespace gargantuan {
 			static_cast<std::uint32_t>(luaL_checkunsigned(L, 3)),
 		};
 		auto Result = Event->Manager->SendEvent(
-			Connection, Event->GetObjectId(), network::ReadRemoteLuauArguments(L, 4)
+			Connection, Event->GetNetworkObjectId(), network::ReadRemoteLuauArguments(L, 4)
 		);
 		if (!Result.Accepted())
 			throw std::runtime_error(
@@ -111,7 +111,7 @@ namespace gargantuan {
 			ScriptExecutionDomain::Server,
 			"FireAllClients"
 		);
-		auto Results = Event->Manager->Broadcast(Event->GetObjectId(), network::ReadRemoteLuauArguments(L, 2));
+		auto Results = Event->Manager->Broadcast(Event->GetNetworkObjectId(), network::ReadRemoteLuauArguments(L, 2));
 		if (Results.empty()) throw std::runtime_error("FireAllClients has no eligible peers");
 		if (std::ranges::none_of(Results, [](const auto &Result) { return Result.Accepted(); }))
 			throw std::runtime_error("FireAllClients was rejected for every eligible peer");

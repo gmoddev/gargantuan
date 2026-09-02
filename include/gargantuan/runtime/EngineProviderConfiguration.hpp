@@ -1,5 +1,7 @@
 #pragma once
 
+#include "gargantuan/runtime/RuntimeMode.hpp"
+
 #include <memory>
 
 namespace gargantuan {
@@ -10,5 +12,6 @@ namespace gargantuan {
 	struct EngineProviderConfiguration final {
 		std::shared_ptr<IEntitlementProvider> Entitlements;
 		bool AudioEnabled = false;
+		RuntimeMode Mode = RuntimeMode::Offline;
 	};
 }

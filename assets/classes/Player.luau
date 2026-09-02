@@ -10,7 +10,10 @@ return c({
 			description = "Nonzero runtime player identity independent of ConnectionId.",
 			type = t.Integer,
 			unmodified = "0",
-			writable = false,
+			writable = true,
+			overrideRead = "GetPlayerId",
+			overrideWrite = "SetReplicatedPlayerId",
+			replicated = true,
 		},
 		Character = {
 			description = "The current runtime character, or nil while no character is spawned.",
@@ -18,6 +21,7 @@ return c({
 			unmodified = "std::nullopt",
 			overrideRead = "GetCharacter",
 			overrideWrite = "SetCharacter",
+			replicated = true,
 		},
 	},
 

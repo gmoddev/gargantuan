@@ -61,14 +61,27 @@ if(DEFINED GARGANTUAN_SYSTEM_RUNTIME_COUNT AND GARGANTUAN_SYSTEM_RUNTIME_COUNT G
 		)
 	endforeach()
 endif()
+if(DEFINED GARGANTUAN_PROTOBUF_RUNTIME_FILE AND NOT "${GARGANTUAN_PROTOBUF_RUNTIME_FILE}" STREQUAL "")
+	get_filename_component(GARGANTUAN_PROTOBUF_RUNTIME_NAME "${GARGANTUAN_PROTOBUF_RUNTIME_FILE}" NAME)
+	GargantuanStageRuntimeFile(
+		"${GARGANTUAN_PROTOBUF_RUNTIME_FILE}"
+		"${GARGANTUAN_PROTOBUF_RUNTIME_NAME}"
+		Runtime
+	)
+endif()
 
 foreach(GARGANTUAN_RUNTIME_MODULE
 	DefaultActionMap.luau
 	DefaultInteractionRuntime.luau
 	DefaultCamera.luau
 	DefaultCharacterRuntime.luau
+	DefaultCharacterAssembly.luau
 	DefaultLocomotion.luau
+	DefaultNetworkLocomotion.luau
+	DefaultNetworkCharacterRuntime.luau
 	DefaultPlayerRuntime.luau
+	DefaultNetworkClientRuntime.luau
+	DefaultNetworkServerRuntime.luau
 	GargantuanSans.ttf
 )
 	GargantuanStageRuntimeFile(
@@ -106,6 +119,18 @@ GargantuanStageRuntimeFile("${GARGANTUAN_SOURCE_DIR}/vendor/sdl/LICENSE.txt" "no
 GargantuanStageRuntimeFile("${GARGANTUAN_SOURCE_DIR}/vendor/sdl_image/LICENSE.txt" "notices/SDL3_image.txt" Notice)
 GargantuanStageRuntimeFile("${GARGANTUAN_SOURCE_DIR}/vendor/sdl_ttf/LICENSE.txt" "notices/SDL3_ttf.txt" Notice)
 GargantuanStageRuntimeFile("${GARGANTUAN_SOURCE_DIR}/vendor/tracy/LICENSE" "notices/Tracy.txt" Notice)
+if(DEFINED GARGANTUAN_GNS_LICENSE_FILE AND NOT "${GARGANTUAN_GNS_LICENSE_FILE}" STREQUAL "")
+	GargantuanStageRuntimeFile(
+		"${GARGANTUAN_GNS_LICENSE_FILE}"
+		"notices/GameNetworkingSockets.txt"
+		Notice
+	)
+	GargantuanStageRuntimeFile(
+		"${GARGANTUAN_PROTOBUF_LICENSE_FILE}"
+		"notices/ProtocolBuffers.txt"
+		Notice
+	)
+endif()
 if(DEFINED GARGANTUAN_SYSTEM_RUNTIME_COUNT AND GARGANTUAN_SYSTEM_RUNTIME_COUNT GREATER 0)
 	GargantuanStageRuntimeFile(
 		"${GARGANTUAN_SOURCE_DIR}/cmake/notices/MSVC-Runtime.txt"

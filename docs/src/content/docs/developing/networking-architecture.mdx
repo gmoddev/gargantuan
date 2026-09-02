@@ -393,8 +393,13 @@ of the accepted decisions above.
    restoration, reentrant peer teardown, Remote publication lifetimes,
    manager-wide resource ceilings, scheduler terminal propagation, aggregate
    reliable queueing, and bounded replication/application fairness.
-- [ ] **Add realtime replication when gameplay requires it.** Introduce sequenced
-   transforms/physics, ownership leases, interpolation, and correction.
+- [x] **Add realtime Character replication and production session bootstrap.**
+  GCHR provides semantic input/actions, server authority, bounded prediction,
+  20 Hz batched state, reconciliation, and presentation. GSES and `GameSession`
+  bind the packaged transport lifetime to server-owned Player creation, explicit
+  trusted LocalPlayer identity, structural materialization, and Character control.
+  The accepted identity is deliberately development-local; account tickets and
+  discovery remain later control-plane work.
 - [ ] **Add interest and streaming when world scale requires it.** Expand
     per-client views, priorities, relevance, and bandwidth policy.
 

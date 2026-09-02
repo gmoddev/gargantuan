@@ -1,7 +1,7 @@
 ---
 status: superseded
 owner: networking
-last_verified: 2026-09-01
+last_verified: 2026-09-02
 superseded_by: devdocs/CurrentArchitecture/CharacterNetworkingFoundation3C.md
 related_code:
   - include/gargantuan/network/CharacterProtocol.hpp
@@ -25,6 +25,9 @@ related_adrs:
 This document preserves the verified Foundation 3B authority and performance
 baseline. Foundation 3C supersedes its realtime publication and presentation
 sections; see [CharacterNetworkingFoundation3C.md](CharacterNetworkingFoundation3C.md).
+Foundation 3D now composes these managers into the packaged game-session and
+Player lifecycle; see
+[CharacterNetworkingFoundation3D.md](CharacterNetworkingFoundation3D.md).
 
 ## Implemented boundary
 
@@ -340,8 +343,9 @@ Character / Animation Foundation 3C priorities, in evidence order, are:
    cadence, because the 500-Character raw stream is 3.36 MB/s before framing;
 2. add bounded remote interpolation and local presentation smoothing over the
    already-correct semantic Character baseline;
-3. expose the native manager through production server/client session bootstrap
-   and narrow Luau semantic command/action bridges without moving policy native;
+3. production server/client session bootstrap and narrow Luau semantic
+   command/action bridges are implemented by Foundation 3D without moving
+   gameplay policy native;
 4. add measured spatial relevance/interest integration for large worlds while
    retaining explicit materialization; and
 5. extend authoritative action presentation/Animator synchronization and content

@@ -1,0 +1,84 @@
+#pragma once
+
+#include "gargantuan/network/Limits.hpp"
+#include "gargantuan/network/Outcome.hpp"
+#include "gargantuan/network/Transport.hpp"
+#include "gargantuan/runtime/ObjectId.hpp"
+
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <optional>
+#include <string>
+
+namespace gargantuan {
+	class DataModel;
+	class Engine;
+	class Player;
+}
+
+namespace gargantuan::network {
+	inline constexpr std::uint64_t DefaultGameSessionHandshakeTimeoutTicks = 600;
+	inline constexpr std::size_t MaximumGameSessionPeers = 512;
+
+	enum class GameSessionRole : std::uint8_t { Server, Client };
+	enum class GameSessionStatus : std::uint8_t { Stopped, Listening, Connecting, Accepted, Ready, Failed };
+
+	struct GameSessionConfiguration {
+		GameSessionRole Role = GameSessionRole::Client;
+		TransportEndpoint Endpoint;
+		NetworkLimits Limits;
+		std::uint64_t HandshakeTimeoutTicks = DefaultGameSessionHandshakeTimeoutTicks;
+		std::uint64_t ClientNonce = 0;
+
+		[[nodiscard]] bool IsValid() const;
+		[[nodiscard]] static NetworkLimits DefaultLimits();
+	};
+
+	struct GameSessionMetrics {
+		std::uint64_t TransportConnections = 0;
+		std::uint64_t AcceptedPeers = 0;
+		std::uint64_t ReadyPeers = 0;
+		std::uint64_t RejectedHandshakes = 0;
+		std::uint64_t RejectedPreAcceptanceMessages = 0;
+		std::uint64_t ProtocolRejects = 0;
+		std::uint64_t HandshakeTimeouts = 0;
+		std::uint64_t PlayersCreated = 0;
+		std::uint64_t PlayersRemoved = 0;
+		std::uint64_t CharacterControlBindings = 0;
+		std::uint64_t CharacterControlRevocations = 0;
+		std::uint64_t ActionsPresented = 0;
+		std::uint64_t ActionPresentationStops = 0;
+		std::uint64_t ActionPresentationDeferrals = 0;
+	};
+
+	class GameSession final {
+	  public:
+		GameSession(
+			std::shared_ptr<IGameTransport> Transport,
+			GameSessionConfiguration Configuration,
+			Engine *ServerRuntime = nullptr
+		);
+		~GameSession();
+		GameSession(const GameSession &) = delete;
+		GameSession &operator=(const GameSession &) = delete;
+
+		[[nodiscard]] TransportOperationResult Start();
+		void Stop();
+		std::size_t Poll();
+		void Step(std::uint64_t SimulationTick);
+		bool AttachClientRuntime(Engine &Runtime);
+
+		[[nodiscard]] GameSessionRole GetRole() const;
+		[[nodiscard]] GameSessionStatus GetStatus() const;
+		[[nodiscard]] const std::string &GetFailure() const;
+		[[nodiscard]] GameSessionMetrics GetMetrics() const;
+		[[nodiscard]] std::shared_ptr<DataModel> GetClientDataModel() const;
+		[[nodiscard]] std::optional<ConnectionId> GetPrimaryConnection() const;
+		[[nodiscard]] std::shared_ptr<Player> GetAcceptedPlayer(ConnectionId Connection) const;
+
+	  private:
+		struct Implementation;
+		std::unique_ptr<Implementation> State;
+	};
+}

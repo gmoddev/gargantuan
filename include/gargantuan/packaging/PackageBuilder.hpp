@@ -143,6 +143,9 @@ namespace gargantuan {
 		Load(const std::filesystem::path &PackageRoot, std::vector<PackageDiagnostic> &Diagnostics);
 		[[nodiscard]] static std::shared_ptr<DataModel>
 		LoadWorld(const RuntimePackagePayload &Payload, const std::filesystem::path &PackageRoot);
+		[[nodiscard]] static std::size_t HydrateClientCode(
+			const std::shared_ptr<DataModel> &TrustedPackageWorld, const std::shared_ptr<DataModel> &ReplicatedWorld
+		);
 	};
 
 	[[nodiscard]] std::string_view GetPackageConfigurationName(PackageConfiguration Configuration);

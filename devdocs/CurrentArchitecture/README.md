@@ -1,5 +1,9 @@
 # Current architecture
 
+- [Character Networking Foundation 3D](CharacterNetworkingFoundation3D.md)
+  defines the packaged client/server game-session owner, accepted-peer and
+  trusted LocalPlayer bootstrap, authoritative Player/Character control
+  lifetime, replaceable Luau movement/action policy, and GSES/GCHR boundary.
 - [Animation Foundation 1](AnimationFoundation1.md) defines canonical glTF
   skeleton/clip assets, asset-owned Bones, schema-backed Animator plus
   runtime-only tracks, deterministic blending, CPU skinning, renderer-neutral
@@ -183,13 +187,15 @@ registration map owns lazy singleton construction and scope. Direct registered
 service members and `GetService` share that path; `FindService` only observes an
 already-live canonical singleton. The present DataModel registers
 `ActionMap`, `AssetService`, `Players`, `ProcessService`, `RunService`, `Tags`,
-`UserInputService`, and `Workspace`.
+`UserInputService`, `CharacterControlService`, and `Workspace`.
 `Workspace` creates a current Camera. A `ReplicatedStorage` class/source scaffold
 exists but is not registered. Basic reliable client replication, the production
 scheduler, and bounded Luau application remotes now exist as networking
-subsystem components. They are not yet wired into a complete multiplayer
-executable or final multiplayer `Players` behavior. The deterministic simulator and optional real
-GNS adapter exercise both replication and Remote paths.
+subsystem components. `GargantuanPlayer --server-bind` and `--connect` now
+compose them through one production `GameSession`, including authoritative
+Players and Character control. External account authentication, discovery,
+matchmaking, and spatial interest remain deferred. The deterministic simulator
+and optional real GNS adapter exercise the same coordinator.
 
 ## Frame execution model
 

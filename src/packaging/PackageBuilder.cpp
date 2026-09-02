@@ -2,6 +2,8 @@
 
 #include "gargantuan/assets/InstanceSerialization.hpp"
 #include "gargantuan/classes/DataModel.hpp"
+#include "gargantuan/classes/ModuleScript.hpp"
+#include "gargantuan/classes/Script.hpp"
 #include "gargantuan/filesystem/Project.hpp"
 #include "gargantuan/reflection/PreRunRegistration.hpp"
 #include "gargantuan/services/AssetService.hpp"
@@ -28,6 +30,10 @@
 
 #if defined(_WIN32)
 #include <Windows.h>
+#endif
+
+#if defined(GetClassName)
+#undef GetClassName
 #endif
 
 namespace gargantuan {
@@ -811,16 +817,18 @@ namespace gargantuan {
 		const std::string SdlError = SDL_GetError();
 		std::filesystem::path Result;
 #if defined(_WIN32)
-		if (const auto *ApplicationData = _wgetenv(L"APPDATA")) Result = ApplicationData;
-		else if (const auto *LocalApplicationData = _wgetenv(L"LOCALAPPDATA")) Result = LocalApplicationData;
+		if (const auto *ApplicationData = _wgetenv(L"APPDATA"))
+			Result = ApplicationData;
+		else if (const auto *LocalApplicationData = _wgetenv(L"LOCALAPPDATA"))
+			Result = LocalApplicationData;
 #else
-		if (const auto *DataHome = std::getenv("XDG_DATA_HOME")) Result = DataHome;
-		else if (const auto *UserHome = std::getenv("HOME")) Result = std::filesystem::path(UserHome) / ".local/share";
+		if (const auto *DataHome = std::getenv("XDG_DATA_HOME"))
+			Result = DataHome;
+		else if (const auto *UserHome = std::getenv("HOME"))
+			Result = std::filesystem::path(UserHome) / ".local/share";
 #endif
 		if (Result.empty())
-			throw std::runtime_error(std::format(
-				"Could not resolve the Gargantuan user-data root: {}", SdlError
-			));
+			throw std::runtime_error(std::format("Could not resolve the Gargantuan user-data root: {}", SdlError));
 		Result /= "Gargantuan";
 		Result /= Identity.ToString();
 		return Result;
@@ -1176,5 +1184,40 @@ namespace gargantuan {
 		if (!Assets) throw std::runtime_error("The packaged project has no canonical AssetService");
 		Assets->LoadRuntimeAssetSnapshot(Payload.Assets);
 		return World;
+	}
+
+	std::size_t PackageBuilder::HydrateClientCode(
+		const std::shared_ptr<DataModel> &TrustedPackageWorld, const std::shared_ptr<DataModel> &ReplicatedWorld
+	) {
+		if (!TrustedPackageWorld || !ReplicatedWorld || TrustedPackageWorld == ReplicatedWorld)
+			throw std::invalid_argument(
+				"Packaged client code hydration requires distinct trusted and replicated worlds"
+			);
+		std::map<std::pair<std::string, std::string>, std::vector<std::shared_ptr<Instance>>> Targets;
+		for (const auto &Target : ReplicatedWorld->GetDescendants())
+			Targets[std::make_pair(Target->GetFullName(), (Target->GetClassName)())].push_back(Target);
+		std::size_t Hydrated = 0;
+		for (const auto &SourceObject : TrustedPackageWorld->GetDescendants()) {
+			auto Source = std::dynamic_pointer_cast<LuaSourceContainer>(SourceObject);
+			if (!Source) continue;
+			if (auto ScriptValue = std::dynamic_pointer_cast<Script>(Source);
+				ScriptValue && ScriptValue->GetRunContext() != Enums::RunContext::Client)
+				continue;
+			if (!std::dynamic_pointer_cast<Script>(Source) && !std::dynamic_pointer_cast<ModuleScript>(Source))
+				continue;
+			auto Found = Targets.find(std::make_pair(SourceObject->GetFullName(), (SourceObject->GetClassName)()));
+			if (Found == Targets.end()) continue;
+			if (Found->second.size() != 1) throw std::runtime_error("Packaged client code target is ambiguous");
+			auto Target = std::dynamic_pointer_cast<LuaSourceContainer>(Found->second.front());
+			if (!Target) throw std::runtime_error("Packaged client code target changed class");
+			if (auto TargetScript = std::dynamic_pointer_cast<Script>(Target);
+				TargetScript && TargetScript->GetRunContext() != Enums::RunContext::Client)
+				throw std::runtime_error("Packaged client Script changed runtime role");
+			if (!Target->GetSource().empty() && Target->GetSource() != Source->GetSource())
+				throw std::runtime_error("Replicated client code target already contains different source");
+			Target->SetSource(Source->GetSource());
+			++Hydrated;
+		}
+		return Hydrated;
 	}
 }

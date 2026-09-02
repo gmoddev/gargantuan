@@ -13,6 +13,7 @@ namespace gargantuan {
 		I_Player;
 
 		friend class Players;
+		int PlayerIdValue = 0;
 		std::shared_ptr<Character> CharacterValue;
 		std::optional<PlayerIdentity> AuthenticationIdentity;
 		SignalConnection::Pointer CharacterDestroyingConnection;

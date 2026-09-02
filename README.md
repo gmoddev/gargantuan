@@ -473,12 +473,21 @@ The networking architecture currently includes:
 - UnreliableRemoteEvent;
 - UnreliableSequencedRemoteEvent;
 - bounded RemoteFunction request/response;
+- a bounded production game-session handshake and shared peer lifetime;
+- server-created Players with trusted client `LocalPlayer` association;
+- server-authoritative `Player.Character` control binding;
+- replaceable client/server Luau Character movement and action policy;
+- GCHR v2 prediction, reconciliation, interpolation, and batched 20 Hz state;
 - finite deadlines;
 - per-peer and aggregate resource limits.
 
 Networking Foundations 1 through 7 have also received an independent adversarial composition pass covering scheduler, replication, remotes, reconnects, authority, resource amplification, visibility, and lifecycle behavior.
 
-Multiplayer gameplay services and final player/session APIs are still under development.
+Packaged GNS-enabled builds can now run as a headless game server or network
+client with `--server-bind HOST:PORT` and `--connect HOST:PORT`. The current
+session identity is development-local; production account authentication,
+discovery, matchmaking, and Studio multiplayer orchestration remain future
+work.
 
 ## Current Limitations
 
@@ -486,7 +495,7 @@ Gargantuan is still early.
 
 Major currently incomplete or deferred areas include:
 
-- final Player service and character/controller model;
+- external account-backed Player identity and session tickets;
 - broader gameplay service coverage;
 - asset identity/import/cooking pipeline;
 - final materials and advanced rendering;

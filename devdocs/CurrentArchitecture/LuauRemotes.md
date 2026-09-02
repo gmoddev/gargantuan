@@ -395,11 +395,18 @@ generation, stale old-session rejection, and mixed baseline/publication plus
 Remote event/request routing through one production scheduler and session. It
 uses no Internet service.
 
+Foundation 3D's `GameSession` is now that production session owner. A Remote
+peer is registered only after GSES acceptance, exact Player materialization,
+trusted `LocalPlayer` selection on the client, and `ClientReady`; disconnect
+removes Remote, GCHR, replication, scheduler, and Player association state from
+the same `ConnectionId` lifetime. Remote payloads still cannot select a Player,
+Character, or script security context.
+
 ## Deliberately deferred
 
 This Remote milestone does not implement matchmaking, Node integration, Studio
-play mode, Character or general transform/physics replication, network
-ownership, interpolation, prediction, rollback, streaming/interest management,
+multiplayer play orchestration, general transform/physics replication, network
+ownership, rollback, streaming/interest management,
 voice, HTTP/service networking, or backend messaging. Character realtime
-prediction/reconciliation is now a sibling native protocol and deliberately
-does not expand Remote authority.
+prediction/reconciliation and production session composition are sibling
+systems and deliberately do not expand Remote authority.

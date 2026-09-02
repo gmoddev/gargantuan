@@ -14,6 +14,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <vector>
 
 namespace gargantuan {
 	class KinematicCharacter;
@@ -36,6 +37,7 @@ namespace gargantuan::network {
 	inline constexpr std::uint32_t DefaultCharacterStateUpdatesPerSecond = 20;
 	inline constexpr std::uint64_t DefaultCharacterAbsoluteRefreshTicks = 60;
 	inline constexpr std::uint64_t DefaultRemoteInterpolationDelayTicks = 6;
+	inline constexpr std::uint64_t DefaultCharacterInputFreshnessTicks = 6;
 	inline constexpr std::uint64_t TinyCorrectionSmoothingTicks = 3;
 	inline constexpr std::uint64_t SmallCorrectionSmoothingTicks = 6;
 
@@ -44,6 +46,7 @@ namespace gargantuan::network {
 		std::uint32_t StateUpdatesPerSecond = DefaultCharacterStateUpdatesPerSecond;
 		std::uint64_t AbsoluteRefreshTicks = DefaultCharacterAbsoluteRefreshTicks;
 		std::uint64_t RemoteInterpolationDelayTicks = DefaultRemoteInterpolationDelayTicks;
+		std::uint64_t InputFreshnessTicks = DefaultCharacterInputFreshnessTicks;
 		std::size_t MaximumStateFrameBytes = MaximumCharacterStateFrameBytes;
 
 		[[nodiscard]] bool IsValid() const;
@@ -95,6 +98,8 @@ namespace gargantuan::network {
 		std::uint64_t HardResets = 0;
 		std::uint64_t PredictedCommandsReplayed = 0;
 		std::uint64_t HistoryOverflows = 0;
+		std::uint64_t InputFreshnessTimeouts = 0;
+		std::uint64_t MovementPolicyErrors = 0;
 		std::uint64_t BytesIn = 0;
 		std::uint64_t BytesOut = 0;
 		std::uint64_t ProtocolRejects = 0;
@@ -109,6 +114,24 @@ namespace gargantuan::network {
 		std::uint64_t ReconciliationCpuNanoseconds = 0;
 		std::uint64_t ReplayCpuNanoseconds = 0;
 		std::uint64_t InterpolationCpuNanoseconds = 0;
+	};
+
+	struct CharacterActionResolution {
+		ObjectId Character;
+		std::uint32_t RequestedActionToken = 0;
+		bool Accepted = false;
+		std::optional<CharacterActionState> AuthoritativeAction;
+	};
+
+	struct CharacterActionEnded {
+		ObjectId Character;
+		std::uint32_t ActionToken = 0;
+	};
+
+	struct CharacterActionPresentation {
+		CharacterActionState Action;
+		std::uint64_t PhaseTick = 0;
+		bool Predicted = false;
 	};
 
 	class AuthoritativeCharacterNetwork final {
@@ -193,13 +216,17 @@ namespace gargantuan::network {
 			bool JumpRequested
 		);
 		bool RequestAction(ConnectionId Connection, std::uint32_t ActionToken, std::uint64_t SimulationTick);
+		void SetPredictionEnabled(bool Enabled);
 		void Reconcile(WorldRoot &World);
 		void UpdatePresentation(std::uint64_t PresentationTick);
 
 		[[nodiscard]] std::optional<CharacterControlTransition> GetControl(ConnectionId Connection) const;
 		[[nodiscard]] std::optional<CharacterActionState> GetAuthoritativeAction(ObjectId Character) const;
+		[[nodiscard]] std::optional<CharacterActionPresentation> GetPresentationAction(ObjectId Character) const;
 		[[nodiscard]] std::size_t GetPredictionHistorySize(ConnectionId Connection) const;
 		[[nodiscard]] std::size_t GetPresentationSnapshotCount(ObjectId Character) const;
+		[[nodiscard]] std::vector<CharacterActionResolution> DrainActionResolutions();
+		[[nodiscard]] std::vector<CharacterActionEnded> DrainActionEndings();
 		[[nodiscard]] CharacterNetworkMetrics GetMetrics() const {
 			return Metrics;
 		}
@@ -214,12 +241,20 @@ namespace gargantuan::network {
 		std::map<ConnectionId, PeerState> Peers;
 		std::map<ObjectId, ReplicaState> Replicas;
 		std::map<std::uint32_t, CharacterActionDefinition> Actions;
+		std::vector<CharacterActionResolution> ActionResolutions;
+		std::vector<CharacterActionEnded> ActionEndings;
+		bool PredictionEnabled = true;
 		CharacterNetworkMetrics Metrics;
 
 		bool Queue(ConnectionId Connection, const CharacterMessage &Message, StateChannelId Channel, bool Reliable);
 		bool HandleMessage(ConnectionId Connection, const ReceivedMessageEvent &Event, CharacterMessage Message);
-		bool HandleState(PeerState &Peer, const ReceivedMessageEvent &Event, CharacterAuthoritativeState State,
-			bool ReliableState, bool FramedState = false);
+		bool HandleState(
+			PeerState &Peer,
+			const ReceivedMessageEvent &Event,
+			CharacterAuthoritativeState State,
+			bool ReliableState,
+			bool FramedState = false
+		);
 		bool Predict(PeerState &Peer, WorldRoot &World, const CharacterInputCommand &Command, bool Record);
 		void HardReset(PeerState &Peer);
 	};

@@ -96,8 +96,10 @@ namespace gargantuan::network {
 		}
 	}
 
-	ReplicationCoordinator::ReplicationCoordinator(std::shared_ptr<Instance> SourceRoot)
-		: SourceRoot(std::move(SourceRoot)) {}
+	ReplicationCoordinator::ReplicationCoordinator(
+		std::shared_ptr<Instance> SourceRoot, InitialRelevancePolicy IsInitiallyRelevantValue
+	)
+		: SourceRoot(std::move(SourceRoot)), IsInitiallyRelevant(std::move(IsInitiallyRelevantValue)) {}
 
 	ReplicationProduceResult ReplicationCoordinator::AddPeer(ConnectionId Connection, ReplicationEpoch Epoch) {
 		if (!SourceRoot || !Connection.IsValid() || !Epoch.IsValid()) return {{}, "Invalid replication peer or source"};
@@ -114,19 +116,30 @@ namespace gargantuan::network {
 				ReplicationProtocolVersion, ReplicationMessageKind::Baseline, Epoch, State.NextSequence
 			};
 			Frame.Schema = CaptureReplicationSchemaCompatibility();
-			Frame.Operations.reserve(SnapshotValue.Objects.size());
+			std::set<ObjectId> Included;
 			for (const auto &Object : SnapshotValue.Objects) {
 				const auto Id = Object.Id.ToObjectId();
+				const bool Root = !Object.Parent;
+				const bool ParentIncluded = Root || Included.contains(Object.Parent->ToObjectId());
+				if (ParentIncluded && (Root || !IsInitiallyRelevant || IsInitiallyRelevant(Id))) Included.insert(Id);
+			}
+			Frame.Operations.reserve(Included.size());
+			for (const auto &Object : SnapshotValue.Objects) {
+				const auto Id = Object.Id.ToObjectId();
+				if (!Included.contains(Id)) continue;
+				const auto Publish = MakePublish(Object);
+				if (!PublishReferencesKnown(State.View, Publish, Included))
+					return {{}, "Initial relevance excludes an object referenced by a materialized object"};
 				State.View.RelevantObjects.insert(Id);
 				State.View.KnownObjects.insert(Id);
-				Frame.Operations.push_back({Epoch, MakePublish(Object)});
+				Frame.Operations.push_back({Epoch, Publish});
 			}
 			auto Encoded = EncodeReplicationFrame(Frame);
 			if (!Encoded) return {{}, Encoded.error().Format()};
 			State.NextSequence = *State.NextSequence.TryNext();
-			Metrics.ObjectsPublished += SnapshotValue.Objects.size();
-			Metrics.OperationsGenerated += SnapshotValue.Objects.size();
-			Metrics.BaselineObjects += SnapshotValue.Objects.size();
+			Metrics.ObjectsPublished += Included.size();
+			Metrics.OperationsGenerated += Included.size();
+			Metrics.BaselineObjects += Included.size();
 			Metrics.BaselineBytes += Encoded->size();
 			Peers.emplace(Connection, std::move(State));
 			return {std::move(Frame), {}};
@@ -168,6 +181,7 @@ namespace gargantuan::network {
 		for (const auto &Record : Read.Records) {
 			const auto Known = CandidatePeer.View.Knows(Record.Object);
 			const auto Relevant = CandidatePeer.View.RelevantObjects.contains(Record.Object);
+			if (!Known && IsInitiallyRelevant && !IsInitiallyRelevant(Record.Object)) continue;
 			bool FailedReference = false;
 			std::visit(
 				[&](const auto &Change) {
@@ -179,7 +193,7 @@ namespace gargantuan::network {
 						if (Found == Objects.end()) return;
 						const auto Publish = MakePublish(*Found->second);
 						if (Publish.Parent && !CandidatePeer.View.Knows(*Publish.Parent)) {
-							FailedReference = true;
+							CandidatePeer.View.RelevantObjects.erase(Record.Object);
 							return;
 						}
 						if (!PublishReferencesKnown(CandidatePeer.View, Publish, BatchPublishObjects)) {

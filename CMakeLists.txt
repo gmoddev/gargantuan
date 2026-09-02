@@ -71,9 +71,14 @@ set(GARGANTUAN_RUNTIME_LUAU_MODULES
 	"DefaultActionMap.luau"
 	"DefaultInteractionRuntime.luau"
 	"DefaultCharacterRuntime.luau"
+	"DefaultCharacterAssembly.luau"
 	"DefaultLocomotion.luau"
+	"DefaultNetworkLocomotion.luau"
+	"DefaultNetworkCharacterRuntime.luau"
 	"DefaultCamera.luau"
 	"DefaultPlayerRuntime.luau"
+	"DefaultNetworkClientRuntime.luau"
+	"DefaultNetworkServerRuntime.luau"
 )
 foreach(GARGANTUAN_RUNTIME_LUAU_MODULE IN LISTS GARGANTUAN_RUNTIME_LUAU_MODULES)
 	configure_file(
@@ -348,6 +353,31 @@ if(MSVC)
 	list(APPEND GARGANTUAN_SYSTEM_RUNTIME_ARGUMENTS
 		-DGARGANTUAN_SYSTEM_RUNTIME_COUNT=${GARGANTUAN_SYSTEM_RUNTIME_COUNT})
 endif()
+set(GARGANTUAN_NETWORK_RUNTIME_ARGUMENTS)
+if(GARGANTUAN_WITH_GNS)
+	list(APPEND GARGANTUAN_NETWORK_RUNTIME_ARGUMENTS
+		-DGARGANTUAN_GNS_LICENSE_FILE=${GameNetworkingSockets_SOURCE_DIR}/LICENSE
+		-DGARGANTUAN_PROTOBUF_LICENSE_FILE=${CMAKE_CURRENT_SOURCE_DIR}/cmake/notices/ProtocolBuffers.txt
+	)
+	if(TARGET protobuf::libprotobuf)
+		list(APPEND GARGANTUAN_NETWORK_RUNTIME_ARGUMENTS
+			-DGARGANTUAN_PROTOBUF_RUNTIME_FILE=$<TARGET_FILE:protobuf::libprotobuf>)
+	elseif(WIN32 AND DEFINED Protobuf_DIR)
+		get_filename_component(GARGANTUAN_PROTOBUF_PACKAGE_ROOT "${Protobuf_DIR}/../.." ABSOLUTE)
+		if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+			set(GARGANTUAN_PROTOBUF_RUNTIME_FILE
+				"${GARGANTUAN_PROTOBUF_PACKAGE_ROOT}/debug/bin/libprotobufd.dll")
+		else()
+			set(GARGANTUAN_PROTOBUF_RUNTIME_FILE
+				"${GARGANTUAN_PROTOBUF_PACKAGE_ROOT}/bin/libprotobuf.dll")
+		endif()
+		if(NOT EXISTS "${GARGANTUAN_PROTOBUF_RUNTIME_FILE}")
+			message(FATAL_ERROR "The GameNetworkingSockets Protocol Buffers runtime is unavailable")
+		endif()
+		list(APPEND GARGANTUAN_NETWORK_RUNTIME_ARGUMENTS
+			-DGARGANTUAN_PROTOBUF_RUNTIME_FILE=${GARGANTUAN_PROTOBUF_RUNTIME_FILE})
+	endif()
+endif()
 add_custom_target(gargantuan_runtime_distribution ALL
 	COMMAND ${CMAKE_COMMAND}
 		-DGARGANTUAN_RUNTIME_DISTRIBUTION_ROOT=$<TARGET_FILE_DIR:gargantuan_player>/RuntimeDistribution
@@ -355,6 +385,7 @@ add_custom_target(gargantuan_runtime_distribution ALL
 		-DGARGANTUAN_SDL_FILE=$<TARGET_FILE:SDL3::SDL3>
 		${GARGANTUAN_SDL_SONAME_ARGUMENT}
 		${GARGANTUAN_SYSTEM_RUNTIME_ARGUMENTS}
+		${GARGANTUAN_NETWORK_RUNTIME_ARGUMENTS}
 		-DGARGANTUAN_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}
 		-DGARGANTUAN_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
 		-DGARGANTUAN_PLATFORM=${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCESSOR}
@@ -471,6 +502,7 @@ if(GARGANTUAN_WITH_GNS)
 	target_compile_definitions(gargantuan_gns_transport PUBLIC GARGANTUAN_WITH_GNS=1)
 	target_include_directories(gargantuan_gns_transport PUBLIC "include")
 	target_link_libraries(gargantuan_gns_transport PUBLIC GameNetworkingSockets::static)
+	target_link_libraries(gargantuan_player PRIVATE gargantuan_gns_transport)
 	if(MSVC)
 		target_compile_options(gargantuan_gns_transport PRIVATE /EHsc)
 	endif()
@@ -623,6 +655,14 @@ if(BUILD_TESTING)
 	target_link_libraries(gargantuan_remote_luau_tests PRIVATE gargantuan_core)
 	add_executable(gargantuan_character_networking_tests "tests/CharacterNetworkingTests.cpp")
 	target_link_libraries(gargantuan_character_networking_tests PRIVATE gargantuan_core nlohmann_json)
+	add_executable(gargantuan_game_session_tests "tests/GameSessionTests.cpp")
+	target_link_libraries(gargantuan_game_session_tests PRIVATE gargantuan_core)
+	target_compile_definitions(gargantuan_game_session_tests PRIVATE
+		GARGANTUAN_FIRST_COMPLETE_GAME_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/samples/FirstCompleteGame"
+	)
+	add_test(NAME GameSessionTests COMMAND gargantuan_game_session_tests)
+	add_executable(gargantuan_game_session_benchmark "tests/GameSessionBenchmark.cpp")
+	target_link_libraries(gargantuan_game_session_benchmark PRIVATE gargantuan_core)
 	target_compile_definitions(gargantuan_character_networking_tests PRIVATE
 		GARGANTUAN_FIRST_COMPLETE_GAME_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/samples/FirstCompleteGame"
 	)
@@ -645,6 +685,11 @@ if(BUILD_TESTING)
 		)
 		add_executable(gargantuan_character_real_transport_tests "tests/CharacterNetworkGnsTests.cpp")
 		target_link_libraries(gargantuan_character_real_transport_tests PRIVATE
+			gargantuan_core
+			gargantuan_gns_transport
+		)
+		add_executable(gargantuan_game_session_real_transport_tests "tests/GameSessionGnsTests.cpp")
+		target_link_libraries(gargantuan_game_session_real_transport_tests PRIVATE
 			gargantuan_core
 			gargantuan_gns_transport
 		)
@@ -744,6 +789,7 @@ if(BUILD_TESTING)
 			gargantuan_remote_luau_tests
 			gargantuan_character_networking_tests
 			gargantuan_character_networking_benchmark
+			gargantuan_game_session_benchmark
 			gargantuan_replication_benchmark
 			gargantuan_remote_benchmark
 		)
@@ -755,6 +801,7 @@ if(BUILD_TESTING)
 				gargantuan_real_transport_tests
 				gargantuan_remote_real_transport_tests
 				gargantuan_character_real_transport_tests
+				gargantuan_game_session_real_transport_tests
 			)
 			set(GARGANTUAN_PROTOBUF_RUNTIMES "")
 			if(TARGET protobuf::libprotobuf)
@@ -769,6 +816,11 @@ if(BUILD_TESTING)
 				endif()
 			endif()
 			foreach(GARGANTUAN_PROTOBUF_RUNTIME IN LISTS GARGANTUAN_PROTOBUF_RUNTIMES)
+				add_custom_command(TARGET gargantuan_game_session_real_transport_tests POST_BUILD
+					COMMAND ${CMAKE_COMMAND} -E copy_if_different
+						"${GARGANTUAN_PROTOBUF_RUNTIME}"
+						"$<TARGET_FILE_DIR:gargantuan_game_session_real_transport_tests>"
+				)
 				add_custom_command(TARGET gargantuan_real_transport_tests POST_BUILD
 					COMMAND ${CMAKE_COMMAND} -E copy_if_different
 						"${GARGANTUAN_PROTOBUF_RUNTIME}"
@@ -906,6 +958,7 @@ if(BUILD_TESTING)
 	set_tests_properties(gargantuan_prerun_bootstrap PROPERTIES LABELS "prerun;runtime" TIMEOUT 120)
 	set_tests_properties(gargantuan_networking_contracts gargantuan_simulated_transport gargantuan_scheduler_contract
 		gargantuan_replication gargantuan_remote gargantuan_remote_luau gargantuan_character_networking
+		GameSessionTests
 		gargantuan_character_networking_benchmark_smoke
 		gargantuan_replication_benchmark_smoke
 		gargantuan_remote_benchmark_smoke PROPERTIES LABELS "networking;runtime" TIMEOUT 180
@@ -925,8 +978,22 @@ if(BUILD_TESTING)
 		add_test(NAME gargantuan_real_transport COMMAND gargantuan_real_transport_tests)
 		add_test(NAME gargantuan_remote_real_transport COMMAND gargantuan_remote_real_transport_tests)
 		add_test(NAME gargantuan_character_real_transport COMMAND gargantuan_character_real_transport_tests)
+		add_test(NAME gargantuan_game_session_real_transport COMMAND gargantuan_game_session_real_transport_tests)
+		if(WIN32)
+			add_test(NAME gargantuan_packaged_game_session
+				COMMAND powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass
+					-File "${CMAKE_CURRENT_SOURCE_DIR}/tests/PackagedGameSession.ps1"
+					-Packager "$<TARGET_FILE:gargantuan_packager>"
+					-RuntimeDistribution "$<TARGET_FILE_DIR:gargantuan_player>/RuntimeDistribution"
+					-ProjectRoot "${CMAKE_CURRENT_SOURCE_DIR}/samples/FirstCompleteGame"
+					-GraphicalClient $<IF:$<BOOL:${GARGANTUAN_RUN_GRAPHICAL_PACKAGE_SMOKE}>,ON,OFF>
+			)
+			set_tests_properties(gargantuan_packaged_game_session PROPERTIES
+				LABELS "networking;transport;packaging;optional" TIMEOUT 60 RUN_SERIAL TRUE
+			)
+		endif()
 		set_tests_properties(gargantuan_real_transport gargantuan_remote_real_transport
-			gargantuan_character_real_transport PROPERTIES
+			gargantuan_character_real_transport gargantuan_game_session_real_transport PROPERTIES
 			LABELS "networking;transport;optional" TIMEOUT 180
 		)
 	endif()

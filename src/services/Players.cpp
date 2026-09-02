@@ -6,6 +6,7 @@
 #include "gargantuan/classes/Script.hpp"
 #include "gargantuan/filesystem/Paths.hpp"
 
+#include <algorithm>
 #include <array>
 #include <filesystem>
 #include <fstream>
@@ -45,8 +46,16 @@ namespace gargantuan {
 	}
 
 	std::vector<std::shared_ptr<Player>> Players::GetPlayers() {
-		if (!LocalPlayerValue || LocalPlayerValue->GetDestroyed() || LocalPlayerValue->IsDestroying()) return {};
-		return {LocalPlayerValue};
+		std::vector<std::shared_ptr<Player>> Result;
+		for (const auto &Child : GetChildren())
+			if (auto Value = std::dynamic_pointer_cast<Player>(Child);
+				Value && !Value->GetDestroyed() && !Value->IsDestroying())
+				Result.push_back(std::move(Value));
+		std::ranges::sort(Result, [](const auto &Left, const auto &Right) {
+			if (Left->GetPlayerId() != Right->GetPlayerId()) return Left->GetPlayerId() < Right->GetPlayerId();
+			return Left->GetObjectId() < Right->GetObjectId();
+		});
+		return Result;
 	}
 
 	void Players::InitializeLocalPlayer() {
@@ -61,14 +70,79 @@ namespace gargantuan {
 		PlayerAdded->Fire(Value);
 	}
 
-	std::shared_ptr<Script> Players::StartDefaultRuntime() {
+	std::shared_ptr<Player> Players::CreateSessionPlayer(PlayerIdentity Identity) {
+		ValidatePlayerIdentity(Identity);
+		if (GetPlayers().size() >= 512 || NextSessionPlayerId <= 0)
+			throw std::length_error("[Player:Session] Player capacity is exhausted");
+		auto Value = std::make_shared<Player>();
+		Value->InitializeIdentity(NextSessionPlayerId++);
+		Value->InitializeAuthenticationIdentity(std::move(Identity));
+		Value->SetName("Player" + std::to_string(Value->GetPlayerId()));
+		Value->SetParent(shared_from_this());
+		PlayerAdded->Fire(Value);
+		return Value;
+	}
+
+	bool Players::RemoveSessionPlayer(const std::shared_ptr<Player> &Value) {
+		if (!Value || Value->GetDestroyed() || Value->IsDestroying() ||
+			Value->GetParent().value_or(nullptr).get() != this)
+			return false;
+		if (LocalPlayerValue == Value) ClearTrustedLocalPlayer();
+		PlayerRemoving->Fire(Value);
+		Value->ShutdownCharacter();
+		if (!Value->GetDestroyed() && !Value->IsDestroying()) Value->Destroy();
+		return true;
+	}
+
+	bool Players::SetTrustedLocalPlayer(const std::shared_ptr<Player> &Value) {
+		if (!Value || Value->GetDestroyed() || Value->IsDestroying() ||
+			Value->GetParent().value_or(nullptr).get() != this)
+			return false;
+		if (LocalPlayerValue == Value) return true;
+		if (LocalPlayerValue) return false;
+		LocalPlayerValue = Value;
+		NotifyPropertyCommitted("LocalPlayer");
+		PlayerAdded->Fire(Value);
+		return true;
+	}
+
+	void Players::ClearTrustedLocalPlayer() {
+		if (!LocalPlayerValue) return;
+		LocalPlayerValue.reset();
+		NotifyPropertyCommitted("LocalPlayer");
+	}
+
+	bool Players::IsRuntimeModule(ObjectId Object) const {
+		if (!RuntimeModules || !Object.IsValid()) return false;
+		if (RuntimeModules->GetObjectId() == Object) return true;
+		for (const auto &Descendant : RuntimeModules->GetDescendants())
+			if (Descendant->GetObjectId() == Object) return true;
+		return false;
+	}
+
+	std::shared_ptr<Script> Players::StartDefaultRuntime(RuntimeMode Mode) {
 		if (RuntimeStarted) return nullptr;
 		if (!GetDefaultControllerEnabled() && !GetDefaultCameraEnabled()) return nullptr;
-		constexpr std::array Names = {"DefaultActionMap", "DefaultCharacterRuntime", "DefaultLocomotion", "DefaultCamera"};
-		std::array<std::string, Names.size()> Sources;
-		for (std::size_t Index = 0; Index < Names.size(); ++Index)
-			Sources[Index] = ReadRuntimeModule(std::string(Names[Index]) + ".luau");
-		const auto BootstrapSource = ReadRuntimeModule("DefaultPlayerRuntime.luau");
+		std::vector<std::string> Names;
+		std::string BootstrapName;
+		Enums::RunContext RunContext = Enums::RunContext::Client;
+		if (Mode == RuntimeMode::NetworkServer) {
+			if (!GetDefaultControllerEnabled()) return nullptr;
+			Names = {"DefaultCharacterAssembly", "DefaultNetworkLocomotion"};
+			BootstrapName = "DefaultNetworkServerRuntime";
+			RunContext = Enums::RunContext::Server;
+		} else if (Mode == RuntimeMode::NetworkClient) {
+			Names = {"DefaultActionMap", "DefaultNetworkLocomotion", "DefaultNetworkCharacterRuntime", "DefaultCamera"};
+			BootstrapName = "DefaultNetworkClientRuntime";
+		} else {
+			Names = {"DefaultActionMap", "DefaultCharacterRuntime", "DefaultLocomotion", "DefaultCamera"};
+			BootstrapName = "DefaultPlayerRuntime";
+		}
+		std::vector<std::string> Sources;
+		Sources.reserve(Names.size());
+		for (const auto &Name : Names)
+			Sources.push_back(ReadRuntimeModule(Name + ".luau"));
+		const auto BootstrapSource = ReadRuntimeModule(BootstrapName + ".luau");
 
 		auto Container = std::make_shared<Folder>();
 		Container->SetName("PlayerRuntimeModules");
@@ -85,9 +159,9 @@ namespace gargantuan {
 		}
 
 		auto Bootstrap = std::make_shared<Script>();
-		Bootstrap->SetName("DefaultPlayerRuntime");
+		Bootstrap->SetName(BootstrapName);
 		Bootstrap->SetArchivable(false);
-		Bootstrap->SetRunContext(Enums::RunContext::Client);
+		Bootstrap->SetRunContext(RunContext);
 		Bootstrap->SetSource(BootstrapSource);
 		Bootstrap->SetParent(Container);
 		RuntimeStarted = true;
@@ -95,17 +169,14 @@ namespace gargantuan {
 	}
 
 	void Players::ShutdownRuntime() {
-		if (!RuntimeStarted && !LocalPlayerValue && !RuntimeModules) return;
+		if (!RuntimeStarted && GetPlayers().empty() && !RuntimeModules) return;
 		RuntimeStarted = false;
 		if (RuntimeModules && !RuntimeModules->GetDestroyed() && !RuntimeModules->IsDestroying())
 			RuntimeModules->Destroy();
 		RuntimeModules.reset();
-		auto Value = std::move(LocalPlayerValue);
-		if (Value) {
-			PlayerRemoving->Fire(Value);
-			Value->ShutdownCharacter();
-			if (!Value->GetDestroyed() && !Value->IsDestroying()) Value->Destroy();
-			NotifyPropertyCommitted("LocalPlayer");
-		}
+		const auto Values = GetPlayers();
+		for (const auto &Value : Values)
+			(void)RemoveSessionPlayer(Value);
+		ClearTrustedLocalPlayer();
 	}
 }

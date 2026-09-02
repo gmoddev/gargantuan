@@ -5,11 +5,18 @@
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/WorldRoot.hpp"
 #include "gargantuan/datatypes/Signal.hpp"
-#include "gargantuan/render/Renderer.hpp"
+#include "gargantuan/filesystem/SourceMount.hpp"
+#include "gargantuan/gui/GuiRuntime.hpp"
+#include "gargantuan/platform/HostEvent.hpp"
 #include "gargantuan/render/RenderExtractor.hpp"
+#include "gargantuan/render/Renderer.hpp"
+#include "gargantuan/runtime/EngineProviderConfiguration.hpp"
+#include "gargantuan/runtime/MutationGateway.hpp"
+#include "gargantuan/runtime/SemanticSpatialResolver.hpp"
 #include "gargantuan/scripting/ScriptEngine.hpp"
 #include "gargantuan/services/ActionMap.hpp"
 #include "gargantuan/services/AssetService.hpp"
+#include "gargantuan/services/CharacterControlService.hpp"
 #include "gargantuan/services/EntitlementService.hpp"
 #include "gargantuan/services/InteractionService.hpp"
 #include "gargantuan/services/Lighting.hpp"
@@ -18,12 +25,6 @@
 #include "gargantuan/services/RunService.hpp"
 #include "gargantuan/services/UserInputService.hpp"
 #include "gargantuan/services/Workspace.hpp"
-#include "gargantuan/runtime/EngineProviderConfiguration.hpp"
-#include "gargantuan/runtime/MutationGateway.hpp"
-#include "gargantuan/runtime/SemanticSpatialResolver.hpp"
-#include "gargantuan/platform/HostEvent.hpp"
-#include "gargantuan/filesystem/SourceMount.hpp"
-#include "gargantuan/gui/GuiRuntime.hpp"
 
 #include <chrono>
 #include <functional>
@@ -60,6 +61,7 @@ namespace gargantuan {
 		std::shared_ptr<UserInputService> UserInputService;
 		std::shared_ptr<ActionMap> ActionMap;
 		std::shared_ptr<AssetService> Assets;
+		std::shared_ptr<CharacterControlService> CharacterControl;
 		std::unique_ptr<AnimationRuntime> Animation;
 		std::shared_ptr<SemanticSpatialResolver> Spatial;
 		std::unique_ptr<AudioRuntime> Audio;
@@ -82,13 +84,19 @@ namespace gargantuan {
 		float GetDeltaTime();
 		[[nodiscard]] HostEventResult ProcessEvent(const HostEvent &Event);
 		[[nodiscard]] bool ReplaceEntitlementProvider(std::shared_ptr<IEntitlementProvider> Provider);
-		[[nodiscard]] CharacterRootMotionMetrics GetCharacterRootMotionMetrics() const { return RootMotionMetrics; }
+		[[nodiscard]] CharacterRootMotionMetrics GetCharacterRootMotionMetrics() const {
+			return RootMotionMetrics;
+		}
+		[[nodiscard]] std::uint64_t GetSimulationTick() const {
+			return SimulationTick;
+		}
 		void Destroy();
 
 	  private:
 		std::chrono::steady_clock::time_point CurrentTick{};
 		std::chrono::steady_clock::time_point LastTick{};
 		bool Destroyed = false;
+		std::uint64_t SimulationTick = 0;
 		CharacterRootMotionMetrics RootMotionMetrics;
 		std::function<void()> UnbindDescendants;
 		SignalConnection::Pointer DescendantRemovedConnection;

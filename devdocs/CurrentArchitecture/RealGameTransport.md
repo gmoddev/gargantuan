@@ -1,7 +1,7 @@
 ---
 status: current
 owner: networking
-last_verified: 2026-08-16
+last_verified: 2026-09-02
 related_code:
   - include/gargantuan/network/GameNetworkingSocketsTransport.hpp
   - src/network/GameNetworkingSocketsTransport.cpp
@@ -163,10 +163,12 @@ congestion behavior, reliable delivery, real connection failure, and backend
 metrics; it does not promise deterministic timing or injected faults through
 this adapter.
 
-The production `NetworkScheduler`, `ReplicationCoordinator`, versioned basic
-replication codec, client applicator, bounded `RemoteManager`, and dedicated
-Character realtime managers now run over localhost GNS tests. The Character
-test carries reliable bind/action identity, semantic input, sequenced
-authoritative state, and reconciliation. Authentication/tickets,
-negotiated-limit exchange, general realtime physics/ownership, Node, spatial
-interest management, and Studio play mode remain unimplemented.
+The production `GameSession` now composes `NetworkScheduler`,
+`ReplicationCoordinator`/client applicator, bounded `RemoteManager`, and the
+dedicated Character realtime managers over one GNS connection lifetime. The
+localhost acceptance test covers bounded GSES limit negotiation, server Player
+creation, trusted `LocalPlayer`, Character control, movement, action/state, and
+disconnect. Packaged headless server and client processes use the same adapter.
+External authentication tickets, general realtime physics ownership, Node,
+spatial interest management, and Studio multiplayer orchestration remain
+unimplemented.

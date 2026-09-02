@@ -1,7 +1,7 @@
 ---
 status: current
 owner: engine
-last_verified: 2026-08-16
+last_verified: 2026-09-02
 related_code:
   - include/gargantuan/
   - src/

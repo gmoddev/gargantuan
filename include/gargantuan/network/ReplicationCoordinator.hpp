@@ -3,6 +3,7 @@
 #include "gargantuan/network/ReplicationProtocol.hpp"
 #include "gargantuan/runtime/ProtocolInput.hpp"
 
+#include <functional>
 #include <map>
 #include <memory>
 #include <optional>
@@ -36,7 +37,10 @@ namespace gargantuan::network {
 
 	class ReplicationCoordinator {
 	  public:
-		explicit ReplicationCoordinator(std::shared_ptr<Instance> SourceRoot);
+		using InitialRelevancePolicy = std::function<bool(ObjectId)>;
+		explicit ReplicationCoordinator(
+			std::shared_ptr<Instance> SourceRoot, InitialRelevancePolicy IsInitiallyRelevant = {}
+		);
 
 		[[nodiscard]] ReplicationProduceResult AddPeer(ConnectionId Connection, ReplicationEpoch Epoch);
 		[[nodiscard]] ReplicationProduceResult
@@ -55,6 +59,7 @@ namespace gargantuan::network {
 			ReliableReplicationSequence NextSequence{1};
 		};
 		std::shared_ptr<Instance> SourceRoot;
+		InitialRelevancePolicy IsInitiallyRelevant;
 		std::map<ConnectionId, PeerState> Peers;
 		ReplicationMetrics Metrics;
 	};

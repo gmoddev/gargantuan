@@ -1,6 +1,6 @@
 # First complete game validation
 
-Status: Character / Animation Foundation 3B network authority revalidated locally on 2026-09-01. This document records a vertical-slice
+Status: Character Networking Foundation 3D packaged-session path revalidated locally on 2026-09-02. This document records a vertical-slice
 falsification exercise; it does not claim that Gargantuan is generally usable.
 
 ## Game design and scope
@@ -45,6 +45,16 @@ reconciles the client over deterministic simulated transport. The client sends
 no transform or root delta. The production GNS opt-in gate repeats the same
 control/input/action/state boundary on localhost without making networking part
 of the authored game scripts.
+
+Foundation 3D additionally packages and launches separate headless server/client
+processes through `--server-bind` and `--connect`. Its session test hydrates a
+client Script from trusted package content, registers a game-defined semantic
+`SessionLunge`, requests it through `CharacterControlService`, validates it in
+server Luau against the authoritative `Player.Character`, observes 0.87 m of
+server-derived root motion, and receives the accepted action resolution. The
+same session path proves default ActionMap movement, Character replacement,
+two-client isolation, `CharacterAutoLoads=false`, disconnect teardown, hostile
+pre-acceptance rejection, handshake timeout, and localhost GNS transport.
 
 ## Authoring workflow used
 

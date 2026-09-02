@@ -7,14 +7,14 @@ return c({
 
 	properties = {
 		LocalPlayer = {
-			description = "The client-local Player. Local Studio Play currently creates exactly one.",
+			description = "The trusted runtime-local Player selected by offline bootstrap or accepted network session identity.",
 			type = t.Optional(t.Instance("Player")),
 			unmodified = "std::nullopt",
 			overrideRead = "GetLocalPlayer",
 			writable = false,
 		},
 		CharacterAutoLoads = {
-			description = "Whether the shipped controller requests a character during startup.",
+			description = "Whether shipped offline/server policy requests a Character for each authoritative Player.",
 			type = t.Bool,
 			unmodified = "true",
 			serializable = true,

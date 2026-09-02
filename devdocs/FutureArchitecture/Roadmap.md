@@ -28,9 +28,18 @@ defect throughput.
   with periodic recovery, four-snapshot remote interpolation, and renderer-only
   local correction smoothing. At 500 continuously moving Characters it reduces
   the state stream from 3.36 MB/s and 30,000 state messages/s to 759,040 B/s and
-  680 state frames/s. Production session/Luau bridges, spatial relevance,
-  adaptive cadence, and deeper Animator content-readiness remain future work.
+  680 state frames/s. Spatial relevance, adaptive cadence, and deeper Animator
+  content-readiness remain future work.
   The non-normative `SpatialRegionsAndPortalTopology.md` is unchanged.
+- Character Networking Foundation 3D makes 3A-3C reachable from packaged
+  `GargantuanPlayer` client/server entrypoints. One `GameSession` composes GNS,
+  scheduling, structural replication, Remotes, GCHR, and Player association on
+  one `ConnectionId` lifetime. GSES admits a bounded development-local session,
+  creates the server Player, explicitly identifies the trusted LocalPlayer,
+  and gates gameplay until client runtime readiness. Engine-shipped Luau owns
+  default server assembly and shared movement policy; game Luau can replace
+  movement/action policy through `CharacterControlService`. This does not claim
+  external account authentication or Node integration.
 - Environment / Lighting Foundation 1 establishes canonical saved Lighting and
   Sky semantics, renderer-neutral incremental publication, AssetService-owned
   coherent face residency, and the SDL shadow/Sky/opaque/GUI pipeline. Local

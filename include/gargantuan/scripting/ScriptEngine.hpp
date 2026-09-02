@@ -2,14 +2,15 @@
 
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Instance.hpp"
+#include "gargantuan/runtime/RuntimeMode.hpp"
 #include "gargantuan/scripting/ThreadEngine.hpp"
 
 #include <Luau/Compiler.h>
+#include <functional>
 #include <lua.h>
 #include <luacode.h>
 #include <lualib.h>
 #include <memory>
-#include <functional>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -48,7 +49,11 @@ namespace gargantuan {
 
 	class ScriptEngine {
 	  public:
-		ScriptEngine(std::shared_ptr<DataModel> game, std::function<void(std::string, std::string)> RuntimeDiagnostic = {});
+		ScriptEngine(
+			std::shared_ptr<DataModel> game,
+			std::function<void(std::string, std::string)> RuntimeDiagnostic = {},
+			RuntimeMode Mode = RuntimeMode::Offline
+		);
 		~ScriptEngine();
 
 		lua_State *L = nullptr;
@@ -62,10 +67,12 @@ namespace gargantuan {
 		std::unordered_map<std::string, std::shared_ptr<Instance>> RequirePathCache;
 		std::function<void(std::string, std::string)> RuntimeDiagnostic;
 		std::vector<std::weak_ptr<SignalConnection>> SignalConnections;
+		RuntimeMode Mode = RuntimeMode::Offline;
 		std::shared_ptr<Instance> FindRequiredInstanceByPath(const char *path);
 		void EmitRuntimeDiagnostic(std::string Severity, std::string Message) const;
 		void TrackSignalConnection(const std::shared_ptr<SignalConnection> &Connection);
 		void RunBootstrapScript(const std::shared_ptr<Script> &ScriptValue);
+		[[nodiscard]] bool CanRunScript(const Script &ScriptValue) const;
 
 		void Step();
 

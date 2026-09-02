@@ -1,7 +1,7 @@
 ---
 status: current
 owner: runtime
-last_verified: 2026-09-01
+last_verified: 2026-09-02
 related_code:
   - assets/classes/Character.luau
   - assets/classes/KinematicCharacter.luau
@@ -88,6 +88,14 @@ The shipped Luau layer owns all replaceable default behavior:
 - `DefaultActionMap.luau` names the default physical bindings; and
 - `DefaultCamera.luau` follows `Player.Character` and owns orbit policy.
 
+Network roles preserve the same ownership split. `DefaultCharacterAssembly`
+is the headless-safe server assembler, `DefaultNetworkLocomotion` is the shared
+client/server command-to-motion policy, and the small client/server runtime
+modules attach them through `CharacterControlService`. The client device map
+produces semantic intent; the server consumes already-authorized intent. See
+`CharacterNetworkingFoundation3D.md` for the production session ordering and
+replacement contract.
+
 Walk speed, gravity integration, jump speed, walkable-floor threshold, step
 height, air-jump policy, camera behavior, and future clip selection are not
 native Character state. A game can set `Players.DefaultControllerEnabled =
@@ -102,9 +110,12 @@ before DataModel construction with `DefineSchema` authority and therefore
 cannot create Players, Characters, runtime modules, or signal connections.
 Character's native schema is registered during native schema bootstrap.
 
-After the runtime DataModel exists, Engine initializes `LocalPlayer`, mounts
-the bounded engine-shipped modules, and executes `DefaultPlayerRuntime` as the
-engine bootstrap before the ordinary project Script queue. This is the
+After an offline runtime DataModel exists, Engine initializes `LocalPlayer`,
+mounts the bounded engine-shipped modules, and executes `DefaultPlayerRuntime`
+as the engine bootstrap before the ordinary project Script queue. A network
+server creates Players only after GSES acceptance and runs the server runtime;
+a network client starts project scripts only after the structural baseline and
+trusted exact `LocalPlayer` association. This is the
 runtime-module equivalent of character pre-run, while preserving the security
 boundary of the true schema PreRun. It initializes once; the unarchivable
 `PlayerRuntimeModules` subtree and all connections are destroyed before VM and
@@ -171,7 +182,7 @@ must be finite. Physics contact iteration and planes retain their existing
 bounds. Root-motion request storage is capped by the 4,096-Animator runtime
 bound and reused after warmup.
 
-Foundations 3A/3B do not add Humanoid, health, a native locomotion graph, IK,
+Foundations 3A-3D do not add Humanoid, health, a native locomotion graph, IK,
 retargeting, motion warping, ragdoll, climbing/vaulting/combat systems,
 distributed physics ownership, remote presentation interpolation, portal
 transfer, a Character editor, or an animation graph/timeline UI. Humanoid is a

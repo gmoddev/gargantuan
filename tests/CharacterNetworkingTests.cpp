@@ -1,5 +1,5 @@
-#include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Attachment.hpp"
+#include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/KinematicCharacter.hpp"
 #include "gargantuan/classes/Part.hpp"
 #include "gargantuan/classes/WorldRoot.hpp"
@@ -177,9 +177,8 @@ namespace {
 		}
 	};
 
-	ReceivedMessageEvent StateFrameEvent(
-		ConnectionId Connection, StateChannelId Channel, const CharacterStateFrame &Frame
-	) {
+	ReceivedMessageEvent
+	StateFrameEvent(ConnectionId Connection, StateChannelId Channel, const CharacterStateFrame &Frame) {
 		auto Bytes = EncodeCharacterMessage(CharacterMessage(Frame));
 		return {
 			Connection,
@@ -427,9 +426,7 @@ namespace {
 							   : std::optional<std::uint32_t>(Request.RequestedActionToken);
 				}
 			);
-			Client = std::make_unique<PredictedCharacterNetwork>(
-				*ClientScheduler, Limits, std::move(ClientMovement)
-			);
+			Client = std::make_unique<PredictedCharacterNetwork>(*ClientScheduler, Limits, std::move(ClientMovement));
 			Check(
 				Server->AddPeer(ServerConnection) && Client->AddPeer(ClientConnection),
 				"Character managers register their connection generations"
@@ -504,7 +501,23 @@ namespace {
 			Value.ClientCharacter->GetPosition().x > Start.x,
 			"local Character prediction is responsive before server state"
 		);
-		for (int Index = 0; Index < 4; ++Index)
+		for (int Index = 0; Index < 4; ++Index) {
+			Value.Cycle();
+			if (Index != 3)
+				Check(
+					Value.Client->SubmitInput(
+						Value.ClientConnection, *Value.ClientWorld, Value.Tick, 1.0f / 60.0f, {1.0f, 0.0f}, 0.0f, false
+					),
+					"continuous movement intent is sampled once per client simulation tick"
+				);
+		}
+		Check(
+			Value.Client->SubmitInput(
+				Value.ClientConnection, *Value.ClientWorld, Value.Tick, 1.0f / 60.0f, {}, 0.0f, false
+			),
+			"client submits a neutral intent when movement ends"
+		);
+		for (int Index = 0; Index < 8; ++Index)
 			Value.Cycle();
 		Check(
 			Near(Value.ClientCharacter->GetPosition(), Value.ServerCharacter->GetPosition()),
@@ -602,6 +615,34 @@ namespace {
 		Check(
 			ChangeJournal::Get().ReadSince(0).empty(),
 			"root-motion prediction, collision correction, and action rejection stay outside structural replication"
+		);
+	}
+
+	void TestServerAuthoritativePredictionMode() {
+		Fixture Value;
+		Value.Client->SetPredictionEnabled(false);
+		const auto Start = Value.ClientCharacter->GetPosition();
+		Check(
+			Value.Client->SubmitInput(
+				Value.ClientConnection, *Value.ClientWorld, Value.Tick, 1.0f / 60.0f, {1.0f, 0.0f}, 0.0f, false
+			),
+			"server-authoritative mode still submits bounded semantic input"
+		);
+		Check(
+			Near(Value.ClientCharacter->GetPosition(), Start) &&
+				Value.Client->GetPredictionHistorySize(Value.ClientConnection) == 0,
+			"disabled prediction performs no local motion and retains no replay history"
+		);
+		for (int Index = 0; Index < 16; ++Index)
+			Value.Cycle();
+		Check(
+			Value.ClientCharacter->GetPosition().x > Start.x,
+			"server-authoritative mode remains playable through authoritative state presentation"
+		);
+		Value.Client->SetPredictionEnabled(true);
+		Check(
+			Value.Client->GetPredictionHistorySize(Value.ClientConnection) == 0,
+			"prediction mode transition starts with a clean bounded history"
 		);
 	}
 
@@ -779,9 +820,7 @@ namespace {
 				Bytes ? std::move(*Bytes) : std::vector<std::byte>{}
 			};
 		};
-		const CharacterControlTransition DeferredBind{
-			Source, CharacterControlEpoch(7), StateChannelId(19), 1, true
-		};
+		const CharacterControlTransition DeferredBind{Source, CharacterControlEpoch(7), StateChannelId(19), 1, true};
 		auto DeferredBindEvent = ControlEvent(DeferredBind);
 		Check(
 			Client.HandleTransportEvent(TransportEvent(DeferredBindEvent)) && !Client.GetControl(ClientConnection),
@@ -817,9 +856,8 @@ namespace {
 		const ConnectionId OldConnection{51, 1};
 		const ConnectionId NewConnection{51, 2};
 		bool SawJump = false;
-		CharacterMovementPolicy JumpPolicy = [&](
-			const CharacterInputCommand &Command, const KinematicCharacter &CharacterValue
-		) {
+		CharacterMovementPolicy JumpPolicy = [&](const CharacterInputCommand &Command,
+												 const KinematicCharacter &CharacterValue) {
 			SawJump = Command.JumpRequested();
 			return Movement(Command, CharacterValue);
 		};
@@ -902,15 +940,15 @@ namespace {
 	}
 
 	void TestClientPolicyCannotChangeAuthority() {
-		CharacterMovementPolicy ModifiedClientPolicy = [](const CharacterInputCommand &Command, const KinematicCharacter &) {
+		CharacterMovementPolicy ModifiedClientPolicy = [](const CharacterInputCommand &Command,
+														  const KinematicCharacter &) {
 			constexpr float ModifiedWalkSpeed = 60.0f;
 			return CharacterMotionRequest{
 				.Translation =
 					{Command.MoveIntent.x * ModifiedWalkSpeed * Command.DeltaSeconds,
 					 0.0f,
 					 Command.MoveIntent.y * ModifiedWalkSpeed * Command.DeltaSeconds},
-				.Velocity =
-					{Command.MoveIntent.x * ModifiedWalkSpeed, 0.0f, Command.MoveIntent.y * ModifiedWalkSpeed},
+				.Velocity = {Command.MoveIntent.x * ModifiedWalkSpeed, 0.0f, Command.MoveIntent.y * ModifiedWalkSpeed},
 			};
 		};
 		Fixture Value({}, ModifiedClientPolicy);
@@ -924,11 +962,39 @@ namespace {
 		const auto ModifiedPrediction = Value.ClientCharacter->GetPosition().x;
 		for (int Index = 0; Index < 5; ++Index)
 			Value.Cycle();
+		const auto ServerDistance = Value.ServerCharacter->GetPosition().x - ServerStart.x;
 		Check(
-			ModifiedPrediction > ServerStart.x + 0.5f &&
-				Value.ServerCharacter->GetPosition().x < ServerStart.x + 0.2f &&
+			Value.Client->SubmitInput(
+				Value.ClientConnection, *Value.ClientWorld, Value.Tick, 1.0f / 60.0f, {}, 0.0f, false
+			),
+			"a neutral intent ends the authoritative continuous movement window"
+		);
+		for (int Index = 0; Index < 8; ++Index)
+			Value.Cycle();
+		Check(
+			ModifiedPrediction > ServerStart.x + 0.5f && ServerDistance <= 0.5f + 0.001f &&
 				Near(Value.ClientCharacter->GetPosition(), Value.ServerCharacter->GetPosition(), 0.05f),
 			"client WalkSpeed modification cannot increase server motion and is reconciled"
+		);
+	}
+
+	void TestLatestIntentFreshnessTimeout() {
+		Fixture Value;
+		Check(
+			Value.Client->SubmitInput(
+				Value.ClientConnection, *Value.ClientWorld, Value.Tick, 1.0f / 60.0f, {1.0f, 0.0f}, 0.0f, false
+			),
+			"freshness fixture submits one bounded movement intent"
+		);
+		for (std::uint64_t Index = 0; Index < DefaultCharacterInputFreshnessTicks + 4; ++Index)
+			Value.Cycle();
+		const auto TimedOutPosition = Value.ServerCharacter->GetPosition();
+		for (int Index = 0; Index < 4; ++Index)
+			Value.Cycle();
+		Check(
+			Near(Value.ServerCharacter->GetPosition(), TimedOutPosition) &&
+				Value.Server->GetMetrics().InputFreshnessTimeouts == 1,
+			"latest intent is reused continuously, then neutralized exactly once after the bounded freshness window"
 		);
 	}
 
@@ -1157,7 +1223,8 @@ namespace {
 							glm::distance(ClientNpc->GetPresentationCFrame().Position, ClientNpc->GetPosition())
 						);
 					}
-					for (int Tick = 0; Tick < 100; ++Tick) Value.Cycle(16ms);
+					for (int Tick = 0; Tick < 100; ++Tick)
+						Value.Cycle(16ms);
 					Check(
 						MaximumPresentationError < MaximumHardCorrectionDistance &&
 							Near(ClientNpc->GetPosition(), ServerNpc->GetPosition(), 0.1f) &&
@@ -1333,7 +1400,8 @@ namespace {
 		);
 
 		for (const auto [Sequence, Tick, X] : std::array<std::array<std::uint64_t, 3>, 2>{
-				std::array<std::uint64_t, 3>{2, 7, 7}, std::array<std::uint64_t, 3>{3, 10, 10}}) {
+				 std::array<std::uint64_t, 3>{2, 7, 7}, std::array<std::uint64_t, 3>{3, 10, 10}
+			 }) {
 			CharacterStateFrame Frame{
 				.ServerTick = Tick,
 				.FrameSequence = CharacterStateFrameSequence(Sequence + 2),
@@ -1343,7 +1411,9 @@ namespace {
 			Client.HandleTransportEvent(TransportEvent(StateFrameEvent(Connection, StateChannelId(1), Frame)));
 			Client.Reconcile(World);
 		}
-		Check(Client.GetPresentationSnapshotCount(SourceA) == 3, "remote interpolation retains at most bounded samples");
+		Check(
+			Client.GetPresentationSnapshotCount(SourceA) == 3, "remote interpolation retains at most bounded samples"
+		);
 		Client.UpdatePresentation(10);
 		Check(
 			Near(ReplicaA->GetPosition(), {10.0f, 6.0f, 0.0f}) &&
@@ -1399,13 +1469,15 @@ namespace {
 			Client.MarkMaterialized(Source, Replica);
 			CharacterControlTransition Bind{Source, CharacterControlEpoch(2), StateChannelId(90), 1, true};
 			auto BindBytes = EncodeCharacterMessage(CharacterMessage(Bind));
-			Client.HandleTransportEvent(TransportEvent(ReceivedMessageEvent{
-				Connection,
-				DeliveryMode::ReliableOrdered,
-				TrafficClass::Control,
-				{},
-				BindBytes ? std::move(*BindBytes) : std::vector<std::byte>{},
-			}));
+			Client.HandleTransportEvent(TransportEvent(
+				ReceivedMessageEvent{
+					Connection,
+					DeliveryMode::ReliableOrdered,
+					TrafficClass::Control,
+					{},
+					BindBytes ? std::move(*BindBytes) : std::vector<std::byte>{},
+				}
+			));
 			CharacterStateFrame Frame{
 				.ServerTick = 10,
 				.FrameSequence = CharacterStateFrameSequence(1),
@@ -1418,7 +1490,8 @@ namespace {
 				.AuthoritativeTick = 10,
 				.Transform = CFrame(0.0f, 6.0f, 0.0f),
 				.Flags = static_cast<std::uint8_t>(
-					Value.Teleport ? CharacterStateFlag::Teleport : static_cast<CharacterStateFlag>(0)),
+					Value.Teleport ? CharacterStateFlag::Teleport : static_cast<CharacterStateFlag>(0)
+				),
 			};
 			const auto Before = Client.GetMetrics();
 			ChangeJournal::Get().Clear();
@@ -1433,9 +1506,8 @@ namespace {
 				"RootPart and Attachment gameplay semantics remain at the corrected Character transform"
 			);
 			Check(
-				Value.Smooth
-					? Near(Root->GetRenderCFrame().Position, {Value.Divergence, 6.0f, 0.0f})
-					: Near(Root->GetRenderCFrame().Position, {0.0f, 6.0f, 0.0f}),
+				Value.Smooth ? Near(Root->GetRenderCFrame().Position, {Value.Divergence, 6.0f, 0.0f})
+							 : Near(Root->GetRenderCFrame().Position, {0.0f, 6.0f, 0.0f}),
 				Value.Name
 			);
 			Check(
@@ -1574,9 +1646,11 @@ int main() {
 		gargantuan::BootstrapNativeRuntimeSchema();
 		TestCodec();
 		TestPredictionAuthorityAndActions();
+		TestServerAuthoritativePredictionMode();
 		TestStaleControlRelevanceAndNpc();
 		TestControlDeferralReconnectAndReplay();
 		TestClientPolicyCannotChangeAuthority();
+		TestLatestIntentFreshnessTimeout();
 		TestPredictionBoundsAndContentMismatch();
 		TestLossReorderAndLifecycle();
 		TestRemotePresentationFaultMatrix();
