@@ -621,7 +621,7 @@ namespace gargantuan::network {
 			}
 			for (const auto Id : ServerCharacters)
 				if (!CurrentCharacters.contains(Id))
-					(void)Authority->UnregisterCharacter(Id, std::max(CurrentTick, 1ull));
+					(void)Authority->UnregisterCharacter(Id, std::max(CurrentTick, std::uint64_t{1}));
 			for (const auto Id : ServerRemoteObjects)
 				if (!CurrentRemotes.contains(Id)) (void)Remotes->UnregisterRemote(Id);
 			ServerCharacters = std::move(CurrentCharacters);
@@ -647,12 +647,14 @@ namespace gargantuan::network {
 				const auto Desired = CharacterValue ? CharacterValue->GetObjectId() : ObjectId{};
 				if (Desired == PeerValue.ControlledCharacter) continue;
 				if (PeerValue.ControlledCharacter.IsValid()) {
-					(void)Authority->RevokeControl(PeerValue.ControlledCharacter, std::max(CurrentTick, 1ull));
+					(void)Authority->RevokeControl(
+						PeerValue.ControlledCharacter, std::max(CurrentTick, std::uint64_t{1})
+					);
 					++Metrics.CharacterControlRevocations;
 				}
 				PeerValue.ControlledCharacter = {};
 				if (Desired.IsValid() && View->Knows(Desired) &&
-					Authority->BindControl(Connection, Desired, std::max(CurrentTick, 1ull))) {
+					Authority->BindControl(Connection, Desired, std::max(CurrentTick, std::uint64_t{1}))) {
 					PeerValue.ControlledCharacter = Desired;
 					++Metrics.CharacterControlBindings;
 				}
@@ -743,7 +745,7 @@ namespace gargantuan::network {
 			auto PeerValue = std::move(Iterator->second);
 			Peers.erase(Iterator);
 			if (Remotes) (void)Remotes->RemovePeer(Connection);
-			if (Authority) (void)Authority->RemovePeer(Connection, std::max(CurrentTick, 1ull));
+			if (Authority) (void)Authority->RemovePeer(Connection, std::max(CurrentTick, std::uint64_t{1}));
 			if (Prediction) (void)Prediction->RemovePeer(Connection);
 			if (Replication) (void)Replication->RemovePeer(Connection);
 			(void)Scheduler.CancelConnection(Connection);
@@ -782,7 +784,7 @@ namespace gargantuan::network {
 					if (Frame.Succeeded() && Frame.Frame)
 						(void)QueueReplicationFrame(*Frame.Frame, Connection, PeerValue.Limits, Scheduler);
 				}
-				Authority->Step(*Runtime->WorldRoot, std::max(SimulationTick, 1ull));
+				Authority->Step(*Runtime->WorldRoot, std::max(SimulationTick, std::uint64_t{1}));
 			} else if (ClientRuntimeAttached && Prediction) {
 				Prediction->Reconcile(*Runtime->WorldRoot);
 				Prediction->UpdatePresentation(SimulationTick);
