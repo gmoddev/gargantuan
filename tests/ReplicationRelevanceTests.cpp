@@ -113,6 +113,38 @@ int main() {
 		Replica.Resolve(LocalCharacter->GetRootPart().value()->GetObjectId()) != nullptr,
 		"owner-required Character materializes its structural descendants"
 	);
+	const auto *OwnerView = Coordinator.GetView(Connection);
+	Check(
+		OwnerView && OwnerView->RelevantObjects.contains(LocalCharacter->GetObjectId()),
+		"dependency-closed owner Character remains marked relevant after baseline publication"
+	);
+	Check(
+		LocalCharacter->ApplyAttributeMutation(
+			"OwnerServerProof", WireValue(true), ScriptSecurityContext::CoreTrusted()
+		) == MutationStatus::Success,
+		"server fixture mutates the owner-required Character after materialization"
+	);
+	auto OwnerAttribute = Coordinator.ProduceIncremental(Connection);
+	if (!OwnerAttribute.Succeeded())
+		std::cerr << "[Replication:RelevanceTest] owner Attribute production failed: " << OwnerAttribute.Error << '\n';
+	Check(
+		OwnerAttribute.Succeeded(),
+		"owner-required Character remains eligible for incremental structural publication"
+	);
+	bool OwnerAttributeApplied = false;
+	if (OwnerAttribute.Frame) {
+		auto Applied = Replica.ApplyFrame(*OwnerAttribute.Frame);
+		OwnerAttributeApplied = Applied.Succeeded();
+		if (!OwnerAttributeApplied)
+			std::cerr << "[Replication:RelevanceTest] owner Attribute application failed: " << Applied.Message << '\n';
+	}
+	Check(OwnerAttributeApplied, "owner-required Character Attribute applies to the replica");
+	auto ReplicaLocalCharacter = std::dynamic_pointer_cast<Character>(Replica.Resolve(LocalCharacter->GetObjectId()));
+	Check(
+		ReplicaLocalCharacter &&
+			ReplicaLocalCharacter->GetAttributeValue("OwnerServerProof") == WireValue(true),
+		"a server-authored Attribute reaches the materialized controlled Character"
+	);
 
 	auto OffInterestPart = std::make_shared<Part>();
 	OffInterestPart->SetCFrame(CFrame(5'000.0f, 0.0f, 0.0f));

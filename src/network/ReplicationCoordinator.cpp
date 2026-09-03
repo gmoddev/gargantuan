@@ -129,6 +129,12 @@ namespace gargantuan::network {
 			}
 			return Depth;
 		}
+
+		void RefreshRelevantObjects(ReplicationView &View, const std::set<ObjectId> &Closure) {
+			View.RelevantObjects.clear();
+			for (const auto Object : Closure)
+				if (View.Knows(Object)) View.RelevantObjects.insert(Object);
+		}
 	}
 
 	ReplicationCoordinator::ReplicationCoordinator(
@@ -513,14 +519,7 @@ namespace gargantuan::network {
 			CandidatePeer.DesiredObjects = std::set<ObjectId>(
 				Selection.DesiredObjects.begin(), Selection.DesiredObjects.end()
 			);
-			CandidatePeer.View.RelevantObjects.clear();
-			std::set_intersection(
-				Closure.begin(),
-				Closure.end(),
-				CandidatePeer.View.KnownObjects.begin(),
-				CandidatePeer.View.KnownObjects.end(),
-				std::inserter(CandidatePeer.View.RelevantObjects, CandidatePeer.View.RelevantObjects.end())
-			);
+			RefreshRelevantObjects(CandidatePeer.View, Closure);
 			Peer->second = std::move(CandidatePeer);
 			return {{}, "No replication relevance changes are available"};
 		}
@@ -547,14 +546,7 @@ namespace gargantuan::network {
 		CandidatePeer.DesiredObjects = std::set<ObjectId>(
 			Selection.DesiredObjects.begin(), Selection.DesiredObjects.end()
 		);
-		CandidatePeer.View.RelevantObjects.clear();
-		std::set_intersection(
-			Closure.begin(),
-			Closure.end(),
-			CandidatePeer.View.KnownObjects.begin(),
-			CandidatePeer.View.KnownObjects.end(),
-			std::inserter(CandidatePeer.View.RelevantObjects, CandidatePeer.View.RelevantObjects.end())
-		);
+		RefreshRelevantObjects(CandidatePeer.View, Closure);
 		CandidateMetrics.OperationsGenerated += Frame.Operations.size();
 		CandidateMetrics.RelevanceTransitions += Entering.size() + Leaving.size();
 		CandidateMetrics.RelevanceTransitionCpuNanoseconds += static_cast<std::uint64_t>(
