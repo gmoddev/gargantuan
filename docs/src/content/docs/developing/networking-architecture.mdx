@@ -404,14 +404,20 @@ of the accepted decisions above.
   now combines global/mandatory identity, owner-required Character membership,
   and a bounded replaceable spatial grid. The resulting desired set feeds
   dependency-closed structural Publish/Unpublish and GCHR materialization.
-  Client Luau cannot request arbitrary objects or pins. Adaptive cadence,
-  priority, and full region topology remain later work.
+  Client Luau cannot request arbitrary objects or pins. Full region topology
+  remains later work.
 - [x] **Harden session transactionality before 3F.** GameSession is explicitly
   one-shot; runtime callbacks use scoped generation-safe ownership; terminal
   reliable admission removes only the affected peer; client bootstrap commits
   at accepted ClientReady; action results remain per request; root motion
   includes its final interval; materialization epochs are 64-bit; and
   DevelopmentLocal is loopback-only without an explicit insecure host override.
+- [x] **Add Character publication importance without changing relevance or
+  simulation.** `ReplicationRelevance` remains the sole boolean materialization
+  owner. Its resolved trusted focus feeds server-private, per-relationship
+  20/10/5 Hz GCHR selection with hysteresis, stable phases, a 60-tick absolute
+  age bound, prompt reliable action/teleport state, and bounded variable-rate
+  client presentation. GCHR remains version 4 and exposes no client tier API.
 
 Node integration for discovery and join tickets can proceed independently once
 the handshake contract exists. Collaborative editing remains later work.

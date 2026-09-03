@@ -87,6 +87,17 @@ namespace gargantuan::network {
 		std::uint64_t MaterializationBacklog = 0;
 		std::uint64_t MaterializationTransitions = 0;
 		std::uint64_t MaterializationCpuNanoseconds = 0;
+		std::uint64_t CharacterImportanceEvaluations = 0;
+		std::uint64_t CharacterImportanceTierTransitions = 0;
+		std::uint64_t CharacterTemporaryPromotions = 0;
+		std::uint64_t CharacterForcedSemanticPublications = 0;
+		std::uint64_t CharacterFullRateStates = 0;
+		std::uint64_t CharacterReducedRateStates = 0;
+		std::uint64_t CharacterLowRateStates = 0;
+		std::uint64_t CharacterStateBytes = 0;
+		std::uint64_t CharacterMaximumStateAgeTicks = 0;
+		std::uint64_t CharacterImportanceCpuNanoseconds = 0;
+		std::uint64_t CharacterDueSetCpuNanoseconds = 0;
 	};
 
 	class GameSession final {

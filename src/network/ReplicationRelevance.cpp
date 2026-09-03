@@ -81,6 +81,7 @@ namespace gargantuan::network {
 			ObjectId LocalPlayer;
 			ObjectId OwnerCharacter;
 			std::vector<glm::vec3> TrustedFocus;
+			std::vector<glm::vec3> ResolvedFocus;
 			std::set<ObjectId> RelevantSpatialRoots;
 			PeerRelevanceSelection Selection;
 			std::uint64_t LastUpdateTick = 0;
@@ -370,6 +371,7 @@ namespace gargantuan::network {
 				return true;
 			Peer.SelectionEvaluated = true;
 			auto Focus = ResolveFocus(Peer);
+			Peer.ResolvedFocus = Focus;
 			std::set<ObjectId> Candidates;
 			if (!Focus.empty() && !Query(Focus, Candidates)) return false;
 			std::set<ObjectId> Relevant;
@@ -480,6 +482,12 @@ namespace gargantuan::network {
 	const PeerRelevanceSelection *ReplicationRelevance::GetSelection(ConnectionId Connection) const {
 		auto Peer = State->Peers.find(Connection);
 		return Peer == State->Peers.end() ? nullptr : &Peer->second.Selection;
+	}
+
+	std::span<const glm::vec3> ReplicationRelevance::GetResolvedFocus(ConnectionId Connection) const {
+		auto Peer = State->Peers.find(Connection);
+		return Peer == State->Peers.end() ? std::span<const glm::vec3>{}
+										  : std::span<const glm::vec3>{Peer->second.ResolvedFocus};
 	}
 
 	bool ReplicationRelevance::IsRuntimeRelevant(ConnectionId Connection, ObjectId Object) const {

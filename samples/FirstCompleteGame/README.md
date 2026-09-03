@@ -5,6 +5,12 @@ third-person collection course, not a showcase: collect three cyan shards,
 avoid the moving obstacle, and use the on-screen button to restart after the
 win panel appears.
 
+Character Networking Foundation 3F leaves this sample's gameplay and package
+surface unchanged. `BeaconLunge` remains a reliable semantic action, owner
+corrections remain full-rate, and adaptive cadence applies only to already
+relevant remote Characters. Network tier policy is intentionally not exposed
+to sample Luau.
+
 The second collectible requires an unobstructed rigid-physics line of sight.
 Its prompt exercises the same general `Workspace:Raycast` boundary available
 to gameplay rather than a sample-specific visibility shortcut.

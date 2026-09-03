@@ -628,9 +628,9 @@ namespace gargantuan::network {
 			PeerValue.PlayerId = static_cast<std::uint32_t>(PeerValue.PlayerValue->GetPlayerId());
 			++Metrics.PlayersCreated;
 			auto CharacterValue = PeerValue.PlayerValue->GetCharacter() ? std::dynamic_pointer_cast<KinematicCharacter>(
-															  *PeerValue.PlayerValue->GetCharacter()
-														  )
-														: nullptr;
+																		  *PeerValue.PlayerValue->GetCharacter()
+																	  )
+																: nullptr;
 			const auto OwnerCharacter = CharacterValue ? CharacterValue->GetObjectId() : ObjectId{};
 			const auto RelevanceStarted = std::chrono::steady_clock::now();
 			if (!Relevance->AddPeer(Connection, PeerValue.PlayerObject, OwnerCharacter)) {
@@ -652,11 +652,11 @@ namespace gargantuan::network {
 			auto Baseline = Replication->AddPeer(Connection, PeerValue.Replication, *Selection);
 			const auto ReplicationMetricsAfter = Replication->GetMetrics();
 			Metrics.BaselineSnapshotCpuNanoseconds += ReplicationMetricsAfter.SnapshotCaptureCpuNanoseconds -
-											  ReplicationMetricsBefore.SnapshotCaptureCpuNanoseconds;
+																		  ReplicationMetricsBefore.SnapshotCaptureCpuNanoseconds;
 			Metrics.BaselineDiscoveryCpuNanoseconds += ReplicationMetricsAfter.BaselineDiscoveryCpuNanoseconds -
-											   ReplicationMetricsBefore.BaselineDiscoveryCpuNanoseconds;
+																		   ReplicationMetricsBefore.BaselineDiscoveryCpuNanoseconds;
 			Metrics.BaselineEncodeCpuNanoseconds += ReplicationMetricsAfter.BaselineEncodeCpuNanoseconds -
-											ReplicationMetricsBefore.BaselineEncodeCpuNanoseconds;
+																	ReplicationMetricsBefore.BaselineEncodeCpuNanoseconds;
 			if (!Baseline.Succeeded()) {
 				Reject(Connection, DisconnectReason::ResourceExhaustion, "Server replication registration failed");
 				return;
@@ -1271,6 +1271,18 @@ namespace gargantuan::network {
 					});
 					return;
 				}
+				for (const auto &[Connection, PeerValue] : Peers) {
+					if (PeerValue.Phase != PeerPhase::Ready) continue;
+					if (!Authority->SetPeerPublicationFocus(Connection, Relevance->GetResolvedFocus(Connection)))
+						PendingPeerFailures.try_emplace(
+							Connection,
+							DisconnectInfo{
+								DisconnectReason::ResourceExhaustion,
+								"[Character:Importance] trusted publication focus update failed",
+							}
+						);
+				}
+				if (!DrainFailures()) return;
 				for (auto &[Connection, PeerValue] : Peers) {
 					if (PeerValue.Phase == PeerPhase::TransportConnected) continue;
 					auto Statistics = Scheduler.GetStatistics(Connection);
@@ -1446,26 +1458,26 @@ namespace gargantuan::network {
 			}
 			auto &PeerValue = Peers.at(*PrimaryConnection);
 			auto Ready = InjectFailure(detail::GameSessionFailurePoint::ClientReadySerialization)
-						 ? SerializationResult<std::vector<std::byte>>(
-							   SerializationFailure(
-								   SerializationErrorCode::InternalFailure,
-								   "Injected ClientReady serialization failure"
+							 ? SerializationResult<std::vector<std::byte>>(
+								   SerializationFailure(
+									   SerializationErrorCode::InternalFailure,
+									   "Injected ClientReady serialization failure"
+								   )
 							   )
-						   )
-						 : EncodeGameSessionMessage(GameSessionClientReady{
-							   PeerValue.SessionEpoch,
-							   PeerValue.Replication,
-							   PeerValue.PlayerObject,
-						   });
+							 : EncodeGameSessionMessage(GameSessionClientReady{
+								   PeerValue.SessionEpoch,
+								   PeerValue.Replication,
+								   PeerValue.PlayerObject,
+							   });
 			auto ReadyIntent = Ready ? MakeNetworkMessageIntent(
-										*PrimaryConnection,
-										DeliveryMode::ReliableOrdered,
-										TrafficClass::Control,
-										{},
-										std::move(*Ready),
-										PeerValue.Limits
-									)
-							  : std::nullopt;
+														*PrimaryConnection,
+														DeliveryMode::ReliableOrdered,
+														TrafficClass::Control,
+														{},
+														std::move(*Ready),
+														PeerValue.Limits
+													)
+											  : std::nullopt;
 			const bool ReadyAccepted = ReadyIntent &&
 				!InjectFailure(detail::GameSessionFailurePoint::ClientReadySchedulerAdmission) &&
 				Scheduler.Submit(std::move(*ReadyIntent)).Accepted();
@@ -1485,7 +1497,7 @@ namespace gargantuan::network {
 
 		std::shared_ptr<DataModel> GetClientDataModel() const {
 			return Configuration.Role == GameSessionRole::Client &&
-					   (Status == GameSessionStatus::Accepted || Status == GameSessionStatus::Ready)
+						   (Status == GameSessionStatus::Accepted || Status == GameSessionStatus::Ready)
 					   ? std::dynamic_pointer_cast<DataModel>(Replica.GetReplicaRoot())
 					   : nullptr;
 		}
@@ -1544,6 +1556,21 @@ namespace gargantuan::network {
 			Result.MaterializationBacklog = ReplicationMetrics.MaterializationBacklog;
 			Result.MaterializationTransitions = ReplicationMetrics.RelevanceTransitions;
 			Result.MaterializationCpuNanoseconds = ReplicationMetrics.RelevanceTransitionCpuNanoseconds;
+		}
+		if (State->Authority) {
+			const auto CharacterMetrics = State->Authority->GetMetrics();
+			Result.CharacterImportanceEvaluations = CharacterMetrics.ImportanceEvaluations;
+			Result.CharacterImportanceTierTransitions = CharacterMetrics.ImportanceTierTransitions;
+			Result.CharacterTemporaryPromotions = CharacterMetrics.TemporaryPromotions;
+			Result.CharacterForcedSemanticPublications = CharacterMetrics.ForcedSemanticPublications;
+			Result.CharacterFullRateStates = CharacterMetrics.FullRateStatesSent;
+			Result.CharacterReducedRateStates = CharacterMetrics.ReducedRateStatesSent;
+			Result.CharacterLowRateStates = CharacterMetrics.LowRateStatesSent;
+			Result.CharacterStateBytes = CharacterMetrics.FullRateStateBytes + CharacterMetrics.ReducedRateStateBytes +
+										 CharacterMetrics.LowRateStateBytes;
+			Result.CharacterMaximumStateAgeTicks = CharacterMetrics.MaximumStateAgeTicks;
+			Result.CharacterImportanceCpuNanoseconds = CharacterMetrics.ImportanceEvaluationCpuNanoseconds;
+			Result.CharacterDueSetCpuNanoseconds = CharacterMetrics.DueSetCpuNanoseconds;
 		}
 		for (const auto &[Connection, PeerValue] : State->Peers) {
 			if (const auto *View = State->Replication ? State->Replication->GetView(Connection) : nullptr)

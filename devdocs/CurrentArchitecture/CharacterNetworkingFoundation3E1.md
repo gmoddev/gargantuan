@@ -278,8 +278,9 @@ epoch bytes across 680 state frames/s; cadence and batching are unchanged. With
 frames/s, or 80,320 bytes/s and 140 messages/s including input. This is the
 same 480-byte/s wire-width delta from the 3E sparse result.
 
-3E relevance policy, bounded closure, hysteresis, structural materialization,
-and the 20 Hz selected-state cadence are unchanged. Foundation 3F should first
-reduce remaining global Player/Character-shell baseline allocations, then add
-importance/cadence tiers for already relevant objects. It must not weaken the
-3E boolean materialization boundary or expose arbitrary client pins.
+3E relevance policy, bounded closure, hysteresis, and structural
+materialization remain unchanged. Foundation 3F now replaces only the global
+selected-state clock with peer-specific 20/10/5 Hz publication for already
+relevant Characters. The 3E.1 all-full row remains exactly reproducible, and
+all failure-atomic lifecycle rules remain in force. See
+`CharacterNetworkingFoundation3F.md`.

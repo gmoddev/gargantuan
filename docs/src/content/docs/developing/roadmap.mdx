@@ -179,8 +179,11 @@ Player/server runtimes.
 - [x] 3E.1 one-shot session transactionality, scoped callback ownership,
   peer-local reliable failure, per-request action results, complete root
   motion, 64-bit materialization epochs, and loopback DevelopmentLocal policy
-- [ ] Foundation 3F: reduce global Player/Character-shell admission allocations,
-  then add measured importance/cadence tiers only for already relevant objects
+- [x] Foundation 3F: server-private peer-specific Character importance,
+  deterministic 20/10/5 Hz replaceable publication, semantic bypasses, and
+  bounded variable-rate presentation for already relevant objects
+- [ ] Revisit Player/Character-shell admission sharing only with a proven
+  peer-specific cache invalidation design that preserves Player semantics
 - [ ] Authenticated short-lived join grants and server identity through the
   hosting/Node control plane; DevelopmentLocal is not identity proof
 

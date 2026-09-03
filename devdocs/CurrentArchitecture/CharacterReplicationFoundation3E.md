@@ -349,20 +349,19 @@ contract because the new bounded counters are exposed by native session,
 replication, and relevance metrics. No secondary or tertiary repository was
 modified for 3E.
 
-## Foundation 3F seam
+## Foundation 3F integration
 
-Foundation 3F may rank objects that are already relevant and choose bounded
-GCHR state cadence/detail from that importance. The 3E boolean desired set,
+Foundation 3F now consumes the exact resolved 3E trusted focus set and ranks
+only Characters in each peer's materialized set. The 3E boolean desired set,
 structural materialization lifetime, owner pin, and control authority remain
-inputs and must not be recomputed by 3F. Initial priorities are reducing the
-remaining allocation cost of globally visible Player/Character-shell baseline
-values, measuring shared immutable serialization templates, and then adding
-importance/cadence tiers without delta-dependent state or per-object Luau
-callbacks.
+unchanged and are never recomputed by importance. The resulting private
+20/10/5 Hz cadence is documented in
+`CharacterNetworkingFoundation3F.md`. No Player visibility, dependency closure,
+or structural transition was moved into GCHR.
 
 ## Explicitly deferred
 
-- adaptive state cadence, network LOD, or per-object priority;
+- simulation, AI, physics, renderer, or region LOD;
 - a public Luau streaming/relevance API;
 - client camera or focus hints;
 - full `SpatialAddress`, regions, portals, and transfer epochs;

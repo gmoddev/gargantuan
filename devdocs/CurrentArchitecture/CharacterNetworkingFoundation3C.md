@@ -389,3 +389,9 @@ Character lifecycle, and `CharacterControlService`; see
 
 Future ownership remains a server-issued control-epoch lease. It never grants
 client transform authority.
+
+Foundation 3F now supersedes only 3C's global publication clock and fixed
+newest-sample hold. It preserves GCHR v4 compact absolute batching and adds
+server-private peer-specific 20/10/5 Hz cadence plus a six-tick velocity
+extrapolation bound. See `CharacterNetworkingFoundation3F.md`; this document
+remains the historical 3C wire, batching, and presentation baseline.

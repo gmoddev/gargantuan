@@ -328,3 +328,13 @@ knowledge after the package has been produced.
 Audio Foundation 2, Animation Foundation, lighting/material improvements,
 debugging/profiling, and GUI Foundation 3 remain candidates, but this slice did
 not produce stronger blocking evidence for them than the three items above.
+
+## Foundation 3F revalidation
+
+The headless FirstCompleteGame tests continue to use the real `BeaconLunge`
+catalog identity and authoritative root-motion collision path. Foundation 3F
+does not alter gameplay simulation or Player visibility: the owner remains
+full-rate, action start/end state bypasses replaceable cadence reliably, and
+re-entering observers receive the current action phase with a fresh
+materialization epoch. The packaged/runtime and graphical proofs remain part
+of Native CI; 3F adds no sample dashboard or client-facing importance API.

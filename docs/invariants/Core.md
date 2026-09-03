@@ -1,7 +1,7 @@
 ---
 status: current
 owner: engine
-last_verified: 2026-09-02
+last_verified: 2026-09-03
 related_code:
   - include/gargantuan/
   - src/
@@ -230,6 +230,33 @@ Tests should enforce them where practical.
 21. `DevelopmentLocal` accepts parsed loopback endpoints only unless the native
     host explicitly enables the insecure-development override. That override
     is not authentication or identity proof.
+22. Replication relevance is the sole owner of whether a peer knows a
+    Character. Network importance applies only to an already-materialized
+    Character relationship.
+23. Network importance changes replaceable publication cadence only. It never
+    changes authoritative simulation cadence, grants control, or creates
+    relevance.
+24. Every locally controlled Character receives the full correction tier,
+    including prediction-disabled server-authoritative control.
+25. Reliable semantic Character state, control, materialization, replacement,
+    action result, and teleport transitions never wait for replaceable-state
+    cadence.
+26. Adaptive Character cadence preserves bounded GCHR batching and uses actual
+    authoritative sample ticks for variable-spacing interpolation.
+27. Every healthy relevant Character relationship has a bounded maximum state
+    age, and tier changes cannot starve publication indefinitely.
+28. Character publication scheduling is peer-specific; one Character may have
+    different cadences for different peers.
+29. Character cadence state is destroyed on relevance leave, Character
+    replacement/destruction, and peer disconnect. It cannot survive reconnect.
+30. Remote extrapolation is bounded and presentation-only. Low importance never
+    stops NPC, physics, action, or Luau simulation.
+31. Clients cannot select a Character publication tier or force arbitrary
+    high-rate publication.
+32. Runtime Character state, publication metadata, and presentation samples
+    remain outside structural replication and the authoring journal.
+33. Admission optimization cannot change Player visibility, trusted
+    `LocalPlayer`, `Player.Character`, identity, or generation semantics.
 
 ## Changes requiring architecture review
 

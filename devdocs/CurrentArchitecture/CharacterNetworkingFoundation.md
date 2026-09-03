@@ -1,7 +1,7 @@
 ---
 status: superseded
 owner: networking
-last_verified: 2026-09-02
+last_verified: 2026-09-03
 superseded_by: devdocs/CurrentArchitecture/CharacterNetworkingFoundation3C.md
 related_code:
   - include/gargantuan/network/CharacterProtocol.hpp
@@ -31,6 +31,10 @@ Player lifecycle; see
 Foundation 3E now gates structural replicas and GCHR publication through one
 server-owned peer relevance result; see
 [CharacterReplicationFoundation3E.md](CharacterReplicationFoundation3E.md).
+Foundation 3F now ranks only those relevant Character relationships for
+peer-specific 20/10/5 Hz replaceable publication while retaining prompt
+semantic state; see
+[CharacterNetworkingFoundation3F.md](CharacterNetworkingFoundation3F.md).
 
 ## Implemented boundary
 

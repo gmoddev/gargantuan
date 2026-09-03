@@ -217,9 +217,10 @@ namespace {
 				.ActionSequence = CharacterActionSequence(4),
 				.RequestedActionToken = 12,
 				.Accepted = true,
-				.AuthoritativeAction = CharacterActionState{
-					CharacterActionSequence(4), 12, Definition.Animation, Definition.ContentRevision, 40, 4
-				},
+				.AuthoritativeAction =
+					CharacterActionState{
+						CharacterActionSequence(4), 12, Definition.Animation, Definition.ContentRevision, 40, 4
+					},
 			},
 			CharacterAuthoritativeState{
 				.Character = Character,
@@ -1353,6 +1354,327 @@ namespace {
 			Check(Message.Payload().size() <= 250, "low negotiated datagram frames never rely on fragmentation");
 	}
 
+	void TestImportanceCadenceAndLifecycle() {
+		CharacterNetworkConfiguration InvalidCadence;
+		InvalidCadence.ReducedStateUpdatesPerSecond = 30;
+		Check(!InvalidCadence.IsValid(), "reduced cadence cannot exceed the full-rate cadence");
+		CharacterNetworkConfiguration InvalidExtrapolation;
+		InvalidExtrapolation.RemoteExtrapolationLimitTicks = MaximumRemoteCharacterSnapshotWindowTicks + 1;
+		Check(!InvalidExtrapolation.IsValid(), "remote extrapolation is bounded by the snapshot lifetime");
+		CharacterNetworkConfiguration InvalidBands;
+		InvalidBands.ImportanceHysteresis = InvalidBands.FullRateDistance;
+		Check(!InvalidBands.IsValid(), "importance bands require a non-overlapping hysteresis policy");
+		RecordingScheduler OfflineScheduler;
+		AuthoritativeCharacterNetwork OfflineServer(OfflineScheduler, TestLimits(), Movement);
+		WorldRoot OfflineWorld;
+		auto OfflineCharacter = std::make_shared<KinematicCharacter>();
+		Check(
+			OfflineServer.RegisterCharacter(OfflineCharacter), "offline fixture registers an authoritative Character"
+		);
+		for (std::uint64_t Tick = 1; Tick <= 60; ++Tick) {
+			auto Transform = OfflineCharacter->GetCFrame();
+			Transform.Position.x += 0.1f;
+			OfflineCharacter->ApplyRuntimeTransform(Transform);
+			OfflineServer.Step(OfflineWorld, Tick);
+		}
+		const auto OfflineMetrics = OfflineServer.GetMetrics();
+		Check(
+			OfflineScheduler.Messages.empty() && OfflineMetrics.ImportanceEvaluations == 0 &&
+				OfflineMetrics.DueStates == 0 && OfflineMetrics.StateSnapshotsBuilt == 0 &&
+				OfflineMetrics.ImportanceEvaluationCpuNanoseconds == 0 && OfflineMetrics.DueSetCpuNanoseconds == 0,
+			"zero-peer offline simulation creates no importance, due-set, snapshot, or network work"
+		);
+
+		RecordingScheduler FullSimulationScheduler;
+		RecordingScheduler LowSimulationScheduler;
+		AuthoritativeCharacterNetwork FullSimulationServer(FullSimulationScheduler, TestLimits(), Movement);
+		AuthoritativeCharacterNetwork LowSimulationServer(LowSimulationScheduler, TestLimits(), Movement);
+		const ConnectionId FullSimulationPeer{138, 1};
+		const ConnectionId LowSimulationPeer{139, 1};
+		auto FullSimulationCharacter = std::make_shared<KinematicCharacter>();
+		auto LowSimulationCharacter = std::make_shared<KinematicCharacter>();
+		WorldRoot FullSimulationWorld;
+		WorldRoot LowSimulationWorld;
+		Check(
+			FullSimulationServer.AddPeer(FullSimulationPeer) &&
+				FullSimulationServer.RegisterCharacter(FullSimulationCharacter) &&
+				FullSimulationServer.MarkMaterialized(
+					FullSimulationPeer, FullSimulationCharacter->GetObjectId(), StateChannelId(138)
+				) &&
+				FullSimulationServer.SetPeerPublicationFocus(FullSimulationPeer, std::array{glm::vec3{}}) &&
+				LowSimulationServer.AddPeer(LowSimulationPeer) &&
+				LowSimulationServer.RegisterCharacter(LowSimulationCharacter) &&
+				LowSimulationServer.MarkMaterialized(
+					LowSimulationPeer, LowSimulationCharacter->GetObjectId(), StateChannelId(139)
+				) &&
+				LowSimulationServer.SetPeerPublicationFocus(
+					LowSimulationPeer, std::array{glm::vec3{-1000.0f, 0.0f, 0.0f}}
+				),
+			"simulation-separation fixture creates equivalent full-rate and low-rate NPCs"
+		);
+		Check(
+			FullSimulationServer.RegisterAction(Action(12, 56, 0.125f)) &&
+				LowSimulationServer.RegisterAction(Action(12, 56, 0.125f)) &&
+				FullSimulationServer.StartServerAction(FullSimulationCharacter->GetObjectId(), 12, 1) &&
+				LowSimulationServer.StartServerAction(LowSimulationCharacter->GetObjectId(), 12, 1),
+			"simulation-separation fixture starts identical authoritative root motion"
+		);
+		for (std::uint64_t Tick = 1; Tick <= 18; ++Tick) {
+			FullSimulationServer.Step(FullSimulationWorld, Tick);
+			LowSimulationServer.Step(LowSimulationWorld, Tick);
+			Check(
+				Near(FullSimulationCharacter->GetPosition(), LowSimulationCharacter->GetPosition()),
+				"publication tier never changes authoritative Character simulation"
+			);
+		}
+		Check(
+			FullSimulationServer.GetPublicationTier(FullSimulationPeer, FullSimulationCharacter->GetObjectId()) ==
+					CharacterPublicationTier::FullRate &&
+				LowSimulationServer.GetPublicationTier(LowSimulationPeer, LowSimulationCharacter->GetObjectId()) ==
+					CharacterPublicationTier::LowRate,
+			"identical authoritative transforms remain independent of different final publication tiers"
+		);
+		RecordingScheduler Scheduler;
+		const ConnectionId PeerA{140, 1};
+		const ConnectionId PeerB{141, 1};
+		AuthoritativeCharacterNetwork Server(Scheduler, TestLimits(), Movement);
+		WorldRoot World;
+		Check(Server.AddPeer(PeerA) && Server.AddPeer(PeerB), "3F importance fixture registers two peers");
+
+		auto MakeCharacter = [](float X) {
+			auto Character = std::make_shared<KinematicCharacter>();
+			Character->SetPosition({X, 6.0f, 0.0f});
+			return Character;
+		};
+		auto NearCharacter = MakeCharacter(24.0f);
+		auto ReducedCharacter = MakeCharacter(100.0f);
+		auto LowCharacter = MakeCharacter(220.0f);
+		auto OwnerCharacter = MakeCharacter(400.0f);
+		const std::array Characters{NearCharacter, ReducedCharacter, LowCharacter, OwnerCharacter};
+		for (std::size_t Index = 0; Index < Characters.size(); ++Index)
+			Check(
+				Server.RegisterCharacter(Characters[Index]) &&
+					Server.MarkMaterialized(PeerA, Characters[Index]->GetObjectId(), StateChannelId(200 + Index)),
+				"3F importance fixture materializes each relationship"
+			);
+		Check(
+			Server.MarkMaterialized(PeerB, LowCharacter->GetObjectId(), StateChannelId(300)) &&
+				Server.SetPeerPublicationFocus(PeerA, std::array{glm::vec3{0.0f, 6.0f, 0.0f}}) &&
+				Server.SetPeerPublicationFocus(PeerB, std::array{glm::vec3{220.0f, 6.0f, 0.0f}}) &&
+				Server.BindControl(PeerA, OwnerCharacter->GetObjectId(), 1).has_value(),
+			"3F uses trusted multi-peer focus while preserving the owner override"
+		);
+		Check(
+			!Server.SetPeerPublicationFocus(
+				PeerA,
+				std::array{
+					glm::vec3{},
+					glm::vec3{},
+					glm::vec3{},
+					glm::vec3{},
+					glm::vec3{},
+				}
+			),
+			"publication focus input is capped independently of materialized character count"
+		);
+		Check(
+			!Server.SetPeerPublicationFocus(
+				PeerA, std::array{glm::vec3{std::numeric_limits<float>::quiet_NaN(), 0.0f, 0.0f}}
+			),
+			"non-finite trusted publication focus fails closed"
+		);
+		Check(Server.RegisterAction(Action(11, 55, 0.25f)), "3F importance fixture registers semantic action content");
+
+		for (std::uint64_t Tick = 1; Tick <= 18; ++Tick) {
+			if (Tick > 1)
+				for (const auto &Character : Characters) {
+					auto Transform = Character->GetCFrame();
+					Transform.Position.x += 0.01f;
+					Character->ApplyRuntimeTransform(Transform);
+				}
+			Server.Step(World, Tick);
+		}
+		Check(
+			Server.GetPublicationTier(PeerA, NearCharacter->GetObjectId()) == CharacterPublicationTier::FullRate &&
+				Server.GetPublicationTier(PeerA, ReducedCharacter->GetObjectId()) ==
+					CharacterPublicationTier::ReducedRate &&
+				Server.GetPublicationTier(PeerA, LowCharacter->GetObjectId()) == CharacterPublicationTier::LowRate &&
+				Server.GetPublicationTier(PeerA, OwnerCharacter->GetObjectId()) == CharacterPublicationTier::FullRate &&
+				Server.GetPublicationTier(PeerB, LowCharacter->GetObjectId()) == CharacterPublicationTier::FullRate,
+			"importance is private per peer, distance-tiered, and owner authoritative"
+		);
+
+		Scheduler.Messages.clear();
+		for (std::uint64_t Tick = 19; Tick <= 78; ++Tick) {
+			for (const auto &Character : Characters) {
+				auto Transform = Character->GetCFrame();
+				Transform.Position.x += 0.01f;
+				Character->ApplyRuntimeTransform(Transform);
+			}
+			Server.Step(World, Tick);
+		}
+		std::map<std::pair<ConnectionId, ObjectId>, std::uint64_t> StateCounts;
+		for (const auto &Message : Scheduler.Messages) {
+			auto Decoded = DecodeCharacterMessage(Message.Payload());
+			auto *Frame = Decoded ? std::get_if<CharacterStateFrame>(&*Decoded) : nullptr;
+			if (!Frame) continue;
+			for (const auto &State : Frame->GetStates())
+				++StateCounts[{Message.Destination(), State.Character}];
+		}
+		const bool CadenceCountsMatch = StateCounts[{PeerA, NearCharacter->GetObjectId()}] == 20 &&
+										StateCounts[{PeerA, ReducedCharacter->GetObjectId()}] == 10 &&
+										StateCounts[{PeerA, LowCharacter->GetObjectId()}] == 5 &&
+										StateCounts[{PeerA, OwnerCharacter->GetObjectId()}] == 20 &&
+										StateCounts[{PeerB, LowCharacter->GetObjectId()}] == 20;
+		if (!CadenceCountsMatch)
+			std::cerr << "[Character:NetworkTest] cadence=" << StateCounts[{PeerA, NearCharacter->GetObjectId()}] << ','
+					  << StateCounts[{PeerA, ReducedCharacter->GetObjectId()}] << ','
+					  << StateCounts[{PeerA, LowCharacter->GetObjectId()}] << ','
+					  << StateCounts[{PeerA, OwnerCharacter->GetObjectId()}] << ','
+					  << StateCounts[{PeerB, LowCharacter->GetObjectId()}] << '\n';
+		Check(CadenceCountsMatch, "deterministic phases deliver exact 20/10/5 Hz moving-state cadence over one second");
+
+		Check(
+			Server.SetPeerPublicationFocus(PeerA, std::array{glm::vec3{70.0f, 6.0f, 0.0f}}),
+			"hysteresis fixture moves trusted focus without exposing a client tier API"
+		);
+		Server.Step(World, 79);
+		Check(
+			Server.GetPublicationTier(PeerA, LowCharacter->GetObjectId()) == CharacterPublicationTier::LowRate,
+			"low tier remains stable inside the sixteen-unit hysteresis band"
+		);
+		Scheduler.Messages.clear();
+		Server.SetPeerPublicationFocus(PeerA, std::array{glm::vec3{77.0f, 6.0f, 0.0f}});
+		auto Rotated = LowCharacter->GetCFrame();
+		Rotated.Rotation = CFrame::Angles(0.0f, 0.1f, 0.0f).Rotation;
+		LowCharacter->ApplyRuntimeTransform(Rotated);
+		for (std::uint64_t Tick = 80; Tick <= 85; ++Tick)
+			Server.Step(World, Tick);
+		const bool ReducedStateRepublished = std::ranges::any_of(
+			Scheduler.Messages, [PeerA, Low = LowCharacter->GetObjectId()](const NetworkMessageIntent &Message) {
+				if (Message.Destination() != PeerA) return false;
+				auto Decoded = DecodeCharacterMessage(Message.Payload());
+				auto *Frame = Decoded ? std::get_if<CharacterStateFrame>(&*Decoded) : nullptr;
+				return Frame &&
+					   std::ranges::any_of(Frame->GetStates(), [Low](const CharacterAuthoritativeState &State) {
+						   return State.Character == Low;
+					   });
+			}
+		);
+		if (!ReducedStateRepublished)
+			std::cerr << "[Character:NetworkTest] promotion_messages=" << Scheduler.Messages.size() << '\n';
+		Check(
+			Server.GetPublicationTier(PeerA, LowCharacter->GetObjectId()) == CharacterPublicationTier::ReducedRate &&
+				ReducedStateRepublished,
+			"crossing the hysteresis boundary republishes changed state by the next reduced-rate phase"
+		);
+		Server.SetPeerPublicationFocus(PeerA, std::array{glm::vec3{-1000.0f, 6.0f, 0.0f}, LowCharacter->GetPosition()});
+		Server.Step(World, 86);
+		Check(
+			Server.GetPublicationTier(PeerA, LowCharacter->GetObjectId()) == CharacterPublicationTier::FullRate,
+			"the minimum of multiple trusted focus points determines importance"
+		);
+
+		Server.SetPeerPublicationFocus(PeerA, std::array{glm::vec3{-1000.0f, 6.0f, 0.0f}});
+		Server.Step(World, 87);
+		Check(
+			Server.GetPublicationTier(PeerA, LowCharacter->GetObjectId()) == CharacterPublicationTier::LowRate,
+			"a relationship can demote directly from full to low when safely beyond both bands"
+		);
+		Scheduler.Messages.clear();
+		Check(Server.StartServerAction(LowCharacter->GetObjectId(), 11, 88), "low-tier action begins authoritatively");
+		Server.Step(World, 89);
+		Check(
+			std::ranges::any_of(
+				Scheduler.Messages,
+				[PeerA](const NetworkMessageIntent &Message) {
+					if (Message.Destination() != PeerA || Message.Delivery() != DeliveryMode::ReliableOrdered)
+						return false;
+					auto Decoded = DecodeCharacterMessage(Message.Payload());
+					auto *Frame = Decoded ? std::get_if<CharacterStateFrame>(&*Decoded) : nullptr;
+					return Frame && Frame->StateCount == 1 && Frame->States[0].ActiveAction.has_value();
+				}
+			),
+			"reliable action semantics bypass low-rate publication cadence"
+		);
+		Scheduler.Messages.clear();
+		auto Teleport = LowCharacter->GetCFrame();
+		Teleport.Position.x += 100.0f;
+		LowCharacter->ApplyRuntimeTransform(Teleport);
+		Server.Step(World, 90);
+		Check(
+			std::ranges::any_of(
+				Scheduler.Messages,
+				[PeerA](const NetworkMessageIntent &Message) {
+					if (Message.Destination() != PeerA || Message.Delivery() != DeliveryMode::ReliableOrdered)
+						return false;
+					auto Decoded = DecodeCharacterMessage(Message.Payload());
+					auto *Frame = Decoded ? std::get_if<CharacterStateFrame>(&*Decoded) : nullptr;
+					return Frame && Frame->StateCount == 1 && Frame->States[0].Teleport();
+				}
+			),
+			"authoritative discontinuities bypass cadence and carry the existing teleport semantic"
+		);
+
+		Check(
+			Server.MarkUnmaterialized(PeerA, LowCharacter->GetObjectId()) &&
+				!Server.GetPublicationTier(PeerA, LowCharacter->GetObjectId()),
+			"unmaterialization destroys private publication history"
+		);
+		Scheduler.Messages.clear();
+		Check(
+			Server.MarkMaterialized(PeerA, LowCharacter->GetObjectId(), StateChannelId(333)),
+			"reentry creates a fresh bounded relationship"
+		);
+		Server.Step(World, 91);
+		Check(
+			std::ranges::any_of(
+				Scheduler.Messages,
+				[PeerA](const NetworkMessageIntent &Message) { return Message.Destination() == PeerA; }
+			),
+			"reentry promptly establishes a fresh authoritative baseline"
+		);
+		const auto Metrics = Server.GetMetrics();
+		if (!(Metrics.ImportanceEvaluations != 0 && Metrics.ImportanceTierTransitions != 0 &&
+			  Metrics.FullRateStatesSent != 0 && Metrics.ReducedRateStatesSent != 0 && Metrics.LowRateStatesSent != 0 &&
+			  Metrics.ForcedSemanticPublications >= 2 &&
+			  Metrics.MaximumStateAgeTicks <= DefaultCharacterAbsoluteRefreshTicks))
+			std::cerr << "[Character:NetworkTest] metrics=" << Metrics.FullRateStatesSent << ','
+					  << Metrics.ReducedRateStatesSent << ','
+					  << Metrics.LowRateStatesSent << ',' << Metrics.ForcedSemanticPublications << ','
+					  << Metrics.MaximumStateAgeTicks << '\n';
+		Check(
+			Metrics.ImportanceEvaluations != 0 && Metrics.ImportanceTierTransitions != 0 &&
+				Metrics.FullRateStatesSent != 0 && Metrics.ReducedRateStatesSent != 0 &&
+				Metrics.LowRateStatesSent != 0 && Metrics.ForcedSemanticPublications >= 2 &&
+				Metrics.MaximumStateAgeTicks <= DefaultCharacterAbsoluteRefreshTicks,
+			"3F diagnostics expose tier work, bytes, state age, promotions, and semantic bypasses"
+		);
+
+		RecordingScheduler ChurnScheduler;
+		AuthoritativeCharacterNetwork ChurnServer(ChurnScheduler, TestLimits(), Movement);
+		auto ChurnCharacter = MakeCharacter(200.0f);
+		Check(ChurnServer.RegisterCharacter(ChurnCharacter), "100-peer churn fixture registers its shared Character");
+		for (std::uint32_t Index = 1; Index <= 100; ++Index) {
+			const ConnectionId Connection{400 + Index, 1};
+			Check(
+				ChurnServer.AddPeer(Connection) &&
+					ChurnServer.SetPeerPublicationFocus(Connection, std::array{glm::vec3{}}) &&
+					ChurnServer.MarkMaterialized(Connection, ChurnCharacter->GetObjectId(), StateChannelId(Index)),
+				"100-peer churn creates bounded publication state"
+			);
+			ChurnServer.Step(World, 100 + Index);
+			Check(ChurnServer.RemovePeer(Connection, 100 + Index), "100-peer churn destroys publication state");
+			ChurnScheduler.Messages.clear();
+		}
+		const auto ChurnMetrics = ChurnServer.GetMetrics();
+		Check(
+			ChurnMetrics.FullRateRelationships == 0 && ChurnMetrics.ReducedRateRelationships == 0 &&
+				ChurnMetrics.LowRateRelationships == 0,
+			"one hundred connect/disconnect lifetimes leave no peer-tier relationship residue"
+		);
+	}
+
 	void TestBatchLossAndRemoteInterpolation() {
 		RecordingScheduler Scheduler;
 		const ConnectionId Connection{41, 1};
@@ -1367,15 +1689,17 @@ namespace {
 		Client.MarkMaterialized(SourceA, ReplicaA);
 		Client.MarkMaterialized(SourceB, ReplicaB);
 		WorldRoot World;
-		auto MakeState = [](ObjectId Character, std::uint64_t Sequence, std::uint64_t Tick, float X) {
-			return CharacterAuthoritativeState{
-				.Character = Character,
-				.ControlEpoch = CharacterControlEpoch(1),
-				.StateSequence = RealtimeStateSequence(Sequence),
-				.AuthoritativeTick = Tick,
-				.Transform = CFrame(X, 6.0f, 0.0f),
+		auto MakeState =
+			[](ObjectId Character, std::uint64_t Sequence, std::uint64_t Tick, float X, float Velocity = 0.0f) {
+				return CharacterAuthoritativeState{
+					.Character = Character,
+					.ControlEpoch = CharacterControlEpoch(1),
+					.StateSequence = RealtimeStateSequence(Sequence),
+					.AuthoritativeTick = Tick,
+					.Transform = CFrame(X, 6.0f, 0.0f),
+					.Velocity = {Velocity, 0.0f, 0.0f},
+				};
 			};
-		};
 		CharacterStateFrame Dropped{
 			.ServerTick = 1,
 			.FrameSequence = CharacterStateFrameSequence(1),
@@ -1450,6 +1774,29 @@ namespace {
 			Near(ReplicaA->GetPresentationCFrame().Position, {10.0f, 6.0f, 0.0f}),
 			"remote presentation holds the newest state instead of extrapolating indefinitely"
 		);
+		CharacterStateFrame Extrapolation{
+			.ServerTick = 100,
+			.FrameSequence = CharacterStateFrameSequence(6),
+			.MaterializationEpoch = CharacterMaterializationEpoch(2),
+			.StateCount = 1,
+		};
+		Extrapolation.States[0] = MakeState(SourceB, 2, 100, 100.0f, 60.0f);
+		Check(
+			Client.HandleTransportEvent(TransportEvent(StateFrameEvent(Connection, StateChannelId(2), Extrapolation))),
+			"sparse remote state with velocity is accepted without treating expected travel as a teleport"
+		);
+		Client.Reconcile(World);
+		Client.UpdatePresentation(109);
+		Check(
+			Near(ReplicaB->GetPresentationCFrame().Position, {103.0f, 6.0f, 0.0f}),
+			"remote presentation extrapolates velocity for the bounded six-tick loss window"
+		);
+		Client.UpdatePresentation(120);
+		Check(
+			Near(ReplicaB->GetPresentationCFrame().Position, {100.0f, 6.0f, 0.0f}) &&
+				Client.GetMetrics().RemoteExtrapolations != 0 && Client.GetMetrics().RemoteExtrapolationHolds != 0,
+			"remote presentation holds the newest sample after the extrapolation budget expires"
+		);
 		Check(
 			Client.MarkUnmaterialized(SourceA) && Client.GetPresentationSnapshotCount(SourceA) == 0,
 			"unmaterialization clears remote interpolation and presentation state"
@@ -1502,6 +1849,149 @@ namespace {
 			ReenteredAction && ReenteredAction->StartTick == 14 && ReenteredPresentation &&
 				ReenteredPresentation->PhaseTick == 16 && !ReenteredPresentation->Predicted,
 			"reentry establishes the authoritative action at its current phase instead of replaying its start"
+		);
+	}
+
+	void TestVariableCadenceMotionQuality() {
+		auto RunProfile =
+			[](const char *QualityMessage, auto StateAt, float MaximumAllowedError, bool DropEveryFifthSample = false) {
+				RecordingScheduler Scheduler;
+				const ConnectionId Connection{242, 1};
+				PredictedCharacterNetwork Client(Scheduler, TestLimits(), Movement);
+				const ObjectId Source{4242, 1};
+				auto Replica = std::make_shared<KinematicCharacter>();
+				WorldRoot World;
+				Check(
+					Client.AddPeer(Connection) && Client.MarkMaterialized(Source, Replica),
+					"variable-cadence quality fixture materializes one remote Character"
+				);
+				std::uint64_t FrameSequence = 1;
+				std::uint64_t StateSequence = 1;
+				std::size_t SampleIndex = 0;
+				std::vector<float> Errors;
+				for (std::uint64_t Tick = 1; Tick <= 180; ++Tick) {
+					if ((Tick - 1) % 12 == 0) {
+						const bool Drop = DropEveryFifthSample && SampleIndex % 5 == 4;
+						++SampleIndex;
+						if (!Drop) {
+							const auto [Position, Velocity] = StateAt(Tick);
+							CharacterStateFrame Frame{
+								.ServerTick = Tick,
+								.FrameSequence = CharacterStateFrameSequence(FrameSequence),
+								.MaterializationEpoch = CharacterMaterializationEpoch(1),
+								.StateCount = 1,
+							};
+							Frame.States[0] = {
+								.Character = Source,
+								.ControlEpoch = CharacterControlEpoch(1),
+								.StateSequence = RealtimeStateSequence(StateSequence),
+								.AuthoritativeTick = Tick,
+								.Transform = CFrame(Position),
+								.Velocity = Velocity,
+							};
+							Check(
+								Client.HandleTransportEvent(
+									TransportEvent(StateFrameEvent(Connection, StateChannelId(91), Frame))
+								),
+								"variable-cadence sample is accepted"
+							);
+							++FrameSequence;
+							++StateSequence;
+						}
+					}
+					Client.Reconcile(World);
+					Client.UpdatePresentation(Tick);
+					if (Tick >= 25) {
+						const auto TargetTick = Tick - DefaultRemoteInterpolationDelayTicks;
+						const auto [ExpectedPosition, ExpectedVelocity] = StateAt(TargetTick);
+						(void)ExpectedVelocity;
+						Errors.push_back(glm::distance(Replica->GetPresentationCFrame().Position, ExpectedPosition));
+					}
+				}
+				const auto MaximumError = *std::ranges::max_element(Errors);
+				if (MaximumError > MaximumAllowedError)
+				std::cerr << "[Character:NetworkTest] quality=" << QualityMessage << " max=" << MaximumError
+							  << " bound=" << MaximumAllowedError << '\n';
+				Check(MaximumError <= MaximumAllowedError, QualityMessage);
+				Check(Client.GetMetrics().InterpolationResets == 0, "variable cadence does not invent teleport resets");
+				if (DropEveryFifthSample)
+					Check(
+						Client.GetMetrics().RemoteExtrapolationHolds != 0,
+						"loss beyond the six-tick extrapolation horizon deterministically holds"
+					);
+			};
+
+		RunProfile(
+			"5 Hz constant motion stays within five centimetres",
+			[](std::uint64_t Tick) {
+				const auto Seconds = static_cast<float>(Tick) / 60.0f;
+				return std::pair{glm::vec3{6.0f * Seconds, 6.0f, 0.0f}, glm::vec3{6.0f, 0.0f, 0.0f}};
+			},
+			0.05f
+		);
+		RunProfile(
+			"5 Hz acceleration, stop, and reverse stay within fifteen centimetres",
+			[](std::uint64_t Tick) {
+				const auto Time = static_cast<float>(Tick) / 60.0f;
+				float X = 0.0f;
+				float Velocity = 0.0f;
+				if (Time <= 1.0f) {
+					X = 3.0f * Time * Time;
+					Velocity = 6.0f * Time;
+				} else if (Time <= 1.5f) {
+					X = 3.0f + 6.0f * (Time - 1.0f);
+					Velocity = 6.0f;
+				} else if (Time <= 2.0f) {
+					const auto Delta = Time - 1.5f;
+					X = 6.0f + 6.0f * Delta - 6.0f * Delta * Delta;
+					Velocity = 6.0f - 12.0f * Delta;
+				} else {
+					X = 7.5f - 6.0f * (Time - 2.0f);
+					Velocity = -6.0f;
+				}
+				return std::pair{glm::vec3{X, 6.0f, 0.0f}, glm::vec3{Velocity, 0.0f, 0.0f}};
+			},
+			0.15f
+		);
+		RunProfile(
+			"5 Hz sharp turns stay within ten centimetres",
+			[](std::uint64_t Tick) {
+				const auto Time = static_cast<float>(Tick) / 60.0f;
+				const auto Angle = 0.5f * Time;
+				return std::pair{
+					glm::vec3{10.0f * std::cos(Angle), 6.0f, 10.0f * std::sin(Angle)},
+					glm::vec3{-5.0f * std::sin(Angle), 0.0f, 5.0f * std::cos(Angle)},
+				};
+			},
+			0.10f
+		);
+		RunProfile(
+			"5 Hz jump and gravity motion stays within the measured fifty-five-centimetre landing bound",
+			[](std::uint64_t Tick) {
+				const auto Time = static_cast<float>(Tick) / 60.0f;
+				const auto AirTime = 16.0f / 9.8f;
+				const auto Height = Time < AirTime ? 6.0f + 8.0f * Time - 4.9f * Time * Time : 6.0f;
+				const auto VerticalVelocity = Time < AirTime ? 8.0f - 9.8f * Time : 0.0f;
+				return std::pair{glm::vec3{2.0f * Time, Height, 0.0f}, glm::vec3{2.0f, VerticalVelocity, 0.0f}};
+			},
+			0.55f
+		);
+		RunProfile(
+			"5 Hz 120-unit-per-second motion stays within ten centimetres",
+			[](std::uint64_t Tick) {
+				const auto Seconds = static_cast<float>(Tick) / 60.0f;
+				return std::pair{glm::vec3{120.0f * Seconds, 6.0f, 0.0f}, glm::vec3{120.0f, 0.0f, 0.0f}};
+			},
+			0.10f
+		);
+		RunProfile(
+			"5 Hz constant motion with deterministic twenty-percent sample loss stays within two metres",
+			[](std::uint64_t Tick) {
+				const auto Seconds = static_cast<float>(Tick) / 60.0f;
+				return std::pair{glm::vec3{6.0f * Seconds, 6.0f, 0.0f}, glm::vec3{6.0f, 0.0f, 0.0f}};
+			},
+			2.0f,
+			true
 		);
 	}
 
@@ -1724,13 +2214,15 @@ end
 		CharacterControlTransition Bind{Source, CharacterControlEpoch(9), StateChannelId(77), 1, true};
 		auto BindBytes = EncodeCharacterMessage(CharacterMessage(Bind));
 		Check(
-			Client.HandleTransportEvent(TransportEvent(ReceivedMessageEvent{
-				Connection,
-				DeliveryMode::ReliableOrdered,
-				TrafficClass::Control,
-				{},
-				BindBytes ? std::move(*BindBytes) : std::vector<std::byte>{},
-			})),
+			Client.HandleTransportEvent(TransportEvent(
+				ReceivedMessageEvent{
+					Connection,
+					DeliveryMode::ReliableOrdered,
+					TrafficClass::Control,
+					{},
+					BindBytes ? std::move(*BindBytes) : std::vector<std::byte>{},
+				}
+			)),
 			"prediction-admission fixture accepts its reliable control bind"
 		);
 		const auto Initial = Character->GetCFrame();
@@ -1746,9 +2238,11 @@ end
 			Client.SubmitInput(Connection, World, 3, 1.0f / 60.0f, {1.0f, 0.0f}, 0.0f, false),
 			"prediction resumes only after scheduler admission"
 		);
-		auto Decoded = Scheduler.Messages.empty() ? SerializationResult<CharacterMessage>(SerializationFailure(
-			SerializationErrorCode::InternalFailure, "missing admitted Character input"
-		)) : DecodeCharacterMessage(Scheduler.Messages.back().Payload());
+		auto Decoded = Scheduler.Messages.empty()
+						   ? SerializationResult<CharacterMessage>(SerializationFailure(
+								 SerializationErrorCode::InternalFailure, "missing admitted Character input"
+							 ))
+						   : DecodeCharacterMessage(Scheduler.Messages.back().Payload());
 		auto *Input = Decoded ? std::get_if<CharacterInputCommand>(&*Decoded) : nullptr;
 		Check(
 			Input && Input->InputSequence == CharacterInputSequence(1) &&
@@ -1765,8 +2259,7 @@ end
 		AuthoritativeCharacterNetwork Server(Scheduler, TestLimits(), Movement);
 		std::size_t TerminalCallbacks = 0;
 		Server.SetTerminalHandler([&](ConnectionId Failed, const DisconnectInfo &Information) {
-			if (Failed == Connection && Information.Reason == DisconnectReason::ResourceExhaustion)
-				++TerminalCallbacks;
+			if (Failed == Connection && Information.Reason == DisconnectReason::ResourceExhaustion) ++TerminalCallbacks;
 		});
 		Check(
 			Server.AddPeer(Connection) && Server.RegisterCharacter(Character) &&
@@ -1809,11 +2302,12 @@ end
 			Definition.DurationTicks = Duration;
 			Definition.EvaluateRootMotion = [Duration](std::uint64_t From, std::uint64_t To) {
 				return To > From
-						   ? std::optional(RootMotionDelta{
-								 .Translation = {
-									 static_cast<float>(To - From) / static_cast<float>(Duration), 0.0f, 0.0f
-								 },
-							 })
+						   ? std::optional(
+								 RootMotionDelta{
+									 .Translation =
+										 {static_cast<float>(To - From) / static_cast<float>(Duration), 0.0f, 0.0f},
+								 }
+							 )
 						   : std::nullopt;
 			};
 
@@ -1853,75 +2347,77 @@ end
 					Client.RegisterAction(Definition),
 				"root-motion prediction fixture registers matching content"
 			);
-			CharacterControlTransition Bind{
-				Source, CharacterControlEpoch(12), StateChannelId(100 + Duration), 1, true
-			};
+			CharacterControlTransition Bind{Source, CharacterControlEpoch(12), StateChannelId(100 + Duration), 1, true};
 			auto BindBytes = EncodeCharacterMessage(CharacterMessage(Bind));
 			Check(
-				Client.HandleTransportEvent(TransportEvent(ReceivedMessageEvent{
-					ClientConnection,
-					DeliveryMode::ReliableOrdered,
-					TrafficClass::Control,
-					{},
-					BindBytes ? std::move(*BindBytes) : std::vector<std::byte>{},
-				})) && Client.RequestAction(ClientConnection, Definition.Token, 10),
+				Client.HandleTransportEvent(TransportEvent(
+					ReceivedMessageEvent{
+						ClientConnection,
+						DeliveryMode::ReliableOrdered,
+						TrafficClass::Control,
+						{},
+						BindBytes ? std::move(*BindBytes) : std::vector<std::byte>{},
+					}
+				)) &&
+					Client.RequestAction(ClientConnection, Definition.Token, 10),
 				"root-motion prediction starts from an admitted semantic action"
 			);
 			const auto ConfirmationOffset = std::max(1u, Duration / 2);
 			for (std::uint32_t Offset = 1; Offset <= Duration; ++Offset) {
 				Check(
-					Client.SubmitInput(
-						ClientConnection, ClientWorld, 10 + Offset, 1.0f / 60.0f, {}, 0.0f, false
-					),
+					Client.SubmitInput(ClientConnection, ClientWorld, 10 + Offset, 1.0f / 60.0f, {}, 0.0f, false),
 					"predicted action advances through each registered interval"
 				);
 				if (Offset == ConfirmationOffset) {
-					auto ResultBytes = EncodeCharacterMessage(CharacterMessage(CharacterActionResult{
-						.Character = Source,
-						.ControlEpoch = CharacterControlEpoch(12),
-						.ActionSequence = CharacterActionSequence(1),
-						.RequestedActionToken = Definition.Token,
-						.Accepted = true,
-						.AuthoritativeAction = CharacterActionState{
-							CharacterActionSequence(1),
-							Definition.Token,
-							Definition.Animation,
-							Definition.ContentRevision,
-							10,
-							Duration,
-						},
-					}));
+					auto ResultBytes = EncodeCharacterMessage(CharacterMessage(
+						CharacterActionResult{
+							.Character = Source,
+							.ControlEpoch = CharacterControlEpoch(12),
+							.ActionSequence = CharacterActionSequence(1),
+							.RequestedActionToken = Definition.Token,
+							.Accepted = true,
+							.AuthoritativeAction = CharacterActionState{
+								CharacterActionSequence(1),
+								Definition.Token,
+								Definition.Animation,
+								Definition.ContentRevision,
+								10,
+								Duration,
+							},
+						}
+					));
 					Check(
-						Client.HandleTransportEvent(TransportEvent(ReceivedMessageEvent{
-							ClientConnection,
-							DeliveryMode::ReliableOrdered,
-							TrafficClass::ReliableApplication,
-							{},
-							ResultBytes ? std::move(*ResultBytes) : std::vector<std::byte>{},
-						})),
+						Client.HandleTransportEvent(TransportEvent(
+							ReceivedMessageEvent{
+								ClientConnection,
+								DeliveryMode::ReliableOrdered,
+								TrafficClass::ReliableApplication,
+								{},
+								ResultBytes ? std::move(*ResultBytes) : std::vector<std::byte>{},
+							}
+						)),
 						"authoritative action confirmation preserves the monotonic predicted phase"
 					);
 				}
 			}
 			const auto ClientFinal = ClientCharacter->GetPosition();
 			Check(
-				Client.SubmitInput(
-					ClientConnection, ClientWorld, 11 + Duration, 1.0f / 60.0f, {}, 0.0f, false
-				) && std::abs(ClientFinal.x - 1.0f) < 0.001f &&
+				Client.SubmitInput(ClientConnection, ClientWorld, 11 + Duration, 1.0f / 60.0f, {}, 0.0f, false) &&
+					std::abs(ClientFinal.x - 1.0f) < 0.001f &&
 					Near(ClientCharacter->GetPosition(), ClientFinal, 0.001f),
 				"prediction uses the same complete interval convention with no post-completion root motion"
 			);
 		}
 		Check(
 			!CharacterActionState{
-				 CharacterActionSequence(1),
-				 1,
-				 AssetId::FromBuiltInName("overflow-action"),
-				 Content(1),
-				 std::numeric_limits<std::uint64_t>::max(),
-				 1,
-			 }
-				 .IsValid() &&
+				CharacterActionSequence(1),
+				1,
+				AssetId::FromBuiltInName("overflow-action"),
+				Content(1),
+				std::numeric_limits<std::uint64_t>::max(),
+				1,
+			}
+					.IsValid() &&
 				!CharacterMaterializationEpoch(std::numeric_limits<std::uint64_t>::max()).TryNext(),
 			"action-end arithmetic and 64-bit materialization generations reject wrap explicitly"
 		);
@@ -1943,7 +2439,9 @@ int main() {
 		TestRemotePresentationFaultMatrix();
 		TestRepeatedManagerChurn();
 		TestStateBatchingCadenceAndSuppression();
+		TestImportanceCadenceAndLifecycle();
 		TestBatchLossAndRemoteInterpolation();
+		TestVariableCadenceMotionQuality();
 		TestLocalPresentationCorrectionMatrix();
 		TestCustomLuauPolicy();
 		TestSchedulerAdmissionPrecedesPrediction();

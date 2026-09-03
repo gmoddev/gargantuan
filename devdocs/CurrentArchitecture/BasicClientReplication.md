@@ -238,3 +238,11 @@ coordinator prepared its cursor/KnownObjects state, that peer is immediately
 terminal and its entire view is removed before subsequent work. Remote and
 GCHR materialization update only after accepted structural admission. No new
 application acknowledgement or parallel streaming protocol was added.
+
+Foundation 3F does not alter this structural path. Boolean relevance and
+Player/Character-shell visibility remain structural 3E decisions; GCHR
+importance exists only after Character materialization. Runtime transforms,
+tier history, and presentation samples remain transient and cannot enter a
+replication frame or authoring journal. No structural serialization cache was
+added because current frames contain peer-view and materialization-specific
+state.

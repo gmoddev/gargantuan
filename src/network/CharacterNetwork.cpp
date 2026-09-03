@@ -79,10 +79,12 @@ namespace gargantuan::network {
 		}
 
 		DisconnectInfo SchedulerFailure(const SchedulerSubmitResult &Result, std::string Diagnostic) {
-			return Result.TerminalDisconnect.value_or(DisconnectInfo{
-				DisconnectReason::ResourceExhaustion,
-				std::move(Diagnostic),
-			});
+			return Result.TerminalDisconnect.value_or(
+				DisconnectInfo{
+					DisconnectReason::ResourceExhaustion,
+					std::move(Diagnostic),
+				}
+			);
 		}
 
 		void HashWord(std::uint64_t &Hash, std::uint64_t Value) {
@@ -128,13 +130,44 @@ namespace gargantuan::network {
 		std::uint64_t SemanticStateBytes(const CharacterAuthoritativeState &State) {
 			return State.ActiveAction ? 184 : 112;
 		}
+
+		std::uint64_t PublicationPhase(ConnectionId Connection, ObjectId Character, std::uint64_t Interval) {
+			if (Interval <= 1) return 0;
+			std::uint64_t Hash = 1469598103934665603ull;
+			HashWord(Hash, Connection.Slot);
+			HashWord(Hash, Connection.Generation);
+			HashWord(Hash, Character.Slot);
+			HashWord(Hash, Character.Generation);
+			return Hash % Interval;
+		}
+
+		float ExpectedTravelDistance(
+			glm::vec3 PreviousVelocity,
+			glm::vec3 CurrentVelocity,
+			std::uint64_t TickSpan,
+			std::uint32_t SimulationTicksPerSecond
+		) {
+			if (SimulationTicksPerSecond == 0) return 0.0f;
+			return std::max(glm::length(PreviousVelocity), glm::length(CurrentVelocity)) *
+				   (static_cast<float>(TickSpan) / static_cast<float>(SimulationTicksPerSecond));
+		}
 	}
 
 	bool CharacterNetworkConfiguration::IsValid() const {
-		return SimulationTicksPerSecond != 0 && StateUpdatesPerSecond != 0 &&
-			   StateUpdatesPerSecond <= SimulationTicksPerSecond &&
-			   SimulationTicksPerSecond % StateUpdatesPerSecond == 0 && AbsoluteRefreshTicks != 0 &&
-			   RemoteInterpolationDelayTicks != 0 && InputFreshnessTicks != 0 &&
+		return SimulationTicksPerSecond != 0 && StateUpdatesPerSecond != 0 && ReducedStateUpdatesPerSecond != 0 &&
+			   LowStateUpdatesPerSecond != 0 && StateUpdatesPerSecond <= SimulationTicksPerSecond &&
+			   StateUpdatesPerSecond >= ReducedStateUpdatesPerSecond &&
+			   ReducedStateUpdatesPerSecond >= LowStateUpdatesPerSecond &&
+			   SimulationTicksPerSecond % StateUpdatesPerSecond == 0 &&
+			   SimulationTicksPerSecond % ReducedStateUpdatesPerSecond == 0 &&
+			   SimulationTicksPerSecond % LowStateUpdatesPerSecond == 0 && AbsoluteRefreshTicks != 0 &&
+			   RemoteInterpolationDelayTicks != 0 && RemoteExtrapolationLimitTicks != 0 &&
+			   RemoteExtrapolationLimitTicks <= MaximumRemoteCharacterSnapshotWindowTicks && InputFreshnessTicks != 0 &&
+			   ImportanceUpdateTicks != 0 && PromotionTicks != 0 && std::isfinite(FullRateDistance) &&
+			   std::isfinite(ReducedRateDistance) && std::isfinite(ImportanceHysteresis) && FullRateDistance > 0.0f &&
+			   ReducedRateDistance > FullRateDistance && ImportanceHysteresis > 0.0f &&
+			   ImportanceHysteresis < FullRateDistance &&
+			   FullRateDistance + ImportanceHysteresis < ReducedRateDistance - ImportanceHysteresis &&
 			   MaximumStateFrameBytes >=
 				   CharacterStateFrameHeaderBytes + CompactCharacterStateBytes + CompactCharacterActionStateBytes &&
 			   MaximumStateFrameBytes <= MaximumCharacterStateFrameBytes;
@@ -142,6 +175,19 @@ namespace gargantuan::network {
 
 	std::uint64_t CharacterNetworkConfiguration::PublicationIntervalTicks() const {
 		return IsValid() ? SimulationTicksPerSecond / StateUpdatesPerSecond : 0;
+	}
+
+	std::uint64_t CharacterNetworkConfiguration::PublicationIntervalTicks(CharacterPublicationTier Tier) const {
+		if (!IsValid()) return 0;
+		switch (Tier) {
+		case CharacterPublicationTier::FullRate:
+			return SimulationTicksPerSecond / StateUpdatesPerSecond;
+		case CharacterPublicationTier::ReducedRate:
+			return SimulationTicksPerSecond / ReducedStateUpdatesPerSecond;
+		case CharacterPublicationTier::LowRate:
+			return SimulationTicksPerSecond / LowStateUpdatesPerSecond;
+		}
+		return 0;
 	}
 
 	bool CharacterActionDefinition::IsValid() const {
@@ -153,11 +199,22 @@ namespace gargantuan::network {
 		struct PublicationState {
 			std::uint64_t Fingerprint = 0;
 			std::uint64_t LastAbsoluteTick = 0;
+			std::uint64_t LastPublicationTick = 0;
+			std::uint64_t TemporaryFullRateUntilTick = 0;
+			CharacterPublicationTier Tier = CharacterPublicationTier::FullRate;
+			CharacterPublicationTier EffectiveTier = CharacterPublicationTier::FullRate;
+			bool HasPublished = false;
+			bool PublishImmediately = true;
+			bool DueThisTick = false;
+			bool SendThisTick = false;
 		};
 		std::map<ObjectId, StateChannelId> Materialized;
 		std::map<ObjectId, PublicationState> Published;
+		std::vector<glm::vec3> PublicationFocus;
 		CharacterStateFrameSequence NextFrameSequence{1};
 		CharacterMaterializationEpoch MaterializationEpoch;
+		std::uint64_t LastImportanceUpdateTick = 0;
+		bool ImportanceDirty = true;
 	};
 
 	struct AuthoritativeCharacterNetwork::CharacterState {
@@ -182,6 +239,13 @@ namespace gargantuan::network {
 		bool ReliableStateRequired = false;
 		std::optional<CharacterAuthoritativeState> PreparedState;
 		std::uint64_t PreparedFingerprint = 0;
+		std::uint64_t SemanticPromotionUntilTick = 0;
+		std::optional<CFrame> LastObservedTransform;
+		glm::vec3 LastObservedVelocity{};
+		std::uint64_t LastObservedTick = 0;
+		bool WasMoving = false;
+		bool DueThisTick = false;
+		bool SendThisTick = false;
 	};
 
 	AuthoritativeCharacterNetwork::~AuthoritativeCharacterNetwork() = default;
@@ -262,7 +326,16 @@ namespace gargantuan::network {
 			!Peer->second.Materialized.emplace(Character, Channel).second)
 			return false;
 		Peer->second.MaterializationEpoch = *NextEpoch;
-		Peer->second.Published.erase(Character);
+		const auto PromotionStart = std::max<std::uint64_t>(LastAuthoritativeTick, 1);
+		const auto PromotionUntil = PromotionStart >
+											std::numeric_limits<std::uint64_t>::max() - Configuration.PromotionTicks
+										? std::numeric_limits<std::uint64_t>::max()
+										: PromotionStart + Configuration.PromotionTicks;
+		Peer->second.Published[Character] = PeerState::PublicationState{
+			.TemporaryFullRateUntilTick = PromotionUntil,
+		};
+		Peer->second.ImportanceDirty = true;
+		SaturatingIncrement(Metrics.TemporaryPromotions);
 		return true;
 	}
 
@@ -276,6 +349,28 @@ namespace gargantuan::network {
 		auto Found = Characters.find(Character);
 		if (Found != Characters.end() && Found->second.Controller == Connection)
 			(void)RevokeControl(Character, std::max<std::uint64_t>(LastAuthoritativeTick, 1));
+		return true;
+	}
+
+	bool AuthoritativeCharacterNetwork::SetPeerPublicationFocus(
+		ConnectionId Connection, std::span<const glm::vec3> FocusPoints
+	) {
+		auto Peer = Peers.find(Connection);
+		if (Peer == Peers.end() || FocusPoints.size() > MaximumCharacterPublicationFocusPoints ||
+			std::ranges::any_of(FocusPoints, [](glm::vec3 Point) { return !Finite(Point); }))
+			return false;
+		if (Peer->second.PublicationFocus.size() == FocusPoints.size() &&
+			std::equal(
+				Peer->second.PublicationFocus.begin(),
+				Peer->second.PublicationFocus.end(),
+				FocusPoints.begin(),
+				[](const glm::vec3 &Left, const glm::vec3 &Right) {
+					return Left.x == Right.x && Left.y == Right.y && Left.z == Right.z;
+				}
+			))
+			return true;
+		Peer->second.PublicationFocus.assign(FocusPoints.begin(), FocusPoints.end());
+		Peer->second.ImportanceDirty = true;
 		return true;
 	}
 
@@ -302,7 +397,18 @@ namespace gargantuan::network {
 		State.ResolvedAction = {};
 		State.PendingActionCount = 0;
 		State.ActiveAction.reset();
-		Peer->second.Published.erase(Character);
+		auto Publication = Peer->second.Published.find(Character);
+		if (Publication != Peer->second.Published.end()) {
+			Publication->second.Tier = CharacterPublicationTier::FullRate;
+			const auto PromotionUntil = AuthoritativeTick >
+												std::numeric_limits<std::uint64_t>::max() - Configuration.PromotionTicks
+											? std::numeric_limits<std::uint64_t>::max()
+											: AuthoritativeTick + Configuration.PromotionTicks;
+			Publication->second.TemporaryFullRateUntilTick = std::max(
+				Publication->second.TemporaryFullRateUntilTick, PromotionUntil
+			);
+			Publication->second.PublishImmediately = true;
+		}
 		const auto Channel = Peer->second.Materialized.at(Character);
 		if (!SendControl(Connection, {Character, *Epoch, Channel, AuthoritativeTick, true})) {
 			State.Controller.reset();
@@ -360,6 +466,7 @@ namespace gargantuan::network {
 		};
 		State.LastActionEvaluationTick = AuthoritativeTick;
 		State.ReliableStateRequired = true;
+		PromoteCharacter(Character, State, AuthoritativeTick);
 		return true;
 	}
 
@@ -403,8 +510,7 @@ namespace gargantuan::network {
 		if (!Intent) {
 			if (Reliable && OnTerminal)
 				OnTerminal(
-					Connection,
-					{DisconnectReason::ResourceExhaustion, "Reliable Character message intent was rejected"}
+					Connection, {DisconnectReason::ResourceExhaustion, "Reliable Character message intent was rejected"}
 				);
 			return false;
 		}
@@ -421,8 +527,7 @@ namespace gargantuan::network {
 		if (!Result.Accepted()) {
 			if (Reliable && OnTerminal)
 				OnTerminal(
-					Connection,
-					SchedulerFailure(Result, "Reliable Character message was rejected by the scheduler")
+					Connection, SchedulerFailure(Result, "Reliable Character message was rejected by the scheduler")
 				);
 			return false;
 		}
@@ -449,8 +554,7 @@ namespace gargantuan::network {
 			SaturatingIncrement(Metrics.ProtocolRejects);
 			if (Reliable && OnTerminal)
 				OnTerminal(
-					Connection,
-					{DisconnectReason::ResourceExhaustion, "Reliable Character state serialization failed"}
+					Connection, {DisconnectReason::ResourceExhaustion, "Reliable Character state serialization failed"}
 				);
 			return false;
 		}
@@ -458,18 +562,20 @@ namespace gargantuan::network {
 			Connection,
 			Reliable ? DeliveryMode::ReliableOrdered : DeliveryMode::UnreliableSequenced,
 			Reliable ? TrafficClass::Control : TrafficClass::RealtimeState,
-			Reliable ? MessageOrder{} : MessageOrder(RealtimeStateOrder{
-											  Channel,
-											  RealtimeStateSequence(Frame.FrameSequence.Value()),
-										  }),
+			Reliable ? MessageOrder{}
+					 : MessageOrder(
+						   RealtimeStateOrder{
+							   Channel,
+							   RealtimeStateSequence(Frame.FrameSequence.Value()),
+						   }
+					   ),
 			std::move(*Encoded),
 			Limits
 		);
 		if (!Intent) {
 			if (Reliable && OnTerminal)
 				OnTerminal(
-					Connection,
-					{DisconnectReason::ResourceExhaustion, "Reliable Character state intent was rejected"}
+					Connection, {DisconnectReason::ResourceExhaustion, "Reliable Character state intent was rejected"}
 				);
 			return false;
 		}
@@ -486,8 +592,7 @@ namespace gargantuan::network {
 		if (!Result.Accepted()) {
 			if (Reliable && OnTerminal)
 				OnTerminal(
-					Connection,
-					SchedulerFailure(Result, "Reliable Character state was rejected by the scheduler")
+					Connection, SchedulerFailure(Result, "Reliable Character state was rejected by the scheduler")
 				);
 			return false;
 		}
@@ -623,7 +728,7 @@ namespace gargantuan::network {
 			for (std::size_t Index = 0; Index < State.PendingActionCount; ++Index) {
 				const auto &Request = State.PendingActions[Index];
 				const auto Selected = ActionPolicy ? ActionPolicy(*State.Controller, Request)
-											   : std::optional<std::uint32_t>(Request.RequestedActionToken);
+												   : std::optional<std::uint32_t>(Request.RequestedActionToken);
 				const auto Definition = Selected ? Actions.find(*Selected) : Actions.end();
 				State.ResolvedAction = Request.ActionSequence;
 				std::optional<CharacterActionState> AcceptedAction;
@@ -645,16 +750,19 @@ namespace gargantuan::network {
 					State.ReliableStateRequired = true;
 					SaturatingIncrement(Metrics.ActionRequestsAccepted);
 				}
+				PromoteCharacter(Id, State, AuthoritativeTick);
 				const bool ResultQueued = Queue(
 					*State.Controller,
-					CharacterMessage(CharacterActionResult{
-						.Character = Request.Character,
-						.ControlEpoch = Request.ControlEpoch,
-						.ActionSequence = Request.ActionSequence,
-						.RequestedActionToken = Request.RequestedActionToken,
-						.Accepted = AcceptedAction.has_value(),
-						.AuthoritativeAction = std::move(AcceptedAction),
-					}),
+					CharacterMessage(
+						CharacterActionResult{
+							.Character = Request.Character,
+							.ControlEpoch = Request.ControlEpoch,
+							.ActionSequence = Request.ActionSequence,
+							.RequestedActionToken = Request.RequestedActionToken,
+							.Accepted = AcceptedAction.has_value(),
+							.AuthoritativeAction = std::move(AcceptedAction),
+						}
+					),
 					{},
 					true
 				);
@@ -714,6 +822,7 @@ namespace gargantuan::network {
 				if (Definition == Actions.end()) {
 					State.ActiveAction.reset();
 					State.ReliableStateRequired = true;
+					PromoteCharacter(Id, State, AuthoritativeTick);
 				} else {
 					const auto ActionEnd = State.ActiveAction->StartTick + State.ActiveAction->DurationTicks;
 					const auto EvaluationTick = std::min(AuthoritativeTick, ActionEnd);
@@ -743,37 +852,56 @@ namespace gargantuan::network {
 						} catch (...) {
 							State.ActiveAction.reset();
 							State.ReliableStateRequired = true;
+							PromoteCharacter(Id, State, AuthoritativeTick);
 							SaturatingIncrement(Metrics.ProtocolRejects);
 						}
 						SaturatingIncrement(
 							Metrics.RootMotionCpuNanoseconds,
 							static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
-												   std::chrono::steady_clock::now() - RootStarted
+														   std::chrono::steady_clock::now() - RootStarted
 							)
-												   .count())
+														   .count())
 						);
 					}
 					if (State.ActiveAction && AuthoritativeTick >= ActionEnd) {
 						State.ActiveAction.reset();
 						State.ReliableStateRequired = true;
+						PromoteCharacter(Id, State, AuthoritativeTick);
 					}
 				}
 			}
-			if (State.ReliableStateRequired) {
+
+			const auto CurrentTransform = CharacterValue->GetCFrame();
+			const auto CurrentVelocity = CharacterValue->GetVelocity();
+			bool Discontinuity = false;
+			bool Moving = glm::length(CurrentVelocity) > 0.01f;
+			if (State.LastObservedTransform && AuthoritativeTick >= State.LastObservedTick) {
+				const auto TickSpan = AuthoritativeTick - State.LastObservedTick;
+				const auto Travel = glm::distance(CurrentTransform.Position, State.LastObservedTransform->Position);
+				const auto Expected = ExpectedTravelDistance(
+					State.LastObservedVelocity, CurrentVelocity, TickSpan, Configuration.SimulationTicksPerSecond
+				);
+				Discontinuity = Travel >= MaximumHardCorrectionDistance + Expected;
+				Moving = Moving || Travel > 0.001f;
+			}
+			if (Moving && !State.WasMoving) PromoteCharacter(Id, State, AuthoritativeTick);
+			State.LastObservedTransform = CurrentTransform;
+			State.LastObservedVelocity = CurrentVelocity;
+			State.LastObservedTick = AuthoritativeTick;
+			State.WasMoving = Moving;
+
+			if (Discontinuity || State.ReliableStateRequired) {
 				const bool HasRecipient = std::ranges::any_of(Peers, [Id](const auto &Entry) {
 					return Entry.second.Materialized.contains(Id);
 				});
-				if (!HasRecipient || PublishState(Id, AuthoritativeTick, false, true))
+				if (Discontinuity) PromoteCharacter(Id, State, AuthoritativeTick);
+				if (!HasRecipient || PublishState(Id, AuthoritativeTick, Discontinuity, true))
 					State.ReliableStateRequired = false;
 			}
 			++Iterator;
 		}
-		const auto Interval = Configuration.PublicationIntervalTicks();
-		if (LastStatePublicationTick == 0 || (AuthoritativeTick > LastStatePublicationTick &&
-											  AuthoritativeTick - LastStatePublicationTick >= Interval)) {
-			PublishStateFrames(AuthoritativeTick);
-			LastStatePublicationTick = AuthoritativeTick;
-		}
+		UpdateImportance(AuthoritativeTick);
+		PublishStateFrames(AuthoritativeTick);
 	}
 
 	std::optional<CharacterAuthoritativeState>
@@ -802,6 +930,102 @@ namespace gargantuan::network {
 		};
 	}
 
+	void AuthoritativeCharacterNetwork::PromoteCharacter(
+		ObjectId Character, CharacterState &State, std::uint64_t AuthoritativeTick
+	) {
+		const auto PromotionUntil = AuthoritativeTick >
+											std::numeric_limits<std::uint64_t>::max() - Configuration.PromotionTicks
+										? std::numeric_limits<std::uint64_t>::max()
+										: AuthoritativeTick + Configuration.PromotionTicks;
+		if (PromotionUntil > State.SemanticPromotionUntilTick) {
+			State.SemanticPromotionUntilTick = PromotionUntil;
+			SaturatingIncrement(Metrics.TemporaryPromotions);
+		}
+		for (auto &[Connection, Peer] : Peers) {
+			(void)Connection;
+			if (!Peer.Materialized.contains(Character)) continue;
+			auto Publication = Peer.Published.find(Character);
+			if (Publication == Peer.Published.end()) continue;
+			Publication->second.TemporaryFullRateUntilTick = std::max(
+				Publication->second.TemporaryFullRateUntilTick, PromotionUntil
+			);
+			Peer.ImportanceDirty = true;
+		}
+	}
+
+	void AuthoritativeCharacterNetwork::UpdateImportance(std::uint64_t AuthoritativeTick) {
+		if (Peers.empty()) return;
+		const auto Started = std::chrono::steady_clock::now();
+		for (auto &[Connection, Peer] : Peers) {
+			if (!Peer.ImportanceDirty && Peer.LastImportanceUpdateTick != 0 &&
+				AuthoritativeTick >= Peer.LastImportanceUpdateTick &&
+				AuthoritativeTick - Peer.LastImportanceUpdateTick < Configuration.ImportanceUpdateTicks)
+				continue;
+			for (const auto &[Character, Channel] : Peer.Materialized) {
+				(void)Channel;
+				auto Runtime = Characters.find(Character);
+				auto Publication = Peer.Published.find(Character);
+				if (Runtime == Characters.end() || Publication == Peer.Published.end()) continue;
+				SaturatingIncrement(Metrics.ImportanceEvaluations);
+				auto CharacterValue = Runtime->second.Character.lock();
+				if (!CharacterValue || CharacterValue->GetDestroyed() || CharacterValue->IsDestroying()) continue;
+				CharacterPublicationTier NextTier = Publication->second.Tier;
+				const bool Owner = Runtime->second.Controller == Connection;
+				const bool Promoted = Runtime->second.SemanticPromotionUntilTick > AuthoritativeTick ||
+									  Publication->second.TemporaryFullRateUntilTick > AuthoritativeTick;
+				if (Owner || Promoted || Peer.PublicationFocus.empty()) {
+					NextTier = CharacterPublicationTier::FullRate;
+				} else {
+					float MinimumDistance = std::numeric_limits<float>::max();
+					for (const auto Focus : Peer.PublicationFocus)
+						MinimumDistance = std::min(
+							MinimumDistance, glm::distance(CharacterValue->GetPosition(), Focus)
+						);
+					switch (Publication->second.Tier) {
+					case CharacterPublicationTier::FullRate:
+						NextTier = MinimumDistance <=
+										   Configuration.FullRateDistance + Configuration.ImportanceHysteresis
+									   ? CharacterPublicationTier::FullRate
+								   : MinimumDistance >
+										   Configuration.ReducedRateDistance + Configuration.ImportanceHysteresis
+									   ? CharacterPublicationTier::LowRate
+									   : CharacterPublicationTier::ReducedRate;
+						break;
+					case CharacterPublicationTier::ReducedRate:
+						NextTier = MinimumDistance < Configuration.FullRateDistance - Configuration.ImportanceHysteresis
+									   ? CharacterPublicationTier::FullRate
+								   : MinimumDistance >
+										   Configuration.ReducedRateDistance + Configuration.ImportanceHysteresis
+									   ? CharacterPublicationTier::LowRate
+									   : CharacterPublicationTier::ReducedRate;
+						break;
+					case CharacterPublicationTier::LowRate:
+						NextTier = MinimumDistance >=
+										   Configuration.ReducedRateDistance - Configuration.ImportanceHysteresis
+									   ? CharacterPublicationTier::LowRate
+								   : MinimumDistance <
+										   Configuration.FullRateDistance - Configuration.ImportanceHysteresis
+									   ? CharacterPublicationTier::FullRate
+									   : CharacterPublicationTier::ReducedRate;
+						break;
+					}
+				}
+				if (NextTier != Publication->second.Tier) {
+					Publication->second.Tier = NextTier;
+					SaturatingIncrement(Metrics.ImportanceTierTransitions);
+				}
+			}
+			Peer.LastImportanceUpdateTick = AuthoritativeTick;
+			Peer.ImportanceDirty = false;
+		}
+		SaturatingIncrement(
+			Metrics.ImportanceEvaluationCpuNanoseconds,
+			static_cast<std::uint64_t>(
+				std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - Started).count()
+			)
+		);
+	}
+
 	bool AuthoritativeCharacterNetwork::PublishState(
 		ObjectId Character, std::uint64_t AuthoritativeTick, bool Teleport, bool Reliable
 	) {
@@ -824,13 +1048,27 @@ namespace gargantuan::network {
 				Frame.States[0] = *State;
 				Queued = QueueStateFrame(Connection, Frame, Visible->second, Reliable);
 				Peer.NextFrameSequence = Peer.NextFrameSequence.TryNext().value_or(CharacterStateFrameSequence{});
-				if (Queued) Peer.Published[Character] = {Fingerprint, AuthoritativeTick};
+				if (Queued) {
+					auto &Publication = Peer.Published[Character];
+					const auto Age = Publication.HasPublished && AuthoritativeTick >= Publication.LastPublicationTick
+										 ? AuthoritativeTick - Publication.LastPublicationTick
+										 : 0;
+					Publication.Fingerprint = Fingerprint;
+					Publication.LastAbsoluteTick = AuthoritativeTick;
+					Publication.LastPublicationTick = AuthoritativeTick;
+					Publication.HasPublished = true;
+					Publication.PublishImmediately = false;
+					SaturatingIncrement(Metrics.StateAgeSamples);
+					SaturatingIncrement(Metrics.StateAgeTicks, Age);
+					Metrics.MaximumStateAgeTicks = std::max(Metrics.MaximumStateAgeTicks, Age);
+				}
 			}
 			if (Queued) {
 				Sent = true;
 				SaturatingIncrement(Metrics.AuthoritativeStatesSent);
 				SaturatingIncrement(Metrics.AbsoluteStatesSent);
 				SaturatingIncrement(Metrics.SemanticStateBytes, SemanticStateBytes(*State));
+				if (Reliable) SaturatingIncrement(Metrics.ForcedSemanticPublications);
 			}
 		}
 		Found->second.NextStateSequence = Found->second.NextStateSequence.TryNext().value_or(RealtimeStateSequence{});
@@ -838,34 +1076,89 @@ namespace gargantuan::network {
 	}
 
 	void AuthoritativeCharacterNetwork::PublishStateFrames(std::uint64_t AuthoritativeTick) {
-		const auto DetectionStarted = std::chrono::steady_clock::now();
+		if (Peers.empty()) return;
 		for (auto &[Id, Runtime] : Characters) {
+			(void)Id;
 			Runtime.PreparedState.reset();
 			Runtime.PreparedFingerprint = 0;
+			Runtime.DueThisTick = false;
+			Runtime.SendThisTick = false;
+		}
+		const auto DueStarted = std::chrono::steady_clock::now();
+		for (auto &[Connection, Peer] : Peers) {
+			for (auto &[Character, Publication] : Peer.Published) {
+				Publication.DueThisTick = false;
+				Publication.SendThisTick = false;
+				auto Runtime = Characters.find(Character);
+				if (Runtime == Characters.end() || !Peer.Materialized.contains(Character)) continue;
+				const bool Owner = Runtime->second.Controller == Connection;
+				const bool Promoted = Runtime->second.SemanticPromotionUntilTick > AuthoritativeTick ||
+									  Publication.TemporaryFullRateUntilTick > AuthoritativeTick;
+				Publication.EffectiveTier = Owner || Promoted ? CharacterPublicationTier::FullRate : Publication.Tier;
+				const auto Interval = Configuration.PublicationIntervalTicks(Publication.EffectiveTier);
+				const bool Refresh = !Publication.HasPublished || AuthoritativeTick < Publication.LastAbsoluteTick ||
+									 AuthoritativeTick - Publication.LastAbsoluteTick >=
+										 Configuration.AbsoluteRefreshTicks;
+				const auto Phase = Publication.EffectiveTier == CharacterPublicationTier::FullRate &&
+										   Peer.PublicationFocus.empty()
+									   ? 0
+									   : PublicationPhase(Connection, Character, Interval);
+				Publication.DueThisTick = !Publication.HasPublished || Publication.PublishImmediately || Refresh ||
+										  AuthoritativeTick < Publication.LastPublicationTick ||
+										  AuthoritativeTick % Interval == Phase;
+				if (Publication.DueThisTick) {
+					Runtime->second.DueThisTick = true;
+					SaturatingIncrement(Metrics.DueStates);
+				}
+			}
+		}
+		SaturatingIncrement(
+			Metrics.DueSetCpuNanoseconds,
+			static_cast<std::uint64_t>(
+				std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - DueStarted)
+					.count()
+			)
+		);
+
+		const auto DetectionStarted = std::chrono::steady_clock::now();
+		for (auto &[Id, Runtime] : Characters) {
+			if (!Runtime.DueThisTick) continue;
 			auto State = BuildState(Id, AuthoritativeTick);
 			if (!State || GetCompactCharacterStateEncodedBytes(*State) == 0) {
 				SaturatingIncrement(Metrics.ProtocolRejects);
 				continue;
 			}
-			const auto Fingerprint = SemanticStateFingerprint(*State);
-			bool Needed = false;
-			for (auto &[Connection, Peer] : Peers) {
-				if (!Peer.Materialized.contains(Id)) continue;
-				SaturatingIncrement(Metrics.StatesConsidered);
-				auto Previous = Peer.Published.find(Id);
-				const bool Refresh = Previous == Peer.Published.end() ||
-									 AuthoritativeTick < Previous->second.LastAbsoluteTick ||
-									 AuthoritativeTick - Previous->second.LastAbsoluteTick >=
-										 Configuration.AbsoluteRefreshTicks;
-				if (Refresh || Previous->second.Fingerprint != Fingerprint)
-					Needed = true;
-				else
-					SaturatingIncrement(Metrics.StatesSuppressedUnchanged);
-			}
-			if (!Needed) continue;
 			Runtime.PreparedState = *State;
-			Runtime.PreparedFingerprint = Fingerprint;
-			Runtime.NextStateSequence = Runtime.NextStateSequence.TryNext().value_or(RealtimeStateSequence{});
+			Runtime.PreparedFingerprint = SemanticStateFingerprint(*State);
+			SaturatingIncrement(Metrics.StateSnapshotsBuilt);
+		}
+		for (auto &[Connection, Peer] : Peers) {
+			(void)Connection;
+			for (auto &[Id, Publication] : Peer.Published) {
+				if (!Publication.DueThisTick) continue;
+				auto Runtime = Characters.find(Id);
+				if (Runtime == Characters.end() || !Runtime->second.PreparedState) continue;
+				SaturatingIncrement(Metrics.StatesConsidered);
+				SaturatingIncrement(Metrics.StateSnapshotRelationshipUses);
+				const bool Refresh = !Publication.HasPublished || AuthoritativeTick < Publication.LastAbsoluteTick ||
+									 AuthoritativeTick - Publication.LastAbsoluteTick >=
+										 Configuration.AbsoluteRefreshTicks;
+				Publication.SendThisTick = Refresh || Publication.PublishImmediately ||
+										   Publication.Fingerprint != Runtime->second.PreparedFingerprint;
+				if (Publication.SendThisTick) {
+					Runtime->second.SendThisTick = true;
+				} else {
+					Publication.PublishImmediately = false;
+					SaturatingIncrement(Metrics.StatesSuppressedUnchanged);
+				}
+			}
+		}
+		for (auto &[Id, Runtime] : Characters) {
+			(void)Id;
+			if (Runtime.PreparedState && Runtime.SendThisTick)
+				Runtime.NextStateSequence = Runtime.NextStateSequence.TryNext().value_or(RealtimeStateSequence{});
+			else
+				Runtime.PreparedState.reset();
 		}
 		SaturatingIncrement(
 			Metrics.StateChangeDetectionCpuNanoseconds,
@@ -894,8 +1187,44 @@ namespace gargantuan::network {
 					++PeerBatchCount;
 					for (const auto &State : Frame.GetStates()) {
 						auto Runtime = Characters.find(State.Character);
-						if (Runtime != Characters.end())
-							Peer.Published[State.Character] = {Runtime->second.PreparedFingerprint, AuthoritativeTick};
+						auto Publication = Peer.Published.find(State.Character);
+						if (Runtime == Characters.end() || Publication == Peer.Published.end()) continue;
+						const auto Age = Publication->second.HasPublished &&
+												 AuthoritativeTick >= Publication->second.LastPublicationTick
+											 ? AuthoritativeTick - Publication->second.LastPublicationTick
+											 : 0;
+						Publication->second.Fingerprint = Runtime->second.PreparedFingerprint;
+						Publication->second.LastAbsoluteTick = AuthoritativeTick;
+						Publication->second.LastPublicationTick = AuthoritativeTick;
+						Publication->second.HasPublished = true;
+						Publication->second.PublishImmediately = false;
+						Publication->second.SendThisTick = false;
+						SaturatingIncrement(Metrics.StateAgeSamples);
+						SaturatingIncrement(Metrics.StateAgeTicks, Age);
+						Metrics.MaximumStateAgeTicks = std::max(Metrics.MaximumStateAgeTicks, Age);
+						const auto StateBytes = static_cast<std::uint64_t>(GetCompactCharacterStateEncodedBytes(State));
+						switch (Publication->second.EffectiveTier) {
+						case CharacterPublicationTier::FullRate:
+							SaturatingIncrement(Metrics.FullRateStatesSent);
+							SaturatingIncrement(Metrics.FullRateStateBytes, StateBytes);
+							SaturatingIncrement(Metrics.FullRateStateAgeTicks, Age);
+							Metrics.MaximumFullRateStateAgeTicks = std::max(Metrics.MaximumFullRateStateAgeTicks, Age);
+							break;
+						case CharacterPublicationTier::ReducedRate:
+							SaturatingIncrement(Metrics.ReducedRateStatesSent);
+							SaturatingIncrement(Metrics.ReducedRateStateBytes, StateBytes);
+							SaturatingIncrement(Metrics.ReducedRateStateAgeTicks, Age);
+							Metrics.MaximumReducedRateStateAgeTicks = std::max(
+								Metrics.MaximumReducedRateStateAgeTicks, Age
+							);
+							break;
+						case CharacterPublicationTier::LowRate:
+							SaturatingIncrement(Metrics.LowRateStatesSent);
+							SaturatingIncrement(Metrics.LowRateStateBytes, StateBytes);
+							SaturatingIncrement(Metrics.LowRateStateAgeTicks, Age);
+							Metrics.MaximumLowRateStateAgeTicks = std::max(Metrics.MaximumLowRateStateAgeTicks, Age);
+							break;
+						}
 						SaturatingIncrement(Metrics.AuthoritativeStatesSent);
 						SaturatingIncrement(Metrics.AbsoluteStatesSent);
 						SaturatingIncrement(Metrics.SemanticStateBytes, SemanticStateBytes(State));
@@ -909,24 +1238,19 @@ namespace gargantuan::network {
 				FrameChannel = {};
 			};
 
-			for (const auto &[Id, Runtime] : Characters) {
-				if (!Runtime.PreparedState) continue;
-				auto Visible = Peer.Materialized.find(Id);
-				if (Visible == Peer.Materialized.end()) continue;
-				auto Previous = Peer.Published.find(Id);
-				const bool Refresh = Previous == Peer.Published.end() ||
-									 AuthoritativeTick < Previous->second.LastAbsoluteTick ||
-									 AuthoritativeTick - Previous->second.LastAbsoluteTick >=
-										 Configuration.AbsoluteRefreshTicks;
-				if (!Refresh && Previous->second.Fingerprint == Runtime.PreparedFingerprint) continue;
-				const auto StateBytes = GetCompactCharacterStateEncodedBytes(*Runtime.PreparedState);
+			for (const auto &[Id, Channel] : Peer.Materialized) {
+				auto Runtime = Characters.find(Id);
+				if (Runtime == Characters.end() || !Runtime->second.PreparedState) continue;
+				auto Publication = Peer.Published.find(Id);
+				if (Publication == Peer.Published.end() || !Publication->second.SendThisTick) continue;
+				const auto StateBytes = GetCompactCharacterStateEncodedBytes(*Runtime->second.PreparedState);
 				if (StateBytes == 0 || CharacterStateFrameHeaderBytes + StateBytes > ByteLimit) {
 					SaturatingIncrement(Metrics.ProtocolRejects);
 					continue;
 				}
 				if (Frame.StateCount == Frame.States.size() || EncodedBytes + StateBytes > ByteLimit) Flush();
-				if (Frame.StateCount == 0) FrameChannel = Visible->second;
-				Frame.States[Frame.StateCount++] = *Runtime.PreparedState;
+				if (Frame.StateCount == 0) FrameChannel = Channel;
+				Frame.States[Frame.StateCount++] = *Runtime->second.PreparedState;
 				EncodedBytes += StateBytes;
 			}
 			Flush();
@@ -943,10 +1267,54 @@ namespace gargantuan::network {
 		);
 	}
 
+	CharacterNetworkMetrics AuthoritativeCharacterNetwork::GetMetrics() const {
+		auto Result = Metrics;
+		Result.FullRateRelationships = 0;
+		Result.ReducedRateRelationships = 0;
+		Result.LowRateRelationships = 0;
+		for (const auto &[Connection, Peer] : Peers) {
+			for (const auto &[Character, Publication] : Peer.Published) {
+				auto Runtime = Characters.find(Character);
+				if (Runtime == Characters.end() || !Peer.Materialized.contains(Character)) continue;
+				const bool Owner = Runtime->second.Controller == Connection;
+				const bool Promoted = Runtime->second.SemanticPromotionUntilTick > LastAuthoritativeTick ||
+									  Publication.TemporaryFullRateUntilTick > LastAuthoritativeTick;
+				const auto Tier = Owner || Promoted ? CharacterPublicationTier::FullRate : Publication.Tier;
+				switch (Tier) {
+				case CharacterPublicationTier::FullRate:
+					SaturatingIncrement(Result.FullRateRelationships);
+					break;
+				case CharacterPublicationTier::ReducedRate:
+					SaturatingIncrement(Result.ReducedRateRelationships);
+					break;
+				case CharacterPublicationTier::LowRate:
+					SaturatingIncrement(Result.LowRateRelationships);
+					break;
+				}
+			}
+		}
+		return Result;
+	}
+
+	std::optional<CharacterPublicationTier>
+	AuthoritativeCharacterNetwork::GetPublicationTier(ConnectionId Connection, ObjectId Character) const {
+		auto Peer = Peers.find(Connection);
+		auto Runtime = Characters.find(Character);
+		if (Peer == Peers.end() || Runtime == Characters.end() || !Peer->second.Materialized.contains(Character))
+			return std::nullopt;
+		auto Publication = Peer->second.Published.find(Character);
+		if (Publication == Peer->second.Published.end()) return std::nullopt;
+		const bool Owner = Runtime->second.Controller == Connection;
+		const bool Promoted = Runtime->second.SemanticPromotionUntilTick > LastAuthoritativeTick ||
+							  Publication->second.TemporaryFullRateUntilTick > LastAuthoritativeTick;
+		return Owner || Promoted ? CharacterPublicationTier::FullRate : Publication->second.Tier;
+	}
+
 	struct PredictedCharacterNetwork::ReplicaState {
 		struct PresentationSnapshot {
 			std::uint64_t Tick = 0;
 			CFrame Transform;
+			glm::vec3 Velocity{};
 		};
 		std::weak_ptr<KinematicCharacter> Character;
 		CharacterControlEpoch Epoch;
@@ -1116,8 +1484,7 @@ namespace gargantuan::network {
 		if (!Result.Accepted()) {
 			if (Reliable && OnTerminal)
 				OnTerminal(
-					Connection,
-					SchedulerFailure(Result, "Reliable Character message was rejected by the scheduler")
+					Connection, SchedulerFailure(Result, "Reliable Character message was rejected by the scheduler")
 				);
 			return false;
 		}
@@ -1204,8 +1571,7 @@ namespace gargantuan::network {
 					Match = Index;
 					break;
 				}
-			if (Match == Peer.PendingActionCount ||
-				Peer.PendingActions[Match].Token != Result->RequestedActionToken)
+			if (Match == Peer.PendingActionCount || Peer.PendingActions[Match].Token != Result->RequestedActionToken)
 				return false;
 			for (std::size_t Index = Match + 1; Index < Peer.PendingActionCount; ++Index)
 				Peer.PendingActions[Index - 1] = Peer.PendingActions[Index];
@@ -1213,8 +1579,8 @@ namespace gargantuan::network {
 			Peer.LastActionResult = Result->ActionSequence;
 			if (Peer.PredictedAction && Peer.PredictedAction->ActionSequence == Result->ActionSequence) {
 				const auto Definition = Result->AuthoritativeAction
-										? Actions.find(Result->AuthoritativeAction->ActionToken)
-										: Actions.end();
+											? Actions.find(Result->AuthoritativeAction->ActionToken)
+											: Actions.end();
 				if (Result->Accepted && Result->AuthoritativeAction && Definition != Actions.end() &&
 					Definition->second.Animation == Result->AuthoritativeAction->Animation &&
 					Definition->second.ContentRevision == Result->AuthoritativeAction->ContentRevision) {
@@ -1318,11 +1684,19 @@ namespace gargantuan::network {
 										Presentation.PresentationSnapshotCount - 1) %
 									   Presentation.PresentationSnapshots.size();
 				const auto &Last = Presentation.PresentationSnapshots[LastIndex];
+				const auto TickSpan = State.AuthoritativeTick >= Last.Tick ? State.AuthoritativeTick - Last.Tick : 0;
+				const auto ExpectedTravel = ExpectedTravelDistance(
+					Last.Velocity, State.Velocity, TickSpan, Configuration.SimulationTicksPerSecond
+				);
 				Reset = Reset || State.AuthoritativeTick < Last.Tick ||
 						glm::distance(State.Transform.Position, Last.Transform.Position) >=
-							MaximumHardCorrectionDistance;
+							MaximumHardCorrectionDistance + ExpectedTravel;
 				if (!Reset && State.AuthoritativeTick == Last.Tick) {
-					Presentation.PresentationSnapshots[LastIndex] = {State.AuthoritativeTick, State.Transform};
+					Presentation.PresentationSnapshots[LastIndex] = {
+						State.AuthoritativeTick,
+						State.Transform,
+						State.Velocity,
+					};
 					Presentation.PresentationEpoch = State.ControlEpoch;
 					Presentation.PendingState = State;
 					return true;
@@ -1350,7 +1724,11 @@ namespace gargantuan::network {
 			}
 			const auto Insert = (Presentation.PresentationSnapshotStart + Presentation.PresentationSnapshotCount) %
 								Presentation.PresentationSnapshots.size();
-			Presentation.PresentationSnapshots[Insert] = {State.AuthoritativeTick, State.Transform};
+			Presentation.PresentationSnapshots[Insert] = {
+				State.AuthoritativeTick,
+				State.Transform,
+				State.Velocity,
+			};
 			++Presentation.PresentationSnapshotCount;
 			Presentation.PresentationEpoch = State.ControlEpoch;
 		}
@@ -1381,9 +1759,7 @@ namespace gargantuan::network {
 				if (Definition != Actions.end()) {
 					const auto ActionEnd = Peer.PredictedAction->StartTick + Peer.PredictedAction->DurationTicks;
 					const auto EvaluationTick = std::min(Command.SimulationTick, ActionEnd);
-					auto Delta = Definition->second.EvaluateRootMotion(
-						Peer.LastActionEvaluationTick, EvaluationTick
-					);
+					auto Delta = Definition->second.EvaluateRootMotion(Peer.LastActionEvaluationTick, EvaluationTick);
 					Peer.LastActionEvaluationTick = EvaluationTick;
 					if (Delta) {
 						auto RootResult = CharacterValue->AdmitMotion(
@@ -1704,30 +2080,43 @@ namespace gargantuan::network {
 					[(Replica.PresentationSnapshotStart + Index) % Replica.PresentationSnapshots.size()];
 			};
 			CFrame Presented = SnapshotAt(0).Transform;
-			if (Replica.PresentationSnapshotCount == 1 || TargetTick <= SnapshotAt(0).Tick) {
+			const auto &Newest = SnapshotAt(Replica.PresentationSnapshotCount - 1);
+			if (TargetTick <= SnapshotAt(0).Tick) {
 				Presented = SnapshotAt(0).Transform;
-				if (Replica.PresentationSnapshotCount == 1) SaturatingIncrement(Metrics.InterpolationBufferUnderruns);
-			} else {
-				const auto &Newest = SnapshotAt(Replica.PresentationSnapshotCount - 1);
-				if (TargetTick >= Newest.Tick) {
-					Presented = Newest.Transform;
+			} else if (TargetTick >= Newest.Tick) {
+				Presented = Newest.Transform;
+				const auto ExtrapolationTicks = TargetTick - Newest.Tick;
+				if (ExtrapolationTicks != 0 && ExtrapolationTicks <= Configuration.RemoteExtrapolationLimitTicks) {
+					Presented.Position += Newest.Velocity *
+										  (static_cast<float>(ExtrapolationTicks) /
+										   static_cast<float>(Configuration.SimulationTicksPerSecond));
+					SaturatingIncrement(Metrics.RemoteExtrapolations);
+				} else if (ExtrapolationTicks > Configuration.RemoteExtrapolationLimitTicks) {
+					SaturatingIncrement(Metrics.RemoteExtrapolationHolds);
 					SaturatingIncrement(Metrics.InterpolationBufferUnderruns);
-				} else {
-					for (std::size_t Index = 1; Index < Replica.PresentationSnapshotCount; ++Index) {
-						const auto &Right = SnapshotAt(Index);
-						if (TargetTick > Right.Tick) continue;
-						const auto &Left = SnapshotAt(Index - 1);
-						const auto Span = Right.Tick - Left.Tick;
-						const auto Alpha = Span == 0 ? 1.0
-													 : static_cast<double>(TargetTick - Left.Tick) /
-														   static_cast<double>(Span);
-						Presented = Left.Transform.Lerp(Right.Transform, Alpha);
-						break;
-					}
+				}
+			} else {
+				for (std::size_t Index = 1; Index < Replica.PresentationSnapshotCount; ++Index) {
+					const auto &Right = SnapshotAt(Index);
+					if (TargetTick > Right.Tick) continue;
+					const auto &Left = SnapshotAt(Index - 1);
+					const auto Span = Right.Tick - Left.Tick;
+					const auto Alpha = Span == 0
+										   ? 1.0
+										   : static_cast<double>(TargetTick - Left.Tick) / static_cast<double>(Span);
+					Presented = Left.Transform.Lerp(Right.Transform, Alpha);
+					break;
 				}
 			}
 			const auto Semantic = CharacterValue->GetCFrame();
-			if (glm::distance(Presented.Position, Semantic.Position) >= MaximumHardCorrectionDistance) {
+			const auto ExpectedOffset = ExpectedTravelDistance(
+				Newest.Velocity,
+				Newest.Velocity,
+				Configuration.RemoteInterpolationDelayTicks + Configuration.RemoteExtrapolationLimitTicks,
+				Configuration.SimulationTicksPerSecond
+			);
+			if (glm::distance(Presented.Position, Semantic.Position) >=
+				MaximumHardCorrectionDistance + ExpectedOffset) {
 				CharacterValue->ApplyRuntimePresentationOffset(std::nullopt);
 				Replica.PresentationSnapshotStart = 0;
 				Replica.PresentationSnapshotCount = 0;

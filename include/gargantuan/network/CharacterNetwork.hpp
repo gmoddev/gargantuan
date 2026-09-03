@@ -14,6 +14,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <span>
 #include <vector>
 
 namespace gargantuan {
@@ -37,20 +38,40 @@ namespace gargantuan::network {
 	inline constexpr std::uint32_t DefaultCharacterStateUpdatesPerSecond = 20;
 	inline constexpr std::uint64_t DefaultCharacterAbsoluteRefreshTicks = 60;
 	inline constexpr std::uint64_t DefaultRemoteInterpolationDelayTicks = 6;
+	inline constexpr std::uint64_t DefaultRemoteExtrapolationLimitTicks = 6;
 	inline constexpr std::uint64_t DefaultCharacterInputFreshnessTicks = 6;
+	inline constexpr std::uint32_t DefaultReducedCharacterStateUpdatesPerSecond = 10;
+	inline constexpr std::uint32_t DefaultLowCharacterStateUpdatesPerSecond = 5;
+	inline constexpr std::uint64_t DefaultCharacterImportanceUpdateTicks = 6;
+	inline constexpr std::uint64_t DefaultCharacterPromotionTicks = 6;
+	inline constexpr float DefaultFullRateCharacterDistance = 64.0f;
+	inline constexpr float DefaultReducedRateCharacterDistance = 160.0f;
+	inline constexpr float DefaultCharacterImportanceHysteresis = 16.0f;
+	inline constexpr std::size_t MaximumCharacterPublicationFocusPoints = 4;
 	inline constexpr std::uint64_t TinyCorrectionSmoothingTicks = 3;
 	inline constexpr std::uint64_t SmallCorrectionSmoothingTicks = 6;
+
+	enum class CharacterPublicationTier : std::uint8_t { FullRate, ReducedRate, LowRate };
 
 	struct CharacterNetworkConfiguration {
 		std::uint32_t SimulationTicksPerSecond = DefaultCharacterSimulationTicksPerSecond;
 		std::uint32_t StateUpdatesPerSecond = DefaultCharacterStateUpdatesPerSecond;
+		std::uint32_t ReducedStateUpdatesPerSecond = DefaultReducedCharacterStateUpdatesPerSecond;
+		std::uint32_t LowStateUpdatesPerSecond = DefaultLowCharacterStateUpdatesPerSecond;
 		std::uint64_t AbsoluteRefreshTicks = DefaultCharacterAbsoluteRefreshTicks;
 		std::uint64_t RemoteInterpolationDelayTicks = DefaultRemoteInterpolationDelayTicks;
+		std::uint64_t RemoteExtrapolationLimitTicks = DefaultRemoteExtrapolationLimitTicks;
 		std::uint64_t InputFreshnessTicks = DefaultCharacterInputFreshnessTicks;
+		std::uint64_t ImportanceUpdateTicks = DefaultCharacterImportanceUpdateTicks;
+		std::uint64_t PromotionTicks = DefaultCharacterPromotionTicks;
+		float FullRateDistance = DefaultFullRateCharacterDistance;
+		float ReducedRateDistance = DefaultReducedRateCharacterDistance;
+		float ImportanceHysteresis = DefaultCharacterImportanceHysteresis;
 		std::size_t MaximumStateFrameBytes = MaximumCharacterStateFrameBytes;
 
 		[[nodiscard]] bool IsValid() const;
 		[[nodiscard]] std::uint64_t PublicationIntervalTicks() const;
+		[[nodiscard]] std::uint64_t PublicationIntervalTicks(CharacterPublicationTier Tier) const;
 	};
 
 	struct CharacterActionDefinition {
@@ -101,6 +122,33 @@ namespace gargantuan::network {
 		std::uint64_t HistoryOverflows = 0;
 		std::uint64_t InputFreshnessTimeouts = 0;
 		std::uint64_t MovementPolicyErrors = 0;
+		std::uint64_t ImportanceEvaluations = 0;
+		std::uint64_t ImportanceTierTransitions = 0;
+		std::uint64_t TemporaryPromotions = 0;
+		std::uint64_t ForcedSemanticPublications = 0;
+		std::uint64_t DueStates = 0;
+		std::uint64_t StateSnapshotsBuilt = 0;
+		std::uint64_t StateSnapshotRelationshipUses = 0;
+		std::uint64_t FullRateStatesSent = 0;
+		std::uint64_t ReducedRateStatesSent = 0;
+		std::uint64_t LowRateStatesSent = 0;
+		std::uint64_t FullRateStateBytes = 0;
+		std::uint64_t ReducedRateStateBytes = 0;
+		std::uint64_t LowRateStateBytes = 0;
+		std::uint64_t FullRateStateAgeTicks = 0;
+		std::uint64_t ReducedRateStateAgeTicks = 0;
+		std::uint64_t LowRateStateAgeTicks = 0;
+		std::uint64_t MaximumFullRateStateAgeTicks = 0;
+		std::uint64_t MaximumReducedRateStateAgeTicks = 0;
+		std::uint64_t MaximumLowRateStateAgeTicks = 0;
+		std::uint64_t StateAgeSamples = 0;
+		std::uint64_t StateAgeTicks = 0;
+		std::uint64_t MaximumStateAgeTicks = 0;
+		std::uint64_t FullRateRelationships = 0;
+		std::uint64_t ReducedRateRelationships = 0;
+		std::uint64_t LowRateRelationships = 0;
+		std::uint64_t RemoteExtrapolations = 0;
+		std::uint64_t RemoteExtrapolationHolds = 0;
 		std::uint64_t BytesIn = 0;
 		std::uint64_t BytesOut = 0;
 		std::uint64_t ProtocolRejects = 0;
@@ -111,6 +159,8 @@ namespace gargantuan::network {
 		std::uint64_t StateEncodeCpuNanoseconds = 0;
 		std::uint64_t StateChangeDetectionCpuNanoseconds = 0;
 		std::uint64_t StateFrameAssemblyCpuNanoseconds = 0;
+		std::uint64_t ImportanceEvaluationCpuNanoseconds = 0;
+		std::uint64_t DueSetCpuNanoseconds = 0;
 		std::uint64_t SchedulerSubmitCpuNanoseconds = 0;
 		std::uint64_t ReconciliationCpuNanoseconds = 0;
 		std::uint64_t ReplayCpuNanoseconds = 0;
@@ -152,6 +202,7 @@ namespace gargantuan::network {
 		bool UnregisterCharacter(ObjectId Character, std::uint64_t AuthoritativeTick);
 		bool MarkMaterialized(ConnectionId Connection, ObjectId Character, StateChannelId Channel);
 		bool MarkUnmaterialized(ConnectionId Connection, ObjectId Character);
+		bool SetPeerPublicationFocus(ConnectionId Connection, std::span<const glm::vec3> FocusPoints);
 		[[nodiscard]] std::optional<CharacterControlEpoch>
 		BindControl(ConnectionId Connection, ObjectId Character, std::uint64_t AuthoritativeTick);
 		bool RevokeControl(ObjectId Character, std::uint64_t AuthoritativeTick);
@@ -163,9 +214,9 @@ namespace gargantuan::network {
 		bool
 		PublishState(ObjectId Character, std::uint64_t AuthoritativeTick, bool Teleport = false, bool Reliable = false);
 
-		[[nodiscard]] CharacterNetworkMetrics GetMetrics() const {
-			return Metrics;
-		}
+		[[nodiscard]] CharacterNetworkMetrics GetMetrics() const;
+		[[nodiscard]] std::optional<CharacterPublicationTier>
+		GetPublicationTier(ConnectionId Connection, ObjectId Character) const;
 
 	  private:
 		struct PeerState;
@@ -180,7 +231,6 @@ namespace gargantuan::network {
 		std::map<std::uint32_t, CharacterActionDefinition> Actions;
 		CharacterControlEpoch NextControlEpoch{1};
 		std::uint64_t LastAuthoritativeTick = 0;
-		std::uint64_t LastStatePublicationTick = 0;
 		CharacterNetworkMetrics Metrics;
 		CharacterTerminalHandler OnTerminal;
 
@@ -192,6 +242,8 @@ namespace gargantuan::network {
 		bool SendControl(ConnectionId Connection, const CharacterControlTransition &Transition);
 		[[nodiscard]] std::optional<CharacterAuthoritativeState>
 		BuildState(ObjectId Character, std::uint64_t AuthoritativeTick, bool Teleport = false);
+		void UpdateImportance(std::uint64_t AuthoritativeTick);
+		void PromoteCharacter(ObjectId Character, CharacterState &State, std::uint64_t AuthoritativeTick);
 		void PublishStateFrames(std::uint64_t AuthoritativeTick);
 	};
 

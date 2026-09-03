@@ -79,6 +79,7 @@ namespace gargantuan::network {
 		bool Update(std::uint64_t SimulationTick);
 
 		[[nodiscard]] const PeerRelevanceSelection *GetSelection(ConnectionId Connection) const;
+		[[nodiscard]] std::span<const glm::vec3> GetResolvedFocus(ConnectionId Connection) const;
 		[[nodiscard]] bool IsRuntimeRelevant(ConnectionId Connection, ObjectId Object) const;
 		[[nodiscard]] bool WasSelectionEvaluated(ConnectionId Connection) const;
 		[[nodiscard]] bool IsHealthy() const;
