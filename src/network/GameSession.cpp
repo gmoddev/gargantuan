@@ -150,6 +150,8 @@ namespace gargantuan::network {
 
 		~Implementation() {
 			Stop();
+			if (ServerDescendantAdded) ServerDescendantAdded->Disconnect();
+			if (ServerDescendantRemoved) ServerDescendantRemoved->Disconnect();
 		}
 
 		void RegisterServerObject(const std::shared_ptr<Instance> &Object) {

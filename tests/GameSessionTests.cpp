@@ -113,6 +113,25 @@ namespace {
 		}
 	}
 
+	void TestServerSessionSignalLifetime() {
+		auto Network = SimulatedNetwork::Create({.BaseLatency = 1ms});
+		auto ServerTransport = Network->CreateTransport();
+		auto ServerWorld = std::make_shared<DataModel>();
+		HeadlessRenderer ServerRenderer(Vector2(320, 240));
+		Engine ServerRuntime(
+			ServerWorld,
+			&ServerRenderer,
+			nullptr,
+			EngineProviderConfiguration{.AudioEnabled = false, .Mode = RuntimeMode::NetworkServer}
+		);
+		{
+			GameSession Server(ServerTransport, Configuration(GameSessionRole::Server, "signal-lifetime"), &ServerRuntime);
+			Check(Server.Start().Succeeded(), "server session for signal-lifetime regression starts");
+			Server.Stop();
+		}
+		ServerRuntime.Destroy();
+	}
+
 	void TestPreAcceptanceAndTimeoutRejection() {
 		auto Network = SimulatedNetwork::Create({.BaseLatency = 1ms});
 		auto ServerTransport = Network->CreateTransport();
@@ -1008,6 +1027,7 @@ int main() {
 	try {
 		gargantuan::BootstrapNativeRuntimeSchema();
 		TestProtocolBounds();
+		TestServerSessionSignalLifetime();
 		TestPreAcceptanceAndTimeoutRejection();
 		TestSpoofedReadyPlayerRejection();
 		TestAcceptedConnectionChurn();
