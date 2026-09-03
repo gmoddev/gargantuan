@@ -309,9 +309,10 @@ namespace gargantuan::network {
 				Peer->second.DeferredReliableBytes += Deferred.back().Encoded.size();
 				return {RemoteSendStatus::DeferredForMaterialization};
 			}
+			const auto Delivery = DeliveryFor(Message.Kind);
 			auto Intent = MakeNetworkMessageIntent(
 				Connection,
-				DeliveryFor(Message.Kind),
+				Delivery,
 				TrafficFor(Message.Kind),
 				OrderFor(Message),
 				std::move(Encoded),
@@ -322,11 +323,16 @@ namespace gargantuan::network {
 			if (Submitted.Status == SchedulerSubmitStatus::DroppedUnreliable)
 				return {RemoteSendStatus::DroppedUnreliable};
 			if (!Submitted.Accepted()) {
-				if (Submitted.TerminalDisconnect)
-					TerminalConnections.try_emplace(Connection, *Submitted.TerminalDisconnect);
+				auto Terminal = std::move(Submitted.TerminalDisconnect);
+				if (Delivery == DeliveryMode::ReliableOrdered && !Terminal)
+					Terminal = DisconnectInfo{
+						DisconnectReason::ResourceExhaustion,
+						"Reliable Remote message was rejected by the scheduler",
+					};
+				if (Terminal) TerminalConnections.try_emplace(Connection, *Terminal);
 				return {
 					.Status = RemoteSendStatus::SchedulerRejected,
-					.TerminalDisconnect = std::move(Submitted.TerminalDisconnect),
+					.TerminalDisconnect = std::move(Terminal),
 				};
 			}
 			if (Submitted.Status == SchedulerSubmitStatus::AcceptedWithSupersession)

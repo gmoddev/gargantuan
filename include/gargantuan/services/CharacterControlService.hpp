@@ -7,6 +7,7 @@
 
 #include <functional>
 #include <map>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -31,13 +32,34 @@ namespace gargantuan {
 		using ActionRegistrationHandler = std::function<bool(const network::CharacterActionDefinition &, bool)>;
 		using PredictionModeHandler = std::function<void(bool)>;
 
+		class RuntimeAttachment final {
+			friend class CharacterControlService;
+			std::weak_ptr<CharacterControlService> Owner;
+			std::uint64_t Generation = 0;
+
+			RuntimeAttachment(std::weak_ptr<CharacterControlService> OwnerValue, std::uint64_t GenerationValue);
+
+		  public:
+			RuntimeAttachment() = default;
+			~RuntimeAttachment();
+			RuntimeAttachment(const RuntimeAttachment &) = delete;
+			RuntimeAttachment &operator=(const RuntimeAttachment &) = delete;
+			RuntimeAttachment(RuntimeAttachment &&Other) noexcept;
+			RuntimeAttachment &operator=(RuntimeAttachment &&Other) noexcept;
+			void Reset();
+			[[nodiscard]] bool IsValid() const;
+		};
+
 		CharacterControlService();
 		~CharacterControlService() override;
 
 		void ConfigureRuntime(RuntimeMode Mode);
-		void AttachClientBridge(ClientSubmitHandler Submit, ClientActionHandler Action);
-		void AttachActionRegistration(ActionRegistrationHandler Register);
-		void AttachPredictionMode(PredictionModeHandler Handler);
+		[[nodiscard]] std::optional<RuntimeAttachment> AttachRuntime(
+			ClientSubmitHandler Submit,
+			ClientActionHandler Action,
+			ActionRegistrationHandler Register,
+			PredictionModeHandler Prediction
+		);
 		void BeginSimulationFrame(std::uint64_t Tick, float DeltaSeconds);
 		void DetachRuntime();
 
@@ -65,6 +87,8 @@ namespace gargantuan {
 		ClientActionHandler ClientAction;
 		ActionRegistrationHandler ActionRegistration;
 		PredictionModeHandler PredictionMode;
+		std::uint64_t RuntimeAttachmentGeneration = 0;
+		std::uint64_t NextRuntimeAttachmentGeneration = 1;
 		std::uint64_t SimulationTick = 0;
 		float SimulationDeltaSeconds = 0.0f;
 		lua_State *PolicyState = nullptr;
@@ -76,6 +100,7 @@ namespace gargantuan {
 		std::map<std::uint32_t, std::string> ActionNamesByToken;
 
 		[[nodiscard]] static std::uint32_t ActionToken(std::string_view Name);
+		void DetachRuntime(std::uint64_t Generation);
 		void ClearPolicyReferences();
 	};
 }

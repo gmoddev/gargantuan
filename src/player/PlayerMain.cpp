@@ -16,6 +16,7 @@
 #include <filesystem>
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -90,6 +91,9 @@ int main(int argc, char *argv[]) {
 	Program.add_argument("--max-frames").scan<'i', int>().default_value(0).help("bounded test-only frame count");
 	Program.add_argument("--server-bind").default_value(std::string()).help("host:port for a network game server");
 	Program.add_argument("--connect").default_value(std::string()).help("host:port for a network game client");
+	Program.add_argument("--allow-insecure-development-network")
+		.flag()
+		.help("allow DevelopmentLocal networking beyond loopback; authentication is not provided");
 	try {
 		Program.parse_args(argc, argv);
 	} catch (const std::exception &) {
@@ -99,12 +103,21 @@ int main(int argc, char *argv[]) {
 
 	const auto ServerText = Program.get<std::string>("--server-bind");
 	const auto ClientText = Program.get<std::string>("--connect");
+	const bool AllowInsecureDevelopmentNetwork = Program.is_used("--allow-insecure-development-network");
+	const auto ServerEndpoint = ServerText.empty() ? std::nullopt : ParseEndpoint(ServerText);
+	const auto ClientEndpoint = ClientText.empty() ? std::nullopt : ParseEndpoint(ClientText);
 	if ((!ServerText.empty() && !ClientText.empty()) || (!ServerText.empty() && !ParseEndpoint(ServerText)) ||
 		(!ClientText.empty() && !ParseEndpoint(ClientText)) ||
+		(ServerEndpoint && !network::IsLoopbackTransportEndpoint(*ServerEndpoint) &&
+		 !AllowInsecureDevelopmentNetwork) ||
+		(ClientEndpoint && !network::IsLoopbackTransportEndpoint(*ClientEndpoint) &&
+		 !AllowInsecureDevelopmentNetwork) ||
 		(Program.is_used("--session-smoke") && ServerText.empty() && ClientText.empty())) {
 		std::cerr << "GargantuanPlayer network endpoint arguments are invalid.\n";
 		return 2;
 	}
+	if (AllowInsecureDevelopmentNetwork && (ServerEndpoint || ClientEndpoint))
+		std::cerr << "[Network:Security] DevelopmentLocal networking is exposed without peer authentication.\n";
 #if !defined(GARGANTUAN_WITH_GNS)
 	if (!ServerText.empty() || !ClientText.empty()) {
 		std::cerr << "GargantuanPlayer was built without production game transport support.\n";
@@ -166,6 +179,7 @@ int main(int argc, char *argv[]) {
 					.Role = network::GameSessionRole::Client,
 					.Endpoint = *ParseEndpoint(ClientText),
 					.Limits = network::GameSessionConfiguration::DefaultLimits(),
+					.AllowInsecureDevelopmentNetwork = AllowInsecureDevelopmentNetwork,
 				}
 			);
 			if (!Session->Start().Succeeded()) throw std::runtime_error("client game-session endpoint failed to start");
@@ -217,6 +231,7 @@ int main(int argc, char *argv[]) {
 					.Role = network::GameSessionRole::Server,
 					.Endpoint = *ParseEndpoint(ServerText),
 					.Limits = network::GameSessionConfiguration::DefaultLimits(),
+					.AllowInsecureDevelopmentNetwork = AllowInsecureDevelopmentNetwork,
 				},
 				Runtime.get()
 			);

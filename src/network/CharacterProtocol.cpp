@@ -214,7 +214,15 @@ namespace gargantuan::network {
 
 	bool CharacterActionState::IsValid() const {
 		return ActionSequence.IsValid() && ActionToken != 0 && Animation.IsValid() && ContentRevision.IsValid() &&
-			   StartTick != 0 && DurationTicks != 0;
+			   StartTick != 0 && DurationTicks != 0 &&
+			   DurationTicks <= std::numeric_limits<std::uint64_t>::max() - StartTick;
+	}
+
+	bool CharacterActionResult::IsValid() const {
+		return Character.IsValid() && ControlEpoch.IsValid() && ActionSequence.IsValid() &&
+			   RequestedActionToken != 0 && Accepted == AuthoritativeAction.has_value() &&
+			   (!AuthoritativeAction ||
+				(AuthoritativeAction->IsValid() && AuthoritativeAction->ActionSequence == ActionSequence));
 	}
 
 	bool CharacterAuthoritativeState::IsValid() const {
@@ -241,8 +249,7 @@ namespace gargantuan::network {
 	}
 
 	bool CharacterStateFrame::IsValid() const {
-		if (ServerTick == 0 || !FrameSequence.IsValid() || !MaterializationEpoch.IsValid() ||
-			MaterializationEpoch.Value() > std::numeric_limits<std::uint16_t>::max() || StateCount == 0 ||
+		if (ServerTick == 0 || !FrameSequence.IsValid() || !MaterializationEpoch.IsValid() || StateCount == 0 ||
 			StateCount > States.size())
 			return false;
 		ObjectId Previous;
@@ -263,6 +270,7 @@ namespace gargantuan::network {
 					return Value.Bound ? CharacterMessageKind::ControlBind : CharacterMessageKind::ControlUnbind;
 				if constexpr (std::is_same_v<Type, CharacterInputCommand>) return CharacterMessageKind::Input;
 				if constexpr (std::is_same_v<Type, CharacterActionRequest>) return CharacterMessageKind::ActionRequest;
+				if constexpr (std::is_same_v<Type, CharacterActionResult>) return CharacterMessageKind::ActionResult;
 				if constexpr (std::is_same_v<Type, CharacterStateFrame>) return CharacterMessageKind::StateFrame;
 				return CharacterMessageKind::State;
 			},
@@ -276,10 +284,11 @@ namespace gargantuan::network {
 			if (!Valid)
 				return SerializationFailure(SerializationErrorCode::InvalidValue, "Character message is invalid");
 			const bool StateFrame = std::holds_alternative<CharacterStateFrame>(Message);
+			const bool Modern = StateFrame || std::holds_alternative<CharacterActionResult>(Message);
 			GameBinaryWriter Output(StateFrame ? MaximumCharacterStateFrameBytes : MaximumCharacterFrameBytes);
 			Output.Bytes.reserve(StateFrame ? MaximumCharacterStateFrameBytes : MaximumCharacterFrameBytes);
 			Output.Integer(CharacterMagic);
-			Output.Integer(StateFrame ? CharacterProtocolVersion : LegacyCharacterProtocolVersion);
+			Output.Integer(Modern ? CharacterProtocolVersion : LegacyCharacterProtocolVersion);
 			Output.Integer(static_cast<std::uint8_t>(GetCharacterMessageKind(Message)));
 			Output.Integer<std::uint8_t>(0);
 			std::visit(
@@ -289,7 +298,7 @@ namespace gargantuan::network {
 						Output.Integer(Value.ServerTick);
 						Output.Integer(Value.FrameSequence.Value());
 						Output.Integer(Value.StateCount);
-						Output.Integer(static_cast<std::uint16_t>(Value.MaterializationEpoch.Value()));
+						Output.Integer(Value.MaterializationEpoch.Value());
 						for (const auto &State : Value.GetStates())
 							if (!WriteCompactState(Output, State)) return;
 					} else {
@@ -313,6 +322,21 @@ namespace gargantuan::network {
 							Output.Integer(Value.BasedOnInput.Value());
 							Output.Integer(Value.RequestedActionToken);
 							Output.Integer<std::uint32_t>(0);
+						} else if constexpr (std::is_same_v<Type, CharacterActionResult>) {
+							Output.Integer(Value.ActionSequence.Value());
+							Output.Integer(Value.RequestedActionToken);
+							Output.Integer<std::uint8_t>(Value.Accepted ? 1 : 0);
+							Output.Integer<std::uint8_t>(0);
+							Output.Integer<std::uint16_t>(0);
+							if (Value.AuthoritativeAction) {
+								Output.Integer(Value.AuthoritativeAction->ActionSequence.Value());
+								Output.Integer(Value.AuthoritativeAction->ActionToken);
+								WriteAssetId(Output, Value.AuthoritativeAction->Animation);
+								WriteContentId(Output, Value.AuthoritativeAction->ContentRevision);
+								Output.Integer(Value.AuthoritativeAction->StartTick);
+								Output.Integer(Value.AuthoritativeAction->DurationTicks);
+								Output.Integer<std::uint32_t>(0);
+							}
 						} else {
 							Output.Integer(Value.StateSequence.Value());
 							Output.Integer(Value.AcknowledgedInput.Value());
@@ -362,12 +386,11 @@ namespace gargantuan::network {
 			if (Reserved != 0)
 				return SerializationFailure(SerializationErrorCode::InvalidValue, "Character frame header is invalid");
 
-			if (Version == CharacterProtocolVersion) {
-				if (KindValue != static_cast<std::uint8_t>(CharacterMessageKind::StateFrame))
-					return SerializationFailure(SerializationErrorCode::InvalidValue, "Character v3 opcode is invalid");
+			if (Version == CharacterProtocolVersion &&
+				KindValue == static_cast<std::uint8_t>(CharacterMessageKind::StateFrame)) {
 				CharacterStateFrame Frame;
 				std::uint64_t FrameSequence = 0;
-				std::uint16_t MaterializationEpoch = 0;
+				std::uint64_t MaterializationEpoch = 0;
 				if (!Input.Integer(Frame.ServerTick) || !Input.Integer(FrameSequence) ||
 					!Input.Integer(Frame.StateCount) || !Input.Integer(MaterializationEpoch))
 					return SerializationFailure(SerializationErrorCode::TruncatedInput, Input.Error);
@@ -388,6 +411,47 @@ namespace gargantuan::network {
 					);
 				return CharacterMessage(Frame);
 			}
+			if (Version == CharacterProtocolVersion &&
+				KindValue == static_cast<std::uint8_t>(CharacterMessageKind::ActionResult)) {
+				CharacterActionResult Result;
+				std::uint64_t Epoch = 0, Sequence = 0;
+				std::uint8_t Accepted = 0, ReservedByte = 0;
+				std::uint16_t ReservedShort = 0;
+				if (!ReadBinaryObjectId(Input, Result.Character) || !Input.Integer(Epoch) ||
+					!Input.Integer(Sequence) || !Input.Integer(Result.RequestedActionToken) ||
+					!Input.Integer(Accepted) || !Input.Integer(ReservedByte) || !Input.Integer(ReservedShort))
+					return SerializationFailure(SerializationErrorCode::TruncatedInput, Input.Error);
+				if (Epoch == 0 || Accepted > 1 || ReservedByte != 0 || ReservedShort != 0)
+					return SerializationFailure(
+						SerializationErrorCode::InvalidValue, "Character action-result header is invalid"
+					);
+				Result.ControlEpoch = CharacterControlEpoch(Epoch);
+				Result.ActionSequence = CharacterActionSequence(Sequence);
+				Result.Accepted = Accepted != 0;
+				if (Result.Accepted) {
+					CharacterActionState Action;
+					std::uint64_t ActionSequence = 0;
+					std::uint32_t ReservedTail = 0;
+					if (!Input.Integer(ActionSequence) || !Input.Integer(Action.ActionToken) ||
+						!ReadAssetId(Input, Action.Animation) || !ReadContentId(Input, Action.ContentRevision) ||
+						!Input.Integer(Action.StartTick) || !Input.Integer(Action.DurationTicks) ||
+						!Input.Integer(ReservedTail))
+						return SerializationFailure(SerializationErrorCode::TruncatedInput, Input.Error);
+					if (ReservedTail != 0)
+						return SerializationFailure(
+							SerializationErrorCode::InvalidValue, "Character action-result reserved bytes are nonzero"
+						);
+					Action.ActionSequence = CharacterActionSequence(ActionSequence);
+					Result.AuthoritativeAction = Action;
+				}
+				if (!Input.Complete() || !Result.IsValid())
+					return SerializationFailure(
+						SerializationErrorCode::InvalidValue, "Character action result contains trailing or invalid data"
+					);
+				return CharacterMessage(Result);
+			}
+			if (Version == CharacterProtocolVersion)
+				return SerializationFailure(SerializationErrorCode::InvalidValue, "Character v4 opcode is invalid");
 
 			if (Version != LegacyCharacterProtocolVersion)
 				return SerializationFailure(

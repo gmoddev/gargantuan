@@ -1,12 +1,15 @@
 ---
 status: current
 owner: networking
-last_verified: 2026-09-02
+last_verified: 2026-09-03
 related_code:
   - include/gargantuan/network/GameNetworkingSocketsTransport.hpp
   - src/network/GameNetworkingSocketsTransport.cpp
   - cmake/GameNetworkingSockets.cmake
   - tests/GameNetworkingSocketsTransportTests.cpp
+  - tests/RemoteGnsTests.cpp
+  - tests/CharacterNetworkGnsTests.cpp
+  - tests/GameSessionGnsTests.cpp
 related_adrs:
   - docs/src/content/docs/developing/networking-architecture.mdx
 ---
@@ -31,14 +34,26 @@ unrelated tests do not inherit GNS or Protobuf; no GNS header or native handle
 appears in Gargantuan's public transport contracts. Examples, tools, GNS tests,
 ICE, Steam WebRTC, and the shared GNS target are disabled.
 Windows uses BCrypt and the reference Curve25519 implementation. Other platforms
-use OpenSSL and remain configured but were not verified in this milestone.
+use OpenSSL. Foundation 3E.1 verified Linux x86-64 with Clang 19 in Release mode
+through the base adapter, Remote, Character, and complete GameSession localhost
+tests. macOS remains configured but unverified.
 
 GNS requires Protobuf. `cmake/gns/vcpkg.json` records a pinned vcpkg manifest
 for Protobuf and OpenSSL on non-Windows systems. A normal manifest build can use
 the vcpkg toolchain with `VCPKG_MANIFEST_DIR` set to `cmake/gns`. The milestone
-verified 64-bit Windows MSVC Debug and Release configurations; Linux and macOS
-are supported by the selected upstream backend but require platform CI evidence
-before Gargantuan claims them as verified configurations.
+verified 64-bit Windows MSVC Debug and Release configurations. Foundation 3E.1
+adds Linux Clang 19 Release evidence; macOS still requires platform CI evidence
+before Gargantuan claims it as a verified configuration.
+
+The adapter calls the pinned `steamnetworkingsockets_flat.h` entry points instead
+of applying C++ virtual dispatch across the upstream static library's
+`-fno-rtti` boundary. These entry points, their opaque interface handle, and all
+native connection handles remain private to the adapter. A GNS-on UBSan probe
+also reaches a function-pointer signature mismatch inside the pinned upstream
+`steamnetworkingsockets_lowlevel.h`; no sanitizer suppression was added. The
+complete Gargantuan ASan/UBSan/LSan suite is therefore validated at the normal
+GNS-off core boundary, while the optional backend has the four clean Release
+localhost executions above.
 
 ## Identity and lifecycle mapping
 
@@ -178,3 +193,10 @@ disconnect. Packaged headless server and client processes use the same adapter.
 External authentication tickets, general realtime physics ownership, Node,
 spatial interest management, and Studio multiplayer orchestration remain
 unimplemented.
+
+Foundation 3E.1 narrows the unauthenticated DevelopmentLocal path above this
+adapter: GameSession accepts only parsed IPv4 loopback or exact IPv6 loopback
+unless the native host explicitly enables insecure development and logs a
+`[Network:Security]` warning. This restriction does not replace the deferred
+GNS ticket/identity protocol. Adapter terminal results are drained through
+peer- versus session-scoped teardown; no GNS callback owns world destruction.

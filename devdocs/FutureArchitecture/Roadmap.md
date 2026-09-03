@@ -47,6 +47,15 @@ defect throughput.
   materialization epoch without changing the 28-byte batch header. Player
   identity remains globally visible; remote Character descendants are spatial.
   Adaptive cadence and full SpatialAddress/region topology remain future work.
+- Character / Replication Foundation 3E.1 makes GameSession acquisition and
+  teardown transactional, uses generation-scoped CharacterControl callback
+  leases, enforces terminal-peer reliable publication, and bounds transport
+  event polling so admission bursts cannot outrun committed journal cursors.
+  GCHR v4 widens materialization epochs to 64 bits, returns one reliable result
+  per action request, and applies the final root-motion interval.
+  DevelopmentLocal networking is loopback-only unless the native host
+  explicitly opts into the unauthenticated development override. Adaptive
+  cadence remains 3F work.
 - Environment / Lighting Foundation 1 establishes canonical saved Lighting and
   Sky semantics, renderer-neutral incremental publication, AssetService-owned
   coherent face residency, and the SDL shadow/Sky/opaque/GUI pipeline. Local

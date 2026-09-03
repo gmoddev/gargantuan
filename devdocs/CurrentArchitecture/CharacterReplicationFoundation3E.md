@@ -1,7 +1,7 @@
 ---
 status: current
 owner: networking
-last_verified: 2026-09-02
+last_verified: 2026-09-03
 related_code:
   - include/gargantuan/network/ReplicationRelevance.hpp
   - include/gargantuan/network/ReplicationCoordinator.hpp
@@ -185,13 +185,14 @@ property delta is coalesced and the eventual dependency enter emits the current
 fixup only after the target is known.
 
 Structural frames retain the peer `ReplicationEpoch`, reliable sequence, and
-generation-bearing `ObjectId`. GCHR v3 additionally uses the former 16-bit
-state-frame reserved field as a bounded peer materialization epoch. The server
-and client advance it on every accepted Character materialize/unmaterialize
-transition. A delayed unreliable frame from before leave/reentry is consumed
-and counted as stale, but cannot mutate the new replica or restore prediction,
-interpolation, or action state. The compact state-frame header remains 28 bytes,
-so the established 15-state/1,200-byte batch ceiling is unchanged.
+generation-bearing `ObjectId`. Foundation 3E.1 widens the GCHR v4 peer
+materialization epoch from 16 to 64 bits. The server and client advance it on
+every accepted Character materialize/unmaterialize transition. A delayed frame
+from before leave/reentry is consumed and counted as stale, but cannot mutate
+the new replica or restore prediction, interpolation, or action state. The
+state-frame header is now 34 bytes and retains the 15-state/1,200-byte batch
+ceiling. See `CharacterNetworkingFoundation3E1.md` for exhaustion and reliable
+commit behavior.
 
 ## Production session integration
 
@@ -286,12 +287,12 @@ proportional to the bounded transition slice. Only initial index construction
 or explicit journal-overflow resnapshot scans the complete world, neither of
 which is a per-peer steady-state scan.
 
-The unchanged all-relevant 500-moving-Character, 20 Hz GCHR fixture produced
-759,040 state bytes/s and 762,640 bytes/s including input in 740 messages/s,
-exactly matching the established 3C network totals. Restricting publication to
-50 of 500 produced 76,240 state bytes/s and 79,840 bytes/s including input in
-140 messages/s. GCHR v3 therefore preserves batching/cadence while sparse
-relevance removes unnecessary Character states.
+The original all-relevant 500-moving-Character, 20 Hz GCHR v3 fixture produced
+759,040 state bytes/s and 762,640 bytes/s including input in 740 messages/s.
+Foundation 3E.1 retains the same batching/cadence and adds six header bytes per
+state frame for the widened generation. The current measured v4 totals are
+recorded in `CharacterNetworkingFoundation3E1.md` and the milestone report;
+sparse relevance still removes unnecessary Character states.
 
 `gargantuan_replication_relevance_tests` covers owner pinning, initial
 near/far selection, dependency closure, global remote Players, stable

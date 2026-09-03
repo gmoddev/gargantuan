@@ -16,13 +16,13 @@
 
 namespace gargantuan::network {
 	inline constexpr std::uint16_t LegacyCharacterProtocolVersion = 1;
-	inline constexpr std::uint16_t CharacterProtocolVersion = 3;
+	inline constexpr std::uint16_t CharacterProtocolVersion = 4;
 	inline constexpr std::size_t MaximumCharacterFrameBytes = 256;
 	inline constexpr std::size_t MaximumCharacterStateFrameBytes = 1200;
 	inline constexpr std::size_t MaximumCharacterStatesPerFrame = 15;
 	inline constexpr std::size_t CompactCharacterStateBytes = 74;
 	inline constexpr std::size_t CompactCharacterActionStateBytes = 72;
-	inline constexpr std::size_t CharacterStateFrameHeaderBytes = 28;
+	inline constexpr std::size_t CharacterStateFrameHeaderBytes = 34;
 	inline constexpr float CompactCharacterVelocityResolution = 1.0f / 64.0f;
 	inline constexpr float MaximumCompactCharacterVelocity = 32767.0f / 64.0f;
 	inline constexpr float CompactCharacterUnitResolution = 1.0f / 32767.0f;
@@ -30,12 +30,13 @@ namespace gargantuan::network {
 	inline constexpr float MaximumCharacterMoveIntentMagnitude = 1.001f;
 
 	enum class CharacterMessageKind : std::uint8_t {
-		ControlBind,
-		ControlUnbind,
-		Input,
-		ActionRequest,
-		State,
-		StateFrame,
+		ControlBind = 0,
+		ControlUnbind = 1,
+		Input = 2,
+		ActionRequest = 3,
+		State = 4,
+		StateFrame = 5,
+		ActionResult = 6,
 	};
 
 	enum class CharacterInputFlag : std::uint8_t {
@@ -94,6 +95,17 @@ namespace gargantuan::network {
 		[[nodiscard]] bool IsValid() const;
 	};
 
+	struct CharacterActionResult {
+		ObjectId Character;
+		CharacterControlEpoch ControlEpoch;
+		CharacterActionSequence ActionSequence;
+		std::uint32_t RequestedActionToken = 0;
+		bool Accepted = false;
+		std::optional<CharacterActionState> AuthoritativeAction;
+
+		[[nodiscard]] bool IsValid() const;
+	};
+
 	struct CharacterAuthoritativeState {
 		ObjectId Character;
 		CharacterControlEpoch ControlEpoch;
@@ -133,6 +145,7 @@ namespace gargantuan::network {
 		CharacterControlTransition,
 		CharacterInputCommand,
 		CharacterActionRequest,
+		CharacterActionResult,
 		CharacterAuthoritativeState,
 		CharacterStateFrame>;
 

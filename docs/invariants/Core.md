@@ -199,6 +199,37 @@ Tests should enforce them where practical.
 11. Peer unpublish is not server destruction. Reentry publishes current
     authoritative state, never historical off-interest backlog, and ObjectId
     generation rules remain authoritative in both cases.
+12. Every externally registered session callback has explicit scoped ownership.
+    `Failed` and `Closed` sessions own no live external callback, peer, trusted
+    LocalPlayer, exposed client replica, or runtime attachment.
+13. Peer and session failure are distinct. One peer's terminal reliable
+    scheduler, protocol, Remote, GCHR, or materialization failure cannot leave
+    that peer active and does not terminate unrelated server peers.
+14. A reliable replication view may advance before local scheduler admission
+    only when rejection immediately destroys the affected peer. No live peer
+    can derive later work from an undelivered cursor, KnownObjects, or
+    RelevantObjects state.
+15. Remote and Character materialization follow accepted structural
+    materialization. Registry membership implies successful owning-subsystem
+    registration; a failed registration cannot precommit live session state.
+16. Local prediction and replay history change only after the corresponding
+    outbound semantic input was admitted by the local scheduler. A lossy drop
+    does not move the predicted Character.
+17. Every admitted Character action request has at most one authoritative
+    semantic result. Rejection does not cancel an unrelated active action, and
+    root motion integrates every interval in `[StartTick, StartTick + Duration)`.
+18. Client runtime attachment is an atomic Ready commit. Failed bootstrap leaves
+    no control callback, gameplay manager, pending action, prediction history,
+    scheduler peer, trusted LocalPlayer, or falsely visible accepted replica.
+19. Character materialization generations are 64-bit monotonic values that
+    refuse exhaustion instead of wrapping. Exhaustion is terminal only for the
+    affected peer (or the client's one session).
+20. `GameSession` is one-shot: `Start` is valid only from `Created`, `Stop` is
+    idempotent and terminal, and restart after `Closed` or `Failed` is rejected.
+    Status values describe lifecycle but never substitute for resource truth.
+21. `DevelopmentLocal` accepts parsed loopback endpoints only unless the native
+    host explicitly enables the insecure-development override. That override
+    is not authentication or identity proof.
 
 ## Changes requiring architecture review
 

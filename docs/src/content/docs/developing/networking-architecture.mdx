@@ -406,6 +406,12 @@ of the accepted decisions above.
   dependency-closed structural Publish/Unpublish and GCHR materialization.
   Client Luau cannot request arbitrary objects or pins. Adaptive cadence,
   priority, and full region topology remain later work.
+- [x] **Harden session transactionality before 3F.** GameSession is explicitly
+  one-shot; runtime callbacks use scoped generation-safe ownership; terminal
+  reliable admission removes only the affected peer; client bootstrap commits
+  at accepted ClientReady; action results remain per request; root motion
+  includes its final interval; materialization epochs are 64-bit; and
+  DevelopmentLocal is loopback-only without an explicit insecure host override.
 
 Node integration for discovery and join tickets can proceed independently once
 the handshake contract exists. Collaborative editing remains later work.

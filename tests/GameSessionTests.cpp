@@ -6,14 +6,18 @@
 #include "gargantuan/classes/Script.hpp"
 #include "gargantuan/filesystem/DiskFilesystem.hpp"
 #include "gargantuan/network/GameSession.hpp"
+#include "gargantuan/network/CharacterNetwork.hpp"
 #include "gargantuan/network/GameSessionProtocol.hpp"
 #include "gargantuan/network/SimulatedTransport.hpp"
 #include "gargantuan/packaging/PackageBuilder.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/render/Renderer.hpp"
 #include "gargantuan/services/AssetService.hpp"
+#include "gargantuan/services/CharacterControlService.hpp"
 #include "gargantuan/services/Players.hpp"
+#include "../src/network/GameSessionTestAccess.hpp"
 
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -47,6 +51,7 @@ namespace {
 			.Limits = GameSessionConfiguration::DefaultLimits(),
 			.HandshakeTimeoutTicks = 120,
 			.ClientNonce = Role == GameSessionRole::Client ? 0x12345678abcdefull : 0,
+			.AllowInsecureDevelopmentNetwork = true,
 		};
 	}
 
@@ -130,6 +135,221 @@ namespace {
 			Server.Stop();
 		}
 		ServerRuntime.Destroy();
+	}
+
+	void TestSessionOwnershipAndEndpointPolicy() {
+		Check(
+			IsLoopbackTransportEndpoint({"127.0.0.1", 27020}) &&
+				IsLoopbackTransportEndpoint({"127.255.10.9", 27020}) &&
+				IsLoopbackTransportEndpoint({"::1", 27020}) &&
+				!IsLoopbackTransportEndpoint({"127.example.com", 27020}) &&
+				!IsLoopbackTransportEndpoint({"127.0.0.1.example.com", 27020}) &&
+				!IsLoopbackTransportEndpoint({"127.0.0.1x", 27020}) &&
+				!IsLoopbackTransportEndpoint({"127.0.0.1.", 27020}) &&
+				!IsLoopbackTransportEndpoint({"0127.0.0.1", 27020}) &&
+				!IsLoopbackTransportEndpoint({"10.0.0.2", 27020}),
+			"DevelopmentLocal loopback validation uses parsed address semantics without prefix trust"
+		);
+		auto Restricted = Configuration(GameSessionRole::Server, "10.0.0.2");
+		Restricted.AllowInsecureDevelopmentNetwork = false;
+		Check(
+			!Restricted.IsValid() && Configuration(GameSessionRole::Server, "10.0.0.2").IsValid(),
+			"non-loopback DevelopmentLocal endpoints require the explicit insecure-development override"
+		);
+
+		auto World = std::make_shared<DataModel>();
+		auto Control = std::dynamic_pointer_cast<CharacterControlService>(
+			World->GetService("CharacterControlService")
+		);
+		auto First = Control->AttachRuntime({}, {}, {}, {});
+		auto Overlap = Control->AttachRuntime({}, {}, {}, {});
+		Check(
+			First && First->IsValid() && !Overlap,
+			"CharacterControl accepts one explicit scoped runtime owner and rejects overlapping attachment"
+		);
+		Control->DetachRuntime();
+		Check(First && !First->IsValid(), "a stale CharacterControl lease observes broad engine shutdown detachment");
+		auto Replacement = Control->AttachRuntime({}, {}, {}, {});
+		First.reset();
+		Check(
+			Replacement && Replacement->IsValid(),
+			"releasing a stale CharacterControl lease cannot detach a fresh attachment generation"
+		);
+		Replacement.reset();
+
+		auto Network = SimulatedNetwork::Create({.BaseLatency = 1ms});
+		auto Transport = Network->CreateTransport();
+		HeadlessRenderer Renderer(Vector2(320, 240));
+		Engine Runtime(
+			World,
+			&Renderer,
+			nullptr,
+			EngineProviderConfiguration{.AudioEnabled = false, .Mode = RuntimeMode::NetworkServer}
+		);
+		{
+			GameSession Unstarted(
+				Transport, Configuration(GameSessionRole::Server, "one-shot-session"), &Runtime
+			);
+			Check(
+				Unstarted.GetStatus() == GameSessionStatus::Created,
+				"a newly constructed GameSession owns no started transport or callback lifetime"
+			);
+		}
+		auto AfterUnstarted = Runtime.CharacterControl->AttachRuntime({}, {}, {}, {});
+		Check(
+			AfterUnstarted && AfterUnstarted->IsValid(),
+			"destroying an unstarted GameSession leaves no stale CharacterControl callback owner"
+		);
+		AfterUnstarted.reset();
+		GameSession Session(Transport, Configuration(GameSessionRole::Server, "one-shot-session"), &Runtime);
+		Check(Session.Start().Succeeded(), "one-shot GameSession starts once");
+		Session.Stop();
+		Check(
+			Session.GetStatus() == GameSessionStatus::Closed &&
+				Session.Start().Status == TransportOperationStatus::InvalidState,
+			"GameSession Stop is terminal and restart is truthfully rejected"
+		);
+		Session.Stop();
+		auto AfterStop = Runtime.CharacterControl->AttachRuntime({}, {}, {}, {});
+		Check(
+			AfterStop && AfterStop->IsValid(),
+			"terminal session cleanup releases only its matching CharacterControl attachment"
+		);
+		AfterStop.reset();
+		Runtime.Destroy();
+	}
+
+	void TestRegistrationCommitAfterCapacityFailure() {
+		auto World = std::make_shared<DataModel>();
+		std::vector<std::shared_ptr<KinematicCharacter>> Characters;
+		Characters.reserve(MaximumNetworkCharacters + 1);
+		for (std::size_t Index = 0; Index <= MaximumNetworkCharacters; ++Index) {
+			auto Character = std::make_shared<KinematicCharacter>();
+			Character->SetPosition({static_cast<float>(Index) * 2.0f, 6.0f, 0.0f});
+			Character->SetParent(World);
+			Characters.push_back(std::move(Character));
+		}
+		HeadlessRenderer Renderer(Vector2(64, 64));
+		Engine Runtime(
+			World,
+			&Renderer,
+			nullptr,
+			EngineProviderConfiguration{.AudioEnabled = false, .Mode = RuntimeMode::NetworkServer}
+		);
+		auto Network = SimulatedNetwork::Create({.BaseLatency = 1ms});
+		GameSession Overflow(
+			Network->CreateTransport(), Configuration(GameSessionRole::Server, "registration-capacity"), &Runtime
+		);
+		Check(
+			!Overflow.Start().Succeeded() && Overflow.GetStatus() == GameSessionStatus::Failed,
+			"Character registry capacity failure aborts server session acquisition before a live callback owner commits"
+		);
+		Characters.back()->Destroy();
+		Characters.pop_back();
+		GameSession Retry(
+			Network->CreateTransport(), Configuration(GameSessionRole::Server, "registration-capacity-retry"), &Runtime
+		);
+		Check(
+			Retry.Start().Succeeded(),
+			"a fresh session can register the exact Character capacity after the failed candidate is removed"
+		);
+		Retry.Stop();
+		Runtime.Destroy();
+	}
+
+	void TestClientBootstrapFailureMatrix() {
+		using detail::GameSessionFailurePoint;
+		using detail::GameSessionTestAccess;
+		const std::array Cases{
+			std::pair{GameSessionFailurePoint::TransportStart, "transport start"},
+			std::pair{GameSessionFailurePoint::SchedulerRegistration, "scheduler registration"},
+			std::pair{GameSessionFailurePoint::ReplicationPeerCreation, "replication peer creation"},
+			std::pair{GameSessionFailurePoint::LocalPlayerResolution, "LocalPlayer resolution"},
+			std::pair{GameSessionFailurePoint::RemoteManagerPeerCreation, "RemoteManager peer creation"},
+			std::pair{
+				GameSessionFailurePoint::PredictedCharacterPeerCreation,
+				"predicted Character peer creation"
+			},
+			std::pair{GameSessionFailurePoint::RuntimeCallbackAttachment, "runtime callback attachment"},
+			std::pair{GameSessionFailurePoint::ClientGraphSynchronization, "client graph synchronization"},
+			std::pair{GameSessionFailurePoint::ClientReadySerialization, "ClientReady serialization"},
+			std::pair{
+				GameSessionFailurePoint::ClientReadySchedulerAdmission,
+				"ClientReady scheduler admission"
+			},
+		};
+		for (const auto &[Point, Name] : Cases) {
+			auto Network = SimulatedNetwork::Create({.BaseLatency = 1ms});
+			auto ServerWorld = std::make_shared<DataModel>();
+			HeadlessRenderer ServerRenderer(Vector2(64, 64));
+			Engine ServerRuntime(
+				ServerWorld,
+				&ServerRenderer,
+				nullptr,
+				EngineProviderConfiguration{.AudioEnabled = false, .Mode = RuntimeMode::NetworkServer}
+			);
+			ServerRuntime.ProcessService->Alive = true;
+			GameSession Server(
+				Network->CreateTransport(), Configuration(GameSessionRole::Server, "bootstrap-failure"), &ServerRuntime
+			);
+			GameSession Client(
+				Network->CreateTransport(), Configuration(GameSessionRole::Client, "bootstrap-failure")
+			);
+			GameSessionTestAccess::SetFailurePoint(Client, Point);
+			Check(Server.Start().Succeeded(), "failure-matrix server starts");
+			const auto ClientStart = Client.Start();
+			if (Point == GameSessionFailurePoint::TransportStart)
+				Check(!ClientStart.Succeeded(), "injected transport acquisition aborts Start");
+			else
+				Check(ClientStart.Succeeded(), "failure-matrix client transport starts before later injection");
+
+			std::unique_ptr<HeadlessRenderer> ClientRenderer;
+			std::unique_ptr<Engine> ClientRuntime;
+			for (std::uint64_t Tick = 1; Tick <= 100 && Client.GetStatus() != GameSessionStatus::Failed; ++Tick) {
+				Advance(Network, Server, Client, Tick);
+				if (!ClientRuntime && Client.GetClientDataModel()) {
+					ClientRenderer = std::make_unique<HeadlessRenderer>(Vector2(64, 64));
+					ClientRuntime = std::make_unique<Engine>(
+						Client.GetClientDataModel(),
+						ClientRenderer.get(),
+						nullptr,
+						EngineProviderConfiguration{.AudioEnabled = false, .Mode = RuntimeMode::NetworkClient}
+					);
+					ClientRuntime->ProcessService->Alive = true;
+					Check(!Client.AttachClientRuntime(*ClientRuntime), Name);
+				}
+				if (ClientRuntime) ClientRuntime->Step();
+				ServerRuntime.Step();
+			}
+			for (std::uint64_t Tick = 101; Tick <= 112; ++Tick) {
+				Advance(Network, Server, Client, Tick);
+				ServerRuntime.Step();
+			}
+			Check(
+				Client.GetStatus() == GameSessionStatus::Failed && !Client.GetClientDataModel() &&
+					!Client.GetPrimaryConnection() && Client.GetMetrics().ReadyPeers == 0,
+				"every injected client bootstrap failure rolls back replica visibility and readiness"
+			);
+			Check(
+				Client.Start().Status == TransportOperationStatus::InvalidState,
+				"a failed GameSession is terminal and cannot restart partially destroyed resources"
+			);
+			Check(
+				ServerRuntime.Players->GetPlayers().empty(),
+				"client bootstrap failure removes any partially admitted authoritative Player"
+			);
+			if (ClientRuntime) {
+				auto Released = ClientRuntime->CharacterControl->AttachRuntime({}, {}, {}, {});
+				Check(
+					Released && Released->IsValid(),
+					"client bootstrap failure releases any acquired CharacterControl callback lease"
+				);
+			}
+			Client.Stop();
+			Server.Stop();
+			if (ClientRuntime) ClientRuntime->Destroy();
+			ServerRuntime.Destroy();
+		}
 	}
 
 	void TestPreAcceptanceAndTimeoutRejection() {
@@ -336,6 +556,176 @@ namespace {
 		);
 		Server.Stop();
 		(void)RawTransport->Stop({DisconnectReason::LocalShutdown, "spoofed readiness complete"});
+		ServerRuntime.Destroy();
+	}
+
+	void TestBurstAdmissionKeepsJournalCursorsCurrent() {
+		constexpr std::size_t PeerCount = 192;
+		struct RawPeer {
+			std::shared_ptr<SimulatedTransport> Transport;
+			ConnectionId Connection;
+			bool ReadySent = false;
+		};
+		SimulatedTransportConfiguration TransportConfiguration;
+		TransportConfiguration.BandwidthBytesPerSecond = MaximumSimulatedBandwidthBytesPerSecond;
+		TransportConfiguration.MaximumTransports = PeerCount + 1;
+		TransportConfiguration.MaximumConnections = PeerCount;
+		TransportConfiguration.MaximumPendingEventsPerTransport = PeerCount * 4;
+		auto Network = SimulatedNetwork::Create(TransportConfiguration);
+		auto ServerTransport = Network->CreateTransport();
+		auto ServerWorld = std::make_shared<DataModel>();
+		HeadlessRenderer ServerRenderer(Vector2(64, 64));
+		Engine ServerRuntime(
+			ServerWorld,
+			&ServerRenderer,
+			nullptr,
+			EngineProviderConfiguration{.AudioEnabled = false, .Mode = RuntimeMode::NetworkServer}
+		);
+		ServerRuntime.ProcessService->Alive = true;
+		auto ServerConfiguration = Configuration(GameSessionRole::Server, "burst-admission");
+		GameSession Server(ServerTransport, ServerConfiguration, &ServerRuntime);
+		Check(Server.Start().Succeeded(), "burst-admission server starts");
+		std::vector<RawPeer> Peers;
+		Peers.reserve(PeerCount);
+		for (std::size_t Index = 0; Index < PeerCount; ++Index) {
+			auto Transport = Network->CreateTransport();
+			Check(
+				Transport && Transport
+							 ->Start({
+								 .Role = TransportRole::Client,
+								 .Endpoint = ServerConfiguration.Endpoint,
+								 .AdvertisedLimits = ServerConfiguration.Limits,
+							 })
+							 .Succeeded(),
+				"burst-admission raw client starts"
+			);
+			Network->Pump();
+			(void)Server.Poll();
+			std::array<TransportEvent, 8> Events;
+			const auto Count = Transport->PollEvents(Events);
+			ConnectionId Connection;
+			for (std::size_t EventIndex = 0; EventIndex < Count; ++EventIndex)
+				if (const auto *Changed = std::get_if<ConnectionStateEvent>(&Events[EventIndex]);
+					Changed && Changed->Current == ConnectionState::Connected)
+					Connection = Changed->Connection;
+			Check(Connection.IsValid(), "burst-admission raw client receives a connection identity");
+			auto Hello = EncodeGameSessionMessage(
+				GameSessionClientHello{static_cast<std::uint64_t>(Index + 1), ServerConfiguration.Limits}
+			);
+			auto Intent = Hello ? MakeNetworkMessageIntent(
+								  Connection,
+								  DeliveryMode::ReliableOrdered,
+								  TrafficClass::Control,
+								  {},
+								  std::move(*Hello),
+								  ServerConfiguration.Limits
+							  )
+							: std::nullopt;
+			Check(Intent && Transport->Send(*Intent).Succeeded(), "burst-admission raw client submits hello");
+			Peers.push_back({std::move(Transport), Connection});
+		}
+		for (std::uint64_t Tick = 1; Tick <= 80 && Server.GetMetrics().ReadyPeers != PeerCount; ++Tick) {
+			(void)Network->Advance(1ms);
+			Network->Pump();
+			(void)Server.Poll();
+			Server.Step(Tick);
+			(void)Network->Advance(1ms);
+			Network->Pump();
+			for (auto &Peer : Peers) {
+				std::array<TransportEvent, 16> Events;
+				const auto Count = Peer.Transport->PollEvents(Events);
+				for (std::size_t EventIndex = 0; EventIndex < Count && !Peer.ReadySent; ++EventIndex) {
+					const auto *Received = std::get_if<ReceivedMessageEvent>(&Events[EventIndex]);
+					if (!Received || !IsGameSessionFrame(Received->Payload)) continue;
+					auto Decoded = DecodeGameSessionMessage(Received->Payload);
+					const auto *Accepted = Decoded ? std::get_if<GameSessionServerAccepted>(&*Decoded) : nullptr;
+					if (!Accepted) continue;
+					auto Ready = EncodeGameSessionMessage(
+						GameSessionClientReady{Accepted->SessionEpoch, Accepted->Replication, Accepted->Player}
+					);
+					auto ReadyIntent = Ready ? MakeNetworkMessageIntent(
+											 Peer.Connection,
+											 DeliveryMode::ReliableOrdered,
+											 TrafficClass::Control,
+											 {},
+											 std::move(*Ready),
+											 Accepted->NegotiatedLimits
+										 )
+									   : std::nullopt;
+					Check(
+						ReadyIntent && Peer.Transport->Send(*ReadyIntent).Succeeded(),
+						"burst-admission raw client submits readiness"
+					);
+					Peer.ReadySent = true;
+				}
+			}
+		}
+		const auto Metrics = Server.GetMetrics();
+		Check(
+			Metrics.ReadyPeers == PeerCount && Metrics.AcceptedPeers == PeerCount && Metrics.PlayersRemoved == 0 &&
+				Metrics.ProtocolRejects == 0 && ServerRuntime.Players->GetPlayers().size() == PeerCount,
+			"bounded burst admission keeps every accepted peer journal cursor current through readiness"
+		);
+		for (auto &Peer : Peers)
+			(void)Peer.Transport->Stop({DisconnectReason::LocalShutdown, "burst-admission complete"});
+		Server.Stop();
+		ServerRuntime.Destroy();
+	}
+
+	void TestRejectedStructuralAdmissionIsPeerTerminal() {
+		auto Network = SimulatedNetwork::Create({.BaseLatency = 1ms});
+		auto ServerTransport = Network->CreateTransport();
+		auto ClientTransport = Network->CreateTransport();
+		auto ServerWorld = std::make_shared<DataModel>();
+		HeadlessRenderer ServerRenderer(Vector2(64, 64));
+		Engine ServerRuntime(
+			ServerWorld,
+			&ServerRenderer,
+			nullptr,
+			EngineProviderConfiguration{.AudioEnabled = false, .Mode = RuntimeMode::NetworkServer}
+		);
+		ServerRuntime.ProcessService->Alive = true;
+		GameSession Server(ServerTransport, Configuration(GameSessionRole::Server, "structural-rejection"), &ServerRuntime);
+		GameSession Client(ClientTransport, Configuration(GameSessionRole::Client, "structural-rejection"));
+		Check(Server.Start().Succeeded() && Client.Start().Succeeded(), "structural-rejection session starts");
+		std::unique_ptr<HeadlessRenderer> ClientRenderer;
+		std::unique_ptr<Engine> ClientRuntime;
+		std::uint64_t Tick = 1;
+		for (; Tick <= 100 && Server.GetMetrics().ReadyPeers != 1; ++Tick) {
+			Advance(Network, Server, Client, Tick);
+			if (!ClientRuntime && Client.GetClientDataModel()) {
+				ClientRenderer = std::make_unique<HeadlessRenderer>(Vector2(64, 64));
+				ClientRuntime = std::make_unique<Engine>(
+					Client.GetClientDataModel(),
+					ClientRenderer.get(),
+					nullptr,
+					EngineProviderConfiguration{.AudioEnabled = false, .Mode = RuntimeMode::NetworkClient}
+				);
+				ClientRuntime->ProcessService->Alive = true;
+				Check(Client.AttachClientRuntime(*ClientRuntime), "structural-rejection client runtime attaches");
+			}
+			if (ClientRuntime) ClientRuntime->Step();
+			ServerRuntime.Step();
+		}
+		Check(
+			Server.GetMetrics().ReadyPeers == 1 && ServerRuntime.Players->GetPlayers().size() == 1,
+			"structural-rejection fixture reaches an owned ready peer"
+		);
+		detail::GameSessionTestAccess::SetFailurePoint(
+			Server, detail::GameSessionFailurePoint::StructuralSchedulerAdmission
+		);
+		auto Mutation = std::make_shared<Script>();
+		Mutation->SetName("TerminalStructuralMutation");
+		Mutation->SetParent(ServerWorld);
+		Server.Step(Tick);
+		Check(
+			Server.GetStatus() == GameSessionStatus::Listening &&
+				Server.GetMetrics().PlayersRemoved == 1 && ServerRuntime.Players->GetPlayers().empty(),
+			"rejected reliable structural admission tears down its Player and peer in the same processing cycle"
+		);
+		Client.Stop();
+		Server.Stop();
+		if (ClientRuntime) ClientRuntime->Destroy();
 		ServerRuntime.Destroy();
 	}
 
@@ -729,6 +1119,17 @@ end)
 			ServerRuntime.Players->GetPlayers().empty(), "disconnect tears down the authoritative Player and Character"
 		);
 		Check(Server.GetMetrics().PlayersRemoved == 1, "disconnect Player teardown is measured exactly once");
+		Check(
+			Client.GetStatus() == GameSessionStatus::Failed && !Client.GetClientDataModel(),
+			"failed client session exposes no accepted replica through ordinal status ordering"
+		);
+		if (ClientRuntime) {
+			auto ReleasedAttachment = ClientRuntime->CharacterControl->AttachRuntime({}, {}, {}, {});
+			Check(
+				ReleasedAttachment && ReleasedAttachment->IsValid(),
+				"client failure rollback releases its runtime callback attachment before Failed is observable"
+			);
+		}
 
 		Client.Stop();
 		Server.Stop();
@@ -1028,8 +1429,13 @@ int main() {
 		gargantuan::BootstrapNativeRuntimeSchema();
 		TestProtocolBounds();
 		TestServerSessionSignalLifetime();
+		TestSessionOwnershipAndEndpointPolicy();
+		TestRegistrationCommitAfterCapacityFailure();
+		TestClientBootstrapFailureMatrix();
 		TestPreAcceptanceAndTimeoutRejection();
 		TestSpoofedReadyPlayerRejection();
+		TestBurstAdmissionKeepsJournalCursorsCurrent();
+		TestRejectedStructuralAdmissionIsPeerTerminal();
 		TestAcceptedConnectionChurn();
 		for (int Cycle = 0; Cycle < 100; ++Cycle)
 			TestProductionLifecycleComposition();

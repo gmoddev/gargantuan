@@ -13,6 +13,7 @@
 #include <lua.h>
 #include <luacode.h>
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cmath>
@@ -159,12 +160,14 @@ namespace {
 
 	struct RecordingScheduler final : INetworkScheduler {
 		std::vector<NetworkMessageIntent> Messages;
+		SchedulerSubmitResult NextSubmission{SchedulerSubmitStatus::Accepted};
 		bool RegisterConnection(ConnectionId, const NetworkLimits &) override {
 			return true;
 		}
 		SchedulerSubmitResult Submit(NetworkMessageIntent Intent) override {
-			Messages.push_back(std::move(Intent));
-			return {SchedulerSubmitStatus::Accepted};
+			const auto Result = NextSubmission;
+			if (Result.Accepted()) Messages.push_back(std::move(Intent));
+			return Result;
 		}
 		SchedulerFlushResult Flush(ConnectionId, SchedulerTickBudget) override {
 			return {SchedulerFlushStatus::Drained};
@@ -192,7 +195,7 @@ namespace {
 	void TestCodec() {
 		const ObjectId Character{99, 7};
 		const auto Definition = Action(12, 3);
-		std::array<CharacterMessage, 5> Messages{
+		std::array<CharacterMessage, 6> Messages{
 			CharacterControlTransition{Character, CharacterControlEpoch(2), StateChannelId(9), 40, true},
 			CharacterControlTransition{Character, CharacterControlEpoch(2), {}, 41, false},
 			CharacterInputCommand{
@@ -207,6 +210,16 @@ namespace {
 			},
 			CharacterActionRequest{
 				Character, CharacterControlEpoch(2), CharacterActionSequence(4), CharacterInputSequence(3), 12
+			},
+			CharacterActionResult{
+				.Character = Character,
+				.ControlEpoch = CharacterControlEpoch(2),
+				.ActionSequence = CharacterActionSequence(4),
+				.RequestedActionToken = 12,
+				.Accepted = true,
+				.AuthoritativeAction = CharacterActionState{
+					CharacterActionSequence(4), 12, Definition.Animation, Definition.ContentRevision, 40, 4
+				},
 			},
 			CharacterAuthoritativeState{
 				.Character = Character,
@@ -283,6 +296,7 @@ namespace {
 		CharacterStateFrame Frame{
 			.ServerTick = 60,
 			.FrameSequence = CharacterStateFrameSequence(7),
+			.MaterializationEpoch = CharacterMaterializationEpoch(0x1'0001),
 			.StateCount = 2,
 		};
 		Frame.States[0] = {
@@ -304,7 +318,7 @@ namespace {
 		auto FrameBytes = EncodeCharacterMessage(CharacterMessage(Frame));
 		Check(
 			FrameBytes && FrameBytes->size() == CharacterStateFrameHeaderBytes + 2 * CompactCharacterStateBytes,
-			"GCHR v3 batches two compact absolute states with an exact ABI-independent size"
+			"GCHR v4 batches two compact absolute states with a widened generation"
 		);
 		if (FrameBytes) {
 			auto Decoded = DecodeCharacterMessage(*FrameBytes);
@@ -319,25 +333,25 @@ namespace {
 			for (std::size_t Boundary = 0; Boundary < FrameBytes->size(); ++Boundary)
 				Check(
 					!DecodeCharacterMessage(std::span<const std::byte>(*FrameBytes).first(Boundary)),
-					"every GCHR v3 truncation boundary fails closed"
+					"every GCHR v4 truncation boundary fails closed"
 				);
 			auto Duplicate = *FrameBytes;
-			std::copy_n(Duplicate.begin() + 28, 8, Duplicate.begin() + 102);
-			Check(!DecodeCharacterMessage(Duplicate), "GCHR v3 rejects duplicate Character identities");
+			std::copy_n(Duplicate.begin() + 34, 8, Duplicate.begin() + 108);
+			Check(!DecodeCharacterMessage(Duplicate), "GCHR v4 rejects duplicate Character identities");
 			auto BadCount = *FrameBytes;
 			BadCount[24] = std::byte{16};
 			BadCount[25] = std::byte{0};
-			Check(!DecodeCharacterMessage(BadCount), "GCHR v3 rejects excessive state counts before decode");
+			Check(!DecodeCharacterMessage(BadCount), "GCHR v4 rejects excessive state counts before decode");
 			auto BadQuantizedRotation = *FrameBytes;
-			BadQuantizedRotation[80] = std::byte{0};
-			BadQuantizedRotation[81] = std::byte{0x80};
+			BadQuantizedRotation[86] = std::byte{0};
+			BadQuantizedRotation[87] = std::byte{0x80};
 			Check(!DecodeCharacterMessage(BadQuantizedRotation), "reserved int16 minimum quantized values fail closed");
 			auto BadFlags = *FrameBytes;
-			BadFlags[100] = std::byte{0x80};
+			BadFlags[106] = std::byte{0x80};
 			Check(!DecodeCharacterMessage(BadFlags), "undefined compact Character state flags fail closed");
 			auto Trailing = *FrameBytes;
 			Trailing.push_back(std::byte{0});
-			Check(!DecodeCharacterMessage(Trailing), "GCHR v3 rejects trailing bytes");
+			Check(!DecodeCharacterMessage(Trailing), "GCHR v4 rejects trailing bytes");
 		}
 		CharacterStateFrame MaximumFrame{
 			.ServerTick = 61,
@@ -352,7 +366,7 @@ namespace {
 		}
 		auto MaximumBytes = EncodeCharacterMessage(CharacterMessage(MaximumFrame));
 		Check(
-			MaximumBytes && MaximumBytes->size() == 1138 && MaximumBytes->size() <= MaximumCharacterStateFrameBytes,
+			MaximumBytes && MaximumBytes->size() == 1144 && MaximumBytes->size() <= MaximumCharacterStateFrameBytes,
 			"the fixed 15-state compact batch remains below the 1200-byte protocol ceiling"
 		);
 		auto OutOfRange = Frame.States[0];
@@ -783,7 +797,7 @@ namespace {
 			Value.Client->GetAuthoritativeAction(NpcId).has_value(),
 			"reliable authoritative action identity is exposed for remote animation policy"
 		);
-		for (int Index = 0; Index < 3; ++Index)
+		for (int Index = 0; Index < 4; ++Index)
 			Value.Cycle();
 		Check(
 			NpcServer->GetPosition().x > 20.0f && Near(NpcClient->GetPosition(), NpcServer->GetPosition(), 0.05f),
@@ -1282,7 +1296,7 @@ namespace {
 			Counts[Index] = Frame ? Frame->StateCount : 0;
 			Check(
 				Frame && Scheduler.Messages[Index].Payload().size() <= MaximumCharacterStateFrameBytes,
-				"every scheduler submission is one bounded GCHR v3 state frame"
+				"every scheduler submission is one bounded GCHR v4 state frame"
 			);
 		}
 		Check(Counts == std::array<std::uint16_t, 3>{15, 15, 2}, "ObjectId ordering splits 32 states as 15/15/2");
@@ -1334,7 +1348,7 @@ namespace {
 			SmallCharacters.push_back(std::move(Character));
 		}
 		SmallServer.Step(World, 1);
-		Check(SmallScheduler.Messages.size() == 4, "250-byte datagram policy splits ten states into four frames");
+		Check(SmallScheduler.Messages.size() == 5, "250-byte datagram policy splits ten states into five frames");
 		for (const auto &Message : SmallScheduler.Messages)
 			Check(Message.Payload().size() <= 250, "low negotiated datagram frames never rely on fragmentation");
 	}
@@ -1694,6 +1708,224 @@ end
 			"custom Luau action selection starts server-known pinned root motion through native authority"
 		);
 	}
+
+	void TestSchedulerAdmissionPrecedesPrediction() {
+		RecordingScheduler Scheduler;
+		const ConnectionId Connection{77, 2};
+		const ObjectId Source{7'701, 3};
+		WorldRoot World;
+		auto Character = std::make_shared<KinematicCharacter>();
+		Character->SetPosition({0.0f, 6.0f, 0.0f});
+		PredictedCharacterNetwork Client(Scheduler, TestLimits(), Movement);
+		Check(
+			Client.AddPeer(Connection) && Client.MarkMaterialized(Source, Character),
+			"prediction-admission fixture materializes a controlled replica"
+		);
+		CharacterControlTransition Bind{Source, CharacterControlEpoch(9), StateChannelId(77), 1, true};
+		auto BindBytes = EncodeCharacterMessage(CharacterMessage(Bind));
+		Check(
+			Client.HandleTransportEvent(TransportEvent(ReceivedMessageEvent{
+				Connection,
+				DeliveryMode::ReliableOrdered,
+				TrafficClass::Control,
+				{},
+				BindBytes ? std::move(*BindBytes) : std::vector<std::byte>{},
+			})),
+			"prediction-admission fixture accepts its reliable control bind"
+		);
+		const auto Initial = Character->GetCFrame();
+		Scheduler.NextSubmission = {SchedulerSubmitStatus::DroppedUnreliable};
+		Check(
+			!Client.SubmitInput(Connection, World, 2, 1.0f / 60.0f, {1.0f, 0.0f}, 0.0f, false) &&
+				Character->GetCFrame().FuzzyEq(Initial) && Client.GetPredictionHistorySize(Connection) == 0 &&
+				Scheduler.Messages.empty(),
+			"a scheduler-dropped input mutates no transform, history, or admitted-message sequence"
+		);
+		Scheduler.NextSubmission = {SchedulerSubmitStatus::Accepted};
+		Check(
+			Client.SubmitInput(Connection, World, 3, 1.0f / 60.0f, {1.0f, 0.0f}, 0.0f, false),
+			"prediction resumes only after scheduler admission"
+		);
+		auto Decoded = Scheduler.Messages.empty() ? SerializationResult<CharacterMessage>(SerializationFailure(
+			SerializationErrorCode::InternalFailure, "missing admitted Character input"
+		)) : DecodeCharacterMessage(Scheduler.Messages.back().Payload());
+		auto *Input = Decoded ? std::get_if<CharacterInputCommand>(&*Decoded) : nullptr;
+		Check(
+			Input && Input->InputSequence == CharacterInputSequence(1) &&
+				Character->GetPosition().x > Initial.Position.x && Client.GetPredictionHistorySize(Connection) == 1,
+			"the first admitted input owns sequence one and then records local prediction"
+		);
+	}
+
+	void TestReliableCharacterFailureAndActionResults() {
+		RecordingScheduler Scheduler;
+		const ConnectionId Connection{88, 4};
+		WorldRoot World;
+		auto Character = std::make_shared<KinematicCharacter>();
+		AuthoritativeCharacterNetwork Server(Scheduler, TestLimits(), Movement);
+		std::size_t TerminalCallbacks = 0;
+		Server.SetTerminalHandler([&](ConnectionId Failed, const DisconnectInfo &Information) {
+			if (Failed == Connection && Information.Reason == DisconnectReason::ResourceExhaustion)
+				++TerminalCallbacks;
+		});
+		Check(
+			Server.AddPeer(Connection) && Server.RegisterCharacter(Character) &&
+				Server.MarkMaterialized(Connection, Character->GetObjectId(), StateChannelId(88)),
+			"reliable-failure fixture registers an authoritative Character"
+		);
+		Scheduler.NextSubmission = {
+			SchedulerSubmitStatus::ReliableBacklogExhausted,
+			DisconnectInfo{DisconnectReason::ResourceExhaustion, "injected reliable backlog exhaustion"},
+		};
+		Check(
+			!Server.BindControl(Connection, Character->GetObjectId(), 1) && TerminalCallbacks == 1,
+			"rejected reliable Character control reports a terminal owning-peer failure"
+		);
+
+		Fixture Value;
+		Check(
+			Value.Client->RequestAction(Value.ClientConnection, 1, Value.Tick) &&
+				Value.Client->RequestAction(Value.ClientConnection, 2, Value.Tick),
+			"two action requests coexist within the bounded pending window"
+		);
+		for (int Index = 0; Index < 3; ++Index)
+			Value.Cycle();
+		auto Resolutions = Value.Client->DrainActionResolutions();
+		auto Active = Value.Client->GetAuthoritativeAction(Value.SourceCharacter);
+		Check(
+			Resolutions.size() == 2 && Resolutions[0].RequestedActionToken == 1 && Resolutions[0].Accepted &&
+				Resolutions[1].RequestedActionToken == 2 && !Resolutions[1].Accepted,
+			"accepted action A and rejected action B preserve two ordered semantic results"
+		);
+		Check(
+			Active && Active->ActionToken == 1,
+			"rejecting replacement action B does not cancel still-active accepted action A"
+		);
+	}
+
+	void TestCompleteRootMotionIntervals() {
+		for (const std::uint32_t Duration : {1u, 2u, 4u}) {
+			auto Definition = Action(100 + Duration, static_cast<std::uint8_t>(100 + Duration), 0.0f);
+			Definition.DurationTicks = Duration;
+			Definition.EvaluateRootMotion = [Duration](std::uint64_t From, std::uint64_t To) {
+				return To > From
+						   ? std::optional(RootMotionDelta{
+								 .Translation = {
+									 static_cast<float>(To - From) / static_cast<float>(Duration), 0.0f, 0.0f
+								 },
+							 })
+						   : std::nullopt;
+			};
+
+			RecordingScheduler ServerScheduler;
+			const ConnectionId ServerConnection{90 + Duration, 1};
+			WorldRoot ServerWorld;
+			auto ServerCharacter = std::make_shared<KinematicCharacter>();
+			ServerCharacter->SetPosition({0.0f, 6.0f, 0.0f});
+			AuthoritativeCharacterNetwork Server(ServerScheduler, TestLimits(), Movement);
+			Check(
+				Server.AddPeer(ServerConnection) && Server.RegisterCharacter(ServerCharacter) &&
+					Server.MarkMaterialized(
+						ServerConnection, ServerCharacter->GetObjectId(), StateChannelId(90 + Duration)
+					) &&
+					Server.RegisterAction(Definition) &&
+					Server.StartServerAction(ServerCharacter->GetObjectId(), Definition.Token, 10),
+				"root-motion server fixture starts a bounded action"
+			);
+			Server.Step(ServerWorld, 10);
+			Server.Step(ServerWorld, 10 + Duration + 3);
+			const auto ServerFinal = ServerCharacter->GetPosition();
+			Server.Step(ServerWorld, 10 + Duration + 4);
+			Check(
+				std::abs(ServerFinal.x - 1.0f) < 0.001f && Near(ServerCharacter->GetPosition(), ServerFinal, 0.001f),
+				"late authoritative steps clamp to and integrate the exact registered action duration"
+			);
+
+			RecordingScheduler ClientScheduler;
+			const ConnectionId ClientConnection{100 + Duration, 1};
+			const ObjectId Source{static_cast<std::uint32_t>(8'000 + Duration), 2};
+			WorldRoot ClientWorld;
+			auto ClientCharacter = std::make_shared<KinematicCharacter>();
+			ClientCharacter->SetPosition({0.0f, 6.0f, 0.0f});
+			PredictedCharacterNetwork Client(ClientScheduler, TestLimits(), Movement);
+			Check(
+				Client.AddPeer(ClientConnection) && Client.MarkMaterialized(Source, ClientCharacter) &&
+					Client.RegisterAction(Definition),
+				"root-motion prediction fixture registers matching content"
+			);
+			CharacterControlTransition Bind{
+				Source, CharacterControlEpoch(12), StateChannelId(100 + Duration), 1, true
+			};
+			auto BindBytes = EncodeCharacterMessage(CharacterMessage(Bind));
+			Check(
+				Client.HandleTransportEvent(TransportEvent(ReceivedMessageEvent{
+					ClientConnection,
+					DeliveryMode::ReliableOrdered,
+					TrafficClass::Control,
+					{},
+					BindBytes ? std::move(*BindBytes) : std::vector<std::byte>{},
+				})) && Client.RequestAction(ClientConnection, Definition.Token, 10),
+				"root-motion prediction starts from an admitted semantic action"
+			);
+			const auto ConfirmationOffset = std::max(1u, Duration / 2);
+			for (std::uint32_t Offset = 1; Offset <= Duration; ++Offset) {
+				Check(
+					Client.SubmitInput(
+						ClientConnection, ClientWorld, 10 + Offset, 1.0f / 60.0f, {}, 0.0f, false
+					),
+					"predicted action advances through each registered interval"
+				);
+				if (Offset == ConfirmationOffset) {
+					auto ResultBytes = EncodeCharacterMessage(CharacterMessage(CharacterActionResult{
+						.Character = Source,
+						.ControlEpoch = CharacterControlEpoch(12),
+						.ActionSequence = CharacterActionSequence(1),
+						.RequestedActionToken = Definition.Token,
+						.Accepted = true,
+						.AuthoritativeAction = CharacterActionState{
+							CharacterActionSequence(1),
+							Definition.Token,
+							Definition.Animation,
+							Definition.ContentRevision,
+							10,
+							Duration,
+						},
+					}));
+					Check(
+						Client.HandleTransportEvent(TransportEvent(ReceivedMessageEvent{
+							ClientConnection,
+							DeliveryMode::ReliableOrdered,
+							TrafficClass::ReliableApplication,
+							{},
+							ResultBytes ? std::move(*ResultBytes) : std::vector<std::byte>{},
+						})),
+						"authoritative action confirmation preserves the monotonic predicted phase"
+					);
+				}
+			}
+			const auto ClientFinal = ClientCharacter->GetPosition();
+			Check(
+				Client.SubmitInput(
+					ClientConnection, ClientWorld, 11 + Duration, 1.0f / 60.0f, {}, 0.0f, false
+				) && std::abs(ClientFinal.x - 1.0f) < 0.001f &&
+					Near(ClientCharacter->GetPosition(), ClientFinal, 0.001f),
+				"prediction uses the same complete interval convention with no post-completion root motion"
+			);
+		}
+		Check(
+			!CharacterActionState{
+				 CharacterActionSequence(1),
+				 1,
+				 AssetId::FromBuiltInName("overflow-action"),
+				 Content(1),
+				 std::numeric_limits<std::uint64_t>::max(),
+				 1,
+			 }
+				 .IsValid() &&
+				!CharacterMaterializationEpoch(std::numeric_limits<std::uint64_t>::max()).TryNext(),
+			"action-end arithmetic and 64-bit materialization generations reject wrap explicitly"
+		);
+	}
 }
 
 int main() {
@@ -1714,6 +1946,9 @@ int main() {
 		TestBatchLossAndRemoteInterpolation();
 		TestLocalPresentationCorrectionMatrix();
 		TestCustomLuauPolicy();
+		TestSchedulerAdmissionPrecedesPrediction();
+		TestReliableCharacterFailureAndActionResults();
+		TestCompleteRootMotionIntervals();
 	} catch (const std::exception &Error) {
 		std::cerr << "UNCAUGHT: " << Error.what() << '\n';
 		return 1;

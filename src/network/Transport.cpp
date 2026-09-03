@@ -2,6 +2,8 @@
 
 #include "gargantuan/runtime/ProtocolInput.hpp"
 
+#include <array>
+#include <cctype>
 #include <type_traits>
 
 namespace gargantuan::network {
@@ -12,6 +14,27 @@ namespace gargantuan::network {
 		} catch (...) {
 			return false;
 		}
+	}
+
+	bool IsLoopbackTransportEndpoint(const TransportEndpoint &Endpoint) {
+		if (!Endpoint.IsValid()) return false;
+		if (Endpoint.Host == "::1") return true;
+		std::array<std::uint32_t, 4> Octets{};
+		std::size_t Octet = 0;
+		std::size_t Digits = 0;
+		for (const auto Character : Endpoint.Host) {
+			if (Character == '.') {
+				if (Digits == 0 || Octet >= 3) return false;
+				++Octet;
+				Digits = 0;
+				continue;
+			}
+			if (!std::isdigit(static_cast<unsigned char>(Character)) || Digits >= 3) return false;
+			Octets[Octet] = Octets[Octet] * 10 + static_cast<std::uint32_t>(Character - '0');
+			if (Octets[Octet] > 255) return false;
+			++Digits;
+		}
+		return Octet == 3 && Digits != 0 && Octets[0] == 127;
 	}
 
 	bool TransportStartConfiguration::IsValid() const {

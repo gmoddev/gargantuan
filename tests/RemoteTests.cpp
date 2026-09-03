@@ -699,6 +699,37 @@ namespace {
 			);
 		}
 
+		{
+			RecordingScheduler RejectedScheduler;
+			const ConnectionId RejectedConnection{76, 1};
+			const ObjectId Event{305, 1};
+			std::set<ObjectId> Visible{Event};
+			RemoteManager Manager(
+				RemoteManagerRole::Server,
+				RejectedScheduler,
+				[&](ConnectionId, ObjectId Object) { return Visible.contains(Object); },
+				[](ObjectId) -> std::shared_ptr<Instance> { return nullptr; }
+			);
+			Check(
+				Manager.AddPeer(RejectedConnection, ReplicationEpoch(1), TestLimits()) &&
+					Manager.RegisterRemote(Event, RemoteInstanceKind::ReliableEvent) &&
+					Manager.PublishRemote(RejectedConnection, Event),
+				"nonterminal scheduler-rejection fixture initializes"
+			);
+			std::size_t TerminalCallbacks = 0;
+			Manager.SetTerminalHandler([&](ConnectionId Connection, const DisconnectInfo &Information) {
+				if (Connection == RejectedConnection && Information.Reason == DisconnectReason::ResourceExhaustion)
+					++TerminalCallbacks;
+			});
+			RejectedScheduler.NextSubmitResult = {SchedulerSubmitStatus::IntentRejected};
+			auto Rejected = Manager.SendEvent(RejectedConnection, Event, {});
+			Check(
+				Rejected.TerminalDisconnect && TerminalCallbacks == 1 &&
+					Manager.SendEvent(RejectedConnection, Event, {}).Status == RemoteSendStatus::InvalidPeer,
+				"every rejected reliable Remote admission becomes an owning-peer terminal failure"
+			);
+		}
+
 		RemoteFixture Fixture;
 		const ObjectId Remote{301, 1};
 		Fixture.Register(Remote, RemoteInstanceKind::Function);

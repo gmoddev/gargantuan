@@ -170,6 +170,20 @@ Player/server runtimes.
 - [ ] Competent lighting/renderer, informed by that checkpoint
 - [ ] MVP player controller preset (Exact obbying can be done later)
 
+### Networking
+
+- [x] Production GSES session, trusted LocalPlayer, Player.Character control,
+  semantic GCHR input/actions, prediction/reconciliation, and 20 Hz batching
+- [x] Server-owned 3E relevance with bounded dependency-closed structural
+  materialization and shared GCHR interest
+- [x] 3E.1 one-shot session transactionality, scoped callback ownership,
+  peer-local reliable failure, per-request action results, complete root
+  motion, 64-bit materialization epochs, and loopback DevelopmentLocal policy
+- [ ] Foundation 3F: reduce global Player/Character-shell admission allocations,
+  then add measured importance/cadence tiers only for already relevant objects
+- [ ] Authenticated short-lived join grants and server identity through the
+  hosting/Node control plane; DevelopmentLocal is not identity proof
+
 ## Gargantuan 0.2
 
 ### Repository

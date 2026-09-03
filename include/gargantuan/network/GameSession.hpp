@@ -20,11 +20,25 @@ namespace gargantuan {
 }
 
 namespace gargantuan::network {
+	namespace detail {
+		class GameSessionTestAccess;
+	}
+
 	inline constexpr std::uint64_t DefaultGameSessionHandshakeTimeoutTicks = 600;
 	inline constexpr std::size_t MaximumGameSessionPeers = 512;
 
 	enum class GameSessionRole : std::uint8_t { Server, Client };
-	enum class GameSessionStatus : std::uint8_t { Stopped, Listening, Connecting, Accepted, Ready, Failed };
+	enum class GameSessionStatus : std::uint8_t {
+		Created,
+		Starting,
+		Listening,
+		Connecting,
+		Accepted,
+		Ready,
+		Closing,
+		Closed,
+		Failed,
+	};
 
 	struct GameSessionConfiguration {
 		GameSessionRole Role = GameSessionRole::Client;
@@ -33,6 +47,7 @@ namespace gargantuan::network {
 		std::uint64_t HandshakeTimeoutTicks = DefaultGameSessionHandshakeTimeoutTicks;
 		std::uint64_t ClientNonce = 0;
 		ReplicationRelevanceConfiguration Relevance;
+		bool AllowInsecureDevelopmentNetwork = false;
 
 		[[nodiscard]] bool IsValid() const;
 		[[nodiscard]] static NetworkLimits DefaultLimits();
@@ -101,6 +116,7 @@ namespace gargantuan::network {
 		bool SetTrustedReplicationFocus(ConnectionId Connection, std::span<const glm::vec3> FocusPoints);
 
 	  private:
+		friend class detail::GameSessionTestAccess;
 		struct Implementation;
 		std::unique_ptr<Implementation> State;
 	};

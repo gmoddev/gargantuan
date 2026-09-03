@@ -1,7 +1,7 @@
 ---
 status: current
 owner: networking
-last_verified: 2026-08-16
+last_verified: 2026-09-03
 related_code:
   - include/gargantuan/network/Scheduler.hpp
   - src/network/Scheduler.cpp
@@ -159,12 +159,28 @@ vocabulary is introduced.
 
 The scheduler itself does not merge opaque application messages. Character
 Networking Foundation 3C now supplies the first game-owned batching contract
-above it: one GCHR v3 unreliable-sequenced intent contains up to 15 independently
+above it: one GCHR v4 unreliable-sequenced intent contains up to 15 independently
 sequenced compact absolute Character states. The Character manager preserves
 application boundaries and negotiated datagram limits before `Submit`; the
 scheduler still cannot merge reliable and unreliable semantics, fragment one
 oversized unreliable message, change application meaning, or carry authority.
 Other codecs remain unbatched unless they define an equally explicit frame.
+
+### Session commit interpretation
+
+Serialization call sites must accept both the outer codec `expected` and the
+inner `SchedulerSubmitResult`. For reliable structural work, `GameSession` uses
+a terminal-peer model: the coordinator may prepare and advance its local view,
+but rejected local admission immediately destroys that peer before another
+delta, Remote materialization update, GCHR publication, or gameplay command can
+use the undelivered state. `Submit` remains local queue admission, not a remote
+acknowledgement.
+
+Reliable Remote and GCHR rejection enters a bounded manager terminal callback
+and then `FailPeer` (or the client's `FailSession`) at the session safe point.
+Required reliable Character state clears only after accepted publication. An
+unreliable Character input drop is normally lossy rather than terminal, but
+prediction, input sequence, and replay history do not advance for that drop.
 
 `SchedulerTickBudget` is valid only against validated negotiated
 `NetworkLimits`. It is nonzero, fits the session's per-tick bytes/messages

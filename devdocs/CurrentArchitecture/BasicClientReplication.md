@@ -1,7 +1,7 @@
 ---
 status: current
 owner: networking
-last_verified: 2026-09-02
+last_verified: 2026-09-03
 related_code:
   - include/gargantuan/network/Replication.hpp
   - include/gargantuan/network/ReplicationProtocol.hpp
@@ -230,3 +230,11 @@ Foundation 3D composes this unchanged one-way structural layer into
 still bypasses structural commits, and engine runtime-module source is excluded
 from the replicated graph. This composition does not make client replica
 mutation an upstream replication path.
+
+Foundation 3E.1 preserves this structural protocol and corrects its production
+commit interpretation. `GameSession` checks both serialization and the inner
+scheduler admission result. If a reliable frame is rejected after the
+coordinator prepared its cursor/KnownObjects state, that peer is immediately
+terminal and its entire view is removed before subsequent work. Remote and
+GCHR materialization update only after accepted structural admission. No new
+application acknowledgement or parallel streaming protocol was added.

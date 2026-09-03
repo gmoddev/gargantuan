@@ -402,6 +402,15 @@ removes Remote, GCHR, replication, scheduler, and Player association state from
 the same `ConnectionId` lifetime. Remote payloads still cannot select a Player,
 Character, or script security context.
 
+Foundation 3E.1 installs the Remote manager terminal callback into that session
+owner. Every nonaccepted reliable scheduler result, including backlog
+exhaustion, fails only the affected server peer (or the client's one session),
+removes its Remote peer state, and completes pending RemoteFunctions through
+bounded disconnect/protocol/resource outcomes. Remote
+materialization is committed only after the corresponding reliable structural
+frame was admitted. Teardown never exposes scheduler implementation details to
+ordinary Luau.
+
 ## Deliberately deferred
 
 This Remote milestone does not implement matchmaking, Node integration, Studio

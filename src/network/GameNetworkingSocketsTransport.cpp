@@ -1,6 +1,7 @@
 #include "gargantuan/network/GameNetworkingSocketsTransport.hpp"
 
 #include <steam/steamnetworkingsockets.h>
+#include <steam/steamnetworkingsockets_flat.h>
 
 #include <algorithm>
 #include <array>
@@ -341,14 +342,17 @@ namespace gargantuan::network {
 			QueueEvent(ConnectionStateEvent{Id, Previous, ConnectionState::Closed});
 			QueueEvent(DisconnectedEvent{Id, Information});
 			if (NotifyBackend && GlobalState().Interface)
-				GlobalState().Interface->CloseConnection(
+				SteamAPI_ISteamNetworkingSockets_CloseConnection(
+					GlobalState().Interface,
 					Handle,
 					BackendDisconnectReason(Information.Reason),
 					BackendDisconnectDiagnostic(Information.Reason),
 					false
 				);
 			else if (GlobalState().Interface)
-				GlobalState().Interface->CloseConnection(Handle, 0, nullptr, false);
+				SteamAPI_ISteamNetworkingSockets_CloseConnection(
+					GlobalState().Interface, Handle, 0, nullptr, false
+				);
 			ReleaseConnection(Id, Handle);
 		}
 
@@ -365,7 +369,8 @@ namespace gargantuan::network {
 				IdIterator == BackendConnections.end()) {
 				if (Role != TransportRole::Server || Information.m_info.m_hListenSocket != Listener) return;
 				if (Events.size() > Configuration.MaximumPendingEvents - 5) {
-					GlobalState().Interface->CloseConnection(
+					SteamAPI_ISteamNetworkingSockets_CloseConnection(
+						GlobalState().Interface,
 						Information.m_hConn,
 						ResourceExhaustionEndReason,
 						"Gargantuan lifecycle event limit reached",
@@ -375,7 +380,8 @@ namespace gargantuan::network {
 				}
 				auto Id = AllocateConnection(Information.m_hConn);
 				if (!Id) {
-					GlobalState().Interface->CloseConnection(
+					SteamAPI_ISteamNetworkingSockets_CloseConnection(
+						GlobalState().Interface,
 						Information.m_hConn,
 						ResourceExhaustionEndReason,
 						"Gargantuan connection limit reached",
@@ -384,7 +390,9 @@ namespace gargantuan::network {
 					return;
 				}
 				if (!QueueEvent(ConnectionStateEvent{*Id, ConnectionState::Connecting, ConnectionState::Authenticating}) ||
-					GlobalState().Interface->AcceptConnection(Information.m_hConn) != k_EResultOK) {
+					SteamAPI_ISteamNetworkingSockets_AcceptConnection(
+						GlobalState().Interface, Information.m_hConn
+					) != k_EResultOK) {
 					FailConnection(*Id, DisconnectReason::TransportFailure, "Unable to accept GNS connection");
 				} else Connections.find(*Id)->second.State = ConnectionState::Authenticating;
 				return;
@@ -461,7 +469,8 @@ namespace gargantuan::network {
 			std::size_t Bytes = 0;
 			while (Count < Limits.MaximumMessagesPerTick && Bytes < Limits.MaximumReceiveBytesPerTick) {
 				SteamNetworkingMessage_t *Message = nullptr;
-				const auto Result = GlobalState().Interface->ReceiveMessagesOnConnection(
+				const auto Result = SteamAPI_ISteamNetworkingSockets_ReceiveMessagesOnConnection(
+					GlobalState().Interface,
 					Connection->second.Handle,
 					&Message,
 					1
@@ -525,7 +534,7 @@ namespace gargantuan::network {
 			return Operation(TransportOperationStatus::MessageRejected);
 		SteamNetworkingIPAddr Address;
 		Address.Clear();
-		if (!Address.ParseString(Configuration.Endpoint.Host.c_str()))
+		if (!SteamAPI_SteamNetworkingIPAddr_ParseString(&Address, Configuration.Endpoint.Host.c_str()))
 			return Operation(TransportOperationStatus::MessageRejected);
 		Address.m_port = Configuration.Endpoint.Port;
 		if (!State->AcquireGlobal()) return TerminalOperation(
@@ -550,7 +559,9 @@ namespace gargantuan::network {
 			)));
 
 		if (Configuration.Role == TransportRole::Server) {
-			State->Listener = Global.Interface->CreateListenSocketIP(Address, static_cast<int>(Options.size()), Options.data());
+			State->Listener = SteamAPI_ISteamNetworkingSockets_CreateListenSocketIP(
+				Global.Interface, Address, static_cast<int>(Options.size()), Options.data()
+			);
 			if (State->Listener == k_HSteamListenSocket_Invalid) {
 				State->ReleaseGlobal();
 				return TerminalOperation(
@@ -560,7 +571,9 @@ namespace gargantuan::network {
 			}
 			Global.ListenerOwners[State->Listener] = State.get();
 		} else {
-			const auto Handle = Global.Interface->ConnectByIPAddress(Address, static_cast<int>(Options.size()), Options.data());
+			const auto Handle = SteamAPI_ISteamNetworkingSockets_ConnectByIPAddress(
+				Global.Interface, Address, static_cast<int>(Options.size()), Options.data()
+			);
 			if (Handle == k_HSteamNetConnection_Invalid) {
 				State->ReleaseGlobal();
 				return TerminalOperation(
@@ -569,7 +582,9 @@ namespace gargantuan::network {
 				);
 			}
 			if (!State->AllocateConnection(Handle)) {
-				Global.Interface->CloseConnection(Handle, ResourceExhaustionEndReason, "Connection identity exhausted", false);
+				SteamAPI_ISteamNetworkingSockets_CloseConnection(
+					Global.Interface, Handle, ResourceExhaustionEndReason, "Connection identity exhausted", false
+				);
 				State->ReleaseGlobal();
 				return TerminalOperation(
 					TransportOperationStatus::ResourceExhausted,
@@ -595,7 +610,7 @@ namespace gargantuan::network {
 		for (const auto Id : Connections) State->CloseConnection(Id, Information, true);
 		if (State->Listener != k_HSteamListenSocket_Invalid) {
 			Global.ListenerOwners.erase(State->Listener);
-			Global.Interface->CloseListenSocket(State->Listener);
+			SteamAPI_ISteamNetworkingSockets_CloseListenSocket(Global.Interface, State->Listener);
 			State->Listener = k_HSteamListenSocket_Invalid;
 		}
 		State->Started = false;
@@ -639,7 +654,9 @@ namespace gargantuan::network {
 		if (!Frame) return Operation(TransportOperationStatus::MessageRejected);
 		if (Message.Delivery() == DeliveryMode::ReliableOrdered) {
 			SteamNetConnectionRealTimeStatus_t Status{};
-			if (Global.Interface->GetConnectionRealTimeStatus(Connection->second.Handle, &Status, 0, nullptr) == k_EResultOK &&
+			if (SteamAPI_ISteamNetworkingSockets_GetConnectionRealTimeStatus(
+					Global.Interface, Connection->second.Handle, &Status, 0, nullptr
+				) == k_EResultOK &&
 				(Status.m_cbPendingReliable < 0 || static_cast<std::size_t>(Status.m_cbPendingReliable) >
 					State->Limits.MaximumQueuedReliableBytes - std::min(
 						State->Limits.MaximumQueuedReliableBytes,
@@ -648,7 +665,8 @@ namespace gargantuan::network {
 		}
 		const int Flags = Message.Delivery() == DeliveryMode::ReliableOrdered
 			? k_nSteamNetworkingSend_Reliable : k_nSteamNetworkingSend_Unreliable;
-		const auto Result = Global.Interface->SendMessageToConnection(
+		const auto Result = SteamAPI_ISteamNetworkingSockets_SendMessageToConnection(
+			Global.Interface,
 			Connection->second.Handle,
 			Frame->data(),
 			static_cast<std::uint32_t>(Frame->size()),
@@ -679,7 +697,7 @@ namespace gargantuan::network {
 		auto &Global = GlobalState();
 		std::lock_guard Lock(Global.Mutex);
 		if (State->Started && Global.Interface) {
-			Global.Interface->RunCallbacks();
+			SteamAPI_ISteamNetworkingSockets_RunCallbacks(Global.Interface);
 			std::vector<ConnectionId> Connections;
 			Connections.reserve(State->Connections.size());
 			for (const auto &[Id, Record] : State->Connections) {
@@ -721,7 +739,9 @@ namespace gargantuan::network {
 		if (!Connection.IsValid() || Iterator == State->Connections.end()) return std::nullopt;
 		auto Result = Iterator->second.Statistics;
 		SteamNetConnectionRealTimeStatus_t Status{};
-		if (Global.Interface->GetConnectionRealTimeStatus(Iterator->second.Handle, &Status, 0, nullptr) == k_EResultOK) {
+		if (SteamAPI_ISteamNetworkingSockets_GetConnectionRealTimeStatus(
+				Global.Interface, Iterator->second.Handle, &Status, 0, nullptr
+			) == k_EResultOK) {
 			if (Status.m_cbPendingReliable >= 0)
 				Result.QueuedReliableBytes = static_cast<std::size_t>(Status.m_cbPendingReliable);
 			if (Status.m_nPing >= 0)

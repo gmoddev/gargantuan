@@ -1,7 +1,7 @@
 ---
 status: current
 owner: networking
-last_verified: 2026-09-02
+last_verified: 2026-09-03
 related_code:
   - include/gargantuan/network/
   - src/network/
@@ -74,7 +74,9 @@ The send-byte budget can hold either one maximum reliable message or one maximum
 unreliable message, so a valid session never advertises a message size that its
 own scheduler tick cannot submit.
 Negotiation computes the component-wise minimum of two valid advertisements, so
-the result cannot exceed either side. There is no handshake exchange yet.
+the result cannot exceed either side. The production GSES handshake exchanges
+and validates those advertisements; transport does not assign application
+identity by itself.
 
 `NetworkStatistics` uses `std::optional` for every backend-dependent measurement.
 It can distinguish submitted, delivered, and received messages and can report
@@ -107,6 +109,11 @@ Character state explicitly acknowledges incorporated Character input. A
 session-rekey policy before sequence exhaustion remains deferred.
 
 `ChangeJournal.Sequence` is not used by any of these types.
+
+GCHR v4 encodes `CharacterMaterializationEpoch` as a 64-bit monotonic value and
+adds a reliable per-request `ActionResult`. Exhaustion refuses the transition
+instead of wrapping and is terminal for only the affected peer. The widened
+34-byte state-frame header preserves the 15-state datagram batch ceiling.
 
 ## Replication intent
 
@@ -160,6 +167,11 @@ replication intent; it cannot grant DataModel authority.
 ticket validation remains deferred; accepting bytes without an authentication
 protocol would falsely imply authority.
 
+The current `DevelopmentLocal` GSES identity is accepted only on parsed IPv4
+loopback or exact IPv6 loopback by default. A native Player CLI override permits
+explicit insecure LAN development and logs `[Network:Security]`; it does not
+turn endpoint reachability into authentication.
+
 `INetworkScheduler`, `SchedulerTickBudget`, structured submit/flush outcomes,
 semantic traffic precedence, and scheduler-only statistics now define the
 pre-transport policy boundary. `Submit` is queue admission, while `Flush` is one
@@ -177,8 +189,9 @@ generation-safe `ConnectionId` and does not add a second transport identity.
 Their scopes are
 documented in `BasicClientReplication.md`, `LuauRemotes.md`,
 `CharacterNetworkingFoundation3D.md`, and
-`CharacterReplicationFoundation3E.md`. General realtime physics replication,
-external account authentication/ticket validation, adaptive state cadence, Node
+`CharacterReplicationFoundation3E.md`. Transactional lifecycle corrections are
+documented in `CharacterNetworkingFoundation3E1.md`. General realtime physics
+replication, external account authentication/ticket validation, adaptive state cadence, Node
 integration, and multiplayer Studio orchestration remain unimplemented. The deterministic in-memory
 implementation is documented in `SimulatedTransport.md`; the opt-in real GNS
 adapter is documented in `RealGameTransport.md`. Backend contract types remain

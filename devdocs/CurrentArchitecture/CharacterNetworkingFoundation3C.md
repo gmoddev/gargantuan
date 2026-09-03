@@ -1,7 +1,7 @@
 ---
 status: current
 owner: networking
-last_verified: 2026-09-01
+last_verified: 2026-09-03
 related_code:
   - include/gargantuan/network/CharacterProtocol.hpp
   - include/gargantuan/network/CharacterNetwork.hpp
@@ -68,11 +68,16 @@ not Character simulation CPU.
 
 ## GCHR versioning and state frames
 
-Foundation 3E advances server state frames to GCHR v3. It consumes the former
+Foundation 3E advanced server state frames to GCHR v3. It consumed the former
 16-bit reserved tail as a bounded peer materialization epoch while retaining
 the exact 28-byte header and compact-state sizes described below. GCHR v3 drops
 delayed state from a pre-leave lifetime after the same ObjectId reenters. The v2
 layout below remains the historical 3C baseline.
+
+Foundation 3E.1 supersedes that wire revision with GCHR v4: the
+materialization epoch is 64-bit, the header is 34 bytes, and reliable
+per-request action results are explicit. Compact state size and the 15-state
+batch ceiling remain unchanged.
 
 GCHR v1 remains unambiguously decodable for control bind/unbind, semantic
 input, action request, and legacy singular state. Server realtime publication

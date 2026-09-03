@@ -67,6 +67,7 @@ namespace gargantuan::network {
 		CharacterMotionRequest(const CharacterInputCommand &Command, const KinematicCharacter &Character)>;
 	using CharacterActionPolicy =
 		std::function<std::optional<std::uint32_t>(ConnectionId Connection, const CharacterActionRequest &Request)>;
+	using CharacterTerminalHandler = std::function<void(ConnectionId, const DisconnectInfo &)>;
 
 	struct CharacterNetworkMetrics {
 		std::uint64_t CommandsReceived = 0;
@@ -155,6 +156,7 @@ namespace gargantuan::network {
 		BindControl(ConnectionId Connection, ObjectId Character, std::uint64_t AuthoritativeTick);
 		bool RevokeControl(ObjectId Character, std::uint64_t AuthoritativeTick);
 		bool RegisterAction(CharacterActionDefinition Definition);
+		void SetTerminalHandler(CharacterTerminalHandler Handler);
 		bool StartServerAction(ObjectId Character, std::uint32_t ActionToken, std::uint64_t AuthoritativeTick);
 		bool HandleTransportEvent(const TransportEvent &Event);
 		void Step(WorldRoot &World, std::uint64_t AuthoritativeTick);
@@ -180,9 +182,12 @@ namespace gargantuan::network {
 		std::uint64_t LastAuthoritativeTick = 0;
 		std::uint64_t LastStatePublicationTick = 0;
 		CharacterNetworkMetrics Metrics;
+		CharacterTerminalHandler OnTerminal;
 
 		bool Queue(ConnectionId Connection, const CharacterMessage &Message, StateChannelId Channel, bool Reliable);
-		bool QueueStateFrame(ConnectionId Connection, const CharacterStateFrame &Frame, StateChannelId Channel);
+		bool QueueStateFrame(
+			ConnectionId Connection, const CharacterStateFrame &Frame, StateChannelId Channel, bool Reliable = false
+		);
 		bool HandleMessage(ConnectionId Connection, const ReceivedMessageEvent &Event, CharacterMessage Message);
 		bool SendControl(ConnectionId Connection, const CharacterControlTransition &Transition);
 		[[nodiscard]] std::optional<CharacterAuthoritativeState>
@@ -205,6 +210,7 @@ namespace gargantuan::network {
 		bool MarkMaterialized(ObjectId Character, const std::shared_ptr<KinematicCharacter> &Replica);
 		bool MarkUnmaterialized(ObjectId Character);
 		bool RegisterAction(CharacterActionDefinition Definition);
+		void SetTerminalHandler(CharacterTerminalHandler Handler);
 		bool HandleTransportEvent(const TransportEvent &Event);
 		bool SubmitInput(
 			ConnectionId Connection,
@@ -245,6 +251,7 @@ namespace gargantuan::network {
 		std::vector<CharacterActionEnded> ActionEndings;
 		bool PredictionEnabled = true;
 		CharacterNetworkMetrics Metrics;
+		CharacterTerminalHandler OnTerminal;
 
 		bool Queue(ConnectionId Connection, const CharacterMessage &Message, StateChannelId Channel, bool Reliable);
 		bool HandleMessage(ConnectionId Connection, const ReceivedMessageEvent &Event, CharacterMessage Message);

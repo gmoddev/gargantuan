@@ -1,7 +1,7 @@
 ---
 status: current
 owner: networking
-last_verified: 2026-09-02
+last_verified: 2026-09-03
 related_code:
   - include/gargantuan/network/GameSession.hpp
   - include/gargantuan/network/GameSessionProtocol.hpp
@@ -360,3 +360,13 @@ accepted-peer/Player/control lifetime now drives server-owned spatial relevance,
 bounded structural materialization, and GCHR visibility without another
 connection identity. Adaptive publication cadence, region/portal handoff,
 distributed ownership, matchmaking, and account tickets remain later layers.
+
+Foundation 3E.1 is the lifecycle-hardening descendant documented in
+`CharacterNetworkingFoundation3E1.md`. It makes `GameSession` explicitly
+one-shot and failure-atomic, replaces broad CharacterControl callback
+detachment with a generation-safe scoped lease, makes rejected reliable work
+terminal for the affected peer, commits client runtime attachment at accepted
+`ClientReady`, adds per-request action results, integrates the final root-motion
+interval, widens materialization epochs to 64 bits, and restricts
+DevelopmentLocal to loopback unless the host explicitly opts into insecure
+development. These corrections do not rewrite 3D or claim account identity.

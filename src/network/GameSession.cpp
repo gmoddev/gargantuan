@@ -1,5 +1,7 @@
 #include "gargantuan/network/GameSession.hpp"
 
+#include "GameSessionTestAccess.hpp"
+
 #include "gargantuan/Engine.hpp"
 #include "gargantuan/Log.hpp"
 #include "gargantuan/animation/AnimationTrack.hpp"
@@ -35,6 +37,7 @@ namespace gargantuan::network {
 	namespace {
 		constexpr std::uint32_t CharacterMagic = 0x52484347;
 		constexpr std::uint32_t RemoteMagic = 0x544d5247;
+		constexpr std::size_t MaximumGameSessionPollEventsPerCall = 128;
 
 		enum class PeerPhase : std::uint8_t { TransportConnected, Accepted, Ready };
 
@@ -57,11 +60,23 @@ namespace gargantuan::network {
 				   Left.Animation == Right.Animation && Left.ContentRevision == Right.ContentRevision &&
 				   Left.StartTick == Right.StartTick && Left.DurationTicks == Right.DurationTicks;
 		}
+
+		std::optional<DisconnectInfo> SchedulerFlushFailure(const SchedulerFlushResult &Result) {
+			if (Result.TerminalDisconnect) return Result.TerminalDisconnect;
+			if (Result.Status == SchedulerFlushStatus::InvalidConnection ||
+				Result.Status == SchedulerFlushStatus::InvalidBudget)
+				return DisconnectInfo{
+					DisconnectReason::ResourceExhaustion,
+					"Scheduler flush ownership became invalid",
+				};
+			return std::nullopt;
+		}
 	}
 
 	bool GameSessionConfiguration::IsValid() const {
 		return Endpoint.IsValid() && Limits.IsValid() && HandshakeTimeoutTicks > 0 &&
-			   HandshakeTimeoutTicks <= DefaultGameSessionHandshakeTimeoutTicks * 10 && Relevance.IsValid();
+			   HandshakeTimeoutTicks <= DefaultGameSessionHandshakeTimeoutTicks * 10 && Relevance.IsValid() &&
+			   (AllowInsecureDevelopmentNetwork || IsLoopbackTransportEndpoint(Endpoint));
 	}
 
 	NetworkLimits GameSessionConfiguration::DefaultLimits() {
@@ -97,13 +112,14 @@ namespace gargantuan::network {
 			std::set<ObjectId> MaterializedCharacters;
 			std::set<ObjectId> MaterializedRemotes;
 			std::set<ObjectId> RemoteMaterializedObjects;
+			bool SchedulerFlushedThisStep = false;
 		};
 
 		std::shared_ptr<IGameTransport> Transport;
 		GameSessionConfiguration Configuration;
 		NetworkScheduler Scheduler;
 		Engine *Runtime = nullptr;
-		GameSessionStatus Status = GameSessionStatus::Stopped;
+		GameSessionStatus Status = GameSessionStatus::Created;
 		std::string Failure;
 		GameSessionMetrics Metrics;
 		std::uint64_t CurrentTick = 0;
@@ -127,8 +143,12 @@ namespace gargantuan::network {
 		SignalConnection::Pointer ServerDescendantAdded;
 		SignalConnection::Pointer ServerDescendantRemoved;
 		std::map<ObjectId, PresentedAction> PresentedActions;
+		std::optional<CharacterControlService::RuntimeAttachment> ControlAttachment;
+		std::map<ConnectionId, DisconnectInfo> PendingPeerFailures;
+		std::optional<DisconnectInfo> PendingSessionFailure;
 		bool BaselineApplied = false;
 		bool ClientRuntimeAttached = false;
+		detail::GameSessionFailurePoint FailurePoint = detail::GameSessionFailurePoint::None;
 
 		Implementation(
 			std::shared_ptr<IGameTransport> TransportValue,
@@ -145,25 +165,35 @@ namespace gargantuan::network {
 				throw std::invalid_argument(
 					"[Network:Session] Client Engine attaches after trusted replication bootstrap"
 				);
-			if (Configuration.Role == GameSessionRole::Server) InitializeServerManagers();
 		}
 
 		~Implementation() {
 			Stop();
-			if (ServerDescendantAdded) ServerDescendantAdded->Disconnect();
-			if (ServerDescendantRemoved) ServerDescendantRemoved->Disconnect();
 		}
 
-		void RegisterServerObject(const std::shared_ptr<Instance> &Object) {
-			if (!Object || Object->GetDestroyed() || Object->IsDestroying()) return;
+		bool InjectFailure(detail::GameSessionFailurePoint Point) {
+			if (FailurePoint != Point) return false;
+			FailurePoint = detail::GameSessionFailurePoint::None;
+			return true;
+		}
+
+		bool RegisterServerObject(const std::shared_ptr<Instance> &Object) {
+			if (!Object || Object->GetDestroyed() || Object->IsDestroying()) return true;
 			if (auto CharacterValue = std::dynamic_pointer_cast<KinematicCharacter>(Object)) {
 				const auto Id = CharacterValue->GetObjectId();
-				if (ServerCharacters.insert(Id).second) (void)Authority->RegisterCharacter(CharacterValue);
+				if (!ServerCharacters.contains(Id)) {
+					if (!Authority->RegisterCharacter(CharacterValue)) return false;
+					ServerCharacters.insert(Id);
+				}
 			}
 			if (auto RemoteValue = std::dynamic_pointer_cast<RemoteBase>(Object)) {
 				const auto Id = RemoteValue->GetObjectId();
-				if (ServerRemoteObjects.insert(Id).second) (void)RemoteValue->BindRemoteManager(Remotes.get());
+				if (!ServerRemoteObjects.contains(Id)) {
+					if (!RemoteValue->BindRemoteManager(Remotes.get())) return false;
+					ServerRemoteObjects.insert(Id);
+				}
 			}
+			return true;
 		}
 
 		void UnregisterServerObject(const std::shared_ptr<Instance> &Object) {
@@ -171,18 +201,32 @@ namespace gargantuan::network {
 			const auto Id = Object->GetObjectId();
 			if (ServerCharacters.contains(Id)) {
 				if (!Authority->UnregisterCharacter(Id, std::max(CurrentTick, std::uint64_t{1}))) {
-					Status = GameSessionStatus::Failed;
-					Failure = "[Character:Relevance] failed to retire the authoritative Character lifetime";
+					if (!PendingSessionFailure)
+						PendingSessionFailure = DisconnectInfo{
+							DisconnectReason::ResourceExhaustion,
+							"[Character:Relevance] failed to retire the authoritative Character lifetime",
+						};
 					return;
 				}
 				ServerCharacters.erase(Id);
 				for (auto &[Connection, PeerValue] : Peers) {
 					(void)Connection;
 					PeerValue.MaterializedCharacters.erase(Id);
+					if (PeerValue.ControlledCharacter == Id) {
+						PeerValue.ControlledCharacter = {};
+						++Metrics.CharacterControlRevocations;
+					}
 				}
 			}
 			if (ServerRemoteObjects.erase(Id)) {
-				(void)Remotes->UnregisterRemote(Id);
+				if (!Remotes->UnregisterRemote(Id)) {
+					if (!PendingSessionFailure)
+						PendingSessionFailure = DisconnectInfo{
+							DisconnectReason::ResourceExhaustion,
+							"[Remote:Registry] failed to retire an authoritative Remote lifetime",
+						};
+					return;
+				}
 				for (auto &[Connection, PeerValue] : Peers) {
 					(void)Connection;
 					PeerValue.MaterializedRemotes.erase(Id);
@@ -208,6 +252,9 @@ namespace gargantuan::network {
 				},
 				[](ObjectId Object) { return ObjectRegistry::Get().Lookup(Object); }
 			);
+			Remotes->SetTerminalHandler([this](ConnectionId Connection, const DisconnectInfo &Information) {
+				PendingPeerFailures.try_emplace(Connection, Information);
+			});
 			Authority = std::make_unique<AuthoritativeCharacterNetwork>(
 				Scheduler,
 				Configuration.Limits,
@@ -230,13 +277,31 @@ namespace gargantuan::network {
 							   : std::nullopt;
 				}
 			);
-			Runtime->CharacterControl->AttachActionRegistration([this](
-																	const CharacterActionDefinition &Definition, bool
-																) { return Authority->RegisterAction(Definition); });
+			Authority->SetTerminalHandler([this](ConnectionId Connection, const DisconnectInfo &Information) {
+				PendingPeerFailures.try_emplace(Connection, Information);
+			});
 			for (const auto &Object : Runtime->DataModel->GetDescendants())
-				RegisterServerObject(Object);
+				if (!RegisterServerObject(Object))
+					throw std::runtime_error("[Network:Session] Server gameplay object registration failed");
+			ControlAttachment = Runtime->CharacterControl->AttachRuntime(
+				{},
+				{},
+				[this](const CharacterActionDefinition &Definition, bool) {
+					return Authority->RegisterAction(Definition);
+				},
+				{}
+			);
+			if (!ControlAttachment)
+				throw std::runtime_error("[Network:Session] Server Character-control attachment failed");
 			ServerDescendantAdded = Runtime->DataModel->DescendantAdded->Connect(
-				[this](std::shared_ptr<Instance> Object) { RegisterServerObject(Object); }
+				[this](std::shared_ptr<Instance> Object) {
+					if (!RegisterServerObject(Object))
+						if (!PendingSessionFailure)
+							PendingSessionFailure = DisconnectInfo{
+								DisconnectReason::ResourceExhaustion,
+								"Server gameplay object registration failed",
+							};
+				}
 			);
 			ServerDescendantRemoved = Runtime->DataModel->DescendantRemoved->Connect(
 				[this](std::shared_ptr<Instance> Object) { UnregisterServerObject(Object); }
@@ -252,6 +317,9 @@ namespace gargantuan::network {
 				[this](ConnectionId, ObjectId Object) { return Replica.Resolve(Object) != nullptr; },
 				[this](ObjectId Object) { return Replica.Resolve(Object); }
 			);
+			Remotes->SetTerminalHandler([this](ConnectionId FailedConnection, const DisconnectInfo &Information) {
+				PendingPeerFailures.try_emplace(FailedConnection, Information);
+			});
 			Prediction = std::make_unique<PredictedCharacterNetwork>(
 				Scheduler,
 				PeerValue.Limits,
@@ -259,12 +327,19 @@ namespace gargantuan::network {
 					return Runtime->CharacterControl->EvaluateMovement(Command, CharacterValue);
 				}
 			);
+			Prediction->SetTerminalHandler([this](ConnectionId FailedConnection, const DisconnectInfo &Information) {
+				PendingPeerFailures.try_emplace(FailedConnection, Information);
+			});
 			if (!Remotes->AddPeer(Connection, PeerValue.Replication, PeerValue.Limits) ||
-				!Prediction->AddPeer(Connection))
+				InjectFailure(detail::GameSessionFailurePoint::RemoteManagerPeerCreation))
 				throw std::runtime_error("[Network:Session] Failed to attach client gameplay managers");
+			if (!Prediction->AddPeer(Connection) ||
+				InjectFailure(detail::GameSessionFailurePoint::PredictedCharacterPeerCreation))
+				throw std::runtime_error("[Network:Session] Failed to attach client Character manager");
 			for (const auto Object : ClientKnownObjects)
-				(void)Remotes->MarkMaterialized(Connection, Object);
-			Runtime->CharacterControl->AttachClientBridge(
+				if (!Remotes->MarkMaterialized(Connection, Object))
+					throw std::runtime_error("[Network:Session] Client Remote materialization failed");
+			ControlAttachment = Runtime->CharacterControl->AttachRuntime(
 				[this, Connection](std::uint64_t Tick, float DeltaSeconds, glm::vec2 Move, float Facing, bool Jump) {
 					return Prediction->SubmitInput(
 						Connection, *Runtime->WorldRoot, Tick, DeltaSeconds, Move, Facing, Jump
@@ -272,72 +347,148 @@ namespace gargantuan::network {
 				},
 				[this, Connection](std::uint32_t Action, std::uint64_t Tick) {
 					return Prediction->RequestAction(Connection, Action, Tick);
-				}
-			);
-			Runtime->CharacterControl->AttachActionRegistration(
+				},
 				[this](const CharacterActionDefinition &Definition, bool Predictable) {
 					return !Predictable || Prediction->RegisterAction(Definition);
-				}
+				},
+				[this](bool Enabled) { Prediction->SetPredictionEnabled(Enabled); }
 			);
-			Runtime->CharacterControl->AttachPredictionMode([this](bool Enabled) {
-				Prediction->SetPredictionEnabled(Enabled);
-			});
-			SynchronizeClientGraph();
+			if (!ControlAttachment)
+				throw std::runtime_error("[Network:Session] Client Character-control attachment failed");
+			if (InjectFailure(detail::GameSessionFailurePoint::RuntimeCallbackAttachment))
+				throw std::runtime_error("[Network:Session] Injected Character-control attachment failure");
+			if (!SynchronizeClientGraph() ||
+				InjectFailure(detail::GameSessionFailurePoint::ClientGraphSynchronization))
+				throw std::runtime_error("[Network:Session] Client gameplay graph synchronization failed");
 		}
 
-		void ApplyServerRemoteMaterialization(ConnectionId Connection, const ReplicationFrame &Frame) {
+		bool ApplyServerRemoteMaterialization(ConnectionId Connection, const ReplicationFrame &Frame) {
 			auto Peer = Peers.find(Connection);
-			if (Peer == Peers.end() || Peer->second.Phase != PeerPhase::Ready || !Remotes) return;
+			if (Peer == Peers.end() || Peer->second.Phase != PeerPhase::Ready || !Remotes) return true;
 			for (const auto &Operation : Frame.Operations)
 				if (const auto *Publish = std::get_if<PublishReplication>(&Operation.Intent)) {
-					if (Peer->second.RemoteMaterializedObjects.insert(Publish->Object).second)
-						(void)Remotes->MarkMaterialized(Connection, Publish->Object);
+					if (!Peer->second.RemoteMaterializedObjects.contains(Publish->Object)) {
+						if (!Remotes->MarkMaterialized(Connection, Publish->Object)) return false;
+						Peer->second.RemoteMaterializedObjects.insert(Publish->Object);
+					}
 				}
 			const auto *View = Replication ? Replication->GetView(Connection) : nullptr;
-			if (!View) return;
+			if (!View) return false;
 			for (auto Iterator = Peer->second.RemoteMaterializedObjects.begin();
 				 Iterator != Peer->second.RemoteMaterializedObjects.end();) {
 				if (View->Knows(*Iterator)) {
 					++Iterator;
 					continue;
 				}
-				(void)Remotes->MarkUnmaterialized(Connection, *Iterator);
+				if (!Remotes->MarkUnmaterialized(Connection, *Iterator)) return false;
 				Iterator = Peer->second.RemoteMaterializedObjects.erase(Iterator);
 			}
+			return true;
 		}
 
 		TransportOperationResult Start() {
-			if (Status != GameSessionStatus::Stopped) return {.Status = TransportOperationStatus::InvalidState};
+			if (Status != GameSessionStatus::Created) return {.Status = TransportOperationStatus::InvalidState};
+			Status = GameSessionStatus::Starting;
+			if (Configuration.Role == GameSessionRole::Server) {
+				try {
+					InitializeServerManagers();
+				} catch (...) {
+					FailSession({DisconnectReason::ResourceExhaustion, "Server session initialization failed"});
+					return {
+						.Status = TransportOperationStatus::ResourceExhausted,
+						.TerminalDisconnect = DisconnectInfo{
+							DisconnectReason::ResourceExhaustion,
+							"Server session initialization failed",
+						},
+					};
+				}
+			}
 			auto Result = Transport->Start({
 				.Role = Configuration.Role == GameSessionRole::Server ? TransportRole::Server : TransportRole::Client,
 				.Endpoint = Configuration.Endpoint,
 				.AdvertisedLimits = Configuration.Limits,
 			});
+			if (Result.Succeeded() && InjectFailure(detail::GameSessionFailurePoint::TransportStart)) {
+				FailSession({DisconnectReason::ResourceExhaustion, "Injected transport-start acquisition failure"});
+				return {
+					.Status = TransportOperationStatus::ResourceExhausted,
+					.TerminalDisconnect = DisconnectInfo{
+						DisconnectReason::ResourceExhaustion,
+						"Injected transport-start acquisition failure",
+					},
+				};
+			}
 			if (Result.Succeeded())
 				Status = Configuration.Role == GameSessionRole::Server ? GameSessionStatus::Listening
 																	   : GameSessionStatus::Connecting;
 			else {
-				Status = GameSessionStatus::Failed;
-				Failure = "Transport endpoint failed to start";
+				FailSession(Result.TerminalDisconnect.value_or(DisconnectInfo{
+					DisconnectReason::TransportFailure,
+					"Transport endpoint failed to start",
+				}));
 			}
 			return Result;
 		}
 
-		void Stop() {
-			if (Status == GameSessionStatus::Stopped) return;
+		void ReleaseSessionResources() {
+			ControlAttachment.reset();
+			if (ServerDescendantAdded) ServerDescendantAdded->Disconnect();
+			if (ServerDescendantRemoved) ServerDescendantRemoved->Disconnect();
+			ServerDescendantAdded.reset();
+			ServerDescendantRemoved.reset();
 			for (auto &[Character, Presented] : PresentedActions) {
 				(void)Character;
 				if (Presented.Track) Presented.Track->Stop();
 			}
 			PresentedActions.clear();
-			if (Runtime) Runtime->CharacterControl->DetachRuntime();
-			for (auto Iterator = Peers.begin(); Iterator != Peers.end();) {
-				auto Connection = Iterator->first;
-				++Iterator;
-				TearDownPeer(Connection);
+			std::vector<ConnectionId> Connections;
+			Connections.reserve(Peers.size());
+			for (const auto &[Connection, PeerValue] : Peers) {
+				(void)PeerValue;
+				Connections.push_back(Connection);
 			}
-			(void)Transport->Stop({DisconnectReason::LocalShutdown, "Game session stopped"});
-			Status = GameSessionStatus::Stopped;
+			for (const auto Connection : Connections)
+				TearDownPeer(Connection);
+			Remotes.reset();
+			Authority.reset();
+			Prediction.reset();
+			Replication.reset();
+			Relevance.reset();
+			Replica.Reset();
+			ServerCharacters.clear();
+			ServerRemoteObjects.clear();
+			ClientCharacterObjects.clear();
+			ClientRemoteObjects.clear();
+			ClientMaterializedCharacters.clear();
+			ClientKnownObjects.clear();
+			PrimaryConnection.reset();
+			PendingPeerFailures.clear();
+			PendingSessionFailure.reset();
+			BaselineApplied = false;
+			ClientRuntimeAttached = false;
+			Runtime = nullptr;
+		}
+
+		void FailSession(DisconnectInfo Information) {
+			if (Status == GameSessionStatus::Failed || Status == GameSessionStatus::Closed) return;
+			const auto Diagnostic = Information.Diagnostic.size() <= 512
+									? Information.Diagnostic
+									: Information.Diagnostic.substr(0, 512);
+			Status = GameSessionStatus::Closing;
+			ReleaseSessionResources();
+			(void)Transport->Stop(std::move(Information));
+			Failure = Diagnostic.empty() ? "Game session failed" : Diagnostic;
+			Status = GameSessionStatus::Failed;
+		}
+
+		void Stop() {
+			if (Status == GameSessionStatus::Closed || Status == GameSessionStatus::Failed) return;
+			const bool TransportStarted = Status != GameSessionStatus::Created;
+			Status = GameSessionStatus::Closing;
+			ReleaseSessionResources();
+			if (TransportStarted)
+				(void)Transport->Stop({DisconnectReason::LocalShutdown, "Game session stopped"});
+			Status = GameSessionStatus::Closed;
 		}
 
 		bool QueueSession(ConnectionId Connection, const GameSessionMessage &Message, const NetworkLimits &Limits) {
@@ -349,7 +500,21 @@ namespace gargantuan::network {
 			return Intent && Scheduler.Submit(std::move(*Intent)).Accepted();
 		}
 
-		void Reject(ConnectionId Connection, DisconnectReason Reason, std::string Diagnostic) {
+		SerializationResult<SchedulerSubmitResult> QueueStructuralFrame(
+			const ReplicationFrame &Frame, ConnectionId Connection, const NetworkLimits &Limits
+		) {
+			if (InjectFailure(detail::GameSessionFailurePoint::StructuralSchedulerAdmission))
+				return SchedulerSubmitResult{
+					SchedulerSubmitStatus::ReliableBacklogExhausted,
+					DisconnectInfo{
+						DisconnectReason::ResourceExhaustion,
+						"Injected reliable structural scheduler exhaustion",
+					},
+				};
+			return QueueReplicationFrame(Frame, Connection, Limits, Scheduler);
+		}
+
+		void FailPeer(ConnectionId Connection, DisconnectReason Reason, std::string Diagnostic) {
 			if (Reason == DisconnectReason::ProtocolViolation) ++Metrics.ProtocolRejects;
 			LOG_WARN(
 				App,
@@ -358,9 +523,33 @@ namespace gargantuan::network {
 				Connection.Generation,
 				Diagnostic.c_str()
 			);
-			if (Configuration.Role == GameSessionRole::Client) Failure = Diagnostic;
-			(void)Transport->Disconnect(Connection, {Reason, Diagnostic});
-			TearDownPeer(Connection);
+			if (Configuration.Role == GameSessionRole::Client)
+				FailSession({Reason, std::move(Diagnostic)});
+			else {
+				TearDownPeer(Connection);
+				(void)Transport->Disconnect(Connection, {Reason, std::move(Diagnostic)});
+			}
+		}
+
+		void Reject(ConnectionId Connection, DisconnectReason Reason, std::string Diagnostic) {
+			FailPeer(Connection, Reason, std::move(Diagnostic));
+		}
+
+		bool DrainFailures() {
+			if (PendingSessionFailure) {
+				auto Information = std::move(*PendingSessionFailure);
+				PendingSessionFailure.reset();
+				FailSession(std::move(Information));
+				return false;
+			}
+			auto Failures = std::move(PendingPeerFailures);
+			PendingPeerFailures.clear();
+			for (auto &[Connection, Information] : Failures) {
+				if (!Peers.contains(Connection)) continue;
+				FailPeer(Connection, Information.Reason, std::move(Information.Diagnostic));
+				if (Configuration.Role == GameSessionRole::Client) return false;
+			}
+			return Status != GameSessionStatus::Failed && Status != GameSessionStatus::Closed;
 		}
 
 		void OnConnected(ConnectionId Connection) {
@@ -382,6 +571,10 @@ namespace gargantuan::network {
 			PrimaryConnection = Connection;
 			if (!Scheduler.RegisterConnection(Connection, Configuration.Limits)) {
 				Reject(Connection, DisconnectReason::ResourceExhaustion, "Client scheduler registration failed");
+				return;
+			}
+			if (InjectFailure(detail::GameSessionFailurePoint::SchedulerRegistration)) {
+				Reject(Connection, DisconnectReason::ResourceExhaustion, "Injected scheduler registration failure");
 				return;
 			}
 			auto &PeerValue = Peers.at(Connection);
@@ -435,9 +628,9 @@ namespace gargantuan::network {
 			PeerValue.PlayerId = static_cast<std::uint32_t>(PeerValue.PlayerValue->GetPlayerId());
 			++Metrics.PlayersCreated;
 			auto CharacterValue = PeerValue.PlayerValue->GetCharacter() ? std::dynamic_pointer_cast<KinematicCharacter>(
-																			  *PeerValue.PlayerValue->GetCharacter()
-																		  )
-																		: nullptr;
+															  *PeerValue.PlayerValue->GetCharacter()
+														  )
+														: nullptr;
 			const auto OwnerCharacter = CharacterValue ? CharacterValue->GetObjectId() : ObjectId{};
 			const auto RelevanceStarted = std::chrono::steady_clock::now();
 			if (!Relevance->AddPeer(Connection, PeerValue.PlayerObject, OwnerCharacter)) {
@@ -459,18 +652,17 @@ namespace gargantuan::network {
 			auto Baseline = Replication->AddPeer(Connection, PeerValue.Replication, *Selection);
 			const auto ReplicationMetricsAfter = Replication->GetMetrics();
 			Metrics.BaselineSnapshotCpuNanoseconds += ReplicationMetricsAfter.SnapshotCaptureCpuNanoseconds -
-													  ReplicationMetricsBefore.SnapshotCaptureCpuNanoseconds;
+											  ReplicationMetricsBefore.SnapshotCaptureCpuNanoseconds;
 			Metrics.BaselineDiscoveryCpuNanoseconds += ReplicationMetricsAfter.BaselineDiscoveryCpuNanoseconds -
-													   ReplicationMetricsBefore.BaselineDiscoveryCpuNanoseconds;
+											   ReplicationMetricsBefore.BaselineDiscoveryCpuNanoseconds;
 			Metrics.BaselineEncodeCpuNanoseconds += ReplicationMetricsAfter.BaselineEncodeCpuNanoseconds -
-													ReplicationMetricsBefore.BaselineEncodeCpuNanoseconds;
-			auto BaselineQueued = Baseline.Succeeded()
-									  ? QueueReplicationFrame(*Baseline.Frame, Connection, PeerValue.Limits, Scheduler)
-									  : SerializationResult<SchedulerSubmitResult>(SerializationFailure(
-											SerializationErrorCode::InternalFailure,
-											"Replication baseline was not produced"
-										));
-			if (!Baseline.Succeeded() ||
+											ReplicationMetricsBefore.BaselineEncodeCpuNanoseconds;
+			if (!Baseline.Succeeded()) {
+				Reject(Connection, DisconnectReason::ResourceExhaustion, "Server replication registration failed");
+				return;
+			}
+			auto BaselineQueued = QueueStructuralFrame(*Baseline.Frame, Connection, PeerValue.Limits);
+			if (
 				!QueueSession(
 					Connection,
 					GameSessionServerAccepted{
@@ -514,8 +706,8 @@ namespace gargantuan::network {
 				Reject(Connection, DisconnectReason::ProtocolViolation, "Server returned invalid negotiated limits");
 				return;
 			}
-			(void)Scheduler.CancelConnection(Connection);
-			if (!Scheduler.RegisterConnection(Connection, Accepted.NegotiatedLimits)) {
+			if (!Scheduler.CancelConnection(Connection) ||
+				!Scheduler.RegisterConnection(Connection, Accepted.NegotiatedLimits)) {
 				Reject(
 					Connection, DisconnectReason::ResourceExhaustion, "Client negotiated scheduler registration failed"
 				);
@@ -549,11 +741,22 @@ namespace gargantuan::network {
 				);
 				return;
 			}
+			if (Frame->Kind == ReplicationMessageKind::Baseline &&
+				InjectFailure(detail::GameSessionFailurePoint::ReplicationPeerCreation)) {
+				FailSession({DisconnectReason::ResourceExhaustion, "Injected replication-peer acquisition failure"});
+				return;
+			}
 			for (const auto &Operation : Frame->Operations) {
 				const auto Object = ReplicationObject(Operation.Intent);
 				if (const auto *Publish = std::get_if<PublishReplication>(&Operation.Intent)) {
 					ClientKnownObjects.insert(Object);
-					if (Remotes) (void)Remotes->MarkMaterialized(Message.Connection, Object);
+					if (Remotes && !Remotes->MarkMaterialized(Message.Connection, Object)) {
+						FailSession({
+							DisconnectReason::ResourceExhaustion,
+							"Client Remote materialization registration failed",
+						});
+						return;
+					}
 					auto ReplicaObject = Replica.Resolve(Object);
 					if (std::dynamic_pointer_cast<KinematicCharacter>(ReplicaObject))
 						ClientCharacterObjects.insert(Object);
@@ -563,8 +766,21 @@ namespace gargantuan::network {
 					ClientKnownObjects.erase(Object);
 					ClientCharacterObjects.erase(Object);
 					ClientRemoteObjects.erase(Object);
-					if (Prediction) (void)Prediction->MarkUnmaterialized(Object);
-					if (Remotes) (void)Remotes->MarkUnmaterialized(Message.Connection, Object);
+					if (Prediction && ClientMaterializedCharacters.erase(Object) &&
+						!Prediction->MarkUnmaterialized(Object)) {
+						FailSession({
+							DisconnectReason::ResourceExhaustion,
+							"Client Character unmaterialization registration failed",
+						});
+						return;
+					}
+					if (Remotes && !Remotes->MarkUnmaterialized(Message.Connection, Object)) {
+						FailSession({
+							DisconnectReason::ResourceExhaustion,
+							"Client Remote unmaterialization registration failed",
+						});
+						return;
+					}
 				}
 			}
 			for (auto Iterator = ClientKnownObjects.begin(); Iterator != ClientKnownObjects.end();) {
@@ -572,13 +788,33 @@ namespace gargantuan::network {
 					++Iterator;
 					continue;
 				}
-				if (Remotes) (void)Remotes->MarkUnmaterialized(Message.Connection, *Iterator);
+				if (Remotes && !Remotes->MarkUnmaterialized(Message.Connection, *Iterator)) {
+					FailSession({
+						DisconnectReason::ResourceExhaustion,
+						"Client materialization registry diverged from its replica",
+					});
+					return;
+				}
+				if (Prediction && ClientMaterializedCharacters.erase(*Iterator) &&
+					!Prediction->MarkUnmaterialized(*Iterator)) {
+					FailSession({
+						DisconnectReason::ResourceExhaustion,
+						"Client Character registry diverged from its replica",
+					});
+					return;
+				}
 				ClientCharacterObjects.erase(*Iterator);
 				ClientRemoteObjects.erase(*Iterator);
 				Iterator = ClientKnownObjects.erase(Iterator);
 			}
 			BaselineApplied = BaselineApplied || Frame->Kind == ReplicationMessageKind::Baseline;
-			if (ClientRuntimeAttached) SynchronizeClientGraph();
+			if (ClientRuntimeAttached && !SynchronizeClientGraph()) {
+				FailSession({
+					DisconnectReason::ResourceExhaustion,
+					"Client gameplay graph synchronization failed",
+				});
+				return;
+			}
 			TryFinalizeClientBootstrap();
 		}
 
@@ -592,7 +828,8 @@ namespace gargantuan::network {
 			auto PlayerValue = std::dynamic_pointer_cast<Player>(Replica.Resolve(PeerIterator->second.PlayerObject));
 			auto PlayersValue = Root ? std::dynamic_pointer_cast<Players>(Root->FindFirstChildOfClass("Players", false))
 									 : nullptr;
-			if (!Root || !PlayerValue || !PlayersValue || PeerIterator->second.PlayerId == 0 ||
+			if (!PlayerValue) return;
+			if (!Root || !PlayersValue || PeerIterator->second.PlayerId == 0 ||
 				static_cast<std::uint32_t>(PlayerValue->GetPlayerId()) != PeerIterator->second.PlayerId ||
 				!PlayersValue->SetTrustedLocalPlayer(PlayerValue)) {
 				Reject(
@@ -600,6 +837,10 @@ namespace gargantuan::network {
 					DisconnectReason::ProtocolViolation,
 					"Trusted LocalPlayer association was not materialized"
 				);
+				return;
+			}
+			if (InjectFailure(detail::GameSessionFailurePoint::LocalPlayerResolution)) {
+				FailSession({DisconnectReason::ResourceExhaustion, "Injected LocalPlayer resolution failure"});
 				return;
 			}
 			Status = GameSessionStatus::Accepted;
@@ -630,7 +871,14 @@ namespace gargantuan::network {
 					View->KnownObjects.begin(), View->KnownObjects.end()
 				);
 				for (const auto Object : PeerValue.RemoteMaterializedObjects)
-					(void)Remotes->MarkMaterialized(Connection, Object);
+					if (!Remotes->MarkMaterialized(Connection, Object)) {
+						FailPeer(
+							Connection,
+							DisconnectReason::ResourceExhaustion,
+							"Server gameplay materialization registration failed"
+						);
+						return;
+					}
 			}
 			++Metrics.ReadyPeers;
 			Metrics.GameplayRegistrationCpuNanoseconds += static_cast<std::uint64_t>(
@@ -727,30 +975,33 @@ namespace gargantuan::network {
 		}
 
 		std::size_t Poll() {
-			std::array<TransportEvent, 256> Buffer;
-			std::size_t Total = 0;
-			for (;;) {
-				const auto Count = Transport->PollEvents(Buffer);
-				Total += Count;
-				for (std::size_t Index = 0; Index < Count; ++Index) {
-					auto Event = std::move(Buffer[Index]);
-					if (const auto *Changed = std::get_if<ConnectionStateEvent>(&Event)) {
-						if (Changed->Current == ConnectionState::Connected)
-							OnConnected(Changed->Connection);
-						else if (Changed->Current == ConnectionState::Closed)
+			std::array<TransportEvent, MaximumGameSessionPollEventsPerCall> Buffer;
+			const auto Count = Transport->PollEvents(Buffer);
+			for (std::size_t Index = 0; Index < Count; ++Index) {
+				auto Event = std::move(Buffer[Index]);
+				if (const auto *Changed = std::get_if<ConnectionStateEvent>(&Event)) {
+					if (Changed->Current == ConnectionState::Connected)
+						OnConnected(Changed->Connection);
+					else if (Changed->Current == ConnectionState::Closed) {
+						if (Configuration.Role == GameSessionRole::Client)
+							FailSession({DisconnectReason::RemoteShutdown, "Game server connection closed"});
+						else
 							TearDownPeer(Changed->Connection);
-					} else if (const auto *Received = std::get_if<ReceivedMessageEvent>(&Event)) {
-						HandleReceived(*Received);
-					} else if (const auto *Disconnected = std::get_if<DisconnectedEvent>(&Event)) {
-						TearDownPeer(Disconnected->Connection);
-					} else if (const auto *Failed = std::get_if<TransportFailureEvent>(&Event)) {
-						Status = GameSessionStatus::Failed;
-						Failure = Failed->Information.Diagnostic;
 					}
+				} else if (const auto *Received = std::get_if<ReceivedMessageEvent>(&Event)) {
+					HandleReceived(*Received);
+				} else if (const auto *Disconnected = std::get_if<DisconnectedEvent>(&Event)) {
+					if (Configuration.Role == GameSessionRole::Client)
+						FailSession(Disconnected->Information);
+					else
+						TearDownPeer(Disconnected->Connection);
+				} else if (const auto *Failed = std::get_if<TransportFailureEvent>(&Event)) {
+					FailSession(Failed->Information);
 				}
-				if (Count < Buffer.size()) break;
+				if (Status == GameSessionStatus::Failed || Status == GameSessionStatus::Closed) return Count;
 			}
-			return Total;
+			(void)DrainFailures();
+			return Count;
 		}
 
 		void SynchronizeServerGraph() {
@@ -763,13 +1014,26 @@ namespace gargantuan::network {
 				std::set<ObjectId> DesiredRemotes;
 				for (const auto Remote : ServerRemoteObjects)
 					if (View->Knows(Remote)) DesiredRemotes.insert(Remote);
+				bool PeerHealthy = true;
 				for (const auto Remote : PeerValue.MaterializedRemotes)
-					if (!DesiredRemotes.contains(Remote)) (void)Remotes->MarkUnmaterialized(Connection, Remote);
+					if (!DesiredRemotes.contains(Remote) && !Remotes->MarkUnmaterialized(Connection, Remote))
+						PeerHealthy = false;
 				for (const auto Remote : DesiredRemotes)
 					if (!PeerValue.MaterializedRemotes.contains(Remote)) {
-						(void)Remotes->MarkMaterialized(Connection, Remote);
-						(void)Remotes->PublishRemote(Connection, Remote, true);
+						if (!Remotes->MarkMaterialized(Connection, Remote) ||
+							!Remotes->PublishRemote(Connection, Remote, true))
+							PeerHealthy = false;
 					}
+				if (!PeerHealthy) {
+					PendingPeerFailures.try_emplace(
+						Connection,
+						DisconnectInfo{
+							DisconnectReason::ResourceExhaustion,
+							"Remote relevance registration failed",
+						}
+					);
+					continue;
+				}
 				PeerValue.MaterializedRemotes = std::move(DesiredRemotes);
 
 				std::set<ObjectId> DesiredCharacters;
@@ -785,17 +1049,23 @@ namespace gargantuan::network {
 				for (const auto Character : PeerValue.MaterializedCharacters)
 					if (!DesiredCharacters.contains(Character) &&
 						!Authority->MarkUnmaterialized(Connection, Character)) {
-						Status = GameSessionStatus::Failed;
-						Failure = "[Character:Relevance] materialization epoch exhausted while leaving relevance";
-						return;
+						PeerHealthy = false;
 					}
 				for (const auto Character : DesiredCharacters)
 					if (!PeerValue.MaterializedCharacters.contains(Character) &&
 						!Authority->MarkMaterialized(Connection, Character, CharacterStateChannel(Character))) {
-						Status = GameSessionStatus::Failed;
-						Failure = "[Character:Relevance] materialization epoch exhausted while entering relevance";
-						return;
+						PeerHealthy = false;
 					}
+				if (!PeerHealthy) {
+					PendingPeerFailures.try_emplace(
+						Connection,
+						DisconnectInfo{
+							DisconnectReason::ResourceExhaustion,
+							"[Character:Relevance] materialization generation could not advance",
+						}
+					);
+					continue;
+				}
 				PeerValue.MaterializedCharacters = std::move(DesiredCharacters);
 
 				auto CharacterValue = PeerValue.PlayerValue && PeerValue.PlayerValue->GetCharacter()
@@ -806,16 +1076,34 @@ namespace gargantuan::network {
 				const auto Desired = CharacterValue ? CharacterValue->GetObjectId() : ObjectId{};
 				if (Desired == PeerValue.ControlledCharacter) continue;
 				if (PeerValue.ControlledCharacter.IsValid()) {
-					(void)Authority->RevokeControl(
-						PeerValue.ControlledCharacter, std::max(CurrentTick, std::uint64_t{1})
-					);
+					if (!Authority->RevokeControl(
+							PeerValue.ControlledCharacter, std::max(CurrentTick, std::uint64_t{1})
+						)) {
+						PendingPeerFailures.try_emplace(
+							Connection,
+							DisconnectInfo{
+								DisconnectReason::ResourceExhaustion,
+								"Owner Character control revocation failed",
+							}
+						);
+						continue;
+					}
 					++Metrics.CharacterControlRevocations;
 				}
 				PeerValue.ControlledCharacter = {};
-				if (Desired.IsValid() && View->Knows(Desired) && PeerValue.MaterializedCharacters.contains(Desired) &&
-					Authority->BindControl(Connection, Desired, std::max(CurrentTick, std::uint64_t{1}))) {
-					PeerValue.ControlledCharacter = Desired;
-					++Metrics.CharacterControlBindings;
+				if (Desired.IsValid() && View->Knows(Desired) && PeerValue.MaterializedCharacters.contains(Desired)) {
+					if (Authority->BindControl(Connection, Desired, std::max(CurrentTick, std::uint64_t{1}))) {
+						PeerValue.ControlledCharacter = Desired;
+						++Metrics.CharacterControlBindings;
+					} else {
+						PendingPeerFailures.try_emplace(
+							Connection,
+							DisconnectInfo{
+								DisconnectReason::ResourceExhaustion,
+								"Owner Character control binding failed",
+							}
+						);
+					}
 				}
 			}
 			Metrics.ServerGraphSynchronizationCpuNanoseconds += static_cast<std::uint64_t>(
@@ -823,29 +1111,29 @@ namespace gargantuan::network {
 			);
 		}
 
-		void SynchronizeClientGraph() {
-			if (!ClientRuntimeAttached || !Prediction || !Remotes || !PrimaryConnection) return;
+		bool SynchronizeClientGraph() {
+			if (!Prediction || !Remotes || !PrimaryConnection) return false;
 			std::set<ObjectId> DesiredCharacters;
 			for (const auto Object : ClientCharacterObjects) {
 				auto CharacterValue = std::dynamic_pointer_cast<KinematicCharacter>(Replica.Resolve(Object));
 				if (CharacterValue && CharacterValue->GetRootPart()) DesiredCharacters.insert(Object);
 			}
 			for (const auto Object : ClientMaterializedCharacters)
-				if (!DesiredCharacters.contains(Object)) (void)Prediction->MarkUnmaterialized(Object);
+				if (!DesiredCharacters.contains(Object) && !Prediction->MarkUnmaterialized(Object)) return false;
 			for (const auto Object : DesiredCharacters)
 				if (!ClientMaterializedCharacters.contains(Object)) {
 					auto CharacterValue = std::dynamic_pointer_cast<KinematicCharacter>(Replica.Resolve(Object));
-					if (CharacterValue) (void)Prediction->MarkMaterialized(Object, CharacterValue);
+					if (!CharacterValue || !Prediction->MarkMaterialized(Object, CharacterValue)) return false;
 				}
 			ClientMaterializedCharacters = std::move(DesiredCharacters);
 			for (const auto Object : ClientRemoteObjects) {
 				auto RemoteValue = std::dynamic_pointer_cast<RemoteBase>(Replica.Resolve(Object));
 				if (!RemoteValue) continue;
-				if (RemoteValue->BindRemoteManager(Remotes.get(), *PrimaryConnection, Object)) {
-					(void)Remotes->PublishRemote(*PrimaryConnection, Object, true);
-					(void)Remotes->MarkMaterialized(*PrimaryConnection, Object);
-				}
+				if (!RemoteValue->BindRemoteManager(Remotes.get(), *PrimaryConnection, Object) ||
+					!Remotes->PublishRemote(*PrimaryConnection, Object, true))
+					return false;
 			}
+			return true;
 		}
 
 		void SynchronizeActionPresentation() {
@@ -915,11 +1203,11 @@ namespace gargantuan::network {
 			if (Iterator == Peers.end()) return;
 			auto PeerValue = std::move(Iterator->second);
 			Peers.erase(Iterator);
-			if (Remotes) (void)Remotes->RemovePeer(Connection);
 			if (Authority) (void)Authority->RemovePeer(Connection, std::max(CurrentTick, std::uint64_t{1}));
 			if (Prediction) (void)Prediction->RemovePeer(Connection);
-			if (Replication) (void)Replication->RemovePeer(Connection);
+			if (Remotes) (void)Remotes->RemovePeer(Connection);
 			if (Relevance) (void)Relevance->RemovePeer(Connection);
+			if (Replication) (void)Replication->RemovePeer(Connection);
 			(void)Scheduler.CancelConnection(Connection);
 			if (Configuration.Role == GameSessionRole::Server && PeerValue.PlayerValue) {
 				if (Runtime->Players->RemoveSessionPlayer(PeerValue.PlayerValue)) ++Metrics.PlayersRemoved;
@@ -932,14 +1220,20 @@ namespace gargantuan::network {
 				ClientRemoteObjects.clear();
 				ClientKnownObjects.clear();
 				PrimaryConnection.reset();
-				if (Status != GameSessionStatus::Stopped) Status = GameSessionStatus::Failed;
-				if (Failure.empty()) Failure = "Game server connection closed";
 			}
 		}
 
 		void Step(std::uint64_t SimulationTick) {
-			if (Status == GameSessionStatus::Stopped || Status == GameSessionStatus::Failed) return;
+			if (Status == GameSessionStatus::Created || Status == GameSessionStatus::Starting ||
+				Status == GameSessionStatus::Closing || Status == GameSessionStatus::Closed ||
+				Status == GameSessionStatus::Failed)
+				return;
+			if (!DrainFailures()) return;
 			CurrentTick = SimulationTick;
+			for (auto &[Connection, PeerValue] : Peers) {
+				(void)Connection;
+				PeerValue.SchedulerFlushedThisStep = false;
+			}
 			std::vector<ConnectionId> TimedOut;
 			for (const auto &[Connection, PeerValue] : Peers)
 				if (PeerValue.Phase != PeerPhase::Ready && SimulationTick >= PeerValue.ConnectedTick &&
@@ -958,51 +1252,146 @@ namespace gargantuan::network {
 													*PeerValue.PlayerValue->GetCharacter()
 												)
 											  : nullptr;
-					(void)Relevance->SetOwnerCharacter(
-						Connection, CharacterValue ? CharacterValue->GetObjectId() : ObjectId{}
-					);
+					if (!Relevance->SetOwnerCharacter(
+							Connection, CharacterValue ? CharacterValue->GetObjectId() : ObjectId{}
+						))
+						PendingPeerFailures.try_emplace(
+							Connection,
+							DisconnectInfo{
+								DisconnectReason::ResourceExhaustion,
+								"Owner Character relevance update failed",
+							}
+						);
 				}
+				if (!DrainFailures()) return;
 				if (!Relevance->Update(std::max(SimulationTick, std::uint64_t{1}))) {
-					Status = GameSessionStatus::Failed;
-					Failure = "[Replication:Relevance] " + Relevance->GetFailure();
+					FailSession({
+						DisconnectReason::ResourceExhaustion,
+						"[Replication:Relevance] " + Relevance->GetFailure(),
+					});
 					return;
 				}
 				for (auto &[Connection, PeerValue] : Peers) {
 					if (PeerValue.Phase == PeerPhase::TransportConnected) continue;
+					auto Statistics = Scheduler.GetStatistics(Connection);
+					if (!Statistics) {
+						PendingPeerFailures.try_emplace(
+							Connection,
+							DisconnectInfo{
+								DisconnectReason::ResourceExhaustion,
+								"Scheduler ownership disappeared before structural publication",
+							}
+						);
+						continue;
+					}
+					if (Statistics->QueuedMessages != 0) {
+						auto Flushed = Scheduler.Flush(
+							Connection, SchedulerTickBudget::FromNetworkLimits(PeerValue.Limits)
+						);
+						PeerValue.SchedulerFlushedThisStep = true;
+						if (auto Failure = SchedulerFlushFailure(Flushed)) {
+							PendingPeerFailures.try_emplace(Connection, std::move(*Failure));
+							continue;
+						}
+					}
+					bool StructuralSubmission = false;
 					const auto *Selection = Relevance->GetSelection(Connection);
-					if (!Selection) continue;
+					if (!Selection) {
+						PendingPeerFailures.try_emplace(
+							Connection,
+							DisconnectInfo{
+								DisconnectReason::ResourceExhaustion,
+								"Server relevance selection disappeared before structural publication",
+							}
+						);
+						continue;
+					}
 					if (Relevance->WasSelectionEvaluated(Connection) || Replication->HasPendingRelevance(Connection)) {
 						auto Transition = Replication->UpdateRelevance(Connection, *Selection);
 						if (Transition.Succeeded() && Transition.Frame) {
-							if (!QueueReplicationFrame(*Transition.Frame, Connection, PeerValue.Limits, Scheduler)) {
-								Status = GameSessionStatus::Failed;
-								Failure = "[Replication:Relevance] structural transition could not be queued";
-								return;
+							auto Queued = QueueStructuralFrame(*Transition.Frame, Connection, PeerValue.Limits);
+							if (!Queued || !Queued->Accepted()) {
+								PendingPeerFailures.try_emplace(
+									Connection,
+									Queued && Queued->TerminalDisconnect
+										? *Queued->TerminalDisconnect
+										: DisconnectInfo{
+											  DisconnectReason::ResourceExhaustion,
+											  "Structural relevance transition was rejected by the scheduler",
+										  }
+								);
+								continue;
 							}
-							ApplyServerRemoteMaterialization(Connection, *Transition.Frame);
+							StructuralSubmission = true;
+							if (!ApplyServerRemoteMaterialization(Connection, *Transition.Frame))
+								PendingPeerFailures.try_emplace(
+									Connection,
+									DisconnectInfo{
+										DisconnectReason::ResourceExhaustion,
+										"Remote materialization could not follow structural commit",
+									}
+								);
+							if (PendingPeerFailures.contains(Connection)) continue;
 						} else if (Transition.Error != "No replication relevance changes are available") {
-							Status = GameSessionStatus::Failed;
-							Failure = "[Replication:Relevance] " + Transition.Error;
-							return;
+							PendingPeerFailures.try_emplace(
+								Connection,
+								DisconnectInfo{
+									DisconnectReason::ResourceExhaustion,
+									"[Replication:Relevance] " + Transition.Error,
+								}
+							);
+							continue;
 						}
 					}
 					auto Frame = Replication->ProduceIncremental(Connection);
 					if (Frame.Succeeded() && Frame.Frame) {
-						if (!QueueReplicationFrame(*Frame.Frame, Connection, PeerValue.Limits, Scheduler)) {
-							Status = GameSessionStatus::Failed;
-							Failure = "[Replication:Relevance] structural delta could not be queued";
-							return;
+						auto Queued = QueueStructuralFrame(*Frame.Frame, Connection, PeerValue.Limits);
+						if (!Queued || !Queued->Accepted()) {
+							PendingPeerFailures.try_emplace(
+								Connection,
+								Queued && Queued->TerminalDisconnect
+									? *Queued->TerminalDisconnect
+									: DisconnectInfo{
+										  DisconnectReason::ResourceExhaustion,
+										  "Structural delta was rejected by the scheduler",
+									  }
+							);
+							continue;
 						}
-						ApplyServerRemoteMaterialization(Connection, *Frame.Frame);
+						StructuralSubmission = true;
+						if (!ApplyServerRemoteMaterialization(Connection, *Frame.Frame))
+							PendingPeerFailures.try_emplace(
+								Connection,
+								DisconnectInfo{
+									DisconnectReason::ResourceExhaustion,
+									"Remote materialization could not follow structural commit",
+								}
+							);
+						if (PendingPeerFailures.contains(Connection)) continue;
 					} else if (Frame.Error != "No replication changes are available" &&
 							   Frame.Error != "No relevant replication changes are available") {
-						Status = GameSessionStatus::Failed;
-						Failure = "[Replication:Relevance] " + Frame.Error;
-						return;
+						PendingPeerFailures.try_emplace(
+							Connection,
+							DisconnectInfo{
+								DisconnectReason::ResourceExhaustion,
+								"[Replication:Relevance] " + Frame.Error,
+							}
+						);
+					}
+					if (StructuralSubmission) {
+						auto Flushed = Scheduler.Flush(
+							Connection, SchedulerTickBudget::FromNetworkLimits(PeerValue.Limits)
+						);
+						PeerValue.SchedulerFlushedThisStep = true;
+						if (auto Failure = SchedulerFlushFailure(Flushed))
+							PendingPeerFailures.try_emplace(Connection, std::move(*Failure));
 					}
 				}
+				if (!DrainFailures()) return;
 				SynchronizeServerGraph();
+				if (!DrainFailures()) return;
 				Authority->Step(*Runtime->WorldRoot, std::max(SimulationTick, std::uint64_t{1}));
+				if (!DrainFailures()) return;
 			} else if (ClientRuntimeAttached && Prediction) {
 				Prediction->Reconcile(*Runtime->WorldRoot);
 				Prediction->UpdatePresentation(SimulationTick);
@@ -1021,20 +1410,23 @@ namespace gargantuan::network {
 				}
 			}
 			if (Remotes) (void)Remotes->Pump(Configuration.Limits.MaximumMessagesPerTick);
+			if (!DrainFailures()) return;
 			std::vector<std::pair<ConnectionId, DisconnectInfo>> TerminalConnections;
 			for (const auto &[Connection, PeerValue] : Peers) {
 				if (Configuration.Role == GameSessionRole::Server && PeerValue.Phase == PeerPhase::TransportConnected)
 					continue;
+				if (PeerValue.SchedulerFlushedThisStep) continue;
 				auto Flushed = Scheduler.Flush(
 					Connection,
 					SchedulerTickBudget::FromNetworkLimits(
 						PeerValue.Limits.IsValid() ? PeerValue.Limits : Configuration.Limits
 					)
 				);
-				if (Flushed.IsTerminal()) TerminalConnections.emplace_back(Connection, *Flushed.TerminalDisconnect);
+				if (auto Failure = SchedulerFlushFailure(Flushed))
+					TerminalConnections.emplace_back(Connection, std::move(*Failure));
 			}
 			for (auto &[Connection, Information] : TerminalConnections)
-				Reject(Connection, Information.Reason, std::move(Information.Diagnostic));
+				FailPeer(Connection, Information.Reason, std::move(Information.Diagnostic));
 		}
 
 		bool AttachClientRuntime(Engine &RuntimeValue) {
@@ -1043,25 +1435,48 @@ namespace gargantuan::network {
 				RuntimeValue.DataModel != GetClientDataModel())
 				return false;
 			Runtime = &RuntimeValue;
-			ClientRuntimeAttached = true;
 			try {
 				InitializeClientManagers();
-			} catch (const std::exception &Error) {
-				ClientRuntimeAttached = false;
-				Failure = Error.what();
-				Status = GameSessionStatus::Failed;
+			} catch (...) {
+				FailSession({
+					DisconnectReason::ResourceExhaustion,
+					"Client runtime bootstrap acquisition failed",
+				});
 				return false;
 			}
 			auto &PeerValue = Peers.at(*PrimaryConnection);
-			if (!QueueSession(
-					*PrimaryConnection,
-					GameSessionClientReady{PeerValue.SessionEpoch, PeerValue.Replication, PeerValue.PlayerObject},
-					PeerValue.Limits
-				)) {
-				Status = GameSessionStatus::Failed;
-				Failure = "Client readiness could not be queued";
+			auto Ready = InjectFailure(detail::GameSessionFailurePoint::ClientReadySerialization)
+						 ? SerializationResult<std::vector<std::byte>>(
+							   SerializationFailure(
+								   SerializationErrorCode::InternalFailure,
+								   "Injected ClientReady serialization failure"
+							   )
+						   )
+						 : EncodeGameSessionMessage(GameSessionClientReady{
+							   PeerValue.SessionEpoch,
+							   PeerValue.Replication,
+							   PeerValue.PlayerObject,
+						   });
+			auto ReadyIntent = Ready ? MakeNetworkMessageIntent(
+										*PrimaryConnection,
+										DeliveryMode::ReliableOrdered,
+										TrafficClass::Control,
+										{},
+										std::move(*Ready),
+										PeerValue.Limits
+									)
+							  : std::nullopt;
+			const bool ReadyAccepted = ReadyIntent &&
+				!InjectFailure(detail::GameSessionFailurePoint::ClientReadySchedulerAdmission) &&
+				Scheduler.Submit(std::move(*ReadyIntent)).Accepted();
+			if (!ReadyAccepted) {
+				FailSession({
+					DisconnectReason::ResourceExhaustion,
+					"Client readiness was rejected by the scheduler",
+				});
 				return false;
 			}
+			ClientRuntimeAttached = true;
 			PeerValue.Phase = PeerPhase::Ready;
 			Status = GameSessionStatus::Ready;
 			++Metrics.ReadyPeers;
@@ -1069,7 +1484,8 @@ namespace gargantuan::network {
 		}
 
 		std::shared_ptr<DataModel> GetClientDataModel() const {
-			return Configuration.Role == GameSessionRole::Client && Status >= GameSessionStatus::Accepted
+			return Configuration.Role == GameSessionRole::Client &&
+					   (Status == GameSessionStatus::Accepted || Status == GameSessionStatus::Ready)
 					   ? std::dynamic_pointer_cast<DataModel>(Replica.GetReplicaRoot())
 					   : nullptr;
 		}
@@ -1081,6 +1497,12 @@ namespace gargantuan::network {
 		: State(std::make_unique<Implementation>(std::move(Transport), std::move(Configuration), ServerRuntime)) {}
 
 	GameSession::~GameSession() = default;
+
+	void detail::GameSessionTestAccess::SetFailurePoint(
+		GameSession &Session, detail::GameSessionFailurePoint Point
+	) {
+		Session.State->FailurePoint = Point;
+	}
 
 	TransportOperationResult GameSession::Start() {
 		return State->Start();

@@ -15,6 +15,7 @@
 #include <cmath>
 #include <limits>
 #include <stdexcept>
+#include <utility>
 
 #include <lua.h>
 #include <lualib.h>
@@ -54,25 +55,62 @@ namespace gargantuan {
 		Mode = ModeValue;
 	}
 
-	void CharacterControlService::AttachClientBridge(ClientSubmitHandler Submit, ClientActionHandler Action) {
+	CharacterControlService::RuntimeAttachment::RuntimeAttachment(
+		std::weak_ptr<CharacterControlService> OwnerValue, std::uint64_t GenerationValue
+	)
+		: Owner(std::move(OwnerValue)), Generation(GenerationValue) {}
+
+	CharacterControlService::RuntimeAttachment::~RuntimeAttachment() {
+		Reset();
+	}
+
+	CharacterControlService::RuntimeAttachment::RuntimeAttachment(RuntimeAttachment &&Other) noexcept
+		: Owner(std::move(Other.Owner)), Generation(std::exchange(Other.Generation, 0)) {}
+
+	CharacterControlService::RuntimeAttachment &
+	CharacterControlService::RuntimeAttachment::operator=(RuntimeAttachment &&Other) noexcept {
+		if (this == &Other) return *this;
+		Reset();
+		Owner = std::move(Other.Owner);
+		Generation = std::exchange(Other.Generation, 0);
+		return *this;
+	}
+
+	void CharacterControlService::RuntimeAttachment::Reset() {
+		if (Generation == 0) return;
+		if (auto Service = Owner.lock()) Service->DetachRuntime(Generation);
+		Owner.reset();
+		Generation = 0;
+	}
+
+	bool CharacterControlService::RuntimeAttachment::IsValid() const {
+		auto Service = Owner.lock();
+		return Generation != 0 && Service && Service->RuntimeAttachmentGeneration == Generation;
+	}
+
+	std::optional<CharacterControlService::RuntimeAttachment> CharacterControlService::AttachRuntime(
+		ClientSubmitHandler Submit,
+		ClientActionHandler Action,
+		ActionRegistrationHandler Register,
+		PredictionModeHandler Prediction
+	) {
+		if (RuntimeAttachmentGeneration != 0 || NextRuntimeAttachmentGeneration == 0) return std::nullopt;
+		for (const auto &[Name, Registered] : ActionsByName) {
+			(void)Name;
+			if (Register && !Register(Registered.Definition, Registered.Predictable)) return std::nullopt;
+		}
+		const auto Generation = NextRuntimeAttachmentGeneration++;
+		RuntimeAttachmentGeneration = Generation;
 		ClientSubmit = std::move(Submit);
 		ClientAction = std::move(Action);
-	}
-
-	void CharacterControlService::AttachActionRegistration(ActionRegistrationHandler Register) {
 		ActionRegistration = std::move(Register);
-		if (!ActionRegistration) return;
-		for (const auto &[Name, Action] : ActionsByName) {
-			(void)Name;
-			if (!ActionRegistration(Action.Definition, Action.Predictable))
-				throw std::runtime_error(
-					"[Character:Control] registered action could not attach to the network session"
-				);
+		PredictionMode = std::move(Prediction);
+		auto Self = std::dynamic_pointer_cast<CharacterControlService>(shared_from_this());
+		if (!Self) {
+			DetachRuntime(Generation);
+			return std::nullopt;
 		}
-	}
-
-	void CharacterControlService::AttachPredictionMode(PredictionModeHandler Handler) {
-		PredictionMode = std::move(Handler);
+		return RuntimeAttachment(Self, Generation);
 	}
 
 	void CharacterControlService::BeginSimulationFrame(std::uint64_t Tick, float DeltaSeconds) {
@@ -83,6 +121,7 @@ namespace gargantuan {
 	}
 
 	void CharacterControlService::DetachRuntime() {
+		RuntimeAttachmentGeneration = 0;
 		ClientSubmit = {};
 		ClientAction = {};
 		ActionRegistration = {};
@@ -90,6 +129,17 @@ namespace gargantuan {
 		SimulationTick = 0;
 		SimulationDeltaSeconds = 0.0f;
 		ClearPolicyReferences();
+	}
+
+	void CharacterControlService::DetachRuntime(std::uint64_t Generation) {
+		if (Generation == 0 || RuntimeAttachmentGeneration != Generation) return;
+		RuntimeAttachmentGeneration = 0;
+		ClientSubmit = {};
+		ClientAction = {};
+		ActionRegistration = {};
+		PredictionMode = {};
+		SimulationTick = 0;
+		SimulationDeltaSeconds = 0.0f;
 	}
 
 	std::uint32_t CharacterControlService::ActionToken(std::string_view Name) {

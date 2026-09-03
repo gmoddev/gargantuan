@@ -75,8 +75,14 @@ namespace gargantuan::network {
 
 		std::optional<CharacterMaterializationEpoch> NextMaterializationEpoch(CharacterMaterializationEpoch Current) {
 			if (!Current.IsValid()) return CharacterMaterializationEpoch(1);
-			if (Current.Value() >= std::numeric_limits<std::uint16_t>::max()) return std::nullopt;
 			return Current.TryNext();
+		}
+
+		DisconnectInfo SchedulerFailure(const SchedulerSubmitResult &Result, std::string Diagnostic) {
+			return Result.TerminalDisconnect.value_or(DisconnectInfo{
+				DisconnectReason::ResourceExhaustion,
+				std::move(Diagnostic),
+			});
 		}
 
 		void HashWord(std::uint64_t &Hash, std::uint64_t Value) {
@@ -327,12 +333,17 @@ namespace gargantuan::network {
 			   Actions.emplace(Definition.Token, std::move(Definition)).second;
 	}
 
+	void AuthoritativeCharacterNetwork::SetTerminalHandler(CharacterTerminalHandler Handler) {
+		OnTerminal = std::move(Handler);
+	}
+
 	bool AuthoritativeCharacterNetwork::StartServerAction(
 		ObjectId Character, std::uint32_t ActionToken, std::uint64_t AuthoritativeTick
 	) {
 		auto Found = Characters.find(Character);
 		auto Definition = Actions.find(ActionToken);
 		if (Found == Characters.end() || Definition == Actions.end() || AuthoritativeTick == 0 ||
+			Definition->second.DurationTicks > std::numeric_limits<std::uint64_t>::max() - AuthoritativeTick ||
 			!Found->second.NextServerAction.IsValid())
 			return false;
 		auto &State = Found->second;
@@ -366,6 +377,11 @@ namespace gargantuan::network {
 		);
 		if (!Encoded) {
 			SaturatingIncrement(Metrics.ProtocolRejects);
+			if (Reliable && OnTerminal)
+				OnTerminal(
+					Connection,
+					{DisconnectReason::ResourceExhaustion, "Reliable Character message serialization failed"}
+				);
 			return false;
 		}
 		MessageOrder Order;
@@ -377,13 +393,21 @@ namespace gargantuan::network {
 			Delivery = DeliveryMode::UnreliableSequenced;
 			Traffic = TrafficClass::RealtimeState;
 			Order = RealtimeStateOrder{Channel, State->StateSequence};
-		} else if (std::holds_alternative<CharacterActionRequest>(Message)) {
+		} else if (std::holds_alternative<CharacterActionRequest>(Message) ||
+				   std::holds_alternative<CharacterActionResult>(Message)) {
 			Traffic = TrafficClass::ReliableApplication;
 		}
 		auto Intent = MakeNetworkMessageIntent(
 			Connection, Delivery, Traffic, std::move(Order), std::move(*Encoded), Limits
 		);
-		if (!Intent) return false;
+		if (!Intent) {
+			if (Reliable && OnTerminal)
+				OnTerminal(
+					Connection,
+					{DisconnectReason::ResourceExhaustion, "Reliable Character message intent was rejected"}
+				);
+			return false;
+		}
 		const auto Bytes = Intent->Payload().size();
 		const auto SubmitStarted = std::chrono::steady_clock::now();
 		auto Result = Scheduler.Submit(std::move(*Intent));
@@ -394,16 +418,23 @@ namespace gargantuan::network {
 					.count()
 			)
 		);
-		if (!Result.Accepted()) return false;
+		if (!Result.Accepted()) {
+			if (Reliable && OnTerminal)
+				OnTerminal(
+					Connection,
+					SchedulerFailure(Result, "Reliable Character message was rejected by the scheduler")
+				);
+			return false;
+		}
 		SaturatingIncrement(Metrics.BytesOut, static_cast<std::uint64_t>(Bytes));
 		SaturatingIncrement(Metrics.SchedulerSubmissions);
 		return true;
 	}
 
 	bool AuthoritativeCharacterNetwork::QueueStateFrame(
-		ConnectionId Connection, const CharacterStateFrame &Frame, StateChannelId Channel
+		ConnectionId Connection, const CharacterStateFrame &Frame, StateChannelId Channel, bool Reliable
 	) {
-		if (!Channel.IsValid()) return false;
+		if (!Reliable && !Channel.IsValid()) return false;
 		const auto EncodeStarted = std::chrono::steady_clock::now();
 		auto Encoded = EncodeCharacterMessage(CharacterMessage(Frame));
 		SaturatingIncrement(
@@ -416,17 +447,32 @@ namespace gargantuan::network {
 		if (!Encoded || Encoded->size() > Configuration.MaximumStateFrameBytes ||
 			Encoded->size() > Limits.MaximumUnreliableMessageBytes) {
 			SaturatingIncrement(Metrics.ProtocolRejects);
+			if (Reliable && OnTerminal)
+				OnTerminal(
+					Connection,
+					{DisconnectReason::ResourceExhaustion, "Reliable Character state serialization failed"}
+				);
 			return false;
 		}
 		auto Intent = MakeNetworkMessageIntent(
 			Connection,
-			DeliveryMode::UnreliableSequenced,
-			TrafficClass::RealtimeState,
-			RealtimeStateOrder{Channel, RealtimeStateSequence(Frame.FrameSequence.Value())},
+			Reliable ? DeliveryMode::ReliableOrdered : DeliveryMode::UnreliableSequenced,
+			Reliable ? TrafficClass::Control : TrafficClass::RealtimeState,
+			Reliable ? MessageOrder{} : MessageOrder(RealtimeStateOrder{
+											  Channel,
+											  RealtimeStateSequence(Frame.FrameSequence.Value()),
+										  }),
 			std::move(*Encoded),
 			Limits
 		);
-		if (!Intent) return false;
+		if (!Intent) {
+			if (Reliable && OnTerminal)
+				OnTerminal(
+					Connection,
+					{DisconnectReason::ResourceExhaustion, "Reliable Character state intent was rejected"}
+				);
+			return false;
+		}
 		const auto Bytes = Intent->Payload().size();
 		const auto SubmitStarted = std::chrono::steady_clock::now();
 		auto Result = Scheduler.Submit(std::move(*Intent));
@@ -437,7 +483,14 @@ namespace gargantuan::network {
 					.count()
 			)
 		);
-		if (!Result.Accepted()) return false;
+		if (!Result.Accepted()) {
+			if (Reliable && OnTerminal)
+				OnTerminal(
+					Connection,
+					SchedulerFailure(Result, "Reliable Character state was rejected by the scheduler")
+				);
+			return false;
+		}
 		SaturatingIncrement(Metrics.BytesOut, static_cast<std::uint64_t>(Bytes));
 		SaturatingIncrement(Metrics.CompactStateBytes, static_cast<std::uint64_t>(Bytes));
 		SaturatingIncrement(Metrics.SchedulerSubmissions);
@@ -570,26 +623,42 @@ namespace gargantuan::network {
 			for (std::size_t Index = 0; Index < State.PendingActionCount; ++Index) {
 				const auto &Request = State.PendingActions[Index];
 				const auto Selected = ActionPolicy ? ActionPolicy(*State.Controller, Request)
-												   : std::optional<std::uint32_t>(Request.RequestedActionToken);
+											   : std::optional<std::uint32_t>(Request.RequestedActionToken);
 				const auto Definition = Selected ? Actions.find(*Selected) : Actions.end();
 				State.ResolvedAction = Request.ActionSequence;
-				if (!Selected || Definition == Actions.end()) {
-					State.ActiveAction.reset();
+				std::optional<CharacterActionState> AcceptedAction;
+				if (!Selected || Definition == Actions.end() ||
+					Definition->second.DurationTicks > std::numeric_limits<std::uint64_t>::max() - AuthoritativeTick) {
 					State.ReliableStateRequired = true;
 					SaturatingIncrement(Metrics.ActionRequestsRejected);
-					continue;
+				} else {
+					AcceptedAction = CharacterActionState{
+						Request.ActionSequence,
+						Definition->second.Token,
+						Definition->second.Animation,
+						Definition->second.ContentRevision,
+						AuthoritativeTick,
+						Definition->second.DurationTicks,
+					};
+					State.ActiveAction = AcceptedAction;
+					State.LastActionEvaluationTick = AuthoritativeTick;
+					State.ReliableStateRequired = true;
+					SaturatingIncrement(Metrics.ActionRequestsAccepted);
 				}
-				State.ActiveAction = CharacterActionState{
-					Request.ActionSequence,
-					Definition->second.Token,
-					Definition->second.Animation,
-					Definition->second.ContentRevision,
-					AuthoritativeTick,
-					Definition->second.DurationTicks,
-				};
-				State.LastActionEvaluationTick = AuthoritativeTick;
-				State.ReliableStateRequired = true;
-				SaturatingIncrement(Metrics.ActionRequestsAccepted);
+				const bool ResultQueued = Queue(
+					*State.Controller,
+					CharacterMessage(CharacterActionResult{
+						.Character = Request.Character,
+						.ControlEpoch = Request.ControlEpoch,
+						.ActionSequence = Request.ActionSequence,
+						.RequestedActionToken = Request.RequestedActionToken,
+						.Accepted = AcceptedAction.has_value(),
+						.AuthoritativeAction = std::move(AcceptedAction),
+					}),
+					{},
+					true
+				);
+				if (!ResultQueued) break;
 			}
 			State.PendingActionCount = 0;
 
@@ -642,48 +711,61 @@ namespace gargantuan::network {
 
 			if (State.ActiveAction) {
 				const auto Definition = Actions.find(State.ActiveAction->ActionToken);
-				if (Definition == Actions.end() ||
-					AuthoritativeTick >= State.ActiveAction->StartTick + State.ActiveAction->DurationTicks) {
+				if (Definition == Actions.end()) {
 					State.ActiveAction.reset();
-				} else if (AuthoritativeTick > State.LastActionEvaluationTick) {
-					const auto RootStarted = std::chrono::steady_clock::now();
-					try {
-						auto Delta = Definition->second.EvaluateRootMotion(
-							State.LastActionEvaluationTick, AuthoritativeTick
-						);
-						State.LastActionEvaluationTick = AuthoritativeTick;
-						if (Delta) {
-							auto Result = CharacterValue->AdmitMotion(
-								World,
-								{
-									.Translation = Delta->Translation,
-									.Velocity = CharacterValue->GetVelocity(),
-									.YawRadians = Delta->YawRadians,
-									.Source = CharacterMotionSource::Animation,
-									.LocalSpace = true,
-								}
+					State.ReliableStateRequired = true;
+				} else {
+					const auto ActionEnd = State.ActiveAction->StartTick + State.ActiveAction->DurationTicks;
+					const auto EvaluationTick = std::min(AuthoritativeTick, ActionEnd);
+					if (EvaluationTick > State.LastActionEvaluationTick) {
+						const auto RootStarted = std::chrono::steady_clock::now();
+						try {
+							auto Delta = Definition->second.EvaluateRootMotion(
+								State.LastActionEvaluationTick, EvaluationTick
 							);
-							if (Result.Succeeded())
-								CharacterValue->ApplyRuntimeControllerFacts(
-									Result.Velocity, Result.FloorNormal, Result.HasFloor
+							State.LastActionEvaluationTick = EvaluationTick;
+							if (Delta) {
+								auto Result = CharacterValue->AdmitMotion(
+									World,
+									{
+										.Translation = Delta->Translation,
+										.Velocity = CharacterValue->GetVelocity(),
+										.YawRadians = Delta->YawRadians,
+										.Source = CharacterMotionSource::Animation,
+										.LocalSpace = true,
+									}
 								);
+								if (Result.Succeeded())
+									CharacterValue->ApplyRuntimeControllerFacts(
+										Result.Velocity, Result.FloorNormal, Result.HasFloor
+									);
+							}
+						} catch (...) {
+							State.ActiveAction.reset();
+							State.ReliableStateRequired = true;
+							SaturatingIncrement(Metrics.ProtocolRejects);
 						}
-					} catch (...) {
-						State.ActiveAction.reset();
-						SaturatingIncrement(Metrics.ProtocolRejects);
+						SaturatingIncrement(
+							Metrics.RootMotionCpuNanoseconds,
+							static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+												   std::chrono::steady_clock::now() - RootStarted
+							)
+												   .count())
+						);
 					}
-					SaturatingIncrement(
-						Metrics.RootMotionCpuNanoseconds,
-						static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
-													   std::chrono::steady_clock::now() - RootStarted
-						)
-													   .count())
-					);
+					if (State.ActiveAction && AuthoritativeTick >= ActionEnd) {
+						State.ActiveAction.reset();
+						State.ReliableStateRequired = true;
+					}
 				}
 			}
-			const bool Reliable = State.ReliableStateRequired;
-			State.ReliableStateRequired = false;
-			if (Reliable) (void)PublishState(Id, AuthoritativeTick, false, true);
+			if (State.ReliableStateRequired) {
+				const bool HasRecipient = std::ranges::any_of(Peers, [Id](const auto &Entry) {
+					return Entry.second.Materialized.contains(Id);
+				});
+				if (!HasRecipient || PublishState(Id, AuthoritativeTick, false, true))
+					State.ReliableStateRequired = false;
+			}
 			++Iterator;
 		}
 		const auto Interval = Configuration.PublicationIntervalTicks();
@@ -732,9 +814,7 @@ namespace gargantuan::network {
 			auto Visible = Peer.Materialized.find(Character);
 			if (Visible == Peer.Materialized.end()) continue;
 			bool Queued = false;
-			if (Reliable) {
-				Queued = Queue(Connection, CharacterMessage(*State), Visible->second, true);
-			} else if (Peer.NextFrameSequence.IsValid() && GetCompactCharacterStateEncodedBytes(*State) != 0) {
+			if (Peer.NextFrameSequence.IsValid() && GetCompactCharacterStateEncodedBytes(*State) != 0) {
 				CharacterStateFrame Frame{
 					.ServerTick = AuthoritativeTick,
 					.FrameSequence = Peer.NextFrameSequence,
@@ -742,7 +822,7 @@ namespace gargantuan::network {
 					.StateCount = 1,
 				};
 				Frame.States[0] = *State;
-				Queued = QueueStateFrame(Connection, Frame, Visible->second);
+				Queued = QueueStateFrame(Connection, Frame, Visible->second, Reliable);
 				Peer.NextFrameSequence = Peer.NextFrameSequence.TryNext().value_or(CharacterStateFrameSequence{});
 				if (Queued) Peer.Published[Character] = {Fingerprint, AuthoritativeTick};
 			}
@@ -897,6 +977,7 @@ namespace gargantuan::network {
 		CharacterControlEpoch LastControlEpoch;
 		CharacterInputSequence NextInput{1};
 		CharacterActionSequence NextAction{1};
+		CharacterActionSequence LastActionResult;
 		std::array<CharacterInputCommand, MaximumCharacterPredictionHistory> History{};
 		std::size_t HistoryStart = 0;
 		std::size_t HistoryCount = 0;
@@ -991,6 +1072,10 @@ namespace gargantuan::network {
 			   Actions.emplace(Definition.Token, std::move(Definition)).second;
 	}
 
+	void PredictedCharacterNetwork::SetTerminalHandler(CharacterTerminalHandler Handler) {
+		OnTerminal = std::move(Handler);
+	}
+
 	bool PredictedCharacterNetwork::Queue(
 		ConnectionId Connection, const CharacterMessage &Message, StateChannelId Channel, bool Reliable
 	) {
@@ -1028,7 +1113,14 @@ namespace gargantuan::network {
 					.count()
 			)
 		);
-		if (!Result.Accepted()) return false;
+		if (!Result.Accepted()) {
+			if (Reliable && OnTerminal)
+				OnTerminal(
+					Connection,
+					SchedulerFailure(Result, "Reliable Character message was rejected by the scheduler")
+				);
+			return false;
+		}
 		SaturatingIncrement(Metrics.BytesOut, static_cast<std::uint64_t>(Bytes));
 		SaturatingIncrement(Metrics.SchedulerSubmissions);
 		return true;
@@ -1076,12 +1168,16 @@ namespace gargantuan::network {
 				}
 				Peer.Control.reset();
 				Peer.PendingControl.reset();
+				Peer.PendingActionCount = 0;
+				Peer.LastActionResult = {};
 				HardReset(Peer);
 				return true;
 			}
 			if (Peer.LastControlEpoch.IsValid() && !Transition->ControlEpoch.IsNewerThan(Peer.LastControlEpoch))
 				return false;
 			Peer.LastControlEpoch = Transition->ControlEpoch;
+			Peer.PendingActionCount = 0;
+			Peer.LastActionResult = {};
 			if (Replicas.contains(Transition->Character)) {
 				auto &Replica = Replicas.at(Transition->Character);
 				Replica.LocalCorrectionStart.reset();
@@ -1096,6 +1192,50 @@ namespace gargantuan::network {
 			}
 			return true;
 		}
+		if (auto *Result = std::get_if<CharacterActionResult>(&Message)) {
+			if (!ReliableAction(Event) || !Peer.Control || Peer.Control->Character != Result->Character ||
+				Peer.Control->ControlEpoch != Result->ControlEpoch)
+				return false;
+			if (Peer.LastActionResult.IsValid() && !Result->ActionSequence.IsNewerThan(Peer.LastActionResult))
+				return true;
+			std::size_t Match = Peer.PendingActionCount;
+			for (std::size_t Index = 0; Index < Peer.PendingActionCount; ++Index)
+				if (Peer.PendingActions[Index].Sequence == Result->ActionSequence) {
+					Match = Index;
+					break;
+				}
+			if (Match == Peer.PendingActionCount ||
+				Peer.PendingActions[Match].Token != Result->RequestedActionToken)
+				return false;
+			for (std::size_t Index = Match + 1; Index < Peer.PendingActionCount; ++Index)
+				Peer.PendingActions[Index - 1] = Peer.PendingActions[Index];
+			--Peer.PendingActionCount;
+			Peer.LastActionResult = Result->ActionSequence;
+			if (Peer.PredictedAction && Peer.PredictedAction->ActionSequence == Result->ActionSequence) {
+				const auto Definition = Result->AuthoritativeAction
+										? Actions.find(Result->AuthoritativeAction->ActionToken)
+										: Actions.end();
+				if (Result->Accepted && Result->AuthoritativeAction && Definition != Actions.end() &&
+					Definition->second.Animation == Result->AuthoritativeAction->Animation &&
+					Definition->second.ContentRevision == Result->AuthoritativeAction->ContentRevision) {
+					Peer.PredictedAction = Result->AuthoritativeAction;
+					Peer.LastActionEvaluationTick = std::max(
+						Peer.LastActionEvaluationTick, Result->AuthoritativeAction->StartTick
+					);
+				} else {
+					Peer.PredictedAction.reset();
+					Peer.LastActionEvaluationTick = 0;
+				}
+			}
+			if (ActionResolutions.size() < MaximumCharacterPredictionHistory)
+				ActionResolutions.push_back({
+					Result->Character,
+					Result->RequestedActionToken,
+					Result->Accepted,
+					Result->AuthoritativeAction,
+				});
+			return true;
+		}
 		if (auto *State = std::get_if<CharacterAuthoritativeState>(&Message)) {
 			const bool ReliableState = Event.Delivery == DeliveryMode::ReliableOrdered &&
 									   Event.Traffic == TrafficClass::Control &&
@@ -1103,14 +1243,15 @@ namespace gargantuan::network {
 			return HandleState(Peer, Event, *State, ReliableState);
 		}
 		if (auto *Frame = std::get_if<CharacterStateFrame>(&Message)) {
-			if (!IsExpectedStateFrameOrder(Event, Frame->FrameSequence)) return false;
+			const bool ReliableFrame = ReliableControl(Event);
+			if (!ReliableFrame && !IsExpectedStateFrameOrder(Event, Frame->FrameSequence)) return false;
 			if (Frame->MaterializationEpoch != Peer.MaterializationEpoch) {
 				SaturatingIncrement(Metrics.StaleStatesDropped, static_cast<std::uint64_t>(Frame->StateCount));
 				return true;
 			}
 			for (const auto &State : Frame->GetStates()) {
 				if (!Replicas.contains(State.Character)) continue;
-				(void)HandleState(Peer, Event, State, false, true);
+				(void)HandleState(Peer, Event, State, ReliableFrame, true);
 			}
 			return true;
 		}
@@ -1237,12 +1378,13 @@ namespace gargantuan::network {
 			CharacterValue->ApplyRuntimeControllerFacts(Result.Velocity, Result.FloorNormal, Result.HasFloor);
 			if (Peer.PredictedAction && Command.SimulationTick > Peer.LastActionEvaluationTick) {
 				auto Definition = Actions.find(Peer.PredictedAction->ActionToken);
-				if (Definition != Actions.end() &&
-					Command.SimulationTick < Peer.PredictedAction->StartTick + Peer.PredictedAction->DurationTicks) {
+				if (Definition != Actions.end()) {
+					const auto ActionEnd = Peer.PredictedAction->StartTick + Peer.PredictedAction->DurationTicks;
+					const auto EvaluationTick = std::min(Command.SimulationTick, ActionEnd);
 					auto Delta = Definition->second.EvaluateRootMotion(
-						Peer.LastActionEvaluationTick, Command.SimulationTick
+						Peer.LastActionEvaluationTick, EvaluationTick
 					);
-					Peer.LastActionEvaluationTick = Command.SimulationTick;
+					Peer.LastActionEvaluationTick = EvaluationTick;
 					if (Delta) {
 						auto RootResult = CharacterValue->AdmitMotion(
 							World,
@@ -1259,6 +1401,7 @@ namespace gargantuan::network {
 								RootResult.Velocity, RootResult.FloorNormal, RootResult.HasFloor
 							);
 					}
+					if (Command.SimulationTick >= ActionEnd) Peer.PredictedAction.reset();
 				} else
 					Peer.PredictedAction.reset();
 			}
@@ -1286,6 +1429,12 @@ namespace gargantuan::network {
 			(PredictionEnabled && Found->second.PredictionSuspended))
 			return false;
 		auto &Peer = Found->second;
+		if (PredictionEnabled && Peer.HistoryCount >= Peer.History.size()) {
+			SaturatingIncrement(Metrics.HistoryOverflows);
+			HardReset(Peer);
+			Peer.PredictionSuspended = true;
+			return false;
+		}
 		CharacterInputCommand Command{
 			.Character = Peer.Control->Character,
 			.ControlEpoch = Peer.Control->ControlEpoch,
@@ -1298,9 +1447,13 @@ namespace gargantuan::network {
 				JumpRequested ? static_cast<std::uint8_t>(CharacterInputFlag::JumpRequested) : 0
 			),
 		};
-		if (!Command.IsValid() || (PredictionEnabled && !Predict(Peer, World, Command, true))) return false;
-		if (!Queue(Connection, CharacterMessage(Command), Peer.Control->Channel, false)) return false;
+		if (!Command.IsValid() || !Queue(Connection, CharacterMessage(Command), Peer.Control->Channel, false))
+			return false;
 		Peer.NextInput = Peer.NextInput.TryNext().value_or(CharacterInputSequence{});
+		if (PredictionEnabled && !Predict(Peer, World, Command, true)) {
+			HardReset(Peer);
+			Peer.PredictionSuspended = true;
+		}
 		return true;
 	}
 
@@ -1413,24 +1566,6 @@ namespace gargantuan::network {
 			if (State.AcknowledgedInput.IsValid() && Peer.NextInput.IsValid() &&
 				State.AcknowledgedInput.Value() >= Peer.NextInput.Value())
 				Reset = true;
-			if (State.ResolvedAction.IsValid()) {
-				std::size_t Write = 0;
-				for (std::size_t Index = 0; Index < Peer.PendingActionCount; ++Index) {
-					const auto Pending = Peer.PendingActions[Index];
-					if (Pending.Sequence.Value() <= State.ResolvedAction.Value()) {
-						const bool Accepted = State.ActiveAction &&
-											  State.ActiveAction->ActionSequence == Pending.Sequence &&
-											  State.ActiveAction->ActionToken == Pending.Token;
-						if (ActionResolutions.size() < MaximumCharacterPredictionHistory)
-							ActionResolutions.push_back(
-								{Id, Pending.Token, Accepted, Accepted ? State.ActiveAction : std::nullopt}
-							);
-					} else {
-						Peer.PendingActions[Write++] = Pending;
-					}
-				}
-				Peer.PendingActionCount = Write;
-			}
 			const auto PreviousPredictedAction = Peer.PredictedAction;
 			const auto PreviousActionTick = Peer.LastActionEvaluationTick;
 			Peer.PredictedAction.reset();

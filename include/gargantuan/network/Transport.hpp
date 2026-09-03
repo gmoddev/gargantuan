@@ -27,6 +27,8 @@ namespace gargantuan::network {
 		[[nodiscard]] bool IsValid() const;
 	};
 
+	[[nodiscard]] bool IsLoopbackTransportEndpoint(const TransportEndpoint &Endpoint);
+
 	struct TransportStartConfiguration {
 		TransportRole Role = TransportRole::Client;
 		TransportEndpoint Endpoint;

@@ -1,5 +1,10 @@
 # Current architecture
 
+- [Character Networking Foundation 3E.1](CharacterNetworkingFoundation3E1.md)
+  defines one-shot transactional GameSession ownership, scoped runtime callback
+  leases, peer/session failure atomicity, reliable scheduler commit rules,
+  per-request action results, complete root-motion intervals, 64-bit
+  materialization epochs, and loopback-only DevelopmentLocal defaults.
 - [Character / Replication Foundation 3E](CharacterReplicationFoundation3E.md)
   defines server-owned peer relevance, the bounded replaceable spatial grid,
   dependency closure, stable remote Player/Character-shell semantics,

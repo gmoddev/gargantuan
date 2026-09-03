@@ -23,6 +23,7 @@
 #include <new>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace {
@@ -54,6 +55,7 @@ namespace {
 			.Limits = GameSessionConfiguration::DefaultLimits(),
 			.HandshakeTimeoutTicks = 1200,
 			.ClientNonce = Nonce,
+			.AllowInsecureDevelopmentNetwork = true,
 		};
 	}
 
@@ -66,6 +68,7 @@ namespace {
 			std::shared_ptr<SimulatedTransport> Transport;
 			ConnectionId Connection;
 			bool ReadySent = false;
+			std::vector<std::byte> DuplicateReady;
 		};
 
 		SimulatedTransportConfiguration TransportConfiguration;
@@ -160,6 +163,7 @@ namespace {
 					auto Ready = EncodeGameSessionMessage(
 						GameSessionClientReady{Accepted->SessionEpoch, Accepted->Replication, Accepted->Player}
 					);
+					if (Ready) Peer.DuplicateReady = *Ready;
 					auto ReadyIntent = Ready ? MakeNetworkMessageIntent(
 												   Peer.Connection,
 												   DeliveryMode::ReliableOrdered,
@@ -179,7 +183,17 @@ namespace {
 		const auto Duration = Milliseconds(Started);
 		const auto Allocations = GameSessionBenchmarkAllocations.load(std::memory_order_relaxed) - AllocationsBefore;
 		const auto Metrics = Server.GetMetrics();
-		if (Metrics.ReadyPeers != PeerCount) throw std::runtime_error("session benchmark did not activate every peer");
+		if (Metrics.ReadyPeers != PeerCount)
+			throw std::runtime_error(
+				"session benchmark did not activate every peer: ready=" + std::to_string(Metrics.ReadyPeers) +
+				" accepted=" + std::to_string(Metrics.AcceptedPeers) +
+				" connected=" + std::to_string(Metrics.TransportConnections) +
+				" playersCreated=" + std::to_string(Metrics.PlayersCreated) +
+				" playersRemoved=" + std::to_string(Metrics.PlayersRemoved) +
+				" rejected=" + std::to_string(Metrics.RejectedHandshakes) +
+				" protocol=" + std::to_string(Metrics.ProtocolRejects) +
+				" timeouts=" + std::to_string(Metrics.HandshakeTimeouts)
+			);
 		std::cout << (SpatialObjectCount == 0 ? "Admission," : "WorldAdmission,")
 				  << (SpatialObjectCount == 0 ? PeerCount : SpatialObjectCount) << ',' << Duration << ','
 				  << Duration / static_cast<double>(PeerCount) << ',' << Tick - 1 << ',' << Metrics.PlayersCreated
@@ -193,8 +207,49 @@ namespace {
 				  << Metrics.MaterializedObjects << ',' << Metrics.MaterializedCharacters << ','
 				  << Metrics.RelevanceInitializationCpuNanoseconds << ',' << Metrics.MaterializationBacklog << ','
 				  << Metrics.MaterializationTransitions << ',' << Metrics.MaterializationCpuNanoseconds << '\n';
-		for (auto &Peer : Peers)
-			(void)Peer.Transport->Stop({DisconnectReason::LocalShutdown, "session benchmark complete"});
+		if (SpatialObjectCount == 0 && PeerCount <= 32) {
+			const auto Before = Server.GetMetrics();
+			const auto FailureAllocationsBefore = GameSessionBenchmarkAllocations.load(std::memory_order_relaxed);
+			const auto FailureStarted = std::chrono::steady_clock::now();
+			for (auto &Peer : Peers) {
+				auto Intent = MakeNetworkMessageIntent(
+					Peer.Connection,
+					DeliveryMode::ReliableOrdered,
+					TrafficClass::Control,
+					{},
+					std::move(Peer.DuplicateReady),
+					ClientConfiguration.Limits
+				);
+				if (!Intent || !Peer.Transport->Send(*Intent).Succeeded())
+					throw std::runtime_error("session benchmark failure trigger was not submitted");
+				(void)Network->Advance(std::chrono::milliseconds(1));
+				Network->Pump();
+				(void)Server.Poll();
+				Server.Step(++Tick);
+			}
+			const auto FailureDuration = Milliseconds(FailureStarted);
+			const auto FailureAllocations = GameSessionBenchmarkAllocations.load(std::memory_order_relaxed) -
+				FailureAllocationsBefore;
+			const auto After = Server.GetMetrics();
+			if (After.PlayersRemoved - Before.PlayersRemoved != PeerCount)
+				throw std::runtime_error("session benchmark did not tear down every failed peer");
+			std::cout << "PeerFailure," << PeerCount << ',' << FailureDuration << ','
+					  << FailureDuration / static_cast<double>(PeerCount) << ',' << PeerCount << ','
+					  << After.PlayersRemoved - Before.PlayersRemoved << ','
+					  << After.CharacterControlRevocations - Before.CharacterControlRevocations << ','
+					  << FailureAllocations << ",0,0,0,0,0,0,0," << After.RelevantObjects << ",0,"
+					  << After.RelevanceLeaves - Before.RelevanceLeaves << ','
+					  << After.RelevanceQueries - Before.RelevanceQueries << ','
+					  << After.RelevanceCandidates - Before.RelevanceCandidates << ','
+					  << After.RelevanceCpuNanoseconds - Before.RelevanceCpuNanoseconds << ','
+					  << After.MaterializedObjects << ',' << After.MaterializedCharacters << ",0,"
+					  << After.MaterializationBacklog << ','
+					  << After.MaterializationTransitions - Before.MaterializationTransitions << ','
+					  << After.MaterializationCpuNanoseconds - Before.MaterializationCpuNanoseconds << '\n';
+		} else {
+			for (auto &Peer : Peers)
+				(void)Peer.Transport->Stop({DisconnectReason::LocalShutdown, "session benchmark complete"});
+		}
 		Server.Stop();
 		Runtime.Destroy();
 	}
@@ -319,7 +374,7 @@ namespace {
 	}
 }
 
-int main() {
+int main(int ArgumentCount, char **Arguments) {
 	try {
 		gargantuan::BootstrapNativeRuntimeSchema();
 		std::cout << "Kind,Count,DurationMs,MillisecondsPerUnit,Ticks,ResultCount,ControlBindings,Allocations,"
@@ -328,6 +383,10 @@ int main() {
 					 "RelevanceLeaves,RelevanceQueries,RelevanceCandidates,RelevanceCpuNs,MaterializedObjects,"
 					 "MaterializedCharacters,RelevanceInitializationNs,MaterializationBacklog,"
 					 "MaterializationTransitions,MaterializationCpuNs\n";
+		if (ArgumentCount > 1 && std::string_view(Arguments[1]) == "--admission-500") {
+			RunAdmission(500);
+			return 0;
+		}
 		for (const auto Count : {1u, 32u, 100u, 500u})
 			RunAdmission(Count);
 		for (const auto WorldSize : {1'000u, 10'000u, 50'000u})
