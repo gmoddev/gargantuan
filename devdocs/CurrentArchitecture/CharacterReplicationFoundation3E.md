@@ -1,8 +1,9 @@
 ---
 status: current
 owner: networking
-last_verified: 2026-09-03
+last_verified: 2026-09-04
 related_code:
+  - include/gargantuan/runtime/SpatialRegionIndex.hpp
   - include/gargantuan/network/ReplicationRelevance.hpp
   - include/gargantuan/network/ReplicationCoordinator.hpp
   - include/gargantuan/network/GameSession.hpp
@@ -29,7 +30,8 @@ for structural replication and realtime Character state:
 ```text
 authoritative DataModel
     -> accepted ConnectionId / Player identity
-    -> ReplicationRelevance policy and replaceable spatial index
+    -> 3H SpatialAddress/region candidates
+    -> ReplicationRelevance policy
     -> peer desired objects + owner-required objects
     -> ReplicationCoordinator ancestor/hard-reference closure
     -> peer KnownObjects materialization view
@@ -51,8 +53,8 @@ position is the default focus.
 
 ## Policy and spatial lookup
 
-The current replaceable lookup is a renderer- and physics-independent uniform
-grid. A spatial root is a `Character`, or otherwise the nearest ancestor
+Foundation 3H now supplies the renderer- and physics-independent canonical
+uniform region index behind this policy. A spatial root is a `Character`, or otherwise the nearest ancestor
 `BasePart`; its descendants share that root's membership. Objects without a
 spatial root remain global. Remote Instances are global because their identity
 and application semantics are not transform-owned.
@@ -61,30 +63,35 @@ The defaults are:
 
 | policy | bound |
 | --- | ---: |
-| grid cell size | 128 units |
+| region size | 128 units |
 | enter radius | 256 units |
 | leave radius | 320 units |
 | normal recomputation interval | 6 simulation ticks |
 | trusted focus points per peer | 4 |
-| indexed spatial roots / cells | 65,536 / 65,536 |
+| indexed roots / populated regions / memberships | 65,536 / 262,144 / 262,144 |
+| ordinary memberships per root / large-root fallback | 64 / 1,024 |
 | desired objects per peer | 65,536 |
-| cells visited by one query | 4,096 |
+| regions visited by one peer query | 4,096 |
 | structural enter + leave objects per incremental frame | 4,096 |
 
 The distinct enter and leave radii provide deterministic hysteresis. Object
-and peer changes mark selection dirty; moving Character roots are sampled at
-the relevance cadence and static `BasePart` roots update their cell through the
-committed `CFrame` signal. All index, candidate, desired, and transition order
+and peer changes mark selection dirty. Character and BasePart CFrame changes
+coalesce into a preallocated dirty-root list and update region membership at
+the relevance safe point; unchanged membership mutates no bucket. All index,
+candidate, desired, and transition order
 uses `ObjectId` ordering. Pointer identity and hash iteration never define wire
 results.
 
-This grid is not a `SpatialAddress`, region owner, physics broadphase, or
-network identity. The future region topology can replace the membership/query
-implementation while retaining the policy output and materialization contract:
+`SpatialAddress` is derived locality rather than physics, render, or network
+identity. Regions return a conservative bounded candidate superset while 3E
+retains exact policy ownership:
 
 ```text
 world membership/address -> relevance policy -> desired ObjectIds
 ```
+
+See `CharacterReplicationFoundation3H.md` for address semantics, multi-region
+bounds, large-object fallback, lifecycle, limits, and scale measurements.
 
 ## Mandatory relevance and Player semantics
 
@@ -266,22 +273,29 @@ teleported trusted focuses measured 2.176 ms, 16,113 allocations, 500 bounded
 queries, 4,782 candidates, 300 enters, and 940 leaves. It never scanned the
 authoritative object catalog per peer.
 
+Those figures preserve the pre-3H 3E baseline. The same post-3H fixtures and
+the 10k/100k/1M index-only scale results are reported in
+`CharacterReplicationFoundation3H.md`.
+
 Memory is bounded by the same ceilings. Per peer, relevance owns at most four
 focus points, 65,536 desired/required ObjectIds, the spatial-root residency
 set, and the coordinator's desired/known/relevant ObjectId sets; GCHR and
 Remote maps contain only currently materialized identities. Each spatial root
-owns one weak Instance reference, position/cell metadata, one cell membership,
-its bounded descendant-member set, and (for a static `BasePart`) one property
-signal connection. The authoritative catalog stores one current
+owns one weak Instance reference, current position, bounded region membership,
+its descendant-member set, dirty bit, and CFrame/Size signal connections. The
+shared region index owns one current generation-bearing root entry plus at most
+64 ordinary memberships, or one bounded large-object fallback entry. The
+authoritative catalog stores one current
 `SnapshotObject` per world object globally, not per peer. In the 500-peer
 fixture the measured known-object sum was 507,000, about 1,014 per peer; there
 is no per-peer storage for the distant 50,000-object world fixture and no
 off-interest delta queue.
 
 Normal admission is proportional to global/mandatory objects plus the queried
-interest set and its dependency closure. A focus update visits bounded grid
-cells and candidates, then diffs the peer's desired/known sets; object movement
-updates one old/new cell in logarithmic ordered-container work. Catalog refresh
+interest set and its dependency closure. A focus update visits bounded regions
+and candidates, then diffs the peer's desired/known sets; object movement
+updates only changed old/new memberships in logarithmic ordered-container work
+and same-membership motion mutates no bucket. Catalog refresh
 is journal-driven and shared across peers. Enter/leave serialization is
 proportional to the bounded transition slice. Only initial index construction
 or explicit journal-overflow resnapshot scans the complete world, neither of
@@ -359,12 +373,16 @@ unchanged and are never recomputed by importance. The resulting private
 `CharacterNetworkingFoundation3F.md`. No Player visibility, dependency closure,
 or structural transition was moved into GCHR.
 
+Foundation 3H changes only the upstream candidate implementation. Region
+crossing alone does not change this boolean 3E result, and 3F/3G see no
+relationship change unless 3E actually commits materialization enter/leave.
+
 ## Explicitly deferred
 
 - simulation, AI, physics, renderer, or region LOD;
 - a public Luau streaming/relevance API;
 - client camera or focus hints;
-- full `SpatialAddress`, regions, portals, and transfer epochs;
+- region wire identity, world paging, portals, and transfer epochs;
 - occlusion or visibility prediction;
 - changing globally visible Player identity semantics;
 - shared mutable wire buffers or protocol identity tied to grid cells.

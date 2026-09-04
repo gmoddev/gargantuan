@@ -628,9 +628,9 @@ namespace gargantuan::network {
 			PeerValue.PlayerId = static_cast<std::uint32_t>(PeerValue.PlayerValue->GetPlayerId());
 			++Metrics.PlayersCreated;
 			auto CharacterValue = PeerValue.PlayerValue->GetCharacter() ? std::dynamic_pointer_cast<KinematicCharacter>(
-																		  *PeerValue.PlayerValue->GetCharacter()
-																	  )
-																: nullptr;
+																							  *PeerValue.PlayerValue->GetCharacter()
+																						  )
+																				: nullptr;
 			const auto OwnerCharacter = CharacterValue ? CharacterValue->GetObjectId() : ObjectId{};
 			const auto RelevanceStarted = std::chrono::steady_clock::now();
 			if (!Relevance->AddPeer(Connection, PeerValue.PlayerObject, OwnerCharacter)) {
@@ -652,11 +652,11 @@ namespace gargantuan::network {
 			auto Baseline = Replication->AddPeer(Connection, PeerValue.Replication, *Selection);
 			const auto ReplicationMetricsAfter = Replication->GetMetrics();
 			Metrics.BaselineSnapshotCpuNanoseconds += ReplicationMetricsAfter.SnapshotCaptureCpuNanoseconds -
-																		  ReplicationMetricsBefore.SnapshotCaptureCpuNanoseconds;
+																					  ReplicationMetricsBefore.SnapshotCaptureCpuNanoseconds;
 			Metrics.BaselineDiscoveryCpuNanoseconds += ReplicationMetricsAfter.BaselineDiscoveryCpuNanoseconds -
-																		   ReplicationMetricsBefore.BaselineDiscoveryCpuNanoseconds;
+																					   ReplicationMetricsBefore.BaselineDiscoveryCpuNanoseconds;
 			Metrics.BaselineEncodeCpuNanoseconds += ReplicationMetricsAfter.BaselineEncodeCpuNanoseconds -
-																	ReplicationMetricsBefore.BaselineEncodeCpuNanoseconds;
+																			ReplicationMetricsBefore.BaselineEncodeCpuNanoseconds;
 			if (!Baseline.Succeeded()) {
 				Reject(Connection, DisconnectReason::ResourceExhaustion, "Server replication registration failed");
 				return;
@@ -1470,14 +1470,14 @@ namespace gargantuan::network {
 								   PeerValue.PlayerObject,
 							   });
 			auto ReadyIntent = Ready ? MakeNetworkMessageIntent(
-														*PrimaryConnection,
-														DeliveryMode::ReliableOrdered,
-														TrafficClass::Control,
-														{},
-														std::move(*Ready),
-														PeerValue.Limits
-													)
-											  : std::nullopt;
+																				*PrimaryConnection,
+																				DeliveryMode::ReliableOrdered,
+																				TrafficClass::Control,
+																				{},
+																				std::move(*Ready),
+																				PeerValue.Limits
+																			)
+																		  : std::nullopt;
 			const bool ReadyAccepted = ReadyIntent &&
 				!InjectFailure(detail::GameSessionFailurePoint::ClientReadySchedulerAdmission) &&
 				Scheduler.Submit(std::move(*ReadyIntent)).Accepted();
@@ -1548,7 +1548,19 @@ namespace gargantuan::network {
 			Result.RelevanceEnters = RelevanceMetrics.RelevanceEnters;
 			Result.RelevanceLeaves = RelevanceMetrics.RelevanceLeaves;
 			Result.RelevanceQueries = RelevanceMetrics.SpatialQueries;
+			Result.RelevanceRegionsVisited = RelevanceMetrics.QueryRegions;
 			Result.RelevanceCandidates = RelevanceMetrics.CandidateObjects;
+			Result.RelevanceCandidateMembershipVisits = RelevanceMetrics.CandidateMembershipVisits;
+			Result.RelevanceCandidateDedupHits = RelevanceMetrics.CandidateDedupHits;
+			Result.SpatialRegionCount = RelevanceMetrics.SpatialRegions;
+			Result.SpatialMembershipCount = RelevanceMetrics.SpatialMemberships;
+			Result.LargeSpatialObjectCount = RelevanceMetrics.LargeSpatialObjects;
+			Result.SpatialMembershipMoves = RelevanceMetrics.SpatialMoves;
+			Result.SpatialSameRegionUpdates = RelevanceMetrics.SameRegionUpdates;
+			Result.SpatialRegionBucketsRemoved = RelevanceMetrics.RegionBucketsRemoved;
+			Result.SpatialPeakRegionOccupancy = RelevanceMetrics.PeakRegionOccupancy;
+			Result.SpatialQueryLimitFailures = RelevanceMetrics.SpatialQueryLimitFailures;
+			Result.SpatialCandidateLimitFailures = RelevanceMetrics.SpatialCandidateLimitFailures;
 			Result.RelevanceCpuNanoseconds = RelevanceMetrics.UpdateCpuNanoseconds;
 		}
 		if (State->Replication) {

@@ -1,6 +1,6 @@
 # First complete game validation
 
-Status: Character Networking Foundation 3D packaged-session path revalidated locally on 2026-09-02. This document records a vertical-slice
+Status: Character / Replication Foundation 3H packaged-session path revalidated on 2026-09-04. This document records a vertical-slice
 falsification exercise; it does not claim that Gargantuan is generally usable.
 
 ## Game design and scope
@@ -71,6 +71,13 @@ smoke completes. The localhost GNS session independently performs the same
 far/near/far/near lifecycle with a Player-independent NPC and verifies current
 transform, RootPart closure, server survival after unpublish, and disconnect.
 
+Foundation 3H changes no sample content or client protocol. The same
+far/near/far/near NPC proof now obtains its conservative candidates from the
+canonical sparse region index, while 3E still owns actual structural
+enter/unpublish/re-entry. `RootMotionOpenNpc` uses the same authoritative
+Character dirty path as ordinary movement, and region membership remains
+transient rather than project or journal state.
+
 ## Authoring workflow used
 
 1. Build the current Studio and Engine Release binaries.
@@ -137,6 +144,9 @@ honest claim of an entirely GUI-authored workflow.
 - server-owned peer relevance through packaged and localhost-GNS sessions,
   including NPC structural enter, peer unpublish, current-state reentry, and
   owner Character retention;
+- canonical server-private SpatialAddress/region candidates without a region
+  wire message, client request surface, saved field, or boundary-crossing
+  structural fallback;
 - canonical Attachment joint binding, transient `WorldCFrame`, bind-pose
   fallback, animated positional Sound, animated prompt range/LOS/hold
   validation, and zero-journal semantic movement;

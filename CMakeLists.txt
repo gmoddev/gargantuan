@@ -651,6 +651,8 @@ if(BUILD_TESTING)
 	target_link_libraries(gargantuan_replication_tests PRIVATE gargantuan_core)
 	add_executable(gargantuan_replication_relevance_tests "tests/ReplicationRelevanceTests.cpp")
 	target_link_libraries(gargantuan_replication_relevance_tests PRIVATE gargantuan_core)
+	add_executable(gargantuan_spatial_region_index_tests "tests/SpatialRegionIndexTests.cpp")
+	target_link_libraries(gargantuan_spatial_region_index_tests PRIVATE gargantuan_core)
 	add_executable(gargantuan_remote_tests "tests/RemoteTests.cpp")
 	target_link_libraries(gargantuan_remote_tests PRIVATE gargantuan_core)
 	add_executable(gargantuan_remote_luau_tests "tests/RemoteLuauTests.cpp")
@@ -665,6 +667,8 @@ if(BUILD_TESTING)
 	add_test(NAME GameSessionTests COMMAND gargantuan_game_session_tests)
 	add_executable(gargantuan_game_session_benchmark "tests/GameSessionBenchmark.cpp")
 	target_link_libraries(gargantuan_game_session_benchmark PRIVATE gargantuan_core)
+	add_executable(gargantuan_spatial_region_index_benchmark "tests/SpatialRegionIndexBenchmark.cpp")
+	target_link_libraries(gargantuan_spatial_region_index_benchmark PRIVATE gargantuan_core)
 	target_compile_definitions(gargantuan_character_networking_tests PRIVATE
 		GARGANTUAN_FIRST_COMPLETE_GAME_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/samples/FirstCompleteGame"
 	)
@@ -907,6 +911,9 @@ if(BUILD_TESTING)
 	add_test(NAME gargantuan_scheduler_contract COMMAND gargantuan_scheduler_contract_tests)
 	add_test(NAME gargantuan_replication COMMAND gargantuan_replication_tests)
 	add_test(NAME gargantuan_replication_relevance COMMAND gargantuan_replication_relevance_tests)
+	add_test(NAME gargantuan_spatial_region_index COMMAND gargantuan_spatial_region_index_tests)
+	add_test(NAME gargantuan_spatial_region_index_benchmark_smoke
+		COMMAND gargantuan_spatial_region_index_benchmark --quick)
 	add_test(NAME gargantuan_remote COMMAND gargantuan_remote_tests)
 	add_test(NAME gargantuan_remote_luau COMMAND gargantuan_remote_luau_tests)
 	add_test(NAME gargantuan_character_networking COMMAND gargantuan_character_networking_tests)
@@ -963,7 +970,9 @@ if(BUILD_TESTING)
 	)
 	set_tests_properties(gargantuan_prerun_bootstrap PROPERTIES LABELS "prerun;runtime" TIMEOUT 120)
 	set_tests_properties(gargantuan_networking_contracts gargantuan_simulated_transport gargantuan_scheduler_contract
-		gargantuan_replication gargantuan_remote gargantuan_remote_luau gargantuan_character_networking
+		gargantuan_replication gargantuan_replication_relevance gargantuan_spatial_region_index
+		gargantuan_spatial_region_index_benchmark_smoke
+		gargantuan_remote gargantuan_remote_luau gargantuan_character_networking
 		GameSessionTests
 		gargantuan_character_networking_benchmark_smoke
 		gargantuan_replication_benchmark_smoke

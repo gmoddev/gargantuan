@@ -1,7 +1,7 @@
 ---
 status: current
 owner: build-and-test
-last_verified: 2026-08-29
+last_verified: 2026-09-04
 related_code:
   - .github/workflows/native-ci.yml
   - CMakeLists.txt
@@ -86,11 +86,11 @@ executable does not relink. `gargantuan_packaged_shaders` compares that runtime
 directory with the complete source shader set and fails when a compiled output
 is missing.
 
-The Windows production contract contains 42 tests. The Linux sanitizer
-configuration with `GARGANTUAN_WITH_GNS=OFF` and renderer benchmarks disabled
-omits the two real-transport and two renderer-headless entries and therefore
-contains 38; that reduced matrix is not the complete Windows gate. Current
-CMake and this document are authoritative.
+The Windows production contract runs the complete registered matrix. The Linux
+sanitizer configuration with `GARGANTUAN_WITH_GNS=OFF` and renderer benchmarks
+disabled omits platform/real-transport and renderer-headless entries; that
+reduced matrix is not the complete Windows gate. Current CMake registration,
+rather than a duplicated numeric count in this document, is authoritative.
 
 | Coverage | Existing CTest entries |
 | --- | --- |
@@ -110,6 +110,7 @@ CMake and this document are authoritative.
 | Serialization smoke | `SerializationBenchmarkSmoke` |
 | Networking contracts and deterministic transport | `gargantuan_networking_contracts`, `gargantuan_simulated_transport`, `gargantuan_scheduler_contract` |
 | Replication and remotes | `gargantuan_replication`, `gargantuan_remote`, `gargantuan_remote_luau` |
+| SpatialAddress/region coordinate, membership, candidate, lifecycle, false-negative, boundedness, and Release scale proof | `gargantuan_spatial_region_index`, `gargantuan_spatial_region_index_benchmark_smoke`, `gargantuan_replication_relevance` |
 | Networking bounded-load smokes | `gargantuan_replication_benchmark_smoke`, `gargantuan_remote_benchmark_smoke` |
 | Real transport lifecycle and remotes | `gargantuan_real_transport`, `gargantuan_remote_real_transport` |
 | Renderer extraction/projection and renderer interface | `gargantuan_renderer_projection_headless`, `gargantuan_renderer_backend_headless` |

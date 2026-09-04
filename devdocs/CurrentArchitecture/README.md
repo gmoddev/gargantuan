@@ -1,5 +1,13 @@
 # Current architecture
 
+- [Character / Replication Foundation 3H](CharacterReplicationFoundation3H.md)
+  defines canonical derived SpatialAddress semantics, sparse bounded
+  multi-region membership, large-object fallback, dirty-driven movement,
+  conservative peer candidates, and the unchanged 3E policy boundary.
+- [Character Networking Foundation 3G](CharacterNetworkingFoundation3G.md)
+  defines bounded fair actual publication of replaceable Character state.
+- [Character Networking Foundation 3F](CharacterNetworkingFoundation3F.md)
+  defines peer-specific Character importance and desired cadence.
 - [Character Networking Foundation 3E.1](CharacterNetworkingFoundation3E1.md)
   defines one-shot transactional GameSession ownership, scoped runtime callback
   leases, peer/session failure atomicity, reliable scheduler commit rules,

@@ -1,7 +1,7 @@
 ---
 status: current
 owner: networking
-last_verified: 2026-09-03
+last_verified: 2026-09-04
 related_code:
   - include/gargantuan/network/CharacterNetwork.hpp
   - include/gargantuan/network/ReplicationRelevance.hpp
@@ -34,6 +34,11 @@ implementation described in
 `devdocs/CurrentArchitecture/CharacterNetworkingFoundation3G.md`. This document
 remains authoritative for the 3F importance, cadence, phase, promotion, and
 variable-rate client presentation policy.
+
+Foundation 3H now supplies canonical bounded region candidates upstream of 3E;
+it does not change this importance function, phase, desired cadence, or tier
+history. A region crossing that remains 3E-relevant leaves the same 3F
+relationship intact.
 
 ## Ownership and separation
 

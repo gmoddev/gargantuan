@@ -27,7 +27,10 @@ schema-compatible baseline, incremental application, and replica applicator.
 Bounded Luau remotes now provide four schema-backed application primitives, a
 versioned binary codec, visibility-checked Object references, finite requests,
 Luau coroutine suspension, deterministic simulator coverage, and real localhost
-GNS coverage. Realtime replication remains unfinished.
+GNS coverage. Realtime Character replication, adaptive cadence, bounded fair
+publication, and canonical server-private SpatialAddress/region candidates are
+implemented; general physics ownership and production world paging remain
+unfinished.
 
 ## Context
 
@@ -404,8 +407,7 @@ of the accepted decisions above.
   now combines global/mandatory identity, owner-required Character membership,
   and a bounded replaceable spatial grid. The resulting desired set feeds
   dependency-closed structural Publish/Unpublish and GCHR materialization.
-  Client Luau cannot request arbitrary objects or pins. Full region topology
-  remains later work.
+  Client Luau cannot request arbitrary objects or pins.
 - [x] **Harden session transactionality before 3F.** GameSession is explicitly
   one-shot; runtime callbacks use scoped generation-safe ownership; terminal
   reliable admission removes only the affected peer; client bootstrap commits
@@ -425,6 +427,12 @@ of the accepted decisions above.
   provide deterministic fairness without changing 3E relevance, 3F tiers,
   authoritative simulation, GCHR v4, or reliable semantic priority. Scheduler
   acceptance remains the only publication-history commit point.
+- [x] **Canonicalize region-assisted candidate discovery.** Foundation 3H
+  replaces 3E's private cell key with derived 64-bit 3D `SpatialAddress`
+  coordinates, sparse bounded multi-region membership, large-object fallback,
+  dirty-driven movement, reusable query scratch, and deterministic candidate
+  dedup. 3E remains the final relevance owner; there is no region wire format,
+  persistence field, public Luau API, simulation LOD, or world paging.
 
 Node integration for discovery and join tickets can proceed independently once
 the handshake contract exists. Collaborative editing remains later work.
@@ -441,7 +449,7 @@ The following are intentionally not fixed by this ADR:
   Character-specific 3G state-count budget;
 - transport-specific certificate or key distribution;
 - prediction, rollback, physics ownership, and reconciliation algorithms;
-- later game-facing relevance policy and full region/portal topology; and
+- later game-facing relevance policy, content paging, and portal topology; and
 - collaborative editing transport and conflict resolution.
 
 These choices require measurements or later gameplay requirements. Implementations

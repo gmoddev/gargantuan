@@ -1,7 +1,7 @@
 ---
 status: current
 owner: networking
-last_verified: 2026-09-03
+last_verified: 2026-09-04
 related_code:
   - include/gargantuan/network/CharacterNetwork.hpp
   - include/gargantuan/network/GameSession.hpp
@@ -34,6 +34,11 @@ Deferral never unmaterializes a Character, changes its tier, reduces simulation
 work, alters input freshness, or queues historical transforms. No GCHR schema,
 protocol version, client message, ordinary Luau API, Node service, Studio API,
 MCP surface, or required telemetry dependency was added.
+
+Foundation 3H now provides server-private spatial candidates upstream of 3E.
+It does not change 3G budgets, wheel membership, peer rotation, age, deadlines,
+accepted-publication commit, GCHR batching, or reliable semantic bypass. Region
+movement affects 3G only if 3E commits a real materialization transition.
 
 ## Configuration and selected unit
 

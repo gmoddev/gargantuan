@@ -35,6 +35,11 @@ Foundation 3F now ranks only those relevant Character relationships for
 peer-specific 20/10/5 Hz replaceable publication while retaining prompt
 semantic state; see
 [CharacterNetworkingFoundation3F.md](CharacterNetworkingFoundation3F.md).
+Foundation 3G bounds actual replaceable publication, while Foundation 3H now
+organizes authoritative spatial roots through canonical derived addresses and
+bounded region candidates without changing the authority or GCHR contracts;
+see [CharacterNetworkingFoundation3G.md](CharacterNetworkingFoundation3G.md)
+and [CharacterReplicationFoundation3H.md](CharacterReplicationFoundation3H.md).
 
 ## Implemented boundary
 

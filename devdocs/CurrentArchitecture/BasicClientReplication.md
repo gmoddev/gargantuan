@@ -1,7 +1,7 @@
 ---
 status: current
 owner: networking
-last_verified: 2026-09-03
+last_verified: 2026-09-04
 related_code:
   - include/gargantuan/network/Replication.hpp
   - include/gargantuan/network/ReplicationProtocol.hpp
@@ -246,3 +246,9 @@ tier history, and presentation samples remain transient and cannot enter a
 replication frame or authoring journal. No structural serialization cache was
 added because current frames contain peer-view and materialization-specific
 state.
+
+Foundation 3H likewise leaves this protocol unchanged. Its derived
+`SpatialAddress` and bounded region index provide candidates to 3E before
+dependency closure. A region crossing is not an `Unpublish`; only a changed 3E
+desired set can create structural enter/leave work. Spatial addresses, region
+membership, and candidate lists are neither serialized nor persisted.

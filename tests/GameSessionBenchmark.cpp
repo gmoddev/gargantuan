@@ -387,6 +387,15 @@ int main(int ArgumentCount, char **Arguments) {
 			RunAdmission(500);
 			return 0;
 		}
+		if (ArgumentCount > 1 && std::string_view(Arguments[1]) == "--world-scale") {
+			for (const auto WorldSize : {1'000u, 10'000u, 50'000u})
+				RunAdmission(1, WorldSize);
+			return 0;
+		}
+		if (ArgumentCount > 1 && std::string_view(Arguments[1]) == "--relevance-500") {
+			RunRelevanceUpdate(500);
+			return 0;
+		}
 		for (const auto Count : {1u, 32u, 100u, 500u})
 			RunAdmission(Count);
 		for (const auto WorldSize : {1'000u, 10'000u, 50'000u})

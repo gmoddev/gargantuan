@@ -272,6 +272,21 @@ Tests should enforce them where practical.
 37. Ordinary Character scheduling membership is generation-safe and lifecycle
     scoped. Relevance leave/re-entry, replacement, destruction, disconnect, and
     terminal peer failure cannot leave a publishable stale wheel or due entry.
+38. `SpatialAddress` is deterministic, server-derived locality metadata, not
+    `ObjectId`, transport identity, persistence state, or authority. Moving
+    across a region cannot change object/control identity or grant mutation.
+39. The runtime region index is sparse, bounded, generation-safe, and owned by
+    one authoritative world/session. Empty buckets are reclaimed; large bounds
+    use a bounded conservative fallback; query-limit failure cannot return a
+    silently truncated candidate set.
+40. Region queries produce candidates only. 3E remains the sole relevance
+    owner, and structural ancestor/hard-reference closure remains separate. A
+    region crossing alone cannot unpublish an object; owner/global/mandatory
+    reasons bypass locality.
+41. Region membership observes committed authoritative transforms at the
+    server relevance safe point. It cannot change simulation cadence, invoke
+    game Luau, write the authoring journal, depend on renderer/physics indexes,
+    or modify 3F/3G scheduling history.
 
 ## Changes requiring architecture review
 

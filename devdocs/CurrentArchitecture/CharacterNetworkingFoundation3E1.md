@@ -1,7 +1,7 @@
 ---
 status: current
 owner: networking
-last_verified: 2026-09-03
+last_verified: 2026-09-04
 related_code:
   - include/gargantuan/network/GameSession.hpp
   - include/gargantuan/network/CharacterNetwork.hpp
@@ -28,6 +28,11 @@ by 3D and 3E. It does not replace relevance, add adaptive cadence, or begin
 subsystem and the next fallible boundary have accepted it. If rollback is not
 safe after reliable structural state advances, the affected peer becomes
 terminal before any further gameplay work.
+
+Foundation 3H replaces only the pre-3E spatial candidate implementation.
+Region registration/update is failure-atomic before it can affect a live
+selection, while 3E.1 remains authoritative for accepted structural scheduler
+submission, peer failure, reconnect, and session teardown.
 
 ## Session state and ownership
 

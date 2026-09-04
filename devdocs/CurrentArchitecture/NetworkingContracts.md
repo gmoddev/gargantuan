@@ -1,7 +1,7 @@
 ---
 status: current
 owner: networking
-last_verified: 2026-09-03
+last_verified: 2026-09-04
 related_code:
   - include/gargantuan/network/
   - src/network/
@@ -126,7 +126,10 @@ destroy the authoritative object or erase relevance intent.
 
 Production peer relevance is server-owned. `ReplicationRelevance` emits a
 deterministic desired set from mandatory/global objects, owner-required
-Character membership, and bounded spatial queries. `ReplicationCoordinator`
+Character membership, and bounded spatial queries. Foundation 3H derives the
+server-private `SpatialAddress` and sparse multi-region memberships used to
+produce a conservative candidate set; it neither grants relevance nor crosses
+the wire. `ReplicationCoordinator`
 owns the separate ancestor/hard-reference closure and Publish/Unpublish
 mechanism. GCHR consumes the same Character membership; it does not run an
 independent distance policy. No client protocol or Luau API can request an

@@ -46,7 +46,9 @@ defect throughput.
   closure, soft-reference fixups, safe unpublish/reentry, and a GCHR v3
   materialization epoch without changing the 28-byte batch header. Player
   identity remains globally visible; remote Character descendants are spatial.
-  Adaptive cadence and full SpatialAddress/region topology remain future work.
+  Foundations 3F/3G subsequently add adaptive desired cadence and bounded actual
+  publication; 3H canonicalizes derived SpatialAddress and region candidates.
+  Public region APIs, content paging, and portal topology remain future work.
 - Character / Replication Foundation 3E.1 makes GameSession acquisition and
   teardown transactional, uses generation-scoped CharacterControl callback
   leases, enforces terminal-peer reliable publication, and bounds transport
@@ -56,6 +58,14 @@ defect throughput.
   DevelopmentLocal networking is loopback-only unless the native host
   explicitly opts into the unauthenticated development override. Adaptive
   cadence remains 3F work.
+- Character Networking Foundations 3F and 3G add peer-specific 20/10/5 Hz
+  desired cadence and bounded age-aware actual publication without changing
+  simulation or reliable semantics. Character / Replication Foundation 3H then
+  promotes 3E's private grid into canonical derived `SpatialAddress` semantics,
+  a bounded sparse multi-region index, large-object fallback, dirty-driven
+  membership, and region-assisted candidate discovery. 3E still owns relevance
+  and structural dependency closure; no region protocol, persistence field,
+  public Luau API, content paging, or portal topology was added.
 - Environment / Lighting Foundation 1 establishes canonical saved Lighting and
   Sky semantics, renderer-neutral incremental publication, AssetService-owned
   coherent face residency, and the SDL shadow/Sky/opaque/GUI pipeline. Local

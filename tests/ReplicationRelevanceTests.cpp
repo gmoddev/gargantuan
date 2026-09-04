@@ -288,8 +288,82 @@ int main() {
 		"two peers select first-only, second-only, shared, and neither spatial objects deterministically"
 	);
 
+	auto RegionWorld = std::make_shared<DataModel>();
+	auto RegionIdentity = std::make_shared<Folder>();
+	RegionIdentity->SetParent(RegionWorld);
+	auto BoundaryPart = std::make_shared<Part>();
+	BoundaryPart->SetCFrame(CFrame(10.0f, 0.0f, 0.0f));
+	BoundaryPart->SetParent(RegionWorld);
+	auto LargePart = std::make_shared<Part>();
+	LargePart->SetSize({20'000.0f, 20'000.0f, 20'000.0f});
+	LargePart->SetCFrame(CFrame(200.0f, 0.0f, 0.0f));
+	LargePart->SetParent(RegionWorld);
+	auto RuntimeCharacter = std::make_shared<KinematicCharacter>();
+	RuntimeCharacter->SetPosition({20.0f, 0.0f, 0.0f});
+	RuntimeCharacter->SetParent(RegionWorld);
+	ReplicationRelevance RegionRelevance(RegionWorld);
+	const ConnectionId RegionConnection{12, 1};
+	const std::array RegionFocus{glm::vec3(100.0f, 0.0f, 0.0f)};
+	Check(
+		RegionRelevance.AddPeer(RegionConnection, RegionIdentity->GetObjectId()) &&
+			RegionRelevance.SetTrustedFocus(RegionConnection, RegionFocus) && RegionRelevance.Update(1) &&
+			RegionRelevance.IsLargeSpatialObject(LargePart->GetObjectId()) &&
+			Contains(RegionRelevance.GetSelection(RegionConnection)->DesiredObjects, LargePart->GetObjectId()),
+		"bounded large-object fallback remains a conservative 3E candidate"
+	);
+	const auto BeforeSameRegion = RegionRelevance.GetMetrics();
+	BoundaryPart->SetCFrame(CFrame(20.0f, 0.0f, 0.0f));
+	Check(
+		RegionRelevance.Update(7) && RegionRelevance.GetMetrics().SpatialMoves == BeforeSameRegion.SpatialMoves &&
+			RegionRelevance.GetMetrics().SameRegionUpdates > BeforeSameRegion.SameRegionUpdates,
+		"committed same-region BasePart movement does not mutate region buckets"
+	);
+	const auto EntersBeforeBoundary = RegionRelevance.GetMetrics().RelevanceEnters;
+	const auto LeavesBeforeBoundary = RegionRelevance.GetMetrics().RelevanceLeaves;
+	BoundaryPart->SetCFrame(CFrame(129.0f, 0.0f, 0.0f));
+	Check(
+		RegionRelevance.Update(13) &&
+			RegionRelevance.GetSpatialAddress(BoundaryPart->GetObjectId()) == SpatialAddress{1, {1, 0, 0}} &&
+			Contains(RegionRelevance.GetSelection(RegionConnection)->DesiredObjects, BoundaryPart->GetObjectId()) &&
+			RegionRelevance.GetMetrics().RelevanceEnters == EntersBeforeBoundary &&
+			RegionRelevance.GetMetrics().RelevanceLeaves == LeavesBeforeBoundary,
+		"region crossing while inside 3E relevance causes no semantic enter/leave churn"
+	);
+	RuntimeCharacter->ApplyRuntimeTransform(CFrame(257.0f, 0.0f, 0.0f));
+	Check(
+		RegionRelevance.Update(19) &&
+			RegionRelevance.GetSpatialAddress(RuntimeCharacter->GetObjectId()) == SpatialAddress{1, {2, 0, 0}},
+		"runtime Character movement uses the same post-authority region membership path"
+	);
+	auto NewParent = std::make_shared<Folder>();
+	NewParent->SetParent(RegionWorld);
+	BoundaryPart->SetParent(NewParent);
+	Check(
+		RegionRelevance.Update(25) &&
+			RegionRelevance.GetSpatialAddress(BoundaryPart->GetObjectId()) == SpatialAddress{1, {1, 0, 0}} &&
+			RegionRelevance.VerifySpatialIndex(),
+		"reparenting reconstructs canonical spatial-root membership without stale entries"
+	);
+	const auto LargeId = LargePart->GetObjectId();
+	LargePart->Destroy();
+	Check(
+		RegionRelevance.Update(31) && !RegionRelevance.IsLargeSpatialObject(LargeId) &&
+			!Contains(RegionRelevance.GetSelection(RegionConnection)->DesiredObjects, LargeId) &&
+			RegionRelevance.VerifySpatialIndex(),
+		"destroy removes large fallback and generation-bearing membership before later selection"
+	);
+	ReplicationRelevanceConfiguration InvalidRegionConfiguration;
+	InvalidRegionConfiguration.RegionSize = 0.0;
+	Check(!InvalidRegionConfiguration.IsValid(), "production relevance rejects a zero region size");
+	InvalidRegionConfiguration = {};
+	InvalidRegionConfiguration.MaximumSpatialRegions = MaximumReplicationSpatialRegions + 1;
+	Check(!InvalidRegionConfiguration.IsValid(), "production relevance rejects regions beyond its hard ceiling");
+	InvalidRegionConfiguration = {};
+	InvalidRegionConfiguration.MaximumQueryMembershipVisits = 0;
+	Check(!InvalidRegionConfiguration.IsValid(), "production relevance rejects a zero candidate-visit budget");
+
 	ReplicationRelevanceConfiguration Limited;
-	Limited.MaximumQueryCells = 1;
+	Limited.MaximumQueryRegions = 1;
 	ReplicationRelevance Bounded(World, {}, Limited);
 	Check(
 		!Bounded.AddPeer({2, 1}, LocalPlayer->GetObjectId(), LocalCharacter->GetObjectId()) && !Bounded.IsHealthy() &&

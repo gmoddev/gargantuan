@@ -11,6 +11,12 @@ corrections remain full-rate, and adaptive cadence applies only to already
 relevant remote Characters. Network tier policy is intentionally not exposed
 to sample Luau.
 
+Character / Replication Foundation 3H likewise adds no sample API or saved
+field. Its derived server-private SpatialAddress/region index supplies bounded
+candidates for the existing remote-NPC far/near/far/near acceptance path; 3E
+still decides actual materialization and a region boundary alone is invisible
+to gameplay.
+
 The second collectible requires an unobstructed rigid-physics line of sight.
 Its prompt exercises the same general `Workspace:Raycast` boundary available
 to gameplay rather than a sample-specific visibility shortcut.
