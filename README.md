@@ -1,600 +1,216 @@
-Note to self: Make sure to view the preview before committing.
-
 <div align="center">
 
-<img src="./assets/github/banner.png" alt="Gargantuan" width="656px" /> <br/> <img src="./assets/github/demo-sphere.gif" alt="Gargantuan" width="324px" /> <img src="./assets/github/demo-waveform.gif" alt="Gargantuan" width="324px" />
+<img src="./assets/github/banner.png" alt="Gargantuan" width="656px" />
 
-<h3>
+# Gargantuan
 
-An Independently Maintained Fork of Gargantuan
+**An experimental standalone game engine built around Luau, Instances, a DataModel, and server-authoritative runtime semantics.**
 
-</h3>
-
-<a href="./LICENSE.md"> <img src="https://img.shields.io/github/license/gmoddev/gargantuan?style=flat-square&label=License" alt="MPL-2.0 License" /> </a> <a href="https://github.com/teamfireworks/gargantuan"> <img src="https://img.shields.io/badge/Upstream-Team%20Fireworks-informational?style=flat-square" alt="Upstream Gargantuan" /> </a>
+<a href="./LICENSE.md"><img src="https://img.shields.io/github/license/gmoddev/gargantuan?style=flat-square&label=License" alt="MPL-2.0 License" /></a>
+<a href="https://github.com/teamfireworks/gargantuan"><img src="https://img.shields.io/badge/Derived%20from-Team%20Fireworks%20Gargantuan-informational?style=flat-square" alt="Derived from Team Fireworks Gargantuan" /></a>
 
 </div>
 
-## About This Fork
+## Overview
 
-This repository is an independently maintained fork of [Gargantuan](https://github.com/teamfireworks/gargantuan), originally developed and maintained by [Team Fireworks](https://github.com/teamfireworks).
+Gargantuan is a C++23 game engine centered on Luau scripting and an Instance/DataModel programming model familiar to Roblox developers, but with its own runtime, authority, networking, persistence, editor, security, and platform semantics.
 
-It was split from upstream for personal development and experimentation with a different architectural direction and development methodology. It is not intended to replace or represent the upstream Gargantuan project.
+This repository was originally forked from [Team Fireworks' Gargantuan](https://github.com/teamfireworks/gargantuan). It has since diverged substantially in architecture and scope and should no longer be treated as an alternate branch of the upstream project. The original project remains the source of the codebase's provenance; this repository now follows an independent design direction.
 
-The goal of this fork is to retain the core idea that made Gargantuan interesting to me, a standalone game engine built around Luau, Instances, a DataModel, and a familiar Roblox-inspired development model, while allowing the runtime, tooling, security model, networking, authoring workflow, and editor to evolve in a different direction.
-
-Development in this repository has already diverged substantially from upstream and is expected to continue doing so.
-
-This fork remains public. Team Fireworks and other Gargantuan contributors are welcome to reference, adapt, or independently implement ideas and changes made here where permitted by the project’s license.
-
-For the original Gargantuan project, documentation, community, and contribution process, see the upstream repository:
-
-https://github.com/teamfireworks/gargantuan
+Gargantuan is not intended to be a drop-in Roblox runtime. Familiar names and concepts are retained where useful, but compatibility does not take precedence over engine-defined behavior.
 
 ## Current Status
 
-Gargantuan is still experimental, but the fork now supports a functional local creator loop rather than only foundational engine architecture.
+Gargantuan is still experimental, but it is beyond a rendering or scripting proof of concept. The current engine and Studio support an end-to-end local creator loop:
 
-The current workflow is capable of:
-
-``` text
-Create Project
-    ↓
-Author Instances
-    ↓
-Write Luau
-    ↓
-Save
-    ↓
-Play
-    ↓
-Run native rendering, physics, input, signals, tasks, and scripts
-    ↓
+```text
+Create/Open Project
+        ↓
+Author Instances and Luau
+        ↓
+Save / Undo / Redo
+        ↓
+Play in an isolated runtime DataModel
+        ↓
+Rendering, physics, input, scripts, animation and gameplay
+        ↓
 Stop
-    ↓
-Return to the unchanged authoring project
+        ↓
+Return to the unchanged authoring document
 ```
 
-The engine and Studio have been validated together using fresh Release builds and real process integration.
+Implemented systems include:
 
-Current local gameplay testing has exercised:
+- generation-safe Instance identity and explicit lifetime/ownership rules;
+- an authoritative DataModel and validated mutation gateway;
+- ordered change journals, project revisions, transactions, Undo/Redo, and deterministic persistence;
+- native classes plus runtime schema support for custom classes, class extensions, custom enums, Attributes, and Tags;
+- Luau execution, tasks, signals, Script/ModuleScript authoring, bounded diagnostics, and capability-aware native boundaries;
+- renderer-neutral immutable render publication, editor picking, lighting/environment foundations, skeletal animation, GPU skinning, and semantic animated attachments;
+- backend-neutral rigid physics with Box3D plus a separate deformable/XPBD path;
+- player lifecycle, default engine-shipped Luau input/camera/locomotion policy, kinematic character movement, and root-motion authority;
+- server-authoritative networking with bounded protocol handling, scheduling/backpressure, reliable/unreliable/sequenced delivery, RemoteEvent/RemoteFunction semantics, GameNetworkingSockets integration, prediction/reconciliation, interpolation, spatial relevance, and bounded Character publication;
+- packaged player/server execution paths and project packaging infrastructure;
+- a public versioned EditorHost boundary used by the separately authored Gargantuan Studio.
 
-- project creation, opening, Save, and Save As;
-- authoritative project revisions and dirty state;
-- Instance creation, deletion, duplication, and reparenting;
-- authoritative transactions and Undo/Redo;
-- Script and ModuleScript source authoring;
-- Luau source diagnostics and persistence;
-- isolated local Play/Stop sessions;
-- runtime Instance creation and adoption;
-- semantic subtree `Clone()`;
-- Attributes and Tags;
-- hierarchy and property signals;
-- `RunService` frame signals;
-- `task.spawn`, `task.defer`, `task.delay`, and `task.wait`;
-- runtime keyboard and pointer input;
-- physics simulation;
-- `Touched` and `TouchEnded`;
-- impulses;
-- rendering and editor viewport capture;
-- `print(...)`, `warn(...)`, and runtime error diagnostics;
-- editor orbit, pan, zoom, and focus-selected navigation.
+The project is developed against explicit ownership and trust-boundary invariants. Renderer state, Studio state, replication projections, snapshots, and caches are intentionally non-authoritative views of the live DataModel.
 
-This does not mean the engine is feature complete. The purpose of the current stage is to validate that the core architecture works coherently enough to build real gameplay and use that gameplay work to drive the next engine requirements.
+## Architecture at a Glance
 
-## Current Direction
+```text
+                    Gargantuan Studio
+                         │
+                 versioned EditorHost IPC
+                         │
+                         ▼
+Authoring commands ──> MutationGateway ──> Authoritative DataModel
+                                             │
+                      ┌──────────────────────┼──────────────────────┐
+                      │                      │                      │
+                      ▼                      ▼                      ▼
+                ChangeJournal       Render Publication       Replication
+                      │                      │                      │
+                      ▼                      ▼                      ▼
+             Studio projections       Renderer backend       Network peers
+```
 
-Development is now transitioning from foundation-first work toward building real vertical slices and fixing concrete issues discovered through use.
+Important architectural rules include:
 
-Major completed architecture work includes:
+- the DataModel owns live Instance state and authoritative mutation;
+- `ObjectId` identity is generation-safe and never pointer-, path-, or name-based;
+- external mutations are bounded, validated, authorized, and committed atomically;
+- rendering consumes immutable published value data rather than traversing the live graph;
+- Studio receives DTOs, schema, journals, stable IDs, and pixels through EditorHost rather than linking to engine internals;
+- transport identity is distinct from Player identity;
+- backend implementations such as Box3D, SDL GPU, serialization libraries, and GameNetworkingSockets sit behind Gargantuan-owned semantic boundaries where replacement is expected;
+- Luau is a product-level runtime choice rather than a generic replaceable scripting backend.
 
-- Explicit Instance lifetime, ownership, detached-state, and hierarchy contracts.
-- Generation-safe object identity.
-- Authoritative mutation and project revision semantics.
-- Bounded authoritative transactions and Undo/Redo.
-- Deterministic project persistence and atomic Save/Save As.
-- Custom Classes, Class Extensions, Attributes, Tags, and custom enums.
-- Runtime schema identity and exact definition-version validation.
-- Protocol input hardening and bounded hostile-input handling.
-- Backend-neutral networking contracts.
-- Deterministic simulated transport.
-- Production scheduler and backpressure rules.
-- Valve GameNetworkingSockets behind a replaceable transport boundary.
-- Server-authoritative basic client replication.
-- Bounded reliable, unreliable, sequenced, and request/response Luau remotes.
-- Independent networking adversarial validation.
-- Box3D isolated behind a backend-neutral physics boundary.
-- Serialization libraries isolated behind Gargantuan-owned codec contracts.
-- SDL input isolated behind Gargantuan host/input semantics.
-- SDL GPU resources isolated behind renderer backend boundaries.
-- Gargantuan Studio project authoring, script editing, viewport rendering, and Play/Stop integration.
-- Fresh production-like engine and Studio build validation.
-
-The longer-term direction remains a standalone Luau development environment that retains the productivity and familiarity of a DataModel/Instance model while providing substantially more control over the engine, runtime, networking, hosting, moderation, tooling, and platform behavior.
+For the current invariant and subsystem map, start with [`AICONTEXT.md`](./AICONTEXT.md) and [`docs/architecture/README.md`](./docs/architecture/README.md).
 
 ## Gargantuan Studio
 
-Gargantuan Studio is a separate private repository that acts as the current authoring environment for this fork.
+[Gargantuan Studio](https://github.com/gmoddev/gargantuan-studio) is a separate C#/Avalonia editor application. It does not link against private engine internals; it launches the public EditorHost and communicates through its versioned local protocol.
 
-Studio currently supports:
+The current Studio supports, among other things:
 
-- New Project;
-- Open;
-- Save and Save As;
-- authoritative dirty-state tracking;
-- Explorer hierarchy inspection;
-- Properties inspection and supported property editing;
-- Create, Delete, Duplicate, and Reparent;
-- authoritative Undo and Redo;
-- Script and ModuleScript editing;
-- bounded Luau syntax diagnostics;
-- editor viewport rendering and picking;
-- RMB orbit;
-- MMB pan;
-- mouse-wheel zoom;
-- `F` to focus the selected object;
-- local Play and Stop;
-- runtime Output;
-- runtime viewport input forwarding.
+- New/Open/Save/Save As;
+- authoritative dirty state, Undo, and Redo;
+- Explorer and schema-driven Properties editing;
+- create/delete/duplicate/reparent operations;
+- Script and ModuleScript source editing with Luau diagnostics;
+- viewport rendering, picking, orbit/pan/zoom, focus, and Move/Rotate/Scale gizmos;
+- dockable/floating editor workspaces and persisted per-user layouts;
+- Assets and Output tools;
+- isolated local Play/Stop sessions;
+- an opt-in bounded local bridge for Gargantuan MCP tooling.
 
-Studio is intentionally a client of the engine’s authoritative EditorHost interface. It does not maintain a second authoritative scene graph or bypass the engine’s mutation rules.
+Studio maintains a non-authoritative document projection and submits edits back through the engine's normal mutation path.
 
-## Getting Started
+## Related Repositories
 
-This project is still under active development, so the exact build paths and requirements may change. Current build details are maintained in the development documentation.
+The wider Gargantuan project is split across several repositories:
 
-After building the engine and Studio, Studio can be launched with a matching engine executable.
+| Repository | Purpose |
+| --- | --- |
+| [`gargantuan`](https://github.com/gmoddev/gargantuan) | Core engine, runtime, EditorHost, networking, packaging, rendering and physics boundaries |
+| [`gargantuan-studio`](https://github.com/gmoddev/gargantuan-studio) | C#/Avalonia authoring environment and Studio-side tooling boundary |
+| [`gargantuan-node`](https://github.com/gmoddev/gargantuan-node) | Go backend-service foundation for Core discovery, DataStore, player authentication, entitlements and diagnostics |
+| [`gargantuan-mcp`](https://github.com/gmoddev/gargantuan-mcp) | Conservative MCP server for bounded Studio-backed inspection and opt-in authoring operations |
+| [`gargantuan-telemetry`](https://github.com/gmoddev/gargantuan-telemetry) | Optional replaceable Rust telemetry library and C ABI for crash/performance reporting |
 
-Example on Windows PowerShell:
+These repositories are intentionally separated by explicit process and protocol boundaries rather than sharing engine internals.
 
-``` powershell
-dotnet "C:\path\to\gargantuan-studio\src\GargantuanStudio\bin\Release\net7.0\GargantuanStudio.dll" `
-  --engine "C:\path\to\gargantuan\build\gargantuan.exe"
+## Building
+
+Clone recursively because the engine uses Git submodules:
+
+```bash
+git clone --recursive https://github.com/gmoddev/gargantuan.git
+cd gargantuan
 ```
 
-Studio can also open an existing project directly:
+The current development workflow uses CMake, Ninja, Just, Rokit/Lute-generated class sources, and `glslc` for shaders.
 
-``` powershell
-dotnet "C:\path\to\GargantuanStudio.dll" `
-  --engine "C:\path\to\gargantuan.exe" `
-  --project "C:\path\to\MyGame"
+Typical setup:
+
+```bash
+rokit install
+lute tools/classgen
+just configure build_type=Release
+just build
 ```
 
-A project can now be created directly from Studio through:
+The exact platform prerequisites and validation commands are documented in [`devdocs/Compiling.md`](./devdocs/Compiling.md).
 
-``` text
-File
-→ New Project
-```
+The build produces the engine executable as well as separate player and packaging targets. Optional GameNetworkingSockets support is controlled by CMake configuration.
 
-Manual fixture copying is no longer required for normal project creation.
+## Runtime Example
 
-## Minimal Runtime Example
-
-A Script can create runtime-only objects during Play:
-
-``` lua
+```lua
 local Workspace = game:GetService("Workspace")
 
-print("runtime starting")
+local part = Instance.new("Part")
+part.Name = "RuntimePart"
+part.Size = Vector3.new(4, 1, 4)
+part.CFrame = CFrame.new(0, 3, 0)
+part.Anchored = true
+part.Parent = Workspace
 
-local Part = Instance.new("Part")
-Part.Name = "RuntimePart"
-Part.Size = Vector3.new(4, 1, 4)
-Part.CFrame = CFrame.new(0, 3, 0)
-Part.Anchored = true
-Part.Color = Color3.fromRGB(80, 170, 255)
-Part.Parent = Workspace
-
-warn("RuntimePart created")
+print("created", part:GetFullName())
 ```
 
-Runtime-created Instances belong only to the isolated Play DataModel. Pressing Stop destroys that runtime state and returns Studio to the unchanged authoring project.
-
-This separation is intentional.
-
-## Clone Example
-
-`Instance:Clone()` performs semantic subtree cloning rather than shallow userdata copying.
-
-``` lua
-local Workspace = game:GetService("Workspace")
-local Original = Workspace:FindFirstChild("Original")
-
-assert(Original ~= nil)
-
-local Copy = Original:Clone()
-
-Copy.Name = "Copy"
-Copy.CFrame = CFrame.new(5, 3, 0)
-Copy.Parent = Workspace
-```
-
-Clone behavior includes:
-
-- detached clone roots;
-- fresh Instance identity;
-- cloned descendants;
-- Attributes;
-- Tags;
-- Class Extension state;
-- Custom Class state;
-- Script source;
-- supported internal object-reference remapping.
-
-Runtime backend state such as physics bodies, renderer resources, signals, subscribers, and coroutine state is not copied.
-
-## Current Luau Surface
-
-The runtime uses Luau and exposes a growing Gargantuan-owned API surface.
-
-Current useful areas include:
-
-### Globals
-
-- `game`
-- `Instance`
-- `print`
-- `warn`
-- `task`
-- standard Luau libraries
-
-### Instance and hierarchy
-
-Current support includes common operations such as:
-
-- `Instance.new`
-- `Clone`
-- `Destroy`
-- `ClearAllChildren`
-- `GetChildren`
-- `GetDescendants`
-- `FindFirstChild`
-- `FindFirstDescendant`
-- class and ancestor lookup helpers
-- `IsA`
-- `GetFullName`
-- `Parent`
-- `Name`
-
-Nullable Instance-returning APIs return Luau `nil` when no object exists.
-
-### Attributes and Tags
-
-Attributes support:
-
-- set;
-- get;
-- removal through `nil`;
-- enumeration;
-- change signals.
-
-Tags support:
-
-- add;
-- remove;
-- membership queries;
-- tagged-instance queries.
-
-The registered `Tags` service is a DataModel-scoped lazy singleton. Either access
-form may occur first:
-
-``` lua
-local Tags = game.Tags
-```
-
-or:
-
-``` lua
-local Tags = game:GetService("Tags")
-```
-
-Both construct when necessary and resolve the same canonical object. Repeated
-access and visible `Name` changes do not change that identity. `FindService`
-remains non-constructing.
-
-### Tasks and runtime signals
-
-Current runtime testing includes:
-
-- `task.spawn`
-- `task.defer`
-- `task.delay`
-- `task.wait`
-- `RunService.PreSimulation`
-- `RunService.PostSimulation`
-- `RunService.PreRender`
-
-Task scheduling semantics are Gargantuan-defined and should not be assumed to match Roblox ordering in every case.
-
-### Input
-
-`UserInputService` currently receives keyboard and pointer input forwarded from the focused Play viewport.
-
-Editor and runtime input are intentionally separated.
-
-### Physics
-
-Current Luau-facing runtime behavior includes:
-
-- automatic Part simulation;
-- anchored and dynamic Parts;
-- collisions;
-- `Touched`;
-- `TouchEnded`;
-- `ApplyImpulse`;
-- Workspace gravity.
-
-### Scripts
-
-`Script` and `ModuleScript` source can be authored and persisted through Studio.
-
-Source authoring currently supports:
-
-- authoritative source state;
-- bounded UTF-8 source;
-- optimistic conflict detection;
-- Undo/Redo;
-- Save/reopen;
-- syntax diagnostics without execution.
-
-Broader module/runtime behavior is still incomplete.
-
-For the current detailed runtime surface, see:
-
-`devdocs/CurrentArchitecture/LuauRuntimeSurface.md`
-
-## Play Isolation
-
-Play sessions run against an isolated runtime DataModel.
-
-The authoring project and runtime world are deliberately separate:
-
-``` text
-Studio Authoring DataModel
-        ↓
-coherent Play launch state
-        ↓
-Runtime DataModel
-        ↓
-gameplay simulation
-        ↓
-Stop
-        ↓
-runtime state discarded
-```
-
-Runtime changes do not:
-
-- modify the authoritative Studio hierarchy;
-- increment the authoring project revision;
-- change persisted revision state;
-- enter Studio Undo history;
-- become permanent unless explicitly authored outside Play.
-
-This allows scripts to create, clone, destroy, simulate, and mutate runtime Instances without contaminating the project being edited.
-
-## Editor Viewport Controls
-
-Current Studio editor viewport controls are:
-
-``` text
-RMB drag   Orbit
-MMB drag   Pan
-Wheel      Zoom
-F          Focus selected object
-LMB        Pick/select
-```
-
-Editor camera state is separate from the Play runtime camera.
-
-Entering Play does not destroy the editor view, and stopping Play restores the previous editor camera state.
-
-## Runtime Diagnostics
-
-During Play:
-
-``` lua
-print("hello")
-warn("warning")
-```
-
-are routed through the runtime diagnostic system into Studio Output.
-
-Current semantics include:
-
-- `print` as informational Luau output;
-- `warn` as warning-level Luau output;
-- runtime script failures as error-level Luau output;
-- bounded argument and message sizes;
-- bounded runtime diagnostic queues;
-- bounded Studio Output history.
-
-Diagnostics are not project state and do not affect project revisions or persistence.
-
-## Architecture
-
-Several external implementations are intentionally isolated behind Gargantuan-owned semantic boundaries.
-
-Current examples include:
-
-``` text
-Physics semantics
-    ↓
-IPhysicsBackend
-    ↓
-Box3D
-
-Transport semantics
-    ↓
-IGameTransport
-    ↓
-GameNetworkingSockets
-
-Serialization semantics
-    ↓
-Gargantuan codec contracts
-    ↓
-nlohmann / optional Glaze paths
-
-Host and input semantics
-    ↓
-Gargantuan HostEvent / HostCommand
-    ↓
-SDL platform adapter
-
-Render extraction
-    ↓
-immutable RenderSnapshot
-    ↓
-BaseRenderer
-    ↓
-SDL GPU renderer
-```
-
-The intent is not to abstract every dependency. Luau, for example, is considered part of the product semantics rather than a generic replaceable scripting backend.
-
-The general rule is that backend-specific implementation types should not define engine semantics when the implementation may reasonably change independently.
+Code executed during Play operates on the isolated runtime DataModel. Stopping the session destroys runtime-only state and returns Studio to the authoring project rather than merging gameplay mutations back into it.
 
 ## Networking
 
-The networking architecture currently includes:
+Networking is designed as an engine subsystem rather than a thin socket wrapper. The current implementation includes:
 
-- bounded protocol input;
-- generation-safe connection identity;
-- explicit reliable, unreliable, and sequenced delivery semantics;
-- deterministic simulated transport;
-- scheduler priorities and backpressure;
-- real GameNetworkingSockets transport;
-- server-authoritative basic client replication;
-- schema/version compatibility;
-- peer visibility rules;
-- reliable structural replication;
-- reliable RemoteEvent;
-- UnreliableRemoteEvent;
-- UnreliableSequencedRemoteEvent;
-- bounded RemoteFunction request/response;
-- a bounded production game-session handshake and shared peer lifetime;
-- server-created Players with trusted client `LocalPlayer` association;
-- server-authoritative `Player.Character` control binding;
-- replaceable client/server Luau Character movement and action policy;
-- GCHR v3 prediction, reconciliation, interpolation, batched 20 Hz state, and stale-materialization rejection;
-- server-owned spatial relevance with bounded structural enter/leave/reentry and owner Character pinning;
-- finite deadlines;
-- per-peer and aggregate resource limits.
+- bounded hostile-input handling and versioned protocol contracts;
+- deterministic simulated transport for validation;
+- scheduling, priorities, admission and backpressure;
+- optional Valve GameNetworkingSockets transport;
+- structural replication and peer-specific materialization;
+- reliable, unreliable, and sequenced delivery semantics;
+- bounded RemoteEvents and request/response RemoteFunctions;
+- production-style session and Player/Character lifecycle handling;
+- Character prediction, reconciliation, interpolation, root-motion authority and variable-rate publication;
+- server-owned spatial regions, relevance, enter/leave/reentry, and owner-character pinning.
 
-Networking Foundations 1 through 7 have also received an independent adversarial composition pass covering scheduler, replication, remotes, reconnects, authority, resource amplification, visibility, and lifecycle behavior.
+Production account identity, discovery/matchmaking orchestration, and the final online service integration are still evolving.
 
-Packaged GNS-enabled builds can now run as a headless game server or network
-client with `--server-bind HOST:PORT` and `--connect HOST:PORT`. The current
-session identity is development-local; production account authentication,
-discovery, matchmaking, and Studio multiplayer orchestration remain future
-work.
+## Backend Services
 
-## Current Limitations
+`gargantuan-node` provides the current backend-service foundation. Its implemented contracts include Core registration/discovery, Diagnostics, revisioned key/value and document/query DataStore services, player authentication, and entitlement checks over generated protobuf/gRPC APIs.
 
-Gargantuan is still early.
+The engine is not required to depend on a Node process for local/offline execution. Online identity and service authority are designed as explicit optional boundaries rather than assumptions embedded into the core runtime.
 
-Major currently incomplete or deferred areas include:
+## Experimental Scope
 
-- external account-backed Player identity and session tickets;
-- broader gameplay service coverage;
-- asset identity/import/cooking pipeline;
-- final materials and advanced rendering;
-- broader ModuleScript/runtime module behavior;
-- debugger and breakpoints;
-- profiler;
-- live editing and hot reload;
-- Studio runtime hierarchy inspection;
-- multiplayer Studio test orchestration;
-- final native project/container format;
-- package/distribution tooling;
-- supported .NET migration for Studio;
-- MCP integration;
-- external script synchronization;
-- collaboration/Teams;
-- production crash reporting/telemetry.
+Gargantuan is not feature complete and should not yet be considered a production replacement for established engines.
 
-Some APIs are intentionally different from Roblox, and others are simply not implemented yet.
+Major areas still under active development include broader gameplay APIs, asset import/cooking, final rendering/material systems, debugger/profiler UX, collaboration and multiplayer Studio orchestration, production account/session infrastructure, packaging/distribution polish, and wider platform validation.
 
-Do not assume API parity based on familiar class or method names.
+Current verified defects and engineering gaps are tracked in [`KNOWN_ISSUES.md`](./KNOWN_ISSUES.md). Roadmaps and future-architecture documents should not be read as implemented behavior.
 
-## Compatibility and API Philosophy
+## Documentation
 
-Gargantuan uses Luau, Instances, Services, a DataModel, and several familiar API patterns, but it is not intended to be a drop-in Roblox runtime.
+The repository contains both current and historical/future design material. When documents disagree, tests, enforced invariants, and verified current architecture take precedence.
 
-Familiar names are used where they provide useful developer ergonomics, but the engine maintains its own:
+Useful entry points:
 
-- authority model;
-- lifetime rules;
-- replication semantics;
-- scheduler behavior;
-- service lifecycle;
-- security boundaries;
-- persistence model;
-- editor architecture.
+- [`AICONTEXT.md`](./AICONTEXT.md) — compact architecture and subsystem routing map;
+- [`docs/architecture/README.md`](./docs/architecture/README.md) — architectural authority and documentation structure;
+- [`docs/invariants/Core.md`](./docs/invariants/Core.md) — core invariants;
+- [`devdocs/CurrentArchitecture/`](./devdocs/CurrentArchitecture/) — detailed subsystem contracts and implementation notes;
+- [`devdocs/Compiling.md`](./devdocs/Compiling.md) — build and test workflow;
+- [`KNOWN_ISSUES.md`](./KNOWN_ISSUES.md) — verified current defects/gaps.
 
-Where compatibility conflicts with clear engine semantics, Gargantuan semantics take priority.
+## Relationship to the Original Gargantuan
 
-## Experimental Status
+This project retains provenance from the original [Team Fireworks Gargantuan](https://github.com/teamfireworks/gargantuan) codebase and remains distributed under its applicable open-source licensing terms.
 
-This remains experimental software.
-
-The engine and Studio are now capable of meaningful local gameplay testing, but they should not currently be considered production replacements for established game engines or development platforms.
-
-The current development strategy is increasingly vertical-slice driven:
-
-``` text
-build something real
-→ find concrete engine friction
-→ reproduce it
-→ fix or define the semantic contract
-→ add regression coverage
-→ continue building
-```
-
-This is preferred over implementing large speculative compatibility surfaces before they are needed.
-
-## Upstream Gargantuan
-
-Gargantuan is a 3D game engine scriptable using Luau, independently developed by Team Fireworks.
-
-The original project describes its goals as providing a powerful, productive, multiplatform game engine with a familiar Luau API surface while allowing developers to own their platform, assets, and core scripts.
-
-Upstream development is maintained separately by Team Fireworks:
-
-- Repository: https://github.com/teamfireworks/gargantuan
-- Documentation: https://gargantuan.teamfireworks.org/
-- Contributing: https://gargantuan.teamfireworks.org/developing/contributing-to-gargantuan
-
-Changes in this repository should not be interpreted as changes proposed, approved, or maintained by Team Fireworks.
-
-## Prior Art
-
-The original Gargantuan design was informed by several other game engines and projects. These references are retained from upstream for attribution:
-
-| Resource                                                            | Info                                                            |
-|:--------------------------------------------------------------------|:----------------------------------------------------------------|
-| [Kinemium Engine](https://github.com/Qquaded/Kinemium-Engine)       | Initial reference implementation for some datatypes             |
-| [Phoenix Engine](https://github.com/PhoenixWhitefire/PhoenixEngine) | Initial reference implementation for Instances and the renderer |
-| [Kitbash’d](https://github.com/kitbashd)                            | Previously inspired the renderer                                |
-| [Flux](https://github.com/thegalaxydev/flux)                        | Inspired the architecture of Instances and userdatas            |
-| [Librebox](https://github.com/StayBlue/librebox-demo/)              | Examples used to test the Gargantuan engine                     |
-| [Roblox Creator Documentation](https://create.roblox.com)           | API design inspiration                                          |
+The current `gmoddev/gargantuan` codebase, however, has accumulated substantial independent architecture and implementation across editor integration, mutation/persistence semantics, runtime schema, networking, Character systems, security boundaries, physics/render isolation, packaging, and related services. New users should evaluate this repository as its own evolving engine rather than assuming behavior, compatibility, roadmap, or contribution practices from upstream.
 
 ## License
 
-This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0. If a copy of the MPL was not distributed with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
-
-This fork retains the licensing and applicable copyright notices of the upstream Gargantuan source from which it was derived.
-
-## Legal Notice
-
-This repository is an independently maintained fork of Gargantuan.
-
-The original Gargantuan project was created and is maintained by Team Fireworks. This fork is not maintained, authorized, or endorsed by Team Fireworks, and changes made here should not be attributed to the upstream maintainers.
-
-Gargantuan and this fork are independent projects and are NOT affiliated with, authorized by, endorsed by, or in any way officially connected with Roblox Corporation. “Roblox” is a registered trademark of Roblox Corporation.
-
-No reverse engineering, decompilation, or extraction of proprietary binaries, source code, or assets belonging to Roblox Corporation is represented as part of this fork.
-
-The engine implementation is based on independently implemented runtime and API concepts intended for developer familiarity and interoperability.
+Gargantuan is licensed under the [Mozilla Public License 2.0](./LICENSE.md).
