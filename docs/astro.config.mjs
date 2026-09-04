@@ -4,7 +4,8 @@ import starlight from "@astrojs/starlight";
 
 // https://astro.build/config
 export default defineConfig({
-	site: "https://gargantuan.teamfireworks.org",
+	site: "https://gmoddev.github.io",
+	base: "/gargantuan",
 	integrations: [
 		starlight({
 			title: "Gargantuan",
