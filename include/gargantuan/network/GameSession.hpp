@@ -99,6 +99,17 @@ namespace gargantuan::network {
 		std::uint64_t MaterializationBacklog = 0;
 		std::uint64_t MaterializationTransitions = 0;
 		std::uint64_t MaterializationCpuNanoseconds = 0;
+		std::uint64_t StructuralTemplateBuilds = 0;
+		std::uint64_t StructuralTemplateHits = 0;
+		std::uint64_t StructuralTemplateMisses = 0;
+		std::uint64_t StructuralTemplateInvalidations = 0;
+		std::uint64_t StructuralTemplateBytes = 0;
+		std::uint64_t PeerMaterializationPlans = 0;
+		std::uint64_t PeerPatchOperations = 0;
+		std::uint64_t ReferencePatchOperations = 0;
+		std::uint64_t StructuralBytesEncoded = 0;
+		std::uint64_t StructuralBytesReused = 0;
+		std::uint64_t ScratchHighWaterBytes = 0;
 		std::uint64_t CharacterImportanceEvaluations = 0;
 		std::uint64_t CharacterImportanceTierTransitions = 0;
 		std::uint64_t CharacterTemporaryPromotions = 0;

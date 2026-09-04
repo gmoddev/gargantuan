@@ -64,11 +64,18 @@ namespace gargantuan::network {
 			return ReadBinaryWireValue(Input, Value, MaximumProtocolStringBytes);
 		}
 
-		void WriteValueMap(Writer &Output, const std::map<std::string, WireValue> &Values) {
+		void WriteValueMap(
+			Writer &Output,
+			const std::map<std::string, WireValue> &Values,
+			const StructuralPropertyPatchList *NilProperties = nullptr
+		) {
 			Output.Integer(static_cast<std::uint32_t>(Values.size()));
 			for (const auto &[Name, Value] : Values) {
 				Output.String(Name);
-				WriteWireValue(Output, Value);
+				if (NilProperties && NilProperties->Contains(Name))
+					WriteWireValue(Output, std::monostate{});
+				else
+					WriteWireValue(Output, Value);
 			}
 		}
 		bool ReadValueMap(Reader &Input, std::map<std::string, WireValue> &Values, std::size_t MaximumCount) {
@@ -85,14 +92,16 @@ namespace gargantuan::network {
 			return true;
 		}
 
-		void WritePublish(Writer &Output, const PublishReplication &Value) {
+		void WritePublish(
+			Writer &Output, const PublishReplication &Value, const StructuralPropertyPatchList *NilProperties = nullptr
+		) {
 			WriteObjectId(Output, Value.Object);
 			WriteSchemaId(Output, Value.ClassSchemaId);
 			Output.Integer(Value.DefinitionVersion);
 			WriteOptionalObjectId(Output, Value.Parent);
 			Output.String(Value.ClassName);
 			Output.String(Value.Name);
-			WriteValueMap(Output, Value.Properties);
+			WriteValueMap(Output, Value.Properties, NilProperties);
 			WriteValueMap(Output, Value.Attributes);
 			Output.Integer(static_cast<std::uint32_t>(Value.Extensions.size()));
 			for (const auto &State : Value.Extensions) {
@@ -174,6 +183,9 @@ namespace gargantuan::network {
 					if constexpr (std::is_same_v<Type, PublishReplication>) {
 						Output.Integer(static_cast<std::uint8_t>(OperationCode::Publish));
 						WritePublish(Output, Value);
+					} else if constexpr (std::is_same_v<Type, PreparedPublishReplication>) {
+						Output.Integer(static_cast<std::uint8_t>(OperationCode::Publish));
+						WritePublish(Output, Value.Template->Publication, &Value.NilProperties);
 					} else if constexpr (std::is_same_v<Type, PropertyReplicationUpdate>) {
 						Output.Integer(static_cast<std::uint8_t>(OperationCode::Property));
 						WriteObjectId(Output, Value.Object);

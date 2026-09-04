@@ -287,6 +287,32 @@ Tests should enforce them where practical.
     server relevance safe point. It cannot change simulation cadence, invoke
     game Luau, write the authoring journal, depend on renderer/physics indexes,
     or modify 3F/3G scheduling history.
+42. Structural materialization templates contain only peer-independent
+    authoritative state. Peer relevance, known-object state, materialization
+    epoch, frame sequence, LocalPlayer, and scheduler outcome remain outside.
+43. Template existence implies neither peer relevance nor peer materialization;
+    3E selection and accepted reliable publication remain the respective owners.
+44. A reliable scheduler rejection cannot leave a live peer with advanced
+    structural cursor, KnownObjects, or materialization-dependent Remote/GCHR
+    state. Existing terminal peer failure remains the commit safeguard.
+45. Character materialization epochs remain peer-specific, and trusted
+    LocalPlayer selection remains GameSession metadata rather than shared
+    structural state.
+46. Full ObjectId generation and authoritative world/scope identity participate
+    in template identity. Slot reuse or a new world cannot reuse a stale
+    structural revision.
+47. Relevance enter/leave and region movement do not invalidate an authoritative
+    structural template unless replicated structure itself changed.
+48. Shared structural templates are immutable. Replaced revisions may remain
+    alive only through bounded in-flight users; no unbounded historical revision
+    cache is permitted.
+49. Template construction/invalidation failure cannot publish stale state or a
+    partially refreshed catalog. The uncached owning publication path remains
+    wire-equivalent and available for deterministic verification.
+50. Runtime Character CFrame remains outside structural templates and GRPL;
+    client mutation cannot build, revise, select, or patch a server template.
+51. Peer-specific soft-reference patches may alter only that peer's encoded
+    publication and can never mutate or leak through the shared description.
 
 ## Changes requiring architecture review
 

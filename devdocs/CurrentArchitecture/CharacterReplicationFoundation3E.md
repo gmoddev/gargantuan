@@ -159,7 +159,8 @@ new hard edge in 3E.
 
 Each peer keeps policy `DesiredObjects` separately from the replication
 `KnownObjects` view. The coordinator owns one generation-safe authoritative
-snapshot catalog, refreshes changed objects from the journal, and advances each
+structural template catalog, refreshes affected immutable object revisions from
+the journal, and advances each
 peer cursor even when records are off-interest. It does not build a complete
 DataModel snapshot for every admission or every peer update.
 
@@ -285,8 +286,8 @@ owns one weak Instance reference, current position, bounded region membership,
 its descendant-member set, dirty bit, and CFrame/Size signal connections. The
 shared region index owns one current generation-bearing root entry plus at most
 64 ordinary memberships, or one bounded large-object fallback entry. The
-authoritative catalog stores one current
-`SnapshotObject` per world object globally, not per peer. In the 500-peer
+authoritative catalog stores one current revisioned structural publication
+template per world object globally, not per peer. In the 500-peer
 fixture the measured known-object sum was 507,000, about 1,014 per peer; there
 is no per-peer storage for the distant 50,000-object world fixture and no
 off-interest delta queue.
@@ -376,6 +377,12 @@ or structural transition was moved into GCHR.
 Foundation 3H changes only the upstream candidate implementation. Region
 crossing alone does not change this boolean 3E result, and 3F/3G see no
 relationship change unless 3E actually commits materialization enter/leave.
+
+Foundation 3I changes only the downstream structural description ownership.
+Template existence does not grant relevance or materialization; 3E still owns
+the desired/known transition. Hard closure, soft peer fixups, materialization
+epochs, trusted LocalPlayer, and terminal scheduler admission remain separate.
+See `ReplicationFoundation3I.md`.
 
 ## Explicitly deferred
 

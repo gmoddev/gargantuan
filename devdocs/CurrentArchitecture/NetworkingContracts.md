@@ -135,6 +135,12 @@ mechanism. GCHR consumes the same Character membership; it does not run an
 independent distance policy. No client protocol or Luau API can request an
 arbitrary object, focus, region, or pin.
 
+Foundation 3I stores the complete peer-independent enter description as one
+immutable revisioned template per authoritative object. Peer plans retain their
+own desired/known sets, frame sequence/epoch, LocalPlayer, materialization
+lifetime, and nullable-reference patches. Prepared descriptions encode as the
+same GRPL v1 `Publish`; no cache key or revision is a network capability.
+
 `ReplicationOperation` is an epoch-scoped variant for publish, property update,
 extension-property update, reparent, attribute update, tag add/remove, and
 unpublish. Operations use generation-safe `ObjectId`, stable `SchemaId`, exact

@@ -52,7 +52,7 @@ namespace gargantuan::network {
 		}
 
 		ObjectId ReplicationObject(const ReplicationIntent &Intent) {
-			return std::visit([](const auto &Value) { return Value.Object; }, Intent);
+			return GetReplicationObject(Intent);
 		}
 
 		bool SamePresentedAction(const CharacterActionState &Left, const CharacterActionState &Right) {
@@ -357,8 +357,7 @@ namespace gargantuan::network {
 				throw std::runtime_error("[Network:Session] Client Character-control attachment failed");
 			if (InjectFailure(detail::GameSessionFailurePoint::RuntimeCallbackAttachment))
 				throw std::runtime_error("[Network:Session] Injected Character-control attachment failure");
-			if (!SynchronizeClientGraph() ||
-				InjectFailure(detail::GameSessionFailurePoint::ClientGraphSynchronization))
+			if (!SynchronizeClientGraph() || InjectFailure(detail::GameSessionFailurePoint::ClientGraphSynchronization))
 				throw std::runtime_error("[Network:Session] Client gameplay graph synchronization failed");
 		}
 
@@ -366,10 +365,11 @@ namespace gargantuan::network {
 			auto Peer = Peers.find(Connection);
 			if (Peer == Peers.end() || Peer->second.Phase != PeerPhase::Ready || !Remotes) return true;
 			for (const auto &Operation : Frame.Operations)
-				if (const auto *Publish = std::get_if<PublishReplication>(&Operation.Intent)) {
-					if (!Peer->second.RemoteMaterializedObjects.contains(Publish->Object)) {
-						if (!Remotes->MarkMaterialized(Connection, Publish->Object)) return false;
-						Peer->second.RemoteMaterializedObjects.insert(Publish->Object);
+				if (IsPublishReplication(Operation.Intent)) {
+					const auto Object = ReplicationObject(Operation.Intent);
+					if (!Peer->second.RemoteMaterializedObjects.contains(Object)) {
+						if (!Remotes->MarkMaterialized(Connection, Object)) return false;
+						Peer->second.RemoteMaterializedObjects.insert(Object);
 					}
 				}
 			const auto *View = Replication ? Replication->GetView(Connection) : nullptr;
@@ -422,10 +422,12 @@ namespace gargantuan::network {
 				Status = Configuration.Role == GameSessionRole::Server ? GameSessionStatus::Listening
 																	   : GameSessionStatus::Connecting;
 			else {
-				FailSession(Result.TerminalDisconnect.value_or(DisconnectInfo{
-					DisconnectReason::TransportFailure,
-					"Transport endpoint failed to start",
-				}));
+				FailSession(Result.TerminalDisconnect.value_or(
+					DisconnectInfo{
+						DisconnectReason::TransportFailure,
+						"Transport endpoint failed to start",
+					}
+				));
 			}
 			return Result;
 		}
@@ -471,9 +473,8 @@ namespace gargantuan::network {
 
 		void FailSession(DisconnectInfo Information) {
 			if (Status == GameSessionStatus::Failed || Status == GameSessionStatus::Closed) return;
-			const auto Diagnostic = Information.Diagnostic.size() <= 512
-									? Information.Diagnostic
-									: Information.Diagnostic.substr(0, 512);
+			const auto Diagnostic = Information.Diagnostic.size() <= 512 ? Information.Diagnostic
+																		 : Information.Diagnostic.substr(0, 512);
 			Status = GameSessionStatus::Closing;
 			ReleaseSessionResources();
 			(void)Transport->Stop(std::move(Information));
@@ -486,8 +487,7 @@ namespace gargantuan::network {
 			const bool TransportStarted = Status != GameSessionStatus::Created;
 			Status = GameSessionStatus::Closing;
 			ReleaseSessionResources();
-			if (TransportStarted)
-				(void)Transport->Stop({DisconnectReason::LocalShutdown, "Game session stopped"});
+			if (TransportStarted) (void)Transport->Stop({DisconnectReason::LocalShutdown, "Game session stopped"});
 			Status = GameSessionStatus::Closed;
 		}
 
@@ -500,9 +500,8 @@ namespace gargantuan::network {
 			return Intent && Scheduler.Submit(std::move(*Intent)).Accepted();
 		}
 
-		SerializationResult<SchedulerSubmitResult> QueueStructuralFrame(
-			const ReplicationFrame &Frame, ConnectionId Connection, const NetworkLimits &Limits
-		) {
+		SerializationResult<SchedulerSubmitResult>
+		QueueStructuralFrame(const ReplicationFrame &Frame, ConnectionId Connection, const NetworkLimits &Limits) {
 			if (InjectFailure(detail::GameSessionFailurePoint::StructuralSchedulerAdmission))
 				return SchedulerSubmitResult{
 					SchedulerSubmitStatus::ReliableBacklogExhausted,
@@ -628,9 +627,9 @@ namespace gargantuan::network {
 			PeerValue.PlayerId = static_cast<std::uint32_t>(PeerValue.PlayerValue->GetPlayerId());
 			++Metrics.PlayersCreated;
 			auto CharacterValue = PeerValue.PlayerValue->GetCharacter() ? std::dynamic_pointer_cast<KinematicCharacter>(
-																							  *PeerValue.PlayerValue->GetCharacter()
-																						  )
-																				: nullptr;
+																			  *PeerValue.PlayerValue->GetCharacter()
+																		  )
+																		: nullptr;
 			const auto OwnerCharacter = CharacterValue ? CharacterValue->GetObjectId() : ObjectId{};
 			const auto RelevanceStarted = std::chrono::steady_clock::now();
 			if (!Relevance->AddPeer(Connection, PeerValue.PlayerObject, OwnerCharacter)) {
@@ -652,18 +651,17 @@ namespace gargantuan::network {
 			auto Baseline = Replication->AddPeer(Connection, PeerValue.Replication, *Selection);
 			const auto ReplicationMetricsAfter = Replication->GetMetrics();
 			Metrics.BaselineSnapshotCpuNanoseconds += ReplicationMetricsAfter.SnapshotCaptureCpuNanoseconds -
-																					  ReplicationMetricsBefore.SnapshotCaptureCpuNanoseconds;
+													  ReplicationMetricsBefore.SnapshotCaptureCpuNanoseconds;
 			Metrics.BaselineDiscoveryCpuNanoseconds += ReplicationMetricsAfter.BaselineDiscoveryCpuNanoseconds -
-																					   ReplicationMetricsBefore.BaselineDiscoveryCpuNanoseconds;
+													   ReplicationMetricsBefore.BaselineDiscoveryCpuNanoseconds;
 			Metrics.BaselineEncodeCpuNanoseconds += ReplicationMetricsAfter.BaselineEncodeCpuNanoseconds -
-																			ReplicationMetricsBefore.BaselineEncodeCpuNanoseconds;
+													ReplicationMetricsBefore.BaselineEncodeCpuNanoseconds;
 			if (!Baseline.Succeeded()) {
 				Reject(Connection, DisconnectReason::ResourceExhaustion, "Server replication registration failed");
 				return;
 			}
 			auto BaselineQueued = QueueStructuralFrame(*Baseline.Frame, Connection, PeerValue.Limits);
-			if (
-				!QueueSession(
+			if (!QueueSession(
 					Connection,
 					GameSessionServerAccepted{
 						.Nonce = PeerValue.Nonce,
@@ -748,7 +746,7 @@ namespace gargantuan::network {
 			}
 			for (const auto &Operation : Frame->Operations) {
 				const auto Object = ReplicationObject(Operation.Intent);
-				if (const auto *Publish = std::get_if<PublishReplication>(&Operation.Intent)) {
+				if (IsPublishReplication(Operation.Intent)) {
 					ClientKnownObjects.insert(Object);
 					if (Remotes && !Remotes->MarkMaterialized(Message.Connection, Object)) {
 						FailSession({
@@ -1458,29 +1456,28 @@ namespace gargantuan::network {
 			}
 			auto &PeerValue = Peers.at(*PrimaryConnection);
 			auto Ready = InjectFailure(detail::GameSessionFailurePoint::ClientReadySerialization)
-							 ? SerializationResult<std::vector<std::byte>>(
-								   SerializationFailure(
-									   SerializationErrorCode::InternalFailure,
-									   "Injected ClientReady serialization failure"
-								   )
-							   )
-							 : EncodeGameSessionMessage(GameSessionClientReady{
-								   PeerValue.SessionEpoch,
-								   PeerValue.Replication,
-								   PeerValue.PlayerObject,
-							   });
+							 ? SerializationResult<std::vector<std::byte>>(SerializationFailure(
+								   SerializationErrorCode::InternalFailure, "Injected ClientReady serialization failure"
+							   ))
+							 : EncodeGameSessionMessage(
+								   GameSessionClientReady{
+									   PeerValue.SessionEpoch,
+									   PeerValue.Replication,
+									   PeerValue.PlayerObject,
+								   }
+							   );
 			auto ReadyIntent = Ready ? MakeNetworkMessageIntent(
-																				*PrimaryConnection,
-																				DeliveryMode::ReliableOrdered,
-																				TrafficClass::Control,
-																				{},
-																				std::move(*Ready),
-																				PeerValue.Limits
-																			)
-																		  : std::nullopt;
+										   *PrimaryConnection,
+										   DeliveryMode::ReliableOrdered,
+										   TrafficClass::Control,
+										   {},
+										   std::move(*Ready),
+										   PeerValue.Limits
+									   )
+									 : std::nullopt;
 			const bool ReadyAccepted = ReadyIntent &&
-				!InjectFailure(detail::GameSessionFailurePoint::ClientReadySchedulerAdmission) &&
-				Scheduler.Submit(std::move(*ReadyIntent)).Accepted();
+									   !InjectFailure(detail::GameSessionFailurePoint::ClientReadySchedulerAdmission) &&
+									   Scheduler.Submit(std::move(*ReadyIntent)).Accepted();
 			if (!ReadyAccepted) {
 				FailSession({
 					DisconnectReason::ResourceExhaustion,
@@ -1510,9 +1507,7 @@ namespace gargantuan::network {
 
 	GameSession::~GameSession() = default;
 
-	void detail::GameSessionTestAccess::SetFailurePoint(
-		GameSession &Session, detail::GameSessionFailurePoint Point
-	) {
+	void detail::GameSessionTestAccess::SetFailurePoint(GameSession &Session, detail::GameSessionFailurePoint Point) {
 		Session.State->FailurePoint = Point;
 	}
 
@@ -1568,6 +1563,17 @@ namespace gargantuan::network {
 			Result.MaterializationBacklog = ReplicationMetrics.MaterializationBacklog;
 			Result.MaterializationTransitions = ReplicationMetrics.RelevanceTransitions;
 			Result.MaterializationCpuNanoseconds = ReplicationMetrics.RelevanceTransitionCpuNanoseconds;
+			Result.StructuralTemplateBuilds = ReplicationMetrics.StructuralTemplateBuilds;
+			Result.StructuralTemplateHits = ReplicationMetrics.StructuralTemplateHits;
+			Result.StructuralTemplateMisses = ReplicationMetrics.StructuralTemplateMisses;
+			Result.StructuralTemplateInvalidations = ReplicationMetrics.StructuralTemplateInvalidations;
+			Result.StructuralTemplateBytes = ReplicationMetrics.StructuralTemplateBytes;
+			Result.PeerMaterializationPlans = ReplicationMetrics.PeerMaterializationPlans;
+			Result.PeerPatchOperations = ReplicationMetrics.PeerPatchOperations;
+			Result.ReferencePatchOperations = ReplicationMetrics.ReferencePatchOperations;
+			Result.StructuralBytesEncoded = ReplicationMetrics.StructuralBytesEncoded;
+			Result.StructuralBytesReused = ReplicationMetrics.StructuralBytesReused;
+			Result.ScratchHighWaterBytes = ReplicationMetrics.ScratchHighWaterBytes;
 		}
 		if (State->Authority) {
 			const auto CharacterMetrics = State->Authority->GetMetrics();

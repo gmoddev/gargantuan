@@ -1,5 +1,9 @@
 # Current architecture
 
+- [Replication Foundation 3I](ReplicationFoundation3I.md) defines immutable
+  revisioned per-object structural publication templates, peer-specific
+  materialization plans/reference patches, transactional invalidation, and the
+  unchanged GRPL v1/reliable scheduler boundary.
 - [Character / Replication Foundation 3H](CharacterReplicationFoundation3H.md)
   defines canonical derived SpatialAddress semantics, sparse bounded
   multi-region membership, large-object fallback, dirty-driven movement,

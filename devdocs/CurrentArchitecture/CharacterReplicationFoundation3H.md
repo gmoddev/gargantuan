@@ -310,3 +310,9 @@ therefore pursue **region-backed structural materialization optimization** only
 where immutable template ownership and invalidation can be proven; adding a
 public spatial API or production world streaming before that profile-driven
 boundary would be premature.
+
+Foundation 3I completed that measured follow-up with immutable revisioned
+per-object publication descriptions and peer-local plans. It did not change the
+3H index, query, region-size default, candidate bounds, or relevance ownership.
+The 10k/100k/1M spatial regression remains a separate index proof; see
+`ReplicationFoundation3I.md` for the materialization allocation result.

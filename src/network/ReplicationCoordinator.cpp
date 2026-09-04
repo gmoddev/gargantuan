@@ -7,8 +7,10 @@
 
 #include <algorithm>
 #include <chrono>
+#include <limits>
 #include <map>
 #include <set>
+#include <stdexcept>
 #include <type_traits>
 #include <vector>
 
@@ -18,27 +20,73 @@ namespace gargantuan::network {
 		constexpr std::size_t MaximumDependencyClosureObjects = MaximumPeerDesiredObjects;
 		constexpr std::size_t MaximumCatalogRefreshBatches = 16;
 
-		PublishReplication MakePublish(const SnapshotObject &Object) {
+		PublishReplication MakePublish(SnapshotObject Object) {
 			return {
 				Object.Id.ToObjectId(),
 				Object.ClassSchemaId,
 				Object.ClassDefinitionVersion,
 				Object.Parent ? std::optional(Object.Parent->ToObjectId()) : std::nullopt,
-				Object.ClassName,
-				Object.Name,
-				Object.Properties,
-				Object.Attributes,
-				Object.Extensions,
-				Object.CustomProperties,
-				Object.Tags,
+				std::move(Object.ClassName),
+				std::move(Object.Name),
+				std::move(Object.Properties),
+				std::move(Object.Attributes),
+				std::move(Object.Extensions),
+				std::move(Object.CustomProperties),
+				std::move(Object.Tags),
 			};
 		}
 
-		std::map<ObjectId, const SnapshotObject *> IndexSnapshot(const Snapshot &SnapshotValue) {
-			std::map<ObjectId, const SnapshotObject *> Result;
-			for (const auto &Object : SnapshotValue.Objects)
-				Result.emplace(Object.Id.ToObjectId(), &Object);
-			return Result;
+		std::size_t DynamicWireValueBytes(const WireValue &Value) {
+			return std::visit(
+				[](const auto &Item) -> std::size_t {
+					using Type = std::decay_t<decltype(Item)>;
+					if constexpr (std::is_same_v<Type, std::string>)
+						return Item.size();
+					else if constexpr (std::is_same_v<Type, WireEnumItem>)
+						return Item.EnumType.size() + Item.Item.size();
+					else
+						return 0;
+				},
+				Value
+			);
+		}
+
+		std::size_t ValueMapBytes(const std::map<std::string, WireValue> &Values) {
+			std::size_t Bytes = Values.size() * sizeof(std::pair<const std::string, WireValue>);
+			for (const auto &[Name, Value] : Values)
+				Bytes += Name.size() + DynamicWireValueBytes(Value);
+			return Bytes;
+		}
+
+		std::size_t RetainedTemplateBytes(const PublishReplication &Publication) {
+			std::size_t Bytes = sizeof(StructuralMaterializationTemplate) + Publication.ClassName.size() +
+								Publication.Name.size() + ValueMapBytes(Publication.Properties) +
+								ValueMapBytes(Publication.Attributes) + Publication.Tags.size() * sizeof(std::string);
+			for (const auto &State : Publication.Extensions)
+				Bytes += sizeof(State) + ValueMapBytes(State.Properties);
+			for (const auto &State : Publication.CustomProperties)
+				Bytes += sizeof(State) + ValueMapBytes(State.Properties);
+			for (const auto &Tag : Publication.Tags)
+				Bytes += Tag.size();
+			return Bytes;
+		}
+
+		std::shared_ptr<const StructuralMaterializationTemplate>
+		MakeTemplate(ObjectId World, std::uint64_t StructuralRevision, SnapshotObject Object) {
+			auto Publication = MakePublish(std::move(Object));
+			if (!IsValidPublishReplication(Publication))
+				throw std::invalid_argument("Authoritative structural template is invalid");
+			const auto Key = StructuralMaterializationTemplateKey{World, Publication.Object, StructuralRevision};
+			const auto Bytes = RetainedTemplateBytes(Publication);
+			return std::make_shared<const StructuralMaterializationTemplate>(
+				StructuralMaterializationTemplate{Key, std::move(Publication), Bytes}
+			);
+		}
+
+		void SaturatingAdd(std::uint64_t &Value, std::uint64_t Added) {
+			Value = Added > std::numeric_limits<std::uint64_t>::max() - Value
+						? std::numeric_limits<std::uint64_t>::max()
+						: Value + Added;
 		}
 
 		bool ReferencesKnown(const ReplicationView &View, const WireValue &Value) {
@@ -49,7 +97,7 @@ namespace gargantuan::network {
 
 		bool PublishReferencesKnown(
 			const ReplicationView &View,
-			const PublishReplication &Publish,
+			const PreparedPublishReplication &Publish,
 			const std::set<ObjectId> &AdditionalKnown = {}
 		) {
 			auto Known = [&](const WireValue &Value) {
@@ -57,20 +105,21 @@ namespace gargantuan::network {
 				return !Reference || View.Knows(Reference->Object.ToObjectId()) ||
 					   AdditionalKnown.contains(Reference->Object.ToObjectId());
 			};
-			for (const auto &[Name, Value] : Publish.Properties) {
+			const auto &Publication = Publish.Template->Publication;
+			for (const auto &[Name, Value] : Publication.Properties) {
+				if (Publish.NilProperties.Contains(Name)) continue;
+				if (!Known(Value)) return false;
+			}
+			for (const auto &[Name, Value] : Publication.Attributes) {
 				(void)Name;
 				if (!Known(Value)) return false;
 			}
-			for (const auto &[Name, Value] : Publish.Attributes) {
-				(void)Name;
-				if (!Known(Value)) return false;
-			}
-			for (const auto &State : Publish.Extensions)
+			for (const auto &State : Publication.Extensions)
 				for (const auto &[Name, Value] : State.Properties) {
 					(void)Name;
 					if (!Known(Value)) return false;
 				}
-			for (const auto &State : Publish.CustomProperties)
+			for (const auto &State : Publication.CustomProperties)
 				for (const auto &[Name, Value] : State.Properties) {
 					(void)Name;
 					if (!Known(Value)) return false;
@@ -78,7 +127,7 @@ namespace gargantuan::network {
 			return true;
 		}
 
-		bool ReferencesAny(const SnapshotObject &Object, const std::set<ObjectId> &Targets) {
+		bool ReferencesAny(const PublishReplication &Object, const std::set<ObjectId> &Targets) {
 			auto Matches = [&](const WireValue &Value) {
 				const auto *Reference = std::get_if<WireObjectReference>(&Value);
 				return Reference && Targets.contains(Reference->Object.ToObjectId());
@@ -104,27 +153,31 @@ namespace gargantuan::network {
 			return false;
 		}
 
-		const InstanceProperty *FindNativeProperty(const SnapshotObject &Object, std::string_view Name) {
+		const InstanceProperty *FindNativeProperty(const PublishReplication &Object, std::string_view Name) {
 			const auto *Definition = GetActiveRuntimeSchemaRegistry().FindClassById(Object.ClassSchemaId);
 			if (!Definition) return nullptr;
-			const auto Found = Definition->AllProperties.find(std::string(Name));
+			const auto Found = std::ranges::find_if(Definition->AllProperties, [&](const auto &Entry) {
+				return Entry.first == Name;
+			});
 			return Found == Definition->AllProperties.end() ? nullptr : Found->second;
 		}
 
-		bool IsHardReference(const SnapshotObject &Object, std::string_view Name) {
+		bool IsHardReference(const PublishReplication &Object, std::string_view Name) {
 			const auto *Property = FindNativeProperty(Object, Name);
 			return Property && Property->SemanticType == InstanceProperty::DataType::ObjectReference &&
 				   (Property->MaterializationDependencyPolicy == InstanceProperty::MaterializationDependency::Hard ||
 					!Property->Nullable);
 		}
 
-		std::size_t AncestryDepth(ObjectId Object, const std::map<ObjectId, SnapshotObject> &Catalog) {
+		std::size_t AncestryDepth(
+			ObjectId Object, const std::map<ObjectId, std::shared_ptr<const StructuralMaterializationTemplate>> &Catalog
+		) {
 			std::size_t Depth = 0;
 			std::set<ObjectId> Visited;
 			while (Depth <= MaximumDependencyClosureDepth && Visited.insert(Object).second) {
 				auto Found = Catalog.find(Object);
-				if (Found == Catalog.end() || !Found->second.Parent) break;
-				Object = Found->second.Parent->ToObjectId();
+				if (Found == Catalog.end() || !Found->second->Publication.Parent) break;
+				Object = *Found->second->Publication.Parent;
 				++Depth;
 			}
 			return Depth;
@@ -138,14 +191,24 @@ namespace gargantuan::network {
 	}
 
 	ReplicationCoordinator::ReplicationCoordinator(
-		std::shared_ptr<Instance> SourceRoot, InitialRelevancePolicy IsInitiallyRelevantValue
+		std::shared_ptr<Instance> SourceRoot,
+		InitialRelevancePolicy IsInitiallyRelevantValue,
+		bool StructuralTemplateReuseEnabledValue
 	)
-		: SourceRoot(std::move(SourceRoot)), IsInitiallyRelevant(std::move(IsInitiallyRelevantValue)) {
+		: SourceRoot(std::move(SourceRoot)), IsInitiallyRelevant(std::move(IsInitiallyRelevantValue)),
+		  StructuralTemplateReuseEnabled(StructuralTemplateReuseEnabledValue) {
 		if (!this->SourceRoot) return;
 		auto SnapshotValue = CaptureSnapshot(this->SourceRoot);
 		CatalogCursor = SnapshotValue.Cursor;
-		for (auto &Object : SnapshotValue.Objects)
-			Catalog.emplace(Object.Id.ToObjectId(), std::move(Object));
+		WorldGeneration = SnapshotValue.Cursor.Scope;
+		const auto StructuralRevision = SnapshotValue.Cursor.NextSequence - 1;
+		for (auto &Object : SnapshotValue.Objects) {
+			const auto Id = Object.Id.ToObjectId();
+			auto Template = MakeTemplate(WorldGeneration, StructuralRevision, std::move(Object));
+			SaturatingAdd(Metrics.StructuralTemplateBytes, Template->RetainedBytes);
+			Catalog.emplace(Id, std::move(Template));
+			SaturatingAdd(Metrics.StructuralTemplateBuilds, 1);
+		}
 		Metrics.CatalogObjects = Catalog.size();
 	}
 
@@ -163,17 +226,36 @@ namespace gargantuan::network {
 					++Iterator;
 					continue;
 				}
-				Catalog.erase(*Iterator);
+				auto CatalogObject = Catalog.find(*Iterator);
+				if (CatalogObject != Catalog.end()) {
+					Metrics.StructuralTemplateBytes -= std::min<std::uint64_t>(
+						Metrics.StructuralTemplateBytes, CatalogObject->second->RetainedBytes
+					);
+					Catalog.erase(CatalogObject);
+				}
+				RequestedTemplates.erase(*Iterator);
 				Iterator = RetiredObjects.erase(Iterator);
 			}
 			auto Read = ChangeJournal::Get().Read(CatalogCursor, MaximumWireJournalRecords);
 			if (Read.Status == ChangeReadStatus::ResnapshotRequired) {
 				try {
 					auto SnapshotValue = CaptureSnapshot(SourceRoot);
-					Catalog.clear();
+					std::map<ObjectId, std::shared_ptr<const StructuralMaterializationTemplate>> Replacement;
+					std::uint64_t ReplacementBytes = 0;
+					const auto StructuralRevision = SnapshotValue.Cursor.NextSequence - 1;
+					for (auto &Object : SnapshotValue.Objects) {
+						const auto Id = Object.Id.ToObjectId();
+						auto Template = MakeTemplate(SnapshotValue.Cursor.Scope, StructuralRevision, std::move(Object));
+						SaturatingAdd(ReplacementBytes, Template->RetainedBytes);
+						Replacement.emplace(Id, std::move(Template));
+					}
+					SaturatingAdd(Metrics.StructuralTemplateInvalidations, Catalog.size());
+					SaturatingAdd(Metrics.StructuralTemplateBuilds, Replacement.size());
+					Catalog.swap(Replacement);
+					RequestedTemplates.clear();
 					RetiredObjects.clear();
-					for (auto &Object : SnapshotValue.Objects)
-						Catalog.emplace(Object.Id.ToObjectId(), std::move(Object));
+					WorldGeneration = SnapshotValue.Cursor.Scope;
+					Metrics.StructuralTemplateBytes = ReplacementBytes;
 					CatalogCursor = SnapshotValue.Cursor;
 					Metrics.CatalogObjects = Catalog.size();
 					++Metrics.CatalogRefreshes;
@@ -183,19 +265,60 @@ namespace gargantuan::network {
 					return false;
 				}
 			}
-			std::set<ObjectId> Touched;
-			for (const auto &Record : Read.Records)
-				Touched.insert(Record.Object);
 			try {
-				for (const auto Object : Touched) {
+				std::map<ObjectId, std::uint64_t> Touched;
+				std::set<ObjectId> PendingRetired;
+				for (const auto &Record : Read.Records) {
+					const bool AffectsTemplate = std::visit(
+						[](const auto &Change) {
+							using Type = std::decay_t<decltype(Change)>;
+							if constexpr (std::is_same_v<Type, PropertyUpdatedChange>) return Change.Replicated;
+							return true;
+						},
+						Record.Payload
+					);
+					if (AffectsTemplate) Touched[Record.Object] = Record.Sequence;
+				}
+				std::map<ObjectId, std::shared_ptr<const StructuralMaterializationTemplate>> Replacements;
+				for (const auto &[Object, StructuralRevision] : Touched) {
 					auto Live = ObjectRegistry::Get().Lookup(Object);
 					if (!Live || Live->GetDestroyed() || Live->IsDestroying()) {
-						RetiredObjects.insert(Object);
+						PendingRetired.insert(Object);
 						continue;
 					}
-					RetiredObjects.erase(Object);
-					Catalog[Object] = CaptureSnapshotObject(Live);
+					Replacements.emplace(
+						Object, MakeTemplate(WorldGeneration, StructuralRevision, CaptureSnapshotObject(Live))
+					);
 				}
+				for (auto Iterator = Replacements.begin(); Iterator != Replacements.end();) {
+					auto Existing = Catalog.find(Iterator->first);
+					if (Existing == Catalog.end()) {
+						++Iterator;
+						continue;
+					}
+					Metrics.StructuralTemplateBytes -= std::min<std::uint64_t>(
+						Metrics.StructuralTemplateBytes, Existing->second->RetainedBytes
+					);
+					SaturatingAdd(Metrics.StructuralTemplateBytes, Iterator->second->RetainedBytes);
+					SaturatingAdd(Metrics.StructuralTemplateInvalidations, 1);
+					SaturatingAdd(Metrics.StructuralTemplateBuilds, 1);
+					RequestedTemplates.erase(Iterator->first);
+					RetiredObjects.erase(Iterator->first);
+					Existing->second = std::move(Iterator->second);
+					Iterator = Replacements.erase(Iterator);
+				}
+				for (const auto &[Object, Template] : Replacements) {
+					(void)Object;
+					SaturatingAdd(Metrics.StructuralTemplateBytes, Template->RetainedBytes);
+					SaturatingAdd(Metrics.StructuralTemplateBuilds, 1);
+				}
+				Catalog.merge(Replacements);
+				for (const auto Object : PendingRetired)
+					if (!RetiredObjects.contains(Object)) {
+						RequestedTemplates.erase(Object);
+						SaturatingAdd(Metrics.StructuralTemplateInvalidations, Catalog.contains(Object) ? 1 : 0);
+					}
+				RetiredObjects.merge(PendingRetired);
 			} catch (const std::exception &Failure) {
 				Error = Failure.what();
 				return false;
@@ -252,10 +375,11 @@ namespace gargantuan::network {
 				++Metrics.DependencyLimitFailures;
 				return false;
 			}
-			if (Found->second.Parent) Pending.push_back({Found->second.Parent->ToObjectId(), Depth + 1});
-			for (const auto &[Name, Value] : Found->second.Properties) {
+			const auto &Publication = Found->second->Publication;
+			if (Publication.Parent) Pending.push_back({*Publication.Parent, Depth + 1});
+			for (const auto &[Name, Value] : Publication.Properties) {
 				const auto *Reference = std::get_if<WireObjectReference>(&Value);
-				if (Reference && IsHardReference(Found->second, Name))
+				if (Reference && IsHardReference(Publication, Name))
 					Pending.push_back({Reference->Object.ToObjectId(), Depth + 1});
 			}
 		}
@@ -263,15 +387,46 @@ namespace gargantuan::network {
 		return true;
 	}
 
-	PublishReplication
-	ReplicationCoordinator::MakePeerPublish(const SnapshotObject &Object, const std::set<ObjectId> &Known) const {
-		auto Publish = MakePublish(Object);
-		for (auto &[Name, Value] : Publish.Properties) {
-			const auto *Reference = std::get_if<WireObjectReference>(&Value);
-			if (Reference && !Known.contains(Reference->Object.ToObjectId()) && !IsHardReference(Object, Name))
-				Value = std::monostate{};
+	PreparedPublishReplication ReplicationCoordinator::MakePeerPublish(
+		ObjectId Object,
+		const std::set<ObjectId> &Known,
+		ReplicationMetrics &CandidateMetrics,
+		std::set<ObjectId> &CandidateRequestedTemplates,
+		bool AllowSoftReferencePatches
+	) {
+		auto Found = Catalog.find(Object);
+		if (Found == Catalog.end()) return {};
+		PreparedPublishReplication Publish{Object, Found->second};
+		if (!StructuralTemplateReuseEnabled ||
+			(!RequestedTemplates.contains(Object) && CandidateRequestedTemplates.insert(Object).second))
+			SaturatingAdd(CandidateMetrics.StructuralTemplateMisses, 1);
+		else {
+			SaturatingAdd(CandidateMetrics.StructuralTemplateHits, 1);
+			SaturatingAdd(CandidateMetrics.StructuralBytesReused, Found->second->RetainedBytes);
 		}
+		if (AllowSoftReferencePatches)
+			for (const auto &[Name, Value] : Found->second->Publication.Properties) {
+				const auto *Reference = std::get_if<WireObjectReference>(&Value);
+				if (Reference && !Known.contains(Reference->Object.ToObjectId()) &&
+					!IsHardReference(Found->second->Publication, Name))
+					Publish.NilProperties.Add(Name);
+			}
+		SaturatingAdd(CandidateMetrics.PeerPatchOperations, 1);
+		SaturatingAdd(CandidateMetrics.ReferencePatchOperations, Publish.NilProperties.Size());
 		return Publish;
+	}
+
+	ReplicationIntent ReplicationCoordinator::FinalizePeerPublish(PreparedPublishReplication Publish) const {
+		if (StructuralTemplateReuseEnabled) return ReplicationIntent(std::move(Publish));
+		auto Publication = Publish.Template->Publication;
+		for (std::size_t Index = 0; Index < Publish.NilProperties.Size(); ++Index) {
+			const auto Name = Publish.NilProperties[Index];
+			auto Value = std::ranges::find_if(Publication.Properties, [&](const auto &Entry) {
+				return Entry.first == Name;
+			});
+			if (Value != Publication.Properties.end()) Value->second = std::monostate{};
+		}
+		return ReplicationIntent(std::move(Publication));
 	}
 
 	ReplicationProduceResult ReplicationCoordinator::ProduceRelevanceFrame(
@@ -292,13 +447,13 @@ namespace gargantuan::network {
 		if (!BuildDependencyClosure(Selection, Closure, Error)) return {{}, std::move(Error)};
 		auto CandidatePeer = Peer->second;
 		auto CandidateMetrics = Metrics;
+		std::set<ObjectId> CandidateRequestedTemplates;
+		SaturatingAdd(CandidateMetrics.PeerMaterializationPlans, 1);
 		ReplicationFrame Frame{ReplicationProtocolVersion, Kind, CandidatePeer.View.Epoch, CandidatePeer.NextSequence};
 		if (Kind == ReplicationMessageKind::Baseline) Frame.Schema = CaptureReplicationSchemaCompatibility();
 
 		std::set<ObjectId> Existing(CandidatePeer.View.KnownObjects.begin(), CandidatePeer.View.KnownObjects.end());
-		const std::set<ObjectId> RequiredObjects(
-			Selection.RequiredObjects.begin(), Selection.RequiredObjects.end()
-		);
+		const std::set<ObjectId> RequiredObjects(Selection.RequiredObjects.begin(), Selection.RequiredObjects.end());
 		std::set<ObjectId> Leaving;
 		std::set_difference(
 			Existing.begin(), Existing.end(), Closure.begin(), Closure.end(), std::inserter(Leaving, Leaving.end())
@@ -320,9 +475,10 @@ namespace gargantuan::network {
 				if (!Existing.contains(Referrer)) continue;
 				auto Found = Catalog.find(Referrer);
 				if (Found == Catalog.end()) continue;
-				for (const auto &[Name, Value] : Found->second.Properties) {
+				const auto &Publication = Found->second->Publication;
+				for (const auto &[Name, Value] : Publication.Properties) {
 					const auto *Reference = std::get_if<WireObjectReference>(&Value);
-					if (Reference && IsHardReference(Found->second, Name) &&
+					if (Reference && IsHardReference(Publication, Name) &&
 						DesiredEntering.contains(Reference->Object.ToObjectId()))
 						PriorityEntering.insert(Reference->Object.ToObjectId());
 				}
@@ -345,10 +501,11 @@ namespace gargantuan::network {
 					if (!DesiredEntering.contains(Object) || !DependencyGroup.insert(Object).second) continue;
 					auto Found = Catalog.find(Object);
 					if (Found == Catalog.end()) continue;
-					if (Found->second.Parent) Pending.push_back(Found->second.Parent->ToObjectId());
-					for (const auto &[Name, Value] : Found->second.Properties) {
+					const auto &Publication = Found->second->Publication;
+					if (Publication.Parent) Pending.push_back(*Publication.Parent);
+					for (const auto &[Name, Value] : Publication.Properties) {
 						const auto *Reference = std::get_if<WireObjectReference>(&Value);
-						if (Reference && IsHardReference(Found->second, Name))
+						if (Reference && IsHardReference(Publication, Name))
 							Pending.push_back(Reference->Object.ToObjectId());
 					}
 				}
@@ -367,24 +524,24 @@ namespace gargantuan::network {
 			for (const auto Candidate : EnterCandidates) {
 				if (!PriorityEntering.contains(Candidate)) continue;
 				auto Added = AddEnterGroup(Candidate);
-				if (!Added)
-					return {{}, "Atomic replication dependency group exceeds the transition work limit"};
+				if (!Added) return {{}, "Atomic replication dependency group exceeds the transition work limit"};
 			}
-			const bool PriorityBacklogged = std::ranges::any_of(
-				PriorityEntering, [&](ObjectId Object) { return !Entering.contains(Object); }
-			);
+			const bool PriorityBacklogged = std::ranges::any_of(PriorityEntering, [&](ObjectId Object) {
+				return !Entering.contains(Object);
+			});
 			if (!PriorityBacklogged) {
 				std::map<ObjectId, std::set<ObjectId>> LeavingDependents;
 				for (const auto Object : DesiredLeaving) {
 					auto Found = Catalog.find(Object);
 					if (Found == Catalog.end()) continue;
-					if (Found->second.Parent) {
-						const auto Parent = Found->second.Parent->ToObjectId();
+					const auto &Publication = Found->second->Publication;
+					if (Publication.Parent) {
+						const auto Parent = *Publication.Parent;
 						if (DesiredLeaving.contains(Parent)) LeavingDependents[Parent].insert(Object);
 					}
-					for (const auto &[Name, Value] : Found->second.Properties) {
+					for (const auto &[Name, Value] : Publication.Properties) {
 						const auto *Reference = std::get_if<WireObjectReference>(&Value);
-						if (!Reference || !IsHardReference(Found->second, Name)) continue;
+						if (!Reference || !IsHardReference(Publication, Name)) continue;
 						const auto Target = Reference->Object.ToObjectId();
 						if (DesiredLeaving.contains(Target)) LeavingDependents[Target].insert(Object);
 					}
@@ -420,8 +577,7 @@ namespace gargantuan::network {
 			for (const auto Candidate : EnterCandidates) {
 				if (PriorityEntering.contains(Candidate)) continue;
 				auto Added = AddEnterGroup(Candidate);
-				if (!Added)
-					return {{}, "Atomic replication dependency group exceeds the transition work limit"};
+				if (!Added) return {{}, "Atomic replication dependency group exceeds the transition work limit"};
 			}
 		}
 		CandidatePeer.PendingRelevanceTransitions = Kind == ReplicationMessageKind::Incremental
@@ -441,21 +597,24 @@ namespace gargantuan::network {
 			IncrementalMaterializedObjects.insert(Entering.begin(), Entering.end());
 			MaterializedAfterFrame = &IncrementalMaterializedObjects;
 		}
+		Frame.Operations.reserve(Entering.size() + Leaving.size());
 
 		if (Kind == ReplicationMessageKind::Incremental && !Leaving.empty()) {
 			for (const auto Referrer : Closure) {
 				if (!Existing.contains(Referrer) || Entering.contains(Referrer)) continue;
 				auto Object = Catalog.find(Referrer);
 				if (Object == Catalog.end()) continue;
-				for (const auto &[Name, Value] : Object->second.Properties) {
+				const auto &Publication = Object->second->Publication;
+				for (const auto &[Name, Value] : Publication.Properties) {
 					const auto *Reference = std::get_if<WireObjectReference>(&Value);
-					const auto *Property = FindNativeProperty(Object->second, Name);
-					const bool CurrentHardReferenceIsNil =
-						Property && Property->SemanticType == InstanceProperty::DataType::ObjectReference &&
-						IsHardReference(Object->second, Name) && std::holds_alternative<std::monostate>(Value);
-					const bool SoftTargetLeaves =
-						Reference && !IsHardReference(Object->second, Name) &&
-						Leaving.contains(Reference->Object.ToObjectId());
+					const auto *Property = FindNativeProperty(Publication, Name);
+					const bool CurrentHardReferenceIsNil = Property &&
+														   Property->SemanticType ==
+															   InstanceProperty::DataType::ObjectReference &&
+														   IsHardReference(Publication, Name) &&
+														   std::holds_alternative<std::monostate>(Value);
+					const bool SoftTargetLeaves = Reference && !IsHardReference(Publication, Name) &&
+												  Leaving.contains(Reference->Object.ToObjectId());
 					if (CurrentHardReferenceIsNil || SoftTargetLeaves) {
 						Frame.Operations.push_back(
 							{Frame.Epoch, PropertyReplicationUpdate{Referrer, Name, std::monostate{}}}
@@ -475,10 +634,12 @@ namespace gargantuan::network {
 		for (const auto Object : EnterOrder) {
 			auto Found = Catalog.find(Object);
 			if (Found == Catalog.end()) return {{}, "Cannot publish a stale authoritative object"};
-			auto Publish = MakePeerPublish(Found->second, *MaterializedAfterFrame);
+			auto Publish = MakePeerPublish(
+				Object, *MaterializedAfterFrame, CandidateMetrics, CandidateRequestedTemplates
+			);
 			if (!PublishReferencesKnown(CandidatePeer.View, Publish, Entering))
 				return {{}, "Hard materialization dependency is not available"};
-			Frame.Operations.push_back({Frame.Epoch, std::move(Publish)});
+			Frame.Operations.push_back({Frame.Epoch, FinalizePeerPublish(std::move(Publish))});
 			CandidatePeer.View.KnownObjects.insert(Object);
 			++CandidateMetrics.ObjectsPublished;
 		}
@@ -504,7 +665,7 @@ namespace gargantuan::network {
 				if (Entering.contains(Referrer) || !Existing.contains(Referrer)) continue;
 				auto Object = Catalog.find(Referrer);
 				if (Object == Catalog.end()) continue;
-				for (const auto &[Name, Value] : Object->second.Properties) {
+				for (const auto &[Name, Value] : Object->second->Publication.Properties) {
 					const auto *Reference = std::get_if<WireObjectReference>(&Value);
 					if (!Reference) continue;
 					if (Entering.contains(Reference->Object.ToObjectId())) {
@@ -540,6 +701,10 @@ namespace gargantuan::network {
 					.count()
 			);
 		if (!Encoded) return {{}, Encoded.error().Format()};
+		SaturatingAdd(CandidateMetrics.StructuralBytesEncoded, Encoded->size());
+		CandidateMetrics.ScratchHighWaterBytes = std::max<std::uint64_t>(
+			CandidateMetrics.ScratchHighWaterBytes, Frame.Operations.capacity() * sizeof(ReplicationOperation)
+		);
 		auto Next = CandidatePeer.NextSequence.TryNext();
 		if (!Next) return {{}, "Reliable replication sequence is exhausted"};
 		CandidatePeer.NextSequence = *Next;
@@ -558,6 +723,7 @@ namespace gargantuan::network {
 			CandidateMetrics.BaselineBytes += Encoded->size();
 		} else
 			CandidateMetrics.IncrementalBytes += Encoded->size();
+		RequestedTemplates.merge(CandidateRequestedTemplates);
 		Peer->second = std::move(CandidatePeer);
 		Metrics = CandidateMetrics;
 		return {std::move(Frame), {}};
@@ -568,7 +734,7 @@ namespace gargantuan::network {
 		if (!RefreshCatalog(Error)) return {{}, std::move(Error)};
 		PeerRelevanceSelection Selection;
 		for (const auto &[Object, State] : Catalog) {
-			if (!State.Parent || !IsInitiallyRelevant || IsInitiallyRelevant(Object))
+			if (!State->Publication.Parent || !IsInitiallyRelevant || IsInitiallyRelevant(Object))
 				Selection.DesiredObjects.push_back(Object);
 		}
 		auto Result = AddPeer(Connection, Epoch, Selection);
@@ -605,6 +771,7 @@ namespace gargantuan::network {
 		if (!RefreshCatalog(CatalogError)) return {{}, std::move(CatalogError)};
 		auto CandidatePeer = Peer->second;
 		auto CandidateMetrics = Metrics;
+		std::set<ObjectId> CandidateRequestedTemplates;
 		if (MaximumJournalRecords == 0 || MaximumJournalRecords > MaximumWireJournalRecords)
 			return {{}, "Replication journal batch limit is invalid"};
 		auto Read = ChangeJournal::Get().Read(CandidatePeer.JournalCursor, MaximumJournalRecords);
@@ -617,6 +784,7 @@ namespace gargantuan::network {
 			CandidatePeer.NextSequence
 		};
 		if (Read.Records.empty()) return {{}, "No replication changes are available"};
+		Frame.Operations.reserve(Read.Records.size());
 		std::set<ObjectId> PublishedThisFrame;
 		std::set<ObjectId> BatchPublishObjects;
 		for (const auto &Record : Read.Records)
@@ -642,9 +810,16 @@ namespace gargantuan::network {
 							CandidatePeer.View.KnownObjects.begin(), CandidatePeer.View.KnownObjects.end()
 						);
 						Available.insert(BatchPublishObjects.begin(), BatchPublishObjects.end());
-						const auto Publish = CandidatePeer.PolicyManaged ? MakePeerPublish(Found->second, Available)
-																		 : MakePublish(Found->second);
-						if (Publish.Parent && !CandidatePeer.View.Knows(*Publish.Parent)) {
+						auto Publish = MakePeerPublish(
+							Record.Object,
+							Available,
+							CandidateMetrics,
+							CandidateRequestedTemplates,
+							CandidatePeer.PolicyManaged
+						);
+						const auto &Publication = Publish.Template->Publication;
+						if (Publication.Parent && !CandidatePeer.View.Knows(*Publication.Parent) &&
+							!BatchPublishObjects.contains(*Publication.Parent)) {
 							CandidatePeer.View.RelevantObjects.erase(Record.Object);
 							return;
 						}
@@ -652,7 +827,7 @@ namespace gargantuan::network {
 							FailedReference = true;
 							return;
 						}
-						Frame.Operations.push_back({Frame.Epoch, Publish});
+						Frame.Operations.push_back({Frame.Epoch, FinalizePeerPublish(std::move(Publish))});
 						CandidatePeer.View.KnownObjects.insert(Record.Object);
 						PublishedThisFrame.insert(Record.Object);
 						++CandidateMetrics.ObjectsPublished;
@@ -679,13 +854,15 @@ namespace gargantuan::network {
 							auto Value = Change.Value;
 							auto CurrentObject = Catalog.find(Record.Object);
 							if (!Change.DeclaringClassSchemaId && CurrentObject != Catalog.end()) {
-								auto CurrentValue = CurrentObject->second.Properties.find(Change.PropertyName);
-								if (CurrentValue != CurrentObject->second.Properties.end())
+								auto CurrentValue = CurrentObject->second->Publication.Properties.find(
+									Change.PropertyName
+								);
+								if (CurrentValue != CurrentObject->second->Publication.Properties.end())
 									Value = CurrentValue->second;
 							}
 							if (!ReferencesKnown(CandidatePeer.View, Value)) {
 								if (CandidatePeer.PolicyManaged && CurrentObject != Catalog.end()) {
-									if (!IsHardReference(CurrentObject->second, Change.PropertyName)) {
+									if (!IsHardReference(CurrentObject->second->Publication, Change.PropertyName)) {
 										Value = std::monostate{};
 										++CandidateMetrics.SoftReferenceFixups;
 									} else {
@@ -767,10 +944,15 @@ namespace gargantuan::network {
 			return {{}, "Replication frame operation limit exceeded"};
 		auto Encoded = EncodeReplicationFrame(Frame);
 		if (!Encoded) return {{}, Encoded.error().Format()};
+		SaturatingAdd(CandidateMetrics.StructuralBytesEncoded, Encoded->size());
+		CandidateMetrics.ScratchHighWaterBytes = std::max<std::uint64_t>(
+			CandidateMetrics.ScratchHighWaterBytes, Frame.Operations.capacity() * sizeof(ReplicationOperation)
+		);
 		auto Next = CandidatePeer.NextSequence.TryNext();
 		if (!Next) return {{}, "Reliable replication sequence is exhausted"};
 		CandidatePeer.NextSequence = *Next;
 		CandidatePeer.JournalCursor = Read.Cursor;
+		RequestedTemplates.merge(CandidateRequestedTemplates);
 		Peer->second = std::move(CandidatePeer);
 		CandidateMetrics.OperationsGenerated += Frame.Operations.size();
 		CandidateMetrics.IncrementalBytes += Encoded->size();
@@ -783,15 +965,12 @@ namespace gargantuan::network {
 	ReplicationCoordinator::SetRelevant(ConnectionId Connection, ObjectId Object, bool Relevant) {
 		auto Peer = Peers.find(Connection);
 		if (Peer == Peers.end() || !Object.IsValid()) return {{}, "Replication peer or object is invalid"};
+		std::string Error;
+		if (!RefreshCatalog(Error)) return {{}, std::move(Error)};
 		auto CandidatePeer = Peer->second;
 		auto CandidateMetrics = Metrics;
-		Snapshot Current;
-		try {
-			Current = CaptureSnapshot(SourceRoot);
-		} catch (const std::exception &Error) {
-			return {{}, Error.what()};
-		}
-		const auto Objects = IndexSnapshot(Current);
+		std::set<ObjectId> CandidateRequestedTemplates;
+		SaturatingAdd(CandidateMetrics.PeerMaterializationPlans, 1);
 		ReplicationFrame Frame{
 			ReplicationProtocolVersion,
 			ReplicationMessageKind::Incremental,
@@ -799,15 +978,17 @@ namespace gargantuan::network {
 			CandidatePeer.NextSequence
 		};
 		if (Relevant) {
-			auto Found = Objects.find(Object);
-			if (Found == Objects.end()) return {{}, "Cannot publish a stale authoritative object"};
+			auto Found = Catalog.find(Object);
+			if (Found == Catalog.end() || RetiredObjects.contains(Object))
+				return {{}, "Cannot publish a stale authoritative object"};
 			if (CandidatePeer.View.Knows(Object)) return {{}, "Object is already published"};
-			auto Publish = MakePublish(*Found->second);
-			if (Publish.Parent && !CandidatePeer.View.Knows(*Publish.Parent))
+			auto Publish = MakePeerPublish(Object, {Object}, CandidateMetrics, CandidateRequestedTemplates, false);
+			const auto &Publication = Publish.Template->Publication;
+			if (Publication.Parent && !CandidatePeer.View.Knows(*Publication.Parent))
 				return {{}, "Publish parent is not materialized for this peer"};
 			if (!PublishReferencesKnown(CandidatePeer.View, Publish, {Object}))
 				return {{}, "Publish references an object not materialized for this peer"};
-			Frame.Operations.push_back({Frame.Epoch, std::move(Publish)});
+			Frame.Operations.push_back({Frame.Epoch, FinalizePeerPublish(std::move(Publish))});
 			CandidatePeer.View.RelevantObjects.insert(Object);
 			CandidatePeer.View.KnownObjects.insert(Object);
 			++CandidateMetrics.ObjectsPublished;
@@ -816,11 +997,11 @@ namespace gargantuan::network {
 			std::vector<ObjectId> Removed{Object};
 			std::set<ObjectId> RemovedSet{Object};
 			for (std::size_t Index = 0; Index < Removed.size(); ++Index) {
-				for (const auto &[Candidate, SnapshotObjectValue] : Objects) {
+				for (const auto &[Candidate, Template] : Catalog) {
 					if (!CandidatePeer.View.Knows(Candidate) || RemovedSet.contains(Candidate)) continue;
-					if ((SnapshotObjectValue->Parent &&
-						 RemovedSet.contains(SnapshotObjectValue->Parent->ToObjectId())) ||
-						ReferencesAny(*SnapshotObjectValue, RemovedSet)) {
+					const auto &Publication = Template->Publication;
+					if ((Publication.Parent && RemovedSet.contains(*Publication.Parent)) ||
+						ReferencesAny(Publication, RemovedSet)) {
 						RemovedSet.insert(Candidate);
 						Removed.push_back(Candidate);
 					}
@@ -835,9 +1016,14 @@ namespace gargantuan::network {
 		}
 		auto Encoded = EncodeReplicationFrame(Frame);
 		if (!Encoded) return {{}, Encoded.error().Format()};
+		SaturatingAdd(CandidateMetrics.StructuralBytesEncoded, Encoded->size());
+		CandidateMetrics.ScratchHighWaterBytes = std::max<std::uint64_t>(
+			CandidateMetrics.ScratchHighWaterBytes, Frame.Operations.capacity() * sizeof(ReplicationOperation)
+		);
 		auto Next = CandidatePeer.NextSequence.TryNext();
 		if (!Next) return {{}, "Reliable replication sequence is exhausted"};
 		CandidatePeer.NextSequence = *Next;
+		RequestedTemplates.merge(CandidateRequestedTemplates);
 		Peer->second = std::move(CandidatePeer);
 		CandidateMetrics.OperationsGenerated += Frame.Operations.size();
 		CandidateMetrics.IncrementalBytes += Encoded->size();

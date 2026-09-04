@@ -1,13 +1,15 @@
+#include "gargantuan/classes/Character.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Folder.hpp"
 #include "gargantuan/classes/Part.hpp"
+#include "gargantuan/classes/Player.hpp"
 #include "gargantuan/classes/RemoteEvent.hpp"
 #include "gargantuan/classes/RemoteFunction.hpp"
 #include "gargantuan/classes/WeldConstraint.hpp"
+#include "gargantuan/network/RemoteManager.hpp"
 #include "gargantuan/network/ReplicaApplier.hpp"
 #include "gargantuan/network/ReplicationCoordinator.hpp"
 #include "gargantuan/network/ReplicationTransport.hpp"
-#include "gargantuan/network/RemoteManager.hpp"
 #include "gargantuan/network/SimulatedTransport.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/runtime/ChangeJournal.hpp"
@@ -15,6 +17,7 @@
 #include <array>
 #include <chrono>
 #include <iostream>
+#include <map>
 #include <span>
 #include <vector>
 
@@ -79,6 +82,298 @@ namespace {
 		return false;
 	}
 
+	const PreparedPublishReplication *FindPreparedPublish(const ReplicationFrame &Frame, ObjectId Object) {
+		for (const auto &Operation : Frame.Operations)
+			if (const auto *Publish = std::get_if<PreparedPublishReplication>(&Operation.Intent);
+				Publish && Publish->Object == Object)
+				return Publish;
+		return nullptr;
+	}
+
+	void TestRevisionedStructuralMaterialization() {
+		auto World = std::make_shared<DataModel>();
+		auto Shared = std::make_shared<Folder>();
+		Shared->SetName("SharedBeforeRevision");
+		Shared->SetParent(World);
+		auto Hidden = std::make_shared<Part>();
+		Hidden->SetName("PeerSpecificReferenceTarget");
+		Hidden->SetParent(World);
+		auto Referrer = std::make_shared<WeldConstraint>();
+		Referrer->SetName("PeerSpecificReferrer");
+		Referrer->SetPart0(Hidden);
+		Referrer->SetParent(World);
+
+		ReplicationCoordinator Coordinator(World);
+		auto First = Coordinator.AddPeer({101, 1}, ReplicationEpoch(1));
+		auto Second = Coordinator.AddPeer({102, 1}, ReplicationEpoch(1));
+		Check(First.Succeeded() && Second.Succeeded(), "shared structural baselines are prepared for two peers");
+		if (!First.Succeeded() || !Second.Succeeded()) return;
+		auto FirstBytes = EncodeReplicationFrame(*First.Frame);
+		auto SecondBytes = EncodeReplicationFrame(*Second.Frame);
+		Check(
+			FirstBytes && SecondBytes && *FirstBytes == *SecondBytes,
+			"shared structural templates preserve byte-identical baseline encoding"
+		);
+		for (const auto &Operation : First.Frame->Operations) {
+			const auto *FirstPublish = std::get_if<PreparedPublishReplication>(&Operation.Intent);
+			const auto *SecondPublish = FirstPublish ? FindPreparedPublish(*Second.Frame, FirstPublish->Object)
+													 : nullptr;
+			Check(
+				FirstPublish && SecondPublish && FirstPublish->Template == SecondPublish->Template,
+				"unchanged peers share the same immutable structural revision"
+			);
+		}
+		const auto SharedBefore = FindPreparedPublish(*First.Frame, Shared->GetObjectId());
+		const auto MetricsAfterReuse = Coordinator.GetMetrics();
+		Check(
+			MetricsAfterReuse.StructuralTemplateBuilds == First.Frame->Operations.size() &&
+				MetricsAfterReuse.StructuralTemplateMisses == First.Frame->Operations.size() &&
+				MetricsAfterReuse.StructuralTemplateHits == Second.Frame->Operations.size() &&
+				MetricsAfterReuse.StructuralBytesReused > 0,
+			"template build, miss, hit, and reused-byte metrics distinguish shared work"
+		);
+
+		Shared->SetName("SharedAfterRevision");
+		auto Incremental = Coordinator.ProduceIncremental({101, 1});
+		auto Third = Coordinator.AddPeer({103, 1}, ReplicationEpoch(1));
+		const auto SharedAfter = Third.Succeeded() ? FindPreparedPublish(*Third.Frame, Shared->GetObjectId()) : nullptr;
+		Check(
+			Incremental.Succeeded() && Third.Succeeded() && SharedBefore && SharedAfter &&
+				SharedBefore->Template != SharedAfter->Template &&
+				SharedBefore->Template->Publication.Name == "SharedBeforeRevision" &&
+				SharedAfter->Template->Publication.Name == "SharedAfterRevision" &&
+				SharedBefore->Template->Key.StructuralRevision < SharedAfter->Template->Key.StructuralRevision,
+			"a structural mutation atomically replaces the revision while prepared old work remains valid"
+		);
+		const auto InvalidationsBeforeNonReplicated = Coordinator.GetMetrics().StructuralTemplateInvalidations;
+		const auto RevisedTemplate = SharedAfter ? SharedAfter->Template : nullptr;
+		Shared->SetArchivable(false);
+		auto Fourth = Coordinator.AddPeer({104, 1}, ReplicationEpoch(1));
+		const auto SharedAfterNonReplicated = Fourth.Succeeded()
+												  ? FindPreparedPublish(*Fourth.Frame, Shared->GetObjectId())
+												  : nullptr;
+		Check(
+			Fourth.Succeeded() && SharedAfterNonReplicated && SharedAfterNonReplicated->Template == RevisedTemplate &&
+				Coordinator.GetMetrics().StructuralTemplateInvalidations == InvalidationsBeforeNonReplicated,
+			"a non-replicated property mutation does not invalidate a structural template"
+		);
+
+		PeerRelevanceSelection HiddenSelection{
+			.RequiredObjects = {World->GetObjectId()},
+			.DesiredObjects = {World->GetObjectId(), Referrer->GetObjectId()},
+		};
+		PeerRelevanceSelection VisibleSelection{
+			.RequiredObjects = {World->GetObjectId()},
+			.DesiredObjects = {World->GetObjectId(), Hidden->GetObjectId(), Referrer->GetObjectId()},
+		};
+		auto HiddenPeer = Coordinator.AddPeer({105, 1}, ReplicationEpoch(1), HiddenSelection);
+		auto VisiblePeer = Coordinator.AddPeer({106, 1}, ReplicationEpoch(1), VisibleSelection);
+		auto HiddenDecoded = HiddenPeer.Succeeded()
+								 ? DecodeReplicationFrame(*EncodeReplicationFrame(*HiddenPeer.Frame))
+								 : SerializationResult<ReplicationFrame>(SerializationFailure(
+									   SerializationErrorCode::InternalFailure, "missing hidden frame"
+								   ));
+		auto VisibleDecoded = VisiblePeer.Succeeded()
+								  ? DecodeReplicationFrame(*EncodeReplicationFrame(*VisiblePeer.Frame))
+								  : SerializationResult<ReplicationFrame>(SerializationFailure(
+										SerializationErrorCode::InternalFailure, "missing visible frame"
+									));
+		auto FindDecodedValue = [&](const SerializationResult<ReplicationFrame> &Frame) -> const WireValue * {
+			if (!Frame) return nullptr;
+			for (const auto &Operation : Frame->Operations)
+				if (const auto *Publish = std::get_if<PublishReplication>(&Operation.Intent);
+					Publish && Publish->Object == Referrer->GetObjectId()) {
+					auto Value = Publish->Properties.find("Part0");
+					return Value == Publish->Properties.end() ? nullptr : &Value->second;
+				}
+			return nullptr;
+		};
+		const auto *HiddenValue = FindDecodedValue(HiddenDecoded);
+		const auto *VisibleValue = FindDecodedValue(VisibleDecoded);
+		Check(
+			HiddenPeer.Succeeded() && VisiblePeer.Succeeded() && HiddenValue && VisibleValue &&
+				std::holds_alternative<std::monostate>(*HiddenValue) &&
+				std::holds_alternative<WireObjectReference>(*VisibleValue) &&
+				Coordinator.GetMetrics().ReferencePatchOperations > 0,
+			"peer-specific reference visibility patches a shared template without leaking hidden identity"
+		);
+
+		ReplicationCoordinator UncachedCoordinator(World, {}, false);
+		auto UncachedPeer = UncachedCoordinator.AddPeer({107, 1}, ReplicationEpoch(1), HiddenSelection);
+		auto PreparedBytes = HiddenPeer.Succeeded()
+								 ? EncodeReplicationFrame(*HiddenPeer.Frame)
+								 : SerializationResult<std::vector<std::byte>>(SerializationFailure(
+									   SerializationErrorCode::InternalFailure, "missing prepared frame"
+								   ));
+		auto UncachedBytes = UncachedPeer.Succeeded()
+								 ? EncodeReplicationFrame(*UncachedPeer.Frame)
+								 : SerializationResult<std::vector<std::byte>>(SerializationFailure(
+									   SerializationErrorCode::InternalFailure, "missing uncached frame"
+								   ));
+		Check(
+			UncachedPeer.Succeeded() && PreparedBytes && UncachedBytes && *PreparedBytes == *UncachedBytes &&
+				std::ranges::none_of(
+					UncachedPeer.Frame->Operations,
+					[](const auto &Operation) {
+						return std::holds_alternative<PreparedPublishReplication>(Operation.Intent);
+					}
+				) &&
+				UncachedCoordinator.GetMetrics().StructuralTemplateHits == 0,
+			"prepared and explicitly uncached structural publication paths are byte-equivalent"
+		);
+
+		const auto InvalidationsBeforeStructuralMutations = Coordinator.GetMetrics().StructuralTemplateInvalidations;
+		Shared->SetParent(Hidden);
+		Check(
+			Shared->ApplyAttributeMutation("Revisioned", WireValue(7), ScriptSecurityContext::CoreTrusted()) ==
+				MutationStatus::Success,
+			"revisioned structural Attribute mutation is accepted"
+		);
+		(void)World->Tags.Add(
+			World->GetObjectId(), Shared->GetObjectId(), "Revisioned", ScriptSecurityContext::CoreTrusted()
+		);
+		Referrer->SetPart0(std::nullopt);
+		auto MutationPeer = Coordinator.AddPeer({108, 1}, ReplicationEpoch(1));
+		const auto RevisedShared = MutationPeer.Succeeded()
+									   ? FindPreparedPublish(*MutationPeer.Frame, Shared->GetObjectId())
+									   : nullptr;
+		const auto RevisedReferrer = MutationPeer.Succeeded()
+										 ? FindPreparedPublish(*MutationPeer.Frame, Referrer->GetObjectId())
+										 : nullptr;
+		Check(
+			MutationPeer.Succeeded() && RevisedShared && RevisedReferrer &&
+				RevisedShared->Template->Publication.Parent == std::optional(Hidden->GetObjectId()) &&
+				RevisedShared->Template->Publication.Attributes.contains("Revisioned") &&
+				std::ranges::find(RevisedShared->Template->Publication.Tags, "Revisioned") !=
+					RevisedShared->Template->Publication.Tags.end() &&
+				std::holds_alternative<std::monostate>(RevisedReferrer->Template->Publication.Properties.at("Part0")) &&
+				Coordinator.GetMetrics().StructuralTemplateInvalidations == InvalidationsBeforeStructuralMutations + 2,
+			"hierarchy, Attribute, Tag, and reference mutations rebuild only affected object revisions"
+		);
+	}
+
+	void TestStructuralTemplateDifferential() {
+		auto World = std::make_shared<DataModel>();
+		std::vector<std::shared_ptr<Folder>> Folders;
+		for (std::size_t Index = 0; Index < 16; ++Index) {
+			auto FolderValue = std::make_shared<Folder>();
+			FolderValue->SetName("DifferentialFolder" + std::to_string(Index));
+			FolderValue->SetParent(World);
+			Folders.push_back(std::move(FolderValue));
+		}
+		auto MovingLeaf = std::make_shared<Part>();
+		MovingLeaf->SetName("DifferentialLeaf");
+		MovingLeaf->SetParent(Folders.front());
+		auto ReferenceTarget = std::make_shared<Part>();
+		ReferenceTarget->SetName("DifferentialReferenceTarget");
+		ReferenceTarget->SetParent(World);
+		auto Reference = std::make_shared<WeldConstraint>();
+		Reference->SetName("DifferentialReference");
+		Reference->SetParent(World);
+		auto PlayerValue = std::make_shared<Player>();
+		PlayerValue->SetName("DifferentialPlayer");
+		PlayerValue->SetParent(World);
+		auto CharacterValue = std::make_shared<Character>();
+		CharacterValue->SetName("DifferentialCharacter");
+		CharacterValue->SetParent(World);
+		std::shared_ptr<Folder> Ephemeral;
+		ReplicationCoordinator PreparedCoordinator(World);
+		ReplicationCoordinator UncachedCoordinator(World, {}, false);
+		std::uint64_t State = 0x9e3779b97f4a7c15ULL;
+		bool Tagged = false;
+		for (std::uint32_t Iteration = 0; Iteration < 64; ++Iteration) {
+			State = State * 6364136223846793005ULL + 1442695040888963407ULL;
+			const auto Index = static_cast<std::size_t>((State >> 32) % Folders.size());
+			switch (Iteration % 8) {
+			case 0:
+				Folders[Index]->SetName("DifferentialRevision" + std::to_string(State));
+				break;
+			case 1:
+				(void)Folders[Index]->ApplyAttributeMutation(
+					"Revision", WireValue(static_cast<int>(Iteration)), ScriptSecurityContext::CoreTrusted()
+				);
+				break;
+			case 2:
+				if (Tagged)
+					(void)World->Tags.Remove(
+						World->GetObjectId(),
+						MovingLeaf->GetObjectId(),
+						"Differential",
+						ScriptSecurityContext::CoreTrusted()
+					);
+				else
+					(void)World->Tags.Add(
+						World->GetObjectId(),
+						MovingLeaf->GetObjectId(),
+						"Differential",
+						ScriptSecurityContext::CoreTrusted()
+					);
+				Tagged = !Tagged;
+				break;
+			case 3:
+				MovingLeaf->SetParent(Folders[Index]);
+				break;
+			case 4:
+				if (Ephemeral) {
+					Ephemeral->Destroy();
+					Ephemeral.reset();
+				} else {
+					Ephemeral = std::make_shared<Folder>();
+					Ephemeral->SetName("DifferentialEphemeral" + std::to_string(State));
+					Ephemeral->SetParent(Folders[Index]);
+				}
+				break;
+			case 5:
+				Reference->SetPart0((State & 1) != 0 ? std::optional(ReferenceTarget) : std::nullopt);
+				break;
+			case 6:
+				PlayerValue->SetCharacter((State & 1) != 0 ? std::optional(CharacterValue) : std::nullopt);
+				break;
+			default:
+				ReferenceTarget->SetName("DifferentialReferenceRevision" + std::to_string(State));
+				break;
+			}
+			PeerRelevanceSelection Selection{
+				.RequiredObjects = {World->GetObjectId()},
+				.DesiredObjects = {
+					World->GetObjectId(),
+					MovingLeaf->GetObjectId(),
+					Reference->GetObjectId(),
+					PlayerValue->GetObjectId()
+				},
+			};
+			if ((State & 2) != 0) Selection.DesiredObjects.push_back(ReferenceTarget->GetObjectId());
+			if ((State & 4) != 0) Selection.DesiredObjects.push_back(CharacterValue->GetObjectId());
+			if (Ephemeral) Selection.DesiredObjects.push_back(Ephemeral->GetObjectId());
+			for (std::size_t Offset = 0; Offset < 6; ++Offset)
+				Selection.DesiredObjects.push_back(Folders[(Index + Offset * 3) % Folders.size()]->GetObjectId());
+			std::ranges::sort(Selection.DesiredObjects);
+			const ConnectionId Connection{static_cast<std::uint32_t>(200 + Iteration), 1};
+			auto Prepared = PreparedCoordinator.AddPeer(Connection, ReplicationEpoch(1), Selection);
+			auto Uncached = UncachedCoordinator.AddPeer(Connection, ReplicationEpoch(1), Selection);
+			auto PreparedBytes = Prepared.Succeeded()
+									 ? EncodeReplicationFrame(*Prepared.Frame)
+									 : SerializationResult<std::vector<std::byte>>(SerializationFailure(
+										   SerializationErrorCode::InternalFailure, "missing prepared differential"
+									   ));
+			auto UncachedBytes = Uncached.Succeeded()
+									 ? EncodeReplicationFrame(*Uncached.Frame)
+									 : SerializationResult<std::vector<std::byte>>(SerializationFailure(
+										   SerializationErrorCode::InternalFailure, "missing uncached differential"
+									   ));
+			Check(
+				Prepared.Succeeded() && Uncached.Succeeded() && PreparedBytes && UncachedBytes &&
+					*PreparedBytes == *UncachedBytes,
+				"deterministic structural mutation and relevance differential matches the uncached path"
+			);
+		}
+		Check(
+			PreparedCoordinator.GetMetrics().StructuralTemplateInvalidations > 0 &&
+				PreparedCoordinator.GetMetrics().StructuralTemplateHits > 0,
+			"differential workload exercises both template invalidation and reuse"
+		);
+	}
+
 	void TestMixedSimulatorComposition() {
 		auto World = std::make_shared<DataModel>();
 		auto Event = std::make_shared<RemoteEvent>();
@@ -115,13 +410,7 @@ namespace {
 		Check(
 			Baseline.Succeeded() &&
 				Deliver(
-					*Baseline.Frame,
-					ServerConnection,
-					Limits,
-					ServerScheduler,
-					Network,
-					ClientTransport,
-					ClientReplica
+					*Baseline.Frame, ServerConnection, Limits, ServerScheduler, Network, ClientTransport, ClientReplica
 				),
 			"mixed simulator establishes the replication baseline"
 		);
@@ -129,21 +418,13 @@ namespace {
 			const auto *View = Coordinator.GetView(Connection);
 			return View && View->Knows(Object);
 		};
-		auto ClientVisibility = [&](ConnectionId, ObjectId Object) {
-			return ClientReplica.Resolve(Object) != nullptr;
-		};
-		RemoteManager ServerRemotes(
-			RemoteManagerRole::Server,
-			ServerScheduler,
-			ServerVisibility,
-			[](ObjectId Object) { return ObjectRegistry::Get().Lookup(Object); }
-		);
-		RemoteManager ClientRemotes(
-			RemoteManagerRole::Client,
-			ClientScheduler,
-			ClientVisibility,
-			[&](ObjectId Object) { return ClientReplica.Resolve(Object); }
-		);
+		auto ClientVisibility = [&](ConnectionId, ObjectId Object) { return ClientReplica.Resolve(Object) != nullptr; };
+		RemoteManager ServerRemotes(RemoteManagerRole::Server, ServerScheduler, ServerVisibility, [](ObjectId Object) {
+			return ObjectRegistry::Get().Lookup(Object);
+		});
+		RemoteManager ClientRemotes(RemoteManagerRole::Client, ClientScheduler, ClientVisibility, [&](ObjectId Object) {
+			return ClientReplica.Resolve(Object);
+		});
 		Check(
 			ServerRemotes.AddPeer(ServerConnection, ReplicationEpoch(1), Limits) &&
 				ClientRemotes.AddPeer(ClientConnection, ReplicationEpoch(1), Limits),
@@ -244,6 +525,8 @@ int main() {
 		return 1;
 	}
 	TestMixedSimulatorComposition();
+	TestRevisionedStructuralMaterialization();
+	TestStructuralTemplateDifferential();
 
 	auto Game = std::make_shared<DataModel>();
 	Game->SetName("ServerWorld");

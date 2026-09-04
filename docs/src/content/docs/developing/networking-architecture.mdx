@@ -433,6 +433,12 @@ of the accepted decisions above.
   dirty-driven movement, reusable query scratch, and deterministic candidate
   dedup. 3E remains the final relevance owner; there is no region wire format,
   persistence field, public Luau API, simulation LOD, or world paging.
+- [x] **Reuse peer-independent structural materialization state.** Foundation
+  3I owns one immutable journal-revisioned publication description per
+  authoritative ObjectId generation. 3E still selects each peer; LocalPlayer,
+  known-object state, materialization/frame epochs, soft-reference patches, and
+  reliable scheduler commit remain peer-specific. Prepared and uncached paths
+  encode identical GRPL v1 bytes, with no client cache protocol or Luau API.
 
 Node integration for discovery and join tickets can proceed independently once
 the handshake contract exists. Collaborative editing remains later work.

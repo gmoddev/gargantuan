@@ -1,6 +1,6 @@
 # First complete game validation
 
-Status: Character / Replication Foundation 3H packaged-session path revalidated on 2026-09-04. This document records a vertical-slice
+Status: Replication Foundation 3I packaged-session path revalidated on 2026-09-04. This document records a vertical-slice
 falsification exercise; it does not claim that Gargantuan is generally usable.
 
 ## Game design and scope
@@ -77,6 +77,13 @@ canonical sparse region index, while 3E still owns actual structural
 enter/unpublish/re-entry. `RootMotionOpenNpc` uses the same authoritative
 Character dirty path as ordinary movement, and region membership remains
 transient rather than project or journal state.
+
+Foundation 3I likewise changes no sample content or client protocol. Structural
+baseline and NPC reentry now source peer-independent object fields from current
+immutable revisions while the existing GameSession still owns trusted
+LocalPlayer, relevance, materialization epochs, and reliable admission. The
+uncached test path encodes identical GRPL v1 bytes, and runtime Beacon/NPC CFrame
+continues exclusively through GCHR rather than structural replication.
 
 ## Authoring workflow used
 

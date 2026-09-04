@@ -40,6 +40,17 @@ namespace gargantuan::network {
 		std::uint64_t RelevanceTransitions = 0;
 		std::uint64_t RelevanceTransitionCpuNanoseconds = 0;
 		std::uint64_t MaterializationBacklog = 0;
+		std::uint64_t StructuralTemplateBuilds = 0;
+		std::uint64_t StructuralTemplateHits = 0;
+		std::uint64_t StructuralTemplateMisses = 0;
+		std::uint64_t StructuralTemplateInvalidations = 0;
+		std::uint64_t StructuralTemplateBytes = 0;
+		std::uint64_t PeerMaterializationPlans = 0;
+		std::uint64_t PeerPatchOperations = 0;
+		std::uint64_t ReferencePatchOperations = 0;
+		std::uint64_t StructuralBytesEncoded = 0;
+		std::uint64_t StructuralBytesReused = 0;
+		std::uint64_t ScratchHighWaterBytes = 0;
 	};
 
 	struct ReplicationProduceResult {
@@ -54,7 +65,9 @@ namespace gargantuan::network {
 	  public:
 		using InitialRelevancePolicy = std::function<bool(ObjectId)>;
 		explicit ReplicationCoordinator(
-			std::shared_ptr<Instance> SourceRoot, InitialRelevancePolicy IsInitiallyRelevant = {}
+			std::shared_ptr<Instance> SourceRoot,
+			InitialRelevancePolicy IsInitiallyRelevant = {},
+			bool StructuralTemplateReuseEnabled = true
 		);
 
 		[[nodiscard]] ReplicationProduceResult AddPeer(ConnectionId Connection, ReplicationEpoch Epoch);
@@ -83,7 +96,10 @@ namespace gargantuan::network {
 		};
 		std::shared_ptr<Instance> SourceRoot;
 		InitialRelevancePolicy IsInitiallyRelevant;
-		std::map<ObjectId, SnapshotObject> Catalog;
+		bool StructuralTemplateReuseEnabled = true;
+		ObjectId WorldGeneration;
+		std::map<ObjectId, std::shared_ptr<const StructuralMaterializationTemplate>> Catalog;
+		std::set<ObjectId> RequestedTemplates;
 		std::set<ObjectId> RetiredObjects;
 		ChangeCursor CatalogCursor;
 		std::map<ConnectionId, PeerState> Peers;
@@ -93,7 +109,14 @@ namespace gargantuan::network {
 		bool BuildDependencyClosure(
 			const PeerRelevanceSelection &Selection, std::set<ObjectId> &Closure, std::string &Error
 		);
-		PublishReplication MakePeerPublish(const SnapshotObject &Object, const std::set<ObjectId> &Known) const;
+		PreparedPublishReplication MakePeerPublish(
+			ObjectId Object,
+			const std::set<ObjectId> &Known,
+			ReplicationMetrics &CandidateMetrics,
+			std::set<ObjectId> &CandidateRequestedTemplates,
+			bool AllowSoftReferencePatches = true
+		);
+		ReplicationIntent FinalizePeerPublish(PreparedPublishReplication Publish) const;
 		ReplicationProduceResult ProduceRelevanceFrame(
 			ConnectionId Connection, const PeerRelevanceSelection &Selection, ReplicationMessageKind Kind
 		);

@@ -235,6 +235,13 @@ namespace gargantuan::network {
 	}
 
 	ReplicaApplyResult ReplicaApplier::ApplyFrame(const ReplicationFrame &Frame) {
+		if (std::ranges::any_of(Frame.Operations, [](const auto &Operation) {
+				return std::holds_alternative<PreparedPublishReplication>(Operation.Intent);
+			})) {
+			auto Encoded = EncodeReplicationFrame(Frame);
+			if (!Encoded) return {ReplicaApplyStatus::MalformedFrame, 0, Encoded.error().Format()};
+			return ApplyBytes(*Encoded);
+		}
 		if (!Frame.IsValid()) return {ReplicaApplyStatus::MalformedFrame, 0, "Replication frame is invalid"};
 		if (Frame.Kind == ReplicationMessageKind::Baseline) {
 			if (Frame.Sequence.Value() != 1)

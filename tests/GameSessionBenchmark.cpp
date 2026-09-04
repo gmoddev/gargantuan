@@ -187,12 +187,10 @@ namespace {
 			throw std::runtime_error(
 				"session benchmark did not activate every peer: ready=" + std::to_string(Metrics.ReadyPeers) +
 				" accepted=" + std::to_string(Metrics.AcceptedPeers) +
-				" connected=" + std::to_string(Metrics.TransportConnections) +
-				" playersCreated=" + std::to_string(Metrics.PlayersCreated) +
-				" playersRemoved=" + std::to_string(Metrics.PlayersRemoved) +
-				" rejected=" + std::to_string(Metrics.RejectedHandshakes) +
-				" protocol=" + std::to_string(Metrics.ProtocolRejects) +
-				" timeouts=" + std::to_string(Metrics.HandshakeTimeouts)
+				" connected=" + std::to_string(Metrics.TransportConnections) + " playersCreated=" +
+				std::to_string(Metrics.PlayersCreated) + " playersRemoved=" + std::to_string(Metrics.PlayersRemoved) +
+				" rejected=" + std::to_string(Metrics.RejectedHandshakes) + " protocol=" +
+				std::to_string(Metrics.ProtocolRejects) + " timeouts=" + std::to_string(Metrics.HandshakeTimeouts)
 			);
 		std::cout << (SpatialObjectCount == 0 ? "Admission," : "WorldAdmission,")
 				  << (SpatialObjectCount == 0 ? PeerCount : SpatialObjectCount) << ',' << Duration << ','
@@ -206,7 +204,13 @@ namespace {
 				  << Metrics.RelevanceCandidates << ',' << Metrics.RelevanceCpuNanoseconds << ','
 				  << Metrics.MaterializedObjects << ',' << Metrics.MaterializedCharacters << ','
 				  << Metrics.RelevanceInitializationCpuNanoseconds << ',' << Metrics.MaterializationBacklog << ','
-				  << Metrics.MaterializationTransitions << ',' << Metrics.MaterializationCpuNanoseconds << '\n';
+				  << Metrics.MaterializationTransitions << ',' << Metrics.MaterializationCpuNanoseconds << ','
+				  << Metrics.StructuralTemplateBuilds << ',' << Metrics.StructuralTemplateHits << ','
+				  << Metrics.StructuralTemplateMisses << ',' << Metrics.StructuralTemplateInvalidations << ','
+				  << Metrics.StructuralTemplateBytes << ',' << Metrics.PeerMaterializationPlans << ','
+				  << Metrics.PeerPatchOperations << ',' << Metrics.ReferencePatchOperations << ','
+				  << Metrics.StructuralBytesReused << ',' << Metrics.StructuralBytesEncoded << ','
+				  << Metrics.ScratchHighWaterBytes << '\n';
 		if (SpatialObjectCount == 0 && PeerCount <= 32) {
 			const auto Before = Server.GetMetrics();
 			const auto FailureAllocationsBefore = GameSessionBenchmarkAllocations.load(std::memory_order_relaxed);
@@ -229,7 +233,7 @@ namespace {
 			}
 			const auto FailureDuration = Milliseconds(FailureStarted);
 			const auto FailureAllocations = GameSessionBenchmarkAllocations.load(std::memory_order_relaxed) -
-				FailureAllocationsBefore;
+											FailureAllocationsBefore;
 			const auto After = Server.GetMetrics();
 			if (After.PlayersRemoved - Before.PlayersRemoved != PeerCount)
 				throw std::runtime_error("session benchmark did not tear down every failed peer");
@@ -245,13 +249,76 @@ namespace {
 					  << After.MaterializedObjects << ',' << After.MaterializedCharacters << ",0,"
 					  << After.MaterializationBacklog << ','
 					  << After.MaterializationTransitions - Before.MaterializationTransitions << ','
-					  << After.MaterializationCpuNanoseconds - Before.MaterializationCpuNanoseconds << '\n';
+					  << After.MaterializationCpuNanoseconds - Before.MaterializationCpuNanoseconds << ",0,0,0,0,"
+					  << After.StructuralTemplateBytes << ",0,0,0,0,0,0\n";
 		} else {
 			for (auto &Peer : Peers)
 				(void)Peer.Transport->Stop({DisconnectReason::LocalShutdown, "session benchmark complete"});
 		}
 		Server.Stop();
 		Runtime.Destroy();
+	}
+
+	void RunStructuralMaterialization(
+		std::string_view Kind,
+		std::size_t PeerCount,
+		std::size_t ObjectCount,
+		bool TemplateReuse,
+		std::size_t MutationStride = 0,
+		std::size_t SparseObjectsPerPeer = 0
+	) {
+		auto World = std::make_shared<DataModel>();
+		std::vector<std::shared_ptr<Folder>> Objects;
+		Objects.reserve(ObjectCount);
+		for (std::size_t Index = 0; Index < ObjectCount; ++Index) {
+			auto Object = std::make_shared<Folder>();
+			Object->SetName("StructuralObject" + std::to_string(Index));
+			Object->SetParent(World);
+			Objects.push_back(std::move(Object));
+		}
+		ReplicationCoordinator Coordinator(World, {}, TemplateReuse);
+		std::uint64_t PublishedObjects = 0;
+		const auto AllocationsBefore = GameSessionBenchmarkAllocations.load(std::memory_order_relaxed);
+		const auto Started = std::chrono::steady_clock::now();
+		for (std::size_t Peer = 0; Peer < PeerCount; ++Peer) {
+			if (MutationStride != 0 && Peer != 0 && Peer % MutationStride == 0) {
+				const auto Object = (Peer / MutationStride - 1) % Objects.size();
+				Objects[Object]->SetName("RevisedStructuralObject" + std::to_string(Peer));
+			}
+			ReplicationProduceResult Baseline;
+			if (SparseObjectsPerPeer == 0) {
+				Baseline = Coordinator.AddPeer({static_cast<std::uint32_t>(Peer + 1), 1}, ReplicationEpoch(1));
+			} else {
+				PeerRelevanceSelection Selection{
+					.RequiredObjects = {World->GetObjectId()},
+					.DesiredObjects = {World->GetObjectId()},
+				};
+				for (std::size_t Offset = 0; Offset < SparseObjectsPerPeer; ++Offset)
+					Selection.DesiredObjects.push_back(
+						Objects[(Peer * SparseObjectsPerPeer + Offset) % Objects.size()]->GetObjectId()
+					);
+				std::ranges::sort(Selection.DesiredObjects);
+				Baseline = Coordinator.AddPeer(
+					{static_cast<std::uint32_t>(Peer + 1), 1}, ReplicationEpoch(1), Selection
+				);
+			}
+			if (!Baseline.Succeeded()) throw std::runtime_error("structural materialization benchmark failed");
+			PublishedObjects += Baseline.Frame->Operations.size();
+		}
+		const auto Duration = Milliseconds(Started);
+		const auto Allocations = GameSessionBenchmarkAllocations.load(std::memory_order_relaxed) - AllocationsBefore;
+		const auto &Metrics = Coordinator.GetMetrics();
+		std::cout << Kind << ',' << PeerCount << ',' << Duration << ',' << Duration / static_cast<double>(PeerCount)
+				  << ",1," << PublishedObjects << ",0," << Allocations << ",0,0,0,"
+				  << Metrics.SnapshotCaptureCpuNanoseconds << ',' << Metrics.BaselineDiscoveryCpuNanoseconds << ','
+				  << Metrics.BaselineEncodeCpuNanoseconds << ",0,0,0,0,0,0,0," << PublishedObjects << ",0,0,"
+				  << Metrics.MaterializationBacklog << ',' << Metrics.RelevanceTransitions << ','
+				  << Metrics.RelevanceTransitionCpuNanoseconds << ',' << Metrics.StructuralTemplateBuilds << ','
+				  << Metrics.StructuralTemplateHits << ',' << Metrics.StructuralTemplateMisses << ','
+				  << Metrics.StructuralTemplateInvalidations << ',' << Metrics.StructuralTemplateBytes << ','
+				  << Metrics.PeerMaterializationPlans << ',' << Metrics.PeerPatchOperations << ','
+				  << Metrics.ReferencePatchOperations << ',' << Metrics.StructuralBytesReused << ','
+				  << Metrics.StructuralBytesEncoded << ',' << Metrics.ScratchHighWaterBytes << '\n';
 	}
 
 	void RunInterestMaterialization(std::size_t InterestSize) {
@@ -282,7 +349,13 @@ namespace {
 				  << Allocations << ",0,0,0," << Metrics.SnapshotCaptureCpuNanoseconds << ','
 				  << Metrics.BaselineDiscoveryCpuNanoseconds << ',' << Metrics.BaselineEncodeCpuNanoseconds
 				  << ",0,0,0,0,0,0,0," << Baseline.Frame->Operations.size() << ",0,0," << Metrics.MaterializationBacklog
-				  << ',' << Metrics.RelevanceTransitions << ',' << Metrics.RelevanceTransitionCpuNanoseconds << '\n';
+				  << ',' << Metrics.RelevanceTransitions << ',' << Metrics.RelevanceTransitionCpuNanoseconds << ','
+				  << Metrics.StructuralTemplateBuilds << ',' << Metrics.StructuralTemplateHits << ','
+				  << Metrics.StructuralTemplateMisses << ',' << Metrics.StructuralTemplateInvalidations << ','
+				  << Metrics.StructuralTemplateBytes << ',' << Metrics.PeerMaterializationPlans << ','
+				  << Metrics.PeerPatchOperations << ',' << Metrics.ReferencePatchOperations << ','
+				  << Metrics.StructuralBytesReused << ',' << Metrics.StructuralBytesEncoded << ','
+				  << Metrics.ScratchHighWaterBytes << '\n';
 	}
 
 	void RunRelevanceUpdate(std::size_t PeerCount) {
@@ -322,7 +395,7 @@ namespace {
 				  << ',' << After.RelevanceLeaves - Before.RelevanceLeaves << ','
 				  << After.SpatialQueries - Before.SpatialQueries << ','
 				  << After.CandidateObjects - Before.CandidateObjects << ','
-				  << After.UpdateCpuNanoseconds - Before.UpdateCpuNanoseconds << ",0,0,0,0,0,0\n";
+				  << After.UpdateCpuNanoseconds - Before.UpdateCpuNanoseconds << ",0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0\n";
 	}
 
 	void RunCommandBridge(std::size_t CharacterCount) {
@@ -369,7 +442,7 @@ namespace {
 		const auto Calls = static_cast<double>(CharacterCount * Ticks);
 		std::cout << "CommandBridge," << CharacterCount << ',' << Duration << ',' << Duration * 1000.0 / Calls << ','
 				  << Ticks << ',' << static_cast<std::uint64_t>(Calls) << ",0," << Allocations
-				  << ",0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0\n";
+				  << ",0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0\n";
 		Runtime.Destroy();
 	}
 }
@@ -382,7 +455,10 @@ int main(int ArgumentCount, char **Arguments) {
 					 "BaselineDiscoveryNs,BaselineEncodeNs,GameplayRegistrationNs,RelevantObjects,RelevanceEnters,"
 					 "RelevanceLeaves,RelevanceQueries,RelevanceCandidates,RelevanceCpuNs,MaterializedObjects,"
 					 "MaterializedCharacters,RelevanceInitializationNs,MaterializationBacklog,"
-					 "MaterializationTransitions,MaterializationCpuNs\n";
+					 "MaterializationTransitions,MaterializationCpuNs,StructuralTemplateBuilds,"
+					 "StructuralTemplateHits,StructuralTemplateMisses,StructuralTemplateInvalidations,"
+					 "StructuralTemplateBytes,PeerMaterializationPlans,PeerPatchOperations,"
+					 "ReferencePatchOperations,StructuralBytesReused,StructuralBytesEncoded,ScratchHighWaterBytes\n";
 		if (ArgumentCount > 1 && std::string_view(Arguments[1]) == "--admission-500") {
 			RunAdmission(500);
 			return 0;
@@ -394,6 +470,13 @@ int main(int ArgumentCount, char **Arguments) {
 		}
 		if (ArgumentCount > 1 && std::string_view(Arguments[1]) == "--relevance-500") {
 			RunRelevanceUpdate(500);
+			return 0;
+		}
+		if (ArgumentCount > 1 && std::string_view(Arguments[1]) == "--structural-materialization") {
+			RunStructuralMaterialization("StructuralShared128", 500, 128, true);
+			RunStructuralMaterialization("StructuralUncached128", 500, 128, false);
+			RunStructuralMaterialization("StructuralMutation128", 256, 128, true, 4);
+			RunStructuralMaterialization("StructuralSparse4096", 500, 4'096, true, 0, 16);
 			return 0;
 		}
 		for (const auto Count : {1u, 32u, 100u, 500u})

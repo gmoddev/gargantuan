@@ -40,6 +40,12 @@ It does not change 3G budgets, wheel membership, peer rotation, age, deadlines,
 accepted-publication commit, GCHR batching, or reliable semantic bypass. Region
 movement affects 3G only if 3E commits a real materialization transition.
 
+Foundation 3I shares immutable authoritative structural publication
+descriptions below 3E. It changes neither recurring GCHR state nor 3G work
+budgets. Runtime Character transform, tier, age, deadline, materialization
+epoch, owner protection, and scheduler acceptance remain outside the shared
+structural template.
+
 ## Configuration and selected unit
 
 `CharacterNetworkConfiguration` owns three trusted, construction-time native

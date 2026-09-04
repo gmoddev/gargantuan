@@ -54,6 +54,12 @@ coordinator maintains one journal-refreshed authoritative object catalog;
 of recapturing the whole DataModel per peer. A baseline always starts at
 reliable sequence 1 and is identified by a nonzero `ReplicationEpoch`.
 
+Foundation 3I makes each catalog entry an immutable revisioned per-object
+structural publication template. Peer baseline/enter operations reference that
+description and retain only peer-specific soft-reference nil patches until
+encoding. The encoder still writes ordinary GRPL v1 `Publish` bytes; final
+frames are not shared or cached. See `ReplicationFoundation3I.md`.
+
 The receiver accepts a baseline only when its schema manifest exactly equals
 the active ordered set of `(SchemaId, DefinitionVersion, definition kind)`.
 Class, custom-class, custom-enum, and extension versions therefore fail closed
@@ -252,3 +258,9 @@ Foundation 3H likewise leaves this protocol unchanged. Its derived
 dependency closure. A region crossing is not an `Unpublish`; only a changed 3E
 desired set can create structural enter/leave work. Spatial addresses, region
 membership, and candidate lists are neither serialized nor persisted.
+
+Foundation 3I resolves the previously deferred safe sharing boundary. Only
+peer-independent authoritative object state is shared. Relevance, known-object
+membership, frame/materialization epochs, LocalPlayer, soft-reference patches,
+and scheduler admission remain peer-owned. The prepared and owning publication
+paths are byte-equivalent and require no protocol-version change.

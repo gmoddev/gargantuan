@@ -66,6 +66,12 @@ defect throughput.
   membership, and region-assisted candidate discovery. 3E still owns relevance
   and structural dependency closure; no region protocol, persistence field,
   public Luau API, content paging, or portal topology was added.
+- Replication Foundation 3I replaces repeated peer-owned structural `Publish`
+  deep copies with immutable revisioned per-object descriptions and bounded
+  peer-specific reference patches. GRPL v1, 3E relevance, LocalPlayer,
+  materialization epochs, GCHR, and reliable scheduler commit remain unchanged.
+  Profiling now points to bounded structural transition work, not a generic
+  cache or public spatial API, as the next networking candidate.
 - Environment / Lighting Foundation 1 establishes canonical saved Lighting and
   Sky semantics, renderer-neutral incremental publication, AssetService-owned
   coherent face residency, and the SDL shadow/Sky/opaque/GUI pipeline. Local
