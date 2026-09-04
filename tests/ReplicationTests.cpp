@@ -14,6 +14,7 @@
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/runtime/ChangeJournal.hpp"
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <iostream>
