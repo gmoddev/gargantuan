@@ -12,8 +12,10 @@
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
+#include <map>
 #include <memory>
 #include <new>
+#include <numeric>
 #include <span>
 #include <stdexcept>
 #include <string_view>
@@ -88,6 +90,29 @@ namespace {
 		TransportOperationResult Send(const NetworkMessageIntent &Message) override {
 			Bytes += Message.Payload().size();
 			++Messages;
+			if (TrackCharacterStates) {
+				auto Decoded = DecodeCharacterMessage(Message.Payload());
+				auto *Frame = Decoded ? std::get_if<CharacterStateFrame>(&*Decoded) : nullptr;
+				if (Frame) {
+					++CharacterFrames;
+					for (const auto &State : Frame->GetStates()) {
+						++CharacterStates;
+						++PeerCharacterStates[Message.Destination()];
+						const auto Key = std::pair{Message.Destination(), State.Character};
+						if (auto Previous = LastCharacterTick.find(Key);
+							Previous != LastCharacterTick.end() && Frame->ServerTick >= Previous->second) {
+							const auto Age = static_cast<double>(Frame->ServerTick - Previous->second);
+							StateAges.push_back(Age);
+							if (auto Owner = OwnerByPeer.find(Message.Destination());
+								Owner != OwnerByPeer.end() && Owner->second == State.Character)
+								OwnerAges.push_back(Age);
+							else
+								RemoteAges.push_back(Age);
+						}
+						LastCharacterTick[Key] = Frame->ServerTick;
+					}
+				}
+			}
 			return {TransportOperationStatus::Succeeded};
 		}
 		std::size_t PollEvents(std::span<TransportEvent>) override {
@@ -101,10 +126,25 @@ namespace {
 		}
 		std::uint64_t Bytes = 0;
 		std::uint64_t Messages = 0;
+		std::uint64_t CharacterFrames = 0;
+		std::uint64_t CharacterStates = 0;
+		bool TrackCharacterStates = false;
+		std::map<ConnectionId, ObjectId> OwnerByPeer;
+		std::map<ConnectionId, std::uint64_t> PeerCharacterStates;
+		std::map<std::pair<ConnectionId, ObjectId>, std::uint64_t> LastCharacterTick;
+		std::vector<double> StateAges;
+		std::vector<double> OwnerAges;
+		std::vector<double> RemoteAges;
 
 		void ResetMeasurements() {
 			Bytes = 0;
 			Messages = 0;
+			CharacterFrames = 0;
+			CharacterStates = 0;
+			PeerCharacterStates.clear();
+			StateAges.clear();
+			OwnerAges.clear();
+			RemoteAges.clear();
 		}
 	};
 
@@ -437,6 +477,8 @@ namespace {
 		}
 		const auto Metrics = Manager.GetMetrics();
 		const auto Delta = [&Metrics, &MetricsBefore](auto Member) { return Metrics.*Member - MetricsBefore.*Member; };
+		if (Delta(&CharacterNetworkMetrics::PublicationStatesDeferred) != 0)
+			throw std::runtime_error("Default Character publication budget deferred healthy peer-scale work");
 		double MeanStep = 0.0;
 		double MeanStates = 0.0;
 		for (const auto Sample : StepSamples)
@@ -457,10 +499,14 @@ namespace {
 				  << Delta(&CharacterNetworkMetrics::AbsoluteStatesSent) / DurationSeconds << ','
 				  << Delta(&CharacterNetworkMetrics::StateSnapshotsBuilt) / DurationSeconds << ','
 				  << Delta(&CharacterNetworkMetrics::StateSnapshotRelationshipUses) / DurationSeconds << ',' << MeanStep
-				  << ','
-				  << Percentile(StepSamples, 0.95) << ',' << Percentile(StepSamples, 0.99) << ',' << MeanStates << ','
-				  << *std::ranges::max_element(StatesPerTick) << ',' << Percentile(StatesPerTick, 0.95) << ','
-				  << StateVariance << ',' << Delta(&CharacterNetworkMetrics::ImportanceEvaluations) / DurationSeconds
+				  << ',' << Percentile(StepSamples, 0.95) << ',' << Percentile(StepSamples, 0.99) << ',' << MeanStates
+				  << ',' << *std::ranges::max_element(StatesPerTick) << ',' << Percentile(StatesPerTick, 0.95) << ','
+				  << StateVariance << ',' << Delta(&CharacterNetworkMetrics::PublicationOfferedStates) << ','
+				  << Delta(&CharacterNetworkMetrics::PublicationStatesSelected) << ','
+				  << Delta(&CharacterNetworkMetrics::PublicationStatesAccepted) << ','
+				  << Delta(&CharacterNetworkMetrics::PublicationStatesDeferred) << ','
+				  << Delta(&CharacterNetworkMetrics::PublicationGlobalBudgetExhaustions) << ','
+				  << Delta(&CharacterNetworkMetrics::ImportanceEvaluations) / DurationSeconds
 				  << ',' << Delta(&CharacterNetworkMetrics::ImportanceEvaluationCpuNanoseconds) << ','
 				  << Delta(&CharacterNetworkMetrics::DueSetCpuNanoseconds) << ','
 				  << Delta(&CharacterNetworkMetrics::StateChangeDetectionCpuNanoseconds) << ','
@@ -469,6 +515,194 @@ namespace {
 				  << Delta(&CharacterNetworkMetrics::SchedulerSubmitCpuNanoseconds) << ',' << Allocations << ','
 				  << Delta(&CharacterNetworkMetrics::ImportanceTierTransitions) << ',' << Metrics.FullRateRelationships
 				  << ',' << Metrics.ReducedRateRelationships << ',' << Metrics.LowRateRelationships << '\n';
+	}
+
+	void RunPublicationBudget(
+		std::string_view Profile,
+		std::span<const std::size_t> PeerLoads,
+		CharacterNetworkConfiguration Configuration,
+		std::size_t SimulationTicks
+	) {
+		MeasuringTransport Transport;
+		Transport.TrackCharacterStates = true;
+		NetworkScheduler Scheduler(Transport);
+		const auto NetworkLimits = Limits();
+		AuthoritativeCharacterNetwork Manager(Scheduler, NetworkLimits, Movement, {}, Configuration);
+		WorldRoot World;
+		std::vector<ConnectionId> Connections;
+		std::vector<std::shared_ptr<KinematicCharacter>> Characters;
+		std::size_t TotalRelationships = 0;
+		for (std::size_t PeerIndex = 0; PeerIndex < PeerLoads.size(); ++PeerIndex) {
+			const ConnectionId Connection{static_cast<std::uint32_t>(20'000 + PeerIndex), 1};
+			Scheduler.RegisterConnection(Connection, NetworkLimits);
+			Manager.AddPeer(Connection);
+			Connections.push_back(Connection);
+			for (std::size_t Relation = 0; Relation < PeerLoads[PeerIndex]; ++Relation) {
+				auto Character = std::make_shared<KinematicCharacter>();
+				Character->SetPosition({static_cast<float>(Relation % 64), 10.0f, static_cast<float>(PeerIndex)});
+				Manager.RegisterCharacter(Character);
+				Manager.MarkMaterialized(Connection, Character->GetObjectId(), StateChannelId(Relation + 1));
+				if (Relation == 0) {
+					(void)Manager.BindControl(Connection, Character->GetObjectId(), 1);
+					Transport.OwnerByPeer[Connection] = Character->GetObjectId();
+				}
+				Characters.push_back(std::move(Character));
+				++TotalRelationships;
+			}
+			(void)Scheduler.Flush(Connection, SchedulerTickBudget::FromNetworkLimits(NetworkLimits));
+		}
+		for (std::uint64_t Tick = 1; Tick <= 18; ++Tick) {
+			for (const auto &Character : Characters) {
+				auto Transform = Character->GetCFrame();
+				Transform.Position.y += 0.01f;
+				Character->ApplyRuntimeTransform(Transform);
+			}
+			Manager.Step(World, Tick);
+			for (const auto Connection : Connections)
+				(void)Scheduler.Flush(Connection, SchedulerTickBudget::FromNetworkLimits(NetworkLimits));
+		}
+		Transport.ResetMeasurements();
+		const auto MetricsBefore = Manager.GetMetrics();
+		std::vector<double> StepSamples;
+		StepSamples.reserve(SimulationTicks);
+		std::uint64_t Allocations = 0;
+		for (std::uint64_t Offset = 0; Offset < SimulationTicks; ++Offset) {
+			const auto Tick = 19 + Offset;
+			for (const auto &Character : Characters) {
+				auto Transform = Character->GetCFrame();
+				Transform.Position.y += 0.01f;
+				Character->ApplyRuntimeTransform(Transform);
+			}
+			const auto AllocationsBefore = CharacterBenchmarkAllocations.load(std::memory_order_relaxed);
+			const auto Started = std::chrono::steady_clock::now();
+			Manager.Step(World, Tick);
+			const auto Ended = std::chrono::steady_clock::now();
+			Allocations += CharacterBenchmarkAllocations.load(std::memory_order_relaxed) - AllocationsBefore;
+			StepSamples.push_back(Microseconds(Started, Ended));
+			for (const auto Connection : Connections)
+				(void)Scheduler.Flush(Connection, SchedulerTickBudget::FromNetworkLimits(NetworkLimits));
+		}
+		const auto Metrics = Manager.GetMetrics();
+		const auto Delta = [&Metrics, &MetricsBefore](auto Member) { return Metrics.*Member - MetricsBefore.*Member; };
+		double MeanStep = std::accumulate(StepSamples.begin(), StepSamples.end(), 0.0) /
+						  static_cast<double>(StepSamples.size());
+		std::uint64_t MinimumPeerStates = 0;
+		std::uint64_t MaximumPeerStates = 0;
+		if (!Connections.empty()) {
+			MinimumPeerStates = std::numeric_limits<std::uint64_t>::max();
+			for (const auto Connection : Connections) {
+				const auto Count = Transport.PeerCharacterStates[Connection];
+				MinimumPeerStates = std::min(MinimumPeerStates, Count);
+				MaximumPeerStates = std::max(MaximumPeerStates, Count);
+			}
+		}
+		std::cout << "BudgetScale," << Profile << ',' << PeerLoads.size() << ',' << TotalRelationships << ','
+				  << Configuration.MaximumPublicationStatesPerPeerTick << ','
+				  << Configuration.MaximumPublicationStatesPerTick << ',' << Configuration.PublicationPeerQuantum << ','
+				  << SimulationTicks << ',' << Transport.CharacterStates << ','
+				  << static_cast<double>(Transport.CharacterStates) / static_cast<double>(SimulationTicks) << ','
+				  << Delta(&CharacterNetworkMetrics::DueStates) << ','
+				  << Delta(&CharacterNetworkMetrics::PublicationOfferedStates) << ','
+				  << Delta(&CharacterNetworkMetrics::PublicationStatesSelected) << ','
+				  << Delta(&CharacterNetworkMetrics::PublicationStatesAccepted) << ','
+				  << Delta(&CharacterNetworkMetrics::PublicationStatesDeferred) << ','
+				  << Delta(&CharacterNetworkMetrics::PublicationOverdueRelationships) << ','
+				  << Delta(&CharacterNetworkMetrics::PublicationDeadlineMisses) << ','
+				  << Delta(&CharacterNetworkMetrics::PublicationDeadlineEscalations) << ','
+				  << Delta(&CharacterNetworkMetrics::PublicationFullRateDeadlineMisses) << ','
+				  << Delta(&CharacterNetworkMetrics::PublicationReducedRateDeadlineMisses) << ','
+				  << Delta(&CharacterNetworkMetrics::PublicationLowRateDeadlineMisses) << ','
+				  << Delta(&CharacterNetworkMetrics::PublicationOwnerDeferrals) << ','
+				  << Delta(&CharacterNetworkMetrics::PublicationGlobalBudgetExhaustions) << ','
+				  << (Delta(&CharacterNetworkMetrics::PublicationLatencySamples) == 0
+						  ? 0.0
+						  : static_cast<double>(Delta(&CharacterNetworkMetrics::PublicationLatencyTicks)) /
+								static_cast<double>(Delta(&CharacterNetworkMetrics::PublicationLatencySamples)))
+				  << ',' << Metrics.MaximumPublicationLatencyTicks << ','
+				  << Delta(&CharacterNetworkMetrics::PublicationLatencyOneToThree) << ','
+				  << Delta(&CharacterNetworkMetrics::PublicationLatencyFourToSix) << ','
+				  << Delta(&CharacterNetworkMetrics::PublicationLatencySevenToTwelve) << ','
+				  << Delta(&CharacterNetworkMetrics::PublicationLatencyOverTwelve) << ',' << MeanStep << ','
+				  << Percentile(StepSamples, 0.50) << ',' << Percentile(StepSamples, 0.95) << ','
+				  << Percentile(StepSamples, 0.99) << ',' << *std::ranges::max_element(StepSamples) << ','
+				  << Delta(&CharacterNetworkMetrics::PublicationDueDiscoveryCpuNanoseconds) << ','
+				  << Delta(&CharacterNetworkMetrics::PublicationSelectionCpuNanoseconds) << ','
+				  << Delta(&CharacterNetworkMetrics::StateChangeDetectionCpuNanoseconds) << ','
+				  << Delta(&CharacterNetworkMetrics::PublicationSnapshotCpuNanoseconds) << ','
+				  << Delta(&CharacterNetworkMetrics::StateFrameAssemblyCpuNanoseconds) << ','
+				  << Delta(&CharacterNetworkMetrics::StateEncodeCpuNanoseconds) << ','
+				  << Delta(&CharacterNetworkMetrics::SchedulerSubmitCpuNanoseconds) << ','
+				  << Delta(&CharacterNetworkMetrics::PublicationCommitCpuNanoseconds) << ',' << Allocations << ','
+				  << Transport.Messages << ','
+				  << (Transport.CharacterFrames == 0 ? 0.0
+													 : static_cast<double>(Transport.CharacterStates) /
+														   static_cast<double>(Transport.CharacterFrames))
+				  << ',' << Percentile(Transport.StateAges, 0.50) << ',' << Percentile(Transport.StateAges, 0.95) << ','
+				  << Percentile(Transport.StateAges, 0.99) << ',' << Percentile(Transport.StateAges, 1.0) << ','
+				  << Percentile(Transport.OwnerAges, 0.50) << ',' << Percentile(Transport.OwnerAges, 0.95) << ','
+				  << Percentile(Transport.OwnerAges, 1.0) << ',' << Percentile(Transport.RemoteAges, 0.50) << ','
+				  << Percentile(Transport.RemoteAges, 0.95) << ',' << Percentile(Transport.RemoteAges, 1.0) << ','
+				  << MinimumPeerStates << ',' << MaximumPeerStates << '\n';
+	}
+
+	void RunDueFraction(std::uint32_t PublicationHz, std::size_t Relationships, std::size_t SimulationTicks) {
+		CharacterNetworkConfiguration Configuration;
+		Configuration.StateUpdatesPerSecond = PublicationHz;
+		Configuration.ReducedStateUpdatesPerSecond = std::min<std::uint32_t>(PublicationHz, 5);
+		Configuration.LowStateUpdatesPerSecond = std::min<std::uint32_t>(PublicationHz, 5);
+		Configuration.MaximumPublicationStatesPerPeerTick = MaximumCharacterPublicationStatesPerPeerTick;
+		Configuration.MaximumPublicationStatesPerTick = MaximumCharacterPublicationStatesPerTick;
+		Configuration.PublicationPeerQuantum = MaximumCharacterPublicationStatesPerPeerTick;
+		MeasuringTransport Transport;
+		NetworkScheduler Scheduler(Transport);
+		const auto NetworkLimits = Limits();
+		const ConnectionId Connection{30'000 + PublicationHz, 1};
+		Scheduler.RegisterConnection(Connection, NetworkLimits);
+		AuthoritativeCharacterNetwork Manager(Scheduler, NetworkLimits, Movement, {}, Configuration);
+		Manager.AddPeer(Connection);
+		Manager.SetPeerPublicationFocus(Connection, std::array{glm::vec3{0.0f, 10.0f, 0.0f}});
+		WorldRoot World;
+		std::vector<std::shared_ptr<KinematicCharacter>> Characters;
+		Characters.reserve(Relationships);
+		for (std::size_t Index = 0; Index < Relationships; ++Index) {
+			auto Character = std::make_shared<KinematicCharacter>();
+			Character->SetPosition({static_cast<float>(Index % 8), 10.0f, 0.0f});
+			Manager.RegisterCharacter(Character);
+			Manager.MarkMaterialized(Connection, Character->GetObjectId(), StateChannelId(Index + 1));
+			Characters.push_back(std::move(Character));
+		}
+		for (std::uint64_t Tick = 1; Tick <= 18; ++Tick) {
+			for (const auto &Character : Characters) {
+				auto Transform = Character->GetCFrame();
+				Transform.Position.x += 0.01f;
+				Character->ApplyRuntimeTransform(Transform);
+			}
+			Manager.Step(World, Tick);
+			(void)Scheduler.Flush(Connection, SchedulerTickBudget::FromNetworkLimits(NetworkLimits));
+		}
+		const auto Before = Manager.GetMetrics();
+		std::vector<double> Samples;
+		Samples.reserve(SimulationTicks);
+		for (std::uint64_t Offset = 0; Offset < SimulationTicks; ++Offset) {
+			for (const auto &Character : Characters) {
+				auto Transform = Character->GetCFrame();
+				Transform.Position.x += 0.01f;
+				Character->ApplyRuntimeTransform(Transform);
+			}
+			const auto Started = std::chrono::steady_clock::now();
+			Manager.Step(World, 19 + Offset);
+			Samples.push_back(Microseconds(Started, std::chrono::steady_clock::now()));
+			(void)Scheduler.Flush(Connection, SchedulerTickBudget::FromNetworkLimits(NetworkLimits));
+		}
+		const auto After = Manager.GetMetrics();
+		std::cout << "DueFraction," << PublicationHz << ',' << Relationships << ',' << SimulationTicks << ','
+				  << 100.0 * static_cast<double>(PublicationHz) /
+						 static_cast<double>(DefaultCharacterSimulationTicksPerSecond)
+				  << ',' << After.DueStates - Before.DueStates << ','
+				  << After.PublicationStatesAccepted - Before.PublicationStatesAccepted << ','
+				  << After.PublicationDueDiscoveryCpuNanoseconds - Before.PublicationDueDiscoveryCpuNanoseconds << ','
+				  << std::accumulate(Samples.begin(), Samples.end(), 0.0) / static_cast<double>(Samples.size()) << ','
+				  << Percentile(Samples, 0.95) << ',' << Percentile(Samples, 0.99) << '\n';
 	}
 
 	void RunPresentationQuality(std::string_view Profile, auto StateAt, bool DropEveryFifthSample = false) {
@@ -660,7 +894,8 @@ int main(int ArgumentCount, char **Arguments) {
 				<< "PeerScale,Peers,Characters,RelevantPerPeer,Relationships,SimulationTicks,PayloadBytesPerSecond,"
 				   "MessagesPerSecond,StatesPerSecond,SnapshotsBuiltPerSecond,SnapshotRelationshipUsesPerSecond,"
 				   "StepMeanUs,P95Us,P99Us,MeanStatesPerTick,MaxStatesPerTick,"
-				   "P95StatesPerTick,StateCountVariance,ImportanceEvaluationsPerSecond,ImportanceNs,DueSetNs,"
+				   "P95StatesPerTick,StateCountVariance,Offered,Selected,Accepted,Deferred,GlobalExhaustions,"
+				   "ImportanceEvaluationsPerSecond,ImportanceNs,DueSetNs,"
 				   "ChangeDetectionNs,AssemblyNs,EncodeNs,SchedulerNs,Allocations,TierTransitions,"
 				   "FullRateRelationships,ReducedRateRelationships,LowRateRelationships\n";
 			RunPeerMatrix(0, 500, 0, 60);
@@ -668,6 +903,45 @@ int main(int ArgumentCount, char **Arguments) {
 			RunPeerMatrix(32, 500, 50, 60);
 			RunPeerMatrix(100, 500, 50, 60);
 			RunPeerMatrix(500, 500, 50, 60);
+			std::cout
+				<< "BudgetScale,Profile,Peers,Relationships,PerPeerBudget,GlobalBudget,PeerQuantum,SimulationTicks,"
+				   "AcceptedStates,StatesPerTick,DueTransitions,Offered,Selected,Accepted,Deferred,Overdue,"
+				   "DeadlineMisses,"
+				   "DeadlineEscalations,FullDeadlineMisses,ReducedDeadlineMisses,LowDeadlineMisses,OwnerDeferrals,"
+				   "GlobalExhaustions,PublicationLatencyMean,PublicationLatencyMax,Latency1To3,Latency4To6,"
+				   "Latency7To12,LatencyOver12,StepMeanUs,P50Us,P95Us,P99Us,MaxUs,"
+				   "DueDiscoveryNs,SelectionNs,ChangeDetectionNs,SnapshotNs,AssemblyNs,EncodeNs,SchedulerNs,"
+				   "CommitNs,Allocations,Messages,StatesPerFrame,StateAgeP50,StateAgeP95,StateAgeP99,StateAgeMax,"
+				   "OwnerAgeP50,OwnerAgeP95,OwnerAgeMax,RemoteAgeP50,RemoteAgeP95,RemoteAgeMax,MinPeerStates,"
+				   "MaxPeerStates\n";
+			const std::array<std::size_t, 1> FiveHundred{500};
+			const std::array<std::size_t, 1> OneThousand{1'000};
+			const std::array<std::size_t, 1> TwoThousand{2'000};
+			const std::array<std::size_t, 1> FourThousand{4'000};
+			const std::array<std::size_t, 3> FairLoads{500, 5, 50};
+			RunPublicationBudget("Default500", FiveHundred, CharacterNetworkConfiguration{}, 120);
+			CharacterNetworkConfiguration MildBudget;
+			MildBudget.MaximumPublicationStatesPerPeerTick = 256;
+			MildBudget.MaximumPublicationStatesPerTick = 256;
+			MildBudget.PublicationPeerQuantum = 60;
+			RunPublicationBudget("Mild500", FiveHundred, MildBudget, 120);
+			CharacterNetworkConfiguration ExtremeBudget;
+			ExtremeBudget.MaximumPublicationStatesPerPeerTick = 32;
+			ExtremeBudget.MaximumPublicationStatesPerTick = 32;
+			ExtremeBudget.PublicationPeerQuantum = 15;
+			RunPublicationBudget("Extreme500", FiveHundred, ExtremeBudget, 120);
+			CharacterNetworkConfiguration FairBudget;
+			FairBudget.MaximumPublicationStatesPerPeerTick = 64;
+			FairBudget.MaximumPublicationStatesPerTick = 96;
+			FairBudget.PublicationPeerQuantum = 15;
+			RunPublicationBudget("Fair500x5x50", FairLoads, FairBudget, 120);
+			RunPublicationBudget("Offered1000Budget256", OneThousand, MildBudget, 60);
+			RunPublicationBudget("Offered2000Budget256", TwoThousand, MildBudget, 60);
+			RunPublicationBudget("Offered4000Budget256", FourThousand, MildBudget, 60);
+			std::cout << "DueFraction,PublicationHz,Relationships,SimulationTicks,NominalDuePercent,Due,Accepted,"
+						 "DueDiscoveryNs,StepMeanUs,P95Us,P99Us\n";
+			for (const auto PublicationHz : {1u, 6u, 30u, 60u})
+				RunDueFraction(PublicationHz, 1'000, 60);
 			std::cout << "Quality,Profile,CadenceHz,MeasuredTicks,MeanPositionError,P95PositionError,"
 						 "MaximumPositionError,MeanArrivalSampleAgeTicks,Extrapolations,Holds,InterpolationResets,"
 						 "HardPresentationResets\n";

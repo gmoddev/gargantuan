@@ -160,14 +160,21 @@ namespace {
 
 	struct RecordingScheduler final : INetworkScheduler {
 		std::vector<NetworkMessageIntent> Messages;
+		std::vector<SchedulerSubmitResult> SubmissionResults;
+		std::size_t SubmissionIndex = 0;
 		SchedulerSubmitResult NextSubmission{SchedulerSubmitStatus::Accepted};
 		bool RegisterConnection(ConnectionId, const NetworkLimits &) override {
 			return true;
 		}
 		SchedulerSubmitResult Submit(NetworkMessageIntent Intent) override {
-			const auto Result = NextSubmission;
+			const auto Result = SubmissionIndex < SubmissionResults.size() ? SubmissionResults[SubmissionIndex++]
+																		   : NextSubmission;
 			if (Result.Accepted()) Messages.push_back(std::move(Intent));
 			return Result;
+		}
+		void ScriptSubmissions(std::vector<SchedulerSubmitResult> Results) {
+			SubmissionResults = std::move(Results);
+			SubmissionIndex = 0;
 		}
 		SchedulerFlushResult Flush(ConnectionId, SchedulerTickBudget) override {
 			return {SchedulerFlushStatus::Drained};
@@ -1309,7 +1316,7 @@ namespace {
 		auto Metrics = Server.GetMetrics();
 		Check(
 			Metrics.StatesConsidered == 64 && Metrics.StatesSuppressedUnchanged == 32 &&
-				Metrics.StateFramesEmitted == 3 && Metrics.BatchSplits == 2,
+				Metrics.StateFramesEmitted == 3 && Metrics.BatchSplits == 2 && Metrics.PublicationStatesDeferred == 0,
 			"bounded 3C metrics expose consideration, suppression, batching, and split counts"
 		);
 		Server.Step(World, 61);
@@ -1640,9 +1647,8 @@ namespace {
 			  Metrics.ForcedSemanticPublications >= 2 &&
 			  Metrics.MaximumStateAgeTicks <= DefaultCharacterAbsoluteRefreshTicks))
 			std::cerr << "[Character:NetworkTest] metrics=" << Metrics.FullRateStatesSent << ','
-					  << Metrics.ReducedRateStatesSent << ','
-					  << Metrics.LowRateStatesSent << ',' << Metrics.ForcedSemanticPublications << ','
-					  << Metrics.MaximumStateAgeTicks << '\n';
+					  << Metrics.ReducedRateStatesSent << ',' << Metrics.LowRateStatesSent << ','
+					  << Metrics.ForcedSemanticPublications << ',' << Metrics.MaximumStateAgeTicks << '\n';
 		Check(
 			Metrics.ImportanceEvaluations != 0 && Metrics.ImportanceTierTransitions != 0 &&
 				Metrics.FullRateStatesSent != 0 && Metrics.ReducedRateStatesSent != 0 &&
@@ -1672,6 +1678,531 @@ namespace {
 			ChurnMetrics.FullRateRelationships == 0 && ChurnMetrics.ReducedRateRelationships == 0 &&
 				ChurnMetrics.LowRateRelationships == 0,
 			"one hundred connect/disconnect lifetimes leave no peer-tier relationship residue"
+		);
+	}
+
+	void TestBoundedPublicationScheduling() {
+		CharacterNetworkConfiguration InvalidPerPeer;
+		InvalidPerPeer.MaximumPublicationStatesPerPeerTick = 0;
+		Check(!InvalidPerPeer.IsValid(), "a zero production per-peer Character publication budget fails closed");
+		CharacterNetworkConfiguration InvalidGlobal;
+		InvalidGlobal.MaximumPublicationStatesPerTick = 0;
+		Check(!InvalidGlobal.IsValid(), "a zero production global Character publication budget fails closed");
+		CharacterNetworkConfiguration ContradictoryBudgets;
+		ContradictoryBudgets.MaximumPublicationStatesPerTick =
+			ContradictoryBudgets.MaximumPublicationStatesPerPeerTick - 1;
+		Check(
+			!ContradictoryBudgets.IsValid(),
+			"the per-peer Character publication bound cannot exceed the global bound"
+		);
+		CharacterNetworkConfiguration InvalidQuantum;
+		InvalidQuantum.PublicationPeerQuantum = InvalidQuantum.MaximumPublicationStatesPerPeerTick + 1;
+		Check(!InvalidQuantum.IsValid(), "the peer quantum cannot exceed its per-peer publication bound");
+		CharacterNetworkConfiguration OversizedBudget;
+		OversizedBudget.MaximumPublicationStatesPerTick = MaximumCharacterPublicationStatesPerTick + 1;
+		Check(!OversizedBudget.IsValid(), "an oversized Character publication budget fails closed");
+
+		CharacterNetworkConfiguration Configuration;
+		Configuration.MaximumPublicationStatesPerPeerTick = 3;
+		Configuration.MaximumPublicationStatesPerTick = 6;
+		Configuration.PublicationPeerQuantum = 2;
+		RecordingScheduler Scheduler;
+		AuthoritativeCharacterNetwork Server(Scheduler, TestLimits(), Movement, {}, Configuration);
+		WorldRoot World;
+		const std::array Connections{ConnectionId{600, 1}, ConnectionId{900, 1}, ConnectionId{1'200, 1}};
+		const std::array<std::size_t, 3> GroupSizes{9, 2, 4};
+		std::array<std::vector<std::shared_ptr<KinematicCharacter>>, 3> Groups;
+		std::vector<std::shared_ptr<KinematicCharacter>> Characters;
+		std::vector<std::pair<ConnectionId, ObjectId>> Relationships;
+		for (std::size_t Group = 0; Group < Groups.size(); ++Group) {
+			Check(Server.AddPeer(Connections[Group]), "the constrained fairness fixture registers each peer");
+			for (std::size_t Index = 0; Index < GroupSizes[Group]; ++Index) {
+				auto Character = std::make_shared<KinematicCharacter>();
+				Character->SetPosition({static_cast<float>(Group * 100 + Index), 6.0f, 0.0f});
+				const auto Id = Character->GetObjectId();
+				Check(
+					Server.RegisterCharacter(Character) &&
+						Server.MarkMaterialized(Connections[Group], Id, StateChannelId(100 + Group * 20 + Index)),
+					"the constrained fairness fixture creates each sparse relationship"
+				);
+				Groups[Group].push_back(Character);
+				Characters.push_back(std::move(Character));
+				Relationships.emplace_back(Connections[Group], Id);
+			}
+			Check(
+				Server.BindControl(Connections[Group], Groups[Group].front()->GetObjectId(), 1).has_value(),
+				"each constrained peer binds one authoritative owner relationship"
+			);
+		}
+		Server.Step(World, 1);
+		std::size_t InitialStates = 0;
+		for (const auto &Message : Scheduler.Messages) {
+			auto Decoded = DecodeCharacterMessage(Message.Payload());
+			if (auto *Frame = Decoded ? std::get_if<CharacterStateFrame>(&*Decoded) : nullptr)
+				InitialStates += Frame->StateCount;
+		}
+		Check(
+			InitialStates == Relationships.size(),
+			"materialization and control baselines bypass the ordinary six-state publication budget"
+		);
+
+		std::map<std::pair<ConnectionId, ObjectId>, std::uint64_t> LastPublication;
+		std::map<std::pair<ConnectionId, ObjectId>, std::uint64_t> MaximumGap;
+		std::map<std::pair<ConnectionId, ObjectId>, std::uint64_t> PublicationCount;
+		for (const auto &Relationship : Relationships) {
+			LastPublication[Relationship] = 1;
+			PublicationCount[Relationship] = 1;
+		}
+		Scheduler.Messages.clear();
+		for (std::uint64_t Tick = 2; Tick <= 72; ++Tick) {
+			for (const auto &Character : Characters) {
+				auto Transform = Character->GetCFrame();
+				Transform.Position.z += 0.02f;
+				Character->ApplyRuntimeTransform(Transform);
+			}
+			Scheduler.Messages.clear();
+			Server.Step(World, Tick);
+			std::size_t StatesThisTick = 0;
+			std::map<ConnectionId, std::size_t> PeerStatesThisTick;
+			for (const auto &Message : Scheduler.Messages) {
+				if (Message.Delivery() != DeliveryMode::UnreliableSequenced) continue;
+				auto Decoded = DecodeCharacterMessage(Message.Payload());
+				auto *Frame = Decoded ? std::get_if<CharacterStateFrame>(&*Decoded) : nullptr;
+				if (!Frame) continue;
+				StatesThisTick += Frame->StateCount;
+				PeerStatesThisTick[Message.Destination()] += Frame->StateCount;
+				for (const auto &State : Frame->GetStates()) {
+					const auto Key = std::pair{Message.Destination(), State.Character};
+					auto Previous = LastPublication.find(Key);
+					Check(
+						Previous != LastPublication.end(),
+						"publication never escapes its materialized peer relationship"
+					);
+					if (Previous == LastPublication.end()) continue;
+					MaximumGap[Key] = std::max(MaximumGap[Key], Tick - Previous->second);
+					Previous->second = Tick;
+					++PublicationCount[Key];
+				}
+			}
+			Check(StatesThisTick <= 6, "expensive recurring publication work obeys the global state-count cap");
+			for (const auto &[Connection, Count] : PeerStatesThisTick) {
+				(void)Connection;
+				Check(Count <= 3, "one dense peer cannot exceed its per-peer publication cap");
+			}
+		}
+		for (const auto &Relationship : Relationships)
+			Check(PublicationCount[Relationship] > 1, "long-running overload does not starve any relationship");
+		for (std::size_t Group = 0; Group < Groups.size(); ++Group) {
+			const auto Owner = std::pair{Connections[Group], Groups[Group].front()->GetObjectId()};
+			Check(MaximumGap[Owner] <= 3, "owner correction keeps its desired three-tick bound when feasible");
+		}
+		Check(
+			MaximumGap[std::pair{Connections[1], Groups[1].back()->GetObjectId()}] <= 6 &&
+				MaximumGap[std::pair{Connections[2], Groups[2].back()->GetObjectId()}] <= 6,
+			"sparse later-ID peers retain the documented one-interval overload defer bound"
+		);
+		const auto FairnessMetrics = Server.GetMetrics();
+		Check(
+			FairnessMetrics.PublicationStatesDeferred != 0 && FairnessMetrics.PublicationGlobalBudgetExhaustions != 0 &&
+				FairnessMetrics.PublicationOfferedStates > FairnessMetrics.PublicationStatesSelected &&
+				FairnessMetrics.PublicationOwnerDeferrals == 0 && FairnessMetrics.MaximumPublicationLatencyTicks <= 3 &&
+				FairnessMetrics.PublicationStatesSelected == FairnessMetrics.PublicationStatesAccepted,
+			"overload metrics distinguish budget deferral while accepted ordinary work commits atomically"
+		);
+
+		CharacterNetworkConfiguration RotationConfiguration;
+		RotationConfiguration.MaximumPublicationStatesPerPeerTick = 1;
+		RotationConfiguration.MaximumPublicationStatesPerTick = 1;
+		RotationConfiguration.PublicationPeerQuantum = 1;
+		RecordingScheduler RotationScheduler;
+		AuthoritativeCharacterNetwork RotationServer(
+			RotationScheduler, TestLimits(), Movement, {}, RotationConfiguration
+		);
+		std::array<std::shared_ptr<KinematicCharacter>, 3> RotationCharacters;
+		const std::array RotationPeers{ConnectionId{10, 1}, ConnectionId{500, 1}, ConnectionId{2'000, 1}};
+		for (std::size_t Index = 0; Index < RotationPeers.size(); ++Index) {
+			RotationCharacters[Index] = std::make_shared<KinematicCharacter>();
+			Check(
+				RotationServer.AddPeer(RotationPeers[Index]) &&
+					RotationServer.RegisterCharacter(RotationCharacters[Index]) &&
+					RotationServer.MarkMaterialized(
+						RotationPeers[Index], RotationCharacters[Index]->GetObjectId(), StateChannelId(250 + Index)
+					),
+				"the under-capacity rotation fixture creates adversarial early and late peer identities"
+			);
+		}
+		RotationServer.Step(World, 1);
+		std::map<ConnectionId, std::size_t> RotationPublications;
+		for (std::uint64_t Tick = 2; Tick <= 12; ++Tick) {
+			for (const auto &Character : RotationCharacters) {
+				auto Transform = Character->GetCFrame();
+				Transform.Position.y += 0.01f;
+				Character->ApplyRuntimeTransform(Transform);
+			}
+			RotationScheduler.Messages.clear();
+			RotationServer.Step(World, Tick);
+			for (const auto &Message : RotationScheduler.Messages)
+				if (Message.Delivery() == DeliveryMode::UnreliableSequenced)
+					++RotationPublications[Message.Destination()];
+		}
+		Check(
+			std::ranges::all_of(
+				RotationPeers, [&](ConnectionId Connection) { return RotationPublications[Connection] != 0; }
+			),
+			"a global budget smaller than the peer count rotates the skipped peer instead of fixing winners"
+		);
+
+		CharacterNetworkConfiguration LifecycleConfiguration;
+		LifecycleConfiguration.MaximumPublicationStatesPerPeerTick = 1;
+		LifecycleConfiguration.MaximumPublicationStatesPerTick = 1;
+		LifecycleConfiguration.PublicationPeerQuantum = 1;
+		RecordingScheduler LifecycleScheduler;
+		AuthoritativeCharacterNetwork LifecycleServer(
+			LifecycleScheduler, TestLimits(), Movement, {}, LifecycleConfiguration
+		);
+		const ConnectionId LifecyclePeer{1'300, 1};
+		std::array<std::shared_ptr<KinematicCharacter>, 3> LifecycleCharacters;
+		Check(LifecycleServer.AddPeer(LifecyclePeer), "the deferred lifecycle fixture registers its peer");
+		for (std::size_t Index = 0; Index < LifecycleCharacters.size(); ++Index) {
+			LifecycleCharacters[Index] = std::make_shared<KinematicCharacter>();
+			Check(
+				LifecycleServer.RegisterCharacter(LifecycleCharacters[Index]) &&
+					LifecycleServer.MarkMaterialized(
+						LifecyclePeer, LifecycleCharacters[Index]->GetObjectId(), StateChannelId(300 + Index)
+					),
+				"the deferred lifecycle fixture materializes each relationship"
+			);
+		}
+		LifecycleServer.Step(World, 1);
+		for (std::uint64_t Tick = 2; Tick <= 3; ++Tick) {
+			for (const auto &Character : LifecycleCharacters) {
+				auto Transform = Character->GetCFrame();
+				Transform.Position.x += 0.01f;
+				Character->ApplyRuntimeTransform(Transform);
+			}
+			LifecycleServer.Step(World, Tick);
+		}
+		std::vector<ObjectId> Deferred;
+		for (const auto &Character : LifecycleCharacters)
+			if (auto State = LifecycleServer.GetPublicationSchedulingState(LifecyclePeer, Character->GetObjectId());
+				State && State->Due)
+				Deferred.push_back(Character->GetObjectId());
+		Check(Deferred.size() == 2, "a one-state cap leaves exactly two compact overdue relationships");
+		if (Deferred.size() == 2) {
+			Check(
+				LifecycleServer.MarkUnmaterialized(LifecyclePeer, Deferred[0]),
+				"relevance leave removes a deferred relationship directly from its intrusive queue"
+			);
+			for (const auto &Character : LifecycleCharacters)
+				if (Character->GetObjectId() == Deferred[1]) Character->Destroy();
+			LifecycleScheduler.Messages.clear();
+			LifecycleServer.Step(World, 4);
+			Check(
+				!LifecycleServer.GetPublicationSchedulingState(LifecyclePeer, Deferred[0]) &&
+					!LifecycleServer.GetPublicationSchedulingState(LifecyclePeer, Deferred[1]),
+				"relevance leave and destruction invalidate deferred work without a stale publication"
+			);
+			Check(
+				LifecycleServer.MarkMaterialized(LifecyclePeer, Deferred[0], StateChannelId(399)),
+				"re-entry creates a fresh materialization lifetime without inherited deadline debt"
+			);
+			LifecycleServer.Step(World, 5);
+			auto Reentered = LifecycleServer.GetPublicationSchedulingState(LifecyclePeer, Deferred[0]);
+			Check(
+				Reentered && Reentered->HasPublished && Reentered->LastAcceptedPublicationTick == 5,
+				"re-entry receives a required current baseline before ordinary scheduling resumes"
+			);
+		}
+		Check(
+			LifecycleServer.RemovePeer(LifecyclePeer, 6) &&
+				!LifecycleServer.GetPublicationSchedulingState(
+					LifecyclePeer, LifecycleCharacters.front()->GetObjectId()
+				),
+			"disconnect clears all peer-local wheel, due, defer, and rotation state"
+		);
+
+		RecordingScheduler RejectionScheduler;
+		CharacterNetworkConfiguration RejectionConfiguration;
+		RejectionConfiguration.MaximumPublicationStatesPerPeerTick = 16;
+		RejectionConfiguration.MaximumPublicationStatesPerTick = 16;
+		RejectionConfiguration.PublicationPeerQuantum = 16;
+		AuthoritativeCharacterNetwork RejectionServer(
+			RejectionScheduler, TestLimits(), Movement, {}, RejectionConfiguration
+		);
+		const ConnectionId RejectionPeer{1'400, 1};
+		std::vector<std::shared_ptr<KinematicCharacter>> RejectionCharacters;
+		Check(RejectionServer.AddPeer(RejectionPeer), "the batch-rejection fixture registers its peer");
+		for (std::size_t Index = 0; Index < 16; ++Index) {
+			auto Character = std::make_shared<KinematicCharacter>();
+			Check(
+				RejectionServer.RegisterCharacter(Character) &&
+					RejectionServer.MarkMaterialized(
+						RejectionPeer, Character->GetObjectId(), StateChannelId(500 + Index)
+					),
+				"the batch-rejection fixture materializes each state"
+			);
+			RejectionCharacters.push_back(std::move(Character));
+		}
+		RejectionServer.Step(World, 1);
+		RejectionScheduler.Messages.clear();
+		for (std::uint64_t Tick = 2; Tick <= 3; ++Tick) {
+			for (const auto &Character : RejectionCharacters) {
+				auto Transform = Character->GetCFrame();
+				Transform.Position.x += 0.01f;
+				Character->ApplyRuntimeTransform(Transform);
+			}
+			if (Tick == 3)
+				RejectionScheduler.ScriptSubmissions(
+					{{SchedulerSubmitStatus::Accepted}, {SchedulerSubmitStatus::DroppedUnreliable}}
+				);
+			RejectionServer.Step(World, Tick);
+		}
+		Check(
+			RejectionScheduler.Messages.size() == 1,
+			"the first GCHR batch can commit while a later batch is rejected independently"
+		);
+		ObjectId RejectedId;
+		std::optional<CharacterPublicationSchedulingState> RejectedState;
+		for (const auto &Character : RejectionCharacters) {
+			auto Candidate = RejectionServer.GetPublicationSchedulingState(RejectionPeer, Character->GetObjectId());
+			if (Candidate && Candidate->LastAcceptedPublicationTick == 1 && Candidate->Due) {
+				RejectedId = Character->GetObjectId();
+				RejectedState = Candidate;
+				break;
+			}
+		}
+		Check(
+			RejectedState && RejectedState->LastAcceptedPublicationTick == 1 && RejectedState->Due,
+			"selected-but-rejected state keeps its prior accepted history and remains compactly due"
+		);
+		RejectionScheduler.Messages.clear();
+		RejectionServer.Step(World, 4);
+		RejectedState = RejectionServer.GetPublicationSchedulingState(RejectionPeer, RejectedId);
+		Check(
+			RejectedState && RejectedState->LastAcceptedPublicationTick == 4 && RejectionScheduler.Messages.size() == 1,
+			"the retry publishes only the newest current state on the next safe opportunity"
+		);
+		const auto RejectionMetrics = RejectionServer.GetMetrics();
+		Check(
+			RejectionMetrics.PublicationSchedulerRejections == 1 &&
+				RejectionMetrics.PublicationStatesSelected == RejectionMetrics.PublicationStatesAccepted + 1,
+			"metrics distinguish scheduler rejection from pre-admission budget deferral"
+		);
+		std::size_t TerminalCallbacks = 0;
+		RejectionServer.SetTerminalHandler([&](ConnectionId Failed, const DisconnectInfo &) {
+			if (Failed == RejectionPeer) ++TerminalCallbacks;
+		});
+		for (std::uint64_t Tick = 5; Tick <= 6; ++Tick) {
+			for (const auto &Character : RejectionCharacters) {
+				auto Transform = Character->GetCFrame();
+				Transform.Position.x += 0.01f;
+				Character->ApplyRuntimeTransform(Transform);
+			}
+			if (Tick == 6)
+				RejectionScheduler.ScriptSubmissions({{
+					SchedulerSubmitStatus::ReliableBacklogExhausted,
+					DisconnectInfo{DisconnectReason::ResourceExhaustion, "injected terminal state rejection"},
+				}});
+			RejectionServer.Step(World, Tick);
+		}
+		Check(TerminalCallbacks == 1, "terminal unreliable submission failure still enters the FailPeer seam");
+		Check(
+			RejectionServer.RemovePeer(RejectionPeer, 6),
+			"FailPeer cleanup can remove every deferred relation idempotently"
+		);
+
+		RecordingScheduler SharedScheduler;
+		AuthoritativeCharacterNetwork SharedServer(SharedScheduler, TestLimits(), Movement);
+		const ConnectionId SharedPeerA{1'500, 1};
+		const ConnectionId SharedPeerB{1'501, 1};
+		auto SharedCharacter = std::make_shared<KinematicCharacter>();
+		const auto SharedId = SharedCharacter->GetObjectId();
+		Check(
+			SharedServer.AddPeer(SharedPeerA) && SharedServer.AddPeer(SharedPeerB) &&
+				SharedServer.RegisterCharacter(SharedCharacter) &&
+				SharedServer.MarkMaterialized(SharedPeerA, SharedId, StateChannelId(600)) &&
+				SharedServer.MarkMaterialized(SharedPeerB, SharedId, StateChannelId(601)),
+			"one authoritative Character forms two independent peer publication relationships"
+		);
+		SharedServer.Step(World, 1);
+		SharedScheduler.Messages.clear();
+		for (std::uint64_t Tick = 2; Tick <= 3; ++Tick) {
+			auto Transform = SharedCharacter->GetCFrame();
+			Transform.Position.x += 0.1f;
+			SharedCharacter->ApplyRuntimeTransform(Transform);
+			if (Tick == 3)
+				SharedScheduler.ScriptSubmissions(
+					{{SchedulerSubmitStatus::Accepted}, {SchedulerSubmitStatus::DroppedUnreliable}}
+				);
+			SharedServer.Step(World, Tick);
+		}
+		auto SharedA = SharedServer.GetPublicationSchedulingState(SharedPeerA, SharedId);
+		auto SharedB = SharedServer.GetPublicationSchedulingState(SharedPeerB, SharedId);
+		Check(
+			SharedA && SharedA->LastAcceptedPublicationTick == 3 && SharedB &&
+				SharedB->LastAcceptedPublicationTick == 1 && SharedB->Due,
+			"shared snapshot acceptance commits per peer and leaves only the rejected peer overdue"
+		);
+		Check(
+			SharedServer.GetMetrics().StateSnapshotsBuilt == 2,
+			"one snapshot is captured per Character tick and reused across accepting and rejecting peers"
+		);
+		SharedScheduler.Messages.clear();
+		auto LatestTransform = SharedCharacter->GetCFrame();
+		LatestTransform.Position.x += 1.0f;
+		SharedCharacter->ApplyRuntimeTransform(LatestTransform);
+		SharedServer.Step(World, 4);
+		SharedB = SharedServer.GetPublicationSchedulingState(SharedPeerB, SharedId);
+		Check(
+			SharedB && SharedB->LastAcceptedPublicationTick == 4,
+			"a rejected peer later receives the current state without replaying a historical snapshot"
+		);
+
+		RecordingScheduler JumpScheduler;
+		AuthoritativeCharacterNetwork JumpServer(JumpScheduler, TestLimits(), Movement, {}, LifecycleConfiguration);
+		const ConnectionId JumpPeer{1'600, 1};
+		std::array<std::shared_ptr<KinematicCharacter>, 3> JumpCharacters;
+		Check(JumpServer.AddPeer(JumpPeer), "the absolute-tick wheel fixture registers its peer");
+		for (std::size_t Index = 0; Index < JumpCharacters.size(); ++Index) {
+			JumpCharacters[Index] = std::make_shared<KinematicCharacter>();
+			Check(
+				JumpServer.RegisterCharacter(JumpCharacters[Index]) &&
+					JumpServer.MarkMaterialized(
+						JumpPeer, JumpCharacters[Index]->GetObjectId(), StateChannelId(700 + Index)
+					),
+				"the absolute-tick wheel fixture creates each relationship"
+			);
+		}
+		JumpServer.Step(World, 1);
+		JumpScheduler.Messages.clear();
+		JumpServer.Step(World, 1'000'000);
+		Check(
+			JumpServer.GetMetrics().PublicationLargeTickRebuilds == 1 && JumpScheduler.Messages.size() == 1,
+			"a debugger-sized forward jump scans the fixed wheel once and still obeys the work cap"
+		);
+		JumpServer.Step(World, 999'999);
+		JumpServer.Step(World, 1'000'064);
+		Check(
+			JumpServer.GetMetrics().PublicationLargeTickRebuilds == 3,
+			"backward ticks and wheel-index reuse rebuild boundedly from absolute deadlines"
+		);
+
+		CharacterNetworkConfiguration LowConfiguration;
+		LowConfiguration.MaximumPublicationStatesPerPeerTick = 1;
+		LowConfiguration.MaximumPublicationStatesPerTick = 1;
+		LowConfiguration.PublicationPeerQuantum = 1;
+		RecordingScheduler LowScheduler;
+		AuthoritativeCharacterNetwork LowServer(LowScheduler, TestLimits(), Movement, {}, LowConfiguration);
+		const ConnectionId LowPeer{1'700, 1};
+		std::array<std::shared_ptr<KinematicCharacter>, 7> LowCharacters;
+		Check(
+			LowServer.AddPeer(LowPeer) &&
+				LowServer.SetPeerPublicationFocus(LowPeer, std::array{glm::vec3{0.0f, 6.0f, 0.0f}}),
+			"the tier-starvation fixture registers trusted focus"
+		);
+		for (std::size_t Index = 0; Index < LowCharacters.size(); ++Index) {
+			LowCharacters[Index] = std::make_shared<KinematicCharacter>();
+			LowCharacters[Index]->SetPosition({Index + 1 == LowCharacters.size() ? 240.0f : float(Index), 6.0f, 0.0f});
+			Check(
+				LowServer.RegisterCharacter(LowCharacters[Index]) &&
+					LowServer.MarkMaterialized(
+						LowPeer, LowCharacters[Index]->GetObjectId(), StateChannelId(800 + Index)
+					),
+				"the tier-starvation fixture materializes each Character"
+			);
+		}
+		const auto LowId = LowCharacters.back()->GetObjectId();
+		LowServer.Step(World, 1);
+		std::vector<std::uint64_t> LowPublicationTicks;
+		for (std::uint64_t Tick = 2; Tick <= 120; ++Tick) {
+			for (const auto &Character : LowCharacters) {
+				auto Transform = Character->GetCFrame();
+				Transform.Position.z += 0.01f;
+				Character->ApplyRuntimeTransform(Transform);
+			}
+			LowScheduler.Messages.clear();
+			LowServer.Step(World, Tick);
+			for (const auto &Message : LowScheduler.Messages) {
+				auto Decoded = DecodeCharacterMessage(Message.Payload());
+				auto *Frame = Decoded ? std::get_if<CharacterStateFrame>(&*Decoded) : nullptr;
+				if (Frame && std::ranges::any_of(Frame->GetStates(), [LowId](const auto &State) {
+						return State.Character == LowId;
+					}))
+					LowPublicationTicks.push_back(Tick);
+			}
+		}
+		Check(
+			LowServer.GetPublicationTier(LowPeer, LowId) == CharacterPublicationTier::LowRate &&
+				LowPublicationTicks.size() >= 3,
+			"absolute-deadline escalation prevents LowRate starvation behind continuous FullRate work"
+		);
+		Check(
+			LowServer.GetMetrics().PublicationDeadlineEscalations != 0 &&
+				LowServer.GetMetrics().PublicationDeadlineMisses ==
+					LowServer.GetMetrics().PublicationFullRateDeadlineMisses +
+						LowServer.GetMetrics().PublicationReducedRateDeadlineMisses +
+						LowServer.GetMetrics().PublicationLowRateDeadlineMisses,
+			"sustained overload reports deterministic hard-deadline escalation"
+		);
+
+		RecordingScheduler UnlimitedScheduler;
+		RecordingScheduler ConstrainedScheduler;
+		AuthoritativeCharacterNetwork UnlimitedServer(UnlimitedScheduler, TestLimits(), Movement);
+		AuthoritativeCharacterNetwork ConstrainedServer(
+			ConstrainedScheduler, TestLimits(), Movement, {}, LifecycleConfiguration
+		);
+		const ConnectionId UnlimitedPeer{1'800, 1};
+		const ConnectionId ConstrainedPeer{1'801, 1};
+		std::array<std::shared_ptr<KinematicCharacter>, 3> UnlimitedCharacters;
+		std::array<std::shared_ptr<KinematicCharacter>, 3> ConstrainedCharacters;
+		Check(
+			UnlimitedServer.AddPeer(UnlimitedPeer) && ConstrainedServer.AddPeer(ConstrainedPeer) &&
+				UnlimitedServer.RegisterAction(Action(90, 90, 0.125f)) &&
+				ConstrainedServer.RegisterAction(Action(90, 90, 0.125f)),
+			"publication-equivalence fixtures register matching semantic policy"
+		);
+		for (std::size_t Index = 0; Index < UnlimitedCharacters.size(); ++Index) {
+			UnlimitedCharacters[Index] = std::make_shared<KinematicCharacter>();
+			ConstrainedCharacters[Index] = std::make_shared<KinematicCharacter>();
+			Check(
+				UnlimitedServer.RegisterCharacter(UnlimitedCharacters[Index]) &&
+					UnlimitedServer.MarkMaterialized(
+						UnlimitedPeer, UnlimitedCharacters[Index]->GetObjectId(), StateChannelId(900 + Index)
+					) &&
+					ConstrainedServer.RegisterCharacter(ConstrainedCharacters[Index]) &&
+					ConstrainedServer.MarkMaterialized(
+						ConstrainedPeer, ConstrainedCharacters[Index]->GetObjectId(), StateChannelId(910 + Index)
+					),
+				"publication-equivalence fixtures create matching authoritative Characters"
+			);
+		}
+		Check(
+			UnlimitedServer.StartServerAction(UnlimitedCharacters[0]->GetObjectId(), 90, 1) &&
+				ConstrainedServer.StartServerAction(ConstrainedCharacters[0]->GetObjectId(), 90, 1),
+			"matching root-motion actions begin at the same authoritative tick"
+		);
+		for (std::uint64_t Tick = 1; Tick <= 24; ++Tick) {
+			for (std::size_t Index = 1; Index < UnlimitedCharacters.size(); ++Index) {
+				auto UnlimitedTransform = UnlimitedCharacters[Index]->GetCFrame();
+				auto ConstrainedTransform = ConstrainedCharacters[Index]->GetCFrame();
+				UnlimitedTransform.Position.z += 0.01f;
+				ConstrainedTransform.Position.z += 0.01f;
+				UnlimitedCharacters[Index]->ApplyRuntimeTransform(UnlimitedTransform);
+				ConstrainedCharacters[Index]->ApplyRuntimeTransform(ConstrainedTransform);
+			}
+			UnlimitedServer.Step(World, Tick);
+			ConstrainedServer.Step(World, Tick);
+			for (std::size_t Index = 0; Index < UnlimitedCharacters.size(); ++Index)
+				Check(
+					Near(
+						UnlimitedCharacters[Index]->GetPosition(), ConstrainedCharacters[Index]->GetPosition(), 0.0001f
+					),
+					"publication budget never changes authoritative transform or root-motion results"
+				);
+		}
+		Check(
+			ConstrainedServer.GetMetrics().PublicationStatesDeferred != 0,
+			"the simulation-equivalence proof actually exercises constrained publication"
 		);
 	}
 
@@ -1910,7 +2441,7 @@ namespace {
 				}
 				const auto MaximumError = *std::ranges::max_element(Errors);
 				if (MaximumError > MaximumAllowedError)
-				std::cerr << "[Character:NetworkTest] quality=" << QualityMessage << " max=" << MaximumError
+					std::cerr << "[Character:NetworkTest] quality=" << QualityMessage << " max=" << MaximumError
 							  << " bound=" << MaximumAllowedError << '\n';
 				Check(MaximumError <= MaximumAllowedError, QualityMessage);
 				Check(Client.GetMetrics().InterpolationResets == 0, "variable cadence does not invent teleport resets");
@@ -2440,6 +2971,7 @@ int main() {
 		TestRepeatedManagerChurn();
 		TestStateBatchingCadenceAndSuppression();
 		TestImportanceCadenceAndLifecycle();
+		TestBoundedPublicationScheduling();
 		TestBatchLossAndRemoteInterpolation();
 		TestVariableCadenceMotionQuality();
 		TestLocalPresentationCorrectionMatrix();

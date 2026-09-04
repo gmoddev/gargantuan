@@ -418,6 +418,13 @@ of the accepted decisions above.
   20/10/5 Hz GCHR selection with hysteresis, stable phases, a 60-tick absolute
   age bound, prompt reliable action/teleport state, and bounded variable-rate
   client presentation. GCHR remains version 4 and exposes no client tier API.
+- [x] **Bound replaceable Character publication under overload.** A server-private
+  64-slot timing wheel discovers due materialized relationships, then trusted
+  per-peer and global state-count limits bound snapshot/assembly work. Persistent
+  peer rotation, owner-first service, tier order, and accepted-state deadlines
+  provide deterministic fairness without changing 3E relevance, 3F tiers,
+  authoritative simulation, GCHR v4, or reliable semantic priority. Scheduler
+  acceptance remains the only publication-history commit point.
 
 Node integration for discovery and join tickets can proceed independently once
 the handshake contract exists. Collaborative editing remains later work.
@@ -430,7 +437,8 @@ The following are intentionally not fixed by this ADR:
 - exact public Instance class names and method spelling for remotes;
 - exact binary field layout, compression, quantization, and varint scheme;
 - sequence widths, wrap rules, acknowledgement layout, and channel granularity;
-- scheduler tick rate, traffic lane count, weights, and default budgets;
+- generic scheduler tick rate, traffic lane count, and weights beyond the
+  Character-specific 3G state-count budget;
 - transport-specific certificate or key distribution;
 - prediction, rollback, physics ownership, and reconciliation algorithms;
 - later game-facing relevance policy and full region/portal topology; and

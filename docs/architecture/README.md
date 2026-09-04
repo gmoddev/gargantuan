@@ -121,6 +121,7 @@ The following documents describe recently implemented, source-verified slices:
 - [Networking foundation validation](../../devdocs/CurrentArchitecture/NetworkingFoundationValidation.md)
 - [Real game transport](../../devdocs/CurrentArchitecture/RealGameTransport.md)
 - [Character networking foundation](../../devdocs/CurrentArchitecture/CharacterNetworkingFoundation.md)
+- [Character networking foundation 3G](../../devdocs/CurrentArchitecture/CharacterNetworkingFoundation3G.md)
 - [Serialization codec boundary](../../devdocs/CurrentArchitecture/SerializationCodecBoundary.md)
 - [Script security](../../devdocs/CurrentArchitecture/ScriptSecurity.md)
 - [SourceMount and FileLink compatibility](../../devdocs/CurrentArchitecture/SourceMount.md)

@@ -257,6 +257,21 @@ Tests should enforce them where practical.
     remain outside structural replication and the authoring journal.
 33. Admission optimization cannot change Player visibility, trusted
     `LocalPlayer`, `Player.Character`, identity, or generation semantics.
+34. Character publication budget applies only to recurring replaceable GCHR
+    state after materialization. It cannot unmaterialize a Character, reduce
+    authoritative simulation/input work, delay reliable semantics, or create a
+    structural runtime CFrame fallback.
+35. Character publication selection is deterministic and bounded by trusted
+    native state-count limits. Peer rotation, owner priority, accepted-state
+    age, and absolute deadlines prevent fixed-order starvation where configured
+    capacity is feasible; deadline metrics report when it is not.
+36. Selecting, snapshotting, encoding, or attempting a Character state does not
+    advance publication history. Only scheduler acceptance commits that peer's
+    relationship, and rejected replaceable work retains only compact newest-wins
+    scheduling metadata.
+37. Ordinary Character scheduling membership is generation-safe and lifecycle
+    scoped. Relevance leave/re-entry, replacement, destruction, disconnect, and
+    terminal peer failure cannot leave a publishable stale wheel or due entry.
 
 ## Changes requiring architecture review
 

@@ -1571,6 +1571,26 @@ namespace gargantuan::network {
 			Result.CharacterMaximumStateAgeTicks = CharacterMetrics.MaximumStateAgeTicks;
 			Result.CharacterImportanceCpuNanoseconds = CharacterMetrics.ImportanceEvaluationCpuNanoseconds;
 			Result.CharacterDueSetCpuNanoseconds = CharacterMetrics.DueSetCpuNanoseconds;
+			Result.CharacterPublicationBudgetConsumed = CharacterMetrics.PublicationBudgetConsumed;
+			Result.CharacterPublicationStatesSelected = CharacterMetrics.PublicationStatesSelected;
+			Result.CharacterPublicationStatesAccepted = CharacterMetrics.PublicationStatesAccepted;
+			Result.CharacterPublicationStatesOffered = CharacterMetrics.PublicationOfferedStates;
+			Result.CharacterPublicationStatesDeferred = CharacterMetrics.PublicationStatesDeferred;
+			Result.CharacterPublicationOverdueRelationships = CharacterMetrics.PublicationOverdueRelationships;
+			Result.CharacterPublicationDeadlineMisses = CharacterMetrics.PublicationDeadlineMisses;
+			Result.CharacterPublicationLatencySamples = CharacterMetrics.PublicationLatencySamples;
+			Result.CharacterPublicationLatencyTicks = CharacterMetrics.PublicationLatencyTicks;
+			Result.CharacterMaximumPublicationLatencyTicks = CharacterMetrics.MaximumPublicationLatencyTicks;
+			Result.CharacterMaximumOwnerStateAgeTicks = CharacterMetrics.MaximumPublicationOwnerAgeTicks;
+			Result.CharacterPublicationOwnerDeferrals = CharacterMetrics.PublicationOwnerDeferrals;
+			Result.CharacterPublicationBudgetExhaustions = CharacterMetrics.PublicationGlobalBudgetExhaustions;
+			Result.CharacterPublicationSchedulerRejections = CharacterMetrics.PublicationSchedulerRejections;
+			Result.CharacterPublicationSelectionCpuNanoseconds = CharacterMetrics.PublicationSelectionCpuNanoseconds;
+			Result.CharacterPublicationActiveRelationships = CharacterMetrics.PublicationActiveRelationships;
+			Result.CharacterPublicationCurrentDueRelationships = CharacterMetrics.PublicationCurrentDueRelationships;
+			Result.CharacterPublicationCurrentOverdueRelationships =
+				CharacterMetrics.PublicationCurrentOverdueRelationships;
+			Result.CharacterMaximumCurrentPublicationAgeTicks = CharacterMetrics.MaximumCurrentPublicationAgeTicks;
 		}
 		for (const auto &[Connection, PeerValue] : State->Peers) {
 			if (const auto *View = State->Replication ? State->Replication->GetView(Connection) : nullptr)

@@ -9,6 +9,7 @@
 #include <cmath>
 #include <limits>
 #include <set>
+#include <tuple>
 #include <utility>
 
 namespace gargantuan::network {
@@ -16,6 +17,21 @@ namespace gargantuan::network {
 		template <typename Value> void SaturatingIncrement(Value &Counter, Value Amount = 1) {
 			Counter = Amount > std::numeric_limits<Value>::max() - Counter ? std::numeric_limits<Value>::max()
 																		   : Counter + Amount;
+		}
+
+		void RecordPublicationDeadlineMiss(CharacterNetworkMetrics &Metrics, CharacterPublicationTier Tier) {
+			SaturatingIncrement(Metrics.PublicationDeadlineMisses);
+			switch (Tier) {
+			case CharacterPublicationTier::FullRate:
+				SaturatingIncrement(Metrics.PublicationFullRateDeadlineMisses);
+				break;
+			case CharacterPublicationTier::ReducedRate:
+				SaturatingIncrement(Metrics.PublicationReducedRateDeadlineMisses);
+				break;
+			case CharacterPublicationTier::LowRate:
+				SaturatingIncrement(Metrics.PublicationLowRateDeadlineMisses);
+				break;
+			}
 		}
 
 		bool Finite(const glm::vec3 &Value) {
@@ -141,6 +157,20 @@ namespace gargantuan::network {
 			return Hash % Interval;
 		}
 
+		std::uint64_t SaturatingTickAdd(std::uint64_t Tick, std::uint64_t Amount) {
+			return Amount > std::numeric_limits<std::uint64_t>::max() - Tick ? std::numeric_limits<std::uint64_t>::max()
+																			 : Tick + Amount;
+		}
+
+		std::uint64_t
+		NextPublicationPhaseTick(std::uint64_t Tick, std::uint64_t Interval, std::uint64_t Phase, bool IncludeCurrent) {
+			if (Interval == 0) return std::numeric_limits<std::uint64_t>::max();
+			const auto Remainder = Tick % Interval;
+			auto Delta = (Phase + Interval - Remainder) % Interval;
+			if (Delta == 0 && !IncludeCurrent) Delta = Interval;
+			return SaturatingTickAdd(Tick, Delta);
+		}
+
 		float ExpectedTravelDistance(
 			glm::vec3 PreviousVelocity,
 			glm::vec3 CurrentVelocity,
@@ -170,7 +200,12 @@ namespace gargantuan::network {
 			   FullRateDistance + ImportanceHysteresis < ReducedRateDistance - ImportanceHysteresis &&
 			   MaximumStateFrameBytes >=
 				   CharacterStateFrameHeaderBytes + CompactCharacterStateBytes + CompactCharacterActionStateBytes &&
-			   MaximumStateFrameBytes <= MaximumCharacterStateFrameBytes;
+			   MaximumStateFrameBytes <= MaximumCharacterStateFrameBytes && MaximumPublicationStatesPerPeerTick != 0 &&
+			   MaximumPublicationStatesPerPeerTick <= MaximumCharacterPublicationStatesPerPeerTick &&
+			   MaximumPublicationStatesPerTick != 0 &&
+			   MaximumPublicationStatesPerTick <= MaximumCharacterPublicationStatesPerTick &&
+			   MaximumPublicationStatesPerPeerTick <= MaximumPublicationStatesPerTick &&
+			   PublicationPeerQuantum != 0 && PublicationPeerQuantum <= MaximumPublicationStatesPerPeerTick;
 	}
 
 	std::uint64_t CharacterNetworkConfiguration::PublicationIntervalTicks() const {
@@ -196,25 +231,123 @@ namespace gargantuan::network {
 	}
 
 	struct AuthoritativeCharacterNetwork::PeerState {
+		enum class PublicationQueueKind : std::uint8_t { None, Wheel, Forced, Owner, FullRate, ReducedRate, LowRate };
+
 		struct PublicationState {
 			std::uint64_t Fingerprint = 0;
 			std::uint64_t LastAbsoluteTick = 0;
 			std::uint64_t LastPublicationTick = 0;
 			std::uint64_t TemporaryFullRateUntilTick = 0;
+			std::uint64_t DesiredDueTick = 0;
+			std::uint64_t HardDeadlineTick = 0;
 			CharacterPublicationTier Tier = CharacterPublicationTier::FullRate;
 			CharacterPublicationTier EffectiveTier = CharacterPublicationTier::FullRate;
+			PublicationQueueKind QueueKind = PublicationQueueKind::None;
+			std::uint8_t WheelSlot = 0;
+			ObjectId PreviousScheduled;
+			ObjectId NextScheduled;
 			bool HasPublished = false;
 			bool PublishImmediately = true;
-			bool DueThisTick = false;
-			bool SendThisTick = false;
+			bool DeadlineEscalationRecorded = false;
+			bool DeadlineMissRecorded = false;
 		};
+
+		struct PublicationList {
+			ObjectId Head;
+			ObjectId Tail;
+			std::size_t Size = 0;
+		};
+
 		std::map<ObjectId, StateChannelId> Materialized;
 		std::map<ObjectId, PublicationState> Published;
+		std::array<PublicationList, CharacterPublicationWheelSlots> PublicationWheel;
+		PublicationList ForcedDue;
+		PublicationList OwnerDue;
+		PublicationList FullRateDue;
+		PublicationList ReducedRateDue;
+		PublicationList LowRateDue;
 		std::vector<glm::vec3> PublicationFocus;
 		CharacterStateFrameSequence NextFrameSequence{1};
 		CharacterMaterializationEpoch MaterializationEpoch;
 		std::uint64_t LastImportanceUpdateTick = 0;
+		std::uint64_t LastDueProcessingTick = 0;
+		std::size_t SelectedThisTick = 0;
+		std::size_t AcceptedBatchesThisTick = 0;
+		bool SchedulerRejectedThisTick = false;
 		bool ImportanceDirty = true;
+
+		PublicationList *GetList(PublicationQueueKind Kind, std::uint8_t Slot = 0) {
+			switch (Kind) {
+			case PublicationQueueKind::Wheel:
+				return Slot < PublicationWheel.size() ? &PublicationWheel[Slot] : nullptr;
+			case PublicationQueueKind::Forced:
+				return &ForcedDue;
+			case PublicationQueueKind::Owner:
+				return &OwnerDue;
+			case PublicationQueueKind::FullRate:
+				return &FullRateDue;
+			case PublicationQueueKind::ReducedRate:
+				return &ReducedRateDue;
+			case PublicationQueueKind::LowRate:
+				return &LowRateDue;
+			case PublicationQueueKind::None:
+				break;
+			}
+			return nullptr;
+		}
+
+		void Unlink(ObjectId Character) {
+			auto Found = Published.find(Character);
+			if (Found == Published.end() || Found->second.QueueKind == PublicationQueueKind::None) return;
+			auto &State = Found->second;
+			auto *List = GetList(State.QueueKind, State.WheelSlot);
+			if (!List) return;
+			if (State.PreviousScheduled.IsValid()) {
+				auto Previous = Published.find(State.PreviousScheduled);
+				if (Previous != Published.end()) Previous->second.NextScheduled = State.NextScheduled;
+			} else {
+				List->Head = State.NextScheduled;
+			}
+			if (State.NextScheduled.IsValid()) {
+				auto Next = Published.find(State.NextScheduled);
+				if (Next != Published.end()) Next->second.PreviousScheduled = State.PreviousScheduled;
+			} else {
+				List->Tail = State.PreviousScheduled;
+			}
+			if (List->Size != 0) --List->Size;
+			State.QueueKind = PublicationQueueKind::None;
+			State.PreviousScheduled = {};
+			State.NextScheduled = {};
+		}
+
+		void LinkBack(ObjectId Character, PublicationQueueKind Kind, std::uint8_t Slot = 0) {
+			auto Found = Published.find(Character);
+			if (Found == Published.end() || Kind == PublicationQueueKind::None) return;
+			Unlink(Character);
+			auto *List = GetList(Kind, Slot);
+			if (!List) return;
+			auto &State = Found->second;
+			State.QueueKind = Kind;
+			State.WheelSlot = Slot;
+			State.PreviousScheduled = List->Tail;
+			State.NextScheduled = {};
+			if (List->Tail.IsValid()) {
+				auto Tail = Published.find(List->Tail);
+				if (Tail != Published.end()) Tail->second.NextScheduled = Character;
+			} else {
+				List->Head = Character;
+			}
+			List->Tail = Character;
+			++List->Size;
+		}
+
+		ObjectId PopFront(PublicationQueueKind Kind) {
+			auto *List = GetList(Kind);
+			if (!List || !List->Head.IsValid()) return {};
+			const auto Result = List->Head;
+			Unlink(Result);
+			return Result;
+		}
 	};
 
 	struct AuthoritativeCharacterNetwork::CharacterState {
@@ -239,13 +372,14 @@ namespace gargantuan::network {
 		bool ReliableStateRequired = false;
 		std::optional<CharacterAuthoritativeState> PreparedState;
 		std::uint64_t PreparedFingerprint = 0;
+		std::uint64_t PreparedTick = 0;
+		std::uint64_t CurrentFingerprint = 0;
+		std::uint64_t CurrentFingerprintTick = 0;
 		std::uint64_t SemanticPromotionUntilTick = 0;
 		std::optional<CFrame> LastObservedTransform;
 		glm::vec3 LastObservedVelocity{};
 		std::uint64_t LastObservedTick = 0;
 		bool WasMoving = false;
-		bool DueThisTick = false;
-		bool SendThisTick = false;
 	};
 
 	AuthoritativeCharacterNetwork::~AuthoritativeCharacterNetwork() = default;
@@ -278,6 +412,7 @@ namespace gargantuan::network {
 		for (const auto Id : Controlled)
 			(void)RevokeControl(Id, AuthoritativeTick);
 		Peers.erase(Connection);
+		if (Peers.empty()) PublicationPeerCursor.reset();
 		return true;
 	}
 
@@ -310,6 +445,7 @@ namespace gargantuan::network {
 			(void)Connection;
 			if (Peer.Materialized.erase(Character))
 				Peer.MaterializationEpoch = *NextMaterializationEpoch(Peer.MaterializationEpoch);
+			Peer.Unlink(Character);
 			Peer.Published.erase(Character);
 		}
 		Characters.erase(Found);
@@ -334,6 +470,7 @@ namespace gargantuan::network {
 		Peer->second.Published[Character] = PeerState::PublicationState{
 			.TemporaryFullRateUntilTick = PromotionUntil,
 		};
+		MakeRelationshipDue(Peer->second, Connection, Character, PromotionStart, true);
 		Peer->second.ImportanceDirty = true;
 		SaturatingIncrement(Metrics.TemporaryPromotions);
 		return true;
@@ -345,6 +482,7 @@ namespace gargantuan::network {
 											 : NextMaterializationEpoch(Peer->second.MaterializationEpoch);
 		if (Peer == Peers.end() || !NextEpoch || !Peer->second.Materialized.erase(Character)) return false;
 		Peer->second.MaterializationEpoch = *NextEpoch;
+		Peer->second.Unlink(Character);
 		Peer->second.Published.erase(Character);
 		auto Found = Characters.find(Character);
 		if (Found != Characters.end() && Found->second.Controller == Connection)
@@ -408,6 +546,7 @@ namespace gargantuan::network {
 				Publication->second.TemporaryFullRateUntilTick, PromotionUntil
 			);
 			Publication->second.PublishImmediately = true;
+			MakeRelationshipDue(Peer->second, Connection, Character, AuthoritativeTick, true);
 		}
 		const auto Channel = Peer->second.Materialized.at(Character);
 		if (!SendControl(Connection, {Character, *Epoch, Channel, AuthoritativeTick, true})) {
@@ -431,6 +570,9 @@ namespace gargantuan::network {
 		Found->second.InputTimedOut = false;
 		Found->second.PendingActionCount = 0;
 		Found->second.ActiveAction.reset();
+		for (auto &[PeerConnection, Peer] : Peers)
+			if (Peer.Published.contains(Character))
+				RefreshRelationshipSchedule(Peer, PeerConnection, Character, AuthoritativeTick);
 		return true;
 	}
 
@@ -590,10 +732,9 @@ namespace gargantuan::network {
 			)
 		);
 		if (!Result.Accepted()) {
-			if (Reliable && OnTerminal)
-				OnTerminal(
-					Connection, SchedulerFailure(Result, "Reliable Character state was rejected by the scheduler")
-				);
+			if (!Reliable) SaturatingIncrement(Metrics.PublicationSchedulerRejections);
+			if ((Reliable || Result.IsTerminal()) && OnTerminal)
+				OnTerminal(Connection, SchedulerFailure(Result, "Character state was rejected by the scheduler"));
 			return false;
 		}
 		SaturatingIncrement(Metrics.BytesOut, static_cast<std::uint64_t>(Bytes));
@@ -889,6 +1030,25 @@ namespace gargantuan::network {
 			State.LastObservedVelocity = CurrentVelocity;
 			State.LastObservedTick = AuthoritativeTick;
 			State.WasMoving = Moving;
+			if (!Peers.empty() && State.NextStateSequence.IsValid()) {
+				const CharacterAuthoritativeState FingerprintState{
+					.Character = Id,
+					.ControlEpoch = State.ControlEpoch,
+					.StateSequence = State.NextStateSequence,
+					.AcknowledgedInput = State.AcknowledgedInput,
+					.ResolvedAction = State.ResolvedAction,
+					.AuthoritativeTick = AuthoritativeTick,
+					.Transform = CurrentTransform,
+					.Velocity = CurrentVelocity,
+					.FloorNormal = CharacterValue->GetFloorNormal(),
+					.Flags = static_cast<std::uint8_t>(
+						CharacterValue->GetGrounded() ? static_cast<std::uint8_t>(CharacterStateFlag::Grounded) : 0
+					),
+					.ActiveAction = State.ActiveAction,
+				};
+				State.CurrentFingerprint = SemanticStateFingerprint(FingerprintState);
+				State.CurrentFingerprintTick = AuthoritativeTick;
+			}
 
 			if (Discontinuity || State.ReliableStateRequired) {
 				const bool HasRecipient = std::ranges::any_of(Peers, [Id](const auto &Entry) {
@@ -933,16 +1093,12 @@ namespace gargantuan::network {
 	void AuthoritativeCharacterNetwork::PromoteCharacter(
 		ObjectId Character, CharacterState &State, std::uint64_t AuthoritativeTick
 	) {
-		const auto PromotionUntil = AuthoritativeTick >
-											std::numeric_limits<std::uint64_t>::max() - Configuration.PromotionTicks
-										? std::numeric_limits<std::uint64_t>::max()
-										: AuthoritativeTick + Configuration.PromotionTicks;
+		const auto PromotionUntil = SaturatingTickAdd(AuthoritativeTick, Configuration.PromotionTicks);
 		if (PromotionUntil > State.SemanticPromotionUntilTick) {
 			State.SemanticPromotionUntilTick = PromotionUntil;
 			SaturatingIncrement(Metrics.TemporaryPromotions);
 		}
 		for (auto &[Connection, Peer] : Peers) {
-			(void)Connection;
 			if (!Peer.Materialized.contains(Character)) continue;
 			auto Publication = Peer.Published.find(Character);
 			if (Publication == Peer.Published.end()) continue;
@@ -950,7 +1106,120 @@ namespace gargantuan::network {
 				Publication->second.TemporaryFullRateUntilTick, PromotionUntil
 			);
 			Peer.ImportanceDirty = true;
+			RefreshRelationshipSchedule(Peer, Connection, Character, AuthoritativeTick);
 		}
+	}
+
+	void AuthoritativeCharacterNetwork::MakeRelationshipDue(
+		PeerState &Peer, ConnectionId Connection, ObjectId Character, std::uint64_t AuthoritativeTick, bool Forced
+	) {
+		auto Publication = Peer.Published.find(Character);
+		auto Runtime = Characters.find(Character);
+		if (Publication == Peer.Published.end() || Runtime == Characters.end() ||
+			!Peer.Materialized.contains(Character))
+			return;
+		auto &State = Publication->second;
+		const bool Owner = Runtime->second.Controller == Connection;
+		const bool Promoted = Runtime->second.SemanticPromotionUntilTick > AuthoritativeTick ||
+							  State.TemporaryFullRateUntilTick > AuthoritativeTick;
+		State.EffectiveTier = Owner || Promoted ? CharacterPublicationTier::FullRate : State.Tier;
+		if (State.DesiredDueTick == 0 || State.DesiredDueTick > AuthoritativeTick)
+			State.DesiredDueTick = AuthoritativeTick;
+		const auto Interval = Configuration.PublicationIntervalTicks(State.EffectiveTier);
+		if (State.HardDeadlineTick == 0) State.HardDeadlineTick = SaturatingTickAdd(State.DesiredDueTick, Interval);
+		if (!Forced && AuthoritativeTick >= State.HardDeadlineTick && !State.DeadlineEscalationRecorded) {
+			State.DeadlineEscalationRecorded = true;
+			SaturatingIncrement(Metrics.PublicationDeadlineEscalations);
+		}
+		if (!Forced && AuthoritativeTick > State.HardDeadlineTick && !State.DeadlineMissRecorded) {
+			State.DeadlineMissRecorded = true;
+			RecordPublicationDeadlineMiss(Metrics, State.EffectiveTier);
+		}
+		if (Forced || State.PublishImmediately) {
+			State.PublishImmediately = true;
+			Peer.LinkBack(Character, PeerState::PublicationQueueKind::Forced);
+			return;
+		}
+		Peer.LinkBack(
+			Character,
+			Owner														? PeerState::PublicationQueueKind::Owner
+			: State.EffectiveTier == CharacterPublicationTier::FullRate ? PeerState::PublicationQueueKind::FullRate
+			: State.EffectiveTier == CharacterPublicationTier::ReducedRate
+				? PeerState::PublicationQueueKind::ReducedRate
+				: PeerState::PublicationQueueKind::LowRate
+		);
+	}
+
+	void AuthoritativeCharacterNetwork::ScheduleRelationship(
+		PeerState &Peer,
+		ConnectionId Connection,
+		ObjectId Character,
+		std::uint64_t AuthoritativeTick,
+		bool IncludeCurrentPhase
+	) {
+		auto Publication = Peer.Published.find(Character);
+		auto Runtime = Characters.find(Character);
+		if (Publication == Peer.Published.end() || Runtime == Characters.end() ||
+			!Peer.Materialized.contains(Character))
+			return;
+		auto &State = Publication->second;
+		if (State.PublishImmediately || !State.HasPublished) {
+			MakeRelationshipDue(Peer, Connection, Character, AuthoritativeTick, true);
+			return;
+		}
+		const bool Owner = Runtime->second.Controller == Connection;
+		const bool Promoted = Runtime->second.SemanticPromotionUntilTick > AuthoritativeTick ||
+							  State.TemporaryFullRateUntilTick > AuthoritativeTick;
+		State.EffectiveTier = Owner || Promoted ? CharacterPublicationTier::FullRate : State.Tier;
+		const auto Interval = Configuration.PublicationIntervalTicks(State.EffectiveTier);
+		const auto Phase = State.EffectiveTier == CharacterPublicationTier::FullRate && Peer.PublicationFocus.empty()
+							   ? 0
+							   : PublicationPhase(Connection, Character, Interval);
+		State.DesiredDueTick = NextPublicationPhaseTick(AuthoritativeTick, Interval, Phase, IncludeCurrentPhase);
+		if (State.HasPublished)
+			State.DesiredDueTick = std::min(
+				State.DesiredDueTick, SaturatingTickAdd(State.LastAbsoluteTick, Configuration.AbsoluteRefreshTicks)
+			);
+		State.HardDeadlineTick = SaturatingTickAdd(State.DesiredDueTick, Interval);
+		if (State.DesiredDueTick <= AuthoritativeTick) {
+			MakeRelationshipDue(Peer, Connection, Character, AuthoritativeTick, false);
+			return;
+		}
+		const auto Slot = static_cast<std::uint8_t>(State.DesiredDueTick % CharacterPublicationWheelSlots);
+		Peer.LinkBack(Character, PeerState::PublicationQueueKind::Wheel, Slot);
+	}
+
+	void AuthoritativeCharacterNetwork::RefreshRelationshipSchedule(
+		PeerState &Peer, ConnectionId Connection, ObjectId Character, std::uint64_t AuthoritativeTick
+	) {
+		auto Publication = Peer.Published.find(Character);
+		auto Runtime = Characters.find(Character);
+		if (Publication == Peer.Published.end() || Runtime == Characters.end()) return;
+		auto &State = Publication->second;
+		if (State.QueueKind == PeerState::PublicationQueueKind::Forced || State.PublishImmediately) {
+			MakeRelationshipDue(Peer, Connection, Character, AuthoritativeTick, true);
+			return;
+		}
+		const bool AlreadyDue = State.QueueKind != PeerState::PublicationQueueKind::Wheel &&
+								State.QueueKind != PeerState::PublicationQueueKind::None;
+		if (AlreadyDue) {
+			const bool Owner = Runtime->second.Controller == Connection;
+			const bool Promoted = Runtime->second.SemanticPromotionUntilTick > AuthoritativeTick ||
+								  State.TemporaryFullRateUntilTick > AuthoritativeTick;
+			const auto PreviousInterval = Configuration.PublicationIntervalTicks(State.EffectiveTier);
+			State.EffectiveTier = Owner || Promoted ? CharacterPublicationTier::FullRate : State.Tier;
+			const auto Interval = Configuration.PublicationIntervalTicks(State.EffectiveTier);
+			const auto CandidateDeadline = SaturatingTickAdd(State.DesiredDueTick, Interval);
+			State.HardDeadlineTick = Interval < PreviousInterval ? std::min(State.HardDeadlineTick, CandidateDeadline)
+																 : std::max(State.HardDeadlineTick, CandidateDeadline);
+			if (State.HardDeadlineTick > AuthoritativeTick) {
+				State.DeadlineEscalationRecorded = false;
+				State.DeadlineMissRecorded = false;
+			}
+			MakeRelationshipDue(Peer, Connection, Character, AuthoritativeTick, false);
+			return;
+		}
+		ScheduleRelationship(Peer, Connection, Character, AuthoritativeTick, true);
 	}
 
 	void AuthoritativeCharacterNetwork::UpdateImportance(std::uint64_t AuthoritativeTick) {
@@ -1014,6 +1283,9 @@ namespace gargantuan::network {
 					Publication->second.Tier = NextTier;
 					SaturatingIncrement(Metrics.ImportanceTierTransitions);
 				}
+				const auto ExpectedEffective = Owner || Promoted ? CharacterPublicationTier::FullRate : NextTier;
+				if (Publication->second.EffectiveTier != ExpectedEffective)
+					RefreshRelationshipSchedule(Peer, Connection, Character, AuthoritativeTick);
 			}
 			Peer.LastImportanceUpdateTick = AuthoritativeTick;
 			Peer.ImportanceDirty = false;
@@ -1058,6 +1330,7 @@ namespace gargantuan::network {
 					Publication.LastPublicationTick = AuthoritativeTick;
 					Publication.HasPublished = true;
 					Publication.PublishImmediately = false;
+					ScheduleRelationship(Peer, Connection, Character, AuthoritativeTick, false);
 					SaturatingIncrement(Metrics.StateAgeSamples);
 					SaturatingIncrement(Metrics.StateAgeTicks, Age);
 					Metrics.MaximumStateAgeTicks = std::max(Metrics.MaximumStateAgeTicks, Age);
@@ -1077,128 +1350,182 @@ namespace gargantuan::network {
 
 	void AuthoritativeCharacterNetwork::PublishStateFrames(std::uint64_t AuthoritativeTick) {
 		if (Peers.empty()) return;
+		SaturatingIncrement(Metrics.PublicationBudgetTicks);
+		SaturatingIncrement(
+			Metrics.PublicationBudgetAvailable,
+			static_cast<std::uint64_t>(Configuration.MaximumPublicationStatesPerTick)
+		);
 		for (auto &[Id, Runtime] : Characters) {
 			(void)Id;
 			Runtime.PreparedState.reset();
 			Runtime.PreparedFingerprint = 0;
-			Runtime.DueThisTick = false;
-			Runtime.SendThisTick = false;
+			Runtime.PreparedTick = 0;
 		}
 		const auto DueStarted = std::chrono::steady_clock::now();
 		for (auto &[Connection, Peer] : Peers) {
-			for (auto &[Character, Publication] : Peer.Published) {
-				Publication.DueThisTick = false;
-				Publication.SendThisTick = false;
-				auto Runtime = Characters.find(Character);
-				if (Runtime == Characters.end() || !Peer.Materialized.contains(Character)) continue;
-				const bool Owner = Runtime->second.Controller == Connection;
-				const bool Promoted = Runtime->second.SemanticPromotionUntilTick > AuthoritativeTick ||
-									  Publication.TemporaryFullRateUntilTick > AuthoritativeTick;
-				Publication.EffectiveTier = Owner || Promoted ? CharacterPublicationTier::FullRate : Publication.Tier;
-				const auto Interval = Configuration.PublicationIntervalTicks(Publication.EffectiveTier);
-				const bool Refresh = !Publication.HasPublished || AuthoritativeTick < Publication.LastAbsoluteTick ||
-									 AuthoritativeTick - Publication.LastAbsoluteTick >=
-										 Configuration.AbsoluteRefreshTicks;
-				const auto Phase = Publication.EffectiveTier == CharacterPublicationTier::FullRate &&
-										   Peer.PublicationFocus.empty()
-									   ? 0
-									   : PublicationPhase(Connection, Character, Interval);
-				Publication.DueThisTick = !Publication.HasPublished || Publication.PublishImmediately || Refresh ||
-										  AuthoritativeTick < Publication.LastPublicationTick ||
-										  AuthoritativeTick % Interval == Phase;
-				if (Publication.DueThisTick) {
-					Runtime->second.DueThisTick = true;
-					SaturatingIncrement(Metrics.DueStates);
+			Peer.SelectedThisTick = 0;
+			Peer.AcceptedBatchesThisTick = 0;
+			Peer.SchedulerRejectedThisTick = false;
+			auto ProcessSlot = [&](std::uint8_t Slot) {
+				auto Current = Peer.PublicationWheel[Slot].Head;
+				auto Remaining = Peer.PublicationWheel[Slot].Size;
+				while (Current.IsValid() && Remaining-- != 0) {
+					auto Publication = Peer.Published.find(Current);
+					if (Publication == Peer.Published.end()) break;
+					const auto Next = Publication->second.NextScheduled;
+					if (Publication->second.DesiredDueTick <= AuthoritativeTick) {
+						Peer.Unlink(Current);
+						if (!Peer.Materialized.contains(Current) || !Characters.contains(Current)) {
+							Current = Next;
+							continue;
+						}
+						SaturatingIncrement(Metrics.DueStates);
+						MakeRelationshipDue(Peer, Connection, Current, AuthoritativeTick, false);
+					}
+					Current = Next;
 				}
+			};
+			if (Peer.LastDueProcessingTick == 0) {
+				ProcessSlot(static_cast<std::uint8_t>(AuthoritativeTick % CharacterPublicationWheelSlots));
+			} else if (AuthoritativeTick < Peer.LastDueProcessingTick ||
+					   AuthoritativeTick - Peer.LastDueProcessingTick >= CharacterPublicationWheelSlots) {
+				for (std::size_t Slot = 0; Slot < CharacterPublicationWheelSlots; ++Slot)
+					ProcessSlot(static_cast<std::uint8_t>(Slot));
+				SaturatingIncrement(Metrics.PublicationLargeTickRebuilds);
+			} else {
+				for (auto Tick = Peer.LastDueProcessingTick + 1; Tick <= AuthoritativeTick; ++Tick)
+					ProcessSlot(static_cast<std::uint8_t>(Tick % CharacterPublicationWheelSlots));
 			}
+			Peer.LastDueProcessingTick = AuthoritativeTick;
+			SaturatingIncrement(Metrics.DueStates, static_cast<std::uint64_t>(Peer.ForcedDue.Size));
+			SaturatingIncrement(
+				Metrics.PublicationOfferedStates,
+				static_cast<std::uint64_t>(
+					Peer.OwnerDue.Size + Peer.FullRateDue.Size + Peer.ReducedRateDue.Size + Peer.LowRateDue.Size
+				)
+			);
 		}
-		SaturatingIncrement(
-			Metrics.DueSetCpuNanoseconds,
-			static_cast<std::uint64_t>(
-				std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - DueStarted)
-					.count()
-			)
+		const auto DueElapsed = static_cast<std::uint64_t>(
+			std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - DueStarted).count()
 		);
+		SaturatingIncrement(Metrics.DueSetCpuNanoseconds, DueElapsed);
+		SaturatingIncrement(Metrics.PublicationDueDiscoveryCpuNanoseconds, DueElapsed);
 
-		const auto DetectionStarted = std::chrono::steady_clock::now();
-		for (auto &[Id, Runtime] : Characters) {
-			if (!Runtime.DueThisTick) continue;
-			auto State = BuildState(Id, AuthoritativeTick);
-			if (!State || GetCompactCharacterStateEncodedBytes(*State) == 0) {
-				SaturatingIncrement(Metrics.ProtocolRejects);
-				continue;
-			}
-			Runtime.PreparedState = *State;
-			Runtime.PreparedFingerprint = SemanticStateFingerprint(*State);
-			SaturatingIncrement(Metrics.StateSnapshotsBuilt);
-		}
-		for (auto &[Connection, Peer] : Peers) {
-			(void)Connection;
-			for (auto &[Id, Publication] : Peer.Published) {
-				if (!Publication.DueThisTick) continue;
-				auto Runtime = Characters.find(Id);
-				if (Runtime == Characters.end() || !Runtime->second.PreparedState) continue;
-				SaturatingIncrement(Metrics.StatesConsidered);
-				SaturatingIncrement(Metrics.StateSnapshotRelationshipUses);
-				const bool Refresh = !Publication.HasPublished || AuthoritativeTick < Publication.LastAbsoluteTick ||
-									 AuthoritativeTick - Publication.LastAbsoluteTick >=
-										 Configuration.AbsoluteRefreshTicks;
-				Publication.SendThisTick = Refresh || Publication.PublishImmediately ||
-										   Publication.Fingerprint != Runtime->second.PreparedFingerprint;
-				if (Publication.SendThisTick) {
-					Runtime->second.SendThisTick = true;
-				} else {
-					Publication.PublishImmediately = false;
-					SaturatingIncrement(Metrics.StatesSuppressedUnchanged);
-				}
-			}
-		}
-		for (auto &[Id, Runtime] : Characters) {
-			(void)Id;
-			if (Runtime.PreparedState && Runtime.SendThisTick)
-				Runtime.NextStateSequence = Runtime.NextStateSequence.TryNext().value_or(RealtimeStateSequence{});
-			else
-				Runtime.PreparedState.reset();
-		}
-		SaturatingIncrement(
-			Metrics.StateChangeDetectionCpuNanoseconds,
-			static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
-										   std::chrono::steady_clock::now() - DetectionStarted
-			)
-										   .count())
-		);
-
-		const auto AssemblyStarted = std::chrono::steady_clock::now();
 		const auto ByteLimit = std::min(Configuration.MaximumStateFrameBytes, Limits.MaximumUnreliableMessageBytes);
-		for (auto &[Connection, Peer] : Peers) {
+		std::uint64_t ChangeDetectionNanoseconds = 0;
+		std::uint64_t SnapshotNanoseconds = 0;
+		std::uint64_t AssemblyNanoseconds = 0;
+		std::uint64_t CommitNanoseconds = 0;
+		std::uint64_t SelectionNanoseconds = 0;
+		auto SelectNext = [&](PeerState &Peer, bool ForcedOnly) -> ObjectId {
+			if (ForcedOnly) return Peer.PopFront(PeerState::PublicationQueueKind::Forced);
+			if (Peer.OwnerDue.Head.IsValid()) return Peer.PopFront(PeerState::PublicationQueueKind::Owner);
+			ObjectId DeadlineCandidate;
+			PeerState::PublicationQueueKind DeadlineKind = PeerState::PublicationQueueKind::None;
+			auto ConsiderDeadline = [&](PeerState::PublicationQueueKind Kind, const PeerState::PublicationList &List) {
+				if (!List.Head.IsValid()) return;
+				auto Candidate = Peer.Published.find(List.Head);
+				if (Candidate == Peer.Published.end() || Candidate->second.HardDeadlineTick > AuthoritativeTick) return;
+				if (!Candidate->second.DeadlineEscalationRecorded) {
+					Candidate->second.DeadlineEscalationRecorded = true;
+					SaturatingIncrement(Metrics.PublicationDeadlineEscalations);
+				}
+				if (!Candidate->second.DeadlineMissRecorded && AuthoritativeTick > Candidate->second.HardDeadlineTick) {
+					Candidate->second.DeadlineMissRecorded = true;
+					RecordPublicationDeadlineMiss(Metrics, Candidate->second.EffectiveTier);
+				}
+				if (!DeadlineCandidate.IsValid()) {
+					DeadlineCandidate = List.Head;
+					DeadlineKind = Kind;
+					return;
+				}
+				const auto Existing = Peer.Published.find(DeadlineCandidate);
+				if (Existing == Peer.Published.end() ||
+					std::tie(Candidate->second.HardDeadlineTick, Candidate->second.DesiredDueTick, Candidate->first) <
+						std::tie(Existing->second.HardDeadlineTick, Existing->second.DesiredDueTick, Existing->first)) {
+					DeadlineCandidate = List.Head;
+					DeadlineKind = Kind;
+				}
+			};
+			ConsiderDeadline(PeerState::PublicationQueueKind::FullRate, Peer.FullRateDue);
+			ConsiderDeadline(PeerState::PublicationQueueKind::ReducedRate, Peer.ReducedRateDue);
+			ConsiderDeadline(PeerState::PublicationQueueKind::LowRate, Peer.LowRateDue);
+			if (DeadlineCandidate.IsValid()) {
+				Peer.Unlink(DeadlineCandidate);
+				return DeadlineCandidate;
+			}
+			if (Peer.FullRateDue.Head.IsValid()) return Peer.PopFront(PeerState::PublicationQueueKind::FullRate);
+			if (Peer.ReducedRateDue.Head.IsValid()) return Peer.PopFront(PeerState::PublicationQueueKind::ReducedRate);
+			return Peer.PopFront(PeerState::PublicationQueueKind::LowRate);
+		};
+
+		auto PublishPeer =
+			[&](ConnectionId Connection, PeerState &Peer, std::size_t MaximumStates, bool ForcedOnly) -> std::size_t {
+			if (MaximumStates == 0 || Peer.SchedulerRejectedThisTick) return 0;
 			CharacterStateFrame Frame{
 				.ServerTick = AuthoritativeTick,
 				.MaterializationEpoch = Peer.MaterializationEpoch,
 			};
 			std::size_t EncodedBytes = CharacterStateFrameHeaderBytes;
 			StateChannelId FrameChannel;
-			std::uint64_t PeerBatchCount = 0;
+			bool Stop = false;
 			auto Flush = [&] {
-				if (Frame.StateCount == 0 || !Peer.NextFrameSequence.IsValid()) return;
+				if (Frame.StateCount == 0 || !Peer.NextFrameSequence.IsValid()) return true;
+				std::sort(
+					Frame.States.begin(),
+					Frame.States.begin() + Frame.StateCount,
+					[](const CharacterAuthoritativeState &Left, const CharacterAuthoritativeState &Right) {
+						return Left.Character < Right.Character;
+					}
+				);
 				Frame.FrameSequence = Peer.NextFrameSequence;
 				const bool Queued = QueueStateFrame(Connection, Frame, FrameChannel);
 				Peer.NextFrameSequence = Peer.NextFrameSequence.TryNext().value_or(CharacterStateFrameSequence{});
+				const auto CommitStarted = std::chrono::steady_clock::now();
 				if (Queued) {
-					++PeerBatchCount;
+					if (Peer.AcceptedBatchesThisTick++ != 0) SaturatingIncrement(Metrics.BatchSplits);
 					for (const auto &State : Frame.GetStates()) {
 						auto Runtime = Characters.find(State.Character);
 						auto Publication = Peer.Published.find(State.Character);
 						if (Runtime == Characters.end() || Publication == Peer.Published.end()) continue;
+						const bool Owner = Runtime->second.Controller == Connection;
 						const auto Age = Publication->second.HasPublished &&
 												 AuthoritativeTick >= Publication->second.LastPublicationTick
 											 ? AuthoritativeTick - Publication->second.LastPublicationTick
 											 : 0;
+						if (!ForcedOnly) {
+							const auto Latency = AuthoritativeTick >= Publication->second.DesiredDueTick
+													 ? AuthoritativeTick - Publication->second.DesiredDueTick
+													 : 0;
+							SaturatingIncrement(Metrics.PublicationLatencySamples);
+							SaturatingIncrement(Metrics.PublicationLatencyTicks, Latency);
+							Metrics.MaximumPublicationLatencyTicks = std::max(
+								Metrics.MaximumPublicationLatencyTicks, Latency
+							);
+							if (Latency >= 1 && Latency <= 3)
+								SaturatingIncrement(Metrics.PublicationLatencyOneToThree);
+							else if (Latency <= 6 && Latency != 0)
+								SaturatingIncrement(Metrics.PublicationLatencyFourToSix);
+							else if (Latency <= 12 && Latency != 0)
+								SaturatingIncrement(Metrics.PublicationLatencySevenToTwelve);
+							else if (Latency > 12)
+								SaturatingIncrement(Metrics.PublicationLatencyOverTwelve);
+							if (Owner) {
+								SaturatingIncrement(Metrics.PublicationOwnerAgeSamples);
+								SaturatingIncrement(Metrics.PublicationOwnerAgeTicks, Age);
+								Metrics.MaximumPublicationOwnerAgeTicks = std::max(
+									Metrics.MaximumPublicationOwnerAgeTicks, Age
+								);
+							}
+						}
 						Publication->second.Fingerprint = Runtime->second.PreparedFingerprint;
 						Publication->second.LastAbsoluteTick = AuthoritativeTick;
 						Publication->second.LastPublicationTick = AuthoritativeTick;
 						Publication->second.HasPublished = true;
 						Publication->second.PublishImmediately = false;
-						Publication->second.SendThisTick = false;
+						Publication->second.DeadlineEscalationRecorded = false;
+						Publication->second.DeadlineMissRecorded = false;
+						ScheduleRelationship(Peer, Connection, State.Character, AuthoritativeTick, false);
 						SaturatingIncrement(Metrics.StateAgeSamples);
 						SaturatingIncrement(Metrics.StateAgeTicks, Age);
 						Metrics.MaximumStateAgeTicks = std::max(Metrics.MaximumStateAgeTicks, Age);
@@ -1228,43 +1555,232 @@ namespace gargantuan::network {
 						SaturatingIncrement(Metrics.AuthoritativeStatesSent);
 						SaturatingIncrement(Metrics.AbsoluteStatesSent);
 						SaturatingIncrement(Metrics.SemanticStateBytes, SemanticStateBytes(State));
+						SaturatingIncrement(
+							ForcedOnly ? Metrics.PublicationRequiredStatesAccepted : Metrics.PublicationStatesAccepted
+						);
 					}
+				} else {
+					for (const auto &State : Frame.GetStates()) {
+						auto Publication = Peer.Published.find(State.Character);
+						if (Publication == Peer.Published.end()) continue;
+						MakeRelationshipDue(
+							Peer, Connection, State.Character, AuthoritativeTick, Publication->second.PublishImmediately
+						);
+					}
+					Peer.SchedulerRejectedThisTick = true;
+					Stop = true;
 				}
+				SaturatingIncrement(
+					CommitNanoseconds,
+					static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+												   std::chrono::steady_clock::now() - CommitStarted
+					)
+												   .count())
+				);
 				Frame = CharacterStateFrame{
 					.ServerTick = AuthoritativeTick,
 					.MaterializationEpoch = Peer.MaterializationEpoch,
 				};
 				EncodedBytes = CharacterStateFrameHeaderBytes;
 				FrameChannel = {};
+				return Queued;
 			};
-
-			for (const auto &[Id, Channel] : Peer.Materialized) {
+			std::size_t Selected = 0;
+			std::size_t Examined = 0;
+			const auto MaximumExamined = Peer.Published.size();
+			while (Selected < MaximumStates && Examined++ < MaximumExamined && !Stop) {
+				const auto SelectionStarted = std::chrono::steady_clock::now();
+				const auto Id = SelectNext(Peer, ForcedOnly);
+				SaturatingIncrement(
+					SelectionNanoseconds,
+					static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+												   std::chrono::steady_clock::now() - SelectionStarted
+					)
+												   .count())
+				);
+				if (!Id.IsValid()) break;
 				auto Runtime = Characters.find(Id);
-				if (Runtime == Characters.end() || !Runtime->second.PreparedState) continue;
 				auto Publication = Peer.Published.find(Id);
-				if (Publication == Peer.Published.end() || !Publication->second.SendThisTick) continue;
+				auto Channel = Peer.Materialized.find(Id);
+				if (Runtime == Characters.end() || Publication == Peer.Published.end() ||
+					Channel == Peer.Materialized.end())
+					continue;
+				const auto DetectionStarted = std::chrono::steady_clock::now();
+				const bool Refresh = !Publication->second.HasPublished ||
+									 AuthoritativeTick < Publication->second.LastAbsoluteTick ||
+									 AuthoritativeTick - Publication->second.LastAbsoluteTick >=
+										 Configuration.AbsoluteRefreshTicks;
+				const bool Changed = Runtime->second.CurrentFingerprintTick != AuthoritativeTick ||
+									 Publication->second.Fingerprint != Runtime->second.CurrentFingerprint;
+				const bool Required = ForcedOnly || Publication->second.PublishImmediately || Refresh || Changed;
+				SaturatingIncrement(
+					ChangeDetectionNanoseconds,
+					static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+												   std::chrono::steady_clock::now() - DetectionStarted
+					)
+												   .count())
+				);
+				SaturatingIncrement(Metrics.StatesConsidered);
+				if (!Required) {
+					Publication->second.PublishImmediately = false;
+					SaturatingIncrement(Metrics.StatesSuppressedUnchanged);
+					ScheduleRelationship(Peer, Connection, Id, AuthoritativeTick, false);
+					continue;
+				}
+				if (Runtime->second.PreparedTick != AuthoritativeTick) {
+					const auto SnapshotStarted = std::chrono::steady_clock::now();
+					auto State = BuildState(Id, AuthoritativeTick);
+					SaturatingIncrement(
+						SnapshotNanoseconds,
+						static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+													   std::chrono::steady_clock::now() - SnapshotStarted
+						)
+													   .count())
+					);
+					if (!State || GetCompactCharacterStateEncodedBytes(*State) == 0) {
+						SaturatingIncrement(Metrics.ProtocolRejects);
+						MakeRelationshipDue(
+							Peer, Connection, Id, AuthoritativeTick, Publication->second.PublishImmediately
+						);
+						continue;
+					}
+					Runtime->second.PreparedState = *State;
+					Runtime->second.PreparedFingerprint = SemanticStateFingerprint(*State);
+					Runtime->second.PreparedTick = AuthoritativeTick;
+					SaturatingIncrement(Metrics.StateSnapshotsBuilt);
+				}
+				if (!Runtime->second.PreparedState) {
+					MakeRelationshipDue(
+						Peer, Connection, Id, AuthoritativeTick, Publication->second.PublishImmediately
+					);
+					continue;
+				}
 				const auto StateBytes = GetCompactCharacterStateEncodedBytes(*Runtime->second.PreparedState);
 				if (StateBytes == 0 || CharacterStateFrameHeaderBytes + StateBytes > ByteLimit) {
 					SaturatingIncrement(Metrics.ProtocolRejects);
+					MakeRelationshipDue(
+						Peer, Connection, Id, AuthoritativeTick, Publication->second.PublishImmediately
+					);
 					continue;
 				}
-				if (Frame.StateCount == Frame.States.size() || EncodedBytes + StateBytes > ByteLimit) Flush();
-				if (Frame.StateCount == 0) FrameChannel = Channel;
+				if (Frame.StateCount == Frame.States.size() || EncodedBytes + StateBytes > ByteLimit) (void)Flush();
+				if (Stop) break;
+				const auto AssemblyStarted = std::chrono::steady_clock::now();
+				if (Frame.StateCount == 0) FrameChannel = Channel->second;
 				Frame.States[Frame.StateCount++] = *Runtime->second.PreparedState;
 				EncodedBytes += StateBytes;
+				SaturatingIncrement(
+					AssemblyNanoseconds,
+					static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+												   std::chrono::steady_clock::now() - AssemblyStarted
+					)
+												   .count())
+				);
+				++Selected;
+				if (!ForcedOnly) ++Peer.SelectedThisTick;
+				SaturatingIncrement(
+					ForcedOnly ? Metrics.PublicationRequiredStatesSelected : Metrics.PublicationStatesSelected
+				);
+				SaturatingIncrement(Metrics.StateSnapshotRelationshipUses);
 			}
-			Flush();
-			if (PeerBatchCount > 1) SaturatingIncrement(Metrics.BatchSplits, PeerBatchCount - 1);
+			if (!Stop) (void)Flush();
+			return Selected;
+		};
+
+		for (auto &[Connection, Peer] : Peers)
+			while (Peer.ForcedDue.Size != 0 && !Peer.SchedulerRejectedThisTick)
+				if (PublishPeer(Connection, Peer, Peer.ForcedDue.Size, true) == 0) break;
+
+		std::size_t GlobalConsumed = 0;
+		auto Start = PublicationPeerCursor ? Peers.lower_bound(*PublicationPeerCursor) : Peers.begin();
+		if (Start == Peers.end()) Start = Peers.begin();
+		auto Current = Start;
+		auto Advance = [&] {
+			if (++Current == Peers.end()) Current = Peers.begin();
+		};
+		if (!Peers.empty()) {
+			for (std::size_t Visited = 0;
+				 Visited < Peers.size() && GlobalConsumed < Configuration.MaximumPublicationStatesPerTick;
+				 ++Visited) {
+				auto &Peer = Current->second;
+				const auto Capacity = Peer.SelectedThisTick >= Configuration.MaximumPublicationStatesPerPeerTick
+										  ? 0
+										  : Configuration.MaximumPublicationStatesPerPeerTick - Peer.SelectedThisTick;
+				const auto RemainingGlobal = Configuration.MaximumPublicationStatesPerTick - GlobalConsumed;
+				const auto RemainingPeers = Peers.size() - Visited - 1;
+				const auto ReservedForPeers = std::min(RemainingPeers, RemainingGlobal);
+				const auto Allowance = std::min({
+					Configuration.PublicationPeerQuantum,
+					Capacity,
+					RemainingGlobal - ReservedForPeers,
+				});
+				const auto Selected = PublishPeer(Current->first, Peer, Allowance, false);
+				GlobalConsumed += Selected;
+				Advance();
+			}
+			bool MadeProgress = true;
+			while (MadeProgress && GlobalConsumed < Configuration.MaximumPublicationStatesPerTick) {
+				MadeProgress = false;
+				for (std::size_t Visited = 0;
+					 Visited < Peers.size() && GlobalConsumed < Configuration.MaximumPublicationStatesPerTick;
+					 ++Visited) {
+					auto &Peer = Current->second;
+					const auto Capacity = Peer.SelectedThisTick >= Configuration.MaximumPublicationStatesPerPeerTick
+											  ? 0
+											  : Configuration.MaximumPublicationStatesPerPeerTick -
+													Peer.SelectedThisTick;
+					const auto RemainingGlobal = Configuration.MaximumPublicationStatesPerTick - GlobalConsumed;
+					const auto Allowance = std::min({Configuration.PublicationPeerQuantum, Capacity, RemainingGlobal});
+					const auto Selected = PublishPeer(Current->first, Peer, Allowance, false);
+					GlobalConsumed += Selected;
+					MadeProgress = MadeProgress || Selected != 0;
+					Advance();
+				}
+			}
+			if (Current == Start) Advance();
+			PublicationPeerCursor = Current->first;
+			SaturatingIncrement(Metrics.PublicationPeerFairnessRotations);
 		}
+		SaturatingIncrement(Metrics.PublicationBudgetConsumed, static_cast<std::uint64_t>(GlobalConsumed));
+		std::uint64_t Deferred = 0;
+		std::uint64_t OwnerDeferred = 0;
+		std::uint64_t Overdue = 0;
+		for (auto &[Connection, Peer] : Peers) {
+			(void)Connection;
+			const auto OrdinaryDue = Peer.OwnerDue.Size + Peer.FullRateDue.Size + Peer.ReducedRateDue.Size +
+									 Peer.LowRateDue.Size;
+			if (GlobalConsumed >= Configuration.MaximumPublicationStatesPerTick ||
+				Peer.SelectedThisTick >= Configuration.MaximumPublicationStatesPerPeerTick) {
+				SaturatingIncrement(Deferred, static_cast<std::uint64_t>(OrdinaryDue));
+				SaturatingIncrement(OwnerDeferred, static_cast<std::uint64_t>(Peer.OwnerDue.Size));
+			}
+			for (const auto Kind :
+				 {PeerState::PublicationQueueKind::Owner,
+				  PeerState::PublicationQueueKind::FullRate,
+				  PeerState::PublicationQueueKind::ReducedRate,
+				  PeerState::PublicationQueueKind::LowRate}) {
+				auto *List = Peer.GetList(Kind);
+				if (!List || !List->Head.IsValid()) continue;
+				auto Publication = Peer.Published.find(List->Head);
+				if (Publication != Peer.Published.end() && Publication->second.DesiredDueTick < AuthoritativeTick)
+					SaturatingIncrement(Overdue, static_cast<std::uint64_t>(List->Size));
+			}
+		}
+		SaturatingIncrement(Metrics.PublicationStatesDeferred, Deferred);
+		SaturatingIncrement(Metrics.PublicationOwnerDeferrals, OwnerDeferred);
+		SaturatingIncrement(Metrics.PublicationOverdueRelationships, Overdue);
+		if (Deferred != 0 && GlobalConsumed >= Configuration.MaximumPublicationStatesPerTick)
+			SaturatingIncrement(Metrics.PublicationGlobalBudgetExhaustions);
 		for (auto &[Id, Runtime] : Characters)
-			Runtime.PreparedState.reset();
-		SaturatingIncrement(
-			Metrics.StateFrameAssemblyCpuNanoseconds,
-			static_cast<std::uint64_t>(
-				std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - AssemblyStarted)
-					.count()
-			)
-		);
+			if (Runtime.PreparedTick == AuthoritativeTick) {
+				Runtime.NextStateSequence = Runtime.NextStateSequence.TryNext().value_or(RealtimeStateSequence{});
+				Runtime.PreparedState.reset();
+			}
+		SaturatingIncrement(Metrics.StateChangeDetectionCpuNanoseconds, ChangeDetectionNanoseconds);
+		SaturatingIncrement(Metrics.PublicationSnapshotCpuNanoseconds, SnapshotNanoseconds);
+		SaturatingIncrement(Metrics.StateFrameAssemblyCpuNanoseconds, AssemblyNanoseconds);
+		SaturatingIncrement(Metrics.PublicationCommitCpuNanoseconds, CommitNanoseconds);
+		SaturatingIncrement(Metrics.PublicationSelectionCpuNanoseconds, SelectionNanoseconds);
 	}
 
 	CharacterNetworkMetrics AuthoritativeCharacterNetwork::GetMetrics() const {
@@ -1272,11 +1788,33 @@ namespace gargantuan::network {
 		Result.FullRateRelationships = 0;
 		Result.ReducedRateRelationships = 0;
 		Result.LowRateRelationships = 0;
+		Result.PublicationActiveRelationships = 0;
+		Result.PublicationCurrentDueRelationships = 0;
+		Result.PublicationCurrentOverdueRelationships = 0;
+		Result.PublicationCurrentForcedRelationships = 0;
+		Result.MaximumCurrentPublicationAgeTicks = 0;
+		Result.MaximumCurrentOwnerPublicationAgeTicks = 0;
 		for (const auto &[Connection, Peer] : Peers) {
 			for (const auto &[Character, Publication] : Peer.Published) {
 				auto Runtime = Characters.find(Character);
 				if (Runtime == Characters.end() || !Peer.Materialized.contains(Character)) continue;
 				const bool Owner = Runtime->second.Controller == Connection;
+				SaturatingIncrement(Result.PublicationActiveRelationships);
+				const bool Due = Publication.QueueKind != PeerState::PublicationQueueKind::None &&
+								 Publication.QueueKind != PeerState::PublicationQueueKind::Wheel;
+				if (Due) SaturatingIncrement(Result.PublicationCurrentDueRelationships);
+				if (Publication.QueueKind == PeerState::PublicationQueueKind::Forced)
+					SaturatingIncrement(Result.PublicationCurrentForcedRelationships);
+				if (Due && Publication.DesiredDueTick < LastAuthoritativeTick)
+					SaturatingIncrement(Result.PublicationCurrentOverdueRelationships);
+				const auto Age = Publication.HasPublished && LastAuthoritativeTick >= Publication.LastPublicationTick
+									 ? LastAuthoritativeTick - Publication.LastPublicationTick
+									 : 0;
+				Result.MaximumCurrentPublicationAgeTicks = std::max(Result.MaximumCurrentPublicationAgeTicks, Age);
+				if (Owner)
+					Result.MaximumCurrentOwnerPublicationAgeTicks = std::max(
+						Result.MaximumCurrentOwnerPublicationAgeTicks, Age
+					);
 				const bool Promoted = Runtime->second.SemanticPromotionUntilTick > LastAuthoritativeTick ||
 									  Publication.TemporaryFullRateUntilTick > LastAuthoritativeTick;
 				const auto Tier = Owner || Promoted ? CharacterPublicationTier::FullRate : Publication.Tier;
@@ -1308,6 +1846,30 @@ namespace gargantuan::network {
 		const bool Promoted = Runtime->second.SemanticPromotionUntilTick > LastAuthoritativeTick ||
 							  Publication->second.TemporaryFullRateUntilTick > LastAuthoritativeTick;
 		return Owner || Promoted ? CharacterPublicationTier::FullRate : Publication->second.Tier;
+	}
+
+	std::optional<CharacterPublicationSchedulingState>
+	AuthoritativeCharacterNetwork::GetPublicationSchedulingState(ConnectionId Connection, ObjectId Character) const {
+		auto Peer = Peers.find(Connection);
+		auto Runtime = Characters.find(Character);
+		if (Peer == Peers.end() || Runtime == Characters.end() || !Peer->second.Materialized.contains(Character))
+			return std::nullopt;
+		auto Publication = Peer->second.Published.find(Character);
+		if (Publication == Peer->second.Published.end()) return std::nullopt;
+		const auto &State = Publication->second;
+		const bool Owner = Runtime->second.Controller == Connection;
+		const bool Promoted = Runtime->second.SemanticPromotionUntilTick > LastAuthoritativeTick ||
+							  State.TemporaryFullRateUntilTick > LastAuthoritativeTick;
+		return CharacterPublicationSchedulingState{
+			.Tier = Owner || Promoted ? CharacterPublicationTier::FullRate : State.Tier,
+			.LastAcceptedPublicationTick = State.LastPublicationTick,
+			.DesiredDueTick = State.DesiredDueTick,
+			.HardDeadlineTick = State.HardDeadlineTick,
+			.HasPublished = State.HasPublished,
+			.Due = State.QueueKind != PeerState::PublicationQueueKind::None &&
+				   State.QueueKind != PeerState::PublicationQueueKind::Wheel,
+			.Forced = State.QueueKind == PeerState::PublicationQueueKind::Forced,
+		};
 	}
 
 	struct PredictedCharacterNetwork::ReplicaState {

@@ -98,6 +98,25 @@ namespace gargantuan::network {
 		std::uint64_t CharacterMaximumStateAgeTicks = 0;
 		std::uint64_t CharacterImportanceCpuNanoseconds = 0;
 		std::uint64_t CharacterDueSetCpuNanoseconds = 0;
+		std::uint64_t CharacterPublicationBudgetConsumed = 0;
+		std::uint64_t CharacterPublicationStatesSelected = 0;
+		std::uint64_t CharacterPublicationStatesAccepted = 0;
+		std::uint64_t CharacterPublicationStatesOffered = 0;
+		std::uint64_t CharacterPublicationStatesDeferred = 0;
+		std::uint64_t CharacterPublicationOverdueRelationships = 0;
+		std::uint64_t CharacterPublicationDeadlineMisses = 0;
+		std::uint64_t CharacterPublicationLatencySamples = 0;
+		std::uint64_t CharacterPublicationLatencyTicks = 0;
+		std::uint64_t CharacterMaximumPublicationLatencyTicks = 0;
+		std::uint64_t CharacterMaximumOwnerStateAgeTicks = 0;
+		std::uint64_t CharacterPublicationOwnerDeferrals = 0;
+		std::uint64_t CharacterPublicationBudgetExhaustions = 0;
+		std::uint64_t CharacterPublicationSchedulerRejections = 0;
+		std::uint64_t CharacterPublicationSelectionCpuNanoseconds = 0;
+		std::uint64_t CharacterPublicationActiveRelationships = 0;
+		std::uint64_t CharacterPublicationCurrentDueRelationships = 0;
+		std::uint64_t CharacterPublicationCurrentOverdueRelationships = 0;
+		std::uint64_t CharacterMaximumCurrentPublicationAgeTicks = 0;
 	};
 
 	class GameSession final {

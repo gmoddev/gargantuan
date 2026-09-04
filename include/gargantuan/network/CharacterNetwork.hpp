@@ -48,6 +48,12 @@ namespace gargantuan::network {
 	inline constexpr float DefaultReducedRateCharacterDistance = 160.0f;
 	inline constexpr float DefaultCharacterImportanceHysteresis = 16.0f;
 	inline constexpr std::size_t MaximumCharacterPublicationFocusPoints = 4;
+	inline constexpr std::size_t DefaultCharacterPublicationStatesPerPeerTick = 512;
+	inline constexpr std::size_t DefaultCharacterPublicationStatesPerTick = 8192;
+	inline constexpr std::size_t DefaultCharacterPublicationPeerQuantum = 510;
+	inline constexpr std::size_t MaximumCharacterPublicationStatesPerPeerTick = MaximumNetworkCharacters;
+	inline constexpr std::size_t MaximumCharacterPublicationStatesPerTick = 65536;
+	inline constexpr std::size_t CharacterPublicationWheelSlots = 64;
 	inline constexpr std::uint64_t TinyCorrectionSmoothingTicks = 3;
 	inline constexpr std::uint64_t SmallCorrectionSmoothingTicks = 6;
 
@@ -68,6 +74,9 @@ namespace gargantuan::network {
 		float ReducedRateDistance = DefaultReducedRateCharacterDistance;
 		float ImportanceHysteresis = DefaultCharacterImportanceHysteresis;
 		std::size_t MaximumStateFrameBytes = MaximumCharacterStateFrameBytes;
+		std::size_t MaximumPublicationStatesPerPeerTick = DefaultCharacterPublicationStatesPerPeerTick;
+		std::size_t MaximumPublicationStatesPerTick = DefaultCharacterPublicationStatesPerTick;
+		std::size_t PublicationPeerQuantum = DefaultCharacterPublicationPeerQuantum;
 
 		[[nodiscard]] bool IsValid() const;
 		[[nodiscard]] std::uint64_t PublicationIntervalTicks() const;
@@ -162,9 +171,59 @@ namespace gargantuan::network {
 		std::uint64_t ImportanceEvaluationCpuNanoseconds = 0;
 		std::uint64_t DueSetCpuNanoseconds = 0;
 		std::uint64_t SchedulerSubmitCpuNanoseconds = 0;
+		std::uint64_t PublicationBudgetTicks = 0;
+		std::uint64_t PublicationBudgetAvailable = 0;
+		std::uint64_t PublicationBudgetConsumed = 0;
+		std::uint64_t PublicationStatesSelected = 0;
+		std::uint64_t PublicationStatesAccepted = 0;
+		std::uint64_t PublicationRequiredStatesSelected = 0;
+		std::uint64_t PublicationRequiredStatesAccepted = 0;
+		std::uint64_t PublicationOfferedStates = 0;
+		std::uint64_t PublicationStatesDeferred = 0;
+		std::uint64_t PublicationOverdueRelationships = 0;
+		std::uint64_t PublicationDeadlineMisses = 0;
+		std::uint64_t PublicationDeadlineEscalations = 0;
+		std::uint64_t PublicationFullRateDeadlineMisses = 0;
+		std::uint64_t PublicationReducedRateDeadlineMisses = 0;
+		std::uint64_t PublicationLowRateDeadlineMisses = 0;
+		std::uint64_t PublicationLatencySamples = 0;
+		std::uint64_t PublicationLatencyTicks = 0;
+		std::uint64_t MaximumPublicationLatencyTicks = 0;
+		std::uint64_t PublicationLatencyOneToThree = 0;
+		std::uint64_t PublicationLatencyFourToSix = 0;
+		std::uint64_t PublicationLatencySevenToTwelve = 0;
+		std::uint64_t PublicationLatencyOverTwelve = 0;
+		std::uint64_t PublicationOwnerAgeSamples = 0;
+		std::uint64_t PublicationOwnerAgeTicks = 0;
+		std::uint64_t MaximumPublicationOwnerAgeTicks = 0;
+		std::uint64_t PublicationOwnerDeferrals = 0;
+		std::uint64_t PublicationPeerFairnessRotations = 0;
+		std::uint64_t PublicationGlobalBudgetExhaustions = 0;
+		std::uint64_t PublicationSchedulerRejections = 0;
+		std::uint64_t PublicationLargeTickRebuilds = 0;
+		std::uint64_t PublicationActiveRelationships = 0;
+		std::uint64_t PublicationCurrentDueRelationships = 0;
+		std::uint64_t PublicationCurrentOverdueRelationships = 0;
+		std::uint64_t PublicationCurrentForcedRelationships = 0;
+		std::uint64_t MaximumCurrentPublicationAgeTicks = 0;
+		std::uint64_t MaximumCurrentOwnerPublicationAgeTicks = 0;
+		std::uint64_t PublicationDueDiscoveryCpuNanoseconds = 0;
+		std::uint64_t PublicationSelectionCpuNanoseconds = 0;
+		std::uint64_t PublicationSnapshotCpuNanoseconds = 0;
+		std::uint64_t PublicationCommitCpuNanoseconds = 0;
 		std::uint64_t ReconciliationCpuNanoseconds = 0;
 		std::uint64_t ReplayCpuNanoseconds = 0;
 		std::uint64_t InterpolationCpuNanoseconds = 0;
+	};
+
+	struct CharacterPublicationSchedulingState {
+		CharacterPublicationTier Tier = CharacterPublicationTier::FullRate;
+		std::uint64_t LastAcceptedPublicationTick = 0;
+		std::uint64_t DesiredDueTick = 0;
+		std::uint64_t HardDeadlineTick = 0;
+		bool HasPublished = false;
+		bool Due = false;
+		bool Forced = false;
 	};
 
 	struct CharacterActionResolution {
@@ -217,6 +276,8 @@ namespace gargantuan::network {
 		[[nodiscard]] CharacterNetworkMetrics GetMetrics() const;
 		[[nodiscard]] std::optional<CharacterPublicationTier>
 		GetPublicationTier(ConnectionId Connection, ObjectId Character) const;
+		[[nodiscard]] std::optional<CharacterPublicationSchedulingState>
+		GetPublicationSchedulingState(ConnectionId Connection, ObjectId Character) const;
 
 	  private:
 		struct PeerState;
@@ -229,6 +290,7 @@ namespace gargantuan::network {
 		std::map<ConnectionId, PeerState> Peers;
 		std::map<ObjectId, CharacterState> Characters;
 		std::map<std::uint32_t, CharacterActionDefinition> Actions;
+		std::optional<ConnectionId> PublicationPeerCursor;
 		CharacterControlEpoch NextControlEpoch{1};
 		std::uint64_t LastAuthoritativeTick = 0;
 		CharacterNetworkMetrics Metrics;
@@ -244,6 +306,19 @@ namespace gargantuan::network {
 		BuildState(ObjectId Character, std::uint64_t AuthoritativeTick, bool Teleport = false);
 		void UpdateImportance(std::uint64_t AuthoritativeTick);
 		void PromoteCharacter(ObjectId Character, CharacterState &State, std::uint64_t AuthoritativeTick);
+		void MakeRelationshipDue(
+			PeerState &Peer, ConnectionId Connection, ObjectId Character, std::uint64_t AuthoritativeTick, bool Forced
+		);
+		void ScheduleRelationship(
+			PeerState &Peer,
+			ConnectionId Connection,
+			ObjectId Character,
+			std::uint64_t AuthoritativeTick,
+			bool IncludeCurrentPhase
+		);
+		void RefreshRelationshipSchedule(
+			PeerState &Peer, ConnectionId Connection, ObjectId Character, std::uint64_t AuthoritativeTick
+		);
 		void PublishStateFrames(std::uint64_t AuthoritativeTick);
 	};
 

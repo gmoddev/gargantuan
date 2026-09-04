@@ -29,6 +29,12 @@ Foundation 3E.1 made each materialization lifetime failure-atomic and added a
 that lifecycle model and adds compact scheduling metadata to each existing
 peer-Character relationship.
 
+Foundation 3G now owns the current bounded due-discovery and fair-selection
+implementation described in
+`devdocs/CurrentArchitecture/CharacterNetworkingFoundation3G.md`. This document
+remains authoritative for the 3F importance, cadence, phase, promotion, and
+variable-rate client presentation policy.
+
 ## Ownership and separation
 
 The server-owned `AuthoritativeCharacterNetwork` owns importance. `GameSession`
@@ -272,8 +278,8 @@ regions/portals/`SpatialAddress`, authentication/matchmaking/Node tickets,
 vehicle networking, combat rollback, generic abilities/Humanoid, animation
 graphs, Studio multiplayer tooling, and telemetry redesign.
 
-The next Character networking foundation should use production telemetry to
-validate the 5 Hz landing/loss bounds, add a fairness cursor only if real
-replaceable backpressure demonstrates starvation, and investigate structural
-admission allocation sharing only behind a proof of peer-specific invalidation
-and unchanged Player semantics.
+Foundation 3G has added the measured bounded publication budget, timing wheel,
+age escalation, and deterministic peer fairness cursor. Production telemetry
+should still validate the 5 Hz landing/loss and overload-hold bounds. Structural
+admission allocation sharing remains deferred behind a proof of peer-specific
+invalidation and unchanged Player semantics.
