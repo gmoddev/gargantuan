@@ -2,6 +2,7 @@
 
 #include "gargantuan/network/Limits.hpp"
 #include "gargantuan/network/Outcome.hpp"
+#include "gargantuan/network/ReplicationCoordinator.hpp"
 #include "gargantuan/network/ReplicationRelevance.hpp"
 #include "gargantuan/network/Transport.hpp"
 #include "gargantuan/runtime/ObjectId.hpp"
@@ -47,6 +48,7 @@ namespace gargantuan::network {
 		std::uint64_t HandshakeTimeoutTicks = DefaultGameSessionHandshakeTimeoutTicks;
 		std::uint64_t ClientNonce = 0;
 		ReplicationRelevanceConfiguration Relevance;
+		StructuralReplicationConfiguration StructuralReplication;
 		bool AllowInsecureDevelopmentNetwork = false;
 
 		[[nodiscard]] bool IsValid() const;
@@ -110,6 +112,31 @@ namespace gargantuan::network {
 		std::uint64_t StructuralBytesEncoded = 0;
 		std::uint64_t StructuralBytesReused = 0;
 		std::uint64_t ScratchHighWaterBytes = 0;
+		std::uint64_t StructuralSchedulingTicks = 0;
+		std::uint64_t StructuralTransitionsOffered = 0;
+		std::uint64_t StructuralTransitionsSelected = 0;
+		std::uint64_t StructuralTransitionsPrepared = 0;
+		std::uint64_t StructuralTransitionsEncoded = 0;
+		std::uint64_t StructuralTransitionsAccepted = 0;
+		std::uint64_t StructuralTransitionsCommitted = 0;
+		std::uint64_t StructuralTransitionsDeferredByBudget = 0;
+		std::uint64_t StructuralTransitionsCancelled = 0;
+		std::uint64_t StructuralTransitionsReplanned = 0;
+		std::uint64_t StructuralDeadlineMisses = 0;
+		std::uint64_t StructuralPeerFairnessRotations = 0;
+		std::uint64_t StructuralGlobalBudgetExhaustions = 0;
+		std::uint64_t StructuralDependencyPlanOperations = 0;
+		std::uint64_t StructuralBacklogLimitFailures = 0;
+		std::uint64_t StructuralJournalLagFailures = 0;
+		std::uint64_t StructuralMaximumJournalLagRecords = 0;
+		std::uint64_t StructuralPendingEnters = 0;
+		std::uint64_t StructuralPendingLeaves = 0;
+		std::uint64_t StructuralPendingCritical = 0;
+		std::uint64_t StructuralActivePeers = 0;
+		std::uint64_t StructuralOldestPendingAgeTicks = 0;
+		std::uint64_t StructuralCriticalOldestAgeTicks = 0;
+		std::uint64_t StructuralSelectionCpuNanoseconds = 0;
+		std::uint64_t StructuralMaximumTransitionsSelectedPerTick = 0;
 		std::uint64_t CharacterImportanceEvaluations = 0;
 		std::uint64_t CharacterImportanceTierTransitions = 0;
 		std::uint64_t CharacterTemporaryPromotions = 0;

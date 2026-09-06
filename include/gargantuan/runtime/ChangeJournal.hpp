@@ -3,6 +3,7 @@
 #include "gargantuan/runtime/ObjectId.hpp"
 
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <limits>
@@ -17,6 +18,8 @@
 #include "gargantuan/runtime/WireValue.hpp"
 
 namespace gargantuan {
+	inline constexpr std::size_t DefaultChangeJournalCapacity = 16'384;
+
 	class InProcessReplicationSession;
 	namespace network { class ReplicaApplier; }
 
@@ -109,7 +112,7 @@ namespace gargantuan {
 			std::deque<ChangeRecord> Records;
 		};
 		mutable std::mutex Mutex;
-		std::size_t Capacity = 4096;
+		std::size_t Capacity = DefaultChangeJournalCapacity;
 		std::unordered_map<ObjectId, Stream> Streams;
 		std::atomic<bool> ProfilingEnabled = false;
 		std::atomic<std::uint64_t> ProfileCommitCount = 0;

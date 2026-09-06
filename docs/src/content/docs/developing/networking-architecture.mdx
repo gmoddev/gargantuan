@@ -439,6 +439,12 @@ of the accepted decisions above.
   known-object state, materialization/frame epochs, soft-reference patches, and
   reliable scheduler commit remain peer-specific. Prepared and uncached paths
   encode identical GRPL v1 bytes, with no client cache protocol or Luau API.
+- [x] **Bound structural transitions without weakening reliable semantics.**
+  Foundation 3J retains compact peer Enter/Leave work after 3E, selects complete
+  dependency-safe groups under trusted per-peer/global work limits, rotates
+  peer service deterministically, prioritizes required bootstrap, and commits
+  KnownObjects/cursors only after reliable scheduler acceptance. GRPL v1 and
+  the client replication architecture remain unchanged.
 
 Node integration for discovery and join tickets can proceed independently once
 the handshake contract exists. Collaborative editing remains later work.

@@ -128,8 +128,7 @@ int main() {
 	if (!OwnerAttribute.Succeeded())
 		std::cerr << "[Replication:RelevanceTest] owner Attribute production failed: " << OwnerAttribute.Error << '\n';
 	Check(
-		OwnerAttribute.Succeeded(),
-		"owner-required Character remains eligible for incremental structural publication"
+		OwnerAttribute.Succeeded(), "owner-required Character remains eligible for incremental structural publication"
 	);
 	bool OwnerAttributeApplied = false;
 	if (OwnerAttribute.Frame) {
@@ -141,8 +140,7 @@ int main() {
 	Check(OwnerAttributeApplied, "owner-required Character Attribute applies to the replica");
 	auto ReplicaLocalCharacter = std::dynamic_pointer_cast<Character>(Replica.Resolve(LocalCharacter->GetObjectId()));
 	Check(
-		ReplicaLocalCharacter &&
-			ReplicaLocalCharacter->GetAttributeValue("OwnerServerProof") == WireValue(true),
+		ReplicaLocalCharacter && ReplicaLocalCharacter->GetAttributeValue("OwnerServerProof") == WireValue(true),
 		"a server-authored Attribute reaches the materialized controlled Character"
 	);
 
@@ -422,14 +420,12 @@ int main() {
 	auto DenseLeaveSecond = BudgetCoordinator.UpdateRelevance(BudgetConnection, RootOnly);
 	std::size_t DestroyOperations = 0;
 	if (DenseLeaveSecond.Frame)
-		DestroyOperations = std::ranges::count_if(
-			DenseLeaveSecond.Frame->Operations,
-			[](const auto &Operation) { return std::holds_alternative<DestroyReplication>(Operation.Intent); }
-		);
+		DestroyOperations = std::ranges::count_if(DenseLeaveSecond.Frame->Operations, [](const auto &Operation) {
+			return std::holds_alternative<DestroyReplication>(Operation.Intent);
+		});
 	Check(
-		DenseLeaveSecond.Succeeded() && DenseLeaveSecond.Frame->Operations.size() == 5 &&
-			DestroyOperations == 1 && BudgetReplica.ApplyFrame(*DenseLeaveSecond.Frame).Succeeded() &&
-			DenseObjects.back()->GetDestroyed() &&
+		DenseLeaveSecond.Succeeded() && DenseLeaveSecond.Frame->Operations.size() == 5 && DestroyOperations == 1 &&
+			BudgetReplica.ApplyFrame(*DenseLeaveSecond.Frame).Succeeded() && DenseObjects.back()->GetDestroyed() &&
 			std::ranges::all_of(
 				std::span(DenseObjects).first(DenseObjects.size() - 1),
 				[](const auto &Object) { return !Object->GetDestroyed(); }
@@ -474,8 +470,7 @@ int main() {
 		.RequiredObjects = {EnterRaceWorld->GetObjectId()},
 		.DesiredObjects = {EnterRaceWorld->GetObjectId()},
 	};
-	auto EnterRaceBaseline =
-		EnterRaceCoordinator.AddPeer(EnterRaceConnection, ReplicationEpoch(1), EnterRaceSelection);
+	auto EnterRaceBaseline = EnterRaceCoordinator.AddPeer(EnterRaceConnection, ReplicationEpoch(1), EnterRaceSelection);
 	std::vector<std::shared_ptr<Folder>> EnterRaceObjects;
 	EnterRaceObjects.reserve(MaximumRelevanceTransitionsPerFrame + 1);
 	for (std::size_t Index = 0; Index < MaximumRelevanceTransitionsPerFrame + 1; ++Index) {
@@ -500,13 +495,11 @@ int main() {
 	const auto *EnterRaceView = EnterRaceCoordinator.GetView(EnterRaceConnection);
 	Check(EnterRaceBaseline.Succeeded(), "pending-enter destruction fixture produces its baseline");
 	Check(
-		EnterRaceFirst.Succeeded() &&
-			EnterRaceFirst.Frame->Operations.size() == MaximumRelevanceTransitionsPerFrame,
+		EnterRaceFirst.Succeeded() && EnterRaceFirst.Frame->Operations.size() == MaximumRelevanceTransitionsPerFrame,
 		"pending-enter destruction fixture leaves exactly one target behind its budget"
 	);
 	Check(
-		!EnterRaceSecond.Succeeded() &&
-			EnterRaceSecond.Error == "No replication relevance changes are available",
+		!EnterRaceSecond.Succeeded() && EnterRaceSecond.Error == "No replication relevance changes are available",
 		"destroying the pending target produces no stale lifecycle work"
 	);
 	Check(
@@ -533,24 +526,34 @@ int main() {
 	std::ranges::sort(DependencySelection.DesiredObjects);
 	auto DependencyEnterFirst = BudgetCoordinator.UpdateRelevance(BudgetConnection, DependencySelection);
 	auto DependencyEnterSecond = BudgetCoordinator.UpdateRelevance(BudgetConnection, DependencySelection);
+	const auto DependencyEnterFirstApplied = DependencyEnterFirst.Frame
+												 ? BudgetReplica.ApplyFrame(*DependencyEnterFirst.Frame)
+												 : ReplicaApplyResult{};
+	const auto DependencyEnterSecondApplied = DependencyEnterSecond.Frame
+												  ? BudgetReplica.ApplyFrame(*DependencyEnterSecond.Frame)
+												  : ReplicaApplyResult{};
 	Check(
 		DependencyEnterFirst.Succeeded() &&
 			DependencyEnterFirst.Frame->Operations.size() == MaximumRelevanceTransitionsPerFrame &&
-			BudgetReplica.ApplyFrame(*DependencyEnterFirst.Frame).Succeeded() && DependencyEnterSecond.Succeeded() &&
-			DependencyEnterSecond.Frame->Operations.size() == 1 &&
-			BudgetReplica.ApplyFrame(*DependencyEnterSecond.Frame).Succeeded() &&
+			DependencyEnterFirstApplied.Succeeded() && DependencyEnterSecond.Succeeded() &&
+			DependencyEnterSecond.Frame->Operations.size() == 1 && DependencyEnterSecondApplied.Succeeded() &&
 			BudgetReplica.Resolve(DependencyPlayer->GetObjectId()) &&
 			BudgetReplica.Resolve(DependencyCharacter->GetObjectId()),
 		"owner-required hard-reference group is prioritized and never publishes a referrer before its target"
 	);
 	auto DependencyLeaveFirst = BudgetCoordinator.UpdateRelevance(BudgetConnection, RootOnly);
 	auto DependencyLeaveSecond = BudgetCoordinator.UpdateRelevance(BudgetConnection, RootOnly);
+	const auto DependencyLeaveFirstApplied = DependencyLeaveFirst.Frame
+												 ? BudgetReplica.ApplyFrame(*DependencyLeaveFirst.Frame)
+												 : ReplicaApplyResult{};
+	const auto DependencyLeaveSecondApplied = DependencyLeaveSecond.Frame
+												  ? BudgetReplica.ApplyFrame(*DependencyLeaveSecond.Frame)
+												  : ReplicaApplyResult{};
 	Check(
 		DependencyLeaveFirst.Succeeded() &&
 			DependencyLeaveFirst.Frame->Operations.size() == MaximumRelevanceTransitionsPerFrame &&
-			BudgetReplica.ApplyFrame(*DependencyLeaveFirst.Frame).Succeeded() && DependencyLeaveSecond.Succeeded() &&
-			DependencyLeaveSecond.Frame->Operations.size() == 1 &&
-			BudgetReplica.ApplyFrame(*DependencyLeaveSecond.Frame).Succeeded(),
+			DependencyLeaveFirstApplied.Succeeded() && DependencyLeaveSecond.Succeeded() &&
+			DependencyLeaveSecond.Frame->Operations.size() == 1 && DependencyLeaveSecondApplied.Succeeded(),
 		"hard-reference leave orders dependents ahead of targets across a transition budget boundary"
 	);
 
@@ -591,8 +594,8 @@ int main() {
 		.DesiredObjects = {ReplacementWorld->GetObjectId(), ReplacementPlayer->GetObjectId()},
 	};
 	auto ReplacementFirst = ReplacementCoordinator.UpdateRelevance(ReplacementConnection, ReplacementSelection);
-	const auto ReplacementFirstApplied =
-		ReplacementFirst.Frame ? ReplacementReplica.ApplyFrame(*ReplacementFirst.Frame) : ReplicaApplyResult{};
+	const auto ReplacementFirstApplied = ReplacementFirst.Frame ? ReplacementReplica.ApplyFrame(*ReplacementFirst.Frame)
+																: ReplicaApplyResult{};
 	auto ReplacementPlayerReplica = std::dynamic_pointer_cast<Player>(
 		ReplacementReplica.Resolve(ReplacementPlayer->GetObjectId())
 	);
@@ -610,6 +613,225 @@ int main() {
 		ReplacementSecond.Succeeded() && ReplacementReplica.ApplyFrame(*ReplacementSecond.Frame).Succeeded() &&
 			!ReplacementCoordinator.HasPendingRelevance(ReplacementConnection),
 		"deferred unrelated leaves drain after the replacement reference is safe"
+	);
+
+	auto ScheduledWorld = std::make_shared<DataModel>();
+	StructuralReplicationConfiguration ScheduledConfiguration{
+		.MaximumTransitionsPerPeerTick = 4,
+		.MaximumTransitionsPerTick = 8,
+		.PeerQuantum = 2,
+		.MaximumPendingTransitionsPerPeer = 64,
+		.TransitionDeadlineTicks = 3,
+	};
+	ReplicationCoordinator ScheduledCoordinator(ScheduledWorld, {}, true, ScheduledConfiguration);
+	const ConnectionId ScheduledConnection{11, 1};
+	PeerRelevanceSelection ScheduledSelection{
+		.RequiredObjects = {ScheduledWorld->GetObjectId()},
+		.DesiredObjects = {ScheduledWorld->GetObjectId()},
+	};
+	std::vector<std::shared_ptr<Folder>> ScheduledObjects;
+	std::vector<ObjectId> ExpectedScheduledOrder;
+	for (std::size_t Index = 0; Index < 12; ++Index) {
+		auto Object = std::make_shared<Folder>();
+		Object->SetParent(ScheduledWorld);
+		ScheduledSelection.DesiredObjects.push_back(Object->GetObjectId());
+		ExpectedScheduledOrder.push_back(Object->GetObjectId());
+		ScheduledObjects.push_back(std::move(Object));
+	}
+	std::ranges::sort(ScheduledSelection.DesiredObjects);
+	std::ranges::sort(ExpectedScheduledOrder);
+	auto ScheduledBaseline = ScheduledCoordinator.AddPeerBounded(
+		ScheduledConnection, ReplicationEpoch(1), ScheduledSelection
+	);
+	ReplicaApplier ScheduledReplica;
+	Check(
+		ScheduledBaseline.Succeeded() && ScheduledBaseline.Frame->Operations.size() == 1 &&
+			ScheduledReplica.ApplyFrame(*ScheduledBaseline.Frame).Succeeded() &&
+			ScheduledCoordinator.GetMetrics().MaterializationBacklog == 13 &&
+			ScheduledCoordinator.GetMetrics().ObjectsPublished == 0 &&
+			!ScheduledCoordinator.GetView(ScheduledConnection)->Knows(ScheduledWorld->GetObjectId()),
+		"bounded bootstrap prepares only its required dependency closure and retains compact ordinary work"
+	);
+	Check(
+		!ScheduledCoordinator.CommitSchedulerAcceptance(ScheduledConnection, ReliableReplicationSequence(99))
+				.Succeeded() &&
+			!ScheduledCoordinator.GetView(ScheduledConnection)->Knows(ScheduledWorld->GetObjectId()),
+		"mismatched scheduler acceptance cannot commit a prepared structural frame"
+	);
+	Check(
+		ScheduledCoordinator.CommitSchedulerAcceptance(ScheduledConnection, ScheduledBaseline.Frame->Sequence)
+				.Succeeded() &&
+			ScheduledCoordinator.GetMetrics().MaterializationBacklog == 12 &&
+			ScheduledCoordinator.GetMetrics().ObjectsPublished == 1 &&
+			ScheduledCoordinator.GetView(ScheduledConnection)->Knows(ScheduledWorld->GetObjectId()),
+		"bounded bootstrap becomes committed only after scheduler acceptance"
+	);
+
+	const auto CancelledObject = ExpectedScheduledOrder.back();
+	ScheduledSelection.DesiredObjects.erase(std::ranges::find(ScheduledSelection.DesiredObjects, CancelledObject));
+	ExpectedScheduledOrder.pop_back();
+	auto RecordedScheduled = ScheduledCoordinator.RecordDesiredState(ScheduledConnection, ScheduledSelection, 1);
+	Check(
+		RecordedScheduled.Succeeded() && ScheduledCoordinator.GetMetrics().MaterializationBacklog == 11 &&
+			ScheduledCoordinator.GetMetrics().StructuralTransitionsCancelled == 1,
+		"an object that becomes undesired before materialization cancels without a create/destroy pair"
+	);
+
+	std::vector<ObjectId> ActualScheduledOrder;
+	for (std::uint64_t Tick = 10; Tick < 32 && ScheduledCoordinator.HasPendingRelevance(ScheduledConnection); ++Tick) {
+		auto Produced = ScheduledCoordinator.ProducePendingRelevance(ScheduledConnection, 2, Tick);
+		Check(
+			Produced.Succeeded() && Produced.SelectedTransitions <= 2 &&
+				ScheduledReplica.ApplyFrame(*Produced.Frame).Succeeded(),
+			"constrained structural scheduling emits a dependency-safe bounded frame"
+		);
+		if (!Produced.Succeeded()) break;
+		std::vector<ObjectId> SelectedObjects;
+		for (const auto &Operation : Produced.Frame->Operations)
+			if (IsPublishReplication(Operation.Intent))
+				SelectedObjects.push_back(GetReplicationObject(Operation.Intent));
+		const auto BeforeAcceptance = ScheduledCoordinator.GetMetrics();
+		Check(
+			BeforeAcceptance.StructuralTransitionsSelected ==
+					BeforeAcceptance.StructuralTransitionsAccepted + Produced.SelectedTransitions &&
+				std::ranges::none_of(
+					SelectedObjects,
+					[&](ObjectId Object) { return ScheduledCoordinator.GetView(ScheduledConnection)->Knows(Object); }
+				),
+			"selection and preparation do not claim scheduler acceptance or structural commit"
+		);
+		Check(
+			ScheduledCoordinator.CommitSchedulerAcceptance(ScheduledConnection, Produced.Frame->Sequence).Succeeded(),
+			"accepted bounded structural frame commits its exact prepared transition set"
+		);
+		ActualScheduledOrder.insert(ActualScheduledOrder.end(), SelectedObjects.begin(), SelectedObjects.end());
+	}
+	const auto ScheduledMetrics = ScheduledCoordinator.GetMetrics();
+	Check(
+		ActualScheduledOrder == ExpectedScheduledOrder &&
+			!ScheduledCoordinator.HasPendingRelevance(ScheduledConnection) &&
+			ScheduledMetrics.StructuralTransitionsSelected == ScheduledMetrics.StructuralTransitionsAccepted &&
+			ScheduledMetrics.StructuralTransitionsAccepted == ScheduledMetrics.StructuralTransitionsCommitted &&
+			ScheduledMetrics.StructuralTransitionsDeferredByBudget != 0 &&
+			ScheduledMetrics.StructuralDeadlineMisses != 0,
+		"persistent age-ordered scheduling drains every eligible ObjectId and reports overload honestly"
+	);
+	Check(
+		ScheduledReplica.Resolve(CancelledObject) == nullptr,
+		"cancelled pending materialization never becomes visible to the client replica"
+	);
+
+	auto CoalescedWorld = std::make_shared<DataModel>();
+	auto CoalescedFirst = std::make_shared<Folder>();
+	CoalescedFirst->SetParent(CoalescedWorld);
+	auto CoalescedSecond = std::make_shared<Folder>();
+	CoalescedSecond->SetParent(CoalescedWorld);
+	ReplicationCoordinator CoalescedCoordinator(CoalescedWorld, {}, true, ScheduledConfiguration);
+	const ConnectionId CoalescedConnection{13, 1};
+	PeerRelevanceSelection CoalescedSelection{
+		.RequiredObjects = {CoalescedWorld->GetObjectId()},
+		.DesiredObjects = {
+			CoalescedWorld->GetObjectId(), CoalescedFirst->GetObjectId(), CoalescedSecond->GetObjectId()
+		},
+	};
+	std::ranges::sort(CoalescedSelection.DesiredObjects);
+	auto CoalescedRegistration = CoalescedCoordinator.RegisterPeerBounded(
+		CoalescedConnection, ReplicationEpoch(1), CoalescedSelection
+	);
+	auto CoalescedBaseline = CoalescedCoordinator.ProducePendingBaseline(CoalescedConnection, 1, 1);
+	ReplicaApplier CoalescedReplica;
+	Check(
+		CoalescedRegistration.Succeeded() && CoalescedBaseline.Succeeded() &&
+			CoalescedReplica.ApplyFrame(*CoalescedBaseline.Frame).Succeeded() &&
+			CoalescedCoordinator.CommitSchedulerAcceptance(CoalescedConnection, CoalescedBaseline.Frame->Sequence)
+				.Succeeded(),
+		"coalescing fixture commits only its required root before ordinary structural work"
+	);
+	CoalescedSecond->SetName("CurrentWhilePending");
+	auto SkippedPendingMutation = CoalescedCoordinator.ProduceIncremental(CoalescedConnection, 2);
+	Check(
+		!SkippedPendingMutation.Succeeded() &&
+			SkippedPendingMutation.Error == "No relevant replication changes are available",
+		"journal progress skips history for a peer that has not materialized the pending object"
+	);
+	auto CoalescedEnters = CoalescedCoordinator.ProducePendingRelevance(CoalescedConnection, 2, 2);
+	Check(
+		CoalescedEnters.Succeeded() && CoalescedReplica.ApplyFrame(*CoalescedEnters.Frame).Succeeded() &&
+			CoalescedCoordinator.CommitSchedulerAcceptance(CoalescedConnection, CoalescedEnters.Frame->Sequence)
+				.Succeeded(),
+		"pending objects materialize from their current template after skipped unknown-object history"
+	);
+	auto CoalescedReplicaObject = CoalescedReplica.Resolve(CoalescedSecond->GetObjectId());
+	Check(
+		CoalescedReplicaObject && CoalescedReplicaObject->GetName() == "CurrentWhilePending",
+		"eventual materialization contains the newest authoritative state without historical replay"
+	);
+	auto NoHistoricalReplay = CoalescedCoordinator.ProduceIncremental(CoalescedConnection, 2);
+	Check(
+		!NoHistoricalReplay.Succeeded() && NoHistoricalReplay.Error == "No replication changes are available",
+		"coalesced pending-object mutation does not remain as a later journal update"
+	);
+
+	PeerRelevanceSelection ScheduledLeaveSelection{
+		.RequiredObjects = {ScheduledWorld->GetObjectId()},
+		.DesiredObjects = {ScheduledWorld->GetObjectId()},
+	};
+	auto RecordedLeaves = ScheduledCoordinator.RecordDesiredState(ScheduledConnection, ScheduledLeaveSelection, 40);
+	const auto RetainedObject = ExpectedScheduledOrder.front();
+	ScheduledLeaveSelection.DesiredObjects.push_back(RetainedObject);
+	std::ranges::sort(ScheduledLeaveSelection.DesiredObjects);
+	auto CancelledLeave = ScheduledCoordinator.RecordDesiredState(ScheduledConnection, ScheduledLeaveSelection, 41);
+	Check(
+		RecordedLeaves.Succeeded() && CancelledLeave.Succeeded() &&
+			ScheduledCoordinator.GetView(ScheduledConnection)->Knows(RetainedObject) &&
+			ScheduledCoordinator.GetMetrics().MaterializationBacklog == ExpectedScheduledOrder.size() - 1,
+		"ordinary leave cancelled by renewed desire preserves the committed materialization lifetime"
+	);
+
+	StructuralReplicationConfiguration InvalidStructuralConfiguration;
+	InvalidStructuralConfiguration.MaximumTransitionsPerPeerTick = 0;
+	Check(!InvalidStructuralConfiguration.IsValid(), "production structural scheduling rejects a zero peer budget");
+	InvalidStructuralConfiguration = {};
+	InvalidStructuralConfiguration.PeerQuantum = InvalidStructuralConfiguration.MaximumTransitionsPerPeerTick + 1;
+	Check(
+		!InvalidStructuralConfiguration.IsValid(),
+		"production structural scheduling rejects a peer quantum larger than its peer budget"
+	);
+	InvalidStructuralConfiguration = {};
+	InvalidStructuralConfiguration.MaximumPendingTransitions =
+		InvalidStructuralConfiguration.MaximumPendingTransitionsPerPeer - 1;
+	Check(
+		!InvalidStructuralConfiguration.IsValid(),
+		"production structural scheduling rejects a global pending limit below its per-peer limit"
+	);
+
+	StructuralReplicationConfiguration GlobalPendingConfiguration;
+	GlobalPendingConfiguration.MaximumTransitionsPerPeerTick = 2;
+	GlobalPendingConfiguration.MaximumTransitionsPerTick = 2;
+	GlobalPendingConfiguration.PeerQuantum = 2;
+	GlobalPendingConfiguration.MaximumPendingTransitionsPerPeer = 2;
+	GlobalPendingConfiguration.MaximumPendingTransitions = 2;
+	auto GlobalPendingWorld = std::make_shared<DataModel>();
+	auto GlobalPendingFirst = std::make_shared<Folder>();
+	GlobalPendingFirst->SetParent(GlobalPendingWorld);
+	auto GlobalPendingSecond = std::make_shared<Folder>();
+	GlobalPendingSecond->SetParent(GlobalPendingWorld);
+	ReplicationCoordinator GlobalPendingCoordinator(GlobalPendingWorld, {}, true, GlobalPendingConfiguration);
+	PeerRelevanceSelection GlobalPendingSelection{
+		.RequiredObjects = {GlobalPendingWorld->GetObjectId()},
+		.DesiredObjects = {
+			GlobalPendingWorld->GetObjectId(), GlobalPendingFirst->GetObjectId(), GlobalPendingSecond->GetObjectId()
+		},
+	};
+	std::ranges::sort(GlobalPendingSelection.DesiredObjects);
+	auto GlobalPendingRegistration = GlobalPendingCoordinator.RegisterPeerBounded(
+		{14, 1}, ReplicationEpoch(1), GlobalPendingSelection
+	);
+	Check(
+		!GlobalPendingRegistration.Succeeded() &&
+			GlobalPendingCoordinator.GetMetrics().StructuralBacklogLimitFailures == 1 &&
+			GlobalPendingCoordinator.GetMetrics().MaterializationBacklog == 0,
+		"the global pending ceiling fails only the registering peer and releases its partial queue"
 	);
 
 	PeerRelevanceSelection OversizedSelection = RootOnly;
@@ -639,11 +861,12 @@ int main() {
 		CycleReplica.Resolve(RemotePlayer->GetObjectId())
 	);
 	Check(
-		CycleDestroy.Succeeded() && CycleReplica.ApplyFrame(*CycleDestroy.Frame).Succeeded() &&
-			ReplicaCyclePlayer && !ReplicaCyclePlayer->GetCharacter() &&
-			std::ranges::any_of(CycleDestroy.Frame->Operations, [](const auto &Operation) {
-				return std::holds_alternative<DestroyReplication>(Operation.Intent);
-			}),
+		CycleDestroy.Succeeded() && CycleReplica.ApplyFrame(*CycleDestroy.Frame).Succeeded() && ReplicaCyclePlayer &&
+			!ReplicaCyclePlayer->GetCharacter() &&
+			std::ranges::any_of(
+				CycleDestroy.Frame->Operations,
+				[](const auto &Operation) { return std::holds_alternative<DestroyReplication>(Operation.Intent); }
+			),
 		"authoritative Character destroy clears the hard Player reference before retiring the replica"
 	);
 

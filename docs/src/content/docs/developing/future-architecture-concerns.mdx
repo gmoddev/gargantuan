@@ -98,7 +98,7 @@ An ADR is required before selecting an IDL or changing a public wire format.
 attributes, tags, and custom/extension state. It tracks journal position,
 authoritative revision, local snapshot version, and invalid identities. The
 projection is bounded to 65,536 objects; journal application is bounded to
-4,096 records per batch. The engine journal retains 4,096 records per scope by
+4,096 records per batch. The engine journal retains 16,384 records per scope by
 default and requests a resnapshot when a cursor falls behind.
 
 This is the necessary cost of a responsive process-separated editor, not a
@@ -353,7 +353,7 @@ These questions remain valuable audits but were not validated as defects:
    publication or a proven non-authoritative receiver scope?
 3. Can commit/response/projection failures always distinguish not-committed,
    committed-and-observed, and committed-but-projection-unavailable states?
-4. Do 65,536-object documents, 4,096-record journal windows, replication frames,
+4. Do 65,536-object documents, 16,384-record journal windows, replication frames,
    and network queues remain usable under one combined end-to-end workload?
 5. Can supported rolling upgrades preserve schema, package, replication, Node,
    Studio, MCP, and Telemetry compatibility without treating their versions as

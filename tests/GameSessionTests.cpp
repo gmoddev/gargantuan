@@ -1,3 +1,4 @@
+#include "../src/network/GameSessionTestAccess.hpp"
 #include "gargantuan/Engine.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/KinematicCharacter.hpp"
@@ -5,8 +6,8 @@
 #include "gargantuan/classes/RemoteEvent.hpp"
 #include "gargantuan/classes/Script.hpp"
 #include "gargantuan/filesystem/DiskFilesystem.hpp"
-#include "gargantuan/network/GameSession.hpp"
 #include "gargantuan/network/CharacterNetwork.hpp"
+#include "gargantuan/network/GameSession.hpp"
 #include "gargantuan/network/GameSessionProtocol.hpp"
 #include "gargantuan/network/SimulatedTransport.hpp"
 #include "gargantuan/packaging/PackageBuilder.hpp"
@@ -15,7 +16,6 @@
 #include "gargantuan/services/AssetService.hpp"
 #include "gargantuan/services/CharacterControlService.hpp"
 #include "gargantuan/services/Players.hpp"
-#include "../src/network/GameSessionTestAccess.hpp"
 
 #include <array>
 #include <chrono>
@@ -130,7 +130,9 @@ namespace {
 			EngineProviderConfiguration{.AudioEnabled = false, .Mode = RuntimeMode::NetworkServer}
 		);
 		{
-			GameSession Server(ServerTransport, Configuration(GameSessionRole::Server, "signal-lifetime"), &ServerRuntime);
+			GameSession Server(
+				ServerTransport, Configuration(GameSessionRole::Server, "signal-lifetime"), &ServerRuntime
+			);
 			Check(Server.Start().Succeeded(), "server session for signal-lifetime regression starts");
 			Server.Stop();
 		}
@@ -139,8 +141,7 @@ namespace {
 
 	void TestSessionOwnershipAndEndpointPolicy() {
 		Check(
-			IsLoopbackTransportEndpoint({"127.0.0.1", 27020}) &&
-				IsLoopbackTransportEndpoint({"127.255.10.9", 27020}) &&
+			IsLoopbackTransportEndpoint({"127.0.0.1", 27020}) && IsLoopbackTransportEndpoint({"127.255.10.9", 27020}) &&
 				IsLoopbackTransportEndpoint({"::1", 27020}) &&
 				!IsLoopbackTransportEndpoint({"127.example.com", 27020}) &&
 				!IsLoopbackTransportEndpoint({"127.0.0.1.example.com", 27020}) &&
@@ -158,9 +159,7 @@ namespace {
 		);
 
 		auto World = std::make_shared<DataModel>();
-		auto Control = std::dynamic_pointer_cast<CharacterControlService>(
-			World->GetService("CharacterControlService")
-		);
+		auto Control = std::dynamic_pointer_cast<CharacterControlService>(World->GetService("CharacterControlService"));
 		auto First = Control->AttachRuntime({}, {}, {}, {});
 		auto Overlap = Control->AttachRuntime({}, {}, {}, {});
 		Check(
@@ -187,9 +186,7 @@ namespace {
 			EngineProviderConfiguration{.AudioEnabled = false, .Mode = RuntimeMode::NetworkServer}
 		);
 		{
-			GameSession Unstarted(
-				Transport, Configuration(GameSessionRole::Server, "one-shot-session"), &Runtime
-			);
+			GameSession Unstarted(Transport, Configuration(GameSessionRole::Server, "one-shot-session"), &Runtime);
 			Check(
 				Unstarted.GetStatus() == GameSessionStatus::Created,
 				"a newly constructed GameSession owns no started transport or callback lifetime"
@@ -266,17 +263,11 @@ namespace {
 			std::pair{GameSessionFailurePoint::ReplicationPeerCreation, "replication peer creation"},
 			std::pair{GameSessionFailurePoint::LocalPlayerResolution, "LocalPlayer resolution"},
 			std::pair{GameSessionFailurePoint::RemoteManagerPeerCreation, "RemoteManager peer creation"},
-			std::pair{
-				GameSessionFailurePoint::PredictedCharacterPeerCreation,
-				"predicted Character peer creation"
-			},
+			std::pair{GameSessionFailurePoint::PredictedCharacterPeerCreation, "predicted Character peer creation"},
 			std::pair{GameSessionFailurePoint::RuntimeCallbackAttachment, "runtime callback attachment"},
 			std::pair{GameSessionFailurePoint::ClientGraphSynchronization, "client graph synchronization"},
 			std::pair{GameSessionFailurePoint::ClientReadySerialization, "ClientReady serialization"},
-			std::pair{
-				GameSessionFailurePoint::ClientReadySchedulerAdmission,
-				"ClientReady scheduler admission"
-			},
+			std::pair{GameSessionFailurePoint::ClientReadySchedulerAdmission, "ClientReady scheduler admission"},
 		};
 		for (const auto &[Point, Name] : Cases) {
 			auto Network = SimulatedNetwork::Create({.BaseLatency = 1ms});
@@ -292,9 +283,7 @@ namespace {
 			GameSession Server(
 				Network->CreateTransport(), Configuration(GameSessionRole::Server, "bootstrap-failure"), &ServerRuntime
 			);
-			GameSession Client(
-				Network->CreateTransport(), Configuration(GameSessionRole::Client, "bootstrap-failure")
-			);
+			GameSession Client(Network->CreateTransport(), Configuration(GameSessionRole::Client, "bootstrap-failure"));
 			GameSessionTestAccess::SetFailurePoint(Client, Point);
 			Check(Server.Start().Succeeded(), "failure-matrix server starts");
 			const auto ClientStart = Client.Start();
@@ -583,6 +572,9 @@ namespace {
 		);
 		ServerRuntime.ProcessService->Alive = true;
 		auto ServerConfiguration = Configuration(GameSessionRole::Server, "burst-admission");
+		ServerConfiguration.StructuralReplication.MaximumTransitionsPerPeerTick = 64;
+		ServerConfiguration.StructuralReplication.MaximumTransitionsPerTick = 256;
+		ServerConfiguration.StructuralReplication.PeerQuantum = 64;
 		GameSession Server(ServerTransport, ServerConfiguration, &ServerRuntime);
 		Check(Server.Start().Succeeded(), "burst-admission server starts");
 		std::vector<RawPeer> Peers;
@@ -591,12 +583,12 @@ namespace {
 			auto Transport = Network->CreateTransport();
 			Check(
 				Transport && Transport
-							 ->Start({
-								 .Role = TransportRole::Client,
-								 .Endpoint = ServerConfiguration.Endpoint,
-								 .AdvertisedLimits = ServerConfiguration.Limits,
-							 })
-							 .Succeeded(),
+								 ->Start({
+									 .Role = TransportRole::Client,
+									 .Endpoint = ServerConfiguration.Endpoint,
+									 .AdvertisedLimits = ServerConfiguration.Limits,
+								 })
+								 .Succeeded(),
 				"burst-admission raw client starts"
 			);
 			Network->Pump();
@@ -613,14 +605,14 @@ namespace {
 				GameSessionClientHello{static_cast<std::uint64_t>(Index + 1), ServerConfiguration.Limits}
 			);
 			auto Intent = Hello ? MakeNetworkMessageIntent(
-								  Connection,
-								  DeliveryMode::ReliableOrdered,
-								  TrafficClass::Control,
-								  {},
-								  std::move(*Hello),
-								  ServerConfiguration.Limits
-							  )
-							: std::nullopt;
+									  Connection,
+									  DeliveryMode::ReliableOrdered,
+									  TrafficClass::Control,
+									  {},
+									  std::move(*Hello),
+									  ServerConfiguration.Limits
+								  )
+								: std::nullopt;
 			Check(Intent && Transport->Send(*Intent).Succeeded(), "burst-admission raw client submits hello");
 			Peers.push_back({std::move(Transport), Connection});
 		}
@@ -644,14 +636,14 @@ namespace {
 						GameSessionClientReady{Accepted->SessionEpoch, Accepted->Replication, Accepted->Player}
 					);
 					auto ReadyIntent = Ready ? MakeNetworkMessageIntent(
-											 Peer.Connection,
-											 DeliveryMode::ReliableOrdered,
-											 TrafficClass::Control,
-											 {},
-											 std::move(*Ready),
-											 Accepted->NegotiatedLimits
-										 )
-									   : std::nullopt;
+												   Peer.Connection,
+												   DeliveryMode::ReliableOrdered,
+												   TrafficClass::Control,
+												   {},
+												   std::move(*Ready),
+												   Accepted->NegotiatedLimits
+											   )
+											 : std::nullopt;
 					Check(
 						ReadyIntent && Peer.Transport->Send(*ReadyIntent).Succeeded(),
 						"burst-admission raw client submits readiness"
@@ -663,8 +655,12 @@ namespace {
 		const auto Metrics = Server.GetMetrics();
 		Check(
 			Metrics.ReadyPeers == PeerCount && Metrics.AcceptedPeers == PeerCount && Metrics.PlayersRemoved == 0 &&
-				Metrics.ProtocolRejects == 0 && ServerRuntime.Players->GetPlayers().size() == PeerCount,
-			"bounded burst admission keeps every accepted peer journal cursor current through readiness"
+				Metrics.ProtocolRejects == 0 && ServerRuntime.Players->GetPlayers().size() == PeerCount &&
+				Metrics.StructuralMaximumTransitionsSelectedPerTick <=
+					ServerConfiguration.StructuralReplication.MaximumTransitionsPerTick &&
+				Metrics.StructuralTransitionsSelected == Metrics.StructuralTransitionsCommitted &&
+				Metrics.StructuralGlobalBudgetExhaustions != 0,
+			"bounded fair burst admission keeps every peer current without exceeding the global structural cap"
 		);
 		for (auto &Peer : Peers)
 			(void)Peer.Transport->Stop({DisconnectReason::LocalShutdown, "burst-admission complete"});
@@ -685,7 +681,9 @@ namespace {
 			EngineProviderConfiguration{.AudioEnabled = false, .Mode = RuntimeMode::NetworkServer}
 		);
 		ServerRuntime.ProcessService->Alive = true;
-		GameSession Server(ServerTransport, Configuration(GameSessionRole::Server, "structural-rejection"), &ServerRuntime);
+		GameSession Server(
+			ServerTransport, Configuration(GameSessionRole::Server, "structural-rejection"), &ServerRuntime
+		);
 		GameSession Client(ClientTransport, Configuration(GameSessionRole::Client, "structural-rejection"));
 		Check(Server.Start().Succeeded() && Client.Start().Succeeded(), "structural-rejection session starts");
 		std::unique_ptr<HeadlessRenderer> ClientRenderer;
@@ -719,8 +717,8 @@ namespace {
 		Mutation->SetParent(ServerWorld);
 		Server.Step(Tick);
 		Check(
-			Server.GetStatus() == GameSessionStatus::Listening &&
-				Server.GetMetrics().PlayersRemoved == 1 && ServerRuntime.Players->GetPlayers().empty(),
+			Server.GetStatus() == GameSessionStatus::Listening && Server.GetMetrics().PlayersRemoved == 1 &&
+				ServerRuntime.Players->GetPlayers().empty(),
 			"rejected reliable structural admission tears down its Player and peer in the same processing cycle"
 		);
 		Client.Stop();

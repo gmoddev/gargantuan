@@ -1,6 +1,6 @@
 # First complete game validation
 
-Status: Replication Foundation 3I packaged-session path revalidated on 2026-09-04. This document records a vertical-slice
+Status: Replication Foundation 3J packaged-session contract revalidated on 2026-09-06. This document records a vertical-slice
 falsification exercise; it does not claim that Gargantuan is generally usable.
 
 ## Game design and scope
@@ -85,6 +85,15 @@ LocalPlayer, relevance, materialization epochs, and reliable admission. The
 uncached test path encodes identical GRPL v1 bytes, and runtime Beacon/NPC CFrame
 continues exclusively through GCHR rather than structural replication.
 
+Foundation 3J also changes no sample content, package format, Luau surface, or
+client protocol. The sample's small critical and ordinary baseline fits the
+default structural work budget without artificial streaming delay. Dedicated
+deterministic fixtures—not the authored game—constrain that budget to prove
+dependency-safe incremental Enter/Leave work, current-template coalescing,
+exact scheduler-accepted KnownObjects commit, fair multi-peer progress, and
+bounded recovery. GRPL v1, GCHR, Remotes, LocalPlayer, Character control, and
+the packaged gameplay contract remain unchanged.
+
 ## Authoring workflow used
 
 1. Build the current Studio and Engine Release binaries.
@@ -154,6 +163,9 @@ honest claim of an entirely GUI-authored workflow.
 - canonical server-private SpatialAddress/region candidates without a region
   wire message, client request surface, saved field, or boundary-crossing
   structural fallback;
+- bounded dependency-safe structural transition selection, critical bootstrap,
+  peer/global work limits, fair peer rotation, compact cancellation, and exact
+  scheduler-accepted materialization commit without client-side scheduling;
 - canonical Attachment joint binding, transient `WorldCFrame`, bind-pose
   fallback, animated positional Sound, animated prompt range/LOS/hold
   validation, and zero-journal semantic movement;

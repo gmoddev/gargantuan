@@ -70,8 +70,11 @@ defect throughput.
   deep copies with immutable revisioned per-object descriptions and bounded
   peer-specific reference patches. GRPL v1, 3E relevance, LocalPlayer,
   materialization epochs, GCHR, and reliable scheduler commit remain unchanged.
-  Profiling now points to bounded structural transition work, not a generic
-  cache or public spatial API, as the next networking candidate.
+  Replication Foundation 3J now schedules the remaining peer-specific work with
+  deterministic per-peer/global limits, dependency-safe groups, critical
+  bootstrap priority, fair peer rotation, compact cancellation, and exact
+  scheduler-accepted peer materialization. It adds no generic QoS system or
+  public spatial/materialization API.
 - Environment / Lighting Foundation 1 establishes canonical saved Lighting and
   Sky semantics, renderer-neutral incremental publication, AssetService-owned
   coherent face residency, and the SDL shadow/Sky/opaque/GUI pipeline. Local

@@ -1,5 +1,9 @@
 # Current architecture
 
+- [Replication Foundation 3J](ReplicationFoundation3J.md) defines bounded
+  dependency-safe structural transition work, deterministic peer fairness,
+  critical bootstrap ordering, compact pending state, and exact
+  scheduler-accepted materialization commit.
 - [Replication Foundation 3I](ReplicationFoundation3I.md) defines immutable
   revisioned per-object structural publication templates, peer-specific
   materialization plans/reference patches, transactional invalidation, and the

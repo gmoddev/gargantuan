@@ -311,7 +311,7 @@ Telemetry dependency. Studio, Node, MCP, and Telemetry repositories are
 intentionally unchanged. Offline runtimes with no GameSession construct no
 coordinator/template state; headless server operation is unchanged.
 
-## Explicit deferrals and next recommendation
+## Explicit deferrals and 3J continuation
 
 3I does not cache final encoded frames, compress GRPL property names, implement
 content paging, expose spatial/materialization controls, parallelize encoding,
@@ -319,10 +319,12 @@ or add a generic cache framework. Per-peer known/relevant sets, dependency
 closure sets, frame buffers, reliable scheduler bytes, and receiver
 materialization remain real peer-specific costs.
 
-The next measured target should be **structural replication work budgeting**.
-3I removed the unsafe reason to rebuild identical semantic descriptions, but a
-synchronized dense enter still legitimately performs peer-specific closure,
-encoding, and reliable submission. A future foundation can budget atomic
-dependency groups without delaying mandatory owner/session state or changing
-3E relevance. Production structural streaming should wait until such burst
-control and package-backed availability have independent evidence.
+Foundation 3J implements the measured structural replication work budget that
+3I deliberately deferred. It retains current dependency-safe Enter/Leave work,
+selects bounded per-peer/global quanta, protects mandatory owner/session
+bootstrap, rotates peer service fairly, and commits the exact prepared set only
+after reliable scheduler acceptance. See `ReplicationFoundation3J.md`.
+
+Neither foundation implements content paging, public world streaming, a generic
+QoS framework, or package-backed availability. Those remain separate work with
+their own evidence requirements.

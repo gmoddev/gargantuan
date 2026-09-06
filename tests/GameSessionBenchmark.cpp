@@ -63,6 +63,13 @@ namespace {
 		return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - Started).count();
 	}
 
+	double Percentile(std::vector<double> Samples, double Fraction) {
+		if (Samples.empty()) return 0.0;
+		std::ranges::sort(Samples);
+		const auto Index = static_cast<std::size_t>(Fraction * static_cast<double>(Samples.size() - 1));
+		return Samples[Index];
+	}
+
 	void RunAdmission(std::size_t PeerCount, std::size_t SpatialObjectCount = 0) {
 		struct RawPeer {
 			std::shared_ptr<SimulatedTransport> Transport;
@@ -145,16 +152,33 @@ namespace {
 			Peers.push_back({std::move(Transport), Connection});
 		}
 		std::uint64_t Tick = 1;
+		std::size_t PreviouslyAcceptedPeers = 0;
+		std::uint64_t StructuralPendingHighWater = 0;
+		std::vector<double> CriticalReadyTicks;
+		std::string FirstDisconnect;
 		while (Tick <= 1200 && Server.GetMetrics().ReadyPeers != PeerCount) {
 			Network->Pump();
 			(void)Server.Poll();
 			Server.Step(Tick);
+			const auto Progress = Server.GetMetrics();
+			StructuralPendingHighWater = std::max(
+				StructuralPendingHighWater, Progress.StructuralPendingEnters + Progress.StructuralPendingLeaves
+			);
+			while (PreviouslyAcceptedPeers < Progress.AcceptedPeers) {
+				CriticalReadyTicks.push_back(static_cast<double>(Tick));
+				++PreviouslyAcceptedPeers;
+			}
 			(void)Network->Advance(std::chrono::milliseconds(1));
 			Network->Pump();
 			for (auto &Peer : Peers) {
 				std::array<TransportEvent, 64> Events;
 				const auto Count = Peer.Transport->PollEvents(Events);
-				for (std::size_t Index = 0; Index < Count && !Peer.ReadySent; ++Index) {
+				for (std::size_t Index = 0; Index < Count; ++Index) {
+					if (const auto *Disconnected = std::get_if<DisconnectedEvent>(&Events[Index])) {
+						if (FirstDisconnect.empty()) FirstDisconnect = Disconnected->Information.Diagnostic;
+						continue;
+					}
+					if (Peer.ReadySent) continue;
 					const auto *Received = std::get_if<ReceivedMessageEvent>(&Events[Index]);
 					if (!Received || !IsGameSessionFrame(Received->Payload)) continue;
 					auto Decoded = DecodeGameSessionMessage(Received->Payload);
@@ -190,27 +214,80 @@ namespace {
 				" connected=" + std::to_string(Metrics.TransportConnections) + " playersCreated=" +
 				std::to_string(Metrics.PlayersCreated) + " playersRemoved=" + std::to_string(Metrics.PlayersRemoved) +
 				" rejected=" + std::to_string(Metrics.RejectedHandshakes) + " protocol=" +
-				std::to_string(Metrics.ProtocolRejects) + " timeouts=" + std::to_string(Metrics.HandshakeTimeouts)
+				std::to_string(Metrics.ProtocolRejects) + " timeouts=" + std::to_string(Metrics.HandshakeTimeouts) +
+				" pending=" + std::to_string(Metrics.StructuralPendingEnters + Metrics.StructuralPendingLeaves) +
+				" selected=" + std::to_string(Metrics.StructuralTransitionsSelected) +
+				" committed=" + std::to_string(Metrics.StructuralTransitionsCommitted) +
+				" backlogFailures=" + std::to_string(Metrics.StructuralBacklogLimitFailures) +
+				" journalLagFailures=" + std::to_string(Metrics.StructuralJournalLagFailures) + " maxJournalLag=" +
+				std::to_string(Metrics.StructuralMaximumJournalLagRecords) + " firstDisconnect=" + FirstDisconnect
 			);
-		std::cout << (SpatialObjectCount == 0 ? "Admission," : "WorldAdmission,")
-				  << (SpatialObjectCount == 0 ? PeerCount : SpatialObjectCount) << ',' << Duration << ','
-				  << Duration / static_cast<double>(PeerCount) << ',' << Tick - 1 << ',' << Metrics.PlayersCreated
-				  << ',' << Metrics.CharacterControlBindings << ',' << Allocations << ','
-				  << Metrics.SessionAcceptanceCpuNanoseconds << ',' << Metrics.PlayerCreationCpuNanoseconds << ','
-				  << Metrics.ServerGraphSynchronizationCpuNanoseconds << ',' << Metrics.BaselineSnapshotCpuNanoseconds
-				  << ',' << Metrics.BaselineDiscoveryCpuNanoseconds << ',' << Metrics.BaselineEncodeCpuNanoseconds
-				  << ',' << Metrics.GameplayRegistrationCpuNanoseconds << ',' << Metrics.RelevantObjects << ','
-				  << Metrics.RelevanceEnters << ',' << Metrics.RelevanceLeaves << ',' << Metrics.RelevanceQueries << ','
-				  << Metrics.RelevanceCandidates << ',' << Metrics.RelevanceCpuNanoseconds << ','
-				  << Metrics.MaterializedObjects << ',' << Metrics.MaterializedCharacters << ','
-				  << Metrics.RelevanceInitializationCpuNanoseconds << ',' << Metrics.MaterializationBacklog << ','
-				  << Metrics.MaterializationTransitions << ',' << Metrics.MaterializationCpuNanoseconds << ','
-				  << Metrics.StructuralTemplateBuilds << ',' << Metrics.StructuralTemplateHits << ','
-				  << Metrics.StructuralTemplateMisses << ',' << Metrics.StructuralTemplateInvalidations << ','
-				  << Metrics.StructuralTemplateBytes << ',' << Metrics.PeerMaterializationPlans << ','
-				  << Metrics.PeerPatchOperations << ',' << Metrics.ReferencePatchOperations << ','
-				  << Metrics.StructuralBytesReused << ',' << Metrics.StructuralBytesEncoded << ','
-				  << Metrics.ScratchHighWaterBytes << '\n';
+		auto PrintAdmission = [&](std::string_view Kind,
+								  double Elapsed,
+								  std::uint64_t ElapsedTicks,
+								  std::uint64_t AllocationCount,
+								  const GameSessionMetrics &Current) {
+			std::cout << Kind << ',' << (SpatialObjectCount == 0 ? PeerCount : SpatialObjectCount) << ',' << Elapsed
+					  << ',' << Elapsed / static_cast<double>(PeerCount) << ',' << ElapsedTicks << ','
+					  << Current.PlayersCreated << ',' << Current.CharacterControlBindings << ',' << AllocationCount
+					  << ',' << Current.SessionAcceptanceCpuNanoseconds << ',' << Current.PlayerCreationCpuNanoseconds
+					  << ',' << Current.ServerGraphSynchronizationCpuNanoseconds << ','
+					  << Current.BaselineSnapshotCpuNanoseconds << ',' << Current.BaselineDiscoveryCpuNanoseconds << ','
+					  << Current.BaselineEncodeCpuNanoseconds << ',' << Current.GameplayRegistrationCpuNanoseconds
+					  << ',' << Current.RelevantObjects << ',' << Current.RelevanceEnters << ','
+					  << Current.RelevanceLeaves << ',' << Current.RelevanceQueries << ','
+					  << Current.RelevanceCandidates << ',' << Current.RelevanceCpuNanoseconds << ','
+					  << Current.MaterializedObjects << ',' << Current.MaterializedCharacters << ','
+					  << Current.RelevanceInitializationCpuNanoseconds << ',' << Current.MaterializationBacklog << ','
+					  << Current.MaterializationTransitions << ',' << Current.MaterializationCpuNanoseconds << ','
+					  << Current.StructuralTemplateBuilds << ',' << Current.StructuralTemplateHits << ','
+					  << Current.StructuralTemplateMisses << ',' << Current.StructuralTemplateInvalidations << ','
+					  << Current.StructuralTemplateBytes << ',' << Current.PeerMaterializationPlans << ','
+					  << Current.PeerPatchOperations << ',' << Current.ReferencePatchOperations << ','
+					  << Current.StructuralBytesReused << ',' << Current.StructuralBytesEncoded << ','
+					  << Current.ScratchHighWaterBytes << ',' << StructuralPendingHighWater << ','
+					  << Current.StructuralMaximumTransitionsSelectedPerTick << ','
+					  << Current.StructuralTransitionsSelected << ',' << Current.StructuralTransitionsCommitted << ','
+					  << Current.StructuralTransitionsDeferredByBudget << ','
+					  << Current.StructuralGlobalBudgetExhaustions << ',' << Percentile(CriticalReadyTicks, 0.50) << ','
+					  << Percentile(CriticalReadyTicks, 0.95) << ',' << Percentile(CriticalReadyTicks, 0.99) << ','
+					  << (CriticalReadyTicks.empty() ? 0.0 : *std::ranges::max_element(CriticalReadyTicks)) << ','
+					  << Current.StructuralJournalLagFailures << ',' << Current.StructuralMaximumJournalLagRecords
+					  << '\n';
+		};
+		PrintAdmission(
+			SpatialObjectCount == 0 ? "AdmissionCriticalReady" : "WorldAdmissionCriticalReady",
+			Duration,
+			Tick - 1,
+			Allocations,
+			Metrics
+		);
+		while (Tick <= 1200 && Server.GetMetrics().MaterializationBacklog != 0) {
+			Network->Pump();
+			(void)Server.Poll();
+			Server.Step(Tick);
+			const auto Progress = Server.GetMetrics();
+			StructuralPendingHighWater = std::max(
+				StructuralPendingHighWater, Progress.StructuralPendingEnters + Progress.StructuralPendingLeaves
+			);
+			(void)Network->Advance(std::chrono::milliseconds(1));
+			Network->Pump();
+			for (auto &Peer : Peers) {
+				std::array<TransportEvent, 256> Events;
+				(void)Peer.Transport->PollEvents(Events);
+			}
+			++Tick;
+		}
+		const auto ConvergedMetrics = Server.GetMetrics();
+		if (ConvergedMetrics.MaterializationBacklog != 0)
+			throw std::runtime_error("session benchmark structural materialization did not converge");
+		PrintAdmission(
+			SpatialObjectCount == 0 ? "AdmissionConverged" : "WorldAdmissionConverged",
+			Milliseconds(Started),
+			Tick - 1,
+			GameSessionBenchmarkAllocations.load(std::memory_order_relaxed) - AllocationsBefore,
+			ConvergedMetrics
+		);
 		if (SpatialObjectCount == 0 && PeerCount <= 32) {
 			const auto Before = Server.GetMetrics();
 			const auto FailureAllocationsBefore = GameSessionBenchmarkAllocations.load(std::memory_order_relaxed);
@@ -250,7 +327,7 @@ namespace {
 					  << After.MaterializationBacklog << ','
 					  << After.MaterializationTransitions - Before.MaterializationTransitions << ','
 					  << After.MaterializationCpuNanoseconds - Before.MaterializationCpuNanoseconds << ",0,0,0,0,"
-					  << After.StructuralTemplateBytes << ",0,0,0,0,0,0\n";
+					  << After.StructuralTemplateBytes << ",0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0\n";
 		} else {
 			for (auto &Peer : Peers)
 				(void)Peer.Transport->Stop({DisconnectReason::LocalShutdown, "session benchmark complete"});
@@ -318,7 +395,8 @@ namespace {
 				  << Metrics.StructuralTemplateInvalidations << ',' << Metrics.StructuralTemplateBytes << ','
 				  << Metrics.PeerMaterializationPlans << ',' << Metrics.PeerPatchOperations << ','
 				  << Metrics.ReferencePatchOperations << ',' << Metrics.StructuralBytesReused << ','
-				  << Metrics.StructuralBytesEncoded << ',' << Metrics.ScratchHighWaterBytes << '\n';
+				  << Metrics.StructuralBytesEncoded << ',' << Metrics.ScratchHighWaterBytes
+				  << ",0,0,0,0,0,0,0,0,0,0,0,0\n";
 	}
 
 	void RunInterestMaterialization(std::size_t InterestSize) {
@@ -355,7 +433,75 @@ namespace {
 				  << Metrics.StructuralTemplateBytes << ',' << Metrics.PeerMaterializationPlans << ','
 				  << Metrics.PeerPatchOperations << ',' << Metrics.ReferencePatchOperations << ','
 				  << Metrics.StructuralBytesReused << ',' << Metrics.StructuralBytesEncoded << ','
-				  << Metrics.ScratchHighWaterBytes << '\n';
+				  << Metrics.ScratchHighWaterBytes << ",0,0,0,0,0,0,0,0,0,0,0,0\n";
+	}
+
+	void RunStructuralScheduling(std::size_t ObjectCount, std::size_t Budget) {
+		auto World = std::make_shared<DataModel>();
+		std::vector<std::shared_ptr<Folder>> Objects;
+		Objects.reserve(ObjectCount);
+		PeerRelevanceSelection Selection{
+			.RequiredObjects = {World->GetObjectId()},
+			.DesiredObjects = {World->GetObjectId()},
+		};
+		for (std::size_t Index = 0; Index < ObjectCount; ++Index) {
+			auto Object = std::make_shared<Folder>();
+			Object->SetName("ScheduledStructuralObject" + std::to_string(Index));
+			Object->SetParent(World);
+			Selection.DesiredObjects.push_back(Object->GetObjectId());
+			Objects.push_back(std::move(Object));
+		}
+		std::ranges::sort(Selection.DesiredObjects);
+		StructuralReplicationConfiguration StructuralConfiguration{
+			.MaximumTransitionsPerPeerTick = Budget,
+			.MaximumTransitionsPerTick = Budget,
+			.PeerQuantum = Budget,
+			.MaximumPendingTransitionsPerPeer = MaximumPeerDesiredObjects,
+			.TransitionDeadlineTicks = 600,
+		};
+		const auto AllocationsBefore = GameSessionBenchmarkAllocations.load(std::memory_order_relaxed);
+		const auto TotalStarted = std::chrono::steady_clock::now();
+		ReplicationCoordinator Coordinator(World, {}, true, StructuralConfiguration);
+		const ConnectionId Connection{1, 1};
+		const auto BootstrapStarted = std::chrono::steady_clock::now();
+		auto Baseline = Coordinator.AddPeerBounded(Connection, ReplicationEpoch(1), Selection);
+		const auto BootstrapMilliseconds = Milliseconds(BootstrapStarted);
+		if (!Baseline.Succeeded()) throw std::runtime_error("bounded structural benchmark bootstrap failed");
+		if (!Coordinator.CommitSchedulerAcceptance(Connection, Baseline.Frame->Sequence).Succeeded())
+			throw std::runtime_error("bounded structural benchmark bootstrap commit failed");
+		const auto PendingHighWater = Coordinator.GetMetrics().MaterializationBacklog;
+		std::vector<double> TickMilliseconds;
+		std::size_t MaximumSelected = Baseline.SelectedTransitions;
+		std::uint64_t Tick = 1;
+		while (Coordinator.HasPendingRelevance(Connection) && Tick <= ObjectCount + 2) {
+			const auto TickStarted = std::chrono::steady_clock::now();
+			auto Produced = Coordinator.ProducePendingRelevance(Connection, Budget, Tick);
+			TickMilliseconds.push_back(Milliseconds(TickStarted));
+			if (!Produced.Succeeded()) throw std::runtime_error("bounded structural benchmark did not make progress");
+			MaximumSelected = std::max(MaximumSelected, Produced.SelectedTransitions);
+			if (!Coordinator.CommitSchedulerAcceptance(Connection, Produced.Frame->Sequence).Succeeded())
+				throw std::runtime_error("bounded structural benchmark scheduler commit failed");
+			++Tick;
+		}
+		if (Coordinator.HasPendingRelevance(Connection))
+			throw std::runtime_error("bounded structural benchmark did not converge");
+		const auto TotalMilliseconds = Milliseconds(TotalStarted);
+		const auto Allocations = GameSessionBenchmarkAllocations.load(std::memory_order_relaxed) - AllocationsBefore;
+		const auto Metrics = Coordinator.GetMetrics();
+		double MeanTickMilliseconds = 0.0;
+		for (const auto Value : TickMilliseconds)
+			MeanTickMilliseconds += Value;
+		if (!TickMilliseconds.empty()) MeanTickMilliseconds /= static_cast<double>(TickMilliseconds.size());
+		std::cout << "StructuralScheduling," << ObjectCount << ',' << Budget << ',' << Tick - 1 << ','
+				  << TotalMilliseconds << ',' << BootstrapMilliseconds << ',' << MeanTickMilliseconds << ','
+				  << Percentile(TickMilliseconds, 0.50) << ',' << Percentile(TickMilliseconds, 0.95) << ','
+				  << Percentile(TickMilliseconds, 0.99) << ','
+				  << (TickMilliseconds.empty() ? 0.0 : *std::ranges::max_element(TickMilliseconds)) << ','
+				  << MaximumSelected << ',' << PendingHighWater << ',' << Metrics.StructuralTransitionsSelected << ','
+				  << Metrics.StructuralTransitionsCommitted << ',' << Metrics.StructuralTransitionsDeferredByBudget
+				  << ',' << Metrics.StructuralDeadlineMisses << ',' << Metrics.StructuralDependencyPlanOperations << ','
+				  << Metrics.StructuralBacklogLimitFailures << ',' << Metrics.StructuralSelectionCpuNanoseconds << ','
+				  << Metrics.StructuralBytesEncoded << ',' << Allocations << '\n';
 	}
 
 	void RunRelevanceUpdate(std::size_t PeerCount) {
@@ -395,7 +541,8 @@ namespace {
 				  << ',' << After.RelevanceLeaves - Before.RelevanceLeaves << ','
 				  << After.SpatialQueries - Before.SpatialQueries << ','
 				  << After.CandidateObjects - Before.CandidateObjects << ','
-				  << After.UpdateCpuNanoseconds - Before.UpdateCpuNanoseconds << ",0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0\n";
+				  << After.UpdateCpuNanoseconds - Before.UpdateCpuNanoseconds
+				  << ",0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0\n";
 	}
 
 	void RunCommandBridge(std::size_t CharacterCount) {
@@ -442,7 +589,7 @@ namespace {
 		const auto Calls = static_cast<double>(CharacterCount * Ticks);
 		std::cout << "CommandBridge," << CharacterCount << ',' << Duration << ',' << Duration * 1000.0 / Calls << ','
 				  << Ticks << ',' << static_cast<std::uint64_t>(Calls) << ",0," << Allocations
-				  << ",0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0\n";
+				  << ",0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0\n";
 		Runtime.Destroy();
 	}
 }
@@ -450,6 +597,15 @@ namespace {
 int main(int ArgumentCount, char **Arguments) {
 	try {
 		gargantuan::BootstrapNativeRuntimeSchema();
+		if (ArgumentCount > 1 && std::string_view(Arguments[1]) == "--structural-scheduling") {
+			std::cout << "Kind,OfferedTransitions,Budget,ServiceTicks,TotalMs,BootstrapMs,MeanTickMs,P50TickMs,"
+						 "P95TickMs,P99TickMs,MaxTickMs,MaximumSelected,PendingHighWater,Selected,Committed,"
+						 "DeferredByBudget,DeadlineMisses,DependencyPlanOperations,BacklogLimitFailures,SelectionNs,"
+						 "EncodedBytes,Allocations\n";
+			for (const auto Offered : {1'000u, 2'000u, 5'000u, 10'000u})
+				RunStructuralScheduling(Offered, 1'000);
+			return 0;
+		}
 		std::cout << "Kind,Count,DurationMs,MillisecondsPerUnit,Ticks,ResultCount,ControlBindings,Allocations,"
 					 "SessionAcceptanceNs,PlayerCreationNs,ServerGraphSynchronizationNs,BaselineSnapshotNs,"
 					 "BaselineDiscoveryNs,BaselineEncodeNs,GameplayRegistrationNs,RelevantObjects,RelevanceEnters,"
@@ -458,9 +614,18 @@ int main(int ArgumentCount, char **Arguments) {
 					 "MaterializationTransitions,MaterializationCpuNs,StructuralTemplateBuilds,"
 					 "StructuralTemplateHits,StructuralTemplateMisses,StructuralTemplateInvalidations,"
 					 "StructuralTemplateBytes,PeerMaterializationPlans,PeerPatchOperations,"
-					 "ReferencePatchOperations,StructuralBytesReused,StructuralBytesEncoded,ScratchHighWaterBytes\n";
+					 "ReferencePatchOperations,StructuralBytesReused,StructuralBytesEncoded,ScratchHighWaterBytes,"
+					 "StructuralPendingHighWater,StructuralMaximumSelectedPerTick,StructuralSelected,"
+					 "StructuralCommitted,StructuralDeferredByBudget,StructuralGlobalBudgetExhaustions,"
+					 "CriticalReadyP50Tick,CriticalReadyP95Tick,CriticalReadyP99Tick,CriticalReadyMaxTick,"
+					 "StructuralJournalLagFailures,StructuralMaximumJournalLagRecords\n";
 		if (ArgumentCount > 1 && std::string_view(Arguments[1]) == "--admission-500") {
 			RunAdmission(500);
+			return 0;
+		}
+		if (ArgumentCount > 1 && std::string_view(Arguments[1]) == "--admission-normal") {
+			for (const auto Count : {1u, 32u, 100u})
+				RunAdmission(Count);
 			return 0;
 		}
 		if (ArgumentCount > 1 && std::string_view(Arguments[1]) == "--world-scale") {

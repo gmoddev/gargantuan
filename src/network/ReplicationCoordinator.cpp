@@ -190,13 +190,26 @@ namespace gargantuan::network {
 		}
 	}
 
+	bool StructuralReplicationConfiguration::IsValid() const {
+		return MaximumTransitionsPerPeerTick != 0 &&
+			   MaximumTransitionsPerPeerTick <= MaximumRelevanceTransitionsPerFrame && MaximumTransitionsPerTick != 0 &&
+			   MaximumTransitionsPerTick <= MaximumStructuralTransitionsPerTick &&
+			   MaximumTransitionsPerPeerTick <= MaximumTransitionsPerTick && PeerQuantum != 0 &&
+			   PeerQuantum <= MaximumTransitionsPerPeerTick && MaximumPendingTransitionsPerPeer != 0 &&
+			   MaximumPendingTransitionsPerPeer <= MaximumPeerDesiredObjects && MaximumPendingTransitions != 0 &&
+			   MaximumPendingTransitionsPerPeer <= MaximumPendingTransitions &&
+			   MaximumPendingTransitions <= MaximumStructuralPendingTransitions && TransitionDeadlineTicks != 0;
+	}
+
 	ReplicationCoordinator::ReplicationCoordinator(
 		std::shared_ptr<Instance> SourceRoot,
 		InitialRelevancePolicy IsInitiallyRelevantValue,
-		bool StructuralTemplateReuseEnabledValue
+		bool StructuralTemplateReuseEnabledValue,
+		StructuralReplicationConfiguration ConfigurationValue
 	)
 		: SourceRoot(std::move(SourceRoot)), IsInitiallyRelevant(std::move(IsInitiallyRelevantValue)),
-		  StructuralTemplateReuseEnabled(StructuralTemplateReuseEnabledValue) {
+		  StructuralTemplateReuseEnabled(StructuralTemplateReuseEnabledValue), Configuration(ConfigurationValue) {
+		if (!Configuration.IsValid()) throw std::invalid_argument("Structural replication configuration is invalid");
 		if (!this->SourceRoot) return;
 		auto SnapshotValue = CaptureSnapshot(this->SourceRoot);
 		CatalogCursor = SnapshotValue.Cursor;
@@ -387,6 +400,241 @@ namespace gargantuan::network {
 		return true;
 	}
 
+	void ReplicationCoordinator::CompactPendingQueues(PeerState &Peer) {
+		if (Peer.PendingTransitions.empty()) {
+			Peer.CriticalQueue.clear();
+			Peer.OrdinaryQueue.clear();
+			Peer.LeavingDependents.clear();
+			return;
+		}
+		const auto MaximumQueueEntries = Peer.PendingTransitions.size() * 2 + 64;
+		if (Peer.CriticalQueue.size() + Peer.OrdinaryQueue.size() <= MaximumQueueEntries) return;
+		std::vector<std::pair<ObjectId, PendingTransition>> Current;
+		Current.reserve(Peer.PendingTransitions.size());
+		for (const auto &[Object, Transition] : Peer.PendingTransitions)
+			Current.emplace_back(Object, Transition);
+		std::ranges::sort(Current, [](const auto &Left, const auto &Right) {
+			return Left.second.PendingSinceTick != Right.second.PendingSinceTick
+					   ? Left.second.PendingSinceTick < Right.second.PendingSinceTick
+					   : Left.first < Right.first;
+		});
+		Peer.CriticalQueue.clear();
+		Peer.OrdinaryQueue.clear();
+		for (const auto &[Object, Transition] : Current) {
+			auto &Queue = Transition.Critical ? Peer.CriticalQueue : Peer.OrdinaryQueue;
+			Queue.push_back({Object, Transition.Token});
+		}
+	}
+
+	void ReplicationCoordinator::ApplyPreparedCommit(PeerState &Peer, PreparedStructuralCommit Commit) {
+		Peer.NextSequence = Commit.NextSequence;
+		if (Commit.JournalCursor) Peer.JournalCursor = *Commit.JournalCursor;
+		for (const auto Object : Commit.Entering) {
+			Peer.View.KnownObjects.insert(Object);
+			PendingTransitionCount -= std::min<std::size_t>(
+				PendingTransitionCount, Peer.PendingTransitions.erase(Object)
+			);
+		}
+		for (const auto Object : Commit.Leaving) {
+			Peer.View.ForgetReplica(Object);
+			PendingTransitionCount -= std::min<std::size_t>(
+				PendingTransitionCount, Peer.PendingTransitions.erase(Object)
+			);
+		}
+		RefreshRelevantObjects(Peer.View, Peer.DesiredObjects);
+		SaturatingAdd(Metrics.ObjectsPublished, Commit.PublishedObjects);
+		SaturatingAdd(Metrics.ObjectsUnpublished, Commit.UnpublishedObjects);
+		SaturatingAdd(Metrics.ObjectsDestroyed, Commit.DestroyedObjects);
+		SaturatingAdd(Metrics.StructuralDeadlineMisses, Commit.DeadlineMisses);
+		CompactPendingQueues(Peer);
+	}
+
+	void ReplicationCoordinator::RefreshPendingMetrics(ReplicationMetrics &Snapshot) const {
+		Snapshot.MaterializationBacklog = 0;
+		Snapshot.StructuralPendingEnters = 0;
+		Snapshot.StructuralPendingLeaves = 0;
+		Snapshot.StructuralPendingCritical = 0;
+		Snapshot.StructuralActivePeers = 0;
+		Snapshot.StructuralOldestPendingAgeTicks = 0;
+		Snapshot.StructuralCriticalOldestAgeTicks = 0;
+		for (const auto &[Connection, Peer] : Peers) {
+			(void)Connection;
+			SaturatingAdd(Snapshot.MaterializationBacklog, Peer.PendingTransitions.size());
+			if (!Peer.PendingTransitions.empty()) SaturatingAdd(Snapshot.StructuralActivePeers, 1);
+			for (const auto &[Object, Transition] : Peer.PendingTransitions) {
+				(void)Object;
+				if (Transition.Kind == PendingTransitionKind::Enter)
+					SaturatingAdd(Snapshot.StructuralPendingEnters, 1);
+				else
+					SaturatingAdd(Snapshot.StructuralPendingLeaves, 1);
+				if (Transition.Critical) SaturatingAdd(Snapshot.StructuralPendingCritical, 1);
+				const auto Age = LatestSchedulingTick >= Transition.PendingSinceTick
+									 ? LatestSchedulingTick - Transition.PendingSinceTick
+									 : std::uint64_t{0};
+				Snapshot.StructuralOldestPendingAgeTicks = std::max(Snapshot.StructuralOldestPendingAgeTicks, Age);
+				if (Transition.Critical)
+					Snapshot.StructuralCriticalOldestAgeTicks = std::max(
+						Snapshot.StructuralCriticalOldestAgeTicks, Age
+					);
+			}
+		}
+	}
+
+	ReplicationMetrics ReplicationCoordinator::GetMetrics() const {
+		auto Snapshot = Metrics;
+		RefreshPendingMetrics(Snapshot);
+		return Snapshot;
+	}
+
+	bool ReplicationCoordinator::RecordDesiredState(
+		PeerState &Peer, const PeerRelevanceSelection &Selection, std::uint64_t SimulationTick, std::string &Error
+	) {
+		if (Peer.PreparedCommit) {
+			Error = "A structural frame is awaiting scheduler acceptance";
+			return false;
+		}
+		if (Selection == Peer.LastSelection && Peer.DesiredCatalogCursor.Scope == CatalogCursor.Scope &&
+			Peer.DesiredCatalogCursor.NextSequence == CatalogCursor.NextSequence && !Peer.DesiredObjects.empty()) {
+			for (auto Iterator = Peer.PendingTransitions.begin(); Iterator != Peer.PendingTransitions.end();) {
+				const bool StaleEnter = Iterator->second.Kind == PendingTransitionKind::Enter &&
+										(RetiredObjects.contains(Iterator->first) ||
+										 !Catalog.contains(Iterator->first));
+				if (StaleEnter) {
+					Iterator = Peer.PendingTransitions.erase(Iterator);
+					--PendingTransitionCount;
+					SaturatingAdd(Metrics.StructuralTransitionsCancelled, 1);
+					continue;
+				}
+				if (Iterator->second.Kind == PendingTransitionKind::Leave && RetiredObjects.contains(Iterator->first) &&
+					!Iterator->second.Critical) {
+					if (Peer.NextPendingToken == std::numeric_limits<std::uint64_t>::max()) {
+						Error = "Structural pending transition token is exhausted";
+						return false;
+					}
+					Iterator->second.Critical = true;
+					Iterator->second.Token = Peer.NextPendingToken++;
+					Peer.CriticalQueue.push_back({Iterator->first, Iterator->second.Token});
+					SaturatingAdd(Metrics.StructuralTransitionsReplanned, 1);
+				}
+				++Iterator;
+			}
+			CompactPendingQueues(Peer);
+			return true;
+		}
+
+		std::set<ObjectId> Desired;
+		if (!BuildDependencyClosure(Selection, Desired, Error)) return false;
+		PeerRelevanceSelection RequiredSelection{
+			.RequiredObjects = Selection.RequiredObjects,
+			.DesiredObjects = Selection.RequiredObjects,
+		};
+		if (RequiredSelection.DesiredObjects.empty() && SourceRoot)
+			RequiredSelection.RequiredObjects = RequiredSelection.DesiredObjects = {SourceRoot->GetObjectId()};
+		std::set<ObjectId> Required;
+		if (!BuildDependencyClosure(RequiredSelection, Required, Error)) return false;
+
+		for (auto Iterator = Peer.PendingTransitions.begin(); Iterator != Peer.PendingTransitions.end();) {
+			const bool Known = Peer.View.Knows(Iterator->first);
+			const bool DesiredNow = Desired.contains(Iterator->first);
+			const bool StillRequired = Iterator->second.Kind == PendingTransitionKind::Enter
+										   ? DesiredNow && !Known && Catalog.contains(Iterator->first) &&
+												 !RetiredObjects.contains(Iterator->first)
+										   : !DesiredNow && Known;
+			if (StillRequired) {
+				++Iterator;
+				continue;
+			}
+			Iterator = Peer.PendingTransitions.erase(Iterator);
+			--PendingTransitionCount;
+			SaturatingAdd(Metrics.StructuralTransitionsCancelled, 1);
+		}
+
+		auto AddPending = [&](ObjectId Object, PendingTransitionKind Kind, bool Critical) -> bool {
+			auto Existing = Peer.PendingTransitions.find(Object);
+			if (Existing != Peer.PendingTransitions.end()) {
+				if (Existing->second.Kind == Kind && Existing->second.Critical == Critical) return true;
+				if (Peer.NextPendingToken == std::numeric_limits<std::uint64_t>::max()) {
+					Error = "Structural pending transition token is exhausted";
+					return false;
+				}
+				Existing->second.Kind = Kind;
+				Existing->second.Critical = Critical;
+				Existing->second.Token = Peer.NextPendingToken++;
+				auto &Queue = Critical ? Peer.CriticalQueue : Peer.OrdinaryQueue;
+				Queue.push_back({Object, Existing->second.Token});
+				SaturatingAdd(Metrics.StructuralTransitionsReplanned, 1);
+				return true;
+			}
+			if (Peer.PendingTransitions.size() >= Configuration.MaximumPendingTransitionsPerPeer) {
+				SaturatingAdd(Metrics.StructuralBacklogLimitFailures, 1);
+				Error = "Peer structural pending transition limit exceeded";
+				return false;
+			}
+			if (PendingTransitionCount >= Configuration.MaximumPendingTransitions) {
+				SaturatingAdd(Metrics.StructuralBacklogLimitFailures, 1);
+				Error = "Session structural pending transition limit exceeded";
+				return false;
+			}
+			if (Peer.NextPendingToken == std::numeric_limits<std::uint64_t>::max()) {
+				Error = "Structural pending transition token is exhausted";
+				return false;
+			}
+			PendingTransition Transition{Kind, SimulationTick, Peer.NextPendingToken++, Critical};
+			Peer.PendingTransitions.emplace(Object, Transition);
+			++PendingTransitionCount;
+			auto &Queue = Critical ? Peer.CriticalQueue : Peer.OrdinaryQueue;
+			Queue.push_back({Object, Transition.Token});
+			return true;
+		};
+
+		for (const auto Object : Desired)
+			if (!Peer.View.Knows(Object) && !RetiredObjects.contains(Object) &&
+				!AddPending(Object, PendingTransitionKind::Enter, Required.contains(Object)))
+				return false;
+		std::vector<ObjectId> KnownObjects(Peer.View.KnownObjects.begin(), Peer.View.KnownObjects.end());
+		std::ranges::sort(KnownObjects);
+		for (const auto Object : KnownObjects) {
+			const auto Id = Object;
+			if (!Desired.contains(Id) && !AddPending(Id, PendingTransitionKind::Leave, RetiredObjects.contains(Id)))
+				return false;
+		}
+
+		Peer.LeavingDependents.clear();
+		for (const auto &[Object, Transition] : Peer.PendingTransitions) {
+			if (Transition.Kind != PendingTransitionKind::Leave) continue;
+			auto Found = Catalog.find(Object);
+			if (Found == Catalog.end()) continue;
+			const auto &Publication = Found->second->Publication;
+			if (Publication.Parent) {
+				auto Parent = Peer.PendingTransitions.find(*Publication.Parent);
+				if (Parent != Peer.PendingTransitions.end() && Parent->second.Kind == PendingTransitionKind::Leave)
+					Peer.LeavingDependents[*Publication.Parent].push_back(Object);
+			}
+			for (const auto &[Name, Value] : Publication.Properties) {
+				const auto *Reference = std::get_if<WireObjectReference>(&Value);
+				if (!Reference || !IsHardReference(Publication, Name)) continue;
+				const auto Target = Reference->Object.ToObjectId();
+				auto Dependency = Peer.PendingTransitions.find(Target);
+				if (Dependency != Peer.PendingTransitions.end() &&
+					Dependency->second.Kind == PendingTransitionKind::Leave)
+					Peer.LeavingDependents[Target].push_back(Object);
+			}
+		}
+		for (auto &[Object, Dependents] : Peer.LeavingDependents) {
+			(void)Object;
+			std::ranges::sort(Dependents);
+			Dependents.erase(std::unique(Dependents.begin(), Dependents.end()), Dependents.end());
+		}
+
+		Peer.DesiredObjects = std::move(Desired);
+		Peer.RequiredObjects = std::move(Required);
+		Peer.LastSelection = Selection;
+		Peer.DesiredCatalogCursor = CatalogCursor;
+		RefreshRelevantObjects(Peer.View, Peer.DesiredObjects);
+		CompactPendingQueues(Peer);
+		return true;
+	}
+
 	PreparedPublishReplication ReplicationCoordinator::MakePeerPublish(
 		ObjectId Object,
 		const std::set<ObjectId> &Known,
@@ -416,6 +664,36 @@ namespace gargantuan::network {
 		return Publish;
 	}
 
+	PreparedPublishReplication ReplicationCoordinator::MakePeerPublish(
+		ObjectId Object,
+		const ReplicationView &View,
+		const std::set<ObjectId> &Entering,
+		const std::set<ObjectId> &Leaving,
+		ReplicationMetrics &CandidateMetrics,
+		std::set<ObjectId> &CandidateRequestedTemplates
+	) {
+		auto Found = Catalog.find(Object);
+		if (Found == Catalog.end()) return {};
+		PreparedPublishReplication Publish{Object, Found->second};
+		if (!StructuralTemplateReuseEnabled ||
+			(!RequestedTemplates.contains(Object) && CandidateRequestedTemplates.insert(Object).second))
+			SaturatingAdd(CandidateMetrics.StructuralTemplateMisses, 1);
+		else {
+			SaturatingAdd(CandidateMetrics.StructuralTemplateHits, 1);
+			SaturatingAdd(CandidateMetrics.StructuralBytesReused, Found->second->RetainedBytes);
+		}
+		for (const auto &[Name, Value] : Found->second->Publication.Properties) {
+			const auto *Reference = std::get_if<WireObjectReference>(&Value);
+			if (!Reference) continue;
+			const auto Target = Reference->Object.ToObjectId();
+			const bool KnownAfterFrame = (View.Knows(Target) && !Leaving.contains(Target)) || Entering.contains(Target);
+			if (!KnownAfterFrame && !IsHardReference(Found->second->Publication, Name)) Publish.NilProperties.Add(Name);
+		}
+		SaturatingAdd(CandidateMetrics.PeerPatchOperations, 1);
+		SaturatingAdd(CandidateMetrics.ReferencePatchOperations, Publish.NilProperties.Size());
+		return Publish;
+	}
+
 	ReplicationIntent ReplicationCoordinator::FinalizePeerPublish(PreparedPublishReplication Publish) const {
 		if (StructuralTemplateReuseEnabled) return ReplicationIntent(std::move(Publish));
 		auto Publication = Publish.Template->Publication;
@@ -430,10 +708,17 @@ namespace gargantuan::network {
 	}
 
 	ReplicationProduceResult ReplicationCoordinator::ProduceRelevanceFrame(
-		ConnectionId Connection, const PeerRelevanceSelection &Selection, ReplicationMessageKind Kind
+		ConnectionId Connection,
+		ReplicationMessageKind Kind,
+		std::size_t MaximumTransitions,
+		std::uint64_t SimulationTick,
+		bool CriticalOnly
 	) {
 		auto Peer = Peers.find(Connection);
 		if (Peer == Peers.end()) return {{}, "Replication peer is not registered"};
+		if (Peer->second.PreparedCommit) return {{}, "A structural frame is awaiting scheduler acceptance"};
+		if (MaximumTransitions == 0 || MaximumTransitions > MaximumReplicationOperationsPerFrame)
+			return {{}, "Structural transition work limit is invalid"};
 		const auto Started = std::chrono::steady_clock::now();
 		const auto RefreshStarted = std::chrono::steady_clock::now();
 		std::string Error;
@@ -442,166 +727,129 @@ namespace gargantuan::network {
 			std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - RefreshStarted)
 				.count()
 		);
-		const auto DiscoveryStarted = std::chrono::steady_clock::now();
-		std::set<ObjectId> Closure;
-		if (!BuildDependencyClosure(Selection, Closure, Error)) return {{}, std::move(Error)};
-		auto CandidatePeer = Peer->second;
+		const auto SelectionStarted = std::chrono::steady_clock::now();
+		auto &CurrentPeer = Peer->second;
 		auto CandidateMetrics = Metrics;
 		std::set<ObjectId> CandidateRequestedTemplates;
 		SaturatingAdd(CandidateMetrics.PeerMaterializationPlans, 1);
-		ReplicationFrame Frame{ReplicationProtocolVersion, Kind, CandidatePeer.View.Epoch, CandidatePeer.NextSequence};
+		SaturatingAdd(CandidateMetrics.StructuralSchedulingTicks, 1);
+		SaturatingAdd(CandidateMetrics.StructuralTransitionsOffered, CurrentPeer.PendingTransitions.size());
+		ReplicationFrame Frame{ReplicationProtocolVersion, Kind, CurrentPeer.View.Epoch, CurrentPeer.NextSequence};
 		if (Kind == ReplicationMessageKind::Baseline) Frame.Schema = CaptureReplicationSchemaCompatibility();
-
-		std::set<ObjectId> Existing(CandidatePeer.View.KnownObjects.begin(), CandidatePeer.View.KnownObjects.end());
-		const std::set<ObjectId> RequiredObjects(Selection.RequiredObjects.begin(), Selection.RequiredObjects.end());
 		std::set<ObjectId> Leaving;
-		std::set_difference(
-			Existing.begin(), Existing.end(), Closure.begin(), Closure.end(), std::inserter(Leaving, Leaving.end())
-		);
 		std::set<ObjectId> Entering;
-		std::set_difference(
-			Closure.begin(), Closure.end(), Existing.begin(), Existing.end(), std::inserter(Entering, Entering.end())
-		);
-		std::set<ObjectId> DesiredEntering;
-		std::set<ObjectId> DesiredLeaving;
+		std::map<ObjectId, std::size_t> EnterReferenceFixupCosts;
+		std::map<ObjectId, std::size_t> LeaveReferenceFixupCosts;
+		std::size_t HardNilLeaveFixupCost = 0;
 		if (Kind == ReplicationMessageKind::Incremental) {
-			DesiredEntering.swap(Entering);
-			DesiredLeaving.swap(Leaving);
-			std::size_t Remaining = MaximumRelevanceTransitionsPerFrame;
-			std::set<ObjectId> PriorityEntering;
-			for (const auto Object : DesiredEntering)
-				if (RequiredObjects.contains(Object)) PriorityEntering.insert(Object);
-			for (const auto Referrer : Closure) {
-				if (!Existing.contains(Referrer)) continue;
-				auto Found = Catalog.find(Referrer);
-				if (Found == Catalog.end()) continue;
+			for (const auto Referrer : CurrentPeer.DesiredObjects) {
+				if (!CurrentPeer.View.Knows(Referrer)) continue;
+				auto Object = Catalog.find(Referrer);
+				if (Object == Catalog.end()) continue;
+				for (const auto &[Name, Value] : Object->second->Publication.Properties) {
+					const auto *Reference = std::get_if<WireObjectReference>(&Value);
+					if (Reference) {
+						++EnterReferenceFixupCosts[Reference->Object.ToObjectId()];
+						if (!IsHardReference(Object->second->Publication, Name))
+							++LeaveReferenceFixupCosts[Reference->Object.ToObjectId()];
+					} else if (std::holds_alternative<std::monostate>(Value) &&
+							   IsHardReference(Object->second->Publication, Name)) {
+						++HardNilLeaveFixupCost;
+					}
+				}
+			}
+		}
+		std::size_t Remaining = MaximumTransitions;
+		const auto MaximumExamined = std::max<std::size_t>(64, MaximumTransitions * 4);
+		std::size_t Examined = 0;
+		auto CollectGroup = [&](ObjectId Candidate, std::set<ObjectId> &Group) -> bool {
+			std::vector<ObjectId> Pending{Candidate};
+			for (std::size_t Index = 0; Index < Pending.size(); ++Index) {
+				SaturatingAdd(CandidateMetrics.StructuralDependencyPlanOperations, 1);
+				const auto Object = Pending[Index];
+				auto Transition = CurrentPeer.PendingTransitions.find(Object);
+				if (Transition == CurrentPeer.PendingTransitions.end() ||
+					Transition->second.Kind != CurrentPeer.PendingTransitions.at(Candidate).Kind ||
+					!Group.insert(Object).second)
+					continue;
+				if (Transition->second.Kind == PendingTransitionKind::Leave) {
+					auto Dependents = CurrentPeer.LeavingDependents.find(Object);
+					if (Dependents != CurrentPeer.LeavingDependents.end())
+						Pending.insert(Pending.end(), Dependents->second.begin(), Dependents->second.end());
+					continue;
+				}
+				auto Found = Catalog.find(Object);
+				if (Found == Catalog.end() || RetiredObjects.contains(Object)) continue;
 				const auto &Publication = Found->second->Publication;
+				if (Publication.Parent && !CurrentPeer.View.Knows(*Publication.Parent))
+					Pending.push_back(*Publication.Parent);
 				for (const auto &[Name, Value] : Publication.Properties) {
 					const auto *Reference = std::get_if<WireObjectReference>(&Value);
 					if (Reference && IsHardReference(Publication, Name) &&
-						DesiredEntering.contains(Reference->Object.ToObjectId()))
-						PriorityEntering.insert(Reference->Object.ToObjectId());
+						!CurrentPeer.View.Knows(Reference->Object.ToObjectId()))
+						Pending.push_back(Reference->Object.ToObjectId());
 				}
 			}
-			std::vector<ObjectId> EnterCandidates(DesiredEntering.begin(), DesiredEntering.end());
-			std::ranges::sort(EnterCandidates, [&](ObjectId Left, ObjectId Right) {
-				const bool LeftPriority = PriorityEntering.contains(Left);
-				const bool RightPriority = PriorityEntering.contains(Right);
-				if (LeftPriority != RightPriority) return LeftPriority;
-				const auto LeftDepth = AncestryDepth(Left, Catalog);
-				const auto RightDepth = AncestryDepth(Right, Catalog);
-				return LeftDepth != RightDepth ? LeftDepth < RightDepth : Left < Right;
-			});
-			auto AddEnterGroup = [&](ObjectId Candidate) -> std::optional<bool> {
-				if (Entering.contains(Candidate)) return true;
-				std::set<ObjectId> DependencyGroup;
-				std::vector<ObjectId> Pending{Candidate};
-				for (std::size_t Index = 0; Index < Pending.size(); ++Index) {
-					const auto Object = Pending[Index];
-					if (!DesiredEntering.contains(Object) || !DependencyGroup.insert(Object).second) continue;
-					auto Found = Catalog.find(Object);
-					if (Found == Catalog.end()) continue;
-					const auto &Publication = Found->second->Publication;
-					if (Publication.Parent) Pending.push_back(*Publication.Parent);
-					for (const auto &[Name, Value] : Publication.Properties) {
-						const auto *Reference = std::get_if<WireObjectReference>(&Value);
-						if (Reference && IsHardReference(Publication, Name))
-							Pending.push_back(Reference->Object.ToObjectId());
-					}
+			return Group.size() <= Configuration.PeerQuantum && Group.size() <= MaximumRelevanceTransitionsPerFrame;
+		};
+		auto ProcessQueue = [&](std::deque<PendingQueueEntry> &Queue, bool Critical) -> bool {
+			const auto QueueEntries = Queue.size();
+			for (std::size_t Index = 0; Index < QueueEntries && Remaining != 0 && Examined < MaximumExamined; ++Index) {
+				const auto Entry = Queue.front();
+				Queue.pop_front();
+				Queue.push_back(Entry);
+				++Examined;
+				auto Transition = CurrentPeer.PendingTransitions.find(Entry.Object);
+				if (Transition == CurrentPeer.PendingTransitions.end() || Transition->second.Token != Entry.Token ||
+					Transition->second.Critical != Critical)
+					continue;
+				auto &Selected = Transition->second.Kind == PendingTransitionKind::Enter ? Entering : Leaving;
+				if (Selected.contains(Entry.Object)) continue;
+				std::set<ObjectId> Group;
+				if (!CollectGroup(Entry.Object, Group)) {
+					SaturatingAdd(CandidateMetrics.DependencyLimitFailures, 1);
+					Error = "Atomic replication dependency group exceeds the transition work limit";
+					return false;
 				}
-				std::size_t NewDependencies = 0;
-				for (const auto Object : DependencyGroup)
-					if (!Entering.contains(Object)) ++NewDependencies;
-				if (NewDependencies > MaximumRelevanceTransitionsPerFrame) {
-					++Metrics.DependencyLimitFailures;
-					return std::nullopt;
+				std::size_t NewWork = 0;
+				for (const auto Object : Group) {
+					if (Selected.contains(Object)) continue;
+					++NewWork;
+					const auto &FixupCosts = Transition->second.Kind == PendingTransitionKind::Enter
+												 ? EnterReferenceFixupCosts
+												 : LeaveReferenceFixupCosts;
+					if (auto Cost = FixupCosts.find(Object); Cost != FixupCosts.end()) NewWork += Cost->second;
 				}
-				if (NewDependencies > Remaining) return false;
-				Entering.insert(DependencyGroup.begin(), DependencyGroup.end());
-				Remaining -= NewDependencies;
-				return true;
-			};
-			for (const auto Candidate : EnterCandidates) {
-				if (!PriorityEntering.contains(Candidate)) continue;
-				auto Added = AddEnterGroup(Candidate);
-				if (!Added) return {{}, "Atomic replication dependency group exceeds the transition work limit"};
+				if (Transition->second.Kind == PendingTransitionKind::Leave && Leaving.empty())
+					NewWork += HardNilLeaveFixupCost;
+				if (NewWork > Configuration.PeerQuantum) {
+					Error = "Structural dependency group and reference fixups exceed the peer quantum";
+					return false;
+				}
+				if (NewWork > Remaining) continue;
+				Selected.insert(Group.begin(), Group.end());
+				Remaining -= NewWork;
 			}
-			const bool PriorityBacklogged = std::ranges::any_of(PriorityEntering, [&](ObjectId Object) {
-				return !Entering.contains(Object);
-			});
-			if (!PriorityBacklogged) {
-				std::map<ObjectId, std::set<ObjectId>> LeavingDependents;
-				for (const auto Object : DesiredLeaving) {
-					auto Found = Catalog.find(Object);
-					if (Found == Catalog.end()) continue;
-					const auto &Publication = Found->second->Publication;
-					if (Publication.Parent) {
-						const auto Parent = *Publication.Parent;
-						if (DesiredLeaving.contains(Parent)) LeavingDependents[Parent].insert(Object);
-					}
-					for (const auto &[Name, Value] : Publication.Properties) {
-						const auto *Reference = std::get_if<WireObjectReference>(&Value);
-						if (!Reference || !IsHardReference(Publication, Name)) continue;
-						const auto Target = Reference->Object.ToObjectId();
-						if (DesiredLeaving.contains(Target)) LeavingDependents[Target].insert(Object);
-					}
-				}
-				std::vector<ObjectId> LeaveOrder(DesiredLeaving.begin(), DesiredLeaving.end());
-				std::ranges::sort(LeaveOrder, [&](ObjectId Left, ObjectId Right) {
-					const auto LeftDepth = AncestryDepth(Left, Catalog);
-					const auto RightDepth = AncestryDepth(Right, Catalog);
-					return LeftDepth != RightDepth ? LeftDepth > RightDepth : Left < Right;
-				});
-				for (const auto Candidate : LeaveOrder) {
-					if (Remaining == 0 || Leaving.contains(Candidate)) continue;
-					std::set<ObjectId> DependencyGroup;
-					std::vector<ObjectId> Pending{Candidate};
-					for (std::size_t Index = 0; Index < Pending.size(); ++Index) {
-						const auto Object = Pending[Index];
-						if (Leaving.contains(Object) || !DesiredLeaving.contains(Object) ||
-							!DependencyGroup.insert(Object).second)
-							continue;
-						auto Dependents = LeavingDependents.find(Object);
-						if (Dependents != LeavingDependents.end())
-							Pending.insert(Pending.end(), Dependents->second.begin(), Dependents->second.end());
-					}
-					if (DependencyGroup.size() > MaximumRelevanceTransitionsPerFrame) {
-						++Metrics.DependencyLimitFailures;
-						return {{}, "Atomic replication dependency group exceeds the transition work limit"};
-					}
-					if (DependencyGroup.size() > Remaining) continue;
-					Leaving.insert(DependencyGroup.begin(), DependencyGroup.end());
-					Remaining -= DependencyGroup.size();
-				}
-			}
-			for (const auto Candidate : EnterCandidates) {
-				if (PriorityEntering.contains(Candidate)) continue;
-				auto Added = AddEnterGroup(Candidate);
-				if (!Added) return {{}, "Atomic replication dependency group exceeds the transition work limit"};
-			}
-		}
-		CandidatePeer.PendingRelevanceTransitions = Kind == ReplicationMessageKind::Incremental
-														? DesiredEntering.size() + DesiredLeaving.size() -
-															  Entering.size() - Leaving.size()
-														: 0;
-		CandidateMetrics.MaterializationBacklog = CandidatePeer.PendingRelevanceTransitions;
-		for (const auto &[OtherConnection, OtherPeer] : Peers)
-			if (OtherConnection != Connection)
-				CandidateMetrics.MaterializationBacklog += OtherPeer.PendingRelevanceTransitions;
-		std::set<ObjectId> IncrementalMaterializedObjects;
-		const std::set<ObjectId> *MaterializedAfterFrame = &Closure;
-		if (Kind == ReplicationMessageKind::Incremental) {
-			IncrementalMaterializedObjects = Existing;
-			for (const auto Object : Leaving)
-				IncrementalMaterializedObjects.erase(Object);
-			IncrementalMaterializedObjects.insert(Entering.begin(), Entering.end());
-			MaterializedAfterFrame = &IncrementalMaterializedObjects;
-		}
+			return true;
+		};
+		if (!ProcessQueue(CurrentPeer.CriticalQueue, true)) return {{}, std::move(Error)};
+		if (!CriticalOnly && !ProcessQueue(CurrentPeer.OrdinaryQueue, false)) return {{}, std::move(Error)};
+		const auto SelectedObjectTransitionCount = Entering.size() + Leaving.size();
+		SaturatingAdd(
+			CandidateMetrics.StructuralTransitionsDeferredByBudget,
+			CurrentPeer.PendingTransitions.size() > SelectedObjectTransitionCount
+				? CurrentPeer.PendingTransitions.size() - SelectedObjectTransitionCount
+				: 0
+		);
+		CandidateMetrics.StructuralSelectionCpuNanoseconds += static_cast<std::uint64_t>(
+			std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - SelectionStarted)
+				.count()
+		);
 		Frame.Operations.reserve(Entering.size() + Leaving.size());
 
 		if (Kind == ReplicationMessageKind::Incremental && !Leaving.empty()) {
-			for (const auto Referrer : Closure) {
-				if (!Existing.contains(Referrer) || Entering.contains(Referrer)) continue;
+			for (const auto Referrer : CurrentPeer.DesiredObjects) {
+				if (!CurrentPeer.View.Knows(Referrer) || Entering.contains(Referrer)) continue;
 				auto Object = Catalog.find(Referrer);
 				if (Object == Catalog.end()) continue;
 				const auto &Publication = Object->second->Publication;
@@ -635,15 +883,15 @@ namespace gargantuan::network {
 			auto Found = Catalog.find(Object);
 			if (Found == Catalog.end()) return {{}, "Cannot publish a stale authoritative object"};
 			auto Publish = MakePeerPublish(
-				Object, *MaterializedAfterFrame, CandidateMetrics, CandidateRequestedTemplates
+				Object, CurrentPeer.View, Entering, Leaving, CandidateMetrics, CandidateRequestedTemplates
 			);
-			if (!PublishReferencesKnown(CandidatePeer.View, Publish, Entering))
+			if (!PublishReferencesKnown(CurrentPeer.View, Publish, Entering))
 				return {{}, "Hard materialization dependency is not available"};
 			Frame.Operations.push_back({Frame.Epoch, FinalizePeerPublish(std::move(Publish))});
-			CandidatePeer.View.KnownObjects.insert(Object);
-			++CandidateMetrics.ObjectsPublished;
 		}
 
+		std::uint64_t UnpublishedObjects = 0;
+		std::uint64_t DestroyedObjects = 0;
 		if (Kind == ReplicationMessageKind::Incremental) {
 			std::vector<ObjectId> LeaveOrder(Leaving.begin(), Leaving.end());
 			std::ranges::sort(LeaveOrder, [&](ObjectId Left, ObjectId Right) {
@@ -654,15 +902,14 @@ namespace gargantuan::network {
 			for (const auto Object : LeaveOrder) {
 				if (RetiredObjects.contains(Object)) {
 					Frame.Operations.push_back({Frame.Epoch, DestroyReplication{Object}});
-					++CandidateMetrics.ObjectsDestroyed;
+					++DestroyedObjects;
 				} else {
 					Frame.Operations.push_back({Frame.Epoch, UnpublishReplication{Object}});
-					++CandidateMetrics.ObjectsUnpublished;
+					++UnpublishedObjects;
 				}
-				CandidatePeer.View.ForgetReplica(Object);
 			}
-			for (const auto Referrer : Closure) {
-				if (Entering.contains(Referrer) || !Existing.contains(Referrer)) continue;
+			for (const auto Referrer : CurrentPeer.DesiredObjects) {
+				if (Entering.contains(Referrer) || !CurrentPeer.View.Knows(Referrer)) continue;
 				auto Object = Catalog.find(Referrer);
 				if (Object == Catalog.end()) continue;
 				for (const auto &[Name, Value] : Object->second->Publication.Properties) {
@@ -677,19 +924,19 @@ namespace gargantuan::network {
 		}
 
 		if (Frame.Operations.empty()) {
-			CandidatePeer.DesiredObjects = std::set<ObjectId>(
-				Selection.DesiredObjects.begin(), Selection.DesiredObjects.end()
-			);
-			RefreshRelevantObjects(CandidatePeer.View, Closure);
-			Peer->second = std::move(CandidatePeer);
+			Metrics = CandidateMetrics;
+			CompactPendingQueues(CurrentPeer);
 			return {{}, "No replication relevance changes are available"};
 		}
-		if (Frame.Operations.size() > MaximumReplicationOperationsPerFrame)
-			return {{}, "Replication relevance frame operation limit exceeded"};
+		if (Frame.Operations.size() > MaximumTransitions ||
+			Frame.Operations.size() > MaximumReplicationOperationsPerFrame)
+			return {{}, "Replication relevance frame exceeded its selected work limit"};
+		const auto SelectedWorkCount = Frame.Operations.size();
+		SaturatingAdd(CandidateMetrics.StructuralTransitionsSelected, SelectedWorkCount);
 		if (Kind == ReplicationMessageKind::Baseline)
 			CandidateMetrics.BaselineDiscoveryCpuNanoseconds += static_cast<std::uint64_t>(
 				std::chrono::duration_cast<std::chrono::nanoseconds>(
-					std::chrono::steady_clock::now() - DiscoveryStarted
+					std::chrono::steady_clock::now() - SelectionStarted
 				)
 					.count()
 			);
@@ -702,31 +949,53 @@ namespace gargantuan::network {
 			);
 		if (!Encoded) return {{}, Encoded.error().Format()};
 		SaturatingAdd(CandidateMetrics.StructuralBytesEncoded, Encoded->size());
+		SaturatingAdd(CandidateMetrics.StructuralTransitionsEncoded, SelectedWorkCount);
 		CandidateMetrics.ScratchHighWaterBytes = std::max<std::uint64_t>(
 			CandidateMetrics.ScratchHighWaterBytes, Frame.Operations.capacity() * sizeof(ReplicationOperation)
 		);
-		auto Next = CandidatePeer.NextSequence.TryNext();
+		auto Next = CurrentPeer.NextSequence.TryNext();
 		if (!Next) return {{}, "Reliable replication sequence is exhausted"};
-		CandidatePeer.NextSequence = *Next;
-		CandidatePeer.DesiredObjects = std::set<ObjectId>(
-			Selection.DesiredObjects.begin(), Selection.DesiredObjects.end()
-		);
-		RefreshRelevantObjects(CandidatePeer.View, Closure);
+		std::uint64_t DeadlineMisses = 0;
+		for (const auto Object : Entering) {
+			auto Transition = CurrentPeer.PendingTransitions.find(Object);
+			if (Transition != CurrentPeer.PendingTransitions.end()) {
+				const auto Age = SimulationTick >= Transition->second.PendingSinceTick
+									 ? SimulationTick - Transition->second.PendingSinceTick
+									 : std::uint64_t{0};
+				if (Age > Configuration.TransitionDeadlineTicks) SaturatingAdd(DeadlineMisses, 1);
+			}
+		}
 		CandidateMetrics.OperationsGenerated += Frame.Operations.size();
-		CandidateMetrics.RelevanceTransitions += Entering.size() + Leaving.size();
+		CandidateMetrics.RelevanceTransitions += SelectedObjectTransitionCount;
+		SaturatingAdd(CandidateMetrics.StructuralTransitionsPrepared, SelectedWorkCount);
 		CandidateMetrics.RelevanceTransitionCpuNanoseconds += static_cast<std::uint64_t>(
 			std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - Started).count()
 		);
 		if (Kind == ReplicationMessageKind::Baseline) {
-			CandidatePeer.JournalCursor = CatalogCursor;
 			CandidateMetrics.BaselineObjects += Entering.size();
 			CandidateMetrics.BaselineBytes += Encoded->size();
 		} else
 			CandidateMetrics.IncrementalBytes += Encoded->size();
 		RequestedTemplates.merge(CandidateRequestedTemplates);
-		Peer->second = std::move(CandidatePeer);
 		Metrics = CandidateMetrics;
-		return {std::move(Frame), {}};
+		PreparedStructuralCommit Commit{
+			.Sequence = Frame.Sequence,
+			.NextSequence = *Next,
+			.JournalCursor = Kind == ReplicationMessageKind::Baseline ? std::optional<ChangeCursor>(CatalogCursor)
+																	  : std::nullopt,
+			.Entering = std::vector<ObjectId>(Entering.begin(), Entering.end()),
+			.Leaving = std::vector<ObjectId>(Leaving.begin(), Leaving.end()),
+			.PublishedObjects = Entering.size(),
+			.UnpublishedObjects = UnpublishedObjects,
+			.DestroyedObjects = DestroyedObjects,
+			.DeadlineMisses = DeadlineMisses,
+			.TransitionCount = SelectedWorkCount,
+		};
+		if (CurrentPeer.ExplicitSchedulerCommit)
+			CurrentPeer.PreparedCommit = std::move(Commit);
+		else
+			ApplyPreparedCommit(CurrentPeer, std::move(Commit));
+		return {std::move(Frame), {}, SelectedWorkCount};
 	}
 
 	ReplicationProduceResult ReplicationCoordinator::AddPeer(ConnectionId Connection, ReplicationEpoch Epoch) {
@@ -737,6 +1006,7 @@ namespace gargantuan::network {
 			if (!State->Publication.Parent || !IsInitiallyRelevant || IsInitiallyRelevant(Object))
 				Selection.DesiredObjects.push_back(Object);
 		}
+		Selection.RequiredObjects = Selection.DesiredObjects;
 		auto Result = AddPeer(Connection, Epoch, Selection);
 		if (Result.Succeeded()) Peers.at(Connection).PolicyManaged = false;
 		return Result;
@@ -745,98 +1015,206 @@ namespace gargantuan::network {
 	ReplicationProduceResult ReplicationCoordinator::AddPeer(
 		ConnectionId Connection, ReplicationEpoch Epoch, const PeerRelevanceSelection &Selection
 	) {
-		if (!SourceRoot || !Connection.IsValid() || !Epoch.IsValid()) return {{}, "Invalid replication peer or source"};
-		if (Peers.contains(Connection)) return {{}, "Replication peer is already registered"};
+		return AddPeer(Connection, Epoch, Selection, false);
+	}
+
+	ReplicationProduceResult ReplicationCoordinator::AddPeerBounded(
+		ConnectionId Connection, ReplicationEpoch Epoch, const PeerRelevanceSelection &Selection
+	) {
+		return AddPeer(Connection, Epoch, Selection, true);
+	}
+
+	ReplicationScheduleResult ReplicationCoordinator::RegisterPeerBounded(
+		ConnectionId Connection, ReplicationEpoch Epoch, const PeerRelevanceSelection &Selection
+	) {
+		auto Registered = RegisterPeer(Connection, Epoch, Selection, true);
+		if (!Registered.Succeeded()) return Registered;
+		const auto CriticalTransitionCount = GetPendingCriticalTransitionCount(Connection);
+		if (CriticalTransitionCount > Configuration.PeerQuantum) {
+			RemovePeer(Connection);
+			return {"Critical structural bootstrap exceeds its bounded transition quantum"};
+		}
+		return {};
+	}
+
+	ReplicationScheduleResult ReplicationCoordinator::RegisterPeer(
+		ConnectionId Connection,
+		ReplicationEpoch Epoch,
+		const PeerRelevanceSelection &Selection,
+		bool ExplicitSchedulerCommit
+	) {
+		if (!SourceRoot || !Connection.IsValid() || !Epoch.IsValid()) return {"Invalid replication peer or source"};
+		if (Peers.contains(Connection)) return {"Replication peer is already registered"};
 		for (const auto &[Existing, State] : Peers)
 			if (Existing.Slot == Connection.Slot && State.View.Connection.IsValid())
-				return {{}, "A live replication peer already owns this connection slot"};
+				return {"A live replication peer already owns this connection slot"};
 		PeerState State{{Connection, Epoch}, CatalogCursor, ReliableReplicationSequence(1)};
 		State.PolicyManaged = true;
-		Peers.emplace(Connection, std::move(State));
-		auto Result = ProduceRelevanceFrame(Connection, Selection, ReplicationMessageKind::Baseline);
-		if (!Result.Succeeded()) Peers.erase(Connection);
+		State.ExplicitSchedulerCommit = ExplicitSchedulerCommit;
+		auto [Peer, Added] = Peers.emplace(Connection, std::move(State));
+		if (!Added) return {"Replication peer is already registered"};
+		std::string Error;
+		if (!RefreshCatalog(Error) || !RecordDesiredState(Peer->second, Selection, 0, Error)) {
+			RemovePeer(Connection);
+			return {std::move(Error)};
+		}
+		return {};
+	}
+
+	ReplicationProduceResult ReplicationCoordinator::AddPeer(
+		ConnectionId Connection,
+		ReplicationEpoch Epoch,
+		const PeerRelevanceSelection &Selection,
+		bool BoundOrdinaryTransitions
+	) {
+		auto Registered = RegisterPeer(Connection, Epoch, Selection, BoundOrdinaryTransitions);
+		if (!Registered.Succeeded()) return {{}, std::move(Registered.Error)};
+		const auto MaximumTransitions = BoundOrdinaryTransitions ? Configuration.MaximumTransitionsPerPeerTick
+																 : std::min<std::size_t>(
+																	   MaximumReplicationOperationsPerFrame,
+																	   Peers.at(Connection).PendingTransitions.size()
+																   );
+		const bool CriticalOnly = BoundOrdinaryTransitions && Peers.at(Connection).PendingTransitions.size() >
+																  Configuration.MaximumTransitionsPerPeerTick;
+		const auto CriticalTransitionCount = static_cast<std::size_t>(std::ranges::count_if(
+			Peers.at(Connection).PendingTransitions, [](const auto &Entry) { return Entry.second.Critical; }
+		));
+		if (BoundOrdinaryTransitions && CriticalTransitionCount > MaximumTransitions) {
+			RemovePeer(Connection);
+			return {{}, "Critical structural bootstrap exceeds its bounded transition limit"};
+		}
+		auto Result = ProduceRelevanceFrame(
+			Connection, ReplicationMessageKind::Baseline, MaximumTransitions, 0, CriticalOnly
+		);
+		if (!Result.Succeeded()) RemovePeer(Connection);
 		return Result;
 	}
 
 	ReplicationProduceResult
 	ReplicationCoordinator::UpdateRelevance(ConnectionId Connection, const PeerRelevanceSelection &Selection) {
-		return ProduceRelevanceFrame(Connection, Selection, ReplicationMessageKind::Incremental);
+		if (StandaloneSchedulingTick != std::numeric_limits<std::uint64_t>::max()) ++StandaloneSchedulingTick;
+		auto Recorded = RecordDesiredState(Connection, Selection, StandaloneSchedulingTick);
+		if (!Recorded.Succeeded()) return {{}, std::move(Recorded.Error)};
+		return ProducePendingRelevance(Connection, MaximumRelevanceTransitionsPerFrame, StandaloneSchedulingTick);
+	}
+
+	ReplicationScheduleResult ReplicationCoordinator::RecordDesiredState(
+		ConnectionId Connection, const PeerRelevanceSelection &Selection, std::uint64_t SimulationTick
+	) {
+		LatestSchedulingTick = std::max(LatestSchedulingTick, SimulationTick);
+		auto Peer = Peers.find(Connection);
+		if (Peer == Peers.end()) return {"Replication peer is not registered"};
+		std::string Error;
+		if (!RefreshCatalog(Error) || !RecordDesiredState(Peer->second, Selection, SimulationTick, Error))
+			return {std::move(Error)};
+		return {};
+	}
+
+	ReplicationProduceResult ReplicationCoordinator::ProducePendingRelevance(
+		ConnectionId Connection, std::size_t MaximumTransitions, std::uint64_t SimulationTick
+	) {
+		LatestSchedulingTick = std::max(LatestSchedulingTick, SimulationTick);
+		return ProduceRelevanceFrame(
+			Connection, ReplicationMessageKind::Incremental, MaximumTransitions, SimulationTick, false
+		);
+	}
+
+	ReplicationProduceResult ReplicationCoordinator::ProducePendingBaseline(
+		ConnectionId Connection, std::size_t MaximumTransitions, std::uint64_t SimulationTick
+	) {
+		LatestSchedulingTick = std::max(LatestSchedulingTick, SimulationTick);
+		auto Peer = Peers.find(Connection);
+		if (Peer == Peers.end()) return {{}, "Replication peer is not registered"};
+		const bool CriticalOnly = Peer->second.PendingTransitions.size() > MaximumTransitions;
+		return ProduceRelevanceFrame(
+			Connection, ReplicationMessageKind::Baseline, MaximumTransitions, SimulationTick, CriticalOnly
+		);
 	}
 
 	ReplicationProduceResult
-	ReplicationCoordinator::ProduceIncremental(ConnectionId Connection, std::size_t MaximumJournalRecords) {
+	ReplicationCoordinator::ProduceIncremental(ConnectionId Connection, std::size_t MaximumTransitions) {
 		auto Peer = Peers.find(Connection);
 		if (Peer == Peers.end()) return {{}, "Replication peer is not registered"};
+		if (Peer->second.PreparedCommit) return {{}, "A structural frame is awaiting scheduler acceptance"};
 		std::string CatalogError;
 		if (!RefreshCatalog(CatalogError)) return {{}, std::move(CatalogError)};
-		auto CandidatePeer = Peer->second;
 		auto CandidateMetrics = Metrics;
 		std::set<ObjectId> CandidateRequestedTemplates;
-		if (MaximumJournalRecords == 0 || MaximumJournalRecords > MaximumWireJournalRecords)
-			return {{}, "Replication journal batch limit is invalid"};
-		auto Read = ChangeJournal::Get().Read(CandidatePeer.JournalCursor, MaximumJournalRecords);
-		if (Read.Status == ChangeReadStatus::ResnapshotRequired)
+		if (MaximumTransitions == 0 || MaximumTransitions > MaximumReplicationOperationsPerFrame)
+			return {{}, "Replication transition work limit is invalid"};
+		const bool PolicyManaged = Peer->second.PolicyManaged;
+		CandidateMetrics.StructuralMaximumJournalLagRecords = std::max(
+			CandidateMetrics.StructuralMaximumJournalLagRecords,
+			CatalogCursor.NextSequence >= Peer->second.JournalCursor.NextSequence
+				? CatalogCursor.NextSequence - Peer->second.JournalCursor.NextSequence
+				: std::uint64_t{0}
+		);
+		auto Read = ChangeJournal::Get().Read(
+			Peer->second.JournalCursor, PolicyManaged ? MaximumWireJournalRecords : MaximumTransitions
+		);
+		if (Read.Status == ChangeReadStatus::ResnapshotRequired) {
+			SaturatingAdd(CandidateMetrics.StructuralJournalLagFailures, 1);
+			Metrics = CandidateMetrics;
 			return {{}, "Authoritative journal cursor requires a new baseline"};
-		ReplicationFrame Frame{
-			ReplicationProtocolVersion,
-			ReplicationMessageKind::Incremental,
-			CandidatePeer.View.Epoch,
-			CandidatePeer.NextSequence
-		};
+		}
+		SaturatingAdd(CandidateMetrics.StructuralTransitionsOffered, Read.Records.size());
 		if (Read.Records.empty()) return {{}, "No replication changes are available"};
-		Frame.Operations.reserve(Read.Records.size());
+		auto CandidateView = Peer->second.View;
+		auto CandidateNextSequence = Peer->second.NextSequence;
+		ReplicationFrame Frame{
+			ReplicationProtocolVersion, ReplicationMessageKind::Incremental, CandidateView.Epoch, CandidateNextSequence
+		};
+		Frame.Operations.reserve(std::min(MaximumTransitions, Read.Records.size()));
+		auto ProcessedCursor = Peer->second.JournalCursor;
 		std::set<ObjectId> PublishedThisFrame;
+		std::set<ObjectId> DestroyedThisFrame;
 		std::set<ObjectId> BatchPublishObjects;
 		for (const auto &Record : Read.Records)
 			if (std::holds_alternative<ObjectCreatedChange>(Record.Payload) && Catalog.contains(Record.Object) &&
-				(!CandidatePeer.PolicyManaged || CandidatePeer.View.RelevantObjects.contains(Record.Object)))
+				(!PolicyManaged || CandidateView.RelevantObjects.contains(Record.Object)))
 				BatchPublishObjects.insert(Record.Object);
 		for (const auto &Record : Read.Records) {
-			const auto Known = CandidatePeer.View.Knows(Record.Object);
-			const auto Relevant = CandidatePeer.View.RelevantObjects.contains(Record.Object);
-			if (CandidatePeer.PolicyManaged && !Relevant) continue;
-			if (!Known && !CandidatePeer.PolicyManaged && IsInitiallyRelevant && !IsInitiallyRelevant(Record.Object))
-				continue;
+			if (Frame.Operations.size() == MaximumTransitions) break;
+			ProcessedCursor.NextSequence = Record.Sequence + 1;
+			const auto Known = CandidateView.Knows(Record.Object);
+			const auto Relevant = CandidateView.RelevantObjects.contains(Record.Object);
+			if (PolicyManaged && !Relevant) continue;
+			if (!Known && !PolicyManaged && IsInitiallyRelevant && !IsInitiallyRelevant(Record.Object)) continue;
 			bool FailedReference = false;
 			std::visit(
 				[&](const auto &Change) {
 					using Type = std::decay_t<decltype(Change)>;
 					if constexpr (std::is_same_v<Type, ObjectCreatedChange>) {
-						if (!Relevant) CandidatePeer.View.RelevantObjects.insert(Record.Object);
+						if (!Relevant) CandidateView.RelevantObjects.insert(Record.Object);
 						if (Known) return;
 						auto Found = Catalog.find(Record.Object);
 						if (Found == Catalog.end()) return;
 						std::set<ObjectId> Available(
-							CandidatePeer.View.KnownObjects.begin(), CandidatePeer.View.KnownObjects.end()
+							CandidateView.KnownObjects.begin(), CandidateView.KnownObjects.end()
 						);
 						Available.insert(BatchPublishObjects.begin(), BatchPublishObjects.end());
 						auto Publish = MakePeerPublish(
-							Record.Object,
-							Available,
-							CandidateMetrics,
-							CandidateRequestedTemplates,
-							CandidatePeer.PolicyManaged
+							Record.Object, Available, CandidateMetrics, CandidateRequestedTemplates, PolicyManaged
 						);
 						const auto &Publication = Publish.Template->Publication;
-						if (Publication.Parent && !CandidatePeer.View.Knows(*Publication.Parent) &&
+						if (Publication.Parent && !CandidateView.Knows(*Publication.Parent) &&
 							!BatchPublishObjects.contains(*Publication.Parent)) {
-							CandidatePeer.View.RelevantObjects.erase(Record.Object);
+							CandidateView.RelevantObjects.erase(Record.Object);
 							return;
 						}
-						if (!PublishReferencesKnown(CandidatePeer.View, Publish, BatchPublishObjects)) {
+						if (!PublishReferencesKnown(CandidateView, Publish, BatchPublishObjects)) {
 							FailedReference = true;
 							return;
 						}
 						Frame.Operations.push_back({Frame.Epoch, FinalizePeerPublish(std::move(Publish))});
-						CandidatePeer.View.KnownObjects.insert(Record.Object);
+						CandidateView.KnownObjects.insert(Record.Object);
 						PublishedThisFrame.insert(Record.Object);
-						++CandidateMetrics.ObjectsPublished;
 					} else if constexpr (std::is_same_v<Type, ObjectDestroyedChange>) {
 						if (!Known) return;
 						Frame.Operations.push_back({Frame.Epoch, DestroyReplication{Record.Object}});
-						CandidatePeer.View.ForgetReplica(Record.Object);
-						CandidatePeer.View.RelevantObjects.erase(Record.Object);
-						++CandidateMetrics.ObjectsDestroyed;
+						CandidateView.ForgetReplica(Record.Object);
+						CandidateView.RelevantObjects.erase(Record.Object);
+						DestroyedThisFrame.insert(Record.Object);
 					} else {
 						if (!Known || PublishedThisFrame.contains(Record.Object)) {
 							if (PublishedThisFrame.contains(Record.Object)) ++CandidateMetrics.OperationsCoalesced;
@@ -860,8 +1238,8 @@ namespace gargantuan::network {
 								if (CurrentValue != CurrentObject->second->Publication.Properties.end())
 									Value = CurrentValue->second;
 							}
-							if (!ReferencesKnown(CandidatePeer.View, Value)) {
-								if (CandidatePeer.PolicyManaged && CurrentObject != Catalog.end()) {
+							if (!ReferencesKnown(CandidateView, Value)) {
+								if (PolicyManaged && CurrentObject != Catalog.end()) {
 									if (!IsHardReference(CurrentObject->second->Publication, Change.PropertyName)) {
 										Value = std::monostate{};
 										++CandidateMetrics.SoftReferenceFixups;
@@ -884,7 +1262,7 @@ namespace gargantuan::network {
 							}
 							Frame.Operations.push_back({Frame.Epoch, std::move(Update)});
 						} else if constexpr (std::is_same_v<Type, AttributeUpdatedChange>) {
-							if (Change.Value && !ReferencesKnown(CandidatePeer.View, *Change.Value)) {
+							if (Change.Value && !ReferencesKnown(CandidateView, *Change.Value)) {
 								FailedReference = true;
 								return;
 							}
@@ -893,7 +1271,7 @@ namespace gargantuan::network {
 								 AttributeReplicationUpdate{Record.Object, Change.AttributeName, Change.Value}}
 							);
 						} else if constexpr (std::is_same_v<Type, ExtensionPropertyUpdatedChange>) {
-							if (!ReferencesKnown(CandidatePeer.View, Change.Value)) {
+							if (!ReferencesKnown(CandidateView, Change.Value)) {
 								FailedReference = true;
 								return;
 							}
@@ -916,7 +1294,7 @@ namespace gargantuan::network {
 								{Frame.Epoch, TagRemovedReplication{Record.Object, Change.TagName}}
 							);
 						} else if constexpr (std::is_same_v<Type, ObjectReparentedChange>) {
-							if (Change.Parent && !CandidatePeer.View.Knows(*Change.Parent)) {
+							if (Change.Parent && !CandidateView.Knows(*Change.Parent)) {
 								FailedReference = true;
 								return;
 							}
@@ -934,9 +1312,9 @@ namespace gargantuan::network {
 			}
 		}
 		if (Frame.Operations.empty()) {
-			CandidatePeer.JournalCursor = Read.Cursor;
-			CandidateMetrics.ReplicationBacklog = Read.Records.size() == MaximumJournalRecords ? 1 : 0;
-			Peer->second = std::move(CandidatePeer);
+			Peer->second.View = std::move(CandidateView);
+			Peer->second.JournalCursor = ProcessedCursor;
+			CandidateMetrics.ReplicationBacklog = ProcessedCursor.NextSequence < CatalogCursor.NextSequence ? 1 : 0;
 			Metrics = CandidateMetrics;
 			return {{}, "No relevant replication changes are available"};
 		}
@@ -945,20 +1323,42 @@ namespace gargantuan::network {
 		auto Encoded = EncodeReplicationFrame(Frame);
 		if (!Encoded) return {{}, Encoded.error().Format()};
 		SaturatingAdd(CandidateMetrics.StructuralBytesEncoded, Encoded->size());
+		SaturatingAdd(CandidateMetrics.StructuralTransitionsEncoded, Frame.Operations.size());
 		CandidateMetrics.ScratchHighWaterBytes = std::max<std::uint64_t>(
 			CandidateMetrics.ScratchHighWaterBytes, Frame.Operations.capacity() * sizeof(ReplicationOperation)
 		);
-		auto Next = CandidatePeer.NextSequence.TryNext();
+		auto Next = CandidateNextSequence.TryNext();
 		if (!Next) return {{}, "Reliable replication sequence is exhausted"};
-		CandidatePeer.NextSequence = *Next;
-		CandidatePeer.JournalCursor = Read.Cursor;
+		CandidateNextSequence = *Next;
 		RequestedTemplates.merge(CandidateRequestedTemplates);
-		Peer->second = std::move(CandidatePeer);
 		CandidateMetrics.OperationsGenerated += Frame.Operations.size();
+		SaturatingAdd(CandidateMetrics.StructuralTransitionsSelected, Frame.Operations.size());
+		SaturatingAdd(CandidateMetrics.StructuralTransitionsPrepared, Frame.Operations.size());
 		CandidateMetrics.IncrementalBytes += Encoded->size();
-		CandidateMetrics.ReplicationBacklog = Read.Records.size() == MaximumJournalRecords ? 1 : 0;
+		CandidateMetrics.ReplicationBacklog = ProcessedCursor.NextSequence < CatalogCursor.NextSequence ? 1 : 0;
+		if (!Peer->second.ExplicitSchedulerCommit) {
+			SaturatingAdd(CandidateMetrics.ObjectsPublished, PublishedThisFrame.size());
+			SaturatingAdd(CandidateMetrics.ObjectsDestroyed, DestroyedThisFrame.size());
+		}
 		Metrics = CandidateMetrics;
-		return {std::move(Frame), {}};
+		const auto OperationCount = Frame.Operations.size();
+		if (Peer->second.ExplicitSchedulerCommit) {
+			Peer->second.PreparedCommit = PreparedStructuralCommit{
+				.Sequence = Frame.Sequence,
+				.NextSequence = CandidateNextSequence,
+				.JournalCursor = ProcessedCursor,
+				.Entering = std::vector<ObjectId>(PublishedThisFrame.begin(), PublishedThisFrame.end()),
+				.Leaving = std::vector<ObjectId>(DestroyedThisFrame.begin(), DestroyedThisFrame.end()),
+				.PublishedObjects = PublishedThisFrame.size(),
+				.DestroyedObjects = DestroyedThisFrame.size(),
+				.TransitionCount = OperationCount,
+			};
+		} else {
+			Peer->second.View = std::move(CandidateView);
+			Peer->second.NextSequence = CandidateNextSequence;
+			Peer->second.JournalCursor = ProcessedCursor;
+		}
+		return {std::move(Frame), {}, OperationCount};
 	}
 
 	ReplicationProduceResult
@@ -1014,9 +1414,12 @@ namespace gargantuan::network {
 			}
 			CandidateMetrics.ObjectsUnpublished += Removed.size();
 		}
+		SaturatingAdd(CandidateMetrics.StructuralTransitionsSelected, Frame.Operations.size());
+		SaturatingAdd(CandidateMetrics.StructuralTransitionsPrepared, Frame.Operations.size());
 		auto Encoded = EncodeReplicationFrame(Frame);
 		if (!Encoded) return {{}, Encoded.error().Format()};
 		SaturatingAdd(CandidateMetrics.StructuralBytesEncoded, Encoded->size());
+		SaturatingAdd(CandidateMetrics.StructuralTransitionsEncoded, Frame.Operations.size());
 		CandidateMetrics.ScratchHighWaterBytes = std::max<std::uint64_t>(
 			CandidateMetrics.ScratchHighWaterBytes, Frame.Operations.capacity() * sizeof(ReplicationOperation)
 		);
@@ -1028,11 +1431,16 @@ namespace gargantuan::network {
 		CandidateMetrics.OperationsGenerated += Frame.Operations.size();
 		CandidateMetrics.IncrementalBytes += Encoded->size();
 		Metrics = CandidateMetrics;
-		return {std::move(Frame), {}};
+		const auto OperationCount = Frame.Operations.size();
+		return {std::move(Frame), {}, OperationCount};
 	}
 
 	bool ReplicationCoordinator::RemovePeer(ConnectionId Connection) {
-		return Peers.erase(Connection) != 0;
+		auto Peer = Peers.find(Connection);
+		if (Peer == Peers.end()) return false;
+		PendingTransitionCount -= std::min(PendingTransitionCount, Peer->second.PendingTransitions.size());
+		Peers.erase(Peer);
+		return true;
 	}
 
 	const ReplicationView *ReplicationCoordinator::GetView(ConnectionId Connection) const {
@@ -1042,6 +1450,45 @@ namespace gargantuan::network {
 
 	bool ReplicationCoordinator::HasPendingRelevance(ConnectionId Connection) const {
 		auto Peer = Peers.find(Connection);
-		return Peer != Peers.end() && Peer->second.PendingRelevanceTransitions != 0;
+		return Peer != Peers.end() && !Peer->second.PendingTransitions.empty();
+	}
+
+	std::size_t ReplicationCoordinator::GetPendingCriticalTransitionCount(ConnectionId Connection) const {
+		auto Peer = Peers.find(Connection);
+		if (Peer == Peers.end()) return 0;
+		return static_cast<std::size_t>(std::ranges::count_if(Peer->second.PendingTransitions, [](const auto &Entry) {
+			return Entry.second.Critical;
+		}));
+	}
+
+	bool ReplicationCoordinator::HasPendingStructuralWork() const {
+		for (const auto &[Connection, Peer] : Peers) {
+			(void)Connection;
+			if (!Peer.PendingTransitions.empty()) return true;
+		}
+		return false;
+	}
+
+	ReplicationScheduleResult
+	ReplicationCoordinator::CommitSchedulerAcceptance(ConnectionId Connection, ReliableReplicationSequence Sequence) {
+		auto Peer = Peers.find(Connection);
+		if (Peer == Peers.end()) return {"Replication peer is not registered"};
+		if (!Peer->second.PreparedCommit) return {"No structural frame is awaiting scheduler acceptance"};
+		if (Peer->second.PreparedCommit->Sequence != Sequence)
+			return {"Structural scheduler acceptance does not match the prepared frame"};
+		auto Commit = std::move(*Peer->second.PreparedCommit);
+		Peer->second.PreparedCommit.reset();
+		SaturatingAdd(Metrics.StructuralTransitionsAccepted, Commit.TransitionCount);
+		SaturatingAdd(Metrics.StructuralTransitionsCommitted, Commit.TransitionCount);
+		ApplyPreparedCommit(Peer->second, std::move(Commit));
+		return {};
+	}
+
+	void ReplicationCoordinator::RecordPeerFairnessRotation() {
+		SaturatingAdd(Metrics.StructuralPeerFairnessRotations, 1);
+	}
+
+	void ReplicationCoordinator::RecordGlobalBudgetExhaustion() {
+		SaturatingAdd(Metrics.StructuralGlobalBudgetExhaustions, 1);
 	}
 }

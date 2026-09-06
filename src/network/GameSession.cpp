@@ -39,7 +39,7 @@ namespace gargantuan::network {
 		constexpr std::uint32_t RemoteMagic = 0x544d5247;
 		constexpr std::size_t MaximumGameSessionPollEventsPerCall = 128;
 
-		enum class PeerPhase : std::uint8_t { TransportConnected, Accepted, Ready };
+		enum class PeerPhase : std::uint8_t { TransportConnected, BootstrapPending, Accepted, Ready };
 
 		std::uint32_t FrameMagic(std::span<const std::byte> Bytes) {
 			if (Bytes.size() < 4) return 0;
@@ -76,6 +76,7 @@ namespace gargantuan::network {
 	bool GameSessionConfiguration::IsValid() const {
 		return Endpoint.IsValid() && Limits.IsValid() && HandshakeTimeoutTicks > 0 &&
 			   HandshakeTimeoutTicks <= DefaultGameSessionHandshakeTimeoutTicks * 10 && Relevance.IsValid() &&
+			   StructuralReplication.IsValid() &&
 			   (AllowInsecureDevelopmentNetwork || IsLoopbackTransportEndpoint(Endpoint));
 	}
 
@@ -113,6 +114,9 @@ namespace gargantuan::network {
 			std::set<ObjectId> MaterializedRemotes;
 			std::set<ObjectId> RemoteMaterializedObjects;
 			bool SchedulerFlushedThisStep = false;
+			bool PreferPendingRelevance = true;
+			bool StructuralSubmittedThisStep = false;
+			std::size_t StructuralTransitionsConsumedThisStep = 0;
 		};
 
 		std::shared_ptr<IGameTransport> Transport;
@@ -127,6 +131,8 @@ namespace gargantuan::network {
 		std::uint64_t NextReplicationEpoch = 1;
 		std::map<ConnectionId, Peer> Peers;
 		std::optional<ConnectionId> PrimaryConnection;
+		std::optional<ConnectionId> StructuralFairnessCursor;
+		std::vector<ConnectionId> StructuralConnectionsScratch;
 
 		std::unique_ptr<ReplicationCoordinator> Replication;
 		std::unique_ptr<ReplicationRelevance> Relevance;
@@ -235,9 +241,12 @@ namespace gargantuan::network {
 		}
 
 		void InitializeServerManagers() {
-			Replication = std::make_unique<ReplicationCoordinator>(Runtime->DataModel, [this](ObjectId Object) {
-				return !Runtime->Players->IsRuntimeModule(Object);
-			});
+			Replication = std::make_unique<ReplicationCoordinator>(
+				Runtime->DataModel,
+				[this](ObjectId Object) { return !Runtime->Players->IsRuntimeModule(Object); },
+				true,
+				Configuration.StructuralReplication
+			);
 			Relevance = std::make_unique<ReplicationRelevance>(
 				Runtime->DataModel,
 				[this](ObjectId Object) { return Runtime->Players->IsRuntimeModule(Object); },
@@ -647,39 +656,12 @@ namespace gargantuan::network {
 				Reject(Connection, DisconnectReason::ResourceExhaustion, "Server relevance selection is unavailable");
 				return;
 			}
-			const auto ReplicationMetricsBefore = Replication->GetMetrics();
-			auto Baseline = Replication->AddPeer(Connection, PeerValue.Replication, *Selection);
-			const auto ReplicationMetricsAfter = Replication->GetMetrics();
-			Metrics.BaselineSnapshotCpuNanoseconds += ReplicationMetricsAfter.SnapshotCaptureCpuNanoseconds -
-													  ReplicationMetricsBefore.SnapshotCaptureCpuNanoseconds;
-			Metrics.BaselineDiscoveryCpuNanoseconds += ReplicationMetricsAfter.BaselineDiscoveryCpuNanoseconds -
-													   ReplicationMetricsBefore.BaselineDiscoveryCpuNanoseconds;
-			Metrics.BaselineEncodeCpuNanoseconds += ReplicationMetricsAfter.BaselineEncodeCpuNanoseconds -
-													ReplicationMetricsBefore.BaselineEncodeCpuNanoseconds;
-			if (!Baseline.Succeeded()) {
+			auto Registered = Replication->RegisterPeerBounded(Connection, PeerValue.Replication, *Selection);
+			if (!Registered.Succeeded()) {
 				Reject(Connection, DisconnectReason::ResourceExhaustion, "Server replication registration failed");
 				return;
 			}
-			auto BaselineQueued = QueueStructuralFrame(*Baseline.Frame, Connection, PeerValue.Limits);
-			if (!QueueSession(
-					Connection,
-					GameSessionServerAccepted{
-						.Nonce = PeerValue.Nonce,
-						.SessionEpoch = PeerValue.SessionEpoch,
-						.Replication = PeerValue.Replication,
-						.Player = PeerValue.PlayerObject,
-						.PlayerId = PeerValue.PlayerId,
-						.Identity = SessionIdentityKind::DevelopmentLocal,
-						.NegotiatedLimits = PeerValue.Limits,
-					},
-					PeerValue.Limits
-				) ||
-				!BaselineQueued || !BaselineQueued->Accepted()) {
-				Reject(Connection, DisconnectReason::ResourceExhaustion, "Server bootstrap could not be queued");
-				return;
-			}
-			PeerValue.Phase = PeerPhase::Accepted;
-			++Metrics.AcceptedPeers;
+			PeerValue.Phase = PeerPhase::BootstrapPending;
 			Metrics.SessionAcceptanceCpuNanoseconds += static_cast<std::uint64_t>(
 				std::chrono::duration_cast<std::chrono::nanoseconds>(
 					std::chrono::steady_clock::now() - AcceptanceStarted
@@ -936,7 +918,8 @@ namespace gargantuan::network {
 				HandleSessionMessage(Received.Connection, Received);
 				return;
 			}
-			if (PeerIterator->second.Phase == PeerPhase::TransportConnected) {
+			if (PeerIterator->second.Phase == PeerPhase::TransportConnected ||
+				PeerIterator->second.Phase == PeerPhase::BootstrapPending) {
 				++Metrics.RejectedPreAcceptanceMessages;
 				Reject(
 					Received.Connection,
@@ -1201,6 +1184,10 @@ namespace gargantuan::network {
 			if (Iterator == Peers.end()) return;
 			auto PeerValue = std::move(Iterator->second);
 			Peers.erase(Iterator);
+			if (Peers.empty()) {
+				StructuralFairnessCursor.reset();
+				StructuralConnectionsScratch.clear();
+			}
 			if (Authority) (void)Authority->RemovePeer(Connection, std::max(CurrentTick, std::uint64_t{1}));
 			if (Prediction) (void)Prediction->RemovePeer(Connection);
 			if (Remotes) (void)Remotes->RemovePeer(Connection);
@@ -1231,6 +1218,8 @@ namespace gargantuan::network {
 			for (auto &[Connection, PeerValue] : Peers) {
 				(void)Connection;
 				PeerValue.SchedulerFlushedThisStep = false;
+				PeerValue.StructuralSubmittedThisStep = false;
+				PeerValue.StructuralTransitionsConsumedThisStep = 0;
 			}
 			std::vector<ConnectionId> TimedOut;
 			for (const auto &[Connection, PeerValue] : Peers)
@@ -1304,7 +1293,7 @@ namespace gargantuan::network {
 							continue;
 						}
 					}
-					bool StructuralSubmission = false;
+					if (!Relevance->WasSelectionEvaluated(Connection)) continue;
 					const auto *Selection = Relevance->GetSelection(Connection);
 					if (!Selection) {
 						PendingPeerFailures.try_emplace(
@@ -1316,46 +1305,47 @@ namespace gargantuan::network {
 						);
 						continue;
 					}
-					if (Relevance->WasSelectionEvaluated(Connection) || Replication->HasPendingRelevance(Connection)) {
-						auto Transition = Replication->UpdateRelevance(Connection, *Selection);
-						if (Transition.Succeeded() && Transition.Frame) {
-							auto Queued = QueueStructuralFrame(*Transition.Frame, Connection, PeerValue.Limits);
-							if (!Queued || !Queued->Accepted()) {
-								PendingPeerFailures.try_emplace(
-									Connection,
-									Queued && Queued->TerminalDisconnect
-										? *Queued->TerminalDisconnect
-										: DisconnectInfo{
-											  DisconnectReason::ResourceExhaustion,
-											  "Structural relevance transition was rejected by the scheduler",
-										  }
-								);
-								continue;
+					auto Recorded = Replication->RecordDesiredState(Connection, *Selection, SimulationTick);
+					if (!Recorded.Succeeded())
+						PendingPeerFailures.try_emplace(
+							Connection,
+							DisconnectInfo{
+								DisconnectReason::ResourceExhaustion,
+								"[Replication:StructuralScheduler] " + Recorded.Error,
 							}
-							StructuralSubmission = true;
-							if (!ApplyServerRemoteMaterialization(Connection, *Transition.Frame))
-								PendingPeerFailures.try_emplace(
-									Connection,
-									DisconnectInfo{
-										DisconnectReason::ResourceExhaustion,
-										"Remote materialization could not follow structural commit",
-									}
-								);
-							if (PendingPeerFailures.contains(Connection)) continue;
-						} else if (Transition.Error != "No replication relevance changes are available") {
-							PendingPeerFailures.try_emplace(
-								Connection,
-								DisconnectInfo{
-									DisconnectReason::ResourceExhaustion,
-									"[Replication:Relevance] " + Transition.Error,
-								}
-							);
-							continue;
-						}
+						);
+				}
+				if (!DrainFailures()) return;
+
+				auto &StructuralConnections = StructuralConnectionsScratch;
+				StructuralConnections.clear();
+				if (StructuralConnections.capacity() < Peers.size()) StructuralConnections.reserve(Peers.size());
+				for (const auto &[Connection, PeerValue] : Peers)
+					if (PeerValue.Phase != PeerPhase::TransportConnected) StructuralConnections.push_back(Connection);
+				if (!StructuralConnections.empty()) {
+					std::size_t Start = 0;
+					if (StructuralFairnessCursor) {
+						auto Found = std::lower_bound(
+							StructuralConnections.begin(), StructuralConnections.end(), *StructuralFairnessCursor
+						);
+						Start = Found == StructuralConnections.end()
+									? 0
+									: static_cast<std::size_t>(Found - StructuralConnections.begin());
 					}
-					auto Frame = Replication->ProduceIncremental(Connection);
-					if (Frame.Succeeded() && Frame.Frame) {
-						auto Queued = QueueStructuralFrame(*Frame.Frame, Connection, PeerValue.Limits);
+					std::rotate(
+						StructuralConnections.begin(),
+						StructuralConnections.begin() + static_cast<std::ptrdiff_t>(Start),
+						StructuralConnections.end()
+					);
+					if (Start != 0) Replication->RecordPeerFairnessRotation();
+				}
+
+				std::optional<ConnectionId> LastServicedConnection;
+				std::size_t GlobalConsumed = 0;
+				bool MadeProgress = true;
+				auto SubmitStructural =
+					[&](ConnectionId Connection, Peer &PeerValue, ReplicationProduceResult &Produced) {
+						auto Queued = QueueStructuralFrame(*Produced.Frame, Connection, PeerValue.Limits);
 						if (!Queued || !Queued->Accepted()) {
 							PendingPeerFailures.try_emplace(
 								Connection,
@@ -1363,13 +1353,23 @@ namespace gargantuan::network {
 									? *Queued->TerminalDisconnect
 									: DisconnectInfo{
 										  DisconnectReason::ResourceExhaustion,
-										  "Structural delta was rejected by the scheduler",
+										  "Structural transition was rejected by the reliable scheduler",
 									  }
 							);
-							continue;
+							return false;
 						}
-						StructuralSubmission = true;
-						if (!ApplyServerRemoteMaterialization(Connection, *Frame.Frame))
+						auto Committed = Replication->CommitSchedulerAcceptance(Connection, Produced.Frame->Sequence);
+						if (!Committed.Succeeded()) {
+							PendingPeerFailures.try_emplace(
+								Connection,
+								DisconnectInfo{
+									DisconnectReason::ResourceExhaustion,
+									"[Replication:StructuralScheduler] " + Committed.Error,
+								}
+							);
+							return false;
+						}
+						if (!ApplyServerRemoteMaterialization(Connection, *Produced.Frame)) {
 							PendingPeerFailures.try_emplace(
 								Connection,
 								DisconnectInfo{
@@ -1377,25 +1377,171 @@ namespace gargantuan::network {
 									"Remote materialization could not follow structural commit",
 								}
 							);
-						if (PendingPeerFailures.contains(Connection)) continue;
-					} else if (Frame.Error != "No replication changes are available" &&
-							   Frame.Error != "No relevant replication changes are available") {
-						PendingPeerFailures.try_emplace(
-							Connection,
-							DisconnectInfo{
-								DisconnectReason::ResourceExhaustion,
-								"[Replication:Relevance] " + Frame.Error,
+							return false;
+						}
+						PeerValue.StructuralSubmittedThisStep = true;
+						LastServicedConnection = Connection;
+						return true;
+					};
+
+				while (MadeProgress && GlobalConsumed < Configuration.StructuralReplication.MaximumTransitionsPerTick) {
+					MadeProgress = false;
+					for (const auto Connection : StructuralConnections) {
+						auto Peer = Peers.find(Connection);
+						if (Peer == Peers.end() || PendingPeerFailures.contains(Connection)) continue;
+						auto &Consumed = Peer->second.StructuralTransitionsConsumedThisStep;
+						if (Consumed >= Configuration.StructuralReplication.MaximumTransitionsPerPeerTick) continue;
+						const auto Allowance = std::min({
+							Configuration.StructuralReplication.PeerQuantum,
+							Configuration.StructuralReplication.MaximumTransitionsPerPeerTick - Consumed,
+							Configuration.StructuralReplication.MaximumTransitionsPerTick - GlobalConsumed,
+						});
+						if (Allowance == 0) break;
+						if (Peer->second.Phase == PeerPhase::BootstrapPending) {
+							const auto CriticalTransitions = Replication->GetPendingCriticalTransitionCount(Connection);
+							if (CriticalTransitions == 0) {
+								PendingPeerFailures.try_emplace(
+									Connection,
+									DisconnectInfo{
+										DisconnectReason::ResourceExhaustion,
+										"Structural bootstrap has no required transition",
+									}
+								);
+								continue;
 							}
-						);
+							if (CriticalTransitions > Allowance) continue;
+							const auto ReplicationMetricsBefore = Replication->GetCumulativeMetrics();
+							auto Produced = Replication->ProducePendingBaseline(Connection, Allowance, SimulationTick);
+							const auto ReplicationMetricsAfter = Replication->GetCumulativeMetrics();
+							Metrics.BaselineSnapshotCpuNanoseconds +=
+								ReplicationMetricsAfter.SnapshotCaptureCpuNanoseconds -
+								ReplicationMetricsBefore.SnapshotCaptureCpuNanoseconds;
+							Metrics.BaselineDiscoveryCpuNanoseconds +=
+								ReplicationMetricsAfter.BaselineDiscoveryCpuNanoseconds -
+								ReplicationMetricsBefore.BaselineDiscoveryCpuNanoseconds;
+							Metrics.BaselineEncodeCpuNanoseconds +=
+								ReplicationMetricsAfter.BaselineEncodeCpuNanoseconds -
+								ReplicationMetricsBefore.BaselineEncodeCpuNanoseconds;
+							if (!Produced.Succeeded() || !Produced.Frame) {
+								PendingPeerFailures.try_emplace(
+									Connection,
+									DisconnectInfo{
+										DisconnectReason::ResourceExhaustion,
+										"[Replication:StructuralScheduler] " + Produced.Error,
+									}
+								);
+								continue;
+							}
+							if (!SubmitStructural(Connection, Peer->second, Produced)) continue;
+							if (!QueueSession(
+									Connection,
+									GameSessionServerAccepted{
+										.Nonce = Peer->second.Nonce,
+										.SessionEpoch = Peer->second.SessionEpoch,
+										.Replication = Peer->second.Replication,
+										.Player = Peer->second.PlayerObject,
+										.PlayerId = Peer->second.PlayerId,
+										.Identity = SessionIdentityKind::DevelopmentLocal,
+										.NegotiatedLimits = Peer->second.Limits,
+									},
+									Peer->second.Limits
+								)) {
+								PendingPeerFailures.try_emplace(
+									Connection,
+									DisconnectInfo{
+										DisconnectReason::ResourceExhaustion,
+										"Server bootstrap acceptance could not be queued",
+									}
+								);
+								continue;
+							}
+							Peer->second.Phase = PeerPhase::Accepted;
+							++Metrics.AcceptedPeers;
+							Consumed += Produced.SelectedTransitions;
+							GlobalConsumed += Produced.SelectedTransitions;
+							MadeProgress = Produced.SelectedTransitions != 0;
+							continue;
+						}
+						auto ProduceRelevance = [&]() {
+							if (!Replication->HasPendingRelevance(Connection)) return false;
+							auto Produced = Replication->ProducePendingRelevance(Connection, Allowance, SimulationTick);
+							if (Produced.Succeeded() && Produced.Frame) {
+								if (SubmitStructural(Connection, Peer->second, Produced)) {
+									Consumed += Produced.SelectedTransitions;
+									GlobalConsumed += Produced.SelectedTransitions;
+									MadeProgress = Produced.SelectedTransitions != 0;
+									Peer->second.PreferPendingRelevance = false;
+								}
+								return true;
+							}
+							if (Produced.Error == "No replication relevance changes are available") return false;
+							PendingPeerFailures.try_emplace(
+								Connection,
+								DisconnectInfo{
+									DisconnectReason::ResourceExhaustion,
+									"[Replication:StructuralScheduler] " + Produced.Error,
+								}
+							);
+							return true;
+						};
+						auto ProduceJournal = [&]() {
+							auto Produced = Replication->ProduceIncremental(Connection, Allowance);
+							if (Produced.Succeeded() && Produced.Frame) {
+								if (SubmitStructural(Connection, Peer->second, Produced)) {
+									Consumed += Produced.SelectedTransitions;
+									GlobalConsumed += Produced.SelectedTransitions;
+									MadeProgress = Produced.SelectedTransitions != 0;
+									Peer->second.PreferPendingRelevance = true;
+								}
+								return true;
+							}
+							if (Produced.Error == "No replication changes are available" ||
+								Produced.Error == "No relevant replication changes are available")
+								return false;
+							PendingPeerFailures.try_emplace(
+								Connection,
+								DisconnectInfo{
+									DisconnectReason::ResourceExhaustion,
+									"[Replication:StructuralScheduler] " + Produced.Error,
+								}
+							);
+							return true;
+						};
+						if (Peer->second.PreferPendingRelevance) {
+							if (ProduceRelevance()) continue;
+							(void)ProduceJournal();
+						} else {
+							if (ProduceJournal()) continue;
+							(void)ProduceRelevance();
+						}
 					}
-					if (StructuralSubmission) {
-						auto Flushed = Scheduler.Flush(
-							Connection, SchedulerTickBudget::FromNetworkLimits(PeerValue.Limits)
-						);
-						PeerValue.SchedulerFlushedThisStep = true;
-						if (auto Failure = SchedulerFlushFailure(Flushed))
-							PendingPeerFailures.try_emplace(Connection, std::move(*Failure));
-					}
+				}
+				if (!StructuralConnections.empty()) {
+					auto Last = LastServicedConnection
+									? std::ranges::find(StructuralConnections, *LastServicedConnection)
+									: StructuralConnections.begin();
+					if (Last == StructuralConnections.end() || ++Last == StructuralConnections.end())
+						StructuralFairnessCursor = StructuralConnections.front();
+					else
+						StructuralFairnessCursor = *Last;
+				}
+				if (GlobalConsumed >= Configuration.StructuralReplication.MaximumTransitionsPerTick &&
+					Replication->HasPendingStructuralWork())
+					Replication->RecordGlobalBudgetExhaustion();
+				Metrics.StructuralMaximumTransitionsSelectedPerTick = std::max<std::uint64_t>(
+					Metrics.StructuralMaximumTransitionsSelectedPerTick, GlobalConsumed
+				);
+				for (const auto Connection : StructuralConnections) {
+					auto Peer = Peers.find(Connection);
+					if (Peer == Peers.end() || PendingPeerFailures.contains(Connection) ||
+						!Peer->second.StructuralSubmittedThisStep)
+						continue;
+					auto Flushed = Scheduler.Flush(
+						Connection, SchedulerTickBudget::FromNetworkLimits(Peer->second.Limits)
+					);
+					Peer->second.SchedulerFlushedThisStep = true;
+					if (auto Failure = SchedulerFlushFailure(Flushed))
+						PendingPeerFailures.try_emplace(Connection, std::move(*Failure));
 				}
 				if (!DrainFailures()) return;
 				SynchronizeServerGraph();
@@ -1574,6 +1720,32 @@ namespace gargantuan::network {
 			Result.StructuralBytesEncoded = ReplicationMetrics.StructuralBytesEncoded;
 			Result.StructuralBytesReused = ReplicationMetrics.StructuralBytesReused;
 			Result.ScratchHighWaterBytes = ReplicationMetrics.ScratchHighWaterBytes;
+			Result.StructuralSchedulingTicks = ReplicationMetrics.StructuralSchedulingTicks;
+			Result.StructuralTransitionsOffered = ReplicationMetrics.StructuralTransitionsOffered;
+			Result.StructuralTransitionsSelected = ReplicationMetrics.StructuralTransitionsSelected;
+			Result.StructuralTransitionsPrepared = ReplicationMetrics.StructuralTransitionsPrepared;
+			Result.StructuralTransitionsEncoded = ReplicationMetrics.StructuralTransitionsEncoded;
+			Result.StructuralTransitionsAccepted = ReplicationMetrics.StructuralTransitionsAccepted;
+			Result.StructuralTransitionsCommitted = ReplicationMetrics.StructuralTransitionsCommitted;
+			Result.StructuralTransitionsDeferredByBudget = ReplicationMetrics.StructuralTransitionsDeferredByBudget;
+			Result.StructuralTransitionsCancelled = ReplicationMetrics.StructuralTransitionsCancelled;
+			Result.StructuralTransitionsReplanned = ReplicationMetrics.StructuralTransitionsReplanned;
+			Result.StructuralDeadlineMisses = ReplicationMetrics.StructuralDeadlineMisses;
+			Result.StructuralPeerFairnessRotations = ReplicationMetrics.StructuralPeerFairnessRotations;
+			Result.StructuralGlobalBudgetExhaustions = ReplicationMetrics.StructuralGlobalBudgetExhaustions;
+			Result.StructuralDependencyPlanOperations = ReplicationMetrics.StructuralDependencyPlanOperations;
+			Result.StructuralBacklogLimitFailures = ReplicationMetrics.StructuralBacklogLimitFailures;
+			Result.StructuralJournalLagFailures = ReplicationMetrics.StructuralJournalLagFailures;
+			Result.StructuralMaximumJournalLagRecords = ReplicationMetrics.StructuralMaximumJournalLagRecords;
+			Result.StructuralPendingEnters = ReplicationMetrics.StructuralPendingEnters;
+			Result.StructuralPendingLeaves = ReplicationMetrics.StructuralPendingLeaves;
+			Result.StructuralPendingCritical = ReplicationMetrics.StructuralPendingCritical;
+			Result.StructuralActivePeers = ReplicationMetrics.StructuralActivePeers;
+			Result.StructuralOldestPendingAgeTicks = ReplicationMetrics.StructuralOldestPendingAgeTicks;
+			Result.StructuralCriticalOldestAgeTicks = ReplicationMetrics.StructuralCriticalOldestAgeTicks;
+			Result.StructuralSelectionCpuNanoseconds = ReplicationMetrics.StructuralSelectionCpuNanoseconds;
+			Result.StructuralMaximumTransitionsSelectedPerTick =
+				State->Metrics.StructuralMaximumTransitionsSelectedPerTick;
 		}
 		if (State->Authority) {
 			const auto CharacterMetrics = State->Authority->GetMetrics();
@@ -1625,7 +1797,8 @@ namespace gargantuan::network {
 	}
 	std::shared_ptr<Player> GameSession::GetAcceptedPlayer(ConnectionId Connection) const {
 		auto Iterator = State->Peers.find(Connection);
-		return Iterator != State->Peers.end() && Iterator->second.Phase != PeerPhase::TransportConnected
+		return Iterator != State->Peers.end() &&
+					   (Iterator->second.Phase == PeerPhase::Accepted || Iterator->second.Phase == PeerPhase::Ready)
 				   ? Iterator->second.PlayerValue
 				   : nullptr;
 	}
