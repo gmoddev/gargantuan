@@ -167,6 +167,12 @@ Deliver:
 - render extraction, correct primitive meshes, culling/batching baseline,
   materials, lights, textures/meshes, and device failure diagnostics;
 - content-addressed asset importer/resolver/cache;
+- Geometry Foundation 1A ([research](SolidGeometryCompilerResearch.md)) after
+  Asset Foundation 2B's independent mesh-collision boundary: a bounded,
+  deterministic headless solid-geometry compiler that
+  transactionally emits ordinary canonical Mesh and backend-neutral collision
+  assets; Manifold is the first prototype candidate, not yet a dependency
+  decision, and runtime game-facing CSG remains deferred;
 - basic audio and transform/tween animation;
 - functional Screen UI: layout, text, image, button, clipping, focus, navigation;
 - structured `[System:SubSystem]` diagnostics and performance counters; and
@@ -220,6 +226,9 @@ Deliver:
   atomic save and recovery;
 - Luau editor/language services and runtime source-map integration;
 - asset browser/import queue and GUI inspector/device emulation;
+- Geometry Foundation 1B solid-model authoring for union, intersection,
+  difference, edit/separate, preview, collision inspection, diagnostics, and
+  command-backed undo/redo through the headless compiler;
 - isolated local server/multi-client play orchestration; and
 - capability broker architecture (third-party plugin distribution remains off).
 
