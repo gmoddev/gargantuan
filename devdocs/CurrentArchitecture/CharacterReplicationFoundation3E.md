@@ -30,7 +30,7 @@ for structural replication and realtime Character state:
 ```text
 authoritative DataModel
     -> accepted ConnectionId / Player identity
-    -> 3H SpatialAddress/region candidates
+    -> 3H SpatialCellAddress/region candidates
     -> ReplicationRelevance policy
     -> peer desired objects + owner-required objects
     -> ReplicationCoordinator ancestor/hard-reference closure
@@ -82,7 +82,7 @@ candidate, desired, and transition order
 uses `ObjectId` ordering. Pointer identity and hash iteration never define wire
 results.
 
-`SpatialAddress` is derived locality rather than physics, render, or network
+`SpatialCellAddress` is derived acceleration locality rather than physics, render, or network
 identity. Regions return a conservative bounded candidate superset while 3E
 retains exact policy ownership:
 

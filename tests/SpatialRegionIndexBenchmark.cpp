@@ -1,4 +1,5 @@
 #include "gargantuan/runtime/SpatialRegionIndex.hpp"
+#include "gargantuan/runtime/SpatialRuntimeProjection.hpp"
 
 #include <algorithm>
 #include <array>
@@ -73,6 +74,15 @@ namespace {
 				   : static_cast<double>(Metrics.MembershipCount) / static_cast<double>(Metrics.RegionCount);
 	}
 
+	struct SpaceIsolationLatency {
+		std::size_t UnrelatedObjects = 0;
+		double MeanMs = 0.0;
+		double P50Ms = 0.0;
+		double P95Ms = 0.0;
+		double P99Ms = 0.0;
+		double MaximumMs = 0.0;
+	};
+
 	void RunWorldScale(std::size_t ObjectCount, double RegionSize) {
 		auto Limits = Configuration(ObjectCount, RegionSize);
 		SpatialRegionIndex Index(Limits);
@@ -83,7 +93,9 @@ namespace {
 		const auto BuildStarted = std::chrono::steady_clock::now();
 		for (std::size_t Object = 0; Object < ObjectCount; ++Object) {
 			const auto Status = Index.Register(
-				{static_cast<std::uint32_t>(Object + 1), 1}, SpatialBounds::Point(Position(Object, RegionSize))
+				{static_cast<std::uint32_t>(Object + 1), 1},
+				DefaultSpatialSpace,
+				SpatialBounds::Point(Position(Object, RegionSize))
 			);
 			if (Status != SpatialRegionStatus::Success)
 				throw std::runtime_error("[Spatial:Benchmark] world registration failed");
@@ -126,6 +138,7 @@ namespace {
 		for (std::size_t Object = 0; Object < ObjectCount; ++Object)
 			if (Index.Register(
 					{static_cast<std::uint32_t>(Object + 1), 1},
+					DefaultSpatialSpace,
 					SpatialBounds::Point({static_cast<double>(Object) * RegionSize * 2.0, 0.0, 0.0})
 				) != SpatialRegionStatus::Success)
 				throw std::runtime_error("[Spatial:Benchmark] movement registration failed");
@@ -135,6 +148,7 @@ namespace {
 		for (std::size_t Object = 0; Object < ObjectCount; ++Object)
 			if (Index.Update(
 					{static_cast<std::uint32_t>(Object + 1), 1},
+					DefaultSpatialSpace,
 					SpatialBounds::Point({static_cast<double>(Object) * RegionSize * 2.0 + RegionSize * 0.25, 0.0, 0.0})
 				) != SpatialRegionStatus::Success)
 				throw std::runtime_error("[Spatial:Benchmark] same-region movement failed");
@@ -149,6 +163,7 @@ namespace {
 		for (std::size_t Object = 0; Object < ObjectCount; ++Object)
 			if (Index.Update(
 					{static_cast<std::uint32_t>(Object + 1), 1},
+					DefaultSpatialSpace,
 					SpatialBounds::Point({static_cast<double>(Object) * RegionSize * 2.0 + RegionSize * 1.25, 0.0, 0.0})
 				) != SpatialRegionStatus::Success)
 				throw std::runtime_error("[Spatial:Benchmark] boundary movement failed");
@@ -169,6 +184,7 @@ namespace {
 		for (std::size_t Object = 0; Object < ObjectCount; ++Object)
 			if (Index.Update(
 					{static_cast<std::uint32_t>(Object + 1), 1},
+					DefaultSpatialSpace,
 					SpatialBounds::Point({-10'000'000.0 - static_cast<double>(Object) * RegionSize * 3.0, 0.0, 0.0})
 				) != SpatialRegionStatus::Success)
 				throw std::runtime_error("[Spatial:Benchmark] teleport movement failed");
@@ -198,6 +214,7 @@ namespace {
 		for (std::size_t Object = 0; Object < ObjectCount; ++Object)
 			if (Index.Register(
 					{static_cast<std::uint32_t>(Object + 1), 1},
+					DefaultSpatialSpace,
 					SpatialBounds::Point({static_cast<double>(Object % 100) * 0.01, 0.0, 0.0})
 				) != SpatialRegionStatus::Success)
 				throw std::runtime_error("[Spatial:Benchmark] dense registration failed");
@@ -231,7 +248,9 @@ namespace {
 		Scratch.Reserve(Limits);
 		for (std::size_t Object = 0; Object < ObjectCount; ++Object)
 			if (Index.Register(
-					{static_cast<std::uint32_t>(Object + 1), 1}, SpatialBounds::Point(Position(Object, RegionSize))
+					{static_cast<std::uint32_t>(Object + 1), 1},
+					DefaultSpatialSpace,
+					SpatialBounds::Point(Position(Object, RegionSize))
 				) != SpatialRegionStatus::Success)
 				throw std::runtime_error("[Spatial:Benchmark] focus-query registration failed");
 		const std::array<SpatialRegionQueryVolume, 4> Overlapping{
@@ -277,17 +296,97 @@ namespace {
 		Measure("MultiFocusOverlap", Overlapping);
 		Measure("MultiFocusDisjoint", Disjoint);
 	}
+
+	SpaceIsolationLatency RunSpaceIsolation(std::size_t UnrelatedObjectCount, double RegionSize) {
+		constexpr std::size_t LocalObjectCount = 1;
+		auto Limits = Configuration(UnrelatedObjectCount + LocalObjectCount, RegionSize);
+		Limits.MaximumRegions = UnrelatedObjectCount + LocalObjectCount;
+		Limits.MaximumMemberships = UnrelatedObjectCount + LocalObjectCount;
+		Limits.MaximumQueryCandidates = LocalObjectCount;
+		Limits.MaximumQueryMembershipVisits = std::max<std::size_t>(LocalObjectCount, 4'096);
+		SpatialRegionIndex Index(Limits);
+		SpatialRegionQueryScratch Scratch;
+		Scratch.Reserve(Limits);
+		const SpatialSpaceId IsolatedSpace{2, 1};
+		const auto BuildAllocationsBefore = SpatialBenchmarkAllocations.load(std::memory_order_relaxed);
+		const auto BuildBytesBefore = SpatialBenchmarkAllocatedBytes.load(std::memory_order_relaxed);
+		const auto BuildStarted = std::chrono::steady_clock::now();
+		for (std::size_t Object = 0; Object < LocalObjectCount; ++Object) {
+			const auto Point = glm::dvec3(static_cast<double>(Object % 100), 0.0, 0.0);
+			if (Index.Register(
+					{static_cast<std::uint32_t>(Object + 1), 1}, DefaultSpatialSpace, SpatialBounds::Point(Point)
+				) != SpatialRegionStatus::Success)
+				throw std::runtime_error("[Spatial:Benchmark] local-space registration failed");
+		}
+		for (std::size_t Object = 0; Object < UnrelatedObjectCount; ++Object) {
+			const auto Point = glm::dvec3(static_cast<double>(Object) * RegionSize * 2.0, 0.0, 0.0);
+			if (Index.Register(
+					{static_cast<std::uint32_t>(LocalObjectCount + Object + 1), 1},
+					IsolatedSpace,
+					SpatialBounds::Point(Point)
+				) != SpatialRegionStatus::Success)
+				throw std::runtime_error("[Spatial:Benchmark] unrelated-space registration failed");
+		}
+		const auto BuildMs = Milliseconds(BuildStarted);
+		const auto BuildAllocations = SpatialBenchmarkAllocations.load(std::memory_order_relaxed) -
+									  BuildAllocationsBefore;
+		const auto BuildBytes = SpatialBenchmarkAllocatedBytes.load(std::memory_order_relaxed) - BuildBytesBefore;
+		const SpatialRegionQueryVolume Volume{
+			.Space = DefaultSpatialSpace,
+			.Center = {0.0, 0.0, 0.0},
+			.Radius = 128.0,
+		};
+		const auto QueryAllocationsBefore = SpatialBenchmarkAllocations.load(std::memory_order_relaxed);
+		const auto QueryBytesBefore = SpatialBenchmarkAllocatedBytes.load(std::memory_order_relaxed);
+		constexpr std::size_t QueryIterations = 100;
+		std::array<double, QueryIterations> QueryDurations;
+		double QueryMs = 0.0;
+		for (std::size_t Iteration = 0; Iteration < QueryIterations; ++Iteration) {
+			const auto QueryStarted = std::chrono::steady_clock::now();
+			if (Index.Query(std::span(&Volume, 1), Scratch) != SpatialRegionStatus::Success)
+				throw std::runtime_error("[Spatial:Benchmark] isolated-space query failed");
+			QueryDurations[Iteration] = Milliseconds(QueryStarted);
+			QueryMs += QueryDurations[Iteration];
+		}
+		QueryMs /= QueryIterations;
+		const auto QueryAllocations = SpatialBenchmarkAllocations.load(std::memory_order_relaxed) -
+									  QueryAllocationsBefore;
+		const auto QueryBytes = SpatialBenchmarkAllocatedBytes.load(std::memory_order_relaxed) - QueryBytesBefore;
+		const auto Metrics = Index.GetMetrics();
+		std::cout << "SpaceIsolation," << RegionSize << ',' << UnrelatedObjectCount << ',' << BuildMs << ','
+				  << BuildAllocations << ',' << BuildBytes << ',' << QueryMs << ',' << QueryAllocations << ','
+				  << QueryBytes << ',' << Metrics.RegionCount << ',' << Metrics.MembershipCount << ','
+				  << AverageOccupancy(Metrics) << ',' << Metrics.PeakRegionOccupancy << ',' << Scratch.Regions.size()
+				  << ',' << Scratch.Candidates.size() << ',' << LocalObjectCount << ",0," << Metrics.CandidateDedupHits
+				  << ",0,0,0,0,0\n";
+		std::ranges::sort(QueryDurations);
+		auto Percentile = [&QueryDurations](std::size_t Percent) {
+			const auto Index = (Percent * (QueryDurations.size() - 1) + 99) / 100;
+			return QueryDurations[Index];
+		};
+		return {
+			.UnrelatedObjects = UnrelatedObjectCount,
+			.MeanMs = QueryMs,
+			.P50Ms = Percentile(50),
+			.P95Ms = Percentile(95),
+			.P99Ms = Percentile(99),
+			.MaximumMs = QueryDurations.back(),
+		};
+	}
 }
 
 int main(int ArgumentCount, char **Arguments) {
 	try {
 		const bool Full = ArgumentCount > 1 && std::string_view(Arguments[1]) == "--full";
+		std::vector<SpaceIsolationLatency> IsolationResults;
 		std::cout << "Kind,RegionSize,ObjectCount,BuildMs,BuildAllocations,BuildAllocatedBytes,OperationMs,"
 					 "OperationAllocations,OperationAllocatedBytes,"
 					 "RegionCount,MembershipCount,AverageOccupancy,PeakOccupancy,QueryRegions,Candidates,Relevant,"
 					 "FalsePositives,DedupHits,"
 					 "CrossMs,CrossAllocations,CrossAllocatedBytes,SameRegionUpdates,MembershipMoves\n";
 		if (Full) {
+			RunWorldScale(100, DefaultSpatialRegionSize);
+			RunWorldScale(1'000, DefaultSpatialRegionSize);
 			for (const auto RegionSize : {64.0, 128.0, 256.0, 512.0, 1024.0})
 				RunWorldScale(100'000, RegionSize);
 			for (const auto ObjectCount : {10'000u, 100'000u, 1'000'000u})
@@ -295,12 +394,23 @@ int main(int ArgumentCount, char **Arguments) {
 			RunMovement(10'000, DefaultSpatialRegionSize);
 			RunDense(10'000, DefaultSpatialRegionSize);
 			RunFocusQueries(DefaultSpatialRegionSize);
+			for (const auto Unrelated : {0u, 10'000u, 100'000u, 999'999u})
+				IsolationResults.push_back(RunSpaceIsolation(Unrelated, DefaultSpatialRegionSize));
 		} else {
 			RunWorldScale(10'000, DefaultSpatialRegionSize);
 			RunMovement(1'000, DefaultSpatialRegionSize);
 			RunDense(1'000, DefaultSpatialRegionSize);
 			RunFocusQueries(DefaultSpatialRegionSize);
+			IsolationResults.push_back(RunSpaceIsolation(0, DefaultSpatialRegionSize));
+			IsolationResults.push_back(RunSpaceIsolation(10'000, DefaultSpatialRegionSize));
 		}
+		std::cout << "SpaceIsolationLatency,UnrelatedObjects,MeanMs,P50Ms,P95Ms,P99Ms,MaximumMs\n";
+		for (const auto &Result : IsolationResults)
+			std::cout << "SpaceIsolationLatency," << Result.UnrelatedObjects << ',' << Result.MeanMs << ','
+					  << Result.P50Ms << ',' << Result.P95Ms << ',' << Result.P99Ms << ',' << Result.MaximumMs << '\n';
+		std::cout << "SpatialLayout,ProjectionBytes,SpatialPoseBytes,SpatialSpaceIdBytes,SpatialCellAddressBytes\n"
+				  << "SpatialLayout," << sizeof(SpatialRuntimeProjection) << ',' << sizeof(SpatialPose) << ','
+				  << sizeof(SpatialSpaceId) << ',' << sizeof(SpatialCellAddress) << '\n';
 		return 0;
 	} catch (const std::exception &Error) {
 		std::cerr << "[Spatial:Benchmark] " << Error.what() << '\n';

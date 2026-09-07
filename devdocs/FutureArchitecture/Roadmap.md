@@ -47,7 +47,7 @@ defect throughput.
   materialization epoch without changing the 28-byte batch header. Player
   identity remains globally visible; remote Character descendants are spatial.
   Foundations 3F/3G subsequently add adaptive desired cadence and bounded actual
-  publication; 3H canonicalizes derived SpatialAddress and region candidates.
+  publication; 3H canonicalizes derived SpatialCellAddress and region candidates.
   Public region APIs, content paging, and portal topology remain future work.
 - Character / Replication Foundation 3E.1 makes GameSession acquisition and
   teardown transactional, uses generation-scoped CharacterControl callback
@@ -61,7 +61,7 @@ defect throughput.
 - Character Networking Foundations 3F and 3G add peer-specific 20/10/5 Hz
   desired cadence and bounded age-aware actual publication without changing
   simulation or reliable semantics. Character / Replication Foundation 3H then
-  promotes 3E's private grid into canonical derived `SpatialAddress` semantics,
+  promotes 3E's private grid into canonical derived `SpatialCellAddress` semantics,
   a bounded sparse multi-region index, large-object fallback, dirty-driven
   membership, and region-assisted candidate discovery. 3E still owns relevance
   and structural dependency closure; no region protocol, persistence field,

@@ -28,7 +28,7 @@ Bounded Luau remotes now provide four schema-backed application primitives, a
 versioned binary codec, visibility-checked Object references, finite requests,
 Luau coroutine suspension, deterministic simulator coverage, and real localhost
 GNS coverage. Realtime Character replication, adaptive cadence, bounded fair
-publication, and canonical server-private SpatialAddress/region candidates are
+publication, and canonical server-private SpatialCellAddress/region candidates are
 implemented; general physics ownership and production world paging remain
 unfinished.
 
@@ -428,7 +428,7 @@ of the accepted decisions above.
   authoritative simulation, GCHR v4, or reliable semantic priority. Scheduler
   acceptance remains the only publication-history commit point.
 - [x] **Canonicalize region-assisted candidate discovery.** Foundation 3H
-  replaces 3E's private cell key with derived 64-bit 3D `SpatialAddress`
+  replaces 3E's private cell key with derived 3D `SpatialCellAddress`
   coordinates, sparse bounded multi-region membership, large-object fallback,
   dirty-driven movement, reusable query scratch, and deterministic candidate
   dedup. 3E remains the final relevance owner; there is no region wire format,
@@ -445,6 +445,13 @@ of the accepted decisions above.
   peer service deterministically, prioritizes required bootstrap, and commits
   KnownObjects/cursors only after reliable scheduler acceptance. GRPL v1 and
   the client replication architecture remain unchanged.
+- [x] **Separate semantic placement from runtime spatial acceleration.**
+  Foundation 3K keeps Instance CFrame/hierarchy/identity authoritative, moves
+  derived pose/bounds/dirty ownership into `SpatialRuntimeProjectionStore`,
+  distinguishes `SpatialPose` from `SpatialCellAddress`, and gives spaces strong
+  generation-safe identity. Production remains explicit DefaultSpace; internal
+  two-space tests prove identical local coordinates cannot alias candidates.
+  There is no package, protocol, client scheduler, or ordinary Luau surface.
 
 Node integration for discovery and join tickets can proceed independently once
 the handshake contract exists. Collaborative editing remains later work.

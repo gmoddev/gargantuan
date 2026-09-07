@@ -160,7 +160,7 @@ honest claim of an entirely GUI-authored workflow.
 - server-owned peer relevance through packaged and localhost-GNS sessions,
   including NPC structural enter, peer unpublish, current-state reentry, and
   owner Character retention;
-- canonical server-private SpatialAddress/region candidates without a region
+- canonical server-private SpatialCellAddress/region candidates without a region
   wire message, client request surface, saved field, or boundary-crossing
   structural fallback;
 - bounded dependency-safe structural transition selection, critical bootstrap,

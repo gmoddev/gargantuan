@@ -32,6 +32,10 @@ namespace gargantuan::network {
 			return std::isfinite(Value.x) && std::isfinite(Value.y) && std::isfinite(Value.z);
 		}
 
+		bool Equal(glm::dvec3 Left, glm::dvec3 Right) {
+			return Left.x == Right.x && Left.y == Right.y && Left.z == Right.z;
+		}
+
 		SpatialBounds PartBounds(const BasePart &Part) {
 			const auto Frame = Part.GetCFrame();
 			const glm::dvec3 Half = glm::abs(glm::dvec3(Part.GetSize())) * 0.5;
@@ -81,10 +85,8 @@ namespace gargantuan::network {
 
 		struct SpatialEntry {
 			std::weak_ptr<Instance> Object;
-			glm::vec3 Position{0.0f};
 			std::set<ObjectId> Members;
 			std::vector<SignalConnection::Pointer> SpatialChanged;
-			bool Dirty = false;
 		};
 
 		struct PeerState {
@@ -105,8 +107,7 @@ namespace gargantuan::network {
 		std::map<ObjectId, ObjectLocation> ObjectLocations;
 		std::set<ObjectId> GlobalObjects;
 		std::map<ObjectId, SpatialEntry> SpatialObjects;
-		std::vector<ObjectId> DirtySpatialObjects;
-		SpatialRegionIndex Regions;
+		SpatialRuntimeProjectionStore Spatial;
 		SpatialRegionQueryScratch QueryScratch;
 		std::map<ConnectionId, PeerState> Peers;
 		SignalConnection::Pointer DescendantAdded;
@@ -121,11 +122,11 @@ namespace gargantuan::network {
 			ReplicationRelevanceConfiguration ConfigurationValue
 		)
 			: SourceRoot(std::move(SourceRootValue)), IsExcluded(std::move(IsExcludedValue)),
-			  Configuration(ConfigurationValue), Regions(ConfigurationValue.SpatialConfiguration()) {
+			  Configuration(ConfigurationValue),
+			  Spatial({.Index = ConfigurationValue.SpatialConfiguration(), .MaximumSpaces = 1}) {
 			if (!SourceRoot || !std::dynamic_pointer_cast<DataModel>(SourceRoot) || !Configuration.IsValid())
 				throw std::invalid_argument("[Replication:Relevance] configuration or source root is invalid");
 			QueryScratch.Reserve(Configuration.SpatialConfiguration());
-			DirtySpatialObjects.reserve(Configuration.MaximumSpatialObjects);
 			RegisterObject(SourceRoot);
 			for (const auto &Object : SourceRoot->GetDescendants())
 				RegisterObject(Object);
@@ -158,21 +159,18 @@ namespace gargantuan::network {
 			Fail(std::string(Operation) + " failed: " + SpatialRegionStatusName(Status));
 		}
 
+		void FailProjection(std::string_view Operation, SpatialRuntimeProjectionStatus Status) {
+			auto Message = std::string(Operation) + " failed: " + SpatialRuntimeProjectionStatusName(Status);
+			if (Status == SpatialRuntimeProjectionStatus::IndexFailure)
+				Message += std::string(" (") + SpatialRegionStatusName(Spatial.GetLastIndexFailure()) + ')';
+			Fail(std::move(Message));
+		}
+
 		void MarkSpatialDirty(ObjectId Object) {
-			auto Found = SpatialObjects.find(Object);
-			if (Found == SpatialObjects.end() || Found->second.Dirty) return;
-			if (DirtySpatialObjects.size() >= Configuration.MaximumSpatialObjects) {
-				std::erase_if(DirtySpatialObjects, [this](ObjectId Candidate) {
-					auto Current = SpatialObjects.find(Candidate);
-					return Current == SpatialObjects.end() || !Current->second.Dirty;
-				});
-			}
-			if (DirtySpatialObjects.size() >= Configuration.MaximumSpatialObjects) {
-				Fail("Dirty spatial-object work exceeds its object limit");
-				return;
-			}
-			Found->second.Dirty = true;
-			DirtySpatialObjects.push_back(Object);
+			if (!SpatialObjects.contains(Object)) return;
+			const auto Status = Spatial.MarkDirty(Object);
+			if (Status != SpatialRuntimeProjectionStatus::Success)
+				FailProjection("Spatial projection dirty mark", Status);
 		}
 
 		std::optional<ObjectId> FindSpatialRoot(const std::shared_ptr<Instance> &Object) const {
@@ -187,10 +185,9 @@ namespace gargantuan::network {
 			return PartRoot;
 		}
 
-		std::optional<glm::vec3> PositionOf(const std::shared_ptr<Instance> &Object) const {
-			if (auto CharacterValue = std::dynamic_pointer_cast<Character>(Object))
-				return CharacterValue->GetPosition();
-			if (auto PartValue = std::dynamic_pointer_cast<BasePart>(Object)) return PartValue->GetCFrame().Position;
+		std::optional<CFrame> PoseOf(const std::shared_ptr<Instance> &Object) const {
+			if (auto CharacterValue = std::dynamic_pointer_cast<Character>(Object)) return CharacterValue->GetCFrame();
+			if (auto PartValue = std::dynamic_pointer_cast<BasePart>(Object)) return PartValue->GetCFrame();
 			return std::nullopt;
 		}
 
@@ -204,17 +201,17 @@ namespace gargantuan::network {
 		bool AddSpatialRoot(const std::shared_ptr<Instance> &Object) {
 			const auto Id = Object->GetObjectId();
 			if (SpatialObjects.contains(Id)) return true;
-			auto Position = PositionOf(Object);
+			auto Pose = PoseOf(Object);
 			auto Bounds = BoundsOf(Object);
-			if (!Position || !Finite(*Position) || !Bounds) {
+			if (!Pose || !Finite(Pose->Position) || !Bounds) {
 				Fail("Spatial object has invalid authoritative bounds");
 				return false;
 			}
-			SpatialEntry Entry{.Object = Object, .Position = *Position};
+			SpatialEntry Entry{.Object = Object};
 			Entry.Members.insert(Id);
-			const auto Status = Regions.Register(Id, *Bounds);
-			if (Status != SpatialRegionStatus::Success) {
-				FailSpatial("Spatial root registration", Status);
+			const auto Status = Spatial.Register(Id, {Spatial.GetDefaultSpace(), *Pose}, *Bounds);
+			if (Status != SpatialRuntimeProjectionStatus::Success) {
+				FailProjection("Spatial root projection registration", Status);
 				return false;
 			}
 			decltype(SpatialObjects)::iterator Found;
@@ -222,11 +219,11 @@ namespace gargantuan::network {
 			try {
 				std::tie(Found, Added) = SpatialObjects.emplace(Id, std::move(Entry));
 			} catch (...) {
-				(void)Regions.Remove(Id);
+				(void)Spatial.Remove(Id);
 				throw;
 			}
 			if (!Added) {
-				(void)Regions.Remove(Id);
+				(void)Spatial.Remove(Id);
 				return true;
 			}
 			try {
@@ -241,7 +238,7 @@ namespace gargantuan::network {
 				for (auto &Connection : Found->second.SpatialChanged)
 					if (Connection) Connection->Disconnect();
 				SpatialObjects.erase(Found);
-				(void)Regions.Remove(Id);
+				(void)Spatial.Remove(Id);
 				throw;
 			}
 			Metrics.SpatialEntries = SpatialObjects.size();
@@ -283,9 +280,10 @@ namespace gargantuan::network {
 				if (*Location->second.SpatialRoot == Object && Root != SpatialObjects.end()) {
 					for (auto &Connection : Root->second.SpatialChanged)
 						if (Connection) Connection->Disconnect();
-					const auto Status = Regions.Remove(Object);
-					if (Status != SpatialRegionStatus::Success && Status != SpatialRegionStatus::MissingObject)
-						FailSpatial("Spatial root removal", Status);
+					const auto Status = Spatial.Remove(Object);
+					if (Status != SpatialRuntimeProjectionStatus::Success &&
+						Status != SpatialRuntimeProjectionStatus::MissingProjection)
+						FailProjection("Spatial root projection removal", Status);
 					SpatialObjects.erase(Root);
 					SaturatingIncrement(Metrics.SpatialRemovals);
 				}
@@ -305,25 +303,23 @@ namespace gargantuan::network {
 			auto Found = SpatialObjects.find(Object);
 			if (Found == SpatialObjects.end()) return;
 			auto InstanceValue = Found->second.Object.lock();
-			auto Position = PositionOf(InstanceValue);
+			auto Pose = PoseOf(InstanceValue);
 			auto Bounds = BoundsOf(InstanceValue);
-			if (!InstanceValue || !Position || !Finite(*Position) || !Bounds) {
+			if (!InstanceValue || !Pose || !Finite(Pose->Position) || !Bounds) {
 				Fail("Spatial root lost valid authoritative bounds");
 				return;
 			}
-			Found->second.Position = *Position;
-			const auto Status = Regions.Update(Object, *Bounds);
-			if (Status != SpatialRegionStatus::Success) FailSpatial("Spatial root membership update", Status);
+			const auto Status = Spatial.Update(Object, {Spatial.GetDefaultSpace(), *Pose}, *Bounds);
+			if (Status != SpatialRuntimeProjectionStatus::Success)
+				FailProjection("Spatial root projection update", Status);
 		}
 
 		void RefreshDirtySpatialPositions() {
-			for (const auto Object : DirtySpatialObjects) {
-				auto Found = SpatialObjects.find(Object);
-				if (Found != SpatialObjects.end()) Found->second.Dirty = false;
+			for (const auto Object : Spatial.GetDirtyObjects()) {
 				UpdateSpatialPosition(Object);
 				if (!Healthy) return;
 			}
-			DirtySpatialObjects.clear();
+			Spatial.ClearDirtyObjects();
 		}
 
 		bool WithinAnyFocus(glm::vec3 Position, std::span<const glm::vec3> Focus, float Radius) const {
@@ -339,11 +335,11 @@ namespace gargantuan::network {
 			std::array<SpatialRegionQueryVolume, MaximumReplicationFocusPoints> Volumes;
 			for (std::size_t Index = 0; Index < Focus.size(); ++Index)
 				Volumes[Index] = {
-					.Space = DefaultSpatialSpaceId,
+					.Space = Spatial.GetDefaultSpace(),
 					.Center = glm::dvec3(Focus[Index]),
 					.Radius = Configuration.LeaveRadius,
 				};
-			const auto Status = Regions.Query(std::span(Volumes).first(Focus.size()), QueryScratch);
+			const auto Status = Spatial.Query(std::span(Volumes).first(Focus.size()), QueryScratch);
 			if (Status == SpatialRegionStatus::Success) return true;
 			FailSpatial("Replication region candidate query", Status);
 			return false;
@@ -352,8 +348,9 @@ namespace gargantuan::network {
 		std::vector<glm::vec3> ResolveFocus(const PeerState &Peer) const {
 			if (!Peer.TrustedFocus.empty()) return Peer.TrustedFocus;
 			auto Owner = SpatialObjects.find(Peer.OwnerCharacter);
-			return Owner == SpatialObjects.end() ? std::vector<glm::vec3>{}
-												 : std::vector<glm::vec3>{Owner->second.Position};
+			const auto *Projection = Owner == SpatialObjects.end() ? nullptr : Spatial.Get(Peer.OwnerCharacter);
+			return Projection ? std::vector<glm::vec3>{Projection->Pose.LocalTransform.Position}
+							  : std::vector<glm::vec3>{};
 		}
 
 		bool BuildSelection(PeerState &Peer) {
@@ -402,15 +399,17 @@ namespace gargantuan::network {
 			std::set<ObjectId> Relevant;
 			for (const auto Existing : Peer.RelevantSpatialRoots) {
 				auto Found = SpatialObjects.find(Existing);
-				if (Found != SpatialObjects.end() &&
+				const auto *Projection = Found == SpatialObjects.end() ? nullptr : Spatial.Get(Existing);
+				if (Projection &&
 					(Existing == Peer.OwnerCharacter ||
-					 WithinAnyFocus(Found->second.Position, Focus, Configuration.LeaveRadius)))
+					 WithinAnyFocus(Projection->Pose.LocalTransform.Position, Focus, Configuration.LeaveRadius)))
 					Relevant.insert(Existing);
 			}
 			for (const auto Candidate : QueryScratch.Candidates) {
 				auto Found = SpatialObjects.find(Candidate);
-				if (Found != SpatialObjects.end() &&
-					WithinAnyFocus(Found->second.Position, Focus, Configuration.EnterRadius))
+				const auto *Projection = Found == SpatialObjects.end() ? nullptr : Spatial.Get(Candidate);
+				if (Projection &&
+					WithinAnyFocus(Projection->Pose.LocalTransform.Position, Focus, Configuration.EnterRadius))
 					Relevant.insert(Candidate);
 			}
 			if (Peer.OwnerCharacter.IsValid() && SpatialObjects.contains(Peer.OwnerCharacter))
@@ -539,7 +538,7 @@ namespace gargantuan::network {
 
 	ReplicationRelevanceMetrics ReplicationRelevance::GetMetrics() const {
 		auto Result = State->Metrics;
-		const auto Spatial = State->Regions.GetMetrics();
+		const auto Spatial = State->Spatial.GetIndexMetrics();
 		Result.SpatialQueries = Spatial.RegionQueries;
 		Result.QueryRegions = Spatial.RegionsVisited;
 		Result.CandidateObjects = Spatial.CandidateObjects;
@@ -560,15 +559,30 @@ namespace gargantuan::network {
 		return Result;
 	}
 
-	std::optional<SpatialAddress> ReplicationRelevance::GetSpatialAddress(ObjectId Object) const {
-		return State->Regions.GetPrimaryAddress(Object);
+	std::optional<SpatialCellAddress> ReplicationRelevance::GetSpatialCellAddress(ObjectId Object) const {
+		return State->Spatial.GetCellAddress(Object);
 	}
 
 	bool ReplicationRelevance::IsLargeSpatialObject(ObjectId Object) const {
-		return State->Regions.IsLargeObject(Object);
+		return State->Spatial.IsLargeObject(Object);
 	}
 
 	bool ReplicationRelevance::VerifySpatialIndex() const {
-		return State->Regions.VerifyConsistency();
+		if (!State->Spatial.VerifyConsistency() || State->Spatial.GetProjectionCount() != State->SpatialObjects.size())
+			return false;
+		for (const auto &[Object, Entry] : State->SpatialObjects) {
+			auto InstanceValue = Entry.Object.lock();
+			const auto *Projection = State->Spatial.Get(Object);
+			auto Pose = State->PoseOf(InstanceValue);
+			auto Bounds = State->BoundsOf(InstanceValue);
+			if (!InstanceValue || !Projection || !Pose || !Bounds ||
+				ObjectRegistry::Get().Lookup(Object).get() != InstanceValue.get() ||
+				Projection->Pose.Space != State->Spatial.GetDefaultSpace() ||
+				!Projection->Pose.LocalTransform.FuzzyEq(*Pose) ||
+				!Equal(Projection->Bounds.Minimum, Bounds->Minimum) ||
+				!Equal(Projection->Bounds.Maximum, Bounds->Maximum))
+				return false;
+		}
+		return true;
 	}
 }

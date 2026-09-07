@@ -1,8 +1,8 @@
 #pragma once
 
 #include "gargantuan/runtime/ObjectId.hpp"
+#include "gargantuan/runtime/SpatialTypes.hpp"
 
-#include <compare>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -14,7 +14,6 @@
 #include <glm/vec3.hpp>
 
 namespace gargantuan {
-	inline constexpr std::uint32_t DefaultSpatialSpaceId = 1;
 	inline constexpr double DefaultSpatialRegionSize = 128.0;
 	inline constexpr std::size_t MaximumSpatialRegionIndexObjects = 1'000'000;
 	inline constexpr std::size_t MaximumSpatialRegionIndexRegions = 1'000'000;
@@ -25,27 +24,6 @@ namespace gargantuan {
 	inline constexpr std::size_t MaximumSpatialQueryRegions = 65'536;
 	inline constexpr std::size_t MaximumSpatialQueryCandidates = 1'000'000;
 	inline constexpr std::size_t MaximumSpatialQueryMembershipVisits = 4'000'000;
-
-	struct SpatialRegionCoordinate {
-		std::int64_t X = 0;
-		std::int64_t Y = 0;
-		std::int64_t Z = 0;
-		auto operator<=>(const SpatialRegionCoordinate &) const = default;
-	};
-
-	// SpatialAddress is derived coarse locality, never authoritative object
-	// identity. Space 1 is the current DataModel world; zero is reserved invalid.
-	struct SpatialAddress {
-		std::uint32_t Space = DefaultSpatialSpaceId;
-		SpatialRegionCoordinate Region;
-
-		[[nodiscard]] bool IsValid() const {
-			return Space != 0;
-		}
-		[[nodiscard]] std::uint64_t StableHash() const noexcept;
-		[[nodiscard]] std::string ToString() const;
-		auto operator<=>(const SpatialAddress &) const = default;
-	};
 
 	struct SpatialBounds {
 		glm::dvec3 Minimum{0.0};
@@ -58,7 +36,7 @@ namespace gargantuan {
 	};
 
 	struct SpatialRegionQueryVolume {
-		std::uint32_t Space = DefaultSpatialSpaceId;
+		SpatialSpaceId Space = DefaultSpatialSpace;
 		glm::dvec3 Center{0.0};
 		double Radius = 0.0;
 
@@ -84,6 +62,7 @@ namespace gargantuan {
 		Success,
 		InvalidConfiguration,
 		InvalidIdentity,
+		InvalidSpace,
 		InvalidBounds,
 		InvalidCoordinate,
 		DuplicateObject,
@@ -102,7 +81,7 @@ namespace gargantuan {
 	[[nodiscard]] const char *SpatialRegionStatusName(SpatialRegionStatus Status) noexcept;
 
 	struct SpatialRegionQueryScratch {
-		std::vector<SpatialAddress> Regions;
+		std::vector<SpatialCellAddress> Regions;
 		std::vector<ObjectId> Candidates;
 
 		void Reserve(const SpatialRegionIndexConfiguration &Configuration);
@@ -131,8 +110,8 @@ namespace gargantuan {
 		std::uint64_t CandidateLimitFailures = 0;
 	};
 
-	[[nodiscard]] std::optional<SpatialAddress> SpatialAddressForPosition(
-		glm::dvec3 Position, double RegionSize = DefaultSpatialRegionSize, std::uint32_t Space = DefaultSpatialSpaceId
+	[[nodiscard]] std::optional<SpatialCellAddress> SpatialCellAddressForPosition(
+		glm::dvec3 Position, double RegionSize = DefaultSpatialRegionSize, SpatialSpaceId Space = DefaultSpatialSpace
 	);
 
 	class SpatialRegionIndex final {
@@ -142,15 +121,15 @@ namespace gargantuan {
 		SpatialRegionIndex(const SpatialRegionIndex &) = delete;
 		SpatialRegionIndex &operator=(const SpatialRegionIndex &) = delete;
 
-		[[nodiscard]] SpatialRegionStatus Register(ObjectId Object, const SpatialBounds &Bounds);
-		[[nodiscard]] SpatialRegionStatus Update(ObjectId Object, const SpatialBounds &Bounds);
+		[[nodiscard]] SpatialRegionStatus Register(ObjectId Object, SpatialSpaceId Space, const SpatialBounds &Bounds);
+		[[nodiscard]] SpatialRegionStatus Update(ObjectId Object, SpatialSpaceId Space, const SpatialBounds &Bounds);
 		[[nodiscard]] SpatialRegionStatus Remove(ObjectId Object);
 		[[nodiscard]] SpatialRegionStatus
 		Query(std::span<const SpatialRegionQueryVolume> Volumes, SpatialRegionQueryScratch &Scratch);
 
 		[[nodiscard]] bool Contains(ObjectId Object) const;
 		[[nodiscard]] bool IsLargeObject(ObjectId Object) const;
-		[[nodiscard]] std::optional<SpatialAddress> GetPrimaryAddress(ObjectId Object) const;
+		[[nodiscard]] std::optional<SpatialCellAddress> GetPrimaryAddress(ObjectId Object) const;
 		[[nodiscard]] std::size_t GetMembershipCount(ObjectId Object) const;
 		[[nodiscard]] bool VerifyConsistency() const;
 		[[nodiscard]] const SpatialRegionIndexConfiguration &GetConfiguration() const;

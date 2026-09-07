@@ -139,9 +139,9 @@ duration.
 | Grounded/teleport | one bit each in a byte | two defined bits | exact | unknown bits reject |
 
 Position intentionally remains absolute float32. It does not impose a small
-global fixed-point world and can later become `(SpatialAddress, local
-transform)` without changing Character authority. Spatial regions and portals
-remain unimplemented.
+global fixed-point world and a future wire revision can later become
+`(SpatialSpaceId, local transform)` without changing Character authority.
+Spatial regions and portals remain unimplemented.
 
 Quaternion encoding preserves arbitrary valid Character orientation instead of
 assuming every future `Character` is upright. The current

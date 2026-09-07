@@ -254,9 +254,9 @@ added because current frames contain peer-view and materialization-specific
 state.
 
 Foundation 3H likewise leaves this protocol unchanged. Its derived
-`SpatialAddress` and bounded region index provide candidates to 3E before
+`SpatialCellAddress` and the bounded region index provide candidates to 3E before
 dependency closure. A region crossing is not an `Unpublish`; only a changed 3E
-desired set can create structural enter/leave work. Spatial addresses, region
+desired set can create structural enter/leave work. Spatial cell addresses, region
 membership, and candidate lists are neither serialized nor persisted.
 
 Foundation 3I resolves the previously deferred safe sharing boundary. Only

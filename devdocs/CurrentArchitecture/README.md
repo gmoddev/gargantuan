@@ -1,5 +1,9 @@
 # Current architecture
 
+- [Spatial Runtime Projection Foundation 3K](SpatialRuntimeProjectionFoundation3K.md)
+  defines the semantic Instance/projection/acceleration boundary, strong
+  generation-safe spaces, explicit DefaultSpace compatibility, transactional
+  projection transfer, and isolated per-space candidate queries.
 - [Replication Foundation 3J](ReplicationFoundation3J.md) defines bounded
   dependency-safe structural transition work, deterministic peer fairness,
   critical bootstrap ordering, compact pending state, and exact
@@ -9,7 +13,7 @@
   materialization plans/reference patches, transactional invalidation, and the
   unchanged GRPL v1/reliable scheduler boundary.
 - [Character / Replication Foundation 3H](CharacterReplicationFoundation3H.md)
-  defines canonical derived SpatialAddress semantics, sparse bounded
+  defines canonical derived SpatialCellAddress semantics, sparse bounded
   multi-region membership, large-object fallback, dirty-driven movement,
   conservative peer candidates, and the unchanged 3E policy boundary.
 - [Character Networking Foundation 3G](CharacterNetworkingFoundation3G.md)

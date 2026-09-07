@@ -73,7 +73,7 @@ animation pose + Part/Attachment chain
     -> SemanticSpatialResolver
     -> exact semantic transform inside one current world
     -> region membership + SpatialTopologyStore
-    -> SpatialAddress { Region, LocalTransform }
+    -> PortalSpatialLocation { Region, LocalTransform }
     -> Sound / Interaction / queries / rendering
 ```
 
@@ -88,7 +88,7 @@ consumer deliberately traverses an edge.
 coordinate system. Region support must not silently reinterpret that public
 property. Before implementation, an ADR must choose an explicit region-aware
 address surface while preserving existing default-region reads. The preferred
-direction is to compose a `SpatialAddress` for region-aware native consumers and
+direction is to compose a `PortalSpatialLocation` for region-aware native consumers and
 leave the current CFrame-only property as the default-region compatibility
 surface; exposing a separate script-visible region/address value can follow a
 schema and compatibility decision.
@@ -155,7 +155,7 @@ hidden global coordinate system. Region A at `(0, 0, 0)` and Region B at
 `(0, 0, 0)` do not overlap because a spatial address is a pair:
 
 ```cpp
-struct SpatialAddress
+struct PortalSpatialLocation
 {
     ObjectId Region;
     CFrame LocalTransform;
@@ -356,7 +356,7 @@ illustrative native shape is:
 
 ```cpp
 SpatialRaycastResult RaycastSpatial(
-    SpatialAddress Origin,
+    PortalSpatialLocation Origin,
     glm::vec3 Direction,
     SpatialQueryPolicy Policy);
 ```
@@ -377,7 +377,7 @@ portal recursion.
 
 For an Attachment-anchored ProximityPrompt, `SemanticSpatialResolver` first
 produces the current static or animated local endpoint. Region membership then
-forms its `SpatialAddress`, and the spatial LOS traversal connects the
+forms its `PortalSpatialLocation`, and the spatial LOS traversal connects the
 character's address to that endpoint. Animation does not mutate topology or
 produce journal records, while a region transfer or portal edit remains an
 authoritative committed change.

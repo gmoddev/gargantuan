@@ -40,13 +40,13 @@ namespace gargantuan {
 		}
 
 		bool ContainsAddress(
-			const SpatialAddress &Primary, std::span<const SpatialAddress> Additional, SpatialAddress Value
+			const SpatialCellAddress &Primary, std::span<const SpatialCellAddress> Additional, SpatialCellAddress Value
 		) {
 			return Primary == Value || std::ranges::binary_search(Additional, Value);
 		}
 	}
 
-	std::uint64_t SpatialAddress::StableHash() const noexcept {
+	std::uint64_t SpatialCellAddress::StableHash() const noexcept {
 		std::uint64_t Hash = 14695981039346656037ull;
 		auto Mix = [&Hash](std::uint64_t Value) {
 			for (std::size_t Byte = 0; Byte < sizeof(Value); ++Byte) {
@@ -54,16 +54,18 @@ namespace gargantuan {
 				Hash *= 1099511628211ull;
 			}
 		};
-		Mix(Space);
-		Mix(std::bit_cast<std::uint64_t>(Region.X));
-		Mix(std::bit_cast<std::uint64_t>(Region.Y));
-		Mix(std::bit_cast<std::uint64_t>(Region.Z));
+		Mix(Space.Slot);
+		Mix(Space.Generation);
+		Mix(std::bit_cast<std::uint64_t>(Cell.X));
+		Mix(std::bit_cast<std::uint64_t>(Cell.Y));
+		Mix(std::bit_cast<std::uint64_t>(Cell.Z));
 		return Hash;
 	}
 
-	std::string SpatialAddress::ToString() const {
+	std::string SpatialCellAddress::ToString() const {
 		std::ostringstream Stream;
-		Stream << "space=" << Space << " region=(" << Region.X << ',' << Region.Y << ',' << Region.Z << ')';
+		Stream << "space=(" << Space.Slot << ',' << Space.Generation << ") cell=(" << Cell.X << ',' << Cell.Y << ','
+			   << Cell.Z << ')';
 		return Stream.str();
 	}
 
@@ -73,7 +75,7 @@ namespace gargantuan {
 	}
 
 	bool SpatialRegionQueryVolume::IsValid() const {
-		return Space != 0 && Finite(Center) && std::isfinite(Radius) && Radius >= 0.0;
+		return Space.IsValid() && Finite(Center) && std::isfinite(Radius) && Radius >= 0.0;
 	}
 
 	bool SpatialRegionIndexConfiguration::IsValid() const {
@@ -98,6 +100,8 @@ namespace gargantuan {
 			return "invalid configuration";
 		case SpatialRegionStatus::InvalidIdentity:
 			return "invalid identity";
+		case SpatialRegionStatus::InvalidSpace:
+			return "invalid space";
 		case SpatialRegionStatus::InvalidBounds:
 			return "invalid bounds";
 		case SpatialRegionStatus::InvalidCoordinate:
@@ -138,39 +142,38 @@ namespace gargantuan {
 		Candidates.clear();
 	}
 
-	std::optional<SpatialAddress>
-	SpatialAddressForPosition(glm::dvec3 Position, double RegionSize, std::uint32_t Space) {
-		if (Space == 0 || !Finite(Position)) return std::nullopt;
+	std::optional<SpatialCellAddress>
+	SpatialCellAddressForPosition(glm::dvec3 Position, double RegionSize, SpatialSpaceId Space) {
+		if (!Space.IsValid() || !Finite(Position)) return std::nullopt;
 		const auto X = RegionCoordinate(Position.x, RegionSize);
 		const auto Y = RegionCoordinate(Position.y, RegionSize);
 		const auto Z = RegionCoordinate(Position.z, RegionSize);
 		if (!X || !Y || !Z) return std::nullopt;
-		return SpatialAddress{Space, {*X, *Y, *Z}};
+		return SpatialCellAddress{Space, {*X, *Y, *Z}};
 	}
 
 	struct SpatialRegionIndex::Implementation {
 		struct Entry {
-			SpatialBounds Bounds;
-			SpatialAddress Primary;
-			std::vector<SpatialAddress> Additional;
+			SpatialCellAddress Primary;
+			std::vector<SpatialCellAddress> Additional;
 			std::uint64_t QueryGeneration = 0;
 			bool Large = false;
 
 			[[nodiscard]] std::size_t MembershipCount() const {
 				return Large ? 0 : Additional.size() + 1;
 			}
-			[[nodiscard]] bool Contains(SpatialAddress Address) const {
+			[[nodiscard]] bool Contains(SpatialCellAddress Address) const {
 				return !Large && ContainsAddress(Primary, Additional, Address);
 			}
 		};
 
 		SpatialRegionIndexConfiguration Configuration;
 		std::map<ObjectId, Entry> Objects;
-		std::map<SpatialAddress, std::set<ObjectId>> Regions;
-		std::set<ObjectId> LargeObjects;
-		std::vector<SpatialAddress> MembershipScratch;
-		std::vector<SpatialAddress> AddedScratch;
-		std::vector<SpatialAddress> RemovedScratch;
+		std::map<SpatialCellAddress, std::set<ObjectId>> Regions;
+		std::map<SpatialSpaceId, std::set<ObjectId>> LargeObjects;
+		std::vector<SpatialCellAddress> MembershipScratch;
+		std::vector<SpatialCellAddress> AddedScratch;
+		std::vector<SpatialCellAddress> RemovedScratch;
 		std::uint64_t QueryGeneration = 0;
 		SpatialRegionIndexMetrics Metrics;
 
@@ -184,23 +187,28 @@ namespace gargantuan {
 		void RefreshGauges() {
 			Metrics.RegionCount = Regions.size();
 			Metrics.SpatialObjectCount = Objects.size();
-			Metrics.LargeObjectCount = LargeObjects.size();
+			Metrics.LargeObjectCount = 0;
+			for (const auto &[Space, ObjectsInSpace] : LargeObjects) {
+				(void)Space;
+				SaturatingIncrement(Metrics.LargeObjectCount, static_cast<std::uint64_t>(ObjectsInSpace.size()));
+			}
 		}
 
-		std::span<const SpatialAddress> Additional(const Entry &Value) const {
+		std::span<const SpatialCellAddress> Additional(const Entry &Value) const {
 			return Value.Additional;
 		}
 
-		void CopyMemberships(const Entry &Value, std::vector<SpatialAddress> &Destination) const {
+		void CopyMemberships(const Entry &Value, std::vector<SpatialCellAddress> &Destination) const {
 			Destination.clear();
 			if (Value.Large) return;
 			Destination.push_back(Value.Primary);
 			Destination.insert(Destination.end(), Value.Additional.begin(), Value.Additional.end());
 		}
 
-		SpatialRegionStatus DeriveMemberships(const SpatialBounds &Bounds, bool &Large) {
+		SpatialRegionStatus DeriveMemberships(SpatialSpaceId Space, const SpatialBounds &Bounds, bool &Large) {
 			MembershipScratch.clear();
 			Large = false;
+			if (!Space.IsValid()) return SpatialRegionStatus::InvalidSpace;
 			if (!Bounds.IsValid()) return SpatialRegionStatus::InvalidBounds;
 			const glm::dvec3 MaximumPoint{
 				Bounds.Maximum.x > Bounds.Minimum.x
@@ -213,34 +221,34 @@ namespace gargantuan {
 					? std::nextafter(Bounds.Maximum.z, -std::numeric_limits<double>::infinity())
 					: Bounds.Maximum.z,
 			};
-			const auto Minimum = SpatialAddressForPosition(Bounds.Minimum, Configuration.RegionSize);
-			const auto Maximum = SpatialAddressForPosition(MaximumPoint, Configuration.RegionSize);
+			const auto Minimum = SpatialCellAddressForPosition(Bounds.Minimum, Configuration.RegionSize, Space);
+			const auto Maximum = SpatialCellAddressForPosition(MaximumPoint, Configuration.RegionSize, Space);
 			if (!Minimum || !Maximum) return SpatialRegionStatus::InvalidCoordinate;
-			const auto XCount = AxisCount(Minimum->Region.X, Maximum->Region.X, Configuration.MaximumRegionsPerObject);
-			const auto YCount = AxisCount(Minimum->Region.Y, Maximum->Region.Y, Configuration.MaximumRegionsPerObject);
-			const auto ZCount = AxisCount(Minimum->Region.Z, Maximum->Region.Z, Configuration.MaximumRegionsPerObject);
+			const auto XCount = AxisCount(Minimum->Cell.X, Maximum->Cell.X, Configuration.MaximumRegionsPerObject);
+			const auto YCount = AxisCount(Minimum->Cell.Y, Maximum->Cell.Y, Configuration.MaximumRegionsPerObject);
+			const auto ZCount = AxisCount(Minimum->Cell.Z, Maximum->Cell.Z, Configuration.MaximumRegionsPerObject);
 			if (!XCount || !YCount || !ZCount || *XCount > Configuration.MaximumRegionsPerObject / *YCount ||
 				*XCount * *YCount > Configuration.MaximumRegionsPerObject / *ZCount) {
 				Large = true;
 				return SpatialRegionStatus::Success;
 			}
-			for (std::int64_t X = Minimum->Region.X;; ++X) {
-				for (std::int64_t Y = Minimum->Region.Y;; ++Y) {
-					for (std::int64_t Z = Minimum->Region.Z;; ++Z) {
-						MembershipScratch.push_back({DefaultSpatialSpaceId, {X, Y, Z}});
-						if (Z == Maximum->Region.Z) break;
+			for (std::int64_t X = Minimum->Cell.X;; ++X) {
+				for (std::int64_t Y = Minimum->Cell.Y;; ++Y) {
+					for (std::int64_t Z = Minimum->Cell.Z;; ++Z) {
+						MembershipScratch.push_back({Space, {X, Y, Z}});
+						if (Z == Maximum->Cell.Z) break;
 					}
-					if (Y == Maximum->Region.Y) break;
+					if (Y == Maximum->Cell.Y) break;
 				}
-				if (X == Maximum->Region.X) break;
+				if (X == Maximum->Cell.X) break;
 			}
 			return SpatialRegionStatus::Success;
 		}
 
-		Entry MakeEntry(const SpatialBounds &Bounds, bool Large) const {
-			Entry Result{.Bounds = Bounds, .Large = Large};
+		Entry MakeEntry(SpatialSpaceId Space, const SpatialBounds &Bounds, bool Large) const {
+			Entry Result{.Large = Large};
 			const auto Center = Bounds.Minimum * 0.5 + Bounds.Maximum * 0.5;
-			const auto CenterAddress = SpatialAddressForPosition(Center, Configuration.RegionSize);
+			const auto CenterAddress = SpatialCellAddressForPosition(Center, Configuration.RegionSize, Space);
 			if (CenterAddress) Result.Primary = *CenterAddress;
 			if (!Large) {
 				if (!CenterAddress || !std::ranges::binary_search(MembershipScratch, *CenterAddress))
@@ -252,9 +260,9 @@ namespace gargantuan {
 			return Result;
 		}
 
-		void UpdatePrimaryAddress(Entry &Value, const SpatialBounds &Bounds) const {
+		void UpdatePrimaryAddress(Entry &Value, SpatialSpaceId Space, const SpatialBounds &Bounds) const {
 			const auto Center = Bounds.Minimum * 0.5 + Bounds.Maximum * 0.5;
-			const auto Address = SpatialAddressForPosition(Center, Configuration.RegionSize);
+			const auto Address = SpatialCellAddressForPosition(Center, Configuration.RegionSize, Space);
 			if (!Address || Value.Primary == *Address) return;
 			if (!Value.Large) {
 				auto NewPrimary = std::ranges::lower_bound(Value.Additional, *Address);
@@ -265,13 +273,13 @@ namespace gargantuan {
 			Value.Primary = *Address;
 		}
 
-		std::size_t NewRegionCount(std::span<const SpatialAddress> Addresses) const {
-			return static_cast<std::size_t>(std::ranges::count_if(Addresses, [this](SpatialAddress Address) {
+		std::size_t NewRegionCount(std::span<const SpatialCellAddress> Addresses) const {
+			return static_cast<std::size_t>(std::ranges::count_if(Addresses, [this](SpatialCellAddress Address) {
 				return !Regions.contains(Address);
 			}));
 		}
 
-		bool InsertMemberships(ObjectId Object, std::span<const SpatialAddress> Addresses) {
+		bool InsertMemberships(ObjectId Object, std::span<const SpatialCellAddress> Addresses) {
 			try {
 				for (const auto Address : Addresses) {
 					auto [Region, Created] = Regions.try_emplace(Address);
@@ -297,7 +305,7 @@ namespace gargantuan {
 			}
 		}
 
-		void RemoveMemberships(ObjectId Object, std::span<const SpatialAddress> Addresses) {
+		void RemoveMemberships(ObjectId Object, std::span<const SpatialCellAddress> Addresses) {
 			for (const auto Address : Addresses) {
 				auto Region = Regions.find(Address);
 				if (Region == Regions.end()) continue;
@@ -309,14 +317,42 @@ namespace gargantuan {
 			}
 		}
 
-		SpatialRegionStatus Register(ObjectId Object, const SpatialBounds &Bounds) {
+		bool InsertLargeObject(SpatialSpaceId Space, ObjectId Object) {
+			try {
+				auto [Bucket, Created] = LargeObjects.try_emplace(Space);
+				try {
+					Bucket->second.insert(Object);
+				} catch (...) {
+					if (Created && Bucket->second.empty()) LargeObjects.erase(Bucket);
+					throw;
+				}
+				return true;
+			} catch (const std::bad_alloc &) {
+				return false;
+			}
+		}
+
+		void RemoveLargeObject(SpatialSpaceId Space, ObjectId Object) {
+			auto Bucket = LargeObjects.find(Space);
+			if (Bucket == LargeObjects.end()) return;
+			Bucket->second.erase(Object);
+			if (Bucket->second.empty()) LargeObjects.erase(Bucket);
+		}
+
+		bool ContainsLargeObject(const Entry &Value, ObjectId Object) const {
+			auto Bucket = LargeObjects.find(Value.Primary.Space);
+			return Bucket != LargeObjects.end() && Bucket->second.contains(Object);
+		}
+
+		SpatialRegionStatus Register(ObjectId Object, SpatialSpaceId Space, const SpatialBounds &Bounds) {
 			if (!Object.IsValid()) return SpatialRegionStatus::InvalidIdentity;
+			if (!Space.IsValid()) return SpatialRegionStatus::InvalidSpace;
 			if (Objects.contains(Object)) return SpatialRegionStatus::DuplicateObject;
 			if (Objects.size() >= Configuration.MaximumObjects) return SpatialRegionStatus::ObjectLimit;
 			bool Large = false;
-			if (const auto Status = DeriveMemberships(Bounds, Large); Status != SpatialRegionStatus::Success)
+			if (const auto Status = DeriveMemberships(Space, Bounds, Large); Status != SpatialRegionStatus::Success)
 				return Status;
-			if (Large && LargeObjects.size() >= Configuration.MaximumLargeObjects)
+			if (Large && Metrics.LargeObjectCount >= Configuration.MaximumLargeObjects)
 				return SpatialRegionStatus::LargeObjectLimit;
 			if (!Large && (MembershipScratch.size() > Configuration.MaximumMemberships ||
 						   Metrics.MembershipCount > Configuration.MaximumMemberships - MembershipScratch.size()))
@@ -325,16 +361,12 @@ namespace gargantuan {
 				return SpatialRegionStatus::RegionLimit;
 			Entry Candidate;
 			try {
-				Candidate = MakeEntry(Bounds, Large);
+				Candidate = MakeEntry(Space, Bounds, Large);
 			} catch (const std::bad_alloc &) {
 				return SpatialRegionStatus::AllocationFailure;
 			}
 			if (Large) {
-				try {
-					LargeObjects.insert(Object);
-				} catch (const std::bad_alloc &) {
-					return SpatialRegionStatus::AllocationFailure;
-				}
+				if (!InsertLargeObject(Space, Object)) return SpatialRegionStatus::AllocationFailure;
 			} else if (!InsertMemberships(Object, MembershipScratch)) {
 				return SpatialRegionStatus::AllocationFailure;
 			}
@@ -342,7 +374,7 @@ namespace gargantuan {
 				Objects.emplace(Object, std::move(Candidate));
 			} catch (const std::bad_alloc &) {
 				if (Large)
-					LargeObjects.erase(Object);
+					RemoveLargeObject(Space, Object);
 				else
 					RemoveMemberships(Object, MembershipScratch);
 				return SpatialRegionStatus::AllocationFailure;
@@ -353,27 +385,28 @@ namespace gargantuan {
 			return SpatialRegionStatus::Success;
 		}
 
-		SpatialRegionStatus Update(ObjectId Object, const SpatialBounds &Bounds) {
+		SpatialRegionStatus Update(ObjectId Object, SpatialSpaceId Space, const SpatialBounds &Bounds) {
 			auto Found = Objects.find(Object);
 			if (Found == Objects.end()) return SpatialRegionStatus::MissingObject;
+			if (!Space.IsValid()) return SpatialRegionStatus::InvalidSpace;
 			bool Large = false;
-			if (const auto Status = DeriveMemberships(Bounds, Large); Status != SpatialRegionStatus::Success)
+			if (const auto Status = DeriveMemberships(Space, Bounds, Large); Status != SpatialRegionStatus::Success)
 				return Status;
 			const auto OldMembershipCount = Found->second.MembershipCount();
-			bool Same = Found->second.Large == Large;
+			bool Same = Found->second.Large == Large && Found->second.Primary.Space == Space;
 			if (Same && !Large) {
 				Same = OldMembershipCount == MembershipScratch.size() &&
-					   std::ranges::all_of(MembershipScratch, [&Found](SpatialAddress Address) {
+					   std::ranges::all_of(MembershipScratch, [&Found](SpatialCellAddress Address) {
 						   return Found->second.Contains(Address);
 					   });
 			}
 			if (Same) {
-				UpdatePrimaryAddress(Found->second, Bounds);
-				Found->second.Bounds = Bounds;
+				UpdatePrimaryAddress(Found->second, Space, Bounds);
 				SaturatingIncrement(Metrics.SameRegionUpdates);
 				return SpatialRegionStatus::Success;
 			}
-			if (Large && !Found->second.Large && LargeObjects.size() >= Configuration.MaximumLargeObjects)
+			const auto OldSpace = Found->second.Primary.Space;
+			if (Large && !Found->second.Large && Metrics.LargeObjectCount >= Configuration.MaximumLargeObjects)
 				return SpatialRegionStatus::LargeObjectLimit;
 			const auto NewMembershipCount = Large ? 0 : MembershipScratch.size();
 			if (NewMembershipCount > OldMembershipCount) {
@@ -395,13 +428,13 @@ namespace gargantuan {
 					RemovedScratch.insert(
 						RemovedScratch.end(), Found->second.Additional.begin(), Found->second.Additional.end()
 					);
-					std::erase_if(RemovedScratch, [this](SpatialAddress Address) {
+					std::erase_if(RemovedScratch, [this](SpatialCellAddress Address) {
 						return std::ranges::binary_search(MembershipScratch, Address);
 					});
 				}
 			}
 			const auto ReclaimableRegions = static_cast<std::size_t>(
-				std::ranges::count_if(RemovedScratch, [this](SpatialAddress Address) {
+				std::ranges::count_if(RemovedScratch, [this](SpatialCellAddress Address) {
 					auto Region = Regions.find(Address);
 					return Region != Regions.end() && Region->second.size() == 1;
 				})
@@ -411,24 +444,21 @@ namespace gargantuan {
 				return SpatialRegionStatus::RegionLimit;
 			Entry Candidate;
 			try {
-				Candidate = MakeEntry(Bounds, Large);
+				Candidate = MakeEntry(Space, Bounds, Large);
 			} catch (const std::bad_alloc &) {
 				return SpatialRegionStatus::AllocationFailure;
 			}
 			bool AddedLarge = false;
-			if (Large && !Found->second.Large) {
-				try {
-					AddedLarge = LargeObjects.insert(Object).second;
-				} catch (const std::bad_alloc &) {
-					return SpatialRegionStatus::AllocationFailure;
-				}
+			if (Large && (!Found->second.Large || OldSpace != Space)) {
+				AddedLarge = InsertLargeObject(Space, Object);
+				if (!AddedLarge) return SpatialRegionStatus::AllocationFailure;
 			}
 			if (!InsertMemberships(Object, AddedScratch)) {
-				if (AddedLarge) LargeObjects.erase(Object);
+				if (AddedLarge) RemoveLargeObject(Space, Object);
 				return SpatialRegionStatus::AllocationFailure;
 			}
 			RemoveMemberships(Object, RemovedScratch);
-			if (Found->second.Large && !Large) LargeObjects.erase(Object);
+			if (Found->second.Large && (!Large || OldSpace != Space)) RemoveLargeObject(OldSpace, Object);
 			Candidate.QueryGeneration = Found->second.QueryGeneration;
 			Found->second = std::move(Candidate);
 			Metrics.MembershipCount -= OldMembershipCount;
@@ -443,7 +473,7 @@ namespace gargantuan {
 			if (Found == Objects.end()) return SpatialRegionStatus::MissingObject;
 			CopyMemberships(Found->second, MembershipScratch);
 			RemoveMemberships(Object, MembershipScratch);
-			LargeObjects.erase(Object);
+			if (Found->second.Large) RemoveLargeObject(Found->second.Primary.Space, Object);
 			Metrics.MembershipCount -= Found->second.MembershipCount();
 			Objects.erase(Found);
 			SaturatingIncrement(Metrics.ObjectRemovals);
@@ -469,39 +499,39 @@ namespace gargantuan {
 			if (Volumes.size() > Configuration.MaximumQueryVolumes)
 				return FailQuery(SpatialRegionStatus::QueryVolumeLimit);
 			if (Volumes.empty()) return SpatialRegionStatus::Success;
-			std::array<SpatialAddress, MaximumSpatialQueryVolumes> MinimumAddresses;
-			std::array<SpatialAddress, MaximumSpatialQueryVolumes> MaximumAddresses;
+			std::array<SpatialCellAddress, MaximumSpatialQueryVolumes> MinimumAddresses;
+			std::array<SpatialCellAddress, MaximumSpatialQueryVolumes> MaximumAddresses;
 			for (std::size_t VolumeIndex = 0; VolumeIndex < Volumes.size(); ++VolumeIndex) {
 				const auto &Volume = Volumes[VolumeIndex];
-				if (!Volume.IsValid() || Volume.Space != DefaultSpatialSpaceId)
-					return FailQuery(SpatialRegionStatus::InvalidBounds);
-				const auto Minimum = SpatialAddressForPosition(
+				if (!Volume.Space.IsValid()) return FailQuery(SpatialRegionStatus::InvalidSpace);
+				if (!Volume.IsValid()) return FailQuery(SpatialRegionStatus::InvalidBounds);
+				const auto Minimum = SpatialCellAddressForPosition(
 					Volume.Center - glm::dvec3(Volume.Radius), Configuration.RegionSize, Volume.Space
 				);
-				const auto Maximum = SpatialAddressForPosition(
+				const auto Maximum = SpatialCellAddressForPosition(
 					Volume.Center + glm::dvec3(Volume.Radius), Configuration.RegionSize, Volume.Space
 				);
 				if (!Minimum || !Maximum) return FailQuery(SpatialRegionStatus::InvalidCoordinate);
 				MinimumAddresses[VolumeIndex] = *Minimum;
 				MaximumAddresses[VolumeIndex] = *Maximum;
-				const auto XCount = AxisCount(Minimum->Region.X, Maximum->Region.X, Configuration.MaximumQueryRegions);
-				const auto YCount = AxisCount(Minimum->Region.Y, Maximum->Region.Y, Configuration.MaximumQueryRegions);
-				const auto ZCount = AxisCount(Minimum->Region.Z, Maximum->Region.Z, Configuration.MaximumQueryRegions);
+				const auto XCount = AxisCount(Minimum->Cell.X, Maximum->Cell.X, Configuration.MaximumQueryRegions);
+				const auto YCount = AxisCount(Minimum->Cell.Y, Maximum->Cell.Y, Configuration.MaximumQueryRegions);
+				const auto ZCount = AxisCount(Minimum->Cell.Z, Maximum->Cell.Z, Configuration.MaximumQueryRegions);
 				if (!XCount || !YCount || !ZCount || *XCount > Configuration.MaximumQueryRegions / *YCount ||
 					*XCount * *YCount > Configuration.MaximumQueryRegions / *ZCount)
 					return FailQuery(SpatialRegionStatus::QueryRegionLimit);
 				const auto VolumeRegionCount = *XCount * *YCount * *ZCount;
 				if (VolumeRegionCount > Configuration.MaximumQueryRegions - Scratch.Regions.size())
 					return FailQuery(SpatialRegionStatus::QueryRegionLimit);
-				for (std::int64_t X = Minimum->Region.X;; ++X) {
-					for (std::int64_t Y = Minimum->Region.Y;; ++Y) {
-						for (std::int64_t Z = Minimum->Region.Z;; ++Z) {
+				for (std::int64_t X = Minimum->Cell.X;; ++X) {
+					for (std::int64_t Y = Minimum->Cell.Y;; ++Y) {
+						for (std::int64_t Z = Minimum->Cell.Z;; ++Z) {
 							Scratch.Regions.push_back({Volume.Space, {X, Y, Z}});
-							if (Z == Maximum->Region.Z) break;
+							if (Z == Maximum->Cell.Z) break;
 						}
-						if (Y == Maximum->Region.Y) break;
+						if (Y == Maximum->Cell.Y) break;
 					}
-					if (X == Maximum->Region.X) break;
+					if (X == Maximum->Cell.X) break;
 				}
 			}
 			if (Volumes.size() > 1) {
@@ -540,28 +570,38 @@ namespace gargantuan {
 				if (LargeObject) SaturatingIncrement(Metrics.LargeObjectCandidates);
 				return SpatialRegionStatus::Success;
 			};
-			for (const auto Object : LargeObjects)
-				if (const auto Status = AddCandidate(Object, true); Status != SpatialRegionStatus::Success)
-					return FailQuery(Status);
+			std::array<SpatialSpaceId, MaximumSpatialQueryVolumes> QuerySpaces;
+			std::size_t QuerySpaceCount = 0;
+			for (const auto &Volume : Volumes) {
+				if (std::find(QuerySpaces.begin(), QuerySpaces.begin() + QuerySpaceCount, Volume.Space) !=
+					QuerySpaces.begin() + QuerySpaceCount)
+					continue;
+				QuerySpaces[QuerySpaceCount++] = Volume.Space;
+				auto LargeBucket = LargeObjects.find(Volume.Space);
+				if (LargeBucket == LargeObjects.end()) continue;
+				for (const auto Object : LargeBucket->second)
+					if (const auto Status = AddCandidate(Object, true); Status != SpatialRegionStatus::Success)
+						return FailQuery(Status);
+			}
 			SaturatingIncrement(Metrics.RegionsVisited, static_cast<std::uint64_t>(Scratch.Regions.size()));
 			if (Volumes.size() == 1) {
 				const auto Minimum = MinimumAddresses.front();
 				const auto Maximum = MaximumAddresses.front();
-				for (std::int64_t X = Minimum.Region.X;; ++X) {
-					for (std::int64_t Y = Minimum.Region.Y;; ++Y) {
-						auto Region = Regions.lower_bound({Minimum.Space, {X, Y, Minimum.Region.Z}});
+				for (std::int64_t X = Minimum.Cell.X;; ++X) {
+					for (std::int64_t Y = Minimum.Cell.Y;; ++Y) {
+						auto Region = Regions.lower_bound({Minimum.Space, {X, Y, Minimum.Cell.Z}});
 						while (Region != Regions.end() && Region->first.Space == Minimum.Space &&
-							   Region->first.Region.X == X && Region->first.Region.Y == Y &&
-							   Region->first.Region.Z <= Maximum.Region.Z) {
+							   Region->first.Cell.X == X && Region->first.Cell.Y == Y &&
+							   Region->first.Cell.Z <= Maximum.Cell.Z) {
 							for (const auto Object : Region->second)
 								if (const auto Status = AddCandidate(Object, false);
 									Status != SpatialRegionStatus::Success)
 									return FailQuery(Status);
 							++Region;
 						}
-						if (Y == Maximum.Region.Y) break;
+						if (Y == Maximum.Cell.Y) break;
 					}
-					if (X == Maximum.Region.X) break;
+					if (X == Maximum.Cell.X) break;
 				}
 			} else {
 				for (const auto Address : Scratch.Regions) {
@@ -581,12 +621,12 @@ namespace gargantuan {
 			std::size_t MembershipCount = 0;
 			for (const auto &[Object, Value] : Objects) {
 				if (Value.Large) {
-					if (!LargeObjects.contains(Object) || !Value.Primary.IsValid() || Value.MembershipCount() != 0)
+					if (!ContainsLargeObject(Value, Object) || !Value.Primary.IsValid() || Value.MembershipCount() != 0)
 						return false;
 					continue;
 				}
-				if (LargeObjects.contains(Object) || !Value.Primary.IsValid()) return false;
-				auto Verify = [&](SpatialAddress Address) {
+				if (ContainsLargeObject(Value, Object) || !Value.Primary.IsValid()) return false;
+				auto Verify = [&](SpatialCellAddress Address) {
 					auto Region = Regions.find(Address);
 					return Region != Regions.end() && Region->second.contains(Object);
 				};
@@ -602,8 +642,18 @@ namespace gargantuan {
 					if (Found == Objects.end() || !Found->second.Contains(Address)) return false;
 				}
 			}
+			std::size_t LargeCount = 0;
+			for (const auto &[Space, Bucket] : LargeObjects) {
+				if (!Space.IsValid() || Bucket.empty()) return false;
+				LargeCount += Bucket.size();
+				for (const auto Object : Bucket) {
+					auto Found = Objects.find(Object);
+					if (Found == Objects.end() || !Found->second.Large || Found->second.Primary.Space != Space)
+						return false;
+				}
+			}
 			return MembershipCount == Metrics.MembershipCount && Regions.size() == Metrics.RegionCount &&
-				   Objects.size() == Metrics.SpatialObjectCount && LargeObjects.size() == Metrics.LargeObjectCount;
+				   Objects.size() == Metrics.SpatialObjectCount && LargeCount == Metrics.LargeObjectCount;
 		}
 	};
 
@@ -614,12 +664,13 @@ namespace gargantuan {
 
 	SpatialRegionIndex::~SpatialRegionIndex() = default;
 
-	SpatialRegionStatus SpatialRegionIndex::Register(ObjectId Object, const SpatialBounds &Bounds) {
-		return State->Register(Object, Bounds);
+	SpatialRegionStatus
+	SpatialRegionIndex::Register(ObjectId Object, SpatialSpaceId Space, const SpatialBounds &Bounds) {
+		return State->Register(Object, Space, Bounds);
 	}
 
-	SpatialRegionStatus SpatialRegionIndex::Update(ObjectId Object, const SpatialBounds &Bounds) {
-		return State->Update(Object, Bounds);
+	SpatialRegionStatus SpatialRegionIndex::Update(ObjectId Object, SpatialSpaceId Space, const SpatialBounds &Bounds) {
+		return State->Update(Object, Space, Bounds);
 	}
 
 	SpatialRegionStatus SpatialRegionIndex::Remove(ObjectId Object) {
@@ -645,7 +696,7 @@ namespace gargantuan {
 		return Found != State->Objects.end() && Found->second.Large;
 	}
 
-	std::optional<SpatialAddress> SpatialRegionIndex::GetPrimaryAddress(ObjectId Object) const {
+	std::optional<SpatialCellAddress> SpatialRegionIndex::GetPrimaryAddress(ObjectId Object) const {
 		auto Found = State->Objects.find(Object);
 		return Found == State->Objects.end() ? std::nullopt : std::optional(Found->second.Primary);
 	}

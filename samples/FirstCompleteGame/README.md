@@ -12,7 +12,7 @@ relevant remote Characters. Network tier policy is intentionally not exposed
 to sample Luau.
 
 Character / Replication Foundation 3H likewise adds no sample API or saved
-field. Its derived server-private SpatialAddress/region index supplies bounded
+field. Its derived server-private SpatialCellAddress/region index supplies bounded
 candidates for the existing remote-NPC far/near/far/near acceptance path; 3E
 still decides actual materialization and a region boundary alone is invisible
 to gameplay.

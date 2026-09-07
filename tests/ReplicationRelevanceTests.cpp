@@ -320,8 +320,13 @@ int main() {
 	const auto LeavesBeforeBoundary = RegionRelevance.GetMetrics().RelevanceLeaves;
 	BoundaryPart->SetCFrame(CFrame(129.0f, 0.0f, 0.0f));
 	Check(
+		!RegionRelevance.VerifySpatialIndex(),
+		"semantic movement is observably dirty until the established projection synchronization safe point"
+	);
+	Check(
 		RegionRelevance.Update(13) &&
-			RegionRelevance.GetSpatialAddress(BoundaryPart->GetObjectId()) == SpatialAddress{1, {1, 0, 0}} &&
+			RegionRelevance.GetSpatialCellAddress(BoundaryPart->GetObjectId()) ==
+				SpatialCellAddress{DefaultSpatialSpace, {1, 0, 0}} &&
 			Contains(RegionRelevance.GetSelection(RegionConnection)->DesiredObjects, BoundaryPart->GetObjectId()) &&
 			RegionRelevance.GetMetrics().RelevanceEnters == EntersBeforeBoundary &&
 			RegionRelevance.GetMetrics().RelevanceLeaves == LeavesBeforeBoundary,
@@ -329,8 +334,8 @@ int main() {
 	);
 	RuntimeCharacter->ApplyRuntimeTransform(CFrame(257.0f, 0.0f, 0.0f));
 	Check(
-		RegionRelevance.Update(19) &&
-			RegionRelevance.GetSpatialAddress(RuntimeCharacter->GetObjectId()) == SpatialAddress{1, {2, 0, 0}},
+		RegionRelevance.Update(19) && RegionRelevance.GetSpatialCellAddress(RuntimeCharacter->GetObjectId()) ==
+										  SpatialCellAddress{DefaultSpatialSpace, {2, 0, 0}},
 		"runtime Character movement uses the same post-authority region membership path"
 	);
 	auto NewParent = std::make_shared<Folder>();
@@ -338,7 +343,8 @@ int main() {
 	BoundaryPart->SetParent(NewParent);
 	Check(
 		RegionRelevance.Update(25) &&
-			RegionRelevance.GetSpatialAddress(BoundaryPart->GetObjectId()) == SpatialAddress{1, {1, 0, 0}} &&
+			RegionRelevance.GetSpatialCellAddress(BoundaryPart->GetObjectId()) ==
+				SpatialCellAddress{DefaultSpatialSpace, {1, 0, 0}} &&
 			RegionRelevance.VerifySpatialIndex(),
 		"reparenting reconstructs canonical spatial-root membership without stale entries"
 	);

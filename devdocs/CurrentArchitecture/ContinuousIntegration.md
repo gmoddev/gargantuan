@@ -110,7 +110,7 @@ rather than a duplicated numeric count in this document, is authoritative.
 | Serialization smoke | `SerializationBenchmarkSmoke` |
 | Networking contracts and deterministic transport | `gargantuan_networking_contracts`, `gargantuan_simulated_transport`, `gargantuan_scheduler_contract` |
 | Replication and remotes | `gargantuan_replication`, `gargantuan_remote`, `gargantuan_remote_luau` |
-| SpatialAddress/region coordinate, membership, candidate, lifecycle, false-negative, boundedness, and Release scale proof | `gargantuan_spatial_region_index`, `gargantuan_spatial_region_index_benchmark_smoke`, `gargantuan_replication_relevance` |
+| SpatialPose/SpatialCellAddress separation, space generation/isolation, projection lifecycle/transfer, membership, candidate, false-negative, boundedness, and Release scale proof | `gargantuan_spatial_region_index`, `gargantuan_spatial_region_index_benchmark_smoke`, `gargantuan_replication_relevance` |
 | Networking bounded-load smokes | `gargantuan_replication_benchmark_smoke`, `gargantuan_remote_benchmark_smoke` |
 | Real transport lifecycle and remotes | `gargantuan_real_transport`, `gargantuan_remote_real_transport` |
 | Renderer extraction/projection and renderer interface | `gargantuan_renderer_projection_headless`, `gargantuan_renderer_backend_headless` |

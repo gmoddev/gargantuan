@@ -279,7 +279,7 @@ was added.
 
 3F explicitly defers simulation/AI/physics LOD, sleeping, distributed ownership,
 congestion-control protocols, client bandwidth settings, renderer/PVS relevance,
-regions/portals/`SpatialAddress`, authentication/matchmaking/Node tickets,
+regions/portals/cross-space networking, authentication/matchmaking/Node tickets,
 vehicle networking, combat rollback, generic abilities/Humanoid, animation
 graphs, Studio multiplayer tooling, and telemetry redesign.
 

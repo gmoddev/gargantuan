@@ -2,7 +2,7 @@
 
 #include "gargantuan/network/Connection.hpp"
 #include "gargantuan/runtime/ObjectId.hpp"
-#include "gargantuan/runtime/SpatialRegionIndex.hpp"
+#include "gargantuan/runtime/SpatialRuntimeProjection.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -107,7 +107,7 @@ namespace gargantuan::network {
 		[[nodiscard]] bool IsHealthy() const;
 		[[nodiscard]] const std::string &GetFailure() const;
 		[[nodiscard]] ReplicationRelevanceMetrics GetMetrics() const;
-		[[nodiscard]] std::optional<SpatialAddress> GetSpatialAddress(ObjectId Object) const;
+		[[nodiscard]] std::optional<SpatialCellAddress> GetSpatialCellAddress(ObjectId Object) const;
 		[[nodiscard]] bool IsLargeSpatialObject(ObjectId Object) const;
 		[[nodiscard]] bool VerifySpatialIndex() const;
 

@@ -3,6 +3,9 @@ status: current
 owner: networking
 last_verified: 2026-09-04
 related_code:
+  - include/gargantuan/runtime/SpatialTypes.hpp
+  - include/gargantuan/runtime/SpatialRuntimeProjection.hpp
+  - src/runtime/SpatialRuntimeProjection.cpp
   - include/gargantuan/runtime/SpatialRegionIndex.hpp
   - src/runtime/SpatialRegionIndex.cpp
   - include/gargantuan/network/ReplicationRelevance.hpp
@@ -27,7 +30,8 @@ region protocol.
 
 ```text
 authoritative transform/bounds
-    -> derived SpatialAddress and sparse region memberships
+    -> 3K SpatialRuntimeProjection
+    -> derived SpatialCellAddress and sparse region memberships
     -> bounded candidate regions and ObjectIds
     -> 3E exact relevance, hysteresis, owner/global policy
     -> dependency-closed structural materialization
@@ -40,23 +44,26 @@ per `ReplicationRelevance`. It point-indexed Character and BasePart roots, polle
 every Character on each relevance update, and performed fresh bounded cell
 queries. 3H deliberately retains the measured uniform-grid shape. It replaces
 the private 32-bit `CellAddress` and cell maps with the reusable
-`SpatialAddress`/`SpatialRegionIndex`, adds generic bounds and large-object
+`SpatialCellAddress`/`SpatialRegionIndex`, adds generic bounds and large-object
 handling, and makes transform membership updates dirty-driven. There is no
 second competing spatial index and no octree.
 
-## Canonical address
+## Canonical cell address
 
-`SpatialAddress` is `{ uint32 Space, int64 X, int64 Y, int64 Z }`. Space zero is
-invalid; space one denotes the current DataModel world. The field is a reserved
-multi-space seam only: 3H supports one active space and rejects other query
-spaces. Portals, interiors, world travel, server sharding, and floating origins
-remain deferred.
+As clarified by Foundation 3K, `SpatialCellAddress` is
+`{ SpatialSpaceId Space, int64 X, int64 Y, int64 Z }`. `SpatialSpaceId` is a
+strong `{slot,generation}` runtime identity; zero in either component is
+invalid. `DefaultSpatialSpace {1,1}` denotes the production DataModel world.
+The reusable index supports isolated internal spaces, while production 3E uses
+only explicit DefaultSpace. Portals, interiors, world travel, server sharding,
+and floating origins remain deferred.
 
 The address is derived runtime metadata. It is not persisted in project files,
 written to `ChangeJournal`, encoded in GCHR or structural replication, or sent
 to a client. The authoritative CFrame/bounds remain the sole location source.
 `ObjectId { slot, generation }` continues to answer which object exists;
-`SpatialAddress` answers where it currently belongs. A region crossing changes
+`SpatialPose` answers semantic placement in a space; `SpatialCellAddress`
+answers which acceleration bucket currently contains it. A cell crossing changes
 no ObjectId, control epoch, materialization epoch, authority, or gameplay state.
 
 Coordinates use mathematical `floor(position / regionSize)`, including for
@@ -66,8 +73,8 @@ so a box ending exactly on a boundary does not acquire the next region.
 Conversion happens through finite `long double` arithmetic followed by an
 explicit signed-64-bit range check; NaN, infinity, and overflow fail instead of
 wrapping. Equality and ordering are structural. The stable diagnostic hash is
-an explicit byte-wise FNV-1a mix of the space and three signed coordinates; it
-is distribution metadata, not a security primitive or identity.
+an explicit byte-wise FNV-1a mix of the space slot/generation and three signed
+coordinates; it is distribution metadata, not a security primitive or identity.
 
 ## Spatial roots and bounds
 
@@ -99,16 +106,15 @@ memberships.
 
 ## Ownership, storage, and lifecycle
 
-`ReplicationRelevance` owns one `SpatialRegionIndex` for its authoritative
-server world/session. All peers share its region buckets; no peer receives a
-copy of region contents. The reusable runtime type is networking-neutral, but
-3E is its only production consumer in 3H. A server GameSession creates the
-index during manager initialization and destroys it during `Stop`, failure, or
-normal shutdown. Offline/client runtimes create neither relevance nor region
-query state.
+`SpatialRuntimeProjectionStore` owns projection and index state for the
+authoritative server world/session. `ReplicationRelevance` owns that spatial
+context's lifetime and remains the sole production 3E consumer. All peers share
+its buckets; no peer receives a copy. A server GameSession creates the context
+during manager initialization and destroys it during `Stop`, failure, or normal
+shutdown. Offline/client runtimes create neither relevance nor query state.
 
 The index contains ordered sparse maps from generation-bearing `ObjectId` to
-one current entry and from `SpatialAddress` to an ordered ObjectId set. It
+one current entry and from `SpatialCellAddress` to an ordered ObjectId set. It
 allocates nothing for empty theoretical regions. Removing the final membership
 erases the bucket immediately. A 100,000-unique-region teleport test leaves one
 live region while moving and zero after removal; there is no historical path or
@@ -123,13 +129,13 @@ entry remains queryable, removes retired membership, and commits the entry.
 Validation/resource failure retains the prior membership. At most one object's
 bounded overlap can exist transiently during the atomic old/new swap.
 
-Same-membership movement only replaces current bounds/primary address and
-increments a diagnostic; it does not erase or insert a bucket. Dirty roots use
-one pre-reserved ObjectId vector plus an intrusive `Dirty` bit in the existing
-root entry, so repeated transform signals coalesce and ordinary same-region
-motion allocates no dirty tasks. Stale dirty handles validate through the full
-ObjectId generation. Reparent/remove disconnects signals and incrementally
-removes the old root; no raw Instance pointer is retained in a bucket.
+Same-membership movement replaces projection pose/bounds/primary address and
+increments diagnostics; it does not erase or insert a bucket. Dirty roots use
+one pre-reserved ObjectId vector plus the projection's `Dirty` bit, so repeated
+transform signals coalesce and ordinary same-region motion allocates no dirty
+tasks. Stale dirty handles validate through the full ObjectId generation.
+Reparent/remove disconnects signals and incrementally removes the projection;
+no raw Instance pointer is retained in projection or bucket storage.
 
 ## Candidate query and 3E separation
 
@@ -289,7 +295,9 @@ runtime Character movement, reparent, destroy, and consistency checks. Existing
 GameSession and Character networking suites continue to cover cross-control,
 stale generations/epochs, `FailPeer`, reconnect, 100-cycle lifecycle, GCHR
 malformation, semantic action/teleport bypass, 3F cadence, and 3G scheduler
-acceptance/fairness/budget behavior.
+acceptance/fairness/budget behavior. Foundation 3K adds strong space-generation,
+identical-coordinate isolation, transactional transfer, dirty coalescing,
+stale object/space generation, and randomized projection state-machine coverage.
 
 No GCHR, structural, handshake, package, persistence, authoring, or Remote wire
 format changed. There is no new Luau callback or API. Client code has no region,
@@ -316,3 +324,8 @@ per-object publication descriptions and peer-local plans. It did not change the
 3H index, query, region-size default, candidate bounds, or relevance ownership.
 The 10k/100k/1M spatial regression remains a separate index proof; see
 `ReplicationFoundation3I.md` for the materialization allocation result.
+
+Foundation 3K later split semantic `SpatialPose` from the acceleration-only
+`SpatialCellAddress` and moved projection/bounds/dirty ownership into
+`SpatialRuntimeProjectionStore`. The 3H candidate and 3E policy contracts remain
+unchanged; see `SpatialRuntimeProjectionFoundation3K.md`.

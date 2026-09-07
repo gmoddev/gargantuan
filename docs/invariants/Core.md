@@ -272,7 +272,7 @@ Tests should enforce them where practical.
 37. Ordinary Character scheduling membership is generation-safe and lifecycle
     scoped. Relevance leave/re-entry, replacement, destruction, disconnect, and
     terminal peer failure cannot leave a publishable stale wheel or due entry.
-38. `SpatialAddress` is deterministic, server-derived locality metadata, not
+38. `SpatialCellAddress` is deterministic, server-derived acceleration metadata, not
     `ObjectId`, transport identity, persistence state, or authority. Moving
     across a region cannot change object/control identity or grant mutation.
 39. The runtime region index is sparse, bounded, generation-safe, and owned by
@@ -313,6 +313,20 @@ Tests should enforce them where practical.
     client mutation cannot build, revise, select, or patch a server template.
 51. Peer-specific soft-reference patches may alter only that peer's encoded
     publication and can never mutate or leak through the shared description.
+52. Instance identity, hierarchy, and reflected properties remain semantic
+    authority. Orthogonal runtime participation may use subsystem-owned
+    projections, but a projection cannot replace or outlive its full ObjectId
+    generation.
+53. Semantic `SpatialPose`, generation-safe `SpatialSpaceId`, and rebuildable
+    `SpatialCellAddress` are distinct. Equal local coordinates in different
+    space generations cannot alias queries, identity, relevance, or authority.
+54. Spatial projection creation, mutation, transfer, and removal preserve a
+    complete projection/index transaction. Failed work leaves the previous
+    committed state, and production consistency checks detect semantic drift.
+55. DefaultSpace preserves current single-space package, protocol, physics,
+    renderer, animation, Character, and replication behavior. Space/projection/
+    cell state is native, transient, non-authoritative, and unavailable to
+    ordinary Luau or client input.
 
 ## Changes requiring architecture review
 
