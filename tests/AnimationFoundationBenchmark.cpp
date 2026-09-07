@@ -1252,11 +1252,12 @@ namespace {
 		const std::shared_ptr<AssetService> &Assets,
 		const ImportedRig &Asset,
 		std::span<const RenderMeshCreate> SourceMeshes,
-		const std::string &AudioReference
+		const std::string &AudioReference,
+		bool Quick
 	) {
-		constexpr std::size_t StaticObjectCount = 50'000;
-		constexpr std::size_t AnimatedRigCount = 500;
-		constexpr std::size_t VisibleRigCount = 50;
+		const std::size_t StaticObjectCount = Quick ? 1'000 : 50'000;
+		const std::size_t AnimatedRigCount = Quick ? 50 : 500;
+		const std::size_t VisibleRigCount = Quick ? 10 : 50;
 		std::vector<std::shared_ptr<Part>> StaticObjects;
 		std::vector<std::shared_ptr<MeshPart>> Rigs;
 		std::vector<std::shared_ptr<Animator>> Animators;
@@ -1407,7 +1408,7 @@ namespace {
 				Incremental->MeshVertexUpdates.empty() && Incremental->MeshCreates.empty() &&
 				Incremental->Updates.size() == ExpectedPoseUpdates && StaticUpdateCount == 0 &&
 				Incremental->Creates.empty() && Incremental->Removes.empty() && !Incremental->FullResync,
-			"50K static world policy publication touched static objects or evaluated a frozen rig"
+			"static-world policy publication touched static objects or evaluated a frozen rig"
 		);
 		Require(
 			RuntimeAfter.PoseEvaluations - RuntimeBefore.PoseEvaluations == ExpectedPoseUpdates &&
@@ -1432,12 +1433,14 @@ namespace {
 		Require(
 			SemanticAllocationDelta == 0 && AllocationsAfterRuntime == AllocationsBeforeRuntime &&
 				RuntimeAfter.BufferAllocations == RuntimeBefore.BufferAllocations,
-			"50K static world animation or semantic steady state allocated after warmup"
+			"static-world animation or semantic steady state allocated after warmup"
 		);
-		std::cout << "[Animation:Benchmark] staticWorld=50000 animatedRigs=500 visibleRigs=50 "
-					 "semanticRigs=1 frozenVisualRigs=449 poseUpdates=51 anchorResolutions=1 staticUpdates=0 "
-					 "changeJournalRecords=0 documentReconciliation=0 runtimeAllocations=0 semanticAllocations=0 "
-					 "cpuDynamicVertexUpdates=0 fullResyncs=0 publisherMs="
+		std::cout << "[Animation:Benchmark] staticWorld=" << StaticObjectCount
+				  << " animatedRigs=" << AnimatedRigCount << " visibleRigs=" << VisibleRigCount
+				  << " semanticRigs=1 frozenVisualRigs=" << AnimatedRigCount - VisibleRigCount - 1
+				  << " poseUpdates=" << ExpectedPoseUpdates << " anchorResolutions=1 staticUpdates=0 "
+				  << "changeJournalRecords=0 documentReconciliation=0 runtimeAllocations=0 semanticAllocations=0 "
+				  << "cpuDynamicVertexUpdates=0 fullResyncs=0 publisherMs="
 				  << static_cast<double>(PublishNanoseconds) / 1'000'000.0 << '\n';
 		Audio->Shutdown();
 		InteractionServiceTestAccess::Shutdown(*Interaction);
@@ -1458,9 +1461,10 @@ namespace {
 	void RunStaticAttachmentRegression(
 		const std::shared_ptr<Workspace> &WorkspaceValue,
 		const std::shared_ptr<AssetService> &Assets,
-		const ImportedRig &Asset
+		const ImportedRig &Asset,
+		bool Quick
 	) {
-		constexpr std::size_t StaticAttachmentCount = 50'000;
+		const std::size_t StaticAttachmentCount = Quick ? 1'000 : 50'000;
 		auto StaticOwner = std::make_shared<Part>();
 		StaticOwner->SetAnchored(true);
 		StaticOwner->SetParent(WorkspaceValue);
@@ -1513,9 +1517,10 @@ namespace {
 			std::cerr << "[Animation:Benchmark] staticAttachments semantic allocations spatial="
 				<< AllocationsAfterSpatial - AllocationsAfterRuntime << '\n';
 		Require(ChangeJournal::Get().ReadSince(0).empty() && AllocationDelta == 0,
-			"50K ordinary Attachment steady state journaled or allocated");
-		std::cout << "[Animation:Benchmark] staticAttachments=50000 animatedRigs=1 semanticAnchors=1 "
-			"anchorResolutions=1 staticAttachmentScans=0 changeJournalRecords=0 semanticAllocations=0\n";
+			"ordinary Attachment steady state journaled or allocated");
+		std::cout << "[Animation:Benchmark] staticAttachments=" << StaticAttachmentCount
+				  << " animatedRigs=1 semanticAnchors=1 anchorResolutions=1 staticAttachmentScans=0 "
+				  << "changeJournalRecords=0 semanticAllocations=0\n";
 		Spatial->Shutdown();
 		Runtime->Shutdown();
 		AnimatorValue->Destroy();
@@ -1627,7 +1632,7 @@ int main(int ArgumentCount, char **Arguments) {
 						);
 					}
 		} else if (StaticWorld) {
-			RunStaticWorldRegression(World, WorkspaceValue, Assets, Imported.at(64), SourceMeshes, AudioReference);
+			RunStaticWorldRegression(World, WorkspaceValue, Assets, Imported.at(64), SourceMeshes, AudioReference, false);
 		} else if (JobScaling) {
 			RunJobScaling(World, WorkspaceValue, Assets, Imported.at(64), SourceMeshes, AudioReference, Quick);
 		} else if (PolicyScenarios) {
@@ -1643,6 +1648,7 @@ int main(int ArgumentCount, char **Arguments) {
 		} else {
 			for (const auto Rigs : {1u, 10u, 100u, 500u})
 				for (const auto AnchorsPerRig : {0u, 1u, 4u, 16u, 64u}) {
+					if (Quick && (Rigs > 100 || AnchorsPerRig > 16)) continue;
 					auto Result = RunScenario(
 						World,
 						WorkspaceValue,
@@ -1708,8 +1714,8 @@ int main(int ArgumentCount, char **Arguments) {
 				);
 			}
 			RunCpuSkinningScaling(Quick);
-			RunStaticWorldRegression(World, WorkspaceValue, Assets, Imported.at(64), SourceMeshes, AudioReference);
-			RunStaticAttachmentRegression(WorkspaceValue, Assets, Imported.at(64));
+			RunStaticWorldRegression(World, WorkspaceValue, Assets, Imported.at(64), SourceMeshes, AudioReference, Quick);
+			RunStaticAttachmentRegression(WorkspaceValue, Assets, Imported.at(64), Quick);
 			for (const auto Characters : {1u, 10u, 100u, 500u}) {
 				RunRootMotionScenario(WorkspaceValue, Assets, Imported.at(64), Characters, 0, 0, Frames);
 				RunRootMotionScenario(WorkspaceValue, Assets, Imported.at(64), Characters, Characters, 0, Frames);
