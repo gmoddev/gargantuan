@@ -75,6 +75,11 @@ defect throughput.
   bootstrap priority, fair peer rotation, compact cancellation, and exact
   scheduler-accepted peer materialization. It adds no generic QoS system or
   public spatial/materialization API.
+- Spatial Runtime Projection Foundation 3K separates authoritative semantic
+  pose from derived acceleration-cell addressing, adds generation-safe
+  subsystem-owned spatial projections and explicit space identity, and proves
+  isolated-space query and transfer behavior. Instance semantics, 3H candidate
+  discovery, 3E relevance, and 3J materialization authority remain unchanged.
 - Environment / Lighting Foundation 1 establishes canonical saved Lighting and
   Sky semantics, renderer-neutral incremental publication, AssetService-owned
   coherent face residency, and the SDL shadow/Sky/opaque/GUI pipeline. Local
@@ -167,12 +172,17 @@ Deliver:
 - render extraction, correct primitive meshes, culling/batching baseline,
   materials, lights, textures/meshes, and device failure diagnostics;
 - content-addressed asset importer/resolver/cache;
+- Asset Foundation 2B's mesh-collision slice: establish the separate
+  backend-neutral collision boundary, MeshPart binding, physics-backend
+  projection, bounded lifetime/residency behavior, and measured representation
+  policy needed by imported and generated meshes; other 2B priorities remain
+  separately scoped in current architecture;
 - Geometry Foundation 1A ([research](SolidGeometryCompilerResearch.md)) after
-  Asset Foundation 2B's independent mesh-collision boundary: a bounded,
-  deterministic headless solid-geometry compiler that
-  transactionally emits ordinary canonical Mesh and backend-neutral collision
-  assets; Manifold is the first prototype candidate, not yet a dependency
-  decision, and runtime game-facing CSG remains deferred;
+  that Asset Foundation 2B slice: a bounded, deterministic headless
+  solid-geometry compiler that transactionally emits ordinary canonical Mesh
+  assets and produces collision data only through the established 2B contract;
+  Manifold is the first prototype candidate, not yet a dependency decision, and
+  runtime game-facing CSG remains deferred;
 - basic audio and transform/tween animation;
 - functional Screen UI: layout, text, image, button, clipping, focus, navigation;
 - structured `[System:SubSystem]` diagnostics and performance counters; and

@@ -13,15 +13,15 @@ related_current_architecture:
 
 Gargantuan should treat constructive solid geometry (CSG) as a versioned,
 bounded geometry compiler. An editable authoring graph should compile
-transactionally into an ordinary canonical `Mesh` asset and an independent,
-backend-neutral collision asset. Rendering, physics, replication, and spatial
-indexing should consume those compiled artifacts and should not evaluate or
-retain the authoring graph.
+transactionally into an ordinary canonical `Mesh` asset and produce collision
+data through the prerequisite, backend-neutral Asset Foundation 2B contract.
+Rendering, physics, replication, and spatial indexing should consume only those
+compiled artifacts and should not evaluate or retain the authoring graph.
 
 ```text
 editable solid graph
     -> bounded headless compiler
-    -> canonical Mesh + independent CollisionGeometry
+    -> canonical Mesh + collision output through Asset Foundation 2B
     -> ordinary AssetService/runtime projections
 ```
 
@@ -87,6 +87,13 @@ union, intersection, and ordered difference. Associative union/intersection
 should be representable as n-ary operations. Pointer identity, display names,
 and array position must not be durable node identity.
 
+The expected scene and runtime representation is an ordinary `MeshPart` whose
+generated mesh and collision data retain source-group provenance back to that
+authoring asset. `SolidModel` is authoring/source state, not a special runtime
+`BasePart` subclass. Any alternative semantic Instance requires a separate ADR
+and evidence that an ordinary `MeshPart` cannot preserve the required authoring
+identity.
+
 Compilation should validate the complete source revision, build visual and
 collision candidates off-thread, validate and encode all artifacts, then use an
 AssetService compound commit. Failure publishes no partial revision and leaves
@@ -102,13 +109,14 @@ contract.
 
 ## Roadmap placement
 
-1. Finish the existing semantic/projection work and Asset Foundation 2B's
-   generic mesh-collision boundary.
+1. Build on the completed Foundation 3K semantic/projection boundary and finish
+   Asset Foundation 2B's generic mesh-collision boundary.
 2. Add Geometry Foundation 1A in Phase 2: prototype and gate a headless compiler
-   that produces ordinary canonical mesh and collision assets. This milestone
-   includes corpus tests, fuzzing, determinism checks, bounds, cancellation,
-   benchmarks, and transactional AssetService integration; it does not include
-   Studio modeling UI or game-facing runtime CSG.
+   that produces ordinary canonical mesh assets and collision data only through
+   the established Asset Foundation 2B contract. This milestone includes corpus
+   tests, fuzzing, determinism checks, bounds, cancellation, benchmarks, and
+   transactional AssetService integration; it does not include Studio modeling
+   UI or game-facing runtime CSG.
 3. Add Geometry Foundation 1B in Phase 4: Studio union, intersection,
    difference, edit/separate, preview, collision inspection, diagnostics, and
    command-backed undo/redo over the headless compiler.
