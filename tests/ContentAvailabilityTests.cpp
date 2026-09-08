@@ -159,6 +159,9 @@ int main() {
 			.Package = Data.Package,
 			.ManifestDigest = Data.ManifestDigest,
 			.Mode = ContentResidencyMode::OnDemand,
+		},
+		[](std::string Code, std::string Message) {
+			std::cerr << "[Content:AvailabilityTest] " << Code << ": " << Message << '\n';
 		}
 	);
 	Check(Pump(Service, [&] { return Service.IsManifestAvailable(); }), "manifest acquisition did not complete");
@@ -171,6 +174,11 @@ int main() {
 	auto FirstRegion = WorkspaceValue->FindFirstChild("StreamedRegion", false);
 	Check(FirstRegion && FirstRegion->GetDataModel() == World,
 		"admission did not create an authoritative Workspace lifetime");
+	if (!FirstRegion) {
+		Service.Stop();
+		TeardownNativeRuntimeSchema();
+		return 1;
+	}
 	const auto FirstObject = FirstRegion->GetObjectId();
 
 	auto RuntimeChild = std::make_shared<Folder>();
