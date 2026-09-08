@@ -33,8 +33,19 @@ namespace gargantuan {
 	inline constexpr std::size_t MaximumPackageBlobReferenceBytes = 256;
 	inline constexpr std::size_t MaximumPackageContentManifestBytes = 32 * 1024 * 1024;
 	inline constexpr std::size_t MaximumPackageContentManifestJsonNodes = 2 * 1024 * 1024;
-	inline constexpr std::size_t MaximumPackageContentPayloadBytes = 8 * 1024 * 1024;
+	inline constexpr std::size_t MaximumPackageContentPayloadBytes = 1024 * 1024;
 	inline constexpr std::size_t MaximumPackageContentObjectsPerUnit = 512;
+	inline constexpr std::size_t MaximumContentAvailabilityWorkers = 8;
+	inline constexpr std::size_t MaximumContentAvailabilityInFlight = 16;
+	inline constexpr std::size_t MaximumContentAvailabilityPendingRequests = 1024;
+	inline constexpr std::size_t MaximumContentAvailabilityCompletedPayloadBytes = 16 * 1024 * 1024;
+	inline constexpr std::size_t MaximumContentAvailabilityCachedPayloadBytes = 32 * 1024 * 1024;
+	inline constexpr std::size_t MaximumContentAvailabilityCompletionsPerTick = 16;
+	inline constexpr std::size_t MaximumContentAvailabilityAdmissionUnitsPerTick = 2;
+	inline constexpr std::size_t MaximumContentAvailabilityAdmissionObjectsPerTick = 512;
+	inline constexpr std::size_t MaximumContentAvailabilityAdmissionBytesPerTick = MaximumPackageContentPayloadBytes;
+	inline constexpr std::size_t MaximumContentAvailabilityEvictionUnitsPerTick = 2;
+	inline constexpr std::size_t MaximumContentAvailabilityEvictionObjectsPerTick = 512;
 
 	struct PackageContentNamespace final {
 		ProjectId Project;
@@ -213,12 +224,36 @@ namespace gargantuan {
 		ContentAvailabilityLimits Limits;
 	};
 
+	struct ContentAvailabilityDurationMetric final {
+		std::uint64_t Samples = 0;
+		std::uint64_t TotalMicroseconds = 0;
+		std::uint64_t MaximumMicroseconds = 0;
+	};
+
+	struct ContentAvailabilityTimingMetrics final {
+		ContentAvailabilityDurationMetric AcceptedToQueued;
+		ContentAvailabilityDurationMetric QueuedToProviderStart;
+		ContentAvailabilityDurationMetric Provider;
+		ContentAvailabilityDurationMetric Verification;
+		ContentAvailabilityDurationMetric VerificationToPreparation;
+		ContentAvailabilityDurationMetric Preparation;
+		ContentAvailabilityDurationMetric WorkerPreparation;
+		ContentAvailabilityDurationMetric PreparationToCommit;
+		ContentAvailabilityDurationMetric Commit;
+		ContentAvailabilityDurationMetric EndToEnd;
+		ContentAvailabilityDurationMetric Step;
+	};
+
 	struct ContentAvailabilityMetrics final {
 		std::uint64_t ManifestBytes = 0;
 		std::uint64_t Requests = 0;
 		std::uint64_t Acquisitions = 0;
 		std::uint64_t AcquisitionDeduplications = 0;
 		std::uint64_t CacheHits = 0;
+		std::uint64_t CacheEvictions = 0;
+		std::uint64_t CompletionCapacityDeferrals = 0;
+		std::uint64_t AdmissionDeferrals = 0;
+		std::uint64_t StaleCompletionsRejected = 0;
 		std::uint64_t Cancellations = 0;
 		std::uint64_t Failures = 0;
 		std::uint64_t Admissions = 0;
@@ -232,6 +267,17 @@ namespace gargantuan {
 		std::uint64_t AdmissionPendingHighWater = 0;
 		std::uint64_t CompletedPayloadBytesHighWater = 0;
 		std::uint64_t CachedPayloadBytesHighWater = 0;
+		std::uint64_t RequestedUnits = 0;
+		std::uint64_t AcquiringUnits = 0;
+		std::uint64_t PreparedUnits = 0;
+		std::uint64_t ResidentUnits = 0;
+		std::uint64_t EvictingUnits = 0;
+		std::uint64_t FailedUnits = 0;
+		std::uint64_t ReservedCompletionPayloadBytes = 0;
+		std::uint64_t CompletedPayloadBytes = 0;
+		std::uint64_t CachedPayloadBytes = 0;
+		std::uint64_t OldestRequestAgeMicroseconds = 0;
+		ContentAvailabilityTimingMetrics Timing;
 	};
 
 	class ContentAvailabilityService final {

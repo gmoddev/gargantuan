@@ -1,5 +1,5 @@
 #include "gargantuan/assets/InstanceSerialization.hpp"
-#include "gargantuan/Log.hpp"
+#include "assets/PreparedInstanceSerialization.hpp"
 #include "gargantuan/classes/Instance.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/datatypes/CFrame.hpp"
@@ -16,7 +16,6 @@
 #include "gargantuan/runtime/WireCodec.hpp"
 #include "serialization/JsonCodec.hpp"
 
-#include <SDL3/SDL_log.h>
 #include <array>
 #include <cmath>
 #include <cstring>
@@ -35,6 +34,13 @@
 
 namespace gargantuan::InstanceSerialization {
 	using json = JsonCodec::Json;
+
+	namespace Internal {
+		struct PreparedInstanceDocument final {
+			explicit PreparedInstanceDocument(json Value) : Contents(std::move(Value)) {}
+			json Contents;
+		};
+	}
 
 	// Serialization
 
@@ -601,7 +607,6 @@ namespace gargantuan::InstanceSerialization {
 			return std::nullopt;
 		}
 
-		LOG_INFO(App, "Registered property count for %s: %zu", className.c_str(), definition->AllProperties.size());
 		auto instance = InstanceClassRegistry::Construct(*definition);
 		if (instance->ApplyPropertyMutation("Name", name.get<std::string>(), Enums::Permission::Engine) !=
 			MutationStatus::Success) {
@@ -610,11 +615,9 @@ namespace gargantuan::InstanceSerialization {
 		}
 		for (auto &[key, property] : definition->AllProperties) {
 			if (property->CustomSchemaPropertyType) continue;
-			LOG_INFO(App, "Trying to deserialize %s of %s", key.data(), state.FormatCurrentPath().data());
 			if (key == "Parent" || !properties.contains(key) ||
 				property->PersistencePolicy != InstanceProperty::Persistence::Saved || !property->Write)
 				continue;
-			LOG_INFO(App, "Deserializing %s of %s", key.data(), state.FormatCurrentPath().data());
 
 			auto value = properties[key];
 			if (!value.is_object()) {
@@ -814,45 +817,25 @@ namespace gargantuan::InstanceSerialization {
 	}
 
 	namespace {
-		DeserializationState DeserializeImpl(InstanceFormat format, std::istream &input, bool ApplyPendingTags) {
-		DeserializationState state;
-
-		if (!input.good()) {
-			state.PushError("Bad stream from instance contents");
-			return state;
+		std::expected<json, std::string> PrepareJson(std::string_view Encoded) {
+			if (Encoded.empty()) return std::unexpected("Instance document byte length is invalid");
+			auto Parsed = JsonCodec::Parse(Encoded, MaximumProtocolDocumentBytes, "Instance persistence");
+			if (!Parsed) return std::unexpected("Failed to parse JSON: " + Parsed.error().Format());
+			if (!Parsed->is_object()) return std::unexpected("Expected a JSON object");
+			if (!Parsed->contains("Version") || !(*Parsed)["Version"].is_number_integer() ||
+				((*Parsed)["Version"] != 0 && (*Parsed)["Version"] != 1 && (*Parsed)["Version"] != 2 &&
+					(*Parsed)["Version"] != 3 && (*Parsed)["Version"] != 4))
+				return std::unexpected("Unsupported instance format version");
+			return std::move(*Parsed);
 		}
 
-		switch (format) {
-		case InstanceFormat::Json: {
-			auto Encoded = ReadBoundedDocument(input);
-			if (!Encoded || Encoded->empty()) {
-					state.PushError("Instance document byte length is invalid");
-					return state;
-			}
-			auto Parsed = JsonCodec::Parse(*Encoded, MaximumProtocolDocumentBytes, "Instance persistence");
-			if (!Parsed) {
-				state.PushError("Failed to parse JSON: {}", Parsed.error().Format());
-				return state;
-			}
-			auto contents = std::move(*Parsed);
-
-			if (!contents.is_object()) {
-				state.PushError("Expected a JSON object");
-				return state;
-			}
-
-			if (!contents.contains("Version") || !contents["Version"].is_number_integer() ||
-				(contents["Version"] != 0 && contents["Version"] != 1 && contents["Version"] != 2 &&
-					contents["Version"] != 3 && contents["Version"] != 4)) {
-				state.PushError("Unsupported instance format version");
-				return state;
-			}
-
-			const auto version = contents["Version"].get<int>();
+		DeserializationState MaterializeJson(const json &Contents, bool ApplyPendingTags) {
+			DeserializationState state;
+			const auto version = Contents["Version"].get<int>();
 			std::optional<std::shared_ptr<Instance>> maybeInstance;
 			try {
 				maybeInstance = TryDeserializeInstance(
-					contents, state, version >= 1, version >= 2, version >= 3, version >= 4, version >= 4
+					Contents, state, version >= 1, version >= 2, version >= 3, version >= 4, version >= 4
 				);
 			} catch (const std::exception &Error) {
 				state.PushError("Failed to validate instance document: {}", Error.what());
@@ -878,16 +861,46 @@ namespace gargantuan::InstanceSerialization {
 				}
 			}
 
-			break;
-		}
-
-		default:
-			state.PushError("Binary instance format is not yet implemented");
-			break;
-		}
-
 			return state;
 		}
+
+		DeserializationState DeserializeImpl(InstanceFormat format, std::istream &input, bool ApplyPendingTags) {
+			DeserializationState state;
+			if (!input.good()) {
+				state.PushError("Bad stream from instance contents");
+				return state;
+			}
+			if (format != InstanceFormat::Json) {
+				state.PushError("Binary instance format is not yet implemented");
+				return state;
+			}
+			auto Encoded = ReadBoundedDocument(input);
+			if (!Encoded) {
+				state.PushError("Instance document byte length is invalid");
+				return state;
+			}
+			auto Prepared = PrepareJson(*Encoded);
+			if (!Prepared) {
+				state.Errors.push_back(std::move(Prepared.error()));
+				return state;
+			}
+			return MaterializeJson(*Prepared, ApplyPendingTags);
+		}
+	}
+
+	Internal::PreparedInstanceDocumentResult Internal::PrepareDetachedJson(std::span<const std::uint8_t> Bytes) {
+		auto Prepared = PrepareJson(std::string_view(reinterpret_cast<const char *>(Bytes.data()), Bytes.size()));
+		if (!Prepared) return std::unexpected(std::move(Prepared.error()));
+		return std::make_shared<const PreparedInstanceDocument>(std::move(*Prepared));
+	}
+
+	DeserializationState Internal::MaterializeDetachedJson(const PreparedInstanceDocumentPtr &Prepared) {
+		if (!Prepared) {
+			DeserializationState State;
+			State.PushError("Prepared Instance document is absent");
+			return State;
+		}
+		return MaterializeJson(Prepared->Contents, false);
 	}
 
 	DeserializationState Deserialize(InstanceFormat format, std::istream &input) {

@@ -58,7 +58,7 @@ explicit bounded negotiation rather than reinterpret existing bytes.
 
 The package writer visits direct Workspace children in serialized order. A
 subtree becomes a unit only when it has a finite spatial bound, at most 512
-objects, at most 8 MiB of version-4 JSON, and no bootstrap-sensitive Script,
+objects, at most 1 MiB of version-4 JSON, and no bootstrap-sensitive Script,
 ModuleScript, RemoteEvent, RemoteFunction, Character, KinematicCharacter,
 Player, Camera, Terrain, or FileLink. Everything else remains in the bootstrap
 snapshot. Current generated units are independent and have no dependency edges;
@@ -81,7 +81,7 @@ not participate.
 | Logical key | 128 bytes |
 | Package-space key | 64 bytes |
 | Blob reference | 256 bytes |
-| Stored/decoded unit payload | 8 MiB |
+| Stored/decoded unit payload | 1 MiB |
 | Decoded objects per unit | 512 |
 | Coarse cells overlapped by one unit/query | 4,096 |
 
@@ -125,10 +125,11 @@ provider may use either mode when selected by trusted host composition.
 ## Acquisition state machine
 
 The compact states are `Unavailable`, `Requested`, `Acquiring`, `Available`,
-`Admitting`, `Resident`, `Evicting`, and `Failed`. Available means only that
-verified immutable bytes are retained. Resident means the detached hierarchy
-successfully crossed the authoritative commit boundary. Peer structural
-convergence is later 3J state and is never represented here.
+`Admitting`, `Resident`, `Evicting`, and `Failed`. Available means verified
+immutable bytes and a worker-validated parsed document are retained without a
+live Instance hierarchy. Resident means the detached hierarchy successfully
+crossed the authoritative commit boundary. Peer structural convergence is later
+3J state and is never represented here.
 
 Direct demand is a saturating aggregate counter. The first direct request adds
 one transitive dependency demand for every hard dependency; repeated requests
@@ -140,10 +141,14 @@ no Luau, protocol, or client operation exposes it.
 
 Provider calls run on a session-owned `JobSystem`. Defaults are two workers,
 four in-flight calls, 1,024 pending keys, a ten-second per-call deadline, and
-four completions consumed per tick. Completion payload bytes are capped at
-16 MiB and cached immutable payload bytes at 32 MiB. Queue and byte overload do
-not grow memory: work stays unavailable/requested or becomes a retryable bounded
-failure. No provider IO or gRPC wait occurs on the simulation thread.
+four completions consumed per tick. Hard configuration ceilings are eight
+workers, 16 in-flight calls, 1,024 pending keys, and 16 completions consumed per
+tick. The service reserves each declared payload against the 16 MiB completed
+payload ceiling before starting provider work. Cached immutable payload bytes
+are independently capped at 32 MiB and evicted under pressure. Queue and byte
+overload do not grow without bound: work remains unavailable/requested or enters
+an explicit bounded failure. No provider IO or gRPC wait occurs on the
+simulation thread.
 
 Stop first marks the session cancellation token and advances its generation,
 then joins/cancels jobs, stops the provider, and clears completion storage. Every
@@ -152,11 +157,13 @@ replacement session.
 
 ## Transactional authoritative admission
 
-On Main, the service verifies the provider namespace, key, advertised digest,
-actual SHA-256, exact byte count, configured cache bound, manifest schema, and
-hard dependency residency. It then performs bounded version-4
-`DeserializeDetached`. Detached preparation allocates no authoritative world
-identity and cannot run simulation, physics, 3K, 3H, 3E, 3J, Scripts, or Remotes.
+Provider IO, response identity and length checks, SHA-256 verification, JSON
+parse/tree validation, and manifest indexing run on a worker. Main consumes a
+bounded completion, verifies current session demand/generation and dependency
+residency, materializes the already parsed version-4 document into a detached
+Instance hierarchy, preflights its decoded object count, and commits it.
+Detached preparation allocates no authoritative world identity and cannot run
+simulation, physics, 3K, 3H, 3E, 3J, Scripts, or Remotes.
 
 The single `SetParent(Workspace)` is the feasible authoritative commit boundary.
 Existing Instance/DataModel preflight validates the complete prepared subtree
@@ -165,12 +172,14 @@ leaves the prior world unchanged and the unit Failed; no prefix is left
 resident. A successful commit allocates fresh scoped ObjectIds and normal
 Instance lifecycle hooks derive all downstream subsystem state.
 
-Default admission limits are two units, 512 declared objects, and 8 MiB per
-tick. A unit larger than the object/byte hard ceiling cannot enter the manifest;
+Default admission limits are two units, 512 declared objects, and 1 MiB per
+tick. Hard ceilings are the same. A unit larger than the object/byte hard ceiling cannot enter the manifest;
 an offered budget smaller than the atomic unit ceiling is rejected at service
-construction. The current transaction prepares one already bounded unit in one
-tick; cross-tick preparation of a single larger atomic hierarchy is explicitly
-deferred rather than claiming unsupported partial atomicity.
+construction. The current transaction materializes one already bounded unit on
+Main in one tick; cross-tick preparation of a single hierarchy is explicitly
+deferred rather than claiming unsupported partial atomicity. Measurement showed
+that retaining the old 8 MiB ceiling would be unsafe, while worker parse plus
+atomic Main materialization at 1 MiB remains within the validated frame budget.
 
 Bootstrap completion means the manifest is valid and every
 `RequiredAtBootstrap` unit is Resident. Fully resident compatibility additionally
@@ -233,7 +242,7 @@ every blob, and services exact namespace/key lookups. Runtime requests never
 become paths.
 
 The RPCs are bounded unary messages. There is no compression and no chunking in
-v1; the maximum configured blob is 8 MiB and gRPC transport limits must be at
+v1; the maximum configured blob is 1 MiB and gRPC transport limits must be at
 least the selected response maximum. A later chunked protocol would require
 explicit ordinal/count/total-size bounds and whole-payload digest verification.
 
@@ -254,8 +263,10 @@ A pending request retains fixed record/counter state and the manifest key; an
 in-flight request retains its exact identity/context. A completed or cached unit
 retains at most its bounded immutable bytes. A Resident unit retains its normal
 live hierarchy plus a pointer set used only to distinguish package-owned objects
-from runtime-created children; source bytes are dropped after commit in the
-current policy. All caches are session-owned.
+from runtime-created children. Its verified raw bytes may remain in the bounded
+immutable cache for reload, but the parsed document is dropped after commit;
+the cache never owns mutable Instances or runtime ObjectIds. All caches are
+session-owned.
 
 Manifest key lookup is expected constant time. Coarse lookup is proportional to
 bounded overlapped cells plus returned candidates, not total manifest entries.
@@ -267,6 +278,212 @@ and reports 100K/1M manifests as deterministic hard-limit rejections rather than
 allocating attacker-selected scale. Packaging and complete-game tests compose
 the local provider. The private Node vertical uses a real TLS Node process and the same Engine
 admission path, then compares the resulting hierarchy with local acquisition.
+
+## Foundation 3L.1 production validation
+
+Foundation 3L originally shipped the provider-neutral architecture and bounded
+unit format with partial production validation. In particular, the old 8 MiB
+unit ceiling was a memory bound, not evidence that atomic Main-thread decode and
+commit fit a frame. The 3L.1 work measured that path first and did not introduce
+a partially visible or generic incremental scheduler.
+
+### Admission decision and measured cost
+
+The Windows measurements below were captured on the trusted MSVC Release worker
+on 2026-09-08. Times are milliseconds. Worker preparation is JSON parsing and
+tree validation; Main preparation is detached Instance materialization; commit
+is the single authoritative `SetParent(Workspace)` transaction.
+
+| Profile | Objects | Bytes | Worker mean / p99 / max | Main mean / p99 / max | Commit mean / p99 / max |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| lightweight | 10 | 2,060 | 0.044 / 0.046 / 0.067 | 0.042 / 0.050 / 0.057 | 0.039 / 0.046 / 0.064 |
+| lightweight | 100 | 20,510 | 0.427 / 0.466 / 0.492 | 0.473 / 0.508 / 0.516 | 0.310 / 0.422 / 0.443 |
+| lightweight | 256 | 52,490 | 1.056 / 1.092 / 1.110 | 1.191 / 1.243 / 1.305 | 0.873 / 1.258 / 1.316 |
+| representative Parts | 512 | 262,902 | 9.993 / 10.326 / 10.663 | 7.602 / 7.955 / 8.354 | 7.044 / 7.810 / 8.289 |
+| final legal maximum | 512 | 1,048,576 | 14.883 / 14.623 / 15.540 | 8.834 / 8.655 / 9.371 | 5.734 / 5.492 / 7.108 |
+| rejected former maximum | 512 | 8,388,608 | 65.023 / 63.465 / 69.036 | 28.507 / 27.748 / 30.073 | 11.468 / 11.169 / 16.160 |
+
+The service-path benchmark repeats each case with a fresh DataModel and includes
+completion handling, detached materialization, commit, and the remainder of
+`ContentAvailabilityService::Step`. At the final 512-object/1 MiB maximum it
+measured worker preparation mean/p50/p95/p99/max of
+`14.780/14.807/15.093/15.093/15.142`, total preparation
+`23.432/23.440/23.747/23.747/23.958`, commit
+`4.142/4.125/4.336/4.336/4.346`, time to Resident
+`31.213/31.206/31.614/31.614/31.900`, and Main service step
+`13.704/13.696/13.962/13.962/14.280` ms. These figures include the
+allocation-instrumented executable's replacement-allocation overhead and are
+therefore conservative relative to the earlier native-allocator run.
+
+Two MiB service cases crossed the 60 Hz frame budget in repeated runs and four
+MiB cases reached about 24–30 ms Main steps. The former 8 MiB ceiling had a
+30.073 ms detached-materialization maximum before its separate commit cost.
+Consequently the independently streamable payload limit changed from 8 MiB to
+1 MiB while the 512-object limit remained. This is a package-builder partition
+change, not a package-format version change: newly built packages partition or
+retain an oversized subtree in bootstrap, and an existing version-2 package
+whose manifest declares a unit above 1 MiB is rejected and must be rebuilt.
+
+JSON parse/validation was moved off Main because it was both safe to detach and
+measurably significant. Main still materializes the complete detached hierarchy
+and commits it atomically. The supported maximum's worst measured
+3L-attributable Main service step is 14.280 ms on the validation worker. Commit
+is not the sole dominant cost; detached semantic construction is larger for the
+legal-maximum string case, while representative Part lifecycle work makes
+commit comparable.
+
+### Deterministic work and memory bounds
+
+The scheduler remains content-specific and uses these hard ceilings:
+
+| Resource | Default | Hard maximum |
+| --- | ---: | ---: |
+| Worker jobs | 2 | 8 |
+| In-flight requests/completions | 4 | 16 |
+| Pending requested keys | 1,024 | 1,024 |
+| Completions consumed/tick | 4 | 16 |
+| Admission units/tick | 2 | 2 |
+| Admission objects/tick | 512 | 512 |
+| Admission bytes/tick | 1 MiB | 1 MiB |
+| Eviction units/tick | 2 | 2 |
+| Eviction objects/tick | 512 | 512 |
+| Completed payload bytes | 16 MiB | 16 MiB |
+| Immutable cache bytes | 32 MiB | 32 MiB |
+
+Declared completion bytes are reserved before either a provider fetch or cached
+reparse starts. A test holds 16 legal 1 MiB completions at exactly 16 MiB, proves
+the seventeenth stays Requested with an explicit capacity deferral, then proves
+the backlog drains incrementally. Configuration tests cover limit-minus-one,
+exact limit, and limit-plus-one. Cache tests retain only verified shared raw
+bytes, hit that cache on reload without another provider acquisition, exceed the
+32 MiB accounting ceiling with 33 legal units, observe eviction, and never
+exceed the byte high-water.
+
+Each parsed JSON document is bounded by the 1 MiB protocol document limit and
+protocol depth/node/string limits, while concurrent work is constrained by the
+16 in-flight ceiling and encoded-byte completion reservation. The detached graph
+is additionally bounded by 512 decoded objects. Available records can retain
+parsed documents after leaving the completion queue, and that decoded memory is
+not directly charged to the 32 MiB encoded-byte cache budget.
+There is no historical event queue, per-object future, or timer. The benchmark
+executable replaces global allocation only for the benchmark process and
+records requested allocation count, peak live requested bytes, and bytes still
+live at the end of worker preparation, detached materialization, and commit. It
+does not claim allocator metadata, fragmentation, or operating-system RSS. At
+the 512-object representative Part profile, worker/Main/commit allocation
+counts were 128,848 / 57,801 / 44,557 at maximum, with peak requested bytes of
+1.31 / 1.83 / 5.44 MiB and end-of-stage live requested bytes of 1.31 / 1.83 /
+5.18 MiB. At the legal 512-object/1 MiB profile they were 128,950 / 55,864 /
+42,542 allocations, 2.12 / 3.05 / 7.22 MiB peak requested bytes, and 2.06 /
+2.99 / 6.21 MiB live requested bytes. The difference between the reported
+maximum peak and maximum end-of-stage live values is about 0.068 / 0.063 /
+1.00 MiB for the legal maximum (and 0.002 / 0.001 / 0.253 MiB for the
+representative Part profile). The remaining memory gap is an
+accelerated long-run process-RSS plateau measurement, especially for parsed
+documents retained by multiple Available records; finite structural bounds and
+raw-byte high-water counters are not represented as an RSS result.
+
+### Providers, latency, and real client proof
+
+The Node integration test now launches four real roles: the Go Node host with
+TLS/gRPC, an authoritative Engine server process, a GNS client process, and the
+client Engine runtime created from the received snapshot. The server requests a
+Node-originated Folder and Part, validates digest and schema, commits them,
+derives 3K membership, 3H candidates and 3E Desired, lets 3J publish ordinary
+GRPL structure, and observes the exact hierarchy, Origin attribute, Anchored,
+CFrame, and Size on the separate client. It then evicts the unit, observes
+client removal, reloads it with fresh server and client ObjectIds, continues
+Character movement plus RemoteEvent/RemoteFunction traffic, and disconnects
+without retaining Player or Character authority.
+
+For the first streamed unit, the measured Node timing was:
+
+| Interval | Microseconds |
+| --- | ---: |
+| T0 demand to T2 payload complete | 3,075 |
+| T2 to T3 SHA-256 verification | 2 |
+| T3 to T4 preparation complete | 1,560 |
+| T4 to T5 authoritative commit | 69 |
+| T5 to T7 server structural commit | 1 |
+| T7 to T8 client observation | 11,101 |
+| T0 to T8 | 15,970 |
+
+Its mixed streaming loop measured Main tick mean/p50/p95/p99/max of
+`79/45/103/103/296` microseconds while accepting 34 Character states and 2,516
+Character bytes. The stream lifecycle selected and committed 57 structural
+transitions. The retained lifecycle fixture validates five paced RemoteFunction
+round trips and three RemoteEvent acknowledgements during load/evict/reload.
+The five-call latency sample measured mean/p50/p95/p99/max of
+`12,913/13,251/13,939/13,939/15,693` microseconds with no timeout, reconnect, or
+protocol error. A 20-call paced run and a 100-call stress run instead
+reproducibly terminated the separate Windows client with access violation
+`0xc0000005`. Those runs do not implicate content admission or Node gRPC, but
+they prevent a production-health claim for sustained RemoteFunction traffic and
+remain a release blocker pending a dedicated Remote investigation.
+
+Canonical final-world comparison passes for Local FullyResident, Local
+OnDemand, Node FullyResident, and Node OnDemand. Sample wall/Main-tick p99 values
+in microseconds were Local FullyResident `77,150/183`, Local OnDemand
+`46,095/7`, Node FullyResident `105,958/204`, and Node OnDemand `73,916/10`.
+Deterministic Node delays of 0, 5, 25, 100, and 500 ms changed wall time but kept
+Main-tick p99 at 8, 11, 11, 12, and 10 microseconds respectively. Throttled
+64 KiB, 256 KiB, 512 KiB, and 1 MiB cases converged; the 1 MiB case accounted
+exactly 1,048,576 completed and cached bytes. Node outage while A was Resident
+made B fail without revoking A; restarting Node and invoking trusted
+`RetryContent(B)` admitted B in the same session.
+
+### Lifecycle, overload, and authority results
+
+The checked-in content test dynamically covers 500 demands producing one
+provider acquisition and one authoritative admission; cache load/evict/reload;
+ephemeral runtime mutation reset on reload; runtime-created descendant eviction
+pinning; fresh ObjectIds plus stale ObjectRegistry rejection; dependency fan-in,
+ordering, failure/retry and two-/three-node cycle rejection; 100 cancellation
+cycles; cancellation during legal-maximum worker preparation; ten
+Stop-during-request cycles; 1,026 requests against the exact 1,024-key queue;
+exact completion/cache pressure; and a deterministic 10,000-operation
+demand/release reference model. Malformed coverage includes
+duplicate/unsorted/oversized keys, zero sizes, truncation, invalid UTF-8,
+invalid shape/schema, wrong object count, and validly digested corrupt content.
+Detached Script and Remote instances stay outside every DataModel and cannot
+execute or become usable.
+
+The full Windows 46-test CTest contract covers the existing 3K/3H/3E/3J,
+Character, Remote, package, headless, and stale pending-Enter regressions. The
+65,536-entry manifest parsed in 850.574 ms and its fixed-grid index built in
+19.881 ms; 65,537/100,000/1,000,000 compact attacker cases rejected before DOM
+allocation in 0.917/1.169/9.398 ms. An escaped-key 65,537-entry form rejected in
+0.858 ms. The pre-scan recognizes semantically
+equivalent escaped top-level `Entries` keys and checks duplicate occurrences.
+A manifest can therefore describe many
+unavailable units without inserting any live 3H projections.
+
+Authority remains unchanged. No client or Luau API can request a package key,
+retry, choose a provider/endpoint, or pin content. Node cannot select ObjectIds,
+Character authority, LocalPlayer, 3E Desired, or 3J Known. Every payload is
+identity/size/digest checked before parsing, detached content has no gameplay
+context, cache entries contain no live state, local filesystem requests resolve
+only manifest-indexed safe paths beneath the configured canonical root, and
+provider failure cannot revoke a Resident unit. Ordinary Script, Remote,
+Character, relevance, and materialization security contexts are not bypassed.
+
+### Validation status and remaining deferrals
+
+On 2026-09-08, the MSVC Release build and all 46 Windows CTests passed. A
+focused working-tree security review found no lower-privileged reportable issue;
+it retained the multi-record decoded-memory/RSS plateau measurement as explicit
+follow-up. A focused Linux Clang 19 ASan/UBSan/LSan build passed the content
+test, benchmark smoke test, and the complete benchmark including the legal and
+former payload maxima with leak detection enabled. Hosted full-suite sanitizer
+CI is still the terminal broad Linux gate.
+
+The real GNS TLS Node-to-server-to-separate-client lifecycle passed with the
+five-call RemoteFunction sample above. Node `go test ./...`, `go vet ./...`, and
+`go test -race ./...` passed. Publication CI and documentation deployment, a
+content-coupled 32/100/500-peer matrix, long-run RSS plateau measurement, and a
+stable sustained RemoteFunction distribution must be recorded as terminal
+green before Foundation 3L can be promoted from partial validation under the
+3L.1 acceptance contract.
 
 ## Compatibility and deferrals
 
@@ -284,7 +501,8 @@ CDN/distributed storage, runtime persistence/write-back, hot package patching,
 cross-server travel, server migration, topology/portals, and shared scheduler
 infrastructure.
 
-The recommended next foundation is **A — residency policy and creator streaming
-controls**. The native acquisition/admission/lifetime seam now exists; measured
-product work should decide when trusted server policy requests units without
-exposing raw package keys or runtime cells to clients.
+The recommended next foundation, once every 3L.1 production gate is terminal
+green, is **Foundation 3M — Trusted Spatial Residency Policy**. The native
+acquisition/admission/lifetime seam now exists; measured product work should
+decide when trusted server policy requests units without exposing raw package
+keys or runtime cells to clients.

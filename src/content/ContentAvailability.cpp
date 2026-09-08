@@ -1,5 +1,6 @@
 #include "gargantuan/content/ContentAvailability.hpp"
 
+#include "assets/PreparedInstanceSerialization.hpp"
 #include "gargantuan/assets/InstanceSerialization.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Instance.hpp"
@@ -9,6 +10,7 @@
 #include "serialization/JsonCodec.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <fstream>
 #include <limits>
@@ -16,7 +18,6 @@
 #include <mutex>
 #include <queue>
 #include <set>
-#include <sstream>
 #include <stdexcept>
 #include <unordered_map>
 #include <unordered_set>
@@ -26,6 +27,30 @@ namespace gargantuan {
 
 	namespace {
 		constexpr std::string_view ManifestFormat = "GargantuanPackageContent";
+		using AvailabilityClock = std::chrono::steady_clock;
+		using AvailabilityTimePoint = AvailabilityClock::time_point;
+
+		void RecordDuration(
+			ContentAvailabilityDurationMetric &Metric,
+			AvailabilityTimePoint StartedAt,
+			AvailabilityTimePoint FinishedAt
+		) {
+			if (FinishedAt < StartedAt) return;
+			const auto Microseconds = static_cast<std::uint64_t>(
+				std::chrono::duration_cast<std::chrono::microseconds>(FinishedAt - StartedAt).count()
+			);
+			++Metric.Samples;
+			Metric.TotalMicroseconds += Microseconds;
+			Metric.MaximumMicroseconds = std::max(Metric.MaximumMicroseconds, Microseconds);
+		}
+
+		struct DurationScope final {
+			explicit DurationScope(ContentAvailabilityDurationMetric &MetricValue)
+				: Metric(MetricValue), StartedAt(AvailabilityClock::now()) {}
+			~DurationScope() { RecordDuration(Metric, StartedAt, AvailabilityClock::now()); }
+			ContentAvailabilityDurationMetric &Metric;
+			AvailabilityTimePoint StartedAt;
+		};
 
 		bool IsSafeBlobReference(std::string_view Value) {
 			if (Value.empty() || Value.size() > MaximumPackageBlobReferenceBytes || Value.front() == '/' ||
@@ -109,6 +134,143 @@ namespace gargantuan {
 				? ContentProviderError{ContentProviderErrorCode::DeadlineExceeded, "content request deadline elapsed"}
 				: ContentProviderError{ContentProviderErrorCode::Cancelled, "content request was cancelled"};
 		}
+
+		struct JsonStringToken final {
+			std::size_t End = 0;
+			bool Equals = false;
+		};
+
+		JsonStringToken ScanJsonStringToken(
+			std::string_view Encoded,
+			std::size_t Start,
+			std::string_view Expected
+		) {
+			std::size_t ExpectedPosition = 0;
+			bool Equals = true;
+			for (auto Position = Start + 1; Position < Encoded.size(); ++Position) {
+				const auto Character = static_cast<unsigned char>(Encoded[Position]);
+				if (Character == '"')
+					return {Position + 1, Equals && ExpectedPosition == Expected.size()};
+				std::uint32_t Decoded = Character;
+				if (Character == '\\') {
+					if (++Position == Encoded.size()) return {Encoded.size(), false};
+					const char Escape = Encoded[Position];
+					if (Escape == 'u') {
+						if (Encoded.size() - Position <= 4) return {Encoded.size(), false};
+						Decoded = 0;
+						for (std::size_t Digit = 0; Digit < 4; ++Digit) {
+							const auto Hex = static_cast<unsigned char>(Encoded[++Position]);
+							Decoded <<= 4;
+							if (Hex >= '0' && Hex <= '9') Decoded += Hex - '0';
+							else if (Hex >= 'a' && Hex <= 'f') Decoded += Hex - 'a' + 10;
+							else if (Hex >= 'A' && Hex <= 'F') Decoded += Hex - 'A' + 10;
+							else Equals = false;
+						}
+					} else {
+						switch (Escape) {
+						case '"': Decoded = '"'; break;
+						case '\\': Decoded = '\\'; break;
+						case '/': Decoded = '/'; break;
+						case 'b': Decoded = '\b'; break;
+						case 'f': Decoded = '\f'; break;
+						case 'n': Decoded = '\n'; break;
+						case 'r': Decoded = '\r'; break;
+						case 't': Decoded = '\t'; break;
+						default: Equals = false; break;
+						}
+					}
+				}
+				if (ExpectedPosition >= Expected.size() ||
+					Decoded != static_cast<unsigned char>(Expected[ExpectedPosition])) Equals = false;
+				++ExpectedPosition;
+			}
+			return {Encoded.size(), false};
+		}
+
+		std::size_t ValidateManifestEntryArrayCount(std::string_view Encoded, std::size_t Position) {
+			std::size_t Depth = 1;
+			std::size_t Entries = 0;
+			bool InString = false;
+			bool Escaped = false;
+			bool InElement = false;
+			for (++Position; Position < Encoded.size() && Depth != 0; ++Position) {
+				const char Character = Encoded[Position];
+				if (InString) {
+					if (Escaped) Escaped = false;
+					else if (Character == '\\') Escaped = true;
+					else if (Character == '"') InString = false;
+					continue;
+				}
+				if (Character == '"') {
+					if (Depth == 1 && !InElement) {
+						InElement = true;
+						if (++Entries > MaximumPackageContentUnits)
+							throw std::length_error("manifest entry count exceeds its bound");
+					}
+					InString = true;
+					continue;
+				}
+				if (Character == '{' || Character == '[') {
+					if (Depth == 1 && !InElement) {
+						InElement = true;
+						if (++Entries > MaximumPackageContentUnits)
+							throw std::length_error("manifest entry count exceeds its bound");
+					}
+					++Depth;
+					continue;
+				}
+				if (Character == '}' || Character == ']') {
+					--Depth;
+					continue;
+				}
+				if (Depth != 1) continue;
+				if (Character == ',') {
+					InElement = false;
+					continue;
+				}
+				if (!std::isspace(static_cast<unsigned char>(Character)) && !InElement) {
+					InElement = true;
+					if (++Entries > MaximumPackageContentUnits)
+						throw std::length_error("manifest entry count exceeds its bound");
+				}
+			}
+			return Position;
+		}
+
+		void ValidateManifestEntryCountBeforeParse(std::string_view Encoded) {
+			std::size_t ObjectDepth = 0;
+			std::size_t ArrayDepth = 0;
+			for (std::size_t Position = 0; Position < Encoded.size(); ++Position) {
+				const char Character = Encoded[Position];
+				if (Character == '{') {
+					++ObjectDepth;
+					continue;
+				}
+				if (Character == '}') {
+					if (ObjectDepth != 0) --ObjectDepth;
+					continue;
+				}
+				if (Character == '[') {
+					++ArrayDepth;
+					continue;
+				}
+				if (Character == ']') {
+					if (ArrayDepth != 0) --ArrayDepth;
+					continue;
+				}
+				if (Character != '"') continue;
+				const auto Token = ScanJsonStringToken(Encoded, Position, "Entries");
+				Position = Token.End == 0 ? Position : Token.End - 1;
+				if (!Token.Equals || ObjectDepth != 1 || ArrayDepth != 0) continue;
+				auto Value = Token.End;
+				while (Value < Encoded.size() && std::isspace(static_cast<unsigned char>(Encoded[Value]))) ++Value;
+				if (Value == Encoded.size() || Encoded[Value++] != ':') continue;
+				while (Value < Encoded.size() && std::isspace(static_cast<unsigned char>(Encoded[Value]))) ++Value;
+				if (Value == Encoded.size() || Encoded[Value] != '[') continue;
+				const auto End = ValidateManifestEntryArrayCount(Encoded, Value);
+				if (End != 0) Position = End - 1;
+			}
+		}
 	}
 
 	bool IsValidPackageContentKey(std::string_view Value) {
@@ -166,6 +328,7 @@ namespace gargantuan {
 				throw std::runtime_error("manifest byte length is invalid");
 			ValidateProtocolJsonDocument(Encoded, MaximumPackageContentManifestBytes);
 			if (!IsValidProtocolUtf8(Encoded)) throw std::runtime_error("manifest is not valid UTF-8");
+			ValidateManifestEntryCountBeforeParse(Encoded);
 			auto Parsed = Json::parse(Encoded);
 			JsonCodec::ValidateTree(Parsed, MaximumPackageContentManifestJsonNodes);
 			if (!Parsed.is_object() || Parsed.size() != 6 || !Parsed["Format"].is_string() ||
@@ -477,23 +640,51 @@ namespace gargantuan {
 	}
 
 	struct ContentAvailabilityService::Impl {
+		struct ContentTimes final {
+			AvailabilityTimePoint ProviderStarted{};
+			AvailabilityTimePoint BytesReceived{};
+			AvailabilityTimePoint VerificationFinished{};
+			AvailabilityTimePoint PreparationStarted{};
+			AvailabilityTimePoint WorkerPreparationFinished{};
+		};
+		struct PreparedContent final {
+			std::string Key;
+			std::shared_ptr<const std::vector<std::uint8_t>> Bytes;
+			InstanceSerialization::Internal::PreparedInstanceDocumentPtr Document;
+			std::size_t EncodedBytes = 0;
+			bool CacheHit = false;
+			ContentTimes Times;
+		};
 		struct Record {
 			ContentResidencyState Residency = ContentResidencyState::Unavailable;
 			std::uint32_t DirectDemand = 0;
 			std::uint32_t DependencyDemand = 0;
 			std::uint32_t Pins = 0;
 			std::shared_ptr<std::atomic_bool> RequestCancelled;
-			std::shared_ptr<const std::vector<std::uint8_t>> Payload;
+			std::shared_ptr<const std::vector<std::uint8_t>> CachedPayload;
+			InstanceSerialization::Internal::PreparedInstanceDocumentPtr Prepared;
+			std::size_t EncodedBytes = 0;
+			std::optional<AvailabilityTimePoint> AcceptedAt;
+			std::optional<AvailabilityTimePoint> QueuedAt;
+			ContentTimes Times;
 			std::shared_ptr<Instance> Root;
 			std::unordered_set<const Instance *> PackageObjects;
+		};
+		struct PreparedManifest final {
+			PackageContentManifest Manifest;
+			std::unordered_map<std::string, std::size_t> Indices;
+			std::vector<std::vector<std::size_t>> Dependents;
+			std::vector<Record> Records;
+			std::size_t EncodedBytes = 0;
 		};
 		enum class CompletionKind : std::uint8_t { Manifest, Content };
 		struct Completion {
 			CompletionKind Kind = CompletionKind::Manifest;
 			std::uint64_t Generation = 0;
 			std::string Key;
-			ContentManifestProviderResult Manifest = std::unexpected(ContentProviderError{});
-			ContentPayloadProviderResult Payload = std::unexpected(ContentProviderError{});
+			std::size_t ReservedBytes = 0;
+			std::expected<PreparedManifest, ContentProviderError> Manifest = std::unexpected(ContentProviderError{});
+			std::expected<PreparedContent, ContentProviderError> Content = std::unexpected(ContentProviderError{});
 		};
 
 		std::shared_ptr<DataModel> World;
@@ -513,6 +704,7 @@ namespace gargantuan {
 		std::vector<Record> Records;
 		ContentAvailabilityMetrics Metrics;
 		std::size_t InFlight = 0;
+		std::size_t ReservedCompletionBytes = 0;
 		std::size_t Pending = 0;
 		std::size_t CachedBytes = 0;
 		bool ManifestInFlight = false;
@@ -550,7 +742,38 @@ namespace gargantuan {
 				Completion Result;
 				Result.Kind = CompletionKind::Manifest;
 				Result.Generation = RequestContext.SessionGeneration;
-				Result.Manifest = Provider->GetManifest(RequestContext, Package);
+				auto Encoded = Provider->GetManifest(RequestContext, Package);
+				if (!Encoded) {
+					Result.Manifest = std::unexpected(Encoded.error());
+				} else {
+					const auto Bytes = std::span(
+						reinterpret_cast<const std::uint8_t *>(Encoded->data()), Encoded->size()
+					);
+					if (AssetContentId::Hash(Bytes) != Configuration.ManifestDigest) {
+						Result.Manifest = std::unexpected(ContentProviderError{
+							ContentProviderErrorCode::InvalidResponse, "content provider returned a manifest with the wrong digest"
+						});
+					} else if (auto Parsed = ParsePackageContentManifest(*Encoded);
+						!Parsed || Parsed->Package != Package) {
+						Result.Manifest = std::unexpected(ContentProviderError{
+							ContentProviderErrorCode::InvalidResponse,
+							Parsed ? "manifest namespace differs from the active package" : Parsed.error()
+						});
+					} else {
+						PreparedManifest Prepared;
+						Prepared.EncodedBytes = Encoded->size();
+						Prepared.Manifest = std::move(*Parsed);
+						Prepared.Records.resize(Prepared.Manifest.Entries.size());
+						Prepared.Dependents.resize(Prepared.Manifest.Entries.size());
+						Prepared.Indices.reserve(Prepared.Manifest.Entries.size());
+						for (std::size_t Index = 0; Index < Prepared.Manifest.Entries.size(); ++Index)
+							Prepared.Indices.emplace(Prepared.Manifest.Entries[Index].Key, Index);
+						for (std::size_t Index = 0; Index < Prepared.Manifest.Entries.size(); ++Index)
+							for (const auto &Dependency : Prepared.Manifest.Entries[Index].Dependencies)
+								Prepared.Dependents[Prepared.Indices.at(Dependency)].push_back(Index);
+						Result.Manifest = std::move(Prepared);
+					}
+				}
 				std::scoped_lock Lock(CompletionMutex);
 				Completions.push_back(std::move(Result));
 			});
@@ -566,24 +789,59 @@ namespace gargantuan {
 			Metrics.InFlightHighWater = std::max<std::uint64_t>(Metrics.InFlightHighWater, InFlight);
 			auto Provider = Configuration.Provider;
 			auto Identity = PackageContentIdentity{Configuration.Package, Manifest->Entries[Index].Key};
+			const auto ExpectedDigest = Manifest->Entries[Index].Digest;
+			const auto ExpectedBytes = static_cast<std::size_t>(Manifest->Entries[Index].CompressedBytes);
+			ReservedCompletionBytes += ExpectedBytes;
 			auto RequestContext = Context();
 			RequestContext.Cancelled = RecordValue.RequestCancelled;
-			Jobs.Submit([this, Provider = std::move(Provider), Identity = std::move(Identity), RequestContext] {
+			Jobs.Submit([this, Provider = std::move(Provider), Identity = std::move(Identity), ExpectedDigest, ExpectedBytes, RequestContext] {
 				Completion Result;
 				Result.Kind = CompletionKind::Content;
 				Result.Generation = RequestContext.SessionGeneration;
 				Result.Key = Identity.Key;
-				Result.Payload = Provider->GetContent(RequestContext, Identity);
+				Result.ReservedBytes = ExpectedBytes;
+				PreparedContent Prepared;
+				Prepared.Key = Identity.Key;
+				Prepared.Times.ProviderStarted = AvailabilityClock::now();
+				auto Payload = Provider->GetContent(RequestContext, Identity);
+				Prepared.Times.BytesReceived = AvailabilityClock::now();
+				if (!Payload) {
+					Result.Content = std::unexpected(Payload.error());
+				} else if (RequestContext.IsCancelled() || RequestContext.IsExpired()) {
+					Result.Content = std::unexpected(CancelledError(RequestContext));
+				} else if (Payload->Identity != Identity || Payload->Digest != ExpectedDigest || !Payload->Bytes ||
+					Payload->Bytes->size() != ExpectedBytes || AssetContentId::Hash(*Payload->Bytes) != ExpectedDigest) {
+					Result.Content = std::unexpected(ContentProviderError{
+						ContentProviderErrorCode::InvalidResponse, "content payload identity, digest, or size is invalid"
+					});
+				} else {
+					Prepared.EncodedBytes = Payload->Bytes->size();
+					Prepared.Bytes = Payload->Bytes;
+					Prepared.Times.VerificationFinished = AvailabilityClock::now();
+					Prepared.Times.PreparationStarted = Prepared.Times.VerificationFinished;
+					auto Document = InstanceSerialization::Internal::PrepareDetachedJson(*Payload->Bytes);
+					Prepared.Times.WorkerPreparationFinished = AvailabilityClock::now();
+					if (RequestContext.IsCancelled() || RequestContext.IsExpired()) {
+						Result.Content = std::unexpected(CancelledError(RequestContext));
+					} else if (!Document) {
+						Result.Content = std::unexpected(ContentProviderError{
+							ContentProviderErrorCode::InvalidResponse, std::move(Document.error())
+						});
+					} else {
+						Prepared.Document = std::move(*Document);
+						Result.Content = std::move(Prepared);
+					}
+				}
 				std::scoped_lock Lock(CompletionMutex);
-				if (Result.Payload && Result.Payload->Bytes &&
-					Result.Payload->Bytes->size() <= Configuration.Limits.MaximumCompletedPayloadBytes -
+				if (Result.Content &&
+					Result.Content->EncodedBytes <= Configuration.Limits.MaximumCompletedPayloadBytes -
 						std::min(CompletionBytes, Configuration.Limits.MaximumCompletedPayloadBytes)) {
-					CompletionBytes += Result.Payload->Bytes->size();
+					CompletionBytes += Result.Content->EncodedBytes;
 					CompletionBytesHighWater = std::max(CompletionBytesHighWater, CompletionBytes);
 					Completions.push_back(std::move(Result));
-				} else if (!Result.Payload) Completions.push_back(std::move(Result));
+				} else if (!Result.Content) Completions.push_back(std::move(Result));
 				else {
-					Result.Payload = std::unexpected(ContentProviderError{
+					Result.Content = std::unexpected(ContentProviderError{
 						ContentProviderErrorCode::ResourceExhausted, "completed-payload queue byte limit reached"
 					});
 					Completions.push_back(std::move(Result));
@@ -591,19 +849,74 @@ namespace gargantuan {
 			});
 		}
 
+		void SubmitCachedContent(std::size_t Index) {
+			auto &RecordValue = Records[Index];
+			RecordValue.Residency = ContentResidencyState::Acquiring;
+			RecordValue.RequestCancelled = std::make_shared<std::atomic_bool>(false);
+			--Pending;
+			++InFlight;
+			++Metrics.CacheHits;
+			Metrics.InFlightHighWater = std::max<std::uint64_t>(Metrics.InFlightHighWater, InFlight);
+			const auto ExpectedBytes = RecordValue.EncodedBytes;
+			ReservedCompletionBytes += ExpectedBytes;
+			auto Bytes = RecordValue.CachedPayload;
+			auto Key = Manifest->Entries[Index].Key;
+			auto RequestContext = Context();
+			RequestContext.Cancelled = RecordValue.RequestCancelled;
+			Jobs.Submit([this, Bytes = std::move(Bytes), Key = std::move(Key), ExpectedBytes, RequestContext] {
+				Completion Result;
+				Result.Kind = CompletionKind::Content;
+				Result.Generation = RequestContext.SessionGeneration;
+				Result.Key = Key;
+				Result.ReservedBytes = ExpectedBytes;
+				PreparedContent Prepared;
+				Prepared.Key = Key;
+				Prepared.Bytes = Bytes;
+				Prepared.EncodedBytes = ExpectedBytes;
+				Prepared.CacheHit = true;
+				Prepared.Times.ProviderStarted = AvailabilityClock::now();
+				Prepared.Times.BytesReceived = Prepared.Times.ProviderStarted;
+				Prepared.Times.VerificationFinished = Prepared.Times.BytesReceived;
+				Prepared.Times.PreparationStarted = Prepared.Times.VerificationFinished;
+				auto Document = InstanceSerialization::Internal::PrepareDetachedJson(*Bytes);
+				Prepared.Times.WorkerPreparationFinished = AvailabilityClock::now();
+				if (RequestContext.IsCancelled() || RequestContext.IsExpired()) {
+					Result.Content = std::unexpected(CancelledError(RequestContext));
+				} else if (!Document) {
+					Result.Content = std::unexpected(ContentProviderError{
+						ContentProviderErrorCode::InvalidResponse, std::move(Document.error())
+					});
+				} else {
+					Prepared.Document = std::move(*Document);
+					Result.Content = std::move(Prepared);
+				}
+				std::scoped_lock Lock(CompletionMutex);
+				if (Result.Content) {
+					CompletionBytes += Result.Content->EncodedBytes;
+					CompletionBytesHighWater = std::max(CompletionBytesHighWater, CompletionBytes);
+				}
+				Completions.push_back(std::move(Result));
+			});
+		}
+
 		void AdjustDependencies(std::size_t Index, bool Add) {
 			std::vector<std::size_t> PendingDependencies;
 			for (const auto &Key : Manifest->Entries[Index].Dependencies) PendingDependencies.push_back(Indices.at(Key));
-			std::unordered_set<std::size_t> Visited;
 			while (!PendingDependencies.empty()) {
 				const auto Dependency = PendingDependencies.back();
 				PendingDependencies.pop_back();
-				if (!Visited.insert(Dependency).second) continue;
 				auto &RecordValue = Records[Dependency];
+				const auto PriorDesire = Desire(RecordValue);
 				if (Add) {
-					if (RecordValue.DependencyDemand != std::numeric_limits<std::uint32_t>::max())
-						++RecordValue.DependencyDemand;
-				} else if (RecordValue.DependencyDemand != 0) --RecordValue.DependencyDemand;
+					if (RecordValue.DependencyDemand == std::numeric_limits<std::uint32_t>::max()) continue;
+					++RecordValue.DependencyDemand;
+					if (PriorDesire != 0) continue;
+					RecordValue.AcceptedAt = AvailabilityClock::now();
+				} else {
+					if (RecordValue.DependencyDemand == 0) continue;
+					--RecordValue.DependencyDemand;
+					if (Desire(RecordValue) != 0) continue;
+				}
 				for (const auto &Key : Manifest->Entries[Dependency].Dependencies)
 					PendingDependencies.push_back(Indices.at(Key));
 			}
@@ -613,18 +926,23 @@ namespace gargantuan {
 			auto &RecordValue = Records[Index];
 			++Metrics.Requests;
 			if (RecordValue.DirectDemand == std::numeric_limits<std::uint32_t>::max()) return false;
+			const auto PriorDesire = Desire(RecordValue);
 			if (RecordValue.DirectDemand++ != 0) {
 				++Metrics.AcquisitionDeduplications;
 				return true;
 			}
-			AdjustDependencies(Index, true);
+			if (PriorDesire == 0) {
+				RecordValue.AcceptedAt = AvailabilityClock::now();
+				AdjustDependencies(Index, true);
+			}
 			return true;
 		}
 
 		bool Release(std::size_t Index) {
 			auto &RecordValue = Records[Index];
 			if (RecordValue.DirectDemand == 0) return false;
-			if (--RecordValue.DirectDemand == 0) AdjustDependencies(Index, false);
+			--RecordValue.DirectDemand;
+			if (Desire(RecordValue) == 0) AdjustDependencies(Index, false);
 			return true;
 		}
 
@@ -633,6 +951,10 @@ namespace gargantuan {
 			for (std::size_t Index = 0; Index < Records.size(); ++Index) {
 				auto &RecordValue = Records[Index];
 				if (Desire(RecordValue) == 0) {
+					if (RecordValue.Residency == ContentResidencyState::Available) {
+						RecordValue.Prepared.reset();
+						RecordValue.Residency = ContentResidencyState::Unavailable;
+					}
 					if (RecordValue.Residency == ContentResidencyState::Requested) {
 						RecordValue.Residency = ContentResidencyState::Unavailable;
 						if (Pending != 0) --Pending;
@@ -643,18 +965,44 @@ namespace gargantuan {
 						++Metrics.Cancellations;
 					continue;
 				}
-				if (RecordValue.Payload && RecordValue.Residency == ContentResidencyState::Unavailable) {
-					RecordValue.Residency = ContentResidencyState::Available;
-					++Metrics.CacheHits;
-				}
 				if (RecordValue.Residency == ContentResidencyState::Unavailable) {
 					if (Pending >= Configuration.Limits.MaximumPendingRequests) continue;
 					RecordValue.Residency = ContentResidencyState::Requested;
+					RecordValue.QueuedAt = AvailabilityClock::now();
+					if (RecordValue.AcceptedAt)
+						RecordDuration(Metrics.Timing.AcceptedToQueued, *RecordValue.AcceptedAt, *RecordValue.QueuedAt);
 					++Pending;
 					Metrics.PendingHighWater = std::max<std::uint64_t>(Metrics.PendingHighWater, Pending);
 				}
-				if (RecordValue.Residency == ContentResidencyState::Requested &&
-					InFlight < Configuration.Limits.MaximumInFlight) SubmitContent(Index);
+				const auto ExpectedBytes = static_cast<std::size_t>(Manifest->Entries[Index].CompressedBytes);
+				if (RecordValue.Residency != ContentResidencyState::Requested) continue;
+				if (ExpectedBytes > Configuration.Limits.MaximumCompletedPayloadBytes -
+					std::min(ReservedCompletionBytes, Configuration.Limits.MaximumCompletedPayloadBytes)) {
+					++Metrics.CompletionCapacityDeferrals;
+					continue;
+				}
+				if (InFlight >= Configuration.Limits.MaximumInFlight) continue;
+				if (RecordValue.CachedPayload) SubmitCachedContent(Index);
+				else SubmitContent(Index);
+			}
+		}
+
+		void MakeCacheSpace(std::size_t RequiredBytes, std::size_t PreservedIndex) {
+			if (RequiredBytes <= Configuration.Limits.MaximumCachedPayloadBytes -
+				std::min(CachedBytes, Configuration.Limits.MaximumCachedPayloadBytes)) return;
+			for (std::size_t Index = Records.size(); Index-- > 0;) {
+				if (Index == PreservedIndex) continue;
+				auto &RecordValue = Records[Index];
+				if (!RecordValue.CachedPayload || RecordValue.Residency == ContentResidencyState::Acquiring ||
+					(!RecordValue.Root && Desire(RecordValue) != 0)) continue;
+				CachedBytes -= RecordValue.EncodedBytes;
+				RecordValue.CachedPayload.reset();
+				if (!RecordValue.Root) RecordValue.Prepared.reset();
+				RecordValue.EncodedBytes = 0;
+				if (!RecordValue.Root) RecordValue.Residency = ContentResidencyState::Unavailable;
+				++Metrics.CacheEvictions;
+				if (RequiredBytes <= Configuration.Limits.MaximumCachedPayloadBytes -
+					std::min(CachedBytes, Configuration.Limits.MaximumCachedPayloadBytes)) return;
 			}
 		}
 
@@ -681,10 +1029,29 @@ namespace gargantuan {
 		if (!World || !WorkspaceValue || WorkspaceValue->GetDataModel() != World || !Configuration.Provider ||
 			!Configuration.Package.Project.IsValid() || Configuration.Package.PackageVersion == 0 ||
 			!Configuration.ManifestDigest.IsValid() || Configuration.Limits.WorkerCount == 0 ||
-			Configuration.Limits.MaximumInFlight == 0 || Configuration.Limits.MaximumAdmissionUnitsPerTick == 0 ||
+			Configuration.Limits.WorkerCount > MaximumContentAvailabilityWorkers ||
+			Configuration.Limits.MaximumInFlight == 0 ||
+			Configuration.Limits.MaximumInFlight > MaximumContentAvailabilityInFlight ||
+			Configuration.Limits.MaximumPendingRequests == 0 ||
+			Configuration.Limits.MaximumPendingRequests > MaximumContentAvailabilityPendingRequests ||
+			Configuration.Limits.MaximumCompletedPayloadBytes < MaximumPackageContentPayloadBytes ||
+			Configuration.Limits.MaximumCompletedPayloadBytes > MaximumContentAvailabilityCompletedPayloadBytes ||
+			Configuration.Limits.MaximumCachedPayloadBytes < MaximumPackageContentPayloadBytes ||
+			Configuration.Limits.MaximumCachedPayloadBytes > MaximumContentAvailabilityCachedPayloadBytes ||
+			Configuration.Limits.MaximumCompletionsPerTick == 0 ||
+			Configuration.Limits.MaximumCompletionsPerTick > MaximumContentAvailabilityCompletionsPerTick ||
+			Configuration.Limits.MaximumAdmissionUnitsPerTick == 0 ||
+			Configuration.Limits.MaximumAdmissionUnitsPerTick > MaximumContentAvailabilityAdmissionUnitsPerTick ||
 			Configuration.Limits.MaximumAdmissionObjectsPerTick < MaximumPackageContentObjectsPerUnit ||
-			Configuration.Limits.MaximumAdmissionBytesPerTick == 0 ||
-			Configuration.Limits.MaximumCompletedPayloadBytes < MaximumPackageContentPayloadBytes)
+			Configuration.Limits.MaximumAdmissionObjectsPerTick > MaximumContentAvailabilityAdmissionObjectsPerTick ||
+			Configuration.Limits.MaximumAdmissionBytesPerTick < MaximumPackageContentPayloadBytes ||
+			Configuration.Limits.MaximumAdmissionBytesPerTick > MaximumContentAvailabilityAdmissionBytesPerTick ||
+			Configuration.Limits.MaximumEvictionUnitsPerTick == 0 ||
+			Configuration.Limits.MaximumEvictionUnitsPerTick > MaximumContentAvailabilityEvictionUnitsPerTick ||
+			Configuration.Limits.MaximumEvictionObjectsPerTick < MaximumPackageContentObjectsPerUnit ||
+			Configuration.Limits.MaximumEvictionObjectsPerTick > MaximumContentAvailabilityEvictionObjectsPerTick ||
+			Configuration.Limits.RequestTimeout < std::chrono::milliseconds(10) ||
+			Configuration.Limits.RequestTimeout > std::chrono::seconds(10))
 			throw std::invalid_argument("Content availability configuration is invalid");
 		State = std::make_unique<Impl>(
 			std::move(World), std::move(WorkspaceValue), std::move(Configuration), std::move(Diagnostic)
@@ -698,6 +1065,7 @@ namespace gargantuan {
 
 	void ContentAvailabilityService::Step() {
 		if (!State || State->Stopped) return;
+		DurationScope StepDuration(State->Metrics.Timing.Step);
 		std::vector<Impl::Completion> Completed;
 		{
 			std::scoped_lock Lock(State->CompletionMutex);
@@ -705,7 +1073,7 @@ namespace gargantuan {
 			Completed.reserve(Count);
 			for (std::size_t Index = 0; Index < Count; ++Index) {
 				auto Item = std::move(State->Completions[Index]);
-				if (Item.Payload && Item.Payload->Bytes) State->CompletionBytes -= Item.Payload->Bytes->size();
+				if (Item.Content) State->CompletionBytes -= Item.Content->EncodedBytes;
 				Completed.push_back(std::move(Item));
 			}
 			State->Completions.erase(State->Completions.begin(), State->Completions.begin() + static_cast<std::ptrdiff_t>(Count));
@@ -715,7 +1083,11 @@ namespace gargantuan {
 		}
 		for (auto &Completion : Completed) {
 			if (State->InFlight != 0) --State->InFlight;
+			if (Completion.ReservedBytes <= State->ReservedCompletionBytes)
+				State->ReservedCompletionBytes -= Completion.ReservedBytes;
+			else State->ReservedCompletionBytes = 0;
 			if (Completion.Generation != State->Generation) {
+				++State->Metrics.StaleCompletionsRejected;
 				++State->Metrics.Cancellations;
 				continue;
 			}
@@ -727,31 +1099,12 @@ namespace gargantuan {
 					State->Report("ManifestUnavailable", Completion.Manifest.error().Message);
 					continue;
 				}
-				const auto Bytes = std::span(
-					reinterpret_cast<const std::uint8_t *>(Completion.Manifest->data()), Completion.Manifest->size()
-				);
-				if (AssetContentId::Hash(Bytes) != State->Configuration.ManifestDigest) {
-					State->ManifestFailed = true;
-					++State->Metrics.Failures;
-					State->Report("ManifestDigestMismatch", "Content provider returned a manifest with the wrong digest");
-					continue;
-				}
-				auto Parsed = ParsePackageContentManifest(*Completion.Manifest);
-				if (!Parsed || Parsed->Package != State->Configuration.Package) {
-					State->ManifestFailed = true;
-					++State->Metrics.Failures;
-					State->Report("ManifestInvalid", Parsed ? "Manifest namespace differs from the active package" : Parsed.error());
-					continue;
-				}
-				State->Metrics.ManifestBytes = Completion.Manifest->size();
-				State->Manifest = std::move(*Parsed);
-				State->Records.resize(State->Manifest->Entries.size());
-				State->Dependents.resize(State->Manifest->Entries.size());
-				for (std::size_t Index = 0; Index < State->Manifest->Entries.size(); ++Index)
-					State->Indices.emplace(State->Manifest->Entries[Index].Key, Index);
-				for (std::size_t Index = 0; Index < State->Manifest->Entries.size(); ++Index)
-					for (const auto &Dependency : State->Manifest->Entries[Index].Dependencies)
-						State->Dependents[State->Indices.at(Dependency)].push_back(Index);
+				auto Prepared = std::move(*Completion.Manifest);
+				State->Metrics.ManifestBytes = Prepared.EncodedBytes;
+				State->Manifest = std::move(Prepared.Manifest);
+				State->Indices = std::move(Prepared.Indices);
+				State->Dependents = std::move(Prepared.Dependents);
+				State->Records = std::move(Prepared.Records);
 				for (std::size_t Index = 0; Index < State->Manifest->Entries.size(); ++Index)
 					if (State->Configuration.Mode == ContentResidencyMode::FullyResident || HasPackageContentFlag(
 							State->Manifest->Entries[Index].Flags, PackageContentFlags::RequiredAtBootstrap
@@ -772,31 +1125,42 @@ namespace gargantuan {
 				continue;
 			}
 			RecordValue.RequestCancelled.reset();
-			if (!Completion.Payload) {
+			if (!Completion.Content) {
 				RecordValue.Residency = ContentResidencyState::Failed;
 				++State->Metrics.Failures;
-				State->Report("AcquisitionFailed", Completion.Payload.error().Message);
+				State->Report("AcquisitionFailed", Completion.Content.error().Message);
 				continue;
 			}
 			const auto &Entry = State->Manifest->Entries[Found->second];
-			const auto &Payload = *Completion.Payload;
-			if (Payload.Identity.Package != State->Configuration.Package || Payload.Identity.Key != Entry.Key ||
-				Payload.Digest != Entry.Digest || !Payload.Bytes || Payload.Bytes->size() != Entry.CompressedBytes ||
-				AssetContentId::Hash(*Payload.Bytes) != Entry.Digest ||
-				Payload.Bytes->size() > State->Configuration.Limits.MaximumCachedPayloadBytes -
-					std::min(State->CachedBytes, State->Configuration.Limits.MaximumCachedPayloadBytes)) {
+			const auto &Prepared = *Completion.Content;
+			if (Prepared.Key != Entry.Key || !Prepared.Document || Prepared.EncodedBytes != Entry.CompressedBytes) {
 				RecordValue.Residency = ContentResidencyState::Failed;
 				++State->Metrics.Failures;
-				State->Report("PayloadRejected", "Content payload identity, digest, size, or cache bound is invalid");
+				State->Report("PayloadRejected", "Content payload identity or size is invalid");
 				continue;
 			}
-			RecordValue.Payload = Payload.Bytes;
-			State->CachedBytes += Payload.Bytes->size();
-			State->Metrics.CachedPayloadBytesHighWater = std::max<std::uint64_t>(
-				State->Metrics.CachedPayloadBytesHighWater, State->CachedBytes
-			);
-			State->Metrics.BytesAcquired += Payload.Bytes->size();
-			State->Metrics.BytesVerified += Payload.Bytes->size();
+			if (!RecordValue.CachedPayload) {
+				State->MakeCacheSpace(Prepared.EncodedBytes, Found->second);
+				if (Prepared.EncodedBytes > State->Configuration.Limits.MaximumCachedPayloadBytes -
+					std::min(State->CachedBytes, State->Configuration.Limits.MaximumCachedPayloadBytes)) {
+					RecordValue.Residency = ContentResidencyState::Failed;
+					++State->Metrics.Failures;
+					State->Report("PayloadRejected", "Content immutable cache byte limit is exhausted");
+					continue;
+				}
+				RecordValue.CachedPayload = Prepared.Bytes;
+				RecordValue.EncodedBytes = Prepared.EncodedBytes;
+				State->CachedBytes += Prepared.EncodedBytes;
+				State->Metrics.CachedPayloadBytesHighWater = std::max<std::uint64_t>(
+					State->Metrics.CachedPayloadBytesHighWater, State->CachedBytes
+				);
+			}
+			RecordValue.Prepared = Prepared.Document;
+			RecordValue.Times = Prepared.Times;
+			if (!Prepared.CacheHit) {
+				State->Metrics.BytesAcquired += Prepared.EncodedBytes;
+				State->Metrics.BytesVerified += Prepared.EncodedBytes;
+			}
 			RecordValue.Residency = ContentResidencyState::Available;
 		}
 
@@ -815,15 +1179,22 @@ namespace gargantuan {
 		for (std::size_t Index = 0; Index < State->Records.size() && Units < State->Configuration.Limits.MaximumAdmissionUnitsPerTick; ++Index) {
 			auto &RecordValue = State->Records[Index];
 			const auto &Entry = State->Manifest->Entries[Index];
-			if (RecordValue.Residency != ContentResidencyState::Available || State->Desire(RecordValue) == 0 ||
-				!State->DependenciesResident(Index) || Objects + Entry.ObjectCount > State->Configuration.Limits.MaximumAdmissionObjectsPerTick ||
-				Bytes + Entry.UncompressedBytes > State->Configuration.Limits.MaximumAdmissionBytesPerTick) continue;
+			if (RecordValue.Residency != ContentResidencyState::Available || State->Desire(RecordValue) == 0) continue;
+			if (!State->DependenciesResident(Index) ||
+				Objects + Entry.ObjectCount > State->Configuration.Limits.MaximumAdmissionObjectsPerTick ||
+				Bytes + Entry.UncompressedBytes > State->Configuration.Limits.MaximumAdmissionBytesPerTick) {
+				++State->Metrics.AdmissionDeferrals;
+				continue;
+			}
 			RecordValue.Residency = ContentResidencyState::Admitting;
-			std::string Text(RecordValue.Payload->begin(), RecordValue.Payload->end());
-			std::stringstream Input(Text);
-			auto Prepared = InstanceSerialization::DeserializeDetached(InstanceSerialization::InstanceFormat::Json, Input);
+			auto Prepared = InstanceSerialization::Internal::MaterializeDetachedJson(RecordValue.Prepared);
+			const auto PreparationFinished = AvailabilityClock::now();
 			if (!Prepared.Ok || !Prepared.Instance || Prepared.Instance->IsA("DataModel") ||
 				Prepared.ObjectsDecoded != Entry.ObjectCount) {
+				State->CachedBytes -= RecordValue.EncodedBytes;
+				RecordValue.CachedPayload.reset();
+				RecordValue.Prepared.reset();
+				RecordValue.EncodedBytes = 0;
 				RecordValue.Residency = ContentResidencyState::Failed;
 				++State->Metrics.Failures;
 				const auto Detail = !Prepared.Errors.empty()
@@ -838,9 +1209,14 @@ namespace gargantuan {
 			RecordValue.PackageObjects.reserve(Descendants.size() + 1);
 			RecordValue.PackageObjects.insert(Prepared.Instance.get());
 			for (const auto &Object : Descendants) RecordValue.PackageObjects.insert(Object.get());
+			const auto CommitStarted = AvailabilityClock::now();
 			try {
 				Prepared.Instance->SetParent(State->WorkspaceValue);
 			} catch (const std::exception &Error) {
+				State->CachedBytes -= RecordValue.EncodedBytes;
+				RecordValue.CachedPayload.reset();
+				RecordValue.Prepared.reset();
+				RecordValue.EncodedBytes = 0;
 				RecordValue.PackageObjects.clear();
 				RecordValue.Residency = ContentResidencyState::Failed;
 				++State->Metrics.Failures;
@@ -849,8 +1225,20 @@ namespace gargantuan {
 			}
 			RecordValue.Root = std::move(Prepared.Instance);
 			RecordValue.Residency = ContentResidencyState::Resident;
-			State->CachedBytes -= RecordValue.Payload->size();
-			RecordValue.Payload.reset();
+			const auto ResidentAt = AvailabilityClock::now();
+			RecordValue.Prepared.reset();
+			if (RecordValue.QueuedAt) {
+				RecordDuration(State->Metrics.Timing.QueuedToProviderStart, *RecordValue.QueuedAt, RecordValue.Times.ProviderStarted);
+				RecordDuration(State->Metrics.Timing.Provider, RecordValue.Times.ProviderStarted, RecordValue.Times.BytesReceived);
+				RecordDuration(State->Metrics.Timing.Verification, RecordValue.Times.BytesReceived, RecordValue.Times.VerificationFinished);
+				RecordDuration(State->Metrics.Timing.VerificationToPreparation, RecordValue.Times.VerificationFinished, RecordValue.Times.PreparationStarted);
+				RecordDuration(State->Metrics.Timing.WorkerPreparation, RecordValue.Times.PreparationStarted, RecordValue.Times.WorkerPreparationFinished);
+				RecordDuration(State->Metrics.Timing.Preparation, RecordValue.Times.PreparationStarted, PreparationFinished);
+				RecordDuration(State->Metrics.Timing.PreparationToCommit, PreparationFinished, CommitStarted);
+				RecordDuration(State->Metrics.Timing.Commit, CommitStarted, ResidentAt);
+			}
+			if (RecordValue.AcceptedAt)
+				RecordDuration(State->Metrics.Timing.EndToEnd, *RecordValue.AcceptedAt, ResidentAt);
 			++Units;
 			Objects += Entry.ObjectCount;
 			Bytes += static_cast<std::size_t>(Entry.UncompressedBytes);
@@ -869,7 +1257,7 @@ namespace gargantuan {
 			if (!RecordValue.Root || RecordValue.Root->GetDestroyed()) {
 				RecordValue.Root.reset();
 				RecordValue.PackageObjects.clear();
-				RecordValue.Residency = RecordValue.Payload ? ContentResidencyState::Available : ContentResidencyState::Unavailable;
+				RecordValue.Residency = RecordValue.Prepared ? ContentResidencyState::Available : ContentResidencyState::Unavailable;
 				continue;
 			}
 			auto Live = RecordValue.Root->GetDescendants();
@@ -884,7 +1272,7 @@ namespace gargantuan {
 			RecordValue.Root->Destroy();
 			RecordValue.Root.reset();
 			RecordValue.PackageObjects.clear();
-			RecordValue.Residency = RecordValue.Payload ? ContentResidencyState::Available : ContentResidencyState::Unavailable;
+			RecordValue.Residency = RecordValue.Prepared ? ContentResidencyState::Available : ContentResidencyState::Unavailable;
 			++Units;
 			Objects += Entry.ObjectCount;
 			++State->Metrics.Evictions;
@@ -907,10 +1295,13 @@ namespace gargantuan {
 			if (RecordValue.Root && !RecordValue.Root->GetDestroyed()) RecordValue.Root->Destroy();
 			RecordValue.Root.reset();
 			RecordValue.PackageObjects.clear();
-			RecordValue.Payload.reset();
+			RecordValue.Prepared.reset();
+			RecordValue.CachedPayload.reset();
+			RecordValue.EncodedBytes = 0;
 			RecordValue.Residency = ContentResidencyState::Unavailable;
 		}
 		State->InFlight = 0;
+		State->ReservedCompletionBytes = 0;
 		State->Pending = 0;
 		State->CachedBytes = 0;
 		std::scoped_lock Lock(State->CompletionMutex);
@@ -934,7 +1325,13 @@ namespace gargantuan {
 		if (!State || State->Stopped || !State->Manifest) return false;
 		auto Found = State->Indices.find(std::string(Key));
 		if (Found == State->Indices.end() || State->Records[Found->second].Pins == std::numeric_limits<std::uint32_t>::max()) return false;
-		++State->Records[Found->second].Pins;
+		auto &RecordValue = State->Records[Found->second];
+		const auto PriorDesire = State->Desire(RecordValue);
+		++RecordValue.Pins;
+		if (PriorDesire == 0) {
+			RecordValue.AcceptedAt = AvailabilityClock::now();
+			State->AdjustDependencies(Found->second, true);
+		}
 		return true;
 	}
 
@@ -942,7 +1339,9 @@ namespace gargantuan {
 		if (!State || State->Stopped || !State->Manifest) return false;
 		auto Found = State->Indices.find(std::string(Key));
 		if (Found == State->Indices.end() || State->Records[Found->second].Pins == 0) return false;
-		--State->Records[Found->second].Pins;
+		auto &RecordValue = State->Records[Found->second];
+		--RecordValue.Pins;
+		if (State->Desire(RecordValue) == 0) State->AdjustDependencies(Found->second, false);
 		return true;
 	}
 
@@ -950,7 +1349,10 @@ namespace gargantuan {
 		if (!State || State->Stopped || !State->Manifest) return false;
 		auto Found = State->Indices.find(std::string(Key));
 		if (Found == State->Indices.end() || State->Records[Found->second].Residency != ContentResidencyState::Failed) return false;
-		State->Records[Found->second].Residency = ContentResidencyState::Unavailable;
+		auto &RecordValue = State->Records[Found->second];
+		RecordValue.Residency = ContentResidencyState::Unavailable;
+		RecordValue.AcceptedAt = AvailabilityClock::now();
+		RecordValue.QueuedAt.reset();
 		State->StartRequests();
 		return true;
 	}
@@ -979,7 +1381,48 @@ namespace gargantuan {
 		return State ? State->InFlight + State->Pending : 0;
 	}
 	ContentAvailabilityMetrics ContentAvailabilityService::GetMetrics() const {
-		return State ? State->Metrics : ContentAvailabilityMetrics{};
+		if (!State) return {};
+		auto Result = State->Metrics;
+		const auto Now = AvailabilityClock::now();
+		for (const auto &RecordValue : State->Records) {
+			switch (RecordValue.Residency) {
+			case ContentResidencyState::Requested:
+				++Result.RequestedUnits;
+				break;
+			case ContentResidencyState::Acquiring:
+				++Result.AcquiringUnits;
+				break;
+			case ContentResidencyState::Available:
+			case ContentResidencyState::Admitting:
+				++Result.PreparedUnits;
+				break;
+			case ContentResidencyState::Resident:
+				++Result.ResidentUnits;
+				break;
+			case ContentResidencyState::Evicting:
+				++Result.EvictingUnits;
+				break;
+			case ContentResidencyState::Failed:
+				++Result.FailedUnits;
+				break;
+			case ContentResidencyState::Unavailable:
+				break;
+			}
+			if (State->Desire(RecordValue) != 0 && RecordValue.AcceptedAt &&
+				RecordValue.Residency != ContentResidencyState::Resident) {
+				const auto Age = static_cast<std::uint64_t>(
+					std::chrono::duration_cast<std::chrono::microseconds>(Now - *RecordValue.AcceptedAt).count()
+				);
+				Result.OldestRequestAgeMicroseconds = std::max(Result.OldestRequestAgeMicroseconds, Age);
+			}
+		}
+		Result.ReservedCompletionPayloadBytes = State->ReservedCompletionBytes;
+		Result.CachedPayloadBytes = State->CachedBytes;
+		{
+			std::scoped_lock Lock(State->CompletionMutex);
+			Result.CompletedPayloadBytes = State->CompletionBytes;
+		}
+		return Result;
 	}
 	const PackageContentManifest *ContentAvailabilityService::GetManifest() const {
 		return State && State->Manifest ? &*State->Manifest : nullptr;
