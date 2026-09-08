@@ -5,6 +5,9 @@
   and private Node acquisition, bounded asynchronous residency, transactional
   authoritative admission, dependency-safe eviction, and the unchanged
   3K/3H/3E/3J authority chain.
+- [Runtime Host Foundation 1](RuntimeHostFoundation1.md) separates the official
+  packaged Player and dedicated Server composition roots while retaining one
+  Engine, package model, GameSession, and ContentAvailability implementation.
 - [Spatial Runtime Projection Foundation 3K](SpatialRuntimeProjectionFoundation3K.md)
   defines the semantic Instance/projection/acceleration boundary, strong
   generation-safe spaces, explicit DefaultSpace compatibility, transactional
@@ -225,9 +228,10 @@ already-live canonical singleton. The present DataModel registers
 `Workspace` creates a current Camera. A `ReplicatedStorage` class/source scaffold
 exists but is not registered. Basic reliable client replication, the production
 scheduler, and bounded Luau application remotes now exist as networking
-subsystem components. `GargantuanPlayer --server-bind` and `--connect` now
-compose them through one production `GameSession`, including authoritative
-Players and Character control. External account authentication, discovery,
+subsystem components. `GargantuanPlayer --connect` and
+`GargantuanServer --bind` compose them through the same production
+`GameSession`, including authoritative Players and Character control. Engine
+depends on neither process host. External account authentication, discovery,
 matchmaking, and spatial interest remain deferred. The deterministic simulator
 and optional real GNS adapter exercise the same coordinator.
 

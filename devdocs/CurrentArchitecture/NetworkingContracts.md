@@ -177,8 +177,9 @@ ticket validation remains deferred; accepting bytes without an authentication
 protocol would falsely imply authority.
 
 The current `DevelopmentLocal` GSES identity is accepted only on parsed IPv4
-loopback or exact IPv6 loopback by default. A native Player CLI override permits
-explicit insecure LAN development and logs `[Network:Security]`; it does not
+loopback or exact IPv6 loopback by default. The role-specific Player and Server
+CLIs can explicitly permit insecure LAN development and log
+`[Network:Security]`; the override does not
 turn endpoint reachability into authentication.
 
 `INetworkScheduler`, `SchedulerTickBudget`, structured submit/flush outcomes,

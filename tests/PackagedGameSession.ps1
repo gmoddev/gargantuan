@@ -1,23 +1,29 @@
 param(
 	[Parameter(Mandatory = $true)][string]$Packager,
-	[Parameter(Mandatory = $true)][string]$RuntimeDistribution,
+	[Parameter(Mandatory = $true)][string]$PlayerRuntimeDistribution,
+	[Parameter(Mandatory = $true)][string]$ServerRuntimeDistribution,
 	[Parameter(Mandatory = $true)][string]$ProjectRoot,
 	[string]$GraphicalClient = 'OFF'
 )
 
 $ErrorActionPreference = 'Stop'
 $TestRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("gps-{0}-{1}" -f $PID, [Guid]::NewGuid().ToString('N').Substring(0, 8))
-$PackageRoot = Join-Path $TestRoot 'Package'
+$PlayerPackageRoot = Join-Path $TestRoot 'PlayerPackage'
+$ServerPackageRoot = Join-Path $TestRoot 'ServerPackage'
 $FixtureRoot = Join-Path $TestRoot 'FirstCompleteGame'
 $ServerProcess = $null
 $ClientProcess = $null
 
-function Start-PlayerProcess {
-	param([string[]]$Arguments)
+function Start-RuntimeProcess {
+	param(
+		[Parameter(Mandatory = $true)][string]$Executable,
+		[Parameter(Mandatory = $true)][string]$WorkingDirectory,
+		[string[]]$Arguments
+	)
 	try {
 		$StartInfo = [System.Diagnostics.ProcessStartInfo]::new()
-		$StartInfo.FileName = $Player
-		$StartInfo.WorkingDirectory = $PackageRoot
+		$StartInfo.FileName = $Executable
+		$StartInfo.WorkingDirectory = $WorkingDirectory
 		$StartInfo.UseShellExecute = $false
 		$StartInfo.CreateNoWindow = $true
 		$StartInfo.RedirectStandardOutput = $true
@@ -225,21 +231,26 @@ end)
 	$ProjectJson = $ProjectDocument | ConvertTo-Json -Depth 100 -Compress
 	[System.IO.File]::WriteAllText($ProjectDocumentPath, $ProjectJson, [System.Text.UTF8Encoding]::new($false))
 
-	& $Packager build --project $FixtureRoot --output $PackageRoot --runtime $RuntimeDistribution --configuration Release
+	& $Packager build --project $FixtureRoot --output $PlayerPackageRoot --runtime $PlayerRuntimeDistribution --configuration Release
 	if ($LASTEXITCODE -ne 0) {
-		throw "Packager exited with $LASTEXITCODE"
+		throw "Player packager exited with $LASTEXITCODE"
+	}
+	& $Packager build --project $FixtureRoot --output $ServerPackageRoot --runtime $ServerRuntimeDistribution --configuration Release
+	if ($LASTEXITCODE -ne 0) {
+		throw "Server packager exited with $LASTEXITCODE"
 	}
 
-	$Player = Join-Path $PackageRoot 'GargantuanPlayer.exe'
+	$Player = Join-Path $PlayerPackageRoot 'GargantuanPlayer.exe'
+	$Server = Join-Path $ServerPackageRoot 'GargantuanServer.exe'
 	$Port = 40000 + ($PID % 1000)
 	$Endpoint = "127.0.0.1:$Port"
-	$ServerProcess = Start-PlayerProcess -Arguments @('--headless', '--server-bind', $Endpoint, '--session-smoke', '--max-frames', '360')
+	$ServerProcess = Start-RuntimeProcess -Executable $Server -WorkingDirectory $ServerPackageRoot -Arguments @('--bind', $Endpoint, '--session-smoke', '--max-ticks', '360')
 	Start-Sleep -Milliseconds 300
 	$ClientArguments = @('--connect', $Endpoint, '--session-smoke', '--max-frames', '240')
 	if ($GraphicalClient -ne 'ON') {
 		$ClientArguments = @('--headless') + $ClientArguments
 	}
-	$ClientProcess = Start-PlayerProcess -Arguments $ClientArguments
+	$ClientProcess = Start-RuntimeProcess -Executable $Player -WorkingDirectory $PlayerPackageRoot -Arguments $ClientArguments
 	if (-not $ClientProcess.WaitForExit(20000)) {
 		Stop-Process -Id $ClientProcess.Id -Force
 		throw 'Packaged game-session client timed out'

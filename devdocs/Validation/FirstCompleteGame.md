@@ -46,8 +46,9 @@ no transform or root delta. The production GNS opt-in gate repeats the same
 control/input/action/state boundary on localhost without making networking part
 of the authored game scripts.
 
-Foundation 3D additionally packages and launches separate server/client
-processes through `--server-bind` and `--connect`. The package gate runs both a
+Foundation 3D originally packaged separate server/client roles into one Player
+executable. Runtime Host Foundation 1 preserves the proof through
+`GargantuanServer --bind` and `GargantuanPlayer --connect`. The package gate runs both a
 graphical and a headless client against a headless server. It hydrates a client
 Script from trusted package content, drives a real `W` event through the
 default ActionMap, registers the game-defined semantic `PackageLunge`, requests

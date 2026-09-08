@@ -35,12 +35,13 @@ replication, Remote, Character, or Player connection identities.
 Packaged entrypoints are:
 
 ```text
-GargantuanPlayer --server-bind HOST:PORT [--headless]
+GargantuanServer --bind HOST:PORT
 GargantuanPlayer --connect HOST:PORT [--headless]
 ```
 
-The GNS-enabled player runs `Poll -> Engine::Step -> GameSession::Step`; both
-network roles pace that loop to 60 Hz, including a headless dedicated server.
+Each GNS-enabled role runs `Poll -> Engine::Step -> GameSession::Step` and
+paces its loop to 60 Hz. Server is a headless composition root and Player owns
+graphical/offline/client concerns.
 Offline launch remains the default and still creates its trusted local Player
 without a transport. A future listen server can compose the same server/client
 roles without changing Character policy; 3D does not add listen-server UX.

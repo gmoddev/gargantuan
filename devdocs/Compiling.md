@@ -165,6 +165,21 @@ just fresh_example cube.luau
 
 Use the fresh_* form when testing C++ engine changes.
 Use the non-fresh form when only rerunning already-built code/content.
+
+Packaged builds produce role-specific hosts and distributions:
+
+```text
+GargantuanPlayer [--connect HOST:PORT]
+GargantuanServer --bind HOST:PORT
+RuntimeDistribution/
+ServerRuntimeDistribution/
+```
+
+Player owns graphical/offline/client composition and rejects `--server-bind`.
+Server owns authoritative headless composition and rejects `--connect` and
+graphical options. Both use the same semantic package model; Server is not
+added to ordinary Player packages automatically.
+
 8. Run EditorHost
 The original in-engine Studio prototype and its Just recipes were removed after
 Studio moved to a separately authored application. Its MPL-2.0 implementation

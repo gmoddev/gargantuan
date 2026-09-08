@@ -424,6 +424,23 @@ Tests should enforce them where practical.
 95. Default packaged offline and server runtimes compose the local fully
     resident provider, preserving no-Node behavior through the same admission
     implementation used by on-demand and remote modes.
+96. Engine depends on neither official packaged host. `GargantuanPlayer` and
+    `GargantuanServer` depend on Engine through an internal native composition
+    seam; that seam is not a stable public ABI.
+97. Official runtime role is explicit trusted native construction state.
+    Engine does not inspect executable identity, command-line state, package
+    data, or client input to infer `RuntimeMode`.
+98. Player is offline/client composition only. Server is authoritative/headless
+    composition only; server provider state cannot enter through package data,
+    ordinary Luau, or client protocol.
+99. GameSession and ContentAvailability semantics remain Engine infrastructure.
+    Hosts select roles/providers but do not define wire, acquisition, admission,
+    eviction, cache, or authority semantics.
+100. Dedicated Server does not initialize video, window, renderer presentation,
+    input, graphical frame pacing, or audio output. Binary graphical linkage is
+    distinct from runtime initialization.
+101. Host separation does not alter package semantic versions, GRPL, GCHR,
+    ordinary Luau authority, EditorHost trust, or generation-safe teardown.
 
 ## Changes requiring architecture review
 

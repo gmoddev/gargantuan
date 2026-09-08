@@ -489,8 +489,11 @@ green before Foundation 3L can be promoted from partial validation under the
 
 Package format version 2 adds `Startup.ContentManifest` and hashed region files.
 The strict inspector continues to accept version-1 legacy packages as a complete
-bootstrap project with no content manifest. New packaged runtimes use local
-fully-resident composition. Studio, MCP, and Telemetry require no compatibility
+bootstrap project with no content manifest. Offline `GargantuanPlayer` and the
+default `GargantuanServer` composition use local fully-resident content through
+the same Engine service; a trusted Server host can instead inject the private
+Node provider and residency mode. Player has no corresponding server-provider
+configuration path. Studio, MCP, and Telemetry require no compatibility
 change because package production remains in the Engine CLI/EditorHost contract,
 no authoring UI or public content protocol was added, and existing diagnostics
 can consume aggregate counters later.
