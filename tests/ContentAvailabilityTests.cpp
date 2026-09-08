@@ -80,7 +80,7 @@ namespace {
 	};
 
 	struct Fixture final {
-		PackageContentNamespace Package{*ProjectId::Parse("01234567-89ab-cdef-0123-456789abcdef"), 17};
+		PackageContentNamespace Package{*ProjectId::Parse("0123456789abcdef0123456789abcdef"), 17};
 		PackageContentManifest Manifest;
 		std::shared_ptr<VectorContentProvider> Provider = std::make_shared<VectorContentProvider>();
 		AssetContentId ManifestDigest;

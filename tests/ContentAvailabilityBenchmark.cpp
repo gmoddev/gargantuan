@@ -40,7 +40,7 @@ namespace {
 		const std::array<std::uint8_t, 1> DigestInput{0x3a};
 		const auto Digest = AssetContentId::Hash(DigestInput);
 		PackageContentManifest Manifest{
-			.Package = {*ProjectId::Parse("01234567-89ab-cdef-0123-456789abcdef"), 17},
+			.Package = {*ProjectId::Parse("0123456789abcdef0123456789abcdef"), 17},
 			.InstanceSchemaVersion = PackageContentInstanceSchemaVersion,
 		};
 		Manifest.Entries.reserve(Count);
