@@ -128,7 +128,11 @@ int main() {
 
 	Fixture Data;
 	auto Parsed = ParsePackageContentManifest(Data.Provider->Manifest);
-	Check(Parsed.has_value() && EncodePackageContentManifest(*Parsed) == Data.Provider->Manifest,
+	const auto RoundTrippedManifest = Parsed ? EncodePackageContentManifest(*Parsed) : std::string{};
+	if (!Parsed) std::cerr << "Manifest parse error: " << Parsed.error() << '\n';
+	if (Parsed && RoundTrippedManifest != Data.Provider->Manifest)
+		std::cerr << "Expected manifest: " << Data.Provider->Manifest << "\nActual manifest:   " << RoundTrippedManifest << '\n';
+	Check(Parsed.has_value() && RoundTrippedManifest == Data.Provider->Manifest,
 		"content manifest did not round-trip deterministically");
 	PackageContentCoarseIndex Coarse(*Parsed, 64.0f);
 	auto Query = Coarse.Query("default", {{-1.0f, -1.0f, -1.0f}, {1.0f, 1.0f, 1.0f}}, 8);
