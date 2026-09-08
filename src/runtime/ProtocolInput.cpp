@@ -13,11 +13,12 @@ namespace gargantuan {
 		void ValidateJsonNode(
 			const JsonCodec::Json &Value,
 			std::size_t Depth,
-			std::size_t &Nodes
+			std::size_t &Nodes,
+			std::size_t MaximumNodes
 		) {
 			if (Depth > MaximumProtocolJsonDepth)
 				throw std::invalid_argument("Protocol JSON exceeds its nesting-depth limit");
-			if (Nodes == MaximumProtocolJsonNodes)
+			if (Nodes == MaximumNodes)
 				throw std::invalid_argument("Protocol JSON exceeds its node-count limit");
 			++Nodes;
 
@@ -30,12 +31,12 @@ namespace gargantuan {
 			if (Value.is_object()) {
 				for (const auto &[Name, Child] : Value.items()) {
 					ValidateProtocolString(Name, MaximumProtocolIdentifierBytes, "Protocol field name");
-					ValidateJsonNode(Child, Depth + 1, Nodes);
+					ValidateJsonNode(Child, Depth + 1, Nodes, MaximumNodes);
 				}
 				return;
 			}
 			if (Value.is_array())
-				for (const auto &Child : Value) ValidateJsonNode(Child, Depth + 1, Nodes);
+				for (const auto &Child : Value) ValidateJsonNode(Child, Depth + 1, Nodes, MaximumNodes);
 		}
 	}
 
@@ -98,8 +99,13 @@ namespace gargantuan {
 	}
 
 	void JsonCodec::ValidateTree(const Json &Value) {
+		ValidateTree(Value, MaximumProtocolJsonNodes);
+	}
+
+	void JsonCodec::ValidateTree(const Json &Value, std::size_t MaximumNodes) {
+		if (MaximumNodes == 0) throw std::invalid_argument("Protocol JSON node-count limit is zero");
 		std::size_t Nodes = 0;
-		ValidateJsonNode(Value, 1, Nodes);
+		ValidateJsonNode(Value, 1, Nodes, MaximumNodes);
 	}
 
 	void ValidateProtocolWireValue(const WireValue &Value) {

@@ -74,6 +74,7 @@ not participate.
 | Boundary | Limit |
 | --- | ---: |
 | Manifest bytes | 32 MiB |
+| Manifest JSON nodes | 2,097,152 |
 | Units | 65,536 |
 | Total dependency edges | 262,144 |
 | Dependencies per unit | 64 |

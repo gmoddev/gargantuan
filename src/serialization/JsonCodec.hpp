@@ -20,6 +20,7 @@ namespace gargantuan::JsonCodec {
 	);
 	SerializationResult<std::string> Encode(const Json &Value, std::string_view DocumentName);
 	void ValidateTree(const Json &Value);
+	void ValidateTree(const Json &Value, std::size_t MaximumNodes);
 
 	bool HasOnlyFields(const Json &Value, std::initializer_list<std::string_view> Allowed);
 	std::optional<std::uint32_t> DecodeUnsigned32(const Json &Value);

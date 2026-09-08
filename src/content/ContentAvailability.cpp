@@ -4,6 +4,7 @@
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Instance.hpp"
 #include "gargantuan/runtime/JobSystem.hpp"
+#include "gargantuan/runtime/ProtocolInput.hpp"
 #include "gargantuan/services/Workspace.hpp"
 #include "serialization/JsonCodec.hpp"
 
@@ -163,18 +164,21 @@ namespace gargantuan {
 		try {
 			if (Encoded.empty() || Encoded.size() > MaximumPackageContentManifestBytes)
 				throw std::runtime_error("manifest byte length is invalid");
-			auto Parsed = JsonCodec::Parse(Encoded, MaximumPackageContentManifestBytes, "package content manifest");
-			if (!Parsed || !Parsed->is_object() || Parsed->size() != 6 || !(*Parsed)["Format"].is_string() ||
-				(*Parsed)["Format"].get_ref<const std::string &>() != ManifestFormat ||
-				!(*Parsed)["Version"].is_number_unsigned() ||
-				(*Parsed)["Version"].get<std::uint32_t>() != PackageContentManifestVersion ||
-				!(*Parsed)["ProjectId"].is_string() || !(*Parsed)["PackageVersion"].is_number_unsigned() ||
-				!(*Parsed)["InstanceSchemaVersion"].is_number_unsigned() || !(*Parsed)["Entries"].is_array())
+			ValidateProtocolJsonDocument(Encoded, MaximumPackageContentManifestBytes);
+			if (!IsValidProtocolUtf8(Encoded)) throw std::runtime_error("manifest is not valid UTF-8");
+			auto Parsed = Json::parse(Encoded);
+			JsonCodec::ValidateTree(Parsed, MaximumPackageContentManifestJsonNodes);
+			if (!Parsed.is_object() || Parsed.size() != 6 || !Parsed["Format"].is_string() ||
+				Parsed["Format"].get_ref<const std::string &>() != ManifestFormat ||
+				!Parsed["Version"].is_number_unsigned() ||
+				Parsed["Version"].get<std::uint32_t>() != PackageContentManifestVersion ||
+				!Parsed["ProjectId"].is_string() || !Parsed["PackageVersion"].is_number_unsigned() ||
+				!Parsed["InstanceSchemaVersion"].is_number_unsigned() || !Parsed["Entries"].is_array())
 				throw std::runtime_error("manifest shape or version is invalid");
-			auto Project = ProjectId::Parse((*Parsed)["ProjectId"].get_ref<const std::string &>());
-			const auto PackageVersion = (*Parsed)["PackageVersion"].get<std::uint64_t>();
-			const auto SchemaVersion = (*Parsed)["InstanceSchemaVersion"].get<std::uint32_t>();
-			const auto &WireEntries = (*Parsed)["Entries"];
+			auto Project = ProjectId::Parse(Parsed["ProjectId"].get_ref<const std::string &>());
+			const auto PackageVersion = Parsed["PackageVersion"].get<std::uint64_t>();
+			const auto SchemaVersion = Parsed["InstanceSchemaVersion"].get<std::uint32_t>();
+			const auto &WireEntries = Parsed["Entries"];
 			if (!Project || PackageVersion == 0 || SchemaVersion != PackageContentInstanceSchemaVersion ||
 				WireEntries.size() > MaximumPackageContentUnits)
 				throw std::runtime_error("manifest identity or entry count is invalid");

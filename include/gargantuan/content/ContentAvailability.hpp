@@ -32,6 +32,7 @@ namespace gargantuan {
 	inline constexpr std::size_t MaximumPackageSpaceKeyBytes = 64;
 	inline constexpr std::size_t MaximumPackageBlobReferenceBytes = 256;
 	inline constexpr std::size_t MaximumPackageContentManifestBytes = 32 * 1024 * 1024;
+	inline constexpr std::size_t MaximumPackageContentManifestJsonNodes = 2 * 1024 * 1024;
 	inline constexpr std::size_t MaximumPackageContentPayloadBytes = 8 * 1024 * 1024;
 	inline constexpr std::size_t MaximumPackageContentObjectsPerUnit = 512;
 
