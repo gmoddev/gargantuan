@@ -169,7 +169,9 @@ int main() {
 		auto Renderer = std::make_unique<InspectingRenderer>(Vector2(320.0f, 200.0f));
 		Require(Renderer->GetCapabilities().GpuSkinning,
 			"the production SDL renderer did not select GPU skinning capability");
-		Engine RuntimeEngine(RuntimeWorld, Renderer.get());
+		auto LocalContent = PackageBuilder::GetLocalContentConfiguration(*Loaded, WorkspaceRoot.PackageRoot);
+		Require(LocalContent.has_value(), "package did not expose local content configuration");
+		Engine RuntimeEngine(RuntimeWorld, Renderer.get(), {}, {.Content = std::move(LocalContent)});
 		RuntimeEngine.ProcessService->Alive = true;
 		std::uint64_t InitialRevision = 0;
 		for (std::size_t Attempt = 0; InitialRevision == 0 && Attempt < 30; ++Attempt) {

@@ -113,7 +113,10 @@ namespace {
 					Relative.find("nodeentitlement") == std::string::npos &&
 					Relative.find("node_entitlement") == std::string::npos &&
 					Relative.find("private-node-entitlements") == std::string::npos &&
-					Relative.find("entitlements.grpc.pb") == std::string::npos && !Relative.ends_with(".proto"),
+					Relative.find("nodecontent") == std::string::npos &&
+					Relative.find("private-node-content") == std::string::npos &&
+					Relative.find("entitlements.grpc.pb") == std::string::npos &&
+					Relative.find("content.grpc.pb") == std::string::npos && !Relative.ends_with(".proto"),
 				"generic package included a private backend adapter, schema, or configuration artifact"
 			);
 		}
@@ -152,6 +155,20 @@ int main() {
 			Payload.Identity == ProjectValue.Identity && !Payload.UnsavedChanges,
 			"package snapshot identity/revision state is incorrect"
 		);
+		Require(!Payload.ContentUnits.empty(), "package capture did not partition any independently available content");
+		auto RepeatedPayload = PackageBuilder::Capture(ProjectValue, World, InitialRevision, InitialRevision);
+		Require(
+			RepeatedPayload.ProjectJson == Payload.ProjectJson &&
+			RepeatedPayload.ContentUnits.size() == Payload.ContentUnits.size(),
+			"equivalent package capture did not produce a deterministic partition"
+		);
+		for (std::size_t Index = 0; Index < Payload.ContentUnits.size(); ++Index)
+			Require(
+				RepeatedPayload.ContentUnits[Index].Entry.Key == Payload.ContentUnits[Index].Entry.Key &&
+				RepeatedPayload.ContentUnits[Index].Entry.Digest == Payload.ContentUnits[Index].Entry.Digest &&
+				RepeatedPayload.ContentUnits[Index].Payload == Payload.ContentUnits[Index].Payload,
+				"equivalent package capture changed a content key, digest, or payload"
+			);
 		const auto RuntimeCatalog = Json::parse(Payload.Assets.CatalogJson);
 		Require(
 			RuntimeCatalog.value("Format", "") == "GargantuanRuntimeAssets" &&
@@ -194,6 +211,11 @@ int main() {
 			"equivalent package inputs did not produce a deterministic manifest"
 		);
 		Require(
+			ReadText(ReleaseA / "content/content.manifest.json") ==
+				ReadText(ReleaseB / "content/content.manifest.json"),
+			"equivalent package inputs did not produce a deterministic content manifest"
+		);
+		Require(
 			First.Size.TotalBytes == First.Size.RuntimeBytes + First.Size.ProjectBytes + First.Size.AssetBytes +
 										 First.Size.ShaderBytes + First.Size.OtherBytes,
 			"package size breakdown does not sum to total bytes"
@@ -217,7 +239,9 @@ int main() {
 			"packaged runtime retained authoring filesystem authority"
 		);
 		HeadlessRenderer Renderer(Vector2(640, 360));
-		Engine RuntimeEngine(PackagedWorld, &Renderer);
+		auto LocalContent = PackageBuilder::GetLocalContentConfiguration(*Loaded, ReleaseA);
+		Require(LocalContent.has_value(), "package did not expose its local content provider configuration");
+		Engine RuntimeEngine(PackagedWorld, &Renderer, {}, {.Content = std::move(LocalContent)});
 		RuntimeEngine.ProcessService->Alive = true;
 		RuntimeEngine.Step();
 		auto InitialRuntimePublication = Renderer.TakeLastPublication();

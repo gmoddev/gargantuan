@@ -327,6 +327,103 @@ Tests should enforce them where practical.
     renderer, animation, Character, and replication behavior. Space/projection/
     cell state is native, transient, non-authoritative, and unavailable to
     ordinary Luau or client input.
+56. `PackageContentNamespace { ProjectId, PackageVersion }` plus a logical
+    content key is immutable package identity, not a live `ObjectId`, runtime
+    `SpatialSpaceId`, or derived `SpatialCellAddress`.
+57. A package content digest verifies bytes but does not replace their stable
+    logical key. Equal bytes may occur under distinct package semantics.
+58. Content acquisition makes immutable bytes available; it does not create,
+    parent, simulate, index, publish, or replicate authoritative Instances.
+59. Only the Engine-owned admission path may turn validated content bytes into
+    authoritative runtime Instances and allocate their runtime identities.
+60. Local-package and private Node content providers converge through the same
+    Engine validation, detached preparation, and admission path.
+61. A content provider selects where trusted host configuration obtains bytes.
+    It does not select residency policy or gain live DataModel authority.
+62. Streaming is optional. Fully resident local compatibility and bounded
+    on-demand residency are policies independent of the chosen provider.
+63. Local on-demand residency requires neither Gargantuan Node nor a network.
+64. Node content delivery is an optional server-infrastructure path and is not
+    a client asset/content API.
+65. Direct and dependency demand are aggregate server state. Repeated peer
+    demand for one content key cannot create per-peer payload copies or
+    concurrent duplicate acquisitions.
+66. Provider work runs outside the simulation thread. Main consumes only a
+    bounded number and bounded bytes of completed work per tick.
+67. `Available` immutable payload and `Resident` authoritative hierarchy are
+    distinct states. Neither implies 3J peer materialization.
+68. Detached prepared content cannot simulate, execute Luau, enter physics,
+    create runtime spatial projection, become relevant, expose Remotes, or
+    materialize to peers before its single authoritative parent commit.
+69. Resident content enters normal Instance lifecycle hooks; 3K derives its
+    projection, 3H indexes live projections, 3E selects peer relevance, and 3J
+    schedules bounded structural materialization.
+70. Unloaded package content owns no live `ObjectId`, projection, physics body,
+    Remote registration, or peer materialization state.
+71. Eviction ends the authoritative runtime hierarchy by normal destruction.
+    Reload deserializes a fresh hierarchy and receives fresh runtime identities.
+72. An old runtime identity, provider completion, or peer materialization epoch
+    cannot bind to a reloaded content lifetime.
+73. Manifest and payload SHA-256, namespace, key, byte count, instance schema,
+    decoded object count, and detached hierarchy shape are verified before
+    authoritative admission.
+74. Corrupt, oversized, mismatched, malformed, or stale content never becomes
+    authoritative and transitions only to bounded failure state.
+75. Manifest bytes, unit count, key/reference/space lengths, per-unit and total
+    dependency counts, payload bytes, decoded objects, coarse-cell overlap,
+    request queue, in-flight work, completion bytes, and cache bytes have hard
+    native bounds.
+76. Content dependency traversal is iterative and bounded. Missing targets,
+    duplicate or unsorted edges, self-edges, and cycles reject the manifest.
+77. A dependent unit may admit only after all declared hard dependencies are
+    Resident, and a dependency may not evict while a dependent remains Resident.
+78. Package construction partitions only bounded independently serializable
+    Workspace subtrees. Bootstrap-sensitive Scripts, ModuleScripts, Remotes,
+    Characters, Players, Camera, Terrain, and FileLink content stay bootstrap.
+79. Runtime mutation of an immutable package baseline is ephemeral unless a
+    separate authoritative state owner persists it. Foundation 3L performs no
+    write-back or package patching.
+80. A runtime-created child pins its package-owned root against automatic
+    eviction. Foundation 3L never silently destroys unowned runtime state.
+81. Content cache entries, where retained, are immutable source bytes only.
+    Live Instances and mutated runtime state are never cache values.
+82. Exact package namespace validation prevents package-version mixing across
+    manifest, provider response, payload, cache, and active session.
+83. Session stop cancels provider work, advances generation, joins its jobs,
+    clears completions, and prevents late results from entering a replacement
+    session.
+84. Package coarse bounds are optional bounded authored metadata in a logical
+    package space. They are neither ghost Instances nor persisted 3H cells.
+85. The package coarse index provides bounded candidate content keys only. It
+    cannot create residency demand or authoritative objects by itself.
+86. Package space `default` maps through host/runtime policy to the existing
+    runtime DefaultSpace after admission; no `SpatialSpaceId {Slot,Generation}`
+    is serialized in package content.
+87. Ordinary clients cannot select Local versus Node, change a Node endpoint,
+    fabricate a package version, request arbitrary provider keys, or pin
+    content. Those are trusted native host/runtime operations.
+88. Node may return immutable package bytes only. It cannot allocate ObjectIds,
+    assign LocalPlayer, grant Character control, choose relevance, or mutate 3J
+    Known state.
+89. Node filesystem lookup is an exact pre-indexed namespace/key lookup rooted
+    in trusted configuration; request input never becomes a filesystem path,
+    URL, endpoint, provider name, or tenant authority.
+90. Node content RPCs require authenticated tenant-bearing node or game-server
+    principals and separate manifest/blob read capabilities. Operators and
+    unauthenticated callers have no implicit content authority.
+91. Node outage or remote provider failure cannot revoke or mutate an already
+    Resident authoritative hierarchy; only trusted residency demand can begin
+    eviction.
+92. Streamed Script and Remote instances, when future partition policy permits
+    them, must still use their normal post-commit lifecycle and security
+    contexts. Provider completion itself can never execute or expose them.
+93. Package content admission and 3J structural materialization remain distinct
+    bounded schedulers with distinct completion points and ownership.
+94. Content availability cannot alter Character simulation/publication cadence
+    or Remote scheduling; overload applies bounded content backpressure instead.
+95. Default packaged offline and server runtimes compose the local fully
+    resident provider, preserving no-Node behavior through the same admission
+    implementation used by on-demand and remote modes.
 
 ## Changes requiring architecture review
 

@@ -1,5 +1,10 @@
 # Current architecture
 
+- [Content Availability Foundation 3L](ContentAvailabilityFoundation3L.md)
+  defines deterministic immutable package content units, provider-neutral local
+  and private Node acquisition, bounded asynchronous residency, transactional
+  authoritative admission, dependency-safe eviction, and the unchanged
+  3K/3H/3E/3J authority chain.
 - [Spatial Runtime Projection Foundation 3K](SpatialRuntimeProjectionFoundation3K.md)
   defines the semantic Instance/projection/acceleration boundary, strong
   generation-safe spaces, explicit DefaultSpace compatibility, transactional

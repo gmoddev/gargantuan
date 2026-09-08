@@ -109,6 +109,9 @@ MyGame/
         GargantuanSans.ttf
     content/
         game.instance.json
+        content.manifest.json       # package format 2 independent content units
+        regions/
+            00000000.instance.json
         prerun.luau                 # only when the project has PreRun
         assets/
             catalog.json
@@ -127,10 +130,16 @@ location; current working directory is never package authority.
 
 ## Package manifest and integrity
 
-`game.package.json` is the package marker and has exactly twelve fields:
+Foundation 3L advances newly built packages to format 2 and adds the optional
+closed `Startup.ContentManifest` reference plus its content record. See
+[Content Availability Foundation 3L](ContentAvailabilityFoundation3L.md).
+The strict reader continues to accept legacy format-1 packages as one complete
+bootstrap snapshot with no independent content units.
+
+`game.package.json` is the package marker. Its common fields are:
 
 - `Format: GargantuanGamePackage`;
-- `PackageFormatVersion: 1`;
+- `PackageFormatVersion: 2` for current builds (`1` remains readable);
 - `RuntimeCompatibility: 1`;
 - ProjectId, bounded display name, Development/Release configuration;
 - captured nonzero revision and unsaved-change disclosure;
