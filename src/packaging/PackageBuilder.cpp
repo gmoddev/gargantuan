@@ -35,6 +35,12 @@
 #if defined(GetClassName)
 #undef GetClassName
 #endif
+#if defined(min)
+#undef min
+#endif
+#if defined(max)
+#undef max
+#endif
 
 namespace gargantuan {
 	namespace {
@@ -99,9 +105,19 @@ namespace gargantuan {
 			std::string ProjectPath;
 			std::string AssetCatalogPath;
 			std::optional<std::string> PreRunPath;
+			std::optional<std::string> ContentManifestPath;
+			AssetContentId ContentManifestDigest;
 			std::string ContentTableSha256;
 			std::vector<ContentEntry> Content;
 		};
+
+		struct SerializedSubtreeInspection final {
+			std::size_t Objects = 0;
+			bool BootstrapOnly = false;
+			std::optional<PackageCoarseBounds> Bounds;
+		};
+
+		SerializedSubtreeInspection InspectSerializedSubtree(const Json &Root);
 
 		class Sha256 final {
 		  public:
@@ -496,7 +512,7 @@ namespace gargantuan {
 					!(*Parsed)["Content"].is_array())
 					throw std::runtime_error("Package manifest shape is invalid");
 				const auto FormatVersion = (*Parsed)["PackageFormatVersion"].get<std::uint32_t>();
-				if (FormatVersion != GamePackageFormatVersion)
+				if (FormatVersion != 1 && FormatVersion != GamePackageFormatVersion)
 					throw std::runtime_error("Package format version is unsupported");
 				const auto Compatibility = (*Parsed)["RuntimeCompatibility"].get<std::uint32_t>();
 				if (Compatibility != RuntimeCompatibilityVersion)
@@ -510,9 +526,10 @@ namespace gargantuan {
 				const auto &Startup = (*Parsed)["Startup"];
 				if (!Identity || !Configuration || DisplayName.empty() ||
 					DisplayName.size() > MaximumDisplayNameBytes || !IsSafeRelativePath(Player) ||
-					Startup.size() != 3 || !Startup.contains("Project") || !Startup["Project"].is_string() ||
+					Startup.size() != (FormatVersion == 1 ? 3 : 4) || !Startup.contains("Project") || !Startup["Project"].is_string() ||
 					!Startup.contains("AssetCatalog") || !Startup["AssetCatalog"].is_string() ||
-					!Startup.contains("PreRun") || (!Startup["PreRun"].is_null() && !Startup["PreRun"].is_string()))
+					!Startup.contains("PreRun") || (!Startup["PreRun"].is_null() && !Startup["PreRun"].is_string()) ||
+					(FormatVersion >= 2 && (!Startup.contains("ContentManifest") || !Startup["ContentManifest"].is_string())))
 					throw std::runtime_error("Package startup metadata is invalid");
 
 				ParsedPackageManifest Result;
@@ -529,8 +546,10 @@ namespace gargantuan {
 				Result.ProjectPath = Startup["Project"].get<std::string>();
 				Result.AssetCatalogPath = Startup["AssetCatalog"].get<std::string>();
 				if (Startup["PreRun"].is_string()) Result.PreRunPath = Startup["PreRun"].get<std::string>();
+				if (FormatVersion >= 2) Result.ContentManifestPath = Startup["ContentManifest"].get<std::string>();
 				if (!IsSafeRelativePath(Result.ProjectPath) || !IsSafeRelativePath(Result.AssetCatalogPath) ||
-					(Result.PreRunPath && !IsSafeRelativePath(*Result.PreRunPath)))
+					(Result.PreRunPath && !IsSafeRelativePath(*Result.PreRunPath)) ||
+					(Result.ContentManifestPath && !IsSafeRelativePath(*Result.ContentManifestPath)))
 					throw std::runtime_error("Package startup paths are unsafe");
 
 				const auto &Content = (*Parsed)["Content"];
@@ -573,6 +592,39 @@ namespace gargantuan {
 						throw std::runtime_error("Package required entry is absent");
 				if (Result.PreRunPath && !Seen.contains(LowerPath(*Result.PreRunPath)))
 					throw std::runtime_error("Package PreRun entry is absent");
+				if (Result.ContentManifestPath) {
+					if (!Seen.contains(LowerPath(*Result.ContentManifestPath)))
+						throw std::runtime_error("Package content manifest entry is absent");
+					auto Found = std::ranges::find(Result.Content, *Result.ContentManifestPath, &ContentEntry::Path);
+					if (Found == Result.Content.end()) throw std::runtime_error("Package content manifest metadata is absent");
+					Result.ContentManifestDigest = *AssetContentId::Parse(Found->Sha256);
+					auto ContentManifestText = ReadBoundedText(
+						*ResolvePackageFile(Root, *Result.ContentManifestPath, true), MaximumPackageContentManifestBytes
+					);
+					auto ContentManifest = ParsePackageContentManifest(ContentManifestText);
+					if (!ContentManifest || ContentManifest->Package.Project != Result.Inspection.Identity ||
+						ContentManifest->Package.PackageVersion != Result.Inspection.Revision)
+						throw std::runtime_error("Package content manifest is invalid or has the wrong namespace");
+					for (const auto &Unit : ContentManifest->Entries) {
+						auto UnitFound = std::ranges::find(Result.Content, Unit.BlobReference, &ContentEntry::Path);
+						if (UnitFound == Result.Content.end() || UnitFound->Size != Unit.CompressedBytes ||
+							UnitFound->Sha256 != Unit.Digest.ToString())
+							throw std::runtime_error("Package content unit is absent from the verified content table");
+						if (VerifyContent) {
+							auto UnitText = ReadBoundedText(
+								*ResolvePackageFile(Root, Unit.BlobReference, true), MaximumPackageContentPayloadBytes
+							);
+							auto UnitDocument = JsonCodec::Parse(
+								UnitText, MaximumPackageContentPayloadBytes, "package content unit"
+							);
+							if (!UnitDocument || !UnitDocument->is_object() ||
+								UnitDocument->value("Version", 0u) != PackageContentInstanceSchemaVersion ||
+								UnitDocument->value("ClassName", "") == "DataModel" ||
+								InspectSerializedSubtree(*UnitDocument).Objects != Unit.ObjectCount)
+								throw std::runtime_error("Package content unit payload is malformed");
+						}
+					}
+				}
 				for (const auto Required : RequiredRuntimeFiles)
 					if (!Seen.contains(LowerPath(Required)))
 						throw std::runtime_error("Package runtime resource is absent");
@@ -738,12 +790,14 @@ namespace gargantuan {
 			};
 			Check("game.package.json");
 			Check("content/game.instance.json");
+			Check("content/content.manifest.json");
 			Check("content/assets/catalog.json");
 			if (Payload.PreRunSource) Check("content/prerun.luau");
 			for (const auto &File : Distribution.Files)
 				Check(File.Path);
 			for (const auto &Artifact : Payload.Assets.Artifacts)
 				Check("content/" + Artifact.RelativePath);
+			for (const auto &Unit : Payload.ContentUnits) Check(Unit.Entry.BlobReference);
 #else
 			(void)Destination;
 			(void)Candidate;
@@ -767,6 +821,142 @@ namespace gargantuan {
 				Size.ShaderBytes += Bytes;
 			else
 				Size.OtherBytes += Bytes;
+		}
+
+		SerializedSubtreeInspection InspectSerializedSubtree(const Json &Root) {
+			SerializedSubtreeInspection Result;
+			std::vector<const Json *> Pending{&Root};
+			std::array<double, 3> Minimum{
+				std::numeric_limits<double>::infinity(),
+				std::numeric_limits<double>::infinity(),
+				std::numeric_limits<double>::infinity(),
+			};
+			std::array<double, 3> Maximum{
+				-std::numeric_limits<double>::infinity(),
+				-std::numeric_limits<double>::infinity(),
+				-std::numeric_limits<double>::infinity(),
+			};
+			bool HasBounds = false;
+			while (!Pending.empty()) {
+				const auto *Node = Pending.back();
+				Pending.pop_back();
+				if (!Node->is_object() || ++Result.Objects > MaximumPackageContentObjectsPerUnit) return Result;
+				const auto ClassName = Node->value("ClassName", "");
+				if (ClassName == "Script" || ClassName == "ModuleScript" || ClassName == "RemoteEvent" ||
+					ClassName == "RemoteFunction" || ClassName == "Character" || ClassName == "KinematicCharacter" ||
+					ClassName == "Player" || ClassName == "Camera" || ClassName == "Terrain" || ClassName == "FileLink")
+					Result.BootstrapOnly = true;
+				if (Node->contains("Properties") && (*Node)["Properties"].is_object()) {
+					const auto &Properties = (*Node)["Properties"];
+					if (Properties.contains("CFrame") && Properties["CFrame"].is_object() &&
+						Properties["CFrame"].contains("CFrame") && Properties["CFrame"]["CFrame"].is_array() &&
+						Properties["CFrame"]["CFrame"].size() == 12 && Properties.contains("Size") &&
+						Properties["Size"].is_object() && Properties["Size"].contains("Vector3") &&
+						Properties["Size"]["Vector3"].is_array() && Properties["Size"]["Vector3"].size() == 3) {
+						const auto &Frame = Properties["CFrame"]["CFrame"];
+						const auto &Size = Properties["Size"]["Vector3"];
+						bool Finite = true;
+						std::array<double, 3> Center{}, Half{};
+						for (std::size_t Axis = 0; Axis < 3; ++Axis) {
+							if (!Frame[Axis].is_number() || !Size[Axis].is_number()) Finite = false;
+							else {
+								Center[Axis] = Frame[Axis].get<double>();
+								Half[Axis] = std::abs(Size[Axis].get<double>()) * 0.5;
+								Finite = Finite && std::isfinite(Center[Axis]) && std::isfinite(Half[Axis]);
+							}
+						}
+						std::array<double, 3> Extent{};
+						for (std::size_t Row = 0; Row < 3 && Finite; ++Row)
+							for (std::size_t Column = 0; Column < 3; ++Column) {
+								const auto Component = 3 + Column * 3 + Row;
+								if (!Frame[Component].is_number()) {
+									Finite = false;
+									break;
+								}
+								const auto Rotation = Frame[Component].get<double>();
+								if (!std::isfinite(Rotation)) {
+									Finite = false;
+									break;
+								}
+								Extent[Row] += std::abs(Rotation) * Half[Column];
+							}
+						if (Finite) {
+							HasBounds = true;
+							for (std::size_t Axis = 0; Axis < 3; ++Axis) {
+								Minimum[Axis] = std::min(Minimum[Axis], Center[Axis] - Extent[Axis]);
+								Maximum[Axis] = std::max(Maximum[Axis], Center[Axis] + Extent[Axis]);
+							}
+						}
+					}
+				}
+				if (Node->contains("Children") && (*Node)["Children"].is_array())
+					for (const auto &Child : (*Node)["Children"]) Pending.push_back(&Child);
+			}
+			if (HasBounds) {
+				PackageCoarseBounds Encoded;
+				for (std::size_t Axis = 0; Axis < 3; ++Axis) {
+					if (Minimum[Axis] < -std::numeric_limits<float>::max() ||
+						Maximum[Axis] > std::numeric_limits<float>::max()) return Result;
+					Encoded.Minimum[Axis] = static_cast<float>(Minimum[Axis]);
+					Encoded.Maximum[Axis] = static_cast<float>(Maximum[Axis]);
+				}
+				Result.Bounds = Encoded;
+			}
+			return Result;
+		}
+
+		void PartitionPackageContent(GamePayload &Payload) {
+			auto Project = JsonCodec::Parse(Payload.ProjectJson, MaximumProjectSnapshotBytes, "package project snapshot");
+			if (!Project || !Project->is_object() || !Project->contains("Children") || !(*Project)["Children"].is_array())
+				throw std::runtime_error("Package project snapshot cannot be partitioned");
+			Json *Workspace = nullptr;
+			for (auto &Child : (*Project)["Children"])
+				if (Child.is_object() && Child.value("ClassName", "") == "Workspace") {
+					Workspace = &Child;
+					break;
+				}
+			if (!Workspace || !Workspace->contains("Children") || !(*Workspace)["Children"].is_array())
+				throw std::runtime_error("Package project has no serializable Workspace");
+			Json Retained = Json::array();
+			std::size_t UnitNumber = 0;
+			for (auto &Child : (*Workspace)["Children"]) {
+				auto Inspection = InspectSerializedSubtree(Child);
+				if (Inspection.BootstrapOnly || !Inspection.Bounds || Inspection.Objects == 0 ||
+					Inspection.Objects > MaximumPackageContentObjectsPerUnit) {
+					Retained.push_back(std::move(Child));
+					continue;
+				}
+				auto Unit = Child;
+				Unit["Version"] = PackageContentInstanceSchemaVersion;
+				auto Encoded = JsonCodec::Encode(Unit, "package content unit");
+				if (!Encoded || Encoded->empty() || Encoded->size() > MaximumPackageContentPayloadBytes) {
+					Retained.push_back(std::move(Child));
+					continue;
+				}
+				const auto Key = std::format("workspace/{:08x}", UnitNumber++);
+				const auto Blob = std::format("content/regions/{:08x}.instance.json", UnitNumber - 1);
+				const auto Bytes = std::span(reinterpret_cast<const std::uint8_t *>(Encoded->data()), Encoded->size());
+				Payload.ContentUnits.push_back({
+					.Entry = {
+						.Key = Key,
+						.BlobReference = Blob,
+						.Digest = AssetContentId::Hash(Bytes),
+						.CompressedBytes = Encoded->size(),
+						.UncompressedBytes = Encoded->size(),
+						.ObjectCount = static_cast<std::uint32_t>(Inspection.Objects),
+						.Dependencies = {},
+						.PackageSpaceKey = "default",
+						.CoarseBounds = Inspection.Bounds,
+						.Flags = PackageContentFlags::ImmutableBaseline,
+					},
+					.Payload = std::move(*Encoded),
+				});
+			}
+			(*Workspace)["Children"] = std::move(Retained);
+			auto Bootstrap = JsonCodec::Encode(*Project, "package bootstrap project");
+			if (!Bootstrap || Bootstrap->size() > MaximumProjectSnapshotBytes)
+				throw std::runtime_error("Package bootstrap project exceeds its bound");
+			Payload.ProjectJson = std::move(*Bootstrap);
 		}
 	}
 
@@ -859,6 +1049,7 @@ namespace gargantuan {
 		};
 		if (Result.DisplayName.empty() || Result.DisplayName.size() > MaximumDisplayNameBytes)
 			throw std::runtime_error("Project display name exceeds the package bound");
+		PartitionPackageContent(Result);
 		return Result;
 	}
 
@@ -890,8 +1081,23 @@ namespace gargantuan {
 					Request.Payload.DisplayName.size() > MaximumDisplayNameBytes ||
 					Request.Payload.ProjectJson.empty() ||
 					Request.Payload.ProjectJson.size() > MaximumProjectSnapshotBytes ||
-					Request.Payload.Assets.CatalogJson.size() > 1024 * 1024)
+					Request.Payload.Assets.CatalogJson.size() > 1024 * 1024 ||
+					Request.Payload.ContentUnits.size() > MaximumPackageContentUnits)
 					throw std::runtime_error("Package payload snapshot is invalid or exceeds its bounds");
+				PackageContentManifest ContentManifest{
+					.Package = {Request.Payload.Identity, Request.Payload.AuthoritativeRevision},
+					.InstanceSchemaVersion = PackageContentInstanceSchemaVersion,
+				};
+				for (const auto &Unit : Request.Payload.ContentUnits) {
+					if (Unit.Payload.size() != Unit.Entry.CompressedBytes ||
+						Unit.Entry.UncompressedBytes != Unit.Entry.CompressedBytes ||
+						AssetContentId::Hash(std::span(
+							reinterpret_cast<const std::uint8_t *>(Unit.Payload.data()), Unit.Payload.size()
+						)) != Unit.Entry.Digest)
+						throw std::runtime_error("Package content unit does not match its immutable metadata");
+					ContentManifest.Entries.push_back(Unit.Entry);
+				}
+				(void)ParsePackageContentManifest(EncodePackageContentManifest(ContentManifest)).value();
 			});
 
 			std::optional<RuntimeDistributionDescription> Distribution;
@@ -944,6 +1150,15 @@ namespace gargantuan {
 					));
 				};
 				AddText("content/game.instance.json", "Project", Request.Payload.ProjectJson);
+				PackageContentManifest ContentManifest{
+					.Package = {Request.Payload.Identity, Request.Payload.AuthoritativeRevision},
+					.InstanceSchemaVersion = PackageContentInstanceSchemaVersion,
+				};
+				for (const auto &Unit : Request.Payload.ContentUnits) {
+					ContentManifest.Entries.push_back(Unit.Entry);
+					AddText(Unit.Entry.BlobReference, "Project", Unit.Payload);
+				}
+				AddText("content/content.manifest.json", "Project", EncodePackageContentManifest(ContentManifest));
 				AddText("content/assets/catalog.json", "Asset", Request.Payload.Assets.CatalogJson);
 				if (Request.Payload.PreRunSource)
 					AddText("content/prerun.luau", "Project", *Request.Payload.PreRunSource);
@@ -975,6 +1190,7 @@ namespace gargantuan {
 				const auto ContentHash = HashText(Content.dump());
 				Json Startup{
 					{"Project", "content/game.instance.json"},
+					{"ContentManifest", "content/content.manifest.json"},
 					{"AssetCatalog", "content/assets/catalog.json"},
 					{"PreRun", Request.Payload.PreRunSource ? Json("content/prerun.luau") : Json(nullptr)},
 				};
@@ -1125,6 +1341,8 @@ namespace gargantuan {
 		if (!Manifest) return std::nullopt;
 		try {
 			RuntimePackagePayload Result{.Inspection = Manifest->Inspection};
+			Result.ContentManifestReference = Manifest->ContentManifestPath;
+			Result.ContentManifestDigest = Manifest->ContentManifestDigest;
 			Result.ProjectJson = ReadBoundedText(
 				*ResolvePackageFile(PackageRoot, Manifest->ProjectPath, true), MaximumProjectSnapshotBytes
 			);
@@ -1184,6 +1402,25 @@ namespace gargantuan {
 		if (!Assets) throw std::runtime_error("The packaged project has no canonical AssetService");
 		Assets->LoadRuntimeAssetSnapshot(Payload.Assets);
 		return World;
+	}
+
+	std::optional<ContentAvailabilityConfiguration> PackageBuilder::GetLocalContentConfiguration(
+		const RuntimePackagePayload &Payload,
+		const std::filesystem::path &PackageRoot,
+		ContentResidencyMode Mode
+	) {
+		if (!Payload.ContentManifestReference) return std::nullopt;
+		if (!PackageRoot.is_absolute() || !Payload.Inspection.Identity.IsValid() || Payload.Inspection.Revision == 0 ||
+			!Payload.ContentManifestDigest.IsValid())
+			throw std::invalid_argument("Packaged content configuration is invalid");
+		return ContentAvailabilityConfiguration{
+			.Provider = std::make_shared<LocalPackageContentProvider>(
+				PackageRoot, *Payload.ContentManifestReference, Payload.ContentManifestDigest
+			),
+			.Package = {Payload.Inspection.Identity, Payload.Inspection.Revision},
+			.ManifestDigest = Payload.ContentManifestDigest,
+			.Mode = Mode,
+		};
 	}
 
 	std::size_t PackageBuilder::HydrateClientCode(

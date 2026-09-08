@@ -653,6 +653,11 @@ if(BUILD_TESTING)
 	target_link_libraries(gargantuan_replication_relevance_tests PRIVATE gargantuan_core)
 	add_executable(gargantuan_spatial_region_index_tests "tests/SpatialRegionIndexTests.cpp")
 	target_link_libraries(gargantuan_spatial_region_index_tests PRIVATE gargantuan_core)
+	add_executable(gargantuan_content_availability_tests "tests/ContentAvailabilityTests.cpp")
+	target_link_libraries(gargantuan_content_availability_tests PRIVATE gargantuan_core)
+	add_test(NAME gargantuan_content_availability COMMAND gargantuan_content_availability_tests)
+	add_executable(gargantuan_content_availability_benchmark "tests/ContentAvailabilityBenchmark.cpp")
+	target_link_libraries(gargantuan_content_availability_benchmark PRIVATE gargantuan_core)
 	add_executable(gargantuan_remote_tests "tests/RemoteTests.cpp")
 	target_link_libraries(gargantuan_remote_tests PRIVATE gargantuan_core)
 	add_executable(gargantuan_remote_luau_tests "tests/RemoteLuauTests.cpp")
@@ -798,6 +803,8 @@ if(BUILD_TESTING)
 			gargantuan_remote_luau_tests
 			gargantuan_character_networking_tests
 			gargantuan_character_networking_benchmark
+			gargantuan_content_availability_tests
+			gargantuan_content_availability_benchmark
 			gargantuan_game_session_benchmark
 			gargantuan_replication_benchmark
 			gargantuan_remote_benchmark
@@ -918,9 +925,15 @@ if(BUILD_TESTING)
 	add_test(NAME gargantuan_remote_luau COMMAND gargantuan_remote_luau_tests)
 	add_test(NAME gargantuan_character_networking COMMAND gargantuan_character_networking_tests)
 	add_test(NAME gargantuan_character_networking_benchmark_smoke COMMAND gargantuan_character_networking_benchmark)
+	add_test(NAME gargantuan_content_availability_benchmark_smoke
+		COMMAND gargantuan_content_availability_benchmark --quick)
 	add_test(NAME gargantuan_replication_benchmark_smoke COMMAND gargantuan_replication_benchmark)
 	add_test(NAME gargantuan_remote_benchmark_smoke COMMAND gargantuan_remote_benchmark)
 	set_tests_properties(gargantuan_shader_tool_validation PROPERTIES LABELS "build;shader" TIMEOUT 60)
+	set_tests_properties(gargantuan_content_availability PROPERTIES
+		LABELS "content;packaging;runtime;lifecycle;security" TIMEOUT 180)
+	set_tests_properties(gargantuan_content_availability_benchmark_smoke PROPERTIES
+		LABELS "content;packaging;runtime;benchmark" TIMEOUT 180)
 	set_tests_properties(gargantuan_foundation PROPERTIES
 		LABELS "foundation;runtime;serialization;editorhost;protocol;renderer" TIMEOUT 300
 	)

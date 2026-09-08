@@ -214,6 +214,11 @@ int main(int argc, char *argv[]) {
 		const auto Mode = !ServerText.empty()
 							  ? RuntimeMode::NetworkServer
 							  : (!ClientText.empty() ? RuntimeMode::NetworkClient : RuntimeMode::Offline);
+		auto ProviderConfiguration = EngineProviderConfiguration{.AudioEnabled = !Headless, .Mode = Mode};
+		if (Mode != RuntimeMode::NetworkClient)
+			ProviderConfiguration.Content = PackageBuilder::GetLocalContentConfiguration(
+				*Payload, PackageRoot, ContentResidencyMode::FullyResident
+			);
 		Runtime = std::make_unique<Engine>(
 			World,
 			Renderer.get(),
@@ -221,7 +226,7 @@ int main(int argc, char *argv[]) {
 				if (Code == "Information") return;
 				std::cerr << "[Runtime:Diagnostic] [" << Code << "] " << Message << '\n';
 			},
-			EngineProviderConfiguration{.AudioEnabled = !Headless, .Mode = Mode}
+			std::move(ProviderConfiguration)
 		);
 #if defined(GARGANTUAN_WITH_GNS)
 		if (!ServerText.empty()) {

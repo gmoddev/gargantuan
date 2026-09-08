@@ -4,6 +4,7 @@
 #include "gargantuan/audio/AudioRuntime.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/WorldRoot.hpp"
+#include "gargantuan/content/ContentAvailability.hpp"
 #include "gargantuan/datatypes/Signal.hpp"
 #include "gargantuan/filesystem/SourceMount.hpp"
 #include "gargantuan/gui/GuiRuntime.hpp"
@@ -66,6 +67,7 @@ namespace gargantuan {
 		std::shared_ptr<SemanticSpatialResolver> Spatial;
 		std::unique_ptr<AudioRuntime> Audio;
 		std::shared_ptr<EntitlementService> Entitlements;
+		std::unique_ptr<ContentAvailabilityService> Content;
 		std::shared_ptr<InteractionService> Interaction;
 		std::shared_ptr<Lighting> Lighting;
 		std::shared_ptr<Players> Players;
@@ -84,6 +86,7 @@ namespace gargantuan {
 		float GetDeltaTime();
 		[[nodiscard]] HostEventResult ProcessEvent(const HostEvent &Event);
 		[[nodiscard]] bool ReplaceEntitlementProvider(std::shared_ptr<IEntitlementProvider> Provider);
+		[[nodiscard]] ContentAvailabilityService *GetContentAvailability() const { return Content.get(); }
 		[[nodiscard]] CharacterRootMotionMetrics GetCharacterRootMotionMetrics() const {
 			return RootMotionMetrics;
 		}

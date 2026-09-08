@@ -1,6 +1,7 @@
 #pragma once
 
 #include "gargantuan/assets/AssetTypes.hpp"
+#include "gargantuan/content/ContentAvailability.hpp"
 #include "gargantuan/filesystem/ProjectIdentity.hpp"
 
 #include <atomic>
@@ -18,7 +19,7 @@ namespace gargantuan {
 	class DataModel;
 	class Project;
 
-	inline constexpr std::uint32_t GamePackageFormatVersion = 1;
+	inline constexpr std::uint32_t GamePackageFormatVersion = 2;
 	inline constexpr std::uint32_t RuntimeCompatibilityVersion = 1;
 
 	enum class PackageConfiguration : std::uint8_t { Development, Release };
@@ -69,6 +70,11 @@ namespace gargantuan {
 		std::string ProjectJson;
 		std::optional<std::string> PreRunSource;
 		AssetRuntimeSnapshot Assets;
+		struct ContentUnit final {
+			PackageContentEntry Entry;
+			std::string Payload;
+		};
+		std::vector<ContentUnit> ContentUnits;
 	};
 
 	struct PackageSizeBreakdown {
@@ -125,6 +131,8 @@ namespace gargantuan {
 		std::string ProjectJson;
 		std::optional<std::string> PreRunSource;
 		AssetRuntimeSnapshot Assets;
+		std::optional<std::string> ContentManifestReference;
+		AssetContentId ContentManifestDigest;
 	};
 
 	class PackageBuilder final {
@@ -143,6 +151,11 @@ namespace gargantuan {
 		Load(const std::filesystem::path &PackageRoot, std::vector<PackageDiagnostic> &Diagnostics);
 		[[nodiscard]] static std::shared_ptr<DataModel>
 		LoadWorld(const RuntimePackagePayload &Payload, const std::filesystem::path &PackageRoot);
+		[[nodiscard]] static std::optional<ContentAvailabilityConfiguration> GetLocalContentConfiguration(
+			const RuntimePackagePayload &Payload,
+			const std::filesystem::path &PackageRoot,
+			ContentResidencyMode Mode = ContentResidencyMode::FullyResident
+		);
 		[[nodiscard]] static std::size_t HydrateClientCode(
 			const std::shared_ptr<DataModel> &TrustedPackageWorld, const std::shared_ptr<DataModel> &ReplicatedWorld
 		);

@@ -24,6 +24,7 @@
 #include <lua.h>
 #include <memory>
 #include <optional>
+#include <thread>
 
 namespace gargantuan {
 	Engine::Engine(
@@ -136,6 +137,29 @@ namespace gargantuan {
 			}
 		});
 		DataModelDestroyingConnection = DataModel->Destroying->Once([this](std::monostate) { Destroy(); });
+		const bool PreloadAllContent = ProviderConfiguration.Content &&
+			ProviderConfiguration.Content->Mode == ContentResidencyMode::FullyResident;
+		const auto ContentStartupDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+		if (ProviderConfiguration.Content) {
+			Content = std::make_unique<ContentAvailabilityService>(
+				DataModel,
+				Workspace,
+				std::move(*ProviderConfiguration.Content),
+				[](std::string Code, std::string Message) {
+					LOG_WARN(App, "[Content:Availability] %s: %s", Code.c_str(), Message.c_str());
+				}
+			);
+			if (PreloadAllContent) {
+				while (!Content->IsFullyResident()) {
+					Content->Step();
+					if (std::chrono::steady_clock::now() >= ContentStartupDeadline ||
+						(Content->IsManifestAvailable() && Content->GetActiveRequestCount() == 0 &&
+						 !Content->IsFullyResident()))
+						throw std::runtime_error("[Content:Availability] fully resident package bootstrap failed");
+					std::this_thread::yield();
+				}
+			}
+		}
 
 		Script->RunBootstrapScript(Players->StartDefaultRuntime(ProviderConfiguration.Mode));
 		Interaction->StartDefaultRuntime();
@@ -151,6 +175,7 @@ namespace gargantuan {
 		if (Destroyed) return;
 		Destroyed = true;
 		LOG_INFO(App, "Destroying engine");
+		if (Content) Content->Stop();
 		if (DataModelDestroyingConnection) {
 			DataModelDestroyingConnection->Disconnect();
 			DataModelDestroyingConnection.reset();
@@ -224,6 +249,7 @@ namespace gargantuan {
 	void Engine::Step() {
 		if (!ProcessService->Alive) return;
 		Mutations.Drain();
+		if (Content) Content->Step();
 
 		CurrentTick = std::chrono::steady_clock::now();
 		if (LastTick.time_since_epoch().count() == 0) LastTick = CurrentTick;
