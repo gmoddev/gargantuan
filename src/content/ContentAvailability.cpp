@@ -822,7 +822,11 @@ namespace gargantuan {
 				Prepared.ObjectsDecoded != Entry.ObjectCount) {
 				RecordValue.Residency = ContentResidencyState::Failed;
 				++State->Metrics.Failures;
-				State->Report("AdmissionDecodeRejected", "Content payload did not decode to its declared detached subtree");
+				const auto Detail = !Prepared.Errors.empty()
+					? Prepared.Errors.front()
+					: "decoded " + std::to_string(Prepared.ObjectsDecoded) + " objects; expected " +
+						std::to_string(Entry.ObjectCount);
+				State->Report("AdmissionDecodeRejected", "Content payload did not decode to its declared detached subtree: " + Detail);
 				continue;
 			}
 			auto Descendants = Prepared.Instance->GetDescendants();
