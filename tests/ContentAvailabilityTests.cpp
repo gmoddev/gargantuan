@@ -176,7 +176,6 @@ int main() {
 		"admission did not create an authoritative Workspace lifetime");
 	if (!FirstRegion) {
 		Service.Stop();
-		TeardownNativeRuntimeSchema();
 		return 1;
 	}
 	const auto FirstObject = FirstRegion->GetObjectId();
