@@ -3,6 +3,7 @@
 #include "gargantuan/animation/AnimationTrack.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Instance.hpp"
+#include "gargantuan/classes/RemoteFunction.hpp"
 #include "gargantuan/classes/Script.hpp"
 #include "gargantuan/datatypes/Axes.hpp"
 #include "gargantuan/datatypes/CFrame.hpp"
@@ -172,6 +173,9 @@ namespace gargantuan {
 
 	ScriptEngine::~ScriptEngine() {
 		if (L) {
+			for (auto &WeakFunction : RemoteFunctions)
+				if (auto Function = WeakFunction.lock()) Function->ClearHandlers();
+			RemoteFunctions.clear();
 			for (auto &WeakScript : ManagedScripts)
 				if (auto ScriptValue = WeakScript.lock()) ScriptValue->Cleanup();
 			ManagedScripts.clear();
@@ -192,6 +196,16 @@ namespace gargantuan {
 				return !Existing || !Existing->Connected;
 			});
 		SignalConnections.emplace_back(Connection);
+	}
+
+	void ScriptEngine::TrackRemoteFunction(const std::shared_ptr<RemoteFunction> &Function) {
+		if (!Function) return;
+		std::erase_if(RemoteFunctions, [](const auto &WeakFunction) { return WeakFunction.expired(); });
+		if (std::ranges::any_of(RemoteFunctions, [&](const auto &WeakFunction) {
+				return WeakFunction.lock() == Function;
+			}))
+			return;
+		RemoteFunctions.emplace_back(Function);
 	}
 
 	ScriptEngine *ScriptEngine::Get(lua_State *L) {

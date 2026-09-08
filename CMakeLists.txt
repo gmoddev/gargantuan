@@ -174,6 +174,9 @@ set(SDLIMAGE_PNG_LIBPNG OFF CACHE BOOL "" FORCE)
 set(SDLTTF_VENDORED ON CACHE BOOL "" FORCE)
 set(SDLTTF_HARFBUZZ ON CACHE BOOL "" FORCE)
 set(SDLTTF_PLUTOSVG OFF CACHE BOOL "" FORCE)
+# Keep the bundled static FreeType closure independent of whatever optional
+# package-manager libraries happen to be visible to a host-support superbuild.
+set(FT_DISABLE_ZLIB ON CACHE BOOL "" FORCE)
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 
 add_subdirectory(vendor/argparse SYSTEM)
@@ -184,6 +187,12 @@ add_subdirectory(vendor/json SYSTEM)
 add_subdirectory(vendor/luau SYSTEM)
 add_subdirectory(vendor/sdl SYSTEM)
 add_subdirectory(vendor/sdl_image SYSTEM)
+# A parent superbuild may already have found a package-manager zlib for gRPC.
+# Do not let that cached result change the bundled static FreeType ABI or leak a
+# Node-only DLL into GargantuanPlayer.
+if(FT_DISABLE_ZLIB)
+	set(ZLIB_FOUND OFF)
+endif()
 add_subdirectory(vendor/sdl_ttf SYSTEM)
 
 # SDL expands __FILE__ into diagnostics that ship in its runtime library. Keep
@@ -225,6 +234,8 @@ option(GARGANTUAN_BUILD_RENDERER_BENCHMARKS "Build the manual renderer feasibili
 option(GARGANTUAN_BUILD_SERIALIZATION_BENCHMARKS "Build the serialization baseline benchmark" ON)
 option(GARGANTUAN_BUILD_GLAZE_SERIALIZATION_PROTOTYPE "Build the private Glaze codec evaluation targets" OFF)
 option(GARGANTUAN_WITH_GNS "Build the optional GameNetworkingSockets transport adapter" OFF)
+option(GARGANTUAN_WITH_NODE_CONTENT "Build the trusted GargantuanServer Node ContentStreaming adapter" OFF)
+set(GARGANTUAN_NODE_PROTOCOL_ROOT "" CACHE PATH "Path to gargantuan-node/protocol/proto for official Server Node content support")
 option(GARGANTUAN_RUN_GRAPHICAL_PACKAGE_SMOKE "Run the packaged player smoke on a GPU-capable test host" OFF)
 set(GARGANTUAN_FILAMENT_ROOT "" CACHE PATH "External Filament SDK root for the experimental renderer benchmark")
 set(GARGANTUAN_WITH_FILAMENT OFF)
@@ -251,6 +262,38 @@ add_subdirectory(vendor/tracy)
 
 if(GARGANTUAN_WITH_GNS)
 	include(cmake/GameNetworkingSockets.cmake)
+endif()
+
+if(GARGANTUAN_WITH_NODE_CONTENT)
+	if(NOT EXISTS "${GARGANTUAN_NODE_PROTOCOL_ROOT}/content/v1/content.proto")
+		message(FATAL_ERROR
+			"GARGANTUAN_WITH_NODE_CONTENT requires GARGANTUAN_NODE_PROTOCOL_ROOT to name the canonical gargantuan-node protocol/proto directory")
+	endif()
+	find_package(Protobuf CONFIG QUIET)
+	if(NOT Protobuf_FOUND)
+		find_package(Protobuf REQUIRED)
+	endif()
+	find_package(gRPC CONFIG REQUIRED)
+	set(GARGANTUAN_NODE_CONTENT_PROTO "${GARGANTUAN_NODE_PROTOCOL_ROOT}/content/v1/content.proto")
+	set(GARGANTUAN_NODE_CONTENT_GENERATED_ROOT "${CMAKE_CURRENT_BINARY_DIR}/generated/node-content")
+	set(GARGANTUAN_NODE_CONTENT_GENERATED_SOURCES
+		"${GARGANTUAN_NODE_CONTENT_GENERATED_ROOT}/content/v1/content.pb.cc"
+		"${GARGANTUAN_NODE_CONTENT_GENERATED_ROOT}/content/v1/content.grpc.pb.cc")
+	set(GARGANTUAN_NODE_CONTENT_GENERATED_HEADERS
+		"${GARGANTUAN_NODE_CONTENT_GENERATED_ROOT}/content/v1/content.pb.h"
+		"${GARGANTUAN_NODE_CONTENT_GENERATED_ROOT}/content/v1/content.grpc.pb.h")
+	add_custom_command(
+		OUTPUT ${GARGANTUAN_NODE_CONTENT_GENERATED_SOURCES} ${GARGANTUAN_NODE_CONTENT_GENERATED_HEADERS}
+		COMMAND ${CMAKE_COMMAND} -E make_directory "${GARGANTUAN_NODE_CONTENT_GENERATED_ROOT}/content/v1"
+		COMMAND protobuf::protoc
+			--proto_path "${GARGANTUAN_NODE_PROTOCOL_ROOT}"
+			--cpp_out "${GARGANTUAN_NODE_CONTENT_GENERATED_ROOT}"
+			--grpc_out "${GARGANTUAN_NODE_CONTENT_GENERATED_ROOT}"
+			--plugin=protoc-gen-grpc=$<TARGET_FILE:gRPC::grpc_cpp_plugin>
+			"${GARGANTUAN_NODE_CONTENT_PROTO}"
+		DEPENDS "${GARGANTUAN_NODE_CONTENT_PROTO}"
+		VERBATIM
+	)
 endif()
 
 option(
@@ -319,6 +362,20 @@ endif()
 target_link_libraries(gargantuan_player PRIVATE gargantuan_player_host gargantuan_core ${CMAKE_DL_LIBS})
 add_library(gargantuan_server_host STATIC "src/host/server/ServerHost.cpp")
 target_link_libraries(gargantuan_server_host PUBLIC gargantuan_runtime_host)
+if(GARGANTUAN_WITH_NODE_CONTENT)
+	add_library(gargantuan_node_content_provider STATIC
+		"src/host/server/NodeContentProvider.cpp"
+		${GARGANTUAN_NODE_CONTENT_GENERATED_SOURCES}
+		${GARGANTUAN_NODE_CONTENT_GENERATED_HEADERS}
+	)
+	target_include_directories(gargantuan_node_content_provider
+		PRIVATE "${GARGANTUAN_NODE_CONTENT_GENERATED_ROOT}")
+	target_link_libraries(gargantuan_node_content_provider
+		PUBLIC gargantuan_core
+		PRIVATE gRPC::grpc++ protobuf::libprotobuf)
+	target_link_libraries(gargantuan_server_host PRIVATE gargantuan_node_content_provider)
+	target_compile_definitions(gargantuan_server_host PRIVATE GARGANTUAN_WITH_NODE_CONTENT=1)
+endif()
 add_executable(gargantuan_server "src/server/ServerMain.cpp")
 set_target_properties(gargantuan_server PROPERTIES OUTPUT_NAME "GargantuanServer")
 if(APPLE)
@@ -395,6 +452,51 @@ if(GARGANTUAN_WITH_GNS)
 			-DGARGANTUAN_PROTOBUF_RUNTIME_FILE=${GARGANTUAN_PROTOBUF_RUNTIME_FILE})
 	endif()
 endif()
+set(GARGANTUAN_NODE_SERVER_RUNTIME_ARGUMENTS)
+if(GARGANTUAN_WITH_NODE_CONTENT AND WIN32)
+	list(APPEND GARGANTUAN_NODE_SERVER_RUNTIME_ARGUMENTS
+		"-DGARGANTUAN_OPTIONAL_RUNTIME_FILES=$<JOIN:$<TARGET_RUNTIME_DLLS:gargantuan_server>,|>")
+	if(DEFINED VCPKG_INSTALLED_DIR AND DEFINED VCPKG_TARGET_TRIPLET)
+		set(GARGANTUAN_NODE_REQUIRED_RUNTIME_COUNT 0)
+		foreach(GARGANTUAN_NODE_RUNTIME_NAMES IN ITEMS
+			"libcrypto-3-x64.dll|libcrypto-3-x64.dll"
+			"libssl-3-x64.dll|libssl-3-x64.dll"
+			"zlib1.dll|zlibd1.dll")
+			string(REPLACE "|" ";" GARGANTUAN_NODE_RUNTIME_NAME_PAIR
+				"${GARGANTUAN_NODE_RUNTIME_NAMES}")
+			list(GET GARGANTUAN_NODE_RUNTIME_NAME_PAIR 0 GARGANTUAN_NODE_RELEASE_RUNTIME_NAME)
+			list(GET GARGANTUAN_NODE_RUNTIME_NAME_PAIR 1 GARGANTUAN_NODE_DEBUG_RUNTIME_NAME)
+			set(GARGANTUAN_NODE_RELEASE_RUNTIME_FILE
+				"${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin/${GARGANTUAN_NODE_RELEASE_RUNTIME_NAME}")
+			set(GARGANTUAN_NODE_DEBUG_RUNTIME_FILE
+				"${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/debug/bin/${GARGANTUAN_NODE_DEBUG_RUNTIME_NAME}")
+			if(NOT EXISTS "${GARGANTUAN_NODE_RELEASE_RUNTIME_FILE}" OR
+				NOT EXISTS "${GARGANTUAN_NODE_DEBUG_RUNTIME_FILE}")
+				message(FATAL_ERROR
+					"A required Node provider runtime is unavailable: ${GARGANTUAN_NODE_RUNTIME_NAMES}")
+			endif()
+			list(APPEND GARGANTUAN_NODE_SERVER_RUNTIME_ARGUMENTS
+				"-DGARGANTUAN_NODE_REQUIRED_RUNTIME_FILE_${GARGANTUAN_NODE_REQUIRED_RUNTIME_COUNT}=$<IF:$<CONFIG:Debug>,${GARGANTUAN_NODE_DEBUG_RUNTIME_FILE},${GARGANTUAN_NODE_RELEASE_RUNTIME_FILE}>")
+			math(EXPR GARGANTUAN_NODE_REQUIRED_RUNTIME_COUNT
+				"${GARGANTUAN_NODE_REQUIRED_RUNTIME_COUNT} + 1")
+		endforeach()
+		list(APPEND GARGANTUAN_NODE_SERVER_RUNTIME_ARGUMENTS
+			-DGARGANTUAN_NODE_REQUIRED_RUNTIME_COUNT=${GARGANTUAN_NODE_REQUIRED_RUNTIME_COUNT})
+		set(GARGANTUAN_NODE_NOTICE_COUNT 0)
+		foreach(GARGANTUAN_NODE_NOTICE_PACKAGE IN ITEMS abseil c-ares grpc openssl re2 upb zlib)
+			set(GARGANTUAN_NODE_NOTICE_FILE
+				"${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/share/${GARGANTUAN_NODE_NOTICE_PACKAGE}/copyright")
+			if(EXISTS "${GARGANTUAN_NODE_NOTICE_FILE}")
+				list(APPEND GARGANTUAN_NODE_SERVER_RUNTIME_ARGUMENTS
+					"-DGARGANTUAN_OPTIONAL_NOTICE_FILE_${GARGANTUAN_NODE_NOTICE_COUNT}=${GARGANTUAN_NODE_NOTICE_FILE}"
+					"-DGARGANTUAN_OPTIONAL_NOTICE_NAME_${GARGANTUAN_NODE_NOTICE_COUNT}=${GARGANTUAN_NODE_NOTICE_PACKAGE}.txt")
+				math(EXPR GARGANTUAN_NODE_NOTICE_COUNT "${GARGANTUAN_NODE_NOTICE_COUNT} + 1")
+			endif()
+		endforeach()
+		list(APPEND GARGANTUAN_NODE_SERVER_RUNTIME_ARGUMENTS
+			-DGARGANTUAN_OPTIONAL_NOTICE_COUNT=${GARGANTUAN_NODE_NOTICE_COUNT})
+	endif()
+endif()
 add_custom_target(gargantuan_runtime_distribution ALL
 	COMMAND ${CMAKE_COMMAND}
 		-DGARGANTUAN_RUNTIME_DISTRIBUTION_ROOT=$<TARGET_FILE_DIR:gargantuan_player>/RuntimeDistribution
@@ -420,6 +522,7 @@ add_custom_target(gargantuan_server_runtime_distribution ALL
 		${GARGANTUAN_SDL_SONAME_ARGUMENT}
 		${GARGANTUAN_SYSTEM_RUNTIME_ARGUMENTS}
 		${GARGANTUAN_NETWORK_RUNTIME_ARGUMENTS}
+		${GARGANTUAN_NODE_SERVER_RUNTIME_ARGUMENTS}
 		-DGARGANTUAN_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}
 		-DGARGANTUAN_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
 		-DGARGANTUAN_PLATFORM=${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCESSOR}

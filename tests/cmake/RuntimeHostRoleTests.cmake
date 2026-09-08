@@ -40,13 +40,32 @@ GargantuanRequireRejected(
 	"Player server bind" "${GARGANTUAN_PLAYER}" "use GargantuanServer --bind" --server-bind 127.0.0.1:46001
 )
 GargantuanRequireRejected(
-	"Player server provider" "${GARGANTUAN_PLAYER}" "arguments are invalid" --node-token-environment GARGANTUAN_SECRET
+	"Player Node provider" "${GARGANTUAN_PLAYER}" "arguments are invalid" --content-provider node
+)
+GargantuanRequireRejected(
+	"Player Node endpoint" "${GARGANTUAN_PLAYER}" "arguments are invalid" --content-node-endpoint 127.0.0.1:46002
 )
 GargantuanRequireRejected(
 	"Server client connect" "${GARGANTUAN_SERVER}" "use GargantuanPlayer" --connect 127.0.0.1:46001
 )
 GargantuanRequireRejected(
 	"Server graphical state" "${GARGANTUAN_SERVER}" "use GargantuanPlayer" --renderer vulkan
+)
+GargantuanRequireRejected(
+	"Server Node missing endpoint" "${GARGANTUAN_SERVER}" "requires --content-node-endpoint"
+	--content-provider node --content-node-root-ca root.pem --content-node-token-env GARGANTUAN_SECRET
+)
+GargantuanRequireRejected(
+	"Server Node missing token source" "${GARGANTUAN_SERVER}" "requires --content-node-token-env"
+	--content-provider node --content-node-endpoint 127.0.0.1:46002 --content-node-root-ca root.pem
+)
+GargantuanRequireRejected(
+	"Server Node missing root CA" "${GARGANTUAN_SERVER}" "requires --content-node-root-ca"
+	--content-provider node --content-node-endpoint 127.0.0.1:46002 --content-node-token-env GARGANTUAN_SECRET
+)
+GargantuanRequireRejected(
+	"Server invalid content residency" "${GARGANTUAN_SERVER}" "content provider arguments are invalid"
+	--content-residency automatic
 )
 GargantuanRequireParserAccepted("Offline Player" "${GARGANTUAN_PLAYER}")
 GargantuanRequireParserAccepted(

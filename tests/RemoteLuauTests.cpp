@@ -457,6 +457,32 @@ int main() {
 		);
 	}
 
+	{
+		auto LifetimeGame = std::make_shared<DataModel>();
+		auto LifetimeEngine = std::make_unique<ScriptEngine>(LifetimeGame);
+		auto LifetimeFunction = std::make_shared<RemoteFunction>();
+		Visible.insert(LifetimeFunction->GetObjectId());
+		Check(
+			LifetimeFunction->BindRemoteManager(&Server) &&
+				Server.PublishRemote(Connection, LifetimeFunction->GetObjectId()),
+			"lifetime RemoteFunction is bound and visible"
+		);
+		PushGlobal(LifetimeEngine->L, "LifetimeFunction", LifetimeFunction);
+		{
+			ScriptSecurityScope Scope(
+				{ScriptExecutionDomain::Server,
+				 {ScriptCapability::ReadDataModel, ScriptCapability::NetworkSend, ScriptCapability::NetworkReceive}}
+			);
+			Check(
+				Run(*LifetimeEngine, "LifetimeFunction:SetServerHandler(function(Peer) return 1 end)") == LUA_OK,
+				"lifetime RemoteFunction installs a handler"
+			);
+		}
+		LifetimeEngine.reset();
+		LifetimeFunction.reset();
+		Check(true, "RemoteFunction can outlive its ScriptEngine without accessing a closed Luau VM");
+	}
+
 	ServerEvent->Destroy();
 	Check(
 		Server.SendEvent(Connection, ServerEvent->GetObjectId(), {}).Status == RemoteSendStatus::UnknownRemote,

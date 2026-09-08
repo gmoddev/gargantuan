@@ -1289,8 +1289,8 @@ namespace gargantuan {
 			if (RecordValue.RequestCancelled) RecordValue.RequestCancelled->store(true, std::memory_order_release);
 		++State->Generation;
 		State->Metrics.Cancellations += State->InFlight + State->Pending;
-		State->Jobs.Shutdown(false);
 		State->Configuration.Provider->Stop();
+		State->Jobs.Shutdown(false);
 		for (auto &RecordValue : State->Records) {
 			if (RecordValue.Root && !RecordValue.Root->GetDestroyed()) RecordValue.Root->Destroy();
 			RecordValue.Root.reset();

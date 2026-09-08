@@ -226,11 +226,13 @@ fetch new content never revokes existing world authority.
 
 ## Node trust boundary
 
-The private Node adapter sends only request correlation, project ID, package
-version, and logical content key. The TLS endpoint, root certificate, workload
-token environment variable, response bounds, and deadlines come only from
-trusted host configuration. Responses must echo the exact request identity.
-Engine still hashes every manifest and payload before admission.
+The Node adapter, promoted from the original private 3L integration fixture to
+the internal production Server-host target by Runtime Host Foundation 1.1,
+sends only request correlation, project ID, package version, and logical content
+key. The TLS endpoint, root certificate, workload token environment variable,
+response bounds, and deadlines come only from trusted host configuration.
+Responses must echo the exact request identity. Engine still hashes every
+manifest and payload before admission.
 
 Node derives tenant exclusively from the authenticated workload principal.
 `GetManifest` requires `content.manifest.read`; `GetContent` requires

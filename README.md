@@ -184,6 +184,23 @@ Production account identity, discovery/matchmaking orchestration, and the final 
 
 The engine is not required to depend on a Node process for local/offline execution. Online identity and service authority are designed as explicit optional boundaries rather than assumptions embedded into the core runtime.
 
+Packaged `GargantuanServer` uses local package content by default. A deployment
+that builds the optional Node ContentStreaming adapter can select it explicitly:
+
+```text
+GargantuanServer --bind 127.0.0.1:46000 \
+  --content-provider node \
+  --content-residency on-demand \
+  --content-node-endpoint node.example:7443 \
+  --content-node-root-ca deployment-root.pem \
+  --content-node-token-env GARGANTUAN_NODE_TOKEN
+```
+
+Node mode is TLS-only and reads the workload token from the named environment
+variable; no literal-token CLI is provided. These are trusted Server deployment
+options, not package, Player, client-protocol, or Luau settings. Explicit Node
+selection fails closed and never falls back to local content.
+
 ## Experimental Scope
 
 Gargantuan is not feature complete and should not yet be considered a production replacement for established engines.

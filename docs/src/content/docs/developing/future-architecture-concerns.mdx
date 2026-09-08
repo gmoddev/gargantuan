@@ -305,17 +305,20 @@ expanding the control plane. Each new distributed mechanism should be justified
 by a required topology, failure mode, or measured scale rather than platform
 aspiration alone.
 
-The engine-specific C++ adapter under Node's `integration/gargantuan` is
-deliberately documented as a private first-party boundary and keeps generated
-gRPC types out of public Engine headers. Revisit its packaging only when there
-is a concrete independent SDK or deployment consumer.
+Runtime Host Foundation 1.1 moved the engine-specific C++ adapter from Node's
+`integration/gargantuan` fixture into Gargantuan's internal Server-host support
+target so official `GargantuanServer` can compose it. Generated gRPC types still
+do not enter public Engine headers, semantic core does not depend on either
+host, and this remains private first-party infrastructure rather than a generic
+SDK.
 
 ### Node transport and bootstrap identity
 
 **Validation: The original concern was overstated.** TLS is optional for the
 default loopback listener, but configuration rejects non-loopback plaintext
-unless the operator explicitly enables `tls.insecure_remote`. The private Engine
-adapter requires TLS. Static bearer principals are loaded from environment or
+unless the operator explicitly enables `tls.insecure_remote`. Official
+GargantuanServer Node-content mode requires TLS and has no plaintext route.
+Static bearer principals are loaded from environment or
 files and compared as constant-time keyed hashes.
 
 The remaining future concern is production identity, not an accidental open

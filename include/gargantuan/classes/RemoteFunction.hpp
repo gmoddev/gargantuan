@@ -4,6 +4,8 @@
 #include "gargantuan/classes/generated/RemoteFunction.hpp"
 
 namespace gargantuan {
+	class ScriptEngine;
+
 	class RemoteFunction final : public RemoteBase {
 		I_RemoteFunction;
 
@@ -16,6 +18,7 @@ namespace gargantuan {
 		void BindRequestHandler();
 
 	  private:
+		friend class ScriptEngine;
 		lua_State *HandlerState = nullptr;
 		int ServerHandlerReference = LUA_NOREF;
 		int ClientHandlerReference = LUA_NOREF;

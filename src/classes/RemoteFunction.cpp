@@ -3,6 +3,7 @@
 #include "gargantuan/Log.hpp"
 #include "gargantuan/network/RemoteLuau.hpp"
 #include "gargantuan/network/RemoteManager.hpp"
+#include "gargantuan/scripting/ScriptEngine.hpp"
 #include "gargantuan/scripting/ScriptSecurity.hpp"
 
 #include <cmath>
@@ -284,6 +285,9 @@ namespace gargantuan {
 		if (Function->ServerHandlerReference != LUA_NOREF)
 			lua_unref(Function->HandlerState, Function->ServerHandlerReference);
 		Function->ServerHandlerReference = lua_ref(L, 2);
+		ScriptEngine::Get(MainState)->TrackRemoteFunction(
+			std::dynamic_pointer_cast<RemoteFunction>(Function->shared_from_this())
+		);
 		Function->BindRequestHandler();
 		return 0;
 	}
@@ -305,6 +309,9 @@ namespace gargantuan {
 		if (Function->ClientHandlerReference != LUA_NOREF)
 			lua_unref(Function->HandlerState, Function->ClientHandlerReference);
 		Function->ClientHandlerReference = lua_ref(L, 2);
+		ScriptEngine::Get(MainState)->TrackRemoteFunction(
+			std::dynamic_pointer_cast<RemoteFunction>(Function->shared_from_this())
+		);
 		Function->BindRequestHandler();
 		return 0;
 	}

@@ -30,6 +30,7 @@
 using namespace gargantuan;
 
 int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
+	const auto HostStartupStarted = std::chrono::steady_clock::now();
 	argparse::ArgumentParser Program("GargantuanPlayer");
 	Program.add_description("Gargantuan standalone game runtime");
 	Program.add_argument("--headless").flag().help("disable the graphical renderer");
@@ -166,6 +167,11 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 			Payload->Inspection.DisplayName.c_str(),
 			Payload->Inspection.Identity.ToString().c_str()
 		);
+		std::cout << "[Runtime:Player] StartupWallMilliseconds="
+				  << std::chrono::duration_cast<std::chrono::milliseconds>(
+						 std::chrono::steady_clock::now() - HostStartupStarted
+					 ).count()
+				  << '\n';
 		(void)UserDataRoot;
 
 		SDLHost Host;
@@ -252,6 +258,12 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 			}
 		}
 		const auto ExitCode = Runtime->ProcessService->ExitCode;
+		if (SessionSmoke) {
+			if (const auto Value = Runtime->CharacterControl->GetAttributeValue("RemoteFunctionMetrics"))
+				if (const auto *MetricsText = std::get_if<std::string>(&*Value)) std::cout << *MetricsText << '\n';
+			if (const auto Value = Runtime->CharacterControl->GetAttributeValue("OfficialHostTimeline"))
+				if (const auto *TimelineText = std::get_if<std::string>(&*Value)) std::cout << *TimelineText << '\n';
+		}
 		if (Session) {
 			const auto Metrics = Session->GetMetrics();
 			LOG_INFO(

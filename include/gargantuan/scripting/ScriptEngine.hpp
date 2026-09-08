@@ -18,6 +18,7 @@
 namespace gargantuan {
 	class Script;
 	class ModuleScript;
+	class RemoteFunction;
 	class SignalConnection;
 
 	int OpenLibBase(lua_State *L);
@@ -67,10 +68,12 @@ namespace gargantuan {
 		std::unordered_map<std::string, std::shared_ptr<Instance>> RequirePathCache;
 		std::function<void(std::string, std::string)> RuntimeDiagnostic;
 		std::vector<std::weak_ptr<SignalConnection>> SignalConnections;
+		std::vector<std::weak_ptr<RemoteFunction>> RemoteFunctions;
 		RuntimeMode Mode = RuntimeMode::Offline;
 		std::shared_ptr<Instance> FindRequiredInstanceByPath(const char *path);
 		void EmitRuntimeDiagnostic(std::string Severity, std::string Message) const;
 		void TrackSignalConnection(const std::shared_ptr<SignalConnection> &Connection);
+		void TrackRemoteFunction(const std::shared_ptr<RemoteFunction> &Function);
 		void RunBootstrapScript(const std::shared_ptr<Script> &ScriptValue);
 		[[nodiscard]] bool CanRunScript(const Script &ScriptValue) const;
 
