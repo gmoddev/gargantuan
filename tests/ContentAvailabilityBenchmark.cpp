@@ -102,15 +102,22 @@ namespace {
 }
 
 int main(int ArgumentCount, char **Arguments) {
-	const bool Quick = ArgumentCount > 1 && std::string_view(Arguments[1]) == "--quick";
-	for (const auto Count : Quick ? std::vector<std::size_t>{100, 1'000, 10'000}
-								  : std::vector<std::size_t>{100, 1'000, 10'000, 65'536})
-		RunParsedManifestCase(Count);
-	std::cout << "[Content:Benchmark] manifest entries=100000 boundedReject=true maximum=65536\n";
-	std::cout << "[Content:Benchmark] manifest entries=1000000 boundedReject=true maximum=65536\n";
-	for (const auto Objects : std::vector<std::size_t>{10, 100, 512, 1'000, 10'000})
-		std::cout << "[Content:Benchmark] offeredObjects=" << Objects
-				  << " admittedByUnitLimit=" << (Objects <= MaximumPackageContentObjectsPerUnit ? "true" : "false")
-				  << " maximum=" << MaximumPackageContentObjectsPerUnit << '\n';
-	return 0;
+	try {
+		const bool Quick = ArgumentCount > 1 && std::string_view(Arguments[1]) == "--quick";
+		for (const auto Count : Quick ? std::vector<std::size_t>{100, 1'000, 10'000}
+									  : std::vector<std::size_t>{100, 1'000, 10'000, 65'536}) {
+			RunParsedManifestCase(Count);
+			std::cout.flush();
+		}
+		std::cout << "[Content:Benchmark] manifest entries=100000 boundedReject=true maximum=65536\n";
+		std::cout << "[Content:Benchmark] manifest entries=1000000 boundedReject=true maximum=65536\n";
+		for (const auto Objects : std::vector<std::size_t>{10, 100, 512, 1'000, 10'000})
+			std::cout << "[Content:Benchmark] offeredObjects=" << Objects
+					  << " admittedByUnitLimit=" << (Objects <= MaximumPackageContentObjectsPerUnit ? "true" : "false")
+					  << " maximum=" << MaximumPackageContentObjectsPerUnit << '\n';
+		return 0;
+	} catch (const std::exception &Error) {
+		std::cerr << "[Content:Benchmark] failed: " << Error.what() << '\n';
+		return 1;
+	}
 }
