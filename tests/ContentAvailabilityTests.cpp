@@ -88,8 +88,10 @@ namespace {
 		Fixture() {
 			auto Region = std::static_pointer_cast<Instance>(std::make_shared<Folder>());
 			Region->SetName("StreamedRegion");
+			Region->SetArchivable(true);
 			auto Child = std::make_shared<Folder>();
 			Child->SetName("AuthoredChild");
+			Child->SetArchivable(true);
 			Child->SetParent(Region);
 			auto Payload = InstanceSerialization::Serialize(InstanceSerialization::InstanceFormat::Json, Region);
 			auto Bytes = std::make_shared<std::vector<std::uint8_t>>(Payload.begin(), Payload.end());
