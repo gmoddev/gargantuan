@@ -129,7 +129,15 @@ First adoption publishes a detached subtree into one scope. Moving an already
 adopted subtree between DataModel scopes is rejected.
 
 Records remain an in-process prototype. Retention is bounded per scope and cursor reads
-detect eviction with `ResnapshotRequired`; the default capacity is 4,096.
+detect eviction with `ResnapshotRequired`; the current default capacity is 16,384.
+The process-global journal implements logical per-DataModel ownership. A
+DataModel's final shared-owner release retires only its own journal stream and
+render-dirty scope, including headless scopes without a renderer consumer.
+`Destroy()` alone preserves final removal records while live consumers still
+own the world. Cleanup does not reset another world's cursors or sequence and
+does not allocate a new ObjectId. A replacement world has a different
+generation-safe scope. The native retirement helpers are private to DataModel;
+no script, package, or network cleanup API is exposed.
 Authoring transaction identity and bounded semantic history are implemented
 separately from this sequence; see `AuthoritativeTransactions.md`. Compaction,
 rollback, and network transport are not implemented. Consumers must not treat this as an untrusted network protocol. See

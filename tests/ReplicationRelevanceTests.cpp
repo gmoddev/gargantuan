@@ -876,7 +876,113 @@ int main() {
 		"authoritative Character destroy clears the hard Player reference before retiring the replica"
 	);
 
+	{
+		// Player.Character is a hard dependency. A transport-byte retry may not
+		// publish half that group or advance Known after an oversized attempt.
+		auto BytePlayer = Runtime.Players->CreateSessionPlayer({"byte-relevance-test", "hard-group"});
+		auto ByteCharacter = *BytePlayer->GetCharacter();
+		BytePlayer->SetName(std::string(24 * 1024, 'p'));
+		ByteCharacter->SetName(std::string(24 * 1024, 'c'));
+		PeerRelevanceSelection HardSelection{.RequiredObjects = {World->GetObjectId()},
+			.DesiredObjects = {World->GetObjectId(), BytePlayer->GetObjectId()}};
+		std::ranges::sort(HardSelection.DesiredObjects);
+		ReplicationCoordinator HardByteCoordinator(World);
+		const ConnectionId HardByteConnection{21, 1};
+		Check(HardByteCoordinator.RegisterPeerBounded(HardByteConnection, ReplicationEpoch(1), HardSelection).Succeeded(),
+			"hard-reference byte fixture registers");
+		ReplicaApplier HardByteReplica;
+		for (std::uint64_t Tick = 1; Tick <= 12 && (Tick == 1 || HardByteCoordinator.HasPendingRelevance(HardByteConnection)); ++Tick) {
+			const auto KnownBefore = HardByteCoordinator.GetView(HardByteConnection)->KnownObjects;
+			std::size_t Limit = 40 * 1024;
+			auto Produce = [&] {
+				return Tick == 1 ? HardByteCoordinator.ProducePendingBaseline(HardByteConnection, 16, Tick, Limit)
+					: HardByteCoordinator.ProducePendingRelevance(HardByteConnection, 16, Tick, Limit);
+			};
+			auto LegalGroup = Produce();
+			if (!LegalGroup.Succeeded()) {
+				Check(HardByteCoordinator.GetView(HardByteConnection)->KnownObjects == KnownBefore,
+					"over-limit hard-reference candidate does not advance Known");
+				Limit = 64 * 1024;
+				LegalGroup = Produce();
+			}
+			Check(LegalGroup.Succeeded() && LegalGroup.Frame && HardByteReplica.ApplyFrame(*LegalGroup.Frame).Succeeded(),
+				"byte-bounded hard-reference frame applies without a dangling reference");
+			if (!LegalGroup.Succeeded() || !LegalGroup.Frame) break;
+			const auto Encoded = EncodeReplicationFrame(*LegalGroup.Frame);
+			Check(Encoded && Encoded->size() <= Limit, "hard-reference wire frame respects its supplied byte budget");
+			auto PlayerReplica = std::dynamic_pointer_cast<Player>(HardByteReplica.Resolve(BytePlayer->GetObjectId()));
+			Check(!PlayerReplica || (PlayerReplica->GetCharacter() &&
+				*PlayerReplica->GetCharacter() == HardByteReplica.Resolve(ByteCharacter->GetObjectId())),
+				"published hard reference always resolves within the accepted prefix");
+			Check(HardByteCoordinator.CommitSchedulerAcceptance(HardByteConnection, LegalGroup.Frame->Sequence).Succeeded(),
+				"hard-reference group commits only after scheduler acceptance");
+		}
+		Check(!HardByteCoordinator.HasPendingRelevance(HardByteConnection) && HardByteReplica.Resolve(BytePlayer->GetObjectId()),
+			"hard-reference byte slices eventually converge");
+		HardByteCoordinator.RemovePeer(HardByteConnection);
+	}
 	Runtime.Destroy();
+	{
+		// Legal immutable content can expand beyond a negotiated reliable frame.
+		// Production selection must drain smaller slices without advancing Known
+		// before scheduler acceptance or raising any existing transition ceiling.
+		auto ByteWorld = std::make_shared<DataModel>();
+		std::vector<std::shared_ptr<Folder>> ByteObjects;
+		PeerRelevanceSelection ByteSelection{.RequiredObjects = {ByteWorld->GetObjectId()},
+			.DesiredObjects = {ByteWorld->GetObjectId()}};
+		for (std::size_t Index = 0; Index < 8; ++Index) {
+			auto Object = std::make_shared<Folder>();
+			Object->SetName(std::string(16 * 1024, static_cast<char>('a' + Index)));
+			Object->SetParent(ByteWorld);
+			ByteSelection.DesiredObjects.push_back(Object->GetObjectId());
+			ByteObjects.push_back(std::move(Object));
+		}
+		std::ranges::sort(ByteSelection.DesiredObjects);
+		ReplicationCoordinator ByteCoordinator(ByteWorld);
+		const ConnectionId ByteConnection{20, 1};
+		constexpr std::size_t ByteLimit = 48 * 1024;
+		Check(ByteCoordinator.RegisterPeerBounded(ByteConnection, ReplicationEpoch(1), ByteSelection).Succeeded(),
+			"byte-bounded peer registration succeeds");
+		ReplicaApplier ByteReplica;
+		auto ApplyByteFrame = [&](ReplicationProduceResult Produced) {
+			Check(Produced.Succeeded() && Produced.Frame.has_value(), "byte-bounded frame is produced");
+			if (!Produced.Succeeded() || !Produced.Frame) return false;
+			auto Encoded = EncodeReplicationFrame(*Produced.Frame);
+			Check(Encoded && Encoded->size() <= ByteLimit && Produced.SelectedTransitions <= 9,
+				"structural slice respects both work and negotiated byte ceilings");
+			if (!Encoded) return false;
+			auto Decoded = DecodeReplicationFrame(*Encoded);
+			Check(Decoded && ByteReplica.ApplyFrame(*Decoded).Succeeded(), "byte-bounded wire frame applies normally");
+			Check(ByteCoordinator.CommitSchedulerAcceptance(ByteConnection, Produced.Frame->Sequence).Succeeded(),
+				"byte-bounded Known state commits only on scheduler acceptance");
+			return true;
+		};
+		Check(!ByteCoordinator.ProducePendingBaseline(ByteConnection, 9, 1, 0).Succeeded(),
+			"zero negotiated byte budget fails without consuming pending work");
+		ApplyByteFrame(ByteCoordinator.ProducePendingBaseline(ByteConnection, 9, 1, ByteLimit));
+		for (std::uint64_t Tick = 2; Tick < 20 && ByteCoordinator.HasPendingRelevance(ByteConnection); ++Tick)
+			if (!ApplyByteFrame(ByteCoordinator.ProducePendingRelevance(ByteConnection, 9, Tick, ByteLimit))) break;
+		Check(!ByteCoordinator.HasPendingRelevance(ByteConnection), "large legal publication drains under transport limit");
+		for (const auto &Object : ByteObjects) {
+			auto Replica = ByteReplica.Resolve(Object->GetObjectId());
+			Check(Replica && Replica->GetName() == Object->GetName(), "sliced publication preserves exact names");
+			Object->SetName(std::string(17 * 1024, 'z'));
+		}
+		for (std::size_t Iteration = 0; Iteration < 10; ++Iteration) {
+			auto Produced = ByteCoordinator.ProduceIncremental(ByteConnection, 9, ByteLimit);
+			if (!Produced.Succeeded()) break;
+			if (!ApplyByteFrame(std::move(Produced))) break;
+		}
+		for (const auto &Object : ByteObjects) {
+			auto Replica = ByteReplica.Resolve(Object->GetObjectId());
+			Check(Replica && Replica->GetName() == Object->GetName(), "byte-bounded journal update preserves every property");
+		}
+		ByteObjects.front()->SetName(std::string(64 * 1024, 'q'));
+		Check(!ByteCoordinator.ProduceIncremental(ByteConnection, 9, ByteLimit).Succeeded(),
+			"indivisible oversized property fails closed without false acceptance");
+		ByteCoordinator.RemovePeer(ByteConnection);
+		ByteWorld->Destroy();
+	}
 	if (Failures == 0) std::cout << "Replication relevance tests passed\n";
 	return Failures == 0 ? 0 : 1;
 }

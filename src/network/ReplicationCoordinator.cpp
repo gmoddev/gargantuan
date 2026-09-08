@@ -712,12 +712,14 @@ namespace gargantuan::network {
 		ReplicationMessageKind Kind,
 		std::size_t MaximumTransitions,
 		std::uint64_t SimulationTick,
-		bool CriticalOnly
+		bool CriticalOnly,
+		std::size_t MaximumFrameBytes
 	) {
 		auto Peer = Peers.find(Connection);
 		if (Peer == Peers.end()) return {{}, "Replication peer is not registered"};
 		if (Peer->second.PreparedCommit) return {{}, "A structural frame is awaiting scheduler acceptance"};
-		if (MaximumTransitions == 0 || MaximumTransitions > MaximumReplicationOperationsPerFrame)
+		if (MaximumTransitions == 0 || MaximumTransitions > MaximumReplicationOperationsPerFrame ||
+			MaximumFrameBytes == 0 || MaximumFrameBytes > MaximumReplicationFrameBytes)
 			return {{}, "Structural transition work limit is invalid"};
 		const auto Started = std::chrono::steady_clock::now();
 		const auto RefreshStarted = std::chrono::steady_clock::now();
@@ -760,6 +762,7 @@ namespace gargantuan::network {
 			}
 		}
 		std::size_t Remaining = MaximumTransitions;
+		std::size_t LargestSelectedGroupWork = 1;
 		const auto MaximumExamined = std::max<std::size_t>(64, MaximumTransitions * 4);
 		std::size_t Examined = 0;
 		auto CollectGroup = [&](ObjectId Candidate, std::set<ObjectId> &Group) -> bool {
@@ -827,6 +830,7 @@ namespace gargantuan::network {
 					return false;
 				}
 				if (NewWork > Remaining) continue;
+				LargestSelectedGroupWork = std::max(LargestSelectedGroupWork, NewWork);
 				Selected.insert(Group.begin(), Group.end());
 				Remaining -= NewWork;
 			}
@@ -948,6 +952,21 @@ namespace gargantuan::network {
 					.count()
 			);
 		if (!Encoded) return {{}, Encoded.error().Format()};
+		if (Encoded->size() > MaximumFrameBytes) {
+			// Selection has not committed Known, sequence, or journal state. Retry a
+			// smaller dependency-closed slice under the negotiated transport ceiling.
+			// This exceptional path is logarithmically bounded; ordinary frames pay
+			// only the comparison, and no transition or byte ceiling is increased.
+			const auto MinimumWork = Kind == ReplicationMessageKind::Baseline
+				? std::max(LargestSelectedGroupWork, GetPendingCriticalTransitionCount(Connection))
+				: LargestSelectedGroupWork;
+			const auto Reduced = std::max(MinimumWork, MaximumTransitions / 2);
+			if (Reduced >= MaximumTransitions)
+				return {{}, "Atomic structural group exceeds the negotiated reliable message limit"};
+			return ProduceRelevanceFrame(Connection, Kind, Reduced, SimulationTick,
+				CriticalOnly || (Kind == ReplicationMessageKind::Baseline && CurrentPeer.PendingTransitions.size() > Reduced),
+				MaximumFrameBytes);
+		}
 		SaturatingAdd(CandidateMetrics.StructuralBytesEncoded, Encoded->size());
 		SaturatingAdd(CandidateMetrics.StructuralTransitionsEncoded, SelectedWorkCount);
 		CandidateMetrics.ScratchHighWaterBytes = std::max<std::uint64_t>(
@@ -1111,28 +1130,28 @@ namespace gargantuan::network {
 	}
 
 	ReplicationProduceResult ReplicationCoordinator::ProducePendingRelevance(
-		ConnectionId Connection, std::size_t MaximumTransitions, std::uint64_t SimulationTick
+		ConnectionId Connection, std::size_t MaximumTransitions, std::uint64_t SimulationTick, std::size_t MaximumFrameBytes
 	) {
 		LatestSchedulingTick = std::max(LatestSchedulingTick, SimulationTick);
 		return ProduceRelevanceFrame(
-			Connection, ReplicationMessageKind::Incremental, MaximumTransitions, SimulationTick, false
+			Connection, ReplicationMessageKind::Incremental, MaximumTransitions, SimulationTick, false, MaximumFrameBytes
 		);
 	}
 
 	ReplicationProduceResult ReplicationCoordinator::ProducePendingBaseline(
-		ConnectionId Connection, std::size_t MaximumTransitions, std::uint64_t SimulationTick
+		ConnectionId Connection, std::size_t MaximumTransitions, std::uint64_t SimulationTick, std::size_t MaximumFrameBytes
 	) {
 		LatestSchedulingTick = std::max(LatestSchedulingTick, SimulationTick);
 		auto Peer = Peers.find(Connection);
 		if (Peer == Peers.end()) return {{}, "Replication peer is not registered"};
 		const bool CriticalOnly = Peer->second.PendingTransitions.size() > MaximumTransitions;
 		return ProduceRelevanceFrame(
-			Connection, ReplicationMessageKind::Baseline, MaximumTransitions, SimulationTick, CriticalOnly
+			Connection, ReplicationMessageKind::Baseline, MaximumTransitions, SimulationTick, CriticalOnly, MaximumFrameBytes
 		);
 	}
 
 	ReplicationProduceResult
-	ReplicationCoordinator::ProduceIncremental(ConnectionId Connection, std::size_t MaximumTransitions) {
+	ReplicationCoordinator::ProduceIncremental(ConnectionId Connection, std::size_t MaximumTransitions, std::size_t MaximumFrameBytes) {
 		auto Peer = Peers.find(Connection);
 		if (Peer == Peers.end()) return {{}, "Replication peer is not registered"};
 		if (Peer->second.PreparedCommit) return {{}, "A structural frame is awaiting scheduler acceptance"};
@@ -1140,7 +1159,8 @@ namespace gargantuan::network {
 		if (!RefreshCatalog(CatalogError)) return {{}, std::move(CatalogError)};
 		auto CandidateMetrics = Metrics;
 		std::set<ObjectId> CandidateRequestedTemplates;
-		if (MaximumTransitions == 0 || MaximumTransitions > MaximumReplicationOperationsPerFrame)
+		if (MaximumTransitions == 0 || MaximumTransitions > MaximumReplicationOperationsPerFrame ||
+			MaximumFrameBytes == 0 || MaximumFrameBytes > MaximumReplicationFrameBytes)
 			return {{}, "Replication transition work limit is invalid"};
 		const bool PolicyManaged = Peer->second.PolicyManaged;
 		CandidateMetrics.StructuralMaximumJournalLagRecords = std::max(
@@ -1322,6 +1342,11 @@ namespace gargantuan::network {
 			return {{}, "Replication frame operation limit exceeded"};
 		auto Encoded = EncodeReplicationFrame(Frame);
 		if (!Encoded) return {{}, Encoded.error().Format()};
+		if (Encoded->size() > MaximumFrameBytes) {
+			if (MaximumTransitions == 1)
+				return {{}, "Structural operation exceeds the negotiated reliable message limit"};
+			return ProduceIncremental(Connection, MaximumTransitions / 2, MaximumFrameBytes);
+		}
 		SaturatingAdd(CandidateMetrics.StructuralBytesEncoded, Encoded->size());
 		SaturatingAdd(CandidateMetrics.StructuralTransitionsEncoded, Frame.Operations.size());
 		CandidateMetrics.ScratchHighWaterBytes = std::max<std::uint64_t>(

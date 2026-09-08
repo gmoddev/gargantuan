@@ -15,6 +15,7 @@ namespace gargantuan {
 	class AssetService;
 	class DataModel : public ServiceProvider {
 		I_DataModel;
+		~DataModel() override;
 
 		const ServiceDefinitions &GetServiceDefinitions() const override;
 

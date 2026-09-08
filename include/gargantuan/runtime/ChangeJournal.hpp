@@ -107,6 +107,8 @@ namespace gargantuan {
 		[[nodiscard]] ChangeJournalProfile GetProfile() const;
 
 	  private:
+		friend class DataModel;
+		void ReleaseScope(ObjectId Scope);
 		struct Stream {
 			std::uint64_t NextSequence = 1;
 			std::deque<ChangeRecord> Records;

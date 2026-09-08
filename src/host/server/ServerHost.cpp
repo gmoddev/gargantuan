@@ -112,6 +112,8 @@ namespace gargantuan::host {
 		Program.add_argument("--content-lifecycle-smoke")
 			.default_value(std::string())
 			.help("test-only trusted content key for official load/evict/reload validation");
+		Program.add_argument("--content-churn-cycles").scan<'i', int>().default_value(0)
+			.help("test-only bounded repeated lifecycle smoke cycles (1-10000)");
 		Program.add_argument("--content-stop-in-flight-smoke")
 			.default_value(std::string())
 			.help("test-only trusted content key for official shutdown cancellation validation");
@@ -144,6 +146,7 @@ namespace gargantuan::host {
 		const auto NodeRootCertificate = Program.get<std::string>("--content-node-root-ca");
 		const auto NodeTokenEnvironment = Program.get<std::string>("--content-node-token-env");
 		const auto ContentLifecycleKey = Program.get<std::string>("--content-lifecycle-smoke");
+		const auto ContentChurnCycles = Program.get<int>("--content-churn-cycles");
 		const auto StopInFlightKey = Program.get<std::string>("--content-stop-in-flight-smoke");
 		const bool HasNodeOption = !NodeEndpoint.empty() || !NodeRootCertificate.empty() || !NodeTokenEnvironment.empty();
 		if (ProviderName == "node" && NodeEndpoint.empty()) {
@@ -167,6 +170,8 @@ namespace gargantuan::host {
 			return 2;
 		}
 		if (!Residency || (ProviderName != "local" && ProviderName != "node") ||
+			ContentChurnCycles < 0 || ContentChurnCycles > 10000 ||
+			(ContentChurnCycles != 0 && (ContentLifecycleKey.empty() || *Residency != ContentResidencyMode::OnDemand)) ||
 			(!ContentLifecycleKey.empty() && !StopInFlightKey.empty()) ||
 			(!ContentLifecycleKey.empty() && !IsValidPackageContentKey(ContentLifecycleKey)) ||
 			(!StopInFlightKey.empty() && !IsValidPackageContentKey(StopInFlightKey))) {
@@ -195,6 +200,16 @@ namespace gargantuan::host {
 		const auto BindEndpoint = BindText.empty() ? std::nullopt : ParseEndpoint(BindText);
 		const bool StartupSmoke = Program.is_used("--startup-smoke");
 		const bool SessionSmoke = Program.is_used("--session-smoke");
+		// Keep bounded acceptance diagnostics available even if the harness must
+		// terminate a failed long-running smoke process.
+		if (SessionSmoke || ContentChurnCycles != 0) {
+			std::cout << std::unitbuf;
+			SDL_SetLogOutputFunction([](void *, int, SDL_LogPriority, const char *Message) {
+				std::cerr << Message << '\n';
+			}, nullptr);
+			SDL_SetLogPriority(LogCategory::App, SDL_LOG_PRIORITY_INFO);
+			SDL_SetLogPriority(LogCategory::Lua, SDL_LOG_PRIORITY_INFO);
+		}
 		const bool AllowInsecureDevelopmentNetwork = Program.is_used("--allow-insecure-development-network");
 		if ((!BindText.empty() && !BindEndpoint) ||
 			(!BindEndpoint && !StartupSmoke && StopInFlightKey.empty()) || (SessionSmoke && !BindEndpoint) ||
@@ -222,6 +237,8 @@ namespace gargantuan::host {
 		std::unique_ptr<network::GameSession> Session;
 		try {
 			const auto HostStartupStarted = std::chrono::steady_clock::now();
+			const auto HostStartupUnixMilliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(
+				std::chrono::system_clock::now().time_since_epoch()).count();
 			auto World = PackageBuilder::LoadWorld(*Payload, PackageRoot);
 			HeadlessRenderer Renderer(Vector2(320, 180));
 			std::optional<ContentAvailabilityConfiguration> Content;
@@ -357,6 +374,8 @@ namespace gargantuan::host {
 				static_cast<long long>(StartupWallMilliseconds)
 			);
 			std::cout << "[Runtime:Server] StartupWallMilliseconds=" << StartupWallMilliseconds << '\n';
+			if (ContentChurnCycles != 0)
+				std::cout << "[Content:Churn] ClockAnchorUnixMilliseconds=" << HostStartupUnixMilliseconds << '\n';
 
 			SignalLifetime Signals;
 			auto HostElapsedMilliseconds = [&] {
@@ -375,6 +394,8 @@ namespace gargantuan::host {
 				WaitingForEviction,
 				HoldingEviction,
 				WaitingForReload,
+				WaitingForFinalEviction,
+				HoldingFinalDrain,
 				Complete,
 			};
 			auto ContentStage = ContentSmokeStage::WaitingForPeer;
@@ -387,6 +408,7 @@ namespace gargantuan::host {
 			std::shared_ptr<Instance> FirstContentRoot;
 			ObjectId FirstContentObjectId;
 			int ContentStageTick = 0;
+			int CompletedContentCycles = 0;
 			bool StopRequestSubmitted = false;
 			std::optional<std::chrono::steady_clock::time_point> StopRequestObserved;
 			auto FindStreamedRoot = [&]() -> std::shared_ptr<Instance> {
@@ -418,6 +440,7 @@ namespace gargantuan::host {
 					}
 				}
 				if (!ContentLifecycleKey.empty()) {
+					const int ContentHoldTicks = ContentChurnCycles == 0 || CompletedContentCycles <= 1 ? 45 : 6;
 					switch (ContentStage) {
 					case ContentSmokeStage::WaitingForPeer:
 						if (!Session || Session->GetMetrics().ReadyPeers >= 1) {
@@ -486,7 +509,12 @@ namespace gargantuan::host {
 						}
 						break;
 					case ContentSmokeStage::HoldingFirstResident:
-						if (Ticks - ContentStageTick >= 45) {
+						// The RSS soak proves one complete network lifecycle first, then
+						// churns the authoritative world after that Player disconnects.
+						// Continuous peer pressure is measured separately by the scale test.
+						if (ContentChurnCycles != 0 && CompletedContentCycles == 1 && Session &&
+							Session->GetMetrics().PlayersRemoved == 0) break;
+						if (Ticks - ContentStageTick >= ContentHoldTicks) {
 							if (!Runtime->Content->ReleaseContent(ContentLifecycleKey))
 								throw std::runtime_error("trusted content eviction demand was rejected");
 							std::cout << "[Content:Server] CONTENT_EVICTION_ISSUED Key=" << ContentLifecycleKey
@@ -508,7 +536,7 @@ namespace gargantuan::host {
 						}
 						break;
 					case ContentSmokeStage::HoldingEviction:
-						if (Ticks - ContentStageTick >= 45) {
+						if (Ticks - ContentStageTick >= ContentHoldTicks) {
 							if (!Runtime->Content->RequestContent(ContentLifecycleKey))
 								throw std::runtime_error("trusted content reload demand was rejected");
 							std::cout << "[Content:Server] CONTENT_RELOAD_ISSUED Key=" << ContentLifecycleKey
@@ -529,10 +557,48 @@ namespace gargantuan::host {
 							std::cout << "[Content:Server] CONTENT_LIFECYCLE_RELOAD_OK Key="
 									  << ContentLifecycleKey << " SemanticDigest=" << SemanticDigest
 									  << " ElapsedMilliseconds=" << HostElapsedMilliseconds() << '\n';
+							++CompletedContentCycles;
+							if (ContentChurnCycles != 0 && CompletedContentCycles < ContentChurnCycles) {
+								FirstContentRoot = std::move(ReloadedRoot);
+								FirstContentObjectId = FirstContentRoot->GetObjectId();
+								ContentStage = ContentSmokeStage::HoldingFirstResident;
+								ContentStageTick = Ticks;
+							} else if (ContentChurnCycles != 0) {
+								if (!Runtime->Content->ReleaseContent(ContentLifecycleKey))
+									throw std::runtime_error("trusted final drain was rejected");
+								ContentStage = ContentSmokeStage::WaitingForFinalEviction;
+							} else ContentStage = ContentSmokeStage::Complete;
+							if (ContentChurnCycles != 0) {
+								const auto Memory = Runtime->Content->GetMetrics();
+								std::cout << "[Content:Churn] cycle=" << CompletedContentCycles
+									<< " elapsed_ms=" << HostElapsedMilliseconds() << " cache_bytes=" << Memory.CachedPayloadBytes
+									<< " decoded_bytes=" << Memory.DecodedDocumentBytes << " decoded_high_water=" << Memory.DecodedDocumentBytesHighWater
+									<< " completion_high_water=" << Memory.CompletedPayloadBytesHighWater
+									<< " detached_objects_high_water=" << Memory.DetachedObjectsHighWater
+									<< " resident_objects=" << Memory.ResidentPackageObjects << '\n';
+							}
+						}
+						break;
+					case ContentSmokeStage::WaitingForFinalEviction:
+						if (Runtime->Content->GetState(ContentLifecycleKey) == ContentResidencyState::Unavailable) {
+							if (FindStreamedRoot()) throw std::runtime_error("final content drain retained a runtime root");
+							ContentStageTick = Ticks;
+							ContentStage = ContentSmokeStage::HoldingFinalDrain;
+							std::cout << "[Content:Churn] FINAL_DRAIN elapsed_ms=" << HostElapsedMilliseconds() << '\n';
+						}
+						break;
+					case ContentSmokeStage::HoldingFinalDrain:
+						if (Ticks - ContentStageTick >= 120) {
+							const auto Memory = Runtime->Content->GetMetrics();
+							if (Memory.ResidentUnits != 0 || Memory.DecodedDocumentBytes != 0 ||
+								Memory.CompletedPayloadBytes != 0 || Runtime->Content->GetActiveRequestCount() != 0)
+								throw std::runtime_error("final content drain retained live work");
+							std::cout << "[Content:Churn] CONTENT_CHURN_OK cycles=" << CompletedContentCycles << '\n';
 							ContentStage = ContentSmokeStage::Complete;
 						}
 						break;
 					case ContentSmokeStage::Complete:
+						if (ContentChurnCycles != 0 && !Session) Runtime->ProcessService->MarkExit(0);
 						break;
 					}
 				}

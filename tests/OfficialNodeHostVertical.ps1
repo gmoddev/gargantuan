@@ -1,5 +1,5 @@
 param(
-	[Parameter(Mandatory = $true)][ValidateSet('Prepare', 'Node', 'NodeCycle', 'NodeResidentSurvival', 'NodeCorrupt', 'NodeBootstrapFailure', 'Local')][string]$Mode,
+	[Parameter(Mandatory = $true)][ValidateSet('Prepare', 'Node', 'NodeCycle', 'NodeResidentSurvival', 'NodeCorrupt', 'NodeBootstrapFailure', 'Local', 'Churn')][string]$Mode,
 	[string]$Packager,
 	[string]$PlayerRuntimeDistribution,
 	[string]$ServerRuntimeDistribution,
@@ -9,6 +9,12 @@ param(
 	[string]$NodeEndpoint,
 	[string]$RootCertificateFile,
 	[int]$RemoteFunctionCallCount = 5,
+	[ValidateRange(0, 512)][int]$ContentObjectCount = 0,
+	[ValidateRange(0, 1536)][int]$ContentNamePadding = 0,
+	[ValidateRange(1, 10000)][int]$ChurnCycles = 1000,
+	[switch]$ServerOnlyChurn,
+	[ValidateRange(0, 65535)][int]$LifecycleGamePort = 0,
+	[string]$MemoryOutputPrefix,
 	[string]$TokenEnvironmentName = 'GARGANTUAN_ENGINE_ADAPTER_TOKEN',
 	[string]$WrongTokenEnvironmentName = 'GARGANTUAN_ENGINE_ADAPTER_WRONG_TOKEN',
 	[string]$LimitedTokenEnvironmentName = 'GARGANTUAN_ENGINE_ADAPTER_LIMITED_TOKEN',
@@ -33,6 +39,13 @@ function Disable-ProjectScripts {
 	foreach ($Child in @($Node.Children)) {
 		Disable-ProjectScripts -Node $Child
 	}
+}
+
+function Get-DocumentObjectCount {
+	param($Node)
+	$Count = 1
+	foreach ($Child in @($Node.Children)) { $Count += Get-DocumentObjectCount -Node $Child }
+	return $Count
 }
 
 function New-RemoteNode {
@@ -77,6 +90,7 @@ function Start-RuntimeProcess {
 	$StartInfo.RedirectStandardError = $true
 	$StartInfo.Arguments = ($Arguments | ForEach-Object { '"' + $_.Replace('"', '\"') + '"' }) -join ' '
 	$StartInfo.Environment['PATH'] = "$WorkingDirectory;$env:SystemRoot\System32;$env:SystemRoot"
+	$StartInfo.Environment['SDL_LOGGING'] = '*=info'
 	foreach ($EnvironmentVariable in $RemoveEnvironmentVariables) {
 		[void]$StartInfo.Environment.Remove($EnvironmentVariable)
 	}
@@ -89,11 +103,13 @@ function Complete-RuntimeProcess {
 		[Parameter(Mandatory = $true)][string]$Label,
 		[int]$TimeoutMilliseconds = 30000
 	)
+	$OutputRead = $Process.StandardOutput.ReadToEndAsync()
+	$ErrorRead = $Process.StandardError.ReadToEndAsync()
 	if (-not $Process.WaitForExit($TimeoutMilliseconds)) {
 		Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue
 		throw "$Label timed out"
 	}
-	$Output = $Process.StandardOutput.ReadToEnd() + $Process.StandardError.ReadToEnd()
+	$Output = $OutputRead.GetAwaiter().GetResult() + $ErrorRead.GetAwaiter().GetResult()
 	return [pscustomobject]@{ ExitCode = $Process.ExitCode; Output = $Output }
 }
 
@@ -146,6 +162,25 @@ if ($Mode -eq 'Prepare') {
 	$ProjectDocumentPath = Join-Path $FixtureRoot '.gargantuan\project.instance.json'
 	$ProjectDocument = Get-Content -LiteralPath $ProjectDocumentPath -Raw | ConvertFrom-Json
 	Disable-ProjectScripts -Node $ProjectDocument
+	if ($ContentObjectCount -ne 0) {
+		$WorkspaceNode = $ProjectDocument.Children | Where-Object Name -eq 'Workspace'
+		$CourseNode = $WorkspaceNode.Children | Where-Object Name -eq 'CollectionCourse'
+		$GroundNode = $CourseNode.Children | Where-Object Name -eq 'Ground'
+		$CurrentCount = Get-DocumentObjectCount -Node $CourseNode
+		if (-not $GroundNode -or $CurrentCount -gt $ContentObjectCount) { throw 'Invalid content memory profile' }
+		while ($CurrentCount -lt $ContentObjectCount) {
+			$Part = $GroundNode | ConvertTo-Json -Depth 100 -Compress | ConvertFrom-Json
+			$Part.Name = "MemoryPart$CurrentCount" + ('x' * $ContentNamePadding)
+			$Part.Properties.CanCollide.Bool = $false
+			$Part.Properties.CanTouch.Bool = $false
+			$Part.Properties.Size.Vector3 = @(2, 1, 3)
+			$Part.Properties.CFrame.CFrame[0] = $CurrentCount % 32
+			$Part.Properties.CFrame.CFrame[1] = 2
+			$Part.Properties.CFrame.CFrame[2] = [math]::Floor($CurrentCount / 32)
+			$CourseNode.Children = @($CourseNode.Children) + @($Part)
+			$CurrentCount++
+		}
+	}
 	$GameScripts = $ProjectDocument.Children | Where-Object {
 		$_.Name -eq 'GameScripts' -and $_.ClassName -eq 'Folder'
 	} | Select-Object -First 1
@@ -292,19 +327,19 @@ RunService.PostSimulation:Connect(function()
 			local Samples = {}
 			local Total = 0
 			local Timeouts = 0
+			local Errors = 0
 			for _ = 1, 5 do
 				local StartedAt = os.clock()
 				local Invoked, Result = pcall(function()
 					return Function:InvokeServerWithTimeout(5, "node-content-ping")
 				end)
 				if not Invoked then
-					-- Initial project construction can precede network publication by a
-					-- tick. Retry only through the ordinary RemoteFunction path.
-					FunctionStarted = false
-					return
+					Errors += 1
+					if type(Result) == "string" and string.find(Result, "timeout", 1, true) then Timeouts += 1 end
+				elseif Result ~= "node-content-pong" then
+					Errors += 1
 				end
 				local Elapsed = (os.clock() - StartedAt) * 1000000
-				if Result ~= "node-content-pong" then Timeouts += 1 end
 				Total += Elapsed
 				table.insert(Samples, Elapsed)
 				task.wait()
@@ -314,12 +349,12 @@ RunService.PostSimulation:Connect(function()
 				return Samples[math.floor((#Samples - 1) * Percent / 100) + 1]
 			end
 			local MetricsText = string.format(
-				"[Content:RemoteFunction] samples=%d mean_us=%.0f p50_us=%.0f p95_us=%.0f p99_us=%.0f max_us=%.0f timeouts=%d",
-				#Samples, Total / #Samples, Percentile(50), Percentile(95), Percentile(99), Samples[#Samples], Timeouts
+				"[Content:RemoteFunction] samples=%d mean_us=%.0f p50_us=%.0f p95_us=%.0f p99_us=%.0f max_us=%.0f timeouts=%d errors=%d",
+				#Samples, Total / #Samples, Percentile(50), Percentile(95), Percentile(99), Samples[#Samples], Timeouts, Errors
 			)
 			print(MetricsText)
 			CharacterControl:SetAttribute("RemoteFunctionMetrics", MetricsText)
-			FunctionComplete = Timeouts == 0
+			FunctionComplete = Errors == 0
 			RemoteFunctionCompleteUs = ElapsedUs()
 		end)
 	end
@@ -404,6 +439,8 @@ end)
 		ContentKey = $ContentManifest.Entries[0].Key
 		ContentRootName = 'CollectionCourse'
 		RemoteFunctionCallCount = $RemoteFunctionCallCount
+		ContentObjectCount = $ContentManifest.Entries[0].ObjectCount
+		ContentPayloadBytes = $ContentManifest.Entries[0].UncompressedBytes
 		PlayerPackageRoot = $PlayerPackageRoot
 		ServerPackageRoot = $ServerPackageRoot
 	}
@@ -434,6 +471,85 @@ $NodeSecretEnvironmentNames = @(
 	$MissingTokenEnvironmentName
 )
 
+if ($Mode -eq 'Churn') {
+	Require-Value -Name 'MemoryOutputPrefix' -Value $MemoryOutputPrefix
+	$GameEndpoint = "127.0.0.1:$(44000 + ($PID % 1000))"
+	$ProviderArguments = @('--content-provider', 'local')
+	if ($NodeEndpoint) {
+		Require-Value -Name 'RootCertificateFile' -Value $RootCertificateFile
+		$ProviderArguments = @('--content-provider', 'node', '--content-node-endpoint', $NodeEndpoint,
+			'--content-node-root-ca', $RootCertificateFile, '--content-node-token-env', $TokenEnvironmentName)
+	}
+	$ServerProcess = $null
+	$PlayerProcess = $null
+	$Samples = [System.Collections.Generic.List[object]]::new()
+	$Watch = [System.Diagnostics.Stopwatch]::StartNew()
+	try {
+		$RoleArguments = @('--bind', $GameEndpoint, '--session-smoke')
+		if ($ServerOnlyChurn) { $RoleArguments = @('--startup-smoke') }
+		$ServerProcess = Start-RuntimeProcess -Executable $Server -WorkingDirectory $Descriptor.ServerPackageRoot -Arguments (
+			$RoleArguments + @('--max-ticks', '300000',
+			'--content-residency', 'on-demand', '--content-lifecycle-smoke', $ContentKey,
+			'--content-churn-cycles', [string]$ChurnCycles) + $ProviderArguments)
+		# Drain both pipes from launch: sustained lifecycle diagnostics must never
+		# turn a full redirected pipe into artificial Server backpressure.
+		$ServerOutput = $ServerProcess.StandardOutput.ReadToEndAsync()
+		$ServerError = $ServerProcess.StandardError.ReadToEndAsync()
+		while (-not $ServerProcess.HasExited) {
+			$ServerProcess.Refresh()
+			$Samples.Add([pscustomobject]@{ ElapsedMs = $Watch.ElapsedMilliseconds;
+				UnixMilliseconds = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds();
+				WorkingSetBytes = $ServerProcess.WorkingSet64; PrivateBytes = $ServerProcess.PrivateMemorySize64;
+				Threads = $ServerProcess.Threads.Count; Handles = $ServerProcess.HandleCount })
+			if (-not $ServerOnlyChurn -and -not $PlayerProcess -and $Watch.ElapsedMilliseconds -ge 2300) {
+				$PlayerProcess = Start-RuntimeProcess -Executable $Player -WorkingDirectory $Descriptor.PlayerPackageRoot -Arguments @(
+					'--headless', '--connect', $GameEndpoint, '--session-smoke', '--max-frames', '1800'
+				) -RemoveEnvironmentVariables $NodeSecretEnvironmentNames
+				$PlayerOutput = $PlayerProcess.StandardOutput.ReadToEndAsync()
+				$PlayerError = $PlayerProcess.StandardError.ReadToEndAsync()
+			}
+			if ($PlayerProcess -and $PlayerProcess.HasExited -and $PlayerProcess.ExitCode -ne 0) {
+				throw "Churn Player failed: $($PlayerProcess.ExitCode)"
+			}
+			if ($Watch.Elapsed.TotalMinutes -gt 20) { throw 'Churn Server timed out' }
+			if (-not $ServerOnlyChurn -and $Watch.Elapsed.TotalMinutes -gt 3 -and
+				$PlayerProcess -and -not $PlayerProcess.HasExited) { throw 'Churn network proof timed out after three minutes' }
+			Start-Sleep -Milliseconds 100
+		}
+		$ServerProcess.WaitForExit()
+		$Output = $ServerOutput.GetAwaiter().GetResult() + $ServerError.GetAwaiter().GetResult()
+		[System.IO.File]::WriteAllText("$MemoryOutputPrefix-server.log", $Output)
+		if ($ServerProcess.ExitCode -ne 0) { throw "Churn Server failed: $($ServerProcess.ExitCode)`n$Output" }
+		Require-Marker -Label 'Churn Server' -Output $Output -Marker "CONTENT_CHURN_OK cycles=$ChurnCycles"
+		if ($ServerOnlyChurn) {
+			Write-Output "[Content:Memory] SERVER_ONLY_CHURN_OK cycles=$ChurnCycles objects=$($Descriptor.ContentObjectCount) payload_bytes=$($Descriptor.ContentPayloadBytes) elapsed_ms=$($Watch.ElapsedMilliseconds) samples=$($Samples.Count)"
+			return
+		}
+		if (-not $PlayerProcess -or -not $PlayerProcess.WaitForExit(30000)) { throw 'Churn Player did not stop' }
+		if ($PlayerProcess.ExitCode -ne 0) { throw "Churn Player failed: $($PlayerProcess.ExitCode)" }
+		$ClientOutput = $PlayerOutput.GetAwaiter().GetResult() + $PlayerError.GetAwaiter().GetResult()
+		[System.IO.File]::WriteAllText("$MemoryOutputPrefix-player.log", $ClientOutput)
+		Require-Marker -Label 'Churn Player' -Output $ClientOutput -Marker '[Content:OfficialHost] ClientTimeline'
+		Write-Output "[Content:Memory] CHURN_OK cycles=$ChurnCycles objects=$($Descriptor.ContentObjectCount) payload_bytes=$($Descriptor.ContentPayloadBytes) elapsed_ms=$($Watch.ElapsedMilliseconds) samples=$($Samples.Count)"
+		Write-Output $ClientOutput
+	} finally {
+		$Samples | Export-Csv -LiteralPath "$MemoryOutputPrefix-memory.csv" -NoTypeInformation
+		if ($PlayerProcess -and -not $PlayerProcess.HasExited) { Stop-Process -Id $PlayerProcess.Id -Force }
+		if ($ServerProcess -and -not $ServerProcess.HasExited) { Stop-Process -Id $ServerProcess.Id -Force }
+		if ($ServerProcess) {
+			$ServerProcess.WaitForExit()
+			[System.IO.File]::WriteAllText("$MemoryOutputPrefix-server.log", $ServerOutput.GetAwaiter().GetResult() + $ServerError.GetAwaiter().GetResult())
+		}
+		if ($PlayerProcess) {
+			$PlayerProcess.WaitForExit()
+			[System.IO.File]::WriteAllText("$MemoryOutputPrefix-player.log", $PlayerOutput.GetAwaiter().GetResult() + $PlayerError.GetAwaiter().GetResult())
+		}
+		if ($ServerProcess) { $ServerProcess.Dispose() }
+		if ($PlayerProcess) { $PlayerProcess.Dispose() }
+	}
+	return
+}
+
 if ($Mode -eq 'Node' -or $Mode -eq 'NodeCycle') {
 	foreach ($Pair in @(
 		@('NodeEndpoint', $NodeEndpoint),
@@ -443,6 +559,7 @@ if ($Mode -eq 'Node' -or $Mode -eq 'NodeCycle') {
 		Require-Value -Name $Pair[0] -Value $Pair[1]
 	}
 	$Port = 41000 + ($PID % 1000)
+	if ($LifecycleGamePort -ne 0) { $Port = $LifecycleGamePort }
 	$GameEndpoint = "127.0.0.1:$Port"
 	$NodeArguments = @(
 		'--content-provider', 'node',

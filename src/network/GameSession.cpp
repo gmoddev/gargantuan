@@ -177,6 +177,9 @@ namespace gargantuan::network {
 			Stop();
 		}
 
+		bool SpatialValidationRequested = false;
+		bool SpatialValidationPassed = false;
+
 		bool InjectFailure(detail::GameSessionFailurePoint Point) {
 			if (FailurePoint != Point) return false;
 			FailurePoint = detail::GameSessionFailurePoint::None;
@@ -1258,6 +1261,10 @@ namespace gargantuan::network {
 					});
 					return;
 				}
+				if (SpatialValidationRequested) {
+					SpatialValidationRequested = false;
+					SpatialValidationPassed = Relevance->VerifySpatialIndex();
+				}
 				for (const auto &[Connection, PeerValue] : Peers) {
 					if (PeerValue.Phase != PeerPhase::Ready) continue;
 					if (!Authority->SetPeerPublicationFocus(Connection, Relevance->GetResolvedFocus(Connection)))
@@ -1411,7 +1418,8 @@ namespace gargantuan::network {
 							}
 							if (CriticalTransitions > Allowance) continue;
 							const auto ReplicationMetricsBefore = Replication->GetCumulativeMetrics();
-							auto Produced = Replication->ProducePendingBaseline(Connection, Allowance, SimulationTick);
+							auto Produced = Replication->ProducePendingBaseline(Connection, Allowance, SimulationTick,
+								Peer->second.Limits.MaximumReliableMessageBytes);
 							const auto ReplicationMetricsAfter = Replication->GetCumulativeMetrics();
 							Metrics.BaselineSnapshotCpuNanoseconds +=
 								ReplicationMetricsAfter.SnapshotCaptureCpuNanoseconds -
@@ -1464,7 +1472,8 @@ namespace gargantuan::network {
 						}
 						auto ProduceRelevance = [&]() {
 							if (!Replication->HasPendingRelevance(Connection)) return false;
-							auto Produced = Replication->ProducePendingRelevance(Connection, Allowance, SimulationTick);
+							auto Produced = Replication->ProducePendingRelevance(Connection, Allowance, SimulationTick,
+								Peer->second.Limits.MaximumReliableMessageBytes);
 							if (Produced.Succeeded() && Produced.Frame) {
 								if (SubmitStructural(Connection, Peer->second, Produced)) {
 									Consumed += Produced.SelectedTransitions;
@@ -1485,7 +1494,8 @@ namespace gargantuan::network {
 							return true;
 						};
 						auto ProduceJournal = [&]() {
-							auto Produced = Replication->ProduceIncremental(Connection, Allowance);
+							auto Produced = Replication->ProduceIncremental(Connection, Allowance,
+								Peer->second.Limits.MaximumReliableMessageBytes);
 							if (Produced.Succeeded() && Produced.Frame) {
 								if (SubmitStructural(Connection, Peer->second, Produced)) {
 									Consumed += Produced.SelectedTransitions;
@@ -1805,5 +1815,25 @@ namespace gargantuan::network {
 	bool GameSession::SetTrustedReplicationFocus(ConnectionId Connection, std::span<const glm::vec3> FocusPoints) {
 		return State->Configuration.Role == GameSessionRole::Server && State->Relevance &&
 			   State->Relevance->SetTrustedFocus(Connection, FocusPoints);
+	}
+
+	bool detail::GameSessionTestAccess::VerifySpatialIndex(const GameSession &Session) {
+		return !Session.State->SpatialValidationRequested && Session.State->SpatialValidationPassed;
+	}
+	void detail::GameSessionTestAccess::RequestSpatialValidation(GameSession &Session) {
+		Session.State->SpatialValidationRequested = true;
+		Session.State->SpatialValidationPassed = false;
+	}
+	std::optional<SpatialCellAddress> detail::GameSessionTestAccess::GetSpatialCellAddress(
+		const GameSession &Session, ObjectId Object) {
+		return Session.State->Relevance ? Session.State->Relevance->GetSpatialCellAddress(Object) : std::nullopt;
+	}
+	CharacterNetworkMetrics detail::GameSessionTestAccess::GetCharacterMetrics(const GameSession &Session) {
+		return Session.State->Authority ? Session.State->Authority->GetMetrics() : CharacterNetworkMetrics{};
+	}
+	std::vector<ConnectionId> detail::GameSessionTestAccess::GetConnections(const GameSession &Session) {
+		std::vector<ConnectionId> Result;
+		for (const auto &[Connection, PeerValue] : Session.State->Peers) Result.push_back(Connection);
+		return Result;
 	}
 }

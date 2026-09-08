@@ -459,8 +459,9 @@ namespace gargantuan {
 			std::array<std::int32_t, 3> Minimum{}, Maximum{};
 			std::uint64_t MembershipCount = 1;
 			for (std::size_t Axis = 0; Axis < 3; ++Axis) {
-				const auto MinimumCell = std::floor(Entry.CoarseBounds->Minimum[Axis] / CellSize);
-				const auto MaximumCell = std::floor(Entry.CoarseBounds->Maximum[Axis] / CellSize);
+				// Double preserves the exact int32 upper bound in the check below.
+				const auto MinimumCell = std::floor(static_cast<double>(Entry.CoarseBounds->Minimum[Axis]) / CellSize);
+				const auto MaximumCell = std::floor(static_cast<double>(Entry.CoarseBounds->Maximum[Axis]) / CellSize);
 				if (MinimumCell < std::numeric_limits<std::int32_t>::min() ||
 					MaximumCell > std::numeric_limits<std::int32_t>::max())
 					throw std::length_error("Package coarse bounds exceed the addressable range");
@@ -496,8 +497,8 @@ namespace gargantuan {
 		std::array<std::int32_t, 3> Minimum{}, Maximum{};
 		std::uint64_t CellCount = 1;
 		for (std::size_t Axis = 0; Axis < 3; ++Axis) {
-			const auto A = std::floor(Bounds.Minimum[Axis] / State->CellSize);
-			const auto B = std::floor(Bounds.Maximum[Axis] / State->CellSize);
+			const auto A = std::floor(static_cast<double>(Bounds.Minimum[Axis]) / State->CellSize);
+			const auto B = std::floor(static_cast<double>(Bounds.Maximum[Axis]) / State->CellSize);
 			if (A < std::numeric_limits<std::int32_t>::min() || B > std::numeric_limits<std::int32_t>::max()) return Result;
 			Minimum[Axis] = static_cast<std::int32_t>(A);
 			Maximum[Axis] = static_cast<std::int32_t>(B);
@@ -647,10 +648,26 @@ namespace gargantuan {
 			AvailabilityTimePoint PreparationStarted{};
 			AvailabilityTimePoint WorkerPreparationFinished{};
 		};
+		struct DecodedAccounting final {
+			std::atomic<std::size_t> Bytes{0};
+			std::atomic<std::size_t> HighWater{0};
+			std::atomic<std::uint64_t> Deferrals{0};
+		};
+		struct DecodedDocument final {
+			InstanceSerialization::Internal::PreparedInstanceDocumentPtr Document;
+			std::shared_ptr<DecodedAccounting> Accounting;
+			std::size_t Bytes = 0;
+			~DecodedDocument() {
+				Document.reset();
+				if (Accounting) Accounting->Bytes.fetch_sub(Bytes, std::memory_order_relaxed);
+			}
+		};
+		using DecodedDocumentPtr = std::shared_ptr<const DecodedDocument>;
 		struct PreparedContent final {
 			std::string Key;
 			std::shared_ptr<const std::vector<std::uint8_t>> Bytes;
-			InstanceSerialization::Internal::PreparedInstanceDocumentPtr Document;
+			DecodedDocumentPtr Document;
+			bool PreparationDeferred = false;
 			std::size_t EncodedBytes = 0;
 			bool CacheHit = false;
 			ContentTimes Times;
@@ -662,7 +679,7 @@ namespace gargantuan {
 			std::uint32_t Pins = 0;
 			std::shared_ptr<std::atomic_bool> RequestCancelled;
 			std::shared_ptr<const std::vector<std::uint8_t>> CachedPayload;
-			InstanceSerialization::Internal::PreparedInstanceDocumentPtr Prepared;
+			DecodedDocumentPtr Prepared;
 			std::size_t EncodedBytes = 0;
 			std::optional<AvailabilityTimePoint> AcceptedAt;
 			std::optional<AvailabilityTimePoint> QueuedAt;
@@ -703,6 +720,7 @@ namespace gargantuan {
 		std::vector<std::vector<std::size_t>> Dependents;
 		std::vector<Record> Records;
 		ContentAvailabilityMetrics Metrics;
+		std::shared_ptr<DecodedAccounting> Decoded = std::make_shared<DecodedAccounting>();
 		std::size_t InFlight = 0;
 		std::size_t ReservedCompletionBytes = 0;
 		std::size_t Pending = 0;
@@ -725,6 +743,52 @@ namespace gargantuan {
 
 		ContentRequestContext Context() const {
 			return {Cancelled, std::chrono::steady_clock::now() + Configuration.Limits.RequestTimeout, Generation};
+		}
+
+		void FinishPreparation(PreparedContent &Prepared,
+			InstanceSerialization::Internal::PreparedInstanceDocumentResult Document,
+			const ContentRequestContext &RequestContext, Completion &Result) {
+			if (RequestContext.IsCancelled() || RequestContext.IsExpired()) {
+				Result.Content = std::unexpected(CancelledError(RequestContext));
+				return;
+			}
+			if (!Document) {
+				Result.Content = std::unexpected(ContentProviderError{
+					ContentProviderErrorCode::InvalidResponse, std::move(Document.error())});
+				return;
+			}
+			const auto Bytes = InstanceSerialization::Internal::GetPreparedDocumentRetainedBytes(*Document) +
+				sizeof(DecodedDocument) + 2 * sizeof(void *);
+			const auto Limit = Configuration.Limits.MaximumDecodedDocumentBytes;
+			if (Bytes > Limit) {
+				Result.Content = std::unexpected(ContentProviderError{
+					ContentProviderErrorCode::ResourceExhausted, "decoded content document exceeds its byte limit"});
+				return;
+			}
+			auto Current = Decoded->Bytes.load(std::memory_order_relaxed);
+			while (Bytes <= Limit - Current) {
+				if (!Decoded->Bytes.compare_exchange_weak(Current, Current + Bytes, std::memory_order_relaxed)) continue;
+				auto HighWater = Decoded->HighWater.load(std::memory_order_relaxed);
+				while (HighWater < Current + Bytes && !Decoded->HighWater.compare_exchange_weak(
+					HighWater, Current + Bytes, std::memory_order_relaxed)) {}
+				try {
+					auto Retained = std::make_shared<DecodedDocument>();
+					Retained->Accounting = Decoded;
+					Retained->Bytes = Bytes;
+					Retained->Document = std::move(*Document);
+					Prepared.Document = std::move(Retained);
+				} catch (...) {
+					Decoded->Bytes.fetch_sub(Bytes, std::memory_order_relaxed);
+					throw;
+				}
+				Result.Content = std::move(Prepared);
+				return;
+			}
+			// Keep verified immutable bytes, not another decoded DOM. A ready unit
+			// retries preparation from cache through the same bounded worker queue.
+			Decoded->Deferrals.fetch_add(1, std::memory_order_relaxed);
+			Prepared.PreparationDeferred = true;
+			Result.Content = std::move(Prepared);
 		}
 
 		std::size_t Desire(const Record &Value) const {
@@ -790,11 +854,12 @@ namespace gargantuan {
 			auto Provider = Configuration.Provider;
 			auto Identity = PackageContentIdentity{Configuration.Package, Manifest->Entries[Index].Key};
 			const auto ExpectedDigest = Manifest->Entries[Index].Digest;
+			const auto ExpectedObjects = Manifest->Entries[Index].ObjectCount;
 			const auto ExpectedBytes = static_cast<std::size_t>(Manifest->Entries[Index].CompressedBytes);
 			ReservedCompletionBytes += ExpectedBytes;
 			auto RequestContext = Context();
 			RequestContext.Cancelled = RecordValue.RequestCancelled;
-			Jobs.Submit([this, Provider = std::move(Provider), Identity = std::move(Identity), ExpectedDigest, ExpectedBytes, RequestContext] {
+			Jobs.Submit([this, Provider = std::move(Provider), Identity = std::move(Identity), ExpectedDigest, ExpectedBytes, ExpectedObjects, RequestContext] {
 				Completion Result;
 				Result.Kind = CompletionKind::Content;
 				Result.Generation = RequestContext.SessionGeneration;
@@ -819,18 +884,9 @@ namespace gargantuan {
 					Prepared.Bytes = Payload->Bytes;
 					Prepared.Times.VerificationFinished = AvailabilityClock::now();
 					Prepared.Times.PreparationStarted = Prepared.Times.VerificationFinished;
-					auto Document = InstanceSerialization::Internal::PrepareDetachedJson(*Payload->Bytes);
+					auto Document = InstanceSerialization::Internal::PrepareDetachedJson(*Payload->Bytes, ExpectedObjects);
 					Prepared.Times.WorkerPreparationFinished = AvailabilityClock::now();
-					if (RequestContext.IsCancelled() || RequestContext.IsExpired()) {
-						Result.Content = std::unexpected(CancelledError(RequestContext));
-					} else if (!Document) {
-						Result.Content = std::unexpected(ContentProviderError{
-							ContentProviderErrorCode::InvalidResponse, std::move(Document.error())
-						});
-					} else {
-						Prepared.Document = std::move(*Document);
-						Result.Content = std::move(Prepared);
-					}
+					FinishPreparation(Prepared, std::move(Document), RequestContext, Result);
 				}
 				std::scoped_lock Lock(CompletionMutex);
 				if (Result.Content &&
@@ -851,9 +907,9 @@ namespace gargantuan {
 
 		void SubmitCachedContent(std::size_t Index) {
 			auto &RecordValue = Records[Index];
+			if (RecordValue.Residency == ContentResidencyState::Requested) --Pending;
 			RecordValue.Residency = ContentResidencyState::Acquiring;
 			RecordValue.RequestCancelled = std::make_shared<std::atomic_bool>(false);
-			--Pending;
 			++InFlight;
 			++Metrics.CacheHits;
 			Metrics.InFlightHighWater = std::max<std::uint64_t>(Metrics.InFlightHighWater, InFlight);
@@ -861,9 +917,10 @@ namespace gargantuan {
 			ReservedCompletionBytes += ExpectedBytes;
 			auto Bytes = RecordValue.CachedPayload;
 			auto Key = Manifest->Entries[Index].Key;
+			const auto ExpectedObjects = Manifest->Entries[Index].ObjectCount;
 			auto RequestContext = Context();
 			RequestContext.Cancelled = RecordValue.RequestCancelled;
-			Jobs.Submit([this, Bytes = std::move(Bytes), Key = std::move(Key), ExpectedBytes, RequestContext] {
+			Jobs.Submit([this, Bytes = std::move(Bytes), Key = std::move(Key), ExpectedBytes, ExpectedObjects, RequestContext] {
 				Completion Result;
 				Result.Kind = CompletionKind::Content;
 				Result.Generation = RequestContext.SessionGeneration;
@@ -878,18 +935,9 @@ namespace gargantuan {
 				Prepared.Times.BytesReceived = Prepared.Times.ProviderStarted;
 				Prepared.Times.VerificationFinished = Prepared.Times.BytesReceived;
 				Prepared.Times.PreparationStarted = Prepared.Times.VerificationFinished;
-				auto Document = InstanceSerialization::Internal::PrepareDetachedJson(*Bytes);
+				auto Document = InstanceSerialization::Internal::PrepareDetachedJson(*Bytes, ExpectedObjects);
 				Prepared.Times.WorkerPreparationFinished = AvailabilityClock::now();
-				if (RequestContext.IsCancelled() || RequestContext.IsExpired()) {
-					Result.Content = std::unexpected(CancelledError(RequestContext));
-				} else if (!Document) {
-					Result.Content = std::unexpected(ContentProviderError{
-						ContentProviderErrorCode::InvalidResponse, std::move(Document.error())
-					});
-				} else {
-					Prepared.Document = std::move(*Document);
-					Result.Content = std::move(Prepared);
-				}
+				FinishPreparation(Prepared, std::move(Document), RequestContext, Result);
 				std::scoped_lock Lock(CompletionMutex);
 				if (Result.Content) {
 					CompletionBytes += Result.Content->EncodedBytes;
@@ -1038,6 +1086,8 @@ namespace gargantuan {
 			Configuration.Limits.MaximumCompletedPayloadBytes > MaximumContentAvailabilityCompletedPayloadBytes ||
 			Configuration.Limits.MaximumCachedPayloadBytes < MaximumPackageContentPayloadBytes ||
 			Configuration.Limits.MaximumCachedPayloadBytes > MaximumContentAvailabilityCachedPayloadBytes ||
+			Configuration.Limits.MaximumDecodedDocumentBytes < MaximumPackageContentPayloadBytes ||
+			Configuration.Limits.MaximumDecodedDocumentBytes > MaximumContentAvailabilityDecodedDocumentBytes ||
 			Configuration.Limits.MaximumCompletionsPerTick == 0 ||
 			Configuration.Limits.MaximumCompletionsPerTick > MaximumContentAvailabilityCompletionsPerTick ||
 			Configuration.Limits.MaximumAdmissionUnitsPerTick == 0 ||
@@ -1132,8 +1182,9 @@ namespace gargantuan {
 				continue;
 			}
 			const auto &Entry = State->Manifest->Entries[Found->second];
-			const auto &Prepared = *Completion.Content;
-			if (Prepared.Key != Entry.Key || !Prepared.Document || Prepared.EncodedBytes != Entry.CompressedBytes) {
+			auto &Prepared = *Completion.Content;
+			if (Prepared.Key != Entry.Key || (!Prepared.Document && !Prepared.PreparationDeferred) ||
+				Prepared.EncodedBytes != Entry.CompressedBytes) {
 				RecordValue.Residency = ContentResidencyState::Failed;
 				++State->Metrics.Failures;
 				State->Report("PayloadRejected", "Content payload identity or size is invalid");
@@ -1155,7 +1206,10 @@ namespace gargantuan {
 					State->Metrics.CachedPayloadBytesHighWater, State->CachedBytes
 				);
 			}
-			RecordValue.Prepared = Prepared.Document;
+			RecordValue.Prepared = std::move(Prepared.Document);
+			// A dependent must not occupy decoded capacity needed by its dependency.
+			// Retain its verified raw cache entry; prepare again only when it can admit.
+			if (!State->DependenciesResident(Found->second)) RecordValue.Prepared.reset();
 			RecordValue.Times = Prepared.Times;
 			if (!Prepared.CacheHit) {
 				State->Metrics.BytesAcquired += Prepared.EncodedBytes;
@@ -1163,19 +1217,24 @@ namespace gargantuan {
 			}
 			RecordValue.Residency = ContentResidencyState::Available;
 		}
+		Completed.clear();
 
 		State->StartRequests();
 		if (!State->Manifest) return;
-		State->Metrics.AdmissionPendingHighWater = std::max<std::uint64_t>(
-			State->Metrics.AdmissionPendingHighWater,
-			std::ranges::count_if(State->Records, [](const Impl::Record &RecordValue) {
-				return RecordValue.Residency == ContentResidencyState::Available ||
-					RecordValue.Residency == ContentResidencyState::Admitting;
-			})
-		);
 		std::size_t Units = 0;
 		std::size_t Objects = 0;
 		std::size_t Bytes = 0;
+		std::size_t AvailableDecodedBytes = 0;
+		std::size_t AdmissionPending = 0;
+		for (const auto &RecordValue : State->Records) {
+			if (RecordValue.Prepared) AvailableDecodedBytes += RecordValue.Prepared->Bytes;
+			if (RecordValue.Residency == ContentResidencyState::Available ||
+				RecordValue.Residency == ContentResidencyState::Admitting) ++AdmissionPending;
+		}
+		State->Metrics.AdmissionPendingHighWater = std::max<std::uint64_t>(
+			State->Metrics.AdmissionPendingHighWater, AdmissionPending);
+		State->Metrics.AvailableDecodedBytesHighWater = std::max<std::uint64_t>(
+			State->Metrics.AvailableDecodedBytesHighWater, AvailableDecodedBytes);
 		for (std::size_t Index = 0; Index < State->Records.size() && Units < State->Configuration.Limits.MaximumAdmissionUnitsPerTick; ++Index) {
 			auto &RecordValue = State->Records[Index];
 			const auto &Entry = State->Manifest->Entries[Index];
@@ -1186,8 +1245,18 @@ namespace gargantuan {
 				++State->Metrics.AdmissionDeferrals;
 				continue;
 			}
+			if (!RecordValue.Prepared) {
+				if (State->InFlight < State->Configuration.Limits.MaximumInFlight &&
+					State->Decoded->Bytes.load(std::memory_order_relaxed) < State->Configuration.Limits.MaximumDecodedDocumentBytes &&
+					RecordValue.EncodedBytes <= State->Configuration.Limits.MaximumCompletedPayloadBytes -
+						std::min(State->ReservedCompletionBytes, State->Configuration.Limits.MaximumCompletedPayloadBytes))
+					State->SubmitCachedContent(Index);
+				continue;
+			}
 			RecordValue.Residency = ContentResidencyState::Admitting;
-			auto Prepared = InstanceSerialization::Internal::MaterializeDetachedJson(RecordValue.Prepared);
+			auto Prepared = InstanceSerialization::Internal::MaterializeDetachedJson(RecordValue.Prepared->Document);
+			State->Metrics.DetachedObjectsHighWater = std::max<std::uint64_t>(
+				State->Metrics.DetachedObjectsHighWater, Prepared.ObjectsDecoded);
 			const auto PreparationFinished = AvailabilityClock::now();
 			if (!Prepared.Ok || !Prepared.Instance || Prepared.Instance->IsA("DataModel") ||
 				Prepared.ObjectsDecoded != Entry.ObjectCount) {
@@ -1244,6 +1313,9 @@ namespace gargantuan {
 			Bytes += static_cast<std::size_t>(Entry.UncompressedBytes);
 			++State->Metrics.Admissions;
 			State->Metrics.ObjectsAdmitted += Entry.ObjectCount;
+			State->Metrics.ResidentPackageObjects += Entry.ObjectCount;
+			State->Metrics.ResidentPackageObjectsHighWater = std::max(
+				State->Metrics.ResidentPackageObjectsHighWater, State->Metrics.ResidentPackageObjects);
 		}
 
 		Units = 0;
@@ -1255,6 +1327,7 @@ namespace gargantuan {
 				State->HasResidentDependent(Index) ||
 				Objects + Entry.ObjectCount > State->Configuration.Limits.MaximumEvictionObjectsPerTick) continue;
 			if (!RecordValue.Root || RecordValue.Root->GetDestroyed()) {
+				State->Metrics.ResidentPackageObjects -= RecordValue.PackageObjects.size();
 				RecordValue.Root.reset();
 				RecordValue.PackageObjects.clear();
 				RecordValue.Residency = RecordValue.Prepared ? ContentResidencyState::Available : ContentResidencyState::Unavailable;
@@ -1277,6 +1350,7 @@ namespace gargantuan {
 			Objects += Entry.ObjectCount;
 			++State->Metrics.Evictions;
 			State->Metrics.ObjectsEvicted += Entry.ObjectCount;
+			State->Metrics.ResidentPackageObjects -= Entry.ObjectCount;
 		}
 		State->StartRequests();
 	}
@@ -1304,8 +1378,13 @@ namespace gargantuan {
 		State->ReservedCompletionBytes = 0;
 		State->Pending = 0;
 		State->CachedBytes = 0;
+		State->Metrics.ResidentPackageObjects = 0;
+		State->Manifest.reset();
+		decltype(State->Records){}.swap(State->Records);
+		decltype(State->Indices){}.swap(State->Indices);
+		decltype(State->Dependents){}.swap(State->Dependents);
 		std::scoped_lock Lock(State->CompletionMutex);
-		State->Completions.clear();
+		decltype(State->Completions){}.swap(State->Completions);
 		State->CompletionBytes = 0;
 	}
 
@@ -1385,6 +1464,7 @@ namespace gargantuan {
 		auto Result = State->Metrics;
 		const auto Now = AvailabilityClock::now();
 		for (const auto &RecordValue : State->Records) {
+			if (RecordValue.Prepared) Result.AvailableDecodedBytes += RecordValue.Prepared->Bytes;
 			switch (RecordValue.Residency) {
 			case ContentResidencyState::Requested:
 				++Result.RequestedUnits;
@@ -1417,6 +1497,10 @@ namespace gargantuan {
 			}
 		}
 		Result.ReservedCompletionPayloadBytes = State->ReservedCompletionBytes;
+		Result.RetainedRecordCount = State->Records.size();
+		Result.DecodedDocumentBytes = State->Decoded->Bytes.load(std::memory_order_relaxed);
+		Result.DecodedDocumentBytesHighWater = State->Decoded->HighWater.load(std::memory_order_relaxed);
+		Result.DecodedCapacityDeferrals = State->Decoded->Deferrals.load(std::memory_order_relaxed);
 		Result.CachedPayloadBytes = State->CachedBytes;
 		{
 			std::scoped_lock Lock(State->CompletionMutex);

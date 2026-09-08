@@ -90,7 +90,7 @@ part of the authoritative hierarchy contract.
 
 Property update records contain an owned `WireValue` snapshot captured after
 assignment, so consumers do not need to reread the live object and `std::any`
-cannot leak across the serialization boundary. `ChangeJournal` retains 4,096
+cannot leak across the serialization boundary. `ChangeJournal` retains 16,384
 records per scope by default. Capacity is configurable and
 old records are evicted from the front. `CreateCursor` starts at the next commit.
 `Read` returns a bounded batch and an advanced cursor. If a cursor predates the
@@ -100,6 +100,12 @@ The older `ReadSince` API reads the unscoped diagnostic stream and remains for c
 cannot report retention loss and must not be used by reliable replication.
 Capacity changes and snapshot construction are Main-domain policy decisions even
 though journal reads and commits are internally synchronized.
+
+The final DataModel owner releases that world's retained stream. Ordinary
+`Destroy()` leaves records available until consumers release their world
+ownership; it is not a global journal clear. This retires history for an ended
+generation without changing any active scope's ordering. See
+`FoundationRuntime.md` for the associated render-dirty retirement contract.
 
 ## Future work
 

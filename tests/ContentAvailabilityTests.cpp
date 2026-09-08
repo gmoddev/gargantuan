@@ -1,4 +1,6 @@
 #include "gargantuan/assets/InstanceSerialization.hpp"
+#include "gargantuan/Engine.hpp"
+#include "gargantuan/render/Renderer.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Folder.hpp"
 #include "gargantuan/classes/RemoteEvent.hpp"
@@ -154,6 +156,19 @@ int main() {
 	auto Query = Coarse.Query("default", {{-1.0f, -1.0f, -1.0f}, {1.0f, 1.0f, 1.0f}}, 8);
 	Check(Query.size() == 1 && Query.front() == 0 && Coarse.GetMembershipCount() != 0,
 		"package coarse index did not return the independent content unit");
+	// Float rounding must not turn INT32_MAX into an accepted 2^31 cell.
+	const float OutsideCoarseRange = 2147483648.0f;
+	auto CoarseBoundaryManifest = *Parsed;
+	CoarseBoundaryManifest.Entries.front().CoarseBounds = PackageCoarseBounds{
+		{OutsideCoarseRange, 0, 0}, {OutsideCoarseRange, 0, 0}};
+	bool BoundaryRejected = false;
+	try { PackageContentCoarseIndex InvalidCoarse(CoarseBoundaryManifest, 1.0f); }
+	catch (const std::length_error &) { BoundaryRejected = true; }
+	Check(BoundaryRejected, "coarse index accepted a cell outside signed 32-bit range");
+	CoarseBoundaryManifest.Entries.front().CoarseBounds = PackageCoarseBounds{{0, 0, 0}, {0, 0, 0}};
+	PackageContentCoarseIndex UnitCoarse(CoarseBoundaryManifest, 1.0f);
+	Check(UnitCoarse.Query("default", {{OutsideCoarseRange, 0, 0}, {OutsideCoarseRange, 0, 0}}, 8).empty(),
+		"coarse query accepted a cell outside signed 32-bit range");
 	auto Cycle = Data.Manifest;
 	Cycle.Entries.push_back(Cycle.Entries.front());
 	Cycle.Entries[0].Key = "a";
@@ -268,6 +283,15 @@ int main() {
 	Limits.MaximumCompletedPayloadBytes = MaximumContentAvailabilityCompletedPayloadBytes + 1;
 	Check(!LimitsAccepted(Limits), "completed payload bytes above the hard maximum were accepted");
 	Limits = {};
+	Limits.MaximumDecodedDocumentBytes = MaximumContentAvailabilityDecodedDocumentBytes - 1;
+	Check(LimitsAccepted(Limits), "decoded byte ceiling minus one was rejected");
+	Limits.MaximumDecodedDocumentBytes = MaximumContentAvailabilityDecodedDocumentBytes;
+	Check(LimitsAccepted(Limits), "exact decoded byte ceiling was rejected");
+	Limits.MaximumDecodedDocumentBytes = MaximumContentAvailabilityDecodedDocumentBytes + 1;
+	Check(!LimitsAccepted(Limits), "decoded bytes above the hard maximum were accepted");
+	Limits.MaximumDecodedDocumentBytes = MaximumPackageContentPayloadBytes - 1;
+	Check(!LimitsAccepted(Limits), "decoded bytes below the supported minimum were accepted");
+	Limits = {};
 	Limits.MaximumCachedPayloadBytes = MaximumContentAvailabilityCachedPayloadBytes + 1;
 	Check(!LimitsAccepted(Limits), "cache bytes above the hard maximum were accepted");
 	Limits = {};
@@ -375,6 +399,9 @@ int main() {
 		"100-cycle lifecycle stress accounting was incorrect");
 	Service.Stop();
 	Check(Service.GetActiveRequestCount() == 0, "session teardown retained content requests");
+	Check(Service.GetMetrics().DecodedDocumentBytes == 0 && Service.GetMetrics().RetainedRecordCount == 0 &&
+		Service.GetMetrics().ResidentPackageObjects == 0 && !Service.GetManifest(),
+		"Stop retained decoded documents or session manifest/record metadata");
 	Check(!WorkspaceValue->FindFirstChild("StreamedRegion", false),
 		"session teardown retained a package-owned authoritative Instance");
 
@@ -517,6 +544,8 @@ int main() {
 	Check(DependencyFailureService.GetState("a") != ContentResidencyState::Resident &&
 		DependencyFailureService.GetActiveRequestCount() == 0,
 		"failed dependency permitted dependent admission or spun acquisition");
+	Check(DependencyFailureService.GetMetrics().DecodedDocumentBytes == 0,
+		"failed dependency retained a decoded dependent document");
 	DependencyFailureData.Provider->Payloads.emplace(
 		"z", ContentPayload{{DependencyFailureData.Package, "z"}, FailureLeaf.Digest, FailureBytes}
 	);
@@ -985,6 +1014,27 @@ int main() {
 	}), "randomized model did not converge to the empty residency set");
 	RandomService.Stop();
 
+	// Exhaust provider work before Main has admitted every available unit.
+	// FullyResident bootstrap must keep draining the bounded admission backlog.
+	try {
+		auto BootstrapWorld = std::make_shared<DataModel>();
+		HeadlessRenderer Renderer(Vector2(64, 64));
+		Engine BootstrapRuntime(BootstrapWorld, &Renderer, nullptr, {
+			.Content = ContentAvailabilityConfiguration{
+				.Provider = RandomData.Provider, .Package = RandomData.Package,
+				.ManifestDigest = RandomData.ManifestDigest, .Mode = ContentResidencyMode::FullyResident,
+				.Limits = {.WorkerCount = 8, .MaximumInFlight = 16, .MaximumCompletionsPerTick = 16,
+					.MaximumAdmissionUnitsPerTick = 1},
+			}, .AudioEnabled = false, .Mode = RuntimeMode::NetworkServer,
+		});
+		Check(BootstrapRuntime.Content->IsFullyResident() && BootstrapRuntime.Content->GetMetrics().Admissions == 16,
+			"FullyResident Engine did not drain available content");
+		BootstrapRuntime.Destroy();
+	} catch (const std::exception &Error) {
+		std::cerr << "[Content:Test] FullyResident backlog: " << Error.what() << '\n';
+		Check(false, "FullyResident Engine failed with an available admission backlog");
+	}
+
 	auto RunRejectedPayload = [&](std::string Encoded, std::uint32_t DeclaredObjects, const char *Message) {
 		Fixture InvalidData;
 		auto Bytes = std::make_shared<std::vector<std::uint8_t>>(Encoded.begin(), Encoded.end());
@@ -1020,6 +1070,8 @@ int main() {
 		Check(Pump(InvalidService, [&] {
 			return InvalidService.GetState("workspace/00000000") == ContentResidencyState::Failed;
 		}) && !InvalidWorkspace->FindFirstChild("StreamedRegion", false), Message);
+		Check(InvalidService.GetMetrics().DecodedDocumentBytes == 0,
+			"failed payload retained a decoded document");
 		InvalidService.Stop();
 	};
 	const auto ValidPayload = std::string(

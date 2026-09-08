@@ -165,6 +165,11 @@ namespace gargantuan {
 		}
 	}
 
+	void ChangeJournal::ReleaseScope(ObjectId Scope) {
+		std::scoped_lock Lock(Mutex);
+		Streams.erase(Scope);
+	}
+
 	void ChangeJournal::ResetProfile() {
 		ProfileCommitCount.store(0, std::memory_order_relaxed);
 		ProfileEvictedRecordCount.store(0, std::memory_order_relaxed);

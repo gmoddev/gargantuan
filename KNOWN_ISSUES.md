@@ -45,6 +45,36 @@ ordering, parent/hierarchy visibility during the callback, reparent versus
 Destroy behavior, subtree ordering, and reentrancy rules before adding the
 schema declaration, native signal, and tests.
 
+## KI-006: Content-coupled gameplay latency exceeds the 3L.2 readiness envelope
+
+- Status: Open; Foundation 3M remains gated.
+- Priority: High
+- Area: Structural materialization and gameplay latency under peer scale.
+- Evidence: [Foundation 3L.2 measurements](devdocs/CurrentArchitecture/ContentAvailabilityFoundation3L_2.md).
+- Relevant code: `src/network/ReplicationCoordinator.cpp`,
+  `src/network/ReplicaApplier.cpp`, `tests/GameSessionBenchmark.cpp`.
+
+The candidate 32-peer 512-object workload converges within the existing 3J cap,
+but RemoteFunction p99 rises from about 26 ms without the streamed region to
+about 382 ms with it Resident. A 100-peer run similarly converges but records
+one owner-action submission failure during reload. The first grouped 500-peer
+fixture missed client-code hydration before the workload Script materialized;
+that attempt produced zero RPC samples and is not an RPC failure. Establishing
+the gameplay client first exposed a separate full-rate receive overload:
+500 input commands/tick exceed the official host's one 128-event Poll call/tick,
+and reliable gameplay traffic is disconnected when the simulated queue fills.
+An explicitly staggered 12 Hz input profile is being measured separately, without
+raising the host, transport, or 3J limits. These are measured
+performance/availability failures, not evidence that the previously fixed
+RemoteFunction access violation has returned. Concurrent bounded build activity
+is recorded and isolated confirmation is still required.
+
+Resolution requires attributed baseline/resident/streaming measurements, healthy
+owner/action/root-motion and Remote traffic, and clean 32/100/500 convergence
+without raising limits, bypassing 3E/3J, or weakening replica validation. Full
+semantic snapshot validation during incremental replica application is an
+inspection lead, not a proven exclusive root cause.
+
 ## Maintenance rules
 
 - Record only issues verified against the current branch.

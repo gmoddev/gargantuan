@@ -153,8 +153,7 @@ namespace gargantuan {
 				while (!Content->IsFullyResident()) {
 					Content->Step();
 					if (std::chrono::steady_clock::now() >= ContentStartupDeadline ||
-						(Content->IsManifestAvailable() && Content->GetActiveRequestCount() == 0 &&
-						 !Content->IsFullyResident()))
+						Content->GetMetrics().Failures != 0)
 						throw std::runtime_error("[Content:Availability] fully resident package bootstrap failed");
 					std::this_thread::yield();
 				}

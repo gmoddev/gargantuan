@@ -40,6 +40,7 @@ namespace gargantuan {
 	inline constexpr std::size_t MaximumContentAvailabilityPendingRequests = 1024;
 	inline constexpr std::size_t MaximumContentAvailabilityCompletedPayloadBytes = 16 * 1024 * 1024;
 	inline constexpr std::size_t MaximumContentAvailabilityCachedPayloadBytes = 32 * 1024 * 1024;
+	inline constexpr std::size_t MaximumContentAvailabilityDecodedDocumentBytes = 16 * 1024 * 1024;
 	inline constexpr std::size_t MaximumContentAvailabilityCompletionsPerTick = 16;
 	inline constexpr std::size_t MaximumContentAvailabilityAdmissionUnitsPerTick = 2;
 	inline constexpr std::size_t MaximumContentAvailabilityAdmissionObjectsPerTick = 512;
@@ -214,6 +215,7 @@ namespace gargantuan {
 		std::size_t MaximumEvictionUnitsPerTick = 2;
 		std::size_t MaximumEvictionObjectsPerTick = MaximumPackageContentObjectsPerUnit;
 		std::chrono::milliseconds RequestTimeout{10'000};
+		std::size_t MaximumDecodedDocumentBytes = MaximumContentAvailabilityDecodedDocumentBytes;
 	};
 
 	struct ContentAvailabilityConfiguration final {
@@ -276,6 +278,17 @@ namespace gargantuan {
 		std::uint64_t ReservedCompletionPayloadBytes = 0;
 		std::uint64_t CompletedPayloadBytes = 0;
 		std::uint64_t CachedPayloadBytes = 0;
+		// Decoded documents include worker completions, Available, and Main's drain.
+		// Counts conservative STL-owned capacity; allocator bookkeeping is measured by RSS.
+		std::uint64_t DecodedDocumentBytes = 0;
+		std::uint64_t DecodedDocumentBytesHighWater = 0;
+		std::uint64_t DecodedCapacityDeferrals = 0;
+		std::uint64_t AvailableDecodedBytes = 0;
+		std::uint64_t AvailableDecodedBytesHighWater = 0;
+		std::uint64_t DetachedObjectsHighWater = 0;
+		std::uint64_t ResidentPackageObjects = 0;
+		std::uint64_t ResidentPackageObjectsHighWater = 0;
+		std::uint64_t RetainedRecordCount = 0;
 		std::uint64_t OldestRequestAgeMicroseconds = 0;
 		ContentAvailabilityTimingMetrics Timing;
 	};

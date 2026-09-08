@@ -237,6 +237,11 @@ namespace gargantuan {
 		}
 	}
 
+	void RenderDirtyAccumulator::ReleaseScope(ObjectId Scope) {
+		std::scoped_lock Lock(Mutex);
+		Scopes.erase(Scope);
+	}
+
 	RenderDirtyBatch RenderDirtyAccumulator::Capture(ObjectId Scope, RenderDirtyConsumerId Consumer) {
 		if (!Scope.IsValid()) throw std::invalid_argument("Render dirty capture requires a valid scope");
 		if (Consumer == InvalidRenderDirtyConsumerId)

@@ -134,11 +134,14 @@ namespace gargantuan::network {
 			ConnectionId Connection, const PeerRelevanceSelection &Selection, std::uint64_t SimulationTick
 		);
 		[[nodiscard]] ReplicationProduceResult
-		ProducePendingRelevance(ConnectionId Connection, std::size_t MaximumTransitions, std::uint64_t SimulationTick);
+		ProducePendingRelevance(ConnectionId Connection, std::size_t MaximumTransitions, std::uint64_t SimulationTick,
+			std::size_t MaximumFrameBytes = MaximumReplicationFrameBytes);
 		[[nodiscard]] ReplicationProduceResult
-		ProducePendingBaseline(ConnectionId Connection, std::size_t MaximumTransitions, std::uint64_t SimulationTick);
+		ProducePendingBaseline(ConnectionId Connection, std::size_t MaximumTransitions, std::uint64_t SimulationTick,
+			std::size_t MaximumFrameBytes = MaximumReplicationFrameBytes);
 		[[nodiscard]] ReplicationProduceResult
-		ProduceIncremental(ConnectionId Connection, std::size_t MaximumTransitions = MaximumWireJournalRecords);
+		ProduceIncremental(ConnectionId Connection, std::size_t MaximumTransitions = MaximumWireJournalRecords,
+			std::size_t MaximumFrameBytes = MaximumReplicationFrameBytes);
 		[[nodiscard]] ReplicationProduceResult SetRelevant(ConnectionId Connection, ObjectId Object, bool Relevant);
 		bool RemovePeer(ConnectionId Connection);
 		[[nodiscard]] const ReplicationView *GetView(ConnectionId Connection) const;
@@ -242,7 +245,8 @@ namespace gargantuan::network {
 			ReplicationMessageKind Kind,
 			std::size_t MaximumTransitions,
 			std::uint64_t SimulationTick,
-			bool CriticalOnly = false
+			bool CriticalOnly = false,
+			std::size_t MaximumFrameBytes = MaximumReplicationFrameBytes
 		);
 		ReplicationProduceResult AddPeer(
 			ConnectionId Connection,

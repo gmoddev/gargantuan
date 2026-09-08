@@ -819,6 +819,8 @@ if(BUILD_TESTING)
 	add_test(NAME GameSessionTests COMMAND gargantuan_game_session_tests)
 	add_executable(gargantuan_game_session_benchmark "tests/GameSessionBenchmark.cpp")
 	target_link_libraries(gargantuan_game_session_benchmark PRIVATE gargantuan_core)
+	target_compile_definitions(gargantuan_game_session_benchmark PRIVATE
+		GARGANTUAN_FIRST_COMPLETE_GAME_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/samples/FirstCompleteGame")
 	add_executable(gargantuan_spatial_region_index_benchmark "tests/SpatialRegionIndexBenchmark.cpp")
 	target_link_libraries(gargantuan_spatial_region_index_benchmark PRIVATE gargantuan_core)
 	target_compile_definitions(gargantuan_character_networking_tests PRIVATE

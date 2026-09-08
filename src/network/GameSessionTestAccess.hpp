@@ -1,6 +1,8 @@
 #pragma once
 
 #include <cstdint>
+#include "gargantuan/network/CharacterNetwork.hpp"
+#include "gargantuan/runtime/SpatialRegionIndex.hpp"
 
 namespace gargantuan::network {
 	class GameSession;
@@ -25,5 +27,10 @@ namespace gargantuan::network::detail {
 	class GameSessionTestAccess final {
 	  public:
 		static void SetFailurePoint(GameSession &Session, GameSessionFailurePoint Point);
+		static void RequestSpatialValidation(GameSession &Session);
+		[[nodiscard]] static bool VerifySpatialIndex(const GameSession &Session);
+		[[nodiscard]] static std::optional<SpatialCellAddress> GetSpatialCellAddress(const GameSession &Session, ObjectId Object);
+		[[nodiscard]] static CharacterNetworkMetrics GetCharacterMetrics(const GameSession &Session);
+		[[nodiscard]] static std::vector<ConnectionId> GetConnections(const GameSession &Session);
 	};
 }

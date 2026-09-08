@@ -86,6 +86,8 @@ namespace gargantuan {
 		[[nodiscard]] RenderDirtyProfile GetProfile() const;
 
 	  private:
+		friend class DataModel;
+		void ReleaseScope(ObjectId Scope);
 		struct Entry {
 			RenderUpdateDomain Domains = RenderUpdateDomain::None;
 			std::size_t EstimatedDeformableBytes = 0;

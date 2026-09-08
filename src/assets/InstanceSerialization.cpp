@@ -36,9 +36,29 @@ namespace gargantuan::InstanceSerialization {
 	using json = JsonCodec::Json;
 
 	namespace Internal {
+		std::size_t JsonRetainedBytes(const json &Value) {
+			std::size_t Bytes = 0;
+			if (Value.is_object()) {
+				const auto &Object = Value.get_ref<const json::object_t &>();
+				Bytes += sizeof(Object) + Object.capacity() * sizeof(json::object_t::value_type);
+				for (const auto &[Key, Child] : Object)
+					Bytes += Key.capacity() + 1 + JsonRetainedBytes(Child);
+			} else if (Value.is_array()) {
+				const auto &Array = Value.get_ref<const json::array_t &>();
+				Bytes += sizeof(Array) + Array.capacity() * sizeof(json);
+				for (const auto &Child : Array) Bytes += JsonRetainedBytes(Child);
+			} else if (Value.is_string()) {
+				const auto &String = Value.get_ref<const json::string_t &>();
+				Bytes += sizeof(String) + String.capacity() + 1;
+			}
+			return Bytes;
+		}
+
 		struct PreparedInstanceDocument final {
-			explicit PreparedInstanceDocument(json Value) : Contents(std::move(Value)) {}
+			explicit PreparedInstanceDocument(json Value) : Contents(std::move(Value)),
+				RetainedBytes(sizeof(PreparedInstanceDocument) + 2 * sizeof(void *) + JsonRetainedBytes(Contents)) {}
 			json Contents;
+			std::size_t RetainedBytes;
 		};
 	}
 
@@ -888,10 +908,28 @@ namespace gargantuan::InstanceSerialization {
 		}
 	}
 
-	Internal::PreparedInstanceDocumentResult Internal::PrepareDetachedJson(std::span<const std::uint8_t> Bytes) {
+	Internal::PreparedInstanceDocumentResult Internal::PrepareDetachedJson(
+		std::span<const std::uint8_t> Bytes, std::size_t ExpectedObjects) {
 		auto Prepared = PrepareJson(std::string_view(reinterpret_cast<const char *>(Bytes.data()), Bytes.size()));
 		if (!Prepared) return std::unexpected(std::move(Prepared.error()));
+		if (ExpectedObjects != 0) {
+			std::size_t Count = 0;
+			auto CountObjects = [&](auto &&Self, const json &Object) -> bool {
+				if (!Object.is_object() || ++Count > ExpectedObjects) return false;
+				const auto Children = Object.find("Children");
+				if (Children == Object.end()) return true;
+				if (!Children->is_array()) return false;
+				for (const auto &Child : *Children) if (!Self(Self, Child)) return false;
+				return true;
+			};
+			if (!CountObjects(CountObjects, *Prepared) || Count != ExpectedObjects)
+				return std::unexpected("Content document differs from its declared object count");
+		}
 		return std::make_shared<const PreparedInstanceDocument>(std::move(*Prepared));
+	}
+
+	std::size_t Internal::GetPreparedDocumentRetainedBytes(const PreparedInstanceDocumentPtr &Prepared) {
+		return Prepared ? Prepared->RetainedBytes : 0;
 	}
 
 	DeserializationState Internal::MaterializeDetachedJson(const PreparedInstanceDocumentPtr &Prepared) {

@@ -179,6 +179,13 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 		const auto MaximumFrames = RequestedFrames > 0 ? RequestedFrames
 													   : (Program.is_used("--startup-smoke") ? 12 : 0);
 		const bool SessionSmoke = Program.is_used("--session-smoke");
+		if (SessionSmoke) {
+			SDL_SetLogOutputFunction([](void *, int, SDL_LogPriority, const char *Message) {
+				std::cerr << Message << '\n';
+			}, nullptr);
+			SDL_SetLogPriority(LogCategory::App, SDL_LOG_PRIORITY_INFO);
+			SDL_SetLogPriority(LogCategory::Lua, SDL_LOG_PRIORITY_INFO);
+		}
 		bool SessionMovementInjected = false;
 		int Frames = 0;
 		auto NetworkFrameDeadline = std::chrono::steady_clock::now();

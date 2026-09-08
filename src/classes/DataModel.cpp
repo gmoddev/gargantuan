@@ -2,6 +2,8 @@
 
 #include "gargantuan/reflection/InstanceClassRegistry.hpp"
 #include "gargantuan/runtime/ProtocolInput.hpp"
+#include "gargantuan/runtime/ChangeJournal.hpp"
+#include "gargantuan/render/RenderDirtyAccumulator.hpp"
 #include "gargantuan/services/ActionMap.hpp"
 #include "gargantuan/services/AssetService.hpp"
 #include "gargantuan/services/CharacterControlService.hpp"
@@ -23,6 +25,16 @@ namespace gargantuan {
 		thread_local DataModel *DeferredRevisionWorld = nullptr;
 		thread_local bool *DeferredRevisionChanged = nullptr;
 	}
+	DataModel::~DataModel() {
+		// Destroy() must leave final records readable while consumers own this
+		// world. Only the final shared-owner release retires the process caches.
+		// Do not publish a new identity from a destructor.
+		if (Id.IsValid()) {
+			ChangeJournal::Get().ReleaseScope(Id);
+			RenderDirtyAccumulator::Get().ReleaseScope(Id);
+		}
+	}
+
 	void DataModel::EnsureAuthoritativeRevisionAvailable() const {
 		if (AuthoritativeRevision == std::numeric_limits<std::uint64_t>::max())
 			throw std::overflow_error("Authoritative project revision is exhausted");

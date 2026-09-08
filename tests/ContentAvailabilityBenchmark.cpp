@@ -6,6 +6,7 @@
 #include "gargantuan/classes/Part.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/runtime/ProtocolInput.hpp"
+#include "gargantuan/runtime/ChangeJournal.hpp"
 #include "gargantuan/services/Workspace.hpp"
 
 #include <algorithm>
@@ -24,6 +25,19 @@
 #include <string_view>
 #include <thread>
 #include <vector>
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <psapi.h>
+#pragma comment(lib, "Psapi.lib")
+#elif defined(__linux__)
+#include <fstream>
+#include <sys/resource.h>
+#include <unistd.h>
+#endif
 
 namespace {
 	struct TrackedAllocationHeader final {
@@ -117,6 +131,27 @@ namespace {
 		double P99 = 0.0;
 		double Maximum = 0.0;
 	};
+
+	void PrintProcessMemory(std::string_view Phase) {
+		std::cout << "[Content:PressureMemory] phase=" << Phase;
+#ifdef _WIN32
+		PROCESS_MEMORY_COUNTERS_EX Counters{};
+		Counters.cb = sizeof(Counters);
+		if (!GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS *>(&Counters), sizeof(Counters)))
+			throw std::runtime_error("pressure process memory query failed");
+		std::cout << " rssBytes=" << Counters.WorkingSetSize << " rssHighWaterBytes=" << Counters.PeakWorkingSetSize
+			<< " privateBytes=" << Counters.PrivateUsage;
+#elif defined(__linux__)
+		std::ifstream Input("/proc/self/statm");
+		std::uint64_t Pages = 0, Resident = 0;
+		Input >> Pages >> Resident;
+		rusage Usage{};
+		if (!Input || getrusage(RUSAGE_SELF, &Usage) != 0) throw std::runtime_error("pressure process memory query failed");
+		std::cout << " rssBytes=" << Resident * static_cast<std::uint64_t>(sysconf(_SC_PAGESIZE))
+			<< " rssHighWaterBytes=" << static_cast<std::uint64_t>(Usage.ru_maxrss) * 1024;
+#endif
+		std::cout << '\n';
+	}
 
 	struct AllocationSample final {
 		std::uint64_t Allocations = 0;
@@ -396,21 +431,128 @@ namespace {
 	  public:
 		std::string Manifest;
 		ContentPayload Payload;
+		bool MissingDependency = false;
 
 		[[nodiscard]] std::string_view Name() const override { return "benchmark-content"; }
 		[[nodiscard]] ContentManifestProviderResult GetManifest(
 			const ContentRequestContext &, const PackageContentNamespace &
 		) override { return Manifest; }
 		[[nodiscard]] ContentPayloadProviderResult GetContent(
-			const ContentRequestContext &, const PackageContentIdentity &
-		) override { return Payload; }
+			const ContentRequestContext &, const PackageContentIdentity &Identity
+		) override {
+			if (MissingDependency && Identity.Key == "z")
+				return std::unexpected(ContentProviderError{ContentProviderErrorCode::NotFound});
+			auto Result = Payload;
+			Result.Identity = Identity;
+			return Result;
+		}
 	};
+
+	// Isolate retained service allocations from fixture construction and process RSS.
+	// The missing dependency prevents admission without pausing workers or bypassing
+	// ContentAvailability. Every dependent is a legal 512-object immutable unit.
+	void RunDecodedPressureCase(bool BlockDependency = true) {
+		const auto Encoded = MakeContentPayload(512, 0, true);
+		auto Bytes = std::make_shared<const std::vector<std::uint8_t>>(Encoded.begin(), Encoded.end());
+		auto Manifest = MakeManifest(64);
+		const auto Digest = AssetContentId::Hash(*Bytes);
+		for (auto &Entry : Manifest.Entries) {
+			Entry.Digest = Digest;
+			Entry.CompressedBytes = Bytes->size();
+			Entry.UncompressedBytes = Bytes->size();
+			Entry.ObjectCount = 512;
+			if (BlockDependency) Entry.Dependencies = {"z"};
+		}
+		auto Dependency = Manifest.Entries.back();
+		Dependency.Key = "z";
+		Dependency.BlobReference = "content/z";
+		Dependency.Dependencies.clear();
+		if (BlockDependency) Manifest.Entries.push_back(Dependency);
+		auto Provider = std::make_shared<BenchmarkContentProvider>();
+		Provider->Manifest = EncodePackageContentManifest(Manifest);
+		Provider->Payload = {{Manifest.Package, ""}, Digest, Bytes};
+		Provider->MissingDependency = true;
+		const auto ManifestDigest = AssetContentId::Hash(std::span(
+			reinterpret_cast<const std::uint8_t *>(Provider->Manifest.data()), Provider->Manifest.size()));
+		auto World = std::make_shared<DataModel>();
+		auto WorkspaceValue = std::dynamic_pointer_cast<Workspace>(World->GetService("Workspace"));
+		StartAllocationSample();
+		{
+			ContentAvailabilityService Service(World, WorkspaceValue, {
+				.Provider = Provider, .Package = Manifest.Package, .ManifestDigest = ManifestDigest,
+				.Mode = ContentResidencyMode::OnDemand,
+				.Limits = {.WorkerCount = 8, .MaximumInFlight = 16, .MaximumCompletionsPerTick = 16,
+					.MaximumAdmissionUnitsPerTick = 1},
+			});
+			const auto Deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+			while (!Service.IsManifestAvailable() && std::chrono::steady_clock::now() < Deadline) {
+				Service.Step();
+				std::this_thread::yield();
+			}
+			if (!Service.IsManifestAvailable()) throw std::runtime_error("pressure manifest unavailable");
+			for (const auto &Entry : Manifest.Entries)
+				if (Entry.Key != "z" && !Service.RequestContent(Entry.Key))
+					throw std::runtime_error("pressure demand rejected");
+			const auto DrainStarted = std::chrono::steady_clock::now();
+			std::uint64_t DrainTicks = 0;
+			do {
+				Service.Step();
+				++DrainTicks;
+				std::this_thread::sleep_for(std::chrono::milliseconds(10));
+			} while ((BlockDependency ? Service.GetMetrics().RequestedUnits != 0 || Service.GetActiveRequestCount() != 0 :
+				Service.GetMetrics().ResidentUnits != 64) &&
+				std::chrono::steady_clock::now() < Deadline);
+			const auto Metrics = Service.GetMetrics();
+			std::cout << "[Content:Pressure] units=64 objectsPerUnit=512 encodedPerUnit=" << Encoded.size()
+				<< " available=" << Metrics.PreparedUnits << " resident=" << Metrics.ResidentUnits
+				<< " cacheBytes=" << Metrics.CachedPayloadBytes << " completionBytes=" << Metrics.CompletedPayloadBytes
+				<< " decodedBytes=" << Metrics.DecodedDocumentBytes
+				<< " decodedHighWater=" << Metrics.DecodedDocumentBytesHighWater
+				<< " decodedDeferrals=" << Metrics.DecodedCapacityDeferrals
+				<< " pendingHighWater=" << Metrics.PendingHighWater << " inFlightHighWater=" << Metrics.InFlightHighWater
+				<< " completionHighWaterBytes=" << Metrics.CompletedPayloadBytesHighWater
+				<< " cacheHighWaterBytes=" << Metrics.CachedPayloadBytesHighWater
+				<< " availableDecodedHighWaterBytes=" << Metrics.AvailableDecodedBytesHighWater
+				<< " detachedObjectsHighWater=" << Metrics.DetachedObjectsHighWater
+				<< " residentOriginObjectsHighWater=" << Metrics.ResidentPackageObjectsHighWater
+				<< " drainTicks=" << DrainTicks
+				<< " drainMs=" << std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - DrainStarted).count()
+				<< " mainStepMaxUs=" << Metrics.Timing.Step.MaximumMicroseconds
+				<< " trackedRetainedBytes=" << TrackedAllocationBytes.load()
+				<< " trackedPeakBytes=" << TrackedAllocationPeakBytes.load() << '\n';
+			PrintProcessMemory("pressure-converged");
+			if (Metrics.ResidentUnits != (BlockDependency ? 0u : 64u)) throw std::runtime_error("pressure admission did not converge");
+			if (!BlockDependency && (Metrics.Acquisitions != 64 || Metrics.Admissions != 64 ||
+				Metrics.DecodedCapacityDeferrals == 0 || Metrics.Failures != 0))
+				throw std::runtime_error("decoded overload did not defer and drain without refetch/failure");
+			if (Metrics.DecodedDocumentBytesHighWater > MaximumContentAvailabilityDecodedDocumentBytes)
+				throw std::runtime_error("decoded documents exceeded capacity");
+			Service.Stop();
+			if (Service.GetMetrics().DecodedDocumentBytes != 0 || Service.GetMetrics().RetainedRecordCount != 0)
+				throw std::runtime_error("Stop retained decoded/session state");
+			std::cout << "[Content:Pressure] afterStopTrackedBytes=" << TrackedAllocationBytes.load() << '\n';
+			PrintProcessMemory("after-stop");
+		}
+		std::cout << "[Content:Pressure] afterServiceDestructionTrackedBytes=" << TrackedAllocationBytes.load() << '\n';
+		World->Destroy();
+		WorkspaceValue.reset();
+		World.reset();
+		std::cout << "[Content:Pressure] afterWorldDestructionTrackedBytes=" << TrackedAllocationBytes.load() << '\n';
+		PrintProcessMemory("after-world-destruction");
+		// Attribution only, after every fixture consumer has stopped. Production
+		// lifecycle must not globally clear another live world's journal.
+		ChangeJournal::Get().Clear();
+		std::cout << "[Content:Pressure] afterJournalClearTrackedBytes=" << TrackedAllocationBytes.load() << '\n';
+		const auto Allocations = FinishAllocationSample();
+		(void)Allocations;
+	}
 
 	void RunServiceAdmissionCase(
 		std::size_t ObjectCount,
 		std::size_t PayloadBytes,
 		std::size_t Iterations,
-		bool RepresentativeParts = false
+		bool RepresentativeParts = false,
+		bool TrackLifecycle = false
 	) {
 		const auto Encoded = MakeContentPayload(ObjectCount, PayloadBytes, RepresentativeParts);
 		auto Bytes = std::make_shared<const std::vector<std::uint8_t>>(Encoded.begin(), Encoded.end());
@@ -443,7 +585,14 @@ namespace {
 		std::vector<double> CommitSamples;
 		std::vector<double> ResidentSamples;
 		std::vector<double> MainStepSamples;
+		std::vector<double> DrainedBytes;
+		DrainedBytes.reserve(Iterations);
+		if (TrackLifecycle) StartAllocationSample();
 		for (std::size_t Iteration = 0; Iteration < Iterations; ++Iteration) {
+			if (TrackLifecycle && Iteration != 0) {
+				DrainedBytes.push_back(static_cast<double>(TrackedAllocationBytes.load()));
+				std::cout << "[Content:Lifecycle] cycle=" << Iteration << " drainedTrackedBytes=" << DrainedBytes.back() << '\n';
+			}
 			auto World = std::make_shared<DataModel>();
 			auto WorkspaceValue = std::dynamic_pointer_cast<Workspace>(World->GetService("Workspace"));
 			ContentAvailabilityService Service(World, WorkspaceValue, {
@@ -476,6 +625,17 @@ namespace {
 			ResidentSamples.push_back(Milliseconds(Metrics.Timing.EndToEnd));
 			MainStepSamples.push_back(Milliseconds(Metrics.Timing.Step));
 			Service.Stop();
+		}
+		if (TrackLifecycle) {
+			DrainedBytes.push_back(static_cast<double>(TrackedAllocationBytes.load()));
+			const auto Allocation = FinishAllocationSample();
+			std::vector<double> Tail(DrainedBytes.begin() + DrainedBytes.size() / 2, DrainedBytes.end());
+			const auto Minimum = *std::ranges::min_element(Tail);
+			const auto Maximum = *std::ranges::max_element(Tail);
+			std::cout << "[Content:Lifecycle] cycles=" << Iterations << " tailMinBytes=" << Minimum
+				<< " tailMaxBytes=" << Maximum << " finalBytes=" << Allocation.RetainedBytes
+				<< " peakBytes=" << Allocation.PeakBytes << '\n';
+			if (Maximum - Minimum > 256 * 1024) throw std::runtime_error("same-process content lifecycle retained memory grows");
 		}
 		const auto WorkerPreparation = Summarize(std::move(WorkerPreparationSamples));
 		const auto TotalPreparation = Summarize(std::move(TotalPreparationSamples));
@@ -510,6 +670,18 @@ namespace {
 int main(int ArgumentCount, char **Arguments) {
 	try {
 		BootstrapNativeRuntimeSchema();
+		if (ArgumentCount > 1 && std::string_view(Arguments[1]) == "--lifecycle") {
+			RunServiceAdmissionCase(512, 1024 * 1024, 100, true, true);
+			return 0;
+		}
+		if (ArgumentCount > 1 && std::string_view(Arguments[1]) == "--decoded-pressure") {
+			RunDecodedPressureCase();
+			return 0;
+		}
+		if (ArgumentCount > 1 && std::string_view(Arguments[1]) == "--decoded-overload") {
+			RunDecodedPressureCase(false);
+			return 0;
+		}
 		const bool Quick = ArgumentCount > 1 && std::string_view(Arguments[1]) == "--quick";
 		for (const auto Count : Quick ? std::vector<std::size_t>{100, 1'000, 10'000}
 									  : std::vector<std::size_t>{100, 1'000, 10'000, 32'768, 65'535, 65'536}) {

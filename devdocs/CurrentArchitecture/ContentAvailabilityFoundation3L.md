@@ -364,9 +364,17 @@ exceed the byte high-water.
 Each parsed JSON document is bounded by the 1 MiB protocol document limit and
 protocol depth/node/string limits, while concurrent work is constrained by the
 16 in-flight ceiling and encoded-byte completion reservation. The detached graph
-is additionally bounded by 512 decoded objects. Available records can retain
-parsed documents after leaving the completion queue, and that decoded memory is
-not directly charged to the 32 MiB encoded-byte cache budget.
+is additionally bounded by 512 decoded objects. Foundation 3L.2 adds a separate
+16 MiB retained decoded-document ceiling; this is not charged to the 32 MiB
+encoded-byte cache budget. Worker completions, Main's drain batch, and Available
+records share one RAII charge, released with the final document owner. A blocked
+dependency drops its decoded document while preserving only bounded verified
+cache bytes. Aggregate pressure defers re-preparation through the existing
+worker queue; an individually over-budget document fails before materialization.
+The charge conservatively counts STL-owned container/string capacity, not
+allocator bookkeeping or transient parser memory. See
+[`ContentAvailabilityFoundation3L_2.md`](ContentAvailabilityFoundation3L_2.md)
+for the memory attribution and measured validation status.
 There is no historical event queue, per-object future, or timer. The benchmark
 executable replaces global allocation only for the benchmark process and
 records requested allocation count, peak live requested bytes, and bytes still

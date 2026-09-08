@@ -17,6 +17,7 @@
 #include "gargantuan/network/ReplicaApplier.hpp"
 #include "gargantuan/network/ReplicationCoordinator.hpp"
 #include "gargantuan/render/RenderExtractor.hpp"
+#include "gargantuan/render/RenderDirtyAccumulator.hpp"
 #include "gargantuan/render/RenderProjection.hpp"
 #include "gargantuan/render/Renderer.hpp"
 #include "gargantuan/runtime/ChangeJournal.hpp"
@@ -6835,6 +6836,39 @@ namespace {
 		lua_settop(L, 0);
 	}
 
+	void TestWorldCacheRetirement() {
+		using namespace gargantuan;
+		auto Survivor = std::make_shared<DataModel>();
+		auto &Journal = ChangeJournal::Get();
+		auto &Dirty = RenderDirtyAccumulator::Get();
+		const auto SurvivorScope = Survivor->GetObjectId();
+		const auto SurvivorCursor = Journal.CreateCursor(SurvivorScope);
+		Survivor->SetName("SurvivingWorld");
+		const auto SurvivorRecords = Journal.Read(SurvivorCursor).Records.size();
+		const auto SurvivorDirty = Dirty.GetPendingObjectCount(SurvivorScope);
+		Check(SurvivorRecords != 0 && SurvivorDirty != 0, "live world has journal and render state");
+		ObjectId PreviousScope;
+		for (std::size_t Cycle = 0; Cycle < 100; ++Cycle) {
+			auto World = std::make_shared<DataModel>();
+			const auto Scope = World->GetObjectId();
+			Check(Scope != PreviousScope, "replacement world has a fresh generation-safe scope");
+			const auto Cursor = Journal.CreateCursor(Scope);
+			auto PartValue = std::make_shared<Part>();
+			PartValue->SetParent(World->GetService("Workspace"));
+			World->Destroy();
+			Check(!Journal.Read(Cursor).Records.empty(), "Destroy preserves final records for live consumers");
+			Check(Dirty.GetPendingObjectCount(Scope) != 0, "Destroy preserves pending render removal");
+			World.reset();
+			Check(Journal.Read(Cursor).Records.empty() && Journal.CreateCursor(Scope).NextSequence == 1,
+				"last world owner releases the journal stream including its retained sequence state");
+			Check(Dirty.GetPendingObjectCount(Scope) == 0, "last world owner releases headless render dirty state");
+			Check(Journal.Read(SurvivorCursor).Records.size() == SurvivorRecords &&
+				Dirty.GetPendingObjectCount(SurvivorScope) == SurvivorDirty,
+				"retiring another world never clears the active world's consumers");
+			PreviousScope = Scope;
+		}
+	}
+
 	void TestPlayDiagnosticBounds() {
 		using namespace gargantuan;
 		auto World = std::make_shared<DataModel>();
@@ -6909,6 +6943,7 @@ int main() {
 	TestInstanceAttributes();
 	TestInstanceTags();
 	TestBoundedJournalCursor();
+	TestWorldCacheRetirement();
 	TestSnapshotBaseline();
 	TestWireJournalAndLoopbackReplication();
 	TestProtocolInputHardening();
