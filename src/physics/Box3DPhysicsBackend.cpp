@@ -1,5 +1,6 @@
 #include "gargantuan/physics/PhysicsBackend.hpp"
 #include "physics/Box3DConversions.hpp"
+#include "../runtime/RuntimeWorkDiagnostics.hpp"
 
 #include <box3d/box3d.h>
 #include <box3d/collision.h>
@@ -84,6 +85,7 @@ namespace gargantuan {
 			}
 
 			[[nodiscard]] PhysicsBodyId CreateBody(const PhysicsBodyDesc &Description) override {
+				runtime_detail::WorkScope Work(runtime_detail::WorkPhase::PhysicsBodyCreate);
 				if (!b3World_IsValid(World) || !IsValidBodyDescription(Description)) return {};
 				const auto Id = AllocateBody();
 				auto &Entry = BodySlots[Id.Slot];
@@ -101,13 +103,17 @@ namespace gargantuan {
 					ReleaseBody(Id);
 					return {};
 				}
+				StaticWorldDirty = true;
+				if (!Description.Anchored) ++DynamicBodyCount;
 
 				Entry.Record->Shape = CreateShape(Entry.Record->Body, Id, Description, true);
 				if (!b3Shape_IsValid(Entry.Record->Shape)) {
 					b3DestroyBody(Entry.Record->Body);
+					if (!Description.Anchored) --DynamicBodyCount;
 					ReleaseBody(Id);
 					return {};
 				}
+				runtime_detail::RecordWorkUnits(runtime_detail::WorkPhase::PhysicsBodyCreate);
 				return Id;
 			}
 
@@ -121,6 +127,12 @@ namespace gargantuan {
 					return {PhysicsOperationStatus::InvalidDescription, "Physics body description is invalid"};
 
 				const auto &Previous = Record->Description;
+				// A non-colliding, non-touching anchored body cannot change any
+				// contact/sensor pair. Its native transform and query proxy still
+				// update synchronously below; this is not deferred activation.
+				if (!Previous.Anchored || !Description.Anchored || Previous.CanCollide ||
+					Description.CanCollide || Previous.CanTouch || Description.CanTouch)
+					StaticWorldDirty = true;
 				const bool RebuildShape = Previous.Shape.Kind != Description.Shape.Kind ||
 					!SameSize(Previous.Shape.Size, Description.Shape.Size) ||
 					Previous.CanCollide != Description.CanCollide || Previous.Density != Description.Density;
@@ -137,8 +149,11 @@ namespace gargantuan {
 					b3Shape_EnableContactEvents(Record->Shape, Description.CanCollide && Description.CanTouch);
 				}
 
-				if (Previous.Anchored != Description.Anchored)
+				if (Previous.Anchored != Description.Anchored) {
 					b3Body_SetType(Record->Body, Description.Anchored ? b3_staticBody : b3_dynamicBody);
+					if (Description.Anchored) --DynamicBodyCount;
+					else ++DynamicBodyCount;
+				}
 				b3Body_SetTransform(
 					Record->Body,
 					Box3DConversions::ToBox3(Description.Transform.Position),
@@ -149,8 +164,10 @@ namespace gargantuan {
 			}
 
 			PhysicsOperationResult DestroyBody(PhysicsBodyId Body) override {
+				runtime_detail::WorkScope Work(runtime_detail::WorkPhase::PhysicsBodyDestroy);
 				auto *Record = FindBody(Body);
 				if (!Record) return InvalidBody();
+				StaticWorldDirty = true;
 				std::vector<PhysicsConstraintId> Attached;
 				for (std::size_t Index = 1; Index < ConstraintSlots.size(); ++Index) {
 					const auto &Entry = ConstraintSlots[Index];
@@ -161,16 +178,20 @@ namespace gargantuan {
 				for (const auto Constraint : Attached) DestroyConstraint(Constraint);
 				ShapeOwners.erase(b3StoreShapeId(Record->Shape));
 				if (b3Body_IsValid(Record->Body)) b3DestroyBody(Record->Body);
+				if (!Record->Description.Anchored) --DynamicBodyCount;
 				ReleaseBody(Body);
+				runtime_detail::RecordWorkUnits(runtime_detail::WorkPhase::PhysicsBodyDestroy);
 				return {};
 			}
 
 			[[nodiscard]] PhysicsConstraintId CreateConstraint(
 				const PhysicsConstraintDesc &Description
 			) override {
+				runtime_detail::WorkScope Work(runtime_detail::WorkPhase::PhysicsConstraintCreate);
 				auto *BodyA = FindBody(Description.BodyA);
 				auto *BodyB = FindBody(Description.BodyB);
 				if (!BodyA || !BodyB || Description.BodyA == Description.BodyB) return {};
+				StaticWorldDirty = true;
 				const auto Id = AllocateConstraint();
 				auto &Entry = ConstraintSlots[Id.Slot];
 				Entry.Record = std::make_unique<ConstraintRecord>();
@@ -190,15 +211,19 @@ namespace gargantuan {
 					ReleaseConstraint(Id);
 					return {};
 				}
+				runtime_detail::RecordWorkUnits(runtime_detail::WorkPhase::PhysicsConstraintCreate);
 				return Id;
 			}
 
 			PhysicsOperationResult DestroyConstraint(PhysicsConstraintId Constraint) override {
+				runtime_detail::WorkScope Work(runtime_detail::WorkPhase::PhysicsConstraintDestroy);
 				auto *Record = FindConstraint(Constraint);
 				if (!Record)
 					return {PhysicsOperationStatus::InvalidId, "Physics constraint identity is invalid or stale"};
+				StaticWorldDirty = true;
 				if (b3Joint_IsValid(Record->Joint)) b3DestroyJoint(Record->Joint, false);
 				ReleaseConstraint(Constraint);
+				runtime_detail::RecordWorkUnits(runtime_detail::WorkPhase::PhysicsConstraintDestroy);
 				return {};
 			}
 
@@ -207,6 +232,7 @@ namespace gargantuan {
 				if (!Record) return InvalidBody();
 				if (!IsFinite(Impulse))
 					return {PhysicsOperationStatus::InvalidDescription, "Physics impulse is not finite"};
+				StaticWorldDirty = true;
 				b3Body_ApplyLinearImpulseToCenter(Record->Body, Box3DConversions::ToBox3(Impulse), true);
 				return {};
 			}
@@ -216,6 +242,7 @@ namespace gargantuan {
 					return {PhysicsOperationStatus::BackendFailure, "Physics world is unavailable"};
 				if (!IsFinite(Gravity))
 					return {PhysicsOperationStatus::InvalidDescription, "Physics gravity is not finite"};
+				StaticWorldDirty = true;
 				b3World_SetGravity(World, Box3DConversions::ToBox3(Gravity));
 				return {};
 			}
@@ -490,7 +517,28 @@ namespace gargantuan {
 				PhysicsStepResult Result;
 				if (!b3World_IsValid(World) || !std::isfinite(Config.DeltaTime) || Config.DeltaTime <= 0.0f ||
 					Config.SubStepCount <= 0) return Result;
-				b3World_Step(World, Config.DeltaTime, Config.SubStepCount);
+				runtime_detail::RecordWorkUnits(runtime_detail::WorkPhase::PhysicsBackendStep);
+				const bool NeedsStep = DynamicBodyCount != 0 || StaticWorldDirty;
+				runtime_detail::RecordWorkDisposition(runtime_detail::WorkPhase::PhysicsBackendStep, NeedsStep);
+				// Once a wholly static world has processed its mutations, no body
+				// motion or overlap can change until the next participating mutation.
+				// Return fresh empty events: native event buffers must not be replayed.
+				// Even sleeping dynamic bodies retain the full backend stepping path.
+				if (!NeedsStep) return Result;
+				StaticWorldDirty = true;
+				runtime_detail::MeasureWork(runtime_detail::WorkPhase::PhysicsBackendStep,
+					[&] { b3World_Step(World, Config.DeltaTime, Config.SubStepCount); });
+				if (runtime_detail::ActiveWorkSample) {
+					const auto Profile = b3World_GetProfile(World);
+					auto Record = [](runtime_detail::WorkPhase Phase, float Milliseconds) {
+						if (std::isfinite(Milliseconds) && Milliseconds >= 0 && Milliseconds < 1e12f)
+							runtime_detail::RecordReportedWork(Phase, static_cast<std::uint64_t>(static_cast<double>(Milliseconds) * 1e6));
+					};
+					Record(runtime_detail::WorkPhase::PhysicsPairsProfile, Profile.pairs);
+					Record(runtime_detail::WorkPhase::PhysicsCollideProfile, Profile.collide);
+					Record(runtime_detail::WorkPhase::PhysicsSolveProfile, Profile.solve);
+					Record(runtime_detail::WorkPhase::PhysicsSensorsProfile, Profile.sensors);
+				}
 
 				const auto BodyEvents = b3World_GetBodyEvents(World);
 				const auto MotionCount = std::min(
@@ -550,6 +598,7 @@ namespace gargantuan {
 						SensorEvents.endEvents[Index].visitorShapeId,
 						PhysicsContactPhase::Ended
 					);
+				StaticWorldDirty = false;
 				return Result;
 			}
 
@@ -573,6 +622,8 @@ namespace gargantuan {
 			};
 
 			b3WorldId World{};
+			std::size_t DynamicBodyCount = 0;
+			bool StaticWorldDirty = true;
 			std::vector<SlotEntry<BodyRecord>> BodySlots;
 			std::vector<std::uint32_t> FreeBodySlots;
 			std::vector<SlotEntry<ConstraintRecord>> ConstraintSlots;

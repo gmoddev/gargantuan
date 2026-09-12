@@ -9,13 +9,16 @@
 #include "gargantuan/scripting/ScriptEngine.hpp"
 #include "gargantuan/scripting/ScriptSecurity.hpp"
 #include "gargantuan/services/Workspace.hpp"
+#include "../src/runtime/RuntimeWorkDiagnostics.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <iostream>
 #include <memory>
 #include <optional>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -357,6 +360,163 @@ namespace {
 		Check(Touches == 1, "committed CanTouch false disables later sensor events");
 	}
 
+	void TestStaticWorldStepReference() {
+		PhysicsWorld World(PhysicsWorldConfig{.Gravity = {0.0f, 0.0f, 0.0f}});
+		PhysicsWorld Reference(PhysicsWorldConfig{.Gravity = {0.0f, 0.0f, 0.0f}});
+		std::array<PhysicsBodyDesc, 3> Descriptions{};
+		Descriptions[0].Anchored = true;
+		Descriptions[0].CanCollide = false;
+		Descriptions[0].Shape.Size = {4.0f, 4.0f, 4.0f};
+		Descriptions[1].Anchored = true;
+		Descriptions[2].Anchored = true;
+		Descriptions[2].CanCollide = false;
+		Descriptions[2].CanTouch = false;
+		std::array<PhysicsBodyId, 3> Ids{};
+		for (std::size_t Index = 0; Index < Ids.size(); ++Index) {
+			Ids[Index] = World.CreateBody(Descriptions[Index]);
+			Check(Ids[Index].IsValid() && Reference.CreateBody(Descriptions[Index]) == Ids[Index],
+				"static reference fixture has matching generation-safe identities");
+		}
+		// Force the reference through ordinary Box3D stepping, without a new
+		// test-only engine switch. This distant dynamic body cannot interact.
+		auto DynamicDescription = Descriptions[2];
+		DynamicDescription.Anchored = false;
+		DynamicDescription.Transform = CFrame(10000.0f, 10000.0f, 10000.0f);
+		const auto ReferenceDynamic = Reference.CreateBody(DynamicDescription);
+		Check(ReferenceDynamic.IsValid(), "reference always has a dynamic body");
+		auto Update = [&](std::size_t Index) {
+			Check(World.UpdateBody(Ids[Index], Descriptions[Index]).Succeeded() &&
+				Reference.UpdateBody(Ids[Index], Descriptions[Index]).Succeeded(), "paired body mutation succeeds");
+		};
+		auto ContactKeys = [](const PhysicsStepResult &Result) {
+			std::vector<std::tuple<PhysicsBodyId, PhysicsBodyId, PhysicsContactPhase>> Keys;
+			for (const auto &Contact : Result.Contacts)
+				Keys.emplace_back(Contact.BodyA, Contact.BodyB, Contact.Phase);
+			std::sort(Keys.begin(), Keys.end());
+			return Keys;
+		};
+		std::uint64_t ActualSteps = 0, EmptySteps = 0;
+		auto CompareStep = [&](bool ExpectBackendStep) {
+			runtime_detail::WorkSample Sample{};
+			PhysicsStepResult Actual;
+			{
+				runtime_detail::WorkCapture Capture(&Sample);
+				Actual = World.Step({});
+			}
+			const auto Expected = Reference.Step({});
+			const auto &Work = Sample[static_cast<std::size_t>(runtime_detail::WorkPhase::PhysicsBackendStep)];
+			Check(Work.Calls == (ExpectBackendStep ? 1u : 0u) && Work.Units == 1 &&
+				Work.Retained == (ExpectBackendStep ? 1u : 0u) && Work.Rejected == (ExpectBackendStep ? 0u : 1u),
+				"only settled static worlds elide backend work");
+			ActualSteps += Work.Retained;
+			EmptySteps += Work.Rejected;
+			Check(ContactKeys(Actual) == ContactKeys(Expected) && Actual.EventsTruncated == Expected.EventsTruncated,
+				"static fast path equals full-step reference contact events without replay");
+			for (const auto Id : Ids) {
+				const auto A = World.GetBodyState(Id), B = Reference.GetBodyState(Id);
+				Check(A && B && glm::length(A->Transform.Position - B->Transform.Position) < 0.0001f &&
+					glm::length(A->LinearVelocity - B->LinearVelocity) < 0.0001f,
+					"static fast path preserves current body states");
+			}
+			if (!ExpectBackendStep)
+				Check(Actual.Motions.empty() && Actual.Contacts.empty(), "skipped steps return no stale native events");
+			return Actual;
+		};
+		const auto Initial = CompareStep(true);
+		Check(Initial.Contacts.size() == 1 && Initial.Contacts[0].Phase == PhysicsContactPhase::Began,
+			"static sensor overlap begins once");
+		for (int Index = 0; Index < 128; ++Index) {
+			Descriptions[2].Transform = CFrame(static_cast<float>(Index % 9), 0.0f, 0.0f);
+			Update(2);
+			CompareStep(false);
+		}
+		Descriptions[1].Transform = CFrame(20.0f, 0.0f, 0.0f);
+		Update(1);
+		const auto End = CompareStep(true);
+		Check(End.Contacts.size() == 1 && End.Contacts[0].Phase == PhysicsContactPhase::Ended,
+			"static transform changes end existing overlaps promptly");
+		CompareStep(false);
+
+		std::uint32_t Seed = 0x3F17u;
+		for (int Iteration = 0; Iteration < 96; ++Iteration) {
+			Seed = Seed * 1664525u + 1013904223u;
+			switch ((Seed >> 16) % 6) {
+			case 0:
+				Descriptions[1].Transform = CFrame((Seed & 1) ? 0.0f : 20.0f, 0.0f, 0.0f);
+				Update(1);
+				break;
+			case 1:
+				Descriptions[0].CanTouch = !Descriptions[0].CanTouch;
+				Update(0);
+				break;
+			case 2:
+				Descriptions[1].Shape.Size = glm::vec3((Seed & 1) ? 2.0f : 8.0f);
+				Descriptions[1].Shape.Kind = (Seed & 2) ? PhysicsShapeKind::Ball : PhysicsShapeKind::Box;
+				Update(1);
+				break;
+			case 3:
+				Descriptions[1].CanCollide = !Descriptions[1].CanCollide;
+				Update(1);
+				break;
+			case 4:
+				Descriptions[2].CanTouch = !Descriptions[2].CanTouch;
+				Update(2);
+				break;
+			case 5: {
+				const auto Old = Ids[1];
+				Check(World.DestroyBody(Old).Succeeded() && Reference.DestroyBody(Old).Succeeded(),
+					"destroy during settled static lifetime succeeds");
+				Ids[1] = World.CreateBody(Descriptions[1]);
+				Check(Ids[1] != Old && Reference.CreateBody(Descriptions[1]) == Ids[1],
+					"static replacement receives fresh generation in both paths");
+				Check(!World.UpdateBody(Old, Descriptions[1]).Succeeded() && !World.DestroyBody(Old).Succeeded(),
+					"stale updates and destroys cannot corrupt static step eligibility");
+				break;
+			}
+			}
+			CompareStep(true);
+			CompareStep(false);
+			CompareStep(false);
+		}
+		Descriptions[1].CanCollide = true;
+		Descriptions[1].Transform = CFrame(5.0f, 0.0f, 0.0f);
+		Update(1);
+		const auto Query = World.Raycast({.Origin = {}, .Direction = {12.0f, 0.0f, 0.0f}});
+		Check(Query.Succeeded() && std::any_of(Query.Candidates.begin(), Query.Candidates.end(),
+			[&](const auto &Hit) { return Hit.Body == Ids[1]; }), "query sees mutation before any backend step");
+		CompareStep(true);
+		Descriptions[1].Anchored = false;
+		Update(1);
+		for (int Index = 0; Index < 12; ++Index) CompareStep(true);
+		Descriptions[1].Anchored = true;
+		Update(1);
+		CompareStep(true);
+		CompareStep(false);
+		Check(World.SetGravity({}).Succeeded() && Reference.SetGravity({}).Succeeded(), "gravity mutation succeeds");
+		CompareStep(true);
+		Check(World.ApplyLinearImpulse(Ids[1], {1.0f, 0.0f, 0.0f}).Succeeded() &&
+			Reference.ApplyLinearImpulse(Ids[1], {1.0f, 0.0f, 0.0f}).Succeeded(), "anchored impulse remains well-defined");
+		CompareStep(true);
+		const PhysicsConstraintDesc Constraint{.BodyA = Ids[0], .BodyB = Ids[1]};
+		const auto Joint = World.CreateConstraint(Constraint);
+		Check(Joint.IsValid() && Reference.CreateConstraint(Constraint) == Joint, "static constraint admission matches");
+		CompareStep(true);
+		CompareStep(false);
+		Check(World.DestroyConstraint(Joint).Succeeded() && Reference.DestroyConstraint(Joint).Succeeded(),
+			"static constraint removal matches");
+		CompareStep(true);
+		CompareStep(false);
+		const auto Dynamic = World.CreateBody(DynamicDescription);
+		Check(Dynamic.IsValid(), "new dynamic body disables static no-work path");
+		CompareStep(true);
+		CompareStep(true);
+		Check(World.DestroyBody(Dynamic).Succeeded() && !World.DestroyBody(Dynamic).Succeeded(),
+			"dynamic removal and stale duplicate do not corrupt the live count");
+		CompareStep(true);
+		CompareStep(false);
+		Check(ActualSteps > 100 && EmptySteps > 300, "reference covers both active and no-work paths repeatedly");
+	}
+
 	std::shared_ptr<Part> MakeRayPart(
 		const std::shared_ptr<Workspace> &WorkspaceValue,
 		std::string Name,
@@ -579,6 +739,7 @@ int main() {
 	TestConstraintAndPendingDestroy();
 	TestSimulationPublicationAndImpulse();
 	TestTouchAndSensorUpdates();
+	TestStaticWorldStepReference();
 	TestSemanticRaycastContract();
 	TestPrimitiveRaycastsAndDeterministicTie();
 	TestGameplayLuauRaycastStress();
