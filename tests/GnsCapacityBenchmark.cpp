@@ -215,7 +215,7 @@ void Run(Case Work) {
 		if (SteamNetworkingSockets()->GetConnectionRealTimeStatus(Server, &Status, 0, nullptr) != k_EResultOK)
 			throw std::runtime_error("status");
 		PeakPending = std::max<std::int64_t>(PeakPending, Status.m_cbPendingReliable);
-		MaxQueue = std::max(MaxQueue, Status.m_usecQueueTime);
+		MaxQueue = std::max<std::int64_t>(MaxQueue, Status.m_usecQueueTime);
 		if (Time < OfferEnd) EndOfferPending = Status.m_cbPendingReliable;
 		if (Time - LastSample >= 100000) {
 			std::cout << "[Network:CapacitySample] case=" << Work.Name << " us=" << Time - Start
