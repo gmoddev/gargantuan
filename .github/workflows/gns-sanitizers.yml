@@ -1,0 +1,172 @@
+name: GNS sanitizer CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux-gns-sanitizers:
+    name: Ubuntu 24.04 / Clang 19 / ASan + UBSan + LSan / GNS
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      CMAKE_BUILD_PARALLEL_LEVEL: 4
+      ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+      ASAN_SYMBOLIZER_PATH: /usr/bin/llvm-symbolizer-19
+      UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+      SDL_VIDEODRIVER: dummy
+
+    steps:
+      - name: Checkout recursive dependencies
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: recursive
+
+      - name: Verify recursive dependency checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          git submodule status --recursive | tee /tmp/gargantuan-submodules.txt
+          if grep -Eq '^[\-+U]' /tmp/gargantuan-submodules.txt; then
+            echo "Submodules are missing, conflicted, or not at their pinned revisions."
+            exit 1
+          fi
+
+      - name: Install Clang and headless build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            clang-19 \
+            clang-format \
+            cmake \
+            glslc \
+            libfreetype-dev \
+            libx11-dev \
+            libxcursor-dev \
+            libxext-dev \
+            libxfixes-dev \
+            libxi-dev \
+            libxrandr-dev \
+            libxss-dev \
+            libxtst-dev \
+            libclang-rt-19-dev \
+            g++-14 \
+            llvm-19 \
+            ninja-build
+          clang-19 --version
+          g++-14 --version
+          test -d /usr/lib/gcc/x86_64-linux-gnu/14
+          clang++-19 --gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/14 -v -E -x c++ /dev/null
+          llvm-symbolizer-19 --version
+          glslc --version
+
+      - name: Locate canonical vcpkg toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${VCPKG_INSTALLATION_ROOT:-}"
+          test -x "$VCPKG_INSTALLATION_ROOT/vcpkg"
+          VcpkgToolchain="$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
+          test -f "$VcpkgToolchain"
+          "$VCPKG_INSTALLATION_ROOT/vcpkg" version
+          echo "VCPKG_TOOLCHAIN=$VcpkgToolchain" >> "$GITHUB_ENV"
+
+      - name: Install pinned repository tools
+        uses: paradoxum-games/setup-rokit@c6a9749169e3a0146019b899cd0342556f773908 # v3
+        with:
+          version: 1.2.0
+          cache: true
+
+      - name: Generate native class and reflection sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          lute tools/classgen
+          test -f include/gargantuan/classes/generated/Instance.hpp
+          test -f src/classes/generated/Instance.cpp
+          test -f include/gargantuan/services/generated/Workspace.hpp
+          test -f src/services/generated/Workspace.cpp
+
+      - name: Configure GNS sanitizer targets
+        shell: bash
+        run: |
+          set -euo pipefail
+          GccInstallDir=/usr/lib/gcc/x86_64-linux-gnu/14
+          SanitizerFlags="--gcc-install-dir=$GccInstallDir -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all"
+          cmake -S . -B build-gns-sanitizers -G Ninja \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_C_COMPILER=clang-19 \
+            -DCMAKE_CXX_COMPILER=clang++-19 \
+            -DCMAKE_CXX_FLAGS="$SanitizerFlags" \
+            -DCMAKE_EXE_LINKER_FLAGS="--gcc-install-dir=$GccInstallDir -fsanitize=address,undefined" \
+            -DBUILD_TESTING=ON \
+            -DGARGANTUAN_TRACY=OFF \
+            -DGARGANTUAN_WITH_GNS=ON \
+            -DGARGANTUAN_GNS_UPSTREAM_UBSAN_COMPAT=ON \
+            -DGARGANTUAN_BUILD_RENDERER_BENCHMARKS=OFF \
+            -DGARGANTUAN_BUILD_SERIALIZATION_BENCHMARKS=OFF \
+            -DGARGANTUAN_BUILD_GLAZE_SERIALIZATION_PROTOTYPE=OFF \
+            -DGARGANTUAN_GLSLC_EXECUTABLE="$(command -v glslc)" \
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_TOOLCHAIN" \
+            -DVCPKG_MANIFEST_DIR="$PWD/cmake/gns" \
+            -DVCPKG_INSTALLED_DIR="$PWD/build-gns-sanitizers/vcpkg_installed" \
+            -DVCPKG_TARGET_TRIPLET=x64-linux \
+            -DFETCHCONTENT_BASE_DIR="$PWD/build-gns-sanitizers/_deps"
+
+      - name: Build GNS sanitizer targets
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake --build build-gns-sanitizers \
+            --parallel "$CMAKE_BUILD_PARALLEL_LEVEL" \
+            --target \
+              gargantuan_real_transport_tests \
+              gargantuan_remote_real_transport_tests \
+              gargantuan_character_real_transport_tests \
+              gargantuan_game_session_real_transport_tests \
+              gargantuan_gns_capacity_benchmark
+
+      - name: Run GNS transport sanitizer CTest contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          ctest --test-dir build-gns-sanitizers \
+            --parallel 1 \
+            --timeout 300 \
+            --output-on-failure \
+            --no-tests=error \
+            --output-junit build-gns-sanitizers/ctest-gns-results.xml \
+            -R '^(gargantuan_real_transport|gargantuan_remote_real_transport|gargantuan_character_real_transport|gargantuan_game_session_real_transport)$'
+
+      - name: Run profiled GameSession over GNS under sanitizers
+        shell: bash
+        run: |
+          set -euo pipefail
+          build-gns-sanitizers/gargantuan_game_session_real_transport_tests --reliable-profile
+
+      - name: Run production byte-admission GNS matrix under sanitizers
+        shell: bash
+        run: |
+          set -euo pipefail
+          build-gns-sanitizers/gargantuan_gns_capacity_benchmark --production-admission \
+            | tee build-gns-sanitizers/gns-capacity-production-admission.log
+
+      - name: Upload GNS sanitizer diagnostics
+        if: failure()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: gns-sanitizer-diagnostics
+          if-no-files-found: ignore
+          path: |
+            build-gns-sanitizers/CMakeFiles/CMakeConfigureLog.yaml
+            build-gns-sanitizers/Testing/Temporary/LastTest.log
+            build-gns-sanitizers/ctest-gns-results.xml
+            build-gns-sanitizers/gns-capacity-production-admission.log

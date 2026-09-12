@@ -17,6 +17,7 @@
 #include <functional>
 #include <iostream>
 #include <memory>
+#include <string_view>
 #include <thread>
 
 namespace {
@@ -32,20 +33,42 @@ namespace {
 		++Failures;
 	}
 
-	GameSessionConfiguration Configuration(GameSessionRole Role, std::uint16_t Port) {
-		return {
+	ReliableServiceProfile CandidateReliableService() {
+		ReliableServiceProfile Profile;
+		Profile.ConnectionRate = 8ull * 1024 * 1024;
+		Profile.AggregateRate = Profile.ConnectionRate;
+		Profile.BackendRate = 2 * Profile.ConnectionRate;
+		Profile.MaximumConnections = 1;
+		Profile.RequireLatencyCompatibility = true;
+		return Profile;
+	}
+
+	GameSessionConfiguration Configuration(GameSessionRole Role, std::uint16_t Port, bool Profiled) {
+		GameSessionConfiguration Result{
 			.Role = Role,
 			.Endpoint = {"127.0.0.1", Port},
 			.Limits = GameSessionConfiguration::DefaultLimits(),
 			.HandshakeTimeoutTicks = 600,
 			.ClientNonce = Role == GameSessionRole::Client ? 0x3dfeed1234ull : 0,
 		};
+		if (Profiled && Role == GameSessionRole::Server) Result.ReliableService = CandidateReliableService();
+		return Result;
 	}
 }
 
-int main() {
+int main(int ArgumentCount, char **Arguments) {
 	using namespace gargantuan;
 	using namespace gargantuan::network;
+	const bool Profiled = ArgumentCount == 2 && std::string_view(Arguments[1]) == "--reliable-profile";
+	if (ArgumentCount > 1 && !Profiled) {
+		std::cerr << "usage: gargantuan_game_session_real_transport_tests [--reliable-profile]\n";
+		return 2;
+	}
+	if (Profiled) {
+		const auto Profile = CandidateReliableService();
+		Check(Profile.IsValid() && Profile.IsLatencyCompatible(),
+			"profiled real GNS fixture uses the approved capacity-compatible candidate");
+	}
 	gargantuan::BootstrapNativeRuntimeSchema();
 
 	auto ServerWorld = std::make_shared<DataModel>();
@@ -124,10 +147,16 @@ end)
 	std::unique_ptr<GameSession> Server;
 	std::uint16_t Port = 0;
 	for (std::uint32_t Candidate = 39400; Candidate < 39500; ++Candidate) {
-		auto CandidateTransport = std::make_shared<GameNetworkingSocketsTransport>();
+		GameNetworkingSocketsTransportConfiguration TransportConfiguration;
+		if (Profiled) {
+			const auto Profile = CandidateReliableService();
+			TransportConfiguration.MaximumConnections = Profile.MaximumConnections;
+			TransportConfiguration.SendRate = static_cast<std::uint32_t>(Profile.BackendRate);
+		}
+		auto CandidateTransport = std::make_shared<GameNetworkingSocketsTransport>(TransportConfiguration);
 		auto CandidateSession = std::make_unique<GameSession>(
 			CandidateTransport,
-			Configuration(GameSessionRole::Server, static_cast<std::uint16_t>(Candidate)),
+			Configuration(GameSessionRole::Server, static_cast<std::uint16_t>(Candidate), Profiled),
 			&ServerRuntime
 		);
 		if (!CandidateSession->Start().Succeeded()) continue;
@@ -140,7 +169,7 @@ end)
 	if (!Server) return 1;
 
 	auto ClientTransport = std::make_shared<GameNetworkingSocketsTransport>();
-	GameSession Client(ClientTransport, Configuration(GameSessionRole::Client, Port));
+	GameSession Client(ClientTransport, Configuration(GameSessionRole::Client, Port, false));
 	Check(Client.Start().Succeeded(), "real GNS GameSession client starts");
 
 	std::unique_ptr<HeadlessRenderer> ClientRenderer;
@@ -181,6 +210,18 @@ end)
 		Server->GetMetrics().ReadyPeers == 1 && Client.GetStatus() == GameSessionStatus::Ready,
 		"real GNS completes accepted peer, trusted LocalPlayer, and gameplay-ready phases"
 	);
+	if (Profiled) {
+		const auto Metrics = Server->GetMetrics();
+		Check(Metrics.ReliableAdmissionPeerStates == 1,
+			"profiled real GNS session owns one generation-scoped byte-admission peer state");
+		Check(Metrics.ReliableAdmission.AcceptedBytes > 0,
+			"profiled real GNS session admits structural bytes through the production accountant");
+		Check(Metrics.ReliableAdmission.PeerCreditHighWater > 0 &&
+			Metrics.ReliableAdmission.GlobalCreditHighWater > 0,
+			"profiled real GNS session exercises finite peer and global elapsed-time credit");
+		Check(Metrics.ReliableAdmission.CreditDeferrals > 0 || Metrics.ReliableAdmission.SizeDeferrals > 0,
+			"profiled real GNS bootstrap observes a bounded credit or exact-size deferral before admission");
+	}
 	auto ServerPlayers = ServerRuntime.Players->GetPlayers();
 	Check(
 		ServerPlayers.size() == 1 && ServerPlayers.front()->GetCharacter().has_value(),
@@ -320,12 +361,17 @@ end)
 			Client.GetStatus() == GameSessionStatus::Failed && !ClientRuntime->Players->GetLocalPlayer().has_value(),
 			"real GNS hard disconnect stops client control and clears trusted LocalPlayer"
 		);
+		if (Profiled)
+			Check(Server->GetMetrics().ReliableAdmissionPeerStates == 0,
+				"profiled real GNS disconnect releases generation-scoped byte-admission state");
 	}
 
 	Client.Stop();
 	Server->Stop();
 	if (ClientRuntime) ClientRuntime->Destroy();
 	ServerRuntime.Destroy();
-	if (Failures == 0) std::cout << "Real GNS game-session lifecycle tests passed\n";
+	if (Failures == 0)
+		std::cout << (Profiled ? "Profiled real GNS game-session lifecycle tests passed\n"
+							   : "Real GNS game-session lifecycle tests passed\n");
 	return Failures == 0 ? 0 : 1;
 }
