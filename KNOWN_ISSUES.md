@@ -82,6 +82,14 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Content-coupled gameplay latency exceeds the 3L.2 readiness envelope
 
+The [profiled GNS sanitizer attribution](devdocs/CurrentArchitecture/GameSessionReliableAdmissionAttribution.md)
+closes the previously blocked GNS sanitizer progression at code revision
+`8fa332416`: four base fixtures, profiled GameSession, and the executed 12-case
+production byte-admission matrix all pass with ASan/UBSan/LSan enabled. The
+mandatory-deferral assertion was a test-contract error; production admission is
+unchanged. This does not close the gameplay/client, overload, journal, scale or
+security qualification requirements of KI-006.
+
 Update 2026-09-12: the user approved RPC p95/p99/max 150/250/500 ms and
 Event/action max 250 ms, >=25% gameplay reserve, no large-group exception and
 unqualified low-rate compatibility. Hierarchical reliable-byte admission is now

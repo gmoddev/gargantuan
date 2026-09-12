@@ -6,6 +6,24 @@ last_verified: 2026-09-12
 
 # Foundation 3L.3 diagnostic validation ledger
 
+## Profiled GNS sanitizer closure attribution (2026-09-12)
+
+The [independent attribution report](GameSessionReliableAdmissionAttribution.md)
+reproduces `632b28ca4`'s profiled assertion in **20/20 unchanged runs**. Five
+bounded traces show a successful 3,769-byte bootstrap reservation with
+46,525–47,167 B peer credit already earned. No reservation was denied and neither
+deferral counter needed to increment. The assertion over-constrained the
+elapsed-time service contract; no production accounting defect was established.
+
+The already-published test-only correction `8fa332416` passes **20/20** repeated
+profiled runs, all **four** base GNS sanitizer fixtures, a separate profiled stage,
+and the executed **12/12 production byte-admission matrix** with its analyzer.
+ASan, UBSan and LSan remain enabled. Published GNS CI `34719712475` and Native CI
+`34719712455` also passed at that code revision. **This GNS sanitizer gate is
+closed**, superseding the historical not-run limitation below. Full gameplay/
+client qualification, overload, journal margin, scale/physics and security gates
+remain independent: **B — FOUNDATION 3L PARTIALLY READY; no 3M.**
+
 ## Hierarchical byte-admission validation (2026-09-12)
 
 **B — FOUNDATION 3L PARTIALLY READY.** Policy and implementation are one coherent
