@@ -543,6 +543,7 @@ namespace gargantuan::network {
 	};
 
 	bool GameNetworkingSocketsTransportConfiguration::IsValid() const {
+		if (SendRate && (*SendRate == 0 || *SendRate > static_cast<std::uint32_t>(std::numeric_limits<int>::max()))) return false;
 		if (MaximumConnections == 0 || MaximumConnections > NativeMaximumGnsConnections ||
 			MaximumPendingEvents == 0 || MaximumPendingEvents > NativeMaximumGnsPendingEvents ||
 			MaximumPendingReceiveBytes == 0 ||
@@ -586,7 +587,8 @@ namespace gargantuan::network {
 		State->Endpoint = Configuration.Endpoint;
 		State->Limits = Configuration.AdvertisedLimits;
 
-		std::array<SteamNetworkingConfigValue_t, 4> Options;
+		std::array<SteamNetworkingConfigValue_t, 6> Options;
+		int OptionCount = 4;
 		Options[0].SetPtr(k_ESteamNetworkingConfig_Callback_ConnectionStatusChanged,
 			reinterpret_cast<void *>(Impl::StatusChanged));
 		Options[1].SetInt32(k_ESteamNetworkingConfig_SendBufferSize,
@@ -598,10 +600,15 @@ namespace gargantuan::network {
 				State->Limits.MaximumDecodedMessageBytes + AdapterEnvelopeBytes,
 				static_cast<std::size_t>(k_cbMaxSteamNetworkingSocketsMessageSizeSend)
 			)));
+		if (State->Configuration.SendRate) {
+			Options[4].SetInt32(k_ESteamNetworkingConfig_SendRateMin, static_cast<int>(*State->Configuration.SendRate));
+			Options[5].SetInt32(k_ESteamNetworkingConfig_SendRateMax, static_cast<int>(*State->Configuration.SendRate));
+			OptionCount = 6;
+		}
 
 		if (Configuration.Role == TransportRole::Server) {
 			State->Listener = SteamAPI_ISteamNetworkingSockets_CreateListenSocketIP(
-				Global.Interface, Address, static_cast<int>(Options.size()), Options.data()
+				Global.Interface, Address, OptionCount, Options.data()
 			);
 			if (State->Listener == k_HSteamListenSocket_Invalid) {
 				State->ReleaseGlobal();
@@ -613,7 +620,7 @@ namespace gargantuan::network {
 			Global.ListenerOwners[State->Listener] = State.get();
 		} else {
 			const auto Handle = SteamAPI_ISteamNetworkingSockets_ConnectByIPAddress(
-				Global.Interface, Address, static_cast<int>(Options.size()), Options.data()
+				Global.Interface, Address, OptionCount, Options.data()
 			);
 			if (Handle == k_HSteamNetConnection_Invalid) {
 				State->ReleaseGlobal();

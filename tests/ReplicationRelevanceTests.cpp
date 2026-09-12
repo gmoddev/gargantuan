@@ -1474,6 +1474,7 @@ int main() {
 	try {
 		test::TestReliableEnvelopeProfileModel();
 		test::TestAtomicGroupDistributions();
+		test::TestPreAcceptanceByteDeferral();
 	} catch (const std::exception &Error) {
 		std::cerr << "[Network:EnvelopeContract] " << Error.what() << '\n';
 		++Failures;

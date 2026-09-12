@@ -12,6 +12,32 @@ related_code:
 
 # Foundation 3L.3: runtime work isolation
 
+## Approved reliable-byte admission implementation (2026-09-12)
+
+The approved service targets are RPC p95/p99/max 150/250/500 ms and Event ACK/
+action-result max 250 ms, with >=25% gameplay reserve and no large-group waiver.
+The [deployment contract](NetworkingReliableDeploymentContract.md) is now the
+implementation contract for trusted startup-only R/A/N profiles. Hierarchical
+elapsed-time finite credit and observed pending reliable exposure control which
+complete prepared frames may enter the existing scheduler. Exact pre-acceptance
+encoding is reused; deferred work does not advance Known, sequence or emitting
+journal state. Byte deferrals still consume the existing 3J selection-work budget.
+There is no new queued payload/frontier, wire change, lane or semantic authority.
+
+Capacity-incompatible profiles stay explicitly unqualified; omission retains
+legacy development behavior. Numeric compatibility is not actual-path or latency
+qualification. Tests and current-source measurements are recorded in the
+[ledger](ContentAvailabilityFoundation3L_3Validation.md). The candidate profile
+passes official near-max Local/Node 100-call runs without timeout/error, with RPC
+p99/max 72.058/73.316 and 74.723/75.801 ms. Higher explicit backend capacity is
+part of this result; it is not an admission-only counterfactual or full client/
+offered-gameplay qualification. **B — FOUNDATION 3L
+PARTIALLY READY** while official/client, overload, journal, security or current CI
+gates remain open. No 3M.
+
+The following sections preserve earlier checkpoints; their statements that byte
+admission was not implemented apply to their recorded source revisions.
+
 ## Reliable deployment and atomic-group contract (2026-09-12)
 
 **B — FOUNDATION 3L PARTIALLY READY.** The service-envelope diagnostic slice is

@@ -14,6 +14,7 @@
 #include <csignal>
 #include <filesystem>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -127,6 +128,14 @@ namespace gargantuan::host {
 		Program.add_argument("--startup-smoke").flag().help("exit after a bounded authoritative startup smoke");
 		Program.add_argument("--session-smoke").flag().help("require a bounded packaged game-session acceptance proof");
 		Program.add_argument("--max-ticks").scan<'i', int>().default_value(0).help("bounded test-only server tick count");
+		Program.add_argument("--reliable-rate").scan<'u', std::uint64_t>().default_value(std::uint64_t{0})
+			.help("trusted per-connection application byte reservation per second; requires aggregate rate and peers");
+		Program.add_argument("--reliable-aggregate-rate").scan<'u', std::uint64_t>().default_value(std::uint64_t{0})
+			.help("trusted application egress reservation for this Server process, bytes/second");
+		Program.add_argument("--reliable-peers").scan<'u', std::uint32_t>().default_value(std::uint32_t{0})
+			.help("maximum connections funded by the reliable deployment profile");
+		Program.add_argument("--reliable-require-latency-compatible").flag()
+			.help("reject numerically unqualified profiles; actual path qualification is still required");
 		Program.add_argument("--content-provider")
 			.default_value(std::string("local"))
 			.help("trusted content origin: local (default) or node");
@@ -166,6 +175,43 @@ namespace gargantuan::host {
 			return 2;
 		}
 
+		const bool HasReliableArgument = Program.is_used("--reliable-rate") || Program.is_used("--reliable-aggregate-rate") ||
+			Program.is_used("--reliable-peers") || Program.is_used("--reliable-require-latency-compatible");
+		if (HasReliableArgument) {
+			if (HostConfiguration.ReliableService || !Program.is_used("--reliable-rate") ||
+				!Program.is_used("--reliable-aggregate-rate") || !Program.is_used("--reliable-peers")) {
+				std::cerr << "[Network:ServiceProfile] Supply rate, aggregate rate and peers together; do not override an injected profile.\n";
+				return 2;
+			}
+			network::ReliableServiceProfile Profile;
+			Profile.ConnectionRate = Program.get<std::uint64_t>("--reliable-rate");
+			Profile.AggregateRate = Program.get<std::uint64_t>("--reliable-aggregate-rate");
+			Profile.MaximumConnections = Program.get<std::uint32_t>("--reliable-peers");
+			if (Profile.ConnectionRate > static_cast<std::uint64_t>(std::numeric_limits<int>::max()) / 2 ||
+				Profile.MaximumConnections > network::MaximumGameSessionPeers) {
+				std::cerr << "[Network:ServiceProfile] Rate plus backend headroom or peer count exceeds the native envelope.\n";
+				return 2;
+			}
+			Profile.BackendRate = 2 * Profile.ConnectionRate;
+			Profile.GlobalBacklog = Profile.GlobalBurst + 2 * Profile.GameplayBurst * Profile.MaximumConnections;
+			Profile.RequireLatencyCompatibility = Program.is_used("--reliable-require-latency-compatible");
+			HostConfiguration.ReliableService = Profile;
+		}
+		if (HostConfiguration.ReliableService) {
+			const auto &Profile = *HostConfiguration.ReliableService;
+			if (!Profile.IsValid() || Profile.MaximumConnections > network::MaximumGameSessionPeers) {
+				std::cerr << "[Network:ServiceProfile] Invalid: " << Profile.ValidationError() << " (session peer maximum 512).\n";
+				return 2;
+			}
+			std::cout << "[Network:ServiceProfile] R=" << Profile.ConnectionRate << " A=" << Profile.AggregateRate
+				<< " N=" << Profile.MaximumConnections << " BackendRate=" << Profile.BackendRate
+				<< " StructuralPermille=" << Profile.StructuralPermille << " PeerBurst=" << Profile.PeerBurst
+				<< " GlobalBurst=" << Profile.GlobalBurst << " GameplayBurst=" << Profile.GameplayBurst
+				<< " PeerBacklog=" << Profile.PeerBacklog << " GlobalBacklog=" << Profile.GlobalBacklog
+				<< " Class=" << (Profile.IsLatencyCompatible() ? "capacity-compatible-path-unqualified" : "unqualified-low-capacity") << '\n';
+		} else {
+			std::cout << "[Network:ServiceProfile] Class=unqualified-legacy No byte-admission profile supplied\n";
+		}
 		bool HasContentArgument = false;
 		for (int Index = 1; Index < ArgumentCount; ++Index)
 			HasContentArgument = HasContentArgument || IsContentArgument(Arguments[Index]);
@@ -383,7 +429,12 @@ namespace gargantuan::host {
 			}
 #if defined(GARGANTUAN_WITH_GNS)
 			if (BindEndpoint) {
-				std::shared_ptr<network::IGameTransport> Transport = std::make_shared<network::GameNetworkingSocketsTransport>();
+				network::GameNetworkingSocketsTransportConfiguration TransportConfiguration;
+				if (HostConfiguration.ReliableService) {
+					TransportConfiguration.MaximumConnections = HostConfiguration.ReliableService->MaximumConnections;
+					TransportConfiguration.SendRate = static_cast<std::uint32_t>(HostConfiguration.ReliableService->BackendRate);
+				}
+				std::shared_ptr<network::IGameTransport> Transport = std::make_shared<network::GameNetworkingSocketsTransport>(TransportConfiguration);
 				if (SessionSmoke) Transport = std::make_shared<SessionSmokeTransport>(std::move(Transport));
 				Session = std::make_unique<network::GameSession>(
 					std::move(Transport),
@@ -392,6 +443,7 @@ namespace gargantuan::host {
 						.Endpoint = *BindEndpoint,
 						.Limits = network::GameSessionConfiguration::DefaultLimits(),
 						.AllowInsecureDevelopmentNetwork = AllowInsecureDevelopmentNetwork,
+						.ReliableService = HostConfiguration.ReliableService,
 					},
 					Runtime.get()
 				);
@@ -707,6 +759,18 @@ namespace gargantuan::host {
 			}
 
 			const auto ExitCode = Runtime->ProcessService->ExitCode;
+			if (Session && HostConfiguration.ReliableService) {
+				const auto Metrics = Session->GetMetrics();
+				const auto &M = Metrics.ReliableAdmission;
+				std::cout << "[Network:Admission] accepted=" << M.AcceptedBytes << " reserved=" << M.ReservedBytes
+					<< " rolledBack=" << M.RolledBackBytes << " creditDeferrals=" << M.CreditDeferrals
+					<< " sizeDeferrals=" << M.SizeDeferrals << " deferredByteAttempts=" << M.DeferredBytes
+					<< " backlogDeferrals=" << M.BacklogDeferrals << " feedbackDeferrals=" << M.FeedbackDeferrals
+					<< " fairnessDeferrals=" << M.FairnessDeferrals << " waitMaxUs=" << M.MaximumAdmissionWaitMicroseconds
+					<< " peerBacklogHigh=" << M.PeerBacklogHighWater << " globalBacklogHigh=" << M.GlobalBacklogHighWater
+					<< " peerCreditHigh=" << M.PeerCreditHighWater << " globalCreditHigh=" << M.GlobalCreditHighWater
+					<< " peerStates=" << Metrics.ReliableAdmissionPeerStates << " logicalBytes=" << Metrics.ReliableAdmissionLogicalBytes << '\n';
+			}
 			if (Runtime->Content) {
 				const auto Metrics = Runtime->Content->GetMetrics();
 				LOG_INFO(

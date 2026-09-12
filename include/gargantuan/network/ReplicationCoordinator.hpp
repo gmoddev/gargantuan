@@ -136,6 +136,10 @@ namespace gargantuan::network {
 		std::size_t SelectedTransitions = 0;
 		// Includes copied/coalesced/skipped records and byte-limit retries, not just emitted operations.
 		std::size_t JournalRecordsExamined = 0;
+		// Exact pre-acceptance encoding, reused by the runtime submission path.
+		std::vector<std::byte> EncodedFrame;
+		bool DeferredForBytes = false;
+		std::size_t RequiredFrameBytes = 0;
 		[[nodiscard]] bool Succeeded() const {
 			return Frame.has_value();
 		}
@@ -180,14 +184,17 @@ namespace gargantuan::network {
 		);
 		[[nodiscard]] ReplicationProduceResult
 		ProducePendingRelevance(ConnectionId Connection, std::size_t MaximumTransitions, std::uint64_t SimulationTick,
-			std::size_t MaximumFrameBytes = MaximumReplicationFrameBytes);
+			std::size_t MaximumFrameBytes = MaximumReplicationFrameBytes,
+			std::size_t AvailableFrameBytes = MaximumReplicationFrameBytes);
 		[[nodiscard]] ReplicationProduceResult
 		ProducePendingBaseline(ConnectionId Connection, std::size_t MaximumTransitions, std::uint64_t SimulationTick,
-			std::size_t MaximumFrameBytes = MaximumReplicationFrameBytes);
+			std::size_t MaximumFrameBytes = MaximumReplicationFrameBytes,
+			std::size_t AvailableFrameBytes = MaximumReplicationFrameBytes);
 		[[nodiscard]] ReplicationProduceResult
 		ProduceIncremental(ConnectionId Connection, std::size_t MaximumTransitions = MaximumWireJournalRecords,
 			std::size_t MaximumFrameBytes = MaximumReplicationFrameBytes,
-			std::size_t MaximumJournalRecords = MaximumStructuralJournalRecordsPerCall);
+			std::size_t MaximumJournalRecords = MaximumStructuralJournalRecordsPerCall,
+			std::size_t AvailableFrameBytes = MaximumReplicationFrameBytes);
 		[[nodiscard]] std::uint64_t GetJournalLag(ConnectionId Connection) const;
 		[[nodiscard]] ReplicationProduceResult SetRelevant(ConnectionId Connection, ObjectId Object, bool Relevant);
 		bool RemovePeer(ConnectionId Connection);
@@ -322,7 +329,8 @@ namespace gargantuan::network {
 		std::size_t PendingTransitionCount = 0;
 		ReplicationMetrics Metrics;
 		ReplicationProduceResult ProducePlannedFrame(ConnectionId Connection, ReplicationMessageKind Kind,
-			std::size_t MaximumTransitions, std::uint64_t SimulationTick, std::size_t MaximumFrameBytes);
+			std::size_t MaximumTransitions, std::uint64_t SimulationTick, std::size_t MaximumFrameBytes,
+			std::size_t AvailableFrameBytes);
 
 		bool RefreshCatalog(std::string &Error);
 		void BeginRetirementTick(std::uint64_t SimulationTick);
@@ -360,7 +368,8 @@ namespace gargantuan::network {
 			std::size_t MaximumTransitions,
 			std::uint64_t SimulationTick,
 			bool CriticalOnly = false,
-			std::size_t MaximumFrameBytes = MaximumReplicationFrameBytes
+			std::size_t MaximumFrameBytes = MaximumReplicationFrameBytes,
+			std::size_t AvailableFrameBytes = MaximumReplicationFrameBytes
 		);
 		ReplicationProduceResult AddPeer(
 			ConnectionId Connection,

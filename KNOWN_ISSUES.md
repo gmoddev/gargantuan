@@ -82,6 +82,20 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Content-coupled gameplay latency exceeds the 3L.2 readiness envelope
 
+Update 2026-09-12: the user approved RPC p95/p99/max 150/250/500 ms and
+Event/action max 250 ms, >=25% gameplay reserve, no large-group exception and
+unqualified low-rate compatibility. Hierarchical reliable-byte admission is now
+implemented and targeted-validated: elapsed-time per-peer/global
+credit, finite backlog feedback, exact pre-acceptance sizing, encoded reuse and
+generation-safe cleanup. The candidate 8 MiB/s application / 16 MiB/s backend
+profile passes official near-max Local/Node 100-RPC cases at p99/max
+72.058/73.316 and 74.723/75.801 ms with no timeout/error. This does **not** close
+KI-006: full gameplay burst/request-path and client qualification, overload,
+production journal margin, security and current-source CI remain open until
+measured. The statements below that admission is absent describe the earlier
+published checkpoints, not this implementation. See the
+[current implementation contract](devdocs/CurrentArchitecture/NetworkingReliableDeploymentContract.md).
+
 The published envelope assessment (`108200d07`) now has a
 [deployment/atomic-group contract follow-up](devdocs/CurrentArchitecture/NetworkingReliableDeploymentContract.md).
 One actual dependency group can occupy all 524,256 GRPL application bytes of

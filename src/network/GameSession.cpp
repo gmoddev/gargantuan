@@ -2,6 +2,7 @@
 #include "../runtime/RuntimeWorkDiagnostics.hpp"
 #include "../runtime/PublicationLatencyDiagnostics.hpp"
 #include "SessionSendAllowance.hpp"
+#include "ReliableByteAdmission.hpp"
 
 #include "GameSessionTestAccess.hpp"
 
@@ -48,6 +49,11 @@ namespace gargantuan::network {
 			Value += std::min(Amount, std::numeric_limits<std::uint64_t>::max() - Value);
 		}
 
+		std::uint64_t ServiceTime() {
+			return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+				std::chrono::steady_clock::now().time_since_epoch()).count());
+		}
+
 		std::uint32_t FrameMagic(std::span<const std::byte> Bytes) {
 			if (Bytes.size() < 4) return 0;
 			return std::to_integer<std::uint32_t>(Bytes[0]) | (std::to_integer<std::uint32_t>(Bytes[1]) << 8) |
@@ -84,6 +90,8 @@ namespace gargantuan::network {
 		return Endpoint.IsValid() && Limits.IsValid() && HandshakeTimeoutTicks > 0 &&
 			   HandshakeTimeoutTicks <= DefaultGameSessionHandshakeTimeoutTicks * 10 && Relevance.IsValid() &&
 			   StructuralReplication.IsValid() &&
+			   (!ReliableService || (Role == GameSessionRole::Server && ReliableService->IsValid() &&
+				ReliableService->MaximumConnections <= MaximumGameSessionPeers)) &&
 			   (AllowInsecureDevelopmentNetwork || IsLoopbackTransportEndpoint(Endpoint));
 	}
 
@@ -123,6 +131,7 @@ namespace gargantuan::network {
 			detail::SessionSendAllowance SendAllowance;
 			bool PreferPendingRelevance = true;
 			bool StructuralSubmittedThisStep = false;
+			bool ByteDeferredThisStep = false;
 			std::size_t StructuralTransitionsConsumedThisStep = 0;
 			std::size_t JournalRecordsConsumedThisStep = 0;
 			std::optional<std::uint64_t> JournalPendingSinceTick;
@@ -131,6 +140,7 @@ namespace gargantuan::network {
 		std::shared_ptr<IGameTransport> Transport;
 		GameSessionConfiguration Configuration;
 		NetworkScheduler Scheduler;
+		std::optional<detail::ReliableByteAdmission> ByteAdmission;
 		Engine *Runtime = nullptr;
 		GameSessionStatus Status = GameSessionStatus::Created;
 		std::string Failure;
@@ -180,6 +190,12 @@ namespace gargantuan::network {
 				throw std::invalid_argument(
 					"[Network:Session] Client Engine attaches after trusted replication bootstrap"
 				);
+			if (Configuration.ReliableService) {
+				ByteAdmission.emplace(*Configuration.ReliableService);
+				Configuration.Limits.MaximumReliableMessageBytes = std::min<std::size_t>(
+					Configuration.Limits.MaximumReliableMessageBytes,
+					MaximumReliableServiceGroupBytes - ReliableServiceEnvelopeBytes);
+			}
 		}
 
 		~Implementation() {
@@ -536,7 +552,8 @@ namespace gargantuan::network {
 		}
 
 		SerializationResult<SchedulerSubmitResult>
-		QueueStructuralFrame(const ReplicationFrame &Frame, ConnectionId Connection, const NetworkLimits &Limits) {
+		QueueStructuralFrame(const ReplicationFrame &Frame, std::vector<std::byte> Encoded,
+			ConnectionId Connection, const NetworkLimits &Limits) {
 			runtime_detail::WorkProducerScope Producer(Frame.Kind == ReplicationMessageKind::Baseline ? runtime_detail::WorkProducer::Bootstrap :
 				runtime_detail::WorkProducer::Structural);
 			if (InjectFailure(detail::GameSessionFailurePoint::StructuralSchedulerAdmission))
@@ -547,7 +564,7 @@ namespace gargantuan::network {
 						"Injected reliable structural scheduler exhaustion",
 					},
 				};
-			return QueueReplicationFrame(Frame, Connection, Limits, Scheduler);
+			return QueueEncodedReplicationFrame(Frame.Sequence, std::move(Encoded), Connection, Limits, Scheduler);
 		}
 
 		void FailPeer(ConnectionId Connection, DisconnectReason Reason, std::string Diagnostic) {
@@ -589,7 +606,8 @@ namespace gargantuan::network {
 		}
 
 		void OnConnected(ConnectionId Connection) {
-			if (!Connection.IsValid() || Peers.size() >= MaximumGameSessionPeers) {
+			if (!Connection.IsValid() || Peers.size() >= MaximumGameSessionPeers ||
+				(Configuration.ReliableService && Peers.size() >= Configuration.ReliableService->MaximumConnections)) {
 				Reject(Connection, DisconnectReason::ResourceExhaustion, "Game session peer capacity reached");
 				return;
 			}
@@ -1243,6 +1261,7 @@ namespace gargantuan::network {
 			if (Iterator == Peers.end()) return;
 			auto PeerValue = std::move(Iterator->second);
 			Peers.erase(Iterator);
+			if (ByteAdmission) ByteAdmission->Remove(Connection);
 			if (Peers.empty()) {
 				StructuralFairnessCursor.reset();
 				StructuralConnectionsScratch.clear();
@@ -1280,6 +1299,7 @@ namespace gargantuan::network {
 				(void)Connection;
 				PeerValue.SendAllowance.Reset();
 				PeerValue.StructuralSubmittedThisStep = false;
+				PeerValue.ByteDeferredThisStep = false;
 				PeerValue.StructuralTransitionsConsumedThisStep = 0;
 				PeerValue.JournalRecordsConsumedThisStep = 0;
 			}
@@ -1380,6 +1400,29 @@ namespace gargantuan::network {
 				}
 				if (!DrainFailures()) return;
 
+				if (ByteAdmission) {
+					if (!ByteAdmission->BeginStep(ServiceTime())) {
+						FailSession({DisconnectReason::ResourceExhaustion, "Reliable byte admission clock/ownership failed"});
+						return;
+					}
+					// Snapshot the whole admitted connection envelope, including bootstrap.
+					// Scheduler bytes have not reached the provider: count both, not either.
+					for (const auto &[Connection, PeerValue] : Peers) {
+						(void)PeerValue;
+						const auto Backend = Transport->GetStatistics(Connection);
+						const auto Queued = Scheduler.GetStatistics(Connection);
+						std::optional<std::uint64_t> Exposure;
+						if (Backend && Backend->QueuedReliableBytes && Queued) {
+							Exposure = *Backend->QueuedReliableBytes;
+							SaturatingAdd(*Exposure, Queued->QueuedReliableBytes);
+							SaturatingAdd(*Exposure, Queued->QueuedReliableMessages * ReliableServiceEnvelopeBytes);
+						}
+						if (!ByteAdmission->Observe(Connection, Exposure)) {
+							FailSession({DisconnectReason::ResourceExhaustion, "Reliable byte admission connection envelope failed"});
+							return;
+						}
+					}
+				}
 				Replication->ProcessPlanning(SimulationTick);
 				auto &StructuralConnections = StructuralConnectionsScratch;
 				StructuralConnections.clear();
@@ -1417,8 +1460,20 @@ namespace gargantuan::network {
 				bool MadeProgress = false;
 				auto SubmitStructural =
 					[&](ConnectionId Connection, Peer &PeerValue, ReplicationProduceResult &Produced) {
-						auto Queued = QueueStructuralFrame(*Produced.Frame, Connection, PeerValue.Limits);
+						std::optional<detail::ReliableByteAdmission::Reservation> Receipt;
+						if (ByteAdmission) {
+							Receipt = ByteAdmission->Reserve(Connection, Produced.EncodedFrame.size() + ReliableServiceEnvelopeBytes);
+							if (!Receipt) {
+								// No yield or second producer exists between quote and reserve.
+								// A failed invariant is terminal, never acceptance without credit.
+								PendingPeerFailures.try_emplace(Connection, DisconnectInfo{DisconnectReason::ResourceExhaustion,
+									"Reliable structural byte reservation changed during preparation"});
+								return false;
+								}
+						}
+						auto Queued = QueueStructuralFrame(*Produced.Frame, std::move(Produced.EncodedFrame), Connection, PeerValue.Limits);
 						if (!Queued || !Queued->Accepted()) {
+							if (Receipt) (void)ByteAdmission->Rollback(*Receipt);
 							PendingPeerFailures.try_emplace(
 								Connection,
 								Queued && Queued->TerminalDisconnect
@@ -1428,6 +1483,13 @@ namespace gargantuan::network {
 										  "Structural transition was rejected by the reliable scheduler",
 									  }
 							);
+							return false;
+						}
+						// Once queued, bytes are charged even if a later semantic invariant
+						// terminates the peer. Do not refund already accepted traffic.
+						if (Receipt && !ByteAdmission->Commit(*Receipt)) {
+							PendingPeerFailures.try_emplace(Connection, DisconnectInfo{DisconnectReason::ResourceExhaustion,
+								"Reliable byte reservation commit failed"});
 							return false;
 						}
 						auto Committed = Replication->CommitSchedulerAcceptance(Connection, Produced.Frame->Sequence);
@@ -1471,6 +1533,7 @@ namespace gargantuan::network {
 						for (const auto Connection : StructuralConnections) {
 							auto Peer = Peers.find(Connection);
 							if (Peer == Peers.end() || PendingPeerFailures.contains(Connection)) continue;
+							if (Peer->second.ByteDeferredThisStep) continue;
 							if (BootstrapOnly && Peer->second.Phase != PeerPhase::BootstrapPending) continue;
 							auto &Consumed = Peer->second.StructuralTransitionsConsumedThisStep;
 							if (Consumed >= Configuration.StructuralReplication.MaximumTransitionsPerPeerTick) continue;
@@ -1480,6 +1543,24 @@ namespace gargantuan::network {
 								PassLimit - GlobalConsumed,
 							});
 							if (Allowance == 0) break;
+							std::size_t AvailableFrameBytes = MaximumReplicationFrameBytes;
+							if (ByteAdmission) {
+								if (!Replication->IsPlanningReady(Connection) && Replication->GetJournalLag(Connection) == 0) {
+									ByteAdmission->NoWork(Connection); continue;
+								}
+								const auto Bytes = ByteAdmission->Allowance(Connection, ServiceTime());
+								if (Bytes < 36 + ReliableServiceEnvelopeBytes) continue;
+								AvailableFrameBytes = static_cast<std::size_t>(Bytes - ReliableServiceEnvelopeBytes);
+							}
+							auto DeferBytes = [&](const ReplicationProduceResult &Produced) {
+								if (!Produced.DeferredForBytes) return false;
+								ByteAdmission->DeferSize(Connection, Produced.RequiredFrameBytes + ReliableServiceEnvelopeBytes);
+								Peer->second.ByteDeferredThisStep = true;
+								Consumed += Produced.SelectedTransitions;
+								GlobalConsumed += Produced.SelectedTransitions;
+								LastServicedConnection = Connection;
+								return true;
+							};
 							if (Peer->second.Phase == PeerPhase::BootstrapPending) {
 								if (!Replication->IsPlanningReady(Connection)) continue;
 								const auto CriticalTransitions = Replication->GetPendingCriticalTransitionCount(Connection);
@@ -1496,7 +1577,8 @@ namespace gargantuan::network {
 								if (CriticalTransitions > Allowance) continue;
 								const auto ReplicationMetricsBefore = Replication->GetCumulativeMetrics();
 								auto Produced = Replication->ProducePendingBaseline(Connection, Allowance, SimulationTick,
-									Peer->second.Limits.MaximumReliableMessageBytes);
+									Peer->second.Limits.MaximumReliableMessageBytes, AvailableFrameBytes);
+								if (DeferBytes(Produced)) continue;
 								const auto ReplicationMetricsAfter = Replication->GetCumulativeMetrics();
 								Metrics.BaselineSnapshotCpuNanoseconds +=
 									ReplicationMetricsAfter.SnapshotCaptureCpuNanoseconds -
@@ -1553,7 +1635,8 @@ namespace gargantuan::network {
 							auto ProduceRelevance = [&]() {
 								if (!Replication->HasPendingRelevance(Connection)) return false;
 								auto Produced = Replication->ProducePendingRelevance(Connection, Allowance, SimulationTick,
-									Peer->second.Limits.MaximumReliableMessageBytes);
+									Peer->second.Limits.MaximumReliableMessageBytes, AvailableFrameBytes);
+								if (DeferBytes(Produced)) return true;
 								if (Produced.Succeeded() && Produced.Frame) {
 									if (SubmitStructural(Connection, Peer->second, Produced)) {
 										Consumed += Produced.SelectedTransitions;
@@ -1583,9 +1666,10 @@ namespace gargantuan::network {
 									return false;
 								}
 								auto Produced = Replication->ProduceIncremental(Connection, Allowance,
-									Peer->second.Limits.MaximumReliableMessageBytes, JournalAllowance);
+									Peer->second.Limits.MaximumReliableMessageBytes, JournalAllowance, AvailableFrameBytes);
 								JournalConsumed += Produced.JournalRecordsExamined;
 								GlobalJournalConsumed += Produced.JournalRecordsExamined;
+								if (DeferBytes(Produced)) return true;
 								if (Produced.JournalRecordsExamined != 0) {
 									LastServicedConnection = Connection;
 									LastJournalServicedConnection = Connection;
@@ -1613,18 +1697,19 @@ namespace gargantuan::network {
 							};
 							if (Peer->second.PreferPendingRelevance) {
 								if (ProduceRelevance()) continue;
-								(void)ProduceJournal();
+								if (ProduceJournal()) continue;
 							} else {
 								if (ProduceJournal()) continue;
-								(void)ProduceRelevance();
+								if (ProduceRelevance()) continue;
 							}
+							if (ByteAdmission) ByteAdmission->NoWork(Connection);
 						}
 					}
 				}
 				// Complete READY batches can keep the operation budget saturated for
 				// many ticks. Preserve independent progress for journal prefixes that
 				// provably cannot emit structural work, under the unchanged read caps.
-				if (GlobalConsumed >= Configuration.StructuralReplication.MaximumTransitionsPerTick) {
+				if (ByteAdmission || GlobalConsumed >= Configuration.StructuralReplication.MaximumTransitionsPerTick) {
 					for (const auto Connection : StructuralConnections) {
 						if (GlobalJournalConsumed >= Configuration.StructuralReplication.MaximumJournalRecordsPerTick) break;
 						auto Peer = Peers.find(Connection);
@@ -1643,6 +1728,7 @@ namespace gargantuan::network {
 								"[Replication:StructuralScheduler] " + Produced.Error});
 					}
 				}
+				if (ByteAdmission) ByteAdmission->EndStep();
 				if (!StructuralConnections.empty()) {
 					auto Last = LastServicedConnection
 						? std::ranges::find(StructuralConnections, *LastServicedConnection) : StructuralConnections.begin();
@@ -1826,7 +1912,13 @@ namespace gargantuan::network {
 		return State->Failure;
 	}
 	GameSessionMetrics GameSession::GetMetrics() const {
+		// Bounded aggregates only; no peer labels or retained per-message history.
 		auto Result = State->Metrics;
+		if (State->ByteAdmission) {
+			Result.ReliableAdmission = State->ByteAdmission->GetMetrics();
+			Result.ReliableAdmissionPeerStates = State->ByteAdmission->PeerCount();
+			Result.ReliableAdmissionLogicalBytes = State->ByteAdmission->LogicalBytes();
+		}
 		Result.ClientReplica = State->Replica.GetMetrics();
 		if (State->Relevance) {
 			const auto RelevanceMetrics = State->Relevance->GetMetrics();

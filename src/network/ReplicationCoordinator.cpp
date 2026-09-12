@@ -1035,13 +1035,14 @@ namespace gargantuan::network {
 		std::size_t MaximumTransitions,
 		std::uint64_t SimulationTick,
 		bool CriticalOnly,
-		std::size_t MaximumFrameBytes
+		std::size_t MaximumFrameBytes,
+		std::size_t AvailableFrameBytes
 	) {
 		runtime_detail::WorkScope Work(runtime_detail::WorkPhase::StructuralSelection);
 		auto Peer = Peers.find(Connection);
 		if (Peer == Peers.end()) return {{}, "Replication peer is not registered"};
 		if (Peer->second.Planned)
-			return ProducePlannedFrame(Connection, Kind, MaximumTransitions, SimulationTick, MaximumFrameBytes);
+			return ProducePlannedFrame(Connection, Kind, MaximumTransitions, SimulationTick, MaximumFrameBytes, AvailableFrameBytes);
 		if (Peer->second.PreparedCommit) return {{}, "A structural frame is awaiting scheduler acceptance"};
 		if (MaximumTransitions == 0 || MaximumTransitions > MaximumReplicationOperationsPerFrame ||
 			MaximumFrameBytes == 0 || MaximumFrameBytes > MaximumReplicationFrameBytes)
@@ -1455,7 +1456,13 @@ namespace gargantuan::network {
 				return {{}, "Atomic structural group exceeds the negotiated reliable message limit"};
 			return ProduceRelevanceFrame(Connection, Kind, Reduced, SimulationTick,
 				CriticalOnly || (Kind == ReplicationMessageKind::Baseline && CurrentPeer.PendingTransitions.size() > Reduced),
-				MaximumFrameBytes);
+				MaximumFrameBytes, AvailableFrameBytes);
+		}
+		if (Encoded->size() > AvailableFrameBytes) {
+			SaturatingAdd(CandidateMetrics.StructuralBytesEncoded, Encoded->size());
+			SaturatingAdd(CandidateMetrics.StructuralTransitionsEncoded, SelectedWorkCount);
+			Metrics = CandidateMetrics;
+			return {{}, {}, SelectedWorkCount, 0, {}, true, Encoded->size()};
 		}
 		SaturatingAdd(CandidateMetrics.StructuralBytesEncoded, Encoded->size());
 		SaturatingAdd(CandidateMetrics.StructuralTransitionsEncoded, SelectedWorkCount);
@@ -1509,7 +1516,7 @@ namespace gargantuan::network {
 			CurrentPeer.PreparedCommit = std::move(Commit);
 		else
 			ApplyPreparedCommit(CurrentPeer, std::move(Commit));
-		return {std::move(Frame), {}, SelectedWorkCount};
+		return {std::move(Frame), {}, SelectedWorkCount, 0, std::move(*Encoded)};
 	}
 
 	ReplicationProduceResult ReplicationCoordinator::AddPeer(ConnectionId Connection, ReplicationEpoch Epoch) {
@@ -1627,17 +1634,19 @@ namespace gargantuan::network {
 	}
 
 	ReplicationProduceResult ReplicationCoordinator::ProducePendingRelevance(
-		ConnectionId Connection, std::size_t MaximumTransitions, std::uint64_t SimulationTick, std::size_t MaximumFrameBytes
+		ConnectionId Connection, std::size_t MaximumTransitions, std::uint64_t SimulationTick, std::size_t MaximumFrameBytes,
+		std::size_t AvailableFrameBytes
 	) {
 		BeginRetirementTick(SimulationTick);
 		LatestSchedulingTick = std::max(LatestSchedulingTick, SimulationTick);
 		return ProduceRelevanceFrame(
-			Connection, ReplicationMessageKind::Incremental, MaximumTransitions, SimulationTick, false, MaximumFrameBytes
+			Connection, ReplicationMessageKind::Incremental, MaximumTransitions, SimulationTick, false, MaximumFrameBytes, AvailableFrameBytes
 		);
 	}
 
 	ReplicationProduceResult ReplicationCoordinator::ProducePendingBaseline(
-		ConnectionId Connection, std::size_t MaximumTransitions, std::uint64_t SimulationTick, std::size_t MaximumFrameBytes
+		ConnectionId Connection, std::size_t MaximumTransitions, std::uint64_t SimulationTick, std::size_t MaximumFrameBytes,
+		std::size_t AvailableFrameBytes
 	) {
 		BeginRetirementTick(SimulationTick);
 		LatestSchedulingTick = std::max(LatestSchedulingTick, SimulationTick);
@@ -1645,7 +1654,7 @@ namespace gargantuan::network {
 		if (Peer == Peers.end()) return {{}, "Replication peer is not registered"};
 		const bool CriticalOnly = Peer->second.PendingTransitions.size() > MaximumTransitions;
 		return ProduceRelevanceFrame(
-			Connection, ReplicationMessageKind::Baseline, MaximumTransitions, SimulationTick, CriticalOnly, MaximumFrameBytes
+			Connection, ReplicationMessageKind::Baseline, MaximumTransitions, SimulationTick, CriticalOnly, MaximumFrameBytes, AvailableFrameBytes
 		);
 	}
 
@@ -1658,7 +1667,7 @@ namespace gargantuan::network {
 
 	ReplicationProduceResult ReplicationCoordinator::ProduceIncremental(
 		ConnectionId Connection, std::size_t MaximumTransitions, std::size_t MaximumFrameBytes,
-		std::size_t MaximumJournalRecords) {
+		std::size_t MaximumJournalRecords, std::size_t AvailableFrameBytes) {
 		runtime_detail::WorkScope Work(runtime_detail::WorkPhase::IncrementalPreparation);
 		auto Peer = Peers.find(Connection);
 		if (Peer == Peers.end()) return {{}, "Replication peer is not registered"};
@@ -1919,7 +1928,14 @@ namespace gargantuan::network {
 			if (Read.Records.size() == 1)
 				return Finish({{}, "Structural operation exceeds the negotiated reliable message limit"});
 			return Finish(ProduceIncremental(Connection, MaximumTransitions / 2, MaximumFrameBytes,
-				MaximumJournalRecords - Read.Records.size()));
+				MaximumJournalRecords - Read.Records.size(), AvailableFrameBytes));
+		}
+		if (Encoded->size() > AvailableFrameBytes) {
+			SaturatingAdd(CandidateMetrics.StructuralTransitionsSelected, Frame.Operations.size());
+			SaturatingAdd(CandidateMetrics.StructuralTransitionsEncoded, Frame.Operations.size());
+			SaturatingAdd(CandidateMetrics.StructuralBytesEncoded, Encoded->size());
+			Metrics = CandidateMetrics;
+			return Finish({{}, {}, Frame.Operations.size(), 0, {}, true, Encoded->size()});
 		}
 		SaturatingAdd(CandidateMetrics.StructuralBytesEncoded, Encoded->size());
 		SaturatingAdd(CandidateMetrics.StructuralTransitionsEncoded, Frame.Operations.size());
@@ -1967,7 +1983,7 @@ namespace gargantuan::network {
 			}
 			ApplyAcceptedParents(Peer->second, std::move(AcceptedParents));
 		}
-		return Finish({std::move(Frame), {}, OperationCount});
+		return Finish({std::move(Frame), {}, OperationCount, 0, std::move(*Encoded)});
 	}
 
 	ReplicationProduceResult

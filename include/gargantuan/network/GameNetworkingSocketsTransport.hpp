@@ -15,6 +15,8 @@ namespace gargantuan::network {
 		std::uint32_t MaximumConnections = 256;
 		std::uint32_t MaximumPendingEvents = 16'384;
 		std::size_t MaximumPendingReceiveBytes = 16 * 1024 * 1024;
+		// Trusted startup-only per-listener/connection setting, never global.
+		std::optional<std::uint32_t> SendRate;
 
 		[[nodiscard]] bool IsValid() const;
 	};

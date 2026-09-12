@@ -1,5 +1,5 @@
 ---
-status: design-assessment-not-implemented
+status: historical-assessment-with-implemented-follow-up
 owner: networking
 last_verified: 2026-09-12
 related_code:
@@ -13,6 +13,17 @@ related_code:
 ---
 
 # Networking reliable service envelope
+
+## Current follow-up (2026-09-12)
+
+The assessment below preserves its original measured source state. The approved
+[deployment contract](NetworkingReliableDeploymentContract.md) now implements
+hierarchical byte admission with no large-group latency exception. Its
+[validation ledger](ContentAvailabilityFoundation3L_3Validation.md) records the
+production-accountant matrix and official Local/Node results. Earlier statements
+that admission was absent apply to the historical diagnostic slice, not current
+runtime behavior. Full path/client, overload, journal, security and CI qualification
+remain separate gates; this assessment does not certify a deployment.
 
 ## Published assessment and follow-up
 

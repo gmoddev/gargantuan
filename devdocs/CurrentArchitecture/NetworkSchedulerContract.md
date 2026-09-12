@@ -13,6 +13,20 @@ related_adrs:
 
 # Network scheduler contract
 
+## Profiled structural byte admission (2026-09-12)
+
+The trusted [reliable deployment profile](NetworkingReliableDeploymentContract.md)
+adds an optional GameSession resource check **before** this scheduler accepts a
+prepared structural frame. It uses exact encoded bytes plus adapter framing,
+finite elapsed-time peer/global credit and observed reliable backlog. Insufficient
+capacity leaves 3J work pending; it does not add a message queue or mutate Known.
+Accepted submission retains the existing acceptance/ordering contract below.
+Failed submission refunds its reservation and follows existing terminal cleanup.
+The scheduler's own queue, per-step limits, late-send allowance, traffic ordering,
+and 3J operation/planning bounds are not increased or repurposed as a rate limit.
+Legacy sessions without a profile remain unqualified for the approved latency
+class; actual profiled service qualification requires the official-path gates.
+
 ## Validation checkpoint
 
 The deterministic simulator and pure contracts now prove the transport and

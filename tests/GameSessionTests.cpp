@@ -29,6 +29,7 @@
 #include <functional>
 #include <iostream>
 #include <memory>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -772,7 +773,7 @@ namespace {
 		ServerRuntime.Destroy();
 	}
 
-	void TestRejectedStructuralAdmissionIsPeerTerminal() {
+	void TestRejectedStructuralAdmissionIsPeerTerminal(bool WithByteAdmission = false) {
 		auto Network = SimulatedNetwork::Create({.BaseLatency = 1ms});
 		auto ServerTransport = Network->CreateTransport();
 		auto ClientTransport = Network->CreateTransport();
@@ -785,15 +786,21 @@ namespace {
 			EngineProviderConfiguration{.AudioEnabled = false, .Mode = RuntimeMode::NetworkServer}
 		);
 		ServerRuntime.ProcessService->Alive = true;
-		GameSession Server(
-			ServerTransport, Configuration(GameSessionRole::Server, "structural-rejection"), &ServerRuntime
-		);
+		auto ServerConfiguration = Configuration(GameSessionRole::Server, "structural-rejection");
+		if (WithByteAdmission) {
+			ServerConfiguration.ReliableService.emplace();
+			auto &Profile = *ServerConfiguration.ReliableService;
+			Profile.ConnectionRate = Profile.AggregateRate = 8 * 1024 * 1024;
+			Profile.BackendRate = 16 * 1024 * 1024;
+		}
+		GameSession Server(ServerTransport, ServerConfiguration, &ServerRuntime);
 		GameSession Client(ClientTransport, Configuration(GameSessionRole::Client, "structural-rejection"));
 		Check(Server.Start().Succeeded() && Client.Start().Succeeded(), "structural-rejection session starts");
 		std::unique_ptr<HeadlessRenderer> ClientRenderer;
 		std::unique_ptr<Engine> ClientRuntime;
 		std::uint64_t Tick = 1;
 		for (; Tick <= 100 && Server.GetMetrics().ReadyPeers != 1; ++Tick) {
+			if (WithByteAdmission) std::this_thread::sleep_for(1ms);
 			Advance(Network, Server, Client, Tick);
 			if (!ClientRuntime && Client.GetClientDataModel()) {
 				ClientRenderer = std::make_unique<HeadlessRenderer>(Vector2(64, 64));
@@ -819,12 +826,18 @@ namespace {
 		auto Mutation = std::make_shared<Script>();
 		Mutation->SetName("TerminalStructuralMutation");
 		Mutation->SetParent(ServerWorld);
+		if (WithByteAdmission) std::this_thread::sleep_for(2ms);
 		Server.Step(Tick);
 		Check(
 			Server.GetStatus() == GameSessionStatus::Listening && Server.GetMetrics().PlayersRemoved == 1 &&
 				ServerRuntime.Players->GetPlayers().empty(),
 			"rejected reliable structural admission tears down its Player and peer in the same processing cycle"
 		);
+		if (WithByteAdmission) {
+			const auto Metrics = Server.GetMetrics();
+			Check(Metrics.ReliableAdmission.AcceptedBytes > 0 && Metrics.ReliableAdmission.RolledBackBytes > 0 &&
+				Metrics.ReliableAdmissionPeerStates == 0, "failed scheduler admission refunds reservation and clears generation-safe accounting");
+		}
 		Client.Stop();
 		Server.Stop();
 		if (ClientRuntime) ClientRuntime->Destroy();
@@ -887,7 +900,7 @@ namespace {
 		ServerRuntime.Destroy();
 	}
 
-	void TestProductionLifecycleComposition(bool MeasureHandoff = false) {
+	void TestProductionLifecycleComposition(bool MeasureHandoff = false, bool WithByteAdmission = false) {
 		SimulatedTransportConfiguration TransportConfiguration;
 		TransportConfiguration.BaseLatency = 1ms;
 		auto Network = SimulatedNetwork::Create(TransportConfiguration);
@@ -1045,7 +1058,15 @@ end)
 			EngineProviderConfiguration{.AudioEnabled = false, .Mode = RuntimeMode::NetworkServer}
 		);
 		ServerRuntime.ProcessService->Alive = true;
-		GameSession Server(ServerTransport, Configuration(GameSessionRole::Server), &ServerRuntime);
+		auto ServerConfiguration = Configuration(GameSessionRole::Server);
+		if (WithByteAdmission) {
+			ServerConfiguration.ReliableService.emplace();
+			auto &Profile = *ServerConfiguration.ReliableService;
+			Profile.ConnectionRate = Profile.AggregateRate = 8 * 1024 * 1024;
+			Profile.BackendRate = 16 * 1024 * 1024;
+			Profile.RequireLatencyCompatibility = true;
+		}
+		GameSession Server(ServerTransport, ServerConfiguration, &ServerRuntime);
 		GameSession Client(ClientTransport, Configuration(GameSessionRole::Client));
 		Check(Server.Start().Succeeded() && Client.Start().Succeeded(), "production session endpoints start");
 		std::shared_ptr<Folder> HandoffMarker;
@@ -1055,6 +1076,7 @@ end)
 		}
 		std::size_t LateCharacterTicks = 0, LateRemoteTicks = 0;
 		auto TraceAdvance = [&](std::uint64_t Tick) {
+			if (WithByteAdmission) std::this_thread::sleep_for(1ms);
 			if (!MeasureHandoff) { Advance(Network, Server, Client, Tick); return; }
 			// A small real structural mutation ensures the early flush precedes
 			// Character authority and the ordinary Luau Remote pump in this step.
@@ -1283,6 +1305,16 @@ end)
 			ServerRuntime.Players->GetPlayers().empty(), "disconnect tears down the authoritative Player and Character"
 		);
 		Check(Server.GetMetrics().PlayersRemoved == 1, "disconnect Player teardown is measured exactly once");
+		if (WithByteAdmission) {
+			const auto Metrics = Server.GetMetrics();
+			Check(Metrics.ReliableAdmission.AcceptedBytes > 0 && Metrics.ReliableAdmissionPeerStates == 0 &&
+				Metrics.ReliableAdmission.GlobalCreditHighWater <= MaximumReliableServiceGroupBytes &&
+				Metrics.StructuralMaximumTransitionsSelectedPerTick <= 8192,
+				"profile-enabled action/Remote/Character lifecycle preserves byte, peer cleanup and 3J bounds");
+			std::cout << "[Network:ByteAdmissionSession] accepted=" << Metrics.ReliableAdmission.AcceptedBytes
+				<< " deferred=" << Metrics.ReliableAdmission.SizeDeferrals
+				<< " waitMaxUs=" << Metrics.ReliableAdmission.MaximumAdmissionWaitMicroseconds << '\n';
+		}
 		Check(
 			Client.GetStatus() == GameSessionStatus::Failed && !Client.GetClientDataModel(),
 			"failed client session exposes no accepted replica through ordinal status ordering"
@@ -1680,6 +1712,12 @@ int main(int ArgumentCount, char **Arguments) {
 			TestProductionLifecycleComposition(true);
 			return Failures == 0 ? 0 : 1;
 		}
+		if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--byte-admission") {
+			TestRejectedStructuralAdmissionIsPeerTerminal(true);
+			TestProductionLifecycleComposition(true, true);
+			TestProductionLifecycleComposition(false, true);
+			return Failures == 0 ? 0 : 1;
+		}
 		if (ArgumentCount != 1) throw std::invalid_argument("Unknown game-session test selection");
 		TestPublicationLatencyBounds();
 		TestProtocolBounds();
@@ -1691,6 +1729,9 @@ int main(int ArgumentCount, char **Arguments) {
 		TestSpoofedReadyPlayerRejection();
 		TestBurstAdmissionKeepsJournalCursorsCurrent();
 		TestRejectedStructuralAdmissionIsPeerTerminal();
+		TestRejectedStructuralAdmissionIsPeerTerminal(true);
+		TestProductionLifecycleComposition(true, true);
+		TestProductionLifecycleComposition(false, true);
 		TestAcceptedConnectionChurn();
 		for (int Cycle = 0; Cycle < 100; ++Cycle)
 			TestProductionLifecycleComposition();

@@ -843,7 +843,7 @@ if(BUILD_TESTING)
 		add_executable(gargantuan_real_transport_tests "tests/GameNetworkingSocketsTransportTests.cpp")
 		add_executable(gargantuan_gns_capacity_benchmark "tests/GnsCapacityBenchmark.cpp")
 		target_compile_features(gargantuan_gns_capacity_benchmark PRIVATE cxx_std_23)
-		target_link_libraries(gargantuan_gns_capacity_benchmark PRIVATE GameNetworkingSockets::static)
+		target_link_libraries(gargantuan_gns_capacity_benchmark PRIVATE gargantuan_core GameNetworkingSockets::static)
 		target_link_libraries(gargantuan_real_transport_tests PRIVATE
 			gargantuan_core
 			gargantuan_gns_transport

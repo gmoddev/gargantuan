@@ -15,6 +15,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <thread>
 #include <variant>
@@ -190,6 +191,13 @@ int main() {
 	{
 		GameNetworkingSocketsTransportConfiguration Configuration;
 		Check(Configuration.IsValid(), "default GNS adapter configuration is valid");
+		Configuration.SendRate = 0;
+		Check(!Configuration.IsValid(), "zero explicit GNS rate is invalid");
+		Configuration.SendRate = std::numeric_limits<std::uint32_t>::max();
+		Check(!Configuration.IsValid(), "GNS rate cannot overflow the signed backend setting");
+		Configuration.SendRate = 16 * 1024 * 1024;
+		Check(Configuration.IsValid(), "trusted per-connection backend headroom is valid");
+		Configuration.SendRate.reset();
 		Configuration.MaximumConnections = 0;
 		Check(!Configuration.IsValid(), "zero GNS connection capacity is rejected");
 		Configuration = {};

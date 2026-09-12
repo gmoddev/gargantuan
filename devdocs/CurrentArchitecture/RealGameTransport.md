@@ -16,6 +16,19 @@ related_adrs:
 
 # Real game transport
 
+## Trusted rate configuration (2026-09-12)
+
+The adapter now accepts an optional positive signed-range `SendRate` at startup.
+It applies matching GNS send min/max values to its listener/connection options,
+not the backend-global defaults or another adapter. Omission retains the inherited
+rate. Buffer limits, flags, reliable FIFO and unreliable sequencing are unchanged.
+The [ServerHost deployment profile](NetworkingReliableDeploymentContract.md)
+owns application reservations and separately funded backend packet/realtime
+headroom; GNS's configured on-wire rate is not measured application throughput.
+GameSession consumes pending reliable bytes as conservative admission feedback.
+This is not a new transport lane, ordering domain or guarantee on an unqualified
+physical link.
+
 ## Backend selection and build
 
 `GameNetworkingSocketsTransport` is Gargantuan's first real `IGameTransport`

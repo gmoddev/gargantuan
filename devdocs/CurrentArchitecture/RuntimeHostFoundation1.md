@@ -12,6 +12,19 @@ related_adrs: []
 
 # Runtime Host Foundation 1
 
+## Trusted reliable-service configuration (2026-09-12)
+
+`ServerHostConfiguration::ReliableService` is startup-only native deployment
+input, separate from content/provider configuration. The dedicated Server accepts
+the complete `--reliable-rate` / `--reliable-aggregate-rate` / `--reliable-peers`
+tuple or an injected host profile, not both. Validation occurs before packaged
+runtime acquisition. No client, package, Node content descriptor or Luau field
+can supply it. The host passes connection/aggregate reservations to GameSession
+and a separate backend rate to its GNS listener. See the
+[deployment contract](NetworkingReliableDeploymentContract.md) for numeric limits,
+packet/realtime headroom, low-rate unqualified behavior and qualification gates.
+Omission retains legacy development behavior and reports it as unqualified.
+
 ## Boundary
 
 The official packaged runtime has distinct process composition roots:

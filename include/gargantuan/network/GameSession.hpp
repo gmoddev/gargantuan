@@ -5,6 +5,7 @@
 #include "gargantuan/network/ReplicaApplier.hpp"
 #include "gargantuan/network/ReplicationCoordinator.hpp"
 #include "gargantuan/network/ReplicationRelevance.hpp"
+#include "gargantuan/network/ReliableServiceProfile.hpp"
 #include "gargantuan/network/Transport.hpp"
 #include "gargantuan/runtime/ObjectId.hpp"
 
@@ -51,12 +52,17 @@ namespace gargantuan::network {
 		ReplicationRelevanceConfiguration Relevance;
 		StructuralReplicationConfiguration StructuralReplication;
 		bool AllowInsecureDevelopmentNetwork = false;
+		// Trusted startup-only server input; absent means legacy/unqualified.
+		std::optional<ReliableServiceProfile> ReliableService;
 
 		[[nodiscard]] bool IsValid() const;
 		[[nodiscard]] static NetworkLimits DefaultLimits();
 	};
 
 	struct GameSessionMetrics {
+		ReliableByteAdmissionMetrics ReliableAdmission;
+		std::uint64_t ReliableAdmissionPeerStates = 0;
+		std::uint64_t ReliableAdmissionLogicalBytes = 0;
 		std::uint64_t TransportConnections = 0;
 		std::uint64_t AcceptedPeers = 0;
 		std::uint64_t ReadyPeers = 0;

@@ -1,6 +1,8 @@
 // Backend-only discriminator, not a GameSession/GRPL correctness fixture.
 // Same pinned GNS, flags, IP loopback and message-size envelope as the adapter.
-// Rate overrides exist only in this executable, never in the production adapter.
+// Laboratory offers remain test-only. --production-admission uses the exact
+// runtime byte accountant, but still does not prove GameSession/GRPL correctness.
+#include "../src/network/ReliableByteAdmission.hpp"
 #include <steam/steamnetworkingsockets.h>
 #include <steam/isteamnetworkingutils.h>
 #include <algorithm>
@@ -39,6 +41,7 @@ struct Case {
 	bool Rpc = true, Before = false;
 	int AdmissionPercent = 0; // --envelope only; fixed configured-rate fraction.
 	int EnvelopeRate = 0; // Test-only capacity-shortfall discriminator.
+	bool ProductionAdmission = false;
 };
 double Percentile(std::vector<double> Values, double Fraction) {
 	if (Values.empty()) return -1;
@@ -73,6 +76,7 @@ void Run(Case Work) {
 	std::uint64_t Submitted = 0, Delivered = 0, Messages = 0, Received = 0;
 	std::uint64_t Requests = 0, Responses = 0, UnreliableSent = 0, UnreliableReceived = 0;
 	std::int64_t LastDelivery = Start, LastResponse = Start, MaxResponseGap = 0, LastSample = 0;
+	std::int64_t LastEventResponse = Start, MaxEventResponseGap = 0;
 	std::int64_t LastRequest = 0, LastUnreliable = 0, MaxQueue = 0, PeakPending = 0, EndOfferPending = 0;
 	std::int64_t CreditTime = Start, Period = 0, LastStructural = Start, LastStructuralSubmission = Start;
 	const auto ProfileRate = Work.EnvelopeRate ? Work.EnvelopeRate : Work.Rate;
@@ -80,6 +84,13 @@ void Run(Case Work) {
 	const auto BacklogLimit = ProfileRate / 10; // 100 ms configured service, not a delivery guarantee.
 	const auto Burst = ProfileRate / 20; // At most 50 ms credit; unused time cannot build an arbitrary burst.
 	double Credit = Burst;
+	std::optional<gargantuan::network::detail::ReliableByteAdmission> Production;
+	if (Work.ProductionAdmission) {
+		gargantuan::network::ReliableServiceProfile Profile;
+		Profile.ConnectionRate = Profile.AggregateRate = ProfileRate;
+		Profile.BackendRate = Work.Rate;
+		Production.emplace(Profile);
+	}
 	std::uint64_t PeriodBytes = 0, MaximumPeriodBytes = 0, BacklogDeferrals = 0, EventResponses = 0, ActionResponses = 0;
 	std::vector<double> Rtt, ReceiveAge, UnreliableLatency, EventRtt, ActionRtt;
 	Rtt.reserve(128); ReceiveAge.reserve(8192); UnreliableLatency.reserve(512);
@@ -114,6 +125,7 @@ void Run(Case Work) {
 				Delivered += Message->m_cbSize; ++Received; LastDelivery = Time;
 				if (Header.Kind == 1) LastStructural = Time;
 				if (Header.Kind == 6 || Header.Kind == 8) {
+					if (Header.Kind == 6) { MaxEventResponseGap = std::max(MaxEventResponseGap, Time - LastEventResponse); LastEventResponse = Time; }
 					auto &Values = Header.Kind == 6 ? EventRtt : ActionRtt;
 					if (Values.size() == 128) throw std::runtime_error("envelope response sample bound");
 					Values.push_back((Time - Header.Sent) / 1000.0);
@@ -141,7 +153,7 @@ void Run(Case Work) {
 		if (!Messages) throw std::runtime_error("early request");
 	}
 	std::size_t StructuralSubmitted = 0;
-	const auto OfferEnd = Start + (Work.Offered || Work.AdmissionPercent ? 6000000 : Work.Total ? 0 : 2000000);
+	const auto OfferEnd = Start + (Work.Offered || Work.AdmissionPercent || Production ? 6000000 : Work.Total ? 0 : 2000000);
 	if (Work.AdmissionPercent && (Work.Chunk > static_cast<std::size_t>(Burst) || Work.Chunk < sizeof(Probe)))
 		throw std::runtime_error("atomic group does not fit envelope; no split/oversized exception");
 	const auto Deadline = Start + 25000000;
@@ -154,6 +166,13 @@ void Run(Case Work) {
 		Credit = std::min<double>(Burst, Credit + (Time - CreditTime) * AdmissionRate / 1000000.0); CreditTime = Time;
 		const auto Allowed = Work.Offered
 			? std::min<std::size_t>(Work.Total, static_cast<std::size_t>((Time - Start) * Work.Offered / 1000000)) : Work.Total;
+		if (Production) {
+			SteamNetConnectionRealTimeStatus_t Feedback{};
+			if (SteamNetworkingSockets()->GetConnectionRealTimeStatus(Server, &Feedback, 0, nullptr) != k_EResultOK ||
+				Feedback.m_cbPendingReliable < 0 || !Production->BeginStep(Time) ||
+				!Production->Observe({1, 1}, static_cast<std::uint64_t>(Feedback.m_cbPendingReliable)))
+				throw std::runtime_error("production admission feedback unavailable");
+		}
 		while (StructuralSubmitted < Allowed) {
 			const auto Size = std::min(Work.Chunk, Work.Total - StructuralSubmitted);
 			if (Work.Offered && Size > Allowed - StructuralSubmitted) break;
@@ -167,15 +186,23 @@ void Run(Case Work) {
 				if (Pending + Size > static_cast<std::uint64_t>(BacklogLimit)) { ++BacklogDeferrals; break; }
 				Credit -= Size;
 			}
+			std::optional<gargantuan::network::detail::ReliableByteAdmission::Reservation> Receipt;
+			if (Production) {
+				if (Size > Production->Allowance({1, 1}, Time)) { Production->DeferSize({1, 1}, Size); break; }
+				Receipt = Production->Reserve({1, 1}, Size);
+				if (!Receipt) throw std::runtime_error("production reservation failed");
+			}
 			Send(Server, 1, StructuralSubmitted, Size, k_nSteamNetworkingSend_Reliable);
+			if (Receipt && !Production->Commit(*Receipt)) throw std::runtime_error("production credit commit failed");
 			StructuralSubmitted += Size;
 			LastStructuralSubmission = Now();
 			PeriodBytes += Size;
 		}
-		const unsigned RequestLimit = Work.Offered || Work.AdmissionPercent ? 60u : Work.Total ? 1u : 20u;
+		if (Production) Production->EndStep();
+		const unsigned RequestLimit = Work.Offered || Work.AdmissionPercent || Production ? 60u : Work.Total ? 1u : 20u;
 		if (Work.Rpc && Requests < RequestLimit && Time - LastRequest >= 100000) {
 			Send(Client, 2, ++Requests, 115, k_nSteamNetworkingSend_Reliable); LastRequest = Time;
-			if (Work.AdmissionPercent) {
+			if (Work.AdmissionPercent || Production) {
 				Send(Client, 5, Requests, 115, k_nSteamNetworkingSend_Reliable);
 				Send(Client, 7, Requests, 115, k_nSteamNetworkingSend_Reliable);
 			}
@@ -198,13 +225,16 @@ void Run(Case Work) {
 			LastSample = Time;
 		}
 		if (Time >= OfferEnd && StructuralSubmitted == Work.Total && Submitted == Delivered && Requests == Responses &&
-			(!Work.AdmissionPercent || (EventResponses == Requests && ActionResponses == Requests)) && Status.m_cbPendingReliable == 0) break;
+			(!(Work.AdmissionPercent || Production) || (EventResponses == Requests && ActionResponses == Requests)) && Status.m_cbPendingReliable == 0) break;
 		std::this_thread::sleep_for(1ms);
 	}
 	std::cout << "[Network:CapacityResult] case=" << Work.Name << " overrideRate=" << Work.Rate
 		<< " profileRate=" << ProfileRate
-		<< " admissionPercent=" << Work.AdmissionPercent << " admissionBps=" << AdmissionRate << " burstBytes=" << Burst
-		<< " backlogLimit=" << BacklogLimit << " backlogDeferrals=" << BacklogDeferrals
+		<< " productionAdmission=" << Work.ProductionAdmission
+		<< " admissionPercent=" << (Production ? 75 : Work.AdmissionPercent)
+		<< " admissionBps=" << (Production ? ProfileRate * 3ll / 4 : AdmissionRate)
+		<< " burstBytes=" << (Production ? 524288 : Burst)
+		<< " backlogLimit=" << (Production ? 1048640 : BacklogLimit) << " backlogDeferrals=" << BacklogDeferrals
 		<< " structuralAdmitted=" << StructuralSubmitted << " structuralConvergedSeconds=" << (LastStructural - Start) / 1000000.0
 		<< " structuralEffectiveBps=" << StructuralSubmitted * 1000000.0 / std::max<std::int64_t>(1, LastStructural - Start)
 		<< " admissionFinishedSeconds=" << (LastStructuralSubmission - Start) / 1000000.0
@@ -217,13 +247,22 @@ void Run(Case Work) {
 		<< " requests=" << Requests << " responses=" << Responses << " rpcP50Ms=" << Percentile(Rtt, .5)
 		<< " rpcP95Ms=" << Percentile(Rtt, .95) << " eventResponses=" << EventResponses << " actionResponses=" << ActionResponses
 		<< " eventP99Ms=" << Percentile(EventRtt,.99) << " eventMaxMs=" << Percentile(EventRtt,1)
+		<< " eventGapMaxMs=" << MaxEventResponseGap / 1000.0
 		<< " actionP99Ms=" << Percentile(ActionRtt,.99) << " actionMaxMs=" << Percentile(ActionRtt,1)
 		<< " rpcP99Ms=" << Percentile(Rtt, .99) << " rpcMaxMs=" << Percentile(Rtt, 1)
 		<< " responseGapMaxMs=" << MaxResponseGap / 1000.0 << " receiveAgeMaxMs=" << Percentile(ReceiveAge, 1)
 		<< " unreliableSent=" << UnreliableSent << " unreliableReceived=" << UnreliableReceived
 		<< " unreliableMaxMs=" << Percentile(UnreliableLatency, 1) << '\n';
+	if (Production) {
+		const auto &M = Production->GetMetrics();
+		std::cout << "[Network:ProductionAdmission] case=" << Work.Name << " R=" << ProfileRate << " BackendRate=" << Work.Rate
+			<< " chunk=" << Work.Chunk << " accepted=" << M.AcceptedBytes << " creditDeferrals=" << M.CreditDeferrals
+			<< " sizeDeferrals=" << M.SizeDeferrals << " deferredByteAttempts=" << M.DeferredBytes
+			<< " backlogDeferrals=" << M.BacklogDeferrals << " waitMaxUs=" << M.MaximumAdmissionWaitMicroseconds
+			<< " peerBacklogHigh=" << M.PeerBacklogHighWater << " globalCreditHigh=" << M.GlobalCreditHighWater << '\n';
+	}
 	if (StructuralSubmitted != Work.Total || Submitted != Delivered || Messages != Received || Requests != Responses ||
-		(Work.AdmissionPercent && (EventResponses != Requests || ActionResponses != Requests))) throw std::runtime_error("did not drain");
+		((Work.AdmissionPercent || Production) && (EventResponses != Requests || ActionResponses != Requests))) throw std::runtime_error("did not drain");
 	SteamNetworkingSockets()->CloseConnection(Client, 0, "capacity complete", false);
 	SteamNetworkingSockets()->CloseConnection(Server, 0, "capacity complete", false);
 	SteamNetworkingSockets()->CloseListenSocket(Listener);
@@ -233,6 +272,13 @@ int main(int ArgumentCount, char **Arguments) {
 	SteamNetworkingErrMsg Error{};
 	if (!GameNetworkingSockets_Init(nullptr, Error)) return 2;
 	try {
+		if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--production-admission") {
+			for (const int Rate : {256*1024, 512*1024, 1024*1024, 2*1024*1024, 4*1024*1024, 8*1024*1024})
+				for (const std::size_t Chunk : {std::size_t{2000}, std::size_t{524288}})
+					Run({.Name = "production-byte-admission", .Chunk = Chunk, .Rate = 2 * Rate,
+						.EnvelopeRate = Rate, .ProductionAdmission = true});
+			GameNetworkingSockets_Kill(); return 0;
+		}
 		if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--envelope") {
 			for (const int Rate : {256*1024, 512*1024, 1024*1024, 2*1024*1024, 4*1024*1024})
 				for (const int Percent : {50, 75})

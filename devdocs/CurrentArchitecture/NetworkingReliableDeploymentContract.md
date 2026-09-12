@@ -1,5 +1,5 @@
 ---
-status: design-contract-not-implemented
+status: implemented-with-open-qualification-gates
 owner: networking-and-runtime-host
 last_verified: 2026-09-12
 related_code:
@@ -16,6 +16,179 @@ related_adrs:
 ---
 
 # Reliable deployment profile and atomic-group compatibility contract
+
+## Approved service class and implementation (2026-09-12)
+
+The user approved the proposed targets, 75/25 share, **no large-group exception**,
+and unqualified treatment of incompatible low-rate profiles. This supersedes the
+historical preflight/proposal below. Foundation 3L remains **B** until the official
+path, client, overload, journal, security and current-source CI gates close.
+
+The qualified gameplay targets are RPC p95/p99/max **150/250/500 ms**, reliable
+Event ACK max service gap **250 ms**, and action-result max **250 ms**. These are
+targets selected by product approval, not percentile claims inferred from a rate.
+`ReliableServiceProfile::IsLatencyCompatible()` establishes necessary capacity
+compatibility only; it does not certify an actual network/host or its p95.
+
+Trusted startup `ServerHostConfiguration::ReliableService` owns R/A/N, backend
+rate, share, finite bursts, admission thresholds and nonqueue allowance. The
+session consumes the profile; GNS sets its rate on the listener/connection, never
+process-globally. Clients, packages, Node content metadata and Luau cannot choose
+it. No GSES/GRPL/GCHR wire fields or ordering domains changed.
+
+The CLI requires `--reliable-rate`, `--reliable-aggregate-rate` and
+`--reliable-peers` together (bytes/s, bytes/s, count). Supplying only part or
+overriding an injected host profile fails. Native configuration can further tune
+finite fields through the same validator. `--reliable-require-latency-compatible`
+rejects an impossible class claim. Omission preserves legacy development behavior
+and emits `unqualified-legacy`; it does not silently install a faster default.
+
+An explicit CLI profile sets backend send min=max to **2R**, retaining R for
+application reservation and an additional R for packet/realtime headroom. This
+is a conservative configuration choice, **not measured path capacity**. Operators
+must fund N backend ceilings and packet/retransmission/request load on their real
+deployment; multiple Server processes must have separately funded envelopes.
+No observed short-term throughput increases admission credit. Native profiles
+may configure less backend headroom but remain capacity-unqualified. No send or
+receive buffer was enlarged. Gameplay qualification additionally assumes finite
+overlapping burst E, average gameplay within the reserved share, adequate actual
+service and the declared host/path allowance. Overload retains existing finite
+terminal-failure policy; there is no guarantee for unlimited concurrent Remotes.
+
+Production numeric contract:
+
+- `N*R <= A`; positive rates fit checked native/backend arithmetic. Session N is
+  also at most 512. `1 <= StructuralPermille <= 750`: gameplay reserve >=25%.
+- G=524,288 complete GNS bytes, of which 32 are adapter framing. The profiled
+  session advertises at most 524,256 application bytes; it does not first accept
+  a 524,288-byte application frame that the adapter cannot transmit.
+- Peer/global structural bursts are finite and at least G. E defaults to
+  262,176, covering one codec-ceiling Remote plus framing.
+- `Bp <= Qp-2E`, `Bg <= Qg-2NE`, `Qg >= Qp`. The second E funds fresh gameplay
+  headroom **while an existing gameplay burst is still pending**; a legal maximum
+  group must not require a perfectly empty queue under a small continuous load.
+  Defaults Bp=Bg=G, Qp=G+2E=1,048,640; CLI Qg=G+2NE.
+- Qp/Qg cannot exceed the existing 64/256 MiB native resource ceilings. These are
+  admission-exposure thresholds, not a claim of an exact total GNS memory cap.
+  At N=500, Qg=262,700,288; a larger N that cannot fund this envelope fails rather
+  than silently shrinking E or increasing memory limits.
+- Nonqueue allowance defaults to 100 ms and must be in 1..249 ms. Compatibility
+  requires Qp/R and Qg/A to fit the remaining part of the stricter 250-ms max,
+  plus backend headroom >=R. This is necessary arithmetic, not proof of host,
+  p95, loss/retransmission or actual bandwidth. With default thresholds/allowance,
+  256/512 KiB/s and 1/2/4 MiB/s profiles are unqualified; 8 MiB/s is a candidate
+  for actual path validation. No larger-group waiver changes those targets.
+
+### Runtime byte boundary
+
+`ReliableByteAdmission` is Main-owned resource accounting, not a scheduler of
+semantic state. At the structural safe point after the early flush, GameSession
+observes every admitted connection, including bootstrap. Exposure is provider
+pending reliable bytes + unsent scheduler reliable bytes + 32 bytes per unsent
+message. Missing feedback stops structural admission; absent data is never zero.
+Already serialized but unacknowledged reliable bytes are not a second unsent FIFO
+prefix; GNS still retains them under its existing finite provider limits. Actual
+retransmission/physical shortfall remains part of path qualification.
+
+Credit accrues from monotonic elapsed microseconds at S*R and S*A, with integer
+fractional remainder, zero initial credit, finite caps and no refill per flush.
+Each connection keeps one scalar required-cost hint, bucket, feedback and wait
+age. No frame, object/Instance pointer, candidate list or semantic identity is
+retained by this mechanism. The map is bounded by N generation-safe connections;
+disconnect releases it. Memory diagnostics count logical state (not allocator
+node overhead). One active synchronous reservation exists at most.
+
+The existing 3J rotating consideration supplies peer order. A locally eligible
+large group waiting for global credit earmarks the next global refill, preventing
+smaller peers from consuming it forever. Local credit/backlog obstruction releases
+the earmark; no-work, disconnect and accepted service release it too. A complete
+group waits for finite credit, never borrows debt or bypasses the maximum.
+
+Preparation takes a transient byte allowance **separate from the hard message
+limit**. It uses the existing exact validation encoding. If insufficient, it
+returns selected-operation cost plus a byte hint, with no PreparedCommit, Known,
+sequence or emitting journal-cursor change. The READY plan survives; later
+preparation revalidates current catalog/revision and re-encodes current payload.
+Deferred sizing still consumes per-peer/global selection work for that step,
+with one byte-deferred attempt per peer per step. No credit-induced hard-limit
+replan or unbounded sizing retry is introduced. Nonemitting journal prefixes may
+still progress under the independent existing journal caps.
+
+When funded, peer and global exact frame+adapter bytes are reserved synchronously,
+the already encoded bytes enter the existing scheduler, and matching 3J acceptance
+commits Known/journal state. Failed scheduler admission refunds once and follows
+existing terminal peer cleanup. Already accepted bytes are not refunded on a
+later semantic failure. The 8,192 selection and 65,536 planning limits remain
+independent. Late gameplay handoff, reliable FIFO order and unreliable GCHR remain
+unchanged. There is no lane or new creator-facing priority.
+
+Structural admission stops when exposure plus the group would exceed Qp-E or
+Qg-NE. A threshold exceeded by intervening gameplay latches admission off until
+exposure falls by min(quarter threshold, quarter G). Reserved bytes are added
+immediately to this step's exposure, preventing several same-step submissions
+from treating the same snapshot as empty. A fresh step replaces that snapshot.
+The thresholds constrain structural contribution; they do not pretend to hard-cap
+concurrent gameplay, provider protocol overhead or already-unacknowledged storage.
+
+Current-source results and remaining gates are recorded in the
+[validation ledger](ContentAvailabilityFoundation3L_3Validation.md).
+
+The candidate 8 MiB/s application / 16 MiB/s backend profile passes the official
+near-max Local and Node 100-call fixture: RPC p99/max 72.058/73.316 and
+74.723/75.801 ms, respectively, no timeouts/errors, pending reliable peak 469,320 B.
+This does not qualify full-size gameplay requests on the unchanged 256 KiB/s
+Player request path, nor sustained gameplay bursts, overload/recovery or arbitrary
+host/network conditions. The implementation is current; full qualification is not.
+
+## Historical service-class selection preflight (2026-09-12)
+
+The following preflight and proposal describe `e4739af17` before the approval
+above. Statements that implementation was absent or selection unresolved are
+historical, not current implementation status.
+
+The implementation task over published `e4739af17` stops at its explicit
+pre-implementation policy gate. **No production latency class has been selected
+or installed.** Current networking contracts promise bounded queues, declared
+ordering and terminal request outcomes, not an ordinary-gameplay p99/max bound.
+The accepted networking design also leaves tuning values provisional.
+
+The closest existing numeric requirements are the healthy differential's RPC
+p95/p99/max of 150/250/500 ms, action-result max 250 ms and Event ACK max gap
+250 ms. `GameSessionBenchmark.cpp` enforces them, but
+[3L.2 validation](ContentAvailabilityFoundation3L_2Validation.md) explicitly
+classifies them as fixture health gates, not Engine service guarantees. They
+cannot be relabeled as an already-approved deployment promise. The prior
+backend matrix's roughly 16/32/53 ms results are observations, not target-setting
+authority either.
+
+Recommended decision for confirmation, **not an implemented policy**:
+
+- Adopt those existing healthy-fixture targets as the qualified Foundation 3L
+  gameplay target, rather than choosing a number from the latest passing matrix.
+- Start with 75% structural service and at least 25% gameplay reserve; prohibit
+  a configured structural share above 75%. The measured small-message tradeoff
+  is 7.316 s convergence at 75% versus 10.970 s at 50%, with approximately
+  53 ms RPC maxima in both. This is a candidate policy, not a universally proven
+  safe percentage independent of offered gameplay load.
+- Do not waive the maximum for a legal atomic group. Reject incompatible
+  **qualified profiles**; preserve lower-rate legacy compatibility as explicitly
+  unqualified. The task's five requested rates are test profiles, not evidence
+  that each must qualify for one latency class.
+- Define ordinary gameplay's supported aggregate/per-peer burst and sustained
+  demand, along with request-path, RTT and host-service assumptions, before
+  claiming qualification. One codec-ceiling Remote allowance is a conservative
+  single-message reserve, not a bound on overlapping calls. Existing Remote
+  payload, concurrency and rate limits are not silently reduced.
+
+The consequential missing decision is whether to promote those fixture targets
+to the deployment contract **without a large-group exception**. A different
+target or an explicit constrained-service exception changes startup compatibility,
+backlog thresholds and deployment capacity requirements. No production admission,
+rate, sizing, ordering, wire, 3J or planning change is made while this is unresolved.
+
+For clarity, the measured 524,256-byte ceiling group is **eight Folder ancestry
+operations**, not a Player/Character group. The separate demonstrated large
+Player/Character group remains 123,183 bytes/two operations.
 
 ## Decision and implementation boundary
 

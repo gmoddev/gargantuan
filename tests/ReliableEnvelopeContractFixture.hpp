@@ -1,7 +1,7 @@
 #pragma once
 
-// Test-only contract model and isolated production-planner observations. This
-// file does not configure a transport, change selection, or grant byte credit.
+// Historical test-only numeric model and isolated production-planner tests.
+// Runtime credit is tested separately by ReliableByteAdmissionFixture.hpp.
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Folder.hpp"
 #include "gargantuan/classes/Part.hpp"
@@ -93,7 +93,7 @@ inline void TestReliableEnvelopeProfileModel() {
 		}
 		EnvelopeRequire(!Invalid.IsValid(), "invalid or overflowing profile fails closed");
 	}
-	std::cout << "[Network:EnvelopeContract] profileCases=18 result=pass runtimeAdmission=unchanged\n";
+	std::cout << "[Network:EnvelopeContract] profileCases=18 result=pass runtimeAdmission=not-tested-by-model\n";
 }
 
 struct AtomicGroupFixture {
@@ -161,6 +161,56 @@ struct AtomicGroupFixture {
 		Sizes.clear(); Counts.clear();
 	}
 };
+
+inline void TestPreAcceptanceByteDeferral() {
+	AtomicGroupFixture Fixture;
+	auto Parent = std::make_shared<Folder>(); Parent->SetParent(Fixture.World);
+	auto Child = std::make_shared<Folder>(); Child->SetParent(Parent); Child->SetName("before-credit");
+	Fixture.Desired({Child->GetObjectId()});
+	for (int Attempt = 0; Attempt != 10000 && !Fixture.Coordinator.IsPlanningReady(Fixture.Connection); ++Attempt)
+		Fixture.Coordinator.ProcessPlanning(++Fixture.Tick);
+	const auto Known = Fixture.Coordinator.GetView(Fixture.Connection)->KnownObjects;
+	auto Deferred = Fixture.Coordinator.ProducePendingRelevance(Fixture.Connection, 512, Fixture.Tick, 524256, 0);
+	EnvelopeRequire(Deferred.DeferredForBytes && !Deferred.Frame && Deferred.EncodedFrame.empty() &&
+		Deferred.RequiredFrameBytes > 0 && Deferred.SelectedTransitions == 2, "exact cost defers whole dependency closure without retaining bytes");
+	EnvelopeRequire(Fixture.Coordinator.IsPlanningReady(Fixture.Connection) &&
+		Fixture.Coordinator.GetView(Fixture.Connection)->KnownObjects == Known, "byte deferral neither replans nor accepts Known");
+	Child->SetName("changed-during-credit-wait");
+	auto Produced = Fixture.Coordinator.ProducePendingRelevance(Fixture.Connection, 512, Fixture.Tick, 524256, 524256);
+	EnvelopeRequire(Produced.Frame && !Produced.DeferredForBytes && !Produced.EncodedFrame.empty(), "funded group prepares current payload");
+	auto Encoded = network::EncodeReplicationFrame(*Produced.Frame);
+	EnvelopeRequire(Encoded && *Encoded == Produced.EncodedFrame, "pre-acceptance bytes equal exact wire encoding");
+	EnvelopeRequire(Fixture.Coordinator.GetView(Fixture.Connection)->KnownObjects == Known, "prepared funded group still awaits acceptance");
+	EnvelopeRequire(Fixture.Replica.ApplyFrame(*Produced.Frame).Succeeded() &&
+		Fixture.Coordinator.CommitSchedulerAcceptance(Fixture.Connection, Produced.Frame->Sequence).Succeeded(), "byte-funded dependency group accepts once");
+	EnvelopeRequire(Fixture.Replica.Resolve(Child->GetObjectId())->GetName() == Child->GetName(), "credit wait cannot publish stale ordinary mutation");
+	for (int Attempt = 0; Attempt != 10000 && Fixture.Coordinator.HasPendingStructuralWork(); ++Attempt)
+		Fixture.Coordinator.ProcessPlanning(++Fixture.Tick);
+	Child->SetName("journal-byte-defer");
+	auto Journal = Fixture.Coordinator.ProduceIncremental(Fixture.Connection, 512, 524256, 2048, 0);
+	EnvelopeRequire(Journal.DeferredForBytes && !Journal.Frame && Journal.JournalRecordsExamined != 0, "journal deferral charges bounded examination without accepting");
+	auto FundedJournal = Fixture.Coordinator.ProduceIncremental(Fixture.Connection, 512, 524256, 2048, 524256);
+	EnvelopeRequire(FundedJournal.Frame && Fixture.Replica.ApplyFrame(*FundedJournal.Frame).Succeeded() &&
+		Fixture.Coordinator.CommitSchedulerAcceptance(Fixture.Connection, FundedJournal.Frame->Sequence).Succeeded(), "journal cursor was not lost while byte-deferred");
+	EnvelopeRequire(Fixture.Replica.Resolve(Child->GetObjectId())->GetName() == Child->GetName(), "deferred journal eventual exact state");
+
+	auto Obsolete = std::make_shared<Folder>(); Obsolete->SetParent(Fixture.World);
+	const auto OldId = Obsolete->GetObjectId();
+	Fixture.Desired({Child->GetObjectId(), OldId});
+	for (int Attempt = 0; Attempt != 10000 && !Fixture.Coordinator.IsPlanningReady(Fixture.Connection); ++Attempt)
+		Fixture.Coordinator.ProcessPlanning(++Fixture.Tick);
+	Deferred = Fixture.Coordinator.ProducePendingRelevance(Fixture.Connection, 512, Fixture.Tick, 524256, 0);
+	EnvelopeRequire(Deferred.DeferredForBytes, "generation fixture defers old candidate");
+	Obsolete->Destroy();
+	auto Fresh = std::make_shared<Folder>(); Fresh->SetParent(Fixture.World);
+	EnvelopeRequire(Fresh->GetObjectId() != OldId, "reacquisition has fresh identity");
+	Fixture.Desired({Child->GetObjectId(), Fresh->GetObjectId()});
+	Fixture.Advance(false, false);
+	EnvelopeRequire(!Fixture.Coordinator.GetView(Fixture.Connection)->Knows(OldId) &&
+		Fixture.Coordinator.GetView(Fixture.Connection)->Knows(Fresh->GetObjectId()) && !Fixture.Replica.Resolve(OldId),
+		"old byte hint cannot resurrect destroyed generation or bind replacement identity");
+	std::cout << "[Network:ByteAdmission] preacceptance dependency/journal/mutation/recreation result=pass\n";
+}
 
 inline void TestAtomicGroupDistributions() {
 	{

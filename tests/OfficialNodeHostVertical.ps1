@@ -9,6 +9,9 @@ param(
 	[string]$NodeEndpoint,
 	[string]$RootCertificateFile,
 	[int]$RemoteFunctionCallCount = 5,
+	# Trusted test harness only. Production rates enter through ServerHost CLI,
+	# not content, client scripts, or a backend-global environment override.
+	[UInt64]$ReliableRate = [UInt64]$env:GARGANTUAN_TEST_RELIABLE_RATE,
 	[ValidateRange(0, 512)][int]$ContentObjectCount = 0,
 	[ValidateRange(0, 1536)][int]$ContentNamePadding = 0,
 	[ValidateSet('representative', 'lightweight', 'property-heavy')][string]$ContentShape = 'representative',
@@ -24,6 +27,11 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$ReliableArguments = @()
+if ($ReliableRate -ne 0) {
+	$ReliableArguments = @('--reliable-rate', [string]$ReliableRate,
+		'--reliable-aggregate-rate', [string]$ReliableRate, '--reliable-peers', '1')
+}
 
 function Require-Value {
 	param([string]$Name, [string]$Value)
@@ -580,7 +588,7 @@ if ($Mode -eq 'Churn') {
 		$ServerProcess = Start-RuntimeProcess -Executable $Server -WorkingDirectory $Descriptor.ServerPackageRoot -Arguments (
 			$RoleArguments + @('--max-ticks', '300000',
 			'--content-residency', 'on-demand', '--content-lifecycle-smoke', $ContentKey,
-			'--content-churn-cycles', [string]$ChurnCycles) + $ProviderArguments)
+			'--content-churn-cycles', [string]$ChurnCycles) + $ProviderArguments + $ReliableArguments)
 		# Drain both pipes from launch: sustained lifecycle diagnostics must never
 		# turn a full redirected pipe into artificial Server backpressure.
 		$ServerOutput = $ServerProcess.StandardOutput.ReadToEndAsync()
@@ -668,7 +676,7 @@ if ($Mode -eq 'Node' -or $Mode -eq 'NodeCycle') {
 		$ServerArguments = @(
 			'--bind', $GameEndpoint, '--session-smoke', '--max-ticks', $ServerMaximumTicks,
 			'--content-lifecycle-smoke', $ContentKey
-		) + $NodeArguments
+		) + $NodeArguments + $ReliableArguments
 		$ServerProcess = Start-RuntimeProcess -Executable $Server -WorkingDirectory $Descriptor.ServerPackageRoot -Arguments $ServerArguments
 		# Keep diagnostics flowing while the peer runs; do not let redirected
 		# output stop the Server before the Player's handshake can be serviced.

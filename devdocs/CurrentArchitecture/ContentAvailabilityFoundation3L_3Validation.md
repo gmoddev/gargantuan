@@ -6,6 +6,318 @@ last_verified: 2026-09-12
 
 # Foundation 3L.3 diagnostic validation ledger
 
+## Hierarchical byte-admission validation (2026-09-12)
+
+**B — FOUNDATION 3L PARTIALLY READY.** Policy and implementation are one coherent
+slice on `foundation/3l-content-availability`, starting at
+`e4739af176ce9c3c588343988893b72cfd46d8ac`. No merge, 3M, lane, ordering-domain,
+wire-version, content-limit, GNS-buffer or secondary-repository change. Unrelated
+morphology edits and sealed security evidence are excluded and preserved.
+
+The approved [service contract](NetworkingReliableDeploymentContract.md) is RPC
+p95/p99/max **150/250/500 ms**, Event ACK max gap **250 ms**, action-result max
+**250 ms**, structural share at most **75%**, gameplay reserve at least **25%**,
+with **no large-group exception**. Numeric compatibility is a necessary check,
+not path certification. Incompatible low rates remain explicitly unqualified;
+requesting compatibility on such a profile fails before runtime acquisition.
+
+### Source and verification method
+
+Local source is canonical. Scoped, timestamp-preserving archives went only to
+`dockerbox` / `192.168.0.108`, under `C:\Sandbox\Codex`. The final native receipt
+`build-3l3-worker/evidence/reliable-admission-v4-source.json` checks **69** scoped
+native/test/build-input files against worker SHA-256. Official v3 and v4 have
+identical production source; the final v4 test-only addition records Event ACK
+gaps in the capacity matrix and includes its analyzer. No commit was used to
+synchronize source. Native builds use four jobs, CTest two; the existing Clang 19
+container is limited to four CPUs and 12 GiB. Incremental build/dependency caches
+and unrelated worker workloads remain intact.
+
+The actual boundary is Main-owned `ReliableByteAdmission` -> exact pre-acceptance
+encoded group -> synchronous peer/global reservation -> existing scheduler
+acceptance -> existing 3J Known/journal commit -> normal transport publication.
+Deferral keeps only a scalar cost hint, not encoded payload. Sizing attempts still
+consume selection work; no PreparedCommit or emitting cursor advances. Tests
+cover fresh property values after a deferred encode, destroy/recreate, strict
+replica application, rollback exactly once and disconnect generation cleanup.
+The existing 8,192 selection / 65,536 planning limits and KI-007 remain unchanged.
+
+Node remains at `f4440423c0701ff396f589fd51b6ce41edc63539` with its two pre-existing
+uncommitted integration files preserved, not committed or changed by this slice.
+Their local/worker SHA-256 values match: `integration/gargantuan/CMakeLists.txt`
+`A27EB8CDC7C9868342F68C3A420FFFB33BE8712B489317128AD64A9591E31EDD` and
+`internal/host/content_scale_integration_test.go`
+`878F041125BB8AC7B5A68BDB4AA5677FFF115A2015EDED6BF1E2F74D11EDC4B6`.
+
+### Production-accountant capacity matrix
+
+**MEASURED:** `gargantuan_gns_capacity_benchmark --production-admission` calls the
+same production integer accountant, with one IP-loopback GNS connection, 1,450,000
+structural bytes and 60 small RPC, Event and action probes of each type. Backend
+min=max is **2R**, structural credit **0.75R**. Whole opaque messages model group
+cost but are not GRPL or RemoteManager; official correctness evidence is separate.
+Both 2,000-byte and 524,288-byte maximum groups drain at every tested rate, with
+905/905 and 183/183 reliable messages delivered and all 60 replies per type. Each
+case accepts exactly 1,450,000 structural bytes. No oversize exception or splitting.
+
+| R | 2,000-B RPC p50 / p95 / p99 / max ms | Max-group RPC p50 / p95 / p99 / max ms | Max-group Event ACK gap / action RTT max ms | Capacity classification |
+| --- | --- | --- | --- | --- |
+| 256 KiB/s | 11.047 / 14.657 / 15.029 / 15.060 | 14.075 / 867.813 / 969.075 / 1,012.720 | 1,101.320 / 1,012.720 | Unqualified |
+| 512 KiB/s | 12.762 / 15.942 / 16.288 / 16.608 | 14.333 / 357.724 / 440.181 / 462.996 | 550.618 / 462.994 | Unqualified |
+| 1 MiB/s | 12.641 / 15.581 / 16.616 / 17.558 | 13.749 / 119.244 / 180.724 / 219.985 | 306.372 / 219.982 | Unqualified |
+| 2 MiB/s | 13.578 / 14.836 / 15.125 / 15.656 | 13.556 / 15.747 / 61.561 / 92.852 | 179.905 / 92.850 | Unqualified |
+| 4 MiB/s | 13.131 / 15.078 / 15.545 / 16.131 | 13.666 / 15.638 / 17.665 / 35.680 | 120.777 / 35.678 | Unqualified |
+| 8 MiB/s | 13.544 / 15.583 / 16.112 / 16.158 | 13.153 / 15.669 / 16.005 / 16.203 | 105.301 / 16.197 | Capacity-compatible candidate |
+
+The 2/4 MiB/s probe samples passing is not grounds to override the worst-profile
+compatibility arithmetic. Likewise a 2,000-byte probe does not qualify low rates
+for the unchanged maximum group. ACK-gap values include the 100-ms probe cadence.
+
+| R | Pending reliable high-water: small / max group B | Convergence: small / max group s | Max-group admission wait ms | Max-group size / backlog deferral attempts | Max-group deferred byte attempts |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 256 KiB/s | 2,354 / 524,292 | 7.38367 / 8.16885 | 2,668.516 | 4,000 / 862 | 1,959,790,048 |
+| 512 KiB/s | 3,424 / 524,292 | 3.69476 / 4.08910 | 1,335.052 | 1,993 / 450 | 977,207,920 |
+| 1 MiB/s | 3,508 / 524,292 | 1.85108 / 2.04602 | 667.887 | 966 / 208 | 473,043,200 |
+| 2 MiB/s | 8,255 / 524,292 | 0.93027 / 1.02275 | 333.828 | 512 / 110 | 250,865,904 |
+| 4 MiB/s | 13,831 / 524,292 | 0.467702 / 0.513593 | 168.346 | 248 / 54 | 121,668,672 |
+| 8 MiB/s | 34,449 / 524,292 | 0.239158 / 0.261796 | 85.490 | 125 / 28 | 61,481,488 |
+
+Deferred bytes count repeated **attempts**, not retained memory. The laboratory
+driver asks every poll; GameSession instead retains a scalar required-cost hint
+and does not repeatedly encode while credit is short. Every max-group case stays
+at accountant exposure and global-credit high-water **524,288 B**; GNS may report
+524,292 B including its own protocol overhead. No exact GNS memory-cap claim.
+Credit high-water is <=524,288 in all twelve cases. Full data, including small-
+group Event/action and credit/size attempts, is retained in
+`byte-admission-v4-final-analysis.json`, reproducible with
+`tests/AnalyzeProductionByteAdmission.ps1 -CapacityLog <log> -OutputFile <json>`.
+
+Historical backend comparisons at 256 KiB/s: no admission RPC max **5,708 ms**;
+small-group experimental 75% **52.82 ms / 7.316 s** convergence, 50%
+**52.94 ms / 10.970 s**. New small-group production accounting is
+**15.060 ms / 7.384 s**, but backend=512 KiB/s, not 256 KiB/s. Finite accumulated
+maximum-group credit intentionally trades larger structural wait for intact
+atomic groups; it does not promise small-message latency during impossible
+low-rate serialization.
+
+### Fairness, denial and validation
+
+**MEASURED deterministic accounting:** 500 continuously eligible peer identities,
+8 MiB/s R, A=500R, zero initial credit, full 512 KiB group per peer, rotating
+consideration and 1-ms simulated accounting clock. All 500 serviced by **583 ms**;
+44,336 logical bytes / 500 peer records; Qg=262,700,288. This is not 500 actual
+network connections or production peer convergence. A separate adversarial
+small-first peer cannot steal the refill earmarked by a locally eligible large
+peer. Six profile accumulation tests, 13 invalid resource profiles, unavailable/
+missing feedback, high-water recovery, stale generation, repeated same-time
+passes, double rollback/commit denial and lifecycle cleanup pass. Pure full-group
+credit waits at the six R values are 2,666.667 / 1,333.334 / 666.667 / 333.334 /
+166.667 / 83.334 ms. These are calculated from a deterministic clock and tested,
+not observed Internet service times.
+
+| Validation | Exact result / scope |
+| --- | --- |
+| MSVC Release current-source targeted suite | **10/10**, 18.69 s; Foundation, replication, relevance/KI-007/dependency/bootstrap, GameSession, scheduler, physics and four GNS suites |
+| Clang 19 ASan / UBSan / LSan | **7/7**, 58.76 s, `ASAN_OPTIONS=detect_leaks=1:halt_on_error=1`, `UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1`; separate late-handoff also passes |
+| Profile-enabled lifecycle | Failed structural acceptance refunds; full action/Remote/root-motion/Character lifecycle and disconnect pass; late same-step sends preserved |
+| GNS production-accountant matrix | **12/12**, all reliable messages/replies delivered; analyzer validates effective profile, credit/exposure bounds and candidate probe targets |
+| ServerHost early rejection | **4/4**: partial CLI, zero R, unfunded N*R, incompatible requested latency class; exit 2 before runtime acquisition |
+| Official Local / Node | **2/2**, eight cycles and 100 RPCs each, details below |
+| Documentation | Isolated unchanged Astro site **19 pages / 3.86 s**, existing missing-404-entry warning; morphology excluded. 44 local Markdown link targets resolve; developer Markdown is outside Astro |
+| Source review | Complete **32-path** explicit diff plus new-file inventory; ordinary source/contract review, **not** a completed current-source Security Diff Scan |
+| Pre-change branch CI | `e4739af17`, run `34676794324`: terminal **success**; not evidence for the new implementation |
+| New publication CI | Must be checked after push; not presumed green from worker validation |
+
+Evidence is under `build-3l3-worker/evidence/`: v4 source receipt, v4 CTest and
+Linux sanitizer logs, v4-final matrix log/analysis, official v3 logs/analysis, and
+`reliable-admission-review-inventory.{json,patch}`. Source inventory enumerates
+all 32 scoped changed/new paths and excluded unrelated morphology; the sealed
+prior security artifact is not modified or relabeled. Final full security scan,
+full supported CTest, fresh 90-case physics matrix, real 500-peer byte-profile
+convergence, overload/recovery and production journal-retention margin are
+**not run/measured** in this slice. Earlier physics/scale evidence is preserved,
+not relabeled as a current profile run. GNS observer/matrix sanitizer execution
+is **not run**: the existing Clang image lacks pkg-config, OpenSSL/protobuf headers
+and protoc. The production accountant/Coordinator/GameSession are covered by the
+seven sanitizer cases; backend-only native evidence is not sanitizer evidence.
+
+One instrumentation provenance correction is retained: timestamp-preserving v4
+sync placed the changed matrix source older than an object built during v3 work.
+The first v4 matrix therefore lacked the new Event-gap field. Only that test file
+differed (plus its new analyzer); production hashes were unchanged. Its worker
+timestamp was refreshed, the target actually recompiled, and all twelve cases
+reran into **v4-final**. The final analyzer requires the field. No old result is
+claimed as final Event-gap evidence. A mixed-CRT LNK4098 warning remains in the
+native GNS capacity target's link log; no linker suppression was added. Early
+CLI probing first targeted an incomplete executable directory (missing DLLs);
+the four reported checks used the complete `ServerRuntimeDistribution` instead.
+
+### Official product-path measurements
+
+**MEASURED:** `TestOfficialContentMemorySoak/near-max`, Local and Node, eight
+cycles each, 512 representative Parts, name padding 1,536, payload 1,048,197 bytes,
+100 RPCs each. First residency includes a real official Player, eviction and fresh
+reload. Remaining churn runs after that Player disconnects; this is **not** eight
+continuous connected-client pressure cycles. Both cases passed, 13.18/13.56 s
+(29.32 s combined including setup). Effective Server profile R=A=8,388,608 B/s,
+N=1, backend min=max=16,777,216 B/s, S=750/1000, Bp=Bg=524,288, E=262,176,
+Qp=Qg=1,048,640. The official Player's outgoing backend remains 262,144 B/s.
+
+| Metric | Local | Node |
+| --- | ---: | ---: |
+| RPC samples | 100 | 100 |
+| RPC p50 / p95 / p99 / max ms (Luau observation) | 33.127 / 35.307 / 72.058 / 73.316 | 33.492 / 43.713 / 74.723 / 75.801 |
+| RPC timeout / error / crash | 0 / 0 / 0 | 0 / 0 / 0 |
+| GNS pending reliable peak B | 469,320 | 469,320 |
+| GNS queue estimate at peak ms | 27.933 | 27.933 |
+| Response queue estimate p99 / max ms | 25.976 / 27.596 | 25.976 / 27.798 |
+| Handler -> produced response max ms | 0.059 | 0.207 |
+| Response produced -> scheduler acceptance max ms | 0.009 | 0.022 |
+| Acceptance -> GNS call begins max ms | 4.961 | 0.119 |
+| Player receive -> callback max ms | 23.202 | 22.900 |
+| Player callback -> RPC completion max ms | 2.434 | 2.782 |
+| Reliable Event ACK samples | 71 | 76 |
+| Event ACK RTT p95 / p99 / max ms | 50.506 / 68.048 / 72.111 | 37.467 / 49.882 / 59.479 |
+| Event ACK max service gap ms (Luau) | 100.787 | 83.469 |
+| RemoteEvent max receive gap ms (GNS poll) | 100.288 | 82.970 |
+| RPC response max receive gap ms (GNS poll) | 66.645 | 66.702 |
+| One action request-accepted -> client result-handled ms | 47.667 | 41.270 |
+| Player frame interval p50 / p95 / p99 / max ms | 16.624 / 17.893 / 18.214 / 25.895 | 16.619 / 17.624 / 18.560 / 25.899 |
+| Player event-loop max service gap ms | 39.504 | 39.998 |
+| Player Character max service gap ms | 72.118 | 74.026 |
+| Player combined Remote max service gap ms | 83.069 | 74.024 |
+| Client structural apply total max ms | 20.018 | 19.766 |
+| First full 512-object visibility from fixture start ms | 351.357 | 337.666 |
+| Eviction / fresh full reload observation from fixture start ms | 966.330 / 1,803.848 | 949.952 / 1,786.232 |
+| Structural accepted bytes, including adapter | 1,881,755 | 1,885,057 |
+| Credit / size / backlog / feedback deferral attempts | 1 / 1 / 0 / 0 | 1 / 1 / 0 / 0 |
+| Deferred byte attempts (not unique backlog bytes) | 11,942 | 11,942 |
+| Maximum sampled byte-admission wait ms | 14.359 | 16.754 |
+| Accountant peer/global exposure high-water B | 469,316 | 469,316 |
+| Peer/global credit high-water B | 524,288 | 524,288 |
+| Retained accounting peers after disconnect | 0 | 0 |
+
+Action has **one** matched request/result, not a p99 distribution or sustained
+worst-backlog action qualification. Character/root-motion recipient p95/p99 are
+**not measured** here: the existing Player counters retain maxima. Do not compute
+quantiles of the running-max columns. First/full/reload times use one client-local
+fixture clock, not server-commit-to-client convergence. Exact commit-relative
+convergence and current 200/500-peer production distributions are **not measured**.
+
+Reproduce RPC/queue analysis using `tests/AnalyzeTransportService.ps1` on each
+`near-max-{local,node}-{server,player}.log` in
+`build-3l3-worker/evidence/byte-admission-v3-official/`. All four service traces
+have zero invalid/dropped records. Player frame summaries use complete
+`[Runtime:PlayerFrame]` CSV rows, milliseconds = ns/1e6, quantile index
+floor((count-1)*fraction); service gaps use the maximum, not quantiles of maxima.
+Action pairs are the single player-local `SchedulerAccepted kind=4` and
+`ClientHandled kind=7`; no inter-host timestamp subtraction is used.
+
+**Historical comparison, not a single-variable counterfactual:** the inherited
+256 KiB/s official run had about 1.45 MB pending, 5.3 s queue residence, 5.5 s RPC
+delay and a timeout. The new runs remove that symptom in this fixture, but change
+both admission and explicit backend capacity. They do not prove that admission
+alone provides the same result at 256 KiB/s.
+
+### Bounds, qualification and remaining owners
+
+The accountant owns at most N fixed peer records, one global refill earmark and
+one synchronous reservation; no peer*object frontier or deferred frame queue.
+Credit is finite elapsed-time S*R/S*A, not credit per tick/flush. Admission cannot
+raise exposure above Qp-E / Qg-NE, including same-step reservations. Provider
+protocol bytes, already-unacknowledged storage and additional gameplay are not
+misrepresented as that exact threshold. Existing provider/scheduler resource
+ceilings and terminal backpressure still apply. Unlimited gameplay is unqualified.
+
+Low-rate maximum-group results must not be replaced by small-message success.
+With this E/Q/nonqueue allowance, 256/512 KiB/s and 1/2/4 MiB/s fail necessary
+compatibility; 8 MiB/s is only a **candidate**. Request path, actual service,
+RTT/loss, host pauses and sustained offered gameplay still require qualification.
+In particular, the unchanged 256 KiB/s Player request path is not qualified for
+arbitrary codec-ceiling RPC requests within a 100-ms nonqueue allowance. Existing
+Remote payload/concurrency limits are not silently reduced to hide that fact.
+
+No lane is implemented or demonstrated necessary by the qualified-candidate
+small-gameplay fixture. Mandatory low-rate plus maximum-group plus these latency
+targets would require a separate ordering-domain assessment; those profiles are
+unqualified here. Next: qualify the full declared gameplay burst/request path and
+client service under near-max complete groups, then sustained overload/recovery,
+500-peer production fairness/convergence and journal retention. Do not infer
+current production journal margin from synthetic byte-accounting fairness.
+Current-source security and publication CI remain explicit gates, not inherited
+from a sealed prior checkpoint or a passing pre-change workflow.
+
+## Historical first implementation checkpoint (2026-09-12)
+
+The user approved RPC p95/p99/max 150/250/500 ms, Event ACK/action max 250 ms,
+75% structural share with >=25% gameplay reserve, no large-group exception, and
+unqualified low-rate compatibility. The preflight below is historical. Work
+continues on `foundation/3l-content-availability` over published `e4739af17`.
+
+Implementation now in validation: trusted startup R/A/N profile, finite
+elapsed-time peer/global structural credit, backlog feedback, fair global refill
+earmark, exact pre-acceptance sizing and encoded-byte reuse, byte deferral without
+Known/sequence advancement, failed-admission refund and generation-safe cleanup.
+No new payload queue, lane, wire version, public priority, content bound, increased
+3J/planning limit, merge or 3M. Unrelated morphology edits remain excluded.
+
+First exact worker receipt: 67 scoped native files matched local SHA-256.
+The first MSVC build regenerated its CMake glob but the in-flight MSBuild link
+did not yet load the new profile translation unit; restarting the incremental
+build resolved that source-list issue without a source workaround. Four targeted
+MSVC Release tests then passed **4/4 in 14.38 s**: scheduler contracts, replication
+relevance/dependencies, GameSession, and real GNS transport. This includes pure
+elapsed-time/fairness/profile tests and exact pre-acceptance mutation/journal/
+recreation tests, but precedes the added profile-enabled lifecycle/official matrix.
+
+Final profile-enabled MSVC/sanitizer, official Local/Node, backend matrix, docs
+and current-source CI results are still pending at this checkpoint. No security,
+overload, journal-retention or latency qualification is inferred from 4/4.
+**B — FOUNDATION 3L PARTIALLY READY.**
+
+## Reliable service-class preflight (2026-09-12)
+
+**B — FOUNDATION 3L PARTIALLY READY.** Local and published branch HEAD both remain
+`e4739af176ce9c3c588343988893b72cfd46d8ac`. The follow-up implementation request's
+policy stop condition was reached before production edits. The
+[deployment contract](NetworkingReliableDeploymentContract.md#historical-service-class-selection-preflight-2026-09-12)
+records the candidate and the required decision, not a newly installed policy.
+The existing 250/500-ms RPC and 250-ms Event/action thresholds are explicitly
+fixture health gates in 3L.2 validation. Current networking/host contracts do not
+independently define the requested ordinary-gameplay latency or burst workload.
+
+Recomputed arithmetic below assumes application service equals the displayed
+rate. It is **calculated**, not a new backend measurement or an Internet guarantee.
+G=524,288 includes adapter framing; E=262,176 conservatively covers one Remote
+codec-ceiling message plus framing, not arbitrary concurrent gameplay bursts.
+
+| Rate | G/R ideal serialization ms | (G+E)/R ideal drain ms |
+| --- | ---: | ---: |
+| 256 KiB/s | 2,000 | 3,000.122 |
+| 512 KiB/s | 1,000 | 1,500.061 |
+| 1 MiB/s | 500 | 750.031 |
+| 2 MiB/s | 250 | 375.015 |
+| 4 MiB/s | 125 | 187.508 |
+
+These omit request-path service, RTT, packet/retransmission overhead, host pauses
+and additional gameplay bursts. They cannot by themselves qualify even the
+4 MiB/s profile. Nor do they make the five requested test rates mandatory
+production latency-qualified deployments. The ceiling fixture is eight ancestry
+operations; the large Player/Character sample is separately 123,183 bytes.
+
+No implementation, new backend matrix, official Local/Node differential, byte
+admission fairness, overload or recovery result exists in this preflight:
+**not measured**. Prior 10/10 MSVC, 7/7 Clang ASan/UBSan/LSan plus late-handoff,
+18-case model and 19-page docs results below remain evidence for unchanged code,
+not rerun or relabeled as admission validation. No new security closure is claimed.
+CI reads for `e4739af17` (`34676794324`) and `108200d07` (`34675486038`) remain
+in progress at this checkpoint; neither is terminal green. Morphology edits and
+sealed evidence remain untouched. No merge, production commit, push or 3M.
+Preflight documentation verification: eight local link targets in the two edited
+documents resolve, `git diff --check` passes, and the isolated unchanged docs site
+builds 19 pages in 2.67 s with the existing missing-404-entry warning. Developer
+Markdown is outside that site build; this is not native/runtime validation.
+
 ## Diagnostic publication and deployment contract (2026-09-12)
 
 **B — FOUNDATION 3L PARTIALLY READY.** The completed 12-file diagnostic slice was

@@ -599,7 +599,7 @@ void ReplicationCoordinator::ProcessPlanning(std::uint64_t SimulationTick) {
 }
 
 ReplicationProduceResult ReplicationCoordinator::ProducePlannedFrame(ConnectionId Connection, ReplicationMessageKind Kind,
-	std::size_t MaximumTransitions, std::uint64_t SimulationTick, std::size_t MaximumFrameBytes) {
+	std::size_t MaximumTransitions, std::uint64_t SimulationTick, std::size_t MaximumFrameBytes, std::size_t AvailableFrameBytes) {
 	auto &Peer = Peers.at(Connection);
 	if (!Peer.PlanningError.empty()) return {{}, Peer.PlanningError};
 	if (Peer.PreparedCommit) return {{}, "A structural frame is awaiting scheduler acceptance"};
@@ -683,6 +683,16 @@ ReplicationProduceResult ReplicationCoordinator::ProducePlannedFrame(ConnectionI
 		PlanningPeers.insert(Connection);
 		return {{}, "No replication relevance changes are available"};
 	}
+	if (Encoded->size() > AvailableFrameBytes) {
+		// Transient byte pressure is NOT a smaller legal message size. Keep the
+		// dependency-complete plan, no prepared commit or payload across ticks.
+		// Still charge selected/encoded work so deferral cannot bypass 3J's cap.
+		SaturatingAdd(CandidateMetrics.StructuralTransitionsSelected, Frame.Operations.size());
+		SaturatingAdd(CandidateMetrics.StructuralTransitionsEncoded, Frame.Operations.size());
+		SaturatingAdd(CandidateMetrics.StructuralBytesEncoded, Encoded->size());
+		Metrics = CandidateMetrics;
+		return {{}, {}, Frame.Operations.size(), 0, {}, true, Encoded->size()};
+	}
 	auto Next = Peer.NextSequence.TryNext();
 	if (!Next) return {{}, "Reliable replication sequence is exhausted"};
 	if (Peer.PublicationJournalEnds.size() + Plan.Entering.size() > MaximumPeerDesiredObjects)
@@ -718,5 +728,5 @@ ReplicationProduceResult ReplicationCoordinator::ProducePlannedFrame(ConnectionI
 	RequestedTemplates.merge(Requested);
 	Metrics = CandidateMetrics;
 	Peer.PreparedCommit = std::move(Commit);
-	return {std::move(Frame), {}, Count};
+	return {std::move(Frame), {}, Count, 0, std::move(*Encoded)};
 }

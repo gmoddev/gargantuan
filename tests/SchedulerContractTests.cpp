@@ -2,6 +2,7 @@
 #include "gargantuan/network/SimulatedTransport.hpp"
 #include "../src/runtime/RuntimeWorkDiagnostics.hpp"
 #include "../src/network/SessionSendAllowance.hpp"
+#include "ReliableByteAdmissionFixture.hpp"
 
 #include <algorithm>
 #include <array>
@@ -338,6 +339,8 @@ namespace {
 }
 
 int main() {
+	try { gargantuan::test::TestReliableByteAdmission(); }
+	catch (const std::exception &Failure) { Check(false, Failure.what()); }
 	{
 		const ConnectionId Connection{900, 1};
 		RecordingTransport Transport(Connection);
