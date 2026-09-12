@@ -1,4 +1,5 @@
 #include "gargantuan/content/ContentAvailability.hpp"
+#include "../runtime/RuntimeWorkDiagnostics.hpp"
 
 #include "assets/PreparedInstanceSerialization.hpp"
 #include "gargantuan/assets/InstanceSerialization.hpp"
@@ -1114,6 +1115,7 @@ namespace gargantuan {
 	ContentAvailabilityService::~ContentAvailabilityService() { Stop(); }
 
 	void ContentAvailabilityService::Step() {
+		runtime_detail::WorkScope Work(runtime_detail::WorkPhase::ContentStep);
 		if (!State || State->Stopped) return;
 		DurationScope StepDuration(State->Metrics.Timing.Step);
 		std::vector<Impl::Completion> Completed;
@@ -1254,7 +1256,8 @@ namespace gargantuan {
 				continue;
 			}
 			RecordValue.Residency = ContentResidencyState::Admitting;
-			auto Prepared = InstanceSerialization::Internal::MaterializeDetachedJson(RecordValue.Prepared->Document);
+			auto Prepared = runtime_detail::MeasureWork(runtime_detail::WorkPhase::DetachedPreparation,
+				[&] { return InstanceSerialization::Internal::MaterializeDetachedJson(RecordValue.Prepared->Document); });
 			State->Metrics.DetachedObjectsHighWater = std::max<std::uint64_t>(
 				State->Metrics.DetachedObjectsHighWater, Prepared.ObjectsDecoded);
 			const auto PreparationFinished = AvailabilityClock::now();
@@ -1280,6 +1283,7 @@ namespace gargantuan {
 			for (const auto &Object : Descendants) RecordValue.PackageObjects.insert(Object.get());
 			const auto CommitStarted = AvailabilityClock::now();
 			try {
+				runtime_detail::WorkScope CommitWork(runtime_detail::WorkPhase::ContentCommit);
 				Prepared.Instance->SetParent(State->WorkspaceValue);
 			} catch (const std::exception &Error) {
 				State->CachedBytes -= RecordValue.EncodedBytes;

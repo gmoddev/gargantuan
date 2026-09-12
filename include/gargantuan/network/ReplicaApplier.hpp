@@ -35,6 +35,11 @@ namespace gargantuan::network {
 		std::uint64_t OperationsApplied = 0;
 		std::uint64_t RejectedStaleOperations = 0;
 		std::uint64_t RejectedInvalidReferences = 0;
+		std::uint64_t CandidateCopyNanoseconds = 0;
+		std::uint64_t SemanticValidationNanoseconds = 0;
+		std::uint64_t ValidationLoadNanoseconds = 0;
+		std::uint64_t LiveApplyNanoseconds = 0;
+		SnapshotLoadProfile ValidationLoad;
 	};
 
 	class ReplicaApplier {

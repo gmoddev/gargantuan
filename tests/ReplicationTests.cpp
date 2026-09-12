@@ -12,6 +12,7 @@
 #include "gargantuan/network/ReplicationTransport.hpp"
 #include "gargantuan/network/SimulatedTransport.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
+#include "gargantuan/render/RenderDirtyAccumulator.hpp"
 #include "gargantuan/runtime/ChangeJournal.hpp"
 
 #include <algorithm>
@@ -89,6 +90,110 @@ namespace {
 				Publish && Publish->Object == Object)
 				return Publish;
 		return nullptr;
+	}
+
+	void TestRepeatedReplicaPropertyPreflight() {
+		auto World = std::make_shared<DataModel>();
+		auto PartValue = std::make_shared<Part>();
+		PartValue->SetCFrame(CFrame(glm::vec3(5, 6, 7)));
+		PartValue->SetParent(World);
+		ReplicationCoordinator Coordinator(World);
+		ReplicaApplier Replica;
+		auto Baseline = Coordinator.AddPeer({702, 1}, ReplicationEpoch(1));
+		Check(Baseline.Succeeded() && Replica.ApplyFrame(*Baseline.Frame).Succeeded(),
+			"repeated-property regression establishes a fully validated baseline");
+		auto ReplicaPart = std::dynamic_pointer_cast<Part>(Replica.Resolve(PartValue->GetObjectId()));
+		if (!ReplicaPart) return;
+		const auto Root = Replica.GetReplicaRoot();
+		const auto LoadedBefore = Replica.GetMetrics().ValidationLoad.ConstructionNanoseconds;
+		const auto Expected = CaptureSnapshotObject(PartValue).Properties.at("CFrame");
+		ReplicaPart->SetCFrame(CFrame(glm::vec3(40, 50, 60)));
+		ReplicationFrame Repeated{
+			ReplicationProtocolVersion, ReplicationMessageKind::Incremental, ReplicationEpoch(1),
+			ReliableReplicationSequence(2), {},
+			{{ReplicationEpoch(1), PropertyReplicationUpdate{PartValue->GetObjectId(), "CFrame", Expected}}}};
+		auto Bytes = EncodeReplicationFrame(Repeated);
+		Check(Bytes && Replica.ApplyBytes(*Bytes).Succeeded() &&
+			Replica.GetReplicaRoot() == Root && Replica.Resolve(PartValue->GetObjectId()) == ReplicaPart &&
+			ReplicaPart->GetCFrame().FuzzyEq(PartValue->GetCFrame()) &&
+			Replica.GetMetrics().ValidationLoad.ConstructionNanoseconds == LoadedBefore,
+			"identical semantic values reuse preflight but still correct live replica state without replacing identity");
+		Check(Replica.ApplyFrame(Repeated).Status == ReplicaApplyStatus::StaleSequence,
+			"repeated property fast path cannot bypass reliable sequence validation");
+		auto Invalid = Repeated;
+		Invalid.Sequence = ReliableReplicationSequence(3);
+		Invalid.Operations.push_back({ReplicationEpoch(1),
+			PropertyReplicationUpdate{PartValue->GetObjectId(), "CFrame", std::string("wrong-native-type")}});
+		Check(Replica.ApplyFrame(Invalid).Status == ReplicaApplyStatus::SemanticRejection &&
+			Replica.GetReplicaRoot() == Root && ReplicaPart->GetCFrame().FuzzyEq(PartValue->GetCFrame()) &&
+			Replica.GetNextSequence() == ReliableReplicationSequence(3),
+			"a repeated prefix cannot mask an invalid changed property or advance the sequence");
+		auto Changed = Repeated;
+		Changed.Sequence = ReliableReplicationSequence(3);
+		PartValue->SetCFrame(CFrame(glm::vec3(8, 9, 10)));
+		std::get<PropertyReplicationUpdate>(Changed.Operations.front().Intent).Value =
+			CaptureSnapshotObject(PartValue).Properties.at("CFrame");
+		Check(Replica.ApplyFrame(Changed).Succeeded() && ReplicaPart->GetCFrame().FuzzyEq(PartValue->GetCFrame()) &&
+			Replica.GetMetrics().ValidationLoad.ConstructionNanoseconds > LoadedBefore,
+			"changed property values require fresh full native preflight");
+		Replica.Reset();
+		Check(Replica.ApplyFrame(Repeated).Status == ReplicaApplyStatus::StaleEpoch && !Replica.GetReplicaRoot(),
+			"validation reuse cannot survive replica reset");
+		World->Destroy();
+	}
+
+	void TestReplicaRenderDirtiness() {
+		auto World = std::make_shared<DataModel>();
+		ReplicationCoordinator Coordinator(World);
+		const ConnectionId Peer{701, 1};
+		ReplicaApplier Replica;
+		auto Baseline = Coordinator.AddPeer(Peer, ReplicationEpoch(1));
+		Check(Baseline.Succeeded() && Replica.ApplyFrame(*Baseline.Frame).Succeeded(),
+			"render-dirty regression establishes a replica baseline");
+		if (!Replica.GetReplicaRoot()) return;
+		auto &Dirty = RenderDirtyAccumulator::Get();
+		const auto Scope = Replica.GetReplicaRoot()->GetObjectId();
+		const auto Cursor = ChangeJournal::Get().CreateCursor(Scope);
+		const auto Consumer = Dirty.CreateConsumer();
+		struct ConsumerLifetime {
+			RenderDirtyConsumerId Id;
+			~ConsumerLifetime() { RenderDirtyAccumulator::Get().ReleaseConsumer(Id); }
+		} Lifetime{Consumer};
+		Dirty.Acknowledge(Dirty.Capture(Scope, Consumer));
+		auto PartValue = std::make_shared<Part>();
+		PartValue->SetParent(World);
+		auto Publish = Coordinator.ProduceIncremental(Peer);
+		Check(Publish.Succeeded() && Replica.ApplyFrame(*Publish.Frame).Succeeded(),
+			"live replica publication succeeds with render dirtiness enabled");
+		auto ReplicaPart = Replica.Resolve(PartValue->GetObjectId());
+		if (!ReplicaPart) return;
+		const auto ReplicaId = ReplicaPart->GetObjectId();
+		auto Batch = Dirty.Capture(Scope, Consumer);
+		Check(std::ranges::any_of(Batch.Records, [&](const auto &Record) {
+			return Record.Object == ReplicaId && HasRenderUpdateDomain(Record.Domains, RenderUpdateDomain::Hierarchy);
+		}), "ordinary GRPL publication marks the live replica for render extraction");
+		Dirty.Acknowledge(Batch);
+		PartValue->SetCFrame(CFrame(glm::vec3(5, 6, 7)));
+		auto Update = Coordinator.ProduceIncremental(Peer);
+		Check(Update.Succeeded() && Replica.ApplyFrame(*Update.Frame).Succeeded(),
+			"replica transform update succeeds");
+		Batch = Dirty.Capture(Scope, Consumer);
+		Check(std::ranges::any_of(Batch.Records, [&](const auto &Record) {
+			return Record.Object == ReplicaId && HasRenderUpdateDomain(Record.Domains, RenderUpdateDomain::Transform);
+		}), "ordinary GRPL transform reaches the live render-dirty scope");
+		Dirty.Acknowledge(Batch);
+		PartValue->Destroy();
+		auto Removal = Coordinator.ProduceIncremental(Peer);
+		Check(Removal.Succeeded() && Replica.ApplyFrame(*Removal.Frame).Succeeded(),
+			"replica destroy succeeds");
+		Batch = Dirty.Capture(Scope, Consumer);
+		Check(std::ranges::any_of(Batch.Records, [&](const auto &Record) {
+			return Record.Object == ReplicaId && HasRenderUpdateDomain(Record.Domains, RenderUpdateDomain::Hierarchy);
+		}), "ordinary GRPL destroy retires the old render lifetime");
+		Check(ChangeJournal::Get().Read(Cursor).Records.empty(),
+			"live replica rendering does not feed back into journal history");
+		Replica.Reset();
+		World->Destroy();
 	}
 
 	void TestRevisionedStructuralMaterialization() {
@@ -526,6 +631,8 @@ int main() {
 		return 1;
 	}
 	TestMixedSimulatorComposition();
+	TestReplicaRenderDirtiness();
+	TestRepeatedReplicaPropertyPreflight();
 	TestRevisionedStructuralMaterialization();
 	TestStructuralTemplateDifferential();
 

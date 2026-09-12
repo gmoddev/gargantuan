@@ -1,4 +1,5 @@
 #include "gargantuan/classes/WorldRoot.hpp"
+#include "../runtime/RuntimeWorkDiagnostics.hpp"
 #include "gargantuan/Log.hpp"
 #include "gargantuan/render/RenderDirtyAccumulator.hpp"
 
@@ -805,13 +806,16 @@ namespace gargantuan {
 		std::optional<std::vector<std::shared_ptr<Instance>>> Instances
 	) {
 		(void)Instances;
-		ApplyPendingPhysicsChanges();
+		runtime_detail::MeasureWork(runtime_detail::WorkPhase::PhysicsUpdate, [&] { ApplyPendingPhysicsChanges(); });
 		StepAccumulator += static_cast<float>(DeltaTime);
 		int Steps = 0;
 		while (StepAccumulator >= STEP_INTERVAL && Steps < MAX_STEPS_PER_FRAME) {
 			ApplyPendingImpulses();
 			ApplyPendingDeformableForces();
-			auto Result = Physics.Step({.DeltaTime = STEP_INTERVAL, .SubStepCount = SUB_STEP_COUNT});
+			auto Result = runtime_detail::MeasureWork(runtime_detail::WorkPhase::PhysicsRigidStep,
+				[&] { return Physics.Step({.DeltaTime = STEP_INTERVAL, .SubStepCount = SUB_STEP_COUNT}); });
+			{
+			runtime_detail::WorkScope Work(runtime_detail::WorkPhase::PhysicsEvents);
 			if (Result.EventsTruncated)
 				LOG_ERROR(App, "[Physics:Backend] Step event limit reached; excess events were rejected");
 			for (const auto &Motion : Result.Motions) {
@@ -840,11 +844,14 @@ namespace gargantuan {
 				}
 			}
 
-			auto SoftResult = Deformables.Step({
+			}
+			auto Colliders = runtime_detail::MeasureWork(runtime_detail::WorkPhase::PhysicsSoftColliders,
+				[&] { return BuildSoftBodyColliders(); });
+			auto SoftResult = runtime_detail::MeasureWork(runtime_detail::WorkPhase::PhysicsSoftStep, [&] { return Deformables.Step({
 				.DeltaTime = STEP_INTERVAL,
 				.Gravity = {0.0f, -GetGravity(), 0.0f},
-				.Colliders = BuildSoftBodyColliders(),
-			});
+				.Colliders = std::move(Colliders),
+			}); });
 			LastSoftBodyProfile = SoftResult.Profile;
 			if (SoftResult.CollidersTruncated)
 				LOG_ERROR(App, "[Physics:SoftBody] Collider limit reached; excess colliders were rejected");

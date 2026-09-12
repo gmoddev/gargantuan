@@ -53,6 +53,17 @@ Repeated or reentrant `Destroy` calls are no-ops. `Destroyed` is reflected as a
 read-only, non-editable property; scripts and ordinary native callers cannot
 move the lifecycle backwards.
 
+## Engine composition lifetime
+
+Engine constructor-body failure uses a local RAII construction lifetime to run
+normal Engine teardown before its initialized members are destroyed. This
+disconnects native world/descendant callbacks, stops content/provider workers,
+detaches runtime services, and clears script-owned handlers while their VM is
+alive. A world retained by the caller cannot retain callbacks into an Engine
+whose construction failed. Ordinary destruction remains idempotent. Hosts and
+fixtures must also keep the borrowed renderer alive until Engine destruction,
+and keep Engine alive until all borrowing GameSessions are destroyed.
+
 ## ObjectId semantics
 
 `ObjectId` is a pair of 32-bit values: a registry slot and its generation. It is

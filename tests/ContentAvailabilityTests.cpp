@@ -3,6 +3,7 @@
 #include "gargantuan/render/Renderer.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Folder.hpp"
+#include "gargantuan/classes/Part.hpp"
 #include "gargantuan/classes/RemoteEvent.hpp"
 #include "gargantuan/classes/Script.hpp"
 #include "gargantuan/content/ContentAvailability.hpp"
@@ -810,6 +811,116 @@ int main() {
 		"1023/1024/1025 queue pressure did not remain explicitly bounded");
 	QueueService.Stop();
 
+	// Exercise actual retained-document charges at the configured session ceiling,
+	// not only configuration validation. Leave worker completions queued before
+	// Step so admission cannot consume their independently reserved documents.
+	Fixture DecodedBoundaryData;
+	auto DecodedRegion = std::static_pointer_cast<Instance>(std::make_shared<Folder>());
+	DecodedRegion->SetName("DecodedBoundaryRegion");
+	DecodedRegion->SetArchivable(true);
+	for (std::size_t Index = 1; Index < MaximumPackageContentObjectsPerUnit; ++Index) {
+		auto Child = std::make_shared<Part>();
+		Child->SetName("Part" + std::to_string(Index) + std::string(1000, 'x'));
+		Child->SetArchivable(true);
+		Child->SetParent(DecodedRegion);
+	}
+	const auto DecodedPayload = InstanceSerialization::Serialize(InstanceSerialization::InstanceFormat::Json, DecodedRegion);
+	auto DecodedBytes = std::make_shared<std::vector<std::uint8_t>>(DecodedPayload.begin(), DecodedPayload.end());
+	Check(DecodedBytes->size() <= MaximumPackageContentPayloadBytes, "decoded-boundary payload exceeds the legal byte limit");
+	DecodedRegion->Destroy();
+	DecodedRegion.reset();
+	const auto DecodedDigest = AssetContentId::Hash(*DecodedBytes);
+	auto LargeEntry = DecodedBoundaryData.Manifest.Entries.front();
+	LargeEntry.Digest = DecodedDigest;
+	LargeEntry.ObjectCount = MaximumPackageContentObjectsPerUnit;
+	LargeEntry.CompressedBytes = LargeEntry.UncompressedBytes = DecodedBytes->size();
+	DecodedBoundaryData.Manifest.Entries.front() = LargeEntry;
+	DecodedBoundaryData.Provider->Payloads[LargeEntry.Key] = {{DecodedBoundaryData.Package, LargeEntry.Key}, DecodedDigest, DecodedBytes};
+	auto RefreshDecodedManifest = [&] {
+		DecodedBoundaryData.Provider->Manifest = EncodePackageContentManifest(DecodedBoundaryData.Manifest);
+		DecodedBoundaryData.ManifestDigest = AssetContentId::Hash(std::span(
+			reinterpret_cast<const std::uint8_t *>(DecodedBoundaryData.Provider->Manifest.data()),
+			DecodedBoundaryData.Provider->Manifest.size()));
+	};
+	RefreshDecodedManifest();
+	std::size_t DocumentCharge = 0;
+	{
+		auto BoundaryWorld = std::make_shared<DataModel>();
+		auto BoundaryWorkspace = std::dynamic_pointer_cast<Workspace>(BoundaryWorld->GetService("Workspace"));
+		ContentAvailabilityService BoundaryService(BoundaryWorld, BoundaryWorkspace, {
+			.Provider = DecodedBoundaryData.Provider, .Package = DecodedBoundaryData.Package,
+			.ManifestDigest = DecodedBoundaryData.ManifestDigest, .Mode = ContentResidencyMode::OnDemand});
+		Check(Pump(BoundaryService, [&] { return BoundaryService.IsManifestAvailable(); }), "decoded charge manifest failed");
+		Check(BoundaryService.RequestContent(LargeEntry.Key), "decoded charge request failed");
+		Check(Pump(BoundaryService, [&] { return BoundaryService.GetState(LargeEntry.Key) == ContentResidencyState::Resident; }),
+			"decoded charge measurement did not admit");
+		DocumentCharge = BoundaryService.GetMetrics().DecodedDocumentBytesHighWater;
+		BoundaryService.Stop();
+		Check(BoundaryService.GetMetrics().DecodedDocumentBytes == 0, "charge measurement leaked decoded bytes");
+	}
+	Check(DocumentCharge * 2 > MaximumPackageContentPayloadBytes &&
+		DocumentCharge * 2 + 1 <= MaximumContentAvailabilityDecodedDocumentBytes,
+		"decoded boundary charge is outside configurable session limits");
+	if (DocumentCharge * 2 > MaximumPackageContentPayloadBytes &&
+		DocumentCharge * 2 + 1 <= MaximumContentAvailabilityDecodedDocumentBytes) {
+		DecodedBoundaryData.Manifest.Entries.clear();
+		DecodedBoundaryData.Provider->Payloads.clear();
+		for (const auto *Key : {"boundary/a", "boundary/b"}) {
+			auto Entry = LargeEntry;
+			Entry.Key = Key;
+			Entry.BlobReference = "content/" + Entry.Key;
+			Entry.Dependencies.clear();
+			DecodedBoundaryData.Manifest.Entries.push_back(Entry);
+			DecodedBoundaryData.Provider->Payloads[Entry.Key] = {{DecodedBoundaryData.Package, Entry.Key}, DecodedDigest, DecodedBytes};
+		}
+		RefreshDecodedManifest();
+		for (const int Offset : {-1, 0, 1}) {
+			auto BoundaryWorld = std::make_shared<DataModel>();
+			auto BoundaryWorkspace = std::dynamic_pointer_cast<Workspace>(BoundaryWorld->GetService("Workspace"));
+			auto BoundaryLimits = ContentAvailabilityLimits{};
+			BoundaryLimits.MaximumDecodedDocumentBytes = static_cast<std::size_t>(static_cast<std::int64_t>(DocumentCharge * 2) + Offset);
+			ContentAvailabilityService BoundaryService(BoundaryWorld, BoundaryWorkspace, {
+				.Provider = DecodedBoundaryData.Provider, .Package = DecodedBoundaryData.Package,
+				.ManifestDigest = DecodedBoundaryData.ManifestDigest, .Mode = ContentResidencyMode::OnDemand,
+				.Limits = BoundaryLimits});
+			Check(Pump(BoundaryService, [&] { return BoundaryService.IsManifestAvailable(); }), "decoded boundary manifest failed");
+			Check(BoundaryService.RequestContent("boundary/a") && BoundaryService.RequestContent("boundary/b"),
+				"decoded boundary demand failed");
+			BoundaryService.Step();
+			const auto BoundaryDeadline = std::chrono::steady_clock::now() + 5s;
+			auto BoundarySettled = [&] {
+				const auto Metrics = BoundaryService.GetMetrics();
+				return Offset < 0 ? Metrics.DecodedCapacityDeferrals != 0 : Metrics.DecodedDocumentBytes == DocumentCharge * 2;
+			};
+			while (!BoundarySettled() && std::chrono::steady_clock::now() < BoundaryDeadline) std::this_thread::yield();
+			Check(BoundarySettled(), "decoded reservation boundary did not settle");
+			const auto Metrics = BoundaryService.GetMetrics();
+			Check(Metrics.DecodedDocumentBytes == DocumentCharge * (Offset < 0 ? 1 : 2) &&
+				Metrics.DecodedDocumentBytesHighWater <= BoundaryLimits.MaximumDecodedDocumentBytes && Metrics.Admissions == 0,
+				"decoded reservation exceeded its exact boundary or admitted undrained content");
+			std::cout << "[Content:DecodedBoundary] charge=" << DocumentCharge << " limit=" << BoundaryLimits.MaximumDecodedDocumentBytes
+				<< " current=" << Metrics.DecodedDocumentBytes << " high_water=" << Metrics.DecodedDocumentBytesHighWater
+				<< " deferrals=" << Metrics.DecodedCapacityDeferrals << '\n';
+			Check(BoundaryService.ReleaseContent("boundary/a") && BoundaryService.ReleaseContent("boundary/b"),
+				"decoded boundary cancellation failed");
+			Check(Pump(BoundaryService, [&] {
+				return BoundaryService.GetMetrics().DecodedDocumentBytes == 0 && BoundaryService.GetActiveRequestCount() == 0 &&
+					BoundaryService.GetState("boundary/a") == ContentResidencyState::Unavailable &&
+					BoundaryService.GetState("boundary/b") == ContentResidencyState::Unavailable;
+			}),
+				"decoded boundary cancellation retained documents");
+			Check(BoundaryService.RequestContent("boundary/a"), "decoded boundary recovery request failed");
+			Check(Pump(BoundaryService, [&] { return BoundaryService.GetState("boundary/a") == ContentResidencyState::Resident; }),
+				"decoded boundary did not recover after pressure removal");
+			Check(BoundaryService.ReleaseContent("boundary/a"), "decoded boundary recovery release failed");
+			Check(Pump(BoundaryService, [&] { return BoundaryService.GetState("boundary/a") == ContentResidencyState::Unavailable; }),
+				"decoded boundary recovery eviction failed");
+			BoundaryService.Stop();
+			Check(BoundaryService.GetMetrics().DecodedDocumentBytes == 0 && BoundaryService.GetActiveRequestCount() == 0,
+				"decoded boundary Stop retained documents or workers");
+		}
+	}
+
 	Fixture CancellationData;
 	CancellationData.Provider->Delay = 2ms;
 	auto CancellationWorld = std::make_shared<DataModel>();
@@ -1033,6 +1144,34 @@ int main() {
 	} catch (const std::exception &Error) {
 		std::cerr << "[Content:Test] FullyResident backlog: " << Error.what() << '\n';
 		Check(false, "FullyResident Engine failed with an available admission backlog");
+	}
+
+	// A failed Engine constructor does not run ~Engine. The still-owned input
+	// world must not retain native callbacks into its abandoned construction.
+	for (std::size_t Attempt = 0; Attempt < 24; ++Attempt) {
+		Fixture FailedBootstrap;
+		FailedBootstrap.Provider->Corrupt = true;
+		auto FailedWorld = std::make_shared<DataModel>();
+		HeadlessRenderer FailedRenderer(Vector2(64, 64));
+		ContentAvailabilityLimits FailureLimits;
+		if (Attempt % 3 == 1) FailureLimits.MaximumAdmissionObjectsPerTick = 0;
+		bool Rejected = false;
+		try {
+			auto FailedRuntime = std::make_unique<Engine>(FailedWorld, &FailedRenderer, nullptr,
+				EngineProviderConfiguration{
+					.Content = ContentAvailabilityConfiguration{
+						.Provider = FailedBootstrap.Provider, .Package = FailedBootstrap.Package,
+						.ManifestDigest = FailedBootstrap.ManifestDigest, .Mode = ContentResidencyMode::FullyResident,
+						.Limits = FailureLimits},
+					.AudioEnabled = false, .Mode = Attempt % 3 == 2 ? RuntimeMode::NetworkClient : RuntimeMode::NetworkServer});
+		} catch (const std::exception &) {
+			Rejected = true;
+		}
+		Check(Rejected, "invalid Engine bootstrap was accepted");
+		auto AfterFailure = std::make_shared<Folder>();
+		AfterFailure->SetParent(FailedWorld);
+		FailedWorld->Destroy();
+		Check(FailedWorld->GetDestroyed(), "failed Engine input world could not be destroyed safely");
 	}
 
 	auto RunRejectedPayload = [&](std::string Encoded, std::uint32_t DeclaredObjects, const char *Message) {

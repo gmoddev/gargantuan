@@ -58,6 +58,24 @@ setter calls therefore cannot feed back into the authoritative source stream.
 Suppression is thread-local and deliberately narrow, not a general way to skip
 authoritative recording.
 
+The network `ReplicaApplier` retains renderer dirtiness for its exact live
+receiver scope while suppressing journal history. Native create/property/parent/
+destroy commits still feed the bounded `RenderDirtyAccumulator`, using local
+generation-safe IDs; they do not create a replication feedback stream. Temporary
+validation worlds and nested default suppression emit neither journal history
+nor render dirtiness. The scoped policy restores its predecessor during unwind.
+Suppressed validation avoids constructing property/subtree wire payloads which
+would be discarded, without skipping setters, adoption checks or signals.
+`LoadSnapshot` remains the complete semantic and native-materialization preflight;
+the applicator does not run its identical semantic pass a second time beforehand.
+An incremental frame containing only native property assignments exactly equal
+to the already validated semantic snapshot reuses that preflight result. The
+complete envelope, epoch, sequence and operation-target checks still run, and
+live setters still apply the authoritative values (local prediction may differ).
+Any changed value, absent property, custom property or non-property operation
+requires complete candidate preflight. Reset invalidates the semantic snapshot;
+there is no cross-generation validation cache or additional retained world.
+
 Scope matching and sequences are strict. A record for another scope is rejected.
 A record below the expected cursor is rejected as a
 duplicate, a record above it is rejected as out of order, and a source cursor

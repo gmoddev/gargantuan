@@ -108,6 +108,10 @@ namespace gargantuan {
 
 	  private:
 		friend class DataModel;
+		friend class Instance;
+		// Suppressed receiver/validation mutations still validate and notify, but
+		// need not serialize payloads which Commit would immediately discard.
+		[[nodiscard]] static bool DiscardsPayload(ObjectId Scope);
 		void ReleaseScope(ObjectId Scope);
 		struct Stream {
 			std::uint64_t NextSequence = 1;
@@ -129,10 +133,13 @@ namespace gargantuan {
 		friend class InProcessReplicationSession;
 		friend class MutationGateway;
 		friend class network::ReplicaApplier;
-		ScopedChangeJournalSuppression();
+		// Only the live receiver scope may retain renderer dirtiness. Validation
+		// worlds and nested default suppression remain completely unpublished.
+		explicit ScopedChangeJournalSuppression(ObjectId RenderScope = {});
 		~ScopedChangeJournalSuppression();
 		ScopedChangeJournalSuppression(const ScopedChangeJournalSuppression &) = delete;
 		ScopedChangeJournalSuppression &operator=(const ScopedChangeJournalSuppression &) = delete;
+		ObjectId PreviousRenderScope;
 	};
 
 	class ScopedChangeJournalCapture {

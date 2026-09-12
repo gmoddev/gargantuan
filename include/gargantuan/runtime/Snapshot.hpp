@@ -62,9 +62,17 @@ namespace gargantuan {
 		[[nodiscard]] std::shared_ptr<Instance> Resolve(WireObjectId id) const;
 	};
 
+	// Optional native diagnostics; not serialized and never part of snapshot semantics.
+	struct SnapshotLoadProfile {
+		std::uint64_t ValidationNanoseconds = 0;
+		std::uint64_t ConstructionNanoseconds = 0;
+		std::uint64_t ParentingNanoseconds = 0;
+		std::uint64_t PropertiesNanoseconds = 0;
+	};
+
 	Snapshot CaptureSnapshot(const std::shared_ptr<Instance> &root);
 	SnapshotObject CaptureSnapshotObject(const std::shared_ptr<Instance> &Object);
 	std::string SerializeSnapshot(const Snapshot &snapshot);
 	SnapshotParseResult DeserializeSnapshot(std::string_view serialized);
-	SnapshotLoadResult LoadSnapshot(const Snapshot &snapshot);
+	SnapshotLoadResult LoadSnapshot(const Snapshot &snapshot, SnapshotLoadProfile *Profile = nullptr);
 }

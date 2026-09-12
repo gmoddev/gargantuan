@@ -45,6 +45,7 @@
 #include "gargantuan/services/ProcessService.hpp"
 #include "gargantuan/services/Tags.hpp"
 #include "gargantuan/services/Workspace.hpp"
+#include "../src/runtime/RuntimeWorkDiagnostics.hpp"
 
 #include <algorithm>
 #include <array>
@@ -2169,6 +2170,53 @@ namespace {
 		);
 		journal.SetCapacity(originalCapacity);
 		journal.Clear();
+	}
+
+	void TestJournalCursorRangeReference() {
+		using namespace gargantuan;
+		auto &Journal = ChangeJournal::Get();
+		const auto OriginalCapacity = Journal.GetCapacity();
+		auto World = std::make_shared<DataModel>();
+		const auto Scope = World->GetObjectId();
+		Journal.SetCapacity(137);
+		const auto Start = Journal.CreateCursor(Scope);
+		for (std::size_t Index = 0; Index < 500; ++Index)
+			(void)Journal.Commit(Scope, Scope, TagAddedChange{std::to_string(Index)});
+		const auto End = Journal.CreateCursor(Scope);
+		const auto Oldest = End.NextSequence - 137;
+		for (std::uint64_t Sequence = Start.NextSequence; Sequence <= End.NextSequence + 1; ++Sequence) {
+			for (const auto Limit : {0u, 1u, 17u, 137u, 512u}) {
+				const auto Read = Journal.Read({Scope, Sequence}, Limit);
+				const bool Stale = Sequence < Oldest;
+				const auto ExpectedCount = Stale || Sequence >= End.NextSequence ? std::uint64_t{0}
+					: std::min<std::uint64_t>(Limit, End.NextSequence - Sequence);
+				Check(Read.Status == (Stale ? ChangeReadStatus::ResnapshotRequired : ChangeReadStatus::Available) &&
+					Read.Records.size() == ExpectedCount && Read.Cursor.Scope == Scope &&
+					Read.Cursor.NextSequence == (Stale ? Oldest : Sequence + ExpectedCount),
+					"journal cursor range equals independent sequence reference including zero limits and future cursors");
+				for (std::size_t Index = 0; Index < Read.Records.size(); ++Index)
+					Check(Read.Records[Index].Sequence == Sequence + Index && Read.Records[Index].Scope == Scope &&
+						std::get<TagAddedChange>(Read.Records[Index].Payload).TagName ==
+							std::to_string(Sequence + Index - Start.NextSequence),
+						"journal bounded range preserves record identity, payload and order");
+			}
+		}
+		Journal.Clear();
+		Check(Journal.Read({Scope, Oldest}, 0).Status == ChangeReadStatus::ResnapshotRequired &&
+			Journal.Read(End, 17).Records.empty(), "cleared journal preserves lag detection and its end cursor");
+		std::vector<std::pair<ObjectId, ChangePayload>> Batch;
+		for (std::size_t Index = 0; Index < 200; ++Index) Batch.emplace_back(Scope, TagAddedChange{"Batch"});
+		Journal.CommitBatch(Scope, std::move(Batch));
+		const auto BatchEnd = Journal.CreateCursor(Scope);
+		const auto Tail = Journal.Read({Scope, BatchEnd.NextSequence - 17}, 512);
+		Check(Tail.Records.size() == 17 && Tail.Cursor.NextSequence == BatchEnd.NextSequence &&
+			Tail.Records.front().Sequence == BatchEnd.NextSequence - 17,
+			"batch retention and clear leave a contiguous readable tail");
+		Journal.SetCapacity(0);
+		Check(Journal.Read(BatchEnd).Records.empty() &&
+			Journal.Read({Scope, BatchEnd.NextSequence - 1}).Status == ChangeReadStatus::ResnapshotRequired,
+			"zero retention keeps end-cursor and stale-cursor semantics");
+		Journal.SetCapacity(OriginalCapacity);
 	}
 
 	void TestSnapshotBaseline() {
@@ -6915,6 +6963,58 @@ namespace {
 	}
 }
 
+namespace {
+	void TestRuntimeWorkAccounting() {
+		using namespace gargantuan::runtime_detail;
+		WorkSample Sample{}, Isolated{};
+		static std::uint64_t Allocations = 0, Bytes = 0;
+		{
+			WorkCapture Capture(&Sample, []() noexcept { return Allocations; }, []() noexcept { return Bytes; });
+			{
+				WorkScope Parent(WorkPhase::DesiredState);
+				++Allocations; Bytes += 16;
+				{
+					WorkScope Child(WorkPhase::DependencyClosure);
+					++Allocations; Bytes += 32;
+					RecordWorkUnits(WorkPhase::DependencyClosure, 3);
+					RecordWorkDisposition(WorkPhase::DependencyClosure, true, 2);
+					RecordWorkDisposition(WorkPhase::DependencyClosure, false);
+				}
+			}
+			const auto &Parent = Sample[static_cast<std::size_t>(WorkPhase::DesiredState)];
+			const auto &Child = Sample[static_cast<std::size_t>(WorkPhase::DependencyClosure)];
+			Check(Parent.ExclusiveNanoseconds + Child.ExclusiveNanoseconds == Parent.Nanoseconds &&
+				Child.ExclusiveNanoseconds == Child.Nanoseconds,
+				"exclusive diagnostics partition nested work without double counting");
+			Check(Parent.Allocations == 2 && Parent.AllocatedBytes == 48 && Child.Allocations == 1 &&
+				Child.AllocatedBytes == 32 && Child.Units == 3 && Child.Retained == 2 && Child.Rejected == 1,
+				"work counters preserve inclusive allocation and candidate definitions");
+			try {
+				WorkScope Outer(WorkPhase::SessionStep);
+				WorkCapture Nested(&Isolated);
+				WorkScope Inner(WorkPhase::SessionStep);
+				throw 7;
+			} catch (int) {}
+			Check(ActiveWorkSample == &Sample && ActiveWorkScope == nullptr &&
+				Isolated[static_cast<std::size_t>(WorkPhase::SessionStep)].Calls == 1,
+				"nested work capture and exception restore scope and capture ownership");
+			{
+				WorkCapture Disabled(nullptr);
+				WorkScope NoWork(WorkPhase::ContentStep);
+				RecordWorkUnits(WorkPhase::ContentStep);
+			}
+			Check(Sample[static_cast<std::size_t>(WorkPhase::ContentStep)].Calls == 0,
+				"disabled work diagnostics record nothing");
+			auto &Units = Sample[0].Units;
+			Units = std::numeric_limits<std::uint64_t>::max() - 1;
+			RecordWorkUnits(WorkPhase::ContentStep, 3);
+			Check(Units == std::numeric_limits<std::uint64_t>::max(), "work counters saturate");
+		}
+		Check(!ActiveWorkSample && !ActiveWorkScope && !ActiveWorkAllocationReader && !ActiveWorkAllocationBytesReader,
+			"completed capture retains no sample, scope or reader callback");
+	}
+}
+
 int main() {
 	try {
 		gargantuan::BootstrapNativeRuntimeSchema();
@@ -6923,6 +7023,7 @@ int main() {
 		return 1;
 	}
 
+	TestRuntimeWorkAccounting();
 	TestHierarchyAndDestruction();
 	TestServiceProviderSemantics();
 	TestObjectIdsAndChanges();
@@ -6943,6 +7044,7 @@ int main() {
 	TestInstanceAttributes();
 	TestInstanceTags();
 	TestBoundedJournalCursor();
+	TestJournalCursorRangeReference();
 	TestWorldCacheRetirement();
 	TestSnapshotBaseline();
 	TestWireJournalAndLoopbackReplication();

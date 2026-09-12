@@ -1,4 +1,5 @@
 #include "gargantuan/Engine.hpp"
+#include "runtime/RuntimeWorkDiagnostics.hpp"
 #include "gargantuan/Log.hpp"
 #include "gargantuan/Profiler.hpp"
 #include "gargantuan/classes/Animator.hpp"
@@ -75,6 +76,14 @@ namespace gargantuan {
 		  Entitlements(GetService<gargantuan::EntitlementService>()),
 		  Interaction(GetService<gargantuan::InteractionService>()), Lighting(GetService<gargantuan::Lighting>()),
 		  Players(GetService<gargantuan::Players>()) {
+		// All members exist here, but ~Engine does not run if this body throws.
+		// Unwind runtime bindings while their Engine/VM/renderer are still alive,
+		// before automatic member destruction can leave callbacks in the world.
+		struct ConstructionLifetime final {
+			Engine &Runtime;
+			bool Complete = false;
+			~ConstructionLifetime() { if (!Complete) Runtime.Destroy(); }
+		} Construction{*this};
 		if (ProviderConfiguration.Entitlements &&
 			!Entitlements->ConfigureProvider(std::move(ProviderConfiguration.Entitlements)))
 			LOG_WARN(
@@ -101,6 +110,7 @@ namespace gargantuan {
 		if (DataModel->Filesystem) ProjectSources = std::make_unique<SourceMount>(*DataModel->Filesystem);
 
 		UnbindDescendants = DataModel->BindDescendants([this](std::shared_ptr<Instance> inst) {
+			runtime_detail::WorkScope Work(runtime_detail::WorkPhase::EngineActivation);
 			if (auto script = std::dynamic_pointer_cast<gargantuan::Script>(inst)) {
 				this->Script->ScriptQueue.insert(script);
 			}
@@ -164,6 +174,7 @@ namespace gargantuan {
 		Interaction->StartDefaultRuntime();
 
 		LOG_INFO(App, "Constructed engine");
+		Construction.Complete = true;
 	}
 
 	Engine::~Engine() {
@@ -246,6 +257,7 @@ namespace gargantuan {
 	}
 
 	void Engine::Step() {
+		runtime_detail::WorkScope Work(runtime_detail::WorkPhase::EngineStep);
 		if (!ProcessService->Alive) return;
 		Mutations.Drain();
 		if (Content) Content->Step();
@@ -263,7 +275,8 @@ namespace gargantuan {
 			{
 				G_PROFILE("Simulation");
 				RunService->PreSimulation->Fire(deltaTime);
-				WorldRoot->StepPhysics(deltaTime, std::nullopt);
+				runtime_detail::MeasureWork(runtime_detail::WorkPhase::Physics,
+					[&] { WorldRoot->StepPhysics(deltaTime, std::nullopt); });
 				Workspace->GetCurrentCamera()->Step(deltaTime);
 				RunService->PostSimulation->Fire(deltaTime);
 			}
@@ -292,8 +305,10 @@ namespace gargantuan {
 						UpdateContext.SemanticRequirementsComplete = Spatial->AreAnimationRequirementsComplete();
 						UpdateContext.SemanticRequiredObjects = Spatial->GetAnimationRequiredRigs();
 					}
-					Animation->Step(deltaTime, UpdateContext);
+					runtime_detail::MeasureWork(runtime_detail::WorkPhase::Animation,
+						[&] { Animation->Step(deltaTime, UpdateContext); });
 					for (const auto &Request : Animation->GetRootMotionRequests()) {
+						runtime_detail::WorkScope Work(runtime_detail::WorkPhase::RootMotion);
 						const auto AdmissionStarted = std::chrono::steady_clock::now();
 						++RootMotionMetrics.Requests;
 						auto CharacterValue = Request.Target.lock();
@@ -359,9 +374,9 @@ namespace gargantuan {
 				G_PROFILE("Draw");
 				const auto [viewportWidth, viewportHeight] = Renderer->GetViewportSize();
 				auto camera = Workspace->GetCurrentCamera();
-				auto Publication = RenderPublishing.Publish(
-					*WorldRoot, MakeRenderCameraInput(*camera), viewportWidth, viewportHeight
-				);
+				auto Publication = runtime_detail::MeasureWork(runtime_detail::WorkPhase::RenderPublication,
+					[&] { return RenderPublishing.Publish(
+						*WorldRoot, MakeRenderCameraInput(*camera), viewportWidth, viewportHeight); });
 				try {
 					Renderer->Draw(std::move(Publication));
 				} catch (...) {
