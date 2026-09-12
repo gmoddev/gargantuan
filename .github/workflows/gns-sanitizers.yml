@@ -121,6 +121,26 @@ jobs:
             -DVCPKG_TARGET_TRIPLET=x64-linux \
             -DFETCHCONTENT_BASE_DIR="$PWD/build-gns-sanitizers/_deps"
 
+      - name: Verify GNS sanitizer exclusion scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          GNSCommand="$(ninja -C build-gns-sanitizers -t commands GameNetworkingSockets_s | grep -m1 'steamnetworkingsockets_snp.cpp')"
+          AdapterCommand="$(ninja -C build-gns-sanitizers -t commands gargantuan_gns_transport | grep -m1 'GameNetworkingSocketsTransport.cpp')"
+          printf 'GNS compile command: %s\n' "$GNSCommand"
+          printf 'Gargantuan adapter compile command: %s\n' "$AdapterCommand"
+
+          grep -Fq -- '-fsanitize=address,undefined' <<<"$GNSCommand"
+          grep -Fq -- '-fno-sanitize=function' <<<"$GNSCommand"
+          grep -Fq -- '-fno-sanitize=alignment' <<<"$GNSCommand"
+
+          grep -Fq -- '-fsanitize=address,undefined' <<<"$AdapterCommand"
+          if grep -Fq -- '-fno-sanitize=function' <<<"$AdapterCommand" || \
+             grep -Fq -- '-fno-sanitize=alignment' <<<"$AdapterCommand"; then
+            echo "GNS-only UBSan compatibility exclusions leaked into Gargantuan code."
+            exit 1
+          fi
+
       - name: Build GNS sanitizer targets
         shell: bash
         run: |

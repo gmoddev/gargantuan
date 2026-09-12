@@ -9,7 +9,7 @@ set(GARGANTUAN_GNS_REVISION "2cb93a06350bb065db53abdb0d87cf297e0bfd34")
 
 option(
 	GARGANTUAN_GNS_UPSTREAM_UBSAN_COMPAT
-	"Disable Clang's function-type UBSan check only for pinned GNS callback type erasure"
+	"Apply pinned GNS's upstream UBSan compatibility exclusions only to the upstream target"
 	OFF
 )
 
@@ -40,18 +40,22 @@ if(NOT TARGET GameNetworkingSockets::static)
 	message(FATAL_ERROR "Pinned GameNetworkingSockets source did not provide GameNetworkingSockets::static")
 endif()
 
-# The pinned GNS low-level callback wrapper deliberately erases a typed callback
-# through a void* function signature. Clang's function UBSan check diagnoses that
-# third-party boundary before Gargantuan's adapter can execute. This opt-in switch
-# is sanitizer-test infrastructure only: it disables that one sub-check on the
-# upstream GNS C++ target while Gargantuan targets and all other sanitizer checks
-# remain unchanged.
+# Two pinned-GNS implementation details conflict with Clang's full undefined
+# sanitizer even though Gargantuan does not own either operation:
+# - the low-level callback wrapper deliberately erases a typed callback through
+#   a void* function signature;
+# - SNP packet serialization performs typed integer accesses into byte buffers.
+# The pinned dependency's own cmake/FindUBSan.cmake has intentionally disabled
+# the alignment sub-check since upstream commit cfe781c4a95800de4707ac1ab9a83d2368a2bdd3.
+# Keep these exclusions opt-in and private to the upstream GNS target. Gargantuan
+# targets retain full -fsanitize=undefined coverage, including alignment.
 if(GARGANTUAN_GNS_UPSTREAM_UBSAN_COMPAT)
 	if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 		message(FATAL_ERROR "GARGANTUAN_GNS_UPSTREAM_UBSAN_COMPAT is supported only with Clang")
 	endif()
 	target_compile_options(GameNetworkingSockets_s PRIVATE
 		"$<$<COMPILE_LANGUAGE:CXX>:-fno-sanitize=function>"
+		-fno-sanitize=alignment
 	)
 endif()
 
