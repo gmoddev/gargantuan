@@ -36,22 +36,275 @@ The bounded continuation, KI-007 ordering, reference index, typed Character insp
 retirement and same-step allowance share current coordinator/session contracts; they
 are not split into historically broken intermediate implementations.
 
-### Committed-source pre-push gate
+### Executed committed-source gate and publication
 
-After the commits are constructed, rerun MSVC Release affected CTest and late-handoff,
-Clang 19 ASan/UBSan/LSan (`detect_leaks=1`), the 200-peer healthy differential and
-500-peer lifecycle/convergence fixture, and the 19-page documentation build. Retain
-the exact committed revision, source hashes and receipts under the publication prefix
-in the local evidence directory. Existing streaming health failures remain failures:
-structural convergence is not a non-starvation pass. Push is conditional on preserved
-correctness/resource bounds and no new regression; a failed required correctness test
-blocks publication.
+Published HEAD: `47d0b5a9406449ce7c4ae1f2341e0889e4366ee2`, tracking
+`origin/foundation/3l-content-availability`. Normal push; no force, merge or PR.
+The coherent series is `801a2a6ab` (physics), `2728f097e` (lifetime/preflight),
+`36d4eb668` (coupled planning/lifecycle/service), `47d0b5a9` (validation history).
+All 49 changed native/build/fixture files match the pre-staging source. The complete
+522-file native inventory also matches the worker's Git-normalized source: 157 raw
+hash matches, 365 line-ending-only differences, zero semantic source differences.
+`publication-all-native-source.json` and `publication-final-source.json` supersede
+the incomplete 38-file dirty-tree-helper inventory `publication-committed-source.json`.
 
-No new committed-source result is claimed by this preparation entry. The final task
-report must identify the executed results and pushed revision, or explicitly state
-that publication stopped. End-to-end latency instrumentation starts only after push.
-Client preflight, official transport, overload/recovery, the 170-entry startup journal
-margin, current-source security and CI remain open. **B — FOUNDATION 3L PARTIALLY READY.**
+**Measured on committed source:** MSVC Release 6/6 (8.09 s), Clang 19 ASan/UBSan/LSan
+7/7 (57.23 s, leak detection enabled), same-step late-handoff, 200-peer differential,
+500-peer load/eviction/reload convergence, and 19 documentation pages from a clean
+committed archive. The benchmark hash remains
+`6CFD2439AD1F56FCADC17D12A5C623642637465E36530B432795372B84B796F7`.
+Control load p99/max 4.118/8.988 ms; Local 32.859/48.454; Node 34.070/47.750.
+The streaming cases converge but fail their unchanged health gates. This is a
+partially-ready development publication, not a non-starvation acceptance.
+
+## Post-publication: due-to-recipient attribution (2026-09-11)
+
+**B — FOUNDATION 3L PARTIALLY READY.** No new production scheduling correction is
+justified by this slice. Retain bounded, opt-in test diagnostics and their regression
+test, not a jobs, Character priority, transaction, transport or wire redesign.
+
+### Exact source and method
+
+`latency-v3-source.json` preserves the diagnostic delta over the published source;
+the complete publication inventory establishes its base. Current native benchmark:
+`DC2AF141FFAC8A5CAEA4FF873926CA83825E529EE9A864745083B96779ECCB35`.
+Evidence: `latency-v3-{none,local}-200-50.out.log`, `latency-v3-node-200-50.log`,
+`latency-v3-local-500-50.out.log`, and `latency-final-{control,local,node,500}.json`
+plus `latency-final-reviewed.json`, all under `build-3l3-worker/evidence` (untracked).
+The analyzer is `tests/AnalyzePublicationLatency.ps1`. Its later offline-only
+surrounding-tick analysis does not change the measured native source.
+
+Unchanged deterministic workload: 200 connected peers, 50 Characters, 10 root-motion
+Characters, five-tick input cadence, 512-object package version 17, 120 warmup ticks,
+301 ticks per phase, 100 RPCs per phase, the existing event/action schedule; one real
+headless GameSession client plus raw simulated recipients. Node changes only the
+content provider. The official network fixture is separate below.
+
+All stage intervals use one-process steady-clock nanoseconds and complete stable
+peer/object generation + sequence/epoch or RequestId correlations. First/last peers
+are sampled; all recipients contribute to fixed 1-ms histograms. The 200-peer capture
+has 29,759 records of a hard 131,072 maximum, 11,534,336 reserved record bytes, about
+320 KiB fixed histogram storage, zero drops, zero decode exceptions, zero histogram
+overflow. The 500-peer capture has 25,084 records. No production record history or
+client-selectable enable/priority is introduced. The scope restores its borrowed sink.
+
+**Method correction:** `Observe` runs before real `GameSession` packet dispatch;
+raw recipients never apply a DataModel. Histograms therefore measure pre-application
+packet observation, not rendered presentation. `ClientHandled` means packet handler
+return/interpolation input, not pose visibility. Exact authoritative-change birth,
+render-observer completion and application-to-visible-observer latency are **not
+measured**. Do not manufacture those intervals from the observer timestamps.
+
+### Healthy differential, load phase
+
+All times in milliseconds. Histogram percentiles marked `upper` are deterministic
+1-ms bucket upper bounds; maxima remain exact measurements, not inferred quantiles.
+
+| Metric | Control | Local | Node |
+| --- | ---: | ---: | ---: |
+| Tick p50 / p95 | 2.468 / 3.229 | 6.169 / 20.713 | 6.412 / 21.540 |
+| Tick p99 / max | 3.828 / 9.198 | 31.000 / 48.523 | 33.885 / 53.348 |
+| Accepted Character states/wall second | 8,263.35 | 7,517.65 | 7,473.59 |
+| Throughput loss versus control | baseline | 9.02% | 9.56% |
+| Character gap p50 / p95 / p99 upper | 52 / 152 / 201 | 56 / 200 / 321 | 56 / 200 / 318 |
+| Root gap p50 / p95 / p99 upper | 100 / 200 / 201 | 100 / 201 / 353 | 100 / 201 / 352 |
+| Character/root exact max gap | 201.532 | 645.851 | 658.239 |
+| Reliable Event ACK max gap | 19.130 | 86.199 | 82.165 |
+| Event RTT p99 / max (297 samples) | 35.732 / 36.113 | 104.082 / 137.175 | 108.168 / 134.281 |
+| RPC RTT p50 / p95 / p99 / max | 33.680 / 35.302 / 35.539 / 35.882 | 37.996 / 62.774 / 100.967 / 103.280 | 38.241 / 46.030 / 106.360 / 134.142 |
+| RPC timeouts/errors/crashes | 0 / 0 / 0 | 0 / 0 / 0 | 0 / 0 / 0 |
+| Action p99 / max (7 samples) | 34.713 / 36.050 | 39.069 / 39.293 | 39.008 / 39.896 |
+| Peer convergence max ms / ticks | 16.848 / 1 | 1,348.55 / 51 | 1,397.97 / 52 |
+
+There are 44,480 Character-gap and 24,619 root-gap observations per load case.
+Scheduler rejections remain zero. Streaming health remains FAIL, not an accepted
+envelope inferred from a lower p99 or an unchanged number of accepted states.
+
+### Character/root stage decomposition
+
+Entries are p50 / p95 / p99 / max milliseconds; stage quantiles are **not additive**.
+
+| Stage | Control | Local | Node |
+| --- | --- | --- | --- |
+| Due-tick Engine complete to produced | 2.110 / 2.668 / 3.016 / 3.174 | 4.066 / 20.145 / 28.032 / 29.089 | 2.139 / 24.239 / 28.511 / 33.256 |
+| Produced to scheduler accepted | .0009 / .0014 / .0020 / .0088 | .0009 / .0015 / .0021 / .0112 | .0009 / .0017 / .0032 / .0103 |
+| Accepted to handoff | .213 / .752 / .866 / 1.028 | .226 / .758 / .878 / 1.078 | .222 / .776 / .961 / 1.258 |
+| Handoff to simulator delivery | .135 / .215 / .268 / .394 | .144 / .299 / 1.511 / 1.881 | .146 / .354 / 1.228 / 1.852 |
+| Simulator delivery to raw observer | .413 / .662 / .768 / 4.018 | .419 / .696 / 20.343 / 53.220 | .419 / .728 / 20.564 / 52.009 |
+| Real-client observer to callback | .0029 / .0038 / .0051 / 2.602 | .0029 / .0046 / .0075 / 2.688 | .0030 / .0049 / 3.144 / 23.148 |
+| GCHR callback to handler return | .0015 / .0019 / .0024 / .0068 | .0015 / .0021 / .0024 / .0040 | .0016 / .0025 / .0060 / .0074 |
+
+All 340 sampled ordinary productions per load case occur on the due tick: lateness
+0 ticks at every retained quantile/max. The due-time anchor is after `Engine::Step`
+and before `GameSession::Step`, not an exact state mutation timestamp.
+
+The worst Local sample is root-motion Character 63 generation 1, peer 200 generation
+1, materialization epoch 11, sequence 478/tick 504 to sequence 490/tick 516. Effective
+tier is Low (12 ticks), ordinary rather than forced. Its measured 645.851-ms gap is:
+596.8999 before the due-tick Engine-complete anchor; 28.0321 to production; .0015 to
+acceptance; .2747 to handoff; .2994 to simulator delivery; 20.3434 to raw observation.
+It has no real-client application stage because peer 200 is a raw observer.
+
+Surrounding ticks 505–516 take 46.09–84.85 ms per **whole shared fixture iteration**;
+server Session steps take 24.61–33.96 ms, raw observer draining 18.76–20.11 ms each.
+Tick 509 additionally contains the 24.03-ms real-client structural callback below.
+The complete per-tick trace is retained in `WorstGapSurroundingTicks`. On due tick
+516, frame construction is 3.353 ms, validation encoding 4.344 ms, submission encoding
+4.264 ms and acceptance/commit 3.536 ms. Selection's inclusive scope is 10.045 ms;
+do not add child encode scopes to it. These bounded bursts materially dilate ticks
+even though cumulative post-selection CPU is smaller than relevance. This is a
+combination of runtime work and serialized fixture work, not a pure server-host
+counterfactual or an accepted packet waiting 650 ms in the scheduler.
+
+### RPC and reliable Event attribution
+
+For 100 Local load RPCs, p50 / p99 / max milliseconds:
+
+| Stage | Measured interval |
+| --- | --- |
+| Request accepted to handoff | .053 / .098 / .109 |
+| Request handoff to simulator delivery | 20.476 / 50.069 / 52.891 |
+| Request delivery to server callback | 10.531 / 20.387 / 20.497 |
+| Server callback to native handler dispatch | 6.559 / 30.888 / 34.034 |
+| Handler dispatch to response produced | .0021 / .0093 / .0121 |
+| Response produced to acceptance | .0015 / .0020 / .0035 |
+| Response accepted to handoff | .0032 / .0064 / .0065 |
+| Response handoff to simulator delivery | .188 / 1.410 / 1.881 |
+| Response delivery to client callback | .0055 / .0813 / .0821 |
+| Client callback to native completion return | .167 / .409 / .433 |
+
+The same Node response-acceptance/handoff maximum is .013 ms and callback/completion
+maximum .401 ms. Native completion-return RTT is slightly longer than the Lua RTT
+table because Lua records before callback return. Loopback's remaining RPC time is
+predominantly before response production; the retained late-send correction is not
+contradicted. This does **not** establish official reliable-backend service.
+
+Reliable Event ACK sequences/RTT remain measured by the Luau fixture. Their native
+packet-stage correlation is **not measured**: the existing reliable Event wire field
+has sequence zero, so repeated packet taps cannot uniquely identify those events.
+The analyzer explicitly reports duplicate `Remote100` keys and does not derive event
+stage distributions from them. No wire field is added to repair diagnostics.
+
+### Real-client structural application
+
+Local frame sequence 8, epoch 1: 154,851 bytes / 512 create operations; 274 existing
+candidate identities copied and 786 identities natively preflighted, zero removals.
+Callback total 24.033 ms; `ReplicaApplier` 22.589 ms: copy .111, semantic 1.325,
+preflight 8.888, live apply 9.175, residual 3.090 ms. Preflight contains validation
+.582, construction 1.857, parenting 4.267 and properties 2.182 ms. Residual includes
+temporary-world destruction and metadata, not a separately timed cleanup-only scope.
+Node's equivalent frame is 23.140 ms. The Node GCHR callback is measurably delayed
+23.148 ms after pre-application observation by synchronous packet processing in the
+batch; its own handler remains below .008 ms.
+
+This verifies actual contribution from client native preflight/live creation without
+claiming it alone owns the approximately 650-ms scale gap. The prior 8,193-replica,
+one-property 89–101-ms scaling result remains applicable to the unchanged transaction
+path, but is historical, not a fresh run of that size. A whole-world transactional
+preflight redesign is outside this task. Renderer-visible completion remains unmeasured.
+
+### Bounds, overhead and gates
+
+500 peers still load in 158 ticks (4,399.78 ms), evict in 212 (3,868.62 ms), and reload
+in 158 (4,320.81 ms). Initial acquisition/admission is exactly 1/1; reload admissions
+become 2, not a duplicated initial lifetime. Planning remains 65,536 charged steps,
+2,048 peer slice, maximum measured service interval 16 ticks; 3J remains 8,192.
+Known is acceptance-only; targeted dependency/bootstrap/KI-007 tests pass. Load gap
+812.921 ms, eviction gap 304.180 ms and reload gap 427.784 ms do not close health gates. Journal lag high-water
+16,214 versus retention 16,384 leaves 170 entries, not a defensible final margin.
+There are zero journal failures or RPC errors; convergence does not close overload.
+
+Paired same-binary v2 probe-off/on load runs: Control wall 5,019.16/5,020.65 ms,
+Local 5,520.23/5,521.72 ms; Local throughput 7,514.18/7,512.16 states/s. This is about
+.03% wall/throughput difference, not a statistically established zero-overhead bound.
+Local p99 varies 30.965/32.388 ms; do not interpret one pair as exact probe CPU cost.
+The v3 addition only samples existing real-client replica counters and root metadata.
+
+### Official GNS path: reproduced failure, not closure
+
+Freshly rebuilt official Player/Server/Packager, existing Node fixture only as the
+test driver; no secondary source changes. `TestOfficialContentMemorySoak/near-max`
+requests eight churn cycles and 100 RPCs using one real headless Player, Local then
+Node provider. Both runs FAIL (Player exit 22) after 1,800 frames; no successful
+ClientTimeline marker. This is not a crash: exit 22 is the existing smoke proof's
+incomplete Step 2, with `FunctionComplete=false` after one RPC timeout. The fixture
+does not finish its requested eight cycles, so do not report eight-cycle soak success.
+
+Raw logs and `player-analysis.json` are in `build-3l3-worker/evidence/latency-final-official`;
+the driver receipt is `latency-v3-official-near-max.log`. Both traces retain all 1,800
+Player frame rows, below the 4,096 cap; `Complete=false` correctly reports failed proof.
+
+| Official near-max metric | Local | Node |
+| --- | ---: | ---: |
+| RPC p50 / p95 / p99 / max ms | 33.224 / 34.640 / 1,734.685 / 5,000.479 | 33.332 / 34.792 / 1,749.883 / 5,000.113 |
+| RPC samples / timeouts / errors / crashes | 100 / 1 / 1 / 0 | 100 / 1 / 1 / 0 |
+| Reliable Event ACK max gap ms | 5,549.552 | 5,531.744 |
+| Player Remote receive-service max gap ms | 5,544.188 | 5,529.299 |
+| Player Character receive-service max gap ms | 1,854.763 | 1,865.923 |
+| Player event-loop max gap ms | 39.027 | 53.949 |
+| Player Poll max ms | 29.642 | 36.378 |
+| Player replica apply max ms | 29.371 | 33.022 |
+| Native preflight max ms | 18.041 | 17.698 |
+| Sampled backend pending reliable bytes high-water | 1,420,323 | 1,420,323 |
+
+The reliable-byte trace reaches its bounded 256 structural + 256 application samples;
+the high-water is a **sampled lower bound**, not a complete run maximum. It measures
+GNS pending reliable bytes, not a separately measured RPC queue, acknowledged history,
+queue age or end-to-end backlog. All captured sends report acceptance. Local RPC 6's
+handler runs; a same-server-clock application send follows 34 microseconds later with
+1,390,274 pending reliable bytes. That tap does not carry RequestId, so this is temporal
+association, not a falsely exact response-ID handoff match. Client-clock RPC 6 times
+out at 5,000.479 ms. Server-clock response/body timing is never subtracted from an
+unsynchronized client timestamp. Precise official response-handoff-to-receive duration
+is **not measured**.
+
+Source finding: `GameNetworkingSocketsTransport::Send` sends both GRPL and reliable
+application traffic through `SendMessageToConnection` on the same connection with
+the Reliable flag. It does not configure independent lanes; native semantic order
+tags do not create backend lanes. Pending bytes are queried before admission. Client
+event service continues in tens of milliseconds while reliable service gaps reach
+seconds. Local server-frame interval max is approximately 23.76 ms, not a giant
+multi-second synchronous tick. Therefore the observed official failure cannot be
+explained by the Player's measured preflight spike or the raw scale harness alone.
+
+**Inferred owning boundary:** reliable backend stream/head-of-line and service/capacity
+policy. Exact congestion, configured rate, effective send rate, unacknowledged bytes,
+per-response queue age and backend packet receive timestamps remain unmeasured. Do
+not distinguish inadequate configured capacity from arbitration starvation without
+those measurements. Do not raise bandwidth limits or add lanes on this evidence
+alone. Historical approximately 3.8-second official delay is not fixed; this run
+demonstrates approximately 5.5-second Remote gaps and an RPC timeout instead.
+
+The next dedicated task is **Official Reliable Transport Service/Capacity Attribution**:
+correlate RequestId through the actual GNS send/receive boundary with interval-local
+clocks; capture bounded pending/unacknowledged bytes, rate policy, observed drain rate,
+queue age and packet/callback service; separate physical/configured saturation from
+same-stream head-of-line delay. Preserve ordering/lifecycle dependencies, GCHR semantics
+and reverse-direction structural progress. Any new ordering lane requires explicit
+architecture/wire review. Client transactional preflight remains the next independent
+client owner; neither it nor general jobs is a workaround for the official failure.
+
+### Final diagnostic validation and publication boundary
+
+Final diagnostic native source: MSVC Release affected tests **6/6 PASS (8.29 s)**;
+Clang 19 ASan/UBSan/LSan **7/7 PASS (56.78 s, detect_leaks=1)** plus late-handoff.
+The committed-source rerun is MSVC **6/6 (8.35 s)** and sanitizers **7/7 (57.06 s)**,
+with 13 GCHR and two reliable Event messages handed off after production in the
+same step. All 53 changed native/build/fixture worker hashes match committed source.
+The final documentation archive builds **19 pages (2.13 s)**. The final pre-push
+amendment only updates this result ledger and known-issue publication/status text;
+native/build/fixture blobs are unchanged from those committed-source reruns.
+The previous v2 sanitizer pass was also 7/7; it is not substituted for final v3.
+No physics behavior changed: targeted physics regression passes; the prior 90-case
+matrix is preserved, not falsely rerun. Planning/3J, KI-007, dependency/bootstrap,
+acceptance-only Known and 500-peer convergence remain green. Control health passes;
+Local/Node/500 health and official near-max proof remain failed as recorded above.
+No production correction is retained after publication, only attribution diagnostics,
+bounded histogram/storage tests, offline analysis and this ledger.
+
+Current-source security inventory/review, startup retention margin, overload/recovery,
+final client/official transport service contracts and terminal current-source CI remain
+open. The sealed obsolete security checkpoint is untouched. No Foundation 3M work.
 
 ## Previous slice: derivation versus serial commit (2026-09-11)
 

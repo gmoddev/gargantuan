@@ -1,5 +1,6 @@
 #include "gargantuan/network/CharacterNetwork.hpp"
 #include "../runtime/RuntimeWorkDiagnostics.hpp"
+#include "../runtime/PublicationLatencyDiagnostics.hpp"
 
 #include "gargantuan/classes/KinematicCharacter.hpp"
 #include "gargantuan/classes/WorldRoot.hpp"
@@ -1489,6 +1490,18 @@ namespace gargantuan::network {
 					}
 				);
 				Frame.FrameSequence = Peer.NextFrameSequence;
+				if (runtime_detail::PublicationLatencySelected(Connection)) {
+					for (const auto &State : Frame.GetStates()) {
+						const auto Found = Peer.Published.find(State.Character);
+						if (Found == Peer.Published.end()) continue;
+						const auto &Publication = Found->second;
+						runtime_detail::RecordPublicationLatency({.Stage = "CharacterProduced", .Connection = Connection,
+							.Object = State.Character, .Tick = AuthoritativeTick, .Sequence = State.StateSequence.Value(),
+							.Due = Publication.DesiredDueTick, .Epoch = Frame.MaterializationEpoch.Value(),
+							.Kind = 5, .Tier = static_cast<std::uint32_t>(Publication.EffectiveTier),
+							.Operations = ForcedOnly ? 1u : 0u});
+					}
+				}
 				const bool Queued = QueueStateFrame(Connection, Frame, FrameChannel);
 				Peer.NextFrameSequence = Peer.NextFrameSequence.TryNext().value_or(CharacterStateFrameSequence{});
 				const auto CommitStarted = std::chrono::steady_clock::now();

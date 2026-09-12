@@ -1,5 +1,6 @@
 #include "gargantuan/network/Scheduler.hpp"
 #include "../runtime/RuntimeWorkDiagnostics.hpp"
+#include "../runtime/PublicationLatencyDiagnostics.hpp"
 #include "gargantuan/network/Transport.hpp"
 
 #include <algorithm>
@@ -152,6 +153,8 @@ namespace gargantuan::network {
 			if (Message.Delivery() == DeliveryMode::ReliableOrdered) ++Connection.Statistics.QueuedReliableMessages;
 			else ++Connection.Statistics.QueuedUnreliableMessages;
 			Connection.Queues[*Precedence].emplace_back(std::move(Message));
+			const auto &Queued = Connection.Queues[*Precedence].back();
+			runtime_detail::RecordPublicationPacket("SchedulerAccepted", Queued.Destination(), Queued.Payload());
 			++Depth;
 			++Connection.Statistics.QueuedMessages;
 		}
@@ -281,6 +284,7 @@ namespace gargantuan::network {
 				return Result;
 			}
 			auto Submission = State->Transport.Send(Message);
+			if (Submission.Succeeded()) runtime_detail::RecordPublicationPacket("Handoff", Message.Destination(), Message.Payload());
 			if (Submission.Status == TransportOperationStatus::WouldBlock) {
 				if (ProducerSample) runtime_detail::AddWorkCounter(ProducerSample->CapacityDeferrals, 1);
 				Result.Status = SchedulerFlushStatus::TransportBackpressured;

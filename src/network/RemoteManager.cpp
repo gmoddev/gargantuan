@@ -1,5 +1,6 @@
 #include "gargantuan/network/RemoteManager.hpp"
 #include "../runtime/RuntimeWorkDiagnostics.hpp"
+#include "../runtime/PublicationLatencyDiagnostics.hpp"
 
 #include "gargantuan/classes/Instance.hpp"
 #include "gargantuan/runtime/ProtocolInput.hpp"
@@ -479,6 +480,8 @@ namespace gargantuan::network {
 					.Error = StructuredRemoteError{"invalid_result", "Remote handler returned unsupported values"},
 				};
 			}
+			runtime_detail::RecordPublicationLatency({.Stage = "RpcResponseProduced", .Connection = Key.Connection,
+				.Object = Remote, .Sequence = Key.Request.Value(), .Kind = 104});
 			return SendMessage(Key.Connection, std::move(Message)).Accepted();
 		}
 
@@ -570,6 +573,8 @@ namespace gargantuan::network {
 							Key.Request, RemoteRequestTerminalStatus::RemoteError, {}, std::move(Queued.Message.Error)
 						)
 					);
+				runtime_detail::RecordPublicationLatency({.Stage = "RpcCompletion", .Connection = Key.Connection,
+					.Object = Queued.Message.Remote, .Sequence = Key.Request.Value(), .Kind = 104});
 				return;
 			}
 			if (Queued.Message.Kind == RemoteMessageKind::Cancellation) {
@@ -622,6 +627,8 @@ namespace gargantuan::network {
 			};
 			auto Callback = Handler->second;
 			try {
+				runtime_detail::RecordPublicationLatency({.Stage = "RpcHandler", .Connection = Key.Connection,
+					.Object = Queued.Message.Remote, .Sequence = Key.Request.Value(), .Kind = 103});
 				Callback(
 					{{Queued.Connection, Peer->second.Epoch},
 					 Queued.Message.Remote,

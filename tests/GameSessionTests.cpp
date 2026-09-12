@@ -1,5 +1,6 @@
 #include "../src/network/GameSessionTestAccess.hpp"
 #include "../src/runtime/RuntimeWorkDiagnostics.hpp"
+#include "PublicationLatencyFixture.hpp"
 #include "gargantuan/Engine.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Folder.hpp"
@@ -45,6 +46,26 @@ namespace {
 
 	float HorizontalDistance(const glm::vec3 &Left, const glm::vec3 &Right) {
 		return glm::distance(glm::vec2(Left.x, Left.z), glm::vec2(Right.x, Right.z));
+	}
+
+	void TestPublicationLatencyBounds() {
+		test::RecipientGapHistogram Histogram;
+		Histogram.Add(1.25); Histogram.Add(20.75); Histogram.Add(5000);
+		Check(Histogram.Count == 3 && Histogram.Upper(.50) == 21 && Histogram.Maximum == 5000 &&
+			Histogram.Upper(1.0) == -1, "recipient histogram retains exact max and does not invent overflow percentiles");
+		const auto Previous = runtime_detail::ActivePublicationLatency;
+		{
+			test::PublicationLatencyFixture Fixture(true, {1, 1}, {2, 1});
+			Fixture.Begin("load");
+			runtime_detail::RecordPublicationLatency({.Connection = {1, 2}});
+			Check(Fixture.GetCount() == 0, "latency probe rejects a stale peer generation");
+			for (std::size_t Index = 0; Index < 131075; ++Index)
+				runtime_detail::RecordPublicationLatency({.Stage = "BoundTest", .Connection = {1, 1}});
+			Check(Fixture.GetCount() == 131072 && Fixture.GetDropped() == 3, "latency diagnostic storage has a hard cap");
+			Fixture.End();
+		}
+		Check(runtime_detail::ActivePublicationLatency == Previous && test::ActiveRecipientGaps == nullptr,
+			"latency probe releases borrowed sink and histogram on scope teardown");
 	}
 
 	class HandoffTransport final : public IGameTransport {
@@ -1660,6 +1681,7 @@ int main(int ArgumentCount, char **Arguments) {
 			return Failures == 0 ? 0 : 1;
 		}
 		if (ArgumentCount != 1) throw std::invalid_argument("Unknown game-session test selection");
+		TestPublicationLatencyBounds();
 		TestProtocolBounds();
 		TestServerSessionSignalLifetime();
 		TestSessionOwnershipAndEndpointPolicy();

@@ -175,9 +175,18 @@ namespace {
 		std::vector<double> FrameWorkTimes;
 		std::vector<double> PaceOvershootTimes;
 		const bool TraceWork = std::getenv("GARGANTUAN_CONTENT_TRACE") != nullptr;
+		// Simulator connection IDs are endpoint-local. Admission is ordered in
+		// this fixture; use server identities for raw observer correlation.
+		const auto LatencyConnections = detail::GameSessionTestAccess::GetConnections(Server);
+		if (LatencyConnections.size() != Peers.size()) throw std::runtime_error("latency peer mapping mismatch");
+		for (std::size_t Index = 0; Index < Peers.size(); ++Index)
+			Peers[Index].Content.LatencyConnection = LatencyConnections[Index];
+		test::PublicationLatencyFixture Latency(std::getenv("GARGANTUAN_PUBLICATION_LATENCY") != nullptr,
+			Peers.front().Content.LatencyConnection, Peers.back().Content.LatencyConnection);
 		struct TickWorkSample {
 			std::uint64_t Tick = 0;
 			std::uint64_t SelectedOperations = 0, AcceptedOperations = 0;
+			std::array<std::uint64_t, 8> ClientReplicaPhases{};
 			double StartMilliseconds = 0;
 			double ObserverDrainMilliseconds = 0;
 			double FrameWorkMilliseconds = 0;
@@ -191,6 +200,8 @@ namespace {
 		CompletedWorkSamples.reserve(4);
 		if (TraceWork) WorkSamples.reserve(1201);
 		const auto TraceStarted = std::chrono::steady_clock::now();
+		Latency.SetOrigin(TraceStarted);
+		for (const auto &Character : RootCharacters) Latency.AddRoot(Character->GetObjectId());
 		std::uint64_t PendingHighWater = 0;
 		std::uint64_t PreviousSelectedOperations = 0, PreviousAcceptedOperations = 0;
 		std::map<ObjectId, SpatialCellAddress> RootCells;
@@ -227,6 +238,9 @@ namespace {
 				runtime_detail::WorkCapture Capture(TraceWork ? &WorkSample.Server : nullptr, ReadWorkAllocations, ReadWorkAllocatedBytes);
 				(void)Server.Poll();
 				Runtime.Step();
+				for (const auto Connection : {LatencyConnections.front(), LatencyConnections.back()})
+					runtime_detail::RecordPublicationLatency({.Stage = "EngineComplete", .Connection = Connection,
+						.Tick = Tick, .Kind = 300});
 				Server.Step(Tick++);
 			}
 			TickTimes.push_back(Milliseconds(Started));
@@ -255,9 +269,22 @@ namespace {
 			for (auto &Peer : Peers) {
 				if (Peer.Session) {
 					runtime_detail::WorkCapture Capture(TraceWork ? &WorkSample.Client : nullptr, ReadWorkAllocations, ReadWorkAllocatedBytes);
+					const auto BeforeReplica = TraceWork ? Peer.Session->GetMetrics().ClientReplica : ReplicaMetrics{};
 					(void)Peer.Session->Poll();
 					Peer.Runtime->Step();
 					Peer.Session->Step(Tick);
+					if (TraceWork) {
+						const auto After = Peer.Session->GetMetrics().ClientReplica;
+						WorkSample.ClientReplicaPhases = {
+							After.CandidateCopyNanoseconds - BeforeReplica.CandidateCopyNanoseconds,
+							After.SemanticValidationNanoseconds - BeforeReplica.SemanticValidationNanoseconds,
+							After.ValidationLoadNanoseconds - BeforeReplica.ValidationLoadNanoseconds,
+							After.ValidationLoad.ValidationNanoseconds - BeforeReplica.ValidationLoad.ValidationNanoseconds,
+							After.ValidationLoad.ConstructionNanoseconds - BeforeReplica.ValidationLoad.ConstructionNanoseconds,
+							After.ValidationLoad.ParentingNanoseconds - BeforeReplica.ValidationLoad.ParentingNanoseconds,
+							After.ValidationLoad.PropertiesNanoseconds - BeforeReplica.ValidationLoad.PropertiesNanoseconds,
+							After.LiveApplyNanoseconds - BeforeReplica.LiveApplyNanoseconds};
+					}
 					if (Peer.Session->GetStatus() != GameSessionStatus::Ready)
 						throw std::runtime_error("real scale client lost Ready at tick " + std::to_string(Tick) + ": " +
 							Peer.Session->GetFailure() + " transport=" + Peer.Content.DisconnectDiagnostic);
@@ -307,6 +334,7 @@ namespace {
 		}
 		auto RunPhase = [&](std::string_view Phase, std::size_t ExpectedObjects, bool WaitForConvergence) {
 			CurrentWorkPhase = Phase;
+			Latency.Begin(Phase);
 			// Fixture placement at a cell edge exercises ordinary animation-driven
 			// dirty projection; no spatial index or Desired/Known mutation is used.
 			RootCells.clear();
@@ -417,6 +445,7 @@ namespace {
 				if (const auto Value = ClientControl->GetAttributeValue(Name)) std::cout << std::get<std::string>(*Value) << '\n';
 			const auto RootAfter = Runtime.GetCharacterRootMotionMetrics();
 			const auto PhaseTicks = Tick - StartTick;
+			Latency.End();
 			const auto WallMilliseconds = Milliseconds(Started);
 			const auto CharacterAfter = detail::GameSessionTestAccess::GetCharacterMetrics(Server);
 			std::uint64_t MaximumGap = 0, RootMaximumGap = 0, RootStates = 0;
@@ -557,6 +586,7 @@ namespace {
 				WorkSamples.reserve(1201);
 			}
 			if (!RemotesComplete) throw std::runtime_error("100-call scale RemoteFunction exceeded its bounded phase");
+			Latency.End();
 			if (Differential) {
 				const bool Healthy = Percentile(TickTimes, 0.95) <= 16.667 && Percentile(TickTimes, 0.99) <= 33.334 &&
 					Percentile(TickTimes, 1.0) <= 100.0 && Number(ClientControl, "ScaleRemoteP95Us") <= 150'000 &&
@@ -579,6 +609,7 @@ namespace {
 		auto PrintWorkSamples = [&] {
 			if (WorkSamplesPrinted) return;
 			WorkSamplesPrinted = true;
+			Latency.Print();
 			for (const auto &[PhaseName, Samples] : CompletedWorkSamples) {
 				for (const bool Client : {false, true}) {
 					for (std::size_t Index = 0; Index < runtime_detail::WorkProducerNames.size(); ++Index) {
@@ -657,6 +688,12 @@ namespace {
 							<< " selectedOps=" << Sample.SelectedOperations << " acceptedOps=" << Sample.AcceptedOperations
 							<< " observerDrainMs=" << Sample.ObserverDrainMilliseconds
 							<< " frameWorkMs=" << Sample.FrameWorkMilliseconds << " frameElapsedMs=" << Sample.FrameElapsedMilliseconds;
+						if (Client) {
+							constexpr std::array Names{"ReplicaCopy", "ReplicaSemantic", "ReplicaPreflight", "ReplicaValidate",
+								"ReplicaConstruct", "ReplicaParent", "ReplicaProperties", "ReplicaLive"};
+							for (std::size_t I = 0; I < Names.size(); ++I)
+								std::cout << ' ' << Names[I] << "Ns=" << Sample.ClientReplicaPhases[I];
+						}
 						for (std::size_t Index = 0; Index < runtime_detail::WorkPhaseNames.size(); ++Index) {
 							const auto &Value = (Client ? Sample.Client : Sample.Server)[Index];
 							std::cout << ' ' << runtime_detail::WorkPhaseNames[Index] << "Ns=" << Value.Nanoseconds;

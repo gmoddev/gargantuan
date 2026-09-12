@@ -47,7 +47,7 @@ schema declaration, native signal, and tests.
 
 ## KI-007: Soft-reference replacement can invalidate a structural removal frame
 
-- Status: Resolved and validated locally (2026-09-11); uncommitted/unpublished.
+- Status: Resolved and validated (2026-09-11); published on `foundation/3l-content-availability` in `36d4eb668` (not merged).
 - Priority: High.
 - Area: Server replication reference-fixup completeness / journal ordering.
 - Relevant code: `src/network/ReplicationCoordinator.cpp`,
@@ -89,7 +89,27 @@ This closes the ordering defect, not general planning work or Foundation health.
 - Relevant code: `src/network/ReplicationCoordinator.cpp`,
   `src/network/ReplicaApplier.cpp`, `tests/GameSessionBenchmark.cpp`.
 
-Latest attribution/lookup checkpoint (`derive-lookup-v3`) preserves bounded
+Latest post-publication latency attribution (`latency-v3`) distinguishes due-tick
+cadence from accepted-packet delay. Healthy Local/Node p99 is 31.00/33.88 ms;
+raw Character/root observer gaps are 645.85/658.24 ms, throughput loss 9.02%/9.56%,
+and all sampled ordinary publications are produced on their due tick. The worst
+Local root sample spans 12 dilated shared-fixture iterations, not scheduler
+rejection. The observer precedes real-client application; it is not a presentation
+guarantee. A 512-operation client callback costs 24.03 ms including 8.89-ms native
+preflight and 9.18-ms live application. No transaction redesign is implemented.
+
+The current official near-max GNS test FAILS for both Local and Node: one RPC
+times out at approximately five seconds; Remote receive gaps reach 5.544/5.529 s
+while Player event-loop gaps remain below 54 ms. Sampled pending reliable bytes
+reach 1,420,323; GRPL and reliable application use the same backend connection
+stream. Backend rate/capacity versus head-of-line service is the next dedicated
+owner; precise per-RPC backend wait remains unmeasured. No lane, wire, budget or
+priority change is justified here. See the
+[post-publication ledger](devdocs/CurrentArchitecture/ContentAvailabilityFoundation3L_3Validation.md#post-publication-due-to-recipient-attribution-2026-09-11).
+Client preflight, official transport guarantees, overload/recovery, the 170-entry
+startup journal margin, current-source security and terminal CI remain open.
+
+The preceding attribution/lookup checkpoint (`derive-lookup-v3`) preserves bounded
 planning and reduces healthy Local/Node tick p99 to 30.82/30.74 ms by making
 existing 3E examinations cheaper. Recipient maximum gaps remain 652.59/649.24 ms,
 and throughput losses remain 9.15%/9.05%. 500-peer reload p99/max is 43.27/52.41 ms,

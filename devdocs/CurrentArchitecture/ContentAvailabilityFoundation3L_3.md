@@ -14,7 +14,8 @@ related_code:
 
 ## Publication checkpoint (2026-09-11)
 
-The retained source is being preserved on `foundation/3l-content-availability`,
+The retained source was published on `foundation/3l-content-availability`, at
+`47d0b5a9406449ce7c4ae1f2341e0889e4366ee2` (four coherent commits),
 from `a68f76bbf9bc4d75bac1de40bdc7b8dc4837b2a1`. This is a partially-ready
 development branch, not a merge or Foundation 3M authorization. The
 [publication ledger](ContentAvailabilityFoundation3L_3Validation.md#publication-checkpoint-2026-09-11)
@@ -22,10 +23,50 @@ defines the scope and committed-source validation gate. The historical sections
 below describe their original dirty-source checkpoints; their no-commit/no-push
 statements are historical, not the current publication instruction.
 
-After publication, the next investigation is due-to-recipient latency, including
-cadence/tick dilation, client preflight, transport and observer work. The read-epoch
-proposal remains unimplemented and is not the next authorized production change.
-No latency gate is closed by publishing the accumulated corrections.
+The subsequent investigation is due-to-recipient latency. No latency gate is
+closed by publishing the accumulated corrections. The read-epoch proposal remains
+unimplemented; no jobs, protocol, acceptance authority or budget changes follow
+from the latency measurements.
+
+### Publication latency boundary
+
+`PublicationLatencyDiagnostics.hpp` supplies a private thread-local, borrowed,
+test-owned sink. It records no production file output and owns no runtime queue.
+Inactive taps return before timestamps or packet decoding. The scale fixture
+selects the first/last server peer identities (including generations), reserves
+131,072 POD records, saturates drop/failure counters, and prints after measured
+phases. Independent Character/root histograms have 4,097 fixed buckets each:
+1-ms upper-bound quantiles, exact maxima, and an explicit overflow bucket. The
+test retains four phase histograms, not an unbounded publication history.
+
+Correlations use peer/object generations, state sequence and materialization
+epoch, or Remote identity and RequestId. Simulator endpoints have local connection
+ids; delivery taps explicitly map them to server identities. All simulator stage
+intervals use one process's steady clock. Official host clocks are not subtracted
+across processes. A missing boundary remains **not measured**.
+
+**Measured:** ordinary sampled Character publications are produced on their due
+tick. Low-tier cadence is 12 ticks. The approximately 650-ms raw-recipient tail
+spans expensive consecutive fixture iterations, which include server work and
+raw simulated-peer decode/observation on the same thread. It is not evidence of
+3G rejection or an accepted packet waiting 650 ms for handoff.
+
+**Important observer contract:** the scale transport observes received packets
+before returning the batch to `GameSession::Poll`. Raw peers never apply a replica.
+Consequently its recipient histogram is pre-application observation, not visible
+Character presentation. `ClientHandled` records callback return (GCHR protocol/
+interpolation input), not a rendered pose. Exact authoritative-change birth and
+render-observer completion remain unmeasured. Do not label these boundaries as
+an end-to-end presentation guarantee.
+
+Client replica counters separate candidate copying, semantic work, full native
+preflight (including validation/construction/parent/property subphases), and live
+application. Their per-tick deltas are attached to a structural frame only when
+the captured apply interval lies wholly inside that frame's callback interval.
+Residual apply time includes teardown/metadata and is not a dedicated cleanup
+measurement. The existing whole-candidate transaction is unchanged. A replacement
+transaction model, or official reliable-backend service contract, requires a
+separate design task. See the validation ledger for measured values and limits.
 
 ## Previous slice: derivation versus serial commit (2026-09-11)
 

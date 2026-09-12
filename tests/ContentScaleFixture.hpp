@@ -6,6 +6,7 @@
 #include "gargantuan/content/ContentAvailability.hpp"
 #include "gargantuan/network/CharacterProtocol.hpp"
 #include "gargantuan/network/ReplicationProtocol.hpp"
+#include "PublicationLatencyFixture.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -95,6 +96,7 @@ namespace gargantuan::test {
 	}
 
 	struct ContentScalePeer final {
+		network::ConnectionId LatencyConnection;
 		std::unordered_set<ObjectId> Objects;
 		ObjectId Root;
 		std::optional<network::CharacterControlTransition> Control;
@@ -114,6 +116,7 @@ namespace gargantuan::test {
 		std::string DisconnectDiagnostic;
 
 		void Observe(std::span<const std::byte> Bytes) {
+			runtime_detail::RecordPublicationPacket("Observer", LatencyConnection, Bytes);
 			if (Bytes.size() < 4) return;
 			if (std::memcmp(Bytes.data(), "GRPL", 4) == 0) {
 				auto Frame = network::DecodeReplicationFrame(Bytes);
@@ -158,6 +161,10 @@ namespace gargantuan::test {
 					auto &LastWall = LastStateWall[State.Character];
 					if (LastWall != std::chrono::steady_clock::time_point{}) {
 						const auto Gap = std::chrono::duration<double, std::milli>(ReceivedAt - LastWall).count();
+						if (ActiveRecipientGaps) {
+							(*ActiveRecipientGaps)[0].Add(Gap);
+							if (RootMotionCharacters.contains(State.Character)) (*ActiveRecipientGaps)[1].Add(Gap);
+						}
 						if (Gap > MaximumGapWallMilliseconds) {
 							MaximumGapWallMilliseconds = Gap;
 							MaximumGapStarted = LastWall;

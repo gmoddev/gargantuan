@@ -1,4 +1,5 @@
 #include "gargantuan/network/SimulatedTransport.hpp"
+#include "../runtime/PublicationLatencyDiagnostics.hpp"
 
 #include <algorithm>
 #include <cassert>
@@ -450,6 +451,8 @@ namespace gargantuan::network {
 				return;
 			}
 
+			runtime_detail::RecordPublicationPacket("SimulatedDelivered",
+				Source->Role == TransportRole::Server ? Item.SourceConnection : Item.DestinationConnection, Item.Payload);
 			SaturatingIncrement(SourceConnection.Statistics.MessagesDelivered);
 			if (Item.Duplicate) SaturatingIncrement(SourceConnection.Statistics.DuplicatedUnreliableMessages);
 			SaturatingIncrement(DestinationConnection.Statistics.MessagesReceived);

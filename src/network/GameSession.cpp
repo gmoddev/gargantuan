@@ -1,5 +1,6 @@
 #include "gargantuan/network/GameSession.hpp"
 #include "../runtime/RuntimeWorkDiagnostics.hpp"
+#include "../runtime/PublicationLatencyDiagnostics.hpp"
 #include "SessionSendAllowance.hpp"
 
 #include "GameSessionTestAccess.hpp"
@@ -948,6 +949,10 @@ namespace gargantuan::network {
 		}
 
 		void HandleReceived(const ReceivedMessageEvent &Received) {
+			runtime_detail::PublicationPacketScope Latency(
+				Configuration.Role == GameSessionRole::Client ? "ClientCallback" : "ServerCallback",
+				Configuration.Role == GameSessionRole::Client ? "ClientHandled" : "ServerHandled",
+				Received.Connection, Received.Payload);
 			auto PeerIterator = Peers.find(Received.Connection);
 			if (PeerIterator == Peers.end()) return;
 			const auto Magic = FrameMagic(Received.Payload);
