@@ -14,6 +14,17 @@ related_code:
 
 # Networking reliable service envelope
 
+## Published assessment and follow-up
+
+This diagnostic slice is published as `108200d077a8830ba2fd5fc96e518bdde6baf0c2`
+on `foundation/3l-content-availability`. Its original checkpoint below is retained
+as evidence. The subsequent [deployment/atomic-group contract](NetworkingReliableDeploymentContract.md)
+defines trusted per-connection plus aggregate reservation semantics and finite
+oversized-group credit without implementing production admission. Actual isolated
+planner groups now include a 123,183-byte Player/Character group and an eight-op
+group reaching the GNS complete-message ceiling. Mixed canonical group-frequency
+percentiles remain unmeasured; frame percentiles below must not be relabeled.
+
 ## Decision checkpoint
 
 **B — FOUNDATION 3L PARTIALLY READY.** This is a measured design assessment over

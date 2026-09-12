@@ -6,6 +6,136 @@ last_verified: 2026-09-12
 
 # Foundation 3L.3 diagnostic validation ledger
 
+## Diagnostic publication and deployment contract (2026-09-12)
+
+**B — FOUNDATION 3L PARTIALLY READY.** The completed 12-file diagnostic slice was
+committed and normally pushed as `108200d077a8830ba2fd5fc96e518bdde6baf0c2` on
+`foundation/3l-content-availability`. Remote HEAD was verified equal. Only the
+explicit diagnostic/documentation paths were staged; morphology and untracked
+build/evidence files were excluded. No production source/config changes or
+secondary repository edits. No force push, merge or 3M.
+
+Before that push, 59 affected committed native/test/script files were checked
+against their Git blobs and exact worker SHA-256 values. Two previously local-only
+analysis scripts were missing on the worker and copied explicitly; all 59 then
+matched. Committed-source MSVC targeted native/network tests passed **10/10 in
+14.45 s**. The complete ten-case rate/admission matrix passed again, checked by
+the committed analyzer; all 905/905 messages and 60 replies of each probe type
+arrived in every case. Clang 19 ASan/UBSan/LSan core passed **7/7 in 57.03 s** with
+leak detection, plus the separate late-handoff test. These are not sanitizer
+results for the unchanged GNS capacity executable or scale byte observer.
+The isolated committed docs-site content built **19 pages in 3.34 s**; morphology
+was not included. Developer Markdown is reviewed separately, not an Astro route.
+
+Artifacts remain local under `build-3l3-worker/evidence/`:
+`envelope-publish-source.json`, `envelope-publish-native.log`,
+`envelope-publish-matrix.log`, `envelope-publish-analysis.json`, and
+`envelope-publish-linux-sanitizers.log`. The earlier `service-envelope/` evidence
+and sealed security artifact are preserved unchanged.
+
+The [new design contract](NetworkingReliableDeploymentContract.md) is based on
+source inspection of ServerHost, GameSession, network limits, scheduler and GNS
+configuration, plus the actual group tests. It does not install a production
+profile or byte controller. There is no current aggregate-rate option; the
+proposed reservation contract requires `N*R <= A`, hierarchical finite peer/global
+credit, separately bounded gameplay reserve, and queue-window feasibility.
+Omitted operator configuration remains explicitly unqualified legacy behavior,
+not a universal rate guarantee. No cross-repository ownership change is needed
+for a single Server process; machine-wide multi-process allocation stays with
+the operator/orchestrator.
+
+### Actual group observations
+
+`ReliableEnvelopeContractFixture.hpp` records a frame only when existing
+`PlanningCompletedGroups == 1`; every measured case checks strict application,
+unchanged Known before acceptance, exact scheduler commit and bounded disposal.
+No production observer, callbacks, queue, budget or group formation was added.
+The fixture is isolated on purpose: full 200/500-peer **group frequency** and
+official-network group partition remain **not measured**. Prior frame data is
+not upgraded into group evidence.
+
+Native `deployment-contract-reserve` final results, GRPL bytes including
+36-byte header (add 32 adapter bytes for admission):
+
+| Case | Samples | p50 / p95 / p99 / max bytes | Operations |
+| --- | ---: | --- | ---: |
+| Ordinary Part | 128 | 338 / 339 / 339 / 339 | 1 |
+| Ordinary authoritative destruction | 128 | 45 / 45 / 45 / 45 | 1 |
+| Player/Character | 1 | 334 / 334 / 334 / 334 | 2 |
+| 32-node ancestry group | 1 | 2,788 / 2,788 / 2,788 / 2,788 | 32 |
+| KI-007 replace/remove | 1 | 157 / 157 / 157 / 157 | 5 |
+| Fresh target/restore | 1 | 440 / 440 / 440 / 440 | 5 |
+| KI-007 clear/remove | 1 | 125 / 125 / 125 / 125 | 5 |
+| 32-node subtree eviction | 1 | 324 / 324 / 324 / 324 | 32 |
+
+Legal worst-payload cases are separate, not ordinary production sizing authority:
+123,183 B/2 ops for 60 KiB Player/Character names; 459,292 B/7 ops for seven long-
+named ancestors; **524,256 B/8 ops** at the exact GNS complete-message ceiling;
+524,900 B/8 ops for eight full-length names. The last group is rejected by the
+524,256-byte planner allowance without Known advance, yet remains valid under
+the larger bounded GRPL codec and strict replica. This proves a finite supported
+transport ceiling distinct from legal object/schema state and the 8 MiB codec
+ceiling. No group was split to produce a passing observation.
+
+The additional official-style normal baseline is 1,867 B/5 ops with **five**
+completed groups in the measured native run. It is not an atomic-group sample.
+Identity order and existing Known prerequisites can make Player/Character enter
+together or in separate dependency-safe ordered groups. The dedicated isolated
+case proves the possible 123,183-byte group, without assuming all baselines use it.
+Quantiles on one sample describe only that observation, not population tails.
+
+### Contract/test follow-up validation
+
+- Test-only numeric profile model: **18/18** positive/negative cases, including
+  aggregate underfunding, overflow, queue/burst bounds, impossible low-rate class
+  and full Remote codec-ceiling reserve. `IsValid()` is not deployment qualification.
+- Final MSVC Release targeted native/network CTest: **10/10, 14.27 s**; independent
+  relevance executable also passed and retained the complete group observations.
+- Final Clang 19 ASan/UBSan/LSan core CTest: **7/7, 57.31 s**, with
+  `detect_leaks=1`, sanitizer halt-on-error, followed by a passing late-handoff
+  case. The new profile/group code is included. GNS matrix/scale-observer code
+  was not changed in this follow-up and has no new sanitizer claim.
+- Docs-site build: **19 pages, 2.50 s**, same isolated committed site content;
+  the existing missing-404-entry warning remains. The five developer/issue
+  documents' **30 local Markdown link targets** were separately verified.
+- `git diff --check` passes. Production `src`, `include`, assets and CMake have
+  no changes relative to the published diagnostic source. Prior physics matrix,
+  provider/scale, official Local/Node and memory evidence is retained, not rerun
+  or represented as new production improvement. No current-source security scan
+  or full CI result is implied by this targeted pass.
+
+Final worker logs are retained under `build-3l3-worker/evidence/` as
+`deployment-contract-reserve-{build,groups,native,linux-sanitizers}.log`.
+The published-source receipt records final committed blobs and worker SHA-256
+verification separately from the prior diagnostic receipt. Local working trees
+remain canonical; the worker supplies build/test results, never replacement source.
+
+### Remaining gate
+
+Full 512 KiB group compatibility at 256 KiB/s requires at least 2.000 s of ideal
+serialization; 4 KiB bounded gameplay burst makes the illustrative Q/R 2.015625 s.
+That is a small-probe reserve, not full Remote compatibility. The existing
+256 KiB Remote codec ceiling plus adapter requires a conservative 262,176-byte
+single-message reserve. With a maximum structural group, Q/R becomes 3.000122 s;
+the model rejects 2.1 s and accepts 3.1 s numerically. Exact maximum attainable
+Remote payload and overlapping production burst distribution are **not measured**.
+No Remote payload, request or rate semantics were reduced.
+The proposed policy waits for finite credit and rejects an impossible claimed
+profile, not legal content silently. A slower compatibility class is not a
+passing 3L interactive envelope. If full compatibility, low bandwidth and a
+subsecond service class are all mandatory, a separate ordering-domain assessment
+is justified. No lanes are implemented here.
+
+Production byte admission, actual rate/overhead mapping, aggregate fairness,
+strict backend accounting slack, official Local/Node correction, client service,
+overload/recovery, production journal margin and current-source security remain
+open. Prior physics, shared acquisition/admission, selection/planning-cap evidence
+is unchanged; no broad workload rerun is represented as a production improvement.
+The `1bbcd9489` Native CI run `34672410169` has now reached terminal success for
+both Windows and Linux. The published diagnostic run `34675486038` is still in
+progress at this checkpoint; this is not current-source CI closure. Docs CI/Pages
+is main-only, so this branch push does not deploy Pages.
+
 ## Reliable service envelope assessment (2026-09-12)
 
 **B — FOUNDATION 3L PARTIALLY READY.** Diagnostic/design slice over published

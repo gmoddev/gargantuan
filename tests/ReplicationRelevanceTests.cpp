@@ -14,6 +14,7 @@
 #include "gargantuan/services/Players.hpp"
 #include "../src/runtime/RuntimeWorkDiagnostics.hpp"
 #include "../src/network/PlanningLookup.hpp"
+#include "ReliableEnvelopeContractFixture.hpp"
 
 #include <algorithm>
 #include <array>
@@ -1470,6 +1471,13 @@ namespace {
 
 int main() {
 	BootstrapNativeRuntimeSchema();
+	try {
+		test::TestReliableEnvelopeProfileModel();
+		test::TestAtomicGroupDistributions();
+	} catch (const std::exception &Error) {
+		std::cerr << "[Network:EnvelopeContract] " << Error.what() << '\n';
+		++Failures;
+	}
 	TestPlanningContinuation();
 	TestPlanningReferenceChange();
 	TestPlanningStaleCriticalInput();
@@ -2387,13 +2395,15 @@ int main() {
 		"authoritative Character destroy clears the hard Player reference before retiring the replica"
 	);
 
-	for (const bool Planned : {false, true}) for (const std::size_t NameBytes : {24u * 1024, 60u * 1024}) {
+	for (const bool Planned : {false, true}) for (const std::size_t NameBytes : {0u, 24u * 1024, 60u * 1024}) {
 		// Player.Character is a hard dependency. A transport-byte retry may not
 		// publish half that group or advance Known after an oversized attempt.
 		auto BytePlayer = Runtime.Players->CreateSessionPlayer({"byte-relevance-test", "hard-group"});
 		auto ByteCharacter = *BytePlayer->GetCharacter();
-		BytePlayer->SetName(std::string(NameBytes, 'p'));
-		ByteCharacter->SetName(std::string(NameBytes, 'c'));
+		if (NameBytes) {
+			BytePlayer->SetName(std::string(NameBytes, 'p'));
+			ByteCharacter->SetName(std::string(NameBytes, 'c'));
+		}
 		PeerRelevanceSelection HardSelection{.RequiredObjects = {World->GetObjectId()},
 			.DesiredObjects = {World->GetObjectId(), BytePlayer->GetObjectId()}};
 		std::ranges::sort(HardSelection.DesiredObjects);
@@ -2405,12 +2415,17 @@ int main() {
 			"hard-reference byte fixture registers");
 		ReplicaApplier HardByteReplica;
 		std::uint64_t PlanningTick = 0;
+		std::uint64_t LastPlanningGroups = 0;
 		for (std::uint64_t Tick = 1; Tick <= 12 && !HardByteCoordinator.GetView(HardByteConnection)->Knows(BytePlayer->GetObjectId()); ++Tick) {
 			const auto KnownBefore = HardByteCoordinator.GetView(HardByteConnection)->KnownObjects;
 			std::size_t Limit = 40 * 1024;
 			auto Produce = [&] {
+				runtime_detail::WorkSample GroupWork{};
+				runtime_detail::WorkCapture Capture(&GroupWork);
 				if (Planned) for (int Attempt = 0; Attempt != 10000 && !HardByteCoordinator.IsPlanningReady(HardByteConnection); ++Attempt)
 					HardByteCoordinator.ProcessPlanning(++PlanningTick);
+				const auto Groups = GroupWork.Counters[static_cast<std::size_t>(runtime_detail::WorkCounter::PlanningCompletedGroups)];
+				if (Groups) LastPlanningGroups = Groups;
 				return Tick == 1 ? HardByteCoordinator.ProducePendingBaseline(HardByteConnection, 16, Tick, Limit)
 					: HardByteCoordinator.ProducePendingRelevance(HardByteConnection, 16, Tick, Limit);
 			};
@@ -2427,7 +2442,8 @@ int main() {
 			const auto Encoded = EncodeReplicationFrame(*LegalGroup.Frame);
 			Check(Encoded && Encoded->size() <= Limit, "hard-reference wire frame respects its supplied byte budget");
 			if (Encoded) std::cout << "[Network:AtomicBytes] planned=" << Planned << " nameBytes=" << NameBytes << " frameBytes=" << Encoded->size()
-				<< " operations=" << LegalGroup.Frame->Operations.size() << " knownBefore=" << KnownBefore.size() << '\n';
+				<< " operations=" << LegalGroup.Frame->Operations.size() << " knownBefore=" << KnownBefore.size()
+				<< " planningGroups=" << LastPlanningGroups << '\n';
 			auto PlayerReplica = std::dynamic_pointer_cast<Player>(HardByteReplica.Resolve(BytePlayer->GetObjectId()));
 			Check(!PlayerReplica || (PlayerReplica->GetCharacter() &&
 				*PlayerReplica->GetCharacter() == HardByteReplica.Resolve(ByteCharacter->GetObjectId())),

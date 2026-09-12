@@ -82,6 +82,15 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Content-coupled gameplay latency exceeds the 3L.2 readiness envelope
 
+The published envelope assessment (`108200d07`) now has a
+[deployment/atomic-group contract follow-up](devdocs/CurrentArchitecture/NetworkingReliableDeploymentContract.md).
+One actual dependency group can occupy all 524,256 GRPL application bytes of
+the 512 KiB GNS complete-message ceiling. At 256 KiB/s that necessarily means
+two seconds of ideal FIFO serialization. The proposed finite-credit compatibility
+class cannot be called a subsecond gameplay guarantee; reject an impossible rate/
+latency profile rather than silently changing content or ordering. Production
+admission remains unimplemented, and KI-006 remains open.
+
 - Status: Open; Foundation 3M remains gated.
 - Priority: High
 - Area: Structural materialization and gameplay latency under peer scale.

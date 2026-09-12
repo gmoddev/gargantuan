@@ -12,6 +12,23 @@ related_code:
 
 # Foundation 3L.3: runtime work isolation
 
+## Reliable deployment and atomic-group contract (2026-09-12)
+
+**B — FOUNDATION 3L PARTIALLY READY.** The service-envelope diagnostic slice is
+published as `108200d07`; no production behavior changed. The
+[follow-up contract](NetworkingReliableDeploymentContract.md) assigns reserved
+per-connection/aggregate egress to trusted ServerHost configuration, rejects
+unfunded or impossible latency profiles, and selects finite accumulated credit
+for complete oversized groups. It remains design/test-only, not runtime admission.
+
+Actual single-group observations use the existing planner boundary counter,
+strict replica preflight and acceptance-only Known. The exact GNS ceiling is
+attainable by an eight-operation dependency group: 524,256 GRPL bytes plus the
+32-byte adapter envelope. A full-compatible group therefore requires two seconds
+of ideal serialization at the inherited 256 KiB/s rate. That limit cannot be
+removed by frame fragmentation or a small-group percentile. No new content
+limit, rate, lane, wire, queue, 3J/planning policy or 3M work is introduced.
+
 ## Reliable service envelope assessment (2026-09-12)
 
 **B — FOUNDATION 3L PARTIALLY READY.** The
