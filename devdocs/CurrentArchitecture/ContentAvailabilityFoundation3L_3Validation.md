@@ -1,10 +1,261 @@
 ---
 status: partial-validation
 owner: runtime-networking
-last_verified: 2026-09-11
+last_verified: 2026-09-12
 ---
 
 # Foundation 3L.3 diagnostic validation ledger
+
+## Official reliable service attribution (2026-09-12)
+
+**B — FOUNDATION 3L PARTIALLY READY.** Attribution-only delta over
+`630a1522069567cb834862be6dcaa1fcab4369fe` on
+`foundation/3l-content-availability`. No rate, buffer, lane, reliable ordering,
+wire, replication budget, semantic authority or client transaction change.
+No secondary source changes, branch merge or 3M work. Morphology edits remain
+outside this slice. The source/evidence receipt is
+`build-3l3-worker/evidence/transport-v1/source-and-evidence.json`.
+
+### Method and actual ownership
+
+Official fixture: the existing `TestOfficialContentMemorySoak/near-max`, same
+packaged 512-object content, Local then Node OnDemand, headless official Windows
+Server/Player processes over GNS IP loopback on `dockerbox` / HostPC. Eight churn
+cycles are **requested, not completed**. Both Players exit 22 at 1,800 frames
+with one RPC timeout; the harness then terminates the still-running server.
+This is a failed acceptance run, not a crash or a successful eight-cycle soak.
+Native builds use four jobs; tests use two; capacity runs do not overlap builds.
+
+The source path is `NetworkScheduler::Submit` (engine queue admission), shared
+same-step `GameSession` flush allowance, `NetworkScheduler::Flush`, adapter
+`Send`, private 32-byte envelope construction, GNS `SendMessageToConnection`,
+backend send/token-bucket/ordered queue, receiver backend complete-message queue,
+adapter `DrainMessages`, `GameSession::HandleReceived`, `RemoteManager` dispatch,
+and completion/Luau continuation. Scheduler admission is not delivery/ACK, and
+GNS acceptance does not grant additional authority or modify Known. TrafficClass
+controls **engine** queue selection; the adapter carries it as metadata but uses
+one backend lane/ordered stream, not a GNS priority. GNS owns service threads,
+packetization, retransmission, reliable reassembly and ordering. The engine owns
+Main-thread polling and semantic callbacks.
+
+`TransportServiceSmoke.hpp` installs borrowed private publication/GNS sinks only
+for `--session-smoke` plus `GARGANTUAN_TRANSPORT_SERVICE_TRACE=1`. No payload copy,
+graph decode or per-message heap allocation is added by the collector. It emits
+at most 131,072 fixed-size diagnostic lines, using a 1,024-byte stack buffer and
+a saturating dropped counter; it retains no history or native pointer/handle.
+Records include full peer/object generations, existing RequestId/frame sequence,
+and backend message number. Missing status fields are -1, never invented zero.
+
+Observed server records: 20,038 / 20,063; Player: 18,576 / 18,610, zero Player
+drops and zero malformed parsed records. Server forced termination means its
+final end receipt is unavailable. Counts below describe the retained window,
+not hypothetical later churn. Immediate bounded output preserves failure traces
+but adds test overhead: Player event-loop max is 55.24/50.46 ms, compared with
+39.03/53.95 ms in the preceding unsampled official run. No isolated logging-cost
+counterfactual is claimed. It remains far below the multi-second receive gap.
+
+All subtractions stay within one process's clock. The GNS receive age subtracts
+GNS local timestamps only. Matching backend message numbers proves identity,
+not clock synchronization. `m_usecQueueTime` is an **estimate**, not actual send
+time. It includes pending unreliable bytes and ignores precise framing details.
+Receiver age starts at completed-message allocation, not first fragment arrival.
+Exact per-packet transmission, sender retransmission residence, receiver fragment/
+ordered reassembly residence, and one-way cross-process transit are **not measured**.
+
+### Reliable traffic and burst shape — MEASURED
+
+Application bytes exclude the adapter's additional 32 bytes/message and GNS
+packet/framing/encryption overhead. Size columns are p50/p95/p99/max bytes.
+
+| Producer | Server Local messages / bytes | Server Node messages / bytes | Size distribution |
+| --- | ---: | ---: | --- |
+| GRPL | 1,769 / 2,141,545 | 1,770 / 2,141,719 | 174 / 174 / 174 / 469,284 |
+| Reliable Event ACK | 338 / 28,054 | 338 / 28,054 | 83 / 83 / 83 / 83 |
+| RPC response | 100 / 8,300 | 100 / 8,300 | 83 / 83 / 83 / 83 |
+| Character bind | 1 / 40 | 1 / 40 | 40 / 40 / 40 / 40 |
+| Reliable Character state/control | 2 / 288 | 2 / 288 | 108 / 108 / 108 / 180 |
+| Owner-action result | 1 / 116 | 1 / 116 | 116 / 116 / 116 / 116 |
+| GSES bootstrap | 1 / 80 | 1 / 80 | 80 / 80 / 80 / 80 |
+| Total | 2,212 / 2,178,423 | 2,213 / 2,178,597 | — |
+
+No additional unclassified reliable sends appear. Server RPC requests are zero
+in this client-originated workload. Each Player submits 342 reliable events
+(28,376 bytes, each 83), 100 requests (7,400 bytes, each 74), one cancellation
+(52 bytes), one action request (48 bytes), and two GSES messages (80 bytes total,
+32/48). Unbind/other unexercised producer counts are zero, not validated service
+guarantees. All recorded backend send results succeed; no observed rejection.
+
+GRPL contributes 98.31% of server reliable application bytes and about 80% of
+messages. Four frames alone contain 1,813,406 bytes (83.24% of all reliable
+payload). Local relative submit times are 0.318, 0.385, 1.768 and 1.834 seconds;
+sizes are 437,419 / 469,284 / 467,539 / 439,164 bytes. Node has the same sizes at
+0.302 / 0.369 / 1.751 / 1.817 seconds. Each frame has 256 operations. The two
+frames of each pair are about four ticks apart, not a continuous saturated-tick
+run. Maximum selected/committed work in an official tick is only 258; maximum
+GRPL bytes/tick is 469,284. p50/p95/p99 GRPL bytes/tick are 174. The existing
+8,192 limit is not approached, yet a single accepted frame requires roughly
+1.8 seconds of service at the inherited backend rate. This is the measured
+operation-count versus encoded-byte mismatch, not permission to change 3J.
+
+Backend pending reliable peak is 1,449,887 / 1,449,885 bytes, replacing the
+earlier capped 1,420,323-byte **sample** high-water. Pending exceeds 1,000,000
+bytes for approximately 1.917/1.934 seconds by poll-interval integration.
+Local backlog reaches 0.889 MB after the first pair and 1.450 MB after the second.
+It falls from 1.399 MB at t=2.05 s to 0.053 MB at t=7.67 s (about 240 kB/s net
+drain despite ongoing small submissions), and is zero by the t=8.17 s sample.
+Node is zero by t=8.13 s. Recent backend outbound rate is 248,846/249,727 bytes/s
+in the active drain window. Sent-unacked bytes are measured separately; they
+are not the megabyte pending queue. Unreliable pending work also accumulates.
+Class-specific *pending* bytes are not directly exposed by this single GNS queue;
+submitted bytes identify the dominant producer, not exact per-class queue residence.
+
+### RPC/Remote path — MEASURED
+
+| Metric (ms) | Local | Node |
+| --- | ---: | ---: |
+| RPC p50 / p95 / p99 / max, including timeout sample | 32.168 / 35.662 / 1,736.313 / 5,013.167 | 33.407 / 34.646 / 1,737.034 / 5,016.815 |
+| RPC timeouts / errors / crashes | 1 / 1 / 0 | 1 / 1 / 0 |
+| Event ACK max gap | 5,549.584 | 5,547.756 |
+| Player Remote callback max gap | 5,543.347 | 5,542.214 |
+| Player Character callback max gap | 1,864.97 | 1,852.51 |
+| Player event-loop max gap | 55.241 | 50.462 |
+| Player Poll max | 43.522 | 45.756 |
+| Player structural apply max | 42.585 | 45.121 |
+| Response acceptance → GNS call p99 / max | 0.0662 / 0.0860 | 0.0457 / 0.0475 |
+| Instrumented GNS send call max | 0.0100 | 0.0106 |
+| Handler → response produced max | 0.0821 | 0.0523 |
+| Player GNS receive → RPC callback max | 18.788 | 5.176 |
+| RPC callback → completion max, 99 completed responses only | 6.886 | 4.318 |
+
+RPC 6 provides the exact failing correlation: object 23/generation 1, RequestId 6,
+backend server-send/player-receive message **139/139 Local, 142/142 Node**.
+
+| RPC 6 stage (ms unless bytes) | Local | Node |
+| --- | ---: | ---: |
+| Client request acceptance → GNS accepted | 0.0180 | 0.0251 |
+| Client request estimated backend queue wait | 0 | 0 |
+| Server GNS receive → engine callback | 0.0131 | 0.0117 |
+| Server callback → handler | 0.3495 | 0.2927 |
+| Handler → response produced | 0.0438 | 0.0361 |
+| Response produced → scheduler accepted | 0.0071 | 0.0075 |
+| Scheduler accepted → GNS call | 0.0067 | 0.0065 |
+| GNS call → accepted | 0.0057 | 0.0057 |
+| Reliable pending bytes before response | 1,394,418 | 1,391,411 |
+| Estimated backend queue wait before response | 5,337.341 | 5,324.386 |
+| Client-local request acceptance → response polled | 5,539.164 | 5,523.265 |
+| Completed-message GNS receive age at Player poll | 18.339 | 13.271 |
+| Player poll observation → engine callback | 2.951 | 5.176 |
+| Callback → gameplay completion | not completed: already timed out | not completed: already timed out |
+
+RPC 5 is also delayed: backend estimate 1,649.566/1,645.248 ms, completed RTT
+1,736.313/1,737.034 ms. The response deadline does not create the backend wait;
+RPC 6 eventually arrives after its deadline and cannot be counted as a successful
+completion. The reliable action result is submitted with 3,623 ms estimated queue
+wait. Exact owner-action end-to-end latency is **not measured** in this capture.
+Reliable Character state/control also enters a queue with 3,174–3,623 ms estimated
+wait. Luau Event ACK RTT/gaps and backend receive gaps are distinct observations.
+No renderer/presentation or root-motion-specific new guarantee is inferred.
+
+### Capacity versus ordering discriminator — MEASURED
+
+`gargantuan_gns_capacity_benchmark`, final `transport-capacity-v2`, uses the same
+pinned GNS IP localhost backend and ordinary reliable/unreliable flags. It is
+not a fake successful official game: no GameSession, GRPL decode, RemoteManager,
+DataModel or Player application runs. Tiny 115-byte request/response probes and
+opaque structural-sized payloads isolate backend service. A 115-byte unreliable
+probe every 100 ms makes contention visible. Each case has a 25-second deadline;
+histories cap at 128 RTTs, 8,192 receiver-age samples and 512 unreliable samples.
+Status is printed at 10 Hz. All submitted reliable bytes/messages and every RPC
+probe are required to arrive before success. Unreliable delivery is not guaranteed.
+One preceding v1 run establishes repeatability; v2 extends RPC probing throughout
+the full six-second paced interval and submits the exact final due chunk.
+
+| Case | Reliable bytes / messages | Reliable drain s | RPC max ms | Effective delivered bytes/s |
+| --- | ---: | ---: | ---: | ---: |
+| Gameplay only | 2,300 / 20 | 1.936 (paced) | 16.525 | 1,188 |
+| Structure only | 1,450,000 / 4 | 5.708 | not applicable | 254,029 |
+| Structure burst → RPC | 1,450,115 / 5 | 5.709 | 5,708.43 | 254,013 |
+| RPC response queued → same burst | 1,450,115 / 5 | 5.718 | 11.575 | 253,602 |
+| Same burst, 16 kB messages | 1,450,115 / 92 | 5.710 | 5,708.85 | 253,980 |
+| Same burst, test-only fixed 1 MiB/s | 1,450,115 / 5 | 1.429 | 1,428.55 | 1,014,720 |
+| Same burst, test-only fixed 4 MiB/s | 1,450,115 / 5 | 0.359 | 358.208 | 4,042,290 |
+
+| Six-second paced structural offer, default backend rate | Total reliable bytes delivered (includes 60 RPC responses) | Pending just before offer end | Peak pending | RPC p99 / max ms | Drain complete s from start |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 128 KiB/s | 793,332 | 0 | 16,505 | 64.099 / 64.245 | 6.062 |
+| 256 KiB/s | 1,579,764 | 62,298 | 78,685 | 294.275 / 297.114 | 6.314 |
+| 512 KiB/s | 3,152,628 | 1,624,087 | 1,639,337 | 6,300.87 / 6,393.96 | 12.473 |
+
+Approximate accumulation is zero at 128 KiB/s after each small burst, about
+10 kB/s at the nominal 256 KiB/s application offer (additional framing/probes
+consume capacity), and about 271 kB/s at 512 KiB/s. These are six-second fixture
+observations, not universal sustainable WAN rates. At 512 KiB/s the finite offer
+drains about 6.47 seconds after demand stops. Its trailing unreliable probes also
+wait about 6.39 seconds. Burst unreliable results count arrivals by reliable drain,
+not all eventual datagrams; stopping the fixture can discard remaining best-effort
+work. Do not infer guaranteed delivery or pure network loss from that count.
+
+**Inference supported by counterfactuals:** configured capacity plus FIFO queued
+byte order dominates the official seconds-long delay. The backend is not physically
+limited to 256 KiB/s on this host: changing only test rate moves delivered throughput
+by approximately 4x/16x. Same bytes with smaller messages leave the trailing RPC
+unchanged; changing submission order changes RPC latency without improving total
+drain. Reliable stream ordering and shared sender queue service matter, but an
+independent lane is **not yet proven necessary**. No claim assigns every microsecond
+to sender versus receiver ordered reassembly; packet-level residence is unmeasured.
+
+### Decision, validation and next boundary
+
+No production rate increase, buffer increase, message reordering or speculative
+byte scheduler is retained. Raising a forced minimum using loopback data is not a
+safe capacity policy for slower paths. Deferring arbitrary bytes would split
+dependency-complete or KI-007 groups; limiting the number of already-enqueued
+messages leaves the 469 kB atomic-message problem intact. The next task is
+**Networking Reliable Service Envelope**: define the supported capacity/rate and
+service-latency contract, derive a maximum atomic encoded group plus finite
+transport-facing backlog/byte admission, and prove overload/convergence. Reuse
+current 3J acceptance and engine ordering. Only then assess independent lanes if
+necessary, with reference/lifecycle barriers, reconnect, version compatibility,
+and reverse-starvation tests. GNS has lane facilities, but implementing them is
+explicitly outside this attribution slice.
+
+Retained code is bounded diagnostic taps, a smoke collector, the backend-only
+benchmark and offline parser. Local/Node official capture still **FAILS** as
+expected. MSVC Release official hosts build; seven targeted CTests pass in
+14.22 seconds (four GNS adapter/Remote/Character/GameSession tests plus session,
+replication relevance/KI-007 and scheduler). Ten capacity cases pass. Diagnostics
+do not modify planning, 3E, 3J, KI-007, or late-send allowance. Established exact
+8,192-cap, 500-peer convergence and acquisition/admission evidence is preserved,
+not falsely described as rerun. The ordinary-runtime diagnostic path does no
+status query, timestamp, allocation or logging without a borrowed sink.
+
+The previous 7/7 Clang 19 ASan/UBSan/LSan core result is retained for unchanged
+core code; it is **not** a fresh sanitizer claim for these GNS-only taps/hosts.
+The already-documented upstream GNS-on UBSan signature issue remains distinct.
+No complete current-source security scan, overload/recovery, production journal
+retention, official service or client preflight closure is claimed. Known/journal
+progress is engine acceptance-based; this slice does not establish that backend
+ACKs pin journal retention. That causal relationship remains **not measured**.
+
+Reproduction: enable the smoke environment variable for the existing official
+near-max fixture; analyze each server/player pair with
+`tests/AnalyzeTransportService.ps1`; run the optional
+`gargantuan_gns_capacity_benchmark` executable. Raw captures, parsed JSON,
+capacity samples and build/test receipts are retained in
+`build-3l3-worker/evidence/transport-v1`, with worker originals under
+`C:\Sandbox\Codex\Logs\gargantuan-3l3\transport-v1-official` and
+`transport-capacity-v2.log`. They are untracked investigation artifacts, not
+production per-tick logging. The offline analyzer rejects multi-peer/generation
+captures rather than guessing a cross-process peer mapping.
+
+Documentation build: **19 pages PASS, 3.32 s**, Node 24.19, an isolated committed
+public-docs snapshot (public pages unchanged; unrelated morphology edits excluded).
+The developer Markdown ledger/contract updates are separately reviewed, not claimed
+to be Astro-rendered pages. Branch CI checked: previous `47d0b5a94` run
+`34667804305` is terminal green for Windows and Linux; starting `630a15220` run
+`34670385751` has Windows terminal green, Linux sanitizer build in progress at
+the publication checkpoint. This is not current-delta CI closure. No incomplete
+gate is promoted to green.
 
 ## Publication checkpoint (2026-09-11)
 

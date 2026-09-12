@@ -25,6 +25,7 @@
 
 #if defined(GARGANTUAN_WITH_GNS)
 #include "gargantuan/network/GameNetworkingSocketsTransport.hpp"
+#include "host/common/TransportServiceSmoke.hpp"
 #endif
 #if defined(GARGANTUAN_WITH_NODE_CONTENT)
 #include "host/server/NodeContentProvider.hpp"
@@ -232,6 +233,9 @@ namespace gargantuan::host {
 		const auto BindEndpoint = BindText.empty() ? std::nullopt : ParseEndpoint(BindText);
 		const bool StartupSmoke = Program.is_used("--startup-smoke");
 		const bool SessionSmoke = Program.is_used("--session-smoke");
+#if defined(GARGANTUAN_WITH_GNS)
+		TransportServiceSmoke TransportTrace(SessionSmoke, "server");
+#endif
 		// Keep bounded acceptance diagnostics available even if the harness must
 		// terminate a failed long-running smoke process.
 		if (SessionSmoke || ContentChurnCycles != 0) {

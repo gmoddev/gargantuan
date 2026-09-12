@@ -841,6 +841,9 @@ if(BUILD_TESTING)
 	target_link_libraries(gargantuan_remote_benchmark PRIVATE gargantuan_core)
 	if(GARGANTUAN_WITH_GNS)
 		add_executable(gargantuan_real_transport_tests "tests/GameNetworkingSocketsTransportTests.cpp")
+		add_executable(gargantuan_gns_capacity_benchmark "tests/GnsCapacityBenchmark.cpp")
+		target_compile_features(gargantuan_gns_capacity_benchmark PRIVATE cxx_std_23)
+		target_link_libraries(gargantuan_gns_capacity_benchmark PRIVATE GameNetworkingSockets::static)
 		target_link_libraries(gargantuan_real_transport_tests PRIVATE
 			gargantuan_core
 			gargantuan_gns_transport
@@ -989,6 +992,11 @@ if(BUILD_TESTING)
 				endif()
 			endif()
 			foreach(GARGANTUAN_PROTOBUF_RUNTIME IN LISTS GARGANTUAN_PROTOBUF_RUNTIMES)
+				add_custom_command(TARGET gargantuan_gns_capacity_benchmark POST_BUILD
+					COMMAND ${CMAKE_COMMAND} -E copy_if_different
+						"${GARGANTUAN_PROTOBUF_RUNTIME}"
+						"$<TARGET_FILE_DIR:gargantuan_gns_capacity_benchmark>"
+				)
 				add_custom_command(TARGET gargantuan_game_session_real_transport_tests POST_BUILD
 					COMMAND ${CMAKE_COMMAND} -E copy_if_different
 						"${GARGANTUAN_PROTOBUF_RUNTIME}"

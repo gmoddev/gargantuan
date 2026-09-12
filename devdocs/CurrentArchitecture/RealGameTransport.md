@@ -1,7 +1,7 @@
 ---
 status: current
 owner: networking
-last_verified: 2026-09-03
+last_verified: 2026-09-12
 related_code:
   - include/gargantuan/network/GameNetworkingSocketsTransport.hpp
   - src/network/GameNetworkingSocketsTransport.cpp
@@ -114,6 +114,69 @@ envelope. Reliable messages are bounded by both active `NetworkLimits` and GNS's
 effective unreliable application ceiling through `GetAvailableDatagramBytes`.
 
 ## Polling, threads, and lifetime
+
+### Verified reliable service limitation (Foundation 3L, 2026-09-12)
+
+The pinned backend defaults **both** `SendRateMin` and `SendRateMax` to
+262,144 bytes/s. `SNP_ClampSendRate` treats equal bounds as a fixed send rate;
+it is not an automatically expanding bandwidth estimate. The adapter does not
+override either setting. The official failing Local/Node captures confirm that
+configured minimum, maximum and effective estimate all remain 262,144 bytes/s.
+This is a configured backend service limit, not a measured LAN capacity ceiling.
+
+All adapter sends use lane zero. `TrafficClass` survives as validated envelope
+metadata, but does **not** configure GNS priority, independent reliable ordering
+or send-rate allocation. Reliable messages use `k_nSteamNetworkingSend_Reliable`
+without NoNagle/NoDelay flags; unreliable messages use the ordinary unreliable
+flag. GNS owns packetization, retransmission, reassembly and FIFO reliable delivery.
+Even unreliable submissions can wait behind already-queued work in this lane;
+the scheduler cannot supersede messages after handing them to GNS.
+
+The official session permits 2 MiB per tick and 16 MiB queued reliable bytes.
+These finite bounds do not constitute a latency guarantee. Four 437–469 kB GRPL
+messages generate 1.813 MB of payload, reaching 1.450 MB pending reliable bytes.
+A tagged RPC response is accepted by GNS within microseconds, with an estimated
+5.32–5.34-second queue wait. Recipient-local request-acceptance-to-response-receive
+is 5.52–5.54 seconds; completed-message receive-to-poll age is 13–18 ms for that
+response. The client event loop is not the multi-second owner.
+
+`m_cbPendingReliable` is backend not-yet-sent/retransmission work, **not** the
+engine scheduler queue or all sent-unacknowledged bytes. `m_usecQueueTime` is a
+rate-based estimate, not an actual per-message transmit timestamp. Its single-lane
+calculation includes pending unreliable work and rounds to packet units. Measured
+receiver age uses GNS's local clock and completed-message timestamp; it does not
+measure time spent reassembling an incomplete ordered message. Exact per-packet
+send, retransmission and receiver reassembly residence remain unmeasured.
+
+The private `GnsServiceDiagnostics.hpp` borrowed Main-thread sink is inactive by
+default. Official hosts enable the fixed-header, 131,072-record/output-line cap
+only with trusted `--session-smoke` **and** `GARGANTUAN_TRANSPORT_SERVICE_TRACE=1`.
+No payload, token, native handle or history is retained. A 1,024-byte stack row,
+saturating dropped count, complete connection generations and scoped restoration
+bound its ownership. Output occurs only in this test mode; it can affect measured
+host time. The ordinary path has no diagnostic status queries, timestamps or log.
+
+`tests/GnsCapacityBenchmark.cpp` is a bounded **backend-only** discriminator, not
+a replication/RemoteManager correctness fixture. Same bytes at the default rate
+take about 5.71 seconds regardless of 470 kB versus 16 kB messages. A preceding
+RPC takes about 12 ms, a following RPC 5.71 seconds. Test-only fixed rate changes
+to 1/4 MiB/s reduce the latter to 1.43/0.36 seconds, establishing configured-rate
+causality on loopback without changing production settings or ordering.
+
+**No behavioral correction is retained.** Raising a fixed minimum based on
+loopback throughput does not establish a supported network envelope; merely
+raising the buffer hides the problem. Byte pacing must bound both already-queued
+bytes and the maximum dependency-complete/clear-removal group's bytes, preserving
+3J acceptance, KI-007 and eventual service. A single 469 kB message already costs
+roughly 1.8 seconds at the default rate, so message-count caps alone cannot prove
+prompt service. The next owner is a **Networking Reliable Service Envelope**:
+explicit rate/capacity policy, complete-group byte admission and bounded backend
+backlog. Independent GNS lanes are available, but are not implemented or proven
+necessary; any split first requires lifecycle/reference ordering review, reconnect
+and compatibility design. See the
+[measured ledger](ContentAvailabilityFoundation3L_3Validation.md#official-reliable-service-attribution-2026-09-12).
+
+### Main-thread and backend ownership
 
 The adapter creates no Gargantuan worker thread. GNS may use its own internal
 service thread for transport mechanics. Gargantuan lifecycle callbacks are run

@@ -25,6 +25,7 @@
 
 #if defined(GARGANTUAN_WITH_GNS)
 #include "gargantuan/network/GameNetworkingSocketsTransport.hpp"
+#include "host/common/TransportServiceSmoke.hpp"
 #endif
 
 using namespace gargantuan;
@@ -88,6 +89,9 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 		}
 	} Sdl;
 
+#if defined(GARGANTUAN_WITH_GNS)
+	TransportServiceSmoke TransportTrace(Program.is_used("--session-smoke"), "player");
+#endif
 	std::unique_ptr<BaseRenderer> Renderer;
 	std::unique_ptr<Engine> Runtime;
 	std::unique_ptr<network::GameSession> Session;

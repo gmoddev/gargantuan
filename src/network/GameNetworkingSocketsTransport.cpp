@@ -1,4 +1,6 @@
 #include "gargantuan/network/GameNetworkingSocketsTransport.hpp"
+#include "GnsServiceDiagnostics.hpp"
+#include "../runtime/PublicationLatencyDiagnostics.hpp"
 #include "../runtime/RuntimeWorkDiagnostics.hpp"
 
 #include <steam/steamnetworkingsockets.h>
@@ -229,6 +231,41 @@ namespace gargantuan::network {
 		std::deque<std::uint32_t> FreeSlots;
 		std::deque<TransportEvent> Events;
 		std::size_t PendingReceiveBytes = 0;
+
+		void Observe(ConnectionId Id, const char *Stage, std::span<const std::byte> Payload = {},
+			int Delivery = -1, int Traffic = -1, std::int64_t Number = -1,
+			std::int64_t ReceiveAgeUs = -1, int Result = -1) const noexcept {
+			const auto *Sink = detail::ActiveGnsService;
+			if (!Sink) return;
+			const auto Iterator = Connections.find(Id);
+			if (Iterator == Connections.end()) return;
+			detail::GnsServiceRecord Value{.Stage = Stage, .Connection = Id,
+				.Nanoseconds = runtime_detail::PublicationLatencyNow(), .MessageNumber = Number,
+				.ReceiveAgeUs = ReceiveAgeUs};
+			Value.Role = static_cast<int>(Role); Value.Delivery = Delivery; Value.Traffic = Traffic;
+			Value.Bytes = static_cast<std::uint32_t>(Payload.size()); Value.Result = Result;
+			SteamNetConnectionRealTimeStatus_t Status{};
+			if (SteamAPI_ISteamNetworkingSockets_GetConnectionRealTimeStatus(
+				GlobalState().Interface, Iterator->second.Handle, &Status, 0, nullptr) == k_EResultOK) {
+				Value.PendingReliable = Status.m_cbPendingReliable;
+				Value.UnackedReliable = Status.m_cbSentUnackedReliable;
+				Value.PendingUnreliable = Status.m_cbPendingUnreliable;
+				Value.QueueUs = Status.m_usecQueueTime; Value.Rate = Status.m_nSendRateBytesPerSecond;
+				Value.OutBytesPerSecond = Status.m_flOutBytesPerSec;
+				Value.InBytesPerSecond = Status.m_flInBytesPerSec; Value.Ping = Status.m_nPing;
+			}
+			auto ReadConfig = [&](ESteamNetworkingConfigValue Key) {
+				std::int32_t Setting = -1; std::size_t Size = sizeof(Setting);
+				ESteamNetworkingConfigDataType Type{};
+				const auto Result = SteamAPI_ISteamNetworkingUtils_GetConfigValue(SteamNetworkingUtils(),
+					Key, k_ESteamNetworkingConfig_Connection, Iterator->second.Handle, &Type, &Setting, &Size);
+				return Result > 0 && Type == k_ESteamNetworkingConfig_Int32 && Size == sizeof(Setting) ? Setting : -1;
+			};
+			Value.RateMin = ReadConfig(k_ESteamNetworkingConfig_SendRateMin);
+			Value.RateMax = ReadConfig(k_ESteamNetworkingConfig_SendRateMax);
+			Value.SendBuffer = ReadConfig(k_ESteamNetworkingConfig_SendBufferSize);
+			Sink->Record(Sink->Context, Value, Payload);
+		}
 
 		static void StatusChanged(SteamNetConnectionStatusChangedCallback_t *Information) {
 			if (!Information) return;
@@ -482,6 +519,9 @@ namespace gargantuan::network {
 					break;
 				}
 				auto Event = DecodeMessage(Id, *Message);
+				if (Event && detail::ActiveGnsService) Observe(Id, "GnsReceive", Event->Payload,
+					static_cast<int>(Event->Delivery), static_cast<int>(Event->Traffic), Message->m_nMessageNumber,
+					SteamAPI_ISteamNetworkingUtils_GetLocalTimestamp(SteamNetworkingUtils()) - Message->m_usecTimeReceived);
 				Message->Release();
 				if (!Event) {
 					FailConnection(Id, DisconnectReason::ProtocolViolation, "Malformed GNS adapter message");
@@ -667,14 +707,19 @@ namespace gargantuan::network {
 		}
 		const int Flags = Message.Delivery() == DeliveryMode::ReliableOrdered
 			? k_nSteamNetworkingSend_Reliable : k_nSteamNetworkingSend_Unreliable;
+		State->Observe(Message.Destination(), "GnsBefore", Message.Payload(),
+			static_cast<int>(Message.Delivery()), static_cast<int>(Message.Traffic()));
+		int64 MessageNumber = -1;
 		const auto Result = SteamAPI_ISteamNetworkingSockets_SendMessageToConnection(
 			Global.Interface,
 			Connection->second.Handle,
 			Frame->data(),
 			static_cast<std::uint32_t>(Frame->size()),
 			Flags,
-			nullptr
+			detail::ActiveGnsService ? &MessageNumber : nullptr
 		);
+		State->Observe(Message.Destination(), "GnsQueued", Message.Payload(),
+			static_cast<int>(Message.Delivery()), static_cast<int>(Message.Traffic()), MessageNumber, -1, static_cast<int>(Result));
 		switch (Result) {
 		case k_EResultOK:
 			SaturatingAdd(*Connection->second.Statistics.MessagesSent, 1);
@@ -706,7 +751,10 @@ namespace gargantuan::network {
 				(void)Record;
 				Connections.push_back(Id);
 			}
-			for (const auto Id : Connections) State->DrainMessages(Id);
+			for (const auto Id : Connections) {
+				State->Observe(Id, "GnsPoll");
+				State->DrainMessages(Id);
+			}
 		}
 		const auto Count = std::min(Output.size(), State->Events.size());
 		for (std::size_t Index = 0; Index < Count; ++Index) {

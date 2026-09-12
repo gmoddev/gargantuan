@@ -98,7 +98,21 @@ rejection. The observer precedes real-client application; it is not a presentati
 guarantee. A 512-operation client callback costs 24.03 ms including 8.89-ms native
 preflight and 9.18-ms live application. No transaction redesign is implemented.
 
-The current official near-max GNS test FAILS for both Local and Node: one RPC
+The official reliable service follow-up (2026-09-12) identifies fixed GNS
+capacity plus same-lane FIFO backlog: configured minimum/maximum/effective send
+rate are all 262,144 bytes/s. The fuller capture peaks at 1,449,887/1,449,885
+pending reliable bytes, dominated by four large GRPL frames. Correlated RPC 6
+has a 5.32–5.34-second estimated backend wait, microsecond engine handoff, and
+5.52–5.54 seconds of client-local request-to-response availability; Player polling
+and callbacks add milliseconds, not seconds. Smaller messages with identical
+queued bytes do not help; test-only 1/4 MiB/s rates reduce backend drain by about
+4x/16x. No production rate/buffer/lane/order/wire change is retained. The next owner
+is **Networking Reliable Service Envelope**: supported rate/capacity policy,
+dependency-complete/KI-007 atomic-group byte bound and bounded backlog admission,
+before considering separate lanes. See the
+[transport attribution ledger](devdocs/CurrentArchitecture/ContentAvailabilityFoundation3L_3Validation.md#official-reliable-service-attribution-2026-09-12).
+
+The preceding official near-max GNS test FAILS for both Local and Node: one RPC
 times out at approximately five seconds; Remote receive gaps reach 5.544/5.529 s
 while Player event-loop gaps remain below 54 ms. Sampled pending reliable bytes
 reach 1,420,323; GRPL and reliable application use the same backend connection

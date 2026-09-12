@@ -1,7 +1,7 @@
 ---
 status: investigation-in-progress
 owner: runtime-networking
-last_verified: 2026-09-11
+last_verified: 2026-09-12
 related_code:
   - src/runtime/RuntimeWorkDiagnostics.hpp
   - src/network/ReplicationCoordinator.cpp
@@ -11,6 +11,38 @@ related_code:
 ---
 
 # Foundation 3L.3: runtime work isolation
+
+## Official reliable service attribution (2026-09-12)
+
+**B — FOUNDATION 3L PARTIALLY READY.** The `transport-v1` official capture and
+`transport-capacity-v2` backend discriminator identify a fixed GNS rate plus
+same-lane FIFO backlog. No production scheduling/rate/ordering correction is
+retained. The adapter inherits 262,144 bytes/s minimum **and** maximum. Four large
+GRPL messages create a measured 1.450 MB pending reliable peak; a correlated RPC
+response has 5.32–5.34 seconds of estimated backend queue wait while engine handoff
+takes microseconds. Receiver-local request-to-response availability takes
+5.52–5.54 seconds. The event loop is still serviced within 56 ms in these captures.
+
+The private bounded smoke tap measures engine acceptance, backend submission,
+queue/rate/unacked state, backend message identity, completed-message receive age,
+engine callback and Remote completion. It changes no limits, flags, lane, protocol,
+relevance, acceptance or Known state. Cross-process clocks are not subtracted.
+
+Current operation bounds (65,536 planning steps and 8,192 accepted selections)
+do not prove reliable byte-service latency. Even the measured 256-operation frame
+can contain 469 kB. Smaller messages with the same already-enqueued byte burst do
+not improve a trailing RPC. Test-only rate changes establish capacity causality,
+not a safe universal production rate. The architecture handoff is **Networking
+Reliable Service Envelope**, before any lane/ordering redesign. Required group
+byte bounds must preserve dependency closure and KI-007 clear/replace/removal
+atomicity, acceptance-only Known, finite queues and fair convergence.
+
+The [transport contract](RealGameTransport.md#verified-reliable-service-limitation-foundation-3l-2026-09-12)
+and [validation ledger](ContentAvailabilityFoundation3L_3Validation.md#official-reliable-service-attribution-2026-09-12)
+separate measured stages, inferred service ownership and unmeasured packet-level
+residence. Client preflight, supported healthy service, overload/recovery,
+production journal margin, security and current-source CI remain independent
+gates. No 3M, jobification, client transaction redesign or branch merge follows.
 
 ## Publication checkpoint (2026-09-11)
 
