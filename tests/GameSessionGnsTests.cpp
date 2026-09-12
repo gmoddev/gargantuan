@@ -219,8 +219,10 @@ end)
 		Check(Metrics.ReliableAdmission.PeerCreditHighWater > 0 &&
 			Metrics.ReliableAdmission.GlobalCreditHighWater > 0,
 			"profiled real GNS session exercises finite peer and global elapsed-time credit");
-		Check(Metrics.ReliableAdmission.CreditDeferrals > 0 || Metrics.ReliableAdmission.SizeDeferrals > 0,
-			"profiled real GNS bootstrap observes a bounded credit or exact-size deferral before admission");
+		// Whether this real-time bootstrap happens to defer is timing-dependent:
+		// service time accrues finite credit while the connection/bootstrap work runs.
+		// Deterministic zero-credit and exact-size deferral behavior is covered by
+		// ReliableByteAdmissionFixture and the production-admission matrix.
 	}
 	auto ServerPlayers = ServerRuntime.Players->GetPlayers();
 	Check(
