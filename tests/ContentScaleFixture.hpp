@@ -8,6 +8,7 @@
 #include "gargantuan/network/ReplicationProtocol.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -98,6 +99,11 @@ namespace gargantuan::test {
 		ObjectId Root;
 		std::optional<network::CharacterControlTransition> Control;
 		std::map<ObjectId, std::uint64_t> LastStateTick;
+		std::map<ObjectId, std::chrono::steady_clock::time_point> LastStateWall;
+		double MaximumGapWallMilliseconds = 0;
+		std::chrono::steady_clock::time_point MaximumGapStarted{}, MaximumGapEnded{};
+		std::uint64_t MaximumGapFromTick = 0, MaximumGapToTick = 0;
+		double RootMotionMaximumGapWallMilliseconds = 0;
 		std::unordered_set<ObjectId> RootMotionCharacters;
 		std::uint64_t RootMotionStates = 0;
 		std::uint64_t RootMotionMaximumGapTicks = 0;
@@ -147,7 +153,22 @@ namespace gargantuan::test {
 					if (Binding->Bound) Control = *Binding;
 					else Control.reset();
 				}
+				const auto ReceivedAt = std::chrono::steady_clock::now();
 				auto ObserveState = [&](const network::CharacterAuthoritativeState &State) {
+					auto &LastWall = LastStateWall[State.Character];
+					if (LastWall != std::chrono::steady_clock::time_point{}) {
+						const auto Gap = std::chrono::duration<double, std::milli>(ReceivedAt - LastWall).count();
+						if (Gap > MaximumGapWallMilliseconds) {
+							MaximumGapWallMilliseconds = Gap;
+							MaximumGapStarted = LastWall;
+							MaximumGapEnded = ReceivedAt;
+							MaximumGapFromTick = LastStateTick[State.Character];
+							MaximumGapToTick = State.AuthoritativeTick;
+						}
+						if (RootMotionCharacters.contains(State.Character))
+							RootMotionMaximumGapWallMilliseconds = std::max(RootMotionMaximumGapWallMilliseconds, Gap);
+					}
+					LastWall = ReceivedAt;
 					auto &Last = LastStateTick[State.Character];
 					if (RootMotionCharacters.contains(State.Character)) {
 						++RootMotionStates;

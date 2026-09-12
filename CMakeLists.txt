@@ -736,6 +736,8 @@ if(BUILD_TESTING)
 	target_link_libraries(gargantuan_physics_backend_tests PRIVATE gargantuan_core)
 	add_executable(gargantuan_physics_query_benchmark "tests/PhysicsQueryBenchmark.cpp")
 	target_link_libraries(gargantuan_physics_query_benchmark PRIVATE gargantuan_core nlohmann_json)
+	add_executable(gargantuan_physics_activation_benchmark "tests/PhysicsActivationBenchmark.cpp")
+	target_link_libraries(gargantuan_physics_activation_benchmark PRIVATE gargantuan_core)
 	add_executable(gargantuan_soft_body_physics_tests "tests/SoftBodyPhysicsTests.cpp")
 	target_link_libraries(gargantuan_soft_body_physics_tests PRIVATE gargantuan_core)
 	add_executable(gargantuan_soft_body_physics_benchmark "tests/SoftBodyPhysicsBenchmark.cpp")
@@ -821,6 +823,11 @@ if(BUILD_TESTING)
 	target_link_libraries(gargantuan_game_session_benchmark PRIVATE gargantuan_core)
 	target_compile_definitions(gargantuan_game_session_benchmark PRIVATE
 		GARGANTUAN_FIRST_COMPLETE_GAME_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/samples/FirstCompleteGame")
+	add_test(NAME ContentScaleUnwindTests COMMAND ${CMAKE_COMMAND}
+		-DGARGANTUAN_BENCHMARK=$<TARGET_FILE:gargantuan_game_session_benchmark>
+		-DGARGANTUAN_TEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}
+		-P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/ContentScaleUnwindTests.cmake)
+	set_tests_properties(ContentScaleUnwindTests PROPERTIES TIMEOUT 360 LABELS "content;lifecycle")
 	add_executable(gargantuan_spatial_region_index_benchmark "tests/SpatialRegionIndexBenchmark.cpp")
 	target_link_libraries(gargantuan_spatial_region_index_benchmark PRIVATE gargantuan_core)
 	target_compile_definitions(gargantuan_character_networking_tests PRIVATE
@@ -930,6 +937,7 @@ if(BUILD_TESTING)
 			gargantuan_attributes_tags_profile
 			gargantuan_physics_backend_tests
 			gargantuan_physics_query_benchmark
+			gargantuan_physics_activation_benchmark
 			gargantuan_soft_body_physics_tests
 			gargantuan_soft_body_physics_benchmark
 			gargantuan_platform_input_boundary_tests

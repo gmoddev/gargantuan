@@ -36,6 +36,8 @@ namespace gargantuan::network {
 		float EnterRadius = 256.0f;
 		float LeaveRadius = 320.0f;
 		std::uint64_t UpdateIntervalTicks = 6;
+		// Native runtime policy only. One unit is a complete, coherent peer evaluation.
+		std::size_t MaximumPeerEvaluationsPerTick = 64;
 		std::size_t MaximumSpatialObjects = MaximumReplicationSpatialObjects;
 		std::size_t MaximumSpatialRegions = MaximumReplicationSpatialRegions;
 		std::size_t MaximumSpatialMemberships = MaximumReplicationSpatialMemberships;
@@ -62,6 +64,7 @@ namespace gargantuan::network {
 		std::uint64_t CandidateMembershipVisits = 0;
 		std::uint64_t CandidateDedupHits = 0;
 		std::uint64_t RelevanceEvaluations = 0;
+		std::uint64_t SelectionCacheHits = 0;
 		std::uint64_t SpatialEntries = 0;
 		std::uint64_t SpatialMemberships = 0;
 		std::uint64_t SpatialRegions = 0;
@@ -79,6 +82,15 @@ namespace gargantuan::network {
 		std::uint64_t RelevanceLeaves = 0;
 		std::uint64_t LimitFailures = 0;
 		std::uint64_t UpdateCpuNanoseconds = 0;
+		std::uint64_t PeerEvaluations = 0;
+		std::uint64_t PeerEvaluationsLastUpdate = 0;
+		std::uint64_t PeerEvaluationsHighWater = 0;
+		std::uint64_t DeferredPeers = 0;
+		std::uint64_t DeferredPeersHighWater = 0;
+		std::uint64_t OldestPendingAgeTicks = 0;
+		std::uint64_t MaximumPendingAgeTicks = 0;
+		std::uint64_t StagingBytes = 0;
+		std::uint64_t CharacterCandidateBytes = 0;
 	};
 
 	class ReplicationRelevance final {
@@ -101,7 +113,11 @@ namespace gargantuan::network {
 		bool Update(std::uint64_t SimulationTick);
 
 		[[nodiscard]] const PeerRelevanceSelection *GetSelection(ConnectionId Connection) const;
+		[[nodiscard]] std::shared_ptr<const PeerRelevanceSelection> GetSelectionSnapshot(ConnectionId Connection) const;
 		[[nodiscard]] std::span<const glm::vec3> GetResolvedFocus(ConnectionId Connection) const;
+		// Derived typed subset of the last evaluated spatial-root result. Callers
+		// must still validate live registration, IsRuntimeRelevant and Known.
+		[[nodiscard]] std::span<const ObjectId> GetRuntimeCharacterCandidates(ConnectionId Connection) const;
 		[[nodiscard]] bool IsRuntimeRelevant(ConnectionId Connection, ObjectId Object) const;
 		[[nodiscard]] bool WasSelectionEvaluated(ConnectionId Connection) const;
 		[[nodiscard]] bool IsHealthy() const;

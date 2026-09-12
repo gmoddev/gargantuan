@@ -1,5 +1,7 @@
 #include "gargantuan/network/Scheduler.hpp"
 #include "gargantuan/network/SimulatedTransport.hpp"
+#include "../src/runtime/RuntimeWorkDiagnostics.hpp"
+#include "../src/network/SessionSendAllowance.hpp"
 
 #include <algorithm>
 #include <array>
@@ -336,6 +338,104 @@ namespace {
 }
 
 int main() {
+	{
+		const ConnectionId Connection{900, 1};
+		RecordingTransport Transport(Connection);
+		NetworkScheduler Scheduler(Transport);
+		const auto Limits = TestLimits(64, 32, 256, 128, 4);
+		Check(Scheduler.RegisterConnection(Connection, Limits), "session allowance registers its exact peer");
+		detail::SessionSendAllowance Allowance;
+		auto Queue = [&](unsigned int Value, TrafficClass Traffic, std::size_t Bytes) {
+			auto Message = Intent(Connection, Traffic == TrafficClass::RealtimeState ? DeliveryMode::UnreliableSequenced
+				: DeliveryMode::ReliableOrdered, Traffic, Value, Limits, Bytes,
+				Traffic == TrafficClass::RealtimeState ? MessageOrder(RealtimeStateOrder{StateChannelId(1), RealtimeStateSequence(Value)})
+				: MessageOrder{});
+			Check(Message && Scheduler.Submit(std::move(*Message)).Accepted(), "bounded session probe queues normally");
+		};
+		Queue(1, TrafficClass::StructuralReplication, 64);
+		const auto Early = Allowance.Flush(Scheduler, Connection, Limits);
+		Queue(3, TrafficClass::RealtimeState, 32);
+		Queue(2, TrafficClass::ReliableApplication, 32);
+		const auto Late = Allowance.Flush(Scheduler, Connection, Limits);
+		Check(Early.BytesSubmitted + Late.BytesSubmitted == 128 &&
+			Early.MessagesSubmitted + Late.MessagesSubmitted == 3 &&
+			Transport.SubmittedValues == std::vector<unsigned int>({1, 2, 3}),
+			"late gameplay reaches transport with only residual capacity and structural-first order");
+		Queue(4, TrafficClass::ReliableApplication, 1);
+		Check(Allowance.Flush(Scheduler, Connection, Limits).Status == SchedulerFlushStatus::BudgetLimited &&
+			Transport.SubmittedValues.size() == 3, "repeated service cannot mint a fresh byte allowance");
+		Allowance.Reset();
+		Check(Allowance.Flush(Scheduler, Connection, Limits).MessagesSubmitted == 1 &&
+			Scheduler.GetStatistics(Connection)->QueuedMessages == 0, "remaining reliable work drains next step without duplication");
+		Allowance.Reset();
+		Queue(5, TrafficClass::StructuralReplication, 64);
+		Transport.NextSendStatus = TransportOperationStatus::WouldBlock;
+		Check(Allowance.Flush(Scheduler, Connection, Limits).Status == SchedulerFlushStatus::TransportBackpressured,
+			"structural backpressure is preserved");
+		Queue(6, TrafficClass::ReliableApplication, 16);
+		Check(Allowance.Flush(Scheduler, Connection, Limits).MessagesSubmitted == 0 &&
+			Scheduler.GetStatistics(Connection)->QueuedMessages == 2, "late work cannot retry/overtake a blocked structural flush");
+		Allowance.Reset();
+		Check(Allowance.Flush(Scheduler, Connection, Limits).MessagesSubmitted == 2 &&
+			Transport.SubmittedValues == std::vector<unsigned int>({1, 2, 3, 4, 5, 6}),
+			"backpressured reliable work recovers in order at the next service step");
+		Scheduler.CancelConnection(Connection);
+		Allowance.Reset();
+		Check(Allowance.Flush(Scheduler, Connection, Limits).Status == SchedulerFlushStatus::InvalidConnection,
+			"allowance cannot revive a disconnected generation");
+		std::cout << "[Network:SessionAllowance] bytes=" << sizeof(Allowance) << "\n";
+	}
+	{
+		const ConnectionId Connection{901, 1};
+		RecordingTransport Transport(Connection);
+		NetworkScheduler Scheduler(Transport);
+		const auto Limits = TestLimits(8, 8, 64, 128, 1);
+		Scheduler.RegisterConnection(Connection, Limits);
+		detail::SessionSendAllowance Allowance;
+		for (unsigned int Value : {1u, 2u}) {
+			auto Message = Intent(Connection, DeliveryMode::ReliableOrdered, TrafficClass::ReliableApplication, Value, Limits);
+			Scheduler.Submit(std::move(*Message));
+			Allowance.Flush(Scheduler, Connection, Limits);
+		}
+		Check(Transport.SubmittedValues == std::vector<unsigned int>({1}) &&
+			Scheduler.GetStatistics(Connection)->QueuedMessages == 1, "shared message cap binds despite unused bytes");
+		Allowance.Reset();
+		Check(Allowance.Flush(Scheduler, Connection, Limits).MessagesSubmitted == 1, "message-limited work makes next-step progress");
+	}
+	{
+		using namespace gargantuan::runtime_detail;
+		RecordingTransport Transport({1, 1});
+		NetworkScheduler Scheduler(Transport);
+		const auto Limits = TestLimits(64, 32, 256, 64, 4);
+		Check(Scheduler.RegisterConnection(Transport.ActiveConnection, Limits), "diagnostic scheduler connection registers");
+		WorkSample Sample{};
+		WorkCapture Capture(&Sample);
+		{
+			WorkProducerScope Producer(WorkProducer::Structural);
+			Check(Scheduler.Submit(*Intent(Transport.ActiveConnection, DeliveryMode::ReliableOrdered,
+				TrafficClass::StructuralReplication, 1, Limits, 64, ReliableReplicationOrder{ReliableReplicationSequence{1}})).Accepted(),
+				"diagnostic structural message accepted");
+		}
+		{
+			WorkProducerScope Producer(WorkProducer::RpcResponse);
+			Check(Scheduler.Submit(*Intent(Transport.ActiveConnection, DeliveryMode::ReliableOrdered,
+				TrafficClass::ReliableApplication, 2, Limits, 8)).Accepted(), "diagnostic RPC accepted");
+		}
+		Check(Scheduler.Flush(Transport.ActiveConnection, {64, 4}).Status == SchedulerFlushStatus::BudgetLimited,
+			"diagnostic annotation does not reorder RPC ahead of structural bytes");
+		Transport.NextSendStatus = TransportOperationStatus::WouldBlock;
+		Check(Scheduler.Flush(Transport.ActiveConnection, {64, 4}).Status == SchedulerFlushStatus::TransportBackpressured,
+			"diagnostic annotation preserves transport backpressure");
+		Check(Scheduler.Flush(Transport.ActiveConnection, {64, 4}).Status == SchedulerFlushStatus::Drained,
+			"diagnostic annotated backlog drains");
+		const auto &Structural = Sample.Producers[static_cast<std::size_t>(WorkProducer::Structural)];
+		const auto &Rpc = Sample.Producers[static_cast<std::size_t>(WorkProducer::RpcResponse)];
+		Check(Structural.Enqueued == 1 && Structural.Serviced == 1 && Structural.ServicedBytes == 64 &&
+			Rpc.Enqueued == 1 && Rpc.Serviced == 1 && Rpc.ServicedBytes == 8 && Rpc.BudgetDeferrals == 1 &&
+			Rpc.CapacityDeferrals == 1 && Rpc.QueueDepthMaximum == 1 && Transport.SubmittedValues == std::vector<unsigned int>{1, 2},
+			"bounded producer counters account exactly without affecting selection or wire order");
+		Check(Scheduler.CancelConnection(Transport.ActiveConnection), "diagnostic queue cancels with its peer");
+	}
 	using namespace gargantuan::network;
 	using namespace std::chrono_literals;
 

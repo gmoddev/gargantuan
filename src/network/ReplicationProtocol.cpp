@@ -1,4 +1,5 @@
 #include "gargantuan/network/ReplicationProtocol.hpp"
+#include "../runtime/RuntimeWorkDiagnostics.hpp"
 
 #include "gargantuan/network/BinaryCodec.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
@@ -355,6 +356,7 @@ namespace gargantuan::network {
 	}
 
 	SerializationResult<std::vector<std::byte>> EncodeReplicationFrame(const ReplicationFrame &Frame) {
+		runtime_detail::WorkScope Work(runtime_detail::WorkPhase::StructuralEncode);
 		try {
 			if (!Frame.IsValid())
 				return SerializationFailure(SerializationErrorCode::InvalidValue, "Replication frame is invalid");
@@ -390,6 +392,7 @@ namespace gargantuan::network {
 	}
 
 	SerializationResult<ReplicationFrame> DecodeReplicationFrame(std::span<const std::byte> Bytes) {
+		runtime_detail::WorkScope Work(runtime_detail::WorkPhase::ClientDecode);
 		try {
 			if (Bytes.size() > MaximumReplicationFrameBytes)
 				return SerializationFailure(

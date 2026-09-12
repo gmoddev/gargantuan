@@ -1,4 +1,5 @@
 #include "gargantuan/network/GameNetworkingSocketsTransport.hpp"
+#include "../runtime/RuntimeWorkDiagnostics.hpp"
 
 #include <steam/steamnetworkingsockets.h>
 #include <steam/steamnetworkingsockets_flat.h>
@@ -633,6 +634,7 @@ namespace gargantuan::network {
 	}
 
 	TransportOperationResult GameNetworkingSocketsTransport::Send(const NetworkMessageIntent &Message) {
+		runtime_detail::WorkScope Work(runtime_detail::WorkPhase::TransportSend);
 		auto &Global = GlobalState();
 		std::lock_guard Lock(Global.Mutex);
 		if (!State->Started) return Operation(TransportOperationStatus::InvalidState);

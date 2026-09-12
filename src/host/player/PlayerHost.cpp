@@ -180,6 +180,7 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 													   : (Program.is_used("--startup-smoke") ? 12 : 0);
 		const bool SessionSmoke = Program.is_used("--session-smoke");
 		if (SessionSmoke) {
+			Runtime->RenderPublishing.SetProfilingEnabled(true);
 			SDL_SetLogOutputFunction([](void *, int, SDL_LogPriority, const char *Message) {
 				std::cerr << Message << '\n';
 			}, nullptr);
@@ -189,8 +190,22 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 		bool SessionMovementInjected = false;
 		int Frames = 0;
 		auto NetworkFrameDeadline = std::chrono::steady_clock::now();
+		auto PreviousFrameStarted = NetworkFrameDeadline;
+		auto PreviousEventService = NetworkFrameDeadline;
+		std::uint64_t ProfileFrames = 0;
+		auto PreviousMetrics = Session ? Session->GetMetrics() : network::GameSessionMetrics{};
+		auto Nanoseconds = [](auto Duration) {
+			return std::chrono::duration_cast<std::chrono::nanoseconds>(Duration).count();
+		};
+		if (SessionSmoke)
+			std::cout << "[Runtime:PlayerFrame] unix_us,frame,interval_ns,event_gap_ns,poll_ns,engine_ns,session_ns,"
+				"bytes,frames,operations,copy_ns,semantic_ns,load_ns,load_validate_ns,construct_ns,parent_ns,properties_ns,"
+				"live_apply_ns,apply_total_ns,decode_ns,render_extract_ns,render_publish_ns,published_objects,"
+				"character_messages,remote_messages,character_max_gap_ns,remote_max_gap_ns\n";
 		while (Runtime->ProcessService->Alive) {
+			const auto FrameStarted = std::chrono::steady_clock::now();
 			if (Session) (void)Session->Poll();
+			const auto EventServiceStarted = std::chrono::steady_clock::now();
 			HostEvent Event;
 			while (Host.PollEvent(Event)) {
 				auto Result = Runtime->ProcessEvent(Event);
@@ -212,7 +227,9 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 					SessionMovementInjected = true;
 				}
 			}
+			const auto EngineStarted = std::chrono::steady_clock::now();
 			Runtime->Step();
+			const auto SessionStarted = std::chrono::steady_clock::now();
 			if (Session) {
 				Session->Step(Runtime->GetSimulationTick());
 				if (Session->GetStatus() == network::GameSessionStatus::Failed)
@@ -227,6 +244,44 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 					if (Satisfied) Runtime->ProcessService->MarkExit(0);
 				}
 			}
+			const auto FrameCompleted = std::chrono::steady_clock::now();
+			// Bounded, test-only trace. No world/property/credential values are logged.
+			if (SessionSmoke && ProfileFrames < 4096) {
+				const auto Metrics = Session ? Session->GetMetrics() : network::GameSessionMetrics{};
+				const auto &Current = Metrics.ClientReplica;
+				const auto &Previous = PreviousMetrics.ClientReplica;
+				const auto Render = Runtime->RenderPublishing.GetLastProfile();
+				std::cout << "[Runtime:PlayerFrame] "
+					<< std::chrono::duration_cast<std::chrono::microseconds>(
+						std::chrono::system_clock::now().time_since_epoch()).count() << ',' << ++ProfileFrames << ','
+					<< Nanoseconds(FrameStarted - PreviousFrameStarted) << ','
+					<< Nanoseconds(EventServiceStarted - PreviousEventService) << ','
+					<< Nanoseconds(EventServiceStarted - FrameStarted) << ','
+					<< Nanoseconds(SessionStarted - EngineStarted) << ','
+					<< Nanoseconds(FrameCompleted - SessionStarted) << ','
+					<< Metrics.ClientStructuralBytesReceived - PreviousMetrics.ClientStructuralBytesReceived << ','
+					<< Current.FramesApplied - Previous.FramesApplied << ','
+					<< Current.OperationsApplied - Previous.OperationsApplied << ','
+					<< Current.CandidateCopyNanoseconds - Previous.CandidateCopyNanoseconds << ','
+					<< Current.SemanticValidationNanoseconds - Previous.SemanticValidationNanoseconds << ','
+					<< Current.ValidationLoadNanoseconds - Previous.ValidationLoadNanoseconds << ','
+					<< Current.ValidationLoad.ValidationNanoseconds - Previous.ValidationLoad.ValidationNanoseconds << ','
+					<< Current.ValidationLoad.ConstructionNanoseconds - Previous.ValidationLoad.ConstructionNanoseconds << ','
+					<< Current.ValidationLoad.ParentingNanoseconds - Previous.ValidationLoad.ParentingNanoseconds << ','
+					<< Current.ValidationLoad.PropertiesNanoseconds - Previous.ValidationLoad.PropertiesNanoseconds << ','
+					<< Current.LiveApplyNanoseconds - Previous.LiveApplyNanoseconds << ','
+					<< Metrics.ClientStructuralApplyNanoseconds - PreviousMetrics.ClientStructuralApplyNanoseconds << ','
+					<< Metrics.ClientStructuralDecodeNanoseconds - PreviousMetrics.ClientStructuralDecodeNanoseconds << ','
+					<< Render.FinalStateExtractionNanoseconds << ',' << Render.PublicationConstructionNanoseconds << ','
+					<< Runtime->RenderPublishing.GetPublishedObjectCount() << ','
+					<< Metrics.ClientCharacterMessagesHandled - PreviousMetrics.ClientCharacterMessagesHandled << ','
+					<< Metrics.ClientRemoteMessagesHandled - PreviousMetrics.ClientRemoteMessagesHandled << ','
+					<< Metrics.ClientCharacterMaximumServiceGapNanoseconds << ','
+					<< Metrics.ClientRemoteMaximumServiceGapNanoseconds << '\n';
+				PreviousMetrics = Metrics;
+			}
+			PreviousFrameStarted = FrameStarted;
+			PreviousEventService = EventServiceStarted;
 			if (MaximumFrames > 0 && ++Frames >= MaximumFrames) {
 				int ExitCode = SessionSmoke ? 8 : 0;
 				if (SessionSmoke && !ClientText.empty()) {

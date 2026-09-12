@@ -1,4 +1,5 @@
 #include "gargantuan/network/RemoteManager.hpp"
+#include "../runtime/RuntimeWorkDiagnostics.hpp"
 
 #include "gargantuan/classes/Instance.hpp"
 #include "gargantuan/runtime/ProtocolInput.hpp"
@@ -281,6 +282,12 @@ namespace gargantuan::network {
 			std::vector<std::byte> Encoded,
 			bool AllowDependencyDeferral
 		) {
+			const auto Producer = Message.Kind == RemoteMessageKind::Request ? runtime_detail::WorkProducer::RpcRequest :
+				Message.Kind == RemoteMessageKind::Response || Message.Kind == RemoteMessageKind::RequestError ? runtime_detail::WorkProducer::RpcResponse :
+				Message.Kind == RemoteMessageKind::ReliableEvent ? runtime_detail::WorkProducer::RemoteEventReliable :
+				Message.Kind == RemoteMessageKind::UnreliableEvent || Message.Kind == RemoteMessageKind::SequencedEvent ? runtime_detail::WorkProducer::RemoteEventUnreliable :
+				runtime_detail::WorkProducer::RemoteControl;
+			runtime_detail::WorkProducerScope ProducerScope(Producer);
 			auto Peer = Peers.find(Connection);
 			if (Peer == Peers.end()) return {RemoteSendStatus::InvalidPeer};
 			std::vector<ObjectId> Missing;
@@ -1130,6 +1137,7 @@ namespace gargantuan::network {
 	}
 
 	std::size_t RemoteManager::Pump(std::size_t MaximumMessages) {
+		runtime_detail::WorkScope Work(runtime_detail::WorkPhase::RemotePump);
 		if (!State->Active || MaximumMessages == 0 || MaximumMessages > NativeMaximumNetworkMessagesPerTick) return 0;
 		const auto Now = State->GetTime();
 		std::vector<Implementation::PendingKey> TimedOut;

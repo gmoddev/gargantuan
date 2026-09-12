@@ -1,4 +1,5 @@
 #include "gargantuan/network/ReplicationRelevance.hpp"
+#include "../runtime/RuntimeWorkDiagnostics.hpp"
 
 #include "gargantuan/classes/BasePart.hpp"
 #include "gargantuan/classes/Character.hpp"
@@ -49,7 +50,8 @@ namespace gargantuan::network {
 
 	bool ReplicationRelevanceConfiguration::IsValid() const {
 		return std::isfinite(EnterRadius) && EnterRadius > 0.0f && std::isfinite(LeaveRadius) &&
-			   LeaveRadius >= EnterRadius && UpdateIntervalTicks != 0 && MaximumSpatialObjects != 0 &&
+			   LeaveRadius >= EnterRadius && UpdateIntervalTicks != 0 && MaximumPeerEvaluationsPerTick >= 2 &&
+			   MaximumPeerEvaluationsPerTick <= MaximumReplicationRelevancePeers && MaximumSpatialObjects != 0 &&
 			   MaximumSpatialObjects <= MaximumReplicationSpatialObjects && MaximumSpatialRegions != 0 &&
 			   MaximumSpatialRegions <= MaximumReplicationSpatialRegions && MaximumSpatialMemberships != 0 &&
 			   MaximumSpatialMemberships <= MaximumReplicationSpatialMemberships &&
@@ -85,6 +87,7 @@ namespace gargantuan::network {
 
 		struct SpatialEntry {
 			std::weak_ptr<Instance> Object;
+			bool CharacterRoot = false;
 			std::set<ObjectId> Members;
 			std::vector<SignalConnection::Pointer> SpatialChanged;
 		};
@@ -95,10 +98,14 @@ namespace gargantuan::network {
 			std::vector<glm::vec3> TrustedFocus;
 			std::vector<glm::vec3> ResolvedFocus;
 			std::set<ObjectId> RelevantSpatialRoots;
-			PeerRelevanceSelection Selection;
+			std::vector<ObjectId> RuntimeCharacterCandidates;
+			std::shared_ptr<const PeerRelevanceSelection> Selection = std::make_shared<const PeerRelevanceSelection>();
 			std::uint64_t LastUpdateTick = 0;
+			std::uint64_t WorldRevision = 0;
+			std::uint64_t EvaluationPass = 0;
+			std::uint64_t PendingSinceTick = 0;
 			bool Dirty = true;
-			bool SelectionEvaluated = false;
+			bool CriticalDirty = false;
 		};
 
 		std::shared_ptr<Instance> SourceRoot;
@@ -113,6 +120,15 @@ namespace gargantuan::network {
 		SignalConnection::Pointer DescendantAdded;
 		SignalConnection::Pointer DescendantRemoved;
 		ReplicationRelevanceMetrics Metrics;
+		// No retained object result or peer pointer: cursors are full connection identities.
+		ConnectionId OrdinaryCursor;
+		ConnectionId CriticalCursor;
+		std::uint64_t WorldRevision = 1;
+		std::uint64_t EvaluationPass = 1;
+		std::uint64_t NextWorkTick = 0;
+		std::uint64_t LastSimulationTick = 0;
+		std::size_t EvaluationsThisTick = 0;
+		bool WorldDirty = false;
 		bool Healthy = true;
 		std::string Failure;
 
@@ -207,7 +223,7 @@ namespace gargantuan::network {
 				Fail("Spatial object has invalid authoritative bounds");
 				return false;
 			}
-			SpatialEntry Entry{.Object = Object};
+			SpatialEntry Entry{.Object = Object, .CharacterRoot = static_cast<bool>(std::dynamic_pointer_cast<Character>(Object))};
 			Entry.Members.insert(Id);
 			const auto Status = Spatial.Register(Id, {Spatial.GetDefaultSpace(), *Pose}, *Bounds);
 			if (Status != SpatialRuntimeProjectionStatus::Success) {
@@ -264,10 +280,8 @@ namespace gargantuan::network {
 				GlobalObjects.insert(Id);
 				ObjectLocations.emplace(Id, ObjectLocation{});
 			}
-			for (auto &[Connection, Peer] : Peers) {
-				(void)Connection;
-				Peer.Dirty = true;
-			}
+			WorldDirty = true;
+			NextWorkTick = 0;
 		}
 
 		void UnregisterObject(ObjectId Object) {
@@ -292,11 +306,8 @@ namespace gargantuan::network {
 			}
 			ObjectLocations.erase(Location);
 			Metrics.SpatialEntries = SpatialObjects.size();
-			for (auto &[Connection, Peer] : Peers) {
-				(void)Connection;
-				Peer.RelevantSpatialRoots.erase(Object);
-				Peer.Dirty = true;
-			}
+			WorldDirty = true;
+			NextWorkTick = 0;
 		}
 
 		void UpdateSpatialPosition(ObjectId Object) {
@@ -332,6 +343,7 @@ namespace gargantuan::network {
 		}
 
 		bool Query(std::span<const glm::vec3> Focus) {
+			runtime_detail::WorkScope Work(runtime_detail::WorkPhase::RelevanceQuery);
 			std::array<SpatialRegionQueryVolume, MaximumReplicationFocusPoints> Volumes;
 			for (std::size_t Index = 0; Index < Focus.size(); ++Index)
 				Volumes[Index] = {
@@ -340,6 +352,7 @@ namespace gargantuan::network {
 					.Radius = Configuration.LeaveRadius,
 				};
 			const auto Status = Spatial.Query(std::span(Volumes).first(Focus.size()), QueryScratch);
+			runtime_detail::RecordWorkUnits(runtime_detail::WorkPhase::RelevanceQuery, QueryScratch.Candidates.size());
 			if (Status == SpatialRegionStatus::Success) return true;
 			FailSpatial("Replication region candidate query", Status);
 			return false;
@@ -354,24 +367,39 @@ namespace gargantuan::network {
 		}
 
 		bool BuildSelection(PeerState &Peer) {
+			runtime_detail::WorkScope Work(runtime_detail::WorkPhase::RelevanceSelection);
 			std::set<ObjectId> Required;
 			std::set<ObjectId> Desired = GlobalObjects;
+			runtime_detail::RecordWorkUnits(runtime_detail::WorkPhase::RelevanceSelection, GlobalObjects.size());
 			if (Peer.LocalPlayer.IsValid()) Required.insert(Peer.LocalPlayer);
+			Peer.RuntimeCharacterCandidates.clear();
 			for (const auto RootId : Peer.RelevantSpatialRoots) {
+				runtime_detail::CountWork(runtime_detail::WorkCounter::RelevanceRoots);
 				auto Root = SpatialObjects.find(RootId);
 				if (Root == SpatialObjects.end()) continue;
+				if (Root->second.CharacterRoot) Peer.RuntimeCharacterCandidates.push_back(RootId);
+				runtime_detail::RecordWorkUnits(runtime_detail::WorkPhase::RelevanceSelection, Root->second.Members.size());
 				Desired.insert(Root->second.Members.begin(), Root->second.Members.end());
+				runtime_detail::CountWork(runtime_detail::WorkCounter::RelevanceMembers, Root->second.Members.size());
 				if (RootId == Peer.OwnerCharacter)
 					Required.insert(Root->second.Members.begin(), Root->second.Members.end());
 			}
 			Desired.insert(Required.begin(), Required.end());
+			runtime_detail::RecordWorkUnits(runtime_detail::WorkPhase::RelevanceSelection, Required.size());
+			runtime_detail::RecordWorkDisposition(runtime_detail::WorkPhase::RelevanceSelection, true, Desired.size());
 			if (Desired.size() > Configuration.MaximumDesiredObjectsPerPeer ||
 				Required.size() > Configuration.MaximumDesiredObjectsPerPeer) {
 				Fail("Peer relevance selection exceeds its object limit");
 				return false;
 			}
-			Peer.Selection.RequiredObjects.assign(Required.begin(), Required.end());
-			Peer.Selection.DesiredObjects.assign(Desired.begin(), Desired.end());
+			if (!std::ranges::equal(Required, Peer.Selection->RequiredObjects) ||
+				!std::ranges::equal(Desired, Peer.Selection->DesiredObjects)) {
+				runtime_detail::WorkScope CommitWork(runtime_detail::WorkPhase::RelevanceCommit);
+				PeerRelevanceSelection Selection;
+				Selection.RequiredObjects.assign(Required.begin(), Required.end());
+				Selection.DesiredObjects.assign(Desired.begin(), Desired.end());
+				Peer.Selection = std::make_shared<const PeerRelevanceSelection>(std::move(Selection));
+			}
 			return true;
 		}
 
@@ -380,34 +408,91 @@ namespace gargantuan::network {
 			for (const auto &[Connection, Peer] : Peers) {
 				(void)Connection;
 				SaturatingIncrement(
-					Metrics.DesiredObjects, static_cast<std::uint64_t>(Peer.Selection.DesiredObjects.size())
+					Metrics.DesiredObjects, static_cast<std::uint64_t>(Peer.Selection->DesiredObjects.size())
 				);
 			}
 		}
 
-		bool UpdatePeer(PeerState &Peer, std::uint64_t SimulationTick, bool Force) {
-			if (!Force && !Peer.Dirty && Peer.LastUpdateTick != 0 && SimulationTick >= Peer.LastUpdateTick &&
-				SimulationTick - Peer.LastUpdateTick < Configuration.UpdateIntervalTicks)
-				return true;
-			Peer.SelectionEvaluated = true;
+		bool NeedsEvaluation(const PeerState &Peer, std::uint64_t SimulationTick) const {
+			return Peer.Dirty || Peer.WorldRevision != WorldRevision || Peer.LastUpdateTick == 0 ||
+				SimulationTick < Peer.LastUpdateTick ||
+				SimulationTick - Peer.LastUpdateTick >= Configuration.UpdateIntervalTicks;
+		}
+
+		bool UpdatePeer(PeerState &Peer, std::uint64_t SimulationTick) {
+			runtime_detail::WorkScope PeerWork(runtime_detail::WorkPhase::RelevancePeer);
+			runtime_detail::CountWork(runtime_detail::WorkCounter::RelevancePeers);
 			auto Focus = ResolveFocus(Peer);
-			Peer.ResolvedFocus = Focus;
 			if (Focus.empty())
 				QueryScratch.Clear();
 			else if (!Query(Focus))
 				return false;
+			auto FinishEvaluation = [&] {
+				runtime_detail::WorkScope CommitWork(runtime_detail::WorkPhase::RelevanceCommit);
+				Peer.ResolvedFocus = std::move(Focus);
+				Peer.LastUpdateTick = SimulationTick;
+				Peer.WorldRevision = WorldRevision;
+				Peer.EvaluationPass = EvaluationPass;
+				Peer.PendingSinceTick = 0;
+				Peer.Dirty = false;
+				Peer.CriticalDirty = false;
+			};
+			// Check the same enter/leave predicates without constructing another set
+			// when the result is unchanged. Current projection/focus still determine
+			// relevance; the cached selection is reusable only at the same membership
+			// revision and with unchanged required owner lifecycle.
+			std::optional<runtime_detail::WorkScope> HysteresisWork;
+			HysteresisWork.emplace(runtime_detail::WorkPhase::RelevanceHysteresis);
+			// Query candidates and retained roots are ordered by full ObjectId.
+			// Join them monotonically instead of searching the root tree per candidate.
+			// This cursor is call-local; no iterator survives semantic mutation.
+			auto KnownRoot = Peer.RelevantSpatialRoots.begin();
+			const bool SameRoots =
+				(!Peer.OwnerCharacter.IsValid() || !SpatialObjects.contains(Peer.OwnerCharacter) ||
+					Peer.RelevantSpatialRoots.contains(Peer.OwnerCharacter)) &&
+				std::ranges::all_of(Peer.RelevantSpatialRoots, [&](ObjectId Existing) {
+					runtime_detail::CountWork(runtime_detail::WorkCounter::RelevanceOldRootVisits);
+					// A healthy projection store and SpatialObjects have the same root
+					// identities (transactional AddSpatialRoot / UnregisterObject).
+					const auto *Projection = Spatial.Get(Existing);
+					return Projection && (Existing == Peer.OwnerCharacter ||
+						WithinAnyFocus(Projection->Pose.LocalTransform.Position, Focus, Configuration.LeaveRadius));
+				}) && [&] {
+					for (const auto Candidate : QueryScratch.Candidates) {
+						runtime_detail::CountWork(runtime_detail::WorkCounter::RelevanceCandidateVisits);
+						while (KnownRoot != Peer.RelevantSpatialRoots.end() && *KnownRoot < Candidate) ++KnownRoot;
+						if (KnownRoot != Peer.RelevantSpatialRoots.end() && *KnownRoot == Candidate) continue;
+						const auto *Projection = Spatial.Get(Candidate);
+						if (Projection && WithinAnyFocus(Projection->Pose.LocalTransform.Position, Focus, Configuration.EnterRadius)) return false;
+					}
+					return true;
+				}();
+			if (SameRoots) {
+				HysteresisWork.reset();
+				runtime_detail::CountWork(runtime_detail::WorkCounter::RelevanceUnchangedRoots);
+				runtime_detail::CountWork(runtime_detail::WorkCounter::RelevanceNoopQueryCandidates, QueryScratch.Candidates.size());
+				const bool RebuildSelection = Peer.WorldRevision != WorldRevision || Peer.CriticalDirty || Peer.LastUpdateTick == 0;
+				SaturatingIncrement(Metrics.RelevanceEvaluations, static_cast<std::uint64_t>(QueryScratch.Candidates.size()));
+				if (RebuildSelection && !BuildSelection(Peer)) return false;
+				if (!RebuildSelection) {
+					SaturatingIncrement(Metrics.SelectionCacheHits);
+					runtime_detail::CountWork(runtime_detail::WorkCounter::RelevanceUnchangedSelection);
+				}
+				FinishEvaluation();
+				return true;
+			}
 			std::set<ObjectId> Relevant;
 			for (const auto Existing : Peer.RelevantSpatialRoots) {
-				auto Found = SpatialObjects.find(Existing);
-				const auto *Projection = Found == SpatialObjects.end() ? nullptr : Spatial.Get(Existing);
+				runtime_detail::CountWork(runtime_detail::WorkCounter::RelevanceOldRootVisits);
+				const auto *Projection = Spatial.Get(Existing);
 				if (Projection &&
 					(Existing == Peer.OwnerCharacter ||
 					 WithinAnyFocus(Projection->Pose.LocalTransform.Position, Focus, Configuration.LeaveRadius)))
 					Relevant.insert(Existing);
 			}
 			for (const auto Candidate : QueryScratch.Candidates) {
-				auto Found = SpatialObjects.find(Candidate);
-				const auto *Projection = Found == SpatialObjects.end() ? nullptr : Spatial.Get(Candidate);
+				runtime_detail::CountWork(runtime_detail::WorkCounter::RelevanceCandidateVisits);
+				const auto *Projection = Spatial.Get(Candidate);
 				if (Projection &&
 					WithinAnyFocus(Projection->Pose.LocalTransform.Position, Focus, Configuration.EnterRadius))
 					Relevant.insert(Candidate);
@@ -421,10 +506,35 @@ namespace gargantuan::network {
 			SaturatingIncrement(
 				Metrics.RelevanceEvaluations, static_cast<std::uint64_t>(QueryScratch.Candidates.size())
 			);
-			Peer.RelevantSpatialRoots = std::move(Relevant);
-			Peer.LastUpdateTick = SimulationTick;
-			Peer.Dirty = false;
-			return BuildSelection(Peer);
+			HysteresisWork.reset();
+			{
+				runtime_detail::WorkScope CommitWork(runtime_detail::WorkPhase::RelevanceCommit);
+				Peer.RelevantSpatialRoots = std::move(Relevant);
+			}
+			if (!BuildSelection(Peer)) return false;
+			FinishEvaluation();
+			return true;
+		}
+
+		bool ProcessPeers(std::uint64_t SimulationTick, std::size_t &Remaining, bool CriticalOnly) {
+			if (Peers.empty()) return true;
+			auto &Cursor = CriticalOnly ? CriticalCursor : OrdinaryCursor;
+			auto Current = Peers.upper_bound(Cursor);
+			for (std::size_t Visited = 0; Visited < Peers.size() && Remaining != 0; ++Visited) {
+				if (Current == Peers.end()) Current = Peers.begin();
+				auto &[Connection, Peer] = *Current++;
+				Cursor = Connection;
+				if ((CriticalOnly && !Peer.CriticalDirty) || !NeedsEvaluation(Peer, SimulationTick)) continue;
+				if (SimulationTick >= Peer.PendingSinceTick && Peer.PendingSinceTick != 0)
+					Metrics.MaximumPendingAgeTicks = std::max(Metrics.MaximumPendingAgeTicks,
+						SimulationTick - Peer.PendingSinceTick);
+				if (!UpdatePeer(Peer, SimulationTick)) return false;
+				--Remaining;
+				++EvaluationsThisTick;
+				SaturatingIncrement(Metrics.PeerEvaluations);
+				++Metrics.PeerEvaluationsLastUpdate;
+			}
+			return true;
 		}
 	};
 
@@ -450,17 +560,21 @@ namespace gargantuan::network {
 		auto [Iterator, Added] = State->Peers.emplace(
 			Connection, Implementation::PeerState{.LocalPlayer = LocalPlayer, .OwnerCharacter = OwnerCharacter}
 		);
-		if (!Added || !State->UpdatePeer(Iterator->second, 0, true)) {
+		if (!Added || !State->UpdatePeer(Iterator->second, 0)) {
 			State->Peers.erase(Connection);
 			return false;
 		}
 		State->RefreshDesiredObjectGauge();
+		State->NextWorkTick = 0;
 		return true;
 	}
 
 	bool ReplicationRelevance::RemovePeer(ConnectionId Connection) {
 		const bool Removed = State->Peers.erase(Connection) != 0;
-		if (Removed) State->RefreshDesiredObjectGauge();
+		if (Removed) {
+			State->RefreshDesiredObjectGauge();
+			State->NextWorkTick = 0;
+		}
 		return Removed;
 	}
 
@@ -471,6 +585,8 @@ namespace gargantuan::network {
 		if (Peer->second.OwnerCharacter == Character) return true;
 		Peer->second.OwnerCharacter = Character;
 		Peer->second.Dirty = true;
+		Peer->second.CriticalDirty = true;
+		State->NextWorkTick = 0;
 		return true;
 	}
 
@@ -479,37 +595,88 @@ namespace gargantuan::network {
 		if (Peer == State->Peers.end() || FocusPoints.size() > MaximumReplicationFocusPoints ||
 			std::ranges::any_of(FocusPoints, [](glm::vec3 Point) { return !Finite(Point); }))
 			return false;
+		if (std::ranges::equal(Peer->second.TrustedFocus, FocusPoints)) return true;
 		Peer->second.TrustedFocus.assign(FocusPoints.begin(), FocusPoints.end());
 		Peer->second.Dirty = true;
+		State->NextWorkTick = 0;
 		return true;
 	}
 
 	bool ReplicationRelevance::Update(std::uint64_t SimulationTick) {
+		runtime_detail::WorkScope Work(runtime_detail::WorkPhase::Relevance);
 		if (!State->Healthy || SimulationTick == 0) return false;
+		if (State->EvaluationPass == std::numeric_limits<std::uint64_t>::max() ||
+			(State->WorldDirty && State->WorldRevision == std::numeric_limits<std::uint64_t>::max())) {
+			State->Fail("Relevance revision exhausted");
+			return false;
+		}
+		++State->EvaluationPass;
+		State->Metrics.PeerEvaluationsLastUpdate = 0;
+		if (SimulationTick != State->LastSimulationTick) State->EvaluationsThisTick = 0;
 		const auto Started = std::chrono::steady_clock::now();
-		State->RefreshDirtySpatialPositions();
+		auto RecordDuration = [&] {
+			SaturatingIncrement(State->Metrics.UpdateCpuNanoseconds, static_cast<std::uint64_t>(
+				std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - Started).count()));
+		};
+		runtime_detail::MeasureWork(runtime_detail::WorkPhase::SpatialUpdate,
+			[&] { State->RefreshDirtySpatialPositions(); });
 		if (!State->Healthy) return false;
+		if (State->WorldDirty) {
+			++State->WorldRevision;
+			State->WorldDirty = false;
+		}
+		if (SimulationTick >= State->LastSimulationTick && SimulationTick < State->NextWorkTick) {
+			State->LastSimulationTick = SimulationTick;
+			RecordDuration();
+			return true; // No peer/world scan, queue allocation, or selection copy on the idle path.
+		}
+		State->LastSimulationTick = SimulationTick;
 		for (auto &[Connection, Peer] : State->Peers) {
 			(void)Connection;
-			Peer.SelectionEvaluated = false;
+			if (State->NeedsEvaluation(Peer, SimulationTick) && Peer.PendingSinceTick == 0)
+				Peer.PendingSinceTick = SimulationTick;
 		}
-		for (auto &[Connection, Peer] : State->Peers) {
+		// Reserve at most a quarter for prompt owner-lifecycle changes. The ordinary
+		// rotating pass always retains service, including under sustained critical work.
+		const auto Available = State->Configuration.MaximumPeerEvaluationsPerTick - State->EvaluationsThisTick;
+		auto CriticalRemaining = std::min(Available,
+			std::max<std::size_t>(1, State->Configuration.MaximumPeerEvaluationsPerTick / 4));
+		if (!State->ProcessPeers(SimulationTick, CriticalRemaining, true)) return false;
+		auto Remaining = State->Configuration.MaximumPeerEvaluationsPerTick - State->EvaluationsThisTick;
+		if (!State->ProcessPeers(SimulationTick, Remaining, false)) return false;
+		State->Metrics.PeerEvaluationsHighWater = std::max(
+			State->Metrics.PeerEvaluationsHighWater, static_cast<std::uint64_t>(State->EvaluationsThisTick));
+		State->Metrics.DeferredPeers = 0;
+		State->Metrics.OldestPendingAgeTicks = 0;
+		State->NextWorkTick = std::numeric_limits<std::uint64_t>::max();
+		for (const auto &[Connection, Peer] : State->Peers) {
 			(void)Connection;
-			if (!State->UpdatePeer(Peer, SimulationTick, false)) return false;
+			if (State->NeedsEvaluation(Peer, SimulationTick)) {
+				++State->Metrics.DeferredPeers;
+				State->NextWorkTick = SimulationTick;
+				State->Metrics.OldestPendingAgeTicks = std::max(State->Metrics.OldestPendingAgeTicks,
+					SimulationTick >= Peer.PendingSinceTick ? SimulationTick - Peer.PendingSinceTick : 0);
+			} else {
+				auto Due = Peer.LastUpdateTick;
+				SaturatingIncrement(Due, State->Configuration.UpdateIntervalTicks);
+				State->NextWorkTick = std::min(State->NextWorkTick, Due);
+			}
 		}
+		State->Metrics.DeferredPeersHighWater = std::max(State->Metrics.DeferredPeersHighWater, State->Metrics.DeferredPeers);
+		State->Metrics.MaximumPendingAgeTicks = std::max(State->Metrics.MaximumPendingAgeTicks, State->Metrics.OldestPendingAgeTicks);
 		State->RefreshDesiredObjectGauge();
-		SaturatingIncrement(
-			State->Metrics.UpdateCpuNanoseconds,
-			static_cast<std::uint64_t>(
-				std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - Started).count()
-			)
-		);
+		RecordDuration();
 		return State->Healthy;
 	}
 
 	const PeerRelevanceSelection *ReplicationRelevance::GetSelection(ConnectionId Connection) const {
 		auto Peer = State->Peers.find(Connection);
-		return Peer == State->Peers.end() ? nullptr : &Peer->second.Selection;
+		return Peer == State->Peers.end() ? nullptr : Peer->second.Selection.get();
+	}
+
+	std::shared_ptr<const PeerRelevanceSelection> ReplicationRelevance::GetSelectionSnapshot(ConnectionId Connection) const {
+		auto Peer = State->Peers.find(Connection);
+		return Peer == State->Peers.end() ? nullptr : Peer->second.Selection;
 	}
 
 	std::span<const glm::vec3> ReplicationRelevance::GetResolvedFocus(ConnectionId Connection) const {
@@ -518,14 +685,21 @@ namespace gargantuan::network {
 										  : std::span<const glm::vec3>{Peer->second.ResolvedFocus};
 	}
 
+	std::span<const ObjectId> ReplicationRelevance::GetRuntimeCharacterCandidates(ConnectionId Connection) const {
+		const auto Peer = State->Peers.find(Connection);
+		return Peer == State->Peers.end() ? std::span<const ObjectId>{}
+			: std::span<const ObjectId>{Peer->second.RuntimeCharacterCandidates};
+	}
+
 	bool ReplicationRelevance::IsRuntimeRelevant(ConnectionId Connection, ObjectId Object) const {
 		auto Peer = State->Peers.find(Connection);
-		return Peer != State->Peers.end() && Peer->second.RelevantSpatialRoots.contains(Object);
+		return Peer != State->Peers.end() && State->SpatialObjects.contains(Object) &&
+			Peer->second.RelevantSpatialRoots.contains(Object);
 	}
 
 	bool ReplicationRelevance::WasSelectionEvaluated(ConnectionId Connection) const {
 		auto Peer = State->Peers.find(Connection);
-		return Peer != State->Peers.end() && Peer->second.SelectionEvaluated;
+		return Peer != State->Peers.end() && Peer->second.EvaluationPass == State->EvaluationPass;
 	}
 
 	bool ReplicationRelevance::IsHealthy() const {
@@ -538,6 +712,15 @@ namespace gargantuan::network {
 
 	ReplicationRelevanceMetrics ReplicationRelevance::GetMetrics() const {
 		auto Result = State->Metrics;
+		for (const auto &[Connection, Peer] : State->Peers) {
+			(void)Connection;
+			SaturatingIncrement(Result.CharacterCandidateBytes,
+				static_cast<std::uint64_t>(Peer.RuntimeCharacterCandidates.capacity() * sizeof(ObjectId)));
+		}
+		// Conservative padded storage bound for new fixed peer/cursor metadata.
+		// Existing semantic selections and spatial-index storage are not copied.
+		Result.StagingBytes = State->Peers.size() * (4 * sizeof(std::uint64_t)) +
+			2 * sizeof(ConnectionId) + 5 * sizeof(std::uint64_t) + sizeof(std::size_t);
 		const auto Spatial = State->Spatial.GetIndexMetrics();
 		Result.SpatialQueries = Spatial.RegionQueries;
 		Result.QueryRegions = Spatial.RegionsVisited;

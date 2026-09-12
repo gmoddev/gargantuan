@@ -1,11 +1,12 @@
 ---
 status: current
 owner: networking
-last_verified: 2026-09-06
+last_verified: 2026-09-11
 related_code:
   - include/gargantuan/network/ReplicationCoordinator.hpp
   - include/gargantuan/network/GameSession.hpp
   - src/network/ReplicationCoordinator.cpp
+  - src/network/ReplicationPlanning.hpp
   - src/network/GameSession.cpp
   - tests/ReplicationRelevanceTests.cpp
   - tests/GameSessionTests.cpp
@@ -16,8 +17,12 @@ related_adrs:
 
 # Replication foundation 3J
 
-Foundation 3J bounds server preparation and reliable submission of structural
-work after 3E has decided a peer's desired objects. It preserves 3I's immutable
+Foundation 3J bounds selected structural operations and reliable submission
+after 3E has decided a peer's desired objects. It does not bound all surrounding
+Desired/dependency/fixup inspection by itself. Runtime peers now use the separate,
+private dependency-complete continuation described in the measured
+[3L.3 planning checkpoint](ContentAvailabilityFoundation3L_3.md) before offering
+READY work to these unchanged selection limits. It preserves 3I's immutable
 authoritative templates, GRPL v1, peer materialization epochs, and 3E.1's
 reliable failure rules.
 
@@ -36,6 +41,28 @@ reliable failure rules.
 This is not the lossy newest-wins policy used by 3G. Budget exhaustion leaves a
 semantic transition pending. It does not make an object irrelevant, drop an
 operation, advance a peer cursor, or claim materialization.
+
+KI-007 in `KNOWN_ISSUES.md` records the formerly omitted accepted soft edge when
+a replacement precedes old-target removal. The current local correction tracks
+accepted native reference targets beside accepted ancestry and charges their
+clear/replacement work to removal groups. Current authoritative values alone are
+not sufficient. See the [3L.3 correctness gate](ContentAvailabilityFoundation3L_3.md)
+and validation ledger for exact-source results; no client validation, budget or
+authority is weakened.
+
+The subsequent call-local ordered planning lookup joins sorted Desired identities
+to catalog/accepted maps. At most eight iterator advances precede a tree-search
+fallback for each lookup. This bounds sparse lookup walking only, not total
+planning. No iterator survives the non-mutating pass and no candidate becomes
+accepted early. This remains the synchronous/reference path. Runtime continuation
+state instead validates immutable selection and catalog/accepted revisions at
+each service slice, and reacquires reference values by ObjectId after suspension.
+Only complete, lifecycle-valid, fully costed batches become READY. Incomplete
+scratch is neither Pending nor Known; READY is not acceptance. KI-007 never sees
+partial groups. The separate default 65,536 planning-step allowance, 2,048 peer
+slice, finite memory ceilings and cancellation rules do not raise any 3J budget.
+The 3L.3 ledger records improved reload tails, slower convergence and still-failing
+healthy service gates; bounded planning is not an end-to-end latency guarantee.
 
 ## Ownership and work limits
 
@@ -74,9 +101,13 @@ One peer owns:
 
 - the existing committed `ReplicationView`, `JournalCursor`, replication epoch,
   and next reliable sequence;
+- a sparse ObjectId-to-exclusive-journal-boundary map for accepted complete
+  publications whose represented state is ahead of that peer's journal cursor;
 - the current dependency-closed desired and required object sets;
 - one `PendingTransition` per current `Desired - Known` Enter or `Known -
   Desired` Leave;
+- accepted ancestry records with compact non-nil native reference targets from
+  the actual accepted frame; these are replica bookkeeping, not semantic truth;
 - critical and ordinary FIFO scheduling entries containing only ObjectId and a
   generation token; and
 - at most one bounded prepared commit while synchronous scheduler admission is
@@ -130,6 +161,27 @@ transition pass. Required same-frame nil/reference fixups consume work units
 alongside the object transitions that caused them. A group plus its fixups that
 cannot fit the peer quantum is detected as an explicit resource failure instead
 of overshooting the cap or remaining silently unserviceable forever.
+
+Old reference targets come from accepted object metadata, including peer-specific
+nil patches and accepted journal property updates, not the current catalog alone.
+Surviving referrers must receive a current available replacement or nullable nil
+in the same group before a target Leave. Unavailable hard replacements defer the
+Leave until existing prerequisite Enter work progresses. A surviving referrer's
+clear is one charged operation. Hard referrers also pending Leave join dependency
+closure; soft referrers may leave independently. If their departure can reduce a
+temporary oversized clear set to a legal group, selection defers the target and
+continues peer queue service. A genuinely oversized surviving-reference group
+retains the existing peer-local failure policy. No unbounded retry/debt queue or
+new semantic dependency graph is created.
+
+Accepted reference records are prepared with the frame and installed only at its
+matching scheduler acceptance. Parent-only updates preserve the references;
+reference-only updates preserve the ancestry journal watermark. Leave/destroy and
+peer/session teardown release them. Frozen canonical property pointers plus full
+ObjectIds cannot resolve to replacement Instance identities. Three fixed debug
+counters measure inspection/removal work; accepted ancestry logical bytes now also
+include the reference vector capacity. This finite representation does not close
+the separate whole-peer planning CPU bound.
 
 Dependency and current-revision validation occurs again when work is selected.
 Pending Enter work resolves the current 3I template, so property mutations while
@@ -220,7 +272,28 @@ stream of known-object updates can monopolize that peer's quantum.
 
 For an unknown pending-Enter object, journal property records are skipped and the
 cursor may advance because eventual Enter reconstructs the current complete 3I
-template. No per-peer historical property queue is required. For known objects,
+template. The converse scheduling order must also be safe: when Enter is accepted
+first, its prepared commit records the catalog's **prepare-time** exclusive
+journal boundary. Earlier records for that ObjectId are already represented by
+the complete publication and are skipped on subsequent bounded journal reads.
+Otherwise old Attributes/tags can roll current materialization backwards and
+bulk content repeats its initialization history. A newer catalog refresh by
+another peer before acceptance cannot move this captured boundary. Records at or
+after it and all unrelated objects keep their normal handling. Only exact
+scheduler acceptance installs the boundary; rejected preparation installs none.
+
+This is native server materialization bookkeeping, not a wire field, new
+scheduler, payload queue, relevance decision, or journal-cursor shortcut. Each
+map entry is one generation-bearing ObjectId plus one uint64 boundary, bounded
+to 65,536 current entries per peer; it contains no strings or snapshots. Entries
+are removed with the corresponding accepted Leave/destroy and all are released
+on peer/session destruction. Baselines whose cursor already represents the
+publication need no entry. Unchanged resident objects may retain this compact
+bookkeeping for their current materialization lifetime, never historical reload
+lifetimes. Maximum map payload is 65,536 times sizeof(pair<const ObjectId,
+uint64_t>), plus allocator/tree overhead; the validation failure is peer-local.
+
+No per-peer historical property queue is required. For already-known objects,
 the existing journal preserves ordered create/destroy/reparent/tag/attribute and
 other structural barriers; ordinary property values use current authoritative
 state where the established replication semantics permit coalescing. A peer that

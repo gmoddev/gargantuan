@@ -32,6 +32,38 @@
 
 namespace gargantuan::host {
 	namespace {
+#if defined(GARGANTUAN_WITH_GNS)
+		// Only constructed by the trusted bounded session-smoke mode. This observes
+		// ordinary sends unchanged; it has no queue, scheduling or authority policy.
+		class SessionSmokeTransport final : public network::IGameTransport {
+			std::shared_ptr<network::IGameTransport> Delegate;
+			std::uint32_t ApplicationTraces = 0;
+			std::uint32_t StructuralTraces = 0;
+		  public:
+			explicit SessionSmokeTransport(std::shared_ptr<network::IGameTransport> Value) : Delegate(std::move(Value)) {}
+			network::TransportOperationResult Start(const network::TransportStartConfiguration &Value) override { return Delegate->Start(Value); }
+			network::TransportOperationResult Stop(network::DisconnectInfo Value) override { return Delegate->Stop(std::move(Value)); }
+			network::TransportOperationResult Disconnect(network::ConnectionId Connection, network::DisconnectInfo Value) override { return Delegate->Disconnect(Connection, std::move(Value)); }
+			std::size_t PollEvents(std::span<network::TransportEvent> Output) override { return Delegate->PollEvents(Output); }
+			std::optional<std::size_t> GetAvailableDatagramBytes(network::ConnectionId Connection) const override { return Delegate->GetAvailableDatagramBytes(Connection); }
+			std::optional<network::NetworkStatistics> GetStatistics(network::ConnectionId Connection) const override { return Delegate->GetStatistics(Connection); }
+			network::TransportOperationResult Send(const network::NetworkMessageIntent &Message) override {
+				const bool Structural = Message.Traffic() == network::TrafficClass::StructuralReplication;
+				const bool Application = Message.Traffic() == network::TrafficClass::ReliableApplication;
+				auto &Count = Structural ? StructuralTraces : ApplicationTraces;
+				if ((!Structural && !Application) || Count >= 256) return Delegate->Send(Message);
+				++Count;
+				const auto Before = Delegate->GetStatistics(Message.Destination());
+				const auto Result = Delegate->Send(Message);
+				std::cout << "[Content:TransportSend] monotonic_us="
+					<< std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch()).count()
+					<< " structural=" << Structural << " bytes=" << Message.Payload().size()
+					<< " queued_reliable_before=" << (Before && Before->QueuedReliableBytes ? *Before->QueuedReliableBytes : 0)
+					<< " accepted=" << Result.Succeeded() << '\n';
+				return Result;
+			}
+		};
+#endif
 		volatile std::sig_atomic_t StopRequested = 0;
 
 		void RequestStop(int) {
@@ -233,6 +265,9 @@ namespace gargantuan::host {
 		auto Payload = BootstrapPackagedRuntime(PackageRoot, RuntimeRoot, "GargantuanServer", BootstrapExitCode);
 		if (!Payload) return BootstrapExitCode;
 
+		// These owners also outlive the catch handler. Engine::Destroy borrows
+		// Renderer, and GameSession::Stop borrows Engine during exception cleanup.
+		std::unique_ptr<HeadlessRenderer> Renderer;
 		std::unique_ptr<Engine> Runtime;
 		std::unique_ptr<network::GameSession> Session;
 		try {
@@ -240,7 +275,7 @@ namespace gargantuan::host {
 			const auto HostStartupUnixMilliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(
 				std::chrono::system_clock::now().time_since_epoch()).count();
 			auto World = PackageBuilder::LoadWorld(*Payload, PackageRoot);
-			HeadlessRenderer Renderer(Vector2(320, 180));
+			Renderer = std::make_unique<HeadlessRenderer>(Vector2(320, 180));
 			std::optional<ContentAvailabilityConfiguration> Content;
 			const bool IsNodeProvider = std::holds_alternative<NodeServerContentConfiguration>(HostConfiguration.Content);
 			ContentResidencyMode ContentMode = ContentResidencyMode::FullyResident;
@@ -308,7 +343,7 @@ namespace gargantuan::host {
 			const auto ContentBootstrapStarted = std::chrono::steady_clock::now();
 			Runtime = std::make_unique<Engine>(
 				World,
-				&Renderer,
+				Renderer.get(),
 				[](std::string Code, std::string Message) {
 					if (Code == "Information") return;
 					std::cerr << "[Runtime:Server] [" << Code << "] " << Message << '\n';
@@ -344,8 +379,10 @@ namespace gargantuan::host {
 			}
 #if defined(GARGANTUAN_WITH_GNS)
 			if (BindEndpoint) {
+				std::shared_ptr<network::IGameTransport> Transport = std::make_shared<network::GameNetworkingSocketsTransport>();
+				if (SessionSmoke) Transport = std::make_shared<SessionSmokeTransport>(std::move(Transport));
 				Session = std::make_unique<network::GameSession>(
-					std::make_shared<network::GameNetworkingSocketsTransport>(),
+					std::move(Transport),
 					network::GameSessionConfiguration{
 						.Role = network::GameSessionRole::Server,
 						.Endpoint = *BindEndpoint,
@@ -419,9 +456,17 @@ namespace gargantuan::host {
 			if ((!ContentLifecycleKey.empty() || !StopInFlightKey.empty()) && !Runtime->Content)
 				throw std::runtime_error("trusted content smoke requires package content availability");
 			auto TickDeadline = std::chrono::steady_clock::now();
+			auto PreviousTickStarted = TickDeadline;
+			auto PreviousSessionMetrics = network::GameSessionMetrics{};
+			std::uint32_t ProfileTicks = 0;
+			if (SessionSmoke)
+				std::cout << "[Runtime:ServerFrame] unix_us,tick,interval_ns,poll_ns,engine_ns,session_ns,encode_ns,relevance_ns,materialize_ns,selected,committed,pending,wire_bytes\n";
 			while (Runtime->ProcessService->Alive && StopRequested == 0) {
+				const auto TickStarted = std::chrono::steady_clock::now();
 				if (Session) (void)Session->Poll();
+				const auto EngineStarted = std::chrono::steady_clock::now();
 				Runtime->Step();
+				const auto SessionStarted = std::chrono::steady_clock::now();
 				if (Session) {
 					Session->Step(Runtime->GetSimulationTick());
 					if (Session->GetStatus() == network::GameSessionStatus::Failed)
@@ -439,6 +484,24 @@ namespace gargantuan::host {
 							Runtime->ProcessService->MarkExit(0);
 					}
 				}
+				if (SessionSmoke && Session && ProfileTicks < 4096) {
+					const auto Now = std::chrono::steady_clock::now();
+					const auto Metrics = Session->GetMetrics();
+					auto Ns = [](auto Duration) { return std::chrono::duration_cast<std::chrono::nanoseconds>(Duration).count(); };
+					std::cout << "[Runtime:ServerFrame] "
+						<< std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch()).count()
+						<< ',' << ++ProfileTicks << ',' << Ns(TickStarted - PreviousTickStarted) << ',' << Ns(EngineStarted - TickStarted)
+						<< ',' << Ns(SessionStarted - EngineStarted) << ',' << Ns(Now - SessionStarted)
+						<< ',' << Metrics.BaselineEncodeCpuNanoseconds - PreviousSessionMetrics.BaselineEncodeCpuNanoseconds
+						<< ',' << Metrics.RelevanceCpuNanoseconds - PreviousSessionMetrics.RelevanceCpuNanoseconds
+						<< ',' << Metrics.MaterializationCpuNanoseconds - PreviousSessionMetrics.MaterializationCpuNanoseconds
+						<< ',' << Metrics.StructuralTransitionsSelected - PreviousSessionMetrics.StructuralTransitionsSelected
+						<< ',' << Metrics.StructuralTransitionsCommitted - PreviousSessionMetrics.StructuralTransitionsCommitted
+						<< ',' << Metrics.StructuralPendingEnters + Metrics.StructuralPendingLeaves
+						<< ',' << Metrics.StructuralBytesEncoded - PreviousSessionMetrics.StructuralBytesEncoded << '\n';
+					PreviousSessionMetrics = Metrics;
+				}
+				PreviousTickStarted = TickStarted;
 				if (!ContentLifecycleKey.empty()) {
 					const int ContentHoldTicks = ContentChurnCycles == 0 || CompletedContentCycles <= 1 ? 45 : 6;
 					switch (ContentStage) {

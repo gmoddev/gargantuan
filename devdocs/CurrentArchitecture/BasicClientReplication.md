@@ -148,9 +148,13 @@ protocol and never enters a `ReplicationFrame`.
 
 `ReplicaApplier` separates framing, semantic projection, validation, and live
 application. It first decodes a complete bounded frame, applies every operation
-to a candidate Snapshot semantic state, runs `ValidateSnapshotSemantic`, and
-performs a complete `LoadSnapshot` preflight. Only then may an incremental frame
-touch the live client graph.
+to a candidate Snapshot semantic state, and performs `LoadSnapshot` preflight,
+which begins with complete static semantic validation. It does not repeat that
+identical pass beforehand. A frame consisting solely of native property values
+exactly equal to the already validated semantic snapshot reuses that preflight;
+all live writes still execute to correct predicted/local presentation state.
+Any changed value or other operation requires complete candidate preflight.
+Only then may an incremental frame touch the live client graph.
 
 Incremental commit applies under journal suppression and deferred signals so
 observers cannot see an operation prefix. Existing client `Instance` identities
@@ -159,9 +163,14 @@ failure occurs after preflight, the prior validated semantic state is
 rematerialized before rejection. Baselines replace the replica only after a
 complete successful load. A failed group, schema mismatch, malformed frame,
 stale epoch, or sequence error leaves no partial candidate state published.
-Candidate lookup, hierarchy closure, and live replica removal use explicit
-identity/child indexes so bounded frames do not degrade into operation-count
-times object-count scans.
+Candidate lookup and hierarchy closure use explicit identity/child indexes.
+This does not bound the full apply path by changed operations: changed native
+values still copy/index/preflight the candidate world, the receiver reverse map
+is rebuilt, and `RemoveReplicaObject` scans the receiver mapping after each
+removal to prune destroyed descendants. Multiple removals can therefore incur
+operation-count times receiver-count work. Foundation 3L.3's fixed-increment
+scaling probe confirms the whole-world preflight cost; local transaction
+validation needs a separate correctness design before that work can be removed.
 
 ## Scheduler and transport integration
 
@@ -236,6 +245,14 @@ Foundation 3D composes this unchanged one-way structural layer into
 still bypasses structural commits, and engine runtime-module source is excluded
 from the replicated graph. This composition does not make client replica
 mutation an upstream replication path.
+
+Client session registries retire each materialized ObjectId once. A validated
+relationship setter can recursively destroy a Character subtree before later
+bounded structural Leave frames arrive. The post-apply sweep immediately retires
+the now-absent replicas; those later, normally validated Leave frames do not
+retire the same Remote/Character registrations a second time. Frame sequence,
+epoch, object-generation, and semantic validation still precede this bookkeeping.
+Replacement Characters use fresh identities and materialization lifetimes.
 
 Foundation 3E.1 preserves this structural protocol and corrects its production
 commit interpretation. `GameSession` checks both serialization and the inner

@@ -1,4 +1,5 @@
 #include "gargantuan/network/Scheduler.hpp"
+#include "../runtime/RuntimeWorkDiagnostics.hpp"
 #include "gargantuan/network/Transport.hpp"
 
 #include <algorithm>
@@ -119,9 +120,18 @@ namespace gargantuan::network {
 	}
 
 	struct NetworkScheduler::Implementation {
+		struct QueuedMessage : NetworkMessageIntent {
+			explicit QueuedMessage(NetworkMessageIntent Message)
+				: NetworkMessageIntent(std::move(Message)), Producer(runtime_detail::ActiveWorkProducer),
+				  EnqueuedNanoseconds(runtime_detail::ActiveWorkSample ? runtime_detail::WorkTimestamp() : 0) {}
+			runtime_detail::WorkProducer Producer;
+			std::uint64_t EnqueuedNanoseconds;
+		};
 		struct ConnectionQueue {
 			NetworkLimits Limits;
-			std::array<std::deque<NetworkMessageIntent>, 6> Queues;
+			std::array<std::deque<QueuedMessage>, 6> Queues;
+			std::array<std::size_t, runtime_detail::WorkProducerNames.size()> ProducerDepths{};
+			std::array<std::uint64_t, runtime_detail::WorkProducerNames.size()> LastServiceNanoseconds{};
 			SchedulerStatistics Statistics;
 			std::uint32_t ConsecutiveStructuralReplicationMessages = 0;
 			bool Active = true;
@@ -132,9 +142,17 @@ namespace gargantuan::network {
 
 		static void Queue(ConnectionQueue &Connection, NetworkMessageIntent Message) {
 			const auto Precedence = SchedulerTrafficPrecedence(Message.Traffic());
+			const auto Producer = runtime_detail::ActiveWorkProducer;
+			auto &Depth = Connection.ProducerDepths[static_cast<std::size_t>(Producer)];
+			if (auto *Sample = runtime_detail::CurrentProducerSample(Producer)) {
+				runtime_detail::AddWorkCounter(Sample->Enqueued, 1);
+				runtime_detail::AddWorkCounter(Sample->EnqueuedBytes, Message.Payload().size());
+				Sample->QueueDepthMaximum = std::max<std::uint64_t>(Sample->QueueDepthMaximum, Depth + 1);
+			}
 			if (Message.Delivery() == DeliveryMode::ReliableOrdered) ++Connection.Statistics.QueuedReliableMessages;
 			else ++Connection.Statistics.QueuedUnreliableMessages;
-			Connection.Queues[*Precedence].push_back(std::move(Message));
+			Connection.Queues[*Precedence].emplace_back(std::move(Message));
+			++Depth;
 			++Connection.Statistics.QueuedMessages;
 		}
 
@@ -147,6 +165,8 @@ namespace gargantuan::network {
 			Connection.Statistics.QueuedUnreliableMessages = 0;
 			Connection.Statistics.QueuedMessages = 0;
 			Connection.ConsecutiveStructuralReplicationMessages = 0;
+			Connection.ProducerDepths.fill(0);
+			Connection.LastServiceNanoseconds.fill(0);
 		}
 
 		static SchedulerSubmitResult RejectUnreliable(ConnectionQueue &Connection) {
@@ -211,6 +231,7 @@ namespace gargantuan::network {
 				const auto ExistingBytes = Existing->Payload().size();
 				if (Bytes > Connection.Limits.MaximumSendBytesPerTick -
 					(Connection.Statistics.QueuedUnreliableBytes - ExistingBytes)) return Implementation::RejectUnreliable(Connection);
+				--Connection.ProducerDepths[static_cast<std::size_t>(Existing->Producer)];
 				QueueValue.erase(Existing);
 				Connection.Statistics.QueuedUnreliableBytes -= ExistingBytes;
 				--Connection.Statistics.QueuedUnreliableMessages;
@@ -232,6 +253,7 @@ namespace gargantuan::network {
 	}
 
 	SchedulerFlushResult NetworkScheduler::Flush(ConnectionId ConnectionIdValue, SchedulerTickBudget Budget) {
+		runtime_detail::WorkScope Work(runtime_detail::WorkPhase::SchedulerFlush);
 		auto Iterator = State->Connections.find(ConnectionIdValue);
 		if (Iterator == State->Connections.end() || !Iterator->second.Active)
 			return {.Status = SchedulerFlushStatus::InvalidConnection};
@@ -250,13 +272,17 @@ namespace gargantuan::network {
 			auto &QueueValue = Connection.Queues[QueueIndex];
 			const auto &Message = QueueValue.front();
 			const auto Bytes = Message.Payload().size();
+			auto *ProducerSample = runtime_detail::CurrentProducerSample(Message.Producer);
+			if (ProducerSample) runtime_detail::AddWorkCounter(ProducerSample->Opportunities, 1);
 			if (Result.MessagesSubmitted == Budget.MaximumMessages || Bytes > Budget.MaximumBytes - Result.BytesSubmitted) {
+				if (ProducerSample) runtime_detail::AddWorkCounter(ProducerSample->BudgetDeferrals, 1);
 				Result.Status = SchedulerFlushStatus::BudgetLimited;
 				++Connection.Statistics.BudgetLimitedFlushes;
 				return Result;
 			}
 			auto Submission = State->Transport.Send(Message);
 			if (Submission.Status == TransportOperationStatus::WouldBlock) {
+				if (ProducerSample) runtime_detail::AddWorkCounter(ProducerSample->CapacityDeferrals, 1);
 				Result.Status = SchedulerFlushStatus::TransportBackpressured;
 				++Connection.Statistics.TransportBackpressureEvents;
 				return Result;
@@ -277,6 +303,20 @@ namespace gargantuan::network {
 				Connection.Statistics.QueuedUnreliableBytes -= Bytes;
 				--Connection.Statistics.QueuedUnreliableMessages;
 			}
+			const auto ProducerIndex = static_cast<std::size_t>(Message.Producer);
+			if (ProducerSample) {
+				const auto Now = runtime_detail::WorkTimestamp();
+				runtime_detail::AddWorkCounter(ProducerSample->Serviced, 1);
+				runtime_detail::AddWorkCounter(ProducerSample->ServicedBytes, Bytes);
+				if (Message.EnqueuedNanoseconds != 0)
+					ProducerSample->ServiceAgeMaximumNanoseconds = std::max(ProducerSample->ServiceAgeMaximumNanoseconds,
+						Now - std::min(Now, Message.EnqueuedNanoseconds));
+				auto &Last = Connection.LastServiceNanoseconds[ProducerIndex];
+				if (Last != 0) ProducerSample->ServiceGapMaximumNanoseconds = std::max(ProducerSample->ServiceGapMaximumNanoseconds,
+					Now - std::min(Now, Last));
+				Last = Now;
+			}
+			--Connection.ProducerDepths[ProducerIndex];
 			QueueValue.pop_front();
 			--Connection.Statistics.QueuedMessages;
 			++Connection.Statistics.MessagesSubmittedToTransport;

@@ -130,6 +130,15 @@ history, LRU, tombstone-value, or deferred-frame cache. `RemovePeer`, terminal
 peer failure, GameSession `Stop`, world destruction, and coordinator destruction
 release their owners normally.
 
+Foundation 3L.3 now performs retired-catalog reclamation through a shared
+4,096-identity tick budget. Private identity leases in the catalog wrapper and
+existing prepared/accepted ancestry records replace repeated peer-Known searches.
+After the last such owner disappears, a retired template may persist until that
+bounded sweep reaches it. The immutable 3I publication description still contains
+no peer/session state. See the current [3L.3 ownership and maintenance
+contract](ContentAvailabilityFoundation3L_3.md#implemented-ownership-proof),
+including memory accounting, finite tombstone ceiling and failure semantics.
+
 ## Transactional build and invalidation
 
 `RefreshCatalog` reads the existing scoped `ChangeJournal`. Replicated property,
@@ -172,7 +181,7 @@ template without sharing or modifying peer visibility state.
 The final wire bytes remain peer-specific and are encoded once per coordinator
 validation/submission path. They are not cached because frame epoch/sequence,
 selection, soft-reference visibility, batch shape, and scheduler outcome differ.
-The scheduler continues to own a copied contiguous payload after admission; it
+The scheduler continues to own a contiguous payload moved into its intent after admission; it
 never retains a pointer into a template or mutable DataModel object.
 
 An internal constructor switch disables prepared-template reuse and materializes

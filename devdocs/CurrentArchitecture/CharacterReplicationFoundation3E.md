@@ -53,6 +53,14 @@ position is the default focus.
 
 ## Policy and spatial lookup
 
+The measured [3L derivation slice](ReplicationDerivationAssessment3L.md) preserves
+these semantics while replacing duplicate root/projection lookups and per-candidate
+tree membership searches with a call-local ordered join. Every due evaluation
+still reads current positions and applies enter/leave hysteresis. Root membership
+revision alone is not sufficient to skip queries when other Characters move.
+Spatial queries remain Main-owned and mutate internal deduplication state; the
+assessment's pinned worker read boundary is a proposal, not current capability.
+
 Foundation 3H now supplies the renderer- and physics-independent canonical
 uniform region index behind this policy. A spatial root is a `Character`, or otherwise the nearest ancestor
 `BasePart`; its descendants share that root's membership. Objects without a
@@ -182,6 +190,12 @@ receiver's replica; the server Instance remains alive and may reenter. Server
 destruction retains tombstone structure only while a peer still knows the
 identity, allowing deterministic child-before-parent retirement without
 confusing unpublish with authoritative destruction.
+
+The later 3L.3 reclamation refinement retains that terminal structure through
+prepared/accepted identity leases and removes it with a bounded rotating sweep
+after the last owner releases it. This changes reclamation timing only, not
+Desired, Known, dependency closure or 3J acceptance; see
+[3L.3](ContentAvailabilityFoundation3L_3.md#implemented-ownership-proof).
 
 Off-interest journal records are skipped rather than queued. Reentry therefore
 publishes one fresh current snapshot and never replays the object's historical

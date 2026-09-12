@@ -2,6 +2,7 @@
 
 #include "gargantuan/network/Limits.hpp"
 #include "gargantuan/network/Outcome.hpp"
+#include "gargantuan/network/ReplicaApplier.hpp"
 #include "gargantuan/network/ReplicationCoordinator.hpp"
 #include "gargantuan/network/ReplicationRelevance.hpp"
 #include "gargantuan/network/Transport.hpp"
@@ -70,6 +71,14 @@ namespace gargantuan::network {
 		std::uint64_t ActionsPresented = 0;
 		std::uint64_t ActionPresentationStops = 0;
 		std::uint64_t ActionPresentationDeferrals = 0;
+		std::uint64_t ClientStructuralBytesReceived = 0;
+		std::uint64_t ClientStructuralDecodeNanoseconds = 0;
+		std::uint64_t ClientStructuralApplyNanoseconds = 0;
+		std::uint64_t ClientCharacterMessagesHandled = 0;
+		std::uint64_t ClientRemoteMessagesHandled = 0;
+		std::uint64_t ClientCharacterMaximumServiceGapNanoseconds = 0;
+		std::uint64_t ClientRemoteMaximumServiceGapNanoseconds = 0;
+		ReplicaMetrics ClientReplica;
 		std::uint64_t SessionAcceptanceCpuNanoseconds = 0;
 		std::uint64_t PlayerCreationCpuNanoseconds = 0;
 		std::uint64_t ServerGraphSynchronizationCpuNanoseconds = 0;
@@ -96,6 +105,17 @@ namespace gargantuan::network {
 		std::uint64_t SpatialQueryLimitFailures = 0;
 		std::uint64_t SpatialCandidateLimitFailures = 0;
 		std::uint64_t RelevanceCpuNanoseconds = 0;
+		std::uint64_t RelevancePeerEvaluations = 0;
+		std::uint64_t RelevanceSelectionCacheHits = 0;
+		std::uint64_t RelevancePeerEvaluationsHighWater = 0;
+		std::uint64_t RelevanceDeferredPeers = 0;
+		std::uint64_t RelevanceDeferredPeersHighWater = 0;
+		std::uint64_t RelevanceOldestPendingAgeTicks = 0;
+		std::uint64_t RelevanceMaximumPendingAgeTicks = 0;
+		std::uint64_t RelevanceStagingBytes = 0;
+		std::uint64_t RelevanceCharacterCandidateBytes = 0;
+		std::uint64_t DependencyPlanRebuilds = 0;
+		std::uint64_t DependencyPlanCacheHits = 0;
 		std::uint64_t MaterializedObjects = 0;
 		std::uint64_t MaterializedCharacters = 0;
 		std::uint64_t MaterializationBacklog = 0;
@@ -137,6 +157,37 @@ namespace gargantuan::network {
 		std::uint64_t StructuralCriticalOldestAgeTicks = 0;
 		std::uint64_t StructuralSelectionCpuNanoseconds = 0;
 		std::uint64_t StructuralMaximumTransitionsSelectedPerTick = 0;
+		std::uint64_t AcceptedAncestryObjects = 0;
+		std::uint64_t AcceptedAncestryLogicalBytes = 0;
+		std::uint64_t CatalogRetiredObjects = 0;
+		std::uint64_t CatalogRetiredHighWater = 0;
+		std::uint64_t CatalogRetirementExaminations = 0;
+		std::uint64_t CatalogRetirementMaximumTickExaminations = 0;
+		std::uint64_t CatalogRetirementReleases = 0;
+		std::uint64_t CatalogRetentionLogicalBytes = 0;
+		std::uint64_t CatalogReferenceIndexBytes = 0;
+		std::uint64_t PlanningWork = 0;
+		std::uint64_t PlanningMaximumTickWork = 0;
+		std::uint64_t PlanningServiceOpportunities = 0;
+		std::uint64_t PlanningMaximumServiceGapTicks = 0;
+		std::uint64_t PlanningMaximumPeerSlice = 0;
+		std::uint64_t PlanningResumes = 0;
+		std::uint64_t PlanningInvalidations = 0;
+		std::uint64_t PlanningReadyBatches = 0;
+		std::uint64_t PlanningRecords = 0;
+		std::uint64_t PlanningRecordsHighWater = 0;
+		std::uint64_t PlanningPeerRecordsHighWater = 0;
+		std::uint64_t PlanningCpuNanoseconds = 0;
+		std::uint64_t JournalRecordsExamined = 0;
+		std::uint64_t JournalRecordsPerTickHighWater = 0;
+		std::uint64_t JournalRecordsPerPeerTickHighWater = 0;
+		std::uint64_t JournalBudgetDeferrals = 0;
+		std::uint64_t JournalBacklogRecords = 0;
+		std::uint64_t JournalBacklogRecordsHighWater = 0;
+		// Age of a continuously nonempty peer backlog, not a per-record timestamp.
+		std::uint64_t JournalOldestBacklogEpisodeAgeTicks = 0;
+		std::uint64_t JournalMaximumBacklogEpisodeAgeTicks = 0;
+		std::uint64_t JournalStagingBytes = 0;
 		std::uint64_t CharacterImportanceEvaluations = 0;
 		std::uint64_t CharacterImportanceTierTransitions = 0;
 		std::uint64_t CharacterTemporaryPromotions = 0;

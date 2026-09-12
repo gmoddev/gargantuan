@@ -26,7 +26,8 @@ file(MAKE_DIRECTORY "${GARGANTUAN_WORKSPACE}")
 
 function(GargantuanServerPackageFailure MessageText)
 	file(REMOVE_RECURSE "${GARGANTUAN_WORKSPACE}")
-	message(FATAL_ERROR "${MessageText}")
+	string(CONCAT FailureText ${ARGV})
+	message(FATAL_ERROR "${FailureText}")
 endfunction()
 
 execute_process(
@@ -72,6 +73,22 @@ if(NOT GARGANTUAN_SERVER_RESULT EQUAL 0)
 		"Dedicated Server package smoke failed (${GARGANTUAN_SERVER_RESULT}): "
 		"${GARGANTUAN_SERVER_OUTPUT}${GARGANTUAN_SERVER_ERROR}"
 	)
+endif()
+
+# This error occurs after Engine construction, not in the CLI/config parser.
+# Exception cleanup must retain the renderer until Engine::Destroy completes.
+execute_process(
+	COMMAND "${GARGANTUAN_SERVER}" --startup-smoke --max-ticks 12
+		--content-residency on-demand --content-lifecycle-smoke workspace/nonexistent-unwind-regression
+	WORKING_DIRECTORY "${GARGANTUAN_WORKSPACE}"
+	RESULT_VARIABLE GARGANTUAN_UNWIND_RESULT
+	OUTPUT_VARIABLE GARGANTUAN_UNWIND_OUTPUT ERROR_VARIABLE GARGANTUAN_UNWIND_ERROR
+	TIMEOUT 60)
+if(NOT GARGANTUAN_UNWIND_RESULT EQUAL 7 OR
+	NOT "${GARGANTUAN_UNWIND_OUTPUT}${GARGANTUAN_UNWIND_ERROR}" MATCHES "trusted content smoke key is absent")
+	GargantuanServerPackageFailure(
+		"Dedicated Server exception cleanup failed (${GARGANTUAN_UNWIND_RESULT}): "
+		"${GARGANTUAN_UNWIND_OUTPUT}${GARGANTUAN_UNWIND_ERROR}")
 endif()
 
 file(REMOVE_RECURSE "${GARGANTUAN_WORKSPACE}")

@@ -245,27 +245,33 @@ end)
 	$Port = 40000 + ($PID % 1000)
 	$Endpoint = "127.0.0.1:$Port"
 	$ServerProcess = Start-RuntimeProcess -Executable $Server -WorkingDirectory $ServerPackageRoot -Arguments @('--bind', $Endpoint, '--session-smoke', '--max-ticks', '360')
+	# Smoke profiling can exceed redirected pipe capacity before either host
+	# exits. Drain both streams concurrently, as in the official Node vertical.
+	$ServerOutputRead = $ServerProcess.StandardOutput.ReadToEndAsync()
+	$ServerErrorRead = $ServerProcess.StandardError.ReadToEndAsync()
 	Start-Sleep -Milliseconds 300
 	$ClientArguments = @('--connect', $Endpoint, '--session-smoke', '--max-frames', '240')
 	if ($GraphicalClient -ne 'ON') {
 		$ClientArguments = @('--headless') + $ClientArguments
 	}
 	$ClientProcess = Start-RuntimeProcess -Executable $Player -WorkingDirectory $PlayerPackageRoot -Arguments $ClientArguments
+	$ClientOutputRead = $ClientProcess.StandardOutput.ReadToEndAsync()
+	$ClientErrorRead = $ClientProcess.StandardError.ReadToEndAsync()
 	if (-not $ClientProcess.WaitForExit(20000)) {
 		Stop-Process -Id $ClientProcess.Id -Force
 		throw 'Packaged game-session client timed out'
 	}
-	$ClientOutput = $ClientProcess.StandardOutput.ReadToEnd() + $ClientProcess.StandardError.ReadToEnd()
+	$ClientOutput = $ClientOutputRead.GetAwaiter().GetResult() + $ClientErrorRead.GetAwaiter().GetResult()
 	if ($ClientProcess.ExitCode -ne 0) {
-		$ClientDiagnostic = if ($ClientProcess.HasExited) { $ClientProcess.StandardError.ReadToEnd() } else { '' }
-		$ServerDiagnostic = if ($ServerProcess.HasExited) { $ServerProcess.StandardError.ReadToEnd() } else { '' }
+		$ClientDiagnostic = $ClientErrorRead.GetAwaiter().GetResult()
+		$ServerDiagnostic = if ($ServerProcess.HasExited) { $ServerErrorRead.GetAwaiter().GetResult() } else { '' }
 		throw "Packaged client session proof failed: client=$($ClientProcess.ExitCode) output=$ClientOutput clientError=$ClientDiagnostic serverError=$ServerDiagnostic"
 	}
 	if (-not $ServerProcess.WaitForExit(20000)) {
 		Stop-Process -Id $ServerProcess.Id -Force
 		throw 'Packaged game-session server timed out'
 	}
-	$ServerOutput = $ServerProcess.StandardOutput.ReadToEnd() + $ServerProcess.StandardError.ReadToEnd()
+	$ServerOutput = $ServerOutputRead.GetAwaiter().GetResult() + $ServerErrorRead.GetAwaiter().GetResult()
 	if ($ServerProcess.ExitCode -ne 0) {
 		throw "Packaged server session proof failed: server=$($ServerProcess.ExitCode) output=$ServerOutput"
 	}

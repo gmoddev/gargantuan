@@ -31,6 +31,7 @@ namespace gargantuan::network::detail {
 		[[nodiscard]] static bool VerifySpatialIndex(const GameSession &Session);
 		[[nodiscard]] static std::optional<SpatialCellAddress> GetSpatialCellAddress(const GameSession &Session, ObjectId Object);
 		[[nodiscard]] static CharacterNetworkMetrics GetCharacterMetrics(const GameSession &Session);
+		[[nodiscard]] static std::uint64_t GetReliableEventsAccepted(const GameSession &Session);
 		[[nodiscard]] static std::vector<ConnectionId> GetConnections(const GameSession &Session);
 	};
 }

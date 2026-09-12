@@ -1,4 +1,5 @@
 #include "gargantuan/network/CharacterNetwork.hpp"
+#include "../runtime/RuntimeWorkDiagnostics.hpp"
 
 #include "gargantuan/classes/KinematicCharacter.hpp"
 #include "gargantuan/classes/WorldRoot.hpp"
@@ -615,6 +616,9 @@ namespace gargantuan::network {
 	bool AuthoritativeCharacterNetwork::Queue(
 		ConnectionId Connection, const CharacterMessage &Message, StateChannelId Channel, bool Reliable
 	) {
+		runtime_detail::WorkProducerScope Producer(std::holds_alternative<CharacterActionResult>(Message)
+			? runtime_detail::WorkProducer::OwnerAction : Reliable ? runtime_detail::WorkProducer::CharacterReliable
+			: runtime_detail::WorkProducer::Gchr);
 		const auto EncodeStarted = std::chrono::steady_clock::now();
 		auto Encoded = EncodeCharacterMessage(Message);
 		SaturatingIncrement(
@@ -681,6 +685,8 @@ namespace gargantuan::network {
 	bool AuthoritativeCharacterNetwork::QueueStateFrame(
 		ConnectionId Connection, const CharacterStateFrame &Frame, StateChannelId Channel, bool Reliable
 	) {
+		runtime_detail::WorkProducerScope Producer(Reliable ? runtime_detail::WorkProducer::CharacterReliable :
+			runtime_detail::WorkProducer::Gchr);
 		if (!Reliable && !Channel.IsValid()) return false;
 		const auto EncodeStarted = std::chrono::steady_clock::now();
 		auto Encoded = EncodeCharacterMessage(CharacterMessage(Frame));
@@ -853,6 +859,7 @@ namespace gargantuan::network {
 	}
 
 	void AuthoritativeCharacterNetwork::Step(WorldRoot &World, std::uint64_t AuthoritativeTick) {
+		runtime_detail::WorkScope Work(runtime_detail::WorkPhase::CharacterSimulation);
 		if (AuthoritativeTick == 0) return;
 		LastAuthoritativeTick = AuthoritativeTick;
 		for (auto Iterator = Characters.begin(); Iterator != Characters.end();) {
@@ -867,6 +874,7 @@ namespace gargantuan::network {
 			}
 
 			for (std::size_t Index = 0; Index < State.PendingActionCount; ++Index) {
+				runtime_detail::WorkScope ActionWork(runtime_detail::WorkPhase::ActionService);
 				const auto &Request = State.PendingActions[Index];
 				const auto Selected = ActionPolicy ? ActionPolicy(*State.Controller, Request)
 												   : std::optional<std::uint32_t>(Request.RequestedActionToken);
@@ -959,6 +967,7 @@ namespace gargantuan::network {
 			}
 
 			if (State.ActiveAction) {
+				runtime_detail::WorkScope ActionWork(runtime_detail::WorkPhase::ActionRootMotion);
 				const auto Definition = Actions.find(State.ActiveAction->ActionToken);
 				if (Definition == Actions.end()) {
 					State.ActiveAction.reset();
@@ -1349,6 +1358,7 @@ namespace gargantuan::network {
 	}
 
 	void AuthoritativeCharacterNetwork::PublishStateFrames(std::uint64_t AuthoritativeTick) {
+		runtime_detail::WorkScope Work(runtime_detail::WorkPhase::CharacterPublication);
 		if (Peers.empty()) return;
 		SaturatingIncrement(Metrics.PublicationBudgetTicks);
 		SaturatingIncrement(
@@ -2009,6 +2019,9 @@ namespace gargantuan::network {
 	bool PredictedCharacterNetwork::Queue(
 		ConnectionId Connection, const CharacterMessage &Message, StateChannelId Channel, bool Reliable
 	) {
+		runtime_detail::WorkProducerScope Producer(std::holds_alternative<CharacterActionRequest>(Message)
+			? runtime_detail::WorkProducer::OwnerAction : Reliable ? runtime_detail::WorkProducer::CharacterReliable :
+			runtime_detail::WorkProducer::CharacterInput);
 		const auto EncodeStarted = std::chrono::steady_clock::now();
 		auto Encoded = EncodeCharacterMessage(Message);
 		SaturatingIncrement(

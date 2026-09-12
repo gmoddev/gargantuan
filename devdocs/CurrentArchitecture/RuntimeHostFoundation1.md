@@ -119,11 +119,31 @@ Offline Player remains single-process and needs neither Server nor Node.
 
 Player stops GameSession before Engine, then renderer and SDL. Server stops
 accepting/polling peers, stops and destroys GameSession, calls Engine::Destroy,
-and only then releases Engine. Engine stops ContentAvailability; that service
+and only then releases Engine. Both hosts declare the renderer owner before
+Engine and GameSession, outside their runtime `try` block, so the borrowed
+renderer remains alive during catch-handler cleanup as well as normal return.
+The 3L.2 exception audit found and corrected Server's former try-local renderer;
+normal shutdown had concealed a stack-use-after-scope on startup/runtime error.
+Engine stops ContentAvailability; that service
 invalidates demand/session generation, asks the provider to cancel active RPC
 contexts, joins its bounded worker queue, destroys Resident roots, and releases
 the provider/channel with Engine. SIGINT/SIGTERM request normal Server-loop
 exit. Existing session and content generations remain stale-work authority.
+
+The trusted `--session-smoke` diagnostic additionally records at most 4,096
+Server/Player tick samples and 256 structural plus 256 application send samples.
+An internal Server transport decorator forwards every operation unchanged and
+observes the existing backend queued-reliable-byte statistic. It creates no
+queue or scheduling policy. Traces contain timing, counts and byte sizes, never
+payloads, credentials or certificate material. Ordinary host mode constructs the
+transport directly. Fixture RPCs carry a monotonic timestamp as an ordinary
+return value to distinguish handler service from delayed reply delivery.
+Player samples additionally report successfully handled GCHR/Remote message
+counts and exact monotonic maximum intervals between those handler calls.
+These aggregate service counters have fixed per-session storage and no payload
+labels. A service gap includes a legitimate sender idle interval, so it is a
+starvation measure only when the fixture continuously offers corresponding
+traffic; it is not a claim that every handled GCHR frame changes a transform.
 
 Package, client, and Luau state cannot construct ServerHostConfiguration,
 choose a Node token/endpoint, select NetworkServer, or invoke trusted retry.

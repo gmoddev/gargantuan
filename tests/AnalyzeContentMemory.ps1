@@ -60,6 +60,8 @@ foreach ($File in Get-ChildItem -LiteralPath $InputDirectory -Filter '*-memory.c
 	$Steady = @($Samples | Where-Object { [double]$_.ElapsedMs -ge $WarmEnd -and [double]$_.ElapsedMs -lt $DrainStart })
 	$Drained = @($Samples | Where-Object { [double]$_.ElapsedMs -ge $DrainStart })
 	$Quarter = [math]::Max(1, [math]::Floor($Steady.Count / 4))
+	$HasPrivate = $Samples[0].PSObject.Properties.Name -contains 'PrivateBytes'
+	$HasHandles = $Samples[0].PSObject.Properties.Name -contains 'Handles'
 	$Result = [ordered]@{
 		Profile = $File.BaseName
 		Complete = $true
@@ -68,6 +70,7 @@ foreach ($File in Get-ChildItem -LiteralPath $InputDirectory -Filter '*-memory.c
 		PlayerComplete = $PlayerComplete
 		Cycles = $Cycles.Count
 		Units = 'bytes; slopes are bytes/second'
+		MemoryCounters = $(if ($HasPrivate) { 'RSS/WorkingSet and PrivateUsage' } else { 'RSS only; private memory unavailable' })
 		SteadyWindow = 'second half of completed churn cycles, before final drain'
 		ClockAlignment = $(if ($Aligned) { 'Host and sampler aligned by Unix-millisecond anchor; sampling interval approximately 100 ms' } else { 'Historical unaligned host/sampler clocks: steady window approximate; startup milestone RSS unavailable' })
 		HostToSamplerOffsetMs = $(if ($Aligned) { $Offset } else { $null })
@@ -77,15 +80,18 @@ foreach ($File in Get-ChildItem -LiteralPath $InputDirectory -Filter '*-memory.c
 		Rss = Get-Distribution @($Samples | ForEach-Object { [double]$_.WorkingSetBytes })
 		WarmupRss = Get-Distribution @($Samples | Where-Object { [double]$_.ElapsedMs -lt $WarmEnd } | ForEach-Object { [double]$_.WorkingSetBytes })
 		SteadyRss = Get-Distribution @($Steady | ForEach-Object { [double]$_.WorkingSetBytes })
-		SteadyPrivate = Get-Distribution @($Steady | ForEach-Object { [double]$_.PrivateBytes })
+		SteadyPrivate = $(if ($HasPrivate) { Get-Distribution @($Steady | ForEach-Object { [double]$_.PrivateBytes }) } else { $null })
 		DrainedRss = Get-Distribution @($Drained | ForEach-Object { [double]$_.WorkingSetBytes })
-		DrainedPrivate = Get-Distribution @($Drained | ForEach-Object { [double]$_.PrivateBytes })
+		DrainedPrivate = $(if ($HasPrivate) { Get-Distribution @($Drained | ForEach-Object { [double]$_.PrivateBytes }) } else { $null })
 		SteadyRssSlope = Get-Slope $Steady 'WorkingSetBytes'
-		SteadyPrivateSlope = Get-Slope $Steady 'PrivateBytes'
+		SteadyPrivateSlope = $(if ($HasPrivate) { Get-Slope $Steady 'PrivateBytes' } else { $null })
 		SteadyFirstQuarterRss = Get-Distribution @($Steady | Select-Object -First $Quarter | ForEach-Object { [double]$_.WorkingSetBytes })
 		SteadyLastQuarterRss = Get-Distribution @($Steady | Select-Object -Last $Quarter | ForEach-Object { [double]$_.WorkingSetBytes })
 		Threads = Get-Distribution @($Samples | ForEach-Object { [double]$_.Threads })
-		Handles = Get-Distribution @($Samples | ForEach-Object { [double]$_.Handles })
+		Handles = $(if ($HasHandles) { Get-Distribution @($Samples | ForEach-Object { [double]$_.Handles }) } else { $null })
+	}
+	if ($Samples[0].PSObject.Properties.Name -contains 'HighWaterBytes') {
+		$Result['ObservedProcessRssHighWaterBytes'] = ($Samples | Measure-Object -Property HighWaterBytes -Maximum).Maximum
 	}
 	foreach ($Milestone in @(@('PostBootstrapRss', $Bootstrap), @('PostFirstLoadRss', $FirstLoad))) {
 		if ($Aligned -and $Milestone[1].Success) {

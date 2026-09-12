@@ -1,4 +1,6 @@
 #include "gargantuan/network/GameSession.hpp"
+#include "../runtime/RuntimeWorkDiagnostics.hpp"
+#include "SessionSendAllowance.hpp"
 
 #include "GameSessionTestAccess.hpp"
 
@@ -40,6 +42,10 @@ namespace gargantuan::network {
 		constexpr std::size_t MaximumGameSessionPollEventsPerCall = 128;
 
 		enum class PeerPhase : std::uint8_t { TransportConnected, BootstrapPending, Accepted, Ready };
+
+		void SaturatingAdd(std::uint64_t &Value, std::uint64_t Amount) {
+			Value += std::min(Amount, std::numeric_limits<std::uint64_t>::max() - Value);
+		}
 
 		std::uint32_t FrameMagic(std::span<const std::byte> Bytes) {
 			if (Bytes.size() < 4) return 0;
@@ -113,10 +119,12 @@ namespace gargantuan::network {
 			std::set<ObjectId> MaterializedCharacters;
 			std::set<ObjectId> MaterializedRemotes;
 			std::set<ObjectId> RemoteMaterializedObjects;
-			bool SchedulerFlushedThisStep = false;
+			detail::SessionSendAllowance SendAllowance;
 			bool PreferPendingRelevance = true;
 			bool StructuralSubmittedThisStep = false;
 			std::size_t StructuralTransitionsConsumedThisStep = 0;
+			std::size_t JournalRecordsConsumedThisStep = 0;
+			std::optional<std::uint64_t> JournalPendingSinceTick;
 		};
 
 		std::shared_ptr<IGameTransport> Transport;
@@ -179,6 +187,17 @@ namespace gargantuan::network {
 
 		bool SpatialValidationRequested = false;
 		bool SpatialValidationPassed = false;
+		std::optional<std::chrono::steady_clock::time_point> LastClientCharacterService;
+		std::optional<std::chrono::steady_clock::time_point> LastClientRemoteService;
+
+		void RecordClientService(std::uint64_t &Count, std::uint64_t &MaximumGap,
+			std::optional<std::chrono::steady_clock::time_point> &Previous) {
+			const auto Now = std::chrono::steady_clock::now();
+			if (Previous) MaximumGap = std::max(MaximumGap, static_cast<std::uint64_t>(
+				std::chrono::duration_cast<std::chrono::nanoseconds>(Now - *Previous).count()));
+			if (Count != std::numeric_limits<std::uint64_t>::max()) ++Count;
+			Previous = Now;
+		}
 
 		bool InjectFailure(detail::GameSessionFailurePoint Point) {
 			if (FailurePoint != Point) return false;
@@ -374,6 +393,7 @@ namespace gargantuan::network {
 		}
 
 		bool ApplyServerRemoteMaterialization(ConnectionId Connection, const ReplicationFrame &Frame) {
+			runtime_detail::WorkScope Work(runtime_detail::WorkPhase::RemoteMaterialization);
 			auto Peer = Peers.find(Connection);
 			if (Peer == Peers.end() || Peer->second.Phase != PeerPhase::Ready || !Remotes) return true;
 			for (const auto &Operation : Frame.Operations)
@@ -388,6 +408,7 @@ namespace gargantuan::network {
 			if (!View) return false;
 			for (auto Iterator = Peer->second.RemoteMaterializedObjects.begin();
 				 Iterator != Peer->second.RemoteMaterializedObjects.end();) {
+				runtime_detail::CountWork(runtime_detail::WorkCounter::RemoteRegistryExamined);
 				if (View->Knows(*Iterator)) {
 					++Iterator;
 					continue;
@@ -504,6 +525,7 @@ namespace gargantuan::network {
 		}
 
 		bool QueueSession(ConnectionId Connection, const GameSessionMessage &Message, const NetworkLimits &Limits) {
+			runtime_detail::WorkProducerScope Producer(runtime_detail::WorkProducer::SessionControl);
 			auto Encoded = EncodeGameSessionMessage(Message);
 			if (!Encoded) return false;
 			auto Intent = MakeNetworkMessageIntent(
@@ -514,6 +536,8 @@ namespace gargantuan::network {
 
 		SerializationResult<SchedulerSubmitResult>
 		QueueStructuralFrame(const ReplicationFrame &Frame, ConnectionId Connection, const NetworkLimits &Limits) {
+			runtime_detail::WorkProducerScope Producer(Frame.Kind == ReplicationMessageKind::Baseline ? runtime_detail::WorkProducer::Bootstrap :
+				runtime_detail::WorkProducer::Structural);
 			if (InjectFailure(detail::GameSessionFailurePoint::StructuralSchedulerAdmission))
 				return SchedulerSubmitResult{
 					SchedulerSubmitStatus::ReliableBacklogExhausted,
@@ -659,7 +683,7 @@ namespace gargantuan::network {
 				Reject(Connection, DisconnectReason::ResourceExhaustion, "Server relevance selection is unavailable");
 				return;
 			}
-			auto Registered = Replication->RegisterPeerBounded(Connection, PeerValue.Replication, *Selection);
+			auto Registered = Replication->RegisterPeerPlanned(Connection, PeerValue.Replication, Relevance->GetSelectionSnapshot(Connection));
 			if (!Registered.Succeeded()) {
 				Reject(Connection, DisconnectReason::ResourceExhaustion, "Server replication registration failed");
 				return;
@@ -708,7 +732,12 @@ namespace gargantuan::network {
 		}
 
 		void ApplyReplication(const ReceivedMessageEvent &Message) {
+			const auto DecodeStarted = std::chrono::steady_clock::now();
 			auto Frame = DecodeReplicationFrame(Message.Payload);
+			const auto ApplyStarted = std::chrono::steady_clock::now();
+			Metrics.ClientStructuralBytesReceived += Message.Payload.size();
+			Metrics.ClientStructuralDecodeNanoseconds += static_cast<std::uint64_t>(
+				std::chrono::duration_cast<std::chrono::nanoseconds>(ApplyStarted - DecodeStarted).count());
 			if (!Frame) {
 				Reject(
 					Message.Connection, DisconnectReason::ProtocolViolation, "Malformed structural replication frame"
@@ -716,6 +745,8 @@ namespace gargantuan::network {
 				return;
 			}
 			auto Result = Replica.ApplyFrame(*Frame);
+			Metrics.ClientStructuralApplyNanoseconds += static_cast<std::uint64_t>(
+				std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - ApplyStarted).count());
 			if (!Result.Succeeded()) {
 				Reject(
 					Message.Connection,
@@ -746,7 +777,10 @@ namespace gargantuan::network {
 					if (std::dynamic_pointer_cast<RemoteBase>(ReplicaObject)) ClientRemoteObjects.insert(Object);
 				} else if (std::holds_alternative<UnpublishReplication>(Operation.Intent) ||
 						   std::holds_alternative<DestroyReplication>(Operation.Intent)) {
-					ClientKnownObjects.erase(Object);
+					// A validated property write (for example Player.Character = nil)
+					// can destroy a subtree before its later bounded Leave frames arrive.
+					// The post-apply sweep already retires those local registrations.
+					const bool WasKnown = ClientKnownObjects.erase(Object) != 0;
 					ClientCharacterObjects.erase(Object);
 					ClientRemoteObjects.erase(Object);
 					if (Prediction && ClientMaterializedCharacters.erase(Object) &&
@@ -757,7 +791,7 @@ namespace gargantuan::network {
 						});
 						return;
 					}
-					if (Remotes && !Remotes->MarkUnmaterialized(Message.Connection, Object)) {
+					if (Remotes && WasKnown && !Remotes->MarkUnmaterialized(Message.Connection, Object)) {
 						FailSession({
 							DisconnectReason::ResourceExhaustion,
 							"Client Remote unmaterialization registration failed",
@@ -949,16 +983,20 @@ namespace gargantuan::network {
 			if (Magic == CharacterMagic) {
 				if (Configuration.Role == GameSessionRole::Server)
 					(void)Authority->HandleTransportEvent(Event);
-				else
-					(void)Prediction->HandleTransportEvent(Event);
+				else if (Prediction->HandleTransportEvent(Event))
+					RecordClientService(Metrics.ClientCharacterMessagesHandled,
+						Metrics.ClientCharacterMaximumServiceGapNanoseconds, LastClientCharacterService);
 			} else if (Magic == RemoteMagic) {
-				(void)Remotes->HandleTransportEvent(Event);
+				if (Remotes->HandleTransportEvent(Event) && Configuration.Role == GameSessionRole::Client)
+					RecordClientService(Metrics.ClientRemoteMessagesHandled,
+						Metrics.ClientRemoteMaximumServiceGapNanoseconds, LastClientRemoteService);
 			} else {
 				Reject(Received.Connection, DisconnectReason::ProtocolViolation, "Unknown game-session protocol frame");
 			}
 		}
 
 		std::size_t Poll() {
+			runtime_detail::WorkScope Work(runtime_detail::WorkPhase::SessionPoll);
 			std::array<TransportEvent, MaximumGameSessionPollEventsPerCall> Buffer;
 			const auto Count = Transport->PollEvents(Buffer);
 			for (std::size_t Index = 0; Index < Count; ++Index) {
@@ -989,15 +1027,19 @@ namespace gargantuan::network {
 		}
 
 		void SynchronizeServerGraph() {
+			runtime_detail::WorkScope Work(runtime_detail::WorkPhase::GraphSynchronization);
 			if (!Runtime || !Authority || !Remotes || !Relevance) return;
 			const auto Started = std::chrono::steady_clock::now();
 			for (auto &[Connection, PeerValue] : Peers) {
 				if (PeerValue.Phase != PeerPhase::Ready) continue;
 				const auto *View = Replication->GetView(Connection);
 				if (!View) continue;
+				runtime_detail::CountWork(runtime_detail::WorkCounter::GraphPeers);
 				std::set<ObjectId> DesiredRemotes;
-				for (const auto Remote : ServerRemoteObjects)
+				for (const auto Remote : ServerRemoteObjects) {
+					runtime_detail::CountWork(runtime_detail::WorkCounter::GraphRemotes);
 					if (View->Knows(Remote)) DesiredRemotes.insert(Remote);
+				}
 				bool PeerHealthy = true;
 				for (const auto Remote : PeerValue.MaterializedRemotes)
 					if (!DesiredRemotes.contains(Remote) && !Remotes->MarkUnmaterialized(Connection, Remote))
@@ -1021,24 +1063,33 @@ namespace gargantuan::network {
 				PeerValue.MaterializedRemotes = std::move(DesiredRemotes);
 
 				std::set<ObjectId> DesiredCharacters;
-				for (const auto Character : ServerCharacters) {
+				for (const auto Character : Relevance->GetRuntimeCharacterCandidates(Connection)) {
+					runtime_detail::CountWork(runtime_detail::WorkCounter::GraphCharacters);
+					runtime_detail::RecordWorkUnits(runtime_detail::WorkPhase::GraphSynchronization);
+					// The typed list is only an inspection hint. Removal before this
+					// peer's next 3E evaluation cannot restore an old registration.
+					if (!ServerCharacters.contains(Character)) continue;
 					auto CharacterValue = std::dynamic_pointer_cast<KinematicCharacter>(
 						ObjectRegistry::Get().Lookup(Character)
 					);
 					auto RootPart = CharacterValue ? CharacterValue->GetRootPart() : std::nullopt;
-					if (View->Knows(Character) && Relevance->IsRuntimeRelevant(Connection, Character) && RootPart &&
-						View->Knows((*RootPart)->GetObjectId()))
+					const bool Materialized = View->Knows(Character) && Relevance->IsRuntimeRelevant(Connection, Character) && RootPart &&
+						View->Knows((*RootPart)->GetObjectId());
+					runtime_detail::CountWork(runtime_detail::WorkCounter::GraphKnownChecks);
+					if (!Materialized) runtime_detail::CountWork(runtime_detail::WorkCounter::GraphIrrelevant);
+					runtime_detail::RecordWorkDisposition(runtime_detail::WorkPhase::GraphSynchronization, Materialized);
+					if (Materialized)
 						DesiredCharacters.insert(Character);
 				}
 				for (const auto Character : PeerValue.MaterializedCharacters)
-					if (!DesiredCharacters.contains(Character) &&
-						!Authority->MarkUnmaterialized(Connection, Character)) {
-						PeerHealthy = false;
+					if (!DesiredCharacters.contains(Character)) {
+						runtime_detail::CountWork(runtime_detail::WorkCounter::GraphChanges);
+						if (!Authority->MarkUnmaterialized(Connection, Character)) PeerHealthy = false;
 					}
 				for (const auto Character : DesiredCharacters)
-					if (!PeerValue.MaterializedCharacters.contains(Character) &&
-						!Authority->MarkMaterialized(Connection, Character, CharacterStateChannel(Character))) {
-						PeerHealthy = false;
+					if (!PeerValue.MaterializedCharacters.contains(Character)) {
+						runtime_detail::CountWork(runtime_detail::WorkCounter::GraphChanges);
+						if (!Authority->MarkMaterialized(Connection, Character, CharacterStateChannel(Character))) PeerHealthy = false;
 					}
 				if (!PeerHealthy) {
 					PendingPeerFailures.try_emplace(
@@ -1212,17 +1263,20 @@ namespace gargantuan::network {
 		}
 
 		void Step(std::uint64_t SimulationTick) {
+			runtime_detail::WorkScope Work(runtime_detail::WorkPhase::SessionStep);
 			if (Status == GameSessionStatus::Created || Status == GameSessionStatus::Starting ||
 				Status == GameSessionStatus::Closing || Status == GameSessionStatus::Closed ||
 				Status == GameSessionStatus::Failed)
 				return;
 			if (!DrainFailures()) return;
 			CurrentTick = SimulationTick;
+			if (Replication) Replication->ProcessCatalogRetirement(SimulationTick);
 			for (auto &[Connection, PeerValue] : Peers) {
 				(void)Connection;
-				PeerValue.SchedulerFlushedThisStep = false;
+				PeerValue.SendAllowance.Reset();
 				PeerValue.StructuralSubmittedThisStep = false;
 				PeerValue.StructuralTransitionsConsumedThisStep = 0;
+				PeerValue.JournalRecordsConsumedThisStep = 0;
 			}
 			std::vector<ConnectionId> TimedOut;
 			for (const auto &[Connection, PeerValue] : Peers)
@@ -1291,10 +1345,7 @@ namespace gargantuan::network {
 						continue;
 					}
 					if (Statistics->QueuedMessages != 0) {
-						auto Flushed = Scheduler.Flush(
-							Connection, SchedulerTickBudget::FromNetworkLimits(PeerValue.Limits)
-						);
-						PeerValue.SchedulerFlushedThisStep = true;
+						auto Flushed = PeerValue.SendAllowance.Flush(Scheduler, Connection, PeerValue.Limits);
 						if (auto Failure = SchedulerFlushFailure(Flushed)) {
 							PendingPeerFailures.try_emplace(Connection, std::move(*Failure));
 							continue;
@@ -1312,7 +1363,7 @@ namespace gargantuan::network {
 						);
 						continue;
 					}
-					auto Recorded = Replication->RecordDesiredState(Connection, *Selection, SimulationTick);
+					auto Recorded = Replication->RequestPlanning(Connection, Relevance->GetSelectionSnapshot(Connection), SimulationTick);
 					if (!Recorded.Succeeded())
 						PendingPeerFailures.try_emplace(
 							Connection,
@@ -1324,11 +1375,18 @@ namespace gargantuan::network {
 				}
 				if (!DrainFailures()) return;
 
+				Replication->ProcessPlanning(SimulationTick);
 				auto &StructuralConnections = StructuralConnectionsScratch;
 				StructuralConnections.clear();
 				if (StructuralConnections.capacity() < Peers.size()) StructuralConnections.reserve(Peers.size());
-				for (const auto &[Connection, PeerValue] : Peers)
+				bool HasPendingBootstrap = false;
+				for (const auto &[Connection, PeerValue] : Peers) {
 					if (PeerValue.Phase != PeerPhase::TransportConnected) StructuralConnections.push_back(Connection);
+					if (PeerValue.Phase != PeerPhase::TransportConnected)
+						runtime_detail::MaximumWork(runtime_detail::WorkCounter::JournalLagBeforeServiceMaximum,
+							Replication->GetJournalLag(Connection));
+					HasPendingBootstrap = HasPendingBootstrap || PeerValue.Phase == PeerPhase::BootstrapPending;
+				}
 				if (!StructuralConnections.empty()) {
 					std::size_t Start = 0;
 					if (StructuralFairnessCursor) {
@@ -1348,8 +1406,10 @@ namespace gargantuan::network {
 				}
 
 				std::optional<ConnectionId> LastServicedConnection;
+				std::optional<ConnectionId> LastJournalServicedConnection;
 				std::size_t GlobalConsumed = 0;
-				bool MadeProgress = true;
+				std::size_t GlobalJournalConsumed = 0;
+				bool MadeProgress = false;
 				auto SubmitStructural =
 					[&](ConnectionId Connection, Peer &PeerValue, ReplicationProduceResult &Produced) {
 						auto Queued = QueueStructuralFrame(*Produced.Frame, Connection, PeerValue.Limits);
@@ -1391,46 +1451,114 @@ namespace gargantuan::network {
 						return true;
 					};
 
-				while (MadeProgress && GlobalConsumed < Configuration.StructuralReplication.MaximumTransitionsPerTick) {
-					MadeProgress = false;
-					for (const auto Connection : StructuralConnections) {
-						auto Peer = Peers.find(Connection);
-						if (Peer == Peers.end() || PendingPeerFailures.contains(Connection)) continue;
-						auto &Consumed = Peer->second.StructuralTransitionsConsumedThisStep;
-						if (Consumed >= Configuration.StructuralReplication.MaximumTransitionsPerPeerTick) continue;
-						const auto Allowance = std::min({
-							Configuration.StructuralReplication.PeerQuantum,
-							Configuration.StructuralReplication.MaximumTransitionsPerPeerTick - Consumed,
-							Configuration.StructuralReplication.MaximumTransitionsPerTick - GlobalConsumed,
-						});
-						if (Allowance == 0) break;
-						if (Peer->second.Phase == PeerPhase::BootstrapPending) {
-							const auto CriticalTransitions = Replication->GetPendingCriticalTransitionCount(Connection);
-							if (CriticalTransitions == 0) {
-								PendingPeerFailures.try_emplace(
-									Connection,
-									DisconnectInfo{
-										DisconnectReason::ResourceExhaustion,
-										"Structural bootstrap has no required transition",
-									}
-								);
+				// A deferred bootstrap must not repeatedly miss its turn behind an
+				// already-ready peer's bulk journal. Reserve up to a quarter of the
+				// existing global cap, then run the ordinary rotating pass unchanged.
+				for (const bool BootstrapOnly : {true, false}) {
+					if (BootstrapOnly && !HasPendingBootstrap) continue;
+					const auto GlobalLimit = Configuration.StructuralReplication.MaximumTransitionsPerTick;
+					const auto BootstrapLimit = GlobalLimit - GlobalLimit / 4 >= Configuration.StructuralReplication.PeerQuantum
+						? GlobalLimit / 4 : 0;
+					const auto PassLimit = BootstrapOnly ? BootstrapLimit : GlobalLimit;
+					MadeProgress = true;
+					while (MadeProgress && GlobalConsumed < PassLimit) {
+						MadeProgress = false;
+						for (const auto Connection : StructuralConnections) {
+							auto Peer = Peers.find(Connection);
+							if (Peer == Peers.end() || PendingPeerFailures.contains(Connection)) continue;
+							if (BootstrapOnly && Peer->second.Phase != PeerPhase::BootstrapPending) continue;
+							auto &Consumed = Peer->second.StructuralTransitionsConsumedThisStep;
+							if (Consumed >= Configuration.StructuralReplication.MaximumTransitionsPerPeerTick) continue;
+							const auto Allowance = std::min({
+								Configuration.StructuralReplication.PeerQuantum,
+								Configuration.StructuralReplication.MaximumTransitionsPerPeerTick - Consumed,
+								PassLimit - GlobalConsumed,
+							});
+							if (Allowance == 0) break;
+							if (Peer->second.Phase == PeerPhase::BootstrapPending) {
+								if (!Replication->IsPlanningReady(Connection)) continue;
+								const auto CriticalTransitions = Replication->GetPendingCriticalTransitionCount(Connection);
+								if (CriticalTransitions == 0) {
+									PendingPeerFailures.try_emplace(
+										Connection,
+										DisconnectInfo{
+											DisconnectReason::ResourceExhaustion,
+											"Structural bootstrap has no required transition",
+										}
+									);
+									continue;
+								}
+								if (CriticalTransitions > Allowance) continue;
+								const auto ReplicationMetricsBefore = Replication->GetCumulativeMetrics();
+								auto Produced = Replication->ProducePendingBaseline(Connection, Allowance, SimulationTick,
+									Peer->second.Limits.MaximumReliableMessageBytes);
+								const auto ReplicationMetricsAfter = Replication->GetCumulativeMetrics();
+								Metrics.BaselineSnapshotCpuNanoseconds +=
+									ReplicationMetricsAfter.SnapshotCaptureCpuNanoseconds -
+									ReplicationMetricsBefore.SnapshotCaptureCpuNanoseconds;
+								Metrics.BaselineDiscoveryCpuNanoseconds +=
+									ReplicationMetricsAfter.BaselineDiscoveryCpuNanoseconds -
+									ReplicationMetricsBefore.BaselineDiscoveryCpuNanoseconds;
+								Metrics.BaselineEncodeCpuNanoseconds +=
+									ReplicationMetricsAfter.BaselineEncodeCpuNanoseconds -
+									ReplicationMetricsBefore.BaselineEncodeCpuNanoseconds;
+								// A world revision can obsolete a queued bootstrap while its
+								// peer awaits bounded 3E service. Defer, never accept stale work.
+								if (Produced.Error == "No replication relevance changes are available") continue;
+								if (!Produced.Succeeded() || !Produced.Frame) {
+									PendingPeerFailures.try_emplace(
+										Connection,
+										DisconnectInfo{
+											DisconnectReason::ResourceExhaustion,
+											"[Replication:StructuralScheduler] " + Produced.Error,
+										}
+									);
+									continue;
+								}
+								if (!SubmitStructural(Connection, Peer->second, Produced)) continue;
+								if (!QueueSession(
+										Connection,
+										GameSessionServerAccepted{
+											.Nonce = Peer->second.Nonce,
+											.SessionEpoch = Peer->second.SessionEpoch,
+											.Replication = Peer->second.Replication,
+											.Player = Peer->second.PlayerObject,
+											.PlayerId = Peer->second.PlayerId,
+											.Identity = SessionIdentityKind::DevelopmentLocal,
+											.NegotiatedLimits = Peer->second.Limits,
+										},
+										Peer->second.Limits
+									)) {
+									PendingPeerFailures.try_emplace(
+										Connection,
+										DisconnectInfo{
+											DisconnectReason::ResourceExhaustion,
+											"Server bootstrap acceptance could not be queued",
+										}
+									);
+									continue;
+								}
+								Peer->second.Phase = PeerPhase::Accepted;
+								++Metrics.AcceptedPeers;
+								Consumed += Produced.SelectedTransitions;
+								GlobalConsumed += Produced.SelectedTransitions;
+								MadeProgress = Produced.SelectedTransitions != 0;
 								continue;
 							}
-							if (CriticalTransitions > Allowance) continue;
-							const auto ReplicationMetricsBefore = Replication->GetCumulativeMetrics();
-							auto Produced = Replication->ProducePendingBaseline(Connection, Allowance, SimulationTick,
-								Peer->second.Limits.MaximumReliableMessageBytes);
-							const auto ReplicationMetricsAfter = Replication->GetCumulativeMetrics();
-							Metrics.BaselineSnapshotCpuNanoseconds +=
-								ReplicationMetricsAfter.SnapshotCaptureCpuNanoseconds -
-								ReplicationMetricsBefore.SnapshotCaptureCpuNanoseconds;
-							Metrics.BaselineDiscoveryCpuNanoseconds +=
-								ReplicationMetricsAfter.BaselineDiscoveryCpuNanoseconds -
-								ReplicationMetricsBefore.BaselineDiscoveryCpuNanoseconds;
-							Metrics.BaselineEncodeCpuNanoseconds +=
-								ReplicationMetricsAfter.BaselineEncodeCpuNanoseconds -
-								ReplicationMetricsBefore.BaselineEncodeCpuNanoseconds;
-							if (!Produced.Succeeded() || !Produced.Frame) {
+							auto ProduceRelevance = [&]() {
+								if (!Replication->HasPendingRelevance(Connection)) return false;
+								auto Produced = Replication->ProducePendingRelevance(Connection, Allowance, SimulationTick,
+									Peer->second.Limits.MaximumReliableMessageBytes);
+								if (Produced.Succeeded() && Produced.Frame) {
+									if (SubmitStructural(Connection, Peer->second, Produced)) {
+										Consumed += Produced.SelectedTransitions;
+										GlobalConsumed += Produced.SelectedTransitions;
+										MadeProgress = Produced.SelectedTransitions != 0;
+										Peer->second.PreferPendingRelevance = false;
+									}
+									return true;
+								}
+								if (Produced.Error == "No replication relevance changes are available") return false;
 								PendingPeerFailures.try_emplace(
 									Connection,
 									DisconnectInfo{
@@ -1438,98 +1566,86 @@ namespace gargantuan::network {
 										"[Replication:StructuralScheduler] " + Produced.Error,
 									}
 								);
-								continue;
-							}
-							if (!SubmitStructural(Connection, Peer->second, Produced)) continue;
-							if (!QueueSession(
-									Connection,
-									GameSessionServerAccepted{
-										.Nonce = Peer->second.Nonce,
-										.SessionEpoch = Peer->second.SessionEpoch,
-										.Replication = Peer->second.Replication,
-										.Player = Peer->second.PlayerObject,
-										.PlayerId = Peer->second.PlayerId,
-										.Identity = SessionIdentityKind::DevelopmentLocal,
-										.NegotiatedLimits = Peer->second.Limits,
-									},
-									Peer->second.Limits
-								)) {
+								return true;
+							};
+							auto ProduceJournal = [&]() {
+								auto &JournalConsumed = Peer->second.JournalRecordsConsumedThisStep;
+								const auto JournalAllowance = std::min(
+									Configuration.StructuralReplication.MaximumJournalRecordsPerPeerTick - JournalConsumed,
+									Configuration.StructuralReplication.MaximumJournalRecordsPerTick - GlobalJournalConsumed);
+								if (JournalAllowance == 0) {
+									if (Replication->GetJournalLag(Connection) != 0) SaturatingAdd(Metrics.JournalBudgetDeferrals, 1);
+									return false;
+								}
+								auto Produced = Replication->ProduceIncremental(Connection, Allowance,
+									Peer->second.Limits.MaximumReliableMessageBytes, JournalAllowance);
+								JournalConsumed += Produced.JournalRecordsExamined;
+								GlobalJournalConsumed += Produced.JournalRecordsExamined;
+								if (Produced.JournalRecordsExamined != 0) {
+									LastServicedConnection = Connection;
+									LastJournalServicedConnection = Connection;
+								}
+								if (Produced.Succeeded() && Produced.Frame) {
+									if (SubmitStructural(Connection, Peer->second, Produced)) {
+										Consumed += Produced.SelectedTransitions;
+										GlobalConsumed += Produced.SelectedTransitions;
+										MadeProgress = Produced.SelectedTransitions != 0;
+										Peer->second.PreferPendingRelevance = true;
+									}
+									return true;
+								}
+								if (Produced.Error == "No replication changes are available" ||
+									Produced.Error == "No relevant replication changes are available")
+									return false;
 								PendingPeerFailures.try_emplace(
 									Connection,
 									DisconnectInfo{
 										DisconnectReason::ResourceExhaustion,
-										"Server bootstrap acceptance could not be queued",
+										"[Replication:StructuralScheduler] " + Produced.Error,
 									}
 								);
-								continue;
-							}
-							Peer->second.Phase = PeerPhase::Accepted;
-							++Metrics.AcceptedPeers;
-							Consumed += Produced.SelectedTransitions;
-							GlobalConsumed += Produced.SelectedTransitions;
-							MadeProgress = Produced.SelectedTransitions != 0;
-							continue;
-						}
-						auto ProduceRelevance = [&]() {
-							if (!Replication->HasPendingRelevance(Connection)) return false;
-							auto Produced = Replication->ProducePendingRelevance(Connection, Allowance, SimulationTick,
-								Peer->second.Limits.MaximumReliableMessageBytes);
-							if (Produced.Succeeded() && Produced.Frame) {
-								if (SubmitStructural(Connection, Peer->second, Produced)) {
-									Consumed += Produced.SelectedTransitions;
-									GlobalConsumed += Produced.SelectedTransitions;
-									MadeProgress = Produced.SelectedTransitions != 0;
-									Peer->second.PreferPendingRelevance = false;
-								}
 								return true;
+							};
+							if (Peer->second.PreferPendingRelevance) {
+								if (ProduceRelevance()) continue;
+								(void)ProduceJournal();
+							} else {
+								if (ProduceJournal()) continue;
+								(void)ProduceRelevance();
 							}
-							if (Produced.Error == "No replication relevance changes are available") return false;
-							PendingPeerFailures.try_emplace(
-								Connection,
-								DisconnectInfo{
-									DisconnectReason::ResourceExhaustion,
-									"[Replication:StructuralScheduler] " + Produced.Error,
-								}
-							);
-							return true;
-						};
-						auto ProduceJournal = [&]() {
-							auto Produced = Replication->ProduceIncremental(Connection, Allowance,
-								Peer->second.Limits.MaximumReliableMessageBytes);
-							if (Produced.Succeeded() && Produced.Frame) {
-								if (SubmitStructural(Connection, Peer->second, Produced)) {
-									Consumed += Produced.SelectedTransitions;
-									GlobalConsumed += Produced.SelectedTransitions;
-									MadeProgress = Produced.SelectedTransitions != 0;
-									Peer->second.PreferPendingRelevance = true;
-								}
-								return true;
-							}
-							if (Produced.Error == "No replication changes are available" ||
-								Produced.Error == "No relevant replication changes are available")
-								return false;
-							PendingPeerFailures.try_emplace(
-								Connection,
-								DisconnectInfo{
-									DisconnectReason::ResourceExhaustion,
-									"[Replication:StructuralScheduler] " + Produced.Error,
-								}
-							);
-							return true;
-						};
-						if (Peer->second.PreferPendingRelevance) {
-							if (ProduceRelevance()) continue;
-							(void)ProduceJournal();
-						} else {
-							if (ProduceJournal()) continue;
-							(void)ProduceRelevance();
 						}
+					}
+				}
+				// Complete READY batches can keep the operation budget saturated for
+				// many ticks. Preserve independent progress for journal prefixes that
+				// provably cannot emit structural work, under the unchanged read caps.
+				if (GlobalConsumed >= Configuration.StructuralReplication.MaximumTransitionsPerTick) {
+					for (const auto Connection : StructuralConnections) {
+						if (GlobalJournalConsumed >= Configuration.StructuralReplication.MaximumJournalRecordsPerTick) break;
+						auto Peer = Peers.find(Connection);
+						if (Peer == Peers.end() || PendingPeerFailures.contains(Connection) ||
+							Peer->second.Phase == PeerPhase::TransportConnected || Peer->second.Phase == PeerPhase::BootstrapPending) continue;
+						auto &Consumed = Peer->second.JournalRecordsConsumedThisStep;
+						const auto Allowance = std::min(Configuration.StructuralReplication.MaximumJournalRecordsPerPeerTick - Consumed,
+							Configuration.StructuralReplication.MaximumJournalRecordsPerTick - GlobalJournalConsumed);
+						if (!Allowance) continue;
+						auto Produced = Replication->ProduceIncremental(Connection, 0, Peer->second.Limits.MaximumReliableMessageBytes, Allowance);
+						Consumed += Produced.JournalRecordsExamined;
+						GlobalJournalConsumed += Produced.JournalRecordsExamined;
+						if (Produced.JournalRecordsExamined) LastJournalServicedConnection = Connection;
+						if (Produced.Error != "No replication changes are available" && Produced.Error != "No relevant replication changes are available")
+							PendingPeerFailures.try_emplace(Connection, DisconnectInfo{DisconnectReason::ResourceExhaustion,
+								"[Replication:StructuralScheduler] " + Produced.Error});
 					}
 				}
 				if (!StructuralConnections.empty()) {
 					auto Last = LastServicedConnection
-									? std::ranges::find(StructuralConnections, *LastServicedConnection)
-									: StructuralConnections.begin();
+						? std::ranges::find(StructuralConnections, *LastServicedConnection) : StructuralConnections.begin();
+					// Coalesced/skipped records consume service even with no frame.
+					// Continue after the last reader when the journal budget binds.
+					if (GlobalJournalConsumed >= Configuration.StructuralReplication.MaximumJournalRecordsPerTick &&
+						LastJournalServicedConnection)
+						Last = std::ranges::find(StructuralConnections, *LastJournalServicedConnection);
 					if (Last == StructuralConnections.end() || ++Last == StructuralConnections.end())
 						StructuralFairnessCursor = StructuralConnections.front();
 					else
@@ -1541,18 +1657,36 @@ namespace gargantuan::network {
 				Metrics.StructuralMaximumTransitionsSelectedPerTick = std::max<std::uint64_t>(
 					Metrics.StructuralMaximumTransitionsSelectedPerTick, GlobalConsumed
 				);
+				SaturatingAdd(Metrics.JournalRecordsExamined, GlobalJournalConsumed);
+				Metrics.JournalRecordsPerTickHighWater = std::max<std::uint64_t>(Metrics.JournalRecordsPerTickHighWater, GlobalJournalConsumed);
+				Metrics.JournalBacklogRecords = 0;
+				Metrics.JournalOldestBacklogEpisodeAgeTicks = 0;
+				Metrics.JournalStagingBytes = Peers.size() * (sizeof(std::size_t) + sizeof(std::optional<std::uint64_t>));
 				for (const auto Connection : StructuralConnections) {
 					auto Peer = Peers.find(Connection);
+					if (Peer != Peers.end()) {
+						Metrics.JournalRecordsPerPeerTickHighWater = std::max<std::uint64_t>(
+							Metrics.JournalRecordsPerPeerTickHighWater, Peer->second.JournalRecordsConsumedThisStep);
+						const auto Lag = Replication->GetJournalLag(Connection);
+						runtime_detail::MaximumWork(runtime_detail::WorkCounter::JournalLagAfterServiceMaximum, Lag);
+						SaturatingAdd(Metrics.JournalBacklogRecords, Lag);
+						auto &PendingSince = Peer->second.JournalPendingSinceTick;
+						if (Lag == 0) PendingSince.reset();
+						else {
+							if (!PendingSince) PendingSince = SimulationTick;
+							Metrics.JournalOldestBacklogEpisodeAgeTicks = std::max(Metrics.JournalOldestBacklogEpisodeAgeTicks,
+								SimulationTick >= *PendingSince ? SimulationTick - *PendingSince : 0);
+						}
+					}
 					if (Peer == Peers.end() || PendingPeerFailures.contains(Connection) ||
 						!Peer->second.StructuralSubmittedThisStep)
 						continue;
-					auto Flushed = Scheduler.Flush(
-						Connection, SchedulerTickBudget::FromNetworkLimits(Peer->second.Limits)
-					);
-					Peer->second.SchedulerFlushedThisStep = true;
+					auto Flushed = Peer->second.SendAllowance.Flush(Scheduler, Connection, Peer->second.Limits);
 					if (auto Failure = SchedulerFlushFailure(Flushed))
 						PendingPeerFailures.try_emplace(Connection, std::move(*Failure));
 				}
+				Metrics.JournalBacklogRecordsHighWater = std::max(Metrics.JournalBacklogRecordsHighWater, Metrics.JournalBacklogRecords);
+				Metrics.JournalMaximumBacklogEpisodeAgeTicks = std::max(Metrics.JournalMaximumBacklogEpisodeAgeTicks, Metrics.JournalOldestBacklogEpisodeAgeTicks);
 				if (!DrainFailures()) return;
 				SynchronizeServerGraph();
 				if (!DrainFailures()) return;
@@ -1578,16 +1712,11 @@ namespace gargantuan::network {
 			if (Remotes) (void)Remotes->Pump(Configuration.Limits.MaximumMessagesPerTick);
 			if (!DrainFailures()) return;
 			std::vector<std::pair<ConnectionId, DisconnectInfo>> TerminalConnections;
-			for (const auto &[Connection, PeerValue] : Peers) {
+			for (auto &[Connection, PeerValue] : Peers) {
 				if (Configuration.Role == GameSessionRole::Server && PeerValue.Phase == PeerPhase::TransportConnected)
 					continue;
-				if (PeerValue.SchedulerFlushedThisStep) continue;
-				auto Flushed = Scheduler.Flush(
-					Connection,
-					SchedulerTickBudget::FromNetworkLimits(
-						PeerValue.Limits.IsValid() ? PeerValue.Limits : Configuration.Limits
-					)
-				);
+				auto Flushed = PeerValue.SendAllowance.Flush(Scheduler, Connection,
+					PeerValue.Limits.IsValid() ? PeerValue.Limits : Configuration.Limits);
 				if (auto Failure = SchedulerFlushFailure(Flushed))
 					TerminalConnections.emplace_back(Connection, std::move(*Failure));
 			}
@@ -1693,6 +1822,7 @@ namespace gargantuan::network {
 	}
 	GameSessionMetrics GameSession::GetMetrics() const {
 		auto Result = State->Metrics;
+		Result.ClientReplica = State->Replica.GetMetrics();
 		if (State->Relevance) {
 			const auto RelevanceMetrics = State->Relevance->GetMetrics();
 			Result.RelevantObjects = RelevanceMetrics.DesiredObjects;
@@ -1713,9 +1843,20 @@ namespace gargantuan::network {
 			Result.SpatialQueryLimitFailures = RelevanceMetrics.SpatialQueryLimitFailures;
 			Result.SpatialCandidateLimitFailures = RelevanceMetrics.SpatialCandidateLimitFailures;
 			Result.RelevanceCpuNanoseconds = RelevanceMetrics.UpdateCpuNanoseconds;
+			Result.RelevancePeerEvaluations = RelevanceMetrics.PeerEvaluations;
+			Result.RelevanceSelectionCacheHits = RelevanceMetrics.SelectionCacheHits;
+			Result.RelevancePeerEvaluationsHighWater = RelevanceMetrics.PeerEvaluationsHighWater;
+			Result.RelevanceDeferredPeers = RelevanceMetrics.DeferredPeers;
+			Result.RelevanceDeferredPeersHighWater = RelevanceMetrics.DeferredPeersHighWater;
+			Result.RelevanceOldestPendingAgeTicks = RelevanceMetrics.OldestPendingAgeTicks;
+			Result.RelevanceMaximumPendingAgeTicks = RelevanceMetrics.MaximumPendingAgeTicks;
+			Result.RelevanceStagingBytes = RelevanceMetrics.StagingBytes;
+			Result.RelevanceCharacterCandidateBytes = RelevanceMetrics.CharacterCandidateBytes;
 		}
 		if (State->Replication) {
 			const auto &ReplicationMetrics = State->Replication->GetMetrics();
+			Result.DependencyPlanRebuilds = ReplicationMetrics.DependencyPlanRebuilds;
+			Result.DependencyPlanCacheHits = ReplicationMetrics.DependencyPlanCacheHits;
 			Result.MaterializationBacklog = ReplicationMetrics.MaterializationBacklog;
 			Result.MaterializationTransitions = ReplicationMetrics.RelevanceTransitions;
 			Result.MaterializationCpuNanoseconds = ReplicationMetrics.RelevanceTransitionCpuNanoseconds;
@@ -1756,6 +1897,27 @@ namespace gargantuan::network {
 			Result.StructuralSelectionCpuNanoseconds = ReplicationMetrics.StructuralSelectionCpuNanoseconds;
 			Result.StructuralMaximumTransitionsSelectedPerTick =
 				State->Metrics.StructuralMaximumTransitionsSelectedPerTick;
+			Result.AcceptedAncestryObjects = ReplicationMetrics.AcceptedAncestryObjects;
+			Result.AcceptedAncestryLogicalBytes = ReplicationMetrics.AcceptedAncestryLogicalBytes;
+			Result.CatalogRetiredObjects = ReplicationMetrics.CatalogRetiredObjects;
+			Result.CatalogRetiredHighWater = ReplicationMetrics.CatalogRetiredHighWater;
+			Result.CatalogRetirementExaminations = ReplicationMetrics.CatalogRetirementExaminations;
+			Result.CatalogRetirementMaximumTickExaminations = ReplicationMetrics.CatalogRetirementMaximumTickExaminations;
+			Result.CatalogRetirementReleases = ReplicationMetrics.CatalogRetirementReleases;
+			Result.CatalogRetentionLogicalBytes = ReplicationMetrics.CatalogRetentionLogicalBytes;
+			Result.CatalogReferenceIndexBytes = ReplicationMetrics.CatalogReferenceIndexBytes;
+			Result.PlanningWork = ReplicationMetrics.PlanningWork;
+			Result.PlanningMaximumTickWork = ReplicationMetrics.PlanningMaximumTickWork;
+			Result.PlanningServiceOpportunities = ReplicationMetrics.PlanningServiceOpportunities;
+			Result.PlanningMaximumServiceGapTicks = ReplicationMetrics.PlanningMaximumServiceGapTicks;
+			Result.PlanningMaximumPeerSlice = ReplicationMetrics.PlanningMaximumPeerSlice;
+			Result.PlanningResumes = ReplicationMetrics.PlanningResumes;
+			Result.PlanningInvalidations = ReplicationMetrics.PlanningInvalidations;
+			Result.PlanningReadyBatches = ReplicationMetrics.PlanningReadyBatches;
+			Result.PlanningRecords = ReplicationMetrics.PlanningRecords;
+			Result.PlanningRecordsHighWater = ReplicationMetrics.PlanningRecordsHighWater;
+			Result.PlanningPeerRecordsHighWater = ReplicationMetrics.PlanningPeerRecordsHighWater;
+			Result.PlanningCpuNanoseconds = ReplicationMetrics.PlanningCpuNanoseconds;
 		}
 		if (State->Authority) {
 			const auto CharacterMetrics = State->Authority->GetMetrics();
@@ -1830,6 +1992,9 @@ namespace gargantuan::network {
 	}
 	CharacterNetworkMetrics detail::GameSessionTestAccess::GetCharacterMetrics(const GameSession &Session) {
 		return Session.State->Authority ? Session.State->Authority->GetMetrics() : CharacterNetworkMetrics{};
+	}
+	std::uint64_t detail::GameSessionTestAccess::GetReliableEventsAccepted(const GameSession &Session) {
+		return Session.State->Remotes ? Session.State->Remotes->GetMetrics().ReliableEventsAccepted : 0;
 	}
 	std::vector<ConnectionId> detail::GameSessionTestAccess::GetConnections(const GameSession &Session) {
 		std::vector<ConnectionId> Result;

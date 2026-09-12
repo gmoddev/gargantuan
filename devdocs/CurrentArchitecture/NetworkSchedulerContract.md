@@ -187,6 +187,19 @@ prediction, input sequence, and replay history do not advance for that drop.
 ceilings, and can submit any one session-valid message. The scheduler does not
 invent an independent unbounded budget.
 
+`GameSession` additionally shares one per-peer negotiated send allowance across
+its early, structural and final flush opportunities within one `Step`. A drained
+earlier flush permits newly produced Character/Remote work to use only remaining
+bytes/messages at the final service point. Any non-drained result stops further
+flush attempts for that peer in the step, preserving queued structural
+prerequisites and avoiding backpressure retries. A residual smaller than the
+existing minimum valid `SchedulerTickBudget` waits for the next step; no credit
+accumulates. This fixed counter state owns no messages and does not change
+scheduler precedence, reliable ordering, queue ceilings or 3J acceptance.
+It guarantees a bounded local service opportunity, not backend delivery or
+same-step service when capacity is exhausted. See the Foundation 3L.3 ledger
+for recording-transport and tight-byte/message-budget validation.
+
 ## Scheduler statistics
 
 `SchedulerStatistics` reports intent admission/rejection, reliable backlog
