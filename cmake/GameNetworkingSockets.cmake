@@ -1,5 +1,10 @@
 include(FetchContent)
 
+# Gargantuan's root project is C++-only, but pinned GNS publishes a c_std_99
+# requirement for its C sources. Enable C in the parent GNS integration scope so
+# CMake retains the compiler feature table when the fetched target is consumed.
+enable_language(C)
+
 set(GARGANTUAN_GNS_REVISION "2cb93a06350bb065db53abdb0d87cf297e0bfd34")
 
 option(
