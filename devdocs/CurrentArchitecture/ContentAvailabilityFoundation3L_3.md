@@ -12,6 +12,31 @@ related_code:
 
 # Foundation 3L.3: runtime work isolation
 
+## Reliable service envelope assessment (2026-09-12)
+
+**B — FOUNDATION 3L PARTIALLY READY.** The
+[service-envelope assessment](NetworkingReliableServiceEnvelope.md) separates
+operation limits from bytes, capacity and FIFO latency. Ten backend-only rate ×
+admission cases drain every reliable message. At the existing 256 KiB/s rate,
+50/75% structural pacing reduces RPC max from the retained 5.708 seconds to
+52.94/52.82 ms, trading structural convergence for 10.97/7.32 seconds. This is
+not an official-path correction. A capacity-shortfall case keeps backlog near
+105 kB but RPC max rises to 423 ms: configured budget is not actual service.
+
+Canonical 200/500-peer captures show 154,851-byte content frames; conditional
+single-Part encoding after parent acceptance is at most 339 bytes. The official
+near-max fixture's padded names explain 83.35% of its four large frame bytes.
+The production planner also emits a valid 123,183-byte hard-reference group in
+the extended regression, demonstrating why the small-group model is not universal.
+Actual arbitrary-group percentiles remain unmeasured; no atomic group was split.
+
+Only test/diagnostic and documentation changes are retained. Production admission,
+rates, ordering and all semantic/planning/3J bounds are unchanged. Implementation
+stops at the required deployment/aggregate-rate and oversized-group contract
+decision. Lanes are not demonstrated necessary for the tested small-group work;
+client, official transport, journal margin, overload, security and current-source
+CI remain open. See the ledger for exact scope and measured versus inferred data.
+
 ## Official reliable service attribution (2026-09-12)
 
 **B — FOUNDATION 3L PARTIALLY READY.** The `transport-v1` official capture and

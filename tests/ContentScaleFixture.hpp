@@ -7,6 +7,7 @@
 #include "gargantuan/network/CharacterProtocol.hpp"
 #include "gargantuan/network/ReplicationProtocol.hpp"
 #include "PublicationLatencyFixture.hpp"
+#include "StructuralBytesFixture.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -115,12 +116,14 @@ namespace gargantuan::test {
 		std::uint64_t InputSequence = 0;
 		std::string DisconnectDiagnostic;
 
-		void Observe(std::span<const std::byte> Bytes) {
+		void Observe(std::span<const std::byte> Bytes, network::DeliveryMode Delivery = network::DeliveryMode::UnreliableUnordered) {
+			if (ActiveStructuralBytes && Delivery == network::DeliveryMode::ReliableOrdered) ActiveStructuralBytes->Reliable(Bytes.size());
 			runtime_detail::RecordPublicationPacket("Observer", LatencyConnection, Bytes);
 			if (Bytes.size() < 4) return;
 			if (std::memcmp(Bytes.data(), "GRPL", 4) == 0) {
 				auto Frame = network::DecodeReplicationFrame(Bytes);
 				if (!Frame) throw std::runtime_error("scale peer received invalid GRPL");
+				if (ActiveStructuralBytes) ActiveStructuralBytes->Observe(*Frame, Bytes.size(), LatencyConnection);
 				for (const auto &Operation : Frame->Operations) {
 					if (const auto *Publish = std::get_if<network::PublishReplication>(&Operation.Intent)) {
 						if (Publish->Name.starts_with("ContentScale")) {

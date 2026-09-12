@@ -183,6 +183,9 @@ namespace {
 			Peers[Index].Content.LatencyConnection = LatencyConnections[Index];
 		test::PublicationLatencyFixture Latency(std::getenv("GARGANTUAN_PUBLICATION_LATENCY") != nullptr,
 			Peers.front().Content.LatencyConnection, Peers.back().Content.LatencyConnection);
+		test::StructuralBytesFixture StructuralBytes(std::getenv("GARGANTUAN_STRUCTURAL_BYTES") != nullptr,
+			Peers.front().Content.LatencyConnection);
+		StructuralBytes.PreviousEncoded = Server.GetMetrics().StructuralBytesEncoded;
 		struct TickWorkSample {
 			std::uint64_t Tick = 0;
 			std::uint64_t SelectedOperations = 0, AcceptedOperations = 0;
@@ -210,6 +213,7 @@ namespace {
 		bool GameplayFailed = false;
 		const auto InputPeriod = (Peers.size() == 500 || Differential) && !FullRateInput ? 5u : 1u;
 		auto Step = [&] {
+			StructuralBytes.Advance();
 			const auto FrameStarted = std::chrono::steady_clock::now();
 			TickWorkSample WorkSample{.Tick = Tick, .StartMilliseconds = Milliseconds(TraceStarted)};
 			for (std::size_t PeerIndex = 0; PeerIndex < Peers.size(); ++PeerIndex) {
@@ -254,6 +258,7 @@ namespace {
 				}
 			}
 			const auto Metrics = Server.GetMetrics();
+			StructuralBytes.Encoded(Metrics.StructuralBytesEncoded);
 			if (TraceWork) {
 				WorkSample.SelectedOperations = Metrics.StructuralTransitionsSelected - PreviousSelectedOperations;
 				WorkSample.AcceptedOperations = Metrics.StructuralTransitionsCommitted - PreviousAcceptedOperations;
@@ -296,7 +301,7 @@ namespace {
 					const auto Count = Peer.Transport->PollEvents(Events);
 					for (std::size_t Index = 0; Index < Count; ++Index) {
 						if (const auto *Message = std::get_if<ReceivedMessageEvent>(&Events[Index]))
-							Peer.Content.Observe(Message->Payload);
+							Peer.Content.Observe(Message->Payload, Message->Delivery);
 						if (std::holds_alternative<DisconnectedEvent>(Events[Index]))
 							throw std::runtime_error("scale peer disconnected");
 					}
@@ -333,6 +338,7 @@ namespace {
 				<< " admissions=" << Runtime.Content->GetMetrics().Admissions << '\n';
 		}
 		auto RunPhase = [&](std::string_view Phase, std::size_t ExpectedObjects, bool WaitForConvergence) {
+			StructuralBytes.Begin(Phase);
 			CurrentWorkPhase = Phase;
 			Latency.Begin(Phase);
 			// Fixture placement at a cell edge exercises ordinary animation-driven
@@ -445,6 +451,7 @@ namespace {
 				if (const auto Value = ClientControl->GetAttributeValue(Name)) std::cout << std::get<std::string>(*Value) << '\n';
 			const auto RootAfter = Runtime.GetCharacterRootMotionMetrics();
 			const auto PhaseTicks = Tick - StartTick;
+			StructuralBytes.End();
 			Latency.End();
 			const auto WallMilliseconds = Milliseconds(Started);
 			const auto CharacterAfter = detail::GameSessionTestAccess::GetCharacterMetrics(Server);

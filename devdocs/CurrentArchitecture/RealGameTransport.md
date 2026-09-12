@@ -117,6 +117,12 @@ effective unreliable application ceiling through `GetAvailableDatagramBytes`.
 
 ### Verified reliable service limitation (Foundation 3L, 2026-09-12)
 
+The subsequent [reliable-service envelope assessment](NetworkingReliableServiceEnvelope.md)
+tests rate-scaled byte admission without changing this production adapter. It
+finds bounded small-group FIFO service feasible in the laboratory, but leaves
+trusted deployment/aggregate capacity and oversized-group compatibility decisions
+open. It is not a new default rate or an official non-starvation guarantee.
+
 The pinned backend defaults **both** `SendRateMin` and `SendRateMax` to
 262,144 bytes/s. `SNP_ClampSendRate` treats equal bounds as a fixed send rate;
 it is not an automatically expanding bandwidth estimate. The adapter does not

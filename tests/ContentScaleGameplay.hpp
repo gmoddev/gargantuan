@@ -24,7 +24,7 @@ namespace gargantuan::test {
 		std::size_t PollEvents(std::span<network::TransportEvent> Output) override {
 			const auto Count = Delegate->PollEvents(Output);
 			for (std::size_t Index = 0; Index < Count; ++Index) {
-				if (const auto *Message = std::get_if<network::ReceivedMessageEvent>(&Output[Index])) Observation.Observe(Message->Payload);
+				if (const auto *Message = std::get_if<network::ReceivedMessageEvent>(&Output[Index])) Observation.Observe(Message->Payload, Message->Delivery);
 				if (const auto *Disconnected = std::get_if<network::DisconnectedEvent>(&Output[Index]))
 					Observation.DisconnectDiagnostic = Disconnected->Information.Diagnostic;
 			}

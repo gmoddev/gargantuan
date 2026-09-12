@@ -6,6 +6,216 @@ last_verified: 2026-09-12
 
 # Foundation 3L.3 diagnostic validation ledger
 
+## Reliable service envelope assessment (2026-09-12)
+
+**B — FOUNDATION 3L PARTIALLY READY.** Diagnostic/design slice over published
+`1bbcd948991a398c7a0613dcfea90668e10b68db`, branch
+`foundation/3l-content-availability`. Production source is unchanged. No new
+rate, buffer, lane, wire, client queue, semantic authority or 3J/planning policy.
+No secondary repository edits, merge or 3M. Morphology files remain excluded.
+This slice is local/uncommitted for the explicit contract decision described in
+[NetworkingReliableServiceEnvelope.md](NetworkingReliableServiceEnvelope.md).
+
+### Reproducibility and measurement limits
+
+Worker is verified `dockerbox` / HostPC, 24 logical processors, 32 GiB RAM;
+four build jobs and two test jobs, retained incremental caches. Runs do not
+overlap native builds or sanitizer compilation. Canonical 200-peer/50-Character,
+neighborhood-5, input-period-5 workload is unchanged; Local 500-peer uses the same
+50 active Characters. Node is the existing TLS provider fixture, not an Engine
+transport policy change. Each scale phase runs 301 ticks and all four phases
+(baseline/load/evict/reload) are retained. The source remains canonical locally.
+
+`GARGANTUAN_STRUCTURAL_BYTES=1` enables a **test-only** scoped observer. Frame
+size/operation distributions cover all recipients; detailed re-encoding and
+payload breakdown sample the first, real-client recipient. Five vectors cap at
+32,768 doubles each; three arrays hold 1,201 tick counters each. Maximum sample
+payload is 1,339,544 bytes plus container/object overhead; transient codec scratch
+is bounded by the existing legal frame. Bounds fail the fixture rather than
+silently dropping samples. No production diagnostic, public control or queue
+was introduced. Codecs re-encode individual operations and assert their sizes
+sum exactly to the original frame. This observer adds test work: these timings
+are **not** a clean optimization counterfactual. Production code did not change.
+
+Quantiles use the existing deterministic floor-rank convention. Frames are
+received accepted frames on the lossless simulator; source structural encoded
+bytes/tick are measured separately from received total reliable bytes/tick.
+Those boundaries are not conflated. All measured selected operations equal
+committed operations and no peer failed. Total reliable *admission* bytes/tick,
+actual generic planner-group percentiles, official-group decomposition and
+packet-level bandwidth overhead remain **not measured**. Console floating-point
+quantiles round large byte values; exact integer per-phase totals are retained.
+
+The diagnostic `flatEnterGroup` label denotes a single encoded publication
+conditional on its parent already being accepted, **not** the planner's actual
+group partition. The first child may bring its unknown parent. Canonical decoded
+Folder/Part costs imply a conservative 429-byte complete Enter group for this
+flat graph; this is **INFERRED**, not a measured generic group maximum. Removal
+samples retain the whole removal frame as a conservative complete envelope.
+
+### Canonical load byte distribution — MEASURED
+
+Entries below are p50 / p95 / p99 / max unless stated. No byte admission is active.
+
+| Metric | Control 200 | Local 200 | Node 200 | Local 500 |
+| --- | --- | --- | --- | --- |
+| Observed GRPL frames | 200 | 400 | 400 | 1,000 |
+| Operations/frame | 12/13/14/14 | 14/512/512/512 | same | 12/512/512/512 |
+| Bytes/frame | 864/933/1,002/1,002 | 1,002/154,851/154,851/154,851 | same | 864/154,851/154,851/154,851 |
+| Frame bytes/operation | 72/72/72/72 | 72/302.443/302.443/302.443 | same | 72.273/302.443/302.443/302.443 |
+| Single-Part-after-parent bytes | no content samples | 339/339/339/339 | same | same |
+| Global encoded GRPL bytes/tick | 0/0/0/175,560 | 0/0/~2,477,620/~2,477,620 | same | 0/~2,477,620/~2,477,620/~2,477,620 |
+| Global received reliable bytes/tick | 66/21,666/36,243/237,550 | 66/36,243/~2,477,740/~2,477,740 | same | 66/~2,477,680/~2,477,740/~2,567,860 |
+| Consecutive nonzero structural receive ticks | 1 | 13 | 13 | 32 |
+| Total GRPL bytes, load | 175,560 | 31,145,760 | 31,145,760 | 77,826,105 |
+| Total operations, load | 2,440 | 104,840 | 104,840 | 261,545 |
+| Total GRPL bytes, eviction | 175,560 | 1,104,396 | 1,104,396 | 2,767,067 |
+| Total GRPL bytes, reload | 192,674 | 31,162,874 | 31,162,874 | 77,791,674 |
+
+The 512-content-operation frame contributes 109,354 reflected-property bytes,
+33,794 identity/class/parent/count bytes, 11,667 name bytes and 36 framing bytes.
+Attributes/extensions/custom state/tags contribute zero entry payload bytes in
+this package. Known-object ordinary updates are separate (828 bytes in the first
+200-peer recipient's accompanying 12-op frame; 759 in the 500-peer case).
+The complete flat removal frame is 4,644 bytes / 512 operations.
+
+Official source inspection explains the different ~450 kB frames: 492 new Parts
+each carry 1,536 padding characters in Name. Two publications add 1,511,424 bytes
+of padding, **83.35%** of the retained 1,813,406-byte four-frame total. An all-padded
+256-op frame has 393,216 padding bytes and 76,068 other bytes. The codec emits
+Name once. This is authored fixture payload, not a redundant serialization claim.
+The predicted padded Part frame is 1,869 bytes; that prediction is not a measured
+official-group quantile. The unrelated property-heavy fixture is not used here.
+
+Extended native hard-reference tests measure a 123,183-byte/two-op planned group
+and a 123,347-byte/four-op reference-path frame with 60 KiB Player/Character names.
+The 40 KiB attempt does not advance Known; the larger valid allowance preserves
+strict replica validation and explicit scheduler acceptance. All pending cleanup
+then drains. The initial diagnostic harness asserted before planned disposal
+finished and failed its new final assertion; it was corrected to service existing
+bounded cleanup. No production fix or weakened invariant was needed. Final
+`service-atomic-v3` passes both paths, including the 24 KiB cases and KI-007 suite.
+
+### Rate × admission — MEASURED, backend-only
+
+`gargantuan_gns_capacity_benchmark --envelope`, `service-envelope-v3`: same pinned
+GNS localhost/ordinary flags/FIFO; 1,450,000 structural bytes in 725 whole opaque
+2,000-byte messages, then ongoing tiny RPC/event/action probes. Not real GRPL or
+RemoteManager semantics. All ten cases receive **905/905 reliable messages,
+1,470,700/1,470,700 server reliable bytes, 60/60 RPC, 60/60 event ACKs and 60/60
+action results**. No reliable drop, timeout or crash. Each case is deadline-bounded.
+
+Admission is 50% or 75% of nominal `S`, with credit capped at 50 ms of `S` and
+pending reliable+unreliable threshold at 100 ms of `S`. Credit is elapsed-time
+shared, not renewed per flush; no source candidate/payload queue. Status and
+latency sample capacities remain fixed. These are test hypotheses, not selected
+product thresholds. A global server egress contract is not exercised.
+
+| Nominal KiB/s | Structural % | Pending reliable peak B | RPC p99/max ms | Structural receive complete s | Structural B/s (finite burst average) | Max admitted structural B/10ms | Drain after last structural admission ms |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 256 | 50 | 10,876 | 16.08 / 52.94 | 10.9708 | 132,169 | 14,000 | 7.03 |
+| 256 | 75 | 12,012 | 32.17 / 52.82 | 7.3160 | 198,197 | 14,000 | 6.01 |
+| 512 | 50 | 26,026 | 17.07 / 49.98 | 5.4388 | 266,602 | 28,000 | 6.49 |
+| 512 | 75 | 26,026 | 33.85 / 52.53 | 3.6295 | 399,508 | 28,000 | 7.50 |
+| 1,024 | 50 | 49,699 | 19.11 / 53.92 | 2.6735 | 542,367 | 56,000 | 7.61 |
+| 1,024 | 75 | 49,699 | 33.75 / 57.89 | 1.7857 | 811,990 | 58,000 | 8.12 |
+| 2,048 | 50 | 102,617 | 16.07 / 56.41 | 1.2907 | ~1,123,440 | 114,000 | 7.50 |
+| 2,048 | 75 | 102,266 | 35.88 / 59.72 | 0.8644 | ~1,677,540 | 118,000 | 8.61 |
+| 4,096 | 50 | 205,855 | 16.62 / 56.75 | 0.5999 | ~2,417,190 | 228,000 | 6.50 |
+| 4,096 | 75 | 208,372 | 38.00 / 58.78 | 0.4014 | ~3,612,280 | 238,000 | 6.37 |
+
+Per-case RPC p50/p95 range 11.02–14.05 / 15.06–16.19 ms; the full values and
+event/action percentiles are preserved in `analysis.json`. Event ACK max is
+49.98–59.72 ms; action-result max 49.98–59.72 ms. These are backend round trips,
+not owner-action validation latency. Unreliable probes keep their best-effort
+semantics; observed max latency stays below 55 ms. Fixture average B/s over its
+entire six-second gameplay period must not be mistaken for the separate finite
+structural drain throughput. Initial credit explains finite-burst throughput
+above the sustained structural token rate.
+
+At unchanged 256 KiB/s, retained unpaced 1.45 MB burst -> RPC was 5.708 s.
+The 75% case reduces it to 52.82 ms while structure takes 7.316 s rather than
+5.709 s (about 28% longer). The 50% case takes 10.971 s (about 92% longer).
+This is a targeted causal admission experiment, not an official correction.
+
+`--envelope-shortfall`: nominal admission profile 1 MiB/s at 75%, actual fixed
+backend 256 KiB/s. Pending high 104,915 B against 104,857 B admission threshold
+(58 B backend accounting/framing difference); 2,860 guard deferrals; RPC
+p50/p95/p99/max **416.73/421.54/422.98/423.29 ms**. Event max 423.29, action max
+426.76 ms. All 905 messages/180 gameplay responses arrive. Structural convergence
+5.813 s, last-admission-to-receive drain 414.34 ms. This validates exercised
+backpressure but disproves a nominal-rate-only latency guarantee. The threshold
+is not reported as an exact backend hard byte cap.
+
+### Canonical convergence and unchanged blockers
+
+No candidate byte admission is installed in these scale runs. Load maxima:
+Control/Local/Node p99 **3.735/33.279/34.561 ms**, Character accepted states/s
+**8,263.54/7,498.38/7,424.28**, raw recipient maxima **202.38/660.20/698.53 ms**.
+The diagnostic observer adds re-encoding work; do not attribute these differences
+to a production optimization. Control exits 0; streaming exits 1 because existing
+gameplay health gates still fail, despite successful structural convergence and
+zero Remote errors. Node integration's FAIL is that propagated health failure,
+not a provider acquisition error. Official Local/Node was not rerun: its unchanged
+production result remains the retained failure (one timeout each, ~5.53 s response
+availability). Backend probes do not supersede it.
+
+Local 500 load/evict/reload all converge: **158/212/158 ticks**, **4,406.06 /
+3,873.18 /4,316.56 ms**. Prior equivalent values were 4,399.78/3,868.62/4,320.81 ms;
+this is no material convergence correction. Character/root raw load max 814.61 ms,
+eviction 305.93, reload 430.17. Exactly one acquisition and initial admission,
+fresh reload identity/admission 2, exact 8,192 selected maximum and 65,536 planning
+maximum remain intact. Journal failures zero; maximum lag 16,214 /16,384 retains
+only **170 entries** margin. No new journal or transport guarantee is claimed.
+
+### Validation, artifacts and implementation gate
+
+MSVC Release targeted CTest passes **7/7** in 14.29 s; the three precisely named
+Remote/Character/GameSession real-transport entries additionally pass **3/3** in
+0.27 s. Full reference/planned relevance tests, including KI-007, bootstrap,
+byte rejection and the enlarged hard group, pass. Ten matrix cases and one
+shortfall case pass. Four canonical byte fixtures complete their observations;
+streaming health remains FAIL as above. No production physics change invalidates
+the retained 90-case matrix.
+
+Current-source Clang 19 ASan/UBSan/LSan core CTest passes **7/7** in **57.04 s**,
+with `detect_leaks=1:halt_on_error=1`, plus the separate late-handoff fixture.
+This includes the enlarged reference/planned hard-group regression. The backend
+capacity executable and scale byte observer were not run under sanitizers; no
+GNS-on sanitizer closure is claimed (the pinned upstream UBSan issue remains as
+documented). No new production mechanism was introduced. The isolated published
+documentation-site snapshot builds **19 pages in 2.20 s** with bundled Node 24;
+the new developer Markdown assessment/ledger are manually reviewed, not falsely
+counted as Astro routes. Unrelated morphology edits are excluded from that build.
+
+The published `1bbcd9489` [Native CI run](https://github.com/gmoddev/gargantuan/actions/runs/34672410169)
+has terminal-success Windows and in-progress Linux at this checkpoint; the
+workflow is **not green**. This uncommitted diagnostic slice has no new CI run or
+Pages deployment. Final-source security/CI are not claimed. No normal rate policy
+or official Local/Node correction was deployed.
+
+Node fixture provenance is existing local HEAD
+`f4440423c0701ff396f589fd51b6ce41edc63539` plus its preserved uncommitted
+`integration/gargantuan/CMakeLists.txt` and
+`internal/host/content_scale_integration_test.go`. This slice edits neither file
+and does not treat Node published HEAD alone as their source state.
+
+Artifacts: `build-3l3-worker/evidence/service-envelope/`, `service-envelope-v3.log`,
+`service-shortfall-v3.log`, `service-atomic-v3.log`, both CTest logs, four
+`service-bytes-v2-*` logs and `analysis.json`. `tests/AnalyzeReliableEnvelope.ps1`
+requires all ten unique cases, exact reliable totals and all four phases/eight
+byte distributions per fixture, and emits source-log hashes. The analysis is not
+a security scan. The obsolete sealed security artifact is untouched.
+
+Proposed boundary: bounded backend admission experiments, canonical byte observer,
+the enlarged reference/planned hard-group regression, the reproducible analyzer
+and this design/ledger update. No production networking policy belongs in that
+commit yet. Before implementation, approve a trusted deployment/aggregate rate
+profile and explicit policy for valid groups above the service quantum. No lane
+is demonstrated necessary for small-group workloads; full same-FIFO guarantees
+remain unproved. Client, overload/recovery, journal margin, current-source security
+and CI remain open. No push/merge or 3M is implied by this local checkpoint.
+
 ## Official reliable service attribution (2026-09-12)
 
 **B — FOUNDATION 3L PARTIALLY READY.** Attribution-only delta over

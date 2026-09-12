@@ -89,6 +89,16 @@ This closes the ordering defect, not general planning work or Foundation health.
 - Relevant code: `src/network/ReplicationCoordinator.cpp`,
   `src/network/ReplicaApplier.cpp`, `tests/GameSessionBenchmark.cpp`.
 
+The reliable-service envelope follow-up is diagnostic/design only. At the current
+256 KiB/s backend rate, 50/75% byte pacing reduces controlled RPC maxima to about
+53 ms while 1.45 MB of structure takes 10.97/7.32 s to converge. This is not an
+official-path fix. Valid planned hard-reference work can encode to 123,183 bytes
+in two operations; a universal small burst cap needs an explicit oversized-group
+policy. Production implementation stops for the trusted deployment/aggregate rate
+and compatibility decision. See
+[NetworkingReliableServiceEnvelope.md](devdocs/CurrentArchitecture/NetworkingReliableServiceEnvelope.md).
+No rates, lanes, wire, buffers or semantic bounds changed; KI-006 remains open.
+
 Latest post-publication latency attribution (`latency-v3`) distinguishes due-tick
 cadence from accepted-packet delay. Healthy Local/Node p99 is 31.00/33.88 ms;
 raw Character/root observer gaps are 645.85/658.24 ms, throughput loss 9.02%/9.56%,

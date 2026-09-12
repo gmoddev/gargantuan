@@ -2387,25 +2387,30 @@ int main() {
 		"authoritative Character destroy clears the hard Player reference before retiring the replica"
 	);
 
-	{
+	for (const bool Planned : {false, true}) for (const std::size_t NameBytes : {24u * 1024, 60u * 1024}) {
 		// Player.Character is a hard dependency. A transport-byte retry may not
 		// publish half that group or advance Known after an oversized attempt.
 		auto BytePlayer = Runtime.Players->CreateSessionPlayer({"byte-relevance-test", "hard-group"});
 		auto ByteCharacter = *BytePlayer->GetCharacter();
-		BytePlayer->SetName(std::string(24 * 1024, 'p'));
-		ByteCharacter->SetName(std::string(24 * 1024, 'c'));
+		BytePlayer->SetName(std::string(NameBytes, 'p'));
+		ByteCharacter->SetName(std::string(NameBytes, 'c'));
 		PeerRelevanceSelection HardSelection{.RequiredObjects = {World->GetObjectId()},
 			.DesiredObjects = {World->GetObjectId(), BytePlayer->GetObjectId()}};
 		std::ranges::sort(HardSelection.DesiredObjects);
 		ReplicationCoordinator HardByteCoordinator(World);
 		const ConnectionId HardByteConnection{21, 1};
-		Check(HardByteCoordinator.RegisterPeerBounded(HardByteConnection, ReplicationEpoch(1), HardSelection).Succeeded(),
+		Check((Planned ? HardByteCoordinator.RegisterPeerPlanned(HardByteConnection, ReplicationEpoch(1),
+			std::make_shared<const PeerRelevanceSelection>(HardSelection)) :
+			HardByteCoordinator.RegisterPeerBounded(HardByteConnection, ReplicationEpoch(1), HardSelection)).Succeeded(),
 			"hard-reference byte fixture registers");
 		ReplicaApplier HardByteReplica;
-		for (std::uint64_t Tick = 1; Tick <= 12 && (Tick == 1 || HardByteCoordinator.HasPendingRelevance(HardByteConnection)); ++Tick) {
+		std::uint64_t PlanningTick = 0;
+		for (std::uint64_t Tick = 1; Tick <= 12 && !HardByteCoordinator.GetView(HardByteConnection)->Knows(BytePlayer->GetObjectId()); ++Tick) {
 			const auto KnownBefore = HardByteCoordinator.GetView(HardByteConnection)->KnownObjects;
 			std::size_t Limit = 40 * 1024;
 			auto Produce = [&] {
+				if (Planned) for (int Attempt = 0; Attempt != 10000 && !HardByteCoordinator.IsPlanningReady(HardByteConnection); ++Attempt)
+					HardByteCoordinator.ProcessPlanning(++PlanningTick);
 				return Tick == 1 ? HardByteCoordinator.ProducePendingBaseline(HardByteConnection, 16, Tick, Limit)
 					: HardByteCoordinator.ProducePendingRelevance(HardByteConnection, 16, Tick, Limit);
 			};
@@ -2413,7 +2418,7 @@ int main() {
 			if (!LegalGroup.Succeeded()) {
 				Check(HardByteCoordinator.GetView(HardByteConnection)->KnownObjects == KnownBefore,
 					"over-limit hard-reference candidate does not advance Known");
-				Limit = 64 * 1024;
+				Limit = 2 * NameBytes + 16 * 1024;
 				LegalGroup = Produce();
 			}
 			Check(LegalGroup.Succeeded() && LegalGroup.Frame && HardByteReplica.ApplyFrame(*LegalGroup.Frame).Succeeded(),
@@ -2421,6 +2426,8 @@ int main() {
 			if (!LegalGroup.Succeeded() || !LegalGroup.Frame) break;
 			const auto Encoded = EncodeReplicationFrame(*LegalGroup.Frame);
 			Check(Encoded && Encoded->size() <= Limit, "hard-reference wire frame respects its supplied byte budget");
+			if (Encoded) std::cout << "[Network:AtomicBytes] planned=" << Planned << " nameBytes=" << NameBytes << " frameBytes=" << Encoded->size()
+				<< " operations=" << LegalGroup.Frame->Operations.size() << " knownBefore=" << KnownBefore.size() << '\n';
 			auto PlayerReplica = std::dynamic_pointer_cast<Player>(HardByteReplica.Resolve(BytePlayer->GetObjectId()));
 			Check(!PlayerReplica || (PlayerReplica->GetCharacter() &&
 				*PlayerReplica->GetCharacter() == HardByteReplica.Resolve(ByteCharacter->GetObjectId())),
@@ -2428,6 +2435,10 @@ int main() {
 			Check(HardByteCoordinator.CommitSchedulerAcceptance(HardByteConnection, LegalGroup.Frame->Sequence).Succeeded(),
 				"hard-reference group commits only after scheduler acceptance");
 		}
+		// HasPendingRelevance includes the continuation's charged disposal, not
+		// just unaccepted transitions. Let that existing cleanup finish too.
+		if (Planned) for (int Attempt = 0; Attempt != 10000 && HardByteCoordinator.HasPendingStructuralWork(); ++Attempt)
+			HardByteCoordinator.ProcessPlanning(++PlanningTick);
 		Check(!HardByteCoordinator.HasPendingRelevance(HardByteConnection) && HardByteReplica.Resolve(BytePlayer->GetObjectId()),
 			"hard-reference byte slices eventually converge");
 		HardByteCoordinator.RemovePeer(HardByteConnection);
