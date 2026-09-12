@@ -126,8 +126,10 @@ provider may use either mode when selected by trusted host composition.
 
 The compact states are `Unavailable`, `Requested`, `Acquiring`, `Available`,
 `Admitting`, `Resident`, `Evicting`, and `Failed`. Available means verified
-immutable bytes and a worker-validated parsed document are retained without a
-live Instance hierarchy. Resident means the detached hierarchy successfully
+immutable bytes are retained without a live Instance hierarchy. A worker-validated
+parsed document may also be retained within the decoded budget; under pressure or
+blocked dependencies it is released and later prepared again from verified cached
+bytes through the bounded worker path. Resident means the detached hierarchy successfully
 crossed the authoritative commit boundary. Peer structural convergence is later
 3J state and is never represented here.
 
@@ -375,6 +377,11 @@ The charge conservatively counts STL-owned container/string capacity, not
 allocator bookkeeping or transient parser memory. See
 [`ContentAvailabilityFoundation3L_2.md`](ContentAvailabilityFoundation3L_2.md)
 for the memory attribution and measured validation status.
+The [final-correctness closure report](ContentAvailabilityFoundation3L_2Closure.md)
+records the corrected exception ownership/client preflight defects and the
+remaining reliable-service and healthy-workload degradation. These measured
+failures keep Foundation 3M gated; finite content convergence is not a latency
+acceptance result.
 There is no historical event queue, per-object future, or timer. The benchmark
 executable replaces global allocation only for the benchmark process and
 records requested allocation count, peak live requested bytes, and bytes still

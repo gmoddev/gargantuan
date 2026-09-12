@@ -1,8 +1,9 @@
 # Content Availability Foundation 3L.2
 
-Status: validation in progress, 2026-09-08. This document does not grant the
-Foundation 3M readiness gate. Measurements below are candidate-working-tree
-evidence, not terminal publication CI results.
+Status: partially ready, 2026-09-08. Foundation 3M remains gated by measured
+gameplay/Player materialization failures. See the [full measured validation report](ContentAvailabilityFoundation3L_2Validation.md)
+for all 110 report items, 32 direct answers, current matrices, lifecycle/RSS
+results, security scope, publication CI and explicit remaining coverage gaps.
 
 ## Baseline and scope
 
@@ -54,7 +55,7 @@ the 16 MiB limit must not be described as a total-process heap/RSS ceiling.
 
 Added aggregate metrics report decoded current/high-water bytes, decoded
 deferrals, Available decoded current/high-water bytes, detached-object
-high-water, resident-origin metadata estimates, and retained record count.
+high-water, resident package-origin object counts (not metadata bytes), and retained record count.
 There are no production per-peer or per-content metric labels.
 
 ### Final world-owner retirement
@@ -89,8 +90,10 @@ to 3J production. A frame larger than that limit is retried with a smaller
 transition budget before scheduler acceptance. Critical bootstrap and hard
 reference groups remain indivisible; an indivisible over-limit operation fails
 closed. No hard reference is truncated, no Known/cursor/sequence commit occurs
-for a rejected oversized candidate, and the global 8,192 transition cap is
-unchanged. Existing 8 MiB protocol and 512 KiB transport ceilings are not raised.
+for a rejected oversized candidate. The default global 8,192 transitions/tick
+budget exercised by these tests is unchanged; the existing trusted native
+configuration maximum remains 65,536. Existing 8 MiB protocol and 512 KiB
+transport ceilings are not raised.
 
 ## Validation fixtures and interpretation
 
@@ -133,10 +136,29 @@ failure and Clang UBSan float-to-int overflow before correction. The signed
   process waits. Existing Windows Node process teardown is forced by the fixture;
   it proves process/port reclamation, not graceful Node signal handling.
 
-## Candidate measurements so far
+## Native and validation surface ownership
 
-These timing samples overlap bounded worker build activity and require isolated
-confirmation before a performance-readiness claim.
+| Surface | Owner / lifetime / threading | Authority and bound |
+| --- | --- | --- |
+| `MaximumDecodedDocumentBytes`, shared retained-document charge | ContentAvailability service/workers; atomic shared accounting survives each retained document | Trusted native configuration, 1–16 MiB; no ordinary script or client selection |
+| Decoded/Available/deferral/detached/resident-origin/record metrics | ContentAvailability session; aggregate snapshots of bounded state | Non-secret diagnostics, not residency policy; object counts are not byte estimates |
+| Private `ReleaseScope` helpers and DataModel destructor | Final world owner; journal/render mutexes protect exact scope erasure | No public reset, no global clear, no creation of identity; existing scope bounds preserved |
+| `MaximumFrameBytes` production arguments | ReplicationCoordinator on session thread, per production attempt | Existing negotiated transport/protocol bound; no accepted Known/cursor/sequence change before scheduling |
+| GameSessionTestAccess spatial/Character/connection observations | Internal native tests; session lifetime and existing safe point | Read observations plus opt-in consistency validation, no direct Desired/Known or authority mutation |
+| `--content-churn-cycles`, clock anchor and host timeline diagnostics | Trusted Server smoke loop; ordinary main thread, one host lifetime | Disabled by default; 1–10,000 with explicit key/OnDemand, 120-tick drain; no game-network command |
+| Windows/Go memory and process-cycle selectors | Test harness and owned child processes; process waits and async pipe drains | Trusted operator paths, bounded cycles/deadlines, generated fixture-only credentials; not production config |
+| Linux `/proc` sampler | Go test runner, 100 ms samples of its owned Server PID | Explicit opt-in, 10,000 cycles/provider, 20-minute Server deadline; RSS/HWM/threads, private unavailable |
+| Memory/scale PowerShell analyzers | Offline test tooling, finite input files | Non-secret measurements; absent counters stay null, not zero; no runtime authority |
+
+No new distribution library or protocol-generated binding is required by 3L.2.
+The official Node adapter/credentials remain the existing Server-owned 1.1
+composition, not a newly introduced Engine or Player construction route.
+
+## Historical first-pass measurements
+
+These initial samples are retained as history; the measured companion report
+contains the final current-revision matrix. Timings overlap bounded worker
+activity and do not support a performance-readiness claim.
 
 | Case | Measured result |
 | --- | --- |
@@ -160,10 +182,18 @@ test deadline. It is a failed validation attempt, not evidence of a memory
 plateau or successful Player completion. A bounded script-side network timeout
 now allows diagnostics/cleanup before the outer test deadline.
 
-## Remaining acceptance work
+## Current readiness
 
-Long-run official RSS/private plateau, Local/Node 32/100/500 gameplay distributions,
-100 official process cycles, complete sanitizer/CTest coverage, scoped security
-review, candidate publication CI, and documentation deployment are not yet all
-terminal. The final measured report must answer every requested gate and preserve
-failed attempts alongside corrected reruns. Foundation 3M remains gated.
+The Windows Local/Node 1,000-cycle memory profiles, full twelve-combination
+32/100/500 structural/gameplay matrix, 100 official process cycles, scoped
+security review, and Windows/supported Linux Engine CTests have completed.
+The measured report records separate Linux soak/native sanitizer and hosted CI
+outcomes rather than borrowing success from another configuration.
+
+Structural convergence and bounded memory are not a simulation non-starvation
+pass. The 500-peer no-content baseline is already slow, streaming materially
+worsens RPC/tick latency, and owner-action submissions fail. The legal near-limit
+official Player stalls with both Local and Node, with its captured main stack
+in incremental replica snapshot validation/materialization. The combined
+64-unit mixed-gameplay overload and pending-fan-out failure matrix remain gaps.
+Do not begin 3M before these failures are fixed and the envelope is rerun.

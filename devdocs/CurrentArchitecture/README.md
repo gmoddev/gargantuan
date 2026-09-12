@@ -1,5 +1,17 @@
 # Current architecture
 
+- [Content Availability Foundation 3L.3 runtime work isolation](ContentAvailabilityFoundation3L_3.md)
+  records compiled server/client phase attribution, the CPU fan-out and reliable
+  delivery regressions, and the still-open non-starvation gate. Its
+  [validation ledger](ContentAvailabilityFoundation3L_3Validation.md) distinguishes
+  current checks from retained evidence and uncompleted acceptance criteria.
+- [Content Availability Foundation 3L.2 final correctness](ContentAvailabilityFoundation3L_2Closure.md)
+  separates corrected lifetime/client CPU defects from the remaining measured
+  critical-service and healthy-baseline streaming degradation, with the expanded
+  acceptance report and exact-source validation status.
+- [Content Availability Foundation 3L.2 validation](ContentAvailabilityFoundation3L_2Validation.md)
+  records bounded-memory and content-coupled peer-scale measurements, explicit
+  gameplay/materialization blockers, and the still-closed Foundation 3M gate.
 - [Content Availability Foundation 3L](ContentAvailabilityFoundation3L.md)
   defines deterministic immutable package content units, provider-neutral local
   and private Node acquisition, bounded asynchronous residency, transactional
