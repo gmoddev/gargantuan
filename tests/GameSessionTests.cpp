@@ -82,6 +82,50 @@ namespace {
 	}
 
 	void TestPublicationLatencyBounds() {
+		using Record = runtime_detail::PublicationLatencyRecord;
+		std::vector<Record> DueRecords{
+			{.Stage="FrameBegin", .Tick=10, .Nanoseconds=1'000'000'000},
+			{.Stage="CharacterNextDue", .Connection={1,1}, .Object={9,2}, .Tick=10, .Due=22},
+			{.Stage="FrameBegin", .Tick=22, .Nanoseconds=1'600'000'000},
+			{.Stage="CharacterDue", .Connection={1,1}, .Object={9,2}, .Tick=22, .Due=22},
+			{.Stage="StateBuilt", .Object={9,2}, .Tick=22, .Sequence=7, .Epoch=3, .Nanoseconds=1'601'000'000},
+			{.Stage="CharacterProduced", .Connection={1,1}, .Object={9,2}, .Tick=22, .Sequence=7, .Due=22, .Nanoseconds=1'602'000'000},
+			{.Stage="SchedulerAccepted", .Connection={1,1}, .Object={9,2}, .Tick=22, .Sequence=7, .Due=3, .Nanoseconds=1'603'000'000, .Kind=5},
+			{.Stage="CharacterNextDue", .Connection={1,1}, .Object={9,2}, .Tick=22, .Due=34},
+			{.Stage="ObserverState", .Connection={1,1}, .Object={9,2}, .Tick=22, .Sequence=7, .Due=3, .Nanoseconds=1'652'000'000}
+		};
+		auto Due = test::MeasureDueService(DueRecords, {{9,2}});
+		Check(Due.Milliseconds == std::vector<double>{52} && Due.RootMilliseconds == Due.Milliseconds &&
+			Due.Missing == 0 && Due.Unresolved == 0 && Due.Future == 1,
+			"due service excludes twelve sparse cadence ticks and counts future work separately");
+		DueRecords.back().Due = 4;
+		Check(test::MeasureDueService(DueRecords).Missing == 1, "due service never joins a different control epoch");
+		DueRecords.back().Due = 3; DueRecords.back().Object.Generation = 3;
+		Check(test::MeasureDueService(DueRecords).Missing == 1, "due service never joins a recycled ObjectId");
+		DueRecords.back().Object.Generation = 2; DueRecords.back().Connection.Generation = 2;
+		Check(test::MeasureDueService(DueRecords).Missing == 1, "due service never joins a recycled recipient");
+		DueRecords.resize(4);
+		Check(test::MeasureDueService(DueRecords).Unresolved == 1, "scheduled due work without production is observable");
+		DueRecords.push_back({.Stage="CharacterUnchanged", .Connection={1,1}, .Object={9,2}, .Tick=22, .Due=22});
+		Due = test::MeasureDueService(DueRecords);
+		Check(Due.Unresolved == 0 && Due.Suppressed == 1 && Due.Milliseconds.empty(),
+			"legitimate unchanged suppression is not a missing delivery or latency sample");
+		DueRecords.resize(3);
+		DueRecords.push_back({.Stage="CharacterNextDue", .Connection={1,1}, .Object={9,2}, .Tick=22, .Due=34});
+		Due = test::MeasureDueService(DueRecords);
+		Check(Due.Unresolved == 0 && Due.Rescheduled == 1, "cadence refresh before discovery can supersede a forecast");
+		DueRecords.insert(DueRecords.begin() + 3, {.Stage="CharacterDue", .Connection={1,1}, .Object={9,2}, .Tick=22, .Due=22});
+		Due = test::MeasureDueService(DueRecords);
+		Check(Due.Unresolved == 1 && Due.Rescheduled == 0, "rescheduling cannot hide confirmed due work without service");
+		DueRecords.push_back({.Stage="RecipientRetired", .Connection={1,1}, .Object={9,3}});
+		Check(test::MeasureDueService(DueRecords).Unresolved == 1, "stale retirement cannot erase another generation's due work");
+		DueRecords.back().Object.Generation = 2;
+		Due = test::MeasureDueService(DueRecords);
+		Check(Due.Unresolved == 0 && Due.Retired == 1 && Due.RetiredDue == 1,
+			"explicit materialization retirement is terminal accounting, not a delivered sample");
+		test::ServiceBucket Bucket;
+		Bucket.Add(8, 0, 64); Bucket.Add(8, .125, 64); Bucket.Add(10, .125, 64);
+		Check(Bucket.Required == 18, "all-window accounting detects bursts that one-second averages hide");
 		test::RecipientGapHistogram Histogram;
 		Histogram.Add(1.25); Histogram.Add(20.75); Histogram.Add(5000);
 		Check(Histogram.Count == 3 && Histogram.Upper(.50) == 21 && Histogram.Maximum == 5000 &&

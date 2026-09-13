@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../src/runtime/PublicationLatencyDiagnostics.hpp"
+#include "DueServiceFixture.hpp"
 #include "gargantuan/network/CharacterProtocol.hpp"
 #include "gargantuan/network/RemoteProtocol.hpp"
 #include <algorithm>
@@ -25,6 +26,11 @@ class JoinedCharacterFixture final {
 	runtime_detail::PublicationLatencySink *Previous = nullptr;
 	bool Enabled = false, Active = false;
 	std::uint64_t Dropped = 0, DecodeFailures = 0;
+	bool Service = false;
+	std::size_t RecordLimit = MaximumRecords;
+	struct PhaseSlice { std::string Name; std::size_t Begin, End; };
+	std::vector<PhaseSlice> Phases;
+	std::set<ObjectId> Roots;
 	static bool Selected(void *Context, network::ConnectionId Connection) noexcept {
 		const auto &Self = *static_cast<JoinedCharacterFixture *>(Context);
 		return Self.Active && (!Connection.IsValid() || std::binary_search(Self.Connections.begin(),
@@ -32,7 +38,7 @@ class JoinedCharacterFixture final {
 	}
 	static void Append(void *Context, Record Value) noexcept {
 		auto &Self = *static_cast<JoinedCharacterFixture *>(Context);
-		if (Self.Records.size() < MaximumRecords) Self.Records.push_back(Value);
+		if (Self.Records.size() < Self.RecordLimit) Self.Records.push_back(Value);
 		else ++Self.Dropped;
 	}
 	static void Packet(void *Context, const char *Stage, network::ConnectionId Connection,
@@ -83,18 +89,23 @@ class JoinedCharacterFixture final {
 		} catch (...) { ++Self.DecodeFailures; }
 	}
 public:
-	JoinedCharacterFixture(bool Enable, std::span<const network::ConnectionId> Peers) : Enabled(Enable) {
+	JoinedCharacterFixture(bool Enable, std::span<const network::ConnectionId> Peers, bool MeasureService = false)
+		: Enabled(Enable || MeasureService), Service(MeasureService) {
 		if (!Enabled) return;
 		if (Peers.size() > Connections.size()) throw std::runtime_error("joined peer bound");
 		ConnectionCount = Peers.size(); std::copy(Peers.begin(), Peers.end(), Connections.begin());
 		std::sort(Connections.begin(), Connections.begin() + ConnectionCount);
-		Records.reserve(MaximumRecords);
+		if (Service) RecordLimit = 4 * MaximumRecords;
+		Records.reserve(RecordLimit);
+		Phases.reserve(5);
 	}
 	~JoinedCharacterFixture() { End(); }
 	JoinedCharacterFixture(const JoinedCharacterFixture &) = delete;
 	JoinedCharacterFixture &operator=(const JoinedCharacterFixture &) = delete;
 	void Begin(std::string_view Phase) {
-		if (!Enabled || Phase != "load") return;
+		if (!Enabled || (!Service && Phase != "load")) return;
+		if (Active || Phases.size() == 5) throw std::runtime_error("joined phase bound");
+		Phases.push_back({std::string(Phase), Records.size(), Records.size()});
 		Previous = runtime_detail::ActivePublicationLatency;
 		Active = true; runtime_detail::ActivePublicationLatency = &Sink;
 		Mark("PhaseBegin", 0);
@@ -102,6 +113,7 @@ public:
 	void End() noexcept {
 		if (!Active) return;
 		Mark("PhaseEnd", 0);
+		Phases.back().End = Records.size();
 		runtime_detail::ActivePublicationLatency = Previous; Active = false;
 	}
 	void Mark(const char *Stage, std::uint64_t Tick, network::ConnectionId Peer = {}) const noexcept {
@@ -110,12 +122,23 @@ public:
 	std::size_t GetCount() const noexcept { return Records.size(); }
 	std::span<const Record> GetRecords() const noexcept { return Records; }
 	std::uint64_t GetDropped() const noexcept { return Dropped; }
-	void Print() const {
+	void AddRoot(ObjectId Object) { Roots.insert(Object); }
+	void Print(bool RequireQualified = false) const {
 		if (!Enabled) return;
-		std::cout << "[Content:JoinedLimit] records=" << Records.size() << " cap=" << MaximumRecords
+		std::cout << "[Content:JoinedLimit] records=" << Records.size() << " cap=" << RecordLimit
 			<< " reservedBytes=" << Records.capacity() * sizeof(Record) << " dropped=" << Dropped
 			<< " decodeFailures=" << DecodeFailures << '\n';
-		for (const auto &V : Records)
+		if (Service) {
+			bool Complete = true;
+			for (const auto &Phase : Phases)
+				Complete &= PrintDueService(std::cout, Phase.Name,
+					std::span(Records).subspan(Phase.Begin, Phase.End - Phase.Begin), ConnectionCount, Roots);
+			// Includes inter-phase intervals in the all-window traffic audit.
+			Complete &= PrintDueService(std::cout, "all", Records, ConnectionCount, Roots);
+			std::cout << "[Content:ServiceQualification] complete=" << Complete << '\n';
+			if (RequireQualified && !Complete) throw std::runtime_error("qualified due-service or workload accounting failed");
+		}
+		if (!Service) for (const auto &V : Records)
 			std::cout << "[Content:Joined] stage=" << V.Stage << " peer=" << V.Connection.Slot
 				<< " peerGen=" << V.Connection.Generation << " object=" << V.Object.Slot << " objectGen=" << V.Object.Generation
 				<< " tick=" << V.Tick << " seq=" << V.Sequence << " due=" << V.Due << " epoch=" << V.Epoch

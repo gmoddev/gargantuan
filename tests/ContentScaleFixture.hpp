@@ -148,6 +148,8 @@ namespace gargantuan::test {
 					} else if (std::holds_alternative<network::UnpublishReplication>(Operation.Intent) ||
 						std::holds_alternative<network::DestroyReplication>(Operation.Intent)) {
 						const auto Object = network::GetReplicationObject(Operation.Intent);
+						runtime_detail::RecordPublicationLatency({.Stage = "RecipientRetired", .Connection = LatencyConnection,
+							.Object = Object, .Kind = 503});
 						Objects.erase(Object);
 						if (Object == Root) Root = {};
 					}
@@ -164,6 +166,7 @@ namespace gargantuan::test {
 					if (runtime_detail::PublicationLatencySelected(LatencyConnection)) {
 						const runtime_detail::PublicationLatencyRecord Record{.Stage = "ObserverState", .Connection = LatencyConnection,
 							.Object = State.Character, .Tick = State.AuthoritativeTick, .Sequence = State.StateSequence.Value(),
+							.Due = State.ControlEpoch.Value(),
 							.Nanoseconds = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
 								ReceivedAt.time_since_epoch()).count()), .Kind = 5};
 						auto *Sink = runtime_detail::ActivePublicationLatency;
