@@ -82,6 +82,12 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Content-coupled gameplay latency exceeds the 3L.2 readiness envelope
 
+The current [SEC-3L-001 closure](devdocs/CurrentArchitecture/ContentAvailabilitySecurityClosure3L.md)
+passes the reviewed Foundation 3L security gate after a generation-safe package
+ownership correction. Client/scale, aggregate Event/action fanout, physical-link
+capacity and rendered-client qualification remain open; KI-006 is not closed.
+Earlier security-gate statements below are historical checkpoints.
+
 The former KI-008 combined aggregate failure is corrected; its
 [attribution and scoped overload/recovery evidence](devdocs/CurrentArchitecture/GnsPacketSequenceAttribution3L.md)
 does not close the independent KI-006 qualification gates.

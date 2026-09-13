@@ -6,6 +6,34 @@ last_verified: 2026-09-13
 
 # Foundation 3L.3 diagnostic validation ledger
 
+## SEC-3L-001 package-ownership lifetime closure (2026-09-13)
+
+The completed security review of `33f4622543ee7cb80d98d4f02e3655eabb708349`
+identified one current 3L blocker: raw package-object addresses could alias a
+replacement runtime child and allow its automatic destruction. The
+[security closure receipt](ContentAvailabilitySecurityClosure3L.md) preserves
+that finding and the deterministic unchanged-source failure, then records the
+correction to full slot/generation ObjectId ownership. Admission captures the
+original hierarchy's identities after successful commit; callback-created
+children remain runtime pins. No provider, demand, wire, GNS or reliable-admission
+contract changes.
+
+MSVC Release and Clang 19 ASan/UBSan/LSan each pass **13/13** affected CTests,
+including exact native-address and registry-slot reuse with a new generation,
+ordinary content lifecycle controls and 100 same-process failure-unwind cycles.
+The 512-object / 65,536-unit bound allows at most 256 MiB of logical identity
+payload, adding zero versus x64 pointers; allocator/container overhead and
+simultaneous worst-case RSS are not exactly measured. Focused source review and
+one independent candidate review find no remaining affected security blocker.
+**SEC-3L-001 resolved; Foundation 3L security PASS in the reviewed scope.**
+Documentation/publication checks are recorded in the receipt. Current-source CI
+is inspected after the normal push, separately from worker validation.
+
+Client/scale, aggregate Event/action fanout, physical-link capacity and rendered
+client performance remain open under KI-006. Public unauthenticated GameSession
+admission remains a separate deployment/future-architecture issue.
+**B — FOUNDATION 3L PARTIALLY READY; no 3M.**
+
 ## KI-008 attribution and correction (2026-09-13)
 
 The [attribution receipt](GnsPacketSequenceAttribution3L.md) resumes preserved
@@ -26,8 +54,9 @@ The single-peer worst margin remains 16,210 entries. Long overload latency and
 application service gaps are retained as unfavorable evidence in the receipt.
 Rebuilt official Local and Node pass both small and upper 16-KiB RPC cases,
 100 replies each with zero errors/timeouts. New-source publication CI is separate.
-Independent security, client/scale and broader gameplay fanout gates remain
-open. **B — FOUNDATION 3L PARTIALLY READY; no 3M.**
+Independent security, client/scale and broader gameplay fanout gates remained
+open at that checkpoint; the SEC-3L-001 entry above supersedes its security gate.
+**B — FOUNDATION 3L PARTIALLY READY; no 3M.**
 
 ## Engine-default gameplay qualification (historical 46da288a3 checkpoint)
 

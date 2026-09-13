@@ -1,5 +1,9 @@
 # Current architecture
 
+- [Foundation 3L security closure](ContentAvailabilitySecurityClosure3L.md)
+  preserves SEC-3L-001's raw-address lifetime ABA finding and records full-ObjectId
+  package ownership, deterministic address-reuse regression, bounded metadata,
+  affected validation and the focused security verdict.
 - [Content Availability Foundation 3L.3 runtime work isolation](ContentAvailabilityFoundation3L_3.md)
   records compiled server/client phase attribution, the CPU fan-out and reliable
   delivery regressions, and the still-open non-starvation gate. Its

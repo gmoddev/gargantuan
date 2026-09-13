@@ -22,6 +22,10 @@
 #include <sstream>
 #include <thread>
 
+#ifdef GARGANTUAN_TEST_REUSE_ALLOCATION
+#include "ContentOwnershipAllocator.hpp"
+#endif
+
 namespace {
 	using namespace gargantuan;
 	using namespace std::chrono_literals;
@@ -139,11 +143,153 @@ namespace {
 			);
 		}
 	};
+
+	void TestPackageOwnershipLifetime() {
+		Fixture Data;
+		auto World = std::make_shared<DataModel>();
+		auto WorkspaceValue = std::dynamic_pointer_cast<Workspace>(World->GetService("Workspace"));
+		ContentAvailabilityService Service(World, WorkspaceValue, {
+			.Provider = Data.Provider, .Package = Data.Package, .ManifestDigest = Data.ManifestDigest,
+			.Mode = ContentResidencyMode::OnDemand});
+		constexpr auto Key = "workspace/00000000";
+		Check(Pump(Service, [&] { return Service.IsManifestAvailable(); }), "ownership manifest loads");
+		Check(Service.RequestContent(Key), "ownership demand accepted");
+		Check(Pump(Service, [&] { return Service.GetState(Key) == ContentResidencyState::Resident; }), "ownership package admits");
+		auto Root = WorkspaceValue->FindFirstChild("StreamedRegion", false);
+		auto Original = Root ? Root->FindFirstChild("AuthoredChild", false) : nullptr;
+		Check(Root && Original, "ownership package root and child exist");
+		if (!Root || !Original) return;
+		const auto RootId = Root->GetObjectId(), OriginalId = Original->GetObjectId();
+		const auto OriginalAddress = reinterpret_cast<std::uintptr_t>(Original.get());
+		std::weak_ptr<Instance> OriginalWeak = Original;
+		Original->Destroy();
+#ifdef GARGANTUAN_TEST_REUSE_ALLOCATION
+		ContentOwnershipAllocation::Target = OriginalAddress;
+#endif
+		Original.reset();
+		Check(OriginalWeak.expired(), "package metadata does not retain destroyed original object");
+		// Release the final weak control-block reference before reusing its allocation.
+		OriginalWeak.reset();
+#ifdef GARGANTUAN_TEST_REUSE_ALLOCATION
+		Check(ContentOwnershipAllocation::Held != nullptr, "original native allocation was captured for exact reuse");
+		ContentOwnershipAllocation::Reuse = true;
+#endif
+		auto Replacement = std::make_shared<Folder>();
+		const auto ReplacementId = Replacement->GetObjectId();
+		Check(ReplacementId.Slot == OriginalId.Slot && ReplacementId.Generation != OriginalId.Generation,
+			"replacement reuses registry slot with a distinct generation");
+		Check(!ObjectRegistry::Get().Lookup(OriginalId) && ObjectRegistry::Get().Lookup(ReplacementId) == Replacement,
+			"stale identity cannot resolve replacement lifetime");
+#ifdef GARGANTUAN_TEST_REUSE_ALLOCATION
+		Check(reinterpret_cast<std::uintptr_t>(Replacement.get()) == OriginalAddress && !ContentOwnershipAllocation::Held,
+			"replacement occupies the exact original native address");
+		ContentOwnershipAllocation::Reset();
+#endif
+		Replacement->SetParent(Root);
+		Check(Service.ReleaseContent(Key), "ownership demand released");
+		for (int Attempt = 0; Attempt < 8; ++Attempt) Service.Step();
+		Check(Service.GetState(Key) == ContentResidencyState::Resident && !Root->GetDestroyed() && !Replacement->GetDestroyed(),
+			"SEC-3L-001 replacement lifetime pins root despite historical address or slot reuse");
+		if (Root->GetDestroyed()) { Service.Stop(); World->Destroy(); return; }
+		auto Second = std::make_shared<Folder>();
+		Second->SetParent(Root);
+		Replacement->SetParent(nullptr);
+		for (int Attempt = 0; Attempt < 8; ++Attempt) Service.Step();
+		Check(Service.GetState(Key) == ContentResidencyState::Resident && !Second->GetDestroyed(),
+			"remaining runtime descendant independently pins root");
+		Second->Destroy();
+		Check(Pump(Service, [&] { return Service.GetState(Key) == ContentResidencyState::Unavailable; }),
+			"removing every runtime pin permits automatic eviction");
+		Check(Root->GetDestroyed() && !Replacement->GetDestroyed() && !ObjectRegistry::Get().Lookup(RootId),
+			"eviction ends package lifetime without destroying detached runtime state");
+		std::weak_ptr<Instance> RootWeak = Root;
+		Root.reset();
+		Check(RootWeak.expired(), "evicted record does not retain original root");
+		Replacement->Destroy(); Replacement.reset(); Second.reset();
+		Check(Service.RequestContent(Key), "ownership reload requested");
+		Check(Pump(Service, [&] { return Service.GetState(Key) == ContentResidencyState::Resident; }), "ownership reload admits");
+		auto Reloaded = WorkspaceValue->FindFirstChild("StreamedRegion", false);
+		auto ReloadedChild = Reloaded ? Reloaded->FindFirstChild("AuthoredChild", false) : nullptr;
+		Check(Reloaded && ReloadedChild && Reloaded->GetObjectId() != RootId && ReloadedChild->GetObjectId() != OriginalId,
+			"reloaded root and child have fresh full identities");
+		Check(Service.ReleaseContent(Key), "unchanged reload demand released");
+		Check(Pump(Service, [&] { return Service.GetState(Key) == ContentResidencyState::Unavailable; }),
+			"unchanged original package hierarchy remains automatically evictable");
+		Service.Stop();
+		Check(Service.GetMetrics().RetainedRecordCount == 0 && Service.GetMetrics().ResidentPackageObjects == 0,
+			"ownership records and object accounting clear on Stop");
+		World->Destroy();
+		std::cout << "[Content:Ownership] forced_address_reuse="
+#ifdef GARGANTUAN_TEST_REUSE_ALLOCATION
+			<< 1
+#else
+			<< 0
+#endif
+			<< " object_id_bytes=" << sizeof(ObjectId) << " pointer_bytes=" << sizeof(const Instance *) << '\n';
+	}
+
+	void TestPackageOwnershipAdmissionEdges() {
+		// Each case owns an independent service and authoritative hierarchy.
+		for (int Case = 0; Case < 4; ++Case) {
+			Fixture Data;
+			auto World = std::make_shared<DataModel>();
+			auto WorkspaceValue = std::dynamic_pointer_cast<Workspace>(World->GetService("Workspace"));
+			bool CommitRejected = false;
+			ContentAvailabilityService Service(World, WorkspaceValue, {
+				.Provider = Data.Provider, .Package = Data.Package, .ManifestDigest = Data.ManifestDigest,
+				.Mode = ContentResidencyMode::OnDemand},
+				[&](std::string Code, std::string) { CommitRejected |= Code == "AdmissionCommitRejected"; });
+			constexpr auto Key = "workspace/00000000";
+			Check(Pump(Service, [&] { return Service.IsManifestAvailable(); }), "edge manifest loads");
+			std::shared_ptr<Folder> CallbackChild;
+			auto Added = WorkspaceValue->ChildAdded->Connect([&](std::shared_ptr<Instance> Root) {
+				if (Case != 1 || Root->GetName() != "StreamedRegion") return;
+				CallbackChild = std::make_shared<Folder>();
+				CallbackChild->SetParent(Root);
+			});
+			if (Case == 3) WorkspaceValue->Destroy();
+			Check(Service.RequestContent(Key), "edge demand accepted");
+			if (Case == 3) {
+				Check(Pump(Service, [&] { return Service.GetState(Key) == ContentResidencyState::Failed; }) && CommitRejected,
+					"failed authoritative admission reports commit rejection");
+				Check(Service.GetMetrics().ResidentPackageObjects == 0 && Service.GetMetrics().Admissions == 0,
+					"failed admission publishes no package ownership");
+			} else {
+				Check(Pump(Service, [&] { return Service.GetState(Key) == ContentResidencyState::Resident; }), "edge package admits");
+				auto Root = WorkspaceValue->FindFirstChild("StreamedRegion", false);
+				Check(Root != nullptr, "edge package root exists");
+				if (Root) {
+					if (Case == 0) Root->FindFirstChild("AuthoredChild", false)->Destroy();
+					if (Case == 2) Root->Destroy();
+					Check(Service.ReleaseContent(Key), "edge demand released");
+					if (Case == 1) {
+						for (int Attempt = 0; Attempt < 8; ++Attempt) Service.Step();
+						Check(CallbackChild && !CallbackChild->GetDestroyed() && !Root->GetDestroyed() &&
+							Service.GetState(Key) == ContentResidencyState::Resident,
+							"admission callback child is runtime state and pins root");
+						if (CallbackChild && !CallbackChild->GetDestroyed()) CallbackChild->Destroy();
+					}
+					Check(Pump(Service, [&] { return Service.GetState(Key) == ContentResidencyState::Unavailable; }),
+						"destroyed original, removed callback pin, or externally destroyed root cleans up");
+					Check(Service.GetMetrics().ResidentPackageObjects == 0, "edge cleanup releases ownership metadata");
+				}
+			}
+			Added->Disconnect();
+			Service.Stop();
+			Check(Service.GetMetrics().RetainedRecordCount == 0, "edge stop releases records");
+			World->Destroy();
+		}
+	}
 }
 
 int main() {
 	using namespace gargantuan;
 	BootstrapNativeRuntimeSchema();
+	TestPackageOwnershipLifetime();
+	TestPackageOwnershipAdmissionEdges();
+#ifdef GARGANTUAN_TEST_REUSE_ALLOCATION
+	return Failures == 0 ? 0 : 1;
+#endif
 
 	Fixture Data;
 	auto Parsed = ParsePackageContentManifest(Data.Provider->Manifest);

@@ -266,8 +266,25 @@ prefixes; payloads, tokens, paths, and provider error internals are not emitted.
 A pending request retains fixed record/counter state and the manifest key; an
 in-flight request retains its exact identity/context. A completed or cached unit
 retains at most its bounded immutable bytes. A Resident unit retains its normal
-live hierarchy plus a pointer set used only to distinguish package-owned objects
-from runtime-created children. Its verified raw bytes may remain in the bounded
+live hierarchy plus an `unordered_set<ObjectId>` of complete slot/generation
+identities used only to distinguish original package lifetimes from runtime
+children. Native address or registry-slot reuse does not confer package ownership.
+Admission snapshots the original detached hierarchy, allocates the bounded set's
+buckets/nodes before commit, and fills them with full identities only after
+successful authoritative `SetParent(Workspace)`. The snapshot excludes runtime
+children added by admission callbacks. Failed commit leaves the record's set
+empty. Eviction compares the current root and descendants' full identities;
+any unknown lifetime pins the root. Eviction, external-root cleanup and Stop
+clear ownership metadata; it holds no owning Instance references.
+
+The bound remains 512 identities per unit and 65,536 manifest units: at 8 bytes
+per ObjectId, at most 4 KiB per unit or 256 MiB of logical identity payload across
+the conservative aggregate ceiling. This adds zero logical payload bytes over
+64-bit pointers on the validated x64 targets. Hash nodes/buckets, allocator
+overhead and transient node-handle storage are not exactly measured. See the
+[SEC-3L-001 closure receipt](ContentAvailabilitySecurityClosure3L.md).
+
+Its verified raw bytes may remain in the bounded
 immutable cache for reload, but the parsed document is dropped after commit;
 the cache never owns mutable Instances or runtime ObjectIds. All caches are
 session-owned.

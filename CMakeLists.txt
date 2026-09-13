@@ -805,6 +805,11 @@ if(BUILD_TESTING)
 	add_executable(gargantuan_content_availability_tests "tests/ContentAvailabilityTests.cpp")
 	target_link_libraries(gargantuan_content_availability_tests PRIVATE gargantuan_core)
 	add_test(NAME gargantuan_content_availability COMMAND gargantuan_content_availability_tests)
+	add_executable(gargantuan_content_ownership_tests "tests/ContentAvailabilityTests.cpp")
+	target_compile_definitions(gargantuan_content_ownership_tests PRIVATE GARGANTUAN_TEST_REUSE_ALLOCATION=1)
+	target_link_libraries(gargantuan_content_ownership_tests PRIVATE gargantuan_core)
+	add_test(NAME gargantuan_content_ownership COMMAND gargantuan_content_ownership_tests)
+	set_tests_properties(gargantuan_content_ownership PROPERTIES LABELS "content;runtime;lifecycle;security" TIMEOUT 180)
 	add_executable(gargantuan_content_availability_benchmark "tests/ContentAvailabilityBenchmark.cpp")
 	target_link_libraries(gargantuan_content_availability_benchmark PRIVATE gargantuan_core)
 	add_executable(gargantuan_remote_tests "tests/RemoteTests.cpp")
@@ -979,6 +984,7 @@ if(BUILD_TESTING)
 			gargantuan_character_networking_tests
 			gargantuan_character_networking_benchmark
 			gargantuan_content_availability_tests
+			gargantuan_content_ownership_tests
 			gargantuan_content_availability_benchmark
 			gargantuan_game_session_benchmark
 			gargantuan_replication_benchmark
