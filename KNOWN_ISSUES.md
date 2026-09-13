@@ -84,6 +84,15 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining real-client and physical recipient-service qualification
 
+Update 2026-09-13, physical preflight: **OPEN** for the intended 32-actual-client
+profile. The [hardware receipt](devdocs/CurrentArchitecture/PhysicalDeploymentPreflight3L.md)
+finds a 1 Gbps active link on the inspected worker, below the accepted 32-peer
+2.147 Gbps application reservation / 4.295 Gbps aggregate backend ceilings.
+The task stops before client execution; this is a physical funding shortfall,
+not an attributed engine defect. No new physical scale or headroom is measured.
+A 10 Gbps dedicated host/path is only a candidate. Hypothetical 200/500-client
+support is not a product requirement or the reason this issue remains open.
+
 Update 2026-09-13, disposition **B — narrowed, OPEN**:
 [qualified recipient-service evidence](devdocs/CurrentArchitecture/ContentClientScaleQualification3L.md#recipient-service-qualification-2026-09-13)
 passes Local and Node with 32 and 200 protocol peers, eight root-motion
@@ -96,8 +105,8 @@ at 200 (Local/Node); the 200-peer raw cadence guard can still exceed 250 ms.
 No production correction or historical guard relaxation is retained.
 
 This has one actual gameplay client per case. New Character-fanout service with
-32 actual GameSession clients, a funded physical 200/500-client profile and
-actual-path capacity remain not measured. Historical 200/50 remains over-limit;
+32 actual GameSession clients and a funded physical deployment's actual-path
+capacity remain not measured. Historical 200/50 remains over-limit;
 its later reload also leaves 199 unresolved forecast records, without missing
 produced/accepted observations. Do not claim whole-stress-trial cadence closure
 from the passing load join. These limitations are explicit, not a new renderer

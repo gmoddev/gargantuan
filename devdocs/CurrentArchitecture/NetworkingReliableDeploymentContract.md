@@ -17,6 +17,16 @@ related_adrs:
 
 # Reliable deployment profile and atomic-group compatibility contract
 
+## Physical funding preflight (2026-09-13)
+
+The [32-client hardware preflight](PhysicalDeploymentPreflight3L.md) establishes
+that the inspected worker's 1 Gbps NIC cannot fund the current R=8 MiB/s class:
+N*R is 256 MiB/s and aggregate backend ceilings are 512 MiB/s. No production
+deployment class is accepted by that preflight. A proposed 10 Gbps dedicated
+host/path remains unfunded and unqualified. Loopback tests cannot establish
+physical-NIC funding. The implementation and numeric constraints below remain
+unchanged; neither low measured demand nor idle peers reduce reservations.
+
 ## Approved service class and implementation (2026-09-12)
 
 The [gameplay workload contract gate](ReliableGameplayWorkloadContract3L.md)

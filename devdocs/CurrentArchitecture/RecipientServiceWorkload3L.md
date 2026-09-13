@@ -70,6 +70,11 @@ to every peer through normal load, steady resident, eviction and reload. Keep
 Qp=1,048,640 and Qg=524,288+524,352*N; no bounds are increased. Local and Node
 use the same engine fixture; the Node source remains untouched.
 
+The subsequent [physical preflight](PhysicalDeploymentPreflight3L.md) stops the
+intended 32-actual-client run: the inspected worker has a 1 Gbps NIC, below even
+N*R. The workload is unchanged. No loopback result, smaller offered average or
+candidate 10 Gbps hosting specification is promoted to physical qualification.
+
 ## Measurement contract
 
 Raw observation gap and authoritative tick gap remain historical diagnostics.

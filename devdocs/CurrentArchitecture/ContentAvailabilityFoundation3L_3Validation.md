@@ -6,6 +6,21 @@ last_verified: 2026-09-13
 
 # Foundation 3L.3 diagnostic validation ledger
 
+## Physical deployment preflight stop (2026-09-13)
+
+Starting at `ca176c81609eea83dbef634e37342700a3811114`, the documentation-only
+[hardware/capacity receipt](PhysicalDeploymentPreflight3L.md) records a 1 Gbps
+active physical link on the trusted 5900X/32-GiB development worker. The accepted
+32-peer profile requires 256 MiB/s application reservation and funding for
+512 MiB/s aggregate backend ceilings. Hardware cannot fund this intended class;
+the task's explicit capacity stop applies before actual-client execution.
+
+No new actual-client matrix, native/sanitizer run, CPU saturation, NIC throughput
+or retention result is claimed. Prior exact-source evidence remains valid in its
+original scope. A proposed 10 Gbps host/path is not rented, funded or qualified.
+No production/harness changes; KI-006 OPEN for 32 actual clients, Foundation 3L
+**B — PARTIALLY READY**. Final closure is premature; no 3M or larger-scale promise.
+
 ## Qualified recipient-service matrix (2026-09-13)
 
 Starting at `049095905528cf1c8abcbcd2507da4f162ecf3b8`, diagnostic `8e7000b30`

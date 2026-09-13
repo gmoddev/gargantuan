@@ -12,6 +12,20 @@ checks. This narrows KI-006; it does not qualify physical 200/500 clients or
 close all real-client scale evidence. No production correction is retained.
 The historical 200/50 diagnostic remains unqualified and failing. No 3M.
 
+## Physical deployment preflight (2026-09-13)
+
+The [physical preflight](PhysicalDeploymentPreflight3L.md) over `ca176c8160`
+stops before the requested 32-actual-client run. The inspected 12-core 5900X /
+32-GiB development worker has a 1 Gbps active Ethernet link. N=32 at the accepted
+R=8 MiB/s needs 2.147 Gbps application capacity and 4.295 Gbps aggregate backend
+ceilings. Even the minimum rate compatible with the unchanged 150-ms queue
+allowance exceeds that NIC at 32 peers. This is a reservation shortfall, not a
+measured engine failure. A 10 Gbps dedicated deployment is documented only as
+an unfunded candidate. Actual-client service and physical headroom remain
+**not measured**; no new supported client count or production correction.
+KI-006 remains OPEN for the intended 32-client gate, not hypothetical 500 peers.
+Existing evidence below is reused within its original scope; no 3M or closure.
+
 ## Recipient service qualification (2026-09-13)
 
 ### Source, workload and metric
