@@ -49,6 +49,37 @@ namespace {
 		return glm::distance(glm::vec2(Left.x, Left.z), glm::vec2(Right.x, Right.z));
 	}
 
+	void TestGroundedNetworkLocomotion() {
+		auto World = std::make_shared<DataModel>();
+		HeadlessRenderer Renderer(Vector2(32, 32));
+		Engine Runtime(World, &Renderer, nullptr,
+			EngineProviderConfiguration{.AudioEnabled = false, .Mode = RuntimeMode::NetworkServer});
+		Runtime.ProcessService->Alive = true;
+		Runtime.Step();
+		auto Character = std::make_shared<KinematicCharacter>();
+		Character->SetParent(World);
+		Character->ApplyRuntimeControllerFacts({0, -700, 0}, {0, 1, 0}, true);
+		CharacterInputCommand Command;
+		Command.DeltaSeconds = 1.0f / 60;
+		for (int Index = 0; Index < 600; ++Index) {
+			const auto Motion = Runtime.CharacterControl->EvaluateMovement(Command, *Character);
+			Check(Motion.Velocity.y < 0 && Motion.Velocity.y > -4,
+				"default grounded network movement cannot accumulate unencodable falling velocity");
+			Character->ApplyRuntimeControllerFacts(Motion.Velocity, {0, 1, 0}, true);
+		}
+		Command.Flags = static_cast<std::uint8_t>(CharacterInputFlag::JumpRequested);
+		Check(Runtime.CharacterControl->EvaluateMovement(Command, *Character).Velocity.y == 50,
+			"grounded velocity reset preserves default jump admission");
+		Command.Flags = 0;
+		Character->ApplyRuntimeControllerFacts({0, 20, 0}, {0, 1, 0}, true);
+		Check(Runtime.CharacterControl->EvaluateMovement(Command, *Character).Velocity.y > 16,
+			"grounded velocity reset preserves upward motion");
+		Character->ApplyRuntimeControllerFacts({0, -20, 0}, {}, false);
+		Check(Runtime.CharacterControl->EvaluateMovement(Command, *Character).Velocity.y < -20,
+			"airborne default movement still applies gravity");
+		Runtime.Destroy();
+	}
+
 	void TestPublicationLatencyBounds() {
 		test::RecipientGapHistogram Histogram;
 		Histogram.Add(1.25); Histogram.Add(20.75); Histogram.Add(5000);
@@ -1719,6 +1750,7 @@ int main(int ArgumentCount, char **Arguments) {
 			return Failures == 0 ? 0 : 1;
 		}
 		if (ArgumentCount != 1) throw std::invalid_argument("Unknown game-session test selection");
+		TestGroundedNetworkLocomotion();
 		TestPublicationLatencyBounds();
 		TestProtocolBounds();
 		TestServerSessionSignalLifetime();

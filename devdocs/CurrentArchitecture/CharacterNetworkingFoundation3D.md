@@ -137,6 +137,14 @@ registers the same action/policy content on both sides. Otherwise it disables
 prediction and accepts authoritative presentation. Client matching never grants
 authority.
 
+The shared default network locomotion policy clears existing downward velocity
+when grounded before applying one gravity step. This prevents sustained floor
+contact from accumulating falling speed beyond the compact GCHR velocity range,
+which otherwise stalls state publication and eventually fills prediction history.
+Positive velocity and grounded jump admission remain unchanged. The 3L sustained
+action workload exposed this default-policy defect; the fix belongs in shared
+Luau policy and does not widen the codec or add a native movement rule.
+
 `RegisterAction` hashes a bounded game-defined name to an opaque token and pins
 a Ready Animation `AssetId` plus immutable `ContentId`. Server policy selects
 duration and bounded root translation/yaw and may reject each request. Clients
