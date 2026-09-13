@@ -18,6 +18,37 @@ The [Architectural Discipline and Subsystem Boundaries proposal](../../../../../
 defines the new future tracks below. Foundation 3L remains **partially ready**;
 3M cannot begin until its independent exit gates close.
 
+## Subsystem status
+
+Implementation and qualification are independent. **Foundation implemented**
+means the stated baseline exists, not that the whole subsystem has shipped.
+**Not assessed here** means this review did not establish a subsystem-wide
+qualification verdict; it does not invalidate existing scoped tests or reports.
+**Qualified** must always identify the revision, platform/workload scope, and
+acceptance evidence. Blocked, deferred, and superseded describe planning state.
+
+| Subsystem | Implementation | Qualification | Remaining work / planning state |
+| --- | --- | --- | --- |
+| Studio | Foundation implemented | Not assessed here | Mature first-party UI/tools; multi-client orchestration and plugin/project trust remain. Studio owns UI; EditorHost owns authoritative engine operations. |
+| Script editing | Foundation implemented | Not assessed here | External two-way file sync, durable mappings and three-way conflict workflow remain. |
+| MCP | Foundation implemented | Not assessed here | Authenticated Studio bridge and bounded revision-aware writes exist; extend capabilities only for concrete workflows. |
+| Runtime GUI | Partial | Not assessed here | Retained controls, text editing and scrolling exist; broader controls/layout/accessibility remain. |
+| Rendering / assets | Foundation implemented | Not assessed here | Renderer 2C has a scoped SDL decision; PBR shading, rendering performance and residency maturity remain. |
+| Player / physics | Foundation implemented | Not assessed here | Controller/camera and weld baseline exist; mesh collision and broader constraints remain. |
+| Packaging | Windows baseline implemented | Not assessed here | Recorded Windows package smoke evidence is scoped; cross-platform creator distribution and release qualification remain. |
+| Node | Foundation implemented | Not assessed here | Durable storage, public gameplay admission and production operations remain. |
+| Telemetry | Foundation implemented | Not assessed here | Optional library and host integration exist; ABI/release operations and any new data collection need separate qualification. |
+| Foundations 3G / 3H / 3K | Documented slices implemented | Not reassessed here | Retain each milestone's existing scoped evidence; no blanket current-revision or public-hosting qualification claim. |
+| Foundation 3L | Substantially implemented | Partially qualified | Active closure: correctness, gameplay/client, overload/recovery, journal margin, scale/physics and security gates remain. |
+| Foundation 3M | Planned | Not yet qualified | **Blocked on 3L closure.** Trusted residency demand policy only. |
+| ECS semantic migration | Superseded | Not applicable | Retain DataModel/Instance authority and subsystem-owned derived stores. |
+| ScriptSecurity privilege enum | Superseded | Not applicable | Domains remain separate from host-granted capabilities. |
+| Ribbon/plugin-first Studio plan | Superseded | Not applicable | First-party tools use the existing shell/panels; plugin support is additive. |
+
+At the reviewed main HEAD `5ada43a57`, the 3L ledger records successful Native
+and GNS sanitizer CI. Those checks are not universally pending, but their success
+does not close the independent 3L gates or qualify later revisions.
+
 ## Gargantuan 0.1
 
 ### Basics
