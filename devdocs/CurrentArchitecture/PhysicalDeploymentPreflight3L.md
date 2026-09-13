@@ -8,6 +8,11 @@ last_verified: 2026-09-13
 
 ## Decision and source
 
+Subsequent [VPS measurements](VpsPhysicalPreflight3L.md) retain the physical
+capacity stop on the existing tested path. The
+[service-coverage decision assessment](../FutureArchitecture/Foundation3LServiceCoverageDecision.md)
+recommends Option C as a proposal only; no service contract is amended.
+
 **STOP: the inspected worker cannot fund the intended 32-client network
 profile. No production deployment class is physically qualified by this task.**
 Branch `foundation/3l-content-availability`, starting source
