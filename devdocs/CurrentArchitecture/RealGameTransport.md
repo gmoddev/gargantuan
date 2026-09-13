@@ -1,7 +1,7 @@
 ---
 status: current
 owner: networking
-last_verified: 2026-09-12
+last_verified: 2026-09-13
 related_code:
   - include/gargantuan/network/GameNetworkingSocketsTransport.hpp
   - src/network/GameNetworkingSocketsTransport.cpp
@@ -39,6 +39,18 @@ and best-effort unreliable delivery, encryption, congestion control, connection
 diagnostics, and compatible statistics without dictating Gargantuan replication
 or scheduling policy. The dependency is BSD-3-Clause; its required notice is
 preserved in `cmake/gns/LICENSE.txt`.
+
+The immutable revision carries one narrow local timer-fairness correction in
+`cmake/gns/ApplyServiceFairness.cmake`. A dispatch pass considers only timers due
+at its entry, while each callback still receives a fresh timestamp. This returns
+control to UDP/ACK reads before newly scheduled timers run. The full normalized
+source hash is checked before an idempotent patch is applied; an unexpected
+dependency source change fails configuration. The
+[KI-008 attribution and validation](GnsPacketSequenceAttribution3L.md) records
+the demonstrated receive starvation, direct dependency control and regression.
+This changes neither packet validation nor wire/API/ABI, buffers, rates, ordering
+domains, or Gargantuan admission ownership. It is a local correction, not an
+upstream backport or dependency upgrade.
 
 The adapter is opt-in with `GARGANTUAN_WITH_GNS=ON`. GNS is fetched at the exact
 revision, built static, and exposed only through the optional

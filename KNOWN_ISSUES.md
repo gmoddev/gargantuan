@@ -82,7 +82,9 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Content-coupled gameplay latency exceeds the 3L.2 readiness envelope
 
-The combined aggregate overload also exposes [KI-008](#ki-008-gns-packet-sequence-close-during-aggregate-structural-overload).
+The former KI-008 combined aggregate failure is corrected; its
+[attribution and scoped overload/recovery evidence](devdocs/CurrentArchitecture/GnsPacketSequenceAttribution3L.md)
+does not close the independent KI-006 qualification gates.
 
 The September 13 [workload contract](devdocs/CurrentArchitecture/ReliableGameplayWorkloadContract3L.md)
 selects conservative engine-owned defaults and implements canonical real
@@ -365,33 +367,6 @@ transport/service latency. These are headless official Windows hosts, not a
 graphical GPU-present latency proof. See the final-correctness closure report
 linked from the measured validation document for exact revisions and remaining
 gates. Foundation 3M remains blocked.
-
-## KI-008: GNS packet-sequence close during aggregate structural overload
-
-- Status: Open; blocks combined aggregate overload/recovery qualification.
-- Priority: High
-- Area: Real transport under aggregate structural pressure
-- Reproduction: `gargantuan_game_session_real_transport_tests --reliable-workload-32-structural`
-- Evidence: [reliable gameplay qualification](devdocs/CurrentArchitecture/ReliableGameplayQualification3L.md).
-- Relevant paths: `tests/ReliableGameplayWorkloadFixture.hpp`,
-  `src/network/GameNetworkingSocketsTransport.cpp`, and pinned GNS
-  `steamnetworkingsockets_connections.cpp` at `2cb93a06350bb065db53abdb0d87cf297e0bfd34`.
-
-The 32-client fixture passes its initial eight-active qualified RPC phase, then
-fails combined all-active RPC/structural overload on both MSVC and Linux.
-Terminal-only native diagnostics expose GNS `Pkt number lurch by 32578;
-06a0->85e2`. Pinned GNS closes when the authenticated packet-number gap exceeds
-`0x4000`. This identifies the rejecting backend guard, not the ultimate reason
-for the gap. Journal/backlog-limit failure counters stay zero. Accepted calls
-can terminate with errors and final structural convergence/recovery is not
-established. Per-message backend tracing changes timing and makes a Linux run
-pass, so that instrumented pass cannot close the original failure.
-
-The original workload remains an explicit diagnostic; ordinary/RPC-only
-aggregate qualification is separate. Resolution requires isolating the packet
-gap with bounded terminal diagnostics and then verifying unchanged-workload
-recovery on both platforms. Do not weaken the packet guard, increase buffers,
-change wire ordering, or silently reduce this workload to obtain a pass.
 
 ## Maintenance rules
 

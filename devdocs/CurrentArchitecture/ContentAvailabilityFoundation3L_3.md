@@ -19,8 +19,10 @@ concrete qualified size/rate/burst/concurrency and aggregate assumptions. The
 [qualification report](ReliableGameplayQualification3L.md) records the canonical
 GameSession/GNS matrix, official Local/Node upper RPC evidence, overload recovery
 and actual journal-reader margins. The shared grounded-locomotion policy defect
-is fixed. Combined aggregate structural overload exposes open KI-008 at the
-pinned GNS packet-number guard; it is retained as an unchanged diagnostic.
+is fixed. The [KI-008 attribution](GnsPacketSequenceAttribution3L.md) establishes
+pinned GNS timer starvation of UDP/ACK reads and records a narrow correction.
+The unchanged combined 32-peer overload now passes with recovery on MSVC and
+Linux sanitizers; the report retains unfavorable overload latency and bounds.
 Independent client/scale and security gates remain open: **B — PARTIALLY READY;
 no 3M.** Earlier checkpoints below preserve their original measured scope.
 

@@ -11,15 +11,28 @@
 #include <cmath>
 #include <cstdio>
 #include <map>
+#include <cstdlib>
+#include <steam/steamnetworkingsockets.h>
+#include <steam/steamnetworkingsockets_flat.h>
 
 // Real GameSession/GNS qualification, deliberately separate from the transport
 // capacity benchmark. All completions traverse production Remote dispatch.
 namespace {
 
+int DiagnosticDimension(const char *Name, int Default, int Minimum, int Maximum) {
+	const auto *Text = std::getenv(Name);
+	if (!Text) return Default;
+	return std::clamp(std::atoi(Text), Minimum, Maximum);
+}
+
 void RunAggregateReliableGameplay(Engine &ServerRuntime, Engine &PrimaryRuntime,
 	GameSession &Server, GameSession &Primary, std::uint16_t Port, std::uint64_t &Tick,
 	const std::shared_ptr<RemoteFunction> &Function, const std::shared_ptr<RemoteEvent> &Event) {
 	using Clock = std::chrono::steady_clock;
+	const auto DiagnosticStart = Clock::now();
+	const int PressureCount = QualificationDiagnostic ? DiagnosticDimension("KI008_GROUPS", 6, 0, 6) : 6;
+	const int PressureBytes = QualificationDiagnostic ? DiagnosticDimension("KI008_BYTES", 24576, 1, 24576) : 24576;
+	const bool Gameplay = !QualificationDiagnostic || DiagnosticDimension("KI008_GAMEPLAY", 1, 0, 1) != 0;
 	// Preserve the backend reason without enabling per-message tracing, which
 	// materially changes the saturation timing of the structural diagnostic.
 	detail::GnsServiceSink Diagnostic{nullptr, nullptr, [](void *, ConnectionId Id, const char *Reason) noexcept {
@@ -30,6 +43,15 @@ void RunAggregateReliableGameplay(Engine &ServerRuntime, Engine &PrimaryRuntime,
 		~DiagnosticScope() { detail::ActiveGnsService = Previous; }
 	} Scope{detail::ActiveGnsService};
 	detail::ActiveGnsService = &Diagnostic;
+	if (QualificationDiagnostic) {
+		SteamAPI_ISteamNetworkingUtils_SetDebugOutputFunction(SteamNetworkingUtils(), k_ESteamNetworkingSocketsDebugOutputType_Msg,
+			[](ESteamNetworkingSocketsDebugOutputType Level, const char *Text) {
+				std::fprintf(stderr, "[KI008:Gns] ns=%lld thread=%zu level=%d %s\n",
+					static_cast<long long>(Clock::now().time_since_epoch().count()), std::hash<std::thread::id>{}(std::this_thread::get_id()), static_cast<int>(Level), Text);
+			});
+		std::fprintf(stderr, "[KI008:Config] peers=%u groups=%d bytes=%d gameplay=%d ns=%lld thread=%zu\n", QualificationPeerCount, PressureCount, PressureBytes, Gameplay,
+			static_cast<long long>(DiagnosticStart.time_since_epoch().count()), std::hash<std::thread::id>{}(std::this_thread::get_id()));
+	}
 	struct Peer {
 		std::shared_ptr<GameNetworkingSocketsTransport> Transport;
 		std::unique_ptr<GameSession> Session;
@@ -41,6 +63,16 @@ void RunAggregateReliableGameplay(Engine &ServerRuntime, Engine &PrimaryRuntime,
 		}
 	};
 	std::vector<std::unique_ptr<Peer>> Peers;
+	struct AggregateBounds {
+		std::uint64_t MinimumMargin = DefaultChangeJournalCapacity, RequiredHigh = 0, OldestSequence = 0, PendingHigh = 0;
+		ConnectionId OldestOwner;
+		bool CatalogOwner = false;
+		double OldestAgeMs = 0, ServiceGapMs = 0;
+	} Bounds;
+	struct JournalTime { std::uint64_t Sequence = 0; Clock::time_point Observed; };
+	std::vector<JournalTime> JournalTimes(DefaultChangeJournalCapacity);
+	std::uint64_t LastJournalTail = 0;
+	auto LastStep = Clock::now();
 	bool Disconnected = false;
 	auto CheckSession = [&](const GameSession &Session) {
 		if (Session.GetStatus() != GameSessionStatus::Failed) return;
@@ -76,6 +108,29 @@ void RunAggregateReliableGameplay(Engine &ServerRuntime, Engine &PrimaryRuntime,
 			Peer->Session->Step(Tick);
 		}
 		++Tick;
+		const auto ObservedAt = Clock::now();
+		Bounds.ServiceGapMs = std::max(Bounds.ServiceGapMs, std::chrono::duration<double, std::milli>(ObservedAt - LastStep).count());
+		LastStep = ObservedAt;
+		const auto Metrics = Server.GetMetrics();
+		Bounds.PendingHigh = std::max(Bounds.PendingHigh, Metrics.StructuralPendingEnters + Metrics.StructuralPendingLeaves);
+		const auto Tail = ChangeJournal::Get().CreateCursor(ServerRuntime.DataModel->GetObjectId());
+		for (auto Sequence = std::max(LastJournalTail, Tail.NextSequence > DefaultChangeJournalCapacity ? Tail.NextSequence - DefaultChangeJournalCapacity : 1);
+			Sequence < Tail.NextSequence; ++Sequence) JournalTimes[Sequence % JournalTimes.size()] = {Sequence, ObservedAt};
+		LastJournalTail = Tail.NextSequence;
+		const auto Oldest = ChangeJournal::Get().Read({Tail.Scope, 0}, 0).Cursor.NextSequence;
+		for (const auto &Requirement : detail::GameSessionTestAccess::GetJournalRequirements(Server)) {
+			const auto Required = Tail.NextSequence - Requirement.Cursor.NextSequence;
+			const auto Margin = Required >= DefaultChangeJournalCapacity ? 0 : DefaultChangeJournalCapacity - Required;
+			if (Margin < Bounds.MinimumMargin) {
+				Bounds.MinimumMargin = Margin; Bounds.OldestSequence = Requirement.Cursor.NextSequence;
+				Bounds.OldestOwner = Requirement.Connection; Bounds.CatalogOwner = Requirement.Catalog;
+			}
+			Bounds.RequiredHigh = std::max(Bounds.RequiredHigh, Required);
+			const auto &Time = JournalTimes[Requirement.Cursor.NextSequence % JournalTimes.size()];
+			if (Required && Time.Sequence == Requirement.Cursor.NextSequence)
+				Bounds.OldestAgeMs = std::max(Bounds.OldestAgeMs, std::chrono::duration<double, std::milli>(ObservedAt - Time.Observed).count());
+			Check(Requirement.Cursor.NextSequence >= Oldest, "aggregate live journal requirement remains retained");
+		}
 		CheckSession(Primary);
 		for (const auto &Peer : Peers) CheckSession(*Peer->Session);
 		std::this_thread::sleep_until(Next);
@@ -124,12 +179,15 @@ void RunAggregateReliableGameplay(Engine &ServerRuntime, Engine &PrimaryRuntime,
 	std::vector<GameSession *> Sessions{&Primary};
 	for (auto &Peer : Peers) { Runtimes.push_back(Peer->Runtime.get()); Sessions.push_back(Peer->Session.get()); }
 	for (const bool Overload : {false, true, false}) {
+		Bounds = {};
+		LastStep = Clock::now();
+		const auto Before = Server.GetMetrics();
 		for (auto &Sample : Samples) Sample = {};
-		const std::size_t Active = Overload ? QualificationPeerCount : 8;
+		const std::size_t Active = Overload ? QualificationPeerCount : std::min(8u, QualificationPeerCount);
 		const int Concurrent = Overload ? 16 : 4;
 		std::vector<std::shared_ptr<Part>> Pressure;
 		if (Overload && QualificationAggregateStructural) {
-			for (int Index = 0; Index < 6; ++Index) {
+			for (int Index = 0; Index < PressureCount; ++Index) {
 				auto Object = std::make_shared<Part>();
 				Object->SetName("AggregatePressure" + std::to_string(Index));
 				Object->SetAnchored(true);
@@ -143,8 +201,8 @@ void RunAggregateReliableGameplay(Engine &ServerRuntime, Engine &PrimaryRuntime,
 		const auto Started = Clock::now();
 		for (int Frame = 0; Frame < 480 && !Disconnected; ++Frame) {
 			for (std::size_t Index = 0; Index < Pressure.size(); ++Index)
-				Pressure[Index]->SetName("Aggregate" + std::to_string(Index) + "-" + std::to_string(Frame) + std::string(24 * 1024, 'a'));
-			if (Frame % 40 == 0 || (Overload && Frame == 479)) {
+				Pressure[Index]->SetName("Aggregate" + std::to_string(Index) + "-" + std::to_string(Frame) + std::string(PressureBytes, 'a'));
+			if (Gameplay && (Frame % 40 == 0 || (Overload && Frame == 479))) {
 				for (std::size_t Index = 0; Index < Active; ++Index) {
 					auto &Sample = Samples[Index];
 					if (Sample.Pending != 0) continue;
@@ -184,8 +242,29 @@ void RunAggregateReliableGameplay(Engine &ServerRuntime, Engine &PrimaryRuntime,
 			return All;
 		};
 		auto Pending = [&]() { return std::any_of(Samples.begin(), Samples.end(), [](const Sample &Value) { return Value.Pending != 0; }); };
-		while (!Disconnected && (Pending() || !Converged()) && Clock::now() < Deadline) Step();
+		while (!Disconnected && (Pending() || !Converged() || Server.GetMetrics().JournalBacklogRecords != 0) && Clock::now() < Deadline) Step();
 		Check(!Pending() && Converged(), "aggregate accepted requests drain and all peers converge");
+		const auto After = Server.GetMetrics();
+		const auto &Admission = After.ReliableAdmission;
+		std::cout << "[Qualification:AggregateBounds] overload=" << Overload << " duration_s=" << std::chrono::duration<double>(Ended - Started).count()
+			<< " drain_ms=" << std::chrono::duration<double, std::milli>(Clock::now() - Ended).count()
+			<< " structural_reserved=" << Admission.ReservedBytes - Before.ReliableAdmission.ReservedBytes
+			<< " structural_accepted=" << Admission.AcceptedBytes - Before.ReliableAdmission.AcceptedBytes
+			<< " credit_deferrals=" << Admission.CreditDeferrals - Before.ReliableAdmission.CreditDeferrals
+			<< " backlog_deferrals=" << Admission.BacklogDeferrals - Before.ReliableAdmission.BacklogDeferrals
+			<< " peer_credit_high=" << Admission.PeerCreditHighWater << " global_credit_high=" << Admission.GlobalCreditHighWater
+			<< " peer_backlog_high=" << Admission.PeerBacklogHighWater << " global_backlog_high=" << Admission.GlobalBacklogHighWater
+			<< " admission_wait_us=" << Admission.MaximumAdmissionWaitMicroseconds << " service_gap_ms=" << Bounds.ServiceGapMs
+			<< " pending_high=" << Bounds.PendingHigh << " journal_required_high=" << Bounds.RequiredHigh
+			<< " journal_minimum_margin=" << Bounds.MinimumMargin << " journal_oldest_sequence=" << Bounds.OldestSequence
+			<< " journal_owner=" << (!Bounds.RequiredHigh ? "none" : Bounds.CatalogOwner ? "catalog" : "peer")
+			<< " journal_owner_slot=" << Bounds.OldestOwner.Slot << " journal_owner_generation=" << Bounds.OldestOwner.Generation
+			<< " journal_oldest_age_ms=" << Bounds.OldestAgeMs << " journal_recovery_backlog=" << After.JournalBacklogRecords << '\n';
+		Check(Admission.PeerCreditHighWater <= CandidateReliableService().PeerBurst && Admission.GlobalCreditHighWater <= CandidateReliableService().GlobalBurst,
+			"aggregate byte credit stays within unchanged caps");
+		Check(After.PlanningMaximumTickWork <= 65'536 && After.StructuralMaximumTransitionsSelectedPerTick <= 8'192,
+			"aggregate planning and selection bounds remain unchanged");
+		Check(After.JournalBacklogRecords == 0, "aggregate raw journal readers recover");
 		for (std::size_t Index = 0; Index < Active; ++Index) {
 			auto &Sample = Samples[Index];
 			std::sort(Sample.Latencies.begin(), Sample.Latencies.end());
@@ -199,7 +278,7 @@ void RunAggregateReliableGameplay(Engine &ServerRuntime, Engine &PrimaryRuntime,
 				<< " structural_received_bytes=" << Sessions[Index]->GetMetrics().ClientStructuralBytesReceived - StructuralBefore[Index]
 				<< " convergence_ms=" << ConvergenceMs[Index]
 				<< " admitted_Bps=" << Sample.Accepted * 3104 / std::chrono::duration<double>(Ended - Started).count() << '\n';
-			Check(Sample.Errors == 0 && Sample.Completed == Sample.Accepted && Sample.Completed > 0,
+			Check(Sample.Errors == 0 && Sample.Completed == Sample.Accepted && (!Gameplay || Sample.Completed > 0),
 				"every eligible aggregate peer completes accepted work without corruption");
 			if (!Overload) Check(Percentile(.95) <= 150 && Percentile(.99) <= 250 && Percentile(1) <= 500,
 				"aggregate qualified RPC meets unchanged gates");
@@ -213,6 +292,16 @@ void RunAggregateReliableGameplay(Engine &ServerRuntime, Engine &PrimaryRuntime,
 	// Stop while callback captures still exist, including on a failed drain.
 	Primary.Stop();
 	for (auto &Peer : Peers) Peer->Session->Stop();
+	const auto CleanupDeadline = Clock::now() + 5s;
+	while (!detail::GameSessionTestAccess::GetConnections(Server).empty() && Clock::now() < CleanupDeadline) {
+		(void)Server.Poll(); Server.Step(Tick++); std::this_thread::sleep_for(1ms);
+	}
+	const auto Requirements = detail::GameSessionTestAccess::GetJournalRequirements(Server);
+	const auto PeerRequirements = std::count_if(Requirements.begin(), Requirements.end(), [](const auto &Value) { return !Value.Catalog; });
+	std::cout << "[Qualification:AggregateCleanup] peer_requirements=" << PeerRequirements
+		<< " connections=" << detail::GameSessionTestAccess::GetConnections(Server).size() << '\n';
+	Check(PeerRequirements == 0 && detail::GameSessionTestAccess::GetConnections(Server).empty(), "aggregate disconnect releases every peer journal owner");
+	if (QualificationDiagnostic) SteamAPI_ISteamNetworkingUtils_SetDebugOutputFunction(SteamNetworkingUtils(), k_ESteamNetworkingSocketsDebugOutputType_None, nullptr);
 }
 
 void RunReliableGameplayWorkload(

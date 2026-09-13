@@ -277,9 +277,11 @@ does not by itself qualify all 32 peers at maximum burst or 200/500 peer host
 performance.
 
 `--reliable-workload-32-structural` preserves the combined aggregate structural
-stress as a separate diagnostic. It exposes the open backend packet-sequence
-close in [KI-008](../../KNOWN_ISSUES.md#ki-008-gns-packet-sequence-close-during-aggregate-structural-overload).
-It is not silently reduced or counted as a passing overload/recovery case.
+stress that exposed [KI-008](GnsPacketSequenceAttribution3L.md). The unchanged
+workload passes overload and recovery after the narrowly attributed GNS timer
+fairness correction, and is now included in GNS sanitizer CI. Overload latency
+is reported separately from ordinary qualified targets; the workload is not
+reduced to avoid the failure.
 
 ## Journal and client observations
 

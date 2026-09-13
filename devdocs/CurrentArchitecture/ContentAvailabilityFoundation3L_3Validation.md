@@ -6,7 +6,30 @@ last_verified: 2026-09-13
 
 # Foundation 3L.3 diagnostic validation ledger
 
-## Engine-default gameplay qualification (2026-09-13)
+## KI-008 attribution and correction (2026-09-13)
+
+The [attribution receipt](GnsPacketSequenceAttribution3L.md) resumes preserved
+evidence at `46da288a3f3ce56ffbd88b42c45f26645825d096`. Both starting-source CI
+workflows are terminal success. A direct GNS-only control and deterministic
+before/after timer regression demonstrate pinned GNS timer-dispatch starvation
+of its own UDP/ACK reads. A source-hash-guarded local patch fixes eligibility
+within the existing dispatcher, preserving fresh callback timestamps and the
+immutable dependency revision. No sequence validation, wire, rate, buffer,
+admission, Known, journal capacity, planning or complete-group cap changes.
+
+Corrected MSVC Release and Clang 19 ASan/UBSan/LSan pass 12 / 11 affected CTests,
+both 12-case admission matrices, qualified single-peer mixed gameplay, RPC-only
+aggregate and unchanged 32-peer combined structural overload/recovery. All 6,656
+overload RPCs complete per platform. Aggregate journal margin is 16,326 / 16,366
+entries, recovery backlog is zero and disconnect releases every peer owner.
+The single-peer worst margin remains 16,210 entries. Long overload latency and
+application service gaps are retained as unfavorable evidence in the receipt.
+Rebuilt official Local and Node pass both small and upper 16-KiB RPC cases,
+100 replies each with zero errors/timeouts. New-source publication CI is separate.
+Independent security, client/scale and broader gameplay fanout gates remain
+open. **B — FOUNDATION 3L PARTIALLY READY; no 3M.**
+
+## Engine-default gameplay qualification (historical 46da288a3 checkpoint)
 
 The [selected workload contract](ReliableGameplayWorkloadContract3L.md) supersedes
 the missing-number stop at the historical checkpoints below. Defaults are

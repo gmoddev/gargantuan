@@ -13,6 +13,46 @@ not every legal message or every workload satisfying the selected upper bounds.
 Independent current-source security, client/scale and final validation remain
 separate gates.
 
+## KI-008 correction receipt (2026-09-13)
+
+The [packet-sequence attribution](GnsPacketSequenceAttribution3L.md) supersedes
+the unresolved KI-008 diagnosis recorded below. Pinned GNS repeatedly dispatches
+newly due timers in one pass, starving its own UDP/ACK reads. A direct GNS-only
+control and an original-versus-corrected timer regression establish ownership.
+The narrow local patch retains the immutable dependency revision and all packet
+validation, wire, ordering, workload, buffer and byte-admission contracts.
+
+The unchanged 32-peer combined structural/RPC workload now passes on MSVC and
+Clang 19 ASan/UBSan/LSan. Each completes all 6,656 overload RPCs without error;
+structural convergence and drain finish within 1.727 s after offered load ends.
+Ordinary recovery worst RPC latency is 77.86 / 83.37 ms. Overload worst RPC
+latency remains 3.321 / 3.829 s; this is not ordinary latency qualification.
+Aggregate journal margins are 16,326 / 16,366 of 16,384, with zero journal backlog
+after recovery and zero peer owners/connections after deliberate disconnect.
+
+MSVC passes 12 affected CTests and Linux passes 11, including the dependency
+fairness regression, KI-007 and late-send/lifecycle coverage. Both canonical
+single-peer matrices, RPC-only aggregate modes and 12-case admission matrices
+pass. Qualified mixed RPC p95/p99/max are 73.92/74.89/74.89 ms on Windows and
+70.65/71.42/71.42 ms on Linux; Event/action maxima remain below 101 ms. The
+single-peer mixed-overload minimum journal margin remains 16,210 on Linux
+(16,272 on Windows), recovering to zero outstanding raw-reader backlog.
+
+Rebuilt official Local and Node pass 100 small and 100 upper 16-KiB RPCs each,
+with zero errors or timeouts. The linked attribution receipt records exact
+measurements and publication status. Starting-source Native CI
+[34741243563](https://github.com/gmoddev/gargantuan/actions/runs/34741243563) and
+GNS sanitizer CI
+[34741243527](https://github.com/gmoddev/gargantuan/actions/runs/34741243527)
+both reached terminal success. The corrected combined fixture is now a required
+GNS sanitizer workflow step. Those starting-source runs do not validate this
+new correction. Full client/scale, aggregate Event/action fanout and independent
+security gates remain open; Foundation 3L remains partially ready.
+
+Sections from **Source and execution** onward preserve the earlier workload
+checkpoint and its then-open KI-008 result; current attribution and correction
+evidence above take precedence.
+
 ## Source and execution
 
 Work begins from published `b866a89e741b4b4df3419c74856d293b650bf475` on
@@ -194,7 +234,7 @@ The fixture also fixes its own stale RemoteManager pointer use after disconnect
 and stops sessions before callback captures expire. The original ASan failure
 was in the fixture, not proof of a production manager lifetime defect.
 
-This is [KI-008](../../KNOWN_ISSUES.md#ki-008-gns-packet-sequence-close-during-aggregate-structural-overload)
+This was [KI-008](GnsPacketSequenceAttribution3L.md)
 and an explicit stop at the backend wire-safety boundary. The known failing
 combined diagnostic is not a required green CI step. CI covers the separate
 single-peer matrix and RPC-only aggregate modes; its green result must not be

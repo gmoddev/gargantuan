@@ -49,7 +49,7 @@ acceptance evidence. Blocked, deferred, and superseded describe planning state.
 | Node | Foundation implemented | Not assessed here | Durable storage, public gameplay admission and production operations remain. |
 | Telemetry | Foundation implemented | Not assessed here | Optional library and host integration exist; ABI/release operations and any new data collection need separate qualification. |
 | Foundations 3G / 3H / 3K | Documented slices implemented | Not reassessed here | Retain each milestone's existing scoped evidence; no blanket current-revision or public-hosting qualification claim. |
-| Foundation 3L | Substantially implemented; numeric gameplay contract and canonical fixtures exist | Partially qualified; scoped single-peer and official upper-RPC evidence | KI-008 combined aggregate overload, complete gameplay/client and journal guarantees, scale/physics and current-source security remain. |
+| Foundation 3L | Substantially implemented; numeric gameplay contract and canonical fixtures exist | Partially qualified; scoped single-peer, official upper-RPC and corrected 32-peer overload/recovery evidence | Complete gameplay/client and production journal guarantees, scale/physics and current-source security remain. |
 | Foundation 3M | Planned | Not yet qualified | **Blocked on 3L closure.** Trusted residency demand policy only. |
 | ECS semantic migration | Superseded | Not applicable | Retain DataModel/Instance authority and subsystem-owned derived stores. |
 | ScriptSecurity privilege enum | Superseded | Not applicable | Domains remain separate from host-granted capabilities. |
@@ -61,7 +61,8 @@ does not close the independent 3L gates or qualify later revisions.
 
 The September 13 [gameplay qualification](../CurrentArchitecture/ReliableGameplayQualification3L.md)
 selects conservative engine defaults and records scoped runtime results. The
-combined aggregate stress reproducer remains open; it is not a Ready claim.
+unchanged combined aggregate stress now passes with recovery after the narrowly
+attributed KI-008 GNS timer correction; it is not a Ready claim.
 
 ### Future architectural tracks
 

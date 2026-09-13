@@ -149,6 +149,7 @@ jobs:
             --parallel "$CMAKE_BUILD_PARALLEL_LEVEL" \
             --target \
               gargantuan_real_transport_tests \
+              gargantuan_gns_service_fairness_tests \
               gargantuan_remote_real_transport_tests \
               gargantuan_character_real_transport_tests \
               gargantuan_game_session_real_transport_tests \
@@ -164,7 +165,7 @@ jobs:
             --output-on-failure \
             --no-tests=error \
             --output-junit build-gns-sanitizers/ctest-gns-results.xml \
-            -R '^(gargantuan_real_transport|gargantuan_remote_real_transport|gargantuan_character_real_transport|gargantuan_game_session_real_transport)$'
+            -R '^(gargantuan_real_transport|gargantuan_gns_service_fairness|gargantuan_remote_real_transport|gargantuan_character_real_transport|gargantuan_game_session_real_transport)$'
 
       - name: Run profiled GameSession over GNS under sanitizers
         shell: bash
@@ -183,12 +184,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # KI-008's unchanged --reliable-workload-32-structural reproducer
-          # remains an explicit diagnostic, not a claimed passing CI gate.
           build-gns-sanitizers/gargantuan_game_session_real_transport_tests --reliable-workload 2>&1 \
             | tee build-gns-sanitizers/reliable-workload.log
           build-gns-sanitizers/gargantuan_game_session_real_transport_tests --reliable-workload-32 2>&1 \
             | tee build-gns-sanitizers/reliable-aggregate.log
+          build-gns-sanitizers/gargantuan_game_session_real_transport_tests --reliable-workload-32-structural 2>&1 \
+            | tee build-gns-sanitizers/reliable-aggregate-structural.log
 
       - name: Upload reliable gameplay qualification measurements
         if: always()
@@ -199,6 +200,7 @@ jobs:
           path: |
             build-gns-sanitizers/reliable-workload.log
             build-gns-sanitizers/reliable-aggregate.log
+            build-gns-sanitizers/reliable-aggregate-structural.log
 
       - name: Upload GNS sanitizer diagnostics
         if: failure()

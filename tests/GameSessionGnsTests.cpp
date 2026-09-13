@@ -28,6 +28,7 @@ namespace {
 	int Failures = 0;
 	std::uint32_t QualificationPeerCount = 1;
 	bool QualificationAggregateStructural = false;
+	bool QualificationDiagnostic = false;
 
 	void Check(bool Condition, const char *Message) {
 		if (Condition) return;
@@ -65,13 +66,16 @@ namespace {
 int main(int ArgumentCount, char **Arguments) {
 	using namespace gargantuan;
 	using namespace gargantuan::network;
+	QualificationDiagnostic = ArgumentCount == 2 && std::string_view(Arguments[1]) == "--ki008-attribution";
 	QualificationAggregateStructural = ArgumentCount == 2 && std::string_view(Arguments[1]) == "--reliable-workload-32-structural";
+	QualificationAggregateStructural = QualificationAggregateStructural || QualificationDiagnostic;
 	const bool Aggregate = QualificationAggregateStructural || (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--reliable-workload-32");
 	if (Aggregate) QualificationPeerCount = 32;
+	if (QualificationDiagnostic) QualificationPeerCount = DiagnosticDimension("KI008_PEERS", 32, 1, 32);
 	const bool Workload = Aggregate || (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--reliable-workload");
 	const bool Profiled = Workload || (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--reliable-profile");
 	if (ArgumentCount > 1 && !Profiled) {
-		std::cerr << "usage: gargantuan_game_session_real_transport_tests [--reliable-profile|--reliable-workload|--reliable-workload-32|--reliable-workload-32-structural]\n";
+		std::cerr << "usage: gargantuan_game_session_real_transport_tests [--reliable-profile|--reliable-workload|--reliable-workload-32|--reliable-workload-32-structural|--ki008-attribution]\n";
 		return 2;
 	}
 	if (Profiled) {
