@@ -6,6 +6,39 @@ last_verified: 2026-09-13
 
 # Foundation 3L.3 diagnostic validation ledger
 
+## Joined 200-peer recipient attribution (2026-09-13)
+
+The [joined client/scale receipt](ContentClientScaleQualification3L.md#joined-recipient-attribution-2026-09-13)
+explains the retained ~650-ms failures. Published documentation checkpoint
+`1dccd89a6` preserves production `543cc0de0`; diagnostic commit `7b299ab61`
+adds bounded timing only. No production behavior correction is retained.
+
+Recipient 200:1 / root Character 63:1 observes state 478 at tick 504, then state
+490 at tick 516. No update to that low-rate relationship is due in ticks 505–515.
+All 41,480 ordinary selections are on their desired tick, and all 45,120 ordinary
+plus forced recipient-state keys match acceptance, submission, delivery and
+observation. Local/Node next-state due-tick-to-observation is 52.2210/50.1847 ms,
+while raw observation gaps remain **656.3057/649.8674 ms**.
+
+Exact interval accounting attributes 340.0189/334.7485 ms to server work,
+42.3026/47.4721 to the one gameplay client, and 250.5823/245.2356 to protocol
+observers. Observer-only GRPL validation accounts for 245.8639/240.5820 ms.
+This is mixed cadence/shared-fixture timing, with real server streaming work;
+it is not a 650-ms joined Player application delay or one isolated production
+operation. The guard remains intact and failing.
+
+Complete accounting also establishes that this diagnostic exceeds the accepted
+reliable message-count envelope: peer 1 and aggregate egress bursts fail in
+control, Local and Node. Local needs a 467.6004-message aggregate burst versus
+256 accepted, including all forced Character recipients. Byte buckets and RPC
+concurrency pass. A passing RPC subset never qualified this entire workload.
+
+Focused MSVC session/trace tests and the unchanged control/Local/Node matrix run;
+all traces have zero drops/decode failures. Isolated documentation build passes
+19 pages. Prior exact-production security/CI/overload/official evidence is reused
+within its original scope. Qualified multi-client/fanout and physical-capacity
+claims remain not measured. **KI-006 open; B — PARTIALLY READY; no 3M.**
+
 ## Current-source client/scale qualification (2026-09-13)
 
 The [client/scale receipt](ContentClientScaleQualification3L.md) records the open

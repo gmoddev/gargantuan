@@ -12,6 +12,272 @@ Node cases pass, including the accepted RPC latency envelope. The retained
 health checks with streaming. No production correction is conclusively
 attributed by this checkpoint. Do not close KI-006 or begin 3M.
 
+## Joined recipient attribution (2026-09-13)
+
+**Classification: mixed cadence/shared-fixture wall-clock failure, not a joined
+650-ms production-state delivery delay.** The canonical diagnostic is also
+outside the accepted reliable message-count envelope. The historical failures
+are real measurements; neither their guard nor the workload is weakened here.
+
+The documentation checkpoint is published as `1dccd89a6`, whose runtime/test
+trees equal measured production `543cc0de0`. The bounded diagnostic commit is
+`7b299ab61`. There is no production behavior correction. Six tracked source/test
+files differ from the 562-file worker baseline manifest, all intentional; the
+six replacements and one new header match local SHA-256 hashes exactly. The
+other 556 manifest files are unchanged. Sibling and morphology work is preserved.
+
+### Timestamp model and scope
+
+The join key is full recipient ConnectionId, full Character ObjectId,
+authoritative tick and state sequence; decoded GCHR records also preserve the
+control epoch and materialization epoch. No pointer identity or new semantic
+identity is introduced. Root request/commit joins use full Character identity
+and the Engine simulation tick. Engine and server publication tick counters
+are distinct: in this fixture the measured Engine tick is publication tick
+minus 44. Shared steady-clock timestamps provide the mapping; they are not
+interchangeable counters or cross-process clocks.
+
+`GARGANTUAN_JOINED_LATENCY=1` enables `JoinedCharacterFixture` for the load phase
+only. It reserves 1,048,576 fixed-shape records (80 MiB), with static stage names,
+no retained payloads and an explicit failure on overflow/decode failure.
+Control/Local/Node retain 770,689/772,151/772,151 records, with zero drops and
+zero decode failures. Output is deferred until all measured phases finish.
+Existing inactive runtime taps remain no-ops without a scoped test sink.
+
+| Stage | Measured meaning |
+| --- | --- |
+| T0 | Start of the existing authoritative due tick, joined from `CharacterNextDue` and `FrameBegin`; not an invented continuous-wall deadline |
+| Root request / commit | Existing Animator request and successful Main-thread admission, with matching Engine tick |
+| T1 | `StateBuilt`: generation-safe authoritative snapshot constructed |
+| T2 | `CharacterSnapshot` / `CharacterProduced`: cached snapshot and selected recipient frame ready |
+| T3 | New structural dependency **not applicable** to these already-materialized Character endpoints; both frames use materialization epoch 11 |
+| T4 | Existing scheduler accepts the GCHR frame; this is not a new 3J structural acceptance or reliable-credit charge |
+| T5 | Simulated transport successfully submits the frame |
+| T6 | Simulated transport queues the matching recipient event |
+| T7/T8 | Protocol observer begins decoding, records the state at the exact timestamp used by the gap guard, then completes its checks |
+
+The worst recipient is a protocol observer, not a Player. It records protocol
+facts, not a live replicated Character transform. The separate real client's
+`ClientCallback`/`ClientHandled` taps retain that distinction. For these
+unreliable sequenced Character frames, reliable byte admission is **not
+applicable**. An observer does not acquire a live-application timestamp merely
+because it decoded a message.
+
+### Worst Local and Node state joins
+
+Both worst streaming gaps concern recipient **200:1**, root Character **63:1**,
+control epoch **2**. Last observation: authoritative tick **504**, sequence
+**478**. Next: tick **516**, sequence **490**. Values below are milliseconds
+relative to the last observed state; they are an ordered state join, not sums
+of unrelated stage maxima.
+
+| Next-state milestone | Local | Node |
+| --- | ---: | ---: |
+| T0: tick 516 begins | 604.0847 | 599.6827 |
+| Root request (Engine tick 472) | 604.3952 | 599.9798 |
+| Root commit (same Engine tick) | 604.4025 | 599.9870 |
+| Due wheel processes relationship | 632.5068 | 627.4749 |
+| T1: authoritative snapshot built | 632.5303 | 627.5042 |
+| T2: recipient frame ready | 632.6141 | 627.5854 |
+| T4: scheduler accepted | 632.6155 | 627.5867 |
+| T5: transport submitted | 633.1328 | 628.0622 |
+| T6: recipient event queued | 633.6023 | 628.5026 |
+| Observer decode begins | 656.3040 | 649.8658 |
+| T8: guard observes state | **656.3057** | **649.8674** |
+| Observer checks finish | 656.3062 | 649.8679 |
+
+Thus the next due state takes **52.2210/50.1847 ms from T0 to observation**.
+Snapshot construction to recipient-frame readiness is 0.0838/0.0812 ms;
+frame readiness to scheduler acceptance 0.0014/0.0013 ms; accepted-to-submit
+0.5173/0.4755 ms; submit-to-event-queue 0.4695/0.4404 ms; event-queue-to-observer
+entry 22.7017/21.3632 ms; observer entry-to-state observation 0.0017/0.0016 ms.
+The earlier state was built 1.4249/1.5920 ms before its observation. No joined
+state spends approximately 650 ms in scheduler, transport or client application.
+
+At tick 504 the relationship schedules its next due tick as 516, on the
+LowRate tier (12 ticks at nominal 60 Hz). The next recorded schedule after
+516 is 528. There are **no due publications to recipient 200 for ticks
+505–515**. The Character nevertheless produces snapshots for other recipients
+on every tick 505–516, with sequences 479–490. All 41,480 ordinary selected
+recipient states in each run are produced on their desired due tick: zero
+late selections and maximum tick lateness zero. The 3/6/12-tick tiers and
+unchanged-state suppression remain authoritative; owner input's five-tick
+cadence is a separate mechanism.
+
+Inside the worst streaming interval, the affected Animator makes seven nonzero
+root requests, Engine ticks 466–472 (publication ticks 510–516). Every request
+commits in the same tick, taking approximately 7–8 microseconds. Earlier steps
+in the interval produce no root request: animation requests require a valid
+nonzero motion delta, not an unconditional motion command every wall interval.
+Across load, requests equal commits: 1,270 control and 1,400 per streaming run.
+No root request is lost or deferred. A root-request sequence does not require
+one network publication per request to every low-rate observer.
+
+All **45,120** full recipient/state keys match exactly across scheduler
+acceptance, transport submission, event delivery and observation: zero missing
+or extra keys. This includes 41,480 ordinary deliveries and 3,640 reliable
+forced-semantic deliveries, which the earlier ordinary-publication counter did
+not include. No intermediate state due to the worst recipient is missing.
+
+### Exact interval ownership and observer isolation
+
+The table clips paired timing spans to each run's actual worst observation
+interval. These mutually exclusive owners sum to the measured gap. The control
+worst pair is recipient 197:1 / Character 63:1, ticks 545–557, sequences 519–531;
+it also spans 12 publication ticks. The values are corresponding worst intervals,
+not an assertion that the same tick window is worst in every run.
+
+| Wall-clock owner, ms | Control | Local | Node |
+| --- | ---: | ---: | ---: |
+| Server simulation/replication | 39.3439 | 340.0189 | 334.7485 |
+| One gameplay client Engine | 3.1084 | 42.3026 | 47.4721 |
+| 199 protocol observer drains | 4.6285 | 250.5823 | 245.2356 |
+| Pacing | 151.7160 | 3.2578 | 3.7045 |
+| Other fixture work / boundaries | 5.2560 | 20.1441 | 18.7067 |
+| Total | **204.0528** | **656.3057** | **649.8674** |
+
+Observer isolation uses separately timed `ServerDone`, `DrainBegin/DrainDone`
+and decoded-packet scopes, without reducing peers or deferring canonical work.
+GRPL decoding and hierarchy/property verification inside the protocol observers
+accounts for **0 / 245.8639 / 240.5820 ms** of the table's observer time.
+Character packet processing accounts for 2.1548/2.1609/2.1110 ms. Remaining
+observer time is polling, loop and diagnostic overhead. In streaming, that
+observer-only GRPL work blocks the next server tick because all roles share one
+serial harness. The official Player does not run 199 other clients' validators.
+
+The server component also increases substantially; this is **not purely an
+observer artifact**. Streaming ticks include real structural preparation,
+encoding and publication. No single production operation owns the whole gap.
+Direct `Content::Step` work in the interval is approximately
+0.014/0.017/0.019 ms, already included in server time; acquisition/admission
+precedes the examined publication burst. Provider worker/TLS timing is not
+invented from these Main-thread counters. Removing observer time arithmetically
+is not a rerun: Engine animation uses elapsed time, so an accelerated harness
+could change motion intervals. No weakened qualification variant is retained.
+
+### Complete load producer and recipient accounting
+
+Trace windows last 5.027959 / 5.5535743 / 5.5512429 seconds for
+control/Local/Node. Unless stated otherwise, counts and bytes below are identical
+in all three runs. Divide by the recorded wall duration, not simulated ticks,
+for rates. Payload bytes include protocol headers, not the GNS adapter or TLS.
+
+| Traffic | Producer count | Recipient/network count | Payload bytes |
+| --- | ---: | ---: | ---: |
+| Authoritative Character snapshots | 13,610 unique states across 50 Characters | 45,120 state deliveries in 36,507 GCHR frames | 5,110,758 |
+| Ordinary Character publication subset | 13,584 unique snapshots | 41,480 state deliveries | Included above |
+| Forced reliable Character subset | 26 unique states | 3,640 deliveries, each in its own frame; mean fanout 140 | 522,720 |
+| Root-Character subset of all states | 2,273 unique states | 25,059 state deliveries | 2,385,006 compact-state bytes, excluding shared frame headers |
+| Owner input | 3,241 commands from 50 owners | 3,241 server deliveries | 194,460 |
+| Reliable Event offered / echoed ACK | 301 / 301 | Fanout one in each direction | 19,866 / 19,874 |
+| RPC request / response | 100 / 100 | Fanout one; maximum outstanding one, final zero | 6,100 / 6,100 |
+| Action request / accepted result | 8 / 8 | Fanout one for result; forced state fanout counted separately | 384 / 928 |
+| Streaming GRPL | Recipient-specific prepared frames | 400 messages, 104,840 operations, 200 recipients | 31,145,760 |
+| Control GRPL | Recipient-specific prepared frames | 200 messages, 2,440 operations, 200 recipients | 175,560 |
+| Content acquisition | Zero control; one acquisition and one initial admission per streaming provider | One immutable 512-object package | 273,032 uncompressed provider payload bytes |
+
+For example, Local produces approximately 2,450.7 unique Character snapshots/s,
+delivers 8,124.5 states/s in 6,573.6 GCHR frames/s, and submits approximately
+920,264 Character payload bytes/s. Its Event/RPC/action offer rates are
+54.20/18.01/1.44 per second. Root-Character state delivery is a subset, not
+additional traffic to add to the totals. The fixture's earlier phase counters
+use slightly different boundaries; the trace counts every packet in its window,
+including an echo crossing a phase boundary. Network/TLS framing, physical ACKs
+and retransmissions are **not measured** by the simulated transport.
+
+There is one ordinary reliable gameplay producer, not 50. Reliable accounting
+includes every forced semantic recipient, action result and echoed Event, and
+excludes GRPL from the ordinary gameplay bucket because it has separate
+structural credit. No unknown/control packet is omitted in this load window.
+All 200 recipients are included. Add the documented 32-byte adapter envelope
+once per packet for the following service-budget calculations; this is budget
+accounting, not measured GNS wire traffic.
+
+For each peer/direction, evaluate every packet-bounded interval against
+`messages <= 16 + 64*T` and `bytes <= 20480 + 32768*T`. Aggregate 200-peer
+limits are `messages <= 256 + 1024*T` and `bytes <= 327680 + 524288*T`.
+The minimum burst needed at the fixed accepted rate is
+`max_interval(count - rate * duration)`; a phase average cannot establish this.
+
+| Required message burst | Control | Local | Node | Accepted burst |
+| --- | ---: | ---: | ---: | ---: |
+| Peer 1 ingress | 89.0954 | 74.7063 | 74.4057 | 16 |
+| Peer 1 egress, including semantic fanout | 106.6678 | 88.9821 | 88.7181 | 16 |
+| Aggregate server egress | 533.0325 | 467.6004 | 463.8676 | 256 |
+
+All three violate those message-count assumptions. The other peers' individual
+message buckets pass, as do measured byte buckets. Aggregate reliable egress
+is 4,049 messages and 679,190 bytes including adapters; its required byte burst
+is below 75,673 bytes, within 327,680. Peer 1 ingress/egress is 409/427 messages
+and 39,438/43,158 bytes including adapters. RPC concurrency and action count
+remain bounded. This does not retroactively relabel a qualified failure: the
+handoff explicitly classified the 200/50 case as an investigation fixture with
+unproved complete envelope accounting. That accounting is now measured and
+fails. No workload or accepted limit is changed to make the case pass.
+
+### Guard verdict, validation and next task
+
+The observation-gap metric is valid as **elapsed shared-fixture recipient
+cadence**, but invalid as a standalone measure of production due-state latency.
+It includes time before the next semantically due update and serial work for
+199 other observers. Server streaming cost is also real. Classification is
+therefore **mixed**, with an exact fixture/measurement owner in
+`RunContentScale` and `ContentScalePeer::Observe`, not a single production
+publication, transport or application defect. The 250-ms guard and its failures
+remain intact. No caching, threading, queue, rate, wire or transaction change is
+retained. Only bounded instrumentation and its focused tests are added.
+
+Before/after instrumentation reproduces the result: earlier 662.822/642.989 ms;
+first joined run 664.6061/653.1715 ms; final joined run 656.3057/649.8674 ms.
+Control passes, streaming load/evict/reload fail unchanged health checks.
+Final load tick p95/p99/max is 4.3591/5.4551/10.6414 ms control,
+22.7121/29.9545/53.4288 Local and 22.1833/30.6537/50.5497 Node.
+These are instrumentation comparisons, not optimization gains.
+
+MSVC `gargantuan_game_session_tests` passes, including full-generation state
+correlation, one packet byte charge, stale-peer rejection, bounded storage and
+scoped-sink cleanup. Both joined comparisons run the unchanged three-provider
+matrix; traces have no omissions or decode failures. The documentation build
+passes with 19 pages in an isolated copy. Initial copied dependency and system
+Node 20 setup failures were repaired using isolated dependencies and Node 24;
+the active docs workspace and repository dependency files were not changed.
+
+Prior security/KI-007/KI-008, sanitizer, overload and official Player evidence
+remains evidence for the unchanged production behavior at `543cc0de0`, not an
+exact-commit CI claim for the added instrumentation. No production behavior
+correction or GNS path change requires those expensive matrices again. Existing
+official Player application/Poll gaps are consistent with this attribution:
+the Player has no serial 199-observer drain. It lacks this 200-peer server-side
+join, so it does not prove a physical 200-client deployment; no automatic rerun
+was performed.
+
+Raw v1/v2 receipts, hashes and exit codes are on `dockerbox` under
+`C:\Sandbox\Codex\Artifacts\joined-3l-20260913` and
+`C:\Sandbox\Codex\Artifacts\joined-3l-20260913-v2`. Local analysis and full
+per-state joins are under `C:\Users\aiden\AppData\Local\Temp\3l-joined-evidence-v2`;
+temporary artifacts are not checked in. Diagnostic source is committed
+separately from these documentation conclusions.
+
+**Stop at the attribution boundary:** no single production owner violating an
+accepted service property is established after the complete join. KI-006 stays
+open; Foundation 3L remains **B — PARTIALLY READY**. Real-client 200/500 scale,
+qualified aggregate fanout, physical deployment capacity, high-scale shutdown
+retention and GPU-present visibility remain **not measured**.
+
+**Exact next task:** define the companion diagnostic around per-recipient
+due-tick-to-observation latency, retain raw observation cadence and server tick
+health separately, and construct a 200-peer gameplay mix that demonstrably fits
+all existing peer/global message and byte inequalities including forced semantic
+fanout. Preserve this unqualified stress case as a control. Select/fund a physical
+deployment profile before claiming real-client support. Do not optimize
+production merely to satisfy the serial-harness gap or begin 3M.
+
+## Earlier client/scale checkpoint
+
+The remaining sections preserve the measurements and limitations preceding the
+joined attribution above. Their pending-attribution statements are historical;
+the new join supersedes that uncertainty without erasing the failed runs.
+
 ## Source and evidence boundary
 
 Branch: `foundation/3l-content-availability`. Starting and measured production
@@ -316,8 +582,9 @@ merge or claim of CI covering a later source revision is made.
 Documentation verification: the new receipt's relative file links resolve and
 the scoped diff passes `git diff --check`. Astro site source is unchanged; a new
 site build is not run for this devdocs/known-issues-only checkpoint. The three
-documentation changes are left uncommitted and unpublished for review; HEAD
-remains the measured production revision. Unrelated morphology edits are retained.
+documentation changes were initially left uncommitted for review, then published
+as `1dccd89a6` before the joined attribution above. Unrelated morphology edits
+are retained.
 
 Non-starvation is demonstrated for the measured official single-client and
 retained reliable matrices. The canonical 200-peer diagnostic fails its

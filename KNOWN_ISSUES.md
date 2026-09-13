@@ -82,6 +82,17 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Content-coupled gameplay latency exceeds the 3L.2 readiness envelope
 
+Update 2026-09-13, joined attribution: [per-state evidence](devdocs/CurrentArchitecture/ContentClientScaleQualification3L.md#joined-recipient-attribution-2026-09-13)
+classifies the ~650-ms 200/50 gap as mixed cadence/shared-fixture timing. The
+next due state reaches observation in 52.2210/50.1847 ms Local/Node; the raw
+656.3057/649.8674-ms interval includes 12 correctly scheduled ticks and
+250.5823/245.2356 ms of serial observer work. All 45,120 recipient-state keys
+match through acceptance and observation. Complete forced-fanout accounting
+also fails this diagnostic's peer/global reliable message-count envelope.
+No single production owner is established; no production optimization or guard
+relaxation is retained. Qualified real-client scale remains open, not disproved
+or closed by this unqualified shared-harness result. See diagnostic `7b299ab61`.
+
 Update 2026-09-13: the [current-source client/scale receipt](devdocs/CurrentArchitecture/ContentClientScaleQualification3L.md)
 at `543cc0de0` passes official single-Player Local/Node RPC and lifecycle service,
 but reproduces the retained 200/50 streaming diagnostic failure: Local/Node
