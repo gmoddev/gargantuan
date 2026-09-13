@@ -1,10 +1,63 @@
+---
+status: planned
+authority: non-normative
+---
+
 # Delivery roadmap
 
 This roadmap optimizes for a dependable creator loop, not checkbox parity. Phases
 have exit tests; dates should be assigned only after Phase 0 measures build and
 defect throughput.
 
+## Review status — 2026-09-12
+
+Reviewed across main, Node, MCP, Telemetry, and Studio; see the
+[revision/evidence ledger](RoadmapEvidence20260912.md) and the
+[feature checklist](../../docs/src/content/docs/developing/roadmap.mdx).
+Checked deliverables represent the stated implemented slice. Unchecked
+**Partial** entries cross off only delivered work. No phase exit is certified by
+this documentation review, and the runtime suites were not rerun.
+
+| Phase | Status | Remaining exit scope |
+| --- | --- | --- |
+| 0 | Partial; build, security and test foundations exist | Full finding closure/release blocks, complete configuration/tooling matrix and clean-machine safety qualification. |
+| 1 | Partial; identity/schema/journal/capabilities/persistence are implemented | Broader migrations, API conformance and end-to-end quota/lifecycle qualification. |
+| 2 | Partial; input, audio/animation, retained GUI, assets, Lighting/Sky and Windows packaging exist | Mesh collision, rendering breadth/performance and every minimum-game acceptance gate. |
+| 3 | Partial; packaged authoritative networking through 3K and the 3L lifecycle exist | 3L correctness/service/resource qualification and authenticated admission before public hosting. |
+| 4 | Partial; native Studio shell, docking, source editing/history, local Play and MCP exist | Two-way source sync, advanced authoring/language tooling, multi-client orchestration and plugin trust. |
+| 5 | Partial; Node and telemetry foundations exist | Durable backend storage, creator distribution, public operations, signing/provenance and external-creator qualification. |
+| 6 | Future, demand-led | Default-space 3M precedes semantic regions/topology; other expansion requires its own measured gates. |
+
+### Future architectural tracks
+
+The full [Architectural Discipline and Subsystem Boundaries](ArchitecturalDisciplineAndSubsystemBoundaries.md)
+proposal is non-normative design input. Priorities are scoped per track.
+
+- [ ] Architecture 0A–0C: machine-readable dependency extraction, declared allowed/forbidden edges, reporting, then CI enforcement.
+- [ ] **Partial — Architecture 0D/0E:** ~~separate GNS adapter and packaged host targets~~; graph-backed transitive-boundary tightening, neutral protocol/publication extraction, then progressive isolation.
+- [ ] Close Foundation 3L before starting 3M. The [current validation ledger](../CurrentArchitecture/ContentAvailabilityFoundation3L_3Validation.md) records **partially ready; no 3M**, despite the closed GNS sanitizer gate.
+- [ ] Foundation 3M: bounded trusted demand policy with semantic priority, deadlines, deterministic distance/cost ties, hysteresis, bounded lookahead and revision-stamped request/release deltas into 3L.
+- [ ] **P0 before untrusted public hosting:** signed short-lived server/session-bound join grants and bounded admission before Player/Character, relevance/materialization, Remote, pin or gameplay-capability allocation; GSES retains compatibility validation.
+- [ ] **Partial:** ~~existing planning/selection/transport budgets~~; finite per-stage service/resource envelopes through discovery, encoding, backend service, client application and cleanup/recovery, including overload and fairness.
+- [ ] Bounded subsystem-owned CPU/allocation/residency attribution with static tags; allocator hooks only if needed. Detailed profiling remains local unless a separate telemetry contract permits it.
+- [ ] Asset 2B residency accounting for canonical/decoded/GPU/physics/animation bytes, consumers/pins, last use and load/eviction counts before normative general eviction policy.
+- [ ] Conditional immutable 3H/3K read epochs and later worker derivation only after measured crossover and Amdahl headroom; neither blocks 3L/3M.
+- [ ] Studio engine-assigned provenance over existing history, scoped plugin grants and revocable project trust; staged atomic external-author transactions only for a demonstrated need.
+- [ ] Audit canonical schema coverage for API/tooling metadata; extend the existing registry rather than introduce another.
+- [ ] **P2 after reliable-service stabilization:** bounded semantic anti-entropy over receiver-normalized agreed state; mismatches use normal 3J recovery, never direct `Known` mutation.
+- [ ] Default-space 3M validation, then semantic SpatialRegion, region-local physics/topology and portals with consumer-specific traversal budgets.
+- [ ] **Partial:** ~~network fuzz harnesses~~; risk-weighted coverage-guided content, snapshot/journal, persistence, artifact/importer, and future admission/topology fuzzing with sanitizer runs and retained corpora.
+
+3L owns content lifecycle, 3E relevance, and 3J accepted materialization. 3M
+owns demand only. Generic prediction extraction waits for a second consumer.
+Do not reintroduce an ECS semantic conversion, second schema/capability registry,
+second history, or duplicate streaming lifecycle as a new foundation.
+
 ## Evidence updates
+
+The following entries record cumulative milestone history. A milestone's
+original deferrals may be implemented by a later entry; use the reviewed
+checklists and evidence ledger above for present status.
 
 - Animation Foundation 3A establishes a canonical non-Humanoid `Character`,
   engine-shipped replaceable Luau assembly/locomotion, renderer-neutral root
@@ -113,14 +166,13 @@ when the disabled Vector2 tests are restored.
 
 Deliver:
 
-- reproducible recursive checkout/build documentation;
-- CI Debug/Release build and headless test target, starting with Windows;
-- engine libraries separated enough to test without application startup;
-- ASan/UBSan where supported, static analysis, formatter, and crash-on-error tests;
-- source-backed capability matrix and honest README status;
-- fixes/tests for SEC-001 through SEC-014, hierarchy cycles/reentrancy, mouse
-  state, malformed serializers, and shader/native failure handling; and
-- restricted project-open mode plus canonical source-root confinement.
+- [x] Reproducible recursive checkout/build documentation.
+- [ ] **Partial:** ~~Windows Release and Linux sanitizer/headless CI~~; complete Debug/Release qualification matrix.
+- [x] Core test targets and separate packaged hosts sufficient for headless testing without application startup.
+- [ ] **Partial:** ~~ASan/UBSan and malformed-input regressions~~; qualify static analysis, formatting and complete crash-on-error coverage.
+- [ ] **Partial:** ~~source-backed current architecture and README status~~; keep a complete release capability matrix verified.
+- [ ] **Partial:** ~~hierarchy/input/parser/native-boundary regression work~~; requalify every historical SEC finding against current source and retain explicit release blocks.
+- [x] Non-executing EditorHost project open and canonical SourceMount root confinement; persistent plugin/project grant policy remains separate.
 
 Exit: clean CI; all high/medium findings closed or explicitly release-blocked;
 malformed/traversal corpus cannot crash, escape roots, or execute before trust.
@@ -131,23 +183,19 @@ Prerequisite: Phase 0 CI and safety baseline. Decisions: Instance remains the
 public model; specialized stores stay internal; IDs are never raw addresses;
 mutations publish only after commit; compatibility is an adapter. Tests: property-
 based hierarchy/lifecycle, schema conformance, scene round trip/migration, module
-graphs, scheduler quotas and domain-denial tests. Likely blockers: generated
-reflection currently mixes metadata with executable Luau, public behavior is
-underspecified, and changing ownership touches every subsystem.
+graphs, scheduler quotas and domain-denial tests. Historical reflection coupling
+is now addressed by frozen canonical schema. Remaining blockers include
+remaining public behavior/migration gaps, and cross-subsystem ownership changes.
 
 Deliver:
 
-- `ObjectId`, generation-checked handles, object registry, and transactional
-  hierarchy/lifecycle;
-- unified schema registry for persistence, replication, access, editability,
-  validation, and migration;
-- ordered change journal and safe-point event publication;
-- server/client/plugin/editor execution domains and capability checks;
-- root-sandboxed Luau, checked native bindings, reliable ModuleScript resolution,
-  bounded scheduler/signals, cancellation and diagnostics;
-- versioned scene/project schema, stable references, limits, atomic save,
-  migrations, and `SourceMount`; and
-- documented frame phases plus physics/render command/extraction boundaries.
+- [x] `ObjectId`, generation-checked registry and validated hierarchy/lifecycle with committed publication.
+- [ ] **Partial:** ~~canonical frozen schema for persistence, replication, access, editability and validation~~; broader migration/tooling coverage.
+- [x] Ordered committed change journal and buffered safe-point publication boundaries.
+- [ ] **Partial:** ~~Core/PreRun/Studio/Server/Client domains and host-created capability checks~~; plugin grants/trust/revocation.
+- [ ] **Partial:** ~~source-root sandboxing, checked bindings, ModuleScript resolution and scheduler foundations~~; full abuse/quota/cancellation exit qualification.
+- [ ] **Partial:** ~~versioned project persistence, stable references, bounds, atomic save and SourceMount~~; broader migration contracts.
+- [x] Documented frame phases and neutral physics/immutable render-publication boundaries.
 
 Exit: property-based hierarchy/round-trip tests pass; a saved scene preserves
 identity/references; wrong native calls never crash; abusive tasks/signals stay
@@ -166,27 +214,25 @@ breadth before the sample closes end-to-end.
 
 Deliver:
 
-- action mapping, corrected input state, gamepad, player camera/controller;
-- physics property synchronization, raycast/overlap, collision groups, validated
-  constraints and buffered contacts;
-- render extraction, correct primitive meshes, culling/batching baseline,
-  materials, lights, textures/meshes, and device failure diagnostics;
-- content-addressed asset importer/resolver/cache;
-- Asset Foundation 2B's mesh-collision slice: establish the separate
+- [ ] **Partial:** ~~ActionMap, corrected input boundary and default player camera/controller~~; qualify the complete device/focus matrix.
+- [ ] **Partial:** ~~neutral physics synchronization/queries, weld constraints and buffered contacts~~; broader collision-group/constraint acceptance.
+- [ ] **Partial:** ~~immutable render extraction, primitive/imported meshes, basic materials/textures and Lighting/Sky~~; culling/bucketing, local lights and broader device qualification.
+- [x] Content-addressed asset importer/resolver/cache foundations.
+- [ ] Asset Foundation 2B's mesh-collision slice: establish the separate
   backend-neutral collision boundary, MeshPart binding, physics-backend
   projection, bounded lifetime/residency behavior, and measured representation
   policy needed by imported and generated meshes; other 2B priorities remain
   separately scoped in current architecture;
-- Geometry Foundation 1A ([research](SolidGeometryCompilerResearch.md)) after
+- [ ] Geometry Foundation 1A ([research](SolidGeometryCompilerResearch.md)) after
   that Asset Foundation 2B slice: a bounded, deterministic headless
   solid-geometry compiler that transactionally emits ordinary canonical Mesh
   assets and produces collision data only through the established 2B contract;
   Manifold is the first prototype candidate, not yet a dependency decision, and
   runtime game-facing CSG remains deferred;
-- basic audio and transform/tween animation;
-- functional Screen UI: layout, text, image, button, clipping, focus, navigation;
-- structured `[System:SubSystem]` diagnostics and performance counters; and
-- the collect-and-exit sample plus package/smoke-test command.
+- [x] Basic Audio Foundation 1 and transform/tween/Character animation foundations.
+- [x] Retained Screen UI foundation: layout, text, images, TextButtons, clipping, focus/navigation, TextBoxes and scrolling.
+- [ ] **Partial:** ~~structured diagnostics and subsystem benchmark/counter surfaces~~; comprehensive local CPU/allocation/residency attribution.
+- [x] FirstCompleteGame collect-and-exit sample and Windows standalone package/smoke command; broader clean-machine acceptance remains the phase exit.
 
 Exit: every acceptance test in `MinimumUsableGame.md` passes on a clean machine.
 
@@ -197,21 +243,21 @@ schema journal. Decisions: server truth, asynchronous typed messages, local play
 uses the real protocol, network ownership is only a lease, transport is replaceable
 and encrypted. Tests: protocol fuzzing, golden vectors/version negotiation,
 latency/loss/reorder, malicious clients, bandwidth budgets, multi-process soak and
-reconnect/failure. Likely blockers: nondeterministic physics, schema churn, missing
-operational auth/discovery owner, and overgeneralizing replication before the
-character slice is measured.
+reconnect/failure. Remaining blockers include broader physics authority, schema
+compatibility, public game-session admission and 3L qualification. Node now owns
+service discovery and identity-provider foundations; those do not by themselves
+authenticate a GameSession peer.
 
 Deliver:
 
-- separate `GameServer` and `GameClient` roles plus loopback orchestration;
-- strict protocol handshake, stable schema hash, bounded serialization, encrypted
-  remote transport adapter;
-- server-to-client create/update/destroy replication with baselines and recovery;
-- Players/session lifecycle and semantic input-command channel;
-- one predicted/reconciled character controller and remote interpolation;
-- typed `NetworkEvent` and `NetworkRequest` APIs with deadlines/rate limits;
-- spatial interest grid, per-client budgets, traffic profiler, and fault injection;
-- malicious-client corpus and multi-process latency/loss/soak tests.
+- [x] Separate packaged Server/Player roles and loopback GameSession orchestration.
+- [x] GSES compatibility handshake, schema compatibility, bounded codecs and replaceable GNS transport; authenticated public join grants remain open.
+- [x] Server-to-client structural replication with baselines, recovery and scheduler-accepted materialization.
+- [x] Players/session lifecycle and semantic GCHR input/action channel.
+- [x] Bounded predicted/reconciled Character controller and remote interpolation.
+- [x] Bounded RemoteEvent/RemoteFunction semantics with deadline/rate policy; these are the implemented names for the earlier NetworkEvent/NetworkRequest intent.
+- [ ] **Partial:** ~~3E/3H relevance index, per-peer budgets, traffic diagnostics and simulated fault injection~~; complete creator-facing traffic profiler.
+- [ ] **Partial:** ~~malformed/adverse-transport and packaged multi-process tests~~; full current-source malicious-client, 3L overload/client/scale and public-hosting qualification.
 
 Exit: two clients complete the sample through one authoritative server under
 simulated adverse network conditions; forged state and resource abuse are
@@ -230,17 +276,16 @@ performance on large hierarchies.
 
 Deliver:
 
-- EditorHost project/trust launcher and structured diagnostics;
-- viewport/hierarchy/properties using versioned engine APIs;
-- selection, picking, transform gizmos, command bus, undo/redo, dirty state,
-  atomic save and recovery;
-- Luau editor/language services and runtime source-map integration;
-- asset browser/import queue and GUI inspector/device emulation;
-- Geometry Foundation 1B solid-model authoring for union, intersection,
+- [ ] **Partial:** ~~authenticated EditorHost launch, non-executing open and structured diagnostics~~; persistent revocable project/plugin trust.
+- [x] Studio viewport, virtualized Explorer and schema-driven Properties using versioned EditorHost APIs.
+- [ ] **Partial:** ~~selection/picking, transform gizmos, shared commands/history, dirty state and atomic save~~; broader crash/conflict recovery.
+- [ ] **Partial:** ~~Luau source tabs, syntax diagnostics and revision-checked commits~~; full language services, debugging and source-map integration.
+- [ ] **Partial:** ~~Assets tool, filtered asset picker and import commands~~; expanded import queue UX and GUI inspector/device emulation.
+- [ ] Geometry Foundation 1B solid-model authoring for union, intersection,
   difference, edit/separate, preview, collision inspection, diagnostics, and
   command-backed undo/redo through the headless compiler;
-- isolated local server/multi-client play orchestration; and
-- capability broker architecture (third-party plugin distribution remains off).
+- [ ] **Partial:** ~~one isolated local Play/Stop runtime~~; Studio server/multi-client test orchestration.
+- [ ] **Partial:** ~~explicit Studio services and independently authorized MCP bridge writes~~; third-party plugin broker/grants/distribution.
 
 Exit: a creator can construct, script, save, reopen, play-test, diagnose, and
 package the minimum game entirely through Studio-supported workflows.
@@ -258,14 +303,13 @@ that conflicts with the coherent core.
 
 Deliver:
 
-- Linux/macOS verified packages and platform capability matrix;
-- rigged character animation/tooling, improved lighting/materials/particles;
-- scalable scene streaming and replication profiling;
-- deployment configuration, self-hosted discovery/auth reference, server storage
-  connector, secret management, admin/operations console;
-- versioned compatibility adapter and migration report for selected Roblox APIs;
-- sandboxed signed plugin pilot; documentation/tutorial/sample suite; and
-- security policy, signed releases, SBOM/provenance, update/rollback plan.
+- [ ] **Partial:** ~~Linux headless/server evidence~~; verified Linux/macOS creator packages and complete platform matrix.
+- [ ] **Partial:** ~~rigged animation, Character/root-motion runtime, Lighting/Sky and material assets~~; expanded animation tools, advanced rendering and particles.
+- [ ] **Partial:** ~~3L lifecycle and replication/content profiling~~; 3L qualification, 3M trusted demand and creator-facing scalable streaming.
+- [ ] **Partial:** ~~Node deployment configuration, discovery, workload/player authentication, entitlement/content services and memory-backed storage contracts~~; durable storage, gameplay join admission and production secret/admin operations.
+- [ ] Versioned compatibility adapter and migration report for selected Roblox APIs.
+- [ ] **Partial:** ~~documentation and samples~~; sandboxed signed plugin pilot and full tutorial-conformance suite.
+- [ ] **Partial:** ~~documented capability/privacy boundaries and optional telemetry integration~~; release security qualification, signed releases, SBOM/provenance and update/rollback operations.
 
 Exit: invited external creators complete projects without routine engine-team
 intervention; server operations and security response have owners and runbooks.
@@ -301,21 +345,21 @@ than introducing renderer-only portals or a second source of spatial authority.
 | Documentation | API status generated from tested schemas; tutorials run in CI; claims tied to release gates. |
 | Observability | Structured categories (`[Network:Replication]`, `[Script:Scheduler]`), trace IDs/ticks/object IDs, privacy controls. |
 
-## First 12 concrete engineering tickets
+## Original first 12 engineering tickets — reviewed status
 
-1. Add CI bootstrap/build/headless test and dependency checkout verification.
-2. Fix project/`FileLink` canonical-root confinement and add trust mode.
-3. Replace unsafe loader/module casts and borrowed deserializer views.
-4. Replace raw parent lifetime, reject cycles, and make destruction monotonic.
-5. Centralize checked native Luau receiver/argument/error handling.
-6. Introduce execution domains/capabilities and remove `ProcessService` from games.
-7. Add parser/scene/scheduler/signal budgets plus fuzz/sanitizer targets.
-8. Specify and prototype stable IDs, schema flags, transactions, and journal.
-9. Implement bounded, source-located scene serialization and atomic round trip.
-10. Finish ModuleScript identity/resolution and a bounded cancellable scheduler.
-11. Fix input state and implement the first ActionMap plus player camera.
-12. Implement render/physics synchronization boundary and the first visible,
-    interactive Screen UI acceptance test.
+1. **Partial:** ~~CI bootstrap/build/headless tests and dependency checkout checks~~; retain the full Phase 0 configuration/release gate.
+2. **Partial:** ~~FileLink/SourceMount canonical-root confinement and non-executing project open~~; persistent project/plugin trust remains open.
+3. **Implemented foundation:** ~~checked module resolution and owned/bounded deserialization~~; continue parser regressions.
+4. **Implemented foundation:** ~~generation-safe object identity, parent-cycle rejection and monotonic destruction~~.
+5. **Partial:** ~~checked native binding/capability boundaries~~; continue auditing full API coverage rather than asserting every historical binding is closed.
+6. **Implemented foundation:** ~~host-granted execution capabilities and denial of ambient game ProcessService authority~~.
+7. **Partial:** ~~bounded parser/runtime surfaces and network fuzz/sanitizer targets~~; finish boundary-wide coverage and complete scheduler/signal abuse qualification.
+8. **Implemented foundation:** ~~stable IDs, canonical schema, mutation journal and authoritative Studio history~~; history is commit-only grouping.
+9. **Partial:** ~~versioned bounded serialization and atomic project round trip~~; broader migration/source-diagnostic qualification.
+10. **Partial:** ~~ModuleScript identity/resolution and scheduler foundations~~; complete cancellable scheduler/quota exit qualification.
+11. **Implemented foundation:** ~~corrected input boundary, ActionMap and default player camera/controller~~.
+12. **Implemented foundation:** ~~neutral physics/immutable render boundary and interactive retained Screen UI~~.
 
-Do not parallelize higher-level feature volume ahead of tickets 1–10. They are the
-load-bearing contracts for networking, Studio, and long-lived creator content.
+These are continuing contracts for networking, Studio and creator content, not
+twelve wholly unstarted foundations. Remaining qualification and known-issue
+gates still constrain higher-level work; use the track ordering above.

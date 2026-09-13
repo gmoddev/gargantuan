@@ -1,7 +1,22 @@
 ---
 title: Roadmap
-description: Planned features for Gargantuan.
+description: Implemented slices, remaining work, and future architectural tracks.
 ---
+
+Reviewed on **2026-09-12** across main, Studio, MCP, Node, and Telemetry.
+This is a source-and-test review, not a new release qualification run.
+See the [revision and evidence ledger](../../../../../devdocs/FutureArchitecture/RoadmapEvidence20260912.md)
+and the [phase delivery roadmap](../../../../../devdocs/FutureArchitecture/Roadmap.md).
+
+**Status key:** checked items are implemented within the stated scope.
+An unchecked **Partial** item strikes through only its delivered portion and
+keeps the remainder open. **Superseded** entries record a changed design, not
+completed implementation. Existing version headings are planning buckets, not
+claims that a version or phase has shipped.
+
+The [Architectural Discipline and Subsystem Boundaries proposal](../../../../../devdocs/FutureArchitecture/ArchitecturalDisciplineAndSubsystemBoundaries.md)
+defines the new future tracks below. Foundation 3L remains **partially ready**;
+3M cannot begin until its independent exit gates close.
 
 ## Gargantuan 0.1
 
@@ -34,14 +49,13 @@ Engine-side editor interface progress:
 - [x] Scalar property mutation through the authoritative gateway
 - [x] Initial offscreen viewport capture, ObjectId picking, and camera commands
 - [x] Negotiated bounded shared-memory frame ring and drop-old backpressure
-- [ ] Continuous native presentation loop with measured 30/60 FPS pacing
-- [ ] Restricted Luau Studio UI runtime and explicit editor services
-- [ ] Save, play-session, and transaction interfaces
+- [ ] **Partial:** ~~continuous paced native viewport presentation~~; qualify sustained 30/60 FPS across supported hardware and workloads
+- [x] Restricted Luau Studio UI runtime and explicit editor services
+- [x] Save/Save As, authoritative bounded history/Undo/Redo, and isolated local Play/Stop interfaces
+- [ ] Studio multiplayer/test-session orchestration and broader recovery qualification
 
-Projects will initially have:
-
-- a `.gargantuan/project.instance.json`
-- a `.gargantuan/project.config.json`
+New Project now creates the authoritative project-v4 document through EditorHost;
+project creation is an implemented workflow rather than a proposed file layout.
 
 Studio progress:
 
@@ -49,17 +63,20 @@ Studio progress:
 - [x] Load projects by CLI (thanks godmothersfire!)
 - [x] Opens existing projects (thanks godmothersfire!)
 - [x] Legacy startup-only `FileLink` directory import (thanks godmothersfire!)
-- [ ] New project flow
-- [ ] Implement UI primitives
-- [ ] Widgets
-- [ ] Docking
+- [x] Engine-authoritative New Project flow
+- [x] Avalonia UI primitives and editor widgets over explicit Studio services
+- [x] Versioned docking, tabs/splits, floating windows, script documents, and saved layouts
+- [ ] Named workspace layouts and further workspace polish
 - [ ] Plugins system
-- [ ] Ribbon bar
-- [ ] Settings plugin
-- [ ] Explorer plugin
-- [ ] Properties plugin
-- [ ] Console plugin
-- [ ] Building tool plugin
+- **Superseded:** ~~Ribbon bar~~; the implemented shell uses menus and grouped toolbars
+- [ ] **Partial:** ~~host-owned telemetry consent and workspace settings~~; general settings UI and plugin integration
+- [x] Explorer tool with virtualized hierarchy and structural commands
+- [x] Schema-backed Properties tool
+- [x] Bounded categorized Output tool
+- [x] Move/Rotate/Scale viewport gizmos and command-backed edits
+
+These are first-party tools; their implementation does not complete third-party
+plugin loading, grants, revocation, or distribution.
 
 The legacy `FileLink` importer is not the future script-authoring architecture,
 and embedding Rojo is no longer planned. The replacement is the native workflow
@@ -74,15 +91,15 @@ Player/server runtimes.
 #### 1. Contracts and identity
 
 - [ ] Accept a durable authoring-identity design distinct from session-scoped `ObjectId`
-- [ ] Specify bounded source revisions, hashes, synchronized-base retention, and stale-write behavior
+- [ ] **Partial:** ~~bounded source revisions and stale-write rejection~~; synchronization hashes and mutually synchronized-base retention
 - [ ] Specify versioned, recoverable mapping metadata with project-root-confined paths
-- [ ] Specify source transaction, journal, undo/redo, save, deletion, rename, and recovery semantics
-- [ ] Define explicit Studio script-sync and DevBridge capabilities and denial behavior
+- [ ] **Partial:** ~~source transaction, journal invalidation, undo/redo, and save semantics~~; file-mapping deletion/rename and sync recovery semantics
+- [ ] **Partial:** ~~independent Studio/MCP ProjectWrite and ScriptWrite opt-ins with denial behavior~~; script-sync capabilities
 
 #### 2. Manual synchronization foundation
 
-- [ ] Add bounded authoritative source read/write commands with expected revisions
-- [ ] Extend EditorHost for source operations, transactions, and structured sync errors
+- [x] Bounded authoritative source read/write commands with expected revisions
+- [ ] **Partial:** ~~EditorHost source operations, history, and structured SourceConflict errors~~; filesystem-sync errors
 - [ ] Support manually mapping an existing script to a project-relative file
 - [ ] Implement explicit one-shot Studio-to-disk and disk-to-Studio synchronization
 - [ ] Prove atomic disk replacement, cancellation, rollback, and crash recovery
@@ -105,29 +122,30 @@ Player/server runtimes.
 
 - [ ] Add the Studio-only `DeveloperService` facade over native coordination operations
 - [ ] Build sync status, mapping, suspension, resync, diff, and three-way conflict UI
-- [ ] Integrate source changes and resolutions with Studio transactions, undo/redo, and save
+- [ ] **Partial:** ~~source edits integrated with Studio history, undo/redo, and save~~; external synchronization/conflict-resolution integration
 - [ ] Define a compatibility/import path for existing `FileLink` or Rojo project layouts without retaining their authority model
 
 #### 6. Optional MCP DevBridge
 
-- [ ] Add an opt-in authenticated, project-scoped Studio DevBridge with bounded sessions and requests
-- [ ] Expose narrow revision-aware script inspect/read/write/sync/conflict tools
-- [ ] Route MCP and Studio UI through the same development coordination core
-- [ ] Ship agent guidance for expected-revision writes and explicit conflict handling
-- [ ] Prove the engine, Player, and production server have no MCP or host-sync dependency or exposed service
+- [x] Opt-in authenticated, project-scoped Windows Studio bridge with bounded sessions and requests
+- [ ] **Partial:** ~~revision-aware script inspect/read/write tools and stale-source conflict responses~~; sync and three-way conflict tools
+- [ ] **Partial:** ~~MCP and Studio UI share authoritative command and script-workspace routes~~; future filesystem-sync coordination
+- [x] MCP tool guidance for mandatory expected source revisions and explicit stale-write conflicts
+- [ ] **Partial:** ~~MCP depends on the Studio bridge, with no direct Engine/EditorHost connection~~; verify the same isolation when host-sync is introduced
 
 #### 7. Hardening and exit criteria
 
-- [ ] Add path traversal, symlink/junction escape, stale identity, malformed metadata, and capability-denial tests
-- [ ] Bound watched roots, mappings, queued events, source bytes, conflicts, retained bases, requests, and timeouts
-- [ ] Add structured `[Studio:ScriptSync]` and `[Studio:DevBridge]` diagnostics without logging source or secrets
+- [ ] **Partial:** ~~SourceMount confinement and MCP stale-identity/capability/input-bound tests~~; sync mapping metadata and watcher-specific attack cases
+- [ ] **Partial:** ~~source bytes, bridge requests, concurrency, and timeouts are bounded~~; watched roots, mappings, queued file events, retained bases, and sync conflicts
+- [ ] Add synchronization-specific `[Studio:ScriptSync]` and `[Studio:DevBridge]` diagnostics without logging source or secrets; existing bridge diagnostics do not complete this future sync surface
 - [ ] Demonstrate clean Studio edits, clean external edits, simultaneous edits, each resolution mode, rename/move, delete, restart recovery, and stale MCP writes end to end
 
 ### Scripting
 
-- [x] ProcessService (great for Lest and friends!) (thanks godmothersfire!)
+- [x] Capability-gated ProcessService for trusted tooling; no ambient game process authority (thanks godmothersfire!)
 - [ ] Implement the remaining data types to API parity
-- [ ] ScriptSecurity enum, tentatively: None, Plugin, Studio, Internal
+- [x] Explicit execution domains and host-granted capability checks
+- **Superseded:** ~~ScriptSecurity privilege enum: None, Plugin, Studio, Internal~~; domains do not imply privilege
 - [x] `require()` implementation with user-provided require aliases (thanks godmothersfire!)
 - [x] `@game/...` maps to requiring `DataModel...` (thanks godmothersfire!)
 - [ ] Roblox compatibility mode
@@ -143,11 +161,10 @@ Player/server runtimes.
 - [ ] UISizeConstraint, UIGridLayouts, UIPageLayouts, UIFlexItem etc
 - [x] TextButtons receive routed pointer/focus/keyboard input
 - [ ] ImageButtons receive input
-- [ ] TextBoxes are stateful
-- [ ] Render ScrollingFrames
+- [x] Stateful bounded UTF-8 TextBoxes with focus, selection/editing, and secure input
+- [x] ScrollingFrames with nested scrolling and committed render/input geometry
 - [ ] Render EditableImages
-- [ ] Drag and drop
-- [ ] EditableImages
+- [ ] General runtime GUI drag and drop (Studio workspace dragging is implemented separately)
 - [ ] ViewportFrames
 - [ ] Stylesheets?
 
@@ -155,20 +172,19 @@ Player/server runtimes.
 
 - [x] Basic physics colliders (thanks Native315!)
 - [ ] Mesh colliders
-- [ ] Visual Materials
-- [ ] Physical Materials
+- [ ] **Partial:** ~~canonical Material assets and imported material rendering~~; mature material authoring and renderer breadth
+- [ ] **Partial:** ~~neutral rigid-body density and deformable material parameters~~; general physical-material asset/service policy
 - [ ] MaterialService
-- [ ] PBR
-- [ ] LightingService
-- [ ] LightingEffects
-- [ ] Textures and decals
+- [ ] **Partial:** ~~canonical metallic/roughness material inputs~~; metallic-roughness BRDF, normal mapping, IBL, and color-management pipeline (current shading is Lambert)
+- [x] Canonical Lighting service and Sky semantics (Environment / Lighting Foundation 1)
+- [ ] **Partial:** ~~sun, exposure, fog, and shadows~~; local lights, atmosphere, probes, and advanced effects
+- [ ] **Partial:** ~~canonical Image assets and renderer-owned mesh/UI texture residency~~; decals
 - [ ] GlslSourceContainer, VertexShader, FragmentShader, ComputeShader classes
 - [x] SDL GPU resources confined behind the immutable renderer/backend boundary
-- [ ] Run the measured renderer technology decision checkpoint described in
-  [Render Extraction](./render-extraction/#renderer-technology-decision-checkpoint)
-  before committing to a mature material, lighting, and asset stack
-- [ ] Competent lighting/renderer, informed by that checkpoint
-- [ ] MVP player controller preset (Exact obbying can be done later)
+- [x] Measured Renderer Foundation 2C technology checkpoint: retain SDL GPU
+- [ ] Revisit the backend economics before broad PBR/IBL/post-processing
+- [ ] **Partial:** ~~immutable renderer publication, SDL backend, Lighting/Sky, mesh/material/UI rendering~~; draw bucketing, culling, and advanced rendering
+- [x] Replaceable engine-shipped Luau player controller/camera and collision-authoritative Character movement
 
 ### Networking
 
@@ -188,27 +204,33 @@ Player/server runtimes.
 - [x] Foundation 3J: bounded dependency-safe structural transition work,
   critical owner/session bootstrap, deterministic peer fairness, compact
   cancellation-aware backlog state, and scheduler-accepted peer materialization
+- [x] Foundation 3G: bounded age-aware fair Character publication
+- [x] Foundation 3H: bounded derived spatial-cell and region candidate index
+- [x] Foundation 3K: generation-safe subsystem-owned spatial projections and spaces
+- [ ] **Partial — Foundation 3L:** ~~content acquisition/admission/eviction lifecycle, Local/Node providers, bounded planning and reliable-byte admission~~; gameplay/client, sustained overload/fairness/recovery, journal margin, scale/physics, and current-source security qualification remain open
 - [ ] Authenticated short-lived join grants and server identity through the
-  hosting/Node control plane; DevelopmentLocal is not identity proof
+  hosting/Node control plane; DevelopmentLocal is not identity proof. Node player authentication is implemented, but does not yet gate GameSession gameplay allocation
 
 ## Gargantuan 0.2
 
 ### Repository
 
 - [ ] Monorepository layout (Can be done in 0.1 if deemed feasible)
-- [ ] Migrate to flecs with an ECS layout (Spook has a reference implementation)
+- **Superseded/rejected:** ~~Migrate to flecs with ECS as the object model~~; retain DataModel semantic authority and subsystem-owned derived stores
 
 ### Studio
 
 - [ ] `.instance.bin` format
-- [ ] Compile projects into executables
-- [ ] Implement client-server boundaries (run two Gargantuans at once for now)
-- [ ] Datastores
-- [ ] Monetization $$$$$$ (by the developer, not Gargantuan)
+- [x] Studio/CLI Windows x64 standalone packaging with a shared PackageBuilder and relocated smoke proof
+- [ ] Installed creator-tool distribution, signed packages, and other desktop platform qualification
+- [x] Separate packaged Player/Server host roles and authoritative GameSession networking
+- [ ] Integrate multi-client test orchestration into Studio
+- [ ] **Partial:** ~~Node revisioned key/value and bounded document/query contracts, in-memory provider, and tenant/capability checks~~; durable production storage and game-facing integration
+- [ ] **Partial:** ~~engine EntitlementService, replaceable providers, and Node local/Steam ownership checks~~; purchases, developer monetization, and operational economy services
 
 ### Worlds
 
-- [ ] Constraints
+- [ ] **Partial:** ~~generation-safe weld constraints and buffered backend synchronization~~; additional constraint types
 - [ ] ParticleEmitters
 - [ ] Trails
 - [ ] Beams
@@ -219,15 +241,73 @@ Player/server runtimes.
 
 - [ ] Implement the assortment of Lute stdlibs
 - [ ] Implement code modifications with `@std/syntax`
-- [ ] Self-hosting game servers
-- [ ] Self-hosting CDN servers
+- [ ] **Partial:** ~~dedicated headless Server host, Node service runtime/discovery, authentication-provider foundations, and deployment configuration~~; authenticated game admission and public operations qualification
+- [ ] **Partial:** ~~authenticated tenant-bound immutable package delivery through Node's exact filesystem index~~; general CDN distribution/cache/operations
 - [ ] API rich enough to get large games onto Gargantuan (ie. Welcome To Hell)
 - [ ] Visual scripting (block & node based)
 
 ## Future infrastructure and diagnostics
 
-- [ ] Add optional, fail-open crash diagnostics through a removable or
-  replaceable reporting boundary, as described in
-  [Optional crash diagnostics and telemetry](./future-architecture/#optional-crash-diagnostics-and-telemetry).
-  This is not a current development blocker; prioritize it as builds reach more
-  external testers and users.
+- [x] Optional fail-open telemetry ABI and Rust library, Engine/EditorHost and Studio host adapters, separate default-off consent, privacy allowlist, bounded queues/spool, and crash/performance tests
+- [ ] Cross-repository ABI manifest and release/collector operations qualification
+- [ ] Detailed local CPU/allocation/residency attribution; external telemetry consent does not authorize these extra data
+
+## Future architecture tracks
+
+These tracks have separate priorities; they are not one global queue. The
+[full proposal](../../../../../devdocs/FutureArchitecture/ArchitecturalDisciplineAndSubsystemBoundaries.md)
+contains ownership rules, rejection behavior, resource units, and acceptance criteria.
+
+### Architecture enforcement
+
+- [ ] Architecture 0A: extract a machine-readable target/include/dependency graph
+- [ ] Architecture 0B: declare allowed directions and forbidden subsystem edges
+- [ ] Architecture 0C: report violations, then enforce forbidden-edge CI
+- [ ] **Partial — Architecture 0D:** ~~separate GNS transport and packaged host targets~~; verify their transitive boundaries against the graph and extract neutral protocol/codecs and renderer-neutral publication targets
+- [ ] Architecture 0E: progressively isolate remaining targets where ownership benefits justify the change
+- [ ] Audit canonical schema coverage for methods, signals, services, arguments, returns, docs, Luau types, and MCP introspection; extend the existing registry
+
+### Foundation 3L closure, then 3M
+
+- [ ] Close 3L's current correctness, service, resource, and qualification gates; passing the GNS sanitizer gate alone is insufficient
+- [ ] Foundation 3M: trusted default-space residency demand policy over the existing 3L lifecycle
+- [ ] Bound coarse queries, candidates, retained policy state, and request/release deltas
+- [ ] Add semantic priority, deadlines, deterministic distance/cost ties, enter/leave hysteresis, and bounded trusted movement lookahead
+- [ ] Reject stale policy revisions and prove scale, cancellation, acquisition deduplication, and Character/Remote service preservation
+
+3M owns demand only. 3L owns content lifecycle, 3E owns relevance, and 3J owns
+accepted materialization/`Known`. Do not introduce a second streaming lifecycle.
+
+### Network security and hardening
+
+- [ ] **P0 before public untrusted hosting:** bounded PendingAdmission and short-lived signed server/session-bound join grants, expiry/replay checks, and key rotation
+- [ ] Gate Player, Character control, 3E/3J state, Remote gameplay state, content pins, and capabilities on successful admission
+- [ ] Keep GSES protocol/schema/build compatibility validation independent of control-plane identity
+- [ ] Qualify untrusted public hosting after admission is implemented
+- [ ] **P2 after reliable-service stabilization:** bounded receiver-normalized semantic anti-entropy; mismatches enter normal complete 3J recovery groups and never advance `Known` directly
+
+### Performance and asset residency
+
+- [ ] **Partial:** ~~existing content/planning/selection/transport budgets and diagnostic counters~~; inventory finite resource/service envelopes across discovery, derivation, preparation, encoding, scheduling, transport, application, and cleanup/recovery
+- [ ] Extend bounded subsystem-owned CPU, retained-byte, allocation, and residency attribution; use static tags, not per-object or user-string identities
+- [ ] Asset 2B: canonical/decoded/GPU/physics/animation bytes, consumers/pins, last use, and load/eviction counts before normative general eviction policy
+- [ ] Investigate an immutable same-tick 3H/3K read epoch only as justified infrastructure
+- [ ] Add allocator hooks or 3E worker derivation only after measured need, serial/parallel crossover, and Amdahl headroom
+
+### Studio provenance and trust
+
+- [ ] Add engine-assigned author provenance and generation-safe author leases over the existing authoritative history
+- [ ] Extend host-created capabilities with scoped plugin grants, explicit project trust, consent, and revocation
+- [ ] Design bounded staged atomic external-author transactions only if a concrete workflow requires them; current recording groups committed edits and does not promise rollback
+- [ ] Keep one ordered undo history; collaborative/selective undo remains a separate design
+
+### Large worlds and continuous fuzzing
+
+- [ ] Validate default-space 3M policy before semantic SpatialRegion, region-local physics/topology, and portals
+- [ ] Keep semantic region identity separate from internal SpatialSpaceId; portals provide candidates to existing residency/relevance owners
+- [ ] Define independent render, replication, spatial-query, audio, interaction, and AI traversal budgets
+- [ ] **Partial:** ~~network protocol fuzz targets~~; expand coverage-guided fuzzing and retained regression corpora by risk across content, snapshot/journal, persistence, package/artifact, bounded importers, then future admission/topology parsers
+
+Generic prediction extraction waits for a second consumer. Schema registration,
+capabilities, validated publication, Character reconciliation, and Studio history
+are existing foundations to extend, not new replacement frameworks.

@@ -8,6 +8,15 @@ events and requests, reusable assets, physics, animation, audio, retained-mode
 GUI, scene editing, play testing, packaging, and self-hosting. It should not chase
 deprecated APIs, historical quirks, or exact bug compatibility.
 
+Focused proposals:
+
+- [Architectural discipline and subsystem boundaries](ArchitecturalDisciplineAndSubsystemBoundaries.md)
+  records future dependency enforcement, authenticated admission, bounded service
+  envelopes, resource attribution, policy-only 3M, and later hardening/topology.
+  See the [reviewed roadmap](Roadmap.md) and
+  [five-repository evidence ledger](RoadmapEvidence20260912.md) for implemented
+  slices and open gates; Foundation 3L remains partially ready and 3M blocked.
+
 The defining freedom is deployment and composition: developers can self-host
 servers and services, own source/assets, extend tooling through explicit
 capabilities, and choose compatibility adapters without weakening the core.

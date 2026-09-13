@@ -147,6 +147,12 @@ a goal; each migration must verify claims against current code and tests.
   records accepted boundaries and the evidence-backed GNS transport selection;
   gameplay networking layers remain deferred.
 - [Roadmap](../src/content/docs/developing/roadmap.mdx) is non-normative ordering.
+- [Architectural discipline and subsystem boundaries](../../devdocs/FutureArchitecture/ArchitecturalDisciplineAndSubsystemBoundaries.md)
+  is future design input for dependency enforcement, admission, service/resource
+  envelopes, trusted 3M demand policy, and later hardening/topology.
+- [Cross-repository roadmap evidence review](../../devdocs/FutureArchitecture/RoadmapEvidence20260912.md)
+  records the 2026-09-12 source/test basis for completed and partial roadmap
+  slices across main, Node, MCP, Telemetry, and Studio; it is not release qualification.
 - Files under `devdocs/FutureArchitecture/` are design input and must be
   reconciled with newer accepted documents before implementation.
 
