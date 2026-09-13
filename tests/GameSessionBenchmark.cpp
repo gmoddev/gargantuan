@@ -149,6 +149,8 @@ namespace {
 		auto &Peers, std::uint64_t &Tick, bool FullRateInput, std::size_t ActivePeers = 0, bool Stream = true) {
 		Runtime.ProcessService->Alive = true;
 		const bool Differential = ActivePeers != 0;
+		const bool Qualified = std::getenv("GARGANTUAN_QUALIFIED_SCALE") != nullptr;
+		const bool MeasureService = Qualified || std::getenv("GARGANTUAN_DUE_SERVICE") != nullptr;
 		std::vector<std::shared_ptr<AnimationTrack>> RootTracks;
 		std::vector<std::shared_ptr<KinematicCharacter>> RootCharacters;
 		for (const auto &PlayerValue : Runtime.Players->GetPlayers()) {
@@ -201,10 +203,11 @@ namespace {
 		std::vector<TickWorkSample> WorkSamples;
 		std::vector<std::pair<std::string, std::vector<TickWorkSample>>> CompletedWorkSamples;
 		std::string_view CurrentWorkPhase = "warmup";
-		CompletedWorkSamples.reserve(4);
+		CompletedWorkSamples.reserve(5);
 		if (TraceWork) WorkSamples.reserve(1201);
 		const auto TraceStarted = std::chrono::steady_clock::now();
-		test::JoinedCharacterFixture Joined(std::getenv("GARGANTUAN_JOINED_LATENCY") != nullptr, LatencyConnections);
+		test::JoinedCharacterFixture Joined(std::getenv("GARGANTUAN_JOINED_LATENCY") != nullptr, LatencyConnections, MeasureService);
+		for (const auto &Character : RootCharacters) Joined.AddRoot(Character->GetObjectId());
 		Latency.SetOrigin(TraceStarted);
 		for (const auto &Character : RootCharacters) Latency.AddRoot(Character->GetObjectId());
 		std::uint64_t PendingHighWater = 0;
@@ -213,11 +216,21 @@ namespace {
 		std::uint64_t RootCellCrossings = 0;
 		float RootMinimumY = std::numeric_limits<float>::max();
 		bool GameplayFailed = false;
+		std::uint64_t JournalMinimumMargin = DefaultChangeJournalCapacity;
 		const auto InputPeriod = (Peers.size() == 500 || Differential) && !FullRateInput ? 5u : 1u;
 		auto Step = [&] {
 			StructuralBytes.Advance();
 			const auto FrameStarted = std::chrono::steady_clock::now();
 			Joined.Mark("FrameBegin", Tick);
+			// Oscillate the real input, keeping the long service trial inside the
+			// same grounded neighborhood without teleporting or changing authority.
+			if (Qualified && Tick % 120 == 0) {
+				const bool Forward = Tick % 240 == 0;
+				for (const bool W : {true, false}) (void)Peers.front().Runtime->ProcessEvent(KeyEvent{
+					.Device = {1}, .Physical = W ? PhysicalKey::W : PhysicalKey::S,
+					.Logical = W ? LogicalKey::W : LogicalKey::S,
+					.State = W == Forward ? ButtonState::Pressed : ButtonState::Released});
+			}
 			TickWorkSample WorkSample{.Tick = Tick, .StartMilliseconds = Milliseconds(TraceStarted)};
 			for (std::size_t PeerIndex = 0; PeerIndex < Peers.size(); ++PeerIndex) {
 				auto &Peer = Peers[PeerIndex];
@@ -253,6 +266,17 @@ namespace {
 				Server.Step(Tick++);
 			}
 			Joined.Mark("ServerDone", Tick - 1);
+			if (Qualified) {
+				const auto Tail = ChangeJournal::Get().CreateCursor(Runtime.DataModel->GetObjectId());
+				const auto Oldest = ChangeJournal::Get().Read({Tail.Scope, 0}, 0).Cursor.NextSequence;
+				for (const auto &Reader : detail::GameSessionTestAccess::GetJournalRequirements(Server)) {
+					if (Reader.Cursor.Scope != Tail.Scope || Reader.Cursor.NextSequence > Tail.NextSequence)
+						throw std::runtime_error("qualified journal diagnostic scope mismatch");
+					const auto Required = Tail.NextSequence - Reader.Cursor.NextSequence;
+					JournalMinimumMargin = std::min(JournalMinimumMargin, Required >= DefaultChangeJournalCapacity ? 0 : DefaultChangeJournalCapacity - Required);
+					if (Reader.Cursor.NextSequence < Oldest) throw std::runtime_error("qualified live journal reader lost retained history");
+				}
+			}
 			TickTimes.push_back(Milliseconds(Started));
 			for (const auto &CharacterValue : RootCharacters) {
 				RootMinimumY = std::min(RootMinimumY, CharacterValue->GetPosition().y);
@@ -465,7 +489,6 @@ namespace {
 			const auto RootAfter = Runtime.GetCharacterRootMotionMetrics();
 			const auto PhaseTicks = Tick - StartTick;
 			StructuralBytes.End();
-			Joined.End();
 			Latency.End();
 			const auto WallMilliseconds = Milliseconds(Started);
 			const auto CharacterAfter = detail::GameSessionTestAccess::GetCharacterMetrics(Server);
@@ -500,6 +523,7 @@ namespace {
 			if (Differential) { FrameWorkTimes.pop_back(); PaceOvershootTimes.pop_back(); }
 			if (!detail::GameSessionTestAccess::VerifySpatialIndex(Server))
 				throw std::runtime_error("scale 3K/3H consistency check failed");
+			Joined.End();
 			const double Seconds = static_cast<double>(PhaseTicks) / 60.0;
 			std::cout << "[Content:Scale] packageVersion=" << Runtime.Content->GetManifest()->Package.PackageVersion
 				<< " peers=" << Peers.size() << " objects=" << Objects << " phase=" << Phase
@@ -518,7 +542,13 @@ namespace {
 				<< " paceOvershootP50Ms=" << Percentile(PaceOvershootTimes, 0.50) << " paceOvershootP95Ms=" << Percentile(PaceOvershootTimes, 0.95)
 				<< " paceOvershootP99Ms=" << Percentile(PaceOvershootTimes, 0.99) << " paceOvershootMaxMs=" << Percentile(PaceOvershootTimes, 1.0)
 				<< " pendingHighWater=" << PendingHighWater << " selectedCap=" << After.StructuralMaximumTransitionsSelectedPerTick
+				<< " reservedBytes=" << After.ReliableAdmission.ReservedBytes << " acceptedBytes=" << After.ReliableAdmission.AcceptedBytes
+				<< " rollbackBytes=" << After.ReliableAdmission.RolledBackBytes
+				<< " peerBacklogHighWater=" << After.ReliableAdmission.PeerBacklogHighWater
+				<< " globalBacklogHighWater=" << After.ReliableAdmission.GlobalBacklogHighWater
+				<< " creditDeferrals=" << After.ReliableAdmission.CreditDeferrals << " backlogDeferrals=" << After.ReliableAdmission.BacklogDeferrals
 				<< " journalLag=" << After.StructuralMaximumJournalLagRecords << " journalFailures=" << After.StructuralJournalLagFailures
+				<< " journalMinimumMargin=" << JournalMinimumMargin
 				<< " journalRecords=" << After.JournalRecordsExamined - Before.JournalRecordsExamined
 				<< " journalGlobalCapHighWater=" << After.JournalRecordsPerTickHighWater
 				<< " journalPeerCapHighWater=" << After.JournalRecordsPerPeerTickHighWater
@@ -601,7 +631,7 @@ namespace {
 			PrintScaleMemory();
 			std::cout << '\n';
 			std::cout.flush();
-			if (TraceWork && CompletedWorkSamples.size() < 4) {
+			if (TraceWork && CompletedWorkSamples.size() < 5) {
 				CompletedWorkSamples.emplace_back(std::string(Phase), std::move(WorkSamples));
 				WorkSamples = {};
 				WorkSamples.reserve(1201);
@@ -609,19 +639,21 @@ namespace {
 			if (!RemotesComplete) throw std::runtime_error("100-call scale RemoteFunction exceeded its bounded phase");
 			Latency.End();
 			if (Differential) {
-				const bool Healthy = Percentile(TickTimes, 0.95) <= 16.667 && Percentile(TickTimes, 0.99) <= 33.334 &&
-					Percentile(TickTimes, 1.0) <= 100.0 && Number(ClientControl, "ScaleRemoteP95Us") <= 150'000 &&
+				const bool ServiceHealthy = Number(ClientControl, "ScaleRemoteP95Us") <= 150'000 &&
 					Number(ClientControl, "ScaleRemoteP99Us") <= 250'000 && Number(ClientControl, "ScaleRemoteMaxUs") <= 500'000 &&
 					Number(ClientControl, "ScaleRemoteErrors") == 0 && !ActionEventStalled &&
 					Number(ClientControl, "ScaleActionSubmissionFailures") == SubmissionFailuresBefore &&
 					Number(ClientControl, "ScaleActionRejections") == RejectionsBefore &&
 					Number(ClientControl, "ScaleActionMaxResultUs") <= 250'000 &&
 					Number(ClientControl, "ScaleEventAcks") > EventAcksBefore && Number(ClientControl, "ScaleEventMaxGapUs") <= 250'000 &&
+					After.CharacterPublicationSchedulerRejections == Before.CharacterPublicationSchedulerRejections;
+				const bool Healthy = ServiceHealthy && Percentile(TickTimes, 0.95) <= 16.667 && Percentile(TickTimes, 0.99) <= 33.334 &&
+					Percentile(TickTimes, 1.0) <= 100.0 &&
 					MaximumGap <= 12 && RootMaximumGap <= 12 && MaximumWallGap <= 250 && RootMaximumWallGap <= 250;
 				std::cout << "[Content:Differential] phase=" << Phase << " phaseHealthy=" << Healthy << " peers=" << Peers.size()
-					<< " activePeers=" << ActivePeers << " stream=" << Stream << '\n';
-				GameplayFailed = GameplayFailed || !Healthy;
-				if (!Healthy && Phase == "baseline") throw std::runtime_error("differential baseline health gate failed before content demand");
+					<< " activePeers=" << ActivePeers << " stream=" << Stream << " serviceHealthy=" << ServiceHealthy << '\n';
+				GameplayFailed = GameplayFailed || !(Qualified ? ServiceHealthy : Healthy);
+				if (!(Qualified ? ServiceHealthy : Healthy) && Phase == "baseline") throw std::runtime_error("differential baseline health gate failed before content demand");
 			}
 		};
 		// Trace output is deferred until all phases finish: printing thousands
@@ -631,7 +663,7 @@ namespace {
 			if (WorkSamplesPrinted) return;
 			WorkSamplesPrinted = true;
 			Latency.Print();
-			Joined.Print();
+			Joined.Print(Qualified);
 			for (const auto &[PhaseName, Samples] : CompletedWorkSamples) {
 				for (const bool Client : {false, true}) {
 					for (std::size_t Index = 0; Index < runtime_detail::WorkProducerNames.size(); ++Index) {
@@ -752,6 +784,7 @@ namespace {
 			}
 			if (!Runtime.Content->RequestContent(test::ScaleContentKey)) throw std::runtime_error("scale demand rejected");
 			RunPhase("load", Objects, true);
+			if (Qualified) RunPhase("resident", Objects, true);
 			auto Root = Runtime.Workspace->FindFirstChild(std::string(test::ScaleRootName), false);
 			if (!Root || Runtime.Content->GetMetrics().Acquisitions != 1 || Runtime.Content->GetMetrics().Admissions != 1)
 				throw std::runtime_error("scale region acquisition/admission was not shared");
@@ -783,7 +816,7 @@ namespace {
 		catch (...) {
 			if (TraceWork && !WorkSamplesPrinted) {
 				try {
-					if (!WorkSamples.empty() && CompletedWorkSamples.size() < 4)
+					if (!WorkSamples.empty() && CompletedWorkSamples.size() < 5)
 						CompletedWorkSamples.emplace_back(std::string(CurrentWorkPhase) + "-interrupted", std::move(WorkSamples));
 					PrintWorkSamples();
 				} catch (...) { std::cerr << "[Content:Trace] failed to emit bounded failure trace\n"; }
@@ -812,6 +845,7 @@ namespace {
 		};
 		ThrowAt("provider");
 		const bool GroupedContent = ContentConfiguration && (PeerCount == 500 || ActivePeers != 0) && !DenseContent;
+		const bool Qualified = ContentConfiguration && std::getenv("GARGANTUAN_QUALIFIED_SCALE") != nullptr;
 		struct RawPeer {
 			std::shared_ptr<SimulatedTransport> Transport;
 			ConnectionId Connection;
@@ -826,7 +860,7 @@ namespace {
 		};
 
 		SimulatedTransportConfiguration TransportConfiguration;
-		TransportConfiguration.BandwidthBytesPerSecond = MaximumSimulatedBandwidthBytesPerSecond;
+		TransportConfiguration.BandwidthBytesPerSecond = Qualified ? 16 * 1024 * 1024 : MaximumSimulatedBandwidthBytesPerSecond;
 		TransportConfiguration.MaximumTransports = MaximumGameSessionPeers + 1;
 		TransportConfiguration.MaximumConnections = MaximumGameSessionPeers;
 		TransportConfiguration.MaximumPendingEventsPerTransport = MaximumGameSessionPeers * 4;
@@ -834,7 +868,7 @@ namespace {
 		auto ServerTransport = Network->CreateTransport();
 		auto World = std::make_shared<DataModel>();
 		if (Observation) Observation->ServerWorld = World;
-		if (ContentConfiguration) test::AddScaleGameplay(World, ActivePeers != 0);
+		if (ContentConfiguration) test::AddScaleGameplay(World, ActivePeers != 0, Qualified);
 		HeadlessRenderer Renderer(Vector2(64, 64));
 		Engine Runtime(
 			World,
@@ -851,7 +885,7 @@ namespace {
 			Ground->SetName("ScaleResidentGround");
 			Ground->SetAnchored(true);
 			Ground->SetSize({1024.0f, 1.0f, 1024.0f});
-			Ground->SetPosition({static_cast<float>(Group) * 2048.0f, 0.0f, 0.0f});
+			Ground->SetPosition({static_cast<float>(Group + (Qualified ? 1 : 0)) * 2048.0f, 0.0f, 0.0f});
 			Ground->SetParent(Runtime.Workspace);
 			}
 			const auto Deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
@@ -869,18 +903,32 @@ namespace {
 			Object->SetParent(World);
 			SpatialObjects.push_back(std::move(Object));
 		}
-		auto SpatialPlacement = Runtime.Players->PlayerAdded->Connect([Scale = ContentConfiguration.has_value(), GroupedContent, Neighborhood](std::shared_ptr<Player> PlayerValue) {
+		auto SpatialPlacement = Runtime.Players->PlayerAdded->Connect([Scale = ContentConfiguration.has_value(), GroupedContent, Neighborhood, Qualified](std::shared_ptr<Player> PlayerValue) {
 			if (!PlayerValue || !PlayerValue->GetCharacter()) return;
 			auto CharacterValue = std::dynamic_pointer_cast<KinematicCharacter>(*PlayerValue->GetCharacter());
 			if (CharacterValue) {
 				const auto Index = PlayerValue->GetPlayerId() - 1;
 				CharacterValue->SetPosition(Scale ? glm::vec3(static_cast<float>(Index % 32) * 3.0f, 6.0f,
 					static_cast<float>(Index / 32) * 3.0f) : glm::vec3(static_cast<float>(Index) * 1024.0f, 6.0f, 0.0f));
-				if (GroupedContent) CharacterValue->SetPosition({static_cast<float>(Index / Neighborhood) * 2048.0f +
+				if (GroupedContent) CharacterValue->SetPosition({static_cast<float>(Index / Neighborhood + (Qualified ? 1 : 0)) * 2048.0f +
 					static_cast<float>(Index % 5) * 3.0f, 6.0f, static_cast<float>((Index % Neighborhood) / 5) * 3.0f});
 			}
 		});
-		const auto ServerConfiguration = Configuration(GameSessionRole::Server);
+		auto ServerConfiguration = Configuration(GameSessionRole::Server);
+		if (Qualified) {
+			auto &Profile = ServerConfiguration.ReliableService.emplace();
+			Profile.ConnectionRate = 8 * 1024 * 1024;
+			Profile.AggregateRate = PeerCount * Profile.ConnectionRate;
+			Profile.BackendRate = 2 * Profile.ConnectionRate;
+			Profile.MaximumConnections = static_cast<std::uint32_t>(PeerCount);
+			Profile.GlobalBacklog = MaximumReliableServiceGroupBytes + 2 * PeerCount * Profile.GameplayBurst;
+			Profile.RequireLatencyCompatibility = true;
+			if (!Profile.IsValid()) throw std::runtime_error("qualified simulator profile invalid");
+			std::cout << "[Content:ScaleProfile] simulated=1 N=" << PeerCount << " R=" << Profile.ConnectionRate
+				<< " A=" << Profile.AggregateRate << " backend=" << Profile.BackendRate
+				<< " structuralPermille=" << Profile.StructuralPermille << " Qp=" << Profile.PeerBacklog
+				<< " Qg=" << Profile.GlobalBacklog << '\n';
+		}
 		const auto ClientConfiguration = Configuration(GameSessionRole::Client);
 		GameSession Server(ServerTransport, ServerConfiguration, &Runtime);
 		ThrowAt("session");
@@ -1228,6 +1276,27 @@ namespace {
 				(void)Peer.Transport->Stop({DisconnectReason::LocalShutdown, "session benchmark complete"});
 		}
 		Server.Stop();
+		if (Qualified) {
+			const auto Closed = Server.GetMetrics();
+			const auto Connections = detail::GameSessionTestAccess::GetConnections(Server).size();
+			const auto Readers = detail::GameSessionTestAccess::GetJournalRequirements(Server).size();
+			std::cout << "[Content:ScaleShutdown] connections=" << Connections << " journalReaders=" << Readers
+				<< " admissionOwners=" << Closed.ReliableAdmissionPeerStates
+				<< " admissionBytes=" << Closed.ReliableAdmissionLogicalBytes << '\n';
+			if (Connections || Readers || Closed.ReliableAdmissionPeerStates ||
+				Closed.ReliableAdmission.ReservedBytes != Closed.ReliableAdmission.AcceptedBytes + Closed.ReliableAdmission.RolledBackBytes)
+				throw std::runtime_error("qualified session retained shutdown ownership");
+			Runtime.Content->Stop();
+			const auto Content = Runtime.Content->GetMetrics();
+			std::cout << "[Content:ContentShutdown] requested=" << Content.RequestedUnits << " acquiring=" << Content.AcquiringUnits
+				<< " prepared=" << Content.PreparedUnits << " resident=" << Content.ResidentUnits
+				<< " completionReserved=" << Content.ReservedCompletionPayloadBytes << " completedBytes=" << Content.CompletedPayloadBytes
+				<< " decodedBytes=" << Content.DecodedDocumentBytes << " cachedBytes=" << Content.CachedPayloadBytes
+				<< " records=" << Content.RetainedRecordCount << " residentObjects=" << Content.ResidentPackageObjects << '\n';
+			if (Content.RequestedUnits || Content.AcquiringUnits || Content.PreparedUnits || Content.ReservedCompletionPayloadBytes ||
+				Content.CompletedPayloadBytes || Content.DecodedDocumentBytes)
+				throw std::runtime_error("qualified content retained transient shutdown ownership");
+		}
 		for (auto &Peer : Peers) if (Peer.Session) {
 			Peer.Session->Stop();
 			if (Peer.Runtime) Peer.Runtime->Destroy();
@@ -1547,8 +1616,10 @@ int main(int ArgumentCount, char **Arguments) {
 			const auto Active = std::stoull(Arguments[4]);
 			const auto Neighborhood = std::stoull(Arguments[5]);
 			const auto PeerCount = ArgumentCount == 7 ? std::stoull(Arguments[6]) : 500;
-			if ((Provider != "none" && Provider != "local" && Provider != "node") || PeerCount < 25 || PeerCount > 500 ||
-				Active < 25 || Active > PeerCount ||
+			const bool Qualified = std::getenv("GARGANTUAN_QUALIFIED_SCALE") != nullptr;
+			if ((Qualified && ((PeerCount != 32 && PeerCount != 200) || Active != 8 || Neighborhood != 8)) ||
+				(Provider != "none" && Provider != "local" && Provider != "node") || PeerCount < 25 || PeerCount > 500 ||
+				Active < (Qualified ? 8u : 25u) || Active > PeerCount ||
 				Neighborhood < 5 || Neighborhood > 25)
 				throw std::invalid_argument("invalid trusted differential workload configuration");
 			RunAdmission(PeerCount, 0, test::ScaleConfiguration(Arguments[2], Provider == "node"), false, false, {}, nullptr,

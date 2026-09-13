@@ -34,7 +34,8 @@ namespace gargantuan::test {
 		std::optional<network::NetworkStatistics> GetStatistics(network::ConnectionId Connection) const override { return Delegate->GetStatistics(Connection); }
 	};
 
-	inline void AddScaleGameplay(const std::shared_ptr<DataModel> &World, bool MeasureWithoutDiagnosticBroadcast = false) {
+	inline void AddScaleGameplay(const std::shared_ptr<DataModel> &World, bool MeasureWithoutDiagnosticBroadcast = false,
+		bool Qualified = false) {
 		auto Assets = std::dynamic_pointer_cast<AssetService>(World->GetService("AssetService"));
 		DiskFilesystem Filesystem(std::filesystem::path(GARGANTUAN_FIRST_COMPLETE_GAME_ROOT));
 		Assets->LoadProjectAssets(Filesystem);
@@ -67,7 +68,7 @@ Function:SetServerHandler(function(Peer, Message) return Message end)
 		auto ClientScript = std::make_shared<Script>();
 		ClientScript->SetName("ScaleClientTraffic");
 		ClientScript->SetRunContext(Enums::RunContext::Client);
-		ClientScript->SetSource(R"(
+		ClientScript->SetSource(std::string("local Qualified = ") + (Qualified ? "true\n" : "false\n") + R"(
 local Control = game:GetService("CharacterControlService")
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -129,13 +130,13 @@ RunService.PostSimulation:Connect(function()
     local NextPhase = Control:GetAttribute("ScalePhase")
     if not NextPhase then return end
     Tick += 1
-    if Tick % 40 == 1 then
+    if Tick % (if Qualified then 120 else 40) == 1 then
         StartedActionAt = os.clock()
         if not Control:RequestAction("ScaleLunge") then
             Control:SetAttribute("ScaleActionSubmissionFailures", (Control:GetAttribute("ScaleActionSubmissionFailures") or 0) + 1)
         end
     end
-    if EventSequence < Tick + 1 then
+    if (not Qualified or Tick % 4 == 1) and EventSequence < Tick + 1 then
         EventSequence += 1
         -- Both the offered count and pending map are bounded by the phase's
         -- 1,200-tick cap; acknowledged entries are retired immediately.
@@ -166,7 +167,7 @@ RunService.PostSimulation:Connect(function()
             table.insert(Samples, Elapsed)
             Control:SetAttribute("ScaleRemoteSamples", Index)
             Control:SetAttribute("ScaleRemoteErrors", Errors)
-            task.wait()
+            task.wait(if Qualified then 0.1 else 0)
         end
         table.sort(Samples)
         Control:SetAttribute("ScaleRemoteMetrics", string.format("[Content:ScaleRemote] phase=%s samples=100 mean_us=%.0f p50_us=%.0f p95_us=%.0f p99_us=%.0f max_us=%.0f timeouts=%d errors=%d", RunningPhase, Total / 100, Samples[50], Samples[95], Samples[99], Samples[100], Timeouts, Errors))
