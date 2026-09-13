@@ -82,6 +82,14 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Content-coupled gameplay latency exceeds the 3L.2 readiness envelope
 
+Update 2026-09-13: the [current-source client/scale receipt](devdocs/CurrentArchitecture/ContentClientScaleQualification3L.md)
+at `543cc0de0` passes official single-Player Local/Node RPC and lifecycle service,
+but reproduces the retained 200/50 streaming diagnostic failure: Local/Node
+Character/root observation gaps 662.822/642.989 ms, versus 202.476 ms control.
+Those fixture guards are not a universal product contract. Complete high-scale
+real-client/fanout and physical-capacity qualification remains not measured;
+no conclusively attributed production correction is retained. KI-006 stays open.
+
 The current [SEC-3L-001 closure](devdocs/CurrentArchitecture/ContentAvailabilitySecurityClosure3L.md)
 passes the reviewed Foundation 3L security gate after a generation-safe package
 ownership correction. Client/scale, aggregate Event/action fanout, physical-link

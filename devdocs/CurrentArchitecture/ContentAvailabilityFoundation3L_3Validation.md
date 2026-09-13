@@ -6,6 +6,42 @@ last_verified: 2026-09-13
 
 # Foundation 3L.3 diagnostic validation ledger
 
+## Current-source client/scale qualification (2026-09-13)
+
+The [client/scale receipt](ContentClientScaleQualification3L.md) records the open
+gate inventory, exact production source `543cc0de098627570a434e4002fcbb8f41c2b03a`,
+current measurements, retained failures and missing evidence. No production or
+sibling source changes. Security, CI and corrected reliable-overload evidence
+remain valid and are reused.
+
+Official headless Player Local/Node pass 100 RPCs each without error or timeout,
+with p95/p99/max 35.939/59.013/91.111 and 36.440/61.020/92.122 ms. Event-loop
+maxima are 54.165/56.302 ms; Character handler gaps 89.747/90.198 ms. Both pass
+eight-cycle near-maximum-content churn. GPU-present timing is not measured.
+
+The unchanged 200-connected / 50-Character control passes all phases. Local/Node
+load still fail retained investigation guards: tick p95 20.841/21.455 ms and
+recipient Character/root gaps 662.822/642.989 ms. Eviction/reload also fail;
+an untraced Local repeat reproduces the load gap at 659.854 ms. Structural
+convergence, RPC/Event/action service and scheduler rejection checks pass.
+The fixture has one full client Engine plus 199 protocol observers, not 200
+real Players. Its thresholds remain investigation guards, not a newly adopted
+all-workload product contract. No single narrow production defect is attributed.
+
+Whole-world changed-property preflight remains: at 8,193 replicas, preflight
+p50/max is 76.202/87.364 ms and total application p50/max 95.827/112.409 ms.
+The standalone cost violates no accepted standalone gate; no transaction
+redesign or speculative optimization is justified. Larger-world service is
+not thereby qualified.
+
+Full real-client 200/500 scale, aggregate ordinary Event/action fanout accounting,
+physical capacity and high-scale shutdown retention remain not measured.
+The receipt separates semantic visibility from server publication and GPU
+presentation, and records stage/cross-clock limitations. Earlier failures below
+remain historical evidence; this checkpoint supersedes their current-source
+timing claims only for the measured equivalent cases.
+**B — FOUNDATION 3L PARTIALLY READY; KI-006 remains open; no 3M.**
+
 ## SEC-3L-001 package-ownership lifetime closure (2026-09-13)
 
 The completed security review of `33f4622543ee7cb80d98d4f02e3655eabb708349`
