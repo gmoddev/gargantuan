@@ -6,6 +6,38 @@ last_verified: 2026-09-12
 
 # Foundation 3L.3 diagnostic validation ledger
 
+## Reliable gameplay workload decision gate (2026-09-12)
+
+The [contract-first assessment](ReliableGameplayWorkloadContract3L.md) continues
+from published documentation HEAD `cfb21c469` with unchanged native source from
+`5ada43a57`. It inventories RPC/Event/echo, action, reliable Character fanout and
+bootstrap producers, and verifies that outgoing RPC tracking is already bounded
+per peer and manager. No new resource limit is introduced.
+
+Product requirements do not yet justify qualified payload, arrival/burst,
+concurrency or active-peer values. Candidate 8 MiB/s R/A/N arithmetic at
+1/32/200/500 peers passes the existing necessary server backlog check, but cannot
+qualify client uplink, count limits, observer fanout, handler time or latency
+percentiles. A codec-ceiling request already needs about one second at the
+unchanged Player rate. The report specifies seven fixture purposes without
+inventing their missing workload parameters.
+
+Overload/recovery and journal production/margin/oldest-owner measurements are
+**not measured**; the historical 170-entry margin is not a production guarantee.
+No native source or fixture changed. Documentation link/whitespace and site-build
+checks are recorded separately from native/security/client/scale qualification.
+**B — FOUNDATION 3L PARTIALLY READY; no 3M.** Next: an accepted product/platform
+workload decision, then complete compatibility and qualification.
+
+Local documentation validation passes: patch whitespace, relative-link
+resolution (85 links across the changed document set), source-derived frame
+and R/A/N arithmetic, and the 19-page Astro build using Node 24.19.0. The build
+retains the pre-existing missing-404-entry warning. No native test or security
+scan was rerun for this documentation-only assessment. CI at the preceding
+documentation HEAD `cfb21c469` was still in progress when this checkpoint was
+written (native `34733295196`, GNS sanitizer `34733295182`); terminal green
+evidence above the original source HEAD must not be inferred.
+
 ## Overload qualification stopped at Part A (2026-09-12)
 
 At published HEAD `5ada43a5773a96b1f0a97e9e6299baa6f420b762`, the

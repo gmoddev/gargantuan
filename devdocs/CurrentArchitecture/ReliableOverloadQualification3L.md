@@ -13,6 +13,12 @@ related_code:
 
 # Foundation 3L overload qualification: Part A contract gate
 
+The subsequent [gameplay workload contract assessment](ReliableGameplayWorkloadContract3L.md)
+expands the producer inventory, verifies existing RPC bounds, records the
+missing product decisions, and supplies candidate deployment arithmetic and a
+seven-fixture specification. Its gate remains closed; it does not turn this
+historical checkpoint into executed overload/recovery evidence.
+
 **B — FOUNDATION 3L PARTIALLY READY.** Inspected branch
 `foundation/3l-content-availability`, HEAD
 `5ada43a5773a96b1f0a97e9e6299baa6f420b762`. This is a documentation-only

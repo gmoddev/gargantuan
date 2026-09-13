@@ -816,6 +816,31 @@ It must not silently become:
 
 ---
 
+## 4.4 Legal input versus qualified service
+
+A parser ceiling defines legal representation, not supported production demand.
+Legal input remains subject to authority, lifecycle and resource admission.
+
+A qualified service claim must identify the complete workload: encoded message
+sizes, request/response combinations, arrival count and byte rates, finite burst
+and replenishment windows, concurrency, active peers and recipient fanout. It
+must also identify the deployment capacity and host/path assumptions that fund
+that workload in each direction. Engine-generated control traffic shares those
+finite resources and cannot be omitted from the accounting.
+
+Overload is demand outside that accepted envelope or above sustainable service.
+Its ordinary latency targets may lapse, but bounded resource use, explicit
+failure, correct ownership and defined recovery remain required. A workload
+cannot be relabeled overload after failing a qualified service test.
+
+Product/platform owners select the supported application behavior; subsystem
+owners cost and validate it, and trusted host/operator policy funds it. Codec
+maxima, denial ceilings, reserve percentages and passing microbenchmarks cannot
+substitute for that decision. Missing requirements must remain explicit before
+fixtures or implementation turn them into an accidental product promise.
+
+---
+
 # 5. Parallel Derivation Policy
 
 ## 5.1 General rule

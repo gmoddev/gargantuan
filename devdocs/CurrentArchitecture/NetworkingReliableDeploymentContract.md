@@ -19,6 +19,13 @@ related_adrs:
 
 ## Approved service class and implementation (2026-09-12)
 
+The [gameplay workload contract gate](ReliableGameplayWorkloadContract3L.md)
+defines legal versus qualified versus overload, inventories reliable producers
+and existing RPC limits, and records the still-unselected payload/rate/burst/
+concurrency policy. R/A/N compatibility and `GameplayBurst` headroom do not
+establish that policy or qualify every legal Remote. Its candidate 1/32/200/500
+peer arithmetic is a capacity preflight, not a new production service promise.
+
 The user approved the proposed targets, 75/25 share, **no large-group exception**,
 and unqualified treatment of incompatible low-rate profiles. This supersedes the
 historical preflight/proposal below. Foundation 3L remains **B** until the official

@@ -82,6 +82,14 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Content-coupled gameplay latency exceeds the 3L.2 readiness envelope
 
+The subsequent [workload contract assessment](devdocs/CurrentArchitecture/ReliableGameplayWorkloadContract3L.md)
+verifies existing outgoing RPC-count bounds and identifies reliable Character
+observer fanout and client uplink as necessary workload inputs. No arbitrary
+payload/rate/concurrency values or new resource caps are selected. Product/host
+workload ownership must be resolved before the canonical overload/recovery and
+journal qualification matrix can run; this establishes a contract gap, not a new
+runtime defect or closure of KI-006.
+
 The [overload qualification Part A review](devdocs/CurrentArchitecture/ReliableOverloadQualification3L.md)
 at `5ada43a5773a96b1f0a97e9e6299baa6f420b762` stops at the missing qualified
 gameplay payload/arrival envelope. Codec maxima and reserve arithmetic do not
