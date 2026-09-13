@@ -6,6 +6,23 @@ last_verified: 2026-09-12
 
 # Foundation 3L.3 diagnostic validation ledger
 
+## Overload qualification stopped at Part A (2026-09-12)
+
+At published HEAD `5ada43a5773a96b1f0a97e9e6299baa6f420b762`, the
+[payload-envelope review](ReliableOverloadQualification3L.md) finds legal codec
+ceilings and a passing small-gameplay official fixture, but no sufficiently
+defined ordinary qualified request/response/Event size and arrival envelope.
+The task's explicit Part A stop applies; sustained overload, aggregate fairness,
+recovery and production journal margin are **not measured** in this checkpoint.
+No production or fixture change is retained. Existing 170-entry startup margin
+does not qualify journal sufficiency under overload.
+
+Native CI `34724984881` and complete GNS sanitizer CI `34724984872` are both
+verified terminal **success** at this HEAD. This supersedes pending CI statements
+at earlier checkpoints without closing the independent gameplay/client/scale,
+overload, journal or current-source security gates. **B — FOUNDATION 3L PARTIALLY
+READY; no 3M.** The linked report lists the contract decisions required to resume.
+
 ## Profiled GNS sanitizer closure attribution (2026-09-12)
 
 The [independent attribution report](GameSessionReliableAdmissionAttribution.md)

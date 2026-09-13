@@ -82,6 +82,15 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Content-coupled gameplay latency exceeds the 3L.2 readiness envelope
 
+The [overload qualification Part A review](devdocs/CurrentArchitecture/ReliableOverloadQualification3L.md)
+at `5ada43a5773a96b1f0a97e9e6299baa6f420b762` stops at the missing qualified
+gameplay payload/arrival envelope. Codec maxima and reserve arithmetic do not
+define supported ordinary large requests, responses or Events. Overload,
+recovery and production journal margin remain unmeasured in that checkpoint;
+no production defect is attributed. Native and complete GNS sanitizer CI are
+verified green at that HEAD. The contract gap and independent client/scale and
+security gates keep Foundation 3L partially ready.
+
 The [profiled GNS sanitizer attribution](devdocs/CurrentArchitecture/GameSessionReliableAdmissionAttribution.md)
 closes the previously blocked GNS sanitizer progression at code revision
 `8fa332416`: four base fixtures, profiled GameSession, and the executed 12-case
