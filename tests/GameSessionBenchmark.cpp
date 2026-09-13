@@ -13,6 +13,7 @@
 #include "gargantuan/render/Renderer.hpp"
 #include "ContentScaleFixture.hpp"
 #include "ContentScaleGameplay.hpp"
+#include "JoinedCharacterFixture.hpp"
 #include "../src/network/GameSessionTestAccess.hpp"
 #include "../src/runtime/RuntimeWorkDiagnostics.hpp"
 #include <SDL3/SDL_timer.h>
@@ -203,6 +204,7 @@ namespace {
 		CompletedWorkSamples.reserve(4);
 		if (TraceWork) WorkSamples.reserve(1201);
 		const auto TraceStarted = std::chrono::steady_clock::now();
+		test::JoinedCharacterFixture Joined(std::getenv("GARGANTUAN_JOINED_LATENCY") != nullptr, LatencyConnections);
 		Latency.SetOrigin(TraceStarted);
 		for (const auto &Character : RootCharacters) Latency.AddRoot(Character->GetObjectId());
 		std::uint64_t PendingHighWater = 0;
@@ -215,6 +217,7 @@ namespace {
 		auto Step = [&] {
 			StructuralBytes.Advance();
 			const auto FrameStarted = std::chrono::steady_clock::now();
+			Joined.Mark("FrameBegin", Tick);
 			TickWorkSample WorkSample{.Tick = Tick, .StartMilliseconds = Milliseconds(TraceStarted)};
 			for (std::size_t PeerIndex = 0; PeerIndex < Peers.size(); ++PeerIndex) {
 				auto &Peer = Peers[PeerIndex];
@@ -238,15 +241,18 @@ namespace {
 			}
 			Network->Pump();
 			const auto Started = std::chrono::steady_clock::now();
+			Joined.Mark("ServerBegin", Tick);
 			{
 				runtime_detail::WorkCapture Capture(TraceWork ? &WorkSample.Server : nullptr, ReadWorkAllocations, ReadWorkAllocatedBytes);
 				(void)Server.Poll();
 				Runtime.Step();
+				Joined.Mark("EngineDone", Tick);
 				for (const auto Connection : {LatencyConnections.front(), LatencyConnections.back()})
 					runtime_detail::RecordPublicationLatency({.Stage = "EngineComplete", .Connection = Connection,
 						.Tick = Tick, .Kind = 300});
 				Server.Step(Tick++);
 			}
+			Joined.Mark("ServerDone", Tick - 1);
 			TickTimes.push_back(Milliseconds(Started));
 			for (const auto &CharacterValue : RootCharacters) {
 				RootMinimumY = std::min(RootMinimumY, CharacterValue->GetPosition().y);
@@ -273,11 +279,13 @@ namespace {
 			Network->Pump();
 			for (auto &Peer : Peers) {
 				if (Peer.Session) {
+					Joined.Mark("ClientBegin", Tick - 1, Peer.Content.LatencyConnection);
 					runtime_detail::WorkCapture Capture(TraceWork ? &WorkSample.Client : nullptr, ReadWorkAllocations, ReadWorkAllocatedBytes);
 					const auto BeforeReplica = TraceWork ? Peer.Session->GetMetrics().ClientReplica : ReplicaMetrics{};
 					(void)Peer.Session->Poll();
 					Peer.Runtime->Step();
 					Peer.Session->Step(Tick);
+					Joined.Mark("ClientDone", Tick - 1, Peer.Content.LatencyConnection);
 					if (TraceWork) {
 						const auto After = Peer.Session->GetMetrics().ClientReplica;
 						WorkSample.ClientReplicaPhases = {
@@ -296,6 +304,7 @@ namespace {
 					continue;
 				}
 				const auto ObserverStarted = std::chrono::steady_clock::now();
+				Joined.Mark("DrainBegin", Tick - 1, Peer.Content.LatencyConnection);
 				std::array<TransportEvent, 256> Events;
 				for (;;) {
 					const auto Count = Peer.Transport->PollEvents(Events);
@@ -308,9 +317,11 @@ namespace {
 					if (Count < Events.size()) break;
 				}
 				WorkSample.ObserverDrainMilliseconds += Milliseconds(ObserverStarted);
+				Joined.Mark("DrainDone", Tick - 1, Peer.Content.LatencyConnection);
 			}
 			if (Differential) {
 				const auto WorkMilliseconds = Milliseconds(FrameStarted);
+				Joined.Mark("PaceBegin", Tick - 1);
 				WorkSample.FrameWorkMilliseconds = WorkMilliseconds;
 				// Relative Win32 sleep rounded this fixture's spare frame time up
 				// by ~15 ms every tick, halving the measured gameplay cadence even
@@ -324,6 +335,7 @@ namespace {
 				PaceOvershootTimes.push_back(std::max(0.0, Milliseconds(FrameStarted) - std::max(16.667, WorkMilliseconds)));
 			}
 			if (TraceWork && WorkSamples.size() < 1201) WorkSamples.push_back(std::move(WorkSample));
+			Joined.Mark("FrameDone", Tick - 1);
 		};
 		if (Differential) {
 			// Finish initial animation-rig publication and spectator retirement
@@ -341,6 +353,7 @@ namespace {
 			StructuralBytes.Begin(Phase);
 			CurrentWorkPhase = Phase;
 			Latency.Begin(Phase);
+			Joined.Begin(Phase);
 			// Fixture placement at a cell edge exercises ordinary animation-driven
 			// dirty projection; no spatial index or Desired/Known mutation is used.
 			RootCells.clear();
@@ -452,6 +465,7 @@ namespace {
 			const auto RootAfter = Runtime.GetCharacterRootMotionMetrics();
 			const auto PhaseTicks = Tick - StartTick;
 			StructuralBytes.End();
+			Joined.End();
 			Latency.End();
 			const auto WallMilliseconds = Milliseconds(Started);
 			const auto CharacterAfter = detail::GameSessionTestAccess::GetCharacterMetrics(Server);
@@ -613,10 +627,11 @@ namespace {
 		// Trace output is deferred until all phases finish: printing thousands
 		// of samples between phases would contaminate the next Engine time delta.
 		bool WorkSamplesPrinted = false;
-		auto PrintWorkSamples = [&] {
+			auto PrintWorkSamples = [&] {
 			if (WorkSamplesPrinted) return;
 			WorkSamplesPrinted = true;
 			Latency.Print();
+			Joined.Print();
 			for (const auto &[PhaseName, Samples] : CompletedWorkSamples) {
 				for (const bool Client : {false, true}) {
 					for (std::size_t Index = 0; Index < runtime_detail::WorkProducerNames.size(); ++Index) {

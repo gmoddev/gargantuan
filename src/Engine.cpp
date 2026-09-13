@@ -1,4 +1,5 @@
 #include "gargantuan/Engine.hpp"
+#include "runtime/PublicationLatencyDiagnostics.hpp"
 #include "runtime/RuntimeWorkDiagnostics.hpp"
 #include "gargantuan/Log.hpp"
 #include "gargantuan/Profiler.hpp"
@@ -310,6 +311,8 @@ namespace gargantuan {
 					for (const auto &Request : Animation->GetRootMotionRequests()) {
 						runtime_detail::WorkScope Work(runtime_detail::WorkPhase::RootMotion);
 						const auto AdmissionStarted = std::chrono::steady_clock::now();
+						runtime_detail::RecordPublicationLatency({.Stage = "RootRequest", .Object = Request.TargetCharacter,
+							.Tick = SimulationTick, .Kind = 301});
 						++RootMotionMetrics.Requests;
 						auto CharacterValue = Request.Target.lock();
 						if (!CharacterValue || CharacterValue->GetDestroyed() || CharacterValue->IsDestroying() ||
@@ -341,6 +344,8 @@ namespace gargantuan {
 							++RootMotionMetrics.Rejected;
 						else {
 							++RootMotionMetrics.Accepted;
+							runtime_detail::RecordPublicationLatency({.Stage = "RootCommit", .Object = Request.TargetCharacter,
+								.Tick = SimulationTick, .Kind = 301});
 							if (glm::length(Result.AppliedTranslation - RequestedWorld) > 1.0e-4f)
 								++RootMotionMetrics.Clipped;
 						}

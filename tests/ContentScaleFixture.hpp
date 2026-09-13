@@ -118,7 +118,7 @@ namespace gargantuan::test {
 
 		void Observe(std::span<const std::byte> Bytes, network::DeliveryMode Delivery = network::DeliveryMode::UnreliableUnordered) {
 			if (ActiveStructuralBytes && Delivery == network::DeliveryMode::ReliableOrdered) ActiveStructuralBytes->Reliable(Bytes.size());
-			runtime_detail::RecordPublicationPacket("Observer", LatencyConnection, Bytes);
+			runtime_detail::PublicationPacketScope ObservationScope("Observer", "ObserverApplied", LatencyConnection, Bytes);
 			if (Bytes.size() < 4) return;
 			if (std::memcmp(Bytes.data(), "GRPL", 4) == 0) {
 				auto Frame = network::DecodeReplicationFrame(Bytes);
@@ -161,6 +161,14 @@ namespace gargantuan::test {
 				}
 				const auto ReceivedAt = std::chrono::steady_clock::now();
 				auto ObserveState = [&](const network::CharacterAuthoritativeState &State) {
+					if (runtime_detail::PublicationLatencySelected(LatencyConnection)) {
+						const runtime_detail::PublicationLatencyRecord Record{.Stage = "ObserverState", .Connection = LatencyConnection,
+							.Object = State.Character, .Tick = State.AuthoritativeTick, .Sequence = State.StateSequence.Value(),
+							.Nanoseconds = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+								ReceivedAt.time_since_epoch()).count()), .Kind = 5};
+						auto *Sink = runtime_detail::ActivePublicationLatency;
+						Sink->Record(Sink->Context, Record);
+					}
 					auto &LastWall = LastStateWall[State.Character];
 					if (LastWall != std::chrono::steady_clock::time_point{}) {
 						const auto Gap = std::chrono::duration<double, std::milli>(ReceivedAt - LastWall).count();

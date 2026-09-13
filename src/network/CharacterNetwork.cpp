@@ -1082,7 +1082,7 @@ namespace gargantuan::network {
 		auto CharacterValue = Found->second.Character.lock();
 		if (!CharacterValue || CharacterValue->GetDestroyed() || CharacterValue->IsDestroying()) return std::nullopt;
 		auto &Runtime = Found->second;
-		return CharacterAuthoritativeState{
+		auto Result = CharacterAuthoritativeState{
 			.Character = Character,
 			.ControlEpoch = Runtime.ControlEpoch,
 			.StateSequence = Runtime.NextStateSequence,
@@ -1098,6 +1098,9 @@ namespace gargantuan::network {
 			),
 			.ActiveAction = Runtime.ActiveAction,
 		};
+		runtime_detail::RecordPublicationLatency({.Stage = "StateBuilt", .Object = Character,
+			.Tick = AuthoritativeTick, .Sequence = Result.StateSequence.Value(), .Epoch = Result.ControlEpoch.Value(), .Kind = 5});
+		return Result;
 	}
 
 	void AuthoritativeCharacterNetwork::PromoteCharacter(
@@ -1137,6 +1140,9 @@ namespace gargantuan::network {
 			State.DesiredDueTick = AuthoritativeTick;
 		const auto Interval = Configuration.PublicationIntervalTicks(State.EffectiveTier);
 		if (State.HardDeadlineTick == 0) State.HardDeadlineTick = SaturatingTickAdd(State.DesiredDueTick, Interval);
+		runtime_detail::RecordPublicationLatency({.Stage = "CharacterDue", .Connection = Connection,
+			.Object = Character, .Tick = AuthoritativeTick, .Due = State.DesiredDueTick,
+			.Kind = 5, .Tier = static_cast<std::uint32_t>(State.EffectiveTier), .Operations = Forced ? 1u : 0u});
 		if (!Forced && AuthoritativeTick >= State.HardDeadlineTick && !State.DeadlineEscalationRecorded) {
 			State.DeadlineEscalationRecorded = true;
 			SaturatingIncrement(Metrics.PublicationDeadlineEscalations);
@@ -1191,6 +1197,9 @@ namespace gargantuan::network {
 				State.DesiredDueTick, SaturatingTickAdd(State.LastAbsoluteTick, Configuration.AbsoluteRefreshTicks)
 			);
 		State.HardDeadlineTick = SaturatingTickAdd(State.DesiredDueTick, Interval);
+		runtime_detail::RecordPublicationLatency({.Stage = "CharacterNextDue", .Connection = Connection,
+			.Object = Character, .Tick = AuthoritativeTick, .Due = State.DesiredDueTick,
+			.Kind = 5, .Tier = static_cast<std::uint32_t>(State.EffectiveTier)});
 		if (State.DesiredDueTick <= AuthoritativeTick) {
 			MakeRelationshipDue(Peer, Connection, Character, AuthoritativeTick, false);
 			return;
@@ -1645,6 +1654,8 @@ namespace gargantuan::network {
 				);
 				SaturatingIncrement(Metrics.StatesConsidered);
 				if (!Required) {
+					runtime_detail::RecordPublicationLatency({.Stage = "CharacterUnchanged", .Connection = Connection,
+						.Object = Id, .Tick = AuthoritativeTick, .Due = Publication->second.DesiredDueTick, .Kind = 5});
 					Publication->second.PublishImmediately = false;
 					SaturatingIncrement(Metrics.StatesSuppressedUnchanged);
 					ScheduleRelationship(Peer, Connection, Id, AuthoritativeTick, false);
@@ -1668,6 +1679,8 @@ namespace gargantuan::network {
 						continue;
 					}
 					Runtime->second.PreparedState = *State;
+					runtime_detail::RecordPublicationLatency({.Stage = "CharacterSnapshot",
+						.Object = Id, .Tick = AuthoritativeTick, .Sequence = State->StateSequence.Value(), .Kind = 5});
 					Runtime->second.PreparedFingerprint = SemanticStateFingerprint(*State);
 					Runtime->second.PreparedTick = AuthoritativeTick;
 					SaturatingIncrement(Metrics.StateSnapshotsBuilt);

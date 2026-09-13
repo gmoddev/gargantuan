@@ -1,6 +1,7 @@
 #include "../src/network/GameSessionTestAccess.hpp"
 #include "../src/runtime/RuntimeWorkDiagnostics.hpp"
 #include "PublicationLatencyFixture.hpp"
+#include "JoinedCharacterFixture.hpp"
 #include "gargantuan/Engine.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Folder.hpp"
@@ -98,6 +99,30 @@ namespace {
 		}
 		Check(runtime_detail::ActivePublicationLatency == Previous && test::ActiveRecipientGaps == nullptr,
 			"latency probe releases borrowed sink and histogram on scope teardown");
+		{
+			const std::array<ConnectionId, 2> Connections{{{2, 1}, {1, 1}}};
+			test::JoinedCharacterFixture Joined(true, Connections);
+			Joined.Begin("baseline");
+			Joined.Mark("NotLoad", 1);
+			Check(Joined.GetCount() == 0, "joined diagnostic records only its bounded load phase");
+			Joined.Begin("load");
+			runtime_detail::RecordPublicationLatency({.Connection = {1, 2}});
+			Check(Joined.GetCount() == 1, "joined diagnostic rejects stale peer generation");
+			CharacterStateFrame Frame{.ServerTick = 31, .FrameSequence = CharacterStateFrameSequence{1}, .StateCount = 1};
+			Frame.States[0] = CharacterAuthoritativeState{.Character = {9, 2}, .ControlEpoch = CharacterControlEpoch{7},
+				.StateSequence = RealtimeStateSequence{12}, .AuthoritativeTick = 31};
+			const auto Bytes = EncodeCharacterMessage(Frame);
+			Check(Bytes.has_value(), "joined trace fixture encodes a valid state");
+			runtime_detail::RecordPublicationPacket("EgressSubmit", {1, 1}, *Bytes);
+			const auto Records = Joined.GetRecords();
+			Check(Records.size() == 3 && Records[1].Kind == 405 && Records[1].Bytes == Bytes->size() &&
+				Records[2].Object == ObjectId{9, 2} && Records[2].Sequence == 12 && Records[2].Tick == 31 &&
+				Records[2].Due == 7, "joined packet preserves full state identity and counts packet bytes only once");
+			for (std::size_t Index = 0; Index < 1'048'574; ++Index) Joined.Mark("Bound", Index);
+			Check(Joined.GetCount() == 1'048'576 && Joined.GetDropped() == 1, "joined diagnostic hard cap is observable");
+			Joined.End();
+		}
+		Check(runtime_detail::ActivePublicationLatency == Previous, "joined diagnostic restores scoped sink");
 	}
 
 	class HandoffTransport final : public IGameTransport {
