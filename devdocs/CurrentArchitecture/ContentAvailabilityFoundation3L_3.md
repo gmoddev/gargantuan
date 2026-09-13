@@ -12,6 +12,18 @@ related_code:
 
 # Foundation 3L.3: runtime work isolation
 
+## Reliable gameplay qualification (2026-09-13)
+
+The [engine-default contract](ReliableGameplayWorkloadContract3L.md) now supplies
+concrete qualified size/rate/burst/concurrency and aggregate assumptions. The
+[qualification report](ReliableGameplayQualification3L.md) records the canonical
+GameSession/GNS matrix, official Local/Node upper RPC evidence, overload recovery
+and actual journal-reader margins. The shared grounded-locomotion policy defect
+is fixed. Combined aggregate structural overload exposes open KI-008 at the
+pinned GNS packet-number guard; it is retained as an unchanged diagnostic.
+Independent client/scale and security gates remain open: **B — PARTIALLY READY;
+no 3M.** Earlier checkpoints below preserve their original measured scope.
+
 ## Approved reliable-byte admission implementation (2026-09-12)
 
 The approved service targets are RPC p95/p99/max 150/250/500 ms and Event ACK/

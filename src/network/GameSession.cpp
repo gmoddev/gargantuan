@@ -2088,7 +2088,8 @@ namespace gargantuan::network {
 		return Session.State->Relevance ? Session.State->Relevance->GetSpatialCellAddress(Object) : std::nullopt;
 	}
 	CharacterNetworkMetrics detail::GameSessionTestAccess::GetCharacterMetrics(const GameSession &Session) {
-		return Session.State->Authority ? Session.State->Authority->GetMetrics() : CharacterNetworkMetrics{};
+		return Session.State->Authority ? Session.State->Authority->GetMetrics() :
+			Session.State->Prediction ? Session.State->Prediction->GetMetrics() : CharacterNetworkMetrics{};
 	}
 	std::uint64_t detail::GameSessionTestAccess::GetReliableEventsAccepted(const GameSession &Session) {
 		return Session.State->Remotes ? Session.State->Remotes->GetMetrics().ReliableEventsAccepted : 0;
@@ -2096,6 +2097,15 @@ namespace gargantuan::network {
 	std::vector<ConnectionId> detail::GameSessionTestAccess::GetConnections(const GameSession &Session) {
 		std::vector<ConnectionId> Result;
 		for (const auto &[Connection, PeerValue] : Session.State->Peers) Result.push_back(Connection);
+		return Result;
+	}
+	std::vector<detail::JournalRequirement> detail::GameSessionTestAccess::GetJournalRequirements(const GameSession &Session) {
+		std::vector<JournalRequirement> Result;
+		const auto *Replication = Session.State->Replication.get();
+		if (!Replication) return Result;
+		Result.push_back({Replication->CatalogCursor, {}, true, false});
+		for (const auto &[Connection, Peer] : Replication->Peers)
+			Result.push_back({Peer.JournalCursor, Connection, false, Peer.PreparedCommit.has_value()});
 		return Result;
 	}
 }

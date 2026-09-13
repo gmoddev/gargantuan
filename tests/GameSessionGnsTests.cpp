@@ -26,6 +26,8 @@ namespace {
 	using namespace std::chrono_literals;
 
 	int Failures = 0;
+	std::uint32_t QualificationPeerCount = 1;
+	bool QualificationAggregateStructural = false;
 
 	void Check(bool Condition, const char *Message) {
 		if (Condition) return;
@@ -36,9 +38,11 @@ namespace {
 	ReliableServiceProfile CandidateReliableService() {
 		ReliableServiceProfile Profile;
 		Profile.ConnectionRate = 8ull * 1024 * 1024;
-		Profile.AggregateRate = Profile.ConnectionRate;
+		Profile.AggregateRate = Profile.ConnectionRate * QualificationPeerCount;
 		Profile.BackendRate = 2 * Profile.ConnectionRate;
-		Profile.MaximumConnections = 1;
+		Profile.MaximumConnections = QualificationPeerCount;
+		Profile.GlobalBacklog = MaximumReliableServiceGroupBytes +
+			2 * QualificationPeerCount * Profile.GameplayBurst;
 		Profile.RequireLatencyCompatibility = true;
 		return Profile;
 	}
@@ -56,15 +60,25 @@ namespace {
 	}
 }
 
+#include "ReliableGameplayWorkloadFixture.hpp"
+
 int main(int ArgumentCount, char **Arguments) {
 	using namespace gargantuan;
 	using namespace gargantuan::network;
-	const bool Profiled = ArgumentCount == 2 && std::string_view(Arguments[1]) == "--reliable-profile";
+	QualificationAggregateStructural = ArgumentCount == 2 && std::string_view(Arguments[1]) == "--reliable-workload-32-structural";
+	const bool Aggregate = QualificationAggregateStructural || (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--reliable-workload-32");
+	if (Aggregate) QualificationPeerCount = 32;
+	const bool Workload = Aggregate || (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--reliable-workload");
+	const bool Profiled = Workload || (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--reliable-profile");
 	if (ArgumentCount > 1 && !Profiled) {
-		std::cerr << "usage: gargantuan_game_session_real_transport_tests [--reliable-profile]\n";
+		std::cerr << "usage: gargantuan_game_session_real_transport_tests [--reliable-profile|--reliable-workload|--reliable-workload-32|--reliable-workload-32-structural]\n";
 		return 2;
 	}
 	if (Profiled) {
+		SDL_SetLogOutputFunction([](void *, int, SDL_LogPriority, const char *Message) {
+			std::cerr << Message << '\n';
+		}, nullptr);
+		SDL_SetLogPriorities(SDL_LOG_PRIORITY_WARN);
 		const auto Profile = CandidateReliableService();
 		Check(Profile.IsValid() && Profile.IsLatencyCompatible(),
 			"profiled real GNS fixture uses the approved capacity-compatible candidate");
@@ -72,6 +86,20 @@ int main(int ArgumentCount, char **Arguments) {
 	gargantuan::BootstrapNativeRuntimeSchema();
 
 	auto ServerWorld = std::make_shared<DataModel>();
+	auto QualificationFunction = std::make_shared<RemoteFunction>();
+	auto QualificationEvent = std::make_shared<RemoteEvent>();
+	if (Workload) {
+		auto Floor = std::make_shared<Part>();
+		Floor->SetName("QualificationFloor");
+		Floor->SetAnchored(true);
+		Floor->SetSize({1024.0f, 1.0f, 1024.0f});
+		Floor->SetPosition({0.0f, -1.0f, 0.0f});
+		Floor->SetParent(ServerWorld->GetService("Workspace"));
+		QualificationFunction->SetName("QualificationFunction");
+		QualificationFunction->SetParent(ServerWorld);
+		QualificationEvent->SetName("QualificationEvent");
+		QualificationEvent->SetParent(ServerWorld);
+	}
 	DiskFilesystem SampleFilesystem(std::filesystem::path(GARGANTUAN_FIRST_COMPLETE_GAME_ROOT));
 	auto ServerAssets = std::dynamic_pointer_cast<AssetService>(ServerWorld->GetService("AssetService"));
 	ServerAssets->LoadProjectAssets(SampleFilesystem);
@@ -126,6 +154,28 @@ RunService.PreSimulation:Connect(function()
 end)
 )");
 	ClientActionPolicy->SetParent(ServerWorld);
+	if (Workload) ClientActionPolicy->SetSource(ClientActionPolicy->GetSource() + R"(
+local WorkloadStarted = 0
+local WorkloadSequence = 0
+CharacterControl.ActionResolved:Connect(function(Character, ActionName, Accepted)
+	if WorkloadSequence > 0 and ActionName == "GnsLunge" then
+		CharacterControl:SetAttribute("WorkloadResolved", WorkloadSequence)
+		CharacterControl:SetAttribute("WorkloadAccepted", Accepted)
+		WorkloadSequence = 0
+	end
+end)
+RunService.PreSimulation:Connect(function()
+	local Sequence = CharacterControl:GetAttribute("WorkloadRequest") or 0
+	if Sequence > WorkloadStarted and WorkloadSequence == 0 then
+		WorkloadStarted = Sequence
+		WorkloadSequence = Sequence
+		if not CharacterControl:RequestAction("GnsLunge") then
+			CharacterControl:SetAttribute("WorkloadRejected", Sequence)
+			WorkloadSequence = 0
+		end
+	end
+end)
+)");
 	auto RelevanceNpc = std::make_shared<KinematicCharacter>();
 	RelevanceNpc->SetName("GnsRelevanceNpc");
 	auto RelevanceRoot = std::make_shared<Part>();
@@ -235,6 +285,19 @@ end)
 	);
 
 	if (ClientRuntime && !ServerPlayers.empty() && ServerPlayers.front()->GetCharacter()) {
+		if (Workload) {
+			if (Aggregate) RunAggregateReliableGameplay(ServerRuntime, *ClientRuntime, *Server, Client, Port,
+				Tick, QualificationFunction, QualificationEvent);
+			else RunReliableGameplayWorkload(ServerRuntime, *ClientRuntime, *Server, Client,
+				*ClientTransport, Tick, *ServerTransport, QualificationFunction, QualificationEvent);
+			Client.Stop();
+			Server->Stop();
+			Check(Server->GetMetrics().ReliableAdmissionPeerStates == 0,
+				"qualification shutdown releases admission peer state");
+			ClientRuntime->Destroy();
+			ServerRuntime.Destroy();
+			return Failures == 0 ? 0 : 1;
+		}
 		auto CharacterValue = std::dynamic_pointer_cast<KinematicCharacter>(*ServerPlayers.front()->GetCharacter());
 		auto FindClientRelevanceNpc = [&]() {
 			return ClientRuntime ? std::dynamic_pointer_cast<KinematicCharacter>(

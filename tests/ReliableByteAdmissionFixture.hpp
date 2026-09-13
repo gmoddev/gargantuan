@@ -4,6 +4,7 @@
 #include <array>
 #include <iostream>
 #include <stdexcept>
+#include <vector>
 
 namespace gargantuan::test {
 inline void TestReliableByteAdmission() {
@@ -108,21 +109,21 @@ inline void TestReliableByteAdmission() {
 		Require(Admission.Observe({First.Slot, 2}, 0) && !Admission.Allowance({First.Slot, 2}, 5'000'000), "replacement starts with no old credit");
 		Require(!Admission.Reserve(First, 68), "stale generation cannot reserve replacement resources");
 	}
-	{
-		const auto Profile = ProfileFor(8 * 1024 * 1024, 500);
+	for (const std::uint32_t PeerCount : {200u, 500u}) {
+		const auto Profile = ProfileFor(8 * 1024 * 1024, PeerCount);
 		Require(Profile.IsValid(), "500-peer envelope funds finite aggregate headroom");
 		ReliableByteAdmission Admission(Profile);
 		Require(Admission.BeginStep(0), "500-peer start");
-		for (std::uint32_t Slot = 1; Slot <= 500; ++Slot) Require(Admission.Observe({Slot, 1}, 0), "bounded 500-peer registration");
-		std::array<bool, 500> Served{};
+		for (std::uint32_t Slot = 1; Slot <= PeerCount; ++Slot) Require(Admission.Observe({Slot, 1}, 0), "bounded scale-peer registration");
+		std::vector<bool> Served(PeerCount, false);
 		std::uint64_t MaximumWait = 0;
 		std::size_t Count = 0;
 		for (std::uint64_t Tick = 1; Tick <= 2000 && Count != Served.size(); ++Tick) {
 			const auto Time = Tick * 1000;
 			Require(Admission.BeginStep(Time), "500-peer clock");
-			for (std::uint32_t Slot = 1; Slot <= 500; ++Slot) Require(Admission.Observe({Slot, 1}, 0), "500-peer feedback");
-			for (std::uint32_t Offset = 0; Offset != 500; ++Offset) {
-				const auto Index = static_cast<std::uint32_t>((Tick + Offset) % 500);
+			for (std::uint32_t Slot = 1; Slot <= PeerCount; ++Slot) Require(Admission.Observe({Slot, 1}, 0), "scale-peer feedback");
+			for (std::uint32_t Offset = 0; Offset != PeerCount; ++Offset) {
+				const auto Index = static_cast<std::uint32_t>((Tick + Offset) % PeerCount);
 				const ConnectionId Id{Index + 1, 1};
 				if (Served[Index]) { Admission.NoWork(Id); continue; }
 				Admission.DeferSize(Id, Group);
@@ -133,8 +134,8 @@ inline void TestReliableByteAdmission() {
 			}
 			Admission.EndStep();
 		}
-		Require(Count == 500 && MaximumWait <= 600'000, "all 500 eligible peers receive finite full-group service");
-		Require(Admission.GetMetrics().AcceptedBytes == 500 * Group && Admission.GlobalCredit() <= Profile.GlobalBurst, "aggregate traffic and credit are exact");
+		Require(Count == PeerCount && MaximumWait <= 600'000, "all eligible scale peers receive finite full-group service");
+		Require(Admission.GetMetrics().AcceptedBytes == PeerCount * Group && Admission.GlobalCredit() <= Profile.GlobalBurst, "aggregate traffic and credit are exact");
 		Require(Admission.LogicalBytes() < 128 * 1024, "frontier memory is compact per-connection state, not per object");
 		std::cout << "[Network:ByteAdmission] FairPeers=" << Count << " MaxWaitUs=" << MaximumWait
 			<< " PeerStates=" << Admission.PeerCount() << " LogicalBytes=" << Admission.LogicalBytes()

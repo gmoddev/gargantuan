@@ -12,6 +12,7 @@ param(
 	# Trusted test harness only. Production rates enter through ServerHost CLI,
 	# not content, client scripts, or a backend-global environment override.
 	[UInt64]$ReliableRate = [UInt64]$env:GARGANTUAN_TEST_RELIABLE_RATE,
+	[ValidateSet(0, 16384)][int]$QualifiedRpcFrameBytes = [int]$env:GARGANTUAN_TEST_QUALIFIED_RPC_FRAME_BYTES,
 	[ValidateRange(0, 512)][int]$ContentObjectCount = 0,
 	[ValidateRange(0, 1536)][int]$ContentNamePadding = 0,
 	[ValidateSet('representative', 'lightweight', 'property-heavy')][string]$ContentShape = 'representative',
@@ -502,6 +503,18 @@ RunService.PostSimulation:Connect(function()
 end)
 '@
 	$ClientSource = $ClientSource.Replace('for _ = 1, 5 do', "for _ = 1, $RemoteFunctionCallCount do")
+	if ($QualifiedRpcFrameBytes -ne 0) {
+		# Exact GRMT frame sizes: request 52+5+string; response adds a double.
+		# Small Event probes remain at their existing cadence while upper-size
+		# RPCs are paced below the common 32 KiB/s budget in each direction.
+		$RequestExpression = 'string.rep("q", 16327)'
+		$ResponseExpression = 'string.rep("r", 16318)'
+		$ServerSource = $ServerSource.Replace('"node-content-ping"', $RequestExpression).Replace('"node-content-pong"', $ResponseExpression)
+		$ClientSource = $ClientSource.Replace('"node-content-ping"', $RequestExpression).Replace('"node-content-pong"', $ResponseExpression)
+		$ClientSource = $ClientSource.Replace('task.wait()', 'task.wait(1.25)')
+		$ClientSource = $ClientSource.Replace('table.sort(Samples)', 'assert(Errors == 0 and Timeouts == 0, "qualified RPC failed"); table.sort(Samples)')
+		$ClientSource = $ClientSource.Replace('print(MetricsText)', 'assert(Percentile(95) <= 150000 and Percentile(99) <= 250000 and Samples[#Samples] <= 500000, "qualified RPC latency gate failed"); print(MetricsText)')
+	}
 	$ClientSource = $ClientSource.Replace('__EXPECTED_CONTENT_OBJECTS__', [string]$ExpectedContentObjects)
 	$ClientSource = $ClientSource.Replace('__PROPERTY_HEAVY__', ($ContentShape -eq 'property-heavy').ToString().ToLowerInvariant())
 	$ServerScript = Copy-ScriptTemplate -Template $ScriptTemplate -Name 'OfficialNodeHostServerProof' -RunContext 'Server' -Source $ServerSource
@@ -601,7 +614,7 @@ if ($Mode -eq 'Churn') {
 				Threads = $ServerProcess.Threads.Count; Handles = $ServerProcess.HandleCount })
 			if (-not $ServerOnlyChurn -and -not $PlayerProcess -and $Watch.ElapsedMilliseconds -ge 2300) {
 				$PlayerProcess = Start-RuntimeProcess -Executable $Player -WorkingDirectory $Descriptor.PlayerPackageRoot -Arguments @(
-					'--headless', '--connect', $GameEndpoint, '--session-smoke', '--max-frames', '1800'
+					'--headless', '--connect', $GameEndpoint, '--session-smoke', '--max-frames', $(if ($QualifiedRpcFrameBytes) { '10000' } else { '1800' })
 				) -RemoveEnvironmentVariables $NodeSecretEnvironmentNames
 				$PlayerOutput = $PlayerProcess.StandardOutput.ReadToEndAsync()
 				$PlayerError = $PlayerProcess.StandardError.ReadToEndAsync()

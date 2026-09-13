@@ -13,6 +13,12 @@ related_code:
 
 # Foundation 3L overload qualification: Part A contract gate
 
+**Historical September 12 stop.** The September 13
+[engine-default contract](ReliableGameplayWorkloadContract3L.md) supersedes the
+missing-number stop below. Current fixture execution and remaining limitations
+belong to the [validation ledger](ContentAvailabilityFoundation3L_3Validation.md).
+The old unmeasured statements apply only to this recorded checkpoint.
+
 The subsequent [gameplay workload contract assessment](ReliableGameplayWorkloadContract3L.md)
 expands the producer inventory, verifies existing RPC bounds, records the
 missing product decisions, and supplies candidate deployment arithmetic and a

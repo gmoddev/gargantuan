@@ -236,7 +236,7 @@ namespace gargantuan::network {
 			int Delivery = -1, int Traffic = -1, std::int64_t Number = -1,
 			std::int64_t ReceiveAgeUs = -1, int Result = -1) const noexcept {
 			const auto *Sink = detail::ActiveGnsService;
-			if (!Sink) return;
+			if (!Sink || !Sink->Record) return;
 			const auto Iterator = Connections.find(Id);
 			if (Iterator == Connections.end()) return;
 			detail::GnsServiceRecord Value{.Stage = Stage, .Connection = Id,
@@ -370,6 +370,8 @@ namespace gargantuan::network {
 		void CloseConnection(ConnectionId Id, DisconnectInfo Information, bool NotifyBackend) {
 			const auto Iterator = Connections.find(Id);
 			if (Iterator == Connections.end()) return;
+			if (const auto *Sink = detail::ActiveGnsService; Sink && Sink->Closed)
+				Sink->Closed(Sink->Context, Id, Information.Diagnostic.c_str());
 			auto Handle = Iterator->second.Handle;
 			auto Previous = Iterator->second.State;
 			RemoveConnectionMessageEvents(Id);

@@ -1,35 +1,70 @@
 ---
-status: blocked-on-product-workload-decision
+status: engine-default-selected-partially-qualified
 owner: runtime-networking-and-runtime-host
-last_verified: 2026-09-12
+last_verified: 2026-09-13
 ---
 
 # Foundation 3L reliable gameplay workload contract gate
 
 ## Decision and source scope
 
-**B — FOUNDATION 3L PARTIALLY READY; overload/recovery gate not passed.**
-This contract-first assessment continues from published documentation HEAD
-`cfb21c46937f7cd523aa28012cb1dd53bb51d060` on
-`foundation/3l-content-availability`. Native source and fixtures are unchanged
-from `5ada43a5773a96b1f0a97e9e6299baa6f420b762`.
+**B — FOUNDATION 3L PARTIALLY READY; qualification remains evidence-gated.**
+The engine-owned defaults below supersede the September 12 missing-product-
+decision stop. The September 13 task explicitly authorizes conservative defaults.
+Initial local HEAD, upstream and remote were all
+`b866a89e741b4b4df3419c74856d293b650bf475`; its native and dedicated GNS sanitizer
+workflows both completed successfully before source changes.
 
-The repository establishes reliable semantics, finite denial/resource limits,
-approved latency targets and server capacity policy. It does **not** establish
-the intended production payload/rate/burst/concurrency combination. Neither the
-[accepted networking design](../../docs/src/content/docs/developing/networking-architecture.mdx),
-[minimum game](../FutureArchitecture/MinimumUsableGame.md),
-[Remote API](LuauRemotes.md), nor current fixtures supplies that missing product
-requirement. A pickup/action game and typed scalar/reference messaging motivate
-small control messages, but do not justify a specific general-purpose KiB or
-messages/s promise. Large inventory replies, nested calls, broadcasts and
-Character observer fanout need explicit workload assumptions.
+These are workload assumptions for qualification, not new parser restrictions,
+application traffic shaping, or a claim that every legal application qualifies.
+The inventory distinguishes the existing hard safety limits from this smaller
+ordinary service workload. Measured failures cannot be reclassified by silently
+reducing these defaults.
 
-Accordingly, no numeric qualified payload, arrival or concurrency policy is
-selected, no new runtime limit is introduced, and no overload fixture is run.
-This is the task's explicit missing-requirements stop, not a failed benchmark or
-evidence that a feasible gameplay contract cannot exist. The tables below make
-the unresolved decisions and the qualification procedure reviewable.
+## Selected engine default
+
+All byte budgets include the 32-byte GNS adapter envelope. A payload ceiling
+below means the entire encoded GRMT frame, including its 52-byte header.
+
+| Quantity | Selected qualification default |
+| --- | --- |
+| RPC request, response, reliable Event and echoed Event | **16,384 B encoded frame**, 16,416 B complete message; the response may equal the request ceiling |
+| Per-peer arrivals, independently in each direction | For every interval T seconds: **Bytes(T) <=20,480 +32,768*T** and **Messages(T) <=16 +64*T**, including engine control, actions, responses and every reliable observer recipient |
+| RPC overlap | **Four outstanding requests per peer per direction**, 64 per server manager aggregate; nested calls consume the same allowance |
+| Actions | At most two requests/s per owner, burst one, one unresolved action; result and semantic observer fanout count against shared budgets |
+| Control lifecycle | At most one Character bind/replacement per peer per second, burst one; one new connection progression per second aggregate during steady gameplay |
+| Moderate aggregate | N=32 connected, at most eight active; aggregate each direction **256 KiB/s, 160 KiB burst, 512 messages/s, 128-message burst** |
+| High peer-count stress | N=200 or 500 connected, at most 16 active ordinary producers; aggregate each direction **512 KiB/s, 320 KiB burst, 1,024 messages/s, 256-message burst**; all-recipient fanout still charged |
+| One peer | The per-peer bound; aggregate outstanding at most four |
+| Host/path assumption | 60 Hz service, no unbounded/yielding handler work; <=5 ms handler completion; combined path/host/client nonqueue allowance <=100 ms; client backend remains 256 KiB/s, server R=8 MiB/s and backend=16 MiB/s |
+| Dependencies | Qualification begins only with published Remote identities and already materialized argument references. New dependent-object waits are measured from invocation and are outside this ordinary latency promise until separately qualified. |
+| Recovery deadline | After 480 offered service opportunities (at least eight seconds; longer under host saturation), accepted traffic and pending structural work must drain/converge within 20 seconds; subsequent ordinary probes must satisfy unchanged latency targets |
+
+Idle peers are not free: incidental reliable state/control bytes and broadcast
+recipients count against the aggregate limits. Active fraction alone does not
+bound fanout. Unreliable inputs/state and content-provider IO require additional
+path and host headroom. A host unable to fund N*R cannot claim this deployment
+merely because most peers are idle; 200/500 dimensions are scale stress, not an
+assertion of commodity-NIC service capacity.
+
+The burst is shared, not multiplied by concurrency. Four simultaneous 16 KiB
+requests exceed it. A canonical concurrent burst uses four 3 KiB requests plus
+one 3 KiB Event: 15,520 B, leaving 4,960 B for control/actions. A single full-size
+message leaves 4,064 B. Requests and responses are charged independently; a
+handler that bunches replies must keep egress within its own burst.
+
+Rationale: 16 KiB accommodates ordinary typed game state while staying one
+sixteenth of the legal frame ceiling. At the unchanged 256 KiB/s client backend,
+the entire 20 KiB burst serializes in 78.125 ms, and its fluid drain bound at
+32 KiB/s continuing demand is 89.286 ms. This leaves useful, but not guaranteed,
+headroom in the fixed latency gates; the server FIFO and complete structural
+group must still be measured. Per-peer steady gameplay is only 1/64 of the
+2 MiB/s server reserve and 1/8 of client backend capacity. Four RPCs support
+independent gameplay operations without treating the 1,024 storage ceiling as
+a service promise. Aggregate calls and responses remain below existing manager
+limits, including the 4,096 generated response/control messages/s and 32 MiB/s
+generated byte ceilings. These engineering arguments precede measured pass/fail;
+they do not turn capacity arithmetic into latency proof.
 
 ## Legal, qualified and overload
 
@@ -54,12 +89,15 @@ ordering domain, wire field or application priority class follows from this
 distinction. [Deployment capacity](NetworkingReliableDeploymentContract.md)
 and qualified gameplay demand are separate contracts.
 
-## Producer inventory — source verified, sizes calculated
+## Producer inventory — source verified, historical fixture sizes
 
 Frame bytes below include the named protocol header but exclude the **32-byte
 GNS adapter envelope**. Count that envelope once per message in service budgets.
 Packet/encryption/ACK/retransmission bytes require separate physical headroom.
 Calculated sizes are source arithmetic, not new executed size measurements.
+The fixture-frequency column records the pre-selection baseline. Its statements
+about unselected workload values describe that earlier fixture; the selected
+table above supplies the current qualification assumptions for every producer.
 
 | Producer / direction | Legal shape and tighter semantic/resource policy | Existing fixture and production frequency behavior |
 | --- | --- | --- |
@@ -127,34 +165,20 @@ latency guarantee; qualification needs an explicit handler/host service
 assumption. A general script watchdog belongs to scripting policy and would be
 a separate architecture decision, not a hidden networking benchmark limit.
 
-## Required workload decision — values intentionally unresolved
+## Applying the three limit classes
 
-The product/platform owner must select supported gameplay behavior; runtime
-networking must cost it and the trusted host/operator must fund it. A platform
-decision does not require a Node change: native ServerHost already owns the
-deployment input. Prefer one common qualified GRMT frame-size limit unless
-actual request/response requirements justify an asymmetry; do not add a large
-message class merely because the codec permits one.
+The inventory's codec and hard safety ceilings remain unchanged. The selected
+table supplies the separate service limit for each producer. Applications may
+control Remote sizes/rates and request Character actions or lifecycle changes;
+their ability to encode a message does not bypass authority, pending-request,
+dispatch, scheduler or backend bounds. Legal overload may receive explicit
+rejection or terminal disconnect; accepted live-lifetime work must not silently
+disappear. Report these outcomes separately from successful completions.
 
-| Decision | Required content | Current status |
-| --- | --- | --- |
-| Payloads | Maximum encoded RPC request, response and Event bytes, whether their maxima may coincide, plus full-size application behavior | **Not selected**; larger qualified fixtures **not measured** |
-| Per-peer arrivals, each direction | Message and complete-message byte rates, finite count/byte burst, window/replenishment rule, maximum peak duration | **Not selected** |
-| Aggregate arrivals | Independent server ingress/egress rates and bursts; actual recipient fanout; simultaneous active versus merely connected peers | **Not selected** |
-| RPC overlap | Qualified pending requests per peer and server, both directions, nested-call allowance and response-bunching bound | **Not selected**; resource ceilings above are already implemented |
-| Engine traffic | Action mix, materialized observers, reliable semantic/control churn and joining peers sharing the nonstructural reserve | **Not selected** |
-| Path and host | Client uplink service, server ingress/egress, RTT/loss/retransmission, host tick/handler/client-application allowances and measurement start/end | **Not selected** beyond the scoped official observations and server profile |
-| Materialization dependency | Whether qualified RPC timing includes waiting for a newly referenced object's complete 3J admission, and its finite supported demand | **Not selected**; no clock-start change may hide that wait |
-
-A compact contract can use, for every direction and every interval of length
-`T > 0`, admitted workload bounds `Bytes(T) <= BurstBytes + ByteRate*T` and
-`Messages(T) <= BurstMessages + MessageRate*T`, with independent peer and server
-totals. Specify maximum frame sizes as well. A transaction is not one message:
-request, response, probe echo, error, control and every fanout recipient consume
-their own budgets. If a peak rate is allowed for a finite window, specify both
-and its replenishment; a one-second average alone permits an uncontrolled burst.
-This is a proposed specification form, not an implemented gameplay shaper or
-permission to choose token values from passing tests.
+The workload inequalities are qualification assumptions, not an implemented
+gameplay shaper. Qualification fixtures must account for request, response,
+echo, action and every fanout recipient. Neither a one-second average nor an
+RPC-only tally establishes the complete workload boundary.
 
 ## Deployment compatibility preflight
 
@@ -214,62 +238,82 @@ Additional necessary checks before admitting a workload:
    full-group profiles unqualified. A higher class must be explicit when
    required. Do not weaken the targets or fund overload by increasing buffers.
 
-**Result:** server candidate arithmetic is compatible; complete mandatory
-gameplay-profile compatibility is **not established** because the workload,
-active-peer mix and client/path/host budgets are unresolved. No mathematically
-impossible combination is accepted as qualified.
+**Result:** the selected rates and bursts fit the mandatory server reservation
+and unchanged client ceiling mathematically. End-to-end qualification remains
+measured: Qp/R plus the nonqueue allowance does not prove the RPC p95 gate.
 
-## Canonical qualification matrix — specification pending decision
+## Canonical fixture matrix
 
-These seven fixture purposes are fixed; their missing workload parameters must
-come from the accepted decision above before implementation. They are not seven
-new service classes or a Cartesian product of all dimensions.
+`gargantuan_game_session_real_transport_tests --reliable-workload` exercises
+real GameSession bootstrap, exact GRMT encoding, native Remote dispatch, matched
+response/echo payloads, Luau-authorized Character actions, mixed structural
+application, deliberate overload and recovery. The fixture keeps the Character
+on a floor and holds trusted structural relevance at the test region; the
+original short lifecycle mode remains separate.
 
-| Fixture | Required setup | Question / gate |
+| Case | Demand | Purpose |
 | --- | --- | --- |
-| Ordinary small | Preserve official small RPC, echo and action probes with the approved arrival schedule; 1 peer, Local and Node | Does the existing ordinary service remain healthy? Prior evidence passes its recorded scope; no new run. |
-| Qualified upper payload | Exact approved request/response/Event maxima and approved pairings; at least one request-heavy and one response-heavy boundary | Does upper qualified size pass unchanged latency gates without hiding uplink cost? **Not measured.** |
-| Qualified burst | Approved count/byte burst and window, include coincident responses, echo, actions and reliable Character state | Are queue exposure and service bounded at the supported burst boundary? **Not measured.** |
-| Concurrent RPC | Approved peer/aggregate overlap, nested calls if supported, delayed response completion within the handler allowance | Do overlapping requests terminate exactly once and meet service without leaking tracking? **Not measured.** |
-| Mixed structural | Qualified gameplay plus dependency-complete streaming and supported lifecycle churn; Local and Node providers | Does admission defer structural demand while gameplay passes, preserving Known and selection/planning bounds? **Not measured.** |
-| Multi-peer aggregate | 32-peer moderate case and 200/500 stress dimensions, explicit active subset/all-active scenario, funded R/A/N and observer fanout | Do peer gaps, latency and convergence spread pass without treating connected peers as all codec-max senders? **Not measured.** |
-| Overload then recovery | Supported baseline, explicit demand above accepted byte/count/burst or structural capacity, then return below sustainable capacity | Do resources remain bounded, failures stay explicit and surviving/replacement lifetimes recover and converge? **Not measured.** |
+| Small | 128-B RPC and echoed Event every eight service opportunities | Sequential baseline with action results |
+| Upper | 16,384-B request and response; equally sized Event/echo halfway between RPC arrivals; period 80 opportunities | Symmetric upper encoded-frame ceiling |
+| Burst/concurrent | Four 3,072-B RPC requests plus one 3,072-B Event every 40 opportunities | Simultaneous requests and reply bunching within the shared byte burst |
+| Mixed | Same gameplay; anchored Parts enter fixed relevance every four opportunities | Real structural acceptance and client application during gameplay |
+| Gameplay overload | 16 concurrent 16,384-B RPCs and upper-size Event probes | Legal traffic beyond qualified concurrency/burst; terminal accounting and recovery |
+| Structural overload | 32 materialized Parts, 16 names of 24 KiB changed each opportunity; small gameplay | Stress complete-group admission and journal retention without resizing the journal; actual host-paced throughput must be reported |
+| Mixed overload | Same structural changes and overloaded gameplay | Shared FIFO pressure and recovery |
+| Recovery | Small ordinary traffic after demand ends and accepted work drains | Ordinary latency restoration within a fixed 20-second drain/convergence deadline |
 
-For overload, fix offered demand and phase duration before the run; record actual
-admitted/rejected work. Separate excess structural demand with qualified gameplay
-from deliberate gameplay overload. A disconnected peer is a terminal outcome,
-not evidence of that peer's convergence; report replacement bootstrap separately.
-Define finite recovery deadline and acceptable terminal policy in the workload
-decision, not after seeing drain results.
+Service opportunities are paced at least 16.667 ms apart; report actual elapsed
+time and offered rate, not an assumed 60 Hz under host saturation. Action
+commands are eligible once per 60 opportunities with one pending. Completion
+latency includes the fixture-to-Luau dispatch interval. Overload is run only
+after the qualified cases pass. Rejected calls are reported and do not become
+successful latency samples.
 
-Retain per-phase RPC p50/p95/p99/max, Event RTT and ACK gap, action-result latency,
-pending reliable bytes, peer/global credit and reservations, structural deferrals,
-pending groups/ages, memory high-water, per-peer fairness, recovery time and
-convergence. Report offered, accepted, completed, rejected and timed-out counts;
-do not exclude failed calls to improve latency percentiles.
+`--reliable-workload-32` provides 32 actual GameSession clients sharing one
+server and manager, eight active qualified RPC producers, all-active overload,
+then ordinary recovery. Per-peer accepted/completed/error counts and latency
+distributions prevent an aggregate mean from hiding an unserved peer. This
+does not by itself qualify all 32 peers at maximum burst or 200/500 peer host
+performance.
 
-## Journal and validation gate
+`--reliable-workload-32-structural` preserves the combined aggregate structural
+stress as a separate diagnostic. It exposes the open backend packet-sequence
+close in [KI-008](../../KNOWN_ISSUES.md#ki-008-gns-packet-sequence-close-during-aggregate-structural-overload).
+It is not silently reduced or counted as a passing overload/recovery case.
 
-The historical retained margin **170 / 16,384 entries** is unchanged. Supported,
-overload and recovery journal production rate, oldest required entry and owning
-peer/consumer, minimum margin, low-margin duration, and correlation with deferred
-groups/transport admission are **not measured**. Collect them on the same timeline
-as service/backlog. Diagnose valid delay, unfair service, stale/lifecycle ownership
-or configuration insufficiency before proposing any retention change. Do not
-increase journal capacity to manufacture a passing result.
+## Journal and client observations
 
-The [prior overload checkpoint](ReliableOverloadQualification3L.md) and
-[validation ledger](ContentAvailabilityFoundation3L_3Validation.md) retain official
-Local/Node RPC p99 72.058/74.723 ms and terminal successful native/sanitizer CI at
-`5ada43a57`. This assessment is documentation and source arithmetic only: new
-native tests, overload/recovery, security scan, client/scale guarantees and
-production journal qualification are **not measured**. Later documentation-HEAD
-CI must be reported independently; old green runs do not certify a new HEAD.
+The read-only `GameSessionTestAccess::GetJournalRequirements` diagnostic reports
+the catalog cursor and every live peer cursor with its connection identity and
+prepared-commit presence. These are the coordinator's actual raw-journal readers.
+Dependency/planning revision stamps and publication watermarks do not themselves
+read old journal entries and must not be reported as retention owners. Other
+consumers, such as a simultaneously attached EditorHost, require separate
+qualification; this dedicated-server fixture has none.
 
-Next task: product/platform and runtime-host owners accept the small common
-payload or justified asymmetric payload policy, both-direction rate/burst and
-RPC overlap, active-peer/observer mix, and client/path/handler allowances. Then
-validate that precise contract against mandatory deployments, implement only
-any demonstrated missing bound, and run this matrix and journal qualification.
-Foundation 3L stays partially ready until these and its independent current-source
-security, client/scale and terminal-validation gates close. No 3M or merge.
+The fixture reads the tail and oldest retained sequence without copying journal
+payloads. It reports production, retained high-water, required high-water,
+minimum margin, and the owner/sequence at that margin. Capacity remains 16,384.
+Required-entry age starts at the first post-step observation, so it can
+underestimate commit-to-release retention by one service interval. Report that
+sampling limitation. Remote offered/admitted byte counters exclude engine
+control and action fanout; they are not complete gameplay arrival accounting.
+Transport-deferral duration and correlation must be evaluated on the same
+timeline; a full retained ring is not evidence of an endangered live reader.
+Historical 170/16,384 evidence is not promoted to production qualification.
+
+RPC completion and Event echo validate client semantic application. Structural
+convergence is the replicated instance's current value on the client. No
+rendered-visibility guarantee follows from the headless fixture. Existing client
+decode/application counters and the whole-world preflight concern remain
+separate from presentation/rendering.
+
+## Evidence status and remaining gates
+
+Numeric defaults are selected; the [qualification report](ReliableGameplayQualification3L.md)
+records executed cases, scope and the unresolved combined aggregate failure.
+Unavailable evidence remains **not measured**. Required final validation includes MSVC Release,
+Linux Clang ASan/UBSan/LSan, dedicated GNS, official Local/Node, admission and
+relevant scale/lifecycle regression fixtures, documentation build, and terminal
+published-source CI. Independent security and client/scale gates remain open.
+Foundation 3L is not Ready; no 3M or merge is authorized by this contract.

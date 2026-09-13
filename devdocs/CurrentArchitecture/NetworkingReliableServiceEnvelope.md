@@ -16,6 +16,12 @@ related_code:
 
 ## Current follow-up (2026-09-12)
 
+The September 13 [workload contract](ReliableGameplayWorkloadContract3L.md)
+selects engine-owned size, rate, burst and concurrency defaults. Its canonical
+GameSession/GNS fixtures measure ordinary, overloaded and recovering service.
+Use the current validation ledger for results; this historical assessment does
+not establish those later workload measurements.
+
 The assessment below preserves its original measured source state. The approved
 [deployment contract](NetworkingReliableDeploymentContract.md) now implements
 hierarchical byte admission with no large-group latency exception. Its

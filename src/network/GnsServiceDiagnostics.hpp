@@ -21,6 +21,8 @@ struct GnsServiceRecord {
 struct GnsServiceSink {
 	void *Context = nullptr;
 	void (*Record)(void *, GnsServiceRecord, std::span<const std::byte>) noexcept = nullptr;
+	// Optional terminal-only observation; the diagnostic is borrowed for this call.
+	void (*Closed)(void *, ConnectionId, const char *) noexcept = nullptr;
 };
 inline thread_local GnsServiceSink *ActiveGnsService = nullptr;
 }

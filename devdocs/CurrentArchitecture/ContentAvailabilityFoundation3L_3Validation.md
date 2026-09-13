@@ -1,10 +1,45 @@
 ---
 status: partial-validation
 owner: runtime-networking
-last_verified: 2026-09-12
+last_verified: 2026-09-13
 ---
 
 # Foundation 3L.3 diagnostic validation ledger
+
+## Engine-default gameplay qualification (2026-09-13)
+
+The [selected workload contract](ReliableGameplayWorkloadContract3L.md) supersedes
+the missing-number stop at the historical checkpoints below. Defaults are
+16-KiB encoded Remote frames, 32 KiB/s and 20-KiB burst per peer/direction, four
+outstanding RPCs, and bounded active fractions at 32/200/500 peers. Existing
+codec, resource, byte-admission and wire limits remain unchanged.
+
+The [qualification report](ReliableGameplayQualification3L.md) records MSVC and
+Linux sanitizer single-peer small/upper/burst/concurrent/mixed/overload/recovery
+results, actual journal-reader margin, and official Local/Node 100-RPC small and
+upper cases. The sustained fixture demonstrated and fixed grounded downward
+velocity accumulation in shared Luau policy (`f2653b055`). It also exposed a
+fixture callback-lifetime error, now corrected.
+
+Combined 32-peer structural/RPC overload fails at a pinned GNS packet-number
+safety guard: **KI-008 remains open**. Its unchanged reproducer is separate
+from the passing ordinary/RPC-only aggregate scope. No backend guard, buffer,
+wire semantics or qualification target is weakened. Full aggregate journal,
+client/scale, current-source security and final publication checks remain
+independent. **B — FOUNDATION 3L PARTIALLY READY; no 3M.**
+
+All sections below retain their recorded source dates; their statements that
+workload defaults or executed measurements are missing are historical.
+
+Final canonical validation passes MSVC Release **11/11** affected CTests and
+Linux Clang 19 ASan/UBSan/LSan **9/9**, both gameplay modes and both **12/12**
+production-admission matrices. Controlled 200/500-peer admission serves every
+eligible peer within 283/583 ms. Official small and upper RPC Local/Node cases
+pass, and the 19-page documentation build succeeds with Node 24.19.0. The
+separate unchanged KI-008 diagnostic fails on both platforms; its final Linux
+run reports the backend packet-number guard without sanitizer errors. See the
+linked report for exact metrics and unavailable evidence. Publication CI is a
+separate terminal check after the normal push.
 
 ## Reliable gameplay workload decision gate (2026-09-12)
 

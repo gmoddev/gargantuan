@@ -82,13 +82,17 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Content-coupled gameplay latency exceeds the 3L.2 readiness envelope
 
-The subsequent [workload contract assessment](devdocs/CurrentArchitecture/ReliableGameplayWorkloadContract3L.md)
-verifies existing outgoing RPC-count bounds and identifies reliable Character
-observer fanout and client uplink as necessary workload inputs. No arbitrary
-payload/rate/concurrency values or new resource caps are selected. Product/host
-workload ownership must be resolved before the canonical overload/recovery and
-journal qualification matrix can run; this establishes a contract gap, not a new
-runtime defect or closure of KI-006.
+The combined aggregate overload also exposes [KI-008](#ki-008-gns-packet-sequence-close-during-aggregate-structural-overload).
+
+The September 13 [workload contract](devdocs/CurrentArchitecture/ReliableGameplayWorkloadContract3L.md)
+selects conservative engine-owned defaults and implements canonical real
+GameSession/GNS qualification fixtures. The missing-number stop is superseded.
+The sustained fixture demonstrated accumulated grounded downward velocity in
+the shared locomotion policy, eventually preventing compact Character state
+encoding; the policy now resets downward velocity while grounded before
+applying gravity. The [validation ledger](devdocs/CurrentArchitecture/ContentAvailabilityFoundation3L_3Validation.md)
+separates measured workload results from remaining client, scale, journal and
+security gates. KI-006 remains open; a passing subset does not close it.
 
 The [overload qualification Part A review](devdocs/CurrentArchitecture/ReliableOverloadQualification3L.md)
 at `5ada43a5773a96b1f0a97e9e6299baa6f420b762` stops at the missing qualified
@@ -361,6 +365,33 @@ transport/service latency. These are headless official Windows hosts, not a
 graphical GPU-present latency proof. See the final-correctness closure report
 linked from the measured validation document for exact revisions and remaining
 gates. Foundation 3M remains blocked.
+
+## KI-008: GNS packet-sequence close during aggregate structural overload
+
+- Status: Open; blocks combined aggregate overload/recovery qualification.
+- Priority: High
+- Area: Real transport under aggregate structural pressure
+- Reproduction: `gargantuan_game_session_real_transport_tests --reliable-workload-32-structural`
+- Evidence: [reliable gameplay qualification](devdocs/CurrentArchitecture/ReliableGameplayQualification3L.md).
+- Relevant paths: `tests/ReliableGameplayWorkloadFixture.hpp`,
+  `src/network/GameNetworkingSocketsTransport.cpp`, and pinned GNS
+  `steamnetworkingsockets_connections.cpp` at `2cb93a06350bb065db53abdb0d87cf297e0bfd34`.
+
+The 32-client fixture passes its initial eight-active qualified RPC phase, then
+fails combined all-active RPC/structural overload on both MSVC and Linux.
+Terminal-only native diagnostics expose GNS `Pkt number lurch by 32578;
+06a0->85e2`. Pinned GNS closes when the authenticated packet-number gap exceeds
+`0x4000`. This identifies the rejecting backend guard, not the ultimate reason
+for the gap. Journal/backlog-limit failure counters stay zero. Accepted calls
+can terminate with errors and final structural convergence/recovery is not
+established. Per-message backend tracing changes timing and makes a Linux run
+pass, so that instrumented pass cannot close the original failure.
+
+The original workload remains an explicit diagnostic; ordinary/RPC-only
+aggregate qualification is separate. Resolution requires isolating the packet
+gap with bounded terminal diagnostics and then verifying unchanged-workload
+recovery on both platforms. Do not weaken the packet guard, increase buffers,
+change wire ordering, or silently reduce this workload to obtain a pass.
 
 ## Maintenance rules
 

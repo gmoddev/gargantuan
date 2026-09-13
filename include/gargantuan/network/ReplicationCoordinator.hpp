@@ -18,6 +18,7 @@ namespace gargantuan {
 }
 
 namespace gargantuan::network {
+	namespace detail { class GameSessionTestAccess; }
 	inline constexpr std::size_t MaximumRelevanceTransitionsPerFrame = 4'096;
 	inline constexpr std::size_t DefaultStructuralTransitionsPerPeerTick = 512;
 	inline constexpr std::size_t DefaultStructuralTransitionsPerTick = 8'192;
@@ -153,6 +154,7 @@ namespace gargantuan::network {
 	};
 
 	class ReplicationCoordinator {
+		friend class detail::GameSessionTestAccess;
 	  public:
 		using InitialRelevancePolicy = std::function<bool(ObjectId)>;
 		explicit ReplicationCoordinator(

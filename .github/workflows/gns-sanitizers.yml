@@ -179,6 +179,27 @@ jobs:
           build-gns-sanitizers/gargantuan_gns_capacity_benchmark --production-admission \
             | tee build-gns-sanitizers/gns-capacity-production-admission.log
 
+      - name: Run qualified gameplay, overload, and recovery over GNS
+        shell: bash
+        run: |
+          set -euo pipefail
+          # KI-008's unchanged --reliable-workload-32-structural reproducer
+          # remains an explicit diagnostic, not a claimed passing CI gate.
+          build-gns-sanitizers/gargantuan_game_session_real_transport_tests --reliable-workload 2>&1 \
+            | tee build-gns-sanitizers/reliable-workload.log
+          build-gns-sanitizers/gargantuan_game_session_real_transport_tests --reliable-workload-32 2>&1 \
+            | tee build-gns-sanitizers/reliable-aggregate.log
+
+      - name: Upload reliable gameplay qualification measurements
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: reliable-gameplay-qualification
+          if-no-files-found: ignore
+          path: |
+            build-gns-sanitizers/reliable-workload.log
+            build-gns-sanitizers/reliable-aggregate.log
+
       - name: Upload GNS sanitizer diagnostics
         if: failure()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
