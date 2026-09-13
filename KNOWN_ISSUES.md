@@ -80,7 +80,28 @@ destroy during preparation, fresh identity, disconnect and byte-budget rejection
 are covered. Deliberately dangling frames remain rejected by client preflight.
 This closes the ordering defect, not general planning work or Foundation health.
 
-## KI-006: Content-coupled gameplay latency exceeds the 3L.2 readiness envelope
+<a id="ki-006-content-coupled-gameplay-latency-exceeds-the-3l2-readiness-envelope"></a>
+
+## KI-006: Remaining real-client and physical recipient-service qualification
+
+Update 2026-09-13, disposition **B — narrowed, OPEN**:
+[qualified recipient-service evidence](devdocs/CurrentArchitecture/ContentClientScaleQualification3L.md#recipient-service-qualification-2026-09-13)
+passes Local and Node with 32 and 200 protocol peers, eight root-motion
+Characters/eight recipients each and a contract-compliant Remote/action mix.
+All qualified due/accepted states are observed, with zero unresolved due work,
+lateness or scheduler rejection. RPC/Event/action targets, structural
+convergence, all-interval message/byte budgets and measured shutdown ownership
+pass. Due→observation maxima are 72.5193/72.2049 ms at 32 and 76.4958/65.6693
+at 200 (Local/Node); the 200-peer raw cadence guard can still exceed 250 ms.
+No production correction or historical guard relaxation is retained.
+
+This has one actual gameplay client per case. New Character-fanout service with
+32 actual GameSession clients, a funded physical 200/500-client profile and
+actual-path capacity remain not measured. Historical 200/50 remains over-limit;
+its later reload also leaves 199 unresolved forecast records, without missing
+produced/accepted observations. Do not claim whole-stress-trial cadence closure
+from the passing load join. These limitations are explicit, not a new renderer
+latency requirement. KI-006 is not resolved and Foundation 3L is not Ready.
 
 Update 2026-09-13, joined attribution: [per-state evidence](devdocs/CurrentArchitecture/ContentClientScaleQualification3L.md#joined-recipient-attribution-2026-09-13)
 classifies the ~650-ms 200/50 gap as mixed cadence/shared-fixture timing. The

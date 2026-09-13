@@ -6,11 +6,264 @@ last_verified: 2026-09-13
 
 # Foundation 3L client and scale qualification
 
-**B — FOUNDATION 3L PARTIALLY READY.** Current-source official Player Local and
-Node cases pass, including the accepted RPC latency envelope. The retained
-200-connected / 50-Character diagnostic still fails its tick and recipient-gap
-health checks with streaming. No production correction is conclusively
-attributed by this checkpoint. Do not close KI-006 or begin 3M.
+**B — FOUNDATION 3L PARTIALLY READY.** The qualified 32- and 200-protocol-peer
+Local/Node workload passes recipient service, gameplay budgets and lifecycle
+checks. This narrows KI-006; it does not qualify physical 200/500 clients or
+close all real-client scale evidence. No production correction is retained.
+The historical 200/50 diagnostic remains unqualified and failing. No 3M.
+
+## Recipient service qualification (2026-09-13)
+
+### Source, workload and metric
+
+Start: `049095905528cf1c8abcbcd2507da4f162ecf3b8`, branch
+`foundation/3l-content-availability`. Production source is unchanged by this
+task. Diagnostic commit `8e7000b30` and workload commit
+`566ecac7d16da5f067d867c1f9fc5709337821b5` contain the verified test source.
+[The canonical workload](RecipientServiceWorkload3L.md) records the
+pre-run arithmetic, exact unchanged limits, commands and deployment assumptions.
+Eight root-motion Characters each have eight recipients; one real gameplay
+client supplies <=15 Event/ACK exchanges/s, <=10 sequential RPCs/s and <=0.5
+actions/s. Shared 512-object content loads, remains resident, evicts and reloads.
+The real client alternates movement direction so the longer trial stays on its
+resident floor. Other recipients validate protocol/hierarchy/state; they are
+not additional Player engines.
+
+[DueServiceFixture.hpp](../../tests/DueServiceFixture.hpp) analyzes bounded
+records after the timed phases. The origin is FrameBegin of the authoritative
+desired due tick, not the preceding observation. Full ObjectId, recipient
+generation, control epoch, authoritative tick and state sequence join snapshot,
+production, scheduler acceptance and observation. ClientHandled is reported
+separately for the one live client. Forced publications have separate
+built-to-observation latency and acceptance/observation conservation. No pointer
+identity, new queue, lane, priority, rate, wire change or production logging is
+introduced.
+
+Future cadence forecasts, pre-discovery cadence reschedules, unchanged
+suppression, explicit recipient retirement and unresolved work are separate
+counters. A reschedule cannot satisfy confirmed due work. Overflow, decoding,
+missing origin/identity, missing accepted observation, unfinished RPCs or an
+over-limit workload fail qualification. The record cap is 4,194,304 (320 MiB
+reserved); analysis maps are bounded by that finite record set. The original
+load-only detailed trace remains available with its original 1,048,576 cap.
+
+The old raw gap/tick `phaseHealthy` guard remains intact. Qualified mode also
+reports `serviceHealthy`, using the accepted RPC/Event/action targets and zero
+Character scheduler rejection. It additionally requires complete due-service
+and all-interval workload accounting. Raw-gap failures are visible diagnostics,
+not silently turned into passes or universal Character latency promises.
+
+### Qualified matrix
+
+The authoritative matrix receipt is worker artifact
+`C:\Sandbox\Codex\Artifacts\due-service-3l-20260913-v4` on `dockerbox`.
+`source.json` verifies 564 source files with zero mismatches. MSVC Release uses
+the existing incremental Node-linked benchmark and native test builds, bounded
+to four compiler jobs, with compilation separate from timed runs. Node remains
+read-only at `c1f60b179c1aafccc233babbebde18925ea4f32e`. Its existing real-TLS
+provider harness drives the same primary-repository workload.
+
+Every row exits 0 with five passing normative service phases and
+`[Content:ServiceQualification] complete=1`:
+
+| Provider / peers | Ordinary due samples | Due→observation p50 / p95 / p99 / max, ms | Forced recipient states | Raw gap max, ms |
+| --- | ---: | --- | ---: | ---: |
+| Local / 32 | 46,721 | 0.8701 / 3.4937 / 4.3719 / 72.5193 | 880 | 202.422 |
+| Node / 32 | 46,977 | 0.8455 / 3.4447 / 4.3100 / 72.2049 | 888 | 203.113 |
+| Local / 200 | 47,253 | 2.3927 / 7.8542 / 19.6125 / 76.4958 | 880 | 340.775 |
+| Node / 200 | 46,935 | 2.4339 / 8.1177 / 20.2065 / 65.6693 | 872 | 320.977 |
+
+All eight Characters carry root-motion tracks, so root due distributions equal
+the ordinary Character distributions in this workload. All rows have zero
+missing produced states, missing accepted observations, unresolved due work,
+identity/origin failures, scheduler rejections and selection lateness ticks.
+No Character relationship retires during these qualified phases. The 64 future
+relationships at each end are scheduled beyond the last measured tick, not
+missing samples. Ordinary+forced accepted observations are respectively
+47,601 / 47,865 / 48,133 / 47,807. Maximum observed fanout is exactly eight.
+The 200-peer load/reload raw cadence guards still fail; bounded due service and
+normative gameplay service pass.
+
+All-window reliable demand includes the 32-B adapter allowance exactly once,
+every forced Character recipient, actions and replies, with GRPL charged to
+structural admission separately. Across the matrix the maximum required peer
+burst is 4.67219 messages / 558.889 B versus 16 / 20,480 allowed; the maximum
+global burst is 65.862 messages / 9,711.33 B versus the stricter N=32 limits
+128 / 163,840. Every phase and the combined timeline pass both direction
+buckets. The largest encoded Remote frame is 70 B, and RPC overlap is one,
+with zero requests pending at the end. This qualifies the combined small-frame
+mix; existing upper-size/concurrent GNS evidence remains a separate retained gate.
+
+### Gameplay and structural service
+
+There are 500 completed RPCs per provider/scale trial, 100 per phase, with zero
+timeouts/errors. Values below are the **worst of the five phase percentiles**,
+not a fabricated pooled distribution. Action phases have only about seven
+samples each; the maximum is more informative than a tail-percentile claim.
+
+| Provider / peers | RPC p50 / p95 / p99 / max, ms | Event ACK service-gap max, ms | Action result max, ms |
+| --- | --- | ---: | ---: |
+| Local / 32 | 33.454 / 36.520 / 61.512 / 71.281 | 144.590 | 58.143 |
+| Node / 32 | 33.459 / 36.731 / 60.317 / 61.894 | 143.371 | 37.142 |
+| Local / 200 | 33.394 / 39.549 / 91.219 / 95.346 | 224.882 | 39.240 |
+| Node / 200 | 33.363 / 40.565 / 90.674 / 95.784 | 216.237 | 79.964 |
+
+All are inside RPC 150/250/500 ms and Event/action 250 ms. There are no action
+submission failures or rejections. The four trials submit 35/36/36/35 action
+requests and receive the same number of results. Event submissions/ACK egress
+are 1,050/1,050, 1,055/1,054, 1,052/1,051 and 1,048/1,048; up to one exchange
+is at the final observation boundary, not claimed as a completed latency sample.
+Per-phase matched client ACK counters and latency samples are retained in logs.
+Requests/responses each use 47,600 complete-message bytes per trial. Actual
+Event ingress bytes are 105,202 / 105,711 / 105,416 / 105,011, including adapter
+allowance. No application broadcast fans these Remotes out beyond the caller.
+
+Aggregate root request/commit counts are exactly 17,128/17,128,
+17,232/17,232, 17,312/17,312 and 17,328/17,328. The animation runs at host
+cadence; requests are emitted only for nonzero root deltas. Distinct transmitted
+authoritative states number 29,387 / 29,502 / 29,233 / 29,155, with staggered
+recipient cadence; these are not eight times a single globally shared 20-Hz
+producer. The pre-run conservative 480-snapshot/s bound accounts for this.
+
+All 512-object load/resident/evict/reload checks converge. Load / eviction /
+reload maximum convergence is 253.587 / 85.513 / 238.881 ms Local-32,
+240.338 / 89.729 / 235.116 Node-32, 1,321.070 / 688.850 / 1,302.610 Local-200,
+and 1,300.990 / 675.331 / 1,326.330 Node-200. The steady resident phase retains
+the same semantically validated object population. Reload reuses one provider
+acquisition, makes a second admission, and assigns fresh full ObjectIds; old
+root/part identities and spatial projections do not survive eviction.
+
+Per-tick planning work high-water remains 65,536 and 3J selection 8,192. Reliable peer/global
+backlog high-water is 154,883 / 2,478,128 B at 32 and 154,883 / 4,914,996 B at
+200, inside unchanged Qp/Qg. Credit deferrals are visible; accepted structural
+traffic is not treated as free gameplay. Live journal reader minimum margins
+are 10,249 / 10,233 / 10,249 / 10,249 entries, with no lost live history or
+journal failure. The probe validates the DataModel journal scope before
+subtracting cursor sequences. Phase-end journal backlog returns to zero.
+Retained planning-record high-water is 179,104 at 32 and 1,344,856 at 200;
+resident-phase retained records are 18,304 and 146,488, respectively. These are
+retained dependency/planning records, not the per-tick work budget or raw-journal
+readers. Per-peer record high-water is 5,052 / 6,040. Credit deferral counts are
+197/219/175/167 across the four trials; backlog deferrals are zero.
+
+### Work ownership and retention
+
+| Provider / peers | Server work per tick p50 / p95 / p99 / max, ms | Client work per tick p50 / p95 / p99 / max, ms |
+| --- | --- | --- |
+| Local / 32 | 0.6056 / 3.1778 / 3.7244 / 40.2800 | 0.1641 / 0.2724 / 0.3987 / 36.5480 |
+| Node / 32 | 0.5898 / 3.2023 / 3.8320 / 41.7288 | 0.1613 / 0.2683 / 0.4250 / 35.6553 |
+| Local / 200 | 2.0278 / 7.2815 / 14.2608 / 51.4290 | 0.1530 / 0.2704 / 0.4037 / 40.2428 |
+| Node / 200 | 2.0425 / 7.4921 / 15.1034 / 57.9889 | 0.1514 / 0.2620 / 0.3983 / 37.0893 |
+
+At 200 peers, total server/client/199-observer/pacing/other milliseconds over
+the joined five-phase timeline are Local 14,265.1 / 806.112 / 1,278.78 /
+53,945.8 / 914.408, and Node 14,340.2 / 785.485 / 1,268.18 / 53,723.6 /
+901.835. Observer processing is explicit shared-fixture cost. These are not
+200 parallel Player event loops, GPU presentation, or network latency claims.
+The one live client's due→ClientHandled max is separately recorded (59.883 ms
+for Local-200); observer timestamps precede live GameSession semantic handling.
+
+An additional post-run-only summary adds actual callback-start intervals and
+Character/Remote semantic-handler gaps. `due-service-3l-20260913-v5` repeats
+Local/Node 200 at final diagnostic source; the timed workload, collection,
+qualification predicates and production source are identical to v4. Both
+repeats exit 0 with complete due/budget/shutdown accounting. Due p50/p95/p99/max
+is Local 2.4700/7.7658/19.8310/83.0507 ms (47,082 samples) and Node
+2.4490/7.8414/19.4072/69.0071 ms (46,946 samples), with zero missing, unresolved,
+retired, late or rejected qualified service. These repeats supplement the v4
+matrix; they do not replace its original measurements.
+
+| Final 200-peer repeat | Client callback interval p50 / p95 / p99 / max, ms | Character handler gap max, ms | Remote handler gap max, ms |
+| --- | --- | ---: | ---: |
+| Local | 16.5790 / 22.0282 / 23.2615 / 85.0048 | 174.366 | 198.616 |
+| Node | 16.5709 / 22.1206 / 23.5874 / 85.5387 | 165.877 | 195.180 |
+
+These gaps are cadence/service diagnostics; mixed Remote handler gaps are not
+RPC RTTs or substitutes for matched Event ACK measurements. In the v4 live
+client, per-tick structural preflight maxima are 9.3426/8.2778/10.1577/11.1108
+ms and live-apply maxima 10.5537/9.7469/12.7090/10.1740 ms across the four
+provider/scale rows. These phase subcosts overlap encompassing client work and
+must not be added to it as separate owners.
+
+RSS high-water includes the trace and is 224,878,592 / 232,206,336 /
+444,719,104 / 448,139,264 B. It is not a leak detector. Before final shutdown,
+one resident provider unit/cache is intentional. After shutdown all four cases
+report zero connections, live journal readers and admission peer owners;
+reserved bytes equal accepted plus rolled-back bytes. The empty accountant's
+336 logical bytes are its fixed object size, not a remaining reservation.
+Content requested/acquiring/prepared/resident units, completion reservation,
+completed/decoded/cached bytes, retained records and resident package objects
+are all zero. Destruction of the replication coordinator ends its planner,
+pending-group and retired-catalog ownership; individual private container
+capacities after destruction are not separately measured.
+
+### Historical comparison and remaining scope
+
+Historical Local/Node load raw gaps remain **655.446 / 647.402 ms**, with the
+unchanged guard failing. Yet load due→observation p50/p95/p99/max is
+8.7686/24.1672/52.5131/86.3973 and 8.7404/25.2325/51.2124/87.3489 ms.
+Each load phase has 41,651 on-time ordinary states and 3,640 forced recipient
+states, all accepted and observed, with zero unresolved due records. The
+extra post-phase consistency tick is included in this new trace; the older
+41,480/45,120 counts describe the earlier load-only trace interval.
+
+Required load message bursts are ingress peer 74.7083 / 74.4025 and egress
+peer 88.9399 / 88.7773 versus 16, and global egress 445.564 / 460.455 versus
+256. Whole-trial global egress needs 635.320 / 636.112 messages. Byte buckets
+still pass. Historical load is deliberately unqualified; it cannot establish
+a supported-scale starvation defect. Prior joined worst-interval server/client/
+observer attribution remains preserved below.
+
+The later historical reload retains **199 unresolved schedule forecasts** in
+the new all-phase diagnostic, despite zero missing produced/accepted state keys
+and no selection lateness. Those forecasts lack a terminal resolution in this
+trace; GRPL retirement did not resolve them. Do not claim complete whole-trial
+cadence closure or infer a production drop from them. Resolving that unqualified
+stress-only diagnostic is separate from the four completely accounted qualified
+trials. Historical `complete=0` and exit 1 are preserved.
+
+Official one-Player Local/Node service and real 32-client GNS qualified/
+overload/recovery evidence below are reused within their unchanged production
+scope. The new fanout matrix has one actual client per case. Full fanout with
+32 real clients, real 200/500 clients, a funded high-scale physical profile,
+actual NIC/WAN service lower bounds and rendered/GPU latency remain **not
+measured**. The simulator uses R=8 MiB/s, A=256 or 1,600 MiB/s, backend=2R,
+S=0.75 and 25% gameplay reserve; these mathematical reservations are not proof
+that the product selected or funded such a physical deployment.
+Headless client semantic application is the current qualification boundary;
+there is no additional numeric GPU-present gate to invent for Foundation 3L.
+
+**KI-006 disposition B: narrow, keep OPEN for remaining physical/real-client
+qualification.** The qualified simulator workload has no demonstrated
+production recipient-service defect. Do not mark Foundation 3L Ready from it.
+Final acceptance is not yet eligible to close those missing gates. Exact next
+task: select the supported funded deployment/client profile, then run this
+qualified Character/root/Remote/action/content mix with actual GameSession
+clients on that profile, preserving existing service targets and ownership
+checks. Do not assume physical 200/500 support, merge, or begin 3M.
+
+### Validation receipt
+
+Focused MSVC GameSession/diagnostic tests pass. Clang 19 ASan/UBSan/LSan passes
+both `GameSessionTests` and `ContentScaleUnwindTests` (2/2; 61.83 and 43.11 s),
+with no new suppression. The final header is covered by the Linux source
+manifest `v4/linux-source.json`, identical to `v5/source.json`; MSVC rebuilds
+the final benchmark and both 200-peer repeats pass. The v4 manifest remains
+the immutable source receipt for the four-case original matrix. The only v4→v5
+source difference adds the post-run callback/handler summary described above.
+
+The existing remote incremental caches are preserved. Linux CMake regeneration
+took 383 seconds; this was build preparation, outside timed qualification.
+An earlier obsolete diagnostic build was stopped before final validation;
+it is not counted as a pass. No worker process remains running for this task,
+and the unrelated Docker workloads remain untouched.
+
+The isolated documentation build passes 19 pages and search/sitemap generation
+using Node 24.19.0. All 47 checked relative Markdown targets resolve; the old
+KI-006 heading anchor is retained. The build uses the unchanged committed Astro
+inputs, excluding the concurrent morphology edits. SEC-3L-001 and KI-008
+production evidence is reused within its original scope. Published-source CI
+status is reported with the final source-control receipt, not assumed green.
 
 ## Joined recipient attribution (2026-09-13)
 

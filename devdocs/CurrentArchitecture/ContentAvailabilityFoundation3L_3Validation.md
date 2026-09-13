@@ -6,6 +6,39 @@ last_verified: 2026-09-13
 
 # Foundation 3L.3 diagnostic validation ledger
 
+## Qualified recipient-service matrix (2026-09-13)
+
+Starting at `049095905528cf1c8abcbcd2507da4f162ecf3b8`, diagnostic `8e7000b30`
+and workload `566ecac7d` changes
+add bounded due→observation distributions, complete accepted-state conservation,
+cadence reschedule/retirement accounting and every-interval reliable traffic
+budgets. The [workload arithmetic](RecipientServiceWorkload3L.md) fixes eight
+active root-motion Characters, eight recipients each, one ordinary producer and
+unchanged admission/service limits. No production implementation changes.
+
+The [receipt](ContentClientScaleQualification3L.md#recipient-service-qualification-2026-09-13)
+records five-phase Local/Node passes at 32 and 200 protocol peers. Due maxima
+are 72.5193/72.2049 and 76.4958/65.6693 ms, zero missing/unresolved qualified
+due states, zero accepted-state loss, zero late selection and zero scheduler
+rejection. Every workload bucket passes; RPC/Event/action targets pass. All
+content phases converge within unchanged 65,536 planning / 8,192 selection
+bounds. Live journal margin is at least 10,233/16,384; measured session/content
+transient owners clear at shutdown. One real gameplay client validates semantic
+handling; other peers validate the protocol graph.
+
+Historical Local/Node 200/50 still fails raw-gap and message-burst guards. Load
+raw gaps 655.446/647.402 ms accompany due-service maxima 86.3973/87.3489 ms,
+with all load states joined. Later reload has 199 unresolved schedule forecasts
+despite zero missing accepted/produced keys; whole-trial forecast closure is not
+claimed. Those stress results are not promoted to qualification.
+
+KI-006 is **B — narrowed, OPEN** for real-client/physical qualification. The
+simulator's R=8 MiB/s and A=N*R reservation is not a selected funded physical
+200/500-client product profile. No physical-capacity claim, merge or 3M follows.
+Existing official one-Player and 32-client GNS/overload, SEC-3L-001 and KI-008
+evidence is reused within unchanged production scope. See the receipt for
+validation, source manifests, artifacts and remaining not-measured evidence.
+
 ## Joined 200-peer recipient attribution (2026-09-13)
 
 The [joined client/scale receipt](ContentClientScaleQualification3L.md#joined-recipient-attribution-2026-09-13)
