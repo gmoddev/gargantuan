@@ -106,6 +106,7 @@ namespace gargantuan::network {
 		[[nodiscard]] std::optional<SchedulerStatistics> GetStatistics(ConnectionId Connection) const override;
 
 	  private:
+		friend struct detail::ReliableServiceFeedbackAccess;
 		struct Implementation;
 		std::unique_ptr<Implementation> State;
 	};

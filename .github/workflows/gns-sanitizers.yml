@@ -197,6 +197,16 @@ jobs:
           build-gns-sanitizers/gargantuan_gns_capacity_benchmark --production-admission \
             | tee build-gns-sanitizers/gns-capacity-production-admission.log
 
+      - name: Run pooled production service over the existing GNS fixtures
+        shell: bash
+        run: |
+          set -euo pipefail
+          build-gns-sanitizers/gargantuan_game_session_real_transport_tests --pooled --reliable-profile
+          build-gns-sanitizers/gargantuan_game_session_real_transport_tests --pooled --reliable-workload 2>&1 \
+            | tee build-gns-sanitizers/pooled-workload.log
+          build-gns-sanitizers/gargantuan_game_session_real_transport_tests --pooled --reliable-workload-32-structural 2>&1 \
+            | tee build-gns-sanitizers/pooled-aggregate-structural.log
+
       - name: Run qualified gameplay, overload, and recovery over GNS
         shell: bash
         run: |
@@ -218,6 +228,8 @@ jobs:
             build-gns-sanitizers/reliable-workload.log
             build-gns-sanitizers/reliable-aggregate.log
             build-gns-sanitizers/reliable-aggregate-structural.log
+            build-gns-sanitizers/pooled-workload.log
+            build-gns-sanitizers/pooled-aggregate-structural.log
 
       - name: Upload GNS sanitizer diagnostics
         if: failure()

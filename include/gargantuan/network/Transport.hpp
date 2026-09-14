@@ -16,6 +16,7 @@
 #include <vector>
 
 namespace gargantuan::network {
+	namespace detail { struct ReliableServiceFeedback; struct ReliableServiceFeedbackAccess; }
 	inline constexpr std::size_t MaximumTransportEndpointBytes = 1024;
 	inline constexpr std::size_t MaximumOpaqueHandshakeMaterialBytes = 64 * 1024;
 
@@ -78,5 +79,10 @@ namespace gargantuan::network {
 		virtual std::size_t PollEvents(std::span<TransportEvent> Output) = 0;
 		[[nodiscard]] virtual std::optional<std::size_t> GetAvailableDatagramBytes(ConnectionId Connection) const = 0;
 		[[nodiscard]] virtual std::optional<NetworkStatistics> GetStatistics(ConnectionId Connection) const = 0;
+	  private:
+		friend struct detail::ReliableServiceFeedbackAccess;
+		virtual bool EnableReliableServiceFeedback();
+		virtual std::optional<detail::ReliableServiceFeedback> ReadReliableServiceFeedback(ConnectionId Connection) const;
+		virtual bool ReleaseReliableServiceFeedback(ConnectionId Connection);
 	};
 }

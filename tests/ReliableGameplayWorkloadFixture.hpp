@@ -260,7 +260,7 @@ void RunAggregateReliableGameplay(Engine &ServerRuntime, Engine &PrimaryRuntime,
 			<< " journal_owner=" << (!Bounds.RequiredHigh ? "none" : Bounds.CatalogOwner ? "catalog" : "peer")
 			<< " journal_owner_slot=" << Bounds.OldestOwner.Slot << " journal_owner_generation=" << Bounds.OldestOwner.Generation
 			<< " journal_oldest_age_ms=" << Bounds.OldestAgeMs << " journal_recovery_backlog=" << After.JournalBacklogRecords << '\n';
-		Check(Admission.PeerCreditHighWater <= CandidateReliableService().PeerBurst && Admission.GlobalCreditHighWater <= CandidateReliableService().GlobalBurst,
+		Check(Admission.PeerCreditHighWater <= CandidateReliableService().PeerCreditCap() && Admission.GlobalCreditHighWater <= CandidateReliableService().GlobalCreditCap(),
 			"aggregate byte credit stays within unchanged caps");
 		Check(After.PlanningMaximumTickWork <= 65'536 && After.StructuralMaximumTransitionsSelectedPerTick <= 8'192,
 			"aggregate planning and selection bounds remain unchanged");
@@ -565,6 +565,8 @@ void RunReliableGameplayWorkload(
 			<< " client_backlog_high=" << Results.BacklogHighWater << " drain_ms=" << DrainMs
 			<< " server_backlog_high=" << Results.ServerBacklogHigh
 			<< " structural_accepted_bytes=" << After.ReliableAdmission.AcceptedBytes - Before.ReliableAdmission.AcceptedBytes
+			<< " qualification_grants=" << After.ReliableAdmission.QualificationGrants - Before.ReliableAdmission.QualificationGrants
+			<< " grant_deferrals=" << After.ReliableAdmission.GrantDeferrals - Before.ReliableAdmission.GrantDeferrals
 			<< " credit_deferrals=" << After.ReliableAdmission.CreditDeferrals - Before.ReliableAdmission.CreditDeferrals
 			<< " peer_credit_high=" << After.ReliableAdmission.PeerCreditHighWater
 			<< " global_credit_high=" << After.ReliableAdmission.GlobalCreditHighWater
@@ -580,8 +582,8 @@ void RunReliableGameplayWorkload(
 			<< " pending_enters=" << After.StructuralPendingEnters << " pending_leaves=" << After.StructuralPendingLeaves
 			<< " decode_ns=" << Client.GetMetrics().ClientStructuralDecodeNanoseconds
 			<< " apply_ns=" << Client.GetMetrics().ClientStructuralApplyNanoseconds << '\n';
-		Check(After.ReliableAdmission.PeerCreditHighWater <= CandidateReliableService().PeerBurst &&
-			After.ReliableAdmission.GlobalCreditHighWater <= CandidateReliableService().GlobalBurst,
+		Check(After.ReliableAdmission.PeerCreditHighWater <= CandidateReliableService().PeerCreditCap() &&
+			After.ReliableAdmission.GlobalCreditHighWater <= CandidateReliableService().GlobalCreditCap(),
 			"finite peer and global credit stay within unchanged caps");
 		Check(After.PlanningMaximumTickWork <= 65'536 && After.StructuralMaximumTransitionsSelectedPerTick <= 8'192,
 			"qualification preserves planning and exact structural selection bounds");

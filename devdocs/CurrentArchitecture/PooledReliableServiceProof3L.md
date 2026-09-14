@@ -17,6 +17,12 @@ related_adrs:
 
 ## Current registered proof result
 
+The [production integration checkpoint](PooledReliableServiceIntegration3L.md#production-recovery-conflict-2026-09-14)
+now exposes a retained-journal overload/recovery conflict. The unchanged
+42-case model remains proof of its bounded pending-offer semantics; it does
+not qualify the production workload's retained authoritative history or its
+fixed recovery deadline. Production pooled service is stopped and unqualified.
+
 **PASS: 33 model + nine hardening = 42/42 cases**, through the existing
 `gargantuan_networking_contracts` CTest entry. The
 [completion receipt](PooledReliableServiceProof3LValidation.md) records source

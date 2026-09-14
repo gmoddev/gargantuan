@@ -17,6 +17,17 @@ related_adrs:
 
 # Reliable deployment profile and atomic-group compatibility contract
 
+## Unqualified pooled implementation checkpoint (2026-09-14)
+
+The [production stop receipt](PooledReliableServiceIntegration3L.md#implemented-checkpoint-ownership)
+describes explicit `--reliable-mode POOLED_SERVICE` startup, fixed Option C
+validation and its ownership boundaries in an isolated checkpoint. Existing
+full-reservation semantics remain the default. The pooled mode is **not
+qualified**: its 2-MiB/s peer credit and retained journal workload fail the
+unchanged fixed overload recovery gate. No physical deployment claim follows
+from successful small-message gameplay or native retirement. Resolve that
+contract conflict before publishing a production service qualification.
+
 ## Physical funding preflight (2026-09-13)
 
 The [32-client hardware preflight](PhysicalDeploymentPreflight3L.md) establishes

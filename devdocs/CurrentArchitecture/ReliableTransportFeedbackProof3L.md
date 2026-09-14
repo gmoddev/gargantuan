@@ -246,6 +246,12 @@ Retransmission can make physical cost exceed created logical debt by any bounded
 
 ## Slow-peer qualification
 
+The [isolated production integration checkpoint](PooledReliableServiceIntegration3L.md#implemented-checkpoint-ownership)
+propagates the exact receipt through queued intent metadata and retains each
+closed native generation until GameSession consumes terminal evidence. That
+checkpoint is stopped on overload recovery; native attribution's prior
+qualification does not qualify the complete pooled production path.
+
 The 16 MiB/s Option C `PeerDrainFloor` describes the sender-side queue serialization floor needed for the same-FIFO blocking proof. Whole-message ACK completion time is too conservative for this purpose because RTT/ACK delay is part of the accepted nonqueue/path allowance, and ACK-only burst rate can be distorted by delayed ACK arrival.
 
 An ordinary new structural grant therefore requires two fresh samples for the same `ConnectionId` generation, separated by at most the accepted **50 ms** feedback window, with checked monotonic counters and:

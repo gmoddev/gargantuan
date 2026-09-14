@@ -130,6 +130,8 @@ namespace gargantuan::host {
 		Program.add_argument("--max-ticks").scan<'i', int>().default_value(0).help("bounded test-only server tick count");
 		Program.add_argument("--reliable-rate").scan<'u', std::uint64_t>().default_value(std::uint64_t{0})
 			.help("trusted per-connection application byte reservation per second; requires aggregate rate and peers");
+		Program.add_argument("--reliable-mode").default_value(std::string("FULL_RESERVATION"))
+			.help("trusted service mode: FULL_RESERVATION or the fixed 32-peer POOLED_SERVICE candidate");
 		Program.add_argument("--reliable-aggregate-rate").scan<'u', std::uint64_t>().default_value(std::uint64_t{0})
 			.help("trusted application egress reservation for this Server process, bytes/second");
 		Program.add_argument("--reliable-peers").scan<'u', std::uint32_t>().default_value(std::uint32_t{0})
@@ -176,8 +178,20 @@ namespace gargantuan::host {
 		}
 
 		const bool HasReliableArgument = Program.is_used("--reliable-rate") || Program.is_used("--reliable-aggregate-rate") ||
-			Program.is_used("--reliable-peers") || Program.is_used("--reliable-require-latency-compatible");
+			Program.is_used("--reliable-peers") || Program.is_used("--reliable-require-latency-compatible") || Program.is_used("--reliable-mode");
 		if (HasReliableArgument) {
+			const auto Mode = Program.get<std::string>("--reliable-mode");
+			if (Mode == "POOLED_SERVICE") {
+				if (HostConfiguration.ReliableService || Program.is_used("--reliable-rate") ||
+					Program.is_used("--reliable-aggregate-rate") || Program.is_used("--reliable-peers")) {
+					std::cerr << "[Network:ServiceProfile] POOLED_SERVICE selects the fixed Option C candidate; full-reservation overrides are invalid.\n";
+					return 2;
+				}
+				HostConfiguration.ReliableService = network::ReliableServiceProfile::PooledService();
+			} else {
+			if (Mode != "FULL_RESERVATION") {
+				std::cerr << "[Network:ServiceProfile] Unknown reliable service mode.\n"; return 2;
+			}
 			if (HostConfiguration.ReliableService || !Program.is_used("--reliable-rate") ||
 				!Program.is_used("--reliable-aggregate-rate") || !Program.is_used("--reliable-peers")) {
 				std::cerr << "[Network:ServiceProfile] Supply rate, aggregate rate and peers together; do not override an injected profile.\n";
@@ -196,6 +210,7 @@ namespace gargantuan::host {
 			Profile.GlobalBacklog = Profile.GlobalBurst + 2 * Profile.GameplayBurst * Profile.MaximumConnections;
 			Profile.RequireLatencyCompatibility = Program.is_used("--reliable-require-latency-compatible");
 			HostConfiguration.ReliableService = Profile;
+			}
 		}
 		if (HostConfiguration.ReliableService) {
 			const auto &Profile = *HostConfiguration.ReliableService;
@@ -203,7 +218,12 @@ namespace gargantuan::host {
 				std::cerr << "[Network:ServiceProfile] Invalid: " << Profile.ValidationError() << " (session peer maximum 512).\n";
 				return 2;
 			}
-			std::cout << "[Network:ServiceProfile] R=" << Profile.ConnectionRate << " A=" << Profile.AggregateRate
+			if (Profile.IsPooled()) {
+				std::cout << "[Network:ServiceProfile] Mode=POOLED_SERVICE N=" << Profile.MaximumConnections
+					<< " BackendCap=" << Profile.Pooled.BackendCap << " StructuralPool=" << Profile.Pooled.StructuralPool
+					<< " PeerDrainFloor=" << Profile.Pooled.PeerDrainFloor << " Grants=" << Profile.Pooled.MaximumDrainGrants
+					<< " Class=capacity-compatible-path-unqualified\n";
+			} else std::cout << "[Network:ServiceProfile] Mode=FULL_RESERVATION R=" << Profile.ConnectionRate << " A=" << Profile.AggregateRate
 				<< " N=" << Profile.MaximumConnections << " BackendRate=" << Profile.BackendRate
 				<< " StructuralPermille=" << Profile.StructuralPermille << " PeerBurst=" << Profile.PeerBurst
 				<< " GlobalBurst=" << Profile.GlobalBurst << " GameplayBurst=" << Profile.GameplayBurst
@@ -432,7 +452,7 @@ namespace gargantuan::host {
 				network::GameNetworkingSocketsTransportConfiguration TransportConfiguration;
 				if (HostConfiguration.ReliableService) {
 					TransportConfiguration.MaximumConnections = HostConfiguration.ReliableService->MaximumConnections;
-					TransportConfiguration.SendRate = static_cast<std::uint32_t>(HostConfiguration.ReliableService->BackendRate);
+					TransportConfiguration.SendRate = static_cast<std::uint32_t>(HostConfiguration.ReliableService->BackendSendRate());
 				}
 				std::shared_ptr<network::IGameTransport> Transport = std::make_shared<network::GameNetworkingSocketsTransport>(TransportConfiguration);
 				if (SessionSmoke) Transport = std::make_shared<SessionSmokeTransport>(std::move(Transport));

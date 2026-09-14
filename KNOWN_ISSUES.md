@@ -85,6 +85,18 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining pooled-service implementation and physical qualification
 
+Production integration update 2026-09-14: **OPEN / STOPPED**. The isolated
+checkpoint based on `222c5beb3` implements pooled credit/grants, exact native
+retirement and generation cleanup, but its canonical structural and mixed
+overload cases each retain 7,248 journal records after the fixed 20-second
+recovery deadline. The [current stop receipt](devdocs/CurrentArchitecture/PooledReliableServiceIntegration3L.md#production-recovery-conflict-2026-09-14)
+records the 180-MiB workload versus 2-MiB/s peer-credit conflict, exact debt
+conservation and limited passing gameplay evidence. The model's one pending
+group does not cover the retained authoritative history. Reconcile that
+contract before continuing integration or physical qualification; do not
+retune the profile or discard history to obtain a PASS. This source is not
+qualified by prior CI. Foundation 3L remains **B** and 3M remains blocked.
+
 Retirement-attribution update 2026-09-14: **OPEN**. The
 [current qualification receipt](devdocs/CurrentArchitecture/ReliableTransportFeedbackProof3LValidation.md#retirement-attribution-qualification-2026-09-14)
 records exact sender-local native message retirement at `a5a182ff9`, 12/12 mixed

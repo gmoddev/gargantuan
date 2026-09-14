@@ -6,6 +6,27 @@ last_verified: 2026-09-14
 
 # Foundation 3L.3 diagnostic validation ledger
 
+## Production pooled recovery stop (2026-09-14)
+
+The [integration checkpoint](PooledReliableServiceIntegration3L.md#production-recovery-conflict-2026-09-14)
+implements the explicit pooled profile, bounded admission, exact attributed
+retirement and terminal generation reconciliation over published `222c5beb3`.
+MSVC real-GNS ordinary cases pass gameplay targets and structural debt is
+conserved, but structural and mixed overload both fail the canonical fixed
+20-second recovery gate with 7,248 journal records outstanding. The source
+archive, measurements, ownership changes, resource limits and validation scope
+are recorded in that receipt. This reaches the user's explicit design stop:
+the reference model's bounded pending offers and production retained journal
+history require reconciliation. Production pooled service is **NOT QUALIFIED**.
+
+Integration-source Linux sanitizers, full GNS qualification, Local/Node
+regression and hosted Native/GNS workflows are **not measured** after the
+stop. Prior exact-source attribution evidence below remains valid within its
+original scope. Physical 32-client qualification is not measured; KI-006 is
+**OPEN**, Foundation 3L **B — PARTIALLY READY**, and 3M **BLOCKED / NOT STARTED**.
+The next task is the bounded overload/service contract decision, followed by
+resumption of the isolated implementation, rather than physical qualification.
+
 ## Exact reliable retirement attribution checkpoint (2026-09-14)
 
 Native attribution is implemented at `62c663335cfd36498869fde3d8e85406f102e281`,

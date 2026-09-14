@@ -1,4 +1,6 @@
 #include "gargantuan/network/Scheduler.hpp"
+#include "ReliableServiceFeedback.hpp"
+#include "gargantuan/network/ReliableServiceProfile.hpp"
 #include "../runtime/RuntimeWorkDiagnostics.hpp"
 #include "../runtime/PublicationLatencyDiagnostics.hpp"
 #include "gargantuan/network/Transport.hpp"
@@ -134,6 +136,7 @@ namespace gargantuan::network {
 			std::array<std::size_t, runtime_detail::WorkProducerNames.size()> ProducerDepths{};
 			std::array<std::uint64_t, runtime_detail::WorkProducerNames.size()> LastServiceNanoseconds{};
 			SchedulerStatistics Statistics;
+			detail::ReliableServiceAcceptedBytes ServiceAccepted;
 			std::uint32_t ConsecutiveStructuralReplicationMessages = 0;
 			bool Active = true;
 		};
@@ -209,8 +212,10 @@ namespace gargantuan::network {
 		}
 		const auto Bytes = Message.Payload().size();
 		if (Message.Delivery() == DeliveryMode::ReliableOrdered) {
+			const auto CompleteBytes = Bytes + ReliableServiceEnvelopeBytes;
 			if (Bytes > Connection.Limits.MaximumQueuedReliableBytes - Connection.Statistics.QueuedReliableBytes ||
-				Bytes > State->MaximumTotalQueuedReliableBytes - State->TotalQueuedReliableBytes) {
+				Bytes > State->MaximumTotalQueuedReliableBytes - State->TotalQueuedReliableBytes ||
+				CompleteBytes > std::numeric_limits<std::uint64_t>::max() - Connection.ServiceAccepted.All) {
 				++Connection.Statistics.IntentsRejected;
 				++Connection.Statistics.ReliableBacklogExhaustions;
 				State->Clear(Connection);
@@ -218,7 +223,11 @@ namespace gargantuan::network {
 				return {SchedulerSubmitStatus::ReliableBacklogExhausted,
 					DisconnectInfo{DisconnectReason::ResourceExhaustion, "Reliable scheduler backlog exhausted"}};
 			}
+			const auto Traffic = Message.Traffic();
 			Implementation::Queue(Connection, std::move(Message));
+			Connection.ServiceAccepted.All += CompleteBytes;
+			if (Traffic == TrafficClass::StructuralReplication) Connection.ServiceAccepted.Structural += CompleteBytes;
+			else if (Traffic == TrafficClass::ReliableApplication) Connection.ServiceAccepted.Gameplay += CompleteBytes;
 			Connection.Statistics.QueuedReliableBytes += Bytes;
 			State->TotalQueuedReliableBytes += Bytes;
 			++Connection.Statistics.IntentsAccepted;
@@ -347,5 +356,10 @@ namespace gargantuan::network {
 	std::optional<SchedulerStatistics> NetworkScheduler::GetStatistics(ConnectionId Connection) const {
 		auto Iterator = State->Connections.find(Connection);
 		return Iterator == State->Connections.end() ? std::nullopt : std::optional(Iterator->second.Statistics);
+	}
+	std::optional<detail::ReliableServiceAcceptedBytes> detail::ReliableServiceFeedbackAccess::Accepted(
+		const NetworkScheduler &Scheduler, ConnectionId Connection) {
+		auto Found = Scheduler.State->Connections.find(Connection);
+		return Found == Scheduler.State->Connections.end() ? std::nullopt : std::optional(Found->second.ServiceAccepted);
 	}
 }

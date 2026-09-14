@@ -12,6 +12,7 @@
 #include <vector>
 
 namespace gargantuan::network {
+	namespace detail { struct ReliableServiceFeedbackAccess; }
 	struct RealtimeStateOrder {
 		StateChannelId Channel;
 		RealtimeStateSequence Sequence;
@@ -45,6 +46,10 @@ namespace gargantuan::network {
 		[[nodiscard]] const std::vector<std::byte> &Payload() const { return MessagePayload; }
 
 	  private:
+		friend struct detail::ReliableServiceFeedbackAccess;
+		// Sender-local attribution follows the existing queued message. Never
+		// serialized and never an application acknowledgement or order key.
+		std::uint64_t ReliableRetirementToken = 0;
 		friend std::optional<NetworkMessageIntent> MakeNetworkMessageIntent(
 			ConnectionId,
 			DeliveryMode,

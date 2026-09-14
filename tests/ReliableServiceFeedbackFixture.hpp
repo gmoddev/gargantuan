@@ -350,6 +350,41 @@ inline bool Run() {
 		Require(Native.Counters.Invalid && Native.ObservedAtMicroseconds >= static_cast<std::uint64_t>(Before) &&
 			Native.ObservedAtMicroseconds <= static_cast<std::uint64_t>(After), "native copy preserves invalidity and stamps its own observation time");
 	});
+	Case("AdapterAttributedQueueAndTerminalLease", [] {
+		auto Pair = StartPair({.MaximumConnections = 1, .SendRate = 16 * 1024 * 1024}, TestLimits(), true);
+		struct Cleanup { PairFixture &Value; ~Cleanup() { StopPair(Value); } } Guard{Pair};
+		Require(Pair.ServerConnection.IsValid(), "leased pair connected");
+		constexpr std::size_t StructuralBytes = 512 * 1024 - 32;
+		constexpr std::size_t GameplayBytes = 16 * 1024;
+		auto Intent = MakeNetworkMessageIntent(Pair.ServerConnection, DeliveryMode::ReliableOrdered,
+			TrafficClass::StructuralReplication, ReliableReplicationOrder{ReliableReplicationSequence{1}},
+			std::vector<std::byte>(StructuralBytes, std::byte{0x31}), Pair.Limits);
+		Require(Intent && Access::Attribute(*Intent, 81), "private queued attribution attached");
+		NetworkScheduler Scheduler(*Pair.Server);
+		Require(Scheduler.RegisterConnection(Pair.ServerConnection, Pair.Limits) && Scheduler.Submit(std::move(*Intent)).Accepted(), "scheduler acceptance");
+		Require(!Sample(Pair).ActiveAttributedRetirementToken, "queued work has not reached native sender");
+		Require(Scheduler.Flush(Pair.ServerConnection, SchedulerTickBudget::FromNetworkLimits(Pair.Limits)).MessagesSubmitted == 1, "existing scheduler handoff");
+		auto Gameplay = Message(Pair.ServerConnection, DeliveryMode::ReliableOrdered,
+			std::vector<std::byte>(GameplayBytes, std::byte{0x42}), Pair.Limits);
+		Require(Gameplay && Scheduler.Submit(std::move(*Gameplay)).Accepted() &&
+			Scheduler.Flush(Pair.ServerConnection, SchedulerTickBudget::FromNetworkLimits(Pair.Limits)).MessagesSubmitted == 1,
+			"ordinary gameplay follows the maximum complete structural group in the same reliable FIFO");
+		const auto Final = Complete(Pair, StructuralBytes + GameplayBytes + 64);
+		Require(Final.AttributedRetirementSequence == 1 && Final.LastAttributedRetirementToken == 81 &&
+			Final.LastAttributedRetiredPayloadBytes == StructuralBytes + 32 && Final.LastAttributedRetirementMessageNumber,
+			"adapter preserves exact native message receipt");
+		const auto Received = Payloads(Pair.ClientEvents);
+		Require(Received.size() == 2 && Received[0] == std::vector<std::byte>(StructuralBytes, std::byte{0x31}) &&
+			Received[1] == std::vector<std::byte>(GameplayBytes, std::byte{0x42}), "complete G and gameplay preserve FIFO bytes");
+		const auto Old = Pair.ServerConnection;
+		Require(Pair.Server->Disconnect(Old, {DisconnectReason::LocalShutdown, "leased terminal test"}).Succeeded(), "purge");
+		const auto Terminal = Access::Observe(*Pair.Server, Old);
+		Require(Terminal && Terminal->State == ConnectionState::Closed && Terminal->LastAttributedRetirementToken == 81,
+			"closed generation retains its receipt");
+		Require(!Access::Release(*Pair.Server, {Old.Slot, Old.Generation + 1}), "wrong generation cannot consume terminal");
+		Require(Access::Release(*Pair.Server, Old) && !Access::Release(*Pair.Server, Old) && !Access::Observe(*Pair.Server, Old),
+			"terminal consumed exactly once before reuse");
+	});
 	Case("SnapshotOverhead", [] {
 		OwnedPair Owner; auto &Pair = Owner.Pair;
 		const auto Before = Sample(Pair);
@@ -367,7 +402,7 @@ inline bool Run() {
 			<< " terminal_vector_bytes=" << sizeof(std::vector<std::optional<Feedback>>)
 			<< " snapshot_mean_ns=" << Elapsed / Count << " samples=" << Count << '\n';
 	});
-	std::cout << "[Network:ReliableFeedback] passed=" << Passed << " total=9\n";
-	return Passed == 9;
+	std::cout << "[Network:ReliableFeedback] passed=" << Passed << " total=10\n";
+	return Passed == 10;
 }
 }

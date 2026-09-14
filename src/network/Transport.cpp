@@ -1,4 +1,5 @@
 #include "gargantuan/network/Transport.hpp"
+#include "ReliableServiceFeedback.hpp"
 
 #include "gargantuan/runtime/ProtocolInput.hpp"
 
@@ -7,6 +8,9 @@
 #include <type_traits>
 
 namespace gargantuan::network {
+	bool IGameTransport::EnableReliableServiceFeedback() { return false; }
+	std::optional<detail::ReliableServiceFeedback> IGameTransport::ReadReliableServiceFeedback(ConnectionId) const { return {}; }
+	bool IGameTransport::ReleaseReliableServiceFeedback(ConnectionId) { return false; }
 	bool TransportEndpoint::IsValid() const {
 		try {
 			ValidateProtocolString(Host, MaximumTransportEndpointBytes, "Transport endpoint");

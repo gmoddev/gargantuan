@@ -36,6 +36,8 @@ std::string_view ResourceError(const ReliableServiceProfile &Value) {
 }
 
 bool ReliableServiceProfile::IsLatencyCompatible() const {
+	if (IsPooled()) return MaximumConnections == 32 && NonQueueAllowanceMilliseconds == 100 && Pooled.ValidationError().empty();
+	if (Mode != ReliableServiceMode::FULL_RESERVATION) return false;
 	if (!ResourceError(*this).empty()) return false;
 	const auto QueueMilliseconds = 250 - NonQueueAllowanceMilliseconds;
 	// Necessary worst-case capacity test, not a percentile inferred from a mean
@@ -46,9 +48,31 @@ bool ReliableServiceProfile::IsLatencyCompatible() const {
 }
 
 std::string_view ReliableServiceProfile::ValidationError() const {
+	if (IsPooled()) {
+		if (MaximumConnections != 32 || NonQueueAllowanceMilliseconds != 100)
+			return "POOLED_SERVICE requires the accepted 32-peer, 100 ms nonqueue candidate";
+		return Pooled.ValidationError();
+	}
+	if (Mode != ReliableServiceMode::FULL_RESERVATION) return "Unknown reliable service mode";
 	if (auto Error = ResourceError(*this); !Error.empty()) return Error;
 	if (RequireLatencyCompatibility && !IsLatencyCompatible())
 		return "Unqualified reliable rate/backlog profile: the full atomic-group envelope cannot fit the approved latency target";
+	return {};
+}
+
+std::string_view PooledReliableServiceProfile::ValidationError() const {
+	// Deliberately freeze the qualified candidate instead of admitting a new
+	// numeric service class through an unqualified native configuration.
+	const PooledReliableServiceProfile Accepted;
+	if (BackendCap != Accepted.BackendCap || StructuralPool != Accepted.StructuralPool ||
+		GameplayReserve != Accepted.GameplayReserve || ControlRealtimeReserve != Accepted.ControlRealtimeReserve ||
+		RequiredTransportReserve != Accepted.RequiredTransportReserve || PeerDrainFloor != Accepted.PeerDrainFloor ||
+		PeerCreditRate != Accepted.PeerCreditRate || GlobalCreditRate != Accepted.GlobalCreditRate ||
+		PeerBurstCap != Accepted.PeerBurstCap || GlobalBurstCap != Accepted.GlobalBurstCap ||
+		PeerPendingCap != Accepted.PeerPendingCap || GlobalPendingCap != Accepted.GlobalPendingCap ||
+		MaximumDrainGrants != Accepted.MaximumDrainGrants || FeedbackFreshnessMicroseconds != Accepted.FeedbackFreshnessMicroseconds ||
+		RequalificationMicroseconds < Accepted.RequalificationMicroseconds)
+		return "POOLED_SERVICE parameters differ from the accepted Option C candidate";
 	return {};
 }
 }

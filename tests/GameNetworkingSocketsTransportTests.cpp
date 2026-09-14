@@ -1,4 +1,5 @@
 #include "gargantuan/network/GameNetworkingSocketsTransport.hpp"
+#include "../src/network/ReliableServiceFeedback.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Folder.hpp"
 #include "gargantuan/classes/RemoteEvent.hpp"
@@ -134,11 +135,12 @@ namespace {
 
 	PairFixture StartPair(
 		GameNetworkingSocketsTransportConfiguration ServerConfiguration = {},
-		NetworkLimits Limits = TestLimits()
+		NetworkLimits Limits = TestLimits(), bool RetainServiceTerminals = false
 	) {
 		PairFixture Result;
 		Result.Limits = Limits;
 		Result.Server = std::make_unique<GameNetworkingSocketsTransport>(ServerConfiguration);
+		if (RetainServiceTerminals && !detail::ReliableServiceFeedbackAccess::Enable(*Result.Server)) return Result;
 		for (std::uint32_t Candidate = 39000; Candidate < 39100; ++Candidate) {
 			TransportStartConfiguration Start{
 				.Role = TransportRole::Server,

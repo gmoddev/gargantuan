@@ -209,6 +209,8 @@ namespace gargantuan::network {
 		[[nodiscard]] bool HasPendingStructuralWork() const;
 		[[nodiscard]] ReplicationScheduleResult
 		CommitSchedulerAcceptance(ConnectionId Connection, ReliableReplicationSequence Sequence);
+		[[nodiscard]] ReplicationScheduleResult
+		DiscardSchedulerPreparation(ConnectionId Connection, ReliableReplicationSequence Sequence);
 		void RecordPeerFairnessRotation();
 		void RecordGlobalBudgetExhaustion();
 		[[nodiscard]] const ReplicationMetrics &GetCumulativeMetrics() const {

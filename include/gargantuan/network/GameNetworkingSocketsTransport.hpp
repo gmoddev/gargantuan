@@ -44,6 +44,9 @@ namespace gargantuan::network {
 
 	  private:
 		friend struct detail::ReliableServiceFeedbackAccess;
+		bool EnableReliableServiceFeedback() override;
+		std::optional<detail::ReliableServiceFeedback> ReadReliableServiceFeedback(ConnectionId Connection) const override;
+		bool ReleaseReliableServiceFeedback(ConnectionId Connection) override;
 		struct Impl;
 		std::unique_ptr<Impl> State;
 	};

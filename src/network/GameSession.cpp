@@ -3,6 +3,7 @@
 #include "../runtime/PublicationLatencyDiagnostics.hpp"
 #include "SessionSendAllowance.hpp"
 #include "ReliableByteAdmission.hpp"
+#include "PooledReliableServiceFeedback.hpp"
 
 #include "GameSessionTestAccess.hpp"
 
@@ -129,6 +130,7 @@ namespace gargantuan::network {
 			std::set<ObjectId> MaterializedRemotes;
 			std::set<ObjectId> RemoteMaterializedObjects;
 			detail::SessionSendAllowance SendAllowance;
+			detail::PooledReliableServiceFeedback ReliableFeedback;
 			bool PreferPendingRelevance = true;
 			bool StructuralSubmittedThisStep = false;
 			bool ByteDeferredThisStep = false;
@@ -191,6 +193,8 @@ namespace gargantuan::network {
 					"[Network:Session] Client Engine attaches after trusted replication bootstrap"
 				);
 			if (Configuration.ReliableService) {
+				if (Configuration.ReliableService->IsPooled() && !detail::ReliableServiceFeedbackAccess::Enable(*Transport))
+					throw std::invalid_argument("[Network:Session] POOLED_SERVICE requires native attributed retirement and terminal feedback");
 				ByteAdmission.emplace(*Configuration.ReliableService);
 				Configuration.Limits.MaximumReliableMessageBytes = std::min<std::size_t>(
 					Configuration.Limits.MaximumReliableMessageBytes,
@@ -553,7 +557,7 @@ namespace gargantuan::network {
 
 		SerializationResult<SchedulerSubmitResult>
 		QueueStructuralFrame(const ReplicationFrame &Frame, std::vector<std::byte> Encoded,
-			ConnectionId Connection, const NetworkLimits &Limits) {
+			ConnectionId Connection, const NetworkLimits &Limits, std::uint64_t RetirementToken = 0) {
 			runtime_detail::WorkProducerScope Producer(Frame.Kind == ReplicationMessageKind::Baseline ? runtime_detail::WorkProducer::Bootstrap :
 				runtime_detail::WorkProducer::Structural);
 			if (InjectFailure(detail::GameSessionFailurePoint::StructuralSchedulerAdmission))
@@ -564,7 +568,14 @@ namespace gargantuan::network {
 						"Injected reliable structural scheduler exhaustion",
 					},
 				};
-			return QueueEncodedReplicationFrame(Frame.Sequence, std::move(Encoded), Connection, Limits, Scheduler);
+			if (!RetirementToken) return QueueEncodedReplicationFrame(Frame.Sequence, std::move(Encoded), Connection, Limits, Scheduler);
+			auto Intent = runtime_detail::MeasureWork(runtime_detail::WorkPhase::StructuralIntent, [&] {
+				return MakeNetworkMessageIntent(Connection, DeliveryMode::ReliableOrdered,
+					TrafficClass::StructuralReplication, ReliableReplicationOrder{Frame.Sequence}, std::move(Encoded), Limits);
+			});
+			if (!Intent || !detail::ReliableServiceFeedbackAccess::Attribute(*Intent, RetirementToken))
+				return SchedulerSubmitResult{SchedulerSubmitStatus::IntentRejected};
+			return runtime_detail::MeasureWork(runtime_detail::WorkPhase::StructuralSubmit, [&] { return Scheduler.Submit(std::move(*Intent)); });
 		}
 
 		void FailPeer(ConnectionId Connection, DisconnectReason Reason, std::string Diagnostic) {
@@ -579,6 +590,7 @@ namespace gargantuan::network {
 			if (Configuration.Role == GameSessionRole::Client)
 				FailSession({Reason, std::move(Diagnostic)});
 			else {
+				if (IsPooled()) (void)Transport->Disconnect(Connection, {Reason, Diagnostic});
 				TearDownPeer(Connection);
 				(void)Transport->Disconnect(Connection, {Reason, std::move(Diagnostic)});
 			}
@@ -1256,8 +1268,52 @@ namespace gargantuan::network {
 			}
 		}
 
+		bool IsPooled() const { return Configuration.ReliableService && Configuration.ReliableService->IsPooled(); }
+
+		bool UpdateOrdinaryFunding() {
+			std::uint64_t Debt = 0, Lower = 0, Upper = 0;
+			for (auto &[Id, Value] : Peers) {
+				auto Accepted = detail::ReliableServiceFeedbackAccess::Accepted(Scheduler, Id);
+				if (!Accepted && Value.Phase == PeerPhase::TransportConnected) Accepted = detail::ReliableServiceAcceptedBytes{};
+				if (!Accepted) return false;
+				const auto Updated = Value.ReliableFeedback.Observe(Id, *Accepted, {}, ServiceTime(),
+					ByteAdmission->DebtToken(Id), ByteAdmission->Debt(Id));
+				if (!Updated.Valid || Value.ReliableFeedback.OrdinaryDebt > std::numeric_limits<std::uint64_t>::max() - Debt)
+					return false;
+				Debt += Value.ReliableFeedback.OrdinaryDebt;
+				Lower += Value.ReliableFeedback.GameplayLower;
+				Upper += Value.ReliableFeedback.GameplayUpper;
+			}
+			const auto Funded = detail::PooledReliableServiceFeedback::FundedOrdinary(Debt, Lower, Upper);
+			if (!Funded) return false;
+			ByteAdmission->SetOrdinaryFunding(*Funded);
+			return true;
+		}
+
 		void TearDownPeer(ConnectionId Connection) {
 			auto Iterator = Peers.find(Connection);
+			if (IsPooled()) {
+				// Closing is not a release. Purge first, reconcile the immutable
+				// old-generation receipt, cancel unsent work, then release the slot.
+				(void)Transport->Disconnect(Connection, {DisconnectReason::LocalShutdown, "Session peer teardown"});
+				const auto Final = detail::ReliableServiceFeedbackAccess::Observe(*Transport, Connection);
+				if (Iterator != Peers.end()) {
+					auto Accepted = detail::ReliableServiceFeedbackAccess::Accepted(Scheduler, Connection);
+					if (!Accepted && Iterator->second.Phase == PeerPhase::TransportConnected) Accepted = detail::ReliableServiceAcceptedBytes{};
+					if (!Final || Final->State != ConnectionState::Closed || !Accepted) {
+						PendingSessionFailure = DisconnectInfo{DisconnectReason::TransportFailure,
+							"[Network:PooledService] Terminal purge evidence unavailable; debt retained"};
+						return;
+					}
+					const auto Last = Iterator->second.ReliableFeedback.Observe(Connection, *Accepted, Final, ServiceTime(),
+						ByteAdmission->DebtToken(Connection), ByteAdmission->Debt(Connection));
+					if (Last.Valid && Last.RetiredBytes)
+						(void)ByteAdmission->Retire(Connection, Last.RetiredToken, Last.RetiredBytes);
+					(void)Scheduler.CancelConnection(Connection);
+					(void)ByteAdmission->TerminalRelease(Connection);
+				}
+				(void)detail::ReliableServiceFeedbackAccess::Release(*Transport, Connection);
+			}
 			if (Iterator == Peers.end()) return;
 			auto PeerValue = std::move(Iterator->second);
 			Peers.erase(Iterator);
@@ -1409,6 +1465,29 @@ namespace gargantuan::network {
 					// Scheduler bytes have not reached the provider: count both, not either.
 					for (const auto &[Connection, PeerValue] : Peers) {
 						(void)PeerValue;
+						if (IsPooled()) {
+							auto Accepted = detail::ReliableServiceFeedbackAccess::Accepted(Scheduler, Connection);
+							if (!Accepted && PeerValue.Phase == PeerPhase::TransportConnected) Accepted = detail::ReliableServiceAcceptedBytes{};
+							const auto Sample = detail::ReliableServiceFeedbackAccess::Observe(*Transport, Connection);
+							if (!Accepted) {
+								FailSession({DisconnectReason::ResourceExhaustion, "Pooled acceptance accounting unavailable"}); return;
+							}
+							const auto Result = Peers.at(Connection).ReliableFeedback.Observe(Connection, *Accepted, Sample,
+								ServiceTime(), ByteAdmission->DebtToken(Connection), ByteAdmission->Debt(Connection));
+							if (!Result.Valid || (Result.RetiredBytes &&
+								!ByteAdmission->Retire(Connection, Result.RetiredToken, Result.RetiredBytes)) || Result.Terminal) {
+								PendingPeerFailures.try_emplace(Connection, DisconnectInfo{DisconnectReason::TransportFailure,
+									Result.Terminal ? "[Network:PooledService] Native connection terminated before event delivery" :
+									"[Network:PooledService] Contradictory native service feedback"});
+							}
+							if (!ByteAdmission->ObserveService(Connection, detail::ReliableByteAdmission::ServiceObservation{
+								.ObservedAtMicroseconds = Result.ObservedAtMicroseconds, .Qualified = Result.Qualified,
+								.Available = Result.Valid && Result.Available,
+								.OrdinaryDebt = Peers.at(Connection).ReliableFeedback.OrdinaryDebt})) {
+								FailSession({DisconnectReason::ResourceExhaustion, "Pooled generation envelope failed"}); return;
+							}
+							continue;
+						}
 						const auto Backend = Transport->GetStatistics(Connection);
 						const auto Queued = Scheduler.GetStatistics(Connection);
 						std::optional<std::uint64_t> Exposure;
@@ -1421,6 +1500,9 @@ namespace gargantuan::network {
 							FailSession({DisconnectReason::ResourceExhaustion, "Reliable byte admission connection envelope failed"});
 							return;
 						}
+					}
+					if (IsPooled() && (!DrainFailures() || !UpdateOrdinaryFunding())) {
+						FailSession({DisconnectReason::TransportFailure, "Pooled aggregate funding accounting failed"}); return;
 					}
 				}
 				Replication->ProcessPlanning(SimulationTick);
@@ -1462,8 +1544,37 @@ namespace gargantuan::network {
 					[&](ConnectionId Connection, Peer &PeerValue, ReplicationProduceResult &Produced) {
 						std::optional<detail::ReliableByteAdmission::Reservation> Receipt;
 						if (ByteAdmission) {
+							if (IsPooled() && (!PeerValue.ReliableFeedback.Previous || ServiceTime() -
+								PeerValue.ReliableFeedback.Previous->ObservedAtMicroseconds > Configuration.ReliableService->Pooled.FeedbackFreshnessMicroseconds)) {
+								// Encoding and bounded retries may outlive a feedback window.
+								// Read current native evidence at the actual acceptance boundary.
+								const auto Accepted = detail::ReliableServiceFeedbackAccess::Accepted(Scheduler, Connection);
+								if (!Accepted) {
+									PendingPeerFailures.try_emplace(Connection, DisconnectInfo{DisconnectReason::TransportFailure,
+										"[Network:PooledService] Acceptance accounting disappeared during preparation"}); return false;
+								}
+								const auto Sample = detail::ReliableServiceFeedbackAccess::Observe(*Transport, Connection);
+								const auto Result = PeerValue.ReliableFeedback.Observe(Connection, *Accepted, Sample,
+									ServiceTime(), ByteAdmission->DebtToken(Connection), ByteAdmission->Debt(Connection));
+								if (!Result.Valid || (Result.RetiredBytes &&
+									!ByteAdmission->Retire(Connection, Result.RetiredToken, Result.RetiredBytes)) || Result.Terminal) {
+									PendingPeerFailures.try_emplace(Connection, DisconnectInfo{DisconnectReason::TransportFailure,
+										"[Network:PooledService] Native evidence failed during preparation"}); return false;
+								}
+								(void)ByteAdmission->RefreshService(Connection, detail::ReliableByteAdmission::ServiceObservation{
+									Result.ObservedAtMicroseconds, Result.Qualified, Result.Available, PeerValue.ReliableFeedback.OrdinaryDebt});
+							}
+							if (IsPooled()) (void)ByteAdmission->Allowance(Connection, ServiceTime());
 							Receipt = ByteAdmission->Reserve(Connection, Produced.EncodedFrame.size() + ReliableServiceEnvelopeBytes);
 							if (!Receipt) {
+								if (IsPooled() && Replication->DiscardSchedulerPreparation(Connection, Produced.Frame->Sequence).Succeeded()) {
+									ByteAdmission->DeferSize(Connection, Produced.EncodedFrame.size() + ReliableServiceEnvelopeBytes);
+									PeerValue.ByteDeferredThisStep = true;
+									PeerValue.StructuralTransitionsConsumedThisStep += Produced.SelectedTransitions;
+									GlobalConsumed += Produced.SelectedTransitions;
+									LastServicedConnection = Connection;
+									return false;
+								}
 								// No yield or second producer exists between quote and reserve.
 								// A failed invariant is terminal, never acceptance without credit.
 								PendingPeerFailures.try_emplace(Connection, DisconnectInfo{DisconnectReason::ResourceExhaustion,
@@ -1471,7 +1582,8 @@ namespace gargantuan::network {
 								return false;
 								}
 						}
-						auto Queued = QueueStructuralFrame(*Produced.Frame, std::move(Produced.EncodedFrame), Connection, PeerValue.Limits);
+						auto Queued = QueueStructuralFrame(*Produced.Frame, std::move(Produced.EncodedFrame), Connection,
+							PeerValue.Limits, IsPooled() && Receipt ? Receipt->Token : 0);
 						if (!Queued || !Queued->Accepted()) {
 							if (Receipt) (void)ByteAdmission->Rollback(*Receipt);
 							PendingPeerFailures.try_emplace(
@@ -1547,6 +1659,9 @@ namespace gargantuan::network {
 							if (ByteAdmission) {
 								if (!Replication->IsPlanningReady(Connection) && Replication->GetJournalLag(Connection) == 0) {
 									ByteAdmission->NoWork(Connection); continue;
+								}
+								if (IsPooled() && !UpdateOrdinaryFunding()) {
+									FailSession({DisconnectReason::TransportFailure, "Pooled ordinary funding became invalid"}); return;
 								}
 								const auto Bytes = ByteAdmission->Allowance(Connection, ServiceTime());
 								if (Bytes < 36 + ReliableServiceEnvelopeBytes) continue;

@@ -1919,8 +1919,10 @@ namespace gargantuan::network {
 		if (Frame.Operations.size() > MaximumReplicationOperationsPerFrame)
 			return Finish({{}, "Replication frame operation limit exceeded"});
 		auto Encoded = runtime_detail::MeasureWork(runtime_detail::WorkPhase::StructuralValidationEncode, [&] { return EncodeReplicationFrame(Frame); });
-		if (!Encoded) return Finish({{}, Encoded.error().Format()});
-		if (Encoded->size() > MaximumFrameBytes) {
+		const bool FrameTooLarge = !Encoded && Encoded.error().Code == SerializationErrorCode::LimitExceeded &&
+			Encoded.error().Message == "Replication frame exceeds its byte limit";
+		if (!Encoded && !FrameTooLarge) return Finish({{}, Encoded.error().Format()});
+		if (FrameTooLarge || Encoded->size() > MaximumFrameBytes) {
 			runtime_detail::CountWork(runtime_detail::WorkCounter::EncodeRetries);
 			if (MaximumTransitions == 1)
 				return Finish({{}, "Structural operation exceeds the negotiated reliable message limit"});
@@ -2139,6 +2141,17 @@ namespace gargantuan::network {
 
 	void ReplicationCoordinator::RecordPeerFairnessRotation() {
 		SaturatingAdd(Metrics.StructuralPeerFairnessRotations, 1);
+	}
+
+	ReplicationScheduleResult ReplicationCoordinator::DiscardSchedulerPreparation(
+		ConnectionId Connection, ReliableReplicationSequence Sequence) {
+		auto Peer = Peers.find(Connection);
+		if (Peer == Peers.end() || !Peer->second.PreparedCommit || Peer->second.PreparedCommit->Sequence != Sequence)
+			return {"Structural preparation discard does not match the prepared frame"};
+		// Preparation owns only proposed acceptance metadata. Known, journal and
+		// sequence remain untouched, and the complete plan can be prepared again.
+		Peer->second.PreparedCommit.reset();
+		return {};
 	}
 
 	void ReplicationCoordinator::RecordGlobalBudgetExhaustion() {

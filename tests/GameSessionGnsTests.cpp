@@ -29,6 +29,7 @@ namespace {
 	std::uint32_t QualificationPeerCount = 1;
 	bool QualificationAggregateStructural = false;
 	bool QualificationDiagnostic = false;
+	bool QualificationPooled = false;
 
 	void Check(bool Condition, const char *Message) {
 		if (Condition) return;
@@ -37,6 +38,7 @@ namespace {
 	}
 
 	ReliableServiceProfile CandidateReliableService() {
+		if (QualificationPooled) return ReliableServiceProfile::PooledService();
 		ReliableServiceProfile Profile;
 		Profile.ConnectionRate = 8ull * 1024 * 1024;
 		Profile.AggregateRate = Profile.ConnectionRate * QualificationPeerCount;
@@ -66,6 +68,9 @@ namespace {
 int main(int ArgumentCount, char **Arguments) {
 	using namespace gargantuan;
 	using namespace gargantuan::network;
+	if (ArgumentCount > 1 && std::string_view(Arguments[1]) == "--pooled") {
+		QualificationPooled = true; --ArgumentCount; ++Arguments;
+	}
 	QualificationDiagnostic = ArgumentCount == 2 && std::string_view(Arguments[1]) == "--ki008-attribution";
 	QualificationAggregateStructural = ArgumentCount == 2 && std::string_view(Arguments[1]) == "--reliable-workload-32-structural";
 	QualificationAggregateStructural = QualificationAggregateStructural || QualificationDiagnostic;
@@ -75,7 +80,7 @@ int main(int ArgumentCount, char **Arguments) {
 	const bool Workload = Aggregate || (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--reliable-workload");
 	const bool Profiled = Workload || (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--reliable-profile");
 	if (ArgumentCount > 1 && !Profiled) {
-		std::cerr << "usage: gargantuan_game_session_real_transport_tests [--reliable-profile|--reliable-workload|--reliable-workload-32|--reliable-workload-32-structural|--ki008-attribution]\n";
+		std::cerr << "usage: gargantuan_game_session_real_transport_tests [--pooled] [--reliable-profile|--reliable-workload|--reliable-workload-32|--reliable-workload-32-structural|--ki008-attribution]\n";
 		return 2;
 	}
 	if (Profiled) {
@@ -92,13 +97,15 @@ int main(int ArgumentCount, char **Arguments) {
 	auto ServerWorld = std::make_shared<DataModel>();
 	auto QualificationFunction = std::make_shared<RemoteFunction>();
 	auto QualificationEvent = std::make_shared<RemoteEvent>();
-	if (Workload) {
+	{
 		auto Floor = std::make_shared<Part>();
 		Floor->SetName("QualificationFloor");
 		Floor->SetAnchored(true);
 		Floor->SetSize({1024.0f, 1.0f, 1024.0f});
 		Floor->SetPosition({0.0f, -1.0f, 0.0f});
 		Floor->SetParent(ServerWorld->GetService("Workspace"));
+	}
+	if (Workload) {
 		QualificationFunction->SetName("QualificationFunction");
 		QualificationFunction->SetParent(ServerWorld);
 		QualificationEvent->SetName("QualificationEvent");
@@ -205,7 +212,7 @@ end)
 		if (Profiled) {
 			const auto Profile = CandidateReliableService();
 			TransportConfiguration.MaximumConnections = Profile.MaximumConnections;
-			TransportConfiguration.SendRate = static_cast<std::uint32_t>(Profile.BackendRate);
+			TransportConfiguration.SendRate = static_cast<std::uint32_t>(Profile.BackendSendRate());
 		}
 		auto CandidateTransport = std::make_shared<GameNetworkingSocketsTransport>(TransportConfiguration);
 		auto CandidateSession = std::make_unique<GameSession>(
@@ -298,6 +305,15 @@ end)
 			Server->Stop();
 			Check(Server->GetMetrics().ReliableAdmissionPeerStates == 0,
 				"qualification shutdown releases admission peer state");
+			if (QualificationPooled) {
+				const auto M = Server->GetMetrics().ReliableAdmission;
+				Check(M.AcceptedBytes == M.VerifiedAttributedRetirement + M.TerminalReleasedBytes + M.OutstandingBytes &&
+					!M.OutstandingBytes && !M.ActiveDrainGrants && M.VerifiedAttributedRetirement,
+					"pooled workload shutdown conserves exact structural debt and clears grants");
+				std::cout << "[Network:PooledGns] created=" << M.AcceptedBytes << " retired=" << M.VerifiedAttributedRetirement
+					<< " terminal=" << M.TerminalReleasedBytes << " outstanding=" << M.OutstandingBytes
+					<< " grants_high=" << M.DrainGrantsHighWater << " debt_high=" << M.OutstandingHighWater << '\n';
+			}
 			ClientRuntime->Destroy();
 			ServerRuntime.Destroy();
 			return Failures == 0 ? 0 : 1;
@@ -344,6 +360,9 @@ end)
 			CharacterValue && glm::distance(CharacterValue->GetPosition(), InitialPosition) > 0.25f,
 			"real GNS carries ordinary Luau semantic input to authoritative Character movement"
 		);
+		(void)ClientRuntime->ProcessEvent(KeyEvent{
+			.Device = {1}, .Physical = PhysicalKey::W, .Logical = LogicalKey::W, .State = ButtonState::Released,
+		});
 
 		const auto BeforeAction = CharacterValue ? CharacterValue->GetPosition() : glm::vec3{};
 		const auto ActionDeadline = std::chrono::steady_clock::now() + 10s;
@@ -380,6 +399,17 @@ end)
 		while (std::chrono::steady_clock::now() < FirstNpcDeadline && !FindClientRelevanceNpc())
 			StepNetwork();
 		auto FirstNpcReplica = FindClientRelevanceNpc();
+		if (QualificationPooled) {
+			const auto M = Server->GetMetrics();
+			std::cout << "[Network:PooledNpc] present=" << bool(FirstNpcReplica)
+				<< " root=" << bool(FirstNpcReplica && FirstNpcReplica->GetRootPart())
+				<< " target_distance=" << (FirstNpcReplica ? glm::distance(FirstNpcReplica->GetPosition(), FirstNpcTarget) : -1.0f)
+				<< " authoritative_distance=" << (FirstNpcReplica ? glm::distance(FirstNpcReplica->GetPosition(), RelevanceNpc->GetPosition()) : -1.0f)
+				<< " peer_distance=" << glm::distance(CharacterValue->GetPosition(), RelevanceNpc->GetPosition())
+				<< " peer_y=" << CharacterValue->GetPosition().y << " npc_y=" << RelevanceNpc->GetPosition().y
+				<< " outstanding=" << M.ReliableAdmission.OutstandingBytes << " grants=" << M.ReliableAdmission.ActiveDrainGrants
+				<< " probes=" << M.ReliableAdmission.QualificationGrants << " pending_enters=" << M.StructuralPendingEnters << '\n';
+		}
 		Check(
 			FirstNpcReplica && FirstNpcReplica->GetRootPart() &&
 				glm::distance(FirstNpcReplica->GetPosition(), FirstNpcTarget) < 1.0f,
@@ -437,6 +467,14 @@ end)
 
 	Client.Stop();
 	Server->Stop();
+	if (QualificationPooled) {
+		const auto M = Server->GetMetrics().ReliableAdmission;
+		Check(M.AcceptedBytes == M.VerifiedAttributedRetirement + M.TerminalReleasedBytes &&
+			!M.OutstandingBytes && !M.ActiveDrainGrants && !Server->GetMetrics().ReliableAdmissionPeerStates && M.VerifiedAttributedRetirement,
+			"pooled lifecycle conserves debt and clears every generation owner");
+		std::cout << "[Network:PooledGns] created=" << M.AcceptedBytes << " retired=" << M.VerifiedAttributedRetirement
+			<< " terminal=" << M.TerminalReleasedBytes << " outstanding=" << M.OutstandingBytes << '\n';
+	}
 	if (ClientRuntime) ClientRuntime->Destroy();
 	ServerRuntime.Destroy();
 	if (Failures == 0)

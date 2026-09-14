@@ -11,6 +11,7 @@
 #include "PooledReliableServiceModelFixture.hpp"
 #include "PooledReliableServiceProofHardening.hpp"
 #include "ReliableTransportFeedbackModelFixture.hpp"
+#include "PooledReliableServiceProductionFixture.hpp"
 
 #include <array>
 #include <iostream>
@@ -251,6 +252,7 @@ int main() {
 	Check(gargantuan::test::reliable_feedback_model::RunReliableTransportFeedbackModelTests(),
 		"Foundation 3L reliable transport feedback executable proof passes");
 
+	Check(gargantuan::test::RunPooledReliableServiceProductionTests(), "Production pooled admission passes");
 	if (Failures == 0) std::cout << "All networking contract tests passed\n";
 	return Failures == 0 ? 0 : 1;
 }

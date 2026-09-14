@@ -181,6 +181,13 @@ inline void TestPreAcceptanceByteDeferral() {
 	auto Encoded = network::EncodeReplicationFrame(*Produced.Frame);
 	EnvelopeRequire(Encoded && *Encoded == Produced.EncodedFrame, "pre-acceptance bytes equal exact wire encoding");
 	EnvelopeRequire(Fixture.Coordinator.GetView(Fixture.Connection)->KnownObjects == Known, "prepared funded group still awaits acceptance");
+	const auto UnacceptedSequence = Produced.Frame->Sequence;
+	EnvelopeRequire(Fixture.Coordinator.DiscardSchedulerPreparation(Fixture.Connection, UnacceptedSequence).Succeeded() &&
+		!Fixture.Coordinator.DiscardSchedulerPreparation(Fixture.Connection, UnacceptedSequence).Succeeded(),
+		"expired resource quote discards exactly one unaccepted preparation");
+	Produced = Fixture.Coordinator.ProducePendingRelevance(Fixture.Connection, 512, Fixture.Tick, 524256, 524256);
+	EnvelopeRequire(Produced.Frame && Produced.Frame->Sequence == UnacceptedSequence &&
+		Fixture.Coordinator.GetView(Fixture.Connection)->KnownObjects == Known, "discard preserves complete plan, sequence and Known");
 	EnvelopeRequire(Fixture.Replica.ApplyFrame(*Produced.Frame).Succeeded() &&
 		Fixture.Coordinator.CommitSchedulerAcceptance(Fixture.Connection, Produced.Frame->Sequence).Succeeded(), "byte-funded dependency group accepts once");
 	EnvelopeRequire(Fixture.Replica.Resolve(Child->GetObjectId())->GetName() == Child->GetName(), "credit wait cannot publish stale ordinary mutation");
@@ -193,6 +200,23 @@ inline void TestPreAcceptanceByteDeferral() {
 	EnvelopeRequire(FundedJournal.Frame && Fixture.Replica.ApplyFrame(*FundedJournal.Frame).Succeeded() &&
 		Fixture.Coordinator.CommitSchedulerAcceptance(Fixture.Connection, FundedJournal.Frame->Sequence).Succeeded(), "journal cursor was not lost while byte-deferred");
 	EnvelopeRequire(Fixture.Replica.Resolve(Child->GetObjectId())->GetName() == Child->GetName(), "deferred journal eventual exact state");
+	// Admission waits can accumulate more than one wire frame of independent
+	// property operations. The existing bounded retry must also handle the
+	// encoder's absolute ceiling without committing any discarded prefix.
+	for (int Index = 0; Index < 32; ++Index)
+		Child->SetName(std::to_string(Index) + std::string(24 * 1024, 'j'));
+	std::size_t JournalOperations = 0;
+	for (int Attempt = 0; Attempt < 8 && JournalOperations < 32; ++Attempt) {
+		auto Batch = Fixture.Coordinator.ProduceIncremental(Fixture.Connection, 512, 524256, 2048, 524256);
+		EnvelopeRequire(Batch.Frame && Batch.EncodedFrame.size() <= 524256 && Batch.JournalRecordsExamined <= 2048,
+			"oversized accumulated journal retries within unchanged byte and read caps");
+		JournalOperations += Batch.Frame->Operations.size();
+		EnvelopeRequire(Fixture.Replica.ApplyFrame(*Batch.Frame).Succeeded() &&
+			Fixture.Coordinator.CommitSchedulerAcceptance(Fixture.Connection, Batch.Frame->Sequence).Succeeded(),
+			"journal retry preserves ordered acceptance");
+	}
+	EnvelopeRequire(JournalOperations == 32 && Fixture.Replica.Resolve(Child->GetObjectId())->GetName() == Child->GetName(),
+		"every accumulated property operation applies exactly once in order");
 
 	auto Obsolete = std::make_shared<Folder>(); Obsolete->SetParent(Fixture.World);
 	const auto OldId = Obsolete->GetObjectId();

@@ -225,7 +225,10 @@ namespace gargantuan::network {
 			return detail::ReliableServiceFeedback{Id, Native.ObservedAtMicroseconds,
 				Counters.UniqueReliableStreamBytesFirstSent, Counters.UniqueReliableStreamBytesAcked,
 				Counters.ReliablePayloadBytesAcked, Counters.ReliableStreamBytesRetransmitted,
-				Native.PendingReliableStreamBytes, Native.SentUnackedReliableStreamBytes, State};
+				Native.PendingReliableStreamBytes, Native.SentUnackedReliableStreamBytes, State,
+				Counters.AttributedRetirementSequence, Counters.ActiveAttributedRetirementToken,
+				Counters.ActiveAttributedMessageNumber, Counters.LastAttributedRetirementToken,
+				Counters.LastAttributedRetirementMessageNumber, Counters.LastAttributedRetiredPayloadBytes};
 		}
 	}
 
@@ -240,6 +243,7 @@ namespace gargantuan::network {
 
 		GameNetworkingSocketsTransportConfiguration Configuration;
 		bool Started = false;
+		bool RetainServiceTerminals = false;
 		bool OwnsGlobalReference = false;
 		TransportRole Role = TransportRole::Client;
 		TransportEndpoint Endpoint;
@@ -366,7 +370,7 @@ namespace gargantuan::network {
 			BackendConnections.erase(Handle);
 			Connections.erase(Id);
 			if (Id.Slot < Generations.size() && Generations[Id.Slot] == Id.Generation &&
-				Id.Generation != std::numeric_limits<std::uint32_t>::max()) FreeSlots.push_back(Id.Slot);
+				Id.Generation != std::numeric_limits<std::uint32_t>::max() && !RetainServiceTerminals) FreeSlots.push_back(Id.Slot);
 		}
 
 		bool QueueEvent(TransportEvent Event) {
@@ -412,7 +416,15 @@ namespace gargantuan::network {
 					GlobalState().Interface, Handle,
 					NotifyBackend ? BackendDisconnectReason(Information.Reason) : 0,
 					NotifyBackend ? BackendDisconnectDiagnostic(Information.Reason) : nullptr, Final) && Final.Counters.Purged)
+				{
 					TerminalFeedback[Id.Slot] = ServiceFeedback(Id, Final);
+					// Purge remains terminal evidence even if cumulative service
+					// counters exhausted. It must never be reported as a drain.
+					if (RetainServiceTerminals && !TerminalFeedback[Id.Slot])
+						TerminalFeedback[Id.Slot] = detail::ReliableServiceFeedback{
+							.Connection = Id, .ObservedAtMicroseconds = Final.ObservedAtMicroseconds,
+							.State = ConnectionState::Closed, .CountersValid = false};
+				}
 			}
 			ReleaseConnection(Id, Handle);
 		}
@@ -740,14 +752,18 @@ namespace gargantuan::network {
 		State->Observe(Message.Destination(), "GnsBefore", Message.Payload(),
 			static_cast<int>(Message.Delivery()), static_cast<int>(Message.Traffic()));
 		int64 MessageNumber = -1;
+		const auto Token = detail::ReliableServiceFeedbackAccess::Token(Message);
+		if (Token && !SteamNetworkingSocketsLib::GargantuanBeginReliableRetirementAttribution(Token))
+			return Operation(TransportOperationStatus::TransportFailure);
 		const auto Result = SteamAPI_ISteamNetworkingSockets_SendMessageToConnection(
 			Global.Interface,
 			Connection->second.Handle,
 			Frame->data(),
 			static_cast<std::uint32_t>(Frame->size()),
 			Flags,
-			detail::ActiveGnsService ? &MessageNumber : nullptr
+			(Token || detail::ActiveGnsService) ? &MessageNumber : nullptr
 		);
+		if (Token) SteamNetworkingSocketsLib::GargantuanEndReliableRetirementAttribution();
 		State->Observe(Message.Destination(), "GnsQueued", Message.Payload(),
 			static_cast<int>(Message.Delivery()), static_cast<int>(Message.Traffic()), MessageNumber, -1, static_cast<int>(Result));
 		switch (Result) {
@@ -830,13 +846,29 @@ namespace gargantuan::network {
 		return Result.IsValid() ? std::optional<NetworkStatistics>(Result) : std::nullopt;
 	}
 
-	std::optional<detail::ReliableServiceFeedback> detail::ReliableServiceFeedbackAccess::Observe(
-		const GameNetworkingSocketsTransport &Transport, ConnectionId Connection) {
+	bool GameNetworkingSocketsTransport::EnableReliableServiceFeedback() {
+		auto &Global = GlobalState(); std::lock_guard Lock(Global.Mutex);
+		if (State->Started || !State->Connections.empty()) return false;
+		State->RetainServiceTerminals = true;
+		return true;
+	}
+	bool GameNetworkingSocketsTransport::ReleaseReliableServiceFeedback(ConnectionId Connection) {
+		auto &Global = GlobalState(); std::lock_guard Lock(Global.Mutex);
+		if (!State->RetainServiceTerminals || !Connection.IsValid() || State->Connections.contains(Connection) ||
+			Connection.Slot >= State->TerminalFeedback.size()) return false;
+		auto &Final = State->TerminalFeedback[Connection.Slot];
+		if (!Final || Final->Connection != Connection || Final->State != ConnectionState::Closed) return false;
+		Final.reset();
+		if (Connection.Generation != std::numeric_limits<std::uint32_t>::max()) State->FreeSlots.push_back(Connection.Slot);
+		return true;
+	}
+	std::optional<detail::ReliableServiceFeedback> GameNetworkingSocketsTransport::ReadReliableServiceFeedback(
+		ConnectionId Connection) const {
 		auto &Global = GlobalState();
 		// Existing adapter ownership lock, followed by GNS's existing connection
 		// lock in the bridge. No new/global GNS snapshot lock is introduced.
 		std::lock_guard Lock(Global.Mutex);
-		const auto &State = *Transport.State;
+		const auto &State = *this->State;
 		if (!Connection.IsValid()) return {};
 		const auto Found = State.Connections.find(Connection);
 		if (Found == State.Connections.end()) {
