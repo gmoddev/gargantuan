@@ -95,7 +95,7 @@ inline std::int64_t NativeSend(NativePair &Pair, std::size_t Bytes, std::uint64_
 	std::vector<std::byte> Payload(Bytes, std::byte{0x5a});
 	if (Token) Require(SteamNetworkingSocketsLib::GargantuanBeginReliableRetirementAttribution(Token),
 		"attribution scope begins");
-	std::int64_t MessageNumber = -1;
+	int64 MessageNumber = -1; // GNS's output-pointer type differs from std::int64_t on Linux.
 	const auto Result = Pair.Sockets->SendMessageToConnection(
 		Pair.Sender, Payload.data(), static_cast<std::uint32_t>(Payload.size()),
 		k_nSteamNetworkingSend_Reliable, &MessageNumber);

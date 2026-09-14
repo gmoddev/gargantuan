@@ -1,6 +1,8 @@
 #pragma once
 #include <cstdint>
 
+class ISteamNetworkingSockets;
+
 struct GargantuanReliableServiceCounters {
 	std::uint64_t UniqueReliableStreamBytesFirstSent = 0;
 	std::uint64_t UniqueReliableStreamBytesAcked = 0;
@@ -36,7 +38,6 @@ struct GargantuanReliableServiceSnapshot {
 };
 
 namespace SteamNetworkingSocketsLib {
-class ISteamNetworkingSockets;
 // Scope exactly one synchronous reliable submission for sender-local retirement
 // attribution. Begin/End are thread-local and introduce no global GNS lock.
 bool GargantuanBeginReliableRetirementAttribution(std::uint64_t Token) noexcept;
@@ -44,6 +45,9 @@ void GargantuanEndReliableRetirementAttribution() noexcept;
 std::uint64_t GargantuanTakeReliableRetirementAttribution() noexcept;
 void GargantuanCopyReliableServiceFeedback(const GargantuanReliableServiceCounters &Counters,
 	int Pending, int Unacked, int NativeState, GargantuanReliableServiceSnapshot &Result);
+GargantuanReliableServiceSnapshot *GargantuanGetClosingFeedback();
+bool GargantuanReadNativeFeedback(ISteamNetworkingSockets *Interface, std::uint32_t Handle,
+	GargantuanReliableServiceSnapshot &Result);
 bool GargantuanGetReliableServiceFeedback(ISteamNetworkingSockets *Interface, std::uint32_t Handle,
 	GargantuanReliableServiceSnapshot &Result);
 bool GargantuanCloseWithReliableServiceFeedback(ISteamNetworkingSockets *Interface, std::uint32_t Handle,
