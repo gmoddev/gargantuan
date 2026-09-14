@@ -10,6 +10,7 @@
 #include "gargantuan/network/Transport.hpp"
 #include "PooledReliableServiceModelFixture.hpp"
 #include "PooledReliableServiceProofHardening.hpp"
+#include "ReliableTransportFeedbackModelFixture.hpp"
 
 #include <array>
 #include <iostream>
@@ -247,6 +248,8 @@ int main() {
 		"Foundation 3L pooled reliable service executable proof passes");
 	Check(gargantuan::test::pooled_service_model::hardening::RunPooledReliableServiceProofHardeningTests(),
 		"Foundation 3L pooled reliable service proof hardening passes");
+	Check(gargantuan::test::reliable_feedback_model::RunReliableTransportFeedbackModelTests(),
+		"Foundation 3L reliable transport feedback executable proof passes");
 
 	if (Failures == 0) std::cout << "All networking contract tests passed\n";
 	return Failures == 0 ? 0 : 1;
