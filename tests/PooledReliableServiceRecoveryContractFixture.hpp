@@ -6,6 +6,7 @@
 #include "gargantuan/runtime/ChangeJournal.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <iostream>
 #include <limits>
@@ -99,11 +100,11 @@ namespace gargantuan::test::pooled_recovery_contract {
 		Check(ServiceUs(CanonicalRemainingBytes, PeerCreditRate) == 84'937'500,
 			"the measured 7,248-record remainder cannot drain in the old 20-second deadline");
 
-		// Existing 3J semantics already resolve ordinary native properties from
-		// current authoritative catalog state. For this Name-only workload, one
-		// final update per object is semantically sufficient. Encode and decode
-		// that exact final-state representation through the real GRPL codec so
-		// this proves semantic convergence rather than only a smaller queue.
+		// Existing 3J semantics permit ordinary current-state property projection.
+		// For this Name-only workload, one final update per object is semantically
+		// sufficient. Encode and decode that exact final-state representation
+		// through the real GRPL codec so this proves semantic convergence rather
+		// than only a smaller queue.
 		network::ReplicationFrame FinalState{
 			.Version = network::ReplicationProtocolVersion,
 			.Kind = network::ReplicationMessageKind::Incremental,
@@ -149,27 +150,113 @@ namespace gargantuan::test::pooled_recovery_contract {
 			}
 		}
 
+		U CanonicalRecoveryUs = 0;
+		U FairRecoveryUs = 0;
+		U FairRecoveryGameplayDelayUs = 0;
+		U FairRecoveryGrantGapUs = 0;
+		if (CoalescedCompleteBytes <= CompleteGroupBytes) {
+			// Demand has stopped; this is the finite semantic remainder for one
+			// canonical peer. The accepted admission model must converge it within
+			// the workload-derived bound, while pending/committed debt stays bounded.
+			pooled_service_model::Model Canonical;
+			Check(Canonical.Connect(1, 1) && Canonical.Fresh(1, 1),
+				"canonical recovery peer connects with fresh feedback");
+			const U CanonicalStop = Canonical.Now();
+			Check(Canonical.OfferStructural(1, 1, CoalescedCompleteBytes) == pooled_service_model::Offer::Queued,
+				"canonical semantic remainder enters bounded pooled admission");
+			while (!Canonical.Converged()) {
+				pooled_service_model::Healthy(Canonical);
+				Check(Canonical.Pending() <= CompleteGroupBytes && Canonical.Committed() <= 4 * CompleteGroupBytes,
+					"canonical recovery preserves pending and committed debt bounds");
+				if (Canonical.Now() - CanonicalStop > ConvergenceBoundUs(CoalescedCompleteBytes, CoalescedCompleteBytes)) break;
+			}
+			CanonicalRecoveryUs = Canonical.Now() - CanonicalStop;
+			Check(Canonical.Converged(), "canonical semantic remainder converges after demand cessation");
+			Check(CanonicalRecoveryUs <= ConvergenceBoundUs(CoalescedCompleteBytes, CoalescedCompleteBytes),
+				"canonical convergence stays inside its workload-derived bound");
+
+			// Four retained groups per peer model finite semantic overload after
+			// offered demand stops. RetainedCounts is proof-local workload input,
+			// not a proposed production queue. The accepted Option C model owns all
+			// actual pending/reserved/committed admission state.
+			pooled_service_model::Model Fair;
+			pooled_service_model::All(Fair);
+			std::array<unsigned, 32> RetainedCounts{};
+			RetainedCounts.fill(4);
+			constexpr U FairPeerWork = 4 * CompleteGroupBytes;
+			constexpr U FairAggregateWork = 32 * FairPeerWork;
+			const U FairStop = Fair.Now();
+			U NextGameplayUs = 100'000;
+			while (true) {
+				bool AnyRetained = false;
+				for (std::uint32_t Slot = 1; Slot <= 32; ++Slot) {
+					auto &Remaining = RetainedCounts[Slot - 1];
+					if (!Remaining) continue;
+					AnyRetained = true;
+					const auto &Peer = Fair.At(Slot);
+					if (!Peer.pending && !Peer.reserved && !Peer.grant &&
+						Fair.OfferStructural(Slot, 1, CompleteGroupBytes) == pooled_service_model::Offer::Queued)
+						--Remaining;
+				}
+				pooled_service_model::FreshAll(Fair);
+				pooled_service_model::Admit(Fair);
+				if (Fair.Now() >= NextGameplayUs) {
+					for (std::uint32_t Slot = 1; Slot <= 8; ++Slot)
+						(void)Fair.Gameplay(Slot, 1, PeerGameplayBurst);
+					NextGameplayUs += 100'000;
+				}
+				pooled_service_model::Healthy(Fair);
+				if (!AnyRetained && Fair.Converged() && !Fair.GameDebt() && !Fair.ControlDebt()) break;
+				if (Fair.Now() - FairStop > ConvergenceBoundUs(FairPeerWork, FairAggregateWork)) break;
+			}
+			FairRecoveryUs = Fair.Now() - FairStop;
+			FairRecoveryGameplayDelayUs = Fair.M().maxGameDelay;
+			FairRecoveryGrantGapUs = Fair.M().maxGrantGap;
+			Check(Fair.Converged() && !Fair.GameDebt() && !Fair.ControlDebt(),
+				"32-peer retained semantic workload converges after demand cessation");
+			Check(FairRecoveryUs <= ConvergenceBoundUs(FairPeerWork, FairAggregateWork),
+				"32-peer recovery remains inside the workload-derived convergence bound");
+			Check(Fair.M().maxPending <= 32 * CompleteGroupBytes && Fair.M().maxCommitted <= 4 * CompleteGroupBytes,
+				"32-peer recovery keeps pooled admission state bounded");
+			for (std::uint32_t Slot = 1; Slot <= 32; ++Slot)
+				Check(Fair.At(Slot).completions == 4,
+					"every conforming peer receives all retained structural service opportunities");
+			Check(FairRecoveryGrantGapUs <= MaximumFreshCreditWarmupUs + MaximumFirstGrantFairnessUs + 50'000,
+				"recovery grant rotation preserves the accepted credit-plus-fairness envelope");
+			Check(FairRecoveryGameplayDelayUs + 100'000 <= 150'000,
+				"qualified gameplay remains inside the accepted nonqueue plus RPC p95 envelope during recovery");
+
+			// Repeated finite overload/recovery cycles must not accumulate admission
+			// debt or deprive any peer. Each cycle begins only after the preceding
+			// semantic remainder has converged.
+			pooled_service_model::Model Cycles;
+			pooled_service_model::All(Cycles);
+			for (int Cycle = 0; Cycle < 8; ++Cycle) {
+				for (std::uint32_t Slot = 1; Slot <= 32; ++Slot)
+					Check(Cycles.OfferStructural(Slot, 1, CompleteGroupBytes) == pooled_service_model::Offer::Queued,
+						"repeated recovery cycle admits one bounded semantic group per peer");
+				while (!Cycles.Converged()) pooled_service_model::Healthy(Cycles);
+				Check(!Cycles.Pending() && !Cycles.Reserved() && !Cycles.Committed() && !Cycles.Grants(),
+					"repeated recovery cycle leaves no pooled admission carryover");
+			}
+			for (std::uint32_t Slot = 1; Slot <= 32; ++Slot)
+				Check(Cycles.At(Slot).completions == 8,
+					"repeated recovery cycles preserve finite service opportunity for every peer");
+		}
+
 		// The old gameplay/FIFO proof remains independent of historical retained
 		// work because no peer may own more than one accepted structural grant.
 		const U GameplayFollowerUs = ServiceUs(CompleteGroupBytes + PeerGameplayBurst, PeerDrainFloor);
 		Check(GameplayFollowerUs <= 50'000,
 			"one admitted complete group plus qualified gameplay burst stays inside the funded queue window");
 
-		// Repeated bounded overload/recovery cycles do not accumulate historical
-		// debt when each cycle converges before the next begins. This is an
-		// algebraic lifecycle proof, not a new production queue.
-		U RepeatedCycleRetained = 0;
-		for (int Cycle = 0; Cycle < 8; ++Cycle) {
-			RepeatedCycleRetained = CoalescedCompleteBytes;
-			Check(RepeatedCycleRetained <= CompleteGroupBytes,
-				"repeated canonical cycle remains within one semantic complete group");
-			RepeatedCycleRetained = 0;
-		}
-		Check(RepeatedCycleRetained == 0, "repeated overload/recovery cycles converge without retained carryover");
-
 		std::cout << "[PooledRecoveryContract] canonical_raw_bytes=" << CanonicalRawBytes
 			<< " canonical_remaining_bytes=" << CanonicalRemainingBytes
 			<< " canonical_coalesced_complete_bytes=" << CoalescedCompleteBytes
+			<< " canonical_recovery_us=" << CanonicalRecoveryUs
+			<< " fair_recovery_us=" << FairRecoveryUs
+			<< " fair_gameplay_delay_us=" << FairRecoveryGameplayDelayUs
+			<< " fair_grant_gap_us=" << FairRecoveryGrantGapUs
 			<< " worst_peer_retained_bytes=" << WorstPeerRetainedWork
 			<< " worst_global_retained_bytes=" << WorstGlobalRetainedWork
 			<< " worst_convergence_bound_us=" << WorstCaseBound
