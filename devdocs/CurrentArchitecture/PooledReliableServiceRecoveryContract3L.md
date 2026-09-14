@@ -186,21 +186,36 @@ from current-state replication that may collapse:
   their established ordered handling;
 - hard-reference changes remain dependency-sensitive and cannot be collapsed
   across a state where doing so would make a required target unavailable;
-- for an already-known ordinary native property, `ProduceIncremental` resolves
-  the operation's value from the **current authoritative catalog** where the
-  existing replication semantics permit it.
+- for already-known ordinary native properties stored in the catalog property
+  map, `ProduceIncremental` already substitutes current authoritative values where
+  the established replication semantics permit current-state projection.
 
-The stopped canonical workload exposes a narrow implementation mismatch inside
-that already-accepted semantic model. It mutates only the `Name` property of 16
-already materialized Parts. Current production resolves every retained Name
-record to the same current catalog value but still emits one operation for each
-record. The retained historical values are therefore not semantically necessary
-to converge the replica.
+`Name` is a narrow special case. Snapshot/materialization stores it in the
+separate `SnapshotObject::Name` / `PublishReplication::Name` field and explicitly
+excludes `Name` from the generic native `Properties` map. Consequently the current
+known-object journal path does **not** perform the generic current-catalog value
+substitution for `Name`; it replays each retained `Change.Value`.
 
-A safe implementation may collapse repeated ordinary native scalar property
-records for the same `(ObjectId, property)` to the last represented current-state
-operation **within the existing ordered barriers**. Cursor advancement must still
-be transactional: no skipped/coalesced record becomes represented until the
+That does not make every historical Name mutation semantically necessary. GRPL
+is a state-projection boundary: `ChangeJournal.Sequence` never crosses it, a
+newly materialized object publishes one current complete Name, and 3J already
+permits ordinary property history to coalesce where no ordered structural barrier
+requires intermediate states. `Name` is a scalar current-state field and carries
+no parent/reference dependency edge. Repeated Name writes for the same live
+object between lifecycle/hierarchy/dependency barriers may therefore be represented
+by the final current Name without creating a new authority or weakening an
+accepted ordering dependency.
+
+The stopped canonical workload exposes that special-case implementation gap. It
+mutates only `Name` on 16 already materialized Parts, so production serializes
+thousands of historical scalar values even though semantic convergence requires
+only the final Name for each live object.
+
+A safe implementation may collapse repeated coalescible scalar property records
+for the same `(ObjectId, property)` to one final current-state operation **within
+the existing ordered barriers**. For `Name`, the final value must come from the
+current catalog publication's separate `Name` field. Cursor advancement must
+remain transactional: no skipped/coalesced record becomes represented until the
 frame that semantically covers it is accepted. This contract does not authorize
 coalescing lifecycle, hierarchy, tag/attribute or dependency-sensitive reference
 barriers merely because a benchmark becomes smaller.
@@ -224,7 +239,7 @@ The workload is:
 
 It is below the 16,384-record hard journal window, so it is a valid finite bounded
 overload. However, its 180 MiB raw history is not semantically necessary retained
-work under the existing current-value property semantics.
+work under the existing GRPL state-projection and 3J coalescing semantics.
 
 The measured remainder is:
 
@@ -239,17 +254,17 @@ That explains the remainder without attributing a starvation defect, gameplay
 defect or numeric-profile contradiction.
 
 **Canonical classification: C — production is retaining semantically redundant
-history that existing safe coalescing semantics already permit it to collapse.**
-It is also finite bounded overload in the descriptive sense of A, but A is not
-the root cause of the failed fixture: the raw 180 MiB is not the semantic work
-that must be delivered.
+history that existing safe coalescing semantics permit it to collapse.** It is
+also finite bounded overload in the descriptive sense of A, but A is not the
+root cause of the failed fixture: the raw 180 MiB is not the semantic work that
+must be delivered.
 
 ## Hard retained-work envelope
 
 A conservative byte-service upper bound can be derived without assuming average
 traffic. Treat every retained journal record or pending transition as potentially
-requiring its own maximum complete group G. This is deliberately loose but it is
-hard and mechanically derived from existing limits.
+requiring its own maximum serviceable complete group G. This is deliberately loose
+but mechanically derived from existing limits.
 
 Per peer:
 
@@ -340,8 +355,9 @@ one-grant-per-peer rule and become an unbounded FIFO prefix.
 - the conservative hard retained-work ceilings are 40 GiB per peer and 768 GiB
   aggregate;
 - the resulting workload-derived hard convergence envelope exceeds 20 seconds;
-- one current Name update for each of the 16 canonical objects is encoded by the
-  real GRPL encoder and must fit one accepted complete group;
+- one final Name update for each of the 16 canonical objects is encoded and
+  decoded through the real GRPL codec with exact object identity/property/value,
+  and must fit one accepted complete group;
 - the existing G + 20 KiB gameplay follower still fits the funded 50-ms queue
   window;
 - repeated bounded canonical overload/recovery cycles return semantic retained
@@ -356,11 +372,12 @@ The production pooled admission/debt work in `d2742796f` is not rejected by this
 reconciliation. Exact retirement, generation cleanup, debt conservation, grant
 bounds and gameplay evidence remain applicable at their measured scope.
 
-The next implementation change is narrower: make the existing known-object
-ordinary-property current-state semantics actually coalesce superseded journal
-records instead of emitting one identical operation per historical mutation,
-while preserving ordered barriers and acceptance-only cursor/Known commit.
-Then rerun the canonical structural/mixed overload fixture using:
+The next implementation change is narrow: make known-object coalescible scalar
+property history, including the special `Name` field, collapse to current
+DataModel/catalog state within existing ordered barriers instead of serializing
+every superseded mutation. Preserve complete-group atomicity and
+acceptance-only cursor/Known commit. Then rerun the canonical structural/mixed
+overload fixture using:
 
 1. the unchanged 20-second **service-recovery** gate;
 2. measured semantically necessary retained bytes at demand cessation;
