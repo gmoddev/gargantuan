@@ -10,6 +10,7 @@
 #include "gargantuan/network/Transport.hpp"
 #include "PooledReliableServiceModelFixture.hpp"
 #include "PooledReliableServiceProofHardening.hpp"
+#include "PooledReliableServiceRecoveryContractFixture.hpp"
 #include "ReliableTransportFeedbackModelFixture.hpp"
 #include "PooledReliableServiceProductionFixture.hpp"
 
@@ -130,7 +131,7 @@ int main() {
 		DisconnectReason::AuthenticationFailure, DisconnectReason::ProtocolViolation,
 		DisconnectReason::ResourceExhaustion, DisconnectReason::TransportFailure,
 		DisconnectReason::IncompatibleVersion
-	}) Check(IsTerminalDisconnectReason(Reason), "every structured disconnect reason is terminal");
+	}) Check(IsTerminalDisconnectReason(Reason), "every structured disconnect reason is terminal and structured");
 	Check(!IsTerminalDisconnectReason(static_cast<DisconnectReason>(255)) &&
 		!DisconnectInfo{static_cast<DisconnectReason>(255), {}}.IsValid(),
 		"unknown disconnect reasons fail closed");
@@ -249,6 +250,8 @@ int main() {
 		"Foundation 3L pooled reliable service executable proof passes");
 	Check(gargantuan::test::pooled_service_model::hardening::RunPooledReliableServiceProofHardeningTests(),
 		"Foundation 3L pooled reliable service proof hardening passes");
+	Check(gargantuan::test::pooled_recovery_contract::RunPooledReliableServiceRecoveryContractTests(),
+		"Foundation 3L pooled recovery contract proof passes");
 	Check(gargantuan::test::reliable_feedback_model::RunReliableTransportFeedbackModelTests(),
 		"Foundation 3L reliable transport feedback executable proof passes");
 
