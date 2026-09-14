@@ -127,8 +127,12 @@ jobs:
           set -euo pipefail
           GNSCommand="$(ninja -C build-gns-sanitizers -t commands GameNetworkingSockets_s | grep -m1 'steamnetworkingsockets_snp.cpp')"
           AdapterCommand="$(ninja -C build-gns-sanitizers -t commands gargantuan_gns_transport | grep -m1 'GameNetworkingSocketsTransport.cpp')"
+          FeedbackCommand="$(ninja -C build-gns-sanitizers -t commands gargantuan_gns_feedback_counters | grep -m1 'ReliableServiceFeedback.cpp')"
+          BridgeCommand="$(ninja -C build-gns-sanitizers -t commands gargantuan_gns_feedback_bridge | grep -m1 'ReliableServiceFeedbackBridge.cpp')"
           printf 'GNS compile command: %s\n' "$GNSCommand"
           printf 'Gargantuan adapter compile command: %s\n' "$AdapterCommand"
+          printf 'Gargantuan feedback compile command: %s\n' "$FeedbackCommand"
+          printf 'Gargantuan bridge compile command: %s\n' "$BridgeCommand"
 
           grep -Fq -- '-fsanitize=address,undefined' <<<"$GNSCommand"
           grep -Fq -- '-fno-sanitize=function' <<<"$GNSCommand"
@@ -140,6 +144,14 @@ jobs:
             echo "GNS-only UBSan compatibility exclusions leaked into Gargantuan code."
             exit 1
           fi
+
+          for OwnedCommand in "$FeedbackCommand" "$BridgeCommand"; do
+            grep -Fq -- '-fsanitize=address,undefined' <<<"$OwnedCommand"
+            if grep -Fq -- '-fno-sanitize=' <<<"$OwnedCommand"; then
+              echo "GNS-only compatibility exclusions leaked into owned feedback code."
+              exit 1
+            fi
+          done
 
       - name: Build GNS sanitizer targets
         shell: bash

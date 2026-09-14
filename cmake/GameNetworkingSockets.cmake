@@ -36,6 +36,7 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(GameNetworkingSockets)
 include("${CMAKE_CURRENT_LIST_DIR}/gns/ApplyServiceFairness.cmake")
+include("${CMAKE_CURRENT_LIST_DIR}/gns/ApplyReliableServiceFeedback.cmake")
 
 if(NOT TARGET GameNetworkingSockets::static)
 	message(FATAL_ERROR "Pinned GameNetworkingSockets source did not provide GameNetworkingSockets::static")
