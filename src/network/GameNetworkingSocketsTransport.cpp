@@ -222,10 +222,7 @@ namespace gargantuan::network {
 			else if (Native.NativeState == k_ESteamNetworkingConnectionState_Connecting ||
 				Native.NativeState == k_ESteamNetworkingConnectionState_FindingRoute) State = ConnectionState::Connecting;
 			else return {};
-			const auto Time = std::chrono::duration_cast<std::chrono::microseconds>(
-				std::chrono::steady_clock::now().time_since_epoch()).count();
-			if (Time < 0) return {};
-			return detail::ReliableServiceFeedback{Id, static_cast<std::uint64_t>(Time),
+			return detail::ReliableServiceFeedback{Id, Native.ObservedAtMicroseconds,
 				Counters.UniqueReliableStreamBytesFirstSent, Counters.UniqueReliableStreamBytesAcked,
 				Counters.ReliablePayloadBytesAcked, Counters.ReliableStreamBytesRetransmitted,
 				Native.PendingReliableStreamBytes, Native.SentUnackedReliableStreamBytes, State};

@@ -23,6 +23,7 @@ private:
 
 struct GargantuanReliableServiceSnapshot {
 	GargantuanReliableServiceCounters Counters;
+	std::uint64_t ObservedAtMicroseconds = 0;
 	std::uint64_t PendingReliableStreamBytes = 0;
 	std::uint64_t SentUnackedReliableStreamBytes = 0;
 	int NativeState = 0;

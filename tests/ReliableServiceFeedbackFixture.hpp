@@ -179,6 +179,12 @@ inline bool Run() {
 		Require(!Ack.Invalid && Ack.UniqueReliableStreamBytesAcked == 100, "duplicate native ACK transition does not double count");
 		Ack.AckSegment(1, false); Require(Ack.Invalid, "ACK cannot exceed unique first-send");
 		GargantuanReliableServiceCounters Negative; Negative.FirstSend(-1); Require(Negative.Invalid, "negative native range fails conservatively");
+		GargantuanReliableServiceSnapshot Native;
+		const auto Before = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+		SteamNetworkingSocketsLib::GargantuanCopyReliableServiceFeedback(First, 0, 0, 0, Native);
+		const auto After = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+		Require(Native.Counters.Invalid && Native.ObservedAtMicroseconds >= static_cast<std::uint64_t>(Before) &&
+			Native.ObservedAtMicroseconds <= static_cast<std::uint64_t>(After), "native copy preserves invalidity and stamps its own observation time");
 	});
 	Case("SnapshotOverhead", [] {
 		OwnedPair Owner; auto &Pair = Owner.Pair;

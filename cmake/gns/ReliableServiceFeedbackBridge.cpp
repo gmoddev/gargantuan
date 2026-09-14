@@ -1,5 +1,6 @@
 #include "ReliableServiceFeedback.hpp"
 #include <steam/isteamnetworkingsockets.h>
+#include <chrono>
 
 namespace SteamNetworkingSocketsLib {
 // Called from the native ownership hook while its existing lock is held.
@@ -10,6 +11,12 @@ void GargantuanCopyReliableServiceFeedback(const GargantuanReliableServiceCounte
 	Result.PendingReliableStreamBytes = Pending;
 	Result.SentUnackedReliableStreamBytes = Unacked;
 	Result.NativeState = NativeState;
+	// Stamp while the native connection lock still protects these values. A
+	// delayed adapter return must not make an older sample appear fresh.
+	const auto Time = std::chrono::duration_cast<std::chrono::microseconds>(
+		std::chrono::steady_clock::now().time_since_epoch()).count();
+	if (Time < 0) Result.Counters.Invalid = true;
+	else Result.ObservedAtMicroseconds = static_cast<std::uint64_t>(Time);
 }
 
 // Borrowed only for the synchronous existing CloseConnection call on this thread.
