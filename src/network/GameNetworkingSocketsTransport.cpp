@@ -1,5 +1,7 @@
 #include "gargantuan/network/GameNetworkingSocketsTransport.hpp"
 #include "GnsServiceDiagnostics.hpp"
+#include "ReliableServiceFeedback.hpp"
+#include "../../cmake/gns/ReliableServiceFeedback.hpp"
 #include "../runtime/PublicationLatencyDiagnostics.hpp"
 #include "../runtime/RuntimeWorkDiagnostics.hpp"
 
@@ -207,6 +209,27 @@ namespace gargantuan::network {
 			constexpr std::size_t BackendMaximum = 0x10000000;
 			return static_cast<int>(std::clamp(Bytes, BackendMinimum, BackendMaximum));
 		}
+
+		std::optional<detail::ReliableServiceFeedback> ServiceFeedback(
+			ConnectionId Id, const GargantuanReliableServiceSnapshot &Native) {
+			const auto &Counters = Native.Counters;
+			if (!Id.IsValid() || Counters.Invalid ||
+				Counters.UniqueReliableStreamBytesAcked > Counters.UniqueReliableStreamBytesFirstSent ||
+				Counters.ReliablePayloadBytesAcked > Counters.UniqueReliableStreamBytesAcked) return {};
+			ConnectionState State;
+			if (Counters.Purged) State = ConnectionState::Closed;
+			else if (Native.NativeState == k_ESteamNetworkingConnectionState_Connected) State = ConnectionState::Connected;
+			else if (Native.NativeState == k_ESteamNetworkingConnectionState_Connecting ||
+				Native.NativeState == k_ESteamNetworkingConnectionState_FindingRoute) State = ConnectionState::Connecting;
+			else return {};
+			const auto Time = std::chrono::duration_cast<std::chrono::microseconds>(
+				std::chrono::steady_clock::now().time_since_epoch()).count();
+			if (Time < 0) return {};
+			return detail::ReliableServiceFeedback{Id, static_cast<std::uint64_t>(Time),
+				Counters.UniqueReliableStreamBytesFirstSent, Counters.UniqueReliableStreamBytesAcked,
+				Counters.ReliablePayloadBytesAcked, Counters.ReliableStreamBytesRetransmitted,
+				Native.PendingReliableStreamBytes, Native.SentUnackedReliableStreamBytes, State};
+		}
 	}
 
 	struct GameNetworkingSocketsTransport::Impl {
@@ -228,6 +251,9 @@ namespace gargantuan::network {
 		std::unordered_map<ConnectionId, ConnectionRecord> Connections;
 		std::unordered_map<HSteamNetConnection, ConnectionId> BackendConnections;
 		std::vector<std::uint32_t> Generations{0};
+		// One final snapshot per allocated slot, replaced on generation reuse.
+		// No history growth under reconnect churn, and no live counter duplication.
+		std::vector<std::optional<detail::ReliableServiceFeedback>> TerminalFeedback{1};
 		std::deque<std::uint32_t> FreeSlots;
 		std::deque<TransportEvent> Events;
 		std::size_t PendingReceiveBytes = 0;
@@ -325,6 +351,8 @@ namespace gargantuan::network {
 				Id = {Slot, 1};
 			}
 			ConnectionRecord Record;
+			if (TerminalFeedback.size() < Generations.size()) TerminalFeedback.resize(Generations.size());
+			TerminalFeedback[Id.Slot].reset();
 			Record.Handle = Handle;
 			Record.Statistics.BytesSent = 0;
 			Record.Statistics.BytesReceived = 0;
@@ -381,18 +409,14 @@ namespace gargantuan::network {
 			}
 			QueueEvent(ConnectionStateEvent{Id, Previous, ConnectionState::Closed});
 			QueueEvent(DisconnectedEvent{Id, Information});
-			if (NotifyBackend && GlobalState().Interface)
-				SteamAPI_ISteamNetworkingSockets_CloseConnection(
-					GlobalState().Interface,
-					Handle,
-					BackendDisconnectReason(Information.Reason),
-					BackendDisconnectDiagnostic(Information.Reason),
-					false
-				);
-			else if (GlobalState().Interface)
-				SteamAPI_ISteamNetworkingSockets_CloseConnection(
-					GlobalState().Interface, Handle, 0, nullptr, false
-				);
+			if (GlobalState().Interface) {
+				GargantuanReliableServiceSnapshot Final;
+				if (SteamNetworkingSocketsLib::GargantuanCloseWithReliableServiceFeedback(
+					GlobalState().Interface, Handle,
+					NotifyBackend ? BackendDisconnectReason(Information.Reason) : 0,
+					NotifyBackend ? BackendDisconnectDiagnostic(Information.Reason) : nullptr, Final) && Final.Counters.Purged)
+					TerminalFeedback[Id.Slot] = ServiceFeedback(Id, Final);
+			}
 			ReleaseConnection(Id, Handle);
 		}
 
@@ -807,5 +831,28 @@ namespace gargantuan::network {
 				Result.EstimatedRoundTripTime = std::chrono::milliseconds(Status.m_nPing);
 		}
 		return Result.IsValid() ? std::optional<NetworkStatistics>(Result) : std::nullopt;
+	}
+
+	std::optional<detail::ReliableServiceFeedback> detail::ReliableServiceFeedbackAccess::Observe(
+		const GameNetworkingSocketsTransport &Transport, ConnectionId Connection) {
+		auto &Global = GlobalState();
+		// Existing adapter ownership lock, followed by GNS's existing connection
+		// lock in the bridge. No new/global GNS snapshot lock is introduced.
+		std::lock_guard Lock(Global.Mutex);
+		const auto &State = *Transport.State;
+		if (!Connection.IsValid()) return {};
+		const auto Found = State.Connections.find(Connection);
+		if (Found == State.Connections.end()) {
+			if (Connection.Slot < State.TerminalFeedback.size()) {
+				const auto &Final = State.TerminalFeedback[Connection.Slot];
+				if (Final && Final->Connection == Connection) return Final;
+			}
+			return {};
+		}
+		if (!State.Started || !Global.Interface) return {};
+		GargantuanReliableServiceSnapshot Native;
+		if (!SteamNetworkingSocketsLib::GargantuanGetReliableServiceFeedback(
+			Global.Interface, Found->second.Handle, Native)) return {};
+		return ServiceFeedback(Connection, Native);
 	}
 }

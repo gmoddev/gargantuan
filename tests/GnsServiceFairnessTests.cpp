@@ -1,5 +1,6 @@
 #include <steam/steamnetworkingsockets.h>
 #include <steamnetworkingsockets_thinker.h>
+#include <clientlib/steamnetworkingsockets_snp.h>
 #include <chrono>
 #include <cstdio>
 #include <thread>
@@ -12,6 +13,45 @@ STEAMNETWORKINGSOCKETS_INTERFACE void SteamNetworkingSockets_Poll(int);
 // Deliberately tests the pinned dependency's private timer contract. This target
 // links no Gargantuan runtime and follows GNS's platform RTTI settings.
 namespace {
+bool ReliableMessageRetirement() {
+	using namespace SteamNetworkingSocketsLib;
+	SSNPSenderState Sender;
+	auto *Message = CSteamNetworkingMessage::New(129);
+	if (!Message) return false;
+	Message->m_nFlags = k_nSteamNetworkingSend_Reliable;
+	Message->m_cbSize = 132; // 129 submitted bytes (including GGNS), 3 private header bytes.
+	auto &Info = Message->ReliableSendInfo();
+	Info.m_nStreamPos = 1;
+	Info.m_cbHdr = 3;
+	Info.m_nSentReliableSegRefCount = 2;
+	Message->LinkToQueueTail(&CSteamNetworkingMessage::m_links, &Sender.m_unackedReliableMessages);
+	const auto First = Sender.m_listSentReliableSegments.AddToTail();
+	const auto Last = Sender.m_listSentReliableSegments.AddToTail();
+	for (const auto Segment : {First, Last}) {
+		auto &Value = Sender.m_listSentReliableSegments[Segment];
+		Value.m_pMsg = Message;
+		Value.m_nOffset = Segment == First ? 0 : 66;
+		Value.m_cbSize = 66;
+		Value.m_nRefCount = Segment == First ? 1 : 2; // Last range also has a retry packet reference.
+		Value.m_hStatusOrRetry = SNPSendReliableSegment_t::k_nStatus_Acked;
+	}
+	Sender.GargantuanFeedback.FirstSend(132);
+	Sender.GargantuanFeedback.AckSegment(66, false);
+	Sender.RemoveRefCountReliableSegment(First);
+	bool Passed = Sender.GargantuanFeedback.ReliablePayloadBytesAcked == 0 && Info.m_nSentReliableSegRefCount == 1;
+	Sender.GargantuanFeedback.Retransmit(66);
+	Sender.GargantuanFeedback.AckSegment(66, false);
+	Sender.RemoveRefCountReliableSegment(Last);
+	Passed = Passed && Sender.GargantuanFeedback.ReliablePayloadBytesAcked == 0;
+	Sender.GargantuanFeedback.AckSegment(66, true);
+	Sender.RemoveRefCountReliableSegment(Last); // Exact pinned native final-reference retirement.
+	Passed = Passed && Sender.GargantuanFeedback.ReliablePayloadBytesAcked == 129 &&
+		Sender.GargantuanFeedback.UniqueReliableStreamBytesAcked == 132 && Sender.m_unackedReliableMessages.empty();
+	Sender.Shutdown();
+	Passed = Passed && Sender.GargantuanFeedback.Purged && Sender.GargantuanFeedback.ReliablePayloadBytesAcked == 129;
+	std::fprintf(stderr, "[Gns:ReliableFeedback] PartialFinalDuplicateRetirement=%s\n", Passed ? "PASS" : "FAIL");
+	return Passed;
+}
 class RepeatingTimer final : public SteamNetworkingSocketsLib::IThinker {
 public:
 	int Calls = 0;
@@ -37,7 +77,7 @@ int main() {
 		std::fprintf(stderr, "[Gns:Fairness] initialization failed: %s\n", Error);
 		return 1;
 	}
-	bool Passed = true;
+	bool Passed = ReliableMessageRetirement();
 	{
 		RepeatingTimer First, Second;
 		First.SetNextThinkTimeASAP();

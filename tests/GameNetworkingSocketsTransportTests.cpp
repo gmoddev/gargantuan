@@ -181,11 +181,16 @@ namespace {
 	}
 }
 
-int main() {
+#include "ReliableServiceFeedbackFixture.hpp"
+
+int main(int ArgumentCount, char **Arguments) {
 	using namespace gargantuan;
 	using namespace gargantuan::network;
 	try { gargantuan::BootstrapNativeRuntimeSchema(); }
 	catch (const std::exception &Error) { std::cerr << Error.what() << '\n'; return 1; }
+	const bool FeedbackPassed = FeedbackFixture::Run();
+	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--reliable-feedback") return FeedbackPassed ? 0 : 1;
+	Check(FeedbackPassed, "native reliable-service feedback contract");
 	std::cout << "[Networking:GNS] validating configuration\n" << std::flush;
 
 	{
