@@ -2218,9 +2218,12 @@ namespace gargantuan::network {
 		std::vector<JournalRequirement> Result;
 		const auto *Replication = Session.State->Replication.get();
 		if (!Replication) return Result;
-		Result.push_back({Replication->CatalogCursor, {}, true, false});
+		Result.push_back({Replication->CatalogCursor, {}, true, false, Replication->NameCoalescingBegin});
 		for (const auto &[Connection, Peer] : Replication->Peers)
-			Result.push_back({Peer.JournalCursor, Connection, false, Peer.PreparedCommit.has_value()});
+			Result.push_back({Peer.JournalCursor, Connection, false, Peer.PreparedCommit.has_value(), Replication->NameCoalescingBegin});
 		return Result;
+	}
+	ReplicationMetrics detail::GameSessionTestAccess::GetReplicationMetrics(const GameSession &Session) {
+		return Session.State->Replication ? Session.State->Replication->GetMetrics() : ReplicationMetrics{};
 	}
 }

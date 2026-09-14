@@ -293,6 +293,30 @@ bookkeeping for their current materialization lifetime, never historical reload
 lifetimes. Maximum map payload is 65,536 times sizeof(pair<const ObjectId,
 uint64_t>), plus allocator/tree overhead; the validation failure is peer-local.
 
+Known native `Name` uses a narrow current-state derivation rule. Catalog refresh
+records the exclusive boundary after the most recent non-Name journal record.
+Only Name records in that barrier-free suffix may use the existing immutable
+publication's separate `Name` field; earlier segments retain historical order.
+Every non-Name record is conservatively a global barrier, including unrelated
+create/destroy, reparent, reference/nil, Attributes, tags and extension changes.
+Other scalar properties retain their existing behavior; this is not general
+journal compaction or a new property policy.
+
+For each already-Known full ObjectId, the first suffix Name emits current
+authoritative state and subsequent covered Names need no output. Existing
+accepted ancestry/reference metadata carries one additional uint64 exclusive
+Name boundary, captured at preparation from the catalog cursor. Only matching
+scheduler acceptance installs it and commits the prepared source cursor. Byte
+deferral, encoding failure, mismatched acceptance and discarded preparation
+install nothing. Later bounded reads may skip history already covered by an
+accepted Name, but cannot skip a later mutation beyond its captured boundary.
+Another peer refreshing the catalog cannot extend a prepared frame's coverage.
+Leave/destroy, full identity replacement and session destruction release this
+metadata; resnapshot failure still requires a fresh baseline. Source reads and
+retry examinations retain their existing hard budgets. The additional marker
+contains no cached value and introduces no new map, wire field or payload queue.
+`tests/NameCoalescingFixture.hpp` covers these contracts.
+
 No per-peer historical property queue is required. For already-known objects,
 the existing journal preserves ordered create/destroy/reparent/tag/attribute and
 other structural barriers; ordinary property values use current authoritative

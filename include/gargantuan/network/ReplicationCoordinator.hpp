@@ -232,6 +232,9 @@ namespace gargantuan::network {
 			std::uint64_t Token = 0;
 		};
 		struct AcceptedParentState {
+			// Exclusive journal boundary represented by accepted current Name.
+			// No value cache; the existing materialization lifetime owns this marker.
+			std::uint64_t NameJournalEnd = 0;
 			ObjectId Parent; // Invalid denotes no parent, not an unknown identity.
 			std::uint64_t JournalEnd = 0; // Parent-only coalescing watermark.
 			// Ownership only, not Known or a materialization epoch. Prepared parents
@@ -319,6 +322,10 @@ namespace gargantuan::network {
 		std::uint64_t RetirementTick = 0;
 		std::size_t RetirementRemaining = MaximumCatalogRetirementExaminationsPerTick;
 		ChangeCursor CatalogCursor;
+		// Only the suffix after every non-Name record can use today's Name.
+		// A conservative global barrier also covers hierarchy/reference effects
+		// on other objects without maintaining a second dependency graph.
+		std::uint64_t NameCoalescingBegin = 0;
 		// Latest committed catalog boundary that changed live identities, ancestry,
 		// or hard-reference edges. Ordinary publication revisions are independent.
 		ChangeCursor DependencyCursor;

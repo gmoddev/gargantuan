@@ -4,6 +4,7 @@
 #include "gargantuan/classes/RemoteFunction.hpp"
 #include "gargantuan/network/RemoteManager.hpp"
 #include "gargantuan/runtime/ChangeJournal.hpp"
+#include "PooledReliableServiceRecoveryContractFixture.hpp"
 #include "../src/network/GameSessionTestAccess.hpp"
 #include "../src/network/GnsServiceDiagnostics.hpp"
 
@@ -499,6 +500,9 @@ void RunReliableGameplayWorkload(
 		const auto Started = Clock::now();
 		const auto Before = Server.GetMetrics();
 		const auto JournalStart = ChangeJournal::Get().CreateCursor(ServerRuntime.DataModel->GetObjectId()).NextSequence;
+		const auto BeforeReplication = detail::GameSessionTestAccess::GetReplicationMetrics(Server);
+		const auto BeforeClient = Client.GetMetrics();
+		const auto BeforeClientReplica = BeforeClient.ClientReplica;
 		std::vector<std::shared_ptr<Part>> Parts;
 		if (Case.StructuralOverload) {
 			for (int Index = 0; Index < 32; ++Index) {
@@ -539,18 +543,104 @@ void RunReliableGameplayWorkload(
 		}
 		const auto DemandEnded = Clock::now();
 		const auto DrainDeadline = DemandEnded + 20s;
+		const auto DemandEndMetrics = Server.GetMetrics();
+		// Qualification-only bounded inventory. Count closed Name segments in
+		// order, and one current Name per object in the barrier-free suffix.
+		// Singleton frame encoding is a conservative complete-message byte bound;
+		// unrelated retained records are charged at the unchanged complete G cap.
+		std::uint64_t RetainedNames = 0, RetainedOther = 0, RetainedWorkBytes = 0;
+		for (const auto &Requirement : detail::GameSessionTestAccess::GetJournalRequirements(Server)) {
+			if (Requirement.Catalog) continue;
+			const auto Read = ChangeJournal::Get().Read(Requirement.Cursor, DefaultChangeJournalCapacity);
+			Check(Read.Status == ChangeReadStatus::Available, "cessation inventory remains in the authoritative journal window");
+			std::set<ObjectId> CurrentNames;
+			for (const auto &Record : Read.Records) {
+				const auto *Name = std::get_if<PropertyUpdatedChange>(&Record.Payload);
+				if (!Name || !Name->Replicated || Name->DeclaringClassSchemaId || Name->PropertyName != "Name" ||
+					!std::holds_alternative<std::string>(Name->Value)) {
+					++RetainedOther; RetainedWorkBytes += MaximumReliableServiceGroupBytes; continue;
+				}
+				WireValue Value = Name->Value;
+				if (Record.Sequence >= Requirement.NameCoalescingBegin) {
+					if (!CurrentNames.insert(Record.Object).second) continue;
+					const auto Live = ObjectRegistry::Get().Lookup(Record.Object);
+					Check(Live && !Live->GetDestroyed(), "retained current Name has live authoritative identity");
+					if (Live) Value = Live->GetName();
+				}
+				ReplicationFrame Frame{ReplicationProtocolVersion, ReplicationMessageKind::Incremental,
+					ReplicationEpoch(1), ReliableReplicationSequence(1)};
+				Frame.Operations.push_back({Frame.Epoch, PropertyReplicationUpdate{Record.Object, "Name", std::move(Value)}});
+				const auto Encoded = EncodeReplicationFrame(Frame);
+				Check(Encoded.has_value(), "retained Name singleton has an exact complete-message encoding");
+				if (Encoded) RetainedWorkBytes += Encoded->size() + ReliableServiceEnvelopeBytes;
+				++RetainedNames;
+			}
+		}
+		const auto ConvergenceAllowance = CandidateReliableService().IsPooled()
+			? std::chrono::microseconds(test::pooled_recovery_contract::ConvergenceBoundUs(RetainedWorkBytes, RetainedWorkBytes))
+			: std::chrono::duration_cast<std::chrono::microseconds>(20s);
+		const auto ConvergenceDeadline = DemandEnded + ConvergenceAllowance;
 		auto Converged = [&]() {
 			return std::all_of(Parts.begin(), Parts.end(), [&](const auto &Object) {
 				return ClientRuntime.DataModel->FindFirstChild(Object->GetName(), true) != nullptr;
 			}) && Server.GetMetrics().JournalBacklogRecords == 0 && Server.GetMetrics().MaterializationBacklog == 0;
 		};
-		while (Client.GetStatus() == GameSessionStatus::Ready &&
-			(PendingRequests || !Events.empty() || ActionStarted || !Converged()) && Clock::now() < DrainDeadline) Step();
+		double ServiceRecoveryMs = -1, ConvergenceMs = -1;
+		double RecoveryRpcMs = 0, RecoveryEventMs = 0, RecoveryActionMs = 0;
+		std::uint64_t JournalAt20Seconds = 0;
+		bool DeadlineObserved = false, RecoveryProbeSent = false;
+		std::size_t RecoveryRpcIndex = 0, RecoveryEventIndex = 0, RecoveryActionIndex = 0;
+		while (Client.GetStatus() == GameSessionStatus::Ready && Clock::now() < ConvergenceDeadline) {
+			const auto Now = Clock::now();
+			const auto Current = Server.GetMetrics();
+			if (ConvergenceMs < 0 && Converged()) ConvergenceMs = std::chrono::duration<double, std::milli>(Now - DemandEnded).count();
+			if (!RecoveryProbeSent && !PendingRequests && Events.empty() && !ActionStarted) {
+				RecoveryRpcIndex = Results.Rpc.size(); RecoveryEventIndex = Results.Event.size(); RecoveryActionIndex = Results.Action.size();
+				RecoveryProbeSent = true;
+				Send(true, 128); Send(false, 128);
+				ActionStarted = Clock::now();
+				(void)ActionService->ApplyAttributeMutation("WorkloadRequest", WireValue(++ActionSequence));
+			}
+			const auto ServerQueue = ServerTransport.GetStatistics(ServerConnections.front());
+			const auto ClientQueue = ClientTransport.GetStatistics(*Connection);
+			if (ServiceRecoveryMs < 0 && RecoveryProbeSent && !PendingRequests && Events.empty() && !ActionStarted &&
+				Results.Rpc.size() > RecoveryRpcIndex && Results.Event.size() > RecoveryEventIndex && Results.Action.size() > RecoveryActionIndex &&
+				!Current.ReliableAdmission.OutstandingBytes && !Current.ReliableAdmission.ActiveDrainGrants &&
+				ServerQueue && ServerQueue->QueuedReliableBytes == std::optional<std::size_t>(0) &&
+				ClientQueue && ClientQueue->QueuedReliableBytes == std::optional<std::size_t>(0)) {
+				ServiceRecoveryMs = std::chrono::duration<double, std::milli>(Now - DemandEnded).count();
+				RecoveryRpcMs = Results.Rpc[RecoveryRpcIndex]; RecoveryEventMs = Results.Event[RecoveryEventIndex];
+				RecoveryActionMs = Results.Action[RecoveryActionIndex];
+			}
+			if (!DeadlineObserved && Now >= DrainDeadline) { DeadlineObserved = true; JournalAt20Seconds = Current.JournalBacklogRecords; }
+			if (ServiceRecoveryMs >= 0 && ConvergenceMs >= 0 && (!Case.StructuralOverload || DeadlineObserved)) break;
+			if (Now >= DrainDeadline && ServiceRecoveryMs < 0) break;
+			Step();
+		}
 		Check(Client.GetStatus() == GameSessionStatus::Ready, "single-peer workload remains connected");
-		Check(PendingRequests == 0 && Events.empty() && !ActionStarted && Converged(),
-			"accepted workload drains and structural state converges within fixed recovery deadline");
+		Check(ServiceRecoveryMs >= 0 && ServiceRecoveryMs <= 20'000 && RecoveryRpcMs <= 500 && RecoveryEventMs <= 250 && RecoveryActionMs <= 250,
+			"service recovers within 20 seconds with cleared debt/grants/queues and qualified gameplay probes");
+		Check(ConvergenceMs >= 0 && ConvergenceMs <= std::chrono::duration<double, std::milli>(ConvergenceAllowance).count(),
+			"structural convergence meets the independent workload-derived bound");
 		const double DrainMs = std::chrono::duration<double, std::milli>(Clock::now() - DemandEnded).count();
 		const auto After = Server.GetMetrics();
+		const auto AfterReplication = detail::GameSessionTestAccess::GetReplicationMetrics(Server);
+		const auto AfterClientReplica = Client.GetMetrics().ClientReplica;
+		std::cout << "[Qualification:Recovery] case=" << Case.Name << " service_recovery_ms=" << ServiceRecoveryMs
+			<< " convergence_ms=" << ConvergenceMs << " convergence_bound_ms=" << std::chrono::duration<double, std::milli>(ConvergenceAllowance).count()
+			<< " journal_at_cessation=" << DemandEndMetrics.JournalBacklogRecords << " journal_at_20s=" << (DeadlineObserved ? std::to_string(JournalAt20Seconds) : "not-measured")
+			<< " retained_name_upper=" << RetainedNames << " retained_other_upper=" << RetainedOther << " retained_complete_bytes_upper=" << RetainedWorkBytes
+			<< " emitted_transitions=" << AfterClientReplica.OperationsApplied - BeforeClientReplica.OperationsApplied
+			<< " emitted_frames=" << AfterClientReplica.FramesApplied - BeforeClientReplica.FramesApplied
+			<< " coalesced_records=" << AfterReplication.OperationsCoalesced - BeforeReplication.OperationsCoalesced
+			<< " recovery_rpc_ms=" << RecoveryRpcMs << " recovery_event_ms=" << RecoveryEventMs << " recovery_action_ms=" << RecoveryActionMs
+			<< " debt_high=" << After.ReliableAdmission.OutstandingHighWater << " grants_high=" << After.ReliableAdmission.DrainGrantsHighWater
+			<< " admission_wait_us=" << After.ReliableAdmission.MaximumAdmissionWaitMicroseconds
+			<< " planning_gap_ticks=" << After.PlanningMaximumServiceGapTicks
+			<< " materialization_cpu_ns=" << After.MaterializationCpuNanoseconds - Before.MaterializationCpuNanoseconds
+			<< " client_decode_ns=" << Client.GetMetrics().ClientStructuralDecodeNanoseconds - BeforeClient.ClientStructuralDecodeNanoseconds
+			<< " client_apply_ns=" << Client.GetMetrics().ClientStructuralApplyNanoseconds - BeforeClient.ClientStructuralApplyNanoseconds
+			<< " client_remote_gap_ns=" << Client.GetMetrics().ClientRemoteMaximumServiceGapNanoseconds << '\n';
 		const auto JournalEnd = ChangeJournal::Get().CreateCursor(ServerRuntime.DataModel->GetObjectId()).NextSequence;
 		const double Seconds = std::chrono::duration<double>(DemandEnded - Started).count();
 		const double P95 = Percentile(Results.Rpc, .95), P99 = Percentile(Results.Rpc, .99);

@@ -267,6 +267,7 @@ namespace gargantuan::network {
 		if (!this->SourceRoot) return;
 		auto SnapshotValue = CaptureSnapshot(this->SourceRoot);
 		CatalogCursor = SnapshotValue.Cursor;
+		NameCoalescingBegin = CatalogCursor.NextSequence;
 		DependencyCursor = CatalogCursor;
 		PlanningCursor = CatalogCursor;
 		WorldGeneration = SnapshotValue.Cursor.Scope;
@@ -380,6 +381,7 @@ namespace gargantuan::network {
 					Metrics.StructuralTemplateBytes = ReplacementBytes;
 					Metrics.CatalogReferenceIndexBytes = ReplacementIndexBytes;
 					CatalogCursor = SnapshotValue.Cursor;
+					NameCoalescingBegin = CatalogCursor.NextSequence;
 					DependencyCursor = CatalogCursor;
 					PlanningCursor = CatalogCursor;
 					Metrics.CatalogObjects = Catalog.size();
@@ -392,8 +394,12 @@ namespace gargantuan::network {
 			}
 			try {
 				std::map<ObjectId, std::uint64_t> Touched;
+				auto CandidateNameBegin = NameCoalescingBegin;
 				std::set<ObjectId> PendingRetired;
 				for (const auto &Record : Read.Records) {
+					const auto *Name = std::get_if<PropertyUpdatedChange>(&Record.Payload);
+					if (!Name || !Name->Replicated || Name->DeclaringClassSchemaId || Name->PropertyName != "Name" ||
+						!std::holds_alternative<std::string>(Name->Value)) CandidateNameBegin = Record.Sequence + 1;
 					const bool AffectsTemplate = std::visit(
 						[](const auto &Change) {
 							using Type = std::decay_t<decltype(Change)>;
@@ -475,6 +481,7 @@ namespace gargantuan::network {
 				Metrics.CatalogRetiredHighWater = std::max<std::uint64_t>(
 					Metrics.CatalogRetiredHighWater, RetiredObjects.size());
 				if (DependenciesChanged) DependencyCursor = Read.Cursor;
+				NameCoalescingBegin = CandidateNameBegin;
 				if (DependenciesChanged || ReferencesChanged) PlanningCursor = Read.Cursor;
 				if (!Read.Records.empty()) {
 					runtime_detail::CountWork(runtime_detail::WorkCounter::CatalogBatches);
@@ -1744,6 +1751,7 @@ namespace gargantuan::network {
 		Frame.Operations.reserve(std::min(MaximumTransitions, Read.Records.size()));
 		auto ProcessedCursor = Peer->second.JournalCursor;
 		std::set<ObjectId> PublishedThisFrame;
+		std::set<ObjectId> CurrentNames;
 		std::set<ObjectId> DestroyedThisFrame;
 		std::set<ObjectId> BatchPublishObjects;
 		for (const auto &Record : Read.Records)
@@ -1751,6 +1759,19 @@ namespace gargantuan::network {
 				(!PolicyManaged || ReadView().RelevantObjects.contains(Record.Object)))
 				BatchPublishObjects.insert(Record.Object);
 		for (const auto &Record : Read.Records) {
+			const auto *Name = std::get_if<PropertyUpdatedChange>(&Record.Payload);
+			const bool NativeName = Name && Name->Replicated && !Name->DeclaringClassSchemaId && Name->PropertyName == "Name" &&
+				std::holds_alternative<std::string>(Name->Value);
+			const auto AcceptedName = Peer->second.AcceptedParents.find(Record.Object);
+			if (NativeName && ReadView().Knows(Record.Object) &&
+				(CurrentNames.contains(Record.Object) || (AcceptedName != Peer->second.AcceptedParents.end() &&
+					Record.Sequence < AcceptedName->second.NameJournalEnd))) {
+				// This record is covered by an accepted Name, or by an output in
+				// this candidate. Only the latter's eventual acceptance commits it.
+				ProcessedCursor.NextSequence = Record.Sequence + 1;
+				++CandidateMetrics.OperationsCoalesced;
+				continue;
+			}
 			if (Frame.Operations.size() == MaximumTransitions) break;
 			ProcessedCursor.NextSequence = Record.Sequence + 1;
 			const auto Published = Peer->second.PublicationJournalEnds.find(Record.Object);
@@ -1823,6 +1844,11 @@ namespace gargantuan::network {
 							}
 							auto Value = Change.Value;
 							auto CurrentObject = Catalog.find(Record.Object);
+							if (NativeName && Record.Sequence >= NameCoalescingBegin && CurrentObject != Catalog.end() &&
+								!RetiredObjects.contains(Record.Object) && AcceptedName != Peer->second.AcceptedParents.end()) {
+								Value = CurrentObject->second->Publication.Name;
+								CurrentNames.insert(Record.Object);
+							}
 							if (!Change.DeclaringClassSchemaId && CurrentObject != Catalog.end()) {
 								auto CurrentValue = CurrentObject->second->Publication.Properties.find(
 									Change.PropertyName
@@ -1960,6 +1986,11 @@ namespace gargantuan::network {
 		Metrics = CandidateMetrics;
 		const auto OperationCount = Frame.Operations.size();
 		auto AcceptedParents = CaptureAcceptedParents(Peer->second, Frame, ProcessedCursor.NextSequence);
+		for (const auto Object : CurrentNames) {
+			auto [Entry, Inserted] = AcceptedParents.try_emplace(Object, Peer->second.AcceptedParents.at(Object));
+			(void)Inserted;
+			Entry->second.NameJournalEnd = CatalogCursor.NextSequence;
+		}
 		if (Peer->second.ExplicitSchedulerCommit) {
 			Peer->second.PreparedCommit = PreparedStructuralCommit{
 				.Sequence = Frame.Sequence,

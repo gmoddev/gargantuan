@@ -6,7 +6,18 @@ last_verified: 2026-09-14
 
 # Foundation 3L.3 diagnostic validation ledger
 
-## Production pooled recovery stop (2026-09-14)
+## Known-object Name qualification in progress (2026-09-14)
+
+The [production integration receipt](PooledReliableServiceIntegration3L.md#known-object-name-correction-2026-09-14)
+records the narrow Name correction over `8c41dd2ec`. Four affected MSVC suites
+pass, including acceptance/barrier/read-budget/resnapshot regressions. Initial
+canonical structural/mixed overload now converges in 1.629/1.669 seconds with
+zero journal remainder. Expanded recovery reporting and final-source closure
+remain pending; production pooled service is not yet qualified. Physical
+qualification is not measured, KI-006 remains open, Foundation 3L remains
+**B — PARTIALLY READY**, and 3M remains **BLOCKED / NOT STARTED**.
+
+## Historical production pooled recovery stop (2026-09-14)
 
 The [integration checkpoint](PooledReliableServiceIntegration3L.md#production-recovery-conflict-2026-09-14)
 implements the explicit pooled profile, bounded admission, exact attributed

@@ -7,6 +7,7 @@
 
 namespace gargantuan::network {
 	class GameSession;
+	struct ReplicationMetrics;
 }
 
 namespace gargantuan::network::detail {
@@ -15,6 +16,7 @@ namespace gargantuan::network::detail {
 		ConnectionId Connection;
 		bool Catalog = false;
 		bool PreparedCommit = false;
+		std::uint64_t NameCoalescingBegin = 0;
 	};
 
 	enum class GameSessionFailurePoint : std::uint8_t {
@@ -43,5 +45,6 @@ namespace gargantuan::network::detail {
 		[[nodiscard]] static std::vector<ConnectionId> GetConnections(const GameSession &Session);
 		// Actual raw-history readers, not dependency/publication revision stamps.
 		[[nodiscard]] static std::vector<JournalRequirement> GetJournalRequirements(const GameSession &Session);
+		[[nodiscard]] static ReplicationMetrics GetReplicationMetrics(const GameSession &Session);
 	};
 }

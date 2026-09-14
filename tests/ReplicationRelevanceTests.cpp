@@ -15,6 +15,7 @@
 #include "../src/runtime/RuntimeWorkDiagnostics.hpp"
 #include "../src/network/PlanningLookup.hpp"
 #include "ReliableEnvelopeContractFixture.hpp"
+#include "NameCoalescingFixture.hpp"
 
 #include <algorithm>
 #include <array>
@@ -618,6 +619,7 @@ namespace {
 			Replica.Resolve(Visible->GetObjectId())->GetName() == "AfterHiddenHistory",
 			"skipped history drains across bounded calls without losing the later relevant mutation");
 		for (std::size_t Index = 0; Index < 30; ++Index) Visible->SetName(std::string(256, 'x') + std::to_string(Index));
+		(void)Visible->ApplyAttributeMutation("RetryBarrier", WireValue(true));
 		bool Retried = false;
 		for (std::size_t Tick = 0; Tick < 64; ++Tick) {
 			auto Produced = Coordinator.ProduceIncremental(Connection, 32, 512, 31);
@@ -1475,6 +1477,7 @@ int main() {
 		test::TestReliableEnvelopeProfileModel();
 		test::TestAtomicGroupDistributions();
 		test::TestPreAcceptanceByteDeferral();
+		test::TestNameCoalescing();
 	} catch (const std::exception &Error) {
 		std::cerr << "[Network:EnvelopeContract] " << Error.what() << '\n';
 		++Failures;

@@ -38,7 +38,7 @@ below means the entire encoded GRMT frame, including its 52-byte header.
 | One peer | The per-peer bound; aggregate outstanding at most four |
 | Host/path assumption | 60 Hz service, no unbounded/yielding handler work; <=5 ms handler completion; combined path/host/client nonqueue allowance <=100 ms; client backend remains 256 KiB/s, server R=8 MiB/s and backend=16 MiB/s |
 | Dependencies | Qualification begins only with published Remote identities and already materialized argument references. New dependent-object waits are measured from invocation and are outside this ordinary latency promise until separately qualified. |
-| Recovery deadline | After 480 offered service opportunities (at least eight seconds; longer under host saturation), accepted traffic and pending structural work must drain/converge within 20 seconds; subsequent ordinary probes must satisfy unchanged latency targets |
+| Recovery deadline | After 480 offered service opportunities (at least eight seconds; longer under host saturation), ordinary service returns within 20 seconds and subsequent ordinary probes satisfy unchanged latency targets. For pooled service, complete structural convergence uses the independent [retained-work bound](PooledReliableServiceRecoveryContract3L.md#structural-convergence). |
 
 Idle peers are not free: incidental reliable state/control bytes and broadcast
 recipients count against the aggregate limits. Active fraction alone does not

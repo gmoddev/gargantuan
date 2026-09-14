@@ -1,5 +1,5 @@
 ---
-status: production-checkpoint-stopped-recovery-implementation-required
+status: production-coalescing-qualification-in-progress
 owner: runtime-networking
 last_verified: 2026-09-14
 related_code:
@@ -13,11 +13,68 @@ related_adrs:
   - ../FutureArchitecture/Foundation3LServiceCoverageDecision.md
 ---
 
-# Foundation 3L pooled production integration stop receipt
+# Foundation 3L pooled production integration receipt
 
 ## Current disposition
 
-**STOPPED / NOT QUALIFIED.** The isolated production integration based on
+**QUALIFICATION IN PROGRESS / NOT YET QUALIFIED.** The Name correction is based
+on published `8c41dd2ec5388ddd73648ae0b44613071da7df22` and retains the reconciled
+service-recovery/convergence distinction. No merge, physical 32-client run or
+Foundation 3M work is authorized by this qualification receipt.
+
+### Known-object Name correction (2026-09-14)
+
+The [3J journal contract](ReplicationFoundation3J.md#journal-mutation-and-cancellation)
+now coalesces native Name only in the current catalog's suffix after every
+non-Name barrier. It reads `Publication.Name`, not the generic property map or
+a separately cached value. Existing per-Known-object accepted metadata captures
+the exclusive source boundary; only scheduler acceptance installs coverage and
+commits source progress. Failed/deferred/discarded preparation commits nothing.
+Closed segments, lifecycle, hierarchy, references/nil, Attributes/tags and
+resnapshot semantics retain their existing ordering. The conservative global
+barrier may forgo otherwise safe optimization under unrelated structural churn.
+
+The first MSVC Release run passes all four affected suites (networking contracts,
+scheduler, relevance including the focused Name fixture, and legacy GNS session;
+10.88 seconds). The first canonical pooled run passes the existing fixture:
+
+| Case | Previous journal remainder at 20 s | New final convergence after demand | New final journal remainder | New accepted structural bytes |
+| --- | ---: | ---: | ---: | ---: |
+| Structural overload | 7,248 | 1,629.12 ms | 0 | 4,342,072 |
+| Mixed overload | 7,248 | 1,668.88 ms | 0 | 4,342,072 |
+
+The expanded MSVC run passes the four suites again (9.28 seconds) and all eight
+pooled workload cases. Structural/mixed overload respectively recover ordinary
+service in 113.403/1,120.29 ms and converge in 1,635.78/1,709.31 ms against a
+20,847.1-ms retained-work bound. Each retains 2,016 raw records at cessation,
+conservatively represented by 32 current Names / 789,772 complete-message bytes
+(singleton framing upper bound), and has zero journal records at 20 seconds.
+Each emits 208 total transitions (32 materializations plus 176 Name updates) in
+12 frames and coalesces 7,504 Name records. Recovery RPC/Event/action probes are
+39.147/39.134/39.143 ms and 37.174/37.166/37.167 ms. The full run conserves
+8,727,506 accepted/retired structural bytes, terminal release and outstanding
+debt zero, with one grant and 393,866-byte debt high-water.
+
+The general cessation inventory is explicitly an upper bound: closed Name
+segments keep historical values, suffix Names use current authoritative state,
+singleton framing overestimates batching, and unrelated records are charged G.
+It is measurement-only scratch bounded by the existing journal window. The
+20-second observation keeps the fixture running after convergence; `drain_ms`
+therefore measures observation duration, while `convergence_ms` is the first
+actual convergence. Maximum Remote interarrival gaps include intentional idle
+time and are not the eligible-grant fairness metric. Qualified workload targets
+are unchanged; deliberate mixed overload can exceed ordinary gameplay limits,
+but its subsequent recovery probes must satisfy them.
+
+Linux sanitizers, full GNS, Local/Node closure and hosted CI remain pending.
+These passing subsets are not final production qualification claims.
+The raw workload remains 480 opportunities times 16 writes, alternating over
+**32** Parts: 7,680 Name records / 180 MiB of value history. Its 384 creation
+records bring the reported journal production to 8,064 records per case.
+
+### Historical production stop
+
+The isolated production integration based on
 `222c5beb318552a9cc07ec043c5b34581d64980f` reaches exact attributed retirement,
 bounded admission and real-GNS gameplay, but fails the former structural overload
 recovery fixture. This checkpoint is not a production deployment recommendation.

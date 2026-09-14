@@ -205,8 +205,11 @@ inline void TestPreAcceptanceByteDeferral() {
 	// encoder's absolute ceiling without committing any discarded prefix.
 	for (int Index = 0; Index < 32; ++Index)
 		Child->SetName(std::to_string(Index) + std::string(24 * 1024, 'j'));
+	// Close this Name segment: its historical operations must still exercise
+	// the byte retry, independently of current-state suffix coalescing.
+	(void)Child->ApplyAttributeMutation("RetryBarrier", WireValue(true));
 	std::size_t JournalOperations = 0;
-	for (int Attempt = 0; Attempt < 8 && JournalOperations < 32; ++Attempt) {
+	for (int Attempt = 0; Attempt < 8 && JournalOperations < 33; ++Attempt) {
 		auto Batch = Fixture.Coordinator.ProduceIncremental(Fixture.Connection, 512, 524256, 2048, 524256);
 		EnvelopeRequire(Batch.Frame && Batch.EncodedFrame.size() <= 524256 && Batch.JournalRecordsExamined <= 2048,
 			"oversized accumulated journal retries within unchanged byte and read caps");
@@ -215,7 +218,7 @@ inline void TestPreAcceptanceByteDeferral() {
 			Fixture.Coordinator.CommitSchedulerAcceptance(Fixture.Connection, Batch.Frame->Sequence).Succeeded(),
 			"journal retry preserves ordered acceptance");
 	}
-	EnvelopeRequire(JournalOperations == 32 && Fixture.Replica.Resolve(Child->GetObjectId())->GetName() == Child->GetName(),
+	EnvelopeRequire(JournalOperations == 33 && Fixture.Replica.Resolve(Child->GetObjectId())->GetName() == Child->GetName(),
 		"every accumulated property operation applies exactly once in order");
 
 	auto Obsolete = std::make_shared<Folder>(); Obsolete->SetParent(Fixture.World);

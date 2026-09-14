@@ -192,9 +192,12 @@ from current-state replication that may collapse:
 
 `Name` is a narrow special case. Snapshot/materialization stores it in the
 separate `SnapshotObject::Name` / `PublishReplication::Name` field and explicitly
-excludes `Name` from the generic native `Properties` map. Consequently the current
-known-object journal path does **not** perform the generic current-catalog value
-substitution for `Name`; it replays each retained `Change.Value`.
+excludes `Name` from the generic native `Properties` map. At the stopped
+`d2742796f` checkpoint the known-object journal path did **not** perform the
+generic current-catalog value substitution for `Name`; it replayed each retained
+`Change.Value`. The subsequent [Name correction](ReplicationFoundation3J.md#journal-mutation-and-cancellation)
+reads the separate current publication field only in the suffix after every
+non-Name barrier, with accepted source coverage and unchanged bounded reads.
 
 That does not make every historical Name mutation semantically necessary. GRPL
 is a state-projection boundary: `ChangeJournal.Sequence` never crosses it, a
@@ -207,7 +210,8 @@ by the final current Name without creating a new authority or weakening an
 accepted ordering dependency.
 
 The stopped canonical workload exposes that special-case implementation gap. It
-mutates only `Name` on 16 already materialized Parts, so production serializes
+mutates only `Name`, alternating two cohorts of 16 already materialized Parts
+(32 distinct objects), so the stopped production source serialized
 thousands of historical scalar values even though semantic convergence requires
 only the final Name for each live object.
 
@@ -231,7 +235,7 @@ The workload is:
 
 ```text
 480 offered opportunities
-* 16 already-known objects
+* 16 already-known object updates (alternating across 32 Parts)
 * 24 KiB Name value
 = 7,680 journal records
 = 180 MiB raw value history
@@ -355,9 +359,10 @@ one-grant-per-peer rule and become an unbounded FIFO prefix.
 - the conservative hard retained-work ceilings are 40 GiB per peer and 768 GiB
   aggregate;
 - the resulting workload-derived hard convergence envelope exceeds 20 seconds;
-- one final Name update for each of the 16 canonical objects is encoded and
+- one final Name update for each object of a 16-object canonical cohort is encoded and
   decoded through the real GRPL codec with exact object identity/property/value,
-  and must fit one accepted complete group;
+  and must fit one accepted complete group; this codec/model case covers one
+  cohort, while production's two alternating cohorts require up to 32 final Names;
 - the existing G + 20 KiB gameplay follower still fits the funded 50-ms queue
   window;
 - repeated bounded canonical overload/recovery cycles return semantic retained
@@ -372,7 +377,7 @@ The production pooled admission/debt work in `d2742796f` is not rejected by this
 reconciliation. Exact retirement, generation cleanup, debt conservation, grant
 bounds and gameplay evidence remain applicable at their measured scope.
 
-The next implementation change is narrow: make known-object coalescible scalar
+The subsequent implementation change is narrow: make known-object coalescible scalar
 property history, including the special `Name` field, collapse to current
 DataModel/catalog state within existing ordered barriers instead of serializing
 every superseded mutation. Preserve complete-group atomicity and
