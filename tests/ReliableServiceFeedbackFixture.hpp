@@ -2,6 +2,7 @@
 #include "../src/network/ReliableServiceFeedback.hpp"
 #include "../cmake/gns/ReliableServiceFeedback.hpp"
 #include <steam/isteamnetworkingutils.h>
+#include <steam/steamnetworkingsockets.h>
 #include <stdexcept>
 
 // Included after the existing real-transport pair fixture. Shares its bounded
@@ -61,6 +62,64 @@ inline Feedback Complete(PairFixture &Pair, std::uint64_t ExpectedPayload) {
 		!Final.PendingReliableStreamBytes && !Final.SentUnackedReliableStreamBytes,
 		"complete ACK retirement matches exact submitted payload plus GGNS envelope");
 	return Final;
+}
+
+struct NativePair {
+	// Keep Gargantuan's normal adapter owner alive so the shared GNS library and
+	// service thread are initialized through the production path.
+	OwnedPair Runtime;
+	ISteamNetworkingSockets *Sockets = SteamNetworkingSockets();
+	HSteamNetConnection Sender = k_HSteamNetConnection_Invalid;
+	HSteamNetConnection Receiver = k_HSteamNetConnection_Invalid;
+	NativePair() {
+		Require(Sockets != nullptr, "native GNS interface available");
+		Require(Sockets->CreateSocketPair(&Sender, &Receiver, true, nullptr, nullptr),
+			"native network-loopback socket pair created");
+	}
+	~NativePair() {
+		if (Sockets && Sender != k_HSteamNetConnection_Invalid)
+			(void)Sockets->CloseConnection(Sender, 0, "attribution test cleanup", false);
+		if (Sockets && Receiver != k_HSteamNetConnection_Invalid)
+			(void)Sockets->CloseConnection(Receiver, 0, "attribution test cleanup", false);
+	}
+};
+
+inline GargantuanReliableServiceSnapshot NativeSample(NativePair &Pair) {
+	GargantuanReliableServiceSnapshot Result;
+	Require(SteamNetworkingSocketsLib::GargantuanGetReliableServiceFeedback(
+		Pair.Sockets, static_cast<std::uint32_t>(Pair.Sender), Result), "native attributed feedback available");
+	return Result;
+}
+
+inline std::int64_t NativeSend(NativePair &Pair, std::size_t Bytes, std::uint64_t Token = 0) {
+	std::vector<std::byte> Payload(Bytes, std::byte{0x5a});
+	if (Token) Require(SteamNetworkingSocketsLib::GargantuanBeginReliableRetirementAttribution(Token),
+		"attribution scope begins");
+	std::int64_t MessageNumber = -1;
+	const auto Result = Pair.Sockets->SendMessageToConnection(
+		Pair.Sender, Payload.data(), static_cast<std::uint32_t>(Payload.size()),
+		k_nSteamNetworkingSend_Reliable, &MessageNumber);
+	if (Token) SteamNetworkingSocketsLib::GargantuanEndReliableRetirementAttribution();
+	Require(Result == k_EResultOK && MessageNumber > 0, "native reliable message accepted with identity");
+	return MessageNumber;
+}
+
+inline GargantuanReliableServiceSnapshot WaitNativeRetirement(NativePair &Pair, std::uint64_t Sequence) {
+	GargantuanReliableServiceSnapshot Current;
+	const auto Deadline = std::chrono::steady_clock::now() + 8s;
+	while (std::chrono::steady_clock::now() < Deadline) {
+		Pair.Sockets->RunCallbacks();
+		for (;;) {
+			SteamNetworkingMessage_t *MessageValue = nullptr;
+			const auto Count = Pair.Sockets->ReceiveMessagesOnConnection(Pair.Receiver, &MessageValue, 1);
+			if (Count <= 0) break;
+			if (MessageValue) MessageValue->Release();
+		}
+		Current = NativeSample(Pair);
+		if (Current.Counters.AttributedRetirementSequence >= Sequence) return Current;
+		std::this_thread::sleep_for(1ms);
+	}
+	return NativeSample(Pair);
 }
 
 inline bool Run() {
@@ -162,6 +221,102 @@ inline bool Run() {
 			!New.ReliablePayloadBytesAcked && !New.ReliableStreamBytesRetransmitted &&
 			!Access::Observe(*Pair.Server, OldId), "replacement has zero counters and rejects old feedback identity");
 	});
+	Case("MixedRetirementAttribution", [] {
+		std::size_t AttributionPassed = 0;
+		auto RetirementCase = [&](const char *Name, auto Body) {
+			Body(); ++AttributionPassed;
+			std::cout << "[Network:ReliableAttribution] " << Name << "=PASS\n";
+		};
+		auto Retire = [](GargantuanReliableServiceCounters &Value, std::int64_t Message, int Payload) {
+			Value.AckMessage(Message, Payload + 3, 3);
+		};
+		RetirementCase("StructuralThenGameplay_GameplayRetiresFirst", [&] {
+			GargantuanReliableServiceCounters Value; Value.AttributeMessage(1, 10);
+			Retire(Value, 11, 100); Require(!Value.AttributedRetirementSequence && Value.ActiveAttributedRetirementToken == 1, "gameplay cannot retire structural A");
+			Retire(Value, 10, 512); Require(Value.AttributedRetirementSequence == 1 && Value.LastAttributedRetirementToken == 1 && Value.LastAttributedRetiredPayloadBytes == 512, "structural A retires itself");
+		});
+		RetirementCase("GameplayThenStructural_StructuralRetiresFirst", [&] {
+			GargantuanReliableServiceCounters Value; Value.AttributeMessage(2, 21);
+			Retire(Value, 21, 256); Retire(Value, 20, 64);
+			Require(Value.AttributedRetirementSequence == 1 && Value.LastAttributedRetirementToken == 2 && Value.LastAttributedRetirementMessageNumber == 21, "later structural B owns its own retirement");
+		});
+		RetirementCase("AlternatingStructuralGameplayControl", [&] {
+			GargantuanReliableServiceCounters Value; Value.AttributeMessage(3, 30); Retire(Value, 31, 80); Retire(Value, 32, 40);
+			Require(!Value.AttributedRetirementSequence, "ordinary classes do not advance structural retirement"); Retire(Value, 30, 300);
+			Value.AttributeMessage(4, 33); Retire(Value, 34, 90); Retire(Value, 33, 301);
+			Require(Value.AttributedRetirementSequence == 2 && Value.LastAttributedRetirementToken == 4, "alternating classes remain isolated");
+		});
+		RetirementCase("TwoStructuralGrantsWithGameplayBetween", [&] {
+			GargantuanReliableServiceCounters Value; Value.AttributeMessage(5, 40); Retire(Value, 40, 400); Retire(Value, 41, 75);
+			Value.AttributeMessage(6, 42); Retire(Value, 42, 401);
+			Require(Value.AttributedRetirementSequence == 2 && Value.LastAttributedRetirementToken == 6 && Value.ReliablePayloadBytesAcked == 876, "sequential grant ownership is exact");
+		});
+		RetirementCase("StructuralRetransmission", [&] {
+			GargantuanReliableServiceCounters Value; Value.AttributeMessage(7, 50); Value.FirstSend(512); Value.Retransmit(512); Value.Retransmit(512); Value.AckSegment(512, false); Retire(Value, 50, 500);
+			Require(Value.AttributedRetirementSequence == 1 && Value.LastAttributedRetiredPayloadBytes == 500 && Value.ReliableStreamBytesRetransmitted == 1024, "structural retry increases physical cost only");
+		});
+		RetirementCase("GameplayRetransmissionIgnored", [&] {
+			GargantuanReliableServiceCounters Value; Value.AttributeMessage(8, 60); Value.Retransmit(300); Retire(Value, 61, 250);
+			Require(!Value.AttributedRetirementSequence && Value.ActiveAttributedRetirementToken == 8 && Value.ReliableStreamBytesRetransmitted == 300, "gameplay retry cannot manufacture structural drain"); Retire(Value, 60, 260);
+		});
+		RetirementCase("DelayedAck", [&] {
+			GargantuanReliableServiceCounters Value; Value.AttributeMessage(9, 70);
+			Require(Value.ActiveAttributedRetirementToken == 9 && !Value.AttributedRetirementSequence, "time without retirement retains active debt"); Retire(Value, 70, 270);
+		});
+		RetirementCase("DuplicateAck", [&] {
+			GargantuanReliableServiceCounters Value; Value.AttributeMessage(10, 80); Value.FirstSend(100); Value.AckSegment(100, false); Value.AckSegment(100, true); Retire(Value, 80, 280);
+			Require(Value.AttributedRetirementSequence == 1 && Value.UniqueReliableStreamBytesAcked == 100, "duplicate segment ACK does not duplicate logical retirement");
+		});
+		RetirementCase("MultiSegmentStructural", [&] {
+			GargantuanReliableServiceCounters Value; Value.AttributeMessage(11, 90); Value.FirstSend(200); Value.FirstSend(300); Value.AckSegment(200, false);
+			Require(!Value.AttributedRetirementSequence, "partial segment ACK cannot retire message"); Value.AckSegment(300, false); Retire(Value, 90, 490);
+			Require(Value.AttributedRetirementSequence == 1 && Value.LastAttributedRetiredPayloadBytes == 490, "final message reference retires once after all segments");
+		});
+		RetirementCase("SharedPacketMessageIsolation", [&] {
+			GargantuanReliableServiceCounters Value; Value.AttributeMessage(12, 100); Value.FirstSend(200); Value.AckSegment(200, false);
+			Retire(Value, 101, 50); Require(!Value.AttributedRetirementSequence, "co-processed unrelated message cannot retire attributed message"); Retire(Value, 100, 150);
+		});
+		RetirementCase("MixedOutstandingTerminalTeardown", [&] {
+			GargantuanReliableServiceCounters Value; Value.AttributeMessage(13, 110); Retire(Value, 111, 60); Value.Purged = true;
+			Require(!Value.AttributedRetirementSequence && Value.ActiveAttributedRetirementToken == 13 && Value.Purged, "terminal purge retains unretired structural identity for terminal release");
+		});
+		RetirementCase("ReconnectGenerationIsolation", [&] {
+			GargantuanReliableServiceCounters Old; Old.AttributeMessage(14, 120); GargantuanReliableServiceCounters Fresh;
+			Retire(Old, 120, 320); Require(Old.AttributedRetirementSequence == 1 && !Fresh.AttributedRetirementSequence && !Fresh.ActiveAttributedRetirementToken, "old generation retirement cannot mutate fresh sender state");
+		});
+		Require(AttributionPassed == 12, "complete mixed-retirement attribution matrix passed");
+	});
+	Case("RealGnsAttributedRetirement", [] {
+		NativePair Pair;
+		constexpr std::uint64_t Token = 41;
+		const auto MessageNumber = NativeSend(Pair, 48 * 1024, Token);
+		const auto Active = NativeSample(Pair);
+		Require(Active.Counters.ActiveAttributedRetirementToken == Token &&
+			Active.Counters.ActiveAttributedMessageNumber == static_cast<std::uint64_t>(MessageNumber) &&
+			!Active.Counters.AttributedRetirementSequence, "real GNS send binds token to assigned message number before service");
+		const auto Retired = WaitNativeRetirement(Pair, 1);
+		Require(Retired.Counters.AttributedRetirementSequence == 1 &&
+			Retired.Counters.LastAttributedRetirementToken == Token &&
+			Retired.Counters.LastAttributedRetirementMessageNumber == static_cast<std::uint64_t>(MessageNumber) &&
+			Retired.Counters.LastAttributedRetiredPayloadBytes == 48 * 1024 &&
+			!Retired.Counters.ActiveAttributedRetirementToken,
+			"real GNS final-reference retirement reports exact sender-local identity and payload once");
+		const auto BaselineSequence = Retired.Counters.AttributedRetirementSequence;
+		(void)NativeSend(Pair, 4 * 1024);
+		const auto Deadline = std::chrono::steady_clock::now() + 2s;
+		GargantuanReliableServiceSnapshot After = Retired;
+		while (std::chrono::steady_clock::now() < Deadline) {
+			Pair.Sockets->RunCallbacks();
+			SteamNetworkingMessage_t *MessageValue = nullptr;
+			if (Pair.Sockets->ReceiveMessagesOnConnection(Pair.Receiver, &MessageValue, 1) > 0 && MessageValue) MessageValue->Release();
+			After = NativeSample(Pair);
+			if (!After.PendingReliableStreamBytes && !After.SentUnackedReliableStreamBytes) break;
+			std::this_thread::sleep_for(1ms);
+		}
+		Require(After.Counters.AttributedRetirementSequence == BaselineSequence &&
+			After.Counters.LastAttributedRetirementToken == Token,
+			"unattributed reliable traffic cannot overwrite structural retirement identity");
+	});
 	Case("CheckedCounterExhaustion", [] {
 		const auto Maximum = std::numeric_limits<std::uint64_t>::max();
 		GargantuanReliableServiceCounters First;
@@ -172,13 +327,22 @@ inline bool Run() {
 		Retry.ReliableStreamBytesRetransmitted = Maximum; Retry.Retransmit(1);
 		Require(Retry.Invalid && Retry.ReliableStreamBytesRetransmitted == Maximum, "retry overflow invalidates");
 		GargantuanReliableServiceCounters Payload;
-		Payload.ReliablePayloadBytesAcked = Maximum; Payload.AckMessage(33, 1);
+		Payload.ReliablePayloadBytesAcked = Maximum; Payload.AckMessage(1, 33, 1);
 		Require(Payload.Invalid && Payload.ReliablePayloadBytesAcked == Maximum, "payload overflow invalidates");
 		GargantuanReliableServiceCounters Ack;
 		Ack.FirstSend(100); Ack.AckSegment(100, false); Ack.AckSegment(100, true);
 		Require(!Ack.Invalid && Ack.UniqueReliableStreamBytesAcked == 100, "duplicate native ACK transition does not double count");
 		Ack.AckSegment(1, false); Require(Ack.Invalid, "ACK cannot exceed unique first-send");
 		GargantuanReliableServiceCounters Negative; Negative.FirstSend(-1); Require(Negative.Invalid, "negative native range fails conservatively");
+		GargantuanReliableServiceCounters TokenReuse; TokenReuse.AttributeMessage(10, 1); TokenReuse.AckMessage(1, 10, 0); TokenReuse.AttributeMessage(10, 2);
+		Require(TokenReuse.Invalid, "attribution token cannot alias within one sender generation");
+		GargantuanReliableServiceCounters SequenceOverflow; SequenceOverflow.AttributedRetirementSequence = Maximum; SequenceOverflow.AttributeMessage(11, 3);
+		Require(SequenceOverflow.Invalid && !SequenceOverflow.ActiveAttributedRetirementToken, "retirement sequence exhaustion fails before a new attributed obligation");
+		GargantuanReliableServiceCounters Concurrent; Concurrent.AttributeMessage(12, 4); Concurrent.AttributeMessage(13, 5);
+		Require(Concurrent.Invalid, "more than one active attributed obligation per connection fails closed");
+		Require(SteamNetworkingSocketsLib::GargantuanBeginReliableRetirementAttribution(20), "thread-local attribution token accepted");
+		Require(!SteamNetworkingSocketsLib::GargantuanBeginReliableRetirementAttribution(21), "nested attribution scope rejected");
+		SteamNetworkingSocketsLib::GargantuanEndReliableRetirementAttribution();
 		GargantuanReliableServiceSnapshot Native;
 		const auto Before = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
 		SteamNetworkingSocketsLib::GargantuanCopyReliableServiceFeedback(First, 0, 0, 0, Native);
@@ -194,12 +358,16 @@ inline bool Run() {
 		for (std::size_t Index = 0; Index < Count; ++Index) (void)Sample(Pair);
 		const auto Elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - Start).count();
 		Monotonic(Before, Sample(Pair));
+		constexpr std::size_t AttributionScalarBytes = 6 * sizeof(std::uint64_t);
 		std::cout << "[Network:ReliableFeedback] native_counter_bytes=" << sizeof(GargantuanReliableServiceCounters)
+			<< " attribution_scalar_bytes=" << AttributionScalarBytes
+			<< " option_c_32_peer_attribution_bytes=" << AttributionScalarBytes * 32
+			<< " native_4096_connection_attribution_bytes=" << AttributionScalarBytes * 4096
 			<< " feedback_bytes=" << sizeof(Feedback) << " terminal_slot_bytes=" << sizeof(std::optional<Feedback>)
 			<< " terminal_vector_bytes=" << sizeof(std::vector<std::optional<Feedback>>)
 			<< " snapshot_mean_ns=" << Elapsed / Count << " samples=" << Count << '\n';
 	});
-	std::cout << "[Network:ReliableFeedback] passed=" << Passed << " total=7\n";
-	return Passed == 7;
+	std::cout << "[Network:ReliableFeedback] passed=" << Passed << " total=9\n";
+	return Passed == 9;
 }
 }

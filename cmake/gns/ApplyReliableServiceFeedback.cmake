@@ -52,10 +52,18 @@ GargantuanWriteFeedbackSource()
 
 GargantuanReadFeedbackSource(steamnetworkingsockets_snp.cpp 99e2b190b17993139bd3251f8862b81b58903a119ea456edacfec68f3dd9d65c)
 GargantuanReplaceFeedback("void SSNPSenderState::Shutdown()\n{" "void SSNPSenderState::Shutdown()\n{\n\tGargantuanFeedback.Purged = true; // Purge is never ACK retirement.")
-GargantuanReplaceFeedback("\t\tpMsg->Unlink();\n\t\tpMsg->Release();" "\t\tGargantuanFeedback.AckMessage(pMsg->m_cbSize, info.m_cbHdr);\n\t\tpMsg->Unlink();\n\t\tpMsg->Release();")
+GargantuanReplaceFeedback("\t\tpMsg->Unlink();\n\t\tpMsg->Release();" "\t\tGargantuanFeedback.AckMessage(pMsg->m_nMessageNumber, pMsg->m_cbSize, info.m_cbHdr);\n\t\tpMsg->Unlink();\n\t\tpMsg->Release();")
 GargantuanReplaceFeedback("\t\t\t\t\t\t// The most common case (hopefully): the segment is currently in flight" "\t\t\t\t\t\tm_senderState.GargantuanFeedback.AckSegment(cbSeg, relSeg.m_hStatusOrRetry == SNPSendReliableSegment_t::k_nStatus_Acked);\n\n\t\t\t\t\t\t// The most common case (hopefully): the segment is currently in flight")
 GargantuanReplaceFeedback("// First time sending this segment.  Fill out an inflight segment record" "m_senderState.GargantuanFeedback.FirstSend(pSeg->m_cbSegSize);\n\t\t\t\t// First time sending this segment.  Fill out an inflight segment record")
 GargantuanReplaceFeedback("// It's a retry\n\t\t\t\tpInFlightSeg" "m_senderState.GargantuanFeedback.Retransmit(pSeg->m_cbSegSize);\n\t\t\t\t// It's a retry\n\t\t\t\tpInFlightSeg")
+GargantuanReplaceFeedback("\tpSendMessage->m_nMessageNumber = ++lane.m_nLastSentMsgNum;" [=[
+	pSendMessage->m_nMessageNumber = ++lane.m_nLastSentMsgNum;
+	if ( pSendMessage->m_nFlags & k_nSteamNetworkingSend_Reliable )
+	{
+		const uint64_t nGargantuanRetirementToken = GargantuanTakeReliableRetirementAttribution();
+		if ( nGargantuanRetirementToken )
+			m_senderState.GargantuanFeedback.AttributeMessage( nGargantuanRetirementToken, pSendMessage->m_nMessageNumber );
+	}]=])
 GargantuanWriteFeedbackSource()
 
 GargantuanReadFeedbackSource(steamnetworkingsockets_connections.h 9ece0f7051f1b67e44c75c27c10867a863b56e2a0d0ac95849aa116b5274a9ef)

@@ -3,6 +3,26 @@
 #include <chrono>
 
 namespace SteamNetworkingSocketsLib {
+namespace {
+thread_local std::uint64_t PendingReliableRetirementToken = 0;
+}
+
+bool GargantuanBeginReliableRetirementAttribution(std::uint64_t Token) noexcept {
+	if (!Token || PendingReliableRetirementToken) return false;
+	PendingReliableRetirementToken = Token;
+	return true;
+}
+
+void GargantuanEndReliableRetirementAttribution() noexcept {
+	PendingReliableRetirementToken = 0;
+}
+
+std::uint64_t GargantuanTakeReliableRetirementAttribution() noexcept {
+	const auto Result = PendingReliableRetirementToken;
+	PendingReliableRetirementToken = 0;
+	return Result;
+}
+
 // Called from the native ownership hook while its existing lock is held.
 void GargantuanCopyReliableServiceFeedback(const GargantuanReliableServiceCounters &Counters,
 	int Pending, int Unacked, int NativeState, GargantuanReliableServiceSnapshot &Result) {
