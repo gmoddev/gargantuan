@@ -85,6 +85,14 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining pooled-service implementation and physical qualification
 
+Native feedback update 2026-09-14: **OPEN**. The narrow pinned-GNS feedback
+boundary is implemented; its [receipt](devdocs/CurrentArchitecture/ReliableTransportFeedbackProof3LValidation.md)
+records native ACK/payload semantics, generation/teardown, checked overflow,
+real-GNS fixtures and sanitizer gates. This supplies observations for the next
+separately authorized pooled-admission task. It does not implement
+`POOLED_SERVICE`, fund a physical path or qualify 32 actual clients. Foundation
+3L remains **B — PARTIALLY READY** and 3M remains blocked.
+
 Update 2026-09-14: **OPEN**. The selected Option C design/model now passes all
 33 existing model and nine registered hardening cases (**42/42**) in the
 networking-contract test. The [proof receipt](devdocs/CurrentArchitecture/PooledReliableServiceProof3LValidation.md)

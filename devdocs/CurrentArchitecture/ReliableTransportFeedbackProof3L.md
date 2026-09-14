@@ -4,6 +4,9 @@ owner: runtime-networking-and-runtime-host
 last_verified: 2026-09-14
 related_code:
   - src/network/GameNetworkingSocketsTransport.cpp
+  - src/network/ReliableServiceFeedback.hpp
+  - cmake/gns/ApplyReliableServiceFeedback.cmake
+  - tests/ReliableServiceFeedbackFixture.hpp
   - tests/ReliableTransportFeedbackModelFixture.hpp
   - tests/NetworkingContractsTests.cpp
 related_adrs:
@@ -14,11 +17,52 @@ related_adrs:
 
 ## Verdict
 
-**B — NARROW GNS ADAPTER EXTENSION REQUIRED.**
+**Native feedback extension implemented; validation is recorded in the [receipt](ReliableTransportFeedbackProof3LValidation.md).**
 
-The accepted Option C pooled-service model remains valid as an abstract service proof, but production cannot implement its drain/debt decisions from the currently exposed GNS telemetry. The pinned GNS revision already maintains the internal state needed for a truthful signal; neither the pin nor current upstream exposes a sufficient public cumulative application-byte acknowledgement statistic. No dependency upgrade, wire change, second reliable lane, pooled production admission, or Foundation 3M work is part of this proof.
+The accepted Option C pooled-service model remains valid as an abstract service proof. Upstream public GNS status alone cannot supply its exact drain/debt evidence. The pinned integration now observes existing native first-send, retry, ACK and final-message retirement transitions and exposes a private generation-safe snapshot. This does not implement production pooled admission. Foundation 3L remains **B — PARTIALLY READY**, KI-006 **OPEN**, and 3M blocked.
 
-The required production boundary is a narrow dependency-facing telemetry extension plus an adapter-owned generation/timestamp wrapper. It must expose monotonic unique reliable-stream progress and complete reliable-message payload retirement without changing GNS send, ACK, retransmission, ordering, queue, or congestion behavior.
+The implemented boundary preserves GNS send, ACK, retransmission, ordering, queue and congestion behavior. No dependency upgrade, wire change, second reliable lane or application ACK is introduced.
+
+## Implemented private boundary
+
+`cmake/gns/ApplyReliableServiceFeedback.cmake` verifies normalized source hashes at
+the exact pin and applies idempotent hooks. Unknown edits fail configuration.
+The hooks observe `SSNPSenderState` at these existing ownership points:
+
+| Native point | Observation |
+| --- | --- |
+| First-send branch allocating an in-flight reliable segment | Add its unique stream range once to `UniqueReliableStreamBytesFirstSent` |
+| Retry branch reusing an existing segment | Add physical retry bytes only to `ReliableStreamBytesRetransmitted` |
+| Segment ACK processing before its existing state update | Add to `UniqueReliableStreamBytesAcked` only if it was not already Acked |
+| `RemoveRefCountReliableSegment`, final Acked segment reference, immediately before message unlink/release | Add `m_cbSize - ReliableSendInfo().m_cbHdr` once to `ReliablePayloadBytesAcked` |
+| `SSNPSenderState::Shutdown` | Mark sender ownership purged; retain cumulative counters and never create ACK progress |
+
+The final-reference point may occur after the segment's first ACK when retry
+packet references still exist. That delay is conservative: partial ACK and
+duplicate ACK cannot retire the message early. The payload excludes only GNS's
+private reliable header, retaining Gargantuan's complete 32-byte GGNS envelope.
+
+All four counters use checked `uint64_t` increments. Overflow, negative native
+ranges or ACK progress exceeding unique first-send sets sticky invalid feedback;
+the bridge returns unavailable. Invalid counters cannot wrap or appear as valid
+saturation. Only construction of a new native sender starts a zero baseline.
+
+The bridge obtains GNS's existing per-connection lock through its existing API
+handle lookup and copies all counters, pending, sent-unacked and native state
+together. It introduces no global lock. Gargantuan's existing adapter ownership
+mutex serializes identity lookup and wrapping with `ConnectionId` and a steady-
+clock microsecond timestamp. Raw GNS handles never leave the private bridge.
+
+No-linger close captures the post-purge snapshot inside the existing native close
+operation, using its existing lock order. One terminal snapshot per adapter slot
+survives release with the old `ConnectionId`; slot reuse clears it and advances
+the generation. This bounded snapshot is terminal evidence, not an admission
+debt-release policy. If native feedback is invalid, no valid sample is exposed.
+
+Owned checked arithmetic and snapshot/capture code compile in separate object
+targets with full sanitizer instrumentation. Only existing GNS translation units
+retain the established upstream function/alignment compatibility exclusions.
+The adapter/private type is neither gameplay, Luau, wire nor creator-facing API.
 
 ## Pinned source and reliable-byte lifecycle
 
@@ -243,14 +287,11 @@ Classification: **B**, not C. The capability exists internally in both revisions
 
 ## Production implementation boundary
 
-The exact next implementation task is **not pooled admission**. First implement and validate the narrow GNS feedback extension alone:
-
-1. add checked generation-local sender counters at existing first-send, ACK-retirement, message-retirement and retry-send transitions;
-2. expose them through one Gargantuan-private, lock-safe bridge without changing public GNS protocol behavior;
-3. add real-GNS loss/retransmission/duplicate/delayed-ACK tests proving monotonicity and exact payload retirement;
-4. wrap the bridge in generation-safe `ReliableServiceFeedback` at the adapter;
-5. validate teardown/reset/overflow/failure behavior on Windows Release and Linux sanitizers.
-
-Only after that boundary is green may a separate task connect it to production `POOLED_SERVICE` admission and re-run the accepted Option C service proof against real GameSession/GNS feedback.
+The narrow native boundary is implemented in this checkpoint. Its release gate
+is the real-GNS, native-transition, model, sanitizer and source-specific CI evidence
+in the [validation receipt](ReliableTransportFeedbackProof3LValidation.md).
+Only after those gates are green may a separately authorized task connect it to
+production `POOLED_SERVICE` admission and re-run the accepted Option C service
+proof against real GameSession/GNS feedback.
 
 KI-006 remains **OPEN**. Production pooled service remains **NOT IMPLEMENTED**. Foundation 3L remains **B — PARTIALLY READY**. No 3M.

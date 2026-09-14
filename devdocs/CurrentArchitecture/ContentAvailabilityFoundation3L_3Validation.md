@@ -1,10 +1,31 @@
 ---
 status: partial-validation
 owner: runtime-networking
-last_verified: 2026-09-13
+last_verified: 2026-09-14
 ---
 
 # Foundation 3L.3 diagnostic validation ledger
+
+## Native reliable-service feedback checkpoint (2026-09-14)
+
+Based on published `009fc4f9b87faa473a463965ae75925517cda4dd`, the
+[native feedback contract](ReliableTransportFeedbackProof3L.md) is implemented
+at existing pinned-GNS first-send, retry, unique ACK and final-message retirement
+transitions. The [receipt](ReliableTransportFeedbackProof3LValidation.md#native-implementation-checkpoint-2026-09-14)
+owns the exact tests, checked-overflow policy, coherent locking, terminal/reuse
+semantics, memory and runtime measurements and sanitizer evidence.
+
+MSVC passes seven real-GNS feedback cases, a native partial/final ACK retirement
+fixture and the affected networking contracts, including 19/19 feedback-model
+and 42/42 Option C cases. Final Linux Clang 19 ASan/UBSan/LSan passes the seven
+feedback cases and 6/6 affected CTests; the established GNS workflow scope also
+passes during implementation. Owned feedback code retains full instrumentation,
+and repeated incremental builds pass. Docs build 19 pages and 28 links/anchors
+pass. Native feedback is locally ready for pooled-service integration, subject
+to required terminal-green CI at the published checkpoint recorded in the handoff.
+This is telemetry only: production `POOLED_SERVICE` remains **NOT IMPLEMENTED**,
+physical 32-actual-client pooled qualification **NOT MEASURED**, KI-006 **OPEN**,
+Foundation 3L **B — PARTIALLY READY**, and 3M **BLOCKED / NOT STARTED**.
 
 ## Option C registered model proof completion (2026-09-14)
 

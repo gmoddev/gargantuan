@@ -6,7 +6,134 @@ last_verified: 2026-09-14
 
 # Foundation 3L reliable transport feedback proof validation
 
-## Source and scope
+## Native implementation checkpoint (2026-09-14)
+
+Starting source: `009fc4f9b87faa473a463965ae75925517cda4dd`, branch
+`foundation/3l-content-availability`. The GNS pin remains
+`2cb93a06350bb065db53abdb0d87cf297e0bfd34`. Only the primary repository's native
+feedback integration, tests and documentation change. `ReliableByteAdmission`,
+`GameSession`, pooled policy and wire behavior are unchanged.
+
+Implementation commits:
+
+- native instrumentation: `2e15c66573b2b169ae89e62a767697e23cb7da0d`;
+- private wrapper and tests: `0f64d562dcdc7bbe5f6dbe1181570b38d727bd8e`;
+- final build dependency correction: `ac7a27d5bf2c463796e7dd5db2f6435d00dd3fc9`.
+
+The [contract](ReliableTransportFeedbackProof3L.md#implemented-private-boundary)
+records exact native hook locations and ownership. Private
+`src/network/ReliableServiceFeedback.hpp` supplies all accepted fields, generation
+identity and a monotonic observation timestamp from one locked native snapshot.
+No per-packet allocation or history is added. A terminal sample is retained only
+until its adapter slot is reused; old identity then fails lookup. Overflow is
+sticky invalid/unavailable and cannot manufacture service.
+
+### Real transport and native fixture coverage
+
+`gargantuan_real_transport_tests --reliable-feedback` runs seven cases and the
+ordinary real-transport CTest runs them too. The private GNS fairness executable
+also exercises the exact `RemoveRefCountReliableSegment` retirement function.
+
+| Case | Required evidence |
+| --- | --- |
+| First send/message boundaries | 97 B, 64 KiB, maximum 524,256 B application payload, then three queued 1,024/1,025/1,026 B messages; 593,156 complete-message payload bytes ACK-retired, 593,171 unique stream bytes, no no-loss retry |
+| Repeated retransmission | 100% receive loss forces repeated physical retries; zero ACK progress during loss; recovery ACKs each unique range and retires payload once |
+| Delayed ACK | 200-ms receive lag with configured 16 MiB/s; positive outstanding state and no early payload retirement, then complete drain |
+| Duplicate traffic | 100% receive duplication; no additional unique ACK or payload retirement after completion, one application delivery |
+| Teardown/reconnect | Outstanding data purged without ACK credit; old generation terminal, reused slot has new generation/zero counters and rejects old identity |
+| Checked exhaustion | Actual native counter type seeded near `UINT64_MAX`; no wrap, sticky invalid; duplicate ACK idempotence and impossible ACK/negative range rejection |
+| Snapshot overhead | 10,000 coherent observations on an idle connected pair, monotonic timestamps and counters |
+| Native partial/final/duplicate retirement | Partial segment retirement and an ACKed retry reference do not retire payload; final reference retires exactly 129 B from a 132 B stream, once; purge retains that exact cumulative value |
+
+### Model correspondence
+
+The real first-send/drain case matches `UniqueFirstSendDrain`. Injected repeated
+loss/recovery matches `RepeatedRetransmissions`, `AckAfterRetransmission` and
+`LogicalDebtPhysicalCostSeparated`: first-send and unique ACK stay logical, while
+retries accumulate independently. Delayed/duplicate traffic matches `DelayedAck`
+and `DuplicateAck`; native segment-reference tests refine the model's complete-
+message retirement boundary. Teardown/reuse matches `ConnectionTeardown` and
+`ReconnectNewGeneration`. Counter invalidation corresponds to conservative
+`CounterResetWrap`/`TransportFailure`. Qualification/grant behavior remains model
+coverage only; it is not consumed by production admission.
+
+### Validation and overhead
+
+MSVC Release on trusted `dockerbox` passes the seven feedback cases, native
+retirement/fairness test and affected networking contracts. The registered model
+rerun passes **19/19 feedback** and **42/42 Option C** (33 + 9 hardening) cases.
+The three affected CTests pass in **14.59 s**. Final Linux Clang 19
+ASan/UBSan/LSan validation passes all seven feedback cases and **6/6 CTests in
+15.33 s**, including native retirement, networking contracts, real transport,
+Remote, Character and GameSession transport. No sanitizer finding occurred.
+
+Measured x64 layout: **40 B native counters/state**, **72 B feedback value**, and
+**80 B optional terminal snapshot per allocated adapter slot**, plus one vector
+control object per adapter (24 B on tested x64 platforms), existing vector spare
+capacity and a pointer-sized thread-local close capture. Snapshot stack copies
+are temporary. There is no unbounded per-message/packet telemetry cardinality.
+Hot paths add a fixed checked increment at an existing transition, with no heap
+allocation, trace or history. End-to-end throughput delta is **not measured**.
+Final MSVC snapshot mean is **233 ns** over 10,000 samples on the trusted worker.
+Final Linux sanitizer snapshot mean is **409 ns** over 10,000 samples. Both
+platforms observe 49,257 retransmitted stream bytes in the forced-retry fixture,
+without duplicate unique first-send or payload retirement. These idle-pair
+microbenchmarks are observations, not a
+worst-case lock-contention or per-packet throughput guarantee.
+
+Owned arithmetic and native bridge compile separately under full ASan/UBSan;
+CI checks both commands and the adapter for exclusion leakage. Existing GNS-only
+function/alignment exclusions are unchanged. LSan is enabled through ASan's leak
+detection. The existing GNS workflow scope remains required, including its
+already established gameplay/overload fixtures; no physical pooled qualification
+is run.
+
+The full existing GNS sanitizer scope passed during implementation: six CTests,
+profiled GameSession, production-admission capacity matrix, ordinary reliable
+workload, 32-peer workload and 32-peer structural workload. The final native
+snapshot/build refinement was then rebuilt and revalidated with the seven
+feedback fixtures, six CTests and 19/42 models above. Exact-source hosted GNS CI
+replays the complete workflow scope after publication.
+
+Incremental Ninja validation exposed a generated-header cycle in an intermediate
+bridge object that included private GNS headers. The final object accepts plain
+values from the connection-locked native ownership hook and includes only the
+public sockets interface. Checked arithmetic, copying and close-capture state
+remain fully instrumented. Reconfigure plus a second incremental build passes
+with `ninja: no work to do`; CI now repeats the build to catch discovered-header
+dependency regressions. The exact pinned-source patch also passes repeat
+application without unknown changes or timestamp churn.
+
+Documentation: locked dependency reuse with Node 24.19.0/Astro passes **19 pages
+in 3.18 s**;
+the three implementation/validation documents pass **28 relative link/anchor
+checks**, and `git diff --check` passes. Temporary build artifacts stay untracked.
+
+Worker receipts live under
+`C:\Sandbox\Codex\Logs\gargantuan-3l-native-feedback`. Cached worker validation
+matches all **13 committed implementation/test files by SHA-256** with zero
+mismatches; logs/XML are copied to the isolated worktree's ignored
+`build/native-feedback/` directory. Cached worker validation
+is followed by exact published-source Native engine CI and GNS sanitizer CI;
+terminal results and commit identities are recorded in the publication handoff.
+An older green workflow does not qualify a later source revision.
+
+Local native feedback is **READY FOR POOLED-SERVICE INTEGRATION**, subject to
+terminal-green Native engine CI and GNS sanitizer CI at the published checkpoint.
+
+Production pooled service remains **NOT IMPLEMENTED**, KI-006 **OPEN**,
+Foundation 3L **B — PARTIALLY READY**, Foundation 3M **BLOCKED / NOT STARTED**.
+Once native feedback validation and exact-source CI are green, the next task is
+a separately authorized implementation of accepted Option C `POOLED_SERVICE`
+admission consuming this feedback, followed by its own real-GNS qualification.
+
+## Historical architecture/proof checkpoint
+
+The sections below record the pre-implementation proof at `e2912895` and its
+follow-up `009fc4f9`. Their NOT IMPLEMENTED and pending-CI labels are historical;
+the native implementation checkpoint above owns the current feedback status.
+
+### Source and scope
 
 Starting published source: `e29128950d51d669057129c5408dd2ea0c558a10` on
 `foundation/3l-content-availability`. The accepted 42-case Option C pooled-service
