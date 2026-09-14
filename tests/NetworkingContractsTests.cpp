@@ -9,6 +9,7 @@
 #include "gargantuan/network/Statistics.hpp"
 #include "gargantuan/network/Transport.hpp"
 #include "PooledReliableServiceModelFixture.hpp"
+#include "PooledReliableServiceProofHardening.hpp"
 
 #include <array>
 #include <iostream>
@@ -244,6 +245,8 @@ int main() {
 
 	Check(gargantuan::test::pooled_service_model::RunPooledReliableServiceModelTests(),
 		"Foundation 3L pooled reliable service executable proof passes");
+	Check(gargantuan::test::pooled_service_model::hardening::RunPooledReliableServiceProofHardeningTests(),
+		"Foundation 3L pooled reliable service proof hardening passes");
 
 	if (Failures == 0) std::cout << "All networking contract tests passed\n";
 	return Failures == 0 ? 0 : 1;

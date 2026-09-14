@@ -222,7 +222,9 @@ inline bool RunPooledReliableServiceProofHardeningTests() {
 				"four-grant structural debt bound not reached exactly");
 			Require(ModelValue.Invariant(), "funded aggregate invariant rejected admitted debt");
 			Require(!ModelValue.Reserve(), "fifth concurrent drain grant was admitted");
-			Require(ModelValue.At(5).credit == G && ModelValue.Pending() == 5 * G,
+			// Accept moves four groups from pending requirements to committed debt.
+			Require(ModelValue.At(5).credit == G && ModelValue.Pending() == G &&
+				ModelValue.Pending() + ModelValue.Committed() == 5 * G,
 				"credit/service separation or pending accounting mismatch");
 		});
 	} catch (...) {
