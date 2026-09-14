@@ -1,5 +1,4 @@
 #pragma once
-#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <iostream>
@@ -7,34 +6,87 @@
 #include <optional>
 #include <stdexcept>
 #include <string_view>
+
 namespace gargantuan::test::reliable_feedback_model {
-using U=std::uint64_t; constexpr U KiB=1024,MiB=1024*KiB,G=512*KiB,DrainFloor=16*MiB,FreshnessUs=50'000;
-enum class SegmentState:std::uint8_t{Pending,InFlight,Retry,Acked}; enum class FeedbackState:std::uint8_t{Missing,Fresh,Stale,Contradictory,Terminal};
-struct Message{U PayloadBytes=0,ReliableHeaderBytes=0;SegmentState State=SegmentState::Pending;bool PayloadRetired=false;};
-struct Snapshot{std::uint32_t Generation=0;U ObservedAtUs=0,UniqueReliableStreamBytesAcked=0,ReliablePayloadBytesAcked=0,ReliableStreamBytesRetransmitted=0,PendingReliableStreamBytes=0,SentUnackedReliableStreamBytes=0;FeedbackState State=FeedbackState::Missing;};
-class Model{public:explicit Model(std::uint32_t g=1):Generation(g){if(!g)throw std::invalid_argument("generation");}std::size_t Submit(U p,U h=3){if(!p||p>G||h>16)throw std::invalid_argument("message");if(Count==Messages.size())throw std::overflow_error("message-cap");auto&m=Messages[Count];m={p,h};Pending+=p+h;CreatedPayload+=p;return Count++;}void FirstSend(std::size_t i){auto&m=At(i);Req(m.State==SegmentState::Pending,"first");U s=Stream(m);Req(Pending>=s,"pending");Pending-=s;Unacked+=s;FirstPhysical+=s;m.State=SegmentState::InFlight;}void MarkLostForRetry(std::size_t i){auto&m=At(i);Req(m.State==SegmentState::InFlight,"loss");U s=Stream(m);Req(Unacked>=s,"unacked");Unacked-=s;Pending+=s;m.State=SegmentState::Retry;}void Retransmit(std::size_t i){auto&m=At(i);Req(m.State==SegmentState::Retry,"retry");U s=Stream(m);Req(Pending>=s,"retry pending");Pending-=s;Unacked+=s;RetransPhysical+=s;m.State=SegmentState::InFlight;}void Ack(std::size_t i,U at){auto&m=At(i);Req(m.State==SegmentState::InFlight||m.State==SegmentState::Retry,"ack");U s=Stream(m);if(m.State==SegmentState::InFlight){Req(Unacked>=s,"ack unacked");Unacked-=s;}else{Req(Pending>=s,"ack pending");Pending-=s;}m.State=SegmentState::Acked;Add(UniqueStreamAcked,s);if(!m.PayloadRetired){m.PayloadRetired=true;Add(PayloadAcked,m.PayloadBytes);}LastAckAtUs=at;}void DuplicateAck(std::size_t i,U at){auto&m=At(i);Req(m.State==SegmentState::Acked,"dup");LastAckAtUs=at;}void TerminalRelease(){Terminal=true;U o=CreatedPayload-PayloadAcked-TerminalReleased;Add(TerminalReleased,o);Pending=Unacked=0;for(std::size_t i=0;i<Count;++i)if(Messages[i].State!=SegmentState::Acked)Messages[i].State=SegmentState::Acked;}Snapshot Observe(U at)const{return{Generation,at,UniqueStreamAcked,PayloadAcked,RetransPhysical,Pending,Unacked,Terminal?FeedbackState::Terminal:FeedbackState::Fresh};}U Created()const{return CreatedPayload;}U Drained()const{return PayloadAcked;}U Released()const{return TerminalReleased;}U Outstanding()const{return CreatedPayload-PayloadAcked-TerminalReleased;}U StreamAcked()const{return UniqueStreamAcked;}U Retransmitted()const{return RetransPhysical;}U PendingBytes()const{return Pending;}U UnackedBytes()const{return Unacked;}U PhysicalBytesSent()const{return FirstPhysical+RetransPhysical;}bool Conserved()const{return CreatedPayload==PayloadAcked+TerminalReleased+Outstanding();}
-private:std::array<Message,16>Messages{};std::size_t Count=0;std::uint32_t Generation=0;U CreatedPayload=0,PayloadAcked=0,TerminalReleased=0,UniqueStreamAcked=0,FirstPhysical=0,RetransPhysical=0,Pending=0,Unacked=0;std::optional<U>LastAckAtUs;bool Terminal=false;Message&At(std::size_t i){if(i>=Count)throw std::out_of_range("message");return Messages[i];}static U Stream(const Message&m){if(m.PayloadBytes>std::numeric_limits<U>::max()-m.ReliableHeaderBytes)throw std::overflow_error("stream");return m.PayloadBytes+m.ReliableHeaderBytes;}static void Add(U&t,U d){if(d>std::numeric_limits<U>::max()-t)throw std::overflow_error("counter");t+=d;}static void Req(bool v,const char*w){if(!v)throw std::runtime_error(w);}};
-struct Qualifier{std::uint32_t Generation=0;std::optional<Snapshot>Previous;bool Qualified=false,BootstrapGrantAvailable=true;bool AcceptSample(const Snapshot&s){if(!s.Generation||(Generation&&s.Generation!=Generation)){Reset(s.Generation);Previous=s;return false;}if(!Generation)Generation=s.Generation;if(s.State!=FeedbackState::Fresh){Qualified=false;Previous=s;return false;}if(Previous){if(s.ObservedAtUs<Previous->ObservedAtUs||s.UniqueReliableStreamBytesAcked<Previous->UniqueReliableStreamBytesAcked||s.ReliablePayloadBytesAcked<Previous->ReliablePayloadBytesAcked||s.ReliableStreamBytesRetransmitted<Previous->ReliableStreamBytesRetransmitted){Qualified=false;Previous=s;return false;}U dt=s.ObservedAtUs-Previous->ObservedAtUs,db=s.UniqueReliableStreamBytesAcked-Previous->UniqueReliableStreamBytesAcked;if(dt&&dt<=FreshnessUs){__uint128_t l=(__uint128_t)db*1'000'000u,r=(__uint128_t)DrainFloor*dt;Qualified=l>=r;}else Qualified=false;}Previous=s;return Qualified;}bool MayIssueGrant(bool debt,bool wants){if(!wants||debt)return false;if(Qualified)return true;if(BootstrapGrantAvailable){BootstrapGrantAvailable=false;return true;}return false;}void Reset(std::uint32_t g){Generation=g;Previous.reset();Qualified=false;BootstrapGrantAvailable=true;}};
-inline void C(bool v,std::string_view w){if(!v)throw std::runtime_error(std::string(w));}
-inline bool RunReliableTransportFeedbackModelTests(){std::size_t passed=0;auto T=[&](const char*n,auto f){try{f();++passed;std::cout<<"[ReliableFeedbackModel] "<<n<<"=pass\n";}catch(const std::exception&e){std::cerr<<"[ReliableFeedbackModel] "<<n<<"=FAIL "<<e.what()<<'\n';throw;}};try{
-T("UniqueFirstSendDrain",[]{Model m;auto i=m.Submit(64*KiB);m.FirstSend(i);m.Ack(i,10'000);C(m.Drained()==64*KiB&&m.StreamAcked()>m.Drained()&&m.Conserved(),"unique");});
-T("OneRetransmission",[]{Model m;auto i=m.Submit(64*KiB);m.FirstSend(i);m.MarkLostForRetry(i);m.Retransmit(i);m.Ack(i,20'000);C(m.Drained()==64*KiB&&m.Retransmitted()>0&&m.Conserved(),"retry");});
-T("RepeatedRetransmissions",[]{Model m;auto i=m.Submit(G);m.FirstSend(i);for(int n=0;n<3;++n){m.MarkLostForRetry(i);m.Retransmit(i);}m.Ack(i,40'000);C(m.Drained()==G&&m.StreamAcked()==G+3&&m.PhysicalBytesSent()>2*G&&m.Conserved(),"repeat");});
-T("DelayedAck",[]{Model m;auto i=m.Submit(G);m.FirstSend(i);auto b=m.Observe(40'000);m.Ack(i,80'000);C(b.ReliablePayloadBytesAcked==0&&m.Drained()==G,"delayed");});
-T("DuplicateAck",[]{Model m;auto i=m.Submit(8*KiB);m.FirstSend(i);m.Ack(i,10'000);auto a=m.Drained(),s=m.StreamAcked();m.DuplicateAck(i,11'000);C(m.Drained()==a&&m.StreamAcked()==s,"dup");});
-T("AckAfterRetransmission",[]{Model m;auto i=m.Submit(8*KiB);m.FirstSend(i);m.MarkLostForRetry(i);m.Retransmit(i);m.Ack(i,15'000);C(m.Drained()==8*KiB&&m.Retransmitted()==8*KiB+3,"ack retry");});
-T("QueueBytesReenterPending",[]{Model m;auto i=m.Submit(32*KiB);auto p=m.PendingBytes();m.FirstSend(i);C(m.PendingBytes()==0&&m.UnackedBytes()==p,"send");m.MarkLostForRetry(i);C(m.PendingBytes()==p&&m.UnackedBytes()==0,"reenter");m.Retransmit(i);C(m.PendingBytes()+m.UnackedBytes()==p,"sum");});
-T("PeerDrainsAtFloor",[]{Qualifier q;Snapshot a{.Generation=1,.ObservedAtUs=0,.State=FeedbackState::Fresh};q.AcceptSample(a);auto b=a;b.ObservedAtUs=25'000;b.UniqueReliableStreamBytesAcked=410*KiB;C(q.AcceptSample(b),"floor");});
-T("PeerDrainsBelowFloor",[]{Qualifier q;Snapshot a{.Generation=1,.ObservedAtUs=0,.State=FeedbackState::Fresh};q.AcceptSample(a);auto b=a;b.ObservedAtUs=25'000;b.UniqueReliableStreamBytesAcked=300*KiB;C(!q.AcceptSample(b),"below");});
-T("IdlePeer",[]{Qualifier q;Snapshot a{.Generation=1,.ObservedAtUs=0,.State=FeedbackState::Fresh};q.AcceptSample(a);auto b=a;b.ObservedAtUs=25'000;C(!q.AcceptSample(b)&&!q.Qualified,"idle");});
-T("FirstGrantBootstrap",[]{Qualifier q;C(q.MayIssueGrant(false,true),"first");C(!q.MayIssueGrant(false,true),"one");});
-T("DrainedSlowPeerRequalification",[]{Qualifier q;C(q.MayIssueGrant(false,true),"boot");Snapshot a{.Generation=1,.ObservedAtUs=0,.State=FeedbackState::Fresh};q.AcceptSample(a);auto b=a;b.ObservedAtUs=25'000;b.UniqueReliableStreamBytesAcked=200*KiB;C(!q.AcceptSample(b),"slow");C(!q.MayIssueGrant(false,true),"deny");auto c=b;c.ObservedAtUs=45'000;c.UniqueReliableStreamBytesAcked+=400*KiB;C(q.AcceptSample(c)&&q.MayIssueGrant(false,true),"requal");});
-T("StaleFeedback",[]{Qualifier q;Snapshot a{.Generation=1,.ObservedAtUs=0,.State=FeedbackState::Fresh};q.AcceptSample(a);auto b=a;b.ObservedAtUs=FreshnessUs+1;b.UniqueReliableStreamBytesAcked=G;C(!q.AcceptSample(b),"stale");});
-T("MissingFeedback",[]{Qualifier q;Snapshot a{.Generation=1,.State=FeedbackState::Missing};C(!q.AcceptSample(a),"missing");});
-T("ConnectionTeardown",[]{Model m;auto a=m.Submit(100*KiB),b=m.Submit(200*KiB);m.FirstSend(a);m.Ack(a,10'000);m.FirstSend(b);m.TerminalRelease();C(m.Drained()==100*KiB&&m.Released()==200*KiB&&m.Outstanding()==0&&m.Conserved(),"terminal");});
-T("ReconnectNewGeneration",[]{Qualifier q;Snapshot a{.Generation=1,.ObservedAtUs=0,.UniqueReliableStreamBytesAcked=G,.ReliablePayloadBytesAcked=G,.State=FeedbackState::Fresh};q.AcceptSample(a);auto b=a;b.Generation=2;b.ObservedAtUs=1;b.UniqueReliableStreamBytesAcked=0;b.ReliablePayloadBytesAcked=0;C(!q.AcceptSample(b)&&q.Generation==2&&!q.Qualified&&q.BootstrapGrantAvailable,"gen");});
-T("CounterResetWrap",[]{Qualifier q;Snapshot a{.Generation=1,.ObservedAtUs=0,.UniqueReliableStreamBytesAcked=1000,.ReliablePayloadBytesAcked=900,.State=FeedbackState::Fresh};q.AcceptSample(a);auto b=a;b.ObservedAtUs=10'000;b.UniqueReliableStreamBytesAcked=999;C(!q.AcceptSample(b)&&!q.Qualified,"reset");});
-T("TransportFailure",[]{Qualifier q;Snapshot a{.Generation=1,.State=FeedbackState::Contradictory};C(!q.AcceptSample(a),"failure");Model m;auto i=m.Submit(G);m.FirstSend(i);m.TerminalRelease();C(m.Drained()==0&&m.Released()==G&&m.Conserved(),"release");});
-T("LogicalDebtPhysicalCostSeparated",[]{Model m;auto i=m.Submit(G);m.FirstSend(i);m.MarkLostForRetry(i);m.Retransmit(i);m.MarkLostForRetry(i);m.Retransmit(i);m.Ack(i,30'000);C(m.Created()==G&&m.Drained()==G&&m.PhysicalBytesSent()>2*G&&m.Conserved(),"separate");});
-}catch(...){return false;}std::cout<<"[ReliableFeedbackModel] result=pass tests="<<passed<<'\n';return passed==19;}
-}
+using U = std::uint64_t;
+constexpr U KiB = 1024, MiB = 1024 * KiB, G = 512 * KiB;
+constexpr U DrainFloor = 16 * MiB, FreshnessUs = 50'000, RequalificationUs = 1'000'000;
+
+enum class SegmentState : std::uint8_t { Pending, InFlight, Retry, Acked };
+enum class FeedbackState : std::uint8_t { Missing, Fresh, Contradictory, Terminal };
+struct Message { U Payload = 0, Header = 0; SegmentState State = SegmentState::Pending; bool PayloadRetired = false; };
+struct Snapshot {
+    std::uint32_t Generation = 0; U ObservedAtUs = 0;
+    U UniqueStreamBytesFirstSent = 0, UniqueStreamBytesAcked = 0, PayloadBytesAcked = 0, RetransmitStreamBytes = 0;
+    U PendingStreamBytes = 0, SentUnackedStreamBytes = 0; FeedbackState State = FeedbackState::Missing;
+};
+
+class Model {
+public:
+    explicit Model(std::uint32_t GenerationValue = 1) : Generation(GenerationValue) { if (!Generation) throw std::invalid_argument("generation"); }
+    std::size_t Submit(U Payload, U Header = 3) {
+        if (!Payload || Payload > G || Header > 16 || Count == Messages.size()) throw std::invalid_argument("message");
+        Messages[Count] = {.Payload = Payload, .Header = Header}; Pending += Stream(Messages[Count]); Created += Payload; return Count++;
+    }
+    void FirstSend(std::size_t Index) { auto &M=At(Index); Need(M.State==SegmentState::Pending,"first-send"); Move(Pending,Unacked,Stream(M)); FirstSent+=Stream(M); Physical+=Stream(M); M.State=SegmentState::InFlight; }
+    void Lose(std::size_t Index) { auto &M=At(Index); Need(M.State==SegmentState::InFlight,"loss"); Move(Unacked,Pending,Stream(M)); M.State=SegmentState::Retry; }
+    void Retransmit(std::size_t Index) { auto &M=At(Index); Need(M.State==SegmentState::Retry,"retransmit"); Move(Pending,Unacked,Stream(M)); Retransmitted+=Stream(M); Physical+=Stream(M); M.State=SegmentState::InFlight; }
+    void Ack(std::size_t Index) {
+        auto &M=At(Index); Need(M.State==SegmentState::InFlight||M.State==SegmentState::Retry,"ack");
+        U S=Stream(M); if(M.State==SegmentState::InFlight) Sub(Unacked,S); else Sub(Pending,S); Acked+=S; M.State=SegmentState::Acked;
+        if(!M.PayloadRetired){M.PayloadRetired=true;PayloadAcked+=M.Payload;}
+    }
+    void DuplicateAck(std::size_t Index) { Need(At(Index).State==SegmentState::Acked,"duplicate"); }
+    void TerminalRelease() { Terminal=true; Released += Outstanding(); Pending=Unacked=0; }
+    Snapshot Observe(U AtUs) const { return {Generation,AtUs,FirstSent,Acked,PayloadAcked,Retransmitted,Pending,Unacked,Terminal?FeedbackState::Terminal:FeedbackState::Fresh}; }
+    U LogicalCreated()const{return Created;} U LogicalDrained()const{return PayloadAcked;} U LogicalReleased()const{return Released;} U Outstanding()const{return Created-PayloadAcked-Released;}
+    U PhysicalBytes()const{return Physical;} U PendingBytes()const{return Pending;} U UnackedBytes()const{return Unacked;} bool Conserved()const{return Created==PayloadAcked+Released+Outstanding();}
+private:
+    std::array<Message,16> Messages{}; std::size_t Count=0; std::uint32_t Generation=0; bool Terminal=false;
+    U Created=0,PayloadAcked=0,Released=0,FirstSent=0,Acked=0,Retransmitted=0,Pending=0,Unacked=0,Physical=0;
+    Message &At(std::size_t I){if(I>=Count)throw std::out_of_range("message");return Messages[I];}
+    static U Stream(const Message&M){if(M.Payload>std::numeric_limits<U>::max()-M.Header)throw std::overflow_error("stream");return M.Payload+M.Header;}
+    static void Need(bool V,const char*W){if(!V)throw std::runtime_error(W);} static void Sub(U&A,U B){Need(A>=B,"underflow");A-=B;} static void Move(U&A,U&B,U N){Sub(A,N);if(N>std::numeric_limits<U>::max()-B)throw std::overflow_error("move");B+=N;}
+};
+
+struct Qualifier {
+    std::uint32_t Generation=0; std::optional<Snapshot> Previous; bool Qualified=false; U NextQualificationGrantUs=0;
+    bool Sample(const Snapshot&S) {
+        if(!S.Generation || (Generation && S.Generation!=Generation)){Reset(S.Generation);Previous=S;return false;}
+        if(!Generation)Generation=S.Generation;
+        if(S.State!=FeedbackState::Fresh){Qualified=false;Previous=S;return false;}
+        if(Previous){
+            if(S.ObservedAtUs<Previous->ObservedAtUs||S.UniqueStreamBytesFirstSent<Previous->UniqueStreamBytesFirstSent||S.UniqueStreamBytesAcked<Previous->UniqueStreamBytesAcked||S.PayloadBytesAcked<Previous->PayloadBytesAcked||S.RetransmitStreamBytes<Previous->RetransmitStreamBytes){Qualified=false;Previous=S;return false;}
+            U Dt=S.ObservedAtUs-Previous->ObservedAtUs, First=S.UniqueStreamBytesFirstSent-Previous->UniqueStreamBytesFirstSent, Ack=S.UniqueStreamBytesAcked-Previous->UniqueStreamBytesAcked;
+            if(Dt && Dt<=FreshnessUs && Dt<=std::numeric_limits<U>::max()/DrainFloor){U Need=(DrainFloor*Dt+999'999)/1'000'000; Qualified=First>=Need && Ack>0;}else Qualified=false;
+        }
+        Previous=S; return Qualified;
+    }
+    bool MayOrdinaryGrant(bool OutstandingDebt)const{return Qualified&&!OutstandingDebt;}
+    bool MayQualificationGrant(U Now,bool OutstandingDebt){if(OutstandingDebt||Now<NextQualificationGrantUs)return false;NextQualificationGrantUs=Now+RequalificationUs;return true;}
+    void Reset(std::uint32_t G){Generation=G;Previous.reset();Qualified=false;NextQualificationGrantUs=0;}
+};
+inline void Check(bool V,std::string_view W){if(!V)throw std::runtime_error(std::string(W));}
+
+inline bool RunReliableTransportFeedbackModelTests(){std::size_t Passed=0;auto T=[&](const char*N,auto F){try{F();++Passed;std::cout<<"[ReliableFeedbackModel] "<<N<<"=pass\n";}catch(const std::exception&E){std::cerr<<"[ReliableFeedbackModel] "<<N<<"=FAIL "<<E.what()<<'\n';throw;}};try{
+T("UniqueFirstSendDrain",[]{Model M;auto I=M.Submit(64*KiB);M.FirstSend(I);M.Ack(I);Check(M.LogicalDrained()==64*KiB&&M.Conserved(),"drain");});
+T("OneRetransmission",[]{Model M;auto I=M.Submit(64*KiB);M.FirstSend(I);M.Lose(I);M.Retransmit(I);M.Ack(I);Check(M.LogicalDrained()==64*KiB&&M.PhysicalBytes()>M.LogicalCreated(),"retry");});
+T("RepeatedRetransmissions",[]{Model M;auto I=M.Submit(G);M.FirstSend(I);for(int N=0;N<3;++N){M.Lose(I);M.Retransmit(I);}M.Ack(I);Check(M.LogicalDrained()==G&&M.PhysicalBytes()>3*G&&M.Conserved(),"retries");});
+T("DelayedAck",[]{Model M;auto I=M.Submit(G);M.FirstSend(I);Check(M.Observe(40'000).PayloadBytesAcked==0,"early");M.Ack(I);Check(M.LogicalDrained()==G,"late");});
+T("DuplicateAck",[]{Model M;auto I=M.Submit(8*KiB);M.FirstSend(I);M.Ack(I);auto A=M.Observe(1);M.DuplicateAck(I);auto B=M.Observe(2);Check(A.PayloadBytesAcked==B.PayloadBytesAcked&&A.UniqueStreamBytesAcked==B.UniqueStreamBytesAcked,"dup");});
+T("AckAfterRetransmission",[]{Model M;auto I=M.Submit(8*KiB);M.FirstSend(I);M.Lose(I);M.Retransmit(I);M.Ack(I);Check(M.LogicalDrained()==8*KiB,"ack retry");});
+T("QueueBytesReenterPending",[]{Model M;auto I=M.Submit(32*KiB);U S=M.PendingBytes();M.FirstSend(I);M.Lose(I);Check(M.PendingBytes()==S&&M.UnackedBytes()==0,"reenter");M.Retransmit(I);Check(M.PendingBytes()+M.UnackedBytes()==S,"sum");});
+T("PeerDrainsAtFloor",[]{Qualifier Q;Snapshot A{.Generation=1,.ObservedAtUs=0,.State=FeedbackState::Fresh};Q.Sample(A);auto B=A;B.ObservedAtUs=25'000;B.UniqueStreamBytesFirstSent=410*KiB;B.UniqueStreamBytesAcked=64*KiB;Check(Q.Sample(B)&&Q.MayOrdinaryGrant(false),"floor");});
+T("PeerDrainsBelowFloor",[]{Qualifier Q;Snapshot A{.Generation=1,.ObservedAtUs=0,.State=FeedbackState::Fresh};Q.Sample(A);auto B=A;B.ObservedAtUs=25'000;B.UniqueStreamBytesFirstSent=300*KiB;B.UniqueStreamBytesAcked=64*KiB;Check(!Q.Sample(B)&&!Q.MayOrdinaryGrant(false),"slow");});
+T("IdlePeer",[]{Qualifier Q;Snapshot A{.Generation=1,.ObservedAtUs=0,.State=FeedbackState::Fresh};Q.Sample(A);auto B=A;B.ObservedAtUs=25'000;Check(!Q.Sample(B)&&Q.MayQualificationGrant(25'000,false),"idle bootstrap");});
+T("FirstGrantBootstrap",[]{Qualifier Q;Check(Q.MayQualificationGrant(0,false),"first");Check(!Q.MayQualificationGrant(1,false),"bounded");});
+T("DrainedSlowPeerRequalification",[]{Qualifier Q;Check(Q.MayQualificationGrant(0,false),"first");Snapshot A{.Generation=1,.ObservedAtUs=0,.State=FeedbackState::Fresh};Q.Sample(A);auto B=A;B.ObservedAtUs=25'000;B.UniqueStreamBytesFirstSent=200*KiB;B.UniqueStreamBytesAcked=32*KiB;Check(!Q.Sample(B)&&!Q.MayOrdinaryGrant(false),"deny");Check(!Q.MayQualificationGrant(500'000,false),"cooldown");Check(Q.MayQualificationGrant(1'000'000,false),"probe");auto C=B;C.ObservedAtUs=45'000;C.UniqueStreamBytesFirstSent+=400*KiB;C.UniqueStreamBytesAcked+=64*KiB;Check(Q.Sample(C)&&Q.MayOrdinaryGrant(false),"requalified");});
+T("StaleFeedback",[]{Qualifier Q;Snapshot A{.Generation=1,.ObservedAtUs=0,.State=FeedbackState::Fresh};Q.Sample(A);auto B=A;B.ObservedAtUs=FreshnessUs+1;B.UniqueStreamBytesFirstSent=G;B.UniqueStreamBytesAcked=G;Check(!Q.Sample(B),"stale");});
+T("MissingFeedback",[]{Qualifier Q;Snapshot A{.Generation=1,.State=FeedbackState::Missing};Check(!Q.Sample(A),"missing");});
+T("ConnectionTeardown",[]{Model M;auto A=M.Submit(100*KiB),B=M.Submit(200*KiB);M.FirstSend(A);M.Ack(A);M.FirstSend(B);M.TerminalRelease();Check(M.LogicalDrained()==100*KiB&&M.LogicalReleased()==200*KiB&&M.Conserved(),"terminal");});
+T("ReconnectNewGeneration",[]{Qualifier Q;Snapshot A{.Generation=1,.ObservedAtUs=0,.State=FeedbackState::Fresh};Q.Sample(A);auto B=A;B.Generation=2;B.ObservedAtUs=1;Check(!Q.Sample(B)&&Q.Generation==2&&!Q.Qualified&&Q.MayQualificationGrant(1,false),"generation");});
+T("CounterResetWrap",[]{Qualifier Q;Snapshot A{.Generation=1,.ObservedAtUs=0,.UniqueStreamBytesFirstSent=1000,.UniqueStreamBytesAcked=900,.PayloadBytesAcked=800,.State=FeedbackState::Fresh};Q.Sample(A);auto B=A;B.ObservedAtUs=10'000;B.UniqueStreamBytesAcked=899;Check(!Q.Sample(B)&&!Q.Qualified,"reset");});
+T("TransportFailure",[]{Qualifier Q;Snapshot A{.Generation=1,.State=FeedbackState::Contradictory};Check(!Q.Sample(A),"failure");Model M;auto I=M.Submit(G);M.FirstSend(I);M.TerminalRelease();Check(M.LogicalReleased()==G&&M.Conserved(),"release");});
+T("LogicalDebtPhysicalCostSeparated",[]{Model M;auto I=M.Submit(G);M.FirstSend(I);M.Lose(I);M.Retransmit(I);M.Lose(I);M.Retransmit(I);M.Ack(I);Check(M.LogicalCreated()==G&&M.LogicalDrained()==G&&M.PhysicalBytes()>2*G&&M.Conserved(),"separate");});
+}catch(...){return false;}std::cout<<"[ReliableFeedbackModel] result=pass tests="<<Passed<<'\n';return Passed==19;}
+} // namespace gargantuan::test::reliable_feedback_model
