@@ -1,5 +1,5 @@
 ---
-status: production-checkpoint-stopped-recovery-contract-conflict
+status: production-checkpoint-stopped-recovery-implementation-required
 owner: runtime-networking
 last_verified: 2026-09-14
 related_code:
@@ -19,9 +19,44 @@ related_adrs:
 
 **STOPPED / NOT QUALIFIED.** The isolated production integration based on
 `222c5beb318552a9cc07ec043c5b34581d64980f` reaches exact attributed retirement,
-bounded admission and real-GNS gameplay, but fails the unchanged structural
-overload recovery contract. This checkpoint is not a production deployment
-recommendation. No merge, physical 32-client run or Foundation 3M work occurred.
+bounded admission and real-GNS gameplay, but fails the former structural overload
+recovery fixture. This checkpoint is not a production deployment recommendation.
+No merge, physical 32-client run or Foundation 3M work occurred.
+
+### Recovery-contract reconciliation (2026-09-14)
+
+The architecture conflict is now resolved by
+[`PooledReliableServiceRecoveryContract3L.md`](PooledReliableServiceRecoveryContract3L.md).
+The selected decision is **B — separate service recovery from structural
+convergence**:
+
+- the existing 20-second gate remains a fixed **service-recovery** requirement
+  for ordinary scheduler/admission/gameplay behavior after excess offered demand
+  stops;
+- complete **structural convergence** uses a bounded workload-derived service
+  curve over semantically necessary retained work and the accepted 2 MiB/s
+  per-peer / 64 MiB/s aggregate service floors;
+- no rates, journal bounds, wire format, ordering, Known semantics or gameplay
+  guarantees are relaxed.
+
+The canonical 180-MiB fixture additionally exposes **C — existing safe
+coalescing is not being used for the special `Name` field**. `Name` is stored
+outside the generic snapshot/property map, so the current known-object journal
+path replays each historical Name value. GRPL and 3J are state-projection
+contracts, however: ChangeJournal sequence is not a wire sequence, complete
+materialization carries only the current Name, and ordinary property history may
+coalesce where no lifecycle/hierarchy/reference barrier requires intermediate
+states. The 7,680 canonical Name records are therefore valid bounded journal
+input but not 180 MiB of semantically necessary delivery state.
+
+The reconciliation does **not** qualify or resume the stopped production
+implementation. The next production task is a narrow, semantics-preserving
+journal-to-frame correction: coalesce repeated coalescible scalar property
+records, including `Name`, to current authoritative state within existing
+ordered barriers, with acceptance-only cursor/Known commit. Then re-run the
+canonical overload cases with the unchanged 20-second service-recovery gate and
+the workload-derived structural-convergence bound. Physical qualification remains
+blocked until that source is green.
 
 ### Production recovery conflict (2026-09-14)
 
@@ -31,24 +66,25 @@ The canonical command is the existing real-GNS fixture with the explicit mode:
 gargantuan_game_session_real_transport_tests --pooled --reliable-workload
 ```
 
-The [workload contract](ReliableGameplayWorkloadContract3L.md#selected-engine-default)
-requires convergence within **20 seconds** after 480 service opportunities.
+The historical [workload contract](ReliableGameplayWorkloadContract3L.md#selected-engine-default)
+combined convergence with a fixed **20 seconds** after 480 service opportunities.
 Its structural overload mutates 16 already materialized Part names by 24 KiB
-per opportunity. The production journal preserves independent property
+per opportunity. The production journal preserves independent Name property
 operations in order. That offers **180 MiB of name values**, before protocol
 overhead. The accepted pooled peer credit permits **2 MiB/s**, capped at G.
 Even granting the full G credit at the start, the measured structural case's
 11.3634 seconds of demand (including setup) plus 20 seconds can fund at most
 about **63.23 MiB**. Full-rate feedback and zero transport delay cannot bridge
-this difference. This is a conflict between the selected credit envelope,
-preserved journal history and the existing fixed recovery requirement.
+this difference. The reconciliation above supersedes the interpretation that
+all 180 MiB must converge within the fixed service-recovery window.
 
 The reference model's overload case retains one pending scalar group and
 counts additional offers as overload without appending them. Production must
 still account for authoritative journal history behind the next group.
 Passing the model's pending/debt bounds does not establish bounded recovery
-for this retained history. Do not change the recovery deadline, discard or
-coalesce history, raise credit/rates, or weaken freshness merely to pass.
+for this retained history. Do not discard authoritative state, raise rates,
+or weaken freshness to obtain a pass; only semantics-preserving coalescing
+already permitted by the replication contract is in scope for the next task.
 
 MSVC Release source archive `source8.tar` has SHA-256
 `e1a49478e2a02aed971072fdd76a981e92e80eec82345379d2e491cbd9dde622`.
@@ -76,7 +112,7 @@ gameplay gates: worst measured RPC maximum 91.9395 ms, Event maximum
 The overload case itself is not an ordinary-latency qualification. The
 28 qualification probes also show that actual fresh-sample eligibility is
 more restrictive than the reference differential's supplied healthy feedback.
-That distinction needs coverage when reconciling the service contract.
+That distinction remains covered by the service contract.
 
 ### Implemented checkpoint ownership
 
@@ -128,7 +164,7 @@ matching reference grant order, credit and counts. Separate production cases
 cover fixed profile rejection, rollback/conservation, stale/missing feedback,
 probe cooldown, generation reset, ordinary followers, funded deferral/recovery,
 unrelated gameplay ACKs, retransmission and ordinary-class bounds. This is not
-a differential proof of the failed canonical retained-journal overload.
+a differential proof of the corrected retained-journal overload path.
 
 Final-source MSVC Release passes **4/4** focused CTests (networking contracts,
 scheduler contracts, replication relevance and legacy real-GNS GameSession)
@@ -149,17 +185,21 @@ The existing LNK4098 runtime-library warning remains present. Documentation
 builds **19 pages**, **69** relative links/anchors pass, and `git diff --check`
 passes. Full engine-suite qualification is **not measured** on this source.
 Linux ASan/UBSan/LSan, full GNS workflow, canonical Local/Node regression and
-hosted Native/GNS workflows for this integration source are **not measured**:
-the explicit design stop was reached before those qualification stages.
-Published `222c5beb3` and its prior terminal-green CI remain separate evidence.
-Physical 32-actual-client pooled qualification is **not measured**, as requested.
+hosted Native/GNS workflows for this integration source were **not measured**
+at the stop checkpoint: the explicit design stop was reached before those
+qualification stages. Published prior terminal-green CI remains separate
+evidence. Physical 32-actual-client pooled qualification is **not measured**,
+as requested.
 
-**Exact next task:** reconcile Option C's per-peer credit, bounded pending
-demand and fresh-feedback semantics with authoritative journal retention and
-the canonical fixed overload recovery contract. Update and qualify that
-bounded overload/service contract before resuming this production checkpoint.
-The next task is not physical qualification. KI-006 remains **OPEN**, Foundation
-3L **B — PARTIALLY READY**, and 3M **BLOCKED / NOT STARTED**.
+**Exact next task:** implement the existing semantics-preserving known-object
+scalar-property coalescing in the journal-to-frame derivation path, including
+`Name` via the current publication Name field. Preserve lifecycle/hierarchy/
+reference barriers, complete-group atomicity, scheduler acceptance-only
+journal/Known commit, exact attributed retirement and all Option C admission
+bounds. Then re-run structural and mixed canonical overload with separate
+service-recovery and structural-convergence gates. The next task is not physical
+qualification. KI-006 remains **OPEN**, Foundation 3L **B — PARTIALLY READY**,
+and 3M **BLOCKED / NOT STARTED**.
 
 ## Prior attribution stop resolution
 
@@ -215,12 +255,10 @@ control retirement cannot clear another message's active obligation. No wire,
 pin, reliable lane or ordering change is needed. The aggregate counter remains
 available for aggregate accounting; it is not a substitute for the exact receipt.
 
-Resume production `POOLED_SERVICE` admission
-integration using exact attributed structural retirement. That separate task
-must attach the token, carry native receipts and terminal ownership through the
-existing `ConnectionId` generation boundary, and prove the accepted model against
-production admission. It must not infer those fields from the current aggregate
-adapter value.
+The exact-attribution integration has since been carried into the stopped
+production checkpoint described above. The remaining blocker is no longer native
+retirement identity; it is the semantics-preserving journal-to-frame coalescing
+correction and requalification under the reconciled recovery contract.
 
 KI-006 remains **OPEN**. Foundation 3L remains **B — PARTIALLY READY**.
 Physical 32-actual-client pooled qualification is **NOT MEASURED**.
