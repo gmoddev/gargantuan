@@ -1,5 +1,5 @@
 ---
-status: selected-candidate-model-proven
+status: selected-profile-production-qualification
 owner: runtime-networking-and-runtime-host
 last_verified: 2026-09-14
 ---
@@ -58,22 +58,20 @@ all pass. Invalid/underfunded profiles and checked arithmetic overflow reject.
 The fixed 32-peer scalar model retains no payload queue; its measured MSVC
 object is 7,816 B, not a production memory/ABI guarantee.
 
-**Implementation-readiness gate:** this model checkpoint is eligible for
-**READY FOR PRODUCTION IMPLEMENTATION only when the consuming commit's required
-current-source CI is terminal green**, in addition to these executed tests and
-matching docs/link/build validation. Consult that commit's hosted checks; a
-running or older run cannot satisfy the gate. Production pooled service is
-**NOT IMPLEMENTED** and physical 32-actual-client qualification is **NOT MEASURED**.
-KI-006 remains OPEN, Foundation 3L remains **B — PARTIALLY READY**, and 3M is blocked.
+**Current implementation gate:** production pooled admission, exact attributed
+retirement and the narrow Name correction have since been implemented. The
+[production receipt](../CurrentArchitecture/PooledReliableServiceIntegration3L.md#current-disposition)
+owns final worker MSVC/sanitizer/GNS/Local/Node results and exact-source hosted
+publication gates. Running or older CI cannot qualify the consuming source.
+The model profile above is unchanged; service recovery retains the fixed
+20-second gate while complete convergence uses semantically necessary retained
+work and the accepted service floors.
 
-After that gate, the exact next separately authorized production task is to
-implement explicit pooled profile/startup validation and bounded complete-group
-credit/reservation/drain-grant accounting in the existing admission path, fed
-by verified generation-scoped GameSession/GNS service feedback. Preserve current
-full-reservation defaults, one reliable ordering domain, whole-group acceptance,
-Known/journal commit semantics, finite fairness and terminal debt reconciliation.
-Validate those production paths before the funded 32-actual-client Local/Node
-physical run. This proof-completion task authorizes none of that implementation.
+Once the receipt's required current-source hosted gates are terminal green, the
+exact next task is the separate funded **32-actual-client Local/Node physical
+qualification**. That evidence is **NOT MEASURED** here. KI-006 remains **OPEN**,
+Foundation 3L **B — PARTIALLY READY**, and 3M **BLOCKED / NOT STARTED**. The model
+and loopback evidence do not establish a physical service floor.
 
 ## Historical conceptual assessment (2026-09-13)
 

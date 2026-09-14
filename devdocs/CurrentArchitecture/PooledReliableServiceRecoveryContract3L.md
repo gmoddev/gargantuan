@@ -368,8 +368,9 @@ one-grant-per-peer rule and become an unbounded FIFO prefix.
 - repeated bounded canonical overload/recovery cycles return semantic retained
   work to zero rather than accumulating historical debt.
 
-Hosted validation for the proof source is recorded separately when terminal.
-Until then, executable proof result is **not measured**.
+The proof passes on final coalescing source `ab3f0d61d` on the worker alongside
+the 42 pooled and 19 feedback-model cases. The [production receipt](PooledReliableServiceIntegration3L.md#publication-gates-and-reproducibility)
+records exact-source hosted publication gates; a running check is not a pass.
 
 ## Effect on the stopped production checkpoint
 
@@ -377,18 +378,21 @@ The production pooled admission/debt work in `d2742796f` is not rejected by this
 reconciliation. Exact retirement, generation cleanup, debt conservation, grant
 bounds and gameplay evidence remain applicable at their measured scope.
 
-The subsequent implementation change is narrow: make known-object coalescible scalar
-property history, including the special `Name` field, collapse to current
-DataModel/catalog state within existing ordered barriers instead of serializing
-every superseded mutation. Preserve complete-group atomicity and
-acceptance-only cursor/Known commit. Then rerun the canonical structural/mixed
-overload fixture using:
+The subsequent narrow implementation at `555354bb5` makes known-object native
+`Name` history collapse to the current catalog Name in the suffix after every
+non-Name barrier. It preserves complete-group atomicity and acceptance-only
+source coverage/cursor/Known commit. The final `ab3f0d61d` fixture separately
+measures service recovery throughout the bounded window. The canonical
+structural/mixed worker cases pass with:
 
 1. the unchanged 20-second **service-recovery** gate;
 2. measured semantically necessary retained bytes at demand cessation;
 3. the workload-derived **structural-convergence** bound above;
 4. unchanged gameplay, fairness, lifecycle and debt-conservation checks.
 
-Do not resume physical qualification until that corrected production checkpoint
-is green. KI-006 remains open, Foundation 3L remains **B — PARTIALLY READY**, and
-Foundation 3M remains **BLOCKED / NOT STARTED**.
+The [current receipt](PooledReliableServiceIntegration3L.md#current-disposition)
+owns results, limits and hosted publication gates. Once that corrected published
+source is terminal green, the exact next task is the separate funded physical
+32-actual-client Local/Node qualification. Physical evidence is not measured;
+KI-006 remains open, Foundation 3L **B — PARTIALLY READY**, and Foundation 3M
+**BLOCKED / NOT STARTED**.

@@ -6,16 +6,31 @@ last_verified: 2026-09-14
 
 # Foundation 3L.3 diagnostic validation ledger
 
-## Known-object Name qualification in progress (2026-09-14)
+## Known-object Name production qualification (2026-09-14)
 
 The [production integration receipt](PooledReliableServiceIntegration3L.md#known-object-name-correction-2026-09-14)
-records the narrow Name correction over `8c41dd2ec`. Four affected MSVC suites
-pass, including acceptance/barrier/read-budget/resnapshot regressions. Initial
-canonical structural/mixed overload now converges in 1.629/1.669 seconds with
-zero journal remainder. Expanded recovery reporting and final-source closure
-remain pending; production pooled service is not yet qualified. Physical
-qualification is not measured, KI-006 remains open, Foundation 3L remains
-**B — PARTIALLY READY**, and 3M remains **BLOCKED / NOT STARTED**.
+records the narrow Name correction at `555354bb5` over `8c41dd2ec`, with bounded
+recovery measurement corrected at `ab3f0d61d`. Four affected MSVC suites and eight
+Clang sanitizer suites pass, including acceptance/barrier/read-budget/resnapshot
+regressions. The 42-case pooled model, 19-case feedback model, eight production
+groups, ten native-feedback fixtures and full established GNS workflow pass.
+All four required Local/Node 32/200 simulated-peer regressions pass; the receipt
+preserves the stricter 200-peer diagnostic limitations and cleanup accounting.
+
+Final canonical structural/mixed convergence is 1.638/1.682 seconds on MSVC and
+1.980/1.986 seconds under Clang sanitizers, within the 20.847-second retained-work
+bound. Service recovery is independently below 1.12 seconds; both cases have
+zero journal remainder at 20 seconds. Debt conserves exactly, and the pooled
+32-peer structural fixture returns to ordinary service without residual debt.
+
+Worker production qualification is complete. The [publication gates](PooledReliableServiceIntegration3L.md#publication-gates-and-reproducibility)
+require both exact-source hosted workflows and the consuming publication's
+required checks to be terminal green before handoff. Once green, production
+`POOLED_SERVICE` is qualified in the measured Engine/loopback scope and the exact
+next task is the separate funded 32-actual-client Local/Node physical
+qualification. Physical evidence and whole-server Name-fixture tick CPU are
+**not measured**. KI-006 remains **OPEN**, Foundation 3L **B — PARTIALLY READY**,
+and 3M **BLOCKED / NOT STARTED**. No physical qualification or merge was run.
 
 ## Historical production pooled recovery stop (2026-09-14)
 

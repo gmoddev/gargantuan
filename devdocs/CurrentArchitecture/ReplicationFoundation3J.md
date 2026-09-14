@@ -1,7 +1,7 @@
 ---
 status: current
 owner: networking
-last_verified: 2026-09-11
+last_verified: 2026-09-14
 related_code:
   - include/gargantuan/network/ReplicationCoordinator.hpp
   - include/gargantuan/network/GameSession.hpp
@@ -9,6 +9,7 @@ related_code:
   - src/network/ReplicationPlanning.hpp
   - src/network/GameSession.cpp
   - tests/ReplicationRelevanceTests.cpp
+  - tests/NameCoalescingFixture.hpp
   - tests/GameSessionTests.cpp
   - tests/GameSessionBenchmark.cpp
 related_adrs:

@@ -1,5 +1,5 @@
 ---
-status: production-coalescing-qualification-in-progress
+status: production-qualification-receipt
 owner: runtime-networking
 last_verified: 2026-09-14
 related_code:
@@ -7,6 +7,9 @@ related_code:
   - src/network/PooledReliableServiceFeedback.hpp
   - src/network/GameSession.cpp
   - tests/PooledReliableServiceProductionFixture.hpp
+  - src/network/ReplicationCoordinator.cpp
+  - tests/NameCoalescingFixture.hpp
+  - tests/ReliableGameplayWorkloadFixture.hpp
   - cmake/gns/ApplyReliableServiceFeedback.cmake
   - tests/ReliableServiceFeedbackFixture.hpp
 related_adrs:
@@ -17,10 +20,20 @@ related_adrs:
 
 ## Current disposition
 
-**QUALIFICATION IN PROGRESS / NOT YET QUALIFIED.** The Name correction is based
-on published `8c41dd2ec5388ddd73648ae0b44613071da7df22` and retains the reconciled
-service-recovery/convergence distinction. No merge, physical 32-client run or
-Foundation 3M work is authorized by this qualification receipt.
+**IMPLEMENTATION AND WORKER QUALIFICATION COMPLETE.** The Name correction at
+`555354bb5031f0e64b6594ce6606558651805314`, with recovery measurement corrected at
+`ab3f0d61dfceac5e3e4935049b7333e4cebb7a8a`, is based on published
+`8c41dd2ec5388ddd73648ae0b44613071da7df22`. It retains the reconciled service
+recovery/convergence distinction and qualifies explicit production
+`POOLED_SERVICE` within the measured Engine/loopback scope **only when both
+required hosted workflows on the consuming published source are terminal green**.
+The hosted gates and worker evidence are recorded below; running CI is not a pass.
+
+After that publication gate, the exact next task is the **separate funded
+32-actual-client Local/Node physical qualification** against the accepted Option C
+profile. That physical evidence is **not measured** here. KI-006 remains **OPEN**,
+Foundation 3L **B — PARTIALLY READY**, and 3M **BLOCKED / NOT STARTED**. No merge,
+physical client run or 3M work was performed.
 
 ### Known-object Name correction (2026-09-14)
 
@@ -66,8 +79,8 @@ time and are not the eligible-grant fairness metric. Qualified workload targets
 are unchanged; deliberate mixed overload can exceed ordinary gameplay limits,
 but its subsequent recovery probes must satisfy them.
 
-Linux sanitizers, full GNS, Local/Node closure and hosted CI remain pending.
-These passing subsets are not final production qualification claims.
+These initial runs are retained for provenance. The final worker measurements
+and publication gates below supersede them for the corrected executable source.
 
 #### Recovery-probe correction
 
@@ -93,10 +106,132 @@ accepted RPC/Event/action errors and ordinary demand-phase action refusals remai
 failures. A successful recovery group must meet 150-ms RPC and 250-ms Event/action
 bounds with cleared debt/grants/reliable queues. No production admission,
 prediction behavior, workload rate, or service-recovery deadline changes.
-Final-source validation of this measurement correction is pending.
+Final-source worker validation of this measurement correction passes below.
+
+#### Executable-source closure at `ab3f0d61d`
+
+The corrected MSVC workload passes all eight cases. Structural/mixed service
+recovery is 113.472/1,112.43 ms; structural convergence is 1,637.63/1,681.98 ms
+against the unchanged 20,847.1-ms bound. Both have 2,016 raw records at cessation,
+32 retained Names, 7,504 coalesced records, 208 transitions / 12 frames and zero
+journal records at 20 seconds. Each recovery needs one probe with no local
+action refusal. Structural/mixed recovery RPC/Event/action times are
+37.405/37.397/37.405 ms and 38.109/38.099/38.100 ms.
+
+The current per-case client decode/apply CPU is 31.878/42.814 ms for structural
+overload and 30.714/42.806 ms for mixed overload. The old structural run consumed
+82.556/114.733 ms of decode/apply CPU while still incomplete at 20 seconds; it
+does not provide CPU to full convergence. These are client decode/application
+counters, not server tick CPU. Whole server tick CPU for this Name fixture is
+**not measured**; its legacy materialization CPU counter reports zero.
+
+The existing Local/Node consumer target is rebuilt against the same production
+Engine source. All four qualified differential cases pass with a 512-object
+package, eight active peers and eight-object neighborhoods:
+
+| Simulated peers | Local | TLS Node |
+| --- | --- | --- |
+| 32 | PASS, 75.26 s | PASS, 75.05 s |
+| 200 | PASS, 76.95 s | PASS, 76.78 s |
+
+Every baseline/load/resident/evict/reload phase reports `serviceHealthy=1` and
+every run reports qualification completion. At 200 peers, load/reload retains
+the existing stricter diagnostic `phaseHealthy=0`; this is not silently promoted
+to a tick/raw-gap pass. Both providers finish with zero connections, journal
+readers, admission owners, requested/acquiring/prepared/resident content,
+completion reservations, completed/decoded/cached bytes and resident objects.
+The remaining 544 admission bytes are the fixed empty admission object, not a
+transient owner. These are simulated-peer regression cases, not the separate
+physical 32-client qualification. No sibling source was modified.
 The raw workload remains 480 opportunities times 16 writes, alternating over
 **32** Parts: 7,680 Name records / 180 MiB of value history. Its 384 creation
 records bring the reported journal production to 8,064 records per case.
+
+#### Final sanitizer, resource and service evidence
+
+Clang 19 ASan/UBSan/LSan on the trusted worker passes **8/8 focused CTests in
+43.01 seconds**, **42/42 pooled model/hardening cases**, **19/19 feedback-model
+cases**, **8/8 production pooled groups**, the recovery-contract proof and
+**10/10 native-feedback fixtures**. The production differential preserves the
+healthy 32-peer wave, 31 completions with one non-draining peer retaining exactly
+G, fixed profile rejection, exact retirement, generation cleanup and conservation.
+Its 32-peer admission object is 5,440 logical bytes on Clang (5,408 on MSVC),
+excluding allocator overhead and existing journal/scheduler/feedback storage.
+
+The full established Linux GNS workflow exits **0**: both profile lifecycles,
+the production-admission capacity matrix, all eight pooled gameplay cases,
+pooled 32-peer structural overload, and full-reservation single-peer, 32-peer
+gameplay and 32-peer structural compatibility fixtures pass. No sanitizer finding
+is reported. These 32-peer cases use existing in-process/loopback fixtures.
+
+| Final canonical case | MSVC service recovery | Clang sanitizer service recovery | MSVC convergence | Clang sanitizer convergence | Convergence bound |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Structural overload | 113.472 ms | 132.579 ms | 1,637.63 ms | 1,979.54 ms | 20,847.1 ms |
+| Mixed overload | 1,112.43 ms | 1,112.92 ms | 1,681.98 ms | 1,985.87 ms | 20,847.1 ms |
+
+Service recovery passes the unchanged **20-second** deadline independently of
+convergence. Each case has **zero raw journal remainder at 20 seconds**. Clang
+has 1,504 raw records at cessation (MSVC 2,016); each platform's conservative
+remaining semantic inventory is 32 Names, zero other records, and 789,772 complete
+message bytes. Both platforms emit 208 transitions / 12 frames, including 32
+materializations and 176 Name updates, coalescing 7,504 source records. Previous
+emitted transition/frame counts to full convergence are **not measured**: that
+source still had 7,248 records after 20 seconds. The old case accepted 10,643,384
+structural bytes while incomplete; the corrected case accepts 4,342,072 and
+converges. These are measured case totals, not identical-duration throughput.
+
+MSVC journal retained high-water is 9,884 / 16,384 records for structural/mixed;
+the corresponding **required-reader** high-water is 2,592 / 2,640, leaving
+13,792 / 13,744 records of safety margin. Retained history reaching its fixed
+storage cap is distinct from a lagging required reader exhausting that window.
+The final MSVC workload conserves **8,727,506 created = 8,727,506 retired +
+0 terminal + 0 outstanding**; Clang conserves **8,727,438 = 8,727,438 + 0 + 0**.
+Both reach one grant and 393,866 debt bytes high-water.
+
+Clang structural/mixed recovery RPC/Event/action is 37.258/37.202/37.190 ms and
+38.342/38.281/38.273 ms. Both need one recovery group with zero local action
+refusals. Gameplay-only overload also recovers in 1,108.14 ms. Client decode/apply
+CPU is 39.391/137.057 ms and 39.586/133.379 ms under sanitizers; these timings
+must not be compared as an optimized-build speed ratio against MSVC.
+
+The pooled 32-peer structural fixture drains in 1,455.64 ms after overload and
+conserves **130,813,628 created = retired**, with zero terminal release and
+outstanding debt, four grants and 590,984 debt bytes high-water. Measured service
+gaps are 54.246 ms before overload, 168.676 ms during overload and 42.514 ms in
+the subsequent ordinary phase. Overload required-journal high-water is 132,
+margin 16,252, and final recovery backlog zero. Maximum admission wait is
+1,497.178 ms, including cold/ineligible intervals; it is not the conditional
+eligible-grant model bound. Canonical single-peer planning gap remains seven
+ticks. No physical path fairness, whole-server tick CPU or rendered-client
+behavior is inferred from these measurements.
+
+The production change adds one 64-bit source-coverage marker to existing
+accepted-object metadata and one 64-bit coordinator barrier. The candidate-only
+set is bounded by the existing journal read/operation limits. There is no new
+cached Name value, semantic truth set, global compaction or retained payload
+queue. Generic property derivation and all Option C numeric limits are unchanged.
+
+#### Publication gates and reproducibility
+
+The exact executable-source hosted gates are [Native engine CI at ab3f0d61d](https://github.com/gmoddev/gargantuan/actions/runs/34897744683)
+and [GNS sanitizer CI at ab3f0d61d](https://github.com/gmoddev/gargantuan/actions/runs/34897744791).
+Both must finish successfully; the consuming documentation-only publication must
+also have terminal-green required current-source checks before final handoff.
+The superseded `555354bb5` runs were cancelled after the probe correction and
+are not qualification evidence. A docs-only closure does not change the measured
+executable source. Closure docs build **19 pages**, **100 relative links/anchors**
+pass, and `git diff --check` passes.
+
+Worker evidence is retained under
+`C:\Sandbox\Codex\Logs\gargantuan-3l-name-coalescing`: `workload3.log` is final
+MSVC, `name-coalescing-*.log` is the final Linux workflow, and
+`local-node-32.log` / `local-node-200.log` are the consumer regressions. The
+isolated local checkout retains copies under `build/name-coalescing/`.
+The full 27-file C++ overlay through `555354bb5` has SHA-256
+`a3385f9b124fc07022e7a0dafab1753a63014430b3dcdcd4ef02c49496955568`;
+the final one-file `ab3f0d61d` probe overlay has SHA-256
+`f8edecd7f3552fdf752f57a394e2f555f7b1bb309045a4dee57ce80ab7bdd945`.
+Builds use four jobs and persistent caches. No sibling source was changed.
 
 ### Historical production stop
 
@@ -106,7 +241,7 @@ bounded admission and real-GNS gameplay, but fails the former structural overloa
 recovery fixture. This checkpoint is not a production deployment recommendation.
 No merge, physical 32-client run or Foundation 3M work occurred.
 
-### Recovery-contract reconciliation (2026-09-14)
+### Historical recovery-contract reconciliation (2026-09-14)
 
 The architecture conflict is now resolved by
 [`PooledReliableServiceRecoveryContract3L.md`](PooledReliableServiceRecoveryContract3L.md).

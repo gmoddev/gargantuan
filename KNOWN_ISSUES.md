@@ -83,16 +83,24 @@ This closes the ordering defect, not general planning work or Foundation health.
 <a id="ki-006-content-coupled-gameplay-latency-exceeds-the-3l2-readiness-envelope"></a>
 <a id="ki-006-remaining-real-client-and-physical-recipient-service-qualification"></a>
 
-## KI-006: Remaining pooled-service implementation and physical qualification
+## KI-006: Remaining physical pooled-service qualification
 
-Name correction update 2026-09-14: **OPEN / QUALIFICATION IN PROGRESS**. The
+Name correction update 2026-09-14: **OPEN / WORKER PRODUCTION QUALIFICATION COMPLETE**. The
 [integration receipt](devdocs/CurrentArchitecture/PooledReliableServiceIntegration3L.md#known-object-name-correction-2026-09-14)
-records the acceptance-safe Name suffix correction over `8c41dd2ec`, passing
-focused MSVC suites and initial structural/mixed convergence at 1.629/1.669
-seconds. The recovery contract is reconciled: service recovery retains its
-20-second gate and complete convergence uses the retained-work service bound.
-Final-source qualification and separate funded physical 32-client evidence are
-still required. Foundation 3L remains **B** and 3M remains blocked.
+records the acceptance-safe Name suffix correction at `555354bb5`, with recovery
+measurement corrected at `ab3f0d61d`. MSVC, Clang sanitizers, the established full
+GNS scope and qualified Local/Node 32/200 simulated-peer regressions pass.
+Structural/mixed convergence is 1.638/1.682 seconds on MSVC and 1.980/1.986 seconds
+under sanitizers; service recovery is separately below 1.12 seconds, with exact
+debt conservation and zero raw journal remainder at 20 seconds. The accepted
+profile, gameplay guarantees and barrier/acceptance semantics are unchanged.
+
+The receipt requires terminal-green hosted checks for the executable source and
+consuming publication before final qualification handoff. Once those gates pass,
+the exact next task is the **separate funded 32-actual-client Local/Node physical
+qualification**; that evidence is **not measured** here. Production code and
+loopback results do not close this physical gate. Foundation 3L remains
+**B — PARTIALLY READY**, and 3M remains **BLOCKED / NOT STARTED**.
 
 Historical production integration stop 2026-09-14: The isolated
 checkpoint based on `222c5beb3` implements pooled credit/grants, exact native
