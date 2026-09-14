@@ -68,6 +68,32 @@ but its subsequent recovery probes must satisfy them.
 
 Linux sanitizers, full GNS, Local/Node closure and hosted CI remain pending.
 These passing subsets are not final production qualification claims.
+
+#### Recovery-probe correction
+
+At executable checkpoint `555354bb5031f0e64b6594ce6606558651805314`, Linux
+ASan/UBSan/LSan passes all eight focused CTests (43.41 seconds), the 42 pooled
+model/hardening cases, 19 feedback-model cases, eight production pooled groups
+and ten native-feedback fixtures. Canonical structural/mixed cases also recover
+service in 120.589/1,113.61 ms and converge in 1,985.73/1,932.72 ms with zero
+journal remainder at 20 seconds.
+
+The complete first Linux workload nevertheless exits 1: the new one-shot probe
+in gameplay-only overload receives a local `RequestAction` refusal, so the
+fixture never observes a successful action even though its remaining 20-second
+recovery window is unused. `PredictedCharacterNetwork::RequestAction` may refuse
+admission while prediction is suspended after history overflow; reconciliation
+clears that state. An early unaccepted probe is not evidence that service cannot
+recover by the deadline. The failed log is retained as `linux-attempt1/pooled-workload.log`.
+
+The corrected measurement sends at most one RPC/Event/action probe group per
+second while recovery is unproven, records every attempt and local action
+refusal, and still fails if no qualified group completes by 20 seconds. All
+accepted RPC/Event/action errors and ordinary demand-phase action refusals remain
+failures. A successful recovery group must meet 150-ms RPC and 250-ms Event/action
+bounds with cleared debt/grants/reliable queues. No production admission,
+prediction behavior, workload rate, or service-recovery deadline changes.
+Final-source validation of this measurement correction is pending.
 The raw workload remains 480 opportunities times 16 writes, alternating over
 **32** Parts: 7,680 Name records / 180 MiB of value history. Its 384 creation
 records bring the reported journal production to 8,064 records per case.

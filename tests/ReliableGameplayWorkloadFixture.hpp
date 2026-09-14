@@ -338,6 +338,7 @@ void RunReliableGameplayWorkload(
 		bool OldestCatalog = false;
 		double MaximumRequiredAgeMs = 0;
 		std::size_t ServerBacklogHigh = 0;
+		std::uint64_t RecoveryActionRejections = 0;
 	};
 	struct PendingEvent { Clock::time_point Started; std::vector<WireValue> Arguments; };
 	Observation Results;
@@ -347,6 +348,7 @@ void RunReliableGameplayWorkload(
 	auto ActionService = ClientRuntime.DataModel->GetService("CharacterControlService");
 	int ActionSequence = 0;
 	std::optional<Clock::time_point> ActionStarted;
+	bool RecoveryProbeActive = false;
 	struct JournalTime { std::uint64_t Sequence = 0; Clock::time_point Observed; };
 	std::vector<JournalTime> JournalTimes(DefaultChangeJournalCapacity);
 	std::uint64_t LastObservedTail = ChangeJournal::Get().CreateCursor(ServerRuntime.DataModel->GetObjectId()).NextSequence;
@@ -424,6 +426,7 @@ void RunReliableGameplayWorkload(
 				const auto Authority = detail::GameSessionTestAccess::GetCharacterMetrics(Server);
 				const auto Prediction = detail::GameSessionTestAccess::GetCharacterMetrics(Client);
 				std::cout << "[Qualification:ActionRejected] sequence=" << ActionSequence
+					<< " recovery_probe=" << RecoveryProbeActive
 					<< " commands_received=" << Authority.CommandsReceived << " commands_accepted=" << Authority.CommandsAccepted
 					<< " stale_commands=" << Authority.StaleCommandsRejected << " states_sent=" << Authority.AuthoritativeStatesSent
 					<< " authority_protocol_rejects=" << Authority.ProtocolRejects
@@ -443,7 +446,10 @@ void RunReliableGameplayWorkload(
 							<< " quaternion_length=" << glm::length(Value->GetCFrame().ToQuaternion()) << '\n';
 					}
 				}
-				++Results.Errors;
+				// A locally refused recovery probe was never accepted. Recovery
+				// is a deadline, not a promise that the first early probe succeeds.
+				if (RecoveryProbeActive) ++Results.RecoveryActionRejections;
+				else ++Results.Errors;
 				ActionStarted.reset();
 			}
 		}
@@ -497,6 +503,7 @@ void RunReliableGameplayWorkload(
 	for (int Frame = 0; Frame < 120; ++Frame) Step();
 	for (const auto &Case : Cases) {
 		Results = {};
+		RecoveryProbeActive = false;
 		const auto Started = Clock::now();
 		const auto Before = Server.GetMetrics();
 		const auto JournalStart = ChangeJournal::Get().CreateCursor(ServerRuntime.DataModel->GetObjectId()).NextSequence;
@@ -589,14 +596,19 @@ void RunReliableGameplayWorkload(
 		double RecoveryRpcMs = 0, RecoveryEventMs = 0, RecoveryActionMs = 0;
 		std::uint64_t JournalAt20Seconds = 0;
 		bool DeadlineObserved = false, RecoveryProbeSent = false;
+		auto NextRecoveryProbe = DemandEnded;
+		std::size_t RecoveryAttempts = 0;
 		std::size_t RecoveryRpcIndex = 0, RecoveryEventIndex = 0, RecoveryActionIndex = 0;
 		while (Client.GetStatus() == GameSessionStatus::Ready && Clock::now() < ConvergenceDeadline) {
 			const auto Now = Clock::now();
 			const auto Current = Server.GetMetrics();
 			if (ConvergenceMs < 0 && Converged()) ConvergenceMs = std::chrono::duration<double, std::milli>(Now - DemandEnded).count();
-			if (!RecoveryProbeSent && !PendingRequests && Events.empty() && !ActionStarted) {
+			if (!RecoveryProbeSent && Now >= NextRecoveryProbe && !PendingRequests && Events.empty() && !ActionStarted) {
 				RecoveryRpcIndex = Results.Rpc.size(); RecoveryEventIndex = Results.Event.size(); RecoveryActionIndex = Results.Action.size();
 				RecoveryProbeSent = true;
+				RecoveryProbeActive = true;
+				NextRecoveryProbe = Now + 1s;
+				++RecoveryAttempts;
 				Send(true, 128); Send(false, 128);
 				ActionStarted = Clock::now();
 				(void)ActionService->ApplyAttributeMutation("WorkloadRequest", WireValue(++ActionSequence));
@@ -605,6 +617,7 @@ void RunReliableGameplayWorkload(
 			const auto ClientQueue = ClientTransport.GetStatistics(*Connection);
 			if (ServiceRecoveryMs < 0 && RecoveryProbeSent && !PendingRequests && Events.empty() && !ActionStarted &&
 				Results.Rpc.size() > RecoveryRpcIndex && Results.Event.size() > RecoveryEventIndex && Results.Action.size() > RecoveryActionIndex &&
+				Results.Rpc[RecoveryRpcIndex] <= 150 && Results.Event[RecoveryEventIndex] <= 250 && Results.Action[RecoveryActionIndex] <= 250 &&
 				!Current.ReliableAdmission.OutstandingBytes && !Current.ReliableAdmission.ActiveDrainGrants &&
 				ServerQueue && ServerQueue->QueuedReliableBytes == std::optional<std::size_t>(0) &&
 				ClientQueue && ClientQueue->QueuedReliableBytes == std::optional<std::size_t>(0)) {
@@ -612,13 +625,17 @@ void RunReliableGameplayWorkload(
 				RecoveryRpcMs = Results.Rpc[RecoveryRpcIndex]; RecoveryEventMs = Results.Event[RecoveryEventIndex];
 				RecoveryActionMs = Results.Action[RecoveryActionIndex];
 			}
+			if (ServiceRecoveryMs < 0 && RecoveryProbeSent && !PendingRequests && Events.empty() && !ActionStarted) {
+				RecoveryProbeSent = false;
+				RecoveryProbeActive = false;
+			}
 			if (!DeadlineObserved && Now >= DrainDeadline) { DeadlineObserved = true; JournalAt20Seconds = Current.JournalBacklogRecords; }
 			if (ServiceRecoveryMs >= 0 && ConvergenceMs >= 0 && (!Case.StructuralOverload || DeadlineObserved)) break;
 			if (Now >= DrainDeadline && ServiceRecoveryMs < 0) break;
 			Step();
 		}
 		Check(Client.GetStatus() == GameSessionStatus::Ready, "single-peer workload remains connected");
-		Check(ServiceRecoveryMs >= 0 && ServiceRecoveryMs <= 20'000 && RecoveryRpcMs <= 500 && RecoveryEventMs <= 250 && RecoveryActionMs <= 250,
+		Check(ServiceRecoveryMs >= 0 && ServiceRecoveryMs <= 20'000 && RecoveryRpcMs <= 150 && RecoveryEventMs <= 250 && RecoveryActionMs <= 250,
 			"service recovers within 20 seconds with cleared debt/grants/queues and qualified gameplay probes");
 		Check(ConvergenceMs >= 0 && ConvergenceMs <= std::chrono::duration<double, std::milli>(ConvergenceAllowance).count(),
 			"structural convergence meets the independent workload-derived bound");
@@ -634,6 +651,7 @@ void RunReliableGameplayWorkload(
 			<< " emitted_frames=" << AfterClientReplica.FramesApplied - BeforeClientReplica.FramesApplied
 			<< " coalesced_records=" << AfterReplication.OperationsCoalesced - BeforeReplication.OperationsCoalesced
 			<< " recovery_rpc_ms=" << RecoveryRpcMs << " recovery_event_ms=" << RecoveryEventMs << " recovery_action_ms=" << RecoveryActionMs
+			<< " recovery_attempts=" << RecoveryAttempts << " recovery_action_rejections=" << Results.RecoveryActionRejections
 			<< " debt_high=" << After.ReliableAdmission.OutstandingHighWater << " grants_high=" << After.ReliableAdmission.DrainGrantsHighWater
 			<< " admission_wait_us=" << After.ReliableAdmission.MaximumAdmissionWaitMicroseconds
 			<< " planning_gap_ticks=" << After.PlanningMaximumServiceGapTicks
