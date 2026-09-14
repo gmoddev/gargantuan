@@ -6,6 +6,29 @@ last_verified: 2026-09-14
 
 # Foundation 3L.3 diagnostic validation ledger
 
+## Exact reliable retirement attribution checkpoint (2026-09-14)
+
+Native attribution is implemented at `62c663335cfd36498869fde3d8e85406f102e281`,
+with declaration/test portability corrections at
+`a5a182ff94ae7373e0cdcdcc6232b434696926fe`. The
+[qualification receipt](ReliableTransportFeedbackProof3LValidation.md#retirement-attribution-qualification-2026-09-14)
+records 12/12 mixed-retirement cases, 9/9 feedback fixtures including real-GNS
+identity binding/final retirement, 3/3 affected CTests on MSVC and Clang sanitizers,
+unchanged 19/19 and 42/42 model proofs, resource measurements and hosted CI.
+Hosted qualification is terminal green: Native CI `34831487114` passes MSVC
+58/58 and Clang sanitizers 50/50; GNS CI `34831486990` passes 5/5 transport CTests
+and its full established workflow scope. Native attribution is **READY FOR
+POOLED-SERVICE INTEGRATION**. The [stop receipt](PooledReliableServiceIntegration3L.md)
+closes the attribution blocker while preserving why aggregate ACKs alone cannot
+retire structural debt.
+
+The [contract](ReliableTransportFeedbackProof3L.md#exact-retirement-attribution)
+uses one sender-local token/native-message pair, exact final-reference retirement,
+checked fail-closed storage, and the existing outer connection generation. There
+is no wire or ordering change. Production adapter propagation and pooled
+admission remain the next integration task. KI-006 remains **OPEN**, Foundation
+3L **B — PARTIALLY READY**, and 3M **BLOCKED / NOT STARTED**.
+
 ## Native reliable-service feedback checkpoint (2026-09-14)
 
 Based on published `009fc4f9b87faa473a463965ae75925517cda4dd`, the

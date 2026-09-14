@@ -17,13 +17,68 @@ related_adrs:
 
 ## Verdict
 
-**Native feedback extension implemented; validation is recorded in the [receipt](ReliableTransportFeedbackProof3LValidation.md).**
+**READY FOR POOLED-SERVICE INTEGRATION:** native feedback and exact sender-local
+retirement attribution are implemented and qualified at `a5a182ff9`. The
+[receipt](ReliableTransportFeedbackProof3LValidation.md#retirement-attribution-qualification-2026-09-14)
+records terminal-green MSVC, Linux sanitizer and GNS workflow results.
 
 The accepted Option C pooled-service model remains valid as an abstract service proof. Upstream public GNS status alone cannot supply its exact drain/debt evidence. The pinned integration now observes existing native first-send, retry, ACK and final-message retirement transitions and exposes a private generation-safe snapshot. This does not implement production pooled admission. Foundation 3L remains **B — PARTIALLY READY**, KI-006 **OPEN**, and 3M blocked.
 
 The implemented boundary preserves GNS send, ACK, retransmission, ordering, queue and congestion behavior. No dependency upgrade, wire change, second reliable lane or application ACK is introduced.
 
 ## Implemented private boundary
+
+### Exact retirement attribution
+
+Decision B retains the narrow private GNS integration. Connection-wide
+`ReliablePayloadBytesAcked` is truthful aggregate retirement, but cannot identify
+structural versus gameplay/control retirement. Reliable delivery order does not
+imply sender retirement order. The [integration stop receipt](PooledReliableServiceIntegration3L.md)
+preserves the counterexample; aggregate ACK deltas must never pay structural debt.
+
+The private `GargantuanBeginReliableRetirementAttribution(Token)` /
+`GargantuanEndReliableRetirementAttribution()` scope marks exactly one synchronous
+reliable submission on the calling thread. In the existing SNP send path,
+immediately after assigning `m_nMessageNumber`, the reliable branch consumes the
+token and binds it to that native message number in the connection's sender
+state. The token is never attached to a packet or serialized. GNS's existing
+message number supplies identity; the Gargantuan token supplies sender-local
+obligation correlation. The current single reliable lane/order domain is unchanged.
+
+At `RemoveRefCountReliableSegment`'s final ACKed message reference, before
+unlink/release, `AckMessage(MessageNumber, MessageBytes, PrivateHeaderBytes)`
+updates the aggregate counter. Only an exact active-message match advances
+`AttributedRetirementSequence` and publishes `LastAttributedRetirementToken`,
+`LastAttributedRetirementMessageNumber`, and `LastAttributedRetiredPayloadBytes`.
+It then clears the active token/message pair. Unrelated gameplay/control
+retirements cannot change that receipt. Retry references can delay final release;
+retry bytes remain physical cost, never a second logical retirement.
+
+The fixed storage permits **one active attributed message per native connection**
+and one last-retired receipt. It adds six `uint64_t` fields (48 bytes) and one
+thread-local pending token, with no per-message map, packet history, queue or
+allocation. Successive tokens must be nonzero and strictly increase within a
+sender lifetime. Zero/negative native message identities, concurrent obligations,
+token reuse/regression, sequence exhaustion and invalid byte arithmetic set
+sticky invalid feedback. Zero/nested Begin calls reject. Callers must always end
+the scope, including rejected submissions, and consume a receipt before granting
+another obligation; the receipt is not an event backlog.
+
+Shutdown marks `Purged` without advancing verified retirement or clearing the
+unretired active identity. That identity describes remaining ownership for
+terminal release, not ACK success. A new native sender starts with zero state.
+The outer lifecycle key remains the full adapter `ConnectionId` generation;
+message numbers or tokens alone must never identify a replacement connection.
+
+The current production `ReliableServiceFeedback` adapter value still exposes
+aggregate fields only. Exact fields are available in the private native
+snapshot and exercised by the native fixture. The next pooled integration must
+bind its accepted structural obligation at submission, preserve exact receipt
+and terminal identity through the existing generation-safe adapter boundary,
+and consume each matching receipt once. This task does not implement that
+production policy or claim that the aggregate adapter value already carries it.
+
+### Aggregate observation and capture
 
 `cmake/gns/ApplyReliableServiceFeedback.cmake` verifies normalized source hashes at
 the exact pin and applies idempotent hooks. Unknown edits fail configuration.
@@ -122,7 +177,9 @@ Likewise, summing positive decreases of pending reliable bytes is unsound: one s
 
 ## Smallest truthful native extension
 
-The production adapter does not need packet internals, semantic ACKs, or a public generic GNS API. The narrow extension should maintain four generation-local checked `uint64_t` cumulative counters in GNS sender state and expose them through a private Gargantuan integration bridge while the connection lock is held:
+The four aggregate counters below remain implemented and useful. Exact class
+attribution additionally requires the fixed identity fields described above;
+these aggregate values alone are not structural retirement evidence:
 
 ```text
 UniqueReliableStreamBytesFirstSent
@@ -167,7 +224,7 @@ Option C must keep two ledgers:
 ```text
 Logical structural debt
     = complete Gargantuan reliable bytes accepted for structural service
-      - delta(ReliablePayloadBytesAcked)
+      - payload bytes from matching, previously unconsumed attributed retirements
       - valid terminal release
 
 Physical transport cost
@@ -202,7 +259,7 @@ and
 Delta(UniqueReliableStreamBytesAcked) > 0
 ```
 
-while the peer has no previous outstanding structural grant debt. The first condition proves actual local/backend unique serialization rather than configured rate. The second proves that the remote transport is making ACK progress rather than merely accepting bytes into an unacknowledged black hole. Exact structural debt is retired only by `ReliablePayloadBytesAcked`, not by either qualification counter.
+while the peer has no previous outstanding structural grant debt. The first condition proves actual local/backend unique serialization rather than configured rate. The second proves that the remote transport is making ACK progress rather than merely accepting bytes into an unacknowledged black hole. Exact structural debt is retired only by a matching attributed message receipt, never by aggregate payload ACKs or either qualification counter.
 
 RTT, pending/unacked state and retransmission deltas remain supporting health/cost diagnostics. They can make a profile unqualified but cannot manufacture positive verified service.
 

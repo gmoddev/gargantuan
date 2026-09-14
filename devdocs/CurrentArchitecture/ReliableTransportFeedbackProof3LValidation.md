@@ -6,6 +6,158 @@ last_verified: 2026-09-14
 
 # Foundation 3L reliable transport feedback proof validation
 
+## Retirement attribution qualification (2026-09-14)
+
+Implementation: `62c663335cfd36498869fde3d8e85406f102e281`. Corrected executable
+source: `a5a182ff94ae7373e0cdcdcc6232b434696926fe`, published on
+`foundation/3l-content-availability`. The pin remains
+`2cb93a06350bb065db53abdb0d87cf297e0bfd34`. No production pooled admission,
+wire, ordering, grant/profile, or dependency change was made.
+
+**READY FOR POOLED-SERVICE INTEGRATION. Local and required hosted qualification
+pass on the corrected executable source.** The
+[contract](ReliableTransportFeedbackProof3L.md#exact-retirement-attribution)
+and [integration stop](PooledReliableServiceIntegration3L.md) supersede the
+earlier conclusion that aggregate connection retirement alone suffices for
+structural debt. The older evidence below remains valid in its recorded scope.
+
+### Failure classification and correction
+
+Both original exact-source workflows failed during compilation, before tests:
+[Native engine CI 34829807610](https://github.com/gmoddev/gargantuan/actions/runs/34829807610)
+and [GNS sanitizer CI 34829807689](https://github.com/gmoddev/gargantuan/actions/runs/34829807689).
+`ReliableServiceFeedback.hpp` had moved the global public GNS interface forward
+declaration into `SteamNetworkingSocketsLib` and removed the native-read and
+close-capture declarations. MSVC reported C3861/C2027; Clang reported undeclared
+native read and incomplete interface use. Restoring the original declarations
+is a source compilation correction, not a protocol or architecture change.
+
+The focused Clang build then exposed a fixture portability defect:
+`std::int64_t*` is not GNS's `int64*` on Linux. The test now uses the API's exact
+output-pointer type. No attribution behavior was changed to make tests pass.
+There was no sanitizer finding or dependency/infrastructure failure at these
+two failure points.
+
+### Final executable-source evidence
+
+| Evidence | MSVC Release | Clang 19 ASan/UBSan/LSan |
+| --- | --- | --- |
+| Feedback fixture, including mixed matrix and real native identity | **9/9 PASS** | **9/9 PASS** |
+| Deterministic mixed-retirement attribution matrix | **12/12 PASS** | **12/12 PASS** |
+| Affected CTests: native fairness/retirement, networking contracts, real transport | **3/3 PASS**, 14.85 s | **3/3 PASS**, 14.85 s |
+| Accepted feedback model | **19/19 PASS** | **19/19 PASS** |
+| Unchanged Option C model/hardening | **42/42 PASS** | **42/42 PASS** |
+
+The mixed matrix covers both opposite retirement orders, alternating structural/
+gameplay/control messages, successive grants separated by gameplay, structural
+and gameplay retransmission, delayed/duplicate ACK, multi-segment final retirement,
+co-processed message isolation, terminal mixed outstanding debt and fresh-sender
+isolation. It invokes the native counter implementation deterministically;
+co-packetization and reconnect in that matrix are modeled ownership scenarios,
+not additional physical packet/reconnect measurements.
+
+The real-GNS `RealGnsAttributedRetirement` fixture uses a network-loopback native
+socket pair. A sender-local token binds to the message number returned by the
+real send API; final retirement reports exactly 49,152 payload bytes once, and
+later unattributed reliable traffic cannot overwrite that receipt. Existing real
+loss/retry, delayed/duplicate traffic and adapter teardown/reconnect cases remain
+green. The native reference-count fixture separately proves that partial ACKs
+and retry references cannot trigger premature message retirement.
+
+Checked overflow covers first-send/retry/payload arithmetic, impossible ACK
+progress, negative ranges, token reuse, concurrent attributed obligations,
+sequence exhaustion and nested attribution scope rejection. Purge and verified
+retirement remain distinct. The deterministic attribution lifecycle proof and
+real adapter generation/reset proof are separate layers; production propagation
+of exact receipts through the adapter remains part of the next integration task.
+
+### Commands and worker provenance
+
+Worker: trusted `dockerbox`. MSVC reused
+`C:\Sandbox\Codex\Builds\gargantuan\runtime-host-f1-1-baseline2-msvc-gns-vs`
+with sources in `C:\Sandbox\Codex\Workspaces\gargantuan-runtime-host-f1-1\engine`.
+Clang reused `/build-engine` and `/workspace-engine` in the task-owned
+`codex-gargantuan-native-feedback` container (four CPUs, 12 GiB).
+Both builds used four jobs; dependencies and incremental caches were retained.
+Nine native integration/adapter/build/test files match the local executable
+source by SHA-256 after CRLF normalization; all six transferred files also match
+byte-for-byte. The final container stopped with exit 0.
+
+```powershell
+$TaskBuild = 'C:\Sandbox\Codex\Builds\gargantuan\runtime-host-f1-1-baseline2-msvc-gns-vs'
+$TaskTools = 'C:\Sandbox\Codex\Tools\cmake-3.31.10\cmake-3.31.10-windows-x86_64\bin'
+& "$TaskTools\cmake.exe" --build $TaskBuild --config Release --parallel 4 --target gargantuan_real_transport_tests gargantuan_networking_contract_tests gargantuan_gns_service_fairness_tests
+& "$TaskBuild\Release\gargantuan_real_transport_tests.exe" --reliable-feedback
+& "$TaskBuild\Release\gargantuan_networking_contract_tests.exe"
+& "$TaskTools\ctest.exe" --test-dir $TaskBuild -C Release -R '^(gargantuan_real_transport|gargantuan_networking_contracts|gargantuan_gns_service_fairness)$' --parallel 1 --timeout 300 --output-on-failure --no-tests=error
+```
+
+Linux commands:
+
+```sh
+cmake --build /build-engine --parallel 4 --target gargantuan_real_transport_tests gargantuan_networking_contract_tests gargantuan_gns_service_fairness_tests
+/build-engine/gargantuan_real_transport_tests --reliable-feedback
+/build-engine/gargantuan_networking_contract_tests
+ctest --test-dir /build-engine -R '^(gargantuan_real_transport|gargantuan_networking_contracts|gargantuan_gns_service_fairness)$' --parallel 1 --timeout 300 --output-on-failure --no-tests=error
+```
+
+Environment: `ASAN_OPTIONS=detect_leaks=1:halt_on_error=1`,
+`UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1`,
+`ASAN_SYMBOLIZER_PATH=/usr/bin/llvm-symbolizer-19`, `SDL_VIDEODRIVER=dummy`.
+Logs are `attribution-{build,msvc-feedback,msvc-models,msvc-ctest,linux-build,linux-feedback,linux-models,linux-ctest}.log`
+under `C:\Sandbox\Codex\Logs\gargantuan-3l-native-feedback`, copied to the
+isolated worktree's ignored `build/attribution-closure/` directory.
+
+### Hosted CI and sanitizer scope
+
+Both corrective runs target exact executable source `a5a182ff94ae7373e0cdcdcc6232b434696926fe`:
+
+| Workflow | Result |
+| --- | --- |
+| [Native engine CI 34831487114](https://github.com/gmoddev/gargantuan/actions/runs/34831487114) | **Terminal PASS**: MSVC **58/58**, 60.04 s; Linux Clang ASan/UBSan/LSan **50/50**, 283.26 s |
+| [GNS sanitizer CI 34831486990](https://github.com/gmoddev/gargantuan/actions/runs/34831486990) | **Terminal PASS**: **5/5** transport CTests, 15.48 s, and full established workflow scope |
+
+The required GNS workflow includes its five transport CTests, repeated incremental
+build, profiled GameSession, production-admission matrix, ordinary reliable
+workload, 32-peer workload and 32-peer structural workload. These remain the
+existing localhost workflow scope, not physical pooled-service qualification.
+The workflow checks full instrumentation of owned counters, snapshot bridge and
+adapter. Existing GNS-only function/alignment exclusions must not leak into them.
+That scope check passed. No sanitizer finding occurred. Complete hosted logs and
+terminal JSON are retained beside the focused worker receipts as `ci-native.log`,
+`ci-gns.log` and `ci-<run-id>.json`. This closure changes documentation only;
+`a5a182ff94ae7373e0cdcdcc6232b434696926fe` remains the qualified native/test/build source.
+
+### Resource measurements and limitations
+
+The existing size fixture reports **88 B native counter state**, including
+**48 B** for six attribution scalars: 1,536 B at 32 sender states or 196,608 B
+at 4,096 states. These are scalar multiplication examples, not an application
+memory ceiling. One active attribution and one last receipt per native sender
+are the hard cardinality limits. No packet/message map or allocation is added.
+Thread-local submission state adds one `uint64_t` per participating thread.
+
+The unchanged aggregate adapter value remains **72 B**, its optional terminal
+slot **80 B**, and vector control object **24 B** on tested x64 builds. It does
+not yet store exact attributed terminal receipts. Native snapshots are temporary
+copies. Snapshot mean over 10,000 idle samples: **241 ns MSVC**, **469 ns Clang
+sanitizers**. End-to-end throughput, worst-case contention and allocator/RSS delta
+are **not measured**; these microbenchmarks are not throughput guarantees.
+
+Documentation validation: Node 24.19.0 with the existing locked dependency cache
+builds **19 pages**; all **60 relative link/anchor checks** across the
+five changed documents pass, as does `git diff --check`. No new instrumentation
+was created for memory/size measurements.
+
+No tracked active 3L checkpoint exists at this branch revision; this receipt and
+the canonical 3L.3 ledger own the checkpoint. Production `POOLED_SERVICE` remains
+**NOT IMPLEMENTED**, physical 32-client pooled qualification **NOT MEASURED**,
+KI-006 **OPEN**, Foundation 3L **B — PARTIALLY READY**, and 3M **BLOCKED / NOT STARTED**.
+The retirement-attribution blocker is closed at the native boundary. The exact
+next task is to resume production `POOLED_SERVICE` admission integration using
+exact attributed structural retirement. Production integration and physical
+qualification remain separate uncompleted gates.
+
 ## Native implementation checkpoint (2026-09-14)
 
 Starting source: `009fc4f9b87faa473a463965ae75925517cda4dd`, branch

@@ -85,6 +85,19 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining pooled-service implementation and physical qualification
 
+Retirement-attribution update 2026-09-14: **OPEN**. The
+[current qualification receipt](devdocs/CurrentArchitecture/ReliableTransportFeedbackProof3LValidation.md#retirement-attribution-qualification-2026-09-14)
+records exact sender-local native message retirement at `a5a182ff9`, 12/12 mixed
+cases and the real-GNS identity proof on MSVC and Clang sanitizers. Native CI
+passes 58/58 MSVC and 50/50 Linux sanitizer tests; GNS CI passes its five transport
+tests and full established scope. Native attribution is **READY FOR POOLED-SERVICE
+INTEGRATION**. The attribution blocker is closed; the
+[historical integration stop](devdocs/CurrentArchitecture/PooledReliableServiceIntegration3L.md)
+remains evidence that aggregate ACKs cannot identify structural retirement.
+Production receipt propagation and `POOLED_SERVICE` admission are not implemented;
+physical 32-client qualification remains not measured. Foundation 3L remains
+**B — PARTIALLY READY**; 3M remains blocked.
+
 Native feedback update 2026-09-14: **OPEN**. The narrow pinned-GNS feedback
 boundary is implemented; its [receipt](devdocs/CurrentArchitecture/ReliableTransportFeedbackProof3LValidation.md)
 records native ACK/payload semantics, generation/teardown, checked overflow,
