@@ -186,6 +186,20 @@ checklists and evidence ledger above for present status.
 
 ## Priority conventions
 
+### Studio authoring track
+
+The [Studio authoring checkpoint and implementation order](../../docs/src/content/docs/developing/roadmap.mdx#studio-authoring-checkpoint)
+were reconciled on 2026-09-14. The accepted
+[Studio-owned Authoring and UX Architecture](https://github.com/gmoddev/gargantuan-studio/blob/docs/studio-authoring-ux-architecture/devdocs/AcceptedArchitecture/StudioAuthoringAndUXArchitecture.md)
+separates delivered foundations from planned work and architecture gates.
+Its five Studio phases are shell/documents, core authoring UX, gated runtime/
+TestSession/PreRun capabilities, advanced editors, then extensions/optional
+platform. They do not renumber the Engine phases below or change 3L/3M gates.
+First-party tools are internal Studio features; the ribbon/plugin-first plan
+is superseded. PreRun editing remains blocked on Engine contracts.
+
+### Shared priority labels
+
 - **P0:** blocks safe continued development or invalidates higher layers.
 - **P1:** required for the minimum usable game or first multiplayer slice.
 - **P2:** required before public creator/server use.

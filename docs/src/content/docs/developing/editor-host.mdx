@@ -7,6 +7,14 @@ Gargantuan Studio is a separately authored private application. It consumes
 Gargantuan through the public, versioned EditorHost protocol instead of linking
 against private engine internals.
 
+The accepted Studio product model is maintained in the private Studio-owned
+[Gargantuan Studio Authoring and UX Architecture](https://github.com/gmoddev/gargantuan-studio/blob/docs/studio-authoring-ux-architecture/devdocs/AcceptedArchitecture/StudioAuthoringAndUXArchitecture.md).
+It defines resource-bound documents, first-party tools, selection, settings and
+future TestSession boundaries; acceptance is not feature completion. See the
+[public Studio checkpoint](../roadmap/#studio-authoring-checkpoint) for delivered,
+planned, architecture-blocked and superseded work. Engine remains the owner of
+the protocol, authoritative project, schema, history and persistence.
+
 ```text
 Private Gargantuan Studio
         |
@@ -98,7 +106,8 @@ will own process lifecycle, IPC, windows, viewport presentation, filesystem
 dialogs, and Luau runtime bootstrap. Explorer, Properties, selection, commands,
 settings, and most workflows should consume explicit `DocumentService`,
 `SelectionService`, `ViewportService`, and `CommandService` APIs from Luau.
-Reference-valued editing remains future interface work; reference metadata is exposed read-only. Minimal Play sessions are
+Current Studio supports schema-constrained object-reference editing through
+the authoritative property path. Minimal Play sessions are
 implemented with a separate runtime DataModel and VM; multiplayer, debugging,
 live-edit synchronization, and applying runtime changes back remain deferred.
 Structural editing, grouped transactions, Undo/Redo, and dedicated Script/
@@ -114,7 +123,7 @@ The implemented Luau viewport adapter adds `ViewportControl`; it does not infer
 that permission from the `Studio` domain. Process, filesystem, and network
 access remain ungranted.
 
-`GetSchema` schema-discovery version 5 exposes the frozen registry generation
+`GetSchema` schema-discovery version 6 exposes the frozen registry generation
 and immutable class/enum/extension metadata. Project classes include stable
 base and native-host IDs, construction/subclass policy, constructibility, and
 ordered declarative properties. Native properties carry datatype and wire type,
