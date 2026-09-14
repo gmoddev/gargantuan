@@ -1,36 +1,26 @@
 #include "ReliableServiceFeedback.hpp"
-#include <clientlib/steamnetworkingsockets_connections.h>
-#include <clientlib/csteamnetworkingsockets.h>
+#include <steam/isteamnetworkingsockets.h>
 
 namespace SteamNetworkingSocketsLib {
-// One forwarding hook in the pinned API translation unit retains its lookup
-// and lock acquisition. All owned snapshot/capture logic is fully instrumented.
-CSteamNetworkConnectionBase *GargantuanFindConnection(std::uint32_t Handle, ConnectionScopeLock &Lock);
-
-void CSteamNetworkConnectionBase::GargantuanPopulateReliableServiceFeedback(GargantuanReliableServiceSnapshot &Result) const {
-	Result.Counters = m_senderState.GargantuanFeedback;
-	if (m_senderState.m_cbPendingReliable < 0 || m_senderState.m_cbSentUnackedReliable < 0)
-		Result.Counters.Invalid = true;
-	Result.PendingReliableStreamBytes = m_senderState.m_cbPendingReliable;
-	Result.SentUnackedReliableStreamBytes = m_senderState.m_cbSentUnackedReliable;
-	Result.NativeState = static_cast<int>(GetState());
+// Called from the native ownership hook while its existing lock is held.
+void GargantuanCopyReliableServiceFeedback(const GargantuanReliableServiceCounters &Counters,
+	int Pending, int Unacked, int NativeState, GargantuanReliableServiceSnapshot &Result) {
+	Result.Counters = Counters;
+	if (Pending < 0 || Unacked < 0) Result.Counters.Invalid = true;
+	Result.PendingReliableStreamBytes = Pending;
+	Result.SentUnackedReliableStreamBytes = Unacked;
+	Result.NativeState = NativeState;
 }
 
 // Borrowed only for the synchronous existing CloseConnection call on this thread.
 // No new lock, callback, allocation, or persistent connection registry.
 static thread_local GargantuanReliableServiceSnapshot *GargantuanClosingFeedback = nullptr;
 
-void GargantuanCaptureClosingFeedback(const CSteamNetworkConnectionBase &Connection) {
-	if (GargantuanClosingFeedback) Connection.GargantuanPopulateReliableServiceFeedback(*GargantuanClosingFeedback);
-}
+GargantuanReliableServiceSnapshot *GargantuanGetClosingFeedback() { return GargantuanClosingFeedback; }
 
 bool GargantuanGetReliableServiceFeedback(ISteamNetworkingSockets *Interface,
 	std::uint32_t Handle, GargantuanReliableServiceSnapshot &Result) {
-	ConnectionScopeLock Lock;
-	auto *Connection = GargantuanFindConnection(Handle, Lock);
-	if (!Connection || Connection->m_pSteamNetworkingSocketsInterface != Interface) return false;
-	Connection->GargantuanPopulateReliableServiceFeedback(Result);
-	return !Result.Counters.Invalid;
+	return GargantuanReadNativeFeedback(Interface, Handle, Result) && !Result.Counters.Invalid;
 }
 
 bool GargantuanCloseWithReliableServiceFeedback(ISteamNetworkingSockets *Interface,

@@ -62,14 +62,27 @@ GargantuanReadFeedbackSource(steamnetworkingsockets_connections.h 9ece0f7051f1b6
 GargantuanReplaceFeedback("\t/// Called when we close the connection locally" [=[
 	// Caller holds the existing connection lock. Direct fields avoid a second
 	// mutable status sample or the rate-estimator side effects of realtime status.
-	void GargantuanPopulateReliableServiceFeedback(GargantuanReliableServiceSnapshot &Result) const;
+	void GargantuanPopulateReliableServiceFeedback(GargantuanReliableServiceSnapshot &Result) const {
+		GargantuanCopyReliableServiceFeedback(m_senderState.GargantuanFeedback,
+			m_senderState.m_cbPendingReliable, m_senderState.m_cbSentUnackedReliable,
+			static_cast<int>(GetState()), Result);
+	}
 
 	/// Called when we close the connection locally]=])
 GargantuanWriteFeedbackSource()
 
 GargantuanReadFeedbackSource(csteamnetworkingsockets.cpp 2b260c05cc8c262e785387ea3d08eee74cc03b6eed00493e961a82c05dec5451)
-GargantuanReplaceFeedback("static CSteamNetworkListenSocketBase *GetListenSocketByHandle" "CSteamNetworkConnectionBase *GargantuanFindConnection(uint32 Handle, ConnectionScopeLock &Lock) {\n\treturn GetConnectionByHandleForAPI(Handle, Lock, \"GargantuanReliableServiceFeedback\");\n}\n\nstatic CSteamNetworkListenSocketBase *GetListenSocketByHandle")
-GargantuanReplaceFeedback("\tpConn->APICloseConnection( nReason, pszDebug, bEnableLinger );\n\treturn true;" "\tpConn->APICloseConnection( nReason, pszDebug, bEnableLinger );\n\tGargantuanCaptureClosingFeedback(*pConn);\n\treturn true;")
+GargantuanReplaceFeedback("static CSteamNetworkListenSocketBase *GetListenSocketByHandle" [=[
+bool GargantuanReadNativeFeedback(ISteamNetworkingSockets *Interface, uint32 Handle, GargantuanReliableServiceSnapshot &Result) {
+	ConnectionScopeLock Lock;
+	auto *Connection = GetConnectionByHandleForAPI(Handle, Lock, "GargantuanReliableServiceFeedback");
+	if (!Connection || Connection->m_pSteamNetworkingSocketsInterface != Interface) return false;
+	Connection->GargantuanPopulateReliableServiceFeedback(Result);
+	return true;
+}
+
+static CSteamNetworkListenSocketBase *GetListenSocketByHandle]=])
+GargantuanReplaceFeedback("\tpConn->APICloseConnection( nReason, pszDebug, bEnableLinger );\n\treturn true;" "\tpConn->APICloseConnection( nReason, pszDebug, bEnableLinger );\n\tif (auto *Result = GargantuanGetClosingFeedback()) pConn->GargantuanPopulateReliableServiceFeedback(*Result);\n\treturn true;")
 GargantuanWriteFeedbackSource()
 
 # Our checked arithmetic is compiled independently, with full project sanitizer
@@ -78,14 +91,13 @@ add_library(gargantuan_gns_feedback_counters OBJECT "${GargantuanFeedbackDirecto
 target_compile_features(gargantuan_gns_feedback_counters PRIVATE cxx_std_11)
 target_include_directories(GameNetworkingSockets_s PRIVATE "${GargantuanFeedbackDirectory}")
 target_sources(GameNetworkingSockets_s PRIVATE $<TARGET_OBJECTS:gargantuan_gns_feedback_counters>)
-add_library(gargantuan_gns_feedback_bridge OBJECT "${GargantuanFeedbackDirectory}/ReliableServiceFeedbackBridge.cpp")
-target_compile_features(gargantuan_gns_feedback_bridge PRIVATE cxx_std_17)
-target_include_directories(gargantuan_gns_feedback_bridge PRIVATE
-	"${gamenetworkingsockets_SOURCE_DIR}/src/steamnetworkingsockets"
-	$<TARGET_PROPERTY:GameNetworkingSockets_s,INCLUDE_DIRECTORIES>)
-target_compile_definitions(gargantuan_gns_feedback_bridge PRIVATE
+add_library(gargantuan_gns_feedback_snapshot OBJECT "${GargantuanFeedbackDirectory}/ReliableServiceFeedbackBridge.cpp")
+target_compile_features(gargantuan_gns_feedback_snapshot PRIVATE cxx_std_17)
+target_include_directories(gargantuan_gns_feedback_snapshot PRIVATE
+	"${gamenetworkingsockets_SOURCE_DIR}/include")
+target_compile_definitions(gargantuan_gns_feedback_snapshot PRIVATE
 	$<TARGET_PROPERTY:GameNetworkingSockets_s,COMPILE_DEFINITIONS>)
 if(MSVC)
-	target_compile_options(gargantuan_gns_feedback_bridge PRIVATE $<IF:$<CONFIG:Debug>,/GR,/GR->)
+	target_compile_options(gargantuan_gns_feedback_snapshot PRIVATE $<IF:$<CONFIG:Debug>,/GR,/GR->)
 endif()
-target_sources(GameNetworkingSockets_s PRIVATE $<TARGET_OBJECTS:gargantuan_gns_feedback_bridge>)
+target_sources(GameNetworkingSockets_s PRIVATE $<TARGET_OBJECTS:gargantuan_gns_feedback_snapshot>)

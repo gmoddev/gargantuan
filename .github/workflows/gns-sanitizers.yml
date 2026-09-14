@@ -128,7 +128,7 @@ jobs:
           GNSCommand="$(ninja -C build-gns-sanitizers -t commands GameNetworkingSockets_s | grep -m1 'steamnetworkingsockets_snp.cpp')"
           AdapterCommand="$(ninja -C build-gns-sanitizers -t commands gargantuan_gns_transport | grep -m1 'GameNetworkingSocketsTransport.cpp')"
           FeedbackCommand="$(ninja -C build-gns-sanitizers -t commands gargantuan_gns_feedback_counters | grep -m1 'ReliableServiceFeedback.cpp')"
-          BridgeCommand="$(ninja -C build-gns-sanitizers -t commands gargantuan_gns_feedback_bridge | grep -m1 'ReliableServiceFeedbackBridge.cpp')"
+          BridgeCommand="$(ninja -C build-gns-sanitizers -t commands gargantuan_gns_feedback_snapshot | grep -m1 'ReliableServiceFeedbackBridge.cpp')"
           printf 'GNS compile command: %s\n' "$GNSCommand"
           printf 'Gargantuan adapter compile command: %s\n' "$AdapterCommand"
           printf 'Gargantuan feedback compile command: %s\n' "$FeedbackCommand"
@@ -166,6 +166,11 @@ jobs:
               gargantuan_character_real_transport_tests \
               gargantuan_game_session_real_transport_tests \
               gargantuan_gns_capacity_benchmark
+
+          # Re-read discovered header dependencies. A first build alone can miss
+          # a cycle between owned instrumentation and GNS's generated headers.
+          cmake --build build-gns-sanitizers --parallel "$CMAKE_BUILD_PARALLEL_LEVEL" \
+            --target gargantuan_real_transport_tests gargantuan_gns_service_fairness_tests
 
       - name: Run GNS transport sanitizer CTest contract
         shell: bash

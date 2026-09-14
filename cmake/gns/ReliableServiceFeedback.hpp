@@ -29,8 +29,13 @@ struct GargantuanReliableServiceSnapshot {
 };
 
 namespace SteamNetworkingSocketsLib {
-class CSteamNetworkConnectionBase;
-void GargantuanCaptureClosingFeedback(const CSteamNetworkConnectionBase &Connection);
+// Thin GNS ownership hooks pass plain values while retaining their connection
+// lock. Owned snapshot/capture code needs no generated/private GNS headers.
+void GargantuanCopyReliableServiceFeedback(const GargantuanReliableServiceCounters &Counters,
+	int Pending, int Unacked, int NativeState, GargantuanReliableServiceSnapshot &Result);
+GargantuanReliableServiceSnapshot *GargantuanGetClosingFeedback();
+bool GargantuanReadNativeFeedback(ISteamNetworkingSockets *Interface,
+	std::uint32_t Handle, GargantuanReliableServiceSnapshot &Result);
 bool GargantuanGetReliableServiceFeedback(ISteamNetworkingSockets *Interface,
 	std::uint32_t Handle, GargantuanReliableServiceSnapshot &Result);
 bool GargantuanCloseWithReliableServiceFeedback(ISteamNetworkingSockets *Interface,
