@@ -14,6 +14,8 @@ at existing pinned-GNS first-send, retry, unique ACK and final-message retiremen
 transitions. The [receipt](ReliableTransportFeedbackProof3LValidation.md#native-implementation-checkpoint-2026-09-14)
 owns the exact tests, checked-overflow policy, coherent locking, terminal/reuse
 semantics, memory and runtime measurements and sanitizer evidence.
+Observation time is captured with the native counters under the existing
+connection lock and preserved through the adapter, including delayed returns.
 
 MSVC passes seven real-GNS feedback cases, a native partial/final ACK retirement
 fixture and the affected networking contracts, including 19/19 feedback-model

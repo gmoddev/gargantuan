@@ -49,9 +49,12 @@ saturation. Only construction of a new native sender starts a zero baseline.
 
 The bridge obtains GNS's existing per-connection lock through its existing API
 handle lookup and copies all counters, pending, sent-unacked and native state
-together. It introduces no global lock. Gargantuan's existing adapter ownership
-mutex serializes identity lookup and wrapping with `ConnectionId` and a steady-
-clock microsecond timestamp. Raw GNS handles never leave the private bridge.
+together, including a steady-clock microsecond timestamp taken while the native
+lock still protects the copied values. A delayed adapter return cannot re-date
+an older observation. It introduces no global lock. Gargantuan's existing adapter
+ownership mutex serializes identity lookup and wrapping with `ConnectionId`;
+the wrapper preserves the captured timestamp. Raw GNS handles never leave the
+private bridge.
 
 No-linger close captures the post-purge snapshot inside the existing native close
 operation, using its existing lock order. One terminal snapshot per adapter slot

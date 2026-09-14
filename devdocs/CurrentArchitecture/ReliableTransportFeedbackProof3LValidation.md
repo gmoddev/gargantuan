@@ -18,7 +18,8 @@ Implementation commits:
 
 - native instrumentation: `2e15c66573b2b169ae89e62a767697e23cb7da0d`;
 - private wrapper and tests: `0f64d562dcdc7bbe5f6dbe1181570b38d727bd8e`;
-- final build dependency correction: `ac7a27d5bf2c463796e7dd5db2f6435d00dd3fc9`.
+- build dependency correction: `ac7a27d5bf2c463796e7dd5db2f6435d00dd3fc9`;
+- locked observation timestamp: `4f8da450ad8ed6bc34cd1ef5dc4bd9c995f1eb13`.
 
 The [contract](ReliableTransportFeedbackProof3L.md#implemented-private-boundary)
 records exact native hook locations and ownership. Private
@@ -27,6 +28,12 @@ identity and a monotonic observation timestamp from one locked native snapshot.
 No per-packet allocation or history is added. A terminal sample is retained only
 until its adapter slot is reused; old identity then fails lookup. Overflow is
 sticky invalid/unavailable and cannot manufacture service.
+
+The final timestamp correction captures steady-clock time in the owned native
+copy while the existing connection lock protects the counters and queue values.
+The adapter preserves that time, so a pause before returning the sample cannot
+make old service appear fresh. The native-copy fixture checks the captured time
+against the surrounding clock interval and preserves sticky invalidity.
 
 ### Real transport and native fixture coverage
 
@@ -62,9 +69,9 @@ coverage only; it is not consumed by production admission.
 MSVC Release on trusted `dockerbox` passes the seven feedback cases, native
 retirement/fairness test and affected networking contracts. The registered model
 rerun passes **19/19 feedback** and **42/42 Option C** (33 + 9 hardening) cases.
-The three affected CTests pass in **14.59 s**. Final Linux Clang 19
+The three affected CTests pass in **14.77 s**. Final Linux Clang 19
 ASan/UBSan/LSan validation passes all seven feedback cases and **6/6 CTests in
-15.33 s**, including native retirement, networking contracts, real transport,
+15.47 s**, including native retirement, networking contracts, real transport,
 Remote, Character and GameSession transport. No sanitizer finding occurred.
 
 Measured x64 layout: **40 B native counters/state**, **72 B feedback value**, and
@@ -74,8 +81,8 @@ capacity and a pointer-sized thread-local close capture. Snapshot stack copies
 are temporary. There is no unbounded per-message/packet telemetry cardinality.
 Hot paths add a fixed checked increment at an existing transition, with no heap
 allocation, trace or history. End-to-end throughput delta is **not measured**.
-Final MSVC snapshot mean is **233 ns** over 10,000 samples on the trusted worker.
-Final Linux sanitizer snapshot mean is **409 ns** over 10,000 samples. Both
+Final MSVC snapshot mean is **230 ns** over 10,000 samples on the trusted worker.
+Final Linux sanitizer snapshot mean is **452 ns** over 10,000 samples. Both
 platforms observe 49,257 retransmitted stream bytes in the forced-retry fixture,
 without duplicate unique first-send or payload retirement. These idle-pair
 microbenchmarks are observations, not a
@@ -105,7 +112,7 @@ dependency regressions. The exact pinned-source patch also passes repeat
 application without unknown changes or timestamp churn.
 
 Documentation: locked dependency reuse with Node 24.19.0/Astro passes **19 pages
-in 3.18 s**;
+in 1.72 s**;
 the three implementation/validation documents pass **28 relative link/anchor
 checks**, and `git diff --check` passes. Temporary build artifacts stay untracked.
 
