@@ -131,7 +131,7 @@ int main() {
 		DisconnectReason::AuthenticationFailure, DisconnectReason::ProtocolViolation,
 		DisconnectReason::ResourceExhaustion, DisconnectReason::TransportFailure,
 		DisconnectReason::IncompatibleVersion
-	}) Check(IsTerminalDisconnectReason(Reason), "every structured disconnect reason is terminal and structured");
+	}) Check(IsTerminalDisconnectReason(Reason), "every structured disconnect reason is terminal");
 	Check(!IsTerminalDisconnectReason(static_cast<DisconnectReason>(255)) &&
 		!DisconnectInfo{static_cast<DisconnectReason>(255), {}}.IsValid(),
 		"unknown disconnect reasons fail closed");
