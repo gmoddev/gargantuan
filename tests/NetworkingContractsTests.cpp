@@ -8,6 +8,7 @@
 #include "gargantuan/network/Sequence.hpp"
 #include "gargantuan/network/Statistics.hpp"
 #include "gargantuan/network/Transport.hpp"
+#include "PooledReliableServiceModelFixture.hpp"
 
 #include <array>
 #include <iostream>
@@ -240,6 +241,9 @@ int main() {
 	};
 	Check(!IsValidTransportEvent(OversizedReceive, FirstLimits),
 		"received events enforce delivery-specific negotiated message ceilings");
+
+	Check(gargantuan::test::pooled_service_model::RunPooledReliableServiceModelTests(),
+		"Foundation 3L pooled reliable service executable proof passes");
 
 	if (Failures == 0) std::cout << "All networking contract tests passed\n";
 	return Failures == 0 ? 0 : 1;
