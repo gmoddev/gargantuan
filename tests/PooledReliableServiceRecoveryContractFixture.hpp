@@ -101,9 +101,9 @@ namespace gargantuan::test::pooled_recovery_contract {
 
 		// Existing 3J semantics already resolve ordinary native properties from
 		// current authoritative catalog state. For this Name-only workload, one
-		// final update per object is semantically sufficient. Encode that exact
-		// final-state representation through the real GRPL encoder to prove the
-		// semantic convergence set fits one accepted complete group.
+		// final update per object is semantically sufficient. Encode and decode
+		// that exact final-state representation through the real GRPL codec so
+		// this proves semantic convergence rather than only a smaller queue.
 		network::ReplicationFrame FinalState{
 			.Version = network::ReplicationProtocolVersion,
 			.Kind = network::ReplicationMessageKind::Incremental,
@@ -128,6 +128,25 @@ namespace gargantuan::test::pooled_recovery_contract {
 				"canonical coalesced final-state frame fits one accepted complete group");
 			Check(ServiceUs(CoalescedCompleteBytes, PeerCreditRate) < 1'000'000,
 				"canonical semantically necessary final state drains within one second of peer credit");
+			auto Decoded = network::DecodeReplicationFrame(*Encoded);
+			Check(static_cast<bool>(Decoded), "canonical coalesced final-state frame decodes");
+			if (Decoded) {
+				Check(Decoded->Operations.size() == Objects,
+					"canonical decoded final-state frame contains one update per object");
+				for (U Index = 0; Index < Decoded->Operations.size(); ++Index) {
+					const auto *Update = std::get_if<network::PropertyReplicationUpdate>(&Decoded->Operations[Index].Intent);
+					Check(Update != nullptr, "canonical decoded operation remains a property update");
+					if (!Update) continue;
+					Check(Update->Object == ObjectId{static_cast<std::uint32_t>(Index + 1), 1},
+						"canonical decoded property update retains the exact object identity");
+					Check(Update->PropertyName == "Name",
+						"canonical decoded property update retains Name semantics");
+					const auto *Value = std::get_if<std::string>(&Update->Value);
+					const std::string Expected(NameBytes, static_cast<char>('a' + (Index % 26)));
+					Check(Value && *Value == Expected,
+						"canonical decoded property update retains the exact current final value");
+				}
+			}
 		}
 
 		// The old gameplay/FIFO proof remains independent of historical retained
