@@ -4,6 +4,7 @@ owner: runtime-networking-and-runtime-host
 last_verified: 2026-09-14
 related_code:
   - tests/PooledReliableServiceModelFixture.hpp
+  - tests/PooledReliableServiceProofHardening.hpp
   - tests/NetworkingContractsTests.cpp
   - src/network/ReliableByteAdmission.hpp
   - src/network/GameSession.cpp
@@ -13,6 +14,16 @@ related_adrs:
 ---
 
 # Foundation 3L pooled reliable service executable proof
+
+## Current registered proof result
+
+**PASS: 33 model + nine hardening = 42/42 cases**, through the existing
+`gargantuan_networking_contracts` CTest entry. The
+[completion receipt](PooledReliableServiceProof3LValidation.md) records source
+`0512aac60a7649d1c0498c423c5327aa16f6c540`, hashes, commands and limitations.
+The only demonstrated correction was a hardening assertion confusing pending
+requirements with already committed debt; model logic and profile values did
+not change. Production implementation and physical qualification remain open.
 
 ## Scope and authority
 
@@ -151,6 +162,18 @@ backend service, failed pre-acceptance rollback, or terminal connection teardown
 Accepted structural debt is never reclassified as a failed reservation merely because later
 backend service fails.
 
+The registered hardening case makes conservation explicit across structural,
+gameplay and modeled control debt:
+
+```text
+CreatedDebt = VerifiedDrainedDebt + TerminalReleasedDebt + OutstandingDebt
+577,536 B   = 167,772 B           + 409,764 B            + 0 B
+```
+
+Advancing time without feedback/service does not erase debt. Disconnect keeps
+accepted debt charged; terminal teardown releases the remaining accounted debt.
+Reservation rollback is pre-acceptance and is not a drain of accepted debt.
+
 ### Credit is not service
 
 A connected peer begins with zero structural credit. Credit accrues with monotonic elapsed time
@@ -271,6 +294,12 @@ The model uses a fixed 32-entry peer array. On the local x86-64 Clang/GCC build 
 future production ABI guarantee. Its logical state is O(N) with N fixed to 32 and does not grow
 with test duration or offered overload history.
 
+The registered Windows/MSVC completion run measures 7,816 B for the same model
+object. Retain both compiler-specific observations; neither is a portable ABI
+size or a measurement of production backend allocations. Pending means work
+not yet accepted: after accepting four of five G offers, pending is G and
+committed is 4G. Their sum remains 5G; accepted groups are not counted twice.
+
 ## Startup validation
 
 The executable profile validator rejects the candidate before model construction when any of
@@ -336,7 +365,24 @@ Required and supporting cases:
 32. `FullReservationModeDistinct`
 33. `FeedbackStalenessLimit`
 
-## Pre-publication local model evidence
+The same harness now also invokes these nine distinct hardening cases:
+
+1. `FreshFeedbackAllowsAdmission`
+2. `DelayedFeedbackWithinLimitAllowsAdmission`
+3. `DebtConservation`
+4. `SlowPeerLosesFurtherGrantEligibility`
+5. `MixedSmallLargeFairness`
+6. `GameplayBurstAfterAdmission`
+7. `FullReservationCompatibility`
+8. `ThirtyTwoMaximumGroupsFirstServiceReport`
+9. `AggregateDebtInvariantIncludesTransportReserve`
+
+All nine pass. In particular, 40-ms-old valid feedback is eligible within the
+50-ms limit, stale feedback defers, and fresh feedback from a below-floor peer
+still cannot grant more work after its previous debt has drained. The explicit
+post-admission gameplay follower retains the 32.5-ms modeled queue bound.
+
+## Historical pre-publication local model evidence
 
 The standalone form of the same test-only model was compiled as C++23 with local GCC and
 Clang 17 using `-O2 -Wall -Wextra -pedantic`. All 33 cases passed. Twenty repeated Clang runs
@@ -373,8 +419,10 @@ candidate therefore uses the stricter value rather than weakening a gameplay tar
 
 ## Implementation gate
 
-The executable proof is necessary but not production qualification. If repository CI accepts the
-model, this candidate is eligible for a later **scoped production implementation task**. That
+The complete registered model/hardening proof is necessary but not production
+qualification. When required current-source CI is terminal green and the
+matching documentation/link/build checks pass, this candidate is
+**READY FOR PRODUCTION IMPLEMENTATION** in a separately authorized task. That
 future task must still implement an explicit pooled service mode without changing existing
 full-reservation semantics and must prove the same invariants against actual GameSession/GNS
 feedback and failure behavior.

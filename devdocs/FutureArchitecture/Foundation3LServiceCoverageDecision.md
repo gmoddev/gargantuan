@@ -1,10 +1,81 @@
 ---
-status: proposed-not-accepted
+status: selected-candidate-model-proven
 owner: runtime-networking-and-runtime-host
-last_verified: 2026-09-13
+last_verified: 2026-09-14
 ---
 
 # Foundation 3L physical service-contract decision
+
+## Current Option C proof checkpoint (2026-09-14)
+
+The selected Option C numeric model is **PASS: 33 existing model cases plus
+nine registered hardening cases, 42/42 total**. The
+[executable proof](../CurrentArchitecture/PooledReliableServiceProof3L.md) owns
+the detailed candidate and formal bounds; the
+[validation receipt](../CurrentArchitecture/PooledReliableServiceProof3LValidation.md)
+records source hashes, commands, the initial test failure and its correction.
+The conceptual assessment below predates that executable proof and is retained
+as historical decision rationale, not an outstanding demand to build those
+already executed model cases.
+
+| Selected candidate | Value / invariant |
+| --- | --- |
+| Mode, peers and legal group | Explicit `POOLED_SERVICE`, N=32, G=524,288 B; existing `FULL_RESERVATION` semantics retained |
+| Physical target | 1 GbE **model target only**; no measured physical service claim |
+| Funded usable envelope | 96 MiB/s = 100,663,296 B/s |
+| Fixed pools | Structural 64 + gameplay 8 + transport 8 + separate control/realtime 4 = 84 MiB/s; 12 MiB/s unallocated slack |
+| Structural credit | Peer 2 MiB/s capped at G; global 64 MiB/s capped at 4G |
+| Pending / committed bounds | Pending at most G per peer and 32G globally; committed structural debt at most 4G; at most four grants |
+| Active-grant floor | Verified 16 MiB/s per active grant; four floors fit the 64 MiB/s pool |
+| Feedback | Fresh and at/above floor, age at most 50 ms; missing/error/stale/below-floor feedback cannot authorize another grant |
+
+At admission, committed + reserved + prospective structural debt, fresh
+gameplay/control headroom and the transport reserve must fit the funded 50-ms
+queue window. Credit is eligibility, never evidence of service. The executed
+conservation case records `created = verified_drained + terminal_released +
+outstanding`: 577,536 B created, 167,772 B verified drained, 409,764 B terminally
+released and zero outstanding. Elapsed time and disconnect alone release none
+of the accepted debt; terminal reconciliation is distinct from failed admission.
+
+The same-FIFO G + 20 KiB gameplay follower takes 32.471 ms continuously and
+32.5 ms in the 500-us model. With the existing 100-ms nonqueue allowance, the
+132.5-ms bound satisfies RPC p95/p99/max 150/250/500 ms and Event ACK/action
+250 ms. The explicit post-admission burst case passes without a lane or bypass.
+
+Rotating active-peer service plus the large-waiter/global-credit earmark gives
+finite qualified-wave `L_i <= 220.5 ms` from credit eligibility and first
+verified service at most 221 ms. The conservative G completion bound is
+470.5 ms plus one model step from credit eligibility, approximately 721 ms
+including fresh-zero credit. The executed 32xG wave is p50 376 ms and
+p95/p99/max 502 ms from zero-credit demand, with committed high-water 4G and
+pending high-water 32G. These are conditional model progress bounds, not a
+physical latency promise for unhealthy peers or unlimited demand.
+
+Tiny/large repeated fairness, slow/non-draining containment, 40-ms delayed
+valid feedback versus stale feedback, below-floor regrant denial after old
+debt drains, zero-credit reconnect/churn, bounded overload and 226.5-ms recovery
+all pass. Invalid/underfunded profiles and checked arithmetic overflow reject.
+The fixed 32-peer scalar model retains no payload queue; its measured MSVC
+object is 7,816 B, not a production memory/ABI guarantee.
+
+**Implementation-readiness gate:** this model checkpoint is eligible for
+**READY FOR PRODUCTION IMPLEMENTATION only when the consuming commit's required
+current-source CI is terminal green**, in addition to these executed tests and
+matching docs/link/build validation. Consult that commit's hosted checks; a
+running or older run cannot satisfy the gate. Production pooled service is
+**NOT IMPLEMENTED** and physical 32-actual-client qualification is **NOT MEASURED**.
+KI-006 remains OPEN, Foundation 3L remains **B — PARTIALLY READY**, and 3M is blocked.
+
+After that gate, the exact next separately authorized production task is to
+implement explicit pooled profile/startup validation and bounded complete-group
+credit/reservation/drain-grant accounting in the existing admission path, fed
+by verified generation-scoped GameSession/GNS service feedback. Preserve current
+full-reservation defaults, one reliable ordering domain, whole-group acceptance,
+Known/journal commit semantics, finite fairness and terminal debt reconciliation.
+Validate those production paths before the funded 32-actual-client Local/Node
+physical run. This proof-completion task authorizes none of that implementation.
+
+## Historical conceptual assessment (2026-09-13)
 
 **Recommendation: C — REVISE SERVICE COVERAGE.**
 

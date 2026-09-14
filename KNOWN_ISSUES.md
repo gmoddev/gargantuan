@@ -81,8 +81,22 @@ are covered. Deliberately dangling frames remain rejected by client preflight.
 This closes the ordering defect, not general planning work or Foundation health.
 
 <a id="ki-006-content-coupled-gameplay-latency-exceeds-the-3l2-readiness-envelope"></a>
+<a id="ki-006-remaining-real-client-and-physical-recipient-service-qualification"></a>
 
-## KI-006: Remaining real-client and physical recipient-service qualification
+## KI-006: Remaining pooled-service implementation and physical qualification
+
+Update 2026-09-14: **OPEN**. The selected Option C design/model now passes all
+33 existing model and nine registered hardening cases (**42/42**) in the
+networking-contract test. The [proof receipt](devdocs/CurrentArchitecture/PooledReliableServiceProof3LValidation.md)
+records debt conservation, the unchanged FIFO gameplay bound, feedback freshness,
+slow-peer regrant protection and the corrected pending-versus-committed test
+expectation. No model/profile retuning or production networking change occurred.
+The production pooled-service implementation remains **NOT IMPLEMENTED**;
+actual 32-client physical qualification remains **NOT MEASURED**. A model-target
+1 GbE envelope is not measured/funded service. Implementation readiness also
+requires matching docs validation and required current-source terminal-green CI.
+Foundation 3L remains **B — PARTIALLY READY**; no 3M. Earlier receipts below
+retain their source/profile scope and do not close these remaining gates.
 
 Update 2026-09-13, physical preflight: **OPEN** for the intended 32-actual-client
 profile. The [hardware receipt](devdocs/CurrentArchitecture/PhysicalDeploymentPreflight3L.md)

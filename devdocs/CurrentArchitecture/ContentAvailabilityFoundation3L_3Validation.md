@@ -6,6 +6,31 @@ last_verified: 2026-09-13
 
 # Foundation 3L.3 diagnostic validation ledger
 
+## Option C registered model proof completion (2026-09-14)
+
+Test source `0512aac60a7649d1c0498c423c5327aa16f6c540`, based on published
+hardening `fffaed16e246039ac2931be989341847d48ff343`, registers all nine hardening
+cases beside the existing 33 model cases in the networking-contract harness.
+The [receipt](PooledReliableServiceProof3LValidation.md) records **42/42 PASS**,
+including debt conservation, post-admission gameplay, delayed/stale feedback
+and slow-peer regrant denial. One test incorrectly counted accepted groups as
+pending; the corrected assertion preserves total debt and all bounds. No
+reference-model logic, numeric candidate or production networking changed.
+
+| Gate | Current state |
+| --- | --- |
+| Option C model proof | PASS, including all nine hardening cases |
+| Production pooled implementation | NOT IMPLEMENTED; later scoped task after matching docs checks and required current-source terminal-green CI |
+| Physical 32-actual-client Local/Node qualification | NOT MEASURED; modeled 1 GbE capacity is not a funded/measured path |
+| KI-006 / 3L / 3M | OPEN / B — PARTIALLY READY / BLOCKED |
+
+The [decision](../FutureArchitecture/Foundation3LServiceCoverageDecision.md#current-option-c-proof-checkpoint-2026-09-14)
+and [numeric model](PooledReliableServiceProof3L.md) now distinguish executed
+model proof from the historical conceptual assessment. The original
+full-reservation hardware preflight stop below remains valid in its own scope.
+Reviewed security and qualified Local/Node simulator receipts remain unchanged;
+this proof is neither production implementation nor physical qualification.
+
 ## Physical deployment preflight stop (2026-09-13)
 
 Starting at `ca176c81609eea83dbef634e37342700a3811114`, the documentation-only
