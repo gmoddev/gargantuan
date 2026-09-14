@@ -1,0 +1,256 @@
+---
+status: selected-native-feedback-contract
+owner: runtime-networking-and-runtime-host
+last_verified: 2026-09-14
+related_code:
+  - src/network/GameNetworkingSocketsTransport.cpp
+  - tests/ReliableTransportFeedbackModelFixture.hpp
+  - tests/NetworkingContractsTests.cpp
+related_adrs:
+  - ../FutureArchitecture/Foundation3LServiceCoverageDecision.md
+---
+
+# Foundation 3L reliable transport feedback proof
+
+## Verdict
+
+**B — NARROW GNS ADAPTER EXTENSION REQUIRED.**
+
+The accepted Option C pooled-service model remains valid as an abstract service proof, but production cannot implement its drain/debt decisions from the currently exposed GNS telemetry. The pinned GNS revision already maintains the internal state needed for a truthful signal; neither the pin nor current upstream exposes a sufficient public cumulative application-byte acknowledgement statistic. No dependency upgrade, wire change, second reliable lane, pooled production admission, or Foundation 3M work is part of this proof.
+
+The required production boundary is a narrow dependency-facing telemetry extension plus an adapter-owned generation/timestamp wrapper. It must expose monotonic unique reliable-stream progress and complete reliable-message payload retirement without changing GNS send, ACK, retransmission, ordering, queue, or congestion behavior.
+
+## Pinned source and reliable-byte lifecycle
+
+Gargantuan pins GameNetworkingSockets at `2cb93a06350bb065db53abdb0d87cf297e0bfd34` through `cmake/GameNetworkingSockets.cmake`.
+
+One Gargantuan reliable send follows this source-verified lifecycle:
+
+```text
+Gargantuan payload
+    -> 32-byte GGNS adapter envelope
+    -> GNS CSteamNetworkingMessage
+    -> GNS reliable-message header prepended to the reliable stream
+    -> queued/pending reliable stream bytes
+    -> unique stream segment first transmitted: pending -> sent-unacked
+    -> packet loss/NACK: sent-unacked -> pending retry
+    -> retransmit: pending retry -> sent-unacked
+    -> ACK: owning stream segment becomes Acked and leaves pending/unacked ownership
+    -> final ACKed segment reference retires/unlinks/releases the reliable message
+    -> connection shutdown purges any remainder
+```
+
+Pinned `steamnetworkingsockets_snp.cpp` verifies that `m_cbPendingReliable` and `m_cbSentUnackedReliable` describe mutually exclusive ownership of unique reliable-stream bytes. First transmission moves bytes from pending to sent-unacked. A retry moves the same bytes back from sent-unacked to pending. ACK processing subtracts the segment from whichever state owns it and marks that segment Acked. Therefore:
+
+```text
+m_cbPendingReliable + m_cbSentUnackedReliable
+```
+
+is a useful instantaneous unique reliable-stream outstanding quantity. `m_cbPendingReliable` alone is not a drain counter.
+
+GNS reliable stream bytes are not identical to Gargantuan application debt. GNS prepends its own per-message reliable header and increases the message byte size before assigning stream positions. The internal reliable message retains `ReliableSendInfo::m_cbHdr`, the original message object and its sent-segment reference count. When the last ACKed reliable-segment reference is removed, GNS still has enough information to retire exactly the original message payload as:
+
+```text
+GnsMessageBytes - ReliableSendInfo.m_cbHdr
+```
+
+For Gargantuan this payload already includes the 32-byte GGNS adapter envelope and therefore matches the complete-message byte unit charged by reliable-service admission.
+
+## Current adapter telemetry classification
+
+The existing adapter exposes or records these quantities:
+
+| Existing quantity | Actual meaning | Suitable for logical debt retirement? |
+| --- | --- | --- |
+| adapter `BytesSent` | Gargantuan payload bytes accepted by GNS `SendMessage...` | **No.** Submission/acceptance only. |
+| `m_cbPendingReliable` | reliable-stream bytes waiting to be sent/retried | **No.** Retries can increase it. |
+| `m_cbSentUnackedReliable` | unique reliable-stream bytes currently sent but awaiting ACK | Not alone. Useful with pending as instantaneous outstanding state. |
+| `m_nSendRateBytesPerSecond` | GNS rate/congestion estimate subject to configured min/max clamps | **No.** Explicit profiles set min=max, so this may report configured policy. |
+| `m_flOutBytesPerSec` | recent physical output observation | No. Includes transport behavior and is not unique application retirement. |
+| RTT/loss estimates | path-health observations | Supporting diagnostics only. |
+
+The current explicit Gargantuan profile sets GNS SendRateMin and SendRateMax to the configured backend rate. Consequently `m_nSendRateBytesPerSecond >= 16 MiB/s` cannot prove that a peer actually received or ACKed 16 MiB/s of unique reliable service.
+
+Likewise, summing positive decreases of pending reliable bytes is unsound: one stream range can leave pending on first send, re-enter pending after loss, then leave pending again on retransmission. The same logical bytes can therefore generate multiple positive pending decreases.
+
+## Smallest truthful native extension
+
+The production adapter does not need packet internals, semantic ACKs, or a public generic GNS API. The narrow extension should maintain four generation-local checked `uint64_t` cumulative counters in GNS sender state and expose them through a private Gargantuan integration bridge while the connection lock is held:
+
+```text
+UniqueReliableStreamBytesFirstSent
+UniqueReliableStreamBytesAcked
+ReliablePayloadBytesAcked
+ReliableStreamBytesRetransmitted
+```
+
+Semantics:
+
+- `UniqueReliableStreamBytesFirstSent` advances only when a reliable stream range first transitions from pending to in-flight. Retry sends do not advance it.
+- `UniqueReliableStreamBytesAcked` advances exactly once when a unique reliable stream segment becomes Acked, whether the successful ACK followed first send or retransmission.
+- `ReliablePayloadBytesAcked` advances once when the final reliable segment reference for a message is ACKed and the message is retired. The increment is that message's complete payload bytes excluding only the private GNS reliable-stream header.
+- `ReliableStreamBytesRetransmitted` advances for actual retry stream bytes transmitted. It is physical-cost evidence and never retires logical application debt.
+
+All increments use checked arithmetic. Overflow is terminal/invalid feedback, never wrap.
+
+The Gargantuan adapter combines those counters with existing instantaneous status and generation-safe identity:
+
+```cpp
+struct ReliableServiceFeedback {
+    ConnectionId Connection;
+    std::uint64_t ObservedAtMicroseconds;
+    std::uint64_t UniqueReliableStreamBytesFirstSent;
+    std::uint64_t UniqueReliableStreamBytesAcked;
+    std::uint64_t ReliablePayloadBytesAcked;
+    std::uint64_t ReliableStreamBytesRetransmitted;
+    std::uint64_t PendingReliableStreamBytes;
+    std::uint64_t SentUnackedReliableStreamBytes;
+    ConnectionState State;
+};
+```
+
+No raw GNS handle is a service identity. The adapter resolves the live handle through its existing `ConnectionId` generation mapping and stamps one monotonic observation time. Missing bridge/status data returns unavailable feedback rather than fabricated zero.
+
+`ReliablePayloadBytesAccepted` need not be added to this feedback object: Gargantuan's existing synchronous reservation/scheduler-acceptance path is already the authoritative source of created structural debt. Adding another accepted-byte counter would duplicate ownership rather than strengthen conservation.
+
+## Logical debt versus physical transport cost
+
+Option C must keep two ledgers:
+
+```text
+Logical structural debt
+    = complete Gargantuan reliable bytes accepted for structural service
+      - delta(ReliablePayloadBytesAcked)
+      - valid terminal release
+
+Physical transport cost
+    includes unique first-send stream bytes
+           + retransmitted stream bytes
+           + packet/encryption/ACK/protocol overhead not represented by logical debt
+```
+
+The exact conservation equation remains:
+
+```text
+CreatedLogicalDebt
+= VerifiedPayloadAcked
++ TerminalReleased
++ OutstandingLogicalDebt
+```
+
+Retransmission can make physical cost exceed created logical debt by any bounded amount allowed by transport policy, but it cannot make `ReliablePayloadBytesAcked` advance twice for one message. Transport reserve and host/path qualification cover that physical cost; retransmission bytes never masquerade as successful logical drain.
+
+## Slow-peer qualification
+
+The 16 MiB/s Option C `PeerDrainFloor` describes the sender-side queue serialization floor needed for the same-FIFO blocking proof. Whole-message ACK completion time is too conservative for this purpose because RTT/ACK delay is part of the accepted nonqueue/path allowance, and ACK-only burst rate can be distorted by delayed ACK arrival.
+
+An ordinary new structural grant therefore requires two fresh samples for the same `ConnectionId` generation, separated by at most the accepted **50 ms** feedback window, with checked monotonic counters and:
+
+```text
+Delta(UniqueReliableStreamBytesFirstSent)
+    >= ceil(16 MiB/s * DeltaTime)
+
+and
+
+Delta(UniqueReliableStreamBytesAcked) > 0
+```
+
+while the peer has no previous outstanding structural grant debt. The first condition proves actual local/backend unique serialization rather than configured rate. The second proves that the remote transport is making ACK progress rather than merely accepting bytes into an unacknowledged black hole. Exact structural debt is retired only by `ReliablePayloadBytesAcked`, not by either qualification counter.
+
+RTT, pending/unacked state and retransmission deltas remain supporting health/cost diagnostics. They can make a profile unqualified but cannot manufacture positive verified service.
+
+An idle peer is not classified slow merely because both deltas are zero. It simply has no current ordinary-grant qualification evidence.
+
+## First grant and drained-slow-peer requalification
+
+Requiring service history before first service is circular. Resolve that with a bounded **qualification grant** rather than pretending the peer is already qualified:
+
+- one complete group at most `G`;
+- consumes one of the same four aggregate structural drain-grant slots;
+- obeys the same FIFO, aggregate debt, credit, pending and generation limits;
+- no second qualification grant while any old debt is outstanding;
+- the first live generation may receive one qualification grant immediately after fresh backend/connection health and the normal admission checks;
+- successful first-send-floor plus ACK progress enables ordinary grants.
+
+If a peer previously drains below the floor, reaching zero debt does **not** restore ordinary eligibility. The selected proof contract permits another qualification grant only after a **1 second** per-generation cooldown, under the same bounded one-G/one-slot rules. This is a requalification probe, not ordinary service. A repeatedly slow peer therefore cannot mint unrestricted drain capacity or monopolize more than one bounded grant at a time.
+
+A future production implementation may choose a longer cooldown, but shortening it below this proof value requires revalidation.
+
+## Freshness, generation and contradictory feedback
+
+Freshness applies to the complete atomic feedback snapshot. The two samples used for qualification must:
+
+- carry the same live generation-safe `ConnectionId`;
+- be observed monotonically and no more than 50 ms apart;
+- have nondecreasing cumulative counters;
+- come from a connected backend state with available instantaneous status.
+
+Reconnect creates a fresh `ConnectionId` generation, zero baseline, no inherited qualification, no inherited ACK history and no inherited cooldown advantage. Backend handle reuse is irrelevant unless it resolves to the current generation.
+
+Same-generation counter decrease/reset, timestamp reversal, impossible arithmetic, missing source data or bridge/status disagreement marks feedback contradictory. New structural grants stop. Outstanding logical debt is retained until truthful ACK retirement or terminal reconciliation.
+
+Counters never intentionally wrap. Checked `uint64_t` exhaustion is a terminal feedback failure. A legitimate reset occurs only with a new connection generation.
+
+## Terminal release
+
+Terminal release is not successful drain. Outstanding logical debt may be released only when the owning connection generation is irreversibly torn down and GNS/adapter ownership has definitively abandoned/purged the remaining reliable work. A transient closing state or elapsed timeout does not itself erase debt.
+
+Diagnostics must retain separate cumulative values for `VerifiedPayloadAcked` and `TerminalReleased` so a failed connection cannot appear as successful service.
+
+## Application-level ACK decision
+
+No Gargantuan wire/application ACK is required for this boundary. GNS transport ACK proves the property Option C needs: the remote transport has acknowledged the reliable bytes and GNS can retire its retransmission responsibility. Semantic application consumption is a later layer and is already measured by existing gameplay/client qualification where needed. Adding application ACK messages would unnecessarily change the wire protocol and ordering workload.
+
+## Trust boundary
+
+All positive service counters are local backend telemetry. A remote peer can influence ACK timing, loss, queue depth and connection lifetime, but that influence can only delay ACK progress, increase retransmission cost, retain existing debt or reduce future grants. It cannot increment the local first-send/ACK/payload-retirement counters except through actual local send/transport ACK processing.
+
+## Executable feedback model
+
+`tests/ReliableTransportFeedbackModelFixture.hpp` is registered in `gargantuan_networking_contract_tests`. It is deterministic and socket-free. It models pending/in-flight/retry/ACK transitions, unique first-send and ACK counters, exact payload retirement, retransmission physical cost, terminal release, generation reset, feedback qualification and bounded qualification grants.
+
+The matrix covers:
+
+1. unique first-send drain;
+2. one retransmission;
+3. repeated retransmissions;
+4. delayed ACK;
+5. duplicate ACK;
+6. ACK after retransmission;
+7. queue bytes re-enter pending;
+8. peer drains at floor;
+9. peer drains below floor;
+10. idle peer;
+11. first-grant bootstrap;
+12. drained-slow-peer requalification;
+13. stale feedback;
+14. missing feedback;
+15. connection teardown;
+16. reconnect/new generation;
+17. counter reset/wrap/regression;
+18. transport failure;
+19. logical debt versus physical cost separation.
+
+The model asserts that retransmission may increase physical bytes while `LogicalDrained <= LogicalCreated` and the conservation equation remains exact.
+
+## Pinned-source probe and current upstream comparison
+
+Pinned-source inspection establishes the transitions above directly in `steamnetworkingsockets_snp.cpp` and `steamnetworkingsockets_snp.h`: pending/unacked ownership, retry migration, ACK state, per-message reliable header size, sent-segment reference count and final message retirement all already exist internally.
+
+Current upstream master inspected at `a424b7db649438acafb60c99cae6667587c42732` retains the same sender-state/message-retirement design. Its public realtime status still exposes pending/unacked/rate-style fields rather than a cumulative application-payload-ACKed counter. Therefore a dependency upgrade does not remove the need for the narrow integration signal.
+
+Classification: **B**, not C. The capability exists internally in both revisions; the missing piece is a narrow truthful exposure, not a broad dependency redesign.
+
+## Production implementation boundary
+
+The exact next implementation task is **not pooled admission**. First implement and validate the narrow GNS feedback extension alone:
+
+1. add checked generation-local sender counters at existing first-send, ACK-retirement, message-retirement and retry-send transitions;
+2. expose them through one Gargantuan-private, lock-safe bridge without changing public GNS protocol behavior;
+3. add real-GNS loss/retransmission/duplicate/delayed-ACK tests proving monotonicity and exact payload retirement;
+4. wrap the bridge in generation-safe `ReliableServiceFeedback` at the adapter;
+5. validate teardown/reset/overflow/failure behavior on Windows Release and Linux sanitizers.
+
+Only after that boundary is green may a separate task connect it to production `POOLED_SERVICE` admission and re-run the accepted Option C service proof against real GameSession/GNS feedback.
+
+KI-006 remains **OPEN**. Production pooled service remains **NOT IMPLEMENTED**. Foundation 3L remains **B — PARTIALLY READY**. No 3M.
