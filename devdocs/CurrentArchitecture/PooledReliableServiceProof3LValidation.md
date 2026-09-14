@@ -115,3 +115,31 @@ terminal green at the final published commit. Documentation deployment only
 runs on main push/manual dispatch; this task validates the docs build locally
 and does not deploy Pages. No standalone physical/GNS qualification is invoked
 locally merely for this deterministic proof.
+
+## Native transport-feedback follow-up
+
+The later [reliable transport feedback proof](ReliableTransportFeedbackProof3L.md)
+refines only the abstract model's `verified drain` observation boundary. The
+42/42 Option C service-model result above remains accepted, but production must
+not interpret configured GNS rate or positive pending-byte decreases as that
+verified service.
+
+Pinned GNS source inspection establishes an exact internal distinction between
+pending and sent-unacked reliable-stream ownership, retry re-entry, ACK retirement
+and final reliable-message retirement. The selected production boundary therefore
+requires a narrow GNS/adapter telemetry extension exposing monotonic unique
+first-send stream bytes, unique ACKed stream bytes, complete payload bytes ACKed,
+and retransmitted stream bytes. No wire/application ACK is required.
+
+`tests/ReliableTransportFeedbackModelFixture.hpp` is registered in the existing
+networking-contract CTest and adds 19 deterministic feedback/lifecycle cases.
+It preserves the original N=32/G/96-MiB/s Option C candidate and its 50-ms
+freshness limit. A bounded one-G qualification grant breaks the first-service
+circularity; a previously slow drained peer may receive another qualification
+grant only after a one-second per-generation cooldown. Ordinary grants still
+require fresh measured serialization at the 16-MiB/s floor plus positive ACK
+progress.
+
+Decision: **B — NARROW GNS ADAPTER EXTENSION REQUIRED**. Production pooled
+service remains **NOT IMPLEMENTED**, KI-006 stays **OPEN**, Foundation 3L remains
+**B — PARTIALLY READY**, and no 3M work is authorized by this follow-up.
