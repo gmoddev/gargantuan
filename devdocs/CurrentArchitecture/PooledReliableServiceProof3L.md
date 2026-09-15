@@ -17,11 +17,14 @@ related_adrs:
 
 ## Current registered proof result
 
-The [production integration checkpoint](PooledReliableServiceIntegration3L.md#production-recovery-conflict-2026-09-14)
-now exposes a retained-journal overload/recovery conflict. The unchanged
-42-case model remains proof of its bounded pending-offer semantics; it does
-not qualify the production workload's retained authoritative history or its
-fixed recovery deadline. Production pooled service is stopped and unqualified.
+The [production integration receipt](PooledReliableServiceIntegration3L.md#known-object-name-correction-2026-09-14)
+supersedes the historical retained-journal recovery stop. Production pooled
+service qualifies in Engine/loopback scope at `eec0c7123`; the unchanged 42-case
+model remains proof of its bounded pending-offer semantics. The
+[recovery contract](PooledReliableServiceRecoveryContract3L.md) and production
+receipt separately cover retained history and service recovery. The
+[physical attempt](PooledPhysicalQualification3L.md) has not qualified a
+32-actual-client Local/Node deployment.
 
 **PASS: 33 model + nine hardening = 42/42 cases**, through the existing
 `gargantuan_networking_contracts` CTest entry. The
@@ -29,7 +32,8 @@ fixed recovery deadline. Production pooled service is stopped and unqualified.
 `0512aac60a7649d1c0498c423c5327aa16f6c540`, hashes, commands and limitations.
 The only demonstrated correction was a hardening assertion confusing pending
 requirements with already committed debt; model logic and profile values did
-not change. Production implementation and physical qualification remain open.
+not change. That historical model receipt alone does not qualify production
+implementation or a physical deployment; use the newer receipts above.
 
 ## Scope and authority
 
@@ -42,12 +46,13 @@ implemented production behavior.
 The proof is intentionally in `CurrentArchitecture` rather than a second conceptual ADR:
 it records an executable test specification and validation evidence. Production
 `ReliableServiceProfile`, `ReliableByteAdmission`, `GameSession`, scheduler, GNS, wire and
-ordering semantics remain unchanged by this proof. `FULL_RESERVATION` remains the only
-implemented production service profile at this checkpoint; `POOLED_SERVICE` below is a
-candidate for a later scoped implementation task.
+ordering semantics remained unchanged by the original proof task. At that
+historical checkpoint, `FULL_RESERVATION` was the only implemented profile.
+The newer production receipt above records the subsequent `POOLED_SERVICE`
+implementation; the numeric proof below is not a competing production status.
 
-No Foundation 3M work is included. KI-006 remains open for production implementation and
-funded 32-actual-client physical qualification.
+No Foundation 3M work is included. KI-006 remains open for funded
+32-actual-client physical qualification.
 
 ## Selected 32-peer candidate
 

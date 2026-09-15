@@ -6,6 +6,16 @@ last_verified: 2026-09-13
 
 # Foundation 3L physical deployment preflight
 
+## Current routing (2026-09-15)
+
+This receipt below is historical **FULL_RESERVATION** evidence. Its 256-MiB/s
+reservation shortfall does not reject the accepted Option C profile. The
+[pooled physical attempt](PooledPhysicalQualification3L.md) measures the current
+LAN against the 96-MiB/s pooled envelope. Forward throughput is measured;
+bidirectional funding and 32-actual-client Local/Node qualification remain open.
+Production pooled service is qualified in the separate
+[Engine/loopback receipt](PooledReliableServiceIntegration3L.md#known-object-name-correction-2026-09-14).
+
 ## Decision and source
 
 Subsequent [VPS measurements](VpsPhysicalPreflight3L.md) retain the physical

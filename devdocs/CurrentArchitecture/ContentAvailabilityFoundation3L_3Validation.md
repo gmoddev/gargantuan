@@ -6,6 +6,27 @@ last_verified: 2026-09-14
 
 # Foundation 3L.3 diagnostic validation ledger
 
+## Physical pooled qualification attempt (2026-09-15)
+
+The [physical receipt](PooledPhysicalQualification3L.md) records unchanged
+production source `eec0c7123a39698761e49ed276ee37aae673e023`, actual 7950X3D/5900X
+host inventory, Ethernet routing/MTU, bidirectional ICMP baseline and bounded
+forward TCP/UDP measurements against the accepted 96-MiB/s Option C envelope.
+It supersedes the old full-reservation shortfall as routing for this task.
+
+**INCOMPLETE / NOT PHYSICALLY QUALIFIED.** Local Windows denied the temporary
+benchmark receiver firewall rule; independent reverse capacity is not measured.
+Exact UDP loss, full bidirectional headroom and 32 actual GameSession clients
+through Local and Node remain **not measured**. No production defect was
+established, no source correction was made, and unaffected terminal-green
+Native/GNS evidence at `eec0c7123` is reused. The canonical simulator's one
+gameplay client plus protocol observers does not satisfy this physical gate.
+
+Complete the bounded bidirectional preflight with a provisioned receiver, then
+complete the planned actual-client harness and run the unchanged accepted mix.
+KI-006 remains **OPEN**, Foundation 3L **B — PARTIALLY READY / NOT READY TO CLOSE**,
+and 3M **BLOCKED / NOT STARTED**. The stricter 200-peer diagnostic remains separate.
+
 ## Known-object Name production qualification (2026-09-14)
 
 The [production integration receipt](PooledReliableServiceIntegration3L.md#known-object-name-correction-2026-09-14)

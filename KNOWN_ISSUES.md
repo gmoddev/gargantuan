@@ -85,6 +85,19 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+Physical attempt update 2026-09-15: **OPEN / PHYSICAL QUALIFICATION INCOMPLETE**.
+The [current physical receipt](devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md)
+records the 7950X3D-to-5900X Ethernet path and forward TCP/UDP preflight against
+Option C's unchanged 96-MiB/s envelope. The historical full-reservation 1-GbE
+shortfall does not reject this pooled profile. Local Windows denied the scoped
+receiver firewall rule, leaving independent reverse capacity and full funding
+unmeasured. Exact UDP loss and both 32-actual-client Local/Node runs are also
+**not measured**; the existing canonical simulator is not a physical client farm.
+No Engine defect was established. Complete receiver provisioning and the
+bidirectional preflight, then the planned actual-client harness and unchanged
+Local/Node workload. Production Engine/loopback qualification is retained;
+3L remains **B — PARTIALLY READY**, not ready to close, with no 3M or merge.
+
 Name correction update 2026-09-14: **OPEN / WORKER PRODUCTION QUALIFICATION COMPLETE**. The
 [integration receipt](devdocs/CurrentArchitecture/PooledReliableServiceIntegration3L.md#known-object-name-correction-2026-09-14)
 records the acceptance-safe Name suffix correction at `555354bb5`, with recovery
