@@ -85,17 +85,24 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
-Physical attempt update 2026-09-15: **OPEN / PHYSICAL QUALIFICATION INCOMPLETE**.
+Physical resumption update 2026-09-15: **OPEN / PREFLIGHT INCONCLUSIVE**.
 The [current physical receipt](devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md)
-records the 7950X3D-to-5900X Ethernet path and forward TCP/UDP preflight against
-Option C's unchanged 96-MiB/s envelope. The historical full-reservation 1-GbE
-shortfall does not reject this pooled profile. Local Windows denied the scoped
-receiver firewall rule, leaving independent reverse capacity and full funding
-unmeasured. Exact UDP loss and both 32-actual-client Local/Node runs are also
-**not measured**; the existing canonical simulator is not a physical client farm.
-No Engine defect was established. Complete receiver provisioning and the
-bidirectional preflight, then the planned actual-client harness and unchanged
-Local/Node workload. Production Engine/loopback qualification is retained;
+now records three independent TCP trials each way and sequence-accounted UDP
+on the current 7950X3D/5900X LAN against the unchanged 96-MiB/s envelope.
+Clean trials exceed the envelope, but reverse UDP loss, pacing variation and
+one playback-window failure remain unattributed. Missing completed frames in
+that failure are not exact network packet loss. The conservative gate is not
+passed; no hard 1-GbE limit or Engine defect is established. The earlier local
+firewall privilege blocker was avoided with client-initiated pull connections.
+All four temporary worker rules and all benchmark processes are gone.
+
+The operator confirms **no direct cable yet**; the planned **25 Gb fiber cable
+is deferred until delivery**. Current intermediate hardware is unidentified;
+future fiber capacity is not measured. Identify the installed path and repeat
+attributable preflight, then, if it passes, implement the smallest missing
+actual-client harness and run the unchanged Local/Node workload in the same
+task. Both 32-actual-client runs and all their service/resource/cleanup metrics
+remain **not measured**. Production Engine/loopback qualification is retained;
 3L remains **B — PARTIALLY READY**, not ready to close, with no 3M or merge.
 
 Name correction update 2026-09-14: **OPEN / WORKER PRODUCTION QUALIFICATION COMPLETE**. The

@@ -1,7 +1,7 @@
 ---
 status: partial-validation
 owner: runtime-networking
-last_verified: 2026-09-14
+last_verified: 2026-09-15
 ---
 
 # Foundation 3L.3 diagnostic validation ledger
@@ -10,20 +10,34 @@ last_verified: 2026-09-14
 
 The [physical receipt](PooledPhysicalQualification3L.md) records unchanged
 production source `eec0c7123a39698761e49ed276ee37aae673e023`, actual 7950X3D/5900X
-host inventory, Ethernet routing/MTU, bidirectional ICMP baseline and bounded
-forward TCP/UDP measurements against the accepted 96-MiB/s Option C envelope.
-It supersedes the old full-reservation shortfall as routing for this task.
+host inventory, Ethernet routing/MTU, bidirectional ICMP baseline and independent
+TCP/UDP measurements against the unchanged 96-MiB/s Option C envelope. Three
+TCP trials each way deliver 939.047–947.019 Mbit/s forward and
+941.466–941.982 Mbit/s reverse. Forward UDP sequence-accounted loss is
+0.012517% at nominal 96 MiB/s and 0.023111% at 104 MiB/s; the latter delivers
+872.311 Mbit/s. Reverse envelope probes lose 0.463981% / 1.011574%; two clean
+headroom repeats deliver 859.196 / 852.324 Mbit/s with no missing packets.
+An earlier headroom run has playback-window errors and cannot establish exact
+network loss. All trials, including that anomaly, are retained.
 
-**INCOMPLETE / NOT PHYSICALLY QUALIFIED.** Local Windows denied the temporary
-benchmark receiver firewall rule; independent reverse capacity is not measured.
-Exact UDP loss, full bidirectional headroom and 32 actual GameSession clients
-through Local and Node remain **not measured**. No production defect was
-established, no source correction was made, and unaffected terminal-green
-Native/GNS evidence at `eec0c7123` is reused. The canonical simulator's one
-gameplay client plus protocol observers does not satisfy this physical gate.
+**INCONCLUSIVE / NOT PHYSICALLY QUALIFIED.** Client-initiated pull connections
+enabled reverse measurement without a local firewall change. The remaining
+stop is unattributed reverse UDP loss/pacing and qualification-tool/host timing,
+not the previous privilege boundary or an established hard 1-GbE ceiling.
+No numerical loss threshold was invented. The operator confirms no direct
+cable is installed; the planned 25 Gb fiber cable is deferred until delivery.
+Intermediate LAN hardware models remain unknown; future fiber is not qualified.
+All four temporary worker rules were removed, benchmark processes are absent,
+and unrelated containers were preserved. No production defect was established;
+unaffected terminal-green Native/GNS evidence at `eec0c7123` is reused.
 
-Complete the bounded bidirectional preflight with a provisioned receiver, then
-complete the planned actual-client harness and run the unchanged accepted mix.
+Local/Node 32-actual-client health, gameplay/service, recovery/convergence,
+debt/journal/fairness, application CPU/memory/network and lifecycle cleanup are
+**not measured**. The simulator's one gameplay client plus observers does not
+satisfy this gate. On the installed fiber path, verify topology and repeat
+attributable preflight; if it passes, immediately implement the smallest missing
+actual-client harness and run the unchanged canonical Local/Node workload.
+If resuming on the present LAN, resolve the retained reverse UDP anomaly first.
 KI-006 remains **OPEN**, Foundation 3L **B — PARTIALLY READY / NOT READY TO CLOSE**,
 and 3M **BLOCKED / NOT STARTED**. The stricter 200-peer diagnostic remains separate.
 

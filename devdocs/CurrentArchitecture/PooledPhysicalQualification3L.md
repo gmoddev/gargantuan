@@ -1,5 +1,5 @@
 ---
-status: incomplete-physical-preflight
+status: inconclusive-physical-preflight
 owner: runtime-networking-and-runtime-host
 last_verified: 2026-09-15
 ---
@@ -8,150 +8,215 @@ last_verified: 2026-09-15
 
 ## Verdict and source
 
-**INCOMPLETE / NOT PHYSICALLY QUALIFIED.** Forward TCP capacity and UDP delivery
-were measured on the available Ethernet LAN. Independent reverse capacity,
-exact UDP loss and full bidirectional funding remain **not measured**. Local
-Windows denied creation of the scoped benchmark receiver firewall rule with
-`Access is denied`; the available process token was not an administrator token.
-User authorization was already present. This was an OS setup limitation, not
-an automatic approval-review rejection or an attributed Engine defect.
+**INCONCLUSIVE / NOT PHYSICALLY QUALIFIED.** Independent TCP and UDP evidence is
+now available in both directions. Clean trials exceed the accepted envelope,
+but reverse UDP loss, pacing variation and a ctsTraffic playback-window failure
+remain unattributed on the shared Windows hosts. The conservative preflight
+gate is **not passed**. This is a qualification-tool / host-timing attribution
+stop, not proof of a hard 1-GbE capacity ceiling or an Engine defect.
 
-No 32-client Gargantuan workload was started. Neither Local nor Node is
-physically qualified. These results do **not** establish that the available
-1-GbE path is incapable of funding Option C. The older
-[full-reservation shortfall](PhysicalDeploymentPreflight3L.md) is historical
-and cannot reject the pooled profile.
+The operator corrected the topology: **no direct cable is installed**. The
+planned **25 Gb fiber cable is deferred until delivery in a few days**. Current
+LAN measurements do not qualify that future path, its NICs or negotiated speed.
+Intermediate network hardware models remain unidentified.
 
-Production source: `eec0c7123a39698761e49ed276ee37aae673e023` on
+No actual Gargantuan server or clients were launched; Local and Node physical
+qualification are **not measured**. KI-006 remains **OPEN**, Foundation 3L
+**B — PARTIALLY READY / NOT READY FOR FINAL ACCEPTANCE**, and 3M **BLOCKED / NOT
+STARTED**. No merge was performed.
+
+Production source remains `eec0c7123a39698761e49ed276ee37aae673e023`.
+This documentation-only resumption starts from published evidence
+`669949b0dac722dd896e9dcf36ebaeb677c6bd96` on
 `foundation/3l-content-availability`, primary repository `gmoddev/gargantuan`.
-The published branch matched this source before the attempt and before receipt
-preparation. Work used an isolated detached worktree; the user's dirty checkout
-was preserved. This publication changes documentation only: no production,
-test, profile, wire, ordering, rate, journal or recovery semantics changed.
-No active Foundation 3L checkpoint file was present at this source; the
-physical receipt, validation ledger and KI-006 are updated together.
+An isolated detached worktree preserves the user's dirty checkout. No production,
+test, profile, rates, limits, wire, ordering or recovery semantics changed.
+No active Foundation 3L checkpoint exists at this source.
 
-## Profile and hardware
+The [morning attempt receipt](https://github.com/gmoddev/gargantuan/blob/669949b0dac722dd896e9dcf36ebaeb677c6bd96/devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md)
+retains its original measurements and local administrator-token blocker.
+Client-initiated ctsTraffic pull connections allowed independent reverse testing
+without adding a local inbound firewall rule. Local administrator access was
+not acquired and was not necessary for that method.
 
-The accepted [Option C proof](PooledReliableServiceProof3L.md#selected-32-peer-candidate)
-requires a usable envelope of **100,663,296 B/s = 96 MiB/s = 805.306368 Mbit/s**.
-Fixed modeled commitments are 84 MiB/s: structural 64, gameplay 8,
-control/realtime 4 and transport reserve 8; another 12 MiB/s remains inside
-the envelope. All bounds, four concurrent grants and the 16-MiB/s active-grant
-peer drain floor remain unchanged. A throughput sample is not proof of those
-application guarantees or reserved physical headroom.
+## Profile, topology and placement
 
-| Resource | Intended client generator | Intended server / trusted dockerbox |
+The accepted [Option C profile](PooledReliableServiceProof3L.md#selected-32-peer-candidate)
+requires **96 MiB/s = 100,663,296 B/s = 805.306368 Mbit/s** of usable envelope.
+Fixed commitments remain 84 MiB/s: structural 64, gameplay 8,
+control/realtime 4 and transport reserve 8; another 12 MiB/s is inside the
+envelope. Four concurrent grants and the 16-MiB/s active-grant peer drain floor
+are unchanged. The extra 104-MiB/s UDP probes test physical headroom only;
+they do not change Gargantuan's profile or create a new acceptance threshold.
+
+| Resource | Workstation / intended client generator | Dockerbox / intended server |
 | --- | --- | --- |
 | Host | DESKTOP-B8V8NAN | HOSTPC |
 | CPU | Ryzen 9 7950X3D, 16 cores / 32 logical | Ryzen 9 5900X, 12 cores / 24 logical |
 | OS | Windows 11 Pro, build 26200 | Windows 11 Pro, build 26200 |
-| OS-visible RAM | 33,157,488,640 bytes | 34,281,426,944 bytes |
-| Free memory at inventory | 8,741,300 KiB | 17,192,488 KiB |
-| Inventory UTC | 2026-09-15 10:58:08 | 2026-09-15 10:59:18 |
-| Physical NIC | Realtek Gaming 2.5GbE Family Controller | Realtek PCIe GbE Family Controller |
+| OS-visible RAM bytes | 33,157,488,640 | 34,281,426,944 |
+| Free RAM KiB at inventory | 9,748,956 | 17,111,844 |
+| Inventory UTC, 2026-09-15 | 20:56:29 | 21:19:12 |
+| NIC | Realtek Gaming 2.5GbE Family Controller | Realtek PCIe GbE Family Controller |
 | Negotiated speed | 2.5 Gbit/s | 1 Gbit/s |
 | Driver version / date | 10.54.1111.2021 / 2021-11-11 | 10.79.50.1003 / 2025-10-03 |
 | IPv4 / interface | 192.168.0.68/24 / Ethernet | 192.168.0.108/24 / Ethernet 2 |
 | MTU | 1500 | 1500 |
 
-Both machines were shared, not reserved. The worker's existing `drycreek-bot`
-and `directus-db` containers remained running. Free memory is a snapshot, not
-a supported client count or a reservation. No 10/25-GbE adapter was visible in
-the physical-adapter inventory; the disabled/unidentified PCI inspection did
-not identify an available high-speed NIC. No NIC, route, driver or MTU was tuned.
+The path traverses the existing LAN, not a direct cable. Exact intermediate
+switch/router and cable models are **not established**. Both routes are on-link
+`192.168.0.0/24`; workstation traffic is explicitly bound to `192.168.0.68`.
+Its active Wi-Fi and VPN are not the selected peer route. Worker Wi-Fi is
+disconnected; WSL virtual interfaces are outside this path. No available
+high-speed physical NIC was established. No driver, NIC, MTU or route was tuned.
 
-Observed topology is client Ethernet to worker Ethernet on the on-link
-`192.168.0.0/24` LAN. `Find-NetRoute` selected Ethernet and source
-`192.168.0.68`, not the client's active Wi-Fi or VPN. The benchmark sender was
-explicitly bound to that address. Intermediate switch and cable models and
-direct-cable status are **not established**; do not call this a direct link.
-Worker Wi-Fi was disconnected. WSL virtual interfaces were outside this path.
+Hosts are shared, not reserved. Existing worker containers `drycreek-bot` and
+`directus-db` remained running. Benchmark placement was workstation sender /
+worker receiver for forward traffic, worker sender / workstation receiver for
+reverse traffic. Trials were sequential, without overlapping evidence transfers.
+TCP used four connections in one tool process per host. Forward UDP used one
+process per host; reverse UDP used one worker server and either one or four
+workstation receivers. Four receiver wrappers also sampled host CPU, so
+measurement overhead is part of this environment and is not isolated.
 
-## Baseline latency and MTU
+## Independent TCP capacity
 
-Each direction used 100 sequential ICMP echoes, 1,200-byte payload, a 500-ms
-timeout and 50-ms spacing. All 100 succeeded in each direction: observed
-baseline ICMP loss was **0/100** in each direction, not a general loss guarantee.
-Percentiles use nearest rank. `.NET Ping` reports integer milliseconds; a zero
-sample means below its millisecond resolution, not zero physical latency.
+[Microsoft ctsTraffic](https://github.com/microsoft/ctsTraffic) 2.0.3.9 x64 was
+obtained from its official release directory. Both executable copies match
+SHA-256 `0548089E59C872306CE2C98E7163E2A717119756010CF64D3CB3DA2854F632CF`;
+Authenticode reports **NotSigned**. This is distinct from signed NTTTCP below.
 
-| ICMP direction | Mean RTT ms | p50 / p95 / p99 / max ms | Mean / max absolute successive RTT delta ms |
-| --- | ---: | --- | --- |
-| Client to worker | 0.18 | 0 / 0 / 2 / 15 | 0.343 / 15 |
-| Worker to client | 0.28 | 0 / 2 / 6 / 11 | 0.566 / 11 |
+Each trial transfers 536,870,912 application bytes per connection over four
+connections, 2,147,483,648 bytes total, with `-Verify:data`.
+Forward uses `-Pattern:push`; reverse uses `-Pattern:pull` on independently
+established client connections. Common settings are TCP port 55301,
+`-Connections:4 -Iterations:1` on the client and `-ServerExitLimit:4` on the
+worker. All six trials record four successes, zero network/protocol errors,
+exit zero and no wrapper timeout.
 
-The last column is an explicitly defined RTT-variation statistic, not one-way
-packet jitter. DF probes succeeded at 1,472 payload bytes and returned
-`PacketTooBig` at 1,473 in both directions, consistent with the 1,500-byte MTU.
-One-way jitter, latency under the Gargantuan workload and shaping/asymmetry
-across independently saturated directions are **not measured**.
+Received throughput below divides verified application bytes by the interval
+from the receiver's first connection-established timestamp to its last
+connection-success timestamp. It excludes worker listener startup wait and
+tool control bytes. Timestamps have millisecond resolution. CPU is the mean
+of sampled host aggregate CPU percentages over each wrapper's lifetime,
+including startup; it is not dedicated Engine CPU.
 
-## Throughput method and results
+| Trial | Received Mbit/s | Workstation / worker mean CPU % |
+| --- | ---: | --- |
+| tcp-forward-1 | 944.520 | 16.43 / 7.75 |
+| tcp-forward-2 | 939.047 | 14.86 / 8.53 |
+| tcp-forward-3 | 947.019 | 16.86 / 8.56 |
+| tcp-reverse-1 | 941.982 | 11.60 / 8.09 |
+| tcp-reverse-2 | 941.569 | 13.00 / 8.31 |
+| tcp-reverse-3 | 941.466 | 20.43 / 7.94 |
 
-Used the Microsoft-signed [NTTTCP 5.40 release](https://github.com/microsoft/ntttcp/releases/tag/v5.40).
-Authenticode was valid for Microsoft Corporation; both executable copies had
-SHA-256 `F66561D09AF91305412FD60CA4B28D57C7B650035D3C1EDCC00A57B079E2247E`.
-Tool locations were the isolated worktree's `build/physical/Tools/ntttcp.exe`
-and worker `C:\Sandbox\Codex\Tools\ntttcp-5.40\ntttcp.exe`.
+TCP alone funds the throughput comparison in every trial. Across these samples,
+maximum observed benchmark RSS is 13,455,360 bytes workstation and 12,353,536
+bytes worker. Maximum sampled core utilization is 93% and 82%, respectively.
+These are tool measurements, not a 32-client resource envelope.
 
-Each valid trial used four synchronous connections/threads, 15 seconds of
-measurement, two seconds warmup and one second cooldown. Three successful TCP
-trials and three UDP envelope trials provide bounded repeatability; one UDP
-trial each sampled the 64-MiB/s structural and 84-MiB/s fixed-commitment rates.
-No specific physical repeat count was found in the canonical plan. These are
-short capacity preflight samples, not endurance or application qualification.
+## UDP packet accounting, throughput and jitter
 
-Common arguments, with paired XML output and a hidden bounded process wrapper:
+Forward uses Microsoft-signed [NTTTCP 5.40](https://github.com/microsoft/ntttcp/releases/tag/v5.40),
+verified SHA-256
+`F66561D09AF91305412FD60CA4B28D57C7B650035D3C1EDCC00A57B079E2247E`.
+One sender/receiver connection uses 1,400-byte datagrams, 15 seconds measurement,
+two seconds warmup, one second cooldown, base port 55201 and sequence/QPC
+logging with `-jm`. Sender `-thr 98304` or `106496` is KiB/s for the single
+thread; NTTTCP pacing truncates to integer bytes/ms. Loss is counted from
+unique sequence numbers in the observed interior after warmup, not inferred
+from mismatched sender/receiver byte totals. Packets beyond the first/last
+observed sequence are excluded; these are exact **bounded-interval** loss counts.
 
-```text
-receiver: -r -m 4,*,192.168.0.108 -t 15 -wu 2 -cd 1 -p 55201 -to 10000 -nsb -xml <receipt>
-sender:   -s -m 4,*,192.168.0.108 -t 15 -wu 2 -cd 1 -p 55201 -to 10000 -nsb -xml <receipt> -nic 192.168.0.68
-UDP:      add -u -l 1400 to both; sender adds -thr 16384, 21504 or 24576
-```
+Reverse uses ctsTraffic UDP at nominal 96 or 104 MiB/s, 15 seconds configured
+stream length, `-DatagramByteSize:1400`, default one-second playback buffer,
+port 55201, and per-receiver jitter CSV. Aggregate frame rate is 72,000 or
+78,000/s, divided equally across four flows when applicable. Integer frame
+sizing produces **1,398 bytes per frame, one UDP datagram per frame**, including
+the tool header. Expected sequence counts are 1,080,000 or 1,170,000.
+Zero-error frame runs allow missing-sequence packet accounting.
 
-`-thr` is KiB/s per thread. NTTTCP converts it to integer bytes/ms, so the
-nominal 96-MiB/s setting is paced at 100,660,000 B/s before timer effects.
-TCP data used 65,536-byte application buffers; UDP used 1,400-byte payloads.
-Data ports were 55201–55204, with TCP synchronization ports 56201–56204.
-The SSH receiver session stayed open until its child finished; wrapper timeout
-was 35 seconds. Trials below all recorded child exit zero and no wrapper timeout.
+For both tools, received payload rate uses observed receive timestamps, not
+nominal duration. Four-flow rates use the common earliest-to-latest receiver
+timestamp span, not the sum of separate per-flow rates. This includes flow
+startup skew. Sender pacing sometimes exceeded the configured 15-second span.
 
-| Trial label | Sender Mbit/s | Worker delivered Mbit/s | Sender / worker reported CPU % |
-| --- | ---: | ---: | --- |
-| tcp-to-server-4 | 945.954 | 945.864 | 22.225 / 7.686 |
-| tcp-to-server-5 | 946.270 | 945.808 | 23.912 / 7.996 |
-| tcp-to-server-6 | 944.942 | 944.961 | 24.063 / 8.136 |
-| udp-64-to-server-1 | 536.791 | 536.830 | 23.207 / 9.776 |
-| udp-84-to-server-1 | 704.646 | 704.387 | 35.292 / 9.605 |
-| udp-96-to-server-1 | 805.351 | 805.252 | 26.234 / 10.212 |
-| udp-96-to-server-2 | 805.326 | 804.724 | 26.594 / 9.817 |
-| udp-96-to-server-3 | 804.748 | 804.902 | 23.885 / 10.740 |
+| Direction / trial | Nominal MiB/s | Expected / received unique packets | Lost / loss % | Received payload Mbit/s |
+| --- | ---: | --- | --- | ---: |
+| Forward udp-forward-seq-1 | 96 | 1,078,564 / 1,078,429 | 135 / 0.012517% | 805.220 |
+| Forward udp-forward-headroom-1 | 104 | 1,168,287 / 1,168,017 | 270 / 0.023111% | 872.311 |
+| Reverse udp-reverse-2, one flow | 96 | 1,080,000 / 1,074,989 | 5,011 / 0.463981% | 778.113 |
+| Reverse udp-reverse-group-1, four flows | 96 | 1,080,000 / 1,069,075 | 10,925 / 1.011574% | 795.020 |
+| Reverse udp-reverse-headroom-1, four flows | 104 | exact unique receive count not recoverable | exact packet loss not measured | not attributable as packet goodput |
+| Reverse udp-reverse-headroom-2, four flows | 104 | 1,170,000 / 1,170,000 | 0 / 0% | 859.196 |
+| Reverse udp-reverse-headroom-3, four flows | 104 | 1,170,000 / 1,170,000 | 0 / 0% | 852.324 |
 
-Forward TCP exceeds the envelope in all three samples. The UDP envelope
-samples straddle approximately 805 Mbit/s; they do not prove an exact
-805.306368-Mbit/s loss-qualified usable minimum. Do not retune the profile or
-classify the tiny differences as an attributed network-capacity failure.
+The first headroom trial received 1,617,364,374 bytes, equivalent to 1,156,913
+datagram-sized receives, but recorded only 1,060,648 completed frames,
+109,352 missing completed frames and 96,265 error frames. Error frames include
+received packets outside the playback sequence window. **109,352 is not a
+network packet-loss count.** The byte-counter deficit of 13,087 is not an exact
+unique-loss count either, because those error frames lack complete identity
+accounting. Completed-frame goodput was 743.835 Mbit/s; that metric cannot
+stand in for raw datagram capacity. The retained analyzer returns null packet
+loss for error-frame trials rather than silently treating missed playback as loss.
 
-Sender/receiver windows differ slightly, and their buffer totals are not
-sequence-matched. **Exact UDP packet loss is not measured.** All five UDP trials
-reported zero host UDP error-counter deltas on both machines. These counters
-cannot detect every path drop and are not proof of zero loss. TCP host counter
-deltas at the client were respectively 22/22/32 retransmissions and 6/8/10
-errors, with zero reported by the worker. NTTTCP reads host-wide IP Helper
-counters, so unrelated shared-host traffic may contribute; these are not
-per-flow Engine errors. Reported CPU is the tool's host aggregate; no aggregate
-saturation was observed, but individual-core saturation, process CPU/RSS and
-32-client generator adequacy are **not measured**.
+Jitter below is absolute change in relative transit time,
+`abs(delta receive time - delta send time)`, and its RFC-3550-style 1/16 EWMA.
+It needs no cross-host clock offset synchronization. NTTTCP CSV is in receive
+order; ctsTraffic CSV is completed-sequence order, so the latter is explicitly
+a **sequence-adjacent** statistic, not a proven arrival-order jitter measure.
+Grouped values are the largest per-flow p99 / EWMA maximum, not pooled percentiles.
 
-The first three TCP setup attempts produced no valid capacity evidence: the
-first lost its remote receiver with SSH lifetime; later attempts omitted the
-tool's extra synchronization ports. They were bounded/stopped and excluded.
-A `-rt -wa` TCP round-trip diagnostic returned zero measured application bytes
-despite exit zero and was also excluded. It does not substitute for independent
-reverse throughput. A batch-wrapper stale exit-status check was corrected in
-ignored preflight tooling; it did not invalidate the completed third TCP
-trial's paired child receipts. No Gargantuan correction followed.
+| Trial | Transit variation p99 ms | Maximum EWMA jitter ms |
+| --- | ---: | ---: |
+| udp-forward-seq-1 | 0.224 | 1.303 |
+| udp-forward-headroom-1 | 0.226 | 1.221 |
+| udp-reverse-2 | 0.548 | 1.799 |
+| udp-reverse-group-1 | 0.599 | 2.356 |
+| udp-reverse-headroom-1, completed frames only | 0.631 | 3.255 |
+| udp-reverse-headroom-2 | 0.611 | 0.864 |
+| udp-reverse-headroom-3 | 0.613 | 0.974 |
+
+All retained measurable runs have zero logged duplicate frames/packets;
+NTTTCP observed no reordered arrivals in the analyzed intervals. ctsTraffic
+sequence ordering cannot independently establish absence of packet reordering.
+An initial reverse UDP attempt on 55301 failed with Windows bind error 10013:
+that port lies in an excluded UDP range. It is a setup failure, excluded from
+capacity/loss evidence; the subsequent trials used available port 55201.
+
+During the anomalous first reverse headroom trial, the worker had a sampled
+core at 100%, while mean host CPU was 14.21%; clean repeats had maximum cores
+47% / 56% and host means 10.23% / 9.29%. This is correlation, not attribution
+to a process or proof of a server bottleneck. Workstation wrapper samples showed
+mean host CPU 17.17–17.67% during that anomalous trial. Per-receiver RSS stayed
+at or below 15,396,864 bytes across the four-flow probes; worker tool RSS was
+at or below 11,591,680 bytes. Short sampling can miss scheduling stalls.
+No driver trace, packet capture or isolated-host reproduction establishes
+the cause. Clean repeats are retained alongside, not substituted for, failures.
+Forward NTTTCP reports workstation / worker host CPU 16.461% / 8.445% at
+nominal 96 MiB/s and 14.972% / 9.320% at 104 MiB/s. Forward UDP process RSS
+was not sampled. None of these measurements qualifies application resource use.
+
+The evidence therefore does not establish a conservative usable UDP minimum
+under the canonical deployment contract. No arbitrary acceptable loss percentage
+has been added. Neither a permanent physical capacity failure nor a qualified
+1-GbE profile follows from these mixed results.
+
+## Baseline ICMP and MTU
+
+Fresh samples at 21:19 UTC use 100 sequential 1,200-byte echoes per direction,
+500-ms timeout and 50-ms spacing. All succeeded. Percentiles are nearest rank;
+integer-millisecond zero means below the API's resolution.
+
+| Direction | Loss | Mean RTT ms | p50 / p95 / p99 / max ms | Mean / max absolute successive RTT delta ms |
+| --- | --- | ---: | --- | --- |
+| Workstation to worker | 0 / 100 | 0.11 | 0 / 0 / 1 / 10 | 0.222 / 10 |
+| Worker to workstation | 0 / 100 | 0.04 | 0 / 0 / 1 / 2 | 0.081 / 2 |
+
+DF probes at 1,472 payload bytes succeeded and 1,473 returned `PacketTooBig`
+both ways, consistent with MTU 1500. These were baseline samples after throughput
+testing. ICMP under saturation and one-way absolute latency are **not measured**.
 
 ## Actual-client and provider gate
 
@@ -159,91 +224,94 @@ trial's paired child receipts. No Gargantuan correction followed.
 | --- | --- | --- |
 | Actual GameSession clients / server launched | 0 / 0 | 0 / 0 |
 | Connection establishment and health of 32 clients | not measured | not measured |
-| Server tick p50/p95/p99/max, CPU/RSS/network | not measured | not measured |
-| Character/root cadence, due-to-observation latency, publication gaps | not measured | not measured |
-| RPC RTT/handler/response queue, timeouts/errors | not measured | not measured |
-| Event ACK/service and action result latency/rejections | not measured | not measured |
-| Load/evict/reload and structural convergence | not measured | not measured |
+| Server tick/service, CPU/RSS/network | not measured | not measured |
+| Character/root cadence, latency and publication gaps | not measured | not measured |
+| RPC RTT, handler/response queue, timeouts/errors | not measured | not measured |
+| Event ACK/service and action latency/rejections | not measured | not measured |
+| Structural load/evict/reload and convergence | not measured | not measured |
 | Fixed 20-second service recovery | not measured | not measured |
-| Exact debt retirement, grants/journal high-water, fairness/backlog | not measured | not measured |
-| Client process CPU/RSS, callback intervals, missed observations/disconnects | not measured | not measured |
-| Debt/readers/admission owners/content/generations after application shutdown | not measured | not measured |
+| Exact retirement/debt, grants/journal, fairness/backlog | not measured | not measured |
+| Client CPU/RSS, callback intervals and missed observations | not measured | not measured |
+| Logical lifecycle/debt/readers/content cleanup | not measured | not measured |
 
-The canonical [recipient workload](RecipientServiceWorkload3L.md) is unchanged:
-eight moving/root Characters with eight recipients each, one qualified gameplay
-producer and the shared 512-object / 273,032-byte provider unit through
-baseline/load/resident/evict/reload and the accepted overload/recovery cases.
-Its offered arithmetic cannot be multiplied accidentally by launching 32
-independent producers, or reduced to make the physical run pass.
+The [canonical workload](RecipientServiceWorkload3L.md) remains eight moving/root
+Characters with eight recipients each, **one** qualified gameplay producer,
+and the shared 512-object / 273,032-byte provider unit through
+baseline/load/resident/evict/reload and accepted overload/recovery cases.
+Launching 32 independent producers would incorrectly multiply offered demand.
 
-The existing [`GameSessionBenchmark.cpp`](../../tests/GameSessionBenchmark.cpp)
-creates an actual `GameSession`/runtime for content peer index zero and protocol
-observers for other peers on `SimulatedNetwork`.
-[`DueServiceFixture.hpp`](../../tests/DueServiceFixture.hpp) explicitly states
-its one-actual-gameplay-client scope. The historical physical plan calls for a
-multi-process extension after funding; that canonical 32-actual-client runner
-was not found ready to execute. Merely launching 32 players does not supply
-the required measured workload, identity correlation and lifecycle accounting.
-No new easier workload or production instrumentation was introduced here.
+The existing [GameSession benchmark](../../tests/GameSessionBenchmark.cpp)
+uses an actual content client at peer index zero and protocol observers for
+other peers on SimulatedNetwork. [DueServiceFixture](../../tests/DueServiceFixture.hpp)
+likewise has one actual gameplay client. They are not a ready physical client
+farm. The task authorizes the smallest missing actual-client harness **after
+preflight passes**; that condition has not been established, so no harness
+implementation or application run was started.
 
-Keep the [fixed service-recovery gate](PooledReliableServiceRecoveryContract3L.md)
-independent of workload-derived structural convergence; retained structural
-work need not all finish within 20 seconds. Prior Engine/loopback measurements
-retain their original scope, not a physical equivalent. The stricter 200-peer
-load/reload tick diagnostic remains separate performance debt.
+The [recovery contract](PooledReliableServiceRecoveryContract3L.md) keeps
+fixed 20-second service recovery separate from retained-work-derived structural
+convergence. Unaffected Engine/loopback results retain their original scope;
+the stricter 200-peer tick diagnostic remains separate performance debt.
 
-## Cleanup, evidence and validation
+## Cleanup, artifacts and validation
 
-Worker cleanup at `2026-09-15T11:22:10Z` and client cleanup at `11:22:14Z`
-found no NTTTCP processes and no remaining task firewall rules. Only worker
-rules `Codex-Gargantuan-Physical-20260915-TCP` and
-`Codex-Gargantuan-Physical-20260915-UDP` were added and removed. They were scoped
-to the exact benchmark program, worker address, client address and ports above.
-The client rule attempt created no rule. No UAC prompt, persistent elevation,
-firewall-wide relaxation or unrelated service change was made. Existing worker
-containers remained up eight days. Retained files are tools/logs, not leaked
-processes. Application cleanup metrics remain unmeasured because no application
-trial ran; RSS alone is not logical-retention evidence.
+Four temporary inbound worker rules allowed only the relevant executable,
+local `192.168.0.108` and remote `192.168.0.68`, on all profiles:
 
-Raw inventory, ICMP samples, paired XML/JSON/logs, scripts, cleanup receipts and
-a per-file SHA-256 manifest are archived as
-`pooled-physical-preflight-20260915.zip`, SHA-256
-`6F14F8115C3D08096B490FA7FEBBD71ED9F9C80EA178D13691D8520F1334AED4`:
+| Rule name | Executable | Protocol / configured ports |
+| --- | --- | --- |
+| Codex-Gargantuan-PhysicalResume-20260915-TCP | ctsTraffic 2.0.3.9 | TCP 55301 |
+| Codex-Gargantuan-PhysicalResume-20260915-UDP | ctsTraffic 2.0.3.9 | UDP 55201, after excluded-port setup correction |
+| Codex-Gargantuan-PhysicalResume-Ntttcp-20260915-TCP | NTTTCP 5.40 | TCP 55201,56201 |
+| Codex-Gargantuan-PhysicalResume-Ntttcp-20260915-UDP | NTTTCP 5.40 | UDP 55201 |
 
-- Local: `C:\Users\aiden\AppData\Local\Temp\gargantuan-3l-physical-20260915\build\physical\`.
-- Worker: `C:\Sandbox\Codex\Logs\gargantuan-3l-physical-20260915\`.
+Worker cleanup at **2026-09-15T21:20:09Z** removed those four rules and verified
+none remained, with no ctsTraffic/NTTTCP processes. Client cleanup at
+**21:20:10Z** also found no task rules or benchmark processes. No local rule was
+added; the optional local receiver setup script was prepared but not executed.
+Both protected worker containers remained up eight days. No global firewall
+disable, interactive UAC prompt, persistent elevation, driver update or unrelated
+service change occurred. Tool files and logs are retained intentionally.
 
-The archive excludes the third-party executable/source; its verified executable
-hash and upstream version are recorded above. Local Temp storage is not a
-permanent artifact service; the worker copy is retained for resumption.
+The resumption archive `pooled-physical-resume-20260915.zip` contains **329**
+manifest-verified files: inventories, sequence/timing CSV, paired tool receipts,
+analysis scripts/results, topology clarification and cleanup. SHA-256:
 
-Existing [Native CI](https://github.com/gmoddev/gargantuan/actions/runs/34900780304)
-and [GNS CI](https://github.com/gmoddev/gargantuan/actions/runs/34900779755) were
-rechecked as completed/success at exact source `eec0c7123`. No expensive native
-suite was rerun for this documentation-only attempt. Documentation validation
-passed: 88 relative file targets, eight table rows against paired XML/JSON
-receipts, all 109 archived files against the manifest, both cleanup receipts,
-matching worker archive SHA-256 and `git diff --check`. No site input changed;
-no new application or hosted qualification is claimed by those checks.
+`43573204bfb3a2986efe396d64948deb98bc673a21ddb3f5d144efd47808c1a0`
+
+- Local evidence: `C:\Users\aiden\AppData\Local\Temp\gargantuan-3l-physical-20260915\build\physical-resume\`.
+- Retained worker archive: `C:\Sandbox\Codex\Logs\gargantuan-3l-physical-resume-20260915\`.
+- Executables: local `build/physical-resume/Tools/ctsTraffic.exe` and
+  `build/physical/Tools/ntttcp.exe`; worker
+  `C:\Sandbox\Codex\Tools\ctsTraffic-2.0.3.9\ctsTraffic.exe` and
+  `C:\Sandbox\Codex\Tools\ntttcp-5.40\ntttcp.exe`.
+
+The archive excludes third-party executable/source directories. It preserves
+both successful and invalid/anomalous trials. Local Temp is not permanent
+artifact hosting. The earlier morning archive and receipt remain separate.
+
+Existing terminal-success [Native CI](https://github.com/gmoddev/gargantuan/actions/runs/34900780304)
+and [GNS CI](https://github.com/gmoddev/gargantuan/actions/runs/34900779755) at exact
+production source `eec0c7123` are reused. No native suites were rerun for this
+documentation-only resumption. Validation passes 53 relative file targets,
+six TCP and seven UDP receipt rows, both cleanup receipts, all 329 archived
+files against their SHA-256 manifest, matching worker archive hash, and
+`git diff --check`. These checks do not imply application qualification.
 
 ## Exact next task
 
-Provision the scoped benchmark receiver on the client with an actual Windows
-administrator token, or provide another authorized receiver host. Existing
-user permission does not provide that OS token. For this same path/tool, the
-local inbound rules must restrict the program to the verified local NTTTCP
-executable, local address `192.168.0.68`, remote address `192.168.0.108`, TCP
-data/sync ports `55201-55204,56201-56204` and UDP data ports `55201-55204`.
-Recreate equivalent temporary worker rules only during trials, then remove
-both sides' task rules. Do not disable the firewall or rely on an interactive
-firewall/UAC prompt during unattended work.
+When the planned fiber path is physically installed, identify both NICs,
+drivers, negotiated speed, MTU, selected route and any intermediate hardware.
+Do not assume a 25-Gb cable alone establishes a 25-Gbit/s path. Repeat the
+bounded independent TCP and sequence-accounted UDP preflight, resolving pacing
+and playback-window attribution before declaring a usable envelope. If work
+resumes on the current LAN instead, those unresolved reverse UDP results remain
+a prerequisite; a clean subset alone is not the retained verdict.
 
-Complete independent TCP directions, sequence-accounted UDP throughput/loss,
-under-load latency and CPU/headroom preflight. If that establishes funding,
-complete the planned bounded 32-actual-GameSession-client harness using the
-unchanged canonical producer mix, real transport and full observation/cleanup
-accounting, then run Local and Node with bounded repeats. If capacity fails,
-classify that measured environment without changing Option C.
+If preflight passes, continue in the same task with the smallest canonical
+32-actual-GameSession-client harness and unchanged Local and Node workloads,
+including every service, resource and cleanup metric above. Do not reduce the
+profile to obtain a pass.
 
 **Supported physical profile: none established. KI-006 OPEN. Foundation 3L
-B — PARTIALLY READY, not ready to close. No merge; 3M BLOCKED / NOT STARTED.**
+B — PARTIALLY READY; not ready for final acceptance. No merge; no 3M.**

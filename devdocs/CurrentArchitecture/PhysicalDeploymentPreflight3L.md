@@ -11,8 +11,10 @@ last_verified: 2026-09-13
 This receipt below is historical **FULL_RESERVATION** evidence. Its 256-MiB/s
 reservation shortfall does not reject the accepted Option C profile. The
 [pooled physical attempt](PooledPhysicalQualification3L.md) measures the current
-LAN against the 96-MiB/s pooled envelope. Forward throughput is measured;
-bidirectional funding and 32-actual-client Local/Node qualification remain open.
+LAN against the 96-MiB/s pooled envelope. Independent throughput and UDP packet
+accounting are now available both ways, but reverse loss/pacing attribution
+leaves funding inconclusive; 32-actual-client Local/Node qualification remains
+open. The operator's planned 25 Gb fiber cable is not installed or measured.
 Production pooled service is qualified in the separate
 [Engine/loopback receipt](PooledReliableServiceIntegration3L.md#known-object-name-correction-2026-09-14).
 
