@@ -245,6 +245,10 @@ Linux used three jobs in `codex-prepared-sanitizers-native`, with persistent
 was discarded and no unrelated workload was changed.
 
 The exposure's authoritative gate is [Native engine CI for its branch](https://github.com/gmoddev/gargantuan/actions/workflows/native-ci.yml?query=branch%3Afeature%2Feditorhost-property-batch).
+An initial hosted MSVC 19.51 attempt rejected a test lambda default argument
+using a local JSON alias and terminated with an internal compiler error. The
+fixture now passes those JSON arguments explicitly; no Engine behavior or
+qualification assertion was changed. That failed attempt is not certification.
 Both hosted jobs must pass on the **exact final source**, alongside affected
 documentation/link/whitespace checks, before declaring **READY FOR STUDIO
 CONSUMPTION**. A green foundation-only run is insufficient. The completion report

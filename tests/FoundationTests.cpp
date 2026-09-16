@@ -4560,16 +4560,16 @@ namespace {
 			~Cleanup() { std::error_code Error; std::filesystem::remove_all(Root, Error); }
 		} CleanupValue{Root};
 		std::filesystem::create_directories(Root / ".gargantuan");
-		auto Node = [](const std::string &Name, const std::string &Class, Json Children = Json::array()) {
+		auto Node = [](const std::string &Name, const std::string &Class, Json Children) {
 			return Json{{"Name", Name}, {"ClassName", Class}, {"ClassSchemaId", SchemaId::FromNativeName("Engine", Class).ToString()},
 				{"ClassDefinitionVersion", 1}, {"Properties", Json::object()}, {"Attributes", Json::object()},
 				{"Extensions", Json::array()}, {"CustomProperties", Json::array()}, {"Tags", Json::array()}, {"Children", Children}};
 		};
 		Json Children = Json::array();
-		for (std::size_t Index = 0; Index < 256; ++Index) Children.push_back(Node("Part" + std::to_string(Index), "Part"));
-		Children.push_back(Node("BatchFrame", "Frame"));
-		Children.push_back(Node("BatchScript", "ModuleScript"));
-		Children.push_back(Node("BatchWeld", "WeldConstraint"));
+		for (std::size_t Index = 0; Index < 256; ++Index) Children.push_back(Node("Part" + std::to_string(Index), "Part", Json::array()));
+		Children.push_back(Node("BatchFrame", "Frame", Json::array()));
+		Children.push_back(Node("BatchScript", "ModuleScript", Json::array()));
+		Children.push_back(Node("BatchWeld", "WeldConstraint", Json::array()));
 		auto Document = Node("BatchWorld", "DataModel", Json::array({Node("Workspace", "Workspace", std::move(Children))}));
 		Document["Version"] = 4;
 		std::ofstream(Root / ".gargantuan" / "project.instance.json", std::ios::binary) << Document.dump();
@@ -4578,15 +4578,15 @@ namespace {
 			return Json{{"Version", 1}, {"RequestId", "batch\"\\request"}, {"SessionToken", Token},
 				{"Method", Method}, {"Params", std::move(Params)}};
 		};
-		auto Call = [&](std::string Method, Json Params = Json::object()) {
+		auto Call = [&](std::string Method, Json Params) {
 			return Json::parse(Host.HandleRequest(Envelope(std::move(Method), std::move(Params)).dump()));
 		};
-		auto Handshake = Call("Handshake");
+		auto Handshake = Call("Handshake", Json::object());
 		Check(Handshake["Result"]["ProtocolVersion"] == 1 && Handshake["Result"]["PropertyBatchVersion"] == 1 &&
 			std::ranges::find(Handshake["Result"]["Capabilities"], "SetPropertyBatch") != Handshake["Result"]["Capabilities"].end(),
 			"batch capability is additive to protocol 1");
 		Check(Call("OpenProject", {{"Root", Root.string()}})["Ok"].get<bool>(), "batch fixture opens through EditorHost");
-		auto SnapshotResponse = Call("GetSnapshot");
+		auto SnapshotResponse = Call("GetSnapshot", Json::object());
 		const auto Scope = SnapshotResponse["Result"]["Snapshot"]["Cursor"]["Scope"];
 		const auto ScopeId = JsonCodec::DecodeObjectId(Scope);
 		auto World = ScopeId ? std::dynamic_pointer_cast<DataModel>(ObjectRegistry::Get().Lookup(ScopeId->ToObjectId())) : nullptr;
@@ -4609,7 +4609,7 @@ namespace {
 				{"ExpectedRevision", World->GetAuthoritativeRevision()}, {"Writes", std::move(Writes)}};
 		};
 		auto Batch = [&](Json Writes) { return Call("SetPropertyBatch", Params(std::move(Writes))); };
-		auto Schema = Call("GetSchema");
+		auto Schema = Call("GetSchema", Json::object());
 		Check(Schema["Result"]["SchemaDiscoveryVersion"] == 6, "batch metadata preserves schema discovery version 6");
 		std::size_t Advertised = 0;
 		for (const auto &Definition : Schema["Result"]["Definitions"]) {
@@ -4792,7 +4792,7 @@ namespace {
 		}
 		const auto Delayed = Params(Json::array({Rename}));
 		Check(Call("OpenProject", {{"Root", Root.string()}})["Ok"].get<bool>(), "replacement project opens");
-		const auto ReplacementSnapshot = Call("GetSnapshot");
+		const auto ReplacementSnapshot = Call("GetSnapshot", Json::object());
 		const auto NewScope = JsonCodec::DecodeObjectId(ReplacementSnapshot["Result"]["Snapshot"]["Cursor"]["Scope"]);
 		World = std::dynamic_pointer_cast<DataModel>(ObjectRegistry::Get().Lookup(NewScope->ToObjectId()));
 		auto DelayedAtResetRevision = Delayed;
