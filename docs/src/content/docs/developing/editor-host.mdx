@@ -46,8 +46,8 @@ Undo/Redo. An all-no-op batch changes neither history nor revision. Protocol
 version 1 and schema discovery version 6 remain unchanged, and existing
 single-property clients remain compatible. Requests over the 1 MiB envelope or
 prepared resource budgets reject wholly, without chunking. See the
-[canonical request, response, errors and limits](../../../../../devdocs/CurrentArchitecture/EditorHostProtocol.md#prepared-native-property-batches-capability-version-1)
-and [qualification receipt](../../../../../devdocs/CurrentArchitecture/PreparedPropertyCommitValidation.md#editorhost-exposure-qualification).
+[canonical request, response, errors and limits](https://github.com/gmoddev/gargantuan/blob/9c4514c1774b07c0ce8b2291147dc60f6a023f3c/devdocs/CurrentArchitecture/EditorHostProtocol.md#prepared-native-property-batches-capability-version-1)
+and [qualification receipt](https://github.com/gmoddev/gargantuan/blob/feature/editorhost-property-batch/devdocs/CurrentArchitecture/PreparedPropertyCommitValidation.md#editorhost-exposure-qualification).
 This Engine API does not implement Studio multi-object Properties UX.
 
 Start the headless host with a fresh random token for each launch:
