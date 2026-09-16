@@ -132,6 +132,19 @@ setters, partial-success ordinary groups, legacy Undo/Redo, journal capacity and
 eviction, property notifications and atomic SetTransform. Existing assertions
 were preserved; five history accesses only changed to dereference shared actions.
 
+The separate Linux Clang 19 Release run also passes both affected tests with
+ASan/UBSan (`halt_on_error=1`) and leak detection (`detect_leaks=1`), with no
+sanitizer or leak report. Its sustained allocation sweeps reject 34/43/48/49/37
+positions in the same five modes (211 total), and all 26 boundary-denial commits
+pass. This run uses the canonical C++ sanitizer coverage with uninstrumented
+vendor C dependencies. An initial supplemental configuration additionally
+instrumented SDL C objects and failed SDL's `--no-undefined` shared-library link;
+correcting those build-only flags to match CI resolved that harness issue.
+No repository build configuration was changed for the workaround.
+
+The documentation site builds all 19 pages; affected relative Markdown links
+resolve and the staged patch passes `git diff --check`.
+
 Single-run Release samples on the shared remote Windows worker, with one
 96-byte new Name per object and an initially empty retained journal:
 
