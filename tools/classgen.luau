@@ -154,6 +154,9 @@ const function assembleProperties(state: GenerationState)
 			state.definitionProperties:line(`.UseRead<&{state.class.name}::{getIdentifier}>()`)
 			if property.writable ~= false then
 				state.definitionProperties:line(`.UseWrite<&{state.class.name}::{setIdentifier}>()`)
+				if isEditable then
+					state.definitionProperties:line(`.UsePreparedStore<&{state.class.name}::{key}>()`)
+				end
 			end
 		end
 

@@ -691,6 +691,10 @@ if(BUILD_TESTING)
 		add_test(NAME GlazeSerializationTests COMMAND gargantuan_glaze_serialization_tests)
 	endif()
 	add_executable(gargantuan_foundation_tests "tests/FoundationTests.cpp")
+	add_executable(gargantuan_prepared_property_tests "tests/PreparedPropertyTests.cpp")
+	target_link_libraries(gargantuan_prepared_property_tests PRIVATE gargantuan_core)
+	add_test(NAME gargantuan_prepared_property COMMAND gargantuan_prepared_property_tests)
+	set_tests_properties(gargantuan_prepared_property PROPERTIES LABELS "runtime;property;history;journal")
 	target_link_libraries(gargantuan_foundation_tests PRIVATE gargantuan_core nlohmann_json)
 	add_executable(gargantuan_asset_foundation_tests "tests/AssetFoundationTests.cpp")
 	target_link_libraries(gargantuan_asset_foundation_tests PRIVATE gargantuan_core nlohmann_json)
@@ -948,6 +952,7 @@ if(BUILD_TESTING)
 		set(GARGANTUAN_SDL_RUNTIME_TARGETS
 			gargantuan
 			gargantuan_foundation_tests
+			gargantuan_prepared_property_tests
 			gargantuan_asset_foundation_tests
 			gargantuan_asset_foundation_benchmark
 			gargantuan_animation_foundation_tests

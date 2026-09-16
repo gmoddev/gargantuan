@@ -1,4 +1,5 @@
 #include "gargantuan/runtime/MutationGateway.hpp"
+#include "PreparedPropertyCommit.hpp"
 
 #include "gargantuan/assets/InstanceSerialization.hpp"
 #include "gargantuan/classes/DataModel.hpp"
@@ -1037,6 +1038,8 @@ namespace gargantuan {
 			if (!Transaction)
 				return {.Status = Redo ? TransactionStatus::NothingToRedo : TransactionStatus::NothingToUndo,
 					.Message = Redo ? "There is nothing to redo" : "There is nothing to undo"};
+			if (Transaction->ReplayPolicy == TransactionReplayPolicy::PreparedPropertyBatch)
+				return PreparedPropertyCommit::Replay(World, SecurityContext, Redo);
 			try {
 				World.EnsureAuthoritativeRevisionAvailable();
 			} catch (const std::overflow_error &Error) {

@@ -2,6 +2,11 @@
 
 ## Implemented contract
 
+An internal bounded prepared-property coordinator is being qualified separately
+from the ordinary paths described below. It has no EditorHost request exposure.
+See [implementation and qualification evidence](PreparedPropertyCommitValidation.md)
+for its raw stores, reserved journal/history installation, and prepared replay.
+
 The `Instance`/`DataModel` graph is authoritative state owned by the `Main`
 execution domain. The runtime now has two supported mutation flows:
 

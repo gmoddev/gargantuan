@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -101,6 +102,7 @@ namespace gargantuan {
 		ReparentTransactionChange,
 		SubtreeTransactionChange>;
 
+	enum class TransactionReplayPolicy { Legacy, PreparedPropertyBatch };
 	struct CommittedTransaction {
 		TransactionId Id;
 		std::string Label;
@@ -110,6 +112,7 @@ namespace gargantuan {
 		std::vector<TransactionChange> Changes;
 		std::size_t SemanticBytes = 0;
 		TransactionState State = TransactionState::Committed;
+		TransactionReplayPolicy ReplayPolicy = TransactionReplayPolicy::Legacy;
 	};
 
 	enum class TransactionStatus {
@@ -144,6 +147,7 @@ namespace gargantuan {
 		std::uint64_t ResultingRevision = 0;
 		std::size_t ChangeCount = 0;
 		std::string Message;
+		std::size_t NotificationFailures = 0;
 		[[nodiscard]] bool Succeeded() const {
 			return Status == TransactionStatus::Success || Status == TransactionStatus::NoChanges;
 		}
@@ -198,7 +202,7 @@ namespace gargantuan {
 		[[nodiscard]] std::size_t GetOpenCount() const {
 			return Open ? 1 : 0;
 		}
-		[[nodiscard]] const std::deque<CommittedTransaction> &GetCommitted() const {
+		[[nodiscard]] const std::deque<std::shared_ptr<const CommittedTransaction>> &GetCommitted() const {
 			return History;
 		}
 		[[nodiscard]] std::size_t GetRetainedBytes() const {
@@ -206,6 +210,9 @@ namespace gargantuan {
 		}
 
 	  private:
+		friend class PreparedPropertyCommit;
+		static TransactionId AllocatePreparedIdentity();
+		void InstallPrepared(AuthoritativeTransactionHistory &Candidate) noexcept;
 		struct OpenTransaction {
 			TransactionId Id;
 			std::uint64_t Owner = 0;
@@ -225,7 +232,7 @@ namespace gargantuan {
 		void Retain(CommittedTransaction Transaction);
 
 		std::optional<OpenTransaction> Open;
-		std::deque<CommittedTransaction> History;
+		std::deque<std::shared_ptr<const CommittedTransaction>> History;
 		std::size_t RetainedBytes = 0;
 		std::size_t Cursor = 0;
 		std::vector<std::pair<ObjectId, ObjectId>> IdentityMappings;

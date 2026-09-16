@@ -119,6 +119,75 @@ namespace gargantuan {
 			throw std::overflow_error("Change journal sequence is exhausted");
 	}
 
+	ChangeJournal::PreparedJournalBatch::PreparedJournalBatch(
+		ChangeJournal &Owner, const std::vector<BufferedChangeRecord> &Records
+	) : Journal(Owner), Lock(Owner.Mutex), RecordCount(Records.size()) {
+		if (SuppressionDepth || CapturedRecords)
+			throw std::logic_error("Prepared journal cannot run inside capture or suppression");
+		// Build every candidate before inserting even an empty stream. Roll back
+		// empty entries if a later map allocation fails during construction.
+		Candidates.reserve(Records.size());
+		for (const auto &Record : Records) {
+			auto Found = std::find_if(Candidates.begin(), Candidates.end(), [&](const Candidate &Value) {
+				return Value.Scope == Record.Scope;
+			});
+			if (Found == Candidates.end()) {
+				Candidates.emplace_back();
+				Found = std::prev(Candidates.end());
+				Found->Scope = Record.Scope;
+				if (auto Existing = Journal.Streams.find(Record.Scope); Existing != Journal.Streams.end()) {
+					Found->Records = Existing->second.Records;
+					Found->NextSequence = Existing->second.NextSequence;
+				}
+				const auto Count = std::count_if(Records.begin(), Records.end(), [&](const auto &Value) {
+					return Value.Scope == Record.Scope;
+				});
+				if (static_cast<std::size_t>(Count) > Journal.Capacity)
+					throw std::length_error("Prepared journal batch exceeds capacity");
+				if (static_cast<std::uint64_t>(Count) > std::numeric_limits<std::uint64_t>::max() - Found->NextSequence)
+					throw std::overflow_error("Change journal sequence is exhausted");
+			}
+			Found->Records.push_back({Found->NextSequence++, Record.Scope, Record.Object, Record.Payload});
+		}
+		for (auto &Value : Candidates)
+			while (Value.Records.size() > Journal.Capacity) {
+				Value.Records.pop_front();
+				++Evicted;
+			}
+		try {
+			for (auto &Value : Candidates)
+				Value.Created = Journal.Streams.try_emplace(Value.Scope).second;
+		} catch (...) {
+			for (const auto &Value : Candidates)
+				if (Value.Created) Journal.Streams.erase(Value.Scope);
+			throw;
+		}
+	}
+
+	ChangeJournal::PreparedJournalBatch::~PreparedJournalBatch() {
+		if (!Installed)
+			for (const auto &Value : Candidates)
+				if (Value.Created) Journal.Streams.erase(Value.Scope);
+	}
+
+	void ChangeJournal::PreparedJournalBatch::Install() noexcept {
+		for (auto &Value : Candidates) {
+			auto &Stream = Journal.Streams.find(Value.Scope)->second;
+			static_assert(noexcept(Stream.Records.swap(Value.Records)));
+			Stream.Records.swap(Value.Records);
+			Stream.NextSequence = Value.NextSequence;
+		}
+		Installed = true;
+		if (Journal.ProfilingEnabled.load(std::memory_order_relaxed)) {
+			Journal.ProfileCommitCount.fetch_add(RecordCount, std::memory_order_relaxed);
+			Journal.ProfileEvictedRecordCount.fetch_add(Evicted, std::memory_order_relaxed);
+		}
+	}
+
+	void ChangeJournal::PreparedJournalBatch::Release() noexcept {
+		Lock.unlock();
+	}
+
 	std::vector<ChangeRecord> ChangeJournal::ReadSince(std::uint64_t sequence) const {
 		std::scoped_lock lock(Mutex);
 		std::vector<ChangeRecord> result;

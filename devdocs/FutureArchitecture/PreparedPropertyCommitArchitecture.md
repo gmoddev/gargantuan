@@ -1,6 +1,6 @@
 ---
 status: accepted-design
-implementation_status: not-started
+implementation_status: internal-foundation-implemented
 owner: runtime-authoring
 last_verified: 2026-09-16
 source_checkpoint: 25c4da3d72c18d473bffcd21c095189d255fb470
@@ -24,6 +24,12 @@ related_architecture:
 ---
 
 # Prepared property commit architecture
+
+Implementation and qualification evidence for the internal foundation now lives
+in [Prepared property commit validation](../CurrentArchitecture/PreparedPropertyCommitValidation.md).
+The decision below remains normative. Descriptions of the ordinary mutation
+blocker explain why the separate prepared path is required; qualification must
+finish before EditorHost exposure.
 
 ## Decision
 
@@ -573,9 +579,11 @@ Studio or unrelated networking/Foundation work.
 Later cleanup may migrate single-property mutation or `SetTransform` onto the
 prepared path after qualification; that is not required for the bounded batch.
 
-## Readiness
+## Accepted design checkpoint readiness
 
-**READY FOR IMPLEMENTATION.** No stop condition is currently triggered.
+**READY FOR IMPLEMENTATION** was the accepted architecture checkpoint decision.
+Current implementation readiness and proof results are maintained in the
+[validation record](../CurrentArchitecture/PreparedPropertyCommitValidation.md).
 
 The source provides a narrow feasible path: generated backing storage can be split
 from the fallible `NotifyPropertyCommitted` tail; journal copy/swap work can move
@@ -589,6 +597,6 @@ prepared-safe property must execute arbitrary callback/user code during raw stat
 application, or that journal/history candidate installation cannot actually be
 allocation-free after the boundary.
 
-**Exact next task:** implement the Engine-only prepared property commit foundation
+**Next task at design acceptance:** implement the Engine-only prepared property commit foundation
 and failure-injection proof (steps 1–4). Do not add `SetPropertyBatch` to
 EditorHost and do not modify Studio until that proof is green.

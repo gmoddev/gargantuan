@@ -107,6 +107,32 @@ namespace gargantuan {
 		[[nodiscard]] ChangeJournalProfile GetProfile() const;
 
 	  private:
+		friend class PreparedPropertyCommit;
+		friend struct PreparedPropertyTestAccess;
+		// Synchronous Main-only reservation. Its lock protects candidate sequences
+		// until the coordinator has installed state AND advanced revision.
+		class PreparedJournalBatch {
+		  public:
+			PreparedJournalBatch(ChangeJournal &Journal, const std::vector<BufferedChangeRecord> &Records);
+			~PreparedJournalBatch();
+			PreparedJournalBatch(const PreparedJournalBatch &) = delete;
+			PreparedJournalBatch &operator=(const PreparedJournalBatch &) = delete;
+			void Install() noexcept;
+			void Release() noexcept;
+		  private:
+			struct Candidate {
+				ObjectId Scope;
+				std::deque<ChangeRecord> Records;
+				std::uint64_t NextSequence = 1;
+				bool Created = false;
+			};
+			ChangeJournal &Journal;
+			std::unique_lock<std::mutex> Lock;
+			std::vector<Candidate> Candidates;
+			bool Installed = false;
+			std::size_t RecordCount = 0;
+			std::size_t Evicted = 0;
+		};
 		friend class DataModel;
 		friend class Instance;
 		// Suppressed receiver/validation mutations still validate and notify, but

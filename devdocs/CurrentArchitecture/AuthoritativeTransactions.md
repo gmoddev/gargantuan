@@ -62,6 +62,13 @@ changes `PersistedRevision`.
 
 ## Semantic change representation
 
+Retained actions now use immutable shared ownership so an internal prepared
+property action can reserve candidate retention without copying older payloads.
+Entries tagged `PreparedPropertyBatch` replay through the prepared coordinator;
+ordinary entries keep the legacy execution described here. See
+[prepared property qualification](PreparedPropertyCommitValidation.md) for current
+evidence and limits. This storage change does not make ordinary groups abortable.
+
 History owns values and stable identities only; it contains no `Instance`, raw
 pointer, callback, backend handle, or Studio reference. Current categories are:
 

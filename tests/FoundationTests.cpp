@@ -4093,7 +4093,7 @@ namespace {
 		auto Records = Journal.Read(Cursor);
 		Check(
 			Records.Records.size() == 3 && World->Transactions.GetCommitted().size() == 1 &&
-				World->Transactions.GetCommitted().back().Changes.size() == 3,
+				World->Transactions.GetCommitted().back()->Changes.size() == 3,
 			"transaction commit publishes all journal records and one semantic history entry"
 		);
 		Check(
@@ -4214,7 +4214,7 @@ namespace {
 			)
 					.Succeeded() &&
 				World->GetAuthoritativeRevision() == ImplicitStart + 1 &&
-				World->Transactions.GetCommitted().back().Label == "Set Name",
+				World->Transactions.GetCommitted().back()->Label == "Set Name",
 			"one-shot Studio mutation creates and commits one implicit transaction"
 		);
 		const auto BeforeHistoryExecution = World->GetAuthoritativeRevision();
@@ -4285,7 +4285,7 @@ namespace {
 		}
 		Check(
 			AggregateHistory.GetCommitted().size() == 2 &&
-				AggregateHistory.GetCommitted().front().Id != FirstAggregateId &&
+				AggregateHistory.GetCommitted().front()->Id != FirstAggregateId &&
 				AggregateHistory.GetRetainedBytes() == AggregateChangeBytes * 2,
 			"aggregate byte bound independently evicts the oldest transaction exactly"
 		);
@@ -4312,7 +4312,7 @@ namespace {
 		);
 		const auto DeleteElapsed =
 			std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - DeleteStarted).count();
-		const auto &DeleteRecord = World->Transactions.GetCommitted().back();
+		const auto &DeleteRecord = *World->Transactions.GetCommitted().back();
 		const auto *DeleteChange = std::get_if<SubtreeTransactionChange>(&DeleteRecord.Changes.front());
 		Check(
 			DeleteChange && DeleteChange->Kind == SubtreeTransactionKind::Destroy &&
@@ -4365,7 +4365,7 @@ namespace {
 				DuplicateObjectCommand{SourceId},
 				MutationAuthorityContext::Studio(ScriptSecurityContext::StudioCoreUi(), Scope, std::nullopt, 41)
 			);
-			const auto &DuplicateRecord = World->Transactions.GetCommitted().back();
+			const auto &DuplicateRecord = *World->Transactions.GetCommitted().back();
 			const auto *DuplicateChange = std::get_if<SubtreeTransactionChange>(&DuplicateRecord.Changes.front());
 			Check(
 				Duplicated.Succeeded() && Duplicated.Object && *Duplicated.Object != SourceId && DuplicateChange &&

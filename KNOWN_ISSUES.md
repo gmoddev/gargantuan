@@ -4,6 +4,28 @@ This file tracks verified current defects and engineering gaps that are useful
 to contributors but do not belong in the feature roadmap. An entry remains
 open until its resolution criteria are implemented and verified.
 
+## KI-008: JSON tree cleanup can allocate during memory-exhaustion unwinding
+
+- Status: Open outside the prepared-property primitive; avoided by that primitive.
+- Priority: Medium.
+- Area: Serialization under sustained allocation failure.
+- Relevant code: `src/runtime/WireCodec.cpp::MeasureWireValueJsonBytes`,
+  `vendor/json/include/nlohmann/json.hpp::json_value::destroy`.
+
+Prepared-property qualification on MSVC Release exposed process termination at
+preparation allocation index 7 when JSON-based byte measurement ran with all
+subsequent allocations rejected. The vendored JSON tree destructor builds a
+heap-backed traversal stack, so cleanup can itself allocate while unwinding.
+This happened before the authoritative boundary; no prepared batch committed.
+
+The prepared primitive now uses allocation-free conservative closed-WireValue
+size accounting and passes sustained preparation-failure sweeps. General JSON
+serialization remains unchanged in this task. Resolving this broader issue
+requires a separate allocation-failure contract and qualification of JSON
+construction, cleanup, and error formatting; ordinary exception catches alone
+do not establish recovery under sustained exhaustion. See the
+[prepared-property evidence](devdocs/CurrentArchitecture/PreparedPropertyCommitValidation.md).
+
 ## KI-002: Box3D diagnostics are not integrated with engine logging
 
 - Status: Open
