@@ -46,6 +46,8 @@
 #include "gargantuan/services/Tags.hpp"
 #include "gargantuan/services/Workspace.hpp"
 #include "../src/runtime/RuntimeWorkDiagnostics.hpp"
+#include "../src/runtime/PreparedPropertyCommit.hpp"
+#include "../src/serialization/JsonCodec.hpp"
 
 #include <algorithm>
 #include <array>
@@ -4548,6 +4550,258 @@ namespace {
 			"failure before atomic replacement preserves the prior valid project file");
 	}
 
+	void TestEditorHostPropertyBatch() {
+		using namespace gargantuan;
+		using Json = nlohmann::ordered_json;
+		const auto Root = std::filesystem::temp_directory_path() /
+			("gargantuan-property-batch-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+		struct Cleanup {
+			std::filesystem::path Root;
+			~Cleanup() { std::error_code Error; std::filesystem::remove_all(Root, Error); }
+		} CleanupValue{Root};
+		std::filesystem::create_directories(Root / ".gargantuan");
+		auto Node = [](const std::string &Name, const std::string &Class, Json Children = Json::array()) {
+			return Json{{"Name", Name}, {"ClassName", Class}, {"ClassSchemaId", SchemaId::FromNativeName("Engine", Class).ToString()},
+				{"ClassDefinitionVersion", 1}, {"Properties", Json::object()}, {"Attributes", Json::object()},
+				{"Extensions", Json::array()}, {"CustomProperties", Json::array()}, {"Tags", Json::array()}, {"Children", Children}};
+		};
+		Json Children = Json::array();
+		for (std::size_t Index = 0; Index < 256; ++Index) Children.push_back(Node("Part" + std::to_string(Index), "Part"));
+		Children.push_back(Node("BatchFrame", "Frame"));
+		Children.push_back(Node("BatchScript", "ModuleScript"));
+		Children.push_back(Node("BatchWeld", "WeldConstraint"));
+		auto Document = Node("BatchWorld", "DataModel", Json::array({Node("Workspace", "Workspace", std::move(Children))}));
+		Document["Version"] = 4;
+		std::ofstream(Root / ".gargantuan" / "project.instance.json", std::ios::binary) << Document.dump();
+		EditorHost Host("batch-token");
+		auto Envelope = [](std::string Method, Json Params, std::string Token = "batch-token") {
+			return Json{{"Version", 1}, {"RequestId", "batch\"\\request"}, {"SessionToken", Token},
+				{"Method", Method}, {"Params", std::move(Params)}};
+		};
+		auto Call = [&](std::string Method, Json Params = Json::object()) {
+			return Json::parse(Host.HandleRequest(Envelope(std::move(Method), std::move(Params)).dump()));
+		};
+		auto Handshake = Call("Handshake");
+		Check(Handshake["Result"]["ProtocolVersion"] == 1 && Handshake["Result"]["PropertyBatchVersion"] == 1 &&
+			std::ranges::find(Handshake["Result"]["Capabilities"], "SetPropertyBatch") != Handshake["Result"]["Capabilities"].end(),
+			"batch capability is additive to protocol 1");
+		Check(Call("OpenProject", {{"Root", Root.string()}})["Ok"].get<bool>(), "batch fixture opens through EditorHost");
+		auto SnapshotResponse = Call("GetSnapshot");
+		const auto Scope = SnapshotResponse["Result"]["Snapshot"]["Cursor"]["Scope"];
+		const auto ScopeId = JsonCodec::DecodeObjectId(Scope);
+		auto World = ScopeId ? std::dynamic_pointer_cast<DataModel>(ObjectRegistry::Get().Lookup(ScopeId->ToObjectId())) : nullptr;
+		Check(World != nullptr, "batch snapshot identifies its live world");
+		if (!World) return;
+		std::vector<std::shared_ptr<Instance>> Parts;
+		for (std::size_t Index = 0; Index < 256; ++Index) Parts.push_back(World->FindFirstChild("Part" + std::to_string(Index), true));
+		auto FrameObject = World->FindFirstChild("BatchFrame", true);
+		auto ScriptObject = World->FindFirstChild("BatchScript", true);
+		auto WeldObject = World->FindFirstChild("BatchWeld", true);
+		auto Write = [](const std::shared_ptr<Instance> &Object, const std::string &Name, const WireValue &Value) {
+			const auto *Property = Object->FindProperty(Name);
+			return Json{{"Object", JsonCodec::EncodeObjectId(WireObjectId::FromObjectId(Object->GetObjectId()))},
+				{"DeclaringClassSchemaId", Property->DeclaringSchemaId.ToString()},
+				{"DeclaringDefinitionVersion", Property->DeclaringDefinitionVersion}, {"Property", Name},
+				{"Value", JsonCodec::EncodeWireValue(Value)}};
+		};
+		auto Params = [&](Json Writes) {
+			return Json{{"PropertyBatchVersion", 1}, {"Scope", Scope},
+				{"ExpectedRevision", World->GetAuthoritativeRevision()}, {"Writes", std::move(Writes)}};
+		};
+		auto Batch = [&](Json Writes) { return Call("SetPropertyBatch", Params(std::move(Writes))); };
+		auto Schema = Call("GetSchema");
+		Check(Schema["Result"]["SchemaDiscoveryVersion"] == 6, "batch metadata preserves schema discovery version 6");
+		std::size_t Advertised = 0;
+		for (const auto &Definition : Schema["Result"]["Definitions"]) {
+			if (!Definition.contains("Properties")) continue;
+			for (const auto &Property : Definition["Properties"]) {
+				const auto Name = Property["Name"].get<std::string>();
+				if (Property["AtomicBatchWritable"].get<bool>()) {
+					++Advertised;
+					Check(Name != "Source" && Property["DataType"] != "ObjectReference", "batch discovery excludes source and references");
+				}
+				if (Definition["CanonicalName"] == "Engine.BasePart" && Name == "Position")
+					Check(!Property["AtomicBatchWritable"].get<bool>(), "override setter is not batch advertised");
+				if ((Definition["CanonicalName"] == "Engine.Instance" && Name == "Name") ||
+					(Definition["CanonicalName"] == "Engine.Part" && Name == "Shape"))
+					Check(Property["AtomicBatchWritable"].get<bool>(), "generated string and enum properties are batch advertised");
+			}
+		}
+		Check(Advertised > 0, "schema advertises generated prepared-safe properties");
+		auto State = [&] {
+			return std::tuple{SerializeSnapshot(CaptureSnapshot(World)), World->GetAuthoritativeRevision(),
+				World->Transactions.GetCommitted(), World->Transactions.GetStatus().Cursor,
+				World->Transactions.GetRetainedBytes(), ChangeJournal::Get().CreateCursor(World->GetObjectId()).NextSequence};
+		};
+		auto Reject = [&](Json Parameters, std::string_view Code, std::string Token = "batch-token") {
+			const auto Before = State();
+			const auto Response = Json::parse(Host.HandleRequest(Envelope("SetPropertyBatch", std::move(Parameters), Token).dump()));
+			Check(!Response["Ok"].get<bool>() && Response["Error"]["Code"].get<std::string>() == Code,
+				("batch rejection has stable category: " + std::string(Code) + " " + Response.dump()).c_str());
+			Check(State() == Before, "rejected batch preserves snapshot, revision, history, and journal");
+		};
+		const auto Rename = Write(Parts[0], "Name", std::string("Renamed"));
+		const auto BeforeBadEnvelope = State();
+		auto BadEnvelope = Envelope("SetPropertyBatch", Params(Json::array({Rename})));
+		BadEnvelope["Version"] = (std::uint64_t{1} << 32) + 1;
+		const auto BadVersion = Json::parse(Host.HandleRequest(BadEnvelope.dump()));
+		Check(!BadVersion["Ok"].get<bool>() && BadVersion["Error"]["Code"] == "MalformedRequest" && State() == BeforeBadEnvelope,
+			"protocol version cannot wrap to version 1");
+		auto Invalid = Params(Json::array({Rename}));
+		Invalid["ExpectedRevision"] = World->GetAuthoritativeRevision() + 1;
+		Reject(Invalid, "Conflict");
+		Invalid = Params(Json::array({Rename})); Invalid["PropertyBatchVersion"] = 2;
+		Reject(Invalid, "UnsupportedCapabilityVersion");
+		Invalid.erase("PropertyBatchVersion"); Reject(Invalid, "MalformedRequest");
+		Invalid = Params(Json::array({Rename})); Invalid.erase("ExpectedRevision"); Reject(Invalid, "MalformedRequest");
+		Reject(Params(Json::array({Rename})), "Unauthorized", "previous-launch-token");
+		Reject(Params(Json::array()), "MalformedRequest");
+		Invalid = Params(Json::array({Rename})); Invalid["Writes"] = 256; Reject(Invalid, "MalformedRequest");
+		Invalid = Params(Json::array({Rename})); Invalid["Writes"][0]["Property"] = std::string(257, 'p'); Reject(Invalid, "MalformedRequest");
+		Invalid = Params(Json::array({Rename})); Invalid["Writes"][0]["DeclaringClassSchemaId"] = "invalid"; Reject(Invalid, "MalformedRequest");
+		Invalid = Params(Json::array({Rename})); Invalid["Writes"][0]["DeclaringDefinitionVersion"] = std::uint64_t{1} << 32; Reject(Invalid, "MalformedRequest");
+		Invalid = Params(Json::array({Rename})); Invalid["Writes"][0]["DeclaringDefinitionVersion"] = 2; Reject(Invalid, "StaleSchema");
+		Invalid = Params(Json::array({Rename})); Invalid["Writes"][0]["DeclaringClassSchemaId"] = SchemaId::FromNativeName("Engine", "Part").ToString(); Reject(Invalid, "StaleSchema");
+		Invalid = Params(Json::array({Rename})); Invalid["Writes"][0]["Property"] = "MissingProperty"; Reject(Invalid, "StaleSchema");
+		Invalid = Params(Json::array({Rename})); Invalid["Writes"][0]["Object"] = "not-an-object-id"; Reject(Invalid, "MalformedRequest");
+		auto Stale = std::make_shared<Part>(); Stale->SetParent(World);
+		auto StaleWrite = Write(Stale, "Name", std::string("stale")); Stale->Destroy();
+		auto Replacement = std::make_shared<Part>(); Replacement->SetParent(World);
+		Reject(Params(Json::array({Rename, StaleWrite})), "StaleObject");
+		Replacement->Destroy();
+		Reject(Params(Json::array({Rename, Rename})), "DuplicateWrite");
+		Reject(Params(Json::array({Rename, Write(Parts[0], "Name", std::string("conflict"))})), "DuplicateWrite");
+		Reject(Params(Json::array({Rename, Write(Parts[1], "Transparency", WireFloat{2.0f})})), "ValidationFailed");
+		Reject(Params(Json::array({Rename, Write(Parts[1], "Name", WireFloat{1.0f})})), "ValidationFailed");
+		Reject(Params(Json::array({Rename, Write(Parts[1], "Shape", WireEnumItem{"PartType", "Missing"})})), "ValidationFailed");
+		Reject(Params(Json::array({Write(Parts[0], "Destroyed", false)})), "ReadOnly");
+		Reject(Params(Json::array({Write(Parts[0], "Position", WireVector3{1, 2, 3})})), "UnsupportedProperty");
+		Reject(Params(Json::array({Write(ScriptObject, "Source", std::string("return 1"))})), "UnsupportedProperty");
+		Reject(Params(Json::array({Write(WeldObject, "Part0", std::monostate{})})), "UnsupportedProperty");
+		Invalid = Params(Json::array({Rename})); Invalid["Writes"][0]["Value"] = {{"Type", "Vector3"}, {"Value", {1, 2}}}; Reject(Invalid, "ValidationFailed");
+		Invalid = Params(Json::array({Rename})); Invalid["Writes"][0]["Value"] = {{"Type", "String"}, {"Value", std::string(65537, 's')}}; Reject(Invalid, "MalformedRequest");
+		Json Maximum = Json::array();
+		for (const auto &PartObject : Parts) Maximum.push_back(Write(PartObject, "Transparency", WireFloat{0.25f}));
+		auto TooMany = Maximum; TooMany.push_back(Rename);
+		Reject(Params(TooMany), "ResourceLimit");
+		Json Large = Json::array();
+		for (std::size_t Index = 0; Index < 17; ++Index) Large.push_back(Write(Parts[Index], "Name", std::string(65536, 's')));
+		Check(Envelope("SetPropertyBatch", Params(Large)).dump().size() > EditorHostMaximumRequestBytes, "oversize fixture exceeds framing limit");
+		Reject(Params(Large), "MalformedRequest");
+		// The coordinator's conservative escaped-byte budget can be stricter than
+		// the actual envelope; it still rejects the entire request before mutation.
+		Large = Json::array();
+		for (std::size_t Index = 0; Index < 16; ++Index) Large.push_back(Write(Parts[Index], "Name", std::string(64700, 's')));
+		Check(Envelope("SetPropertyBatch", Params(Large)).dump().size() <= EditorHostMaximumRequestBytes, "resource budget fixture fits framing limit");
+		Reject(Params(Large), "ResourceLimit");
+		const auto Open = Call("BeginTransaction", {{"Label", "Existing group"}});
+		Check(Open["Ok"].get<bool>(), "ordinary transaction opens before batch denial");
+		Reject(Params(Json::array({Rename})), "TransactionOpen");
+		Check(Call("CommitTransaction", {{"TransactionId", Open["Result"]["TransactionId"]}})["Ok"].get<bool>(), "ordinary empty group still commits normally");
+		EditorHost Restricted("restricted", {ScriptExecutionDomain::Studio, ScriptCapabilitySet{ScriptCapability::ReadDataModel}});
+		const auto RestrictedResult = Json::parse(Restricted.HandleRequest(Envelope("SetPropertyBatch", Params(Json::array({Rename})), "restricted").dump()));
+		Check(!RestrictedResult["Ok"].get<bool>() && RestrictedResult["Error"]["Code"] == "Unauthorized", "batch requires authoring capability");
+		const auto BeforeSingle = World->GetAuthoritativeRevision();
+		auto Single = Batch(Json::array({Rename}));
+		Check(Single["Ok"].get<bool>() && Single["RequestId"] == "batch\"\\request" &&
+			Single["Result"]["StartingRevision"] == BeforeSingle && Single["Result"]["ResultingRevision"] == BeforeSingle + 1 &&
+			Single["Result"]["ChangedWriteCount"] == 1 && Single["Result"]["TransactionId"].is_string(), "single batch returns authoritative whole-action result");
+		const auto BeforeNoOp = State();
+		const auto NoOp = Batch(Json::array({Rename}));
+		Check(NoOp["Ok"].get<bool>() && NoOp["Result"]["ChangedWriteCount"] == 0 && NoOp["Result"]["TransactionId"].is_null() &&
+			NoOp["Result"]["StartingRevision"] == NoOp["Result"]["ResultingRevision"] && State() == BeforeNoOp, "complete no-op preserves revision, history, and journal");
+		const auto HistoryBefore = World->Transactions.GetCommitted().size();
+		const auto RevisionBefore = World->GetAuthoritativeRevision();
+		const auto CursorBefore = ChangeJournal::Get().CreateCursor(World->GetObjectId());
+		auto Replica = InProcessReplicationSession::Start(World);
+		Check(Replica.Succeeded(), "batch replication baseline loads");
+		std::size_t ObserverCalls = 0;
+		Parts[0]->GetPropertyChangedSignal("Transparency")->Connect([&](std::monostate) {
+			++ObserverCalls;
+			const auto FirstValue = Parts[0]->ReadPropertyWireValue("Transparency");
+			for (const auto &PartObject : Parts)
+				Check(PartObject->ReadPropertyWireValue("Transparency") == FirstValue, "first observer sees the entire batch, Undo, or Redo");
+			Check(World->GetAuthoritativeRevision() > RevisionBefore, "observer sees committed revision");
+		});
+		const auto MaxResult = Batch(Maximum);
+		Check(MaxResult["Ok"].get<bool>() && MaxResult["Result"]["ChangedWriteCount"] == 256 &&
+			World->GetAuthoritativeRevision() == RevisionBefore + 1 && World->Transactions.GetCommitted().size() == HistoryBefore + 1,
+			"256 writes produce exactly one revision and history action");
+		const auto Published = ChangeJournal::Get().Read(CursorBefore);
+		Check(Published.Records.size() == 256 && std::ranges::all_of(Published.Records, [](const auto &Record) {
+			return std::holds_alternative<PropertyUpdatedChange>(Record.Payload);
+		}), "batch publishes normal property journal records");
+		if (Replica.Session) {
+			Check(Replica.Session->ApplyAvailable().AppliedRecords == 256, "normal replica consumes all batch records");
+			for (const auto &PartObject : Parts)
+				Check(Replica.Session->ResolveReceiver(WireObjectId::FromObjectId(PartObject->GetObjectId()))->ReadPropertyWireValue("Transparency") ==
+					PartObject->ReadPropertyWireValue("Transparency"), "replica values match the committed batch");
+		}
+		const auto Undo = Call("Undo", {{"ExpectedRevision", World->GetAuthoritativeRevision()}});
+		Check(Undo["Ok"].get<bool>() && World->GetAuthoritativeRevision() == RevisionBefore + 2 &&
+			World->Transactions.GetStatus().Cursor == HistoryBefore, "one Undo restores entire batch atomically");
+		const auto Redo = Call("Redo", {{"ExpectedRevision", World->GetAuthoritativeRevision()}});
+		Check(Redo["Ok"].get<bool>() && World->GetAuthoritativeRevision() == RevisionBefore + 3 && ObserverCalls == 3 &&
+			World->Transactions.GetCommitted().size() == HistoryBefore + 1, "one Redo reapplies entire batch atomically");
+		Parts[0]->GetPropertyChangedSignal("Transparency")->DisconnectAll();
+		if (Replica.Session) {
+			Check(Replica.Session->ApplyAvailable().AppliedRecords == 512, "prepared Undo/Redo follow normal replica publication");
+			Replica.Session->GetReceiverRoot()->Destroy();
+			Replica.Session.reset();
+		}
+		const auto Mixed = Batch(Json::array({Rename, Write(Parts[1], "Name", std::string("Second"))}));
+		Check(Mixed["Ok"].get<bool>() && Mixed["Result"]["ChangedWriteCount"] == 1 &&
+			World->Transactions.GetCommitted().back()->Changes.size() == 1, "mixed batch drops no-op writes from history");
+		const auto Multi = Batch(Json::array({Write(Parts[0], "Shape", WireEnumItem{"PartType", "Ball"}),
+			Write(Parts[0], "Size", WireVector3{2, 3, 4}), Write(Parts[0], "Color", WireColor3{0.1f, 0.2f, 0.3f}),
+			Write(Parts[0], "Anchored", true), Write(FrameObject, "Size", WireUDim2{{0.5f, 1}, {0.25f, 2}}),
+			Write(FrameObject, "AnchorPoint", WireVector2{0.5f, 0.5f}),
+			Write(Parts[0], "CFrame", WireCFrame{{1, 2, 3, 1, 0, 0, 0, 1, 0, 0, 0, 1}})}));
+		Check(Multi["Ok"].get<bool>() && Multi["Result"]["ChangedWriteCount"] == 7, "batch accepts multiple generated native property types");
+		Parts[0]->GetPropertyChangedSignal("Name")->Connect([](std::monostate) { throw std::runtime_error("observer fixture"); });
+		const auto Notification = Batch(Json::array({Write(Parts[0], "Name", std::string("ObserverSuccess"))}));
+		Check(Notification["Ok"].get<bool>() && Notification["Result"]["NotificationFailures"] == 1 && Parts[0]->GetName() == "ObserverSuccess",
+			"post-commit observer failure remains whole-batch success");
+		Parts[0]->GetPropertyChangedSignal("Name")->DisconnectAll();
+		// An old client never opts into PropertyBatchVersion and keeps using Name.
+		Check(Call("SetProperty", {{"Object", Rename["Object"]}, {"Property", "Name"},
+			{"Value", {{"Type", "String"}, {"Value", "LegacyClient"}}}})["Ok"].get<bool>(), "older single-property client remains compatible");
+		for (const std::size_t Count : {1u, 32u, 256u}) {
+			std::vector<double> EncodeTimes, HandleTimes;
+			std::size_t RequestBytes = 0, ResponseBytes = 0;
+			for (std::size_t Iteration = 0; Iteration < 7; ++Iteration) {
+				Json Writes = Json::array();
+				for (std::size_t Index = 0; Index < Count; ++Index)
+					Writes.push_back(Write(Parts[Index], "Transparency", WireFloat{Iteration % 2 == 0 ? 0.5f : 0.75f}));
+				auto Request = Envelope("SetPropertyBatch", Params(std::move(Writes)));
+				const auto Start = std::chrono::steady_clock::now();
+				const auto Encoded = Request.dump();
+				const auto EncodedAt = std::chrono::steady_clock::now();
+				const auto Response = Host.HandleRequest(Encoded);
+				const auto Done = std::chrono::steady_clock::now();
+				Check(Json::parse(Response)["Ok"].get<bool>(), "batch protocol measurement succeeds");
+				if (Iteration != 0) {
+					EncodeTimes.push_back(std::chrono::duration<double, std::micro>(EncodedAt - Start).count());
+					HandleTimes.push_back(std::chrono::duration<double, std::micro>(Done - EncodedAt).count());
+				}
+				RequestBytes = Encoded.size(); ResponseBytes = Response.size();
+			}
+			std::ranges::sort(EncodeTimes); std::ranges::sort(HandleTimes);
+			std::cout << "[EditorHost:PropertyBatch] Writes=" << Count << " EncodeMedianUs=" << EncodeTimes[3]
+				<< " HandleMedianUs=" << HandleTimes[3] << " RequestBytes=" << RequestBytes << " ResponseBytes=" << ResponseBytes << '\n';
+		}
+		const auto Delayed = Params(Json::array({Rename}));
+		Check(Call("OpenProject", {{"Root", Root.string()}})["Ok"].get<bool>(), "replacement project opens");
+		const auto ReplacementSnapshot = Call("GetSnapshot");
+		const auto NewScope = JsonCodec::DecodeObjectId(ReplacementSnapshot["Result"]["Snapshot"]["Cursor"]["Scope"]);
+		World = std::dynamic_pointer_cast<DataModel>(ObjectRegistry::Get().Lookup(NewScope->ToObjectId()));
+		auto DelayedAtResetRevision = Delayed;
+		DelayedAtResetRevision["ExpectedRevision"] = World->GetAuthoritativeRevision();
+		Reject(DelayedAtResetRevision, "StaleProject");
+		DelayedAtResetRevision["Scope"] = ReplacementSnapshot["Result"]["Snapshot"]["Cursor"]["Scope"];
+		Reject(DelayedAtResetRevision, "StaleObject");
+	}
+
 	void TestEditorHostProtocol() {
 		using Json = nlohmann::ordered_json;
 		using namespace gargantuan;
@@ -5049,6 +5303,9 @@ namespace {
 				}, "test-token");
 				Check(!RejectedPlayMutation["Ok"].get<bool>() && RejectedPlayMutation["Error"]["Code"] == "PlaySessionActive",
 					"authoritative source mutation is disabled during Play");
+				const auto RejectedPlayBatch = call("SetPropertyBatch", Json::object(), "test-token");
+				Check(!RejectedPlayBatch["Ok"].get<bool>() && RejectedPlayBatch["Error"]["Code"] == "PlaySessionActive",
+					"prepared batch authoring is disabled during Play");
 				auto PlayDiagnostics = call("PollPlayDiagnostics", {{"PlaySessionId", PlayId}}, "test-token");
 				const auto HasLuauError = [](const Json &Diagnostics) {
 					return std::ranges::any_of(Diagnostics, [](const Json &Diagnostic) {
@@ -5186,6 +5443,10 @@ namespace {
 			!opened["Result"]["ProjectState"]["Dirty"].get<bool>(),
 			"EditorHost opens a project clean with coherent authoritative and persisted revisions");
 		auto projectSchema = call("GetSchema", Json::object(), "test-token");
+		for (const auto &Definition : projectSchema["Result"]["Definitions"])
+			if (Definition["Kind"] == "Extension" || Definition.value("ConstructionKind", "") == "CustomData")
+				for (const auto &Property : Definition["Properties"])
+					Check(!Property["AtomicBatchWritable"].get<bool>(), "custom and extension maps never advertise prepared batch support");
 		auto discoveredEnum = std::find_if(
 			projectSchema["Result"]["Definitions"].begin(), projectSchema["Result"]["Definitions"].end(),
 			[](const Json &definition) { return definition["CanonicalName"] == "Game.CombatState"; }
@@ -7058,6 +7319,7 @@ int main() {
 	TestAuthoritativeTransactions();
 	TestProjectRevisionPersistence();
 	TestEditorHostProtocol();
+	TestEditorHostPropertyBatch();
 	TestLuauExceptionBoundary();
 	TestLuauEmbeddingCompatibility();
 	TestPlayDiagnosticBounds();

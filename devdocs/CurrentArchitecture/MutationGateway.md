@@ -2,8 +2,10 @@
 
 ## Implemented contract
 
-An internal bounded prepared-property coordinator is being qualified separately
-from the ordinary paths described below. It has no EditorHost request exposure.
+The bounded prepared-property coordinator is qualified separately
+from the ordinary paths described below. EditorHost's optional `SetPropertyBatch`
+version 1 delegates to that coordinator once after bounded protocol admission;
+it does not loop over ordinary setters or generalize transactions.
 See [implementation and qualification evidence](PreparedPropertyCommitValidation.md)
 for its raw stores, reserved journal/history installation, and prepared replay.
 

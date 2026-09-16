@@ -31,7 +31,9 @@ applied changes can be rolled back. An empty group is closed as `NoChanges`.
 The one-open-group, change-count, and byte bounds prevent abandoned input from
 growing memory. A five-minute lifetime is checked at request boundaries; an
 expired changed group is committed and an empty group closes as `NoChanges`, so
-timeout never claims to roll back already applied work.
+timeout never claims to roll back already applied work. The separate
+`SetPropertyBatch` command rejects while a group is open and does not expire it;
+this preserves zero revision/history/journal effects on a rejected batch.
 
 ## Commit-only grouping contract
 
@@ -142,9 +144,17 @@ does not clear history. Project open/replacement clears history, cursor, aliases
 and open grouping state.
 
 EditorHost advertises `Undo`, `Redo`, and `AuthoritativeHistoryStatus`. Undo and
-Redo take empty payloads. Project state and journal responses carry derived
+Redo accept empty payloads or the existing optional `ExpectedRevision`. Project state and journal responses carry derived
 history status; raw cursor indices, restoration aliases, and arbitrary history
 selection are not protocol operations.
+
+`SetPropertyBatch` version 1 creates one prepared history action for its changed
+write set. Exact no-ops create no action or revision change, and mixed batches
+omit no-op entries. Forward installation and that action's Undo/Redo use the
+qualified prepared coordinator, including atomic history cursor and journal
+installation. Ordinary entries keep their existing replay policy. The complete
+protocol contract and resource bounds are in
+[EditorHost protocol](./EditorHostProtocol.md#prepared-native-property-batches-capability-version-1).
 
 ## Bounds and eviction
 

@@ -5,6 +5,10 @@
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/runtime/ExecutionDomain.hpp"
 #include "gargantuan/runtime/WireCodec.hpp"
+#include "gargantuan/editor/EditorHost.hpp"
+#include "../src/serialization/JsonCodec.hpp"
+#include <filesystem>
+#include <fstream>
 #include <chrono>
 #include <algorithm>
 #include <atomic>
@@ -490,6 +494,47 @@ namespace {
 		}
 	}
 
+	void TestEditorHostResponseAfterCommit() {
+		using Json = JsonCodec::Json;
+		const auto Root = std::filesystem::temp_directory_path() /
+			("gargantuan-batch-response-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+		struct Cleanup {
+			std::filesystem::path Root;
+			~Cleanup() { RejectAllocations = false; PreparedPropertyCommit::SetQualificationHooks({});
+				std::error_code Error; std::filesystem::remove_all(Root, Error); }
+		} CleanupValue{Root};
+		std::filesystem::create_directories(Root / ".gargantuan");
+		std::ofstream(Root / ".gargantuan" / "project.instance.json") <<
+			R"({"Version":0,"Name":"ResponseWorld","ClassName":"DataModel","Properties":{},"Children":[]})";
+		EditorHost Host("response-token");
+		auto Request = [](std::string Method, Json Params) {
+			return Json{{"Version", 1}, {"RequestId", "response\"test"}, {"SessionToken", "response-token"},
+				{"Method", Method}, {"Params", Params}}.dump();
+		};
+		Require(Json::parse(Host.HandleRequest(Request("OpenProject", {{"Root", Root.string()}})))["Ok"].get<bool>(), "response fixture open");
+		const auto SnapshotResponse = Json::parse(Host.HandleRequest(Request("GetSnapshot", Json::object())));
+		const auto Scope = SnapshotResponse["Result"]["Snapshot"]["Cursor"]["Scope"];
+		auto World = std::dynamic_pointer_cast<DataModel>(ObjectRegistry::Get().Lookup(JsonCodec::DecodeObjectId(Scope)->ToObjectId()));
+		auto PartObject = std::make_shared<Part>(); PartObject->SetParent(World);
+		const auto *Property = PartObject->FindProperty("Name");
+		const auto Encoded = Request("SetPropertyBatch", {{"PropertyBatchVersion", 1}, {"Scope", Scope},
+			{"ExpectedRevision", World->GetAuthoritativeRevision()}, {"Writes", Json::array({{
+				{"Object", JsonCodec::EncodeObjectId(WireObjectId::FromObjectId(PartObject->GetObjectId()))},
+				{"DeclaringClassSchemaId", Property->DeclaringSchemaId.ToString()}, {"DeclaringDefinitionVersion", Property->DeclaringDefinitionVersion},
+				{"Property", "Name"}, {"Value", {{"Type", "String"}, {"Value", "Committed under allocation denial"}}}
+			}})}});
+		PreparedPropertyCommit::SetQualificationHooks({nullptr, [](bool Enter) noexcept {
+			if (Enter) { ++BoundaryCount; RejectAllocations = true; }
+			// Intentionally keep rejecting after commit, through response return.
+		}});
+		const auto EncodedResponse = Host.HandleRequest(Encoded);
+		RejectAllocations = false;
+		PreparedPropertyCommit::SetQualificationHooks({});
+		const auto Response = Json::parse(EncodedResponse);
+		Require(Response["Ok"].get<bool>() && Response["Result"]["ChangedWriteCount"] == 1 &&
+			PartObject->GetName() == "Committed under allocation denial", "batch success response allocated after commit");
+	}
+
 	void TestAdditionalPropertyTypes() {
 		Fixture F;
 		auto Gui = std::make_shared<Frame>(); Gui->SetParent(F.World);
@@ -533,6 +578,7 @@ int main() {
 		TestFinalValidationAndRetention();
 		TestReaderFenceAndLargeValues();
 		TestAdditionalPropertyTypes();
+		TestEditorHostResponseAfterCommit();
 		std::cout << "[Prepared:Qualification] passed boundaries=" << BoundaryCount << '\n';
 		return 0;
 	} catch (const std::exception &Error) {

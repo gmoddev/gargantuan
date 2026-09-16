@@ -47,6 +47,12 @@ namespace gargantuan {
 
 	void PreparedPropertyCommit::SetQualificationHooks(QualificationHooks Value) noexcept { Hooks = Value; }
 
+	bool PreparedPropertyCommit::SupportsProperty(const InstanceProperty &Property) noexcept {
+		return Property.Editable && Property.StorePrepared && !Property.CustomSchemaPropertyType &&
+			Property.SemanticType != InstanceProperty::DataType::Unsupported &&
+			Property.SemanticType != InstanceProperty::DataType::ObjectReference && Property.Name != "Source";
+	}
+
 	MutationStatus PreparedPropertyCommit::PreparePropertyWireMutation(Instance &Target, const InstanceProperty &Property,
 		const PreparedPropertyWrite &Write, const ScriptSecurityContext &Security, std::any &Native, WireValue &After) {
 		// Shared by forward and replay; retain the ordinary wire path's canonical
@@ -157,9 +163,7 @@ namespace gargantuan {
 					Result.Status = MutationStatus::InvalidProperty;
 					return Result;
 				}
-				if (!Property->Editable || !Property->StorePrepared || Property->CustomSchemaPropertyType ||
-					Property->SemanticType == InstanceProperty::DataType::Unsupported ||
-					Property->SemanticType == InstanceProperty::DataType::ObjectReference || Write.PropertyName == "Source") {
+				if (!SupportsProperty(*Property)) {
 					Result.Status = MutationStatus::ReadOnly;
 					return Result;
 				}

@@ -60,10 +60,11 @@ UTF-8 bytes with no NUL.
 | `CreateProject` | Creates, initially persists, and adopts a minimum project without accepting serialized state or revision input. |
 | `GetProjectState` | Returns authoritative/persisted revisions, derived dirty state, destination, and bounded history status. |
 | `SaveProject` / `SaveProjectAs` | Optionally compare `ExpectedRevision`, then atomically persist an exact authoritative revision; Save As adopts its validated destination only after success. |
-| `GetSchema` | Returns class compatibility metadata plus schema-discovery v5 definitions, native property semantics, and registry generation. |
+| `GetSchema` | Returns class compatibility metadata plus schema-discovery v6 definitions, native property semantics, and registry generation. |
 | `GetSnapshot` | Returns snapshot v6 plus editor-property projection v1 and establishes the session cursor. |
 | `PollChanges` | Returns scoped wire-journal v6 records after that cursor. |
 | `SetProperty` | Applies a schema-identified closed native-property `WireValue` through `MutationGateway`; legacy Name remains compatible. |
+| `SetPropertyBatch` | Applies 1–256 prepared-safe native property writes through the Engine prepared coordinator as one atomic history action; requires property-batch capability version 1, current scope and exact revision. |
 | `SetTransform` | Atomically applies optional canonical `CFrame` and `Size` values to one `BasePart` through one implicit authoring transaction. |
 | `SetAttribute` | Applies or removes a bounded attribute through `MutationGateway`. |
 | `SetExtensionProperty` | Applies a schema-resolved extension property through `MutationGateway`. |
@@ -101,14 +102,14 @@ The CFrame wire and project formats both encode the three rotation basis columns
 contiguously as Right, Up, and Back. Decode, Undo/Redo, and save/reopen preserve
 that orientation rather than transposing the matrix.
 `SetAttribute` uses the same live-object and `MutateDataModel` checks. Every
-mutation carries a host-created Studio authority context scoped to the open
-DataModel; decoded request data never supplies capabilities or scope. Attribute
+mutation carries host-owned Studio authority scoped to the open
+DataModel; decoded request data never grants capabilities or scope authority. Attribute
 state is delivered by snapshot and dedicated `AttributeUpdate` records rather
 than a second polling path. `AddTag` and `RemoveTag` use that same authority;
 snapshot membership and `TagAdded`/`TagRemoved` carry committed tag state.
 Native enum mutation uses canonical enum type and item identity. Object-reference
-metadata is exposed with stable class constraints but reference editing remains
-read-only. Source mounts and play sessions are otherwise deliberately outside
+metadata carries stable class constraints and effective property access;
+references are excluded from prepared batches. Source mounts and play sessions are otherwise deliberately outside
 the native property contract. Script Source is intentionally excluded
 from generic `SetProperty`; its dedicated token-checked operation is the only
 Studio write path. Viewport methods
@@ -127,7 +128,7 @@ mutation gateway check it at their native boundaries. Every viewport method
 also checks `ViewportControl`. It does not grant
 process, filesystem, network, or arbitrary engine-native access.
 
-Schema discovery is read-only. Version 5 returns stable class/enum/extension
+Schema discovery is read-only. Version 6 returns stable class/enum/extension
 identity, definition kind and version, provenance, class-base and extension-target
 IDs, class construction/subclass policy and native host identity, ordered
 custom-enum items, ordered declarative schema properties, and native property
@@ -140,6 +141,142 @@ Replacing an open project closes and releases the prior live DataModel and
 viewport snapshot before entering the next schema candidate lifecycle. If the
 replacement PreRun or project load fails, no old world remains live against the
 new or prior registry; a later `OpenProject` may construct a fresh document.
+
+## Prepared native property batches, capability version 1
+
+`Handshake.Result.Capabilities` includes `SetPropertyBatch`, and
+`Handshake.Result.PropertyBatchVersion` is `1`. This version jointly covers the
+method and the additive `AtomicBatchWritable` property metadata in both
+`GetSchema.Result.Definitions[].Properties[]` and the inherited `Classes` adapter.
+Protocol version 1 and schema discovery version 6 remain unchanged. Clients
+must check the capability and version before offering batch editing, then echo
+`PropertyBatchVersion: 1` on each batch; no mutable handshake negotiation state
+is needed. Old clients can ignore the additional capability and fields and keep
+using existing single-property methods. Unknown batch versions fail closed.
+
+The flag is derived from the coordinator's exact generated prepared-store
+eligibility plus effective Studio read/write permissions and mutation capability.
+It is discovery guidance, never authority or a promise that a particular value
+will validate. Clients must not infer support from datatype. Ordinary generated
+scalar, string, vector, color, UDim/UDim2, CFrame and native enum backing stores
+can qualify. Handwritten/override setters, references, Source, custom/extension
+maps, Attributes, Tags and hierarchy do not qualify. A custom class can still
+inherit a supported native property such as `Instance.Name`.
+
+The envelope remains the standard envelope above. `Params` has exactly:
+
+```json
+{
+  "PropertyBatchVersion": 1,
+  "Scope": { "Slot": 1, "Generation": 3 },
+  "ExpectedRevision": 42,
+  "Writes": [
+    {
+      "Object": { "Slot": 10, "Generation": 3 },
+      "DeclaringClassSchemaId": "0123456789abcdef0123456789abcdef",
+      "DeclaringDefinitionVersion": 1,
+      "Property": "Name",
+      "Value": { "Type": "String", "Value": "Renamed" }
+    }
+  ]
+}
+```
+
+IDs in this example are illustrative. Take `Scope` from the current
+`GetSnapshot.Result.Snapshot.Cursor.Scope`, object IDs from that snapshot, and
+declaring schema ID/version from current discovery (following the class base
+chain for inherited properties). Schema IDs are canonical 32-digit hexadecimal;
+object slot/generation and positive definition versions fit uint32. Revision is
+a required positive uint64, separate from cursor sequence and transaction ID.
+No object names or hierarchy paths resolve identities. The launch token is
+checked first; the scope is only an equality precondition against the host's
+current DataModel. Thus even a delayed request with a coincidentally matching
+reset revision cannot reach a replacement project. Full object generations,
+declaring schema/version, active frozen registry and final revision are rechecked
+by Engine. Request data cannot supply authority.
+
+Admission requires `MutateDataModel`, an open project and established snapshot
+cursor, effective reflected access, stopped Play, and no open ordinary authoring
+group. `TransactionId` is not accepted. A batch does not expire or implicitly
+commit an existing ordinary group, including on rejection. Other commands retain
+their existing timeout/group behavior, and `SetTransform` is unchanged.
+
+Bounds are 1–256 writes, 1 MiB for the entire encoded request before parsing,
+256 UTF-8 bytes per property/identifier, and 64 KiB per string value. Existing
+stricter RequestId (128 bytes) and method (64 bytes) limits, JSON depth/node,
+UTF-8, NUL and finite-value validation also apply. The bounded
+array count is checked before per-write reservation; IDs and versions are checked
+before narrowing. The coordinator retains its conservative request accounting,
+4 MiB aggregate old/new values, 2 MiB journal payload, 8 MiB history action, and
+256 direct notifications/records. Its conservative estimate can reject an
+envelope that fits the transport byte limit. See the
+[resource accounting and proof](./PreparedPropertyCommitValidation.md).
+Nothing silently splits or chunks a request. Every repeated object/property pair
+is rejected, including identical assignments and conflicting schema identities.
+
+Whole-batch success uses the ordinary `Ok: true` / `Result` envelope:
+
+```json
+{
+  "StartingRevision": 42,
+  "ResultingRevision": 43,
+  "ChangedWriteCount": 1,
+  "TransactionId": "123",
+  "NotificationFailures": 0
+}
+```
+
+`TransactionId` follows the existing canonical decimal-string convention. A
+complete no-op returns equal revisions, zero changed writes and `null` transaction
+ID; it creates no history or journal state. Mixed batches omit no-op writes from
+the committed action. A nonempty changed set installs all values, one Engine
+history action, normal property journal records and exactly one revision
+advancement together. Prepared history Undo/Redo uses the same coordinator and
+advances one revision per successful replay. Existing ordinary history semantics
+are unchanged. Polling/replication consumes the normal journal; there is no
+parallel publication or EditorHost-owned history. Reconcile through `PollChanges`
+and authoritative project state, as for existing mutations.
+
+The success response storage and escaping, and parsed request cleanup, are
+completed before invoking the coordinator. After success, fixed numeric slots
+are filled without allocation. Post-commit observer failures are counted in
+`NotificationFailures` and remain success; they cannot undo a committed action
+or be reported as a failed batch. Observers see the complete installed state and
+may initiate later actions. `ResultingRevision` identifies this action's revision,
+not any subsequent observer action. A lost transport response remains an unknown
+delivery outcome: refresh authoritative state rather than blindly retrying.
+
+Failures use `Ok: false` / `Error` with no per-write success array:
+
+| Code | Meaning |
+| --- | --- |
+| `MalformedRequest` | Invalid envelope, count shape/empty array, malformed ID/version, unknown fields, or existing framing/JSON/string limits. An envelope over 1 MiB is rejected before parsing, with null RequestId and the existing byte-length diagnostic. |
+| `UnsupportedCapabilityVersion` | Batch version is missing from the supported version set. A missing required field itself is malformed. |
+| `Unauthorized` | Rejected launch token, missing authoring capability, or denied effective property access. |
+| `ProjectRequired` / `SnapshotRequired` | No current project or no established snapshot cursor. |
+| `StaleProject` | Scope identifies another project instance, even if revisions match. |
+| `Conflict` | Expected authoritative revision differs. |
+| `StaleObject` | Object is missing, destroyed, stale generation, or outside the current project. |
+| `StaleSchema` | Unknown property or incompatible declaring schema/version. |
+| `ReadOnly` | Property has no writer or its write permission is Never. |
+| `UnsupportedProperty` | Reflected property lacks prepared-safe support. |
+| `ValidationFailed` | Invalid WireValue or Engine type/range/enum/native-value rejection. |
+| `DuplicateWrite` | Repeated object/property identity, even with equal values. |
+| `ResourceLimit` | More than 256 writes or a coordinator preparation/resource budget failure. |
+| `TransactionOpen` / `PlaySessionActive` | Authoring state does not admit a batch. |
+| `RevisionExhausted` | Revision cannot advance. |
+| `WrongExecutionDomain` / `Rejected` / `InternalError` | Engine admission or preparation failed. |
+
+An authoritative batch failure contributes zero live writes, revision changes,
+journal records or history actions. The adapter validates only transport,
+identity, discovery eligibility and effective access; deep property preparation,
+no-op normalization, atomic installation and replay remain exclusively in
+`PreparedPropertyCommit`. General JSON allocator exhaustion before that primitive
+retains the existing process-failure limitation documented as KI-008; it does
+not imply partial batch installation.
+
+This is Engine API exposure only. Studio multi-object Properties UX is a separate
+task gated on the [final-source qualification receipt](./PreparedPropertyCommitValidation.md#editorhost-exposure-qualification).
 
 ## Licensing and repository contract
 

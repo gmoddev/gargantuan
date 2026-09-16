@@ -36,6 +36,20 @@ application and must not be copied, adapted, translated, or ported into it.
 
 ## EditorHost v0
 
+`SetPropertyBatch` is an optional Engine capability with `PropertyBatchVersion = 1`.
+It accepts 1–256 generated prepared-safe property writes, the exact project
+revision, and the current snapshot scope. Discovery exposes
+`AtomicBatchWritable`; clients must negotiate and use that flag rather than infer
+support from datatype. One changed batch is one atomic Engine history action and
+revision transition, with normal journal publication and atomic prepared
+Undo/Redo. An all-no-op batch changes neither history nor revision. Protocol
+version 1 and schema discovery version 6 remain unchanged, and existing
+single-property clients remain compatible. Requests over the 1 MiB envelope or
+prepared resource budgets reject wholly, without chunking. See the
+[canonical request, response, errors and limits](../../../../../devdocs/CurrentArchitecture/EditorHostProtocol.md#prepared-native-property-batches-capability-version-1)
+and [qualification receipt](../../../../../devdocs/CurrentArchitecture/PreparedPropertyCommitValidation.md#editorhost-exposure-qualification).
+This Engine API does not implement Studio multi-object Properties UX.
+
 Start the headless host with a fresh random token for each launch:
 
 ```powershell

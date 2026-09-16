@@ -21,6 +21,7 @@
 #include "gargantuan/services/AssetService.hpp"
 #include "gargantuan/services/Workspace.hpp"
 #include "serialization/JsonCodec.hpp"
+#include "runtime/PreparedPropertyCommit.hpp"
 
 #include <algorithm>
 #include <array>
@@ -107,6 +108,50 @@ namespace gargantuan {
 			if (!Parsed) throw std::runtime_error(Parsed.error().Format());
 			return std::move(*Parsed);
 		}
+
+		bool AtomicBatchWritable(const InstanceProperty &Property, const ScriptSecurityContext &Security) {
+			return PreparedPropertyCommit::SupportsProperty(Property) &&
+				Security.HasCapability(ScriptCapability::MutateDataModel) &&
+				Property.Read && Property.Write && Property.CanRead(Security) && Property.CanWrite(Security) &&
+				static_cast<int>(Enums::Permission::None) >= static_cast<int>(Property.ReadPermission) &&
+				static_cast<int>(Enums::Permission::None) >= static_cast<int>(Property.WritePermission);
+		}
+
+		// Reserve and encode everything fallible before Apply. Fixed-width JSON
+		// number slots use trailing whitespace, so completing a committed response
+		// needs neither allocation nor a JSON tree (including its allocating cleanup).
+		struct PropertyBatchResponse {
+			std::string Encoded;
+			std::array<std::size_t, 5> Offsets{};
+			explicit PropertyBatchResponse(const Json &RequestId) {
+				Encoded = "{\"Version\":1,\"RequestId\":" + RequestId.dump() + ",\"Ok\":true,\"Result\":{";
+				constexpr std::array Names{"StartingRevision", "ResultingRevision", "ChangedWriteCount",
+					"TransactionId", "NotificationFailures"};
+				for (std::size_t Index = 0; Index < Names.size(); ++Index) {
+					if (Index != 0) Encoded += ',';
+					Encoded += '"';
+					Encoded += Names[Index];
+					Encoded += "\":";
+					Offsets[Index] = Encoded.size();
+					Encoded.append(22, ' '); // uint64 plus optional string quotes
+				}
+				Encoded += "}}";
+			}
+			void Complete(const PreparedPropertyResult &Result) noexcept {
+				const std::array<std::uint64_t, 5> Values{Result.StartingRevision, Result.ResultingRevision,
+					Result.ChangedWrites, Result.HistoryId.Value, Result.NotificationFailures};
+				for (std::size_t Index = 0; Index < Values.size(); ++Index) {
+					auto *Slot = Encoded.data() + Offsets[Index];
+					if (Index == 3 && Values[Index] == 0) {
+						std::copy_n("null", 4, Slot);
+						continue;
+					}
+					if (Index == 3) *Slot++ = '"';
+					const auto Converted = std::to_chars(Slot, Slot + 20, Values[Index]);
+					if (Index == 3) *Converted.ptr = '"';
+				}
+			}
+		};
 
 		const char *MutationStatusName(MutationStatus status) {
 			switch (status) {
@@ -210,6 +255,7 @@ namespace gargantuan {
 				{"Readable", Readable},
 				{"Writable", Writable},
 				{"Editable", Supported && Property.Editable && Readable && Writable},
+				{"AtomicBatchWritable", AtomicBatchWritable(Property, Security)},
 				{"Category", Property.Category},
 				{"NumericRange", nullptr},
 				{"EditorHint", Property.EditorHint ? Json(*Property.EditorHint) : Json(nullptr)},
@@ -271,6 +317,7 @@ namespace gargantuan {
 				{"DataType", DataType}, {"WireType", WireType},
 				{"Default", JsonCodec::EncodeWireValue(Default)},
 				{"Readable", true}, {"Writable", true}, {"Editable", Editable},
+				{"AtomicBatchWritable", false},
 				{"Category", "Data"}, {"NumericRange", nullptr}, {"EditorHint", nullptr},
 				{"CompoundType", nullptr}, {"EnumKind", nullptr}, {"EnumType", nullptr},
 				{"EnumSchemaId", nullptr}, {"EnumDefinitionVersion", nullptr}, {"EnumItems", Json::array()},
@@ -351,7 +398,7 @@ namespace gargantuan {
 			return Method == "OpenProject" || Method == "CreateProject" || Method == "SaveProject" ||
 				Method == "SaveProjectAs" || Method == "BeginTransaction" || Method == "CommitTransaction" ||
 				Method == "Undo" || Method == "Redo" || Method == "SetScriptSource" ||
-				Method == "SetProperty" || Method == "SetTransform" || Method == "SetAttribute" || Method == "SetExtensionProperty" ||
+				Method == "SetProperty" || Method == "SetPropertyBatch" || Method == "SetTransform" || Method == "SetAttribute" || Method == "SetExtensionProperty" ||
 				Method == "SetCustomProperty" || Method == "AddTag" || Method == "RemoveTag" ||
 				Method == "CreateInstance" || Method == "DestroyInstance" ||
 				Method == "DuplicateInstance" || Method == "ReparentInstance" ||
@@ -754,7 +801,7 @@ namespace gargantuan {
 				));
 			auto message = std::move(*ParsedMessage);
 			if (!HasOnlyFields(message, {"Version", "RequestId", "SessionToken", "Method", "Params"}) ||
-				message.value("Version", 0u) != EditorHostProtocolVersion ||
+				!message.contains("Version") || JsonCodec::DecodeUnsigned32(message["Version"]) != EditorHostProtocolVersion ||
 				!message.contains("RequestId") || !message["RequestId"].is_string() ||
 				message["RequestId"].get_ref<const std::string &>().size() > 128 ||
 				!message.contains("SessionToken") || !message["SessionToken"].is_string() ||
@@ -766,9 +813,9 @@ namespace gargantuan {
 			requestId = message["RequestId"];
 			if (message["SessionToken"].get<std::string>() != SessionToken)
 				return SerializeBoundedResponse(ErrorResponse(requestId, "Unauthorized", "Session token was rejected"));
-			if (World) (void)World->Transactions.ExpireOwner(*World, TransactionOwner);
-
 			const auto method = message["Method"].get<std::string>();
+			// Batch failures cannot commit an unrelated expired legacy group.
+			if (World && method != "SetPropertyBatch") (void)World->Transactions.ExpireOwner(*World, TransactionOwner);
 			const auto &parameters = message["Params"];
 			if (ActivePlaySession && IsAuthoringMethodWhilePlaying(method))
 				return SerializeBoundedResponse(ErrorResponse(
@@ -816,7 +863,7 @@ namespace gargantuan {
 				if (!parameters.empty())
 					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Handshake takes no parameters"));
 				Json capabilities = {
-					"OpenProject", "CreateProject", "Schema", "Snapshot", "Journal", "SetProperty", "SetTransform", "SetAttribute", "SetExtensionProperty", "SetCustomProperty",
+					"OpenProject", "CreateProject", "Schema", "Snapshot", "Journal", "SetProperty", "SetPropertyBatch", "SetTransform", "SetAttribute", "SetExtensionProperty", "SetCustomProperty",
 					"AddTag", "RemoveTag", "SaveProject", "SaveProjectAs", "AuthoritativeRevision",
 					"CreateInstance", "DestroyInstance", "DuplicateInstance", "ReparentInstance",
 					"BeginTransaction",
@@ -857,6 +904,7 @@ namespace gargantuan {
 					{
 						{"Engine", "Gargantuan"},
 						{"ProtocolVersion", EditorHostProtocolVersion},
+						{"PropertyBatchVersion", EditorHostPropertyBatchVersion},
 						{"Capabilities", std::move(capabilities)},
 						{"ViewportWireVersion", 2},
 						{"ViewportTransports", std::move(viewportTransports)},
@@ -1889,6 +1937,7 @@ namespace gargantuan {
 							{"Readable", static_cast<bool>(property->Read)},
 							{"Writable", static_cast<bool>(property->Write)},
 							{"Editable", property->Editable},
+							{"AtomicBatchWritable", AtomicBatchWritable(*property, StudioSecurity)},
 							{"Persistence", property->PersistencePolicy == InstanceProperty::Persistence::Saved ? "Saved" : "Transient"},
 							{"Replication", property->ReplicationPolicy == InstanceProperty::Replication::FutureReplicated ? "Replicated" : "None"},
 							{"Authority", property->WriteAuthority == InstanceProperty::Authority::Main ? "Main" : "Any"},
@@ -1992,6 +2041,84 @@ namespace gargantuan {
 				return SerializeBoundedResponse(ErrorResponse(
 					requestId, "Unauthorized", "Script source mutation requires EditorCommands and MutateDataModel"
 				));
+			if (method == "SetPropertyBatch") {
+				auto Fail = [&](const char *Code, const char *Message) {
+					return SerializeBoundedResponse(ErrorResponse(requestId, Code, Message));
+				};
+				if (!StudioSecurity.HasCapability(ScriptCapability::MutateDataModel))
+					return Fail("Unauthorized", "SetPropertyBatch requires MutateDataModel");
+				if (!World || !CurrentProject) return Fail("ProjectRequired", "OpenProject must succeed first");
+				if (!HasOnlyFields(parameters, {"PropertyBatchVersion", "Scope", "ExpectedRevision", "Writes"}) ||
+					!parameters.contains("PropertyBatchVersion") || !parameters.contains("Scope") ||
+					!ExpectedRevision || !parameters.contains("Writes") || !parameters["Writes"].is_array())
+					return Fail("MalformedRequest", "SetPropertyBatch requires version, scope, revision, and writes");
+				const auto Version = JsonCodec::DecodeUnsigned32(parameters["PropertyBatchVersion"]);
+				if (!Version || *Version != EditorHostPropertyBatchVersion)
+					return Fail("UnsupportedCapabilityVersion", "PropertyBatchVersion is not supported");
+				const auto Scope = JsonCodec::DecodeObjectId(parameters["Scope"]);
+				if (!Scope) return Fail("MalformedRequest", "Scope must be a canonical ObjectId");
+				if (Scope->ToObjectId() != World->GetObjectId())
+					return Fail("StaleProject", "Scope does not identify the current project instance");
+				if (!Cursor) return Fail("SnapshotRequired", "GetSnapshot must establish a cursor");
+				if (HasRevisionConflict()) return Fail("Conflict", "The authoritative project revision changed");
+				if (World->Transactions.GetOpenCount() != 0)
+					return Fail("TransactionOpen", "Commit the open authoring transaction before a property batch");
+				const auto &EncodedWrites = parameters["Writes"];
+				if (EncodedWrites.empty()) return Fail("MalformedRequest", "Writes must not be empty");
+				if (EncodedWrites.size() > MaximumPreparedPropertyWrites)
+					return Fail("ResourceLimit", "Writes exceeds the 256-write limit");
+				std::vector<PreparedPropertyWrite> Writes;
+				Writes.reserve(EncodedWrites.size());
+				for (const auto &Encoded : EncodedWrites) {
+					if (!HasOnlyFields(Encoded, {"Object", "DeclaringClassSchemaId", "DeclaringDefinitionVersion", "Property", "Value"}) ||
+						!Encoded.contains("Object") || !Encoded.contains("DeclaringClassSchemaId") ||
+						!Encoded["DeclaringClassSchemaId"].is_string() || !Encoded.contains("DeclaringDefinitionVersion") ||
+						!Encoded.contains("Property") || !Encoded["Property"].is_string() || !Encoded.contains("Value"))
+						return Fail("MalformedRequest", "A batch write has invalid fields");
+					const auto &Name = Encoded["Property"].get_ref<const std::string &>();
+					const auto &SchemaText = Encoded["DeclaringClassSchemaId"].get_ref<const std::string &>();
+					if (Name.empty() || Name.size() > MaximumProtocolIdentifierBytes || SchemaText.size() != 32)
+						return Fail("MalformedRequest", "A property or schema identifier has invalid length");
+					const auto Object = JsonCodec::DecodeObjectId(Encoded["Object"]);
+					const auto Schema = SchemaId::Parse(SchemaText);
+					const auto DefinitionVersion = JsonCodec::DecodeUnsigned32(Encoded["DeclaringDefinitionVersion"]);
+					if (!Object || !Schema || !DefinitionVersion || *DefinitionVersion == 0)
+						return Fail("MalformedRequest", "A batch write has invalid identity or version");
+					for (const auto &Previous : Writes)
+						if (Previous.Object == Object->ToObjectId() && Previous.PropertyName == Name)
+							return Fail("DuplicateWrite", "An object/property pair occurs more than once");
+					auto Target = ObjectRegistry::Get().Lookup(Object->ToObjectId());
+					if (!Target || Target->GetDestroyed() || Target->IsDestroying() ||
+						Target->GetReplicationScopeId() != World->GetObjectId())
+						return Fail("StaleObject", "Object is not live in the current project instance");
+					const auto *Property = Target->FindProperty(Name);
+					if (!Property || Property->DeclaringSchemaId != *Schema ||
+						Property->DeclaringDefinitionVersion != *DefinitionVersion)
+						return Fail("StaleSchema", "Property identity or declaring schema version is incompatible");
+					if (!Property->Write || Property->WritePermission == Enums::Permission::Never)
+						return Fail("ReadOnly", "Property is read-only");
+					if (!PreparedPropertyCommit::SupportsProperty(*Property))
+						return Fail("UnsupportedProperty", "Property does not support prepared atomic writes");
+					if (!AtomicBatchWritable(*Property, StudioSecurity))
+						return Fail("Unauthorized", "Property access is not permitted");
+					auto Value = JsonCodec::DecodeWireValue(Encoded["Value"]);
+					if (!Value) return Fail("ValidationFailed", "WireValue is invalid");
+					Writes.push_back({Object->ToObjectId(), *Schema, *DefinitionVersion, Name, std::move(*Value)});
+				}
+				PropertyBatchResponse Response(requestId);
+				// Release the parsed tree while failures still precede mutation. No
+				// references into parameters or EncodedWrites are used after this point.
+				message = nullptr;
+				const auto Result = PreparedPropertyCommit::Apply(*World, *ExpectedRevision, Writes, StudioSecurity);
+				if (Result.Status != MutationStatus::Success) {
+					const auto *Code = Result.Status == MutationStatus::Conflict ? "Conflict" :
+						Result.Status == MutationStatus::InvalidProperty ? "StaleSchema" : MutationStatusName(Result.Status);
+					return Fail(Code, "Prepared property batch was rejected without mutation");
+				}
+				Response.Complete(Result);
+				return std::move(Response.Encoded);
+			}
+
 			if (!World)
 				return SerializeBoundedResponse(ErrorResponse(requestId, "ProjectRequired", "OpenProject must succeed first"));
 			auto StudioMutationAuthority = [&] {

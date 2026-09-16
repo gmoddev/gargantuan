@@ -1,6 +1,6 @@
 ---
 status: accepted-design
-implementation_status: internal-foundation-implemented
+implementation_status: editorhost-exposure-implemented
 owner: runtime-authoring
 last_verified: 2026-09-16
 source_checkpoint: 25c4da3d72c18d473bffcd21c095189d255fb470
@@ -28,8 +28,9 @@ related_architecture:
 Implementation and qualification evidence for the internal foundation now lives
 in [Prepared property commit validation](../CurrentArchitecture/PreparedPropertyCommitValidation.md).
 The decision below remains normative. Descriptions of the ordinary mutation
-blocker explain why the separate prepared path is required; qualification must
-finish before EditorHost exposure.
+blocker explain why the separate prepared path is required. The foundation was
+qualified at `8cb1d7519`; the additive EditorHost adapter and its separate
+final-source gate are recorded in the validation receipt.
 
 ## Decision
 
@@ -451,9 +452,13 @@ journal, history or notification budgets cannot be prepared.
 Authority, capabilities, scope and prepared-safety are never accepted from request
 data; they remain host/schema-owned.
 
-## Eventual EditorHost operation
+## EditorHost operation
 
-Do not implement this protocol in the design task. Intended additive operation:
+The sketch below records design intent, not the canonical serialized contract.
+The implemented additive operation uses `DeclaringClassSchemaId`,
+`DeclaringDefinitionVersion`, `TransactionId` in the success response, plus the
+required `Scope` and `PropertyBatchVersion` preconditions. See the exact
+[EditorHost protocol](../CurrentArchitecture/EditorHostProtocol.md#prepared-native-property-batches-capability-version-1).
 
 ```json
 {
@@ -491,9 +496,11 @@ while an explicit authoring transaction is open.
 
 The top-level EditorHost major version may remain 1 because the method is
 handshake-negotiated/additive. Handshake should advertise a dedicated property-
-batch capability/version. Schema discovery should increment from v5 if Studio is
-to receive an Engine-derived `AtomicBatchWritable` property capability. That flag
-is UX guidance only; every request is authoritatively revalidated.
+batch capability/version. Current discovery is already v6; the implemented
+additive `PropertyBatchVersion = 1` versions both the operation and the optional
+`AtomicBatchWritable` metadata, preserving compatibility with existing v6
+consumers. That flag is UX guidance only; every request is authoritatively
+revalidated.
 
 ## Executable feasibility / failure-injection gate
 

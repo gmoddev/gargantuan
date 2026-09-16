@@ -1,6 +1,6 @@
 #pragma once
 
-// Internal synchronous authoring primitive; deliberately absent from EditorHost.
+// Internal synchronous authoring primitive, also used by EditorHost's bounded adapter.
 #include "gargantuan/runtime/MutationGateway.hpp"
 #include <span>
 
@@ -38,6 +38,8 @@ namespace gargantuan {
 
 	class PreparedPropertyCommit {
 	  public:
+		// Discovery only; Apply always revalidates authority, identity, and values.
+		static bool SupportsProperty(const InstanceProperty &Property) noexcept;
 		static PreparedPropertyResult Apply(DataModel &World, std::uint64_t ExpectedRevision,
 			std::span<const PreparedPropertyWrite> Writes, const ScriptSecurityContext &Security);
 		static TransactionResult Replay(DataModel &World, const ScriptSecurityContext &Security, bool Redo);

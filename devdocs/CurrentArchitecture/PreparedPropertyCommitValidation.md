@@ -9,9 +9,11 @@ source_base: 1e067f2f32e904130c5065022974a71ad2f31ab6
 
 The governing decision is the accepted
 [Prepared Property Commit Architecture](../FutureArchitecture/PreparedPropertyCommitArchitecture.md).
-This record covers its internal implementation and qualification only. EditorHost
-does not expose `SetPropertyBatch`, and schema discovery has no new batch flag.
-Studio and Foundation 3L are unchanged.
+This record covers the internal foundation and the separately qualified
+Engine-only EditorHost exposure based on `8cb1d7519`. The optional
+`SetPropertyBatch` version 1 and `AtomicBatchWritable` metadata are specified in
+[EditorHost protocol](./EditorHostProtocol.md#prepared-native-property-batches-capability-version-1).
+Studio and Foundation 3L remain unchanged.
 
 ## Implementation ownership
 
@@ -174,15 +176,87 @@ The remote supplemental Windows worker has MSVC 19.44. Its build disables
 precompiled headers to avoid that compiler's existing `/pathmap` PCH failure.
 This is supplemental evidence; it does not replace the hosted MSVC 19.50+ gate.
 
-**Readiness rule:** the internal foundation is **READY FOR EDITORHOST EXPOSURE**
-only with both hosted jobs green on its final source and passing documentation,
-link and whitespace checks. This document does not grant permission to bypass
-that gate, and the implementation does not expose the request.
+The foundation satisfied this gate at `8cb1d75192ecc99d7004a84be23673226a8e1484`
+([hosted Native CI](https://github.com/gmoddev/gargantuan/actions/runs/35145089660)).
 
-The exact next implementation task after certification is a separate Engine-only
-EditorHost `SetPropertyBatch` admission/response integration: parse a bounded
-canonical request, enforce the exact document revision and authority, call this
-coordinator once, expose only properties with the proven prepared capability,
-and qualify protocol errors, no-op, journal/replica visibility, history and
-post-commit notification failure reporting. Preserve SetTransform and ordinary
-transaction semantics. Studio integration remains a later task.
+## EditorHost exposure qualification
+
+The Engine adapter on `feature/editorhost-property-batch` calls the existing
+coordinator once. The only coordinator adjustment extracts its existing exact
+prepared-property eligibility predicate for truthful discovery and admission;
+raw stores, preparation budgets, commit installation and replay are unchanged.
+EditorHost validates the versioned envelope, scope/revision, bounded identities,
+duplicates, effective access and prepared support. It prepares the escaped
+success response and releases the JSON request before Apply; response completion
+after commit consists only of bounded numeric conversion into reserved storage.
+
+The existing `gargantuan_foundation` EditorHost protocol suite now covers:
+
+- Additive capability/version and effective generated metadata, exclusions for
+  Source/references/overrides/custom and extension maps, and legacy Name editing.
+- Single/multiple-object/multiple-property and 256-write success; malformed
+  counts/IDs/versions/value shapes, 257 writes, identifier/string/envelope bounds,
+  and the coordinator's stricter conservative request budget.
+- Revision conflicts, destroyed generations, launch-token rejection, schema
+  mismatch, missing authoring permission, stopped-Play admission and open groups.
+- Reopened project scope rejection even at the new reset revision, then rejection
+  of the old object generation with the new scope.
+- Exact snapshot/revision/history-handle/cursor/retained-byte/journal-sequence
+  equality after every tested rejection, complete no-op behavior, and omission
+  of no-op writes from mixed history actions.
+- One action/revision for 256 changes, complete-state visibility to the first
+  observer on forward/Undo/Redo, normal property publication, and ordinary
+  in-process replica consumption of the commit and both replays.
+- Successful authoritative response despite a throwing post-commit observer.
+
+`gargantuan_prepared_property` retains the foundation failure sweeps and adds a
+real EditorHost request with global allocation denial from commit entry through
+the return of the encoded success response. This extends the existing commit
+boundary proof without claiming general JSON OOM recovery (KI-008).
+
+Supplemental qualification on the trusted remote worker passed both affected
+CTest targets with MSVC 19.44 Release and Clang 19 Release with ASan/UBSan and
+`detect_leaks=1`. The prepared executable now proves 27 allocation-denied commit
+boundaries, including the new response-return case; its existing preparation
+failure sweeps remain green. `gargantuan_foundation` includes EditorHost, schema,
+history, journal and in-process replication regressions. The documentation site
+builds all 19 pages; affected relative links and `git diff --check` pass.
+
+Protocol measurements (microseconds, supplemental worker):
+
+| Writes | Windows encode | Windows HandleRequest | Linux sanitizer encode | Linux sanitizer HandleRequest | Request bytes | Response bytes |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 2.3 | 243.3 | 9.2 | 625.5 | 399 | 278 |
+| 32 | 24.4 | 442.7 | 60.2 | 1,285.9 | 6,377–6,378 | 278 |
+| 256 | 185.8 | 1,913.9 | 710.7 | 7,901.0 | 49,544 | 278 |
+
+Measurements use one warm-up and six samples at 1, 32 and 256
+writes, reporting upper medians for client JSON encoding and complete
+`HandleRequest`, plus actual encoded request/response bytes. They include a
+growing retained journal/history; they are smoke measurements, not latency
+guarantees or peak-memory measurements. All foundation resource ceilings remain
+in effect, and response storage is constant apart from bounded RequestId escaping.
+The scoped wire IDs account for the one-byte request-size variation. These
+measurements do not subtract the foundation's empty-journal measurements above;
+the fixtures have different retained-state costs. Remote Windows compilation
+used six jobs and the existing `gargantuan-prepared-property` source/build cache;
+Linux used three jobs in `codex-prepared-sanitizers-native`, with persistent
+`codex-prepared-source` and `codex-prepared-build` volumes. No dependency cache
+was discarded and no unrelated workload was changed.
+
+The exposure's authoritative gate is [Native engine CI for its branch](https://github.com/gmoddev/gargantuan/actions/workflows/native-ci.yml?query=branch%3Afeature%2Feditorhost-property-batch).
+Both hosted jobs must pass on the **exact final source**, alongside affected
+documentation/link/whitespace checks, before declaring **READY FOR STUDIO
+CONSUMPTION**. A green foundation-only run is insufficient. The completion report
+records the immutable exposure commit and hosted run. No GNS/Foundation 3L
+qualification is required by this adapter: no transport, content-admission or
+wire-replication invariant changes; the normal Native CI suite remains required.
+
+The next Studio task is to implement multi-object Properties editing using the
+negotiated `SetPropertyBatch` version 1 and Engine `AtomicBatchWritable` metadata:
+derive the common editable property set, display mixed values, submit one bounded
+write set with current scope/revision and exact declaring identities, handle
+whole-batch rejection without rollback or chunking, and reconcile through normal
+journal/history state. Add Studio end-to-end tests for mixed/no-op edits,
+conflicts, selection/project replacement, limits, Undo/Redo and compatibility
+fallback to existing single-object editing. No Studio UX is implemented here.
