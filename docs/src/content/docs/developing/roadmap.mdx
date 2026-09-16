@@ -1,9 +1,14 @@
 ---
 title: Roadmap
 description: Implemented slices, remaining work, and future architectural tracks.
+status: planned
+authority: non-normative
 ---
 
 Reviewed on **2026-09-12** across main, Studio, MCP, Node, and Telemetry.
+The Studio authoring checkpoint and ordering were reconciled on **2026-09-14**
+against Studio `23bc08a` and Engine `b471b78e7`; other subsystem checkpoints
+retain their original evidence dates.
 This is a source-and-test review, not a new release qualification run.
 See the [revision and evidence ledger](../../../../../devdocs/FutureArchitecture/RoadmapEvidence20260912.md)
 and the [phase delivery roadmap](../../../../../devdocs/FutureArchitecture/Roadmap.md).
@@ -13,6 +18,12 @@ An unchecked **Partial** item strikes through only its delivered portion and
 keeps the remainder open. **Superseded** entries record a changed design, not
 completed implementation. Existing version headings are planning buckets, not
 claims that a version or phase has shipped.
+
+For Studio, **Accepted architecture** records a decided ownership/product
+constraint, not delivered features. **Planned** means implementation remains.
+**Architecture-blocked** means a named contract must be accepted first.
+The checked architecture-publication item below means the decision exists;
+only items explicitly classified **Implemented** claim delivered behavior.
 
 The [Architectural Discipline and Subsystem Boundaries proposal](../../../../../devdocs/FutureArchitecture/ArchitecturalDisciplineAndSubsystemBoundaries.md)
 defines the new future tracks below. Foundation 3L remains **partially ready**;
@@ -29,7 +40,7 @@ acceptance evidence. Blocked, deferred, and superseded describe planning state.
 
 | Subsystem | Implementation | Qualification | Remaining work / planning state |
 | --- | --- | --- | --- |
-| Studio | Foundation implemented | Not assessed here | Mature first-party UI/tools; multi-client orchestration and plugin/project trust remain. Studio owns UI; EditorHost owns authoritative engine operations. |
+| Studio | Foundation implemented; authoring/UX architecture accepted | Not assessed here | General document registration, palette, multi-object authoring and settings remain planned; runtime targets, multi-client TestSession and PreRun editing require contracts. Studio owns UX; Engine/EditorHost owns project authority. |
 | Script editing | Foundation implemented | Not assessed here | External two-way file sync, durable mappings and three-way conflict workflow remain. |
 | MCP | Foundation implemented | Not assessed here | Authenticated Studio bridge and bounded revision-aware writes exist; extend capabilities only for concrete workflows. |
 | Runtime GUI | Partial | Not assessed here | Retained controls, text editing and scrolling exist; broader controls/layout/accessibility remain. |
@@ -68,14 +79,14 @@ does not close the independent 3L gates or qualify later revisions.
 
 The production Studio application is now developed as separately authored,
 private code. It communicates with the MPL-2.0 engine through the public
-[EditorHost process boundary](./editor-host/). The original in-engine prototype
+[EditorHost process boundary](../editor-host/). The original in-engine prototype
 was removed; its MPL-2.0-covered implementation remains available through Git
 history and is not source material for the private application.
 
 Engine-side editor interface progress:
 
 - [x] Versioned EditorHost handshake and capability discovery
-- [x] Non-executing project open
+- [x] Project open without gameplay execution (bounded PreRun schema registration may run)
 - [x] Schema, snapshot, and ordered journal access
 - [x] Scalar property mutation through the authoritative gateway
 - [x] Initial offscreen viewport capture, ObjectId picking, and camera commands
@@ -88,30 +99,91 @@ Engine-side editor interface progress:
 New Project now creates the authoritative project-v4 document through EditorHost;
 project creation is an implemented workflow rather than a proposed file layout.
 
-Studio progress:
+#### Studio authoring checkpoint
 
-- [x] `.instance.json` format (thanks godmothersfire!)
-- [x] Load projects by CLI (thanks godmothersfire!)
-- [x] Opens existing projects (thanks godmothersfire!)
-- [x] Legacy startup-only `FileLink` directory import (thanks godmothersfire!)
-- [x] Engine-authoritative New Project flow
-- [x] Avalonia UI primitives and editor widgets over explicit Studio services
-- [x] Versioned docking, tabs/splits, floating windows, script documents, and saved layouts
-- [ ] Named workspace layouts and further workspace polish
-- [ ] Plugins system
-- **Superseded:** ~~Ribbon bar~~; the implemented shell uses menus and grouped toolbars
-- [ ] **Partial:** ~~host-owned telemetry consent and workspace settings~~; general settings UI and plugin integration
-- [x] Explorer tool with virtualized hierarchy and structural commands
-- [x] Schema-backed Properties tool
-- [x] Bounded categorized Output tool
-- [x] Move/Rotate/Scale viewport gizmos and command-backed edits
+The canonical accepted decision is owned by the private Studio repository:
+[Gargantuan Studio Authoring and UX Architecture](https://github.com/gmoddev/gargantuan-studio/blob/docs/studio-authoring-ux-architecture/devdocs/AcceptedArchitecture/StudioAuthoringAndUXArchitecture.md).
+That document's implementation mapping records source/test evidence and scoped
+limitations. Access requires Studio repository permission. This public roadmap
+routes to the decision rather than duplicating its UX authority.
 
-These are first-party tools; their implementation does not complete third-party
-plugin loading, grants, revocation, or distribution.
+- [x] **Implemented:** New/Open/Save/Save As through authoritative EditorHost operations
+- [x] **Implemented:** authoritative Undo/Redo, separate from local text history
+- [x] **Implemented:** dock/split/float workspace, real floating windows and saved layout
+- [x] **Implemented:** Explorer / schema-driven Properties / bounded chronological Output
+- [x] **Implemented:** Move/Rotate/Scale viewport transform tools
+- [x] **Implemented:** first-class Script documents with local buffers and revision-checked source commits
+- [x] **Implemented:** one isolated local Play/Stop runtime, with no implicit authoring write-back
+- [x] **Implemented:** asset catalog/import/reimport/delete and schema-filtered asset assignment
+- [x] **Implemented:** local package build and Build and Run (Windows foundation)
+- [x] **Implemented:** opt-in authenticated Studio MCP inspection
+- [x] **Implemented:** separately opt-in ProjectWrite/ScriptWrite through normal command/history semantics
+- [x] **Accepted architecture:** published Studio Authoring and UX Architecture; generalized features below remain unimplemented
+- [ ] **Planned:** generalized internal first-party document/editor contract
+- [ ] **Planned:** command palette over the semantic command catalog
+- [ ] **Planned:** Explorer filtering/search and canonical multi-selection
+- [ ] **Planned:** multi-object Properties with compatible intersection, mixed values and authoritative reset/default
+- [ ] **Planned:** richer source editor/language services
+- [ ] **Architecture-blocked:** runtime inspection target identity, capabilities, projection and lifecycle contract
+- [ ] **Architecture-blocked:** multi-client TestSession and Server/Client orchestration contract
+- [ ] **Architecture-blocked:** PreRun authoring contract (inspection/edit, candidate validation, reconstruction, baseline/default, source revisions, cross-schema history)
+- [ ] **Planned:** settings authority separation beyond implemented workspace/telemetry preferences
+- [ ] **Planned:** extension-facing Studio contracts after internal first-party contracts stabilize
+- [ ] **Planned:** named layouts, shortcut remapping and broader theme/accessibility qualification
+
+The current SelectionService accepts multiple ObjectIds, but the Explorer and
+Properties UI do not yet deliver multi-object authoring. Existing Viewport/Script
+document support is not a generalized editor registry. Output's bounded severity/
+category records are not the future structured diagnostic/Problems model.
+Current Play is one runtime within EditorHost, not Server plus N Clients.
+
+#### Superseded Studio direction
+
+| Earlier roadmap language | Disposition |
+| --- | --- |
+| Ribbon bar | **Superseded:** implemented menus and compact grouped toolbars; future palette shares commands |
+| Explorer as plugin | **Superseded:** first-party DataModel-only panel and canonical SelectionService |
+| Properties as plugin | **Superseded:** first-party schema-driven inspector |
+| Console/Output as plugin | **Superseded:** first-party bounded chronological Output; future Problems is active/actionable diagnostics |
+| Settings as plugin | **Superseded:** separate Studio Preferences, authored Project Settings, Runtime/Engine project settings and optional Platform settings |
+| Building tools as generic plugins | **Superseded:** internal viewport tools/services or specialized resource documents according to function |
+
+Third-party loading, grants, revocation, isolation and distribution remain
+planned; first-party delivery does not complete a plugins system. The settings
+taxonomy is accepted, while its general UI/persistence is still planned.
+
+#### Studio implementation order
+
+These are Studio-specific phases, not the Engine delivery phases or version
+release claims. This documentation checkpoint starts none of them.
+
+1. **Shell/document foundations:** generalized first-party document/editor
+   registration; feature-owned command handlers/context; derived Studio context;
+   command palette; structured diagnostic provenance foundation.
+2. **Core authoring UX:** Explorer filtering/search; multi-selection;
+   multi-object Properties and authoritative reset/default; richer Script
+   editing/language services; Problems.
+3. **Architecture-gated capabilities:** runtime inspection; TestSession/multi-client;
+   PreRun only after all six Engine contracts exist. PreRun is registration,
+   validation and frozen schema, not text overriding Engine-default source.
+4. **Advanced editors:** Material, Animation, UI, terrain/world tools and
+   profiler/network tooling using document/panel/viewport-tool/service taxonomy.
+5. **Extensions/platform:** extension-facing contracts; richer supported
+   MCP/automation; optional Gantria publishing/cloud/collaboration. Local and
+   self-hosted authoring stay first-class without Gantria.
+
+**Next implementation slice:** generalize internal document/editor registration
+for existing Viewport and Script kinds only, preserving identity, buffer/history,
+close, focus, docking/floating and restoration invariants. No new editor,
+PreRun, runtime target, public plugin ABI or Engine protocol belongs in that slice.
+
+Legacy compatibility remains delivered: `.instance.json`, CLI project loading
+and the startup-only `FileLink` directory importer. These do not establish a
+modern source-synchronization service.
 
 The legacy `FileLink` importer is not the future script-authoring architecture,
 and embedding Rojo is no longer planned. The replacement is the native workflow
-in [Native script synchronization and development integrations](./future-architecture/#native-script-synchronization-and-development-integrations).
+in [Native script synchronization and development integrations](../future-architecture/#native-script-synchronization-and-development-integrations).
 
 ### Native development workflow
 

@@ -139,6 +139,12 @@ a goal; each migration must verify claims against current code and tests.
 
 ## Accepted and future direction
 
+- [Gargantuan Studio Authoring and UX Architecture](https://github.com/gmoddev/gargantuan-studio/blob/docs/studio-authoring-ux-architecture/devdocs/AcceptedArchitecture/StudioAuthoringAndUXArchitecture.md)
+  is an accepted Studio-owned product/ownership decision (private repository
+  access required), not a claim that generalized documents, PreRun editing or
+  multi-client testing are implemented. The public
+  [Studio checkpoint and order](../src/content/docs/developing/roadmap.mdx#studio-authoring-checkpoint)
+  routes implementation status; Engine retains EditorHost/schema/history authority.
 - [Future architecture](../src/content/docs/developing/future-architecture.mdx)
   is the broad accepted direction, with implementation status stated per section.
 - [Future architecture concerns](../src/content/docs/developing/future-architecture-concerns.mdx)
