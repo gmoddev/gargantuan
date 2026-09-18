@@ -4,6 +4,42 @@ This file tracks verified current defects and engineering gaps that are useful
 to contributors but do not belong in the feature roadmap. An entry remains
 open until its resolution criteria are implemented and verified.
 
+
+## KI-009: Concrete-class constructor defaults diverge from reflected native defaults
+
+- Status: Open; reset-to-default qualification blocked.
+- Priority: Medium.
+- Area: Runtime schema / native class construction / EditorHost Properties defaults.
+- Relevant code: `tools/classgen.luau`, `src/classes/TextLabel.cpp`,
+  `src/classes/ImageLabel.cpp`, `src/classes/TextBox.cpp`,
+  `src/classes/TextButton.cpp`, `src/classes/ScrollingFrame.cpp`,
+  `src/classes/Instance.cpp::ResetPropertyToDefault`,
+  `src/editor/EditorHost.cpp::GetSchema`.
+- Architecture:
+  [Concrete-class property defaults](devdocs/FutureArchitecture/ConcreteClassPropertyDefaults.md).
+
+Several concrete GUI classes directly assign inherited generated backing members
+during construction. Those authored initial values can differ from the declaring
+`InstanceProperty::Unmodified` value that EditorHost currently exposes as
+`Default`. For example, a fresh `TextLabel` has
+`BackgroundTransparency = 1` while `GuiObject` declares `0`;
+`Instance::ResetPropertyToDefault` currently restores `0`.
+
+The mismatch is not isolated: TextBox, TextButton, ImageLabel and ScrollingFrame
+also establish persistent inherited presentation/interaction values in
+constructors. Transient/read-only initialization such as `GuiState` and
+`Workspace.CurrentCamera` is a separate construction concern. Native
+persistence currently serializes all saved writable values, so this is not a
+save/reopen loss defect.
+
+Resolution requires the accepted narrow concrete-class inherited-default
+foundation: one declarative source must feed both construction and effective
+schema/reset discovery without permitting general property shadowing. Migrate
+persistent constructor defaults, preserve transient/contextual initialization,
+update `ResetPropertyToDefault` to resolve the effective concrete default, and
+qualify fresh construction against schema discovery before Studio reset
+qualification resumes.
+
 ## KI-008: JSON tree cleanup can allocate during memory-exhaustion unwinding
 
 - Status: Open outside the prepared-property primitive; avoided by that primitive.
