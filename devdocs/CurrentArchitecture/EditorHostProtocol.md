@@ -148,7 +148,9 @@ new or prior registry; a later `OpenProject` may construct a fresh document.
 `Handshake.Result.PropertyBatchVersion` is `1`. This version jointly covers the
 method and the additive `AtomicBatchWritable` property metadata in both
 `GetSchema.Result.Definitions[].Properties[]` and the inherited `Classes` adapter.
-Protocol version 1 and schema discovery version 6 remain unchanged. Clients
+Protocol version 1 and property-batch version 1 remain unchanged. Schema
+discovery version 7 adds sparse concrete-class default metadata; see the
+[concrete-default contract](ConcreteClassPropertyDefaults.md). Clients
 must check the capability and version before offering batch editing, then echo
 `PropertyBatchVersion: 1` on each batch; no mutable handshake negotiation state
 is needed. Old clients can ignore the additional capability and fields and keep

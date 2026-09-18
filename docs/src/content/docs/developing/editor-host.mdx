@@ -43,8 +43,9 @@ revision, and the current snapshot scope. Discovery exposes
 support from datatype. One changed batch is one atomic Engine history action and
 revision transition, with normal journal publication and atomic prepared
 Undo/Redo. An all-no-op batch changes neither history nor revision. Protocol
-version 1 and schema discovery version 6 remain unchanged, and existing
-single-property clients remain compatible. Requests over the 1 MiB envelope or
+version 1 and property-batch version 1 remain unchanged. Schema discovery is now
+version 7 for concrete-class defaults; strict older schema readers require a
+consumer update. Requests over the 1 MiB envelope or
 prepared resource budgets reject wholly, without chunking. See the
 [canonical request, response, errors and limits](https://github.com/gmoddev/gargantuan/blob/9c4514c1774b07c0ce8b2291147dc60f6a023f3c/devdocs/CurrentArchitecture/EditorHostProtocol.md#prepared-native-property-batches-capability-version-1)
 and [qualification receipt](https://github.com/gmoddev/gargantuan/blob/feature/editorhost-property-batch/devdocs/CurrentArchitecture/PreparedPropertyCommitValidation.md#editorhost-exposure-qualification).
@@ -137,7 +138,7 @@ The implemented Luau viewport adapter adds `ViewportControl`; it does not infer
 that permission from the `Studio` domain. Process, filesystem, and network
 access remain ungranted.
 
-`GetSchema` schema-discovery version 6 exposes the frozen registry generation
+`GetSchema` schema-discovery version 7 exposes the frozen registry generation
 and immutable class/enum/extension metadata. Project classes include stable
 base and native-host IDs, construction/subclass policy, constructibility, and
 ordered declarative properties. Native properties carry datatype and wire type,

@@ -85,6 +85,11 @@ Tests should enforce them where practical.
 11. Custom class properties are frozen declarative schema with bounded sparse
     per-Instance state. They remain distinct from Attributes and extensions, and
     project registration can never supply native callbacks or behavior hooks.
+12. A native inherited property default override changes only its value for the
+    owning concrete class and descendants. Declaring property identity, access,
+    validation and prepared eligibility remain unchanged. One class declaration
+    generates raw construction initialization and sparse schema metadata;
+    effective resolution selects the nearest override or declaring fallback.
 
 ## Security and execution
 

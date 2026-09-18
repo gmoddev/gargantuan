@@ -13,7 +13,7 @@ records syntax, lifecycle, limits, discovery compatibility, and exclusions.
 
 | Gate | Evidence / current state |
 | --- | --- |
-| Classgen | Generation succeeds; 24 focused literal/identity/duplicate/malformed/bound checks pass locally; repeated by both Native CI jobs. |
+| Classgen | Generation succeeds; 26 focused literal/identity/duplicate/malformed/bound checks pass locally, including both finite Float extrema; repeated by both Native CI jobs. |
 | Native compilation | Local MSVC syntax checks pass for runtime schema, generated TextBox, EditorHost, and the focused fixture; full Release build pending hosted CI. |
 | Construction | `gargantuan_concrete_property_defaults` compares direct construction, registry construction, effective resolution, and actual production GetSchema across all prepared-safe saved properties on the five migrated classes, Frame, Part, UIListLayout, and an inherited-label fixture. Pending execution. |
 | Inheritance | Fixture protects no-override fallback, inherited override, nearer TextBox/TextButton override, exact declaring pointer identity, and stale concrete/declaring versions. |
@@ -21,9 +21,9 @@ records syntax, lifecycle, limits, discovery compatibility, and exclusions.
 | Persistence/clone | Fifteen class/value-mode cases cover effective defaults, declared fallbacks, and edited values; verify saved fields are present and load/Clone preserve every saved property. Pending execution. |
 | Prepared compatibility | Existing prepared/property-batch tests retained; new fixture checks migrated metadata eligibility. No reset-through-batch qualification is performed. |
 | Legacy discovery | Legacy Classes keeps its declared fallback. Strict older schema-version readers reject v7 safely and need a later consumer update. |
-| Resource accounting | 16 overrides; ABI record size and exact JSON delta printed by native fixture. Measurement pending execution. |
+| Resource accounting | 16 overrides across 62 production native classes. MSVC 19.50 layout probe: 120-byte override record and 24-byte vector. Fixed storage per schema copy is `16 * 120 + 62 * 24 = 3,408` bytes, plus string allocation and allocator bookkeeping. All four migrated native value types fit the MSVC any inline buffer. Exact discovery delta is printed by the native fixture. |
 | MSVC / sanitizers | Required hosted Native CI pending. Remote `dockerbox` SSH unavailable; no sustained local build substituted. |
-| Documentation | Astro build passed all 19 pages locally; whitespace check passed. |
+| Documentation | Astro build passed all 19 pages locally; eight receipt/contract links resolve and whitespace check passed. |
 
 No Studio, Foundation 3L, prepared coordinator, mutation command, or persistence
 format changes are part of this slice. Runtime reset still uses the declared

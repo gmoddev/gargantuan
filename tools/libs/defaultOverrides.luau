@@ -6,7 +6,7 @@ local function Fail(Message)
 end
 
 local function Number(Value)
-	if type(Value) ~= "number" or Value ~= Value or math.abs(Value) > 3.402823466e38 then
+	if type(Value) ~= "number" or Value ~= Value or math.abs(Value) > 3.4028234663852886e38 then
 		Fail("expected a finite float literal")
 	end
 	return string.format("%.17e", Value) .. "f"

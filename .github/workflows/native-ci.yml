@@ -174,6 +174,12 @@ jobs:
             build-ci/Testing/Temporary/LastTest.log
             build-ci/ctest-results.xml
 
+      - name: Report concrete-default qualification measurements
+        shell: pwsh
+        run: |
+          Select-String -Path build-ci/Testing/Temporary/LastTest.log -SimpleMatch '[Schema:ConcreteDefaults]' |
+            ForEach-Object { $_.Line }
+
   linux-sanitizers:
     name: Ubuntu 24.04 / Clang 19 / ASan + UBSan / Headless
     needs: windows-native
@@ -296,3 +302,7 @@ jobs:
             build-sanitizers/CMakeFiles/CMakeConfigureLog.yaml
             build-sanitizers/Testing/Temporary/LastTest.log
             build-sanitizers/ctest-results.xml
+
+      - name: Report concrete-default sanitizer measurements
+        shell: bash
+        run: grep -F '[Schema:ConcreteDefaults]' build-sanitizers/Testing/Temporary/LastTest.log
