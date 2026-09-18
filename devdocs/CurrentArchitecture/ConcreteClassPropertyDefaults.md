@@ -30,6 +30,13 @@ schema validation repeats identity/type checks and checks native validators,
 ranges, enum values, closed wire encoding, and resource bounds. There are no new
 properties, setter callbacks, or changes to prepared eligibility.
 
+Classgen also materializes declared string literals as `std::string` before
+storing `Unmodified`. The old generator stored those literals as `const char*`
+inside `std::any`, so closed-value discovery omitted them even though backing
+members held native strings. The authored declared value is unchanged; its
+native storage and discovery now match construction. This correction is
+required for the no-override fallback equivalence gate.
+
 ## Construction order
 
 For each override, classgen emits one typed static value function. Both the
@@ -98,7 +105,8 @@ closed-value/native-enum encoding. Invalid override metadata fails registry
 publication, rather than causing discovery to invent or omit a value.
 
 `Definitions[].Properties[].Default` and legacy `Classes` keep their declared-
-fallback meaning. Older clients consuming the legacy projection can ignore the
+fallback meaning; previously omitted string defaults now encode as strings.
+Older clients consuming the legacy projection can ignore the
 new records. Exact-version schema readers must fail closed on version 7 until
 updated; the inspected Studio reader accepts only 5/6 and therefore needs a
 separate compatibility update. This Engine change does not claim that existing
@@ -115,7 +123,12 @@ Each class adds one vector object; each actual override adds one fixed record,
 name storage, and `std::any` native storage. The test prints ABI record size,
 native value/name bytes, and exact added discovery bytes. Static class seeds and
 the active registry retain their normal schema copies; these costs are per
-schema copy, not per live Instance. See the
+schema copy, not per live Instance. The normal native-only steady state retains
+three copies: generated `CLASS_DEFINITION` objects, registration seeds, and the
+active registry. On MSVC, their additional fixed storage totals 10,224 bytes
+(`3 * (16 * 120 + 62 * 24)`), excluding name allocations and allocator overhead.
+A concurrently retained candidate or old registry adds its own bounded copy.
+See the
 [qualification receipt](../Validation/ConcreteClassPropertyDefaults.md).
 
 Native persistence still emits all readable/writable saved properties. Loading

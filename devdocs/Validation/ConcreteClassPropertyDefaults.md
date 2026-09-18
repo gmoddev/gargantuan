@@ -6,6 +6,13 @@ Source base: accepted architecture `a10779015186b5d31416bdb44d72920fb6ec7bbc`,
 on Engine property-batch baseline `04e1353edfe24ffc9d23968f8791afaf245f8ee8`.
 Implementation branch: `feature/concrete-property-defaults`.
 
+The first hosted Windows execution (`35294604118`, source `f7115cb3`) passed
+59 of 60 tests. The new equivalence fixture exposed existing string-literal
+fallbacks stored as `const char*` instead of `std::string`. Classgen now emits
+owned native strings for those declared fallbacks; the complete matrix must
+pass again before qualification. The associated GNS sanitizer run
+(`35294604119`) passed.
+
 The [current contract](../CurrentArchitecture/ConcreteClassPropertyDefaults.md)
 records syntax, lifecycle, limits, discovery compatibility, and exclusions.
 

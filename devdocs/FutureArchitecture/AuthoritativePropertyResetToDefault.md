@@ -77,12 +77,14 @@ native prepared batch.
 
 ## Discovery
 
-The current `GetSchema` response exposes declared native `Default` values
+At the recorded property-batch baseline, `GetSchema` exposes declared native `Default` values
 from `InstanceProperty::Unmodified`, but it does not encode concrete-class
 inherited default overrides.
 
-Reset-aware discovery therefore requires the concrete-default schema extension
-defined in the superseding ADR.
+The concrete-default foundation now implements the schema-v7 extension defined
+in the superseding ADR. See its [current contract](../CurrentArchitecture/ConcreteClassPropertyDefaults.md)
+and [qualification evidence](../Validation/ConcreteClassPropertyDefaults.md).
+This discovery implementation does not qualify production reset behavior.
 
 The preferred representation keeps declared property `Default` unchanged and
 adds bounded class-owned override records. A client resolves the effective value

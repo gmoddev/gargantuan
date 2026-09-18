@@ -99,10 +99,10 @@ namespace {
 					!PreparedPropertyCommit::SupportsProperty(*Property)) continue;
 				const auto *Effective = Registry.ResolveEffectivePropertyDefault(Class->Id, Class->DefinitionVersion,
 					Property->DeclaringSchemaId, Property->DeclaringDefinitionVersion, Name);
-				Require(Effective != nullptr, "effective native default exists");
-				const auto Wire = EncodePropertyDefault(*Property, *Effective);
-				Require(Wire.has_value(), "effective default encodes");
 				const auto Label = Class->ClassName + "." + Name;
+				Require(Effective != nullptr, "effective native default exists: " + Label);
+				const auto Wire = EncodePropertyDefault(*Property, *Effective);
+				Require(Wire.has_value(), "effective default encodes: " + Label);
 				Require(Object->ReadPropertyWireValue(Name) == Wire, "direct construction: " + Label);
 				Require(Constructed->ReadPropertyWireValue(Name) == Wire, "registry construction: " + Label);
 				Require(DiscoveredDefault(Schema, *Class, *Property) == *Wire, "production discovery: " + Label);
