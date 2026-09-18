@@ -177,7 +177,7 @@ jobs:
       - name: Report concrete-default qualification measurements
         shell: pwsh
         run: |
-          Select-String -Path build-ci/Testing/Temporary/LastTest.log -SimpleMatch '[Schema:ConcreteDefaults]' |
+          Select-String -Path build-ci/Testing/Temporary/LastTest.log -SimpleMatch '[Schema:ConcreteDefaults]', '[Schema:ResetDefaults]' |
             ForEach-Object { $_.Line }
 
   linux-sanitizers:
@@ -305,4 +305,4 @@ jobs:
 
       - name: Report concrete-default sanitizer measurements
         shell: bash
-        run: grep -F '[Schema:ConcreteDefaults]' build-sanitizers/Testing/Temporary/LastTest.log
+        run: grep -E '\[Schema:(ConcreteDefaults|ResetDefaults)\]' build-sanitizers/Testing/Temporary/LastTest.log

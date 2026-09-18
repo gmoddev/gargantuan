@@ -2,7 +2,9 @@
 
 This implements the declaration and construction portion of the
 [accepted design](../FutureArchitecture/ConcreteClassPropertyDefaults.md).
-Reset mutation and Studio reset controls are separate, unqualified work.
+Reset mutation is implemented separately; see the
+[reset contract and qualification status](AuthoritativePropertyResetToDefault.md).
+Studio reset controls remain separate work.
 The foundation is qualified on MSVC Release and Linux ASan/UBSan/LSan; see the
 [validation receipt](../Validation/ConcreteClassPropertyDefaults.md).
 
@@ -83,12 +85,14 @@ metadata without being construction-equivalent or reset eligible.
 Native definitions remain version 1 under existing native migration policy.
 Custom inherited override registration is rejected; custom Name construction
 must not be inferred as reset metadata. No third reset-default table exists.
-`Instance::ResetPropertyToDefault` is intentionally unchanged in this slice.
+The subsequent reset implementation consumes this resolver through ordinary
+mutation; the foundation itself does not grant mutation authority.
 
 ## Discovery version 7
 
 EditorHost protocol version 1 and SetPropertyBatch version 1 are unchanged.
-`GetSchema` now returns `SchemaDiscoveryVersion: 7`. Only class definitions with
+`GetSchema` returns `SchemaDiscoveryVersion: 7` when explicitly requested with
+`Params.SchemaDiscoveryVersion = 7`; omission returns compatible v6. Only v7 class definitions with
 authored overrides add `DefaultOverrides`:
 
 ```json
@@ -109,11 +113,10 @@ publication, rather than causing discovery to invent or omit a value.
 
 `Definitions[].Properties[].Default` and legacy `Classes` keep their declared-
 fallback meaning; previously omitted string defaults now encode as strings.
-Older clients consuming the legacy projection can ignore the
-new records. Exact-version schema readers must fail closed on version 7 until
-updated; the inspected Studio reader accepts only 5/6 and therefore needs a
-separate compatibility update. This Engine change does not claim that existing
-Studio schema readers already support concrete defaults.
+Older clients receive v6 without the new records. The reset integration added
+explicit v7 selection because the inspected Studio reader accepts only 5/6.
+New clients must request v7 and fail closed for reset when it is unavailable;
+legacy discovery still supports ordinary editing.
 
 ## Bounds and persistence
 

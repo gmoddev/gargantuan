@@ -114,6 +114,7 @@ The following documents describe recently implemented, source-verified slices:
 - [EditorHost and Studio boundary](../src/content/docs/developing/editor-host.mdx)
 - [Runtime foundation](../../devdocs/CurrentArchitecture/FoundationRuntime.md)
 - [Mutation gateway](../../devdocs/CurrentArchitecture/MutationGateway.md)
+- [Authoritative reset-to-default](../../devdocs/CurrentArchitecture/AuthoritativePropertyResetToDefault.md)
 - [Snapshot baseline](../../devdocs/CurrentArchitecture/SnapshotBaseline.md)
 - [Loopback replication](../../devdocs/CurrentArchitecture/LoopbackReplication.md)
 - [Networking contracts](../../devdocs/CurrentArchitecture/NetworkingContracts.md)

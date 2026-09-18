@@ -13,6 +13,7 @@
 #include "gargantuan/runtime/ObjectId.hpp"
 #include "gargantuan/runtime/WireCodec.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
+#include "../runtime/PreparedPropertyCommit.hpp"
 #include "gargantuan/datatypes/CFrame.hpp"
 #include "gargantuan/datatypes/Color3.hpp"
 #include "gargantuan/datatypes/UDim2.hpp"
@@ -1322,9 +1323,23 @@ namespace gargantuan {
 	};
 
 	void Instance::ResetPropertyToDefault(std::string propertyName) {
-		auto *property = FindProperty(propertyName);
-		if (!property || property->Signal) throw std::runtime_error("Property does not exist or is a signal");
-		const auto status = ApplyPropertyMutation(propertyName, property->Unmodified, Enums::Permission::Engine);
+		RequireFrozenRuntimeSchema("ResetPropertyToDefault");
+		const auto *Class = InstanceClassRegistry::GetDefinition(this);
+		const auto *Property = FindProperty(propertyName);
+		// The qualified reset surface is persistent generated native state. A
+		// default value alone does not authorize contextual/custom/derived writes.
+		if (!Class || Class->ConstructionKind != SchemaClassConstructionKind::Native || !Property ||
+			(Property->PersistencePolicy != InstanceProperty::Persistence::Saved && propertyName != "Name") ||
+			!PreparedPropertyCommit::SupportsProperty(*Property))
+			throw std::runtime_error("Property has no supported authoritative reset default");
+		const auto *Default = GetActiveRuntimeSchemaRegistry().ResolveEffectivePropertyDefault(
+			Class->Id, Class->DefinitionVersion, Property->DeclaringSchemaId,
+			Property->DeclaringDefinitionVersion, propertyName);
+		const auto Value = Default ? EncodePropertyDefault(*Property, *Default) : std::nullopt;
+		if (!Value) throw std::runtime_error("Effective property default is unavailable");
+		// Ordinary wire mutation preserves enum normalization/no-ops as well as
+		// native validation, permissions, revision, journal and notifications.
+		const auto status = ApplyPropertyWireMutation(propertyName, *Value, Enums::Permission::Engine);
 		if (status != MutationStatus::Success) throw std::runtime_error("Default property mutation rejected");
 	};
 

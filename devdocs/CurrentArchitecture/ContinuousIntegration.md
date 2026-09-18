@@ -107,7 +107,7 @@ rather than a duplicated numeric count in this document, is authoritative.
 | Provider-neutral entitlement semantics, Luau authority, vectors, headless lifecycle, and provider overhead smoke | `gargantuan_entitlement_service`, `gargantuan_entitlement_provider_benchmark_smoke` |
 | GUI retained runtime and bounded Release smoke | `gargantuan_gui_foundation`, `gargantuan_gui_foundation_benchmark_smoke` |
 | PreRun bootstrap | `gargantuan_prerun_bootstrap` |
-| Concrete defaults: direct/registry construction, discovery, persistence and cloning | `gargantuan_concrete_property_defaults`; generation steps also run `lute tools/tests/DefaultOverrides` |
+| Concrete defaults: construction, discovery, persistence/Clone, native reset and single/batch editor reset/history/replication | `gargantuan_concrete_property_defaults`; generation steps also run `lute tools/tests/DefaultOverrides` |
 | Serialization smoke | `SerializationBenchmarkSmoke` |
 | Networking contracts and deterministic transport | `gargantuan_networking_contracts`, `gargantuan_simulated_transport`, `gargantuan_scheduler_contract` |
 | Replication and remotes | `gargantuan_replication`, `gargantuan_remote`, `gargantuan_remote_luau` |

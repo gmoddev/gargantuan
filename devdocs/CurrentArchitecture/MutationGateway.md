@@ -58,6 +58,12 @@ which preserves synchronous native mutation without making the queue optional.
 Failure results retain a narrow `MutationStatus`; one bounded formatter converts
 that status into Luau and EditorHost diagnostics rather than collapsing it to a
 generic property-rejected message.
+Native reset resolves the concrete effective default, encodes it, and enters
+ordinary wire mutation (including enum no-op normalization). Editor reset sends
+the same resolved value through existing semantic SetProperty or one complete
+SetPropertyBatch; see [reset semantics](AuthoritativePropertyResetToDefault.md).
+Runtime resets retain runtime history policy; editor requests retain ordinary
+authoring history. No reset-specific authority or transaction exists.
 The atomic wire-property command is restricted to Studio authority and at most
 eight distinct properties. It validates every target property and history bound
 before changing state, applies under one implicit authoritative transaction,

@@ -128,7 +128,13 @@ mutation gateway check it at their native boundaries. Every viewport method
 also checks `ViewportControl`. It does not grant
 process, filesystem, network, or arbitrary engine-native access.
 
-Schema discovery is read-only. Version 6 returns stable class/enum/extension
+Schema discovery is read-only. `GetSchema` accepts only the optional
+`SchemaDiscoveryVersion` field (unsigned 6 or 7); omission returns 6. Version 7
+must be explicitly requested and adds the existing concrete-default overrides.
+Unsupported versions reject with `UnsupportedCapabilityVersion`. This preserves
+ordinary editing for strict v6 consumers. See the
+[reset consumption contract](AuthoritativePropertyResetToDefault.md).
+Version 6 returns stable class/enum/extension
 identity, definition kind and version, provenance, class-base and extension-target
 IDs, class construction/subclass policy and native host identity, ordered
 custom-enum items, ordered declarative schema properties, and native property

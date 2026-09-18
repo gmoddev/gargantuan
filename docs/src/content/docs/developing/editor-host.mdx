@@ -44,8 +44,9 @@ support from datatype. One changed batch is one atomic Engine history action and
 revision transition, with normal journal publication and atomic prepared
 Undo/Redo. An all-no-op batch changes neither history nor revision. Protocol
 version 1 and property-batch version 1 remain unchanged. Schema discovery is now
-version 7 for concrete-class defaults; strict older schema readers require a
-consumer update. Requests over the 1 MiB envelope or
+version 7 for concrete-class defaults when requested with
+`GetSchema({ SchemaDiscoveryVersion: 7 })`; parameterless discovery returns
+compatible v6. Future reset consumers must opt into v7. Requests over the 1 MiB envelope or
 prepared resource budgets reject wholly, without chunking. See the
 [canonical request, response, errors and limits](https://github.com/gmoddev/gargantuan/blob/9c4514c1774b07c0ce8b2291147dc60f6a023f3c/devdocs/CurrentArchitecture/EditorHostProtocol.md#prepared-native-property-batches-capability-version-1)
 and [qualification receipt](https://github.com/gmoddev/gargantuan/blob/feature/editorhost-property-batch/devdocs/CurrentArchitecture/PreparedPropertyCommitValidation.md#editorhost-exposure-qualification).

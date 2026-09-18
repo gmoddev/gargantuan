@@ -513,18 +513,15 @@ runtime resolver and schema-discovery v7 foundation are implemented and
 qualified on `feature/concrete-property-defaults`; evidence is recorded in the
 [foundation receipt](../Validation/ConcreteClassPropertyDefaults.md). The
 [implemented contract](../CurrentArchitecture/ConcreteClassPropertyDefaults.md)
-defines the exact literal syntax and bounds. Production reset integration and
-reset-through-batch qualification remain separate subsequent work.
+defines the exact literal syntax and bounds. The subsequent
+[reset contract](../CurrentArchitecture/AuthoritativePropertyResetToDefault.md)
+and [receipt](../Validation/AuthoritativePropertyResetToDefault.md) track production
+reset integration and reset-through-batch qualification.
 
 **Concrete-default foundation implementation and qualification: COMPLETE.**
 
 The constructor/schema prerequisite gate is satisfied. Production reset
 behavior is not qualified by this foundation slice.
 
-The exact next Engine task is:
-
-> Integrate the canonical effective-default resolver into ordinary
-> `Instance::ResetPropertyToDefault` while preserving the existing mutation
-> path, then resume effective-default reset-through-SetPropertyBatch
-> qualification. Studio schema-v7 consumption and reset controls remain a
-> subsequent task after that Engine gate succeeds.
+The subsequent Engine reset slice is implemented and awaiting its final hosted
+qualification. Studio schema-v7 consumption and reset controls follow that gate.

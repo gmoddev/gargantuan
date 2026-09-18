@@ -5,10 +5,10 @@ to contributors but do not belong in the feature roadmap. An entry remains
 open until its resolution criteria are implemented and verified.
 
 
-## KI-009: Native reset still uses declared rather than effective concrete defaults
+## KI-009: Concrete inherited defaults and authoritative reset
 
-- Status: Open; concrete-default foundation implemented and qualified;
-  production reset integration remains deferred.
+- Status: Open pending final-source reset qualification; foundation qualified
+  and production effective-default reset integration implemented.
 - Priority: Medium.
 - Area: Runtime schema / native class construction / EditorHost Properties defaults.
 - Relevant code: `tools/classgen.luau`, `src/classes/TextLabel.cpp`,
@@ -24,7 +24,7 @@ during construction. Those authored initial values can differ from the declaring
 `InstanceProperty::Unmodified` value that EditorHost currently exposes as
 `Default`. For example, a fresh `TextLabel` has
 `BackgroundTransparency = 1` while `GuiObject` declares `0`;
-`Instance::ResetPropertyToDefault` currently restores `0`.
+the baseline `Instance::ResetPropertyToDefault` restored `0`.
 
 The baseline mismatch also affected TextBox, TextButton, ImageLabel and
 ScrollingFrame constructor assignments. Those persistent defaults now use
@@ -34,9 +34,11 @@ Transient/read-only initialization such as `GuiState` and
 persistence currently serializes all saved writable values, so this is not a
 save/reopen loss defect.
 
-The remaining resolution is to update `ResetPropertyToDefault` to consume the
-effective concrete default through its existing mutation path, then qualify
-reset-through-SetPropertyBatch before Studio reset qualification resumes.
+`ResetPropertyToDefault` now consumes the effective concrete default through
+ordinary wire mutation. Editor single reset uses SetProperty and multi-reset
+uses one existing SetPropertyBatch with per-target defaults. See the
+[reset contract](devdocs/CurrentArchitecture/AuthoritativePropertyResetToDefault.md)
+and [qualification receipt](devdocs/Validation/AuthoritativePropertyResetToDefault.md).
 
 The concrete-default foundation now moves the 16 persistent GUI assignments into
 one typed classgen declaration, generates construction and sparse schema
@@ -44,8 +46,7 @@ overrides, and exposes effective resolution in schema discovery v7. See the
 [qualification receipt](devdocs/Validation/ConcreteClassPropertyDefaults.md).
 The foundation passed 179 construction/schema property cases and 15
 persistence/Clone scenarios on MSVC Release and Linux ASan/UBSan/LSan. The issue
-remains open until ordinary `ResetPropertyToDefault` integration and subsequent
-reset qualification complete.
+remains open until final-source reset qualification completes.
 Studio reset controls are not implemented by the foundation slice.
 
 ## KI-008: JSON tree cleanup can allocate during memory-exhaustion unwinding

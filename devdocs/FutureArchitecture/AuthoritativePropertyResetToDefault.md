@@ -46,8 +46,10 @@ made resettable merely because a constructor assigns it.
 
 The effective-default foundation described by the superseding ADR is now
 [implemented and qualified](../Validation/ConcreteClassPropertyDefaults.md).
-Its prerequisite gate is satisfied; production reset integration and
-reset-through-batch qualification remain the next separate Engine task.
+Its prerequisite gate is satisfied. Production reset integration and
+reset-through-batch qualification are tracked in the subsequent
+[current reset contract](../CurrentArchitecture/AuthoritativePropertyResetToDefault.md)
+and [receipt](../Validation/AuthoritativePropertyResetToDefault.md).
 
 ## Authoritative reset value
 
@@ -282,10 +284,10 @@ Compatibility direction:
 **AUTHORITATIVE DEFAULT SOURCE: SUPERSEDED by
 `ConcreteClassPropertyDefaults.md`.**
 
-**RESET QUALIFICATION: BLOCKED.**
+**RESET IMPLEMENTATION: COMPLETE; final-source qualification pending.**
 
-The exact next Engine task is to implement and qualify the narrow
-concrete-class inherited-default foundation first. Only then should the
-reset-through-`SetPropertyBatch` qualification resume.
+The foundation prerequisite is satisfied. The production effective-default reset
+path and existing SetPropertyBatch consumption proof are implemented. See the
+current reset receipt for the hosted qualification result.
 
 Studio reset controls remain out of scope until that gate passes.

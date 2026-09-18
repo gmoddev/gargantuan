@@ -1892,8 +1892,12 @@ namespace gargantuan {
 			}
 
 			if (method == "GetSchema") {
-				if (!parameters.empty())
-					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "GetSchema takes no parameters"));
+				if (!HasOnlyFields(parameters, {"SchemaDiscoveryVersion"}))
+					return SerializeBoundedResponse(ErrorResponse(requestId, "MalformedRequest", "Invalid GetSchema fields"));
+				const auto DiscoveryVersion = parameters.contains("SchemaDiscoveryVersion")
+					? JsonCodec::DecodeUnsigned32(parameters["SchemaDiscoveryVersion"]) : std::optional<std::uint32_t>(6);
+				if (!DiscoveryVersion || (*DiscoveryVersion != 6 && *DiscoveryVersion != 7))
+					return SerializeBoundedResponse(ErrorResponse(requestId, "UnsupportedCapabilityVersion", "Supported schema discovery versions are 6 and 7"));
 				if (!StudioSecurity.HasCapability(ScriptCapability::ReadDataModel))
 					return SerializeBoundedResponse(ErrorResponse(requestId, "Unauthorized", "Schema access requires ReadDataModel"));
 				auto IsEditorConstructible = [&](const InstanceClassDefinition &Definition) {
@@ -1989,7 +1993,7 @@ namespace gargantuan {
 								));
 						}
 						encoded["Properties"] = std::move(properties);
-						if (!classDefinition->DefaultOverrides.empty()) {
+						if (*DiscoveryVersion >= 7 && !classDefinition->DefaultOverrides.empty()) {
 							Json Overrides = Json::array();
 							for (const auto &Override : classDefinition->DefaultOverrides) {
 								const auto &Property = *classDefinition->AllProperties.at(Override.Property);
@@ -2021,7 +2025,7 @@ namespace gargantuan {
 					definitions.push_back(std::move(encoded));
 				}
 				return SerializeBoundedResponse(SuccessResponse(requestId, {
-					{"SchemaDiscoveryVersion", 7},
+					{"SchemaDiscoveryVersion", *DiscoveryVersion},
 					{"RegistryGeneration", GetRuntimeSchemaLifecycle().GetActiveGeneration()},
 					{"Definitions", std::move(definitions)},
 					{"Classes", std::move(classes)},
