@@ -13,7 +13,7 @@ records syntax, lifecycle, limits, discovery compatibility, and exclusions.
 
 | Gate | Evidence / current state |
 | --- | --- |
-| Classgen | Generation succeeds; 26 focused literal/identity/duplicate/malformed/bound checks pass locally, including both finite Float extrema; repeated by both Native CI jobs. |
+| Classgen | Generation succeeds; 26 focused literal/identity/duplicate/malformed/bound checks pass locally, including both finite Float extrema; repeated by both Native CI jobs. A repeated generation skipped all 62 outputs. Base-chain dependency tracking avoids regenerating unrelated classes. |
 | Native compilation | Local MSVC syntax checks pass for runtime schema, generated TextBox, EditorHost, and the focused fixture; full Release build pending hosted CI. |
 | Construction | `gargantuan_concrete_property_defaults` compares direct construction, registry construction, effective resolution, and actual production GetSchema across all prepared-safe saved properties on the five migrated classes, Frame, Part, UIListLayout, and an inherited-label fixture. Pending execution. |
 | Inheritance | Fixture protects no-override fallback, inherited override, nearer TextBox/TextButton override, exact declaring pointer identity, and stale concrete/declaring versions. |

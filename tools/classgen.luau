@@ -56,13 +56,6 @@ local GenerationModified = 0
 for _, File in { "tools/classgen.luau", "tools/libs/classes.luau", "tools/libs/types.luau", "tools/libs/defaultOverrides.luau" } do
 	GenerationModified = math.max(GenerationModified, fs.metadata(File).modified:toSeconds())
 end
-for _, Target in TARGETS do
-	for _, Entry in fs.listDirectory(Target.input) do
-		if Entry.type == "file" and string.match(Entry.name, "%.luau$") then
-			GenerationModified = math.max(GenerationModified, fs.metadata(path.join(Target.input, Entry.name)).modified:toSeconds())
-		end
-	end
-end
 
 const function pushTypeDependencies(state: GenerationState, type: types.Type)
 	if type.cIncludes then
@@ -373,15 +366,17 @@ end
 
 const function assembleFile(target: Target, inputFilepath: path.Pathlike)
 	const class: classes.Class = luau.loadModule(inputFilepath)
+	local inputLastModified = math.max(GenerationModified, fs.metadata(inputFilepath).modified:toSeconds())
 	const ResolvedOverrides = DefaultOverrides.Resolve(class, function(Name)
 		for _, Target in TARGETS do
 			const File = path.join(Target.input, Name .. ".luau")
-			if fs.exists(File) then return luau.loadModule(File) end
+			if fs.exists(File) then
+				inputLastModified = math.max(inputLastModified, fs.metadata(File).modified:toSeconds())
+				return luau.loadModule(File)
+			end
 		end
 		return nil
 	end)
-
-	local inputLastModified = math.max(GenerationModified, fs.metadata(inputFilepath).modified:toSeconds())
 
 	local headerOutput = path.join(target.headerOutput, class.name .. ".hpp")
 	local isHeaderUpdated = not args:has("force")
