@@ -97,6 +97,7 @@ them in scope rather than silently selecting one source.
 The following documents describe recently implemented, source-verified slices:
 
 - [Runtime schema](../src/content/docs/developing/runtime-schema.mdx)
+- [Concrete-class property default foundation](../../devdocs/CurrentArchitecture/ConcreteClassPropertyDefaults.md)
 - [Render extraction](../src/content/docs/developing/render-extraction.mdx)
 - [Platform and input boundary](../../devdocs/CurrentArchitecture/PlatformInputBoundary.md)
 - [Player runtime](../../devdocs/CurrentArchitecture/PlayerRuntime.md)

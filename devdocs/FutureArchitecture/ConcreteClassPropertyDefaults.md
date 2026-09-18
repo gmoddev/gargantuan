@@ -508,6 +508,14 @@ format change belongs in this architecture task.
 
 ## Gate
 
+Implementation status: the native declaration, generated construction, sparse
+runtime resolver and schema-discovery v7 foundation are implemented on
+`feature/concrete-property-defaults`; qualification is tracked in the
+[foundation receipt](../Validation/ConcreteClassPropertyDefaults.md). The
+[implemented contract](../CurrentArchitecture/ConcreteClassPropertyDefaults.md)
+defines the exact literal syntax and bounds. Production reset integration and
+reset-through-batch qualification remain separate subsequent work.
+
 **READY FOR IMPLEMENTATION: YES.**
 
 **Reset qualification remains BLOCKED** until the effective-default foundation

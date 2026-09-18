@@ -60,7 +60,7 @@ UTF-8 bytes with no NUL.
 | `CreateProject` | Creates, initially persists, and adopts a minimum project without accepting serialized state or revision input. |
 | `GetProjectState` | Returns authoritative/persisted revisions, derived dirty state, destination, and bounded history status. |
 | `SaveProject` / `SaveProjectAs` | Optionally compare `ExpectedRevision`, then atomically persist an exact authoritative revision; Save As adopts its validated destination only after success. |
-| `GetSchema` | Returns class compatibility metadata plus schema-discovery v6 definitions, native property semantics, and registry generation. |
+| `GetSchema` | Returns class compatibility metadata plus schema-discovery v7 definitions, sparse concrete-class default overrides, native property semantics, and registry generation. |
 | `GetSnapshot` | Returns snapshot v6 plus editor-property projection v1 and establishes the session cursor. |
 | `PollChanges` | Returns scoped wire-journal v6 records after that cursor. |
 | `SetProperty` | Applies a schema-identified closed native-property `WireValue` through `MutationGateway`; legacy Name remains compatible. |

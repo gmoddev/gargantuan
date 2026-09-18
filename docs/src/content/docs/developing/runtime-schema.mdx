@@ -112,7 +112,7 @@ unknown item. General migrations are not implemented, so exact version equality
 is the current policy. Attributes still reject enum values and Tags are
 unchanged.
 
-EditorHost `GetSchema` exposes schema-discovery version 6, active registry
+EditorHost `GetSchema` exposes schema-discovery version 7, active registry
 generation, and deterministic class/enum/extension definitions while retaining its old
 `Classes` DTO. Studio caches immutable definitions by `SchemaId` plus
 definition version and selects the active set by registry generation. Studio
@@ -132,8 +132,21 @@ on property metadata. Engine derives it from generated prepared-store eligibilit
 and effective Studio access, and revalidates every request. Datatype alone does
 not establish support. References, Source, override/handwritten setters and
 custom/extension maps are excluded. Protocol version 1 and schema discovery
-version 6 remain compatible with clients that ignore this optional field; see
+versions 6/7 retain this optional field; see
 [EditorHost](../editor-host/) for the batch boundary.
+
+Native classes can declare sparse inherited property-default overrides. The
+same typed declaration generates raw construction initialization and frozen
+class-owned metadata; declaring property identity and `Unmodified` remain
+unchanged. Version 7 adds `Definitions[].DefaultOverrides`, carrying declaring
+ID/version, canonical property identity, and a closed `Default` value. Resolve
+the nearest override along the concrete class base chain before falling back to
+the declaring property default. Strict older readers reject version 7 until
+updated; legacy `Classes` retains its declared-default projection.
+
+See the [concrete-default foundation contract](https://github.com/gmoddev/gargantuan/blob/feature/concrete-property-defaults/devdocs/CurrentArchitecture/ConcreteClassPropertyDefaults.md)
+for construction order, bounds and unsupported cases. Runtime reset integration
+and Studio reset controls remain subsequent work.
 
 Extension values are sparse per-Instance runtime state distinct from Attributes.
 Missing overrides read the frozen default. Each Instance is limited to 128

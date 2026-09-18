@@ -15,6 +15,39 @@
 #include <utility>
 
 namespace gargantuan {
+	std::optional<WireValue> EncodePropertyDefault(const InstanceProperty &Property, const std::any &Value) {
+		if (Property.SemanticType == InstanceProperty::DataType::NativeEnum &&
+			Property.NativeEnumType && Property.ReadEncodedEnumValue) {
+			auto Number = Property.ReadEncodedEnumValue(Value);
+			auto Type = Enums::GetEnums().find(*Property.NativeEnumType);
+			if (!Number || Type == Enums::GetEnums().end()) return std::nullopt;
+			auto Item = Type->second->FromValue(*Number);
+			if (!Item) return std::nullopt;
+			return WireEnumItem{*Property.NativeEnumType, std::string(Item->Name)};
+		}
+		if (Property.SemanticType == InstanceProperty::DataType::ObjectReference)
+			return Property.Nullable ? std::optional<WireValue>(std::monostate{}) : std::nullopt;
+		return EncodeNativeWireValue(Value);
+	}
+
+	const std::any *RuntimeSchemaRegistry::ResolveEffectivePropertyDefault(
+		SchemaId ConcreteClassId, std::uint32_t ConcreteVersion,
+		SchemaId DeclaringClassId, std::uint32_t DeclaringVersion, std::string_view PropertyName) const {
+		const auto *Concrete = FindClassById(ConcreteClassId);
+		if (!Concrete || Concrete->DefinitionVersion != ConcreteVersion) return nullptr;
+		const auto Found = Concrete->AllProperties.find(std::string(PropertyName));
+		if (Found == Concrete->AllProperties.end()) return nullptr;
+		const auto *Property = Found->second;
+		if (Property->DeclaringSchemaId != DeclaringClassId || Property->DeclaringDefinitionVersion != DeclaringVersion ||
+			Property->CustomSchemaPropertyType || Property->Signal) return nullptr;
+		for (auto *Current = Concrete; Current; Current = Current->BaseSchemaId ? FindClassById(*Current->BaseSchemaId) : nullptr) {
+			for (const auto &Override : Current->DefaultOverrides)
+				if (Override.Property == PropertyName) return &Override.Value;
+			if (Current->Id == DeclaringClassId) break;
+		}
+		return Property->Unmodified.has_value() ? &Property->Unmodified : nullptr;
+	}
+
 	namespace {
 		bool IsValidUtf8(std::string_view value) {
 			for (std::size_t index = 0; index < value.size();) {
@@ -184,6 +217,10 @@ namespace gargantuan {
 			InvalidDefinition(definition, "RegisterNative requires NativeEngine provenance");
 		if (definition.ConstructionKind != SchemaClassConstructionKind::Native)
 			InvalidDefinition(definition, "RegisterNative requires native construction metadata");
+		if (definition.DefaultOverrides.size() > MaximumClassDefaultOverrides)
+			InvalidDefinition(definition, "too many class default overrides");
+		std::sort(definition.DefaultOverrides.begin(), definition.DefaultOverrides.end(),
+			[](const auto &Left, const auto &Right) { return Left.Property < Right.Property; });
 		if (definition.Superclass.has_value() != definition.BaseSchemaId.has_value())
 			InvalidDefinition(definition, "base name and base SchemaId must either both exist or both be absent");
 		definition.CanonicalName = ClassCanonicalName(definition);
@@ -318,7 +355,7 @@ namespace gargantuan {
 			InvalidDefinition(definition, "SchemaId does not match deterministic custom class identity");
 		if (definition.ConstructionKind != SchemaClassConstructionKind::CustomData || definition.Constructor)
 			InvalidDefinition(definition, "custom class must use bounded data-only construction");
-		if (!definition.Properties.empty() || !definition.Methods.empty())
+		if (!definition.Properties.empty() || !definition.Methods.empty() || !definition.DefaultOverrides.empty())
 			InvalidDefinition(definition, "custom class cannot supply native members or callbacks");
 		if (baseCanonicalName.empty() || baseCanonicalName.find('.') == std::string_view::npos ||
 			baseCanonicalName.size() > MaximumSchemaNamespaceBytes + MaximumSchemaDefinitionNameBytes + 1 ||
@@ -499,6 +536,7 @@ namespace gargantuan {
 		}
 		std::unordered_map<SchemaId, unsigned char, SchemaIdHash> visitState;
 		std::unordered_map<SchemaId, FlattenedDefinition, SchemaIdHash> flattened;
+		std::size_t OverrideCount = 0, OverrideBytes = 0;
 		std::function<void(SchemaClassDefinition &)> visit = [&](SchemaClassDefinition &definition) {
 			auto &state = visitState[definition.Id];
 			if (state == 1) InvalidDefinition(definition, "inheritance cycle detected");
@@ -525,6 +563,33 @@ namespace gargantuan {
 			}
 			if (result.Depth > MaximumCustomClassInheritanceDepth)
 				InvalidDefinition(definition, "inheritance exceeds its depth limit");
+			if (!definition.DefaultOverrides.empty() && definition.ConstructionKind != SchemaClassConstructionKind::Native)
+				InvalidDefinition(definition, "custom inherited default overrides are not supported");
+			std::unordered_set<std::string> OverrideNames;
+			for (const auto &Override : definition.DefaultOverrides) {
+				const auto Found = result.Properties.find(Override.Property);
+				if (Found == result.Properties.end() || !OverrideNames.insert(Override.Property).second)
+					InvalidDefinition(definition, "unknown or duplicate inherited default override");
+				const auto &Property = *Found->second;
+				if (Property.DeclaringSchemaId != Override.DeclaringClassSchemaId ||
+					Property.DeclaringDefinitionVersion != Override.DeclaringDefinitionVersion ||
+					Property.Signal || Property.CustomSchemaPropertyType || !Property.Read || !Property.Write ||
+					!Property.Editable || Property.WritePermission == Enums::Permission::Never ||
+					Property.PersistencePolicy != InstanceProperty::Persistence::Saved ||
+					Property.SemanticType == InstanceProperty::DataType::Unsupported ||
+					Property.SemanticType == InstanceProperty::DataType::ObjectReference ||
+					Property.Unmodified.type() != Override.Value.type() || !Property.IsValueValid(Override.Value))
+					InvalidDefinition(definition, "invalid inherited default type, identity, or value");
+				const auto Wire = EncodePropertyDefault(Property, Override.Value);
+				if (!Wire) InvalidDefinition(definition, "inherited default is not encodable");
+				const auto Encoded = EncodeWireValueJson(*Wire);
+				if (!Encoded || Encoded->size() > MaximumExtensionDefaultValueBytes ||
+					!DecodeWireValueJson(*Encoded))
+					InvalidDefinition(definition, "inherited default is not a bounded closed wire value");
+				OverrideBytes += Encoded->size() + Override.Property.size();
+				if (++OverrideCount > MaximumNativeDefaultOverrides || OverrideBytes > MaximumNativeDefaultOverrideBytes)
+					InvalidDefinition(definition, "native inherited defaults exceed aggregate bounds");
+			}
 			for (auto &[name, property] : definition.Properties) {
 				if (result.Properties.contains(name) || result.Methods.contains(name))
 					InvalidDefinition(definition, "member " + name + " collides with an inherited member");

@@ -6,6 +6,9 @@ return c({
 	description = "A retained GUI object that presents a logical image resource",
 	since = "0.2.0",
 
+	defaultOverrides = {
+		{ Property = "BackgroundTransparency", Value = 1 },
+	},
 	properties = {
 		Image = {
 			description = "Strict AssetService image reference",

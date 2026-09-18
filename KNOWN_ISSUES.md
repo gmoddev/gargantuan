@@ -7,7 +7,8 @@ open until its resolution criteria are implemented and verified.
 
 ## KI-009: Concrete-class constructor defaults diverge from reflected native defaults
 
-- Status: Open; reset-to-default qualification blocked.
+- Status: Open; concrete-default foundation implemented, qualification pending;
+  production reset integration remains deferred.
 - Priority: Medium.
 - Area: Runtime schema / native class construction / EditorHost Properties defaults.
 - Relevant code: `tools/classgen.luau`, `src/classes/TextLabel.cpp`,
@@ -18,7 +19,7 @@ open until its resolution criteria are implemented and verified.
 - Architecture:
   [Concrete-class property defaults](devdocs/FutureArchitecture/ConcreteClassPropertyDefaults.md).
 
-Several concrete GUI classes directly assign inherited generated backing members
+At the property-batch baseline, several concrete GUI classes directly assigned inherited generated backing members
 during construction. Those authored initial values can differ from the declaring
 `InstanceProperty::Unmodified` value that EditorHost currently exposes as
 `Default`. For example, a fresh `TextLabel` has
@@ -39,6 +40,14 @@ persistent constructor defaults, preserve transient/contextual initialization,
 update `ResetPropertyToDefault` to resolve the effective concrete default, and
 qualify fresh construction against schema discovery before Studio reset
 qualification resumes.
+
+The concrete-default foundation now moves the 16 persistent GUI assignments into
+one typed classgen declaration, generates construction and sparse schema
+overrides, and exposes effective resolution in schema discovery v7. See the
+[qualification receipt](devdocs/Validation/ConcreteClassPropertyDefaults.md).
+The issue remains open until that foundation is qualified and the subsequent
+ordinary `ResetPropertyToDefault` integration/reset qualification completes.
+Studio reset controls are not implemented by the foundation slice.
 
 ## KI-008: JSON tree cleanup can allocate during memory-exhaustion unwinding
 

@@ -56,6 +56,20 @@ namespace gargantuan {
 	inline constexpr std::size_t MaximumExtensionOverridesPerInstance = 128;
 	inline constexpr std::size_t MaximumExtensionOverrideBytesPerInstance = 32 * 1024;
 	inline constexpr std::size_t MaximumCustomSchemaPayloadBytes = 64 * 1024;
+	inline constexpr std::size_t MaximumClassDefaultOverrides = 64;
+	inline constexpr std::size_t MaximumNativeDefaultOverrides = 4096;
+	inline constexpr std::size_t MaximumNativeDefaultOverrideBytes = 64 * 1024;
+
+	struct SchemaPropertyDefaultOverride {
+		SchemaId DeclaringClassSchemaId;
+		std::uint32_t DeclaringDefinitionVersion;
+		std::string Property;
+		std::any Value;
+	};
+
+	// Shared closed-default encoding, including native enum identity.
+	[[nodiscard]] std::optional<WireValue> EncodePropertyDefault(
+		const InstanceProperty &Property, const std::any &Value);
 
 	struct SchemaClassProperty {
 		std::string Name;
@@ -81,6 +95,7 @@ namespace gargantuan {
 		SchemaId NativeHostClassId{};
 		std::optional<std::string> PendingBaseCanonicalName{};
 		std::vector<SchemaClassProperty> DeclaredCustomProperties{};
+		std::vector<SchemaPropertyDefaultOverride> DefaultOverrides{};
 		std::unordered_map<std::string, InstanceProperty> Properties{};
 		std::unordered_map<std::string, UserdataMethod<Instance>> Methods{};
 		bool EditorVisible = true;
@@ -175,6 +190,12 @@ namespace gargantuan {
 		[[nodiscard]] const SchemaClassDefinition *FindClassById(SchemaId id) const;
 		[[nodiscard]] const SchemaClassDefinition *FindClassByType(std::type_index nativeType) const;
 		[[nodiscard]] const SchemaClassDefinition *FindClassByName(std::string_view name) const;
+		// Returned storage belongs to this frozen registry. Invalid/stale identity
+		// returns null; callers must retain the registry lifetime/generation.
+		[[nodiscard]] const std::any *ResolveEffectivePropertyDefault(
+			SchemaId ConcreteClassId, std::uint32_t ConcreteVersion,
+			SchemaId DeclaringClassId, std::uint32_t DeclaringVersion,
+			std::string_view PropertyName) const;
 		[[nodiscard]] const SchemaClassProperty *FindCustomClassProperty(
 			SchemaId declaringClassId,
 			std::string_view propertyName

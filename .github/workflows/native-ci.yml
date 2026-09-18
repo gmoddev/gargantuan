@@ -80,6 +80,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) {
             throw "Class generation failed. Verify the pinned Lute installation and clang-format availability."
           }
+          lute tools/tests/DefaultOverrides
+          if ($LASTEXITCODE -ne 0) { throw "Class default override generation tests failed." }
           $RequiredGeneratedFiles = @(
             'include/gargantuan/classes/generated/Instance.hpp',
             'src/classes/generated/Instance.cpp',
@@ -243,6 +245,7 @@ jobs:
         run: |
           set -euo pipefail
           lute tools/classgen
+          lute tools/tests/DefaultOverrides
           test -f include/gargantuan/classes/generated/Instance.hpp
           test -f src/classes/generated/Instance.cpp
           test -f include/gargantuan/services/generated/Workspace.hpp

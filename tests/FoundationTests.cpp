@@ -4610,7 +4610,7 @@ namespace {
 		};
 		auto Batch = [&](Json Writes) { return Call("SetPropertyBatch", Params(std::move(Writes))); };
 		auto Schema = Call("GetSchema", Json::object());
-		Check(Schema["Result"]["SchemaDiscoveryVersion"] == 6, "batch metadata preserves schema discovery version 6");
+		Check(Schema["Result"]["SchemaDiscoveryVersion"] == 7, "batch metadata is available in schema discovery version 7");
 		std::size_t Advertised = 0;
 		for (const auto &Definition : Schema["Result"]["Definitions"]) {
 			if (!Definition.contains("Properties")) continue;
@@ -5431,7 +5431,7 @@ namespace {
 		}
 		auto schema = call("GetSchema", Json::object(), "test-token");
 		Check(
-			schema["Ok"].get<bool>() && schema["Result"]["SchemaDiscoveryVersion"] == 6 &&
+			schema["Ok"].get<bool>() && schema["Result"]["SchemaDiscoveryVersion"] == 7 &&
 				!schema["Result"]["Classes"].empty() && !schema["Result"]["Definitions"].empty(),
 			"EditorHost exposes versioned frozen schema discovery without removing the class adapter"
 		);

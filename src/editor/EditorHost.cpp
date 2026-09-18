@@ -219,21 +219,6 @@ namespace gargantuan {
 			return "Unsupported";
 		}
 
-		std::optional<WireValue> EncodePropertyDefault(const InstanceProperty &Property) {
-			if (Property.SemanticType == InstanceProperty::DataType::NativeEnum &&
-				Property.NativeEnumType && Property.ReadEncodedEnumValue) {
-				auto Value = Property.ReadEncodedEnumValue(Property.Unmodified);
-				auto Type = Enums::GetEnums().find(*Property.NativeEnumType);
-				if (!Value || Type == Enums::GetEnums().end()) return std::nullopt;
-				auto Item = Type->second->FromValue(*Value);
-				if (!Item) return std::nullopt;
-				return WireEnumItem{*Property.NativeEnumType, std::string(Item->Name)};
-			}
-			if (Property.SemanticType == InstanceProperty::DataType::ObjectReference)
-				return Property.Nullable ? std::optional<WireValue>(std::monostate{}) : std::nullopt;
-			return EncodeNativeWireValue(Property.Unmodified);
-		}
-
 		Json EncodeNativePropertyMetadata(
 			const SchemaClassDefinition &Owner,
 			const InstanceProperty &Property,
@@ -293,7 +278,7 @@ namespace gargantuan {
 			} else if (Property.SemanticType == InstanceProperty::DataType::SchemaEnum) {
 				Encoded["EnumKind"] = "Schema";
 			}
-			if (auto Default = EncodePropertyDefault(Property))
+			if (auto Default = EncodePropertyDefault(Property, Property.Unmodified))
 				Encoded["Default"] = JsonCodec::EncodeWireValue(*Default);
 			return Encoded;
 		}
@@ -2004,6 +1989,20 @@ namespace gargantuan {
 								));
 						}
 						encoded["Properties"] = std::move(properties);
+						if (!classDefinition->DefaultOverrides.empty()) {
+							Json Overrides = Json::array();
+							for (const auto &Override : classDefinition->DefaultOverrides) {
+								const auto &Property = *classDefinition->AllProperties.at(Override.Property);
+								const auto *Declaring = GetActiveRuntimeSchemaRegistry().FindClassById(Override.DeclaringClassSchemaId);
+								Overrides.push_back({
+									{"DeclaringClassSchemaId", Override.DeclaringClassSchemaId.ToString()},
+									{"DeclaringDefinitionVersion", Override.DeclaringDefinitionVersion},
+									{"Property", Override.Property},
+									{"CanonicalName", Declaring->CanonicalName + "." + Override.Property},
+									{"Default", JsonCodec::EncodeWireValue(*EncodePropertyDefault(Property, Override.Value))}});
+							}
+							encoded["DefaultOverrides"] = std::move(Overrides);
+						}
 					} else if (const auto *enumDefinition = std::get_if<SchemaEnumDefinition>(entry)) {
 						Json items = Json::array();
 						for (const auto &item : enumDefinition->Items)
@@ -2022,7 +2021,7 @@ namespace gargantuan {
 					definitions.push_back(std::move(encoded));
 				}
 				return SerializeBoundedResponse(SuccessResponse(requestId, {
-					{"SchemaDiscoveryVersion", 6},
+					{"SchemaDiscoveryVersion", 7},
 					{"RegistryGeneration", GetRuntimeSchemaLifecycle().GetActiveGeneration()},
 					{"Definitions", std::move(definitions)},
 					{"Classes", std::move(classes)},
