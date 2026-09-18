@@ -1,5 +1,5 @@
 ---
-status: implemented
+status: current
 owner: runtime-authoring
 last_verified: 2026-09-18
 related_code:
@@ -15,6 +15,8 @@ Reset applies an ordinary value from the existing
 [accepted reset design](../FutureArchitecture/AuthoritativePropertyResetToDefault.md)
 remains in force. Qualification is recorded in the
 [reset receipt](../Validation/AuthoritativePropertyResetToDefault.md).
+The native V1 reset surface and per-target prepared batch consumption model are
+qualified on MSVC Release and Linux ASan/UBSan/LSan and ready for Studio consumption.
 
 ## Native operation and eligibility
 
@@ -58,7 +60,7 @@ effective-default value resolver or prepared-safe eligibility.
 ## Discovery and compatibility
 
 `GetSchema` accepts an optional `SchemaDiscoveryVersion` of 6 or 7. Omission
-returns version 6, as does explicit 6, preserving the deployed Studio reader
+returns version 6, as does explicit 6, preserving the inspected Studio reader
 that accepts only 5/6. Version 6 omits class-owned overrides and retains declared
 property defaults and ordinary editing metadata. Version 7 must be requested:
 
@@ -73,7 +75,8 @@ requests reject with `UnsupportedCapabilityVersion`; unknown fields reject with
 `MalformedRequest`. Protocol major 1 and SetPropertyBatch V1 are unchanged.
 
 This explicit selection corrects the foundation's parameterless-v7 response:
-inspection of the existing Studio `StudioSchemaCache.Refresh` proved that an
+inspection of Studio `StudioSchemaCache.Refresh` at
+`d3b1c6b77e73105a0331b4925bd5cb347c3e6e28` (`foundation/studio-authoring`) proved that an
 unsolicited v7 response would disable ordinary schema-backed editing. A new
 consumer can first request v7; older Engines reject the parameter, allowing
 ordinary discovery fallback while reset stays disabled. Successful v6 discovery

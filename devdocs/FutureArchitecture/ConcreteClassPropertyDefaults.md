@@ -523,5 +523,6 @@ reset integration and reset-through-batch qualification.
 The constructor/schema prerequisite gate is satisfied. Production reset
 behavior is not qualified by this foundation slice.
 
-The subsequent Engine reset slice is implemented and awaiting its final hosted
-qualification. Studio schema-v7 consumption and reset controls follow that gate.
+The subsequent Engine reset slice is implemented and qualified on MSVC Release
+and Linux ASan/UBSan/LSan. Studio schema-v7 consumption and reset controls are the
+next separate task; see the reset receipt for the supported surface and evidence.

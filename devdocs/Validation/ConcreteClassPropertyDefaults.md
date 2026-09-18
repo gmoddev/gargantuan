@@ -1,7 +1,9 @@
 # Concrete-class property default qualification
 
 Status: concrete-class default foundation qualified on 2026-09-18 (UTC).
-Production reset-to-default remains unqualified.
+Production reset-to-default was outside this foundation qualification; its
+subsequent [implementation and qualification](AuthoritativePropertyResetToDefault.md)
+are recorded separately.
 
 Source base: accepted architecture `a10779015186b5d31416bdb44d72920fb6ec7bbc`,
 on Engine property-batch baseline `04e1353edfe24ffc9d23968f8791afaf245f8ee8`.
@@ -55,11 +57,12 @@ persistence/Clone scenarios inside that fixture, including explicit saved
 fields for values equal to either kind of default.
 
 No Studio, Foundation 3L, prepared coordinator, mutation command, or persistence
-format changes are part of this slice. Runtime reset still uses the declared
-fallback and is intentionally not qualified. KI-009 remains open for that
-remaining production reset integration and its subsequent qualification.
+format changes are part of this foundation slice. At this recorded revision,
+runtime reset still used the declared fallback and KI-009 remained open for
+the subsequent production reset integration and qualification.
 
-The foundation gate is satisfied. The next Engine task is to update ordinary
-`ResetPropertyToDefault` to resolve the effective concrete default and resume
-effective-default reset-through-SetPropertyBatch qualification. Studio schema-v7
-consumption and reset controls follow only after that Engine gate succeeds.
+The foundation gate is satisfied. The subsequent Engine task updated ordinary
+`ResetPropertyToDefault` and qualified effective-default reset through
+SetPropertyBatch, as recorded in the reset receipt above. It also added explicit
+v7 discovery selection while preserving parameterless v6 for older readers.
+Studio schema-v7 consumption and reset controls are now the next separate task.

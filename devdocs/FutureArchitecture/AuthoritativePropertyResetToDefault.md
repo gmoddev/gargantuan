@@ -284,10 +284,13 @@ Compatibility direction:
 **AUTHORITATIVE DEFAULT SOURCE: SUPERSEDED by
 `ConcreteClassPropertyDefaults.md`.**
 
-**RESET IMPLEMENTATION: COMPLETE; final-source qualification pending.**
+**RESET IMPLEMENTATION AND QUALIFICATION: COMPLETE for native V1.**
 
 The foundation prerequisite is satisfied. The production effective-default reset
-path and existing SetPropertyBatch consumption proof are implemented. See the
-current reset receipt for the hosted qualification result.
+path and existing SetPropertyBatch consumption proof pass MSVC Release and Linux
+ASan/UBSan/LSan. See the current reset receipt for hosted evidence.
 
-Studio reset controls remain out of scope until that gate passes.
+**READY FOR STUDIO CONSUMPTION.** The next separate task is Studio v7 schema
+consumption and single/multi-object reset controls with whole-selection admission
+and authoritative history/journal reconciliation. This Engine gate does not
+claim that Studio reset UX is implemented.

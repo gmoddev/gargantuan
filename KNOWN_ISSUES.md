@@ -7,8 +7,8 @@ open until its resolution criteria are implemented and verified.
 
 ## KI-009: Concrete inherited defaults and authoritative reset
 
-- Status: Open pending final-source reset qualification; foundation qualified
-  and production effective-default reset integration implemented.
+- Status: Resolved on 2026-09-18 for the supported native reset surface;
+  concrete defaults and production reset are implemented and qualified.
 - Priority: Medium.
 - Area: Runtime schema / native class construction / EditorHost Properties defaults.
 - Relevant code: `tools/classgen.luau`, `src/classes/TextLabel.cpp`,
@@ -45,9 +45,14 @@ one typed classgen declaration, generates construction and sparse schema
 overrides, and exposes effective resolution in schema discovery v7. See the
 [qualification receipt](devdocs/Validation/ConcreteClassPropertyDefaults.md).
 The foundation passed 179 construction/schema property cases and 15
-persistence/Clone scenarios on MSVC Release and Linux ASan/UBSan/LSan. The issue
-remains open until final-source reset qualification completes.
-Studio reset controls are not implemented by the foundation slice.
+persistence/Clone scenarios on MSVC Release and Linux ASan/UBSan/LSan. Reset
+qualification now also passes 20 native cases, single authoring history/replay,
+four selection modes, 256 per-target resets and 257-write rejection, with normal
+journal/replication and atomic prepared Undo/Redo. Full hosted Windows 60/60 and
+Linux sanitizer 52/52 gates pass on the implementation revision recorded in the
+reset receipt. Explicit v7 discovery preserves parameterless v6 ordinary editing.
+Contextual, custom and other unsupported cases remain excluded as documented;
+Studio reset controls are the next separate task.
 
 ## KI-008: JSON tree cleanup can allocate during memory-exhaustion unwinding
 
