@@ -44,8 +44,10 @@ Constructor-only persistent authored defaults are not acceptable as a second
 truth set. Transient/contextual construction state remains distinct and is not
 made resettable merely because a constructor assigns it.
 
-Reset qualification is blocked until the effective-default foundation described
-by the superseding ADR is implemented and qualified.
+The effective-default foundation described by the superseding ADR is now
+[implemented and qualified](../Validation/ConcreteClassPropertyDefaults.md).
+Its prerequisite gate is satisfied; production reset integration and
+reset-through-batch qualification remain the next separate Engine task.
 
 ## Authoritative reset value
 

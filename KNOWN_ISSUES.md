@@ -5,9 +5,9 @@ to contributors but do not belong in the feature roadmap. An entry remains
 open until its resolution criteria are implemented and verified.
 
 
-## KI-009: Concrete-class constructor defaults diverge from reflected native defaults
+## KI-009: Native reset still uses declared rather than effective concrete defaults
 
-- Status: Open; concrete-default foundation implemented, qualification pending;
+- Status: Open; concrete-default foundation implemented and qualified;
   production reset integration remains deferred.
 - Priority: Medium.
 - Area: Runtime schema / native class construction / EditorHost Properties defaults.
@@ -26,27 +26,26 @@ during construction. Those authored initial values can differ from the declaring
 `BackgroundTransparency = 1` while `GuiObject` declares `0`;
 `Instance::ResetPropertyToDefault` currently restores `0`.
 
-The mismatch is not isolated: TextBox, TextButton, ImageLabel and ScrollingFrame
-also establish persistent inherited presentation/interaction values in
-constructors. Transient/read-only initialization such as `GuiState` and
+The baseline mismatch also affected TextBox, TextButton, ImageLabel and
+ScrollingFrame constructor assignments. Those persistent defaults now use
+generated initialization and matching sparse schema overrides.
+Transient/read-only initialization such as `GuiState` and
 `Workspace.CurrentCamera` is a separate construction concern. Native
 persistence currently serializes all saved writable values, so this is not a
 save/reopen loss defect.
 
-Resolution requires the accepted narrow concrete-class inherited-default
-foundation: one declarative source must feed both construction and effective
-schema/reset discovery without permitting general property shadowing. Migrate
-persistent constructor defaults, preserve transient/contextual initialization,
-update `ResetPropertyToDefault` to resolve the effective concrete default, and
-qualify fresh construction against schema discovery before Studio reset
-qualification resumes.
+The remaining resolution is to update `ResetPropertyToDefault` to consume the
+effective concrete default through its existing mutation path, then qualify
+reset-through-SetPropertyBatch before Studio reset qualification resumes.
 
 The concrete-default foundation now moves the 16 persistent GUI assignments into
 one typed classgen declaration, generates construction and sparse schema
 overrides, and exposes effective resolution in schema discovery v7. See the
 [qualification receipt](devdocs/Validation/ConcreteClassPropertyDefaults.md).
-The issue remains open until that foundation is qualified and the subsequent
-ordinary `ResetPropertyToDefault` integration/reset qualification completes.
+The foundation passed 179 construction/schema property cases and 15
+persistence/Clone scenarios on MSVC Release and Linux ASan/UBSan/LSan. The issue
+remains open until ordinary `ResetPropertyToDefault` integration and subsequent
+reset qualification complete.
 Studio reset controls are not implemented by the foundation slice.
 
 ## KI-008: JSON tree cleanup can allocate during memory-exhaustion unwinding

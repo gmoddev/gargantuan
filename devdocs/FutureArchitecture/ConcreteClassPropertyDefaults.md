@@ -509,23 +509,22 @@ format change belongs in this architecture task.
 ## Gate
 
 Implementation status: the native declaration, generated construction, sparse
-runtime resolver and schema-discovery v7 foundation are implemented on
-`feature/concrete-property-defaults`; qualification is tracked in the
+runtime resolver and schema-discovery v7 foundation are implemented and
+qualified on `feature/concrete-property-defaults`; evidence is recorded in the
 [foundation receipt](../Validation/ConcreteClassPropertyDefaults.md). The
 [implemented contract](../CurrentArchitecture/ConcreteClassPropertyDefaults.md)
 defines the exact literal syntax and bounds. Production reset integration and
 reset-through-batch qualification remain separate subsequent work.
 
-**READY FOR IMPLEMENTATION: YES.**
+**Concrete-default foundation implementation and qualification: COMPLETE.**
 
-**Reset qualification remains BLOCKED** until the effective-default foundation
-is implemented and the constructor/schema equivalence proof passes.
+The constructor/schema prerequisite gate is satisfied. Production reset
+behavior is not qualified by this foundation slice.
 
 The exact next Engine task is:
 
-> Implement the narrow concrete-class inherited-default foundation in
-> classgen/runtime schema, migrate the persistent GUI constructor defaults to
-> it, expose bounded schema-discovery metadata, and qualify fresh construction
-> against effective default resolution. Do not implement Studio reset controls
-> and do not resume reset-through-SetPropertyBatch qualification in the same
-> slice.
+> Integrate the canonical effective-default resolver into ordinary
+> `Instance::ResetPropertyToDefault` while preserving the existing mutation
+> path, then resume effective-default reset-through-SetPropertyBatch
+> qualification. Studio schema-v7 consumption and reset controls remain a
+> subsequent task after that Engine gate succeeds.

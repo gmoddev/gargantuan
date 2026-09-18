@@ -3,6 +3,8 @@
 This implements the declaration and construction portion of the
 [accepted design](../FutureArchitecture/ConcreteClassPropertyDefaults.md).
 Reset mutation and Studio reset controls are separate, unqualified work.
+The foundation is qualified on MSVC Release and Linux ASan/UBSan/LSan; see the
+[validation receipt](../Validation/ConcreteClassPropertyDefaults.md).
 
 ## One declaration
 
@@ -126,9 +128,21 @@ native value/name bytes, and exact added discovery bytes. Static class seeds and
 the active registry retain their normal schema copies; these costs are per
 schema copy, not per live Instance. The normal native-only steady state retains
 three copies: generated `CLASS_DEFINITION` objects, registration seeds, and the
-active registry. On MSVC, their additional fixed storage totals 10,224 bytes
-(`3 * (16 * 120 + 62 * 24)`), excluding name allocations and allocator overhead.
+active registry. On MSVC, their additional fixed member/record payload totals
+10,224 bytes (`3 * (16 * 120 + 62 * 24)`), excluding name allocations,
+container capacity slack, and allocator overhead. This is an object-payload
+account, not a process-RSS or allocator-reservation measurement. Project
+registries also retain the common `SchemaDefinition` variant storage for each
+additional bounded custom class/enum/extension definition; those definitions
+cannot add inherited native override records. With a 24-byte vector on the
+qualified ABIs, the added variant payload is bounded by 24 bytes per additional
+definition, or at most `24 * (64 + 64 + 64) = 4,608` bytes per project registry
+under the existing definition-count limits.
 A concurrently retained candidate or old registry adds its own bounded copy.
+Linux/libstdc++ measures a 72-byte record and 24-byte vector: 2,640 fixed
+member/record bytes per native schema copy, or 7,920 for the usual three copies,
+plus name/value allocation. Both platforms measure 62 native value bytes,
+227 property-name bytes, and 672 encoded value bytes across all 16 overrides.
 Separately, the declared-string correction makes 22 existing literal defaults
 own native strings and two retain native string views inside their existing
 `std::any` fields; allocation depends
@@ -137,6 +151,8 @@ classes it adds 2,493 compact JSON bytes across declared and legacy inherited
 projections. That delta is derived from each newly encodable literal's wire
 record and its existing inheritance fan-out; it is additional to the fixture's
 measured `DefaultOverrides` delta. No new string-default table is stored.
+That measured override delta is 3,695 bytes on both qualified platforms, for
+a total production discovery increase of 6,188 bytes including string defaults.
 See the
 [qualification receipt](../Validation/ConcreteClassPropertyDefaults.md).
 
