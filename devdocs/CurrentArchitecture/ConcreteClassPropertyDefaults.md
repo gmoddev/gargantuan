@@ -30,8 +30,9 @@ schema validation repeats identity/type checks and checks native validators,
 ranges, enum values, closed wire encoding, and resource bounds. There are no new
 properties, setter callbacks, or changes to prepared eligibility.
 
-Classgen also materializes declared string literals as `std::string` before
-storing `Unmodified`. The old generator stored those literals as `const char*`
+Classgen also materializes declared string literals in their declared native
+type (`std::string` or `std::string_view`) before storing `Unmodified`.
+The old generator stored those literals as `const char*`
 inside `std::any`, so closed-value discovery omitted them even though backing
 members held native strings. The authored declared value is unchanged; its
 native storage and discovery now match construction. This correction is
@@ -128,6 +129,14 @@ three copies: generated `CLASS_DEFINITION` objects, registration seeds, and the
 active registry. On MSVC, their additional fixed storage totals 10,224 bytes
 (`3 * (16 * 120 + 62 * 24)`), excluding name allocations and allocator overhead.
 A concurrently retained candidate or old registry adds its own bounded copy.
+Separately, the declared-string correction makes 22 existing literal defaults
+own native strings and two retain native string views inside their existing
+`std::any` fields; allocation depends
+on the standard-library small-object/string optimization. For the 62 production
+classes it adds 2,493 compact JSON bytes across declared and legacy inherited
+projections. That delta is derived from each newly encodable literal's wire
+record and its existing inheritance fan-out; it is additional to the fixture's
+measured `DefaultOverrides` delta. No new string-default table is stored.
 See the
 [qualification receipt](../Validation/ConcreteClassPropertyDefaults.md).
 

@@ -101,10 +101,10 @@ const function assembleProperties(state: GenerationState)
 		if property.type.objectClassName then
 			state.definitionProperties:line(`.SetObjectReferenceType(SchemaId::FromNativeName("Engine", {string.format("%q", property.type.objectClassName)}), {tostring(property.type.nullable == true)})`)
 		end
-		-- String literals must own the native string value in std::any, just as
-		-- the generated backing member does; const char* is not a wire value.
+		-- Materialize the declared native string type in std::any, just as the
+		-- backing member does; an unconverted const char* is not a wire value.
 		const declaredDefault = if property.type.editorDataType == "String"
-			then `std::string({property.unmodified})` else property.unmodified
+			then `static_cast<{property.type.cType}>({property.unmodified})` else property.unmodified
 		state.definitionProperties:line(`.SetUnmodified({declaredDefault})`)
 		if property.serializable then
 			state.definitionProperties:line(`.SetSerializable()`)
