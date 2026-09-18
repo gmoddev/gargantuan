@@ -31,6 +31,8 @@ Reject({ { Property = "Transparency", Value = 0 }, { Property = "Transparency", 
 Reject({ { Property = "Transparency" } })
 Reject({ { Property = "Transparency", Value = 0, Replicated = false } })
 Reject({ Transparency = 1 })
+Reject(false)
+Reject({ [2] = { Property = "Transparency", Value = 1 } })
 Reject({ { Property = "Transparency", Value = 0 / 0 } })
 Reject({ { Property = "Transparency", Value = math.huge } })
 Reject({ { Property = "Transparency", Value = 2 } })

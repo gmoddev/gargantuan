@@ -39,11 +39,14 @@ local function Expression(Property, Value)
 end
 
 function Overrides.Resolve(Class, FindClass)
-	local Entries = Class.defaultOverrides or {}
+	local Entries = if Class.defaultOverrides ~= nil then Class.defaultOverrides else {}
 	if type(Entries) ~= "table" or #Entries > 64 then Fail("expected at most 64 override records") end
+	local Count = 0
 	for Key in Entries do
 		if type(Key) ~= "number" or Key % 1 ~= 0 or Key < 1 or Key > #Entries then Fail("expected a dense override list") end
+		Count += 1
 	end
+	if Count ~= #Entries then Fail("expected a dense override list") end
 	local Seen, Result = {}, {}
 	for _, Entry in Entries do
 		if type(Entry) ~= "table" or type(Entry.Property) ~= "string" or Entry.Value == nil then Fail("malformed override record") end

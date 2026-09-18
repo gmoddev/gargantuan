@@ -13,7 +13,7 @@ records syntax, lifecycle, limits, discovery compatibility, and exclusions.
 
 | Gate | Evidence / current state |
 | --- | --- |
-| Classgen | Generation succeeds; 22 focused literal/identity/duplicate/malformed/bound checks pass locally; repeated by both Native CI jobs. |
+| Classgen | Generation succeeds; 24 focused literal/identity/duplicate/malformed/bound checks pass locally; repeated by both Native CI jobs. |
 | Native compilation | Local MSVC syntax checks pass for runtime schema, generated TextBox, EditorHost, and the focused fixture; full Release build pending hosted CI. |
 | Construction | `gargantuan_concrete_property_defaults` compares direct construction, registry construction, effective resolution, and actual production GetSchema across all prepared-safe saved properties on the five migrated classes, Frame, Part, UIListLayout, and an inherited-label fixture. Pending execution. |
 | Inheritance | Fixture protects no-override fallback, inherited override, nearer TextBox/TextButton override, exact declaring pointer identity, and stale concrete/declaring versions. |
@@ -23,6 +23,7 @@ records syntax, lifecycle, limits, discovery compatibility, and exclusions.
 | Legacy discovery | Legacy Classes keeps its declared fallback. Strict older schema-version readers reject v7 safely and need a later consumer update. |
 | Resource accounting | 16 overrides; ABI record size and exact JSON delta printed by native fixture. Measurement pending execution. |
 | MSVC / sanitizers | Required hosted Native CI pending. Remote `dockerbox` SSH unavailable; no sustained local build substituted. |
+| Documentation | Astro build passed all 19 pages locally; whitespace check passed. |
 
 No Studio, Foundation 3L, prepared coordinator, mutation command, or persistence
 format changes are part of this slice. Runtime reset still uses the declared
