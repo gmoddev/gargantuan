@@ -7,6 +7,7 @@
 
 #include "render/sdl/SDLMeshCache.hpp"
 #include "render/sdl/SDLRenderPass.hpp"
+#include "render/sdl/SDLSceneDepth.hpp"
 #include "render/sdl/SDLSkinPaletteCache.hpp"
 #include "render/sdl/SDLTextureCache.hpp"
 
@@ -151,11 +152,7 @@ namespace gargantuan {
 				.type = SDL_GPU_TEXTURETYPE_2D, .format = ColorFormat, .usage = SDL_GPU_TEXTUREUSAGE_COLOR_TARGET,
 				.width = Width, .height = Height, .layer_count_or_depth = 1, .num_levels = 1,
 			};
-			SDL_GPUTextureCreateInfo DepthInfo{
-				.type = SDL_GPU_TEXTURETYPE_2D, .format = SDL_GPU_TEXTUREFORMAT_D16_UNORM,
-				.usage = SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET, .width = Width, .height = Height,
-				.layer_count_or_depth = 1, .num_levels = 1,
-			};
+			const auto DepthInfo = GetSDLSceneDepthTargetInfo(Gpu, Width, Height);
 			SDL_GPUTransferBufferCreateInfo DownloadInfo{
 				.usage = SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD, .size = static_cast<std::uint32_t>(DownloadBytes),
 			};

@@ -22,6 +22,14 @@ The governing dependency rule is:
 
 ## Publication contract
 
+Published camera matrices use explicit right-handed, conventional zero-to-one
+depth: the declared near/far planes map to 0/1. Both incremental publication and
+full extraction use this convention. The SDL runtime/editor scene attachment
+and opaque pipelines share a checked D32 format; LESS testing and clear=1 are
+unchanged. Shadow depth is independent. See the
+[KI-008 Engine qualification](../../../../../devdocs/Validation/RendererDepthKI008.md)
+for the reproduced D16 precision failure, clipping correction and resource bounds.
+
 A `RenderPublication` owns its sequence/base identity, viewport/camera/complete environment
 state, deterministic object creates/updates/removes, dynamic mesh lifecycle and
 dirty ranges, a complete immutable UI frame when UI changed, and diagnostics.

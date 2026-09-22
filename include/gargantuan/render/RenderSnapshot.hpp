@@ -28,6 +28,8 @@ namespace gargantuan {
 	};
 
 	struct RenderCameraSnapshot {
+		// Camera matrices use right-handed, conventional zero-to-one depth.
+		// Near maps to 0; far maps to 1. Do not depend on per-TU GLM macros.
 		glm::vec3 Position{0.0f};
 		glm::vec3 RightDirection{1.0f, 0.0f, 0.0f};
 		glm::vec3 UpDirection{0.0f, 1.0f, 0.0f};

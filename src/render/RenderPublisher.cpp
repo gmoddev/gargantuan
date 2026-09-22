@@ -118,7 +118,7 @@ namespace gargantuan {
 			Result.NearPlane = Input.NearPlane;
 			Result.FarPlane = Input.FarPlane;
 			Result.ViewMatrix = glm::lookAt(Input.Position, Input.Position + Look, Up);
-			Result.ProjectionMatrix = glm::perspective(glm::radians(Input.VerticalFieldOfView), Aspect, Input.NearPlane, Input.FarPlane);
+			Result.ProjectionMatrix = glm::perspectiveRH_ZO(glm::radians(Input.VerticalFieldOfView), Aspect, Input.NearPlane, Input.FarPlane);
 			Result.ViewProjectionMatrix = Result.ProjectionMatrix * Result.ViewMatrix;
 			if (!IsFinite(Result.ViewMatrix) || !IsFinite(Result.ProjectionMatrix) || !IsFinite(Result.ViewProjectionMatrix))
 				throw std::invalid_argument("RenderPublication camera matrices are not finite");

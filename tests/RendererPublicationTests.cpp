@@ -48,6 +48,35 @@ namespace {
 		return Item;
 	}
 
+	void TestCameraDepthConvention() {
+		using namespace gargantuan;
+		auto Game = std::make_shared<DataModel>();
+		auto World = std::dynamic_pointer_cast<Workspace>(Game->GetService("Workspace"));
+		RenderPublisher Publisher;
+		RenderExtractor Extractor;
+		for (const float Near : {.1f, 1.0f}) for (const float Far : {5000.0f, 100000.0f}) {
+			auto Input = MakeLookAtRenderCameraInput({0, 0, 0}, {0, 0, -1}, {0, 1, 0}, 60);
+			Input.NearPlane = Near;
+			Input.FarPlane = Far;
+			const auto Published = Publisher.Publish(*World, Input, 800, 600);
+			const auto Extracted = Extractor.Extract(*World, Input, 800, 600);
+			for (const auto &Camera : {Published->Frame.Camera, Extracted->Camera}) {
+				auto Depth = [&](float Distance) {
+					const auto Clip = Camera.ProjectionMatrix * glm::vec4(0, 0, -Distance, 1);
+					return Clip.z / Clip.w;
+				};
+				Check(std::abs(Depth(Near)) < 1e-6f, "declared near plane maps to zero depth");
+				Check(std::abs(Depth(Far) - 1) < 1e-6f, "declared far plane maps to one depth");
+				Check(Depth(Near * .5f) < 0 && Depth(Far * 2) > 1, "outside geometry is clipped at declared planes");
+				Check(Depth(Near * 1.5f) > 0 && Depth(Near * 1.5f) < 1, "near geometry remains inside SDL clip range");
+				Check(Depth(Near * 2) < Depth(Far * .5f), "conventional depth increases with distance");
+			}
+			Check(Published->Frame.Camera.ProjectionMatrix == Extracted->Camera.ProjectionMatrix,
+				"incremental and full camera producers have identical explicit depth convention");
+		}
+		Game->Destroy();
+	}
+
 	void TestProjectionOrderingAndIdentity() {
 		using namespace gargantuan;
 		RenderProjection Projection;
@@ -788,6 +817,7 @@ static_assert(!std::is_pointer_v<decltype(gargantuan::RenderObjectCreate::Item)>
 int main() {
 	try {
 		gargantuan::BootstrapNativeRuntimeSchema();
+		TestCameraDepthConvention();
 		TestProjectionOrderingAndIdentity();
 		TestDeformableAndGuiContracts();
 		TestAnimationPaletteContracts();
