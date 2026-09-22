@@ -5,6 +5,7 @@
 #include "gargantuan/Log.hpp"
 #include "render/sdl/SDLMeshCache.hpp"
 #include "render/sdl/SDLRenderPass.hpp"
+#include "render/sdl/SDLSceneDepth.hpp"
 #include "render/sdl/SDLSkinPaletteCache.hpp"
 #include "render/sdl/SDLTextureCache.hpp"
 
@@ -344,6 +345,8 @@ namespace gargantuan {
 		if (WidthValue < 1 || HeightValue < 1) return;
 		if (!State || !State->Gpu || (!State->Options.Offscreen && !State->WindowClaimed))
 			throw std::logic_error("Cannot resize an uninitialized SDLRenderer");
+		const auto DepthInfo = GetSDLSceneDepthTargetInfo(State->Gpu,
+			static_cast<std::uint32_t>(WidthValue), static_cast<std::uint32_t>(HeightValue));
 		if (!State->Options.Offscreen && !SDL_SetGPUSwapchainParameters(
 			State->Gpu, State->Window, SDL_GPU_SWAPCHAINCOMPOSITION_SDR, SDL_GPU_PRESENTMODE_VSYNC
 		)) throw std::runtime_error(std::format("Failed to configure renderer swapchain: {}", SDL_GetError()));
@@ -363,15 +366,6 @@ namespace gargantuan {
 				throw std::runtime_error(std::format("Failed to create offscreen color target: {}", SDL_GetError()));
 		}
 
-		SDL_GPUTextureCreateInfo DepthInfo{
-			.type = SDL_GPU_TEXTURETYPE_2D,
-			.format = SDL_GPU_TEXTUREFORMAT_D16_UNORM,
-			.usage = SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET,
-			.width = static_cast<std::uint32_t>(WidthValue),
-			.height = static_cast<std::uint32_t>(HeightValue),
-			.layer_count_or_depth = 1,
-			.num_levels = 1,
-		};
 		auto *ReplacementDepth = SDL_CreateGPUTexture(State->Gpu, &DepthInfo);
 		if (!ReplacementDepth) {
 			if (ReplacementColor) SDL_ReleaseGPUTexture(State->Gpu, ReplacementColor);

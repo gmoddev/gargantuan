@@ -5,6 +5,7 @@
 #include "render/sdl/SDLMeshCache.hpp"
 #include "render/sdl/SDLPipelineBuilder.hpp"
 #include "render/sdl/SDLRenderPass.hpp"
+#include "render/sdl/SDLSceneDepth.hpp"
 #include "render/sdl/SDLSkinPaletteCache.hpp"
 #include "render/sdl/SDLTextureCache.hpp"
 
@@ -77,7 +78,7 @@ namespace gargantuan {
 					.SetColorFormat(swapchainFormat)
 					.SetBlendingEnabled(true)
 					.SetDepthEnabled(true)
-					.SetDepthFormat(SDL_GPU_TEXTUREFORMAT_D16_UNORM);
+					.SetDepthFormat(SDLSceneDepthFormat);
 				Pipeline = Builder.Build(gpu, Metrics);
 				auto DoubleSidedInfo = Builder.BuildInfo();
 				DoubleSidedInfo.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_NONE;

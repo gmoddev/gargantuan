@@ -4,6 +4,19 @@ This file tracks verified current defects and engineering gaps that are useful
 to contributors but do not belong in the feature roadmap. An entry remains
 open until its resolution criteria are implemented and verified.
 
+## Originating Studio KI-008: camera-dependent geometry slicing
+
+- Status: Corrected for the reproduced Engine fixture; native Studio requalification remains separate.
+- Area: SDL scene depth and camera projection
+- Evidence: [Engine depth qualification](devdocs/Validation/RendererDepthKI008.md)
+
+D16 scene depth collapsed separated surface depths into equal bins. The scene
+attachment/pipeline now use checked D32, and camera producers explicitly map
+near/far to zero/one to match SDL. The 36-case raw-frame fixture and saved-project
+EditorHost probe have zero missing interior pixels. This does not claim arbitrary
+distant sub-unit separation or resolve separate viewport input-latency reports.
+See the receipt and final-source CI checks before merging; Studio is unchanged.
+
 ## KI-002: Box3D diagnostics are not integrated with engine logging
 
 - Status: Open

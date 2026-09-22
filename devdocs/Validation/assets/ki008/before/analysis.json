@@ -1,0 +1,2257 @@
+{
+  "Near": 0.1,
+  "Far": 100000,
+  "Projection": "no",
+  "Records": [
+    {
+      "Frame": "0-1000-0.ppm",
+      "RawSha256": "f249e65c775ac8efefdef237c1543415408ace6298c74227cbb5e1f9a615c418",
+      "Expected": 1568,
+      "Missing": 360,
+      "D16PredictedMissing": 300,
+      "D16Disagreement": 60,
+      "VisibleBlockDepthRange": [
+        1109.9290409230664,
+        1132.860119989716
+      ],
+      "Samples": [
+        {
+          "Pixel": [
+            370,
+            302
+          ],
+          "BlockViewZ": 1126.8486892364388,
+          "FloorViewZ": 1161.2014026006427,
+          "BlockDepth": 0.9998245137060043,
+          "FloorDepth": 0.9998297644194798,
+          "BlockD16": 65523,
+          "FloorD16": 65524,
+          "SeparationD16Steps": 0.3441055076141125
+        },
+        {
+          "Pixel": [
+            399,
+            303
+          ],
+          "BlockViewZ": 1128.045866097184,
+          "FloorViewZ": 1157.187410094066,
+          "BlockDepth": 0.999824702069344,
+          "FloorDepth": 0.9998291669774997,
+          "BlockD16": 65524,
+          "FloorD16": 65524,
+          "SeparationD16Steps": 0.29260775598010325
+        },
+        {
+          "Pixel": [
+            429,
+            304
+          ],
+          "BlockViewZ": 1129.245589451973,
+          "FloorViewZ": 1153.2010727934035,
+          "BlockDepth": 0.9998248904326836,
+          "FloorDepth": 0.9998285695355197,
+          "BlockD16": 65524,
+          "FloorD16": 65524,
+          "SeparationD16Steps": 0.24111000436064567
+        },
+        {
+          "Pixel": [
+            399,
+            306
+          ],
+          "BlockViewZ": 1131.6527082125788,
+          "FloorViewZ": 1145.3102284158383,
+          "BlockDepth": 0.999825267159363,
+          "FloorDepth": 0.9998273746515595,
+          "BlockD16": 65524,
+          "FloorD16": 65524,
+          "SeparationD16Steps": 0.13811450109262713
+        },
+        {
+          "Pixel": [
+            429,
+            307
+          ],
+          "BlockViewZ": 1132.860119989716,
+          "FloorViewZ": 1141.4051633200825,
+          "BlockDepth": 0.9998254555227027,
+          "FloorDepth": 0.9998267772095795,
+          "BlockD16": 65524,
+          "FloorD16": 65524,
+          "SeparationD16Steps": 0.0866167494658937
+        }
+      ]
+    },
+    {
+      "Frame": "0-1000-45.ppm",
+      "RawSha256": "44c131ec60c9e446e306213860efdb21fab0a98751e8b30d4854cd761a75f01a",
+      "Expected": 1404,
+      "Missing": 287,
+      "D16PredictedMissing": 285,
+      "D16Disagreement": 2,
+      "VisibleBlockDepthRange": [
+        1072.5926004555033,
+        1175.561051000177
+      ],
+      "Samples": [
+        {
+          "Pixel": [
+            409,
+            290
+          ],
+          "BlockViewZ": 1128.8607648650889,
+          "FloorViewZ": 1211.6357229558942,
+          "BlockDepth": 0.9998248300566666,
+          "FloorDepth": 0.9998369337232407,
+          "BlockD16": 65524,
+          "FloorD16": 65524,
+          "SeparationD16Steps": 0.7932137889346114
+        },
+        {
+          "Pixel": [
+            412,
+            297
+          ],
+          "BlockViewZ": 1145.0650834906764,
+          "FloorViewZ": 1181.6964435423772,
+          "BlockDepth": 0.9998273372663322,
+          "FloorDepth": 0.9998327516293801,
+          "BlockD16": 65524,
+          "FloorD16": 65524,
+          "SeparationD16Steps": 0.35483028234454816
+        },
+        {
+          "Pixel": [
+            403,
+            302
+          ],
+          "BlockViewZ": 1128.3171789441458,
+          "FloorViewZ": 1161.2014026006427,
+          "BlockDepth": 0.9998247447020432,
+          "FloorDepth": 0.9998297644194798,
+          "BlockD16": 65524,
+          "FloorD16": 65524,
+          "SeparationD16Steps": 0.32896718220791654
+        },
+        {
+          "Pixel": [
+            375,
+            312
+          ],
+          "BlockViewZ": 1106.5089211117854,
+          "FloorViewZ": 1122.2725851269888,
+          "BlockDepth": 0.9998212511655611,
+          "FloorDepth": 0.9998237899996791,
+          "BlockD16": 65523,
+          "FloorD16": 65523,
+          "SeparationD16Steps": 0.16638249392632698
+        },
+        {
+          "Pixel": [
+            383,
+            317
+          ],
+          "BlockViewZ": 1097.2183855845615,
+          "FloorViewZ": 1103.7708447519526,
+          "BlockDepth": 0.9998197207013358,
+          "FloorDepth": 0.9998208027897787,
+          "BlockD16": 65523,
+          "FloorD16": 65523,
+          "SeparationD16Steps": 0.07091466610215758
+        }
+      ]
+    },
+    {
+      "Frame": "0-1000-90.ppm",
+      "RawSha256": "c3a59b4bafb38642fc19fa9120e0feeb7fa1c5e8721ef70ac089a2384fef91c8",
+      "Expected": 588,
+      "Missing": 108,
+      "D16PredictedMissing": 120,
+      "D16Disagreement": 12,
+      "VisibleBlockDepthRange": [
+        1063.672478004821,
+        1174.3877494581866
+      ],
+      "Samples": [
+        {
+          "Pixel": [
+            394,
+            312
+          ],
+          "BlockViewZ": 1078.5050532363937,
+          "FloorViewZ": 1122.2725851269888,
+          "BlockDepth": 0.9998165579408803,
+          "FloorDepth": 0.9998237899996791,
+          "BlockD16": 65523,
+          "FloorD16": 65523,
+          "SeparationD16Steps": 0.47395297338085396
+        },
+        {
+          "Pixel": [
+            396,
+            314
+          ],
+          "BlockViewZ": 1080.8237831965216,
+          "FloorViewZ": 1114.7979530883802,
+          "BlockDepth": 0.9998169557763736,
+          "FloorDepth": 0.9998225951157189,
+          "BlockD16": 65523,
+          "FloorD16": 65523,
+          "SeparationD16Steps": 0.36957410399265145
+        },
+        {
+          "Pixel": [
+            399,
+            316
+          ],
+          "BlockViewZ": 1083.1525049369047,
+          "FloorViewZ": 1107.4222283509157,
+          "BlockDepth": 0.999817353611867,
+          "FloorDepth": 0.9998214002317588,
+          "BlockD16": 65523,
+          "FloorD16": 65523,
+          "SeparationD16Steps": 0.2651952346117248
+        },
+        {
+          "Pixel": [
+            402,
+            318
+          ],
+          "BlockViewZ": 1085.4912831812774,
+          "FloorViewZ": 1100.1434606468906,
+          "BlockDepth": 0.9998177514473603,
+          "FloorDepth": 0.9998202053477987,
+          "BlockD16": 65523,
+          "FloorD16": 65523,
+          "SeparationD16Steps": 0.16081636523079812
+        },
+        {
+          "Pixel": [
+            405,
+            320
+          ],
+          "BlockViewZ": 1087.840183213598,
+          "FloorViewZ": 1092.959750647984,
+          "BlockDepth": 0.9998181492828536,
+          "FloorDepth": 0.9998190104638385,
+          "BlockD16": 65523,
+          "FloorD16": 65523,
+          "SeparationD16Steps": 0.05643749584259561
+        }
+      ]
+    },
+    {
+      "Frame": "0-200-0.ppm",
+      "RawSha256": "70c785645aa690dfd4a911f1bb39351097d71574412146c7462eb172ac4da140",
+      "Expected": 47208,
+      "Missing": 314,
+      "D16PredictedMissing": 629,
+      "D16Disagreement": 315,
+      "VisibleBlockDepthRange": [
+        196.40175052235367,
+        221.66044118575604
+      ],
+      "Samples": [
+        {
+          "Pixel": [
+            243,
+            345
+          ],
+          "BlockViewZ": 221.51832108692363,
+          "FloorViewZ": 222.86090616228068,
+          "BlockDepth": 0.9990991392407823,
+          "FloorDepth": 0.9991045783615505,
+          "BlockD16": 65476,
+          "FloorD16": 65476,
+          "SeparationD16Steps": 0.3564527795456074
+        },
+        {
+          "Pixel": [
+            321,
+            345
+          ],
+          "BlockViewZ": 221.51832108692363,
+          "FloorViewZ": 222.86090616228068,
+          "BlockDepth": 0.9990991392407823,
+          "FloorDepth": 0.9991045783615505,
+          "BlockD16": 65476,
+          "FloorD16": 65476,
+          "SeparationD16Steps": 0.3564527795456074
+        },
+        {
+          "Pixel": [
+            399,
+            345
+          ],
+          "BlockViewZ": 221.51832108692363,
+          "FloorViewZ": 222.86090616228068,
+          "BlockDepth": 0.9990991392407823,
+          "FloorDepth": 0.9991045783615505,
+          "BlockD16": 65476,
+          "FloorD16": 65476,
+          "SeparationD16Steps": 0.3564527795456074
+        },
+        {
+          "Pixel": [
+            477,
+            345
+          ],
+          "BlockViewZ": 221.51832108692363,
+          "FloorViewZ": 222.86090616228068,
+          "BlockDepth": 0.9990991392407823,
+          "FloorDepth": 0.9991045783615505,
+          "BlockD16": 65476,
+          "FloorD16": 65476,
+          "SeparationD16Steps": 0.3564527795456074
+        },
+        {
+          "Pixel": [
+            556,
+            345
+          ],
+          "BlockViewZ": 221.51832108692363,
+          "FloorViewZ": 222.86090616228068,
+          "BlockDepth": 0.9990991392407823,
+          "FloorDepth": 0.9991045783615505,
+          "BlockD16": 65476,
+          "FloorD16": 65476,
+          "SeparationD16Steps": 0.3564527795456074
+        }
+      ]
+    },
+    {
+      "Frame": "0-200-45.ppm",
+      "RawSha256": "1c94ebaf75342ea5f1e0309e0f89e5c541f9653363553ce7dbcba2f1869699f0",
+      "Expected": 41666,
+      "Missing": 297,
+      "D16PredictedMissing": 296,
+      "D16Disagreement": 1,
+      "VisibleBlockDepthRange": [
+        158.63415726965923,
+        266.5379424581115
+      ],
+      "Samples": [
+        {
+          "Pixel": [
+            509,
+            289
+          ],
+          "BlockViewZ": 264.25890077485974,
+          "FloorViewZ": 268.19594935516915,
+          "BlockDepth": 0.9992451657027058,
+          "FloorDepth": 0.9992562758384507,
+          "BlockD16": 65486,
+          "FloorD16": 65486,
+          "SeparationD16Steps": 0.7281027460381323
+        },
+        {
+          "Pixel": [
+            452,
+            323
+          ],
+          "BlockViewZ": 236.8422121500849,
+          "FloorViewZ": 238.7132310510079,
+          "BlockDepth": 0.9991575550942086,
+          "FloorDepth": 0.9991641737989042,
+          "BlockD16": 65480,
+          "FloorD16": 65480,
+          "SeparationD16Steps": 0.43375681222935447
+        },
+        {
+          "Pixel": [
+            387,
+            361
+          ],
+          "BlockViewZ": 211.6058936895432,
+          "FloorViewZ": 212.59343200942,
+          "BlockDepth": 0.9990568457980551,
+          "FloorDepth": 0.9990612362252934,
+          "BlockD16": 65473,
+          "FloorD16": 65473,
+          "SeparationD16Steps": 0.28772664906337064
+        },
+        {
+          "Pixel": [
+            268,
+            391
+          ],
+          "BlockViewZ": 194.21152483366916,
+          "FloorViewZ": 195.68911360617966,
+          "BlockDepth": 0.998972193968751,
+          "FloorDepth": 0.9989799697198112,
+          "BlockD16": 65468,
+          "FloorD16": 65468,
+          "SeparationD16Steps": 0.5095838457266788
+        },
+        {
+          "Pixel": [
+            296,
+            413
+          ],
+          "BlockViewZ": 183.92604203365605,
+          "FloorViewZ": 184.90703058060691,
+          "BlockDepth": 0.9989146053199375,
+          "FloorDepth": 0.9989203742824576,
+          "BlockD16": 65464,
+          "FloorD16": 65464,
+          "SeparationD16Steps": 0.37806895875712954
+        }
+      ]
+    },
+    {
+      "Frame": "0-200-90.ppm",
+      "RawSha256": "d8b29f7b7bcab975845711891cbb9703fff30f6d187d683c1b53a05e71bb0155",
+      "Expected": 22890,
+      "Missing": 88,
+      "D16PredictedMissing": 88,
+      "D16Disagreement": 0,
+      "VisibleBlockDepthRange": [
+        150.66029099876383,
+        266.1905818857355
+      ],
+      "Samples": [
+        {
+          "Pixel": [
+            356,
+            431
+          ],
+          "BlockViewZ": 175.669838602284,
+          "FloorViewZ": 176.93094813005388,
+          "BlockDepth": 0.9988634994967824,
+          "FloorDepth": 0.9988716143791683,
+          "BlockD16": 65461,
+          "FloorD16": 65461,
+          "SeparationD16Steps": 0.531808817155669
+        },
+        {
+          "Pixel": [
+            377,
+            431
+          ],
+          "BlockViewZ": 175.669838602284,
+          "FloorViewZ": 176.93094813005388,
+          "BlockDepth": 0.9988634994967824,
+          "FloorDepth": 0.9988716143791683,
+          "BlockD16": 65461,
+          "FloorD16": 65461,
+          "SeparationD16Steps": 0.531808817155669
+        },
+        {
+          "Pixel": [
+            399,
+            431
+          ],
+          "BlockViewZ": 175.669838602284,
+          "FloorViewZ": 176.93094813005388,
+          "BlockDepth": 0.9988634994967824,
+          "FloorDepth": 0.9988716143791683,
+          "BlockD16": 65461,
+          "FloorD16": 65461,
+          "SeparationD16Steps": 0.531808817155669
+        },
+        {
+          "Pixel": [
+            421,
+            431
+          ],
+          "BlockViewZ": 175.669838602284,
+          "FloorViewZ": 176.93094813005388,
+          "BlockDepth": 0.9988634994967824,
+          "FloorDepth": 0.9988716143791683,
+          "BlockD16": 65461,
+          "FloorD16": 65461,
+          "SeparationD16Steps": 0.531808817155669
+        },
+        {
+          "Pixel": [
+            443,
+            431
+          ],
+          "BlockViewZ": 175.669838602284,
+          "FloorViewZ": 176.93094813005388,
+          "BlockDepth": 0.9988634994967824,
+          "FloorDepth": 0.9988716143791683,
+          "BlockD16": 65461,
+          "FloorD16": 65461,
+          "SeparationD16Steps": 0.531808817155669
+        }
+      ]
+    },
+    {
+      "Frame": "0-2000-0.ppm",
+      "RawSha256": "d478747b7613ba03f2abab8dbae27c477f2b4ad07052f69846d616babd002c22",
+      "Expected": 350,
+      "Missing": 170,
+      "D16PredictedMissing": 170,
+      "D16Disagreement": 0,
+      "VisibleBlockDepthRange": [
+        2252.0276177391142,
+        2273.5608354774163
+      ],
+      "Samples": [
+        {
+          "Pixel": [
+            385,
+            298
+          ],
+          "BlockViewZ": 2261.5473672830963,
+          "FloorViewZ": 2324.832708750546,
+          "BlockDepth": 0.9999135648876648,
+          "FloorDepth": 0.9999159722206257,
+          "BlockD16": 65529,
+          "FloorD16": 65529,
+          "SeparationD16Steps": 0.1577645655901666
+        },
+        {
+          "Pixel": [
+            398,
+            299
+          ],
+          "BlockViewZ": 2263.9398935335853,
+          "FloorViewZ": 2316.683646800405,
+          "BlockDepth": 0.9999136583456816,
+          "FloorDepth": 0.9999156696131805,
+          "BlockD16": 65529,
+          "FloorD16": 65529,
+          "SeparationD16Steps": 0.1318084155391247
+        },
+        {
+          "Pixel": [
+            412,
+            300
+          ],
+          "BlockViewZ": 2266.3374873268167,
+          "FloorViewZ": 2308.591513894032,
+          "BlockDepth": 0.9999137518036983,
+          "FloorDepth": 0.9999153670057351,
+          "BlockD16": 65529,
+          "FloorD16": 65529,
+          "SeparationD16Steps": 0.10585226548080695
+        },
+        {
+          "Pixel": [
+            398,
+            302
+          ],
+          "BlockViewZ": 2271.1479420787223,
+          "FloorViewZ": 2292.5756655419245,
+          "BlockDepth": 0.9999139387197318,
+          "FloorDepth": 0.9999147617908446,
+          "BlockD16": 65529,
+          "FloorD16": 65529,
+          "SeparationD16Steps": 0.05393996537872314
+        },
+        {
+          "Pixel": [
+            413,
+            303
+          ],
+          "BlockViewZ": 2273.5608354774163,
+          "FloorViewZ": 2284.650785739303,
+          "BlockDepth": 0.9999140321777485,
+          "FloorDepth": 0.9999144591833994,
+          "BlockD16": 65529,
+          "FloorD16": 65529,
+          "SeparationD16Steps": 0.02798381532768124
+        }
+      ]
+    },
+    {
+      "Frame": "0-2000-45.ppm",
+      "RawSha256": "90057d7898b1d2ff44e1b1b9e051c38f04b001c8fb425a029f4d69ec1bf3d79e",
+      "Expected": 318,
+      "Missing": 145,
+      "D16PredictedMissing": 154,
+      "D16Disagreement": 9,
+      "VisibleBlockDepthRange": [
+        2214.2753883703044,
+        2312.671305083703
+      ],
+      "Samples": [
+        {
+          "Pixel": [
+            387,
+            298
+          ],
+          "BlockViewZ": 2231.314790122086,
+          "FloorViewZ": 2324.832708750546,
+          "BlockDepth": 0.9999123666607586,
+          "FloorDepth": 0.9999159722206257,
+          "BlockD16": 65529,
+          "FloorD16": 65529,
+          "SeparationD16Steps": 0.2362903658913651
+        },
+        {
+          "Pixel": [
+            407,
+            299
+          ],
+          "BlockViewZ": 2294.5116846035476,
+          "FloorViewZ": 2316.683646800405,
+          "BlockDepth": 0.9999148353990293,
+          "FloorDepth": 0.9999156696131805,
+          "BlockD16": 65529,
+          "FloorD16": 65529,
+          "SeparationD16Steps": 0.05467022439901548
+        },
+        {
+          "Pixel": [
+            399,
+            301
+          ],
+          "BlockViewZ": 2259.0347760652353,
+          "FloorViewZ": 2300.55571555166,
+          "BlockDepth": 0.9999134665265001,
+          "FloorDepth": 0.9999150643982899,
+          "BlockD16": 65529,
+          "FloorD16": 65529,
+          "SeparationD16Steps": 0.10471652774266427
+        },
+        {
+          "Pixel": [
+            399,
+            303
+          ],
+          "BlockViewZ": 2263.8295393972294,
+          "FloorViewZ": 2284.650785739303,
+          "BlockDepth": 0.9999136540393205,
+          "FloorDepth": 0.9999144591833994,
+          "BlockD16": 65529,
+          "FloorD16": 65529,
+          "SeparationD16Steps": 0.05276511720760324
+        },
+        {
+          "Pixel": [
+            392,
+            307
+          ],
+          "BlockViewZ": 2238.8222211584957,
+          "FloorViewZ": 2253.4916820553267,
+          "BlockDepth": 0.9999126672277806,
+          "FloorDepth": 0.9999132487536183,
+          "BlockD16": 65529,
+          "FloorD16": 65529,
+          "SeparationD16Steps": 0.03811029577407643
+        }
+      ]
+    },
+    {
+      "Frame": "0-2000-90.ppm",
+      "RawSha256": "46170a960f409048e22cadb6d0a66aae078a8ee96d247d6192d271f9f71a4154",
+      "Expected": 132,
+      "Missing": 72,
+      "D16PredictedMissing": 72,
+      "D16Disagreement": 0,
+      "VisibleBlockDepthRange": [
+        2206.5138547138895,
+        2311.8605454871918
+      ],
+      "Samples": [
+        {
+          "Pixel": [
+            397,
+            298
+          ],
+          "BlockViewZ": 2214.2753883703044,
+          "FloorViewZ": 2324.832708750546,
+          "BlockDepth": 0.999911676909827,
+          "FloorDepth": 0.9999159722206257,
+          "BlockD16": 65529,
+          "FloorD16": 65529,
+          "SeparationD16Steps": 0.28149319319330235
+        },
+        {
+          "Pixel": [
+            402,
+            300
+          ],
+          "BlockViewZ": 2206.6744901166767,
+          "FloorViewZ": 2308.591513894032,
+          "BlockDepth": 0.9999113657916097,
+          "FloorDepth": 0.9999153670057351,
+          "BlockD16": 65529,
+          "FloorD16": 65529,
+          "SeparationD16Steps": 0.2622195677127309
+        },
+        {
+          "Pixel": [
+            402,
+            303
+          ],
+          "BlockViewZ": 2213.707678327299,
+          "FloorViewZ": 2284.650785739303,
+          "BlockDepth": 0.9999116537462779,
+          "FloorDepth": 0.9999144591833994,
+          "BlockD16": 65529,
+          "FloorD16": 65529,
+          "SeparationD16Steps": 0.1838543217575206
+        },
+        {
+          "Pixel": [
+            402,
+            306
+          ],
+          "BlockViewZ": 2220.7858427223237,
+          "FloorViewZ": 2261.2015049946003,
+          "BlockDepth": 0.9999119417009461,
+          "FloorDepth": 0.9999135513610635,
+          "BlockD16": 65529,
+          "FloorD16": 65529,
+          "SeparationD16Steps": 0.10548907579503441
+        },
+        {
+          "Pixel": [
+            402,
+            309
+          ],
+          "BlockViewZ": 2227.9094161095572,
+          "FloorViewZ": 2238.228692991811,
+          "BlockDepth": 0.9999122296556143,
+          "FloorDepth": 0.9999126435387278,
+          "BlockD16": 65529,
+          "FloorD16": 65529,
+          "SeparationD16Steps": 0.027123829839824087
+        }
+      ]
+    },
+    {
+      "Frame": "0-500-0.ppm",
+      "RawSha256": "0b139bba3fa36d94c0885e8b4126021f0bb88f78c21f19990a6b657321ab116d",
+      "Expected": 6770,
+      "Missing": 734,
+      "D16PredictedMissing": 734,
+      "D16Disagreement": 0,
+      "VisibleBlockDepthRange": [
+        538.8242179996732,
+        563.0650689202837
+      ],
+      "Samples": [
+        {
+          "Pixel": [
+            338,
+            311
+          ],
+          "BlockViewZ": 560.0483956777125,
+          "FloorViewZ": 577.4858894569669,
+          "BlockDepth": 0.9996448876496681,
+          "FloorDepth": 0.9996556708472075,
+          "BlockD16": 65512,
+          "FloorD16": 65512,
+          "SeparationD16Steps": 0.7066768507474269
+        },
+        {
+          "Pixel": [
+            398,
+            312
+          ],
+          "BlockViewZ": 560.64914161538,
+          "FloorViewZ": 575.5498908667197,
+          "BlockDepth": 0.9996452703021668,
+          "FloorDepth": 0.9996545058869389,
+          "BlockD16": 65512,
+          "FloorD16": 65512,
+          "SeparationD16Steps": 0.6052540480442564
+        },
+        {
+          "Pixel": [
+            459,
+            313
+          ],
+          "BlockViewZ": 561.2511777387575,
+          "FloorViewZ": 573.6268296218464,
+          "BlockDepth": 0.9996456529546656,
+          "FloorDepth": 0.9996533409266705,
+          "BlockD16": 65512,
+          "FloorD16": 65512,
+          "SeparationD16Steps": 0.5038312453410859
+        },
+        {
+          "Pixel": [
+            398,
+            315
+          ],
+          "BlockViewZ": 562.4591372035476,
+          "FloorViewZ": 569.819003887337,
+          "BlockDepth": 0.999646418259663,
+          "FloorDepth": 0.9996510110061333,
+          "BlockD16": 65512,
+          "FloorD16": 65512,
+          "SeparationD16Steps": 0.3009856399274691
+        },
+        {
+          "Pixel": [
+            460,
+            316
+          ],
+          "BlockViewZ": 563.0650689202837,
+          "FloorViewZ": 567.9339860187602,
+          "BlockDepth": 0.9996468009121617,
+          "FloorDepth": 0.9996498460458647,
+          "BlockD16": 65512,
+          "FloorD16": 65512,
+          "SeparationD16Steps": 0.19956283722429857
+        }
+      ]
+    },
+    {
+      "Frame": "0-500-45.ppm",
+      "RawSha256": "7966004fa8a71c91c58f9a616442fbb67a08fcc97ed4d8f49f4ebc53305e88bf",
+      "Expected": 6017,
+      "Missing": 372,
+      "D16PredictedMissing": 358,
+      "D16Disagreement": 20,
+      "VisibleBlockDepthRange": [
+        501.1505814790288,
+        607.1652693485629
+      ],
+      "Samples": [
+        {
+          "Pixel": [
+            447,
+            295
+          ],
+          "BlockViewZ": 606.3979797483066,
+          "FloorViewZ": 610.3339371601555,
+          "BlockDepth": 0.9996721832699534,
+          "FloorDepth": 0.9996743102115047,
+          "BlockD16": 65514,
+          "FloorD16": 65514,
+          "SeparationD16Steps": 0.13938911455901037
+        },
+        {
+          "Pixel": [
+            425,
+            304
+          ],
+          "BlockViewZ": 581.3512523696745,
+          "FloorViewZ": 591.411356197857,
+          "BlockDepth": 0.9996579735649966,
+          "FloorDepth": 0.9996638255690875,
+          "BlockD16": 65513,
+          "FloorD16": 65513,
+          "SeparationD16Steps": 0.3835110880949799
+        },
+        {
+          "Pixel": [
+            400,
+            317
+          ],
+          "BlockViewZ": 556.9502973920203,
+          "FloorViewZ": 566.0613986814708,
+          "BlockDepth": 0.9996429011722898,
+          "FloorDepth": 0.9996486810855961,
+          "BlockD16": 65512,
+          "FloorD16": 65512,
+          "SeparationD16Steps": 0.37878661852856765
+        },
+        {
+          "Pixel": [
+            377,
+            327
+          ],
+          "BlockViewZ": 535.1529125848926,
+          "FloorViewZ": 547.9930173131196,
+          "BlockDepth": 0.9996282746698624,
+          "FloorDepth": 0.9996370314829104,
+          "BlockD16": 65511,
+          "FloorD16": 65511,
+          "SeparationD16Steps": 0.5738777431017583
+        },
+        {
+          "Pixel": [
+            364,
+            338
+          ],
+          "BlockViewZ": 526.4283777362948,
+          "FloorViewZ": 529.4048609010583,
+          "BlockDepth": 0.9996220808934211,
+          "FloorDepth": 0.9996242169199562,
+          "BlockD16": 65510,
+          "FloorD16": 65510,
+          "SeparationD16Steps": 0.1399844989773441
+        }
+      ]
+    },
+    {
+      "Frame": "0-500-90.ppm",
+      "RawSha256": "c0a971e58dd6b155126e4d8bbd9ef03a8b0596c783240cc957466e69d28285dc",
+      "Expected": 2792,
+      "Missing": 196,
+      "D16PredictedMissing": 196,
+      "D16Disagreement": 0,
+      "VisibleBlockDepthRange": [
+        493.3359673571145,
+        606.3844737396995
+      ],
+      "Samples": [
+        {
+          "Pixel": [
+            386,
+            337
+          ],
+          "BlockViewZ": 514.0019975298027,
+          "FloorViewZ": 531.0424231777504,
+          "BlockDepth": 0.9996128960666819,
+          "FloorDepth": 0.9996253818802248,
+          "BlockD16": 65510,
+          "FloorD16": 65510,
+          "SeparationD16Steps": 0.818257790530722
+        },
+        {
+          "Pixel": [
+            406,
+            338
+          ],
+          "BlockViewZ": 514.5691690273399,
+          "FloorViewZ": 529.4048609010583,
+          "BlockDepth": 0.9996133249471415,
+          "FloorDepth": 0.9996242169199562,
+          "BlockD16": 65510,
+          "FloorD16": 65510,
+          "SeparationD16Steps": 0.7138054384097275
+        },
+        {
+          "Pixel": [
+            399,
+            340
+          ],
+          "BlockViewZ": 515.707275373502,
+          "FloorViewZ": 526.1598488927867,
+          "BlockDepth": 0.9996141827080607,
+          "FloorDepth": 0.999621886999419,
+          "BlockD16": 65510,
+          "FloorD16": 65510,
+          "SeparationD16Steps": 0.5049007341677386
+        },
+        {
+          "Pixel": [
+            392,
+            342
+          ],
+          "BlockViewZ": 516.850427328118,
+          "FloorViewZ": 522.9543754387113,
+          "BlockDepth": 0.9996150404689798,
+          "FloorDepth": 0.9996195570788818,
+          "BlockD16": 65510,
+          "FloorD16": 65510,
+          "SeparationD16Steps": 0.29599602993302554
+        },
+        {
+          "Pixel": [
+            413,
+            343
+          ],
+          "BlockViewZ": 517.4239059056431,
+          "FloorViewZ": 521.3662405331337,
+          "BlockDepth": 0.9996154693494393,
+          "FloorDepth": 0.9996183921186133,
+          "BlockD16": 65510,
+          "FloorD16": 65510,
+          "SeparationD16Steps": 0.19154367781203108
+        }
+      ]
+    },
+    {
+      "Frame": "1-1000-0.ppm",
+      "RawSha256": "b4847f41c5c059f5db14a918beb085cb01a5482262e8a63f0e66ea99f5815192",
+      "Expected": 1568,
+      "Missing": 360,
+      "D16PredictedMissing": 300,
+      "D16Disagreement": 60,
+      "VisibleBlockDepthRange": [
+        1109.9290409230664,
+        1132.860119989716
+      ],
+      "Samples": [
+        {
+          "Pixel": [
+            370,
+            302
+          ],
+          "BlockViewZ": 1126.8486892364388,
+          "FloorViewZ": 1161.2014026006427,
+          "BlockDepth": 0.9998245137060043,
+          "FloorDepth": 0.9998297644194798,
+          "BlockD16": 65523,
+          "FloorD16": 65524,
+          "SeparationD16Steps": 0.3441055076141125
+        },
+        {
+          "Pixel": [
+            399,
+            303
+          ],
+          "BlockViewZ": 1128.045866097184,
+          "FloorViewZ": 1157.187410094066,
+          "BlockDepth": 0.999824702069344,
+          "FloorDepth": 0.9998291669774997,
+          "BlockD16": 65524,
+          "FloorD16": 65524,
+          "SeparationD16Steps": 0.29260775598010325
+        },
+        {
+          "Pixel": [
+            429,
+            304
+          ],
+          "BlockViewZ": 1129.245589451973,
+          "FloorViewZ": 1153.2010727934035,
+          "BlockDepth": 0.9998248904326836,
+          "FloorDepth": 0.9998285695355197,
+          "BlockD16": 65524,
+          "FloorD16": 65524,
+          "SeparationD16Steps": 0.24111000436064567
+        },
+        {
+          "Pixel": [
+            399,
+            306
+          ],
+          "BlockViewZ": 1131.6527082125788,
+          "FloorViewZ": 1145.3102284158383,
+          "BlockDepth": 0.999825267159363,
+          "FloorDepth": 0.9998273746515595,
+          "BlockD16": 65524,
+          "FloorD16": 65524,
+          "SeparationD16Steps": 0.13811450109262713
+        },
+        {
+          "Pixel": [
+            429,
+            307
+          ],
+          "BlockViewZ": 1132.860119989716,
+          "FloorViewZ": 1141.4051633200825,
+          "BlockDepth": 0.9998254555227027,
+          "FloorDepth": 0.9998267772095795,
+          "BlockD16": 65524,
+          "FloorD16": 65524,
+          "SeparationD16Steps": 0.0866167494658937
+        }
+      ]
+    },
+    {
+      "Frame": "1-1000-45.ppm",
+      "RawSha256": "23c47a58827f734b3f8d672a06d322fd7fc0e3b3997b08d1b2b11fe8130fd3c1",
+      "Expected": 1404,
+      "Missing": 287,
+      "D16PredictedMissing": 285,
+      "D16Disagreement": 2,
+      "VisibleBlockDepthRange": [
+        1072.5926004555033,
+        1175.561051000177
+      ],
+      "Samples": [
+        {
+          "Pixel": [
+            409,
+            290
+          ],
+          "BlockViewZ": 1128.8607648650889,
+          "FloorViewZ": 1211.6357229558942,
+          "BlockDepth": 0.9998248300566666,
+          "FloorDepth": 0.9998369337232407,
+          "BlockD16": 65524,
+          "FloorD16": 65524,
+          "SeparationD16Steps": 0.7932137889346114
+        },
+        {
+          "Pixel": [
+            412,
+            297
+          ],
+          "BlockViewZ": 1145.0650834906764,
+          "FloorViewZ": 1181.6964435423772,
+          "BlockDepth": 0.9998273372663322,
+          "FloorDepth": 0.9998327516293801,
+          "BlockD16": 65524,
+          "FloorD16": 65524,
+          "SeparationD16Steps": 0.35483028234454816
+        },
+        {
+          "Pixel": [
+            403,
+            302
+          ],
+          "BlockViewZ": 1128.3171789441458,
+          "FloorViewZ": 1161.2014026006427,
+          "BlockDepth": 0.9998247447020432,
+          "FloorDepth": 0.9998297644194798,
+          "BlockD16": 65524,
+          "FloorD16": 65524,
+          "SeparationD16Steps": 0.32896718220791654
+        },
+        {
+          "Pixel": [
+            375,
+            312
+          ],
+          "BlockViewZ": 1106.5089211117854,
+          "FloorViewZ": 1122.2725851269888,
+          "BlockDepth": 0.9998212511655611,
+          "FloorDepth": 0.9998237899996791,
+          "BlockD16": 65523,
+          "FloorD16": 65523,
+          "SeparationD16Steps": 0.16638249392632698
+        },
+        {
+          "Pixel": [
+            383,
+            317
+          ],
+          "BlockViewZ": 1097.2183855845615,
+          "FloorViewZ": 1103.7708447519526,
+          "BlockDepth": 0.9998197207013358,
+          "FloorDepth": 0.9998208027897787,
+          "BlockD16": 65523,
+          "FloorD16": 65523,
+          "SeparationD16Steps": 0.07091466610215758
+        }
+      ]
+    },
+    {
+      "Frame": "1-1000-90.ppm",
+      "RawSha256": "3a243a62e6284ca426904c85231b2273eb102fd12e02364dbc19f48c5547733b",
+      "Expected": 588,
+      "Missing": 108,
+      "D16PredictedMissing": 120,
+      "D16Disagreement": 12,
+      "VisibleBlockDepthRange": [
+        1063.672478004821,
+        1174.3877494581866
+      ],
+      "Samples": [
+        {
+          "Pixel": [
+            394,
+            312
+          ],
+          "BlockViewZ": 1078.5050532363937,
+          "FloorViewZ": 1122.2725851269888,
+          "BlockDepth": 0.9998165579408803,
+          "FloorDepth": 0.9998237899996791,
+          "BlockD16": 65523,
+          "FloorD16": 65523,
+          "SeparationD16Steps": 0.47395297338085396
+        },
+        {
+          "Pixel": [
+            396,
+            314
+          ],
+          "BlockViewZ": 1080.8237831965216,
+          "FloorViewZ": 1114.7979530883802,
+          "BlockDepth": 0.9998169557763736,
+          "FloorDepth": 0.9998225951157189,
+          "BlockD16": 65523,
+          "FloorD16": 65523,
+          "SeparationD16Steps": 0.36957410399265145
+        },
+        {
+          "Pixel": [
+            399,
+            316
+          ],
+          "BlockViewZ": 1083.1525049369047,
+          "FloorViewZ": 1107.4222283509157,
+          "BlockDepth": 0.999817353611867,
+          "FloorDepth": 0.9998214002317588,
+          "BlockD16": 65523,
+          "FloorD16": 65523,
+          "SeparationD16Steps": 0.2651952346117248
+        },
+        {
+          "Pixel": [
+            402,
+            318
+          ],
+          "BlockViewZ": 1085.4912831812774,
+          "FloorViewZ": 1100.1434606468906,
+          "BlockDepth": 0.9998177514473603,
+          "FloorDepth": 0.9998202053477987,
+          "BlockD16": 65523,
+          "FloorD16": 65523,
+          "SeparationD16Steps": 0.16081636523079812
+        },
+        {
+          "Pixel": [
+            405,
+            320
+          ],
+          "BlockViewZ": 1087.840183213598,
+          "FloorViewZ": 1092.959750647984,
+          "BlockDepth": 0.9998181492828536,
+          "FloorDepth": 0.9998190104638385,
+          "BlockD16": 65523,
+          "FloorD16": 65523,
+          "SeparationD16Steps": 0.05643749584259561
+        }
+      ]
+    },
+    {
+      "Frame": "1-200-0.ppm",
+      "RawSha256": "b9e8cbc0bf956bbc0434d9319671cdd3107031e80f6012a9569e18250cc8fbd7",
+      "Expected": 47208,
+      "Missing": 314,
+      "D16PredictedMissing": 629,
+      "D16Disagreement": 315,
+      "VisibleBlockDepthRange": [
+        196.40175052235367,
+        221.66044118575604
+      ],
+      "Samples": [
+        {
+          "Pixel": [
+            243,
+            345
+          ],
+          "BlockViewZ": 221.51832108692363,
+          "FloorViewZ": 222.86090616228068,
+          "BlockDepth": 0.9990991392407823,
+          "FloorDepth": 0.9991045783615505,
+          "BlockD16": 65476,
+          "FloorD16": 65476,
+          "SeparationD16Steps": 0.3564527795456074
+        },
+        {
+          "Pixel": [
+            321,
+            345
+          ],
+          "BlockViewZ": 221.51832108692363,
+          "FloorViewZ": 222.86090616228068,
+          "BlockDepth": 0.9990991392407823,
+          "FloorDepth": 0.9991045783615505,
+          "BlockD16": 65476,
+          "FloorD16": 65476,
+          "SeparationD16Steps": 0.3564527795456074
+        },
+        {
+          "Pixel": [
+            399,
+            345
+          ],
+          "BlockViewZ": 221.51832108692363,
+          "FloorViewZ": 222.86090616228068,
+          "BlockDepth": 0.9990991392407823,
+          "FloorDepth": 0.9991045783615505,
+          "BlockD16": 65476,
+          "FloorD16": 65476,
+          "SeparationD16Steps": 0.3564527795456074
+        },
+        {
+          "Pixel": [
+            477,
+            345
+          ],
+          "BlockViewZ": 221.51832108692363,
+          "FloorViewZ": 222.86090616228068,
+          "BlockDepth": 0.9990991392407823,
+          "FloorDepth": 0.9991045783615505,
+          "BlockD16": 65476,
+          "FloorD16": 65476,
+          "SeparationD16Steps": 0.3564527795456074
+        },
+        {
+          "Pixel": [
+            556,
+            345
+          ],
+          "BlockViewZ": 221.51832108692363,
+          "FloorViewZ": 222.86090616228068,
+          "BlockDepth": 0.9990991392407823,
+          "FloorDepth": 0.9991045783615505,
+          "BlockD16": 65476,
+          "FloorD16": 65476,
+          "SeparationD16Steps": 0.3564527795456074
+        }
+      ]
+    },
+    {
+      "Frame": "1-200-45.ppm",
+      "RawSha256": "a550f87718858af6136f64edc266d3b3b9770f06ba907b15408f2e55db29307c",
+      "Expected": 41666,
+      "Missing": 297,
+      "D16PredictedMissing": 296,
+      "D16Disagreement": 1,
+      "VisibleBlockDepthRange": [
+        158.63415726965923,
+        266.5379424581115
+      ],
+      "Samples": [
+        {
+          "Pixel": [
+            509,
+            289
+          ],
+          "BlockViewZ": 264.25890077485974,
+          "FloorViewZ": 268.19594935516915,
+          "BlockDepth": 0.9992451657027058,
+          "FloorDepth": 0.9992562758384507,
+          "BlockD16": 65486,
+          "FloorD16": 65486,
+          "SeparationD16Steps": 0.7281027460381323
+        },
+        {
+          "Pixel": [
+            452,
+            323
+          ],
+          "BlockViewZ": 236.8422121500849,
+          "FloorViewZ": 238.7132310510079,
+          "BlockDepth": 0.9991575550942086,
+          "FloorDepth": 0.9991641737989042,
+          "BlockD16": 65480,
+          "FloorD16": 65480,
+          "SeparationD16Steps": 0.43375681222935447
+        },
+        {
+          "Pixel": [
+            387,
+            361
+          ],
+          "BlockViewZ": 211.6058936895432,
+          "FloorViewZ": 212.59343200942,
+          "BlockDepth": 0.9990568457980551,
+          "FloorDepth": 0.9990612362252934,
+          "BlockD16": 65473,
+          "FloorD16": 65473,
+          "SeparationD16Steps": 0.28772664906337064
+        },
+        {
+          "Pixel": [
+            268,
+            391
+          ],
+          "BlockViewZ": 194.21152483366916,
+          "FloorViewZ": 195.68911360617966,
+          "BlockDepth": 0.998972193968751,
+          "FloorDepth": 0.9989799697198112,
+          "BlockD16": 65468,
+          "FloorD16": 65468,
+          "SeparationD16Steps": 0.5095838457266788
+        },
+        {
+          "Pixel": [
+            296,
+            413
+          ],
+          "BlockViewZ": 183.92604203365605,
+          "FloorViewZ": 184.90703058060691,
+          "BlockDepth": 0.9989146053199375,
+          "FloorDepth": 0.9989203742824576,
+          "BlockD16": 65464,
+          "FloorD16": 65464,
+          "SeparationD16Steps": 0.37806895875712954
+        }
+      ]
+    },
+    {
+      "Frame": "1-200-90.ppm",
+      "RawSha256": "d8b29f7b7bcab975845711891cbb9703fff30f6d187d683c1b53a05e71bb0155",
+      "Expected": 22890,
+      "Missing": 88,
+      "D16PredictedMissing": 88,
+      "D16Disagreement": 0,
+      "VisibleBlockDepthRange": [
+        150.66029099876383,
+        266.1905818857355
+      ],
+      "Samples": [
+        {
+          "Pixel": [
+            356,
+            431
+          ],
+          "BlockViewZ": 175.669838602284,
+          "FloorViewZ": 176.93094813005388,
+          "BlockDepth": 0.9988634994967824,
+          "FloorDepth": 0.9988716143791683,
+          "BlockD16": 65461,
+          "FloorD16": 65461,
+          "SeparationD16Steps": 0.531808817155669
+        },
+        {
+          "Pixel": [
+            377,
+            431
+          ],
+          "BlockViewZ": 175.669838602284,
+          "FloorViewZ": 176.93094813005388,
+          "BlockDepth": 0.9988634994967824,
+          "FloorDepth": 0.9988716143791683,
+          "BlockD16": 65461,
+          "FloorD16": 65461,
+          "SeparationD16Steps": 0.531808817155669
+        },
+        {
+          "Pixel": [
+            399,
+            431
+          ],
+          "BlockViewZ": 175.669838602284,
+          "FloorViewZ": 176.93094813005388,
+          "BlockDepth": 0.9988634994967824,
+          "FloorDepth": 0.9988716143791683,
+          "BlockD16": 65461,
+          "FloorD16": 65461,
+          "SeparationD16Steps": 0.531808817155669
+        },
+        {
+          "Pixel": [
+            421,
+            431
+          ],
+          "BlockViewZ": 175.669838602284,
+          "FloorViewZ": 176.93094813005388,
+          "BlockDepth": 0.9988634994967824,
+          "FloorDepth": 0.9988716143791683,
+          "BlockD16": 65461,
+          "FloorD16": 65461,
+          "SeparationD16Steps": 0.531808817155669
+        },
+        {
+          "Pixel": [
+            443,
+            431
+          ],
+          "BlockViewZ": 175.669838602284,
+          "FloorViewZ": 176.93094813005388,
+          "BlockDepth": 0.9988634994967824,
+          "FloorDepth": 0.9988716143791683,
+          "BlockD16": 65461,
+          "FloorD16": 65461,
+          "SeparationD16Steps": 0.531808817155669
+        }
+      ]
+    },
+    {
+      "Frame": "1-2000-0.ppm",
+      "RawSha256": "5e33aa774288a5a5acccd2b57844141dbe73359917b6791140939c3c13366f3c",
+      "Expected": 350,
+      "Missing": 170,
+      "D16PredictedMissing": 170,
+      "D16Disagreement": 0,
+      "VisibleBlockDepthRange": [
+        2252.0276177391142,
+        2273.5608354774163
+      ],
+      "Samples": [
+        {
+          "Pixel": [
+            385,
+            298
+          ],
+          "BlockViewZ": 2261.5473672830963,
+          "FloorViewZ": 2324.832708750546,
+          "BlockDepth": 0.9999135648876648,
+          "FloorDepth": 0.9999159722206257,
+          "BlockD16": 65529,
+          "FloorD16": 65529,
+          "SeparationD16Steps": 0.1577645655901666
+        },
+        {
+          "Pixel": [
+            398,
+            299
+          ],
+          "BlockViewZ": 2263.9398935335853,
+          "FloorViewZ": 2316.683646800405,
+          "BlockDepth": 0.9999136583456816,
+          "FloorDepth": 0.9999156696131805,
+          "BlockD16": 65529,
+          "FloorD16": 65529,
+          "SeparationD16Steps": 0.1318084155391247
+        },
+        {
+          "Pixel": [
+            412,
+            300
+          ],
+          "BlockViewZ": 2266.3374873268167,
+          "FloorViewZ": 2308.591513894032,
+          "BlockDepth": 0.9999137518036983,
+          "FloorDepth": 0.9999153670057351,
+          "BlockD16": 65529,
+          "FloorD16": 65529,
+          "SeparationD16Steps": 0.10585226548080695
+        },
+        {
+          "Pixel": [
+            398,
+            302
+          ],
+          "BlockViewZ": 2271.1479420787223,
+          "FloorViewZ": 2292.5756655419245,
+          "BlockDepth": 0.9999139387197318,
+          "FloorDepth": 0.9999147617908446,
+          "BlockD16": 65529,
+          "FloorD16": 65529,
+          "SeparationD16Steps": 0.05393996537872314
+        },
+        {
+          "Pixel": [
+            413,
+            303
+          ],
+          "BlockViewZ": 2273.5608354774163,
+          "FloorViewZ": 2284.650785739303,
+          "BlockDepth": 0.9999140321777485,
+          "FloorDepth": 0.9999144591833994,
+          "BlockD16": 65529,
+          "FloorD16": 65529,
+          "SeparationD16Steps": 0.02798381532768124
+        }
+      ]
+    },
+    {
+      "Frame": "1-2000-45.ppm",
+      "RawSha256": "ffbe9f6f056b7f66bfccb193a516c71331d37261baa1c944e51e46cb8db35e35",
+      "Expected": 318,
+      "Missing": 145,
+      "D16PredictedMissing": 154,
+      "D16Disagreement": 9,
+      "VisibleBlockDepthRange": [
+        2214.2753883703044,
+        2312.671305083703
+      ],
+      "Samples": [
+        {
+          "Pixel": [
+            387,
+            298
+          ],
+          "BlockViewZ": 2231.314790122086,
+          "FloorViewZ": 2324.832708750546,
+          "BlockDepth": 0.9999123666607586,
+          "FloorDepth": 0.9999159722206257,
+          "BlockD16": 65529,
+          "FloorD16": 65529,
+          "SeparationD16Steps": 0.2362903658913651
+        },
+        {
+          "Pixel": [
+            407,
+            299
+          ],
+          "BlockViewZ": 2294.5116846035476,
+          "FloorViewZ": 2316.683646800405,
+          "BlockDepth": 0.9999148353990293,
+          "FloorDepth": 0.9999156696131805,
+          "BlockD16": 65529,
+          "FloorD16": 65529,
+          "SeparationD16Steps": 0.05467022439901548
+        },
+        {
+          "Pixel": [
+            399,
+            301
+          ],
+          "BlockViewZ": 2259.0347760652353,
+          "FloorViewZ": 2300.55571555166,
+          "BlockDepth": 0.9999134665265001,
+          "FloorDepth": 0.9999150643982899,
+          "BlockD16": 65529,
+          "FloorD16": 65529,
+          "SeparationD16Steps": 0.10471652774266427
+        },
+        {
+          "Pixel": [
+            399,
+            303
+          ],
+          "BlockViewZ": 2263.8295393972294,
+          "FloorViewZ": 2284.650785739303,
+          "BlockDepth": 0.9999136540393205,
+          "FloorDepth": 0.9999144591833994,
+          "BlockD16": 65529,
+          "FloorD16": 65529,
+          "SeparationD16Steps": 0.05276511720760324
+        },
+        {
+          "Pixel": [
+            392,
+            307
+          ],
+          "BlockViewZ": 2238.8222211584957,
+          "FloorViewZ": 2253.4916820553267,
+          "BlockDepth": 0.9999126672277806,
+          "FloorDepth": 0.9999132487536183,
+          "BlockD16": 65529,
+          "FloorD16": 65529,
+          "SeparationD16Steps": 0.03811029577407643
+        }
+      ]
+    },
+    {
+      "Frame": "1-2000-90.ppm",
+      "RawSha256": "6bf0e82901d429369b25f529dddc5178b0c6619b7d0f7922d2de5d43a72e22a2",
+      "Expected": 132,
+      "Missing": 72,
+      "D16PredictedMissing": 72,
+      "D16Disagreement": 0,
+      "VisibleBlockDepthRange": [
+        2206.5138547138895,
+        2311.8605454871918
+      ],
+      "Samples": [
+        {
+          "Pixel": [
+            397,
+            298
+          ],
+          "BlockViewZ": 2214.2753883703044,
+          "FloorViewZ": 2324.832708750546,
+          "BlockDepth": 0.999911676909827,
+          "FloorDepth": 0.9999159722206257,
+          "BlockD16": 65529,
+          "FloorD16": 65529,
+          "SeparationD16Steps": 0.28149319319330235
+        },
+        {
+          "Pixel": [
+            402,
+            300
+          ],
+          "BlockViewZ": 2206.6744901166767,
+          "FloorViewZ": 2308.591513894032,
+          "BlockDepth": 0.9999113657916097,
+          "FloorDepth": 0.9999153670057351,
+          "BlockD16": 65529,
+          "FloorD16": 65529,
+          "SeparationD16Steps": 0.2622195677127309
+        },
+        {
+          "Pixel": [
+            402,
+            303
+          ],
+          "BlockViewZ": 2213.707678327299,
+          "FloorViewZ": 2284.650785739303,
+          "BlockDepth": 0.9999116537462779,
+          "FloorDepth": 0.9999144591833994,
+          "BlockD16": 65529,
+          "FloorD16": 65529,
+          "SeparationD16Steps": 0.1838543217575206
+        },
+        {
+          "Pixel": [
+            402,
+            306
+          ],
+          "BlockViewZ": 2220.7858427223237,
+          "FloorViewZ": 2261.2015049946003,
+          "BlockDepth": 0.9999119417009461,
+          "FloorDepth": 0.9999135513610635,
+          "BlockD16": 65529,
+          "FloorD16": 65529,
+          "SeparationD16Steps": 0.10548907579503441
+        },
+        {
+          "Pixel": [
+            402,
+            309
+          ],
+          "BlockViewZ": 2227.9094161095572,
+          "FloorViewZ": 2238.228692991811,
+          "BlockDepth": 0.9999122296556143,
+          "FloorDepth": 0.9999126435387278,
+          "BlockD16": 65529,
+          "FloorD16": 65529,
+          "SeparationD16Steps": 0.027123829839824087
+        }
+      ]
+    },
+    {
+      "Frame": "1-500-0.ppm",
+      "RawSha256": "b2f3df08b5b7e6b183414d8203412cbcdab768802de8267630af1945a7060b7d",
+      "Expected": 6770,
+      "Missing": 734,
+      "D16PredictedMissing": 734,
+      "D16Disagreement": 0,
+      "VisibleBlockDepthRange": [
+        538.8242179996732,
+        563.0650689202837
+      ],
+      "Samples": [
+        {
+          "Pixel": [
+            338,
+            311
+          ],
+          "BlockViewZ": 560.0483956777125,
+          "FloorViewZ": 577.4858894569669,
+          "BlockDepth": 0.9996448876496681,
+          "FloorDepth": 0.9996556708472075,
+          "BlockD16": 65512,
+          "FloorD16": 65512,
+          "SeparationD16Steps": 0.7066768507474269
+        },
+        {
+          "Pixel": [
+            398,
+            312
+          ],
+          "BlockViewZ": 560.64914161538,
+          "FloorViewZ": 575.5498908667197,
+          "BlockDepth": 0.9996452703021668,
+          "FloorDepth": 0.9996545058869389,
+          "BlockD16": 65512,
+          "FloorD16": 65512,
+          "SeparationD16Steps": 0.6052540480442564
+        },
+        {
+          "Pixel": [
+            459,
+            313
+          ],
+          "BlockViewZ": 561.2511777387575,
+          "FloorViewZ": 573.6268296218464,
+          "BlockDepth": 0.9996456529546656,
+          "FloorDepth": 0.9996533409266705,
+          "BlockD16": 65512,
+          "FloorD16": 65512,
+          "SeparationD16Steps": 0.5038312453410859
+        },
+        {
+          "Pixel": [
+            398,
+            315
+          ],
+          "BlockViewZ": 562.4591372035476,
+          "FloorViewZ": 569.819003887337,
+          "BlockDepth": 0.999646418259663,
+          "FloorDepth": 0.9996510110061333,
+          "BlockD16": 65512,
+          "FloorD16": 65512,
+          "SeparationD16Steps": 0.3009856399274691
+        },
+        {
+          "Pixel": [
+            460,
+            316
+          ],
+          "BlockViewZ": 563.0650689202837,
+          "FloorViewZ": 567.9339860187602,
+          "BlockDepth": 0.9996468009121617,
+          "FloorDepth": 0.9996498460458647,
+          "BlockD16": 65512,
+          "FloorD16": 65512,
+          "SeparationD16Steps": 0.19956283722429857
+        }
+      ]
+    },
+    {
+      "Frame": "1-500-45.ppm",
+      "RawSha256": "1ee2739dd0b365c36cf800a54b6c9b08af291e7b2045d86f76193939cc641483",
+      "Expected": 6017,
+      "Missing": 372,
+      "D16PredictedMissing": 358,
+      "D16Disagreement": 20,
+      "VisibleBlockDepthRange": [
+        501.1505814790288,
+        607.1652693485629
+      ],
+      "Samples": [
+        {
+          "Pixel": [
+            447,
+            295
+          ],
+          "BlockViewZ": 606.3979797483066,
+          "FloorViewZ": 610.3339371601555,
+          "BlockDepth": 0.9996721832699534,
+          "FloorDepth": 0.9996743102115047,
+          "BlockD16": 65514,
+          "FloorD16": 65514,
+          "SeparationD16Steps": 0.13938911455901037
+        },
+        {
+          "Pixel": [
+            425,
+            304
+          ],
+          "BlockViewZ": 581.3512523696745,
+          "FloorViewZ": 591.411356197857,
+          "BlockDepth": 0.9996579735649966,
+          "FloorDepth": 0.9996638255690875,
+          "BlockD16": 65513,
+          "FloorD16": 65513,
+          "SeparationD16Steps": 0.3835110880949799
+        },
+        {
+          "Pixel": [
+            400,
+            317
+          ],
+          "BlockViewZ": 556.9502973920203,
+          "FloorViewZ": 566.0613986814708,
+          "BlockDepth": 0.9996429011722898,
+          "FloorDepth": 0.9996486810855961,
+          "BlockD16": 65512,
+          "FloorD16": 65512,
+          "SeparationD16Steps": 0.37878661852856765
+        },
+        {
+          "Pixel": [
+            377,
+            327
+          ],
+          "BlockViewZ": 535.1529125848926,
+          "FloorViewZ": 547.9930173131196,
+          "BlockDepth": 0.9996282746698624,
+          "FloorDepth": 0.9996370314829104,
+          "BlockD16": 65511,
+          "FloorD16": 65511,
+          "SeparationD16Steps": 0.5738777431017583
+        },
+        {
+          "Pixel": [
+            364,
+            338
+          ],
+          "BlockViewZ": 526.4283777362948,
+          "FloorViewZ": 529.4048609010583,
+          "BlockDepth": 0.9996220808934211,
+          "FloorDepth": 0.9996242169199562,
+          "BlockD16": 65510,
+          "FloorD16": 65510,
+          "SeparationD16Steps": 0.1399844989773441
+        }
+      ]
+    },
+    {
+      "Frame": "1-500-90.ppm",
+      "RawSha256": "9a93645b66f34ca71d1de09ac5775807a431d46278fd9c134fafbbc87a63f696",
+      "Expected": 2792,
+      "Missing": 196,
+      "D16PredictedMissing": 196,
+      "D16Disagreement": 0,
+      "VisibleBlockDepthRange": [
+        493.3359673571145,
+        606.3844737396995
+      ],
+      "Samples": [
+        {
+          "Pixel": [
+            386,
+            337
+          ],
+          "BlockViewZ": 514.0019975298027,
+          "FloorViewZ": 531.0424231777504,
+          "BlockDepth": 0.9996128960666819,
+          "FloorDepth": 0.9996253818802248,
+          "BlockD16": 65510,
+          "FloorD16": 65510,
+          "SeparationD16Steps": 0.818257790530722
+        },
+        {
+          "Pixel": [
+            406,
+            338
+          ],
+          "BlockViewZ": 514.5691690273399,
+          "FloorViewZ": 529.4048609010583,
+          "BlockDepth": 0.9996133249471415,
+          "FloorDepth": 0.9996242169199562,
+          "BlockD16": 65510,
+          "FloorD16": 65510,
+          "SeparationD16Steps": 0.7138054384097275
+        },
+        {
+          "Pixel": [
+            399,
+            340
+          ],
+          "BlockViewZ": 515.707275373502,
+          "FloorViewZ": 526.1598488927867,
+          "BlockDepth": 0.9996141827080607,
+          "FloorDepth": 0.999621886999419,
+          "BlockD16": 65510,
+          "FloorD16": 65510,
+          "SeparationD16Steps": 0.5049007341677386
+        },
+        {
+          "Pixel": [
+            392,
+            342
+          ],
+          "BlockViewZ": 516.850427328118,
+          "FloorViewZ": 522.9543754387113,
+          "BlockDepth": 0.9996150404689798,
+          "FloorDepth": 0.9996195570788818,
+          "BlockD16": 65510,
+          "FloorD16": 65510,
+          "SeparationD16Steps": 0.29599602993302554
+        },
+        {
+          "Pixel": [
+            413,
+            343
+          ],
+          "BlockViewZ": 517.4239059056431,
+          "FloorViewZ": 521.3662405331337,
+          "BlockDepth": 0.9996154693494393,
+          "FloorDepth": 0.9996183921186133,
+          "BlockD16": 65510,
+          "FloorD16": 65510,
+          "SeparationD16Steps": 0.19154367781203108
+        }
+      ]
+    },
+    {
+      "Frame": "2-1000-0.ppm",
+      "RawSha256": "9b9313a9186e93b8b724c35da825f54267045a0684a1bf988cbfdb8f160e5591",
+      "Expected": 1568,
+      "Missing": 0,
+      "D16PredictedMissing": 0,
+      "D16Disagreement": 0,
+      "VisibleBlockDepthRange": [
+        110.99290409230663,
+        113.28601199897159
+      ],
+      "Samples": []
+    },
+    {
+      "Frame": "2-1000-45.ppm",
+      "RawSha256": "2779a8a0d730621f557099b8c7c2e647b128445d84d37daf12c26c23369458fe",
+      "Expected": 1404,
+      "Missing": 10,
+      "D16PredictedMissing": 10,
+      "D16Disagreement": 0,
+      "VisibleBlockDepthRange": [
+        107.25926004555032,
+        117.5561051000177
+      ],
+      "Samples": [
+        {
+          "Pixel": [
+            423,
+            297
+          ],
+          "BlockViewZ": 117.41545008258959,
+          "FloorViewZ": 118.16964435423772,
+          "BlockDepth": 0.9982986449506884,
+          "FloorDepth": 0.9983095162758017,
+          "BlockD16": 65424,
+          "FloorD16": 65424,
+          "SeparationD16Steps": 0.7124522912960207
+        },
+        {
+          "Pixel": [
+            413,
+            302
+          ],
+          "BlockViewZ": 115.39263914989897,
+          "FloorViewZ": 116.12014026006429,
+          "BlockDepth": 0.9982687854618559,
+          "FloorDepth": 0.9982796441767979,
+          "BlockD16": 65422,
+          "FloorD16": 65422,
+          "SeparationD16Steps": 0.7116258837237716
+        },
+        {
+          "Pixel": [
+            409,
+            304
+          ],
+          "BlockViewZ": 114.60289643152032,
+          "FloorViewZ": 115.32010727934035,
+          "BlockDepth": 0.998256841666323,
+          "FloorDepth": 0.9982676953371965,
+          "BlockD16": 65421,
+          "FloorD16": 65421,
+          "SeparationD16Steps": 0.7112953206948719
+        },
+        {
+          "Pixel": [
+            393,
+            312
+          ],
+          "BlockViewZ": 111.54914446833672,
+          "FloorViewZ": 112.22725851269885,
+          "BlockDepth": 0.998209066484191,
+          "FloorDepth": 0.9982198999787907,
+          "BlockD16": 65418,
+          "FloorD16": 65418,
+          "SeparationD16Steps": 0.7099730685865491
+        },
+        {
+          "Pixel": [
+            383,
+            317
+          ],
+          "BlockViewZ": 109.72183855845614,
+          "FloorViewZ": 110.37708447519528,
+          "BlockDepth": 0.9981792069953586,
+          "FloorDepth": 0.9981900278797871,
+          "BlockD16": 65416,
+          "FloorD16": 65416,
+          "SeparationD16Steps": 0.7091466610215758
+        }
+      ]
+    },
+    {
+      "Frame": "2-1000-90.ppm",
+      "RawSha256": "57d0f89d67e64e489a516beb9adbdea77bd12ee161c1222bdc8e3296a81e4623",
+      "Expected": 588,
+      "Missing": 12,
+      "D16PredictedMissing": 12,
+      "D16Disagreement": 0,
+      "VisibleBlockDepthRange": [
+        106.36724780048208,
+        117.43877494581866
+      ],
+      "Samples": [
+        {
+          "Pixel": [
+            394,
+            320
+          ],
+          "BlockViewZ": 108.78401832135978,
+          "FloorViewZ": 109.29597506479841,
+          "BlockDepth": 0.9981634928105357,
+          "FloorDepth": 0.9981721046203849,
+          "BlockD16": 65415,
+          "FloorD16": 65415,
+          "SeparationD16Steps": 0.5643749584623353
+        },
+        {
+          "Pixel": [
+            396,
+            320
+          ],
+          "BlockViewZ": 108.78401832135978,
+          "FloorViewZ": 109.29597506479841,
+          "BlockDepth": 0.9981634928105357,
+          "FloorDepth": 0.9981721046203849,
+          "BlockD16": 65415,
+          "FloorD16": 65415,
+          "SeparationD16Steps": 0.5643749584623353
+        },
+        {
+          "Pixel": [
+            399,
+            320
+          ],
+          "BlockViewZ": 108.78401832135978,
+          "FloorViewZ": 109.29597506479841,
+          "BlockDepth": 0.9981634928105357,
+          "FloorDepth": 0.9981721046203849,
+          "BlockD16": 65415,
+          "FloorD16": 65415,
+          "SeparationD16Steps": 0.5643749584623353
+        },
+        {
+          "Pixel": [
+            402,
+            320
+          ],
+          "BlockViewZ": 108.78401832135978,
+          "FloorViewZ": 109.29597506479841,
+          "BlockDepth": 0.9981634928105357,
+          "FloorDepth": 0.9981721046203849,
+          "BlockD16": 65415,
+          "FloorD16": 65415,
+          "SeparationD16Steps": 0.5643749584623353
+        },
+        {
+          "Pixel": [
+            405,
+            320
+          ],
+          "BlockViewZ": 108.78401832135978,
+          "FloorViewZ": 109.29597506479841,
+          "BlockDepth": 0.9981634928105357,
+          "FloorDepth": 0.9981721046203849,
+          "BlockD16": 65415,
+          "FloorD16": 65415,
+          "SeparationD16Steps": 0.5643749584623353
+        }
+      ]
+    },
+    {
+      "Frame": "2-200-0.ppm",
+      "RawSha256": "889a963a2a38483559aec4fbda5dcdd810420be8fb4fbbf1d73b6fdb0c919b5a",
+      "Expected": 47208,
+      "Missing": 0,
+      "D16PredictedMissing": 0,
+      "D16Disagreement": 0,
+      "VisibleBlockDepthRange": [
+        19.640175052235364,
+        22.166044118575606
+      ],
+      "Samples": []
+    },
+    {
+      "Frame": "2-200-45.ppm",
+      "RawSha256": "e8b0dfd5dce40e689216dc0aa940c7bed7cfff83ea7a9150b2ccdf4a5150e74c",
+      "Expected": 41666,
+      "Missing": 0,
+      "D16PredictedMissing": 0,
+      "D16Disagreement": 0,
+      "VisibleBlockDepthRange": [
+        15.863415726965924,
+        26.653794245811152
+      ],
+      "Samples": []
+    },
+    {
+      "Frame": "2-200-90.ppm",
+      "RawSha256": "0650e1d148e292f0c55b5c4cf76aa825fce1e6696e16b8e400cb3fc9a94b2f6e",
+      "Expected": 22890,
+      "Missing": 0,
+      "D16PredictedMissing": 0,
+      "D16Disagreement": 0,
+      "VisibleBlockDepthRange": [
+        15.066029099876383,
+        26.619058188573543
+      ],
+      "Samples": []
+    },
+    {
+      "Frame": "2-2000-0.ppm",
+      "RawSha256": "adb29a34b01f3ebc136b0a8bb0ea76989d38f786523426f284b9c90128488dfc",
+      "Expected": 350,
+      "Missing": 0,
+      "D16PredictedMissing": 0,
+      "D16Disagreement": 0,
+      "VisibleBlockDepthRange": [
+        225.2027617739114,
+        227.3560835477416
+      ],
+      "Samples": []
+    },
+    {
+      "Frame": "2-2000-45.ppm",
+      "RawSha256": "7a8704ad6b2a7467c244512cc5102763f15a0f39bdc3d633be61bb378794dc4a",
+      "Expected": 318,
+      "Missing": 26,
+      "D16PredictedMissing": 26,
+      "D16Disagreement": 0,
+      "VisibleBlockDepthRange": [
+        221.42753883703045,
+        231.26713050837023
+      ],
+      "Samples": [
+        {
+          "Pixel": [
+            403,
+            300
+          ],
+          "BlockViewZ": 227.66350291487538,
+          "FloorViewZ": 230.8591513894032,
+          "BlockDepth": 0.9991235096096468,
+          "FloorDepth": 0.9991356700393517,
+          "BlockD16": 65478,
+          "FloorD16": 65478,
+          "SeparationD16Steps": 0.7969337607083987
+        },
+        {
+          "Pixel": [
+            404,
+            301
+          ],
+          "BlockViewZ": 228.41311323512022,
+          "FloorViewZ": 230.055571555166,
+          "BlockDepth": 0.9991263926554361,
+          "FloorDepth": 0.999132643964899,
+          "BlockD16": 65478,
+          "FloorD16": 65478,
+          "SeparationD16Steps": 0.4096795656483271
+        },
+        {
+          "Pixel": [
+            393,
+            305
+          ],
+          "BlockViewZ": 223.89985521261528,
+          "FloorViewZ": 226.8964263947685,
+          "BlockDepth": 0.9991087426132881,
+          "FloorDepth": 0.9991205396670884,
+          "BlockD16": 65477,
+          "FloorD16": 65477,
+          "SeparationD16Steps": 0.7731199208011941
+        },
+        {
+          "Pixel": [
+            389,
+            306
+          ],
+          "BlockViewZ": 224.0688165267665,
+          "FloorViewZ": 226.12015049946004,
+          "BlockDepth": 0.9991094161828843,
+          "FloorDepth": 0.9991175135926357,
+          "BlockD16": 65477,
+          "FloorD16": 65477,
+          "SeparationD16Steps": 0.530663748056962
+        },
+        {
+          "Pixel": [
+            392,
+            307
+          ],
+          "BlockViewZ": 223.88222211584952,
+          "FloorViewZ": 225.3491682055327,
+          "BlockDepth": 0.9991086722598057,
+          "FloorDepth": 0.999114487518183,
+          "BlockD16": 65477,
+          "FloorD16": 65477,
+          "SeparationD16Steps": 0.381102957755316
+        }
+      ]
+    },
+    {
+      "Frame": "2-2000-90.ppm",
+      "RawSha256": "545330fe96e3c0ef97618007df88471be9d00fbc040134c57828c6233c48acbe",
+      "Expected": 132,
+      "Missing": 0,
+      "D16PredictedMissing": 0,
+      "D16Disagreement": 0,
+      "VisibleBlockDepthRange": [
+        220.65138547138898,
+        231.1860545487192
+      ],
+      "Samples": []
+    },
+    {
+      "Frame": "2-500-0.ppm",
+      "RawSha256": "9c8c2ee6305b6e9ab1f5b40487eb9c06fa6a5be9300becfcc737630ce699d89d",
+      "Expected": 6770,
+      "Missing": 0,
+      "D16PredictedMissing": 0,
+      "D16Disagreement": 0,
+      "VisibleBlockDepthRange": [
+        53.88242179996732,
+        56.30650689202837
+      ],
+      "Samples": []
+    },
+    {
+      "Frame": "2-500-45.ppm",
+      "RawSha256": "5cf54e6b80bf6dc7a817bea1f831d4f8b7de93dc2fd2b31e96470fb166a45102",
+      "Expected": 6017,
+      "Missing": 0,
+      "D16PredictedMissing": 0,
+      "D16Disagreement": 0,
+      "VisibleBlockDepthRange": [
+        50.11505814790287,
+        60.716526934856276
+      ],
+      "Samples": []
+    },
+    {
+      "Frame": "2-500-90.ppm",
+      "RawSha256": "e41ef078a7114644bd1c3d643daa9bc419fa560b160803c863a15e319bfeac49",
+      "Expected": 2792,
+      "Missing": 0,
+      "D16PredictedMissing": 0,
+      "D16Disagreement": 0,
+      "VisibleBlockDepthRange": [
+        49.333596735711446,
+        60.638447373969946
+      ],
+      "Samples": []
+    }
+  ]
+}

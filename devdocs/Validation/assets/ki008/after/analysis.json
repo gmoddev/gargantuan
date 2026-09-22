@@ -1,0 +1,475 @@
+{
+  "Near": 0.1,
+  "Far": 100000,
+  "Projection": "zo",
+  "Records": [
+    {
+      "Frame": "0-1000-0.ppm",
+      "RawSha256": "afc5b8dc28cc28f29d1e1451181990b85642706353fb4e20be2d6d993ee1a319",
+      "Expected": 1568,
+      "Missing": 0,
+      "D16PredictedMissing": 540,
+      "D16Disagreement": 540,
+      "VisibleBlockDepthRange": [
+        1109.9290409230664,
+        1132.860119989716
+      ],
+      "Samples": []
+    },
+    {
+      "Frame": "0-1000-45.ppm",
+      "RawSha256": "bb8ffd8cd4090d602f8e9387377a2b597b8e7475f66da8a0c8d4958520067368",
+      "Expected": 1404,
+      "Missing": 0,
+      "D16PredictedMissing": 523,
+      "D16Disagreement": 523,
+      "VisibleBlockDepthRange": [
+        1072.5926004555033,
+        1175.561051000177
+      ],
+      "Samples": []
+    },
+    {
+      "Frame": "0-1000-90.ppm",
+      "RawSha256": "895e671083e5a664684d5581978c02a66586f2ff1c77186d055efc73cd118bf9",
+      "Expected": 588,
+      "Missing": 0,
+      "D16PredictedMissing": 264,
+      "D16Disagreement": 264,
+      "VisibleBlockDepthRange": [
+        1063.672478004821,
+        1174.3877494581866
+      ],
+      "Samples": []
+    },
+    {
+      "Frame": "0-200-0.ppm",
+      "RawSha256": "889a963a2a38483559aec4fbda5dcdd810420be8fb4fbbf1d73b6fdb0c919b5a",
+      "Expected": 47208,
+      "Missing": 0,
+      "D16PredictedMissing": 0,
+      "D16Disagreement": 0,
+      "VisibleBlockDepthRange": [
+        196.40175052235367,
+        221.66044118575604
+      ],
+      "Samples": []
+    },
+    {
+      "Frame": "0-200-45.ppm",
+      "RawSha256": "fd2abe017be4ea52f26be50a28421d32e110e3b6c9e9e31d4172021317f4f483",
+      "Expected": 41666,
+      "Missing": 0,
+      "D16PredictedMissing": 785,
+      "D16Disagreement": 785,
+      "VisibleBlockDepthRange": [
+        158.63415726965923,
+        266.5379424581115
+      ],
+      "Samples": []
+    },
+    {
+      "Frame": "0-200-90.ppm",
+      "RawSha256": "7dfe58b25f2da62e6df968125b6a3b198b67f79723fcd5d0a3fe0556556b89ae",
+      "Expected": 22890,
+      "Missing": 0,
+      "D16PredictedMissing": 528,
+      "D16Disagreement": 528,
+      "VisibleBlockDepthRange": [
+        150.66029099876383,
+        266.1905818857355
+      ],
+      "Samples": []
+    },
+    {
+      "Frame": "0-2000-0.ppm",
+      "RawSha256": "d9e083cc21e012a54272a12d8eb08a289b0dc3e7697d108a60bfcb20d653d1ef",
+      "Expected": 350,
+      "Missing": 0,
+      "D16PredictedMissing": 350,
+      "D16Disagreement": 350,
+      "VisibleBlockDepthRange": [
+        2252.0276177391142,
+        2273.5608354774163
+      ],
+      "Samples": []
+    },
+    {
+      "Frame": "0-2000-45.ppm",
+      "RawSha256": "1481c3cb44db0de66b4b9e68d3d8387038014ba8f90070b450a363cf0c44e431",
+      "Expected": 318,
+      "Missing": 0,
+      "D16PredictedMissing": 235,
+      "D16Disagreement": 235,
+      "VisibleBlockDepthRange": [
+        2214.2753883703044,
+        2312.671305083703
+      ],
+      "Samples": []
+    },
+    {
+      "Frame": "0-2000-90.ppm",
+      "RawSha256": "545330fe96e3c0ef97618007df88471be9d00fbc040134c57828c6233c48acbe",
+      "Expected": 132,
+      "Missing": 0,
+      "D16PredictedMissing": 84,
+      "D16Disagreement": 84,
+      "VisibleBlockDepthRange": [
+        2206.5138547138895,
+        2311.8605454871918
+      ],
+      "Samples": []
+    },
+    {
+      "Frame": "0-500-0.ppm",
+      "RawSha256": "f3da3826763caeab39b889c0ef8f6c9b4ee00781076d5e8525f19402c07274d1",
+      "Expected": 6770,
+      "Missing": 0,
+      "D16PredictedMissing": 0,
+      "D16Disagreement": 0,
+      "VisibleBlockDepthRange": [
+        538.8242179996732,
+        563.0650689202837
+      ],
+      "Samples": []
+    },
+    {
+      "Frame": "0-500-45.ppm",
+      "RawSha256": "c2743a8a6a4b2bd8282a7a34b359effcd803b623d61286b4338b887036a03bd0",
+      "Expected": 6017,
+      "Missing": 0,
+      "D16PredictedMissing": 1100,
+      "D16Disagreement": 1100,
+      "VisibleBlockDepthRange": [
+        501.1505814790288,
+        607.1652693485629
+      ],
+      "Samples": []
+    },
+    {
+      "Frame": "0-500-90.ppm",
+      "RawSha256": "015ab0917d715e73114b06220b2b62725eea8c035a6d279ca5c4ff8dbd61faf8",
+      "Expected": 2792,
+      "Missing": 0,
+      "D16PredictedMissing": 28,
+      "D16Disagreement": 28,
+      "VisibleBlockDepthRange": [
+        493.3359673571145,
+        606.3844737396995
+      ],
+      "Samples": []
+    },
+    {
+      "Frame": "1-1000-0.ppm",
+      "RawSha256": "afc5b8dc28cc28f29d1e1451181990b85642706353fb4e20be2d6d993ee1a319",
+      "Expected": 1568,
+      "Missing": 0,
+      "D16PredictedMissing": 540,
+      "D16Disagreement": 540,
+      "VisibleBlockDepthRange": [
+        1109.9290409230664,
+        1132.860119989716
+      ],
+      "Samples": []
+    },
+    {
+      "Frame": "1-1000-45.ppm",
+      "RawSha256": "bb8ffd8cd4090d602f8e9387377a2b597b8e7475f66da8a0c8d4958520067368",
+      "Expected": 1404,
+      "Missing": 0,
+      "D16PredictedMissing": 523,
+      "D16Disagreement": 523,
+      "VisibleBlockDepthRange": [
+        1072.5926004555033,
+        1175.561051000177
+      ],
+      "Samples": []
+    },
+    {
+      "Frame": "1-1000-90.ppm",
+      "RawSha256": "895e671083e5a664684d5581978c02a66586f2ff1c77186d055efc73cd118bf9",
+      "Expected": 588,
+      "Missing": 0,
+      "D16PredictedMissing": 264,
+      "D16Disagreement": 264,
+      "VisibleBlockDepthRange": [
+        1063.672478004821,
+        1174.3877494581866
+      ],
+      "Samples": []
+    },
+    {
+      "Frame": "1-200-0.ppm",
+      "RawSha256": "889a963a2a38483559aec4fbda5dcdd810420be8fb4fbbf1d73b6fdb0c919b5a",
+      "Expected": 47208,
+      "Missing": 0,
+      "D16PredictedMissing": 0,
+      "D16Disagreement": 0,
+      "VisibleBlockDepthRange": [
+        196.40175052235367,
+        221.66044118575604
+      ],
+      "Samples": []
+    },
+    {
+      "Frame": "1-200-45.ppm",
+      "RawSha256": "4195fa3230aa7d2e15907198291f97b34aaffe1a9f51b45bedd2ccec362e4c6a",
+      "Expected": 41666,
+      "Missing": 0,
+      "D16PredictedMissing": 785,
+      "D16Disagreement": 785,
+      "VisibleBlockDepthRange": [
+        158.63415726965923,
+        266.5379424581115
+      ],
+      "Samples": []
+    },
+    {
+      "Frame": "1-200-90.ppm",
+      "RawSha256": "7dfe58b25f2da62e6df968125b6a3b198b67f79723fcd5d0a3fe0556556b89ae",
+      "Expected": 22890,
+      "Missing": 0,
+      "D16PredictedMissing": 528,
+      "D16Disagreement": 528,
+      "VisibleBlockDepthRange": [
+        150.66029099876383,
+        266.1905818857355
+      ],
+      "Samples": []
+    },
+    {
+      "Frame": "1-2000-0.ppm",
+      "RawSha256": "adb29a34b01f3ebc136b0a8bb0ea76989d38f786523426f284b9c90128488dfc",
+      "Expected": 350,
+      "Missing": 0,
+      "D16PredictedMissing": 350,
+      "D16Disagreement": 350,
+      "VisibleBlockDepthRange": [
+        2252.0276177391142,
+        2273.5608354774163
+      ],
+      "Samples": []
+    },
+    {
+      "Frame": "1-2000-45.ppm",
+      "RawSha256": "ee732202e96c4b05cbcf7895ad3fde90e9cc89a270db33cbfaf1eb6e3d866491",
+      "Expected": 318,
+      "Missing": 0,
+      "D16PredictedMissing": 235,
+      "D16Disagreement": 235,
+      "VisibleBlockDepthRange": [
+        2214.2753883703044,
+        2312.671305083703
+      ],
+      "Samples": []
+    },
+    {
+      "Frame": "1-2000-90.ppm",
+      "RawSha256": "545330fe96e3c0ef97618007df88471be9d00fbc040134c57828c6233c48acbe",
+      "Expected": 132,
+      "Missing": 0,
+      "D16PredictedMissing": 84,
+      "D16Disagreement": 84,
+      "VisibleBlockDepthRange": [
+        2206.5138547138895,
+        2311.8605454871918
+      ],
+      "Samples": []
+    },
+    {
+      "Frame": "1-500-0.ppm",
+      "RawSha256": "f3da3826763caeab39b889c0ef8f6c9b4ee00781076d5e8525f19402c07274d1",
+      "Expected": 6770,
+      "Missing": 0,
+      "D16PredictedMissing": 0,
+      "D16Disagreement": 0,
+      "VisibleBlockDepthRange": [
+        538.8242179996732,
+        563.0650689202837
+      ],
+      "Samples": []
+    },
+    {
+      "Frame": "1-500-45.ppm",
+      "RawSha256": "9c92c2a0015f323e56f6ae9bea685d912d0fd049fd6d2e330fff8f3e8c81c305",
+      "Expected": 6017,
+      "Missing": 0,
+      "D16PredictedMissing": 1100,
+      "D16Disagreement": 1100,
+      "VisibleBlockDepthRange": [
+        501.1505814790288,
+        607.1652693485629
+      ],
+      "Samples": []
+    },
+    {
+      "Frame": "1-500-90.ppm",
+      "RawSha256": "015ab0917d715e73114b06220b2b62725eea8c035a6d279ca5c4ff8dbd61faf8",
+      "Expected": 2792,
+      "Missing": 0,
+      "D16PredictedMissing": 28,
+      "D16Disagreement": 28,
+      "VisibleBlockDepthRange": [
+        493.3359673571145,
+        606.3844737396995
+      ],
+      "Samples": []
+    },
+    {
+      "Frame": "2-1000-0.ppm",
+      "RawSha256": "afc5b8dc28cc28f29d1e1451181990b85642706353fb4e20be2d6d993ee1a319",
+      "Expected": 1568,
+      "Missing": 0,
+      "D16PredictedMissing": 0,
+      "D16Disagreement": 0,
+      "VisibleBlockDepthRange": [
+        110.99290409230663,
+        113.28601199897159
+      ],
+      "Samples": []
+    },
+    {
+      "Frame": "2-1000-45.ppm",
+      "RawSha256": "99c60fbd551dcc804c4a1230c835e848ca8b7373864f1b616a1a64e6d9491555",
+      "Expected": 1404,
+      "Missing": 0,
+      "D16PredictedMissing": 55,
+      "D16Disagreement": 55,
+      "VisibleBlockDepthRange": [
+        107.25926004555032,
+        117.5561051000177
+      ],
+      "Samples": []
+    },
+    {
+      "Frame": "2-1000-90.ppm",
+      "RawSha256": "895e671083e5a664684d5581978c02a66586f2ff1c77186d055efc73cd118bf9",
+      "Expected": 588,
+      "Missing": 0,
+      "D16PredictedMissing": 36,
+      "D16Disagreement": 36,
+      "VisibleBlockDepthRange": [
+        106.36724780048208,
+        117.43877494581866
+      ],
+      "Samples": []
+    },
+    {
+      "Frame": "2-200-0.ppm",
+      "RawSha256": "889a963a2a38483559aec4fbda5dcdd810420be8fb4fbbf1d73b6fdb0c919b5a",
+      "Expected": 47208,
+      "Missing": 0,
+      "D16PredictedMissing": 0,
+      "D16Disagreement": 0,
+      "VisibleBlockDepthRange": [
+        19.640175052235364,
+        22.166044118575606
+      ],
+      "Samples": []
+    },
+    {
+      "Frame": "2-200-45.ppm",
+      "RawSha256": "18d191562b8c00797562245ea3ada7fecc126cdbfa00f3db82b6d0c3abb890d7",
+      "Expected": 41666,
+      "Missing": 0,
+      "D16PredictedMissing": 0,
+      "D16Disagreement": 0,
+      "VisibleBlockDepthRange": [
+        15.863415726965924,
+        26.653794245811152
+      ],
+      "Samples": []
+    },
+    {
+      "Frame": "2-200-90.ppm",
+      "RawSha256": "0650e1d148e292f0c55b5c4cf76aa825fce1e6696e16b8e400cb3fc9a94b2f6e",
+      "Expected": 22890,
+      "Missing": 0,
+      "D16PredictedMissing": 0,
+      "D16Disagreement": 0,
+      "VisibleBlockDepthRange": [
+        15.066029099876383,
+        26.619058188573543
+      ],
+      "Samples": []
+    },
+    {
+      "Frame": "2-2000-0.ppm",
+      "RawSha256": "27a0b7dd1429313355d16311835313bc2e8bd615321f7689b684b6b7aa3998e2",
+      "Expected": 350,
+      "Missing": 0,
+      "D16PredictedMissing": 56,
+      "D16Disagreement": 56,
+      "VisibleBlockDepthRange": [
+        225.2027617739114,
+        227.3560835477416
+      ],
+      "Samples": []
+    },
+    {
+      "Frame": "2-2000-45.ppm",
+      "RawSha256": "ceb3f80a6eca2bc8c62acf9212511ad7b7d63ebd7f65c074a2aa477afba2d1f2",
+      "Expected": 318,
+      "Missing": 0,
+      "D16PredictedMissing": 76,
+      "D16Disagreement": 76,
+      "VisibleBlockDepthRange": [
+        221.42753883703045,
+        231.26713050837023
+      ],
+      "Samples": []
+    },
+    {
+      "Frame": "2-2000-90.ppm",
+      "RawSha256": "64fe9f42cf70d412d67a3694e0b8335868fdeb6a0685f2c3ecb983e9b9d1b889",
+      "Expected": 132,
+      "Missing": 0,
+      "D16PredictedMissing": 30,
+      "D16Disagreement": 30,
+      "VisibleBlockDepthRange": [
+        220.65138547138898,
+        231.1860545487192
+      ],
+      "Samples": []
+    },
+    {
+      "Frame": "2-500-0.ppm",
+      "RawSha256": "9c8c2ee6305b6e9ab1f5b40487eb9c06fa6a5be9300becfcc737630ce699d89d",
+      "Expected": 6770,
+      "Missing": 0,
+      "D16PredictedMissing": 0,
+      "D16Disagreement": 0,
+      "VisibleBlockDepthRange": [
+        53.88242179996732,
+        56.30650689202837
+      ],
+      "Samples": []
+    },
+    {
+      "Frame": "2-500-45.ppm",
+      "RawSha256": "b7cae9468b2e7e58252f27ed0d1477b6797438024d78578d296afbf62dcfa7d3",
+      "Expected": 6017,
+      "Missing": 0,
+      "D16PredictedMissing": 26,
+      "D16Disagreement": 26,
+      "VisibleBlockDepthRange": [
+        50.11505814790287,
+        60.716526934856276
+      ],
+      "Samples": []
+    },
+    {
+      "Frame": "2-500-90.ppm",
+      "RawSha256": "e41ef078a7114644bd1c3d643daa9bc419fa560b160803c863a15e319bfeac49",
+      "Expected": 2792,
+      "Missing": 0,
+      "D16PredictedMissing": 0,
+      "D16Disagreement": 0,
+      "VisibleBlockDepthRange": [
+        49.333596735711446,
+        60.638447373969946
+      ],
+      "Samples": []
+    }
+  ]
+}

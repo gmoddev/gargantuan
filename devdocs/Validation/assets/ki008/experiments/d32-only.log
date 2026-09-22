@@ -1,0 +1,54 @@
+HookApp::findGameWindow, injectWindow: 0000000000000000
+HookApp::findGameWindow, graphicsWindow: 0000000000000000
+[Render:Depth] Driver=vulkan D16=1 D24=0 D32=1
+[Render:Depth] Near=0.1 Far=100000 Projection=production
+[Render:Depth] Matrix22=-1 Matrix32=-0.2
+[Render:Depth] 0-200-0 missing=0 expected=47208
+[Render:Depth] 0-200-45 missing=0 expected=41666
+[Render:Depth] 0-200-90 missing=0 expected=22890
+[Render:Depth] 0-500-0 missing=0 expected=6770
+[Render:Depth] 0-500-45 missing=0 expected=6017
+[Render:Depth] 0-500-90 missing=0 expected=2792
+[Render:Depth] 0-1000-0 missing=0 expected=1568
+[Render:Depth] 0-1000-45 missing=0 expected=1404
+[Render:Depth] 0-1000-90 missing=0 expected=588
+[Render:Depth] 0-2000-0 missing=0 expected=350
+[Render:Depth] 0-2000-45 missing=0 expected=318
+[Render:Depth] 0-2000-90 missing=0 expected=132
+[Render:Depth] 1-200-0 missing=0 expected=47208
+[Render:Depth] 1-200-45 missing=0 expected=41666
+[Render:Depth] 1-200-90 missing=0 expected=22890
+[Render:Depth] 1-500-0 missing=0 expected=6770
+[Render:Depth] 1-500-45 missing=0 expected=6017
+[Render:Depth] 1-500-90 missing=0 expected=2792
+[Render:Depth] 1-1000-0 missing=0 expected=1568
+[Render:Depth] 1-1000-45 missing=0 expected=1404
+[Render:Depth] 1-1000-90 missing=0 expected=588
+[Render:Depth] 1-2000-0 missing=0 expected=350
+[Render:Depth] 1-2000-45 missing=0 expected=318
+[Render:Depth] 1-2000-90 missing=0 expected=132
+[Render:Depth] 2-200-0 missing=0 expected=47208
+[Render:Depth] 2-200-45 missing=0 expected=41666
+[Render:Depth] 2-200-90 missing=0 expected=22890
+[Render:Depth] 2-500-0 missing=0 expected=6770
+[Render:Depth] 2-500-45 missing=0 expected=6017
+[Render:Depth] 2-500-90 missing=0 expected=2792
+[Render:Depth] 2-1000-0 missing=0 expected=1568
+[Render:Depth] 2-1000-45 missing=0 expected=1404
+[Render:Depth] 2-1000-90 missing=0 expected=588
+[Render:Depth] 2-2000-0 missing=0 expected=350
+[Render:Depth] 2-2000-45 missing=0 expected=318
+[Render:Depth] 2-2000-90 missing=0 expected=132
+[Render:Depth] separation depth=0.15 gap=0.001 visible=1 wrong=169
+[Render:Depth] separation depth=0.05 gap=0.001 visible=0 wrong=0
+[Render:Depth] separation depth=1 gap=0.001 visible=1 wrong=0
+[Render:Depth] separation depth=500 gap=0.5 visible=1 wrong=0
+[Render:Depth] separation depth=2000 gap=2 visible=1 wrong=169
+[Render:Depth] separation depth=10000 gap=256 visible=1 wrong=0
+[Render:Depth] separation depth=110000 gap=256 visible=0 wrong=0
+[Render:Depth] resize=1920x1080 resizeUs=3296 captureMedianUs=5165 captureMaxUs=8048 missing=0
+[Render:Depth] resize=2560x1440 resizeUs=14464 captureMedianUs=9746 captureMaxUs=11969 missing=0
+[Render:Depth] resize=3840x2160 resizeUs=19013 captureMedianUs=18978 captureMaxUs=24608 missing=0
+[Render:Depth] resize=320x240 resizeUs=835 captureMedianUs=573 captureMaxUs=1765 missing=0
+[Render:Depth] resize=800x600 resizeUs=468 captureMedianUs=1641 captureMaxUs=4492 missing=0
+[Render:Depth] Cases=36 MissingTotal=338

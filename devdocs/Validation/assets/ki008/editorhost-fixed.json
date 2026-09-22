@@ -1,0 +1,942 @@
+{
+  "EngineSha256": "a8ebdd462572f0aa40a6f3ee3fefbb7997b3560ac73babc87e9c5146f8e03917",
+  "SceneSha256": "f755f8187a04bbc140fa2c58f9477eb3c63dc02b7f1b70641fd16c229ecc4fb2",
+  "Records": [
+    {
+      "Variant": "baseline",
+      "Image": "distance-200-angle-0.png",
+      "Camera": {
+        "Position": [
+          189.5,
+          125.0,
+          -28.75
+        ],
+        "Target": [
+          -10.5,
+          15.0,
+          -28.75
+        ],
+        "FieldOfView": 60.0,
+        "CameraRevision": 1
+      },
+      "Frame": 1,
+      "RawSha256": "889a963a2a38483559aec4fbda5dcdd810420be8fb4fbbf1d73b6fdb0c919b5a",
+      "InteriorBlockPixels": 47208,
+      "MissingBlockPixels": 0,
+      "D16NOPredictedMissing": 629,
+      "D16NODisagreement": 629,
+      "D16ZOPredictedMissing": 0,
+      "D16ZODisagreement": 0
+    },
+    {
+      "Variant": "baseline",
+      "Image": "distance-200-angle-45.png",
+      "Camera": {
+        "Position": [
+          130.92135620117188,
+          125.0,
+          112.67135620117188
+        ],
+        "Target": [
+          -10.5,
+          15.0,
+          -28.75
+        ],
+        "FieldOfView": 60.0,
+        "CameraRevision": 2
+      },
+      "Frame": 2,
+      "RawSha256": "fd2abe017be4ea52f26be50a28421d32e110e3b6c9e9e31d4172021317f4f483",
+      "InteriorBlockPixels": 41666,
+      "MissingBlockPixels": 0,
+      "D16NOPredictedMissing": 296,
+      "D16NODisagreement": 296,
+      "D16ZOPredictedMissing": 785,
+      "D16ZODisagreement": 785
+    },
+    {
+      "Variant": "baseline",
+      "Image": "distance-200-angle-90.png",
+      "Camera": {
+        "Position": [
+          -10.5,
+          125.0,
+          171.25
+        ],
+        "Target": [
+          -10.5,
+          15.0,
+          -28.75
+        ],
+        "FieldOfView": 60.0,
+        "CameraRevision": 3
+      },
+      "Frame": 3,
+      "RawSha256": "7dfe58b25f2da62e6df968125b6a3b198b67f79723fcd5d0a3fe0556556b89ae",
+      "InteriorBlockPixels": 22890,
+      "MissingBlockPixels": 0,
+      "D16NOPredictedMissing": 88,
+      "D16NODisagreement": 88,
+      "D16ZOPredictedMissing": 528,
+      "D16ZODisagreement": 528
+    },
+    {
+      "Variant": "baseline",
+      "Image": "distance-500-angle-0.png",
+      "Camera": {
+        "Position": [
+          489.5,
+          290.0,
+          -28.75
+        ],
+        "Target": [
+          -10.5,
+          15.0,
+          -28.75
+        ],
+        "FieldOfView": 60.0,
+        "CameraRevision": 4
+      },
+      "Frame": 4,
+      "RawSha256": "f3da3826763caeab39b889c0ef8f6c9b4ee00781076d5e8525f19402c07274d1",
+      "InteriorBlockPixels": 6770,
+      "MissingBlockPixels": 0,
+      "D16NOPredictedMissing": 734,
+      "D16NODisagreement": 734,
+      "D16ZOPredictedMissing": 0,
+      "D16ZODisagreement": 0
+    },
+    {
+      "Variant": "baseline",
+      "Image": "distance-500-angle-45.png",
+      "Camera": {
+        "Position": [
+          343.05340576171875,
+          290.0,
+          324.80340576171875
+        ],
+        "Target": [
+          -10.5,
+          15.0,
+          -28.75
+        ],
+        "FieldOfView": 60.0,
+        "CameraRevision": 5
+      },
+      "Frame": 5,
+      "RawSha256": "c2743a8a6a4b2bd8282a7a34b359effcd803b623d61286b4338b887036a03bd0",
+      "InteriorBlockPixels": 6017,
+      "MissingBlockPixels": 0,
+      "D16NOPredictedMissing": 358,
+      "D16NODisagreement": 358,
+      "D16ZOPredictedMissing": 1100,
+      "D16ZODisagreement": 1100
+    },
+    {
+      "Variant": "baseline",
+      "Image": "distance-500-angle-90.png",
+      "Camera": {
+        "Position": [
+          -10.5,
+          290.0,
+          471.25
+        ],
+        "Target": [
+          -10.5,
+          15.0,
+          -28.75
+        ],
+        "FieldOfView": 60.0,
+        "CameraRevision": 6
+      },
+      "Frame": 6,
+      "RawSha256": "015ab0917d715e73114b06220b2b62725eea8c035a6d279ca5c4ff8dbd61faf8",
+      "InteriorBlockPixels": 2792,
+      "MissingBlockPixels": 0,
+      "D16NOPredictedMissing": 196,
+      "D16NODisagreement": 196,
+      "D16ZOPredictedMissing": 28,
+      "D16ZODisagreement": 28
+    },
+    {
+      "Variant": "baseline",
+      "Image": "distance-1000-angle-0.png",
+      "Camera": {
+        "Position": [
+          989.5,
+          565.0,
+          -28.75
+        ],
+        "Target": [
+          -10.5,
+          15.0,
+          -28.75
+        ],
+        "FieldOfView": 60.0,
+        "CameraRevision": 7
+      },
+      "Frame": 7,
+      "RawSha256": "afc5b8dc28cc28f29d1e1451181990b85642706353fb4e20be2d6d993ee1a319",
+      "InteriorBlockPixels": 1568,
+      "MissingBlockPixels": 0,
+      "D16NOPredictedMissing": 300,
+      "D16NODisagreement": 300,
+      "D16ZOPredictedMissing": 540,
+      "D16ZODisagreement": 540
+    },
+    {
+      "Variant": "baseline",
+      "Image": "distance-1000-angle-45.png",
+      "Camera": {
+        "Position": [
+          696.6068115234375,
+          565.0,
+          678.3568115234375
+        ],
+        "Target": [
+          -10.5,
+          15.0,
+          -28.75
+        ],
+        "FieldOfView": 60.0,
+        "CameraRevision": 8
+      },
+      "Frame": 8,
+      "RawSha256": "bb8ffd8cd4090d602f8e9387377a2b597b8e7475f66da8a0c8d4958520067368",
+      "InteriorBlockPixels": 1404,
+      "MissingBlockPixels": 0,
+      "D16NOPredictedMissing": 285,
+      "D16NODisagreement": 285,
+      "D16ZOPredictedMissing": 523,
+      "D16ZODisagreement": 523
+    },
+    {
+      "Variant": "baseline",
+      "Image": "distance-1000-angle-90.png",
+      "Camera": {
+        "Position": [
+          -10.5,
+          565.0,
+          971.25
+        ],
+        "Target": [
+          -10.5,
+          15.0,
+          -28.75
+        ],
+        "FieldOfView": 60.0,
+        "CameraRevision": 9
+      },
+      "Frame": 9,
+      "RawSha256": "895e671083e5a664684d5581978c02a66586f2ff1c77186d055efc73cd118bf9",
+      "InteriorBlockPixels": 588,
+      "MissingBlockPixels": 0,
+      "D16NOPredictedMissing": 120,
+      "D16NODisagreement": 120,
+      "D16ZOPredictedMissing": 264,
+      "D16ZODisagreement": 264
+    },
+    {
+      "Variant": "baseline",
+      "Image": "distance-2000-angle-0.png",
+      "Camera": {
+        "Position": [
+          1989.5,
+          1115.0,
+          -28.75
+        ],
+        "Target": [
+          -10.5,
+          15.0,
+          -28.75
+        ],
+        "FieldOfView": 60.0,
+        "CameraRevision": 10
+      },
+      "Frame": 10,
+      "RawSha256": "d9e083cc21e012a54272a12d8eb08a289b0dc3e7697d108a60bfcb20d653d1ef",
+      "InteriorBlockPixels": 350,
+      "MissingBlockPixels": 0,
+      "D16NOPredictedMissing": 170,
+      "D16NODisagreement": 170,
+      "D16ZOPredictedMissing": 350,
+      "D16ZODisagreement": 350
+    },
+    {
+      "Variant": "baseline",
+      "Image": "distance-2000-angle-45.png",
+      "Camera": {
+        "Position": [
+          1403.713623046875,
+          1115.0,
+          1385.463623046875
+        ],
+        "Target": [
+          -10.5,
+          15.0,
+          -28.75
+        ],
+        "FieldOfView": 60.0,
+        "CameraRevision": 11
+      },
+      "Frame": 11,
+      "RawSha256": "1481c3cb44db0de66b4b9e68d3d8387038014ba8f90070b450a363cf0c44e431",
+      "InteriorBlockPixels": 318,
+      "MissingBlockPixels": 0,
+      "D16NOPredictedMissing": 154,
+      "D16NODisagreement": 154,
+      "D16ZOPredictedMissing": 235,
+      "D16ZODisagreement": 235
+    },
+    {
+      "Variant": "baseline",
+      "Image": "distance-2000-angle-90.png",
+      "Camera": {
+        "Position": [
+          -10.5,
+          1115.0,
+          1971.25
+        ],
+        "Target": [
+          -10.5,
+          15.0,
+          -28.75
+        ],
+        "FieldOfView": 60.0,
+        "CameraRevision": 12
+      },
+      "Frame": 12,
+      "RawSha256": "545330fe96e3c0ef97618007df88471be9d00fbc040134c57828c6233c48acbe",
+      "InteriorBlockPixels": 132,
+      "MissingBlockPixels": 0,
+      "D16NOPredictedMissing": 72,
+      "D16NODisagreement": 72,
+      "D16ZOPredictedMissing": 84,
+      "D16ZODisagreement": 84
+    },
+    {
+      "Variant": "no-shadows",
+      "Image": "distance-200-angle-0.png",
+      "Camera": {
+        "Position": [
+          189.5,
+          125.0,
+          -28.75
+        ],
+        "Target": [
+          -10.5,
+          15.0,
+          -28.75
+        ],
+        "FieldOfView": 60.0,
+        "CameraRevision": 1
+      },
+      "Frame": 1,
+      "RawSha256": "889a963a2a38483559aec4fbda5dcdd810420be8fb4fbbf1d73b6fdb0c919b5a",
+      "InteriorBlockPixels": 47208,
+      "MissingBlockPixels": 0,
+      "D16NOPredictedMissing": 629,
+      "D16NODisagreement": 629,
+      "D16ZOPredictedMissing": 0,
+      "D16ZODisagreement": 0
+    },
+    {
+      "Variant": "no-shadows",
+      "Image": "distance-200-angle-45.png",
+      "Camera": {
+        "Position": [
+          130.92135620117188,
+          125.0,
+          112.67135620117188
+        ],
+        "Target": [
+          -10.5,
+          15.0,
+          -28.75
+        ],
+        "FieldOfView": 60.0,
+        "CameraRevision": 2
+      },
+      "Frame": 2,
+      "RawSha256": "4195fa3230aa7d2e15907198291f97b34aaffe1a9f51b45bedd2ccec362e4c6a",
+      "InteriorBlockPixels": 41666,
+      "MissingBlockPixels": 0,
+      "D16NOPredictedMissing": 296,
+      "D16NODisagreement": 296,
+      "D16ZOPredictedMissing": 785,
+      "D16ZODisagreement": 785
+    },
+    {
+      "Variant": "no-shadows",
+      "Image": "distance-200-angle-90.png",
+      "Camera": {
+        "Position": [
+          -10.5,
+          125.0,
+          171.25
+        ],
+        "Target": [
+          -10.5,
+          15.0,
+          -28.75
+        ],
+        "FieldOfView": 60.0,
+        "CameraRevision": 3
+      },
+      "Frame": 3,
+      "RawSha256": "7dfe58b25f2da62e6df968125b6a3b198b67f79723fcd5d0a3fe0556556b89ae",
+      "InteriorBlockPixels": 22890,
+      "MissingBlockPixels": 0,
+      "D16NOPredictedMissing": 88,
+      "D16NODisagreement": 88,
+      "D16ZOPredictedMissing": 528,
+      "D16ZODisagreement": 528
+    },
+    {
+      "Variant": "no-shadows",
+      "Image": "distance-500-angle-0.png",
+      "Camera": {
+        "Position": [
+          489.5,
+          290.0,
+          -28.75
+        ],
+        "Target": [
+          -10.5,
+          15.0,
+          -28.75
+        ],
+        "FieldOfView": 60.0,
+        "CameraRevision": 4
+      },
+      "Frame": 4,
+      "RawSha256": "f3da3826763caeab39b889c0ef8f6c9b4ee00781076d5e8525f19402c07274d1",
+      "InteriorBlockPixels": 6770,
+      "MissingBlockPixels": 0,
+      "D16NOPredictedMissing": 734,
+      "D16NODisagreement": 734,
+      "D16ZOPredictedMissing": 0,
+      "D16ZODisagreement": 0
+    },
+    {
+      "Variant": "no-shadows",
+      "Image": "distance-500-angle-45.png",
+      "Camera": {
+        "Position": [
+          343.05340576171875,
+          290.0,
+          324.80340576171875
+        ],
+        "Target": [
+          -10.5,
+          15.0,
+          -28.75
+        ],
+        "FieldOfView": 60.0,
+        "CameraRevision": 5
+      },
+      "Frame": 5,
+      "RawSha256": "9c92c2a0015f323e56f6ae9bea685d912d0fd049fd6d2e330fff8f3e8c81c305",
+      "InteriorBlockPixels": 6017,
+      "MissingBlockPixels": 0,
+      "D16NOPredictedMissing": 358,
+      "D16NODisagreement": 358,
+      "D16ZOPredictedMissing": 1100,
+      "D16ZODisagreement": 1100
+    },
+    {
+      "Variant": "no-shadows",
+      "Image": "distance-500-angle-90.png",
+      "Camera": {
+        "Position": [
+          -10.5,
+          290.0,
+          471.25
+        ],
+        "Target": [
+          -10.5,
+          15.0,
+          -28.75
+        ],
+        "FieldOfView": 60.0,
+        "CameraRevision": 6
+      },
+      "Frame": 6,
+      "RawSha256": "015ab0917d715e73114b06220b2b62725eea8c035a6d279ca5c4ff8dbd61faf8",
+      "InteriorBlockPixels": 2792,
+      "MissingBlockPixels": 0,
+      "D16NOPredictedMissing": 196,
+      "D16NODisagreement": 196,
+      "D16ZOPredictedMissing": 28,
+      "D16ZODisagreement": 28
+    },
+    {
+      "Variant": "no-shadows",
+      "Image": "distance-1000-angle-0.png",
+      "Camera": {
+        "Position": [
+          989.5,
+          565.0,
+          -28.75
+        ],
+        "Target": [
+          -10.5,
+          15.0,
+          -28.75
+        ],
+        "FieldOfView": 60.0,
+        "CameraRevision": 7
+      },
+      "Frame": 7,
+      "RawSha256": "afc5b8dc28cc28f29d1e1451181990b85642706353fb4e20be2d6d993ee1a319",
+      "InteriorBlockPixels": 1568,
+      "MissingBlockPixels": 0,
+      "D16NOPredictedMissing": 300,
+      "D16NODisagreement": 300,
+      "D16ZOPredictedMissing": 540,
+      "D16ZODisagreement": 540
+    },
+    {
+      "Variant": "no-shadows",
+      "Image": "distance-1000-angle-45.png",
+      "Camera": {
+        "Position": [
+          696.6068115234375,
+          565.0,
+          678.3568115234375
+        ],
+        "Target": [
+          -10.5,
+          15.0,
+          -28.75
+        ],
+        "FieldOfView": 60.0,
+        "CameraRevision": 8
+      },
+      "Frame": 8,
+      "RawSha256": "bb8ffd8cd4090d602f8e9387377a2b597b8e7475f66da8a0c8d4958520067368",
+      "InteriorBlockPixels": 1404,
+      "MissingBlockPixels": 0,
+      "D16NOPredictedMissing": 285,
+      "D16NODisagreement": 285,
+      "D16ZOPredictedMissing": 523,
+      "D16ZODisagreement": 523
+    },
+    {
+      "Variant": "no-shadows",
+      "Image": "distance-1000-angle-90.png",
+      "Camera": {
+        "Position": [
+          -10.5,
+          565.0,
+          971.25
+        ],
+        "Target": [
+          -10.5,
+          15.0,
+          -28.75
+        ],
+        "FieldOfView": 60.0,
+        "CameraRevision": 9
+      },
+      "Frame": 9,
+      "RawSha256": "895e671083e5a664684d5581978c02a66586f2ff1c77186d055efc73cd118bf9",
+      "InteriorBlockPixels": 588,
+      "MissingBlockPixels": 0,
+      "D16NOPredictedMissing": 120,
+      "D16NODisagreement": 120,
+      "D16ZOPredictedMissing": 264,
+      "D16ZODisagreement": 264
+    },
+    {
+      "Variant": "no-shadows",
+      "Image": "distance-2000-angle-0.png",
+      "Camera": {
+        "Position": [
+          1989.5,
+          1115.0,
+          -28.75
+        ],
+        "Target": [
+          -10.5,
+          15.0,
+          -28.75
+        ],
+        "FieldOfView": 60.0,
+        "CameraRevision": 10
+      },
+      "Frame": 10,
+      "RawSha256": "adb29a34b01f3ebc136b0a8bb0ea76989d38f786523426f284b9c90128488dfc",
+      "InteriorBlockPixels": 350,
+      "MissingBlockPixels": 0,
+      "D16NOPredictedMissing": 170,
+      "D16NODisagreement": 170,
+      "D16ZOPredictedMissing": 350,
+      "D16ZODisagreement": 350
+    },
+    {
+      "Variant": "no-shadows",
+      "Image": "distance-2000-angle-45.png",
+      "Camera": {
+        "Position": [
+          1403.713623046875,
+          1115.0,
+          1385.463623046875
+        ],
+        "Target": [
+          -10.5,
+          15.0,
+          -28.75
+        ],
+        "FieldOfView": 60.0,
+        "CameraRevision": 11
+      },
+      "Frame": 11,
+      "RawSha256": "ee732202e96c4b05cbcf7895ad3fde90e9cc89a270db33cbfaf1eb6e3d866491",
+      "InteriorBlockPixels": 318,
+      "MissingBlockPixels": 0,
+      "D16NOPredictedMissing": 154,
+      "D16NODisagreement": 154,
+      "D16ZOPredictedMissing": 235,
+      "D16ZODisagreement": 235
+    },
+    {
+      "Variant": "no-shadows",
+      "Image": "distance-2000-angle-90.png",
+      "Camera": {
+        "Position": [
+          -10.5,
+          1115.0,
+          1971.25
+        ],
+        "Target": [
+          -10.5,
+          15.0,
+          -28.75
+        ],
+        "FieldOfView": 60.0,
+        "CameraRevision": 12
+      },
+      "Frame": 12,
+      "RawSha256": "545330fe96e3c0ef97618007df88471be9d00fbc040134c57828c6233c48acbe",
+      "InteriorBlockPixels": 132,
+      "MissingBlockPixels": 0,
+      "D16NOPredictedMissing": 72,
+      "D16NODisagreement": 72,
+      "D16ZOPredictedMissing": 84,
+      "D16ZODisagreement": 84
+    },
+    {
+      "Variant": "scale-0.1",
+      "Image": "distance-200-angle-0.png",
+      "Camera": {
+        "Position": [
+          18.950000762939453,
+          12.5,
+          -2.875
+        ],
+        "Target": [
+          -1.0499999523162842,
+          1.5,
+          -2.875
+        ],
+        "FieldOfView": 60.0,
+        "CameraRevision": 1
+      },
+      "Frame": 1,
+      "RawSha256": "889a963a2a38483559aec4fbda5dcdd810420be8fb4fbbf1d73b6fdb0c919b5a",
+      "InteriorBlockPixels": 47208,
+      "MissingBlockPixels": 0,
+      "D16NOPredictedMissing": 0,
+      "D16NODisagreement": 0,
+      "D16ZOPredictedMissing": 0,
+      "D16ZODisagreement": 0
+    },
+    {
+      "Variant": "scale-0.1",
+      "Image": "distance-200-angle-45.png",
+      "Camera": {
+        "Position": [
+          13.092135429382324,
+          12.5,
+          11.267135620117188
+        ],
+        "Target": [
+          -1.0499999523162842,
+          1.5,
+          -2.875
+        ],
+        "FieldOfView": 60.0,
+        "CameraRevision": 2
+      },
+      "Frame": 2,
+      "RawSha256": "18d191562b8c00797562245ea3ada7fecc126cdbfa00f3db82b6d0c3abb890d7",
+      "InteriorBlockPixels": 41666,
+      "MissingBlockPixels": 0,
+      "D16NOPredictedMissing": 0,
+      "D16NODisagreement": 0,
+      "D16ZOPredictedMissing": 0,
+      "D16ZODisagreement": 0
+    },
+    {
+      "Variant": "scale-0.1",
+      "Image": "distance-200-angle-90.png",
+      "Camera": {
+        "Position": [
+          -1.0499999523162842,
+          12.5,
+          17.125
+        ],
+        "Target": [
+          -1.0499999523162842,
+          1.5,
+          -2.875
+        ],
+        "FieldOfView": 60.0,
+        "CameraRevision": 3
+      },
+      "Frame": 3,
+      "RawSha256": "0650e1d148e292f0c55b5c4cf76aa825fce1e6696e16b8e400cb3fc9a94b2f6e",
+      "InteriorBlockPixels": 22890,
+      "MissingBlockPixels": 0,
+      "D16NOPredictedMissing": 0,
+      "D16NODisagreement": 0,
+      "D16ZOPredictedMissing": 0,
+      "D16ZODisagreement": 0
+    },
+    {
+      "Variant": "scale-0.1",
+      "Image": "distance-500-angle-0.png",
+      "Camera": {
+        "Position": [
+          48.95000076293945,
+          29.0,
+          -2.875
+        ],
+        "Target": [
+          -1.0499999523162842,
+          1.5,
+          -2.875
+        ],
+        "FieldOfView": 60.0,
+        "CameraRevision": 4
+      },
+      "Frame": 4,
+      "RawSha256": "9c8c2ee6305b6e9ab1f5b40487eb9c06fa6a5be9300becfcc737630ce699d89d",
+      "InteriorBlockPixels": 6770,
+      "MissingBlockPixels": 0,
+      "D16NOPredictedMissing": 0,
+      "D16NODisagreement": 0,
+      "D16ZOPredictedMissing": 0,
+      "D16ZODisagreement": 0
+    },
+    {
+      "Variant": "scale-0.1",
+      "Image": "distance-500-angle-45.png",
+      "Camera": {
+        "Position": [
+          34.30533981323242,
+          29.0,
+          32.48033905029297
+        ],
+        "Target": [
+          -1.0499999523162842,
+          1.5,
+          -2.875
+        ],
+        "FieldOfView": 60.0,
+        "CameraRevision": 5
+      },
+      "Frame": 5,
+      "RawSha256": "b7cae9468b2e7e58252f27ed0d1477b6797438024d78578d296afbf62dcfa7d3",
+      "InteriorBlockPixels": 6017,
+      "MissingBlockPixels": 0,
+      "D16NOPredictedMissing": 0,
+      "D16NODisagreement": 0,
+      "D16ZOPredictedMissing": 26,
+      "D16ZODisagreement": 26
+    },
+    {
+      "Variant": "scale-0.1",
+      "Image": "distance-500-angle-90.png",
+      "Camera": {
+        "Position": [
+          -1.0499999523162842,
+          29.0,
+          47.125
+        ],
+        "Target": [
+          -1.0499999523162842,
+          1.5,
+          -2.875
+        ],
+        "FieldOfView": 60.0,
+        "CameraRevision": 6
+      },
+      "Frame": 6,
+      "RawSha256": "e41ef078a7114644bd1c3d643daa9bc419fa560b160803c863a15e319bfeac49",
+      "InteriorBlockPixels": 2792,
+      "MissingBlockPixels": 0,
+      "D16NOPredictedMissing": 0,
+      "D16NODisagreement": 0,
+      "D16ZOPredictedMissing": 0,
+      "D16ZODisagreement": 0
+    },
+    {
+      "Variant": "scale-0.1",
+      "Image": "distance-1000-angle-0.png",
+      "Camera": {
+        "Position": [
+          98.94999694824219,
+          56.5,
+          -2.875
+        ],
+        "Target": [
+          -1.0499999523162842,
+          1.5,
+          -2.875
+        ],
+        "FieldOfView": 60.0,
+        "CameraRevision": 7
+      },
+      "Frame": 7,
+      "RawSha256": "afc5b8dc28cc28f29d1e1451181990b85642706353fb4e20be2d6d993ee1a319",
+      "InteriorBlockPixels": 1568,
+      "MissingBlockPixels": 0,
+      "D16NOPredictedMissing": 0,
+      "D16NODisagreement": 0,
+      "D16ZOPredictedMissing": 0,
+      "D16ZODisagreement": 0
+    },
+    {
+      "Variant": "scale-0.1",
+      "Image": "distance-1000-angle-45.png",
+      "Camera": {
+        "Position": [
+          69.66067504882812,
+          56.5,
+          67.83567810058594
+        ],
+        "Target": [
+          -1.0499999523162842,
+          1.5,
+          -2.875
+        ],
+        "FieldOfView": 60.0,
+        "CameraRevision": 8
+      },
+      "Frame": 8,
+      "RawSha256": "99c60fbd551dcc804c4a1230c835e848ca8b7373864f1b616a1a64e6d9491555",
+      "InteriorBlockPixels": 1404,
+      "MissingBlockPixels": 0,
+      "D16NOPredictedMissing": 10,
+      "D16NODisagreement": 10,
+      "D16ZOPredictedMissing": 55,
+      "D16ZODisagreement": 55
+    },
+    {
+      "Variant": "scale-0.1",
+      "Image": "distance-1000-angle-90.png",
+      "Camera": {
+        "Position": [
+          -1.0499999523162842,
+          56.5,
+          97.125
+        ],
+        "Target": [
+          -1.0499999523162842,
+          1.5,
+          -2.875
+        ],
+        "FieldOfView": 60.0,
+        "CameraRevision": 9
+      },
+      "Frame": 9,
+      "RawSha256": "895e671083e5a664684d5581978c02a66586f2ff1c77186d055efc73cd118bf9",
+      "InteriorBlockPixels": 588,
+      "MissingBlockPixels": 0,
+      "D16NOPredictedMissing": 12,
+      "D16NODisagreement": 12,
+      "D16ZOPredictedMissing": 36,
+      "D16ZODisagreement": 36
+    },
+    {
+      "Variant": "scale-0.1",
+      "Image": "distance-2000-angle-0.png",
+      "Camera": {
+        "Position": [
+          198.9499969482422,
+          111.5,
+          -2.875
+        ],
+        "Target": [
+          -1.0499999523162842,
+          1.5,
+          -2.875
+        ],
+        "FieldOfView": 60.0,
+        "CameraRevision": 10
+      },
+      "Frame": 10,
+      "RawSha256": "27a0b7dd1429313355d16311835313bc2e8bd615321f7689b684b6b7aa3998e2",
+      "InteriorBlockPixels": 350,
+      "MissingBlockPixels": 0,
+      "D16NOPredictedMissing": 0,
+      "D16NODisagreement": 0,
+      "D16ZOPredictedMissing": 56,
+      "D16ZODisagreement": 56
+    },
+    {
+      "Variant": "scale-0.1",
+      "Image": "distance-2000-angle-45.png",
+      "Camera": {
+        "Position": [
+          140.37135314941406,
+          111.5,
+          138.54635620117188
+        ],
+        "Target": [
+          -1.0499999523162842,
+          1.5,
+          -2.875
+        ],
+        "FieldOfView": 60.0,
+        "CameraRevision": 11
+      },
+      "Frame": 11,
+      "RawSha256": "ceb3f80a6eca2bc8c62acf9212511ad7b7d63ebd7f65c074a2aa477afba2d1f2",
+      "InteriorBlockPixels": 318,
+      "MissingBlockPixels": 0,
+      "D16NOPredictedMissing": 26,
+      "D16NODisagreement": 26,
+      "D16ZOPredictedMissing": 76,
+      "D16ZODisagreement": 76
+    },
+    {
+      "Variant": "scale-0.1",
+      "Image": "distance-2000-angle-90.png",
+      "Camera": {
+        "Position": [
+          -1.0499999523162842,
+          111.5,
+          197.125
+        ],
+        "Target": [
+          -1.0499999523162842,
+          1.5,
+          -2.875
+        ],
+        "FieldOfView": 60.0,
+        "CameraRevision": 12
+      },
+      "Frame": 12,
+      "RawSha256": "64fe9f42cf70d412d67a3694e0b8335868fdeb6a0685f2c3ecb983e9b9d1b889",
+      "InteriorBlockPixels": 132,
+      "MissingBlockPixels": 0,
+      "D16NOPredictedMissing": 0,
+      "D16NODisagreement": 0,
+      "D16ZOPredictedMissing": 30,
+      "D16ZODisagreement": 30
+    }
+  ]
+}

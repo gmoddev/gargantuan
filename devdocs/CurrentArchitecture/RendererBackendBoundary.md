@@ -121,6 +121,18 @@ ownership last. Resize creates a complete replacement color/depth/download set
 before releasing the current targets, so allocation failure does not leave a
 partially replaced viewport.
 
+## Scene depth contract (KI-008)
+
+Runtime and offscreen EditorHost rendering share a private SDL scene-depth
+descriptor and pipeline format: checked `D32_FLOAT`, without stencil or a D16
+fallback. Conventional Z uses `LESS`, clear=1 and explicit right-handed
+zero-to-one camera projections from both extraction/publication producers.
+Near/far remain .1/100000. The separate D32 shadow attachment/light projection
+is unchanged. Resize preserves replacement-before-release behavior and the
+viewport's required full resync. See the
+[Engine KI-008 receipt](../Validation/RendererDepthKI008.md) for attribution,
+device support, raw frames, tests, memory cost and finite-precision limitations.
+
 ## Leakage audit
 
 Before hardening, these general/public headers exposed SDL GPU types:

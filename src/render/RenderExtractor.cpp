@@ -94,7 +94,7 @@ namespace gargantuan {
 			camera.NearPlane = input.NearPlane;
 			camera.FarPlane = input.FarPlane;
 			camera.ViewMatrix = glm::lookAt(input.Position, input.Position + look, up);
-			camera.ProjectionMatrix = glm::perspective(
+			camera.ProjectionMatrix = glm::perspectiveRH_ZO(
 				glm::radians(input.VerticalFieldOfView), aspect, input.NearPlane, input.FarPlane
 			);
 			camera.ViewProjectionMatrix = camera.ProjectionMatrix * camera.ViewMatrix;

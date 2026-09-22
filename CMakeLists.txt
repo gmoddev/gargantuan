@@ -874,6 +874,9 @@ if(BUILD_TESTING)
 		add_dependencies(gargantuan_first_complete_game_gpu_tests
 			gargantuan_shaders gargantuan_packager gargantuan_runtime_distribution)
 		add_executable(gargantuan_editor_viewport_smoke "tests/EditorViewportSmoke.cpp")
+		add_executable(gargantuan_renderer_depth_tests "tests/RendererDepthTests.cpp")
+		target_link_libraries(gargantuan_renderer_depth_tests PRIVATE gargantuan_core)
+		add_dependencies(gargantuan_renderer_depth_tests gargantuan_shaders)
 		target_link_libraries(gargantuan_editor_viewport_smoke PRIVATE gargantuan_core)
 		add_dependencies(gargantuan_editor_viewport_smoke gargantuan_shaders)
 		add_executable(gargantuan_editor_viewport_presentation_benchmark
@@ -1010,6 +1013,7 @@ if(BUILD_TESTING)
 				gargantuan_renderer_foundation2_gpu_benchmark
 				gargantuan_first_complete_game_gpu_tests
 				gargantuan_editor_viewport_smoke
+				gargantuan_renderer_depth_tests
 				gargantuan_editor_viewport_presentation_benchmark
 			)
 		endif()
