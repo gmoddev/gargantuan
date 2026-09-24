@@ -1,10 +1,100 @@
 ---
 status: partial-validation
 owner: runtime-networking
-last_verified: 2026-09-15
+last_verified: 2026-09-24
 ---
 
 # Foundation 3L.3 diagnostic validation ledger
+
+## Direct fiber production-GNS Phase 1 (2026-09-24)
+
+The [physical receipt](PooledPhysicalQualification3L.md) records exact-source
+MSVC Release production-transport probe execution on pre-existing static
+`10.253.3.1/30` ↔ `10.253.3.2/30` 10-GbE fiber. Four actual GameSession clients
+applied eight 512-KiB structural waves. The complete run records four active
+grants, 16,802,660 B accepted and exactly retired, 16,833,199 unique stream
+bytes first sent and ACKed, zero retransmitted bytes, maximum GNS queue time
+19.252 ms and zero below-floor/invalid feedback classifications. All four
+qualified simultaneously in waves 1, 4 and 6 only. The prescribed Phase 1
+analyzer exited 1 because five waves had no qualified common overlap. The
+short-burst probe is **incomplete**, not a real-GNS packet-loss attribution or
+funding PASS. Gameplay producer RPC p95/p99/max 53.369/76.537/77.006 ms and
+Event ACK max 77.008 ms are within their sampled targets; action and full
+Character/root due service are not measured. The server and clients cleaned up;
+no task rules or processes remain. Phase 2 32-actual-client Local/Node,
+fixed service recovery, complete convergence and final sweep: **not run**.
+KI-006 OPEN; Foundation 3L B — PARTIALLY READY. The unchanged accepted profile
+and review decision B remain in force. Next, correct the bounded actual-client
+probe demand/observation coverage and repeat Phase 1 before full matrix.
+
+## Current physical funding clarification (2026-09-23)
+
+Accepted decision **B — RAW CAPACITY ESTABLISHED; PROCEED TO BOUNDED REAL-GNS
+PHYSICAL QUALIFICATION**, recorded in the
+[funding review](PhysicalFundingGateReview3L.md). This preserves the accepted
+POOLED_SERVICE contract. The historical synthetic-UDP/NDIS prerequisite below
+is superseded; actual transport cost versus unique service is the next proof.
+Use static dedicated-link addresses without weakening security policy. A healthy
+four-grant real-GNS probe must precede the unchanged 32-actual-client Local AND
+Node matrix. KI-006 stays OPEN; final acceptance sweep is not yet eligible.
+
+## Historical direct 10 GbE fiber preflight (2026-09-23)
+
+Approved receive-handoff retry: expanded NBL/NDIS/TCPIP/WFP tracing completed.
+The eight-second static-sender trial generates 900.018899 Mbps and receives
+899.799008 Mbps: 692,304 sent, 692,137 received, 167 missing. All missing
+sequences reach five NIC/filter edges but not TCP/IP in the verified retained
+suffix; early capture overwrite is explicitly excluded. A clean three-second
+control validates all 259,608 packets at all six observed edges; another short
+control is application-clean. No correction, drop owner or exact reason is
+established. NDIS throttling and identical lost/delivered NBL metadata do not
+justify tuning. **Instrumentation stop; funding unqualified; KI-006 OPEN.**
+DHCP and temporary rules/captures are restored. Native ownership/queue tracing
+is the next task before any corrected repeatability or bidirectional funding gate.
+
+The [fiber receipt](FiberPhysicalPreflight3L.md) records branch HEAD `4d2723855`,
+unchanged production source `eec0c7123`, terminal-success Native/GNS CI on both,
+and preserved unrelated checkout edits. Existing mixed-age application binaries
+were inventoried but not used. Both Mellanox ConnectX-4 Lx ports negotiate 10 GbE,
+MTU 1500, on the operator-confirmed direct cable with explicit endpoint binding.
+Three TCP trials per direction deliver 9.246–9.471 Gbit/s. Earlier UDP failures
+and clean samples remain historical evidence. **NETIO/WFP classification/cache
+matching** is now correlated with WSH Default Inbound Block filter 147332 at
+IPv4 ALE receive/accept, on a local/raw copy path. Worker DHCP/APIPA → static
+same-address → DHCP now gives matched 140.840 → 900.001 → 145.683 Mbit/s,
+NETIO sample shares 64.646% → 2.745% → 66.549%, and FindCacheMatch
+44.356% → 0% → 46.308%. AFD lifecycle evidence directly observes DHCP service
+PID 2984 creating a raw UDP endpoint. No security filter is weakened. The
+internal cache algorithm remains opaque, but the conditional sampled cost is
+established. Static remains diagnostic pending a qualified deployment profile.
+
+The elevated follow-up adds seven trials / 35 paired flows. Its final eight-flow
+run submits 692,304 packets; all reach the NIC and receive-filter capture points,
+but TCP/IP sees only 690,060, exactly the application's set. The 2,244-packet
+deficit is therefore before TCP/IP's capture point, after the last filter upper
+edge. Temporarily removing Npcap's fiber binding still loses 1,126 packets at
+the same boundary; restoration can produce both clean and lossy runs. The final
+scheduling trace covers all 32 CPUs during reception. A 29.657-ms service gap
+contains 29.644 ms blocked and 6 microseconds runnable before scheduling.
+Affinity, priority and socket-buffer corrections are not justified. The exact
+handoff queue/drop reason remains unobserved and loss is not causally bounded,
+triggering the requested stop. Prior pause-control evidence remains historical.
+The larger send buffer remains provisional; no Engine/deployment change is
+retained. Original DHCP/APIPA, Npcap binding, NIC properties and cleanup pass.
+
+**STOP / PHYSICAL FUNDING NOT ESTABLISHED.** The accepted usable envelope remains
+805.306368 Mbit/s. The final repeated funding matrix was not run. No actual
+GameSession clients or provider runs followed this
+bounded diagnostic/preflight. Local/Node service, gameplay, debt/fairness, structural
+load/eviction/reload, recovery/convergence, application resources and lifecycle
+are **not measured**. Temporary rules/listeners/processes are absent after cleanup.
+Baseline NIC properties/RSS, addresses, MTU and link state were verified restored.
+Neither hard fiber capacity failure nor an Engine defect is inferred.
+KI-006 stays OPEN, Foundation 3L B — PARTIALLY
+READY; the final acceptance sweep is premature. Next: resolve the last-filter
+to TCP/IP handoff's queue/indication ownership and drop reason, then establish
+stable bidirectional
+funding before the canonical actual-client matrix. No 3M.
 
 ## Physical pooled qualification attempt (2026-09-15)
 

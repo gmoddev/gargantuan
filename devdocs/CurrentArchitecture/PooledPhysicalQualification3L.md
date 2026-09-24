@@ -1,12 +1,184 @@
 ---
-status: inconclusive-physical-preflight
+status: stopped-phase1-incomplete-four-grant-proof
 owner: runtime-networking-and-runtime-host
-last_verified: 2026-09-15
+last_verified: 2026-09-24
 ---
 
 # Foundation 3L pooled physical qualification attempt
 
-## Verdict and source
+## Bounded real-GNS Phase 1 stop (2026-09-24)
+
+**STOP / INCOMPLETE FOUR-GRANT PROOF.** The [accepted funding review](PhysicalFundingGateReview3L.md)
+permitted actual GameSession/GNS testing without a zero-loss synthetic UDP or
+further NDIS prerequisite. The unchanged `POOLED_SERVICE` profile was exercised
+with four actual GameSession clients on the dedicated static fiber. The
+evidence-complete attempt connected all four clients and applied eight repeated
+512-KiB structural waves, but the predeclared analyzer found qualified
+simultaneous four-grant overlap in only waves **1, 4 and 6**: respectively
+16,607, 16,920 and 18,433 microseconds. The other five waves had no qualifying
+common interval (wave 7 qualified only two individual peers). The executable
+exited 1. There was **no observed below-floor interval** and no demonstrated
+transport-budget failure; the short burst workload did not supply enough
+qualified interval evidence to declare Phase 1 healthy. Do not promote three
+successful windows to sustained 64-MiB/s service or Phase 1 PASS.
+
+### Source and physical configuration
+
+The base is published `4d27238553fdc27b9f6772b438c49393eac3a8eb` plus a
+five-file uncommitted qualification-only source overlay, not a clean-HEAD
+binary. Base archive SHA-256 is `252f67d5e76b18f026c1239e1f959e37e973a728dae4f9c2c5bd235fe8d53a18`;
+overlay archive SHA-256 is `9228e18366227c0636a92f309179ab1749e5523f068776219650ccfb3e3790e4`.
+The overlay adds the manual probe, private bounded diagnostics and CMake target;
+the accepted profile values and production admission behavior are unchanged.
+Worker build: MSVC 19.51.36260.0 x64 Release, Ninja, CMake 3.31.6-msvc6,
+four compile jobs, GNS enabled, precompiled headers disabled to avoid a worker
+path-map/PCH compiler error. Declared pinned GNS revision is
+`2cb93a06350bb065db53abdb0d87cf297e0bfd34`; the 278-file prepared GNS
+tree has SHA-256 manifest `d0e3de240f1a2d008f6e8458379745e62ae22f3cfb7559a1e10b2f1db514efb6`.
+Both endpoints ran the same newly built probe executable, SHA-256
+`dee724ebda36f869ec66c8807f6108ad7d86f582551549a15d3ea0637d9f88ea`.
+The copied client package includes exact DLL/runtime hashes in the archive.
+Both worker and local no-socket analyzer self-tests passed before traffic.
+
+The directly connected Mellanox ports were **already** preferred static
+`10.253.3.1/30` (workstation Ethernet 3, if50) and `10.253.3.2/30` (worker
+Ethernet 4, if19) when this task began. Both negotiated 10 GbE with MTU 1500,
+driver 2.53.23539.0; the on-link `/30` routes select the fiber, and each side's
+neighbor cache identifies the opposite Mellanox MAC. A scoped single-datagram
+reachability check arrived on the worker from `10.253.3.1`. Phase 1 bound the
+server to `10.253.3.2:39450` and connected clients to that address. A temporary
+worker Public-profile UDP rule was limited to local `10.253.3.2:39450` and
+remote `10.253.3.1`; it was removed after each attempt. No Windows security
+policy was disabled. No address, route, NIC binding, driver or profile setting
+was changed in this task. Static addressing remains a **candidate deployment
+requirement**, retained because it was pre-existing; persistence was not tested
+since qualification did not pass.
+
+### Measurements and stop reason
+
+The first launch reached its client-ready timeout before demand, then cleanup
+cleared all state. A scoped UDP check verified reachability. A prompt-launch
+repeat applied all eight waves but the PowerShell wrapper truncated its server
+output on nonzero exit. The same bounded workload was repeated once with
+separate stdout/stderr and complete CSV preservation; results below are from
+that evidence-complete attempt. The earlier failures remain in the archive.
+
+| Property | Completed Phase 1 measurement |
+| --- | ---: |
+| Actual GameSession clients / applied structural waves | 4 / 8 each |
+| Maximum simultaneous drain grants / debt | 4 / 2,097,152 B |
+| Structural retirement per wave | 2,097,152 B |
+| Accepted / exact attributed retired / terminal released | 16,802,660 / 16,802,660 / 0 B |
+| Unique stream first sent / ACKed, sampled cumulative deltas | 16,833,199 / 16,833,199 B |
+| Reliable stream retransmitted delta | 0 B |
+| Maximum pending / sent-unacked per peer | 361,701 / 303,715 B |
+| Maximum GNS queue time | 19.252 ms |
+| Configured/effective per-grant GNS send rate | 18,874,368 B/s |
+| Maximum sampled GNS wire outbound per peer | 337,388 B/s |
+| Worker NIC sent / received during wrapper | 18,677,150 / 564,060 B |
+| Worker NIC receive errors / discards delta | 0 / 0 |
+| Server process peak RSS / maximum host CPU sample | 27,099,136 B / 16% |
+| Largest client process RSS / maximum local host CPU sample | 22,233,088 B / 48% |
+
+Each of the four peers ended with first-sent and ACKed deltas equal, and all
+eight 2-MiB aggregate waves retired exactly. The feedback trace has 3,086 rows,
+zero invalid, overflow or below-floor classifications, and an ACK-positive
+qualified interval for all four peers in each of the three overlapping waves.
+The peak sampled RTT is 1 ms. Pending/unacked bytes and debt drained to zero at
+cleanup. Retransmission is physical cost, not logical drain; its observed zero
+does not convert the short offered workload into a 64-MiB/s physical proof.
+No path-loss consequence was demonstrated by this attempt.
+
+The gameplay producer recorded 130 RPCs and 129 Event ACKs. RPC p95/p99/max
+were 53.369/76.537/77.006 ms; Event ACK max 77.008 ms, within the existing
+150/250/500-ms RPC and 250-ms Event targets during the measured work. Every
+client reported eight applied waves and movement; the server terminated the
+session after its incomplete-overlap verdict, so all clients exited nonzero.
+Action result, due-to-observation Character/root latency and per-core CPU are
+**not measured** in this Phase 1 harness. Fixed 20-second service recovery and
+workload-derived complete structural convergence were not independently
+qualified. The client generator process count peaked at four; worker process
+count peaked at one. Host CPU/memory and NIC samples are in the archive; link
+rate alone was not used as headroom proof.
+
+All four client processes exited. The worker rule, UDP listener and probe process
+are gone. Session cleanup reports empty connections/journal requirements,
+zero outstanding debt/grants, and exact accepted=retired+terminal conservation;
+client cleanup also reports `good=1`. A full canonical cache/resident lifecycle
+gate remains **not measured** because Phase 2 did not run. The pre-existing
+static address plan remains preferred; no diagnostic NIC tuning is retained.
+
+**Phase 2 Local: not run. Phase 2 Node: not run. KI-006: OPEN. Foundation 3L:
+B — PARTIALLY READY.** No final acceptance sweep is eligible and no 3M work
+began. The next permitted physical task is to make the bounded actual-client
+probe produce sustained/overlapping qualified backlog windows for all four
+grants, with complete host measurements, without changing the accepted profile.
+After a true Phase 1 PASS, build and run the exact 32-actual-client canonical
+Local and Node matrix. A synthetic zero-loss rerun is not the next gate.
+
+Local untracked evidence archive: `build/physical-gns-evidence-20260924.zip`,
+102 files plus manifest,
+6,017,209 B, SHA-256
+`c567c7d8d5d23e4d36c072862b4b409f5937f20561469dd933e89690318911f1`.
+Every entry was decompressed and SHA-256 checked. The same archive is preserved
+on the worker under
+`C:\Sandbox\Codex\Artifacts\gargantuan-3l-gns-physical-20260924` with
+a matching download hash. It contains source/base and overlay snapshots,
+compiler script, exact binaries, raw per-peer GNS feedback/host CSV and JSON,
+failed-attempt logs, analyzer, and cleanup receipts.
+
+## Current funding-gate clarification (2026-09-23)
+
+The accepted [funding review](PhysicalFundingGateReview3L.md) supersedes the
+historical prerequisite below: **raw capacity is established; proceed to bounded
+production-GNS qualification with static dedicated-link addressing**. Synthetic
+zero-loss UDP and additional Windows/vendor attribution are not prerequisites.
+All pooled service, latency, freshness, fairness/debt and physical actual-client
+gates remain unchanged. Nonzero retransmission is evaluated as physical cost,
+never counted as unique drain and not an automatic failure.
+
+KI-006 remains OPEN; no actual-client physical PASS or Foundation closure is
+implied. Earlier diagnostic measurements and failures below remain historical.
+
+## Historical installed direct fiber update (2026-09-23)
+
+The approved [receive-handoff retry](FiberPhysicalPreflight3L.md) completed
+expanded NBL/NDIS/TCPIP/WFP tracing. A 900.018899-Mbps generated /
+899.799008-Mbps received trial loses 167 packets after the last observed
+filter edge and before TCP/IP. Native drops and metadata do not identify an
+owner or correction. Two clean short controls are insufficient repeatability.
+The instrumentation stop applies: funding remains unqualified, KI-006 OPEN,
+and native indication/return ownership plus queue telemetry is the next task.
+
+The [new 10 GbE fiber preflight](FiberPhysicalPreflight3L.md) supersedes this
+receipt's deferred-cable status. The operator confirms a direct Mellanox-to-
+Mellanox cable. Explicitly bound TCP delivers 9.246–9.471 Gbit/s. Earlier
+UDP failures and clean samples remain historical evidence. WFP now identifies
+WSH Default Inbound Block filter 147332 on a local/raw IPv4 receive/accept path.
+Matched worker DHCP/static/DHCP profiling gives 140.840/900.001/145.683 Mbit/s;
+NETIO sampled share changes 64.646%/2.745%/66.549% and FindCacheMatch
+44.356%/0%/46.308%. AFD lifecycle tracing directly identifies DHCP's raw UDP
+endpoint. No WSH policy change is needed for the static diagnostic condition.
+Elevated receiver traces independently locate 2,244 missing sequences after
+the last filter upper edge and before TCP/IP capture; TCP/IP's sequence set
+exactly equals application delivery. The receiver's largest gap is blocked
+waiting, with only 6 microseconds runnable before scheduling. Npcap unbinding
+does not eliminate loss and is reverted. The hidden handoff queue/drop reason
+remains unobserved, so the requested stop applies. **Physical funding remains
+unqualified** at the unchanged
+805.306368-Mbit/s envelope; the final repeated funding matrix was not run.
+The larger send buffer remains provisional, not a deployment requirement.
+DHCP/address state is restored, NIC settings are unchanged, and task rules,
+traces and processes are absent. The receipt records the pre-existing Public
+worker profile's inbound management limitation. Next: identify receive-handoff
+queue/indication ownership and drop reason, establish a supported correction,
+then stable bidirectional funding with an accepted persistent address plan.
+No actual clients, Local/Node application
+runs or final acceptance sweep occurred. KI-006 remains OPEN and
+Foundation 3L B — PARTIALLY READY; no merge or 3M. The September 15 LAN evidence
+below remains historical within its original scope.
+
+## Historical verdict and source (2026-09-15)
 
 **INCONCLUSIVE / NOT PHYSICALLY QUALIFIED.** Independent TCP and UDP evidence is
 now available in both directions. Clean trials exceed the accepted envelope,

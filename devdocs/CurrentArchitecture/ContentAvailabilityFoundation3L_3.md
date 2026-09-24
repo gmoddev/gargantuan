@@ -12,6 +12,18 @@ related_code:
 
 # Foundation 3L.3: runtime work isolation
 
+## Physical gate checkpoint (2026-09-24)
+
+The accepted [funding review](PhysicalFundingGateReview3L.md) allowed a bounded
+real-GNS probe on the direct static fiber. Its four actual GameSession clients
+completed eight structural waves, but only three waves yielded simultaneous
+qualified evidence for all four drain grants. No below-floor interval or
+retransmission was observed; the required repeatable proof remains incomplete.
+The [physical receipt](PooledPhysicalQualification3L.md) preserves exact source,
+trace and cleanup evidence. The canonical 32-actual-client Local/Node matrix
+was not started. KI-006 remains OPEN and Foundation 3L remains
+**B — PARTIALLY READY**. No final acceptance sweep or 3M work is eligible.
+
 ## Reliable gameplay qualification (2026-09-13)
 
 The [engine-default contract](ReliableGameplayWorkloadContract3L.md) now supplies

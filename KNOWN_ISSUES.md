@@ -85,6 +85,68 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+Production-GNS Phase 1 on direct static fiber, 2026-09-24: **OPEN / STOPPED ON
+INCOMPLETE FOUR-GRANT PROOF**. Four actual GameSession clients applied eight
+512-KiB waves. Native feedback recorded exact accepted=retired 16,802,660 B,
+first sent=ACKed 16,833,199 B and zero retransmission, with no below-floor
+interval. Qualified four-grant overlap occurred in only three of eight waves;
+the prescribed probe exited 1. This demonstrates no path-loss budget failure,
+but does not establish repeatable required service. The 32-actual-client Local
+and Node matrix, action/recovery and final Foundation sweep are not measured.
+KI-006 remains OPEN; [physical receipt](devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md).
+Next: a bounded actual-GNS workload with sustained qualified four-grant
+backlog and complete host measurements, then the unchanged 32-client matrix
+only after Phase 1 passes. The pre-existing static `/30` plan is retained as a
+candidate deployment configuration; temporary scoped rules were removed.
+
+Current funding review 2026-09-23: **OPEN / REAL-GNS PHYSICAL QUALIFICATION**.
+The accepted [decision B](devdocs/CurrentArchitecture/PhysicalFundingGateReview3L.md)
+establishes raw capacity and supersedes the synthetic zero-loss/NDIS-attribution
+prerequisite in historical updates below. Preserve the fixed POOLED_SERVICE
+profile; measure real transport cost, unique service and exact retirement under
+static dedicated-link addressing. A healthy bounded four-grant actual-client
+probe must precede both canonical 32-actual-client Local/Node runs. Those runs
+remain required before closure. No merge, final 3L acceptance or 3M is implied.
+
+Approved receive-handoff retry 2026-09-23: **OPEN / INSTRUMENTATION STOP**.
+Expanded NBL/NDIS/TCPIP/WFP tracing reproduces 167 missing sequences after
+the last observed filter edge and before TCP/IP. The verified retained suffix
+contains 323,058 packets at each pre-TCPIP edge versus 322,891 at TCP/IP/application.
+No native drop reason or distinct NBL metadata joins the loss. NDIS throttling
+ends 120.6 ms before the burst and does not identify its owner. Two clean
+three-second controls without a correction do not establish funding repeatability.
+No supported correction was selected; DHCP, rules and captures were restored.
+Next: Windows/NDIS or vendor-assisted indication/return ownership and queue
+telemetry, then a justified correction and the unchanged funding matrix.
+
+Direct fiber update 2026-09-23: **OPEN / PHYSICAL FUNDING NOT ESTABLISHED**.
+The [10 GbE receipt](devdocs/CurrentArchitecture/FiberPhysicalPreflight3L.md)
+confirms the installed direct Mellanox path and 9.246–9.471-Gbit/s TCP. WFP
+tracing identifies WSH Default Inbound Block filter 147332 at IPv4 ALE
+receive/accept on a local/raw path. Matched DHCP → static same-address → DHCP
+profiles give 140.840 → 900.001 → 145.683 Mbit/s, NETIO shares
+64.646% → 2.745% → 66.549%, and FindCacheMatch shares 44.356% → 0% → 46.308%.
+AFD tracing directly observes DHCP service PID 2984 creating a raw UDP socket.
+The default WSH block is not bypassed; static remains a reverted diagnostic
+configuration pending a qualified physical profile and accepted address plan.
+Elevated receiver tracing now localizes the final 2,244 missing sequences
+after the last filter upper edge and before TCP/IP's capture point. Every
+sequence observed at TCP/IP reaches the application. Removing Npcap's fiber
+binding does not eliminate loss and is reverted. A 29.657-ms receiver gap is
+29.644 ms blocked, then 6 microseconds runnable before scheduling: receiver
+affinity/priority tuning is not supported. The exact upstream handoff queue
+and drop reason remain unobserved; loss is intermittent and not causally bounded.
+The requested stop applies; the final funding matrix was not run. No Engine
+defect or hard fiber ceiling is established. Original DHCP, addresses, bindings,
+NIC settings and cleanup are verified. Instrument that receive handoff's
+queue/indication ownership, establish a supported correction, then demonstrate
+repeatable
+UDP funding against the unchanged 805.306368-Mbit/s
+envelope, then qualify 32 actual clients through both Local and Node. Those
+service/resource/cleanup gates remain **not measured**. Foundation 3L remains
+**B — PARTIALLY READY**, final acceptance is deferred, and 3M remains blocked.
+The September 15 deferred-cable statement below is historical.
+
 Physical resumption update 2026-09-15: **OPEN / PREFLIGHT INCONCLUSIVE**.
 The [current physical receipt](devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md)
 now records three independent TCP trials each way and sequence-accounted UDP
