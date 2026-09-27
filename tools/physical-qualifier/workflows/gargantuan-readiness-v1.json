@@ -1,0 +1,14 @@
+{
+  "SchemaId": "gargantuan.physical-one-client-readiness",
+  "SchemaVersion": 1,
+  "ControlProfile": "legacy-readiness.v1",
+  "TransportVersion": 1,
+  "Roles": ["CLIENT", "SERVER"],
+  "ArtifactSHA256": "1E25676BDF1DA6ED2EA8A28AB183F519D18A4802BD00E7F6730CFA77D395BD5A",
+  "Endpoint": "10.253.3.2:39450",
+  "RegistrationTimeout": 300,
+  "ExecutionTimeout": 60,
+  "LocalCapabilityBoundary": "qualifier.LocalRun",
+  "AcceptanceOwner": "Gargantuan Foundation 3L",
+  "Classification": "ONE_CLIENT_READINESS_ONLY"
+}

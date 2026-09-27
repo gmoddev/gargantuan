@@ -1,0 +1,370 @@
+"""Qualification-only LAN barrier. Python 3.12+, standard library only."""
+import argparse
+import base64
+import hashlib
+import ipaddress
+import json
+import os
+from pathlib import Path
+import secrets
+import selectors
+import shutil
+import socket
+import struct
+import subprocess
+import sys
+import time
+import uuid
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from dependency import Load
+
+Legacy, Transport = Load()
+MAX_FRAME, MAX_LOG = Transport.MAX_FRAME, Transport.MAX_LOG
+Digest, Save, Hidden = Transport.Digest, Transport.Save, Transport.Hidden
+Journal, Channel = Transport.Journal, Transport.Channel
+BASE_HEAD = "eb2ce26ab1455670f4e7b53426cc3521403110c5"
+OVERLAY = "B37F7ED6A1BF2F462AEDF108EC72D7B1EA85F0B8CEA3DFAEDB1A5E4E50DA1DBB"
+GNS_PIN = "2cb93a06350bb065db53abdb0d87cf297e0bfd34"
+PROBE_SHA = "1E25676BDF1DA6ED2EA8A28AB183F519D18A4802BD00E7F6730CFA77D395BD5A"
+SERVER_ADDRESS = "10.253.3.2"
+CLIENT_ADDRESS = "10.253.3.1"
+SERVER_PORT = 39450
+
+
+def CaptureDirections(File, Role):
+    """Count the qualified UDP tuple directions in an Ethernet pcapng file."""
+    LocalAddress, PeerAddress = ((CLIENT_ADDRESS, SERVER_ADDRESS) if Role == "CLIENT"
+                                 else (SERVER_ADDRESS, CLIENT_ADDRESS))
+    Interfaces = []
+    Endian = None
+    Counts = {"Outbound": 0, "Inbound": 0}
+    with open(File, "rb") as Stream:
+        Data = Stream.read()
+    Offset = 0
+    while Offset + 12 <= len(Data):
+        RawType = Data[Offset:Offset + 4]
+        if RawType == b"\x0a\x0d\x0d\x0a":
+            ByteOrder = Data[Offset + 8:Offset + 12]
+            if ByteOrder == b"\x4d\x3c\x2b\x1a":
+                Endian = "<"
+            elif ByteOrder == b"\x1a\x2b\x3c\x4d":
+                Endian = ">"
+            else:
+                raise ValueError("pcapng section has invalid byte-order magic")
+            BlockType = 0x0A0D0D0A
+        else:
+            if Endian is None:
+                raise ValueError("pcapng data precedes its section header")
+            BlockType = struct.unpack_from(Endian + "I", Data, Offset)[0]
+        BlockLength = struct.unpack_from(Endian + "I", Data, Offset + 4)[0]
+        if (BlockLength < 12 or BlockLength % 4 or Offset + BlockLength > len(Data) or
+                struct.unpack_from(Endian + "I", Data, Offset + BlockLength - 4)[0] != BlockLength):
+            raise ValueError("pcapng block length is malformed")
+        if BlockType == 1:
+            LinkType = struct.unpack_from(Endian + "H", Data, Offset + 8)[0]
+            Interfaces.append(LinkType)
+        elif BlockType == 6:
+            InterfaceId, _, _, CapturedLength, _ = struct.unpack_from(Endian + "IIIII", Data, Offset + 8)
+            if InterfaceId >= len(Interfaces):
+                raise ValueError("pcapng packet refers to an unknown interface")
+            if Interfaces[InterfaceId] != 1:
+                raise ValueError("qualification capture is not Ethernet")
+            PacketStart = Offset + 28
+            PacketEnd = PacketStart + CapturedLength
+            if PacketEnd > Offset + BlockLength - 4:
+                raise ValueError("pcapng packet data exceeds its block")
+            Packet = Data[PacketStart:PacketEnd]
+            if len(Packet) >= 14:
+                EtherType = struct.unpack_from(">H", Packet, 12)[0]
+                Layer3 = 14
+                while EtherType in (0x8100, 0x88A8, 0x9100):
+                    if len(Packet) < Layer3 + 4:
+                        break
+                    EtherType = struct.unpack_from(">H", Packet, Layer3 + 2)[0]
+                    Layer3 += 4
+                if EtherType == 0x0800 and len(Packet) >= Layer3 + 20:
+                    HeaderLength = (Packet[Layer3] & 0x0F) * 4
+                    if (Packet[Layer3] >> 4 == 4 and HeaderLength >= 20 and
+                            len(Packet) >= Layer3 + HeaderLength + 8 and Packet[Layer3 + 9] == 17):
+                        Fragment = struct.unpack_from(">H", Packet, Layer3 + 6)[0] & 0x1FFF
+                        if Fragment == 0:
+                            Source = str(ipaddress.IPv4Address(Packet[Layer3 + 12:Layer3 + 16]))
+                            Destination = str(ipaddress.IPv4Address(Packet[Layer3 + 16:Layer3 + 20]))
+                            SourcePort, DestinationPort = struct.unpack_from(">HH", Packet, Layer3 + HeaderLength)
+                            if Role == "CLIENT":
+                                if (Source == LocalAddress and Destination == PeerAddress and
+                                        DestinationPort == SERVER_PORT):
+                                    Counts["Outbound"] += 1
+                                elif (Source == PeerAddress and Destination == LocalAddress and
+                                      SourcePort == SERVER_PORT):
+                                    Counts["Inbound"] += 1
+                            else:
+                                if (Source == LocalAddress and Destination == PeerAddress and
+                                        SourcePort == SERVER_PORT):
+                                    Counts["Outbound"] += 1
+                                elif (Source == PeerAddress and Destination == LocalAddress and
+                                      DestinationPort == SERVER_PORT):
+                                    Counts["Inbound"] += 1
+        Offset += BlockLength
+    if Offset != len(Data) or not Interfaces:
+        raise ValueError("pcapng capture is incomplete or has no interfaces")
+    return Counts
+
+
+def ValidateConfig(Config):
+    uuid.UUID(Config["RunId"])
+    if len(Config["Token"]) != 64:
+        raise ValueError("expected a 256-bit token")
+    for Address in [Config["CoordinatorHost"], *Config["PeerIps"].values()]:
+        Parsed = ipaddress.IPv4Address(Address)
+        if Parsed.is_unspecified or Parsed in ipaddress.ip_network("10.253.3.0/30"):
+            raise ValueError("control channel must bind normal LAN, not qualification fiber")
+    if Config["Endpoint"] != "10.253.3.2:39450" or Config["ArtifactSHA256"].upper() != PROBE_SHA:
+        raise ValueError("this release is scoped to the verified one-client readiness artifact")
+    if not 1 <= Config["Port"] <= 65535:
+        raise ValueError("invalid coordination port")
+    for Key in ("StageTimeout", "RunTimeout"):
+        if not 1 <= Config[Key] <= 600:
+            raise ValueError("timeout must be between 1 and 600 seconds")
+
+
+def Coordinator(Config):
+    return Legacy.Coordinator(Config, ValidateConfig)
+
+
+class LocalRun:
+    def __init__(self, Config, Log):
+        self.Config, self.Log = Config, Log
+        self.Probe = self.Capture = None
+        self.CaptureArmed = False
+        self.Files = []
+        self.FinalizeAt = None
+        self.HookHashes = {}
+        self.CleanupResult = None
+
+    def Check(self):
+        Config = self.Config
+        Probe = Path(Config["ProbePath"])
+        if Probe.name != "gargantuan_physical_gns_funding_probe.exe" or Digest(Probe) != Config["ArtifactSHA256"]:
+            raise ValueError("probe path/hash mismatch")
+        ManifestPath = Path(Config["SourceManifest"])
+        Manifest = json.loads(ManifestPath.read_text(encoding="utf-8-sig"))
+        if (Manifest["BaseHead"] != BASE_HEAD or Manifest["OverlayArchiveSha256"].upper() != OVERLAY or
+                Manifest["GnsPin"] != GNS_PIN):
+            raise ValueError("source manifest provenance mismatch")
+        if Config["ProbeArgs"] != (["server", "10.253.3.2", "39450", "1", "--readiness-smoke"]
+                                  if Config["Role"] == "SERVER" else
+                                  ["client", "10.253.3.2", "39450", str(Config["Nonce"]), "0", "--readiness-smoke"]):
+            raise ValueError("only the one-client readiness smoke is supported")
+        if Config["Role"] == "CLIENT" and not 1 <= Config["Nonce"] <= 2147483647:
+            raise ValueError("invalid nonce")
+        if not Path(Config["WorkDir"]).is_dir():
+            raise ValueError("missing runtime working directory")
+        shutil.copyfile(ManifestPath, self.Log.Directory / "source-manifest.json")
+        if Config.get("CaptureCommand"):
+            if not Path(Config["CaptureCommand"][0]).is_file():
+                raise ValueError("capture executable missing")
+        elif not Config.get("CaptureStart") or not Config.get("CaptureStop"):
+            raise ValueError("capture command or local start/stop hooks required")
+        else:
+            for Name in ("CaptureStart", "CaptureStop"):
+                for Argument in Config[Name]:
+                    if Argument.lower().endswith(".ps1") and not Path(Argument).is_file():
+                        raise ValueError("missing local capture hook: " + Argument)
+                    if Argument.lower().endswith(".ps1"):
+                        self.HookHashes[Argument] = Digest(Argument)
+                        self.Log.Write("CAPTURE_HOOK_PROVENANCE", Path=Argument, SHA256=self.HookHashes[Argument])
+        self.Log.Write("PROVENANCE", ArtifactSHA256=Digest(Probe), BaseHead=BASE_HEAD, OverlaySHA256=OVERLAY, GnsPin=GNS_PIN)
+
+    def Hook(self, Name):
+        Command = [Value.replace("{EvidenceDir}", str(self.Log.Directory)).replace("{RunId}", self.Config.get("RunId", ""))
+                   .replace("{EndpointPid}", str(os.getpid()))
+                   for Value in self.Config[Name]]
+        if "-File" in Command:
+            Index = Command.index("-File")
+            Script = Command[Index + 1]
+            if Digest(Script) != self.HookHashes[Script]:
+                raise ValueError("capture hook changed after staging")
+            # Execute this hash-verified local code as an ordinary inline command.
+            # No Set-ExecutionPolicy, Bypass flag, or machine policy modification.
+            Quote = lambda Value: "'" + Value.replace("'", "''") + "'"
+            Code = "& {\n"
+            Code += Path(Script).read_text(encoding="utf-8-sig") + "\n} "
+            Code += " ".join(Quote(Value) for Value in Command[Index + 2:])
+            Encoded = base64.b64encode(Code.encode("utf-16le")).decode("ascii")
+            Command = Command[:Index] + ["-EncodedCommand", Encoded]
+        with (self.Log.Directory / (Name + ".log")).open("wb") as Output:
+            Completed = subprocess.run(Command, stdout=Output, stderr=subprocess.STDOUT,
+                                       timeout=10, check=False, **Hidden())
+        if Completed.returncode:
+            raise RuntimeError(Name + " hook failed")
+
+    def ArmCapture(self):
+        self.CaptureArmed = True  # Stop hook also runs after partially failed startup.
+        if self.Config.get("CaptureCommand"):
+            Command = [Value.replace("{EvidenceDir}", str(self.Log.Directory))
+                       for Value in self.Config["CaptureCommand"]]
+            Output = (self.Log.Directory / "capture.log").open("wb")
+            self.Files.append(Output)
+            self.Capture = subprocess.Popen(Command, stdout=Output, stderr=subprocess.STDOUT, **Hidden())
+            Deadline = time.monotonic() + 3
+            while not (self.Log.Directory / "client.pcapng").exists():
+                if self.Capture.poll() is not None or time.monotonic() >= Deadline:
+                    raise RuntimeError("capture did not become active")
+                time.sleep(0.02)
+        else:
+            self.Hook("CaptureStart")
+        self.Log.Write("CAPTURE_LIVE")
+
+    def Start(self):
+        Env = dict(os.environ, GARGANTUAN_GNS_LIFECYCLE_TRACE="1")
+        Output = (self.Log.Directory / "probe.stdout.log").open("wb")
+        Error = (self.Log.Directory / "probe.stderr.log").open("wb")
+        self.Files.extend((Output, Error))
+        self.Probe = subprocess.Popen([self.Config["ProbePath"], *self.Config["ProbeArgs"]],
+                                      cwd=self.Config["WorkDir"], env=Env, stdout=Output, stderr=Error, **Hidden())
+        self.Started = time.monotonic()
+        self.Log.Write("PROBE_STARTED", Pid=self.Probe.pid, Args=self.Config["ProbeArgs"])
+
+    def ServerLive(self):
+        Text = (self.Log.Directory / "probe.stderr.log").read_text(errors="replace")
+        if "event=listening" not in Text:
+            return False
+        # Verify the actual socket is owned by this locally launched PID.
+        Command = ("$ErrorActionPreference='Stop'; $E=Get-NetUDPEndpoint -OwningProcess " +
+                   str(self.Probe.pid) + " | Where-Object {$_.LocalAddress -eq '10.253.3.2' -and $_.LocalPort -eq 39450}; "
+                   "if($E){exit 0}else{exit 1}")
+        Check = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", Command],
+                               capture_output=True, timeout=4, **Hidden())
+        return Check.returncode == 0 and self.Probe.poll() is None
+
+    def Status(self):
+        for File in self.Log.Directory.glob("*.log"):
+            if File.stat().st_size > MAX_LOG:
+                raise ValueError("probe/capture log bound exceeded")
+        if self.Capture is not None and self.Capture.poll() is not None:
+            raise RuntimeError("capture exited before probe finalization")
+        if self.Probe is not None and self.Probe.poll() is None:
+            if time.monotonic() - self.Started > 25:
+                raise TimeoutError("local one-client probe deadline exceeded")
+            if self.FinalizeAt and time.monotonic() >= self.FinalizeAt:
+                raise TimeoutError("probe did not finish after CLIENT_DONE")
+
+    def Result(self):
+        Stdout = (self.Log.Directory / "probe.stdout.log").read_text(errors="replace")
+        Stderr = (self.Log.Directory / "probe.stderr.log").read_text(errors="replace")
+        Success = (self.Probe.returncode == 0 and "[Probe:Readiness] result=pass" in Stdout and
+                   "[Probe:Cleanup] good=1" in Stdout)
+        return {"Success": Success, "ExitCode": self.Probe.returncode,
+                "EvidencePath": str(self.Log.Directory), "Pid": self.Probe.pid,
+                "Detail": Stderr[-2048:]}
+
+    def Cleanup(self):
+        if self.CleanupResult is not None:
+            return list(self.CleanupResult)
+        Errors = []
+        for Process in (self.Probe, self.Capture):
+            if Process is not None and Process.poll() is None:
+                try:
+                    Process.terminate()
+                    Process.wait(timeout=3)
+                except Exception:
+                    try:
+                        Process.kill()
+                        Process.wait(timeout=3)
+                    except Exception as Error:
+                        Errors.append(str(Error))
+        if self.CaptureArmed and not self.Config.get("CaptureCommand"):
+            try:
+                self.Hook("CaptureStop")
+            except Exception as Error:
+                Errors.append(str(Error))
+        if self.CaptureArmed:
+            CaptureName = "client.pcapng" if self.Config.get("CaptureCommand") else "worker-capture.pcapng"
+            try:
+                Directions = CaptureDirections(self.Log.Directory / CaptureName, self.Config["Role"])
+                self.Log.Write("CAPTURE_DIRECTIONS", **Directions)
+                if not Directions["Outbound"] or not Directions["Inbound"]:
+                    Errors.append("capture missed a qualified direction: " + json.dumps(Directions, sort_keys=True))
+            except Exception as Error:
+                Errors.append("capture direction validation failed: " + str(Error))
+        for File in self.Files:
+            File.close()
+        self.Log.Write("LOCAL_CLEANUP", Errors=Errors)
+        self.CleanupResult = list(Errors)
+        return list(Errors)
+
+
+def Endpoint(Config):
+    return Legacy.Endpoint(Config, ValidateConfig, LocalRun)
+
+
+def Stage(Args):
+    if Args.server_capture_client:
+        if Args.server_capture_start or Args.server_capture_stop:
+            raise ValueError("choose the privileged capture client or the existing hook pair")
+    elif not Args.server_capture_start or not Args.server_capture_stop:
+        raise ValueError("both existing capture hooks are required without the privileged capture client")
+    Directory = Path(Args.output)
+    Directory.mkdir(parents=True, exist_ok=False)
+    Shared = {"RunId": str(uuid.uuid4()), "Token": secrets.token_hex(32),
+              "CoordinatorHost": Args.client_lan, "PeerIps": {"CLIENT": Args.client_lan, "SERVER": Args.server_lan},
+              "Port": Args.port, "Endpoint": "10.253.3.2:39450", "ArtifactSHA256": PROBE_SHA,
+              "StageTimeout": 300, "RunTimeout": 60}
+    ValidateConfig(Shared)
+    Save(Directory / "coordinator.json", {**Shared, "EvidenceDir": str(Directory / "coordinator-evidence")})
+    ClientBundle = Args.client_bundle
+    Client = {**Shared, "Role": "CLIENT", "Nonce": Args.nonce,
+              "ProbePath": str(Path(ClientBundle) / "gargantuan_physical_gns_funding_probe.exe"),
+              "SourceManifest": str(Path(ClientBundle) / "source-manifest.json"), "WorkDir": ClientBundle,
+              "ProbeArgs": ["client", "10.253.3.2", "39450", str(Args.nonce), "0", "--readiness-smoke"],
+              "EvidenceDir": str(Directory / "client-evidence"),
+              "CaptureCommand": [r"C:\Program Files\Wireshark\dumpcap.exe", "-i", Args.capture_device,
+                                 "-s", "0", "-f", "udp and host 10.253.3.1 and host 10.253.3.2 and port 39450",
+                                 "-a", "duration:90", "-w", "{EvidenceDir}/client.pcapng"]}
+    Save(Directory / "client.json", Client)
+    ServerBundle = Args.server_bundle
+    CaptureStart = ([Args.server_capture_client, "start", "{EvidenceDir}", "{RunId}", "{EndpointPid}"] if Args.server_capture_client else
+                    ["powershell.exe", "-NoProfile", "-NonInteractive", "-File", Args.server_capture_start, "{EvidenceDir}", "Start"])
+    CaptureStop = ([Args.server_capture_client, "stop", "{EvidenceDir}", "{RunId}", "{EndpointPid}"] if Args.server_capture_client else
+                   ["powershell.exe", "-NoProfile", "-NonInteractive", "-File", Args.server_capture_stop, "{EvidenceDir}", "Stop"])
+    Server = {**Shared, "Role": "SERVER", "ProbePath": ServerBundle + r"\gargantuan_physical_gns_funding_probe.exe",
+              "SourceManifest": ServerBundle + r"\source-manifest.json", "WorkDir": ServerBundle,
+              "ProbeArgs": ["server", "10.253.3.2", "39450", "1", "--readiness-smoke"],
+              "EvidenceDir": Args.server_evidence,
+              "CaptureStart": CaptureStart,
+              "CaptureStop": CaptureStop}
+    Save(Directory / "server.json", Server)
+    print("[Qualification:Stage] Configurations written; no listeners, captures, or probes started", flush=True)
+
+
+def Main():
+    Parser = argparse.ArgumentParser(description=__doc__)
+    Sub = Parser.add_subparsers(dest="mode", required=True)
+    for Mode in ("coordinator", "endpoint"):
+        Child = Sub.add_parser(Mode)
+        Child.add_argument("config")
+    Child = Sub.add_parser("stage")
+    for Name in ("output", "client-lan", "server-lan", "client-bundle", "server-bundle", "server-evidence",
+                 "capture-device"):
+        Child.add_argument("--" + Name, required=True)
+    Child.add_argument("--server-capture-client")
+    Child.add_argument("--server-capture-start")
+    Child.add_argument("--server-capture-stop")
+    Child.add_argument("--port", type=int, default=39451)
+    Child.add_argument("--nonce", type=int, default=92707)
+    Args = Parser.parse_args()
+    try:
+        if Args.mode == "stage":
+            Stage(Args)
+            return 0
+        Config = json.loads(Path(Args.config).read_text(encoding="utf-8-sig"))
+        return Coordinator(Config) if Args.mode == "coordinator" else Endpoint(Config)
+    except (Exception, KeyboardInterrupt) as Error:
+        print("[Qualification:Failure] " + (str(Error) or type(Error).__name__), file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(Main())
