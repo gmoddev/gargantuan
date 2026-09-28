@@ -206,7 +206,8 @@ class LocalRun:
         Clients = Config.get("ReadinessClients", 1)
         Fixed = (["server", "10.253.3.2", "39450", str(Clients)]
                  if Config["Role"] == "SERVER" else
-                 ["client", "10.253.3.2", "39450", str(Config["Nonce"]), "0"])
+                 ["client", "10.253.3.2", "39450", str(Config["Nonce"]),
+                  "1" if IsPhase1(Config) else "0"])
         if not IsPhase1(Config):
             Fixed.append("--readiness-smoke")
         if Config["ProbeArgs"] != Fixed:
@@ -284,6 +285,7 @@ class LocalRun:
             Args = list(self.Config["ProbeArgs"])
             if Nonce is not None:
                 Args[3] = str(Nonce)
+                Args[4] = "1" if IsPhase1(self.Config) and Nonce == self.Config["Nonce"] else "0"
                 self.ClientNonces.append(Nonce)
             Stem = "probe" if Clients == 1 else ("probe-server" if Nonce is None else "probe-client-" + str(Nonce))
             Output = (self.Log.Directory / (Stem + ".stdout.log")).open("wb")
@@ -459,7 +461,8 @@ def Stage(Args):
     Client = {**Shared, "Role": "CLIENT", "Nonce": Args.nonce,
               "ProbePath": str(Path(ClientBundle) / "gargantuan_physical_gns_funding_probe.exe"),
               "SourceManifest": str(Path(ClientBundle) / "source-manifest.json"), "WorkDir": ClientBundle,
-              "ProbeArgs": ["client", "10.253.3.2", "39450", str(Args.nonce), "0"] + ([] if Phase1 else ["--readiness-smoke"]),
+              "ProbeArgs": ["client", "10.253.3.2", "39450", str(Args.nonce),
+                            "1" if Phase1 else "0"] + ([] if Phase1 else ["--readiness-smoke"]),
               "EvidenceDir": str(Directory / "client-evidence"),
               "CaptureCommand": [r"C:\Program Files\Wireshark\dumpcap.exe", "-i", Args.capture_device,
                                  "-s", "0", "-f", "udp and host 10.253.3.1 and host 10.253.3.2 and port 39450",

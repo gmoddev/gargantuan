@@ -142,7 +142,34 @@ class QualificationTests(unittest.TestCase):
             Q.ValidateConfig(Config)
         self.assertEqual("duration:70", Client["CaptureCommand"][-3])
         self.assertEqual(["server", "10.253.3.2", "39450", "4"], Server["ProbeArgs"])
-        self.assertEqual(["client", "10.253.3.2", "39450", "92707", "0"], Client["ProbeArgs"])
+        self.assertEqual(["client", "10.253.3.2", "39450", "92707", "1"], Client["ProbeArgs"])
+        Probe = self.Root / "gargantuan_physical_gns_funding_probe.exe"
+        Probe.write_bytes(b"qualification-only test")
+        Manifest = self.Root / "phase1-source-manifest.json"
+        Manifest.write_text(json.dumps({"BaseHead": Q.BASE_HEAD, "OverlayArchiveSha256": Q.OVERLAY,
+                                        "GnsPin": Q.GNS_PIN}))
+        Client.update(ProbePath=str(Probe), SourceManifest=str(Manifest), WorkDir=str(self.Root))
+        Client["CaptureCommand"][0] = sys.executable
+        Log = Q.Journal(self.Root / "phase1-check")
+        try:
+            with mock.patch.object(Q, "Digest", return_value=Q.PROBE_SHA):
+                Q.LocalRun(Client, Log).Check()
+                for Producer in ("0", "2"):
+                    Invalid = {**Client, "ProbeArgs": [*Client["ProbeArgs"]]}
+                    Invalid["ProbeArgs"][4] = Producer
+                    with self.assertRaisesRegex(ValueError, "probe arguments"):
+                        Q.LocalRun(Invalid, Log).Check()
+        finally:
+            Log.Close({"Success": True})
+        Processes = [SimpleNamespace(pid=100 + Index) for Index in range(4)]
+        Run = Q.LocalRun(Client, Q.Journal(self.Root / "phase1-launch"))
+        with mock.patch.object(Q.subprocess, "Popen", side_effect=Processes) as Launch:
+            Run.Start()
+        self.assertEqual(["1", "0", "0", "0"],
+                         [Call.args[0][5] for Call in Launch.call_args_list])
+        for File in Run.Files:
+            File.close()
+        Run.Log.Close({"Success": True})
         for Mutation in ({"ReadinessClients": 1}, {"ResultClassification": "FOUR_CLIENT_READINESS_ONLY"},
                          {"RunTimeout": 60}, {"QualificationMode": "UNSAFE"}):
             with self.assertRaises(ValueError):

@@ -17,7 +17,10 @@ non-smoke probe, `FOUR_CLIENT_PHASE1_ONLY` result classification, 70-second
 client capture finalization and the bounded
 [`four-client-phase1-lifecycle.json`](workflows/four-client-phase1-lifecycle.json)
 workflow. Its server result requires the probe's strengthened four-grant funding
-verdict and metrics; readiness staging remains `FOUR_CLIENT_READINESS_ONLY`.
+verdict and metrics. It launches exactly one gameplay producer (the first
+client nonce) and three non-producers; the endpoint rejects a staged Phase 1
+client config with a different producer flag. Readiness staging keeps all four
+producer flags at zero and remains `FOUR_CLIENT_READINESS_ONLY`.
 This command writes configs only. The artifact pin, both evidence roots, worker
 capture service and hook, fiber/LAN state, lifecycle profiles and endpoint
 leases still require independent preflight before a physical attempt.
