@@ -17,9 +17,11 @@ The producer completed only bounded, sequential gameplay submissions; a
 flood or production scheduler defect is not established. The physical and
 outer lifecycle verdicts remain FAIL. No new Phase 1 or later 3L gate was
 run. The adapter's abort capture finalization is repaired and has local
-regression coverage, while the opt-in native send diagnostics still need a
-new pinned build and endpoint qualification before one fresh diagnostic
-physical attempt. KI-006 stays OPEN; Foundation 3L stays B — PARTIALLY READY.
+regression coverage. The opt-in native send diagnostics have a separately
+pinned Windows build and socket-free analyzer pass on both endpoints; abort
+capture and worker service-stop smokes passed independently. The candidate
+has not been installed for a fresh diagnostic physical attempt. KI-006 stays
+OPEN; Foundation 3L stays B — PARTIALLY READY.
 
 ## Corrected strengthened Phase 1 service/transport stop (2026-09-28)
 

@@ -25,6 +25,12 @@ Abort cleanup also waits for the timed client capture to close its final pcapng
 block. Worker capture stop waits for the service's bounded completed-export
 response before direction validation; failure to acknowledge stays a cleanup
 error. The installed endpoint copies are not updated by this source change.
+The adapter's candidate provenance is base
+`14644a369f9e7bfb9a81c21354adae62902d63d7`, overlay
+`084B87F9AF334C9AFC8D9FAF313FF4ED07A62299D76E8A9F6E40695FFAC44248`,
+and probe SHA-256
+`F985FBCB9C010CCE94550C37384E9118758B2F36E0376BA287FA6093A942F542`.
+It stays staged until the physical preflights and rollback plan are complete.
 This command writes configs only. The artifact pin, both evidence roots, worker
 capture service and hook, fiber/LAN state, lifecycle profiles and endpoint
 leases still require independent preflight before a physical attempt.

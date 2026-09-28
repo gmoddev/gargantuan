@@ -70,9 +70,20 @@ Opt-in GNS and scheduler terminal-send diagnostics now record paired Unix and
 monotonic clocks, status, rejection site, message bytes/type, and scheduler
 queue state when the existing qualifier trace environment variable is set.
 The endpoint also records a paired clock at probe launch. Those changes
-require a newly built, provenance-pinned probe and endpoint bundle before
-another physical attempt can resolve the causal order. The prior binary
-does not contain them. No fresh physical attempt was made from this
+were built as a separate candidate from base
+`14644a369f9e7bfb9a81c21354adae62902d63d7`, qualification overlay
+`084B87F9AF334C9AFC8D9FAF313FF4ED07A62299D76E8A9F6E40695FFAC44248`,
+and GNS pin `2cb93a06350bb065db53abdb0d87cf297e0bfd34`.
+The candidate probe SHA-256 is
+`F985FBCB9C010CCE94550C37384E9118758B2F36E0376BA287FA6093A942F542`;
+its five-case socket-free analyzer self-test passed on both PCs. The worker
+capture service independently acknowledged `start/running`, `stop/stopped`
+after export, and `status/idle` for a smoke run with a complete 15,296-byte
+pcapng. A short real client dumpcap abort smoke exited normally and closed a
+complete 556-byte pcapng; zero matching packets were expected and did not
+qualify any direction. The adapter's 64 local tests passed. The candidate
+remains in task-owned staging; it has not replaced the installed probe,
+service or capture hook. No fresh physical attempt was made from this
 indeterminate receipt; neither the installed probe nor service pin changed.
 **STRENGTHENED FOUR-CLIENT PHASE 1 — FAIL / ATTRIBUTION INDETERMINATE;
 KI-006 OPEN; Foundation 3L B — PARTIALLY READY.**
