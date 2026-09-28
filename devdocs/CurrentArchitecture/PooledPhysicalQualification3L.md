@@ -77,7 +77,7 @@ Retrospective inspection of the worker Codex session identified the false
 while the tool wrapper displayed `exit_code=undefined` without the live session
 ID. The server control journal then completed its authorized capability and
 cleanup successfully before the model emitted that report. Agent Coordinator
-revision `c405f80a8743a983168b3596cf85d89681896514` instructs the agent to
+revision `6a9824cca891ad4cea0e1e6a0d1e374c09b02f7e` instructs the agent to
 poll yielded tool sessions and reconciles this specific stale model reason only
 when the locally validated bootstrap reached `IDLE` and the Codex process
 completed cleanly. Genuine missing-capability and other approval failures are
