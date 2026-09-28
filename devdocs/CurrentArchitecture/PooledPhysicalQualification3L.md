@@ -1,10 +1,37 @@
 ---
 status: stopped-phase1-incomplete-four-grant-proof
 owner: runtime-networking-and-runtime-host
-last_verified: 2026-09-24
+last_verified: 2026-09-27
 ---
 
 # Foundation 3L pooled physical qualification attempt
+
+## One-client lifecycle attempt stopped at worker evidence access (2026-09-27)
+
+The fresh physical run `ff95b60e-8c5e-4125-bbc9-73e1e6844231` used Agent
+Coordinator lifecycle run `960369f2-08a5-40d5-9253-9cfe86786220`. The client
+evidence root was repaired with a fixed, task-owned ACL: SYSTEM,
+Administrators and the owner have full access; only the exact installed
+`CodexSandboxOffline` SID has modify access. The restricted, non-admin client
+created, flushed, read, renamed and deleted fresh evidence before wake. Both
+agents then pulled fresh assignments and registered. The client first capability
+returned LIVE. The worker's first capability failed with `WinError 5` while
+creating `C:\GargantuanQualification\physical-qualifier-service-evidence\lifecycle-407f77f9b2c84b35`.
+The coordinator aborted coherently. The client reported transport ABORT after
+the worker failure; that is a consequence, not a second root cause.
+
+**ONE-CLIENT PHYSICAL READINESS — FAIL.** Client/worker packet counts,
+GNS connection, GameSession Ready and canonical close are **not measured**.
+No probe or capture started. The qualified worker capture hook and pin were not
+changed. The run was not retried. Temporary lifecycle daemons, SSH tunnel and
+worker scheduled task were removed; endpoint policy was restored; worker Packet
+Monitor was stopped with no filters, and its capture service was idle. Retained
+local evidence is under
+`C:\Sandbox\Codex\Artifacts\gargantuan-3l-capture-diagnostic\physical-lifecycle-407f77f9b2c84b35`.
+The next task must preflight and repair only the worker's separate evidence-root
+access under its actual restricted identity, then request a new one-client
+attempt. Four-client readiness is not authorized by this result. KI-006 remains
+OPEN; Foundation 3L remains B — PARTIALLY READY; no 3M.
 
 ## Bounded real-GNS Phase 1 stop (2026-09-24)
 

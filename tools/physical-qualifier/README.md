@@ -31,7 +31,15 @@ stage writes three config files; the project-specific Foundation 2B lifecycle
 catalog and [one-client workflow](workflows/one-client-lifecycle.json) wrap that
 legacy barrier without transmitting physical commands. Its first full run
 registered both agents but aborted before capture or probe because the client
-Codex sandbox could not create its staged evidence directory. A fresh attempt
-requires writable client evidence to be verified before wake; see the
-[protocol record](docs/PROTOCOL.md).
+Codex sandbox could not create its staged evidence directory. The fixed-root
+[`Provision-ClientEvidenceRoot.ps1`](Provision-ClientEvidenceRoot.ps1) repaired
+only that task-owned ACL. The next attempt used
+[`run_one_client_lifecycle.py`](run_one_client_lifecycle.py), which runs
+[`evidence_preflight.py`](evidence_preflight.py) through the installed client
+Codex sandbox before any wake. The restricted client passed; both agents
+registered, but the worker's separate service-evidence root denied its sandbox
+identity. No capture or probe ran. The failed physical and lifecycle IDs are
+consumed; a new attempt requires a bounded worker-root repair and worker
+preflight. See the [physical receipt](../../devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md)
+and [protocol record](docs/PROTOCOL.md).
 POOLED_SERVICE, physical gates, KI-006, Foundation 3L status and 3M are unchanged.

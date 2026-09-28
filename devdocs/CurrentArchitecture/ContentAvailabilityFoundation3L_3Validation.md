@@ -1,10 +1,22 @@
 ---
 status: partial-validation
 owner: runtime-networking
-last_verified: 2026-09-24
+last_verified: 2026-09-27
 ---
 
 # Foundation 3L.3 diagnostic validation ledger
+
+## One-client physical lifecycle gate (2026-09-27)
+
+The [physical receipt](PooledPhysicalQualification3L.md#one-client-lifecycle-attempt-stopped-at-worker-evidence-access-2026-09-27)
+records one fresh attempt after the restricted client evidence preflight passed.
+Both agents pulled and registered; the client returned LIVE, but the worker
+could not create its separate service-evidence directory (`WinError 5`). The
+host aborted, with no GNS/GameSession or packet-direction measurement. There
+was no retry. The client ACL correction is qualified only for its fixed root;
+the worker evidence root needs its own bounded provisioning and restricted
+preflight before a new attempt. KI-006 OPEN; Foundation 3L B — PARTIALLY READY;
+four-client readiness and 3M not started.
 
 ## Direct fiber production-GNS Phase 1 (2026-09-24)
 

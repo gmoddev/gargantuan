@@ -52,6 +52,25 @@ Mellanox-miniport hook independently passed a bounded bidirectional synthetic
 capture and is installed with its matching service hash pin, while the service
 binary and 90-second lease remain unchanged.
 
+The next authorized one-client attempt used physical run
+`ff95b60e-8c5e-4125-bbc9-73e1e6844231` and lifecycle run
+`960369f2-08a5-40d5-9253-9cfe86786220`. A fixed-root provisioning step
+protected `C:\Sandbox\Codex\Evidence\physical-qualifier` from inherited ACLs
+and granted only SYSTEM, Administrators and its owner full access, plus the
+installed `CodexSandboxOffline` SID modify access. No UAC or elevated Codex
+agent was needed. The actual restricted client identity, SID ending `-1004`,
+passed fresh-directory create, file write/flush/read/rename/delete before either
+agent woke. Both agents pulled fresh assignments, registered and reached the
+barrier; the client returned the first LIVE result. The worker then failed
+creating its fresh service-evidence directory with `WinError 5`, and the host
+aborted. No GNS listener, GameSession result or packet capture was obtained.
+The first cause is the worker's separate evidence-root ACL, not the qualified
+capture hook. The run was not retried. Temporary daemons, tunnel and task were
+removed, endpoint policy restored, and worker Packet Monitor was idle with no
+filters. The next task is a bounded **worker evidence-root** access repair and
+restricted worker preflight before a newly authorized one-client attempt.
+KI-006 remains OPEN; Foundation 3L remains B — PARTIALLY READY.
+
 > The protocol coordinates capabilities; it does not transmit authority.
 >
 > Natural-language agent communication does not directly invoke endpoint capabilities.
