@@ -792,7 +792,7 @@ namespace gargantuan::network {
 			SaturatingAdd(*Connection->second.Statistics.BytesSent, Message.Payload().size());
 			return Operation(TransportOperationStatus::Succeeded);
 		case k_EResultIgnored:
-			return Fail(TransportOperationStatus::WouldBlock, "gns-result", static_cast<int>(Result));
+			return Operation(TransportOperationStatus::WouldBlock);
 		case k_EResultLimitExceeded:
 			return Fail(TransportOperationStatus::ResourceExhausted, "gns-result", static_cast<int>(Result));
 		case k_EResultInvalidParam:
