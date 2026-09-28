@@ -6,6 +6,77 @@ last_verified: 2026-09-28
 
 # Foundation 3L pooled physical qualification attempt
 
+## Post-run attribution of the corrected Phase 1 stop (2026-09-28)
+
+The retained run `da16daee-49d2-4812-a985-3159806d202e` is **INDETERMINATE**
+as a service-floor test. On the worker's monotonic microsecond clock, the sole
+class-3 interval for producer peer slot 1 was `[118738033926,
+118738040640]`. At both endpoints its 524,288-byte debt token 23 and 320
+structural journal-lag records persisted, with four active grants in those
+two slot-1 samples. Unique first-send increased by 38,995 bytes and ACKed
+stream bytes by 92,097. GNS pending reliable bytes fell from 38,995 to zero
+over this interval; two other peers also ended step 1038 with zero pending,
+and the global active-grant count had dropped to three by the fourth peer's
+sample eight microseconds later. The row does not establish that all four
+peers remained eligible, with continuously feedable scheduler and backend
+queues, throughout the selected interval. There is no reload marker, but
+the retained trace lacks queue depth and a probe-abort timestamp at this
+resolution.
+
+The exact native rule selected a same-token, same-size debt with active
+retirement attribution, nonzero journal lag and four grants at both samples;
+6,714 microseconds is inside its 4,000–15,000-microsecond window. The
+unchanged 16-MiB/s peer floor is 16,777,216 B/s, so
+`ceil(16,777,216 × 6,714 / 1,000,000) = 112,643 B`. The 38,995-B
+observation is 5,808,013 B/s and correctly sets native `Qualified=0` and
+`floor_failure=1`. The arithmetic is valid; the evidence does not prove
+the sustained workload preconditions needed to attribute that row to
+POOLED_SERVICE. A single short terminal-edge row is not a sustained
+four-peer or aggregate service measurement.
+
+The producer began after the four client starts (`1790589317438`–`7456`
+Unix ms on the client), sent 36 sequential ordinary RPC/Event pairs at a
+100-ms minimum cadence, and reported its terminal scheduler submission by
+the client failure message at `1790589323304` client Unix ms. The worker
+probe stopped on the native floor flag after the interval. The producer's
+stderr has no timestamp on the rejection and no underlying transport status.
+Client and worker wall clocks were not correlated to a common bounded
+offset, so the rejection cannot be placed **BEFORE, DURING, or AFTER** the
+6.714-ms worker interval. `NetworkScheduler::Flush` did accept an intent
+into its queue before calling `IGameTransport::Send`; a `WouldBlock` would
+retain it, while any other failed transport status clears the connection.
+The generic `Transport rejected scheduler submission` fallback does not
+identify whether GNS rejected a frame, reached its pending-reliable cap,
+lost the connection, or failed another backend operation. Caller traffic,
+request size, queue depth and GNS status at that event were not recorded.
+The completed producer samples and fixed cadence do not support a producer
+flood diagnosis. No production scheduler or POOLED_SERVICE defect is
+established, and the 16-MiB/s floor remains unchanged.
+
+Abort cleanup independently truncated the client pcapng because it waited
+for dumpcap's duration only after a successful probe. It terminated dumpcap
+while a block was being written on failure. The worker endpoint allowed ten
+seconds for the capture-service `stop` command, but the service finished
+the owned export about 11 seconds after the abort; the endpoint had
+already tried to validate a missing pcap. The adapter now waits for the
+client capture's fixed bounded duration on abort as on success, gives the
+service stop a 25-second bound (the service hook itself is capped at 15
+seconds), and requires its completed-export acknowledgement before capture
+validation. Regression tests cover abort-side final-block completion and
+receipt validation. These changes have not yet been installed or physically
+qualified on either endpoint.
+
+Opt-in GNS and scheduler terminal-send diagnostics now record paired Unix and
+monotonic clocks, status, rejection site, message bytes/type, and scheduler
+queue state when the existing qualifier trace environment variable is set.
+The endpoint also records a paired clock at probe launch. Those changes
+require a newly built, provenance-pinned probe and endpoint bundle before
+another physical attempt can resolve the causal order. The prior binary
+does not contain them. No fresh physical attempt was made from this
+indeterminate receipt; neither the installed probe nor service pin changed.
+**STRENGTHENED FOUR-CLIENT PHASE 1 — FAIL / ATTRIBUTION INDETERMINATE;
+KI-006 OPEN; Foundation 3L B — PARTIALLY READY.**
+
 ## Corrected strengthened Phase 1 stopped on service/transport failure (2026-09-28)
 
 **STRENGTHENED FOUR-CLIENT PHASE 1 — FAIL; NO FUNDING PASS.** The previous

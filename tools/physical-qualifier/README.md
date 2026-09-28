@@ -21,6 +21,10 @@ verdict and metrics. It launches exactly one gameplay producer (the first
 client nonce) and three non-producers; the endpoint rejects a staged Phase 1
 client config with a different producer flag. Readiness staging keeps all four
 producer flags at zero and remains `FOUR_CLIENT_READINESS_ONLY`.
+Abort cleanup also waits for the timed client capture to close its final pcapng
+block. Worker capture stop waits for the service's bounded completed-export
+response before direction validation; failure to acknowledge stays a cleanup
+error. The installed endpoint copies are not updated by this source change.
 This command writes configs only. The artifact pin, both evidence roots, worker
 capture service and hook, fiber/LAN state, lifecycle profiles and endpoint
 leases still require independent preflight before a physical attempt.

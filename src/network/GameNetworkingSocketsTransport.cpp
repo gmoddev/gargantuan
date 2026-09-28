@@ -10,6 +10,9 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <deque>
 #include <limits>
@@ -719,33 +722,50 @@ namespace gargantuan::network {
 		runtime_detail::WorkScope Work(runtime_detail::WorkPhase::TransportSend);
 		auto &Global = GlobalState();
 		std::lock_guard Lock(Global.Mutex);
-		if (!State->Started) return Operation(TransportOperationStatus::InvalidState);
+		std::int64_t PendingReliable = -1;
+		bool HasPendingStatus = false;
+		auto Fail = [&](TransportOperationStatus Status, const char *Site, int BackendResult = -1) {
+			if (std::getenv("GARGANTUAN_GNS_LIFECYCLE_TRACE")) {
+				const auto Monotonic = std::chrono::duration_cast<std::chrono::nanoseconds>(
+					std::chrono::steady_clock::now().time_since_epoch()).count();
+				const auto Unix = std::chrono::duration_cast<std::chrono::nanoseconds>(
+					std::chrono::system_clock::now().time_since_epoch()).count();
+				std::fprintf(stderr, "[Network:GNS] event=send-failure unix_ns=%lld monotonic_ns=%lld slot=%u generation=%u status=%u site=%s backend_result=%d bytes=%zu delivery=%u traffic=%u pending_reliable=%lld pending_cap=%zu\n",
+					static_cast<long long>(Unix), static_cast<long long>(Monotonic), Message.Destination().Slot,
+					Message.Destination().Generation, static_cast<unsigned>(Status), Site, BackendResult,
+					Message.Payload().size(), static_cast<unsigned>(Message.Delivery()), static_cast<unsigned>(Message.Traffic()),
+					static_cast<long long>(PendingReliable), State->Limits.MaximumQueuedReliableBytes);
+			}
+			return Operation(Status);
+		};
+		if (!State->Started) return Fail(TransportOperationStatus::InvalidState, "not-started");
 		const auto Connection = State->Connections.find(Message.Destination());
 		if (!Message.Destination().IsValid() || Connection == State->Connections.end())
-			return Operation(TransportOperationStatus::InvalidConnection);
+			return Fail(TransportOperationStatus::InvalidConnection, "unknown-connection");
 		if (Connection->second.State != ConnectionState::Connected)
-			return Operation(TransportOperationStatus::InvalidState);
+			return Fail(TransportOperationStatus::InvalidState, "not-connected");
 		const auto MessageLimit = Message.Delivery() == DeliveryMode::ReliableOrdered
 			? State->Limits.MaximumReliableMessageBytes : State->Limits.MaximumUnreliableMessageBytes;
 		if (Message.Payload().empty() || Message.Payload().size() > MessageLimit ||
 			Message.Payload().size() > State->Limits.MaximumDecodedMessageBytes ||
 			Message.Payload().size() > State->Limits.MaximumSendBytesPerTick ||
-			!IsValidMessageOrder(Message.Order())) return Operation(TransportOperationStatus::MessageRejected);
+			!IsValidMessageOrder(Message.Order())) return Fail(TransportOperationStatus::MessageRejected, "message-limit-or-order");
 		if (Message.Delivery() != DeliveryMode::ReliableOrdered &&
 			Message.Payload().size() > BackendMaximumUnreliableFrameBytes - AdapterEnvelopeBytes)
-			return Operation(TransportOperationStatus::MessageRejected);
+			return Fail(TransportOperationStatus::MessageRejected, "unreliable-frame-limit");
 		auto Frame = EncodeFrame(Message);
-		if (!Frame) return Operation(TransportOperationStatus::MessageRejected);
+		if (!Frame) return Fail(TransportOperationStatus::MessageRejected, "frame-encoding");
 		if (Message.Delivery() == DeliveryMode::ReliableOrdered) {
 			SteamNetConnectionRealTimeStatus_t Status{};
 			if (SteamAPI_ISteamNetworkingSockets_GetConnectionRealTimeStatus(
 					Global.Interface, Connection->second.Handle, &Status, 0, nullptr
-				) == k_EResultOK &&
-				(Status.m_cbPendingReliable < 0 || static_cast<std::size_t>(Status.m_cbPendingReliable) >
+				) == k_EResultOK) { PendingReliable = Status.m_cbPendingReliable; HasPendingStatus = true; }
+			if (HasPendingStatus &&
+				(PendingReliable < 0 || static_cast<std::size_t>(PendingReliable) >
 					State->Limits.MaximumQueuedReliableBytes - std::min(
 						State->Limits.MaximumQueuedReliableBytes,
 						Frame->size()
-					))) return Operation(TransportOperationStatus::ResourceExhausted);
+					))) return Fail(TransportOperationStatus::ResourceExhausted, "pending-reliable-cap");
 		}
 		const int Flags = Message.Delivery() == DeliveryMode::ReliableOrdered
 			? k_nSteamNetworkingSend_Reliable : k_nSteamNetworkingSend_Unreliable;
@@ -754,7 +774,7 @@ namespace gargantuan::network {
 		int64 MessageNumber = -1;
 		const auto Token = detail::ReliableServiceFeedbackAccess::Token(Message);
 		if (Token && !SteamNetworkingSocketsLib::GargantuanBeginReliableRetirementAttribution(Token))
-			return Operation(TransportOperationStatus::TransportFailure);
+			return Fail(TransportOperationStatus::TransportFailure, "retirement-attribution");
 		const auto Result = SteamAPI_ISteamNetworkingSockets_SendMessageToConnection(
 			Global.Interface,
 			Connection->second.Handle,
@@ -772,17 +792,17 @@ namespace gargantuan::network {
 			SaturatingAdd(*Connection->second.Statistics.BytesSent, Message.Payload().size());
 			return Operation(TransportOperationStatus::Succeeded);
 		case k_EResultIgnored:
-			return Operation(TransportOperationStatus::WouldBlock);
+			return Fail(TransportOperationStatus::WouldBlock, "gns-result", static_cast<int>(Result));
 		case k_EResultLimitExceeded:
-			return Operation(TransportOperationStatus::ResourceExhausted);
+			return Fail(TransportOperationStatus::ResourceExhausted, "gns-result", static_cast<int>(Result));
 		case k_EResultInvalidParam:
-			return Operation(TransportOperationStatus::MessageRejected);
+			return Fail(TransportOperationStatus::MessageRejected, "gns-result", static_cast<int>(Result));
 		case k_EResultInvalidState:
-			return Operation(TransportOperationStatus::InvalidState);
+			return Fail(TransportOperationStatus::InvalidState, "gns-result", static_cast<int>(Result));
 		case k_EResultNoConnection:
-			return Operation(TransportOperationStatus::InvalidConnection);
+			return Fail(TransportOperationStatus::InvalidConnection, "gns-result", static_cast<int>(Result));
 		default:
-			return Operation(TransportOperationStatus::TransportFailure);
+			return Fail(TransportOperationStatus::TransportFailure, "gns-result", static_cast<int>(Result));
 		}
 	}
 

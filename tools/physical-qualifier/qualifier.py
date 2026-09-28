@@ -35,6 +35,7 @@ CLIENT_CAPTURE_DURATION = 40
 CLIENT_CAPTURE_STOP_TIMEOUT = 45
 PHASE1_CAPTURE_DURATION = 70
 PHASE1_CAPTURE_STOP_TIMEOUT = 75
+CAPTURE_SERVICE_STOP_TIMEOUT = 25
 PHASE1_CLASSIFICATION = "FOUR_CLIENT_PHASE1_ONLY"
 
 
@@ -254,9 +255,18 @@ class LocalRun:
             Command = Command[:Index] + ["-EncodedCommand", Encoded]
         with (self.Log.Directory / (Name + ".log")).open("wb") as Output:
             Completed = subprocess.run(Command, stdout=Output, stderr=subprocess.STDOUT,
-                                       timeout=10, check=False, **Hidden())
+                                       timeout=(CAPTURE_SERVICE_STOP_TIMEOUT if Name == "CaptureStop" else 10),
+                                       check=False, **Hidden())
         if Completed.returncode:
             raise RuntimeError(Name + " hook failed")
+        if Name == "CaptureStop" and len(Command) >= 2 and Command[1] == "stop":
+            try:
+                Receipt = json.loads((self.Log.Directory / (Name + ".log")).read_text())
+            except (OSError, ValueError) as Error:
+                raise RuntimeError("capture service stop acknowledgement is invalid") from Error
+            if (Receipt.get("Success") is not True or Receipt.get("Operation") != "stop" or
+                    Receipt.get("RunId") != self.Config.get("RunId") or Receipt.get("State") != "stopped"):
+                raise RuntimeError("capture service did not acknowledge completed export")
 
     def ArmCapture(self):
         self.CaptureArmed = True  # Stop hook also runs after partially failed startup.
@@ -295,7 +305,8 @@ class LocalRun:
                                        cwd=self.Config["WorkDir"], env=Env,
                                        stdout=Output, stderr=Error, **Hidden())
             self.Probes.append(Process)
-            self.Log.Write("PROBE_STARTED", Pid=Process.pid, Args=Args)
+            self.Log.Write("PROBE_STARTED", Pid=Process.pid, Args=Args,
+                           MonotonicNs=time.monotonic_ns(), UnixNs=time.time_ns())
         self.Probe = ProbeGroup(self.Probes) if Clients == 4 and self.Config["Role"] == "CLIENT" else self.Probes[0]
 
     def ServerLive(self):
@@ -379,10 +390,11 @@ class LocalRun:
         Owned = list(self.Probes) if self.Probes else ([self.Probe] if self.Probe else [])
         if (self.Config.get("ReadinessClients", 1) == 4 and
                 self.Capture is not None and self.Capture.poll() is None and
-                self.Probe is not None and self.Probe.poll() == 0):
+                self.Config.get("CaptureCommand")):
             try:
                 # Windows terminate() kills dumpcap while it may be writing an
-                # enhanced packet block. Its own duration stop closes pcapng.
+                # enhanced packet block, including on abort. Its own bounded
+                # duration stop closes pcapng before validation and manifesting.
                 self.Capture.wait(timeout=(PHASE1_CAPTURE_STOP_TIMEOUT if IsPhase1(self.Config)
                                            else CLIENT_CAPTURE_STOP_TIMEOUT))
             except subprocess.TimeoutExpired:

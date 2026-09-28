@@ -504,6 +504,55 @@ class QualificationTests(unittest.TestCase):
         self.assertEqual(Complete, Capture.read_bytes())
         Log.Close({"Success": True})
 
+    def test_four_client_abort_waits_for_capture_finalization(self):
+        class FailedProbe:
+            def poll(self):
+                return 1
+
+        Evidence = self.Root / "four-abort-finalized"
+        Log = Q.Journal(Evidence)
+        Run = Q.LocalRun({"Role": "CLIENT", "ReadinessClients": 4,
+                          "QualificationMode": "PHASE1", "CaptureCommand": ["test-only"]}, Log)
+        Run.Probe = FailedProbe()
+        Run.CaptureArmed = True
+        Packets = []
+        for Port in range(51820, 51824):
+            Packets.extend((EthernetUdp("10.253.3.1", Port, "10.253.3.2", 39450),
+                            EthernetUdp("10.253.3.2", 39450, "10.253.3.1", Port)))
+        Capture = Evidence / "client.pcapng"
+        WritePcapNg(Capture, Packets)
+        Complete = Capture.read_bytes()
+        Capture.write_bytes(Complete[:-5])
+        Code = ("import pathlib,sys,time; time.sleep(.15); "
+                "File=pathlib.Path(sys.argv[1]); "
+                "File.open('ab').write(bytes.fromhex(sys.argv[2]))")
+        Run.Capture = subprocess.Popen([sys.executable, "-c", Code,
+                                        str(Capture), Complete[-5:].hex()], **Q.Hidden())
+        self.assertEqual([], Run.Cleanup())
+        self.assertEqual(0, Run.Capture.returncode)
+        self.assertEqual(Complete, Capture.read_bytes())
+        Log.Close({"Success": False})
+
+    def test_capture_service_stop_requires_bounded_completed_export_receipt(self):
+        Evidence = self.Root / "service-stop-receipt"
+        Log = Q.Journal(Evidence)
+        Run = Q.LocalRun({"Role": "SERVER", "RunId": self.Config["RunId"],
+                          "CaptureStop": ["capture.exe", "stop", "{EvidenceDir}", "{RunId}"]}, Log)
+
+        def Respond(Command, **Options):
+            self.assertEqual(Q.CAPTURE_SERVICE_STOP_TIMEOUT, Options["timeout"])
+            Options["stdout"].write(json.dumps({"Success": True, "Operation": "stop",
+                "RunId": self.Config["RunId"], "State": "stopped"}).encode())
+            return SimpleNamespace(returncode=0)
+
+        with mock.patch.object(Q.subprocess, "run", side_effect=Respond):
+            Run.Hook("CaptureStop")
+        self.assertIn('"State": "stopped"', (Evidence / "CaptureStop.log").read_text())
+        with mock.patch.object(Q.subprocess, "run", return_value=SimpleNamespace(returncode=0)):
+            with self.assertRaisesRegex(RuntimeError, "acknowledgement is invalid"):
+                Run.Hook("CaptureStop")
+        Log.Close({"Success": True})
+
     def test_four_client_probe_group_waits_for_every_unique_client_and_fails_closed(self):
         class FakeProcess:
             def __init__(self, Pid):

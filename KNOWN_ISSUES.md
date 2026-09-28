@@ -85,6 +85,18 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+Post-run attribution, 2026-09-28: the corrected Phase 1 under-floor row is
+**INDETERMINATE** as a canonical service test. The 16-MiB/s arithmetic is
+correct, but continuous feedable four-peer backlog and the ordering of the
+producer's terminal transport rejection were not recorded. The producer's
+bounded gameplay cadence does not establish a flood defect. Local abort
+capture finalization and service-stop acknowledgement are corrected with
+regression coverage; neither the new instrumentation nor these adapter
+changes has been deployed to the physical endpoints. No new run occurred.
+See the [attribution receipt](devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md#post-run-attribution-of-the-corrected-phase-1-stop-2026-09-28).
+KI-006 stays OPEN and Foundation 3L remains B — PARTIALLY READY.
+
+
 Corrected strengthened four-client Phase 1, 2026-09-28: **OPEN / FAILED
 SERVICE-FEEDBACK GATE; CAUSE NOT YET ISOLATED**. The qualifier now launched
 exactly one producer and three non-producers. The runner-owned tunnel proof

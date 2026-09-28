@@ -7,6 +7,9 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
 #include <deque>
 #include <limits>
 #include <map>
@@ -301,6 +304,18 @@ namespace gargantuan::network {
 				return Result;
 			}
 			if (!Submission.Succeeded()) {
+				if (std::getenv("GARGANTUAN_GNS_LIFECYCLE_TRACE")) {
+					const auto Monotonic = std::chrono::duration_cast<std::chrono::nanoseconds>(
+						std::chrono::steady_clock::now().time_since_epoch()).count();
+					const auto Unix = std::chrono::duration_cast<std::chrono::nanoseconds>(
+						std::chrono::system_clock::now().time_since_epoch()).count();
+					std::fprintf(stderr, "[Network:Scheduler] event=terminal-send unix_ns=%lld monotonic_ns=%lld slot=%u generation=%u status=%u bytes=%zu delivery=%u traffic=%u queued_messages=%zu queued_reliable_bytes=%zu queued_unreliable_bytes=%zu submitted_this_flush=%zu\n",
+						static_cast<long long>(Unix), static_cast<long long>(Monotonic), ConnectionIdValue.Slot,
+						ConnectionIdValue.Generation, static_cast<unsigned>(Submission.Status), Bytes,
+						static_cast<unsigned>(Message.Delivery()), static_cast<unsigned>(Message.Traffic()),
+						Connection.Statistics.QueuedMessages, Connection.Statistics.QueuedReliableBytes,
+						Connection.Statistics.QueuedUnreliableBytes, Result.MessagesSubmitted);
+				}
 				Result.Status = SchedulerFlushStatus::TerminalFailure;
 				Result.TerminalDisconnect = Submission.TerminalDisconnect.value_or(DisconnectInfo{
 					DisconnectReason::TransportFailure, "Transport rejected scheduler submission"});
