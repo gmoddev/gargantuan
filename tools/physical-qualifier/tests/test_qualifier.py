@@ -541,6 +541,7 @@ class QualificationTests(unittest.TestCase):
 
         def Respond(Command, **Options):
             self.assertEqual(Q.CAPTURE_SERVICE_STOP_TIMEOUT, Options["timeout"])
+            self.assertGreater(Options["timeout"], 30)  # The helper owns a 30-second export limit.
             Options["stdout"].write(json.dumps({"Success": True, "Operation": "stop",
                 "RunId": self.Config["RunId"], "State": "stopped"}).encode())
             return SimpleNamespace(returncode=0)

@@ -85,6 +85,25 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+Single diagnostic Phase 1 attempt, 2026-09-28: **OPEN / UNDERFED QUALIFICATION
+WINDOW; CAPTURE EXPORT FAILED AS RUN.** Four real clients reached Ready and
+four grants activated, but 4,449 sampled journal-demand rows yielded only
+two four-grant attributed-backlog rows and no eligible service-floor interval
+or qualified batch. The producer completed 83 RPC and 82 Event samples
+without a terminal scheduler rejection; the worker failed the sustained
+overlap proof and the clients then lost the server. The old 6.714-ms under-floor
+row remains indeterminate. A complete client pcap was finalized, while the
+worker service's fixed 15-second hook deadline interrupted an export later
+measured at 19.262 seconds. Post-run raw-ETL recovery proved all four
+bidirectional tuples and cleared the owned service state, but did not change
+the failed capture gate. A bounded 30-second helper source correction and
+45-second endpoint acknowledgement wait have local regression coverage;
+the installed service is unchanged. The temporary worker probe was rolled
+back, and the one permitted physical attempt was not retried. Canonical
+per-peer/aggregate service, later 3L gates and 32 actual clients remain
+**not measured**. [Detailed receipt](devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md#one-diagnostic-phase-1-attempt-no-sustained-four-grant-window-2026-09-28).
+KI-006 stays OPEN; Foundation 3L remains B — PARTIALLY READY; no 3M or merge.
+
 Post-run attribution, 2026-09-28: the corrected Phase 1 under-floor row is
 **INDETERMINATE** as a canonical service test. The 16-MiB/s arithmetic is
 correct, but continuous feedable four-peer backlog and the ordering of the
@@ -92,7 +111,8 @@ producer's terminal transport rejection were not recorded. The producer's
 bounded gameplay cadence does not establish a flood defect. Local abort
 capture finalization and service-stop acknowledgement are corrected with
 regression coverage; neither the new instrumentation nor these adapter
-changes has been deployed to the physical endpoints. No new run occurred.
+changes had been deployed to the physical endpoints at that checkpoint. The
+single later diagnostic run is recorded above.
 See the [attribution receipt](devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md#post-run-attribution-of-the-corrected-phase-1-stop-2026-09-28).
 KI-006 stays OPEN and Foundation 3L remains B — PARTIALLY READY.
 

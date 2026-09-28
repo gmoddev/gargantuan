@@ -6,6 +6,38 @@ last_verified: 2026-09-28
 
 # Foundation 3L.3 diagnostic validation ledger
 
+## Diagnostic Phase 1 underfed-window and export stop (2026-09-28)
+
+The [single diagnostic attempt](PooledPhysicalQualification3L.md#one-diagnostic-phase-1-attempt-no-sustained-four-grant-window-2026-09-28)
+used physical run `69bfc09f-b04c-4a10-a545-3d01cca2dd97` and lifecycle
+run `f5482f2a-5f30-424d-9c0d-2524e8dbd2dd`. Four actual clients reached
+Ready, one producer and three non-producers registered, wave 1 ran, and four
+grants became active. The producer recorded 83 RPC and 82 Event samples with
+no terminal transport rejection. The native trace has 4,449 journal-demand
+rows but only two four-grant attributed-backlog rows, no eligible class-2 or
+class-3 floor interval, no qualified batch and `floor_failure=0`. The server
+rejected the incomplete sustained overlap proof, then clients saw its GNS
+close. This is an **INVALID / UNDERFED QUALIFICATION WINDOW**; canonical
+per-peer and aggregate service are **not measured**. It does not retroactively
+resolve the earlier 6.714-ms row's **INDETERMINATE** validity or its
+untimestamped scheduler rejection.
+
+The client pcap finalized with all four bidirectional tuples. The worker's
+as-run capture gate failed because its installed service killed a 19.262-second
+owned ETL export at 15 seconds. A post-run export of the preserved raw ETL
+recovered a complete matching pcap and allowed owned service cleanup, but did
+not change the failed result. Agent Coordinator draft PR #3 raises the fixed
+hook bound to 30 seconds with a slow-stop acknowledgement regression;
+Gargantuan's endpoint wait is now 45 seconds. The installed service remains
+unchanged and idle; the temporary diagnostic probe was restored to its prior
+pin. Local Python suites, Windows helper tests and physical hook simulation
+pass; hosted CI is pending. **STRENGTHENED FOUR-CLIENT PHASE 1 — FAIL;
+KI-006 OPEN; Foundation 3L B — PARTIALLY READY.** The one physical attempt
+was not retried. Next: attribute and correct the bounded workload's missing
+sustained four-peer overlap, separately qualify the new service runtime, then
+consider any further physical attempt under fresh authorization. No 3M or
+merge.
+
 ## Corrected Phase 1 attribution and capture-finalization repair (2026-09-28)
 
 The [post-run attribution](PooledPhysicalQualification3L.md#post-run-attribution-of-the-corrected-phase-1-stop-2026-09-28)
@@ -15,13 +47,14 @@ not prove continuous four-peer eligibility or feedable backlog, and the
 producer's generic terminal error has no timestamp or transport status.
 The producer completed only bounded, sequential gameplay submissions; a
 flood or production scheduler defect is not established. The physical and
-outer lifecycle verdicts remain FAIL. No new Phase 1 or later 3L gate was
-run. The adapter's abort capture finalization is repaired and has local
+outer lifecycle verdicts remain FAIL. At that checkpoint no new Phase 1 or
+later 3L gate had run. The adapter's abort capture finalization is repaired and has local
 regression coverage. The opt-in native send diagnostics have a separately
 pinned Windows build and socket-free analyzer pass on both endpoints; abort
 capture and worker service-stop smokes passed independently. The candidate
-has not been installed for a fresh diagnostic physical attempt. KI-006 stays
-OPEN; Foundation 3L stays B — PARTIALLY READY.
+had not yet been installed for a fresh diagnostic physical attempt. The
+subsequent single diagnostic run and source-only service correction are
+recorded above. KI-006 stays OPEN; Foundation 3L stays B — PARTIALLY READY.
 
 ## Corrected strengthened Phase 1 service/transport stop (2026-09-28)
 

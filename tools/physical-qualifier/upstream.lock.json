@@ -1,6 +1,6 @@
 {
   "Repository": "https://github.com/GantriaEngine/agent-coordinator.git",
-  "Commit": "9c81cfb16640dc18e29b6253fc0f5463c4c4dd4b",
+  "Commit": "e02fad12ac53b7cb93535013357122172217ab30",
   "Version": "0.1.0",
   "Files": {
     "agent_coordinator/__init__.py": "57c866300d787290523c7602e2da0231f6c0017ea7c54afb182610cf83ed7ecc",
@@ -9,7 +9,7 @@
     "agent_coordinator/control.py": "e42cc87351cfe9747c04d2863f3b386247900b9649eaa558b96387b4d2b0fe04",
     "agent_coordinator/workflow.py": "d657cffb31ad22b1983fbe5ca56643ed5729f2b9377ce2ccfe7d02a5272091ff",
     "agent_coordinator/schemas/envelope.json": "b9edc5dae2c26103d510132a4daf03ea9b473db9722f7392853352ab0383b270",
-    "privileged-helper/Program.cs": "f83a99794fc32d88aa50e42523fc52d3286e603d0eb105e5cb892dc4a2fdb036",
+    "privileged-helper/Program.cs": "ace7d798032acaa6e21bf24a5046398308fa30920b0800963823b731c4f31de9",
     "privileged-helper/AgentCoordinator.CaptureService.csproj": "1d7fb95e22ddf8afc84bfe986d89dab90489fed3a569c132aaae91d14b166bd6",
     "privileged-helper/Install-CaptureService.ps1": "591348989bf5e5b2bc6ea6e2188436a940f0cba2ab101c800f789a4757fcce35"
   }

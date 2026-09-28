@@ -22,15 +22,20 @@ client nonce) and three non-producers; the endpoint rejects a staged Phase 1
 client config with a different producer flag. Readiness staging keeps all four
 producer flags at zero and remains `FOUR_CLIENT_READINESS_ONLY`.
 Abort cleanup also waits for the timed client capture to close its final pcapng
-block. Worker capture stop waits for the service's bounded completed-export
-response before direction validation; failure to acknowledge stays a cleanup
-error. The installed endpoint copies are not updated by this source change.
+block. Worker capture stop waits up to 45 seconds for the service's bounded
+completed-export response before direction validation; failure to acknowledge
+stays a cleanup error. The generic helper source now bounds its hook at 30
+seconds; the installed worker service still has the prior 15-second bound.
 The adapter's candidate provenance is base
 `14644a369f9e7bfb9a81c21354adae62902d63d7`, overlay
 `2ED31AE67E0F99619940BBB130CD451DB37FEF3A5CEEDAB475E682C3FBEE7003`,
 and probe SHA-256
 `F130DC868A807FFA4EF10887079162C562230854AE17C013559452791993E969`.
-It stays staged until the physical preflights and rollback plan are complete.
+The single diagnostic physical attempt used this probe after both endpoint
+preflights and then restored the prior worker probe pin. It found no sustained
+four-grant backlog window or terminal scheduler rejection. Its 30 MiB worker
+ETL needed 19.262 seconds to export, exposing the installed helper's
+15-second stop limit; post-run recovery does not change the failed gate.
 This command writes configs only. The artifact pin, both evidence roots, worker
 capture service and hook, fiber/LAN state, lifecycle profiles and endpoint
 leases still require independent preflight before a physical attempt.
@@ -39,7 +44,7 @@ assignment. That worker proof is one-use per stage label: do not call the
 tunnel preflight separately with the same label and then invoke the runner.
 
 [upstream.lock.json](upstream.lock.json) pins commit
-`9c81cfb16640dc18e29b6253fc0f5463c4c4dd4b` and SHA-256 of the consumed sources.
+`e02fad12ac53b7cb93535013357122172217ab30` and SHA-256 of the consumed sources.
 
 For an explicitly authorized physical qualification, `stage.json` may carry
 `QualificationProfile: PHYSICAL_QUALIFICATION_INTERACTIVE`. The one-client

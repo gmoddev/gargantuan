@@ -1,10 +1,105 @@
 ---
-status: four-client-readiness-pass-corrected-phase1-service-feedback-stop
+status: four-client-readiness-pass-phase1-underfed-export-stop
 owner: runtime-networking-and-runtime-host
 last_verified: 2026-09-28
 ---
 
 # Foundation 3L pooled physical qualification attempt
+
+## One diagnostic Phase 1 attempt: no sustained four-grant window (2026-09-28)
+
+The single permitted diagnostic attempt used physical run
+`69bfc09f-b04c-4a10-a545-3d01cca2dd97`, label `1f6ca175cd5b489f`,
+and lifecycle run `f5482f2a-5f30-424d-9c0d-2524e8dbd2dd`. Both catalog,
+source/probe pin, non-admin evidence-root and worker LAN preflights passed.
+The runner alone performed the one-use forward/reverse tunnel proof. The
+candidate probe SHA-256 was
+`F130DC868A807FFA4EF10887079162C562230854AE17C013559452791993E969`;
+the service and capture hook stayed on their installed pins. Four actual
+GameSession clients reached Ready and registered: nonce `93731` was the sole
+producer, and `93732`–`93734` were non-producers. Wave 1 began, the structural
+updates were applied, and the worker reached four active grants.
+
+The control order was: coordinator LISTENING at client Unix ms
+`1790627895389`; both endpoints staged; client capture LIVE at `7895980`;
+worker probe launch at worker Unix ms `7898335`; four client probe launches
+at client Unix ms `7899227`–`7899246`; then the worker probe failed its
+funding analyzer and closed the GNS server. The worker emitted its `FAILED`
+control result at worker Unix ms `1790627910436`; the coordinator received
+the client nonzero result and sent ABORT at client Unix ms `1790627910447`.
+Client and worker clock offsets were not bounded, so the eleven-millisecond
+wall-clock difference is not a cross-machine latency measurement. The
+worker's explicit failure was `sustained four-way backlog/fresh-window proof
+incomplete`; all clients then reported `Game server connection closed`.
+There was **no terminal scheduler submission rejection** in this fresh run.
+Its absence cannot timestamp or explain the old run's untimestamped rejection.
+
+The worker trace SHA-256 is
+`7B6FB68F4EA3261726040FAEA17BFA822FAD45A2A14813D0D3DEF17A73AA1A14`.
+It contains 7,026 rows and 4,449 rows with journal lag, but only two
+four-grant attributed-backlog rows and **zero class-2 or class-3 service-floor
+intervals**. No qualified four-grant batch formed (three required). The
+producer completed 83 RPC and 82 Event samples at its fixed minimum 100-ms
+cadence, with no terminal send trace. Exactly one producer and bounded
+distinct demand are established; a flooding contract violation is not.
+The finite one-wave workload did not maintain the simultaneous, feedable
+four-peer backlog required to measure the canonical floor. This attempt is
+**INVALID / UNDERFED QUALIFICATION WINDOW**, not a measured POOLED_SERVICE
+floor failure. The old 6.714-ms row remains **INDETERMINATE** because its
+missing rejection order and continuous-eligibility evidence cannot be
+reconstructed retroactively. The 16-MiB/s per-peer target is unchanged.
+
+The worker reported 16,972,172 B accepted and exactly retired, zero terminal
+release and outstanding bytes after cleanup, four grants at high water,
+2,097,152 B maximum debt and pending admission, and no sampled retransmission.
+Final per-peer unique-first/ACKed bytes were 4,259,972 / 4,259,972 for slot 1,
+4,243,494 / 4,243,494 for slots 2 and 3, and 4,243,501 / 4,243,501 for
+slot 4. Sampled per-peer GNS pending peaked at 522,019 B, unacked at
+351,333 B, and queue age at 27.648 ms. These are finite-run totals and
+maxima; canonical per-peer and aggregate sustained service, fairness and
+full-window recovery are **not measured**.
+
+Client abort cleanup now left a structurally complete pcapng: 3,640 outbound
+and 19,109 inbound qualified UDP frames across all four source ports. Worker
+capture `stop` did **not** acknowledge completion. The installed generic
+service killed its hash-pinned export hook at 15 seconds on this 30 MiB ETL;
+the endpoint recorded `CaptureStop hook failed` and no pcapng at result time.
+Post-run, the unchanged installed hook converted a copy of that raw ETL in
+19.262 seconds and exported 23,752 complete miniport frames. The recovered
+pcap SHA-256 is
+`04FB1AB7D01615FDF1685F2FA27F6EB8AF4376EA6AA2767C490D7ACECB26590E`;
+it has 19,109 outbound and 3,640 inbound qualified frames across the same
+four ports. This recovered pcap was copied back and the owned service stop
+acknowledged, leaving the service idle. The recovery does **not** turn the
+as-run worker capture gate into a pass. The client pcap SHA-256 is
+`0931A9E57E1E28062ED6061E1EE524277EE6D7E006AD7C9D04CFA83A1A35C3BA`.
+
+The fixed upstream helper now allows a bounded 30-second hook export, with a
+16-second completion/idle regression, and the Gargantuan endpoint waits at
+most 45 seconds for its explicit stop acknowledgement. Upstream draft PR #3
+is stacked on the existing classification PR #2; its source commit is
+`e02fad12ac53b7cb93535013357122172217ab30`. Python suites, the Windows
+helper test, and the physical hook simulation passed. **The installed
+capture service was not replaced or physically requalified.** The temporary
+worker candidate probe was rolled back to its prior SHA-256
+`1E25676BDF1DA6ED2EA8A28AB183F519D18A4802BD00E7F6730CFA77D395BD5A`;
+both lifecycle daemons, temporary profiles, credentials and listeners were
+removed. Packet Monitor and Windows trace are stopped, with no filters;
+UDP 39450 is unbound and the service is running idle.
+
+The worker result and physical coordinator are `ABORT/Success=false`; the
+client aborted without a final result file. The outer lifecycle is
+`Success=false`, host exit 1, with both agents
+`FAILED/AGENT_FAILED`. Evidence, including the raw ETL, native CSV and
+post-run recovery receipt, is under
+`C:\Sandbox\Codex\Artifacts\gargantuan-3l-attribution\physical-phase1-1f6ca175cd5b489f`.
+**STRENGTHENED FOUR-CLIENT PHASE 1 — FAIL / NO CANONICAL FLOOR MEASUREMENT;
+KI-006 OPEN; Foundation 3L B — PARTIALLY READY.** This run was not retried.
+Next, attribute why the bounded one-wave demand produces only two
+four-grant backlog rows, and qualify a contract-correct sustained workload
+and the updated capture service before any separately authorized physical
+attempt. Phase 2 Local/Node, 32 actual clients, final acceptance, merge and
+3M remain gated.
 
 ## Post-run attribution of the corrected Phase 1 stop (2026-09-28)
 
@@ -58,13 +153,14 @@ for dumpcap's duration only after a successful probe. It terminated dumpcap
 while a block was being written on failure. The worker endpoint allowed ten
 seconds for the capture-service `stop` command, but the service finished
 the owned export about 11 seconds after the abort; the endpoint had
-already tried to validate a missing pcap. The adapter now waits for the
-client capture's fixed bounded duration on abort as on success, gives the
-service stop a 25-second bound (the service hook itself is capped at 15
-seconds), and requires its completed-export acknowledgement before capture
-validation. Regression tests cover abort-side final-block completion and
-receipt validation. These changes have not yet been installed or physically
-qualified on either endpoint.
+already tried to validate a missing pcap. The first adapter correction waits
+for the client capture's fixed bounded duration on abort as on success, gave
+service stop a 25-second bound, and required its completed-export
+acknowledgement before capture validation. Regression tests cover abort-side
+final-block completion and receipt validation. The later diagnostic attempt
+above exposed the service's separate 15-second hook limit; source now raises
+that bound to 30 seconds and the adapter wait to 45 seconds. The new service
+binary is not installed.
 
 Opt-in GNS and scheduler terminal-send diagnostics now record paired Unix and
 monotonic clocks, status, rejection site, message bytes/type, and scheduler
@@ -82,9 +178,9 @@ after export, and `status/idle` for a smoke run with a complete 15,296-byte
 pcapng. A short real client dumpcap abort smoke exited normally and closed a
 complete 556-byte pcapng; zero matching packets were expected and did not
 qualify any direction. The adapter's 64 local tests passed. The candidate
-remains in task-owned staging; it has not replaced the installed probe,
-service or capture hook. No fresh physical attempt was made from this
-indeterminate receipt; neither the installed probe nor service pin changed.
+remained in task-owned staging at this attribution checkpoint. The later
+single diagnostic attempt is recorded above; its temporary probe installation
+was rolled back, and the installed service/hook pins stayed unchanged.
 **STRENGTHENED FOUR-CLIENT PHASE 1 — FAIL / ATTRIBUTION INDETERMINATE;
 KI-006 OPEN; Foundation 3L B — PARTIALLY READY.**
 
