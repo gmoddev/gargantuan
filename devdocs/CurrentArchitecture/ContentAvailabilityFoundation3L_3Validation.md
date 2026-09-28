@@ -13,12 +13,14 @@ runtime. A real installed-service capture-only export completed in 26.656
 seconds, with a complete 27,006-block pcapng and idle cleanup; installed
 executable and hook hashes were rechecked. Bounded worker-only four-peer
 loopback variants accepted and cleanly retired over 67 MiB aggregate but
-failed the three-batch, three-consecutive-window Phase 1 proof. The strongest
-6-ms variant formed only two nonconsecutive two-window batches and had
-feedable below-floor intervals. ACK-positive windows were interrupted by
+failed the three-batch, three-consecutive-window Phase 1 proof. A first 6-ms
+summary double-counted window rows on repeat analysis; its raw CSV held two
+isolated all-peer eligible steps. The corrected fresh 6-ms run recorded zero
+all-peer eligible steps and one feedable below-floor interval, despite clean
+aggregate retirement and four-grant high water. ACK-positive windows were interrupted by
 ACK-empty samples while all four grants existed, and GNS pending queues
 emptied before a repeatable sustained overlap formed. The floor evaluator's
-16 socket-free edge/eligibility cases pass. Native result `3` on the earlier
+17 socket-free edge/eligibility/idempotency cases pass. Native result `3` on the earlier
 60-byte unreliable client send means `k_EResultNoConnection` after the
 qualifier producer exhausted its 512-sample cap and shut down; it was not a
 GNS queue-limit result. No fresh physical Phase 1 retry occurred, and neither

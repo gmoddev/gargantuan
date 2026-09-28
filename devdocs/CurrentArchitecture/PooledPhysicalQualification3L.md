@@ -69,11 +69,11 @@ an adopted physical probe or a qualified workload.
 The complete four-bank run accepted and verified retirement of 67,148,916
 bytes, with zero terminal release and four grants at high water. It authored
 all 32 waves, and all four clients applied the final wave. The server observed
-542 four-grant attributed-backlog rows, but only one four-peer batch with two
-nonconsecutive eligible windows. There were 50 individually qualified peer
-windows and 12 feedable below-floor intervals. A 6-ms sampling variant also
-accepted and retired all 67,148,916 bytes; its best result was two batches,
-each with only two nonconsecutive windows, plus below-floor intervals. Earlier
+542 four-grant attributed-backlog rows, but the raw CSV has only one isolated
+all-peer eligible step. There were 50 individually qualified peer windows and
+12 feedable below-floor intervals. A 6-ms sampling variant also accepted and
+retired all 67,148,916 bytes; its raw CSV has only two isolated all-peer
+eligible steps, plus below-floor intervals. Earlier
 replenishment, a 16-bank journal reserve, and a 1.1-second quiet-bootstrap
 barrier also failed the same unmodified three-batch/three-consecutive-window
 gate. All completed runs cleaned up with no outstanding bytes or grants and
@@ -81,6 +81,16 @@ no new terminal scheduler/GNS rejection. These are loopback diagnostics, not
 physical service measurements. Artifacts and candidate source are under
 `C:\Sandbox\Codex\Artifacts\gargantuan-3l-end-to-end-20260928` on the
 controller and worker.
+
+The first summary inflated each batch's window count because `Analyze()` ran
+once for gating and again for reporting without resetting its batch counters.
+That did not change the gate's FAIL result. The candidate analyzer now resets
+on every invocation and has an idempotency regression. A fresh 6-ms run with
+that fix accepted and retired 67,148,916 bytes, reached four-grant high water,
+and recorded 529 four-grant attributed-backlog rows and 58 individually
+qualified peer windows, but **zero** all-peer eligible steps and zero batches;
+one feedable interval was below floor. This latest corrected result is the
+local gate verdict.
 
 The per-peer trace explains the current limit: a four-grant period usually
 lasted only 4–10 approximately 5-ms samples, and all four queues were
@@ -104,9 +114,10 @@ finding: `backend_result=3` is `k_EResultNoConnection`, whereas
 after the earlier qualifier exhausted its own 512-gameplay-sample cap and
 closed the connection. An opt-in GNS send-failure trace now reports the named
 native result, connection state, pending/unacked bytes, queue time, rate, and
-native status. MSVC transport tests pass. Sixteen socket-free floor-analyzer
+native status. MSVC transport tests pass. Seventeen socket-free floor-analyzer
 cases pass, including exact/above/below floor, edge interval, grant and
-backlog transitions, delayed ACK, and mid-window feedability loss. The worker
+backlog transitions, delayed ACK, mid-window feedability loss, and repeat
+analysis. The worker
 capture service and hook hashes were rechecked against the qualified pins
 above; the service remains running idle.
 

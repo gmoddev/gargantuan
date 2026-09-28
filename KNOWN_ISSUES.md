@@ -89,9 +89,10 @@ Current 2026-09-28 preflight: the worker's updated 30-second capture service
 passed installed-runtime and 26.656-second ETL export qualification. The
 32-wave four-peer workload candidate remains unqualified. Bounded loopback
 variants accepted and retired over 67 MiB aggregate with four-grant high
-water, but the strongest run formed only two nonconsecutive two-window batches
-and retained real feedable below-floor intervals. ACK-positive samples were
-interrupted by ACK-empty samples; 16 synthetic evaluator cases pass. The
+water, but the corrected latest run formed zero all-peer eligible windows and
+retained a real feedable below-floor interval. ACK-positive samples were
+interrupted by ACK-empty samples; 17 synthetic evaluator cases pass, including
+an idempotency regression for an earlier double-counted diagnostic summary. The
 apparent terminal GNS limit result was misclassified: native result `3` is
 `k_EResultNoConnection`, after the qualifier producer exhausted its
 512-sample cap and shut down. This is now an architecture decision about the
