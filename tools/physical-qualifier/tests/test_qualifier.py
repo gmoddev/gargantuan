@@ -177,6 +177,27 @@ class QualificationTests(unittest.TestCase):
         (Directory / "probe-client-12.stdout.log").write_text("[Probe:Result] pass=0 scope=Phase1-only\n")
         self.assertFalse(Run.Result()["Success"])
 
+    def test_phase1_control_requires_matching_endpoint_classifications(self):
+        self.Config.update(QualificationMode="PHASE1", ReadinessClients=4,
+                           ResultClassification=Q.PHASE1_CLASSIFICATION, RunTimeout=90)
+        self.Start()
+        Client = self.Peer("CLIENT")
+        Server = self.Peer("SERVER")
+        self.Read(Client, "ARM_CAPTURE")
+        Client.Send("CAPTURE_LIVE")
+        self.Read(Server, "START_SERVER")
+        Server.Send("SERVER_LIVE", Pid=123, Endpoint=self.Config["Endpoint"])
+        self.Read(Client, "START_CLIENT")
+        Client.Send("CLIENT_RUNNING", Pid=456)
+        Server.Send("SERVER_DONE", Success=True, Classification=Q.PHASE1_CLASSIFICATION)
+        Client.Send("CLIENT_DONE", Success=True, Classification="FOUR_CLIENT_READINESS_ONLY")
+        self.Read(Server, "RUN_DONE")
+        self.Read(Client, "RUN_DONE")
+        self.Finish(1)
+        Result = json.loads((self.Root / "coordinator" / "result.json").read_text())
+        self.assertFalse(Result["Success"])
+        self.assertEqual("endpoint result classification mismatch", Result["Detail"])
+
     def tearDown(self):
         for Link in self.Links:
             Link.Socket.close()
