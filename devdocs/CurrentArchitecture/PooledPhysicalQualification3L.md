@@ -1,10 +1,60 @@
 ---
-status: live-gns-capture-proven-one-client-agent-startup-failed
+status: one-client-physical-readiness-passed
 owner: runtime-networking-and-runtime-host
 last_verified: 2026-09-28
 ---
 
 # Foundation 3L pooled physical qualification attempt
+
+## One-client physical readiness passed (2026-09-28)
+
+The preceding agent-startup failure was reproduced without a probe: this
+Codex CLI rejects the legacy `[profiles.physical-qualification-interactive]`
+table in the main `config.toml` before `thread.started`. Temporary dedicated
+`physical-qualification-interactive.config.toml` files with the same approved
+interactive sandbox and approval settings passed harmless `codex exec` smoke
+checks under the logged-in, non-admin user on each PC. The temporary files
+were removed after this attempt. No global or restricted profile was changed.
+
+One separately authorized fresh attempt used physical run
+`61920077-ed08-4552-b4d6-0d314e431959`, stage label
+`3f8637c529cc489f`, and lifecycle run
+`2e195100-fcc5-47ae-9442-6443bcf97025`. Both evidence/LAN preflights and
+the fixed SSH forward/reverse handshakes passed before assignment. Both Codex
+agents started, registered and reached the barrier. The worker capture started
+before its GNS listener reported ready at `10.253.3.2:39450`; the client
+connected over the direct fiber, the worker accepted the callback, and both
+GameSession readiness reports passed (`ready=1`, `expected=1`). The client
+reported `clean_remote_shutdown=1` and a clean GNS close.
+
+The same-run client capture contains **98 outbound / 43 inbound** qualified UDP
+packets; the worker miniport export contains **86 outbound / 147 inbound** on
+the exact two-peer tuple. Worker ETL and pcap each contain 233 packets, with
+zero Packet Monitor drops and no lost events. The client pcap SHA-256 is
+`DE2A6BF56E57DCA0C92DD9ED58BD8BE6609AE5BCCB7162F25AF537B39DB1A3AF`;
+the worker pcap SHA-256 is
+`68B104348C58EEF117B78D5862C0E9CA672ECD7FA8F09F16FE79A3BB23B7FC29`,
+and its ETL SHA-256 is
+`10D831A5DE402005A4A3E44A67F42963F431448CCD17395062C6B64C72EE2781`.
+Both endpoint results and the coordinator result are successful, the delayed
+`FINALIZE` was reconciled, `RUN_DONE Success=true` reached both endpoints,
+and the lifecycle host returned PASS with both agents `IDLE`.
+**ONE-CLIENT PHYSICAL READINESS — PASS.** This qualifies only the one-client
+physical prerequisite; it does not establish four-client simultaneous
+readiness or complete the older Phase 1 funding matrix.
+
+The retained lifecycle bundle is
+`C:\Sandbox\Codex\Artifacts\gargantuan-3l-interactive-diagnostic\physical-lifecycle-3f8637c529cc489f`;
+the client physical evidence is under
+`C:\Sandbox\Codex\Evidence\physical-qualifier\lifecycle-3f8637c529cc489f`,
+and the worker evidence is under
+`C:\GargantuanQualification\physical-qualifier-service-evidence\lifecycle-3f8637c529cc489f`.
+The one-run daemons, tasks, tunnel, configs, secrets and temporary profiles
+were removed. Both UDP 39450 listeners are gone. Packet Monitor is stopped
+with no filters, and the installed capture service is running idle on the
+verified hook pin. **KI-006 remains OPEN; Foundation 3L remains B — PARTIALLY
+READY.** The next gated task is four-client simultaneous physical readiness,
+not Phase 1, 3M, final acceptance or merge.
 
 ## Live-GNS capture corrected; fresh one-client lifecycle stopped at agent startup (2026-09-28)
 

@@ -6,6 +6,23 @@ last_verified: 2026-09-28
 
 # Foundation 3L.3 diagnostic validation ledger
 
+## One-client physical readiness passed (2026-09-28)
+
+The [physical receipt](PooledPhysicalQualification3L.md#one-client-physical-readiness-passed-2026-09-28)
+records one separately authorized fresh attempt after correcting the temporary
+Codex named-profile file format. Physical run
+`61920077-ed08-4552-b4d6-0d314e431959` and lifecycle run
+`2e195100-fcc5-47ae-9442-6443bcf97025` passed both evidence/LAN
+preflights, both tunnel handshakes, agent registration, the capture/listener
+barrier, live GNS connection/accept, both GameSession Ready reports, the
+client clean close, bidirectional packet gates on both PCs, successful
+`FINALIZE`/`RUN_DONE`, and host completion. Client capture counted 98 outbound
+/ 43 inbound; worker miniport counted 86 outbound / 147 inbound, with zero
+reported drops or lost ETL events. Cleanup passed on both PCs.
+**ONE-CLIENT PHYSICAL READINESS — PASS; KI-006 OPEN; Foundation 3L B —
+PARTIALLY READY.** Four-client simultaneous readiness, Phase 1 funding
+completion, 3M, final acceptance and merge remain gated.
+
 ## Live-GNS worker capture proof passed; fresh lifecycle agent startup failed (2026-09-28)
 
 The [physical receipt](PooledPhysicalQualification3L.md#live-gns-capture-corrected-fresh-one-client-lifecycle-stopped-at-agent-startup-2026-09-28)
