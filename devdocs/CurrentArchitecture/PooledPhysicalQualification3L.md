@@ -1,5 +1,5 @@
 ---
-status: four-client-readiness-pass-phase1-underfed-export-stop
+status: four-client-readiness-pass-phase1-architecture-decision-required
 owner: runtime-networking-and-runtime-host
 last_verified: 2026-09-28
 ---
@@ -31,21 +31,94 @@ unprimed-ACK, and drained-GNS-queue intervals. A two-group wave exceeded the
 rates above the floor, but did **not** form three batches of three consecutive
 four-peer windows. One run ended after wave 5 with an ACK-empty selected
 interval and a terminal client submission; a traced run reached wave 26 but
-had only one two-window batch. That run identified the terminal submission as
-GNS `k_EResultLimitExceeded` on a 60-byte unreliable realtime message from
-a non-producer, which the current transport maps to terminal
-`ResourceExhausted`. A 4-ms diagnostic stopped on an early service-feedback
+had only one two-window batch. A later native-result audit corrected the
+initial attribution of that run: the producer exhausted the qualifier's
+512-sample cap and shut down, then a non-producer attempted a 60-byte
+unreliable realtime send after its connection had ended. Native result `3`
+means `k_EResultNoConnection`, not `k_EResultLimitExceeded` (`25`). The
+resulting terminal send was downstream of the qualifier abort, not evidence
+of a GNS queue-limit violation. A 4-ms diagnostic stopped on an early service-feedback
 failure. These are isolated diagnostics, not physical qualification, and do
 not establish a production service-floor failure. Candidate source and traces
 are retained under `C:\Sandbox\Codex\Artifacts\gargantuan-3l-sustained-20260928`.
 
 The workload has not independently qualified its sustained four-peer backlog
-window without an unrelated terminal submission. **No fresh physical Phase 1
+window; later full-wave variants avoided terminal submissions but still failed
+the canonical window gate. **No fresh physical Phase 1
 attempt was launched in this task.** The installed physical probe is still
 the prior SHA-256 `1E25676BDF1DA6ED2EA8A28AB183F519D18A4802BD00E7F6730CFA77D395BD5A`;
 no endpoint or capture was taken over. KI-006 stays OPEN, Foundation 3L
 remains B — PARTIALLY READY, and no 3M gate was started. The historical
 15-second service statements below describe the earlier physical attempt.
+
+## Local four-peer contract remains blocked after bounded demand correction (2026-09-28)
+
+An isolated worker-only MSVC Release build tested 32 exact-512-KiB structural
+waves across four real loopback GameSessions, with one gameplay producer. The
+four-bank candidate waits for bootstrap journal and admission to drain, then
+authors at most one group and a 64-byte journal tail per wave. It recycles a
+bank only after four intervening waves, keeps active-wave journal lag at most
+18 operations, and replenishes at a bounded GNS queue low-water mark. The
+hard limits are 32 waves, 288 authored updates, 16,771,200 authored string
+bytes, 70 seconds total, 40 seconds per active wave, 80 producer RPC/Event
+pairs, and 65,536 trace rows. The canonical four-grant maximum, 512-KiB
+per-peer pending cap, 16-MiB/s floor, ACK/retirement requirements, and
+POOLED_SERVICE profile were unchanged. This is a diagnostic candidate, **not**
+an adopted physical probe or a qualified workload.
+
+The complete four-bank run accepted and verified retirement of 67,148,916
+bytes, with zero terminal release and four grants at high water. It authored
+all 32 waves, and all four clients applied the final wave. The server observed
+542 four-grant attributed-backlog rows, but only one four-peer batch with two
+nonconsecutive eligible windows. There were 50 individually qualified peer
+windows and 12 feedable below-floor intervals. A 6-ms sampling variant also
+accepted and retired all 67,148,916 bytes; its best result was two batches,
+each with only two nonconsecutive windows, plus below-floor intervals. Earlier
+replenishment, a 16-bank journal reserve, and a 1.1-second quiet-bootstrap
+barrier also failed the same unmodified three-batch/three-consecutive-window
+gate. All completed runs cleaned up with no outstanding bytes or grants and
+no new terminal scheduler/GNS rejection. These are loopback diagnostics, not
+physical service measurements. Artifacts and candidate source are under
+`C:\Sandbox\Codex\Artifacts\gargantuan-3l-end-to-end-20260928` on the
+controller and worker.
+
+The per-peer trace explains the current limit: a four-grant period usually
+lasted only 4–10 approximately 5-ms samples, and all four queues were
+simultaneously feedable for about 4–5 samples. First-send often exceeded the
+floor during those samples, but ACK deltas arrived in bursts with intervening
+ACK-empty samples. For example, at steps 870–874 of the quiet-bootstrap run,
+all four grants and structural journal demand persisted; ACKs were zero for
+all peers at step 870, zero for three peers at step 871, positive for three at
+step 872, and zero for all at steps 873–874. Those cannot form three
+consecutive ACK-positive eligible windows. Other fully feedable windows had
+unique first-send below the unchanged floor and are retained as failures.
+The one-second requalification interval then separated most subsequent
+four-grant periods. A longer journal reserve did not keep the 512-KiB GNS
+queues feedable after grants became staggered. This evidence does **not**
+establish that physical production throughput is below 16 MiB/s; no valid
+physical four-peer floor measurement occurred.
+
+The native-result audit also corrected the old apparent GNS queue-limit
+finding: `backend_result=3` is `k_EResultNoConnection`, whereas
+`k_EResultLimitExceeded=25`. The 60-byte non-producer unreliable send occurred
+after the earlier qualifier exhausted its own 512-gameplay-sample cap and
+closed the connection. An opt-in GNS send-failure trace now reports the named
+native result, connection state, pending/unacked bytes, queue time, rate, and
+native status. MSVC transport tests pass. Sixteen socket-free floor-analyzer
+cases pass, including exact/above/below floor, edge interval, grant and
+backlog transitions, delayed ACK, and mid-window feedability loss. The worker
+capture service and hook hashes were rechecked against the qualified pins
+above; the service remains running idle.
+
+**Architecture decision required before another physical Phase 1 run.** The
+bounded qualifier can provide the 64-MiB aggregate structural demand and
+clean retirement, but repeated local four-peer runs cannot satisfy the
+current per-window ACK-positive three-by-three gate with the current queue,
+grant/requalification, and feedback cadence. Choosing whether to change the
+canonical service/queue contract or the canonical measurement requirement is
+outside this qualification task. No physical run or lifecycle run ID was
+allocated, no endpoint probe pin changed, and later 3L gates remain NOT
+MEASURED. KI-006 stays OPEN; Foundation 3L remains B — PARTIALLY READY.
 
 ## One diagnostic Phase 1 attempt: no sustained four-grant window (2026-09-28)
 

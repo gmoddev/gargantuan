@@ -10,12 +10,22 @@ last_verified: 2026-09-28
 
 The worker's installed capture helper now has the bounded 30-second hook
 runtime. A real installed-service capture-only export completed in 26.656
-seconds, with a complete 27,006-block pcapng and idle cleanup. The worker-only
-four-peer loopback candidate did not satisfy the three-batch, three-window
-Phase 1 proof and exposed a terminal GNS limit result on a 60-byte unreliable
-client message. No physical Phase 1 retry occurred, and neither canonical
-service throughput nor final Foundation 3L acceptance was established. See
-the [current physical receipt](PooledPhysicalQualification3L.md#capture-runtime-qualified-strengthened-workload-still-blocked-2026-09-28).
+seconds, with a complete 27,006-block pcapng and idle cleanup; installed
+executable and hook hashes were rechecked. Bounded worker-only four-peer
+loopback variants accepted and cleanly retired over 67 MiB aggregate but
+failed the three-batch, three-consecutive-window Phase 1 proof. The strongest
+6-ms variant formed only two nonconsecutive two-window batches and had
+feedable below-floor intervals. ACK-positive windows were interrupted by
+ACK-empty samples while all four grants existed, and GNS pending queues
+emptied before a repeatable sustained overlap formed. The floor evaluator's
+16 socket-free edge/eligibility cases pass. Native result `3` on the earlier
+60-byte unreliable client send means `k_EResultNoConnection` after the
+qualifier producer exhausted its 512-sample cap and shut down; it was not a
+GNS queue-limit result. No fresh physical Phase 1 retry occurred, and neither
+canonical physical service throughput nor final Foundation 3L acceptance was
+established. The next gate is an architecture decision about the current
+queue/grant and per-window ACK-positive measurement contract. See the
+[current physical receipt](PooledPhysicalQualification3L.md#local-four-peer-contract-remains-blocked-after-bounded-demand-correction-2026-09-28).
 
 ## Diagnostic Phase 1 underfed-window and export stop (2026-09-28)
 

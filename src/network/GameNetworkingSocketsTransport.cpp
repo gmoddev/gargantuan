@@ -35,6 +35,20 @@ namespace gargantuan::network {
 		constexpr int ResourceExhaustionEndReason = k_ESteamNetConnectionEnd_AppException_Min + 1;
 		constexpr int ProtocolViolationEndReason = k_ESteamNetConnectionEnd_AppException_Min + 2;
 		constexpr int IncompatibleVersionEndReason = k_ESteamNetConnectionEnd_AppException_Min + 3;
+		static_assert(k_EResultNoConnection == 3 && k_EResultLimitExceeded == 25);
+
+		const char *GnsResultName(int Result) noexcept {
+			switch (Result) {
+			case -1: return "NotCalled";
+			case k_EResultOK: return "OK";
+			case k_EResultIgnored: return "Ignored";
+			case k_EResultNoConnection: return "NoConnection";
+			case k_EResultLimitExceeded: return "LimitExceeded";
+			case k_EResultInvalidParam: return "InvalidParam";
+			case k_EResultInvalidState: return "InvalidState";
+			default: return "Unknown";
+			}
+		}
 
 		struct GlobalGnsState {
 			std::recursive_mutex Mutex;
@@ -726,15 +740,33 @@ namespace gargantuan::network {
 		bool HasPendingStatus = false;
 		auto Fail = [&](TransportOperationStatus Status, const char *Site, int BackendResult = -1) {
 			if (std::getenv("GARGANTUAN_GNS_LIFECYCLE_TRACE")) {
+				std::int64_t SentUnacked = -1, QueueUs = -1, SendRate = -1;
+				int NativeStatus = -1, ConnectionStateValue = -1;
+				const auto FailedConnection = State->Connections.find(Message.Destination());
+				if (FailedConnection != State->Connections.end()) {
+					ConnectionStateValue = static_cast<int>(FailedConnection->second.State);
+					if (Global.Interface) {
+						SteamNetConnectionRealTimeStatus_t Native{};
+						NativeStatus = static_cast<int>(SteamAPI_ISteamNetworkingSockets_GetConnectionRealTimeStatus(
+							Global.Interface, FailedConnection->second.Handle, &Native, 0, nullptr));
+						if (NativeStatus == k_EResultOK) {
+							PendingReliable = Native.m_cbPendingReliable;
+							SentUnacked = Native.m_cbSentUnackedReliable;
+							QueueUs = Native.m_usecQueueTime;
+							SendRate = Native.m_nSendRateBytesPerSecond;
+						}
+					}
+				}
 				const auto Monotonic = std::chrono::duration_cast<std::chrono::nanoseconds>(
 					std::chrono::steady_clock::now().time_since_epoch()).count();
 				const auto Unix = std::chrono::duration_cast<std::chrono::nanoseconds>(
 					std::chrono::system_clock::now().time_since_epoch()).count();
-				std::fprintf(stderr, "[Network:GNS] event=send-failure unix_ns=%lld monotonic_ns=%lld slot=%u generation=%u status=%u site=%s backend_result=%d bytes=%zu delivery=%u traffic=%u pending_reliable=%lld pending_cap=%zu\n",
+				std::fprintf(stderr, "[Network:GNS] event=send-failure unix_ns=%lld monotonic_ns=%lld slot=%u generation=%u status=%u site=%s backend_result=%d backend_result_name=%s native_status=%d connection_state=%d bytes=%zu delivery=%u traffic=%u pending_reliable=%lld sent_unacked=%lld queue_us=%lld send_rate=%lld pending_cap=%zu\n",
 					static_cast<long long>(Unix), static_cast<long long>(Monotonic), Message.Destination().Slot,
-					Message.Destination().Generation, static_cast<unsigned>(Status), Site, BackendResult,
+					Message.Destination().Generation, static_cast<unsigned>(Status), Site, BackendResult, GnsResultName(BackendResult), NativeStatus, ConnectionStateValue,
 					Message.Payload().size(), static_cast<unsigned>(Message.Delivery()), static_cast<unsigned>(Message.Traffic()),
-					static_cast<long long>(PendingReliable), State->Limits.MaximumQueuedReliableBytes);
+					static_cast<long long>(PendingReliable), static_cast<long long>(SentUnacked), static_cast<long long>(QueueUs),
+					static_cast<long long>(SendRate), State->Limits.MaximumQueuedReliableBytes);
 			}
 			return Operation(Status);
 		};
