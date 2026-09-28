@@ -9,6 +9,10 @@ if ($Label -cnotmatch '^[0-9a-f]{16}$' -or $ManifestSHA256 -cnotmatch '^[0-9A-F]
     throw '[Qualification:Socket] Invalid broker identity or pin.'
 }
 $Root = "C:\Sandbox\Codex\Artifacts\gargantuan-3l-physical\$Label"
+$RootItem = Get-Item -LiteralPath $Root -ErrorAction Stop
+if (-not $RootItem.PSIsContainer -or ($RootItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+    throw '[Qualification:Socket] Broker root is missing or redirected.'
+}
 $Manifest = Join-Path $Root 'broker-manifest.json'
 if ((Get-FileHash -LiteralPath $Manifest -Algorithm SHA256).Hash -cne $ManifestSHA256) {
     throw '[Qualification:Socket] Broker manifest pin changed.'
@@ -21,6 +25,15 @@ $Python = 'C:\Users\host\.cache\codex-runtimes\codex-primary-runtime\dependencie
 $Broker = Join-Path $Root 'worker_socket_broker.py'
 if ((Get-FileHash -LiteralPath $Broker -Algorithm SHA256).Hash -cne $BrokerSHA256) {
     throw '[Qualification:Socket] Broker source pin changed.'
+}
+$WorkerSid = '*S-1-5-21-455006656-4040886684-1921607991-1006:(OI)(CI)RX'
+& icacls $Root /inheritance:r /grant:r 'HOSTPC\host:(OI)(CI)F' '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' $WorkerSid | Out-Null
+if ($LASTEXITCODE -ne 0) { throw '[Qualification:Socket] Unable to protect broker root.' }
+$Allowed = @('S-1-5-18', 'S-1-5-32-544', 'S-1-5-21-455006656-4040886684-1921607991-1006',
+             ([Security.Principal.NTAccount]'HOSTPC\host').Translate([Security.Principal.SecurityIdentifier]).Value)
+$Access = @((Get-Acl -LiteralPath $Root).Access)
+if (@($Access | Where-Object { $_.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value -notin $Allowed }).Count -ne 0) {
+    throw '[Qualification:Socket] Broker root has an unrelated access identity.'
 }
 $Config = Join-Path $Root 'server-broker.json'
 $Package = Join-Path $Root 'physical-catalog.zip'
