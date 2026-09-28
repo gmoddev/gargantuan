@@ -6,6 +6,41 @@ last_verified: 2026-09-28
 
 # Foundation 3L pooled physical qualification attempt
 
+## Strengthened Phase 1 staging stopped before assignment (2026-09-28)
+
+The strengthened four-client Phase 1 adapter was staged with fixed non-smoke
+probe arguments, a 70-second complete client capture, a distinct
+`FOUR_CLIENT_PHASE1_ONLY` classification and a bounded lifecycle workflow.
+Its pinned probe/source manifest matched on both PCs; the existing binary's
+socket-free analyzer self-test passed on both. The qualifier suite passed 61
+tests before the lifecycle launch, including Phase 1 result parsing and classification
+rejection. Both interactive evidence-root preflights, worker capture-idle and
+10 GbE/MTU/address checks, and an independent forward/reverse tunnel handshake
+passed. No capture or probe started during those checks.
+
+The staged physical run ID was `ffa573c0-91a8-418a-9ac6-4efb63b12728`,
+label `2370720e43cb49e6`. The independent tunnel proof consumed the worker's
+one-use reverse-proof file for this label. The subsequent lifecycle runner
+repeated that preflight with the same label; the worker rejected the consumed
+proof and the host timed out before assignment. The retained staging artifact
+is `C:\Sandbox\Codex\Artifacts\gargantuan-3l-four-client-design\physical-phase1-2370720e43cb49e6`.
+There is **no lifecycle run ID**, no physical coordinator result, no probe or
+packet capture, and no Phase 1 funding measurement. The staged ID is not a
+completed physical attempt. Under the preflight stop rule, it was not retried.
+
+Task-owned daemons, tunnel, temporary profiles, credentials and staged configs
+were cleaned. UDP 39450 and lifecycle listeners are clear; Packet Monitor is
+stopped with no filters, and the capture service is idle. Both installed
+qualifier sources were restored to their prior
+`BFD15390A40E02F94964E5ECC5C381780E3C48460AC17411E8820FDBC80B4136`
+pin; the worker hook remains
+`231FAE4B89155630138BDC9ABBB1BB526C3B322D0BE2667D2A2E8B5CFEC1375D`.
+The harness now reports a consumed worker proof promptly, with a regression
+test. A separately authorized fresh stage must use the lifecycle runner's
+single built-in tunnel preflight; it must not spend the same one-use proof in
+an independent check. **STRENGTHENED FOUR-CLIENT PHASE 1 — NOT MEASURED;
+KI-006 OPEN; Foundation 3L B — PARTIALLY READY.**
+
 ## Four-client physical readiness passed; historical lifecycle false negative corrected post-run (2026-09-28)
 
 **FOUR-CLIENT PHYSICAL READINESS — PASS. OUTER LIFECYCLE

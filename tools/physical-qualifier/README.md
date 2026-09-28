@@ -21,6 +21,9 @@ verdict and metrics; readiness staging remains `FOUR_CLIENT_READINESS_ONLY`.
 This command writes configs only. The artifact pin, both evidence roots, worker
 capture service and hook, fiber/LAN state, lifecycle profiles and endpoint
 leases still require independent preflight before a physical attempt.
+The lifecycle runner performs its own forward/reverse tunnel proof before
+assignment. That worker proof is one-use per stage label: do not call the
+tunnel preflight separately with the same label and then invoke the runner.
 
 [upstream.lock.json](upstream.lock.json) pins commit
 `9c81cfb16640dc18e29b6253fc0f5463c4c4dd4b` and SHA-256 of the consumed sources.

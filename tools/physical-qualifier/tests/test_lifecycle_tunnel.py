@@ -93,6 +93,27 @@ class LifecycleTunnelTests(unittest.TestCase):
             self.assertEqual(Proof["Reverse"]["Sid"], Tunnel.WORKER_SID)
             self.assertEqual(Proof["ReverseHost"]["WorkerNonce"], "a" * 32)
 
+    def test_consumed_worker_proof_fails_before_assignment_without_handshake_timeout(self):
+        with tempfile.TemporaryDirectory() as Temporary:
+            Session = Tunnel.TunnelSession(SETUP, STAGE, Temporary)
+            Session.Process = SimpleNamespace(pid=731, poll=lambda: None)
+            Session.StartedUnixMs = time.time_ns() // 1000000
+
+            class WorkerClient:
+                def __init__(self, Host, Port, EndpointId, Key):
+                    pass
+
+                def GetPresence(self):
+                    return {"EndpointId": "SERVER", "Status": "OFFLINE"}
+
+            Started = time.monotonic()
+            with patch.object(Tunnel, "LaunchRestrictedReverseProbe",
+                              side_effect=RuntimeError("reverse tunnel proof already consumed")):
+                with self.assertRaisesRegex(RuntimeError, "proof already consumed"):
+                    Session.Preflight(b"key", WorkerClient)
+            self.assertLess(time.monotonic() - Started, 2)
+            self.assertFalse((Path(Temporary) / "tunnel-preflight.json").exists())
+
     def test_wrong_endpoint_and_stale_nonce_rejected(self):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as Listener:
             Listener.bind(("127.0.0.1", 0))

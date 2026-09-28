@@ -6,6 +6,23 @@ last_verified: 2026-09-28
 
 # Foundation 3L.3 diagnostic validation ledger
 
+## Strengthened Phase 1 pre-assignment stop (2026-09-28)
+
+The [Phase 1 staging receipt](PooledPhysicalQualification3L.md#strengthened-phase-1-staging-stopped-before-assignment-2026-09-28)
+records staged physical ID `ffa573c0-91a8-418a-9ac6-4efb63b12728` and
+label `2370720e43cb49e6`. Both endpoint catalogs, the pinned strengthened
+probe self-test, evidence roots, worker capture-idle state, fiber interfaces
+and an independent two-way tunnel proof passed without a physical launch.
+That independent tunnel check consumed the worker's one-use reverse-proof file.
+The lifecycle runner's repeated preflight then timed out **before assignment**.
+There is no lifecycle run ID, probe, capture, or funding measurement; the staged
+ID is not a completed physical attempt. No retry was made. Task-owned state was
+cleaned and both qualifier copies restored to their prior deployment pin.
+The consumed-proof failure now has prompt reporting and a regression test.
+**STRENGTHENED FOUR-CLIENT PHASE 1 — NOT MEASURED; KI-006 OPEN; Foundation 3L
+B — PARTIALLY READY.** A separately authorized fresh stage should use only the
+lifecycle runner's built-in one-use tunnel preflight. No 3M or merge.
+
 ## Four-client physical readiness passed; historical lifecycle false negative corrected post-run (2026-09-28)
 
 The [physical receipt](PooledPhysicalQualification3L.md#four-client-physical-readiness-passed-historical-lifecycle-false-negative-corrected-post-run-2026-09-28)

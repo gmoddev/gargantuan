@@ -88,8 +88,10 @@ def LaunchRestrictedReverseProbe(Stage, Artifact):
         Interactive = Stage.get("QualificationProfile") == INTERACTIVE_PROFILE
         if Interactive:
             Command.append("-Interactive")
-        subprocess.run(Command,
-                       check=True, capture_output=True, text=True, timeout=20)
+        Started = subprocess.run(Command, capture_output=True, text=True, timeout=20)
+        if Started.returncode:
+            raise RuntimeError("worker reverse preflight refused: " +
+                               (Started.stderr.strip() or Started.stdout.strip())[-300:])
         Output = Artifact / ("worker-tunnel-interactive-proof.json" if Interactive else
                              "worker-tunnel-restricted-proof.json")
         Deadline = time.monotonic() + 30
@@ -182,7 +184,7 @@ class TunnelSession:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as Listener:
             Listener.bind(("127.0.0.1", 49961))
             Listener.listen(1)
-            Listener.settimeout(30)
+            Listener.settimeout(0.25)
             Result = {}
 
             def WorkerProbe():
@@ -194,7 +196,16 @@ class TunnelSession:
             Thread = threading.Thread(target=WorkerProbe, name="WorkerReverseProbe")
             Thread.start()
             try:
-                Host = ServeChallenge(Listener, self.Stage["Label"], self.Stage["RunId"])
+                Deadline = time.monotonic() + 30
+                while True:
+                    try:
+                        Host = ServeChallenge(Listener, self.Stage["Label"], self.Stage["RunId"])
+                        break
+                    except socket.timeout:
+                        if "Error" in Result:
+                            raise RuntimeError("worker reverse probe failed: " + str(Result["Error"]))
+                        if time.monotonic() >= Deadline:
+                            raise TimeoutError("worker reverse handshake timed out")
             finally:
                 Thread.join(35)
             if Thread.is_alive():
