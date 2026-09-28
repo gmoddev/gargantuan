@@ -30,11 +30,13 @@ if ($Action -eq 'Start') {
     })
     if ($Components.Count -ne 1 -or $Components[0].DriverName -ne 'mlx5.sys' -or
         [int]$Components[0].Id -le 0) { throw 'Cannot attribute the Mellanox capture component.' }
-    # One miniport edge saw each synthetic UDP direction exactly once. Selecting
-    # TCP/IP as well records the same datagrams again; its named IPv4 L2
-    # SecondaryId observed neither direction on this worker.
+    # The miniport logs one snapshot per datagram. Packet Monitor's -t UDP
+    # predicate hides live-GNS ingress on this Mellanox stack, even though its
+    # raw metadata identifies those frames as UDP. Match the fixed fiber MACs,
+    # IPv4, and fixed port here; the pcap qualifier enforces the exact UDP tuple.
     $CaptureComponent = [int]$Components[0].Id
-    InvokePktMon -Arguments @('filter','add',$FilterName,'-t','UDP','-i','10.253.3.1','10.253.3.2','-p',[string]$CapturePort) | Write-Output
+    InvokePktMon -Arguments @('filter','add',$FilterName,'-m','0C-42-A1-52-38-A8','0C-42-A1-49-D5-E0',
+        '-d','IPv4','-p',[string]$CapturePort) | Write-Output
     $OwnedFilters = InvokePktMon -Arguments @('filter','list')
     @{FilterName=$FilterName; FilterList=$OwnedFilters; Etl=$Etl; Components=@($CaptureComponent);
       CaptureLayers=@('Mellanox miniport'); ComponentId=$CaptureComponent;

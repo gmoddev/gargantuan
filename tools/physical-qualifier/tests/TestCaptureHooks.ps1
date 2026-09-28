@@ -43,7 +43,8 @@ try {
     & $HookBlock $TestDir Start
     Assert $global:TestActive 'Capture did not start'
     Assert ([bool]($global:TestCalls | Where-Object {$_ -eq ('start --capture --comp 13 --pkt-size 0 --file-name ' + $global:TestEtl + ' --file-size 64 --log-mode circular')})) 'Single Mellanox edge or 64 MiB bound was not preserved'
-    Assert ([bool]($global:TestCalls | Where-Object {$_ -eq ('filter add Qualification-' + (Split-Path $TestDir -Leaf) + ' -t UDP -i 10.253.3.1 10.253.3.2 -p 39450')})) 'The peer-address/UDP-port filter changed'
+    Assert ([bool]($global:TestCalls | Where-Object {$_ -eq ('filter add Qualification-' + (Split-Path $TestDir -Leaf) + ' -m 0C-42-A1-52-38-A8 0C-42-A1-49-D5-E0 -d IPv4 -p 39450')})) 'The live-GNS peer-MAC/IPv4/port filter changed'
+    Assert (-not ($global:TestCalls | Where-Object {$_ -match '^filter add .* -t UDP(?: |$)'})) 'The Packet Monitor UDP predicate would hide live-GNS ingress'
     $Owner = Get-Content (Join-Path $TestDir 'pktmon-owner.json') -Raw | ConvertFrom-Json
     Assert (($Owner.Components -join ',') -eq '13' -and $Owner.ComponentId -eq 13 -and $Owner.MiniportIfIndex -eq 19 -and $Owner.CapturePort -eq 39450) 'Capture ownership marker omitted the selected miniport/default port'
     Assert (($Owner.CaptureLayers -join ',') -eq 'Mellanox miniport') 'Capture layer attribution was incomplete'
@@ -53,7 +54,7 @@ try {
     Assert (Test-Path (Join-Path $TestDir 'worker-capture.pcapng')) 'Export missing'
     Assert ([bool]($global:TestCalls | Where-Object {$_ -eq ('etl2pcap ' + $global:TestEtl + ' --out ' + (Join-Path $TestDir 'worker-capture.pcapng') + ' --component-id 13')})) 'Export did not preserve the selected miniport scope'
     & $HookBlock $TestDir Start 39452
-    Assert ([bool]($global:TestCalls | Where-Object {$_ -eq ('filter add Qualification-' + (Split-Path $TestDir -Leaf) + ' -t UDP -i 10.253.3.1 10.253.3.2 -p 39452')})) 'The fixed local synthetic port was not selected'
+    Assert ([bool]($global:TestCalls | Where-Object {$_ -eq ('filter add Qualification-' + (Split-Path $TestDir -Leaf) + ' -m 0C-42-A1-52-38-A8 0C-42-A1-49-D5-E0 -d IPv4 -p 39452')})) 'The fixed local synthetic port was not selected'
     & $HookBlock $TestDir Stop
     $Before = $global:TestCalls.Count
     $Rejected = $false

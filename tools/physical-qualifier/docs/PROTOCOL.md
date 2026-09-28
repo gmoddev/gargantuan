@@ -134,8 +134,9 @@ helpers just to inspect or deploy them. No GO/SERVER LIVE chat relay is needed.
 The stock worker hook `worker/PktMonCapture.ps1 <EvidenceDir> Start|Stop` requires
 local elevation, verifies the Mellanox static link, and resolves exactly one
 `mlx5.sys` miniport component by its current ifIndex. Packet Monitor captures on
-that one miniport edge. Its filter requires both fiber addresses, UDP and port
-39450. Capture is full-packet, circular and bounded to 64 MiB; ETL-to-pcapng
+that one miniport edge. Its filter requires both fixed fiber MAC addresses,
+IPv4 and port 39450; the pcap validator requires the exact two-peer UDP tuple.
+Capture is full-packet, circular and bounded to 64 MiB; ETL-to-pcapng
 export is restricted to the same component ID. An elevated worker-local test may
 select only the fixed synthetic port 39452 as a third hook argument; the service
 does not expose that argument and always uses the default GNS port 39450.
@@ -163,9 +164,31 @@ pinning `13`. The corrected hook passed the bounded direct candidate run
 `965f65e9-da22-4fea-becf-da8356f0e60c`: all five application requests and
 five replies were delivered, and the miniport-only export contained each
 direction exactly five times with no unexplained duplicates or capture drops.
-The worker service remains the same fixed-operation, 90-second-lease binary;
-its installed hook and hash pin are both
+The worker service remains the same fixed-operation, 90-second-lease binary.
+The earlier synthetic-qualified hook and service pin were
 `73A840FCA570F676B06D76457FF719301BBB4C93F9865A25B19EE1671EE63E3E`.
+
+The later live-GNS ingress investigation showed that the synthetic observation
+filter did not generalize to GNS. In the preserved failed-run ETL, miniport 13
+contained 62 outbound payloads and no inbound payloads; all 62 exported to
+pcapng. A bounded live-GNS sweep with the same UDP/IP/port filter again saw no
+inbound payload on miniport 13, WFP Native Filter 30, or TCPIP 75. Removing the
+IP predicate, or selecting every Packet Monitor component, did not restore
+ingress. Matching only the two fiber MACs and IPv4 exposed 150 inbound and 68
+outbound miniport frames, with 150 inbound and 64 outbound on the GNS tuple.
+Adding `-t UDP` to that MAC filter again suppressed every inbound payload;
+matching the same MACs, IPv4 and port 39450 without `-t UDP` captured 127
+inbound and 61 outbound GNS packets at miniport 13. The 188 miniport payloads
+all exported to pcapng with zero reported drops. WFP Native Filter 30 records
+two edge snapshots of each packet, so the hook keeps miniport-only export and
+the existing exact-UDP pcap qualification gate. No NIC offload setting changed.
+The installed hook and service pin are now
+`2BC2E1430A29ACDE61DCCD35B943998FDB45D8E81E3E2A206D66158F334634D9`.
+The installed-hook capture-only proof `e60416771cd34df0` saw 135 inbound and
+32 outbound exact-tuple GNS packets in both ETL and pcapng, with no lost events
+or reported drops. The subsequent fresh one-client lifecycle stopped before
+physical capture when both Codex agents failed at startup; it did not qualify
+one-client readiness.
 The prior hook is retained in the protected worker-local rollback backup.
 Stop uses a task-owned marker and requires matching ETL session/filter inventory
 before stopping or clearing the sole owned filter. Changed ownership aborts cleanup

@@ -24,7 +24,10 @@ configs must independently select a temporary named interactive Codex profile;
 the stage flag does not elevate or change a daemon. The default restricted path
 remains available and its Foundation 2B qualification is a separate claim.
 The September 28 interactive run reached GNS/GameSession Ready but failed the
-worker inbound capture gate; see the [receipt](../../devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md).
+worker inbound capture gate. A later real-GNS capture-only proof passed after
+correcting the Packet Monitor filter; the next fresh lifecycle run stopped at
+Codex agent startup before physical capture. See the
+[receipt](../../devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md).
 Bootstrap downloads to an ignored local directory; import fails closed if sources
 are absent/changed. It does not install services, change network policy, replace
 physical-PC tooling, or run captures/probes. Existing installed standalone copies

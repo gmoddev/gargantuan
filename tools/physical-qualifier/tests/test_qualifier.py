@@ -275,9 +275,12 @@ class QualificationTests(unittest.TestCase):
 
     def test_capture_direction_parser_sees_both_udp_directions(self):
         Capture = self.Root / "bidirectional.pcapng"
+        SamePortTcp = bytearray(EthernetUdp("10.253.3.1", 49155, "10.253.3.2", 39450))
+        SamePortTcp[14 + 9] = 6
         WritePcapNg(Capture, [
             EthernetUdp("10.253.3.1", 49155, "10.253.3.2", 39450),
             EthernetUdp("10.253.3.2", 39450, "10.253.3.1", 49155),
+            bytes(SamePortTcp),
             EthernetUdp("192.168.0.68", 49155, "10.253.3.2", 39450),
             EthernetUdp("10.253.3.2", 39450, "192.168.0.68", 49155),
         ])

@@ -6,6 +6,27 @@ last_verified: 2026-09-28
 
 # Foundation 3L.3 diagnostic validation ledger
 
+## Live-GNS worker capture proof passed; fresh lifecycle agent startup failed (2026-09-28)
+
+The [physical receipt](PooledPhysicalQualification3L.md#live-gns-capture-corrected-fresh-one-client-lifecycle-stopped-at-agent-startup-2026-09-28)
+attributes the previous missing ingress to Packet Monitor's `-t UDP` predicate
+on live-GNS receive frames. A fixed peer-MAC/IPv4/port-39450 filter and
+miniport-only export passed a real-GNS capture-only proof: worker inbound 135,
+outbound 32, no lost events, packet truncation, duplicate miniport groups or
+reported drops. The installed hook/service pin is `2BC2E143…`; the pcap gate
+still requires the exact UDP tuple in both directions. No NIC offload changed.
+
+One fresh interactive-profile physical run
+`429c38d7-26bd-474d-b5d1-e97d13b0e8bd` and lifecycle run
+`575f286e-2c91-438c-9e4a-1f63a96d4cc5` passed evidence/LAN preflights
+and both SSH tunnel handshakes. Both Codex agents failed before session IDs or
+registration; the coordinator aborted at its registration deadline. Physical
+capture and GNS were not started in that run, so its client and worker packet
+counts and GameSession result are **not measured**. Cleanup passed. The run was
+not retried. **ONE-CLIENT PHYSICAL READINESS — FAIL; KI-006 OPEN; Foundation
+3L B — PARTIALLY READY.** Next: diagnose the agent startup failure and make a
+separately authorized fresh one-client attempt before four-client readiness.
+
 ## Interactive one-client path reached Ready; worker capture gate failed (2026-09-28)
 
 The [physical receipt](PooledPhysicalQualification3L.md#interactive-one-client-gns-and-ready-passed-worker-ingress-capture-failed-2026-09-28)

@@ -1,10 +1,79 @@
 ---
-status: one-client-interactive-worker-capture-failed
+status: live-gns-capture-proven-one-client-agent-startup-failed
 owner: runtime-networking-and-runtime-host
 last_verified: 2026-09-28
 ---
 
 # Foundation 3L pooled physical qualification attempt
+
+## Live-GNS capture corrected; fresh one-client lifecycle stopped at agent startup (2026-09-28)
+
+The preserved worker ETL from run `a1e20f02-cb11-425d-99b4-b30119261eff`
+contains 62 raw payload events, all outbound on Mellanox miniport component 13
+(`mlx5.sys`, edge 1); its pcap export contains all 62. No inbound payload was
+present in that ETL. The flow counters included receive activity but did not
+identify the GNS tuple and were not used as packet evidence. A bounded real-GNS
+component sweep showed the same outbound-only result at miniport 13, WFP Native
+Filter 30 and TCPIP 75, including with the UDP port-only filter and with all
+components selected. WFP component 30 records two edge snapshots of a packet
+and is unsuitable for direct aggregate counts.
+
+The causal observation defect is Packet Monitor's `-t UDP` predicate on these
+live-GNS receive frames: a filter on the two fixed fiber MACs and IPv4 exposed
+150 inbound/68 outbound miniport frames, of which 150 inbound/64 outbound were
+the GNS tuple. Adding `-t UDP` to that filter suppressed every inbound payload
+again. Keeping the MACs, IPv4 and port 39450 but omitting `-t UDP` recorded 127
+inbound/61 outbound qualified GNS packets on miniport 13, all 188 exported with
+zero Packet Monitor drops. Packet Monitor's own metadata identified the received
+frames as UDP. The exact internal reason its UDP filter rejects these live-GNS
+receive frames is not established; the earlier five/five synthetic exchange
+did not exercise this behavior. No NIC offload setting was changed. The worker
+hook now uses the fixed peer-MAC/IPv4/port filter and still exports only the
+miniport. The existing pcap validator requires both directions on the exact
+two-peer UDP tuple, so TCP on that port cannot qualify readiness.
+
+The installed, hash-pinned hook `2BC2E1430A29ACDE61DCCD35B943998FDB45D8E81E3E2A206D66158F334634D9`
+then passed a separate capture-only real-GNS proof `e60416771cd34df0`:
+miniport-13 ETL and pcap each contain 167 full-length payloads, 135 inbound
+and 32 outbound on the qualified UDP tuple. All 167 packet group IDs are unique;
+there were no lost events or reported drops. The ETL SHA-256 is
+`CF98E89C6860ED27FAAC392FE5B69BA84DEA815CD3A0D962E93113EC6D543C57`;
+the pcap SHA-256 is
+`407103DA0FC4945ACBFF61078BF79EA535C32D4E1073857329A088C7B91EA4FC`.
+The fixed GNS probe binary remained
+`1E25676BDF1DA6ED2EA8A28AB183F519D18A4802BD00E7F6730CFA77D395BD5A`;
+the qualifier source remained
+`93B71C5C4FFE4AB1412EE3E38581465525654D5D06E4799EB494F2ED8257768C`.
+The capture service's binary and fixed operations were unchanged, and its hook
+pin matches the installed hook. A protected worker-local backup retains the
+prior hook and service config.
+
+After that proof, exactly one fresh interactive-profile physical run was
+staged: `429c38d7-26bd-474d-b5d1-e97d13b0e8bd`, label
+`49a4802f85d34aea`, lifecycle run
+`575f286e-2c91-438c-9e4a-1f63a96d4cc5`. Both evidence and worker LAN
+preflights passed; the fixed SSH forward/reverse handshakes passed before
+assignment. Both lifecycle endpoints then changed from `PREPARING` to
+`AGENT_FAILED` before either Codex agent reported a session ID or registered.
+The coordinator expired its registration deadline and aborted. The immediate
+CLI startup error was not retained by this lifecycle adapter, so its underlying
+cause is not measured. Physical capture, GNS/GameSession readiness, client
+clean close, packet counts and `FINALIZE`/`RUN_DONE` were not reached in this
+fresh attempt. **ONE-CLIENT PHYSICAL READINESS — FAIL.** The failed run was not
+retried.
+
+The retained stage and lifecycle evidence is under
+`C:\Sandbox\Codex\Artifacts\gargantuan-3l-interactive-diagnostic\physical-lifecycle-49a4802f85d34aea`;
+the capture-only proof is under
+`C:\GargantuanQualification\physical-qualifier-service-evidence\proof-e60416771cd34df0`
+on the worker. Cleanup removed both one-run profiles and secrets, the task-owned
+daemons/tasks/tunnel, and the staged physical configs; no probe or UDP 39450
+listener remains. Packet Monitor is stopped with no filters, and the capture
+service is running idle on the corrected pin. **KI-006 remains OPEN; Foundation
+3L remains B — PARTIALLY READY.** The next task is to retain/diagnose the
+Codex CLI startup failure on both endpoints, then perform one separately
+authorized fresh one-client lifecycle attempt. Four-client readiness, Phase 1,
+3M, final acceptance and merge remain gated on a one-client PASS.
 
 ## Interactive one-client GNS and Ready passed; worker ingress capture failed (2026-09-28)
 
