@@ -1,14 +1,14 @@
 # Gargantuan capture-service integration
 
 Generic service source has moved to the pinned
-[Agent Coordinator helper](https://github.com/GantriaEngine/agent-coordinator/tree/24edb592ace678124731455b841e2623f64ba57a/privileged-helper).
+[Agent Coordinator helper](https://github.com/GantriaEngine/agent-coordinator/tree/9c81cfb16640dc18e29b6253fc0f5463c4c4dd4b/privileged-helper).
 This directory retains only the project installer wrapper and integration notes.
-The fixed Packet Monitor hook remains at `../worker/PktMonCapture.ps1`.
+The fixed worker capture hook remains at `../worker/PktMonCapture.ps1`.
 The existing installed Gargantuan service stays the operational baseline.
 
 This Windows-only helper gives the physical qualifier one pre-authorized capability: run the installed, hash-pinned `PktMonCapture.ps1` hook for one evidence directory under a configured root. It does not accept shell commands, executable names, Packet Monitor arguments, interface identifiers, or arbitrary output paths.
 
-The service runs as LocalSystem. Its local named pipe grants access only to LocalSystem and the SID recorded during installation; Windows authenticates pipe clients against this ACL. Requests are newline-delimited JSON, limited to 16 KiB, and accept only `start`/`stop`/`status`, a canonical run UUID, an endpoint-helper PID, and an evidence path below the configured local root. `start` additionally requires that PID to be running the configured Python runtime. The service monitors that process identity and stops its capture when the endpoint helper exits, when the service stops, or at the 90-second hard deadline. The existing hook retains its exact-interface and Packet Monitor ownership checks and 64 MiB circular file cap. Every operation is appended to an admin-only JSONL audit file. An active run record is persisted before capture starts; after a service crash, startup attempts cleanup only for that recorded run. If ownership cannot be verified, new captures are refused until an administrator reconciles it.
+The service runs as LocalSystem. Its local named pipe grants access only to LocalSystem and the SID recorded during installation; Windows authenticates pipe clients against this ACL. Requests are newline-delimited JSON, limited to 16 KiB, and accept only `start`/`stop`/`status`, a canonical run UUID, an endpoint-helper PID, and an evidence path below the configured local root. `start` additionally requires that PID to be running the configured Python runtime. The service monitors that process identity and stops its capture when the endpoint helper exits, when the service stops, or at the 90-second hard deadline. The current hook retains its exact-interface and Windows trace ownership checks and 64 MiB circular file cap. Every operation is appended to an admin-only JSONL audit file. An active run record is persisted before capture starts; after a service crash, startup attempts cleanup only for that recorded run. If ownership cannot be verified, new captures are refused until an administrator reconciles it.
 
 ## Build and install
 

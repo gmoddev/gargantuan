@@ -36,14 +36,16 @@ part of this dependency.
 
 Use a hash-verified immutable source bootstrap rather than adding a submodule or
 committing a second generic implementation. [The lock](../../tools/physical-qualifier/upstream.lock.json)
-pins `24edb592ace678124731455b841e2623f64ba57a` and consumed-source SHA-256 values.
+pins `9c81cfb16640dc18e29b6253fc0f5463c4c4dd4b` and consumed-source SHA-256 values.
 `bootstrap.py` fetches that revision into ignored `.agent-coordinator`; imports
 fail closed on missing/changed pinned sources. New packages embed the snapshot and
 adapter, including the skill entrypoint. Old installed standalone packages remain
 valid independently of this checkout.
 
-The current physical adapter uses the existing legacy readiness profile; its
-three staged configs and wire messages remain unchanged. Standalone schema-control
+The current physical adapter uses the existing legacy readiness profile. Four-client
+staging now supplies a trusted `ResultClassification` to all three configs, and
+the pinned coordinator requires the two endpoint results to agree with it.
+One-client staging retains its previous classification. Standalone schema-control
 v1 additionally supports locally installed schemas/capability catalogs and
 authenticated short-lived assignment pull, with separate registration/execution
 budgets. It is an available infrastructure API, not silently substituted for the

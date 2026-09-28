@@ -347,6 +347,7 @@ def RequireWorkerPhysicalIdle(Stage, Artifact):
         raise RuntimeError("worker physical idle report malformed") from Error
     if (Report.get("CaptureService") != "Running" or Report.get("CaptureActiveRun") is not False or
             Report.get("PacketMonitor") != "Stopped" or Report.get("PacketFilters") != "None" or
+            Report.get("WindowsTrace") != "Stopped" or
             Report.get("Udp39450") != "Unbound" or
             not 0 <= time.time_ns() // 1000000 - Report.get("TimestampUnixMs", -1) <= 30000):
         raise ValueError("worker physical prerequisite is not idle")

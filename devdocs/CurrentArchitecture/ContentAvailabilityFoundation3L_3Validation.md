@@ -6,6 +6,25 @@ last_verified: 2026-09-28
 
 # Foundation 3L.3 diagnostic validation ledger
 
+## Four-client physical readiness evidence passed; lifecycle status open (2026-09-28)
+
+The [new physical receipt](PooledPhysicalQualification3L.md#four-client-physical-evidence-passed-lifecycle-wrapper-status-remains-open-2026-09-28)
+records one fresh run `acd22294-75d5-4457-b69e-73bb6a00d8af`, lifecycle run
+`55d56c05-4dda-435b-a27b-d8578a084978`, after separate client autostop,
+worker four-flow NDIS capture and four-client classification proofs. Server
+Ready/active 4/4 met the canonical one-second interval; all four clients
+reported Ready and clean remote close, with good cleanup. The complete client
+pcap contains 603 outbound/402 inbound exact-tuple packets; the worker pcap
+contains the matching 603 inbound/402 outbound across all four source ports.
+Both endpoint and physical coordinator results are successful and classified
+`FOUR_CLIENT_READINESS_ONLY`; raw evidence manifests verify. The outer
+lifecycle host also completed successfully, but its enclosing adapter returned
+FAIL because the server Codex agent ended `NEEDS_USER/MISSING_CAPABILITY`
+instead of `IDLE` after protocol completion. That wrapper status remains open;
+this run was not retried. **FOUR-CLIENT PHYSICAL EVIDENCE — PASS; OUTER LIFECYCLE
+COMPLETION — FAIL; KI-006 OPEN; Foundation 3L B — PARTIALLY READY.**
+Strengthened Phase 1, 3M and merge were not started.
+
 ## Four-client physical readiness capture stop (2026-09-28)
 
 The [physical receipt](PooledPhysicalQualification3L.md#four-client-application-readiness-passed-capture-gate-failed-2026-09-28)

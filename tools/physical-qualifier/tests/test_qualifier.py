@@ -95,6 +95,11 @@ class QualificationTests(unittest.TestCase):
         Server = json.loads((Root / "server.json").read_text())
         self.assertEqual(4, Client["ReadinessClients"])
         self.assertEqual(4, Server["ReadinessClients"])
+        self.assertEqual("FOUR_CLIENT_READINESS_ONLY", Client["ResultClassification"])
+        self.assertEqual("FOUR_CLIENT_READINESS_ONLY", Server["ResultClassification"])
+        Coordinator = json.loads((Root / "coordinator.json").read_text())
+        self.assertEqual("FOUR_CLIENT_READINESS_ONLY", Coordinator["ResultClassification"])
+        self.assertEqual("duration:40", Client["CaptureCommand"][-3])
         self.assertEqual(["server", "10.253.3.2", "39450", "4", "--readiness-smoke"],
                          Server["ProbeArgs"])
         self.assertEqual(["client", "10.253.3.2", "39450", "92707", "0", "--readiness-smoke"],
@@ -106,6 +111,16 @@ class QualificationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "nonce range"):
             Q.Stage(Args)
         self.assertFalse(Path(Args.output).exists())
+
+    def test_explicit_result_classification_cannot_disagree_with_client_count(self):
+        Config = {**self.Config, "ReadinessClients": 4}
+        with self.assertRaisesRegex(ValueError, "result classification"):
+            Q.ValidateConfig(Config)
+        Config["ResultClassification"] = "FOUR_CLIENT_READINESS_ONLY"
+        Q.ValidateConfig(Config)
+        Config["ReadinessClients"] = 1
+        with self.assertRaisesRegex(ValueError, "result classification"):
+            Q.ValidateConfig(Config)
 
     def tearDown(self):
         for Link in self.Links:
@@ -356,6 +371,35 @@ class QualificationTests(unittest.TestCase):
         self.assertIn("capture direction validation failed: pcapng block length is malformed",
                       Run.Cleanup())
         Log.Close({"Success": False})
+
+    def test_four_client_cleanup_waits_for_capture_to_finish_final_block(self):
+        class CompletedProbe:
+            def poll(self):
+                return 0
+
+        Evidence = self.Root / "four-finalized"
+        Log = Q.Journal(Evidence)
+        Run = Q.LocalRun({"Role": "CLIENT", "ReadinessClients": 4,
+                          "CaptureCommand": ["test-only"]}, Log)
+        Run.Probe = CompletedProbe()
+        Run.CaptureArmed = True
+        Packets = []
+        for Port in range(51820, 51824):
+            Packets.extend((EthernetUdp("10.253.3.1", Port, "10.253.3.2", 39450),
+                            EthernetUdp("10.253.3.2", 39450, "10.253.3.1", Port)))
+        Capture = Evidence / "client.pcapng"
+        WritePcapNg(Capture, Packets)
+        Complete = Capture.read_bytes()
+        Capture.write_bytes(Complete[:-5])
+        Code = ("import pathlib,sys,time; time.sleep(.15); "
+                "File=pathlib.Path(sys.argv[1]); "
+                "File.open('ab').write(bytes.fromhex(sys.argv[2]))")
+        Run.Capture = subprocess.Popen([sys.executable, "-c", Code,
+                                        str(Capture), Complete[-5:].hex()], **Q.Hidden())
+        self.assertEqual([], Run.Cleanup())
+        self.assertEqual(0, Run.Capture.returncode)
+        self.assertEqual(Complete, Capture.read_bytes())
+        Log.Close({"Success": True})
 
     def test_four_client_probe_group_waits_for_every_unique_client_and_fails_closed(self):
         class FakeProcess:

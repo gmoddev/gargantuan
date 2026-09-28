@@ -5,62 +5,140 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
-$Marker = Join-Path $EvidenceDir 'pktmon-owner.json'
+$Marker = Join-Path $EvidenceDir 'netsh-owner.json'
 $Etl = Join-Path $EvidenceDir 'worker-capture.etl'
-$FilterName = 'Qualification-' + (Split-Path $EvidenceDir -Leaf)
-function InvokePktMon([string[]]$Arguments) {
-    $Output = & pktmon @Arguments 2>&1
+$Pcap = Join-Path $EvidenceDir 'worker-capture.pcapng'
+
+function InvokeNetsh([string[]]$Arguments) {
+    $Output = & netsh @Arguments 2>&1
     if ($LASTEXITCODE -ne 0) { throw ($Output -join "`n") }
     return ($Output -join "`n")
 }
+
+function GetTraceStatus {
+    $Output = & netsh trace show status 2>&1
+    $Text = $Output -join "`n"
+    if ($LASTEXITCODE -ne 0 -and $Text -notmatch 'There is no trace session currently in progress') {
+        throw $Text
+    }
+    return $Text
+}
+
+function WriteBlock([IO.BinaryWriter]$Writer, [uint32]$Type, [byte[]]$Body) {
+    $Padding = (4 - ($Body.Length % 4)) % 4
+    $Length = [uint32](12 + $Body.Length + $Padding)
+    $Writer.Write($Type)
+    $Writer.Write($Length)
+    $Writer.Write($Body)
+    if ($Padding) { $Writer.Write([byte[]]::new($Padding)) }
+    $Writer.Write($Length)
+}
+
+function ExportNdisTrace([string]$Source, [string]$Destination, [uint32]$IfIndex) {
+    # The NDIS provider's packet event carries an Ethernet frame in property 3.
+    # Packet Monitor's ETL converter cannot read this provider. Emit a complete
+    # Ethernet pcapng so the normal qualifier validates the exact UDP tuples.
+    $Events = Get-WinEvent -Path $Source -Oldest -ErrorAction Stop
+    $Stream = [IO.File]::Open($Destination, [IO.FileMode]::CreateNew,
+                              [IO.FileAccess]::Write, [IO.FileShare]::None)
+    $Writer = [IO.BinaryWriter]::new($Stream)
+    $Packets = 0
+    try {
+        $Body = [IO.MemoryStream]::new()
+        $Part = [IO.BinaryWriter]::new($Body)
+        $Part.Write([uint32]0x1A2B3C4D)
+        $Part.Write([uint16]1)
+        $Part.Write([uint16]0)
+        $Part.Write([int64]-1)
+        WriteBlock $Writer 0x0A0D0D0A $Body.ToArray()
+        $Body.SetLength(0)
+        $Body.Position = 0
+        $Part.Write([uint16]1)
+        $Part.Write([uint16]0)
+        $Part.Write([uint32]65535)
+        WriteBlock $Writer 1 $Body.ToArray()
+        foreach ($Event in $Events) {
+            if ($Event.ProviderName -ne 'Microsoft-Windows-NDIS-PacketCapture' -or $Event.Id -ne 1001) {
+                continue
+            }
+            $Properties = $Event.Properties
+            if ($Properties.Count -lt 4 -or [uint32]$Properties[0].Value -ne $IfIndex -or
+                [uint32]$Properties[1].Value -ne $IfIndex) { continue }
+            $Frame = [byte[]]$Properties[3].Value
+            if ($Frame.Length -lt 14 -or $Frame.Length -ne [uint32]$Properties[2].Value) {
+                throw 'NDIS packet event is truncated or malformed.'
+            }
+            $Microseconds = [int64](($Event.TimeCreated.ToUniversalTime().Ticks -
+                                      ([datetime]'1970-01-01T00:00:00Z').Ticks) / 10)
+            $Body.SetLength(0)
+            $Body.Position = 0
+            $Part.Write([uint32]0)
+            $Part.Write([uint32]($Microseconds -shr 32))
+            $Part.Write([uint32]($Microseconds -band 0xFFFFFFFFL))
+            $Part.Write([uint32]$Frame.Length)
+            $Part.Write([uint32]$Frame.Length)
+            $Part.Write($Frame)
+            WriteBlock $Writer 6 $Body.ToArray()
+            $Packets++
+        }
+        if ($Packets -eq 0) { throw 'NDIS trace contains no complete frames from the worker fiber miniport.' }
+    } finally {
+        $Writer.Dispose()
+    }
+    return $Packets
+}
+
 if ($Action -eq 'Start') {
-    $Status = InvokePktMon -Arguments @('status')
-    if ($Status -notmatch 'Packet Monitor is not running') { throw 'An existing Packet Monitor session is protected.' }
-    $Filters = InvokePktMon -Arguments @('filter','list')
-    if ($Filters.Trim() -notmatch '^Packet Filters:\s+None$') { throw 'Existing Packet Monitor filters are protected.' }
+    $Status = GetTraceStatus
+    if ($Status -notmatch 'There is no trace session currently in progress') {
+        throw 'An existing Windows trace session is protected.'
+    }
+    if (Test-Path -LiteralPath $Marker) { throw 'A capture ownership marker already exists.' }
     $Adapter = Get-NetAdapter -Name 'Ethernet 4'
-    $IP = Get-NetIPAddress -InterfaceIndex $Adapter.ifIndex -AddressFamily IPv4 | Where-Object {$_.IPAddress -eq '10.253.3.2' -and $_.PrefixLength -eq 30}
+    $IP = Get-NetIPAddress -InterfaceIndex $Adapter.ifIndex -AddressFamily IPv4 |
+          Where-Object {$_.IPAddress -eq '10.253.3.2' -and $_.PrefixLength -eq 30}
     $If = Get-NetIPInterface -InterfaceIndex $Adapter.ifIndex -AddressFamily IPv4
-    if ($Adapter.Status -ne 'Up' -or $Adapter.LinkSpeed -ne '10 Gbps' -or !$IP -or $If.NlMtu -ne 1500 -or $If.Dhcp -ne 'Disabled' -or $Adapter.MacAddress -ne '0C-42-A1-52-38-A8') {
+    if ($Adapter.Status -ne 'Up' -or $Adapter.LinkSpeed -ne '10 Gbps' -or !$IP -or
+        $If.NlMtu -ne 1500 -or $If.Dhcp -ne 'Disabled' -or
+        $Adapter.MacAddress -ne '0C-42-A1-52-38-A8' -or $Adapter.ifIndex -ne 19) {
         throw 'Worker Mellanox configuration does not match the qualified direct link.'
     }
-    $Inventory = InvokePktMon -Arguments @('list','--json') | ConvertFrom-Json
-    $Components = @($Inventory | ForEach-Object {$_.Components} | Where-Object {
-        $_.Type -eq 'Miniport' -and ($_.Properties | Where-Object {$_.Name -eq 'ifIndex' -and $_.Value -eq $Adapter.ifIndex})
-    })
-    if ($Components.Count -ne 1 -or $Components[0].DriverName -ne 'mlx5.sys' -or
-        [int]$Components[0].Id -le 0) { throw 'Cannot attribute the Mellanox capture component.' }
-    # The miniport logs one snapshot per datagram. Packet Monitor's -t UDP
-    # predicate hides live-GNS ingress on this Mellanox stack, even though its
-    # raw metadata identifies those frames as UDP. Match the fixed fiber MACs,
-    # IPv4, and fixed port here; the pcap qualifier enforces the exact UDP tuple.
-    $CaptureComponent = [int]$Components[0].Id
-    InvokePktMon -Arguments @('filter','add',$FilterName,'-m','0C-42-A1-52-38-A8','0C-42-A1-49-D5-E0',
-        '-d','IPv4','-p',[string]$CapturePort) | Write-Output
-    $OwnedFilters = InvokePktMon -Arguments @('filter','list')
-    @{FilterName=$FilterName; FilterList=$OwnedFilters; Etl=$Etl; Components=@($CaptureComponent);
-      CaptureLayers=@('Mellanox miniport'); ComponentId=$CaptureComponent;
-      MiniportIfIndex=$Adapter.ifIndex; CapturePort=$CapturePort} | ConvertTo-Json | Set-Content -LiteralPath $Marker -Encoding UTF8
-    $StartArguments = @('start','--capture','--comp',[string]$CaptureComponent,
-        '--pkt-size','0','--file-name',$Etl,'--file-size','64','--log-mode','circular')
-    InvokePktMon -Arguments $StartArguments | Write-Output
-    $ActiveStatus = InvokePktMon -Arguments @('status')
-    if ($ActiveStatus -match 'Packet Monitor is not running' -or !(Test-Path -LiteralPath $Etl)) { throw 'Packet Monitor did not become active.' }
+    $Guid = ([Guid]$Adapter.InterfaceGuid).ToString('B')
+    $Owned = @{Etl=$Etl; Pcap=$Pcap; InterfaceGuid=$Guid; MiniportIfIndex=$Adapter.ifIndex;
+               CapturePort=$CapturePort; CaptureLayers=@('NDIS physical miniport')}
+    $Owned | ConvertTo-Json | Set-Content -LiteralPath $Marker -Encoding UTF8
+    $StartArguments = @('trace','start','capture=yes','capturetype=physical',
+        "CaptureInterface=$Guid",'Ethernet.Type=IPv4','Protocol=17',
+        'IPv4.Address=10.253.3.1','CaptureMultiLayer=no','PacketTruncateBytes=1518',
+        'report=disabled','persistent=no','fileMode=circular','maxSize=64',"traceFile=$Etl")
+    InvokeNetsh $StartArguments | Write-Output
+    $ActiveStatus = GetTraceStatus
+    if (!$ActiveStatus.Contains($Etl)) { throw 'Windows trace did not become task-owned.' }
     $ActiveStatus | Set-Content -LiteralPath (Join-Path $EvidenceDir 'capture-active.txt')
 } else {
     if (!(Test-Path -LiteralPath $Marker)) { return }
     $Owned = Get-Content -Raw -LiteralPath $Marker | ConvertFrom-Json
-    $Status = InvokePktMon -Arguments @('status')
-    if ($Status -notmatch 'Packet Monitor is not running') {
-        if (!$Status.Contains($Owned.Etl)) { throw 'Current Packet Monitor session differs from the task-owned session.' }
-        InvokePktMon -Arguments @('stop') | Write-Output
+    if ($Owned.Etl -ne $Etl -or $Owned.Pcap -ne $Pcap -or $Owned.MiniportIfIndex -ne 19) {
+        throw 'Capture ownership marker does not match the evidence directory.'
     }
-    $Filters = InvokePktMon -Arguments @('filter','list')
-    if ($Filters.Trim() -ne $Owned.FilterList.Trim()) { throw 'Packet Monitor filters changed; preserving them for local reconciliation.' }
-    # Startup required zero filters, so the unchanged list contains only this task's filter.
-    InvokePktMon -Arguments @('filter','remove') | Write-Output
+    $Status = GetTraceStatus
+    if ($Status -notmatch 'There is no trace session currently in progress') {
+        if (!$Status.Contains($Owned.Etl)) { throw 'Current Windows trace differs from the task-owned session.' }
+        InvokeNetsh @('trace','stop') | Write-Output
+    }
     if (Test-Path -LiteralPath $Owned.Etl) {
-        InvokePktMon -Arguments @('etl2pcap',$Owned.Etl,'--out',(Join-Path $EvidenceDir 'worker-capture.pcapng'),
-                                  '--component-id',[string]$Owned.ComponentId) | Write-Output
+        if (!(Test-Path -LiteralPath $Owned.Pcap)) {
+            $Pending = $Owned.Pcap + '.pending'
+            if (Test-Path -LiteralPath $Pending) { Remove-Item -LiteralPath $Pending -Force }
+            try {
+                $Count = ExportNdisTrace $Owned.Etl $Pending ([uint32]$Owned.MiniportIfIndex)
+                Move-Item -LiteralPath $Pending -Destination $Owned.Pcap -ErrorAction Stop
+                "Exported $Count complete fiber miniport frames." | Write-Output
+            } finally {
+                if (Test-Path -LiteralPath $Pending) { Remove-Item -LiteralPath $Pending -Force }
+            }
+        }
+    } else {
+        throw 'Task-owned Windows trace ETL is missing.'
     }
 }

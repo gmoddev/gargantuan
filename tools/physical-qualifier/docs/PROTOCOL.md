@@ -1,7 +1,7 @@
 ---
 status: current
 owner: qualification-infrastructure
-last_verified: 2026-09-27
+last_verified: 2026-09-28
 ---
 
 # Physical qualifier control protocol v1
@@ -11,14 +11,15 @@ last_verified: 2026-09-27
 The generic control and capture implementation now belongs to
 [GantriaEngine Agent Coordinator](https://github.com/GantriaEngine/agent-coordinator),
 pinned by [upstream.lock.json](../upstream.lock.json) to commit
-`24edb592ace678124731455b841e2623f64ba57a`. Read its
-[protocol](https://github.com/GantriaEngine/agent-coordinator/blob/24edb592ace678124731455b841e2623f64ba57a/docs/PROTOCOL.md)
-and [security model](https://github.com/GantriaEngine/agent-coordinator/blob/24edb592ace678124731455b841e2623f64ba57a/docs/SECURITY.md).
+`9c81cfb16640dc18e29b6253fc0f5463c4c4dd4b`. Read its
+[protocol](https://github.com/GantriaEngine/agent-coordinator/blob/9c81cfb16640dc18e29b6253fc0f5463c4c4dd4b/docs/PROTOCOL.md)
+and [security model](https://github.com/GantriaEngine/agent-coordinator/blob/9c81cfb16640dc18e29b6253fc0f5463c4c4dd4b/docs/SECURITY.md).
 This document retains Gargantuan's legacy readiness profile, fixed artifact,
 capture/evidence policy and acceptance boundaries. Bootstrap the pinned library
 before using this checkout; see [migration](../../../devdocs/CurrentArchitecture/PhysicalAgentCoordination.md).
-Existing installed copies and the old capture service remain operational until
-the new package is separately qualified; no installed tool is replaced here.
+The existing fixed-operation capture service is retained. Its worker-local hook
+was updated after separate capture qualification; the service binary and probe
+are unchanged.
 
 > The protocol coordinates capabilities; it does not transmit authority.
 >
@@ -26,11 +27,11 @@ the new package is separately qualified; no installed tool is replaced here.
 
 This is an explicitly accepted qualification-only process boundary. It does not
 enter Engine, GameSession, GNS, or production networking. It replaces chat timing
-for the qualified one-actual-client smoke and the opt-in, still-unqualified
-four-client readiness smoke; it is not a Foundation 3L
-acceptance gate or evidence of structural funding. KI-006 stays open. Four-client
-readiness, strengthened Phase 1, and the 32-client Local/Node matrix remain separate
-tasks. The accepted POOLED_SERVICE contract and probe binary are unchanged.
+for the qualified one-actual-client and four-client readiness smokes. Physical
+readiness evidence is not final Foundation 3L acceptance or structural funding
+evidence. KI-006 stays open; strengthened Phase 1 and the 32-client Local/Node
+matrix have separate gates.
+The accepted POOLED_SERVICE contract and probe binary are unchanged.
 
 ## Ownership and transport
 
@@ -38,7 +39,7 @@ One coordinator binds an explicit normal-LAN IPv4 address. Each endpoint operato
 starts a local helper which binds its configured LAN source address and registers
 its role. The helper owns only its child probe, capture, and evidence directory.
 The worker operator owns launching the server helper locally, including elevation
-for Packet Monitor. SSH is for deployment/integrity checking, never live timing.
+for the Windows trace hook. SSH is for deployment/integrity checking, never live timing.
 No file transfer, network reconfiguration, firewall operation, or remote arbitrary
 command is exposed. Configured process argv and capture hooks are local operator
 authority, never received over the wire.
@@ -66,7 +67,8 @@ Malformed, oversized, unauthenticated, out-of-order, or out-of-state messages ab
 Two peer sockets maximum; unexpected peer IPs abort. TCP_NODELAY is enabled.
 Control and child text logs are capped at 16 MiB each. Stage/run timeouts are
 configurable within 1–600 seconds; defaults are 300/60 seconds. Capture storage is
-bounded independently (90-second dumpcap; 64 MiB circular worker Packet Monitor).
+bounded independently (40-second dumpcap for four clients, 90 seconds for one;
+64 MiB circular worker NDIS trace).
 Local probe deadline is 25 seconds, server-live detection 6 seconds, hook execution
 10 seconds, socket send 1 second. Capture/child failures abort, rather than retry.
 
@@ -134,15 +136,18 @@ console logs. Each helper blocks on protocol messages. Registration of both help
 authorizes one attempt within the previously authorized experiment; do not arm the
 helpers just to inspect or deploy them. No GO/SERVER LIVE chat relay is needed.
 
-The stock worker hook `worker/PktMonCapture.ps1 <EvidenceDir> Start|Stop` requires
-local elevation, verifies the Mellanox static link, and resolves exactly one
-`mlx5.sys` miniport component by its current ifIndex. Packet Monitor captures on
-that one miniport edge. Its filter requires both fixed fiber MAC addresses,
-IPv4 and port 39450; the pcap validator requires the exact two-peer UDP tuple.
-Capture is full-packet, circular and bounded to 64 MiB; ETL-to-pcapng
-export is restricted to the same component ID. An elevated worker-local test may
-select only the fixed synthetic port 39452 as a third hook argument; the service
-does not expose that argument and always uses the default GNS port 39450.
+The worker hook `worker/PktMonCapture.ps1 <EvidenceDir> Start|Stop` requires
+local elevation, verifies the static Mellanox link and interface index 19, and
+starts a Windows NDIS physical-interface trace scoped to that interface,
+IPv4, UDP and the fixed client address. It does not filter by UDP port: the
+pcap validator requires the exact two-peer UDP tuple and port 39450.
+Capture is full-packet, circular and bounded to 64 MiB. Stop verifies the
+task-owned trace path, then converts only complete NDIS packet events from the
+fiber miniport into an Ethernet pcapng; an incomplete export is not published.
+The worker idle preflight requires both Packet Monitor and Windows trace to be
+stopped before lifecycle assignment.
+An elevated worker-local test may select fixed synthetic port 39452 as a third
+hook argument; the service always uses the default GNS port 39450.
 
 The 2026-09-28 application-only diagnostic on UDP 39452 showed why the prior
 synthetic gate `82b2a37d-f998-4062-92a9-f33a41eca9f8` did not qualify capture:
@@ -185,23 +190,43 @@ inbound and 61 outbound GNS packets at miniport 13. The 188 miniport payloads
 all exported to pcapng with zero reported drops. WFP Native Filter 30 records
 two edge snapshots of each packet, so the hook keeps miniport-only export and
 the existing exact-UDP pcap qualification gate. No NIC offload setting changed.
-The installed hook and service pin are now
+The hook and service pin for the preceding one-client proof were
 `2BC2E1430A29ACDE61DCCD35B943998FDB45D8E81E3E2A206D66158F334634D9`.
 The installed-hook capture-only proof `e60416771cd34df0` saw 135 inbound and
 32 outbound exact-tuple GNS packets in both ETL and pcapng, with no lost events
 or reported drops. The subsequent fresh one-client lifecycle stopped before
 physical capture when both Codex agents failed at startup; it did not qualify
 one-client readiness.
-The prior hook is retained in the protected worker-local rollback backup.
-Stop uses a task-owned marker and requires matching ETL session/filter inventory
-before stopping or clearing the sole owned filter. Changed ownership aborts cleanup
-and preserves unrelated state for the local worker operator. Conversion packet and
-drop totals are recorded. Endpoint cleanup independently parses the resulting pcapng and fails unless the
-exact peer/port tuple appears in both directions. The privileged service invokes
-this fixed hook unchanged; it does not add or remove packet directions. No security
-policy is changed. Do not force-kill helpers: a kill or host crash cannot run finally
-cleanup; the worker must inspect the recorded capture ownership marker locally
-before recovering a leftover Packet Monitor session.
+The 2026-09-28 four-flow attribution reproduced the earlier two-ingress-flow
+pattern with Packet Monitor's port-only filter. Removing that predicate or
+selecting other Packet Monitor components did not reliably show all received
+packets, even though the worker application received 20 requests per flow.
+A bounded Windows NDIS physical-interface trace recorded 20 ingress and 20
+egress packets for each of the four fixed-fiber synthetic flows. The staged
+hook exported valid pcapng with those same counts on both diagnostic port
+39452 and readiness port 39450. After promotion, the installed fixed-operation
+service repeated 20/20 per flow on port 39450. The installed hook and service
+pin are `231FAE4B89155630138BDC9ABBB1BB526C3B322D0BE2667D2A2E8B5CFEC1375D`;
+the previous hook and config remain in the protected worker-local backup.
+
+The fresh four-client physical run `acd22294-75d5-4457-b69e-73bb6a00d8af`
+then recorded all four tuples in both directions: client 603 outbound/402
+inbound, worker 402 outbound/603 inbound. The client dumpcap closed its
+pcapng by its own 40-second duration stop with zero reported drops; the worker
+service stopped its owned trace and exported 1,323 complete fiber frames. Both
+raw evidence manifests verify. The physical coordinator and both endpoint
+results succeeded with `FOUR_CLIENT_READINESS_ONLY`. The outer lifecycle host
+also recorded both capability results as successful, but its final wrapper
+status was FAIL because the server agent ended `NEEDS_USER/MISSING_CAPABILITY`
+after the physical protocol completed; that status is not a packet or
+GameSession failure. See the [physical receipt](../../../devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md).
+
+Stop uses a task-owned marker and requires the matching Windows trace path
+before stopping it. Changed ownership aborts cleanup and preserves unrelated
+state. Endpoint cleanup independently parses the pcapng and fails unless the
+exact peer/port tuple appears in both directions. Do not force-kill helpers:
+a kill or host crash cannot run finally cleanup; the worker must inspect its
+recorded capture ownership marker before recovering a leftover trace.
 
 The locally installed Foundation 2B lifecycle catalog is
 `physical_qualifier_lifecycle.py`, with the ordered workflow in
@@ -258,7 +283,7 @@ worker SID selected during installation. Requests are newline-delimited JSON
 bounded to 16 KiB; the service accepts a canonical run UUID, an endpoint-helper
 PID running the configured Python runtime, and an evidence directory beneath the
 single configured local root. It accepts no executable, command, arbitrary
-Packet Monitor arguments, interface, or path outside that root.
+capture arguments, interface, or path outside that root.
 
 The service verifies the installed hook SHA-256 before each invocation, permits
 one active capture, persists its owned run before starting, and invokes the
@@ -266,7 +291,7 @@ existing exact-interface/ownership hook. It monitors the endpoint helper PID and
 process start time; helper exit, service stop, or the 90-second hard deadline
 stops only that run. Service restart attempts cleanup only for its protected
 active-run record. An ownership mismatch blocks new captures and preserves
-unrelated Packet Monitor state. Audit entries are written under the protected
+unrelated Windows trace state. Audit entries are written under the protected
 ProgramData service directory. Installation is a one-time local Administrator
 action. It does not change UAC, firewall, execution policy, NIC state, or Windows
 security policy.
@@ -297,10 +322,11 @@ with unique consecutive nonces; the server expects four simultaneously Ready and
 active GameSessions for the probe's canonical one-second interval. The client
 result waits for all four processes, requires each canonical clean close, and
 both endpoint captures require four distinct source-port tuples with traffic in
-both directions. Endpoint results are classified `FOUR_CLIENT_READINESS_ONLY`;
-the pinned generic coordinator still emits a one-client top-level label, a
-known classification mismatch in the failed first four-client attempt. This
-mode is not yet physically qualified and is not strengthened Phase 1 or
+both directions. Both endpoint and coordinator results are classified
+`FOUR_CLIENT_READINESS_ONLY`; the coordinator rejects a configured/result
+classification mismatch. The four-client physical readiness evidence passed
+on the single fresh attempt; the outer lifecycle wrapper status requires
+separate reconciliation. This mode is not strengthened Phase 1 or
 32-client funding evidence. Evidence remains local, with result.json,
 control.jsonl, source manifest, probe logs, captures, and evidence-manifest.json.
 The manifest lists every evidence file except itself to avoid a self-hash cycle.

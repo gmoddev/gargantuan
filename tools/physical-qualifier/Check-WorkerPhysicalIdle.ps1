@@ -12,6 +12,10 @@ $Filters = (& pktmon filter list 2>&1 | Out-String).Trim()
 if ($LASTEXITCODE -ne 0 -or $Filters -notmatch '^Packet Filters:\s+None$') {
     throw '[Qualification:Idle] Packet Monitor filters are active or unknown.'
 }
+$Trace = (& netsh trace show status 2>&1 | Out-String).Trim()
+if ($Trace -notmatch '^There is no trace session currently in progress\.') {
+    throw '[Qualification:Idle] Windows trace is active or status unknown.'
+}
 if (@(Get-NetUDPEndpoint -LocalPort 39450 -ErrorAction SilentlyContinue).Count) {
     throw '[Qualification:Idle] Physical UDP listener already exists.'
 }
@@ -20,6 +24,7 @@ if (@(Get-NetUDPEndpoint -LocalPort 39450 -ErrorAction SilentlyContinue).Count) 
     CaptureActiveRun = $false
     PacketMonitor = 'Stopped'
     PacketFilters = 'None'
+    WindowsTrace = 'Stopped'
     Udp39450 = 'Unbound'
     TimestampUnixMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
 } | ConvertTo-Json -Compress

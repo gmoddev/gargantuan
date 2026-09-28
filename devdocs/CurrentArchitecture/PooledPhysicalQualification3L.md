@@ -1,10 +1,89 @@
 ---
-status: four-client-physical-readiness-capture-unqualified
+status: four-client-physical-readiness-evidence-pass-lifecycle-wrapper-open
 owner: runtime-networking-and-runtime-host
 last_verified: 2026-09-28
 ---
 
 # Foundation 3L pooled physical qualification attempt
+
+## Four-client physical evidence passed; lifecycle wrapper status remains open (2026-09-28)
+
+Before one fresh attempt, the three previous evidence defects were separately
+qualified. The client Mellanox dumpcap closed a four-flow synthetic pcapng by
+its own duration stop: 20 outbound and 20 inbound packets per flow, with a
+valid complete file. The staged worker NDIS physical-interface hook exported
+20 inbound and 20 outbound packets per flow on both diagnostic UDP 39452 and
+readiness UDP 39450. The installed fixed-operation service repeated the
+39450 proof under its endpoint-process lease. Generic coordinator tests and
+Gargantuan staging tests established that a trusted four-client classification
+must agree with both endpoint results. The new upstream pin is
+`9c81cfb16640dc18e29b6253fc0f5463c4c4dd4b`; the installed worker hook
+and service hash pin are
+`231FAE4B89155630138BDC9ABBB1BB526C3B322D0BE2667D2A2E8B5CFEC1375D`.
+The service binary and GNS probe were unchanged, and the prior hook/config
+remain in the protected worker-local rollback backup.
+
+Exactly one fresh four-client attempt followed. Physical run
+`acd22294-75d5-4457-b69e-73bb6a00d8af`, label `dbeac03bebd84d1c`, used
+lifecycle run `55d56c05-4dda-435b-a27b-d8578a084978`. Both evidence/LAN
+preflights and the forward/reverse tunnel handshakes passed before assignment.
+The qualifier source hash on both PCs was
+`BFD15390A40E02F94964E5ECC5C381780E3C48460AC17411E8820FDBC80B4136`;
+the four-client workflow hash was
+`e075e8675028d620e9b86ca9b13cc25caf8752993657171a19e9735cbcbe7a03`.
+The unchanged probe hash was
+`1E25676BDF1DA6ED2EA8A28AB183F519D18A4802BD00E7F6730CFA77D395BD5A`.
+Four distinct client nonces **92707–92710** launched once after `SERVER_LIVE`.
+The server accepted four distinct GNS connections and reported
+`ready=4 expected=4`; the verified probe requires Ready/active 4/4 to remain
+simultaneous for its canonical one-second interval. Each client reported
+`ready=1 expected=1 clean_remote_shutdown=1`; all five probe cleanup reports
+had `good=1`.
+
+Both complete raw captures passed the exact four-tuple direction gate:
+
+| Client source port | Client outbound / inbound | Worker inbound / outbound |
+| --- | ---: | ---: |
+| 49241 | 151 / 100 | 151 / 100 |
+| 49242 | 148 / 100 | 148 / 100 |
+| 49243 | 156 / 101 | 156 / 101 |
+| 49244 | 148 / 101 | 148 / 101 |
+
+The client total is **603 outbound / 402 inbound**; the worker has **603
+inbound / 402 outbound**. Client dumpcap closed its 1,005-packet pcapng after
+40 seconds and reported zero drops. The worker service stopped its owned NDIS
+trace and exported 1,323 complete fiber frames, of which 1,005 are the exact
+qualified GNS tuple; the additional frames are outside the tuple gate. The
+client pcap SHA-256 is
+`89C4C53CC9D04EED89B85C2662373A6A20B4847E92E3C4B6991019EDB973FB4C`;
+the worker pcap SHA-256 is
+`6EC30209D8A6F3F26D2725DE72E57E0E6A8A22C26A9CF8BC58D2F3A359800361`.
+Client, worker, coordinator and lifecycle-host evidence manifests verify
+against their retained files.
+
+Both physical endpoints exited 0 with `Success=true`; the physical coordinator
+returned `Success=true`, and all three results were classified
+`FOUR_CLIENT_READINESS_ONLY`. The lifecycle host also recorded both capability
+results as successful and returned code 0. Its enclosing run adapter still
+returned FAIL because the server Codex agent finished in
+`NEEDS_USER/MISSING_CAPABILITY` instead of `IDLE` after the physical protocol
+completed. That later agent status does not negate the recorded GameSession or
+packet evidence, but it prevents a clean outer lifecycle PASS claim. The
+physical readiness evidence is **PASS**; lifecycle wrapper completion remains
+unreconciled. There was no retry.
+
+The retained bundle is under
+`C:\Sandbox\Codex\Artifacts\gargantuan-3l-four-client-design\physical-four-dbeac03bebd84d1c`;
+client raw evidence is under
+`C:\Sandbox\Codex\Evidence\physical-qualifier\lifecycle-dbeac03bebd84d1c`,
+and worker raw evidence is under
+`C:\GargantuanQualification\physical-qualifier-service-evidence\lifecycle-dbeac03bebd84d1c`.
+The one-run daemons, task, tunnel, configs, secrets and temporary profiles
+were removed. UDP 39450 and lifecycle listeners are clear; the worker trace
+and Packet Monitor are stopped with no Packet Monitor filters, and the capture
+service is running idle on the new hook pin. **KI-006 remains OPEN; Foundation
+3L remains B — PARTIALLY READY.** The strengthened Phase 1 workload, 32-client
+matrix, 3M and merge were not started.
 
 ## Four-client application readiness passed; capture gate failed (2026-09-28)
 

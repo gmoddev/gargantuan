@@ -13,7 +13,7 @@ python tools/physical-qualifier/qualifier.py stage --help
 ```
 
 [upstream.lock.json](upstream.lock.json) pins commit
-`24edb592ace678124731455b841e2623f64ba57a` and SHA-256 of the consumed sources.
+`9c81cfb16640dc18e29b6253fc0f5463c4c4dd4b` and SHA-256 of the consumed sources.
 
 For an explicitly authorized physical qualification, `stage.json` may carry
 `QualificationProfile: PHYSICAL_QUALIFICATION_INTERACTIVE`. The one-client
@@ -49,8 +49,14 @@ clients, while the client endpoint launches four distinct nonces. Its local
 result waits for all four clean closes and both captures must contain four
 distinct bidirectional source-port tuples. Default staging remains one client.
 The first four-client physical attempt reached all four application readiness
-checks but failed the client and worker capture gates; the mode is not physically
-qualified. The one-client catalog's first full run
+checks but failed the client and worker capture gates. After separate client
+finalization, worker four-flow capture and classification proofs, the one fresh
+retry passed both raw capture gates and returned
+`FOUR_CLIENT_READINESS_ONLY` success from both endpoints and the physical
+coordinator. Its outer lifecycle wrapper returned FAIL after a server agent
+`NEEDS_USER/MISSING_CAPABILITY` status, despite a successful host result; see
+the [receipt](../../devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md).
+The one-client catalog's first full run
 registered both agents but aborted before capture or probe because the client
 Codex sandbox could not create its staged evidence directory. The next attempt
 proved the client fix but found the worker's separate evidence ACL missing its

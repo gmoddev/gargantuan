@@ -30,6 +30,8 @@ PROBE_SHA = "1E25676BDF1DA6ED2EA8A28AB183F519D18A4802BD00E7F6730CFA77D395BD5A"
 SERVER_ADDRESS = "10.253.3.2"
 CLIENT_ADDRESS = "10.253.3.1"
 SERVER_PORT = 39450
+CLIENT_CAPTURE_DURATION = 40
+CLIENT_CAPTURE_STOP_TIMEOUT = 45
 
 
 def CaptureDirections(File, Role, IncludeTuples=False):
@@ -123,6 +125,10 @@ def ValidateConfig(Config):
     uuid.UUID(Config["RunId"])
     if Config.get("ReadinessClients", 1) not in (1, 4):
         raise ValueError("readiness requires exactly one or four clients")
+    if (Config.get("ReadinessClients", 1) == 4 and
+            Config.get("ResultClassification") != "FOUR_CLIENT_READINESS_ONLY") or (
+            Config.get("ReadinessClients", 1) == 1 and "ResultClassification" in Config):
+        raise ValueError("result classification must match the readiness client count")
     if len(Config["Token"]) != 64:
         raise ValueError("expected a 256-bit token")
     for Address in [Config["CoordinatorHost"], *Config["PeerIps"].values()]:
@@ -287,7 +293,10 @@ class LocalRun:
             if File.stat().st_size > MAX_LOG:
                 raise ValueError("probe/capture log bound exceeded")
         if self.Capture is not None and self.Capture.poll() is not None:
-            raise RuntimeError("capture exited before probe finalization")
+            if (self.Config.get("ReadinessClients", 1) != 4 or
+                    self.Capture.returncode != 0 or self.Probe is None or
+                    self.Probe.poll() is None):
+                raise RuntimeError("capture exited before probe finalization")
         if self.Config.get("ReadinessClients", 1) == 4 and self.Config["Role"] == "CLIENT":
             for Nonce, Process in zip(self.ClientNonces, self.Probes):
                 if Process.poll() not in (None, 0):
@@ -334,6 +343,17 @@ class LocalRun:
             return list(self.CleanupResult)
         Errors = []
         Owned = list(self.Probes) if self.Probes else ([self.Probe] if self.Probe else [])
+        if (self.Config.get("ReadinessClients", 1) == 4 and
+                self.Capture is not None and self.Capture.poll() is None and
+                self.Probe is not None and self.Probe.poll() == 0):
+            try:
+                # Windows terminate() kills dumpcap while it may be writing an
+                # enhanced packet block. Its own duration stop closes pcapng.
+                self.Capture.wait(timeout=CLIENT_CAPTURE_STOP_TIMEOUT)
+            except subprocess.TimeoutExpired:
+                Errors.append("client capture did not finalize within its bounded duration")
+        if self.Capture is not None and self.Capture.poll() is not None and self.Capture.returncode != 0:
+            Errors.append("client capture exited unsuccessfully")
         for Process in [*Owned, self.Capture]:
             if Process is not None and Process.poll() is None:
                 try:
@@ -394,6 +414,7 @@ def Stage(Args):
               "StageTimeout": 300, "RunTimeout": 60}
     if Clients == 4:
         Shared["ReadinessClients"] = 4
+        Shared["ResultClassification"] = "FOUR_CLIENT_READINESS_ONLY"
     ValidateConfig(Shared)
     Save(Directory / "coordinator.json", {**Shared, "EvidenceDir": str(Directory / "coordinator-evidence")})
     ClientBundle = Args.client_bundle
@@ -404,7 +425,8 @@ def Stage(Args):
               "EvidenceDir": str(Directory / "client-evidence"),
               "CaptureCommand": [r"C:\Program Files\Wireshark\dumpcap.exe", "-i", Args.capture_device,
                                  "-s", "0", "-f", "udp and host 10.253.3.1 and host 10.253.3.2 and port 39450",
-                                 "-a", "duration:90", "-w", "{EvidenceDir}/client.pcapng"]}
+                                 "-a", "duration:" + str(CLIENT_CAPTURE_DURATION if Clients == 4 else 90),
+                                 "-w", "{EvidenceDir}/client.pcapng"]}
     Save(Directory / "client.json", Client)
     ServerBundle = Args.server_bundle
     CaptureStart = ([Args.server_capture_client, "start", "{EvidenceDir}", "{RunId}", "{EndpointPid}"] if Args.server_capture_client else

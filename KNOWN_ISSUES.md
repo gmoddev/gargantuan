@@ -99,13 +99,21 @@ captures. One separately authorized four-client readiness attempt then reached
 four distinct GNS connections, server Ready/active 4/4 for the canonical
 interval, and four clean client closes. It failed the capture gate: the client
 raw pcapng ended mid-block and the worker miniport missed inbound traffic for
-two of four source ports. The run was not retried and cleanup passed. Four-client
-physical readiness and strengthened Phase 1 funding remain unqualified; see
-the [physical receipt](devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md).
-Next: attribute and correct the four-client capture gates, then make a
-separately authorized fresh four-client readiness attempt. Only after readiness
-passes is the bounded actual-GNS structural workload with sustained qualified
-four-grant backlog and complete host measurements eligible; the unchanged
+two of four source ports. A single later run independently qualified corrected
+client finalization, worker NDIS capture and four-client coordinator labeling
+before launching. Its physical results passed: four actual GameSession Ready
+clients, four clean closes, both complete captures with every tuple in both
+directions, and `FOUR_CLIENT_READINESS_ONLY` success at both endpoints and the
+physical coordinator. The outer lifecycle adapter nevertheless returned FAIL
+after its server agent ended `NEEDS_USER/MISSING_CAPABILITY` despite a successful
+host result. The run was not retried; cleanup passed. Four-client physical
+readiness evidence is recorded, while lifecycle wrapper completion and
+strengthened Phase 1 funding remain open; see the
+[physical receipt](devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md).
+Next: reconcile the lifecycle wrapper status before treating the physical
+prerequisite as fully closed. The bounded actual-GNS structural workload still
+requires separate authorization and sustained qualified four-grant backlog with
+complete host measurements; the unchanged
 32-client matrix remains gated on Phase 1. The pre-existing static `/30` plan is retained as a
 candidate deployment configuration; temporary scoped rules were removed.
 

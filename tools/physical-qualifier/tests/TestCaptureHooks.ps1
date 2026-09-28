@@ -6,95 +6,113 @@ $HookBlock = [ScriptBlock]::Create([IO.File]::ReadAllText($Hook))
 $TestDir = Join-Path ([IO.Path]::GetTempPath()) ('qualifier-hook-test-' + [Guid]::NewGuid())
 New-Item -ItemType Directory -Path $TestDir | Out-Null
 $global:TestActive = $false
-$global:TestFilters = "Packet Filters:`n    None"
+$global:TestForeign = $false
 $global:TestEtl = ''
+$global:TestEventsEmpty = $false
 $global:TestCalls = [System.Collections.Generic.List[string]]::new()
-$global:TestInventory = '[{"Components":[{"Name":"Mellanox ConnectX-4 Lx Ethernet Adapter","Type":"Miniport","Id":13,"DriverName":"mlx5.sys","Properties":[{"Name":"ifIndex","Value":19}]},{"Name":"TCP/IPv4 - L2","Type":"Protocol","Id":75,"SecondaryId":81,"DriverName":"tcpip.sys","Properties":[{"Name":"Miniport ifIndex","Value":19}]}]}]'
-function global:pktmon {
+function global:netsh {
     param([Parameter(ValueFromRemainingArguments=$true)][string[]]$Arguments)
-    $global:LASTEXITCODE = 0
     $global:TestCalls.Add(($Arguments -join ' '))
-    switch ($Arguments[0]) {
-        'status' { if ($global:TestActive) { "Packet Monitor is running.`nLog file: $global:TestEtl" } else { 'Packet Monitor is not running.' } }
-        'filter' {
-            switch ($Arguments[1]) {
-                'list' { $global:TestFilters }
-                'add' { $global:TestFilters = 'Packet Filters: ' + $Arguments[2] }
-                'remove' { $global:TestFilters = "Packet Filters:`n    None" }
-                default { throw 'Unexpected filter command' }
-            }
+    $global:LASTEXITCODE = 0
+    if (($Arguments[0..2] -join ' ') -eq 'trace show status') {
+        if (!$global:TestActive) {
+            $global:LASTEXITCODE = 1
+            return 'There is no trace session currently in progress.'
         }
-        'list' { $global:TestInventory }
-        'start' {
-            $global:TestEtl = $Arguments[[Array]::IndexOf($Arguments,'--file-name') + 1]
-            [IO.File]::WriteAllBytes($global:TestEtl,[byte[]]@(1,2,3))
-            $global:TestActive = $true
-        }
-        'stop' { $global:TestActive = $false }
-        'etl2pcap' { [IO.File]::WriteAllBytes($Arguments[3],[byte[]]@(4,5,6)) }
-        default { throw 'Unexpected Packet Monitor command' }
+        $Path = if ($global:TestForeign) { 'C:\unrelated.etl' } else { $global:TestEtl }
+        return "Status: Running`nTrace File: $Path"
     }
+    if (($Arguments[0..1] -join ' ') -eq 'trace start') {
+        $global:TestEtl = ($Arguments | Where-Object {$_ -like 'traceFile=*'}).Substring(10)
+        [IO.File]::WriteAllBytes($global:TestEtl,[byte[]]@(1,2,3))
+        $global:TestActive = $true
+        return 'Trace started.'
+    }
+    if (($Arguments[0..1] -join ' ') -eq 'trace stop') {
+        $global:TestActive = $false
+        return 'Trace stopped.'
+    }
+    throw 'Unexpected netsh command'
 }
-function global:Get-NetAdapter { [pscustomobject]@{ifIndex=19;Status='Up';LinkSpeed='10 Gbps';MacAddress='0C-42-A1-52-38-A8'} }
+function global:Get-NetAdapter {
+    [pscustomobject]@{ifIndex=19;Status='Up';LinkSpeed='10 Gbps';MacAddress='0C-42-A1-52-38-A8';
+                     InterfaceGuid='A33455F8-3B6F-46F1-B981-7C861E6B3CD3'}
+}
 function global:Get-NetIPAddress { [pscustomobject]@{IPAddress='10.253.3.2';PrefixLength=30} }
 function global:Get-NetIPInterface { [pscustomobject]@{NlMtu=1500;Dhcp='Disabled'} }
+function global:Get-WinEvent {
+    if ($global:TestEventsEmpty) { return }
+    $Frame = [byte[]]@(0x0C,0x42,0xA1,0x52,0x38,0xA8,0x0C,0x42,0xA1,0x49,0xD5,0xE0,
+        0x08,0x00,0x45,0x00,0x00,0x1C,0x00,0x01,0x40,0x00,0x40,0x11,0x00,0x00,
+        10,253,3,1,10,253,3,2,0xF2,0x30,0x9A,0x1A,0x00,0x08,0x00,0x00)
+    [pscustomobject]@{ProviderName='Microsoft-Windows-NDIS-PacketCapture';Id=1001;
+        TimeCreated=[datetime]'2026-09-28T08:00:00Z';Properties=@(
+            [pscustomobject]@{Value=[uint32]19},[pscustomobject]@{Value=[uint32]19},
+            [pscustomobject]@{Value=[uint32]$Frame.Length},[pscustomobject]@{Value=$Frame})}
+}
 function Assert([bool]$Value,[string]$Detail) { if (!$Value) { throw $Detail } }
 try {
-    & $HookBlock $TestDir Start
+    $First = Join-Path $TestDir 'first'
+    New-Item -ItemType Directory -Path $First | Out-Null
+    & $HookBlock $First Start 39450
     Assert $global:TestActive 'Capture did not start'
-    Assert ([bool]($global:TestCalls | Where-Object {$_ -eq ('start --capture --comp 13 --pkt-size 0 --file-name ' + $global:TestEtl + ' --file-size 64 --log-mode circular')})) 'Single Mellanox edge or 64 MiB bound was not preserved'
-    Assert ([bool]($global:TestCalls | Where-Object {$_ -eq ('filter add Qualification-' + (Split-Path $TestDir -Leaf) + ' -m 0C-42-A1-52-38-A8 0C-42-A1-49-D5-E0 -d IPv4 -p 39450')})) 'The live-GNS peer-MAC/IPv4/port filter changed'
-    Assert (-not ($global:TestCalls | Where-Object {$_ -match '^filter add .* -t UDP(?: |$)'})) 'The Packet Monitor UDP predicate would hide live-GNS ingress'
-    $Owner = Get-Content (Join-Path $TestDir 'pktmon-owner.json') -Raw | ConvertFrom-Json
-    Assert (($Owner.Components -join ',') -eq '13' -and $Owner.ComponentId -eq 13 -and $Owner.MiniportIfIndex -eq 19 -and $Owner.CapturePort -eq 39450) 'Capture ownership marker omitted the selected miniport/default port'
-    Assert (($Owner.CaptureLayers -join ',') -eq 'Mellanox miniport') 'Capture layer attribution was incomplete'
-    & $HookBlock $TestDir Stop
+    $Expected = 'trace start capture=yes capturetype=physical CaptureInterface={a33455f8-3b6f-46f1-b981-7c861e6b3cd3} Ethernet.Type=IPv4 Protocol=17 IPv4.Address=10.253.3.1 CaptureMultiLayer=no PacketTruncateBytes=1518 report=disabled persistent=no fileMode=circular maxSize=64 traceFile=' + $global:TestEtl
+    Assert ([bool]($global:TestCalls | Where-Object {$_ -eq $Expected})) 'Physical-interface trace filters or 64 MiB bound changed'
+    $Owner = Get-Content (Join-Path $First 'netsh-owner.json') -Raw | ConvertFrom-Json
+    Assert ($Owner.MiniportIfIndex -eq 19 -and $Owner.CapturePort -eq 39450 -and
+            ($Owner.CaptureLayers -join ',') -eq 'NDIS physical miniport') 'Capture ownership marker is incomplete'
+    & $HookBlock $First Stop
     Assert (!$global:TestActive) 'Capture did not stop'
-    Assert ($global:TestFilters -match 'None') 'Owned filter not removed'
-    Assert (Test-Path (Join-Path $TestDir 'worker-capture.pcapng')) 'Export missing'
-    Assert ([bool]($global:TestCalls | Where-Object {$_ -eq ('etl2pcap ' + $global:TestEtl + ' --out ' + (Join-Path $TestDir 'worker-capture.pcapng') + ' --component-id 13')})) 'Export did not preserve the selected miniport scope'
-    & $HookBlock $TestDir Start 39452
-    Assert ([bool]($global:TestCalls | Where-Object {$_ -eq ('filter add Qualification-' + (Split-Path $TestDir -Leaf) + ' -m 0C-42-A1-52-38-A8 0C-42-A1-49-D5-E0 -d IPv4 -p 39452')})) 'The fixed local synthetic port was not selected'
-    & $HookBlock $TestDir Stop
+    $Pcap = Join-Path $First 'worker-capture.pcapng'
+    Assert (Test-Path $Pcap) 'Export missing'
+    $Bytes = [IO.File]::ReadAllBytes($Pcap)
+    Assert ($Bytes.Length -gt 80 -and $Bytes[0] -eq 10 -and $Bytes[1] -eq 13 -and
+            $Bytes[2] -eq 13 -and $Bytes[3] -eq 10) 'Export is not pcapng'
+    & $HookBlock $First Stop
+    Assert ((Get-Item $Pcap).Length -eq $Bytes.Length) 'Idempotent stop changed the export'
+
+    $Second = Join-Path $TestDir 'second'
+    New-Item -ItemType Directory -Path $Second | Out-Null
     $Before = $global:TestCalls.Count
     $Rejected = $false
-    try { & $HookBlock $TestDir Start 39453 } catch { $Rejected=$true }
+    try { & $HookBlock $Second Start 39453 } catch { $Rejected=$true }
     Assert $Rejected 'An unapproved capture port was accepted'
-    Assert ($global:TestCalls.Count -eq $Before) 'Invalid capture port invoked Packet Monitor'
+    Assert ($global:TestCalls.Count -eq $Before) 'Invalid port invoked netsh'
     $global:TestActive = $true
-    $Before = $global:TestCalls.Count
+    $global:TestForeign = $true
     $Rejected = $false
-    try { & $HookBlock $TestDir Start } catch { $Rejected=$true }
-    Assert $Rejected 'Existing session was not protected'
-    Assert ($global:TestCalls.Count -eq $Before + 1) 'Existing session was mutated'
+    try { & $HookBlock $Second Start } catch { $Rejected=$true }
+    Assert $Rejected 'Existing trace session was not protected'
+    Assert ($global:TestActive) 'Existing trace session was mutated'
     $global:TestActive = $false
-    $global:TestFilters = 'Packet Filters: unrelated'
+    $global:TestForeign = $false
+
+    $Third = Join-Path $TestDir 'third'
+    New-Item -ItemType Directory -Path $Third | Out-Null
+    & $HookBlock $Third Start 39452
+    $global:TestForeign = $true
     $Rejected = $false
-    try { & $HookBlock $TestDir Start } catch { $Rejected=$true }
-    Assert $Rejected 'Existing filters were not protected'
-    $global:TestFilters = 'Packet Filters: changed-during-run'
+    try { & $HookBlock $Third Stop } catch { $Rejected=$true }
+    Assert $Rejected 'Foreign trace session was not protected during stop'
+    Assert $global:TestActive 'Foreign trace session was stopped'
+    $global:TestForeign = $false
+    & $HookBlock $Third Stop
+
+    $Fourth = Join-Path $TestDir 'fourth'
+    New-Item -ItemType Directory -Path $Fourth | Out-Null
+    & $HookBlock $Fourth Start
+    $global:TestEventsEmpty = $true
     $Rejected = $false
-    try { & $HookBlock $TestDir Stop } catch { $Rejected=$true }
-    Assert $Rejected 'Changed filter ownership was not protected'
-    Assert ($global:TestFilters -eq 'Packet Filters: changed-during-run') 'Changed filters were removed'
-    $global:TestFilters = "Packet Filters:`n    None"
-    $global:TestInventory = '[{"Components":[{"Name":"Mellanox ConnectX-4 Lx Ethernet Adapter","Type":"Miniport","Id":13,"DriverName":"wrong.sys","Properties":[{"Name":"ifIndex","Value":19}]}]}]'
-    $Before = $global:TestCalls.Count
-    $Rejected = $false
-    try { & $HookBlock $TestDir Start } catch { $Rejected=$true }
-    Assert $Rejected 'Wrong miniport driver was accepted'
-    Assert ($global:TestCalls.Count -eq $Before + 3) 'Wrong-driver refusal proceeded beyond inventory validation'
-    $global:TestInventory = '[{"Components":[{"Name":"Mellanox A","Type":"Miniport","Id":13,"DriverName":"mlx5.sys","Properties":[{"Name":"ifIndex","Value":19}]},{"Name":"Mellanox B","Type":"Miniport","Id":14,"DriverName":"mlx5.sys","Properties":[{"Name":"ifIndex","Value":19}]}]}]'
-    $Before = $global:TestCalls.Count
-    $Rejected = $false
-    try { & $HookBlock $TestDir Start } catch { $Rejected=$true }
-    Assert $Rejected 'Ambiguous miniport inventory was accepted'
-    Assert ($global:TestCalls.Count -eq $Before + 3) 'Ambiguous-inventory refusal proceeded beyond validation'
-    Write-Output 'Capture hook simulation passed: exact argv, cleanup, ownership refusal.'
+    try { & $HookBlock $Fourth Stop } catch { $Rejected=$true }
+    Assert $Rejected 'Zero-frame trace was accepted'
+    Assert (!(Test-Path (Join-Path $Fourth 'worker-capture.pcapng'))) 'Failed export was published'
+    Assert (!(Test-Path (Join-Path $Fourth 'worker-capture.pcapng.pending'))) 'Failed export left a pending file'
+    Write-Output 'Capture hook simulation passed: exact scope, export, ownership and cleanup.'
 } finally {
-    Remove-Item Function:\pktmon,Function:\Get-NetAdapter,Function:\Get-NetIPAddress,Function:\Get-NetIPInterface
+    Remove-Item Function:\netsh,Function:\Get-NetAdapter,Function:\Get-NetIPAddress,Function:\Get-NetIPInterface,Function:\Get-WinEvent
     $Resolved = [IO.Path]::GetFullPath($TestDir)
-    if ((Split-Path $Resolved -Parent) -ne ([IO.Path]::GetTempPath().TrimEnd('\')) -or (Split-Path $Resolved -Leaf) -notlike 'qualifier-hook-test-*') {
+    if ((Split-Path $Resolved -Parent) -ne ([IO.Path]::GetTempPath().TrimEnd('\')) -or
+        (Split-Path $Resolved -Leaf) -notlike 'qualifier-hook-test-*') {
         throw 'Refusing cleanup outside the generated test directory.'
     }
     Remove-Item -LiteralPath $TestDir -Recurse -Force
