@@ -71,6 +71,27 @@ filters. The next task is a bounded **worker evidence-root** access repair and
 restricted worker preflight before a newly authorized one-client attempt.
 KI-006 remains OPEN; Foundation 3L remains B — PARTIALLY READY.
 
+The subsequent per-endpoint evidence correction kept an internal allowlist of
+only the client and worker qualification roots. On the worker, the installed
+`HOSTPC\CodexSandboxOffline` identity has SID ending `-1006`, medium integrity
+and no administrator group. The worker service-evidence ACL now retains SYSTEM
+and Administrators full access and the capture service installer `HOSTPC\host`
+modify access, and adds only that exact worker SID with modify access. The
+capture service's configured evidence root and hook pin were unchanged. Fresh
+physical run `c9130ef2-24a9-4d9f-a76f-96f56d5ae629` passed real restricted
+create/write/flush/read/rename/delete preflights on **both** endpoints before
+either lifecycle daemon started. The worker preflight removed its run directory
+so the endpoint could create it afresh. No UAC or elevated Codex agent was used.
+The one authorized lifecycle run `ea43f42e-8d02-4068-b68c-29e3527ccad1`
+pulled and registered both agents; the client returned LIVE. The worker then
+created and wrote its run evidence, but failed socket setup with `WinError
+10013` before `STAGE_READY`, capture or GNS. The host aborted on the failed
+worker result. No retry occurred. Temporary daemons and tunnel were removed,
+policy restored, and worker Packet Monitor stopped with no filters. The exact
+socket operation and policy owner require a separate diagnostic; this evidence
+does not justify relaxing sandbox or network security policy. KI-006 remains
+OPEN and Foundation 3L remains B — PARTIALLY READY.
+
 > The protocol coordinates capabilities; it does not transmit authority.
 >
 > Natural-language agent communication does not directly invoke endpoint capabilities.

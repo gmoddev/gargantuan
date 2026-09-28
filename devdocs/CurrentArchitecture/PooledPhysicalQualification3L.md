@@ -6,6 +6,44 @@ last_verified: 2026-09-27
 
 # Foundation 3L pooled physical qualification attempt
 
+## One-client dual-evidence preflight passed; worker socket denied (2026-09-27)
+
+Physical run `c9130ef2-24a9-4d9f-a76f-96f56d5ae629` used lifecycle run
+`ea43f42e-8d02-4068-b68c-29e3527ccad1`. Before any lifecycle daemon or
+agent wake, the actual non-admin client and worker `CodexSandboxOffline`
+identities each passed a fresh create/write/flush/read/rename/delete preflight
+under their respective qualification evidence roots. The worker's distinct SID
+ends `-1006`; the client's ends `-1004`. Worker ACL provisioning preserved the
+Administrators-owned root, SYSTEM and Administrators full access, and
+`HOSTPC\host` modify access required by the installed capture service, adding
+only the exact worker sandbox SID with modify access. The worker preflight
+deleted its run directory afterward, and the physical endpoint created it
+normally. No UAC was required and neither Codex agent ran elevated.
+
+Both agents woke automatically, pulled fresh assignments and registered. The
+client returned LIVE. The worker wrote its provenance and result under the
+newly writable root, then failed with `[WinError 10013] An attempt was made to
+access a socket in a way forbidden by its access permissions` before sending
+`STAGE_READY`. The source attempts a worker LAN bind and coordinator connect at
+this point; the result does not distinguish which socket call was denied. The
+host aborted on the worker's failed result. There was no capture, GNS listener,
+GameSession Ready, canonical close, FINALIZE or COMPLETE. Client and worker
+packet counts are **not measured**. The physical run was not retried.
+
+**ONE-CLIENT PHYSICAL READINESS — FAIL.** The client and worker endpoint agents
+ended FAILED; temporary daemons, tunnel and worker task were removed and
+endpoint policy restored. No task probe or listener remained. Worker Packet
+Monitor was stopped with no filters and its qualified service was idle; its
+hook and hash pin were unchanged. The retained local run record is under
+`C:\Sandbox\Codex\Artifacts\gargantuan-3l-capture-diagnostic\physical-lifecycle-44376ade81d84182`;
+the worker `result.json` SHA-256 is
+`0DB95099775F63AA74AAD3A4E43158E8D552A9E347CC506FA7418290866E0F0B`.
+The next task is a bounded diagnosis of the worker sandbox's denied socket
+operation and its applicable network policy before a newly authorized
+one-client attempt. No broad network permission change follows from this
+result. Four-client readiness, Phase 1 and 3M were not started. KI-006 OPEN;
+Foundation 3L B — PARTIALLY READY.
+
 ## One-client lifecycle attempt stopped at worker evidence access (2026-09-27)
 
 The fresh physical run `ff95b60e-8c5e-4125-bbc9-73e1e6844231` used Agent

@@ -6,6 +6,18 @@ last_verified: 2026-09-27
 
 # Foundation 3L.3 diagnostic validation ledger
 
+## Both evidence roots ready; one-client socket stop (2026-09-27)
+
+The [physical receipt](PooledPhysicalQualification3L.md#one-client-dual-evidence-preflight-passed-worker-socket-denied-2026-09-27)
+records exact restricted-identity read/write/delete success for both physical
+evidence roots **before daemon start**. In one fresh lifecycle attempt, both
+agents pulled and registered and the client returned LIVE. The worker wrote
+its evidence but its socket setup failed with `WinError 10013` before capture,
+GNS or GameSession. The host aborted; no retry occurred. Packet counts and
+application readiness remain not measured. KI-006 OPEN; Foundation 3L
+B — PARTIALLY READY. The next task is bounded worker socket-policy diagnosis,
+not four-client readiness, Phase 1 or 3M.
+
 ## One-client physical lifecycle gate (2026-09-27)
 
 The [physical receipt](PooledPhysicalQualification3L.md#one-client-lifecycle-attempt-stopped-at-worker-evidence-access-2026-09-27)

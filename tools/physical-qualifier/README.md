@@ -31,15 +31,20 @@ stage writes three config files; the project-specific Foundation 2B lifecycle
 catalog and [one-client workflow](workflows/one-client-lifecycle.json) wrap that
 legacy barrier without transmitting physical commands. Its first full run
 registered both agents but aborted before capture or probe because the client
-Codex sandbox could not create its staged evidence directory. The fixed-root
-[`Provision-ClientEvidenceRoot.ps1`](Provision-ClientEvidenceRoot.ps1) repaired
-only that task-owned ACL. The next attempt used
-[`run_one_client_lifecycle.py`](run_one_client_lifecycle.py), which runs
-[`evidence_preflight.py`](evidence_preflight.py) through the installed client
-Codex sandbox before any wake. The restricted client passed; both agents
-registered, but the worker's separate service-evidence root denied its sandbox
-identity. No capture or probe ran. The failed physical and lifecycle IDs are
-consumed; a new attempt requires a bounded worker-root repair and worker
-preflight. See the [physical receipt](../../devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md)
+Codex sandbox could not create its staged evidence directory. The next attempt
+proved the client fix but found the worker's separate evidence ACL missing its
+restricted SID. The fixed-root
+[`Ensure-QualificationEvidenceRoot.ps1`](Ensure-QualificationEvidenceRoot.ps1)
+now selects only the approved client or worker root by endpoint kind and
+preserves the worker capture service's SYSTEM/installer access. The
+[`run_one_client_lifecycle.py`](run_one_client_lifecycle.py) `preflight` mode
+requires both exact restricted-identity proofs before daemon start; its `run`
+mode refuses wake without fresh matching proofs. The
+[`evidence_preflight.py`](evidence_preflight.py) worker path removes its
+temporary run directory so the qualifier can create it normally. Both real
+sandbox preflights passed in the next single attempt. That attempt stopped on
+worker socket `WinError 10013` before capture or GNS; it was not retried. All
+failed physical and lifecycle IDs are consumed. See the
+[physical receipt](../../devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md)
 and [protocol record](docs/PROTOCOL.md).
 POOLED_SERVICE, physical gates, KI-006, Foundation 3L status and 3M are unchanged.
