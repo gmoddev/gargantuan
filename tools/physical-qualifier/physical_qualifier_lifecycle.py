@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import time
@@ -22,8 +23,12 @@ Streams = {}
 def Settings():
     Config = json.loads((Path.cwd() / ".lifecycle" / "physical.json").read_text(encoding="utf-8"))
     Expected = {"Role", "Python", "Tool", "ToolSHA256", "Coordinator", "Endpoint", "RunId"}
+    if (Config.get("Role") == "SERVER" and "BrokerLabel" in Config):
+        Expected.add("BrokerLabel")
     if set(Config) != Expected or Config["Role"] not in ("CLIENT", "SERVER"):
         raise ValueError("invalid installed physical catalog settings")
+    if "BrokerLabel" in Config and not re.fullmatch(r"[0-9a-f]{16}", Config["BrokerLabel"]):
+        raise ValueError("invalid worker broker label")
     Tool = Path(Config["Tool"]).resolve()
     if not Tool.is_file() or Tool.name != "qualifier.py":
         raise ValueError("physical qualifier source missing")
@@ -114,6 +119,33 @@ def ServerRun(Parameters, Context):
     Config = Settings()
     if Config["Role"] != "SERVER" or Parameters:
         raise ValueError("unauthorized server run")
+    if "BrokerLabel" in Config:
+        Label = Config["BrokerLabel"]
+        Request = Path.cwd() / ".lifecycle" / ("physical-broker-" + Label + ".start.json")
+        Response = Path.cwd() / ".lifecycle" / ("physical-broker-" + Label + ".start-result.json")
+        if Request.exists() or Response.exists():
+            raise ValueError("worker broker start already consumed")
+        with Request.open("x", encoding="utf-8") as Stream:
+            json.dump({"RunId": Config["RunId"], "Action": "START"}, Stream)
+        try:
+            while not Response.is_file():
+                Context.Check()
+                time.sleep(0.05)
+            Row = json.loads(Response.read_text(encoding="utf-8"))
+            if Row.get("RunId") != Config["RunId"] or not isinstance(Row.get("ReturnCode"), int):
+                raise ValueError("invalid worker broker result")
+            ResultFile = Evidence(Config, "Endpoint") / "result.json"
+            if not ResultFile.is_file():
+                raise RuntimeError("physical worker result missing")
+            Result = json.loads(ResultFile.read_text(encoding="utf-8"))
+            return {"Success": Row["ReturnCode"] == 0 and Result.get("Success") is True,
+                    "Evidence": [Metadata(ResultFile)]}
+        except BaseException:
+            Cancel = Path.cwd() / ".lifecycle" / ("physical-broker-" + Label + ".cancel.json")
+            if not Cancel.exists():
+                with Cancel.open("x", encoding="utf-8") as Stream:
+                    json.dump({"RunId": Config["RunId"], "Action": "CANCEL"}, Stream)
+            raise
     return WaitResult(Config, "Endpoint", Start(Config, "Endpoint", "endpoint"), Context)
 
 

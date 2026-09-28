@@ -92,6 +92,28 @@ socket operation and policy owner require a separate diagnostic; this evidence
 does not justify relaxing sandbox or network security policy. KI-006 remains
 OPEN and Foundation 3L remains B — PARTIALLY READY.
 
+The next investigation reproduced the worker's `WinError 10013` at the legacy
+normal-LAN TCP `connect`, after socket creation, worker-source bind and timeout
+had succeeded. The worker sandbox profile intentionally disables network
+access; an enabled outbound firewall block targets its exact offline SID.
+The same executable connected from the limited interactive worker host. A
+Gargantuan-only one-run broker now owns the fixed worker qualifier endpoint
+outside the sandbox, while the restricted catalog sends only a bounded
+preflight/start request. The broker pins the run, source and config hashes and
+rejects caller-supplied commands, addresses and ports. Neither the generic
+Agent Coordinator nor the installed capture service was changed. Physical
+run `722dfaa2-6ac6-4ae4-a67b-c226944c2528` passed both restricted evidence
+preflights and the restricted-to-broker socket preflight. Its lifecycle run
+`0cf08bfe-62f7-423e-a4b5-33636e0f2a1b` stopped before the worker
+registered: the task's SSH tunnel lacked the reverse worker loopback listener
+on port 49961, and the worker recorded `WinError 10061`. The client registered;
+the host timed out waiting for its peer. There was no capture or GNS launch,
+and no retry. A pre-wake reverse-tunnel gate now rejects this setup error.
+Both agents ended FAILED and all task-owned daemons, tunnel, broker task and
+staged policy were cleaned. KI-006 remains OPEN; Foundation 3L remains
+B — PARTIALLY READY. The next task is a fresh one-client lifecycle run with
+both tunnel directions and the same three preflights.
+
 > The protocol coordinates capabilities; it does not transmit authority.
 >
 > Natural-language agent communication does not directly invoke endpoint capabilities.

@@ -6,6 +6,62 @@ last_verified: 2026-09-27
 
 # Foundation 3L pooled physical qualification attempt
 
+## Worker control socket correction passed preflight; lifecycle stopped before the barrier (2026-09-27)
+
+The prior worker `WinError 10013` is attributable to the legacy endpoint's
+`socket.connect(("192.168.0.68", 39451))`, after its IPv4/TCP socket creation,
+`bind(("192.168.0.108", 0))` and three-second timeout all succeeded. The
+actual worker runtime is
+`C:\Sandbox\Codex\Tools\physical-qualifier\runtime\python.exe` under the
+medium-integrity, non-admin `HOSTPC\CodexSandboxOffline` SID ending `-1006`.
+A bounded reproduction captured the stack and `WinError 10013` at `connect`;
+the same executable, working directory and target connected successfully from
+the worker's limited interactive `HOSTPC\host` session. The worker's installed
+`foundation-2-endpoint` profile has `network_access = false`, and the enabled
+`codex_sandbox_offline_block_outbound` firewall rule blocks non-loopback
+outbound traffic for that exact sandbox SID, independent of executable and
+port. TCP 39451 and the assigned ephemeral port were not excluded or already
+owned; the intended LAN address was assigned. No firewall or sandbox policy
+was relaxed.
+
+The project adapter now uses a one-run, hash-pinned local broker in the
+existing limited worker host session. Restricted Codex can request only the
+preflight and exact staged worker endpoint; the broker owns the LAN control
+socket and later endpoint process. Arbitrary command, endpoint, port and
+config changes are rejected. This changes qualification process ownership,
+not GNS, GameSession, capture, POOLED_SERVICE or the generic coordinator.
+
+Fresh physical run `722dfaa2-6ac6-4ae4-a67b-c226944c2528` passed the
+client and worker restricted evidence preflights and the worker socket
+preflight before wake. The non-admin worker sandbox wrote the fixed request;
+the limited broker connected and closed
+`192.168.0.108:51205 -> 192.168.0.68:39451`, with proof returned to and
+verified by the sandbox. The capture service was idle, Packet Monitor stopped
+with no filters, and UDP 39450 unbound. The retained preflight and diagnostic
+evidence is under
+`C:\Sandbox\Codex\Artifacts\gargantuan-3l-capture-diagnostic\physical-lifecycle-7c387c3bd55c4b9e`.
+
+The one authorized lifecycle run `0cf08bfe-62f7-423e-a4b5-33636e0f2a1b`
+then woke both agents. The client pulled a fresh assignment and registered;
+the worker did not. Its lifecycle journal records `WinError 10061` connecting
+to its loopback coordinator address. The run's SSH tunnel had forwarded the
+client to the worker daemon but omitted the reverse worker
+`127.0.0.1:49961` listener. The host aborted on registration deadline; both
+agents ended FAILED. No physical endpoint, capture or GNS process started;
+packet directions, GameSession Ready, canonical close, FINALIZE and COMPLETE
+are **not measured**. The run was not retried. A pre-wake reverse-tunnel check
+now rejects this omission before any agent starts. After the failed run, the
+broker's eventual endpoint launch was further confined to a protected copy of
+the pinned package; this last source-copy hardening has mock coverage but no
+second physical execution. Daemons, tunnel, broker
+task and staged policies were cleaned up; no UDP listener, Packet Monitor
+session/filter or active capture-service run remains. The qualified hook and
+its pin were unchanged. **ONE-CLIENT PHYSICAL READINESS — FAIL.** KI-006 stays
+OPEN and Foundation 3L remains **B — PARTIALLY READY**. The next task is one
+new one-client attempt with both fixed loopback tunnel directions and all three
+preflights; four-client readiness, Phase 1 and 3M remain out of scope until it
+passes.
+
 ## One-client dual-evidence preflight passed; worker socket denied (2026-09-27)
 
 Physical run `c9130ef2-24a9-4d9f-a76f-96f56d5ae629` used lifecycle run

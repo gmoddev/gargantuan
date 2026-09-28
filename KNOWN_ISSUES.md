@@ -94,6 +94,11 @@ the prescribed probe exited 1. This demonstrates no path-loss budget failure,
 but does not establish repeatable required service. The 32-actual-client Local
 and Node matrix, action/recovery and final Foundation sweep are not measured.
 KI-006 remains OPEN; [physical receipt](devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md).
+The latest one-client qualifier corrected worker sandbox control-socket
+ownership and passed all restricted preflights, but its single lifecycle run
+stopped before the worker registered because the reverse loopback tunnel was
+missing. No GNS or capture measurement was obtained; the one-client gate
+remains open before any four-client continuation.
 Next: a bounded actual-GNS workload with sustained qualified four-grant
 backlog and complete host measurements, then the unchanged 32-client matrix
 only after Phase 1 passes. The pre-existing static `/30` plan is retained as a

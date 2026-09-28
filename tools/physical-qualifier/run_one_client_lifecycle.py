@@ -1,8 +1,11 @@
 """One bounded Foundation 2B lifecycle orchestration of the physical qualifier."""
 
 import json
+import hashlib
 from pathlib import Path
 import re
+import shutil
+import socket
 import subprocess
 import sys
 import threading
@@ -14,11 +17,12 @@ CLIENT_CODEX = Path(r"C:\Users\aiden\AppData\Local\OpenAI\Codex\bin\d375f7df50d3
 CLIENT_PYTHON = Path(r"C:\Python312\python.exe")
 WORKER_ARTIFACT = "C:/Sandbox/Codex/Artifacts/gargantuan-3l-physical"
 from evidence_gate import CLIENT_SID, WORKER_SID, RequireProof, RequireEvidenceReady
+from socket_gate import RequireWorkerControlTunnel
 sys.path.insert(0, str(ROOT))
 from agent_coordinator.control import Assignments, Host
 from agent_coordinator.lifecycle.policy import Bootstrap
 from agent_coordinator.lifecycle.service import Client
-from agent_coordinator.lifecycle.secret import LoadKey
+from agent_coordinator.lifecycle.secret import LoadKey, Restrict
 from agent_coordinator.transport import Journal
 from agent_coordinator.workflow import Workflow
 
@@ -85,6 +89,101 @@ def RunWorkerPreflight(Stage, Artifact):
     return Proof
 
 
+def Digest(File):
+    with Path(File).open("rb") as Stream:
+        return hashlib.file_digest(Stream, "sha256").hexdigest().upper()
+
+
+def StopWorkerBroker(Stage):
+    Label, RunId = Stage["Label"], Stage["RunId"]
+    Command = ["ssh", "-o", "BatchMode=yes", "dockerbox", "powershell",
+               "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+               WORKER_ARTIFACT + "/" + Label + "/Stop-WorkerSocketBroker.ps1",
+               "-Label", Label, "-RunId", RunId]
+    return subprocess.run(Command, capture_output=True, text=True, timeout=20)
+
+
+def RunWorkerSocketPreflight(Stage, Artifact):
+    Label, RunId = Stage["Label"], Stage["RunId"]
+    if not re.fullmatch(r"[0-9a-f]{16}", Label) or str(uuid.UUID(RunId)) != RunId:
+        raise ValueError("invalid worker socket identity")
+    Source = Path(__file__).parent
+    Config = Path(Stage["Physical"]) / "server.json"
+    BrokerConfig = Artifact / "server-broker.json"
+    shutil.copy2(Config, BrokerConfig)
+    Restrict(BrokerConfig)
+    Manifest = Artifact / "broker-manifest.json"
+    Manifest.write_text(json.dumps({"Label": Label, "RunId": RunId,
+                                    "ToolSHA256": Stage["ToolSHA256"],
+                                    "ConfigSHA256": Digest(BrokerConfig),
+                                    "PackageSHA256": Stage["PackageSHA256"]},
+                                   indent=2) + "\n", encoding="utf-8")
+    Restrict(Manifest)
+    Files = ("worker_socket_broker.py", "worker_socket_preflight.py",
+             "worker_socket_preflight_launcher.py", "Start-WorkerSocketBroker.ps1",
+             "Start-WorkerSocketPreflight.ps1", "Stop-WorkerSocketBroker.ps1",
+             "Check-WorkerControlTunnel.ps1")
+    Remote = "dockerbox:" + WORKER_ARTIFACT + "/" + Label + "/"
+    subprocess.run(["scp", "-q", *(str(Source / Name) for Name in Files),
+                    str(BrokerConfig), str(Manifest), Remote],
+                   check=True, capture_output=True, text=True, timeout=20)
+    PreflightTask = "Gargantuan3L-SocketPreflight-" + Label
+    BrokerStarted = False
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as Listener:
+        Listener.bind(("192.168.0.68", 39451))
+        Listener.listen(1)
+        Listener.settimeout(30)
+        try:
+            Start = ["ssh", "-o", "BatchMode=yes", "dockerbox", "powershell",
+                     "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+                     WORKER_ARTIFACT + "/" + Label + "/Start-WorkerSocketBroker.ps1",
+                     "-Label", Label, "-ManifestSHA256", Digest(Manifest),
+                     "-BrokerSHA256", Digest(Source / "worker_socket_broker.py")]
+            BrokerStarted = True
+            subprocess.run(Start, check=True, capture_output=True, text=True, timeout=20)
+            Preflight = ["ssh", "-o", "BatchMode=yes", "dockerbox", "powershell",
+                         "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+                         WORKER_ARTIFACT + "/" + Label + "/Start-WorkerSocketPreflight.ps1",
+                         "-Label", Label, "-RunId", RunId]
+            subprocess.run(Preflight, check=True, capture_output=True, text=True, timeout=20)
+            LocalProof = Artifact / "worker-socket-restricted-proof.json"
+            RemoteProof = Remote + "worker-socket-restricted-proof.json"
+            Deadline = time.monotonic() + 35
+            while time.monotonic() < Deadline:
+                Copy = subprocess.run(["scp", "-q", RemoteProof, str(LocalProof)],
+                                      capture_output=True, text=True, timeout=5)
+                if Copy.returncode == 0:
+                    break
+                time.sleep(0.25)
+            else:
+                raise TimeoutError("restricted worker socket proof timed out")
+            Connection, Peer = Listener.accept()
+            Connection.close()
+            if Peer[0] != "192.168.0.108":
+                raise ValueError("unexpected socket preflight peer")
+            BrokerProof = Artifact / "worker-socket-broker-proof.json"
+            subprocess.run(["scp", "-q", Remote + BrokerProof.name, str(BrokerProof)],
+                           check=True, capture_output=True, text=True, timeout=5)
+            Proof = json.loads(LocalProof.read_text(encoding="utf-8"))
+            Broker = json.loads(BrokerProof.read_text(encoding="utf-8"))
+            if (Proof.get("ExitCode") != 0 or not Proof.get("Success") or
+                    Proof.get("Sid") != WORKER_SID or Proof.get("IsAdmin") or
+                    Proof.get("RunId") != RunId or Proof.get("Label") != Label or
+                    Proof.get("Socket") != Broker or not Broker.get("Success") or
+                    Broker.get("Bind") != ["192.168.0.108", 0] or
+                    Broker.get("Connect") != ["192.168.0.68", 39451]):
+                raise RuntimeError("worker restricted socket capability preflight failed")
+            return {"Restricted": Proof, "Broker": Broker}
+        except BaseException:
+            if BrokerStarted:
+                StopWorkerBroker(Stage)
+            raise
+        finally:
+            subprocess.run(["ssh", "-o", "BatchMode=yes", "dockerbox", "schtasks",
+                            "/Delete", "/TN", PreflightTask, "/F"],
+                           capture_output=True, timeout=10)
+
+
 def ReadStage(Artifact):
     Setup = json.loads((Artifact / "setup.json").read_text(encoding="utf-8"))
     Stage = json.loads((Artifact / "stage.json").read_text(encoding="utf-8"))
@@ -98,11 +197,12 @@ def ReadStage(Artifact):
 def Preflight(Artifact):
     _, Stage = ReadStage(Artifact)
     Proofs = RequireEvidenceReady(Stage, Artifact, RunClientPreflight, RunWorkerPreflight)
+    SocketProof = RunWorkerSocketPreflight(Stage, Artifact)
     Ready = {"RunId": Stage["RunId"], "TimestampUnixMs": time.time_ns() // 1000000,
-             "Proofs": Proofs}
+             "Proofs": Proofs, "Socket": SocketProof}
     (Artifact / "evidence-ready.json").write_text(
         json.dumps(Ready, indent=2) + "\n", encoding="utf-8")
-    print("[Qualification:Evidence] Both restricted endpoint preflights PASS before lifecycle daemon start", flush=True)
+    print("[Qualification:Evidence] Both restricted evidence and worker socket preflights PASS before lifecycle daemon start", flush=True)
 
 
 def VerifyReady(Artifact, Stage):
@@ -112,6 +212,13 @@ def VerifyReady(Artifact, Stage):
         raise ValueError("evidence readiness proof missing, stale or mismatched")
     for Role, Sid in (("CLIENT", CLIENT_SID), ("WORKER", WORKER_SID)):
         RequireProof(Ready["Proofs"][Role], Stage["RunId"], Role, Sid)
+    Socket = Ready.get("Socket", {})
+    Restricted, Broker = Socket.get("Restricted", {}), Socket.get("Broker", {})
+    if (not Restricted.get("Success") or Restricted.get("IsAdmin") or
+            Restricted.get("Sid") != WORKER_SID or Restricted.get("RunId") != Stage["RunId"] or
+            Restricted.get("Socket") != Broker or not Broker.get("Success") or
+            Broker.get("Connect") != ["192.168.0.68", 39451]):
+        raise ValueError("worker socket readiness proof missing or mismatched")
     Physical = Path(Stage["Physical"])
     ClientStamp = json.loads((Physical / "preflight.json").read_text(encoding="utf-8"))
     if ClientStamp != Ready["Proofs"]["CLIENT"]:
@@ -166,6 +273,7 @@ def Main(Artifact):
             Samples.append({"Role": Role, "Stage": "before", "Presence": Presence})
             if Presence["Status"] != "OFFLINE":
                 raise ValueError("physical endpoint agent is not offline")
+        RequireWorkerControlTunnel(Stage["Label"], WORKER_ARTIFACT)
         for Role, Item in Clients.items():
             Item.StartAgent(Notices[Role])
         Deadline = time.monotonic() + 250
@@ -196,6 +304,12 @@ def Main(Artifact):
             except (OSError, ValueError):
                 pass
         Thread.join(WorkflowItem.Value["RegistrationTimeout"] + 2)
+        Clean = StopWorkerBroker(Stage)
+        if Clean.returncode:
+            if sys.exc_info()[0] is None and Codes.get("Host") == 0:
+                raise RuntimeError("worker broker cleanup failed: " + Clean.stderr[-300:])
+            print("[Qualification:Socket] Worker broker cleanup failed: " +
+                  Clean.stderr[-300:], flush=True)
 
 
 if __name__ == "__main__":

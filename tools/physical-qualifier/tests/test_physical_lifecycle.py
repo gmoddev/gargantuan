@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from unittest.mock import patch
@@ -31,6 +32,45 @@ with (root / "control.jsonl").open("w") as out:
 
 
 class PhysicalLifecycleTests(unittest.TestCase):
+    def test_worker_broker_request_waits_for_pinned_result(self):
+        with tempfile.TemporaryDirectory() as Temporary:
+            Root = Path(Temporary)
+            (Root / ".lifecycle").mkdir()
+            Label = "0123456789abcdef"
+            RunId = "12345678-1234-1234-1234-123456789abc"
+            Evidence = Root / "worker-evidence"
+            Evidence.mkdir()
+            ResultFile = Evidence / "result.json"
+            ConfigFile = Root / "server.json"
+            ConfigFile.write_text(json.dumps({"EvidenceDir": str(Evidence)}), encoding="utf-8")
+            Config = {"Role": "SERVER", "BrokerLabel": Label,
+                      "RunId": RunId, "Endpoint": str(ConfigFile)}
+            Response = Root / ".lifecycle" / ("physical-broker-" + Label + ".start-result.json")
+            Request = Root / ".lifecycle" / ("physical-broker-" + Label + ".start.json")
+
+            def Finish():
+                while not Request.exists():
+                    time.sleep(0.01)
+                self.assertEqual(json.loads(Request.read_text()),
+                                 {"RunId": RunId, "Action": "START"})
+                ResultFile.write_text(json.dumps({"Success": True}), encoding="utf-8")
+                Response.write_text(json.dumps({"RunId": RunId, "ReturnCode": 0}),
+                                    encoding="utf-8")
+
+            Previous = Path.cwd()
+            os.chdir(Root)
+            try:
+                Thread = threading.Thread(target=Finish)
+                Thread.start()
+                with patch.object(Physical, "Settings", return_value=Config):
+                    Result = Physical.ServerRun({}, Operation(time.monotonic() + 2))
+                Thread.join(2)
+                self.assertFalse(Thread.is_alive())
+                self.assertTrue(Result["Success"])
+                self.assertEqual(Result["Evidence"][0]["Path"], str(ResultFile))
+            finally:
+                os.chdir(Previous)
+
     def test_fixed_catalog_process_lifecycle(self):
         with tempfile.TemporaryDirectory() as Temporary:
             Root = Path(Temporary)

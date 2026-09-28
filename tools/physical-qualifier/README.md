@@ -47,4 +47,22 @@ worker socket `WinError 10013` before capture or GNS; it was not retried. All
 failed physical and lifecycle IDs are consumed. See the
 [physical receipt](../../devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md)
 and [protocol record](docs/PROTOCOL.md).
+
+The worker `WinError 10013` was reproduced at the LAN TCP `connect` and traced
+to the offline Codex SID's non-loopback outbound block. The worker now invokes
+a one-run, pinned local broker through fixed `PREFLIGHT` and `START` requests;
+the limited interactive host broker owns the normal-LAN socket and launches
+only the exact staged qualifier endpoint. The restricted profile and firewall
+rule stay in place. The real restricted-identity broker preflight passed, along
+with both evidence preflights, for physical run
+`722dfaa2-6ac6-4ae4-a67b-c226944c2528`. Its sole lifecycle attempt
+`0cf08bfe-62f7-423e-a4b5-33636e0f2a1b` then failed before the worker
+registered because the SSH tunnel lacked the worker-to-host reverse loopback
+forward for port 49961. A pre-wake check now requires that listener. Future
+staging must forward both client-to-worker daemon
+`-L 127.0.0.1:49964:127.0.0.1:49963` and worker-to-host coordinator
+`-R 127.0.0.1:49961:127.0.0.1:49961`. No physical endpoint, capture or GNS
+started in that run, which was not retried. The next task is a fresh
+one-client attempt; four-client readiness remains gated on its PASS.
+
 POOLED_SERVICE, physical gates, KI-006, Foundation 3L status and 3M are unchanged.
