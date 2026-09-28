@@ -185,6 +185,26 @@ the client collects both results. Agent Coordinator carries only versioned
 capability names and result metadata; the physical commands and run files stay
 endpoint-local.
 
+The physical lifecycle adapter owns one SSH process per fresh physical label.
+The main host listens at `127.0.0.1:49964` through SSH `-L` to the worker's
+`127.0.0.1:49963` lifecycle daemon; the main coordinator consumes this leg.
+SSH `-R` listens on the worker's `127.0.0.1:49961` and forwards to the main
+host's `127.0.0.1:49961` coordinator; the restricted worker endpoint consumes
+this leg. Both listeners bind loopback only. The host controls SSH setup with
+`ExitOnForwardFailure=yes`, one fixed destination per leg, and no peer-supplied
+forwarding options. The worker daemon owns the forward target; the main
+coordinator owns the reverse target. Before creating an assignment or waking
+agents, the adapter requires both restricted evidence proofs, the fixed worker
+socket broker proof, an authenticated `OFFLINE` presence response through the
+forward, and a two-way nonce exchange through the reverse from the worker's
+non-admin sandbox SID. A listener or SSH process alone is not readiness.
+The temporary reverse challenge listener closes before the lifecycle host binds
+the same port. Session identity, SSH PID, ports, owners and timestamps are
+retained locally. Normal exit, preflight failure and lifecycle abort terminate
+the owned SSH process and require both listeners to clear. An existing listener
+or consumed label blocks a new session; the restricted agent cannot launch SSH
+or redirect either leg.
+
 The sole fresh lifecycle attempt prepared physical run
 `58f15af7-46b7-462b-af78-df88a8db428d` and used Agent Coordinator run
 `8267f8a4-7e78-4407-a2ad-9583fbfc46ac`. Both Codex agents woke, pulled

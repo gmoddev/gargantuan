@@ -1,10 +1,60 @@
 ---
 status: stopped-phase1-incomplete-four-grant-proof
 owner: runtime-networking-and-runtime-host
-last_verified: 2026-09-27
+last_verified: 2026-09-28
 ---
 
 # Foundation 3L pooled physical qualification attempt
+
+## Both lifecycle tunnel directions passed; physical GNS connection timed out (2026-09-28)
+
+Fresh physical run `116805d6-7777-4422-9c23-d11644358297` used label
+`fde5f3dc62bd4649` and one lifecycle run
+`ae30e49e-4a24-46e1-a77c-4d4d3b7de82b`. Both evidence roots passed under
+their real non-admin Codex sandbox SIDs before daemon start. The restricted
+worker's fixed broker request connected and closed the pinned LAN control
+socket. Worker capture service, Packet Monitor, filters and UDP 39450 were
+idle before wake. The main host then launched one SSH process (PID 35532)
+with fixed `-L 127.0.0.1:49964:127.0.0.1:49963` to the worker lifecycle
+daemon and `-R 127.0.0.1:49961:127.0.0.1:49961` back to the main coordinator.
+The main host authenticated the worker daemon as `SERVER/OFFLINE` through the
+forward. The restricted worker SID ending `-1006` completed a fresh, two-way
+nonce exchange through the reverse and the worker listener was owned by
+`sshd` PID 12508. All five hard prerequisites passed before the lifecycle
+assignment existed. The prior run had launched only `-L`; its worker's
+`WinError 10061` was the absent `-R` listener, not the earlier sandbox LAN
+socket denial.
+
+Both agents woke automatically, pulled the fresh assignment, registered and
+reached the barrier. The client returned LIVE; the physical worker capture
+started and its probe reported GNS `event=listening` at
+`10.253.3.2:39450` before the client probe launched. The client then timed
+out attempting to connect (`end_reason=5003`); no server incoming callback,
+accept or connected state was observed. Both pcap parsers counted **outbound 0,
+inbound 0** qualifying UDP packets. Packet Monitor reported zero total packets,
+zero drops and no lost events. The client never reached GameSession Ready or
+canonical clean close. The worker reported a failed `SERVER_DONE`; the legacy
+coordinator sent legal FINALIZE and `RUN_DONE Success=false`, then the lifecycle
+host aborted on the worker's failed result. Both agents ended FAILED; no
+successful COMPLETE occurred. The first failing physical gate is the GNS
+client-to-worker connection. The exact network/filter owner is **not
+attributed**: a subsequent bounded ICMP check sent from `10.253.3.1` to
+`10.253.3.2` lost 2/2, while the reverse direction received 2/2, but ICMP
+policy alone does not prove the UDP drop location.
+
+This single physical attempt was **not retried**. The owned SSH process exited
+and both forwards cleared. Task-owned daemons, worker broker/task, physical
+probe/helper, UDP listener and lifecycle tickets are gone; staged endpoint
+policies/workflows were restored. Packet Monitor is stopped with no filters,
+the capture service is running and idle, and UDP 39450 is unbound. The
+retained local evidence is
+`C:\Sandbox\Codex\Artifacts\gargantuan-3l-capture-diagnostic\physical-lifecycle-fde5f3dc62bd4649`;
+worker capture evidence was copied there for reconciliation. **ONE-CLIENT
+PHYSICAL READINESS — FAIL.** KI-006 remains **OPEN** and Foundation 3L remains
+**B — PARTIALLY READY**. The next task is bounded attribution and correction
+of the client-to-worker fiber GNS path, followed only then by a separately
+authorized fresh one-client lifecycle attempt. Four-client readiness, Phase 1
+continuation and 3M remain gated.
 
 ## Worker control socket correction passed preflight; lifecycle stopped before the barrier (2026-09-27)
 

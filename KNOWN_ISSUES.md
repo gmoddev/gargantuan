@@ -94,11 +94,15 @@ the prescribed probe exited 1. This demonstrates no path-loss budget failure,
 but does not establish repeatable required service. The 32-actual-client Local
 and Node matrix, action/recovery and final Foundation sweep are not measured.
 KI-006 remains OPEN; [physical receipt](devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md).
-The latest one-client qualifier corrected worker sandbox control-socket
-ownership and passed all restricted preflights, but its single lifecycle run
-stopped before the worker registered because the reverse loopback tunnel was
-missing. No GNS or capture measurement was obtained; the one-client gate
-remains open before any four-client continuation.
+The latest one-client qualifier passed both restricted evidence roots, the
+fixed worker broker, and authenticated handshakes through both host-owned SSH
+tunnel directions before assignment. Both agents registered and the worker
+reported a live UDP `10.253.3.2:39450` listener, but the client GNS
+connection timed out. Each endpoint captured outbound 0/inbound 0 qualified
+packets; GameSession Ready and clean close were not reached. The single run
+was not retried and cleaned up. The directional fiber/host-filter cause is
+not yet attributed. The one-client gate remains open before any four-client
+continuation; see the [physical receipt](devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md).
 Next: a bounded actual-GNS workload with sustained qualified four-grant
 backlog and complete host measurements, then the unchanged 32-client matrix
 only after Phase 1 passes. The pre-existing static `/30` plan is retained as a

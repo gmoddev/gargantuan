@@ -15,7 +15,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 import worker_socket_broker as Broker
-from socket_gate import RequireWorkerControlTunnel
+from socket_gate import WorkerReverseListener
 
 
 class WorkerSocketBrokerTests(unittest.TestCase):
@@ -88,23 +88,26 @@ class WorkerSocketBrokerTests(unittest.TestCase):
                     self.assertEqual((Tool.parent / "mock-started.txt").read_text(), "started")
                     self.assertTrue(json.loads(Paths["start-result"].read_text())["Success"])
 
-    def test_reverse_tunnel_gate_rejects_missing_listener_before_wake(self):
+    def test_reverse_listener_inspection_does_not_invoke_worker_capability(self):
         Calls = []
 
         def Missing(Command, **Options):
             Calls.append(Command)
             return SimpleNamespace(returncode=1, stdout="", stderr="not listening")
 
-        with self.assertRaisesRegex(RuntimeError, "reverse lifecycle tunnel missing"):
-            RequireWorkerControlTunnel("0123456789abcdef", "C:/fixed", Missing)
+        with self.assertRaisesRegex(RuntimeError, "inspection failed"):
+            WorkerReverseListener("0123456789abcdef", "C:/fixed", Missing)
         self.assertEqual(len(Calls), 1)
         self.assertEqual(Calls[0][-1],
                          "C:/fixed/0123456789abcdef/Check-WorkerControlTunnel.ps1")
 
         def Ready(Command, **Options):
-            return SimpleNamespace(returncode=0, stdout="LISTENING", stderr="")
+            return SimpleNamespace(returncode=0, stdout=json.dumps(
+                {"Present": True, "Address": "127.0.0.1", "Port": 49961,
+                 "OwnerPid": 42, "ProcessName": "sshd"}), stderr="")
 
-        RequireWorkerControlTunnel("0123456789abcdef", "C:/fixed", Ready)
+        self.assertTrue(WorkerReverseListener("0123456789abcdef", "C:/fixed", Ready)["Present"])
+        self.assertNotIn("START", " ".join(Calls[0]))
 
     def test_fixed_manifest_rejects_arbitrary_control_endpoint_and_changed_pin(self):
         with tempfile.TemporaryDirectory() as Temporary:

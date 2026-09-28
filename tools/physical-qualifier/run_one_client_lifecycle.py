@@ -17,7 +17,7 @@ CLIENT_CODEX = Path(r"C:\Users\aiden\AppData\Local\OpenAI\Codex\bin\d375f7df50d3
 CLIENT_PYTHON = Path(r"C:\Python312\python.exe")
 WORKER_ARTIFACT = "C:/Sandbox/Codex/Artifacts/gargantuan-3l-physical"
 from evidence_gate import CLIENT_SID, WORKER_SID, RequireProof, RequireEvidenceReady
-from socket_gate import RequireWorkerControlTunnel
+from lifecycle_tunnel import TunnelSession
 sys.path.insert(0, str(ROOT))
 from agent_coordinator.control import Assignments, Host
 from agent_coordinator.lifecycle.policy import Bootstrap
@@ -122,7 +122,7 @@ def RunWorkerSocketPreflight(Stage, Artifact):
     Files = ("worker_socket_broker.py", "worker_socket_preflight.py",
              "worker_socket_preflight_launcher.py", "Start-WorkerSocketBroker.ps1",
              "Start-WorkerSocketPreflight.ps1", "Stop-WorkerSocketBroker.ps1",
-             "Check-WorkerControlTunnel.ps1")
+             "Check-WorkerControlTunnel.ps1", "Check-WorkerPhysicalIdle.ps1")
     Remote = "dockerbox:" + WORKER_ARTIFACT + "/" + Label + "/"
     subprocess.run(["scp", "-q", *(str(Source / Name) for Name in Files),
                     str(BrokerConfig), str(Manifest), Remote],
@@ -234,9 +234,28 @@ def VerifyReady(Artifact, Stage):
     return Ready
 
 
-def Main(Artifact):
-    Setup, Stage = ReadStage(Artifact)
-    VerifyReady(Artifact, Stage)
+def RequireWorkerPhysicalIdle(Stage, Artifact):
+    Command = ["ssh", "-o", "BatchMode=yes", "dockerbox", "powershell",
+               "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+               WORKER_ARTIFACT + "/" + Stage["Label"] + "/Check-WorkerPhysicalIdle.ps1"]
+    Result = subprocess.run(Command, capture_output=True, text=True, timeout=15)
+    if Result.returncode:
+        raise RuntimeError("worker physical idle preflight failed: " + Result.stderr[-300:])
+    try:
+        Report = json.loads(Result.stdout.strip().splitlines()[-1])
+    except (ValueError, IndexError) as Error:
+        raise RuntimeError("worker physical idle report malformed") from Error
+    if (Report.get("CaptureService") != "Running" or Report.get("CaptureActiveRun") is not False or
+            Report.get("PacketMonitor") != "Stopped" or Report.get("PacketFilters") != "None" or
+            Report.get("Udp39450") != "Unbound" or
+            not 0 <= time.time_ns() // 1000000 - Report.get("TimestampUnixMs", -1) <= 30000):
+        raise ValueError("worker physical prerequisite is not idle")
+    (Artifact / "worker-physical-idle.json").write_text(
+        json.dumps(Report, indent=2) + "\n", encoding="utf-8")
+    return Report
+
+
+def RunLifecycle(Setup, Stage, Artifact, Tunnel):
     WorkflowItem = Workflow(json.loads(Path(Setup["WorkflowFile"]).read_text(encoding="utf-8")))
     NowMs = time.time_ns() // 1000000
     Notices = {Role: {"Version": 1, "EndpointId": Item["EndpointId"],
@@ -273,7 +292,7 @@ def Main(Artifact):
             Samples.append({"Role": Role, "Stage": "before", "Presence": Presence})
             if Presence["Status"] != "OFFLINE":
                 raise ValueError("physical endpoint agent is not offline")
-        RequireWorkerControlTunnel(Stage["Label"], WORKER_ARTIFACT)
+        Tunnel.RequireAlive()
         for Role, Item in Clients.items():
             Item.StartAgent(Notices[Role])
         Deadline = time.monotonic() + 250
@@ -304,9 +323,28 @@ def Main(Artifact):
             except (OSError, ValueError):
                 pass
         Thread.join(WorkflowItem.Value["RegistrationTimeout"] + 2)
+
+
+def Main(Artifact):
+    Setup, Stage = ReadStage(Artifact)
+    try:
+        VerifyReady(Artifact, Stage)
+        RequireWorkerPhysicalIdle(Stage, Artifact)
+        ClientItem = Setup["Endpoints"]["CLIENT"]
+        ClientPresence = Client("127.0.0.1", ClientItem["LifecyclePort"],
+                                ClientItem["EndpointId"], LoadKey(ClientItem["KeyFile"])).GetPresence()
+        if (ClientPresence.get("EndpointId") != ClientItem["EndpointId"] or
+                ClientPresence.get("Status") != "OFFLINE"):
+            raise ValueError("client lifecycle endpoint is not ready before assignment")
+        with TunnelSession(Setup, Stage, Artifact) as Tunnel:
+            ServerKey = LoadKey(Setup["Endpoints"]["SERVER"]["KeyFile"])
+            Tunnel.Preflight(ServerKey, Client)
+            print("[Qualification:Tunnel] Forward and restricted reverse handshakes PASS before assignment", flush=True)
+            return RunLifecycle(Setup, Stage, Artifact, Tunnel)
+    finally:
         Clean = StopWorkerBroker(Stage)
         if Clean.returncode:
-            if sys.exc_info()[0] is None and Codes.get("Host") == 0:
+            if sys.exc_info()[0] is None:
                 raise RuntimeError("worker broker cleanup failed: " + Clean.stderr[-300:])
             print("[Qualification:Socket] Worker broker cleanup failed: " +
                   Clean.stderr[-300:], flush=True)

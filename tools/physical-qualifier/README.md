@@ -58,11 +58,19 @@ with both evidence preflights, for physical run
 `722dfaa2-6ac6-4ae4-a67b-c226944c2528`. Its sole lifecycle attempt
 `0cf08bfe-62f7-423e-a4b5-33636e0f2a1b` then failed before the worker
 registered because the SSH tunnel lacked the worker-to-host reverse loopback
-forward for port 49961. A pre-wake check now requires that listener. Future
-staging must forward both client-to-worker daemon
+forward for port 49961. The host-owned `run` adapter now starts one fixed SSH
+session with both client-to-worker daemon
 `-L 127.0.0.1:49964:127.0.0.1:49963` and worker-to-host coordinator
-`-R 127.0.0.1:49961:127.0.0.1:49961`. No physical endpoint, capture or GNS
-started in that run, which was not retried. The next task is a fresh
-one-client attempt; four-client readiness remains gated on its PASS.
+`-R 127.0.0.1:49961:127.0.0.1:49961`. It authenticates the worker daemon
+through the forward and requires a run-bound nonce exchange from the worker's
+actual restricted SID through the reverse before creating a lifecycle assignment.
+The SSH process and both listeners are checked again during cleanup. A consumed
+physical label cannot reuse an old tunnel session. No physical endpoint, capture or GNS
+started in that historical run, which was not retried. A later fresh run
+passed both tunnel handshakes and registration, then failed on the physical
+client-to-worker GNS connection with zero qualified packets in either capture.
+Its [receipt](../../devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md)
+records the one-run failure and cleanup. Four-client readiness remains gated
+on a later one-client PASS.
 
 POOLED_SERVICE, physical gates, KI-006, Foundation 3L status and 3M are unchanged.

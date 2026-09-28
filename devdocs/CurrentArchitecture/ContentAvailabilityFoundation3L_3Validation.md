@@ -1,10 +1,26 @@
 ---
 status: partial-validation
 owner: runtime-networking
-last_verified: 2026-09-27
+last_verified: 2026-09-28
 ---
 
 # Foundation 3L.3 diagnostic validation ledger
+
+## One-client physical lifecycle transport passed; GNS path failed (2026-09-28)
+
+The [physical receipt](PooledPhysicalQualification3L.md#both-lifecycle-tunnel-directions-passed-physical-gns-connection-timed-out-2026-09-28)
+records fresh physical run `116805d6-7777-4422-9c23-d11644358297` and
+lifecycle run `ae30e49e-4a24-46e1-a77c-4d4d3b7de82b`. Both restricted
+evidence roots, fixed worker broker, authenticated main-to-worker SSH forward
+and restricted-worker-to-main reverse handshake passed before assignment.
+Both agents pulled and registered, and the physical worker was listening on
+UDP `10.253.3.2:39450` before the client launched. The client GNS connection
+timed out; each capture had outbound 0/inbound 0 qualified UDP packets.
+GameSession Ready, clean close and one-client readiness did not pass. The run
+was not retried; all task-owned tunnel, daemon, broker, capture and probe
+resources cleaned. KI-006 OPEN; Foundation 3L B — PARTIALLY READY. Next is
+bounded attribution of the client-to-worker fiber GNS path before any new
+one-client attempt, not four-client readiness or 3M.
 
 ## Both evidence roots ready; one-client socket stop (2026-09-27)
 

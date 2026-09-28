@@ -1,7 +1,7 @@
 ---
 status: current-infrastructure-extraction
 owner: qualification-tooling
-last_verified: 2026-09-27
+last_verified: 2026-09-28
 ---
 
 # Physical agent coordination ownership and migration
@@ -108,11 +108,20 @@ preflights and the restricted-to-broker socket preflight. Its lifecycle run
 registered: the task's SSH tunnel lacked the reverse worker loopback listener
 on port 49961, and the worker recorded `WinError 10061`. The client registered;
 the host timed out waiting for its peer. There was no capture or GNS launch,
-and no retry. A pre-wake reverse-tunnel gate now rejects this setup error.
+and no retry. The current adapter replaces the listener-only gate with
+a host-owned, fixed two-direction SSH session. An authenticated worker daemon
+presence call proves the main forward, and a restricted-worker nonce exchange
+proves the reverse before any assignment is created or agent wakes. A consumed
+label or stale listener fails closed; the owned SSH process and both listeners
+are checked on cleanup. This is qualification transport only and does not
+extend the worker broker's fixed physical endpoint capability.
 Both agents ended FAILED and all task-owned daemons, tunnel, broker task and
 staged policy were cleaned. KI-006 remains OPEN; Foundation 3L remains
-B — PARTIALLY READY. The next task is a fresh one-client lifecycle run with
-both tunnel directions and the same three preflights.
+B — PARTIALLY READY. The subsequent fresh run passed both tunnel handshakes
+and both agent registrations, but the physical client GNS connection timed out
+with zero qualified packets in either capture. The [physical receipt](PooledPhysicalQualification3L.md)
+records its first failure and cleanup. The next task is bounded attribution
+of the client-to-worker fiber GNS path before another fresh one-client run.
 
 > The protocol coordinates capabilities; it does not transmit authority.
 >
