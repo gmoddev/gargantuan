@@ -9,6 +9,7 @@ $global:TestActive = $false
 $global:TestFilters = "Packet Filters:`n    None"
 $global:TestEtl = ''
 $global:TestCalls = [System.Collections.Generic.List[string]]::new()
+$global:TestInventory = '[{"Components":[{"Name":"Mellanox ConnectX-4 Lx Ethernet Adapter","Type":"Miniport","Id":13,"DriverName":"mlx5.sys","Properties":[{"Name":"ifIndex","Value":19}]},{"Name":"TCP/IPv4 - L2","Type":"Protocol","Id":75,"SecondaryId":81,"DriverName":"tcpip.sys","Properties":[{"Name":"Miniport ifIndex","Value":19}]}]}]'
 function global:pktmon {
     param([Parameter(ValueFromRemainingArguments=$true)][string[]]$Arguments)
     $global:LASTEXITCODE = 0
@@ -23,7 +24,7 @@ function global:pktmon {
                 default { throw 'Unexpected filter command' }
             }
         }
-        'list' { '[{"Components":[{"Name":"Mellanox ConnectX-4 Lx Ethernet Adapter","Type":"Miniport","Id":13,"DriverName":"mlx5.sys","Properties":[{"Name":"ifIndex","Value":19}]},{"Name":"TCP/IPv4 - L2","Type":"Protocol","Id":75,"DriverName":"tcpip.sys","Properties":[{"Name":"Miniport ifIndex","Value":19},{"Name":"EtherType","Value":"IPv4"}]}]}]' }
+        'list' { $global:TestInventory }
         'start' {
             $global:TestEtl = $Arguments[[Array]::IndexOf($Arguments,'--file-name') + 1]
             [IO.File]::WriteAllBytes($global:TestEtl,[byte[]]@(1,2,3))
@@ -41,14 +42,24 @@ function Assert([bool]$Value,[string]$Detail) { if (!$Value) { throw $Detail } }
 try {
     & $HookBlock $TestDir Start
     Assert $global:TestActive 'Capture did not start'
-    Assert ([bool]($global:TestCalls | Where-Object {$_ -eq ('start --capture --comp 13 75 --pkt-size 0 --file-name ' + $global:TestEtl + ' --file-size 64 --log-mode circular')})) 'Both capture-layer IDs or the 64 MiB bound were not preserved'
+    Assert ([bool]($global:TestCalls | Where-Object {$_ -eq ('start --capture --comp 13 --pkt-size 0 --file-name ' + $global:TestEtl + ' --file-size 64 --log-mode circular')})) 'Single Mellanox edge or 64 MiB bound was not preserved'
+    Assert ([bool]($global:TestCalls | Where-Object {$_ -eq ('filter add Qualification-' + (Split-Path $TestDir -Leaf) + ' -t UDP -i 10.253.3.1 10.253.3.2 -p 39450')})) 'The peer-address/UDP-port filter changed'
     $Owner = Get-Content (Join-Path $TestDir 'pktmon-owner.json') -Raw | ConvertFrom-Json
-    Assert (($Owner.Components -join ',') -eq '13,75') 'Capture ownership marker omitted the selected component IDs'
-    Assert (($Owner.CaptureLayers -join ',') -eq 'Mellanox miniport,TCP/IPv4 - L2') 'Capture layer attribution was incomplete'
+    Assert (($Owner.Components -join ',') -eq '13' -and $Owner.ComponentId -eq 13 -and $Owner.MiniportIfIndex -eq 19 -and $Owner.CapturePort -eq 39450) 'Capture ownership marker omitted the selected miniport/default port'
+    Assert (($Owner.CaptureLayers -join ',') -eq 'Mellanox miniport') 'Capture layer attribution was incomplete'
     & $HookBlock $TestDir Stop
     Assert (!$global:TestActive) 'Capture did not stop'
     Assert ($global:TestFilters -match 'None') 'Owned filter not removed'
     Assert (Test-Path (Join-Path $TestDir 'worker-capture.pcapng')) 'Export missing'
+    Assert ([bool]($global:TestCalls | Where-Object {$_ -eq ('etl2pcap ' + $global:TestEtl + ' --out ' + (Join-Path $TestDir 'worker-capture.pcapng') + ' --component-id 13')})) 'Export did not preserve the selected miniport scope'
+    & $HookBlock $TestDir Start 39452
+    Assert ([bool]($global:TestCalls | Where-Object {$_ -eq ('filter add Qualification-' + (Split-Path $TestDir -Leaf) + ' -t UDP -i 10.253.3.1 10.253.3.2 -p 39452')})) 'The fixed local synthetic port was not selected'
+    & $HookBlock $TestDir Stop
+    $Before = $global:TestCalls.Count
+    $Rejected = $false
+    try { & $HookBlock $TestDir Start 39453 } catch { $Rejected=$true }
+    Assert $Rejected 'An unapproved capture port was accepted'
+    Assert ($global:TestCalls.Count -eq $Before) 'Invalid capture port invoked Packet Monitor'
     $global:TestActive = $true
     $Before = $global:TestCalls.Count
     $Rejected = $false
@@ -65,6 +76,19 @@ try {
     try { & $HookBlock $TestDir Stop } catch { $Rejected=$true }
     Assert $Rejected 'Changed filter ownership was not protected'
     Assert ($global:TestFilters -eq 'Packet Filters: changed-during-run') 'Changed filters were removed'
+    $global:TestFilters = "Packet Filters:`n    None"
+    $global:TestInventory = '[{"Components":[{"Name":"Mellanox ConnectX-4 Lx Ethernet Adapter","Type":"Miniport","Id":13,"DriverName":"wrong.sys","Properties":[{"Name":"ifIndex","Value":19}]}]}]'
+    $Before = $global:TestCalls.Count
+    $Rejected = $false
+    try { & $HookBlock $TestDir Start } catch { $Rejected=$true }
+    Assert $Rejected 'Wrong miniport driver was accepted'
+    Assert ($global:TestCalls.Count -eq $Before + 3) 'Wrong-driver refusal proceeded beyond inventory validation'
+    $global:TestInventory = '[{"Components":[{"Name":"Mellanox A","Type":"Miniport","Id":13,"DriverName":"mlx5.sys","Properties":[{"Name":"ifIndex","Value":19}]},{"Name":"Mellanox B","Type":"Miniport","Id":14,"DriverName":"mlx5.sys","Properties":[{"Name":"ifIndex","Value":19}]}]}]'
+    $Before = $global:TestCalls.Count
+    $Rejected = $false
+    try { & $HookBlock $TestDir Start } catch { $Rejected=$true }
+    Assert $Rejected 'Ambiguous miniport inventory was accepted'
+    Assert ($global:TestCalls.Count -eq $Before + 3) 'Ambiguous-inventory refusal proceeded beyond validation'
     Write-Output 'Capture hook simulation passed: exact argv, cleanup, ownership refusal.'
 } finally {
     Remove-Item Function:\pktmon,Function:\Get-NetAdapter,Function:\Get-NetIPAddress,Function:\Get-NetIPInterface

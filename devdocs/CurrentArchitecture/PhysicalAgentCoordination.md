@@ -39,6 +39,19 @@ budgets. It is an available infrastructure API, not silently substituted for the
 physical workflow. Applying discovery to Gargantuan requires a separately qualified
 project adapter. Neither schemas nor assignment messages carry executable code.
 
+The project now has a fixed, endpoint-local Foundation 2B lifecycle catalog
+and one-client workflow layered over the legacy readiness barrier. The catalog
+starts only the locally staged qualifier processes; Agent Coordinator carries
+versioned capabilities and result metadata. The first full lifecycle attempt
+registered both Codex agents but aborted before either physical endpoint ran:
+the client Codex sandbox could not create its local coordinator evidence
+directory. This does not qualify assignment-pull adoption or the one-client
+readiness gate. The failed identity is consumed; a later attempt requires a
+new run and a verified writable client evidence location. The worker's
+Mellanox-miniport hook independently passed a bounded bidirectional synthetic
+capture and is installed with its matching service hash pin, while the service
+binary and 90-second lease remain unchanged.
+
 > The protocol coordinates capabilities; it does not transmit authority.
 >
 > Natural-language agent communication does not directly invoke endpoint capabilities.

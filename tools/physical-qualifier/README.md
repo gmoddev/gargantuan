@@ -26,7 +26,12 @@ new package only. Keep old installed bundles/services as rollback. Follow the
 and [physical protocol](docs/PROTOCOL.md) before authorized use.
 
 The generic schema example is not a Foundation 3L workflow. This adapter keeps the
-legacy v1 readiness profile, including early-server-result handling. Current local
-stage writes three config files; adapting authenticated assignment pull to the
-physical project requires separate bounded qualification before deployment.
+legacy v1 readiness profile, including early-server-result handling. The local
+stage writes three config files; the project-specific Foundation 2B lifecycle
+catalog and [one-client workflow](workflows/one-client-lifecycle.json) wrap that
+legacy barrier without transmitting physical commands. Its first full run
+registered both agents but aborted before capture or probe because the client
+Codex sandbox could not create its staged evidence directory. A fresh attempt
+requires writable client evidence to be verified before wake; see the
+[protocol record](docs/PROTOCOL.md).
 POOLED_SERVICE, physical gates, KI-006, Foundation 3L status and 3M are unchanged.

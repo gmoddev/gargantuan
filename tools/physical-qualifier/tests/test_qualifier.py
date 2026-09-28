@@ -278,6 +278,8 @@ class QualificationTests(unittest.TestCase):
         WritePcapNg(Capture, [
             EthernetUdp("10.253.3.1", 49155, "10.253.3.2", 39450),
             EthernetUdp("10.253.3.2", 39450, "10.253.3.1", 49155),
+            EthernetUdp("192.168.0.68", 49155, "10.253.3.2", 39450),
+            EthernetUdp("10.253.3.2", 39450, "192.168.0.68", 49155),
         ])
         self.assertEqual({"Outbound": 1, "Inbound": 1}, Q.CaptureDirections(Capture, "CLIENT"))
         self.assertEqual({"Outbound": 1, "Inbound": 1}, Q.CaptureDirections(Capture, "SERVER"))

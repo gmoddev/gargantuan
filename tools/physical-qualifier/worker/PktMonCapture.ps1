@@ -1,6 +1,7 @@
 param(
     [Parameter(Mandatory=$true)][string]$EvidenceDir,
-    [ValidateSet('Start','Stop')][string]$Action = 'Start'
+    [ValidateSet('Start','Stop')][string]$Action = 'Start',
+    [ValidateSet(39450,39452)][int]$CapturePort = 39450
 )
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
@@ -27,19 +28,19 @@ if ($Action -eq 'Start') {
     $Components = @($Inventory | ForEach-Object {$_.Components} | Where-Object {
         $_.Type -eq 'Miniport' -and ($_.Properties | Where-Object {$_.Name -eq 'ifIndex' -and $_.Value -eq $Adapter.ifIndex})
     })
-    if ($Components.Count -ne 1 -or $Components[0].DriverName -ne 'mlx5.sys') { throw 'Cannot attribute the Mellanox capture component.' }
-    $IPv4Components = @($Inventory | ForEach-Object {$_.Components} | Where-Object {
-        $_.DriverName -eq 'tcpip.sys' -and $_.Name -eq 'TCP/IPv4 - L2' -and
-        ($_.Properties | Where-Object {$_.Name -eq 'Miniport ifIndex' -and $_.Value -eq $Adapter.ifIndex})
-    })
-    if ($IPv4Components.Count -ne 1) { throw 'Cannot attribute the IPv4 capture component to the Mellanox interface.' }
-    $CaptureComponents = @($Components[0].Id, $IPv4Components[0].Id) | Sort-Object -Unique
-    InvokePktMon -Arguments @('filter','add',$FilterName,'-t','UDP','-i','10.253.3.1','10.253.3.2','-p','39450') | Write-Output
+    if ($Components.Count -ne 1 -or $Components[0].DriverName -ne 'mlx5.sys' -or
+        [int]$Components[0].Id -le 0) { throw 'Cannot attribute the Mellanox capture component.' }
+    # One miniport edge saw each synthetic UDP direction exactly once. Selecting
+    # TCP/IP as well records the same datagrams again; its named IPv4 L2
+    # SecondaryId observed neither direction on this worker.
+    $CaptureComponent = [int]$Components[0].Id
+    InvokePktMon -Arguments @('filter','add',$FilterName,'-t','UDP','-i','10.253.3.1','10.253.3.2','-p',[string]$CapturePort) | Write-Output
     $OwnedFilters = InvokePktMon -Arguments @('filter','list')
-    @{FilterName=$FilterName; FilterList=$OwnedFilters; Etl=$Etl; Components=$CaptureComponents;
-      CaptureLayers=@('Mellanox miniport','TCP/IPv4 - L2')} | ConvertTo-Json | Set-Content -LiteralPath $Marker -Encoding UTF8
-    $StartArguments = @('start','--capture','--comp') + @($CaptureComponents | ForEach-Object {[string]$_}) +
-        @('--pkt-size','0','--file-name',$Etl,'--file-size','64','--log-mode','circular')
+    @{FilterName=$FilterName; FilterList=$OwnedFilters; Etl=$Etl; Components=@($CaptureComponent);
+      CaptureLayers=@('Mellanox miniport'); ComponentId=$CaptureComponent;
+      MiniportIfIndex=$Adapter.ifIndex; CapturePort=$CapturePort} | ConvertTo-Json | Set-Content -LiteralPath $Marker -Encoding UTF8
+    $StartArguments = @('start','--capture','--comp',[string]$CaptureComponent,
+        '--pkt-size','0','--file-name',$Etl,'--file-size','64','--log-mode','circular')
     InvokePktMon -Arguments $StartArguments | Write-Output
     $ActiveStatus = InvokePktMon -Arguments @('status')
     if ($ActiveStatus -match 'Packet Monitor is not running' -or !(Test-Path -LiteralPath $Etl)) { throw 'Packet Monitor did not become active.' }
@@ -57,6 +58,7 @@ if ($Action -eq 'Start') {
     # Startup required zero filters, so the unchanged list contains only this task's filter.
     InvokePktMon -Arguments @('filter','remove') | Write-Output
     if (Test-Path -LiteralPath $Owned.Etl) {
-        InvokePktMon -Arguments @('etl2pcap',$Owned.Etl,'--out',(Join-Path $EvidenceDir 'worker-capture.pcapng')) | Write-Output
+        InvokePktMon -Arguments @('etl2pcap',$Owned.Etl,'--out',(Join-Path $EvidenceDir 'worker-capture.pcapng'),
+                                  '--component-id',[string]$Owned.ComponentId) | Write-Output
     }
 }

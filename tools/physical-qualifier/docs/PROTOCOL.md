@@ -97,6 +97,15 @@ Local probe deadline is 25 seconds, server-live detection 6 seconds, hook execut
    A new attempt needs a new run/config/output directory, with no automatic retry.
 
 Local success requires exit 0, probe readiness PASS and probe cleanup `good=1`.
+In the pinned readiness probe, client `clean_remote_shutdown=1` means the client
+reached `GameSessionStatus::Ready` and then observed the GameSession failure text
+`Game server connection closed`. The server reports zero for that field by
+construction; it is not a missing server-side client-close acknowledgement. The
+server checks that the ready-peer count stays stable for one second, then closes
+its session. Require the client's post-Ready remote-close condition and both
+endpoints' cleanup; do not promote the server diagnostic into a new acceptance
+gate. These are qualification-probe semantics, not production networking changes.
+
 Overall readiness requires both endpoint results. Packet tuples and simultaneous
 live-listener timing still require capture/log reconciliation; coordinator success
 does not replace the canonical one-client gate or imply structural service PASS.
@@ -123,11 +132,41 @@ authorizes one attempt within the previously authorized experiment; do not arm t
 helpers just to inspect or deploy them. No GO/SERVER LIVE chat relay is needed.
 
 The stock worker hook `worker/PktMonCapture.ps1 <EvidenceDir> Start|Stop` requires
-local elevation, verifies the Mellanox static link, and discovers both its current
-Miniport and TCP/IPv4 L2 component by the Mellanox ifIndex. Packet Monitor captures
-at those two layers to include both NIC transmit and receive visibility; its UDP
-filter still requires both fiber peer addresses and port 39450. The capture is
-full-packet, circular, and bounded to 64 MiB.
+local elevation, verifies the Mellanox static link, and resolves exactly one
+`mlx5.sys` miniport component by its current ifIndex. Packet Monitor captures on
+that one miniport edge. Its filter requires both fiber addresses, UDP and port
+39450. Capture is full-packet, circular and bounded to 64 MiB; ETL-to-pcapng
+export is restricted to the same component ID. An elevated worker-local test may
+select only the fixed synthetic port 39452 as a third hook argument; the service
+does not expose that argument and always uses the default GNS port 39450.
+
+The 2026-09-28 application-only diagnostic on UDP 39452 showed why the prior
+synthetic gate `82b2a37d-f998-4062-92a9-f33a41eca9f8` did not qualify capture:
+the worker Python listener had no matching inbound firewall allowance. The
+earlier ETL contains one inbound Ethernet snapshot at aggregate component 75,
+three IP-layer drop reports at component 89, and no flow at the named IPv4 L2
+secondary component 81. Its component-81 pcap export was empty because that
+component saw no flow; the drop reports are not three lost fiber packets. A
+temporary allowance limited to the Python runtime, UDP 39452, the two fiber
+addresses and `Ethernet 4` let the next application-only exchange deliver five
+requests and five replies. That rule was removed after the test.
+
+Topology run `941a40a5-bbe1-408f-9bae-3a32a07c50e4` used the same bounded
+application exchange and selected the Mellanox binding stack. Miniport 13 and
+aggregate TCP/IP 75 each observed exactly five Rx and five Tx packets, one copy
+of each synthetic payload. IPv4 L2 secondary component 81 observed zero, while
+the two edges of WFP Native Filter 30 observed each packet twice. Converting all
+selected components yielded 40 frames for ten datagrams; component-13-only
+conversion yielded exactly ten and zero Packet Monitor drop reports. Component
+IDs can change, so the hook resolves the miniport ID at each start rather than
+pinning `13`. The corrected hook passed the bounded direct candidate run
+`965f65e9-da22-4fea-becf-da8356f0e60c`: all five application requests and
+five replies were delivered, and the miniport-only export contained each
+direction exactly five times with no unexplained duplicates or capture drops.
+The worker service remains the same fixed-operation, 90-second-lease binary;
+its installed hook and hash pin are both
+`73A840FCA570F676B06D76457FF719301BBB4C93F9865A25B19EE1671EE63E3E`.
+The prior hook is retained in the protected worker-local rollback backup.
 Stop uses a task-owned marker and requires matching ETL session/filter inventory
 before stopping or clearing the sole owned filter. Changed ownership aborts cleanup
 and preserves unrelated state for the local worker operator. Conversion packet and
@@ -137,6 +176,32 @@ this fixed hook unchanged; it does not add or remove packet directions. No secur
 policy is changed. Do not force-kill helpers: a kill or host crash cannot run finally
 cleanup; the worker must inspect the recorded capture ownership marker locally
 before recovering a leftover Packet Monitor session.
+
+The locally installed Foundation 2B lifecycle catalog is
+`physical_qualifier_lifecycle.py`, with the ordered workflow in
+`workflows/one-client-lifecycle.json`. The client starts its pinned legacy
+coordinator and endpoint, the worker runs its locally approved endpoint, and
+the client collects both results. Agent Coordinator carries only versioned
+capability names and result metadata; the physical commands and run files stay
+endpoint-local.
+
+The sole fresh lifecycle attempt prepared physical run
+`58f15af7-46b7-462b-af78-df88a8db428d` and used Agent Coordinator run
+`8267f8a4-7e78-4407-a2ad-9583fbfc46ac`. Both Codex agents woke, pulled
+fresh assignments and registered. The first client capability failed before
+the legacy coordinator could listen: its child reported `WinError 5` while
+creating the client `coordinator-evidence` directory beneath
+`C:\Sandbox\Codex\Evidence\physical-qualifier\lifecycle-0e2f3637519c4425`.
+The Codex endpoint sandbox could read the staged local config but lacked write
+access to that evidence parent. The host aborted; neither probe nor capture
+started. There was no GNS or GameSession observation and no packet count to
+qualify. The agents and daemons stopped, the SSH tunnel was closed, Packet
+Monitor had no session or filters, and the service remained running and idle.
+This attempt is **FAIL** and must not be retried with its used identity.
+The next task must stage client evidence in a directory writable by the
+bounded Codex endpoint, verify that write access before wake, and then make
+one entirely fresh lifecycle attempt. KI-006 remains OPEN and Foundation 3L B
+remains PARTIALLY READY.
 
 ### Optional Windows capture service
 
