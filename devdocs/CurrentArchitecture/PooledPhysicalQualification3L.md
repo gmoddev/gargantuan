@@ -59,8 +59,10 @@ slot 4. Sampled per-peer GNS pending peaked at 522,019 B, unacked at
 maxima; canonical per-peer and aggregate sustained service, fairness and
 full-window recovery are **not measured**.
 
-Client abort cleanup now left a structurally complete pcapng: 3,640 outbound
-and 19,109 inbound qualified UDP frames across all four source ports. Worker
+The retained client pcapng is structurally complete: 3,640 outbound and
+19,109 inbound qualified UDP frames across all four source ports. Its
+client-result capability did not run after the host aborted, so no client
+result file or as-run capture acceptance exists. Worker
 capture `stop` did **not** acknowledge completion. The installed generic
 service killed its hash-pinned export hook at 15 seconds on this 30 MiB ETL;
 the endpoint recorded `CaptureStop hook failed` and no pcapng at result time.
