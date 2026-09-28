@@ -6,6 +6,47 @@ last_verified: 2026-09-28
 
 # Foundation 3L pooled physical qualification attempt
 
+## Capture runtime qualified; strengthened workload still blocked (2026-09-28)
+
+The worker's `GargantuanPhysicalQualifierCapture` service now runs the pinned
+30-second hook-bound helper. Its installed executable SHA-256 is
+`463934849064F7DD51FEAB73B8471FD9DBB6CAF3D9C95EBB38A8D65B2EFCA664`.
+The installed hook remains
+`231FAE4B89155630138BDC9ABBB1BB526C3B322D0BE2667D2A2E8B5CFEC1375D`.
+The source-matched helper suite passed, including a 16-second stop and the
+90-second lease/security checks. An installed-service capture-only smoke
+exported a 41,418,752-byte ETL in 26.656 seconds to a complete
+32,233,120-byte pcapng with 27,006 blocks (SHA-256
+`AAACD86F92FC62FD92210E87ECE7C0A3439A03734303ED08252F61A2720987EF`).
+The service returned to running/idle; Packet Monitor and Windows trace were
+stopped, and the physical probe pins were not changed. The rollback copy is
+under `C:\Sandbox\Codex\Artifacts\gargantuan-3l-sustained-20260928\capture-service\installed-backup`.
+
+Worker-only four-peer loopback diagnostics tested barriered, exact-512-KiB
+structural groups with a distinct journal tail and an unchanged 16-MiB/s
+per-peer floor. Socket-free analyzer regressions cover feedable below-floor,
+unprimed-ACK, and drained-GNS-queue intervals. A two-group wave exceeded the
+4–15-ms selected interval while the server processed structural work. A
+32-wave one-group variant reached four active grants and valid first-send
+rates above the floor, but did **not** form three batches of three consecutive
+four-peer windows. One run ended after wave 5 with an ACK-empty selected
+interval and a terminal client submission; a traced run reached wave 26 but
+had only one two-window batch. That run identified the terminal submission as
+GNS `k_EResultLimitExceeded` on a 60-byte unreliable realtime message from
+a non-producer, which the current transport maps to terminal
+`ResourceExhausted`. A 4-ms diagnostic stopped on an early service-feedback
+failure. These are isolated diagnostics, not physical qualification, and do
+not establish a production service-floor failure. Candidate source and traces
+are retained under `C:\Sandbox\Codex\Artifacts\gargantuan-3l-sustained-20260928`.
+
+The workload has not independently qualified its sustained four-peer backlog
+window without an unrelated terminal submission. **No fresh physical Phase 1
+attempt was launched in this task.** The installed physical probe is still
+the prior SHA-256 `1E25676BDF1DA6ED2EA8A28AB183F519D18A4802BD00E7F6730CFA77D395BD5A`;
+no endpoint or capture was taken over. KI-006 stays OPEN, Foundation 3L
+remains B — PARTIALLY READY, and no 3M gate was started. The historical
+15-second service statements below describe the earlier physical attempt.
+
 ## One diagnostic Phase 1 attempt: no sustained four-grant window (2026-09-28)
 
 The single permitted diagnostic attempt used physical run

@@ -85,6 +85,16 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+Current 2026-09-28 preflight: the worker's updated 30-second capture service
+passed installed-runtime and 26.656-second ETL export qualification. The
+32-wave four-peer workload candidate remains unqualified: its isolated
+loopback runs did not achieve three sustained four-peer batches, and a traced
+run hit a terminal GNS `k_EResultLimitExceeded` on a 60-byte unreliable
+non-producer message. No fresh physical Phase 1 attempt was launched and the
+physical probe pin was unchanged. The 16-MiB/s floor, POOLED_SERVICE profile,
+and all later acceptance gates remain unchanged. [Current receipt](devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md#capture-runtime-qualified-strengthened-workload-still-blocked-2026-09-28).
+KI-006 remains OPEN; Foundation 3L remains B — PARTIALLY READY.
+
 Single diagnostic Phase 1 attempt, 2026-09-28: **OPEN / UNDERFED QUALIFICATION
 WINDOW; CAPTURE EXPORT FAILED AS RUN.** Four real clients reached Ready and
 four grants activated, but 4,449 sampled journal-demand rows yielded only

@@ -24,8 +24,16 @@ producer flags at zero and remains `FOUR_CLIENT_READINESS_ONLY`.
 Abort cleanup also waits for the timed client capture to close its final pcapng
 block. Worker capture stop waits up to 45 seconds for the service's bounded
 completed-export response before direction validation; failure to acknowledge
-stays a cleanup error. The generic helper source now bounds its hook at 30
-seconds; the installed worker service still has the prior 15-second bound.
+stays a cleanup error. The generic helper source bounds its hook at 30
+seconds. On 2026-09-28 the worker's installed service was updated to that
+bound and qualified with a 26.656-second capture export producing a complete
+32,233,120-byte pcapng. The installed executable SHA-256 is
+`463934849064F7DD51FEAB73B8471FD9DBB6CAF3D9C95EBB38A8D65B2EFCA664`;
+the capture hook, service config, authorized SID, evidence root, and Python
+lease were unchanged. The current 32-wave qualification workload has **not**
+passed its isolated four-peer preflight, so no fresh physical Phase 1 attempt
+was launched with it. The [physical receipt](../../devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md)
+records the blocking observations.
 The adapter's candidate provenance is base
 `14644a369f9e7bfb9a81c21354adae62902d63d7`, overlay
 `2ED31AE67E0F99619940BBB130CD451DB37FEF3A5CEEDAB475E682C3FBEE7003`,
