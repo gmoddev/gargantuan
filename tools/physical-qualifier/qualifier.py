@@ -32,13 +32,14 @@ CLIENT_ADDRESS = "10.253.3.1"
 SERVER_PORT = 39450
 
 
-def CaptureDirections(File, Role):
+def CaptureDirections(File, Role, IncludeTuples=False):
     """Count the qualified UDP tuple directions in an Ethernet pcapng file."""
     LocalAddress, PeerAddress = ((CLIENT_ADDRESS, SERVER_ADDRESS) if Role == "CLIENT"
                                  else (SERVER_ADDRESS, CLIENT_ADDRESS))
     Interfaces = []
     Endian = None
     Counts = {"Outbound": 0, "Inbound": 0}
+    Tuples = {}
     with open(File, "rb") as Stream:
         Data = Stream.read()
     Offset = 0
@@ -92,28 +93,36 @@ def CaptureDirections(File, Role):
                             Source = str(ipaddress.IPv4Address(Packet[Layer3 + 12:Layer3 + 16]))
                             Destination = str(ipaddress.IPv4Address(Packet[Layer3 + 16:Layer3 + 20]))
                             SourcePort, DestinationPort = struct.unpack_from(">HH", Packet, Layer3 + HeaderLength)
+                            Direction = None
+                            ClientPort = None
                             if Role == "CLIENT":
                                 if (Source == LocalAddress and Destination == PeerAddress and
                                         DestinationPort == SERVER_PORT):
-                                    Counts["Outbound"] += 1
+                                    Direction, ClientPort = "Outbound", SourcePort
                                 elif (Source == PeerAddress and Destination == LocalAddress and
                                       SourcePort == SERVER_PORT):
-                                    Counts["Inbound"] += 1
+                                    Direction, ClientPort = "Inbound", DestinationPort
                             else:
                                 if (Source == LocalAddress and Destination == PeerAddress and
                                         SourcePort == SERVER_PORT):
-                                    Counts["Outbound"] += 1
+                                    Direction, ClientPort = "Outbound", DestinationPort
                                 elif (Source == PeerAddress and Destination == LocalAddress and
                                       DestinationPort == SERVER_PORT):
-                                    Counts["Inbound"] += 1
+                                    Direction, ClientPort = "Inbound", SourcePort
+                            if Direction:
+                                Counts[Direction] += 1
+                                Tuple = Tuples.setdefault(str(ClientPort), {"Outbound": 0, "Inbound": 0})
+                                Tuple[Direction] += 1
         Offset += BlockLength
     if Offset != len(Data) or not Interfaces:
         raise ValueError("pcapng capture is incomplete or has no interfaces")
-    return Counts
+    return (Counts, Tuples) if IncludeTuples else Counts
 
 
 def ValidateConfig(Config):
     uuid.UUID(Config["RunId"])
+    if Config.get("ReadinessClients", 1) not in (1, 4):
+        raise ValueError("readiness requires exactly one or four clients")
     if len(Config["Token"]) != 64:
         raise ValueError("expected a 256-bit token")
     for Address in [Config["CoordinatorHost"], *Config["PeerIps"].values()]:
@@ -133,10 +142,30 @@ def Coordinator(Config):
     return Legacy.Coordinator(Config, ValidateConfig)
 
 
+class ProbeGroup:
+    """Expose completion only after all four locally owned client probes exit."""
+
+    def __init__(self, Processes):
+        self.Processes = tuple(Processes)
+        self.pid = self.Processes[0].pid
+
+    def poll(self):
+        Codes = [Process.poll() for Process in self.Processes]
+        if any(Code is None for Code in Codes):
+            return None
+        return next((Code for Code in Codes if Code), 0)
+
+    @property
+    def returncode(self):
+        return self.poll()
+
+
 class LocalRun:
     def __init__(self, Config, Log):
         self.Config, self.Log = Config, Log
         self.Probe = self.Capture = None
+        self.Probes = []
+        self.ClientNonces = []
         self.CaptureArmed = False
         self.Files = []
         self.FinalizeAt = None
@@ -153,11 +182,12 @@ class LocalRun:
         if (Manifest["BaseHead"] != BASE_HEAD or Manifest["OverlayArchiveSha256"].upper() != OVERLAY or
                 Manifest["GnsPin"] != GNS_PIN):
             raise ValueError("source manifest provenance mismatch")
-        if Config["ProbeArgs"] != (["server", "10.253.3.2", "39450", "1", "--readiness-smoke"]
+        Clients = Config.get("ReadinessClients", 1)
+        if Config["ProbeArgs"] != (["server", "10.253.3.2", "39450", str(Clients), "--readiness-smoke"]
                                   if Config["Role"] == "SERVER" else
                                   ["client", "10.253.3.2", "39450", str(Config["Nonce"]), "0", "--readiness-smoke"]):
-            raise ValueError("only the one-client readiness smoke is supported")
-        if Config["Role"] == "CLIENT" and not 1 <= Config["Nonce"] <= 2147483647:
+            raise ValueError("only the fixed readiness smoke is supported")
+        if Config["Role"] == "CLIENT" and not 1 <= Config["Nonce"] <= 2147483648 - Clients:
             raise ValueError("invalid nonce")
         if not Path(Config["WorkDir"]).is_dir():
             raise ValueError("missing runtime working directory")
@@ -219,16 +249,29 @@ class LocalRun:
 
     def Start(self):
         Env = dict(os.environ, GARGANTUAN_GNS_LIFECYCLE_TRACE="1")
-        Output = (self.Log.Directory / "probe.stdout.log").open("wb")
-        Error = (self.Log.Directory / "probe.stderr.log").open("wb")
-        self.Files.extend((Output, Error))
-        self.Probe = subprocess.Popen([self.Config["ProbePath"], *self.Config["ProbeArgs"]],
-                                      cwd=self.Config["WorkDir"], env=Env, stdout=Output, stderr=Error, **Hidden())
         self.Started = time.monotonic()
-        self.Log.Write("PROBE_STARTED", Pid=self.Probe.pid, Args=self.Config["ProbeArgs"])
+        Clients = self.Config.get("ReadinessClients", 1)
+        Nonces = (range(self.Config["Nonce"], self.Config["Nonce"] + Clients)
+                  if self.Config["Role"] == "CLIENT" else (None,))
+        for Nonce in Nonces:
+            Args = list(self.Config["ProbeArgs"])
+            if Nonce is not None:
+                Args[3] = str(Nonce)
+                self.ClientNonces.append(Nonce)
+            Stem = "probe" if Clients == 1 else ("probe-server" if Nonce is None else "probe-client-" + str(Nonce))
+            Output = (self.Log.Directory / (Stem + ".stdout.log")).open("wb")
+            Error = (self.Log.Directory / (Stem + ".stderr.log")).open("wb")
+            self.Files.extend((Output, Error))
+            Process = subprocess.Popen([self.Config["ProbePath"], *Args],
+                                       cwd=self.Config["WorkDir"], env=Env,
+                                       stdout=Output, stderr=Error, **Hidden())
+            self.Probes.append(Process)
+            self.Log.Write("PROBE_STARTED", Pid=Process.pid, Args=Args)
+        self.Probe = ProbeGroup(self.Probes) if Clients == 4 and self.Config["Role"] == "CLIENT" else self.Probes[0]
 
     def ServerLive(self):
-        Text = (self.Log.Directory / "probe.stderr.log").read_text(errors="replace")
+        Stem = "probe-server" if self.Config.get("ReadinessClients", 1) == 4 else "probe"
+        Text = (self.Log.Directory / (Stem + ".stderr.log")).read_text(errors="replace")
         if "event=listening" not in Text:
             return False
         # Verify the actual socket is owned by this locally launched PID.
@@ -245,6 +288,10 @@ class LocalRun:
                 raise ValueError("probe/capture log bound exceeded")
         if self.Capture is not None and self.Capture.poll() is not None:
             raise RuntimeError("capture exited before probe finalization")
+        if self.Config.get("ReadinessClients", 1) == 4 and self.Config["Role"] == "CLIENT":
+            for Nonce, Process in zip(self.ClientNonces, self.Probes):
+                if Process.poll() not in (None, 0):
+                    raise RuntimeError("client probe exited unsuccessfully: " + str(Nonce))
         if self.Probe is not None and self.Probe.poll() is None:
             if time.monotonic() - self.Started > 25:
                 raise TimeoutError("local one-client probe deadline exceeded")
@@ -252,11 +299,33 @@ class LocalRun:
                 raise TimeoutError("probe did not finish after CLIENT_DONE")
 
     def Result(self):
-        Stdout = (self.Log.Directory / "probe.stdout.log").read_text(errors="replace")
-        Stderr = (self.Log.Directory / "probe.stderr.log").read_text(errors="replace")
+        Clients = self.Config.get("ReadinessClients", 1)
+        if Clients == 4 and self.Config["Role"] == "CLIENT":
+            Reports = []
+            for Nonce, Process in zip(self.ClientNonces, self.Probes):
+                Stem = "probe-client-" + str(Nonce)
+                Stdout = (self.Log.Directory / (Stem + ".stdout.log")).read_text(errors="replace")
+                Stderr = (self.Log.Directory / (Stem + ".stderr.log")).read_text(errors="replace")
+                Passed = (Process.returncode == 0 and
+                          "[Probe:Readiness] result=pass role=client ready=1 expected=1 clean_remote_shutdown=1" in Stdout and
+                          "[Probe:Cleanup] good=1" in Stdout)
+                Reports.append((Passed, Stderr))
+            return {"Classification": "FOUR_CLIENT_READINESS_ONLY",
+                    "Success": len(Reports) == 4 and all(Passed for Passed, _ in Reports),
+                    "ExitCode": self.Probe.returncode, "EvidencePath": str(self.Log.Directory),
+                    "Pid": self.Probe.pid, "ClientNonces": self.ClientNonces,
+                    "Detail": "\n".join(str(Nonce) + ": " + Stderr[-400:]
+                                        for Nonce, (_, Stderr) in zip(self.ClientNonces, Reports))[-2048:]}
+        Stem = "probe-server" if Clients == 4 else "probe"
+        Stdout = (self.Log.Directory / (Stem + ".stdout.log")).read_text(errors="replace")
+        Stderr = (self.Log.Directory / (Stem + ".stderr.log")).read_text(errors="replace")
         Success = (self.Probe.returncode == 0 and "[Probe:Readiness] result=pass" in Stdout and
                    "[Probe:Cleanup] good=1" in Stdout)
-        return {"Success": Success, "ExitCode": self.Probe.returncode,
+        if Clients == 4:
+            Success = (Success and
+                       "[Probe:Readiness] result=pass role=server ready=4 expected=4" in Stdout)
+        return {**({"Classification": "FOUR_CLIENT_READINESS_ONLY"} if Clients == 4 else {}),
+                "Success": Success, "ExitCode": self.Probe.returncode,
                 "EvidencePath": str(self.Log.Directory), "Pid": self.Probe.pid,
                 "Detail": Stderr[-2048:]}
 
@@ -264,7 +333,8 @@ class LocalRun:
         if self.CleanupResult is not None:
             return list(self.CleanupResult)
         Errors = []
-        for Process in (self.Probe, self.Capture):
+        Owned = list(self.Probes) if self.Probes else ([self.Probe] if self.Probe else [])
+        for Process in [*Owned, self.Capture]:
             if Process is not None and Process.poll() is None:
                 try:
                     Process.terminate()
@@ -283,10 +353,17 @@ class LocalRun:
         if self.CaptureArmed:
             CaptureName = "client.pcapng" if self.Config.get("CaptureCommand") else "worker-capture.pcapng"
             try:
-                Directions = CaptureDirections(self.Log.Directory / CaptureName, self.Config["Role"])
+                Four = self.Config.get("ReadinessClients", 1) == 4
+                Capture = CaptureDirections(self.Log.Directory / CaptureName, self.Config["Role"], Four)
+                Directions, Tuples = Capture if Four else (Capture, None)
                 self.Log.Write("CAPTURE_DIRECTIONS", **Directions)
                 if not Directions["Outbound"] or not Directions["Inbound"]:
                     Errors.append("capture missed a qualified direction: " + json.dumps(Directions, sort_keys=True))
+                if Four:
+                    self.Log.Write("CAPTURE_TUPLES", Tuples=Tuples)
+                    if len(Tuples) != 4 or any(not Row["Outbound"] or not Row["Inbound"]
+                                               for Row in Tuples.values()):
+                        Errors.append("capture lacks four bidirectional client tuples")
             except Exception as Error:
                 Errors.append("capture direction validation failed: " + str(Error))
         for File in self.Files:
@@ -301,6 +378,9 @@ def Endpoint(Config):
 
 
 def Stage(Args):
+    Clients = getattr(Args, "clients", 1)
+    if Clients not in (1, 4) or not 1 <= Args.nonce <= 2147483648 - Clients:
+        raise ValueError("invalid readiness client count or nonce range")
     if Args.server_capture_client:
         if Args.server_capture_start or Args.server_capture_stop:
             raise ValueError("choose the privileged capture client or the existing hook pair")
@@ -312,6 +392,8 @@ def Stage(Args):
               "CoordinatorHost": Args.client_lan, "PeerIps": {"CLIENT": Args.client_lan, "SERVER": Args.server_lan},
               "Port": Args.port, "Endpoint": "10.253.3.2:39450", "ArtifactSHA256": PROBE_SHA,
               "StageTimeout": 300, "RunTimeout": 60}
+    if Clients == 4:
+        Shared["ReadinessClients"] = 4
     ValidateConfig(Shared)
     Save(Directory / "coordinator.json", {**Shared, "EvidenceDir": str(Directory / "coordinator-evidence")})
     ClientBundle = Args.client_bundle
@@ -331,7 +413,7 @@ def Stage(Args):
                    ["powershell.exe", "-NoProfile", "-NonInteractive", "-File", Args.server_capture_stop, "{EvidenceDir}", "Stop"])
     Server = {**Shared, "Role": "SERVER", "ProbePath": ServerBundle + r"\gargantuan_physical_gns_funding_probe.exe",
               "SourceManifest": ServerBundle + r"\source-manifest.json", "WorkDir": ServerBundle,
-              "ProbeArgs": ["server", "10.253.3.2", "39450", "1", "--readiness-smoke"],
+              "ProbeArgs": ["server", "10.253.3.2", "39450", str(Clients), "--readiness-smoke"],
               "EvidenceDir": Args.server_evidence,
               "CaptureStart": CaptureStart,
               "CaptureStop": CaptureStop}
@@ -354,6 +436,7 @@ def Main():
     Child.add_argument("--server-capture-stop")
     Child.add_argument("--port", type=int, default=39451)
     Child.add_argument("--nonce", type=int, default=92707)
+    Child.add_argument("--clients", type=int, choices=(1, 4), default=1)
     Args = Parser.parse_args()
     try:
         if Args.mode == "stage":

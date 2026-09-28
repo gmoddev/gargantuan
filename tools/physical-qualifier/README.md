@@ -23,11 +23,10 @@ fixed SSH forward/reverse and fresh-run gates remain. Both endpoint daemon
 configs must independently select a temporary named interactive Codex profile;
 the stage flag does not elevate or change a daemon. The default restricted path
 remains available and its Foundation 2B qualification is a separate claim.
-The September 28 interactive run reached GNS/GameSession Ready but failed the
-worker inbound capture gate. A later real-GNS capture-only proof passed after
-correcting the Packet Monitor filter; the next fresh lifecycle run stopped at
-Codex agent startup before physical capture. See the
-[receipt](../../devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md).
+The September 28 one-client physical retry passed under the temporary dedicated
+Codex profile file format. The
+[receipt](../../devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md)
+retains its exact run IDs, packet counts and cleanup evidence.
 Bootstrap downloads to an ignored local directory; import fails closed if sources
 are absent/changed. It does not install services, change network policy, replace
 physical-PC tooling, or run captures/probes. Existing installed standalone copies
@@ -43,7 +42,15 @@ The generic schema example is not a Foundation 3L workflow. This adapter keeps t
 legacy v1 readiness profile, including early-server-result handling. The local
 stage writes three config files; the project-specific Foundation 2B lifecycle
 catalog and [one-client workflow](workflows/one-client-lifecycle.json) wrap that
-legacy barrier without transmitting physical commands. Its first full run
+legacy barrier without transmitting physical commands. The separately selected
+[four-client workflow](workflows/four-client-lifecycle.json) uses the same
+barrier and fixed probe with `stage --clients 4`: one server expects four actual
+clients, while the client endpoint launches four distinct nonces. Its local
+result waits for all four clean closes and both captures must contain four
+distinct bidirectional source-port tuples. Default staging remains one client.
+The first four-client physical attempt reached all four application readiness
+checks but failed the client and worker capture gates; the mode is not physically
+qualified. The one-client catalog's first full run
 registered both agents but aborted before capture or probe because the client
 Codex sandbox could not create its staged evidence directory. The next attempt
 proved the client fix but found the worker's separate evidence ACL missing its
@@ -84,7 +91,7 @@ started in that historical run, which was not retried. A later fresh run
 passed both tunnel handshakes and registration, then failed on the physical
 client-to-worker GNS connection with zero qualified packets in either capture.
 Its [receipt](../../devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md)
-records the one-run failure and cleanup. Four-client readiness remains gated
-on a later one-client PASS.
+records that historical failure and cleanup. The later one-client PASS and
+four-client capture stop are recorded in the current physical receipt.
 
 POOLED_SERVICE, physical gates, KI-006, Foundation 3L status and 3M are unchanged.

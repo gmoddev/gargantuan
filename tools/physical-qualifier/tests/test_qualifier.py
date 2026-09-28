@@ -81,6 +81,32 @@ class QualificationTests(unittest.TestCase):
             Q.Stage(Args)
         self.assertFalse(Path(Args.output).exists())
 
+    def test_four_client_stage_keeps_fixed_probe_and_capture_with_unique_nonce_range(self):
+        Root = self.Root / "four-stage"
+        Args = SimpleNamespace(
+            output=str(Root), client_lan="192.168.0.68", server_lan="192.168.0.108",
+            port=39451, nonce=92707, clients=4, client_bundle=r"C:\client",
+            server_bundle=r"C:\server", server_evidence=r"C:\worker-evidence\four",
+            capture_device=r"\Device\NPF_{5BD66A53-0026-4CAD-9505-0713DD14498A}",
+            server_capture_client=r"C:\Program Files\Gargantuan\PhysicalQualifierCapture\PhysicalQualifier.CaptureService.exe",
+            server_capture_start=None, server_capture_stop=None)
+        Q.Stage(Args)
+        Client = json.loads((Root / "client.json").read_text())
+        Server = json.loads((Root / "server.json").read_text())
+        self.assertEqual(4, Client["ReadinessClients"])
+        self.assertEqual(4, Server["ReadinessClients"])
+        self.assertEqual(["server", "10.253.3.2", "39450", "4", "--readiness-smoke"],
+                         Server["ProbeArgs"])
+        self.assertEqual(["client", "10.253.3.2", "39450", "92707", "0", "--readiness-smoke"],
+                         Client["ProbeArgs"])
+        self.assertEqual("{EvidenceDir}/client.pcapng", Client["CaptureCommand"][-1])
+        self.assertEqual(Q.PROBE_SHA, Server["ArtifactSHA256"])
+        Args.nonce = 2147483645
+        Args.output = str(self.Root / "invalid-four")
+        with self.assertRaisesRegex(ValueError, "nonce range"):
+            Q.Stage(Args)
+        self.assertFalse(Path(Args.output).exists())
+
     def tearDown(self):
         for Link in self.Links:
             Link.Socket.close()
@@ -286,6 +312,93 @@ class QualificationTests(unittest.TestCase):
         ])
         self.assertEqual({"Outbound": 1, "Inbound": 1}, Q.CaptureDirections(Capture, "CLIENT"))
         self.assertEqual({"Outbound": 1, "Inbound": 1}, Q.CaptureDirections(Capture, "SERVER"))
+
+    def test_four_client_capture_requires_four_bidirectional_source_ports(self):
+        Evidence = self.Root / "four-capture"
+        Log = Q.Journal(Evidence)
+        Run = Q.LocalRun({"Role": "CLIENT", "ReadinessClients": 4,
+                          "CaptureCommand": ["test-only"]}, Log)
+        Run.CaptureArmed = True
+        Packets = []
+        for Port in range(51820, 51824):
+            Packets.extend((EthernetUdp("10.253.3.1", Port, "10.253.3.2", 39450),
+                            EthernetUdp("10.253.3.2", 39450, "10.253.3.1", Port)))
+        WritePcapNg(Evidence / "client.pcapng", Packets)
+        self.assertEqual([], Run.Cleanup())
+        Counts, Tuples = Q.CaptureDirections(Evidence / "client.pcapng", "CLIENT", True)
+        self.assertEqual({"Outbound": 4, "Inbound": 4}, Counts)
+        self.assertEqual(4, len(Tuples))
+        Log.Close({"Success": True})
+
+        Missing = self.Root / "four-capture-missing"
+        Log = Q.Journal(Missing)
+        Run = Q.LocalRun({"Role": "SERVER", "ReadinessClients": 4,
+                          "CaptureStart": ["start"], "CaptureStop": ["stop"]}, Log)
+        Run.CaptureArmed = True
+        Run.Hook = mock.Mock()
+        WritePcapNg(Missing / "worker-capture.pcapng", Packets[:-1])
+        self.assertIn("capture lacks four bidirectional client tuples", Run.Cleanup())
+        Log.Close({"Success": False})
+
+    def test_four_client_capture_rejects_a_partial_final_pcapng_block(self):
+        Evidence = self.Root / "four-truncated"
+        Log = Q.Journal(Evidence)
+        Run = Q.LocalRun({"Role": "CLIENT", "ReadinessClients": 4,
+                          "CaptureCommand": ["test-only"]}, Log)
+        Run.CaptureArmed = True
+        Packets = []
+        for Port in range(51820, 51824):
+            Packets.extend((EthernetUdp("10.253.3.1", Port, "10.253.3.2", 39450),
+                            EthernetUdp("10.253.3.2", 39450, "10.253.3.1", Port)))
+        Capture = Evidence / "client.pcapng"
+        WritePcapNg(Capture, Packets)
+        Capture.write_bytes(Capture.read_bytes()[:-5])
+        self.assertIn("capture direction validation failed: pcapng block length is malformed",
+                      Run.Cleanup())
+        Log.Close({"Success": False})
+
+    def test_four_client_probe_group_waits_for_every_unique_client_and_fails_closed(self):
+        class FakeProcess:
+            def __init__(self, Pid):
+                self.pid = Pid
+                self.returncode = None
+
+            def poll(self):
+                return self.returncode
+
+            def terminate(self):
+                self.returncode = -15
+
+            def wait(self, timeout=None):
+                return self.returncode
+
+        Evidence = self.Root / "four-probes"
+        Log = Q.Journal(Evidence)
+        Config = {"Role": "CLIENT", "ReadinessClients": 4, "Nonce": 92707,
+                  "ProbePath": "fixed-probe", "ProbeArgs": ["client", "10.253.3.2", "39450", "92707", "0", "--readiness-smoke"],
+                  "WorkDir": str(self.Root)}
+        Run = Q.LocalRun(Config, Log)
+        Processes = [FakeProcess(100 + Index) for Index in range(4)]
+        with mock.patch.object(Q.subprocess, "Popen", side_effect=Processes) as Launch:
+            Run.Start()
+        self.assertEqual([92707, 92708, 92709, 92710], Run.ClientNonces)
+        self.assertEqual([str(Nonce) for Nonce in Run.ClientNonces],
+                         [Call.args[0][4] for Call in Launch.call_args_list])
+        Processes[0].returncode = 0
+        self.assertIsNone(Run.Probe.poll())
+        for Process in Processes[1:]:
+            Process.returncode = 0
+        for Nonce in Run.ClientNonces:
+            (Evidence / ("probe-client-" + str(Nonce) + ".stdout.log")).write_text(
+                "[Probe:Readiness] result=pass role=client ready=1 expected=1 clean_remote_shutdown=1\n"
+                "[Probe:Cleanup] good=1\n")
+        Result = Run.Result()
+        self.assertTrue(Result["Success"])
+        self.assertEqual("FOUR_CLIENT_READINESS_ONLY", Result["Classification"])
+        (Evidence / "probe-client-92710.stdout.log").write_text("[Probe:Readiness] result=fail\n")
+        self.assertFalse(Run.Result()["Success"])
+        self.assertEqual([], Run.Cleanup())
+        Log.Close({"Success": False})
 
     def test_cleanup_fails_when_capture_lacks_a_direction(self):
         Evidence = self.Root / "one-direction"

@@ -6,6 +6,24 @@ last_verified: 2026-09-28
 
 # Foundation 3L.3 diagnostic validation ledger
 
+## Four-client physical readiness capture stop (2026-09-28)
+
+The [physical receipt](PooledPhysicalQualification3L.md#four-client-application-readiness-passed-capture-gate-failed-2026-09-28)
+records one fresh physical run `4a0eedd7-a16a-4be2-a876-d618723db4ba` and
+lifecycle run `25e59048-71d5-4d3f-b716-fb8cd17b6f60`. Preflights and both
+tunnel handshakes passed. Four unique client nonces and four source-port tuples
+were observed; the server accepted four GNS connections and its canonical
+Ready/active 4/4 interval passed. All four clients reported Ready and clean
+close. The client raw pcapng ended mid-block; its valid-prefix diagnostic
+counted 584 outbound / 334 inbound but does not satisfy the capture gate. The
+worker miniport counted 155 outbound / 298 inbound, with zero inbound on two
+of the four ports, despite zero reported drops or lost events. Both physical
+endpoint results, the coordinator and lifecycle host failed; cleanup passed.
+The single run was not retried. **FOUR-CLIENT SIMULTANEOUS READINESS — FAIL;
+KI-006 OPEN; Foundation 3L B — PARTIALLY READY.** Next: bounded capture and
+classification attribution before a separately authorized fresh four-client
+attempt. Strengthened Phase 1, 3M and merge remain gated.
+
 ## One-client physical readiness passed (2026-09-28)
 
 The [physical receipt](PooledPhysicalQualification3L.md#one-client-physical-readiness-passed-2026-09-28)

@@ -1,10 +1,110 @@
 ---
-status: one-client-physical-readiness-passed
+status: four-client-physical-readiness-capture-unqualified
 owner: runtime-networking-and-runtime-host
 last_verified: 2026-09-28
 ---
 
 # Foundation 3L pooled physical qualification attempt
+
+## Four-client application readiness passed; capture gate failed (2026-09-28)
+
+The separately authorized four-client attempt used the one-client-qualified
+interactive Codex profile format, evidence roots, lifecycle daemons, fixed SSH
+forward/reverse topology, barrier, GNS probe binary and worker capture service.
+Before staging, both Mellanox interfaces were Up at 10 GbE and MTU 1500, with
+the existing `10.253.3.1/30` and `10.253.3.2/30` routes. The client dumpcap
+device matched the current Mellanox interface GUID. Both logged-in non-admin
+users passed harmless Codex startup and evidence-root write/read/rename/delete
+checks. The exact probe hash on both PCs remained
+`1E25676BDF1DA6ED2EA8A28AB183F519D18A4802BD00E7F6730CFA77D395BD5A`;
+the installed worker hook and service pin remained
+`2BC2E1430A29ACDE61DCCD35B943998FDB45D8E81E3E2A206D66158F334634D9`.
+UDP 39450 and lifecycle ports were unbound, Packet Monitor stopped with no
+filters, and the capture service running idle. The interactive path did not
+require the restricted worker socket broker. Fresh evidence/LAN checks and
+both run-bound SSH tunnel handshakes passed before agent assignment.
+
+Physical run `4a0eedd7-a16a-4be2-a876-d618723db4ba`, label
+`d67e466ebaf846d4`, used lifecycle run
+`25e59048-71d5-4d3f-b716-fb8cd17b6f60`. The staged qualifier source SHA-256
+was `E0BD1D6B947BA0F3BFE3300FA32C7CAC2D430541781B45B9FF5A042820B0C54A`;
+the four-client workflow hash was
+`e075e8675028d620e9b86ca9b13cc25caf8752993657171a19e9735cbcbe7a03`.
+Four distinct client probe
+identities, nonces **92707, 92708, 92709 and 92710**, launched once after
+`SERVER_LIVE`. The captures identify four source-port tuples:
+`10.253.3.1:{62242,62243,62244,62245} -> 10.253.3.2:39450`.
+The evidence does not establish a nonce-to-port mapping. The worker logged
+four incoming GNS callbacks, four successful accepts and four connected states
+for distinct server connection IDs `1325778377`, `1863519865`, `931456497`
+and `2580737725`;
+each client logged connected and its canonical clean close. Each client probe
+reported `ready=1`, `expected=1`, `clean_remote_shutdown=1` and cleanup
+`good=1`. The verified probe source requires the server's Ready-peer and active
+connection counts to be **4/4 simultaneously for at least one second** before
+reporting success; its server output was `ready=4`, `expected=4`, cleanup
+`good=1`. The strengthened structural-service workload was not run.
+
+The **first causal failure** was the client capture gate at `CLIENT_DONE`:
+dumpcap's raw pcapng ends 456 bytes into a declared 1,248-byte packet block,
+so the complete-file parser correctly rejected it as malformed. The raw file
+SHA-256 is
+`861E02886C5D9132BD85BB9819608E505E5D4BEFB7431853601D1E867EF0351B`;
+its manifest verifies the retained bytes. A separately saved valid-prefix
+diagnostic contains 918 complete packets, **584 outbound / 334 inbound**, with
+both directions on all four ports, but the invalid raw capture cannot satisfy
+the gate. Hard termination of dumpcap during cleanup is consistent with this
+partial final block; the exact write interruption is not independently proven.
+
+The worker capture independently failed the four-tuple gate. Its Mellanox
+miniport component 13, edge 1, produced 453 full-length, unique packet group
+IDs; ETL and pcap each have 453 packets, with zero reported drops or lost
+events. The qualified UDP counts by client source port were:
+
+| Source port | Worker outbound | Worker inbound |
+| --- | ---: | ---: |
+| 62242 | 38 | 148 |
+| 62243 | 40 | 150 |
+| 62244 | 38 | 0 |
+| 62245 | 39 | 0 |
+
+Thus the worker total was **155 outbound / 298 inbound**, but two actual client
+flows lacked worker ingress capture despite all four reaching GameSession Ready.
+The worker pcap SHA-256 is
+`60B015029453346C74334BF9AC88B9F9A6EC709FC9E088A38E7E9D3F0B0F8B53`;
+the ETL SHA-256 is
+`A38FDE4B5F3E625ED7EDA20A99696723FA2ACF6887C8E45DAEF77E09E253F364`.
+These observations do not establish packet loss or the cause of the missing
+miniport receive records.
+
+Both physical endpoint probe processes exited 0 but sent unsuccessful results
+because of their capture gates. The client reported its malformed capture
+first; the worker reported two missing inbound tuples next. The physical
+coordinator result and lifecycle host were unsuccessful. The delayed `FINALIZE`
+was legal; `RUN_DONE Success=false` completed the physical protocol and both
+lifecycle agents ended FAILED. The pinned generic coordinator still labels its
+top-level result `ONE_CLIENT_READINESS_ONLY` even though both endpoint results
+are `FOUR_CLIENT_READINESS_ONLY`; that classification mismatch also needs
+reconciliation before any four-client acceptance claim.
+
+The raw client and worker manifests verify. The retained lifecycle bundle and
+derived valid-prefix diagnostic are under
+`C:\Sandbox\Codex\Artifacts\gargantuan-3l-four-client-design\physical-four-d67e466ebaf846d4`;
+the client raw evidence is under
+`C:\Sandbox\Codex\Evidence\physical-qualifier\lifecycle-d67e466ebaf846d4`,
+and the worker raw evidence is under
+`C:\GargantuanQualification\physical-qualifier-service-evidence\lifecycle-d67e466ebaf846d4`.
+The one-run probes, daemons, tunnel, tasks, configs, keys and temporary profiles
+were removed; UDP 39450 and lifecycle listeners are clear. Packet Monitor is
+stopped with no filters, and the installed capture service is running idle on
+the same pin. This consumed run was **not retried**.
+**FOUR-CLIENT SIMULTANEOUS READINESS — FAIL. KI-006 remains OPEN; Foundation 3L
+remains B — PARTIALLY READY.** The next task is bounded attribution and
+correction of client capture finalization, worker four-flow ingress visibility
+and the four-client coordinator classification, followed by a separately
+authorized fresh four-client attempt. The qualified one-client test need not
+repeat unless that diagnosis directly invalidates it. Do not begin strengthened
+Phase 1, 3M, final acceptance or merge.
 
 ## One-client physical readiness passed (2026-09-28)
 

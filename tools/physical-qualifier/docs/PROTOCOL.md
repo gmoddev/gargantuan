@@ -26,7 +26,8 @@ the new package is separately qualified; no installed tool is replaced here.
 
 This is an explicitly accepted qualification-only process boundary. It does not
 enter Engine, GameSession, GNS, or production networking. It replaces chat timing
-for the existing one-actual-client readiness smoke; it is not a Foundation 3L
+for the qualified one-actual-client smoke and the opt-in, still-unqualified
+four-client readiness smoke; it is not a Foundation 3L
 acceptance gate or evidence of structural funding. KI-006 stays open. Four-client
 readiness, strengthened Phase 1, and the 32-client Local/Node matrix remain separate
 tasks. The accepted POOLED_SERVICE contract and probe binary are unchanged.
@@ -76,13 +77,15 @@ Local probe deadline is 25 seconds, server-live detection 6 seconds, hook execut
 2. Coordinator sends `ARM_CAPTURE` to client. Client starts full-header capture
    and reports `CAPTURE_LIVE` only when its capture child is alive and pcap exists.
 3. Coordinator sends `START_SERVER`. Worker starts its locally configured capture,
-   then its one-client readiness server. Its unbuffered GNS `event=listening` log,
+   then its readiness server for the selected client count. Its unbuffered GNS `event=listening` log,
    still-running PID, and PID-owned UDP `10.253.3.2:39450` socket must all agree.
 4. Worker sends `SERVER_LIVE` with PID and endpoint. Coordinator immediately sends
-   `START_CLIENT` in the same receive handler. Client launches its already-verified
-   probe and reports `CLIENT_RUNNING`. No chat or additional source/build scan.
-5. Client exits, stops its owned capture, validates that the exact peer/port tuple
-   appears in both directions, and sends `CLIENT_DONE` with success, PID, exit code,
+   `START_CLIENT` in the same receive handler. Client launches one or four
+   already-verified probe processes and reports `CLIENT_RUNNING` with the first
+   PID. No chat or additional source/build scan.
+5. After the client probe or four-process group exits, the endpoint stops its
+   owned capture, validates the selected number of bidirectional peer/port tuples, and sends
+   `CLIENT_DONE` with success, PID, exit code,
    local evidence path, and bounded GNS log detail. The server performs the same
    bidirectional validation after stopping its owned capture. The worker may finish
    and send `SERVER_DONE` before `CLIENT_DONE` reaches the coordinator. Since
@@ -287,9 +290,18 @@ with quoted local arguments and no execution-policy settings. This supports the
 worker's existing script-file restriction while preserving its Windows policy.
 
 Configuration files are per-run trusted local inputs, not production settings.
-This version intentionally refuses non-readiness probe arguments and more than one
-client. Extending to four or 32 clients requires a separate bounded harness change
-after the relevant prerequisite passes. Evidence remains local, with result.json,
+This version refuses non-readiness probe arguments and supports only the qualified
+one-client default or a separately selected four-client readiness mode. In the
+four-client mode, the same barrier launches four actual client probe processes
+with unique consecutive nonces; the server expects four simultaneously Ready and
+active GameSessions for the probe's canonical one-second interval. The client
+result waits for all four processes, requires each canonical clean close, and
+both endpoint captures require four distinct source-port tuples with traffic in
+both directions. Endpoint results are classified `FOUR_CLIENT_READINESS_ONLY`;
+the pinned generic coordinator still emits a one-client top-level label, a
+known classification mismatch in the failed first four-client attempt. This
+mode is not yet physically qualified and is not strengthened Phase 1 or
+32-client funding evidence. Evidence remains local, with result.json,
 control.jsonl, source manifest, probe logs, captures, and evidence-manifest.json.
 The manifest lists every evidence file except itself to avoid a self-hash cycle.
 

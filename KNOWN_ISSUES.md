@@ -94,18 +94,19 @@ the prescribed probe exited 1. This demonstrates no path-loss budget failure,
 but does not establish repeatable required service. The 32-actual-client Local
 and Node matrix, action/recovery and final Foundation sweep are not measured.
 KI-006 remains OPEN; [physical receipt](devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md).
-The latest one-client qualifier passed both restricted evidence roots, the
-fixed worker broker, and authenticated handshakes through both host-owned SSH
-tunnel directions before assignment. Both agents registered and the worker
-reported a live UDP `10.253.3.2:39450` listener, but the client GNS
-connection timed out. Each endpoint captured outbound 0/inbound 0 qualified
-packets; GameSession Ready and clean close were not reached. The single run
-was not retried and cleaned up. The directional fiber/host-filter cause is
-not yet attributed. The one-client gate remains open before any four-client
-continuation; see the [physical receipt](devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md).
-Next: a bounded actual-GNS workload with sustained qualified four-grant
-backlog and complete host measurements, then the unchanged 32-client matrix
-only after Phase 1 passes. The pre-existing static `/30` plan is retained as a
+The later one-client physical readiness retry PASSED with bidirectional
+captures. One separately authorized four-client readiness attempt then reached
+four distinct GNS connections, server Ready/active 4/4 for the canonical
+interval, and four clean client closes. It failed the capture gate: the client
+raw pcapng ended mid-block and the worker miniport missed inbound traffic for
+two of four source ports. The run was not retried and cleanup passed. Four-client
+physical readiness and strengthened Phase 1 funding remain unqualified; see
+the [physical receipt](devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md).
+Next: attribute and correct the four-client capture gates, then make a
+separately authorized fresh four-client readiness attempt. Only after readiness
+passes is the bounded actual-GNS structural workload with sustained qualified
+four-grant backlog and complete host measurements eligible; the unchanged
+32-client matrix remains gated on Phase 1. The pre-existing static `/30` plan is retained as a
 candidate deployment configuration; temporary scoped rules were removed.
 
 Current funding review 2026-09-23: **OPEN / REAL-GNS PHYSICAL QUALIFICATION**.
