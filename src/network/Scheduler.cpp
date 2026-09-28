@@ -314,7 +314,7 @@ namespace gargantuan::network {
 						ConnectionIdValue.Generation, static_cast<unsigned>(Submission.Status), Bytes,
 						static_cast<unsigned>(Message.Delivery()), static_cast<unsigned>(Message.Traffic()),
 						Connection.Statistics.QueuedMessages, Connection.Statistics.QueuedReliableBytes,
-						Connection.Statistics.QueuedUnreliableBytes, Result.MessagesSubmitted);
+						Connection.Statistics.QueuedUnreliableBytes, static_cast<std::size_t>(Result.MessagesSubmitted));
 				}
 				Result.Status = SchedulerFlushStatus::TerminalFailure;
 				Result.TerminalDisconnect = Submission.TerminalDisconnect.value_or(DisconnectInfo{
