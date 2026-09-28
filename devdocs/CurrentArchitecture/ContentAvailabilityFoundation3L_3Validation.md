@@ -6,6 +6,27 @@ last_verified: 2026-09-28
 
 # Foundation 3L.3 diagnostic validation ledger
 
+## Strengthened Phase 1 missing-producer stop (2026-09-28)
+
+The [fresh physical attempt](PooledPhysicalQualification3L.md#strengthened-phase-1-fresh-attempt-stopped-at-missing-producer-2026-09-28)
+used physical ID `68b5abfe-ed9c-44b3-963e-c1d6543fc7d8` and lifecycle ID
+`fa69fa22-bc5f-4236-8516-eaf6aacce018`. The runner's built-in one-use
+tunnel preflight passed and four actual GNS clients connected. The server
+then rejected the staged workload because all four clients advertised
+`producer=0`; its first explicit failure was `exactly one gameplay producer
+required`. No workload wave, qualified four-grant backlog interval or
+structural-service window occurred. Both endpoint and physical coordinator
+results were `ABORT/Success=false`; the outer lifecycle returned
+`Success=false`, host exit 1. Both endpoint captures saw all four tuples in
+both directions, and the evidence manifests verified without mismatches.
+The run was not retried, and task-owned state was cleaned while evidence was
+retained. Installed qualifier pins returned to their prior version; the
+capture hook and production service were unchanged. **STRENGTHENED FOUR-CLIENT
+PHASE 1 — FAIL BEFORE SERVICE MEASUREMENT; KI-006 OPEN; Foundation 3L B —
+PARTIALLY READY.** Correct and independently qualify the exactly-one-producer
+Phase 1 stage before any separately authorized fresh physical attempt. No 3M
+or merge.
+
 ## Strengthened Phase 1 pre-assignment stop (2026-09-28)
 
 The [Phase 1 staging receipt](PooledPhysicalQualification3L.md#strengthened-phase-1-staging-stopped-before-assignment-2026-09-28)

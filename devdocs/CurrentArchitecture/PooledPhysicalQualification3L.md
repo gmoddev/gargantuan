@@ -1,10 +1,86 @@
 ---
-status: four-client-physical-readiness-pass-historical-lifecycle-false-negative-corrected-post-run
+status: four-client-readiness-pass-strengthened-phase1-attempt-aborted-before-service-measurement
 owner: runtime-networking-and-runtime-host
 last_verified: 2026-09-28
 ---
 
 # Foundation 3L pooled physical qualification attempt
+
+## Strengthened Phase 1 fresh attempt stopped at missing producer (2026-09-28)
+
+**STRENGTHENED FOUR-CLIENT PHASE 1 — FAIL BEFORE SERVICE MEASUREMENT.** One
+fresh physical run `68b5abfe-ed9c-44b3-963e-c1d6543fc7d8` (label
+`35c0190e2b084f54`) created lifecycle run
+`fa69fa22-bc5f-4236-8516-eaf6aacce018`. The lifecycle runner alone
+performed the one-use forward/reverse tunnel handshake; it passed before
+assignment. No independent tunnel or nonce check consumed the proof.
+Non-consuming endpoint catalog, exact probe/workflow/source pins, writable
+evidence roots, capture-idle state, 10-GbE/MTU/address and unbound-port checks
+passed first. The installed qualifier SHA-256 was
+`B3F39071E66BD8846C7DD5131E6CBBFF432B45013FC8AC60B5DCCA9F1C0D0A81`,
+workflow SHA-256 was
+`61b8a001779a695363f7252cb82e08b9b0d7675fdb94fe865b6792d63f2f2320`,
+and the unchanged probe SHA-256 was
+`1E25676BDF1DA6ED2EA8A28AB183F519D18A4802BD00E7F6730CFA77D395BD5A`.
+
+The server accepted four real GNS sessions with client nonces `92707`,
+`92708`, `92709` and `92710`. The capture identified four client source ports,
+`54961`, `54962`, `54963` and `54964`, on `10.253.3.1` to worker
+`10.253.3.2:39450`; the evidence does not map each nonce to a port. The first
+causal failure was the worker probe's
+`[Probe:Failure] exactly one gameplay producer required`. Its four peer rows
+all say `producer=0`: Phase 1 staging gave every client a final probe argument
+of `0`, although this canonical workload requires exactly one producer. The
+server stopped before a qualified Ready interval or any workload wave
+(`waves=0`, `applied=0`). Client `92707` exited unsuccessfully and the other
+clients lost the server connection. This is a qualification-harness workload
+construction defect; the run does not establish a production POOLED_SERVICE
+service failure. It was not retried.
+
+The probe's `four_grant_backlog_rows=8`, `grants_high_water=4` and
+`pending_high_water=86352` are startup observations before any workload wave.
+They are **not** a qualified four-grant backlog duration, debt/credit bound,
+pending/unacked peak under load or service sample. The analyzer reported zero
+qualified batches and `B-four-grant-overlap`; that secondary classification
+must not replace the explicit missing-producer failure. Per-peer and aggregate
+service rates, unique first-send/ACK/retired bytes under load, retransmission,
+fairness, queue time, latency, recovery and convergence are **not measured**.
+
+Both captures retained all four exact UDP tuples in both directions. The
+complete client pcap has 996 outbound and 594 inbound qualified packets:
+ports `54961` 253/148, `54962` 246/148, `54963` 251/149 and `54964`
+246/149 (outbound/inbound). The worker pcap has 649 outbound and 1,065
+inbound: ports `54961` 162/271, `54962` 163/265, `54963` 162/267 and
+`54964` 162/262. The worker capture service exported 2,016 complete fiber
+miniport frames and stopped successfully; no Packet Monitor drop/lost-event
+count was established. The client and worker results both say `ABORT`,
+`Success=false`, `client probe exited unsuccessfully: 92707`. The physical
+coordinator also says `ABORT`, `Success=false`; the outer lifecycle says
+`Success=false`, host exit 1 and both agents `FAILED/AGENT_FAILED`.
+
+The retained run artifact is
+`C:\Sandbox\Codex\Artifacts\gargantuan-3l-four-client-design\physical-phase1-35c0190e2b084f54`;
+its lifecycle receipt and full copied worker evidence are under `evidence` and
+`worker-evidence-full`. Client and worker evidence roots remain under
+`C:\Sandbox\Codex\Evidence\physical-qualifier\lifecycle-35c0190e2b084f54`
+and
+`C:\GargantuanQualification\physical-qualifier-service-evidence\lifecycle-35c0190e2b084f54`.
+The four evidence manifests have zero mismatches (client/coordinator/worker/host:
+13/2/13/2 files). Client and worker temporary tasks, listeners, profiles,
+credentials and configs were removed; prior qualifier pins were restored to
+`BFD15390A40E02F94964E5ECC5C381780E3C48460AC17411E8820FDBC80B4136`.
+The worker capture service is running idle, Packet Monitor stopped with no
+filters, Windows trace stopped, and UDP 39450 unbound. The installed capture
+hook remains at
+`231FAE4B89155630138BDC9ABBB1BB526C3B322D0BE2667D2A2E8B5CFEC1375D`.
+
+The next task is to correct Phase 1 qualifier staging to designate exactly one
+client producer, add a regression that rejects a zero- or multiple-producer
+four-client stage, and independently qualify the constructed workload before
+a separately authorized fresh physical attempt. Preserve the canonical
+strengthened workload and service constants. The prior four-client readiness
+PASS remains historical evidence; this attempt did not repeat that gate.
+**KI-006 OPEN; Foundation 3L B — PARTIALLY READY.** No 3M or merge.
 
 ## Strengthened Phase 1 staging stopped before assignment (2026-09-28)
 
