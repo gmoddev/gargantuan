@@ -72,6 +72,19 @@ packet evidence, but it prevents a clean outer lifecycle PASS claim. The
 physical readiness evidence is **PASS**; lifecycle wrapper completion remains
 unreconciled. There was no retry.
 
+Retrospective inspection of the worker Codex session identified the false
+`MISSING_CAPABILITY` report: its bootstrap command yielded after 30 seconds,
+while the tool wrapper displayed `exit_code=undefined` without the live session
+ID. The server control journal then completed its authorized capability and
+cleanup successfully before the model emitted that report. Agent Coordinator
+revision `c405f80a8743a983168b3596cf85d89681896514` instructs the agent to
+poll yielded tool sessions and reconciles this specific stale model reason only
+when the locally validated bootstrap reached `IDLE` and the Codex process
+completed cleanly. Genuine missing-capability and other approval failures are
+not overridden.
+The original outer FAIL receipt is preserved; this code correction has not been
+physically rerun.
+
 The retained bundle is under
 `C:\Sandbox\Codex\Artifacts\gargantuan-3l-four-client-design\physical-four-dbeac03bebd84d1c`;
 client raw evidence is under
