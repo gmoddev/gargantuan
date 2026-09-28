@@ -1,10 +1,114 @@
 ---
-status: four-client-readiness-pass-strengthened-phase1-attempt-aborted-before-service-measurement
+status: four-client-readiness-pass-corrected-phase1-service-feedback-stop
 owner: runtime-networking-and-runtime-host
 last_verified: 2026-09-28
 ---
 
 # Foundation 3L pooled physical qualification attempt
+
+## Corrected strengthened Phase 1 stopped on service/transport failure (2026-09-28)
+
+**STRENGTHENED FOUR-CLIENT PHASE 1 — FAIL; NO FUNDING PASS.** The previous
+attempt's all-zero producer flags were a qualifier staging defect. Gargantuan
+revision `dcab0993c` made the first client the sole producer without changing
+the pinned probe, POOLED_SERVICE, GNS, GameSession or service constants. All 62
+qualifier tests passed, including staged-config rejection of invalid producer
+flags and launched arguments `1,0,0,0`; the unchanged probe's socket-free
+five-case analyzer self-test passed on both endpoints.
+
+One corrected fresh attempt used physical run
+`da16daee-49d2-4812-a985-3159806d202e`, label `bb6aa500a8d84824`, and
+lifecycle run `0e9effd2-3d1c-4afa-9003-c577c5683711`. The qualifier source
+SHA-256 was
+`CECDF79009D4463F2696DF9E934352AF675A203704112472EF04BA9DD69B744D`;
+the fixed workflow SHA-256 remained
+`61b8a001779a695363f7252cb82e08b9b0d7675fdb94fe865b6792d63f2f2320`,
+and the unchanged probe SHA-256 remained
+`1E25676BDF1DA6ED2EA8A28AB183F519D18A4802BD00E7F6730CFA77D395BD5A`.
+Both endpoint catalog, evidence-root, fiber/NIC, capture-idle and source-pin
+preflights passed without touching the one-use tunnel proof. The lifecycle
+runner alone performed its built-in forward/reverse tunnel preflight, which
+passed before assignment. No separate proof consumption or retry occurred.
+
+Four actual GNS sessions connected, with unique nonces `92707`–`92710`.
+Worker registration reported exactly one producer (`92707`) and three
+non-producers. Client control evidence independently records probe arguments
+`1,0,0,0`. Wave 1 began and all four clients moved, but none reported the
+wave applied. The producer completed 36 RPC and 36 Event samples before its
+session failed; its RPC p95/p99/max were 99.5973/121.841/121.841 ms and
+Event maximum was 121.843 ms. These are short pre-abort samples, not a full
+gameplay qualification.
+
+The worker's pinned native feedback trace has 3,657 rows. At simulation step
+1038, peer slot 1 retained a same-token 524,288-byte grant, journal lag 320,
+and four active drain grants across a 6,714-microsecond interval. Its unique
+first-send delta was 38,995 bytes (5,808,013 B/s), below the required 112,643
+bytes for the unchanged 16-MiB/s peer floor; ACK delta was 92,097 and retry
+delta zero. The analyzer marked that interval class 3 and
+`floor_failure=1`, then the worker stopped with `observed service/feedback
+failure`. Only ten sampled rows showed four-grant backlog and only one peer
+had one qualified window; there were zero qualified four-grant batches. No
+repeatable per-peer or aggregate structural-service floor was established.
+The producer client also failed with `Transport rejected scheduler
+submission`; the retained logs do not determine whether that transport
+failure caused, followed, or independently accompanied the floor failure.
+The control barrier aborted on the client's nonzero exit. This run supports a
+bounded under-floor observation under four-grant demand, not a complete
+attribution to POOLED_SERVICE, GNS, CPU, queueing or link loss.
+
+The worker reported 6,486,412 B accepted, 4,913,548 B exactly retired and
+1,572,864 B terminally released during abort, with zero outstanding debt or
+grants after cleanup. Terminal release is not service. Four grants and
+2,097,152 B debt were observed, with aggregate pending high-water
+2,097,152 B; sampled per-peer pending/unacked maxima were 519,745/188,742 B,
+maximum sampled GNS queue time 27.528 ms, and sampled retransmission zero.
+These truncated-run observations do not prove fairness, bounded full-run
+credit/debt, recovery or convergence. Host CPU/memory headroom, Packet Monitor
+drop/lost events, fixed service recovery and full structural convergence were
+**not measured**.
+
+Capture integrity also failed the full gate. The client pcapng ended with a
+malformed block when abort cleanup terminated its timed capture. Worker
+capture `stop` exceeded the endpoint's ten-second hook timeout, so the
+worker result could not validate its pcap at result time. The capture service
+subsequently stopped and exported 11,147 complete miniport frames. Its
+retained complete pcap contains all four UDP source ports (`57815`–`57818`)
+in both directions, with 7,384 qualified outbound and 3,175 inbound packets;
+the client pcap remains incomplete. Neither packet counts nor the later worker
+export repair the failed capture gate. Client and worker results are
+`ABORT/Success=false`, the physical coordinator is `ABORT/Success=false`, and
+the outer lifecycle is `Success=false` with host exit 1 and both agents
+`FAILED/AGENT_FAILED`.
+
+The run artifact and copied worker evidence are retained under
+`C:\Sandbox\Codex\Artifacts\gargantuan-3l-four-client-design\physical-phase1-bb6aa500a8d84824`.
+The worker's exact native CSV SHA-256 is
+`B4E7694781228D91D970B741A35BC90502D7E53A78B9BFCB2CC0DBD4D0BE84ED`;
+the worker pcap SHA-256 is
+`31F635E74E67ED66BB4EE9D115F87341C05FFBFAFC5DFFC3DFA8F7B5EE5E425E`,
+verified against the worker original. Client, coordinator and lifecycle-host
+evidence manifests have zero mismatches (13/2/2 files). The worker endpoint
+did not produce a manifest because cleanup failed; a separate 18-file hash
+inventory covers its copied evidence, native trace and client probe CSVs.
+
+Task-owned daemons, scheduled task, temporary profiles, credentials, staged
+configs and listeners were removed. Both installed qualifier copies returned
+to the prior `BFD15390A40E02F94964E5ECC5C381780E3C48460AC17411E8820FDBC80B4136`
+pin; the worker capture hook pin stayed
+`231FAE4B89155630138BDC9ABBB1BB526C3B322D0BE2667D2A2E8B5CFEC1375D`.
+The worker capture service is running idle, Packet Monitor stopped with no
+filters, Windows trace stopped, and UDP 39450 and lifecycle listeners clear.
+This was the single corrected fresh attempt after the attributable staging
+defect; the Phase 1 automatic retry budget is exhausted.
+
+**KI-006 OPEN; Foundation 3L B — PARTIALLY READY.** Phase 2 Local, Phase 2
+Node, the 32-actual-client matrix and final acceptance sweep remain **not
+measured**; 3M and merge remain gated. The next task is a bounded attribution
+of the exact GNS scheduler-submission status and its timing relative to native
+service feedback, plus the abort capture-finalization path. Establish whether
+the below-floor row represents an implementation defect, transport/resource
+failure or invalid qualification interval before choosing a correction or any
+newly authorized physical attempt. Do not change the accepted service floor.
 
 ## Strengthened Phase 1 fresh attempt stopped at missing producer (2026-09-28)
 

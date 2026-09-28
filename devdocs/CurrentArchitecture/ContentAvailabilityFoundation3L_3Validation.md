@@ -6,6 +6,31 @@ last_verified: 2026-09-28
 
 # Foundation 3L.3 diagnostic validation ledger
 
+## Corrected strengthened Phase 1 service/transport stop (2026-09-28)
+
+The [corrected physical receipt](PooledPhysicalQualification3L.md#corrected-strengthened-phase-1-stopped-on-servicetransport-failure-2026-09-28)
+records physical run `da16daee-49d2-4812-a985-3159806d202e` and lifecycle
+run `0e9effd2-3d1c-4afa-9003-c577c5683711`. The first client was the sole
+producer, four real GNS clients connected, the runner-owned tunnel preflight
+passed, and wave 1 began. Under four active grants and journal demand, native
+feedback marked a 6,714-microsecond peer interval below the unchanged 16-MiB/s
+floor: 38,995 unique first-send bytes versus 112,643 required. The worker
+reported `floor_failure=1`; the producer client also saw a terminal GNS
+scheduler submission rejection. No full four-grant batch qualified, the
+client capture was incomplete after abort, and the worker endpoint timed out
+waiting for capture stop. Both endpoint and physical coordinator results were
+`ABORT/Success=false`; outer lifecycle `Success=false`.
+
+The corrected attempt was not retried. Task-owned state was cleaned, prior
+qualifier installations restored, and evidence retained. The coupled service
+and transport failure still needs causal attribution; the full funding gate
+cannot pass on this evidence. **STRENGTHENED FOUR-CLIENT PHASE 1 — FAIL;
+KI-006 OPEN; Foundation 3L B — PARTIALLY READY.** Phase 2 Local/Node,
+32 actual clients and the final sweep are **not measured**. The exact next
+task is bounded GNS submission/native-feedback timing attribution and abort
+capture-finalization diagnosis before any further physical attempt. No 3M or
+merge.
+
 ## Strengthened Phase 1 missing-producer stop (2026-09-28)
 
 The [fresh physical attempt](PooledPhysicalQualification3L.md#strengthened-phase-1-fresh-attempt-stopped-at-missing-producer-2026-09-28)

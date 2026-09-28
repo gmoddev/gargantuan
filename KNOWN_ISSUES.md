@@ -85,6 +85,27 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+Corrected strengthened four-client Phase 1, 2026-09-28: **OPEN / FAILED
+SERVICE-FEEDBACK GATE; CAUSE NOT YET ISOLATED**. The qualifier now launched
+exactly one producer and three non-producers. The runner-owned tunnel proof
+passed, four actual GNS clients connected and wave 1 began. Pinned native
+feedback observed four active grants with journal demand, then one peer
+first-sent 38,995 B in 6,714 microseconds against the unchanged 112,643-B
+floor. The worker recorded `floor_failure=1` and zero qualified four-grant
+batches. The producer client also saw `Transport rejected scheduler
+submission`; the evidence does not establish its causal order with the floor
+failure. Client abort capture was incomplete and worker capture stop timed
+out at the endpoint, so the full capture gate also failed. Both endpoint and
+outer lifecycle verdicts were FAIL. The single corrected attempt was not
+retried; temporary state was cleaned and evidence retained in the
+[current physical receipt](devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md).
+Phase 2 Local/Node, 32 actual clients and final acceptance are not measured.
+Next: attribute the GNS submission status, native feedback interval and abort
+capture finalization before a correction or separately authorized physical
+attempt. Preserve the service targets. KI-006 remains OPEN; Foundation 3L is
+B — PARTIALLY READY; no 3M or merge. Historical updates below retain their
+original scope.
+
 Production-GNS Phase 1 on direct static fiber, 2026-09-24: **OPEN / STOPPED ON
 INCOMPLETE FOUR-GRANT PROOF**. Four actual GameSession clients applied eight
 512-KiB waves. Native feedback recorded exact accepted=retired 16,802,660 B,
