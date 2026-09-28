@@ -12,6 +12,16 @@ python -m unittest discover -s tools/physical-qualifier/tests -v
 python tools/physical-qualifier/qualifier.py stage --help
 ```
 
+The explicit `stage --clients 4 --phase1` path selects the pinned four-client
+non-smoke probe, `FOUR_CLIENT_PHASE1_ONLY` result classification, 70-second
+client capture finalization and the bounded
+[`four-client-phase1-lifecycle.json`](workflows/four-client-phase1-lifecycle.json)
+workflow. Its server result requires the probe's strengthened four-grant funding
+verdict and metrics; readiness staging remains `FOUR_CLIENT_READINESS_ONLY`.
+This command writes configs only. The artifact pin, both evidence roots, worker
+capture service and hook, fiber/LAN state, lifecycle profiles and endpoint
+leases still require independent preflight before a physical attempt.
+
 [upstream.lock.json](upstream.lock.json) pins commit
 `9c81cfb16640dc18e29b6253fc0f5463c4c4dd4b` and SHA-256 of the consumed sources.
 

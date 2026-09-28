@@ -122,6 +122,61 @@ class QualificationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "result classification"):
             Q.ValidateConfig(Config)
 
+    def test_phase1_stage_is_distinct_and_fixed(self):
+        Root = self.Root / "phase1-stage"
+        Args = SimpleNamespace(
+            output=str(Root), client_lan="192.168.0.68", server_lan="192.168.0.108",
+            port=39451, nonce=92707, clients=4, phase1=True, client_bundle=r"C:\client",
+            server_bundle=r"C:\server", server_evidence=r"C:\worker-evidence\phase1",
+            capture_device="8", server_capture_client=r"C:\capture.exe",
+            server_capture_start=None, server_capture_stop=None)
+        Q.Stage(Args)
+        Client = json.loads((Root / "client.json").read_text())
+        Server = json.loads((Root / "server.json").read_text())
+        Coordinator = json.loads((Root / "coordinator.json").read_text())
+        for Config in (Client, Server, Coordinator):
+            self.assertEqual("PHASE1", Config["QualificationMode"])
+            self.assertEqual(Q.PHASE1_CLASSIFICATION, Config["ResultClassification"])
+            self.assertEqual(4, Config["ReadinessClients"])
+            self.assertEqual(90, Config["RunTimeout"])
+            Q.ValidateConfig(Config)
+        self.assertEqual("duration:70", Client["CaptureCommand"][-3])
+        self.assertEqual(["server", "10.253.3.2", "39450", "4"], Server["ProbeArgs"])
+        self.assertEqual(["client", "10.253.3.2", "39450", "92707", "0"], Client["ProbeArgs"])
+        for Mutation in ({"ReadinessClients": 1}, {"ResultClassification": "FOUR_CLIENT_READINESS_ONLY"},
+                         {"RunTimeout": 60}, {"QualificationMode": "UNSAFE"}):
+            with self.assertRaises(ValueError):
+                Q.ValidateConfig({**Coordinator, **Mutation})
+
+    def test_phase1_result_requires_probe_funding_proof_and_all_four_clients(self):
+        Directory = self.Root / "phase1-results"
+        Directory.mkdir()
+        Config = {"Role": "SERVER", "QualificationMode": "PHASE1", "ReadinessClients": 4}
+        Run = Q.LocalRun(Config, SimpleNamespace(Directory=Directory))
+        Run.Probe = SimpleNamespace(returncode=0, pid=7)
+        Good = ("[Probe:Cleanup] good=1\n[Probe:Windows] qualified_batches=3 required_batches=3 verdict=PASS\n"
+                + "[Probe:FourGrantBatch] index=0\n" * 3
+                + "[Probe:PeerService] slot=1\n" * 4
+                + "[Probe:Admission] grants_high_water=4\n[Probe:Result] pass=1 scope=Phase1-only\n")
+        (Directory / "probe-server.stdout.log").write_text(Good)
+        (Directory / "probe-server.stderr.log").write_text("")
+        self.assertTrue(Run.Result()["Success"])
+        self.assertEqual(Q.PHASE1_CLASSIFICATION, Run.Result()["Classification"])
+        (Directory / "probe-server.stdout.log").write_text(Good.replace("verdict=PASS", "verdict=FAIL"))
+        self.assertFalse(Run.Result()["Success"])
+        Config = {"Role": "CLIENT", "QualificationMode": "PHASE1", "ReadinessClients": 4}
+        Run = Q.LocalRun(Config, SimpleNamespace(Directory=Directory))
+        Run.ClientNonces = [10, 11, 12, 13]
+        Run.Probe = SimpleNamespace(returncode=0, pid=8)
+        Run.Probes = [SimpleNamespace(returncode=0) for _ in range(4)]
+        for Nonce in Run.ClientNonces:
+            (Directory / f"probe-client-{Nonce}.stdout.log").write_text(
+                "[Probe:Summary] role=client\n[Probe:Cleanup] good=1\n[Probe:Result] pass=1 scope=Phase1-only\n")
+            (Directory / f"probe-client-{Nonce}.stderr.log").write_text("")
+        self.assertTrue(Run.Result()["Success"])
+        (Directory / "probe-client-12.stdout.log").write_text("[Probe:Result] pass=0 scope=Phase1-only\n")
+        self.assertFalse(Run.Result()["Success"])
+
     def tearDown(self):
         for Link in self.Links:
             Link.Socket.close()

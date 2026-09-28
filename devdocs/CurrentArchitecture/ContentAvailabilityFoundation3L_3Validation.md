@@ -6,9 +6,9 @@ last_verified: 2026-09-28
 
 # Foundation 3L.3 diagnostic validation ledger
 
-## Four-client physical readiness evidence passed; lifecycle status open (2026-09-28)
+## Four-client physical readiness passed; historical lifecycle false negative corrected post-run (2026-09-28)
 
-The [new physical receipt](PooledPhysicalQualification3L.md#four-client-physical-evidence-passed-lifecycle-wrapper-status-remains-open-2026-09-28)
+The [physical receipt](PooledPhysicalQualification3L.md#four-client-physical-readiness-passed-historical-lifecycle-false-negative-corrected-post-run-2026-09-28)
 records one fresh run `acd22294-75d5-4457-b69e-73bb6a00d8af`, lifecycle run
 `55d56c05-4dda-435b-a27b-d8578a084978`, after separate client autostop,
 worker four-flow NDIS capture and four-client classification proofs. Server
@@ -20,9 +20,15 @@ Both endpoint and physical coordinator results are successful and classified
 `FOUR_CLIENT_READINESS_ONLY`; raw evidence manifests verify. The outer
 lifecycle host also completed successfully, but its enclosing adapter returned
 FAIL because the server Codex agent ended `NEEDS_USER/MISSING_CAPABILITY`
-instead of `IDLE` after protocol completion. That wrapper status remains open;
-this run was not retried. **FOUR-CLIENT PHYSICAL EVIDENCE — PASS; OUTER LIFECYCLE
-COMPLETION — FAIL; KI-006 OPEN; Foundation 3L B — PARTIALLY READY.**
+instead of `IDLE` after protocol completion. Agent Coordinator runtime
+correction `6a9824cca891ad4cea0e1e6a0d1e374c09b02f7e` and test revision
+`2712a4bc26db0b5f6924631ebe5ab9a25c158475` passed 87 local tests and
+hosted Windows/Ubuntu CI, including delayed completion and the failure cases
+that must not be reconciled. All four retained evidence manifests verified.
+The original outer FAIL is unchanged, and this run was not retried.
+**FOUR-CLIENT PHYSICAL READINESS — PASS; OUTER LIFECYCLE RECONCILIATION —
+HISTORICAL FALSE NEGATIVE, CORRECTED POST-RUN; KI-006 OPEN; Foundation 3L
+B — PARTIALLY READY.**
 Strengthened Phase 1, 3M and merge were not started.
 
 ## Four-client physical readiness capture stop (2026-09-28)

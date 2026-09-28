@@ -6,6 +6,7 @@ import ipaddress
 import json
 import os
 from pathlib import Path
+import re
 import secrets
 import selectors
 import shutil
@@ -32,6 +33,13 @@ CLIENT_ADDRESS = "10.253.3.1"
 SERVER_PORT = 39450
 CLIENT_CAPTURE_DURATION = 40
 CLIENT_CAPTURE_STOP_TIMEOUT = 45
+PHASE1_CAPTURE_DURATION = 70
+PHASE1_CAPTURE_STOP_TIMEOUT = 75
+PHASE1_CLASSIFICATION = "FOUR_CLIENT_PHASE1_ONLY"
+
+
+def IsPhase1(Config):
+    return Config.get("QualificationMode") == "PHASE1"
 
 
 def CaptureDirections(File, Role, IncludeTuples=False):
@@ -123,9 +131,16 @@ def CaptureDirections(File, Role, IncludeTuples=False):
 
 def ValidateConfig(Config):
     uuid.UUID(Config["RunId"])
+    if Config.get("QualificationMode") not in (None, "PHASE1"):
+        raise ValueError("unsupported qualification mode")
     if Config.get("ReadinessClients", 1) not in (1, 4):
         raise ValueError("readiness requires exactly one or four clients")
-    if (Config.get("ReadinessClients", 1) == 4 and
+    if IsPhase1(Config):
+        if (Config.get("ReadinessClients") != 4 or
+                Config.get("ResultClassification") != PHASE1_CLASSIFICATION or
+                Config["RunTimeout"] != 90):
+            raise ValueError("Phase 1 requires four clients, fixed classification and run lease")
+    elif (Config.get("ReadinessClients", 1) == 4 and
             Config.get("ResultClassification") != "FOUR_CLIENT_READINESS_ONLY") or (
             Config.get("ReadinessClients", 1) == 1 and "ResultClassification" in Config):
         raise ValueError("result classification must match the readiness client count")
@@ -189,10 +204,16 @@ class LocalRun:
                 Manifest["GnsPin"] != GNS_PIN):
             raise ValueError("source manifest provenance mismatch")
         Clients = Config.get("ReadinessClients", 1)
-        if Config["ProbeArgs"] != (["server", "10.253.3.2", "39450", str(Clients), "--readiness-smoke"]
-                                  if Config["Role"] == "SERVER" else
-                                  ["client", "10.253.3.2", "39450", str(Config["Nonce"]), "0", "--readiness-smoke"]):
-            raise ValueError("only the fixed readiness smoke is supported")
+        Fixed = (["server", "10.253.3.2", "39450", str(Clients)]
+                 if Config["Role"] == "SERVER" else
+                 ["client", "10.253.3.2", "39450", str(Config["Nonce"]), "0"])
+        if not IsPhase1(Config):
+            Fixed.append("--readiness-smoke")
+        if Config["ProbeArgs"] != Fixed:
+            raise ValueError("probe arguments do not match the fixed qualification mode")
+        if IsPhase1(Config) and Config["Role"] == "CLIENT":
+            if Config["CaptureCommand"][-3] != "duration:" + str(PHASE1_CAPTURE_DURATION):
+                raise ValueError("Phase 1 requires the fixed client capture duration")
         if Config["Role"] == "CLIENT" and not 1 <= Config["Nonce"] <= 2147483648 - Clients:
             raise ValueError("invalid nonce")
         if not Path(Config["WorkDir"]).is_dir():
@@ -302,24 +323,27 @@ class LocalRun:
                 if Process.poll() not in (None, 0):
                     raise RuntimeError("client probe exited unsuccessfully: " + str(Nonce))
         if self.Probe is not None and self.Probe.poll() is None:
-            if time.monotonic() - self.Started > 25:
-                raise TimeoutError("local one-client probe deadline exceeded")
+            if time.monotonic() - self.Started > (65 if IsPhase1(self.Config) else 25):
+                raise TimeoutError("local probe deadline exceeded")
             if self.FinalizeAt and time.monotonic() >= self.FinalizeAt:
                 raise TimeoutError("probe did not finish after CLIENT_DONE")
 
     def Result(self):
         Clients = self.Config.get("ReadinessClients", 1)
+        Phase1 = IsPhase1(self.Config)
+        Classification = PHASE1_CLASSIFICATION if Phase1 else "FOUR_CLIENT_READINESS_ONLY"
         if Clients == 4 and self.Config["Role"] == "CLIENT":
             Reports = []
             for Nonce, Process in zip(self.ClientNonces, self.Probes):
                 Stem = "probe-client-" + str(Nonce)
                 Stdout = (self.Log.Directory / (Stem + ".stdout.log")).read_text(errors="replace")
                 Stderr = (self.Log.Directory / (Stem + ".stderr.log")).read_text(errors="replace")
-                Passed = (Process.returncode == 0 and
-                          "[Probe:Readiness] result=pass role=client ready=1 expected=1 clean_remote_shutdown=1" in Stdout and
-                          "[Probe:Cleanup] good=1" in Stdout)
+                Proof = ("[Probe:Result] pass=1 scope=Phase1-only" in Stdout and
+                         "[Probe:Summary] role=client" in Stdout) if Phase1 else (
+                         "[Probe:Readiness] result=pass role=client ready=1 expected=1 clean_remote_shutdown=1" in Stdout)
+                Passed = Process.returncode == 0 and Proof and "[Probe:Cleanup] good=1" in Stdout
                 Reports.append((Passed, Stderr))
-            return {"Classification": "FOUR_CLIENT_READINESS_ONLY",
+            return {"Classification": Classification,
                     "Success": len(Reports) == 4 and all(Passed for Passed, _ in Reports),
                     "ExitCode": self.Probe.returncode, "EvidencePath": str(self.Log.Directory),
                     "Pid": self.Probe.pid, "ClientNonces": self.ClientNonces,
@@ -328,12 +352,20 @@ class LocalRun:
         Stem = "probe-server" if Clients == 4 else "probe"
         Stdout = (self.Log.Directory / (Stem + ".stdout.log")).read_text(errors="replace")
         Stderr = (self.Log.Directory / (Stem + ".stderr.log")).read_text(errors="replace")
-        Success = (self.Probe.returncode == 0 and "[Probe:Readiness] result=pass" in Stdout and
-                   "[Probe:Cleanup] good=1" in Stdout)
-        if Clients == 4:
+        Success = self.Probe.returncode == 0 and "[Probe:Cleanup] good=1" in Stdout
+        if Phase1:
+            Window = re.search(r"^\[Probe:Windows\] .*qualified_batches=(\d+) .*verdict=PASS\b", Stdout, re.MULTILINE)
+            Batches = re.findall(r"^\[Probe:FourGrantBatch\] index=", Stdout, re.MULTILINE)
+            Peers = re.findall(r"^\[Probe:PeerService\] slot=", Stdout, re.MULTILINE)
+            Success = (Success and "[Probe:Result] pass=1 scope=Phase1-only" in Stdout and
+                       Window is not None and int(Window.group(1)) >= 3 and len(Batches) >= 3 and
+                       len(Peers) == 4 and "grants_high_water=4" in Stdout)
+        else:
+            Success = Success and "[Probe:Readiness] result=pass" in Stdout
+        if Clients == 4 and not Phase1:
             Success = (Success and
                        "[Probe:Readiness] result=pass role=server ready=4 expected=4" in Stdout)
-        return {**({"Classification": "FOUR_CLIENT_READINESS_ONLY"} if Clients == 4 else {}),
+        return {**({"Classification": Classification} if Clients == 4 else {}),
                 "Success": Success, "ExitCode": self.Probe.returncode,
                 "EvidencePath": str(self.Log.Directory), "Pid": self.Probe.pid,
                 "Detail": Stderr[-2048:]}
@@ -349,7 +381,8 @@ class LocalRun:
             try:
                 # Windows terminate() kills dumpcap while it may be writing an
                 # enhanced packet block. Its own duration stop closes pcapng.
-                self.Capture.wait(timeout=CLIENT_CAPTURE_STOP_TIMEOUT)
+                self.Capture.wait(timeout=(PHASE1_CAPTURE_STOP_TIMEOUT if IsPhase1(self.Config)
+                                           else CLIENT_CAPTURE_STOP_TIMEOUT))
             except subprocess.TimeoutExpired:
                 Errors.append("client capture did not finalize within its bounded duration")
         if self.Capture is not None and self.Capture.poll() is not None and self.Capture.returncode != 0:
@@ -399,8 +432,11 @@ def Endpoint(Config):
 
 def Stage(Args):
     Clients = getattr(Args, "clients", 1)
+    Phase1 = getattr(Args, "phase1", False)
     if Clients not in (1, 4) or not 1 <= Args.nonce <= 2147483648 - Clients:
         raise ValueError("invalid readiness client count or nonce range")
+    if Phase1 and Clients != 4:
+        raise ValueError("Phase 1 requires exactly four clients")
     if Args.server_capture_client:
         if Args.server_capture_start or Args.server_capture_stop:
             raise ValueError("choose the privileged capture client or the existing hook pair")
@@ -411,21 +447,24 @@ def Stage(Args):
     Shared = {"RunId": str(uuid.uuid4()), "Token": secrets.token_hex(32),
               "CoordinatorHost": Args.client_lan, "PeerIps": {"CLIENT": Args.client_lan, "SERVER": Args.server_lan},
               "Port": Args.port, "Endpoint": "10.253.3.2:39450", "ArtifactSHA256": PROBE_SHA,
-              "StageTimeout": 300, "RunTimeout": 60}
+              "StageTimeout": 300, "RunTimeout": 90 if Phase1 else 60}
     if Clients == 4:
         Shared["ReadinessClients"] = 4
-        Shared["ResultClassification"] = "FOUR_CLIENT_READINESS_ONLY"
+        Shared["ResultClassification"] = PHASE1_CLASSIFICATION if Phase1 else "FOUR_CLIENT_READINESS_ONLY"
+    if Phase1:
+        Shared["QualificationMode"] = "PHASE1"
     ValidateConfig(Shared)
     Save(Directory / "coordinator.json", {**Shared, "EvidenceDir": str(Directory / "coordinator-evidence")})
     ClientBundle = Args.client_bundle
     Client = {**Shared, "Role": "CLIENT", "Nonce": Args.nonce,
               "ProbePath": str(Path(ClientBundle) / "gargantuan_physical_gns_funding_probe.exe"),
               "SourceManifest": str(Path(ClientBundle) / "source-manifest.json"), "WorkDir": ClientBundle,
-              "ProbeArgs": ["client", "10.253.3.2", "39450", str(Args.nonce), "0", "--readiness-smoke"],
+              "ProbeArgs": ["client", "10.253.3.2", "39450", str(Args.nonce), "0"] + ([] if Phase1 else ["--readiness-smoke"]),
               "EvidenceDir": str(Directory / "client-evidence"),
               "CaptureCommand": [r"C:\Program Files\Wireshark\dumpcap.exe", "-i", Args.capture_device,
                                  "-s", "0", "-f", "udp and host 10.253.3.1 and host 10.253.3.2 and port 39450",
-                                 "-a", "duration:" + str(CLIENT_CAPTURE_DURATION if Clients == 4 else 90),
+                                 "-a", "duration:" + str(PHASE1_CAPTURE_DURATION if Phase1 else
+                                                           CLIENT_CAPTURE_DURATION if Clients == 4 else 90),
                                  "-w", "{EvidenceDir}/client.pcapng"]}
     Save(Directory / "client.json", Client)
     ServerBundle = Args.server_bundle
@@ -435,7 +474,7 @@ def Stage(Args):
                    ["powershell.exe", "-NoProfile", "-NonInteractive", "-File", Args.server_capture_stop, "{EvidenceDir}", "Stop"])
     Server = {**Shared, "Role": "SERVER", "ProbePath": ServerBundle + r"\gargantuan_physical_gns_funding_probe.exe",
               "SourceManifest": ServerBundle + r"\source-manifest.json", "WorkDir": ServerBundle,
-              "ProbeArgs": ["server", "10.253.3.2", "39450", str(Clients), "--readiness-smoke"],
+              "ProbeArgs": ["server", "10.253.3.2", "39450", str(Clients)] + ([] if Phase1 else ["--readiness-smoke"]),
               "EvidenceDir": Args.server_evidence,
               "CaptureStart": CaptureStart,
               "CaptureStop": CaptureStop}
@@ -459,6 +498,7 @@ def Main():
     Child.add_argument("--port", type=int, default=39451)
     Child.add_argument("--nonce", type=int, default=92707)
     Child.add_argument("--clients", type=int, choices=(1, 4), default=1)
+    Child.add_argument("--phase1", action="store_true")
     Args = Parser.parse_args()
     try:
         if Args.mode == "stage":

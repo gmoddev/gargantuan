@@ -1,12 +1,26 @@
 ---
-status: four-client-physical-readiness-evidence-pass-lifecycle-wrapper-open
+status: four-client-physical-readiness-pass-historical-lifecycle-false-negative-corrected-post-run
 owner: runtime-networking-and-runtime-host
 last_verified: 2026-09-28
 ---
 
 # Foundation 3L pooled physical qualification attempt
 
-## Four-client physical evidence passed; lifecycle wrapper status remains open (2026-09-28)
+## Four-client physical readiness passed; historical lifecycle false negative corrected post-run (2026-09-28)
+
+**FOUR-CLIENT PHYSICAL READINESS — PASS. OUTER LIFECYCLE
+RECONCILIATION — HISTORICAL FALSE NEGATIVE, CORRECTED POST-RUN.** The original
+outer lifecycle receipt remains FAIL; no physical rerun was made for its
+classification. This interpretation follows independent qualification of Agent
+Coordinator runtime correction `6a9824cca891ad4cea0e1e6a0d1e374c09b02f7e`
+and test-only revision `2712a4bc26db0b5f6924631ebe5ab9a25c158475`:
+87 local tests and hosted Ubuntu and Windows control checks passed. The
+deterministic cases cover delayed clean completion, stale `MISSING_CAPABILITY`
+with local `IDLE` and clean Codex exit, and rejection of actual missing
+capability, failed bootstrap, nonzero exit, stale report without local `IDLE`,
+stale report with failed process, and duplicate completion. Retained client,
+coordinator, worker, and lifecycle-host evidence manifests have zero missing
+or mismatched files (13, 2, 13, and 2 entries, respectively).
 
 Before one fresh attempt, the three previous evidence defects were separately
 qualified. The client Mellanox dumpcap closed a four-flow synthetic pcapng by
@@ -69,8 +83,9 @@ returned FAIL because the server Codex agent finished in
 `NEEDS_USER/MISSING_CAPABILITY` instead of `IDLE` after the physical protocol
 completed. That later agent status does not negate the recorded GameSession or
 packet evidence, but it prevents a clean outer lifecycle PASS claim. The
-physical readiness evidence is **PASS**; lifecycle wrapper completion remains
-unreconciled. There was no retry.
+physical readiness evidence is **PASS**; the historical outer lifecycle
+receipt is **FAIL**, attributable to the post-run-corrected false negative.
+There was no retry.
 
 Retrospective inspection of the worker Codex session identified the false
 `MISSING_CAPABILITY` report: its bootstrap command yielded after 30 seconds,
@@ -83,7 +98,7 @@ when the locally validated bootstrap reached `IDLE` and the Codex process
 completed cleanly. Genuine missing-capability and other approval failures are
 not overridden.
 The original outer FAIL receipt is preserved; this code correction has not been
-physically rerun.
+physically rerun and does not retroactively change that receipt.
 
 The retained bundle is under
 `C:\Sandbox\Codex\Artifacts\gargantuan-3l-four-client-design\physical-four-dbeac03bebd84d1c`;
