@@ -14,6 +14,17 @@ python tools/physical-qualifier/qualifier.py stage --help
 
 [upstream.lock.json](upstream.lock.json) pins commit
 `24edb592ace678124731455b841e2623f64ba57a` and SHA-256 of the consumed sources.
+
+For an explicitly authorized physical qualification, `stage.json` may carry
+`QualificationProfile: PHYSICAL_QUALIFICATION_INTERACTIVE`. The one-client
+lifecycle adapter then checks evidence access and normal-LAN control from the
+logged-in non-admin users and starts no restricted worker socket broker. Its
+fixed SSH forward/reverse and fresh-run gates remain. Both endpoint daemon
+configs must independently select a temporary named interactive Codex profile;
+the stage flag does not elevate or change a daemon. The default restricted path
+remains available and its Foundation 2B qualification is a separate claim.
+The September 28 interactive run reached GNS/GameSession Ready but failed the
+worker inbound capture gate; see the [receipt](../../devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md).
 Bootstrap downloads to an ignored local directory; import fails closed if sources
 are absent/changed. It does not install services, change network policy, replace
 physical-PC tooling, or run captures/probes. Existing installed standalone copies

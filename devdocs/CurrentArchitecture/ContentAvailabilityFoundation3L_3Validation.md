@@ -6,6 +6,24 @@ last_verified: 2026-09-28
 
 # Foundation 3L.3 diagnostic validation ledger
 
+## Interactive one-client path reached Ready; worker capture gate failed (2026-09-28)
+
+The [physical receipt](PooledPhysicalQualification3L.md#interactive-one-client-gns-and-ready-passed-worker-ingress-capture-failed-2026-09-28)
+records run `a1e20f02-cb11-425d-99b4-b30119261eff` and lifecycle run
+`b7fc58d9-4295-4e5c-99ef-23b253747a9d` under the explicitly authorized
+`PHYSICAL_QUALIFICATION_INTERACTIVE` profile. Both normal-user evidence/LAN
+checks and the two fixed tunnel handshakes passed. The GNS server accepted the
+client at `10.253.3.1:51824 -> 10.253.3.2:39450`; both sides connected and
+reported Ready, and the client clean-close gate passed. Client capture counted
+125 outbound / 51 inbound packets. The worker miniport captured 62 outbound /
+0 inbound, despite receiving and accepting the connection. Worker capture
+validation therefore failed, `RUN_DONE Success=false`, and the lifecycle
+agents failed. No retry or four-client test occurred. Restricted Foundation 2B
+qualification is unchanged and is not implied by the interactive physical
+result. Cleanup passed. **ONE-CLIENT PHYSICAL READINESS — FAIL; KI-006 OPEN;
+Foundation 3L B — PARTIALLY READY.** Next: attribute worker live-GNS ingress
+capture before another authorized fresh attempt; no 3M.
+
 ## One-client physical lifecycle transport passed; GNS path failed (2026-09-28)
 
 The [physical receipt](PooledPhysicalQualification3L.md#both-lifecycle-tunnel-directions-passed-physical-gns-connection-timed-out-2026-09-28)

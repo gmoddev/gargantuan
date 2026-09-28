@@ -1,4 +1,4 @@
-"""One-use reverse handshake from the installed restricted worker sandbox."""
+"""One-use reverse handshake from the selected worker identity."""
 
 import csv
 import ctypes
@@ -12,17 +12,19 @@ import uuid
 
 
 WORKER_SID = "S-1-5-21-455006656-4040886684-1921607991-1006"
+INTERACTIVE_SID = "S-1-5-21-455006656-4040886684-1921607991-1001"
 REVERSE_ADDRESS = ("127.0.0.1", 49961)
 
 
-def Probe(Label, RunId):
+def Probe(Label, RunId, Interactive=False):
     if not re.fullmatch(r"[0-9a-f]{16}", Label) or str(uuid.UUID(RunId)) != RunId:
         raise ValueError("invalid reverse tunnel identity")
     Identity = next(csv.reader([subprocess.check_output(
         ["whoami", "/user", "/fo", "csv", "/nh"], text=True).strip()]))
     IsAdmin = bool(ctypes.windll.shell32.IsUserAnAdmin())
-    if Identity[1] != WORKER_SID or IsAdmin:
-        raise PermissionError("reverse probe did not run as restricted worker")
+    ExpectedSid = INTERACTIVE_SID if Interactive else WORKER_SID
+    if Identity[1] != ExpectedSid or IsAdmin:
+        raise PermissionError("reverse probe did not run as the expected worker user")
     WorkerNonce = uuid.uuid4().hex
     Started = time.time_ns() // 1000000
     with socket.create_connection(REVERSE_ADDRESS, timeout=5) as Connection:
@@ -46,7 +48,7 @@ def Probe(Label, RunId):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 3:
-        raise SystemExit("usage: worker_tunnel_preflight.py LABEL RUN_ID")
-    Result = Probe(sys.argv[1], sys.argv[2])
+    if len(sys.argv) not in (3, 4) or (len(sys.argv) == 4 and sys.argv[3] != "INTERACTIVE"):
+        raise SystemExit("usage: worker_tunnel_preflight.py LABEL RUN_ID [INTERACTIVE]")
+    Result = Probe(sys.argv[1], sys.argv[2], len(sys.argv) == 4)
     print(json.dumps(Result, sort_keys=True), flush=True)

@@ -1,10 +1,76 @@
 ---
-status: stopped-phase1-incomplete-four-grant-proof
+status: one-client-interactive-worker-capture-failed
 owner: runtime-networking-and-runtime-host
 last_verified: 2026-09-28
 ---
 
 # Foundation 3L pooled physical qualification attempt
+
+## Interactive one-client GNS and Ready passed; worker ingress capture failed (2026-09-28)
+
+Operator-authorized `PHYSICAL_QUALIFICATION_INTERACTIVE` used temporary named
+Codex profiles on both PCs. A read-only Codex smoke verified the normal logged-in
+non-admin SIDs (`aiden` ending `-1001`, `host` ending `-1001`) and
+`danger-full-access`; the global and restricted Foundation 2B profiles were
+unchanged. The worker's fixed socket broker and restricted evidence SID path
+were bypassed. Both users passed fresh evidence write/read/rename/delete checks,
+the limited worker user reached the main normal-LAN control listener, and the
+fixed SSH forward and reverse completed authenticated pre-assignment handshakes.
+The Mellanox adapters were Up at 10 GbE, MTU 1500, with direct
+`10.253.3.1/30` and `10.253.3.2/30` routes. A separate bounded normal-user UDP
+exchange over the fiber had passed before staging. The worker had an enabled
+Public-profile UDP allow rule for the exact installed GNS executable. The
+capture service was running and idle, Packet Monitor stopped with no filters,
+and UDP 39450 unbound. The installed capture hook matched its service pin
+`73A840FCA570F676B06D76457FF719301BBB4C93F9865A25B19EE1671EE63E3E`;
+its earlier synthetic bidirectional qualification remains a separate claim.
+No interactive UAC prompt was required. The already privileged worker SSH
+management context registered only bounded, limited-user scheduled tasks;
+Packet Monitor ran through the existing capture service.
+
+The single fresh physical run was `a1e20f02-cb11-425d-99b4-b30119261eff`,
+label `c60e576203944bf4`, with lifecycle run
+`b7fc58d9-4295-4e5c-99ef-23b253747a9d`. Both agents registered and the
+barrier started worker capture before its probe reported a live listener at
+`10.253.3.2:39450`. The client used `10.253.3.1:51824` to connect; the worker
+reported the incoming callback, accepted the connection, and both GNS sides
+entered connected state. Both GameSession readiness reports passed (`ready=1`,
+`expected=1`), and the client reported `clean_remote_shutdown=1` and its
+canonical clean close. Neither result is a claim of one-client physical PASS.
+
+The client Ethernet capture counted **125 outbound / 51 inbound** qualified UDP
+packets on that exact tuple. The worker Packet Monitor miniport export counted
+**62 outbound / 0 inbound**; ETL and pcap each contained 62 packets, with zero
+drop count and no lost events. The worker's own GNS callback and accepted
+connection, plus the client's outbound capture, show ingress reached the
+application, but the selected Mellanox miniport capture did not observe that
+direction. The underlying observation-layer cause is not yet attributed. The
+worker result failed on the preserved bidirectional capture gate; `SERVER_DONE`
+was unsuccessful, the delayed `FINALIZE` was legal, and `RUN_DONE Success=false`
+left both lifecycle agents FAILED. The client result and local protocol state
+were successful, but coordinator and lifecycle host success were not.
+**ONE-CLIENT PHYSICAL READINESS — FAIL.** This run was not retried and four-client
+readiness was not attempted.
+
+The retained local bundle is
+`C:\Sandbox\Codex\Artifacts\gargantuan-3l-interactive-diagnostic\physical-lifecycle-c60e576203944bf4`,
+with copied worker ETL/pcap/evidence and both manifest hashes verified against
+their files. The client capture is under
+`C:\Sandbox\Codex\Evidence\physical-qualifier\lifecycle-c60e576203944bf4\client-evidence`.
+The worker pcap SHA-256 is
+`B9DF7C840783C0CBAEF006C13326E4434B18CD6D37C5738D639C3726147FACEF`;
+the client pcap SHA-256 is
+`F0BFC1417D7FDC95B7139320C1FC6D50C8CA9BF2DFDB10FF3B74AE637F1A4CB8`.
+Owned agents, daemons, tasks, tunnel, probes, UDP listener, tickets, temporary
+profiles and one-run secrets are gone. Packet Monitor is stopped with no
+filters; the pinned capture service remains running and idle. Baseline endpoint
+workflow and policy files were restored. The exact next task is bounded
+attribution and correction of the worker's live GNS ingress observation path,
+then a separately authorized fresh one-client attempt. Foundation 2B's
+restricted-profile qualification remains valid and distinct: this physical run
+proves application connectivity under the interactive profile only. KI-006
+remains **OPEN**; Foundation 3L remains **B — PARTIALLY READY**. No Phase 1
+strengthening, 3M or merge followed.
 
 ## Both lifecycle tunnel directions passed; physical GNS connection timed out (2026-09-28)
 

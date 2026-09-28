@@ -18,6 +18,17 @@ CLIENT_PYTHON = Path(r"C:\Python312\python.exe")
 WORKER_ARTIFACT = "C:/Sandbox/Codex/Artifacts/gargantuan-3l-physical"
 from evidence_gate import CLIENT_SID, WORKER_SID, RequireProof, RequireEvidenceReady
 from lifecycle_tunnel import TunnelSession
+
+INTERACTIVE_PROFILE = "PHYSICAL_QUALIFICATION_INTERACTIVE"
+CLIENT_INTERACTIVE_SID = "S-1-5-21-2820064101-3801502750-265446247-1001"
+WORKER_INTERACTIVE_SID = "S-1-5-21-455006656-4040886684-1921607991-1001"
+
+
+def IsInteractive(Stage):
+    Profile = Stage.get("QualificationProfile", "RESTRICTED")
+    if Profile not in ("RESTRICTED", INTERACTIVE_PROFILE):
+        raise ValueError("unknown physical qualification profile")
+    return Profile == INTERACTIVE_PROFILE
 sys.path.insert(0, str(ROOT))
 from agent_coordinator.control import Assignments, Host
 from agent_coordinator.lifecycle.policy import Bootstrap
@@ -29,10 +40,17 @@ from agent_coordinator.workflow import Workflow
 
 def RunClientPreflight(Stage, Artifact):
     Physical = Path(Stage["Physical"])
-    Command = [str(CLIENT_CODEX), "sandbox", "-P", ":workspace", "-p",
-               "foundation-2-endpoint", "-C", str(ROOT), str(CLIENT_PYTHON),
-               "-B", str(Path(__file__).with_name("evidence_preflight.py")),
-               "CLIENT", str(Physical), Stage["RunId"], CLIENT_SID]
+    if IsInteractive(Stage):
+        Command = [str(CLIENT_PYTHON), "-B",
+                   str(Path(__file__).with_name("evidence_preflight.py")),
+                   "CLIENT", str(Physical), Stage["RunId"], CLIENT_INTERACTIVE_SID]
+        Sid = CLIENT_INTERACTIVE_SID
+    else:
+        Command = [str(CLIENT_CODEX), "sandbox", "-P", ":workspace", "-p",
+                   "foundation-2-endpoint", "-C", str(ROOT), str(CLIENT_PYTHON),
+                   "-B", str(Path(__file__).with_name("evidence_preflight.py")),
+                   "CLIENT", str(Physical), Stage["RunId"], CLIENT_SID]
+        Sid = CLIENT_SID
     Process = subprocess.run(Command, text=True, capture_output=True, timeout=20)
     try:
         Proof = json.loads(Process.stdout.strip().splitlines()[-1])
@@ -42,8 +60,64 @@ def RunClientPreflight(Stage, Artifact):
     (Artifact / "client-evidence-preflight.json").write_text(
         json.dumps(Proof, indent=2) + "\n", encoding="utf-8")
     if Process.returncode:
-        raise RuntimeError("client restricted evidence preflight failed before wake")
-    RequireProof(Proof, Stage["RunId"], "CLIENT", CLIENT_SID)
+        raise RuntimeError("client evidence preflight failed before wake")
+    RequireProof(Proof, Stage["RunId"], "CLIENT", Sid)
+    return Proof
+
+
+def RunInteractiveWorkerPreflight(Stage, Artifact):
+    Label, RunId = Stage["Label"], Stage["RunId"]
+    if not re.fullmatch(r"[0-9a-f]{16}", Label) or str(uuid.UUID(RunId)) != RunId:
+        raise ValueError("invalid interactive preflight identity")
+    Source = Path(__file__).parent
+    Names = ("evidence_preflight.py", "worker_interactive_preflight_launcher.py",
+             "Start-WorkerInteractivePreflight.ps1", "Check-WorkerPhysicalIdle.ps1",
+             "Check-WorkerControlTunnel.ps1")
+    Remote = "dockerbox:" + WORKER_ARTIFACT + "/" + Label + "/"
+    subprocess.run(["scp", "-q", *(str(Source / Name) for Name in Names), Remote],
+                   check=True, capture_output=True, text=True, timeout=20)
+    TaskName = "Gargantuan3L-InteractivePreflight-" + Label
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as Listener:
+        Listener.bind(("192.168.0.68", 39451))
+        Listener.listen(1)
+        Listener.settimeout(35)
+        try:
+            Start = ["ssh", "-o", "BatchMode=yes", "dockerbox", "powershell",
+                     "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+                     WORKER_ARTIFACT + "/" + Label + "/Start-WorkerInteractivePreflight.ps1",
+                     "-Label", Label, "-RunId", RunId]
+            subprocess.run(Start, check=True, capture_output=True, text=True, timeout=20)
+            Connection, Peer = Listener.accept()
+            with Connection:
+                Connection.settimeout(5)
+                Challenge = json.loads(Connection.makefile("rb").readline(512))
+                if (Peer[0] != "192.168.0.108" or Challenge.get("Label") != Label or
+                        Challenge.get("RunId") != RunId or
+                        not re.fullmatch(r"[0-9a-f]{32}", Challenge.get("Nonce", ""))):
+                    raise ValueError("interactive worker LAN challenge mismatch")
+                Connection.sendall((json.dumps({"Nonce": Challenge["Nonce"]}) + "\n").encode("ascii"))
+            LocalProof = Artifact / "worker-interactive-preflight.json"
+            Deadline = time.monotonic() + 35
+            while time.monotonic() < Deadline:
+                Copy = subprocess.run(["scp", "-q", Remote + LocalProof.name,
+                                       str(LocalProof)], capture_output=True,
+                                      text=True, timeout=5)
+                if Copy.returncode == 0:
+                    break
+                time.sleep(0.25)
+            else:
+                raise TimeoutError("interactive worker preflight proof timed out")
+        finally:
+            subprocess.run(["ssh", "-o", "BatchMode=yes", "dockerbox", "schtasks",
+                            "/Delete", "/TN", TaskName, "/F"],
+                           capture_output=True, text=True, timeout=10)
+    Proof = json.loads(LocalProof.read_text(encoding="utf-8"))
+    RequireProof(Proof, RunId, "WORKER", WORKER_INTERACTIVE_SID)
+    if (Proof.get("ExitCode") != 0 or Proof.get("Label") != Label or
+            Proof.get("Lan") != {"Bind": ["192.168.0.108", 0],
+                                 "Connect": ["192.168.0.68", 39451],
+                                 "Nonce": Challenge["Nonce"], "Success": True}):
+        raise RuntimeError("interactive worker LAN preflight failed")
     return Proof
 
 
@@ -187,6 +261,16 @@ def RunWorkerSocketPreflight(Stage, Artifact):
 def ReadStage(Artifact):
     Setup = json.loads((Artifact / "setup.json").read_text(encoding="utf-8"))
     Stage = json.loads((Artifact / "stage.json").read_text(encoding="utf-8"))
+    if IsInteractive(Stage):
+        Expected = "physical-qualification-interactive"
+        ClientConfig = json.loads(Path(Stage["ClientConfig"]).read_text(encoding="utf-8"))
+        WorkerConfig = json.loads((Artifact / "server-daemon.json").read_text(encoding="utf-8"))
+        WorkerPhysical = json.loads((Artifact / "server-physical.json").read_text(encoding="utf-8"))
+        if (ClientConfig.get("Profile") != Expected or ClientConfig.get("EndpointId") != "CLIENT" or
+                WorkerConfig.get("Profile") != Expected or WorkerConfig.get("EndpointId") != "SERVER" or
+                WorkerPhysical.get("Role") != "SERVER" or "BrokerLabel" in WorkerPhysical or
+                WorkerPhysical.get("RunId") != Stage["RunId"]):
+            raise ValueError("interactive stage still depends on a restricted endpoint")
     Physical = Path(Stage["Physical"])
     if (Physical.parent != Path(r"C:\Sandbox\Codex\Evidence\physical-qualifier") or
             Physical.name != "lifecycle-" + Stage["Label"]):
@@ -196,13 +280,20 @@ def ReadStage(Artifact):
 
 def Preflight(Artifact):
     _, Stage = ReadStage(Artifact)
-    Proofs = RequireEvidenceReady(Stage, Artifact, RunClientPreflight, RunWorkerPreflight)
-    SocketProof = RunWorkerSocketPreflight(Stage, Artifact)
+    if IsInteractive(Stage):
+        ClientProof = RunClientPreflight(Stage, Artifact)
+        WorkerProof = RunInteractiveWorkerPreflight(Stage, Artifact)
+        Proofs = {"CLIENT": ClientProof, "WORKER": WorkerProof}
+        SocketProof = WorkerProof["Lan"]
+    else:
+        Proofs = RequireEvidenceReady(Stage, Artifact, RunClientPreflight, RunWorkerPreflight)
+        SocketProof = RunWorkerSocketPreflight(Stage, Artifact)
     Ready = {"RunId": Stage["RunId"], "TimestampUnixMs": time.time_ns() // 1000000,
+             "QualificationProfile": Stage.get("QualificationProfile", "RESTRICTED"),
              "Proofs": Proofs, "Socket": SocketProof}
     (Artifact / "evidence-ready.json").write_text(
         json.dumps(Ready, indent=2) + "\n", encoding="utf-8")
-    print("[Qualification:Evidence] Both restricted evidence and worker socket preflights PASS before lifecycle daemon start", flush=True)
+    print("[Qualification:Evidence] Both evidence and worker LAN preflights PASS before lifecycle daemon start", flush=True)
 
 
 def VerifyReady(Artifact, Stage):
@@ -210,15 +301,24 @@ def VerifyReady(Artifact, Stage):
     AgeMs = time.time_ns() // 1000000 - Ready["TimestampUnixMs"]
     if Ready["RunId"] != Stage["RunId"] or not 0 <= AgeMs <= 300000:
         raise ValueError("evidence readiness proof missing, stale or mismatched")
-    for Role, Sid in (("CLIENT", CLIENT_SID), ("WORKER", WORKER_SID)):
+    if Ready.get("QualificationProfile") != Stage.get("QualificationProfile", "RESTRICTED"):
+        raise ValueError("qualification profile changed after preflight")
+    Sids = (("CLIENT", CLIENT_INTERACTIVE_SID), ("WORKER", WORKER_INTERACTIVE_SID)) if IsInteractive(Stage) else (("CLIENT", CLIENT_SID), ("WORKER", WORKER_SID))
+    for Role, Sid in Sids:
         RequireProof(Ready["Proofs"][Role], Stage["RunId"], Role, Sid)
     Socket = Ready.get("Socket", {})
-    Restricted, Broker = Socket.get("Restricted", {}), Socket.get("Broker", {})
-    if (not Restricted.get("Success") or Restricted.get("IsAdmin") or
-            Restricted.get("Sid") != WORKER_SID or Restricted.get("RunId") != Stage["RunId"] or
-            Restricted.get("Socket") != Broker or not Broker.get("Success") or
-            Broker.get("Connect") != ["192.168.0.68", 39451]):
-        raise ValueError("worker socket readiness proof missing or mismatched")
+    if IsInteractive(Stage):
+        if (Ready["Proofs"]["WORKER"].get("Lan") != Socket or
+                Socket.get("Success") is not True or
+                Socket.get("Connect") != ["192.168.0.68", 39451]):
+            raise ValueError("interactive worker LAN readiness proof missing")
+    else:
+        Restricted, Broker = Socket.get("Restricted", {}), Socket.get("Broker", {})
+        if (not Restricted.get("Success") or Restricted.get("IsAdmin") or
+                Restricted.get("Sid") != WORKER_SID or Restricted.get("RunId") != Stage["RunId"] or
+                Restricted.get("Socket") != Broker or not Broker.get("Success") or
+                Broker.get("Connect") != ["192.168.0.68", 39451]):
+            raise ValueError("worker socket readiness proof missing or mismatched")
     Physical = Path(Stage["Physical"])
     ClientStamp = json.loads((Physical / "preflight.json").read_text(encoding="utf-8"))
     if ClientStamp != Ready["Proofs"]["CLIENT"]:
@@ -339,15 +439,16 @@ def Main(Artifact):
         with TunnelSession(Setup, Stage, Artifact) as Tunnel:
             ServerKey = LoadKey(Setup["Endpoints"]["SERVER"]["KeyFile"])
             Tunnel.Preflight(ServerKey, Client)
-            print("[Qualification:Tunnel] Forward and restricted reverse handshakes PASS before assignment", flush=True)
+            print("[Qualification:Tunnel] Forward and reverse handshakes PASS before assignment", flush=True)
             return RunLifecycle(Setup, Stage, Artifact, Tunnel)
     finally:
-        Clean = StopWorkerBroker(Stage)
-        if Clean.returncode:
-            if sys.exc_info()[0] is None:
-                raise RuntimeError("worker broker cleanup failed: " + Clean.stderr[-300:])
-            print("[Qualification:Socket] Worker broker cleanup failed: " +
-                  Clean.stderr[-300:], flush=True)
+        if not IsInteractive(Stage):
+            Clean = StopWorkerBroker(Stage)
+            if Clean.returncode:
+                if sys.exc_info()[0] is None:
+                    raise RuntimeError("worker broker cleanup failed: " + Clean.stderr[-300:])
+                print("[Qualification:Socket] Worker broker cleanup failed: " +
+                      Clean.stderr[-300:], flush=True)
 
 
 if __name__ == "__main__":

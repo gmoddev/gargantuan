@@ -14,13 +14,15 @@ from socket_gate import WorkerReverseListener
 
 WORKER_ARTIFACT = "C:/Sandbox/Codex/Artifacts/gargantuan-3l-physical"
 WORKER_SID = "S-1-5-21-455006656-4040886684-1921607991-1006"
+WORKER_INTERACTIVE_SID = "S-1-5-21-455006656-4040886684-1921607991-1001"
+INTERACTIVE_PROFILE = "PHYSICAL_QUALIFICATION_INTERACTIVE"
 TOPOLOGY = {
     "Forward": {"ListenerHost": "main", "Bind": "127.0.0.1", "Port": 49964,
                 "TargetHost": "worker", "TargetBind": "127.0.0.1", "TargetPort": 49963,
                 "Consumer": "main lifecycle coordinator", "TargetOwner": "worker lifecycle daemon"},
     "Reverse": {"ListenerHost": "worker", "Bind": "127.0.0.1", "Port": 49961,
                 "TargetHost": "main", "TargetBind": "127.0.0.1", "TargetPort": 49961,
-                "Consumer": "restricted worker lifecycle endpoint", "TargetOwner": "main coordinator"},
+                "Consumer": "worker lifecycle endpoint", "TargetOwner": "main coordinator"},
 }
 
 
@@ -79,12 +81,17 @@ def LaunchRestrictedReverseProbe(Stage, Artifact):
                    check=True, capture_output=True, text=True, timeout=20)
     TaskName = "Gargantuan3L-TunnelPreflight-" + Label
     try:
-        subprocess.run(["ssh", "-o", "BatchMode=yes", "dockerbox", "powershell",
+        Command = ["ssh", "-o", "BatchMode=yes", "dockerbox", "powershell",
                         "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
                         WORKER_ARTIFACT + "/" + Label + "/Start-WorkerTunnelPreflight.ps1",
-                        "-Label", Label, "-RunId", RunId],
+                        "-Label", Label, "-RunId", RunId]
+        Interactive = Stage.get("QualificationProfile") == INTERACTIVE_PROFILE
+        if Interactive:
+            Command.append("-Interactive")
+        subprocess.run(Command,
                        check=True, capture_output=True, text=True, timeout=20)
-        Output = Artifact / "worker-tunnel-restricted-proof.json"
+        Output = Artifact / ("worker-tunnel-interactive-proof.json" if Interactive else
+                             "worker-tunnel-restricted-proof.json")
         Deadline = time.monotonic() + 30
         while time.monotonic() < Deadline:
             Copy = subprocess.run(["scp", "-q", Remote + Output.name, str(Output)],
@@ -92,7 +99,7 @@ def LaunchRestrictedReverseProbe(Stage, Artifact):
             if Copy.returncode == 0:
                 return json.loads(Output.read_text(encoding="utf-8"))
             time.sleep(0.25)
-        raise TimeoutError("worker restricted reverse handshake proof timed out")
+        raise TimeoutError("worker reverse handshake proof timed out")
     finally:
         subprocess.run(["ssh", "-o", "BatchMode=yes", "dockerbox", "schtasks",
                         "/Delete", "/TN", TaskName, "/F"],
@@ -100,16 +107,17 @@ def LaunchRestrictedReverseProbe(Stage, Artifact):
 
 
 def RequireReverseProof(Worker, Host, Stage, StartedUnixMs):
+    Sid = WORKER_INTERACTIVE_SID if Stage.get("QualificationProfile") == INTERACTIVE_PROFILE else WORKER_SID
     if (Worker.get("ExitCode") != 0 or Worker.get("Success") is not True or
             Worker.get("Label") != Stage["Label"] or
             Worker.get("RunId") != Stage["RunId"] or
-            Worker.get("Sid") != WORKER_SID or Worker.get("IsAdmin") is not False or
+            Worker.get("Sid") != Sid or Worker.get("IsAdmin") is not False or
             Worker.get("Address") != "127.0.0.1" or Worker.get("Port") != 49961 or
             Worker.get("WorkerNonce") != Host.get("WorkerNonce") or
             Worker.get("HostNonce") != Host.get("HostNonce") or
             not StartedUnixMs <= Worker.get("StartedUnixMs", -1) <=
             Worker.get("CompletedUnixMs", -1) <= time.time_ns() // 1000000):
-        raise ValueError("restricted reverse tunnel proof missing, stale or mismatched")
+        raise ValueError("reverse tunnel proof missing, stale or mismatched")
 
 
 class TunnelSession:
@@ -183,16 +191,16 @@ class TunnelSession:
                 except BaseException as Error:
                     Result["Error"] = Error
 
-            Thread = threading.Thread(target=WorkerProbe, name="RestrictedReverseProbe")
+            Thread = threading.Thread(target=WorkerProbe, name="WorkerReverseProbe")
             Thread.start()
             try:
                 Host = ServeChallenge(Listener, self.Stage["Label"], self.Stage["RunId"])
             finally:
                 Thread.join(35)
             if Thread.is_alive():
-                raise TimeoutError("restricted reverse probe did not finish")
+                raise TimeoutError("worker reverse probe did not finish")
             if "Error" in Result:
-                raise RuntimeError("restricted reverse probe failed: " + str(Result["Error"]))
+                raise RuntimeError("worker reverse probe failed: " + str(Result["Error"]))
             Reverse = Result["Proof"]
             RequireReverseProof(Reverse, Host, self.Stage, self.StartedUnixMs)
         self.RequireAlive()

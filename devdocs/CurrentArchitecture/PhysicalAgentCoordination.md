@@ -6,6 +6,17 @@ last_verified: 2026-09-28
 
 # Physical agent coordination ownership and migration
 
+The September 28 interactive physical attempt used temporary named profiles
+under the two logged-in non-admin users and bypassed the offline worker socket
+broker. Both host-owned SSH tunnel directions and the lifecycle registration
+passed. GNS and GameSession reached one-client Ready, but worker miniport capture
+missed all inbound packets, so the physical and lifecycle verdicts failed.
+This [receipt](PooledPhysicalQualification3L.md#interactive-one-client-gns-and-ready-passed-worker-ingress-capture-failed-2026-09-28)
+does not revise the independently qualified Foundation 2B restricted profile or
+claim that its sandbox permits physical egress. No retry or four-client run was
+made. The temporary profiles and tasks were removed; KI-006 remains OPEN and
+Foundation 3L B — PARTIALLY READY.
+
 Generic LAN coordination now belongs to
 [GantriaEngine/agent-coordinator](https://github.com/GantriaEngine/agent-coordinator).
 It was extracted from the previously untracked `tools/physical-qualifier` working

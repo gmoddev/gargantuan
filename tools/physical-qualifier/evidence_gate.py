@@ -1,4 +1,4 @@
-"""Require both exact restricted-identity proofs before lifecycle wake."""
+"""Require exact endpoint-identity evidence proofs before lifecycle wake."""
 
 
 CLIENT_SID = "S-1-5-21-2820064101-3801502750-265446247-1004"
@@ -9,7 +9,7 @@ def RequireProof(Proof, RunId, EndpointKind, Sid):
     if (not Proof.get("Success") or Proof.get("IsAdmin") or
             Proof.get("Sid") != Sid or Proof.get("RunId") != RunId or
             Proof.get("EndpointKind") != EndpointKind):
-        raise RuntimeError(EndpointKind + " restricted evidence preflight failed before wake")
+        raise RuntimeError(EndpointKind + " evidence preflight failed before wake")
 
 
 def RequireEvidenceReady(Stage, Artifact, ClientCheck, WorkerCheck):

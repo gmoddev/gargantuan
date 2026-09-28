@@ -120,6 +120,47 @@ class LifecycleTunnelTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "stale or mismatched"):
             Tunnel.RequireReverseProof(Worker, Host, STAGE, Worker["StartedUnixMs"] + 1)
 
+    def test_interactive_reverse_requires_logged_in_worker_sid(self):
+        Host = {"WorkerNonce": "a" * 32, "HostNonce": "b" * 32}
+        Started = time.time_ns() // 1000000
+        Stage = {**STAGE, "QualificationProfile": Tunnel.INTERACTIVE_PROFILE}
+        Worker = {"ExitCode": 0, "Success": True, "Label": LABEL, "RunId": RUN_ID,
+                  "Sid": Tunnel.WORKER_INTERACTIVE_SID, "IsAdmin": False,
+                  "Address": "127.0.0.1", "Port": 49961,
+                  "WorkerNonce": Host["WorkerNonce"], "HostNonce": Host["HostNonce"],
+                  "StartedUnixMs": Started, "CompletedUnixMs": Started}
+        Tunnel.RequireReverseProof(Worker, Host, Stage, Started)
+        Worker["Sid"] = Tunnel.WORKER_SID
+        with self.assertRaisesRegex(ValueError, "mismatched"):
+            Tunnel.RequireReverseProof(Worker, Host, Stage, Started)
+
+    def test_interactive_pre_assignment_failure_does_not_start_broker(self):
+        Code = """
+from pathlib import Path
+from unittest.mock import patch
+import run_one_client_lifecycle as Lifecycle
+
+Stage = {'Label': '0123456789abcdef', 'RunId': '12345678-1234-1234-1234-123456789abc',
+         'QualificationProfile': 'PHYSICAL_QUALIFICATION_INTERACTIVE'}
+with patch.object(Lifecycle, 'ReadStage', return_value=({}, Stage)), \\
+     patch.object(Lifecycle, 'VerifyReady', side_effect=ValueError('stale evidence')), \\
+     patch.object(Lifecycle, 'StopWorkerBroker') as Stop, \\
+     patch.object(Lifecycle, 'Assignments') as Assign:
+    try:
+        Lifecycle.Main(Path('unused'))
+    except ValueError as Error:
+        assert str(Error) == 'stale evidence'
+    else:
+        raise AssertionError('pre-assignment failure was accepted')
+Stop.assert_not_called()
+Assign.assert_not_called()
+print('PASS')
+"""
+        Result = subprocess.run([sys.executable, "-B", "-c", Code], cwd=ROOT,
+                                capture_output=True, text=True, timeout=10)
+        self.assertEqual(Result.returncode, 0, Result.stderr)
+        self.assertEqual(Result.stdout.strip(), "PASS")
+
     def test_cleanup_terminates_owned_session_and_checks_both_listeners(self):
         with tempfile.TemporaryDirectory() as Temporary:
             Session = Tunnel.TunnelSession(SETUP, STAGE, Temporary)

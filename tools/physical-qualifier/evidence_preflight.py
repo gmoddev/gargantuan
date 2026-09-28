@@ -1,7 +1,7 @@
-"""One-use evidence checks inside each endpoint's installed Codex sandbox.
+"""One-use evidence checks under the selected endpoint identity.
 
-The caller must run this with ``codex sandbox -P :workspace`` and the same
-endpoint profile and workspace as the lifecycle daemon. No agent is woken here.
+Restricted callers use ``codex sandbox -P :workspace``; interactive callers
+run under the logged-in user. No agent is woken here.
 """
 
 import csv
@@ -74,7 +74,7 @@ def Probe(RunDirectory, RunId, EndpointKind, ExpectedSid, ConfigPath=None, Root=
               "Identity": Identity[0], "Sid": Identity[1],
               "IsAdmin": IsAdmin, "Success": False}
     if Identity[1] != ExpectedSid or IsAdmin:
-        raise PermissionError("preflight did not run as the restricted endpoint identity")
+        raise PermissionError("preflight did not run as the expected endpoint identity")
     RunDirectory = Path(RunDirectory)
     Directory = RunDirectory / ("preflight-" + uuid.uuid4().hex)
     Step = "create-run-directory" if EndpointKind == "WORKER" else "create-directory"
