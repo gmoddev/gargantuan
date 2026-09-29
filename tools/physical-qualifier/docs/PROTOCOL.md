@@ -32,9 +32,10 @@ readiness evidence is not final Foundation 3L acceptance or structural funding
 evidence. KI-006 stays open; strengthened Phase 1 and the 32-client Local/Node
 matrix have separate gates.
 The readiness protocol and its installed probe remain unchanged. Strengthened
-Phase 1 uses the [D01 service curve](../../../docs/adr/D01-pooled-service-curve.md);
-the older short-window contract and its probe pin are historical. A new D01
-binary must be staged and verified before a physical Phase 1 attempt.
+Phase 1 uses the [F1 finite-grant amendment to D01](../../../docs/adr/D01-pooled-service-curve.md#f1-amendment--finite-active-grant-drain-capacity-2026-09-29).
+The older short-window and D01 cross-grant receipts and pins are historical.
+An F1 binary and exact source manifest must be staged and verified before a
+physical Phase 1 attempt; the currently staged D01 candidate is not F1 evidence.
 
 ## Ownership and transport
 
