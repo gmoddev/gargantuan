@@ -1,5 +1,20 @@
 # Gargantuan physical qualification adapter
 
+The versioned Phase 1 probe and adapter now evaluate the
+[D01 rate-plus-bounded-deficit contract](../../docs/adr/D01-pooled-service-curve.md).
+Earlier three-by-three ACK-positive window receipts are historical. The
+installed physical probe and capture-service pins remain unchanged until a
+separate deployment qualification; no physical Phase 1 is authorized here.
+The staged D01 candidate is pinned separately from readiness: probe SHA-256
+`2E543D0983D66895569A0E270905086200C6E478A8C313B206E6BC64C0081ABC`,
+native-source archive SHA-256
+`FC0D0B5E11D488E091CF4552A3CFC7E9362F1DA4DFA434AB139120A15BFDAA5A`,
+base `a998cf98b6a1dad40d414c59e0f4a6d348749e52`, and pinned GNS
+`2cb93a06350bb065db53abdb0d87cf297e0bfd34`. Both candidate bundles
+passed manifest/hash and socket-free self-test preflight. The worker-local
+four-process loopback stress case failed D01's charged service-deficit bound;
+it did not exercise the physical path.
+
 Generic transport, coordinator, endpoint and privileged capture implementation is
 owned by [GantriaEngine Agent Coordinator](https://github.com/GantriaEngine/agent-coordinator).
 This directory retains Gargantuan's exact probe/source identities, fixed GNS argv,
@@ -139,4 +154,6 @@ Its [receipt](../../devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md
 records that historical failure and cleanup. The later one-client PASS and
 four-client capture stop are recorded in the current physical receipt.
 
-POOLED_SERVICE, physical gates, KI-006, Foundation 3L status and 3M are unchanged.
+At the time of that ordering fix, POOLED_SERVICE, physical gates, KI-006,
+Foundation 3L status and 3M were unchanged. The later D01 contract now
+supersedes the short-window service-health and Phase 1 acceptance rules.

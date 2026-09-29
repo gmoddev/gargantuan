@@ -197,6 +197,17 @@ namespace gargantuan::network {
 	}
 	NetworkScheduler::~NetworkScheduler() = default;
 
+	bool NetworkScheduler::ActivateReliableGrant(ConnectionId Connection, std::uint64_t Token, std::uint64_t Time) {
+		if (!Connection.IsValid() || !Token || !Time) return false;
+		auto Found = State->Connections.find(Connection);
+		if (Found == State->Connections.end() || !Found->second.Active) return false;
+		for (auto &QueueValue : Found->second.Queues)
+			for (auto &Message : QueueValue)
+				if (detail::ReliableServiceFeedbackAccess::Token(Message) == Token)
+					return detail::ReliableServiceFeedbackAccess::Activate(Message, Token, Time);
+		return false;
+	}
+
 	bool NetworkScheduler::RegisterConnection(ConnectionId Connection, const NetworkLimits &Limits) {
 		if (!Connection.IsValid() || !Limits.IsValid()) return false;
 		for (const auto &[Existing, Queue] : State->Connections)

@@ -232,6 +232,9 @@ namespace gargantuan::network {
 			const auto &Counters = Native.Counters;
 			if (!Id.IsValid() || Counters.Invalid ||
 				Counters.UniqueReliableStreamBytesAcked > Counters.UniqueReliableStreamBytesFirstSent ||
+				Counters.StructuralPayloadBytesAcked > Counters.StructuralPayloadBytesFirstSent ||
+				Counters.StructuralPayloadBytesFirstSent > Counters.UniqueReliableStreamBytesFirstSent ||
+				Counters.StructuralPayloadBytesAcked > Counters.ReliablePayloadBytesAcked ||
 				Counters.ReliablePayloadBytesAcked > Counters.UniqueReliableStreamBytesAcked) return {};
 			ConnectionState State;
 			if (Counters.Purged) State = ConnectionState::Closed;
@@ -241,6 +244,13 @@ namespace gargantuan::network {
 			else return {};
 			return detail::ReliableServiceFeedback{Id, Native.ObservedAtMicroseconds,
 				Counters.UniqueReliableStreamBytesFirstSent, Counters.UniqueReliableStreamBytesAcked,
+				Counters.StructuralPayloadBytesFirstSent, Counters.StructuralPayloadBytesAcked,
+				Counters.StructuralQualifiedActiveMicroseconds,
+				Counters.StructuralCurrentDeficitByteMicroseconds,
+				Counters.StructuralMaximumDeficitByteMicroseconds,
+				Counters.StructuralActiveGrantBytes, Counters.StructuralActiveGrantFirstSentBytes,
+				Counters.StructuralActiveSinceMicroseconds,
+				Counters.StructuralActiveGrantStartedAtMicroseconds, Counters.StructuralServiceFailed,
 				Counters.ReliablePayloadBytesAcked, Counters.ReliableStreamBytesRetransmitted,
 				Native.PendingReliableStreamBytes, Native.SentUnackedReliableStreamBytes, State,
 				Counters.AttributedRetirementSequence, Counters.ActiveAttributedRetirementToken,
@@ -805,7 +815,9 @@ namespace gargantuan::network {
 			static_cast<int>(Message.Delivery()), static_cast<int>(Message.Traffic()));
 		int64 MessageNumber = -1;
 		const auto Token = detail::ReliableServiceFeedbackAccess::Token(Message);
-		if (Token && !SteamNetworkingSocketsLib::GargantuanBeginReliableRetirementAttribution(Token))
+		if (Token && (!detail::ReliableServiceFeedbackAccess::ActivatedAt(Message) ||
+			!SteamNetworkingSocketsLib::GargantuanBeginReliableRetirementAttribution(Token,
+				detail::ReliableServiceFeedbackAccess::ActivatedAt(Message))))
 			return Fail(TransportOperationStatus::TransportFailure, "retirement-attribution");
 		const auto Result = SteamAPI_ISteamNetworkingSockets_SendMessageToConnection(
 			Global.Interface,

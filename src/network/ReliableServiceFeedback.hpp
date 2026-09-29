@@ -18,6 +18,16 @@ struct ReliableServiceFeedback {
 	std::uint64_t ObservedAtMicroseconds = 0;
 	std::uint64_t UniqueReliableStreamBytesFirstSent = 0;
 	std::uint64_t UniqueReliableStreamBytesAcked = 0;
+	std::uint64_t StructuralPayloadBytesFirstSent = 0;
+	std::uint64_t StructuralPayloadBytesAcked = 0;
+	std::uint64_t StructuralQualifiedActiveMicroseconds = 0;
+	std::uint64_t StructuralCurrentDeficitByteMicroseconds = 0;
+	std::uint64_t StructuralMaximumDeficitByteMicroseconds = 0;
+	std::uint64_t StructuralActiveGrantBytes = 0;
+	std::uint64_t StructuralActiveGrantFirstSentBytes = 0;
+	std::uint64_t StructuralActiveSinceMicroseconds = 0;
+	std::uint64_t StructuralActiveGrantStartedAtMicroseconds = 0;
+	bool StructuralServiceFailed = false;
 	std::uint64_t ReliablePayloadBytesAcked = 0;
 	std::uint64_t ReliableStreamBytesRetransmitted = 0;
 	std::uint64_t PendingReliableStreamBytes = 0;
@@ -40,6 +50,15 @@ struct ReliableServiceFeedbackAccess {
 		return true;
 	}
 	static std::uint64_t Token(const NetworkMessageIntent &Message) { return Message.ReliableRetirementToken; }
+	static std::uint64_t ActivatedAt(const NetworkMessageIntent &Message) {
+		return Message.ReliableGrantActivatedAtMicroseconds;
+	}
+	static bool Activate(NetworkMessageIntent &Message, std::uint64_t Token, std::uint64_t Time) {
+		if (!Token || !Time || Message.ReliableRetirementToken != Token ||
+			Message.ReliableGrantActivatedAtMicroseconds) return false;
+		Message.ReliableGrantActivatedAtMicroseconds = Time;
+		return true;
+	}
 	static bool Enable(IGameTransport &Transport) { return Transport.EnableReliableServiceFeedback(); }
 	static bool Release(IGameTransport &Transport, ConnectionId Connection) { return Transport.ReleaseReliableServiceFeedback(Connection); }
 	[[nodiscard]] static std::optional<ReliableServiceFeedback> Observe(

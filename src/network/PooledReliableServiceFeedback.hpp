@@ -16,6 +16,7 @@ struct PooledReliableServiceFeedback {
 	std::uint64_t StructuralRetired = 0;
 	std::uint64_t OrdinaryDebt = 0, GameplayLower = 0, GameplayUpper = 0;
 	bool Invalid = false;
+	bool ServiceEligible = false;
 
 	struct Result {
 		bool Valid = false, Available = false, Qualified = false, Terminal = false;
@@ -48,6 +49,10 @@ struct PooledReliableServiceFeedback {
 		const auto &S = *Sample;
 		if (!S.CountersValid || S.ObservedAtMicroseconds > Now ||
 			S.UniqueReliableStreamBytesAcked > S.UniqueReliableStreamBytesFirstSent ||
+			S.StructuralPayloadBytesAcked > S.StructuralPayloadBytesFirstSent ||
+			S.StructuralPayloadBytesFirstSent > S.UniqueReliableStreamBytesFirstSent ||
+			S.StructuralPayloadBytesAcked > S.ReliablePayloadBytesAcked ||
+			S.StructuralPayloadBytesFirstSent - S.StructuralPayloadBytesAcked > MaximumReliableServiceGroupBytes ||
 			S.ReliablePayloadBytesAcked > S.UniqueReliableStreamBytesAcked ||
 			S.ReliablePayloadBytesAcked > Created.All) return Reject();
 		const ReliableServiceFeedback Empty{.Connection = Id};
@@ -55,6 +60,11 @@ struct PooledReliableServiceFeedback {
 		if (S.ObservedAtMicroseconds < P.ObservedAtMicroseconds ||
 			S.UniqueReliableStreamBytesFirstSent < P.UniqueReliableStreamBytesFirstSent ||
 			S.UniqueReliableStreamBytesAcked < P.UniqueReliableStreamBytesAcked ||
+			S.StructuralPayloadBytesFirstSent < P.StructuralPayloadBytesFirstSent ||
+			S.StructuralPayloadBytesAcked < P.StructuralPayloadBytesAcked ||
+			S.StructuralQualifiedActiveMicroseconds < P.StructuralQualifiedActiveMicroseconds ||
+			S.StructuralMaximumDeficitByteMicroseconds < P.StructuralMaximumDeficitByteMicroseconds ||
+			(S.StructuralServiceFailed < P.StructuralServiceFailed) ||
 			S.ReliablePayloadBytesAcked < P.ReliablePayloadBytesAcked ||
 			S.ReliableStreamBytesRetransmitted < P.ReliableStreamBytesRetransmitted ||
 			S.AttributedRetirementSequence < P.AttributedRetirementSequence ||
@@ -87,14 +97,13 @@ struct PooledReliableServiceFeedback {
 		Output.ObservedAtMicroseconds = S.ObservedAtMicroseconds;
 		Output.Terminal = S.State == ConnectionState::Closed;
 		Output.Available = S.State == ConnectionState::Connected &&
-			Now - S.ObservedAtMicroseconds <= PooledReliableServiceProfile::QueueWindowMicroseconds;
-		const auto Elapsed = S.ObservedAtMicroseconds - P.ObservedAtMicroseconds;
-		if (Previous && Output.Available && P.State == ConnectionState::Connected && Elapsed &&
-			Elapsed <= PooledReliableServiceProfile::QueueWindowMicroseconds) {
-			const auto Required = (PooledReliableServiceProfile{}.PeerDrainFloor * Elapsed + 999'999) / 1'000'000;
-			Output.Qualified = S.UniqueReliableStreamBytesFirstSent - P.UniqueReliableStreamBytesFirstSent >= Required &&
-				S.UniqueReliableStreamBytesAcked > P.UniqueReliableStreamBytesAcked;
-		}
+			Now - S.ObservedAtMicroseconds <= PooledReliableServiceProfile{}.FeedbackFreshnessMicroseconds;
+		// The native sender checks every first-send event and every observed
+		// still-backlogged interval. A short zero-ACK sample is not a failure.
+		Output.Qualified = Output.Available && !S.StructuralServiceFailed &&
+			S.StructuralMaximumDeficitByteMicroseconds <=
+				PooledReliableServiceProfile::ServiceDeficitBoundByteMicroseconds;
+		ServiceEligible = Output.Qualified;
 		Previous = S;
 		return Output;
 	}

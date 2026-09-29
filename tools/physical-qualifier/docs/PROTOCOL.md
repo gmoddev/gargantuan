@@ -1,7 +1,7 @@
 ---
 status: current
 owner: qualification-infrastructure
-last_verified: 2026-09-28
+last_verified: 2026-09-29
 ---
 
 # Physical qualifier control protocol v1
@@ -31,7 +31,10 @@ for the qualified one-actual-client and four-client readiness smokes. Physical
 readiness evidence is not final Foundation 3L acceptance or structural funding
 evidence. KI-006 stays open; strengthened Phase 1 and the 32-client Local/Node
 matrix have separate gates.
-The accepted POOLED_SERVICE contract and probe binary are unchanged.
+The readiness protocol and its installed probe remain unchanged. Strengthened
+Phase 1 uses the [D01 service curve](../../../docs/adr/D01-pooled-service-curve.md);
+the older short-window contract and its probe pin are historical. A new D01
+binary must be staged and verified before a physical Phase 1 attempt.
 
 ## Ownership and transport
 

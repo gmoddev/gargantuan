@@ -28,6 +28,9 @@ BASE_HEAD = "14644a369f9e7bfb9a81c21354adae62902d63d7"
 OVERLAY = "2ED31AE67E0F99619940BBB130CD451DB37FEF3A5CEEDAB475E682C3FBEE7003"
 GNS_PIN = "2cb93a06350bb065db53abdb0d87cf297e0bfd34"
 PROBE_SHA = "F130DC868A807FFA4EF10887079162C562230854AE17C013559452791993E969"
+PHASE1_BASE_HEAD = "a998cf98b6a1dad40d414c59e0f4a6d348749e52"
+PHASE1_OVERLAY = "FC0D0B5E11D488E091CF4552A3CFC7E9362F1DA4DFA434AB139120A15BFDAA5A"
+PHASE1_PROBE_SHA = "2E543D0983D66895569A0E270905086200C6E478A8C313B206E6BC64C0081ABC"
 SERVER_ADDRESS = "10.253.3.2"
 CLIENT_ADDRESS = "10.253.3.1"
 SERVER_PORT = 39450
@@ -151,8 +154,9 @@ def ValidateConfig(Config):
         Parsed = ipaddress.IPv4Address(Address)
         if Parsed.is_unspecified or Parsed in ipaddress.ip_network("10.253.3.0/30"):
             raise ValueError("control channel must bind normal LAN, not qualification fiber")
-    if Config["Endpoint"] != "10.253.3.2:39450" or Config["ArtifactSHA256"].upper() != PROBE_SHA:
-        raise ValueError("this release is scoped to the verified one-client readiness artifact")
+    ExpectedHash = PHASE1_PROBE_SHA if IsPhase1(Config) else PROBE_SHA
+    if Config["Endpoint"] != "10.253.3.2:39450" or Config["ArtifactSHA256"].upper() != ExpectedHash:
+        raise ValueError("probe hash does not match the fixed qualification mode")
     if not 1 <= Config["Port"] <= 65535:
         raise ValueError("invalid coordination port")
     for Key in ("StageTimeout", "RunTimeout"):
@@ -201,9 +205,17 @@ class LocalRun:
             raise ValueError("probe path/hash mismatch")
         ManifestPath = Path(Config["SourceManifest"])
         Manifest = json.loads(ManifestPath.read_text(encoding="utf-8-sig"))
-        if (Manifest["BaseHead"] != BASE_HEAD or Manifest["OverlayArchiveSha256"].upper() != OVERLAY or
+        ExpectedHead = PHASE1_BASE_HEAD if IsPhase1(Config) else BASE_HEAD
+        ExpectedOverlay = PHASE1_OVERLAY if IsPhase1(Config) else OVERLAY
+        if (Manifest["BaseHead"] != ExpectedHead or Manifest["OverlayArchiveSha256"].upper() != ExpectedOverlay or
                 Manifest["GnsPin"] != GNS_PIN):
             raise ValueError("source manifest provenance mismatch")
+        if IsPhase1(Config) and (Manifest.get("Contract") != "D01" or
+                                 Manifest.get("ProbeSHA256", "").upper() != PHASE1_PROBE_SHA):
+            raise ValueError("Phase 1 requires the D01 probe source manifest")
+        if IsPhase1(Config) and (Manifest.get("SourceArchive") != "d01-native-source.zip" or
+                                 Digest(ManifestPath.parent / "d01-native-source.zip") != PHASE1_OVERLAY):
+            raise ValueError("Phase 1 native source archive hash mismatch")
         Clients = Config.get("ReadinessClients", 1)
         Fixed = (["server", "10.253.3.2", "39450", str(Clients)]
                  if Config["Role"] == "SERVER" else
@@ -234,7 +246,8 @@ class LocalRun:
                     if Argument.lower().endswith(".ps1"):
                         self.HookHashes[Argument] = Digest(Argument)
                         self.Log.Write("CAPTURE_HOOK_PROVENANCE", Path=Argument, SHA256=self.HookHashes[Argument])
-        self.Log.Write("PROVENANCE", ArtifactSHA256=Digest(Probe), BaseHead=BASE_HEAD, OverlaySHA256=OVERLAY, GnsPin=GNS_PIN)
+        self.Log.Write("PROVENANCE", ArtifactSHA256=Digest(Probe), BaseHead=ExpectedHead,
+                       OverlaySHA256=ExpectedOverlay, GnsPin=GNS_PIN)
 
     def Hook(self, Name):
         Command = [Value.replace("{EvidenceDir}", str(self.Log.Directory)).replace("{RunId}", self.Config.get("RunId", ""))
@@ -367,12 +380,41 @@ class LocalRun:
         Stderr = (self.Log.Directory / (Stem + ".stderr.log")).read_text(errors="replace")
         Success = self.Probe.returncode == 0 and "[Probe:Cleanup] good=1" in Stdout
         if Phase1:
-            Window = re.search(r"^\[Probe:Windows\] .*qualified_batches=(\d+) .*verdict=PASS\b", Stdout, re.MULTILINE)
-            Batches = re.findall(r"^\[Probe:FourGrantBatch\] index=", Stdout, re.MULTILINE)
-            Peers = re.findall(r"^\[Probe:PeerService\] slot=", Stdout, re.MULTILINE)
+            def Fields(Label):
+                Lines = re.findall(r"^\[Probe:" + Label + r"\] (.*)$", Stdout, re.MULTILINE)
+                return [dict(re.findall(r"(\w+)=([^\s]+)", Line)) for Line in Lines]
+            Curves, Peers, Admissions = Fields("ServiceCurve"), Fields("PeerService"), Fields("Admission")
+            Curve = Curves[0] if len(Curves) == 1 else {}
+            Admission = Admissions[0] if len(Admissions) == 1 else {}
+            try:
+                PeerProof = (len(Peers) == 4 and len({P["slot"] for P in Peers}) == 4 and
+                             all(int(P["qualified_grants"]) >= 3 and
+                                 int(P["structural_first"]) > 0 and
+                                 int(P["structural_ack"]) == int(P["structural_first"]) and
+                                 int(P["qualified_active_us"]) > 0 and
+                                 int(P["max_deficit_byte_us"]) <= int(Curve["peer_deficit_bound_byte_us"])
+                                 for P in Peers))
+                PoolProof = (Curve["contract"] == "D01" and Curve["verdict"] == "PASS" and
+                             Curve["pool_curve"] == "derived-from-four-native-peer-curves" and
+                             int(Curve["peer_rate_Bps"]) == 16 * 1024 * 1024 and
+                             int(Curve["pool_rate_Bps"]) == 64 * 1024 * 1024 and
+                             int(Curve["quantum_B"]) == 1248 and int(Curve["handoff_us"]) == 6000 and
+                             int(Curve["pool_deficit_bound_byte_us"]) ==
+                             4 * int(Curve["peer_deficit_bound_byte_us"]) and
+                             int(Curve["pool_qualified_us"]) > 0 and
+                             int(Curve["pool_after_first_boundary_us"]) > 0 and
+                             int(Curve["pool_after_second_boundary_us"]) > 0 and
+                             int(Curve["pool_episodes"]) >= 3 and
+                             int(Curve["producer_starved"]) == 0)
+                Conservation = (int(Admission["accepted"]) == int(Admission["retired"]) and
+                                int(Admission["terminal"]) == 0 and
+                                int(Admission["outstanding"]) == 0 and
+                                int(Admission["grants"]) == 0 and
+                                int(Admission["grants_high_water"]) == 4)
+            except (KeyError, ValueError):
+                PeerProof = PoolProof = Conservation = False
             Success = (Success and "[Probe:Result] pass=1 scope=Phase1-only" in Stdout and
-                       Window is not None and int(Window.group(1)) >= 3 and len(Batches) >= 3 and
-                       len(Peers) == 4 and "grants_high_water=4" in Stdout)
+                       PeerProof and PoolProof and Conservation)
         else:
             Success = Success and "[Probe:Readiness] result=pass" in Stdout
         if Clients == 4 and not Phase1:
@@ -460,7 +502,8 @@ def Stage(Args):
     Directory.mkdir(parents=True, exist_ok=False)
     Shared = {"RunId": str(uuid.uuid4()), "Token": secrets.token_hex(32),
               "CoordinatorHost": Args.client_lan, "PeerIps": {"CLIENT": Args.client_lan, "SERVER": Args.server_lan},
-              "Port": Args.port, "Endpoint": "10.253.3.2:39450", "ArtifactSHA256": PROBE_SHA,
+              "Port": Args.port, "Endpoint": "10.253.3.2:39450",
+              "ArtifactSHA256": PHASE1_PROBE_SHA if Phase1 else PROBE_SHA,
               "StageTimeout": 300, "RunTimeout": 90 if Phase1 else 60}
     if Clients == 4:
         Shared["ReadinessClients"] = 4

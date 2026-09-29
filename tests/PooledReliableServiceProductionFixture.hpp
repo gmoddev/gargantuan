@@ -109,6 +109,42 @@ inline bool RunPooledReliableServiceProductionTests() {
 			S.State = ConnectionState::Closed; S.CountersValid = false;
 			R = L.Observe(Id, C, S, 2000, 0, 0); Check(R.Valid && R.Terminal && !R.RetiredBytes, "invalid counters purge only");
 		});
+		Test("PersistentFirstSendHealthDoesNotRequireShortAckDelta", [&] {
+			Ledger L;
+			Sample S{.Connection = Id, .State = ConnectionState::Connected};
+			Check(L.Observe(Id, {0, 0, 0}, S, 0, 0, 0).Valid, "initial healthy generation");
+			S.ObservedAtMicroseconds = 5000;
+			S.UniqueReliableStreamBytesFirstSent = 102;
+			S.StructuralPayloadBytesFirstSent = 100;
+			S.StructuralQualifiedActiveMicroseconds = 4000;
+			S.StructuralMaximumDeficitByteMicroseconds = 90'000'000'000ULL;
+			S.ActiveAttributedRetirementToken = 7;
+			S.ActiveAttributedMessageNumber = 10;
+			auto Result = L.Observe(Id, {100, 100, 0}, S, 5000, 7, 100);
+			Check(Result.Valid && Result.Available && Result.Qualified &&
+				!S.StructuralPayloadBytesAcked && L.ServiceEligible,
+				"first-send service stays healthy with a zero-ACK interval");
+			S.ObservedAtMicroseconds = 6000;
+			S.StructuralMaximumDeficitByteMicroseconds =
+				PooledReliableServiceProfile::ServiceDeficitBoundByteMicroseconds + 1;
+			S.StructuralServiceFailed = true;
+			Result = L.Observe(Id, {100, 100, 0}, S, 6000, 7, 100);
+			Check(Result.Valid && !Result.Qualified && !L.ServiceEligible,
+				"persistent native deficit defeats fresh feedback");
+			S.ObservedAtMicroseconds = 7000;
+			S.UniqueReliableStreamBytesAcked = 102;
+			S.ReliablePayloadBytesAcked = 100;
+			S.StructuralPayloadBytesAcked = 100;
+			S.AttributedRetirementSequence = 1;
+			S.ActiveAttributedRetirementToken = 0;
+			S.ActiveAttributedMessageNumber = 0;
+			S.LastAttributedRetirementToken = 7;
+			S.LastAttributedRetirementMessageNumber = 10;
+			S.LastAttributedRetiredPayloadBytes = 100;
+			Result = L.Observe(Id, {100, 100, 0}, S, 7000, 7, 100);
+			Check(Result.Valid && Result.RetiredBytes == 100 && !Result.Qualified,
+				"later ACK retires exactly but does not erase deficit history");
+		});
 		Test("OrdinarySplitBoundContainsEveryLegalHistory", [&] {
 			for (std::uint64_t Total = 0; Total <= 512 * 1024; Total += 1024) {
 				auto Bound = Ledger::FundedOrdinary(Total, 0, Total); Check(Bound.has_value(), "funding overflow");
@@ -167,6 +203,6 @@ inline bool RunPooledReliableServiceProductionTests() {
 		std::cerr << "[Network:PooledProduction] FAIL " << Error.what() << '\n'; return false;
 	}
 	std::cout << "[Network:PooledProduction] cases=" << Passed << " PASS\n";
-	return Passed == 8;
+	return Passed == 9;
 }
 }

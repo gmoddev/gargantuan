@@ -85,6 +85,20 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+The [D01 service-curve decision](docs/adr/D01-pooled-service-curve.md)
+supersedes the short ACK-positive window rule discussed in the 2026-09-28
+receipt below. That receipt remains historical; no D01 physical Phase 1 has
+run and this issue remains open.
+
+2026-09-29 D01 implementation checkpoint: native and qualifier regression
+suites pass, and a D01 candidate probe and exact-source manifest are staged
+separately from the installed readiness probe. A worker-local four-process
+loopback preflight failed the new per-peer curve during its first full grant:
+the native maximum deficit reached 772,421,812,288 byte-µs against the exact
+101,911,296,000 byte-µs bound. This is a charged service gap, not an added
+handoff exemption or a physical Phase 1 result. The next physical Phase 1
+attempt remains unexecuted and KI-006 remains open.
+
 Current 2026-09-28 preflight: the worker's updated 30-second capture service
 passed installed-runtime and 26.656-second ETL export qualification. The
 32-wave four-peer workload candidate remains unqualified. Bounded loopback

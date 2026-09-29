@@ -6,6 +6,18 @@ class ISteamNetworkingSockets;
 struct GargantuanReliableServiceCounters {
 	std::uint64_t UniqueReliableStreamBytesFirstSent = 0;
 	std::uint64_t UniqueReliableStreamBytesAcked = 0;
+	// Payload bytes belonging to the one native-attributed structural grant.
+	// Reliable stream framing and ordinary reliable traffic are excluded.
+	std::uint64_t StructuralPayloadBytesFirstSent = 0;
+	std::uint64_t StructuralPayloadBytesAcked = 0;
+	std::uint64_t StructuralQualifiedActiveMicroseconds = 0;
+	std::uint64_t StructuralMaximumDeficitByteMicroseconds = 0;
+	std::uint64_t StructuralCurrentDeficitByteMicroseconds = 0;
+	std::uint64_t StructuralActiveGrantBytes = 0;
+	std::uint64_t StructuralActiveGrantFirstSentBytes = 0;
+	std::uint64_t StructuralActiveSinceMicroseconds = 0;
+	std::uint64_t StructuralActiveGrantStartedAtMicroseconds = 0;
+	bool StructuralServiceFailed = false;
 	std::uint64_t ReliablePayloadBytesAcked = 0;
 	std::uint64_t ReliableStreamBytesRetransmitted = 0;
 	// Optional sender-local attribution for one bounded reliable obligation.
@@ -14,16 +26,19 @@ struct GargantuanReliableServiceCounters {
 	std::uint64_t AttributedRetirementSequence = 0;
 	std::uint64_t ActiveAttributedRetirementToken = 0;
 	std::uint64_t ActiveAttributedMessageNumber = 0;
+	std::uint64_t ActiveAttributedPayloadBytes = 0;
 	std::uint64_t LastAttributedRetirementToken = 0;
 	std::uint64_t LastAttributedRetirementMessageNumber = 0;
 	std::uint64_t LastAttributedRetiredPayloadBytes = 0;
 	bool Invalid = false;
 	bool Purged = false;
 
-	void FirstSend(int Bytes) noexcept;
+	void FirstSend(int Bytes, int StructuralPayloadBytes = 0, std::uint64_t NowMicroseconds = 0) noexcept;
 	void Retransmit(int Bytes) noexcept;
 	void AckSegment(int Bytes, bool AlreadyAcked) noexcept;
-	void AttributeMessage(std::uint64_t Token, std::int64_t MessageNumber) noexcept;
+	void AttributeMessage(std::uint64_t Token, std::int64_t MessageNumber,
+		int PayloadBytes = 0, std::uint64_t ActivatedAtMicroseconds = 0) noexcept;
+	void ObserveActiveService(std::uint64_t NowMicroseconds) noexcept;
 	void AckMessage(std::int64_t MessageNumber, int MessageBytes, int PrivateHeaderBytes) noexcept;
 private:
 	void Add(std::uint64_t &Value, int Bytes) noexcept;
@@ -38,11 +53,16 @@ struct GargantuanReliableServiceSnapshot {
 };
 
 namespace SteamNetworkingSocketsLib {
+struct GargantuanReliableAttribution {
+	std::uint64_t Token = 0;
+	std::uint64_t ActivatedAtMicroseconds = 0;
+};
 // Scope exactly one synchronous reliable submission for sender-local retirement
 // attribution. Begin/End are thread-local and introduce no global GNS lock.
-bool GargantuanBeginReliableRetirementAttribution(std::uint64_t Token) noexcept;
+bool GargantuanBeginReliableRetirementAttribution(std::uint64_t Token,
+	std::uint64_t ActivatedAtMicroseconds = 0) noexcept;
 void GargantuanEndReliableRetirementAttribution() noexcept;
-std::uint64_t GargantuanTakeReliableRetirementAttribution() noexcept;
+GargantuanReliableAttribution GargantuanTakeReliableRetirementAttribution() noexcept;
 void GargantuanCopyReliableServiceFeedback(const GargantuanReliableServiceCounters &Counters,
 	int Pending, int Unacked, int NativeState, GargantuanReliableServiceSnapshot &Result);
 GargantuanReliableServiceSnapshot *GargantuanGetClosingFeedback();

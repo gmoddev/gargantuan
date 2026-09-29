@@ -184,6 +184,7 @@ namespace {
 }
 
 #include "ReliableServiceFeedbackFixture.hpp"
+#include "PooledServiceCurveFixture.hpp"
 
 int main(int ArgumentCount, char **Arguments) {
 	using namespace gargantuan;
@@ -191,8 +192,11 @@ int main(int ArgumentCount, char **Arguments) {
 	try { gargantuan::BootstrapNativeRuntimeSchema(); }
 	catch (const std::exception &Error) { std::cerr << Error.what() << '\n'; return 1; }
 	const bool FeedbackPassed = FeedbackFixture::Run();
+	const bool ServiceCurvePassed = ServiceCurveFixture::Run();
 	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--reliable-feedback") return FeedbackPassed ? 0 : 1;
+	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--service-curve") return ServiceCurvePassed ? 0 : 1;
 	Check(FeedbackPassed, "native reliable-service feedback contract");
+	Check(ServiceCurvePassed, "native pooled service curve contract");
 	std::cout << "[Networking:GNS] validating configuration\n" << std::flush;
 
 	{

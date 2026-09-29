@@ -54,15 +54,28 @@ GargantuanReadFeedbackSource(steamnetworkingsockets_snp.cpp 99e2b190b17993139bd3
 GargantuanReplaceFeedback("void SSNPSenderState::Shutdown()\n{" "void SSNPSenderState::Shutdown()\n{\n\tGargantuanFeedback.Purged = true; // Purge is never ACK retirement.")
 GargantuanReplaceFeedback("\t\tpMsg->Unlink();\n\t\tpMsg->Release();" "\t\tGargantuanFeedback.AckMessage(pMsg->m_nMessageNumber, pMsg->m_cbSize, info.m_cbHdr);\n\t\tpMsg->Unlink();\n\t\tpMsg->Release();")
 GargantuanReplaceFeedback("\t\t\t\t\t\t// The most common case (hopefully): the segment is currently in flight" "\t\t\t\t\t\tm_senderState.GargantuanFeedback.AckSegment(cbSeg, relSeg.m_hStatusOrRetry == SNPSendReliableSegment_t::k_nStatus_Acked);\n\n\t\t\t\t\t\t// The most common case (hopefully): the segment is currently in flight")
-GargantuanReplaceFeedback("// First time sending this segment.  Fill out an inflight segment record" "m_senderState.GargantuanFeedback.FirstSend(pSeg->m_cbSegSize);\n\t\t\t\t// First time sending this segment.  Fill out an inflight segment record")
+GargantuanReplaceFeedback("// First time sending this segment.  Fill out an inflight segment record" [=[
+				const auto &GargantuanCounters = m_senderState.GargantuanFeedback;
+				int nGargantuanStructuralBytes = 0;
+				if (GargantuanCounters.ActiveAttributedRetirementToken &&
+					GargantuanCounters.ActiveAttributedMessageNumber == uint64_t(pSeg->m_pMsg->m_nMessageNumber))
+				{
+					const int nBodyBegin = std::max(pSeg->m_nOffset, cbHdr);
+					const int nBodyEnd = std::min(pSeg->m_nOffset + pSeg->m_cbSegSize, cbHdr + pSeg->m_pMsg->m_cbSize);
+					nGargantuanStructuralBytes = std::max(0, nBodyEnd - nBodyBegin);
+				}
+				m_senderState.GargantuanFeedback.FirstSend(pSeg->m_cbSegSize, nGargantuanStructuralBytes);
+				// First time sending this segment.  Fill out an inflight segment record]=])
 GargantuanReplaceFeedback("// It's a retry\n\t\t\t\tpInFlightSeg" "m_senderState.GargantuanFeedback.Retransmit(pSeg->m_cbSegSize);\n\t\t\t\t// It's a retry\n\t\t\t\tpInFlightSeg")
 GargantuanReplaceFeedback("\tpSendMessage->m_nMessageNumber = ++lane.m_nLastSentMsgNum;" [=[
 	pSendMessage->m_nMessageNumber = ++lane.m_nLastSentMsgNum;
 	if ( pSendMessage->m_nFlags & k_nSteamNetworkingSend_Reliable )
 	{
-		const uint64_t nGargantuanRetirementToken = GargantuanTakeReliableRetirementAttribution();
-		if ( nGargantuanRetirementToken )
-			m_senderState.GargantuanFeedback.AttributeMessage( nGargantuanRetirementToken, pSendMessage->m_nMessageNumber );
+		const auto nGargantuanAttribution = GargantuanTakeReliableRetirementAttribution();
+		if ( nGargantuanAttribution.Token )
+			m_senderState.GargantuanFeedback.AttributeMessage( nGargantuanAttribution.Token,
+				pSendMessage->m_nMessageNumber, pSendMessage->m_cbSize,
+				nGargantuanAttribution.ActivatedAtMicroseconds );
 	}]=])
 GargantuanWriteFeedbackSource()
 

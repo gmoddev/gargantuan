@@ -6,6 +6,12 @@ last_verified: 2026-09-28
 
 # Foundation 3L pooled physical qualification attempt
 
+**Decision update (2026-09-29):** The historical attempts below were
+evaluated under the superseded ACK-positive short-window gate. [D01](../../docs/adr/D01-pooled-service-curve.md)
+defines the new production and Phase 1 service-curve contract. None of these
+receipts is a physical D01 pass; the installed probe/service pins are unchanged
+and KI-006 remains open pending a separately authorized physical run.
+
 ## Capture runtime qualified; strengthened workload still blocked (2026-09-28)
 
 The worker's `GargantuanPhysicalQualifierCapture` service now runs the pinned

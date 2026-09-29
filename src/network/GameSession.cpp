@@ -4,6 +4,7 @@
 #include "SessionSendAllowance.hpp"
 #include "ReliableByteAdmission.hpp"
 #include "PooledReliableServiceFeedback.hpp"
+#include "PooledServiceDiagnostics.hpp"
 
 #include "GameSessionTestAccess.hpp"
 
@@ -1472,8 +1473,18 @@ namespace gargantuan::network {
 							if (!Accepted) {
 								FailSession({DisconnectReason::ResourceExhaustion, "Pooled acceptance accounting unavailable"}); return;
 							}
+							const auto ObservedNow = ServiceTime();
 							const auto Result = Peers.at(Connection).ReliableFeedback.Observe(Connection, *Accepted, Sample,
-								ServiceTime(), ByteAdmission->DebtToken(Connection), ByteAdmission->Debt(Connection));
+								ObservedNow, ByteAdmission->DebtToken(Connection), ByteAdmission->Debt(Connection));
+							if (const auto *Sink = detail::ActivePooledService; Sink && Sink->Record)
+								Sink->Record(Sink->Context, detail::PooledServiceRecord{
+									.Connection = Connection, .SimulationTick = SimulationTick,
+									.NowMicroseconds = ObservedNow,
+									.DebtToken = ByteAdmission->DebtToken(Connection),
+									.DebtBytes = ByteAdmission->Debt(Connection),
+									.StructuralJournalLag = Replication->GetJournalLag(Connection),
+									.Accepted = *Accepted, .Feedback = Sample, .Result = Result,
+									.Admission = ByteAdmission->GetMetrics()});
 							if (!Result.Valid || (Result.RetiredBytes &&
 								!ByteAdmission->Retire(Connection, Result.RetiredToken, Result.RetiredBytes)) || Result.Terminal) {
 								PendingPeerFailures.try_emplace(Connection, DisconnectInfo{DisconnectReason::TransportFailure,
@@ -1599,7 +1610,10 @@ namespace gargantuan::network {
 						}
 						// Once queued, bytes are charged even if a later semantic invariant
 						// terminates the peer. Do not refund already accepted traffic.
-						if (Receipt && !ByteAdmission->Commit(*Receipt)) {
+						if (Receipt && (!ByteAdmission->Commit(*Receipt) ||
+							(IsPooled() && !Scheduler.ActivateReliableGrant(Connection, Receipt->Token,
+								PeerValue.Phase == PeerPhase::Ready && PeerValue.ReliableFeedback.ServiceEligible
+									? ServiceTime() : std::numeric_limits<std::uint64_t>::max())))) {
 							PendingPeerFailures.try_emplace(Connection, DisconnectInfo{DisconnectReason::ResourceExhaustion,
 								"Reliable byte reservation commit failed"});
 							return false;

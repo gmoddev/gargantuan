@@ -32,9 +32,11 @@ append-only history: later decisions supersede earlier ADRs rather than rewritin
 them. An accepted ADR may lead implementation, so it is not evidence that every
 described facility already exists.
 
-The repository does not yet have a canonical `docs/adr/` series. Until that
-series is introduced, documents explicitly labeled accepted design direction,
-including the game networking architecture, have ADR-like authority.
+The Foundation 3L [D01 pooled service-curve decision](../adr/D01-pooled-service-curve.md)
+starts the canonical `docs/adr/` series and supersedes the earlier short-window
+POOLED_SERVICE health and qualification model. Other documents explicitly
+labeled accepted design direction, including the game networking architecture,
+retain ADR-like authority until migrated into that series.
 
 ### Protocol specifications
 

@@ -880,6 +880,21 @@ if(BUILD_TESTING)
 			gargantuan_gns_transport
 		)
 		add_executable(gargantuan_game_session_real_transport_tests "tests/GameSessionGnsTests.cpp")
+		# Manual physical Phase 1 probe. Only its socket-free self-test is CTest.
+		add_executable(gargantuan_physical_gns_funding_probe "tests/PhysicalGnsFundingProbe.cpp")
+		target_link_libraries(gargantuan_physical_gns_funding_probe PRIVATE gargantuan_core gargantuan_gns_transport)
+		set(GARGANTUAN_PROBE_SOURCE "unlabelled-source-see-external-manifest" CACHE STRING
+			"Physical probe source identity, confirmed by the staging manifest")
+		target_compile_definitions(gargantuan_physical_gns_funding_probe PRIVATE
+			GARGANTUAN_PROBE_SOURCE="${GARGANTUAN_PROBE_SOURCE}")
+		foreach(GARGANTUAN_PROBE_MODULE IN LISTS GARGANTUAN_RUNTIME_LUAU_MODULES)
+			add_custom_command(TARGET gargantuan_physical_gns_funding_probe POST_BUILD
+				COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:gargantuan_physical_gns_funding_probe>/runtime"
+				COMMAND ${CMAKE_COMMAND} -E copy_if_different
+					"${CMAKE_CURRENT_SOURCE_DIR}/assets/runtime/${GARGANTUAN_PROBE_MODULE}"
+					"$<TARGET_FILE_DIR:gargantuan_physical_gns_funding_probe>/runtime/${GARGANTUAN_PROBE_MODULE}"
+			)
+		endforeach()
 		target_link_libraries(gargantuan_game_session_real_transport_tests PRIVATE
 			gargantuan_core
 			gargantuan_gns_transport
@@ -1000,6 +1015,7 @@ if(BUILD_TESTING)
 				gargantuan_remote_real_transport_tests
 				gargantuan_character_real_transport_tests
 				gargantuan_game_session_real_transport_tests
+				gargantuan_physical_gns_funding_probe
 			)
 			set(GARGANTUAN_PROTOBUF_RUNTIMES "")
 			if(TARGET protobuf::libprotobuf)
@@ -1023,6 +1039,11 @@ if(BUILD_TESTING)
 					COMMAND ${CMAKE_COMMAND} -E copy_if_different
 						"${GARGANTUAN_PROTOBUF_RUNTIME}"
 						"$<TARGET_FILE_DIR:gargantuan_game_session_real_transport_tests>"
+				)
+				add_custom_command(TARGET gargantuan_physical_gns_funding_probe POST_BUILD
+					COMMAND ${CMAKE_COMMAND} -E copy_if_different
+						"${GARGANTUAN_PROTOBUF_RUNTIME}"
+						"$<TARGET_FILE_DIR:gargantuan_physical_gns_funding_probe>"
 				)
 				add_custom_command(TARGET gargantuan_real_transport_tests POST_BUILD
 					COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -1202,9 +1223,21 @@ if(BUILD_TESTING)
 	endif()
 	if(GARGANTUAN_WITH_GNS)
 		add_test(NAME gargantuan_real_transport COMMAND gargantuan_real_transport_tests)
+		add_test(NAME gargantuan_pooled_service_source_contract
+			COMMAND ${CMAKE_COMMAND}
+				"-DGnsRoot=${gamenetworkingsockets_SOURCE_DIR}"
+				"-DGargantuanRoot=${CMAKE_CURRENT_SOURCE_DIR}"
+				-P "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/PooledServiceSourceChecks.cmake")
+		set_tests_properties(gargantuan_pooled_service_source_contract
+			PROPERTIES LABELS "networking;optional" TIMEOUT 10)
 		add_test(NAME gargantuan_remote_real_transport COMMAND gargantuan_remote_real_transport_tests)
 		add_test(NAME gargantuan_character_real_transport COMMAND gargantuan_character_real_transport_tests)
 		add_test(NAME gargantuan_game_session_real_transport COMMAND gargantuan_game_session_real_transport_tests)
+		add_test(NAME gargantuan_physical_gns_probe_self_test COMMAND gargantuan_physical_gns_funding_probe --self-test)
+		add_test(NAME gargantuan_physical_gns_probe_invalid_arguments COMMAND gargantuan_physical_gns_funding_probe server 10.253.3.2 39450 3)
+		set_tests_properties(gargantuan_physical_gns_probe_self_test gargantuan_physical_gns_probe_invalid_arguments
+			PROPERTIES LABELS "networking;headless;optional" TIMEOUT 10)
+		set_tests_properties(gargantuan_physical_gns_probe_invalid_arguments PROPERTIES WILL_FAIL TRUE)
 		if(WIN32)
 			add_test(NAME gargantuan_packaged_game_session
 				COMMAND powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass

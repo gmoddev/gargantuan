@@ -13,6 +13,13 @@ enum class ReliableServiceMode : std::uint8_t { FULL_RESERVATION, POOLED_SERVICE
 // The single accepted Option C candidate. These are eligibility and funded
 // service bounds, never measurements of the configured host or path.
 struct PooledReliableServiceProfile {
+	// D01: one native GNS send quantum plus the pinned 5 ms reliable Nagle
+	// and 1 ms requested service-thread wake. Bounds are exact in byte-us.
+	static constexpr std::uint64_t ServiceQuantumBytes = 1'248;
+	static constexpr std::uint64_t MaximumQualifiedServiceHandoffMicroseconds = 6'000;
+	static constexpr std::uint64_t ServiceDeficitBoundByteMicroseconds =
+		ServiceQuantumBytes * 1'000'000 +
+		(16ULL * 1024 * 1024) * MaximumQualifiedServiceHandoffMicroseconds;
 	std::uint64_t BackendCap = 96 * 1024 * 1024;
 	std::uint64_t StructuralPool = 64 * 1024 * 1024;
 	std::uint64_t GameplayReserve = 8 * 1024 * 1024;

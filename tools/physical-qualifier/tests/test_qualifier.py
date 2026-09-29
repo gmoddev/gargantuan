@@ -139,21 +139,36 @@ class QualificationTests(unittest.TestCase):
             self.assertEqual(Q.PHASE1_CLASSIFICATION, Config["ResultClassification"])
             self.assertEqual(4, Config["ReadinessClients"])
             self.assertEqual(90, Config["RunTimeout"])
+            self.assertEqual(Q.PHASE1_PROBE_SHA, Config["ArtifactSHA256"])
             Q.ValidateConfig(Config)
+            with self.assertRaisesRegex(ValueError, "probe hash"):
+                Q.ValidateConfig({**Config, "ArtifactSHA256": Q.PROBE_SHA})
         self.assertEqual("duration:70", Client["CaptureCommand"][-3])
         self.assertEqual(["server", "10.253.3.2", "39450", "4"], Server["ProbeArgs"])
         self.assertEqual(["client", "10.253.3.2", "39450", "92707", "1"], Client["ProbeArgs"])
         Probe = self.Root / "gargantuan_physical_gns_funding_probe.exe"
         Probe.write_bytes(b"qualification-only test")
         Manifest = self.Root / "phase1-source-manifest.json"
-        Manifest.write_text(json.dumps({"BaseHead": Q.BASE_HEAD, "OverlayArchiveSha256": Q.OVERLAY,
-                                        "GnsPin": Q.GNS_PIN}))
+        Manifest.write_text(json.dumps({"BaseHead": Q.PHASE1_BASE_HEAD, "OverlayArchiveSha256": Q.PHASE1_OVERLAY,
+                                        "GnsPin": Q.GNS_PIN, "Contract": "D01",
+                                        "ProbeSHA256": Q.PHASE1_PROBE_SHA,
+                                        "SourceArchive": "d01-native-source.zip"}))
+        (self.Root / "d01-native-source.zip").write_bytes(b"test source archive")
         Client.update(ProbePath=str(Probe), SourceManifest=str(Manifest), WorkDir=str(self.Root))
         Client["CaptureCommand"][0] = sys.executable
         Log = Q.Journal(self.Root / "phase1-check")
         try:
-            with mock.patch.object(Q, "Digest", return_value=Q.PROBE_SHA):
+            def TestDigest(PathValue):
+                return Q.PHASE1_OVERLAY if Path(PathValue).name == "d01-native-source.zip" else Q.PHASE1_PROBE_SHA
+            with mock.patch.object(Q, "Digest", side_effect=TestDigest):
                 Q.LocalRun(Client, Log).Check()
+                OldManifest = json.loads(Manifest.read_text())
+                OldManifest["Contract"] = "short-window"
+                Manifest.write_text(json.dumps(OldManifest))
+                with self.assertRaisesRegex(ValueError, "D01 probe source"):
+                    Q.LocalRun(Client, Log).Check()
+                OldManifest["Contract"] = "D01"
+                Manifest.write_text(json.dumps(OldManifest))
                 for Producer in ("0", "2"):
                     Invalid = {**Client, "ProbeArgs": [*Client["ProbeArgs"]]}
                     Invalid["ProbeArgs"][4] = Producer
@@ -181,15 +196,30 @@ class QualificationTests(unittest.TestCase):
         Config = {"Role": "SERVER", "QualificationMode": "PHASE1", "ReadinessClients": 4}
         Run = Q.LocalRun(Config, SimpleNamespace(Directory=Directory))
         Run.Probe = SimpleNamespace(returncode=0, pid=7)
-        Good = ("[Probe:Cleanup] good=1\n[Probe:Windows] qualified_batches=3 required_batches=3 verdict=PASS\n"
-                + "[Probe:FourGrantBatch] index=0\n" * 3
-                + "[Probe:PeerService] slot=1\n" * 4
-                + "[Probe:Admission] grants_high_water=4\n[Probe:Result] pass=1 scope=Phase1-only\n")
+        Good = ("[Probe:Cleanup] good=1\n"
+                "[Probe:ServiceCurve] contract=D01 peer_rate_Bps=16777216 pool_rate_Bps=67108864 "
+                "quantum_B=1248 handoff_us=6000 peer_deficit_bound_byte_us=101911296000 "
+                "pool_deficit_bound_byte_us=407645184000 pool_qualified_us=9000 "
+                "pool_after_first_boundary_us=6000 pool_after_second_boundary_us=3000 "
+                "pool_episodes=3 pool_curve=derived-from-four-native-peer-curves producer_starved=0 verdict=PASS\n"
+                + "".join(f"[Probe:PeerService] slot={Slot} qualified_grants=3 structural_first=1572864 "
+                          "structural_ack=1572864 qualified_active_us=100000 max_deficit_byte_us=90000000000\n"
+                          for Slot in range(1, 5))
+                + "[Probe:Admission] accepted=6291456 retired=6291456 terminal=0 outstanding=0 "
+                  "grants=0 grants_high_water=4\n[Probe:Result] pass=1 scope=Phase1-only\n")
         (Directory / "probe-server.stdout.log").write_text(Good)
         (Directory / "probe-server.stderr.log").write_text("")
         self.assertTrue(Run.Result()["Success"])
         self.assertEqual(Q.PHASE1_CLASSIFICATION, Run.Result()["Classification"])
         (Directory / "probe-server.stdout.log").write_text(Good.replace("verdict=PASS", "verdict=FAIL"))
+        self.assertFalse(Run.Result()["Success"])
+        (Directory / "probe-server.stdout.log").write_text(Good.replace("structural_ack=1572864", "structural_ack=0", 1))
+        self.assertFalse(Run.Result()["Success"])
+        (Directory / "probe-server.stdout.log").write_text(Good.replace("pool_after_second_boundary_us=3000", "pool_after_second_boundary_us=0"))
+        self.assertFalse(Run.Result()["Success"])
+        (Directory / "probe-server.stdout.log").write_text(Good.replace("producer_starved=0", "producer_starved=1"))
+        self.assertFalse(Run.Result()["Success"])
+        (Directory / "probe-server.stdout.log").write_text(Good.replace("max_deficit_byte_us=90000000000", "max_deficit_byte_us=101911296001", 1))
         self.assertFalse(Run.Result()["Success"])
         Config = {"Role": "CLIENT", "QualificationMode": "PHASE1", "ReadinessClients": 4}
         Run = Q.LocalRun(Config, SimpleNamespace(Directory=Directory))
@@ -206,7 +236,8 @@ class QualificationTests(unittest.TestCase):
 
     def test_phase1_control_requires_matching_endpoint_classifications(self):
         self.Config.update(QualificationMode="PHASE1", ReadinessClients=4,
-                           ResultClassification=Q.PHASE1_CLASSIFICATION, RunTimeout=90)
+                           ResultClassification=Q.PHASE1_CLASSIFICATION, RunTimeout=90,
+                           ArtifactSHA256=Q.PHASE1_PROBE_SHA)
         self.Start()
         Client = self.Peer("CLIENT")
         Server = self.Peer("SERVER")
