@@ -33,8 +33,10 @@ them. An accepted ADR may lead implementation, so it is not evidence that every
 described facility already exists.
 
 The Foundation 3L [D01 pooled service-curve decision](../adr/D01-pooled-service-curve.md)
-starts the canonical `docs/adr/` series and supersedes the earlier short-window
-POOLED_SERVICE health and qualification model. Other documents explicitly
+starts the canonical `docs/adr/` series. Its F1 amendment governs finite
+accepted-grant drain capacity and supersedes D01's earlier cross-grant
+deficit and the short-window POOLED_SERVICE health/qualification models.
+Other documents explicitly
 labeled accepted design direction, including the game networking architecture,
 retain ADR-like authority until migrated into that series.
 

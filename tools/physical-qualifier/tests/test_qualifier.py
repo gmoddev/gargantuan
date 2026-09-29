@@ -197,13 +197,14 @@ class QualificationTests(unittest.TestCase):
         Run = Q.LocalRun(Config, SimpleNamespace(Directory=Directory))
         Run.Probe = SimpleNamespace(returncode=0, pid=7)
         Good = ("[Probe:Cleanup] good=1\n"
-                "[Probe:ServiceCurve] contract=D01 peer_rate_Bps=16777216 pool_rate_Bps=67108864 "
-                "quantum_B=1248 handoff_us=6000 peer_deficit_bound_byte_us=101911296000 "
-                "pool_deficit_bound_byte_us=407645184000 pool_qualified_us=9000 "
-                "pool_after_first_boundary_us=6000 pool_after_second_boundary_us=3000 "
-                "pool_episodes=3 pool_curve=derived-from-four-native-peer-curves producer_starved=0 verdict=PASS\n"
-                + "".join(f"[Probe:PeerService] slot={Slot} qualified_grants=3 structural_first=1572864 "
-                          "structural_ack=1572864 qualified_active_us=100000 max_deficit_byte_us=90000000000\n"
+                "[Probe:ServiceCurve] contract=F1 peer_rate_Bps=16777216 pool_rate_Bps=67108864 "
+                "quantum_B=1248 startup_us=5000 run_us=1000 peer_finite_intercept_byte_us=101911296000 "
+                "peer_running_bound_byte_us=18025216000 pool_running_bound_byte_us=72100864000 "
+                "pool_common_run_us=9000 pool_episodes=3 "
+                "pool_curve=derived-from-four-native-grant-curves verdict=PASS\n"
+                + "".join(f"[Probe:PeerService] slot={Slot} grants=3 qualified_grants=3 completed_grants=3 "
+                          "structural_first=1572864 structural_ack=1572864 running_us=100000 "
+                          "max_run_deficit_byte_us=9000000000\n"
                           for Slot in range(1, 5))
                 + "[Probe:Admission] accepted=6291456 retired=6291456 terminal=0 outstanding=0 "
                   "grants=0 grants_high_water=4\n[Probe:Result] pass=1 scope=Phase1-only\n")
@@ -215,11 +216,15 @@ class QualificationTests(unittest.TestCase):
         self.assertFalse(Run.Result()["Success"])
         (Directory / "probe-server.stdout.log").write_text(Good.replace("structural_ack=1572864", "structural_ack=0", 1))
         self.assertFalse(Run.Result()["Success"])
-        (Directory / "probe-server.stdout.log").write_text(Good.replace("pool_after_second_boundary_us=3000", "pool_after_second_boundary_us=0"))
+        (Directory / "probe-server.stdout.log").write_text(Good.replace("pool_common_run_us=9000", "pool_common_run_us=0"))
         self.assertFalse(Run.Result()["Success"])
-        (Directory / "probe-server.stdout.log").write_text(Good.replace("producer_starved=0", "producer_starved=1"))
+        (Directory / "probe-server.stdout.log").write_text(Good.replace("contract=F1", "contract=D01"))
         self.assertFalse(Run.Result()["Success"])
-        (Directory / "probe-server.stdout.log").write_text(Good.replace("max_deficit_byte_us=90000000000", "max_deficit_byte_us=101911296001", 1))
+        (Directory / "probe-server.stdout.log").write_text(Good.replace("max_run_deficit_byte_us=9000000000", "max_run_deficit_byte_us=18025216001", 1))
+        self.assertFalse(Run.Result()["Success"])
+        (Directory / "probe-server.stdout.log").write_text(Good.replace("completed_grants=3", "completed_grants=2", 1))
+        self.assertFalse(Run.Result()["Success"])
+        (Directory / "probe-server.stdout.log").write_text(Good.replace("pool_running_bound_byte_us=72100864000", "pool_running_bound_byte_us=72100864001"))
         self.assertFalse(Run.Result()["Success"])
         Config = {"Role": "CLIENT", "QualificationMode": "PHASE1", "ReadinessClients": 4}
         Run = Q.LocalRun(Config, SimpleNamespace(Directory=Directory))

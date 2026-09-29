@@ -388,24 +388,26 @@ class LocalRun:
             Admission = Admissions[0] if len(Admissions) == 1 else {}
             try:
                 PeerProof = (len(Peers) == 4 and len({P["slot"] for P in Peers}) == 4 and
-                             all(int(P["qualified_grants"]) >= 3 and
+                             all(int(P["grants"]) >= 3 and
+                                 int(P["qualified_grants"]) == int(P["grants"]) and
+                                 int(P["completed_grants"]) == int(P["grants"]) and
                                  int(P["structural_first"]) > 0 and
                                  int(P["structural_ack"]) == int(P["structural_first"]) and
-                                 int(P["qualified_active_us"]) > 0 and
-                                 int(P["max_deficit_byte_us"]) <= int(Curve["peer_deficit_bound_byte_us"])
+                                 int(P["running_us"]) > 0 and
+                                 int(P["max_run_deficit_byte_us"]) <= int(Curve["peer_running_bound_byte_us"])
                                  for P in Peers))
-                PoolProof = (Curve["contract"] == "D01" and Curve["verdict"] == "PASS" and
-                             Curve["pool_curve"] == "derived-from-four-native-peer-curves" and
+                PoolProof = (Curve["contract"] == "F1" and Curve["verdict"] == "PASS" and
+                             Curve["pool_curve"] == "derived-from-four-native-grant-curves" and
                              int(Curve["peer_rate_Bps"]) == 16 * 1024 * 1024 and
                              int(Curve["pool_rate_Bps"]) == 64 * 1024 * 1024 and
-                             int(Curve["quantum_B"]) == 1248 and int(Curve["handoff_us"]) == 6000 and
-                             int(Curve["pool_deficit_bound_byte_us"]) ==
-                             4 * int(Curve["peer_deficit_bound_byte_us"]) and
-                             int(Curve["pool_qualified_us"]) > 0 and
-                             int(Curve["pool_after_first_boundary_us"]) > 0 and
-                             int(Curve["pool_after_second_boundary_us"]) > 0 and
-                             int(Curve["pool_episodes"]) >= 3 and
-                             int(Curve["producer_starved"]) == 0)
+                             int(Curve["quantum_B"]) == 1248 and
+                             int(Curve["startup_us"]) == 5000 and int(Curve["run_us"]) == 1000 and
+                             int(Curve["peer_finite_intercept_byte_us"]) == 101911296000 and
+                             int(Curve["peer_running_bound_byte_us"]) == 18025216000 and
+                             int(Curve["pool_running_bound_byte_us"]) ==
+                             4 * int(Curve["peer_running_bound_byte_us"]) and
+                             int(Curve["pool_common_run_us"]) > 0 and
+                             int(Curve["pool_episodes"]) >= 3)
                 Conservation = (int(Admission["accepted"]) == int(Admission["retired"]) and
                                 int(Admission["terminal"]) == 0 and
                                 int(Admission["outstanding"]) == 0 and

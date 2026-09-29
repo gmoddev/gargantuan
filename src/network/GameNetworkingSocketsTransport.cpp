@@ -242,7 +242,7 @@ namespace gargantuan::network {
 			else if (Native.NativeState == k_ESteamNetworkingConnectionState_Connecting ||
 				Native.NativeState == k_ESteamNetworkingConnectionState_FindingRoute) State = ConnectionState::Connecting;
 			else return {};
-			return detail::ReliableServiceFeedback{Id, Native.ObservedAtMicroseconds,
+			auto Result = detail::ReliableServiceFeedback{Id, Native.ObservedAtMicroseconds,
 				Counters.UniqueReliableStreamBytesFirstSent, Counters.UniqueReliableStreamBytesAcked,
 				Counters.StructuralPayloadBytesFirstSent, Counters.StructuralPayloadBytesAcked,
 				Counters.StructuralQualifiedActiveMicroseconds,
@@ -256,6 +256,23 @@ namespace gargantuan::network {
 				Counters.AttributedRetirementSequence, Counters.ActiveAttributedRetirementToken,
 				Counters.ActiveAttributedMessageNumber, Counters.LastAttributedRetirementToken,
 				Counters.LastAttributedRetirementMessageNumber, Counters.LastAttributedRetiredPayloadBytes};
+			Result.StructuralGrantFirstSendAtMicroseconds = Counters.StructuralGrantFirstSendAtMicroseconds;
+			Result.StructuralGrantCompletedAtMicroseconds = Counters.StructuralGrantCompletedAtMicroseconds;
+			Result.StructuralCompletedGrantSequence = Counters.StructuralCompletedGrantSequence;
+			Result.StructuralLastCompletedGrantToken = Counters.StructuralLastCompletedGrantToken;
+			Result.StructuralLastCompletedGrantBytes = Counters.StructuralLastCompletedGrantBytes;
+			Result.StructuralLastCompletedGrantActivatedAtMicroseconds =
+				Counters.StructuralLastCompletedGrantActivatedAtMicroseconds;
+			Result.StructuralLastCompletedGrantFirstSendAtMicroseconds =
+				Counters.StructuralLastCompletedGrantFirstSendAtMicroseconds;
+			Result.StructuralLastCompletedGrantCompletedAtMicroseconds =
+				Counters.StructuralLastCompletedGrantCompletedAtMicroseconds;
+			Result.StructuralLastCompletedGrantMaximumRunningDeficitByteMicroseconds =
+				Counters.StructuralLastCompletedGrantMaximumRunningDeficitByteMicroseconds;
+			Result.StructuralLastCompletedGrantFailed = Counters.StructuralLastCompletedGrantFailed;
+			Result.StructuralMaximumFiniteShortfallByteMicroseconds =
+				Counters.StructuralMaximumFiniteShortfallByteMicroseconds;
+			return Result;
 		}
 	}
 

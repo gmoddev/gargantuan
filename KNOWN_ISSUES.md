@@ -85,6 +85,19 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+2026-09-29 F1 architecture correction: [D01's F1 amendment](docs/adr/D01-pooled-service-curve.md#f1-amendment--finite-active-grant-drain-capacity-2026-09-29)
+defines 16 MiB/s as finite accepted-grant first-send drain capacity, with a
+separate within-grant running-rate proof. It supersedes generation-persistent,
+semantic-busy and sustained post-credit-offer service interpretations without
+changing 2 MiB/s peer admission or ACK-gated grant ownership. Deterministic
+tests obtain four exact 512 KiB grants through production admission, verify
+their finite and common running curves with controlled first-send events, and
+retire all four receipts. Native attribution, deliberately slow service,
+asymmetric grants and credit/ACK gaps pass separate deterministic checks.
+Physical Phase 1 remains pending; KI-006 stays OPEN and Foundation 3L stays
+B — PARTIALLY READY. Older entries
+below record their original checkpoint and are not F1 evidence.
+
 The [D01 service-curve decision](docs/adr/D01-pooled-service-curve.md)
 supersedes the short ACK-positive window rule discussed in the 2026-09-28
 receipt below. That receipt remains historical; no D01 physical Phase 1 has

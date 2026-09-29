@@ -1,6 +1,7 @@
 #pragma once
 #include "../src/network/ReliableByteAdmission.hpp"
 #include "../src/network/PooledReliableServiceFeedback.hpp"
+#include "../src/network/FiniteGrantServiceCurve.hpp"
 #include "PooledReliableServiceModelFixture.hpp"
 #include <array>
 #include <iostream>
@@ -109,7 +110,7 @@ inline bool RunPooledReliableServiceProductionTests() {
 			S.State = ConnectionState::Closed; S.CountersValid = false;
 			R = L.Observe(Id, C, S, 2000, 0, 0); Check(R.Valid && R.Terminal && !R.RetiredBytes, "invalid counters purge only");
 		});
-		Test("PersistentFirstSendHealthDoesNotRequireShortAckDelta", [&] {
+		Test("FiniteGrantFirstSendHealthDoesNotRequireShortAckDelta", [&] {
 			Ledger L;
 			Sample S{.Connection = Id, .State = ConnectionState::Connected};
 			Check(L.Observe(Id, {0, 0, 0}, S, 0, 0, 0).Valid, "initial healthy generation");
@@ -117,7 +118,7 @@ inline bool RunPooledReliableServiceProductionTests() {
 			S.UniqueReliableStreamBytesFirstSent = 102;
 			S.StructuralPayloadBytesFirstSent = 100;
 			S.StructuralQualifiedActiveMicroseconds = 4000;
-			S.StructuralMaximumDeficitByteMicroseconds = 90'000'000'000ULL;
+			S.StructuralMaximumDeficitByteMicroseconds = 10'000'000'000ULL;
 			S.ActiveAttributedRetirementToken = 7;
 			S.ActiveAttributedMessageNumber = 10;
 			auto Result = L.Observe(Id, {100, 100, 0}, S, 5000, 7, 100);
@@ -126,7 +127,7 @@ inline bool RunPooledReliableServiceProductionTests() {
 				"first-send service stays healthy with a zero-ACK interval");
 			S.ObservedAtMicroseconds = 6000;
 			S.StructuralMaximumDeficitByteMicroseconds =
-				PooledReliableServiceProfile::ServiceDeficitBoundByteMicroseconds + 1;
+				PooledReliableServiceProfile::RunningGrantBoundByteMicroseconds + 1;
 			S.StructuralServiceFailed = true;
 			Result = L.Observe(Id, {100, 100, 0}, S, 6000, 7, 100);
 			Check(Result.Valid && !Result.Qualified && !L.ServiceEligible,
@@ -143,7 +144,31 @@ inline bool RunPooledReliableServiceProductionTests() {
 			S.LastAttributedRetiredPayloadBytes = 100;
 			Result = L.Observe(Id, {100, 100, 0}, S, 7000, 7, 100);
 			Check(Result.Valid && Result.RetiredBytes == 100 && !Result.Qualified,
-				"later ACK retires exactly but does not erase deficit history");
+				"later ACK retires exactly but does not erase a failed grant");
+		});
+		Test("QueuedOfferChargesBeforeNativeAttribution", [&] {
+			Ledger L; Sample S{.Connection = Id, .State = ConnectionState::Connected};
+			Check(L.Observe(Id, {0, 0, 0}, S, 1'000'000, 0, 0).Valid, "baseline");
+			Check(L.PublishOffer(7, 77, 1'000'000), "one exact accepted offer");
+			S.ObservedAtMicroseconds = 1'006'075;
+			auto R = L.Observe(Id, {77, 77, 0}, S, 1'006'075, 7, 77);
+			Check(R.Valid && !R.Qualified && L.QueuedOfferFailed,
+				"scheduler-held accepted bytes cannot evade finite latency");
+			S.ActiveAttributedRetirementToken = 7; S.ActiveAttributedMessageNumber = 9;
+			S.StructuralPayloadBytesFirstSent = 77; S.UniqueReliableStreamBytesFirstSent = 77;
+			R = L.Observe(Id, {77, 77, 0}, S, 1'006'075, 7, 77);
+			Check(R.Valid && !R.Qualified && !L.Offer,
+				"late catch-up cannot erase an earlier queued-offer failure");
+		});
+		Test("SuccessfulRequalificationCanRestoreGrantHealth", [&] {
+			Ledger L; Sample S{.Connection = Id, .State = ConnectionState::Connected};
+			Check(L.Observe(Id, {0, 0, 0}, S, 1'000'000, 0, 0).Valid, "baseline");
+			S.ObservedAtMicroseconds = 1'001'000; S.StructuralServiceFailed = true;
+			Check(!L.Observe(Id, {0, 0, 0}, S, 1'001'000, 0, 0).Qualified,
+				"failed grant is unhealthy");
+			S.ObservedAtMicroseconds = 2'001'000; S.StructuralServiceFailed = false;
+			Check(L.Observe(Id, {0, 0, 0}, S, 2'001'000, 0, 0).Qualified,
+				"new independent successful qualification can restore service health");
 		});
 		Test("OrdinarySplitBoundContainsEveryLegalHistory", [&] {
 			for (std::uint64_t Total = 0; Total <= 512 * 1024; Total += 1024) {
@@ -152,6 +177,70 @@ inline bool RunPooledReliableServiceProductionTests() {
 					Check(*Bound >= std::max(Game, PooledReliableServiceProfile::GameplayBurst) +
 						std::max(Total - Game, PooledReliableServiceProfile::ControlBurst), "ordinary underfunding");
 			}
+		});
+		Test("FourReachableMaximumGrantsDrainAndRetire", [&] {
+			Admission Production(ReliableServiceProfile::PooledService());
+			std::array<Admission::Reservation, 4> Receipts{};
+			std::array<FiniteGrantServiceCurve, 4> Curves{};
+			for (const std::uint64_t Time : {0ULL, 250'000ULL}) {
+				Check(Production.BeginStep(Time), "production credit step");
+				for (std::uint32_t Index = 0; Index < Receipts.size(); ++Index)
+					Check(Production.ObserveService({Index + 1, 1},
+						Admission::ServiceObservation{Time, true, true}), "fresh production peer");
+				Production.SetOrdinaryFunding(224 * 1024);
+				Production.EndStep();
+			}
+			Check(Production.BeginStep(250'000), "grant step");
+			for (std::uint32_t Index = 0; Index < Receipts.size(); ++Index)
+				Check(Production.ObserveService({Index + 1, 1},
+					Admission::ServiceObservation{250'000, true, true}), "current-step feedback");
+			Production.SetOrdinaryFunding(224 * 1024);
+			for (std::uint32_t Index = 0; Index < Receipts.size(); ++Index) {
+				const ConnectionId Peer{Index + 1, 1};
+				Check(Production.Allowance(Peer, 250'000) == G, "maximum group is eligible");
+				auto Receipt = Production.Reserve(Peer, G);
+				Check(Receipt && Production.Commit(*Receipt), "production accepts maximum group");
+				Receipts[Index] = *Receipt;
+				Check(Curves[Index].Activate(Receipt->Token, Receipt->Bytes, 250'000),
+					"F1 binds exact production grant token and bytes");
+			}
+			Check(Production.GetMetrics().ActiveDrainGrants == 4 &&
+				Production.GetMetrics().AcceptedBytes == 4 * G, "four production grant slots and bytes");
+			Production.EndStep();
+			// The first-send schedule is controlled; the grants and receipts above are
+			// produced by the unchanged admission implementation, not fabricated offers.
+			for (std::uint32_t Packet = 0; Packet < 32; ++Packet) {
+				const std::uint64_t At = 250'100 + Packet * 900;
+				std::uint64_t CommonDeficit = 0;
+				for (std::uint32_t Index = 0; Index < Receipts.size(); ++Index) {
+					Check(Curves[Index].Observe(At), "pre-send interval remains healthy");
+					CommonDeficit += Curves[Index].CurrentRunningDeficitByteMicroseconds;
+				}
+				Check(CommonDeficit <= PooledReliableServiceProfile::FourGrantPoolRunningBoundByteMicroseconds,
+					"four simultaneously backlogged grants satisfy common pool running bound");
+				for (std::uint32_t Index = 0; Index < Receipts.size(); ++Index) {
+					Check(Curves[Index].FirstSend(Receipts[Index].Token, 16 * 1024, At),
+						"reachable grant satisfies finite and intra-grant curves");
+				}
+			}
+			for (std::uint32_t Index = 0; Index < Receipts.size(); ++Index) {
+				Check(Curves[Index].FirstSentBytes == G && !Curves[Index].ServiceFailed &&
+					(Curves[Index].CompletedAtMicroseconds - Curves[Index].ActivatedAtMicroseconds) *
+						FiniteGrantServiceCurve::PeerRateBytesPerSecond <=
+						FiniteGrantServiceCurve::FiniteInterceptByteMicroseconds + G * 1'000'000,
+					"maximum grant completes within F1 deadline");
+				Check(Production.Retire({Index + 1, 1}, Receipts[Index].Token, G),
+					"matching production receipt retires exactly once");
+			}
+			Check(Production.BeginStep(279'000), "post-ACK service observation");
+			for (std::uint32_t Index = 0; Index < Receipts.size(); ++Index)
+				Check(Production.ObserveService({Index + 1, 1},
+					Admission::ServiceObservation{279'000, true, true}), "ACK-gated grant releases after debt retirement");
+			Production.EndStep();
+			Check(Production.GetMetrics().ActiveDrainGrants == 0 &&
+				Production.GetMetrics().OutstandingBytes == 0 &&
+				Production.GetMetrics().VerifiedAttributedRetirement == 4 * G,
+				"production grants converge without debt or active slots");
 		});
 		Test("ThirtyTwoPeerReferenceDifferential", [&] {
 			using namespace pooled_service_model;
@@ -203,6 +292,6 @@ inline bool RunPooledReliableServiceProductionTests() {
 		std::cerr << "[Network:PooledProduction] FAIL " << Error.what() << '\n'; return false;
 	}
 	std::cout << "[Network:PooledProduction] cases=" << Passed << " PASS\n";
-	return Passed == 9;
+	return Passed == 12;
 }
 }

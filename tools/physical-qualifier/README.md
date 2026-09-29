@@ -1,11 +1,16 @@
 # Gargantuan physical qualification adapter
 
-The versioned Phase 1 probe and adapter now evaluate the
-[D01 rate-plus-bounded-deficit contract](../../docs/adr/D01-pooled-service-curve.md).
-Earlier three-by-three ACK-positive window receipts are historical. The
-installed physical probe and capture-service pins remain unchanged until a
-separate deployment qualification; no physical Phase 1 is authorized here.
-The staged D01 candidate is pinned separately from readiness: probe SHA-256
+The development Phase 1 probe and result analyzer implement the
+[D01/F1 finite-grant drain contract](../../docs/adr/D01-pooled-service-curve.md):
+each accepted maximum-size grant must complete unique native first-send within
+its finite rate-latency envelope, pass its independent intra-grant running-rate
+check, and participate in a real four-peer first-send overlap. Four native
+all-subinterval peer checks imply the 64 MiB/s running-pool bound on that
+common interval. ACK, retirement, capture, and gameplay gates remain separate.
+Earlier short-window and D01 cross-grant receipts are historical. The installed
+physical probe and capture-service pins remain unchanged; no physical Phase 1
+is authorized here. The old staged D01 candidate remains pinned separately
+from readiness: probe SHA-256
 `2E543D0983D66895569A0E270905086200C6E478A8C313B206E6BC64C0081ABC`,
 native-source archive SHA-256
 `FC0D0B5E11D488E091CF4552A3CFC7E9362F1DA4DFA434AB139120A15BFDAA5A`,
@@ -14,6 +19,9 @@ base `a998cf98b6a1dad40d414c59e0f4a6d348749e52`, and pinned GNS
 passed manifest/hash and socket-free self-test preflight. The worker-local
 four-process loopback stress case failed D01's charged service-deficit bound;
 it did not exercise the physical path.
+The D01 manifest and probe hashes are deployment history, not F1 qualification.
+The local Phase 1 result analyzer rejects D01 output as F1; an F1 source/probe
+bundle needs deterministic qualification and new pins before a physical stage.
 
 Generic transport, coordinator, endpoint and privileged capture implementation is
 owned by [GantriaEngine Agent Coordinator](https://github.com/GantriaEngine/agent-coordinator).
@@ -31,8 +39,8 @@ The explicit `stage --clients 4 --phase1` path selects the pinned four-client
 non-smoke probe, `FOUR_CLIENT_PHASE1_ONLY` result classification, 70-second
 client capture finalization and the bounded
 [`four-client-phase1-lifecycle.json`](workflows/four-client-phase1-lifecycle.json)
-workflow. Its server result requires the probe's strengthened four-grant funding
-verdict and metrics. It launches exactly one gameplay producer (the first
+workflow. Its server result requires the F1 four-grant finite-drain verdict and
+metrics. It launches exactly one gameplay producer (the first
 client nonce) and three non-producers; the endpoint rejects a staged Phase 1
 client config with a different producer flag. Readiness staging keeps all four
 producer flags at zero and remains `FOUR_CLIENT_READINESS_ONLY`.
@@ -155,5 +163,6 @@ records that historical failure and cleanup. The later one-client PASS and
 four-client capture stop are recorded in the current physical receipt.
 
 At the time of that ordering fix, POOLED_SERVICE, physical gates, KI-006,
-Foundation 3L status and 3M were unchanged. The later D01 contract now
-supersedes the short-window service-health and Phase 1 acceptance rules.
+Foundation 3L status and 3M were unchanged. D01 later superseded the
+short-window acceptance rules; F1 now supersedes D01's cross-grant service
+deficit for future qualification while those receipts remain historical.

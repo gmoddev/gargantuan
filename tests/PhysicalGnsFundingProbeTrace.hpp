@@ -11,7 +11,10 @@ namespace physical_probe {
 using namespace gargantuan::network;
 constexpr unsigned PeerCount = 4, DemandGroupCount = 1, WaveCount = 32;
 constexpr std::uint64_t GroupBytes = MaximumReliableServiceGroupBytes;
-constexpr std::uint64_t DeficitBound = PooledReliableServiceProfile::ServiceDeficitBoundByteMicroseconds;
+constexpr std::uint64_t RunningDeficitBound = PooledReliableServiceProfile::RunningGrantBoundByteMicroseconds;
+constexpr std::uint64_t PeerDrainRate = 16'777'216;
+constexpr std::uint64_t FiniteLatencyByteMicroseconds =
+	PeerDrainRate * 6'000 + 1'248'000'000;
 constexpr std::uint64_t FreshnessUs = 50'000;
 
 struct Trace {
@@ -23,6 +26,7 @@ struct Trace {
 	};
 	struct Grant {
 		std::uint64_t Token = 0, Bytes = 0, StartedAtMicroseconds = 0;
+		std::uint64_t FirstSendAtMicroseconds = 0, CompletedAtMicroseconds = 0;
 		bool Retired = false, Qualified = false;
 	};
 	struct Peer {
@@ -39,9 +43,9 @@ struct Trace {
 	std::vector<Row> Rows;
 	std::array<Peer, PeerCount> Peers{};
 	std::uint64_t CampaignStartedAt = 0, PoolQualifiedUs = 0;
-	std::uint64_t PoolAfterFirstBoundaryUs = 0, PoolAfterSecondBoundaryUs = 0, PoolEpisodes = 0;
+		std::uint64_t PoolEpisodes = 0;
 	unsigned Demand = 0;
-	bool Overflow = false, Invalid = false, FloorFailure = false, ProducerStarved = false, Installed = false;
+	bool Overflow = false, Invalid = false, FloorFailure = false, Installed = false;
 	detail::PooledServiceSink Sink{this, Record};
 	detail::GnsServiceSink BackendSink{this, BackendRecord, nullptr};
 	detail::PooledServiceSink *PreviousSink = nullptr;
@@ -88,7 +92,7 @@ struct Trace {
 				const auto &F = *S.Feedback;
 				if (F.StructuralPayloadBytesAcked > F.StructuralPayloadBytesFirstSent ||
 					F.StructuralPayloadBytesFirstSent - F.StructuralPayloadBytesAcked > GroupBytes ||
-					F.StructuralMaximumDeficitByteMicroseconds > DeficitBound || F.StructuralServiceFailed)
+					F.StructuralMaximumDeficitByteMicroseconds > RunningDeficitBound || F.StructuralServiceFailed)
 					Self.FloorFailure = true;
 				if (!P->CampaignBaseline) {
 					P->BaselineFirst = F.StructuralPayloadBytesFirstSent;
@@ -116,84 +120,105 @@ struct Trace {
 				P->MaximumDeficit = F.StructuralMaximumDeficitByteMicroseconds;
 				P->Retry += R.RetryDelta;
 			}
-			if (S.DebtToken) {
-				auto *G = Self.FindGrant(*P, S.DebtToken, true);
-				if (G && G->Token && (G->Bytes != S.DebtBytes || G->Retired)) Self.Invalid = true;
+			const auto GrantToken = S.DebtToken ? S.DebtToken : S.Result.RetiredToken;
+			const auto GrantBytes = S.DebtToken ? S.DebtBytes : S.Result.RetiredBytes;
+			if (GrantToken) {
+				auto *G = Self.FindGrant(*P, GrantToken, S.DebtToken != 0);
+				if (G && G->Token && (G->Bytes != GrantBytes || G->Retired)) Self.Invalid = true;
 				if (G) {
-					if (!G->Token) { G->Token = S.DebtToken; G->Bytes = S.DebtBytes; }
-					if (!G->Qualified && S.Feedback && S.Feedback->StructuralActiveGrantStartedAtMicroseconds) {
-						G->Qualified = true;
-						G->StartedAtMicroseconds = S.Feedback->StructuralActiveGrantStartedAtMicroseconds;
-						++P->QualifiedGrants;
+					if (!G->Token) { G->Token = GrantToken; G->Bytes = GrantBytes; }
+					if (S.Feedback) {
+						const auto &F = *S.Feedback;
+						const bool Completed = F.StructuralLastCompletedGrantToken == G->Token;
+						const auto Started = Completed ? F.StructuralLastCompletedGrantActivatedAtMicroseconds :
+							F.StructuralActiveGrantStartedAtMicroseconds;
+						const auto First = Completed ? F.StructuralLastCompletedGrantFirstSendAtMicroseconds :
+							F.StructuralGrantFirstSendAtMicroseconds;
+						const auto Finish = Completed ? F.StructuralLastCompletedGrantCompletedAtMicroseconds :
+							F.StructuralGrantCompletedAtMicroseconds;
+						if (Completed && F.StructuralLastCompletedGrantBytes != G->Bytes) Self.Invalid = true;
+						if (Completed && (F.StructuralLastCompletedGrantFailed ||
+							F.StructuralLastCompletedGrantMaximumRunningDeficitByteMicroseconds > RunningDeficitBound))
+							Self.FloorFailure = true;
+						if (Started && !G->Qualified) {
+							G->Qualified = true; G->StartedAtMicroseconds = Started; ++P->QualifiedGrants;
+						} else if (Started && G->StartedAtMicroseconds != Started) Self.Invalid = true;
+						if (First && (!G->FirstSendAtMicroseconds || G->FirstSendAtMicroseconds == First))
+							G->FirstSendAtMicroseconds = First;
+						else if (First) Self.Invalid = true;
+						if (Finish && (!G->CompletedAtMicroseconds || G->CompletedAtMicroseconds == Finish))
+							G->CompletedAtMicroseconds = Finish;
+						else if (Finish) Self.Invalid = true;
+						if (G->CompletedAtMicroseconds && (!G->Qualified || !G->FirstSendAtMicroseconds ||
+							G->StartedAtMicroseconds > G->FirstSendAtMicroseconds ||
+							G->FirstSendAtMicroseconds > G->CompletedAtMicroseconds ||
+							G->CompletedAtMicroseconds > F.ObservedAtMicroseconds ||
+							PeerDrainRate * (G->CompletedAtMicroseconds - G->StartedAtMicroseconds) >
+								FiniteLatencyByteMicroseconds + G->Bytes * 1'000'000)) Self.FloorFailure = true;
 					}
 				}
 			}
 			if (S.Result.RetiredBytes) {
 				auto *G = Self.FindGrant(*P, S.Result.RetiredToken, false);
-				if (!G || G->Retired || G->Bytes != S.Result.RetiredBytes) Self.Invalid = true;
+				if (!G || G->Retired || G->Bytes != S.Result.RetiredBytes || !G->CompletedAtMicroseconds) Self.Invalid = true;
 				else G->Retired = true;
 			}
 		}
 		P->Previous = R; P->HasPrevious = true; Self.Rows.push_back(R);
 	}
 	void Analyze() {
-		PoolQualifiedUs = PoolAfterFirstBoundaryUs = PoolAfterSecondBoundaryUs = PoolEpisodes = 0;
+		PoolQualifiedUs = PoolEpisodes = 0;
 		if (!CampaignStartedAt) return;
-		std::uint64_t LastEnd = 0;
-		std::array<std::uint64_t, PeerCount> PreviousTokens{};
-		for (std::size_t Index = 0; Index < Rows.size();) {
-			const auto Step = Rows[Index].Sample.SimulationTick;
-			std::array<const Row *, PeerCount> Current{};
-			while (Index < Rows.size() && Rows[Index].Sample.SimulationTick == Step) {
-				const Row *Value = &Rows[Index++];
-				for (unsigned P = 0; P < PeerCount; ++P)
-					if (Value->Sample.Connection == Peers[P].Id) Current[P] = Value;
-			}
-			std::uint64_t Begin = 0, End = std::numeric_limits<std::uint64_t>::max();
-			std::array<std::uint64_t, PeerCount> Tokens{};
-			bool Common = true;
-			for (unsigned P = 0; P < PeerCount; ++P) {
-				const Row *Value = Current[P];
-				if (!Value || !Value->Sample.Feedback || !Value->Sample.DebtToken ||
-					!Value->Sample.Result.Available ||
-					!Value->Sample.Feedback->StructuralActiveGrantStartedAtMicroseconds) {
-					Common = false; break;
+		// Native all-subinterval running-min checks for each grant imply the
+		// 64 MiB/s / 4*B_run pool inequality by summing on each real common
+		// first-send-backlogged interval. Debt/ACK overlap is not service overlap.
+		struct Event { std::uint64_t At; unsigned Peer; bool Start; };
+		std::vector<Event> Events;
+		for (unsigned Index = 0; Index < PeerCount; ++Index)
+			for (std::size_t G = 0; G < Peers[Index].GrantCount; ++G) {
+				const auto &Value = Peers[Index].Grants[G];
+				if (Value.FirstSendAtMicroseconds && Value.CompletedAtMicroseconds > Value.FirstSendAtMicroseconds) {
+					Events.push_back({Value.FirstSendAtMicroseconds, Index, true});
+					Events.push_back({Value.CompletedAtMicroseconds, Index, false});
 				}
-				Tokens[P] = Value->Sample.DebtToken;
-				Begin = std::max(Begin, Value->Sample.Feedback->StructuralActiveGrantStartedAtMicroseconds);
-				End = std::min(End, Value->Sample.Feedback->ObservedAtMicroseconds);
 			}
-			if (!Common || End <= Begin || End <= LastEnd) continue;
-			const auto NewBegin = std::max(Begin, LastEnd);
-			const auto Duration = End - NewBegin;
-			PoolQualifiedUs += Duration;
-			if (End > CampaignStartedAt + 1'000'000)
-				PoolAfterFirstBoundaryUs += End - std::max(NewBegin, CampaignStartedAt + 1'000'000);
-			if (End > CampaignStartedAt + 2'000'000)
-				PoolAfterSecondBoundaryUs += End - std::max(NewBegin, CampaignStartedAt + 2'000'000);
-			if (Tokens != PreviousTokens) { ++PoolEpisodes; PreviousTokens = Tokens; }
-			LastEnd = End;
+		std::sort(Events.begin(), Events.end(), [](const Event &A, const Event &B) {
+			return A.At != B.At ? A.At < B.At : A.Start < B.Start;
+		});
+		std::array<bool, PeerCount> Active{};
+		std::uint64_t PreviousAt = 0;
+		bool CommonBefore = false;
+		for (const auto &Value : Events) {
+			if (CommonBefore && Value.At > PreviousAt) PoolQualifiedUs += Value.At - PreviousAt;
+			Active[Value.Peer] = Value.Start;
+			const bool CommonAfter = std::all_of(Active.begin(), Active.end(), [](bool On) { return On; });
+			if (CommonAfter && !CommonBefore) ++PoolEpisodes;
+			CommonBefore = CommonAfter;
+			PreviousAt = Value.At;
 		}
 	}
 	bool Passed() const {
-		if (Overflow || Invalid || FloorFailure || ProducerStarved || !CampaignStartedAt ||
-			!PoolQualifiedUs || !PoolAfterFirstBoundaryUs || !PoolAfterSecondBoundaryUs || PoolEpisodes < 3)
+		if (Overflow || Invalid || FloorFailure || !CampaignStartedAt ||
+			!PoolQualifiedUs || PoolEpisodes < 3)
 			return false;
 		for (const auto &P : Peers) {
 			if (!P.Id.IsValid() || !P.CampaignBaseline || P.QualifiedGrants < 3 ||
 				P.LastFirst <= P.BaselineFirst || P.LastAck != P.LastFirst ||
-				P.LastActiveUs <= P.BaselineActiveUs || P.MaximumDeficit > DeficitBound ||
+				P.LastActiveUs <= P.BaselineActiveUs || P.MaximumDeficit > RunningDeficitBound ||
 				!P.HasPrevious || !P.Previous.Sample.Feedback ||
 				P.Previous.Sample.Feedback->PendingReliableStreamBytes ||
 				P.Previous.Sample.Feedback->StructuralActiveGrantBytes)
 				return false;
-			for (std::size_t I = 0; I < P.GrantCount; ++I) if (!P.Grants[I].Retired) return false;
+			for (std::size_t I = 0; I < P.GrantCount; ++I)
+				if (!P.Grants[I].Retired || !P.Grants[I].Qualified ||
+					P.Grants[I].Bytes != GroupBytes || !P.Grants[I].FirstSendAtMicroseconds ||
+					!P.Grants[I].CompletedAtMicroseconds) return false;
 		}
 		return true;
 	}
 	void Dump(const char *Path) const {
 		std::ofstream Out(Path); Out.exceptions(std::ios::failbit | std::ios::badbit);
-		Out << "simulation_step,slot,generation,consumed_us,feedback_us,present,valid,available,qualified,debt_token,debt_bytes,journal_lag,accepted_structural,structural_first,structural_ack,active_us,current_deficit_byte_us,max_deficit_byte_us,service_failed,active_grant_started_us,active_grant_bytes,first_sent_in_grant,retry,pending,unacked,retirement_sequence,retired_token,result_retired_bytes,grants,total_debt,created,retired,terminal,delta_first,delta_ack,delta_retry,backend_ns,queue_us,rate\n";
+		Out << "simulation_step,slot,generation,consumed_us,feedback_us,present,valid,available,qualified,debt_token,debt_bytes,journal_lag,accepted_structural,structural_first,structural_ack,running_us,current_run_deficit_byte_us,max_run_deficit_byte_us,service_failed,active_grant_started_us,active_grant_bytes,first_sent_in_grant,grant_first_us,grant_complete_us,last_completed_token,last_completed_bytes,last_completed_activated_us,last_completed_first_us,last_completed_finish_us,last_completed_max_run_deficit_byte_us,last_completed_failed,retry,pending,unacked,retirement_sequence,retired_token,result_retired_bytes,grants,total_debt,created,retired,terminal,delta_first,delta_ack,delta_retry,backend_ns,queue_us,rate\n";
 		for (const auto &R : Rows) {
 			const auto &S = R.Sample; const auto F = S.Feedback.value_or(detail::ReliableServiceFeedback{});
 			const auto &M = S.Admission; const auto &B = R.Backend;
@@ -203,7 +228,14 @@ struct Trace {
 				<< ',' << F.StructuralQualifiedActiveMicroseconds << ',' << F.StructuralCurrentDeficitByteMicroseconds
 				<< ',' << F.StructuralMaximumDeficitByteMicroseconds << ',' << F.StructuralServiceFailed
 				<< ',' << F.StructuralActiveGrantStartedAtMicroseconds << ',' << F.StructuralActiveGrantBytes
-				<< ',' << F.StructuralActiveGrantFirstSentBytes << ',' << F.ReliableStreamBytesRetransmitted
+				<< ',' << F.StructuralActiveGrantFirstSentBytes
+				<< ',' << F.StructuralGrantFirstSendAtMicroseconds << ',' << F.StructuralGrantCompletedAtMicroseconds
+				<< ',' << F.StructuralLastCompletedGrantToken << ',' << F.StructuralLastCompletedGrantBytes
+				<< ',' << F.StructuralLastCompletedGrantActivatedAtMicroseconds
+				<< ',' << F.StructuralLastCompletedGrantFirstSendAtMicroseconds
+				<< ',' << F.StructuralLastCompletedGrantCompletedAtMicroseconds
+				<< ',' << F.StructuralLastCompletedGrantMaximumRunningDeficitByteMicroseconds
+				<< ',' << F.StructuralLastCompletedGrantFailed << ',' << F.ReliableStreamBytesRetransmitted
 				<< ',' << F.PendingReliableStreamBytes << ',' << F.SentUnackedReliableStreamBytes
 				<< ',' << F.AttributedRetirementSequence << ',' << F.LastAttributedRetirementToken << ',' << S.Result.RetiredBytes
 				<< ',' << M.ActiveDrainGrants << ',' << M.OutstandingBytes << ',' << M.AcceptedBytes

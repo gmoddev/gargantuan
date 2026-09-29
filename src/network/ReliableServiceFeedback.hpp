@@ -40,6 +40,19 @@ struct ReliableServiceFeedback {
 	std::uint64_t LastAttributedRetirementMessageNumber = 0;
 	std::uint64_t LastAttributedRetiredPayloadBytes = 0;
 	bool CountersValid = true;
+	// F1 finite-grant evidence. The last completed record survives through
+	// ACK/retirement so a slower Main-thread observer cannot invent a timeline.
+	std::uint64_t StructuralGrantFirstSendAtMicroseconds = 0;
+	std::uint64_t StructuralGrantCompletedAtMicroseconds = 0;
+	std::uint64_t StructuralCompletedGrantSequence = 0;
+	std::uint64_t StructuralLastCompletedGrantToken = 0;
+	std::uint64_t StructuralLastCompletedGrantBytes = 0;
+	std::uint64_t StructuralLastCompletedGrantActivatedAtMicroseconds = 0;
+	std::uint64_t StructuralLastCompletedGrantFirstSendAtMicroseconds = 0;
+	std::uint64_t StructuralLastCompletedGrantCompletedAtMicroseconds = 0;
+	std::uint64_t StructuralLastCompletedGrantMaximumRunningDeficitByteMicroseconds = 0;
+	bool StructuralLastCompletedGrantFailed = false;
+	std::uint64_t StructuralMaximumFiniteShortfallByteMicroseconds = 0;
 };
 struct ReliableServiceFeedbackAccess {
 	[[nodiscard]] static std::optional<ReliableServiceAcceptedBytes> Accepted(const NetworkScheduler &Scheduler, ConnectionId Connection);

@@ -1593,6 +1593,10 @@ namespace gargantuan::network {
 								return false;
 								}
 						}
+						// A qualified finite obligation starts after exact byte/credit
+						// reservation, before the scheduler or native sender can act.
+						const auto GrantActivatedAt = IsPooled() && Receipt && PeerValue.Phase == PeerPhase::Ready
+							? ServiceTime() : std::numeric_limits<std::uint64_t>::max();
 						auto Queued = QueueStructuralFrame(*Produced.Frame, std::move(Produced.EncodedFrame), Connection,
 							PeerValue.Limits, IsPooled() && Receipt ? Receipt->Token : 0);
 						if (!Queued || !Queued->Accepted()) {
@@ -1610,10 +1614,11 @@ namespace gargantuan::network {
 						}
 						// Once queued, bytes are charged even if a later semantic invariant
 						// terminates the peer. Do not refund already accepted traffic.
+						const bool OfferPublished = !Receipt || !IsPooled() || PeerValue.Phase != PeerPhase::Ready ||
+							PeerValue.ReliableFeedback.PublishOffer(Receipt->Token, Receipt->Bytes, GrantActivatedAt);
 						if (Receipt && (!ByteAdmission->Commit(*Receipt) ||
-							(IsPooled() && !Scheduler.ActivateReliableGrant(Connection, Receipt->Token,
-								PeerValue.Phase == PeerPhase::Ready && PeerValue.ReliableFeedback.ServiceEligible
-									? ServiceTime() : std::numeric_limits<std::uint64_t>::max())))) {
+							(IsPooled() && !Scheduler.ActivateReliableGrant(Connection, Receipt->Token, GrantActivatedAt)) ||
+							!OfferPublished)) {
 							PendingPeerFailures.try_emplace(Connection, DisconnectInfo{DisconnectReason::ResourceExhaustion,
 								"Reliable byte reservation commit failed"});
 							return false;

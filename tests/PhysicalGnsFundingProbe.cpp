@@ -74,7 +74,6 @@ struct Probe {
 	std::uint64_t Nonce, Tick = 0, Errors = 0;
 	unsigned ExpectedClients, ReadinessObserved = 0, Wave = 0, Applied = 0, Sequence = 0;
 	Trace Samples;
-	std::array<std::size_t, PeerCount> WaveFirstGrantIndex{};
 	HeadlessRenderer Renderer{Vector2(32, 32)};
 	std::unique_ptr<Engine> Runtime;
 	std::shared_ptr<GameNetworkingSocketsTransport> Transport;
@@ -278,23 +277,10 @@ struct Probe {
 		const bool AppliedAll = std::all_of(Participants.begin(), Participants.end(), [this](const auto &P) { return P.second.Applied == Wave; });
 		const bool GameplayDone = std::all_of(Participants.begin(), Participants.end(), [](const auto &P) { return !P.second.Producer || P.second.GameplayDone; });
 		// Arm the next complete journal group as soon as the previous one has
-		// reached every client.  Waiting for debt retirement or an arbitrary
-		// inter-wave timer can leave the producer empty at credit eligibility.
+		// reached every client. Credit and ACK-gated gaps do not accrue F1 drain
+		// deficit; the next accepted grant receives its own finite obligation.
 		if (Now - ReadyAt < 1500ms || !AppliedAll || !JournalClear || (!Wave && !Drained)) return false;
 		if (Wave < WaveCount) {
-			if (Wave) {
-				const auto NowUs = std::chrono::duration_cast<std::chrono::microseconds>(Now.time_since_epoch()).count();
-				for (unsigned I = 0; I < PeerCount; ++I) {
-					const auto &P = Samples.Peers[I];
-					if (P.GrantCount <= WaveFirstGrantIndex[I] ||
-						P.Grants[WaveFirstGrantIndex[I]].Bytes != GroupBytes ||
-						!P.Grants[WaveFirstGrantIndex[I]].StartedAtMicroseconds ||
-						NowUs - P.Grants[WaveFirstGrantIndex[I]].StartedAtMicroseconds >= 250'000)
-						Samples.ProducerStarved = true;
-				}
-				Require(!Samples.ProducerStarved, "next structural group missed peer-credit eligibility");
-			}
-			for (unsigned I = 0; I < PeerCount; ++I) WaveFirstGrantIndex[I] = Samples.Peers[I].GrantCount;
 			++Wave; Samples.Demand = 1; WaveStarted = Now; Broadcast("wave", Wave);
 			ExpectedNames = DemandNames(Sizes, Wave + 1);
 			for (unsigned I = 0; I < Objects.size(); ++I) Objects[I]->SetName(ExpectedNames[I]);
@@ -302,7 +288,7 @@ struct Probe {
 		}
 		if (!GameplayDone || !Drained) return false;
 		Samples.Analyze();
-		Require(Samples.Passed(), "D01 four-peer service-curve campaign incomplete");
+		Require(Samples.Passed(), "F1 four-peer finite-grant drain campaign incomplete");
 		Require(detail::GameSessionTestAccess::GetCharacterMetrics(*Session).CommandsAccepted > 0, "no authoritative input accepted");
 		Require(!M.ReliableAdmission.TerminalReleasedBytes, "terminal release cannot count as drain");
 		Finished = true; FinishAt = Now; Broadcast("finish", WaveCount);
@@ -348,39 +334,38 @@ struct Probe {
 			const auto Profile = ReliableServiceProfile::PooledService();
 			Samples.Dump("physical-gns-server.csv");
 			for (const auto &[Id, P] : Participants) std::cout << "[Probe:Peer] slot=" << Id.Slot << " generation=" << Id.Generation << " nonce=" << P.Nonce << " producer=" << P.Producer << '\n';
-			std::uint64_t DemandRows = 0, ActiveBacklogRows = 0;
+			std::uint64_t DemandRows = 0, FourGrantDebtRows = 0;
 			for (const auto &R : Samples.Rows) {
 				if (R.Sample.StructuralJournalLag) ++DemandRows;
 				if (R.Sample.StructuralJournalLag && R.Sample.DebtToken && R.Sample.Feedback &&
 					R.Sample.Feedback->ActiveAttributedRetirementToken == R.Sample.DebtToken &&
-					R.Sample.Admission.ActiveDrainGrants == PeerCount) ++ActiveBacklogRows;
+					R.Sample.Admission.ActiveDrainGrants == PeerCount) ++FourGrantDebtRows;
 			}
 			const auto Cause = Participants.size() < PeerCount ? "H-client-readiness-or-disconnect" :
-				Samples.FloorFailure ? "C-service-deficit-or-unacked" : Samples.Invalid ? "D-feedback-or-attribution" :
-				Samples.ProducerStarved ? "E-producer-starved-at-credit-eligibility" :
-				!Samples.PoolQualifiedUs ? "B-four-grant-overlap" : "A-campaign-convergence-or-turnover";
-			std::cout << "[Probe:ServiceCurve] contract=D01 peer_rate_Bps=" << Profile.Pooled.PeerDrainFloor
+				Samples.FloorFailure ? "C-grant-drain-or-delivery" : Samples.Invalid ? "D-feedback-or-attribution" :
+				!Samples.PoolQualifiedUs ? "B-four-grant-firstsend-overlap" : "A-campaign-convergence-or-turnover";
+			std::cout << "[Probe:ServiceCurve] contract=F1 peer_rate_Bps=" << Profile.Pooled.PeerDrainFloor
 				<< " pool_rate_Bps=" << Profile.Pooled.StructuralPool << " quantum_B=" << PooledReliableServiceProfile::ServiceQuantumBytes
-				<< " handoff_us=" << PooledReliableServiceProfile::MaximumQualifiedServiceHandoffMicroseconds
-				<< " peer_deficit_bound_byte_us=" << DeficitBound
-				<< " pool_deficit_bound_byte_us=" << 4 * DeficitBound
-				<< " pool_qualified_us=" << Samples.PoolQualifiedUs
-				<< " pool_after_first_boundary_us=" << Samples.PoolAfterFirstBoundaryUs
-				<< " pool_after_second_boundary_us=" << Samples.PoolAfterSecondBoundaryUs
+				<< " startup_us=5000 run_us=1000"
+				<< " peer_finite_intercept_byte_us=" << FiniteLatencyByteMicroseconds
+				<< " peer_running_bound_byte_us=" << RunningDeficitBound
+				<< " pool_running_bound_byte_us=" << PooledReliableServiceProfile::FourGrantPoolRunningBoundByteMicroseconds
+				<< " pool_common_run_us=" << Samples.PoolQualifiedUs
 				<< " pool_episodes=" << Samples.PoolEpisodes
-				<< " pool_curve=derived-from-four-native-peer-curves"
-				<< " demand_rows=" << DemandRows << " four_grant_backlog_rows=" << ActiveBacklogRows
-				<< " producer_starved=" << Samples.ProducerStarved
+				<< " pool_curve=derived-from-four-native-grant-curves"
+				<< " demand_rows=" << DemandRows << " four_grant_debt_rows=" << FourGrantDebtRows
 				<< " verdict=" << (Samples.Passed() ? "PASS" : "FAIL")
 				<< " failure_class=" << (Samples.Passed() ? "none" : FailureClass.empty() ? Cause : FailureClass) << '\n';
 			for (unsigned I = 0; I < PeerCount; ++I) {
 				const auto &P = Samples.Peers[I];
 				std::cout << "[Probe:PeerService] slot=" << P.Id.Slot << " grants=" << P.GrantCount
 					<< " qualified_grants=" << P.QualifiedGrants
+					<< " completed_grants=" << std::count_if(P.Grants.begin(), P.Grants.begin() + P.GrantCount,
+						[](const Trace::Grant &G) { return G.CompletedAtMicroseconds != 0; })
 					<< " structural_first=" << P.LastFirst - P.BaselineFirst
 					<< " structural_ack=" << P.LastAck - P.BaselineAck
-					<< " qualified_active_us=" << P.LastActiveUs - P.BaselineActiveUs
-					<< " max_deficit_byte_us=" << P.MaximumDeficit
+					<< " running_us=" << P.LastActiveUs - P.BaselineActiveUs
+					<< " max_run_deficit_byte_us=" << P.MaximumDeficit
 					<< " retry=" << P.Retry << '\n';
 			}
 			const auto M = Session->GetMetrics().ReliableAdmission;
@@ -422,12 +407,12 @@ void SelfTest() {
 		bool Rejected = false; try { (void)Number(Bad); } catch (const std::exception &) { Rejected = true; }
 		Require(Rejected, "invalid numeric argument accepted");
 	}
-	// Socket-free campaign records exercise turnover, both requalification
-	// boundaries, a zero-ACK interval, native deficit failure, and staleness.
+	// Socket-free campaign records exercise independent finite grants, real
+	// four-grant first-send overlap, zero-ACK startup, native failure and staleness.
 	auto FeedCurve = [](Trace &T, unsigned Step, unsigned Wave, unsigned Point,
 		bool Slow = false, bool Stale = false) {
 		const std::uint64_t Start = 1'000'000 + std::uint64_t(Wave - 1) * 1'100'000;
-		const std::uint64_t Time = Start + (Point == 0 ? 1000 : Point == 1 ? 6000 : 35'000);
+		const std::uint64_t Time = Start + (Point == 0 ? 1000 : Point == 1 ? 6000 : 31'000);
 		for (unsigned Peer = 0; Peer < PeerCount; ++Peer) {
 			const ConnectionId Id{Peer + 1, 1};
 			const std::uint64_t Token = Wave * PeerCount + Peer + 1;
@@ -442,15 +427,26 @@ void SelfTest() {
 				.ObservedAtMicroseconds = Stale ? Time - FreshnessUs - 1 : Time,
 				.StructuralPayloadBytesFirstSent = Prior + (Point == 0 ? 0 : Point == 1 ? 100'000 : GroupBytes),
 				.StructuralPayloadBytesAcked = Prior + (Point == 2 ? GroupBytes : 0),
-				.StructuralQualifiedActiveMicroseconds = std::uint64_t(Wave - 1) * 35'000 +
-					(Point == 0 ? 1000 : Point == 1 ? 6000 : 35'000),
-				.StructuralMaximumDeficitByteMicroseconds = Slow ? DeficitBound + 1 : 90'000'000'000ULL,
+				.StructuralQualifiedActiveMicroseconds = std::uint64_t(Wave - 1) * 25'000 +
+					(Point == 2 ? 25'000 : 0),
+				.StructuralMaximumDeficitByteMicroseconds = Slow ? RunningDeficitBound + 1 : 10'000'000'000ULL,
 				.StructuralActiveGrantBytes = Active ? GroupBytes : 0,
 				.StructuralActiveGrantFirstSentBytes = Point == 1 ? std::uint64_t{100'000} : 0,
 				.StructuralActiveGrantStartedAtMicroseconds = Active ? Start : 0,
 				.StructuralServiceFailed = Slow,
 				.PendingReliableStreamBytes = Active ? GroupBytes - (Point == 1 ? 100'000 : 0) : 0,
-				.State = ConnectionState::Connected};
+				.State = ConnectionState::Connected,
+				.StructuralGrantFirstSendAtMicroseconds = Point == 1 ? Start + 6000 : 0,
+				.StructuralGrantCompletedAtMicroseconds = Point == 2 ? Start + 31'000 : 0,
+				.StructuralCompletedGrantSequence = Point == 2 ? Wave : Wave - 1,
+				.StructuralLastCompletedGrantToken = Point == 2 ? Token : 0,
+				.StructuralLastCompletedGrantBytes = Point == 2 ? GroupBytes : 0,
+				.StructuralLastCompletedGrantActivatedAtMicroseconds = Point == 2 ? Start : 0,
+				.StructuralLastCompletedGrantFirstSendAtMicroseconds = Point == 2 ? Start + 6000 : 0,
+				.StructuralLastCompletedGrantCompletedAtMicroseconds = Point == 2 ? Start + 31'000 : 0,
+				.StructuralLastCompletedGrantMaximumRunningDeficitByteMicroseconds =
+					Point == 2 ? (Slow ? RunningDeficitBound + 1 : 10'000'000'000ULL) : 0,
+				.StructuralLastCompletedGrantFailed = Point == 2 && Slow};
 			R.Result.Valid = true; R.Result.Available = !Stale; R.Result.Qualified = !Slow && !Stale;
 			R.Admission.ActiveDrainGrants = Active ? PeerCount : 0;
 			if (!Active) { R.Result.RetiredToken = Token; R.Result.RetiredBytes = GroupBytes; }
@@ -462,17 +458,45 @@ void SelfTest() {
 		for (unsigned P = 0; P < 3; ++P)
 			FeedCurve(Good, (W - 1) * 3 + P + 1, W, P);
 	Good.Analyze();
-	Require(Good.Passed() && Good.PoolEpisodes == 3 &&
-		Good.PoolAfterSecondBoundaryUs > 0, "D01 turnover and both boundary gates failed");
+	if (!Good.Passed()) {
+		std::cerr << "[Probe:SelfTest] F1 trace overflow=" << Good.Overflow
+			<< " invalid=" << Good.Invalid << " floor_failure=" << Good.FloorFailure
+			<< " pool_us=" << Good.PoolQualifiedUs << " episodes=" << Good.PoolEpisodes << '\n';
+		for (const auto &Peer : Good.Peers)
+			std::cerr << "[Probe:SelfTest] peer=" << Peer.Id.Slot << " grants=" << Peer.GrantCount
+				<< " qualified=" << Peer.QualifiedGrants << " first=" << Peer.LastFirst
+				<< " ack=" << Peer.LastAck << " running_us=" << Peer.LastActiveUs
+				<< " max_deficit=" << Peer.MaximumDeficit << '\n';
+		for (const auto &Peer : Good.Peers)
+			for (std::size_t Index = 0; Index < Peer.GrantCount; ++Index) {
+				const auto &Grant = Peer.Grants[Index];
+				std::cerr << "[Probe:SelfTest] grant peer=" << Peer.Id.Slot << " token=" << Grant.Token
+					<< " bytes=" << Grant.Bytes << " start=" << Grant.StartedAtMicroseconds
+					<< " first=" << Grant.FirstSendAtMicroseconds
+					<< " complete=" << Grant.CompletedAtMicroseconds
+					<< " retired=" << Grant.Retired << '\n';
+			}
+	}
+	Require(Good.Passed() && Good.PoolEpisodes == 3 && Good.PoolQualifiedUs == 75'000,
+		"F1 grant turnover and common first-send overlap failed");
 	Trace Slow; Slow.Demand = 1; FeedCurve(Slow, 1, 1, 0); FeedCurve(Slow, 2, 1, 1, true);
-	Require(Slow.FloorFailure && !Slow.Passed(), "native service deficit escaped failure");
+	Require(Slow.FloorFailure && !Slow.Passed(), "native grant running deficit escaped failure");
 	Trace Stale; Stale.Demand = 1; FeedCurve(Stale, 1, 1, 0); FeedCurve(Stale, 2, 1, 1, false, true);
 	Require(Stale.Invalid && !Stale.Passed(), "stale campaign feedback escaped failure");
-	Good.ProducerStarved = true;
-	Require(!Good.Passed(), "late source demand escaped producer-starvation gate");
+	Trace NoOverlap; NoOverlap.Demand = 1;
+	for (unsigned W = 1; W <= 3; ++W)
+		for (unsigned P = 0; P < 3; ++P)
+			FeedCurve(NoOverlap, (W - 1) * 3 + P + 1, W, P);
+	for (std::size_t G = 0; G < NoOverlap.Peers[3].GrantCount; ++G)
+		NoOverlap.Peers[3].Grants[G].FirstSendAtMicroseconds += 20'000;
+	for (unsigned Peer = 0; Peer < 3; ++Peer)
+		for (std::size_t G = 0; G < NoOverlap.Peers[Peer].GrantCount; ++G)
+			NoOverlap.Peers[Peer].Grants[G].CompletedAtMicroseconds -= 6000;
+	NoOverlap.Analyze();
+	Require(!NoOverlap.PoolQualifiedUs && !NoOverlap.Passed(), "ACK/debt overlap counted as pool drain");
 	Good.Rows.resize(Trace::Capacity); FeedCurve(Good, 999, 3, 2);
 	Require(Good.Overflow, "trace overflow did not fail closed");
-	std::cout << "[Probe:SelfTest] pass=1 sockets=0 contract=D01 cases=5\n";
+	std::cout << "[Probe:SelfTest] pass=1 sockets=0 contract=F1 cases=5\n";
 }
 }
 int main(int Count, char **Args) {
@@ -501,7 +525,7 @@ int main(int Count, char **Args) {
 			<< " drain_floor=" << P.Pooled.PeerDrainFloor << " peer_credit=" << P.Pooled.PeerCreditRate << " global_credit=" << P.Pooled.GlobalCreditRate
 			<< " grants=" << P.Pooled.MaximumDrainGrants << " freshness_us=" << P.Pooled.FeedbackFreshnessMicroseconds << " requalification_us=" << P.Pooled.RequalificationMicroseconds
 			<< " peer_burst=" << P.Pooled.PeerBurstCap << " global_burst=" << P.Pooled.GlobalBurstCap << " peer_pending=" << P.Pooled.PeerPendingCap << " global_pending=" << P.Pooled.GlobalPendingCap
-			<< " backend_send_rate=" << P.BackendSendRate() << " scope=" << WaveCount << "-barriered-one-G-waves-per-peer contract=D01 actions=not-exercised\n";
+			<< " backend_send_rate=" << P.BackendSendRate() << " scope=" << WaveCount << "-barriered-one-G-waves-per-peer contract=F1 actions=not-exercised\n";
 		Probe Run(Server, Flag != 0, Server ? 0 : N, {Args[2], static_cast<std::uint16_t>(Port)}, ReadinessSmoke, Server ? static_cast<unsigned>(N) : PeerCount);
 		bool Passed = true;
 		try { Run.Run(); } catch (const std::exception &E) { Passed = false; std::cerr << "[Probe:Failure] " << E.what() << '\n'; }

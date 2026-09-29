@@ -117,3 +117,133 @@ predicate and Phase 1's three batches of three consecutive ACK-positive
 ~6 ms throughput windows. A ~6 ms sampler may remain for telemetry only.
 Physical Phase 1 must be requalified under this decision before any 3L
 acceptance claim; KI-006 remains open and 3M remains blocked.
+
+## F1 amendment — finite active-grant drain capacity (2026-09-29)
+
+**F1 is the governing service interpretation.** The preceding D01 text is
+preserved as decision history. F1 supersedes its generation-persistent
+elapsed-active-time deficit, including the rule that grant turnover never
+resets that deficit. The later R3 persistent-deficit, S1 semantic-busy-period,
+and T2 sustained post-credit-offer interpretations are also superseded where
+they conflict with this amendment. No physical Phase 1 result has qualified
+F1. KI-006 remains open and Foundation 3L remains B — PARTIALLY READY.
+
+### Admission and drain are separate rate domains
+
+Peer structural credit refills at **2 MiB/s** with a **512 KiB** burst cap;
+global credit refills at **64 MiB/s** with a **2 MiB** burst cap. Admission
+retains one ACK-gated accepted grant per peer and at most four global grants.
+Credit/fairness eligibility, accepted debt, pending limits and grant release
+are unchanged. A peer waiting for credit, fairness, ACK or retirement does
+not accrue a 16 MiB/s drain obligation. The 2 MiB/s peer rate controls its
+sustainable share across grants. The **16 MiB/s** peer rate controls how
+quickly a finite accepted grant drains once its unique bytes await first
+native transmission. **64 MiB/s** is the simultaneous drain capacity of four
+such grants; it is also the aggregate refill rate of 32 peers at 2 MiB/s.
+Neither rate requires the same four peers to admit work continuously.
+
+For each generation-safe accepted grant `g`, let `W_g` be its exact complete
+attributed structural service bytes, using the same post-coalescing byte
+basis as pooled admission and native structural attribution. Require
+`0 < W_g <= 524,288 B`. Let `t_g` be its qualified activation timestamp,
+`D_g(t)` its cumulative **unique** structural bytes at first native
+transmission, and `f_g` the timestamp of its first positive first-send event.
+Always require `0 <= D_g(t) <= W_g`. First-send drain ends at `D_g = W_g`;
+ownership, ACK and debt retirement can continue afterward. Retransmission,
+scheduler acceptance, GNS enqueue, authored bytes and ordinary reliable
+gameplay/control bytes do not increase `D_g`.
+
+### Phase A — finite rate-latency envelope
+
+Ordinary reliable transport retains the pinned 5,000 µs GNS startup/Nagle
+term. The sender/service scheduling term is 1,000 µs. With
+`R_i = 16,777,216 B/s` and native quantum `Q_i = 1,248 B`, the grant latency
+is derived, not measured or rounded into a new independent allowance:
+
+```text
+H_start = 5,000 µs
+H_run   = 1,000 µs
+L_g     = H_start + H_run + Q_i/R_i
+        = 6.0743865966796875 ms
+
+D_g(t) >= min(W_g, R_i × max(0, t - t_g - L_g))
+T_complete(g) <= t_g + L_g + W_g/R_i
+```
+
+The equation applies to every legal grant size. A 77 B grant has an
+approximately 6.079 ms completion envelope; it does not have a 77 B divided
+by observed-microseconds throughput requirement. For a 512 KiB grant the
+completion envelope is approximately 37.3243865967 ms. Grant completion
+and the exact inequality are checked against native first-send evidence,
+without a short ACK-positive or arbitrary 6 ms throughput window.
+
+### Phase B — recurring drain within one grant
+
+When bytes remain after `f_g`, let `τ_g(t)` be qualified running time from
+`f_g` while `D_g(t) < W_g`. Define the within-grant deficit and bound:
+
+```text
+Y_g(t) = R_i × τ_g(t) - [D_g(t) - D_g(f_g)]
+B_run  = Q_i + R_i × H_run = 18,025.216 B
+Y_g(t) - min(previous Y_g, including initial zero) <= B_run
+```
+
+Evaluate at first-send progress and still-backlogged observation boundaries.
+The running minimum prevents earlier excess service within the grant from
+funding a later blackout. This check resets only when that finite grant has
+completed first-send; it does not run through ACK wait, credit refill or
+fairness rotation into another grant. It is vacuous for a grant completed by
+its first native send. A slow sustained sender within a large grant must
+fail even if its total completion appears to fit the startup allowance.
+
+### Four simultaneous grants
+
+Every qualified grant independently satisfies both phases. For four grants
+active together, with individual activation times and sizes, also require:
+
+```text
+R_pool = 4 × R_i = 67,108,864 B/s
+D_pool(t) = Σ_g D_g(t)
+D_pool(t) >= Σ_g min(W_g, R_i × max(0, t - t_g - L_g))
+```
+
+For four synchronized 512 KiB grants, `W_pool = 2 MiB` and the finite
+completion envelope is `L_g + W_pool/R_pool`, approximately
+37.3243865967 ms. During the common interval after all four have begun
+first-send and before any exhausts its unique bytes, define common
+qualified running time `τ_pool`, structural first-send `S_pool`, and:
+
+```text
+Z_pool = R_pool × τ_pool - S_pool
+B_run_pool = 4 × B_run = 72,100.864 B
+Z_pool - min(previous Z_pool, including initial zero) <= B_run_pool
+```
+
+This common running test supplements the four individual tests. When one
+grant exhausts its bytes, no nonexistent 16 MiB/s demand is charged to it.
+Four-peer physical capacity qualification therefore needs overlapping
+reachable finite grants, preferably maximum grants to expose their
+rate-dominated drain interval, not an indefinite 64 MiB/s stream from the
+same four peers. That physical run is a separate task after deterministic
+qualification.
+
+### Independent health and superseded readings
+
+Cumulative `A_i = Σ_g W_g` for actually admitted grants and cumulative
+first-send `D_i = Σ_g D_g` remain conservation and attribution diagnostics;
+`D_i <= A_i` holds. They are not a cross-grant 16 MiB/s service clock.
+Semantic source busy time does not manufacture offered bytes or drain time.
+T2's generic min-plus curve may test synthetic verifier arithmetic, but
+arbitrary continuous arrivals are not evidence that the current ACK-gated,
+credit-limited production path can admit them. Production capacity evidence
+must use reachable accepted finite grants.
+
+Feedback freshness remains at most 50 ms; one-second requalification does
+not erase accepted debt or delivery evidence. A later qualification grant
+starts its own finite service contract and can be evaluated ex post. ACK
+monotonicity, bounded sent-unacked bytes, eventual ACK convergence, exact
+retirement, debt conservation, pending and active-grant convergence, and
+20-second service recovery remain independent of first-send drain health.
+The transport/gameplay reserves, FULL_RESERVATION, wire format and physical
+funding gates are unchanged. Historical D01/R3/S1/T2 evidence retains its
+original meaning; none is retroactively an F1 pass.

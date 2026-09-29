@@ -3,9 +3,6 @@
 #include <limits>
 
 namespace {
-constexpr std::uint64_t StructuralRate = 16'777'216;
-constexpr std::uint64_t StructuralDeficitBound = 1'248'000'000 + StructuralRate * 6'000;
-
 std::uint64_t ServiceClock() noexcept {
 	const auto Time = std::chrono::duration_cast<std::chrono::microseconds>(
 		std::chrono::steady_clock::now().time_since_epoch()).count();
@@ -22,24 +19,52 @@ void GargantuanReliableServiceCounters::Add(std::uint64_t &Value, int Bytes) noe
 	Value += static_cast<std::uint64_t>(Bytes);
 }
 
+void GargantuanReliableServiceCounters::SyncStructuralGrant() noexcept {
+	if (Invalid) return;
+	const auto &Grant = StructuralGrantCurve;
+	if (Grant.Invalid || Grant.QualifiedRunningMicroseconds < StructuralGrantLastRunningMicroseconds ||
+		Grant.QualifiedRunningMicroseconds - StructuralGrantLastRunningMicroseconds >
+			std::numeric_limits<std::uint64_t>::max() - StructuralQualifiedActiveMicroseconds) {
+		Invalid = true; return;
+	}
+	StructuralQualifiedActiveMicroseconds += Grant.QualifiedRunningMicroseconds - StructuralGrantLastRunningMicroseconds;
+	StructuralGrantLastRunningMicroseconds = Grant.QualifiedRunningMicroseconds;
+	StructuralCurrentDeficitByteMicroseconds = Grant.CurrentRunningDeficitByteMicroseconds;
+	if (Grant.MaximumRunningDeficitByteMicroseconds > StructuralMaximumDeficitByteMicroseconds)
+		StructuralMaximumDeficitByteMicroseconds = Grant.MaximumRunningDeficitByteMicroseconds;
+	if (Grant.MaximumFiniteShortfallByteMicroseconds > StructuralMaximumFiniteShortfallByteMicroseconds)
+		StructuralMaximumFiniteShortfallByteMicroseconds = Grant.MaximumFiniteShortfallByteMicroseconds;
+	StructuralServiceFailed = Grant.ServiceFailed;
+	StructuralGrantFirstSendAtMicroseconds = Grant.FirstSentAtMicroseconds;
+	StructuralGrantCompletedAtMicroseconds = Grant.CompletedAtMicroseconds;
+	StructuralActiveGrantFirstSentBytes = Grant.FirstSentBytes;
+	StructuralActiveSinceMicroseconds = Grant.FirstSentAtMicroseconds && !Grant.CompletedAtMicroseconds
+		? Grant.FirstSentAtMicroseconds : 0;
+	if (Grant.CompletedAtMicroseconds && StructuralActiveGrantBytes) {
+		if (StructuralCompletedGrantSequence == std::numeric_limits<std::uint64_t>::max()) {
+			Invalid = true; return;
+		}
+		++StructuralCompletedGrantSequence;
+		StructuralLastCompletedGrantToken = Grant.ActiveToken;
+		StructuralLastCompletedGrantBytes = Grant.GrantBytes;
+		StructuralLastCompletedGrantActivatedAtMicroseconds = Grant.ActivatedAtMicroseconds;
+		StructuralLastCompletedGrantFirstSendAtMicroseconds = Grant.FirstSentAtMicroseconds;
+		StructuralLastCompletedGrantCompletedAtMicroseconds = Grant.CompletedAtMicroseconds;
+		StructuralLastCompletedGrantMaximumRunningDeficitByteMicroseconds = Grant.MaximumRunningDeficitByteMicroseconds;
+		StructuralLastCompletedGrantFailed = Grant.GrantFailed;
+		StructuralActiveGrantStartedAtMicroseconds = 0;
+		StructuralActiveGrantBytes = 0;
+		StructuralActiveGrantFirstSentBytes = 0;
+		StructuralActiveSinceMicroseconds = 0;
+		StructuralCurrentDeficitByteMicroseconds = 0;
+	}
+}
+
 void GargantuanReliableServiceCounters::ObserveActiveService(std::uint64_t NowMicroseconds) noexcept {
-	if (Invalid || !StructuralActiveSinceMicroseconds) return;
-	if (NowMicroseconds < StructuralActiveSinceMicroseconds) { Invalid = true; return; }
-	const auto Elapsed = NowMicroseconds - StructuralActiveSinceMicroseconds;
-	if (Elapsed > std::numeric_limits<std::uint64_t>::max() / StructuralRate ||
-		Elapsed > std::numeric_limits<std::uint64_t>::max() - StructuralQualifiedActiveMicroseconds) {
-		Invalid = true; return;
-	}
-	const auto Added = Elapsed * StructuralRate;
-	if (Added > std::numeric_limits<std::uint64_t>::max() - StructuralCurrentDeficitByteMicroseconds) {
-		Invalid = true; return;
-	}
-	StructuralQualifiedActiveMicroseconds += Elapsed;
-	StructuralCurrentDeficitByteMicroseconds += Added;
-	if (StructuralCurrentDeficitByteMicroseconds > StructuralMaximumDeficitByteMicroseconds)
-		StructuralMaximumDeficitByteMicroseconds = StructuralCurrentDeficitByteMicroseconds;
-	if (StructuralCurrentDeficitByteMicroseconds > StructuralDeficitBound) StructuralServiceFailed = true;
-	StructuralActiveSinceMicroseconds = NowMicroseconds;
+	if (Invalid || !StructuralActiveGrantBytes ||
+		StructuralGrantCurve.ActiveToken != ActiveAttributedRetirementToken) return;
+	(void)StructuralGrantCurve.Observe(NowMicroseconds);
+	SyncStructuralGrant();
 }
 
 void GargantuanReliableServiceCounters::FirstSend(int Bytes, int StructuralPayloadBytes,
@@ -50,16 +75,16 @@ void GargantuanReliableServiceCounters::FirstSend(int Bytes, int StructuralPaylo
 			StructuralPayloadBytes > StructuralActiveGrantBytes - StructuralActiveGrantFirstSentBytes) {
 			Invalid = true; return;
 		}
-		if (StructuralActiveSinceMicroseconds)
-			ObserveActiveService(NowMicroseconds ? NowMicroseconds : ServiceClock());
-		if (Invalid) return;
-		if (StructuralActiveSinceMicroseconds) {
-			const auto Served = static_cast<std::uint64_t>(StructuralPayloadBytes) * 1'000'000;
-			StructuralCurrentDeficitByteMicroseconds = Served >= StructuralCurrentDeficitByteMicroseconds
-				? 0 : StructuralCurrentDeficitByteMicroseconds - Served;
+		if (StructuralGrantCurve.ActiveToken == ActiveAttributedRetirementToken) {
+			(void)StructuralGrantCurve.FirstSend(ActiveAttributedRetirementToken,
+				static_cast<std::uint64_t>(StructuralPayloadBytes),
+				NowMicroseconds ? NowMicroseconds : ServiceClock());
+			SyncStructuralGrant();
+		} else {
+			StructuralActiveGrantFirstSentBytes += static_cast<std::uint64_t>(StructuralPayloadBytes);
 		}
-		StructuralActiveGrantFirstSentBytes += static_cast<std::uint64_t>(StructuralPayloadBytes);
-		if (StructuralActiveGrantFirstSentBytes == StructuralActiveGrantBytes) {
+		if (Invalid) return;
+		if (StructuralActiveGrantBytes && StructuralActiveGrantFirstSentBytes == StructuralActiveGrantBytes) {
 			StructuralActiveSinceMicroseconds = 0;
 			StructuralActiveGrantStartedAtMicroseconds = 0;
 			StructuralActiveGrantBytes = 0;
@@ -103,10 +128,19 @@ void GargantuanReliableServiceCounters::AttributeMessage(
 	ActiveAttributedPayloadBytes = static_cast<std::uint64_t>(PayloadBytes);
 	StructuralActiveGrantBytes = static_cast<std::uint64_t>(PayloadBytes);
 	StructuralActiveGrantFirstSentBytes = 0;
-	StructuralActiveSinceMicroseconds = PayloadBytes &&
+	StructuralActiveSinceMicroseconds = 0;
+	StructuralGrantFirstSendAtMicroseconds = 0;
+	StructuralGrantCompletedAtMicroseconds = 0;
+	StructuralCurrentDeficitByteMicroseconds = 0;
+	StructuralActiveGrantStartedAtMicroseconds = PayloadBytes && ActivatedAtMicroseconds &&
 		ActivatedAtMicroseconds != std::numeric_limits<std::uint64_t>::max()
 		? ActivatedAtMicroseconds : 0;
-	StructuralActiveGrantStartedAtMicroseconds = StructuralActiveSinceMicroseconds;
+	if (StructuralActiveGrantStartedAtMicroseconds) {
+		StructuralGrantLastRunningMicroseconds = 0;
+		if (!StructuralGrantCurve.Activate(Token, static_cast<std::uint64_t>(PayloadBytes),
+			StructuralActiveGrantStartedAtMicroseconds)) Invalid = true;
+		else StructuralServiceFailed = false;
+	}
 }
 
 void GargantuanReliableServiceCounters::AckMessage(

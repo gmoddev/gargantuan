@@ -13,13 +13,19 @@ enum class ReliableServiceMode : std::uint8_t { FULL_RESERVATION, POOLED_SERVICE
 // The single accepted Option C candidate. These are eligibility and funded
 // service bounds, never measurements of the configured host or path.
 struct PooledReliableServiceProfile {
-	// D01: one native GNS send quantum plus the pinned 5 ms reliable Nagle
-	// and 1 ms requested service-thread wake. Bounds are exact in byte-us.
+	// F1: finite accepted-grant latency and in-grant running capacity.
+	// Neither allowance accumulates across grants or during credit/ACK wait.
+	static constexpr std::uint64_t PeerActiveGrantDrainCapacityFloor = 16ULL * 1024 * 1024;
 	static constexpr std::uint64_t ServiceQuantumBytes = 1'248;
-	static constexpr std::uint64_t MaximumQualifiedServiceHandoffMicroseconds = 6'000;
-	static constexpr std::uint64_t ServiceDeficitBoundByteMicroseconds =
-		ServiceQuantumBytes * 1'000'000 +
-		(16ULL * 1024 * 1024) * MaximumQualifiedServiceHandoffMicroseconds;
+	static constexpr std::uint64_t ServiceStartupMicroseconds = 5'000;
+	static constexpr std::uint64_t ServiceSchedulingMicroseconds = 1'000;
+	static constexpr std::uint64_t FiniteGrantInterceptByteMicroseconds =
+		ServiceQuantumBytes * 1'000'000 + PeerActiveGrantDrainCapacityFloor *
+		(ServiceStartupMicroseconds + ServiceSchedulingMicroseconds);
+	static constexpr std::uint64_t RunningGrantBoundByteMicroseconds =
+		ServiceQuantumBytes * 1'000'000 + PeerActiveGrantDrainCapacityFloor * ServiceSchedulingMicroseconds;
+	static constexpr std::uint64_t FourGrantPoolRunningBoundByteMicroseconds =
+		4 * RunningGrantBoundByteMicroseconds;
 	std::uint64_t BackendCap = 96 * 1024 * 1024;
 	std::uint64_t StructuralPool = 64 * 1024 * 1024;
 	std::uint64_t GameplayReserve = 8 * 1024 * 1024;

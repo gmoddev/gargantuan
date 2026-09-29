@@ -1,22 +1,39 @@
 #pragma once
+#include "../../src/network/FiniteGrantServiceCurve.hpp"
 #include <cstdint>
 
 class ISteamNetworkingSockets;
 
 struct GargantuanReliableServiceCounters {
+	gargantuan::network::FiniteGrantServiceCurve StructuralGrantCurve;
 	std::uint64_t UniqueReliableStreamBytesFirstSent = 0;
 	std::uint64_t UniqueReliableStreamBytesAcked = 0;
 	// Payload bytes belonging to the one native-attributed structural grant.
 	// Reliable stream framing and ordinary reliable traffic are excluded.
 	std::uint64_t StructuralPayloadBytesFirstSent = 0;
 	std::uint64_t StructuralPayloadBytesAcked = 0;
+	// F1 running time and deficit are charged within each finite accepted grant.
+	// The maximum is the maximum of independent per-grant observations, never
+	// a persistent deficit carried into the next grant.
 	std::uint64_t StructuralQualifiedActiveMicroseconds = 0;
 	std::uint64_t StructuralMaximumDeficitByteMicroseconds = 0;
 	std::uint64_t StructuralCurrentDeficitByteMicroseconds = 0;
+	std::uint64_t StructuralMaximumFiniteShortfallByteMicroseconds = 0;
 	std::uint64_t StructuralActiveGrantBytes = 0;
 	std::uint64_t StructuralActiveGrantFirstSentBytes = 0;
 	std::uint64_t StructuralActiveSinceMicroseconds = 0;
 	std::uint64_t StructuralActiveGrantStartedAtMicroseconds = 0;
+	std::uint64_t StructuralGrantFirstSendAtMicroseconds = 0;
+	std::uint64_t StructuralGrantCompletedAtMicroseconds = 0;
+	std::uint64_t StructuralCompletedGrantSequence = 0;
+	std::uint64_t StructuralLastCompletedGrantToken = 0;
+	std::uint64_t StructuralLastCompletedGrantBytes = 0;
+	std::uint64_t StructuralLastCompletedGrantActivatedAtMicroseconds = 0;
+	std::uint64_t StructuralLastCompletedGrantFirstSendAtMicroseconds = 0;
+	std::uint64_t StructuralLastCompletedGrantCompletedAtMicroseconds = 0;
+	std::uint64_t StructuralLastCompletedGrantMaximumRunningDeficitByteMicroseconds = 0;
+	bool StructuralLastCompletedGrantFailed = false;
+	std::uint64_t StructuralGrantLastRunningMicroseconds = 0;
 	bool StructuralServiceFailed = false;
 	std::uint64_t ReliablePayloadBytesAcked = 0;
 	std::uint64_t ReliableStreamBytesRetransmitted = 0;
@@ -42,6 +59,7 @@ struct GargantuanReliableServiceCounters {
 	void AckMessage(std::int64_t MessageNumber, int MessageBytes, int PrivateHeaderBytes) noexcept;
 private:
 	void Add(std::uint64_t &Value, int Bytes) noexcept;
+	void SyncStructuralGrant() noexcept;
 };
 
 struct GargantuanReliableServiceSnapshot {
