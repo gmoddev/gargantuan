@@ -1593,10 +1593,6 @@ namespace gargantuan::network {
 								return false;
 								}
 						}
-						// A qualified finite obligation starts after exact byte/credit
-						// reservation, before the scheduler or native sender can act.
-						const auto GrantActivatedAt = IsPooled() && Receipt && PeerValue.Phase == PeerPhase::Ready
-							? ServiceTime() : std::numeric_limits<std::uint64_t>::max();
 						auto Queued = QueueStructuralFrame(*Produced.Frame, std::move(Produced.EncodedFrame), Connection,
 							PeerValue.Limits, IsPooled() && Receipt ? Receipt->Token : 0);
 						if (!Queued || !Queued->Accepted()) {
@@ -1612,6 +1608,10 @@ namespace gargantuan::network {
 							);
 							return false;
 						}
+						// The scheduler has accepted the exact grant, but has not sent it.
+						// Preparation and a rolled-back reservation are not F1 drain time.
+						const auto GrantActivatedAt = IsPooled() && Receipt && PeerValue.Phase == PeerPhase::Ready
+							? ServiceTime() : std::numeric_limits<std::uint64_t>::max();
 						// Once queued, bytes are charged even if a later semantic invariant
 						// terminates the peer. Do not refund already accepted traffic.
 						const bool OfferPublished = !Receipt || !IsPooled() || PeerValue.Phase != PeerPhase::Ready ||
