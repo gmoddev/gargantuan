@@ -265,6 +265,8 @@ def ReadStage(Artifact):
     if type(ControlOnly) is not bool:
         raise ValueError("invalid control preflight stage mode")
     if ControlOnly:
+        if not IsInteractive(Stage):
+            raise ValueError("control preflight requires the interactive child profile")
         WorkflowItem = Workflow(json.loads(Path(Setup["WorkflowFile"]).read_text(encoding="utf-8")))
         if (WorkflowItem.Value["SchemaId"] != "gargantuan.four-client-control-preflight" or
                 WorkflowItem.Hash != Stage["WorkflowHash"]):

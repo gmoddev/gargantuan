@@ -45,6 +45,11 @@ class ControlPreflightStageTests(unittest.TestCase):
                 return subprocess.run(Command, cwd=ROOT, capture_output=True,
                                       text=True, timeout=10)
             self.assertEqual(0, ReadStage().returncode)
+            Stage["QualificationProfile"] = "RESTRICTED"
+            StageFile.write_text(json.dumps(Stage), encoding="utf-8")
+            self.assertIn("interactive child profile", ReadStage().stderr)
+            Stage["QualificationProfile"] = "PHYSICAL_QUALIFICATION_INTERACTIVE"
+            StageFile.write_text(json.dumps(Stage), encoding="utf-8")
             WorkerPhysical.write_text(json.dumps({"Role": "SERVER", "RunId": RunId}), encoding="utf-8")
             self.assertIn("restricted endpoint", ReadStage().stderr)
             WorkerPhysical.write_text(json.dumps({
