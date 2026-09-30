@@ -199,6 +199,8 @@ int main(int ArgumentCount, char **Arguments) {
 		return GnsPacketTailFixture::Run() ? 0 : 1;
 	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--four-grant")
 		return GnsFourGrantFixture::Run() ? 0 : 1;
+	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--four-grant-sanitizer-safety")
+		return GnsFourGrantFixture::Run(false) ? 0 : 1;
 	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--mixed-traffic")
 		return GnsMixedTrafficFixture::Run() ? 0 : 1;
 	const bool FeedbackPassed = FeedbackFixture::Run();

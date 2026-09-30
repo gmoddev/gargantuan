@@ -22,7 +22,7 @@ struct Segment {
 	std::uint64_t Bytes = 0;
 };
 
-inline bool Run() {
+inline bool Run(bool RequireWallClockF1 = true) {
 	constexpr std::uint64_t GrantBytes = 512 * 1024;
 	constexpr std::uint64_t PoolRate = 64 * 1024 * 1024;
 	constexpr std::uint64_t PoolBound = 4 * FiniteGrantServiceCurve::RunningBoundByteMicroseconds;
@@ -59,6 +59,26 @@ inline bool Run() {
 				throw std::runtime_error("four-peer structural submission failed");
 		}
 		std::this_thread::sleep_for(55ms);
+		if (!RequireWallClockF1) {
+			// Sanitizer instrumentation and shared CI scheduling are not an F1
+			// throughput environment. Let the same real-GNS grants finish before
+			// checking their byte, packet, ACK and retirement semantics.
+			const auto Deadline = std::chrono::steady_clock::now() + 3s;
+			bool Complete = false;
+			while (std::chrono::steady_clock::now() < Deadline) {
+				Complete = true;
+				for (auto &Pair : Pairs) {
+					const auto Sample = detail::ReliableServiceFeedbackAccess::Observe(
+						*Pair.Server, Pair.ServerConnection);
+					if (!Sample || !Sample->CountersValid)
+						throw std::runtime_error("sanitizer grant feedback unavailable");
+					Complete &= Sample->StructuralLastCompletedGrantToken == 1;
+				}
+				if (Complete) break;
+				std::this_thread::sleep_for(5ms);
+			}
+			if (!Complete) throw std::runtime_error("sanitizer grants did not first-send within bounded wait");
+		}
 		std::vector<Segment> All;
 		std::uint64_t CommonStart = 0;
 		std::uint64_t CommonEnd = UINT64_MAX;
@@ -66,6 +86,8 @@ inline bool Run() {
 		std::uint64_t LatestCompletion = 0;
 		std::uint64_t NativePackets = 0;
 		std::uint64_t NativePacketBytes = 0;
+		std::uint64_t MaximumPeerRunningDeficit = 0;
+		std::uint32_t WallClockFailedPeers = 0;
 		std::array<std::vector<Segment>, 4> PerPeer;
 		for (std::size_t Index = 0; Index < Pairs.size(); ++Index) {
 			const auto Sample = detail::ReliableServiceFeedbackAccess::Observe(
@@ -75,15 +97,26 @@ inline bool Run() {
 			const bool CountersInvalid = !Sample->CountersValid;
 			const bool CompletionMissing = Sample->StructuralLastCompletedGrantToken != 1;
 			const bool SizeMismatch = Sample->StructuralLastCompletedGrantBytes != GrantBytes;
+			const bool FirstSendMismatch = Sample->StructuralPayloadBytesFirstSent != GrantBytes ||
+				Sample->StructuralLastCompletedGrantFirstSendAtMicroseconds == 0 ||
+				Sample->StructuralLastCompletedGrantCompletedAtMicroseconds <
+					Sample->StructuralLastCompletedGrantFirstSendAtMicroseconds ||
+				Sample->StructuralLastCompletedGrantFirstSendAtMicroseconds <
+					Sample->StructuralLastCompletedGrantActivatedAtMicroseconds;
 			const bool CurveFailed = Sample->StructuralLastCompletedGrantFailed;
 			const bool RunningBoundExceeded =
 				Sample->StructuralLastCompletedGrantMaximumRunningDeficitByteMicroseconds >
 					FiniteGrantServiceCurve::RunningBoundByteMicroseconds;
-			if (CountersInvalid || CompletionMissing || SizeMismatch || CurveFailed || RunningBoundExceeded) {
+			MaximumPeerRunningDeficit = std::max(MaximumPeerRunningDeficit,
+				Sample->StructuralLastCompletedGrantMaximumRunningDeficitByteMicroseconds);
+			WallClockFailedPeers += CurveFailed || RunningBoundExceeded;
+			if (CountersInvalid || CompletionMissing || SizeMismatch || FirstSendMismatch ||
+				(RequireWallClockF1 && (CurveFailed || RunningBoundExceeded))) {
 				std::cerr << "[Network:GnsFour] peer=" << Index
 					<< " counters_invalid=" << CountersInvalid
 					<< " completion_missing=" << CompletionMissing
 					<< " size_mismatch=" << SizeMismatch
+					<< " first_send_mismatch=" << FirstSendMismatch
 					<< " curve_failed=" << CurveFailed
 					<< " running_bound_exceeded=" << RunningBoundExceeded
 					<< " observed_us=" << Sample->ObservedAtMicroseconds
@@ -111,7 +144,8 @@ inline bool Run() {
 						<< " at_us=" << Native.AtMicroseconds
 						<< " bytes=" << Native.PayloadBytes << '\n';
 				}
-				throw std::runtime_error("individual maximum grant failed F1");
+				throw std::runtime_error(RequireWallClockF1 ?
+					"individual maximum grant failed F1" : "sanitizer grant attribution failed");
 			}
 			CommonStart = std::max(CommonStart, Sample->StructuralLastCompletedGrantFirstSendAtMicroseconds);
 			CommonEnd = std::min(CommonEnd, Sample->StructuralLastCompletedGrantCompletedAtMicroseconds);
@@ -126,12 +160,17 @@ inline bool Run() {
 			std::uint64_t Sum = 0;
 			for (std::uint32_t Event = 0; Event < Sample->LastCompletedStructuralSegmentEventCount; ++Event) {
 				const auto &Native = Sample->LastCompletedStructuralSegmentEvents[Event];
+				if (!Native.PayloadBytes ||
+					Native.AtMicroseconds < Sample->StructuralLastCompletedGrantFirstSendAtMicroseconds ||
+					Native.AtMicroseconds > Sample->StructuralLastCompletedGrantCompletedAtMicroseconds ||
+					(!PerPeer[Index].empty() && Native.AtMicroseconds < PerPeer[Index].back().At))
+					throw std::runtime_error("four-peer first-send event chronology invalid");
 				PerPeer[Index].push_back({Native.AtMicroseconds, Native.PayloadBytes});
 				Sum += Native.PayloadBytes;
 			}
 			if (Sum != GrantBytes) throw std::runtime_error("four-peer first-send timeline incomplete");
 		}
-		if (CommonEnd <= CommonStart + 1000)
+		if (CommonEnd <= CommonStart + (RequireWallClockF1 ? 1000 : 0))
 			throw std::runtime_error("no genuine common four-grant drain interval");
 		for (const auto &Peer : PerPeer) {
 			std::uint64_t AtStart = 0;
@@ -164,12 +203,24 @@ inline bool Run() {
 			throw std::runtime_error("native wire accounting omitted structural bytes");
 		const auto Overhead = NativeWireBytesIpv4 - 4 * GrantBytes;
 		const auto Reserve = ReliableServiceProfile::PooledService().Pooled.RequiredTransportReserve;
-		const auto ReserveBudget = Reserve * (LatestCompletion - EarliestActivation) / 1000000 + 4 * 1300;
-		std::cout << "[Network:GnsFour] overlap_us=" << (CommonEnd - CommonStart)
+		const auto FiniteEnvelopeByteMicroseconds =
+			FiniteGrantServiceCurve::FiniteInterceptByteMicroseconds + GrantBytes * 1000000;
+		const auto FiniteEnvelopeMicroseconds =
+			(FiniteEnvelopeByteMicroseconds + FiniteGrantServiceCurve::PeerRateBytesPerSecond - 1) /
+			FiniteGrantServiceCurve::PeerRateBytesPerSecond;
+		const auto ReserveWindowMicroseconds = RequireWallClockF1 ?
+			LatestCompletion - EarliestActivation : FiniteEnvelopeMicroseconds;
+		const auto ReserveBudget = Reserve * ReserveWindowMicroseconds / 1000000 + 4 * 1300;
+		std::cout << "[Network:GnsFour] mode=" <<
+			(RequireWallClockF1 ? "strict-f1" : "sanitizer-safety-f1-not-qualified")
+			<< " overlap_us=" << (CommonEnd - CommonStart)
+			<< " wall_clock_failed_peers=" << WallClockFailedPeers
+			<< " peer_max_running_byte_us=" << MaximumPeerRunningDeficit
 			<< " pool_max_deficit_byte_us=" << MaximumDeficit << " bound=" << PoolBound
 			<< " native_packets=" << NativePackets << " wire_bytes_ipv4=" << NativeWireBytesIpv4
 			<< " overhead_bytes=" << Overhead << " reserve_budget_bytes=" << ReserveBudget << '\n';
-		if (MaximumDeficit > PoolBound) throw std::runtime_error("four-grant pool F1 failed");
+		if (RequireWallClockF1 && MaximumDeficit > PoolBound)
+			throw std::runtime_error("four-grant pool F1 failed");
 		if (Overhead > ReserveBudget)
 			throw std::runtime_error("four-grant packet overhead exceeded transport reserve");
 		for (auto &Pair : Pairs) {

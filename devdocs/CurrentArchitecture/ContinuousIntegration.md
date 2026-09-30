@@ -162,3 +162,23 @@ driver. The sanitizer job uploads the same configure, CTest, and JUnit evidence
 as the Windows gate on failure. UBSan is not described as an MSVC feature, and
 the workflow does not weaken the normal Windows ABI/toolchain contract to obtain
 sanitizer coverage.
+
+## GNS sanitizer safety versus F1 capacity
+
+The dedicated `.github/workflows/gns-sanitizers.yml` workflow exercises pinned
+GNS and Gargantuan's adapter under ASan/UBSan/LSan. Its four-grant case uses
+`gargantuan_f1_four_grant_sanitizer_safety`: four real 512 KiB reliable
+structural grants must first-send exactly once, preserve event chronology,
+packet bounds and the canonical finite-envelope packet-overhead budget, then
+ACK and retire exactly. A bounded wait accommodates sanitizer instrumentation
+before evidence is read. The test reports `f1-not-qualified` and does **not**
+use instrumented wall-clock intervals to assert 16 MiB/s per peer or 64 MiB/s
+for the pool; it still reports the observed F1 failure count and deficits for
+diagnosis. A green sanitizer job is therefore a memory/undefined-behavior
+and transport-accounting result, not F1 throughput qualification.
+
+The separate `gargantuan_f1_four_grant` test retains the strict native
+first-send curves in the uninstrumented Windows Release CTest matrix.
+Dedicated uninstrumented repeatability and fresh physical qualification are
+also required before claiming F1 capacity. A failure in either strict setting
+remains a qualification blocker even when sanitizer safety passes.
