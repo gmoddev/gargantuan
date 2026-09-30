@@ -28,7 +28,8 @@ F1 native-source archive SHA-256
 and Windows probe SHA-256
 `E564D3CDE19F099FB3F51237C1C5B83DE4FFF78A36C4691E9231AA3E9D1DB5AA`.
 The [F1 manifest](phase1-f1-source-manifest.json) also pins all twelve runtime
-assets; the Phase 1 adapter checks their hashes and rejects the earlier D01
+assets and the two native DLLs required beside the probe executable; the Phase 1
+adapter checks their hashes and rejects the earlier D01
 candidate. [Generate the archive](make_f1_source_archive.py) with
 `python tools/physical-qualifier/make_f1_source_archive.py <output.zip>` from
 the pinned native source, then check it against a build tree

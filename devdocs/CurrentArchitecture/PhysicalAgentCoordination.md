@@ -36,7 +36,7 @@ part of this dependency.
 
 Use a hash-verified immutable source bootstrap rather than adding a submodule or
 committing a second generic implementation. [The lock](../../tools/physical-qualifier/upstream.lock.json)
-pins `9c81cfb16640dc18e29b6253fc0f5463c4c4dd4b` and consumed-source SHA-256 values.
+pins `e02fad12ac53b7cb93535013357122172217ab30` and consumed-source SHA-256 values.
 `bootstrap.py` fetches that revision into ignored `.agent-coordinator`; imports
 fail closed on missing/changed pinned sources. New packages embed the snapshot and
 adapter, including the skill entrypoint. Old installed standalone packages remain

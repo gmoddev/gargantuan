@@ -156,6 +156,7 @@ class QualificationTests(unittest.TestCase):
                                         "GnsPin": Q.GNS_PIN, "Contract": "F1",
                                         "ProbeSHA256": Q.PHASE1_PROBE_SHA,
                                         "SourceArchive": Q.PHASE1_SOURCE_ARCHIVE,
+                                        "NativeDependenciesSha256": Q.PHASE1_NATIVE_DEPENDENCIES,
                                         "RuntimeSha256": RuntimeHashes}))
         (self.Root / Q.PHASE1_SOURCE_ARCHIVE).write_bytes(b"test source archive")
         Client.update(ProbePath=str(Probe), SourceManifest=str(Manifest), WorkDir=str(self.Root))
@@ -168,6 +169,8 @@ class QualificationTests(unittest.TestCase):
                     return Q.PHASE1_OVERLAY
                 if PathValue.parent.name == "runtime":
                     return RuntimeHashes[PathValue.name]
+                if PathValue.name in Q.PHASE1_NATIVE_DEPENDENCIES:
+                    return Q.PHASE1_NATIVE_DEPENDENCIES[PathValue.name]
                 return Q.PHASE1_PROBE_SHA
             with mock.patch.object(Q, "Digest", side_effect=TestDigest):
                 Q.LocalRun(Client, Log).Check()
@@ -191,6 +194,19 @@ class QualificationTests(unittest.TestCase):
 
                 with mock.patch.object(Q, "Digest", side_effect=BadRuntimeDigest):
                     with self.assertRaisesRegex(ValueError, "runtime file hash"):
+                        Q.LocalRun(Client, Log).Check()
+                InvalidDependencies = {**OldManifest, "NativeDependenciesSha256": {}}
+                Manifest.write_text(json.dumps(InvalidDependencies))
+                with self.assertRaisesRegex(ValueError, "native dependency manifest"):
+                    Q.LocalRun(Client, Log).Check()
+                Manifest.write_text(json.dumps(OldManifest))
+                def BadDependencyDigest(PathValue):
+                    if Path(PathValue).name == "SDL3.dll":
+                        return "0" * 64
+                    return TestDigest(PathValue)
+
+                with mock.patch.object(Q, "Digest", side_effect=BadDependencyDigest):
+                    with self.assertRaisesRegex(ValueError, "native dependency hash"):
                         Q.LocalRun(Client, Log).Check()
                 for Producer in ("0", "2"):
                     Invalid = {**Client, "ProbeArgs": [*Client["ProbeArgs"]]}
@@ -224,6 +240,7 @@ class QualificationTests(unittest.TestCase):
         self.assertEqual(Q.PHASE1_OVERLAY, Manifest["OverlayArchiveSha256"])
         self.assertEqual(Q.PHASE1_PROBE_SHA, Manifest["ProbeSHA256"])
         self.assertEqual("F1", Manifest["Contract"])
+        self.assertEqual(Q.PHASE1_NATIVE_DEPENDENCIES, Manifest["NativeDependenciesSha256"])
         RuntimeHashes = Manifest["RuntimeSha256"]
         self.assertEqual(Q.PHASE1_RUNTIME_MANIFEST_SHA, hashlib.sha256(json.dumps(
             RuntimeHashes, sort_keys=True, separators=(",", ":")).encode()).hexdigest().upper())

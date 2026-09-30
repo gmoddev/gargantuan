@@ -11,9 +11,9 @@ last_verified: 2026-09-29
 The generic control and capture implementation now belongs to
 [GantriaEngine Agent Coordinator](https://github.com/GantriaEngine/agent-coordinator),
 pinned by [upstream.lock.json](../upstream.lock.json) to commit
-`9c81cfb16640dc18e29b6253fc0f5463c4c4dd4b`. Read its
-[protocol](https://github.com/GantriaEngine/agent-coordinator/blob/9c81cfb16640dc18e29b6253fc0f5463c4c4dd4b/docs/PROTOCOL.md)
-and [security model](https://github.com/GantriaEngine/agent-coordinator/blob/9c81cfb16640dc18e29b6253fc0f5463c4c4dd4b/docs/SECURITY.md).
+`e02fad12ac53b7cb93535013357122172217ab30`. Read its
+[protocol](https://github.com/GantriaEngine/agent-coordinator/blob/e02fad12ac53b7cb93535013357122172217ab30/docs/PROTOCOL.md)
+and [security model](https://github.com/GantriaEngine/agent-coordinator/blob/e02fad12ac53b7cb93535013357122172217ab30/docs/SECURITY.md).
 This document retains Gargantuan's legacy readiness profile, fixed artifact,
 capture/evidence policy and acceptance boundaries. Bootstrap the pinned library
 before using this checkout; see [migration](../../../devdocs/CurrentArchitecture/PhysicalAgentCoordination.md).

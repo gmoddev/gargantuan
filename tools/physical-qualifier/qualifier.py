@@ -33,6 +33,10 @@ PHASE1_OVERLAY = "10D0CB47ED24D8A249735C49BC55DD52A600AA9DAB05480261435C6E348377
 PHASE1_PROBE_SHA = "E564D3CDE19F099FB3F51237C1C5B83DE4FFF78A36C4691E9231AA3E9D1DB5AA"
 PHASE1_SOURCE_ARCHIVE = "f1-native-source.zip"
 PHASE1_RUNTIME_MANIFEST_SHA = "E105DBA76473990C5AE3AB410762851C7183396FF894A093E526ED26B335D7A9"
+PHASE1_NATIVE_DEPENDENCIES = {
+    "SDL3.dll": "47E1B9064675669FC7F80DAE517781BC163581F4F0BA0BF39E111884A0960E6D",
+    "libprotobuf.dll": "61D315DB6514446B7332261D4A064760E229D47A7B0738A367D612309D601D10",
+}
 SERVER_ADDRESS = "10.253.3.2"
 CLIENT_ADDRESS = "10.253.3.1"
 SERVER_PORT = 39450
@@ -227,6 +231,11 @@ class LocalRun:
                 if not re.fullmatch(r"[A-Za-z0-9_.-]+", Name) or Digest(
                         Path(Config["WorkDir"]) / "runtime" / Name) != Expected:
                     raise ValueError("Phase 1 runtime file hash mismatch: " + Name)
+            if Manifest.get("NativeDependenciesSha256") != PHASE1_NATIVE_DEPENDENCIES:
+                raise ValueError("Phase 1 native dependency manifest mismatch")
+            for Name, Expected in PHASE1_NATIVE_DEPENDENCIES.items():
+                if Digest(Path(Config["WorkDir"]) / Name) != Expected:
+                    raise ValueError("Phase 1 native dependency hash mismatch: " + Name)
         Clients = Config.get("ReadinessClients", 1)
         Fixed = (["server", "10.253.3.2", "39450", str(Clients)]
                  if Config["Role"] == "SERVER" else
