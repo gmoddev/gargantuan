@@ -1,10 +1,90 @@
 ---
-status: f1-phase1-qualification-infrastructure-fail
+status: f1-phase1-production-service-fail
 owner: runtime-networking-and-runtime-host
 last_verified: 2026-09-30
 ---
 
 # Foundation 3L pooled physical qualification attempt
+
+## F1 Phase 1 reached native drain and failed its running bound (2026-09-30)
+
+**F1 PHYSICAL PHASE 1 — FAIL; F1 PRODUCTION SERVICE FAILURE.** The second and
+last fresh attempt authorized for this task used physical run
+`374a128c-3fa9-47d5-9603-5a97c3f79139` and lifecycle run
+`e5ecb1e4-df26-4586-a2e3-dbad4c4f92b2`. Source revision
+`d725b3a9f28f291e432415bc6555af8bf3fbd59a` passed 70 qualifier tests
+and all six hosted native CI jobs. The corrected qualifier package ZIP was
+`5F6D245A39F3F2CCAEB5A62E768445D07C95520466EA3908A0D67BBD608C161D`
+and its `qualifier.py` was
+`7000D7FF17FD4CA384582EAB2296E0C7513A872C1F02B9189535863794C33731`.
+The F1 native probe remained
+`E564D3CDE19F099FB3F51237C1C5B83DE4FFF78A36C4691E9231AA3E9D1DB5AA`.
+Both endpoints passed installed-file, fiber, LAN, capture-idle and evidence
+preflights; the actual worker child connected in 16 ms, both runner-owned
+tunnel directions passed, and PID 35980 owned UDP `10.253.3.2:39450` before
+`SERVER_LIVE`. The earlier control and marker false negatives were resolved.
+
+Four actual GNS clients connected and registered: slot 1 nonce `1783077198`,
+slot 2 producer nonce `1783077197`, slot 3 nonce `1783077199`, and slot 4
+nonce `1783077200`. Their first accepted structural grants were respectively
+5,171, 5,171, 5,766 and 6,361 attributed bytes. Four grants were outstanding;
+wave 1 began, but no client completed a workload wave. Before a common
+four-grant first-send interval formed, slots 1 and 2 received another legal
+1,258-byte grant each. At native trace step 144, slot 1's grant activated at
+`303441892390` µs and first-sent 1,135 bytes at `303441892455` µs. Its
+remaining 123 bytes had not first-sent by `303441896959` µs. Its running
+deficit was **75,547,803,648 byte-µs**. Slot 2 activated at
+`303441892374` µs, first-sent 1,135 bytes at `303441892425` µs, and still
+had 123 bytes unsent at `303441896962` µs; its deficit was
+**76,118,228,992 byte-µs**. Both exceed F1's unchanged
+**18,025,216,000 byte-µs** within-grant bound. Feedback was present, valid,
+available and current; `StructuralServiceFailed=1` and `Qualified=0` for
+both peers. The native trace SHA-256 is
+`288FCF0792FE7E1735B6591A81A7FCDBC811407F36AB71D69088728129743513`.
+
+The two grants eventually first-sent completely at `303441898406` and
+`303441898373` µs, 6,016 and 5,999 µs after activation. Both meet the
+separate finite completion envelope of about 6,149.369 µs for 1,258 bytes,
+but their completed-grant running-deficit high waters were
+**99,841,212,416** and **99,790,880,768 byte-µs**, and both completed with
+the service-failed flag. The finite startup allowance cannot excuse this
+intra-grant gap. The common four-peer running interval was zero, so its
+64-MiB/s pool curve and a maximum 512-KiB grant remain **NOT MEASURED** in
+this attempt. The exact cause of the delayed 123-byte tails inside native
+GNS packetization/scheduling is not yet attributed; changing transport policy
+or F1 semantics requires a separate decision and validation, not a retry here.
+
+Both captures independently contain all four bidirectional UDP tuples; their
+direction counts are mirrored:
+
+| Client UDP port | Worker outbound / inbound | Client outbound / inbound |
+| --- | ---: | ---: |
+| 64708 | 147 / 214 | 214 / 147 |
+| 64709 | 189 / 208 | 208 / 189 |
+| 64710 | 146 / 205 | 205 / 146 |
+| 64711 | 188 / 204 | 204 / 188 |
+
+Packet Monitor exported 1,752 complete fiber miniport frames; an independent
+pcap read found 1,501 qualified frames, exactly matching the client capture's
+1,501 frames. No drop/lost-event counter was retained, so that metric is
+**NOT MEASURED**. Native unique first-send and eventual structural ACK each
+totaled 25,648 bytes, with zero retransmission. Maximum observed aggregate
+sent-unacked was 22,937 bytes; admission reported four-grant high water and
+22,469-byte pending/debt high water. After abort, exact retirement was 25,648
+bytes, terminal release and outstanding debt were zero, and native cleanup
+reported `good=1`. This convergence applies only to the accepted bytes before
+the failure; the full workload's delivery and terminal gates are not qualified.
+Both physical coordinator and outer lifecycle returned failure as a consequence
+of the native service failure. Their available evidence manifests verify; the
+client abort did not produce a final manifest. Both daemons stopped, stage
+bytes and the worker's prior probe were restored, UDP `39450` and control
+listeners were unbound, Packet Monitor was idle, and no probe remained.
+
+The physical retry budget is exhausted. **KI-006 remains OPEN; Foundation 3L
+remains B — PARTIALLY READY; no Foundation 3M work is eligible.** The next
+task is a bounded native attribution of the 1,135+123-byte first-send gap and
+an explicit transport/architecture decision consistent with F1 and the
+gameplay/transport reserves before any new physical authorization.
 
 ## F1 Phase 1 stopped at an impossible server-live marker (2026-09-30)
 

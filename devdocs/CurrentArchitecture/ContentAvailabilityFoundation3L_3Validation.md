@@ -6,6 +6,26 @@ last_verified: 2026-09-30
 
 # Foundation 3L.3 diagnostic validation ledger
 
+## F1 physical Phase 1 native running-drain failure (2026-09-30)
+
+The [final authorized attempt](PooledPhysicalQualification3L.md#f1-phase-1-reached-native-drain-and-failed-its-running-bound-2026-09-30)
+used physical run `374a128c-3fa9-47d5-9603-5a97c3f79139` and lifecycle
+run `e5ecb1e4-df26-4586-a2e3-dbad4c4f92b2`. All control, package, CI,
+evidence, tunnel and server-owned-socket preflights passed. Four real clients
+connected, all four GNS tuples were captured in both directions, and four
+finite grants were outstanding. Two subsequent 1,258-byte grants first-sent
+1,135 bytes promptly but delayed their last 123 bytes long enough to exceed
+F1's **18,025,216,000 byte-µs** intra-grant bound. Valid/current native
+feedback recorded 75,547,803,648 and 76,118,228,992 byte-µs at the first
+failure, then sticky service failure through grant completion. Their finite
+completion envelopes passed separately; the common four-peer interval and
+maximum-grant gate were **NOT MEASURED**. Native cleanup conserved all 25,648
+accepted bytes; the overall physical coordinator and lifecycle failed because
+the F1 production service contract failed. The two-attempt retry budget is
+exhausted. **KI-006 OPEN; Foundation 3L B — PARTIALLY READY; no 3M.** Next:
+attribute the native packetization/scheduling tail gap and make an explicit
+transport/architecture decision before new physical authorization.
+
 ## F1 physical Phase 1 server-live false negative (2026-09-30)
 
 The [fresh post-control-correction attempt](PooledPhysicalQualification3L.md#f1-phase-1-stopped-at-an-impossible-server-live-marker-2026-09-30)

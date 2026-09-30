@@ -85,6 +85,20 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+2026-09-30 final F1 Phase 1 checkpoint: the [second and last authorized fresh
+attempt](devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md#f1-phase-1-reached-native-drain-and-failed-its-running-bound-2026-09-30)
+passed the corrected control and server-readiness barriers, connected four
+actual GNS clients, and captured all four tuples in both directions. Two
+legal 1,258-byte structural grants delayed their final 123 unique first-send
+bytes and exceeded the unchanged 18,025,216,000 byte-µs within-grant bound
+under valid/current native feedback. This is an **F1 PRODUCTION SERVICE
+FAILURE**, even though the separate finite completion envelope passed.
+No common four-peer interval or maximum-grant qualification occurred.
+The bounded retry budget is exhausted; accepted bytes converged and both
+endpoints were restored. **KI-006 OPEN; Foundation 3L B — PARTIALLY READY.**
+The next task is native transport/packetization timing attribution and an
+explicit architecture decision before further physical authorization.
+
 2026-09-30 post-control-correction F1 checkpoint: a fresh attempt reached the
 real worker child, launched capture and the pinned F1 server probe, then
 stopped because the qualifier required a `event=listening` text marker absent
