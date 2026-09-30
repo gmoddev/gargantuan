@@ -1,11 +1,11 @@
 {
   "Repository": "https://github.com/GantriaEngine/agent-coordinator.git",
-  "Commit": "e02fad12ac53b7cb93535013357122172217ab30",
+  "Commit": "67b730e6dbf7a0524d4f29d0d9cb19a0abf8a614",
   "Version": "0.1.0",
   "Files": {
     "agent_coordinator/__init__.py": "57c866300d787290523c7602e2da0231f6c0017ea7c54afb182610cf83ed7ecc",
     "agent_coordinator/transport.py": "1e04f4295727ce6a00e675d76cd2da2b6472ff42188d2e4fc137620281f91ce4",
-    "agent_coordinator/legacy.py": "382a3dde0ad9eae681454cff4d3909e9ea3c3f3a35e94add1220992574c32403",
+    "agent_coordinator/legacy.py": "5320883ed3a0b6bb296285906b6af415953c6e8baae49796a21b4b440195f694",
     "agent_coordinator/control.py": "e42cc87351cfe9747c04d2863f3b386247900b9649eaa558b96387b4d2b0fe04",
     "agent_coordinator/workflow.py": "d657cffb31ad22b1983fbe5ca56643ed5729f2b9377ce2ccfe7d02a5272091ff",
     "agent_coordinator/schemas/envelope.json": "b9edc5dae2c26103d510132a4daf03ea9b473db9722f7392853352ab0383b270",

@@ -36,7 +36,17 @@ part of this dependency.
 
 Use a hash-verified immutable source bootstrap rather than adding a submodule or
 committing a second generic implementation. [The lock](../../tools/physical-qualifier/upstream.lock.json)
-pins `e02fad12ac53b7cb93535013357122172217ab30` and consumed-source SHA-256 values.
+pins `67b730e6dbf7a0524d4f29d0d9cb19a0abf8a614` and consumed-source SHA-256 values.
+
+The pinned legacy control implementation now exposes a separate, bounded
+control-only preflight through the same lifecycle child-launch path used by
+physical Phase 1. It instruments the actual coordinator listener and worker
+child context, reuses the production source-bind/connect and authenticated
+`STAGE_READY` implementation, and completes without a capture or GNS probe.
+The Gargantuan adapter gates it behind dedicated capabilities and a distinct
+workflow/result classification. Its evidence is a prerequisite for a fresh
+physical attempt, not a substitute for physical F1 service, delivery, capture,
+or convergence evidence.
 `bootstrap.py` fetches that revision into ignored `.agent-coordinator`; imports
 fail closed on missing/changed pinned sources. New packages embed the snapshot and
 adapter, including the skill entrypoint. Old installed standalone packages remain

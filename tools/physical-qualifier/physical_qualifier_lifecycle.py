@@ -23,6 +23,10 @@ Streams = {}
 def Settings():
     Config = json.loads((Path.cwd() / ".lifecycle" / "physical.json").read_text(encoding="utf-8"))
     Expected = {"Role", "Python", "Tool", "ToolSHA256", "Coordinator", "Endpoint", "RunId"}
+    if "ControlOnly" in Config:
+        Expected.add("ControlOnly")
+        if Config["ControlOnly"] is not True:
+            raise ValueError("invalid control-only catalog mode")
     if (Config.get("Role") == "SERVER" and "BrokerLabel" in Config):
         Expected.add("BrokerLabel")
     if set(Config) != Expected or Config["Role"] not in ("CLIENT", "SERVER"):
@@ -41,12 +45,16 @@ def Settings():
         ConfigFile = Path(Config["Coordinator"])
         if not ConfigFile.is_file():
             raise ValueError("local coordinator config missing")
-        if json.loads(ConfigFile.read_text(encoding="utf-8"))["RunId"] != Config["RunId"]:
+        Coordinator = json.loads(ConfigFile.read_text(encoding="utf-8"))
+        if (Coordinator["RunId"] != Config["RunId"] or
+                (Coordinator.get("ControlPreflight") is True) != Config.get("ControlOnly", False)):
             raise ValueError("local coordinator run mismatch")
     ConfigFile = Path(Config["Endpoint"])
     if not ConfigFile.is_file():
         raise ValueError("local endpoint config missing")
-    if json.loads(ConfigFile.read_text(encoding="utf-8"))["RunId"] != Config["RunId"]:
+    Endpoint = json.loads(ConfigFile.read_text(encoding="utf-8"))
+    if (Endpoint["RunId"] != Config["RunId"] or
+            (Endpoint.get("ControlPreflight") is True) != Config.get("ControlOnly", False)):
         raise ValueError("local physical run mismatch")
     return Config
 
@@ -92,7 +100,7 @@ def WaitEvent(Directory, Event, Process, Context, MessageType=None):
         time.sleep(0.05)
 
 
-def WaitResult(Config, Name, Process, Context):
+def WaitResult(Config, Name, Process, Context, ExpectedClassification=None):
     while Process.poll() is None:
         Context.Check()
         time.sleep(0.1)
@@ -100,13 +108,16 @@ def WaitResult(Config, Name, Process, Context):
     if not ResultFile.is_file():
         raise RuntimeError("physical result missing for " + Name)
     Result = json.loads(ResultFile.read_text(encoding="utf-8"))
-    return {"Success": Process.returncode == 0 and Result.get("Success") is True,
+    return {"Success": (Process.returncode == 0 and Result.get("Success") is True and
+                        (ExpectedClassification is None or
+                         Result.get("Classification") == ExpectedClassification)),
             "Evidence": [Metadata(ResultFile)]}
 
 
-def ClientStart(Parameters, Context):
+def ClientStartMode(Parameters, Context, ControlOnly):
     Config = Settings()
-    if Config["Role"] != "CLIENT" or Parameters:
+    if (Config["Role"] != "CLIENT" or Parameters or
+            Config.get("ControlOnly", False) is not ControlOnly):
         raise ValueError("unauthorized client start")
     Coordinator = Start(Config, "Coordinator", "coordinator")
     WaitEvent(Evidence(Config, "Coordinator"), "LISTENING", Coordinator, Context)
@@ -115,10 +126,20 @@ def ClientStart(Parameters, Context):
     return {"Success": True, "Evidence": []}
 
 
-def ServerRun(Parameters, Context):
+def ClientStart(Parameters, Context):
+    return ClientStartMode(Parameters, Context, False)
+
+
+def ControlClientStart(Parameters, Context):
+    return ClientStartMode(Parameters, Context, True)
+
+
+def ServerRunMode(Parameters, Context, ControlOnly):
     Config = Settings()
-    if Config["Role"] != "SERVER" or Parameters:
+    if (Config["Role"] != "SERVER" or Parameters or
+            Config.get("ControlOnly", False) is not ControlOnly):
         raise ValueError("unauthorized server run")
+    ExpectedClassification = "CONTROL_PREFLIGHT_ONLY" if ControlOnly else None
     if "BrokerLabel" in Config:
         Label = Config["BrokerLabel"]
         Request = Path.cwd() / ".lifecycle" / ("physical-broker-" + Label + ".start.json")
@@ -138,7 +159,9 @@ def ServerRun(Parameters, Context):
             if not ResultFile.is_file():
                 raise RuntimeError("physical worker result missing")
             Result = json.loads(ResultFile.read_text(encoding="utf-8"))
-            return {"Success": Row["ReturnCode"] == 0 and Result.get("Success") is True,
+            return {"Success": (Row["ReturnCode"] == 0 and Result.get("Success") is True and
+                                (ExpectedClassification is None or
+                                 Result.get("Classification") == ExpectedClassification)),
                     "Evidence": [Metadata(ResultFile)]}
         except BaseException:
             Cancel = Path.cwd() / ".lifecycle" / ("physical-broker-" + Label + ".cancel.json")
@@ -146,17 +169,36 @@ def ServerRun(Parameters, Context):
                 with Cancel.open("x", encoding="utf-8") as Stream:
                     json.dump({"RunId": Config["RunId"], "Action": "CANCEL"}, Stream)
             raise
-    return WaitResult(Config, "Endpoint", Start(Config, "Endpoint", "endpoint"), Context)
+    return WaitResult(Config, "Endpoint", Start(Config, "Endpoint", "endpoint"),
+                      Context, ExpectedClassification)
 
 
-def ClientResult(Parameters, Context):
+def ServerRun(Parameters, Context):
+    return ServerRunMode(Parameters, Context, False)
+
+
+def ControlServerRun(Parameters, Context):
+    return ServerRunMode(Parameters, Context, True)
+
+
+def ClientResultMode(Parameters, Context, ControlOnly):
     Config = Settings()
-    if Config["Role"] != "CLIENT" or Parameters:
+    if (Config["Role"] != "CLIENT" or Parameters or
+            Config.get("ControlOnly", False) is not ControlOnly):
         raise ValueError("unauthorized client result")
-    Results = [WaitResult(Config, Name, Processes[Name], Context)
+    ExpectedClassification = "CONTROL_PREFLIGHT_ONLY" if ControlOnly else None
+    Results = [WaitResult(Config, Name, Processes[Name], Context, ExpectedClassification)
                for Name in ("Endpoint", "Coordinator")]
     return {"Success": all(Item["Success"] for Item in Results),
             "Evidence": [File for Item in Results for File in Item["Evidence"]]}
+
+
+def ClientResult(Parameters, Context):
+    return ClientResultMode(Parameters, Context, False)
+
+
+def ControlClientResult(Parameters, Context):
+    return ClientResultMode(Parameters, Context, True)
 
 
 def Cleanup():
@@ -176,4 +218,7 @@ def Cleanup():
 def GetCatalog():
     return Catalog({"physical.client-start.v1": ClientStart,
                     "physical.server-run.v1": ServerRun,
-                    "physical.client-result.v1": ClientResult}, Cleanup)
+                    "physical.client-result.v1": ClientResult,
+                    "physical.control-client-start.v1": ControlClientStart,
+                    "physical.control-server-run.v1": ControlServerRun,
+                    "physical.control-client-result.v1": ControlClientResult}, Cleanup)

@@ -27,11 +27,62 @@ with (root / "control.jsonl").open("w") as out:
                           "Type": "STAGE_READY"}) + "\\n")
     out.flush()
     time.sleep(0.1)
-(root / "result.json").write_text(json.dumps({"Success": True}))
+(root / "result.json").write_text(json.dumps({"Success": True,
+    "Classification": "CONTROL_PREFLIGHT_ONLY" if item.get("ControlPreflight") else "PHYSICAL_ONLY"}))
 '''
 
 
 class PhysicalLifecycleTests(unittest.TestCase):
+    def test_control_preflight_uses_fixed_child_path_and_isolated_capabilities(self):
+        with tempfile.TemporaryDirectory() as Temporary:
+            Root = Path(Temporary)
+            (Root / ".lifecycle").mkdir()
+            Tool = Root / "qualifier.py"
+            Tool.write_text(FAKE, encoding="utf-8")
+            Configs = {}
+            for Name in ("Coordinator", "Client", "Server"):
+                File = Root / (Name + ".json")
+                File.write_text(json.dumps({"EvidenceDir": str(Root / (Name + "-evidence")),
+                                            "ControlPreflight": True}), encoding="utf-8")
+                Configs[Name] = File
+            Shared = {"Python": sys.executable, "Tool": str(Tool), "RunId": "control-test",
+                      "ControlOnly": True}
+            Client = {**Shared, "Role": "CLIENT", "Coordinator": str(Configs["Coordinator"]),
+                      "Endpoint": str(Configs["Client"])}
+            Server = {**Shared, "Role": "SERVER", "Coordinator": "",
+                      "Endpoint": str(Configs["Server"])}
+            Previous = Path.cwd()
+            os.chdir(Root)
+            try:
+                with patch.object(Physical, "Settings", return_value=Client):
+                    with self.assertRaisesRegex(ValueError, "unauthorized client start"):
+                        Physical.ClientStart({}, Operation(time.monotonic() + 3))
+                    self.assertTrue(Physical.ControlClientStart({}, Operation(time.monotonic() + 5))["Success"])
+                    self.assertEqual(Physical.Processes["Endpoint"].args[4], "endpoint")
+                    self.assertEqual(Physical.Processes["Coordinator"].args[4], "coordinator")
+                ClientProcesses, ClientStreams = Physical.Processes, Physical.Streams
+                Physical.Processes, Physical.Streams = {}, {}
+                try:
+                    with patch.object(Physical, "Settings", return_value=Server):
+                        with self.assertRaisesRegex(ValueError, "unauthorized server run"):
+                            Physical.ServerRun({}, Operation(time.monotonic() + 3))
+                        self.assertTrue(Physical.ControlServerRun({},
+                            Operation(time.monotonic() + 5))["Success"])
+                        self.assertEqual(Physical.Processes["Endpoint"].args[4], "endpoint")
+                    Physical.Cleanup()
+                finally:
+                    Physical.Processes, Physical.Streams = ClientProcesses, ClientStreams
+                with patch.object(Physical, "Settings", return_value=Client):
+                    self.assertTrue(Physical.ControlClientResult({},
+                        Operation(time.monotonic() + 5))["Success"])
+                Workflow(json.loads((ROOT / "workflows" /
+                    "four-client-control-preflight-lifecycle.json").read_text()))
+            finally:
+                Physical.Cleanup()
+                Physical.Processes.clear()
+                Physical.Streams.clear()
+                os.chdir(Previous)
+
     def test_worker_broker_request_waits_for_pinned_result(self):
         with tempfile.TemporaryDirectory() as Temporary:
             Root = Path(Temporary)

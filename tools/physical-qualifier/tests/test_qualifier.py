@@ -124,6 +124,34 @@ class QualificationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "result classification"):
             Q.ValidateConfig(Config)
 
+    def test_f1_control_preflight_has_distinct_classification_and_no_service_claim(self):
+        Root = self.Root / "control-stage"
+        Args = SimpleNamespace(
+            output=str(Root), client_lan="192.168.0.68", server_lan="192.168.0.108",
+            port=39451, nonce=92707, clients=4, phase1=True, control_preflight=True,
+            client_bundle=r"C:\client", server_bundle=r"C:\server",
+            server_evidence=r"C:\worker-evidence\control", capture_device="8",
+            server_capture_client=r"C:\capture.exe", server_capture_start=None,
+            server_capture_stop=None)
+        Q.Stage(Args)
+        for Name in ("coordinator", "client", "server"):
+            Config = json.loads((Root / (Name + ".json")).read_text())
+            self.assertIs(Config["ControlPreflight"], True)
+            self.assertEqual("CONTROL_PREFLIGHT_ONLY", Config["ResultClassification"])
+            self.assertEqual("PHASE1", Config["QualificationMode"])
+            self.assertEqual(30, Config["StageTimeout"])
+            self.assertEqual(15, Config["RunTimeout"])
+            Q.ValidateConfig(Config)
+            with self.assertRaisesRegex(ValueError, "fixed F1-only"):
+                Q.ValidateConfig({**Config, "ResultClassification": Q.PHASE1_CLASSIFICATION})
+            with self.assertRaisesRegex(ValueError, "invalid control preflight"):
+                Q.ValidateConfig({**Config, "ControlPreflight": False})
+        Args.phase1 = False
+        Args.output = str(self.Root / "invalid-control")
+        with self.assertRaisesRegex(ValueError, "control preflight requires"):
+            Q.Stage(Args)
+        self.assertFalse(Path(Args.output).exists())
+
     def test_phase1_stage_is_distinct_and_fixed(self):
         Root = self.Root / "phase1-stage"
         Args = SimpleNamespace(

@@ -11,15 +11,22 @@ last_verified: 2026-09-29
 The generic control and capture implementation now belongs to
 [GantriaEngine Agent Coordinator](https://github.com/GantriaEngine/agent-coordinator),
 pinned by [upstream.lock.json](../upstream.lock.json) to commit
-`e02fad12ac53b7cb93535013357122172217ab30`. Read its
-[protocol](https://github.com/GantriaEngine/agent-coordinator/blob/e02fad12ac53b7cb93535013357122172217ab30/docs/PROTOCOL.md)
-and [security model](https://github.com/GantriaEngine/agent-coordinator/blob/e02fad12ac53b7cb93535013357122172217ab30/docs/SECURITY.md).
+`67b730e6dbf7a0524d4f29d0d9cb19a0abf8a614`. Read its
+[protocol](https://github.com/GantriaEngine/agent-coordinator/blob/67b730e6dbf7a0524d4f29d0d9cb19a0abf8a614/docs/PROTOCOL.md)
+and [security model](https://github.com/GantriaEngine/agent-coordinator/blob/67b730e6dbf7a0524d4f29d0d9cb19a0abf8a614/docs/SECURITY.md).
 This document retains Gargantuan's legacy readiness profile, fixed artifact,
 capture/evidence policy and acceptance boundaries. Bootstrap the pinned library
 before using this checkout; see [migration](../../../devdocs/CurrentArchitecture/PhysicalAgentCoordination.md).
 The existing fixed-operation capture service is retained. Its worker-local hook
 was updated after separate capture qualification; the service binary and probe
 are unchanged.
+
+The dedicated `--control-preflight` four-client stage retains the real pinned
+coordinator and endpoint process launch, source bind, TCP connect, authenticated
+`STAGE_READY`, and clean protocol completion. It uses separate control-only
+lifecycle capabilities and returns `CONTROL_PREFLIGHT_ONLY`; neither endpoint
+starts capture or GNS. Each stage has fresh run identity and token. The result
+proves only the control path and cannot satisfy any physical evidence gate.
 
 > The protocol coordinates capabilities; it does not transmit authority.
 >

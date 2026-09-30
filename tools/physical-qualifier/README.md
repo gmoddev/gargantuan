@@ -89,7 +89,18 @@ assignment. That worker proof is one-use per stage label: do not call the
 tunnel preflight separately with the same label and then invoke the runner.
 
 [upstream.lock.json](upstream.lock.json) pins commit
-`e02fad12ac53b7cb93535013357122172217ab30` and SHA-256 of the consumed sources.
+`67b730e6dbf7a0524d4f29d0d9cb19a0abf8a614` and SHA-256 of the consumed sources.
+The pinned coordinator and endpoint now share the same listener, source-bind,
+connect, and authenticated `STAGE_READY` path in production and the control-only
+preflight. The latter records the actual child process and token, completes the
+control protocol, and returns `CONTROL_PREFLIGHT_ONLY` without starting Packet
+Monitor, capture hooks, GNS, or a probe. Stage it with `--clients 4 --phase1
+--control-preflight` and the separate
+[`four-client-control-preflight-lifecycle.json`](workflows/four-client-control-preflight-lifecycle.json)
+workflow. Its dedicated lifecycle capabilities cannot accept the physical
+workflow, and a control-only result is not physical F1 evidence. Repeat it with
+fresh identities through the same installed lifecycle child launcher before a
+physical run; the interactive host socket check remains supplemental.
 
 For an explicitly authorized physical qualification, `stage.json` may carry
 `QualificationProfile: PHYSICAL_QUALIFICATION_INTERACTIVE`. The one-client

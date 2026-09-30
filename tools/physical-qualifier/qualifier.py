@@ -141,11 +141,19 @@ def CaptureDirections(File, Role, IncludeTuples=False):
 
 def ValidateConfig(Config):
     uuid.UUID(Config["RunId"])
+    ControlPreflight = Config.get("ControlPreflight")
+    if ControlPreflight is not None and ControlPreflight is not True:
+        raise ValueError("invalid control preflight mode")
     if Config.get("QualificationMode") not in (None, "PHASE1"):
         raise ValueError("unsupported qualification mode")
     if Config.get("ReadinessClients", 1) not in (1, 4):
         raise ValueError("readiness requires exactly one or four clients")
-    if IsPhase1(Config):
+    if ControlPreflight:
+        if (not IsPhase1(Config) or Config.get("ReadinessClients") != 4 or
+                Config.get("ResultClassification") != "CONTROL_PREFLIGHT_ONLY" or
+                Config["StageTimeout"] != 30 or Config["RunTimeout"] != 15):
+            raise ValueError("control preflight requires fixed F1-only bounds")
+    elif IsPhase1(Config):
         if (Config.get("ReadinessClients") != 4 or
                 Config.get("ResultClassification") != PHASE1_CLASSIFICATION or
                 Config["RunTimeout"] != 90):
@@ -171,6 +179,8 @@ def ValidateConfig(Config):
 
 
 def Coordinator(Config):
+    if Config.get("ControlPreflight") is True:
+        return Legacy.ControlPreflightCoordinator(Config, ValidateConfig)
     return Legacy.Coordinator(Config, ValidateConfig)
 
 
@@ -268,6 +278,23 @@ class LocalRun:
                         self.Log.Write("CAPTURE_HOOK_PROVENANCE", Path=Argument, SHA256=self.HookHashes[Argument])
         self.Log.Write("PROVENANCE", ArtifactSHA256=Digest(Probe), BaseHead=ExpectedHead,
                        OverlaySHA256=ExpectedOverlay, GnsPin=GNS_PIN)
+        if Config.get("ControlPreflight") is True:
+            self.TokenProof()
+
+    def TokenProof(self):
+        """Preserve the real child token without starting capture or a probe."""
+        if os.name != "nt":
+            self.Log.Write("TOKEN_CONTEXT", Pid=os.getpid(), Platform=os.name)
+            return
+        Tool = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "whoami.exe"
+        Completed = subprocess.run([str(Tool), "/all"], capture_output=True,
+                                   timeout=3, check=False, **Hidden())
+        if Completed.returncode or not Completed.stdout or len(Completed.stdout) > 65536:
+            raise RuntimeError("control preflight could not record the worker token")
+        Context = self.Log.Directory / "token-context.txt"
+        Context.write_bytes(Completed.stdout)
+        self.Log.Write("TOKEN_CONTEXT", Pid=os.getpid(), TokenEvidence=str(Context),
+                       SHA256=Digest(Context), Bytes=Context.stat().st_size)
 
     def Hook(self, Name):
         Command = [Value.replace("{EvidenceDir}", str(self.Log.Directory)).replace("{RunId}", self.Config.get("RunId", ""))
@@ -505,16 +532,21 @@ class LocalRun:
 
 
 def Endpoint(Config):
+    if Config.get("ControlPreflight") is True:
+        return Legacy.ControlPreflightEndpoint(Config, ValidateConfig, LocalRun)
     return Legacy.Endpoint(Config, ValidateConfig, LocalRun)
 
 
 def Stage(Args):
     Clients = getattr(Args, "clients", 1)
     Phase1 = getattr(Args, "phase1", False)
+    ControlPreflight = getattr(Args, "control_preflight", False)
     if Clients not in (1, 4) or not 1 <= Args.nonce <= 2147483648 - Clients:
         raise ValueError("invalid readiness client count or nonce range")
     if Phase1 and Clients != 4:
         raise ValueError("Phase 1 requires exactly four clients")
+    if ControlPreflight and (not Phase1 or Clients != 4):
+        raise ValueError("control preflight requires the F1 four-client profile")
     if Args.server_capture_client:
         if Args.server_capture_start or Args.server_capture_stop:
             raise ValueError("choose the privileged capture client or the existing hook pair")
@@ -526,12 +558,16 @@ def Stage(Args):
               "CoordinatorHost": Args.client_lan, "PeerIps": {"CLIENT": Args.client_lan, "SERVER": Args.server_lan},
               "Port": Args.port, "Endpoint": "10.253.3.2:39450",
               "ArtifactSHA256": PHASE1_PROBE_SHA if Phase1 else PROBE_SHA,
-              "StageTimeout": 300, "RunTimeout": 90 if Phase1 else 60}
+              "StageTimeout": 30 if ControlPreflight else 300,
+              "RunTimeout": 15 if ControlPreflight else 90 if Phase1 else 60}
     if Clients == 4:
         Shared["ReadinessClients"] = 4
-        Shared["ResultClassification"] = PHASE1_CLASSIFICATION if Phase1 else "FOUR_CLIENT_READINESS_ONLY"
+        Shared["ResultClassification"] = ("CONTROL_PREFLIGHT_ONLY" if ControlPreflight else
+                                          PHASE1_CLASSIFICATION if Phase1 else "FOUR_CLIENT_READINESS_ONLY")
     if Phase1:
         Shared["QualificationMode"] = "PHASE1"
+    if ControlPreflight:
+        Shared["ControlPreflight"] = True
     ValidateConfig(Shared)
     Save(Directory / "coordinator.json", {**Shared, "EvidenceDir": str(Directory / "coordinator-evidence")})
     ClientBundle = Args.client_bundle
@@ -579,6 +615,7 @@ def Main():
     Child.add_argument("--nonce", type=int, default=92707)
     Child.add_argument("--clients", type=int, choices=(1, 4), default=1)
     Child.add_argument("--phase1", action="store_true")
+    Child.add_argument("--control-preflight", action="store_true")
     Args = Parser.parse_args()
     try:
         if Args.mode == "stage":

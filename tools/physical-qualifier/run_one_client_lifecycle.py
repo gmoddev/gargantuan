@@ -261,6 +261,17 @@ def RunWorkerSocketPreflight(Stage, Artifact):
 def ReadStage(Artifact):
     Setup = json.loads((Artifact / "setup.json").read_text(encoding="utf-8"))
     Stage = json.loads((Artifact / "stage.json").read_text(encoding="utf-8"))
+    ControlOnly = Stage.get("ControlPreflight", False)
+    if type(ControlOnly) is not bool:
+        raise ValueError("invalid control preflight stage mode")
+    if ControlOnly:
+        WorkflowItem = Workflow(json.loads(Path(Setup["WorkflowFile"]).read_text(encoding="utf-8")))
+        if (WorkflowItem.Value["SchemaId"] != "gargantuan.four-client-control-preflight" or
+                WorkflowItem.Hash != Stage["WorkflowHash"]):
+            raise ValueError("lifecycle workflow does not match control preflight mode")
+        ClientPhysical = json.loads((Artifact / "client-physical.json").read_text(encoding="utf-8"))
+        if ClientPhysical.get("Role") != "CLIENT" or ClientPhysical.get("ControlOnly") is not True:
+            raise ValueError("client physical adapter is not control-only")
     if IsInteractive(Stage):
         Expected = "physical-qualification-interactive"
         ClientConfig = json.loads(Path(Stage["ClientConfig"]).read_text(encoding="utf-8"))
@@ -269,6 +280,7 @@ def ReadStage(Artifact):
         if (ClientConfig.get("Profile") != Expected or ClientConfig.get("EndpointId") != "CLIENT" or
                 WorkerConfig.get("Profile") != Expected or WorkerConfig.get("EndpointId") != "SERVER" or
                 WorkerPhysical.get("Role") != "SERVER" or "BrokerLabel" in WorkerPhysical or
+                (WorkerPhysical.get("ControlOnly") is True) != ControlOnly or
                 WorkerPhysical.get("RunId") != Stage["RunId"]):
             raise ValueError("interactive stage still depends on a restricted endpoint")
     Physical = Path(Stage["Physical"])
@@ -414,6 +426,8 @@ def RunLifecycle(Setup, Stage, Artifact, Tunnel):
                    all(Final.get(Role, {}).get("Status") == "IDLE" for Role in Clients))
         Report = {"Success": Success, "LifecycleRunId": Assignment.RunId,
                   "Codes": Codes, "Final": Final, "Samples": Samples}
+        if Stage.get("ControlPreflight"):
+            Report["Classification"] = "CONTROL_PREFLIGHT_ONLY"
         (Evidence / "qualification.json").write_text(json.dumps(Report, indent=2) + "\n", encoding="utf-8")
         print("[Coordinator:Lifecycle] " + ("PASS" if Success else "FAIL") + " " + str(Evidence), flush=True)
         return 0 if Success else 1
