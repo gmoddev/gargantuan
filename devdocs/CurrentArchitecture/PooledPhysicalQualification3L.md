@@ -18,14 +18,14 @@ source revision is `e082e6b3ab4e5345c03daa1a9bf630d270cb95f0`, GNS pin is
 `2cb93a06350bb065db53abdb0d87cf297e0bfd34`, source archive SHA-256 is
 `10D0CB47ED24D8A249735C49BC55DD52A600AA9DAB05480261435C6E3483775F`,
 and Windows probe SHA-256 is
-`0BCAD6DE1475E2E2A8A6C481D726AD0AF77904FEE2111A551E89207F7A1D61CD`.
+`E564D3CDE19F099FB3F51237C1C5B83DE4FFF78A36C4691E9231AA3E9D1DB5AA`.
 The source archive matched all 24 selected native files in the worker build
-tree after accounting only for CRLF/LF differences. The copied probe passed
-its socket-free F1 self-test; real-file manifest, archive, probe and runtime
-hash preflight passed without starting capture or probe traffic. This is
-candidate provenance, not physical qualification. The locally packaged
-candidate ZIP SHA-256 is
-`F9AB70C8F741D788BDB9564255A32A800170566873619A47EB905884258ED4FF`.
+tree after accounting only for CRLF/LF differences. The final probe was
+relinked after the updated `GameSession.cpp` object, then passed its socket-free
+F1 self-test. Real-file manifest, archive, probe and runtime hash preflight
+passed without starting capture or probe traffic. This is candidate
+provenance, not physical qualification. The corrected candidate ZIP SHA-256 is
+`2F6F9217CD09D276CB23119CC34367FDFD43397F3AF08621023711A0FDB326E8`.
 
 ## Capture runtime qualified; strengthened workload still blocked (2026-09-28)
 

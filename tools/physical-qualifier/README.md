@@ -26,7 +26,7 @@ The separate F1 candidate pins native source revision
 F1 native-source archive SHA-256
 `10D0CB47ED24D8A249735C49BC55DD52A600AA9DAB05480261435C6E3483775F`,
 and Windows probe SHA-256
-`0BCAD6DE1475E2E2A8A6C481D726AD0AF77904FEE2111A551E89207F7A1D61CD`.
+`E564D3CDE19F099FB3F51237C1C5B83DE4FFF78A36C4691E9231AA3E9D1DB5AA`.
 The [F1 manifest](phase1-f1-source-manifest.json) also pins all twelve runtime
 assets; the Phase 1 adapter checks their hashes and rejects the earlier D01
 candidate. [Generate the archive](make_f1_source_archive.py) with
