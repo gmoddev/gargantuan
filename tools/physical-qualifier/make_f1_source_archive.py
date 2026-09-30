@@ -10,6 +10,7 @@ import zipfile
 NATIVE_SOURCE_PATHS = (
     "CMakeLists.txt",
     "cmake/GameNetworkingSockets.cmake",
+    "cmake/gns/ApplyServiceFairness.cmake",
     "cmake/gns/ApplyReliableServiceFeedback.cmake",
     "cmake/gns/ApplyPreciseSenderWake.cmake",
     "cmake/gns/ReliableServiceFeedback.cpp",

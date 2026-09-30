@@ -70,12 +70,49 @@ inline bool Run() {
 		for (std::size_t Index = 0; Index < Pairs.size(); ++Index) {
 			const auto Sample = detail::ReliableServiceFeedbackAccess::Observe(
 				*Pairs[Index].Server, Pairs[Index].ServerConnection);
-			if (!Sample || !Sample->CountersValid || Sample->StructuralLastCompletedGrantToken != 1 ||
-				Sample->StructuralLastCompletedGrantBytes != GrantBytes ||
-				Sample->StructuralLastCompletedGrantFailed ||
+			if (!Sample)
+				throw std::runtime_error("individual maximum grant feedback unavailable");
+			const bool CountersInvalid = !Sample->CountersValid;
+			const bool CompletionMissing = Sample->StructuralLastCompletedGrantToken != 1;
+			const bool SizeMismatch = Sample->StructuralLastCompletedGrantBytes != GrantBytes;
+			const bool CurveFailed = Sample->StructuralLastCompletedGrantFailed;
+			const bool RunningBoundExceeded =
 				Sample->StructuralLastCompletedGrantMaximumRunningDeficitByteMicroseconds >
-					FiniteGrantServiceCurve::RunningBoundByteMicroseconds)
+					FiniteGrantServiceCurve::RunningBoundByteMicroseconds;
+			if (CountersInvalid || CompletionMissing || SizeMismatch || CurveFailed || RunningBoundExceeded) {
+				std::cerr << "[Network:GnsFour] peer=" << Index
+					<< " counters_invalid=" << CountersInvalid
+					<< " completion_missing=" << CompletionMissing
+					<< " size_mismatch=" << SizeMismatch
+					<< " curve_failed=" << CurveFailed
+					<< " running_bound_exceeded=" << RunningBoundExceeded
+					<< " observed_us=" << Sample->ObservedAtMicroseconds
+					<< " active_token=" << Sample->ActiveAttributedRetirementToken
+					<< " active_bytes=" << Sample->StructuralActiveGrantBytes
+					<< " active_first_sent=" << Sample->StructuralActiveGrantFirstSentBytes
+					<< " active_started_us=" << Sample->StructuralActiveGrantStartedAtMicroseconds
+					<< " completed_token=" << Sample->StructuralLastCompletedGrantToken
+					<< " completed_bytes=" << Sample->StructuralLastCompletedGrantBytes
+					<< " activated_us=" << Sample->StructuralLastCompletedGrantActivatedAtMicroseconds
+					<< " first_send_us=" << Sample->StructuralLastCompletedGrantFirstSendAtMicroseconds
+					<< " completed_us=" << Sample->StructuralLastCompletedGrantCompletedAtMicroseconds
+					<< " max_running_byte_us="
+					<< Sample->StructuralLastCompletedGrantMaximumRunningDeficitByteMicroseconds
+					<< " max_finite_shortfall_byte_us="
+					<< Sample->StructuralMaximumFiniteShortfallByteMicroseconds
+					<< " native_packets=" << Sample->NativePacketsSent - InitialPackets[Index]
+					<< " native_packet_bytes=" << Sample->NativePacketBytesSent - InitialPacketBytes[Index]
+					<< " pending=" << Sample->PendingReliableStreamBytes
+					<< " sent_unacked=" << Sample->SentUnackedReliableStreamBytes
+					<< " segment_events=" << Sample->LastCompletedStructuralSegmentEventCount << '\n';
+				for (std::uint32_t Event = 0; Event < Sample->LastCompletedStructuralSegmentEventCount; ++Event) {
+					const auto &Native = Sample->LastCompletedStructuralSegmentEvents[Event];
+					std::cerr << "[Network:GnsFour] peer=" << Index << " segment=" << Event
+						<< " at_us=" << Native.AtMicroseconds
+						<< " bytes=" << Native.PayloadBytes << '\n';
+				}
 				throw std::runtime_error("individual maximum grant failed F1");
+			}
 			CommonStart = std::max(CommonStart, Sample->StructuralLastCompletedGrantFirstSendAtMicroseconds);
 			CommonEnd = std::min(CommonEnd, Sample->StructuralLastCompletedGrantCompletedAtMicroseconds);
 			EarliestActivation = std::min(EarliestActivation,

@@ -1646,6 +1646,16 @@ namespace gargantuan::network {
 						}
 						PeerValue.StructuralSubmittedThisStep = true;
 						LastServicedConnection = Connection;
+						// An accepted F1 grant is already on its finite first-send clock.
+						// Submit it before planning the next peer's large frame; the
+						// shared step allowance keeps normal scheduler precedence/bounds.
+						if (IsPooled() && Receipt && PeerValue.Phase == PeerPhase::Ready) {
+							auto Flushed = PeerValue.SendAllowance.Flush(Scheduler, Connection, PeerValue.Limits);
+							if (auto Failure = SchedulerFlushFailure(Flushed)) {
+								PendingPeerFailures.try_emplace(Connection, std::move(*Failure));
+								return false;
+							}
+						}
 						return true;
 					};
 

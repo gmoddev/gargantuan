@@ -101,6 +101,23 @@ GargantuanReplaceFeedback("\tpSendMessage->m_nMessageNumber = ++lane.m_nLastSent
 				pSendMessage->m_nMessageNumber, pSendMessage->m_cbSize,
 				nGargantuanAttribution.ActivatedAtMicroseconds );
 	}]=])
+GargantuanReplaceFeedback("\tint nMaxPacketsPerThinkRemaining = g_cbUDPSocketBufferSize >> 11;" [=[
+	int nMaxPacketsPerThinkRemaining = g_cbUDPSocketBufferSize >> 11;
+	int nGargantuanStructuralPacketsThisThink = 0;]=])
+GargantuanReplaceFeedback("\t\t// Sent too many packets in one burst?" [=[
+		// Give other finite structural grants a sender visit before one
+		// connection drains an accumulated pacing burst. Keep this sender's
+		// token bucket and the ordinary traffic packet limit unchanged.
+		const auto &GargantuanGrant = m_senderState.GargantuanFeedback;
+		if (GargantuanGrant.StructuralActiveGrantBytes > GargantuanGrant.StructuralActiveGrantFirstSentBytes &&
+			++nGargantuanStructuralPacketsThisThink >= 4)
+		{
+			const SteamNetworkingMicroseconds usecReschedule = SteamNetworkingSockets_GetLocalTimestamp();
+			SNP_TokenBucket_Accumulate(usecReschedule);
+			return std::max(usecReschedule + 1, SNP_GetNextThinkTime(usecReschedule));
+		}
+
+		// Sent too many packets in one burst?]=])
 GargantuanWriteFeedbackSource()
 
 GargantuanReadFeedbackSource(steamnetworkingsockets_connections.h 9ece0f7051f1b67e44c75c27c10867a863b56e2a0d0ac95849aa116b5274a9ef)

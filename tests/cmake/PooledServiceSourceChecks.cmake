@@ -34,6 +34,12 @@ RequireSource("clientlib/steamnetworkingsockets_snp.cpp"
 	"GargantuanFeedback.NativePacket(nBytesSent)")
 RequireSource("clientlib/steamnetworkingsockets_snp.cpp"
 	"GargantuanSeg.m_bGargantuanEverSent = true")
+RequireSource("clientlib/steamnetworkingsockets_snp.cpp"
+	"nGargantuanStructuralPacketsThisThink >= 4")
+RequireSource("steamnetworkingsockets_thinker.cpp"
+	"GargantuanHasRunningStructuralGrant()")
+RequireSource("steamnetworkingsockets_thinker.cpp"
+	"usecRetry = usecNow + 25")
 
 file(READ "${GargantuanRoot}/src/network/GameNetworkingSocketsTransport.cpp" Adapter)
 string(FIND "${Adapter}" "Token && Message.Traffic() == TrafficClass::StructuralReplication" ScopedStructural)

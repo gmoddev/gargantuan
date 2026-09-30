@@ -306,6 +306,7 @@ class QualificationTests(unittest.TestCase):
         self.assertEqual(Q.PHASE1_RUNTIME_MANIFEST_SHA, hashlib.sha256(json.dumps(
             RuntimeHashes, sort_keys=True, separators=(",", ":")).encode()).hexdigest().upper())
         with zipfile.ZipFile(ArchivePath) as Source:
+            self.assertIn("cmake/gns/ApplyServiceFairness.cmake", Source.namelist())
             self.assertIn("src/network/FiniteGrantServiceCurve.hpp", Source.namelist())
             self.assertIn("tests/PhysicalGnsFundingProbeTrace.hpp", Source.namelist())
         subprocess.run([sys.executable, str(Generator), "--verify-tree", str(ArchivePath),
