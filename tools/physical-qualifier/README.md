@@ -27,7 +27,7 @@ The corrected F1 candidate pins native source revision
 F1 native-source archive SHA-256
 `E8BD4673BD1E127D8D9573AB475C190931E25D197E72CD3B8A9C67BDED129B46`,
 and Windows probe SHA-256
-`46FA8689EFF320AE71DC2805AF41F7A813E4DBD837CEF77C9DFEEE63D4D92271`.
+`46FA8689EFF320AE71DC2805AF41F7A813E4DBD837CEF77C9DFFEE63D4D92271`.
 The [F1 manifest](phase1-f1-source-manifest.json) also pins all twelve runtime
 assets and the two native DLLs required beside the probe executable; the Phase 1
 adapter checks their hashes and rejects the earlier D01
