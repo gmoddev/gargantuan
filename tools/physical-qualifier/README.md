@@ -8,8 +8,9 @@ check, and participate in a real four-peer first-send overlap. Four native
 all-subinterval peer checks imply the 64 MiB/s running-pool bound on that
 common interval. ACK, retirement, capture, and gameplay gates remain separate.
 Earlier short-window and D01 cross-grant receipts are historical. The installed
-physical probe and capture-service pins remain unchanged; no physical Phase 1
-is authorized here. The old staged D01 candidate remains pinned separately
+physical probe and capture-service pins remain unchanged until the corrected
+F1 candidate completes deterministic and hosted CI gates. The old staged D01
+candidate remains pinned separately
 from readiness: probe SHA-256
 `2E543D0983D66895569A0E270905086200C6E478A8C313B206E6BC64C0081ABC`,
 native-source archive SHA-256
@@ -20,13 +21,13 @@ passed manifest/hash and socket-free self-test preflight. The worker-local
 four-process loopback stress case failed D01's charged service-deficit bound;
 it did not exercise the physical path.
 The D01 manifest and probe hashes are deployment history, not F1 qualification.
-The separate F1 candidate pins native source revision
-`e082e6b3ab4e5345c03daa1a9bf630d270cb95f0`, pinned GNS
+The corrected F1 candidate pins native source revision
+`83ee0abf6dd5743d4cdf74a83c363db4a5305b9c`, pinned GNS
 `2cb93a06350bb065db53abdb0d87cf297e0bfd34`,
 F1 native-source archive SHA-256
-`10D0CB47ED24D8A249735C49BC55DD52A600AA9DAB05480261435C6E3483775F`,
+`E8BD4673BD1E127D8D9573AB475C190931E25D197E72CD3B8A9C67BDED129B46`,
 and Windows probe SHA-256
-`E564D3CDE19F099FB3F51237C1C5B83DE4FFF78A36C4691E9231AA3E9D1DB5AA`.
+`46FA8689EFF320AE71DC2805AF41F7A813E4DBD837CEF77C9DFEEE63D4D92271`.
 The [F1 manifest](phase1-f1-source-manifest.json) also pins all twelve runtime
 assets and the two native DLLs required beside the probe executable; the Phase 1
 adapter checks their hashes and rejects the earlier D01
