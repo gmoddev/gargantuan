@@ -85,6 +85,17 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+2026-09-30 post-control-correction F1 checkpoint: a fresh attempt reached the
+real worker child, launched capture and the pinned F1 server probe, then
+stopped because the qualifier required a `event=listening` text marker absent
+from the F1 binary. A worker-local no-client loopback diagnostic verified that
+the probe owned the correct UDP port throughout the six-second timeout while
+the marker remained absent. No client probe or F1 grant began, so physical
+F1 service is **NOT MEASURED**. [Receipt](devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md#f1-phase-1-stopped-at-an-impossible-server-live-marker-2026-09-30).
+The corrective qualifier uses live PID-owned socket state; its deterministic,
+package, CI and fresh physical preflights are required before the one remaining
+bounded attempt. **KI-006 OPEN; Foundation 3L B — PARTIALLY READY.**
+
 2026-09-30 F1 physical checkpoint: the [single F1 Phase 1 attempt](devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md#f1-physical-phase-1-stopped-at-the-worker-control-barrier-2026-09-30)
 stopped before GNS or capture when the actual worker endpoint timed out
 connecting to the client control barrier. Interactive normal-LAN preflight

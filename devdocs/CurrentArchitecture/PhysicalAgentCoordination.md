@@ -47,6 +47,14 @@ The Gargantuan adapter gates it behind dedicated capabilities and a distinct
 workflow/result classification. Its evidence is a prerequisite for a fresh
 physical attempt, not a substitute for physical F1 service, delivery, capture,
 or convergence evidence.
+During the first actual-child control preflight, Windows Firewall created an
+inbound Block rule for the newly versioned client Python executable at listener
+startup. The earlier physical timeout had the same cause; its rule became Allow
+only after the run ended. The deployment now uses the hash-identical installed
+client runtime with an existing inbound Allow rule and a pre-stage denial if
+that executable has a Block rule. Three fresh real-child control-only runs
+passed under this selection. A separate Python process's LAN check remains
+supplemental evidence, not proof of the physical child path.
 `bootstrap.py` fetches that revision into ignored `.agent-coordinator`; imports
 fail closed on missing/changed pinned sources. New packages embed the snapshot and
 adapter, including the skill entrypoint. Old installed standalone packages remain

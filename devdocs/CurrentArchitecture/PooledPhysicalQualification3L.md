@@ -1,10 +1,42 @@
 ---
-status: f1-phase1-coordination-fail
+status: f1-phase1-qualification-infrastructure-fail
 owner: runtime-networking-and-runtime-host
 last_verified: 2026-09-30
 ---
 
 # Foundation 3L pooled physical qualification attempt
+
+## F1 Phase 1 stopped at an impossible server-live marker (2026-09-30)
+
+**F1 PHYSICAL SERVICE — NOT MEASURED; QUALIFICATION-INFRASTRUCTURE DEFECT.**
+The first fresh attempt after the control-path correction used physical run
+`18f17968-521e-431e-a402-7b549c214166` and lifecycle run
+`e1087ede-b4a0-44ef-85f8-1fafd32a359d`. Both real-file checks, both
+evidence-root/worker-LAN proofs, all six native CI jobs, and the runner's
+forward/reverse one-use tunnel handshakes passed. The actual worker child
+connected from `192.168.0.108:58009` to the client listener in 15 ms and
+exchanged `STAGE_READY`. The client capture and worker Packet Monitor started.
+The worker launched its exact pinned F1 probe, PID 33032, but the qualifier
+declared `server listener did not become live` after six seconds. The client
+probe group had not started. The server capture exported 540 fiber frames but
+zero qualified UDP `39450` directions/tuples; the client pcap contained only
+headers. No grant or F1 first-send service was measured. The empty-direction
+cleanup errors follow from the premature barrier stop, not from an F1 result.
+Both daemons stopped and task-owned stages rolled back with evidence retained.
+
+The qualifier's `ServerLive` predicate required a GNS `event=listening` text
+marker before checking the probe-owned UDP socket. The pinned native F1 source
+and executable do not contain that marker. A bounded worker-local loopback
+diagnostic ran the same F1 binary with no capture or clients: its live PID
+owned UDP `127.0.0.1:39450` at 1.5, 3.5, and 6.5 seconds, yet stderr never
+contained the marker. This independently reproduces the false-negative
+readiness predicate. The correction uses the live probe PID and its exact
+owned UDP `10.253.3.2:39450` socket as the server-ready proof, with an
+explicit `SERVER_LISTENER_VERIFIED` evidence event. It does not alter F1,
+admission, the native probe, or capture-direction acceptance. A second fresh
+physical attempt is eligible only after this corrected qualifier passes
+deterministic tests, source/package checks, CI, and full fresh preflights.
+**KI-006 remains OPEN; Foundation 3L remains B — PARTIALLY READY.**
 
 ## F1 physical Phase 1 stopped at the worker control barrier (2026-09-30)
 
@@ -55,6 +87,43 @@ Packet Monitor stopped and no filters. The one permitted attempt was not
 retried. Diagnose and deterministically qualify the actual worker endpoint's
 control connection before seeking authorization for another physical Phase 1
 run. **KI-006 remains OPEN; Foundation 3L remains B — PARTIALLY READY.**
+
+### Control-barrier attribution and child-path qualification (2026-09-30)
+
+The failed physical run's client coordinator was listening before the worker
+child started. The fresh control-only reproduction recorded the actual worker
+child PID, medium-integrity `HOSTPC\host` token, source
+`192.168.0.108:65419`, destination `192.168.0.68:39451`, and an exact
+three-second TCP connect timeout. The client coordinator had already written
+`LISTENER_READY`, accepted the client role, and remained active. Windows
+Firewall event 2097 and its resulting enabled inbound TCP **Block** rule
+identify the defect: the rule was created for the newly versioned coordinator
+Python executable as the listener started. The earlier physical runtime had
+also received an automatic Block rule at its listener startup; its rule was
+changed to Allow only after that run's worker timeout. The interactive LAN
+check used a different Python executable with an Allow rule and could not
+qualify this child path. There is no observed worker-side WFP denial.
+
+The bounded correction selects the already installed client qualifier Python
+runtime for the coordinator and endpoint children. Its executable SHA-256 is
+`737A7E3B71E3578F8432ACC7DD88C452E593622C544BC13DA4789D69C63DA5AE`,
+identical to the versioned package runtime, and its existing inbound TCP Allow
+rule applies on the Private normal-LAN profile. The task-owned stage helper
+rejects a missing Allow rule or any enabled Block rule for that exact runtime.
+The qualifier source remains versioned and pinned separately; neither
+capture-service binary/hook nor the native F1 probe was replaced by this fix.
+
+The dedicated `CONTROL_PREFLIGHT_ONLY` workflow ran through the actual client
+and worker Codex lifecycle child launcher with fresh physical/lifecycle IDs
+and full owner-verified rollback between each pass. Three **consecutive**
+passes used the real worker child to bind `192.168.0.108`, connect to the
+pinned client listener, exchange authenticated `STAGE_READY` and completion,
+and return both outer roles to `IDLE`. Their worker connect times were
+16 ms, under 1 ms, and 16 ms. No pass started capture, GNS, or a probe.
+The retained audit and evidence are under
+`C:\Users\aiden\.codex\artifacts\gargantuan-f1-control-stage-20260930`.
+These passes qualify the corrected control path only; F1 physical service
+remains **NOT MEASURED** until a fresh physical attempt completes its gates.
 
 **Decision update (2026-09-29):** The earlier attempts below were
 evaluated under superseded candidate contracts. The [F1 amendment to D01](../../docs/adr/D01-pooled-service-curve.md)

@@ -41,6 +41,9 @@ Generic transport, coordinator, endpoint and privileged capture implementation i
 owned by [GantriaEngine Agent Coordinator](https://github.com/GantriaEngine/agent-coordinator).
 This directory retains Gargantuan's exact probe/source identities, fixed GNS argv,
 physical capture hook, staging, local execution adapter and evidence acceptance.
+F1 server readiness verifies that the still-running probe PID owns the exact
+UDP `10.253.3.2:39450` socket. The pinned F1 binary has no
+`event=listening` log marker, so log text is not a readiness predicate.
 
 ```text
 python tools/physical-qualifier/bootstrap.py
@@ -101,6 +104,14 @@ workflow. Its dedicated lifecycle capabilities cannot accept the physical
 workflow, and a control-only result is not physical F1 evidence. Repeat it with
 fresh identities through the same installed lifecycle child launcher before a
 physical run; the interactive host socket check remains supplemental.
+The deployed client coordinator runtime must have an applicable inbound TCP
+allowance for the normal-LAN control listener. Windows may create an automatic
+Block rule for a new versioned Python executable even when the same binary is
+allowed at another path. The qualified deployment uses the existing installed
+Python 3.12.6 image (SHA-256
+`737A7E3B71E3578F8432ACC7DD88C452E593622C544BC13DA4789D69C63DA5AE`)
+for the child process and keeps the versioned, hash-verified qualifier source.
+The stage helper rejects a Block rule or missing Allow rule for that image.
 
 For an explicitly authorized physical qualification, `stage.json` may carry
 `QualificationProfile: PHYSICAL_QUALIFICATION_INTERACTIVE`. The one-client

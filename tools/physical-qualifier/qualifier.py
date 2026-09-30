@@ -213,6 +213,7 @@ class LocalRun:
         self.FinalizeAt = None
         self.HookHashes = {}
         self.CleanupResult = None
+        self.ServerListenerLogged = False
 
     def Check(self):
         Config = self.Config
@@ -370,17 +371,21 @@ class LocalRun:
         self.Probe = ProbeGroup(self.Probes) if Clients == 4 and self.Config["Role"] == "CLIENT" else self.Probes[0]
 
     def ServerLive(self):
-        Stem = "probe-server" if self.Config.get("ReadinessClients", 1) == 4 else "probe"
-        Text = (self.Log.Directory / (Stem + ".stderr.log")).read_text(errors="replace")
-        if "event=listening" not in Text:
+        if self.Probe is None or self.Probe.poll() is not None:
             return False
-        # Verify the actual socket is owned by this locally launched PID.
+        # The pinned F1 probe does not emit a listening log marker. The live,
+        # PID-owned native UDP socket is the authoritative server-ready proof.
         Command = ("$ErrorActionPreference='Stop'; $E=Get-NetUDPEndpoint -OwningProcess " +
                    str(self.Probe.pid) + " | Where-Object {$_.LocalAddress -eq '10.253.3.2' -and $_.LocalPort -eq 39450}; "
                    "if($E){exit 0}else{exit 1}")
         Check = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", Command],
                                capture_output=True, timeout=4, **Hidden())
-        return Check.returncode == 0 and self.Probe.poll() is None
+        Live = Check.returncode == 0 and self.Probe.poll() is None
+        if Live and not self.ServerListenerLogged:
+            self.Log.Write("SERVER_LISTENER_VERIFIED", Pid=self.Probe.pid,
+                           Address="10.253.3.2", Port=39450, Proof="PID_OWNED_UDP_SOCKET")
+            self.ServerListenerLogged = True
+        return Live
 
     def Status(self):
         for File in self.Log.Directory.glob("*.log"):

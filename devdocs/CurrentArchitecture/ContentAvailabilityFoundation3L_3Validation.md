@@ -6,6 +6,20 @@ last_verified: 2026-09-30
 
 # Foundation 3L.3 diagnostic validation ledger
 
+## F1 physical Phase 1 server-live false negative (2026-09-30)
+
+The [fresh post-control-correction attempt](PooledPhysicalQualification3L.md#f1-phase-1-stopped-at-an-impossible-server-live-marker-2026-09-30)
+used physical run `18f17968-521e-431e-a402-7b549c214166` and lifecycle
+run `e1087ede-b4a0-44ef-85f8-1fafd32a359d`. The actual worker child
+connected to the coordinator and started the pinned probe, but the qualifier
+required a `event=listening` marker absent from that F1 binary. A separate
+worker-local loopback test proved the live probe owned the UDP socket across
+the six-second readiness window with no marker. Client probes did not start;
+F1 service, delivery and convergence remain **NOT MEASURED**. Capture evidence
+was retained and both endpoint stages were rolled back. The exact PID-owned
+socket proof is now the pending qualified correction. **KI-006 OPEN;
+Foundation 3L B — PARTIALLY READY.**
+
 ## F1 physical Phase 1 control-barrier stop (2026-09-30)
 
 The [single fresh F1 attempt](PooledPhysicalQualification3L.md#f1-physical-phase-1-stopped-at-the-worker-control-barrier-2026-09-30)

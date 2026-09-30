@@ -90,8 +90,10 @@ Local probe deadline is 25 seconds, server-live detection 6 seconds, hook execut
 2. Coordinator sends `ARM_CAPTURE` to client. Client starts full-header capture
    and reports `CAPTURE_LIVE` only when its capture child is alive and pcap exists.
 3. Coordinator sends `START_SERVER`. Worker starts its locally configured capture,
-   then its readiness server for the selected client count. Its unbuffered GNS `event=listening` log,
-   still-running PID, and PID-owned UDP `10.253.3.2:39450` socket must all agree.
+   then its readiness server for the selected client count. The worker verifies
+   the still-running probe PID owns UDP `10.253.3.2:39450` and records
+   `SERVER_LISTENER_VERIFIED`. The pinned F1 probe has no `event=listening`
+   log marker; PID-owned socket state is the server-ready proof.
 4. Worker sends `SERVER_LIVE` with PID and endpoint. Coordinator immediately sends
    `START_CLIENT` in the same receive handler. Client launches one or four
    already-verified probe processes and reports `CLIENT_RUNNING` with the first

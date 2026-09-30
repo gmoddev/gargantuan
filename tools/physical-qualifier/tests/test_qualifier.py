@@ -60,6 +60,39 @@ class QualificationTests(unittest.TestCase):
         self.Thread = None
         self.Links = []
 
+    def test_server_ready_uses_owned_udp_socket_without_nonexistent_log_marker(self):
+        class Log:
+            def __init__(self, Directory):
+                self.Directory = Directory
+                self.Events = []
+
+            def Write(self, Event, **Fields):
+                self.Events.append((Event, Fields))
+
+        LogValue = Log(self.Root)
+        (self.Root / "probe-server.stderr.log").write_text("")
+        Run = Q.LocalRun({"ReadinessClients": 4}, LogValue)
+        Run.Probe = SimpleNamespace(pid=12345, poll=lambda: None)
+        with mock.patch.object(Q.subprocess, "run", return_value=SimpleNamespace(returncode=0)) as Check:
+            self.assertTrue(Run.ServerLive())
+            self.assertTrue(Run.ServerLive())
+        self.assertIn("Get-NetUDPEndpoint -OwningProcess 12345", Check.call_args.args[0][-1])
+        self.assertIn("10.253.3.2", Check.call_args.args[0][-1])
+        self.assertIn("39450", Check.call_args.args[0][-1])
+        self.assertEqual([("SERVER_LISTENER_VERIFIED", {
+            "Pid": 12345, "Address": "10.253.3.2", "Port": 39450,
+            "Proof": "PID_OWNED_UDP_SOCKET"})], LogValue.Events)
+
+    def test_server_ready_rejects_unowned_socket_or_exited_probe(self):
+        Run = Q.LocalRun({"ReadinessClients": 4}, SimpleNamespace(Directory=self.Root))
+        Run.Probe = SimpleNamespace(pid=12345, poll=lambda: None)
+        with mock.patch.object(Q.subprocess, "run", return_value=SimpleNamespace(returncode=1)):
+            self.assertFalse(Run.ServerLive())
+        Run.Probe = SimpleNamespace(pid=12345, poll=lambda: 1)
+        with mock.patch.object(Q.subprocess, "run") as Check:
+            self.assertFalse(Run.ServerLive())
+            Check.assert_not_called()
+
     def test_stage_uses_only_opted_in_privileged_capture_client(self):
         StageRoot = self.Root / "stage"
         Args = SimpleNamespace(
