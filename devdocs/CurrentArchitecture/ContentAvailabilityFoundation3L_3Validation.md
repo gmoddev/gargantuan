@@ -1,10 +1,25 @@
 ---
 status: partial-validation
 owner: runtime-networking
-last_verified: 2026-09-28
+last_verified: 2026-09-29
 ---
 
 # Foundation 3L.3 diagnostic validation ledger
+
+## F1 finite-grant candidate preflight (2026-09-29)
+
+The canonical [F1 amendment](../../docs/adr/D01-pooled-service-curve.md)
+defines the 16 MiB/s requirement for finite accepted grants; the 2 MiB/s peer
+credit and all admission limits remain unchanged. Deterministic production
+admission, native attribution, grant-scoped finite/running checks, four-peer
+overlap, ACK and retirement suites passed on the F1 source. The new Phase 1
+adapter pins a separate F1 probe, 24-file native source archive and twelve
+runtime assets. The copied Windows probe passed socket-free self-test and the
+candidate's real-file hash/provenance preflight passed. The earlier D01 probe
+and installed endpoint copies were not replaced. Physical F1 Phase 1 remains
+unrun; KI-006 is OPEN and Foundation 3L remains B — PARTIALLY READY. The
+[physical receipt](PooledPhysicalQualification3L.md) retains all earlier runs
+under their original contract.
 
 ## Capture-runtime and workload preflight update (2026-09-28)
 

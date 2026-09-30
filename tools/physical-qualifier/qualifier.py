@@ -28,9 +28,11 @@ BASE_HEAD = "14644a369f9e7bfb9a81c21354adae62902d63d7"
 OVERLAY = "2ED31AE67E0F99619940BBB130CD451DB37FEF3A5CEEDAB475E682C3FBEE7003"
 GNS_PIN = "2cb93a06350bb065db53abdb0d87cf297e0bfd34"
 PROBE_SHA = "F130DC868A807FFA4EF10887079162C562230854AE17C013559452791993E969"
-PHASE1_BASE_HEAD = "a998cf98b6a1dad40d414c59e0f4a6d348749e52"
-PHASE1_OVERLAY = "FC0D0B5E11D488E091CF4552A3CFC7E9362F1DA4DFA434AB139120A15BFDAA5A"
-PHASE1_PROBE_SHA = "2E543D0983D66895569A0E270905086200C6E478A8C313B206E6BC64C0081ABC"
+PHASE1_BASE_HEAD = "e082e6b3ab4e5345c03daa1a9bf630d270cb95f0"
+PHASE1_OVERLAY = "10D0CB47ED24D8A249735C49BC55DD52A600AA9DAB05480261435C6E3483775F"
+PHASE1_PROBE_SHA = "0BCAD6DE1475E2E2A8A6C481D726AD0AF77904FEE2111A551E89207F7A1D61CD"
+PHASE1_SOURCE_ARCHIVE = "f1-native-source.zip"
+PHASE1_RUNTIME_MANIFEST_SHA = "E105DBA76473990C5AE3AB410762851C7183396FF894A093E526ED26B335D7A9"
 SERVER_ADDRESS = "10.253.3.2"
 CLIENT_ADDRESS = "10.253.3.1"
 SERVER_PORT = 39450
@@ -210,12 +212,21 @@ class LocalRun:
         if (Manifest["BaseHead"] != ExpectedHead or Manifest["OverlayArchiveSha256"].upper() != ExpectedOverlay or
                 Manifest["GnsPin"] != GNS_PIN):
             raise ValueError("source manifest provenance mismatch")
-        if IsPhase1(Config) and (Manifest.get("Contract") != "D01" or
+        if IsPhase1(Config) and (Manifest.get("Contract") != "F1" or
                                  Manifest.get("ProbeSHA256", "").upper() != PHASE1_PROBE_SHA):
-            raise ValueError("Phase 1 requires the D01 probe source manifest")
-        if IsPhase1(Config) and (Manifest.get("SourceArchive") != "d01-native-source.zip" or
-                                 Digest(ManifestPath.parent / "d01-native-source.zip") != PHASE1_OVERLAY):
+            raise ValueError("Phase 1 requires the F1 probe source manifest")
+        if IsPhase1(Config) and (Manifest.get("SourceArchive") != PHASE1_SOURCE_ARCHIVE or
+                                 Digest(ManifestPath.parent / PHASE1_SOURCE_ARCHIVE) != PHASE1_OVERLAY):
             raise ValueError("Phase 1 native source archive hash mismatch")
+        if IsPhase1(Config):
+            RuntimeHashes = Manifest.get("RuntimeSha256")
+            if not isinstance(RuntimeHashes, dict) or hashlib.sha256(json.dumps(
+                    RuntimeHashes, sort_keys=True, separators=(",", ":")).encode()).hexdigest().upper() != PHASE1_RUNTIME_MANIFEST_SHA:
+                raise ValueError("Phase 1 runtime manifest mismatch")
+            for Name, Expected in RuntimeHashes.items():
+                if not re.fullmatch(r"[A-Za-z0-9_.-]+", Name) or Digest(
+                        Path(Config["WorkDir"]) / "runtime" / Name) != Expected:
+                    raise ValueError("Phase 1 runtime file hash mismatch: " + Name)
         Clients = Config.get("ReadinessClients", 1)
         Fixed = (["server", "10.253.3.2", "39450", str(Clients)]
                  if Config["Role"] == "SERVER" else

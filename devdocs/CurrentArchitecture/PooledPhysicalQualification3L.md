@@ -1,16 +1,31 @@
 ---
 status: four-client-readiness-pass-phase1-architecture-decision-required
 owner: runtime-networking-and-runtime-host
-last_verified: 2026-09-28
+last_verified: 2026-09-29
 ---
 
 # Foundation 3L pooled physical qualification attempt
 
 **Decision update (2026-09-29):** The historical attempts below were
-evaluated under the superseded ACK-positive short-window gate. [D01](../../docs/adr/D01-pooled-service-curve.md)
-defines the new production and Phase 1 service-curve contract. None of these
-receipts is a physical D01 pass; the installed probe/service pins are unchanged
-and KI-006 remains open pending a separately authorized physical run.
+evaluated under superseded candidate contracts. The [F1 amendment to D01](../../docs/adr/D01-pooled-service-curve.md)
+now defines finite accepted-grant first-send drain capacity and a separate
+intra-grant running check. None of these receipts is a physical F1 pass; the
+installed probe/service pins are unchanged and KI-006 remains open pending a
+separately authorized physical run.
+
+The next F1 candidate is packaged separately from installed tools. Its native
+source revision is `e082e6b3ab4e5345c03daa1a9bf630d270cb95f0`, GNS pin is
+`2cb93a06350bb065db53abdb0d87cf297e0bfd34`, source archive SHA-256 is
+`10D0CB47ED24D8A249735C49BC55DD52A600AA9DAB05480261435C6E3483775F`,
+and Windows probe SHA-256 is
+`0BCAD6DE1475E2E2A8A6C481D726AD0AF77904FEE2111A551E89207F7A1D61CD`.
+The source archive matched all 24 selected native files in the worker build
+tree after accounting only for CRLF/LF differences. The copied probe passed
+its socket-free F1 self-test; real-file manifest, archive, probe and runtime
+hash preflight passed without starting capture or probe traffic. This is
+candidate provenance, not physical qualification. The locally packaged
+candidate ZIP SHA-256 is
+`F9AB70C8F741D788BDB9564255A32A800170566873619A47EB905884258ED4FF`.
 
 ## Capture runtime qualified; strengthened workload still blocked (2026-09-28)
 

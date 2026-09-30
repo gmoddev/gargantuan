@@ -1,3 +1,4 @@
+import hashlib
 import importlib.util
 import json
 import os
@@ -10,6 +11,7 @@ import tempfile
 import threading
 import time
 import unittest
+import zipfile
 from types import SimpleNamespace
 from unittest import mock
 
@@ -149,26 +151,47 @@ class QualificationTests(unittest.TestCase):
         Probe = self.Root / "gargantuan_physical_gns_funding_probe.exe"
         Probe.write_bytes(b"qualification-only test")
         Manifest = self.Root / "phase1-source-manifest.json"
+        RuntimeHashes = json.loads((Path(__file__).parents[1] / "phase1-f1-source-manifest.json").read_text())["RuntimeSha256"]
         Manifest.write_text(json.dumps({"BaseHead": Q.PHASE1_BASE_HEAD, "OverlayArchiveSha256": Q.PHASE1_OVERLAY,
-                                        "GnsPin": Q.GNS_PIN, "Contract": "D01",
+                                        "GnsPin": Q.GNS_PIN, "Contract": "F1",
                                         "ProbeSHA256": Q.PHASE1_PROBE_SHA,
-                                        "SourceArchive": "d01-native-source.zip"}))
-        (self.Root / "d01-native-source.zip").write_bytes(b"test source archive")
+                                        "SourceArchive": Q.PHASE1_SOURCE_ARCHIVE,
+                                        "RuntimeSha256": RuntimeHashes}))
+        (self.Root / Q.PHASE1_SOURCE_ARCHIVE).write_bytes(b"test source archive")
         Client.update(ProbePath=str(Probe), SourceManifest=str(Manifest), WorkDir=str(self.Root))
         Client["CaptureCommand"][0] = sys.executable
         Log = Q.Journal(self.Root / "phase1-check")
         try:
             def TestDigest(PathValue):
-                return Q.PHASE1_OVERLAY if Path(PathValue).name == "d01-native-source.zip" else Q.PHASE1_PROBE_SHA
+                PathValue = Path(PathValue)
+                if PathValue.name == Q.PHASE1_SOURCE_ARCHIVE:
+                    return Q.PHASE1_OVERLAY
+                if PathValue.parent.name == "runtime":
+                    return RuntimeHashes[PathValue.name]
+                return Q.PHASE1_PROBE_SHA
             with mock.patch.object(Q, "Digest", side_effect=TestDigest):
                 Q.LocalRun(Client, Log).Check()
                 OldManifest = json.loads(Manifest.read_text())
-                OldManifest["Contract"] = "short-window"
-                Manifest.write_text(json.dumps(OldManifest))
-                with self.assertRaisesRegex(ValueError, "D01 probe source"):
-                    Q.LocalRun(Client, Log).Check()
                 OldManifest["Contract"] = "D01"
                 Manifest.write_text(json.dumps(OldManifest))
+                with self.assertRaisesRegex(ValueError, "F1 probe source"):
+                    Q.LocalRun(Client, Log).Check()
+                OldManifest["Contract"] = "F1"
+                Manifest.write_text(json.dumps(OldManifest))
+                InvalidRuntime = {**OldManifest, "RuntimeSha256": {**RuntimeHashes}}
+                InvalidRuntime["RuntimeSha256"]["DefaultActionMap.luau"] = "0" * 64
+                Manifest.write_text(json.dumps(InvalidRuntime))
+                with self.assertRaisesRegex(ValueError, "runtime manifest"):
+                    Q.LocalRun(Client, Log).Check()
+                Manifest.write_text(json.dumps(OldManifest))
+                def BadRuntimeDigest(PathValue):
+                    if Path(PathValue).name == "DefaultActionMap.luau":
+                        return "0" * 64
+                    return TestDigest(PathValue)
+
+                with mock.patch.object(Q, "Digest", side_effect=BadRuntimeDigest):
+                    with self.assertRaisesRegex(ValueError, "runtime file hash"):
+                        Q.LocalRun(Client, Log).Check()
                 for Producer in ("0", "2"):
                     Invalid = {**Client, "ProbeArgs": [*Client["ProbeArgs"]]}
                     Invalid["ProbeArgs"][4] = Producer
@@ -189,6 +212,29 @@ class QualificationTests(unittest.TestCase):
                          {"RunTimeout": 60}, {"QualificationMode": "UNSAFE"}):
             with self.assertRaises(ValueError):
                 Q.ValidateConfig({**Coordinator, **Mutation})
+
+    def test_f1_source_archive_reproduces_pinned_manifest(self):
+        ArchivePath = self.Root / Q.PHASE1_SOURCE_ARCHIVE
+        Generator = Path(__file__).parents[1] / "make_f1_source_archive.py"
+        subprocess.run([sys.executable, str(Generator), str(ArchivePath)], check=True,
+                       capture_output=True, text=True)
+        self.assertEqual(Q.PHASE1_OVERLAY, Q.Digest(ArchivePath))
+        Manifest = json.loads((Generator.parent / "phase1-f1-source-manifest.json").read_text())
+        self.assertEqual(Q.PHASE1_BASE_HEAD, Manifest["BaseHead"])
+        self.assertEqual(Q.PHASE1_OVERLAY, Manifest["OverlayArchiveSha256"])
+        self.assertEqual(Q.PHASE1_PROBE_SHA, Manifest["ProbeSHA256"])
+        self.assertEqual("F1", Manifest["Contract"])
+        RuntimeHashes = Manifest["RuntimeSha256"]
+        self.assertEqual(Q.PHASE1_RUNTIME_MANIFEST_SHA, hashlib.sha256(json.dumps(
+            RuntimeHashes, sort_keys=True, separators=(",", ":")).encode()).hexdigest().upper())
+        with zipfile.ZipFile(ArchivePath) as Source:
+            self.assertIn("src/network/FiniteGrantServiceCurve.hpp", Source.namelist())
+            self.assertIn("tests/PhysicalGnsFundingProbeTrace.hpp", Source.namelist())
+        subprocess.run([sys.executable, str(Generator), "--verify-tree", str(ArchivePath),
+                        str(Generator.parents[2])], check=True, capture_output=True, text=True)
+        with self.assertRaises(subprocess.CalledProcessError):
+            subprocess.run([sys.executable, str(Generator), str(ArchivePath)], check=True,
+                           capture_output=True, text=True)
 
     def test_phase1_result_requires_probe_funding_proof_and_all_four_clients(self):
         Directory = self.Root / "phase1-results"
