@@ -1,17 +1,67 @@
 ---
-status: four-client-readiness-pass-phase1-architecture-decision-required
+status: f1-phase1-coordination-fail
 owner: runtime-networking-and-runtime-host
-last_verified: 2026-09-29
+last_verified: 2026-09-30
 ---
 
 # Foundation 3L pooled physical qualification attempt
 
-**Decision update (2026-09-29):** The historical attempts below were
+## F1 physical Phase 1 stopped at the worker control barrier (2026-09-30)
+
+**F1 PHYSICAL PHASE 1 — FAIL; LIFECYCLE/COORDINATION DEFECT.** One fresh
+attempt used physical run `4523839a-4d29-44b0-9246-9c7bc9053fed` and outer
+lifecycle run `e61b4f94-7df4-4029-831c-416f3989c5be`. The starting
+Gargantuan revision was `700d53a7937b0cebd0b3e0dfceb6ebddf3fb3aab`;
+the staged qualifier revision was `8e7b36b8ec433295fec842ec301f41d602b3de55`
+on draft PR #6. The installed F1 candidate ZIP SHA-256 was
+`F85805FD0B1806D0B16831971C328786872AA0FF051E2342A692E4B9A2BD9803`;
+the staged qualifier ZIP SHA-256 was
+`D1B7641B631FB116F2E84862740A43021F4A1D3192058FB0C05E68E9BE3668E6`.
+The F1 native probe remained
+`E564D3CDE19F099FB3F51237C1C5B83DE4FFF78A36C4691E9231AA3E9D1DB5AA`
+with source archive
+`10D0CB47ED24D8A249735C49BC55DD52A600AA9DAB05480261435C6E3483775F`
+and pinned GNS `2cb93a06350bb065db53abdb0d87cf297e0bfd34`.
+
+Before assignment, installed-file checks and socket-free F1 self-tests passed
+on both endpoints; the normal-LAN interactive worker challenge and both
+one-use tunnel handshakes passed. The direct-fiber link, capture device,
+idle capture service and Packet Monitor, endpoint evidence-root access, and
+six current-head hosted CI checks also passed. These preflights did not
+establish that the actual worker endpoint process could connect to the
+client coordinator's TCP `192.168.0.68:39451` listener during execution.
+
+The outer coordinator recorded client `LIVE` and started the server role.
+The physical client sent `STAGE_READY`; the physical coordinator received it.
+The worker physical endpoint wrote provenance, then its three-second control
+connect timed out before it could send `STAGE_READY`. Its local result was
+`ABORT: timed out`; the physical client then received a connection reset and
+recorded `ABORT`. The outer server role reported failure and the lifecycle
+coordinator aborted. The worker's first failure is in
+`C:\GargantuanQualification\physical-qualifier-service-evidence\lifecycle-006fa4f5dc9a2d3d\result.json`;
+the cross-role sequence is in
+`C:\Users\aiden\.codex\artifacts\gargantuan-f1-phase1-stage-draft-20260930\prepared-006fa4f5dc9a2d3d\lifecycle\evidence\e61b4f94-7df4-4029-831c-416f3989c5be\host\control.jsonl`.
+
+No physical endpoint received the command to arm capture or start a GNS
+probe. There are no qualified client tuples, grant measurements, first-send,
+ACK, retirement, or packet-capture results in this attempt. F1 service and
+transport behavior are **NOT MEASURED**; no application-readiness or Phase 1
+PASS is inferred. The runner's tunnel was stopped; both lifecycle daemons
+were owner-verified and stopped, both endpoint staged workflows/policies and
+the worker candidate payload were restored from byte-verified rollback
+snapshots. UDP `39450`, lifecycle ports and tunnels are clear; no task-owned
+probe or dumpcap remains; the worker capture service is running idle with
+Packet Monitor stopped and no filters. The one permitted attempt was not
+retried. Diagnose and deterministically qualify the actual worker endpoint's
+control connection before seeking authorization for another physical Phase 1
+run. **KI-006 remains OPEN; Foundation 3L remains B — PARTIALLY READY.**
+
+**Decision update (2026-09-29):** The earlier attempts below were
 evaluated under superseded candidate contracts. The [F1 amendment to D01](../../docs/adr/D01-pooled-service-curve.md)
 now defines finite accepted-grant first-send drain capacity and a separate
-intra-grant running check. None of these receipts is a physical F1 pass; the
-installed probe/service pins are unchanged and KI-006 remains open pending a
-separately authorized physical run.
+intra-grant running check. None of those earlier receipts is a physical F1
+pass. The 2026-09-30 F1 run above also failed before measurement; KI-006
+remains open pending a separately authorized fresh physical run.
 
 The next F1 candidate is packaged separately from installed tools. Its native
 source revision is `e082e6b3ab4e5345c03daa1a9bf630d270cb95f0`, GNS pin is

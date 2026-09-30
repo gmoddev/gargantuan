@@ -85,6 +85,15 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+2026-09-30 F1 physical checkpoint: the [single F1 Phase 1 attempt](devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md#f1-physical-phase-1-stopped-at-the-worker-control-barrier-2026-09-30)
+stopped before GNS or capture when the actual worker endpoint timed out
+connecting to the client control barrier. Interactive normal-LAN preflight
+had passed, but did not qualify that exact execution path. The staged files
+and worker candidate payload were rolled back; no F1 physical service metric
+was measured. **KI-006 remains OPEN; Foundation 3L remains B — PARTIALLY
+READY.** The next gate is control-connect diagnosis and deterministic
+qualification before a separately authorized fresh F1 Phase 1 attempt.
+
 2026-09-29 F1 architecture correction: [D01's F1 amendment](docs/adr/D01-pooled-service-curve.md#f1-amendment--finite-active-grant-drain-capacity-2026-09-29)
 defines 16 MiB/s as finite accepted-grant first-send drain capacity, with a
 separate within-grant running-rate proof. It supersedes generation-persistent,

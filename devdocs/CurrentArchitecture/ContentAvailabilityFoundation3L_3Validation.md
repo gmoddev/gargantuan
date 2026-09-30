@@ -1,10 +1,27 @@
 ---
 status: partial-validation
 owner: runtime-networking
-last_verified: 2026-09-29
+last_verified: 2026-09-30
 ---
 
 # Foundation 3L.3 diagnostic validation ledger
+
+## F1 physical Phase 1 control-barrier stop (2026-09-30)
+
+The [single fresh F1 attempt](PooledPhysicalQualification3L.md#f1-physical-phase-1-stopped-at-the-worker-control-barrier-2026-09-30)
+passed both endpoint package/self-test checks, evidence-root and interactive
+normal-LAN preflights, and both tunnel handshakes. Physical run
+`4523839a-4d29-44b0-9246-9c7bc9053fed` stopped before probe or capture:
+the actual worker physical endpoint timed out connecting to the client
+coordinator's TCP `39451` control listener. The outer lifecycle run
+`e61b4f94-7df4-4029-831c-416f3989c5be` failed after the server role
+reported that endpoint failure. F1 grant, service, delivery, capture, and
+convergence gates are **NOT MEASURED**. Owner-verified cleanup restored both
+endpoint stages and the worker candidate payload; the capture service is
+idle. The attempt was not retried. **KI-006 OPEN; Foundation 3L B — PARTIALLY
+READY.** The next gate is an actual-process control-connect diagnosis and
+bounded deterministic preflight, followed by a separately authorized fresh
+physical F1 Phase 1 attempt.
 
 ## F1 finite-grant candidate preflight (2026-09-29)
 
