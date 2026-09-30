@@ -413,6 +413,29 @@ inline bool Run() {
 		Require(Access::Release(*Pair.Server, Old) && !Access::Release(*Pair.Server, Old) && !Access::Observe(*Pair.Server, Old),
 			"terminal consumed exactly once before reuse");
 	});
+	Case("RunningStructuralGrantHintLifetime", [] {
+		using SteamNetworkingSocketsLib::GargantuanHasRunningStructuralGrant;
+		using SteamNetworkingSocketsLib::GargantuanSetRunningStructuralGrant;
+		bool FirstSender = false, SecondSender = false;
+		struct Cleanup {
+			bool &First, &Second;
+			~Cleanup() {
+				SteamNetworkingSocketsLib::GargantuanSetRunningStructuralGrant(First, false);
+				SteamNetworkingSocketsLib::GargantuanSetRunningStructuralGrant(Second, false);
+			}
+		} Guard{FirstSender, SecondSender};
+		Require(!GargantuanHasRunningStructuralGrant(), "no running grant before first native packet");
+		GargantuanSetRunningStructuralGrant(FirstSender, true);
+		GargantuanSetRunningStructuralGrant(FirstSender, true);
+		Require(FirstSender && GargantuanHasRunningStructuralGrant(), "one sender enters running interval exactly once");
+		GargantuanSetRunningStructuralGrant(SecondSender, true);
+		GargantuanSetRunningStructuralGrant(FirstSender, false);
+		Require(!FirstSender && SecondSender && GargantuanHasRunningStructuralGrant(),
+			"one completed sender cannot clear another sender's running interval");
+		GargantuanSetRunningStructuralGrant(SecondSender, false);
+		GargantuanSetRunningStructuralGrant(SecondSender, false);
+		Require(!GargantuanHasRunningStructuralGrant(), "last completion or shutdown clears the wake hint");
+	});
 	Case("SnapshotOverhead", [] {
 		OwnedPair Owner; auto &Pair = Owner.Pair;
 		const auto Before = Sample(Pair);
@@ -430,7 +453,7 @@ inline bool Run() {
 			<< " terminal_vector_bytes=" << sizeof(std::vector<std::optional<Feedback>>)
 			<< " snapshot_mean_ns=" << Elapsed / Count << " samples=" << Count << '\n';
 	});
-	std::cout << "[Network:ReliableFeedback] passed=" << Passed << " total=10\n";
-	return Passed == 10;
+	std::cout << "[Network:ReliableFeedback] passed=" << Passed << " total=11\n";
+	return Passed == 11;
 }
 }

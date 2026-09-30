@@ -2,6 +2,7 @@
 #include "gargantuan/network/Connection.hpp"
 #include "gargantuan/network/MessageIntent.hpp"
 #include "gargantuan/network/Transport.hpp"
+#include <array>
 #include <cstdint>
 #include <optional>
 
@@ -53,6 +54,15 @@ struct ReliableServiceFeedback {
 	std::uint64_t StructuralLastCompletedGrantMaximumRunningDeficitByteMicroseconds = 0;
 	bool StructuralLastCompletedGrantFailed = false;
 	std::uint64_t StructuralMaximumFiniteShortfallByteMicroseconds = 0;
+	struct StructuralSegmentEvent {
+		std::uint64_t AtMicroseconds = 0;
+		std::uint64_t PayloadBytes = 0;
+	};
+	std::array<StructuralSegmentEvent, 512> LastCompletedStructuralSegmentEvents{};
+	std::uint32_t LastCompletedStructuralSegmentEventCount = 0;
+	std::uint64_t NativePacketsSent = 0;
+	std::uint64_t NativePacketBytesSent = 0;
+	std::uint64_t NativeMaximumPacketBytes = 0;
 };
 struct ReliableServiceFeedbackAccess {
 	[[nodiscard]] static std::optional<ReliableServiceAcceptedBytes> Accepted(const NetworkScheduler &Scheduler, ConnectionId Connection);

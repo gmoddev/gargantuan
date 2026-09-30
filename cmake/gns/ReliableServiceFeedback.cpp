@@ -1,12 +1,31 @@
 #include "ReliableServiceFeedback.hpp"
+#include <atomic>
 #include <chrono>
 #include <limits>
 
 namespace {
+std::atomic<unsigned> RunningStructuralGrants{0};
 std::uint64_t ServiceClock() noexcept {
 	const auto Time = std::chrono::duration_cast<std::chrono::microseconds>(
 		std::chrono::steady_clock::now().time_since_epoch()).count();
 	return Time > 0 ? static_cast<std::uint64_t>(Time) : 0;
+}
+}
+
+namespace SteamNetworkingSocketsLib {
+std::uint64_t GargantuanReliableServiceClock() noexcept {
+	return ServiceClock();
+}
+
+void GargantuanSetRunningStructuralGrant(bool &SenderRunning, bool Running) noexcept {
+	if (SenderRunning == Running) return;
+	SenderRunning = Running;
+	if (Running) RunningStructuralGrants.fetch_add(1, std::memory_order_release);
+	else RunningStructuralGrants.fetch_sub(1, std::memory_order_release);
+}
+
+bool GargantuanHasRunningStructuralGrant() noexcept {
+	return RunningStructuralGrants.load(std::memory_order_acquire) != 0;
 }
 }
 
@@ -52,12 +71,22 @@ void GargantuanReliableServiceCounters::SyncStructuralGrant() noexcept {
 		StructuralLastCompletedGrantCompletedAtMicroseconds = Grant.CompletedAtMicroseconds;
 		StructuralLastCompletedGrantMaximumRunningDeficitByteMicroseconds = Grant.MaximumRunningDeficitByteMicroseconds;
 		StructuralLastCompletedGrantFailed = Grant.GrantFailed;
+		LastCompletedStructuralSegmentEvents = StructuralSegmentEvents;
+		LastCompletedStructuralSegmentEventCount = StructuralSegmentEventCount;
 		StructuralActiveGrantStartedAtMicroseconds = 0;
 		StructuralActiveGrantBytes = 0;
 		StructuralActiveGrantFirstSentBytes = 0;
 		StructuralActiveSinceMicroseconds = 0;
 		StructuralCurrentDeficitByteMicroseconds = 0;
 	}
+}
+
+void GargantuanReliableServiceCounters::NativePacket(int Bytes) noexcept {
+	if (Bytes <= 0) { Invalid = true; return; }
+	Add(NativePacketsSent, 1);
+	Add(NativePacketBytesSent, Bytes);
+	if (!Invalid && static_cast<std::uint64_t>(Bytes) > NativeMaximumPacketBytes)
+		NativeMaximumPacketBytes = static_cast<std::uint64_t>(Bytes);
 }
 
 void GargantuanReliableServiceCounters::ObserveActiveService(std::uint64_t NowMicroseconds) noexcept {
@@ -76,9 +105,13 @@ void GargantuanReliableServiceCounters::FirstSend(int Bytes, int StructuralPaylo
 			Invalid = true; return;
 		}
 		if (StructuralGrantCurve.ActiveToken == ActiveAttributedRetirementToken) {
+			const auto EventTime = NowMicroseconds ? NowMicroseconds : ServiceClock();
+			if (StructuralSegmentEventCount < MaximumStructuralSegmentEvents)
+				StructuralSegmentEvents[StructuralSegmentEventCount++] =
+					{EventTime, static_cast<std::uint64_t>(StructuralPayloadBytes)};
 			(void)StructuralGrantCurve.FirstSend(ActiveAttributedRetirementToken,
 				static_cast<std::uint64_t>(StructuralPayloadBytes),
-				NowMicroseconds ? NowMicroseconds : ServiceClock());
+				EventTime);
 			SyncStructuralGrant();
 		} else {
 			StructuralActiveGrantFirstSentBytes += static_cast<std::uint64_t>(StructuralPayloadBytes);
@@ -131,6 +164,7 @@ void GargantuanReliableServiceCounters::AttributeMessage(
 	StructuralActiveSinceMicroseconds = 0;
 	StructuralGrantFirstSendAtMicroseconds = 0;
 	StructuralGrantCompletedAtMicroseconds = 0;
+	StructuralSegmentEventCount = 0;
 	StructuralCurrentDeficitByteMicroseconds = 0;
 	StructuralActiveGrantStartedAtMicroseconds = PayloadBytes && ActivatedAtMicroseconds &&
 		ActivatedAtMicroseconds != std::numeric_limits<std::uint64_t>::max()

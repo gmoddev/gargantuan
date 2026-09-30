@@ -257,6 +257,9 @@ namespace gargantuan::network {
 				Counters.ActiveAttributedMessageNumber, Counters.LastAttributedRetirementToken,
 				Counters.LastAttributedRetirementMessageNumber, Counters.LastAttributedRetiredPayloadBytes};
 			Result.StructuralGrantFirstSendAtMicroseconds = Counters.StructuralGrantFirstSendAtMicroseconds;
+			Result.NativePacketsSent = Counters.NativePacketsSent;
+			Result.NativePacketBytesSent = Counters.NativePacketBytesSent;
+			Result.NativeMaximumPacketBytes = Counters.NativeMaximumPacketBytes;
 			Result.StructuralGrantCompletedAtMicroseconds = Counters.StructuralGrantCompletedAtMicroseconds;
 			Result.StructuralCompletedGrantSequence = Counters.StructuralCompletedGrantSequence;
 			Result.StructuralLastCompletedGrantToken = Counters.StructuralLastCompletedGrantToken;
@@ -272,6 +275,12 @@ namespace gargantuan::network {
 			Result.StructuralLastCompletedGrantFailed = Counters.StructuralLastCompletedGrantFailed;
 			Result.StructuralMaximumFiniteShortfallByteMicroseconds =
 				Counters.StructuralMaximumFiniteShortfallByteMicroseconds;
+			Result.LastCompletedStructuralSegmentEventCount =
+				Counters.LastCompletedStructuralSegmentEventCount;
+			for (std::size_t Index = 0; Index < Result.LastCompletedStructuralSegmentEventCount; ++Index)
+				Result.LastCompletedStructuralSegmentEvents[Index] = {
+					Counters.LastCompletedStructuralSegmentEvents[Index].AtMicroseconds,
+					Counters.LastCompletedStructuralSegmentEvents[Index].PayloadBytes};
 			return Result;
 		}
 	}
@@ -826,12 +835,17 @@ namespace gargantuan::network {
 						Frame->size()
 					))) return Fail(TransportOperationStatus::ResourceExhausted, "pending-reliable-cap");
 		}
+		const auto Token = detail::ReliableServiceFeedbackAccess::Token(Message);
+		// An accepted POOLED_SERVICE grant must not re-enter GNS's 5 ms
+		// underfilled-packet Nagle wait after its first reliable segment.
+		// FULL_RESERVATION and ordinary reliable traffic have no grant token.
 		const int Flags = Message.Delivery() == DeliveryMode::ReliableOrdered
-			? k_nSteamNetworkingSend_Reliable : k_nSteamNetworkingSend_Unreliable;
+			? (Token && Message.Traffic() == TrafficClass::StructuralReplication
+				? k_nSteamNetworkingSend_ReliableNoNagle : k_nSteamNetworkingSend_Reliable)
+			: k_nSteamNetworkingSend_Unreliable;
 		State->Observe(Message.Destination(), "GnsBefore", Message.Payload(),
 			static_cast<int>(Message.Delivery()), static_cast<int>(Message.Traffic()));
 		int64 MessageNumber = -1;
-		const auto Token = detail::ReliableServiceFeedbackAccess::Token(Message);
 		if (Token && (!detail::ReliableServiceFeedbackAccess::ActivatedAt(Message) ||
 			!SteamNetworkingSocketsLib::GargantuanBeginReliableRetirementAttribution(Token,
 				detail::ReliableServiceFeedbackAccess::ActivatedAt(Message))))

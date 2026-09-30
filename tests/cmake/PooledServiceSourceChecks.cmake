@@ -23,16 +23,26 @@ RequireSource("clientlib/steamnetworkingsockets_socketthread.cpp"
 RequireSource("clientlib/steamnetworkingsockets_socketthread.cpp"
 	"msTaskWait = std::max( 1, msTaskWait );")
 RequireSource("clientlib/steamnetworkingsockets_socketthread.cpp"
-	"PollRawUDPSockets( msWait, bManualPoll )")
+	"PollRawUDPSockets( msWait, bManualPoll, usecNextWakeTime )")
+RequireSource("clientlib/steamnetworkingsockets_socketthread.cpp"
+	"SteamNetworkingSocketsLib::GargantuanHasRunningStructuralGrant()")
+RequireSource("clientlib/steamnetworkingsockets_socketthread.cpp"
+	"CREATE_WAITABLE_TIMER_HIGH_RESOLUTION")
+RequireSource("clientlib/steamnetworkingsockets_socketthread.cpp"
+	"usecRemaining - 1000")
+RequireSource("clientlib/steamnetworkingsockets_snp.cpp"
+	"GargantuanFeedback.NativePacket(nBytesSent)")
+RequireSource("clientlib/steamnetworkingsockets_snp.cpp"
+	"GargantuanSeg.m_bGargantuanEverSent = true")
 
 file(READ "${GargantuanRoot}/src/network/GameNetworkingSocketsTransport.cpp" Adapter)
-string(FIND "${Adapter}" "? k_nSteamNetworkingSend_Reliable : k_nSteamNetworkingSend_Unreliable" ReliableFlag)
-if(ReliableFlag EQUAL -1)
-	message(FATAL_ERROR "D01 structural adapter no longer uses ordinary reliable GNS flags")
+string(FIND "${Adapter}" "Token && Message.Traffic() == TrafficClass::StructuralReplication" ScopedStructural)
+string(FIND "${Adapter}" "? k_nSteamNetworkingSend_ReliableNoNagle : k_nSteamNetworkingSend_Reliable" ScopedFlag)
+if(ScopedStructural EQUAL -1 OR ScopedFlag EQUAL -1)
+	message(FATAL_ERROR "F1 pooled structural NoNagle scope changed")
 endif()
-string(FIND "${Adapter}" "k_nSteamNetworkingSend_NoNagle" NoNagle)
 string(FIND "${Adapter}" "FlushMessages" ExplicitFlush)
-if(NOT NoNagle EQUAL -1 OR NOT ExplicitFlush EQUAL -1)
-	message(FATAL_ERROR "D01 GNS adapter now bypasses the pinned Nagle handoff")
+if(NOT ExplicitFlush EQUAL -1)
+	message(FATAL_ERROR "F1 structural send added a connection-wide flush")
 endif()
-message(STATUS "D01 pinned GNS quantum, Nagle and requested wake mechanisms verified")
+message(STATUS "F1 pinned GNS quantum, scoped structural NoNagle and requested wake mechanisms verified")

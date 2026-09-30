@@ -196,6 +196,41 @@ fairness rotation into another grant. It is vacuous for a grant completed by
 its first native send. A slow sustained sender within a large grant must
 fail even if its total completion appears to fit the startup allowance.
 
+### Native transport implementation of the unchanged F1 bound
+
+The first physical F1 trace found a 1,258 B grant whose first UDP packet
+carried 1,135 structural bytes and whose 123 B final segment remained behind
+GNS's ordinary 5 ms Nagle timer. The finite envelope passed, but the
+within-grant running bound failed. POOLED_SERVICE now submits only its
+attributed structural grant messages with pinned per-message
+`ReliableNoNagle`; ordinary reliable gameplay/control and FULL_RESERVATION
+retain `Reliable`. No connection-wide Nagle setting changes. The 5 ms
+`H_start` remains the canonical conservative startup allowance and is not
+replenished for a later segment of the same grant.
+
+Pinned GNS's integer-millisecond socket-thread wait can also oversleep a
+paced sender deadline. Only while an attributed grant has begun unique native
+first-send and still has unsent bytes, the integration uses a precise wake
+and a bounded final 1 ms service-thread spin. A sender-owned, idempotent hint
+is removed on first-send completion or shutdown; ACK wait does not keep it
+active. Unique
+first-send and retransmission accounting commit only after a positive native
+UDP send result, and all segments in that packet share one timestamp. These
+are transport implementation requirements, not new F1 service allowances.
+
+The extra packet cost of scoped NoNagle is bounded by the production grant
+cadence. A server step admits at most four complete structural grants and
+flushes them only after that step's admission loop; each grant is one native
+reliable message. Pinned GNS already sends full packets promptly, so bypassing
+Nagle can create at most one additional underfilled UDP packet per grant.
+At the nominal 16,667 us server step, that is at most 240 extra packets/s,
+or 318,720 B/s using the 1,300 B UDP datagram limit plus 28 B IPv4/UDP
+headers. This is below the existing 8 MiB/s RequiredTransportReserve; it
+does not change that reserve. The real-GNS four-maximum-grant fixture also
+measures total IPv4 packet overhead and requires it to fit the reserve over
+the measured drain interval, alongside each peer and pool F1 curve. This
+measured gate complements the source-derived incremental NoNagle bound.
+
 ### Four simultaneous grants
 
 Every qualified grant independently satisfies both phases. For four grants

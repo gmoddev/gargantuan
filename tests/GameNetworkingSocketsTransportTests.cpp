@@ -186,12 +186,21 @@ namespace {
 #include "ReliableServiceFeedbackFixture.hpp"
 #include "PooledServiceCurveFixture.hpp"
 #include "FiniteGrantServiceCurveFixture.hpp"
+#include "GnsPacketTailFixture.hpp"
+#include "GnsFourGrantFixture.hpp"
+#include "GnsMixedTrafficFixture.hpp"
 
 int main(int ArgumentCount, char **Arguments) {
 	using namespace gargantuan;
 	using namespace gargantuan::network;
 	try { gargantuan::BootstrapNativeRuntimeSchema(); }
 	catch (const std::exception &Error) { std::cerr << Error.what() << '\n'; return 1; }
+	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--packet-tail")
+		return GnsPacketTailFixture::Run() ? 0 : 1;
+	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--four-grant")
+		return GnsFourGrantFixture::Run() ? 0 : 1;
+	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--mixed-traffic")
+		return GnsMixedTrafficFixture::Run() ? 0 : 1;
 	const bool FeedbackPassed = FeedbackFixture::Run();
 	const bool ServiceCurvePassed = ServiceCurveFixture::Run();
 	const bool FiniteGrantPassed = FiniteGrantServiceCurveFixture::Run();

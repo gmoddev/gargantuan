@@ -1,12 +1,27 @@
 #pragma once
 #include "../../src/network/FiniteGrantServiceCurve.hpp"
+#include <array>
 #include <cstdint>
 
 class ISteamNetworkingSockets;
 
 struct GargantuanReliableServiceCounters {
+	struct StructuralSegmentEvent {
+		std::uint64_t AtMicroseconds = 0;
+		std::uint64_t PayloadBytes = 0;
+	};
+	static constexpr std::size_t MaximumStructuralSegmentEvents = 512;
+	std::array<StructuralSegmentEvent, MaximumStructuralSegmentEvents> StructuralSegmentEvents{};
+	std::array<StructuralSegmentEvent, MaximumStructuralSegmentEvents> LastCompletedStructuralSegmentEvents{};
+	std::uint32_t StructuralSegmentEventCount = 0;
+	std::uint32_t LastCompletedStructuralSegmentEventCount = 0;
 	gargantuan::network::FiniteGrantServiceCurve StructuralGrantCurve;
 	std::uint64_t UniqueReliableStreamBytesFirstSent = 0;
+	// Positive UDP data sends, including GNS framing and encrypted payload.
+	// IPv4/UDP headers can be added separately when proving wire reserve.
+	std::uint64_t NativePacketsSent = 0;
+	std::uint64_t NativePacketBytesSent = 0;
+	std::uint64_t NativeMaximumPacketBytes = 0;
 	std::uint64_t UniqueReliableStreamBytesAcked = 0;
 	// Payload bytes belonging to the one native-attributed structural grant.
 	// Reliable stream framing and ordinary reliable traffic are excluded.
@@ -51,6 +66,7 @@ struct GargantuanReliableServiceCounters {
 	bool Purged = false;
 
 	void FirstSend(int Bytes, int StructuralPayloadBytes = 0, std::uint64_t NowMicroseconds = 0) noexcept;
+	void NativePacket(int Bytes) noexcept;
 	void Retransmit(int Bytes) noexcept;
 	void AckSegment(int Bytes, bool AlreadyAcked) noexcept;
 	void AttributeMessage(std::uint64_t Token, std::int64_t MessageNumber,
@@ -71,6 +87,12 @@ struct GargantuanReliableServiceSnapshot {
 };
 
 namespace SteamNetworkingSocketsLib {
+std::uint64_t GargantuanReliableServiceClock() noexcept;
+// Socket-thread wake policy only needs to know whether any connection has a
+// partly first-sent finite structural grant. The sender owns the local bool;
+// this query never shares a connection pointer across threads.
+void GargantuanSetRunningStructuralGrant(bool &SenderRunning, bool Running) noexcept;
+bool GargantuanHasRunningStructuralGrant() noexcept;
 struct GargantuanReliableAttribution {
 	std::uint64_t Token = 0;
 	std::uint64_t ActivatedAtMicroseconds = 0;

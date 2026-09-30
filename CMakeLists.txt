@@ -1223,6 +1223,11 @@ if(BUILD_TESTING)
 	endif()
 	if(GARGANTUAN_WITH_GNS)
 		add_test(NAME gargantuan_real_transport COMMAND gargantuan_real_transport_tests)
+		add_test(NAME gargantuan_f1_packet_tail COMMAND gargantuan_real_transport_tests --packet-tail)
+		add_test(NAME gargantuan_f1_four_grant COMMAND gargantuan_real_transport_tests --four-grant)
+		add_test(NAME gargantuan_f1_mixed_traffic COMMAND gargantuan_real_transport_tests --mixed-traffic)
+		set_tests_properties(gargantuan_f1_packet_tail gargantuan_f1_four_grant
+			gargantuan_f1_mixed_traffic PROPERTIES LABELS "networking;optional;f1" TIMEOUT 30 RUN_SERIAL TRUE)
 		add_test(NAME gargantuan_pooled_service_source_contract
 			COMMAND ${CMAKE_COMMAND}
 				"-DGnsRoot=${gamenetworkingsockets_SOURCE_DIR}"
