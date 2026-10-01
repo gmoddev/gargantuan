@@ -92,9 +92,16 @@ namespace gargantuan::host {
 			if (ProducerFailed) Fail("producer_phase_metrics_failed", Tick);
 			const bool AllPeersAcknowledged = Runtime.CharacterControl->GetAttributeValue("ScalePhaseAcks",
 				ScriptSecurityContext::CoreTrusted()) == std::optional<WireValue>(WireValue(static_cast<int>(PeerCount)));
+			const bool AllContentObserved = Runtime.CharacterControl->GetAttributeValue("ScaleContentObservedAcks",
+				ScriptSecurityContext::CoreTrusted()) == std::optional<WireValue>(WireValue(static_cast<int>(PeerCount)));
 			if (AllPeersAcknowledged && !PhaseAcksObserved) {
 				PhaseAcksObserved = true;
 				std::cout << "[Qualification:Scale] event=phase_acks run=" << RunId << " phase=" << PhaseName
+					<< " count=" << PeerCount << " tick=" << Tick << '\n';
+			}
+			if (AllContentObserved && !ContentAcksObserved) {
+				ContentAcksObserved = true;
+				std::cout << "[Qualification:Scale] event=content_acks run=" << RunId << " phase=" << PhaseName
 					<< " count=" << PeerCount << " tick=" << Tick << '\n';
 			}
 			if (ProducerDone && !ProducerAckObserved) {
@@ -105,7 +112,7 @@ namespace gargantuan::host {
 			const bool WorldConverged = IsWorldConverged(CurrentPhase);
 			if (!PhaseStopRequested && Tick - PhaseTick >= MinimumPhaseTicks &&
 				std::chrono::steady_clock::now() - PhaseStarted > MinimumPhaseWall &&
-				AllPeersAcknowledged && WorldConverged) {
+				AllPeersAcknowledged && AllContentObserved && WorldConverged) {
 				if (Runtime.DataModel->ApplyAttributeMutation("ScalePhaseStopRequested",
 					WireValue(std::string(PhaseName)), ScriptSecurityContext::CoreTrusted()) !=
 					MutationStatus::Success) Fail("phase_stop_publication_rejected", Tick);
@@ -115,13 +122,14 @@ namespace gargantuan::host {
 					<< " elapsed_us=" << std::chrono::duration_cast<std::chrono::microseconds>(
 						std::chrono::steady_clock::now() - PhaseStarted).count() << '\n';
 			}
-			if (PhaseStopRequested && ProducerDone && AllPeersAcknowledged && WorldConverged) {
+			if (PhaseStopRequested && ProducerDone && AllPeersAcknowledged && AllContentObserved && WorldConverged) {
 				EndPhase(Tick);
 				return;
 			}
 			if (Tick - PhaseTick >= MaximumPhaseTicks) {
 				std::cout << "[Qualification:Scale] event=timeout run=" << RunId << " phase=" << PhaseName
 					<< " producer_done=" << ProducerDone << " phase_acks=" << AllPeersAcknowledged
+					<< " content_acks=" << AllContentObserved
 					<< " world_converged=" << WorldConverged
 					<< " materialization_backlog=" << Session.GetMetrics().MaterializationBacklog << '\n';
 				Fail("phase_did_not_converge", Tick);
@@ -154,6 +162,7 @@ namespace gargantuan::host {
 		std::uint64_t ConclusionTick = 0;
 		std::uint64_t ConvergedWarmupTicks = 0;
 		bool PhaseAcksObserved = false;
+		bool ContentAcksObserved = false;
 		bool ProducerAckObserved = false;
 		bool PhaseStopRequested = false;
 		ObjectId FirstContentRoot;
@@ -301,6 +310,7 @@ namespace gargantuan::host {
 			PhaseTick = Tick;
 			PhaseStarted = std::chrono::steady_clock::now();
 			PhaseAcksObserved = false;
+			ContentAcksObserved = false;
 			ProducerAckObserved = false;
 			PhaseStopRequested = false;
 			State = Stage::Measuring;
@@ -319,7 +329,7 @@ namespace gargantuan::host {
 					std::chrono::duration_cast<std::chrono::microseconds>(Ended - PhaseStarted).count()
 				<< " monotonic_us=" << std::chrono::duration_cast<std::chrono::microseconds>(
 					Ended.time_since_epoch()).count()
-				<< " producer_done=1 phase_acks=" << PeerCount
+				<< " producer_done=1 phase_acks=" << PeerCount << " content_acks=" << PeerCount
 				<< " observed_objects=" << (Root ? Root->GetDescendants().size() + 1 : 0)
 				<< " materialization_backlog=" << Metrics.MaterializationBacklog
 				<< " structural_bytes=" << Metrics.StructuralBytesEncoded

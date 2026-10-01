@@ -64,6 +64,8 @@ if PhysicalFarm then
     local PendingCompletion = nil
     local PhaseAcknowledgements = {}
     local AcknowledgementCount = 0
+    local ContentObservations = {}
+    local ContentObservationCount = 0
     local PhaseTick = 0
     local LastBroadcastTick = -60
     local LastStopTick = -60
@@ -75,6 +77,14 @@ if PhysicalFarm then
             if not PhaseAcknowledgements[PeerKey] then
                 PhaseAcknowledgements[PeerKey] = true
                 AcknowledgementCount += 1
+            end
+        elseif Kind == "content_observed" and Phase == CurrentPhase then
+            local PeerKey = tostring(Peer.Slot) .. ":" .. tostring(Peer.Generation)
+            if not ContentObservations[PeerKey] then
+                ContentObservations[PeerKey] = true
+                ContentObservationCount += 1
+                print(string.format("[Content:ScalePhase] event=content_observed phase=%s peer_slot=%d peer_generation=%d count=%d",
+                    Phase, Peer.Slot, Peer.Generation, ContentObservationCount))
             end
         elseif Kind == "complete" and Phase == CurrentPhase and
             game:GetAttribute("ScalePhaseStopRequested") == CurrentPhase and
@@ -97,7 +107,10 @@ if PhysicalFarm then
             PendingCompletion = nil
             PhaseAcknowledgements = {}
             AcknowledgementCount = 0
+            ContentObservations = {}
+            ContentObservationCount = 0
             Control:SetAttribute("ScalePhaseAcks", 0)
+            Control:SetAttribute("ScaleContentObservedAcks", 0)
             Control:SetAttribute("ScaleRemoteDone", nil)
             Control:SetAttribute("ScaleProducerFailed", nil)
             LastBroadcastTick = PhaseTick - 60
@@ -122,7 +135,10 @@ if PhysicalFarm then
             Control:SetAttribute("ScaleRemoteDone", CurrentPhase)
             PendingCompletion = nil
         end
-        if CurrentPhase then Control:SetAttribute("ScalePhaseAcks", AcknowledgementCount) end
+        if CurrentPhase then
+            Control:SetAttribute("ScalePhaseAcks", AcknowledgementCount)
+            Control:SetAttribute("ScaleContentObservedAcks", ContentObservationCount)
+        end
     end)
 end
 assert(Control:RegisterAction("ScaleLunge", "asset://d9d9e9649adbad59588d137c2a642e1d", 0.5, Vector3.new(0.9, 0, 0), 0, true))
@@ -147,6 +163,7 @@ Function:SetServerHandler(function(Peer, Message) return Message end)
 local Control = game:GetService("CharacterControlService")
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
+local Workspace = if PhysicalFarm then game:GetService("Workspace") else nil
 local Function = game:FindFirstChild("ScaleFunction")
 local Event = game:FindFirstChild("ScaleEvent")
 local PhaseControl = if PhysicalFarm then game:FindFirstChild("ScalePhaseControl") else nil
@@ -157,6 +174,14 @@ local PendingPhaseCompletion = nil
 local PendingPhaseCompletionHealthy = true
 local PendingPhaseStop = nil
 local PhaseReadySent = false
+local ContentPhases = {"baseline", "load", "resident", "evict", "reload"}
+local ContentObservedPhases = 0
+local ContentObservedPhase = nil
+local ContentObservationAttempts = 0
+local ContentObservationSubmitted = false
+local LastContentObservationTick = -60
+local LastContentCheckTick = -6
+local PhaseControlTick = 0
 if PhaseControl then
     PhaseControl.OnClientEvent:Connect(function(Kind, Phase)
         if Kind == "phase" and type(Phase) == "string" then
@@ -305,7 +330,7 @@ local function PublishPhaseMetrics(RunningPhase)
         P95 <= 150000 and P99 <= 250000 and Maximum <= 500000 and not PhaseTrafficFailure and
         EventOffers > PhaseEventOffersStart and
         EventOffers - PhaseEventOffersStart == EventAcks - PhaseEventAcksStart and
-        not EventPending and EventMaxRttUs <= 250000 and
+        not EventPending and EventMaxRttUs <= 250000 and EventMaxGapUs <= 250000 and
         ActionRequests > PhaseActionRequestsStart and
         ActionRequests - PhaseActionRequestsStart == Resolutions - PhaseActionResolutionsStart and
         ActionRequests - PhaseActionRequestsStart == Endings - PhaseActionEndingsStart and
@@ -324,6 +349,7 @@ RunService.PostSimulation:Connect(function()
     local LocalPlayer = Players.LocalPlayer
     if not LocalPlayer then return end
     if PhaseControl then
+        PhaseControlTick += 1
         if not PhaseReadySent then
             PhaseReadySent = pcall(function() PhaseControl:FireServer("ready", "") end)
         end
@@ -332,6 +358,43 @@ RunService.PostSimulation:Connect(function()
                 PhaseControl:FireServer("phase_ack", PendingPhaseAcknowledgement)
             end)
             if Acknowledged then PendingPhaseAcknowledgement = nil end
+        end
+        local ReceivedPhase = Control:GetAttribute("ScalePhase")
+        if ReceivedPhase == ContentPhases[ContentObservedPhases + 1] and
+            PhaseControlTick - LastContentCheckTick >= 6 then
+            LastContentCheckTick = PhaseControlTick
+            local Root = Workspace:FindFirstChild("ContentScaleRegion")
+            local Objects = if Root then #Root:GetDescendants() + 1 else 0
+            local ExpectsResident = ReceivedPhase == "load" or ReceivedPhase == "resident" or
+                ReceivedPhase == "reload"
+            -- Evict has already required zero objects before reload. The host
+            -- independently verifies resident/reload ObjectId continuity.
+            if (ExpectsResident and Objects == 512) or
+                (not ExpectsResident and Objects == 0) then
+                ContentObservedPhases += 1
+                ContentObservedPhase = ReceivedPhase
+                ContentObservationAttempts = 0
+                ContentObservationSubmitted = false
+                LastContentObservationTick = PhaseControlTick - 60
+                print(string.format("[Content:ScalePhase] event=content_materialized phase=%s objects=%d player_id=%d",
+                    ReceivedPhase, Objects, LocalPlayer.PlayerId))
+            end
+        end
+        if ContentObservedPhase == ReceivedPhase and not ContentObservationSubmitted and
+            ContentObservationAttempts < 20 and
+            PhaseControlTick - LastContentObservationTick >= 60 then
+            LastContentObservationTick = PhaseControlTick
+            ContentObservationAttempts += 1
+            local Observed = pcall(function()
+                PhaseControl:FireServer("content_observed", ContentObservedPhase)
+            end)
+            if Observed then
+                print(string.format("[Content:ScalePhase] event=content_ack_sent phase=%s player_id=%d attempt=%d",
+                    ContentObservedPhase, LocalPlayer.PlayerId, ContentObservationAttempts))
+                -- One reliable submission is the workload obligation. Retry only
+                -- local submission failure; repeated successful ACKs add load.
+                ContentObservationSubmitted = true
+            end
         end
         if PendingPhaseCompletion then
             local Completed = pcall(function()

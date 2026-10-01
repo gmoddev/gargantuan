@@ -78,9 +78,10 @@ try {
 		$StartedTick = 1 + $Index * 840
 		$ScaleLines.Add("[Qualification:Scale] event=phase_start run=$RunId phase=$Phase tick=$StartedTick monotonic_us=$StartedUs")
 		$ScaleLines.Add("[Qualification:Scale] event=phase_acks run=$RunId phase=$Phase count=32 tick=$($StartedTick + 1)")
-		$ScaleLines.Add("[Qualification:Scale] event=phase_stop_requested run=$RunId phase=$Phase tick=$($StartedTick + 2) elapsed_us=13000001")
-		$ScaleLines.Add("[Qualification:Scale] event=producer_ack run=$RunId phase=$Phase tick=$($StartedTick + 3)")
-		$ScaleLines.Add("[Qualification:Scale] event=phase_end run=$RunId phase=$Phase ticks=781 elapsed_us=13000001 monotonic_us=$($StartedUs + 13000001) producer_done=1 phase_acks=32 tick=$($StartedTick + 781)")
+		$ScaleLines.Add("[Qualification:Scale] event=content_acks run=$RunId phase=$Phase count=32 tick=$($StartedTick + 2)")
+		$ScaleLines.Add("[Qualification:Scale] event=phase_stop_requested run=$RunId phase=$Phase tick=$($StartedTick + 3) elapsed_us=13000001")
+		$ScaleLines.Add("[Qualification:Scale] event=producer_ack run=$RunId phase=$Phase tick=$($StartedTick + 4)")
+		$ScaleLines.Add("[Qualification:Scale] event=phase_end run=$RunId phase=$Phase ticks=781 elapsed_us=13000001 monotonic_us=$($StartedUs + 13000001) producer_done=1 phase_acks=32 content_acks=32 tick=$($StartedTick + 781)")
 	}
 	$ScaleLines.Add("[Qualification:Scale] event=result run=$RunId status=PASS phases=5 peers=32 tick=4201")
 	[IO.File]::WriteAllLines($ServerPath, $ScaleLines)
@@ -119,6 +120,11 @@ try {
 	try { Assert-ScaleRecords -Server ([pscustomobject]@{ OutputPath = $ServerPath }) -Clients $ScaleClients -ExpectedNonces $ScaleNonces } catch { $Rejected = $true }
 	if (-not $Rejected) { throw 'scale result without a qualified producer stop was accepted' }
 	[IO.File]::WriteAllLines($ServerPath, $ScaleLines)
+	[IO.File]::WriteAllLines($ServerPath, @($ScaleLines | Where-Object { $_ -notmatch 'event=content_acks .*phase=load' }))
+	$Rejected = $false
+	try { Assert-ScaleRecords -Server ([pscustomobject]@{ OutputPath = $ServerPath }) -Clients $ScaleClients -ExpectedNonces $ScaleNonces } catch { $Rejected = $true }
+	if (-not $Rejected) { throw 'scale result without all client content observations was accepted' }
+	[IO.File]::WriteAllLines($ServerPath, $ScaleLines)
 	$ProducerPath = $ScaleClients[0].OutputPath
 	$ProducerBaseline = [IO.File]::ReadAllText($ProducerPath)
 	[IO.File]::WriteAllText($ProducerPath, $ProducerBaseline.Replace('event_offers=1 event_acks=1',
@@ -126,6 +132,11 @@ try {
 	$Rejected = $false
 	try { Assert-ScaleRecords -Server ([pscustomobject]@{ OutputPath = $ServerPath }) -Clients $ScaleClients -ExpectedNonces $ScaleNonces } catch { $Rejected = $true }
 	if (-not $Rejected) { throw 'producer receipt with an unacknowledged Event was accepted' }
+	[IO.File]::WriteAllText($ProducerPath, $ProducerBaseline.Replace('event_max_gap_us=1000',
+		'event_max_gap_us=250001'))
+	$Rejected = $false
+	try { Assert-ScaleRecords -Server ([pscustomobject]@{ OutputPath = $ServerPath }) -Clients $ScaleClients -ExpectedNonces $ScaleNonces } catch { $Rejected = $true }
+	if (-not $Rejected) { throw 'producer receipt with an excessive Event ACK service gap was accepted' }
 	[IO.File]::WriteAllText($ProducerPath, $ProducerBaseline.Replace(' remote_errors=0', ''))
 	$Rejected = $false
 	try { Assert-ScaleRecords -Server ([pscustomobject]@{ OutputPath = $ServerPath }) -Clients $ScaleClients -ExpectedNonces $ScaleNonces } catch { $Rejected = $true }

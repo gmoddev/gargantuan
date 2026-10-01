@@ -259,10 +259,13 @@ function Assert-ScaleRecords {
 		$Starts = @($Records | Where-Object { $_.event -eq 'phase_start' -and $_.phase -eq $Name -and $_.run -eq $RunId })
 		$Ends = @($Records | Where-Object { $_.event -eq 'phase_end' -and $_.phase -eq $Name -and $_.run -eq $RunId })
 		$Acks = @($Records | Where-Object { $_.event -eq 'phase_acks' -and $_.phase -eq $Name -and $_.run -eq $RunId })
+		$ContentAcks = @($Records | Where-Object { $_.event -eq 'content_acks' -and $_.phase -eq $Name -and $_.run -eq $RunId })
 		$Stops = @($Records | Where-Object { $_.event -eq 'phase_stop_requested' -and $_.phase -eq $Name -and $_.run -eq $RunId })
 		$Producer = @($Records | Where-Object { $_.event -eq 'producer_ack' -and $_.phase -eq $Name -and $_.run -eq $RunId })
-		if ($Starts.Count -ne 1 -or $Ends.Count -ne 1 -or $Acks.Count -ne 1 -or $Stops.Count -ne 1 -or
-			$Producer.Count -ne 1 -or $Acks[0].count -ne '32' -or $Ends[0].phase_acks -ne '32' -or
+		if ($Starts.Count -ne 1 -or $Ends.Count -ne 1 -or $Acks.Count -ne 1 -or $ContentAcks.Count -ne 1 -or
+			$Stops.Count -ne 1 -or $Producer.Count -ne 1 -or $Acks[0].count -ne '32' -or
+			$ContentAcks[0].count -ne '32' -or $Ends[0].phase_acks -ne '32' -or
+			$Ends[0].content_acks -ne '32' -or
 			$Ends[0].producer_done -ne '1') {
 			throw "scale phase $Name lacks complete typed acknowledgement or convergence evidence"
 		}
@@ -280,6 +283,7 @@ function Assert-ScaleRecords {
 		if ($StartTick -le $PreviousEndTick -or $EndTick -le $StartTick -or
 			[long]$Ends[0].ticks -ne $EndTick - $StartTick -or
 			[long]$Acks[0].tick -lt $StartTick -or [long]$Acks[0].tick -gt [long]$Stops[0].tick -or
+			[long]$ContentAcks[0].tick -lt $StartTick -or [long]$ContentAcks[0].tick -gt [long]$Stops[0].tick -or
 			[long]$Stops[0].tick -lt [long]$Acks[0].tick -or [long]$Stops[0].tick -gt [long]$Producer[0].tick -or
 			[long]$Producer[0].tick -gt $EndTick) {
 			throw "scale phase $Name has an invalid authoritative tick sequence"
@@ -348,7 +352,8 @@ function Assert-ScaleRecords {
 			[double]$Record.remote_timeouts -ne 0 -or
 			[double]$Record.event_offers -le 0 -or
 			[double]$Record.event_offers -ne [double]$Record.event_acks -or
-			[double]$Record.event_outstanding -ne 0 -or [double]$Record.event_max_rtt_us -gt 250000 -or
+				[double]$Record.event_outstanding -ne 0 -or [double]$Record.event_max_rtt_us -gt 250000 -or
+				[double]$Record.event_max_gap_us -gt 250000 -or
 			[double]$Record.action_requests -le 0 -or
 			[double]$Record.action_requests -ne [double]$Record.action_resolutions -or
 			[double]$Record.action_requests -ne [double]$Record.action_endings -or

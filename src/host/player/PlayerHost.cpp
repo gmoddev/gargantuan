@@ -415,7 +415,7 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 								const bool Healthy = MetricsMatchPhase && ProducerHealthy && RemoteSamples == 100 && RemoteP95 <= 150'000 &&
 									RemoteP99 <= 250'000 && RemoteMax <= 500'000 && RemoteErrors == 0 && RemoteTimeouts == 0 &&
 									PhaseEventOffers > 0 && PhaseEventOffers == PhaseEventAcks && EventOutstanding == 0 &&
-									EventMaxRtt <= 250'000 &&
+									EventMaxRtt <= 250'000 && EventMaxGap <= 250'000 &&
 									PhaseActionRequests > 0 && PhaseActionRequests == PhaseActionResolutions &&
 									PhaseActionRequests == PhaseActionEndings && ActionMaxResult <= 250'000 &&
 									SubmissionFailures == FarmScalePreviousSubmissionFailures &&
