@@ -314,7 +314,9 @@ namespace gargantuan::network {
 
 		void Observe(ConnectionId Id, const char *Stage, std::span<const std::byte> Payload = {},
 			int Delivery = -1, int Traffic = -1, std::int64_t Number = -1,
-			std::int64_t ReceiveAgeUs = -1, int Result = -1) const noexcept {
+			std::int64_t ReceiveAgeUs = -1, int Result = -1,
+			const SteamNetConnectionRealTimeStatus_t *KnownStatus = nullptr,
+			bool SampleBackend = true) const noexcept {
 			const auto *Sink = detail::ActiveGnsService;
 			if (!Sink || !Sink->Record) return;
 			const auto Iterator = Connections.find(Id);
@@ -324,26 +326,33 @@ namespace gargantuan::network {
 				.ReceiveAgeUs = ReceiveAgeUs};
 			Value.Role = static_cast<int>(Role); Value.Delivery = Delivery; Value.Traffic = Traffic;
 			Value.Bytes = static_cast<std::uint32_t>(Payload.size()); Value.Result = Result;
-			SteamNetConnectionRealTimeStatus_t Status{};
-			if (SteamAPI_ISteamNetworkingSockets_GetConnectionRealTimeStatus(
-				GlobalState().Interface, Iterator->second.Handle, &Status, 0, nullptr) == k_EResultOK) {
-				Value.PendingReliable = Status.m_cbPendingReliable;
-				Value.UnackedReliable = Status.m_cbSentUnackedReliable;
-				Value.PendingUnreliable = Status.m_cbPendingUnreliable;
-				Value.QueueUs = Status.m_usecQueueTime; Value.Rate = Status.m_nSendRateBytesPerSecond;
-				Value.OutBytesPerSecond = Status.m_flOutBytesPerSec;
-				Value.InBytesPerSecond = Status.m_flInBytesPerSec; Value.Ping = Status.m_nPing;
+			SteamNetConnectionRealTimeStatus_t SampledStatus{};
+			if (SampleBackend && !KnownStatus &&
+				SteamAPI_ISteamNetworkingSockets_GetConnectionRealTimeStatus(
+					GlobalState().Interface, Iterator->second.Handle, &SampledStatus, 0, nullptr) == k_EResultOK)
+				KnownStatus = &SampledStatus;
+			if (KnownStatus) {
+				Value.PendingReliable = KnownStatus->m_cbPendingReliable;
+				Value.UnackedReliable = KnownStatus->m_cbSentUnackedReliable;
+				Value.PendingUnreliable = KnownStatus->m_cbPendingUnreliable;
+				Value.QueueUs = KnownStatus->m_usecQueueTime;
+				Value.Rate = KnownStatus->m_nSendRateBytesPerSecond;
+				Value.OutBytesPerSecond = KnownStatus->m_flOutBytesPerSec;
+				Value.InBytesPerSecond = KnownStatus->m_flInBytesPerSec;
+				Value.Ping = KnownStatus->m_nPing;
 			}
-			auto ReadConfig = [&](ESteamNetworkingConfigValue Key) {
-				std::int32_t Setting = -1; std::size_t Size = sizeof(Setting);
-				ESteamNetworkingConfigDataType Type{};
-				const auto Result = SteamAPI_ISteamNetworkingUtils_GetConfigValue(SteamNetworkingUtils(),
-					Key, k_ESteamNetworkingConfig_Connection, Iterator->second.Handle, &Type, &Setting, &Size);
-				return Result > 0 && Type == k_ESteamNetworkingConfig_Int32 && Size == sizeof(Setting) ? Setting : -1;
-			};
-			Value.RateMin = ReadConfig(k_ESteamNetworkingConfig_SendRateMin);
-			Value.RateMax = ReadConfig(k_ESteamNetworkingConfig_SendRateMax);
-			Value.SendBuffer = ReadConfig(k_ESteamNetworkingConfig_SendBufferSize);
+			if (SampleBackend) {
+				auto ReadConfig = [&](ESteamNetworkingConfigValue Key) {
+					std::int32_t Setting = -1; std::size_t Size = sizeof(Setting);
+					ESteamNetworkingConfigDataType Type{};
+					const auto Result = SteamAPI_ISteamNetworkingUtils_GetConfigValue(SteamNetworkingUtils(),
+						Key, k_ESteamNetworkingConfig_Connection, Iterator->second.Handle, &Type, &Setting, &Size);
+					return Result > 0 && Type == k_ESteamNetworkingConfig_Int32 && Size == sizeof(Setting) ? Setting : -1;
+				};
+				Value.RateMin = ReadConfig(k_ESteamNetworkingConfig_SendRateMin);
+				Value.RateMax = ReadConfig(k_ESteamNetworkingConfig_SendRateMax);
+				Value.SendBuffer = ReadConfig(k_ESteamNetworkingConfig_SendBufferSize);
+			}
 			Sink->Record(Sink->Context, Value, Payload);
 		}
 
@@ -823,11 +832,11 @@ namespace gargantuan::network {
 			return Fail(TransportOperationStatus::MessageRejected, "unreliable-frame-limit");
 		auto Frame = EncodeFrame(Message);
 		if (!Frame) return Fail(TransportOperationStatus::MessageRejected, "frame-encoding");
+		SteamNetConnectionRealTimeStatus_t PreSendStatus{};
 		if (Message.Delivery() == DeliveryMode::ReliableOrdered) {
-			SteamNetConnectionRealTimeStatus_t Status{};
 			if (SteamAPI_ISteamNetworkingSockets_GetConnectionRealTimeStatus(
-					Global.Interface, Connection->second.Handle, &Status, 0, nullptr
-				) == k_EResultOK) { PendingReliable = Status.m_cbPendingReliable; HasPendingStatus = true; }
+					Global.Interface, Connection->second.Handle, &PreSendStatus, 0, nullptr
+				) == k_EResultOK) { PendingReliable = PreSendStatus.m_cbPendingReliable; HasPendingStatus = true; }
 			if (HasPendingStatus &&
 				(PendingReliable < 0 || static_cast<std::size_t>(PendingReliable) >
 					State->Limits.MaximumQueuedReliableBytes - std::min(
@@ -836,15 +845,21 @@ namespace gargantuan::network {
 					))) return Fail(TransportOperationStatus::ResourceExhausted, "pending-reliable-cap");
 		}
 		const auto Token = detail::ReliableServiceFeedbackAccess::Token(Message);
+		const bool PooledStructuralGrant = Token && Message.Traffic() == TrafficClass::StructuralReplication;
 		// An accepted POOLED_SERVICE grant must not re-enter GNS's 5 ms
 		// underfilled-packet Nagle wait after its first reliable segment.
 		// FULL_RESERVATION and ordinary reliable traffic have no grant token.
 		const int Flags = Message.Delivery() == DeliveryMode::ReliableOrdered
-			? (Token && Message.Traffic() == TrafficClass::StructuralReplication
+			? (PooledStructuralGrant
 				? k_nSteamNetworkingSend_ReliableNoNagle : k_nSteamNetworkingSend_Reliable)
 			: k_nSteamNetworkingSend_Unreliable;
+		// The admission read already captured the pre-send status for this grant.
+		// Its diagnostic events must not repeat GNS lock-taking status/config reads
+		// during the finite first-send clock. A post-send status is not inferred.
 		State->Observe(Message.Destination(), "GnsBefore", Message.Payload(),
-			static_cast<int>(Message.Delivery()), static_cast<int>(Message.Traffic()));
+			static_cast<int>(Message.Delivery()), static_cast<int>(Message.Traffic()), -1, -1, -1,
+			PooledStructuralGrant && HasPendingStatus ? &PreSendStatus : nullptr,
+			!PooledStructuralGrant);
 		int64 MessageNumber = -1;
 		if (Token && (!detail::ReliableServiceFeedbackAccess::ActivatedAt(Message) ||
 			!SteamNetworkingSocketsLib::GargantuanBeginReliableRetirementAttribution(Token,
@@ -860,7 +875,8 @@ namespace gargantuan::network {
 		);
 		if (Token) SteamNetworkingSocketsLib::GargantuanEndReliableRetirementAttribution();
 		State->Observe(Message.Destination(), "GnsQueued", Message.Payload(),
-			static_cast<int>(Message.Delivery()), static_cast<int>(Message.Traffic()), MessageNumber, -1, static_cast<int>(Result));
+			static_cast<int>(Message.Delivery()), static_cast<int>(Message.Traffic()),
+			MessageNumber, -1, static_cast<int>(Result), nullptr, !PooledStructuralGrant);
 		switch (Result) {
 		case k_EResultOK:
 			SaturatingAdd(*Connection->second.Statistics.MessagesSent, 1);

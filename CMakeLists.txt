@@ -1247,6 +1247,12 @@ if(BUILD_TESTING)
 				-P "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/PooledServiceSourceChecks.cmake")
 		set_tests_properties(gargantuan_pooled_service_source_contract
 			PROPERTIES LABELS "networking;optional" TIMEOUT 10)
+		add_test(NAME gargantuan_gns_observe_source_contract
+			COMMAND ${CMAKE_COMMAND}
+				"-DGargantuanRoot=${CMAKE_CURRENT_SOURCE_DIR}"
+				-P "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/GnsObserveSourceChecks.cmake")
+		set_tests_properties(gargantuan_gns_observe_source_contract
+			PROPERTIES LABELS "networking;optional;f1" TIMEOUT 10)
 		add_test(NAME gargantuan_remote_real_transport COMMAND gargantuan_remote_real_transport_tests)
 		add_test(NAME gargantuan_character_real_transport COMMAND gargantuan_character_real_transport_tests)
 		add_test(NAME gargantuan_game_session_real_transport COMMAND gargantuan_game_session_real_transport_tests)

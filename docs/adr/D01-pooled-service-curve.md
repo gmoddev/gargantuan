@@ -231,6 +231,14 @@ measures total IPv4 packet overhead and requires it to fit the reserve over
 the measured drain interval, alongside each peer and pool F1 curve. This
 measured gate complements the source-derived incremental NoNagle bound.
 
+For a token-bearing POOLED_SERVICE structural send, the optional `GnsBefore`
+diagnostic reuses the admission read's pre-send GNS status. `GnsQueued` retains
+its message number and send result while leaving unsampled backend fields at
+`-1`; it does not query GNS status or configuration again inside the active
+finite grant. Ordinary reliable send diagnostics remain sampled. Native
+first-send/ACK/retirement feedback, rather than those optional send-log fields,
+is authoritative for F1.
+
 ### Four simultaneous grants
 
 Every qualified grant independently satisfies both phases. For four grants

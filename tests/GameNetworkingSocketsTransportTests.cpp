@@ -1,5 +1,6 @@
 #include "gargantuan/network/GameNetworkingSocketsTransport.hpp"
 #include "../src/network/ReliableServiceFeedback.hpp"
+#include "../src/network/GnsServiceDiagnostics.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Folder.hpp"
 #include "gargantuan/classes/RemoteEvent.hpp"
@@ -18,6 +19,7 @@
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <string_view>
 #include <thread>
 #include <variant>
 #include <vector>
@@ -103,6 +105,11 @@ namespace {
 		}
 		return Result;
 	}
+
+	struct SendDiagnosticCapture {
+		std::array<detail::GnsServiceRecord, 6> Records{};
+		std::size_t Count = 0;
+	};
 
 	std::optional<NetworkMessageIntent> Message(
 		ConnectionId Destination,
@@ -262,6 +269,102 @@ int main(int ArgumentCount, char **Arguments) {
 		"client lifecycle events satisfy the backend-neutral contract");
 	Pair.ServerEvents.clear();
 	Pair.ClientEvents.clear();
+
+	{
+		std::cout << "[Networking:GNS] structural send diagnostic metadata\n" << std::flush;
+		auto ObservedPair = StartPair({.MaximumConnections = 1, .SendRate = 18 * 1024 * 1024},
+			TestLimits(), true);
+		struct PairCleanup {
+			PairFixture &Value;
+			~PairCleanup() { StopPair(Value); }
+		} Cleanup{ObservedPair};
+		Check(ObservedPair.ServerConnection.IsValid(), "structural diagnostic pair connects");
+		if (ObservedPair.ServerConnection.IsValid()) {
+			constexpr std::uint64_t Token = 91;
+			constexpr std::size_t CompleteBytes = 1258;
+			auto Intent = MakeNetworkMessageIntent(ObservedPair.ServerConnection,
+				DeliveryMode::ReliableOrdered, TrafficClass::StructuralReplication,
+				ReliableReplicationOrder{ReliableReplicationSequence(Token)},
+				std::vector<std::byte>(CompleteBytes - ReliableServiceEnvelopeBytes, std::byte{0x45}),
+				ObservedPair.Limits);
+			Check(Intent && detail::ReliableServiceFeedbackAccess::Attribute(*Intent, Token),
+				"structural diagnostic message has one retirement token");
+			if (Intent && detail::ReliableServiceFeedbackAccess::Token(*Intent)) {
+				SendDiagnosticCapture Capture;
+				detail::GnsServiceSink Sink{&Capture,
+					[](void *Context, detail::GnsServiceRecord Value, std::span<const std::byte>) noexcept {
+						auto &Observed = *static_cast<SendDiagnosticCapture *>(Context);
+						if (Observed.Count < Observed.Records.size())
+							Observed.Records[Observed.Count] = Value;
+						++Observed.Count;
+					}, nullptr};
+				auto *PreviousSink = detail::ActiveGnsService;
+				detail::ActiveGnsService = &Sink;
+				struct SinkCleanup {
+					detail::GnsServiceSink *Previous;
+					~SinkCleanup() { detail::ActiveGnsService = Previous; }
+				} Restore{PreviousSink};
+				auto FullReservation = MakeNetworkMessageIntent(ObservedPair.ServerConnection,
+					DeliveryMode::ReliableOrdered, TrafficClass::StructuralReplication,
+					ReliableReplicationOrder{ReliableReplicationSequence(Token - 1)},
+					std::vector<std::byte>(64, std::byte{0x46}), ObservedPair.Limits);
+				Check(FullReservation && ObservedPair.Server->Send(*FullReservation).Succeeded(),
+					"un-tokened structural send retains ordinary diagnostics");
+				auto Gameplay = Message(ObservedPair.ServerConnection, DeliveryMode::ReliableOrdered,
+					{std::byte{0x47}}, ObservedPair.Limits);
+				Check(Gameplay && ObservedPair.Server->Send(*Gameplay).Succeeded(),
+					"reliable gameplay send retains ordinary diagnostics");
+				Check(Capture.Count == 4, "un-tokened reliable sends preserve paired metadata events");
+				if (Capture.Count == 4) {
+					for (const auto Index : {std::size_t{0}, std::size_t{2}}) {
+						const auto &Before = Capture.Records[Index], &Queued = Capture.Records[Index + 1];
+						Check(std::string_view(Before.Stage) == "GnsBefore" &&
+							std::string_view(Queued.Stage) == "GnsQueued" &&
+							Before.Result == -1 && Queued.Result == static_cast<int>(k_EResultOK) &&
+							Queued.MessageNumber > 0 &&
+							Before.Traffic == Queued.Traffic &&
+							Before.QueueUs >= 0 && Queued.QueueUs >= 0 &&
+							Before.RateMin > 0 && Before.RateMax > 0 && Before.SendBuffer > 0 &&
+							Queued.RateMin > 0 && Queued.RateMax > 0 && Queued.SendBuffer > 0,
+								"un-tokened structural and gameplay diagnostics retain native sampling");
+					}
+					Check(Capture.Records[0].Traffic == static_cast<int>(TrafficClass::StructuralReplication) &&
+						Capture.Records[2].Traffic == static_cast<int>(TrafficClass::ReliableApplication),
+						"un-tokened structural and gameplay diagnostic classes stay distinct");
+				}
+				const auto ActivatedAt = static_cast<std::uint64_t>(
+					std::chrono::duration_cast<std::chrono::microseconds>(
+						std::chrono::steady_clock::now().time_since_epoch()).count());
+				Check(detail::ReliableServiceFeedbackAccess::Activate(*Intent, Token, ActivatedAt),
+					"structural diagnostic message records grant activation");
+				const auto Sent = ObservedPair.Server->Send(*Intent);
+				Check(Sent.Succeeded(), "structural diagnostic send succeeds");
+				Check(Capture.Count == 6, "token-bearing structural send keeps before and queued diagnostic events");
+				if (Capture.Count == 6) {
+					const auto &Before = Capture.Records[4], &Queued = Capture.Records[5];
+					Check(std::string_view(Before.Stage) == "GnsBefore" &&
+						std::string_view(Queued.Stage) == "GnsQueued" &&
+						Before.Connection == ObservedPair.ServerConnection &&
+						Queued.Connection == ObservedPair.ServerConnection &&
+						Before.Nanoseconds != 0 && Queued.Nanoseconds >= Before.Nanoseconds &&
+						Before.Bytes == CompleteBytes - ReliableServiceEnvelopeBytes &&
+						Queued.Bytes == Before.Bytes &&
+						Before.Delivery == static_cast<int>(DeliveryMode::ReliableOrdered) &&
+						Queued.Delivery == Before.Delivery &&
+						Before.Traffic == static_cast<int>(TrafficClass::StructuralReplication) &&
+						Queued.Traffic == Before.Traffic &&
+						Before.MessageNumber == -1 && Queued.MessageNumber > 0 &&
+						Before.Result == -1 && Queued.Result == static_cast<int>(k_EResultOK),
+						"structural diagnostic events preserve send identity and result");
+					Check(Before.RateMin == -1 && Before.RateMax == -1 && Before.SendBuffer == -1 &&
+						Queued.PendingReliable == -1 && Queued.UnackedReliable == -1 &&
+						Queued.PendingUnreliable == -1 && Queued.QueueUs == -1 && Queued.Rate == -1 &&
+						Queued.RateMin == -1 && Queued.RateMax == -1 && Queued.SendBuffer == -1,
+						"unsampled post-send backend diagnostics remain unavailable");
+				}
+			}
+		}
+	}
 
 	{
 		std::cout << "[Networking:GNS] reliable delivery\n" << std::flush;

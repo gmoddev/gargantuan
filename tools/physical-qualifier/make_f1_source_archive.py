@@ -22,6 +22,7 @@ NATIVE_SOURCE_PATHS = (
     "src/network/FiniteGrantServiceCurve.hpp",
     "src/network/GameNetworkingSocketsTransport.cpp",
     "src/network/GameSession.cpp",
+    "src/network/GnsServiceDiagnostics.hpp",
     "src/network/PooledReliableServiceFeedback.hpp",
     "src/network/PooledServiceDiagnostics.hpp",
     "src/network/ReliableServiceFeedback.hpp",
@@ -36,6 +37,7 @@ NATIVE_SOURCE_PATHS = (
     "tests/PooledReliableServiceProductionFixture.hpp",
     "tests/PooledServiceCurveFixture.hpp",
     "tests/ReliableServiceFeedbackFixture.hpp",
+    "tests/cmake/GnsObserveSourceChecks.cmake",
     "tests/cmake/PooledServiceSourceChecks.cmake",
 )
 
