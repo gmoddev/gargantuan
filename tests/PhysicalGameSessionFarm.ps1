@@ -468,7 +468,9 @@ try {
 	$ServerArguments = @('--bind', $Endpoint, '--farm-run-id', $RunId, '--farm-peers', [string]$Peers,
 		'--max-ticks', [string]$ServerTicks, '--reliable-mode', 'POOLED_SERVICE',
 		'--content-provider', $Provider.ToLowerInvariant())
-	if ($ScaleWorkload) { $ServerArguments += @('--farm-scale-workload', '--content-residency', 'on-demand') }
+	if ($ScaleWorkload) { $ServerArguments += @('--farm-scale-workload',
+		'--farm-admission-evidence', (Join-Path $RunDirectory 'admission-fairness.tsv'),
+		'--content-residency', 'on-demand') }
 	if (-not [Net.IPAddress]::IsLoopback($BindAddress)) {
 		$ServerArguments += '--allow-insecure-development-network'
 	}

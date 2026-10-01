@@ -5,6 +5,7 @@
 #include "PooledReliableServiceModelFixture.hpp"
 #include <array>
 #include <iostream>
+#include <vector>
 
 namespace gargantuan::test {
 inline bool RunPooledReliableServiceProductionTests() {
@@ -242,9 +243,169 @@ inline bool RunPooledReliableServiceProductionTests() {
 				Production.GetMetrics().VerifiedAttributedRetirement == 4 * G,
 				"production grants converge without debt or active slots");
 		});
+		Test("EqualSizeReplanReplacesDiagnosticDemand", [&] {
+			struct EvidenceCapture {
+				std::vector<detail::AdmissionEvidenceEvent> Events;
+				detail::AdmissionEvidenceSink Sink{this, Record};
+				detail::AdmissionEvidenceSink *Previous = detail::ActiveAdmissionEvidence;
+				EvidenceCapture() { detail::ActiveAdmissionEvidence = &Sink; }
+				~EvidenceCapture() { detail::ActiveAdmissionEvidence = Previous; }
+				static void Record(void *Context, const detail::AdmissionEvidenceEvent &Event) noexcept {
+					try { static_cast<EvidenceCapture *>(Context)->Events.push_back(Event); } catch (...) {}
+				}
+			} Evidence;
+			Admission Production(ReliableServiceProfile::PooledService());
+			const std::array<std::uint64_t, 2> FirstFingerprint{1, 2}, SecondFingerprint{3, 4};
+			for (const auto [Time, Fingerprint] : std::array{
+				std::pair{0ULL, FirstFingerprint}, std::pair{250'000ULL, FirstFingerprint},
+				std::pair{260'000ULL, SecondFingerprint}, std::pair{270'000ULL, SecondFingerprint}}) {
+				Check(Production.BeginStep(Time) && Production.ObserveService(Id,
+					Admission::ServiceObservation{Time, true, true}), "exact candidate step");
+				Production.SetOrdinaryFunding(224 * 1024);
+				Production.DeferSize(Id, G, Fingerprint);
+				Production.EndStep();
+			}
+			std::uint64_t FirstDemand = 0, SecondDemand = 0;
+			unsigned Exact = 0, Replaced = 0, EligibleFirst = 0, EligibleSecond = 0;
+			for (const auto &Event : Evidence.Events) {
+				if (Event.Kind == detail::AdmissionEvidenceKind::ExactDemand) {
+					(++Exact == 1 ? FirstDemand : SecondDemand) = Event.DemandId;
+					Check(Event.ExactBytes == G, "same-size candidates retain exact byte basis");
+				}
+				if (Event.Kind == detail::AdmissionEvidenceKind::DemandDisposed &&
+					Event.Reason == detail::AdmissionEvidenceReason::Replaced) {
+					++Replaced; Check(Event.DemandId == FirstDemand, "old candidate is disposed before replacement");
+				}
+				if (Event.Kind == detail::AdmissionEvidenceKind::CreditEligible) {
+					if (Event.DemandId == FirstDemand) {
+						++EligibleFirst; Check(Event.AtMicroseconds == 250'000, "first candidate eligibility");
+					} else if (Event.DemandId == SecondDemand) {
+						++EligibleSecond; Check(Event.AtMicroseconds == 260'000, "replan starts fresh eligibility");
+					}
+				}
+			}
+			Check(Exact == 2 && FirstDemand && SecondDemand && FirstDemand != SecondDemand &&
+				Replaced == 1 && EligibleFirst == 1 && EligibleSecond == 1,
+				"identical retry keeps one demand; distinct same-size replan starts another");
+		});
+		Test("CreditEligibilityEvidenceExcludesWarmupAndStaleFeedback", [&] {
+			struct EvidenceCapture {
+				std::vector<detail::AdmissionEvidenceEvent> Events;
+				detail::AdmissionEvidenceSink Sink{this, Record};
+				detail::AdmissionEvidenceSink *Previous = detail::ActiveAdmissionEvidence;
+				EvidenceCapture() { detail::ActiveAdmissionEvidence = &Sink; }
+				~EvidenceCapture() { detail::ActiveAdmissionEvidence = Previous; }
+				static void Record(void *Context, const detail::AdmissionEvidenceEvent &Event) noexcept {
+					try { static_cast<EvidenceCapture *>(Context)->Events.push_back(Event); } catch (...) {}
+				}
+			} Evidence;
+			Admission Production(ReliableServiceProfile::PooledService());
+			Check(Production.BeginStep(0) && Production.ObserveService(Id,
+				Admission::ServiceObservation{0, true, true}), "initial evidence step");
+			Production.SetOrdinaryFunding(224 * 1024);
+			Production.DeferSize(Id, G);
+			Production.EndStep();
+			Check(Production.BeginStep(250'000) && Production.ObserveService(Id,
+				Admission::ServiceObservation{250'000, false, false}), "unavailable feedback step");
+			Production.SetOrdinaryFunding(224 * 1024);
+			Production.DeferSize(Id, G);
+			Production.EndStep();
+			Check(Production.BeginStep(260'000) && Production.ObserveService(Id,
+				Admission::ServiceObservation{260'000, true, true}), "restored feedback step");
+			Production.SetOrdinaryFunding(224 * 1024);
+			Production.DeferSize(Id, G);
+			auto Receipt = Production.Reserve(Id, G);
+			Check(Receipt && Production.Commit(*Receipt), "restored credit-eligible grant");
+			Production.EndStep();
+			std::uint64_t Demand = 0;
+			unsigned Exact = 0, Eligible = 0, Accepted = 0;
+			for (const auto &Event : Evidence.Events) {
+				if (Event.Kind == detail::AdmissionEvidenceKind::ExactDemand) { Demand = Event.DemandId; ++Exact; }
+				if (Event.Kind == detail::AdmissionEvidenceKind::CreditEligible) {
+					Check(Event.DemandId == Demand && Event.AtMicroseconds == 260'000 &&
+						Event.CreditThresholdAtMicroseconds == 250'000,
+						"credit crossing and feedback restoration remain separate clocks");
+					++Eligible;
+				}
+				if (Event.Kind == detail::AdmissionEvidenceKind::GrantAccepted) {
+					Check(Event.DemandId == Demand && Event.GrantToken == Receipt->Token &&
+						Event.EligibleSinceMicroseconds == 260'000,
+						"grant joins qualified eligibility, not cold demand");
+					++Accepted;
+				}
+			}
+			Check(Exact == 1 && Eligible == 1 && Accepted == 1,
+				"one exact demand, one qualified eligibility, one grant");
+		});
+		Test("UnexaminedDemandAndReconnectDoNotLaunderEligibility", [&] {
+			struct EvidenceCapture {
+				std::vector<detail::AdmissionEvidenceEvent> Events;
+				detail::AdmissionEvidenceSink Sink{this, Record};
+				detail::AdmissionEvidenceSink *Previous = detail::ActiveAdmissionEvidence;
+				EvidenceCapture() { detail::ActiveAdmissionEvidence = &Sink; }
+				~EvidenceCapture() { detail::ActiveAdmissionEvidence = Previous; }
+				static void Record(void *Context, const detail::AdmissionEvidenceEvent &Event) noexcept {
+					try { static_cast<EvidenceCapture *>(Context)->Events.push_back(Event); } catch (...) {}
+				}
+			} Evidence;
+			Admission Production(ReliableServiceProfile::PooledService());
+			Check(Production.BeginStep(0) && Production.ObserveService(Id,
+				Admission::ServiceObservation{0, true, true}), "old generation begins");
+			Production.SetOrdinaryFunding(224 * 1024);
+			Production.DeferSize(Id, G);
+			Production.EndStep();
+			Check(Production.BeginStep(10'000) && Production.ObserveService(Id,
+				Admission::ServiceObservation{10'000, true, true}), "old generation remains observed");
+			Production.SetOrdinaryFunding(224 * 1024);
+			Production.EndStep();
+			Production.Remove(Id);
+			const ConnectionId Reconnected{1, 2};
+			Check(Production.BeginStep(250'000) && Production.ObserveService(Reconnected,
+				Admission::ServiceObservation{250'000, true, true}), "new generation begins");
+			Production.SetOrdinaryFunding(224 * 1024);
+			Production.DeferSize(Reconnected, G);
+			Production.EndStep();
+			Check(Production.BeginStep(500'000) && Production.ObserveService(Reconnected,
+				Admission::ServiceObservation{500'000, true, true}), "new generation earns its own credit");
+			Production.SetOrdinaryFunding(224 * 1024);
+			Production.DeferSize(Reconnected, G);
+			auto Receipt = Production.Reserve(Reconnected, G);
+			Check(Receipt && Production.Commit(*Receipt), "new generation accepts independently");
+			Production.EndStep();
+			std::uint64_t OldDemand = 0, NewDemand = 0;
+			bool OldUnexamined = false, NewEligible = false, NewAccepted = false;
+			for (const auto &Event : Evidence.Events) {
+				if (Event.Kind == detail::AdmissionEvidenceKind::ExactDemand) {
+					if (Event.Connection == Id) OldDemand = Event.DemandId;
+					if (Event.Connection == Reconnected) NewDemand = Event.DemandId;
+				}
+				if (Event.Kind == detail::AdmissionEvidenceKind::DemandDisposed &&
+					Event.Connection == Id && Event.Reason == detail::AdmissionEvidenceReason::Unexamined)
+					OldUnexamined = Event.DemandId == OldDemand;
+				if (Event.Kind == detail::AdmissionEvidenceKind::CreditEligible && Event.Connection == Reconnected)
+					NewEligible = Event.DemandId == NewDemand && Event.AtMicroseconds == 500'000 &&
+						Event.CreditThresholdAtMicroseconds == 500'000;
+				if (Event.Kind == detail::AdmissionEvidenceKind::GrantAccepted && Event.Connection == Reconnected)
+					NewAccepted = Event.DemandId == NewDemand && Event.GrantToken == Receipt->Token;
+			}
+			Check(OldDemand && NewDemand && OldDemand != NewDemand && OldUnexamined && NewEligible && NewAccepted,
+				"unexamined work is visible and a reconnect cannot inherit eligibility");
+		});
 		Test("ThirtyTwoPeerReferenceDifferential", [&] {
 			using namespace pooled_service_model;
 			for (const bool Stalled : {false, true}) {
+			struct EvidenceCapture {
+				std::vector<detail::AdmissionEvidenceEvent> Events;
+				bool Overflow = false;
+				detail::AdmissionEvidenceSink Sink{this, Record};
+				detail::AdmissionEvidenceSink *Previous = detail::ActiveAdmissionEvidence;
+				EvidenceCapture() { detail::ActiveAdmissionEvidence = &Sink; }
+				~EvidenceCapture() { detail::ActiveAdmissionEvidence = Previous; }
+				static void Record(void *Context, const detail::AdmissionEvidenceEvent &Event) noexcept {
+					auto &Self = *static_cast<EvidenceCapture *>(Context);
+					try { Self.Events.push_back(Event); } catch (...) { Self.Overflow = true; }
+				}
+			} Evidence;
 			Model Reference; All(Reference);
 			Admission Production(ReliableServiceProfile::PooledService());
 			std::array<std::uint64_t, 32> Tokens{};
@@ -284,14 +445,43 @@ inline bool RunPooledReliableServiceProductionTests() {
 			}
 			Check(Completed == ExpectedCompletions && Production.GetMetrics().VerifiedAttributedRetirement == ExpectedCompletions * G &&
 				Production.GetMetrics().OutstandingBytes == (Stalled ? G : 0) && Production.LogicalBytes() < 64 * 1024, "convergence/resource bounds");
+			Check(!Evidence.Overflow, "admission evidence did not overflow");
+			std::array<std::uint64_t, 32> EligibleAt{};
+			std::array<std::uint64_t, 32> EligibleDemand{};
+			std::array<unsigned, 32> AcceptedCounts{};
+			std::uint64_t MaximumEligibleWait = 0;
+			for (const auto &Event : Evidence.Events) {
+				Check(Event.Connection.Generation == 1 && Event.Connection.Slot >= 1 && Event.Connection.Slot <= 32,
+					"admission evidence retains peer generation");
+				const auto Index = Event.Connection.Slot - 1;
+				if (Event.Kind == detail::AdmissionEvidenceKind::CreditEligible) {
+					Check(Event.ExactBytes == G && Event.CreditThresholdAtMicroseconds <= Event.AtMicroseconds,
+						"credit eligibility uses the exact maximum group and monotonic crossing");
+					EligibleAt[Index] = Event.AtMicroseconds;
+					EligibleDemand[Index] = Event.DemandId;
+				}
+				if (Event.Kind == detail::AdmissionEvidenceKind::GrantAccepted) {
+					Check(Event.GrantToken && Event.ExactBytes == G && EligibleAt[Index] &&
+						EligibleDemand[Index] == Event.DemandId && Event.AtMicroseconds >= EligibleAt[Index],
+						"accepted grant joins one exact same-generation eligible demand");
+					MaximumEligibleWait = std::max(MaximumEligibleWait, Event.AtMicroseconds - EligibleAt[Index]);
+					++AcceptedCounts[Index];
+				}
+			}
+			for (const auto Count : AcceptedCounts) Check(Count == 1, "every 32-peer demand has one accepted grant");
+			for (const auto At : EligibleAt) Check(At == 250'000,
+				"all 32 exact groups become credit-eligible even while four grant slots are occupied");
+			if (!Stalled) Check(MaximumEligibleWait <= 220'500,
+				"500-us reference model's conditional seven-wave fairness bound");
 			std::cout << "[Network:PooledProduction] Differential stalled=" << Stalled << " completed=" << Completed
-				<< " outstanding=" << Production.GetMetrics().OutstandingBytes << " logical_bytes=" << Production.LogicalBytes() << '\n';
+				<< " outstanding=" << Production.GetMetrics().OutstandingBytes << " logical_bytes=" << Production.LogicalBytes()
+				<< " eligible_grant_wait_max_us=" << MaximumEligibleWait << '\n';
 			}
 		});
 	} catch (const std::exception &Error) {
 		std::cerr << "[Network:PooledProduction] FAIL " << Error.what() << '\n'; return false;
 	}
 	std::cout << "[Network:PooledProduction] cases=" << Passed << " PASS\n";
-	return Passed == 12;
+	return Passed == 15;
 }
 }

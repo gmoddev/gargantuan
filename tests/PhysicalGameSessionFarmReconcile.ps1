@@ -42,9 +42,14 @@ function Assert-EvidenceRoot {
 	$Expected = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
 	foreach ($File in $Index.Files) {
 		$Name = [string]$File.Name
+		$MaximumBytes = if ($Name -ceq 'admission-fairness.tsv' -and $ExpectedRole -ceq 'Server') {
+			33554432
+		} else {
+			16777216
+		}
 		if ($Name -cnotmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$' -or
 			$Name -ieq 'evidence-sha256.json' -or -not $Expected.Add($Name) -or
-			[long]$File.Bytes -lt 0 -or [long]$File.Bytes -gt 16777216 -or
+			[long]$File.Bytes -lt 0 -or [long]$File.Bytes -gt $MaximumBytes -or
 			[string]$File.Sha256 -cnotmatch '^[a-fA-F0-9]{64}$') {
 			throw "$ExpectedRole evidence index contains an invalid file entry"
 		}

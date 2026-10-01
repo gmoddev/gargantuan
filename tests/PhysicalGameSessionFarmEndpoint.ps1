@@ -326,8 +326,58 @@ function Add-EndpointResourceSamples {
 	}
 }
 
+function Assert-FairnessEvidence {
+	param([string]$Path, [string]$LocalRunId)
+	$File = Get-Item -LiteralPath $Path -ErrorAction Stop
+	if (-not $File.PSIsContainer -and ($File.Length -lt 64 -or $File.Length -gt 33554432)) {
+		throw 'native fairness evidence size is outside the fixed 32 MiB bound'
+	}
+	if ($File.PSIsContainer) { throw 'native fairness evidence is not a file' }
+	$Stream = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+	$Reader = [IO.StreamReader]::new($Stream, [Text.UTF8Encoding]::new($false, $true))
+	try {
+		if ($Reader.ReadLine() -cne "format=GargantuanAdmissionEvidenceV1`trun=$LocalRunId") {
+			throw 'native fairness evidence run/header mismatch'
+		}
+		$Count = 0
+		$Ended = $false
+		while ($null -ne ($Line = $Reader.ReadLine())) {
+			$Fields = $Line.Split([char]9)
+			if ($Fields[0] -ceq 'end') {
+				if ($Ended -or $Fields.Count -ne 3 -or $Fields[1] -cne [string]$Count -or
+					$Fields[2] -cne '0' -or $null -ne $Reader.ReadLine()) {
+					throw 'native fairness evidence end/count/overflow mismatch'
+				}
+				$Ended = $true
+				break
+			}
+			if ($Ended -or $Fields.Count -ne 19 -or $Fields[0] -cne 'event' -or
+				$Fields[1] -cnotin @('exact_demand', 'credit_eligible', 'eligibility_interrupted',
+					'grant_accepted', 'reservation_rolled_back', 'demand_disposed') -or
+				$Fields[2] -cnotin @('none', 'no_work', 'unexamined', 'replaced', 'rollback',
+					'generation_removed', 'terminal_release', 'feedback_unavailable') -or $Count -ge 65536) {
+				throw 'native fairness evidence event schema/count is invalid'
+			}
+			try {
+				$Numbers = @($Fields[3..18] | ForEach-Object { [UInt64]::Parse($_, [Globalization.CultureInfo]::InvariantCulture) })
+			} catch { throw 'native fairness evidence has a noninteger field' }
+			if ($Numbers[0] -lt 1 -or $Numbers[0] -gt 512 -or $Numbers[1] -eq 0 -or
+				$Numbers[2] -eq 0 -or $Numbers[5] -eq 0 -or $Numbers[5] -gt 524288 -or
+				$Numbers[7] -gt $Numbers[6] -or $Numbers[8] -gt $Numbers[6] -or
+				($Fields[1] -cin @('credit_eligible', 'eligibility_interrupted', 'grant_accepted') -and
+					$Numbers[3] -eq 0) -or
+				($Fields[1] -cin @('grant_accepted', 'reservation_rolled_back') -and $Numbers[4] -eq 0)) {
+				throw 'native fairness evidence identity, size, or timestamp is invalid'
+			}
+			$Count++
+		}
+		if (-not $Ended -or $Count -eq 0) { throw 'native fairness evidence has no complete measured events' }
+		return [pscustomobject]@{ Count = $Count; Bytes = $File.Length }
+	} finally { $Reader.Dispose() }
+}
+
 function Assert-ServerEvidence {
-	param([string]$LogPath, [System.Collections.IDictionary]$RunManifest)
+	param([string]$LogPath, [System.Collections.IDictionary]$RunManifest, [string]$FairnessPath)
 	$Records = @(Get-TypedRecords -Path $LogPath -Kind 'Server')
 	$Starts = @($Records | Where-Object event -eq 'start')
 	$Ready = @($Records | Where-Object event -eq 'ready')
@@ -355,6 +405,15 @@ function Assert-ServerEvidence {
 		if ($Scale.Count -ne 1 -or $Scale[0].run -cne $RunManifest.RunId -or
 			$Scale[0].status -cne 'PASS' -or $Scale[0].phases -cne '5' -or
 			$Scale[0].peers -cne '32') { throw 'server scale result is invalid' }
+		$Fairness = Assert-FairnessEvidence -Path $FairnessPath -LocalRunId $RunManifest.RunId
+		$Summary = @(Get-TypedRecords -Path $LogPath -Kind 'Admission' | Where-Object event -eq 'evidence_result')
+		if ($Summary.Count -ne 1 -or $Summary[0].run -cne $RunManifest.RunId -or
+			$Summary[0].file -cne 'admission-fairness.tsv' -or
+			$Summary[0].events -cne [string]$Fairness.Count -or
+			$Summary[0].bytes -cne [string]$Fairness.Bytes -or
+			$Summary[0].overflow -cne '0' -or $Summary[0].write_failed -cne '0') {
+			throw 'server fairness evidence summary does not match the bounded native file'
+		}
 	}
 	return [pscustomobject]@{ Ready = $Ready.Count; UniqueNonces = $NonceSet.Count }
 }
@@ -442,10 +501,12 @@ try {
 	$RunStartedUtc = [DateTimeOffset]::UtcNow.ToString('O')
 	$RunClock = [Diagnostics.Stopwatch]::StartNew()
 	if ($Role -eq 'Server') {
+		$FairnessPath = Join-Path $Paths.Evidence 'admission-fairness.tsv'
 		$Arguments = @('--bind', $Manifest.Endpoint, '--farm-run-id', $RunId,
 			'--farm-peers', '32', '--max-ticks', [string]$Manifest.ServerTicks,
 			'--reliable-mode', 'POOLED_SERVICE', '--content-provider', $Manifest.Provider.ToLowerInvariant())
-		if ($Manifest.ScaleWorkload) { $Arguments += @('--farm-scale-workload', '--content-residency', 'on-demand') }
+		if ($Manifest.ScaleWorkload) { $Arguments += @('--farm-scale-workload',
+			'--farm-admission-evidence', $FairnessPath, '--content-residency', 'on-demand') }
 		if (-not [Net.IPAddress]::IsLoopback($Network.Address)) { $Arguments += '--allow-insecure-development-network' }
 		if ($Manifest.Provider -eq 'Node') {
 			$Arguments += @('--content-node-endpoint', $Manifest.NodeEndpoint,
@@ -534,7 +595,7 @@ try {
 		-MaximumMemoryBytes $RoleWorkingSetBytes `
 		-MaximumAggregateMemoryBytes $EffectiveAggregateWorkingSetBytes -MaximumThreads $MaximumThreadsPerProcess
 	$Verified = if ($Role -eq 'Server') {
-		Assert-ServerEvidence -LogPath $Owners[0].OutputPath -RunManifest $Manifest
+		Assert-ServerEvidence -LogPath $Owners[0].OutputPath -RunManifest $Manifest -FairnessPath $FairnessPath
 	} else {
 		Assert-ClientEvidence -Clients @($Clients) -RunManifest $Manifest
 	}

@@ -1,5 +1,6 @@
 #include "gargantuan/network/ReplicationCoordinator.hpp"
 #include "PlanningLookup.hpp"
+#include "ReliableByteAdmissionDiagnostics.hpp"
 #include "../runtime/RuntimeWorkDiagnostics.hpp"
 
 #include "gargantuan/InstanceProperty.hpp"
@@ -24,6 +25,10 @@ namespace gargantuan::network {
 		constexpr std::size_t MaximumDependencyClosureDepth = 64;
 		constexpr std::size_t MaximumDependencyClosureObjects = MaximumPeerDesiredObjects;
 		constexpr std::size_t MaximumCatalogRefreshBatches = 16;
+		std::array<std::uint64_t, 2> EvidenceFingerprint(const std::vector<std::byte> &Encoded) noexcept {
+			return detail::ActiveAdmissionEvidence ? detail::ExactCandidateFingerprint(Encoded) :
+				std::array<std::uint64_t, 2>{};
+		}
 
 		PublishReplication MakePublish(SnapshotObject Object) {
 			return {
@@ -1466,10 +1471,11 @@ namespace gargantuan::network {
 				MaximumFrameBytes, AvailableFrameBytes);
 		}
 		if (Encoded->size() > AvailableFrameBytes) {
+			const auto Fingerprint = EvidenceFingerprint(*Encoded);
 			SaturatingAdd(CandidateMetrics.StructuralBytesEncoded, Encoded->size());
 			SaturatingAdd(CandidateMetrics.StructuralTransitionsEncoded, SelectedWorkCount);
 			Metrics = CandidateMetrics;
-			return {{}, {}, SelectedWorkCount, 0, {}, true, Encoded->size()};
+			return {{}, {}, SelectedWorkCount, 0, {}, true, Encoded->size(), Fingerprint};
 		}
 		SaturatingAdd(CandidateMetrics.StructuralBytesEncoded, Encoded->size());
 		SaturatingAdd(CandidateMetrics.StructuralTransitionsEncoded, SelectedWorkCount);
@@ -1523,7 +1529,8 @@ namespace gargantuan::network {
 			CurrentPeer.PreparedCommit = std::move(Commit);
 		else
 			ApplyPreparedCommit(CurrentPeer, std::move(Commit));
-		return {std::move(Frame), {}, SelectedWorkCount, 0, std::move(*Encoded)};
+		const auto Fingerprint = EvidenceFingerprint(*Encoded);
+		return {std::move(Frame), {}, SelectedWorkCount, 0, std::move(*Encoded), false, 0, Fingerprint};
 	}
 
 	ReplicationProduceResult ReplicationCoordinator::AddPeer(ConnectionId Connection, ReplicationEpoch Epoch) {
@@ -1959,11 +1966,12 @@ namespace gargantuan::network {
 				MaximumJournalRecords - Read.Records.size(), AvailableFrameBytes));
 		}
 		if (Encoded->size() > AvailableFrameBytes) {
+			const auto Fingerprint = EvidenceFingerprint(*Encoded);
 			SaturatingAdd(CandidateMetrics.StructuralTransitionsSelected, Frame.Operations.size());
 			SaturatingAdd(CandidateMetrics.StructuralTransitionsEncoded, Frame.Operations.size());
 			SaturatingAdd(CandidateMetrics.StructuralBytesEncoded, Encoded->size());
 			Metrics = CandidateMetrics;
-			return Finish({{}, {}, Frame.Operations.size(), 0, {}, true, Encoded->size()});
+			return Finish({{}, {}, Frame.Operations.size(), 0, {}, true, Encoded->size(), Fingerprint});
 		}
 		SaturatingAdd(CandidateMetrics.StructuralBytesEncoded, Encoded->size());
 		SaturatingAdd(CandidateMetrics.StructuralTransitionsEncoded, Frame.Operations.size());
@@ -2016,7 +2024,8 @@ namespace gargantuan::network {
 			}
 			ApplyAcceptedParents(Peer->second, std::move(AcceptedParents));
 		}
-		return Finish({std::move(Frame), {}, OperationCount, 0, std::move(*Encoded)});
+		const auto Fingerprint = EvidenceFingerprint(*Encoded);
+		return Finish({std::move(Frame), {}, OperationCount, 0, std::move(*Encoded), false, 0, Fingerprint});
 	}
 
 	ReplicationProduceResult

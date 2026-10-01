@@ -5,6 +5,7 @@
 #include "gargantuan/runtime/ProtocolInput.hpp"
 
 #include <deque>
+#include <array>
 #include <functional>
 #include <map>
 #include <memory>
@@ -141,6 +142,9 @@ namespace gargantuan::network {
 		std::vector<std::byte> EncodedFrame;
 		bool DeferredForBytes = false;
 		std::size_t RequiredFrameBytes = 0;
+		// Qualification-only identity of the exact encoded candidate, including
+		// candidates deferred before scheduler acceptance.
+		std::array<std::uint64_t, 2> DiagnosticFingerprint{};
 		[[nodiscard]] bool Succeeded() const {
 			return Frame.has_value();
 		}

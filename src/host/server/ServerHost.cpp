@@ -1,5 +1,6 @@
 #include "host/server/ServerHost.hpp"
 #include "host/server/PhysicalScaleQualification.hpp"
+#include "host/server/FarmAdmissionEvidence.hpp"
 
 #include "host/common/PackagedHost.hpp"
 #include "gargantuan/Engine.hpp"
@@ -134,6 +135,8 @@ namespace gargantuan::host {
 		Program.add_argument("--farm-run-id").default_value(std::string()).help("bounded qualification run identity");
 		Program.add_argument("--farm-peers").scan<'i', int>().default_value(0).help("expected actual GameSession clients (1-32)");
 		Program.add_argument("--farm-scale-workload").flag().help("run the bounded 32-client qualified scale matrix");
+		Program.add_argument("--farm-admission-evidence").default_value(std::string())
+			.help("fixed new role-local fairness evidence file for the 32-client scale run");
 		Program.add_argument("--reliable-rate").scan<'u', std::uint64_t>().default_value(std::uint64_t{0})
 			.help("trusted per-connection application byte reservation per second; requires aggregate rate and peers");
 		Program.add_argument("--reliable-mode").default_value(std::string("FULL_RESERVATION"))
@@ -308,7 +311,9 @@ namespace gargantuan::host {
 		const auto FarmRunId = Program.get<std::string>("--farm-run-id");
 		const auto FarmPeers = Program.get<int>("--farm-peers");
 		const bool FarmScaleWorkload = Program.is_used("--farm-scale-workload");
-		const bool FarmMode = !FarmRunId.empty() || FarmPeers != 0 || FarmScaleWorkload;
+		const auto FarmAdmissionEvidencePath = Program.get<std::string>("--farm-admission-evidence");
+		const bool FarmMode = !FarmRunId.empty() || FarmPeers != 0 || FarmScaleWorkload ||
+			!FarmAdmissionEvidencePath.empty();
 		const auto ValidFarmRunId = std::all_of(FarmRunId.begin(), FarmRunId.end(), [](char Value) {
 			return (Value >= 'A' && Value <= 'Z') || (Value >= 'a' && Value <= 'z') ||
 				(Value >= '0' && Value <= '9') || Value == '-';
@@ -316,6 +321,7 @@ namespace gargantuan::host {
 		if (FarmMode && (FarmRunId.empty() || FarmRunId.size() > 64 || !ValidFarmRunId ||
 			FarmPeers < 1 || FarmPeers > 32 || Program.get<int>("--max-ticks") <= 0 ||
 			!BindEndpoint || SessionSmoke || StartupSmoke ||
+			(FarmScaleWorkload != !FarmAdmissionEvidencePath.empty()) ||
 			(FarmScaleWorkload && (FarmPeers != 32 || Program.get<int>("--max-ticks") < 7200 ||
 				Residency != ContentResidencyMode::OnDemand)))) {
 			std::cerr << "[Qualification:Server] Invalid bounded farm arguments.\n";
@@ -562,6 +568,9 @@ namespace gargantuan::host {
 			bool FarmIdentityConflict = false;
 			std::unique_ptr<PhysicalScaleQualification> ScaleQualification;
 			if (FarmScaleWorkload) ScaleQualification = std::make_unique<PhysicalScaleQualification>(*Runtime, *Session, FarmRunId);
+			std::unique_ptr<detail::FarmAdmissionEvidence> AdmissionEvidence;
+			if (FarmScaleWorkload) AdmissionEvidence = std::make_unique<detail::FarmAdmissionEvidence>(
+				FarmRunId, std::filesystem::path(FarmAdmissionEvidencePath));
 			if (FarmMode)
 				std::cout << "[Qualification:Server] event=start run=" << FarmRunId
 					<< " provider=" << ProviderName << " expected=" << FarmPeers << '\n';
@@ -831,7 +840,9 @@ namespace gargantuan::host {
 					std::this_thread::sleep_for(std::chrono::milliseconds(1));
 			}
 
+			if (AdmissionEvidence) AdmissionEvidence->Dump();
 			int ExitCode = Runtime->ProcessService->ExitCode;
+			if (AdmissionEvidence && !AdmissionEvidence->Valid()) ExitCode = 10;
 			if (FarmMode && (FarmReadyHighWater != static_cast<std::size_t>(FarmPeers) ||
 				FarmIdentities.size() != static_cast<std::size_t>(FarmPeers) || FarmIdentityConflict ||
 				(ScaleQualification && !ScaleQualification->IsComplete())))
@@ -843,6 +854,12 @@ namespace gargantuan::host {
 					<< " unique_ready=" << FarmIdentities.size()
 					<< " identity_conflict=" << FarmIdentityConflict
 					<< " exit=" << ExitCode << '\n';
+			if (AdmissionEvidence)
+				std::cout << "[Qualification:Admission] event=evidence_result run=" << FarmRunId
+					<< " file=admission-fairness.tsv events=" << AdmissionEvidence->Count()
+					<< " bytes=" << AdmissionEvidence->BytesWritten()
+					<< " overflow=" << AdmissionEvidence->Overflowed()
+					<< " write_failed=" << AdmissionEvidence->Failed() << '\n';
 			if (Session && HostConfiguration.ReliableService) {
 				const auto Metrics = Session->GetMetrics();
 				const auto &M = Metrics.ReliableAdmission;

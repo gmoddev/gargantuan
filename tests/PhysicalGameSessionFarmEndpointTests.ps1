@@ -149,6 +149,29 @@ try {
 	if (-not $MockProcess.Killed -or -not $MockProcess.Disposed -or $Output.CanWrite -or $ErrorStream.CanWrite) {
 		throw 'owned-PID cleanup did not terminate and dispose the mock process and streams'
 	}
+	$FairnessPath = Join-Path $Evidence 'admission-fairness.tsv'
+	$FairnessLines = @(
+		"format=GargantuanAdmissionEvidenceV1`trun=$($Manifest.RunId)",
+		"event`texact_demand`tnone`t1`t1`t1`t0`t0`t77`t250000`t250000`t250000`t524288`t2097152`t4`t0`t0`t0`t0",
+		"end`t1`t0")
+	[IO.File]::WriteAllText($FairnessPath, ($FairnessLines -join "`n") + "`n")
+	$Fairness = Assert-FairnessEvidence -Path $FairnessPath -LocalRunId $Manifest.RunId
+	if ($Fairness.Count -ne 1 -or $Fairness.Bytes -ne ([IO.FileInfo]$FairnessPath).Length) {
+		throw 'bounded native fairness evidence was not accepted'
+	}
+	Write-EndpointEvidenceHash -Directory $Evidence -LocalRunId $Manifest.RunId -LocalRole Server
+	$Index = Get-Content -LiteralPath (Join-Path $Evidence 'evidence-sha256.json') -Raw | ConvertFrom-Json
+	if (@($Index.Files | Where-Object Name -eq 'admission-fairness.tsv').Count -ne 1) {
+		throw 'native fairness evidence was omitted from the immutable role-local index'
+	}
+	[IO.File]::WriteAllText($FairnessPath, ($FairnessLines[0..1] -join "`n") + "`n")
+	Expect-Rejection {
+		Assert-FairnessEvidence -Path $FairnessPath -LocalRunId $Manifest.RunId
+	} 'missing native fairness evidence end record'
+	[IO.File]::WriteAllText($FairnessPath, ($FairnessLines[0..1] + "end`t1`t1" -join "`n") + "`n")
+	Expect-Rejection {
+		Assert-FairnessEvidence -Path $FairnessPath -LocalRunId $Manifest.RunId
+	} 'native fairness evidence overflow marker'
 	Write-Output '[Qualification:FarmEndpoint] MOCK_TEST_OK'
 } finally {
 	$ResolvedRoot = [IO.Path]::GetFullPath($Root)

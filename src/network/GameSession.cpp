@@ -1576,10 +1576,13 @@ namespace gargantuan::network {
 									Result.ObservedAtMicroseconds, Result.Qualified, Result.Available, PeerValue.ReliableFeedback.OrdinaryDebt});
 							}
 							if (IsPooled()) (void)ByteAdmission->Allowance(Connection, ServiceTime());
+							if (IsPooled()) ByteAdmission->ObserveExactDemand(Connection,
+								Produced.EncodedFrame.size() + ReliableServiceEnvelopeBytes, ServiceTime(), Produced.DiagnosticFingerprint);
 							Receipt = ByteAdmission->Reserve(Connection, Produced.EncodedFrame.size() + ReliableServiceEnvelopeBytes);
 							if (!Receipt) {
 								if (IsPooled() && Replication->DiscardSchedulerPreparation(Connection, Produced.Frame->Sequence).Succeeded()) {
-									ByteAdmission->DeferSize(Connection, Produced.EncodedFrame.size() + ReliableServiceEnvelopeBytes);
+									ByteAdmission->DeferSize(Connection, Produced.EncodedFrame.size() + ReliableServiceEnvelopeBytes,
+										Produced.DiagnosticFingerprint);
 									PeerValue.ByteDeferredThisStep = true;
 									PeerValue.StructuralTransitionsConsumedThisStep += Produced.SelectedTransitions;
 									GlobalConsumed += Produced.SelectedTransitions;
@@ -1616,7 +1619,7 @@ namespace gargantuan::network {
 						// terminates the peer. Do not refund already accepted traffic.
 						const bool OfferPublished = !Receipt || !IsPooled() || PeerValue.Phase != PeerPhase::Ready ||
 							PeerValue.ReliableFeedback.PublishOffer(Receipt->Token, Receipt->Bytes, GrantActivatedAt);
-						if (Receipt && (!ByteAdmission->Commit(*Receipt) ||
+						if (Receipt && (!ByteAdmission->Commit(*Receipt, GrantActivatedAt) ||
 							(IsPooled() && !Scheduler.ActivateReliableGrant(Connection, Receipt->Token, GrantActivatedAt)) ||
 							!OfferPublished)) {
 							PendingPeerFailures.try_emplace(Connection, DisconnectInfo{DisconnectReason::ResourceExhaustion,
@@ -1698,7 +1701,8 @@ namespace gargantuan::network {
 							}
 							auto DeferBytes = [&](const ReplicationProduceResult &Produced) {
 								if (!Produced.DeferredForBytes) return false;
-								ByteAdmission->DeferSize(Connection, Produced.RequiredFrameBytes + ReliableServiceEnvelopeBytes);
+								ByteAdmission->DeferSize(Connection, Produced.RequiredFrameBytes + ReliableServiceEnvelopeBytes,
+									Produced.DiagnosticFingerprint);
 								Peer->second.ByteDeferredThisStep = true;
 								Consumed += Produced.SelectedTransitions;
 								GlobalConsumed += Produced.SelectedTransitions;
