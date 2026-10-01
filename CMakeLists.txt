@@ -4,6 +4,15 @@
 cmake_minimum_required(VERSION 3.25)
 project(gargantuan CXX)
 
+# On Windows, vcpkg appends z-applocal to each Ninja link rule. Those commands
+# copy dependencies into the same output directory, so parallel links can race
+# on a DLL even when the link inputs themselves are independent. Keep compile
+# jobs parallel while serializing the combined link and app-local copy rules.
+if(WIN32 AND CMAKE_GENERATOR MATCHES "^Ninja" AND VCPKG_APPLOCAL_DEPS)
+	set_property(GLOBAL APPEND PROPERTY JOB_POOLS GargantuanVcpkgApplocalLink=1)
+	set(CMAKE_JOB_POOL_LINK GargantuanVcpkgApplocalLink)
+endif()
+
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)

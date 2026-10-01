@@ -35,6 +35,11 @@ GARGANTUAN_BUILD_GLAZE_SERIALIZATION_PROTOTYPE=OFF
 GARGANTUAN_GLSLC_EXECUTABLE=<discovered pinned Vulkan SDK glslc.exe>
 ```
 
+The Windows vcpkg toolchain runs its app-local dependency copy after each link.
+Those copies share an output directory, so CMake assigns Windows Ninja links
+to a one-job pool when app-local deployment is enabled. This preserves parallel
+compilation while preventing concurrent app-local copies from racing on a DLL.
+
 Filament and the Glaze prototype are not part of either gate. The Windows job
 builds the normal engine, SDL renderer sources, shaders, pinned
 GameNetworkingSockets adapter, and native regression targets. The Linux job
