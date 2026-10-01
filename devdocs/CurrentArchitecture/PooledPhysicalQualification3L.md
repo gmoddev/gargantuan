@@ -1969,6 +1969,15 @@ read-only preflight inventories CPU, RAM, disk, process baseline, direct-fiber
 route/link/MTU, UDP listener ownership and Node certificate/token presence.
 These controls are infrastructure checks, not provider acceptance.
 
+The separate two-host coordinator workflow now uses fixed role-local operations:
+launch Server, observe its ready marker, launch 32 Players, observe the producer
+Player's typed ready record, poll both roles within bounded transitions, and
+collect the two exact run results. The adapter pins its PowerShell executable,
+supervisor, full run manifest and source commit, accepts no wire-supplied paths
+or arguments, and kills only its owned supervisor tree on abort. Five local
+tests include an actual pinned Host/Join lifecycle with PowerShell children.
+These tests qualify the control path, not application or capture evidence.
+
 The offline reconciler verifies both immutable evidence indexes and the same
 pinned run manifest, joins all 32 server/client identities, checks the five
 phase and content-observation records, one-producer typed gameplay results,

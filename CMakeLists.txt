@@ -819,6 +819,14 @@ if(BUILD_TESTING)
 			add_test(NAME gargantuan_physical_game_session_farm_preflight
 				COMMAND "${GARGANTUAN_PWSH_EXECUTABLE}" -NoProfile -File
 				"${CMAKE_CURRENT_SOURCE_DIR}/tests/PhysicalGameSessionFarmPreflightTests.ps1")
+			add_test(NAME gargantuan_farm32_worker_capture_hook
+				COMMAND "${GARGANTUAN_PWSH_EXECUTABLE}" -NoProfile -File
+				"${CMAKE_CURRENT_SOURCE_DIR}/tools/physical-qualifier/tests/TestCaptureHooks.ps1"
+				-HookPath "${CMAKE_CURRENT_SOURCE_DIR}/tools/physical-qualifier/worker/PktMonFarm32Capture.ps1"
+				-Farm32)
+			add_test(NAME gargantuan_farm32_client_capture_source
+				COMMAND "${GARGANTUAN_PWSH_EXECUTABLE}" -NoProfile -File
+				"${CMAKE_CURRENT_SOURCE_DIR}/tools/physical-qualifier/tests/TestDumpcapFarm32Capture.ps1")
 		endif()
 	endif()
 	add_executable(gargantuan_gui_foundation_benchmark "tests/GuiFoundationBenchmark.cpp")
