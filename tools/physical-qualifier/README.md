@@ -22,12 +22,12 @@ four-process loopback stress case failed D01's charged service-deficit bound;
 it did not exercise the physical path.
 The D01 manifest and probe hashes are deployment history, not F1 qualification.
 The corrected F1 candidate pins native source revision
-`83ee0abf6dd5743d4cdf74a83c363db4a5305b9c`, pinned GNS
+`ce4733de8d68086667bc8fe5138bcc743f21c54e`, pinned GNS
 `2cb93a06350bb065db53abdb0d87cf297e0bfd34`,
 F1 native-source archive SHA-256
-`E8BD4673BD1E127D8D9573AB475C190931E25D197E72CD3B8A9C67BDED129B46`,
+`18AF89DAEEF3D5DD8E1AC6ED7089EDBEF278990AA211CBB4E54BCF3555D846FB`,
 and Windows probe SHA-256
-`46FA8689EFF320AE71DC2805AF41F7A813E4DBD837CEF77C9DFFEE63D4D92271`.
+`925DC0684787B1D629901D5047FF9ECC968AFC5F4E579DE576F701322E9BB99F`.
 The [F1 manifest](phase1-f1-source-manifest.json) also pins all twelve runtime
 assets and the two native DLLs required beside the probe executable; the Phase 1
 adapter checks their hashes and rejects the earlier D01

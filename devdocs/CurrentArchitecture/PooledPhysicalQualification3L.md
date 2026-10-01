@@ -1,10 +1,47 @@
 ---
 status: f1-phase1-production-service-fail
 owner: runtime-networking-and-runtime-host
-last_verified: 2026-09-30
+last_verified: 2026-10-01
 ---
 
 # Foundation 3L pooled physical qualification attempt
+
+## Corrected F1 candidate deterministic preflight (2026-10-01)
+
+Source commit `ce4733de8d68086667bc8fe5138bcc743f21c54e` keeps the
+grant-scoped F1 constants unchanged and avoids a redundant native status/config
+read immediately before submitting each token-bearing POOLED_SERVICE structural
+message. The scoped `ReliableNoNagle` tail correction and precise native
+first-send attribution remain in place. This additional hot-path change is
+supported by source inspection and repeatability evidence; the exact callsite
+responsible for the earlier rare status-to-send stall was **NOT MEASURED**.
+
+The pinned-GNS Windows fixture reproduces the historical ordinary-Reliable
+1,135 + 123-byte split with a 4,979-µs tail gap and F1 failure. The corrected
+1,258-byte fixture keeps that split but first-sends the tail 14 µs later and
+passes the unchanged running bound. Packet-boundary, tiny and 512-KiB sizes,
+mixed reliable traffic, four maximum grants, ACK and retirement, and source
+checks passed locally. The qualifier suite passed 70/70. The candidate's
+32-wave real-GameSession four-client loopback campaign passed **100/100**
+independent runs, **12,800** maximum-grant peer obligations, and 400 peer
+result lines. Every run had four-grant overlap and local cleanup; the minimum
+reported common overlap was 444,048 µs. The largest observed individual
+running deficit was 12,816,974,912 byte-µs, below the unchanged
+18,025,216,000-byte-µs bound. Cumulative accepted and retired bytes both
+equaled 6,713,450,520. Process exit codes were **NOT MEASURED** by this
+campaign wrapper; probe-level PASS, conservation, and cleanup were checked
+from retained logs. These worker-local results are deterministic preflight,
+**not physical F1 evidence**.
+
+The versioned candidate pins source archive SHA-256
+`18AF89DAEEF3D5DD8E1AC6ED7089EDBEF278990AA211CBB4E54BCF3555D846FB`
+and Windows probe SHA-256
+`925DC0684787B1D629901D5047FF9ECC968AFC5F4E579DE576F701322E9BB99F`.
+The archive verified against all 31 source paths in the worker build tree.
+Historical failed runs below retain their original source and measured verdicts.
+Hosted execution-changing CI, endpoint preflight, capture and a fresh physical
+F1 attempt are separate required gates. **KI-006 OPEN; Foundation 3L B —
+PARTIALLY READY; no 3M.**
 
 ## F1 Phase 1 reached native drain and failed its running bound (2026-09-30)
 

@@ -1,10 +1,26 @@
 ---
 status: partial-validation
 owner: runtime-networking
-last_verified: 2026-09-30
+last_verified: 2026-10-01
 ---
 
 # Foundation 3L.3 diagnostic validation ledger
+
+## Corrected F1 transport candidate worker-local qualification (2026-10-01)
+
+The [candidate receipt](PooledPhysicalQualification3L.md#corrected-f1-candidate-deterministic-preflight-2026-10-01)
+pins source `ce4733de8d68086667bc8fe5138bcc743f21c54e`, the corrected
+`ReliableNoNagle` structural tail path, and the subsequent pre-send diagnostic
+sampling correction. The pinned-GNS old/new 1,258-byte regression passed its
+expected FAIL/PASS comparison, the qualifier suite passed 70/70, and 100/100
+worker-local four-client 32-wave GameSession campaigns passed with common
+four-grant overlap, exact accepted/retired conservation and per-run cleanup.
+The largest observed peer running deficit was 12,816,974,912 byte-µs against
+F1's unchanged 18,025,216,000-byte-µs bound. Exact attribution of the older
+rare status-to-send stall remains **NOT MEASURED**. Hosted CI, endpoint
+staging, capture, physical service and outer lifecycle remain separate gates;
+this entry does not supersede the historical physical FAIL below. **KI-006
+OPEN; Foundation 3L B — PARTIALLY READY; no 3M.**
 
 ## F1 physical Phase 1 native running-drain failure (2026-09-30)
 
