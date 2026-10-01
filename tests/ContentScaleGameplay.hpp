@@ -35,7 +35,7 @@ namespace gargantuan::test {
 	};
 
 	inline void AddScaleGameplay(const std::shared_ptr<DataModel> &World, bool MeasureWithoutDiagnosticBroadcast = false,
-		bool Qualified = false) {
+		bool Qualified = false, std::uint32_t ProducerPlayerId = 0, bool PhysicalFarm = false) {
 		auto Assets = std::dynamic_pointer_cast<AssetService>(World->GetService("AssetService"));
 		DiskFilesystem Filesystem(std::filesystem::path(GARGANTUAN_FIRST_COMPLETE_GAME_ROOT));
 		Assets->LoadProjectAssets(Filesystem);
@@ -43,15 +43,70 @@ namespace gargantuan::test {
 		Event->SetName("ScaleEvent"); Event->SetParent(World);
 		auto Function = std::make_shared<RemoteFunction>();
 		Function->SetName("ScaleFunction"); Function->SetParent(World);
+		if (PhysicalFarm) {
+			auto PhaseControl = std::make_shared<RemoteEvent>();
+			PhaseControl->SetName("ScalePhaseControl"); PhaseControl->SetParent(World);
+		}
 		auto ServerScript = std::make_shared<Script>();
 		ServerScript->SetName("ScaleServerPolicy");
 		ServerScript->SetRunContext(Enums::RunContext::Server);
 		ServerScript->SetSource(std::string("local ReplicateDiagnosticCounter = ") +
-			(MeasureWithoutDiagnosticBroadcast ? "false\n" : "true\n") + R"(
+			(MeasureWithoutDiagnosticBroadcast ? "false\n" : "true\n") +
+			"local PhysicalFarm = " + (PhysicalFarm ? "true\n" : "false\n") + R"(
 local Control = game:GetService("CharacterControlService")
 local Players = game:GetService("Players")
 local Function = game:FindFirstChild("ScaleFunction")
 local Event = game:FindFirstChild("ScaleEvent")
+if PhysicalFarm then
+    local PhaseControl = game:FindFirstChild("ScalePhaseControl")
+    local RunService = game:GetService("RunService")
+    local CurrentPhase = nil
+    local PendingCompletion = nil
+    local PhaseAcknowledgements = {}
+    local AcknowledgementCount = 0
+    local PhaseTick = 0
+    local LastBroadcastTick = -60
+    PhaseControl.OnServerEvent:Connect(function(Peer, Kind, Phase)
+        if Kind == "ready" then
+            if CurrentPhase then PhaseControl:FireClient(Peer.Slot, Peer.Generation, "phase", CurrentPhase) end
+        elseif Kind == "phase_ack" and Phase == CurrentPhase then
+            local PeerKey = tostring(Peer.Slot) .. ":" .. tostring(Peer.Generation)
+            if not PhaseAcknowledgements[PeerKey] then
+                PhaseAcknowledgements[PeerKey] = true
+                AcknowledgementCount += 1
+            end
+        elseif Kind == "complete" and Phase == CurrentPhase and
+            Peer.Slot == game:GetAttribute("ScaleProducerConnectionSlot") and
+            Peer.Generation == game:GetAttribute("ScaleProducerConnectionGeneration") then
+            PendingCompletion = Phase
+            print(string.format("[Content:ScalePhase] event=producer_complete phase=%s peer_slot=%d peer_generation=%d",
+                Phase, Peer.Slot, Peer.Generation))
+        end
+    end)
+    RunService.PostSimulation:Connect(function()
+        PhaseTick += 1
+        local NextPhase = game:GetAttribute("ScalePhase")
+        if type(NextPhase) == "string" and NextPhase ~= CurrentPhase then
+            CurrentPhase = NextPhase
+            PendingCompletion = nil
+            PhaseAcknowledgements = {}
+            AcknowledgementCount = 0
+            Control:SetAttribute("ScalePhaseAcks", 0)
+            Control:SetAttribute("ScaleRemoteDone", nil)
+            LastBroadcastTick = PhaseTick - 60
+        end
+        if CurrentPhase and AcknowledgementCount < 32 and PhaseTick - LastBroadcastTick >= 60 then
+            LastBroadcastTick = PhaseTick
+            local Ok = pcall(function() PhaseControl:FireAllClients("phase", CurrentPhase) end)
+            if Ok then print(string.format("[Content:ScalePhase] event=broadcast phase=%s", CurrentPhase)) end
+        end
+        if PendingCompletion == CurrentPhase and CurrentPhase then
+            Control:SetAttribute("ScaleRemoteDone", CurrentPhase)
+            PendingCompletion = nil
+        end
+        if CurrentPhase then Control:SetAttribute("ScalePhaseAcks", AcknowledgementCount) end
+    end)
+end
 assert(Control:RegisterAction("ScaleLunge", "asset://d9d9e9649adbad59588d137c2a642e1d", 0.5, Vector3.new(0.9, 0, 0), 0, true))
 Control:SetActionPolicy(function(Player, Character, Name)
     return Player.Character == Character and Name == "ScaleLunge"
@@ -68,13 +123,28 @@ Function:SetServerHandler(function(Peer, Message) return Message end)
 		auto ClientScript = std::make_shared<Script>();
 		ClientScript->SetName("ScaleClientTraffic");
 		ClientScript->SetRunContext(Enums::RunContext::Client);
-		ClientScript->SetSource(std::string("local Qualified = ") + (Qualified ? "true\n" : "false\n") + R"(
+		ClientScript->SetSource(std::string("local Qualified = ") + (Qualified ? "true\n" : "false\n") +
+			"local ProducerPlayerId = " + std::to_string(ProducerPlayerId) + "\n" +
+			"local PhysicalFarm = " + (PhysicalFarm ? "true\n" : "false\n") + R"(
 local Control = game:GetService("CharacterControlService")
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local Function = game:FindFirstChild("ScaleFunction")
 local Event = game:FindFirstChild("ScaleEvent")
+local PhaseControl = if PhysicalFarm then game:FindFirstChild("ScalePhaseControl") else nil
 assert(Control:RegisterAction("ScaleLunge", "asset://d9d9e9649adbad59588d137c2a642e1d", 0.5, Vector3.new(0.9, 0, 0), 0, true))
+local PendingPhaseAcknowledgement = nil
+local PendingPhaseCompletion = nil
+local PhaseReadySent = false
+if PhaseControl then
+    PhaseControl.OnClientEvent:Connect(function(Kind, Phase)
+        if Kind == "phase" and type(Phase) == "string" then
+            Control:SetAttribute("ScalePhase", Phase)
+            PendingPhaseAcknowledgement = Phase
+            print(string.format("[Content:ScalePhase] event=received phase=%s", Phase))
+        end
+    end)
+end
 local Phase = nil
 Control:SetAttribute("ScaleClientStarted", true)
 local Tick = 0
@@ -87,6 +157,7 @@ local EventSamples = {}
 local ActionSamples = {}
 local LastEventAck = 0
 local EventMaxGapUs = 0
+local ProducerReported = false
 Event.OnClientEvent:Connect(function(Message, Sequence)
     local Started = EventPending[Sequence]
     if not Started then return end
@@ -126,8 +197,37 @@ Control.ActionEnded:Connect(function(_, Name)
     Control:SetAttribute("ScaleActionEndings", Endings)
 end)
 RunService.PostSimulation:Connect(function()
-    if not Players.LocalPlayer or not Players.LocalPlayer.Character then return end
+    local LocalPlayer = Players.LocalPlayer
+    if not LocalPlayer then return end
+    if PhaseControl then
+        if not PhaseReadySent then
+            PhaseReadySent = pcall(function() PhaseControl:FireServer("ready", "") end)
+        end
+        if PendingPhaseAcknowledgement then
+            local Acknowledged = pcall(function()
+                PhaseControl:FireServer("phase_ack", PendingPhaseAcknowledgement)
+            end)
+            if Acknowledged then PendingPhaseAcknowledgement = nil end
+        end
+        if PendingPhaseCompletion then
+            local Completed = pcall(function()
+                PhaseControl:FireServer("complete", PendingPhaseCompletion)
+            end)
+            if Completed then PendingPhaseCompletion = nil end
+        end
+    end
+    if not ProducerReported then
+        ProducerReported = true
+        local IsProducer = ProducerPlayerId == 0 or LocalPlayer.PlayerId == ProducerPlayerId
+        Control:SetAttribute("ScaleTrafficProducer", IsProducer)
+        Control:SetAttribute("ScaleTrafficPlayerId", LocalPlayer.PlayerId)
+        print(string.format("[Content:ScaleProducer] player_id=%d selected=%s policy_player_id=%d",
+            LocalPlayer.PlayerId, tostring(IsProducer), ProducerPlayerId))
+    end
     local NextPhase = Control:GetAttribute("ScalePhase")
+    if PhysicalFarm and NextPhase == "complete" then return end
+    if ProducerPlayerId ~= 0 and LocalPlayer.PlayerId ~= ProducerPlayerId then return end
+    if not LocalPlayer.Character then return end
     if not NextPhase then return end
     Tick += 1
     if Tick % (if Qualified then 120 else 40) == 1 then
@@ -179,6 +279,7 @@ RunService.PostSimulation:Connect(function()
         Control:SetAttribute("ScaleActionMetrics", Metrics("Action", ActionSamples))
         Control:SetAttribute("ScaleEventMaxGapUs", EventMaxGapUs)
         Control:SetAttribute("ScaleRemoteDone", RunningPhase)
+        if PhaseControl then PendingPhaseCompletion = RunningPhase end
     end)
 end)
 )");

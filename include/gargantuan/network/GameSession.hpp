@@ -15,6 +15,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <vector>
 
 namespace gargantuan {
 	class DataModel;
@@ -57,6 +58,16 @@ namespace gargantuan::network {
 
 		[[nodiscard]] bool IsValid() const;
 		[[nodiscard]] static NetworkLimits DefaultLimits();
+	};
+
+	// Read-only connection evidence for a bounded host qualification run. The
+	// nonce is client-supplied identity, not authentication or Player authority.
+	struct GameSessionPeerIdentity {
+		ConnectionId Connection;
+		std::uint64_t Nonce = 0;
+		std::uint64_t SessionEpoch = 0;
+		std::uint32_t PlayerId = 0;
+		bool Ready = false;
 	};
 
 	struct GameSessionMetrics {
@@ -250,6 +261,7 @@ namespace gargantuan::network {
 		[[nodiscard]] std::shared_ptr<DataModel> GetClientDataModel() const;
 		[[nodiscard]] std::optional<ConnectionId> GetPrimaryConnection() const;
 		[[nodiscard]] std::shared_ptr<Player> GetAcceptedPlayer(ConnectionId Connection) const;
+		[[nodiscard]] std::vector<GameSessionPeerIdentity> GetPeerIdentities() const;
 		bool SetTrustedReplicationFocus(ConnectionId Connection, std::span<const glm::vec3> FocusPoints);
 
 	  private:

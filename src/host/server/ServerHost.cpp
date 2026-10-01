@@ -1,4 +1,5 @@
 #include "host/server/ServerHost.hpp"
+#include "host/server/PhysicalScaleQualification.hpp"
 
 #include "host/common/PackagedHost.hpp"
 #include "gargantuan/Engine.hpp"
@@ -10,12 +11,14 @@
 #include "gargantuan/render/Renderer.hpp"
 
 #include <argparse/argparse.hpp>
+#include <algorithm>
 #include <chrono>
 #include <csignal>
 #include <filesystem>
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <map>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -128,6 +131,9 @@ namespace gargantuan::host {
 		Program.add_argument("--startup-smoke").flag().help("exit after a bounded authoritative startup smoke");
 		Program.add_argument("--session-smoke").flag().help("require a bounded packaged game-session acceptance proof");
 		Program.add_argument("--max-ticks").scan<'i', int>().default_value(0).help("bounded test-only server tick count");
+		Program.add_argument("--farm-run-id").default_value(std::string()).help("bounded qualification run identity");
+		Program.add_argument("--farm-peers").scan<'i', int>().default_value(0).help("expected actual GameSession clients (1-32)");
+		Program.add_argument("--farm-scale-workload").flag().help("run the bounded 32-client qualified scale matrix");
 		Program.add_argument("--reliable-rate").scan<'u', std::uint64_t>().default_value(std::uint64_t{0})
 			.help("trusted per-connection application byte reservation per second; requires aggregate rate and peers");
 		Program.add_argument("--reliable-mode").default_value(std::string("FULL_RESERVATION"))
@@ -299,12 +305,28 @@ namespace gargantuan::host {
 		const auto BindEndpoint = BindText.empty() ? std::nullopt : ParseEndpoint(BindText);
 		const bool StartupSmoke = Program.is_used("--startup-smoke");
 		const bool SessionSmoke = Program.is_used("--session-smoke");
+		const auto FarmRunId = Program.get<std::string>("--farm-run-id");
+		const auto FarmPeers = Program.get<int>("--farm-peers");
+		const bool FarmScaleWorkload = Program.is_used("--farm-scale-workload");
+		const bool FarmMode = !FarmRunId.empty() || FarmPeers != 0 || FarmScaleWorkload;
+		const auto ValidFarmRunId = std::all_of(FarmRunId.begin(), FarmRunId.end(), [](char Value) {
+			return (Value >= 'A' && Value <= 'Z') || (Value >= 'a' && Value <= 'z') ||
+				(Value >= '0' && Value <= '9') || Value == '-';
+		});
+		if (FarmMode && (FarmRunId.empty() || FarmRunId.size() > 64 || !ValidFarmRunId ||
+			FarmPeers < 1 || FarmPeers > 32 || Program.get<int>("--max-ticks") <= 0 ||
+			!BindEndpoint || SessionSmoke || StartupSmoke ||
+			(FarmScaleWorkload && (FarmPeers != 32 || Program.get<int>("--max-ticks") < 7200 ||
+				Residency != ContentResidencyMode::OnDemand)))) {
+			std::cerr << "[Qualification:Server] Invalid bounded farm arguments.\n";
+			return 2;
+		}
 #if defined(GARGANTUAN_WITH_GNS)
 		TransportServiceSmoke TransportTrace(SessionSmoke, "server");
 #endif
 		// Keep bounded acceptance diagnostics available even if the harness must
 		// terminate a failed long-running smoke process.
-		if (SessionSmoke || ContentChurnCycles != 0) {
+		if (SessionSmoke || FarmMode || ContentChurnCycles != 0) {
 			std::cout << std::unitbuf;
 			SDL_SetLogOutputFunction([](void *, int, SDL_LogPriority, const char *Message) {
 				std::cerr << Message << '\n';
@@ -535,6 +557,14 @@ namespace gargantuan::host {
 			auto PreviousTickStarted = TickDeadline;
 			auto PreviousSessionMetrics = network::GameSessionMetrics{};
 			std::uint32_t ProfileTicks = 0;
+			std::map<std::uint64_t, network::ConnectionId> FarmIdentities;
+			std::size_t FarmReadyHighWater = 0;
+			bool FarmIdentityConflict = false;
+			std::unique_ptr<PhysicalScaleQualification> ScaleQualification;
+			if (FarmScaleWorkload) ScaleQualification = std::make_unique<PhysicalScaleQualification>(*Runtime, *Session, FarmRunId);
+			if (FarmMode)
+				std::cout << "[Qualification:Server] event=start run=" << FarmRunId
+					<< " provider=" << ProviderName << " expected=" << FarmPeers << '\n';
 			if (SessionSmoke)
 				std::cout << "[Runtime:ServerFrame] unix_us,tick,interval_ns,poll_ns,engine_ns,session_ns,encode_ns,relevance_ns,materialize_ns,selected,committed,pending,wire_bytes\n";
 			while (Runtime->ProcessService->Alive && StopRequested == 0) {
@@ -547,6 +577,26 @@ namespace gargantuan::host {
 					Session->Step(Runtime->GetSimulationTick());
 					if (Session->GetStatus() == network::GameSessionStatus::Failed)
 						throw std::runtime_error(Session->GetFailure());
+					if (FarmMode) {
+						const auto Current = Session->GetMetrics();
+						FarmReadyHighWater = std::max(FarmReadyHighWater, static_cast<std::size_t>(Current.ReadyPeers));
+						for (const auto &Peer : Session->GetPeerIdentities()) {
+							if (!Peer.Ready) continue;
+							const auto [Iterator, Inserted] = FarmIdentities.emplace(Peer.Nonce, Peer.Connection);
+							if (!Inserted && Iterator->second != Peer.Connection) FarmIdentityConflict = true;
+							if (Inserted)
+								std::cout << "[Qualification:Server] event=ready run=" << FarmRunId
+									<< " nonce=" << Peer.Nonce << " connection_slot=" << Peer.Connection.Slot
+									<< " connection_generation=" << Peer.Connection.Generation
+									<< " session_epoch=" << Peer.SessionEpoch << " player_id=" << Peer.PlayerId
+									<< " monotonic_us=" << std::chrono::duration_cast<std::chrono::microseconds>(
+										std::chrono::steady_clock::now().time_since_epoch()).count() << '\n';
+						}
+					if (ScaleQualification) {
+						ScaleQualification->Step(Runtime->GetSimulationTick());
+						if (ScaleQualification->IsComplete()) Runtime->ProcessService->MarkExit(0);
+					}
+					}
 					if (SessionSmoke) {
 						const auto Metrics = Session->GetMetrics();
 						const bool ContentProofComplete = ContentLifecycleKey.empty() ||
@@ -765,7 +815,10 @@ namespace gargantuan::host {
 				}
 				if (MaximumTicks > 0 && ++Ticks >= MaximumTicks) {
 					const bool ContentIncomplete = !ContentLifecycleKey.empty() && ContentStage != ContentSmokeStage::Complete;
-					Runtime->ProcessService->MarkExit(SessionSmoke ? 8 : (ContentIncomplete ? 9 : 0));
+					const bool FarmIncomplete = FarmMode && (FarmReadyHighWater != static_cast<std::size_t>(FarmPeers) ||
+						FarmIdentities.size() != static_cast<std::size_t>(FarmPeers) || FarmIdentityConflict ||
+						(ScaleQualification && !ScaleQualification->IsComplete()));
+					Runtime->ProcessService->MarkExit(SessionSmoke ? 8 : (FarmIncomplete ? 10 : (ContentIncomplete ? 9 : 0)));
 				}
 				if (BindEndpoint) {
 					TickDeadline += std::chrono::microseconds(16'667);
@@ -778,7 +831,18 @@ namespace gargantuan::host {
 					std::this_thread::sleep_for(std::chrono::milliseconds(1));
 			}
 
-			const auto ExitCode = Runtime->ProcessService->ExitCode;
+			int ExitCode = Runtime->ProcessService->ExitCode;
+			if (FarmMode && (FarmReadyHighWater != static_cast<std::size_t>(FarmPeers) ||
+				FarmIdentities.size() != static_cast<std::size_t>(FarmPeers) || FarmIdentityConflict ||
+				(ScaleQualification && !ScaleQualification->IsComplete())))
+				ExitCode = 10;
+			if (FarmMode)
+				std::cout << "[Qualification:Server] event=result run=" << FarmRunId
+					<< " provider=" << ProviderName << " expected=" << FarmPeers
+					<< " ready_high_water=" << FarmReadyHighWater
+					<< " unique_ready=" << FarmIdentities.size()
+					<< " identity_conflict=" << FarmIdentityConflict
+					<< " exit=" << ExitCode << '\n';
 			if (Session && HostConfiguration.ReliableService) {
 				const auto Metrics = Session->GetMetrics();
 				const auto &M = Metrics.ReliableAdmission;

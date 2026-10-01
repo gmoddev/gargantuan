@@ -794,6 +794,13 @@ if(BUILD_TESTING)
 		GARGANTUAN_RUNTIME_DISTRIBUTION_ROOT="$<TARGET_FILE_DIR:gargantuan_player>/RuntimeDistribution"
 	)
 	add_dependencies(gargantuan_packaging_benchmark gargantuan_runtime_distribution)
+	add_executable(gargantuan_qualified_scale_package "tests/QualifiedScalePackage.cpp")
+	target_link_libraries(gargantuan_qualified_scale_package PRIVATE gargantuan_core nlohmann_json)
+	target_compile_definitions(gargantuan_qualified_scale_package PRIVATE
+		GARGANTUAN_FIRST_COMPLETE_GAME_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/samples/FirstCompleteGame"
+	)
+	add_dependencies(gargantuan_qualified_scale_package
+		gargantuan_runtime_distribution gargantuan_server_runtime_distribution)
 	add_executable(gargantuan_gui_foundation_benchmark "tests/GuiFoundationBenchmark.cpp")
 	target_link_libraries(gargantuan_gui_foundation_benchmark PRIVATE gargantuan_core)
 	add_executable(gargantuan_prerun_bootstrap_tests "tests/PreRunBootstrapTests.cpp")

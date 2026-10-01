@@ -46,6 +46,25 @@ GargantuanRequireRejected(
 	"Player Node endpoint" "${GARGANTUAN_PLAYER}" "arguments are invalid" --content-node-endpoint 127.0.0.1:46002
 )
 GargantuanRequireRejected(
+	"Player incomplete client farm" "${GARGANTUAN_PLAYER}" "client farm arguments are invalid"
+	--farm-run-id farm-test
+)
+GargantuanRequireRejected(
+	"Player zero farm nonce" "${GARGANTUAN_PLAYER}" "client farm arguments are invalid"
+	--headless --connect 127.0.0.1:46001 --max-frames 4
+	--farm-run-id farm-test --farm-slot 0 --farm-client-nonce 0
+)
+GargantuanRequireRejected(
+	"Player out-of-range farm slot" "${GARGANTUAN_PLAYER}" "client farm arguments are invalid"
+	--headless --connect 127.0.0.1:46001 --max-frames 4
+	--farm-run-id farm-test --farm-slot 32 --farm-client-nonce 1
+)
+GargantuanRequireRejected(
+	"Player unbounded farm" "${GARGANTUAN_PLAYER}" "client farm arguments are invalid"
+	--headless --connect 127.0.0.1:46001
+	--farm-run-id farm-test --farm-slot 0 --farm-client-nonce 1
+)
+GargantuanRequireRejected(
 	"Server client connect" "${GARGANTUAN_SERVER}" "use GargantuanPlayer" --connect 127.0.0.1:46001
 )
 GargantuanRequireRejected(
@@ -70,6 +89,10 @@ GargantuanRequireRejected(
 GargantuanRequireParserAccepted("Offline Player" "${GARGANTUAN_PLAYER}")
 GargantuanRequireParserAccepted(
 	"Network Player" "${GARGANTUAN_PLAYER}" --connect 127.0.0.1:46001
+)
+GargantuanRequireParserAccepted(
+	"Bounded client farm Player" "${GARGANTUAN_PLAYER}" --headless --connect 127.0.0.1:46001 --max-frames 4
+	--farm-run-id farm-test --farm-slot 0 --farm-client-nonce 1
 )
 GargantuanRequireParserAccepted(
 	"Dedicated Server" "${GARGANTUAN_SERVER}" --bind 127.0.0.1:46001

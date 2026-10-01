@@ -2215,6 +2215,20 @@ namespace gargantuan::network {
 				   ? Iterator->second.PlayerValue
 				   : nullptr;
 	}
+	std::vector<GameSessionPeerIdentity> GameSession::GetPeerIdentities() const {
+		std::vector<GameSessionPeerIdentity> Result;
+		Result.reserve(State->Peers.size());
+		for (const auto &[Connection, PeerValue] : State->Peers)
+			if (PeerValue.Phase == PeerPhase::Accepted || PeerValue.Phase == PeerPhase::Ready)
+				Result.push_back(GameSessionPeerIdentity{
+					.Connection = Connection,
+					.Nonce = PeerValue.Nonce,
+					.SessionEpoch = PeerValue.SessionEpoch,
+					.PlayerId = PeerValue.PlayerId,
+					.Ready = PeerValue.Phase == PeerPhase::Ready,
+				});
+		return Result;
+	}
 	bool GameSession::SetTrustedReplicationFocus(ConnectionId Connection, std::span<const glm::vec3> FocusPoints) {
 		return State->Configuration.Role == GameSessionRole::Server && State->Relevance &&
 			   State->Relevance->SetTrustedFocus(Connection, FocusPoints);

@@ -14,13 +14,16 @@
 
 #include <SDL3/SDL.h>
 #include <argparse/argparse.hpp>
+#include <array>
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <iostream>
 #include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <thread>
 
 #if defined(GARGANTUAN_WITH_GNS)
@@ -39,6 +42,11 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 	Program.add_argument("--session-smoke").flag().help("require a bounded packaged game-session acceptance proof");
 	Program.add_argument("--max-frames").scan<'i', int>().default_value(0).help("bounded test-only frame count");
 	Program.add_argument("--connect").default_value(std::string()).help("host:port for a network game client");
+	Program.add_argument("--farm-run-id").default_value(std::string()).help("bounded test-only client farm run identity");
+	Program.add_argument("--farm-slot").scan<'i', int>().default_value(-1).help("test-only client farm slot, 0 through 31");
+	Program.add_argument("--farm-client-nonce").scan<'u', std::uint64_t>().default_value(std::uint64_t{0})
+		.help("explicit nonzero test-only game-session client nonce");
+	Program.add_argument("--farm-scale-workload").flag().help("exit after bounded qualified scale workload completion");
 	Program.add_argument("--allow-insecure-development-network")
 		.flag()
 		.help("allow DevelopmentLocal networking beyond loopback; authentication is not provided");
@@ -55,6 +63,27 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 	}
 
 	const auto ClientText = Program.get<std::string>("--connect");
+	const auto FarmRunId = Program.get<std::string>("--farm-run-id");
+	const auto FarmSlot = Program.get<int>("--farm-slot");
+	const auto FarmClientNonce = Program.get<std::uint64_t>("--farm-client-nonce");
+	const bool FarmScaleWorkload = Program.is_used("--farm-scale-workload");
+	const bool FarmEnabled = Program.is_used("--farm-run-id") || Program.is_used("--farm-slot") ||
+		Program.is_used("--farm-client-nonce") || FarmScaleWorkload;
+	bool FarmRunIdValid = !FarmRunId.empty() && FarmRunId.size() <= 64;
+	for (const char Character : FarmRunId)
+		FarmRunIdValid = FarmRunIdValid && ((Character >= '0' && Character <= '9') ||
+			(Character >= 'A' && Character <= 'Z') || (Character >= 'a' && Character <= 'z') ||
+			Character == '-' || Character == '_');
+	if (FarmEnabled &&
+		(!Program.is_used("--farm-run-id") || !Program.is_used("--farm-slot") ||
+		 !Program.is_used("--farm-client-nonce") || !FarmRunIdValid || FarmSlot < 0 || FarmSlot >= 32 ||
+		 FarmClientNonce == 0 || !Program.is_used("--headless") || ClientText.empty() ||
+		 Program.get<int>("--max-frames") <= 0 || Program.get<int>("--max-frames") > 36'000 ||
+		 (FarmScaleWorkload && Program.get<int>("--max-frames") < 9000) ||
+		 Program.is_used("--session-smoke") || Program.is_used("--startup-smoke"))) {
+		std::cerr << "GargantuanPlayer client farm arguments are invalid.\n";
+		return 2;
+	}
 	const bool AllowInsecureDevelopmentNetwork = Program.is_used("--allow-insecure-development-network");
 	const auto ClientEndpoint = ClientText.empty() ? std::nullopt : host::ParseEndpoint(ClientText);
 	if ((!ClientText.empty() && !ClientEndpoint) ||
@@ -72,15 +101,44 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 		return 2;
 	}
 #endif
+	bool FarmReady = false;
+	bool FarmPlayerReady = false;
+	bool FarmCharacterReady = false;
+	bool FarmScaleCompleted = false;
+	constexpr std::array<std::string_view, 5> FarmScalePhases{"baseline", "load", "resident", "evict", "reload"};
+	std::size_t FarmScaleObservedPhases = 0;
+	std::string FarmScaleCurrentPhase;
+	std::optional<std::chrono::steady_clock::time_point> FarmScalePhaseSeen;
+	ObjectId FarmScaleFirstRoot;
+	auto FarmTimestamp = [] {
+		return std::chrono::duration_cast<std::chrono::nanoseconds>(
+			std::chrono::steady_clock::now().time_since_epoch()).count();
+	};
+	auto ReportFarmResult = [&](int ExitCode, std::string_view Reason) {
+		if (!FarmEnabled) return;
+		std::cout << "[Qualification:Client] event=result run_id=" << FarmRunId << " slot=" << FarmSlot
+				  << " nonce=" << FarmClientNonce << " status=" << (ExitCode == 0 ? "PASS" : "FAIL")
+				  << " exit_code=" << ExitCode << " reason=" << Reason
+				  << " session_ready=" << FarmReady << " local_player=" << FarmPlayerReady
+				  << " character=" << FarmCharacterReady << " steady_ns=" << FarmTimestamp() << std::endl;
+	};
+	if (FarmEnabled)
+		std::cout << "[Qualification:Client] event=start run_id=" << FarmRunId << " slot=" << FarmSlot
+				  << " nonce=" << FarmClientNonce << " steady_ns=" << FarmTimestamp() << std::endl;
 
 	const auto PackageRoot = Paths::GetExecutableDirectory().lexically_normal();
 	int BootstrapExitCode = 0;
 	auto Payload = host::BootstrapPackagedRuntime(PackageRoot, PackageRoot, "GargantuanPlayer", BootstrapExitCode);
-	if (!Payload) return BootstrapExitCode;
+	if (!Payload) {
+		const int ExitCode = FarmEnabled && BootstrapExitCode == 0 ? 7 : BootstrapExitCode;
+		ReportFarmResult(ExitCode, "package_bootstrap");
+		return ExitCode;
+	}
 
 	const bool Headless = Program.is_used("--headless");
 	if (!SDL_Init(Headless ? SDL_INIT_EVENTS : SDL_INIT_VIDEO)) {
 		std::cerr << "GargantuanPlayer could not initialize the platform runtime.\n";
+		ReportFarmResult(6, "platform_startup");
 		return 6;
 	}
 	struct SdlLifetime final {
@@ -111,6 +169,7 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 					.Role = network::GameSessionRole::Client,
 					.Endpoint = *ClientEndpoint,
 					.Limits = network::GameSessionConfiguration::DefaultLimits(),
+					.ClientNonce = FarmEnabled ? FarmClientNonce : 0,
 					.AllowInsecureDevelopmentNetwork = AllowInsecureDevelopmentNetwork,
 				}
 			);
@@ -161,6 +220,15 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 #if defined(GARGANTUAN_WITH_GNS)
 		if (!ClientText.empty() && !Session->AttachClientRuntime(*Runtime)) {
 			throw std::runtime_error("client game-session runtime bridge failed to attach");
+		}
+		if (FarmEnabled) {
+			const auto Connection = Session->GetPrimaryConnection();
+			FarmReady = Session->GetStatus() == network::GameSessionStatus::Ready && Connection.has_value();
+			if (!FarmReady) throw std::runtime_error("client farm game session did not reach Ready");
+			std::cout << "[Qualification:Client] event=ready run_id=" << FarmRunId << " slot=" << FarmSlot
+					  << " nonce=" << FarmClientNonce << " connection_slot=" << Connection->Slot
+					  << " connection_generation=" << Connection->Generation
+					  << " steady_ns=" << FarmTimestamp() << std::endl;
 		}
 #endif
 		Runtime->ProcessService->Alive = true;
@@ -238,7 +306,63 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 				Session->Step(Runtime->GetSimulationTick());
 				if (Session->GetStatus() == network::GameSessionStatus::Failed)
 					throw std::runtime_error(Session->GetFailure());
-				if (SessionSmoke) {
+				if (FarmEnabled) {
+					const auto LocalPlayer = Runtime->Players->GetLocalPlayer();
+					if (LocalPlayer && !FarmPlayerReady) {
+						FarmPlayerReady = true;
+						std::cout << "[Qualification:Client] event=player_ready run_id=" << FarmRunId << " slot="
+								  << FarmSlot << " nonce=" << FarmClientNonce << " steady_ns=" << FarmTimestamp() << std::endl;
+					}
+					if (LocalPlayer && (*LocalPlayer)->GetCharacter() && !FarmCharacterReady) {
+						FarmCharacterReady = true;
+						std::cout << "[Qualification:Client] event=character_ready run_id=" << FarmRunId << " slot="
+								  << FarmSlot << " nonce=" << FarmClientNonce << " steady_ns=" << FarmTimestamp() << std::endl;
+					}
+					if (FarmScaleWorkload && FarmReady && FarmPlayerReady) {
+						const auto Phase = Runtime->CharacterControl->GetAttributeValue("ScalePhase");
+						if (Phase) if (const auto *PhaseName = std::get_if<std::string>(&*Phase)) {
+							if (*PhaseName != FarmScaleCurrentPhase) {
+								FarmScaleCurrentPhase = *PhaseName;
+								FarmScalePhaseSeen = std::chrono::steady_clock::now();
+							}
+							if (*PhaseName == "complete") {
+								FarmScaleCompleted = FarmScaleObservedPhases == FarmScalePhases.size();
+								std::cout << "[Qualification:Client] event=scale_complete run_id=" << FarmRunId
+									<< " slot=" << FarmSlot << " nonce=" << FarmClientNonce
+									<< " observed_phases=" << FarmScaleObservedPhases
+									<< " steady_ns=" << FarmTimestamp() << std::endl;
+								Runtime->ProcessService->MarkExit(FarmScaleCompleted ? 0 : 16);
+							} else if (FarmScaleObservedPhases < FarmScalePhases.size() &&
+								*PhaseName == FarmScalePhases[FarmScaleObservedPhases]) {
+								const auto Root = Runtime->Workspace->FindFirstChild("ContentScaleRegion", false);
+								const auto Objects = Root ? Root->GetDescendants().size() + 1 : std::size_t{0};
+								const bool ExpectsResident = *PhaseName == "load" || *PhaseName == "resident" ||
+									*PhaseName == "reload";
+								if ((ExpectsResident && Objects == 512 &&
+									(*PhaseName != "reload" || Root->GetObjectId() != FarmScaleFirstRoot)) ||
+									(!ExpectsResident && Objects == 0)) {
+									if (*PhaseName == "load") FarmScaleFirstRoot = Root->GetObjectId();
+									const auto RootId = Root ? Root->GetObjectId() : ObjectId{};
+									const auto Elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
+										std::chrono::steady_clock::now() - *FarmScalePhaseSeen).count();
+									std::cout << "[Qualification:Client] event=phase_observed run_id=" << FarmRunId
+										<< " slot=" << FarmSlot << " nonce=" << FarmClientNonce
+										<< " phase=" << *PhaseName << " objects=" << Objects
+										<< " root_slot=" << RootId.Slot << " root_generation=" << RootId.Generation
+										<< " receive_to_observed_us=" << Elapsed
+										<< " steady_ns=" << FarmTimestamp() << std::endl;
+									++FarmScaleObservedPhases;
+								}
+						} else if (FarmScaleObservedPhases < FarmScalePhases.size() &&
+								(FarmScaleObservedPhases == 0 || *PhaseName != FarmScalePhases[FarmScaleObservedPhases - 1])) {
+								std::cout << "[Qualification:Client] event=phase_sequence_invalid run_id=" << FarmRunId
+									<< " slot=" << FarmSlot << " nonce=" << FarmClientNonce
+									<< " phase=" << *PhaseName << " observed_phases=" << FarmScaleObservedPhases << std::endl;
+								Runtime->ProcessService->MarkExit(16);
+						}
+					}
+				}
+			if (SessionSmoke) {
 					const auto Metrics = Session->GetMetrics();
 					const bool CameraReady = Headless || Runtime->Workspace->GetCurrentCamera()->GetCameraType() ==
 															 Enums::CameraType::Scriptable;
@@ -288,6 +412,8 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 			PreviousEventService = EventServiceStarted;
 			if (MaximumFrames > 0 && ++Frames >= MaximumFrames) {
 				int ExitCode = SessionSmoke ? 8 : 0;
+				if (FarmEnabled && !FarmReady) ExitCode = 14;
+				if (FarmScaleWorkload && !FarmScaleCompleted) ExitCode = 15;
 				if (SessionSmoke && !ClientText.empty()) {
 					if (!Runtime->Players->GetLocalPlayer())
 						ExitCode = 10;
@@ -352,6 +478,8 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 		Runtime->Destroy();
 		Runtime.reset();
 		Renderer.reset();
+		ReportFarmResult(ExitCode, FarmScaleWorkload ? (FarmScaleCompleted ? "scale_complete" : "scale_incomplete") :
+			(FarmReady ? "completed" : "not_ready"));
 		return ExitCode;
 	} catch (const std::exception &Error) {
 		std::cerr << "GargantuanPlayer stopped because packaged runtime startup failed: " << Error.what() << "\n";
@@ -360,6 +488,7 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 		if (Runtime) Runtime->Destroy();
 		Runtime.reset();
 		Renderer.reset();
+		ReportFarmResult(7, FarmReady ? "runtime_failure" : "not_ready");
 		return 7;
 	}
 }
