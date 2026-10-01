@@ -1,8 +1,11 @@
 # Control-only simulation: functions shadow Windows cmdlets; no NIC/capture changes.
-param([string]$HookPath)
+param([string]$HookPath, [switch]$Farm32)
 $ErrorActionPreference = 'Stop'
 $Hook = if ($HookPath) { $HookPath } else { Join-Path $PSScriptRoot '..\worker\PktMonCapture.ps1' }
 $HookBlock = [ScriptBlock]::Create([IO.File]::ReadAllText($Hook))
+$Prefix = if ($Farm32) { 'farm32-' } else { '' }
+$TraceMaximumMiB = if ($Farm32) { 1024 } else { 256 }
+$NoWrapThresholdMiB = if ($Farm32) { 960 } else { 240 }
 $TestDir = Join-Path ([IO.Path]::GetTempPath()) ('qualifier-hook-test-' + [Guid]::NewGuid())
 New-Item -ItemType Directory -Path $TestDir | Out-Null
 $global:TestActive = $false
@@ -66,15 +69,16 @@ try {
     New-Item -ItemType Directory -Path $First | Out-Null
     & $HookBlock $First Start 39450
     Assert $global:TestActive 'Capture did not start'
-    $Expected = 'trace start capture=yes capturetype=physical CaptureInterface={a33455f8-3b6f-46f1-b981-7c861e6b3cd3} Ethernet.Type=IPv4 Protocol=17 IPv4.Address=10.253.3.1 CaptureMultiLayer=no PacketTruncateBytes=1518 report=disabled persistent=no fileMode=single maxSize=256 traceFile=' + $global:TestEtl
-    Assert ([bool]($global:TestCalls | Where-Object {$_ -eq $Expected})) 'Physical-interface trace filters or 256 MiB bound changed'
-    $Owner = Get-Content (Join-Path $First 'netsh-owner.json') -Raw | ConvertFrom-Json
+    $Expected = 'trace start capture=yes capturetype=physical CaptureInterface={a33455f8-3b6f-46f1-b981-7c861e6b3cd3} Ethernet.Type=IPv4 Protocol=17 IPv4.Address=10.253.3.1 CaptureMultiLayer=no PacketTruncateBytes=1518 report=disabled persistent=no fileMode=single maxSize=' + $TraceMaximumMiB + ' traceFile=' + $global:TestEtl
+    Assert ([bool]($global:TestCalls | Where-Object {$_ -eq $Expected})) 'Physical-interface trace filters or storage bound changed'
+    $Owner = Get-Content (Join-Path $First ($Prefix + 'netsh-owner.json')) -Raw | ConvertFrom-Json
     Assert ($Owner.MiniportIfIndex -eq 19 -and $Owner.CapturePort -eq 39450 -and
-            $Owner.TraceMaximumMiB -eq 256 -and $Owner.NoWrapThresholdMiB -eq 240 -and
+            $Owner.TraceMaximumMiB -eq $TraceMaximumMiB -and $Owner.NoWrapThresholdMiB -eq $NoWrapThresholdMiB -and
             ($Owner.CaptureLayers -join ',') -eq 'NDIS physical miniport') 'Capture ownership marker is incomplete'
     & $HookBlock $First Stop
     Assert (!$global:TestActive) 'Capture did not stop'
-    $Pcap = Join-Path $First 'worker-capture.pcapng'
+    if ($Farm32) { & $HookBlock $First Finalize }
+    $Pcap = Join-Path $First ($Prefix + 'worker-capture.pcapng')
     Assert (Test-Path $Pcap) 'Export missing'
     $Bytes = [IO.File]::ReadAllBytes($Pcap)
     Assert ($Bytes.Length -gt 80 -and $Bytes[0] -eq 10 -and $Bytes[1] -eq 13 -and
@@ -112,27 +116,51 @@ try {
     Assert $global:TestActive 'Foreign trace session was stopped'
     $global:TestForeign = $false
     & $HookBlock $Third Stop
+    if ($Farm32) { & $HookBlock $Third Finalize }
 
     $Fourth = Join-Path $TestDir 'fourth'
     New-Item -ItemType Directory -Path $Fourth | Out-Null
     & $HookBlock $Fourth Start
     $global:TestEventsEmpty = $true
     $Rejected = $false
-    try { & $HookBlock $Fourth Stop } catch { $Rejected=$true }
+    if ($Farm32) { & $HookBlock $Fourth Stop }
+    try { & $HookBlock $Fourth $(if ($Farm32) { 'Finalize' } else { 'Stop' }) } catch { $Rejected=$true }
     Assert $Rejected 'Zero-frame trace was accepted'
-    Assert (!(Test-Path (Join-Path $Fourth 'worker-capture.pcapng'))) 'Failed export was published'
-    Assert (!(Test-Path (Join-Path $Fourth 'worker-capture.pcapng.pending'))) 'Failed export left a pending file'
+    Assert (!(Test-Path (Join-Path $Fourth ($Prefix + 'worker-capture.pcapng')))) 'Failed export was published'
+    Assert (!(Test-Path (Join-Path $Fourth ($Prefix + 'worker-capture.pcapng.pending')))) 'Failed export left a pending file'
 
     $Fifth = Join-Path $TestDir 'fifth'
     New-Item -ItemType Directory -Path $Fifth | Out-Null
     & $HookBlock $Fifth Start
-    $Trace = Join-Path $Fifth 'worker-capture.etl'
-    $Stream = [IO.File]::Open($Trace, [IO.FileMode]::Open, [IO.FileAccess]::Write)
-    try { $Stream.SetLength(240MB) } finally { $Stream.Dispose() }
-    $Rejected = $false
-    try { & $HookBlock $Fifth Stop } catch { $Rejected = $_.Exception.Message -match 'completeness size bound' }
-    Assert $Rejected 'A single-file trace at its completeness threshold was accepted'
-    Assert (!(Test-Path (Join-Path $Fifth 'worker-capture.pcapng'))) 'Near-cap trace published a partial pcap'
+    $Trace = Join-Path $Fifth ($Prefix + 'worker-capture.etl')
+    if ($Farm32) {
+        # Avoid allocating a 960 MiB test file on the controlling PC.
+        $ScriptAst = [System.Management.Automation.Language.Parser]::ParseInput([IO.File]::ReadAllText($Hook),[ref]$null,[ref]$null)
+        $SizeFunction = $ScriptAst.Find({param($Node) $Node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $Node.Name -eq 'AssertTraceBelowBound'}, $true)
+        Assert ($null -ne $SizeFunction) 'Farm32 size guard is missing'
+        Invoke-Expression $SizeFunction.Extent.Text
+        $DiskFunction = $ScriptAst.Find({param($Node) $Node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $Node.Name -eq 'AssertFarm32DiskReserve'}, $true)
+        Assert ($null -ne $DiskFunction) 'Farm32 disk reserve guard is missing'
+        Invoke-Expression $DiskFunction.Extent.Text
+        $Rejected = $false
+        try { AssertFarm32DiskReserve $Fifth ([long]::MaxValue) } catch { $Rejected = $_.Exception.Message -match 'fixed capture/export reserve' }
+        Assert $Rejected 'Farm32 insufficient-disk condition was accepted'
+        $NoWrapThresholdMiB = 960
+        AssertTraceBelowBound (959MB)
+        $Rejected = $false
+        try { AssertTraceBelowBound (960MB) } catch { $Rejected = $_.Exception.Message -match 'completeness size bound' }
+        Assert $Rejected 'Farm32 trace at its non-wrap completeness threshold was accepted'
+        $global:TestEventsEmpty = $false
+        & $HookBlock $Fifth Stop
+        & $HookBlock $Fifth Finalize
+    } else {
+        $Stream = [IO.File]::Open($Trace, [IO.FileMode]::Open, [IO.FileAccess]::Write)
+        try { $Stream.SetLength(240MB) } finally { $Stream.Dispose() }
+        $Rejected = $false
+        try { & $HookBlock $Fifth Stop } catch { $Rejected = $_.Exception.Message -match 'completeness size bound' }
+        Assert $Rejected 'A single-file trace at its completeness threshold was accepted'
+        Assert (!(Test-Path (Join-Path $Fifth 'worker-capture.pcapng'))) 'Near-cap trace published a partial pcap'
+    }
 
     $Sixth = Join-Path $TestDir 'sixth'
     New-Item -ItemType Directory -Path $Sixth | Out-Null
@@ -140,9 +168,21 @@ try {
     $global:TestEventsEmpty = $false
     $global:TestLostEvents = 1
     $Rejected = $false
-    try { & $HookBlock $Sixth Stop } catch { $Rejected = $_.Exception.Message -match 'lost events' }
+    if ($Farm32) { & $HookBlock $Sixth Stop }
+    try { & $HookBlock $Sixth $(if ($Farm32) { 'Finalize' } else { 'Stop' }) } catch { $Rejected = $_.Exception.Message -match 'lost events' }
     Assert $Rejected 'A trace with lost ETW events was accepted'
-    Assert (!(Test-Path (Join-Path $Sixth 'worker-capture.pcapng'))) 'Lossy trace published a partial pcap'
+    Assert (!(Test-Path (Join-Path $Sixth ($Prefix + 'worker-capture.pcapng')))) 'Lossy trace published a partial pcap'
+    if ($Farm32) {
+        $Seventh = Join-Path $TestDir 'seventh'
+        New-Item -ItemType Directory -Path $Seventh | Out-Null
+        [IO.File]::WriteAllText((Join-Path $Seventh 'farm32-worker-capture.etl'), 'preserved')
+        $Before = @($global:TestCalls | Where-Object { $_ -like 'trace start *' }).Count
+        $Rejected = $false
+        try { & $HookBlock $Seventh Start } catch { $Rejected = $true }
+        Assert $Rejected 'Farm32 capture overwrote an existing ETL'
+        Assert (@($global:TestCalls | Where-Object { $_ -like 'trace start *' }).Count -eq $Before) 'Farm32 preexisting-artifact denial started a trace'
+        Assert ((Get-Content -LiteralPath (Join-Path $Seventh 'farm32-worker-capture.etl') -Raw) -eq 'preserved') 'Farm32 existing ETL changed'
+    }
     Write-Output 'Capture hook simulation passed: exact scope, export, ownership and cleanup.'
 } finally {
     Remove-Item Function:\netsh,Function:\Get-NetAdapter,Function:\Get-NetIPAddress,Function:\Get-NetIPInterface,Function:\Get-WinEvent,Function:\tracerpt
