@@ -801,6 +801,14 @@ if(BUILD_TESTING)
 	)
 	add_dependencies(gargantuan_qualified_scale_package
 		gargantuan_runtime_distribution gargantuan_server_runtime_distribution)
+	if(WIN32)
+		find_program(GARGANTUAN_PWSH_EXECUTABLE NAMES pwsh)
+		if(GARGANTUAN_PWSH_EXECUTABLE)
+			add_test(NAME gargantuan_physical_game_session_farm_evidence
+				COMMAND "${GARGANTUAN_PWSH_EXECUTABLE}" -NoProfile -File
+				"${CMAKE_CURRENT_SOURCE_DIR}/tests/PhysicalGameSessionFarmTests.ps1")
+		endif()
+	endif()
 	add_executable(gargantuan_gui_foundation_benchmark "tests/GuiFoundationBenchmark.cpp")
 	target_link_libraries(gargantuan_gui_foundation_benchmark PRIVATE gargantuan_core)
 	add_executable(gargantuan_prerun_bootstrap_tests "tests/PreRunBootstrapTests.cpp")

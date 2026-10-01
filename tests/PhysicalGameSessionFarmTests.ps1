@@ -121,6 +121,17 @@ try {
 	$Rejected = $false
 	try { Assert-ScaleRecords -Server ([pscustomobject]@{ OutputPath = $ServerPath }) -Clients $ScaleClients -ExpectedNonces $ScaleNonces } catch { $Rejected = $true }
 	if (-not $Rejected) { throw 'scale result with incomplete client reload was accepted' }
+	$CurrentProcess = [Diagnostics.Process]::GetCurrentProcess()
+	$AllProcesses = [Collections.Generic.List[object]]::new()
+	$AllProcesses.Add([pscustomobject]@{ Label = 'sampler-test'; Pid = $CurrentProcess.Id; Process = $CurrentProcess })
+	$ResourceSamples = [Collections.Generic.List[object]]::new()
+	$ResourceClock = [Diagnostics.Stopwatch]::StartNew()
+	$LastResourceSampleMilliseconds = -2000L
+	Sample-RunResources
+	if ($ResourceSamples.Count -ne 1 -or $ResourceSamples[0].Label -ne 'sampler-test' -or
+		$ResourceSamples[0].WorkingSetBytes -le 0 -or $ResourceSamples[0].Threads -le 0) {
+		throw 'bounded process resource sample was not recorded'
+	}
 	Write-Output '[Qualification:Farm] TYPED_EVIDENCE_TEST_OK'
 } finally {
 	foreach ($Path in @($ServerPath, $ClientPath) + @($ScaleClients | ForEach-Object OutputPath)) {

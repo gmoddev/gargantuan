@@ -35,6 +35,9 @@ $ServerExecutable = Join-Path $ServerPackageRoot 'GargantuanServer.exe'
 $PlayerExecutable = Join-Path $PlayerPackageRoot 'GargantuanPlayer.exe'
 $RunDirectory = Join-Path $EvidenceRoot $RunId
 $AllProcesses = [System.Collections.Generic.List[object]]::new()
+$ResourceSamples = [System.Collections.Generic.List[object]]::new()
+$ResourceClock = [Diagnostics.Stopwatch]::StartNew()
+$LastResourceSampleMilliseconds = -2000L
 $CleanupErrors = [System.Collections.Generic.List[string]]::new()
 $Failure = $null
 $StartedUtc = [DateTimeOffset]::UtcNow
@@ -126,6 +129,31 @@ function Assert-LogBounds {
 			if (([IO.FileInfo]$Path).Length -gt $MaximumLogBytesPerStream) {
 				throw "[$($Owner.Label)] output exceeded $MaximumLogBytesPerStream bytes: $Path"
 			}
+		}
+	}
+}
+
+function Sample-RunResources {
+	if ($ResourceClock.ElapsedMilliseconds - $LastResourceSampleMilliseconds -lt 2000) { return }
+	if ($ResourceSamples.Count + $AllProcesses.Count -gt 20000) {
+		throw 'bounded process resource evidence exceeded 20000 records'
+	}
+	$LastResourceSampleMilliseconds = $ResourceClock.ElapsedMilliseconds
+	$SampledUtc = [DateTimeOffset]::UtcNow.ToString('O')
+	foreach ($Owner in $AllProcesses) {
+		try {
+			$Owner.Process.Refresh()
+			if ($Owner.Process.HasExited) { continue }
+			$ResourceSamples.Add([pscustomobject]@{
+				RunId = $RunId; Label = $Owner.Label; Pid = $Owner.Pid
+				SampledUtc = $SampledUtc; ElapsedMilliseconds = $ResourceClock.ElapsedMilliseconds
+				WorkingSetBytes = $Owner.Process.WorkingSet64
+				PrivateBytes = $Owner.Process.PrivateMemorySize64
+				CpuMilliseconds = [math]::Round($Owner.Process.TotalProcessorTime.TotalMilliseconds, 3)
+				Threads = $Owner.Process.Threads.Count; Handles = $Owner.Process.HandleCount
+			})
+		} catch {
+			throw "[$($Owner.Label)] resource sample failed: $($_.Exception.Message)"
 		}
 	}
 }
@@ -311,6 +339,15 @@ try {
 	$NonceBytes = [Security.Cryptography.RandomNumberGenerator]::GetBytes(8)
 	$NoncePrefix = [UInt64](([BitConverter]::ToUInt64($NonceBytes, 0) -shr 32) -shl 32)
 	if ($NoncePrefix -eq 0) { $NoncePrefix = [UInt64]0x0100000000000000 }
+	$OperatingSystem = Get-CimInstance Win32_OperatingSystem
+	$Processors = @(Get-CimInstance Win32_Processor)
+	$EvidenceDrive = [IO.DriveInfo]::new([IO.Path]::GetPathRoot($EvidenceRoot))
+	$BoundAddress = Get-NetIPAddress -IPAddress $BindAddress.IPAddressToString -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+		Select-Object -First 1
+	$BoundAdapter = if ($BoundAddress) { Get-NetAdapter -InterfaceIndex $BoundAddress.InterfaceIndex -ErrorAction SilentlyContinue }
+	$BoundInterface = if ($BoundAddress) {
+		Get-NetIPInterface -InterfaceIndex $BoundAddress.InterfaceIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue
+	}
 	$ExpectedNonces = [System.Collections.Generic.List[string]]::new()
 	foreach ($Slot in 0..($Peers - 1)) {
 		$ExpectedNonces.Add([string]($NoncePrefix -bor [UInt64]($Slot + 1)))
@@ -324,6 +361,17 @@ try {
 		ServerExecutable = $ServerExecutable; PlayerExecutable = $PlayerExecutable
 		ServerSha256 = (Get-FileHash -LiteralPath $ServerExecutable -Algorithm SHA256).Hash
 		PlayerSha256 = (Get-FileHash -LiteralPath $PlayerExecutable -Algorithm SHA256).Hash
+		HostPreflight = [ordered]@{
+			Machine = [Environment]::MachineName
+			PhysicalCores = ($Processors | Measure-Object -Property NumberOfCores -Sum).Sum
+			LogicalProcessors = ($Processors | Measure-Object -Property NumberOfLogicalProcessors -Sum).Sum
+			TotalMemoryBytes = [long]$OperatingSystem.TotalVisibleMemorySize * 1024
+			AvailableMemoryBytes = [long]$OperatingSystem.FreePhysicalMemory * 1024
+			EvidenceFreeBytes = $EvidenceDrive.AvailableFreeSpace
+			Interface = if ($BoundAdapter) { $BoundAdapter.Name } else { 'loopback-or-unresolved' }
+			LinkSpeed = if ($BoundAdapter) { [string]$BoundAdapter.LinkSpeed } else { 'not-applicable' }
+			InterfaceMtu = if ($BoundInterface) { $BoundInterface.NlMtu } else { 0 }
+		}
 	}
 	foreach ($Package in @(
 		@('ServerPackage', (Join-Path $ServerPackageRoot 'game.package.json')),
@@ -402,6 +450,7 @@ try {
 	$Clock.Restart()
 	while ($Clock.ElapsedMilliseconds -lt $RunTimeoutMilliseconds) {
 		Assert-LogBounds
+		Sample-RunResources
 		foreach ($Client in $Clients) {
 			if ($Client.Process.HasExited -and $Client.Process.ExitCode -ne 0) {
 				throw "$($Client.Label) exited $($Client.Process.ExitCode)"
@@ -414,6 +463,12 @@ try {
 		Start-Sleep -Milliseconds 100
 	}
 	if ($Clock.ElapsedMilliseconds -ge $RunTimeoutMilliseconds) { throw 'farm runtime deadline elapsed' }
+	Sample-RunResources
+	foreach ($Owner in $AllProcesses) {
+		if (-not @($ResourceSamples | Where-Object { $_.Label -eq $Owner.Label }).Count) {
+			throw "[$($Owner.Label)] has no process resource sample"
+		}
+	}
 	foreach ($Owner in $AllProcesses) {
 		if (-not $Owner.OutputCopy.Wait(5000) -or -not $Owner.ErrorCopy.Wait(5000)) {
 			throw "$($Owner.Label) redirected output did not drain"
@@ -430,6 +485,7 @@ try {
 		UniqueNonces = $Identity.UniqueNonces; UniqueConnections = $Identity.UniqueConnections
 		UniquePlayers = $Identity.UniquePlayers; ServerPid = $Server.Pid
 		ClientPids = @($Clients | ForEach-Object Pid)
+		ResourceSamples = $ResourceSamples.Count; ResourceEvidence = 'process-resources.csv'
 		CompletedUtc = [DateTimeOffset]::UtcNow.ToString('O')
 	}
 } catch {
@@ -440,6 +496,13 @@ try {
 		CompletedUtc = [DateTimeOffset]::UtcNow.ToString('O')
 	}
 } finally {
+	if (Test-Path -LiteralPath $RunDirectory -PathType Container) {
+		try {
+			$ResourceSamples | Export-Csv -LiteralPath (Join-Path $RunDirectory 'process-resources.csv') -NoTypeInformation
+		} catch {
+			$CleanupErrors.Add("resource evidence write failed: $($_.Exception.Message)")
+		}
+	}
 	foreach ($Owner in $AllProcesses) { Stop-RunProcess -Owner $Owner }
 	if ($AllProcesses.Count -gt 0 -and $Port -gt 0) {
 		if (Get-NetUDPEndpoint -LocalPort $Port -ErrorAction SilentlyContinue) {
