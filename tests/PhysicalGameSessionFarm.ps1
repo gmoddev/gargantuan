@@ -159,6 +159,29 @@ function Sample-RunResources {
 	}
 }
 
+function Write-EvidenceManifest {
+	param([Parameter(Mandatory = $true)][string]$Directory)
+	$Entries = @(
+		Get-ChildItem -LiteralPath $Directory -File | Where-Object {
+			$_.Name -notin @('evidence-sha256.json', 'evidence-sha256.json.tmp')
+		} | Sort-Object Name | ForEach-Object {
+			[ordered]@{ Name = $_.Name; Bytes = $_.Length;
+				Sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant() }
+		}
+	)
+	if ($Entries.Count -eq 0) { throw 'farm evidence directory contains no files' }
+	$Temporary = Join-Path $Directory 'evidence-sha256.json.tmp'
+	$Destination = Join-Path $Directory 'evidence-sha256.json'
+	try {
+		[IO.File]::WriteAllText($Temporary, ([ordered]@{ RunId = $RunId; Files = $Entries } |
+			ConvertTo-Json -Depth 5), [Text.UTF8Encoding]::new($false))
+		Move-Item -LiteralPath $Temporary -Destination $Destination -Force
+	} finally {
+		if (Test-Path -LiteralPath $Temporary) { Remove-Item -LiteralPath $Temporary -Force }
+	}
+	return $Entries.Count
+}
+
 function Assert-Records {
 	param([Parameter(Mandatory = $true)]$Clients, [Parameter(Mandatory = $true)]$Server,
 		[Parameter(Mandatory = $true)]$ExpectedNonces)
@@ -236,13 +259,16 @@ function Assert-ScaleRecords {
 		$Starts = @($Records | Where-Object { $_.event -eq 'phase_start' -and $_.phase -eq $Name -and $_.run -eq $RunId })
 		$Ends = @($Records | Where-Object { $_.event -eq 'phase_end' -and $_.phase -eq $Name -and $_.run -eq $RunId })
 		$Acks = @($Records | Where-Object { $_.event -eq 'phase_acks' -and $_.phase -eq $Name -and $_.run -eq $RunId })
+		$Stops = @($Records | Where-Object { $_.event -eq 'phase_stop_requested' -and $_.phase -eq $Name -and $_.run -eq $RunId })
 		$Producer = @($Records | Where-Object { $_.event -eq 'producer_ack' -and $_.phase -eq $Name -and $_.run -eq $RunId })
-		if ($Starts.Count -ne 1 -or $Ends.Count -ne 1 -or $Acks.Count -ne 1 -or
+		if ($Starts.Count -ne 1 -or $Ends.Count -ne 1 -or $Acks.Count -ne 1 -or $Stops.Count -ne 1 -or
 			$Producer.Count -ne 1 -or $Acks[0].count -ne '32' -or $Ends[0].phase_acks -ne '32' -or
 			$Ends[0].producer_done -ne '1') {
 			throw "scale phase $Name lacks complete typed acknowledgement or convergence evidence"
 		}
 		if (-not $Starts[0].ContainsKey('monotonic_us') -or
+			-not $Stops[0].ContainsKey('elapsed_us') -or
+			[long]$Stops[0].elapsed_us -le 13000000 -or
 			-not $Ends[0].ContainsKey('monotonic_us') -or
 			-not $Ends[0].ContainsKey('elapsed_us') -or
 			[long]$Ends[0].elapsed_us -le 13000000 -or
@@ -253,8 +279,9 @@ function Assert-ScaleRecords {
 		$EndTick = [long]$Ends[0].tick
 		if ($StartTick -le $PreviousEndTick -or $EndTick -le $StartTick -or
 			[long]$Ends[0].ticks -ne $EndTick - $StartTick -or
-			[long]$Acks[0].tick -lt $StartTick -or [long]$Acks[0].tick -gt $EndTick -or
-			[long]$Producer[0].tick -lt $StartTick -or [long]$Producer[0].tick -gt $EndTick) {
+			[long]$Acks[0].tick -lt $StartTick -or [long]$Acks[0].tick -gt [long]$Stops[0].tick -or
+			[long]$Stops[0].tick -lt [long]$Acks[0].tick -or [long]$Stops[0].tick -gt [long]$Producer[0].tick -or
+			[long]$Producer[0].tick -gt $EndTick) {
 			throw "scale phase $Name has an invalid authoritative tick sequence"
 		}
 		$PreviousEndTick = $EndTick
@@ -305,21 +332,29 @@ function Assert-ScaleRecords {
 	foreach ($Index in 0..4) {
 		$Record = $ProducerRecords[$Index]
 		$RequiredMetrics = @('remote_samples', 'remote_p95_us', 'remote_p99_us',
-			'remote_max_us', 'remote_errors', 'event_acks', 'event_max_gap_us',
-			'action_resolutions', 'action_endings', 'action_max_result_us',
-			'submission_failures', 'action_rejections')
+			'remote_max_us', 'remote_errors', 'remote_timeouts', 'event_offers',
+			'event_acks', 'event_outstanding', 'event_max_rtt_us', 'event_max_gap_us',
+			'action_requests', 'action_resolutions', 'action_endings', 'action_max_result_us',
+			'submission_failures', 'action_rejections', 'unexpected_endings')
 		foreach ($Metric in $RequiredMetrics) {
 			if (-not $Record.ContainsKey($Metric)) { throw "producer $($Names[$Index]) lacks $Metric" }
 		}
 		if ($Record.run_id -ne $RunId -or $Record.slot -ne '0' -or
 			$Record.nonce -ne $ExpectedNonces[0] -or $Record.phase -ne $Names[$Index] -or
-			$Record.status -ne 'PASS' -or $Record.remote_samples -ne '100' -or
+			$Record.status -ne 'PASS' -or $Record.metrics_phase_valid -ne '1' -or
+			$Record.producer_healthy -ne '1' -or $Record.remote_samples -ne '100' -or
 			[double]$Record.remote_p95_us -gt 150000 -or [double]$Record.remote_p99_us -gt 250000 -or
 			[double]$Record.remote_max_us -gt 500000 -or [double]$Record.remote_errors -ne 0 -or
-			[double]$Record.event_acks -le 0 -or [double]$Record.event_max_gap_us -gt 250000 -or
-			[double]$Record.action_resolutions -le 0 -or [double]$Record.action_endings -le 0 -or
+			[double]$Record.remote_timeouts -ne 0 -or
+			[double]$Record.event_offers -le 0 -or
+			[double]$Record.event_offers -ne [double]$Record.event_acks -or
+			[double]$Record.event_outstanding -ne 0 -or [double]$Record.event_max_rtt_us -gt 250000 -or
+			[double]$Record.action_requests -le 0 -or
+			[double]$Record.action_requests -ne [double]$Record.action_resolutions -or
+			[double]$Record.action_requests -ne [double]$Record.action_endings -or
 			[double]$Record.action_max_result_us -gt 250000 -or
-			[double]$Record.submission_failures -ne 0 -or [double]$Record.action_rejections -ne 0) {
+			[double]$Record.submission_failures -ne 0 -or [double]$Record.action_rejections -ne 0 -or
+			[double]$Record.unexpected_endings -ne 0) {
 			throw "producer gameplay metrics failed in $($Names[$Index])"
 		}
 	}
@@ -369,6 +404,7 @@ try {
 	$BoundInterface = if ($BoundAddress) {
 		Get-NetIPInterface -InterfaceIndex $BoundAddress.InterfaceIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue
 	}
+	$InterfaceBaseline = if ($BoundAdapter) { Get-NetAdapterStatistics -Name $BoundAdapter.Name }
 	$ExpectedNonces = [System.Collections.Generic.List[string]]::new()
 	foreach ($Slot in 0..($Peers - 1)) {
 		$ExpectedNonces.Add([string]($NoncePrefix -bor [UInt64]($Slot + 1)))
@@ -392,6 +428,16 @@ try {
 			Interface = if ($BoundAdapter) { $BoundAdapter.Name } else { 'loopback-or-unresolved' }
 			LinkSpeed = if ($BoundAdapter) { [string]$BoundAdapter.LinkSpeed } else { 'not-applicable' }
 			InterfaceMtu = if ($BoundInterface) { $BoundInterface.NlMtu } else { 0 }
+			InterfaceStart = if ($InterfaceBaseline) {
+				[ordered]@{
+					ReceivedBytes = $InterfaceBaseline.ReceivedBytes
+					SentBytes = $InterfaceBaseline.SentBytes
+					ReceivedDiscardedPackets = $InterfaceBaseline.ReceivedDiscardedPackets
+					ReceivedPacketErrors = $InterfaceBaseline.ReceivedPacketErrors
+					OutboundDiscardedPackets = $InterfaceBaseline.OutboundDiscardedPackets
+					OutboundPacketErrors = $InterfaceBaseline.OutboundPacketErrors
+				}
+			} else { $null }
 		}
 	}
 	foreach ($Package in @(
@@ -525,6 +571,22 @@ try {
 		}
 	}
 	foreach ($Owner in $AllProcesses) { Stop-RunProcess -Owner $Owner }
+	if ($InterfaceBaseline) {
+		try {
+			$InterfaceEnd = Get-NetAdapterStatistics -Name $BoundAdapter.Name
+			$Result.InterfaceDelta = [ordered]@{
+				Name = $BoundAdapter.Name
+				ReceivedBytes = [long]$InterfaceEnd.ReceivedBytes - [long]$InterfaceBaseline.ReceivedBytes
+				SentBytes = [long]$InterfaceEnd.SentBytes - [long]$InterfaceBaseline.SentBytes
+				ReceivedDiscardedPackets = [long]$InterfaceEnd.ReceivedDiscardedPackets - [long]$InterfaceBaseline.ReceivedDiscardedPackets
+				ReceivedPacketErrors = [long]$InterfaceEnd.ReceivedPacketErrors - [long]$InterfaceBaseline.ReceivedPacketErrors
+				OutboundDiscardedPackets = [long]$InterfaceEnd.OutboundDiscardedPackets - [long]$InterfaceBaseline.OutboundDiscardedPackets
+				OutboundPacketErrors = [long]$InterfaceEnd.OutboundPacketErrors - [long]$InterfaceBaseline.OutboundPacketErrors
+			}
+		} catch {
+			$CleanupErrors.Add("interface counter sample failed: $($_.Exception.Message)")
+		}
+	}
 	if ($AllProcesses.Count -gt 0 -and $Port -gt 0) {
 		if (Get-NetUDPEndpoint -LocalPort $Port -ErrorAction SilentlyContinue) {
 			$CleanupErrors.Add("UDP port $Port remained occupied after run-owned process cleanup")
@@ -538,6 +600,15 @@ try {
 	if (Test-Path -LiteralPath $RunDirectory -PathType Container) {
 		[IO.File]::WriteAllText((Join-Path $RunDirectory 'result.json'),
 			($Result | ConvertTo-Json -Depth 6), [Text.UTF8Encoding]::new($false))
+		try {
+			[void](Write-EvidenceManifest -Directory $RunDirectory)
+		} catch {
+			$Result.Status = 'FAIL'
+			$Result.EvidenceError = $_.Exception.Message
+			if (-not $Failure) { $Failure = 'farm evidence manifest failed' }
+			[IO.File]::WriteAllText((Join-Path $RunDirectory 'result.json'),
+				($Result | ConvertTo-Json -Depth 6), [Text.UTF8Encoding]::new($false))
+		}
 	}
 }
 

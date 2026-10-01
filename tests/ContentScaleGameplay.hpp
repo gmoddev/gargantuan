@@ -66,6 +66,7 @@ if PhysicalFarm then
     local AcknowledgementCount = 0
     local PhaseTick = 0
     local LastBroadcastTick = -60
+    local LastStopTick = -60
     PhaseControl.OnServerEvent:Connect(function(Peer, Kind, Phase)
         if Kind == "ready" then
             if CurrentPhase then PhaseControl:FireClient(Peer.Slot, Peer.Generation, "phase", CurrentPhase) end
@@ -76,11 +77,16 @@ if PhysicalFarm then
                 AcknowledgementCount += 1
             end
         elseif Kind == "complete" and Phase == CurrentPhase and
+            game:GetAttribute("ScalePhaseStopRequested") == CurrentPhase and
             Peer.Slot == game:GetAttribute("ScaleProducerConnectionSlot") and
             Peer.Generation == game:GetAttribute("ScaleProducerConnectionGeneration") then
             PendingCompletion = Phase
             print(string.format("[Content:ScalePhase] event=producer_complete phase=%s peer_slot=%d peer_generation=%d",
                 Phase, Peer.Slot, Peer.Generation))
+        elseif Kind == "failed" and Phase == CurrentPhase and
+            Peer.Slot == game:GetAttribute("ScaleProducerConnectionSlot") and
+            Peer.Generation == game:GetAttribute("ScaleProducerConnectionGeneration") then
+            Control:SetAttribute("ScaleProducerFailed", Phase)
         end
     end)
     RunService.PostSimulation:Connect(function()
@@ -93,12 +99,24 @@ if PhysicalFarm then
             AcknowledgementCount = 0
             Control:SetAttribute("ScalePhaseAcks", 0)
             Control:SetAttribute("ScaleRemoteDone", nil)
+            Control:SetAttribute("ScaleProducerFailed", nil)
             LastBroadcastTick = PhaseTick - 60
+            LastStopTick = PhaseTick - 60
         end
         if CurrentPhase and AcknowledgementCount < 32 and PhaseTick - LastBroadcastTick >= 60 then
             LastBroadcastTick = PhaseTick
             local Ok = pcall(function() PhaseControl:FireAllClients("phase", CurrentPhase) end)
             if Ok then print(string.format("[Content:ScalePhase] event=broadcast phase=%s", CurrentPhase)) end
+        end
+        if CurrentPhase and game:GetAttribute("ScalePhaseStopRequested") == CurrentPhase and
+            PendingCompletion ~= CurrentPhase and PhaseTick - LastStopTick >= 60 then
+            LastStopTick = PhaseTick
+            local Slot = game:GetAttribute("ScaleProducerConnectionSlot")
+            local Generation = game:GetAttribute("ScaleProducerConnectionGeneration")
+            if type(Slot) == "number" and type(Generation) == "number" then
+                local Ok = pcall(function() PhaseControl:FireClient(Slot, Generation, "stop", CurrentPhase) end)
+                if Ok then print(string.format("[Content:ScalePhase] event=stop_sent phase=%s", CurrentPhase)) end
+            end
         end
         if PendingCompletion == CurrentPhase and CurrentPhase then
             Control:SetAttribute("ScaleRemoteDone", CurrentPhase)
@@ -133,8 +151,11 @@ local Function = game:FindFirstChild("ScaleFunction")
 local Event = game:FindFirstChild("ScaleEvent")
 local PhaseControl = if PhysicalFarm then game:FindFirstChild("ScalePhaseControl") else nil
 assert(Control:RegisterAction("ScaleLunge", "asset://d9d9e9649adbad59588d137c2a642e1d", 0.5, Vector3.new(0.9, 0, 0), 0, true))
+local Phase = nil
 local PendingPhaseAcknowledgement = nil
 local PendingPhaseCompletion = nil
+local PendingPhaseCompletionHealthy = true
+local PendingPhaseStop = nil
 local PhaseReadySent = false
 if PhaseControl then
     PhaseControl.OnClientEvent:Connect(function(Kind, Phase)
@@ -142,32 +163,66 @@ if PhaseControl then
             Control:SetAttribute("ScalePhase", Phase)
             PendingPhaseAcknowledgement = Phase
             print(string.format("[Content:ScalePhase] event=received phase=%s", Phase))
+        elseif Kind == "stop" and Phase == Control:GetAttribute("ScalePhase") then
+            PendingPhaseStop = Phase
+            print(string.format("[Content:ScalePhase] event=stop_received phase=%s", Phase))
         end
     end)
 end
-local Phase = nil
 Control:SetAttribute("ScaleClientStarted", true)
 local Tick = 0
 local StartedActionAt = 0
 local Resolutions = 0
 local Endings = 0
 local EventSequence = 0
-local EventPending = {}
+local EventPending = nil
+local EventOffers = 0
+local EventAcks = 0
 local EventSamples = {}
 local ActionSamples = {}
 local LastEventAck = 0
 local EventMaxGapUs = 0
+local EventMaxRttUs = 0
+local ActionRequests = 0
+local ActionPendingResult = false
+local ActionPendingEndings = 0
+local ActionSubmissionFailures = 0
+local ActionRejections = 0
+local ActionUnexpectedEndings = 0
+local ActionMaxResultUs = 0
+local PhaseEventOffersStart = 0
+local PhaseEventAcksStart = 0
+local PhaseActionRequestsStart = 0
+local PhaseActionResolutionsStart = 0
+local PhaseActionEndingsStart = 0
+local PhaseActionSubmissionFailuresStart = 0
+local PhaseActionRejectionsStart = 0
+local PhaseActionUnexpectedEndingsStart = 0
+local PhaseStartedAt = 0
+local PhaseStopping = false
+local StopDrainStartedAt = 0
+local PhaseFinalized = false
+local PhaseTrafficFailure = false
+local RpcComplete = false
+local RpcSamples = {}
+local RpcErrors = 0
+local RpcTimeouts = 0
 local ProducerReported = false
 Event.OnClientEvent:Connect(function(Message, Sequence)
-    local Started = EventPending[Sequence]
-    if not Started then return end
-    EventPending[Sequence] = nil
-    if Message ~= Phase then return end
+    if not EventPending or EventPending.Sequence ~= Sequence or EventPending.Phase ~= Message then
+        if PhysicalFarm then PhaseTrafficFailure = true end
+        return
+    end
+    local Started = EventPending.Started
+    EventPending = nil
     local Now = os.clock()
     if LastEventAck ~= 0 then EventMaxGapUs = math.max(EventMaxGapUs, (Now - LastEventAck) * 1000000) end
     LastEventAck = Now
-    if #EventSamples < 1200 then table.insert(EventSamples, (Now - Started) * 1000000) end
-    Control:SetAttribute("ScaleEventAcks", (Control:GetAttribute("ScaleEventAcks") or 0) + 1)
+    local RttUs = (Now - Started) * 1000000
+    EventMaxRttUs = math.max(EventMaxRttUs, RttUs)
+    if #EventSamples < 1200 then table.insert(EventSamples, RttUs) end
+    EventAcks += 1
+    Control:SetAttribute("ScaleEventAcks", EventAcks)
 end)
 local function Metrics(Kind, Samples)
     if #Samples == 0 then return "[Content:Scale" .. Kind .. "] samples=0" end
@@ -180,22 +235,91 @@ local function Metrics(Kind, Samples)
 end
 Control.ActionResolved:Connect(function(_, Name, Accepted)
     if Name ~= "ScaleLunge" or not Accepted then
-        Control:SetAttribute("ScaleActionRejections", (Control:GetAttribute("ScaleActionRejections") or 0) + 1)
+        ActionRejections += 1
+        Control:SetAttribute("ScaleActionRejections", ActionRejections)
+        if PhysicalFarm then
+            PhaseTrafficFailure = true
+            ActionPendingResult = false
+            if ActionPendingEndings > 0 then ActionPendingEndings -= 1 end
+        end
         return
     end
+    if PhysicalFarm and not ActionPendingResult then PhaseTrafficFailure = true end
+    ActionPendingResult = false
     Resolutions += 1
-    if #ActionSamples < 64 then table.insert(ActionSamples, (os.clock() - StartedActionAt) * 1000000) end
+    local ResultUs = (os.clock() - StartedActionAt) * 1000000
+    if #ActionSamples < 64 then table.insert(ActionSamples, ResultUs) end
     Control:SetAttribute("ScaleActionResolutions", Resolutions)
-    Control:SetAttribute("ScaleActionMaxResultUs", math.max(Control:GetAttribute("ScaleActionMaxResultUs") or 0, (os.clock() - StartedActionAt) * 1000000))
+    ActionMaxResultUs = math.max(ActionMaxResultUs, ResultUs)
+    Control:SetAttribute("ScaleActionMaxResultUs", ActionMaxResultUs)
 end)
 Control.ActionEnded:Connect(function(_, Name)
     if Name ~= "ScaleLunge" then
-        Control:SetAttribute("ScaleActionUnexpectedEndings", (Control:GetAttribute("ScaleActionUnexpectedEndings") or 0) + 1)
+        ActionUnexpectedEndings += 1
+        Control:SetAttribute("ScaleActionUnexpectedEndings", ActionUnexpectedEndings)
         return
+    end
+    if PhysicalFarm then
+        if ActionPendingEndings == 0 then
+            ActionUnexpectedEndings += 1
+            Control:SetAttribute("ScaleActionUnexpectedEndings", ActionUnexpectedEndings)
+            PhaseTrafficFailure = true
+            return
+        end
+        ActionPendingEndings -= 1
     end
     Endings += 1
     Control:SetAttribute("ScaleActionEndings", Endings)
 end)
+local function PublishPhaseMetrics(RunningPhase)
+    table.sort(RpcSamples)
+    local Total = 0
+    for _, Value in RpcSamples do Total += Value end
+    local Mean = if #RpcSamples == 0 then 0 else Total / #RpcSamples
+    local P95 = RpcSamples[95] or 0
+    local P99 = RpcSamples[99] or 0
+    local Maximum = RpcSamples[100] or 0
+    Control:SetAttribute("ScaleRemoteMetrics", string.format("[Content:ScaleRemote] phase=%s samples=%d mean_us=%.0f p50_us=%.0f p95_us=%.0f p99_us=%.0f max_us=%.0f timeouts=%d errors=%d",
+        RunningPhase, #RpcSamples, Mean, RpcSamples[50] or 0, P95, P99, Maximum, RpcTimeouts, RpcErrors))
+    Control:SetAttribute("ScaleRemoteSamples", #RpcSamples)
+    Control:SetAttribute("ScaleRemoteP95Us", P95)
+    Control:SetAttribute("ScaleRemoteP99Us", P99)
+    Control:SetAttribute("ScaleRemoteMaxUs", Maximum)
+    Control:SetAttribute("ScaleRemoteErrors", RpcErrors)
+    Control:SetAttribute("ScaleRemoteTimeouts", RpcTimeouts)
+    Control:SetAttribute("ScaleEventMetrics", Metrics("Event", EventSamples))
+    Control:SetAttribute("ScaleEventOffers", EventOffers)
+    Control:SetAttribute("ScaleEventAcks", EventAcks)
+    Control:SetAttribute("ScaleEventMaxRttUs", EventMaxRttUs)
+    Control:SetAttribute("ScaleEventMaxGapUs", EventMaxGapUs)
+    Control:SetAttribute("ScaleEventOutstanding", if EventPending then 1 else 0)
+    Control:SetAttribute("ScaleActionMetrics", Metrics("Action", ActionSamples))
+    Control:SetAttribute("ScaleActionRequests", ActionRequests)
+    Control:SetAttribute("ScaleActionResolutions", Resolutions)
+    Control:SetAttribute("ScaleActionEndings", Endings)
+    Control:SetAttribute("ScaleActionMaxResultUs", ActionMaxResultUs)
+    Control:SetAttribute("ScaleActionSubmissionFailures", ActionSubmissionFailures)
+    Control:SetAttribute("ScaleActionRejections", ActionRejections)
+    Control:SetAttribute("ScaleActionUnexpectedEndings", ActionUnexpectedEndings)
+    local Healthy = #RpcSamples == 100 and RpcErrors == 0 and RpcTimeouts == 0 and
+        P95 <= 150000 and P99 <= 250000 and Maximum <= 500000 and not PhaseTrafficFailure and
+        EventOffers > PhaseEventOffersStart and
+        EventOffers - PhaseEventOffersStart == EventAcks - PhaseEventAcksStart and
+        not EventPending and EventMaxRttUs <= 250000 and
+        ActionRequests > PhaseActionRequestsStart and
+        ActionRequests - PhaseActionRequestsStart == Resolutions - PhaseActionResolutionsStart and
+        ActionRequests - PhaseActionRequestsStart == Endings - PhaseActionEndingsStart and
+        not ActionPendingResult and ActionPendingEndings == 0 and ActionMaxResultUs <= 250000 and
+        ActionSubmissionFailures == PhaseActionSubmissionFailuresStart and
+        ActionRejections == PhaseActionRejectionsStart and
+        ActionUnexpectedEndings == PhaseActionUnexpectedEndingsStart
+    Control:SetAttribute("ScaleProducerHealthy", Healthy)
+    Control:SetAttribute("ScaleMetricsPhase", RunningPhase)
+    -- This marker is last: the host cannot observe a complete phase with a
+    -- partially published typed metrics snapshot.
+    Control:SetAttribute("ScaleRemoteDone", RunningPhase)
+    return Healthy
+end
 RunService.PostSimulation:Connect(function()
     local LocalPlayer = Players.LocalPlayer
     if not LocalPlayer then return end
@@ -211,7 +335,8 @@ RunService.PostSimulation:Connect(function()
         end
         if PendingPhaseCompletion then
             local Completed = pcall(function()
-                PhaseControl:FireServer("complete", PendingPhaseCompletion)
+                PhaseControl:FireServer(if PendingPhaseCompletionHealthy then "complete" else "failed",
+                    PendingPhaseCompletion)
             end)
             if Completed then PendingPhaseCompletion = nil end
         end
@@ -229,58 +354,108 @@ RunService.PostSimulation:Connect(function()
     if ProducerPlayerId ~= 0 and LocalPlayer.PlayerId ~= ProducerPlayerId then return end
     if not LocalPlayer.Character then return end
     if not NextPhase then return end
+    if NextPhase ~= Phase then
+        if PhysicalFarm and Phase and not PhaseFinalized then
+            PhaseTrafficFailure = true
+            return
+        end
+        Phase = NextPhase
+        PhaseStartedAt = os.clock()
+        PhaseStopping = false
+        StopDrainStartedAt = 0
+        PhaseFinalized = false
+        PhaseTrafficFailure = false
+        PendingPhaseStop = nil
+        EventSamples = {}
+        ActionSamples = {}
+        EventPending = nil
+        LastEventAck = 0
+        EventMaxGapUs = 0
+        EventMaxRttUs = 0
+        ActionMaxResultUs = 0
+        ActionPendingResult = false
+        ActionPendingEndings = 0
+        PhaseEventOffersStart = EventOffers
+        PhaseEventAcksStart = EventAcks
+        PhaseActionRequestsStart = ActionRequests
+        PhaseActionResolutionsStart = Resolutions
+        PhaseActionEndingsStart = Endings
+        PhaseActionSubmissionFailuresStart = ActionSubmissionFailures
+        PhaseActionRejectionsStart = ActionRejections
+        PhaseActionUnexpectedEndingsStart = ActionUnexpectedEndings
+        RpcComplete = false
+        RpcSamples = {}
+        RpcErrors = 0
+        RpcTimeouts = 0
+        local RunningPhase = Phase
+        task.spawn(function()
+            for Index = 1, 100 do
+                local Started = os.clock()
+                local Ok, Value, Status = pcall(function() return Function:InvokeServerWithTimeout(5, RunningPhase) end)
+                if not Ok or Value ~= RunningPhase then RpcErrors += 1 end
+                if (Ok and Value == nil and Status == "timeout") or
+                    (not Ok and type(Value) == "string" and string.find(Value, "timeout", 1, true)) then RpcTimeouts += 1 end
+                table.insert(RpcSamples, (os.clock() - Started) * 1000000)
+                Control:SetAttribute("ScaleRemoteSamples", Index)
+                Control:SetAttribute("ScaleRemoteErrors", RpcErrors)
+                task.wait(if Qualified then 0.1 else 0)
+            end
+            RpcComplete = true
+            if not PhysicalFarm then
+                PublishPhaseMetrics(RunningPhase)
+                PhaseFinalized = true
+            end
+        end)
+    end
+    if PhaseFinalized then return end
+    if PhysicalFarm and PendingPhaseStop == Phase and os.clock() - PhaseStartedAt > 13 then
+        if not PhaseStopping then
+            PhaseStopping = true
+            StopDrainStartedAt = os.clock()
+            print(string.format("[Content:ScalePhase] event=drain_start phase=%s offers=%d acks=%d action_requests=%d action_resolutions=%d action_endings=%d",
+                Phase, EventOffers - PhaseEventOffersStart, EventAcks - PhaseEventAcksStart,
+                ActionRequests - PhaseActionRequestsStart, Resolutions - PhaseActionResolutionsStart,
+                Endings - PhaseActionEndingsStart))
+        end
+    end
+    if PhaseStopping then
+        local Drained = not EventPending and not ActionPendingResult and ActionPendingEndings == 0
+        if not Drained and os.clock() - StopDrainStartedAt > 2 then PhaseTrafficFailure = true end
+        if RpcComplete and (Drained or PhaseTrafficFailure) then
+            PendingPhaseCompletionHealthy = PublishPhaseMetrics(Phase)
+            PhaseFinalized = true
+            PendingPhaseCompletion = Phase
+            print(string.format("[Content:ScalePhase] event=metrics_final phase=%s healthy=%s elapsed_us=%.0f event_offers=%d event_acks=%d action_requests=%d action_resolutions=%d action_endings=%d",
+                Phase, tostring(PendingPhaseCompletionHealthy), (os.clock() - PhaseStartedAt) * 1000000,
+                EventOffers - PhaseEventOffersStart, EventAcks - PhaseEventAcksStart,
+                ActionRequests - PhaseActionRequestsStart, Resolutions - PhaseActionResolutionsStart,
+                Endings - PhaseActionEndingsStart))
+        end
+        return
+    end
     Tick += 1
     if Tick % (if Qualified then 120 else 40) == 1 then
-        StartedActionAt = os.clock()
-        if not Control:RequestAction("ScaleLunge") then
-            Control:SetAttribute("ScaleActionSubmissionFailures", (Control:GetAttribute("ScaleActionSubmissionFailures") or 0) + 1)
+        if PhysicalFarm and (ActionPendingResult or ActionPendingEndings > 0) then
+            PhaseTrafficFailure = true
+        else
+            StartedActionAt = os.clock()
+            ActionPendingResult = true
+            ActionRequests += 1
+            if Control:RequestAction("ScaleLunge") then
+                if PhysicalFarm then ActionPendingEndings += 1 end
+            else
+                ActionPendingResult = false
+                ActionSubmissionFailures += 1
+                Control:SetAttribute("ScaleActionSubmissionFailures", ActionSubmissionFailures)
+            end
         end
     end
-    if (not Qualified or Tick % 4 == 1) and EventSequence < Tick + 1 then
+    if (not Qualified or Tick % 4 == 1) and not EventPending then
         EventSequence += 1
-        -- Both the offered count and pending map are bounded by the phase's
-        -- 1,200-tick cap; acknowledged entries are retired immediately.
-        EventPending[EventSequence] = os.clock()
-        Event:FireServer(NextPhase, EventSequence)
+        EventOffers += 1
+        EventPending = {Sequence = EventSequence, Phase = Phase, Started = os.clock()}
+        Event:FireServer(Phase, EventSequence)
     end
-    if NextPhase == Phase then return end
-    Phase = NextPhase
-    EventSamples = {}
-    ActionSamples = {}
-    EventPending = {}
-    LastEventAck = 0
-    EventMaxGapUs = 0
-    local RunningPhase = Phase
-    task.spawn(function()
-        local Samples = {}
-        local Total = 0
-        local Errors = 0
-        local Timeouts = 0
-        for Index = 1, 100 do
-            local Started = os.clock()
-            local Ok, Value, Status = pcall(function() return Function:InvokeServerWithTimeout(5, RunningPhase) end)
-            if not Ok or Value ~= RunningPhase then Errors += 1 end
-            if (Ok and Value == nil and Status == "timeout") or
-                (not Ok and type(Value) == "string" and string.find(Value, "timeout", 1, true)) then Timeouts += 1 end
-            local Elapsed = (os.clock() - Started) * 1000000
-            Total += Elapsed
-            table.insert(Samples, Elapsed)
-            Control:SetAttribute("ScaleRemoteSamples", Index)
-            Control:SetAttribute("ScaleRemoteErrors", Errors)
-            task.wait(if Qualified then 0.1 else 0)
-        end
-        table.sort(Samples)
-        Control:SetAttribute("ScaleRemoteMetrics", string.format("[Content:ScaleRemote] phase=%s samples=100 mean_us=%.0f p50_us=%.0f p95_us=%.0f p99_us=%.0f max_us=%.0f timeouts=%d errors=%d", RunningPhase, Total / 100, Samples[50], Samples[95], Samples[99], Samples[100], Timeouts, Errors))
-        Control:SetAttribute("ScaleRemoteErrors", Errors)
-        Control:SetAttribute("ScaleRemoteP95Us", Samples[95])
-        Control:SetAttribute("ScaleRemoteP99Us", Samples[99])
-        Control:SetAttribute("ScaleRemoteMaxUs", Samples[100])
-        Control:SetAttribute("ScaleEventMetrics", Metrics("Event", EventSamples))
-        Control:SetAttribute("ScaleActionMetrics", Metrics("Action", ActionSamples))
-        Control:SetAttribute("ScaleEventMaxGapUs", EventMaxGapUs)
-        Control:SetAttribute("ScaleRemoteDone", RunningPhase)
-        if PhaseControl then PendingPhaseCompletion = RunningPhase end
-    end)
 end)
 )");
 		ClientScript->SetParent(World);

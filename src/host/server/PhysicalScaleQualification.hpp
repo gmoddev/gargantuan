@@ -87,6 +87,9 @@ namespace gargantuan::host {
 			const auto PhaseName = Name(CurrentPhase);
 			const bool ProducerDone = Runtime.CharacterControl->GetAttributeValue("ScaleRemoteDone",
 				ScriptSecurityContext::CoreTrusted()) == std::optional<WireValue>(WireValue(std::string(PhaseName)));
+			const bool ProducerFailed = Runtime.CharacterControl->GetAttributeValue("ScaleProducerFailed",
+				ScriptSecurityContext::CoreTrusted()) == std::optional<WireValue>(WireValue(std::string(PhaseName)));
+			if (ProducerFailed) Fail("producer_phase_metrics_failed", Tick);
 			const bool AllPeersAcknowledged = Runtime.CharacterControl->GetAttributeValue("ScalePhaseAcks",
 				ScriptSecurityContext::CoreTrusted()) == std::optional<WireValue>(WireValue(static_cast<int>(PeerCount)));
 			if (AllPeersAcknowledged && !PhaseAcksObserved) {
@@ -100,9 +103,19 @@ namespace gargantuan::host {
 					<< " tick=" << Tick << '\n';
 			}
 			const bool WorldConverged = IsWorldConverged(CurrentPhase);
-			if (Tick - PhaseTick >= MinimumPhaseTicks &&
+			if (!PhaseStopRequested && Tick - PhaseTick >= MinimumPhaseTicks &&
 				std::chrono::steady_clock::now() - PhaseStarted > MinimumPhaseWall &&
-				ProducerDone && AllPeersAcknowledged && WorldConverged) {
+				AllPeersAcknowledged && WorldConverged) {
+				if (Runtime.DataModel->ApplyAttributeMutation("ScalePhaseStopRequested",
+					WireValue(std::string(PhaseName)), ScriptSecurityContext::CoreTrusted()) !=
+					MutationStatus::Success) Fail("phase_stop_publication_rejected", Tick);
+				PhaseStopRequested = true;
+				std::cout << "[Qualification:Scale] event=phase_stop_requested run=" << RunId
+					<< " phase=" << PhaseName << " tick=" << Tick
+					<< " elapsed_us=" << std::chrono::duration_cast<std::chrono::microseconds>(
+						std::chrono::steady_clock::now() - PhaseStarted).count() << '\n';
+			}
+			if (PhaseStopRequested && ProducerDone && AllPeersAcknowledged && WorldConverged) {
 				EndPhase(Tick);
 				return;
 			}
@@ -142,6 +155,7 @@ namespace gargantuan::host {
 		std::uint64_t ConvergedWarmupTicks = 0;
 		bool PhaseAcksObserved = false;
 		bool ProducerAckObserved = false;
+		bool PhaseStopRequested = false;
 		ObjectId FirstContentRoot;
 		std::vector<std::shared_ptr<Part>> Grounds;
 		std::vector<std::shared_ptr<AnimationTrack>> RootTracks;
@@ -277,6 +291,9 @@ namespace gargantuan::host {
 			} else if (Value == Phase::Evict) {
 				if (!Runtime.Content->ReleaseContent(ContentKey)) Fail("content_release_rejected", Tick);
 			}
+			if (Runtime.DataModel->ApplyAttributeMutation("ScalePhaseStopRequested", WireValue(std::string("none")),
+				ScriptSecurityContext::CoreTrusted()) != MutationStatus::Success)
+				Fail("phase_stop_reset_rejected", Tick);
 			if (Runtime.DataModel->ApplyAttributeMutation("ScalePhase", WireValue(std::string(Name(Value))),
 				ScriptSecurityContext::CoreTrusted()) != MutationStatus::Success)
 				Fail("phase_publication_rejected", Tick);
@@ -285,6 +302,7 @@ namespace gargantuan::host {
 			PhaseStarted = std::chrono::steady_clock::now();
 			PhaseAcksObserved = false;
 			ProducerAckObserved = false;
+			PhaseStopRequested = false;
 			State = Stage::Measuring;
 			std::cout << "[Qualification:Scale] event=phase_start run=" << RunId << " phase=" << Name(Value)
 				<< " tick=" << Tick << " monotonic_us=" << std::chrono::duration_cast<std::chrono::microseconds>(

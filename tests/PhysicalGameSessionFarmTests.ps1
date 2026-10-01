@@ -78,7 +78,8 @@ try {
 		$StartedTick = 1 + $Index * 840
 		$ScaleLines.Add("[Qualification:Scale] event=phase_start run=$RunId phase=$Phase tick=$StartedTick monotonic_us=$StartedUs")
 		$ScaleLines.Add("[Qualification:Scale] event=phase_acks run=$RunId phase=$Phase count=32 tick=$($StartedTick + 1)")
-		$ScaleLines.Add("[Qualification:Scale] event=producer_ack run=$RunId phase=$Phase tick=$($StartedTick + 2)")
+		$ScaleLines.Add("[Qualification:Scale] event=phase_stop_requested run=$RunId phase=$Phase tick=$($StartedTick + 2) elapsed_us=13000001")
+		$ScaleLines.Add("[Qualification:Scale] event=producer_ack run=$RunId phase=$Phase tick=$($StartedTick + 3)")
 		$ScaleLines.Add("[Qualification:Scale] event=phase_end run=$RunId phase=$Phase ticks=781 elapsed_us=13000001 monotonic_us=$($StartedUs + 13000001) producer_done=1 phase_acks=32 tick=$($StartedTick + 781)")
 	}
 	$ScaleLines.Add("[Qualification:Scale] event=result run=$RunId status=PASS phases=5 peers=32 tick=4201")
@@ -100,7 +101,7 @@ try {
 		)
 		if ($Slot -eq 0) {
 			foreach ($Phase in @('baseline', 'load', 'resident', 'evict', 'reload')) {
-				$ClientLines += "[Qualification:Producer] event=phase_metrics run_id=$RunId slot=0 nonce=$Nonce phase=$Phase status=PASS remote_samples=100 remote_p95_us=1000 remote_p99_us=2000 remote_max_us=3000 remote_errors=0 event_acks=1 event_max_gap_us=1000 action_resolutions=1 action_endings=1 action_max_result_us=1000 submission_failures=0 action_rejections=0"
+				$ClientLines += "[Qualification:Producer] event=phase_metrics run_id=$RunId slot=0 nonce=$Nonce phase=$Phase status=PASS metrics_phase_valid=1 producer_healthy=1 remote_samples=100 remote_p95_us=1000 remote_p99_us=2000 remote_max_us=3000 remote_errors=0 remote_timeouts=0 event_offers=1 event_acks=1 event_outstanding=0 event_max_rtt_us=1000 event_max_gap_us=1000 action_requests=1 action_resolutions=1 action_endings=1 action_max_result_us=1000 submission_failures=0 action_rejections=0 unexpected_endings=0"
 			}
 		}
 		[IO.File]::WriteAllLines($Path, $ClientLines)
@@ -113,8 +114,18 @@ try {
 	try { Assert-ScaleRecords -Server ([pscustomobject]@{ OutputPath = $ServerPath }) -Clients $ScaleClients -ExpectedNonces $ScaleNonces } catch { $Rejected = $true }
 	if (-not $Rejected) { throw 'short scale phase was accepted' }
 	[IO.File]::WriteAllLines($ServerPath, $ScaleLines)
+	[IO.File]::WriteAllLines($ServerPath, @($ScaleLines | Where-Object { $_ -notmatch 'event=phase_stop_requested .*phase=load' }))
+	$Rejected = $false
+	try { Assert-ScaleRecords -Server ([pscustomobject]@{ OutputPath = $ServerPath }) -Clients $ScaleClients -ExpectedNonces $ScaleNonces } catch { $Rejected = $true }
+	if (-not $Rejected) { throw 'scale result without a qualified producer stop was accepted' }
+	[IO.File]::WriteAllLines($ServerPath, $ScaleLines)
 	$ProducerPath = $ScaleClients[0].OutputPath
 	$ProducerBaseline = [IO.File]::ReadAllText($ProducerPath)
+	[IO.File]::WriteAllText($ProducerPath, $ProducerBaseline.Replace('event_offers=1 event_acks=1',
+		'event_offers=2 event_acks=1'))
+	$Rejected = $false
+	try { Assert-ScaleRecords -Server ([pscustomobject]@{ OutputPath = $ServerPath }) -Clients $ScaleClients -ExpectedNonces $ScaleNonces } catch { $Rejected = $true }
+	if (-not $Rejected) { throw 'producer receipt with an unacknowledged Event was accepted' }
 	[IO.File]::WriteAllText($ProducerPath, $ProducerBaseline.Replace(' remote_errors=0', ''))
 	$Rejected = $false
 	try { Assert-ScaleRecords -Server ([pscustomobject]@{ OutputPath = $ServerPath }) -Clients $ScaleClients -ExpectedNonces $ScaleNonces } catch { $Rejected = $true }
@@ -141,9 +152,18 @@ try {
 		$ResourceSamples[0].WorkingSetBytes -le 0 -or $ResourceSamples[0].Threads -le 0) {
 		throw 'bounded process resource sample was not recorded'
 	}
+	[void](Write-EvidenceManifest -Directory $Directory)
+	$EvidenceManifest = Get-Content -LiteralPath (Join-Path $Directory 'evidence-sha256.json') -Raw |
+		ConvertFrom-Json
+	$ServerHash = $EvidenceManifest.Files | Where-Object Name -eq 'server.log'
+	if ($EvidenceManifest.RunId -ne $RunId -or @($ServerHash).Count -ne 1 -or
+		$ServerHash.Sha256 -ne (Get-FileHash -LiteralPath $ServerPath -Algorithm SHA256).Hash.ToLowerInvariant()) {
+		throw 'farm evidence manifest did not hash the retained server receipt'
+	}
 	Write-Output '[Qualification:Farm] TYPED_EVIDENCE_TEST_OK'
 } finally {
-	foreach ($Path in @($ServerPath, $ClientPath) + @($ScaleClients | ForEach-Object OutputPath)) {
+	foreach ($Path in @($ServerPath, $ClientPath, (Join-Path $Directory 'evidence-sha256.json')) +
+		@($ScaleClients | ForEach-Object OutputPath)) {
 		if (Test-Path -LiteralPath $Path) { Remove-Item -LiteralPath $Path -Force }
 	}
 	Remove-Item -LiteralPath $Directory -Force
