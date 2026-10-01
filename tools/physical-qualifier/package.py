@@ -26,6 +26,9 @@ def Main():
     Scripts.mkdir(exist_ok=True)
     for Name in ("qualifier.py", "dependency.py", "upstream.lock.json"):
         shutil.copyfile(Source / Name, Scripts / Name)
+    # The installed personal skill can predate this project's qualified NDIS
+    # hook. Keep both packaged entrypoints on the same pinned capture policy.
+    shutil.copyfile(Source / "worker/PktMonCapture.ps1", Scripts / "PktMonCapture.ps1")
     shutil.copytree(Output / "tool/.agent-coordinator", Scripts / ".agent-coordinator")
     Runtime = Output / "runtime"
     Runtime.mkdir()

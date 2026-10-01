@@ -79,9 +79,10 @@ Two peer sockets maximum; unexpected peer IPs abort. TCP_NODELAY is enabled.
 Control and child text logs are capped at 16 MiB each. Stage/run timeouts are
 configurable within 1–600 seconds; defaults are 300/60 seconds. Capture storage is
 bounded independently (40-second dumpcap for four clients, 90 seconds for one;
-64 MiB circular worker NDIS trace).
-Local probe deadline is 25 seconds, server-live detection 6 seconds, hook execution
-10 seconds, socket send 1 second. Capture/child failures abort, rather than retry.
+256 MiB single-file worker NDIS trace with a 240 MiB completeness threshold).
+Local probe deadline is 25 seconds, server-live detection 6 seconds, worker
+capture-service hook Stop 30 seconds, socket send 1 second. Capture/child
+failures abort, rather than retry.
 
 ## Barrier and states
 
@@ -154,9 +155,10 @@ local elevation, verifies the static Mellanox link and interface index 19, and
 starts a Windows NDIS physical-interface trace scoped to that interface,
 IPv4, UDP and the fixed client address. It does not filter by UDP port: the
 pcap validator requires the exact two-peer UDP tuple and port 39450.
-Capture is full-packet, circular and bounded to 64 MiB. Stop verifies the
-task-owned trace path, then converts only complete NDIS packet events from the
-fiber miniport into an Ethernet pcapng; an incomplete export is not published.
+Capture is full-packet, single-file and bounded to 256 MiB. Stop verifies the
+task-owned trace path, rejects a trace at or above 240 MiB or with lost ETW
+events, then converts only complete NDIS packet events from the fiber miniport
+into an Ethernet pcapng; an incomplete export is not published.
 The worker idle preflight requires both Packet Monitor and Windows trace to be
 stopped before lifecycle assignment.
 An elevated worker-local test may select fixed synthetic port 39452 as a third

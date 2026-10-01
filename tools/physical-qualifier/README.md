@@ -143,7 +143,9 @@ remain the operational baseline until the new bundle is qualified on both PCs.
 
 [package.py](package.py) includes the pinned snapshot plus the project adapter in
 a fresh bundle; all files are hashed. Skill entrypoints are replaced inside the
-new package only. Keep old installed bundles/services as rollback. Follow the
+new package only, including the same project-owned capture hook at both
+`tool/worker/PktMonCapture.ps1` and `skill/scripts/PktMonCapture.ps1`. Keep old
+installed bundles/services as rollback. Follow the
 [migration receipt](../../devdocs/CurrentArchitecture/PhysicalAgentCoordination.md)
 and [physical protocol](docs/PROTOCOL.md) before authorized use.
 
