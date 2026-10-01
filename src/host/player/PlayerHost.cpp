@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -110,6 +111,12 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 	std::string FarmScaleCurrentPhase;
 	std::optional<std::chrono::steady_clock::time_point> FarmScalePhaseSeen;
 	ObjectId FarmScaleFirstRoot;
+	std::size_t FarmScaleProducerPhases = 0;
+	double FarmScalePreviousActionResolutions = 0;
+	double FarmScalePreviousActionEndings = 0;
+	double FarmScalePreviousEventAcks = 0;
+	double FarmScalePreviousSubmissionFailures = 0;
+	double FarmScalePreviousActionRejections = 0;
 	auto FarmTimestamp = [] {
 		return std::chrono::duration_cast<std::chrono::nanoseconds>(
 			std::chrono::steady_clock::now().time_since_epoch()).count();
@@ -326,10 +333,12 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 								FarmScalePhaseSeen = std::chrono::steady_clock::now();
 							}
 							if (*PhaseName == "complete") {
-								FarmScaleCompleted = FarmScaleObservedPhases == FarmScalePhases.size();
+								FarmScaleCompleted = FarmScaleObservedPhases == FarmScalePhases.size() &&
+									(FarmSlot != 0 || FarmScaleProducerPhases == FarmScalePhases.size());
 								std::cout << "[Qualification:Client] event=scale_complete run_id=" << FarmRunId
 									<< " slot=" << FarmSlot << " nonce=" << FarmClientNonce
 									<< " observed_phases=" << FarmScaleObservedPhases
+									<< " producer_phases=" << FarmScaleProducerPhases
 									<< " steady_ns=" << FarmTimestamp() << std::endl;
 								Runtime->ProcessService->MarkExit(FarmScaleCompleted ? 0 : 16);
 							} else if (FarmScaleObservedPhases < FarmScalePhases.size() &&
@@ -359,7 +368,61 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 									<< " slot=" << FarmSlot << " nonce=" << FarmClientNonce
 									<< " phase=" << *PhaseName << " observed_phases=" << FarmScaleObservedPhases << std::endl;
 								Runtime->ProcessService->MarkExit(16);
-						}
+							}
+							if (FarmSlot == 0 && *PhaseName != "complete" &&
+								FarmScaleProducerPhases < FarmScalePhases.size() &&
+								*PhaseName == FarmScalePhases[FarmScaleProducerPhases] &&
+								Runtime->CharacterControl->GetAttributeValue("ScaleRemoteDone") ==
+									std::optional<WireValue>(WireValue(*PhaseName))) {
+								auto Number = [&](std::string_view Name) {
+									const auto Value = Runtime->CharacterControl->GetAttributeValue(Name);
+									if (Value) {
+										if (const auto *Integer = std::get_if<int>(&*Value)) return static_cast<double>(*Integer);
+										if (const auto *Decimal = std::get_if<double>(&*Value)) return *Decimal;
+									}
+									return std::numeric_limits<double>::quiet_NaN();
+								};
+								const double RemoteSamples = Number("ScaleRemoteSamples");
+								const double RemoteP95 = Number("ScaleRemoteP95Us");
+								const double RemoteP99 = Number("ScaleRemoteP99Us");
+								const double RemoteMax = Number("ScaleRemoteMaxUs");
+								const double RemoteErrors = Number("ScaleRemoteErrors");
+								const double EventAcks = Number("ScaleEventAcks");
+								const double EventMaxGap = Number("ScaleEventMaxGapUs");
+								const double ActionResolutions = Number("ScaleActionResolutions");
+								const double ActionEndings = Number("ScaleActionEndings");
+								const double ActionMaxResult = Number("ScaleActionMaxResultUs");
+								const double SubmissionFailures = Number("ScaleActionSubmissionFailures");
+								const double ActionRejections = Number("ScaleActionRejections");
+								const bool Healthy = RemoteSamples == 100 && RemoteP95 <= 150'000 &&
+									RemoteP99 <= 250'000 && RemoteMax <= 500'000 && RemoteErrors == 0 &&
+									EventAcks > FarmScalePreviousEventAcks && EventMaxGap <= 250'000 &&
+									ActionResolutions > FarmScalePreviousActionResolutions &&
+									ActionEndings > FarmScalePreviousActionEndings && ActionMaxResult <= 250'000 &&
+									SubmissionFailures == FarmScalePreviousSubmissionFailures &&
+									ActionRejections == FarmScalePreviousActionRejections;
+								std::cout << "[Qualification:Producer] event=phase_metrics run_id=" << FarmRunId
+									<< " slot=" << FarmSlot << " nonce=" << FarmClientNonce
+									<< " phase=" << *PhaseName << " status=" << (Healthy ? "PASS" : "FAIL")
+									<< " remote_samples=" << RemoteSamples << " remote_p95_us=" << RemoteP95
+									<< " remote_p99_us=" << RemoteP99 << " remote_max_us=" << RemoteMax
+									<< " remote_errors=" << RemoteErrors
+									<< " event_acks=" << EventAcks - FarmScalePreviousEventAcks
+									<< " event_max_gap_us=" << EventMaxGap
+									<< " action_resolutions=" << ActionResolutions - FarmScalePreviousActionResolutions
+									<< " action_endings=" << ActionEndings - FarmScalePreviousActionEndings
+									<< " action_max_result_us=" << ActionMaxResult
+									<< " submission_failures=" << SubmissionFailures - FarmScalePreviousSubmissionFailures
+									<< " action_rejections=" << ActionRejections - FarmScalePreviousActionRejections
+									<< " steady_ns=" << FarmTimestamp() << std::endl;
+								FarmScalePreviousEventAcks = EventAcks;
+								FarmScalePreviousActionResolutions = ActionResolutions;
+								FarmScalePreviousActionEndings = ActionEndings;
+								FarmScalePreviousSubmissionFailures = SubmissionFailures;
+								FarmScalePreviousActionRejections = ActionRejections;
+								++FarmScaleProducerPhases;
+								if (!Healthy) Runtime->ProcessService->MarkExit(17);
+							}
 					}
 				}
 			if (SessionSmoke) {

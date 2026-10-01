@@ -43,7 +43,7 @@ $Result = $null
 function Get-Fields {
 	param([Parameter(Mandatory = $true)][string]$Line)
 	$Fields = @{}
-	foreach ($Match in [regex]::Matches($Line, '(?:^|\s)([a-z_]+)=([^\s]+)')) {
+	foreach ($Match in [regex]::Matches($Line, '(?:^|\s)([a-z][a-z0-9_]*)=([^\s]+)')) {
 		$Fields[$Match.Groups[1].Value] = $Match.Groups[2].Value
 	}
 	return $Fields
@@ -218,7 +218,8 @@ function Assert-ScaleRecords {
 		$Observed = @($ClientRecords | Where-Object { $_.event -eq 'phase_observed' })
 		$Completed = @($ClientRecords | Where-Object { $_.event -eq 'scale_complete' })
 		if ($Observed.Count -ne 5 -or $Completed.Count -ne 1 -or
-			$Completed[0].observed_phases -ne '5') {
+			$Completed[0].observed_phases -ne '5' -or
+			($Slot -eq 0 -and $Completed[0].producer_phases -ne '5')) {
 			throw "client $Slot lacks complete five-phase content observation"
 		}
 		$FirstRoot = $null
@@ -247,6 +248,30 @@ function Assert-ScaleRecords {
 			if ($Name -eq 'reload' -and $RootIdentity -eq $FirstRoot) {
 				throw "client $Slot did not observe a fresh reload root"
 			}
+		}
+	}
+	$ProducerRecords = @(Get-Records -Path $Clients[0].OutputPath -Kind 'Producer' |
+		Where-Object { $_.event -eq 'phase_metrics' })
+	if ($ProducerRecords.Count -ne 5) { throw 'single producer lacks five gameplay metric receipts' }
+	foreach ($Index in 0..4) {
+		$Record = $ProducerRecords[$Index]
+		$RequiredMetrics = @('remote_samples', 'remote_p95_us', 'remote_p99_us',
+			'remote_max_us', 'remote_errors', 'event_acks', 'event_max_gap_us',
+			'action_resolutions', 'action_endings', 'action_max_result_us',
+			'submission_failures', 'action_rejections')
+		foreach ($Metric in $RequiredMetrics) {
+			if (-not $Record.ContainsKey($Metric)) { throw "producer $($Names[$Index]) lacks $Metric" }
+		}
+		if ($Record.run_id -ne $RunId -or $Record.slot -ne '0' -or
+			$Record.nonce -ne $ExpectedNonces[0] -or $Record.phase -ne $Names[$Index] -or
+			$Record.status -ne 'PASS' -or $Record.remote_samples -ne '100' -or
+			[double]$Record.remote_p95_us -gt 150000 -or [double]$Record.remote_p99_us -gt 250000 -or
+			[double]$Record.remote_max_us -gt 500000 -or [double]$Record.remote_errors -ne 0 -or
+			[double]$Record.event_acks -le 0 -or [double]$Record.event_max_gap_us -gt 250000 -or
+			[double]$Record.action_resolutions -le 0 -or [double]$Record.action_endings -le 0 -or
+			[double]$Record.action_max_result_us -gt 250000 -or
+			[double]$Record.submission_failures -ne 0 -or [double]$Record.action_rejections -ne 0) {
+			throw "producer gameplay metrics failed in $($Names[$Index])"
 		}
 	}
 }

@@ -87,17 +87,30 @@ try {
 		$ScaleNonces.Add($Nonce)
 		$Path = Join-Path $Directory ("scale-client-$Slot.log")
 		$RootSlot = 10 + $Slot
-		[IO.File]::WriteAllLines($Path, @(
+		$ClientLines = @(
 			"[Qualification:Client] event=phase_observed run_id=$RunId slot=$Slot nonce=$Nonce phase=baseline objects=0 root_slot=0 root_generation=0 receive_to_observed_us=1",
 			"[Qualification:Client] event=phase_observed run_id=$RunId slot=$Slot nonce=$Nonce phase=load objects=512 root_slot=$RootSlot root_generation=1 receive_to_observed_us=2",
 			"[Qualification:Client] event=phase_observed run_id=$RunId slot=$Slot nonce=$Nonce phase=resident objects=512 root_slot=$RootSlot root_generation=1 receive_to_observed_us=3",
 			"[Qualification:Client] event=phase_observed run_id=$RunId slot=$Slot nonce=$Nonce phase=evict objects=0 root_slot=0 root_generation=0 receive_to_observed_us=4",
 			"[Qualification:Client] event=phase_observed run_id=$RunId slot=$Slot nonce=$Nonce phase=reload objects=512 root_slot=$RootSlot root_generation=2 receive_to_observed_us=5",
-			"[Qualification:Client] event=scale_complete run_id=$RunId slot=$Slot nonce=$Nonce observed_phases=5"
-		))
+			"[Qualification:Client] event=scale_complete run_id=$RunId slot=$Slot nonce=$Nonce observed_phases=5 producer_phases=$(if ($Slot -eq 0) { 5 } else { 0 })"
+		)
+		if ($Slot -eq 0) {
+			foreach ($Phase in @('baseline', 'load', 'resident', 'evict', 'reload')) {
+				$ClientLines += "[Qualification:Producer] event=phase_metrics run_id=$RunId slot=0 nonce=$Nonce phase=$Phase status=PASS remote_samples=100 remote_p95_us=1000 remote_p99_us=2000 remote_max_us=3000 remote_errors=0 event_acks=1 event_max_gap_us=1000 action_resolutions=1 action_endings=1 action_max_result_us=1000 submission_failures=0 action_rejections=0"
+			}
+		}
+		[IO.File]::WriteAllLines($Path, $ClientLines)
 		$ScaleClients.Add([pscustomobject]@{ OutputPath = $Path })
 	}
 	Assert-ScaleRecords -Server ([pscustomobject]@{ OutputPath = $ServerPath }) -Clients $ScaleClients -ExpectedNonces $ScaleNonces
+	$ProducerPath = $ScaleClients[0].OutputPath
+	$ProducerBaseline = [IO.File]::ReadAllText($ProducerPath)
+	[IO.File]::WriteAllText($ProducerPath, $ProducerBaseline.Replace(' remote_errors=0', ''))
+	$Rejected = $false
+	try { Assert-ScaleRecords -Server ([pscustomobject]@{ OutputPath = $ServerPath }) -Clients $ScaleClients -ExpectedNonces $ScaleNonces } catch { $Rejected = $true }
+	if (-not $Rejected) { throw 'producer receipt with a missing zero-valued metric was accepted' }
+	[IO.File]::WriteAllText($ProducerPath, $ProducerBaseline)
 	[IO.File]::WriteAllLines($ServerPath, @($ScaleLines | Where-Object { $_ -notmatch 'event=phase_acks .*phase=reload' }))
 	$Rejected = $false
 	try { Assert-ScaleRecords -Server ([pscustomobject]@{ OutputPath = $ServerPath }) -Clients $ScaleClients -ExpectedNonces $ScaleNonces } catch { $Rejected = $true }
