@@ -161,6 +161,20 @@ jobs:
         run: |
           ctest --test-dir build-ci -C Release --parallel 2 --timeout 300 --output-on-failure --no-tests=error --output-junit build-ci/ctest-results.xml
 
+      - name: Run qualified reliable workload timing in Release
+        shell: cmd
+        run: |
+          build-ci\gargantuan_game_session_real_transport_tests.exe --pooled --reliable-workload
+          if errorlevel 1 exit /b %errorlevel%
+          build-ci\gargantuan_game_session_real_transport_tests.exe --pooled --reliable-workload-32-structural
+          if errorlevel 1 exit /b %errorlevel%
+          build-ci\gargantuan_game_session_real_transport_tests.exe --reliable-workload
+          if errorlevel 1 exit /b %errorlevel%
+          build-ci\gargantuan_game_session_real_transport_tests.exe --reliable-workload-32
+          if errorlevel 1 exit /b %errorlevel%
+          build-ci\gargantuan_game_session_real_transport_tests.exe --reliable-workload-32-structural
+          if errorlevel 1 exit /b %errorlevel%
+
       - name: Upload native CI diagnostics
         if: failure()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
