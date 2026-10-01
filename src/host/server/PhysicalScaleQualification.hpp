@@ -100,7 +100,9 @@ namespace gargantuan::host {
 					<< " tick=" << Tick << '\n';
 			}
 			const bool WorldConverged = IsWorldConverged(CurrentPhase);
-			if (Tick - PhaseTick >= MinimumPhaseTicks && ProducerDone && AllPeersAcknowledged && WorldConverged) {
+			if (Tick - PhaseTick >= MinimumPhaseTicks &&
+				std::chrono::steady_clock::now() - PhaseStarted > MinimumPhaseWall &&
+				ProducerDone && AllPeersAcknowledged && WorldConverged) {
 				EndPhase(Tick);
 				return;
 			}
@@ -116,11 +118,11 @@ namespace gargantuan::host {
 		[[nodiscard]] bool IsComplete() const { return State == Stage::Complete; }
 
 	  private:
-		// These are the existing qualified simulator fixture's 120-tick warmup,
-		// 240-tick minimum phase and 1,200-tick phase/setup caps, not new service
-		// capacity or latency constants.
+		// Retain the simulator's tick bounds and enforce the accepted workload's
+		// separate, strictly greater than 13-second phase-boundary spacing.
 		static constexpr std::uint64_t WarmupTicks = 120;
 		static constexpr std::uint64_t MinimumPhaseTicks = 240;
+		static constexpr auto MinimumPhaseWall = std::chrono::seconds(13);
 		static constexpr std::uint64_t MaximumPhaseTicks = 1'200;
 		static constexpr std::uint64_t MaximumSetupTicks = 1'200;
 		static constexpr std::uint64_t CompletionPropagationTicks = 120;
@@ -135,6 +137,7 @@ namespace gargantuan::host {
 		std::uint64_t FirstTick = 0;
 		std::uint64_t SetupTick = 0;
 		std::uint64_t PhaseTick = 0;
+		std::chrono::steady_clock::time_point PhaseStarted;
 		std::uint64_t ConclusionTick = 0;
 		std::uint64_t ConvergedWarmupTicks = 0;
 		bool PhaseAcksObserved = false;
@@ -279,20 +282,26 @@ namespace gargantuan::host {
 				Fail("phase_publication_rejected", Tick);
 			CurrentPhase = Value;
 			PhaseTick = Tick;
+			PhaseStarted = std::chrono::steady_clock::now();
 			PhaseAcksObserved = false;
 			ProducerAckObserved = false;
 			State = Stage::Measuring;
 			std::cout << "[Qualification:Scale] event=phase_start run=" << RunId << " phase=" << Name(Value)
 				<< " tick=" << Tick << " monotonic_us=" << std::chrono::duration_cast<std::chrono::microseconds>(
-					std::chrono::steady_clock::now().time_since_epoch()).count() << '\n';
+					PhaseStarted.time_since_epoch()).count() << '\n';
 		}
 
 		void EndPhase(std::uint64_t Tick) {
+			const auto Ended = std::chrono::steady_clock::now();
 			const auto Metrics = Session.GetMetrics();
 			const auto Provider = Runtime.Content->GetMetrics();
 			const auto Root = GetContentRoot();
 			std::cout << "[Qualification:Scale] event=phase_end run=" << RunId << " phase=" << Name(CurrentPhase)
-				<< " ticks=" << Tick - PhaseTick << " producer_done=1 phase_acks=" << PeerCount
+				<< " ticks=" << Tick - PhaseTick << " elapsed_us=" <<
+					std::chrono::duration_cast<std::chrono::microseconds>(Ended - PhaseStarted).count()
+				<< " monotonic_us=" << std::chrono::duration_cast<std::chrono::microseconds>(
+					Ended.time_since_epoch()).count()
+				<< " producer_done=1 phase_acks=" << PeerCount
 				<< " observed_objects=" << (Root ? Root->GetDescendants().size() + 1 : 0)
 				<< " materialization_backlog=" << Metrics.MaterializationBacklog
 				<< " structural_bytes=" << Metrics.StructuralBytesEncoded

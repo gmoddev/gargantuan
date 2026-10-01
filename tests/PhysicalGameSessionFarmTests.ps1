@@ -72,13 +72,16 @@ try {
 	} catch { $Rejected = $true }
 	if (-not $Rejected) { throw 'non-simultaneous readiness was accepted' }
 	$ScaleLines = [Collections.Generic.List[string]]::new()
-	foreach ($Phase in @('baseline', 'load', 'resident', 'evict', 'reload')) {
-		$ScaleLines.Add("[Qualification:Scale] event=phase_start run=$RunId phase=$Phase tick=1")
-		$ScaleLines.Add("[Qualification:Scale] event=phase_acks run=$RunId phase=$Phase count=32 tick=2")
-		$ScaleLines.Add("[Qualification:Scale] event=producer_ack run=$RunId phase=$Phase tick=3")
-		$ScaleLines.Add("[Qualification:Scale] event=phase_end run=$RunId phase=$Phase ticks=240 producer_done=1 phase_acks=32 tick=4")
+	foreach ($Index in 0..4) {
+		$Phase = @('baseline', 'load', 'resident', 'evict', 'reload')[$Index]
+		$StartedUs = 1000000 + $Index * 14000000
+		$StartedTick = 1 + $Index * 840
+		$ScaleLines.Add("[Qualification:Scale] event=phase_start run=$RunId phase=$Phase tick=$StartedTick monotonic_us=$StartedUs")
+		$ScaleLines.Add("[Qualification:Scale] event=phase_acks run=$RunId phase=$Phase count=32 tick=$($StartedTick + 1)")
+		$ScaleLines.Add("[Qualification:Scale] event=producer_ack run=$RunId phase=$Phase tick=$($StartedTick + 2)")
+		$ScaleLines.Add("[Qualification:Scale] event=phase_end run=$RunId phase=$Phase ticks=781 elapsed_us=13000001 monotonic_us=$($StartedUs + 13000001) producer_done=1 phase_acks=32 tick=$($StartedTick + 781)")
 	}
-	$ScaleLines.Add("[Qualification:Scale] event=result run=$RunId status=PASS phases=5 peers=32 tick=5")
+	$ScaleLines.Add("[Qualification:Scale] event=result run=$RunId status=PASS phases=5 peers=32 tick=4201")
 	[IO.File]::WriteAllLines($ServerPath, $ScaleLines)
 	$ScaleClients = [Collections.Generic.List[object]]::new()
 	$ScaleNonces = [Collections.Generic.List[string]]::new()
@@ -104,6 +107,12 @@ try {
 		$ScaleClients.Add([pscustomobject]@{ OutputPath = $Path })
 	}
 	Assert-ScaleRecords -Server ([pscustomobject]@{ OutputPath = $ServerPath }) -Clients $ScaleClients -ExpectedNonces $ScaleNonces
+	[IO.File]::WriteAllText($ServerPath, ([IO.File]::ReadAllText($ServerPath)).Replace(
+		'phase=baseline ticks=781 elapsed_us=13000001', 'phase=baseline ticks=781 elapsed_us=12000000'))
+	$Rejected = $false
+	try { Assert-ScaleRecords -Server ([pscustomobject]@{ OutputPath = $ServerPath }) -Clients $ScaleClients -ExpectedNonces $ScaleNonces } catch { $Rejected = $true }
+	if (-not $Rejected) { throw 'short scale phase was accepted' }
+	[IO.File]::WriteAllLines($ServerPath, $ScaleLines)
 	$ProducerPath = $ScaleClients[0].OutputPath
 	$ProducerBaseline = [IO.File]::ReadAllText($ProducerPath)
 	[IO.File]::WriteAllText($ProducerPath, $ProducerBaseline.Replace(' remote_errors=0', ''))

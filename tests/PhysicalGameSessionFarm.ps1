@@ -153,6 +153,7 @@ function Sample-RunResources {
 				Threads = $Owner.Process.Threads.Count; Handles = $Owner.Process.HandleCount
 			})
 		} catch {
+			if ($Owner.Process.HasExited) { continue }
 			throw "[$($Owner.Label)] resource sample failed: $($_.Exception.Message)"
 		}
 	}
@@ -230,6 +231,7 @@ function Assert-ScaleRecords {
 		throw 'scale controller did not report one complete five-phase PASS'
 	}
 	$Names = @('baseline', 'load', 'resident', 'evict', 'reload')
+	$PreviousEndTick = 0L
 	foreach ($Name in $Names) {
 		$Starts = @($Records | Where-Object { $_.event -eq 'phase_start' -and $_.phase -eq $Name -and $_.run -eq $RunId })
 		$Ends = @($Records | Where-Object { $_.event -eq 'phase_end' -and $_.phase -eq $Name -and $_.run -eq $RunId })
@@ -240,6 +242,25 @@ function Assert-ScaleRecords {
 			$Ends[0].producer_done -ne '1') {
 			throw "scale phase $Name lacks complete typed acknowledgement or convergence evidence"
 		}
+		if (-not $Starts[0].ContainsKey('monotonic_us') -or
+			-not $Ends[0].ContainsKey('monotonic_us') -or
+			-not $Ends[0].ContainsKey('elapsed_us') -or
+			[long]$Ends[0].elapsed_us -le 13000000 -or
+			[long]$Ends[0].monotonic_us - [long]$Starts[0].monotonic_us -le 13000000) {
+			throw "scale phase $Name did not retain the required >13-second boundary"
+		}
+		$StartTick = [long]$Starts[0].tick
+		$EndTick = [long]$Ends[0].tick
+		if ($StartTick -le $PreviousEndTick -or $EndTick -le $StartTick -or
+			[long]$Ends[0].ticks -ne $EndTick - $StartTick -or
+			[long]$Acks[0].tick -lt $StartTick -or [long]$Acks[0].tick -gt $EndTick -or
+			[long]$Producer[0].tick -lt $StartTick -or [long]$Producer[0].tick -gt $EndTick) {
+			throw "scale phase $Name has an invalid authoritative tick sequence"
+		}
+		$PreviousEndTick = $EndTick
+	}
+	if ([long]$Results[0].tick -le $PreviousEndTick) {
+		throw 'scale controller result precedes final phase completion'
 	}
 	foreach ($Slot in 0..31) {
 		$ClientRecords = Get-Records -Path $Clients[$Slot].OutputPath -Kind 'Client'
