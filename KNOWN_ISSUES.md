@@ -85,6 +85,21 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+2026-10-01 corrected F1 Phase 1 checkpoint: [fresh physical run](devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md#corrected-f1-physical-phase-1-passed-2026-10-01)
+`e120a1f0-47ae-45e0-869f-9d0450795bc4` passed with four real clients,
+128 exact 512-KiB grants, all finite/running F1 peer curves, 29 common
+four-grant first-send episodes, and the derived pool bound. Accepted and
+retired both reached 67,134,512 B; captures were bidirectional for all four
+tuples with zero reported loss, and the physical coordinator, outer lifecycle,
+and cleanup all passed. This resolves the F1 Phase 1 transport-service blocker
+recorded below without changing any F1 constant or the 2 MiB/s admission
+model. The distinct 32-actual-client Local and real-TLS Node matrix, then the
+final Foundation 3L acceptance sweep, remain **NOT MEASURED**. The current
+benchmark still needs a qualified 32-actual-client farm rather than protocol
+observers. **KI-006 OPEN; Foundation 3L B — PARTIALLY READY; no 3M.**
+
+The entries below are historical checkpoints at their recorded revisions.
+
 2026-09-30 final F1 Phase 1 checkpoint: the [second and last authorized fresh
 attempt](devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md#f1-phase-1-reached-native-drain-and-failed-its-running-bound-2026-09-30)
 passed the corrected control and server-readiness barriers, connected four

@@ -6,6 +6,33 @@ last_verified: 2026-10-01
 
 # Foundation 3L.3 diagnostic validation ledger
 
+## Corrected F1 physical Phase 1 passed; 32-client matrix remains (2026-10-01)
+
+The [fresh physical receipt](PooledPhysicalQualification3L.md#corrected-f1-physical-phase-1-passed-2026-10-01)
+records physical run `e120a1f0-47ae-45e0-869f-9d0450795bc4` and outer
+lifecycle `e29e2200-1538-480f-9969-3ca8b01458fb`. All six hosted
+execution-changing CI jobs and 72 qualifier tests passed before the run.
+Four real clients connected through production GNS and completed 128 exact
+512-KiB accepted grants, 32 per peer. Native unique first-send completed each
+maximum grant 28,681–28,974 µs after activation. The greatest peer running
+deficit was 8,925,478,912 byte-µs, below the unchanged 18,025,216,000-byte-µs
+bound; 29 genuine four-grant overlap episodes totaled 622,756 µs. The sum of
+four peer maxima bounds the common pool deficit at 29,695,672,320 byte-µs,
+below 72,100,864,000 byte-µs. The direct pool high-water was **NOT MEASURED**.
+All first-send and ACK bytes converged, with accepted = retired = 67,134,512 B,
+zero retries and zero terminal release. Both capture manifests verified, all
+four tuples were bidirectional in both captures, the worker ETW recorded zero
+lost events, the coordinator and outer lifecycle succeeded, and owner-verified
+cleanup restored the staged endpoints. **F1 PHYSICAL PHASE 1 — PASS.**
+
+The next canonical gate is the separately measured **32-actual-client Local
+and real-TLS Node matrix**, followed by the final Foundation 3L acceptance
+sweep. The current benchmark has one actual client plus protocol observers;
+the smallest 32-actual-client farm, its exact-source/deployment/link preflight,
+and its evidence collection remain to be qualified before those provider
+runs. No 32-client provider result is inferred from Phase 1. **KI-006 OPEN;
+Foundation 3L B — PARTIALLY READY; no 3M or automatic merge.**
+
 ## Corrected F1 transport candidate worker-local qualification (2026-10-01)
 
 The [candidate receipt](PooledPhysicalQualification3L.md#corrected-f1-candidate-deterministic-preflight-2026-10-01)

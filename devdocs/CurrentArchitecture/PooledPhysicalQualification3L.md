@@ -1,10 +1,88 @@
 ---
-status: f1-phase1-production-service-fail
+status: f1-phase1-pass-later-gates-pending
 owner: runtime-networking-and-runtime-host
 last_verified: 2026-10-01
 ---
 
 # Foundation 3L pooled physical qualification attempt
+
+## Corrected F1 physical Phase 1 passed (2026-10-01)
+
+**F1 PHYSICAL PHASE 1 — PASS.** The scoped `ReliableNoNagle` structural
+transport candidate and corrected capture hook were qualified before this run.
+Source/qualifier commit `fbb235bdae5db8aa8946d329a18035d08996fe32`
+passed 72 qualifier tests, the pinned-GNS and native suites, and all six
+hosted Windows/Linux native and GNS-sanitizer jobs (push and PR runs). The
+installed worker capture hook and its service pin both matched
+`8FE61C01009BA27132D8094B95CD88EB5EB884A3AF5B7A4FBEFAF40A64630EBE`.
+An installed-service synthetic full-volume capture had already completed with
+zero lost events and idle cleanup. Neither that synthetic run nor the 100/100
+worker-local deterministic campaigns is substituted for the physical result.
+
+Fresh physical run `e120a1f0-47ae-45e0-869f-9d0450795bc4` and outer
+lifecycle run `e29e2200-1538-480f-9969-3ca8b01458fb` used exactly four
+real clients over direct fiber. A prior staging identity
+`c8dcfb54-0ec9-4c03-984b-60d64c448acc` was rejected before any physical
+launch because its evidence directory exceeded the ten-minute preflight age;
+both idle stages were rolled back and a new identity was used. The accepted
+run's endpoint configs, evidence-root checks, authenticated tunnel directions,
+actual-child coordinator, four client connections and GameSession readiness
+passed. Each client was assigned 32 exact 524,288-byte maximum structural
+grants through production credit, fairness and ACK-gated admission. The
+retained CSV yielded 128 maximum-grant completion records and three smaller
+completion records (1,258, 1,258 and 663 B). The 25,648-byte difference
+between total accepted bytes and the 128 maximum grants includes earlier
+startup work; its full per-grant breakdown is **NOT MEASURED** in this CSV.
+The workload did not invent a continuous 16 MiB/s cross-grant admission stream.
+
+The retained native CSV is
+`C:\Users\aiden\.codex\artifacts\gargantuan-f1-ce4733-stage-fbb235bda\prepared-b4aea576c5adabca\lifecycle\physical-gns-server.csv`,
+SHA-256 `9E8717D3C478D65F709C01D6AAA7927CBCBCFA29DD6C3F9E0AA9071D3AC1CEC1`.
+It was copied from the worker probe's work directory after lifecycle cleanup;
+the separately sealed endpoint evidence manifests remain unchanged. Every
+maximum grant completed unique first-send in **28,681–28,974 µs** after
+activation, inside F1's approximately 37,324.387-µs finite envelope. The
+per-peer maximum-grant observations were:
+
+| Slot | Complete 512-KiB grants | First-send completion, min–max µs | Maximum within-grant deficit, byte-µs |
+| --- | ---: | ---: | ---: |
+| 1 | 32 | 28,681–28,974 | 5,737,807,872 |
+| 2 | 32 | 28,681–28,961 | 6,794,772,480 |
+| 3 | 32 | 28,683–28,937 | 8,925,478,912 |
+| 4 | 32 | 28,682–28,877 | 8,237,613,056 |
+
+All 131 grant records have `last_completed_failed=0`. The maximum observed
+individual deficit was 8,925,478,912 byte-µs, below the unchanged
+18,025,216,000-byte-µs F1 bound. The probe recorded **29 genuine common
+four-grant first-send episodes** totaling **622,756 µs**. Its pool verdict is
+derived from the four native grant curves: over every common interval, the
+sum of their individual bounded deficits is at most 29,695,672,320 byte-µs,
+below the canonical 72,100,864,000-byte-µs pool bound. The direct physical
+pool high-water was **NOT MEASURED**; the stated number is a conservative
+sum-of-peer-maxima bound, not a sampled pool maximum. The first-send/ACK and
+convergence summary reported 16,777,216 B per peer across the 32 maximum
+grants, zero retries, accepted = retired = 67,134,512 B, terminal release =
+0, outstanding debt = 0, active grants = 0, and `floor_failure=0`.
+
+Both capture manifests verified byte count and SHA-256 for every member:
+13 client and 14 worker files. The client pcapng held **68,212** complete
+packets with zero dumpcap/interface drops. Worker Packet Monitor reported
+79,342 processed events and **zero lost events**; its complete converted
+pcapng and ETL were below the fixed cap. Both captures agreed exactly on all
+four UDP tuples (`52964`–`52967`): client outbound/worker inbound counts were
+1,348, 1,303, 1,346, 1,310 and worker outbound/client inbound counts were
+15,607, 15,826, 15,621, 15,851. Endpoint results, physical coordinator and
+outer lifecycle each reported success with classification
+`FOUR_CLIENT_PHASE1_ONLY`; the outer lifecycle finished with both endpoints
+`IDLE`. Owner-verified rollback restored both installed baselines, found zero
+owned processes, lifecycle listeners or UDP 39450 sockets, and released both
+CodexLock claims. Packet Monitor was stopped with no filters; the capture
+service remained Running and idle.
+
+This passes the bounded **F1 four-client Phase 1** gate only. The separate
+32-actual-client Local/Node and remaining Foundation 3L acceptance gates have
+not been inferred from this run. **KI-006 remains OPEN; Foundation 3L remains
+B — PARTIALLY READY; no Foundation 3M or PR merge.**
 
 ## Full-volume capture-infrastructure preflight (2026-10-01)
 
@@ -25,8 +103,9 @@ below the capture service's 30-second Stop lease. Every packet block matched
 the initial export. A separate retained 41,418,752-byte trace exported 27,004
 frames in 1.271 seconds. These are capture and conversion preflights; they do
 not measure native F1 first-send service or establish physical Phase 1 PASS.
-The installed capture-service hook and pin remain the historical version until
-the exact candidate, CI, service update, and endpoint preflights complete.
+At this historical preflight checkpoint, the installed capture-service hook
+and pin still remained the historical version; the corrected hook was later
+installed and qualified before the passing physical run above.
 
 The first installed-service synthetic Start with the expanded fast-export hook
 failed **before capture** with Windows process error 206. Pinned service source
@@ -41,7 +120,7 @@ and CRLF line endings. Replaying the same 94,896,128-byte ETL through this
 shortened hook exported the same 62,300 frames and identical pcapng hash
 `218226D1BC3A1F38067833706E48DD422A00531D03A066F171EAF0FB17C28D88`
 in 10.348 seconds with zero lost events. A successful installed-service
-synthetic capture is still required before physical staging; no physical F1
+synthetic capture was still required at that checkpoint; no physical F1
 attempt was consumed by the failed service preflight.
 
 ## Corrected F1 candidate deterministic preflight (2026-10-01)
