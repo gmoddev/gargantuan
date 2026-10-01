@@ -128,8 +128,8 @@ namespace {
 		nlohmann::ordered_json Descriptor{
 			{"format", "GargantuanQualifiedScalePackage"}, {"version", 1},
 			{"project_id", Payload.Identity.ToString()}, {"revision", Payload.AuthoritativeRevision},
-			{"player_package", Filesystem::absolute(Output / "Player").generic_string()},
-			{"server_package", Filesystem::absolute(Output / "Server").generic_string()},
+			{"player_package", "Player"},
+			{"server_package", "Server"},
 			{"content_key", Expected.Entry.Key}, {"content_blob", Expected.Entry.BlobReference},
 			{"content_objects", QualifiedScaleObjects}, {"content_bytes", QualifiedScaleBytes},
 			{"content_digest", Expected.Entry.Digest.ToString()},

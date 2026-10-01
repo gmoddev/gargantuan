@@ -175,6 +175,42 @@ jobs:
           build-ci\gargantuan_game_session_real_transport_tests.exe --reliable-workload-32-structural
           if errorlevel 1 exit /b %errorlevel%
 
+      - name: Package qualified 32-client physical candidate
+        if: github.event_name == 'workflow_dispatch'
+        shell: pwsh
+        run: |
+          $PackageRoot = Join-Path $PWD 'build-ci/QualifiedScalePhysical'
+          $PlayerRuntime = Join-Path $PWD 'build-ci/RuntimeDistribution'
+          $ServerRuntime = Join-Path $PWD 'build-ci/ServerRuntimeDistribution'
+          & (Join-Path $PWD 'build-ci/gargantuan_qualified_scale_package.exe') `
+            $PackageRoot $PlayerRuntime $ServerRuntime
+          if ($LASTEXITCODE -ne 0) { throw 'Qualified scale package generation failed' }
+          foreach ($Role in @('Player', 'Server')) {
+            $RoleRoot = Join-Path $PackageRoot $Role
+            $Files = @(Get-ChildItem -LiteralPath $RoleRoot -File -Recurse | Sort-Object FullName |
+              ForEach-Object {
+                [ordered]@{
+                  Path = [IO.Path]::GetRelativePath($RoleRoot, $_.FullName).Replace('\', '/')
+                  Bytes = $_.Length
+                  Sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+                }
+              })
+            if ($Files.Count -lt 3) { throw "Qualified $Role package is incomplete" }
+            [IO.File]::WriteAllText((Join-Path $RoleRoot 'deployment-sha256.json'),
+              ([ordered]@{ Format = 'GargantuanFarmDeployment'; Version = 1;
+                SourceCommit = $env:GITHUB_SHA; Files = $Files } | ConvertTo-Json -Depth 5),
+              [Text.UTF8Encoding]::new($false))
+          }
+
+      - name: Upload qualified 32-client physical candidate
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: qualified-scale-${{ github.sha }}
+          if-no-files-found: error
+          include-hidden-files: true
+          path: build-ci/QualifiedScalePhysical/
+
       - name: Upload native CI diagnostics
         if: failure()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6

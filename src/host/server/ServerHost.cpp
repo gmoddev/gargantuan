@@ -846,6 +846,33 @@ namespace gargantuan::host {
 			if (Session && HostConfiguration.ReliableService) {
 				const auto Metrics = Session->GetMetrics();
 				const auto &M = Metrics.ReliableAdmission;
+				if (FarmMode)
+					std::cout << "[Qualification:Admission] event=result run=" << FarmRunId
+						<< " accepted=" << M.AcceptedBytes
+						<< " retired=" << M.VerifiedAttributedRetirement
+						<< " terminal_release=" << M.TerminalReleasedBytes
+						<< " outstanding=" << M.OutstandingBytes
+						<< " outstanding_high=" << M.OutstandingHighWater
+						<< " active_grants=" << M.ActiveDrainGrants
+						<< " grants_high=" << M.DrainGrantsHighWater
+						<< " grant_deferrals=" << M.GrantDeferrals
+						<< " funded_deferrals=" << M.FundedDeferrals
+						<< " credit_deferrals=" << M.CreditDeferrals
+						<< " fairness_deferrals=" << M.FairnessDeferrals
+						<< " max_wait_us=" << M.MaximumAdmissionWaitMicroseconds
+						<< " peer_backlog_high=" << M.PeerBacklogHighWater
+						<< " global_backlog_high=" << M.GlobalBacklogHighWater
+						<< " peer_credit_high=" << M.PeerCreditHighWater
+						<< " global_credit_high=" << M.GlobalCreditHighWater
+						<< " fairness_rotations=" << Metrics.StructuralPeerFairnessRotations
+						<< " pending_enters=" << Metrics.StructuralPendingEnters
+						<< " pending_leaves=" << Metrics.StructuralPendingLeaves
+						<< " materialization_backlog=" << Metrics.MaterializationBacklog
+						<< " journal_backlog=" << Metrics.JournalBacklogRecords
+						<< " structural_active_peers=" << Metrics.StructuralActivePeers
+						<< " oldest_pending_ticks=" << Metrics.StructuralOldestPendingAgeTicks
+						<< " backlog_failures=" << Metrics.StructuralBacklogLimitFailures
+						<< " journal_failures=" << Metrics.StructuralJournalLagFailures << '\n';
 				std::cout << "[Network:Admission] accepted=" << M.AcceptedBytes << " reserved=" << M.ReservedBytes
 					<< " rolledBack=" << M.RolledBackBytes << " creditDeferrals=" << M.CreditDeferrals
 					<< " sizeDeferrals=" << M.SizeDeferrals << " deferredByteAttempts=" << M.DeferredBytes

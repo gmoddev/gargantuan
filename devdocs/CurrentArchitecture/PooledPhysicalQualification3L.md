@@ -1944,3 +1944,48 @@ profile to obtain a pass.
 
 **Supported physical profile: none established. KI-006 OPEN. Foundation 3L
 B — PARTIALLY READY; not ready for final acceptance. No merge; no 3M.**
+
+## 2026-10-01 — 32-client qualification infrastructure in progress
+
+The retained F1 physical Phase 1 PASS remains authoritative for its four-client
+finite-grant scope. The Local and real-TLS Node 32-actual-client provider matrices
+in the gate table above are still **not measured**. This section records the new
+candidate infrastructure without treating parser or mock tests as physical proof.
+
+The qualified-scale package builder creates one identical 512-object content
+unit for a Server runtime and a Player runtime. A hosted Windows workflow
+dispatch can package those runtime trees with complete per-file SHA-256 indexes
+and one source-commit pin. The run-manifest creator verifies both complete
+package trees, binds a canonical run UUID and 32 distinct run-scoped nonces to
+the exact Server/Player binary, package, content and deployment hashes, and
+writes byte-identical manifests for both physical endpoints. It carries the
+Node address and trusted root certificate hash for Node runs, but no TLS token.
+
+The role-local supervisor uses fixed executable names and fixed arguments. It
+owns either one production Server process or 32 independent production Player
+processes, each with its own GameSession and nonce. It bounds startup, aggregate
+runtime, working set, threads, logs, evidence and owned-process cleanup. The
+read-only preflight inventories CPU, RAM, disk, process baseline, direct-fiber
+route/link/MTU, UDP listener ownership and Node certificate/token presence.
+These controls are infrastructure checks, not provider acceptance.
+
+The offline reconciler verifies both immutable evidence indexes and the same
+pinned run manifest, joins all 32 server/client identities, checks the five
+phase and content-observation records, one-producer typed gameplay results,
+monotonic role-local resource samples, and the final native admission receipt.
+The farm-only native receipt records exact accepted/attributed-retired bytes,
+terminal release, outstanding debt, active/high-water grants, credit/fairness
+deferrals, current pending enter/leave counts, materialization/journal backlog
+and structural failures. Reconciliation deliberately reports **INCOMPLETE**
+until the independent service, fairness, capture, real-TLS, recovery, resource
+and cleanup gates have physical evidence.
+
+The installed four-client capture path is not silently extended to this
+campaign. Its worker service has a 90-second hard lease, whereas five required
+phases each exceed 13 seconds before startup, warmup and terminal propagation.
+A separately versioned, bounded capture/control profile and its retention,
+ownership, pin and lifecycle checks must qualify before either provider run.
+The current worker hook already uses a 256-MiB nonwrapping ETL and rejects
+traces at 240 MiB or with lost events; whether that limit suffices for the
+32-client campaign remains **not measured**. No new capture or 32-client
+physical run is claimed here.
