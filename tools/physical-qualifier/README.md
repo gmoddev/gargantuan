@@ -38,6 +38,16 @@ with `--verify-tree <archive.zip> <source-root>`. The candidate bundle is staged
 separately from installed tools; endpoint artifact, capture, evidence-root and
 normal-LAN preflights remain required before an authorized physical attempt.
 
+The corrected four-client capture hook uses a task-owned, non-circular NDIS
+trace capped at 256 MiB. Stop rejects a trace at or above 240 MiB or with any
+reported lost ETW events, then exports only complete frames from the pinned
+fiber miniport. Large traces use an in-process bounded pcapng exporter so the
+privileged service can finish within its 30-second Stop limit. A 72,000,000-byte
+synthetic fiber payload produced a 94,896,128-byte ETL with zero lost events;
+the final hook replay exported 62,300 complete frames in 10.390 seconds. This
+is capture-infrastructure preflight, not a physical F1 result. The installed
+service hook must be updated and hash-pinned before physical qualification.
+
 Generic transport, coordinator, endpoint and privileged capture implementation is
 owned by [GantriaEngine Agent Coordinator](https://github.com/GantriaEngine/agent-coordinator).
 This directory retains Gargantuan's exact probe/source identities, fixed GNS argv,

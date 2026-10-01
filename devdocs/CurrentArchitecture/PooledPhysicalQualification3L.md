@@ -6,6 +6,28 @@ last_verified: 2026-10-01
 
 # Foundation 3L pooled physical qualification attempt
 
+## Full-volume capture-infrastructure preflight (2026-10-01)
+
+The prior worker hook requested a 64-MiB circular NDIS trace. A complete
+32-wave/four-client maximum-grant workload carries 64 MiB of attributed
+structural bytes before packet and ETL overhead, so circular capture could
+overwrite early evidence without the existing pcap parser detecting it. The
+corrected hook requests a bounded 256-MiB single-file trace, rejects ETL files
+at or above 240 MiB, and fails closed on nonzero or unavailable ETW lost-event
+count. It uses the same fiber-miniport filter and complete-frame pcapng format.
+
+A task-owned synthetic fiber transfer of 60,000 UDP datagrams (72,000,000
+payload bytes) yielded a 94,896,128-byte ETL. The trace was single-file with
+the 256-MiB cap, 181 buffers, 71,643 events, and zero events lost. Replaying
+that retained ETL through the final hook exported 62,300 complete miniport
+frames to a 76,940,164-byte pcapng in 10.390 seconds including the loss check,
+below the capture service's 30-second Stop lease. Every packet block matched
+the initial export. A separate retained 41,418,752-byte trace exported 27,004
+frames in 1.271 seconds. These are capture and conversion preflights; they do
+not measure native F1 first-send service or establish physical Phase 1 PASS.
+The installed capture-service hook and pin remain the historical version until
+the exact candidate, CI, service update, and endpoint preflights complete.
+
 ## Corrected F1 candidate deterministic preflight (2026-10-01)
 
 Source commit `ce4733de8d68086667bc8fe5138bcc743f21c54e` keeps the

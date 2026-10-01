@@ -9,6 +9,7 @@ $global:TestActive = $false
 $global:TestForeign = $false
 $global:TestEtl = ''
 $global:TestEventsEmpty = $false
+$global:TestLostEvents = 0
 $global:TestCalls = [System.Collections.Generic.List[string]]::new()
 function global:netsh {
     param([Parameter(ValueFromRemainingArguments=$true)][string[]]$Arguments)
@@ -50,16 +51,26 @@ function global:Get-WinEvent {
             [pscustomobject]@{Value=[uint32]19},[pscustomobject]@{Value=[uint32]19},
             [pscustomobject]@{Value=[uint32]$Frame.Length},[pscustomobject]@{Value=$Frame})}
 }
+function global:tracerpt {
+    $Arguments = @($args)
+    $Index = [array]::IndexOf($Arguments, '-summary')
+    if ($Index -lt 0 -or $Index + 1 -ge $Arguments.Count) { throw 'Unexpected tracerpt request' }
+    @('Total Buffers Processed 1', 'Total Events  Processed 1',
+      "Total Events  Lost      $global:TestLostEvents") |
+        Set-Content -LiteralPath $Arguments[$Index + 1]
+    $global:LASTEXITCODE = 0
+}
 function Assert([bool]$Value,[string]$Detail) { if (!$Value) { throw $Detail } }
 try {
     $First = Join-Path $TestDir 'first'
     New-Item -ItemType Directory -Path $First | Out-Null
     & $HookBlock $First Start 39450
     Assert $global:TestActive 'Capture did not start'
-    $Expected = 'trace start capture=yes capturetype=physical CaptureInterface={a33455f8-3b6f-46f1-b981-7c861e6b3cd3} Ethernet.Type=IPv4 Protocol=17 IPv4.Address=10.253.3.1 CaptureMultiLayer=no PacketTruncateBytes=1518 report=disabled persistent=no fileMode=circular maxSize=64 traceFile=' + $global:TestEtl
-    Assert ([bool]($global:TestCalls | Where-Object {$_ -eq $Expected})) 'Physical-interface trace filters or 64 MiB bound changed'
+    $Expected = 'trace start capture=yes capturetype=physical CaptureInterface={a33455f8-3b6f-46f1-b981-7c861e6b3cd3} Ethernet.Type=IPv4 Protocol=17 IPv4.Address=10.253.3.1 CaptureMultiLayer=no PacketTruncateBytes=1518 report=disabled persistent=no fileMode=single maxSize=256 traceFile=' + $global:TestEtl
+    Assert ([bool]($global:TestCalls | Where-Object {$_ -eq $Expected})) 'Physical-interface trace filters or 256 MiB bound changed'
     $Owner = Get-Content (Join-Path $First 'netsh-owner.json') -Raw | ConvertFrom-Json
     Assert ($Owner.MiniportIfIndex -eq 19 -and $Owner.CapturePort -eq 39450 -and
+            $Owner.TraceMaximumMiB -eq 256 -and $Owner.NoWrapThresholdMiB -eq 240 -and
             ($Owner.CaptureLayers -join ',') -eq 'NDIS physical miniport') 'Capture ownership marker is incomplete'
     & $HookBlock $First Stop
     Assert (!$global:TestActive) 'Capture did not stop'
@@ -68,6 +79,10 @@ try {
     $Bytes = [IO.File]::ReadAllBytes($Pcap)
     Assert ($Bytes.Length -gt 80 -and $Bytes[0] -eq 10 -and $Bytes[1] -eq 13 -and
             $Bytes[2] -eq 13 -and $Bytes[3] -eq 10) 'Export is not pcapng'
+    $Timestamp = ([uint64][BitConverter]::ToUInt32($Bytes, 60) -shl 32) -bor
+                 [BitConverter]::ToUInt32($Bytes, 64)
+    $ExpectedTimestamp = [DateTimeOffset]::Parse('2026-09-28T08:00:00Z').ToUnixTimeMilliseconds() * 1000
+    Assert ($Timestamp -eq $ExpectedTimestamp) 'Ethernet pcapng timestamp is not UTC'
     & $HookBlock $First Stop
     Assert ((Get-Item $Pcap).Length -eq $Bytes.Length) 'Idempotent stop changed the export'
 
@@ -107,9 +122,30 @@ try {
     Assert $Rejected 'Zero-frame trace was accepted'
     Assert (!(Test-Path (Join-Path $Fourth 'worker-capture.pcapng'))) 'Failed export was published'
     Assert (!(Test-Path (Join-Path $Fourth 'worker-capture.pcapng.pending'))) 'Failed export left a pending file'
+
+    $Fifth = Join-Path $TestDir 'fifth'
+    New-Item -ItemType Directory -Path $Fifth | Out-Null
+    & $HookBlock $Fifth Start
+    $Trace = Join-Path $Fifth 'worker-capture.etl'
+    $Stream = [IO.File]::Open($Trace, [IO.FileMode]::Open, [IO.FileAccess]::Write)
+    try { $Stream.SetLength(240MB) } finally { $Stream.Dispose() }
+    $Rejected = $false
+    try { & $HookBlock $Fifth Stop } catch { $Rejected = $_.Exception.Message -match 'completeness size bound' }
+    Assert $Rejected 'A single-file trace at its completeness threshold was accepted'
+    Assert (!(Test-Path (Join-Path $Fifth 'worker-capture.pcapng'))) 'Near-cap trace published a partial pcap'
+
+    $Sixth = Join-Path $TestDir 'sixth'
+    New-Item -ItemType Directory -Path $Sixth | Out-Null
+    & $HookBlock $Sixth Start
+    $global:TestEventsEmpty = $false
+    $global:TestLostEvents = 1
+    $Rejected = $false
+    try { & $HookBlock $Sixth Stop } catch { $Rejected = $_.Exception.Message -match 'lost events' }
+    Assert $Rejected 'A trace with lost ETW events was accepted'
+    Assert (!(Test-Path (Join-Path $Sixth 'worker-capture.pcapng'))) 'Lossy trace published a partial pcap'
     Write-Output 'Capture hook simulation passed: exact scope, export, ownership and cleanup.'
 } finally {
-    Remove-Item Function:\netsh,Function:\Get-NetAdapter,Function:\Get-NetIPAddress,Function:\Get-NetIPInterface,Function:\Get-WinEvent
+    Remove-Item Function:\netsh,Function:\Get-NetAdapter,Function:\Get-NetIPAddress,Function:\Get-NetIPInterface,Function:\Get-WinEvent,Function:\tracerpt
     $Resolved = [IO.Path]::GetFullPath($TestDir)
     if ((Split-Path $Resolved -Parent) -ne ([IO.Path]::GetTempPath().TrimEnd('\')) -or
         (Split-Path $Resolved -Leaf) -notlike 'qualifier-hook-test-*') {
