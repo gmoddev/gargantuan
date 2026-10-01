@@ -28,6 +28,22 @@ not measure native F1 first-send service or establish physical Phase 1 PASS.
 The installed capture-service hook and pin remain the historical version until
 the exact candidate, CI, service update, and endpoint preflights complete.
 
+The first installed-service synthetic Start with the expanded fast-export hook
+failed **before capture** with Windows process error 206. Pinned service source
+embeds the entire hook in UTF-16 Base64 `-EncodedCommand`; the 12,765-character
+hook produced a 34,184-character argument, above the 32,767-character Windows
+command-line limit. The service remained Running and left no active marker or
+trace. The corrected hook embeds a compressed copy of the same exporter C#
+source, keeping the readable source separately in the repository. The new
+regression verifies exact decoded-source equality and that Start/Stop command
+lines remain below the Windows limit even for a 512-character evidence path
+and CRLF line endings. Replaying the same 94,896,128-byte ETL through this
+shortened hook exported the same 62,300 frames and identical pcapng hash
+`218226D1BC3A1F38067833706E48DD422A00531D03A066F171EAF0FB17C28D88`
+in 10.348 seconds with zero lost events. A successful installed-service
+synthetic capture is still required before physical staging; no physical F1
+attempt was consumed by the failed service preflight.
+
 ## Corrected F1 candidate deterministic preflight (2026-10-01)
 
 Source commit `ce4733de8d68086667bc8fe5138bcc743f21c54e` keeps the

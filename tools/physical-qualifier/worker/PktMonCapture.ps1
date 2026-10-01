@@ -111,90 +111,13 @@ function ExportNdisTraceFast([string]$Source, [string]$Destination, [uint32]$IfI
     # Compile the same bounded NDIS event filter/writer in-process for large
     # Phase 1 traces; keep the simple path for small capture-hook simulations.
     if (-not ('GargantuanQualification.FastNdisExport' -as [type])) {
-        $Definition = @'
-using System;
-using System.Diagnostics.Eventing.Reader;
-using System.IO;
-
-namespace GargantuanQualification {
-public static class FastNdisExport {
-    private const string Provider = "Microsoft-Windows-NDIS-PacketCapture";
-    private static readonly long UnixEpochTicks =
-        new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc).Ticks;
-
-    public static long Export(string Source, string Destination, uint InterfaceIndex) {
-        long Packets = 0;
-        var Query = new EventLogQuery(Source, PathType.FilePath, "*");
-        Query.ReverseDirection = false;
-        using (var Reader = new EventLogReader(Query))
-        using (var Stream = new FileStream(Destination, FileMode.CreateNew,
-            FileAccess.Write, FileShare.None, 1 << 20))
-        using (var Writer = new BinaryWriter(Stream)) {
-            WriteSection(Writer);
-            WriteInterface(Writer);
-            EventRecord Record;
-            while ((Record = Reader.ReadEvent()) != null) {
-                using (Record) {
-                    if (Record.Id != 1001 || Record.ProviderName != Provider)
-                        continue;
-                    var Properties = Record.Properties;
-                    if (Properties.Count < 4 ||
-                        Convert.ToUInt32(Properties[0].Value) != InterfaceIndex ||
-                        Convert.ToUInt32(Properties[1].Value) != InterfaceIndex)
-                        continue;
-                    var Frame = Properties[3].Value as byte[];
-                    if (Frame == null || Frame.Length < 14 ||
-                        Frame.Length != Convert.ToUInt32(Properties[2].Value))
-                        throw new InvalidDataException("NDIS packet event is truncated or malformed.");
-                    var Ticks = Record.TimeCreated.Value.ToUniversalTime().Ticks - UnixEpochTicks;
-                    long Microseconds = Convert.ToInt64((double)Ticks / 10.0);
-                    WritePacket(Writer, Frame, Microseconds);
-                    Packets++;
-                }
-            }
-        }
-        if (Packets == 0)
-            throw new InvalidDataException(
-                "NDIS trace contains no complete frames from the worker fiber miniport.");
-        return Packets;
-    }
-
-    private static void WriteSection(BinaryWriter Writer) {
-        Writer.Write(0x0A0D0D0Au);
-        Writer.Write(28u);
-        Writer.Write(0x1A2B3C4Du);
-        Writer.Write((ushort)1);
-        Writer.Write((ushort)0);
-        Writer.Write(-1L);
-        Writer.Write(28u);
-    }
-
-    private static void WriteInterface(BinaryWriter Writer) {
-        Writer.Write(1u);
-        Writer.Write(20u);
-        Writer.Write((ushort)1);
-        Writer.Write((ushort)0);
-        Writer.Write(65535u);
-        Writer.Write(20u);
-    }
-
-    private static void WritePacket(BinaryWriter Writer, byte[] Frame, long Microseconds) {
-        int Padding = (4 - (Frame.Length & 3)) & 3;
-        uint Length = (uint)(32 + Frame.Length + Padding);
-        Writer.Write(6u);
-        Writer.Write(Length);
-        Writer.Write(0u);
-        Writer.Write((uint)((ulong)Microseconds >> 32));
-        Writer.Write((uint)Microseconds);
-        Writer.Write((uint)Frame.Length);
-        Writer.Write((uint)Frame.Length);
-        Writer.Write(Frame);
-        if (Padding != 0) Writer.Write(new byte[Padding]);
-        Writer.Write(Length);
-    }
-}
-}
-'@
+        $CompressedDefinition = 'H4sIAAAAAAACCrVWW2/bNhR+969g/TBIi6NJdtJtcFwgjZPCWJqldbI+BHlgpOOYiEwKJOUL2vz3HpJSLCVS3K0YbdgWea7f4fmOc8X4PZlulIbFsJNXnoIxo/dcKM1iFZwugWs8Cz4DTUA+k5z8Pex0OF2AymgM5AOV95TrnPJPOU3ZjMVUM8HJ106W36UsJkrjRkzilCpFzqjSFwlTp+tMSI1CBFcm2ZJqILHgSqO8NN4upVgy9E5GpPuRxVIoMdP7XxhPxErtX4wn0/1LGj+APqGZziV0hzVbhVeJGQiebkgq0OY1Z+vTTMTzKxY/KDKyGmZxWJExql2xBXjRn7+HPRLZd1i+y9O/MIDgWsd+YG0gFNZrLVXry2XoFdlMRS5j6JXJjQGR5haoHskZ12TCNcgZAjrhCaz9AhmzrDWXKoZMwuHTyZJK8ikHucFtk4Gt27m4t3te6fKS6vnVJoPgjKVgHnqk+2vX35qx4ljrJUgFYyYhtgUckRlNFWzl3C3wjFd3MZ65dZueNef7TWpTjfVYFGomHLfh1eAw+x9FAsEJnmm4gFXvyZZZ5vw4jkGp4ItkGpzGdE4lBBeC43NEjo5IP2yOweqUob9Hr3LjtjwXjF/F3ix7OnWgeE60At6TxFMBm2UsSJ8hFjIh7qt+vppjEsTzCpFRAbFtQavrYWBvMOo8TZ9HWMnQqTcJmMVmpUQwSYy1KAwj8u1bEVFQ9twFdrc5Lp/9RmtmYcti5XIYNkoYvNFGBlIzUDap0k+xN2yNcysTnIgcO+SIHGCorZGcCI4XWAdX4hpLMehXDNyEt8E/NM3BIljvtP9qMmo3+TNonUkD/aiC2s2g8ESoIncbDTe37aAV6u6amMLajeAc+L2eI4LRqxDWhDGt1/Lvl/m3Z6vnUqxsm034EkdDghxKT9cxZLaVuobDSWaJjYC54oQpomXOcYJAQoQkC5rOhFxAEnT9dswKMi8vl2FpRx2JC9HEz5lhN5pagi+4m+w/GwjNLiz/ugmEDnhiXG2RQWDeHnheInACgO/s/oZ9FYQtEVt2cHReMEXPAd+rOWnRLubA3t7L48dO89P2l22rcpDgJKmXbke5Xvhz9dPS/AkwF5syrggX+HuRpYAjeGayUvglFmgcyErIB2TeGbvDzwXjzAzIWmUl4CTnZZJu/7HTNNeXgiV1Zq5SeUHyVRp0O25ieOE6PA7H+DrOK95rIv0/Wo/CdXTcfz84ORi3ini5mmNyfrRLIGwT2I/Od4e2C5vtTPo36ETtoIT/Y8ZvDw8Hhz/gelfSRW81ZNwr+LPstxedXYXE/Cm7pElixuqIeAfIFl6NIH8hAxzJ+Fn5h2SUimPUMY++N+iTvTq17pWGW6FohcFZaL2Zr5THxuLlJme/xmbv3pFB339dsYWZGiSrif68pJWpHDoGc0V5YxisLm7Iy5a4kLn9IRgfO+b1HYHJ0JQcDQAA'
+        $DefinitionBytes = [Convert]::FromBase64String($CompressedDefinition)
+        $InputStream = [IO.MemoryStream]::new($DefinitionBytes)
+        $ZipStream = [IO.Compression.GZipStream]::new($InputStream, [IO.Compression.CompressionMode]::Decompress)
+        $Reader = [IO.StreamReader]::new($ZipStream, [Text.Encoding]::UTF8)
+        try { $Definition = $Reader.ReadToEnd() }
+        finally { $Reader.Dispose(); $ZipStream.Dispose(); $InputStream.Dispose() }
         Add-Type -TypeDefinition $Definition -ReferencedAssemblies 'System.Core.dll' -ErrorAction Stop
     }
     return [GargantuanQualification.FastNdisExport]::Export($Source, $Destination, $IfIndex)

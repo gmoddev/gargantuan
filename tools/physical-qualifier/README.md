@@ -47,6 +47,12 @@ synthetic fiber payload produced a 94,896,128-byte ETL with zero lost events;
 the final hook replay exported 62,300 complete frames in 10.390 seconds. This
 is capture-infrastructure preflight, not a physical F1 result. The installed
 service hook must be updated and hash-pinned before physical qualification.
+The fixed-operation service embeds its pinned hook in a PowerShell
+`-EncodedCommand`, so the hook keeps the fast exporter as a compressed embedded
+source blob. The readable [C# source](worker/FastNdisExport.cs) is checked
+byte-for-byte against that blob, and a regression bounds the full Windows
+command line for a 512-character evidence path. No auxiliary runtime file is
+needed beside the service-pinned hook.
 
 Generic transport, coordinator, endpoint and privileged capture implementation is
 owned by [GantriaEngine Agent Coordinator](https://github.com/GantriaEngine/agent-coordinator).
