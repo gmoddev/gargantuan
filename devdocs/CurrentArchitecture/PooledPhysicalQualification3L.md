@@ -1992,8 +1992,14 @@ and cleanup gates have physical evidence.
 The installed four-client capture path is not silently extended to this
 campaign. Its worker service has a 90-second hard lease, whereas five required
 phases each exceed 13 seconds before startup, warmup and terminal propagation.
-A separately versioned, bounded capture/control profile and its retention,
-ownership, pin and lifecycle checks must qualify before either provider run.
+A separately versioned Farm32 source candidate is pinned at Agent Coordinator
+`e5cd675e87ea007e064b4cafe7e6650310390456` and staged in draft upstream PR
+`GantriaEngine/agent-coordinator#5`. It uses a different service, pipe, data
+directory and request version, preserving the installed F1 service and hook.
+Its 600-second lease, 60-second privileged Stop, 1024-MiB nonwrapping worker
+ETL and separate client dumpcap profile have passed source/mock checks only.
+Retention, ownership, pin and lifecycle checks on the actual endpoints must
+qualify before either provider run.
 The current worker hook already uses a 256-MiB nonwrapping ETL and rejects
 traces at 240 MiB or with lost events; whether that limit suffices for the
 32-client campaign remains **not measured**. No new capture or 32-client
