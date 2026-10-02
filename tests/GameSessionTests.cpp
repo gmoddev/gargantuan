@@ -1640,6 +1640,15 @@ end)
 				const auto LocalPlayerDuringRevoke = ClientRuntime->Players->GetLocalPlayer();
 				const auto LocalCharacterDuringRevoke = LocalPlayerDuringRevoke && (*LocalPlayerDuringRevoke)->GetCharacter()
 					? *(*LocalPlayerDuringRevoke)->GetCharacter() : nullptr;
+				std::cout << "[Network:ControlRebindTest] phase=revoke serverCharacter="
+					<< static_cast<bool>(ServerPlayers[0]->GetCharacter())
+					<< " serverRoot=" << static_cast<bool>(ServerCharacter->GetRootPart())
+					<< " clientCharacter=" << static_cast<bool>(LocalCharacterDuringRevoke)
+					<< " clientRoot=" << (LocalCharacterDuringRevoke && LocalCharacterDuringRevoke->GetRootPart())
+					<< " bindings=" << Server.GetMetrics().CharacterControlBindings - BindingsBefore
+					<< " revocations=" << Server.GetMetrics().CharacterControlRevocations - RevocationsBefore
+					<< " actions=" << detail::GameSessionTestAccess::GetCharacterMetrics(Server).ActionRequestsAccepted - ActionsBefore
+					<< " clientReady=" << (Client.GetStatus() == GameSessionStatus::Ready) << '\n';
 				Check(ServerPlayers[0]->GetCharacter() && (*ServerPlayers[0]->GetCharacter())->GetObjectId() == CharacterId &&
 					RootPart->GetObjectId() == RootId && Server.GetMetrics().CharacterControlBindings == BindingsBefore &&
 					Server.GetMetrics().CharacterControlRevocations == RevocationsBefore + 1 &&
@@ -1657,6 +1666,15 @@ end)
 				const auto LocalPlayer = ClientRuntime->Players->GetLocalPlayer();
 				const auto LocalCharacter = LocalPlayer && (*LocalPlayer)->GetCharacter()
 					? *(*LocalPlayer)->GetCharacter() : nullptr;
+				std::cout << "[Network:ControlRebindTest] phase=rebound serverRoot="
+					<< static_cast<bool>(ServerCharacter->GetRootPart())
+					<< " clientCharacter=" << static_cast<bool>(LocalCharacter)
+					<< " clientRoot=" << (LocalCharacter && LocalCharacter->GetRootPart())
+					<< " requested=" << (LocalCharacter && LocalCharacter->GetAttributeValue("ReboundActionRequested"))
+					<< " bindings=" << Server.GetMetrics().CharacterControlBindings - BindingsBefore
+					<< " revocations=" << Server.GetMetrics().CharacterControlRevocations - RevocationsBefore
+					<< " actions=" << detail::GameSessionTestAccess::GetCharacterMetrics(Server).ActionRequestsAccepted - ActionsBefore
+					<< " clientReady=" << (Client.GetStatus() == GameSessionStatus::Ready) << '\n';
 				Check(ServerPlayers[0]->GetCharacter() && (*ServerPlayers[0]->GetCharacter())->GetObjectId() == CharacterId &&
 					RootPart->GetObjectId() == RootId && Server.GetMetrics().CharacterControlBindings == BindingsBefore + 1 &&
 					Server.GetMetrics().CharacterControlRevocations == RevocationsBefore + 1 && LocalCharacter &&
