@@ -4,6 +4,7 @@ import hashlib
 import json
 from pathlib import Path
 import shutil
+import subprocess
 import sys
 import unittest
 from unittest import mock
@@ -31,6 +32,8 @@ class MockTransport:
             Endpoint.Prepare(Arguments[0])
         elif Action == "verify":
             Endpoint.Verify(*Arguments)
+        elif Action == "abort":
+            Endpoint.Abort(*Arguments)
         else:
             raise AssertionError(Action)
 
@@ -143,6 +146,88 @@ class OuterCampaignTests(unittest.TestCase):
             Outer.FetchIndexed(MockTransport(), str(Remote), self.Fixture.Root / "changed",
                                "evidence-sha256.json", self.Fixture.Identity["RunId"],
                                "SERVER", 128, 16 * 1024 * 1024)
+
+    def test_admission_fairness_member_uses_canonical_32_mib_cap(self):
+        Remote = self.Fixture.Root / "large-worker-evidence"
+        Remote.mkdir()
+        Member = Remote / "admission-fairness.tsv"
+        with Member.open("wb") as Stream:
+            Stream.truncate(17 * 1024 * 1024)
+        Index = {"RunId": self.Fixture.Identity["RunId"], "Role": "Server",
+                 "Files": [{"Name": Member.name, "Bytes": Member.stat().st_size,
+                            "Sha256": Outer.Digest(Member)}]}
+        (Remote / "evidence-sha256.json").write_text(json.dumps(Index), encoding="utf-8")
+        Outer.FetchIndexed(MockTransport(), str(Remote), self.Fixture.Root / "fairness-copied",
+                           "evidence-sha256.json", self.Fixture.Identity["RunId"],
+                           "SERVER", 128, 16 * 1024 * 1024)
+        self.assertEqual(Member.stat().st_size,
+                         (self.Fixture.Root / "fairness-copied" / Member.name).stat().st_size)
+        Index["Files"][0]["Name"] = "another.tsv"
+        (Remote / "evidence-sha256.json").write_text(json.dumps(Index), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "evidence member invalid"):
+            Outer.FetchIndexed(MockTransport(), str(Remote), self.Fixture.Root / "other-copied",
+                               "evidence-sha256.json", self.Fixture.Identity["RunId"],
+                               "SERVER", 128, 16 * 1024 * 1024)
+
+    def test_failed_launch_aborts_each_run_owned_endpoint_and_binds_reap_receipts(self):
+        RunId = self.Fixture.Identity["RunId"]
+        Roots = {Role: str(self.Fixture.Root / (Role.lower() + "-cleanup"))
+                 for Role in ("SERVER", "CLIENT")}
+        for Role, Root in Roots.items():
+            Endpoint.Prepare(Root)
+            Names = ("host-config.json", "ticket.json") if Role == "SERVER" else ("ticket.json",)
+            for Name in Names:
+                (Path(Root) / Name).write_text(json.dumps({"Format": "GargantuanFarm32Campaign",
+                                                            "Version": 1, "RunId": RunId}), encoding="utf-8")
+        class FinishedChild:
+            def __init__(self, Root, Action):
+                self.Root, self.Action = Root, Action
+
+            def wait(self, timeout):
+                Marker = self.Root / (self.Action + ".abort.request")
+                if not Marker.is_file():
+                    raise AssertionError("missing run-bound abort: " + str(Marker))
+                (self.Root / (self.Action + ".terminal.json")).write_text(json.dumps({
+                    "Format": "GargantuanFarm32Terminal", "Version": 1,
+                    "RunId": RunId, "Action": self.Action,
+                    "ChildTreeReaped": True, "Outcome": "ABORTED"}), encoding="utf-8")
+                return 1
+
+        Launched = [("SERVER", "host", FinishedChild(Path(Roots["SERVER"]), "host")),
+                    ("SERVER", "role", FinishedChild(Path(Roots["SERVER"]), "role")),
+                    ("CLIENT", "role", FinishedChild(Path(Roots["CLIENT"]), "role"))]
+        Outer.ReapLaunch(MockTransport(), Roots, RunId, self.Fixture.Private, Launched, False)
+        self.assertTrue((self.Fixture.Private / "worker-host-terminal.json").is_file())
+        self.assertTrue((self.Fixture.Private / "worker-role-terminal.json").is_file())
+
+    def test_failed_launch_without_endpoint_reap_receipt_fails_closed(self):
+        RunId = self.Fixture.Identity["RunId"]
+        Root = str(self.Fixture.Root / "worker-cleanup")
+        Endpoint.Prepare(Root)
+        (Path(Root) / "host-config.json").write_text(json.dumps({
+            "Format": "GargantuanFarm32Campaign", "Version": 1, "RunId": RunId}),
+            encoding="utf-8")
+        Process = mock.Mock()
+        Process.wait.side_effect = subprocess.TimeoutExpired("mock", 30)
+        with self.assertRaisesRegex(RuntimeError, "cleanup unproven"):
+            Outer.ReapLaunch(MockTransport(), {"SERVER": Root}, RunId, self.Fixture.Private,
+                             [("SERVER", "host", Process)], False)
+        Process.terminate.assert_called_once()
+
+    def test_worker_powershell_raises_nonzero_for_script_exception(self):
+        PowerShell = shutil.which("pwsh.exe")
+        if PowerShell is None:
+            self.skipTest("PowerShell 7 is unavailable")
+        Script = self.Fixture.Root / "fail.ps1"
+        Script.write_text("throw 'mock script exception'\n", encoding="utf-8")
+        def LocalChecked(Arguments, Timeout):
+            return subprocess.run(Arguments[4:], check=True, capture_output=True,
+                                  text=True, timeout=Timeout, creationflags=Outer.Hidden())
+        Transport = Outer.Transport(r"C:\Python312\python.exe", r"C:\Sandbox\farm_outer_endpoint.py")
+        with mock.patch.object(Outer, "Checked", side_effect=LocalChecked):
+            with self.assertRaises(subprocess.CalledProcessError) as Context:
+                Transport.WorkerPowerShell(PowerShell, str(Script), Timeout=10)
+        self.assertNotEqual(0, Context.exception.returncode)
 
     def test_real_worker_paths_remain_under_task_sandbox(self):
         self.assertRaisesRegex(ValueError, "outside task sandbox", REAL_WORKER_SANDBOX,

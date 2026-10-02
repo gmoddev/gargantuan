@@ -5,7 +5,10 @@ import json
 from pathlib import Path
 import sys
 import tempfile
+import threading
+import time
 import unittest
+import uuid
 from unittest import mock
 
 
@@ -29,10 +32,12 @@ class FarmOuterEndpointTests(unittest.TestCase):
         self.addCleanup(self.Temporary.cleanup)
         self.Root = Path(self.Temporary.name) / "stage"
         Endpoint.Prepare(self.Root)
+        self.RunId = str(uuid.uuid4())
         self.Runner = self.Root / "farm_campaign_runner.py"
         self.Runner.write_text("print('fixed mock')\n", encoding="utf-8")
         self.Ticket = Save(self.Root / "ticket.json", {
             "Format": "GargantuanFarm32Campaign", "Version": 1, "Role": "CLIENT",
+            "RunId": self.RunId,
         })
         self.Index = Save(self.Root / "index.json", {"Format": "GargantuanFarm32StageIndex",
             "Version": 1, "Files": [{"Name": File.name, "Sha256": Hash(File)}
@@ -79,6 +84,74 @@ class FarmOuterEndpointTests(unittest.TestCase):
             self.Root.chmod(0o755)
             with self.assertRaises(ValueError):
                 Endpoint.Verify(self.Root, self.Index)
+
+    def RunInThread(self):
+        Errors = []
+        def Target():
+            try:
+                Endpoint.Run(self.Root, self.Index, self.Launch, "role")
+            except (ValueError, RuntimeError, TimeoutError, OSError) as Error:
+                Errors.append(Error)
+        Thread = threading.Thread(target=Target)
+        Thread.start()
+        return Thread, Errors
+
+    def WaitForLog(self):
+        Deadline = time.monotonic() + 5
+        while not (self.Root / "role.stdout.log").is_file():
+            if time.monotonic() >= Deadline:
+                self.fail("bounded mock child did not start")
+            time.sleep(0.01)
+
+    def SetSleepingRunner(self):
+        self.Runner.write_text("import time\nprint('started', flush=True)\ntime.sleep(30)\n",
+                               encoding="utf-8")
+        Index = json.loads(self.Index.read_text())
+        Index["Files"][0]["Sha256"] = Hash(self.Runner)
+        Save(self.Index, Index)
+        Launch = json.loads(self.Launch.read_text())
+        Launch["RunnerSha256"] = Hash(self.Runner)
+        Save(self.Launch, Launch)
+
+    def test_run_bound_abort_reaps_owned_child(self):
+        self.SetSleepingRunner()
+        Thread, Errors = self.RunInThread()
+        self.WaitForLog()
+        Endpoint.Abort(self.Root, self.Index, "role")
+        Thread.join(timeout=12)
+        self.assertFalse(Thread.is_alive())
+        self.assertEqual(1, len(Errors))
+        self.assertIn("abort requested", str(Errors[0]))
+        Terminal = json.loads((self.Root / "role.terminal.json").read_text())
+        self.assertEqual(self.RunId, Terminal["RunId"])
+        self.assertEqual("ABORTED", Terminal["Outcome"])
+        self.assertTrue(Terminal["ChildTreeReaped"])
+
+    def test_run_timeout_reaps_owned_child(self):
+        self.SetSleepingRunner()
+        with mock.patch.object(Endpoint, "MAX_SECONDS", 0.05):
+            Thread, Errors = self.RunInThread()
+            Thread.join(timeout=12)
+        self.assertFalse(Thread.is_alive())
+        self.assertEqual(1, len(Errors))
+        self.assertIn("time or log bound", str(Errors[0]))
+        Terminal = json.loads((self.Root / "role.terminal.json").read_text())
+        self.assertEqual("BOUND_EXCEEDED", Terminal["Outcome"])
+        self.assertTrue(Terminal["ChildTreeReaped"])
+
+    def test_failed_runner_without_live_tree_proof_fails_closed(self):
+        self.Runner.write_text("raise RuntimeError('mock failure')\n", encoding="utf-8")
+        Index = json.loads(self.Index.read_text())
+        Index["Files"][0]["Sha256"] = Hash(self.Runner)
+        Save(self.Index, Index)
+        Launch = json.loads(self.Launch.read_text())
+        Launch["RunnerSha256"] = Hash(self.Runner)
+        Save(self.Launch, Launch)
+        with self.assertRaisesRegex(RuntimeError, "child tree was not reaped"):
+            Endpoint.Run(self.Root, self.Index, self.Launch, "role")
+        Terminal = json.loads((self.Root / "role.terminal.json").read_text())
+        self.assertEqual("FAILED", Terminal["Outcome"])
+        self.assertFalse(Terminal["ChildTreeReaped"])
 
 
 if __name__ == "__main__":

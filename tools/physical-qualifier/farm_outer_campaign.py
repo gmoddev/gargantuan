@@ -121,7 +121,9 @@ class Transport:
                 *(RemoteArgument(Item) for Item in Arguments)]
         Invocation = "& '" + Executable + "' " + " ".join("'" + Item + "'" for Item in Args)
         Encoded = base64.b64encode(("$ErrorActionPreference='Stop';" + Invocation +
-                                    ";exit $LASTEXITCODE").encode("utf-16le")).decode("ascii")
+                                    ";$Succeeded=$?;"
+                                    "if(-not $Succeeded -or $LASTEXITCODE -isnot [int]){exit 1};"
+                                    "exit [int]$LASTEXITCODE").encode("utf-16le")).decode("ascii")
         return Checked(["ssh", "-o", "BatchMode=yes", WORKER_ALIAS, "pwsh.exe",
                         "-NoProfile", "-NonInteractive", "-EncodedCommand", Encoded], Timeout)
 
@@ -488,7 +490,8 @@ def Launch(PrivateRoot, SpecPath, WorkerPython, WorkerHelper, TransportInstance=
     Index = RemoteText(str(PureWindowsPath(Root) / "stage-index.json"))
     HostConfig = RemoteText(str(PureWindowsPath(Root) / "host-launch.json"))
     Host = TransportInstance.RemoteStart("host", Root, Index, HostConfig)
-    Roles = []
+    Launched = [("SERVER", "host", Host)]
+    Success = False
     try:
         Marker = Spec["Host"]["ListeningPath"]
         LocalMarker = PrivateRoot / "worker-listening.json"
@@ -519,28 +522,71 @@ def Launch(PrivateRoot, SpecPath, WorkerPython, WorkerHelper, TransportInstance=
             "State": "CONTROL_ONLY_LISTENING_UNQUALIFIED"})
         Barrier = time.monotonic()
         ServerLaunch = RemoteText(str(PureWindowsPath(Root) / "role-launch.json"))
-        Roles.append(TransportInstance.RemoteStart("role", Root, Index, ServerLaunch))
+        Launched.append(("SERVER", "role",
+                         TransportInstance.RemoteStart("role", Root, Index, ServerLaunch)))
         ClientRoot = Path(Roots["CLIENT"]).resolve(strict=True)
         # A local hidden child keeps the main controller free to observe both roles.
-        Roles.append(subprocess.Popen([sys.executable, "-B", str(SOURCE / "farm_outer_endpoint.py"),
+        Launched.append(("CLIENT", "role", subprocess.Popen([sys.executable, "-B",
+                                       str(SOURCE / "farm_outer_endpoint.py"),
                                        "role", str(ClientRoot), str(ClientRoot / "stage-index.json"),
                                        str(ClientRoot / "role-launch.json")],
                                       cwd=str(SOURCE), stdout=subprocess.DEVNULL,
-                                      stderr=subprocess.DEVNULL, creationflags=Hidden()))
+                                      stderr=subprocess.DEVNULL, creationflags=Hidden())))
         if time.monotonic() - Barrier >= 60:
             raise TimeoutError("[Qualification:FarmOuter] role launch barrier exceeded")
         Deadline = time.monotonic() + 850
-        for Process in Roles:
+        for _, _, Process in Launched[1:]:
             Remaining = max(0.1, Deadline - time.monotonic())
             if Process.wait(timeout=Remaining) != 0:
                 raise RuntimeError("[Qualification:FarmOuter] role failed; preserve evidence")
         if Host.wait(timeout=max(0.1, Deadline - time.monotonic())) != 0:
             raise RuntimeError("[Qualification:FarmOuter] coordinator failed; preserve evidence")
+        Success = True
     finally:
-        for Process in [*Roles, Host]:
-            if Process.poll() is None:
-                Process.terminate()
+        ReapLaunch(TransportInstance, Roots, Identity["RunId"], PrivateRoot, Launched, Success)
     return 0
+
+
+def ReapLaunch(TransportInstance, Roots, RunId, PrivateRoot, Launched, Success):
+    """Abort only run-owned wrappers and require endpoint child-reap receipts."""
+    Errors = []
+    if not Success:
+        for Role, Action, _ in Launched:
+            Root = Roots[Role]
+            Index = str(PureWindowsPath(Root) / "stage-index.json")
+            try:
+                if Role == "SERVER":
+                    TransportInstance.Remote("abort", RemoteText(Root), RemoteText(Index), Action)
+                else:
+                    from farm_outer_endpoint import Abort
+                    Abort(Root, Index, Action)
+            except (ValueError, OSError, subprocess.SubprocessError) as Error:
+                Errors.append("abort request failed for " + Role + "/" + Action + ": " + str(Error))
+    for Role, Action, Process in Launched:
+        try:
+            Process.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            Process.terminate()  # Wrapper only; the endpoint lease remains bounded.
+            Errors.append("owned " + Role + "/" + Action + " wrapper did not reap")
+        Root = Roots[Role]
+        RemoteReceipt = str(PureWindowsPath(Root) / (Action + ".terminal.json"))
+        try:
+            if Role == "SERVER":
+                Receipt = Path(PrivateRoot) / ("worker-" + Action + "-terminal.json")
+                TransportInstance.Fetch(RemoteReceipt, Receipt)
+            else:
+                Receipt = Path(Root) / (Action + ".terminal.json")
+            Row = ReadJson(Receipt)
+            if (Row.get("Format") != "GargantuanFarm32Terminal" or Row.get("Version") != 1 or
+                    Row.get("RunId") != RunId or Row.get("Action") != Action or
+                    Row.get("ChildTreeReaped") is not True or
+                    (Success and Row.get("Outcome") != "COMPLETED")):
+                raise ValueError("terminal child-reap identity mismatch")
+        except (ValueError, OSError, subprocess.SubprocessError) as Error:
+            Errors.append("terminal receipt missing or invalid for " + Role + "/" + Action +
+                          ": " + str(Error))
+    if Errors:
+        raise RuntimeError("[Qualification:FarmOuter] cleanup unproven: " + "; ".join(Errors))
 
 
 def FetchIndexed(TransportInstance, RemoteRoot, LocalRoot, IndexName, RunId, Role,
@@ -567,7 +613,8 @@ def FetchIndexed(TransportInstance, RemoteRoot, LocalRoot, IndexName, RunId, Rol
                 not re.fullmatch(r"[A-Za-z0-9._-]{1,96}", Member["Name"]) or
                 Member["Name"] in Seen or Member["Name"] == IndexName or
                 type(Member["Bytes"]) is not int or
-                not 0 <= Member["Bytes"] <= MaximumMemberBytes or
+                not 0 <= Member["Bytes"] <= (32 * 1024 * 1024 if
+                    Member["Name"] == "admission-fairness.tsv" else MaximumMemberBytes) or
                 not isinstance(Member["Sha256"], str) or
                 not SHA.fullmatch(Member["Sha256"])):
             raise ValueError("[Qualification:FarmOuter] indexed worker evidence member invalid")

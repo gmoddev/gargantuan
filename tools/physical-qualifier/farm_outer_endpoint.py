@@ -6,6 +6,7 @@ of the pinned Farm32 host/role entrypoints. It never starts a capture itself.
 """
 
 import argparse
+from datetime import datetime, timezone
 import hashlib
 import importlib.util
 import json
@@ -16,6 +17,7 @@ import socket
 import subprocess
 import sys
 import time
+import uuid
 
 from private_ticket_acl import AssertPrivate, Harden
 
@@ -94,18 +96,44 @@ def Probe(Host, Port, RunId):
 
 def StopOwned(Process):
     if Process.poll() is not None:
-        return
+        return True
+    TreeStopped = False
     if os.name == "nt":
-        subprocess.run(["taskkill.exe", "/PID", str(Process.pid), "/T", "/F"],
-                       capture_output=True, timeout=8,
-                       creationflags=subprocess.CREATE_NO_WINDOW, check=False)
+        Result = subprocess.run(["taskkill.exe", "/PID", str(Process.pid), "/T", "/F"],
+                                capture_output=True, timeout=8,
+                                creationflags=subprocess.CREATE_NO_WINDOW, check=False)
+        TreeStopped = Result.returncode == 0
     else:
         Process.terminate()
+        TreeStopped = True
     try:
         Process.wait(timeout=8)
     except subprocess.TimeoutExpired:
         Process.kill()
         Process.wait(timeout=5)
+        TreeStopped = False
+    return TreeStopped and Process.poll() is not None
+
+
+def Abort(Root, IndexPath, Action):
+    AssertPrivate(Root)
+    if Action not in ("host", "role"):
+        raise ValueError("[Qualification:FarmOuter] invalid abort target")
+    Root = Path(Root).resolve(strict=True)
+    Input = ReadJson(Root / ("host-config.json" if Action == "host" else "ticket.json"))
+    RunId = Input.get("RunId")
+    if (Input.get("Format") != "GargantuanFarm32Campaign" or Input.get("Version") != 1 or
+            not isinstance(RunId, str) or str(uuid.UUID(RunId)) != RunId):
+        raise ValueError("[Qualification:FarmOuter] abort identity mismatch")
+    Marker = Root / (Action + ".abort.request")
+    Row = {"Format": "GargantuanFarm32Abort", "Version": 1,
+           "RunId": RunId, "Action": Action}
+    if Marker.exists():
+        if ReadJson(Marker) != Row:
+            raise ValueError("[Qualification:FarmOuter] abort marker changed")
+        return
+    with Marker.open("xb") as Stream:
+        Stream.write((json.dumps(Row, sort_keys=True) + "\n").encode("utf-8"))
 
 
 def Run(Root, IndexPath, ConfigPath, Action):
@@ -134,29 +162,59 @@ def Run(Root, IndexPath, ConfigPath, Action):
     elif Input.get("Format") != "GargantuanFarm32Campaign" or Input.get("Version") != 1 or \
             Input.get("Role") not in ("SERVER", "CLIENT"):
         raise ValueError("[Qualification:FarmOuter] role input mismatch")
+    RunId = Input.get("RunId")
+    if not isinstance(RunId, str) or str(uuid.UUID(RunId)) != RunId:
+        raise ValueError("[Qualification:FarmOuter] launch run identity mismatch")
     Flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
     Output = Root / (Action + ".stdout.log")
     Error = Root / (Action + ".stderr.log")
+    AbortMarker = Root / (Action + ".abort.request")
+    Terminal = Root / (Action + ".terminal.json")
+    if AbortMarker.exists() or Terminal.exists():
+        raise ValueError("[Qualification:FarmOuter] stale abort or terminal marker")
     with Output.open("xb") as Stdout, Error.open("xb") as Stderr:
         Process = subprocess.Popen([sys.executable, "-B", str(Root / Config["RunnerName"]),
                                     Action, str(Root / Config["InputName"])],
                                    cwd=str(Root), stdout=Stdout, stderr=Stderr,
                                    creationflags=Flags)
         Deadline = time.monotonic() + MAX_SECONDS
+        Outcome = "FAILED"
         try:
             while Process.poll() is None:
+                if AbortMarker.is_file():
+                    if ReadJson(AbortMarker) != {"Format": "GargantuanFarm32Abort", "Version": 1,
+                                                 "RunId": RunId, "Action": Action}:
+                        raise ValueError("[Qualification:FarmOuter] abort marker identity mismatch")
+                    Outcome = "ABORTED"
+                    raise RuntimeError("[Qualification:FarmOuter] run-bound abort requested")
                 if time.monotonic() >= Deadline or Output.stat().st_size > MAX_LOG or Error.stat().st_size > MAX_LOG:
+                    Outcome = "BOUND_EXCEEDED"
                     raise TimeoutError("[Qualification:FarmOuter] owned process time or log bound")
                 time.sleep(0.1)
             if Process.returncode:
                 raise RuntimeError("[Qualification:FarmOuter] pinned " + Action + " failed")
+            Outcome = "COMPLETED"
         finally:
-            StopOwned(Process)
+            WasRunning = Process.poll() is None
+            Reaped = StopOwned(Process)
+            # A failed runner that already exited may have left an unowned
+            # descendant; PID-tree termination can only prove the live case.
+            if Outcome != "COMPLETED" and not WasRunning:
+                Reaped = False
+            Row = {"Format": "GargantuanFarm32Terminal", "Version": 1,
+                   "RunId": RunId, "Action": Action, "ChildPid": Process.pid,
+                   "ChildExitCode": Process.poll(), "ChildTreeReaped": Reaped,
+                   "Outcome": Outcome,
+                   "EndedUtc": datetime.now(timezone.utc).isoformat()}
+            with Terminal.open("xb") as Stream:
+                Stream.write((json.dumps(Row, sort_keys=True) + "\n").encode("utf-8"))
+            if not Reaped:
+                raise RuntimeError("[Qualification:FarmOuter] owned child tree was not reaped")
 
 
 def Main():
     Parser = argparse.ArgumentParser(description=__doc__)
-    Parser.add_argument("Action", choices=("prepare", "verify", "digest", "probe", "host", "role"))
+    Parser.add_argument("Action", choices=("prepare", "verify", "digest", "probe", "abort", "host", "role"))
     Parser.add_argument("Root")
     Parser.add_argument("IndexOrPort", nargs="?")
     Parser.add_argument("ConfigOrRunId", nargs="?")
@@ -172,6 +230,8 @@ def Main():
         print(Digest(File))
     elif Args.Action == "probe" and Args.ConfigOrRunId is not None:
         Probe(Args.Root, int(Args.IndexOrPort), Args.ConfigOrRunId)
+    elif Args.Action == "abort" and Args.ConfigOrRunId is not None:
+        Abort(Args.Root, Args.IndexOrPort, Args.ConfigOrRunId)
     elif Args.Action in ("host", "role") and Args.ConfigOrRunId is not None:
         Run(Args.Root, Args.IndexOrPort, Args.ConfigOrRunId, Args.Action)
     else:
