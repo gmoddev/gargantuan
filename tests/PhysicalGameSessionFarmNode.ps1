@@ -304,6 +304,12 @@ $ReceiptPath = Join-Path $Stage 'node-run.json'
 if (Test-Path -LiteralPath $ReceiptPath) { throw 'Node stage was already run' }
 $ClaimPath = Join-Path $Stage 'node-run.claim'
 Write-NewFile -Path $ClaimPath -Bytes ([Text.UTF8Encoding]::new($false).GetBytes($Proof.RunId))
+$MaximumLogBytes = 8MB
+$StdoutPath = Join-Path $Stage 'node.stdout.log'
+$StderrPath = Join-Path $Stage 'node.stderr.log'
+foreach ($LogPath in @($StdoutPath, $StderrPath)) {
+	if (Test-Path -LiteralPath $LogPath) { throw 'Node stage contains an unexpected child log' }
+}
 $Info = [Diagnostics.ProcessStartInfo]::new()
 $Info.FileName = $Executable
 $Info.WorkingDirectory = $Stage
@@ -317,14 +323,24 @@ $Child.StartInfo = $Info
 $StartedUtc = [DateTimeOffset]::UtcNow
 $Reason = 'START_FAILED'; $Ready = $false; $ReadyRecorded = $false; $ExitCode = $null
 $Started = $false; $ChildProcessId = 0
+$StdoutStream = $null; $StderrStream = $null; $Stdout = $null; $Stderr = $null
 try {
+	$StdoutStream = [IO.FileStream]::new($StdoutPath, [IO.FileMode]::CreateNew,
+		[IO.FileAccess]::Write, [IO.FileShare]::Read, 4096, [IO.FileOptions]::Asynchronous)
+	$StderrStream = [IO.FileStream]::new($StderrPath, [IO.FileMode]::CreateNew,
+		[IO.FileAccess]::Write, [IO.FileShare]::Read, 4096, [IO.FileOptions]::Asynchronous)
 	if (-not $Child.Start()) { throw 'Node child did not start' }
 	$Started = $true; $ChildProcessId = $Child.Id
-	$Stdout = $Child.StandardOutput.BaseStream.CopyToAsync([IO.Stream]::Null)
-	$Stderr = $Child.StandardError.BaseStream.CopyToAsync([IO.Stream]::Null)
+	$Stdout = $Child.StandardOutput.BaseStream.CopyToAsync($StdoutStream)
+	$Stderr = $Child.StandardError.BaseStream.CopyToAsync($StderrStream)
 	$Deadline = $StartedUtc.AddSeconds($MaximumRuntimeSeconds)
 	$ReadyDeadline = $StartedUtc.AddSeconds(15)
 	while (-not $Child.HasExited -and [DateTimeOffset]::UtcNow -lt $Deadline) {
+		if ($StdoutStream.Length -gt $MaximumLogBytes -or
+			$StderrStream.Length -gt $MaximumLogBytes -or
+			$Stdout.IsFaulted -or $Stderr.IsFaulted) {
+			$Reason = 'LOG_BOUND'; break
+		}
 		if (-not $Ready -and [DateTimeOffset]::UtcNow -lt $ReadyDeadline) {
 			$Socket = [Net.Sockets.TcpClient]::new()
 			try {
@@ -367,6 +383,13 @@ try {
 	}
 	if ($Stdout) { try { [void]$Stdout.Wait(10000) } catch { } }
 	if ($Stderr) { try { [void]$Stderr.Wait(10000) } catch { } }
+	if ($StdoutStream) { $StdoutStream.Dispose() }
+	if ($StderrStream) { $StderrStream.Dispose() }
+	$StdoutBytes = if (Test-Path -LiteralPath $StdoutPath) { (Get-Item -LiteralPath $StdoutPath).Length } else { 0L }
+	$StderrBytes = if (Test-Path -LiteralPath $StderrPath) { (Get-Item -LiteralPath $StderrPath).Length } else { 0L }
+	if ($StdoutBytes -gt $MaximumLogBytes -or $StderrBytes -gt $MaximumLogBytes) {
+		$Reason = 'LOG_BOUND'
+	}
 	$Receipt = [ordered]@{
 		Format = 'GargantuanFarmNodeRun'; Version = 1
 		RunId = $Proof.RunId; StageSha256 = $StageSha256.ToLowerInvariant()
@@ -378,7 +401,13 @@ try {
 		EndedUtc = [DateTimeOffset]::UtcNow.ToString('O')
 		TcpReady = $Ready; TlsProven = $false; Reason = $Reason
 		ExitCode = $ExitCode; ChildReaped = [bool]($Started -and $Child.HasExited)
-		LogsDiscarded = $true
+		LogsDiscarded = $false
+		StdoutPath = $StdoutPath; StdoutBytes = $StdoutBytes
+		StdoutSha256 = if ($StdoutBytes -le $MaximumLogBytes -and
+			(Test-Path -LiteralPath $StdoutPath)) { Get-Sha256 $StdoutPath } else { $null }
+		StderrPath = $StderrPath; StderrBytes = $StderrBytes
+		StderrSha256 = if ($StderrBytes -le $MaximumLogBytes -and
+			(Test-Path -LiteralPath $StderrPath)) { Get-Sha256 $StderrPath } else { $null }
 	}
 	Write-NewFile -Path $ReceiptPath -Bytes ([Text.UTF8Encoding]::new($false).GetBytes(
 		($Receipt | ConvertTo-Json -Depth 5)))

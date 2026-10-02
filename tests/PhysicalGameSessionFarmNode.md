@@ -29,8 +29,10 @@ binary with `serve --config <pinned TOML>`. The child is bounded by a hard
 60–1200-second limit (default 900), a 15-second TCP readiness limit, and a
 same-run `stop.request` file containing the run ID. It terminates and reaps its
 owned process tree, and writes `node-run.json`. Standard output/error are
-drained to a null stream so the helper never creates an unbounded or
-potentially secret-bearing log. A consumed stage is not reusable.
+retained as separate, hash-pinned files with an 8-MiB hard acceptance cap each;
+the supervisor aborts on log overflow. The Node JSON log can therefore supply
+the matching negotiated-TLS receipt without logging the workload token or
+private-key bytes. A consumed stage is not reusable.
 
 `node-tcp-ready.json` and `node-run.json` explicitly record `TlsProven=false`:
 a TCP connect does not prove TLS. Physical Node qualification still needs the

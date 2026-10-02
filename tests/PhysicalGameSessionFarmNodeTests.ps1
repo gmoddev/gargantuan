@@ -217,6 +217,12 @@ func main() {
 		$Receipt.Reason -cne 'STOP_REQUESTED' -or -not (Test-Path -LiteralPath $Claim)) {
 		throw 'Node child lifecycle or honest TLS classification failed'
 	}
+	if ($Receipt.LogsDiscarded -or $Receipt.StdoutBytes -gt 8MB -or
+		$Receipt.StderrBytes -gt 8MB -or
+		$Receipt.StdoutSha256 -cne (Get-Pin $Receipt.StdoutPath) -or
+		$Receipt.StderrSha256 -cne (Get-Pin $Receipt.StderrPath)) {
+		throw 'Node child log retention is not bounded and hash-pinned'
+	}
 	Expect-Rejection { & $Source -Mode Run -StageRoot $Stage -StageSha256 $StagePin } 'single-use Node stage'
 	$BadDescriptor = Join-Path $Root 'bad-descriptor.json'
 	$Descriptor.revision = 24
