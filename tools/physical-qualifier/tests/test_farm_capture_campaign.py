@@ -125,6 +125,25 @@ class CaptureCampaignTests(unittest.TestCase):
         self.assertEqual(Manifest["Role"], "CLIENT")
         self.assertEqual(Manifest["State"], "SEALED_UNQUALIFIED")
 
+    def test_client_capture_clean_early_exit_cannot_be_timestamped_after_role(self):
+        Config = self.Config("CLIENT")
+        self.Capture.mkdir()
+        Controller = campaign.FarmCaptureController(Config, Clock=self.Clock, Sleep=self.Clock.Sleep)
+        Controller.Started = self.Clock()
+
+        class Child:
+            def poll(self):
+                return 0
+
+        Controller.Child = Child()
+        with self.assertRaisesRegex(RuntimeError, "ended before role completion"):
+            Controller.AwaitRole()
+        self.assertLess(self.Clock.Value, 1)
+        self.RoleEvidence("CLIENT")
+        with self.assertRaisesRegex(RuntimeError, "ended before role completion"):
+            Controller.Finish()
+        self.assertFalse((self.Capture / "capture-sha256.json").exists())
+
     def test_role_deadline_is_less_than_service_lease(self):
         Config = self.Config("SERVER")
         self.Capture.mkdir()

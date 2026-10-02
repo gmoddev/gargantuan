@@ -260,11 +260,17 @@ class FarmCaptureController:
             Index = Config["RoleEvidenceRoot"] / "evidence-sha256.json"
             if Index.is_file():
                 try:
-                    return RoleEvidence(Config["RoleEvidenceRoot"], Config["RunId"], Config["Role"])
+                    Evidence = RoleEvidence(Config["RoleEvidenceRoot"], Config["RunId"], Config["Role"])
                 except (json.JSONDecodeError, FileNotFoundError):
                     pass  # A read may overlap the role supervisor's final write.
-            if self.Child is not None and self.Child.poll() not in (None, 0):
-                raise RuntimeError("[Qualification:FarmCapture] client capture failed during role work")
+                else:
+                    # The wrapper's successful exit does not prove when dumpcap
+                    # stopped. It must still be alive after the role is sealed.
+                    if self.Child is not None and self.Child.poll() is not None:
+                        raise RuntimeError("[Qualification:FarmCapture] client capture ended before role completion")
+                    return Evidence
+            if self.Child is not None and self.Child.poll() is not None:
+                raise RuntimeError("[Qualification:FarmCapture] client capture ended before role completion")
             self.Sleep(0.1)
         raise TimeoutError("[Qualification:FarmCapture] role exceeded the 500-second capture deadline")
 
