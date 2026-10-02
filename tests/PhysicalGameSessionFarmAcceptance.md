@@ -51,12 +51,16 @@ the separate reconciliation report. The fixed 20-second service-recovery gate
 is `MEASURED_PASS` only if Local and Node each pass gameplay, structural, and
 mixed service recovery. A valid failing case is reported as `MEASURED_FAIL`;
 an absent workload is `NOT MEASURED`. The fixed ordinary-service observation
-is separate from structural convergence. For each case, a frozen 3J quote is
-audited against every post-cessation accepted complete frame; the parser
-recomputes all 32 peers' exact `W_i`, the canonical workload-derived deadline,
-terminal reader/source/debt conservation, and client final-Name observation.
-Missing or divergent quote evidence fails closed. A parser fixture is not a
-physical Local or Node recovery result.
+is separate from structural convergence. For each case, the frozen 3J reference
+defines the immutable cessation `W_i` and original workload-derived deadline.
+The C3/C5 causal verifier separately audits actual prepared/accepted complete
+frames, source-fence coverage, pending-token disposition, native first-send,
+ACK and retirement. Continuing relevance motion may change later frame bytes;
+those bytes must match their actual prepared identity, not a prediction from
+the frozen reference. The finite accepted prefix must converge by the original
+deadline, and later live work remains audited through terminal conservation
+and client final-Name observation. Missing or inconsistent reference or causal
+evidence fails closed. A parser fixture is not a physical Local or Node result.
 
 The report independently re-reads the indexed Server `server.stdout.log`
 native admission receipt and `admission-fairness.tsv` timeline, then compares
