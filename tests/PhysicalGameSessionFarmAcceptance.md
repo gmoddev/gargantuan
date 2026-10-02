@@ -67,11 +67,18 @@ eligibility waits. These are bounded subsets. A maximum observed wait by itself
 does not establish the canonical fairness verdict or overload backpressure.
 
 For Node, the report also checks the indexed authenticated manifest RPC
-receipt against the run manifest and reconciliation fields. It preserves
-`RealTls=NOT_MEASURED`: `grpc_ssl_credentials` and a matching root pin do not
-constitute a negotiated TLS-session or full provider provenance proof. Local
-evidence containing a Node receipt is rejected. Source, workload and
-deployment pin parity is measured; complete application/provider parity is not.
+receipt against the run manifest and reconciliation fields. Without additional
+Node evidence it preserves `RealTls=NOT_MEASURED`: `grpc_ssl_credentials` and a
+matching root pin do not constitute a negotiated TLS-session proof. To measure
+that one RPC's negotiated TLS, supply the separately pinned `node-tls-match.json`,
+`node-stage.json`, and `node-run.json` paths and SHA-256 values together. The
+analyzer replays the pinned Node TLS matcher against the indexed Server receipt,
+owned-child stage/run receipt, and hash-bound Node log, then requires exact
+agreement with the supplied match receipt. It reports the TLS version/cipher and
+`NEGOTIATED_TLS_MANIFEST_RPC_MEASURED` only for that authenticated request. This
+does not establish complete content delivery or full provider parity. Local
+evidence containing a Node receipt is rejected. Source, workload and deployment
+pin parity is measured; complete application/provider parity is not.
 
 The report records the already typed five-phase observations and final native
 admission conservation as measured subsets. It intentionally remains
@@ -79,8 +86,9 @@ admission conservation as measured subsets. It intentionally remains
 evidence does **not** establish canonical CPU/memory/network headroom, fixed
 20-second recovery without the separately indexed recovery workload,
 workload-derived exact convergence timing, journal
-retention margin under overload, full fairness/backpressure, full provider
-parity, or negotiated real-TLS transport details. Terminal zero journal backlog
+retention margin under overload, full fairness/backpressure, or full provider
+parity. Negotiated real-TLS details remain unmeasured when the optional Node
+owned-child evidence is not supplied. Terminal zero journal backlog
 and zero failures do not establish the high-water retention margin. Those gates
 remain `NOT MEASURED` until their own bounded typed traces and acceptance
 analyzers exist.

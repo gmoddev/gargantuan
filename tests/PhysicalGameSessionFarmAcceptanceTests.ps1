@@ -298,18 +298,74 @@ function New-RunFixture {
 	}
 }
 
+function New-NodeTlsFixture {
+	param($NodeRun)
+	$StageRoot = Join-Path $TestRoot 'node-tls-stage'
+	[void][IO.Directory]::CreateDirectory($StageRoot)
+	$ProviderReceipt = Get-Content -LiteralPath (Join-Path $NodeRun.ServerRoot 'node-provider.json') `
+		-Raw | ConvertFrom-Json -AsHashtable
+	$NodeLogPath = Join-Path $StageRoot 'node.stdout.log'
+	$Record = [ordered]@{
+		time = '2026-10-01T00:00:00Z'; level = 'INFO'
+		msg = '[Content:TLS] authenticated manifest RPC'
+		request_id = $ProviderReceipt.RequestId; project_id = $ProviderReceipt.ProjectId
+		package_version = $ProviderReceipt.PackageVersion; principal_id = 'farm-server'
+		tls_version = 'TLSv1.3'; cipher_suite = 'TLS_AES_128_GCM_SHA256'
+		transport = 'grpc_tls'
+	}
+	[IO.File]::WriteAllText($NodeLogPath, ($Record | ConvertTo-Json -Compress) + "`n")
+	$StagePath = Join-Path $StageRoot 'node-stage.json'
+	Save-Json -Path $StagePath -Value ([ordered]@{
+		Format = 'GargantuanFarmNodeStage'; Version = 1
+		RunId = $NodeRun.Manifest.RunId; ProjectId = $ProviderReceipt.ProjectId
+		Revision = $ProviderReceipt.PackageVersion; NodeEndpoint = $NodeRun.Manifest.NodeEndpoint
+		RootCertificateSha256 = $NodeRun.Manifest.NodeRootCertificateSha256
+		NodeExecutableSha256 = ('d' * 64); ConfigSha256 = ('e' * 64)
+		CertificateSha256 = ('f' * 64)
+	})
+	$StagePin = (Get-FileHash -LiteralPath $StagePath -Algorithm SHA256).Hash.ToLowerInvariant()
+	$RunReceiptPath = Join-Path $StageRoot 'node-run.json'
+	Save-Json -Path $RunReceiptPath -Value ([ordered]@{
+		Format = 'GargantuanFarmNodeRun'; Version = 1
+		RunId = $NodeRun.Manifest.RunId; StageSha256 = $StagePin
+		NodeExecutableSha256 = ('d' * 64); ConfigSha256 = ('e' * 64)
+		CertificateSha256 = ('f' * 64)
+		RootCertificateSha256 = $NodeRun.Manifest.NodeRootCertificateSha256
+		Pid = 1234L; StartedUtc = '2026-10-01T00:00:00Z'
+		EndedUtc = '2026-10-01T00:00:01Z'; TcpReady = $true
+		TlsProven = $false; LogsDiscarded = $false; ChildReaped = $true
+		Reason = 'STOP_REQUESTED'; StdoutPath = $NodeLogPath
+		StdoutSha256 = (Get-FileHash -LiteralPath $NodeLogPath -Algorithm SHA256).Hash.ToLowerInvariant()
+		StdoutBytes = (Get-Item -LiteralPath $NodeLogPath).Length
+		StderrPath = (Join-Path $StageRoot 'node.stderr.log')
+		StderrSha256 = ('a' * 64); StderrBytes = 0L
+	})
+	$RunPin = (Get-FileHash -LiteralPath $RunReceiptPath -Algorithm SHA256).Hash.ToLowerInvariant()
+	$MatchPath = Join-Path $TestRoot 'node-tls-match.json'
+	& (Join-Path $PSScriptRoot 'PhysicalGameSessionFarmNodeTls.ps1') `
+		-ServerReceiptPath (Join-Path $NodeRun.ServerRoot 'node-provider.json') `
+		-NodeStagePath $StagePath -NodeRunReceiptPath $RunReceiptPath `
+		-NodeRunReceiptSha256 $RunPin -NodeStageSha256 $StagePin -OutputPath $MatchPath | Out-Null
+	return @{
+		NodeTlsMatchReceiptPath = $MatchPath
+		NodeTlsMatchReceiptSha256 = (Get-FileHash -LiteralPath $MatchPath -Algorithm SHA256).Hash.ToLowerInvariant()
+		NodeStagePath = $StagePath; NodeStageSha256 = $StagePin
+		NodeRunReceiptPath = $RunReceiptPath; NodeRunReceiptSha256 = $RunPin
+	}
+}
+
 function Invoke-Analyzer {
-	param([string]$OutputPath)
+	param([string]$OutputPath, [hashtable]$TlsInputs = @{})
 	& $Analyzer -LocalReportPath $Local.ReportPath -LocalServerEvidenceRoot $Local.ServerRoot `
 		-LocalClientEvidenceRoot $Local.ClientRoot -NodeReportPath $Node.ReportPath `
 		-NodeServerEvidenceRoot $Node.ServerRoot -NodeClientEvidenceRoot $Node.ClientRoot `
-		-OutputPath $OutputPath | Out-Null
+		-OutputPath $OutputPath @TlsInputs | Out-Null
 }
 
 function Assert-Rejected {
-	param([string]$Name, [string]$OutputPath)
+	param([string]$Name, [string]$OutputPath, [hashtable]$TlsInputs = @{})
 	$Rejected = $false
-	try { Invoke-Analyzer -OutputPath $OutputPath } catch { $Rejected = $true }
+	try { Invoke-Analyzer -OutputPath $OutputPath -TlsInputs $TlsInputs } catch { $Rejected = $true }
 	if (-not $Rejected -or (Test-Path -LiteralPath $OutputPath)) { throw "$Name was accepted" }
 }
 
@@ -345,11 +401,50 @@ try {
 		$Observed.Local.Admission.Fairness.MaximumObservedEligibilityToGrantMicroseconds -ne 200 -or
 		$Observed.Node.Provider.State -cne 'AUTHENTICATED_MANIFEST_RPC_MEASURED' -or
 		$Observed.Node.Provider.RealTls -cne 'NOT_MEASURED' -or
-		@($Observed.GateObservations | Where-Object { $_.State -eq 'NOT MEASURED' }).Count -ne 7 -or
+		@($Observed.GateObservations | Where-Object { $_.State -eq 'NOT MEASURED' }).Count -ne 8 -or
 		$Observed.Local.Recovery.FixedServiceRecovery -cne 'NOT MEASURED' -or
 		$Observed.Node.Recovery.ExactRetainedWorkBytes -cne 'NOT_MEASURED') {
 		throw "resource/parity observation promoted a missing physical gate or lost resource evidence: status=$($Observed.Status) claim=$($Observed.Foundation3LQualification) parity=$($Observed.WorkloadPinParity.State) clients=$($Observed.Local.Resources.Clients.ProcessCount) server=$($Observed.Node.Resources.Server.ProcessCount) ws=$($Observed.Local.Resources.Clients.SumOfPerProcessPeakWorkingSetBytes) missing=$(@($Observed.GateObservations | Where-Object { $_.State -eq 'NOT MEASURED' }).Count)"
 	}
+	$TlsInputs = New-NodeTlsFixture -NodeRun $Node
+	$TlsObservedPath = Join-Path $TestRoot 'tls-observed.json'
+	Invoke-Analyzer -OutputPath $TlsObservedPath -TlsInputs $TlsInputs
+	$TlsObserved = Get-Content -LiteralPath $TlsObservedPath -Raw | ConvertFrom-Json
+	if ($TlsObserved.Node.Provider.RealTls -cne 'NEGOTIATED_TLS_MANIFEST_RPC_MEASURED' -or
+		$TlsObserved.Node.Provider.TlsEvidence.TlsVersion -cne 'TLSv1.3' -or
+		$TlsObserved.Node.Provider.TlsEvidence.CipherSuite -cne 'TLS_AES_128_GCM_SHA256' -or
+		@($TlsObserved.GateObservations | Where-Object {
+			$_.Gate -ceq 'Node negotiated TLS for authenticated manifest RPC' -and
+			$_.State -ceq 'MEASURED' }).Count -ne 1 -or
+		$TlsObserved.Status -cne 'INCOMPLETE' -or
+		$TlsObserved.Foundation3LQualification -cne 'NOT CLAIMED' -or
+		@($TlsObserved.GateObservations | Where-Object {
+			$_.Gate -ceq 'Full Local/Node provider parity' -and
+			$_.State -ceq 'NOT MEASURED' }).Count -ne 1) {
+		throw 'pinned TLS match was not adopted with bounded proof scope'
+	}
+	$WrongPin = @{} + $TlsInputs
+	$WrongPin.NodeTlsMatchReceiptSha256 = '0' * 64
+	Assert-Rejected -Name 'wrong TLS match receipt pin' -TlsInputs $WrongPin `
+		-OutputPath (Join-Path $TestRoot 'tls-wrong-pin.json')
+	$WrongStage = @{} + $TlsInputs
+	$WrongStage.NodeStageSha256 = '0' * 64
+	Assert-Rejected -Name 'wrong Node stage pin' -TlsInputs $WrongStage `
+		-OutputPath (Join-Path $TestRoot 'tls-wrong-stage.json')
+	$IncompleteTls = @{} + $TlsInputs
+	$IncompleteTls.Remove('NodeRunReceiptSha256')
+	Assert-Rejected -Name 'partial Node TLS inputs' -TlsInputs $IncompleteTls `
+		-OutputPath (Join-Path $TestRoot 'tls-partial.json')
+	$OriginalMatch = [IO.File]::ReadAllText($TlsInputs.NodeTlsMatchReceiptPath)
+	$ForgedMatch = $OriginalMatch | ConvertFrom-Json -AsHashtable
+	$ForgedMatch.CipherSuite = 'TLS_AES_256_GCM_SHA384'
+	Save-Json -Path $TlsInputs.NodeTlsMatchReceiptPath -Value $ForgedMatch
+	$ForgedInput = @{} + $TlsInputs
+	$ForgedInput.NodeTlsMatchReceiptSha256 = (Get-FileHash -LiteralPath `
+		$TlsInputs.NodeTlsMatchReceiptPath -Algorithm SHA256).Hash.ToLowerInvariant()
+	Assert-Rejected -Name 'rehashed TLS match differs from raw Node log' -TlsInputs $ForgedInput `
+		-OutputPath (Join-Path $TestRoot 'tls-forged.json')
+	[IO.File]::WriteAllText($TlsInputs.NodeTlsMatchReceiptPath, $OriginalMatch)
 	$OriginalOutput = [IO.File]::ReadAllText($OutputPath)
 	$OverwriteRejected = $false
 	try { Invoke-Analyzer -OutputPath $OutputPath } catch { $OverwriteRejected = $true }

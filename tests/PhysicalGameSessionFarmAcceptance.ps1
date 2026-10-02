@@ -9,6 +9,12 @@ param(
 	[Parameter(Mandatory = $true)][string]$NodeReportPath,
 	[Parameter(Mandatory = $true)][string]$NodeServerEvidenceRoot,
 	[Parameter(Mandatory = $true)][string]$NodeClientEvidenceRoot,
+	[string]$NodeTlsMatchReceiptPath,
+	[string]$NodeTlsMatchReceiptSha256,
+	[string]$NodeStagePath,
+	[string]$NodeStageSha256,
+	[string]$NodeRunReceiptPath,
+	[string]$NodeRunReceiptSha256,
 	[Parameter(Mandatory = $true)][string]$OutputPath
 )
 
@@ -38,6 +44,12 @@ foreach ($Name in @('Get-Fields', 'Read-SharedLogLines', 'Get-Records', 'Get-Rec
 	if (-not (Get-Command $Name -CommandType Function -ErrorAction SilentlyContinue)) {
 		throw "canonical farm recovery parser lacks $Name"
 	}
+}
+
+$NodeTlsInputs = @($NodeTlsMatchReceiptPath, $NodeTlsMatchReceiptSha256,
+	$NodeStagePath, $NodeStageSha256, $NodeRunReceiptPath, $NodeRunReceiptSha256)
+if (@($NodeTlsInputs | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count -notin @(0, 6)) {
+	throw 'Node TLS acceptance inputs must be supplied together'
 }
 
 function Read-BoundedJson {
@@ -530,6 +542,67 @@ function Read-ProviderObservation {
 	}
 }
 
+function Import-NodeTlsMatcher {
+	$Path = Join-Path $PSScriptRoot 'PhysicalGameSessionFarmNodeTls.ps1'
+	$Tokens = $null; $Errors = $null
+	$Ast = [Management.Automation.Language.Parser]::ParseFile($Path, [ref]$Tokens, [ref]$Errors)
+	if ($Errors.Count -ne 0) { throw 'canonical Node TLS matcher has a syntax error' }
+	$Needed = @('Get-NodeTimestamp', 'Get-NodeTlsLogMatchReceipt')
+	foreach ($Function in $Ast.FindAll({ param($Node)
+		$Node -is [Management.Automation.Language.FunctionDefinitionAst]
+	}, $true)) {
+		if ($Function.Name -in $Needed) { $Function.Extent.Text }
+	}
+}
+
+function Read-NodeTlsObservation {
+	param([string]$ServerReceiptPath, [string]$MatchReceiptPath,
+		[string]$MatchReceiptSha256, [string]$StagePath, [string]$StageSha256,
+		[string]$RunReceiptPath, [string]$RunReceiptSha256)
+	foreach ($Pin in @($MatchReceiptSha256, $StageSha256, $RunReceiptSha256)) {
+		if ($Pin -cnotmatch '^[a-fA-F0-9]{64}$') { throw 'Node TLS evidence pin is invalid' }
+	}
+	$Receipt = Read-BoundedJson -Path $MatchReceiptPath -MaximumBytes 4096
+	if ((Get-FileHash -LiteralPath $MatchReceiptPath -Algorithm SHA256).Hash -ine
+		$MatchReceiptSha256) { throw 'Node TLS match receipt differs from independent pin' }
+	$Derived = Get-NodeTlsLogMatchReceipt -ServerReceiptPath $ServerReceiptPath `
+		-NodeStagePath $StagePath -NodeRunReceiptPath $RunReceiptPath `
+		-NodeRunReceiptSha256 $RunReceiptSha256 -NodeStageSha256 $StageSha256
+	if ($Receipt.Keys.Count -ne $Derived.Keys.Count) {
+		throw 'Node TLS match receipt has an unexpected schema'
+	}
+	foreach ($Name in $Derived.Keys) {
+		if (-not $Receipt.Contains($Name)) {
+			throw "Node TLS match receipt differs from pinned source: $Name"
+		}
+		$Same = if ($Name -in @('RecordObservedUtc', 'NodeChildStartedUtc', 'NodeChildEndedUtc')) {
+			(Get-NodeTimestamp $Receipt[$Name]) -eq (Get-NodeTimestamp $Derived[$Name])
+		} else {
+			($Receipt[$Name] | ConvertTo-Json -Compress) -ceq
+			($Derived[$Name] | ConvertTo-Json -Compress)
+		}
+		if (-not $Same) {
+			throw "Node TLS match receipt differs from pinned source: $Name"
+		}
+	}
+	return [ordered]@{
+		State = 'NEGOTIATED_TLS_MANIFEST_RPC_MEASURED'
+		TlsVersion = $Derived.TlsVersion; CipherSuite = $Derived.CipherSuite
+		RequestId = $Derived.RequestId; NodeRunReceiptSha256 = $Derived.NodeRunReceiptSha256
+		NodeStageSha256 = $Derived.NodeStageSha256
+		NodeTlsMatchReceiptSha256 = $MatchReceiptSha256.ToLowerInvariant()
+	}
+}
+
+if (-not [string]::IsNullOrWhiteSpace($NodeTlsMatchReceiptPath)) {
+	foreach ($Definition in @(Import-NodeTlsMatcher)) { . ([scriptblock]::Create($Definition)) }
+	foreach ($Name in @('Get-NodeTimestamp', 'Get-NodeTlsLogMatchReceipt')) {
+		if (-not (Get-Command $Name -CommandType Function -ErrorAction SilentlyContinue)) {
+			throw "canonical Node TLS matcher lacks $Name"
+		}
+	}
+}
+
 function Read-RecoveryObservation {
 	param([System.Collections.IDictionary]$Report, [System.Collections.IDictionary]$Manifest,
 		$Server, $Clients)
@@ -665,6 +738,15 @@ $Local = Read-ProviderRun -ReportPath $LocalReportPath -ServerRoot $LocalServerE
 	-ClientRoot $LocalClientEvidenceRoot -ExpectedProvider 'Local'
 $Node = Read-ProviderRun -ReportPath $NodeReportPath -ServerRoot $NodeServerEvidenceRoot `
 	-ClientRoot $NodeClientEvidenceRoot -ExpectedProvider 'Node'
+if (-not [string]::IsNullOrWhiteSpace($NodeTlsMatchReceiptPath)) {
+	$NodeTlsObservation = Read-NodeTlsObservation `
+		-ServerReceiptPath (Join-Path $NodeServerEvidenceRoot 'node-provider.json') `
+		-MatchReceiptPath $NodeTlsMatchReceiptPath -MatchReceiptSha256 $NodeTlsMatchReceiptSha256 `
+		-StagePath $NodeStagePath -StageSha256 $NodeStageSha256 `
+		-RunReceiptPath $NodeRunReceiptPath -RunReceiptSha256 $NodeRunReceiptSha256
+	$Node.ProviderObservation['RealTls'] = $NodeTlsObservation.State
+	$Node.ProviderObservation['TlsEvidence'] = $NodeTlsObservation
+}
 if ($Local.Report.RunId -ceq $Node.Report.RunId) { throw 'Local and Node reused a physical run identity' }
 foreach ($Name in @('ServerHost', 'ClientHost')) {
 	foreach ($Field in @('HostName', 'InterfaceIndex', 'InterfaceMacAddress', 'InterfaceAddress')) {
@@ -710,7 +792,8 @@ $Observed = [ordered]@{
 		[ordered]@{ Gate = 'Cross-provider exact workload/deployment pin parity'; State = 'MEASURED' },
 		[ordered]@{ Gate = 'Per-provider terminal native admission/debt conservation and bounded grants/credit'; State = 'MEASURED'; Reason = 'sealed final receipt, not an intra-run service or fairness bound' },
 		[ordered]@{ Gate = 'Per-provider exact-demand fairness event identity and observed eligibility waits'; State = 'MEASURED'; Reason = 'sealed native timeline, no canonical maximum-wait verdict from an observed maximum alone' },
-		[ordered]@{ Gate = 'Node authenticated manifest RPC and root/content pins'; State = 'MEASURED'; Reason = 'indexed provider receipt; negotiated TLS session remains unmeasured' },
+		[ordered]@{ Gate = 'Node authenticated manifest RPC and root/content pins'; State = 'MEASURED'; Reason = 'indexed provider receipt' },
+		[ordered]@{ Gate = 'Node negotiated TLS for authenticated manifest RPC'; State = $(if ($Node.ProviderObservation.RealTls -ceq 'NEGOTIATED_TLS_MANIFEST_RPC_MEASURED') { 'MEASURED' } else { 'NOT MEASURED' }); Reason = 'requires independently pinned Node stage/run/log and exact request matcher; full provider parity remains separate' },
 		[ordered]@{ Gate = 'Role-local bounded process sampling'; State = 'MEASURED' },
 		[ordered]@{ Gate = 'Complete-sweep role-local working set within supervisor limit'; State = $(if ($Local.Resources.Server.CompleteSweepCount -gt 0 -and $Local.Resources.Clients.CompleteSweepCount -gt 0 -and $Node.Resources.Server.CompleteSweepCount -gt 0 -and $Node.Resources.Clients.CompleteSweepCount -gt 0) { 'MEASURED' } else { 'NOT MEASURED' }); Reason = 'sequential per-process sweep; not a synchronized host memory or network headroom result' },
 		[ordered]@{ Gate = 'Role-local host CPU, memory, simultaneous owned processes, and fiber NIC counters'; State = 'MEASURED' },
@@ -732,6 +815,13 @@ foreach ($Root in @($LocalServerEvidenceRoot, $LocalClientEvidenceRoot,
 	if ($OutputPath.StartsWith($Resolved + [IO.Path]::DirectorySeparatorChar,
 		[StringComparison]::OrdinalIgnoreCase)) {
 		throw 'acceptance observation must remain outside immutable role-local roots'
+	}
+}
+if (-not [string]::IsNullOrWhiteSpace($NodeStagePath)) {
+	$StageRoot = [IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($NodeStagePath)).TrimEnd('\', '/')
+	if ($OutputPath.StartsWith($StageRoot + [IO.Path]::DirectorySeparatorChar,
+		[StringComparison]::OrdinalIgnoreCase)) {
+		throw 'acceptance observation must remain outside the pinned Node stage'
 	}
 }
 if (Test-Path -LiteralPath $OutputPath) { throw 'acceptance observation path already exists' }
