@@ -28,6 +28,7 @@
 #include <memory>
 #include <map>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -64,6 +65,30 @@ namespace gargantuan::host {
 				Metrics.StructuralPendingEnters == Metrics.StructuralPendingLeaves &&
 				Metrics.StructuralActivePeers == 0 && Metrics.MaterializationBacklog == 0 &&
 				Metrics.JournalBacklogRecords == 0;
+		}
+
+		// The canonical 3L recovery curve uses complete-message W_i at cessation,
+		// not raw journal history or a fixed 20.4705-second convergence deadline.
+		[[nodiscard]] inline std::optional<std::uint64_t> RecoveryConvergenceBoundMicroseconds(
+			std::span<const std::uint64_t> WorkByPeer) {
+			const auto Profile = network::ReliableServiceProfile::PooledService().Pooled;
+			if (WorkByPeer.size() != 32) return {};
+			const auto PeerRate = std::min(Profile.PeerCreditRate, Profile.StructuralPool / WorkByPeer.size());
+			const auto PoolRate = std::min(Profile.GlobalCreditRate, Profile.StructuralPool);
+			if (!PeerRate || !PoolRate) return {};
+			auto ServiceMicroseconds = [](std::uint64_t Bytes, std::uint64_t Rate) {
+				return Bytes / Rate * 1'000'000 +
+					((Bytes % Rate) * 1'000'000 + Rate - 1) / Rate;
+			};
+			std::uint64_t Total = 0, MaximumPeerService = 0;
+			for (const auto Work : WorkByPeer) {
+				if (Work > 40ULL * 1024 * 1024 * 1024 ||
+					Total > 768ULL * 1024 * 1024 * 1024 - Work) return {};
+				Total += Work;
+				MaximumPeerService = std::max(MaximumPeerService, ServiceMicroseconds(Work, PeerRate));
+			}
+			return 20'000'000 + std::max(250'000 + 220'500 + MaximumPeerService,
+				ServiceMicroseconds(Total, PoolRate));
 		}
 	}
 
@@ -273,7 +298,8 @@ namespace gargantuan::host {
 		std::map<network::ConnectionId, std::uint64_t> QuotedFutureBytes;
 		std::size_t AdmissionEvidenceCursor = 0;
 		std::uint64_t QuotedFrameCount = 0, AuditedFrameCount = 0, AuditedAcceptedBytes = 0;
-		bool QuoteComplete = false;
+		std::uint64_t QuoteBoundMicroseconds = 0;
+		bool QuoteComplete = false, QuoteSealed = false, QuoteResultWritten = false;
 		std::string QuoteFailure;
 		bool RecoverySnapshotWritten = false;
 		std::size_t OverloadRetainedHighWater = 0;
@@ -287,10 +313,11 @@ namespace gargantuan::host {
 		static constexpr std::uint32_t OverloadOpportunityCount = 480;
 		static constexpr std::size_t OverloadNameBytes = 24 * 1024;
 		// Keep the fixed 20-second service observation separate from the
-		// stronger sufficient convergence proof. Sample close to its derived
-		// 20.4705-second ceiling so delivery has the full lawful interval.
+		// workload-derived structural convergence deadline. This snapshot is a
+		// service observation, not the structural terminal deadline.
 		static constexpr auto StrictSnapshotTarget = std::chrono::microseconds(20'400'000);
-		static constexpr auto StrictConvergenceDeadline = std::chrono::microseconds(20'470'500);
+		static constexpr std::uint64_t MaximumPeerRetainedCompleteBytes = 40ULL * 1024 * 1024 * 1024;
+		static constexpr std::uint64_t MaximumPoolRetainedCompleteBytes = 768ULL * 1024 * 1024 * 1024;
 
 		[[nodiscard]] static std::string_view Name(Phase Value) {
 			switch (Value) {
@@ -338,6 +365,7 @@ namespace gargantuan::host {
 			AdmissionEvidenceCursor += Events.size();
 			for (const auto &Event : Events) {
 				if (Event.Kind != network::detail::AdmissionEvidenceKind::GrantAccepted) continue;
+				if (QuoteSealed) { QuoteFailure = "structural grant appeared after quote sealing"; return; }
 				if (!CessationQuote->MaximumFrameBytes.contains(Event.Connection)) {
 					QuoteFailure = "a new peer accepted structural work after cessation";
 					return;
@@ -368,52 +396,83 @@ namespace gargantuan::host {
 			AuditQuotedFrames();
 		}
 
-		void FinishCessationQuote(const network::GameSessionMetrics &Metrics, std::uint64_t Tick) {
-			if (QuoteFailure.empty() && !QuoteComplete) QuoteFailure = "frozen quote did not finish by the recovery deadline";
-			if (QuoteFailure.empty() && AdmissionEvidence->Overflowed())
-				QuoteFailure = "admission evidence overflowed during quote audit";
-			if (QuoteFailure.empty() && !detail::HasPhysicalScaleTerminalConvergence(Metrics))
-				QuoteFailure = "retained structural work did not converge by the recovery deadline";
-			if (QuoteFailure.empty() && ChangeJournal::Get().CreateCursor(
-				Runtime.DataModel->GetObjectId()).NextSequence != CessationJournalTail)
-				QuoteFailure = "authoritative structural source changed after cessation";
-			if (QuoteFailure.empty() && (Metrics.ReliableAdmission.AcceptedBytes < CessationAcceptedBytes ||
-				Metrics.ReliableAdmission.AcceptedBytes - CessationAcceptedBytes != AuditedAcceptedBytes ||
-				AuditedFrameCount != QuotedFrameCount))
-				QuoteFailure = "admission totals do not match audited quote frames";
-			if (QuoteFailure.empty()) {
-				for (const auto &[Connection, Frames] : QuotedFrames)
-					if (!Frames.empty()) { QuoteFailure = "a quoted frame was not accepted"; break; }
-				for (const auto &[Connection, Frames] : AcceptedAfterCessation)
-					if (!Frames.empty()) { QuoteFailure = "an accepted frame was not quoted"; break; }
+		[[nodiscard]] static std::string QuoteReasonToken(std::string_view Reason) {
+			std::string Result;
+			for (const char Value : Reason.substr(0, 96)) {
+				if ((Value >= 'a' && Value <= 'z') || (Value >= 'A' && Value <= 'Z') ||
+					(Value >= '0' && Value <= '9') || Value == '_') Result.push_back(Value);
+				else Result.push_back('_');
 			}
-			std::uint64_t Total = 0;
-			if (QuoteFailure.empty()) {
-				for (const auto &[Connection, Debt] : CessationQuote->AcceptedUnretiredCompleteBytes) {
-					const auto Future = QuotedFutureBytes[Connection];
-					if (Debt > std::numeric_limits<std::uint64_t>::max() - Future ||
-						Total > std::numeric_limits<std::uint64_t>::max() - Debt - Future) {
-						QuoteFailure = "cessation quote complete-message sum overflowed";
-						break;
-					}
-					Total += Debt + Future;
-					std::cerr << "[Qualification:Recovery] event=quote_peer run=" << RunId
-						<< " case=" << OverloadCases[OverloadCase]
-						<< " connection_slot=" << Connection.Slot
-						<< " connection_generation=" << Connection.Generation
-						<< " accepted_unretired_complete_bytes=" << Debt
-						<< " future_complete_bytes=" << Future
-						<< " w_complete_upper_bytes=" << Debt + Future << '\n';
-				}
-			}
+			return Result.empty() ? "none" : Result;
+		}
+
+		void EmitQuoteResult(std::uint64_t Tick, std::uint64_t Total = 0) {
+			if (QuoteResultWritten) return;
+			QuoteResultWritten = true;
 			std::cerr << "[Qualification:Recovery] event=quote_result run=" << RunId
 				<< " case=" << OverloadCases[OverloadCase]
 				<< " status=" << (QuoteFailure.empty() ? "PASS" : "NOT_MEASURED")
 				<< " w_complete_upper_bytes=" << (QuoteFailure.empty() ? std::to_string(Total) : "NOT_MEASURED")
 				<< " quoted_frames=" << QuotedFrameCount << " audited_frames=" << AuditedFrameCount
 				<< " audited_accepted_bytes=" << AuditedAcceptedBytes
-				<< " reason=" << (QuoteFailure.empty() ? "none" : QuoteFailure)
+				<< " bound_us=" << (QuoteFailure.empty() ? std::to_string(QuoteBoundMicroseconds) : "NOT_MEASURED")
+				<< " reason=" << QuoteReasonToken(QuoteFailure)
 				<< " tick=" << Tick << '\n';
+		}
+
+		void TrySealCessationQuote(const network::GameSessionMetrics &Metrics, std::uint64_t Tick) {
+			if (!QuoteFailure.empty()) return;
+			if (ChangeJournal::Get().CreateCursor(Runtime.DataModel->GetObjectId()).NextSequence != CessationJournalTail) {
+				QuoteFailure = "authoritative structural source changed after cessation";
+				return;
+			}
+			if (AdmissionEvidence->Overflowed()) { QuoteFailure = "admission evidence overflowed during quote audit"; return; }
+			if (QuoteSealed) {
+				if (Metrics.ReliableAdmission.AcceptedBytes < CessationAcceptedBytes ||
+					Metrics.ReliableAdmission.AcceptedBytes - CessationAcceptedBytes != AuditedAcceptedBytes)
+					QuoteFailure = "admission changed after quote sealing";
+				return;
+			}
+			if (!QuoteComplete) return;
+			for (const auto &[Connection, Frames] : QuotedFrames) if (!Frames.empty()) return;
+			for (const auto &[Connection, Frames] : AcceptedAfterCessation) if (!Frames.empty()) return;
+			if (Metrics.ReliableAdmission.AcceptedBytes < CessationAcceptedBytes ||
+				Metrics.ReliableAdmission.AcceptedBytes - CessationAcceptedBytes != AuditedAcceptedBytes ||
+				AuditedFrameCount != QuotedFrameCount) {
+				QuoteFailure = "admission totals do not match audited quote frames";
+				return;
+			}
+			std::map<network::ConnectionId, std::uint64_t> WorkByPeer;
+			std::uint64_t Total = 0;
+			for (const auto &[Connection, Debt] : CessationQuote->AcceptedUnretiredCompleteBytes) {
+				const auto Future = QuotedFutureBytes[Connection];
+				if (Debt > network::MaximumReliableServiceGroupBytes ||
+					Future > MaximumPeerRetainedCompleteBytes - Debt ||
+					Total > MaximumPoolRetainedCompleteBytes - Debt - Future) {
+					QuoteFailure = "cessation quote exceeds canonical retained work bounds";
+					return;
+				}
+				WorkByPeer.emplace(Connection, Debt + Future);
+				Total += Debt + Future;
+			}
+			std::vector<std::uint64_t> WorkValues;
+			WorkValues.reserve(WorkByPeer.size());
+			for (const auto &[Connection, Work] : WorkByPeer) WorkValues.push_back(Work);
+			const auto Bound = detail::RecoveryConvergenceBoundMicroseconds(WorkValues);
+			if (!Bound) { QuoteFailure = "cessation quote recovery bound is invalid"; return; }
+			QuoteBoundMicroseconds = *Bound;
+			for (const auto &[Connection, Work] : WorkByPeer) {
+			const auto Debt = CessationQuote->AcceptedUnretiredCompleteBytes.at(Connection);
+			std::cerr << "[Qualification:Recovery] event=quote_peer run=" << RunId
+				<< " case=" << OverloadCases[OverloadCase]
+				<< " connection_slot=" << Connection.Slot
+				<< " connection_generation=" << Connection.Generation
+				<< " accepted_unretired_complete_bytes=" << Debt
+				<< " future_complete_bytes=" << QuotedFutureBytes[Connection]
+				<< " w_complete_upper_bytes=" << Work << '\n';
+			}
+			QuoteSealed = true;
+			EmitQuoteResult(Tick, Total);
 		}
 
 		void Initialize(std::uint64_t Tick) {
@@ -716,7 +775,8 @@ namespace gargantuan::host {
 					AcceptedAfterCessation.clear();
 					QuotedFutureBytes.clear();
 					QuotedFrameCount = AuditedFrameCount = AuditedAcceptedBytes = 0;
-					QuoteComplete = false;
+					QuoteBoundMicroseconds = 0;
+					QuoteComplete = QuoteSealed = QuoteResultWritten = false;
 					QuoteFailure.clear();
 					if (!AdmissionEvidence) QuoteFailure = "admission evidence is unavailable";
 					else {
@@ -727,7 +787,7 @@ namespace gargantuan::host {
 					}
 					std::cerr << "[Qualification:Recovery] event=quote_capture run=" << RunId
 						<< " case=" << CaseName << " status=" << (CessationQuote ? "READY" : "NOT_MEASURED")
-						<< " reason=" << (QuoteFailure.empty() ? "none" : QuoteFailure)
+						<< " reason=" << QuoteReasonToken(QuoteFailure)
 						<< " tick=" << Tick << '\n';
 					RecoverySnapshotWritten = false;
 					State = Stage::OverloadRecovery;
@@ -758,6 +818,15 @@ namespace gargantuan::host {
 			if (State == Stage::OverloadRecovery) {
 				StepCessationQuote();
 				const auto Metrics = Session.GetMetrics();
+				TrySealCessationQuote(Metrics, Tick);
+				if (!QuoteFailure.empty()) {
+					if (QuoteResultWritten)
+						std::cerr << "[Qualification:Recovery] event=quote_revoked run=" << RunId
+							<< " case=" << CaseName << " reason=" << QuoteReasonToken(QuoteFailure)
+							<< " tick=" << Tick << '\n';
+					EmitQuoteResult(Tick);
+					Fail("recovery_quote_invalid", Tick);
+				}
 				const auto Retention = ObserveRetention();
 				const auto Elapsed = std::chrono::duration_cast<std::chrono::microseconds>(Now - OverloadCeased).count();
 				std::cerr << "[Qualification:Recovery] event=sample run=" << RunId
@@ -801,10 +870,22 @@ namespace gargantuan::host {
 						<< " cessation_tail=" << CessationJournalTail
 						<< " retained_work_bytes=NOT_MEASURED tick=" << Tick << '\n';
 				}
-				if (Now - OverloadCeased >= StrictConvergenceDeadline) {
-					FinishCessationQuote(Metrics, Tick);
+				if (RecoverySnapshotWritten && QuoteSealed &&
+					Now - OverloadCeased >= std::chrono::microseconds(QuoteBoundMicroseconds)) {
+					if (detail::HasPhysicalScaleTerminalConvergence(Metrics))
+						for (const auto &Reader : network::detail::GameSessionTestAccess::GetJournalRequirements(Session))
+							std::cerr << "[Qualification:Recovery] event=terminal_reader run=" << RunId
+								<< " case=" << CaseName << " catalog=" << Reader.Catalog
+								<< " connection_slot=" << Reader.Connection.Slot
+								<< " connection_generation=" << Reader.Connection.Generation
+								<< " next_sequence=" << Reader.Cursor.NextSequence
+								<< " prepared=" << Reader.PreparedCommit
+								<< " pending_relevance=" << Reader.PendingRelevance << '\n';
 					std::cerr << "[Qualification:Recovery] event=strict_deadline_barrier run=" << RunId
-						<< " case=" << CaseName << " elapsed_us=" << Elapsed << '\n';
+						<< " case=" << CaseName << " elapsed_us=" << Elapsed
+						<< " bound_us=" << QuoteBoundMicroseconds << '\n';
+					if (!detail::HasPhysicalScaleTerminalConvergence(Metrics))
+						Fail("recovery_work_did_not_converge_within_bound", Tick);
 					if (++OverloadCase < OverloadCases.size()) BeginOverloadCase(Tick);
 					else PublishCompletion(Tick);
 				}

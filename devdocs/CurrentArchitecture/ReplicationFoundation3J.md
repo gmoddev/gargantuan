@@ -346,6 +346,18 @@ conservative with respect to remaining native unique bytes. Frame grouping
 divergence, missing evidence, or late source mutation leaves `W_i` unmeasured;
 the frozen replay alone never establishes an exact live result.
 
+The recovery controller seals this quote after live acceptance matches, before
+requiring structural terminal convergence. It then derives the existing 3L
+service bound exactly from all 32 `W_i` values: 20 seconds plus the maximum of
+the 250-ms credit and 220.5-ms fairness terms with per-peer 2-MiB/s byte
+service, or aggregate 64-MiB/s byte service. The fixed ~20.4-second snapshot
+continues to observe ordinary service and client probes; pending structural
+bytes at that time are permitted until the measured `W_i` deadline. Terminal
+reader cursors, no pending debt, exact retirement, and final client Name
+observations are checked at the workload-derived deadline. The external farm
+runtime timeout remains a hard fail-closed limit; a measured bound extending
+beyond it cannot be reported as physical recovery PASS.
+
 No per-peer historical property queue is required. For already-known objects,
 the existing journal preserves ordered create/destroy/reparent/tag/attribute and
 other structural barriers; ordinary property values use current authoritative

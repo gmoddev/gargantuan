@@ -100,6 +100,28 @@ namespace {
 			"unobserved native queue feedback cannot masquerade as zero");
 	}
 
+	void TestRecoveryConvergenceBound() {
+		using host::detail::RecoveryConvergenceBoundMicroseconds;
+		std::array<std::uint64_t, 32> Work{};
+		Check(RecoveryConvergenceBoundMicroseconds(Work) == 20'470'500,
+			"zero retained structural work preserves the fixed service and credit/fairness envelope");
+		Work[0] = 77;
+		Check(RecoveryConvergenceBoundMicroseconds(Work) == 20'470'537,
+			"a positive tiny complete message extends the structural deadline by exact peer service time");
+		Work.fill(512 * 1024);
+		Check(RecoveryConvergenceBoundMicroseconds(Work) == 20'720'500,
+			"32 positive peer workloads use per-peer and pool capacity without a fixed cutoff");
+		Work.fill(0);
+		Work[0] = 40ULL * 1024 * 1024 * 1024;
+		Check(RecoveryConvergenceBoundMicroseconds(Work) == 20'500'470'500ULL,
+			"canonical hard peer envelope remains exact and finite");
+		Work[0]++;
+		Check(!RecoveryConvergenceBoundMicroseconds(Work),
+			"a quote above the canonical peer retained-work bound is rejected");
+		Check(!RecoveryConvergenceBoundMicroseconds(std::span(Work).first(31)),
+			"an incomplete peer quote cannot establish a 32-peer recovery bound");
+	}
+
 	struct RetirementEvidenceCapture {
 		using Record = runtime_detail::PublicationLatencyRecord;
 		std::array<Record, 128> Records{};
@@ -2118,6 +2140,7 @@ int main(int ArgumentCount, char **Arguments) {
 		}
 		if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--scale-counter") {
 			TestPhysicalScaleCounterDecoding();
+			TestRecoveryConvergenceBound();
 			return Failures == 0 ? 0 : 1;
 		}
 		if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--late-handoff") {
@@ -2133,6 +2156,7 @@ int main(int ArgumentCount, char **Arguments) {
 		if (ArgumentCount != 1) throw std::invalid_argument("Unknown game-session test selection");
 		TestGroundedNetworkLocomotion();
 		TestPhysicalScaleCounterDecoding();
+		TestRecoveryConvergenceBound();
 		TestPublicationLatencyBounds();
 		TestFarmPublicationEvidence();
 		TestProtocolBounds();

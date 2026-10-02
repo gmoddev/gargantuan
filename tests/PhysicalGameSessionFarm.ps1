@@ -121,10 +121,121 @@ function Test-RecoveryQuiescent {
 	return $true
 }
 
+function Test-RecoveryServiceHealthy {
+	param([Parameter(Mandatory = $true)]$Sample)
+	foreach ($Field in @('native_observed', 'feedback_observed', 'accepted', 'first_sent',
+		'acked', 'retired', 'terminal_release', 'journal_failures')) {
+		if (-not $Sample.ContainsKey($Field) -or $Sample[$Field] -cnotmatch '^[0-9]+$') { return $false }
+	}
+	return [long]$Sample.native_observed -eq 32 -and [long]$Sample.feedback_observed -eq 32 -and
+		[long]$Sample.terminal_release -eq 0 -and [long]$Sample.journal_failures -eq 0 -and
+		[long]$Sample.accepted -ge [long]$Sample.first_sent -and
+		[long]$Sample.first_sent -ge [long]$Sample.acked -and
+		[long]$Sample.acked -ge [long]$Sample.retired
+}
+
+function Get-RecoveryUnsigned {
+	param([Parameter(Mandatory = $true)]$Row, [Parameter(Mandatory = $true)][string]$Field)
+	if (-not $Row.ContainsKey($Field) -or $Row[$Field] -cnotmatch '^[0-9]+$') {
+		throw "recovery quote lacks unsigned $Field"
+	}
+	$Value = 0L
+	if (-not [long]::TryParse($Row[$Field], [ref]$Value)) {
+		throw "recovery quote $Field exceeds the exact integer range"
+	}
+	return $Value
+}
+
+function Get-RecoveryCeilDiv {
+	param([Parameter(Mandatory = $true)][long]$Numerator,
+		[Parameter(Mandatory = $true)][long]$Denominator)
+	if ($Numerator -lt 0 -or $Denominator -le 0) { throw 'invalid recovery service division' }
+	$Remainder = 0L
+	$Quotient = [math]::DivRem($Numerator, $Denominator, [ref]$Remainder)
+	return [long]($Quotient + [long]($Remainder -ne 0))
+}
+
+function Assert-RecoveryQuote {
+	param([Parameter(Mandatory = $true)]$Diagnostics, [Parameter(Mandatory = $true)][string]$Case,
+		[Parameter(Mandatory = $true)][string]$CaseRunId,
+		[Parameter(Mandatory = $true)]$ExpectedPeers,
+		[Parameter(Mandatory = $true)]$Barrier,
+		[Parameter(Mandatory = $true)]$Snapshot,
+		[Parameter(Mandatory = $true)]$Deadline,
+		[Parameter(Mandatory = $true)]$Samples,
+		[Parameter(Mandatory = $true)][long]$LastProbeLine,
+		[Parameter(Mandatory = $true)][long]$Tail,
+		[Parameter(Mandatory = $true)][long]$MaximumRunMicroseconds)
+	$Captures = @($Diagnostics | Where-Object { $_.event -eq 'quote_capture' -and $_.case -eq $Case -and $_.run -eq $CaseRunId })
+	$Results = @($Diagnostics | Where-Object { $_.event -eq 'quote_result' -and $_.case -eq $Case -and $_.run -eq $CaseRunId })
+	$Revoked = @($Diagnostics | Where-Object { $_.event -eq 'quote_revoked' -and $_.case -eq $Case -and $_.run -eq $CaseRunId })
+	$Peers = @($Diagnostics | Where-Object { $_.event -eq 'quote_peer' -and $_.case -eq $Case -and $_.run -eq $CaseRunId })
+	if ($Captures.Count -ne 1 -or $Results.Count -ne 1 -or $Peers.Count -ne 32 -or $Revoked.Count -ne 0 -or
+		$Captures[0].status -cne 'READY' -or $Captures[0].reason -cne 'none' -or
+		$Results[0].status -cne 'PASS' -or $Results[0].reason -cne 'none' -or
+		[long]$Captures[0].__line -ge [long]$Barrier.__line -or
+		[long]$Barrier.__line -ge [long]$Results[0].__line -or
+		[long]$Results[0].__line -ge [long]$Deadline.__line) {
+		throw "recovery case $Case lacks a complete ordered frozen quote audit"
+	}
+	$Seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+	$Total = 0L
+	$FutureTotal = 0L
+	$MaximumPeerServiceUs = 0L
+	foreach ($Peer in $Peers) {
+		$Identity = "$(Get-RecoveryUnsigned -Row $Peer -Field 'connection_slot'):$(Get-RecoveryUnsigned -Row $Peer -Field 'connection_generation')"
+		if (-not $ExpectedPeers.Contains($Identity) -or -not $Seen.Add($Identity) -or
+			[long]$Peer.__line -le [long]$Barrier.__line -or
+			[long]$Peer.__line -ge [long]$Results[0].__line) {
+			throw "recovery case $Case quote has a wrong or duplicate peer generation"
+		}
+		$Debt = Get-RecoveryUnsigned -Row $Peer -Field 'accepted_unretired_complete_bytes'
+		$Future = Get-RecoveryUnsigned -Row $Peer -Field 'future_complete_bytes'
+		$Work = Get-RecoveryUnsigned -Row $Peer -Field 'w_complete_upper_bytes'
+		if ($Debt -gt 524288L -or $Work -ne $Debt + $Future -or $Work -gt 42949672960L) {
+			throw "recovery case $Case quote exceeds the accepted peer work envelope"
+		}
+		$Total += $Work
+		$FutureTotal += $Future
+		$ServiceUs = Get-RecoveryCeilDiv -Numerator ($Work * 1000000L) -Denominator 2097152L
+		$MaximumPeerServiceUs = [math]::Max($MaximumPeerServiceUs, $ServiceUs)
+	}
+	if ($Seen.Count -ne 32 -or $Total -gt 824633720832L -or
+		$Total -ne (Get-RecoveryUnsigned -Row $Results[0] -Field 'w_complete_upper_bytes') -or
+		$FutureTotal -ne (Get-RecoveryUnsigned -Row $Results[0] -Field 'audited_accepted_bytes')) {
+		throw "recovery case $Case quote does not conserve complete-message bytes"
+	}
+	$QuotedFrames = Get-RecoveryUnsigned -Row $Results[0] -Field 'quoted_frames'
+	$AuditedFrames = Get-RecoveryUnsigned -Row $Results[0] -Field 'audited_frames'
+	if ($QuotedFrames -gt 65536L -or $QuotedFrames -ne $AuditedFrames) {
+		throw "recovery case $Case quote did not audit every accepted frame"
+	}
+	$PoolServiceUs = Get-RecoveryCeilDiv -Numerator ($Total * 1000000L) -Denominator 67108864L
+	$BoundUs = 20000000L + [math]::Max(470500L + $MaximumPeerServiceUs, $PoolServiceUs)
+	if ($BoundUs -gt $MaximumRunMicroseconds) {
+		throw "recovery case $Case retained-work deadline exceeds the run hard timeout"
+	}
+	if ($BoundUs -ne (Get-RecoveryUnsigned -Row $Results[0] -Field 'bound_us') -or
+		$BoundUs -ne (Get-RecoveryUnsigned -Row $Deadline -Field 'bound_us') -or
+		(Get-RecoveryUnsigned -Row $Deadline -Field 'elapsed_us') -lt $BoundUs) {
+		throw "recovery case $Case uses a noncanonical W_i deadline"
+	}
+	$Converged = @($Samples | Where-Object { [long]$_.__line -gt $LastProbeLine -and
+		[long]$_.__line -lt [long]$Deadline.__line -and
+		(Test-RecoveryQuiescent -Sample $_ -Tail $Tail -RequireSourceConvergence) } |
+		Sort-Object { [long]$_.elapsed_us })
+	if ($Converged.Count -eq 0 -or [long]$Converged[0].elapsed_us -gt $BoundUs) {
+		throw "recovery case $Case lacks convergence inside its measured W_i service bound"
+	}
+	return [ordered]@{ TotalBytes = $Total; BoundUs = [long]$BoundUs;
+		ConvergedUs = [long]$Converged[0].elapsed_us }
+}
+
 function Assert-RecoveryRecords {
 	param([Parameter(Mandatory = $true)]$Server, [Parameter(Mandatory = $true)]$Clients,
 		[Parameter(Mandatory = $true)]$ExpectedNonces,
-		[Parameter(Mandatory = $true)][string[]]$ExpectedConnections)
+		[Parameter(Mandatory = $true)][string[]]$ExpectedConnections,
+		[long]$MaximumRunMicroseconds = 900000000L)
 	$Output = Get-Records -Path $Server.OutputPath -Kind 'Recovery'
 	$Diagnostics = @(Get-RecoveryDiagnostics -Path $Server.ErrorPath)
 	$Cases = @('gameplay', 'structural', 'mixed')
@@ -234,35 +345,61 @@ function Assert-RecoveryRecords {
 		}
 		$LastProbeLine = [long]($ProbeRows | Measure-Object -Property __line -Maximum).Maximum
 		$Service = @($Samples | Where-Object { [long]$_.__line -gt $LastProbeLine -and
-			[long]$_.elapsed_us -le 20000000 -and (Test-RecoveryQuiescent -Sample $_ -Tail $Tail) })
+			[long]$_.elapsed_us -le 20000000 -and (Test-RecoveryServiceHealthy -Sample $_) })
 		$ServiceState = if ($Service.Count -gt 0) { 'MEASURED_PASS' } else { 'MEASURED_FAIL' }
 		$SnapshotSample = @($Samples | Where-Object { [long]$_.__line -lt [long]$Snapshots[0].__line -and
 			[long]$_.elapsed_us -eq [long]$Snapshots[0].elapsed_us })
 		$Readers = @($Window | Where-Object { $_.event -eq 'reader' -and
 			[long]$_.__line -lt [long]$Snapshots[0].__line })
-		$ReaderPeers = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
-		$Catalog = 0
-		$ReadersHealthy = $Readers.Count -eq 33
+		$SnapshotReaderPeers = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+		$SnapshotCatalog = 0
+		$SnapshotReadersPresent = $Readers.Count -eq 33
 		foreach ($Reader in $Readers) {
-			if ($Reader.catalog -eq '1') { $Catalog++; continue }
+			if ($Reader.catalog -eq '1') { $SnapshotCatalog++; continue }
 			$Key = "$($Reader.connection_slot):$($Reader.connection_generation)"
-			if (-not $ReaderPeers.Add($Key) -or -not $ExpectedPeers.Contains($Key)) { $ReadersHealthy = $false }
-			if ([long]$Reader.next_sequence -lt $Tail -or $Reader.prepared -ne '0' -or
-				$Reader.pending_relevance -ne '0') { $ReadersHealthy = $false }
+			if (-not $SnapshotReaderPeers.Add($Key) -or -not $ExpectedPeers.Contains($Key)) {
+				$SnapshotReadersPresent = $false
+			}
 		}
-		$CatalogRow = @($Readers | Where-Object { $_.catalog -eq '1' })
-		if ($Catalog -ne 1 -or $ReaderPeers.Count -ne 32 -or
-			$CatalogRow.Count -ne 1 -or [long]$CatalogRow[0].next_sequence -lt $Tail) {
-			$ReadersHealthy = $false
+		if ($SnapshotCatalog -ne 1 -or $SnapshotReaderPeers.Count -ne 32) {
+			$SnapshotReadersPresent = $false
 		}
 		$LastNameLine = if ($Case -eq 'gameplay') { 0L } else {
 			[long]($NameRows | Measure-Object -Property __line -Maximum).Maximum
 		}
-		$Strict = [long]$Snapshots[0].elapsed_us -le 20470500 -and
-			$SnapshotSample.Count -eq 1 -and $ReadersHealthy -and
+		$Quote = Assert-RecoveryQuote -Diagnostics $Diagnostics -Case $Case -CaseRunId $RunId `
+			-ExpectedPeers $ExpectedPeers -Barrier $Barriers[0] -Snapshot $Snapshots[0] `
+			-Deadline $Deadlines[0] -Samples $Samples `
+			-LastProbeLine $LastProbeLine -Tail $Tail -MaximumRunMicroseconds $MaximumRunMicroseconds
+		$TerminalReaders = @($Window | Where-Object { $_.event -eq 'terminal_reader' -and
+			[long]$_.__line -gt [long]$Snapshots[0].__line -and
+			[long]$_.__line -lt [long]$Deadlines[0].__line })
+		$TerminalReaderPeers = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+		$TerminalCatalog = 0
+		$TerminalReadersHealthy = $TerminalReaders.Count -eq 33
+		foreach ($Reader in $TerminalReaders) {
+			if ($Reader.catalog -eq '1') {
+				$TerminalCatalog++
+				if ([long]$Reader.next_sequence -lt $Tail) { $TerminalReadersHealthy = $false }
+				continue
+			}
+			$Key = "$($Reader.connection_slot):$($Reader.connection_generation)"
+			if (-not $TerminalReaderPeers.Add($Key) -or -not $ExpectedPeers.Contains($Key) -or
+				[long]$Reader.next_sequence -lt $Tail -or $Reader.prepared -ne '0' -or
+				$Reader.pending_relevance -ne '0') { $TerminalReadersHealthy = $false }
+		}
+		if ($TerminalCatalog -ne 1 -or $TerminalReaderPeers.Count -ne 32) { $TerminalReadersHealthy = $false }
+		$TerminalSamples = @($Samples | Where-Object { [long]$_.__line -gt $LastProbeLine -and
+			[long]$_.__line -gt $LastNameLine -and
+			[long]$_.elapsed_us -le $Quote.BoundUs -and
+			(Test-RecoveryQuiescent -Sample $_ -Tail $Tail -RequireSourceConvergence) } |
+			Sort-Object { [long]$_.elapsed_us })
+		$Strict = [long]$Snapshots[0].elapsed_us -ge 20000000 -and
+			[long]$Snapshots[0].elapsed_us -le 20470500 -and
+			$SnapshotSample.Count -eq 1 -and $SnapshotReadersPresent -and
 			[long]$Snapshots[0].__line -gt $LastProbeLine -and
-			[long]$Snapshots[0].__line -gt $LastNameLine -and
-			(Test-RecoveryQuiescent -Sample $SnapshotSample[0] -Tail $Tail -RequireSourceConvergence)
+			(Test-RecoveryServiceHealthy -Sample $SnapshotSample[0]) -and
+			$TerminalReadersHealthy -and $TerminalSamples.Count -gt 0
 		$CaseObservations.Add([ordered]@{
 			Case = $Case; Opportunities = 480; StructuralOffers = $Offers.Count
 			CessationJournalTail = $Tail; RawNameHistoryBytes = $ExpectedRaw
@@ -271,7 +408,9 @@ function Assert-RecoveryRecords {
 			FixedServiceRecovery = $ServiceState
 			StrictConvergenceSufficientProof = $(if ($Strict) { 'MEASURED_PASS' } else { 'INCONCLUSIVE_NOT_MEASURED' })
 			StrictSnapshotElapsedUs = [long]$Snapshots[0].elapsed_us
-			ExactRetainedWorkBytes = 'NOT_MEASURED'
+			ExactRetainedWorkBytes = $Quote.TotalBytes
+			RetainedWorkBoundUs = $Quote.BoundUs
+			ObservedStructuralConvergenceUs = $(if ($TerminalSamples.Count) { [long]$TerminalSamples[0].elapsed_us } else { 'NOT_MEASURED' })
 		})
 	}
 	foreach ($Slot in 0..31) {
@@ -326,8 +465,10 @@ function Assert-RecoveryRecords {
 	$State = if ($ServiceFailed) { 'MEASURED_FAIL' } elseif ($ConvergenceIncomplete) {
 		'INCONCLUSIVE_NOT_MEASURED'
 	} else { 'MEASURED_PASS' }
+	$TotalRetainedAcrossCases = 0L
+	foreach ($Observation in $CaseObservations) { $TotalRetainedAcrossCases += [long]$Observation.ExactRetainedWorkBytes }
 	return [ordered]@{ State = $State; Cases = @($CaseObservations);
-		ExactRetainedWorkBytes = 'NOT_MEASURED' }
+		ExactRetainedWorkBytes = $TotalRetainedAcrossCases }
 }
 
 function Start-LoggedProcess {
@@ -839,7 +980,8 @@ try {
 	if ($ScaleWorkload) { Assert-ScaleRecords -Server $Server -Clients $Clients -ExpectedNonces $ExpectedNonces }
 	$RecoveryObservation = if ($RecoveryWorkload) {
 		Assert-RecoveryRecords -Server $Server -Clients $Clients -ExpectedNonces $ExpectedNonces `
-			-ExpectedConnections $Identity.Connections
+			-ExpectedConnections $Identity.Connections `
+			-MaximumRunMicroseconds ([long]$RunTimeoutMilliseconds * 1000L)
 	} else { $null }
 	$FairnessObservation = if ($ScaleWorkload) {
 		Read-AdmissionFairnessEvidence -Path (Join-Path $RunDirectory 'admission-fairness.tsv') `
