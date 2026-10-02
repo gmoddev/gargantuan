@@ -11,8 +11,9 @@ physical acceptance gate. The host and role launchers still verify every pin.
    python tools/physical-qualifier/farm_ticket_staging.py new C:\Users\aiden\.codex\private-farm-runs\farm32-20261001-01
    ```
 
-   Keep its Windows ACL restricted to the current user, Administrators, and
-   SYSTEM. `identity.json` contains the new canonical `RunId`, distinct
+   `new` removes inherited Windows access and verifies that only the current
+   owner, Administrators, SYSTEM, and owner-rights can access this directory;
+   `seal` verifies that boundary again. `identity.json` contains the new canonical `RunId`, distinct
    `CoordinatorRunId`, and two independent 256-bit tokens. Never publish this
    directory or copy it into a package, evidence root, issue, or PR.
 

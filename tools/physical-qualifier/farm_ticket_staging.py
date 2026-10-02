@@ -17,6 +17,8 @@ import secrets
 import sys
 import uuid
 
+from private_ticket_acl import AssertPrivate, Harden
+
 
 FORMAT = "GargantuanFarm32Campaign"
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
@@ -109,6 +111,7 @@ def New(Root):
     if Root.exists() or not Root.parent.is_dir() or Root.parent.is_symlink():
         raise ValueError("[Qualification:FarmTickets] private output root must be new")
     Root.mkdir(mode=0o700)
+    Harden(Root)
     WriteNew(Root / "identity.json", {"Format": FORMAT, "Version": 1,
              "CreatedUtc": UtcNow(), "RunId": str(uuid.uuid4()),
              "CoordinatorRunId": str(uuid.uuid4()),
@@ -210,6 +213,7 @@ def ValidateRole(Role, Input, Identity, Manifest, ManifestHash, WorkflowHash):
 
 
 def Seal(Root, SpecPath):
+    AssertPrivate(Root)
     Root = Path(Root).resolve(strict=True)
     Identity = Exact(ReadJson(Root / "identity.json"),
                      ("Format", "Version", "CreatedUtc", "RunId", "CoordinatorRunId",
