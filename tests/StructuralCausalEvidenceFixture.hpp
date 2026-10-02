@@ -3,6 +3,7 @@
 #include "ReliableEnvelopeContractFixture.hpp"
 #include "../src/network/GameSessionTestAccess.hpp"
 #include "../src/network/ReliableByteAdmissionDiagnostics.hpp"
+#include "../src/network/RecoveryCausalEvidence.hpp"
 
 namespace gargantuan::test {
 inline void TestStructuralCausalEvidence() {
@@ -94,8 +95,11 @@ inline void TestStructuralCausalEvidence() {
 	EnvelopeRequire(Evidence.Last(StructuralCausalKind::PendingCancelled).Value.Pending.Token == Replacement.ReplacementToken,
 		"relevance cancellation disposes the actual replacement token");
 	Plan(WithObject);
+	const auto MotionTail = ChangeJournal::Get().CreateCursor(World->GetObjectId()).NextSequence;
 	auto Enter = Coordinator.ProducePendingRelevance(Connection, 8, ++Tick);
 	EnvelopeRequire(Enter.Frame && Evidence.Last(StructuralCausalKind::Prepared).EnterCount == 1 &&
+		Evidence.Last(StructuralCausalKind::Prepared).Entering[0] == Object->GetObjectId() &&
+		Enter.DiagnosticFingerprint == ExactCandidateFingerprint(Enter.EncodedFrame) &&
 		Coordinator.CommitSchedulerAcceptance(Connection, Enter.Frame->Sequence).Succeeded(), "causal Enter prepares and commits");
 	Plan(RootOnly);
 	auto Leave = Coordinator.ProducePendingRelevance(Connection, 8, ++Tick);
@@ -104,9 +108,148 @@ inline void TestStructuralCausalEvidence() {
 		Evidence.Last(StructuralCausalKind::Prepared).Value.Fingerprint == ExactCandidateFingerprint(Leave.EncodedFrame) &&
 		Coordinator.CommitSchedulerAcceptance(Connection, Leave.Frame->Sequence).Succeeded(),
 		"causal Leave has exact independent frame identity and resolves its own token");
+	EnvelopeRequire(ChangeJournal::Get().CreateCursor(World->GetObjectId()).NextSequence == MotionTail &&
+		!Coordinator.GetView(Connection)->Knows(Object->GetObjectId()),
+		"R2 R3 R4 accepted Enter then Leave changes peer materialization without inventing source journal history");
+
+	// R5: repeated real planning/materialization changes exercise current-state
+	// cancellation, per-generation tokens, and exact frame identity. No synthetic
+	// journal mutation or stationary-workload substitution is used.
+	for (int Cycle = 0; Cycle < 8; ++Cycle) {
+		Plan(WithObject);
+		auto MovingEnter = Coordinator.ProducePendingRelevance(Connection, 8, ++Tick);
+		EnvelopeRequire(MovingEnter.Frame && MovingEnter.DiagnosticFingerprint == ExactCandidateFingerprint(MovingEnter.EncodedFrame) &&
+			Coordinator.CommitSchedulerAcceptance(Connection, MovingEnter.Frame->Sequence).Succeeded(),
+			"R5 oscillating Enter retains exact encoded identity");
+		Plan(RootOnly);
+		auto MovingLeave = Coordinator.ProducePendingRelevance(Connection, 8, ++Tick);
+		EnvelopeRequire(MovingLeave.Frame && MovingLeave.DiagnosticFingerprint == ExactCandidateFingerprint(MovingLeave.EncodedFrame) &&
+			Coordinator.CommitSchedulerAcceptance(Connection, MovingLeave.Frame->Sequence).Succeeded(),
+			"R5 oscillating Leave retains exact encoded identity");
+	}
+	EnvelopeRequire(!Evidence.Overflow && ChangeJournal::Get().CreateCursor(World->GetObjectId()).NextSequence == MotionTail,
+		"R5 continuing relevance oscillation produces bounded causal events without source journal growth");
+
+	Plan(WithObject);
+	auto Reenter = Coordinator.ProducePendingRelevance(Connection, 8, ++Tick);
+	EnvelopeRequire(Reenter.Frame && Coordinator.CommitSchedulerAcceptance(Connection, Reenter.Frame->Sequence).Succeeded(),
+		"R1 R6 recovery peer reenters before the cessation fence");
+	// Complete Enter can represent existing history without advancing the shared
+	// cursor immediately. Audit that actual no-frame coverage before the next case.
+	for (int Attempt = 0; Attempt < 32 && Coordinator.GetJournalLag(Connection) != 0; ++Attempt) {
+		const auto Catchup = Coordinator.ProduceIncremental(Connection);
+		EnvelopeRequire(!Catchup.Frame && Catchup.Error == "No relevant replication changes are available",
+			"accepted current Enter covers only legitimate preceding journal history");
+	}
+	EnvelopeRequire(Coordinator.GetJournalLag(Connection) == 0, "accepted current Enter catches the bounded pre-case suffix");
+	Evidence.Count = 0; // Retain bounded independent case evidence, not an unbounded log.
+	Object->SetName("cessation-first"); Object->SetName("cessation-final");
+	const auto CessationTail = ChangeJournal::Get().CreateCursor(World->GetObjectId()).NextSequence;
+	std::string QuoteError;
+	auto Quote = Coordinator.CaptureFrozenQuote(QuoteError);
+	EnvelopeRequire(Quote && QuoteError.empty(), "R1 captures immutable cessation quote");
+	const std::map<ConnectionId, std::size_t> FrameLimits{{Connection,
+		MaximumReliableServiceGroupBytes - ReliableServiceEnvelopeBytes}};
+	const auto Expected = Quote->AdvanceFrozenJournalQuote(FrameLimits);
+	const auto Actual = Coordinator.ProduceIncremental(Connection);
+	const auto ActualIdentity = Evidence.Last(StructuralCausalKind::Prepared);
+	EnvelopeRequire(Expected.Frame && Actual.Frame && Expected.Frame->Sequence == Actual.Frame->Sequence &&
+		Expected.Frame->CompleteBytes == Actual.EncodedFrame.size() + ReliableServiceEnvelopeBytes &&
+		Expected.Frame->Fingerprint == ActualIdentity.Value.Fingerprint &&
+		ActualIdentity.Value.Fingerprint == ExactCandidateFingerprint(Actual.EncodedFrame) &&
+		ActualIdentity.Value.CursorAfter == CessationTail && Actual.Frame->Operations.size() == 1,
+		"R1 R6 no-motion exact replay and current-state Name coalescing agree byte-for-byte");
+	const auto &FinalName = std::get<PropertyReplicationUpdate>(Actual.Frame->Operations.front().Intent);
+	EnvelopeRequire(std::get<std::string>(FinalName.Value) == "cessation-final",
+		"R6 obsolete Name writes are semantically covered rather than replayed as byte demand");
+	RecoveryCausalEvidence FenceAudit(32, 1000, 100, 4);
+	EnvelopeRequire(FenceAudit.CapturePeer({Connection, ActualIdentity.Value.CursorBefore, CessationTail,
+		Actual.Frame->Sequence.Value(), 1, Expected.Frame->CompleteBytes, {}, {}}), "R1 source-derived fence captures");
+	RecoveryPreparedFrame Prepared{Connection, Actual.Frame->Sequence.Value(), ActualIdentity.Value.CompleteBytes,
+		ActualIdentity.Value.Fingerprint, {ActualIdentity.Value.CursorBefore, ActualIdentity.Value.CursorAfter,
+		RecoveryCoverageDisposition::AcceptedFrame, {}}};
+	EnvelopeRequire(FenceAudit.ObservePrepared(Prepared) && !FenceAudit.Represented(),
+		"R6 prepared bytes are not accepted source coverage");
+	EnvelopeRequire(Coordinator.DiscardSchedulerPreparation(Connection, Actual.Frame->Sequence).Succeeded() &&
+		FenceAudit.ObserveRejected(Connection, Actual.Frame->Sequence.Value()) && !FenceAudit.Represented(),
+		"R6 rejected source candidate cannot advance the causal cessation fence");
+	const auto Retry = Coordinator.ProduceIncremental(Connection);
+	EnvelopeRequire(Retry.Frame && Retry.EncodedFrame == Actual.EncodedFrame &&
+		Evidence.Last(StructuralCausalKind::Prepared).Value.CursorBefore == ActualIdentity.Value.CursorBefore &&
+		Coordinator.CommitSchedulerAcceptance(Connection, Retry.Frame->Sequence).Succeeded() &&
+		FenceAudit.ObservePrepared(Prepared) && FenceAudit.ObserveAccepted(Connection, Prepared.Sequence, 1,
+			Prepared.CompleteBytes, Prepared.Fingerprint) && FenceAudit.Represented(),
+		"R1 R6 actual accepted retry advances the fence with identical source and byte identity");
+	// The bare coordinator has no native transport. Do not fabricate delivery:
+	// this test proves source representation; GNS/tracker tests own ACK/retirement.
+	EnvelopeRequire(!FenceAudit.Converged(), "R10 accepted source representation alone cannot claim native convergence");
+
+	// R7: future live values are not predictable at cessation. Their exact bytes
+	// become auditable at preparation, while the original quote remains immutable.
+	Object->SetName("bounded-cessation");
+	const auto LiveFenceTail = ChangeJournal::Get().CreateCursor(World->GetObjectId()).NextSequence;
+	auto LiveQuote = Coordinator.CaptureFrozenQuote(QuoteError);
+	EnvelopeRequire(LiveQuote && QuoteError.empty(), "R7 finite cessation quote captures before ongoing mutation");
+	Object->SetName("continuous-live-value-after-fence");
+	const auto LiveReference = LiveQuote->AdvanceFrozenJournalQuote(FrameLimits);
+	const auto LiveFrame = Coordinator.ProduceIncremental(Connection);
+	const auto LiveIdentity = Evidence.Last(StructuralCausalKind::Prepared).Value;
+	EnvelopeRequire(LiveReference.Frame && LiveFrame.Frame &&
+		LiveReference.Frame->Fingerprint != LiveIdentity.Fingerprint &&
+		LiveIdentity.Fingerprint == ExactCandidateFingerprint(LiveFrame.EncodedFrame) &&
+		LiveIdentity.CursorAfter > LiveFenceTail,
+		"R7 exact causal live encoding can differ from immutable cessation reference under legal current-state semantics");
+	RecoveryCausalEvidence LiveAudit(32, 1000, 100, 4);
+	EnvelopeRequire(LiveAudit.CapturePeer({Connection, LiveIdentity.CursorBefore, LiveFenceTail,
+		LiveIdentity.Sequence, 1, LiveReference.Frame->CompleteBytes, {}, {}}) && !LiveAudit.Represented(),
+		"R7 withheld baseline source progress remains unresolved despite live source activity");
+	EnvelopeRequire(LiveAudit.ObservePrepared({Connection, LiveIdentity.Sequence, LiveIdentity.CompleteBytes,
+		LiveIdentity.Fingerprint, {LiveIdentity.CursorBefore, LiveIdentity.CursorAfter, RecoveryCoverageDisposition::AcceptedFrame, {}}}) &&
+		Coordinator.CommitSchedulerAcceptance(Connection, LiveFrame.Frame->Sequence).Succeeded() &&
+		LiveAudit.ObserveAccepted(Connection, LiveIdentity.Sequence, 2, LiveIdentity.CompleteBytes, LiveIdentity.Fingerprint) &&
+		LiveAudit.Represented() && LiveAudit.ReferenceBytes(Connection) == LiveReference.Frame->CompleteBytes,
+		"R7 accepted current-state coverage resolves finite source fence without retroactively changing reference bytes");
+	Object->SetName("later-live-work-does-not-reopen-source-fence");
+	EnvelopeRequire(LiveAudit.Represented() && Coordinator.GetJournalLag(Connection) != 0,
+		"R7 later live source backlog cannot reopen represented cessation source prefix");
+
 	Coordinator.RemovePeer(Connection);
 	EnvelopeRequire(Evidence.Last(StructuralCausalKind::PeerRemoved).Value.Connection == Connection && !Evidence.Overflow,
 		"generation removal is explicit and evidence stays bounded");
+	EnvelopeRequire(!Coordinator.CommitSchedulerAcceptance(Connection, LiveFrame.Frame->Sequence).Succeeded(),
+		"R8 removed peer cannot replay old accepted preparation");
+	const ConnectionId ReplacementConnection{Connection.Slot, Connection.Generation + 1};
+	EnvelopeRequire(Coordinator.RegisterPeerPlanned(ReplacementConnection, ReplicationEpoch(1),
+		std::make_shared<const PeerRelevanceSelection>(RootOnly)).Succeeded(), "R8 slot reuse starts a distinct source generation");
+	for (int Attempt = 0; Attempt < 2000 && !Coordinator.IsPlanningReady(ReplacementConnection); ++Attempt)
+		Coordinator.ProcessPlanning(++Tick);
+	const auto ReplacementBaseline = Coordinator.ProducePendingBaseline(ReplacementConnection, 8, ++Tick);
+	EnvelopeRequire(ReplacementBaseline.Frame && Evidence.Last(StructuralCausalKind::Prepared).Value.Connection == ReplacementConnection &&
+		ReplacementBaseline.Frame->Sequence.Value() == 1 && !LiveAudit.ObservePending(ReplacementConnection, 1),
+		"R8 generation reuse has its own sequence and cannot inherit old recovery coverage");
+	Coordinator.RemovePeer(ReplacementConnection);
+	// R9 proves the provider-neutral source layer on two independent coordinator
+	// instances over the same authoritative world. This is not a TLS/provider PASS.
+	ReplicationCoordinator LocalSource(World), NodeSource(World);
+	const ConnectionId IndependentConnection{113, 7};
+	for (auto *Source : {&LocalSource, &NodeSource}) {
+		EnvelopeRequire(Source->RegisterPeerPlanned(IndependentConnection, ReplicationEpoch(1),
+			std::make_shared<const PeerRelevanceSelection>(WithObject)).Succeeded(), "R9 independent source registers");
+		for (int Attempt = 0; Attempt < 2000 && !Source->IsPlanningReady(IndependentConnection); ++Attempt)
+			Source->ProcessPlanning(++Tick);
+		auto IndependentBaseline = Source->ProducePendingBaseline(IndependentConnection, 8, ++Tick);
+		EnvelopeRequire(IndependentBaseline.Frame && Source->CommitSchedulerAcceptance(IndependentConnection,
+			IndependentBaseline.Frame->Sequence).Succeeded(), "R9 independent source baseline accepts");
+	}
+	Object->SetName("provider-neutral-recovery-state");
+	const auto LocalFrame = LocalSource.ProduceIncremental(IndependentConnection);
+	const auto NodeFrame = NodeSource.ProduceIncremental(IndependentConnection);
+	EnvelopeRequire(LocalFrame.Frame && NodeFrame.Frame && LocalFrame.EncodedFrame == NodeFrame.EncodedFrame &&
+		LocalFrame.DiagnosticFingerprint == ExactCandidateFingerprint(LocalFrame.EncodedFrame) &&
+		NodeFrame.DiagnosticFingerprint == LocalFrame.DiagnosticFingerprint,
+		"R9 identical authoritative semantics yield exact identical source evidence independent of provider ownership");
+	LocalSource.RemovePeer(IndependentConnection); NodeSource.RemovePeer(IndependentConnection);
 	World->Destroy();
+	std::cout << "[Recovery:SourceEvidence] R1-R10 causal coordinator cases passed; native delivery and physical providers remain separate gates\n";
 }
 }
