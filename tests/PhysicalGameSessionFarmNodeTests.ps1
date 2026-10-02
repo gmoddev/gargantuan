@@ -84,8 +84,12 @@ try {
 	$WrongKey = Join-Path $Root 'wrong-key.pem'
 	Write-TestCertificate -CertificatePath $WrongCertificate -KeyPath $WrongKey -IpAddress '127.0.0.2'
 
-	$MockSource = Join-Path $Root 'mock-node.go'
+	$MockSourceRoot = Join-Path $Root 'mock-source'
+	[void][IO.Directory]::CreateDirectory($MockSourceRoot)
+	$MockSource = Join-Path $MockSourceRoot 'mock-node.go'
 	$MockExecutable = Join-Path $Root 'mock-node.exe'
+	[IO.File]::WriteAllText((Join-Path $MockSourceRoot 'go.mod'),
+		"module example.com/farm-node-mock`n`ngo 1.22`n")
 	[IO.File]::WriteAllText($MockSource, @'
 package main
 import (
@@ -103,7 +107,21 @@ func main() {
  for { c, e := l.Accept(); if e != nil { return }; c.Close() }
 }
 '@)
-	& $GoExecutable build -o $MockExecutable $MockSource
+	& git -C $MockSourceRoot init -q
+	if ($LASTEXITCODE -ne 0) { throw 'mock Node Git initialization failed' }
+	& git -C $MockSourceRoot add -- go.mod mock-node.go
+	if ($LASTEXITCODE -ne 0) { throw 'mock Node source staging failed' }
+	$CommitEmail = (& git config --get user.email 2>$null)
+	if ([string]::IsNullOrWhiteSpace($CommitEmail)) {
+		$CommitEmail = 'farm-node-test@example.invalid'
+	}
+	& git -C $MockSourceRoot -c user.name=FarmNodeTest -c "user.email=$CommitEmail" `
+		commit -qm 'Create mock Node source'
+	if ($LASTEXITCODE -ne 0) { throw 'mock Node source commit failed' }
+	$MockCommit = (& git -C $MockSourceRoot rev-parse HEAD).Trim()
+	Push-Location $MockSourceRoot
+	try { & $GoExecutable build -buildvcs=true -trimpath -o $MockExecutable . }
+	finally { Pop-Location }
 	if ($LASTEXITCODE -ne 0) { throw 'mock Node build failed' }
 
 	$Listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
@@ -136,14 +154,24 @@ func main() {
 		RunManifestSha256 = Get-Pin $ManifestPath; ServerPackageRoot = $Package
 		DescriptorPath = $DescriptorPath; DescriptorSha256 = Get-Pin $DescriptorPath
 		NodeExecutablePath = $MockExecutable; NodeExecutableSha256 = Get-Pin $MockExecutable
-		NodeSourceCommit = 'f' * 40; CertificatePath = $Certificate
+		NodeSourceCommit = $MockCommit; CertificatePath = $Certificate
 		PrivateKeyPath = $PrivateKey; RootCertificatePath = $Certificate
 	}
+	$Bad = $Prepare.Clone(); $Bad.StageRoot = Join-Path $Root 'BadRevision'
+	$Bad.NodeSourceCommit = 'f' * 40
+	Expect-Rejection { & $Source @Bad } 'binary VCS revision differs from declared Node source commit'
+	$Bad = $Prepare.Clone(); $Bad.StageRoot = Join-Path $Root 'BadBuildMetadata'
+	$Bad.NodeExecutablePath = Join-Path $Root 'not-a-go-binary.exe'
+	[IO.File]::WriteAllText($Bad.NodeExecutablePath, 'not a Go binary')
+	$Bad.NodeExecutableSha256 = Get-Pin $Bad.NodeExecutablePath
+	Expect-Rejection { & $Source @Bad } 'hash-pinned binary lacks Go VCS metadata'
 	$StageOutput = & $Source @Prepare
 	if ($StageOutput -notmatch 'STAGED') { throw 'Node stage was not created' }
 	$Proof = Get-Content -LiteralPath (Join-Path $Stage 'node-stage.json') -Raw | ConvertFrom-Json -AsHashtable
 	$ConfigText = Get-Content -LiteralPath (Join-Path $Stage 'node.toml') -Raw
 	if ($Proof.ProjectId -cne $ProjectId -or $Proof.Revision -ne $Revision -or
+		$Proof.NodeSourceCommit -cne $MockCommit -or
+		$Proof.NodeBinaryVcsStatus -cne 'MATCHED_CLEAN' -or
 		$ConfigText -notmatch [regex]::Escape($ProjectId) -or
 		$ConfigText -notmatch 'package_version = 23' -or
 		$ConfigText -notmatch '(?m)^level = "info"$' -or
@@ -244,6 +272,16 @@ func main() {
 	$Bad = $Prepare.Clone(); $Bad.StageRoot = Join-Path $Root 'BadBinary'
 	$Bad.NodeExecutableSha256 = '0' * 64
 	Expect-Rejection { & $Source @Bad } 'unapproved Node binary'
+	$DirtyExecutable = Join-Path $Root 'dirty-node.exe'
+	[IO.File]::AppendAllText($MockSource, "`n// intentionally dirty at build`n")
+	Push-Location $MockSourceRoot
+	try { & $GoExecutable build -buildvcs=true -trimpath -o $DirtyExecutable . }
+	finally { Pop-Location }
+	if ($LASTEXITCODE -ne 0) { throw 'dirty mock Node build failed' }
+	$Bad = $Prepare.Clone(); $Bad.StageRoot = Join-Path $Root 'BadDirtyBuild'
+	$Bad.NodeExecutablePath = $DirtyExecutable
+	$Bad.NodeExecutableSha256 = Get-Pin $DirtyExecutable
+	Expect-Rejection { & $Source @Bad } 'Node binary was built from a dirty source tree'
 	$Bad = $Prepare.Clone(); $Bad.StageRoot = Join-Path $Root 'BadKey'
 	$Bad.PrivateKeyPath = $WrongKey
 	Expect-Rejection { & $Source @Bad } 'certificate/private-key mismatch'

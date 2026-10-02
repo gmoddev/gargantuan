@@ -128,6 +128,27 @@ function Get-Sha256 {
 	return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
 }
 
+function Assert-NodeBuildProvenance {
+	param([string]$ExecutablePath, [string]$SourceCommit)
+	if ($SourceCommit -cnotmatch '^[a-fA-F0-9]{40}$') {
+		throw 'Node source commit pin is invalid'
+	}
+	$Go = Get-Command go.exe -CommandType Application -ErrorAction Stop |
+		Select-Object -First 1
+	$Lines = @(& $Go.Source version -m $ExecutablePath 2>&1)
+	if ($LASTEXITCODE -ne 0 -or $Lines.Count -gt 128 -or
+		($Lines -join "`n").Length -gt 65536) {
+		throw 'pinned Node binary build metadata is unavailable or unbounded'
+	}
+	$Revision = @($Lines | Where-Object { $_ -cmatch '^\s*build\s+vcs\.revision=([a-f0-9]{40})$' })
+	$Clean = @($Lines | Where-Object { $_ -cmatch '^\s*build\s+vcs\.modified=false$' })
+	$Git = @($Lines | Where-Object { $_ -cmatch '^\s*build\s+vcs=git$' })
+	if ($Revision.Count -ne 1 -or $Clean.Count -ne 1 -or $Git.Count -ne 1 -or
+		$Revision[0] -cnotmatch ('vcs\.revision=' + $SourceCommit.ToLowerInvariant() + '$')) {
+		throw 'pinned Node binary lacks the exact clean source revision'
+	}
+}
+
 function Assert-NodeEndpoint {
 	param([string]$Endpoint)
 	$Parts = $Endpoint -split ':'
@@ -188,6 +209,7 @@ if ($Mode -eq 'Prepare') {
 	$Descriptor = Assert-FilePin -Path $DescriptorPath -Sha256 $DescriptorSha256 -MaximumBytes 65536
 	$Identity = Assert-PackageIdentity -PackageRoot $Server -DescriptorFile $Descriptor
 	$Executable = Assert-FilePin -Path $NodeExecutablePath -Sha256 $NodeExecutableSha256
+	Assert-NodeBuildProvenance -ExecutablePath $Executable -SourceCommit $NodeSourceCommit
 	$Certificate = Assert-FilePin -Path $CertificatePath -MaximumBytes 65536
 	$Key = Assert-FilePin -Path $PrivateKeyPath -MaximumBytes 65536
 	$Root = Assert-FilePin -Path $RootCertificatePath -Sha256 $Manifest.NodeRootCertificateSha256 `
@@ -234,6 +256,7 @@ if ($Mode -eq 'Prepare') {
 		DescriptorPath = $Descriptor; DescriptorSha256 = $DescriptorSha256.ToLowerInvariant()
 		ProjectId = $Identity.ProjectId; Revision = $Identity.Revision
 		NodeSourceCommit = $NodeSourceCommit.ToLowerInvariant()
+		NodeBinaryVcsStatus = 'MATCHED_CLEAN'
 		NodeExecutablePath = $Executable; NodeExecutableSha256 = $NodeExecutableSha256.ToLowerInvariant()
 		NodeEndpoint = $Manifest.NodeEndpoint; NodeTokenEnvironment = $Manifest.NodeTokenEnvironment
 		RootCertificatePath = $Root; RootCertificateSha256 = (Get-Sha256 $Root)
@@ -259,6 +282,7 @@ $StagePath = Assert-FilePin -Path (Join-Path $Stage 'node-stage.json') -Sha256 $
 $Proof = Get-Content -LiteralPath $StagePath -Raw | ConvertFrom-Json -AsHashtable
 if ($Proof.Format -cne 'GargantuanFarmNodeStage' -or $Proof.Version -ne 1 -or
 	$Proof.Status -cne 'STAGED_NOT_TLS_PROVEN' -or
+	$Proof.NodeBinaryVcsStatus -cne 'MATCHED_CLEAN' -or
 	$Proof.HelperSha256 -cne (Get-Sha256 $PSCommandPath) -or
 	[string]$Proof.EndpointValidatorSha256 -cnotmatch '^[a-f0-9]{64}$' -or
 	$Proof.NodeEndpoint -cnotmatch '^127\.0\.0\.1:[0-9]{4,5}$') {
@@ -287,6 +311,7 @@ if ($Identity.ProjectId -cne $Proof.ProjectId -or $Identity.Revision -ne $Proof.
 	throw 'Node stage package identity changed'
 }
 $Executable = Assert-FilePin -Path $Proof.NodeExecutablePath -Sha256 $Proof.NodeExecutableSha256
+Assert-NodeBuildProvenance -ExecutablePath $Executable -SourceCommit $Proof.NodeSourceCommit
 $Config = Assert-FilePin -Path (Join-Path $Stage 'node.toml') -Sha256 $Proof.ConfigSha256 `
 	-MaximumBytes 65536
 $Root = Assert-FilePin -Path $Proof.RootCertificatePath -Sha256 $Proof.RootCertificateSha256 `

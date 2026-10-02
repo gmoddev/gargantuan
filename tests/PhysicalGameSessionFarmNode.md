@@ -13,6 +13,12 @@ an approved Node binary and SHA-256/source commit, a certificate/private-key
 pair, and the manifest-pinned root CA. It checks the full Server deployment
 manifest, then requires the descriptor's dynamic `project_id`/`revision` to
 match `game.package.json` and `content/content.manifest.json`. The generated
+stage also requires `go.exe` on the Server endpoint and checks `go version -m`
+on the exact hash-pinned Node binary. Its embedded `vcs=git`, `vcs.revision`,
+and `vcs.modified=false` must match the declared Node source commit. A binary
+built from a dirty source tree or a managed Git worktree without embedded VCS
+metadata fails closed. The stage records `NodeBinaryVcsStatus=MATCHED_CLEAN`;
+`Run` rechecks the binary hash and embedded revision before launch. The generated
 TOML gives Node only a filesystem content package for that exact identity and
 the `content.manifest.read`/`content.blob.read` game-server principal. The
 Node token is read from the environment; neither it nor the private-key bytes
@@ -42,8 +48,9 @@ Gargantuan Server's authenticated gRPC content request over the pinned CA,
 Node process/config/certificate provenance tied to the same run, and the
 independent TLS/provider transcript required by the farm reconciler. No
 campaign PASS should be inferred from helper staging or TCP readiness alone.
-The supplied Node source commit is a provenance claim paired with the binary
-hash; the build pipeline must independently attest their relationship.
+The embedded clean revision, binary hash, and successful Node CI form the
+source-to-binary provenance chain. Retain the clean-checkout build command and
+binary hash receipt independently; the helper does not itself build Node.
 
 Run the source-only deterministic fixture with:
 
@@ -54,7 +61,8 @@ pwsh -NoProfile -File tests/PhysicalGameSessionFarmNodeTests.ps1
 Optionally pass `-OfficialNodeBinary <path>` to also check the generated TOML
 with the pinned official `gargantuan-node validate-config --config` command.
 The fixture builds a local mock listener, tests bounded owned-child stop/reap,
-single-use staging, descriptor mismatch, wrong SAN, binary/validator-pin
+single-use staging, descriptor mismatch, wrong SAN, binary/validator-pin,
+wrong or absent embedded revision and dirty-source build
 rejection, and exclusion of token/key material from staging. CMake registers it
 on Windows when both PowerShell 7 and Go are available. It never runs the
 physical farm.
