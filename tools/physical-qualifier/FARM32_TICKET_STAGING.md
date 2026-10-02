@@ -8,7 +8,7 @@ physical acceptance gate. The host and role launchers still verify every pin.
    packages, evidence, capture, and registries:
 
    ```powershell
-   python tools/physical-qualifier/farm_ticket_staging.py new C:\Users\aiden\.codex\private-farm-runs\<fresh-name>
+   python tools/physical-qualifier/farm_ticket_staging.py new C:\Users\aiden\.codex\private-farm-runs\farm32-20261001-01
    ```
 
    Keep its Windows ACL restricted to the current user, Administrators, and
@@ -25,7 +25,7 @@ physical acceptance gate. The host and role launchers still verify every pin.
 3. Prepare a closed-schema JSON spec and seal the private root:
 
    ```powershell
-   python tools/physical-qualifier/farm_ticket_staging.py seal C:\Users\aiden\.codex\private-farm-runs\<fresh-name> C:\Users\aiden\.codex\private-farm-runs\<fresh-name>-spec.json
+   python tools/physical-qualifier/farm_ticket_staging.py seal C:\Users\aiden\.codex\private-farm-runs\farm32-20261001-01 C:\Users\aiden\.codex\private-farm-runs\farm32-20261001-01-spec.json
    ```
 
    The spec has exactly `Format: GargantuanFarm32TicketSpec`, `Version: 1`,
