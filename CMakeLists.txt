@@ -803,6 +803,7 @@ if(BUILD_TESTING)
 		gargantuan_runtime_distribution gargantuan_server_runtime_distribution)
 	if(WIN32)
 		find_program(GARGANTUAN_PWSH_EXECUTABLE NAMES pwsh)
+		find_program(GARGANTUAN_GO_EXECUTABLE NAMES go)
 		if(GARGANTUAN_PWSH_EXECUTABLE)
 			add_test(NAME gargantuan_physical_game_session_farm_evidence
 				COMMAND "${GARGANTUAN_PWSH_EXECUTABLE}" -NoProfile -File
@@ -819,6 +820,12 @@ if(BUILD_TESTING)
 			add_test(NAME gargantuan_physical_game_session_farm_preflight
 				COMMAND "${GARGANTUAN_PWSH_EXECUTABLE}" -NoProfile -File
 				"${CMAKE_CURRENT_SOURCE_DIR}/tests/PhysicalGameSessionFarmPreflightTests.ps1")
+			if(GARGANTUAN_GO_EXECUTABLE)
+				add_test(NAME gargantuan_physical_game_session_farm_node
+					COMMAND "${GARGANTUAN_PWSH_EXECUTABLE}" -NoProfile -File
+					"${CMAKE_CURRENT_SOURCE_DIR}/tests/PhysicalGameSessionFarmNodeTests.ps1"
+					-GoExecutable "${GARGANTUAN_GO_EXECUTABLE}")
+			endif()
 			add_test(NAME gargantuan_farm32_worker_capture_hook
 				COMMAND "${GARGANTUAN_PWSH_EXECUTABLE}" -NoProfile -File
 				"${CMAKE_CURRENT_SOURCE_DIR}/tools/physical-qualifier/tests/TestCaptureHooks.ps1"
