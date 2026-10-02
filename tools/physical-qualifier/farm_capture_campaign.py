@@ -26,9 +26,10 @@ CLIENT_KEYS = frozenset({"CaptureScriptPath", "CaptureScriptSha256", "DumpcapPat
 SHA256 = re.compile(r"[0-9a-fA-F]{64}\Z")
 ROLE_DEADLINE_SECONDS = 500  # Leaves 80 s for Stop and 20 s before the service's 600 s lease.
 STOP_TIMEOUT_SECONDS = 80
-FINALIZE_TIMEOUT_SECONDS = 180
+FINALIZE_TIMEOUT_SECONDS = 1800  # Offline only; the privileged Stop remains separately bounded.
 CLIENT_AUTOSTOP_SECONDS = 630  # 600 s dumpcap autostop plus its own 30 s close bound.
-MAX_CAPTURE_BYTES = 960 * 1024 * 1024
+CAPTURE_PROFILE = "Farm32Capture16GiB-v2"
+MAX_CAPTURE_BYTES = 15 * 1024 * 1024 * 1024
 MAX_TEXT_BYTES = 65536
 
 
@@ -161,6 +162,7 @@ def RoleEvidence(Root, RunId, Role):
 
 def SealCapture(Config, StartedUtc, ReadyUtc, StoppedUtc, RoleIndex, ClockSeconds):
     Directory = Config["CaptureDirectory"]
+    AssertCaptureProfile(Config)
     Pcap = Directory / ("farm32-worker-capture.pcapng" if Config["Role"] == "SERVER" else
                         "farm32-client-capture.pcapng")
     if not Pcap.is_file() or not 0 < Pcap.stat().st_size < MAX_CAPTURE_BYTES or \
@@ -183,10 +185,10 @@ def SealCapture(Config, StartedUtc, ReadyUtc, StoppedUtc, RoleIndex, ClockSecond
         if File.is_symlink() or not File.is_file() or len(Files) >= 20:
             raise ValueError("[Qualification:FarmCapture] unsafe capture artifact")
         Size = File.stat().st_size
-        if Size > MAX_CAPTURE_BYTES:
+        if Size >= MAX_CAPTURE_BYTES:
             raise ValueError("[Qualification:FarmCapture] capture artifact exceeds bound")
         Files.append({"Name": File.name, "Bytes": Size, "Sha256": Digest(File)})
-    Index = {"Format": "GargantuanFarm32CaptureEvidence", "Version": 1,
+    Index = {"Format": "GargantuanFarm32CaptureEvidence", "Version": 1, "Profile": CAPTURE_PROFILE,
              "RunId": Config["RunId"], "CoordinatorRunId": Config["CoordinatorRunId"],
              "Role": Config["Role"], "State": "SEALED_UNQUALIFIED",
              "StartedUtc": StartedUtc, "ReadyUtc": ReadyUtc, "StoppedUtc": StoppedUtc,
@@ -195,6 +197,18 @@ def SealCapture(Config, StartedUtc, ReadyUtc, StoppedUtc, RoleIndex, ClockSecond
         json.dump(Index, Stream, indent=2)
         Stream.write("\n")
     return Directory / "capture-sha256.json"
+
+
+def AssertCaptureProfile(Config):
+    Worker = Config["Role"] == "SERVER"
+    Marker = ReadJson(Config["CaptureDirectory"] / (
+        "farm32-netsh-owner.json" if Worker else "farm32-client-capture.json"))
+    Expected = {"Profile": CAPTURE_PROFILE}
+    Expected.update({"TraceMaximumMiB": 16384, "NoWrapThresholdMiB": 15360} if Worker else
+                    {"DurationSeconds": 600, "AutostopKilobytes": 16777216,
+                     "CompletenessBytes": MAX_CAPTURE_BYTES})
+    if any(Marker.get(Key) != Value for Key, Value in Expected.items()):
+        raise ValueError("[Qualification:FarmCapture] capture profile marker differs from the pinned candidate")
 
 
 class FarmCaptureController:
@@ -248,6 +262,7 @@ class FarmCaptureController:
                 self.Sleep(0.1)
             else:
                 raise TimeoutError("[Qualification:FarmCapture] client capture readiness timed out")
+        AssertCaptureProfile(Config)
         self.ReadyUtc = UtcNow()
         with (Directory / "capture-controller-ready.json").open("x", encoding="utf-8") as Stream:
             json.dump({"RunId": Config["RunId"], "CoordinatorRunId": Config["CoordinatorRunId"],
@@ -360,6 +375,7 @@ def BindReceipt(RunId, CoordinatorRunId, CoordinatorResult, ServerIndex, ClientI
         if Index.get("RunId") != RunId or Index.get("Role") != ("Server" if Role == "SERVER" else "Clients") or \
                 Capture.get("RunId") != RunId or Capture.get("CoordinatorRunId") != CoordinatorRunId or \
                 Capture.get("Role") != Role or Capture.get("State") != "SEALED_UNQUALIFIED" or \
+                Capture.get("Profile") != CAPTURE_PROFILE or \
                 Capture.get("RoleIndexSha256") != Digest(IndexPath):
             raise ValueError("[Qualification:FarmCapture] cross-role capture binding mismatch")
         References[Role] = {"RoleIndexSha256": Digest(IndexPath),

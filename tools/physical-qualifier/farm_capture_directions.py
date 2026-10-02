@@ -12,7 +12,8 @@ from pathlib import Path
 import struct
 
 
-MAX_CAPTURE_BYTES = 960 * 1024 * 1024
+CAPTURE_PROFILE = "Farm32Capture16GiB-v2"
+MAX_CAPTURE_BYTES = 15 * 1024 * 1024 * 1024
 MAX_BLOCK_BYTES = 1024 * 1024
 SERVER_ADDRESS = "10.253.3.2"
 CLIENT_ADDRESS = "10.253.3.1"
@@ -31,6 +32,7 @@ def ReadIndex(File, Role):
     Index = json.loads(File.read_text(encoding="utf-8"))
     if (Index.get("Format") != "GargantuanFarm32CaptureEvidence" or
             Index.get("Version") != 1 or Index.get("Role") != Role or
+            Index.get("Profile") != CAPTURE_PROFILE or
             Index.get("State") != "SEALED_UNQUALIFIED" or
             not isinstance(Index.get("Files"), list) or
             not 1 <= len(Index["Files"]) <= 20):

@@ -32,6 +32,9 @@ WORKER_ALIAS = "dockerbox"
 WORKER_IP = "192.168.0.108"
 CLIENT_IP = "192.168.0.68"
 CONTROL_PORT = 39451
+CAPTURE_MEMBER_MAX_BYTES = 15 * 1024 * 1024 * 1024
+CAPTURE_TRANSFER_SECONDS = 1800  # Per immutable ETL/pcap; independent of live capture.
+OUTER_FINISH_SECONDS = 3050
 SHA = re.compile(r"[0-9a-f]{64}\Z")
 SAFE_REMOTE = re.compile(r"^[A-Za-z]:\\[A-Za-z0-9._\\-]{1,350}\Z")
 SAFE_ARGUMENT = re.compile(r"[A-Za-z0-9._:\\-]{1,512}\Z")
@@ -716,7 +719,7 @@ def LaunchPrepared(TransportInstance, Roots, Spec, Identity, PrivateRoot):
                                       stderr=subprocess.DEVNULL, creationflags=Hidden())))
         if time.monotonic() - Barrier >= 60:
             raise TimeoutError("[Qualification:FarmOuter] role launch barrier exceeded")
-        Deadline = time.monotonic() + 850
+        Deadline = time.monotonic() + OUTER_FINISH_SECONDS
         for _, _, Process in Launched[1:]:
             Remaining = max(0.1, Deadline - time.monotonic())
             if Process.wait(timeout=Remaining) != 0:
@@ -795,6 +798,7 @@ def FetchIndexed(TransportInstance, RemoteRoot, LocalRoot, IndexName, RunId, Rol
                 not re.fullmatch(r"[A-Za-z0-9._-]{1,96}", Member["Name"]) or
                 Member["Name"] in Seen or Member["Name"] == IndexName or
                 type(Member["Bytes"]) is not int or
+                (IndexName == "capture-sha256.json" and Member["Bytes"] >= CAPTURE_MEMBER_MAX_BYTES) or
                 not 0 <= Member["Bytes"] <= (335544832 if
                     Member["Name"] == "publication-service.bin" and Role == "SERVER" else
                     32 * 1024 * 1024 if Member["Name"] == "admission-fairness.tsv" and Role == "SERVER" else
@@ -807,7 +811,7 @@ def FetchIndexed(TransportInstance, RemoteRoot, LocalRoot, IndexName, RunId, Rol
         Seen.add(Member["Name"])
         Destination = LocalRoot / Member["Name"]
         TransportInstance.Fetch(str(PureWindowsPath(RemoteRoot) / Member["Name"]),
-                                Destination, Timeout=180)
+                                Destination, Timeout=CAPTURE_TRANSFER_SECONDS if IndexName == "capture-sha256.json" else 180)
         if Destination.stat().st_size != Member["Bytes"] or Digest(Destination) != Member["Sha256"]:
             raise ValueError("[Qualification:FarmOuter] transferred worker evidence hash mismatch")
     return Index
@@ -834,7 +838,7 @@ def Collect(PrivateRoot, SpecPath, WorkerPython, WorkerHelper, TransportInstance
     ServerCapture = FetchIndexed(TransportInstance,
         str(PureWindowsPath(Server["CaptureRoot"]) / Identity["RunId"]),
         Collection / "server-capture", "capture-sha256.json",
-        Identity["RunId"], "SERVER", 20, 960 * 1024 * 1024)
+        Identity["RunId"], "SERVER", 20, CAPTURE_MEMBER_MAX_BYTES)
     ClientRole = Path(Client["EvidenceRoot"]) / "evidence-sha256.json"
     ClientCapture = Path(Client["CaptureRoot"]) / Identity["RunId"] / "capture-sha256.json"
     if not ClientRole.is_file() or not ClientCapture.is_file():

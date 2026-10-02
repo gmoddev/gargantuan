@@ -7,8 +7,10 @@ $Tokens = $null; $Errors = $null
 [System.Management.Automation.Language.Parser]::ParseInput($Text, [ref]$Tokens, [ref]$Errors) | Out-Null
 Assert ($Errors.Count -eq 0) 'Farm32 dumpcap script does not parse'
 Assert ($Text -match '(?m)^\$CaptureSeconds = 600\r?$') 'Farm32 duration changed'
-Assert ($Text -match '(?m)^\$AutostopKilobytes = 1048576\r?$') 'Farm32 filesize autostop changed'
-Assert ($Text -match '(?m)^\$CompletenessBytes = 960MB\r?$') 'Farm32 completeness threshold changed'
+Assert ($Text -match '(?m)^\$AutostopKilobytes = 16777216\r?$') 'Farm32 filesize autostop changed'
+Assert ($Text -match '(?m)^\$CompletenessBytes = 15GB\r?$') 'Farm32 completeness threshold changed'
+Assert ($Text -match '(?m)^\$ReservedBytes = 18GB\r?$') 'Farm32 client disk reserve changed'
+Assert ($Text.Contains("'Farm32Capture16GiB-v2'")) 'Farm32 versioned profile missing'
 Assert ($Text -match "'udp port 39450 and host 10\.253\.3\.2'") 'Farm32 fixed UDP filter changed'
 $ExpectedAutostop = @'
 '-a', "duration:$CaptureSeconds", '-a', "filesize:$AutostopKilobytes"

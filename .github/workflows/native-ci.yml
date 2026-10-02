@@ -168,6 +168,9 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Pinned Agent Coordinator bootstrap failed' }
           python -m unittest discover -s tools/physical-qualifier/tests -p 'test_farm_*.py' -v
           if ($LASTEXITCODE -ne 0) { throw 'Farm32 control and evidence tests failed' }
+          # Control-only mocks; no capture, NIC, or installed-service operation.
+          & tools/physical-qualifier/tests/TestCaptureHooks.ps1 -HookPath tools/physical-qualifier/worker/PktMonFarm32Capture.ps1 -Farm32
+          & tools/physical-qualifier/tests/TestDumpcapFarm32Capture.ps1
 
       - name: Run qualified reliable workload timing in Release
         shell: cmd

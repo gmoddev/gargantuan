@@ -57,6 +57,7 @@ def Index(Root, Role, PcapBytes):
     Capture = Root / Name
     Capture.write_bytes(PcapBytes)
     Row = {"Format": "GargantuanFarm32CaptureEvidence", "Version": 1,
+           "Profile": "Farm32Capture16GiB-v2",
            "RunId": RUN_ID, "CoordinatorRunId": COORDINATOR_ID,
            "Role": Role, "State": "SEALED_UNQUALIFIED", "RoleIndexSha256": "a" * 64,
            "Files": [{"Name": Name, "Bytes": len(PcapBytes),
@@ -85,6 +86,19 @@ class FarmCaptureDirectionsTests(unittest.TestCase):
         self.assertEqual(Result["Status"], "BIDIRECTIONAL_32_TUPLES")
         self.assertEqual(len(Result["Ports"]), 32)
         self.assertEqual(sum(Row["Inbound"] for Row in Result["Server"].values()), 32)
+
+    def test_old_profile_and_threshold_member_are_rejected_before_streaming(self):
+        Server, _ = self.Pair()
+        Row = json.loads(Server.read_text())
+        Row.pop("Profile")
+        Server.write_text(json.dumps(Row))
+        with self.assertRaisesRegex(ValueError, "identity or state"):
+            DIRECTIONS.ReadIndex(Server, "SERVER")
+        Row["Profile"] = "Farm32Capture16GiB-v2"
+        Row["Files"][0]["Bytes"] = 15 * 1024 ** 3
+        Server.write_text(json.dumps(Row))
+        with self.assertRaisesRegex(ValueError, "member is invalid"):
+            DIRECTIONS.ReadIndex(Server, "SERVER")
 
     def test_missing_direction_is_rejected(self):
         Server, Client = self.Pair(Client=Pcap(self.Ports, MissingPort=49007))

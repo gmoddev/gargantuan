@@ -10,8 +10,9 @@ $Etl = Join-Path $EvidenceDir 'farm32-worker-capture.etl'
 $Pcap = Join-Path $EvidenceDir 'farm32-worker-capture.pcapng'
 # One noncircular ETL file. Reaching the reserve below the hard storage cap
 # invalidates evidence rather than permitting silent truncation or wraparound.
-$TraceMaximumMiB = 1024
-$NoWrapThresholdMiB = 960
+$CaptureProfile = 'Farm32Capture16GiB-v2'
+$TraceMaximumMiB = 16384
+$NoWrapThresholdMiB = 15360
 $UnixEpochTicks = [datetime]::new(1970, 1, 1, 0, 0, 0, [DateTimeKind]::Utc).Ticks
 
 function InvokeNetsh([string[]]$Arguments) {
@@ -50,8 +51,8 @@ function AssertTraceBelowBound([long]$EtlBytes) {
 }
 
 function AssertFarm32DiskReserve([string]$PathName, [long]$RequiredBytes) {
-    # Reserve room for the nonwrapping ETL, a complete pcapng, and 512 MiB of
-    # uncommitted headroom. Worker C: is often insufficient; no root is changed.
+    # Start reserves 16 GiB ETL + 16 GiB export + 2 GiB headroom. Finalize
+    # reserves 16 GiB export + 1 GiB headroom in addition to the retained ETL.
     $Drive = [IO.DriveInfo]::new([IO.Path]::GetPathRoot([IO.Path]::GetFullPath($PathName)))
     if (-not $Drive.IsReady -or $Drive.AvailableFreeSpace -lt $RequiredBytes) {
         throw 'Farm32 evidence volume lacks the fixed capture/export reserve.'
@@ -61,6 +62,9 @@ function AssertFarm32DiskReserve([string]$PathName, [long]$RequiredBytes) {
 function WriteBlock([IO.BinaryWriter]$Writer, [uint32]$Type, [byte[]]$Body) {
     $Padding = (4 - ($Body.Length % 4)) % 4
     $Length = [uint32](12 + $Body.Length + $Padding)
+    if ($Writer.BaseStream.Position + $Length -ge $NoWrapThresholdMiB * 1MB) {
+        throw 'Farm32 pcap export reached its completeness size bound.'
+    }
     $Writer.Write($Type)
     $Writer.Write($Length)
     $Writer.Write($Body)
@@ -123,25 +127,27 @@ function ExportNdisTrace([string]$Source, [string]$Destination, [uint32]$IfIndex
 }
 
 function ExportNdisTraceFast([string]$Source, [string]$Destination, [uint32]$IfIndex) {
-    # PowerShell event-property materialization took 26.656 s for a retained
-    # 32-MiB pcap. The fixed-operation service permits only 30 s for Stop.
-    # Compile the same bounded NDIS event filter/writer in-process for large
-    # Phase 1 traces; keep the simple path for small capture-hook simulations.
-    if (-not ('GargantuanQualification.FastNdisExport' -as [type])) {
-        $CompressedDefinition = 'H4sIAAAAAAACCrVWW2/bNhR+969g/TBIi6NJdtJtcFwgjZPCWJqldbI+BHlgpOOYiEwKJOUL2vz3HpJSLCVS3K0YbdgWea7f4fmOc8X4PZlulIbFsJNXnoIxo/dcKM1iFZwugWs8Cz4DTUA+k5z8Pex0OF2AymgM5AOV95TrnPJPOU3ZjMVUM8HJ106W36UsJkrjRkzilCpFzqjSFwlTp+tMSI1CBFcm2ZJqILHgSqO8NN4upVgy9E5GpPuRxVIoMdP7XxhPxErtX4wn0/1LGj+APqGZziV0hzVbhVeJGQiebkgq0OY1Z+vTTMTzKxY/KDKyGmZxWJExql2xBXjRn7+HPRLZd1i+y9O/MIDgWsd+YG0gFNZrLVXry2XoFdlMRS5j6JXJjQGR5haoHskZ12TCNcgZAjrhCaz9AhmzrDWXKoZMwuHTyZJK8ikHucFtk4Gt27m4t3te6fKS6vnVJoPgjKVgHnqk+2vX35qx4ljrJUgFYyYhtgUckRlNFWzl3C3wjFd3MZ65dZueNef7TWpTjfVYFGomHLfh1eAw+x9FAsEJnmm4gFXvyZZZ5vw4jkGp4ItkGpzGdE4lBBeC43NEjo5IP2yOweqUob9Hr3LjtjwXjF/F3ix7OnWgeE60At6TxFMBm2UsSJ8hFjIh7qt+vppjEsTzCpFRAbFtQavrYWBvMOo8TZ9HWMnQqTcJmMVmpUQwSYy1KAwj8u1bEVFQ9twFdrc5Lp/9RmtmYcti5XIYNkoYvNFGBlIzUDap0k+xN2yNcysTnIgcO+SIHGCorZGcCI4XWAdX4hpLMehXDNyEt8E/NM3BIljvtP9qMmo3+TNonUkD/aiC2s2g8ESoIncbDTe37aAV6u6amMLajeAc+L2eI4LRqxDWhDGt1/Lvl/m3Z6vnUqxsm034EkdDghxKT9cxZLaVuobDSWaJjYC54oQpomXOcYJAQoQkC5rOhFxAEnT9dswKMi8vl2FpRx2JC9HEz5lhN5pagi+4m+w/GwjNLiz/ugmEDnhiXG2RQWDeHnheInACgO/s/oZ9FYQtEVt2cHReMEXPAd+rOWnRLubA3t7L48dO89P2l22rcpDgJKmXbke5Xvhz9dPS/AkwF5syrggX+HuRpYAjeGayUvglFmgcyErIB2TeGbvDzwXjzAzIWmUl4CTnZZJu/7HTNNeXgiV1Zq5SeUHyVRp0O25ieOE6PA7H+DrOK95rIv0/Wo/CdXTcfz84ORi3ini5mmNyfrRLIGwT2I/Od4e2C5vtTPo36ETtoIT/Y8ZvDw8Hhz/gelfSRW81ZNwr+LPstxedXYXE/Cm7pElixuqIeAfIFl6NIH8hAxzJ+Fn5h2SUimPUMY++N+iTvTq17pWGW6FohcFZaL2Zr5THxuLlJme/xmbv3pFB339dsYWZGiSrif68pJWpHDoGc0V5YxisLm7Iy5a4kLn9IRgfO+b1HYHJ0JQcDQAA'
+    # Stream one event and packet at a time. This versioned exporter rejects
+    # a packet before it would reach the 15 GiB completeness threshold.
+    # Conversion runs offline, after the separately bounded privileged Stop.
+    if (-not ('GargantuanQualification.Farm32V2NdisExport' -as [type])) {
+        $CompressedDefinition = 'H4sIAAAAAAACCrVWW1PbOBR+z684zcOOXYLXTqC7OwFmgEAns8DSBtoHhgdhK0SDI3kkOZfd8t/3SLKJDTa021mTIbF0rt/R+Y5yxfg9TNZK0/mwk1feghEj91wozWIVnCwo17gXfKYkofKZ5PivYafDyZyqjMQUPhJ5T7jOCf+Uk5RNWUw0Exz+6WT5XcpiUBoXYohTohScEjkf9L/0LxKmTlaZkBoFAZ9MsgXRFGLBlYZUoL9zsmLzfH601lTBPkS7Z/AeorC/U/8aNugrLU3El1IsGGaA2t1zFkuhxFRvf2U8EUu1fTEaT7YvSfxA9THJdC5pt26riFwiCoKnaxfVNWerk0zEsysWP2BcVsM8nC5hhGpXbE696I/fwh5E9hOWn3L3TwwguNaxH1gbCKf1WoPL+nIIeUU2E5HLmPbK5EYUq8Ut2D3IGdcw5prKKRZlzBO68gtkzWOtuVQNlOHwaWdBJHzKqVzjssnA1v5M3Ns1r3R5SfTsap3R4JSl1Lz0oPu+62/MWHE8LwsqFR0xSWN7CPZhSlJFN3LuJHnGqztcz9y6Rc+a8/0mtYnGeswLNROOW/BqcJj1c5HQ4Bj3NL2gy96TLfOY/cM4pkoFXyXT1GlMZkTS4EJwfI9gbw/6YXMMVqcM/Qi9yrVb8lwwfhV789jdiQPFc6IV8J4kngrYLGNB+kxjIRNwX/X95QyTAM8rRPYLiG0bW10PA3uHUedp+jzCSoZOvUnAPGxaSgTjxFiLwjCCb9+KiIKy5y6QIcx2+e43WjMPtixWLqfDRgmDN9rIqNTM8sDGT7E2bI1zIxMcixw7ZA92MNTWSI4FxwOsgytxjaUY9CsGbsLb4AtJc2oRrHfafzUZtZv8GbROpYF+v4LazaDwBETBHfLpzW07aIW6OyamsHYhOKP8Xs8QwehVCGvCmNZr+ffL/Nuz1TMplrbNxnyB4yVBDiUnq5hmtpW6hsMhs8QG1BxxYAq0zDlOIZqAkDAn6VTIOU2Crt+OWUHm5eEyLO2oI3Ehmvg5M+xGUkvwBXfD9rOB0OzCzTM7gdABT4yrDTIIzIcdz0sETgDqO7u/Yl8FYUvElh0cnRdM0XPA92pOWrSLObC19XL7sdP8tvll26ocJDhJ6qV7o1wv/Ln6aWkuEuZgE8YVcIG/51lKcQRPTVYKv8QcjVNYCvmAzDtld/h/zjgzA7JWWUlxkvMySbf+2Gma6wvBkjozV6m8IPkqDboVNzG8cBUehiP8O8wr3msi/d9bt8JVdNg/GhzvjFpFvFzNMDk/eksgbBPYjs7eDu0tbDYz6UfQidpBCf/HjD/s7g52v8P1W0kXvdWQca/gz7LfXnR2FRJzKbskSWLG6j54O8gWXo0gf4EBjmT8X7khGaViG3XMq+8N+rBVp9at0nAlWdObRcJHRBUXo+BSKGYvY1ul2YP92t36h1q4627wkMUkA+pu8OgmniHbMuSEsnM53q1Asb8p3OHkrZNvvWSt5XLRtnbQK8fIYublpjZ+jXUPDmDQ919XbGHQBslqQX5e0so8q2Z5eN4Zpq2LmwrZo1jI3H4XjI8d8/cv4QFStwgOAAA='
         $DefinitionBytes = [Convert]::FromBase64String($CompressedDefinition)
         $InputStream = [IO.MemoryStream]::new($DefinitionBytes)
         $ZipStream = [IO.Compression.GZipStream]::new($InputStream, [IO.Compression.CompressionMode]::Decompress)
         $Reader = [IO.StreamReader]::new($ZipStream, [Text.Encoding]::UTF8)
         try { $Definition = $Reader.ReadToEnd() }
         finally { $Reader.Dispose(); $ZipStream.Dispose(); $InputStream.Dispose() }
-        Add-Type -TypeDefinition $Definition -ReferencedAssemblies 'System.Core.dll' -ErrorAction Stop
+        # EventLogReader lives in System.Diagnostics.EventLog on PowerShell 7;
+        # its actual assembly also preserves the Windows PowerShell 5 path.
+        Add-Type -TypeDefinition $Definition -ReferencedAssemblies @(
+            'System.Core.dll', [System.Diagnostics.Eventing.Reader.EventLogReader].Assembly.Location) -ErrorAction Stop
     }
-    return [GargantuanQualification.FastNdisExport]::Export($Source, $Destination, $IfIndex)
+    return [GargantuanQualification.Farm32V2NdisExport]::Export($Source, $Destination, $IfIndex)
 }
 
 if ($Action -eq 'Start') {
-    AssertFarm32DiskReserve $EvidenceDir 2560MB
+    AssertFarm32DiskReserve $EvidenceDir 34GB
     $Status = GetTraceStatus
     if ($Status -notmatch 'There is no trace session currently in progress') {
         throw 'An existing Windows trace session is protected.'
@@ -163,7 +169,7 @@ if ($Action -eq 'Start') {
         throw 'Worker Mellanox configuration does not match the qualified direct link.'
     }
     $Guid = ([Guid]$Adapter.InterfaceGuid).ToString('B')
-    $Owned = @{Etl=$Etl; Pcap=$Pcap; InterfaceGuid=$Guid; MiniportIfIndex=$Adapter.ifIndex;
+    $Owned = @{Profile=$CaptureProfile; Etl=$Etl; Pcap=$Pcap; InterfaceGuid=$Guid; MiniportIfIndex=$Adapter.ifIndex;
                CapturePort=$CapturePort; CaptureLayers=@('NDIS physical miniport');
                TraceMaximumMiB=$TraceMaximumMiB; NoWrapThresholdMiB=$NoWrapThresholdMiB}
     $Owned | ConvertTo-Json | Set-Content -LiteralPath $Marker -Encoding UTF8
@@ -181,7 +187,8 @@ if ($Action -eq 'Start') {
         throw 'Farm32 capture ownership marker is missing.'
     }
     $Owned = Get-Content -Raw -LiteralPath $Marker | ConvertFrom-Json
-    if ($Owned.Etl -ne $Etl -or $Owned.Pcap -ne $Pcap -or $Owned.MiniportIfIndex -ne 19 -or
+    if ($Owned.Profile -ne $CaptureProfile -or
+        $Owned.Etl -ne $Etl -or $Owned.Pcap -ne $Pcap -or $Owned.MiniportIfIndex -ne 19 -or
         $Owned.TraceMaximumMiB -ne $TraceMaximumMiB -or
         $Owned.NoWrapThresholdMiB -ne $NoWrapThresholdMiB) {
         throw 'Capture ownership marker does not match the evidence directory.'
@@ -204,7 +211,7 @@ if ($Action -eq 'Start') {
             if (Test-Path -LiteralPath (Join-Path $EvidenceDir 'farm32-capture-summary.txt')) {
                 throw 'Farm32 loss summary already exists; refusing to replace it.'
             }
-            AssertFarm32DiskReserve $EvidenceDir 1536MB
+            AssertFarm32DiskReserve $EvidenceDir 17GB
             AssertTraceHasNoLostEvents $Owned.Etl (Join-Path $EvidenceDir 'farm32-capture-summary.txt')
             $Pending = $Owned.Pcap + '.pending'
             if (Test-Path -LiteralPath $Pending) {
@@ -216,10 +223,10 @@ if ($Action -eq 'Start') {
                 } else {
                     ExportNdisTrace $Owned.Etl $Pending ([uint32]$Owned.MiniportIfIndex)
                 }
-                Move-Item -LiteralPath $Pending -Destination $Owned.Pcap -ErrorAction Stop
-                if ((Get-Item -LiteralPath $Owned.Pcap).Length -ge 1024MB) {
+                if ((Get-Item -LiteralPath $Pending).Length -ge $NoWrapThresholdMiB * 1MB) {
                     throw 'Farm32 pcap export exceeded its completeness size bound.'
                 }
+                Move-Item -LiteralPath $Pending -Destination $Owned.Pcap -ErrorAction Stop
                 "Exported $Count complete fiber miniport frames." | Write-Output
             } finally {
                 if (Test-Path -LiteralPath $Pending) { Remove-Item -LiteralPath $Pending -Force }

@@ -17,6 +17,7 @@ sys.path.insert(0, str(ROOT))
 import farm_outer_campaign as Outer  # noqa: E402
 import farm_outer_endpoint as Endpoint  # noqa: E402
 import farm_campaign_runner as Campaign  # noqa: E402
+import farm_capture_campaign as Capture  # noqa: E402
 from test_farm_ticket_staging import FarmTicketStagingTests  # noqa: E402
 REAL_WORKER_SANDBOX = Outer.WorkerSandbox
 
@@ -65,6 +66,42 @@ class MockTransport:
 
 
 class OuterCampaignTests(unittest.TestCase):
+    def test_offline_budgets_enclose_export_without_extending_live_capture(self):
+        self.assertEqual(Capture.ROLE_DEADLINE_SECONDS, 500)
+        self.assertEqual(Capture.STOP_TIMEOUT_SECONDS, 80)
+        self.assertEqual(Capture.CLIENT_AUTOSTOP_SECONDS, 630)
+        self.assertEqual(Capture.FINALIZE_TIMEOUT_SECONDS, 1800)
+        self.assertGreater(Campaign.CAPTURE_FINISH_SECONDS,
+                           Capture.ROLE_DEADLINE_SECONDS + Capture.STOP_TIMEOUT_SECONDS +
+                           10 + Capture.FINALIZE_TIMEOUT_SECONDS)
+        self.assertEqual(Endpoint.MAX_SECONDS, Outer.OUTER_FINISH_SECONDS)
+        self.assertGreater(Endpoint.MAX_SECONDS, Campaign.CAPTURE_FINISH_SECONDS)
+
+    def test_capture_collection_uses_offline_transfer_budget_and_strict_limit(self):
+        Remote = self.Fixture.Root / "capture-transfer"
+        Remote.mkdir()
+        Member = Remote / "farm32-worker-capture.etl"
+        Member.write_bytes(b"small fixture")
+        Index = {"RunId": self.Fixture.Identity["RunId"], "Role": "SERVER",
+                 "Files": [{"Name": Member.name, "Bytes": Member.stat().st_size,
+                            "Sha256": Outer.Digest(Member)}]}
+        IndexFile = Remote / "capture-sha256.json"
+        IndexFile.write_text(json.dumps(Index))
+        Transport = MockTransport()
+        with mock.patch.object(Transport, "Fetch", wraps=Transport.Fetch) as Fetch:
+            Outer.FetchIndexed(Transport, str(Remote), self.Fixture.Root / "capture-copy",
+                               IndexFile.name, self.Fixture.Identity["RunId"], "SERVER",
+                               20, Outer.CAPTURE_MEMBER_MAX_BYTES)
+            self.assertEqual(Fetch.call_args.kwargs["Timeout"], 1800)
+        Index["Files"][0]["Bytes"] = 15 * 1024 ** 3
+        IndexFile.write_text(json.dumps(Index))
+        with mock.patch.object(Transport, "Fetch", wraps=Transport.Fetch) as Fetch:
+            with self.assertRaisesRegex(ValueError, "member invalid"):
+                Outer.FetchIndexed(Transport, str(Remote), self.Fixture.Root / "capped-copy",
+                                   IndexFile.name, self.Fixture.Identity["RunId"], "SERVER",
+                                   20, Outer.CAPTURE_MEMBER_MAX_BYTES)
+            self.assertEqual(Fetch.call_count, 1)  # Index only; capped member is never copied.
+
     def test_staged_entrypoints_import_siblings_with_isolated_python(self):
         for Name, Arguments in (("farm_outer_endpoint.py", ["--help"]),
                                 ("farm_campaign_runner.py", ["--help"]),

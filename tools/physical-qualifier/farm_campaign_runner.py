@@ -58,7 +58,9 @@ NODE_RECONCILE_KEYS = ("NodePowerShellPath", "NodePowerShellSha256",
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 COMMIT = re.compile(r"[0-9a-f]{40}\Z")
 READY_SECONDS = 20
-CAPTURE_FINISH_SECONDS = 800  # Controller owns bounded stop/autostop and offline export.
+# 500 s role wait + 80 s Stop + 10 s status + 1800 s offline export +
+# 610 s streaming hash/receipt guard. This does not extend the live capture lease.
+CAPTURE_FINISH_SECONDS = 3000
 PREFLIGHT_AGE_SECONDS = 120
 TICKET_AGE_SECONDS = 3600
 MAX_JSON_BYTES = 65536

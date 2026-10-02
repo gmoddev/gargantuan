@@ -68,16 +68,18 @@ class FarmCaptureAcceptanceTests(unittest.TestCase):
         (self.ServerCapture / "farm32-worker-capture.pcapng").write_bytes(FIXTURE.Pcap(self.Ports))
         (self.ServerCapture / "farm32-worker-capture.etl").write_bytes(b"etl")
         Save(self.ServerCapture / "farm32-netsh-owner.json", {
+            "Profile": "Farm32Capture16GiB-v2",
             "CapturePort": 39450, "MiniportIfIndex": 19,
             "CaptureLayers": ["NDIS physical miniport"],
-            "TraceMaximumMiB": 1024, "NoWrapThresholdMiB": 960})
+            "TraceMaximumMiB": 16384, "NoWrapThresholdMiB": 15360})
         (self.ClientCapture / "farm32-client-capture.pcapng").write_bytes(FIXTURE.Pcap(self.Ports))
         (self.ServerCapture / "farm32-capture-summary.txt").write_text("Total Events  Lost  0\n", encoding="utf-8")
         Save(self.ClientCapture / "farm32-client-capture.json", {
             "Format": "GargantuanFarm32Dumpcap", "Version": 1, "RunId": RUN,
+            "Profile": "Farm32Capture16GiB-v2",
             "Filter": "udp port 39450 and host 10.253.3.2",
-            "DurationSeconds": 600, "AutostopKilobytes": 1048576,
-            "CompletenessBytes": 960 * 1024 * 1024, "DumpcapSha256": "a" * 64})
+            "DurationSeconds": 600, "AutostopKilobytes": 16777216,
+            "CompletenessBytes": 15 * 1024 * 1024 * 1024, "DumpcapSha256": "a" * 64})
         (self.ClientCapture / "farm32-dumpcap-error.txt").write_text(
             "Packets captured: 64\nPackets received/dropped on interface "
             "'\\Device\\NPF_{TEST}': 64/0 (100.0%)\n", encoding="utf-8")
@@ -89,6 +91,7 @@ class FarmCaptureAcceptanceTests(unittest.TestCase):
 
     def SealCaptures(self):
         Extra = {"CoordinatorRunId": COORDINATOR, "State": "SEALED_UNQUALIFIED",
+                 "Profile": "Farm32Capture16GiB-v2",
                  "ReadyUtc": (NOW + timedelta(seconds=1)).isoformat(),
                  "StoppedUtc": (NOW + timedelta(seconds=6)).isoformat()}
         self.ServerCaptureIndex = Index(self.ServerCapture, "capture-sha256.json",
@@ -200,6 +203,22 @@ class FarmCaptureAcceptanceTests(unittest.TestCase):
         self.SealOuter()
         with self.assertRaisesRegex(ValueError, "ownership or completeness"):
             self.Analyze()
+
+    def test_old_or_mixed_capture_profiles_fail_closed(self):
+        for Root, Name, Fields in (
+            (self.ServerCapture, "farm32-netsh-owner.json", {"TraceMaximumMiB": 1024, "NoWrapThresholdMiB": 960}),
+            (self.ClientCapture, "farm32-client-capture.json", {"AutostopKilobytes": 1048576}),
+            (self.ServerCapture, "farm32-netsh-owner.json", {"Profile": "old"}),
+            (self.ClientCapture, "farm32-client-capture.json", {"Profile": "old"}),
+        ):
+            File = Root / Name
+            Original = json.loads(File.read_text())
+            Save(File, {**Original, **Fields})
+            self.SealCaptures()
+            self.SealOuter()
+            with self.subTest(Name=Name, Fields=Fields), self.assertRaisesRegex(ValueError, "marker is invalid"):
+                self.Analyze()
+            Save(File, Original)
 
     def test_outer_receipt_and_role_hash_mismatch_fail(self):
         Outer = json.loads(self.Outer.read_text())

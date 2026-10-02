@@ -86,13 +86,14 @@ def ReadyPorts(Log, RunId, Nonces):
 
 def ZeroLoss(ServerRoot, ClientRoot, RunId):
     WorkerMarker = ReadJson(ServerRoot / "farm32-netsh-owner.json", 65536)
-    if (WorkerMarker.get("CapturePort") != 39450 or
+    if (WorkerMarker.get("Profile") != directions.CAPTURE_PROFILE or
+            WorkerMarker.get("CapturePort") != 39450 or
             WorkerMarker.get("MiniportIfIndex") != 19 or
             WorkerMarker.get("CaptureLayers") != ["NDIS physical miniport"] or
-            WorkerMarker.get("TraceMaximumMiB") != 1024 or
-            WorkerMarker.get("NoWrapThresholdMiB") != 960 or
+            WorkerMarker.get("TraceMaximumMiB") != 16384 or
+            WorkerMarker.get("NoWrapThresholdMiB") != 15360 or
             not (ServerRoot / "farm32-worker-capture.etl").is_file() or
-            not 0 < (ServerRoot / "farm32-worker-capture.etl").stat().st_size < 960 * 1024 * 1024):
+            not 0 < (ServerRoot / "farm32-worker-capture.etl").stat().st_size < directions.MAX_CAPTURE_BYTES):
         raise ValueError("worker Farm32 capture ownership or completeness marker is invalid")
     Summary = ReadText(ServerRoot / "farm32-capture-summary.txt", 65536)
     Loss = WORKER_LOSS.findall(Summary)
@@ -101,11 +102,11 @@ def ZeroLoss(ServerRoot, ClientRoot, RunId):
     Marker = ReadJson(ClientRoot / "farm32-client-capture.json", 65536)
     Capture = ClientRoot / "farm32-client-capture.pcapng"
     if (Marker.get("Format") != "GargantuanFarm32Dumpcap" or Marker.get("Version") != 1 or
-            Marker.get("RunId") != RunId or
+            Marker.get("Profile") != directions.CAPTURE_PROFILE or Marker.get("RunId") != RunId or
             Marker.get("Filter") != "udp port 39450 and host 10.253.3.2" or
             Marker.get("DurationSeconds") != 600 or
-            Marker.get("AutostopKilobytes") != 1048576 or
-            Marker.get("CompletenessBytes") != 960 * 1024 * 1024 or
+            Marker.get("AutostopKilobytes") != 16777216 or
+            Marker.get("CompletenessBytes") != directions.MAX_CAPTURE_BYTES or
             not Capture.stat().st_size < Marker["CompletenessBytes"] or
             not isinstance(Marker.get("DumpcapSha256"), str) or
             not SHA256.fullmatch(Marker["DumpcapSha256"])):

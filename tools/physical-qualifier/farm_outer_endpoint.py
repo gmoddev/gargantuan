@@ -30,7 +30,7 @@ from private_ticket_acl import AssertPrivate, Harden
 SHA = re.compile(r"[0-9a-f]{64}\Z")
 MAX_CONFIG = 65536
 MAX_LOG = 8 * 1024 * 1024
-MAX_SECONDS = 850
+MAX_SECONDS = 3050  # 3000 s capture finish plus 50 s outer cleanup guard; no live-gate change.
 NODE_TOKEN_NAME = "node-token.secret"
 
 

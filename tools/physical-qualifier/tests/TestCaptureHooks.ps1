@@ -2,10 +2,20 @@
 param([string]$HookPath, [switch]$Farm32)
 $ErrorActionPreference = 'Stop'
 $Hook = if ($HookPath) { $HookPath } else { Join-Path $PSScriptRoot '..\worker\PktMonCapture.ps1' }
-$HookBlock = [ScriptBlock]::Create([IO.File]::ReadAllText($Hook))
+$HookText = [IO.File]::ReadAllText($Hook)
+if ($Farm32) {
+    # Only replace the OS disk query. Exercise the actual guard without needing
+    # 34 GiB free on hosted CI or allocating a near-cap capture.
+    $DiskQuery = '$Drive = [IO.DriveInfo]::new([IO.Path]::GetPathRoot([IO.Path]::GetFullPath($PathName)))'
+    if (-not $HookText.Contains($DiskQuery)) { throw 'Farm32 disk query seam changed' }
+    $HookText = $HookText.Replace($DiskQuery,
+        '$Drive = [pscustomobject]@{IsReady=$true; AvailableFreeSpace=$global:TestDiskFree}')
+}
+$HookBlock = [ScriptBlock]::Create($HookText)
 $Prefix = if ($Farm32) { 'farm32-' } else { '' }
-$TraceMaximumMiB = if ($Farm32) { 1024 } else { 256 }
-$NoWrapThresholdMiB = if ($Farm32) { 960 } else { 240 }
+$TraceMaximumMiB = if ($Farm32) { 16384 } else { 256 }
+$NoWrapThresholdMiB = if ($Farm32) { 15360 } else { 240 }
+$global:TestDiskFree = 64GB
 $TestDir = Join-Path ([IO.Path]::GetTempPath()) ('qualifier-hook-test-' + [Guid]::NewGuid())
 New-Item -ItemType Directory -Path $TestDir | Out-Null
 $global:TestActive = $false
@@ -67,6 +77,14 @@ function Assert([bool]$Value,[string]$Detail) { if (!$Value) { throw $Detail } }
 try {
     $First = Join-Path $TestDir 'first'
     New-Item -ItemType Directory -Path $First | Out-Null
+    if ($Farm32) {
+        $global:TestDiskFree = 34GB - 1
+        $Rejected = $false
+        try { & $HookBlock $First Start 39450 } catch { $Rejected = $_.Exception.Message -match 'fixed capture/export reserve' }
+        Assert $Rejected 'Farm32 start accepted insufficient room for retained ETL plus export'
+        Assert ($global:TestCalls.Count -eq 0) 'Low disk denial invoked capture'
+        $global:TestDiskFree = 34GB
+    }
     & $HookBlock $First Start 39450
     Assert $global:TestActive 'Capture did not start'
     $Expected = 'trace start capture=yes capturetype=physical CaptureInterface={a33455f8-3b6f-46f1-b981-7c861e6b3cd3} Ethernet.Type=IPv4 Protocol=17 IPv4.Address=10.253.3.1 CaptureMultiLayer=no PacketTruncateBytes=1518 report=disabled persistent=no fileMode=single maxSize=' + $TraceMaximumMiB + ' traceFile=' + $global:TestEtl
@@ -75,9 +93,19 @@ try {
     Assert ($Owner.MiniportIfIndex -eq 19 -and $Owner.CapturePort -eq 39450 -and
             $Owner.TraceMaximumMiB -eq $TraceMaximumMiB -and $Owner.NoWrapThresholdMiB -eq $NoWrapThresholdMiB -and
             ($Owner.CaptureLayers -join ',') -eq 'NDIS physical miniport') 'Capture ownership marker is incomplete'
+    if ($Farm32) { Assert ($Owner.Profile -ceq 'Farm32Capture16GiB-v2') 'Farm32 versioned profile is absent' }
     & $HookBlock $First Stop
     Assert (!$global:TestActive) 'Capture did not stop'
-    if ($Farm32) { & $HookBlock $First Finalize }
+    if ($Farm32) {
+        $global:TestDiskFree = 17GB - 1
+        $Rejected = $false
+        try { & $HookBlock $First Finalize } catch { $Rejected = $_.Exception.Message -match 'fixed capture/export reserve' }
+        Assert $Rejected 'Farm32 finalize accepted insufficient export room'
+        Assert (-not (Test-Path (Join-Path $First 'farm32-capture-summary.txt'))) 'Low disk finalize consumed evidence'
+        $global:TestDiskFree = 17GB
+        & $HookBlock $First Finalize
+        $global:TestDiskFree = 64GB
+    }
     $Pcap = Join-Path $First ($Prefix + 'worker-capture.pcapng')
     Assert (Test-Path $Pcap) 'Export missing'
     $Bytes = [IO.File]::ReadAllBytes($Pcap)
@@ -134,7 +162,7 @@ try {
     & $HookBlock $Fifth Start
     $Trace = Join-Path $Fifth ($Prefix + 'worker-capture.etl')
     if ($Farm32) {
-        # Avoid allocating a 960 MiB test file on the controlling PC.
+        # Exercise the production integer guard above 4 GiB without allocation.
         $ScriptAst = [System.Management.Automation.Language.Parser]::ParseInput([IO.File]::ReadAllText($Hook),[ref]$null,[ref]$null)
         $SizeFunction = $ScriptAst.Find({param($Node) $Node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $Node.Name -eq 'AssertTraceBelowBound'}, $true)
         Assert ($null -ne $SizeFunction) 'Farm32 size guard is missing'
@@ -145,11 +173,58 @@ try {
         $Rejected = $false
         try { AssertFarm32DiskReserve $Fifth ([long]::MaxValue) } catch { $Rejected = $_.Exception.Message -match 'fixed capture/export reserve' }
         Assert $Rejected 'Farm32 insufficient-disk condition was accepted'
-        $NoWrapThresholdMiB = 960
-        AssertTraceBelowBound (959MB)
+        $NoWrapThresholdMiB = 15360
+        AssertTraceBelowBound (15GB - 1)
         $Rejected = $false
-        try { AssertTraceBelowBound (960MB) } catch { $Rejected = $_.Exception.Message -match 'completeness size bound' }
+        try { AssertTraceBelowBound (15GB) } catch { $Rejected = $_.Exception.Message -match 'completeness size bound' }
         Assert $Rejected 'Farm32 trace at its non-wrap completeness threshold was accepted'
+        # Compile the actual embedded streaming exporter, including its runtime
+        # EventLog dependency. A counting stream exercises 64-bit offsets with
+        # no large allocation, file, capture, or ETW session.
+        $Packed = [regex]::Match($HookText, '\$CompressedDefinition = ''([^'']+)''').Groups[1].Value
+        $PackedStream = [IO.MemoryStream]::new([Convert]::FromBase64String($Packed))
+        $Zip = [IO.Compression.GZipStream]::new($PackedStream, [IO.Compression.CompressionMode]::Decompress)
+        $Reader = [IO.StreamReader]::new($Zip)
+        try { $Definition = $Reader.ReadToEnd() } finally { $Reader.Dispose() }
+        Add-Type -TypeDefinition $Definition -ReferencedAssemblies @(
+            'System.Core.dll', [System.Diagnostics.Eventing.Reader.EventLogReader].Assembly.Location)
+        Add-Type -TypeDefinition @'
+using System;
+using System.IO;
+public sealed class Farm32CountingStream : Stream {
+    private long Offset;
+    public long Written;
+    public override bool CanRead { get { return false; } }
+    public override bool CanSeek { get { return true; } }
+    public override bool CanWrite { get { return true; } }
+    public override long Length { get { return Offset; } }
+    public override long Position { get { return Offset; } set { Offset = value; } }
+    public override void Flush() { }
+    public override int Read(byte[] Buffer, int Start, int Count) { throw new NotSupportedException(); }
+    public override long Seek(long Value, SeekOrigin Origin) { throw new NotSupportedException(); }
+    public override void SetLength(long Value) { throw new NotSupportedException(); }
+    public override void Write(byte[] Buffer, int Start, int Count) { Offset += Count; Written += Count; }
+    public override void WriteByte(byte Value) { Offset++; Written++; }
+}
+'@
+        $PacketWriter = [GargantuanQualification.Farm32V2NdisExport].GetMethod('WritePacket',
+            [Reflection.BindingFlags]'NonPublic,Static')
+        $Counter = [Farm32CountingStream]::new()
+        $Writer = [IO.BinaryWriter]::new($Counter)
+        try {
+            $Counter.Position = 4GB
+            [void]$PacketWriter.Invoke($null, @($Writer, [byte[]]::new(44), [long]1))
+            Assert ($Counter.Position -eq 4GB + 76) 'Fast export truncated a 64-bit file offset'
+            $Counter.Position = 15GB - 77
+            [void]$PacketWriter.Invoke($null, @($Writer, [byte[]]::new(44), [long]2))
+            Assert ($Counter.Position -eq 15GB - 1) 'Fast export rejected a complete packet below threshold'
+            $Counter.Position = 15GB - 76
+            $BeforeWritten = $Counter.Written
+            $Rejected = $false
+            try { [void]$PacketWriter.Invoke($null, @($Writer, [byte[]]::new(44), [long]3)) }
+            catch { $Rejected = $_.Exception.ToString() -match 'completeness size bound' }
+            Assert ($Rejected -and $Counter.Written -eq $BeforeWritten) 'Fast export wrote a packet reaching the limit'
+        } finally { $Writer.Dispose() }
         $global:TestEventsEmpty = $false
         & $HookBlock $Fifth Stop
         & $HookBlock $Fifth Finalize

@@ -3,10 +3,12 @@
 from datetime import datetime, timedelta, timezone
 import importlib.util
 import json
+import os
 from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 import uuid
 
 
@@ -69,6 +71,17 @@ class CaptureCampaignTests(unittest.TestCase):
         WriteJson(self.RoleRoot / "evidence-sha256.json", Index)
         return self.RoleRoot / "evidence-sha256.json"
 
+    def CaptureMarker(self, Role):
+        Row = {"Profile": "Farm32Capture16GiB-v2"}
+        if Role == "SERVER":
+            Name = "farm32-netsh-owner.json"
+            Row.update(TraceMaximumMiB=16384, NoWrapThresholdMiB=15360)
+        else:
+            Name = "farm32-client-capture.json"
+            Row.update(DurationSeconds=600, AutostopKilobytes=16777216,
+                       CompletenessBytes=15 * 1024 ** 3)
+        WriteJson(self.Capture / Name, Row)
+
     def test_worker_stop_precedes_offline_finalize_and_seals_separate_root(self):
         Config = self.Config("SERVER")
         Calls = []
@@ -79,6 +92,7 @@ class CaptureCampaignTests(unittest.TestCase):
                 Operation = Command[1]
                 if Operation == "start":
                     (self.Capture / "farm32-capture-active.txt").write_text("active")
+                    self.CaptureMarker("SERVER")
                 return subprocess.CompletedProcess(Command, 0, json.dumps({
                     "Success": True, "Operation": Operation, "RunId": self.RunId,
                     "State": {"start": "running", "stop": "stopped", "status": "idle"}[Operation]}), "")
@@ -96,6 +110,7 @@ class CaptureCampaignTests(unittest.TestCase):
         Sealed = Controller.Finish()
         Manifest = campaign.ReadJson(Sealed)
         self.assertEqual(Manifest["State"], "SEALED_UNQUALIFIED")
+        self.assertEqual(Manifest["Profile"], "Farm32Capture16GiB-v2")
         self.assertEqual(Manifest["RoleIndexSha256"], campaign.Digest(Index))
         self.assertEqual([Row[1] for Row in Calls[:3]], ["start", "stop", "status"])
         self.assertEqual(Calls[3][-1], "Finalize")
@@ -112,6 +127,7 @@ class CaptureCampaignTests(unittest.TestCase):
                 return 0
 
         def Spawner(Command, **_):
+            self.CaptureMarker("CLIENT")
             self.assertEqual(Command[0], str(Config["PowerShellPath"]))
             (self.Capture / "farm32-client-capture.pcapng").write_bytes(b"\x0a\x0d\x0d\x0a" + b"x" * 24)
             Child.Test = self
@@ -154,6 +170,54 @@ class CaptureCampaignTests(unittest.TestCase):
         self.assertAlmostEqual(self.Clock.Value, campaign.ROLE_DEADLINE_SECONDS, places=6)
         self.assertLess(campaign.ROLE_DEADLINE_SECONDS + campaign.STOP_TIMEOUT_SECONDS, 600)
 
+    def test_stale_profile_cannot_signal_readiness(self):
+        Config = self.Config("SERVER")
+
+        def Runner(Command, **_):
+            (self.Capture / "farm32-capture-active.txt").write_text("active")
+            WriteJson(self.Capture / "farm32-netsh-owner.json", {
+                "TraceMaximumMiB": 1024, "NoWrapThresholdMiB": 960})
+            return subprocess.CompletedProcess(Command, 0, json.dumps({
+                "Success": True, "Operation": "start", "RunId": self.RunId,
+                "State": "running"}), "")
+
+        Controller = campaign.FarmCaptureController(Config, Runner=Runner)
+        with self.assertRaisesRegex(ValueError, "profile marker"):
+            Controller.Start()
+        self.assertTrue(Controller.WorkerActive)  # RunRole must still perform owned Abort.
+        self.assertFalse((self.Capture / "capture-controller-ready.json").exists())
+
+    def test_sealing_uses_64_bit_strict_15_gib_size_gate(self):
+        # Model file metadata only, retaining tiny real files. This tests the
+        # gate, not large-file throughput or physical capacity qualification.
+        Config = self.Config("SERVER")
+        self.Capture.mkdir()
+        self.CaptureMarker("SERVER")
+        Pcap = self.Capture / "farm32-worker-capture.pcapng"
+        Etl = self.Capture / "farm32-worker-capture.etl"
+        Pcap.write_bytes(b"\x0a\x0d\x0d\x0a" + b"pcap")
+        Etl.write_bytes(b"etl")
+        (self.Capture / "farm32-capture-summary.txt").write_text("Total Events Lost 0\n")
+        RoleIndex = self.RoleEvidence("SERVER")
+        OriginalStat = Path.stat
+        for Bytes in (4 * 1024 ** 3 + 1, 15 * 1024 ** 3 - 1, 15 * 1024 ** 3, 16 * 1024 ** 3):
+            def VirtualStat(File, *Args, **Keywords):
+                Result = OriginalStat(File, *Args, **Keywords)
+                if File in (Pcap, Etl):
+                    Values = list(Result)
+                    Values[6] = Bytes
+                    return os.stat_result(Values)
+                return Result
+            with self.subTest(Bytes=Bytes), mock.patch.object(Path, "stat", VirtualStat):
+                if Bytes < 15 * 1024 ** 3:
+                    Index = campaign.SealCapture(Config, "start", "ready", "stop", RoleIndex, 1)
+                    self.assertEqual(next(Row["Bytes"] for Row in campaign.ReadJson(Index)["Files"]
+                                          if Row["Name"] == Pcap.name), Bytes)
+                    Index.unlink()
+                else:
+                    with self.assertRaisesRegex(ValueError, "capped"):
+                        campaign.SealCapture(Config, "start", "ready", "stop", RoleIndex, 1)
+
     def test_outer_receipt_binds_both_role_and_capture_indices(self):
         Coordinator = self.Root / "coordinator.json"
         WriteJson(Coordinator, {"RunId": self.CoordinatorRunId, "Success": True})
@@ -166,6 +230,7 @@ class CaptureCampaignTests(unittest.TestCase):
             WriteJson(RoleFile, {"RunId": self.RunId, "Role": "Server" if Role == "SERVER" else "Clients"})
             WriteJson(CaptureFile, {"RunId": self.RunId, "CoordinatorRunId": self.CoordinatorRunId,
                                     "Role": Role, "RoleIndexSha256": campaign.Digest(RoleFile),
+                                    "Profile": "Farm32Capture16GiB-v2",
                                     "State": "SEALED_UNQUALIFIED"})
         Receipt = self.Root / "outer.json"
         campaign.BindReceipt(self.RunId, self.CoordinatorRunId, Coordinator,
