@@ -93,13 +93,32 @@ inline void Observe(std::size_t Bytes, std::chrono::microseconds PollPeriod, boo
 				if (const auto *Message = std::get_if<ReceivedMessageEvent>(&Event)) ReceivedBytes += Message->Payload.size();
 			Final = detail::ReliableServiceFeedbackAccess::Observe(*Pair.Server, Pair.ServerConnection);
 			if (!Final || !Final->CountersValid) throw std::runtime_error("ACK cycle invalid native feedback");
-			if (Final->LastAttributedRetirementToken == Token) { ObservedRetirement = Now(); break; }
+			if (Final->LastAttributedRetirementToken == Token) {
+				ObservedRetirement = Now();
+				// Native receipt/ACK can happen after the earlier client drain and
+				// before this sender sample. Consume the already received message;
+				// do not add a latency grace period or infer delivery from ACK.
+				for (const auto &Event : Drain(*Pair.Client))
+					if (const auto *Message = std::get_if<ReceivedMessageEvent>(&Event)) ReceivedBytes += Message->Payload.size();
+				break;
+			}
 		}
 		if (!ObservedRetirement || !Final || Final->StructuralPayloadBytesFirstSent != Accepted ||
 			Final->StructuralPayloadBytesAcked != Accepted || Final->LastAttributedRetiredPayloadBytes != Bytes ||
 			ReceivedBytes != Bytes - ReliableServiceEnvelopeBytes || Final->PendingReliableStreamBytes != 0 ||
-			Final->SentUnackedReliableStreamBytes != 0)
+			Final->SentUnackedReliableStreamBytes != 0) {
+			std::cerr << "[Network:AckCycle:ConvergenceFailure] bytes=" << Bytes << " token=" << Token
+				<< " fault=" << static_cast<int>(Failure) << " observed_retire=" << ObservedRetirement
+				<< " accepted=" << Accepted << " received_payload=" << ReceivedBytes;
+			if (Final) std::cerr << " first=" << Final->StructuralPayloadBytesFirstSent
+				<< " ack=" << Final->StructuralPayloadBytesAcked << " retired=" << Final->LastAttributedRetiredPayloadBytes
+				<< " retired_token=" << Final->LastAttributedRetirementToken << " pending=" << Final->PendingReliableStreamBytes
+				<< " unacked=" << Final->SentUnackedReliableStreamBytes << " retransmitted=" << Final->ReliableStreamBytesRetransmitted;
+			std::cerr << '\n';
+			if (detail::GnsAckDiagnosticsAccess::Read(*Pair.Server, Pair.ServerConnection, Sender)) Dump("sender", Token, Sender);
+			if (detail::GnsAckDiagnosticsAccess::Read(*Pair.Client, Pair.ClientConnection, Receiver)) Dump("receiver", Token, Receiver);
 			throw std::runtime_error("ACK cycle conservation/convergence failed");
+		}
 		if (!detail::GnsAckDiagnosticsAccess::Read(*Pair.Server, Pair.ServerConnection, Sender) ||
 			!detail::GnsAckDiagnosticsAccess::Read(*Pair.Client, Pair.ClientConnection, Receiver))
 			throw std::runtime_error("ACK cycle missing trace");
