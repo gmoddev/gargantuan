@@ -16,7 +16,10 @@ $ExpectedAutostop = @'
 Assert ($Text.Contains($ExpectedAutostop)) 'Farm32 dual autostop missing'
 Assert ($Text -notmatch "'-b'|--ring-buffer") 'Farm32 capture must not rotate or overwrite'
 
-$Root = Join-Path ([IO.Path]::GetTempPath()) ('farm32-dumpcap-test-' + [guid]::NewGuid())
+# Hosted runner temp paths can be junctions. Use the checkout-local test directory
+# so this case reaches the artifact guard instead of the separate reparse guard.
+$FixtureParent = [IO.Path]::GetFullPath($PSScriptRoot).TrimEnd([IO.Path]::DirectorySeparatorChar)
+$Root = Join-Path $FixtureParent ('farm32-dumpcap-test-' + [guid]::NewGuid())
 [void][IO.Directory]::CreateDirectory($Root)
 try {
     $RunId = [guid]::NewGuid().ToString('D')
@@ -25,17 +28,21 @@ try {
     $Existing = Join-Path $RunDir 'farm32-client-capture.pcapng'
     [IO.File]::WriteAllText($Existing, 'preserved')
     $Rejected = $false
+    $RejectionDetail = '<no exception>'
     try {
         & $ScriptPath -EvidenceRoot $Root -RunId $RunId -DumpcapPath 'C:\missing-dumpcap.exe' `
             -DumpcapSha256 ('0' * 64) | Out-Null
-    } catch { $Rejected = $_.Exception.Message -match 'already exists' }
-    Assert $Rejected 'Preexisting Farm32 pcap was accepted'
+    } catch {
+        $RejectionDetail = $_.Exception.Message
+        $Rejected = $RejectionDetail -ceq "Farm32 client capture artifact already exists: $Existing"
+    }
+    Assert $Rejected "Preexisting Farm32 pcap was not rejected at the artifact guard. Actual: $RejectionDetail"
     Assert (([IO.File]::ReadAllText($Existing)) -eq 'preserved') 'Preexisting Farm32 pcap changed'
     Assert (-not (Test-Path -LiteralPath (Join-Path $RunDir 'farm32-client-capture.json'))) 'Denied capture created ownership state'
     'DUMPCAP_FARM32_MOCK_OK'
 } finally {
     $Resolved = [IO.Path]::GetFullPath($Root)
-    if ((Split-Path $Resolved -Parent) -ne ([IO.Path]::GetTempPath().TrimEnd('\')) -or
+    if ((Split-Path $Resolved -Parent) -cne $FixtureParent -or
         (Split-Path $Resolved -Leaf) -notlike 'farm32-dumpcap-test-*') {
         throw 'Unsafe Farm32 test cleanup target.'
     }
