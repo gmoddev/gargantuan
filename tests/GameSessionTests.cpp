@@ -1875,10 +1875,11 @@ int main(int ArgumentCount, char **Arguments) {
 			const auto OffBegin = std::chrono::steady_clock::now();
 			Sample();
 			const auto OffEnd = std::chrono::steady_clock::now();
-			const auto Directory = std::filesystem::temp_directory_path() / "farm-publication-overhead";
-			std::filesystem::create_directories(Directory);
+			const auto Directory = std::filesystem::temp_directory_path() /
+				("farm-publication-overhead-" + std::to_string(
+					std::chrono::steady_clock::now().time_since_epoch().count()));
+			std::filesystem::create_directory(Directory);
 			const auto Path = Directory / "publication-service.bin";
-			std::filesystem::remove(Path);
 			std::chrono::steady_clock::time_point OnBegin, OnEnd;
 			{
 				host::detail::FarmPublicationEvidence Evidence(true, "overhead", -1, 0, Path);
@@ -1904,7 +1905,6 @@ int main(int ArgumentCount, char **Arguments) {
 			const auto PacketOffBegin = std::chrono::steady_clock::now();
 			PacketSample();
 			const auto PacketOffEnd = std::chrono::steady_clock::now();
-			std::filesystem::remove(Path);
 			std::chrono::steady_clock::time_point PacketOnBegin, PacketOnEnd;
 			{
 				host::detail::FarmPublicationEvidence Evidence(true, "overhead", -1, 0, Path);
@@ -1915,6 +1915,7 @@ int main(int ArgumentCount, char **Arguments) {
 					throw std::runtime_error("farm publication packet sample lost records");
 			}
 			std::filesystem::remove(Path);
+			std::filesystem::remove(Directory);
 			const auto OffNs = std::chrono::duration_cast<std::chrono::nanoseconds>(OffEnd - OffBegin).count();
 			const auto OnNs = std::chrono::duration_cast<std::chrono::nanoseconds>(OnEnd - OnBegin).count();
 			std::cout << "[Qualification:Publication] benchmark_samples=" << Samples
