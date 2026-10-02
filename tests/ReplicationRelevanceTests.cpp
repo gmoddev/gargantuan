@@ -160,10 +160,13 @@ namespace {
 			Check(LiveLarge.RegisterPeerPlanned(LargeConnection, ReplicationEpoch(1),
 				std::make_shared<const PeerRelevanceSelection>(LargeSelection)).Succeeded(),
 				"large frozen quote peer registers");
-			for (std::uint64_t Tick = 1; Tick != 200 && !LiveLarge.IsPlanningReady(LargeConnection); ++Tick)
+			for (std::uint64_t Tick = 1; Tick != 2000 && !LiveLarge.IsPlanningReady(LargeConnection); ++Tick)
 				LiveLarge.ProcessPlanning(Tick);
+			Check(LiveLarge.IsPlanningReady(LargeConnection), "large frozen quote planning completes");
 			const auto Limit = MaximumReliableServiceGroupBytes - ReliableServiceEnvelopeBytes;
-			auto LargeBaseline = LiveLarge.ProducePendingBaseline(LargeConnection, 64, Limit);
+			auto LargeBaseline = LiveLarge.ProducePendingBaseline(LargeConnection, 64, 2000, Limit, Limit);
+			if (!LargeBaseline.Frame)
+				std::cerr << "[Replication:FrozenQuote] baseline_error=" << LargeBaseline.Error << '\n';
 			Check(LargeBaseline.Frame && LiveLarge.CommitSchedulerAcceptance(
 				LargeConnection, LargeBaseline.Frame->Sequence).Succeeded(),
 				"large frozen quote starts after an accepted baseline");
