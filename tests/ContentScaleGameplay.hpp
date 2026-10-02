@@ -2,12 +2,14 @@
 
 #include "ContentScaleFixture.hpp"
 #include "gargantuan/classes/Animator.hpp"
+#include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/MeshPart.hpp"
 #include "gargantuan/classes/RemoteEvent.hpp"
 #include "gargantuan/classes/RemoteFunction.hpp"
 #include "gargantuan/classes/Script.hpp"
 #include "gargantuan/filesystem/DiskFilesystem.hpp"
 #include "gargantuan/packaging/PackageBuilder.hpp"
+#include "gargantuan/services/AssetService.hpp"
 
 namespace gargantuan::test {
 	// Observer only: every event is delivered unchanged to the real GameSession.
