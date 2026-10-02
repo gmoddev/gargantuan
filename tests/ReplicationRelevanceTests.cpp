@@ -175,12 +175,15 @@ namespace {
 					LargeObjects[Index]->SetName(std::string(24 * 1024,
 						static_cast<char>('a' + (Round + Index) % 26)));
 			auto LargeQuote = LiveLarge.CaptureFrozenQuote(Error);
+			auto DelayedQuote = LiveLarge.CaptureFrozenQuote(Error);
 			Check(LargeQuote && Error.empty(), "large Name history is captured at cessation");
-			if (LargeQuote) {
+			Check(DelayedQuote && Error.empty(), "delayed audit captures the same cessation state");
+			if (LargeQuote && DelayedQuote) {
 				const std::map<ConnectionId, std::size_t> Limits{{LargeConnection, Limit}};
 				runtime_detail::WorkSample QuoteWork{};
 				std::uint64_t LiveBytes = 0, QuotedBytes = 0;
 				std::size_t Frames = 0, EmptySteps = 0;
+				std::vector<FrozenJournalQuoteFrame> AcceptedFrames;
 				bool Complete = false;
 				for (std::size_t StepIndex = 0; StepIndex < 2048; ++StepIndex) {
 					const auto BeforeLag = LargeQuote->GetJournalLag(LargeConnection);
@@ -208,6 +211,9 @@ namespace {
 						"every frozen frame matches copied live encoding, identity, and complete bytes");
 					Check(LiveLarge.CommitSchedulerAcceptance(LargeConnection, LiveFrame.Frame->Sequence).Succeeded(),
 						"copied live reference commits the same frame sequence");
+					AcceptedFrames.push_back({LargeConnection, LiveFrame.Frame->Sequence,
+						LiveFrame.EncodedFrame.size() + ReliableServiceEnvelopeBytes,
+						detail::ExactCandidateFingerprint(LiveFrame.EncodedFrame)});
 					LiveBytes += LiveFrame.EncodedFrame.size() + ReliableServiceEnvelopeBytes;
 					QuotedBytes += FrozenStep.Frame->CompleteBytes;
 					++Frames;
@@ -216,6 +222,32 @@ namespace {
 					EmptySteps != 0 && LiveBytes == QuotedBytes &&
 					QuoteWork.Counters[static_cast<std::size_t>(runtime_detail::WorkCounter::EncodeRetries)] != 0,
 					"large frozen quote completes after oversize retry and no-frame coalescing without changing W_i");
+				// Simulate live grants arriving before the observer gets one replay
+				// advance per server tick. Delayed sealing must still audit the same
+				// ordered accepted frames and exact complete-byte W_i.
+				std::size_t AuditedFrames = 0;
+				std::uint64_t DelayedBytes = 0;
+				bool DelayedComplete = false;
+				for (std::size_t Tick = 0; Tick < 2048; ++Tick) {
+					const auto Step = DelayedQuote->AdvanceFrozenJournalQuote(Limits);
+					Check(Step.Error.empty(), "one-advance quote audit has no replay error");
+					if (Step.Complete) { DelayedComplete = true; break; }
+					if (!Step.Frame) continue;
+					Check(AuditedFrames < AcceptedFrames.size(),
+						"delayed quote cannot invent an unaccepted structural frame");
+					if (AuditedFrames < AcceptedFrames.size()) {
+						const auto &Accepted = AcceptedFrames[AuditedFrames];
+						Check(Step.Frame->Connection == Accepted.Connection &&
+							Step.Frame->Sequence == Accepted.Sequence &&
+							Step.Frame->CompleteBytes == Accepted.CompleteBytes &&
+							Step.Frame->Fingerprint == Accepted.Fingerprint,
+							"delayed one-advance quote preserves live frame identity and bytes");
+					}
+					DelayedBytes += Step.Frame->CompleteBytes;
+					++AuditedFrames;
+				}
+				Check(DelayedComplete && AuditedFrames == AcceptedFrames.size() && DelayedBytes == LiveBytes,
+					"delayed one-advance sealing conserves every accepted grant and W_i");
 			}
 			LargeWorld->Destroy();
 		}

@@ -374,14 +374,14 @@ namespace gargantuan::host {
 				AcceptedAfterCessation[Event.Connection].push_back(Event);
 			}
 			if (!QuoteComplete) {
-				// Bound replay per server step. This is an observation clone and never
-				// supplies payloads or grants to the production scheduler.
-				for (std::size_t Work = 0; Work < 16; ++Work) {
-					const auto Step = CessationQuote->Replication->AdvanceFrozenJournalQuote(
-						CessationQuote->MaximumFrameBytes);
-					if (!Step.Error.empty()) { QuoteFailure = Step.Error; return; }
-					if (Step.Complete) { QuoteComplete = true; break; }
-					if (!Step.Frame) break;
+				// Keep detached replay off the production service path as much as
+				// possible. One complete advance per server step preserves the exact
+				// frozen frame sequence and W_i; it does not bound one advance's CPU.
+				const auto Step = CessationQuote->Replication->AdvanceFrozenJournalQuote(
+					CessationQuote->MaximumFrameBytes);
+				if (!Step.Error.empty()) { QuoteFailure = Step.Error; return; }
+				if (Step.Complete) QuoteComplete = true;
+				else if (Step.Frame) {
 					if (Step.Frame->CompleteBytes > network::MaximumReliableServiceGroupBytes ||
 						QuotedFrameCount >= detail::FarmAdmissionEvidence::EventLimit() ||
 						QuotedFutureBytes[Step.Frame->Connection] >

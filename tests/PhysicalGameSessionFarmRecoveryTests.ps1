@@ -37,6 +37,14 @@ foreach ($Snippet in @(
 	if ($Found -lt 0) { throw "recovery observation can predate quote replay or metrics: $Snippet" }
 	$Position = $Found + $Snippet.Length
 }
+$ReplayStart = $QualificationSource.IndexOf('void StepCessationQuote() {', [StringComparison]::Ordinal)
+$ReplayEnd = $QualificationSource.IndexOf('AuditQuotedFrames();', $ReplayStart, [StringComparison]::Ordinal)
+if ($ReplayStart -lt 0 -or $ReplayEnd -lt $ReplayStart) { throw 'missing bounded cessation replay' }
+$ReplaySource = $QualificationSource.Substring($ReplayStart, $ReplayEnd - $ReplayStart)
+$AdvanceCount = [regex]::Matches($ReplaySource, 'AdvanceFrozenJournalQuote\(').Count
+if ($AdvanceCount -ne 1 -or $ReplaySource -match 'for\s*\(\s*std::size_t\s+Work') {
+	throw 'cessation quote may perform more than one full advance per server tick'
+}
 $RunId = '7c93e53d-0e0c-4b8d-8a3b-9a761a406ebd'
 $ExpectedNonces = @(0..31 | ForEach-Object { [string](1000 + $_) })
 $Connections = @(0..31 | ForEach-Object { "$(1 + $_):1" })
