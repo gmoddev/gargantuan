@@ -36,8 +36,9 @@ and Stop initiation. The 60-second Stop and offline conversion of a large ETL
 are **not yet worker-qualified**. Before a physical campaign, measure those
 paths at the actual bounded trace size, reconcile them with the 540-second
 coordinator execution budget, and prove both endpoint captures finish with
-complete bidirectional evidence. The worker's current C: free space is below
-the new profile's reserve; choose a dedicated approved volume before staging.
+complete bidirectional evidence. Recheck the fixed 2560-MiB reserve on the
+selected dedicated evidence volume immediately before staging and each run;
+an earlier low-space observation of worker C: is no longer current.
 
 Stage by hash-verifying a versioned candidate bundle on both endpoints, then
 installing only the new Farm32 service/root under a reviewed local procedure.
