@@ -271,6 +271,7 @@ class FarmCaptureController:
     def Finish(self):
         Config = self.Config
         RoleIndex, Result = self.AwaitRole()
+        RoleIndexHash = Digest(RoleIndex)
         if ParseUtc(Result["StartedUtc"]) < ParseUtc(self.ReadyUtc):
             raise ValueError("[Qualification:FarmCapture] role began before capture readiness")
         if Config["Role"] == "SERVER":
@@ -289,6 +290,9 @@ class FarmCaptureController:
             StoppedUtc = UtcNow()
         if ParseUtc(StoppedUtc) < ParseUtc(Result["CompletedUtc"]):
             raise ValueError("[Qualification:FarmCapture] capture ended before role completion")
+        RoleEvidence(Config["RoleEvidenceRoot"], Config["RunId"], Config["Role"])
+        if Digest(RoleIndex) != RoleIndexHash:
+            raise ValueError("[Qualification:FarmCapture] role evidence changed after completion")
         return SealCapture(Config, self.StartedUtc, self.ReadyUtc, StoppedUtc,
                            RoleIndex, round(self.Clock() - self.Started, 3))
 
