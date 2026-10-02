@@ -87,11 +87,27 @@ delays as measured. The cross-provider acceptance analyzer independently
 replays the same sealed join for Local and Node and rejects a changed
 reconciliation value. Legacy evidence with no publication traces remains
 `NOT_MEASURED`; a partial trace set is rejected. Each replay uses a bounded,
-temporary analysis directory outside the sealed roots. Full Character
-recipient cadence, cross-host due-to-handler latency, and Remote cadence stay
-unmeasured because these records do not contain a shared clock or Remote
-offer/send/handler events. Both reports remain `INCOMPLETE` and do not claim
+temporary analysis directory outside the sealed roots. Root-scoped Character
+recipient cadence stays unmeasured without a source-pinned root marker;
+cross-host due-to-handler latency has no shared clock, and Remote cadence
+lacks offer/send/handler events. Both reports remain `INCOMPLETE` and do not claim
 provider or Foundation 3L qualification.
+
+The join also reads the five sealed server phase start/end ticks. For each
+recipient/ObjectId generation and relationship lifetime it reports consecutive
+client-local `ClientHandled` gaps, authoritative state-tick deltas, and whether
+each pair is inside a phase or crosses its entry/exit edge. Older out-of-order
+handled states cannot shorten a forward-progress gap. The role-local wall gap
+does not subtract a server timestamp from a client timestamp. The setup source
+must emit eight `event=tracked_root` rows with full ObjectId, owner ready-peer
+identity, and eight expected recipient slots per root to establish the 64
+canonical relationships. When those rows are absent, the relationship gaps
+remain diagnostic and root identity, coverage, and the 250-ms/12-tick cadence
+verdict are `NOT_MEASURED`. A partial or inconsistent marker set is rejected.
+Even with markers, a boundary gap that includes unmeasured calibration time
+cannot by itself prove a phase-local wall-time failure; it is reported as
+ambiguous unless the entire gap meets the bound. Cross-host due-to-handler
+latency remains separately `NOT_MEASURED`.
 
 This artifact is diagnostic-only until its timing cost is qualified against a
 full 32-client workload. A Release MSVC/GNS microbenchmark on the worker,

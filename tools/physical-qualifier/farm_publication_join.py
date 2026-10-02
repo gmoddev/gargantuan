@@ -28,6 +28,13 @@ READY_FIELD = re.compile(r"([a-z_]+)=([^\s]+)")
 SHA256 = re.compile(r"[0-9a-f]{64}")
 RELATIONSHIP = ("ConnectionSlot", "ConnectionGeneration", "ObjectSlot", "ObjectGeneration")
 STATE = RELATIONSHIP + ("Tick", "Sequence", "MaterializationEpoch")
+PHASE_NAMES = ("baseline", "load", "resident", "evict", "reload")
+PHASE_START = "[Qualification:Scale] event=phase_start "
+PHASE_END = "[Qualification:Scale] event=phase_end "
+ROOT_MARKER = "[Qualification:Scale] event=tracked_root "
+MAX_RELATIONSHIP_REPORT = 4096
+MAX_CHARACTER_GAP_NS = 250_000_000
+MAX_CHARACTER_GAP_TICKS = 12
 
 
 def Identity(Value):
@@ -57,6 +64,73 @@ def ReadyNumber(Row, Field):
     Require(isinstance(Value, str) and re.fullmatch(r"(0|[1-9][0-9]*)", Value),
             "ready log invalid " + Field)
     return int(Value)
+
+
+def PhaseWindows(ServerLogPath, RunId):
+    """Read authoritative tick windows; absence remains explicitly unmeasured."""
+    Starts = {}
+    Ends = {}
+    for Prefix, Target in ((PHASE_START, Starts), (PHASE_END, Ends)):
+        for Row in ReadyRows(ServerLogPath, Prefix):
+            if Row.get("run") != RunId:
+                continue
+            Phase = Row.get("phase")
+            Require(Phase in PHASE_NAMES and Phase not in Target,
+                    "duplicate or unknown farm phase boundary")
+            Target[Phase] = (ReadyNumber(Row, "tick"), ReadyNumber(Row, "monotonic_us"))
+    if not Starts and not Ends:
+        return None
+    Require(set(Starts) == set(PHASE_NAMES) and set(Ends) == set(PHASE_NAMES),
+            "five farm phase tick windows are incomplete")
+    Windows = []
+    PreviousEnd = 0
+    PreviousEndNs = 0
+    for Phase in PHASE_NAMES:
+        StartTick, StartUs = Starts[Phase]
+        EndTick, EndUs = Ends[Phase]
+        Require(PreviousEnd < StartTick < EndTick and
+                PreviousEndNs < StartUs < EndUs,
+                "farm phase ticks or server-local times overlap")
+        Windows.append({"Phase": Phase, "StartTick": StartTick, "EndTick": EndTick})
+        PreviousEnd, PreviousEndNs = EndTick, EndUs
+    return Windows
+
+
+def RootMarkers(ServerLogPath, RunId, ExpectedClients, ReadyBySlot):
+    """Only an explicit setup marker can identify the eight measured roots."""
+    Roots = {}
+    Rows = [Row for Row in ReadyRows(ServerLogPath, ROOT_MARKER)
+            if Row.get("run") == RunId]
+    if not Rows:
+        return None
+    Require(ExpectedClients == 32 and len(Rows) == 8,
+            "farm root marker count does not prove eight active roots")
+    OwnerSlots = set()
+    Indices = set()
+    for Row in Rows:
+        Index = ReadyNumber(Row, "index")
+        OwnerSlot = ReadyNumber(Row, "client_index")
+        Neighborhood = ReadyNumber(Row, "neighborhood")
+        FirstSlot = ReadyNumber(Row, "recipient_first")
+        LastSlot = ReadyNumber(Row, "recipient_last")
+        ServerConnection = (ReadyNumber(Row, "peer_slot"),
+                            ReadyNumber(Row, "peer_generation"))
+        Root = (ReadyNumber(Row, "object_slot"),
+                ReadyNumber(Row, "object_generation"))
+        SetupTick = ReadyNumber(Row, "tick")
+        Require(Index in range(8) and Index not in Indices and
+                OwnerSlot == Index * 4 and OwnerSlot not in OwnerSlots and
+                Neighborhood == OwnerSlot // 8 + 1 and FirstSlot == (Neighborhood - 1) * 8 and
+                LastSlot == FirstSlot + 7 and all(Root) and Root not in Roots and
+                SetupTick > 0 and ServerConnection == ReadyBySlot[OwnerSlot][0],
+                "farm root marker identity or recipient mapping invalid")
+        Indices.add(Index)
+        OwnerSlots.add(OwnerSlot)
+        Roots[Root] = {"OwnerSlot": OwnerSlot, "SetupTick": SetupTick,
+                       "RecipientSlots": tuple(range(FirstSlot, LastSlot + 1))}
+    Require(Indices == set(range(8)) and OwnerSlots == set(range(0, 32, 4)),
+            "farm root marker owner set incomplete")
+    return Roots
 
 
 def Digest(PathValue):
@@ -175,8 +249,10 @@ def CreateDatabase(PathValue):
             Origin INTEGER NOT NULL,
             BuiltNs INTEGER NOT NULL, ProducedNs INTEGER NOT NULL,
             AcceptedNs INTEGER, RejectedNs INTEGER, FrameSeq INTEGER, ServiceBytes INTEGER,
-            ReceiveNs INTEGER, HandledNs INTEGER, ClientSlot INTEGER,
+            ReceiveNs INTEGER, HandledNs INTEGER, ClientSlot INTEGER, Lifetime INTEGER,
             PRIMARY KEY (CS, CG, OS, OG, Tick, Seq, Material));
+        CREATE INDEX HandledCadence ON Produced
+            (CS, CG, OS, OG, Lifetime, HandledNs) WHERE HandledNs IS NOT NULL;
     """)
     return Database
 
@@ -396,9 +472,10 @@ def ReadServer(Database, ServerPath, RunId, ReadyConnections):
                     Counts["DirectAccepted"] += 1
                     Counts["DirectReliableAccepted"] += Produced[5] == 2
                     Counts["ForcedAccepted"] += Produced[5] == 2
-                Database.execute("""UPDATE Produced SET AcceptedNs=?, FrameSeq=?, ServiceBytes=?
+                Database.execute("""UPDATE Produced SET AcceptedNs=?, FrameSeq=?, ServiceBytes=?, Lifetime=?
                     WHERE CS=? AND CG=? AND OS=? AND OG=? AND Tick=? AND Seq=? AND Material=?""",
                     (Value.Nanoseconds, Value.FrameSequence, Value.ServiceBytes,
+                     Pending[2] if Pending is not None else 0,
                      *StateIdentity(Value)))
                 Counts["Accepted"] += 1
             elif Stage == 11:
@@ -533,6 +610,148 @@ def Duration(Database, Predicate, Expression, ExtraJoin=""):
             "MeanNs": None if Count == 0 else Total // Count}
 
 
+def RelationshipCadence(Database, Windows, Roots, ExpectedClients):
+    """Measure only recipient-local handler gaps, grouped by server state ticks."""
+    if Windows is None:
+        return {"Status": "NOT_MEASURED", "RootIdentity": "NOT_MEASURED",
+                "RootCoverage": "NOT_MEASURED", "CanonicalVerdict": "NOT_MEASURED",
+                "PhaseWindows": [], "Relationships": []}
+    def Empty(Phase):
+        return {"Phase": Phase, "States": 0, "Pairs": 0, "WithinPairs": 0,
+                "EntryPairs": 0, "ExitPairs": 0, "SpanningPairs": 0,
+                "MaximumHandledGapNs": None, "MaximumTickDelta": None,
+                "MaximumWithinHandledGapNs": None, "MaximumWithinTickDelta": None,
+                "MaximumBoundaryHandledGapNs": None, "MaximumBoundaryTickDelta": None,
+                "BoundaryUnresolved": 0, "DefiniteBoundaryTickFailures": 0}
+    Relationships = {}
+    StaleByKey = {}
+    PreviousKey = None
+    PreviousTick = PreviousNs = None
+    Cursor = Database.execute("""SELECT ClientSlot, CS, CG, OS, OG, Lifetime, Tick, HandledNs
+        FROM Produced WHERE AcceptedNs IS NOT NULL AND HandledNs IS NOT NULL
+        ORDER BY CS, CG, OS, OG, Lifetime, HandledNs, Tick, Seq, Material""")
+    for ClientSlot, CS, CG, OS, OG, Lifetime, Tick, HandledNs in Cursor:
+        Require(ClientSlot is not None and Lifetime is not None and Tick > 0 and HandledNs > 0,
+                "handled Character cadence identity is incomplete")
+        Key = (ClientSlot, CS, CG, OS, OG, Lifetime)
+        if Key not in Relationships:
+            Require(len(Relationships) < MAX_RELATIONSHIP_REPORT,
+                    "bounded Character relationship report exceeded")
+            Relationships[Key] = [Empty(Window["Phase"]) for Window in Windows]
+        Stats = Relationships[Key]
+        if Key == PreviousKey:
+            Require(HandledNs >= PreviousNs,
+                    "recipient-local Character handler time regressed")
+            if Tick < PreviousTick:
+                # An older handled state is not forward publication progress.
+                # Keep the prior forward point, so it cannot shorten a gap.
+                StaleByKey[Key] = StaleByKey.get(Key, 0) + 1
+                continue
+        for Index, Window in enumerate(Windows):
+            Start, End = Window["StartTick"], Window["EndTick"]
+            if Start <= Tick <= End:
+                Stats[Index]["States"] += 1
+        if Key == PreviousKey:
+            GapNs, GapTicks = HandledNs - PreviousNs, Tick - PreviousTick
+            for Index, Window in enumerate(Windows):
+                Start, End = Window["StartTick"], Window["EndTick"]
+                if PreviousTick > End or Tick < Start:
+                    continue
+                Result = Stats[Index]
+                Result["Pairs"] += 1
+                if PreviousTick < Start and Tick > End:
+                    Kind = "SpanningPairs"
+                elif PreviousTick < Start:
+                    Kind = "EntryPairs"
+                elif Tick > End:
+                    Kind = "ExitPairs"
+                else:
+                    Kind = "WithinPairs"
+                Result[Kind] += 1
+                Result["MaximumHandledGapNs"] = max(Result["MaximumHandledGapNs"] or 0, GapNs)
+                Result["MaximumTickDelta"] = max(Result["MaximumTickDelta"] or 0, GapTicks)
+                if Kind == "WithinPairs":
+                    Result["MaximumWithinHandledGapNs"] = max(
+                        Result["MaximumWithinHandledGapNs"] or 0, GapNs)
+                    Result["MaximumWithinTickDelta"] = max(
+                        Result["MaximumWithinTickDelta"] or 0, GapTicks)
+                else:
+                    Result["MaximumBoundaryHandledGapNs"] = max(
+                        Result["MaximumBoundaryHandledGapNs"] or 0, GapNs)
+                    Result["MaximumBoundaryTickDelta"] = max(
+                        Result["MaximumBoundaryTickDelta"] or 0, GapTicks)
+                    if GapNs > MAX_CHARACTER_GAP_NS:
+                        # The preceding/following state can be in calibration;
+                        # no cross-host timestamp exists to apportion that gap.
+                        Result["BoundaryUnresolved"] += 1
+                    ChargedTicks = (End - Start if Kind == "SpanningPairs" else
+                                    Tick - Start if Kind == "EntryPairs" else
+                                    End - PreviousTick)
+                    if ChargedTicks > MAX_CHARACTER_GAP_TICKS:
+                        Result["DefiniteBoundaryTickFailures"] += 1
+        PreviousKey, PreviousTick, PreviousNs = Key, Tick, HandledNs
+    Report = []
+    for (Slot, CS, CG, OS, OG, Lifetime), Stats in sorted(Relationships.items()):
+        Report.append({"ClientSlot": Slot, "ConnectionSlot": CS,
+                       "ConnectionGeneration": CG, "ObjectSlot": OS,
+                       "ObjectGeneration": OG, "Lifetime": Lifetime,
+                       "StaleHandled": StaleByKey.get((Slot, CS, CG, OS, OG, Lifetime), 0),
+                       "Phases": Stats})
+    Result = {"Status": "RECIPIENT_LOCAL_OBSERVED", "RootIdentity": "NOT_MEASURED",
+              "RootCoverage": "NOT_MEASURED", "CanonicalVerdict": "NOT_MEASURED",
+              "PhaseWindows": Windows, "RelationshipCount": len(Report),
+              "Relationships": Report,
+              "MissingRootMarker": ROOT_MARKER.strip()}
+    if Roots is None:
+        return Result
+    Result["RootIdentity"] = "OBSERVED"
+    Index = {}
+    for Row in Report:
+        Index.setdefault((Row["ClientSlot"], Row["ObjectSlot"], Row["ObjectGeneration"]), []).append(Row)
+    Expected = {(Slot, *Root) for Root, Marker in Roots.items()
+                for Slot in Marker["RecipientSlots"]}
+    Require(len(Expected) == 64 and all(0 <= Slot < ExpectedClients for Slot, _, _ in Expected),
+            "farm root recipient mapping is incomplete")
+    Missing = []
+    Violations = []
+    Ambiguous = []
+    for Key in sorted(Expected):
+        Instances = Index.get(Key, [])
+        if len(Instances) != 1:
+            Missing.append({"ClientSlot": Key[0], "ObjectSlot": Key[1],
+                            "ObjectGeneration": Key[2], "Lifetimes": len(Instances)})
+            continue
+        for Phase in Instances[0]["Phases"]:
+            if (Phase["States"] < 2 or Phase["WithinPairs"] == 0 or
+                    Phase["EntryPairs"] == 0 or
+                    (Phase["Phase"] != PHASE_NAMES[-1] and Phase["ExitPairs"] == 0)):
+                Missing.append({"ClientSlot": Key[0], "ObjectSlot": Key[1],
+                                "ObjectGeneration": Key[2], "Phase": Phase["Phase"],
+                                "Reason": "insufficient phase or boundary observations"})
+            if (Phase["DefiniteBoundaryTickFailures"] > 0 or
+                    (Phase["MaximumWithinHandledGapNs"] is not None and
+                     (Phase["MaximumWithinHandledGapNs"] > MAX_CHARACTER_GAP_NS or
+                      Phase["MaximumWithinTickDelta"] > MAX_CHARACTER_GAP_TICKS))):
+                Violations.append({"ClientSlot": Key[0], "ObjectSlot": Key[1],
+                                   "ObjectGeneration": Key[2], "Phase": Phase["Phase"],
+                                   "MaximumWithinHandledGapNs": Phase["MaximumWithinHandledGapNs"],
+                                   "MaximumWithinTickDelta": Phase["MaximumWithinTickDelta"],
+                                   "DefiniteBoundaryTickFailures": Phase["DefiniteBoundaryTickFailures"]})
+            if Phase["BoundaryUnresolved"]:
+                Ambiguous.append({"ClientSlot": Key[0], "ObjectSlot": Key[1],
+                                  "ObjectGeneration": Key[2], "Phase": Phase["Phase"],
+                                  "UnresolvedBoundaryPairs": Phase["BoundaryUnresolved"]})
+    Result["ExpectedRootRelationships"] = 64
+    Result["MissingRootRelationships"] = Missing
+    Result["CanonicalViolations"] = Violations
+    Result["AmbiguousBoundaryGaps"] = Ambiguous
+    Result["RootCoverage"] = "OBSERVED" if not Missing else "INCOMPLETE"
+    Result["CanonicalVerdict"] = ("FAIL" if Violations else "NOT_MEASURED" if Missing or Ambiguous
+                                  else "PASS")
+    Result["MissingRootMarker"] = None
+    return Result
+
+
 def Join(ServerPath, ServerReadyPath, ClientSources, RunId, ScratchParent,
          ExpectedClients=32):
     """Require complete trace conservation; return only role-local durations."""
@@ -555,6 +774,13 @@ def Join(ServerPath, ServerReadyPath, ClientSources, RunId, ScratchParent,
     Require(shutil.disk_usage(ScratchParent).free >= MAX_DATABASE_BYTES,
             "scratch volume has less than the bounded 4 GiB database cap free")
     ReadyBySlot = ReadyMappings(ServerReadyPath, ClientSources, RunId, ExpectedClients)
+    Windows = PhaseWindows(ServerReadyPath, RunId)
+    Roots = RootMarkers(ServerReadyPath, RunId, ExpectedClients, ReadyBySlot)
+    Require(Roots is None or Windows is not None,
+            "farm roots lack measured phase windows")
+    Require(Roots is None or all(Marker["SetupTick"] < Windows[0]["StartTick"]
+                                 for Marker in Roots.values()),
+            "farm root setup does not precede measured phases")
     with tempfile.TemporaryDirectory(prefix="gargantuan-publication-join-",
                                      dir=ScratchParent) as Root:
         Root = Path(Root).resolve(strict=True)
@@ -581,6 +807,7 @@ def Join(ServerPath, ServerReadyPath, ClientSources, RunId, ScratchParent,
                                   "P.AcceptedNs-P.BuiltNs")
                 Handled = Duration(Database, "P.HandledNs IS NOT NULL",
                                    "P.HandledNs-P.ReceiveNs")
+                Cadence = RelationshipCadence(Database, Windows, Roots, ExpectedClients)
                 Require(Ordinary["Count"] + Forced["Count"] + Direct["Count"] ==
                         Server["Accepted"] and
                         all(Value["MinimumNs"] is None or Value["MinimumNs"] >= 0
@@ -599,6 +826,7 @@ def Join(ServerPath, ServerReadyPath, ClientSources, RunId, ScratchParent,
                         "ServerForcedBuiltToAccepted": Forced,
                         "ServerDirectBuiltToAccepted": Direct,
                         "ClientReceiveToHandled": Handled,
+                        "RecipientCharacterCadence": Cadence,
                         "Retirement": "OBSERVED" if Server["Retired"] else "NONE_OBSERVED",
                         "CrossHostDueToHandled": "NOT_MEASURED",
                         "ScratchPeakDatabaseBytes": DatabaseBytes,

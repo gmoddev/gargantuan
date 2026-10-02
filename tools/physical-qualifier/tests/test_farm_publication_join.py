@@ -97,6 +97,24 @@ class FarmPublicationJoinTests(unittest.TestCase):
         self.assertGreater(Result["ScratchPeakDatabaseBytes"], 0)
         self.assertEqual(list(self.Scratch.iterdir()), [])
 
+    def test_join_reports_sealed_phase_local_cadence_without_inventing_roots(self):
+        self.Write()
+        with self.ServerReady.open("a", encoding="utf-8") as Stream:
+            for Index, Phase in enumerate(("baseline", "load", "resident", "evict", "reload")):
+                Start = 100 + 20 * Index
+                Stream.write(f"[Qualification:Scale] event=phase_start run={self.RunId} "
+                             f"phase={Phase} tick={Start} monotonic_us={Start * 1000}\n")
+                Stream.write(f"[Qualification:Scale] event=phase_end run={self.RunId} "
+                             f"phase={Phase} tick={Start + 4} monotonic_us={(Start + 4) * 1000}\n")
+        Result = self.Analyze()
+        Cadence = Result["RecipientCharacterCadence"]
+        self.assertEqual(Cadence["Status"], "RECIPIENT_LOCAL_OBSERVED")
+        self.assertEqual(Cadence["RootIdentity"], "NOT_MEASURED")
+        self.assertEqual(Cadence["CanonicalVerdict"], "NOT_MEASURED")
+        self.assertEqual(Cadence["RelationshipCount"], 1)
+        self.assertEqual(Cadence["Relationships"][0]["Phases"][0]["States"], 1)
+        self.assertEqual(Result["CrossHostDueToHandled"], "NOT_MEASURED")
+
     def test_forced_state_has_separate_built_origin(self):
         R = self.Record
         self.ServerRecords += [
