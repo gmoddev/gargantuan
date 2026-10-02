@@ -512,6 +512,19 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 									<< " action_rejections=" << ActionRejections - FarmScalePreviousActionRejections
 									<< " unexpected_endings=" << UnexpectedEndings - FarmScalePreviousUnexpectedEndings
 									<< " steady_ns=" << FarmTimestamp() << std::endl;
+								if (!Healthy) {
+									const auto Native = Session->GetMetrics();
+									std::cout << "[Qualification:Producer] event=action_submission_diagnostic run_id=" << FarmRunId
+										<< " slot=" << FarmSlot << " phase=" << *PhaseName
+										<< " attempts=" << Native.ClientActionSubmissionAttempts
+										<< " no_control=" << Native.ClientActionSubmissionNoControl
+										<< " suspended=" << Native.ClientActionSubmissionSuspended
+										<< " invalid=" << Native.ClientActionSubmissionInvalid
+										<< " pending_full=" << Native.ClientActionSubmissionPendingFull
+										<< " scheduler_rejected=" << Native.ClientActionSubmissionSchedulerRejected
+										<< " stale_states=" << Native.ClientCharacterStaleStatesDropped
+										<< " history_overflows=" << Native.ClientCharacterHistoryOverflows << std::endl;
+								}
 								FarmScalePreviousEventAcks = EventAcks;
 								FarmScalePreviousEventOffers = EventOffers;
 								FarmScalePreviousActionRequests = ActionRequests;

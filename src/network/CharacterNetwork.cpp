@@ -2457,12 +2457,25 @@ namespace gargantuan::network {
 	bool PredictedCharacterNetwork::RequestAction(
 		ConnectionId Connection, std::uint32_t ActionToken, std::uint64_t SimulationTick
 	) {
+		SaturatingIncrement(Metrics.ActionSubmissionAttempts);
 		auto Found = Peers.find(Connection);
-		if (Found == Peers.end() || !Found->second.Control || !Found->second.NextAction.IsValid() ||
-			Found->second.PredictionSuspended)
+		if (Found == Peers.end() || !Found->second.Control) {
+			SaturatingIncrement(Metrics.ActionSubmissionNoControl);
 			return false;
+		}
+		if (!Found->second.NextAction.IsValid() || SimulationTick == 0) {
+			SaturatingIncrement(Metrics.ActionSubmissionInvalid);
+			return false;
+		}
+		if (Found->second.PredictionSuspended) {
+			SaturatingIncrement(Metrics.ActionSubmissionSuspended);
+			return false;
+		}
 		auto Definition = Actions.find(ActionToken);
-		if (SimulationTick == 0 || Found->second.PendingActionCount >= MaximumPendingCharacterActions) return false;
+		if (Found->second.PendingActionCount >= MaximumPendingCharacterActions) {
+			SaturatingIncrement(Metrics.ActionSubmissionPendingFull);
+			return false;
+		}
 		auto &Peer = Found->second;
 		const auto BasedOn = Peer.NextInput.Value() > 1 ? CharacterInputSequence(Peer.NextInput.Value() - 1)
 														: CharacterInputSequence{};
@@ -2473,7 +2486,10 @@ namespace gargantuan::network {
 			BasedOn,
 			ActionToken,
 		};
-		if (!Queue(Connection, CharacterMessage(Request), {}, true)) return false;
+		if (!Queue(Connection, CharacterMessage(Request), {}, true)) {
+			SaturatingIncrement(Metrics.ActionSubmissionSchedulerRejected);
+			return false;
+		}
 		Peer.PendingActions[Peer.PendingActionCount++] = {Request.ActionSequence, ActionToken};
 		if (PredictionEnabled && Definition != Actions.end()) {
 			Peer.PredictedAction = CharacterActionState{

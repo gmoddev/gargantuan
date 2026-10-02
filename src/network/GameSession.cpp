@@ -2092,6 +2092,17 @@ namespace gargantuan::network {
 			Result.ReliableAdmissionLogicalBytes = State->ByteAdmission->LogicalBytes();
 		}
 		Result.ClientReplica = State->Replica.GetMetrics();
+		if (State->Prediction) {
+			const auto CharacterMetrics = State->Prediction->GetMetrics();
+			Result.ClientActionSubmissionAttempts = CharacterMetrics.ActionSubmissionAttempts;
+			Result.ClientActionSubmissionNoControl = CharacterMetrics.ActionSubmissionNoControl;
+			Result.ClientActionSubmissionSuspended = CharacterMetrics.ActionSubmissionSuspended;
+			Result.ClientActionSubmissionInvalid = CharacterMetrics.ActionSubmissionInvalid;
+			Result.ClientActionSubmissionPendingFull = CharacterMetrics.ActionSubmissionPendingFull;
+			Result.ClientActionSubmissionSchedulerRejected = CharacterMetrics.ActionSubmissionSchedulerRejected;
+			Result.ClientCharacterStaleStatesDropped = CharacterMetrics.StaleStatesDropped;
+			Result.ClientCharacterHistoryOverflows = CharacterMetrics.HistoryOverflows;
+		}
 		if (State->Relevance) {
 			const auto RelevanceMetrics = State->Relevance->GetMetrics();
 			Result.RelevantObjects = RelevanceMetrics.DesiredObjects;
