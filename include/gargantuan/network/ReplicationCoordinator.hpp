@@ -251,6 +251,14 @@ namespace gargantuan::network {
 			const std::map<ConnectionId, std::size_t> &MaximumFrameBytes);
 
 	  private:
+		struct NameBytePreflightCache {
+			ChangeCursor Catalog;
+			std::set<const std::string *> Validated;
+		};
+		bool NameBytePreflightEnabled = true;
+		[[nodiscard]] ReplicationProduceResult ProduceIncrementalImpl(
+			ConnectionId Connection, std::size_t MaximumTransitions, std::size_t MaximumFrameBytes,
+			std::size_t MaximumJournalRecords, std::size_t AvailableFrameBytes, NameBytePreflightCache &Validation);
 		struct PlanningContinuation;
 		enum class PendingTransitionKind : std::uint8_t { Enter, Leave };
 		struct PendingTransition {

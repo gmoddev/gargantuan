@@ -103,6 +103,10 @@ namespace gargantuan::network::detail {
 
 	class GameSessionTestAccess final {
 	  public:
+		// Internal A/B fixture only. No runtime configuration or wire policy.
+		static void SetNameBytePreflightEnabled(ReplicationCoordinator &Coordinator, bool Enabled) {
+			Coordinator.NameBytePreflightEnabled = Enabled;
+		}
 		static void SetFailurePoint(GameSession &Session, GameSessionFailurePoint Point);
 		static void RequestSpatialValidation(GameSession &Session);
 		[[nodiscard]] static bool VerifySpatialIndex(const GameSession &Session);

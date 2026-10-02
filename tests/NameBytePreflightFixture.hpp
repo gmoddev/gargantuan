@@ -1,0 +1,199 @@
+#pragma once
+
+#include "ReliableEnvelopeContractFixture.hpp"
+#include "../src/network/GameSessionTestAccess.hpp"
+
+namespace gargantuan::test {
+
+struct NameBytePreflightFixture {
+	using Coordinator = network::ReplicationCoordinator;
+	std::shared_ptr<DataModel> World = std::make_shared<DataModel>();
+	std::vector<std::shared_ptr<Folder>> Objects;
+	std::unique_ptr<Coordinator> Optimized, Reference;
+	network::ConnectionId Connection{152, 4};
+	network::PeerRelevanceSelection Selection;
+	runtime_detail::WorkSample OptimizedWork{}, ReferenceWork{};
+	static constexpr auto Limit = network::MaximumReliableServiceGroupBytes - network::ReliableServiceEnvelopeBytes;
+
+	explicit NameBytePreflightFixture(std::size_t Count = 32) {
+		Selection.RequiredObjects = {World->GetObjectId()};
+		Selection.DesiredObjects = {World->GetObjectId()};
+		for (std::size_t Index = 0; Index < Count; ++Index) {
+			auto Object = std::make_shared<Folder>();
+			Object->SetParent(World);
+			Selection.DesiredObjects.push_back(Object->GetObjectId());
+			Objects.push_back(std::move(Object));
+		}
+		std::ranges::sort(Selection.DesiredObjects);
+		Optimized = std::make_unique<Coordinator>(World);
+		Reference = std::make_unique<Coordinator>(World);
+		network::detail::GameSessionTestAccess::SetNameBytePreflightEnabled(*Reference, false);
+		for (auto *Source : {Optimized.get(), Reference.get()}) {
+			auto Baseline = Source->AddPeerBounded(Connection, network::ReplicationEpoch(1), Selection);
+			EnvelopeRequire(Baseline.Frame && Source->CommitSchedulerAcceptance(Connection, Baseline.Frame->Sequence).Succeeded(),
+				"Name preflight A/B fixture accepts identical production baselines");
+		}
+	}
+	~NameBytePreflightFixture() { Optimized->RemovePeer(Connection); Reference->RemovePeer(Connection); World->Destroy(); }
+
+	void Names(std::size_t Rounds, std::size_t Bytes = 24 * 1024) {
+		for (std::size_t Round = 0; Round < Rounds; ++Round)
+			for (std::size_t Index = 0; Index < Objects.size(); ++Index)
+				Objects[Index]->SetName(std::string(Bytes, static_cast<char>('a' + (Round + Index) % 26)));
+	}
+	void Barrier() {
+		EnvelopeRequire(Objects.front()->ApplyAttributeMutation("PreflightBarrier", WireValue(1),
+			ScriptSecurityContext::CoreTrusted()) == MutationStatus::Success, "Name preflight fixture inserts semantic barrier");
+	}
+	network::ReplicationProduceResult Compare(std::size_t Transitions = 512, std::size_t Reads = 2048,
+		std::size_t FrameLimit = Limit, std::size_t Available = Limit, bool Accept = true) {
+		struct Observation {
+			std::uint64_t Before = 0, After = 0;
+			bool Seen = false;
+			network::detail::StructuralCausalEvidenceSink Sink{this,
+				[](void *Context, const network::detail::StructuralCausalEvent &Event) noexcept {
+					if (Event.Kind != network::detail::StructuralCausalKind::Prepared &&
+						Event.Kind != network::detail::StructuralCausalKind::NoFrame) return;
+					auto &Self = *static_cast<Observation *>(Context);
+					Self.Before = Event.CursorBefore; Self.After = Event.CursorAfter; Self.Seen = true;
+				}};
+		};
+		Observation LeftEvidence, RightEvidence;
+		auto Produce = [&](Coordinator &Source, runtime_detail::WorkSample &Sample, Observation &Evidence) {
+			runtime_detail::WorkCapture Capture(&Sample);
+			struct EvidenceScope {
+				network::detail::StructuralCausalEvidenceSink *Previous = network::detail::ActiveStructuralCausalEvidence;
+				explicit EvidenceScope(network::detail::StructuralCausalEvidenceSink &Sink) {
+					network::detail::ActiveStructuralCausalEvidence = &Sink;
+				}
+				~EvidenceScope() { network::detail::ActiveStructuralCausalEvidence = Previous; }
+			} Scope(Evidence.Sink);
+			return Source.ProduceIncremental(Connection, Transitions, FrameLimit, Reads, Available);
+		};
+		auto Left = Produce(*Optimized, OptimizedWork, LeftEvidence);
+		auto Right = Produce(*Reference, ReferenceWork, RightEvidence);
+		EnvelopeRequire(Left.Error == Right.Error && bool(Left.Frame) == bool(Right.Frame) &&
+			Left.SelectedTransitions == Right.SelectedTransitions && Left.DeferredForBytes == Right.DeferredForBytes &&
+			Left.RequiredFrameBytes == Right.RequiredFrameBytes && Left.EncodedFrame == Right.EncodedFrame &&
+			Left.DiagnosticFingerprint == Right.DiagnosticFingerprint && Left.JournalRecordsExamined == Right.JournalRecordsExamined &&
+			Left.JournalRecordsExamined <= Reads && LeftEvidence.Seen == RightEvidence.Seen &&
+			LeftEvidence.Before == RightEvidence.Before && LeftEvidence.After == RightEvidence.After,
+			"Name preflight preserves exact bytes/fingerprint, outcome, cursor evidence and charged journal examinations");
+		EnvelopeRequire(OptimizedWork.Counters[static_cast<std::size_t>(runtime_detail::WorkCounter::EncodeRetries)] ==
+			ReferenceWork.Counters[static_cast<std::size_t>(runtime_detail::WorkCounter::EncodeRetries)],
+			"Name preflight preserves geometric retry diagnostics");
+		if (Left.Frame) {
+			EnvelopeRequire(Left.Frame->Sequence == Right.Frame->Sequence &&
+				Left.EncodedFrame.size() + network::ReliableServiceEnvelopeBytes <= network::MaximumReliableServiceGroupBytes,
+				"Name preflight preserves sequence and the finite complete-group limit");
+			if (Accept) {
+				EnvelopeRequire(Optimized->CommitSchedulerAcceptance(Connection, Left.Frame->Sequence).Succeeded() &&
+					Reference->CommitSchedulerAcceptance(Connection, Right.Frame->Sequence).Succeeded(), "A/B exact frames accept");
+			} else {
+				EnvelopeRequire(Optimized->DiscardSchedulerPreparation(Connection, Left.Frame->Sequence).Succeeded() &&
+					Reference->DiscardSchedulerPreparation(Connection, Right.Frame->Sequence).Succeeded(), "A/B preparations reject without progress");
+			}
+		}
+		EnvelopeRequire(Optimized->GetJournalLag(Connection) == Reference->GetJournalLag(Connection),
+			"Name preflight preserves actual accepted cursor");
+		return Left;
+	}
+	void Drain() {
+		for (std::size_t Attempt = 0; Attempt < 4096; ++Attempt) {
+			auto Result = Compare();
+			EnvelopeRequire(Result.Frame || Result.Error == "No relevant replication changes are available" ||
+				Result.Error == "No replication changes are available", "Name preflight legal workload drains without new errors");
+			if (Optimized->GetJournalLag(Connection) == 0) return;
+		}
+		throw std::runtime_error("Name preflight legal workload failed bounded convergence");
+	}
+};
+
+inline void TestNameBytePreflight() {
+	using namespace network;
+	using runtime_detail::WorkCounter;
+	auto Counter = [](const auto &Sample, WorkCounter CounterValue) { return Sample.Counters[static_cast<std::size_t>(CounterValue)]; };
+	{
+		NameBytePreflightFixture F;
+		F.Names(16);
+		const auto Deferred = F.Compare(512, 2048, F.Limit, 0);
+		EnvelopeRequire(Deferred.DeferredForBytes && Deferred.RequiredFrameBytes != 0,
+			"Name preflight retains exact byte deferral rather than approximating admission");
+		EnvelopeRequire(Counter(F.OptimizedWork, WorkCounter::NamePreflightRetries) > 0 &&
+			Counter(F.OptimizedWork, WorkCounter::NamePreflightCacheHits) > 0 &&
+			Counter(F.OptimizedWork, WorkCounter::NamePreflightValidationBytes) == 32 * 24 * 1024,
+			"one call validates each immutable current Name once across geometric retries");
+		EnvelopeRequire(F.OptimizedWork[static_cast<std::size_t>(runtime_detail::WorkPhase::StructuralEncode)].Calls <
+			F.ReferenceWork[static_cast<std::size_t>(runtime_detail::WorkPhase::StructuralEncode)].Calls,
+			"Name byte proof eliminates actual doomed encoder calls");
+		std::cout << "[Network:NameBytePreflight] case=current"
+			<< " optimized_encode_calls=" << F.OptimizedWork[static_cast<std::size_t>(runtime_detail::WorkPhase::StructuralEncode)].Calls
+			<< " reference_encode_calls=" << F.ReferenceWork[static_cast<std::size_t>(runtime_detail::WorkPhase::StructuralEncode)].Calls
+			<< " optimized_encode_ns=" << F.OptimizedWork[static_cast<std::size_t>(runtime_detail::WorkPhase::StructuralEncode)].Nanoseconds
+			<< " reference_encode_ns=" << F.ReferenceWork[static_cast<std::size_t>(runtime_detail::WorkPhase::StructuralEncode)].Nanoseconds
+			<< " preflight_validation_bytes=" << Counter(F.OptimizedWork, WorkCounter::NamePreflightValidationBytes)
+			<< " preflight_cache_hits=" << Counter(F.OptimizedWork, WorkCounter::NamePreflightCacheHits) << '\n';
+		F.Compare(512, 2048, F.Limit, F.Limit, false);
+		F.Objects.front()->SetName(std::string(24 * 1024, 'Z'));
+		F.Drain(); // New top-level calls must not reuse stale validation/cache identity.
+	}
+	{
+		NameBytePreflightFixture F;
+		F.Names(12); F.Barrier(); F.Names(2);
+		F.Drain();
+		EnvelopeRequire(Counter(F.OptimizedWork, WorkCounter::NamePreflightRetries) > 0 &&
+			F.OptimizedWork[static_cast<std::size_t>(runtime_detail::WorkPhase::StructuralEncode)].Calls <
+			F.ReferenceWork[static_cast<std::size_t>(runtime_detail::WorkPhase::StructuralEncode)].Calls,
+			"historical Name retries optimize while barrier and current suffix preserve every accepted frame");
+		std::cout << "[Network:NameBytePreflight] case=historical"
+			<< " optimized_encode_calls=" << F.OptimizedWork[static_cast<std::size_t>(runtime_detail::WorkPhase::StructuralEncode)].Calls
+			<< " reference_encode_calls=" << F.ReferenceWork[static_cast<std::size_t>(runtime_detail::WorkPhase::StructuralEncode)].Calls
+			<< " optimized_encode_ns=" << F.OptimizedWork[static_cast<std::size_t>(runtime_detail::WorkPhase::StructuralEncode)].Nanoseconds
+			<< " reference_encode_ns=" << F.ReferenceWork[static_cast<std::size_t>(runtime_detail::WorkPhase::StructuralEncode)].Nanoseconds << '\n';
+	}
+	for (const auto &Invalid : std::array<std::string, 4>{std::string{"\xc0\xaf", 2}, std::string{"a\0b", 3},
+		std::string(MaximumProtocolStringBytes + 1, 'x'), std::string{"\xed\xa0\x80", 3}}) {
+		NameBytePreflightFixture F;
+		F.Names(1);
+		// Retained malformed history exercises error precedence independently of
+		// current-state authoring validation. A later barrier prevents coalescing it.
+		ChangeJournal::Get().Commit(F.World->GetObjectId(), F.Objects.back()->GetObjectId(),
+			PropertyUpdatedChange{"Name", WireValue(Invalid), true});
+		F.Barrier();
+		const auto Result = F.Compare();
+		EnvelopeRequire(!Result.Frame && !Result.Error.empty() &&
+			Counter(F.OptimizedWork, WorkCounter::NamePreflightRetries) == 0,
+			"invalid later Name is rejected before oversized-prefix retry can hide it");
+	}
+	{
+		NameBytePreflightFixture F;
+		F.Names(1);
+		const auto ClassId = GetActiveRuntimeSchemaRegistry().FindClassByName("Engine.Folder")->Id;
+		ChangeJournal::Get().Commit(F.World->GetObjectId(), F.Objects.back()->GetObjectId(),
+			PropertyUpdatedChange{"Name", WireValue(std::string{"custom-schema-value"}), true, ClassId, 1});
+		F.Compare();
+		EnvelopeRequire(Counter(F.OptimizedWork, WorkCounter::NamePreflightRetries) == 0,
+			"declaring-class Name is never treated as a native Name byte proof");
+	}
+	{
+		NameBytePreflightFixture F(8);
+		F.Names(1, 1);
+		const auto Small = F.Compare(512, 2048, F.Limit, 0);
+		EnvelopeRequire(Small.DeferredForBytes && Small.RequiredFrameBytes > 8, "measure exact native framing overhead");
+		const auto Overhead = Small.RequiredFrameBytes - 8;
+		for (std::size_t Index = 0; Index < 7; ++Index) F.Objects[Index]->SetName(std::string(MaximumProtocolStringBytes, 'm'));
+		const auto Tail = F.Limit - Overhead - 7 * MaximumProtocolStringBytes;
+		EnvelopeRequire(Tail > 0 && Tail <= MaximumProtocolStringBytes, "exact maximum group has legal individual Names");
+		F.Objects.back()->SetName(std::string(Tail, 't'));
+		const auto Maximum = F.Compare();
+		EnvelopeRequire(Maximum.Frame && Maximum.EncodedFrame.size() + ReliableServiceEnvelopeBytes == MaximumReliableServiceGroupBytes,
+			"preflight preserves an exact legal 512-KiB complete group");
+		F.Objects.front()->SetName(std::string(MaximumProtocolStringBytes, 'n'));
+		const auto Atomic = F.Compare(1, 3, 1024);
+		EnvelopeRequire(!Atomic.Frame && Atomic.Error == "Structural operation exceeds the negotiated reliable message limit",
+			"atomic oversize retains the existing indivisible-operation error");
+	}
+	std::cout << "[Network:NameBytePreflight] exact-AB/errors/budgets/cache/512KiB result=pass\n";
+}
+
+}

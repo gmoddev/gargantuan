@@ -1992,6 +1992,14 @@ namespace gargantuan::network {
 	ReplicationProduceResult ReplicationCoordinator::ProduceIncremental(
 		ConnectionId Connection, std::size_t MaximumTransitions, std::size_t MaximumFrameBytes,
 		std::size_t MaximumJournalRecords, std::size_t AvailableFrameBytes) {
+		NameBytePreflightCache Validation;
+		return ProduceIncrementalImpl(Connection, MaximumTransitions, MaximumFrameBytes,
+			MaximumJournalRecords, AvailableFrameBytes, Validation);
+	}
+
+	ReplicationProduceResult ReplicationCoordinator::ProduceIncrementalImpl(
+		ConnectionId Connection, std::size_t MaximumTransitions, std::size_t MaximumFrameBytes,
+		std::size_t MaximumJournalRecords, std::size_t AvailableFrameBytes, NameBytePreflightCache &Validation) {
 		runtime_detail::WorkScope Work(runtime_detail::WorkPhase::IncrementalPreparation);
 		auto Peer = Peers.find(Connection);
 		if (Peer == Peers.end()) return {{}, "Replication peer is not registered"};
@@ -2074,6 +2082,58 @@ namespace gargantuan::network {
 					.CursorBefore = CursorBefore, .CursorAfter = Peer->second.JournalCursor.NextSequence,
 					.AcceptedRevision = Peer->second.AcceptedRevision});
 			return Finish({{}, "No relevant replication changes are available"});
+		}
+		// Prove only an all-native-Name candidate that the normal encoder would
+		// reject for size. This is a lower bound, never an alternate serializer or
+		// admission estimate. Validate every selected value before skipping a retry:
+		// Frame::IsValid checks the whole candidate before the writer's size limit,
+		// so a bad later string must not disappear behind an earlier oversize prefix.
+		auto ProvenOversizedNames = [&]() {
+			if (!NameBytePreflightEnabled || FrozenQuote || !PolicyManaged ||
+				MaximumTransitions <= 1 || Records.size() <= 1) return false;
+			if (Validation.Catalog.Scope != CatalogCursor.Scope ||
+				Validation.Catalog.NextSequence != CatalogCursor.NextSequence) {
+				Validation.Validated.clear();
+				Validation.Catalog = CatalogCursor;
+			}
+			std::set<ObjectId> CurrentNames;
+			std::size_t NameBytes = 0, OperationCount = 0;
+			for (const auto *Record : Records) {
+				const auto *Name = std::get_if<PropertyUpdatedChange>(&Record->Payload);
+				const auto Accepted = Peer->second.AcceptedParents.find(Record->Object);
+				const auto Published = Peer->second.PublicationJournalEnds.find(Record->Object);
+				const auto Object = Catalog.find(Record->Object);
+				if (!Name || !Name->Replicated || Name->DeclaringClassSchemaId || Name->PropertyName != "Name" ||
+					!std::holds_alternative<std::string>(Name->Value) ||
+					!Peer->second.View.Knows(Record->Object) || !Peer->second.View.RelevantObjects.contains(Record->Object) ||
+					Accepted == Peer->second.AcceptedParents.end() || Record->Sequence < Accepted->second.NameJournalEnd ||
+					(Published != Peer->second.PublicationJournalEnds.end() && Record->Sequence < Published->second) ||
+					Object == Catalog.end() || RetiredObjects.contains(Record->Object) ||
+					Object->second->Publication.Properties.contains("Name")) return false;
+				const bool Coalesced = Record->Sequence >= NameCoalescingBegin;
+				if (Coalesced && !CurrentNames.insert(Record->Object).second) continue;
+				if (OperationCount == MaximumTransitions) break;
+				const auto &Value = Coalesced ? Object->second->Publication.Name : std::get<std::string>(Name->Value);
+				if (!Validation.Validated.contains(&Value)) {
+					if (Value.size() > MaximumProtocolStringBytes || Value.find('\0') != std::string::npos ||
+						Validation.Validated.size() == MaximumStructuralJournalRecordsPerCall) return false;
+					runtime_detail::CountWork(runtime_detail::WorkCounter::NamePreflightValidationBytes, Value.size());
+					if (!IsValidProtocolUtf8(Value)) return false;
+					Validation.Validated.insert(&Value);
+				} else runtime_detail::CountWork(runtime_detail::WorkCounter::NamePreflightCacheHits);
+				NameBytes += Value.size();
+				++OperationCount;
+			}
+			return NameBytes > MaximumFrameBytes;
+		};
+		if (ProvenOversizedNames()) {
+			// Keep the existing geometric attempt and full pinned-read charge. Only
+			// copying/encoding the already-proven doomed candidate is omitted. Outer
+			// reads retain historical string storage across this call-local cache.
+			runtime_detail::CountWork(runtime_detail::WorkCounter::EncodeRetries);
+			runtime_detail::CountWork(runtime_detail::WorkCounter::NamePreflightRetries);
+			return Finish(ProduceIncrementalImpl(Connection, MaximumTransitions / 2, MaximumFrameBytes,
+				MaximumJournalRecords - Records.size(), AvailableFrameBytes, Validation));
 		}
 		// Property updates and coalesced history only read accepted membership.
 		// Copy it lazily if a legacy journal create/destroy actually changes it;
@@ -2310,8 +2370,8 @@ namespace gargantuan::network {
 			// A one-record read cannot be made smaller; its operation is atomic.
 			if (Records.size() == 1)
 				return Finish({{}, "Structural operation exceeds the negotiated reliable message limit"});
-			return Finish(ProduceIncremental(Connection, MaximumTransitions / 2, MaximumFrameBytes,
-				MaximumJournalRecords - Records.size(), AvailableFrameBytes));
+			return Finish(ProduceIncrementalImpl(Connection, MaximumTransitions / 2, MaximumFrameBytes,
+				MaximumJournalRecords - Records.size(), AvailableFrameBytes, Validation));
 		}
 		if (Encoded->size() > AvailableFrameBytes) {
 			const auto Fingerprint = EvidenceFingerprint(*Encoded);

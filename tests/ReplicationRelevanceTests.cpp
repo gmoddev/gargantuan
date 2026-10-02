@@ -20,6 +20,7 @@
 #include "NameCoalescingFixture.hpp"
 #include "StructuralCausalEvidenceFixture.hpp"
 #include "FrozenQuoteSchemaFixture.hpp"
+#include "NameBytePreflightFixture.hpp"
 
 #include <algorithm>
 #include <array>
@@ -1795,6 +1796,7 @@ int main() {
 		test::TestNameCoalescing();
 		test::TestStructuralCausalEvidence();
 		test::TestFrozenQuoteSchemaPin();
+		test::TestNameBytePreflight();
 	} catch (const std::exception &Error) {
 		std::cerr << "[Network:EnvelopeContract] " << Error.what() << '\n';
 		++Failures;
