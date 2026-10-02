@@ -60,6 +60,20 @@ Missing due origins, overdue forecasts, unresolved due work, unaccepted
 production, or unobserved accepted states invalidate due-chain conservation.
 The binary trace does not itself record the corresponding GRPL republish; a
 later Character schedule is evidence of reentry, not direct republish proof.
+An accepted due can also be explicitly rescheduled and rediscovered within
+the same authoritative tick; the join assigns a new obligation epoch only at
+that later schedule, so a second due event without rearm remains a replay.
+The direct reliable `PublishState` path from `Step` is distinct from scheduled
+`PublishStateFrames`: Stage 12 `CharacterDirectOffered` precedes scheduler
+submission and carries the exact state/materialization identity and reliable
+bit. Stage 8 acceptance completes that offer, while Stage 13
+`CharacterDirectRejected` explicitly disposes a failed submission. A direct
+offer may satisfy only a previously confirmed due for the same relationship;
+an unconfirmed due forecast is not a fabricated due observation. The join
+requires every direct offer to be accepted or rejected exactly once and
+reports direct built-to-accepted time separately from scheduled due latency.
+Older sealed traces without Stage 12 cannot be reclassified as direct by
+inference; an unmatched Stage 8 still fails closed.
 Server and client steady clocks have unrelated origins, so cross-host
 due-to-handler latency and phase-long drift remain `NOT_MEASURED`. This
 role-local result alone is not Foundation 3L acceptance.

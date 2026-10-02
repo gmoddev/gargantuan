@@ -53,6 +53,33 @@ class FarmPublicationTraceTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             Validate(self.Path, "run-a", "SERVER")
 
+    def test_direct_offer_requires_full_generation_and_state_identity(self):
+        self.Path = Path(self.Temp.name) / "publication-service.bin"
+        Direct = RECORD.pack(12, 1, 1, 1, 8, 2, 0,
+                             90, 200, 19, 0, 0, 7, 0)
+        self.Write([Direct, self.Record(8, 100)], Role="SERVER", Slot=-1, Nonce=0)
+        self.assertEqual(Validate(self.Path, "run-a", "SERVER")["Stages"], {12: 1, 8: 1})
+        Bad = RECORD.pack(12, 1, 1, 1, 8, 2, 0,
+                          90, 200, 19, 201, 0, 7, 0)
+        self.Write([Bad, self.Record(8, 100)], Role="SERVER", Slot=-1, Nonce=0)
+        with self.assertRaises(ValueError):
+            Validate(self.Path, "run-a", "SERVER")
+
+    def test_direct_rejection_is_server_only_and_requires_matching_shape(self):
+        self.Path = Path(self.Temp.name) / "publication-service.bin"
+        Rejected = RECORD.pack(13, 1, 1, 1, 8, 2, 0,
+                               90, 200, 19, 0, 0, 7, 0)
+        self.Write([Rejected, self.Record(8, 100)], Role="SERVER", Slot=-1, Nonce=0)
+        self.assertEqual(Validate(self.Path, "run-a", "SERVER")["Stages"], {13: 1, 8: 1})
+        Bad = RECORD.pack(13, 1, 1, 1, 8, 2, 74,
+                          90, 200, 19, 0, 0, 7, 0)
+        self.Write([Bad, self.Record(8, 100)], Role="SERVER", Slot=-1, Nonce=0)
+        with self.assertRaises(ValueError):
+            Validate(self.Path, "run-a", "SERVER")
+        self.Write([Rejected, self.Record(9, 100), self.Record(10, 150)])
+        with self.assertRaises(ValueError):
+            Validate(self.Path, "run-a", "CLIENT", 0, 17)
+
     def test_rejects_overflow_decode_failure_and_truncation(self):
         for Dropped, DecodeFailures in ((1, 0), (0, 1)):
             self.Write([self.Record(9), self.Record(10, 150)], Dropped, DecodeFailures)

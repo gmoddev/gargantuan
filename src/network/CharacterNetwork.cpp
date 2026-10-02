@@ -1337,7 +1337,27 @@ namespace gargantuan::network {
 					.StateCount = 1,
 				};
 				Frame.States[0] = *State;
+				std::uint64_t DirectDue = 0;
+				if (runtime_detail::PublicationLatencySelected(Connection)) {
+					const auto Publication = Peer.Published.find(Character);
+					DirectDue = Publication != Peer.Published.end() &&
+						Publication->second.DesiredDueTick <= AuthoritativeTick &&
+						Publication->second.QueueKind != PeerState::PublicationQueueKind::Wheel &&
+						Publication->second.QueueKind != PeerState::PublicationQueueKind::None
+						? Publication->second.DesiredDueTick : 0;
+					runtime_detail::RecordPublicationLatency({.Stage = "CharacterDirectOffered",
+						.Connection = Connection, .Object = Character, .Tick = AuthoritativeTick,
+						.Sequence = State->StateSequence.Value(), .Due = DirectDue,
+						.Epoch = Frame.MaterializationEpoch.Value(), .Kind = 5,
+						.Operations = Reliable ? 1u : 0u});
+				}
 				Queued = QueueStateFrame(Connection, Frame, Visible->second, Reliable);
+				if (!Queued && runtime_detail::PublicationLatencySelected(Connection))
+					runtime_detail::RecordPublicationLatency({.Stage = "CharacterDirectRejected",
+						.Connection = Connection, .Object = Character, .Tick = AuthoritativeTick,
+						.Sequence = State->StateSequence.Value(), .Due = DirectDue,
+						.Epoch = Frame.MaterializationEpoch.Value(), .Kind = 5,
+						.Operations = Reliable ? 1u : 0u});
 				Peer.NextFrameSequence = Peer.NextFrameSequence.TryNext().value_or(CharacterStateFrameSequence{});
 				if (Queued) {
 					auto &Publication = Peer.Published[Character];

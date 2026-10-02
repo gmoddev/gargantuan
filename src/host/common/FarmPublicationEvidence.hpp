@@ -38,7 +38,7 @@ public:
 		FrameBegin = 1, CharacterNextDue, CharacterDue, StateBuilt,
 		CharacterSnapshot, CharacterProduced, CharacterUnchanged,
 		SchedulerAccepted, ClientNativeReceive, ClientHandled,
-		RecipientRetired,
+		RecipientRetired, CharacterDirectOffered, CharacterDirectRejected,
 	};
 	struct Record {
 		std::uint64_t Nanoseconds = 0;
@@ -90,6 +90,8 @@ private:
 		if (Value == "ClientNativeReceive") return Stage::ClientNativeReceive;
 		if (Value == "ClientHandled") return Stage::ClientHandled;
 		if (Value == "RecipientRetired") return Stage::RecipientRetired;
+		if (Value == "CharacterDirectOffered") return Stage::CharacterDirectOffered;
+		if (Value == "CharacterDirectRejected") return Stage::CharacterDirectRejected;
 		return std::nullopt;
 	}
 	void Add(Record Value) noexcept {
@@ -105,7 +107,9 @@ private:
 			.Nanoseconds = Value.Nanoseconds, .Tick = Value.Tick,
 			.Sequence = Value.Sequence, .DueTick = Value.Due,
 			.ControlEpoch = *Kind == Stage::StateBuilt ? Value.Epoch : 0,
-			.MaterializationEpoch = *Kind == Stage::CharacterProduced ? Value.Epoch : 0,
+			.MaterializationEpoch = *Kind == Stage::CharacterProduced ||
+				*Kind == Stage::CharacterDirectOffered || *Kind == Stage::CharacterDirectRejected
+				? Value.Epoch : 0,
 			.ConnectionSlot = Value.Connection.Slot, .ConnectionGeneration = Value.Connection.Generation,
 			.ObjectSlot = Value.Object.Slot, .ObjectGeneration = Value.Object.Generation,
 			.Kind = *Kind, .Flags = static_cast<std::uint16_t>(Value.Operations & 1u),

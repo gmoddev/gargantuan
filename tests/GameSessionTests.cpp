@@ -264,6 +264,44 @@ namespace {
 				"farm server trace seals bounded records after measured work");
 		}
 		Check(runtime_detail::ActivePublicationLatency == Previous, "farm server trace restores scoped sink");
+		const auto DirectPath = Root / "publication-service-direct.bin";
+		{
+			host::detail::FarmPublicationEvidence Evidence(true, "test-run", -1, 0, DirectPath, {}, 2);
+			Evidence.MarkFrameBegin(12);
+			runtime_detail::RecordPublicationLatency({.Stage = "CharacterDirectOffered", .Connection = {4, 7},
+				.Object = {9, 3}, .Tick = 12, .Sequence = 17, .Due = 11, .Epoch = 23,
+				.Operations = 1});
+			Evidence.Dump();
+			Check(Evidence.Valid() && Evidence.Count() == 2,
+				"farm direct Character source marker seals after FrameBegin");
+		}
+		{
+			std::ifstream File(DirectPath, std::ios::binary);
+			const std::string Bytes(std::istreambuf_iterator<char>{File}, {});
+			const auto HeaderEnd = Bytes.find('\n');
+			if (HeaderEnd != std::string::npos && Bytes.size() >= HeaderEnd + 1 + 2 * 80) {
+				const auto Offset = HeaderEnd + 1 + 80;
+				auto Read32 = [&](std::size_t Index) {
+					std::uint32_t Value = 0;
+					for (std::size_t Byte = 0; Byte < 4; ++Byte)
+						Value |= static_cast<std::uint32_t>(static_cast<unsigned char>(Bytes[Offset + Index + Byte])) << (8 * Byte);
+					return Value;
+				};
+				auto Read64 = [&](std::size_t Index) {
+					std::uint64_t Value = 0;
+					for (std::size_t Byte = 0; Byte < 8; ++Byte)
+						Value |= static_cast<std::uint64_t>(static_cast<unsigned char>(Bytes[Offset + Index + Byte])) << (8 * Byte);
+					return Value;
+				};
+				Check(static_cast<unsigned char>(Bytes[Offset]) == 12 &&
+					static_cast<unsigned char>(Bytes[Offset + 1]) == 0 &&
+					static_cast<unsigned char>(Bytes[Offset + 2]) == 1 &&
+					Read32(4) == 4 && Read32(8) == 7 && Read32(12) == 9 && Read32(16) == 3 &&
+					Read64(32) == 12 && Read64(40) == 17 && Read64(48) == 11 && Read64(56) == 0 &&
+					Read64(64) == 23 && Read64(72) == 0,
+					"farm direct marker retains source, due, reliability and generation identity");
+			} else Check(false, "farm direct marker is present in sealed binary trace");
+		}
 		{
 			std::ifstream File(ServerPath, std::ios::binary);
 			const std::string Bytes(std::istreambuf_iterator<char>{File}, {});

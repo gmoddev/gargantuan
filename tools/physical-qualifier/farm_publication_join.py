@@ -149,17 +149,18 @@ def CreateDatabase(PathValue):
             CS INTEGER, CG INTEGER, OS INTEGER, OG INTEGER,
             ForecastDue INTEGER, PendingDue INTEGER, Confirmed INTEGER NOT NULL DEFAULT 0,
             Lifetime INTEGER NOT NULL DEFAULT 0, Retired INTEGER NOT NULL DEFAULT 0,
+            DueEpoch INTEGER NOT NULL DEFAULT 0, LastDispositionDue INTEGER,
             PRIMARY KEY (CS, CG, OS, OG));
         CREATE INDEX RelationshipForecast ON Relationship (ForecastDue)
             WHERE PendingDue IS NULL AND Retired=0;
         CREATE TABLE DueEvent (
             CS INTEGER, CG INTEGER, OS INTEGER, OG INTEGER,
-            Lifetime INTEGER, Due INTEGER, Forced INTEGER,
-            PRIMARY KEY (CS, CG, OS, OG, Lifetime, Due, Forced));
+            Lifetime INTEGER, DueEpoch INTEGER, Due INTEGER, Forced INTEGER,
+            PRIMARY KEY (CS, CG, OS, OG, Lifetime, DueEpoch, Due, Forced));
         CREATE TABLE DueWork (
             CS INTEGER, CG INTEGER, OS INTEGER, OG INTEGER,
-            Lifetime INTEGER, Due INTEGER, Resolution TEXT,
-            PRIMARY KEY (CS, CG, OS, OG, Lifetime, Due));
+            Lifetime INTEGER, DueEpoch INTEGER, Due INTEGER, Resolution TEXT,
+            PRIMARY KEY (CS, CG, OS, OG, Lifetime, DueEpoch, Due));
         CREATE TABLE Built (
             OS INTEGER, OG INTEGER, Tick INTEGER, Seq INTEGER,
             Control INTEGER NOT NULL, Ns INTEGER NOT NULL,
@@ -170,9 +171,10 @@ def CreateDatabase(PathValue):
         CREATE TABLE Produced (
             CS INTEGER, CG INTEGER, OS INTEGER, OG INTEGER,
             Tick INTEGER, Seq INTEGER, Material INTEGER,
-            Control INTEGER NOT NULL, Due INTEGER NOT NULL, Forced INTEGER NOT NULL,
+            Control INTEGER NOT NULL, Due INTEGER, Forced INTEGER NOT NULL,
+            Origin INTEGER NOT NULL,
             BuiltNs INTEGER NOT NULL, ProducedNs INTEGER NOT NULL,
-            AcceptedNs INTEGER, FrameSeq INTEGER, ServiceBytes INTEGER,
+            AcceptedNs INTEGER, RejectedNs INTEGER, FrameSeq INTEGER, ServiceBytes INTEGER,
             ReceiveNs INTEGER, HandledNs INTEGER, ClientSlot INTEGER,
             PRIMARY KEY (CS, CG, OS, OG, Tick, Seq, Material));
     """)
@@ -191,7 +193,10 @@ def ReadServer(Database, ServerPath, RunId, ReadyConnections):
               "DueAccepted": 0, "Retired": 0, "RetiredPending": 0,
               "RetiredDue": 0, "ForecastRescheduled": 0,
               "UnchangedSuppressed": 0, "Produced": 0, "ForcedProduced": 0,
-              "Accepted": 0, "ForcedAccepted": 0}
+              "Accepted": 0, "ForcedAccepted": 0,
+              "DirectOffered": 0, "DirectAccepted": 0, "DirectRejected": 0,
+              "DirectReliableOffered": 0, "DirectReliableAccepted": 0,
+              "DirectSatisfiedDue": 0}
     LastFrameTick = 0
     for Value in IterRecords(ServerPath, RunId, "SERVER"):
         Stage = Value.Stage
@@ -203,14 +208,24 @@ def ReadServer(Database, ServerPath, RunId, ReadyConnections):
             LastFrameTick = Value.Tick
             Database.execute("""UPDATE Relationship SET PendingDue=ForecastDue
                 WHERE PendingDue IS NULL AND Retired=0 AND ForecastDue<=?""", (Value.Tick,))
-        elif Stage in (2, 3, 6, 7, 8, 11):
+        elif Stage in (2, 3, 6, 7, 8, 11, 12, 13):
             FullRelationship(Value)
             Require(Value.Tick <= LastFrameTick, "Character event lacks preceding FrameBegin")
             if Stage in (2, 3, 6, 7):
                 Require(Value.DueTick > 0, "Character event lacks desired due tick")
             if Stage == 2:
-                Previous = Database.execute("""SELECT PendingDue, Confirmed FROM Relationship
+                Previous = Database.execute("""SELECT PendingDue, Confirmed, LastDispositionDue
+                    FROM Relationship
                     WHERE CS=? AND CG=? AND OS=? AND OG=?""", Identity(Value)).fetchone()
+                # A completed obligation can be scheduled again within the same
+                # authoritative tick. Stage 2 is the explicit rearm boundary;
+                # repeating Stage 3 without it remains a rejected replay.
+                if Previous and Previous[2] is not None:
+                    Require(Previous[0] is None and Previous[1] == 0,
+                            "disposed due has an active pending obligation")
+                    Database.execute("""UPDATE Relationship SET DueEpoch=DueEpoch+1,
+                        LastDispositionDue=NULL WHERE CS=? AND CG=? AND OS=? AND OG=?""",
+                        Identity(Value))
                 if Previous and Previous[0] is not None and not Previous[1] and Value.DueTick > Value.Tick:
                     Counts["ForecastRescheduled"] += 1
                     Database.execute("""UPDATE Relationship SET PendingDue=NULL
@@ -226,28 +241,30 @@ def ReadServer(Database, ServerPath, RunId, ReadyConnections):
                                              (Value.DueTick,)).fetchone()
                 Require(DueOrigin is not None and DueOrigin[0] <= Value.Nanoseconds,
                         "confirmed due lacks authoritative FrameBegin origin")
-                Previous = Database.execute("""SELECT PendingDue, Confirmed, Lifetime FROM Relationship
+                Previous = Database.execute("""SELECT PendingDue, Confirmed, Lifetime, DueEpoch
+                    FROM Relationship
                     WHERE CS=? AND CG=? AND OS=? AND OG=?""", Identity(Value)).fetchone()
                 Lifetime = Previous[2] if Previous else 0
+                DueEpoch = Previous[3] if Previous else 0
                 Seen = Database.execute("""SELECT 1 FROM DueEvent WHERE CS=? AND CG=? AND
-                    OS=? AND OG=? AND Lifetime=? AND Due=? AND Forced=?""",
-                    (*Identity(Value), Lifetime, Value.DueTick, Value.Flags)).fetchone()
+                    OS=? AND OG=? AND Lifetime=? AND DueEpoch=? AND Due=? AND Forced=?""",
+                    (*Identity(Value), Lifetime, DueEpoch, Value.DueTick, Value.Flags)).fetchone()
                 if Seen:
                     Require(Previous is not None and Previous[1] == 1 and
                             Previous[0] == Value.DueTick,
                             "confirmed due obligation reused after completion")
                     Counts["DueRediscoveries"] += 1
                 else:
-                    InsertUnique(Database, "INSERT INTO DueEvent VALUES (?,?,?,?,?,?,?)",
-                                 (*Identity(Value), Lifetime, Value.DueTick, Value.Flags),
+                    InsertUnique(Database, "INSERT INTO DueEvent VALUES (?,?,?,?,?,?,?,?)",
+                                 (*Identity(Value), Lifetime, DueEpoch, Value.DueTick, Value.Flags),
                                  "duplicate due obligation identity")
                     Counts["DueClasses"] += 1
                 Work = Database.execute("""SELECT Resolution FROM DueWork WHERE CS=? AND CG=?
-                    AND OS=? AND OG=? AND Lifetime=? AND Due=?""",
-                    (*Identity(Value), Lifetime, Value.DueTick)).fetchone()
+                    AND OS=? AND OG=? AND Lifetime=? AND DueEpoch=? AND Due=?""",
+                    (*Identity(Value), Lifetime, DueEpoch, Value.DueTick)).fetchone()
                 if Work is None:
-                    InsertUnique(Database, "INSERT INTO DueWork VALUES (?,?,?,?,?,?,NULL)",
-                                 (*Identity(Value), Lifetime, Value.DueTick),
+                    InsertUnique(Database, "INSERT INTO DueWork VALUES (?,?,?,?,?,?,?,NULL)",
+                                 (*Identity(Value), Lifetime, DueEpoch, Value.DueTick),
                                  "duplicate due work identity")
                     Counts["Due"] += 1
                 else:
@@ -260,21 +277,24 @@ def ReadServer(Database, ServerPath, RunId, ReadyConnections):
                 Database.execute("""INSERT INTO Relationship
                     (CS,CG,OS,OG,ForecastDue,PendingDue,Confirmed)
                     VALUES (?,?,?,?,?,?,1) ON CONFLICT (CS,CG,OS,OG)
-                    DO UPDATE SET PendingDue=excluded.PendingDue, Confirmed=1, Retired=0""",
+                    DO UPDATE SET PendingDue=excluded.PendingDue, Confirmed=1,
+                    LastDispositionDue=NULL, Retired=0""",
                     (*Identity(Value), Value.DueTick, Value.DueTick))
             elif Stage == 7:
-                Previous = Database.execute("""SELECT PendingDue, Confirmed, Lifetime FROM Relationship
+                Previous = Database.execute("""SELECT PendingDue, Confirmed, Lifetime, DueEpoch
+                    FROM Relationship
                     WHERE CS=? AND CG=? AND OS=? AND OG=?""", Identity(Value)).fetchone()
                 Require(Previous is not None and Previous[0] == Value.DueTick and Previous[1] == 1,
                         "unchanged suppression lacks matching due work")
                 Changed = Database.execute("""UPDATE DueWork SET Resolution='UNCHANGED'
-                    WHERE CS=? AND CG=? AND OS=? AND OG=? AND Lifetime=? AND Due=?
+                    WHERE CS=? AND CG=? AND OS=? AND OG=? AND Lifetime=? AND DueEpoch=? AND Due=?
                     AND Resolution IS NULL""",
-                    (*Identity(Value), Previous[2], Value.DueTick)).rowcount
+                    (*Identity(Value), Previous[2], Previous[3], Value.DueTick)).rowcount
                 Require(Changed == 1, "unchanged suppression duplicated due disposition")
                 Database.execute("""UPDATE Relationship SET ForecastDue=NULL,
-                    PendingDue=NULL, Confirmed=0
-                    WHERE CS=? AND CG=? AND OS=? AND OG=?""", Identity(Value))
+                    PendingDue=NULL, Confirmed=0, LastDispositionDue=?
+                    WHERE CS=? AND CG=? AND OS=? AND OG=?""",
+                    (Value.DueTick, *Identity(Value)))
                 Counts["UnchangedSuppressed"] += 1
             elif Stage == 6:
                 Require(Value.Sequence > 0 and Value.MaterializationEpoch > 0 and
@@ -287,49 +307,103 @@ def ReadServer(Database, ServerPath, RunId, ReadyConnections):
                         Built[1] <= Built[2] <= Value.Nanoseconds,
                         "produced state lacks matching built/snapshot identity")
                 InsertUnique(Database, """INSERT INTO Produced
-                    (CS,CG,OS,OG,Tick,Seq,Material,Control,Due,Forced,BuiltNs,ProducedNs)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (CS,CG,OS,OG,Tick,Seq,Material,Control,Due,Forced,Origin,BuiltNs,ProducedNs)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (*StateIdentity(Value), Built[0], Value.DueTick, Value.Flags,
-                     Built[1], Value.Nanoseconds), "duplicate produced state")
+                     0, Built[1], Value.Nanoseconds), "duplicate produced state")
                 Counts["Produced"] += 1
                 Counts["ForcedProduced"] += Value.Flags
+            elif Stage == 12:
+                Built = Database.execute("""SELECT Control, Ns FROM Built
+                    WHERE OS=? AND OG=? AND Tick=? AND Seq=?""",
+                    (Value.ObjectSlot, Value.ObjectGeneration, Value.Tick,
+                     Value.Sequence)).fetchone()
+                Require(Built is not None and Built[0] > 0 and
+                        Built[1] <= Value.Nanoseconds,
+                        "direct Character offer lacks matching built state")
+                InsertUnique(Database, """INSERT INTO Produced
+                    (CS,CG,OS,OG,Tick,Seq,Material,Control,Due,Forced,Origin,BuiltNs,ProducedNs)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (*StateIdentity(Value), Built[0],
+                     Value.DueTick if Value.DueTick else None, Value.Flags,
+                     2 if Value.Flags else 1, Built[1], Value.Nanoseconds),
+                    "duplicate direct Character offer")
+                Counts["DirectOffered"] += 1
+                Counts["DirectReliableOffered"] += Value.Flags
+            elif Stage == 13:
+                Changed = Database.execute("""UPDATE Produced SET RejectedNs=?
+                    WHERE CS=? AND CG=? AND OS=? AND OG=? AND Tick=? AND Seq=? AND Material=?
+                    AND Origin=? AND Due IS ? AND AcceptedNs IS NULL AND RejectedNs IS NULL
+                    AND ProducedNs<=?""",
+                    (Value.Nanoseconds, *StateIdentity(Value), 2 if Value.Flags else 1,
+                     Value.DueTick if Value.DueTick else None, Value.Nanoseconds)).rowcount
+                Require(Changed == 1, "direct Character rejection lacks unique preceding offer")
+                Counts["DirectRejected"] += 1
             elif Stage == 8:
                 Require((Value.ConnectionSlot, Value.ConnectionGeneration) in ReadyConnections,
                         "accepted recipient lacks server ready identity")
                 Require(all((Value.Sequence, Value.ControlEpoch, Value.MaterializationEpoch,
                              Value.FrameSequence, Value.ServiceBytes)),
                         "accepted packet lacks full state/frame byte identity")
-                Produced = Database.execute("""SELECT Control, Due, Forced, ProducedNs, AcceptedNs
+                Produced = Database.execute("""SELECT Control, Due, Forced, ProducedNs,
+                    AcceptedNs, Origin, RejectedNs
                     FROM Produced WHERE CS=? AND CG=? AND OS=? AND OG=? AND Tick=?
                     AND Seq=? AND Material=?""", StateIdentity(Value)).fetchone()
                 Require(Produced is not None and Produced[0] == Value.ControlEpoch and
-                        Produced[4] is None and Value.Nanoseconds >= Produced[3],
+                        Produced[4] is None and Produced[6] is None and
+                        Value.Nanoseconds >= Produced[3],
                         "accepted packet is unmatched, duplicated, or precedes production")
-                Pending = Database.execute("""SELECT PendingDue, Confirmed, Lifetime FROM Relationship
+                Pending = Database.execute("""SELECT PendingDue, Confirmed, Lifetime, DueEpoch
+                    FROM Relationship
                     WHERE CS=? AND CG=? AND OS=? AND OG=?""", Identity(Value)).fetchone()
-                Require(Pending is not None and Pending[0] == Produced[1] and
-                        Pending[1] == 1 and Value.Tick >= Produced[1],
-                        "accepted state lacks its full recipient due obligation")
-                Origin = Database.execute("SELECT Ns FROM Frame WHERE Tick=?", (Produced[1],)).fetchone()
-                Require(Origin is not None and Origin[0] <= Value.Nanoseconds,
-                        "accepted state lacks authoritative due-tick FrameBegin")
-                Changed = Database.execute("""UPDATE DueWork SET Resolution='ACCEPTED'
-                    WHERE CS=? AND CG=? AND OS=? AND OG=? AND Lifetime=? AND Due=?
-                    AND Resolution IS NULL""",
-                    (*Identity(Value), Pending[2], Produced[1])).rowcount
-                Require(Changed == 1, "accepted state duplicates a due disposition")
+                if Produced[5] == 0:
+                    Require(Pending is not None and Pending[0] == Produced[1] and
+                            Pending[1] == 1 and Value.Tick >= Produced[1],
+                            "accepted scheduled state lacks its recipient due obligation")
+                    Origin = Database.execute("SELECT Ns FROM Frame WHERE Tick=?",
+                                              (Produced[1],)).fetchone()
+                    Require(Origin is not None and Origin[0] <= Value.Nanoseconds,
+                            "accepted scheduled state lacks due-tick FrameBegin")
+                    Changed = Database.execute("""UPDATE DueWork SET Resolution='ACCEPTED'
+                        WHERE CS=? AND CG=? AND OS=? AND OG=? AND Lifetime=? AND DueEpoch=? AND Due=?
+                        AND Resolution IS NULL""",
+                        (*Identity(Value), Pending[2], Pending[3], Produced[1])).rowcount
+                    Require(Changed == 1, "accepted state duplicates a due disposition")
+                    Database.execute("""UPDATE Relationship SET ForecastDue=NULL,
+                        PendingDue=NULL, Confirmed=0, LastDispositionDue=?
+                        WHERE CS=? AND CG=? AND OS=? AND OG=?""",
+                        (Produced[1], *Identity(Value)))
+                    Counts["DueAccepted"] += 1
+                    Counts["ForcedAccepted"] += Produced[2]
+                else:
+                    Require(Produced[5] in (1, 2), "direct Character origin is invalid")
+                    Require(not (Pending is not None and Pending[1] == 1 and Produced[1] is None),
+                            "direct Character acceptance hid confirmed due work")
+                    if Produced[1] is not None:
+                        Require(Pending is not None and Pending[0] == Produced[1] and
+                                Pending[1] == 1 and Value.Tick >= Produced[1],
+                                "direct Character offer cannot discharge unrelated due work")
+                        Changed = Database.execute("""UPDATE DueWork SET Resolution='DIRECT'
+                            WHERE CS=? AND CG=? AND OS=? AND OG=? AND Lifetime=? AND DueEpoch=? AND Due=?
+                            AND Resolution IS NULL""",
+                            (*Identity(Value), Pending[2], Pending[3], Produced[1])).rowcount
+                        Require(Changed == 1, "direct Character acceptance duplicates due disposition")
+                        Database.execute("""UPDATE Relationship SET PendingDue=NULL,
+                            Confirmed=0, LastDispositionDue=?
+                            WHERE CS=? AND CG=? AND OS=? AND OG=?""",
+                            (Produced[1], *Identity(Value)))
+                        Counts["DirectSatisfiedDue"] += 1
+                    Counts["DirectAccepted"] += 1
+                    Counts["DirectReliableAccepted"] += Produced[5] == 2
+                    Counts["ForcedAccepted"] += Produced[5] == 2
                 Database.execute("""UPDATE Produced SET AcceptedNs=?, FrameSeq=?, ServiceBytes=?
                     WHERE CS=? AND CG=? AND OS=? AND OG=? AND Tick=? AND Seq=? AND Material=?""",
                     (Value.Nanoseconds, Value.FrameSequence, Value.ServiceBytes,
                      *StateIdentity(Value)))
-                Database.execute("""UPDATE Relationship SET ForecastDue=NULL,
-                    PendingDue=NULL, Confirmed=0
-                    WHERE CS=? AND CG=? AND OS=? AND OG=?""", Identity(Value))
                 Counts["Accepted"] += 1
-                Counts["DueAccepted"] += 1
-                Counts["ForcedAccepted"] += Produced[2]
             elif Stage == 11:
-                Previous = Database.execute("""SELECT PendingDue, Confirmed, Lifetime, Retired
+                Previous = Database.execute("""SELECT PendingDue, Confirmed, Lifetime,
+                    Retired, DueEpoch
                     FROM Relationship WHERE CS=? AND CG=? AND OS=? AND OG=?""",
                     Identity(Value)).fetchone()
                 Require(Previous is None or Previous[3] == 0,
@@ -341,14 +415,15 @@ def ReadServer(Database, ServerPath, RunId, ReadyConnections):
                     Counts["RetiredPending"] += 1
                     if Previous[1]:
                         Changed = Database.execute("""UPDATE DueWork SET Resolution='RETIRED'
-                            WHERE CS=? AND CG=? AND OS=? AND OG=? AND Lifetime=? AND Due=?
+                            WHERE CS=? AND CG=? AND OS=? AND OG=? AND Lifetime=? AND DueEpoch=? AND Due=?
                             AND Resolution IS NULL""",
-                            (*Identity(Value), Previous[2], Previous[0])).rowcount
+                            (*Identity(Value), Previous[2], Previous[4], Previous[0])).rowcount
                         Require(Changed == 1, "retirement lacks its confirmed due work")
                         Counts["RetiredDue"] += 1
                 if Previous:
                     Database.execute("""UPDATE Relationship SET ForecastDue=NULL,
-                        PendingDue=NULL, Confirmed=0, Lifetime=Lifetime+1, Retired=1
+                        PendingDue=NULL, Confirmed=0, Lifetime=Lifetime+1,
+                        DueEpoch=0, LastDispositionDue=NULL, Retired=1
                         WHERE CS=? AND CG=? AND OS=? AND OG=?""", Identity(Value))
                 else:
                     Database.execute("""INSERT INTO Relationship
@@ -379,17 +454,21 @@ def ReadServer(Database, ServerPath, RunId, ReadyConnections):
         "SELECT count(*) FROM Relationship WHERE Retired=0 AND ForecastDue<=?",
         (LastFrameTick,)).fetchone()[0]
     Counts["UnacceptedProduced"] = Database.execute(
-        "SELECT count(*) FROM Produced WHERE AcceptedNs IS NULL").fetchone()[0]
+        "SELECT count(*) FROM Produced WHERE AcceptedNs IS NULL AND RejectedNs IS NULL").fetchone()[0]
     Counts["UnresolvedDueWork"] = Database.execute(
         "SELECT count(*) FROM DueWork WHERE Resolution IS NULL").fetchone()[0]
     Require(Counts["UnresolvedDue"] == 0 and Counts["UnresolvedDueWork"] == 0 and
             Counts["OverdueForecasts"] == 0 and
             Counts["UnacceptedProduced"] == 0 and
-            Counts["Due"] == Counts["DueAccepted"] + Counts["UnchangedSuppressed"] +
-            Counts["RetiredDue"],
+            Counts["Due"] == Counts["DueAccepted"] + Counts["DirectSatisfiedDue"] +
+            Counts["UnchangedSuppressed"] + Counts["RetiredDue"],
             "server due/production/acceptance conservation incomplete")
-    Require(Counts["Accepted"] > 0 and Counts["ForcedAccepted"] == Counts["ForcedProduced"],
+    Require(Counts["Accepted"] > 0 and
+            Counts["ForcedAccepted"] == Counts["ForcedProduced"] + Counts["DirectReliableAccepted"],
             "accepted Character state or forced-state conservation missing")
+    Require(Counts["DirectAccepted"] + Counts["DirectRejected"] == Counts["DirectOffered"] and
+            Counts["Accepted"] == Counts["DueAccepted"] + Counts["DirectAccepted"],
+            "direct Character offer/acceptance conservation incomplete")
     return Counts
 
 
@@ -494,15 +573,18 @@ def Join(ServerPath, ServerReadyPath, ClientSources, RunId, ScratchParent,
                         Server["ForcedAccepted"] == Clients["ForcedNativeReceive"] ==
                         Clients["ForcedClientHandled"],
                         "server/client Character conservation differs")
-                Ordinary = Duration(Database, "P.Forced=0 AND P.HandledNs IS NOT NULL",
+                Ordinary = Duration(Database, "P.Origin=0 AND P.Forced=0 AND P.HandledNs IS NOT NULL",
                                     "P.AcceptedNs-F.Ns", "JOIN Frame F ON F.Tick=P.Due")
-                Forced = Duration(Database, "P.Forced=1 AND P.HandledNs IS NOT NULL",
+                Forced = Duration(Database, "P.Origin=0 AND P.Forced=1 AND P.HandledNs IS NOT NULL",
+                                  "P.AcceptedNs-P.BuiltNs")
+                Direct = Duration(Database, "P.Origin IN (1,2) AND P.HandledNs IS NOT NULL",
                                   "P.AcceptedNs-P.BuiltNs")
                 Handled = Duration(Database, "P.HandledNs IS NOT NULL",
                                    "P.HandledNs-P.ReceiveNs")
-                Require(Ordinary["Count"] + Forced["Count"] == Server["Accepted"] and
+                Require(Ordinary["Count"] + Forced["Count"] + Direct["Count"] ==
+                        Server["Accepted"] and
                         all(Value["MinimumNs"] is None or Value["MinimumNs"] >= 0
-                            for Value in (Ordinary, Forced, Handled)),
+                            for Value in (Ordinary, Forced, Direct, Handled)),
                         "role-local publication timing is incomplete or negative")
                 Pages = Database.execute("PRAGMA page_count").fetchone()[0]
                 Require(Pages <= MAX_DATABASE_PAGES, "offline join scratch bound exceeded")
@@ -515,6 +597,7 @@ def Join(ServerPath, ServerReadyPath, ClientSources, RunId, ScratchParent,
                         "DueCompleteness": "OBSERVED",
                         "ServerDueToAccepted": Ordinary,
                         "ServerForcedBuiltToAccepted": Forced,
+                        "ServerDirectBuiltToAccepted": Direct,
                         "ClientReceiveToHandled": Handled,
                         "Retirement": "OBSERVED" if Server["Retired"] else "NONE_OBSERVED",
                         "CrossHostDueToHandled": "NOT_MEASURED",
