@@ -1,5 +1,6 @@
 #include "gargantuan/network/GameNetworkingSocketsTransport.hpp"
 #include "GnsServiceDiagnostics.hpp"
+#include "FarmCaptureEndpointAccess.hpp"
 #include "ReliableServiceFeedback.hpp"
 #include "../../cmake/gns/ReliableServiceFeedback.hpp"
 #include "../runtime/PublicationLatencyDiagnostics.hpp"
@@ -960,6 +961,29 @@ namespace gargantuan::network {
 				Result.EstimatedRoundTripTime = std::chrono::milliseconds(Status.m_nPing);
 		}
 		return Result.IsValid() ? std::optional<NetworkStatistics>(Result) : std::nullopt;
+	}
+
+	std::optional<TransportEndpoint> detail::FarmCaptureEndpointAccess::GetDirectRemoteEndpoint(
+		const GameNetworkingSocketsTransport &Transport, ConnectionId Connection
+	) {
+		auto &Global = GlobalState();
+		std::lock_guard Lock(Global.Mutex);
+		if (!Transport.State->Started || !Global.Interface ||
+			Transport.State->Role != TransportRole::Server || !Connection.IsValid()) return std::nullopt;
+		const auto Iterator = Transport.State->Connections.find(Connection);
+		if (Iterator == Transport.State->Connections.end() ||
+			Iterator->second.State != ConnectionState::Connected) return std::nullopt;
+		SteamNetConnectionInfo_t Information{};
+		if (!SteamAPI_ISteamNetworkingSockets_GetConnectionInfo(
+				Global.Interface, Iterator->second.Handle, &Information) ||
+			Information.m_eState != k_ESteamNetworkingConnectionState_Connected ||
+			!Information.m_addrRemote.IsIPv4() || Information.m_addrRemote.GetIPv4() == 0 ||
+			Information.m_addrRemote.m_port == 0) return std::nullopt;
+		std::array<char, SteamNetworkingIPAddr::k_cchMaxString> Address{};
+		SteamAPI_SteamNetworkingIPAddr_ToString(
+			&Information.m_addrRemote, Address.data(), Address.size(), false);
+		TransportEndpoint Result{Address.data(), Information.m_addrRemote.m_port};
+		return Result.IsValid() ? std::optional<TransportEndpoint>(std::move(Result)) : std::nullopt;
 	}
 
 	bool GameNetworkingSocketsTransport::EnableReliableServiceFeedback() {

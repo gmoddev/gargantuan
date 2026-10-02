@@ -32,6 +32,7 @@
 
 #if defined(GARGANTUAN_WITH_GNS)
 #include "gargantuan/network/GameNetworkingSocketsTransport.hpp"
+#include "network/FarmCaptureEndpointAccess.hpp"
 #include "host/common/TransportServiceSmoke.hpp"
 #include "host/common/FarmClockCalibration.hpp"
 #endif
@@ -378,6 +379,9 @@ namespace gargantuan::host {
 		std::unique_ptr<HeadlessRenderer> Renderer;
 		std::unique_ptr<Engine> Runtime;
 		std::unique_ptr<network::GameSession> Session;
+#if defined(GARGANTUAN_WITH_GNS)
+		std::shared_ptr<network::GameNetworkingSocketsTransport> FarmTransport;
+#endif
 		try {
 			const auto HostStartupStarted = std::chrono::steady_clock::now();
 			const auto HostStartupUnixMilliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -528,7 +532,9 @@ namespace gargantuan::host {
 					TransportConfiguration.MaximumConnections = HostConfiguration.ReliableService->MaximumConnections;
 					TransportConfiguration.SendRate = static_cast<std::uint32_t>(HostConfiguration.ReliableService->BackendSendRate());
 				}
-				std::shared_ptr<network::IGameTransport> Transport = std::make_shared<network::GameNetworkingSocketsTransport>(TransportConfiguration);
+				auto NativeTransport = std::make_shared<network::GameNetworkingSocketsTransport>(TransportConfiguration);
+				if (FarmMode) FarmTransport = NativeTransport;
+				std::shared_ptr<network::IGameTransport> Transport = NativeTransport;
 				if (SessionSmoke) Transport = std::make_shared<SessionSmokeTransport>(std::move(Transport));
 				Session = std::make_unique<network::GameSession>(
 					std::move(Transport),
@@ -650,13 +656,26 @@ namespace gargantuan::host {
 							if (!Peer.Ready) continue;
 							const auto [Iterator, Inserted] = FarmIdentities.emplace(Peer.Nonce, Peer.Connection);
 							if (!Inserted && Iterator->second != Peer.Connection) FarmIdentityConflict = true;
-							if (Inserted)
+							if (Inserted) {
+#if defined(GARGANTUAN_WITH_GNS)
+								const auto Remote = FarmTransport
+									? network::detail::FarmCaptureEndpointAccess::GetDirectRemoteEndpoint(
+										*FarmTransport, Peer.Connection) : std::nullopt;
+								if (!Remote || (BindEndpoint->Host == "10.253.3.2" && Remote->Host != "10.253.3.1") ||
+									(network::IsLoopbackTransportEndpoint(*BindEndpoint) && Remote->Host != "127.0.0.1"))
+									throw std::runtime_error("farm ready peer lacks a matching direct UDP endpoint");
+#endif
 								std::cout << "[Qualification:Server] event=ready run=" << FarmRunId
 									<< " nonce=" << Peer.Nonce << " connection_slot=" << Peer.Connection.Slot
 									<< " connection_generation=" << Peer.Connection.Generation
 									<< " session_epoch=" << Peer.SessionEpoch << " player_id=" << Peer.PlayerId
 									<< " monotonic_us=" << std::chrono::duration_cast<std::chrono::microseconds>(
-										std::chrono::steady_clock::now().time_since_epoch()).count() << '\n';
+										std::chrono::steady_clock::now().time_since_epoch()).count();
+#if defined(GARGANTUAN_WITH_GNS)
+								std::cout << " client_port=" << Remote->Port;
+#endif
+								std::cout << '\n';
+							}
 						}
 						if (ScaleQualification) {
 							ScaleQualification->Step(Runtime->GetSimulationTick());
