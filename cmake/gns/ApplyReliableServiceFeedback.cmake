@@ -192,15 +192,25 @@ GargantuanWriteFeedbackSource()
 GargantuanReadFeedbackSource(steamnetworkingsockets_connections.h 9ece0f7051f1b67e44c75c27c10867a863b56e2a0d0ac95849aa116b5274a9ef)
 GargantuanReplaceFeedback("\tint m_cbMaxEncryptedPayload;" "\tint m_cbMaxEncryptedPayload;\n\tbool m_bGargantuanPromptAckReserved = false;\n\tbool m_bGargantuanPromptAck = false;")
 GargantuanReplaceFeedback("\t/// Called when we close the connection locally" [=[
-	bool GargantuanArmPromptFailure() {
+	virtual bool GargantuanIsDirectUDP() const { return false; }
+	bool GargantuanArmPromptFailure(bool AtSocket) {
 		if (!m_senderState.GargantuanPromptFinalGrantAck || !m_senderState.GargantuanAckTrace ||
 			m_senderState.GargantuanFeedback.ActiveAttributedRetirementToken) return false;
-		m_senderState.GargantuanAckTrace->FailNextPromptPacket = true;
+		if (AtSocket) m_senderState.GargantuanAckTrace->FailNextPromptSocketSend = true;
+		else m_senderState.GargantuanAckTrace->FailNextPromptPacket = true;
+		return true;
+	}
+	bool GargantuanFailSocketSend(bool Prompt) {
+		auto *Trace = m_senderState.GargantuanAckTrace.get();
+		if (!Prompt || !Trace || !Trace->FailNextPromptSocketSend) return false;
+		Trace->FailNextPromptSocketSend = false;
+		++Trace->InjectedSocketSendFailures;
+		Trace->FirstSentBytesAtInjectedFailure = m_senderState.GargantuanFeedback.StructuralActiveGrantFirstSentBytes;
 		return true;
 	}
 	bool GargantuanCanReservePromptAck() const {
 		const auto &Grant = m_senderState.GargantuanFeedback;
-		return m_senderState.GargantuanPromptFinalGrantAck && !Grant.Invalid && !Grant.Purged &&
+		return GargantuanIsDirectUDP() && m_senderState.GargantuanPromptFinalGrantAck && !Grant.Invalid && !Grant.Purged &&
 			Grant.ActiveAttributedRetirementToken && Grant.StructuralActiveGrantBytes &&
 			m_senderState.GargantuanPromptWire.Token == Grant.ActiveAttributedRetirementToken &&
 			m_senderState.GargantuanPromptWire.Bytes == Grant.StructuralActiveGrantBytes &&
@@ -209,6 +219,7 @@ GargantuanReplaceFeedback("\t/// Called when we close the connection locally" [=
 				: m_senderState.GargantuanFeedback.StructuralActiveGrantBytes >= gargantuan::network::FiniteGrantServiceCurve::QuantumBytes);
 	}
 	void GargantuanRecordIncomingWire(int Bytes) {
+		if (m_senderState.GargantuanAckTrace) m_senderState.GargantuanAckTrace->Incoming(Bytes);
 		if (m_senderState.GargantuanPromptFinalGrantAck && m_senderState.GargantuanFeedback.ActiveAttributedRetirementToken && Bytes > 0)
 			m_senderState.GargantuanPromptWire.Charge(Bytes, 48);
 	}
@@ -217,6 +228,7 @@ GargantuanReplaceFeedback("\t/// Called when we close the connection locally" [=
 			Trace->MaximumPromptReserveBytes = std::max(Trace->MaximumPromptReserveBytes, uint64_t(Bytes));
 	}
 	bool GargantuanConfigurePromptGrantAck(bool Enabled, uint64_t Reserve, uint64_t Pool, uint64_t TailBudget, uint64_t Peers) {
+		if (Enabled && !GargantuanIsDirectUDP()) return false;
 		if (m_senderState.GargantuanFeedback.ActiveAttributedRetirementToken) return false;
 		GargantuanPromptAckWireBudget Budget;
 		Budget.StructuralPool = Pool;
@@ -252,11 +264,13 @@ GargantuanReplaceFeedback("\t/// Called when we close the connection locally" [=
 GargantuanWriteFeedbackSource()
 
 GargantuanReadFeedbackSource(steamnetworkingsockets_udp.h ea4f517b674eb15f367c8b443a90738bebdcfb3f892b2a59ba26829eabf4ccea)
+GargantuanReplaceFeedback("\tCSteamNetworkConnectionUDP( CSteamNetworkingSockets *pSteamNetworkingSocketsInterface, ConnectionScopeLock &scopeLock );" "\tbool GargantuanIsDirectUDP() const override { return true; }\n\tCSteamNetworkConnectionUDP( CSteamNetworkingSockets *pSteamNetworkingSocketsInterface, ConnectionScopeLock &scopeLock );")
 GargantuanReplaceFeedback("\tvoid Trim( int cbHdrOutSpaceRemaining );" "\tvoid GargantuanReservePromptAck(size_t HeaderBytes, CSteamNetworkConnectionBase &Connection);\n\tvoid Trim( int cbHdrOutSpaceRemaining );")
 GargantuanWriteFeedbackSource()
 
 GargantuanReadFeedbackSource(steamnetworkingsockets_udp.cpp a60888c40ea5a814485e56c1c528774d05df408130137fd909f66fc25d0aee2e)
-GargantuanReplaceFeedback("\t// This is a valid packet.  P2P connections might want to make a note of this" "\tm_connection.GargantuanRecordIncomingWire(cbPkt); // Before an ACK can retire its attributed token.\n\t// This is a valid packet.  P2P connections might want to make a note of this")
+GargantuanReplaceFeedback("\tconst uint8 *pIn = pPkt + sizeof(*hdr);" "\t// Charge once after header/connection/state association, before decrypt can\n\t// reject a duplicate, old sequence, or crypto-invalid consumed datagram.\n\tm_connection.GargantuanRecordIncomingWire(cbPkt);\n\tconst uint8 *pIn = pPkt + sizeof(*hdr);")
+GargantuanReplaceFeedback("\tif ( SendPacketGather( 2, gather, cbSend ) )" "\t// Distinct opt-in socket failure: preserve packet-number and TrackSentStats\n\t// mutation, but never transmit a packet and then pretend it failed.\n\tif ( !m_connection.GargantuanFailSocketSend(ctx.m_bGargantuanPromptAck) && SendPacketGather( 2, gather, cbSend ) )")
 GargantuanReplaceFeedback("\t// Save time when we sent the last sequenced packet." [=[
 	if (ctx.m_bGargantuanPromptAck)
 	{
@@ -289,11 +303,11 @@ GargantuanWriteFeedbackSource()
 
 GargantuanReadFeedbackSource(csteamnetworkingsockets.cpp 2b260c05cc8c262e785387ea3d08eee74cc03b6eed00493e961a82c05dec5451)
 GargantuanReplaceFeedback("static CSteamNetworkListenSocketBase *GetListenSocketByHandle" [=[
-bool GargantuanArmPromptFailure(ISteamNetworkingSockets *Interface, uint32 Handle) {
+bool GargantuanArmPromptFailure(ISteamNetworkingSockets *Interface, uint32 Handle, bool AtSocket) {
 	ConnectionScopeLock Lock;
 	auto *Connection = GetConnectionByHandleForAPI(Handle, Lock, "GargantuanPromptFailure");
 	if (!Connection || Connection->m_pSteamNetworkingSocketsInterface != Interface) return false;
-	return Connection->GargantuanArmPromptFailure();
+	return Connection->GargantuanArmPromptFailure(AtSocket);
 }
 
 bool GargantuanConfigurePromptGrantAck(ISteamNetworkingSockets *Interface, uint32 Handle, bool Enabled,

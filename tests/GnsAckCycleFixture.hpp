@@ -18,6 +18,8 @@ inline void Dump(const char *Side, std::uint64_t Token, const GargantuanAckDiagn
 		<< " last_packet=" << Trace.LastReliablePacketNumber << " overflow=" << Trace.Overflow
 		<< " repeated_ack_serializations=" << Trace.RepeatedAckSerializations
 		<< " ack_packets=" << Trace.AckPacketsSent << " ack_packet_bytes=" << Trace.AckPacketBytes
+		<< " associated_recv_packets=" << Trace.AssociatedReceivedPackets
+		<< " associated_recv_udp_bytes=" << Trace.AssociatedReceivedUdpBytes
 		<< " latest_ack_packet_us=" << Trace.LastAckPacketSentAt
 		<< " maximum_prompt_reserve_bytes=" << Trace.MaximumPromptReserveBytes << '\n';
 	std::cout << "[Network:AckCycle:Wire] side=" << Side << " token=" << Token
@@ -37,14 +39,18 @@ inline void Dump(const char *Side, std::uint64_t Token, const GargantuanAckDiagn
 // Production adapter + real pinned GNS, two successive obligations on the same
 // connection. Submission is explicitly gated by actual native ACK retirement.
 // This isolates ACK/polling; it does not claim to run GameSession credit/fairness.
-enum class Fault { None, NativeSendFailure, ReceiveLoss };
+enum class Fault { None, NativeSendFailure, ReceiveLoss, SocketSendFailure, ReceiveDuplicate };
 inline void Observe(std::size_t Bytes, std::chrono::microseconds PollPeriod, bool Prompt = false,
 	std::uint64_t TailBudget = 0, Fault Failure = Fault::None) {
 	PairFixture Pair = StartPair({.MaximumConnections = 1, .SendRate = 18 * 1024 * 1024}, TestLimits(), true);
 	struct Cleanup { PairFixture &Value; ~Cleanup() { StopPair(Value); } } Guard{Pair};
 	struct LossCleanup {
 		bool Enabled = false;
-		~LossCleanup() { if (Enabled) SteamNetworkingUtils()->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketLoss_Recv, 0); }
+		bool Duplicate = false;
+		~LossCleanup() {
+			if (Enabled) SteamNetworkingUtils()->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketLoss_Recv, 0);
+			if (Duplicate) SteamNetworkingUtils()->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketDup_Recv, 0);
+		}
 	} Loss;
 	if (!Pair.ServerConnection.IsValid()) throw std::runtime_error("ACK cycle connection failed");
 	if (Prompt && !detail::GnsAckDiagnosticsAccess::PromptFinalGrantAck(*Pair.Server, Pair.ServerConnection, true, TailBudget))
@@ -58,13 +64,18 @@ inline void Observe(std::size_t Bytes, std::chrono::microseconds PollPeriod, boo
 		if (!detail::GnsAckDiagnosticsAccess::Read(*Pair.Server, Pair.ServerConnection, Sender, true) ||
 			!detail::GnsAckDiagnosticsAccess::Read(*Pair.Client, Pair.ClientConnection, Receiver, true))
 			throw std::runtime_error("ACK trace activation failed");
-		if (Failure == Fault::NativeSendFailure &&
-			!detail::GnsAckDiagnosticsAccess::FailNextFinalPacket(*Pair.Server, Pair.ServerConnection))
+		if ((Failure == Fault::NativeSendFailure || Failure == Fault::SocketSendFailure) &&
+			!detail::GnsAckDiagnosticsAccess::FailNextFinalPacket(*Pair.Server, Pair.ServerConnection, Failure == Fault::SocketSendFailure))
 			throw std::runtime_error("native final-packet failure could not be armed");
 		auto Intent = MakeNetworkMessageIntent(Pair.ServerConnection, DeliveryMode::ReliableOrdered,
 			TrafficClass::StructuralReplication, ReliableReplicationOrder{ReliableReplicationSequence(Token)},
 			std::vector<std::byte>(Bytes - ReliableServiceEnvelopeBytes, std::byte{0x37}), Pair.Limits);
 		const auto Activated = Now();
+		if (Failure == Fault::ReceiveDuplicate) {
+			if (!SteamNetworkingUtils()->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketDup_Recv, 100))
+				throw std::runtime_error("native receive-duplicate injection failed");
+			Loss.Duplicate = true;
+		}
 		if (Failure == Fault::ReceiveLoss) {
 			if (!SteamNetworkingUtils()->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketLoss_Recv, 100))
 				throw std::runtime_error("native receive-loss injection failed");
@@ -102,6 +113,18 @@ inline void Observe(std::size_t Bytes, std::chrono::microseconds PollPeriod, boo
 					if (const auto *Message = std::get_if<ReceivedMessageEvent>(&Event)) ReceivedBytes += Message->Payload.size();
 				break;
 			}
+		}
+		if (Failure == Fault::ReceiveDuplicate && ObservedRetirement) {
+			// Observe delayed duplicate delivery within the original two-second
+			// bound; the native duplicate filter must not create new service.
+			const auto DuplicateDeadline = std::min(Deadline, std::chrono::steady_clock::now() + 250ms);
+			while (std::chrono::steady_clock::now() < DuplicateDeadline) {
+				std::this_thread::sleep_for(1ms);
+				(void)Drain(*Pair.Server);
+				for (const auto &Event : Drain(*Pair.Client))
+					if (const auto *Message = std::get_if<ReceivedMessageEvent>(&Event)) ReceivedBytes += Message->Payload.size();
+			}
+			Final = detail::ReliableServiceFeedbackAccess::Observe(*Pair.Server, Pair.ServerConnection);
 		}
 		if (!ObservedRetirement || !Final || Final->StructuralPayloadBytesFirstSent != Accepted ||
 			Final->StructuralPayloadBytesAcked != Accepted || Final->LastAttributedRetiredPayloadBytes != Bytes ||
@@ -157,6 +180,14 @@ inline void Observe(std::size_t Bytes, std::chrono::microseconds PollPeriod, boo
 		if (Failure == Fault::NativeSendFailure && (Sender.InjectedNativeSendFailures != 1 || FailedRequests != 1 ||
 			!Sender.FirstSentBytesAtInjectedFailure || Sender.FirstSentBytesAtInjectedFailure >= Bytes || Requests != 1))
 			throw std::runtime_error("native failed final-send retry lost or duplicated its finite obligation");
+		if (Failure == Fault::SocketSendFailure && (Sender.InjectedSocketSendFailures != 1 || FailedRequests != 1 ||
+			Sender.InjectedNativeSendFailures != 0 || !Sender.FirstSentBytesAtInjectedFailure ||
+			Sender.FirstSentBytesAtInjectedFailure >= Bytes || Requests != 1))
+			throw std::runtime_error("post-bookkeeping socket failure lost or duplicated its finite obligation");
+		if (Failure == Fault::ReceiveDuplicate &&
+			(Receiver.AssociatedReceivedPackets <= Final->NativePacketsSent - Before->NativePacketsSent ||
+			Receiver.AssociatedReceivedUdpBytes <= Final->NativePacketBytesSent - Before->NativePacketBytesSent))
+			throw std::runtime_error("duplicate datagrams did not increase independently observed associated wire");
 		if (Failure == Fault::ReceiveLoss && Final->ReliableStreamBytesRetransmitted <= Before->ReliableStreamBytesRetransmitted)
 			throw std::runtime_error("receive-loss case did not exercise retransmission");
 		if (Prompt && TailBudget == 1348 && ((Bytes >= 393652 && Requests != 1) || (Bytes <= 1258 && Requests != 0)))
@@ -169,6 +200,7 @@ inline void Observe(std::size_t Bytes, std::chrono::microseconds PollPeriod, boo
 			<< " prompt=" << Prompt << " requests=" << Requests << " tail_budget=" << TailBudget
 			<< " fault=" << static_cast<int>(Failure) << " failed_requests=" << FailedRequests
 			<< " first_bytes_at_failed_send=" << Sender.FirstSentBytesAtInjectedFailure
+			<< " socket_send_failures=" << Sender.InjectedSocketSendFailures
 			<< " poll_us=" << PollPeriod.count() << " activated_us=" << Activated
 			<< " first_us=" << Final->StructuralLastCompletedGrantFirstSendAtMicroseconds
 			<< " complete_us=" << Final->StructuralLastCompletedGrantCompletedAtMicroseconds
@@ -229,6 +261,15 @@ inline bool Run(bool Prompt = false, std::uint64_t TailBudget = 0) {
 		Budget.Charge(100000, 48); // Whole shared/retransmitted packets remain chargeable.
 		if (Budget.CanRequest(1348)) throw std::runtime_error("ACK wire retry/shared traffic was ignored");
 		GargantuanAckDiagnostics Repeated;
+		Repeated.Incoming(128);
+		Repeated.Incoming(128);
+		if (Repeated.AssociatedReceivedPackets != 2 || Repeated.AssociatedReceivedUdpBytes != 256)
+			throw std::runtime_error("associated duplicate datagram accounting was collapsed");
+		GargantuanAckDiagnostics Overflowing;
+		Overflowing.AssociatedReceivedUdpBytes = UINT64_MAX;
+		Overflowing.Incoming(1);
+		if (!Overflowing.Overflow || Overflowing.AssociatedReceivedPackets != 0)
+			throw std::runtime_error("associated datagram byte overflow accepted");
 		for (int Index = 0; Index < 1000; ++Index) {
 			Repeated.Record(GargantuanAckDiagnostics::AckSerialized, Index, 1, 0);
 			Repeated.Record(GargantuanAckDiagnostics::AckPacketSent, Index, 1, 100);
@@ -247,7 +288,9 @@ inline bool Run(bool Prompt = false, std::uint64_t TailBudget = 0) {
 			Observe(Bytes, 1000us, Prompt, TailBudget);
 		if (Prompt && TailBudget == 1348) {
 			Observe(393652, 1000us, true, TailBudget, Fault::NativeSendFailure);
+			Observe(393652, 1000us, true, TailBudget, Fault::SocketSendFailure);
 			Observe(393652, 1000us, true, TailBudget, Fault::ReceiveLoss);
+			Observe(393652, 1000us, true, TailBudget, Fault::ReceiveDuplicate);
 		}
 		return true;
 	} catch (const std::exception &Error) {
