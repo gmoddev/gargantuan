@@ -906,6 +906,10 @@ if(BUILD_TESTING)
 		GARGANTUAN_FIRST_COMPLETE_GAME_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/samples/FirstCompleteGame"
 	)
 	add_test(NAME GameSessionTests COMMAND gargantuan_game_session_tests)
+	add_executable(gargantuan_frozen_recovery_quote_tests "tests/FrozenRecoveryQuoteTests.cpp")
+	target_link_libraries(gargantuan_frozen_recovery_quote_tests PRIVATE gargantuan_core)
+	add_test(NAME FrozenRecoveryQuoteTests COMMAND gargantuan_frozen_recovery_quote_tests)
+	set_tests_properties(FrozenRecoveryQuoteTests PROPERTIES TIMEOUT 60 LABELS "network;qualification;lifecycle")
 	add_executable(gargantuan_game_session_benchmark "tests/GameSessionBenchmark.cpp")
 	target_link_libraries(gargantuan_game_session_benchmark PRIVATE gargantuan_core)
 	target_compile_definitions(gargantuan_game_session_benchmark PRIVATE
