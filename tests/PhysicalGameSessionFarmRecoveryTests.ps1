@@ -31,8 +31,10 @@ foreach ($Snippet in @(
 	'const auto Retention = ObserveRetention(Tick);',
 	'const auto ObservedAt = std::chrono::steady_clock::now();',
 	'ObservedAt - OverloadCeased).count();',
-	'if (!RecoverySnapshotWritten && ObservedAt - OverloadCeased >= StrictSnapshotTarget)',
-	'ObservedAt - OverloadCeased >= std::chrono::microseconds(QuoteBoundMicroseconds)')) {
+	'const bool SnapshotDue = !RecoverySnapshotWritten &&',
+	'const bool DeadlineDue = (RecoverySnapshotWritten || SnapshotDue) && QuoteSealed &&',
+	'if (SnapshotDue)',
+	'if (DeadlineDue)')) {
 	$Found = $RecoverySource.IndexOf($Snippet, $Position, [StringComparison]::Ordinal)
 	if ($Found -lt 0) { throw "recovery observation can predate quote replay or metrics: $Snippet" }
 	$Position = $Found + $Snippet.Length

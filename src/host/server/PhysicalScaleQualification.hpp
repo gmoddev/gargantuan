@@ -926,7 +926,15 @@ namespace gargantuan::host {
 						(void)Limit;
 						QuoteLagRecords += CessationQuote->Replication->GetJournalLag(Connection);
 					}
-				std::cerr << "[Qualification:Recovery] event=sample run=" << RunId
+				// The binary tick record retains every server step. Keep textual
+				// recovery samples bounded when a large exact quote spans many ticks,
+				// while always recording the two acceptance observation points.
+				const bool SnapshotDue = !RecoverySnapshotWritten &&
+					ObservedAt - OverloadCeased >= StrictSnapshotTarget;
+				const bool DeadlineDue = (RecoverySnapshotWritten || SnapshotDue) && QuoteSealed &&
+					ObservedAt - OverloadCeased >= std::chrono::microseconds(QuoteBoundMicroseconds);
+				if (Tick % 16 == 0 || SnapshotDue || DeadlineDue)
+					std::cerr << "[Qualification:Recovery] event=sample run=" << RunId
 					<< " case=" << CaseName << " elapsed_us=" << Elapsed
 					<< " poll_us=" << CurrentServerTickTiming.PollMicroseconds
 					<< " engine_us=" << CurrentServerTickTiming.EngineMicroseconds
@@ -978,7 +986,7 @@ namespace gargantuan::host {
 					<< " journal_lag_high=" << Metrics.StructuralMaximumJournalLagRecords
 					<< " journal_failures=" << Metrics.StructuralJournalLagFailures
 					<< " tick=" << Tick << '\n';
-				if (!RecoverySnapshotWritten && ObservedAt - OverloadCeased >= StrictSnapshotTarget) {
+				if (SnapshotDue) {
 					RecoverySnapshotWritten = true;
 					for (const auto &Reader : network::detail::GameSessionTestAccess::GetJournalRequirements(Session))
 						std::cerr << "[Qualification:Recovery] event=reader run=" << RunId
@@ -993,8 +1001,7 @@ namespace gargantuan::host {
 						<< " cessation_tail=" << CessationJournalTail
 						<< " retained_work_bytes=NOT_MEASURED tick=" << Tick << '\n';
 				}
-				if (RecoverySnapshotWritten && QuoteSealed &&
-					ObservedAt - OverloadCeased >= std::chrono::microseconds(QuoteBoundMicroseconds)) {
+				if (DeadlineDue) {
 					if (detail::HasPhysicalScaleTerminalConvergence(Metrics))
 						for (const auto &Reader : network::detail::GameSessionTestAccess::GetJournalRequirements(Session))
 							std::cerr << "[Qualification:Recovery] event=terminal_reader run=" << RunId
