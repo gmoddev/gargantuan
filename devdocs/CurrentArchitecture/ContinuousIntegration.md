@@ -157,6 +157,18 @@ session's lifetime remote-service-gap high-water. All RPC/Event/action latency
 gates remain unchanged: a host timing hypothesis does not turn a failed run into
 a PASS or permit its samples to be discarded.
 
+The bounded `[Qualification:WorkloadCpu]` rows supplement those maxima with the
+case, step, phase, wall duration, current-thread CPU delta, and whole-process CPU
+delta from the **same span that established that phase's maximum wall time**.
+Windows counters use `GetThreadTimes` and `GetProcessTimes`; unsupported or failed
+reads are `NOT_MEASURED`, not zero. The step-interval row also retains the prior
+step's requested and actual sleep durations. These fixed-size records are printed
+after the case, without logging on the measured per-step path. CPU counters are
+quantized diagnostics and never replace the elapsed-time latency samples. Small
+thread CPU with large wall time establishes time not spent on that thread's CPU;
+it does not by itself distinguish blocking from preemption. Process CPU can
+exceed wall time when several process threads execute concurrently.
+
 CTest prints failing output and writes JUnit results. On any failed job, the
 workflow uploads the configure log, CTest log, and JUnit file when available.
 No dependency or compiler cache is required for correctness; only the

@@ -795,6 +795,9 @@ if(BUILD_TESTING)
 	)
 	add_dependencies(gargantuan_packaging_benchmark gargantuan_runtime_distribution)
 	add_executable(gargantuan_qualified_scale_package "tests/QualifiedScalePackage.cpp")
+	add_executable(gargantuan_workload_timing_evidence_tests "tests/WorkloadTimingEvidenceTests.cpp")
+	target_compile_features(gargantuan_workload_timing_evidence_tests PRIVATE cxx_std_20)
+	add_test(NAME gargantuan_workload_timing_evidence COMMAND gargantuan_workload_timing_evidence_tests)
 	target_link_libraries(gargantuan_qualified_scale_package PRIVATE gargantuan_core nlohmann_json)
 	target_compile_definitions(gargantuan_qualified_scale_package PRIVATE
 		GARGANTUAN_FIRST_COMPLETE_GAME_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/samples/FirstCompleteGame"
