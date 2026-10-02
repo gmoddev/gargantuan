@@ -2200,6 +2200,29 @@ end)
 			Check(Server.GetMetrics().MaterializedCharacters == Before &&
 				Client.GetMetrics().ClientCharacterStaleStatesDropped == StaleBefore,
 				"Leave cancellation preserves the shared GCHR epoch and ongoing owner state service");
+			for (int Index = 0; Index < 8; ++Index) {
+				Check(Server.SetTrustedReplicationFocus(Connection, Far), "oscillating far focus is accepted");
+				Step();
+				Check(Server.SetTrustedReplicationFocus(Connection, Near), "oscillating near focus is accepted");
+				Step();
+			}
+			for (int Index = 0; Index < 100; ++Index) Step();
+			const auto OscillationStale = Client.GetMetrics().ClientCharacterStaleStatesDropped;
+			for (int Index = 0; Index < 30; ++Index) Step();
+			Check(Server.GetMetrics().MaterializedCharacters == Before &&
+				Client.GetMetrics().ClientCharacterStaleStatesDropped == OscillationStale,
+				"repeated unaccepted relevance reversals cannot accumulate materialization epochs");
+			Check(Server.SetTrustedReplicationFocus(Connection, Far), "lasting far focus is accepted");
+			for (int Index = 0; Index < 500; ++Index) Step();
+			Check(Server.GetMetrics().MaterializedCharacters == Before - 1,
+				"an actually accepted structural Leave still retires the NPC publication lifetime");
+			Check(Server.SetTrustedReplicationFocus(Connection, Near), "lasting near focus is accepted");
+			for (int Index = 0; Index < 500; ++Index) Step();
+			const auto ReentryStale = Client.GetMetrics().ClientCharacterStaleStatesDropped;
+			for (int Index = 0; Index < 30; ++Index) Step();
+			Check(Server.GetMetrics().MaterializedCharacters == Before &&
+				Client.GetMetrics().ClientCharacterStaleStatesDropped == ReentryStale,
+				"accepted Leave and fresh Enter maintain matching GCHR materialization epochs");
 		} else Check(false, "speculative relevance fixture materializes both owner and NPC");
 		Client.Stop();
 		Server.Stop();
