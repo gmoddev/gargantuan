@@ -161,15 +161,13 @@ jobs:
         run: |
           ctest --test-dir build-ci -C Release --parallel 2 --timeout 300 --output-on-failure --no-tests=error --output-junit build-ci/ctest-results.xml
 
-      - name: Verify pinned two-host farm lifecycle
+      - name: Verify pinned Farm32 control and evidence tooling
         shell: pwsh
         run: |
           python tools/physical-qualifier/bootstrap.py
           if ($LASTEXITCODE -ne 0) { throw 'Pinned Agent Coordinator bootstrap failed' }
-          python -m unittest discover -s tools/physical-qualifier/tests -p test_farm_lifecycle.py -v
-          if ($LASTEXITCODE -ne 0) { throw 'Two-host farm lifecycle tests failed' }
-          python -m unittest discover -s tools/physical-qualifier/tests -p test_farm_ticket_staging.py -v
-          if ($LASTEXITCODE -ne 0) { throw 'Farm32 ticket staging tests failed' }
+          python -m unittest discover -s tools/physical-qualifier/tests -p 'test_farm_*.py' -v
+          if ($LASTEXITCODE -ne 0) { throw 'Farm32 control and evidence tests failed' }
 
       - name: Run qualified reliable workload timing in Release
         shell: cmd
