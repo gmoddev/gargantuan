@@ -286,7 +286,9 @@ namespace {
 				"farm server trace seals bounded records after measured work");
 		}
 		Check(runtime_detail::ActivePublicationLatency == Previous, "farm server trace restores scoped sink");
-		const auto DirectPath = Root / "publication-service-direct.bin";
+		const auto DirectDirectory = Root / "direct";
+		std::filesystem::create_directory(DirectDirectory);
+		const auto DirectPath = DirectDirectory / "publication-service.bin";
 		{
 			host::detail::FarmPublicationEvidence Evidence(true, "test-run", -1, 0, DirectPath, {}, 2);
 			Evidence.MarkFrameBegin(12);
@@ -297,6 +299,12 @@ namespace {
 			Check(Evidence.Valid() && Evidence.Count() == 2,
 				"farm direct Character source marker seals after FrameBegin");
 		}
+		bool InvalidNameRejected = false;
+		try {
+			host::detail::FarmPublicationEvidence Evidence(true, "test-run", -1, 0,
+				Root / "publication-service-direct.bin", {}, 2);
+		} catch (const std::invalid_argument &) { InvalidNameRejected = true; }
+		Check(InvalidNameRejected, "farm publication evidence requires its canonical file name");
 		{
 			std::ifstream File(DirectPath, std::ios::binary);
 			const std::string Bytes(std::istreambuf_iterator<char>{File}, {});
@@ -381,8 +389,10 @@ namespace {
 		}
 		Check(runtime_detail::ActivePublicationLatency == Previous, "failed farm trace restores scoped sink");
 		std::filesystem::remove(ServerPath);
+		std::filesystem::remove(DirectPath);
 		std::filesystem::remove(ClientPath);
 		std::filesystem::remove(OverflowPath);
+		std::filesystem::remove(DirectDirectory);
 		std::filesystem::remove(Root);
 	}
 
