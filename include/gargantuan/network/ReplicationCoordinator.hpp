@@ -12,6 +12,7 @@
 #include <memory>
 #include <optional>
 #include <set>
+#include <span>
 #include <string>
 
 namespace gargantuan {
@@ -387,6 +388,10 @@ namespace gargantuan::network {
 		void RefreshPendingMetrics(ReplicationMetrics &Snapshot) const;
 		void CompactPendingQueues(PeerState &Peer);
 		void ApplyPreparedCommit(PeerState &Peer, PreparedStructuralCommit Commit);
+		void RecordCausalPreparation(const PeerState &Peer, const PreparedStructuralCommit &Commit,
+			std::span<const std::byte> Encoded) const;
+		void RecordCausalPendingReplacement(const PeerState &Peer,
+			const std::map<ObjectId, PendingTransition> &Replacement) const;
 		AcceptedParentMap CaptureAcceptedParents(const PeerState &Peer, const ReplicationFrame &Frame, std::uint64_t JournalEnd);
 		static void ApplyAcceptedParents(PeerState &Peer, AcceptedParentMap Parents);
 		PreparedPublishReplication MakePeerPublish(

@@ -1,6 +1,7 @@
 #include "gargantuan/network/ReplicationCoordinator.hpp"
 #include "PlanningLookup.hpp"
 #include "ReliableByteAdmissionDiagnostics.hpp"
+#include "GameSessionTestAccess.hpp"
 #include "../runtime/RuntimeWorkDiagnostics.hpp"
 
 #include "gargantuan/InstanceProperty.hpp"
@@ -28,7 +29,7 @@ namespace gargantuan::network {
 		constexpr std::size_t MaximumDependencyClosureObjects = MaximumPeerDesiredObjects;
 		constexpr std::size_t MaximumCatalogRefreshBatches = 16;
 		std::array<std::uint64_t, 2> EvidenceFingerprint(const std::vector<std::byte> &Encoded) noexcept {
-			return detail::ActiveAdmissionEvidence ? detail::ExactCandidateFingerprint(Encoded) :
+			return (detail::ActiveAdmissionEvidence || detail::ActiveStructuralCausalEvidence) ? detail::ExactCandidateFingerprint(Encoded) :
 				std::array<std::uint64_t, 2>{};
 		}
 
@@ -914,6 +915,50 @@ namespace gargantuan::network {
 		}
 	}
 
+	void ReplicationCoordinator::RecordCausalPreparation(const PeerState &Peer,
+		const PreparedStructuralCommit &Commit, std::span<const std::byte> Encoded) const {
+		if (FrozenQuote || !detail::ActiveStructuralCausalEvidence) return;
+		std::vector<detail::StructuralPendingIdentity> Resolved;
+		Resolved.reserve(Commit.Entering.size() + Commit.Leaving.size());
+		auto Add = [&](ObjectId Object) {
+			const auto Found = Peer.PendingTransitions.find(Object);
+			if (Found != Peer.PendingTransitions.end())
+				Resolved.push_back({Found->second.Token, Object, Found->second.Kind == PendingTransitionKind::Enter});
+		};
+		for (const auto Object : Commit.Entering) Add(Object);
+		for (const auto Object : Commit.Leaving) Add(Object);
+		detail::RecordStructuralCausal({.Kind = detail::StructuralCausalKind::Prepared,
+			.Connection = Peer.View.Connection, .SourceScope = SourceRootId,
+			.Sequence = Commit.Sequence.Value(), .CompleteBytes = Encoded.size() + ReliableServiceEnvelopeBytes,
+			.CursorBefore = Peer.JournalCursor.NextSequence,
+			.CursorAfter = Commit.JournalCursor ? Commit.JournalCursor->NextSequence : Peer.JournalCursor.NextSequence,
+			.AcceptedRevision = Peer.AcceptedRevision, .Fingerprint = detail::ExactCandidateFingerprint(Encoded),
+			.ResolvedPending = Resolved, .Entering = Commit.Entering, .Leaving = Commit.Leaving});
+	}
+
+	void ReplicationCoordinator::RecordCausalPendingReplacement(const PeerState &Peer,
+		const std::map<ObjectId, PendingTransition> &Replacement) const {
+		if (FrozenQuote || !detail::ActiveStructuralCausalEvidence) return;
+		for (const auto &[Object, Old] : Peer.PendingTransitions) {
+			const auto Found = Replacement.find(Object);
+			if (Found != Replacement.end() && Found->second.Token == Old.Token) continue;
+			const bool Replaced = Found != Replacement.end() && Found->second.Kind == Old.Kind;
+			detail::RecordStructuralCausal({
+				.Kind = Replaced ? detail::StructuralCausalKind::PendingReplaced : detail::StructuralCausalKind::PendingCancelled,
+				.Reason = Replaced ? detail::StructuralCausalReason::Replanned : detail::StructuralCausalReason::NoLongerRequired,
+				.Connection = Peer.View.Connection, .SourceScope = SourceRootId,
+				.Pending = {Old.Token, Object, Old.Kind == PendingTransitionKind::Enter},
+				.ReplacementToken = Replaced ? Found->second.Token : 0});
+		}
+		for (const auto &[Object, New] : Replacement) {
+			const auto Found = Peer.PendingTransitions.find(Object);
+			if (Found != Peer.PendingTransitions.end() && Found->second.Kind == New.Kind) continue;
+			detail::RecordStructuralCausal({.Kind = detail::StructuralCausalKind::PendingAdded,
+				.Connection = Peer.View.Connection, .SourceScope = SourceRootId,
+				.Pending = {New.Token, Object, New.Kind == PendingTransitionKind::Enter}});
+		}
+	}
+
 	void ReplicationCoordinator::RefreshPendingMetrics(ReplicationMetrics &Snapshot) const {
 		runtime_detail::WorkScope Work(runtime_detail::WorkPhase::GraphMetrics);
 		Snapshot.MaterializationBacklog = 0;
@@ -964,6 +1009,12 @@ namespace gargantuan::network {
 		PeerState &Peer, const PeerRelevanceSelection &Selection, std::uint64_t SimulationTick, std::string &Error
 	) {
 		runtime_detail::WorkScope Work(runtime_detail::WorkPhase::DesiredState);
+		auto RecordPending = [&](detail::StructuralCausalKind Kind, ObjectId Object,
+			const PendingTransition &Old, std::uint64_t Replacement, detail::StructuralCausalReason Reason) {
+			if (!FrozenQuote) detail::RecordStructuralCausal({.Kind = Kind, .Reason = Reason,
+				.Connection = Peer.View.Connection, .SourceScope = SourceRootId,
+				.Pending = {Old.Token, Object, Old.Kind == PendingTransitionKind::Enter}, .ReplacementToken = Replacement});
+		};
 		if (Peer.PreparedCommit) {
 			Error = "A structural frame is awaiting scheduler acceptance";
 			return false;
@@ -980,6 +1031,8 @@ namespace gargantuan::network {
 										(RetiredObjects.contains(Iterator->first) ||
 										 !Catalog.contains(Iterator->first));
 				if (StaleEnter) {
+					RecordPending(detail::StructuralCausalKind::PendingCancelled, Iterator->first, Iterator->second, 0,
+						detail::StructuralCausalReason::ObjectRetired);
 					Iterator = Peer.PendingTransitions.erase(Iterator);
 					--PendingTransitionCount;
 					SaturatingAdd(Metrics.StructuralTransitionsCancelled, 1);
@@ -991,9 +1044,12 @@ namespace gargantuan::network {
 						Error = "Structural pending transition token is exhausted";
 						return false;
 					}
+					const auto Old = Iterator->second;
 					Iterator->second.Critical = true;
 					Iterator->second.Token = Peer.NextPendingToken++;
 					Peer.CriticalQueue.push_back({Iterator->first, Iterator->second.Token});
+					RecordPending(detail::StructuralCausalKind::PendingReplaced, Iterator->first, Old, Iterator->second.Token,
+						detail::StructuralCausalReason::Replanned);
 					SaturatingAdd(Metrics.StructuralTransitionsReplanned, 1);
 				}
 				++Iterator;
@@ -1034,6 +1090,8 @@ namespace gargantuan::network {
 				++Iterator;
 				continue;
 			}
+			RecordPending(detail::StructuralCausalKind::PendingCancelled, Iterator->first, Iterator->second, 0,
+				detail::StructuralCausalReason::NoLongerRequired);
 			Iterator = Peer.PendingTransitions.erase(Iterator);
 			--PendingTransitionCount;
 			runtime_detail::CountWork(runtime_detail::WorkCounter::CandidateCancelled);
@@ -1050,11 +1108,21 @@ namespace gargantuan::network {
 					Error = "Structural pending transition token is exhausted";
 					return false;
 				}
+				const auto Old = Existing->second;
 				Existing->second.Kind = Kind;
 				Existing->second.Critical = Critical;
 				Existing->second.Token = Peer.NextPendingToken++;
 				auto &Queue = Critical ? Peer.CriticalQueue : Peer.OrdinaryQueue;
 				Queue.push_back({Object, Existing->second.Token});
+				if (Old.Kind == Kind)
+					RecordPending(detail::StructuralCausalKind::PendingReplaced, Object, Old, Existing->second.Token,
+						detail::StructuralCausalReason::Replanned);
+				else {
+					RecordPending(detail::StructuralCausalKind::PendingCancelled, Object, Old, 0,
+						detail::StructuralCausalReason::NoLongerRequired);
+					RecordPending(detail::StructuralCausalKind::PendingAdded, Object, Existing->second, 0,
+						detail::StructuralCausalReason::None);
+				}
 				SaturatingAdd(Metrics.StructuralTransitionsReplanned, 1);
 				runtime_detail::CountWork(runtime_detail::WorkCounter::CandidateReplanned);
 				return true;
@@ -1079,6 +1147,7 @@ namespace gargantuan::network {
 			++PendingTransitionCount;
 			auto &Queue = Critical ? Peer.CriticalQueue : Peer.OrdinaryQueue;
 			Queue.push_back({Object, Transition.Token});
+			RecordPending(detail::StructuralCausalKind::PendingAdded, Object, Transition, 0, detail::StructuralCausalReason::None);
 			return true;
 		};
 
@@ -1706,6 +1775,7 @@ namespace gargantuan::network {
 			.TransitionCount = SelectedWorkCount,
 			.Parents = CaptureAcceptedParents(CurrentPeer, Frame, CatalogCursor.NextSequence),
 		};
+		RecordCausalPreparation(CurrentPeer, Commit, *Encoded);
 		if (CurrentPeer.ExplicitSchedulerCommit)
 			CurrentPeer.PreparedCommit = std::move(Commit);
 		else
@@ -1925,6 +1995,7 @@ namespace gargantuan::network {
 		SaturatingAdd(CandidateMetrics.StructuralTransitionsOffered, Records.size());
 		if (Records.empty()) return {{}, "No replication changes are available"};
 		if (MaximumTransitions == 0) {
+			const auto CursorBefore = Peer->second.JournalCursor.NextSequence;
 			// A saturated structural selector must not pin a prefix that cannot
 			// produce any operation. This narrow path skips non-replicated property
 			// records only; it stops before every lifecycle/replicated mutation.
@@ -1937,6 +2008,12 @@ namespace gargantuan::network {
 			}
 			CandidateMetrics.ReplicationBacklog = Peer->second.JournalCursor.NextSequence < CatalogCursor.NextSequence ? 1 : 0;
 			Metrics = CandidateMetrics;
+			if (!FrozenQuote && Peer->second.JournalCursor.NextSequence != CursorBefore)
+				detail::RecordStructuralCausal({.Kind = detail::StructuralCausalKind::NoFrame,
+					.Reason = detail::StructuralCausalReason::FilteredOrAlreadyCovered,
+					.Connection = Connection, .SourceScope = SourceRootId,
+					.CursorBefore = CursorBefore, .CursorAfter = Peer->second.JournalCursor.NextSequence,
+					.AcceptedRevision = Peer->second.AcceptedRevision});
 			return Finish({{}, "No relevant replication changes are available"});
 		}
 		// Property updates and coalesced history only read accepted membership.
@@ -2148,10 +2225,17 @@ namespace gargantuan::network {
 			}
 		}
 		if (Frame.Operations.empty()) {
+			const auto CursorBefore = Peer->second.JournalCursor.NextSequence;
 			if (CandidateView) Peer->second.View = std::move(*CandidateView);
 			Peer->second.JournalCursor = ProcessedCursor;
 			CandidateMetrics.ReplicationBacklog = ProcessedCursor.NextSequence < CatalogCursor.NextSequence ? 1 : 0;
 			Metrics = CandidateMetrics;
+			if (!FrozenQuote && ProcessedCursor.NextSequence != CursorBefore)
+				detail::RecordStructuralCausal({.Kind = detail::StructuralCausalKind::NoFrame,
+					.Reason = detail::StructuralCausalReason::FilteredOrAlreadyCovered,
+					.Connection = Connection, .SourceScope = SourceRootId,
+					.CursorBefore = CursorBefore, .CursorAfter = ProcessedCursor.NextSequence,
+					.AcceptedRevision = Peer->second.AcceptedRevision});
 			return Finish({{}, "No relevant replication changes are available"});
 		}
 		if (Frame.Operations.size() > MaximumReplicationOperationsPerFrame)
@@ -2217,6 +2301,7 @@ namespace gargantuan::network {
 				.TransitionCount = OperationCount,
 				.Parents = std::move(AcceptedParents),
 			};
+			RecordCausalPreparation(Peer->second, *Peer->second.PreparedCommit, *Encoded);
 		} else {
 			if (CandidateView) Peer->second.View = std::move(*CandidateView);
 			Peer->second.NextSequence = CandidateNextSequence;
@@ -2320,6 +2405,8 @@ namespace gargantuan::network {
 	bool ReplicationCoordinator::RemovePeer(ConnectionId Connection) {
 		auto Peer = Peers.find(Connection);
 		if (Peer == Peers.end()) return false;
+		if (!FrozenQuote) detail::RecordStructuralCausal({.Kind = detail::StructuralCausalKind::PeerRemoved,
+			.Reason = detail::StructuralCausalReason::GenerationRemoved, .Connection = Connection, .SourceScope = SourceRootId});
 		PendingTransitionCount -= std::min(PendingTransitionCount, Peer->second.PendingTransitions.size());
 		if (Peer->second.Planning) {
 			auto Plan = Peer->second.Planning;
@@ -2396,6 +2483,8 @@ namespace gargantuan::network {
 		// Preparation owns only proposed acceptance metadata. Known, journal and
 		// sequence remain untouched, and the complete plan can be prepared again.
 		Peer->second.PreparedCommit.reset();
+		if (!FrozenQuote) detail::RecordStructuralCausal({.Kind = detail::StructuralCausalKind::Rejected,
+			.Connection = Connection, .SourceScope = SourceRootId, .Sequence = Sequence.Value()});
 		return {};
 	}
 

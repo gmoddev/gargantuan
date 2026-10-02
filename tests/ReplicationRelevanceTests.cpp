@@ -18,6 +18,7 @@
 #include "../src/network/ReliableByteAdmissionDiagnostics.hpp"
 #include "ReliableEnvelopeContractFixture.hpp"
 #include "NameCoalescingFixture.hpp"
+#include "StructuralCausalEvidenceFixture.hpp"
 
 #include <algorithm>
 #include <array>
@@ -1791,6 +1792,7 @@ int main() {
 		test::TestAtomicGroupDistributions();
 		test::TestPreAcceptanceByteDeferral();
 		test::TestNameCoalescing();
+		test::TestStructuralCausalEvidence();
 	} catch (const std::exception &Error) {
 		std::cerr << "[Network:EnvelopeContract] " << Error.what() << '\n';
 		++Failures;

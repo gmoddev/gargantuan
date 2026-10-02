@@ -567,6 +567,7 @@ void ReplicationCoordinator::ProcessPlanning(std::uint64_t SimulationTick) {
 					PendingTransitionCount = CountWithoutPeer + Plan.Working.PendingTransitions.size();
 					Peer.DesiredObjects.swap(Plan.Working.DesiredObjects);
 					Peer.RequiredObjects.swap(Plan.Working.RequiredObjects);
+					RecordCausalPendingReplacement(Peer, Plan.Working.PendingTransitions);
 					Peer.PendingTransitions.swap(Plan.Working.PendingTransitions);
 					Peer.CriticalQueue.swap(Plan.Working.CriticalQueue);
 					Peer.OrdinaryQueue.swap(Plan.Working.OrdinaryQueue);
