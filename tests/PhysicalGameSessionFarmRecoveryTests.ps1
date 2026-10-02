@@ -51,6 +51,8 @@ $QualificationStart = $HostSource.IndexOf('const auto QualificationStarted = std
 $ScaleStep = $HostSource.IndexOf('ScaleQualification->Step(Runtime->GetSimulationTick(), {', [StringComparison]::Ordinal)
 if ($SessionEnd -lt 0 -or $QualificationStart -le $SessionEnd -or $ScaleStep -le $QualificationStart -or
 	$QualificationSource -notmatch 'quote_advance_attempted=' -or
+	$QualificationSource -notmatch 'planning_us=' -or
+	$QualificationSource -notmatch 'journal_records=' -or
 	$QualificationSource -notmatch 'quote_complete=' -or
 	$QualificationSource -notmatch 'capture_us=' -or
 	$QualificationSource -notmatch 'quote_lag_records=') {

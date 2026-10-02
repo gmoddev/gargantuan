@@ -309,6 +309,7 @@ namespace gargantuan::host {
 		bool QuoteComplete = false, QuoteSealed = false, QuoteResultWritten = false;
 		std::string QuoteFailure;
 		ServerTickTiming CurrentServerTickTiming;
+		network::GameSessionMetrics PreviousRecoveryMetrics;
 		std::uint64_t LastQuoteAdvanceMicroseconds = 0;
 		bool LastQuoteAdvanceAttempted = false;
 		bool LastQuoteAdvanceProducedFrame = false;
@@ -829,6 +830,7 @@ namespace gargantuan::host {
 					RecoverySnapshotWritten = false;
 					State = Stage::OverloadRecovery;
 					const auto Metrics = Session.GetMetrics();
+					PreviousRecoveryMetrics = Metrics;
 					CessationAcceptedBytes = Metrics.ReliableAdmission.AcceptedBytes;
 					std::cout << "[Qualification:Recovery] event=cessation run=" << RunId
 						<< " case=" << CaseName << " tick=" << Tick
@@ -860,6 +862,18 @@ namespace gargantuan::host {
 					std::chrono::duration_cast<std::chrono::microseconds>(
 						std::chrono::steady_clock::now() - QuoteStarted).count());
 				const auto Metrics = Session.GetMetrics();
+				const auto RelevanceMicroseconds =
+					(Metrics.RelevanceCpuNanoseconds - PreviousRecoveryMetrics.RelevanceCpuNanoseconds) / 1000;
+				const auto PlanningMicroseconds =
+					(Metrics.PlanningCpuNanoseconds - PreviousRecoveryMetrics.PlanningCpuNanoseconds) / 1000;
+				const auto MaterializationMicroseconds =
+					(Metrics.MaterializationCpuNanoseconds - PreviousRecoveryMetrics.MaterializationCpuNanoseconds) / 1000;
+				const auto SelectionMicroseconds =
+					(Metrics.StructuralSelectionCpuNanoseconds - PreviousRecoveryMetrics.StructuralSelectionCpuNanoseconds) / 1000;
+				const auto EncodedBytes = Metrics.StructuralBytesEncoded - PreviousRecoveryMetrics.StructuralBytesEncoded;
+				const auto JournalRecords = Metrics.JournalRecordsExamined - PreviousRecoveryMetrics.JournalRecordsExamined;
+				const auto PlanningWork = Metrics.PlanningWork - PreviousRecoveryMetrics.PlanningWork;
+				PreviousRecoveryMetrics = Metrics;
 				const auto Remote = network::detail::GameSessionTestAccess::GetRemoteMetrics(Session);
 				TrySealCessationQuote(Metrics, Tick);
 				if (!QuoteFailure.empty()) {
@@ -887,6 +901,13 @@ namespace gargantuan::host {
 					<< " poll_us=" << CurrentServerTickTiming.PollMicroseconds
 					<< " engine_us=" << CurrentServerTickTiming.EngineMicroseconds
 					<< " session_us=" << CurrentServerTickTiming.SessionMicroseconds
+					<< " relevance_us=" << RelevanceMicroseconds
+					<< " planning_us=" << PlanningMicroseconds
+					<< " materialization_us=" << MaterializationMicroseconds
+					<< " selection_us=" << SelectionMicroseconds
+					<< " encoded_bytes=" << EncodedBytes
+					<< " journal_records=" << JournalRecords
+					<< " planning_work=" << PlanningWork
 					<< " prequalification_us=" << CurrentServerTickTiming.PreQualificationMicroseconds
 					<< " quote_us=" << QuoteMicroseconds
 					<< " quote_advance_us=" << LastQuoteAdvanceMicroseconds
