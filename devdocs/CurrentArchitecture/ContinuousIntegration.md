@@ -168,6 +168,15 @@ quantized diagnostics and never replace the elapsed-time latency samples. Small
 thread CPU with large wall time establishes time not spent on that thread's CPU;
 it does not by itself distinguish blocking from preemption. Process CPU can
 exceed wall time when several process threads execute concurrently.
+Windows CPU accounting may also advance in coarse quanta (15.625 ms was
+observed on the qualified worker). A short span can consequently report a
+thread CPU delta larger than its wall duration, such as 31.25 ms of accounted
+CPU for a 22.67 ms span, even though a single thread cannot execute on multiple
+cores simultaneously. Preserve that raw measurement; do not clamp it or treat
+it as a utilization ratio. Attribute long stalls using spans large enough to
+distinguish their CPU consumption from this quantization, and use scheduler
+tracing when the counters cannot resolve the question. CPU counter values and
+their observed granularity never alter any service or latency gate.
 
 CTest prints failing output and writes JUnit results. On any failed job, the
 workflow uploads the configure log, CTest log, and JUnit file when available.
