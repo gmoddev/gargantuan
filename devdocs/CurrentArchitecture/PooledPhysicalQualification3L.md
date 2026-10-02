@@ -2345,3 +2345,29 @@ No capture was started by adoption. Near-capacity operational capture/export,
 zero-loss acceptance and cleanup remain required before provider use.
 Protected originals and the adoption receipt are retained under
 `C:\ProgramData\GantriaEngine\AgentCoordinatorCaptureFarm32\hook-adoption-Farm32Capture16GiB-v2`.
+
+Synthetic capacity exercise `9395c8bd-3d82-4159-acd4-8aa626d47fd9` used that
+installed hook and the pinned client capture helper. It is **INCOMPLETE**, not a
+provider or production run. The stopped worker ETL is 9,603,383,296 B, below the
+required 14-GiB exercise threshold. The client sent 3,042,800 marked data packets;
+the worker received 3,039,000. All 3,039,400 worker data packets reached the client.
+Terminal sequence markers agree with the sender counts, so the worker's missing
+3,800 data packets cannot be accepted as complete evidence. The retained receipts
+do not record which sequence ranges were absent; their cause remains under
+investigation. Neither zero NIC error deltas nor clean cleanup establish zero
+capture/socket loss.
+
+The first 80,000 client capture packets show median 100-packet batch spacings of
+15,527.6 us and 15,545.8 us by direction. The synthetic emitter's short blocking
+`select` wait therefore underfeeds the planned capture-size exercise on these
+hosts. An artifact-only pacing correction preserves the original packet count,
+20,000-packet/s ceiling, burst, and 480-second traffic bound. The failed outer
+controller also stopped its client capture child before the child's normal
+600-second close, losing final dumpcap loss diagnostics; the correction preserves
+the existing bounded close phase even on emitter failure. Both corrections remain
+unqualified operationally. Worker capture/service and both endpoint process/socket
+cleanup succeeded. Raw evidence is retained under the run ID in worker
+`C:\Sandbox\Codex\Evidence\Foundation3LFarm32\` and client
+`C:\Sandbox\Codex\Evidence\Farm32NearCap-v1\`. Offline diagnostic export of the
+retained ETL is separate from near-capacity acceptance. No Local/Node qualification
+was performed and KI-006 remains open.
