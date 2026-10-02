@@ -19,6 +19,7 @@ namespace gargantuan::network {
 namespace gargantuan::network::detail {
 	enum class StructuralCausalKind : std::uint8_t {
 		Prepared, Accepted, Rejected, NoFrame, PendingAdded, PendingCancelled, PendingReplaced, PeerRemoved, Delivery, Retired,
+		PlanningInstalled,
 	};
 	enum class StructuralCausalReason : std::uint8_t {
 		None, FilteredOrAlreadyCovered, NoLongerRequired, ObjectRetired, Replanned, GenerationRemoved,
@@ -59,6 +60,7 @@ namespace gargantuan::network::detail {
 		ObjectId SourceScope;
 		std::uint64_t JournalCursor = 0, JournalTail = 0, NextSequence = 0, AcceptedRevision = 0;
 		std::uint64_t PendingTokenWatermark = 0;
+		bool HasUnresolvedPlanning = false;
 		std::vector<StructuralPendingIdentity> Pending;
 		std::uint64_t GrantToken = 0, GrantBytes = 0;
 		std::uint64_t GrantSequence = 0, GrantAcceptedBefore = 0, GrantFirstSent = 0, GrantAcked = 0;

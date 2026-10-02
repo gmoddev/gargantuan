@@ -577,6 +577,17 @@ void ReplicationCoordinator::ProcessPlanning(std::uint64_t SimulationTick) {
 					Peer.DesiredDependencyCursor = DependencyCursor;
 					Peer.ResolvedSelection = Plan.Selection;
 					Plan.Installed = true;
+					if (!FrozenQuote && detail::ActiveStructuralCausalEvidence) {
+						std::vector<detail::StructuralPendingIdentity> Installed;
+						Installed.reserve(Peer.PendingTransitions.size());
+						for (const auto &[Object, Pending] : Peer.PendingTransitions)
+							Installed.push_back({Pending.Token, Object, Pending.Kind == PendingTransitionKind::Enter});
+						detail::RecordStructuralCausal({.Kind = detail::StructuralCausalKind::PlanningInstalled,
+							.Connection = Connection, .SourceScope = SourceRootId,
+							.Sequence = Peer.NextSequence.Value(), .CursorBefore = Peer.JournalCursor.NextSequence,
+							.CursorAfter = Peer.JournalCursor.NextSequence, .AcceptedRevision = Peer.AcceptedRevision,
+							.ResolvedPending = Installed});
+					}
 					SaturatingAdd(Metrics.PlanningReadyBatches, 1);
 					runtime_detail::CountWork(runtime_detail::WorkCounter::PlanningReadyBatches);
 					if (Plan.Cost == 0) {

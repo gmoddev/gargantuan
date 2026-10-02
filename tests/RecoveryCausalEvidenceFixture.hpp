@@ -209,6 +209,20 @@ namespace gargantuan::test {
 				Audit.ObserveCancellation(Peer, 10, RecoveryCancellationDisposition::CurrentStateSuperseded) &&
 				Audit.ObservePending(Peer, 11) && !Audit.ObservePending(Peer, 10);
 		});
+		Test("R7 unresolved cessation planning survives every replan until a valid install", [&] {
+			RecoveryCausalEvidence Audit(32, 1000, 100, 4);
+			auto Initial = Fence(); Initial.JournalCursor = 20; Initial.PendingTokens.clear(); Initial.HasUnresolvedPlanning = true;
+			return Audit.CapturePeer(Initial) && !Audit.Represented() &&
+				Audit.ObservePending(Peer, 4) && Audit.ObserveReplacement(Peer, 4, 5) &&
+				Audit.ObserveCancellation(Peer, 5, RecoveryCancellationDisposition::CurrentStateSuperseded) &&
+				!Audit.Represented() && Audit.ObservePending(Peer, 6) && Audit.ObservePlanningInstalled(Peer, {6}) &&
+				!Audit.Represented() && Accept(Audit, Frame(1, 20, 20, {6}), 1) && Retire(Audit, 1) && Audit.Converged();
+		});
+		Test("R7 valid empty installation discharges genuinely obsolete planning work", [&] {
+			RecoveryCausalEvidence Audit(32, 1000, 100, 4);
+			auto Initial = Fence(); Initial.JournalCursor = 20; Initial.PendingTokens.clear(); Initial.HasUnresolvedPlanning = true;
+			return Audit.CapturePeer(Initial) && !Audit.Represented() && Audit.ObservePlanningInstalled(Peer, {}) && Audit.Converged();
+		});
 		std::cout << "[Recovery:CausalEvidence] cases=" << Cases << " failures=" << Failures << '\n';
 		return Failures == 0;
 	}

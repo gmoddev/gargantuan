@@ -2426,6 +2426,10 @@ namespace gargantuan::network {
 				.JournalCursor = Value.JournalCursor.NextSequence, .JournalTail = Tail,
 				.NextSequence = Value.NextSequence.Value(), .AcceptedRevision = Value.AcceptedRevision,
 				.PendingTokenWatermark = Value.NextPendingToken};
+			Snapshot.HasUnresolvedPlanning = Value.Planned &&
+				(Value.PlanningSelection != Value.ResolvedSelection ||
+				 Value.DesiredDependencyCursor.Scope != Replication.DependencyCursor.Scope ||
+				 Value.DesiredDependencyCursor.NextSequence != Replication.DependencyCursor.NextSequence);
 			Snapshot.Pending.reserve(Value.PendingTransitions.size());
 			for (const auto &[Object, Pending] : Value.PendingTransitions)
 				Snapshot.Pending.push_back({Pending.Token, Object, Pending.Kind == ReplicationCoordinator::PendingTransitionKind::Enter});

@@ -84,7 +84,27 @@ inline void TestStructuralCausalEvidence() {
 		Coverage.Reason == StructuralCausalReason::FilteredOrAlreadyCovered,
 		"source-validated irrelevant no-frame advance is explicit");
 
-	Plan(WithObject);
+	const auto PlanningStart = Evidence.Count;
+	EnvelopeRequire(Coordinator.RequestPlanning(Connection, std::make_shared<const PeerRelevanceSelection>(WithObject), ++Tick).Succeeded(),
+		"R7 new current relevance input can remain uninstalled at cessation");
+	RecoveryCausalEvidence PlanningFence(32, 1000, 100, 4);
+	EnvelopeRequire(PlanningFence.CapturePeer({Connection, ExpectedTail, ExpectedTail,
+		Baseline.Frame->Sequence.Value() + 1, 1, 0, {}, {}, true}) && !PlanningFence.Represented(),
+		"R7 uninstalled relevance cannot falsely seal an otherwise caught-up source fence");
+	for (int Attempt = 0; Attempt < 2000 && !Coordinator.IsPlanningReady(Connection); ++Attempt) Coordinator.ProcessPlanning(++Tick);
+	for (auto Index = PlanningStart; Index < Evidence.Count; ++Index) {
+		const auto &Recorded = Evidence.Events[Index];
+		if (Recorded.Value.Kind == StructuralCausalKind::PendingAdded)
+			EnvelopeRequire(PlanningFence.ObservePending(Connection, Recorded.Value.Pending.Token), "R7 actual source pending token joins evidence");
+		if (Recorded.Value.Kind == StructuralCausalKind::PlanningInstalled) {
+			std::vector<std::uint64_t> Tokens;
+			for (std::size_t Pending = 0; Pending < Recorded.PendingCount; ++Pending) Tokens.push_back(Recorded.Pending[Pending].Token);
+			EnvelopeRequire(PlanningFence.ObservePlanningInstalled(Connection, Tokens), "R7 actual source install closes only planning barrier");
+		}
+	}
+	EnvelopeRequire(!PlanningFence.Represented() && PlanningFence.Snapshot(Connection)->UnresolvedBaselineTokens == 1 &&
+		!PlanningFence.Snapshot(Connection)->HasUnresolvedPlanning,
+		"R7 installed necessary Enter inherits baseline obligation and still requires accepted coverage");
 	const auto FirstPending = Evidence.Last(StructuralCausalKind::PendingAdded).Value.Pending;
 	EnvelopeRequire(FirstPending.Object == Object->GetObjectId() && FirstPending.Enter, "actual installed Enter has causal token");
 	Plan(WithObject);

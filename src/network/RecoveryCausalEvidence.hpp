@@ -51,6 +51,7 @@ namespace gargantuan::network::detail {
 		std::uint64_t PendingTokenWatermark = 0, ReferenceBytes = 0;
 		std::vector<std::uint64_t> PendingTokens;
 		std::vector<RecoveryAcceptedGrant> ExistingGrants;
+		bool HasUnresolvedPlanning = false;
 	};
 	struct RecoveryEvidenceTotals {
 		std::uint64_t AcceptedBytes = 0, FirstSentBytes = 0, AckedBytes = 0;
@@ -67,6 +68,7 @@ namespace gargantuan::network::detail {
 		// Prefix accepted totals freeze at the representation cut. Later delivery
 		// only advances prefix counters for grants owned by that finite cut.
 		RecoveryEvidenceTotals All, Prefix;
+		bool HasUnresolvedPlanning = false;
 	};
 
 	// Run/source-scope owned, bounded read-only qualification state. A new run or
@@ -94,7 +96,7 @@ namespace gargantuan::network::detail {
 			return RecoveryPeerEvidence{Connection, Peer.Cursor, Peer.Fence, Peer.NextSequence, Peer.ReferenceBytes,
 				Peer.BaselinePending.size(), Peer.Pending.size(), Peer.Grants.size(),
 				Peer.Cut.has_value() && !Peer.Disconnected && Error.empty(), Complete, Peer.Disconnected,
-				Peer.Cut.value_or(0), Peer.CutSequence, Peer.Count, Peer.Prefix};
+				Peer.Cut.value_or(0), Peer.CutSequence, Peer.Count, Peer.Prefix, Peer.UnresolvedPlanning};
 		}
 		[[nodiscard]] std::uint64_t ReferenceBytes(ConnectionId Connection) const {
 			const auto Found = Peers.find(Connection);
@@ -140,6 +142,7 @@ namespace gargantuan::network::detail {
 			Peer.PendingWatermark = Fence.PendingTokenWatermark;
 			Peer.LastPendingToken = Fence.PendingTokenWatermark - 1;
 			Peer.ReferenceBytes = Fence.ReferenceBytes;
+			Peer.UnresolvedPlanning = Fence.HasUnresolvedPlanning;
 			for (const auto Token : Fence.PendingTokens) {
 				if (Token == 0 || Token >= Fence.PendingTokenWatermark || !Peer.Pending.insert(Token).second)
 					return Fail("invalid captured pending token");
@@ -178,6 +181,23 @@ namespace gargantuan::network::detail {
 			Peer->SeenPendingTokens.insert(Token);
 			Peer->Pending.insert(Token);
 			++PendingCount;
+			return true;
+		}
+		bool ObservePlanningInstalled(ConnectionId Connection, const std::vector<std::uint64_t> &InstalledTokens) {
+			auto *Peer = FindEvent(Connection);
+			if (!Peer) return false;
+			if (Peer->Prepared || InstalledTokens.size() != Peer->Pending.size())
+				return Fail("planning install differs from causal pending ownership");
+			const std::set<std::uint64_t> Installed(InstalledTokens.begin(), InstalledTokens.end());
+			if (Installed != Peer->Pending || Installed.size() != InstalledTokens.size())
+				return Fail("planning install token set differs from causal evidence");
+			if (Peer->UnresolvedPlanning) {
+				// Repeated requests/replans never clear this barrier. Only an actual
+				// valid production installation supplies the causally current work.
+				Peer->BaselinePending.insert(Installed.begin(), Installed.end());
+				Peer->UnresolvedPlanning = false;
+			}
+			Seal(*Peer);
 			return true;
 		}
 		bool ValidateSourceSnapshot(ConnectionId Connection, std::uint64_t Cursor, std::uint64_t NextSequence,
@@ -341,6 +361,7 @@ namespace gargantuan::network::detail {
 			std::uint64_t CutSequence = 0;
 			RecoveryEvidenceTotals Count, Prefix;
 			bool Disconnected = false;
+			bool UnresolvedPlanning = false;
 		};
 		std::size_t MaximumPeers, MaximumEvents, MaximumPendingTokens, MaximumGrants;
 		std::size_t EventCount = 0, PendingCount = 0, GrantCount = 0;
@@ -391,7 +412,7 @@ namespace gargantuan::network::detail {
 			}
 		}
 		static void Seal(PeerState &Peer) {
-			if (Peer.Cut || Peer.Cursor < Peer.Fence || Peer.Prepared) return;
+			if (Peer.Cut || Peer.Cursor < Peer.Fence || Peer.Prepared || Peer.UnresolvedPlanning) return;
 			if (!Peer.BaselinePending.empty()) return;
 			Peer.Cut = Peer.LastGrantToken;
 			Peer.CutSequence = Peer.NextSequence - 1;
