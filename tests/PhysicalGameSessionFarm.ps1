@@ -578,11 +578,13 @@ function Assert-LogBounds {
 }
 
 function Sample-RunResources {
-	if ($ResourceClock.ElapsedMilliseconds - $LastResourceSampleMilliseconds -lt 2000) { return }
+	# At 32 clients plus the server, a 420-second run needs at most 6,963
+	# process records at two-second intervals; the 900-second maximum needs 14,883.
+	if ($ResourceClock.ElapsedMilliseconds - $script:LastResourceSampleMilliseconds -lt 2000) { return }
 	if ($ResourceSamples.Count + $AllProcesses.Count -gt 20000) {
 		throw 'bounded process resource evidence exceeded 20000 records'
 	}
-	$LastResourceSampleMilliseconds = $ResourceClock.ElapsedMilliseconds
+	$script:LastResourceSampleMilliseconds = $ResourceClock.ElapsedMilliseconds
 	$SampledUtc = [DateTimeOffset]::UtcNow.ToString('O')
 	foreach ($Owner in $AllProcesses) {
 		try {

@@ -177,12 +177,32 @@ try {
 	$AllProcesses.Add([pscustomobject]@{ Label = 'sampler-test'; Pid = $CurrentProcess.Id; Process = $CurrentProcess })
 	$ResourceSamples = [Collections.Generic.List[object]]::new()
 	$ResourceClock = [Diagnostics.Stopwatch]::StartNew()
-	$LastResourceSampleMilliseconds = -2000L
+	$script:LastResourceSampleMilliseconds = -2000L
 	Sample-RunResources
 	if ($ResourceSamples.Count -ne 1 -or $ResourceSamples[0].Label -ne 'sampler-test' -or
 		$ResourceSamples[0].WorkingSetBytes -le 0 -or $ResourceSamples[0].Threads -le 0) {
 		throw 'bounded process resource sample was not recorded'
 	}
+	$FirstSampleMilliseconds = $script:LastResourceSampleMilliseconds
+	Sample-RunResources
+	if ($ResourceSamples.Count -ne 1 -or $script:LastResourceSampleMilliseconds -ne $FirstSampleMilliseconds) {
+		throw 'resource sampler repeated a sample before the two-second interval'
+	}
+	$script:LastResourceSampleMilliseconds = $ResourceClock.ElapsedMilliseconds - 2000L
+	Sample-RunResources
+	if ($ResourceSamples.Count -ne 2) { throw 'resource sampler missed a due two-second sample' }
+	if ((33 * ([math]::Ceiling(420000 / 2000) + 1)) -ne 6963 -or
+		(33 * ([math]::Ceiling(900000 / 2000) + 1)) -ge 20000) {
+		throw 'bounded resource evidence no longer fits the 32-client runtime limits'
+	}
+	$ResourceSamples = [Collections.Generic.List[object]]::new(20000)
+	for ($SampleIndex = 0; $SampleIndex -lt 20000; $SampleIndex++) { $ResourceSamples.Add($null) }
+	$script:LastResourceSampleMilliseconds = $ResourceClock.ElapsedMilliseconds - 2000L
+	$Rejected = $false
+	try { Sample-RunResources } catch {
+		$Rejected = $_.Exception.Message -match 'bounded process resource evidence exceeded 20000 records'
+	}
+	if (-not $Rejected) { throw 'resource sampler did not reject evidence beyond its record cap' }
 	[void](Write-EvidenceManifest -Directory $Directory)
 	$EvidenceManifest = Get-Content -LiteralPath (Join-Path $Directory 'evidence-sha256.json') -Raw |
 		ConvertFrom-Json
