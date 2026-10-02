@@ -146,6 +146,7 @@ func main() {
 	if ($Proof.ProjectId -cne $ProjectId -or $Proof.Revision -ne $Revision -or
 		$ConfigText -notmatch [regex]::Escape($ProjectId) -or
 		$ConfigText -notmatch 'package_version = 23' -or
+		$ConfigText -notmatch '(?m)^level = "info"$' -or
 		$ConfigText -match 'test-only-value' -or $Proof.Contains('TokenValue') -or
 		$Proof.Contains('PrivateKeyPem')) {
 		throw 'Node config identity or secret separation failed'

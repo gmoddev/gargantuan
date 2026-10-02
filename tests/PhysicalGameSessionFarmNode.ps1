@@ -220,7 +220,7 @@ if ($Mode -eq 'Prepare') {
 		('project_id = ' + (Quote-Toml $Identity.ProjectId)),
 		("package_version = $($Identity.Revision)"),
 		('directory = ' + (Quote-Toml $Server)), '',
-		'[limits]', 'max_send_bytes = 1049088', '', '[logging]', 'level = "error"', ''
+		'[limits]', 'max_send_bytes = 1049088', '', '[logging]', 'level = "info"', ''
 	) -join "`n"
 	[void][IO.Directory]::CreateDirectory($Stage)
 	$ConfigPath = Join-Path $Stage 'node.toml'
