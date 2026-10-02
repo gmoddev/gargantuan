@@ -168,6 +168,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Pinned Agent Coordinator bootstrap failed' }
           python -m unittest discover -s tools/physical-qualifier/tests -p test_farm_lifecycle.py -v
           if ($LASTEXITCODE -ne 0) { throw 'Two-host farm lifecycle tests failed' }
+          python -m unittest discover -s tools/physical-qualifier/tests -p test_farm_ticket_staging.py -v
+          if ($LASTEXITCODE -ne 0) { throw 'Farm32 ticket staging tests failed' }
 
       - name: Run qualified reliable workload timing in Release
         shell: cmd
