@@ -88,8 +88,8 @@ deferrals must fit the native final high-water and counters, and terminal
 pending enter/leave totals must reconcile. This is a bounded diagnostic
 subset: the trace still has no continuous semantic backlog ledger, so it
 cannot prove saturated fair-share service from credit-eligible candidates
-alone. V2's lifecycle verdict must be reconciled into the final provider
-acceptance gate; a parser-only fixture is not a physical result.
+alone. The final provider acceptance report reconciles V2's lifecycle verdict
+as a separate gate; a parser-only fixture is not a physical result.
 
 For Node, the report also checks the indexed authenticated manifest RPC
 receipt against the run manifest and reconciliation fields. Without additional

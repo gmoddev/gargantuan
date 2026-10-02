@@ -623,6 +623,7 @@ function Read-AdmissionObservation {
 		FairnessDeferrals = [long]$Admission.fairness_deferrals
 		FairnessRotations = [long]$Admission.fairness_rotations
 		AcceptedGrantWaitBound = $ObservedFairness.AcceptedGrantWaitBound
+		GrantLifecycleCoverage = $ObservedFairness.GrantLifecycleCoverage
 		TraceCanonicalCounterBounds = $ObservedFairness.TraceCanonicalCounterBounds
 		ExactDemandEpisodeCoverage = $ObservedFairness.ExactDemandEpisodeCoverage
 		PendingEnters = [long]$Admission.pending_enters
@@ -961,7 +962,8 @@ $Observed = [ordered]@{
 		[ordered]@{ Gate = 'Cross-provider exact workload/deployment pin parity'; State = 'MEASURED' },
 		[ordered]@{ Gate = 'Per-provider terminal native admission/debt conservation and bounded grants/credit'; State = 'MEASURED'; Reason = 'sealed final receipt, not an intra-run service or fairness bound' },
 		[ordered]@{ Gate = 'Per-provider exact-demand fairness event identity and observed eligibility waits'; State = 'MEASURED'; Reason = 'sealed native timeline; the separate accepted-grant bound remains scoped to recorded episodes' },
-		[ordered]@{ Gate = 'Sealed admission credit, grant, deferral and terminal pending counter bounds'; State = 'MEASURED_PASS'; Reason = 'all native timeline snapshots obey canonical credit/grant caps and monotonic deferral counters; terminal pending transitions reconcile, but per-peer ACK-gated ownership between events remains unmeasured' },
+		[ordered]@{ Gate = 'Sealed admission credit, grant, deferral and terminal pending counter bounds'; State = 'MEASURED_PASS'; Reason = 'all native timeline snapshots obey canonical credit/grant caps and monotonic deferral counters; terminal pending transitions reconcile' },
+		[ordered]@{ Gate = 'Per-peer ACK-gated accepted-grant lifecycle'; State = $(if ($Local.Admission.GrantLifecycleCoverage -eq 'MEASURED_FAIL' -or $Node.Admission.GrantLifecycleCoverage -eq 'MEASURED_FAIL') { 'MEASURED_FAIL' } elseif ($Local.Admission.GrantLifecycleCoverage -eq 'MEASURED_PASS' -and $Node.Admission.GrantLifecycleCoverage -eq 'MEASURED_PASS') { 'MEASURED_PASS' } else { 'NOT MEASURED' }); Reason = 'generation and token scoped acceptance, exact ACK retirement, release, and zero terminal debt in the sealed V2 native timeline; V1 traces remain historical and unmeasured for this gate' },
 		[ordered]@{ Gate = 'Recorded accepted-grant eligibility wait within 220.5 ms'; State = $(if ($Local.Admission.AcceptedGrantWaitBound -eq 'MEASURED_FAIL' -or $Node.Admission.AcceptedGrantWaitBound -eq 'MEASURED_FAIL') { 'MEASURED_FAIL' } elseif ($Local.Admission.AcceptedGrantWaitBound -eq 'MEASURED_PASS' -and $Node.Admission.AcceptedGrantWaitBound -eq 'MEASURED_PASS') { 'MEASURED_PASS' } else { 'NOT MEASURED' }); Reason = 'accepted exact-demand episodes only; interruptions, disposals and continuous semantic backlog remain separate' },
 		[ordered]@{ Gate = 'Node authenticated manifest RPC and root/content pins'; State = 'MEASURED'; Reason = 'indexed provider receipt' },
 		[ordered]@{ Gate = 'Node negotiated TLS for authenticated manifest RPC'; State = $(if ($Node.ProviderObservation.RealTls -ceq 'NEGOTIATED_TLS_MANIFEST_RPC_MEASURED') { 'MEASURED' } else { 'NOT MEASURED' }); Reason = 'requires independently pinned Node stage/run/log and exact request matcher; full provider parity remains separate' },

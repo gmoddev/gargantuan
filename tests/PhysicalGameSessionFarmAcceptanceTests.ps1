@@ -457,6 +457,10 @@ try {
 		$Observed.Local.Admission.MaximumActiveGrants -ne 2 -or
 		$Observed.Local.Admission.Fairness.MaximumObservedEligibilityToGrantMicroseconds -ne 200 -or
 		$Observed.Local.Admission.AcceptedGrantWaitBound -cne 'MEASURED_PASS' -or
+		$Observed.Local.Admission.GrantLifecycleCoverage -cne 'NOT_MEASURED' -or
+		@($Observed.GateObservations | Where-Object {
+			$_.Gate -ceq 'Per-peer ACK-gated accepted-grant lifecycle' -and
+			$_.State -ceq 'NOT MEASURED' }).Count -ne 1 -or
 		@($Observed.GateObservations | Where-Object {
 			$_.Gate -ceq 'Recorded accepted-grant eligibility wait within 220.5 ms' -and
 			$_.State -ceq 'MEASURED_PASS' }).Count -ne 1 -or
@@ -467,7 +471,7 @@ try {
 		$Observed.Local.Capture.Status -cne 'NOT_MEASURED' -or
 		$Observed.Node.Capture.Status -cne 'NOT_MEASURED' -or
 		$Observed.Local.RemoteCadence.Status -cne 'NOT_MEASURED' -or
-		@($Observed.GateObservations | Where-Object { $_.State -eq 'NOT MEASURED' }).Count -ne 15 -or
+		@($Observed.GateObservations | Where-Object { $_.State -eq 'NOT MEASURED' }).Count -ne 16 -or
 		$Observed.Local.Recovery.FixedServiceRecovery -cne 'NOT MEASURED' -or
 		$Observed.Node.Recovery.ExactRetainedWorkBytes -cne 'NOT_MEASURED') {
 		throw "resource/parity observation promoted a missing physical gate or lost resource evidence: status=$($Observed.Status) claim=$($Observed.Foundation3LQualification) parity=$($Observed.WorkloadPinParity.State) clients=$($Observed.Local.Resources.Clients.ProcessCount) server=$($Observed.Node.Resources.Server.ProcessCount) ws=$($Observed.Local.Resources.Clients.SumOfPerProcessPeakWorkingSetBytes) missing=$(@($Observed.GateObservations | Where-Object { $_.State -eq 'NOT MEASURED' }).Count)"
