@@ -1,7 +1,9 @@
 """Reproduce the F1 native probe source archive from the qualified revision."""
 
 import hashlib
+import json
 from pathlib import Path
+import re
 import subprocess
 import sys
 import zipfile
@@ -42,7 +44,29 @@ NATIVE_SOURCE_PATHS = (
 )
 
 
+def PinnedRevision() -> str:
+    Manifest = json.loads((Path(__file__).resolve().parent /
+                           "phase1-f1-source-manifest.json").read_text(encoding="utf-8"))
+    Revision = Manifest.get("BaseHead")
+    if not isinstance(Revision, str) or not re.fullmatch(r"[0-9a-f]{40}", Revision):
+        raise SystemExit("[Qualification:Source] invalid pinned F1 source revision")
+    return Revision
+
+
 def Main() -> None:
+    Root = Path(__file__).resolve().parents[2]
+    SourceRevision = PinnedRevision()
+    if len(sys.argv) == 3 and sys.argv[1] == "--verify-pinned":
+        with zipfile.ZipFile(Path(sys.argv[2]).resolve()) as Archive:
+            if Archive.namelist() != sorted(NATIVE_SOURCE_PATHS):
+                raise SystemExit("[Qualification:Source] F1 source path list mismatch")
+            for Name in Archive.namelist():
+                Expected = subprocess.run(["git", "show", SourceRevision + ":" + Name],
+                                          cwd=Root, check=True, capture_output=True).stdout
+                if Archive.read(Name) != Expected:
+                    raise SystemExit("[Qualification:Source] pinned source mismatch: " + Name)
+        print("[Qualification:Source] pinned_verified=" + str(len(NATIVE_SOURCE_PATHS)))
+        return
     if len(sys.argv) == 4 and sys.argv[1] == "--verify-tree":
         ArchivePath = Path(sys.argv[2]).resolve()
         Root = Path(sys.argv[3]).resolve()
@@ -66,15 +90,14 @@ def Main() -> None:
               " line_ending_normalized=" + str(NormalizedLineEndings))
         return
     if len(sys.argv) != 2:
-        raise SystemExit("usage: make_f1_source_archive.py output.zip | --verify-tree archive.zip source-root")
-    Root = Path(__file__).resolve().parents[2]
+        raise SystemExit("usage: make_f1_source_archive.py output.zip | --verify-pinned archive.zip | --verify-tree archive.zip source-root")
     Output = Path(sys.argv[1]).resolve()
     if Output.exists():
         raise SystemExit("[Qualification:Source] output already exists")
     Output.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(Output, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as Archive:
         for Name in sorted(NATIVE_SOURCE_PATHS):
-            Source = subprocess.run(["git", "show", "HEAD:" + Name], cwd=Root,
+            Source = subprocess.run(["git", "show", SourceRevision + ":" + Name], cwd=Root,
                                     check=True, capture_output=True).stdout
             Entry = zipfile.ZipInfo(Name, (1980, 1, 1, 0, 0, 0))
             Entry.compress_type = zipfile.ZIP_DEFLATED

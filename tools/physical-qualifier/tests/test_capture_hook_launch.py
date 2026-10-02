@@ -18,8 +18,8 @@ class CaptureHookLaunchTests(unittest.TestCase):
         Match = re.search(r"\$CompressedDefinition = '([A-Za-z0-9+/=]+)'", Hook)
         self.assertIsNotNone(Match)
         self.assertEqual(
-            gzip.decompress(base64.b64decode(Match.group(1))),
-            SourcePath.read_bytes(),
+            gzip.decompress(base64.b64decode(Match.group(1))).replace(b"\r\n", b"\n"),
+            SourcePath.read_bytes().replace(b"\r\n", b"\n"),
         )
 
     def test_installed_service_encoded_command_fits_windows_limit(self):

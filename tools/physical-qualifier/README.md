@@ -33,8 +33,9 @@ assets and the two native DLLs required beside the probe executable; the Phase 1
 adapter checks their hashes and rejects the earlier D01
 candidate. [Generate the archive](make_f1_source_archive.py) with
 `python tools/physical-qualifier/make_f1_source_archive.py <output.zip>` from
-the pinned native source, then check it against a build tree
-with `--verify-tree <archive.zip> <source-root>`. The candidate bundle is staged
+the pinned native source. Use `--verify-pinned <archive.zip>` to compare the
+archive with the historical source revision; `--verify-tree <archive.zip>
+<source-root>` checks a separate build tree. The candidate bundle is staged
 separately from installed tools; endpoint artifact, capture, evidence-root and
 normal-LAN preflights remain required before an authorized physical attempt.
 

@@ -309,8 +309,8 @@ class QualificationTests(unittest.TestCase):
             self.assertIn("cmake/gns/ApplyServiceFairness.cmake", Source.namelist())
             self.assertIn("src/network/FiniteGrantServiceCurve.hpp", Source.namelist())
             self.assertIn("tests/PhysicalGnsFundingProbeTrace.hpp", Source.namelist())
-        subprocess.run([sys.executable, str(Generator), "--verify-tree", str(ArchivePath),
-                        str(Generator.parents[2])], check=True, capture_output=True, text=True)
+        subprocess.run([sys.executable, str(Generator), "--verify-pinned", str(ArchivePath)],
+                       check=True, capture_output=True, text=True)
         with self.assertRaises(subprocess.CalledProcessError):
             subprocess.run([sys.executable, str(Generator), str(ArchivePath)], check=True,
                            capture_output=True, text=True)
