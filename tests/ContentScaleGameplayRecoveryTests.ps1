@@ -135,3 +135,6 @@ try {
 } finally {
     if (Test-Path -LiteralPath $Path) { Remove-Item -LiteralPath $Path -Force }
 }
+# A deliberately failing negative-control child is a successful test only
+# after its exact failure was checked above; do not leak its exit code to CI.
+exit 0

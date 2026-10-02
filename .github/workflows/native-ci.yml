@@ -171,6 +171,10 @@ jobs:
           # Control-only mocks; no capture, NIC, or installed-service operation.
           & tools/physical-qualifier/tests/TestCaptureHooks.ps1 -HookPath tools/physical-qualifier/worker/PktMonFarm32Capture.ps1 -Farm32
           & tools/physical-qualifier/tests/TestDumpcapFarm32Capture.ps1
+          & tests/ContentScaleGameplayRecoveryTests.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Client recovery callback regression failed' }
+          & tests/ContentScaleGameplayRecoveryTests.ps1 -ReproduceMissingClientTick
+          if ($LASTEXITCODE -ne 0) { throw 'Client recovery negative control failed' }
 
       - name: Run qualified reliable workload timing in Release
         shell: cmd
