@@ -250,6 +250,9 @@ local ContentObservationSubmitted = false
 local LastContentObservationTick = -60
 local LastContentCheckTick = -6
 local PhaseControlTick = 0
+local FarmCallbackCount = 0
+local FarmCallbackPhase = nil
+local FarmCallbackPhaseCount = 0
 if PhaseControl then
     PhaseControl.OnClientEvent:Connect(function(Kind, Phase)
         if Kind == "phase" and type(Phase) == "string" then
@@ -453,6 +456,27 @@ end
 RunService.PostSimulation:Connect(function()
     local LocalPlayer = Players.LocalPlayer
     if not LocalPlayer then return end
+    if PhysicalFarm then
+        local CurrentPhase = Control:GetAttribute("ScalePhase")
+        if CurrentPhase ~= FarmCallbackPhase then
+            if FarmCallbackPhase and FarmCallbackPhase ~= "complete" then
+                print(string.format("[Qualification:Callback] event=phase_result phase=%s callbacks=%d total=%d",
+                    FarmCallbackPhase, FarmCallbackPhaseCount, FarmCallbackCount))
+            end
+            FarmCallbackPhase = CurrentPhase
+            FarmCallbackPhaseCount = 0
+            if CurrentPhase then Control:SetAttribute("ScaleCallbackPhase", CurrentPhase) end
+        end
+        if CurrentPhase and CurrentPhase ~= "complete" then
+            FarmCallbackCount += 1
+            FarmCallbackPhaseCount += 1
+            -- The host timestamps this sparse beat after the callback returns.
+            -- One local attribute write per 60 callbacks bounds trace cost.
+            if FarmCallbackCount % 60 == 0 then
+                Control:SetAttribute("ScaleCallbackBeat", FarmCallbackCount)
+            end
+        end
+    end
     if PhaseControl then
         PhaseControlTick += 1
         if not PhaseReadySent then

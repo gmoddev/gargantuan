@@ -14,6 +14,7 @@
 
 #include <SDL3/SDL.h>
 #include <argparse/argparse.hpp>
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstdint>
@@ -116,6 +117,7 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 	std::optional<std::chrono::steady_clock::time_point> FarmScalePhaseSeen;
 	ObjectId FarmScaleFirstRoot;
 	std::size_t FarmScaleProducerPhases = 0;
+	int FarmLastCallbackBeat = 0;
 	double FarmScalePreviousActionResolutions = 0;
 	double FarmScalePreviousActionEndings = 0;
 	double FarmScalePreviousActionRequests = 0;
@@ -321,6 +323,29 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 				if (Session->GetStatus() == network::GameSessionStatus::Failed)
 					throw std::runtime_error(Session->GetFailure());
 				if (FarmEnabled) {
+					if (FarmScaleWorkload) {
+						const auto Beat = Runtime->CharacterControl->GetAttributeValue("ScaleCallbackBeat");
+						if (Beat) {
+							const auto *Count = std::get_if<int>(&*Beat);
+							if (!Count || *Count <= 0 || *Count % 60 != 0 ||
+								(*Count != FarmLastCallbackBeat && *Count != FarmLastCallbackBeat + 60))
+								throw std::runtime_error("invalid farm callback beat sequence");
+							if (*Count != FarmLastCallbackBeat) {
+								const auto Phase = Runtime->CharacterControl->GetAttributeValue("ScaleCallbackPhase");
+								const auto *PhaseName = Phase ? std::get_if<std::string>(&*Phase) : nullptr;
+								if (!PhaseName ||
+									std::find(FarmScalePhases.begin(), FarmScalePhases.end(), std::string_view(*PhaseName)) ==
+										FarmScalePhases.end())
+									throw std::runtime_error("invalid farm callback beat phase");
+								FarmLastCallbackBeat = *Count;
+								std::cout << "[Qualification:Callback] event=beat run_id=" << FarmRunId
+									<< " slot=" << FarmSlot << " nonce=" << FarmClientNonce
+									<< " phase=" << *PhaseName
+									<< " callbacks=" << *Count << " simulation_tick=" << Runtime->GetSimulationTick()
+									<< " steady_ns=" << FarmTimestamp() << '\n';
+							}
+						}
+					}
 					const auto LocalPlayer = Runtime->Players->GetLocalPlayer();
 					if (LocalPlayer && !FarmPlayerReady) {
 						FarmPlayerReady = true;
