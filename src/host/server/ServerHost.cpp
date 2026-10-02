@@ -755,7 +755,9 @@ namespace gargantuan::host {
 								.SessionBuildMicroseconds = SessionWork[static_cast<std::size_t>(
 									runtime_detail::WorkPhase::StructuralFrameBuild)].ExclusiveNanoseconds / 1'000,
 								.SessionEncodeMicroseconds = SessionWork[static_cast<std::size_t>(
-									runtime_detail::WorkPhase::StructuralValidationEncode)].ExclusiveNanoseconds / 1'000,
+									// Include the nested StructuralEncode scope that performs
+									// validation/serialization, not just its wrapper overhead.
+									runtime_detail::WorkPhase::StructuralValidationEncode)].Nanoseconds / 1'000,
 								.SessionEncodeRetries = SessionWork.Counters[static_cast<std::size_t>(
 									runtime_detail::WorkCounter::EncodeRetries)],
 								.PreQualificationMicroseconds = Microseconds(QualificationStarted - SessionEnded),

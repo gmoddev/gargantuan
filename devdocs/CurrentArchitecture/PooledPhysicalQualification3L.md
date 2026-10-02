@@ -2190,6 +2190,28 @@ and sleep overshoot 147.483 ms. CPU work versus preemption/blocking was NOT
 MEASURED. These observations do not waive the failure or qualify the candidate.
 Both corresponding GNS sanitizer runs passed.
 
+The subsequent worker-only `a26235496` diagnostic
+`c90df074-8d40-4215-8814-3d616cb86e1c` used the qualified joined oracle worker
+and a 36,000-frame client lifetime covering its 540-second outer budget.
+Gameplay causal recovery converged in the native observation at 332,351 us
+with 6,462 B exactly accepted/first-sent/ACKed/retired. Structural recovery
+failed its unchanged deadline: immutable reference 553,184,194 B, 1,463 quoted
+frames, bound 35,112,492 us. When the quote finished and the deadline check ran
+at 80,340,963 us, the live prefix was still unfinished (`prefix_converged_us=0`):
+537,780,315 B accepted, 537,130,549 B first-sent and 537,115,771 B ACKed/retired.
+This is a valid recovery failure, not successful late convergence or a new
+architecture constant. The missing mixed case remains NOT MEASURED.
+
+Moving reference work off Main alone did not make live replication fast enough.
+Source inspection identified repeated encoding of oversized Name candidates
+before geometric byte-limit retries; correction must preserve exact frames,
+source cursors, errors and work-budget accounting. A separate diagnostic fix
+reports inclusive validation/encode time: the earlier exclusive wrapper value
+omitted its nested serialization scope. No production decision used that counter.
+Worker cleanup again found zero client/server processes and UDP 39450 unbound.
+Evidence is retained under `C:\Sandbox\Codex\Evidence\Farm32_a2623549Diagnostic\`
+and this run ID. No provider or physical PASS is inferred.
+
 Local/real-TLS Node 32-client qualification remains NOT MEASURED; KI-006 OPEN;
 Foundation 3L B — PARTIALLY READY. The established corrected F1 physical Phase 1
 PASS is unchanged.
