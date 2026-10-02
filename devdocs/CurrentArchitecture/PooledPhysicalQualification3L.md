@@ -2318,3 +2318,30 @@ the earlier converged subset is not a substitute for this failure. Evidence is
 retained under `C:\Sandbox\Codex\Evidence\Farm32_976fae8d5Diagnostic\` and
 `C:\Users\aiden\.codex\artifacts\farm32-976fae8d5\`, with the run ID.
 Cleanup again found no owned farm processes or UDP 39450 listener.
+
+Focused native ACK diagnostic `e8163d99b` separately reproduces the delayed
+retirement mechanism using the production adapter and pinned GNS. Eight grants
+(393,652 and 524,288 B, two successive ACK-gated submissions at each of 1-ms and
+16.667-ms Main polling) conserve exact first-send, ACK and retirement with zero
+retransmission. Native ACK receipt follows first-send completion by
+28,978–30,234 us for 393,652 B and 21,584–22,941 us for 524,288 B; Main observation
+adds only 50–1,435 us in this fixture. Receiver traces record the ordinary
+50,000-us ACK deadline from the first reliable packet, completed message,
+successful ACK transmission and sender receipt. This identifies native delayed
+ACK behavior in the focused reproduction; exact native ACK timestamps in the
+earlier farm remain NOT MEASURED. Four grant slots remain ACK-owned. A transport
+correction still requires reserve, mode-isolation and fresh recovery qualification.
+The log is `C:\Users\aiden\.codex\artifacts\ack-cycle-e8163d99b.log`.
+
+The reviewed Farm32 capture-only hook update was applied on 2026-10-02 with
+fixed-input rollback protection and five passing transaction simulations.
+Installed hook SHA-256 is
+`DB8BDD022F3BB30128EBC3E1D8A22596494F2440ABA93DCECDC3334FAB3A8DC9`;
+configuration SHA-256 is
+`D0CCDBFD994A3BAEF78C7AF2105D88BE7FE29DD2C48E196A59EC84C25FFACCDC`.
+The executable, DLL, lease runtime and baseline F1 service are unchanged.
+The adoption receipt explicitly records **IDLE_HOOK_ADOPTED_UNQUALIFIED**.
+No capture was started by adoption. Near-capacity operational capture/export,
+zero-loss acceptance and cleanup remain required before provider use.
+Protected originals and the adoption receipt are retained under
+`C:\ProgramData\GantriaEngine\AgentCoordinatorCaptureFarm32\hook-adoption-Farm32Capture16GiB-v2`.
