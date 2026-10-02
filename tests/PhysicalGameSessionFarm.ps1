@@ -7,7 +7,7 @@
 #     -PlayerPackageRoot C:\run\player -EvidenceRoot C:\run\evidence `
 #     -Endpoint 127.0.0.1:39450 -Peers 32
 # Add -ScaleWorkload -ClientFrames 9000 for the canonical five-phase matrix.
-# Stage AdmissionFairnessEvidence.ps1 beside this script for scale evidence.
+# Stage AdmissionFairnessEvidence.ps1 and RecoveryCausalEvidence.ps1 beside this script.
 
 param(
 	[Parameter(Mandatory = $true)][string]$ServerPackageRoot,
@@ -31,6 +31,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'AdmissionFairnessEvidence.ps1')
+. (Join-Path $PSScriptRoot 'RecoveryCausalEvidence.ps1')
 . (Join-Path $PSScriptRoot 'PhysicalFarmPipeDrain.ps1')
 $ServerPackageRoot = [IO.Path]::GetFullPath($ServerPackageRoot)
 $PlayerPackageRoot = [IO.Path]::GetFullPath($PlayerPackageRoot)
@@ -173,14 +174,18 @@ function Assert-RecoveryQuote {
 		[Parameter(Mandatory = $true)]$Samples,
 		[Parameter(Mandatory = $true)][long]$LastProbeLine,
 		[Parameter(Mandatory = $true)][long]$Tail,
-		[Parameter(Mandatory = $true)][long]$MaximumRunMicroseconds)
+		[Parameter(Mandatory = $true)][long]$MaximumRunMicroseconds,
+		[Parameter(Mandatory = $true)][string]$CausalPath,
+		[Parameter(Mandatory = $true)][long]$CessationMicroseconds)
+	$Causal = Assert-RecoveryCausalEvidence -Path $CausalPath -RunId $CaseRunId -Case $Case `
+		-ExpectedConnections @($ExpectedPeers) -CessationMicroseconds $CessationMicroseconds -JournalFence $Tail
 	$Captures = @($Diagnostics | Where-Object { $_.event -eq 'quote_capture' -and $_.case -eq $Case -and $_.run -eq $CaseRunId })
 	$Results = @($Diagnostics | Where-Object { $_.event -eq 'quote_result' -and $_.case -eq $Case -and $_.run -eq $CaseRunId })
 	$Revoked = @($Diagnostics | Where-Object { $_.event -eq 'quote_revoked' -and $_.case -eq $Case -and $_.run -eq $CaseRunId })
 	$Peers = @($Diagnostics | Where-Object { $_.event -eq 'quote_peer' -and $_.case -eq $Case -and $_.run -eq $CaseRunId })
 	if ($Captures.Count -ne 1 -or $Results.Count -ne 1 -or $Peers.Count -ne 32 -or $Revoked.Count -ne 0 -or
 		$Captures[0].status -cne 'READY' -or $Captures[0].reason -cne 'none' -or
-		$Results[0].status -cne 'PASS' -or $Results[0].reason -cne 'none' -or
+		$Results[0].status -cne 'PASS' -or $Results[0].reason -cne 'none' -or $Results[0].contract -cne 'causal_fence_v1' -or
 		[long]$Captures[0].__line -ge [long]$Barrier.__line -or
 		[long]$Barrier.__line -ge [long]$Results[0].__line -or
 		[long]$Results[0].__line -ge [long]$Deadline.__line) {
@@ -200,7 +205,8 @@ function Assert-RecoveryQuote {
 		$Debt = Get-RecoveryUnsigned -Row $Peer -Field 'accepted_unretired_complete_bytes'
 		$Future = Get-RecoveryUnsigned -Row $Peer -Field 'future_complete_bytes'
 		$Work = Get-RecoveryUnsigned -Row $Peer -Field 'w_complete_upper_bytes'
-		if ($Debt -gt 524288L -or $Work -ne $Debt + $Future -or $Work -gt 42949672960L) {
+		if ($Debt -gt 524288L -or $Work -ne $Debt + $Future -or $Work -gt 42949672960L -or
+			$Debt -ne $Causal.Peers[$Identity].InitialDebt -or $Future -ne $Causal.Peers[$Identity].QuoteBytes) {
 			throw "recovery case $Case quote exceeds the accepted peer work envelope"
 		}
 		$Total += $Work
@@ -209,14 +215,12 @@ function Assert-RecoveryQuote {
 		$MaximumPeerServiceUs = [math]::Max($MaximumPeerServiceUs, $ServiceUs)
 	}
 	if ($Seen.Count -ne 32 -or $Total -gt 824633720832L -or
-		$Total -ne (Get-RecoveryUnsigned -Row $Results[0] -Field 'w_complete_upper_bytes') -or
-		$FutureTotal -ne (Get-RecoveryUnsigned -Row $Results[0] -Field 'audited_accepted_bytes')) {
+		$Total -ne (Get-RecoveryUnsigned -Row $Results[0] -Field 'w_complete_upper_bytes')) {
 		throw "recovery case $Case quote does not conserve complete-message bytes"
 	}
 	$QuotedFrames = Get-RecoveryUnsigned -Row $Results[0] -Field 'quoted_frames'
-	$AuditedFrames = Get-RecoveryUnsigned -Row $Results[0] -Field 'audited_frames'
-	if ($QuotedFrames -gt 65536L -or $QuotedFrames -ne $AuditedFrames) {
-		throw "recovery case $Case quote did not audit every accepted frame"
+	if ($QuotedFrames -gt 65536L -or $QuotedFrames -ne $Causal.QuotedFrames) {
+		throw "recovery case $Case quote differs from its immutable reference frames"
 	}
 	$PoolServiceUs = Get-RecoveryCeilDiv -Numerator ($Total * 1000000L) -Denominator 67108864L
 	$BoundUs = 20000000L + [math]::Max(470500L + $MaximumPeerServiceUs, $PoolServiceUs)
@@ -228,15 +232,35 @@ function Assert-RecoveryQuote {
 		(Get-RecoveryUnsigned -Row $Deadline -Field 'elapsed_us') -lt $BoundUs) {
 		throw "recovery case $Case uses a noncanonical W_i deadline"
 	}
-	$Converged = @($Samples | Where-Object { [long]$_.__line -gt $LastProbeLine -and
-		[long]$_.__line -lt [long]$Deadline.__line -and
-		(Test-RecoveryQuiescent -Sample $_ -Tail $Tail -RequireSourceConvergence) } |
-		Sort-Object { [long]$_.elapsed_us })
-	if ($Converged.Count -eq 0 -or [long]$Converged[0].elapsed_us -gt $BoundUs) {
-		throw "recovery case $Case lacks convergence inside its measured W_i service bound"
+	$CausalResults = @($Diagnostics | Where-Object { $_.event -eq 'causal_result' -and $_.case -eq $Case -and $_.run -eq $CaseRunId })
+	$CausalPeers = @($Diagnostics | Where-Object { $_.event -eq 'causal_peer' -and $_.case -eq $Case -and $_.run -eq $CaseRunId })
+	if ($CausalResults.Count -ne 1 -or $CausalPeers.Count -ne 32 -or $CausalResults[0].status -cne 'PASS' -or
+		$CausalResults[0].contract -cne 'causal_fence_v1' -or
+		[long]$CausalResults[0].__line -le [long]$Results[0].__line -or [long]$CausalResults[0].__line -ge [long]$Deadline.__line -or
+		(Get-RecoveryUnsigned -Row $CausalResults[0] -Field 'events') -ne $Causal.EventCount) {
+		throw "recovery case $Case lacks a complete ordered causal summary"
 	}
+	foreach ($Field in @('accepted', 'first_sent', 'acked', 'retired')) {
+		if ((Get-RecoveryUnsigned -Row $CausalResults[0] -Field $Field) -ne $Causal.Totals[$Field]) { throw "recovery $Case causal total mismatch: $Field" }
+	}
+	$Seen.Clear()
+	foreach ($Row in $CausalPeers) {
+		$Identity = "$(Get-RecoveryUnsigned -Row $Row -Field 'connection_slot'):$(Get-RecoveryUnsigned -Row $Row -Field 'connection_generation')"
+		if (-not $ExpectedPeers.Contains($Identity) -or -not $Seen.Add($Identity) -or
+			[long]$Row.__line -le [long]$Results[0].__line -or [long]$Row.__line -ge [long]$CausalResults[0].__line) { throw "recovery $Case invalid causal peer" }
+		$Peer = $Causal.Peers[$Identity]
+		foreach ($Pair in @(@('journal_fence', 'Fence'), @('cursor', 'Cursor'), @('cut_token', 'Cut'), @('cut_sequence', 'CutSequence'))) {
+			if ((Get-RecoveryUnsigned -Row $Row -Field $Pair[0]) -ne $Peer[$Pair[1]]) { throw "recovery $Case causal peer fence mismatch" }
+		}
+		if ($Row.unresolved -cne '0' -or $Row.planning_unresolved -cne '0' -or $Row.converged -cne '1') { throw "recovery $Case unresolved causal prefix" }
+		foreach ($Field in @('accepted', 'first_sent', 'acked', 'retired')) {
+			if ((Get-RecoveryUnsigned -Row $Row -Field $Field) -ne $Peer.Prefix[$Field]) { throw "recovery $Case causal prefix mismatch: $Field" }
+		}
+	}
+	$ConvergedUs = Get-RecoveryUnsigned -Row $CausalResults[0] -Field 'prefix_converged_us'
+	if ($ConvergedUs -lt $Causal.EarliestConvergedUs -or $ConvergedUs -gt $BoundUs) { throw "recovery $Case causal prefix missed its retained-work deadline" }
 	return [ordered]@{ TotalBytes = $Total; BoundUs = [long]$BoundUs;
-		ConvergedUs = [long]$Converged[0].elapsed_us }
+		ConvergedUs = [long]$ConvergedUs }
 }
 
 function Assert-RecoveryRecords {
@@ -368,6 +392,7 @@ function Assert-RecoveryRecords {
 		if ($Samples.Count -eq 0) { throw "recovery $Case lacks native service samples" }
 		$ObservedRetainedHigh = Get-RecoveryUnsigned -Row $Cessations[0] -Field 'retained_high'
 		$ObservedMinimumMargin = Get-RecoveryUnsigned -Row $Cessations[0] -Field 'minimum_retention_margin'
+		$PreviousTail = $Tail
 		foreach ($Sample in $Samples) {
 			$Oldest = Get-RecoveryUnsigned -Row $Sample -Field 'oldest'
 			$Required = Get-RecoveryUnsigned -Row $Sample -Field 'required'
@@ -375,13 +400,15 @@ function Assert-RecoveryRecords {
 			$Retained = Get-RecoveryUnsigned -Row $Sample -Field 'retained'
 			$ObservedRetainedHigh = [math]::Max($ObservedRetainedHigh, $Retained)
 			$ObservedMinimumMargin = [math]::Min($ObservedMinimumMargin, $Margin)
-			if ($Oldest -lt 1 -or $Required -lt $Oldest -or $Required -gt $Tail -or
+			$CurrentTail = Get-RecoveryUnsigned -Row $Sample -Field 'current_tail'
+			if ($Oldest -lt 1 -or $Required -lt $Oldest -or $Required -gt $CurrentTail -or
 				$Margin -ne ($Required - $Oldest) -or $Retained -gt 16384 -or
 				(Get-RecoveryUnsigned -Row $Sample -Field 'retained_high') -ne $ObservedRetainedHigh -or
 				(Get-RecoveryUnsigned -Row $Sample -Field 'minimum_retention_margin') -ne $ObservedMinimumMargin -or
-				[long]$Sample.journal_failures -ne 0 -or [long]$Sample.current_tail -ne $Tail) {
-				throw "recovery $Case lost retained journal coverage or mutated after cessation"
+				[long]$Sample.journal_failures -ne 0 -or $CurrentTail -lt $PreviousTail) {
+				throw "recovery $Case lost retained journal coverage"
 			}
+			$PreviousTail = $CurrentTail
 		}
 		$LastProbeLine = [long]($ProbeRows | Measure-Object -Property __line -Maximum).Maximum
 		$Service = @($Samples | Where-Object { [long]$_.__line -gt $LastProbeLine -and
@@ -410,7 +437,9 @@ function Assert-RecoveryRecords {
 		$Quote = Assert-RecoveryQuote -Diagnostics $Diagnostics -Case $Case -CaseRunId $RunId `
 			-ExpectedPeers $ExpectedPeers -Barrier $Barriers[0] -Snapshot $Snapshots[0] `
 			-Deadline $Deadlines[0] -Samples $Samples `
-			-LastProbeLine $LastProbeLine -Tail $Tail -MaximumRunMicroseconds $MaximumRunMicroseconds
+			-LastProbeLine $LastProbeLine -Tail $Tail -MaximumRunMicroseconds $MaximumRunMicroseconds `
+			-CausalPath (Join-Path (Split-Path $Server.ErrorPath -Parent) "recovery-$Case.tsv") `
+			-CessationMicroseconds ([long]$Cessations[0].monotonic_us)
 		$TerminalReaders = @($Window | Where-Object { $_.event -eq 'terminal_reader' -and
 			[long]$_.__line -gt [long]$Snapshots[0].__line -and
 			[long]$_.__line -lt [long]$Deadlines[0].__line })
@@ -425,14 +454,13 @@ function Assert-RecoveryRecords {
 			}
 			$Key = "$($Reader.connection_slot):$($Reader.connection_generation)"
 			if (-not $TerminalReaderPeers.Add($Key) -or -not $ExpectedPeers.Contains($Key) -or
-				[long]$Reader.next_sequence -lt $Tail -or $Reader.prepared -ne '0' -or
-				$Reader.pending_relevance -ne '0') { $TerminalReadersHealthy = $false }
+				[long]$Reader.next_sequence -lt $Tail) { $TerminalReadersHealthy = $false }
 		}
 		if ($TerminalCatalog -ne 1 -or $TerminalReaderPeers.Count -ne 32) { $TerminalReadersHealthy = $false }
 		$TerminalSamples = @($Samples | Where-Object { [long]$_.__line -gt $LastProbeLine -and
 			[long]$_.__line -gt $LastNameLine -and
 			[long]$_.elapsed_us -le $Quote.BoundUs -and
-			(Test-RecoveryQuiescent -Sample $_ -Tail $Tail -RequireSourceConvergence) } |
+			(Test-RecoveryServiceHealthy -Sample $_) } |
 			Sort-Object { [long]$_.elapsed_us })
 		$Strict = [long]$Snapshots[0].elapsed_us -ge 20000000 -and
 			[long]$Snapshots[0].elapsed_us -le 20470500 -and
@@ -451,7 +479,7 @@ function Assert-RecoveryRecords {
 			StrictSnapshotElapsedUs = [long]$Snapshots[0].elapsed_us
 			ExactRetainedWorkBytes = $Quote.TotalBytes
 			RetainedWorkBoundUs = $Quote.BoundUs
-			ObservedStructuralConvergenceUs = $(if ($TerminalSamples.Count) { [long]$TerminalSamples[0].elapsed_us } else { 'NOT_MEASURED' })
+			ObservedStructuralConvergenceUs = $Quote.ConvergedUs
 		})
 	}
 	foreach ($Slot in 0..31) {

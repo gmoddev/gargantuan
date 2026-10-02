@@ -28,6 +28,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'AdmissionFairnessEvidence.ps1')
+. (Join-Path $PSScriptRoot 'RecoveryCausalEvidence.ps1')
 . (Join-Path $PSScriptRoot 'PhysicalFarmPublicationEvidence.ps1')
 
 function Import-FarmRecoveryParser {
@@ -249,7 +250,7 @@ function Read-RoleEvidence {
 			$Entry.Name -ieq 'evidence-sha256.json' -or
 			-not $Names.Add([string]$Entry.Name) -or [long]$Entry.Bytes -lt 0 -or
 			[long]$Entry.Bytes -gt $(if ($Role -ceq 'Server' -and
-				$Entry.Name -ceq 'admission-fairness.tsv') { 33554432 }
+				($Entry.Name -ceq 'admission-fairness.tsv' -or $Entry.Name -cmatch '^recovery-(gameplay|structural|mixed)\.tsv$')) { 33554432 }
 				elseif ($Role -ceq 'Server' -and $Entry.Name -ceq 'publication-service.bin') { 335544832 }
 				else { 16777216 })) {
 			throw "$Role evidence index has an invalid retained-file bound"
@@ -762,6 +763,9 @@ function Read-RecoveryObservation {
 		OutputPath = (Assert-IndexedFile -Root $Server.Root -Index $Server.Index -Name 'server.stdout.log')
 		ErrorPath = (Assert-IndexedFile -Root $Server.Root -Index $Server.Index -Name 'server.stderr.log')
 	}
+	foreach ($Case in @('gameplay', 'structural', 'mixed')) {
+		[void](Assert-IndexedFile -Root $Server.Root -Index $Server.Index -Name "recovery-$Case.tsv" -MaximumBytes 33554432)
+	}
 	$ClientLogs = @(0..31 | ForEach-Object {
 		$Label = 'client-{0:D2}' -f $_
 		[pscustomobject]@{
@@ -982,7 +986,7 @@ $Observed = [ordered]@{
 		[ordered]@{ Gate = 'CPU, memory, network and transport headroom'; State = 'NOT MEASURED'; Reason = 'bounded host/NIC snapshots describe utilization, but no canonical CPU/memory/NIC pass percentage or concurrent packet-level reserve proof follows from those samples' },
 		[ordered]@{ Gate = 'Fixed 20-second service recovery'; State = $(if ($Local.Recovery.FixedServiceRecovery -eq 'MEASURED_PASS' -and $Node.Recovery.FixedServiceRecovery -eq 'MEASURED_PASS') { 'MEASURED_PASS' } elseif ($Local.Recovery.FixedServiceRecovery -eq 'MEASURED_FAIL' -or $Node.Recovery.FixedServiceRecovery -eq 'MEASURED_FAIL') { 'MEASURED_FAIL' } else { 'NOT MEASURED' }); Reason = 'three canonical cases per provider, replayed from indexed server/client recovery logs and matched to sealed reconciliation' },
 		[ordered]@{ Gate = 'Strict structural convergence sufficient proof'; State = $(if ($Local.Recovery.StrictConvergenceSufficientProof -eq 'MEASURED_PASS' -and $Node.Recovery.StrictConvergenceSufficientProof -eq 'MEASURED_PASS') { 'MEASURED_PASS' } else { 'NOT MEASURED' }); Reason = '32-peer audited complete-message W_i, exact canonical deadline, terminal source/readers/debt, and client final-Name proof; separate fixed ordinary-service gate' },
-		[ordered]@{ Gate = 'Workload-derived exact structural convergence'; State = $(if ($Local.Recovery.StrictConvergenceSufficientProof -eq 'MEASURED_PASS' -and $Node.Recovery.StrictConvergenceSufficientProof -eq 'MEASURED_PASS' -and $Local.Recovery.ExactRetainedWorkBytes -is [long] -and $Node.Recovery.ExactRetainedWorkBytes -is [long]) { 'MEASURED_PASS' } else { 'NOT MEASURED' }); Reason = 'frozen 3J complete-message quote is audited against every post-cessation accepted frame and terminal structural conservation at its W_i-derived bound' },
+		[ordered]@{ Gate = 'Workload-derived exact structural convergence'; State = $(if ($Local.Recovery.StrictConvergenceSufficientProof -eq 'MEASURED_PASS' -and $Node.Recovery.StrictConvergenceSufficientProof -eq 'MEASURED_PASS' -and $Local.Recovery.ExactRetainedWorkBytes -is [long] -and $Node.Recovery.ExactRetainedWorkBytes -is [long]) { 'MEASURED_PASS' } else { 'NOT MEASURED' }); Reason = 'immutable reference W_i is separately conserved; offline source-event replay proves finite baseline coverage and accepted-prefix first-send, ACK and retirement while later work remains live' },
 		[ordered]@{ Gate = 'Journal retention margin and overload'; State = 'NOT MEASURED'; Reason = 'final zero journal backlog lacks retained-history high-water and overload chronology' },
 		[ordered]@{ Gate = 'Sampled overload journal retention window'; State = $(if ($Local.Recovery.SampledJournalRetention -eq 'MEASURED_PASS' -and $Node.Recovery.SampledJournalRetention -eq 'MEASURED_PASS') { 'MEASURED_PASS' } else { 'NOT MEASURED' }); Reason = 'indexed opportunity and recovery samples remain within 16,384 records with nonnegative observed reader margin; transient between-sample minimum remains unmeasured' },
 		[ordered]@{ Gate = 'Full Local/Node provider parity'; State = 'NOT MEASURED'; Reason = 'application service, real TLS, exact convergence, resource headroom and capture gates remain independent' }

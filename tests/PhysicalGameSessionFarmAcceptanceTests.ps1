@@ -3,6 +3,8 @@
 $ErrorActionPreference = 'Stop'
 $Analyzer = Join-Path $PSScriptRoot 'PhysicalGameSessionFarmAcceptance.ps1'
 . (Join-Path $PSScriptRoot 'AdmissionFairnessEvidence.ps1')
+. (Join-Path $PSScriptRoot 'RecoveryCausalEvidence.ps1')
+. (Join-Path $PSScriptRoot 'RecoveryCausalEvidenceFixture.ps1')
 $Tokens = $null
 $Errors = $null
 [void][Management.Automation.Language.Parser]::ParseFile($Analyzer, [ref]$Tokens, [ref]$Errors)
@@ -155,7 +157,7 @@ function Save-RecoveryLogs {
 		for ($Peer = 1; $Peer -le 32; $Peer++) {
 			$ServerError.Add("[Qualification:Recovery] event=quote_peer run=$RunId case=$Case connection_slot=$Peer connection_generation=1 accepted_unretired_complete_bytes=0 future_complete_bytes=77 w_complete_upper_bytes=77")
 		}
-		$ServerError.Add("[Qualification:Recovery] event=quote_result run=$RunId case=$Case status=PASS w_complete_upper_bytes=2464 quoted_frames=32 audited_frames=32 audited_accepted_bytes=2464 bound_us=20470537 reason=none tick=$($Tick + 482)")
+		$ServerError.Add("[Qualification:Recovery] event=quote_result run=$RunId case=$Case contract=causal_fence_v1 status=PASS w_complete_upper_bytes=2464 quoted_frames=32 bound_us=20470537 reason=none tick=$($Tick + 482)")
 		$Sample = "outstanding=0 active_grants=0 scheduler_queued=0 native_queued=0 native_observed=32 feedback_observed=32 accepted=100 first_sent=100 acked=100 retired=100 terminal_release=0 journal_backlog=0 materialization_backlog=0 current_tail=$Tail retained=16 oldest=1 required=100 margin=99 retained_high=16 minimum_retention_margin=99 journal_failures=0"
 		$ServerError.Add("[Qualification:Recovery] event=sample run=$RunId case=$Case elapsed_us=19000000 $Sample")
 		$ServerError.Add("[Qualification:Recovery] event=sample run=$RunId case=$Case elapsed_us=20000001 $Sample")
@@ -168,6 +170,7 @@ function Save-RecoveryLogs {
 		for ($Peer = 1; $Peer -le 32; $Peer++) {
 			$ServerError.Add("[Qualification:Recovery] event=terminal_reader run=$RunId case=$Case catalog=0 connection_slot=$Peer connection_generation=1 next_sequence=$Tail prepared=0 pending_relevance=0")
 		}
+		foreach ($Row in @(Save-RecoveryCausalFixture -Root $ServerRoot -RunId $RunId -Case $Case -Tail $Tail -CessationMicroseconds (100000000 * ($CaseIndex + 1) + 8000001))) { $ServerError.Add($Row) }
 		$ServerError.Add("[Qualification:Recovery] event=strict_deadline_barrier run=$RunId case=$Case elapsed_us=20471000 bound_us=20470537")
 	}
 	[IO.File]::AppendAllLines($ServerOutputPath, $ServerOutput)

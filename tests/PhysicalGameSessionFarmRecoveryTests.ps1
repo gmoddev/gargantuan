@@ -1,6 +1,8 @@
 #requires -Version 7.0
 # Parser-only recovery evidence tests. No endpoint process or capture is started.
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'RecoveryCausalEvidence.ps1')
+. (Join-Path $PSScriptRoot 'RecoveryCausalEvidenceFixture.ps1')
 $Runner = Join-Path $PSScriptRoot 'PhysicalGameSessionFarm.ps1'
 $Tokens = $null
 $Errors = $null
@@ -40,7 +42,7 @@ foreach ($Snippet in @(
 	$Position = $Found + $Snippet.Length
 }
 $ReplayStart = $QualificationSource.IndexOf('void StepCessationQuote() {', [StringComparison]::Ordinal)
-$ReplayEnd = $QualificationSource.IndexOf('AuditQuotedFrames();', $ReplayStart, [StringComparison]::Ordinal)
+$ReplayEnd = $QualificationSource.IndexOf('[[nodiscard]] static std::string QuoteReasonToken', $ReplayStart, [StringComparison]::Ordinal)
 if ($ReplayStart -lt 0 -or $ReplayEnd -lt $ReplayStart) { throw 'missing bounded cessation replay' }
 $ReplaySource = $QualificationSource.Substring($ReplayStart, $ReplayEnd - $ReplayStart)
 $AdvanceCount = [regex]::Matches($ReplaySource, 'AdvanceFrozenJournalQuote\(').Count
@@ -103,7 +105,7 @@ try {
 		for ($Peer = 1; $Peer -le 32; $Peer++) {
 			$ServerError.Add("[Qualification:Recovery] event=quote_peer run=$RunId case=$Case connection_slot=$Peer connection_generation=1 accepted_unretired_complete_bytes=0 future_complete_bytes=77 w_complete_upper_bytes=77")
 		}
-		$ServerError.Add("[Qualification:Recovery] event=quote_result run=$RunId case=$Case status=PASS w_complete_upper_bytes=2464 quoted_frames=32 audited_frames=32 audited_accepted_bytes=2464 bound_us=20470537 reason=none tick=$($Tick + 482)")
+		$ServerError.Add("[Qualification:Recovery] event=quote_result run=$RunId case=$Case contract=causal_fence_v1 status=PASS w_complete_upper_bytes=2464 quoted_frames=32 bound_us=20470537 reason=none tick=$($Tick + 482)")
 		$SampleFields = "outstanding=0 active_grants=0 scheduler_queued=0 native_queued=0 native_observed=32 feedback_observed=32 accepted=100 first_sent=100 acked=100 retired=100 terminal_release=0 journal_backlog=0 materialization_backlog=0 current_tail=$Tail retained=16 oldest=1 required=100 margin=99 retained_high=16 minimum_retention_margin=99 journal_failures=0"
 		$ServerError.Add("[Qualification:Recovery] event=sample run=$RunId case=$Case elapsed_us=19000000 $SampleFields")
 		$ServerError.Add("[Qualification:Recovery] event=sample run=$RunId case=$Case elapsed_us=20000001 $SampleFields")
@@ -116,6 +118,7 @@ try {
 		for ($Peer = 1; $Peer -le 32; $Peer++) {
 			$ServerError.Add("[Qualification:Recovery] event=terminal_reader run=$RunId case=$Case catalog=0 connection_slot=$Peer connection_generation=1 next_sequence=$Tail prepared=0 pending_relevance=0")
 		}
+		foreach ($Row in @(Save-RecoveryCausalFixture -Root $Root -RunId $RunId -Case $Case -Tail $Tail -CessationMicroseconds (100000000 * ($CaseIndex + 1) + 8000001))) { $ServerError.Add($Row) }
 		$ServerError.Add("[Qualification:Recovery] event=strict_deadline_barrier run=$RunId case=$Case elapsed_us=20471000 bound_us=20470537")
 	}
 	$Server = [pscustomobject]@{ OutputPath = (Join-Path $Root 'server.stdout.log');
@@ -170,6 +173,7 @@ try {
 	})[0].Replace('elapsed_us=19000000', 'elapsed_us=20470530')
 	$DelayedStructural = [Collections.Generic.List[string]]::new()
 	foreach ($Line in $OriginalError) {
+		if ($Line -match 'event=causal_result run=.* case=structural ') { $Line = $Line.Replace('prefix_converged_us=19000000', 'prefix_converged_us=20470530') }
 		if ($Line -match 'event=sample run=.* case=structural elapsed_us=(19000000|20000001) ') {
 			$DelayedStructural.Add($Line.Replace('outstanding=0', 'outstanding=77').Replace(
 				'active_grants=0', 'active_grants=1').Replace('native_queued=0', 'native_queued=77').Replace(
@@ -219,20 +223,18 @@ try {
 	})
 	Assert-RecoveryQuoteRejected -Reason 'unaudited frame' -Lines @($OriginalError | ForEach-Object {
 		if ($_ -match 'event=quote_result run=.* case=gameplay ') {
-			$_.Replace('audited_frames=32', 'audited_frames=31')
+			$_.Replace('quoted_frames=32', 'quoted_frames=31')
 		} else { $_ }
 	})
 	Assert-RecoveryQuoteRejected -Reason 'late structural convergence' -Lines @($OriginalError | ForEach-Object {
-		if ($_ -match 'event=sample run=.* case=gameplay ') {
-			$_.Replace('elapsed_us=19000000', 'elapsed_us=20480000').Replace(
-				'elapsed_us=20000001', 'elapsed_us=20480000')
+		if ($_ -match 'event=causal_result run=.* case=gameplay ') {
+			$_.Replace('prefix_converged_us=19000000', 'prefix_converged_us=20480000')
 		} else { $_ }
 	})
 	Assert-RecoveryQuoteRejected -Reason 'quote-delayed structural observation past exact bound' -Lines @(
 		$OriginalError | ForEach-Object {
-			if ($_ -match 'event=sample run=.* case=structural ') {
-				$_.Replace('elapsed_us=19000000', 'elapsed_us=20470538').Replace(
-					'elapsed_us=20000001', 'elapsed_us=20470538')
+			if ($_ -match 'event=causal_result run=.* case=structural ') {
+				$_.Replace('prefix_converged_us=19000000', 'prefix_converged_us=20470538')
 			} else { $_ }
 		})
 	$Moved = @($OriginalError | Where-Object { $_ -match 'event=name_ack case=structural peer_slot=32 ' })
@@ -251,15 +253,14 @@ try {
 	}
 	[IO.File]::WriteAllLines($Server.ErrorPath, $OriginalError)
 	$PostCessation = @($OriginalError | ForEach-Object {
-		if ($_ -match 'event=sample run=.* case=mixed elapsed_us=19000000 ') {
+		if ($_ -match 'event=sample run=.* case=mixed ') {
 			$_.Replace('current_tail=30000', 'current_tail=30001')
 		} else { $_ }
 	})
 	[IO.File]::WriteAllLines($Server.ErrorPath, $PostCessation)
-	$RejectedMutation = $false
-	try { [void](Assert-RecoveryRecords -Server $Server -Clients $Clients `
-		-ExpectedNonces $ExpectedNonces -ExpectedConnections $Connections) } catch { $RejectedMutation = $true }
-	if (-not $RejectedMutation) { throw 'post-cessation structural mutation was accepted' }
+	$LiveResult = Assert-RecoveryRecords -Server $Server -Clients $Clients `
+		-ExpectedNonces $ExpectedNonces -ExpectedConnections $Connections
+	if ($LiveResult.State -ne 'MEASURED_PASS') { throw 'later source work invalidated a completed finite baseline prefix' }
 	[IO.File]::WriteAllLines($Server.ErrorPath, $OriginalError)
 	$OriginalOutput = [IO.File]::ReadAllText($Server.OutputPath)
 	$BadMargin = [regex]::Replace($OriginalOutput,

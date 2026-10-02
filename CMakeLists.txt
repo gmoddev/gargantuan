@@ -829,6 +829,12 @@ if(BUILD_TESTING)
 			add_test(NAME gargantuan_physical_game_session_farm_fairness_evidence
 				COMMAND "${GARGANTUAN_PWSH_EXECUTABLE}" -NoProfile -File
 				"${CMAKE_CURRENT_SOURCE_DIR}/tests/AdmissionFairnessEvidenceTests.ps1")
+			add_test(NAME gargantuan_physical_game_session_farm_recovery_evidence
+				COMMAND "${GARGANTUAN_PWSH_EXECUTABLE}" -NoProfile -File
+				"${CMAKE_CURRENT_SOURCE_DIR}/tests/PhysicalGameSessionFarmRecoveryTests.ps1")
+			add_test(NAME gargantuan_physical_game_session_farm_causal_replay
+				COMMAND "${GARGANTUAN_PWSH_EXECUTABLE}" -NoProfile -File
+				"${CMAKE_CURRENT_SOURCE_DIR}/tests/RecoveryCausalEvidenceTests.ps1")
 			add_test(NAME gargantuan_physical_game_session_farm_preflight
 				COMMAND "${GARGANTUAN_PWSH_EXECUTABLE}" -NoProfile -File
 				"${CMAKE_CURRENT_SOURCE_DIR}/tests/PhysicalGameSessionFarmPreflightTests.ps1")

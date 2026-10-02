@@ -1,7 +1,7 @@
 #requires -Version 7.0
 # Offline reconciliation of two role-local Foundation 3L farm receipts. This
 # intentionally does not pronounce Local or Node provider qualification.
-# Stage AdmissionFairnessEvidence.ps1 beside this script; its absence fails closed.
+# Stage AdmissionFairnessEvidence.ps1 and RecoveryCausalEvidence.ps1 beside this script.
 
 param(
 	[Parameter(Mandatory = $true)][string]$RunManifestPath,
@@ -13,6 +13,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'AdmissionFairnessEvidence.ps1')
+. (Join-Path $PSScriptRoot 'RecoveryCausalEvidence.ps1')
 . (Join-Path $PSScriptRoot 'PhysicalFarmPublicationEvidence.ps1')
 
 function Get-RequiredJson {
@@ -45,7 +46,7 @@ function Assert-EvidenceRoot {
 	$Expected = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
 	foreach ($File in $Index.Files) {
 		$Name = [string]$File.Name
-		$MaximumBytes = if ($Name -ceq 'admission-fairness.tsv' -and $ExpectedRole -ceq 'Server') {
+		$MaximumBytes = if (($Name -ceq 'admission-fairness.tsv' -or $Name -cmatch '^recovery-(gameplay|structural|mixed)\.tsv$') -and $ExpectedRole -ceq 'Server') {
 			33554432
 		} elseif ($Name -ceq 'publication-service.bin' -and $ExpectedRole -ceq 'Server') {
 			335544832
