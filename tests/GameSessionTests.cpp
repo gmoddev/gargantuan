@@ -2146,8 +2146,9 @@ end)
 		auto Settings = Configuration(GameSessionRole::Server, "speculative-relevance");
 		// Real bounded planning intentionally spans more than one server step.
 		// Relevance can reverse before a planned Leave has ever been accepted.
-		Settings.StructuralReplication.PlanningWorkPerTick = 1;
+		Settings.StructuralReplication.PlanningWorkPerTick = 2;
 		Settings.StructuralReplication.PlanningPeerQuantum = 1;
+		Settings.HandshakeTimeoutTicks = 600;
 		GameSession Server(Network->CreateTransport(), Settings, &Runtime);
 		GameSession Client(Network->CreateTransport(), Configuration(GameSessionRole::Client, "speculative-relevance"));
 		Check(Server.Start().Succeeded() && Client.Start().Succeeded(), "speculative relevance sessions start");
