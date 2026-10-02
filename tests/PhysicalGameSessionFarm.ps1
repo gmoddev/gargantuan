@@ -84,7 +84,7 @@ function Get-Records {
 	if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return @() }
 	$Prefix = "[Qualification:$Kind] "
 	$Rows = [Collections.Generic.List[object]]::new()
-	$Lines = Read-SharedLogLines -Path $Path
+	$Lines = @(Read-SharedLogLines -Path $Path)
 	for ($Index = 0; $Index -lt $Lines.Count; $Index++) {
 		if (-not $Lines[$Index].StartsWith($Prefix, [StringComparison]::Ordinal)) { continue }
 		$Fields = Get-Fields -Line $Lines[$Index]
@@ -99,7 +99,7 @@ function Get-RecoveryDiagnostics {
 	if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return @() }
 	$Prefix = '[Qualification:Recovery] '
 	$Rows = [Collections.Generic.List[object]]::new()
-	$Lines = Read-SharedLogLines -Path $Path
+	$Lines = @(Read-SharedLogLines -Path $Path)
 	for ($Index = 0; $Index -lt $Lines.Count; $Index++) {
 		$Offset = $Lines[$Index].IndexOf($Prefix, [StringComparison]::Ordinal)
 		if ($Offset -lt 0) { continue }
@@ -279,6 +279,10 @@ function Assert-RecoveryRecords {
 			throw "recovery case $Case lacks bounded 480-opportunity cessation evidence"
 		}
 		$Tail = Get-RecoveryUnsigned -Row $Cessations[0] -Field 'journal_tail'
+		$MutationSamples = Get-RecoveryUnsigned -Row $Cessations[0] -Field 'retention_mutation_samples'
+		if ($MutationSamples -ne 16 * $ExpectedOffers) {
+			throw "recovery case $Case lacks mutation-point journal retention coverage"
+		}
 		if ($ExpectedOffers -gt 0) {
 			$MinimumObservedRetentionMargin = [long]::MaxValue
 			$MaximumObservedRetained = 0L
@@ -289,6 +293,7 @@ function Assert-RecoveryRecords {
 				$Required = Get-RecoveryUnsigned -Row $RetentionRow -Field 'required'
 				$Margin = Get-RecoveryUnsigned -Row $RetentionRow -Field 'margin'
 				$Retained = Get-RecoveryUnsigned -Row $RetentionRow -Field 'retained'
+				$SampleCount = Get-RecoveryUnsigned -Row $RetentionRow -Field 'mutation_samples'
 				if ([int]$Offer.opportunity -ne $Index + 1 -or [int]$Offer.mutations -ne 16 -or
 					[int]$Offer.name_bytes -ne 24576 -or
 					[int]$RetentionRow.opportunity -ne $Index + 1 -or
@@ -296,13 +301,14 @@ function Assert-RecoveryRecords {
 					($Index -lt 479 -and [long]$RetentionRow.__line -ge [long]$Offers[$Index + 1].__line) -or
 					$Oldest -lt 1 -or $Required -lt $Oldest -or $Required -gt $Tail -or
 					$Margin -ne ($Required - $Oldest) -or $Retained -gt 16384 -or
+					$SampleCount -ne 16 * ($Index + 1) -or
 					($Index -gt 0 -and [long]$Offer.monotonic_us - [long]$Offers[$Index - 1].monotonic_us -lt 16667)) {
 					throw "recovery case $Case has an invalid structural offer cadence"
 				}
 				$MinimumObservedRetentionMargin = [math]::Min($MinimumObservedRetentionMargin, $Margin)
 				$MaximumObservedRetained = [math]::Max($MaximumObservedRetained, $Retained)
 			}
-			if ($MinimumObservedRetentionMargin -ne
+			if ($MinimumObservedRetentionMargin -lt
 				(Get-RecoveryUnsigned -Row $Cessations[0] -Field 'minimum_retention_margin') -or
 				$MaximumObservedRetained -ne
 				(Get-RecoveryUnsigned -Row $Cessations[0] -Field 'retained_high')) {
@@ -438,6 +444,7 @@ function Assert-RecoveryRecords {
 			CessationJournalTail = $Tail; RawNameHistoryBytes = $ExpectedRaw
 			RetainedHighWaterRecords = [long]$Cessations[0].retained_high
 			MinimumRetentionMarginRecords = [long]$Cessations[0].minimum_retention_margin
+			RetentionMutationSamples = $MutationSamples
 			FixedServiceRecovery = $ServiceState
 			StrictConvergenceSufficientProof = $(if ($Strict) { 'MEASURED_PASS' } else { 'INCONCLUSIVE_NOT_MEASURED' })
 			StrictSnapshotElapsedUs = [long]$Snapshots[0].elapsed_us

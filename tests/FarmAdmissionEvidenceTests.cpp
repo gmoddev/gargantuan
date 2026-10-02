@@ -48,7 +48,7 @@ int main() {
 			Check(ActiveAdmissionEvidence == nullptr, "sink removed before file dump completes");
 		}
 		const auto Original = Read(Path);
-		Check(Original.find("format=GargantuanAdmissionEvidenceV1\trun=12345678-1234-4234-8234-123456789abc\n") == 0 &&
+		Check(Original.find("format=GargantuanAdmissionEvidenceV2\trun=12345678-1234-4234-8234-123456789abc\n") == 0 &&
 			Original.find("event\texact_demand\tnone\t1\t1\t1\t") != std::string::npos &&
 			Original.ends_with("end\t1\t0\n"), "typed file and complete trailer");
 		bool RejectedExisting = false;

@@ -304,6 +304,7 @@ namespace gargantuan::host {
 		bool RecoverySnapshotWritten = false;
 		std::size_t OverloadRetainedHighWater = 0;
 		std::int64_t OverloadMinimumRetentionMargin = std::numeric_limits<std::int64_t>::max();
+		std::uint64_t OverloadRetentionMutationSamples = 0;
 		std::size_t OverloadCase = 0;
 		std::uint32_t OverloadOpportunities = 0;
 		std::chrono::steady_clock::time_point OverloadStageStarted;
@@ -664,7 +665,7 @@ namespace gargantuan::host {
 			std::int64_t Margin = 0;
 		};
 
-		[[nodiscard]] RetentionObservation ObserveRetention() {
+		[[nodiscard]] RetentionObservation ObserveRetention(std::uint64_t Tick) {
 			const auto Window = ChangeJournal::Get().GetRetentionWindow(Runtime.DataModel->GetObjectId());
 			auto Required = Window.NextSequence;
 			for (const auto &Reader : network::detail::GameSessionTestAccess::GetJournalRequirements(Session))
@@ -672,6 +673,7 @@ namespace gargantuan::host {
 			const auto Margin = static_cast<std::int64_t>(Required) - static_cast<std::int64_t>(Window.OldestSequence);
 			OverloadRetainedHighWater = std::max(OverloadRetainedHighWater, Window.RetainedRecords);
 			OverloadMinimumRetentionMargin = std::min(OverloadMinimumRetentionMargin, Margin);
+			if (Margin < 0) Fail("journal_reader_evicted_during_overload", Tick);
 			return {Window.RetainedRecords, Window.OldestSequence, Required, Margin};
 		}
 
@@ -680,6 +682,7 @@ namespace gargantuan::host {
 			OverloadOpportunities = 0;
 			OverloadRetainedHighWater = 0;
 			OverloadMinimumRetentionMargin = std::numeric_limits<std::int64_t>::max();
+			OverloadRetentionMutationSamples = 0;
 			PublishOverloadAttribute("ScaleOverloadCase", WireValue(std::string(OverloadCases[OverloadCase])), Tick);
 			OverloadStageStarted = std::chrono::steady_clock::now();
 			State = Stage::OverloadReady;
@@ -718,18 +721,27 @@ namespace gargantuan::host {
 			const auto First = ((OverloadOpportunities - 1) % 2) * 16;
 			for (std::size_t Index = First; Index < First + 16; ++Index) {
 				const auto Letter = static_cast<char>('a' + (OverloadCase * 7 + OverloadOpportunities + Index) % 26);
+				const auto TailBefore = ChangeJournal::Get().CreateCursor(
+					Runtime.DataModel->GetObjectId()).NextSequence;
 				OverloadParts[Index]->SetName(std::string(OverloadNameBytes, Letter));
+				if (ChangeJournal::Get().CreateCursor(Runtime.DataModel->GetObjectId()).NextSequence <= TailBefore)
+					Fail("overload_name_mutation_not_committed", Tick);
+				// Sample immediately after each committed workload mutation, not
+				// merely after the sixteen-mutation opportunity has completed.
+				(void)ObserveRetention(Tick);
+				++OverloadRetentionMutationSamples;
 			}
 			std::cout << "[Qualification:Recovery] event=structural_offer run=" << RunId
 				<< " case=" << OverloadCases[OverloadCase] << " opportunity=" << OverloadOpportunities
 				<< " mutations=16 name_bytes=" << OverloadNameBytes << " tick=" << Tick
 				<< " monotonic_us=" << std::chrono::duration_cast<std::chrono::microseconds>(
 					std::chrono::steady_clock::now().time_since_epoch()).count() << '\n';
-			const auto Retention = ObserveRetention();
+			const auto Retention = ObserveRetention(Tick);
 			std::cout << "[Qualification:Recovery] event=retention run=" << RunId
 				<< " case=" << OverloadCases[OverloadCase] << " opportunity=" << OverloadOpportunities
 				<< " retained=" << Retention.Retained << " oldest=" << Retention.Oldest
-				<< " required=" << Retention.Required << " margin=" << Retention.Margin << '\n';
+				<< " required=" << Retention.Required << " margin=" << Retention.Margin
+				<< " mutation_samples=" << OverloadRetentionMutationSamples << '\n';
 		}
 
 		void StepOverload(std::uint64_t Tick) {
@@ -753,7 +765,7 @@ namespace gargantuan::host {
 				LastOverloadOpportunity = Now;
 				++OverloadOpportunities;
 				OfferOverloadNameWork(Tick);
-				if (OverloadCase == 0) (void)ObserveRetention();
+				if (OverloadCase == 0) (void)ObserveRetention(Tick);
 				if (OverloadOpportunities == OverloadOpportunityCount) {
 					State = Stage::OverloadOffered;
 					std::cout << "[Qualification:Recovery] event=all_opportunities run=" << RunId
@@ -802,6 +814,7 @@ namespace gargantuan::host {
 								OverloadOpportunityCount * 16 * OverloadNameBytes)
 						<< " retained_high=" << OverloadRetainedHighWater
 						<< " minimum_retention_margin=" << OverloadMinimumRetentionMargin
+						<< " retention_mutation_samples=" << OverloadRetentionMutationSamples
 						<< " journal_backlog=" << Metrics.JournalBacklogRecords
 						<< " outstanding=" << Metrics.ReliableAdmission.OutstandingBytes
 						<< " scheduler_queued=" << Metrics.SchedulerQueuedReliableBytes
@@ -827,7 +840,7 @@ namespace gargantuan::host {
 					EmitQuoteResult(Tick);
 					Fail("recovery_quote_invalid", Tick);
 				}
-				const auto Retention = ObserveRetention();
+				const auto Retention = ObserveRetention(Tick);
 				const auto Elapsed = std::chrono::duration_cast<std::chrono::microseconds>(Now - OverloadCeased).count();
 				std::cerr << "[Qualification:Recovery] event=sample run=" << RunId
 					<< " case=" << CaseName << " elapsed_us=" << Elapsed

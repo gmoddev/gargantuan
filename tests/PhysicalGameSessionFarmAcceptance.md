@@ -71,14 +71,21 @@ run-scoped verdict against the canonical 220.5-ms first-grant eligibility bound;
 an interruption, disposal, or open demand makes complete exact-demand episode
 coverage inconclusive. Even a passing set of accepted grants does not prove
 continuous semantic backlog, sustained fair share, or overload backpressure.
-The sealed admission timeline additionally rejects any snapshot exceeding the
+The V2 native admission timeline adds generation- and token-scoped ACK
+retirement, grant release, and terminal release after each accepted grant.
+Its offline reader rejects a second grant for the same generation before
+release, a release before retirement, duplicate lifecycle transitions, and
+native active-grant counts that disagree with the reconstructed chronology.
+Historical V1 traces remain readable but their grant lifecycle is
+`NOT_MEASURED`. The sealed admission timeline additionally rejects any snapshot exceeding the
 four-grant or peer/global credit caps, a grant-accepted snapshot with no active
 grant, or regressing cumulative deferrals. Its maxima and final sampled
 deferrals must fit the native final high-water and counters, and terminal
 pending enter/leave totals must reconcile. This is a bounded diagnostic
-subset: the trace has no grant-retirement event or continuous semantic backlog
-ledger, so it cannot prove one ACK-gated grant per peer between snapshots or
-saturated fair-share service.
+subset: the trace still has no continuous semantic backlog ledger, so it
+cannot prove saturated fair-share service from credit-eligible candidates
+alone. V2's lifecycle verdict must be reconciled into the final provider
+acceptance gate; a parser-only fixture is not a physical result.
 
 For Node, the report also checks the indexed authenticated manifest RPC
 receipt against the run manifest and reconciliation fields. Without additional
@@ -133,12 +140,14 @@ failures do not establish the high-water retention margin. When the
 indexed three-case recovery workload is present, the report separately records
 that its 480 structural/mixed offer samples and recovery samples stayed within
 the 16,384-record window with nonnegative observed reader margin. This sampled
-verdict now also verifies each reader margin as `required - oldest`, source-log
-offer/retention order, exact 480-sample minimum and high-water against the
-cessation summary, and monotonic cumulative recovery minima/maxima. It cannot
-rule out a transient minimum between observation points. Full
-fairness, backpressure, and continuous journal retention remain `NOT MEASURED`
-until their own bounded typed traces and acceptance analyzers exist.
+verdict now also requires a retained, monotonic 7,680-observation count per
+structural/mixed case: one reader-margin measurement immediately after each
+committed Name mutation. Its native minimum may be lower than the 480
+end-of-opportunity samples and is the authoritative overload minimum. The
+source-log reader checks the count and bounded source-log ordering. This
+closes the between-workload-mutation sampling hole for this fixed overload;
+other commits between those mutations and independent sustained fairness or
+backpressure behavior are not inferred from that observation.
 
 The 4/8-GiB available-memory preflight and the endpoint's per-process/aggregate
 working-set limits are protective run bounds, not a final host-memory acceptance

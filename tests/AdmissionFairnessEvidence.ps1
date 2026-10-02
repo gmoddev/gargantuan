@@ -17,6 +17,11 @@ function Read-AdmissionFairnessEvidence {
 	$Current = [Collections.Generic.Dictionary[string, UInt64]]::new([StringComparer]::Ordinal)
 	$Peers = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)
 	$Tokens = [Collections.Generic.HashSet[UInt64]]::new()
+	$AcceptedGrants = [Collections.Generic.Dictionary[UInt64, object]]::new()
+	$OpenGrantByPeer = [Collections.Generic.Dictionary[string, UInt64]]::new([StringComparer]::Ordinal)
+	$RetiredGrantCount = 0
+	$ReleasedGrantCount = 0
+	$TerminalReleasedGrantCount = 0
 	$PendingReplacement = $null
 	$Count = 0
 	$GrantCount = 0
@@ -33,7 +38,9 @@ function Read-AdmissionFairnessEvidence {
 	$Stream = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
 	$Reader = [IO.StreamReader]::new($Stream, [Text.UTF8Encoding]::new($false, $true))
 	try {
-		if ($Reader.ReadLine() -cne "format=GargantuanAdmissionEvidenceV1`trun=$RunId") {
+		$Header = $Reader.ReadLine()
+		$IsV2 = $Header -ceq "format=GargantuanAdmissionEvidenceV2`trun=$RunId"
+		if (-not $IsV2 -and $Header -cne "format=GargantuanAdmissionEvidenceV1`trun=$RunId") {
 			throw 'admission fairness evidence header or run identity is invalid'
 		}
 		while ($null -ne ($Line = $Reader.ReadLine())) {
@@ -46,7 +53,8 @@ function Read-AdmissionFairnessEvidence {
 			}
 			if ($Count -ge 65536 -or $Fields.Count -ne 19 -or $Fields[0] -cne 'event' -or
 				$Fields[1] -cnotin @('exact_demand', 'credit_eligible', 'eligibility_interrupted',
-					'grant_accepted', 'reservation_rolled_back', 'demand_disposed') -or
+					'grant_accepted', 'reservation_rolled_back', 'demand_disposed',
+					'grant_retired', 'grant_released', 'grant_terminal_released') -or
 				$Fields[2] -cnotin @('none', 'no_work', 'unexamined', 'replaced', 'rollback',
 					'generation_removed', 'terminal_release', 'feedback_unavailable')) {
 				throw "admission fairness evidence event $Count has an invalid schema"
@@ -88,6 +96,37 @@ function Read-AdmissionFairnessEvidence {
 			# may still use the step ledger's earlier Now. File order is causal,
 			# but timestamps need only be monotonic within one demand.
 			$LatestTime = [Math]::Max($LatestTime, $At)
+			if ($Kind -cin @('grant_retired', 'grant_released', 'grant_terminal_released')) {
+				if (-not $IsV2 -or $Reason -cne 'none' -or $Token -eq 0 -or
+					$Episode -ne 0 -or $CreditAt -ne 0 -or $EligibleSince -ne 0 -or
+					-not $AcceptedGrants.ContainsKey($Token) -or
+					-not $OpenGrantByPeer.ContainsKey($Peer) -or $OpenGrantByPeer[$Peer] -ne $Token) {
+					throw 'grant lifecycle event has no matching accepted generation and token'
+				}
+				$Grant = $AcceptedGrants[$Token]
+				if ($Grant.Peer -cne $Peer -or $Grant.DemandId -ne $DemandId -or
+					$Grant.Bytes -ne $Bytes -or $At -lt $Grant.AcceptedAt) {
+					throw 'grant lifecycle event changed accepted identity, bytes, or chronology'
+				}
+				if ($Kind -ceq 'grant_retired') {
+					if ($Grant.Retired) { throw 'grant was retired twice' }
+					$Grant.Retired = $true
+					$RetiredGrantCount++
+				} else {
+					if ($Kind -ceq 'grant_released' -and -not $Grant.Retired) {
+						throw 'grant released before exact ACK retirement'
+					}
+					if ($Kind -ceq 'grant_terminal_released') { $TerminalReleasedGrantCount++ }
+					$ReleasedGrantCount++
+					[void]$OpenGrantByPeer.Remove($Peer)
+					[void]$AcceptedGrants.Remove($Token)
+				}
+				if ($N[11] -ne $OpenGrantByPeer.Count) {
+					throw 'native active grant count disagrees with lifecycle chronology'
+				}
+				$Count++
+				continue
+			}
 			if ($PendingReplacement -and ($Kind -cne 'exact_demand' -or $Peer -cne $PendingReplacement)) {
 				throw 'replaced admission demand was not followed by the same generation replanning'
 			}
@@ -155,6 +194,15 @@ function Read-AdmissionFairnessEvidence {
 						$CreditAt -ne $Demand.CreditAt -or -not $Tokens.Add($Token)) {
 						throw 'accepted grant has invalid episode or duplicate token'
 					}
+					if ($IsV2) {
+						if ($OpenGrantByPeer.ContainsKey($Peer)) { throw 'second ACK-gated grant accepted before release' }
+						$OpenGrantByPeer.Add($Peer, $Token)
+						$AcceptedGrants.Add($Token, @{ Peer = $Peer; DemandId = $DemandId;
+							Bytes = $Bytes; AcceptedAt = $At; Retired = $false })
+						if ($N[11] -ne $OpenGrantByPeer.Count) {
+							throw 'native active grant count disagrees with acceptance chronology'
+						}
+					}
 					$Wait = [UInt64]($At - $EligibleSince)
 					$Stats = $Peers[$Peer]
 					$Stats.GrantCount++
@@ -212,6 +260,14 @@ function Read-AdmissionFairnessEvidence {
 		return [pscustomobject]@{
 			Classification = 'EVIDENCE_INTEGRITY_AND_OBSERVED_TIMING_ONLY'
 			TraceCanonicalCounterBounds = 'MEASURED_PASS'
+			GrantLifecycleCoverage = $(if (-not $IsV2 -or $GrantCount -eq 0) { 'NOT_MEASURED' }
+				elseif ($TerminalReleasedGrantCount -gt 0 -or $OpenGrantByPeer.Count -gt 0 -or
+					$RetiredGrantCount -ne $GrantCount -or $ReleasedGrantCount -ne $GrantCount) { 'MEASURED_FAIL' }
+				else { 'MEASURED_PASS' })
+			RetiredGrantCount = $RetiredGrantCount
+			ReleasedGrantCount = $ReleasedGrantCount
+			TerminalReleasedGrantCount = $TerminalReleasedGrantCount
+			OpenGrantCount = $OpenGrantByPeer.Count
 			MaximumTraceActiveGrants = $MaximumTraceActiveGrants
 			MaximumTracePeerCreditBytes = $MaximumTracePeerCreditBytes
 			MaximumTraceGlobalCreditBytes = $MaximumTraceGlobalCreditBytes

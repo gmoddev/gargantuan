@@ -88,6 +88,9 @@ namespace gargantuan::host::detail {
 			case K::CreditEligible: return "credit_eligible";
 			case K::EligibilityInterrupted: return "eligibility_interrupted";
 			case K::GrantAccepted: return "grant_accepted";
+			case K::GrantRetired: return "grant_retired";
+			case K::GrantReleased: return "grant_released";
+			case K::GrantTerminalReleased: return "grant_terminal_released";
 			case K::ReservationRolledBack: return "reservation_rolled_back";
 			case K::DemandDisposed: return "demand_disposed";
 			}
@@ -145,7 +148,7 @@ namespace gargantuan::host::detail {
 			network::detail::ActiveAdmissionEvidence = Previous;
 			try {
 				ExclusiveWriter Output(Path);
-				Output.Write("format=GargantuanAdmissionEvidenceV1\trun=" + RunId + "\n");
+				Output.Write("format=GargantuanAdmissionEvidenceV2\trun=" + RunId + "\n");
 				for (const auto &Event : Events) Output.Write(Format(Event));
 				Output.Write("end\t" + std::to_string(Events.size()) + "\t" +
 					(Overflow ? std::string("1\n") : std::string("0\n")));

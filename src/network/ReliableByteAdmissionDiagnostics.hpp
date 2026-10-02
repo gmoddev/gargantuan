@@ -28,6 +28,9 @@ namespace gargantuan::network::detail {
 		CreditEligible,
 		EligibilityInterrupted,
 		GrantAccepted,
+		GrantRetired,
+		GrantReleased,
+		GrantTerminalReleased,
 		ReservationRolledBack,
 		DemandDisposed,
 	};

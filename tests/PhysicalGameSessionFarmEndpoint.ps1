@@ -482,7 +482,8 @@ function Assert-FairnessEvidence {
 	$Stream = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
 	$Reader = [IO.StreamReader]::new($Stream, [Text.UTF8Encoding]::new($false, $true))
 	try {
-		if ($Reader.ReadLine() -cne "format=GargantuanAdmissionEvidenceV1`trun=$LocalRunId") {
+		if ($Reader.ReadLine() -cnotin @("format=GargantuanAdmissionEvidenceV1`trun=$LocalRunId",
+			"format=GargantuanAdmissionEvidenceV2`trun=$LocalRunId")) {
 			throw 'native fairness evidence run/header mismatch'
 		}
 		$Count = 0
@@ -499,7 +500,8 @@ function Assert-FairnessEvidence {
 			}
 			if ($Ended -or $Fields.Count -ne 19 -or $Fields[0] -cne 'event' -or
 				$Fields[1] -cnotin @('exact_demand', 'credit_eligible', 'eligibility_interrupted',
-					'grant_accepted', 'reservation_rolled_back', 'demand_disposed') -or
+					'grant_accepted', 'reservation_rolled_back', 'demand_disposed',
+					'grant_retired', 'grant_released', 'grant_terminal_released') -or
 				$Fields[2] -cnotin @('none', 'no_work', 'unexamined', 'replaced', 'rollback',
 					'generation_removed', 'terminal_release', 'feedback_unavailable') -or $Count -ge 65536) {
 				throw 'native fairness evidence event schema/count is invalid'
@@ -512,7 +514,8 @@ function Assert-FairnessEvidence {
 				$Numbers[7] -gt $Numbers[6] -or $Numbers[8] -gt $Numbers[6] -or
 				($Fields[1] -cin @('credit_eligible', 'eligibility_interrupted', 'grant_accepted') -and
 					$Numbers[3] -eq 0) -or
-				($Fields[1] -cin @('grant_accepted', 'reservation_rolled_back') -and $Numbers[4] -eq 0)) {
+				($Fields[1] -cin @('grant_accepted', 'reservation_rolled_back',
+					'grant_retired', 'grant_released', 'grant_terminal_released') -and $Numbers[4] -eq 0)) {
 				throw 'native fairness evidence identity, size, or timestamp is invalid'
 			}
 			$Count++

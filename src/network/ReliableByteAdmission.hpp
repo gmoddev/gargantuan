@@ -53,6 +53,8 @@ public:
 		Value.Service = Service;
 		if (Value.OwnsGrant && !Value.Debt && Service && !Service->OrdinaryDebt) {
 			Value.OwnsGrant = false; --Totals.ActiveDrainGrants;
+			EmitGrantLifecycle(Id, Value, AdmissionEvidenceKind::GrantReleased, Now);
+			ClearDiagnosticGrant(Value);
 		}
 		return true;
 	}
@@ -62,6 +64,7 @@ public:
 		if (!Profile.IsPooled() || Found == Peers.end() || !Token || !Bytes ||
 			Found->second.DebtToken != Token || Found->second.Debt != Bytes ||
 			Bytes > std::numeric_limits<std::uint64_t>::max() - Totals.VerifiedAttributedRetirement) return false;
+		EmitGrantLifecycle(Id, Found->second, AdmissionEvidenceKind::GrantRetired, Now);
 		Found->second.Debt = Found->second.DebtToken = 0;
 		Totals.OutstandingBytes -= Bytes;
 		Totals.VerifiedAttributedRetirement += Bytes;
@@ -74,8 +77,11 @@ public:
 		if (Bytes > std::numeric_limits<std::uint64_t>::max() - Totals.TerminalReleasedBytes) return false;
 		Totals.TerminalReleasedBytes += Bytes; Totals.OutstandingBytes -= Bytes;
 		if (Found->second.OwnsGrant) --Totals.ActiveDrainGrants;
+		if (Found->second.OwnsGrant)
+			EmitGrantLifecycle(Id, Found->second, AdmissionEvidenceKind::GrantTerminalReleased, Now);
 		Found->second.OwnsGrant = false;
 		Found->second.Debt = Found->second.DebtToken = 0;
+		ClearDiagnosticGrant(Found->second);
 		DisposeDemand(Id, Found->second, AdmissionEvidenceReason::TerminalRelease);
 		Remove(Id);
 		return true;
@@ -205,6 +211,9 @@ public:
 			AdmissionEvidenceReason::None,
 			DiagnosticAcceptedAt == std::numeric_limits<std::uint64_t>::max() ? Now : DiagnosticAcceptedAt,
 			Receipt.Token);
+		Value.DiagnosticGrantDemandId = Value.DiagnosticDemandId;
+		Value.DiagnosticGrantBytes = Receipt.Bytes;
+		Value.DiagnosticGrantToken = Receipt.Token;
 		ClearDiagnosticDemand(Value);
 		Value.WaitSince.reset(); Value.Required = MinimumFrameBytes;
 		Add(Totals.AcceptedBytes, Receipt.Bytes); Active.reset(); ReleaseWait(Receipt.Connection); return true;
@@ -266,6 +275,7 @@ private:
 		bool Seen = false, Backlogged = false;
 		std::optional<ServiceObservation> Service;
 		std::uint64_t Debt = 0, DebtToken = 0, NextQualification = 0;
+		std::uint64_t DiagnosticGrantDemandId = 0, DiagnosticGrantBytes = 0, DiagnosticGrantToken = 0;
 		bool OwnsGrant = false;
 		std::uint64_t DiagnosticDemandId = 0, DiagnosticBytes = 0, DiagnosticDemandAt = 0;
 		std::array<std::uint64_t, 2> DiagnosticFingerprint{};
@@ -299,6 +309,22 @@ private:
 			.FairnessDeferrals = Totals.FairnessDeferrals,
 			.ExactCandidateFingerprint = Value.DiagnosticFingerprint,
 		});
+	}
+	void EmitGrantLifecycle(ConnectionId Id, const Peer &Value, AdmissionEvidenceKind Kind,
+		std::uint64_t At) const noexcept {
+		const auto *Sink = ActiveAdmissionEvidence;
+		if (!Sink || !Sink->Record || !Value.DiagnosticGrantDemandId) return;
+		Sink->Record(Sink->Context, AdmissionEvidenceEvent{
+			.Kind = Kind, .Connection = Id, .DemandId = Value.DiagnosticGrantDemandId,
+			.GrantToken = Value.DiagnosticGrantToken, .ExactBytes = Value.DiagnosticGrantBytes,
+			.AtMicroseconds = At, .PeerCreditBytes = Value.Credit.Bytes,
+			.GlobalCreditBytes = Global.Bytes, .ActiveGrants = Totals.ActiveDrainGrants,
+			.GrantDeferrals = Totals.GrantDeferrals, .FundedDeferrals = Totals.FundedDeferrals,
+			.CreditDeferrals = Totals.CreditDeferrals, .FairnessDeferrals = Totals.FairnessDeferrals,
+		});
+	}
+	static void ClearDiagnosticGrant(Peer &Value) noexcept {
+		Value.DiagnosticGrantDemandId = Value.DiagnosticGrantBytes = Value.DiagnosticGrantToken = 0;
 	}
 	static void ClearDiagnosticDemand(Peer &Value) noexcept {
 		Value.DiagnosticDemandId = Value.DiagnosticBytes = Value.DiagnosticDemandAt = 0;

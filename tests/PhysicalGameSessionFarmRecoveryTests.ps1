@@ -45,12 +45,13 @@ try {
 			for ($Opportunity = 1; $Opportunity -le 480; $Opportunity++) {
 				$Time = 100000000 * ($CaseIndex + 1) + $Opportunity * 16667
 				$ServerOutput.Add("[Qualification:Recovery] event=structural_offer run=$RunId case=$Case opportunity=$Opportunity mutations=16 name_bytes=24576 tick=$($Tick + $Opportunity) monotonic_us=$Time")
-				$ServerOutput.Add("[Qualification:Recovery] event=retention run=$RunId case=$Case opportunity=$Opportunity retained=16 oldest=1 required=100 margin=99")
+				$ServerOutput.Add("[Qualification:Recovery] event=retention run=$RunId case=$Case opportunity=$Opportunity retained=16 oldest=1 required=100 margin=99 mutation_samples=$(16 * $Opportunity)")
 			}
 		}
 		$ServerOutput.Add("[Qualification:Recovery] event=all_opportunities run=$RunId case=$Case opportunities=480 elapsed_us=8000000 tick=$($Tick + 480)")
 		$RawBytes = if ($Case -eq 'gameplay') { 0 } else { 188743680 }
-		$ServerOutput.Add("[Qualification:Recovery] event=cessation run=$RunId case=$Case tick=$($Tick + 481) monotonic_us=$(100000000 * ($CaseIndex + 1) + 8000001) journal_tail=$Tail raw_name_bytes=$RawBytes retained_high=16 minimum_retention_margin=99")
+		$MutationSamples = if ($Case -eq 'gameplay') { 0 } else { 7680 }
+		$ServerOutput.Add("[Qualification:Recovery] event=cessation run=$RunId case=$Case tick=$($Tick + 481) monotonic_us=$(100000000 * ($CaseIndex + 1) + 8000001) journal_tail=$Tail raw_name_bytes=$RawBytes retained_high=16 minimum_retention_margin=99 retention_mutation_samples=$MutationSamples")
 		$ServerError.Add("[Qualification:Recovery] event=quote_capture run=$RunId case=$Case status=READY reason=none tick=$($Tick + 481)")
 		$ServerError.Add("[Qualification:Recovery] event=cessation_barrier run=$RunId case=$Case journal_tail=$Tail")
 		for ($Peer = 1; $Peer -le 32; $Peer++) {
@@ -242,6 +243,12 @@ try {
 	Assert-RetentionRejected -Reason 'reader margin arithmetic' -ErrorText ($OriginalError -join "`n") `
 		-OutputText ($OriginalOutput.Replace('opportunity=1 retained=16 oldest=1 required=100 margin=99',
 			'opportunity=1 retained=16 oldest=1 required=101 margin=99'))
+	Assert-RetentionRejected -Reason 'missing mutation-point sample' -ErrorText ($OriginalError -join "`n") `
+		-OutputText ($OriginalOutput.Replace('case=structural opportunity=1 retained=16 oldest=1 required=100 margin=99 mutation_samples=16',
+			'case=structural opportunity=1 retained=16 oldest=1 required=100 margin=99 mutation_samples=15'))
+	Assert-RetentionRejected -Reason 'cessation mutation count mismatch' -ErrorText ($OriginalError -join "`n") `
+		-OutputText ($OriginalOutput.Replace('case=structural tick=2481 monotonic_us=208000001 journal_tail=20000 raw_name_bytes=188743680 retained_high=16 minimum_retention_margin=99 retention_mutation_samples=7680',
+			'case=structural tick=2481 monotonic_us=208000001 journal_tail=20000 raw_name_bytes=188743680 retained_high=16 minimum_retention_margin=99 retention_mutation_samples=7679'))
 	Assert-RetentionRejected -Reason 'forged 480-sample minimum' -ErrorText ($OriginalError -join "`n") `
 		-OutputText ($OriginalOutput.Replace('case=structural tick=2481 monotonic_us=208000001 journal_tail=20000 raw_name_bytes=188743680 retained_high=16 minimum_retention_margin=99',
 			'case=structural tick=2481 monotonic_us=208000001 journal_tail=20000 raw_name_bytes=188743680 retained_high=16 minimum_retention_margin=100'))

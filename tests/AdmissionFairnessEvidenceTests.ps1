@@ -20,8 +20,8 @@ function New-Event {
 }
 
 function Write-Trace {
-	param([string[]]$Events, [string]$Trailer)
-	$Lines = @("format=GargantuanAdmissionEvidenceV1`trun=$RunId") + $Events + @($Trailer)
+	param([string[]]$Events, [string]$Trailer, [int]$Version = 1)
+	$Lines = @("format=GargantuanAdmissionEvidenceV$Version`trun=$RunId") + $Events + @($Trailer)
 	[IO.File]::WriteAllText($Path, ($Lines -join "`n") + "`n", [Text.UTF8Encoding]::new($false))
 }
 
@@ -83,6 +83,45 @@ try {
 		$Offline.MaximumObservedEligibilityToGrantMicroseconds -ne 200 -or
 		$Offline.Classification -cne 'EVIDENCE_INTEGRITY_AND_OBSERVED_TIMING_ONLY') {
 		throw 'offline analyzer result differs from farm reconciliation'
+	}
+	$Lifecycle = @(
+		(New-Event exact_demand 30 1000),
+		(New-Event credit_eligible 30 1100 -Episode 1 -CreditAt 1050 -EligibleAt 1100 -PeerCredit 100),
+		(New-Event grant_accepted 30 1200 -Episode 1 -Token 30 -CreditAt 1050 -EligibleAt 1100 -ActiveGrants 1),
+		(New-Event grant_retired 30 1300 -Token 30 -ActiveGrants 1),
+		(New-Event grant_released 30 1400 -Token 30 -ActiveGrants 0),
+		(New-Event exact_demand 31 1500),
+		(New-Event credit_eligible 31 1600 -Episode 1 -CreditAt 1550 -EligibleAt 1600 -PeerCredit 100),
+		(New-Event grant_accepted 31 1700 -Episode 1 -Token 31 -CreditAt 1550 -EligibleAt 1600 -ActiveGrants 1),
+		(New-Event grant_retired 31 1800 -Token 31 -ActiveGrants 1),
+		(New-Event grant_released 31 1900 -Token 31 -ActiveGrants 0)
+	)
+	Write-Trace -Events $Lifecycle -Trailer "end`t10`t0" -Version 2
+	$LifecycleResult = Read-AdmissionFairnessEvidence -Path $Path -RunId $RunId
+	if ($LifecycleResult.GrantLifecycleCoverage -cne 'MEASURED_PASS' -or
+		$LifecycleResult.RetiredGrantCount -ne 2 -or $LifecycleResult.ReleasedGrantCount -ne 2 -or
+		$LifecycleResult.OpenGrantCount -ne 0) { throw 'complete ACK-gated grant chronology failed' }
+	$Invalid = @($Lifecycle)
+	$Invalid[3] = New-Event grant_retired 30 1300 -Token 31 -ActiveGrants 1
+	Write-Trace -Events $Invalid -Trailer "end`t10`t0" -Version 2
+	try { [void](Read-AdmissionFairnessEvidence -Path $Path -RunId $RunId); throw 'wrong retirement token accepted' }
+	catch { if ($_.Exception.Message -ceq 'wrong retirement token accepted') { throw } }
+	$Invalid = @($Lifecycle)
+	$Invalid[3] = New-Event grant_released 30 1300 -Token 30 -ActiveGrants 0
+	Write-Trace -Events $Invalid -Trailer "end`t10`t0" -Version 2
+	try { [void](Read-AdmissionFairnessEvidence -Path $Path -RunId $RunId); throw 'release before retirement accepted' }
+	catch { if ($_.Exception.Message -ceq 'release before retirement accepted') { throw } }
+	$Invalid = @($Lifecycle[0..3] + $Lifecycle[5..9])
+	Write-Trace -Events $Invalid -Trailer "end`t9`t0" -Version 2
+	try { [void](Read-AdmissionFairnessEvidence -Path $Path -RunId $RunId); throw 'second grant before release accepted' }
+	catch { if ($_.Exception.Message -ceq 'second grant before release accepted') { throw } }
+	$Invalid = @($Lifecycle)
+	$Invalid[4] = New-Event grant_terminal_released 30 1400 -Token 30 -ActiveGrants 0
+	Write-Trace -Events $Invalid -Trailer "end`t10`t0" -Version 2
+	$TerminalResult = Read-AdmissionFairnessEvidence -Path $Path -RunId $RunId
+	if ($TerminalResult.GrantLifecycleCoverage -cne 'MEASURED_FAIL' -or
+		$TerminalResult.TerminalReleasedGrantCount -ne 1) {
+		throw 'terminal release was not classified as a grant lifecycle failure'
 	}
 	$CrossPeerClock = @(
 		(New-Event exact_demand 1 1000),
@@ -165,7 +204,7 @@ try {
 	Write-Trace -Events $Events -Trailer "end`t15`t0"
 	try { [void](Read-AdmissionFairnessEvidence -Path $Path -RunId $RunId); throw 'bad trailer accepted' }
 	catch { if ($_.Exception.Message -ceq 'bad trailer accepted') { throw } }
-Write-Output '[Qualification:Admission] analyzer_cases=21 PASS'
+Write-Output '[Qualification:Admission] analyzer_cases=26 PASS'
 } finally {
 	$Resolved = [IO.Path]::GetFullPath($Root)
 	if ($Resolved.StartsWith([IO.Path]::GetFullPath([IO.Path]::GetTempPath()), [StringComparison]::OrdinalIgnoreCase) -and
