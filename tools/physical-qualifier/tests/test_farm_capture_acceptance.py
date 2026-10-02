@@ -79,7 +79,8 @@ class FarmCaptureAcceptanceTests(unittest.TestCase):
             "Profile": "Farm32Capture16GiB-v2",
             "Filter": "udp port 39450 and host 10.253.3.2",
             "DurationSeconds": 600, "AutostopKilobytes": 16777216,
-            "CompletenessBytes": 15 * 1024 * 1024 * 1024, "DumpcapSha256": "a" * 64})
+            "CompletenessBytes": 15 * 1024 * 1024 * 1024, "RequestedBufferMiB": 64,
+            "DumpcapSha256": "a" * 64})
         (self.ClientCapture / "farm32-dumpcap-error.txt").write_text(
             "Packets captured: 64\nPackets received/dropped on interface "
             "'\\Device\\NPF_{TEST}': 64/0 (100.0%)\n", encoding="utf-8")
@@ -186,6 +187,30 @@ class FarmCaptureAcceptanceTests(unittest.TestCase):
         self.SealOuter()
         with self.assertRaisesRegex(ValueError, "counters are missing"):
             self.Analyze()
+
+    def test_v3_npcap_loss_fails_despite_zero_dumpcap_drops(self):
+        Diagnostic = self.ClientCapture / "farm32-dumpcap-error.txt"
+        Diagnostic.write_text(
+            "Packets captured: 6113310\n"
+            "Packets received/dropped on interface 'Ethernet 3': 6113310/1022 "
+            "(pcap:1022/dumpcap:0/flushed:0/ps_ifdrop:0) (100.0%)\n", encoding="utf-8")
+        self.SealCaptures()
+        self.SealOuter()
+        with self.assertRaisesRegex(ValueError, "dropped packets"):
+            self.Analyze()
+
+    def test_client_requested_buffer_pin_fails_closed(self):
+        Marker = self.ClientCapture / "farm32-client-capture.json"
+        Original = json.loads(Marker.read_text())
+        for Value in (None, 2, 63, 65, "64"):
+            Row = {**Original, "RequestedBufferMiB": Value}
+            if Value is None:
+                del Row["RequestedBufferMiB"]
+            Save(Marker, Row)
+            self.SealCaptures()
+            self.SealOuter()
+            with self.subTest(Value=Value), self.assertRaisesRegex(ValueError, "client capture marker"):
+                self.Analyze()
 
     def test_worker_owner_port_or_etl_is_not_assumed(self):
         Marker = self.ServerCapture / "farm32-netsh-owner.json"

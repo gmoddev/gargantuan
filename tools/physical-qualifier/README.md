@@ -247,6 +247,12 @@ physical or provider PASS. This path has source/mock coverage but requires an
 official workflow-dispatch package, installed side-by-side Farm32 service,
 endpoint runtime staging, and actual control-only qualification before use.
 
+The Farm32 client capture requests a fixed 64 MiB driver buffer and records
+`RequestedBufferMiB: 64` in its marker. This requested setting is pinned by
+campaign sealing and offline acceptance; it is not a verified driver allocation
+or capacity PASS. The [buffer candidate evidence and validation plan](docs/FARM32_CLIENT_CAPTURE_BUFFER.md)
+preserve the existing zero-drop, full-packet, duration, and retention gates.
+
 The fixed baseline/recovery frame ceilings cover their existing 300/420-second
 role-local runtime budgets at the Player's 16,667-us network cadence, including
 its first unslept frame: 18,001/25,201 client frames and the existing extra 1,000

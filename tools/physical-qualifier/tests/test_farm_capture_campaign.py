@@ -90,8 +90,23 @@ class CaptureCampaignTests(unittest.TestCase):
         else:
             Name = "farm32-client-capture.json"
             Row.update(DurationSeconds=600, AutostopKilobytes=16777216,
-                       CompletenessBytes=15 * 1024 ** 3)
+                       CompletenessBytes=15 * 1024 ** 3, RequestedBufferMiB=64)
         WriteJson(self.Capture / Name, Row)
+
+    def test_client_requested_buffer_marker_is_pinned(self):
+        Config = self.Config("CLIENT")
+        self.Capture.mkdir()
+        self.CaptureMarker("CLIENT")
+        campaign.AssertCaptureProfile(Config)
+        Marker = self.Capture / "farm32-client-capture.json"
+        Original = campaign.ReadJson(Marker)
+        for Value in (None, 2, 63, 65, "64"):
+            Row = {**Original, "RequestedBufferMiB": Value}
+            if Value is None:
+                del Row["RequestedBufferMiB"]
+            WriteJson(Marker, Row)
+            with self.subTest(Value=Value), self.assertRaisesRegex(ValueError, "profile marker"):
+                campaign.AssertCaptureProfile(Config)
 
     def test_worker_stop_precedes_offline_finalize_and_seals_separate_root(self):
         Config = self.Config("SERVER")

@@ -4,7 +4,7 @@ $ScriptPath = Join-Path $PSScriptRoot '..\DumpcapFarm32Capture.ps1'
 $Text = [IO.File]::ReadAllText([IO.Path]::GetFullPath($ScriptPath))
 function Assert([bool]$Value, [string]$Detail) { if (-not $Value) { throw $Detail } }
 $Tokens = $null; $Errors = $null
-[System.Management.Automation.Language.Parser]::ParseInput($Text, [ref]$Tokens, [ref]$Errors) | Out-Null
+$Ast = [System.Management.Automation.Language.Parser]::ParseInput($Text, [ref]$Tokens, [ref]$Errors)
 Assert ($Errors.Count -eq 0) 'Farm32 dumpcap script does not parse'
 Assert ($Text -match '(?m)^\$CaptureSeconds = 600\r?$') 'Farm32 duration changed'
 Assert ($Text -match '(?m)^\$AutostopKilobytes = 16777216\r?$') 'Farm32 filesize autostop changed'
@@ -16,7 +16,31 @@ $ExpectedAutostop = @'
 '-a', "duration:$CaptureSeconds", '-a', "filesize:$AutostopKilobytes"
 '@.Trim()
 Assert ($Text.Contains($ExpectedAutostop)) 'Farm32 dual autostop missing'
-Assert ($Text -notmatch "'-b'|--ring-buffer") 'Farm32 capture must not rotate or overwrite'
+Assert ($Text -cnotmatch "'-b'|--ring-buffer") 'Farm32 capture must not rotate or overwrite'
+Assert ($Text -cnotmatch "'-t'|'-C'|'-N'") 'Farm32 capture threading or queue policy changed'
+
+# Evaluate only the argument array, never the capture script or its commands.
+# This checks the actual ProcessStartInfo input without a NIC/dumpcap operation.
+$BufferAssignment = $Ast.Find({ param($Node)
+    $Node -is [System.Management.Automation.Language.AssignmentStatementAst] -and
+        $Node.Left.Extent.Text -ceq '$RequestedBufferMiB'
+}, $true)
+Assert ($null -ne $BufferAssignment) 'Farm32 requested buffer declaration missing'
+$RequestedBufferMiB = & ([scriptblock]::Create($BufferAssignment.Right.Extent.Text))
+Assert ($RequestedBufferMiB -eq 64) 'Farm32 requested capture buffer changed'
+Assert ($Text -match 'RequestedBufferMiB = \$RequestedBufferMiB') 'Requested buffer is absent from capture marker'
+$ArgumentLoop = $Ast.Find({ param($Node)
+    $Node -is [System.Management.Automation.Language.ForEachStatementAst] -and
+        $Node.Variable.Extent.Text -ceq '$Argument'
+}, $true)
+Assert ($null -ne $ArgumentLoop) 'Farm32 process argument array missing'
+$Device = '\Device\NPF_{TEST}'; $Pcap = 'test.pcapng'
+$MarkerValue = @{ Filter = 'udp port 39450 and host 10.253.3.2' }
+$CaptureSeconds = 600; $AutostopKilobytes = 16777216
+$Arguments = @(& ([scriptblock]::Create($ArgumentLoop.Condition.Extent.Text)))
+$ExpectedArguments = @('-i', $Device, '-B', '64', '-f', $MarkerValue.Filter,
+    '-a', 'duration:600', '-a', 'filesize:16777216', '-w', $Pcap, '-q')
+Assert (($Arguments -join "`n") -ceq ($ExpectedArguments -join "`n")) 'Farm32 exact capture command differs'
 
 # Hosted runner temp paths can be junctions. Use the checkout-local test directory
 # so this case reaches the artifact guard instead of the separate reparse guard.

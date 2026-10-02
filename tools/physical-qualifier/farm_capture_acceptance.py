@@ -107,6 +107,7 @@ def ZeroLoss(ServerRoot, ClientRoot, RunId):
             Marker.get("DurationSeconds") != 600 or
             Marker.get("AutostopKilobytes") != 16777216 or
             Marker.get("CompletenessBytes") != directions.MAX_CAPTURE_BYTES or
+            Marker.get("RequestedBufferMiB") != 64 or
             not Capture.stat().st_size < Marker["CompletenessBytes"] or
             not isinstance(Marker.get("DumpcapSha256"), str) or
             not SHA256.fullmatch(Marker["DumpcapSha256"])):
