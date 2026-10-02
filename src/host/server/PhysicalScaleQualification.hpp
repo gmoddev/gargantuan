@@ -809,15 +809,21 @@ namespace gargantuan::host {
 					QuoteBoundMicroseconds = 0;
 					QuoteComplete = QuoteSealed = QuoteResultWritten = false;
 					QuoteFailure.clear();
+					std::uint64_t QuoteCaptureMicroseconds = 0;
 					if (!AdmissionEvidence) QuoteFailure = "admission evidence is unavailable";
 					else {
 						AdmissionEvidenceCursor = static_cast<std::size_t>(AdmissionEvidence->Count());
+						const auto CaptureStarted = std::chrono::steady_clock::now();
 						CessationQuote = network::detail::GameSessionTestAccess::CaptureFrozenCessationQuote(
 							Session, QuoteFailure);
+						QuoteCaptureMicroseconds = static_cast<std::uint64_t>(
+							std::chrono::duration_cast<std::chrono::microseconds>(
+								std::chrono::steady_clock::now() - CaptureStarted).count());
 						if (!CessationQuote && QuoteFailure.empty()) QuoteFailure = "cessation quote capture failed";
 					}
 					std::cerr << "[Qualification:Recovery] event=quote_capture run=" << RunId
 						<< " case=" << CaseName << " status=" << (CessationQuote ? "READY" : "NOT_MEASURED")
+						<< " capture_us=" << QuoteCaptureMicroseconds
 						<< " reason=" << QuoteReasonToken(QuoteFailure)
 						<< " tick=" << Tick << '\n';
 					RecoverySnapshotWritten = false;

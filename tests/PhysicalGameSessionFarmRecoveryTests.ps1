@@ -52,6 +52,7 @@ $ScaleStep = $HostSource.IndexOf('ScaleQualification->Step(Runtime->GetSimulatio
 if ($SessionEnd -lt 0 -or $QualificationStart -le $SessionEnd -or $ScaleStep -le $QualificationStart -or
 	$QualificationSource -notmatch 'quote_advance_attempted=' -or
 	$QualificationSource -notmatch 'quote_complete=' -or
+	$QualificationSource -notmatch 'capture_us=' -or
 	$QualificationSource -notmatch 'quote_lag_records=') {
 	throw 'farm-only per-tick source attribution lacks ordered Session/quote timing and progress'
 }
