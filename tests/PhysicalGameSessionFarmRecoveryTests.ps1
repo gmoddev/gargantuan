@@ -46,8 +46,9 @@ $ReplayEnd = $QualificationSource.IndexOf('[[nodiscard]] static std::string Quot
 if ($ReplayStart -lt 0 -or $ReplayEnd -lt $ReplayStart) { throw 'missing bounded cessation replay' }
 $ReplaySource = $QualificationSource.Substring($ReplayStart, $ReplayEnd - $ReplayStart)
 $AdvanceCount = [regex]::Matches($ReplaySource, 'AdvanceFrozenJournalQuote\(').Count
-if ($AdvanceCount -ne 1 -or $ReplaySource -match 'for\s*\(\s*std::size_t\s+Work') {
-	throw 'cessation quote may perform more than one full advance per server tick'
+if ($AdvanceCount -ne 0 -or $ReplaySource -notmatch 'QuoteWorker->TryPop\(\)' -or
+	$ReplaySource -notmatch 'Consumed < 64') {
+	throw 'cessation reference must encode off Main and consume bounded metadata per tick'
 }
 $HostSource = [IO.File]::ReadAllText((Join-Path $PSScriptRoot '../src/host/server/ServerHost.cpp'))
 $SessionEnd = $HostSource.IndexOf('const auto SessionEnded = std::chrono::steady_clock::now();', [StringComparison]::Ordinal)

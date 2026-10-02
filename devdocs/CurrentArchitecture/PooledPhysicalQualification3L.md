@@ -2158,6 +2158,38 @@ per-case wall-time diagnostics preserve every timing gate. The worker's
 cases pass, with small-case RPC maximum 37.0447 ms. Hosted qualification of the
 eventual execution-changing recovery candidate is still required.
 
+Worker-only diagnostic `6eea014e-3a9d-44b9-bdfa-685ba8b8d2cf` at
+`1f4ba2cfb` exercised the integrated causal observer and independent verifier.
+All five workload phases reached their 32-client acknowledgments. Gameplay
+recovery recorded 165 causal events, 32 reference frames and exactly 14,875 B
+accepted/first-sent/ACKed/retired. Independent replay of its immutable TSV agrees;
+the earliest event-proven prefix convergence was 332,871 us, before the native
+333,318 us observation and 20,471,118 us deadline. This is a diagnostic subset,
+not a provider PASS.
+
+The run failed during structural recovery: client 0 exhausted its explicitly
+configured 18,000 frames and returned `scale_incomplete` (exit 15). The resulting
+required-peer disconnect invalidated recovery after 943 reference frames.
+Structural/mixed recovery and full-run acceptance remain NOT MEASURED.
+The retained quote, causal trace and logs were not relabeled as passing.
+Cleanup verified no Gargantuan client/server process and UDP 39450 unbound.
+Evidence: worker `C:\Sandbox\Codex\Evidence\Farm32_1f4ba2Diagnostic\`
+under that run ID. No capture or two-host physical attempt was performed.
+
+The synchronous reference replay measured 72–94 ms advances during this run,
+in addition to 62–85 ms live Session steps. The bounded oracle-worker correction
+is separately described in the recovery contract; live production cost still
+needs qualification. A later diagnostic must use a client frame lifetime that
+covers its explicit run budget, without changing the recovery deadline.
+
+At diagnostic revision `be2b81bc8`, hosted Native run `37054274530` passed build,
+complete CTest and farm tooling, then failed the standalone qualified recovery
+latency case: RPC p95 203.206 ms, maximum 817.236 ms; Event maximum 781.126 ms.
+The maximum step interval was 1355.57 ms, server Session wall time 402.852 ms,
+and sleep overshoot 147.483 ms. CPU work versus preemption/blocking was NOT
+MEASURED. These observations do not waive the failure or qualify the candidate.
+Both corresponding GNS sanitizer runs passed.
+
 Local/real-TLS Node 32-client qualification remains NOT MEASURED; KI-006 OPEN;
 Foundation 3L B — PARTIALLY READY. The established corrected F1 physical Phase 1
 PASS is unchanged.

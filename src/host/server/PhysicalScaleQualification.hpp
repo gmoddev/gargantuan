@@ -17,6 +17,7 @@
 #include "../../network/GameSessionTestAccess.hpp"
 #include "FarmAdmissionEvidence.hpp"
 #include "FarmRecoveryEvidence.hpp"
+#include "FrozenRecoveryQuote.hpp"
 #include "../../runtime/RuntimeWorkDiagnostics.hpp"
 
 #include <algorithm>
@@ -128,6 +129,7 @@ namespace gargantuan::host {
 		}
 		void AttachAdmissionEvidence(detail::FarmAdmissionEvidence &Evidence) { AdmissionEvidence = &Evidence; }
 		~PhysicalScaleQualification() {
+			QuoteWorker.reset();
 			try { DumpRecoveryEvidence(); }
 			catch (const std::exception &Error) {
 				std::cerr << "[Qualification:Recovery] evidence_write_failed=" << Error.what() << '\n';
@@ -318,6 +320,7 @@ namespace gargantuan::host {
 		std::uint64_t CessationAcceptedBytes = 0;
 		detail::FarmAdmissionEvidence *AdmissionEvidence = nullptr;
 		std::optional<network::detail::FrozenCessationQuote> CessationQuote;
+		std::unique_ptr<detail::FrozenRecoveryQuote> QuoteWorker;
 		std::array<std::unique_ptr<detail::FarmRecoveryEvidence>, 3> RecoveryRecords;
 		detail::FarmRecoveryEvidence *RecoveryEvidence = nullptr;
 		std::uint64_t RecoveryConvergedMicroseconds = 0;
@@ -333,6 +336,7 @@ namespace gargantuan::host {
 		std::uint64_t LastQuoteBuildMicroseconds = 0;
 		std::uint64_t LastQuoteEncodeMicroseconds = 0;
 		std::uint64_t LastQuoteEncodeRetries = 0;
+		std::uint64_t QuoteLagRecords = 0;
 		bool LastQuoteAdvanceAttempted = false;
 		bool LastQuoteAdvanceProducedFrame = false;
 		bool RecoverySnapshotWritten = false;
@@ -391,35 +395,19 @@ namespace gargantuan::host {
 				++AuditedFrameCount;
 				AuditedAcceptedBytes += Event.ExactBytes;
 			}
-			if (!QuoteComplete) {
-				// Keep detached replay off the production service path as much as
-				// possible. One complete advance per server step preserves the exact
-				// frozen frame sequence and W_i; it does not bound one advance's CPU.
+			// Consume only bounded metadata on Main. The worker exclusively owns
+			// the detached reference and never observes or modifies the live session.
+			for (std::size_t Consumed = 0; !QuoteComplete && QuoteWorker && Consumed < 64; ++Consumed) {
+				auto Result = QuoteWorker->TryPop();
+				if (!Result) break;
 				LastQuoteAdvanceAttempted = true;
-				const auto AdvanceStarted = std::chrono::steady_clock::now();
-				runtime_detail::WorkSample QuoteWork{};
-				network::FrozenJournalQuoteStep Step;
-				{
-					runtime_detail::WorkCapture Capture(&QuoteWork);
-					// Detached reference replay must never impersonate live source events.
-					struct PauseObservation {
-						network::detail::StructuralCausalEvidenceSink *Previous = network::detail::ActiveStructuralCausalEvidence;
-						PauseObservation() { network::detail::ActiveStructuralCausalEvidence = nullptr; }
-						~PauseObservation() { network::detail::ActiveStructuralCausalEvidence = Previous; }
-					} Paused;
-					Step = CessationQuote->Replication->AdvanceFrozenJournalQuote(
-						CessationQuote->MaximumFrameBytes);
-				}
-				LastQuoteBuildMicroseconds = QuoteWork[static_cast<std::size_t>(
-					runtime_detail::WorkPhase::IncrementalPreparation)].ExclusiveNanoseconds / 1000;
-				LastQuoteEncodeMicroseconds = QuoteWork[static_cast<std::size_t>(
-					runtime_detail::WorkPhase::StructuralEncode)].ExclusiveNanoseconds / 1000;
-				LastQuoteEncodeRetries = QuoteWork.Counters[static_cast<std::size_t>(
-					runtime_detail::WorkCounter::EncodeRetries)];
-				LastQuoteAdvanceMicroseconds = static_cast<std::uint64_t>(
-					std::chrono::duration_cast<std::chrono::microseconds>(
-						std::chrono::steady_clock::now() - AdvanceStarted).count());
-				LastQuoteAdvanceProducedFrame = Step.Frame.has_value();
+				LastQuoteBuildMicroseconds += Result->BuildMicroseconds;
+				LastQuoteEncodeMicroseconds += Result->EncodeMicroseconds;
+				LastQuoteEncodeRetries += Result->EncodeRetries;
+				LastQuoteAdvanceMicroseconds += Result->AdvanceMicroseconds;
+				QuoteLagRecords = Result->JournalLagRecords;
+				const auto &Step = Result->Step;
+				LastQuoteAdvanceProducedFrame |= Step.Frame.has_value();
 				if (!Step.Error.empty()) { QuoteFailure = Step.Error; return; }
 				if (Step.Complete) QuoteComplete = true;
 				else if (Step.Frame) {
@@ -838,6 +826,7 @@ namespace gargantuan::host {
 					OverloadCeased = std::chrono::steady_clock::now();
 					CessationJournalTail = ChangeJournal::Get().CreateCursor(
 						Runtime.DataModel->GetObjectId()).NextSequence;
+					QuoteWorker.reset();
 					CessationQuote.reset();
 					if (RecoveryEvidence) RecoveryEvidence->Detach();
 					RecoveryEvidence = nullptr;
@@ -845,6 +834,7 @@ namespace gargantuan::host {
 					QuotedFutureBytes.clear();
 					QuotedFrameCount = AuditedFrameCount = AuditedAcceptedBytes = 0;
 					QuoteBoundMicroseconds = 0;
+					QuoteLagRecords = 0;
 					QuoteComplete = QuoteSealed = QuoteResultWritten = false;
 					QuoteFailure.clear();
 					std::uint64_t QuoteCaptureMicroseconds = 0;
@@ -864,6 +854,9 @@ namespace gargantuan::host {
 								RecoveryRecords[OverloadCase] = std::make_unique<detail::FarmRecoveryEvidence>(std::move(*Snapshot));
 								RecoveryEvidence = RecoveryRecords[OverloadCase].get();
 								QuoteFailure = RecoveryEvidence->Failure();
+								if (QuoteFailure.empty())
+									QuoteWorker = std::make_unique<detail::FrozenRecoveryQuote>(
+										std::move(CessationQuote->Replication), CessationQuote->MaximumFrameBytes);
 							}
 						}
 					}
@@ -930,19 +923,13 @@ namespace gargantuan::host {
 					Fail("recovery_quote_invalid", Tick);
 				}
 				const auto Retention = ObserveRetention(Tick);
-				// Quote replay can take longer than a server step. Timestamp the
-				// observed metrics after replay, never with the pre-replay Now.
+				// Timestamp the live observation after collecting available reference
+				// metadata. Oracle work never pauses or subtracts from this clock.
 				const auto ObservedAt = std::chrono::steady_clock::now();
 				const auto Elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
 					ObservedAt - OverloadCeased).count();
 				if (!RecoveryConvergedMicroseconds && RecoveryEvidence->Converged())
 					RecoveryConvergedMicroseconds = static_cast<std::uint64_t>(Elapsed);
-				std::uint64_t QuoteLagRecords = 0;
-				if (CessationQuote)
-					for (const auto &[Connection, Limit] : CessationQuote->MaximumFrameBytes) {
-						(void)Limit;
-						QuoteLagRecords += CessationQuote->Replication->GetJournalLag(Connection);
-					}
 				// The binary tick record retains every server step. Keep textual
 				// recovery samples bounded when a large exact quote spans many ticks,
 				// while always recording the two acceptance observation points.

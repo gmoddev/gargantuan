@@ -124,6 +124,29 @@ The historical text and receipts below retain their original measured scope.
 Any interpretation requiring every later live frame to equal the frozen quote,
 or global quiescence while motion continues, is superseded by this amendment.
 
+### Detached reference execution
+
+The reference oracle must not synchronously encode large frames inside the
+measured server step. A worker-only diagnostic at `1f4ba2cfb` measured 72–94 ms
+reference advances alongside 62–85 ms live Session steps. Limiting replay to
+one frame per step bounded frame count, not its interference with service.
+
+Capture remains on Main. One joined, cancellable oracle worker exclusively
+owns the detached coordinator, frozen journal/catalog and captured immutable
+schema. It publishes a bounded queue of frame identities, exact bytes, cursors,
+timing and terminal status; it owns no live Session, payload queue, evidence
+writer or Main observer. Main consumes bounded metadata without waiting for
+encoding. Schema replacement cannot change the captured reference. Cancellation
+is checked between bounded advances and the worker joins before runtime teardown.
+Serial and worker replay must produce identical reference frames and totals.
+
+The original cessation timestamp, 20-second service observation and immutable
+workload-derived deadline remain unchanged. Oracle execution never pauses the
+clock or extends a deadline. Removing oracle work does not excuse slow live
+replication; production-equivalent resource and gameplay gates still apply.
+This execution correction requires deterministic and hosted qualification before
+provider use.
+
 ## Decision
 
 **B — SEPARATE SERVICE RECOVERY FROM STRUCTURAL CONVERGENCE.**
