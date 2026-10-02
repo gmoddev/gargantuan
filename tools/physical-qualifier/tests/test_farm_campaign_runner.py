@@ -1,5 +1,6 @@
 """Source-only campaign launch boundary tests; no packet capture or farm runs."""
 
+import ctypes
 import datetime
 import hashlib
 import json
@@ -71,6 +72,18 @@ class CampaignTests(unittest.TestCase):
 
     def tearDown(self):
         self.Temporary.cleanup()
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows 8.3 path alias")
+    def test_pinned_file_resolves_existing_short_path_alias(self):
+        PowerShell = self.Root / "pwsh.exe"
+        PowerShell.write_bytes(b"pinned test PowerShell")
+        Buffer = ctypes.create_unicode_buffer(1024)
+        Length = ctypes.windll.kernel32.GetShortPathNameW(str(PowerShell), Buffer, len(Buffer))
+        if not Length or Length >= len(Buffer) or \
+                Buffer.value.casefold() == str(PowerShell.resolve(strict=True)).casefold():
+            self.skipTest("volume has no distinct 8.3 alias")
+        self.assertEqual(PowerShell.resolve(strict=True),
+                         Campaign.Pinned(Buffer.value, Hash(PowerShell), "PowerShell", "pwsh.exe"))
 
     def Role(self, Role):
         Directory = self.Root / Role.lower()
@@ -270,9 +283,9 @@ class CampaignTests(unittest.TestCase):
         with mock.patch.object(Campaign.subprocess, "Popen", return_value=Child) as Spawn:
             Process, Root = Campaign.StartNode(Ticket, Farm, json.loads(self.Manifest.read_text()))
         self.assertIs(Child, Process)
-        self.assertEqual(StageRoot, Root)
+        self.assertEqual(StageRoot.resolve(strict=True), Root)
         Args = Spawn.call_args.args[0]
-        self.assertEqual(Farm["PowerShellPath"], Args[0])
+        self.assertEqual(str(Path(Farm["PowerShellPath"]).resolve(strict=True)), Args[0])
         self.assertIn(Ticket["NodeStageSha256"], Args)
         self.assertIn("900", Args)
         Save(StageRoot / "node-tcp-ready.json", {
@@ -292,7 +305,7 @@ class CampaignTests(unittest.TestCase):
             "RunId": self.RunId, "StageSha256": Ticket["NodeStageSha256"],
             "Reason": "STOP_REQUESTED", "TcpReady": True, "ChildReaped": True,
         })
-        self.assertEqual(Receipt, Campaign.StopNode(Ticket, Child, StageRoot))
+        self.assertEqual(Receipt.resolve(strict=True), Campaign.StopNode(Ticket, Child, StageRoot))
         self.assertEqual(self.RunId, (StageRoot / "stop.request").read_text())
         Bad = json.loads(Receipt.read_text())
         Bad["Reason"] = "CHILD_EXITED"
@@ -416,7 +429,7 @@ class CampaignTests(unittest.TestCase):
         Save(ConfigFile, Config)
 
         def FakeMatch(Args, **Kwargs):
-            self.assertEqual(str(PowerShell), Args[0])
+            self.assertEqual(str(PowerShell.resolve(strict=True)), Args[0])
             self.assertIn(Hash(Stage), Args)
             self.assertIn(Hash(Run), Args)
             Save(Path(Config["NodeTlsMatchReceiptPath"]), {

@@ -193,7 +193,8 @@ class CaptureCampaignTests(unittest.TestCase):
             Config[Key.removesuffix("Path") + "Sha256"] = campaign.Digest(File)
         ConfigFile = self.Root / "config.json"
         WriteJson(ConfigFile, Config)
-        self.assertEqual(campaign.Configured(ConfigFile)["CaptureDirectory"], self.Capture)
+        self.assertEqual(campaign.Configured(ConfigFile)["CaptureDirectory"],
+                         self.CaptureRoot.resolve(strict=True) / self.RunId)
         (self.Root / "CaptureFarm32.ps1").write_bytes(b"changed")
         with self.assertRaisesRegex(ValueError, "pin changed"):
             campaign.Configured(ConfigFile)
