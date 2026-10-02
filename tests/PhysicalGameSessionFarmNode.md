@@ -10,8 +10,12 @@ and certificate policy.
 `Prepare` requires the farm run manifest and its out-of-band SHA-256, the
 hash-verified Server package, the qualified-scale descriptor and its SHA-256,
 an approved Node binary and SHA-256/source commit, a hash-pinned Windows
-`go.exe` metadata inspector, a certificate/private-key
-pair, and the manifest-pinned root CA. It checks the full Server deployment
+`go.exe` metadata inspector, and the worker's one-run certificate/private-key
+pair and manifest-pinned root CA. The outer preparation stages and hashes
+`NewPhysicalGameSessionFarmNodeTls.ps1`, which generates a two-hour CA and
+`127.0.0.1` server certificate in the protected worker run directory. Only
+the public CA and leaf are copied to the controller; the private key never
+leaves the worker. It checks the full Server deployment
 manifest, then requires the descriptor's dynamic `project_id`/`revision` to
 match `game.package.json` and `content/content.manifest.json`. The generated
 stage invokes the pinned `go.exe` with `version -m`
@@ -22,14 +26,17 @@ metadata fails closed. The stage records `NodeBinaryVcsStatus=MATCHED_CLEAN`;
 `Run` rechecks the inspector and binary hashes and embedded revision before launch. The generated
 TOML gives Node only a filesystem content package for that exact identity and
 the `content.manifest.read`/`content.blob.read` game-server principal. The
-Node token is read from the environment; neither it nor the private-key bytes
-are copied into the config or stage receipt. The helper checks key/certificate
+Node token is generated as a fresh 256-bit value in the protected worker run
+directory, and its path and SHA-256 are pinned in the stage. The role runner
+injects it into the Server and Node process environments; the capture child
+does not receive it. Neither the token value nor private-key bytes are copied
+into the config, ticket, log, or stage receipt. The helper checks key/certificate
 compatibility, endpoint SAN, validity, and a chain to the pinned CA. Its new
 stage directory contains `node.toml` and `node-stage.json`; the printed stage
 SHA-256 must be passed independently to `Run`.
 
-`Run` rechecks all public pins, package identity, certificate/key/CA, and token
-presence. The endpoint validator source imported for deployment checks is
+`Run` rechecks all public pins, package identity, certificate/key/CA, and the
+one-run token file's private ACL, identity, hash, and format. The endpoint validator source imported for deployment checks is
 pinned at `Prepare` and rechecked before import/use at `Run`. Run then creates
 an exclusive `node-run.claim`. It launches only the pinned
 binary with `serve --config <pinned TOML>`. The child is bounded by a hard
@@ -57,6 +64,7 @@ Run the source-only deterministic fixture with:
 
 ```powershell
 pwsh -NoProfile -File tests/PhysicalGameSessionFarmNodeTests.ps1
+pwsh -NoProfile -File tests/NewPhysicalGameSessionFarmNodeTlsTests.ps1
 ```
 
 Optionally pass `-OfficialNodeBinary <path>` to also check the generated TOML

@@ -24,6 +24,7 @@ class MockTransport:
     def __init__(self):
         self.ControlRules = []
         self.RetiredNodeRoots = []
+        self.RetiredTlsRoots = []
 
     def AddControlFirewall(self, RunId):
         self.ControlRules.append(("add", RunId))
@@ -47,6 +48,8 @@ class MockTransport:
             Endpoint.Abort(*Arguments)
         elif Action == "retire-node-token":
             self.RetiredNodeRoots.append(Arguments[0])
+        elif Action == "retire-node-tls":
+            self.RetiredTlsRoots.append(Arguments[0])
         else:
             raise AssertionError(Action)
 
@@ -197,6 +200,40 @@ class OuterCampaignTests(unittest.TestCase):
                              Transport)
         self.assertEqual([r"C:\Sandbox" + "\\" + self.Fixture.Identity["RunId"]],
                          Transport.RetiredNodeRoots)
+        self.assertEqual(Transport.RetiredNodeRoots, Transport.RetiredTlsRoots)
+
+    def test_node_preparation_failure_retires_both_worker_secrets(self):
+        Transport = MockTransport()
+        Config = self.Fixture.Private / "node-preparation.json"
+        Config.write_text(json.dumps({"Provider": "Node", "PrivateRoot": str(self.Fixture.Private),
+                                      "WorkerToolRoot": r"C:\Sandbox",
+                                      "WorkerPython": r"C:\Python312\python.exe",
+                                      "WorkerHelper": r"C:\Sandbox\farm_outer_endpoint.py"}), encoding="utf-8")
+        def FailAfterIdentity(ConfigPath, TransportInstance, AttemptId):
+            Outer.WriteNew(self.Fixture.Private / "node-preparation-attempt.json", {
+                "Format": "GargantuanFarmNodePreparationAttempt", "Version": 1,
+                "RunId": self.Fixture.Identity["RunId"], "AttemptId": AttemptId})
+            raise ValueError("mock late failure")
+
+        with mock.patch.object(Outer, "PrepareInputsOnce", side_effect=FailAfterIdentity):
+            with self.assertRaisesRegex(ValueError, "mock late failure"):
+                Outer.PrepareInputs(Config, Transport)
+        Expected = [r"C:\Sandbox" + "\\" + self.Fixture.Identity["RunId"]]
+        self.assertEqual(Expected, Transport.RetiredNodeRoots)
+        self.assertEqual(Expected, Transport.RetiredTlsRoots)
+
+    def test_node_preparation_does_not_retire_a_preexisting_run(self):
+        Transport = MockTransport()
+        Config = self.Fixture.Private / "other-node-preparation.json"
+        Config.write_text(json.dumps({"Provider": "Node", "PrivateRoot": str(self.Fixture.Private),
+                                      "WorkerToolRoot": r"C:\Sandbox",
+                                      "WorkerPython": r"C:\Python312\python.exe",
+                                      "WorkerHelper": r"C:\Sandbox\farm_outer_endpoint.py"}), encoding="utf-8")
+        with mock.patch.object(Outer, "PrepareInputsOnce", side_effect=ValueError("preexisting root")):
+            with self.assertRaisesRegex(ValueError, "preexisting root"):
+                Outer.PrepareInputs(Config, Transport)
+        self.assertEqual([], Transport.RetiredNodeRoots)
+        self.assertEqual([], Transport.RetiredTlsRoots)
 
     def test_worker_firewall_commands_pin_one_program_port_and_peer(self):
         Calls = []

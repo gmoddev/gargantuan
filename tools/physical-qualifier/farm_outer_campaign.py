@@ -9,6 +9,7 @@ not grant a physical PASS; offline reconciliation remains separate.
 
 import argparse
 import base64
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import os
@@ -19,6 +20,7 @@ import socket
 import subprocess
 import sys
 import time
+import uuid
 
 from private_ticket_acl import AssertPrivate
 import farm_ticket_staging as Tickets
@@ -213,7 +215,7 @@ def WorkloadProfile(RecoveryWorkload):
     return ClientFrames, ServerTicks, Arguments
 
 
-def PrepareInputs(ConfigPath, TransportInstance=None):
+def PrepareInputsOnce(ConfigPath, TransportInstance=None, AttemptId=None):
     """Create fresh one-run manifest and role-local inventory, then seal tickets.
 
     Both package deployment manifests are checked by the canonical manifest
@@ -247,6 +249,10 @@ def PrepareInputs(ConfigPath, TransportInstance=None):
     Tickets.New(Config["PrivateRoot"])
     Private = Path(Config["PrivateRoot"]).resolve(strict=True)
     Identity = ReadJson(Private / "identity.json")
+    if Config["Provider"] == "Node":
+        WriteNew(Private / "node-preparation-attempt.json", {
+            "Format": "GargantuanFarmNodePreparationAttempt", "Version": 1,
+            "RunId": Identity["RunId"], "AttemptId": AttemptId})
     WriteNew(Private / "runtime-pins.json", {"Format": "GargantuanFarm32RuntimePins",
         "Version": 1, "WorkerPythonPath": Config["WorkerPython"],
         "WorkerPythonSha256": Config["WorkerPythonSha256"],
@@ -274,6 +280,7 @@ def PrepareInputs(ConfigPath, TransportInstance=None):
     NodeTokenPath = str(PureWindowsPath(WorkerRunRoot) / "node-token.secret")
     NodeTokenSha256 = None
     for Name in ("NewPhysicalGameSessionFarmManifest.ps1",
+                 "NewPhysicalGameSessionFarmNodeTls.ps1",
                  "PhysicalGameSessionFarmPreflight.ps1",
                  "PhysicalGameSessionFarmEndpoint.ps1"):
         SourceFile = SOURCE.parent.parent / "tests" / Name
@@ -291,15 +298,57 @@ def PrepareInputs(ConfigPath, TransportInstance=None):
                     *WorkloadArguments]
     if Config["Provider"] == "Node":
         Node = Config["Node"]
-        if not isinstance(Node, dict) or set(Node) != {"Endpoint", "RootCertificatePath",
-                                                      "TokenEnvironment", "HelperPath", "StageRoot",
-                                                      "DescriptorPath", "DescriptorSha256", "ExecutablePath",
-                                                      "ExecutableSha256", "SourceCommit", "GoExecutablePath",
-                                                      "GoExecutableSha256", "CertificatePath",
-                                                      "PrivateKeyPath"}:
+        BaseKeys = {"Endpoint", "TokenEnvironment", "HelperPath", "StageRoot",
+                    "DescriptorPath", "DescriptorSha256", "ExecutablePath",
+                    "ExecutableSha256", "SourceCommit", "GoExecutablePath",
+                    "GoExecutableSha256"}
+        OldCertificateKeys = {"RootCertificatePath", "CertificatePath", "PrivateKeyPath"}
+        if not isinstance(Node, dict) or set(Node) not in (BaseKeys, BaseKeys | OldCertificateKeys):
             raise ValueError("[Qualification:FarmOuter] invalid Node preparation")
+        NodeTlsRoot = str(PureWindowsPath(WorkerRunRoot) / "node-root-ca.pem")
+        NodeTlsCertificate = str(PureWindowsPath(WorkerRunRoot) / "node-cert.pem")
+        NodeTlsKey = str(PureWindowsPath(WorkerRunRoot) / "node-key.pem")
+        if OldCertificateKeys <= set(Node) and any(
+                WorkerSandbox(ExpandRun(Node[Name], RunId)) != Expected for Name, Expected in (
+                    ("RootCertificatePath", NodeTlsRoot), ("CertificatePath", NodeTlsCertificate),
+                    ("PrivateKeyPath", NodeTlsKey))):
+            raise ValueError("[Qualification:FarmOuter] Node certificate inputs must use the one-run root")
+        Generator = str(PureWindowsPath(WorkerRunRoot) / "NewPhysicalGameSessionFarmNodeTls.ps1")
+        TransportInstance.WorkerPowerShell(WorkerPowerShell["Path"], Generator,
+                                           "-RunRoot", WorkerRunRoot, "-RunId", RunId, Timeout=45)
+        NodeTlsReceipt = Private / "node-tls-stage.json"
+        RemoteNodeTlsReceipt = str(PureWindowsPath(WorkerRunRoot) / "node-tls-stage.json")
+        NodeTlsReceiptSha256 = TransportInstance.Remote("digest", RemoteText(RemoteNodeTlsReceipt)).stdout.strip()
+        if not SHA.fullmatch(NodeTlsReceiptSha256):
+            raise ValueError("[Qualification:FarmOuter] Node TLS stage pin unavailable")
+        TransportInstance.Fetch(RemoteNodeTlsReceipt, NodeTlsReceipt)
+        if Digest(NodeTlsReceipt) != NodeTlsReceiptSha256:
+            raise ValueError("[Qualification:FarmOuter] Node TLS stage transfer changed")
+        NodeTls = ReadJson(NodeTlsReceipt)
+        ExpectedPaths = {"RootCertificatePath": NodeTlsRoot,
+                         "CertificatePath": NodeTlsCertificate, "PrivateKeyPath": NodeTlsKey}
+        if (NodeTls.get("Format") != "GargantuanFarmNodeTlsStage" or NodeTls.get("Version") != 1 or
+                NodeTls.get("RunId") != RunId or NodeTls.get("Status") != "GENERATED_NOT_TLS_PROVEN" or
+                any(NodeTls.get(Name) != Path for Name, Path in ExpectedPaths.items()) or
+                any(not isinstance(NodeTls.get(Name + "Sha256"), str) or
+                    not SHA.fullmatch(NodeTls[Name + "Sha256"]) or
+                    TransportInstance.Remote("digest", RemoteText(Path)).stdout.strip() !=
+                    NodeTls[Name + "Sha256"] for Name, Path in ExpectedPaths.items()) or
+                datetime.fromisoformat(NodeTls["NotAfterUtc"]) <=
+                datetime.now(timezone.utc) + timedelta(minutes=20)):
+            raise ValueError("[Qualification:FarmOuter] generated Node TLS identity pin mismatch")
+        LocalNodeRoot = Private / "node-root-ca.pem"
+        TransportInstance.Fetch(NodeTlsRoot, LocalNodeRoot)
+        if Digest(LocalNodeRoot) != NodeTls["RootCertificateSha256"]:
+            raise ValueError("[Qualification:FarmOuter] client Node trust root copy changed")
+        LocalNodeCertificate = Private / "node-cert.pem"
+        TransportInstance.Fetch(NodeTlsCertificate, LocalNodeCertificate)
+        if Digest(LocalNodeCertificate) != NodeTls["CertificateSha256"]:
+            raise ValueError("[Qualification:FarmOuter] public Node certificate copy changed")
+        Spec["Roles"]["SERVER"]["NodeRootCertificatePath"] = NodeTlsRoot
+        Spec["Roles"]["CLIENT"]["NodeRootCertificatePath"] = str(LocalNodeRoot)
         ManifestArgs += ["-NodeEndpoint", Node["Endpoint"],
-                         "-NodeRootCertificatePath", WorkerSandbox(Node["RootCertificatePath"]),
+                         "-NodeRootCertificatePath", NodeTlsRoot,
                          "-NodeTokenEnvironment", Node["TokenEnvironment"]]
     elif Config["Node"] is not None:
         raise ValueError("[Qualification:FarmOuter] Local campaign has Node preparation")
@@ -346,9 +395,9 @@ def PrepareInputs(ConfigPath, TransportInstance=None):
             "-NodeSourceCommit", Node["SourceCommit"],
             "-GoExecutablePath", WorkerSandbox(Node["GoExecutablePath"]),
             "-GoExecutableSha256", Node["GoExecutableSha256"], "-CertificatePath",
-            WorkerSandbox(Node["CertificatePath"]), "-PrivateKeyPath",
-            WorkerSandbox(Node["PrivateKeyPath"]), "-RootCertificatePath",
-            WorkerSandbox(Node["RootCertificatePath"]), "-NodeTokenFilePath",
+            NodeTlsCertificate, "-PrivateKeyPath",
+            NodeTlsKey, "-RootCertificatePath",
+            NodeTlsRoot, "-NodeTokenFilePath",
             NodeTokenPath, "-NodeTokenFileSha256", NodeTokenSha256, Timeout=40)
         StagePath = str(PureWindowsPath(ExpandRun(Node["StageRoot"], RunId)) / "node-stage.json")
         StageHash = TransportInstance.Remote("digest", RemoteText(StagePath)).stdout.strip()
@@ -393,6 +442,41 @@ def PrepareInputs(ConfigPath, TransportInstance=None):
     SealedSpec = WriteNew(Private / "sealed-spec.json", Spec)
     Tickets.Seal(Private, SealedSpec)
     return Private, SealedSpec
+
+
+def PrepareInputs(ConfigPath, TransportInstance=None):
+    AttemptId = uuid.uuid4().hex
+    try:
+        return PrepareInputsOnce(ConfigPath, TransportInstance, AttemptId)
+    except Exception:
+        try:
+            Config = ReadJson(ConfigPath)
+            if Config.get("Provider") == "Node":
+                Private = Path(Config["PrivateRoot"])
+                IdentityFile = Private / "identity.json"
+                if IdentityFile.is_file():
+                    RunId = ReadJson(IdentityFile)["RunId"]
+                    Marker = Private / "node-preparation-attempt.json"
+                    if Marker.is_file():
+                        if ReadJson(Marker) != {
+                                "Format": "GargantuanFarmNodePreparationAttempt", "Version": 1,
+                                "RunId": RunId, "AttemptId": AttemptId}:
+                            raise ValueError("[Qualification:FarmOuter] failed preparation is not this attempt")
+                        WorkerToolRoot = WorkerSandbox(Config["WorkerToolRoot"])
+                        Helper = str(PureWindowsPath(WorkerToolRoot) / "farm_outer_endpoint.py")
+                        WorkerTransport = TransportInstance or Transport(Config["WorkerPython"], Helper)
+                        if Config["WorkerHelper"] != Helper or \
+                                WorkerTransport.WorkerDigest(Helper) != Digest(SOURCE / "farm_outer_endpoint.py"):
+                            raise ValueError("[Qualification:FarmOuter] worker cleanup helper pin changed")
+                        RunRoot = str(PureWindowsPath(WorkerToolRoot) / RunId)
+                        try:
+                            WorkerTransport.Remote("retire-node-token", RemoteText(RunRoot))
+                        finally:
+                            WorkerTransport.Remote("retire-node-tls", RemoteText(RunRoot))
+        except Exception as CleanupError:
+            raise RuntimeError("[Qualification:FarmOuter] preparation failed; Node secret retirement not proven") \
+                from CleanupError
+        raise
 
 
 def VerifyRuntimePins(PrivateRoot, WorkerPython, WorkerHelper, TransportInstance):
@@ -565,7 +649,10 @@ def Launch(PrivateRoot, SpecPath, WorkerPython, WorkerHelper, TransportInstance=
         try:
             if RuntimeVerified and "NodeStage" in Spec["Roles"]["SERVER"]:
                 WorkerRunRoot = str(PureWindowsPath(WorkerHelper).parent / Identity["RunId"])
-                TransportInstance.Remote("retire-node-token", RemoteText(WorkerRunRoot))
+                try:
+                    TransportInstance.Remote("retire-node-token", RemoteText(WorkerRunRoot))
+                finally:
+                    TransportInstance.Remote("retire-node-tls", RemoteText(WorkerRunRoot))
         finally:
             if FirewallAdded:
                 TransportInstance.RemoveControlFirewall(Identity["RunId"])

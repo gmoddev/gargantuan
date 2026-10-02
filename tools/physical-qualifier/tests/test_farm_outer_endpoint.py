@@ -100,6 +100,13 @@ class FarmOuterEndpointTests(unittest.TestCase):
         with self.assertRaises(FileExistsError):
             Endpoint.NewNodeToken(RunRoot)
         Endpoint.RetireNodeToken(RunRoot)
+
+        for Name in ("node-key.pem", "node-cert.pem", "node-root-ca.pem"):
+            (RunRoot / Name).write_text("bounded mock", encoding="ascii")
+        Endpoint.RetireNodeTls(RunRoot)
+        self.assertFalse(any((RunRoot / Name).exists() for Name in
+                             ("node-key.pem", "node-cert.pem", "node-root-ca.pem")))
+        Endpoint.RetireNodeTls(RunRoot)
         self.assertFalse(TokenFile.exists())
         Endpoint.RetireNodeToken(RunRoot)
 
