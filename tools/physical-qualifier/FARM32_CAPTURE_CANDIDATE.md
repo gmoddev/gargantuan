@@ -40,6 +40,29 @@ complete bidirectional evidence. Recheck the fixed 2560-MiB reserve on the
 selected dedicated evidence volume immediately before staging and each run;
 an earlier low-space observation of worker C: is no longer current.
 
+`farm_capture_campaign.py` is a source-only local adapter for the fixed
+Farm32 capture operations. A role-local `role <config-json>` process must be
+started before the coordinator is armed. It creates a fresh capture run root
+separate from the role evidence root, verifies pinned executable/script hashes,
+starts the worker capture through the Farm32 v2 service or starts the local
+client dumpcap wrapper, and publishes `capture-controller-ready.json` only
+after capture activity is observed. It waits for the same-run role result and
+role SHA-256 index. The worker uses fixed service Stop and idle status before
+a separately bounded offline `Finalize`; the client wrapper remains owned until
+its 600-second dumpcap autostop. The adapter then seals the capture files in
+`capture-sha256.json`. A role result later than capture-start plus 500 seconds
+is incomplete, preserving an 80-second Stop bound within the 600-second
+service lease. A failed operation attempts owned cleanup and records an
+incomplete marker. No generic remote command is accepted.
+
+The `bind` command hashes a successful coordinator result, both role indices,
+and both capture indices into a same-run outer receipt. All capture and outer
+indices deliberately say `SEALED_UNQUALIFIED`: this adapter does not prove
+bidirectional packet tuples, role result correctness beyond the sealed result,
+or the physical campaign verdict. The two-host orchestration, preflight and
+capture packet analysis remain separate work. Neither adapter nor Farm32
+service has been installed or run physically.
+
 Stage by hash-verifying a versioned candidate bundle on both endpoints, then
 installing only the new Farm32 service/root under a reviewed local procedure.
 Do not replace the old installed service or hook. Preserve all old evidence.
