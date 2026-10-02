@@ -266,7 +266,12 @@ explicit-acceptance entry point.
 
 Every peer retains its own committed journal cursor. The initial accepted
 baseline advances that cursor to the catalog revision represented when bootstrap
-was prepared. Later reads are limited by the remaining 3J allowance. While both
+was prepared. Later reads are limited by the remaining 3J allowance. Both
+live catalog refresh and peer incremental preparation pin immutable journal records
+for the duration of their bounded work, avoiding repeated large value copies and
+releasing the journal lock before catalog or frame processing. Frozen cessation
+quotes still own their detached copied suffix. Neither representation changes the
+accepted cursor, Known, retry, or admission rules. While both
 materialization transitions and journal work exist, GameSession alternates the
 two bounded classes per peer; neither a dense Enter backlog nor a continuous
 stream of known-object updates can monopolize that peer's quantum.

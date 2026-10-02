@@ -376,7 +376,6 @@ namespace gargantuan::network {
 			std::size_t AvailableFrameBytes);
 
 		bool RefreshCatalog(std::string &Error);
-		[[nodiscard]] ChangeReadResult ReadJournal(ChangeCursor Cursor, std::size_t MaximumRecords) const;
 		void BeginRetirementTick(std::uint64_t SimulationTick);
 		void ReclaimRetiredTemplates();
 		bool BuildDependencyClosure(
