@@ -59,6 +59,22 @@ namespace gargantuan::host {
 				StepOverload(Tick);
 				return;
 			}
+			if (State == Stage::AwaitingClockQuiescence) {
+				const auto Acks = Runtime.CharacterControl->GetAttributeValue(
+					"ScaleClockQuiescedAcks", ScriptSecurityContext::CoreTrusted());
+				if (Acks == std::optional<WireValue>(WireValue(static_cast<int>(PeerCount)))) {
+					std::cout << "[Qualification:FarmClock] event=quiesce_complete run=" << RunId
+						<< " epoch=" << CalibrationEpoch << " count=" << PeerCount << " tick=" << Tick
+						<< " monotonic_us=" << std::chrono::duration_cast<std::chrono::microseconds>(
+							std::chrono::steady_clock::now().time_since_epoch()).count() << '\n';
+					PublishClockState(true, Tick);
+					State = Stage::Calibrating;
+					return;
+				}
+				if (Tick - CalibrationTick >= MaximumCalibrationTicks)
+					Fail("clock_quiescence_did_not_converge", Tick);
+				return;
+			}
 			if (State == Stage::Calibrating) {
 				const auto Acks = Runtime.CharacterControl->GetAttributeValue(
 					"ScaleClockAcks", ScriptSecurityContext::CoreTrusted());
@@ -173,7 +189,7 @@ namespace gargantuan::host {
 		static constexpr std::uint64_t MaximumSetupTicks = 1'200;
 		static constexpr std::uint64_t CompletionPropagationTicks = 120;
 		static constexpr std::uint64_t MaximumCalibrationTicks = 600;
-		enum class Stage : std::uint8_t { WaitingForPeers, Warming, Calibrating, Measuring,
+		enum class Stage : std::uint8_t { WaitingForPeers, Warming, AwaitingClockQuiescence, Calibrating, Measuring,
 			OverloadReady, OverloadOffering, OverloadOffered, OverloadRecovery,
 			Concluding, Complete };
 		enum class Phase : std::uint8_t { Baseline, Load, Resident, Evict, Reload };
@@ -388,8 +404,8 @@ namespace gargantuan::host {
 			if (Runtime.DataModel->ApplyAttributeMutation("ScaleClockEpoch", WireValue(CalibrationEpoch),
 				ScriptSecurityContext::CoreTrusted()) != MutationStatus::Success)
 				Fail("clock_epoch_publication_rejected", Tick);
-			PublishClockState(true, Tick);
-			State = Stage::Calibrating;
+			PublishClockState(false, Tick);
+			State = Stage::AwaitingClockQuiescence;
 			std::cout << "[Qualification:FarmClock] event=calibration_start run=" << RunId
 				<< " epoch=" << CalibrationEpoch << " next_phase=" << Name(Value) << " tick=" << Tick
 				<< " monotonic_us=" << std::chrono::duration_cast<std::chrono::microseconds>(

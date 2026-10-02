@@ -3,8 +3,11 @@
 The qualified 32-client fixture uses the existing ScaleFunction reliable
 RemoteFunction echo for four sequential calibration calls per client before
 each measured phase. The five calibration epochs occur during initial warmup
-and in explicit bounded gaps between measured phases. All 32 clients must
-finish an epoch before the server publishes the next phase. The existing
+and in explicit bounded gaps between measured phases. Each client first
+receives `calibrating`, locally stops its measured callback and producer,
+and sends a unique quiescence ACK. Only after all 32 ACKs does the server
+enable the clock RPCs. All 32 clients must finish an epoch before the server
+publishes the next phase. The existing
 per-phase traffic mix, minimum 13-second phase duration, admission, GameSession
 message format, and GNS transport policy are unchanged.
 
@@ -15,7 +18,10 @@ Remote request ID, Remote ObjectId, server peer connection generation, and
 run-scoped nonce identify one exchange. No payload is retained. The sink is
 installed only while the replicated ScaleClockActive marker is true and is
 removed before a measured phase begins. It has a fixed 4,096-record cap per
-process; overflow and incomplete evidence fail reconciliation.
+process; the expected maximum server volume is 1,920 records, leaving 2,176
+record slots for diagnostically visible duplication. Overflow, decode
+exceptions, duplicates, and incomplete evidence fail reconciliation. The
+GNS diagnostic filters non-clock frames before backend status/config reads.
 
 These timestamps bracket native submission and receive, not actual packet
 transmission or arrival. For client-minus-server clock offset at one exchange,
@@ -28,7 +34,8 @@ cannot treat the midpoint as a synchronized timestamp.
 tools/physical-qualifier/farm_clock_exchange.py joins the sealed role logs
 after the run. It requires all 32 run-scoped identities, five 32-client
 calibration barriers, four complete requests per client and epoch, accepted
-native sends, ordered local timestamps, zero trace overflow, and server-side
+native sends, ordered local timestamps, a preceding 32-client quiescence
+barrier, zero trace overflow or decode errors, and server-side
 probe timestamps preceding the corresponding measured phase. Its
 PhaseLongOffset and OneWayLatency fields remain NOT_MEASURED.
 

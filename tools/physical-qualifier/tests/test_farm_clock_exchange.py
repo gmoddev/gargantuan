@@ -30,6 +30,8 @@ def Fixture(Peers=2, Probes=2):
     Server.append(f"[Qualification:FarmClock] event=calibration_complete run={RUN} epoch=1 count={Peers}\n")
     Server.append(f"[Qualification:FarmClock] event=calibration_start run={RUN} epoch=1 "
                   "next_phase=baseline monotonic_us=900\n")
+    Server.append(f"[Qualification:FarmClock] event=quiesce_complete run={RUN} epoch=1 "
+                  f"count={Peers} monotonic_us=950\n")
     Server.append(f"[Qualification:Scale] event=phase_start run={RUN} phase=baseline monotonic_us=2000\n")
     Server.append(f"[Qualification:Scale] event=phase_end run={RUN} phase=baseline monotonic_us=3000\n")
     for Slot in range(Peers):
@@ -47,10 +49,10 @@ def Fixture(Peers=2, Probes=2):
                 Native("client", Slot, 1, 1, Sequence, Request, "GnsReceive", Base + 300, 4),
             ])
     Server.append(f"[Qualification:FarmClock] event=terminal run={RUN} role=server slot=-1 "
-                  f"records={Peers * Probes * 3} overflow=0\n")
+                  f"records={Peers * Probes * 3} overflow=0 invalid_decode=0\n")
     for Slot in Clients:
         Clients[Slot].append(f"[Qualification:FarmClock] event=terminal run={RUN} role=client "
-                             f"slot={Slot} records={Probes * 3} overflow=0\n")
+                             f"slot={Slot} records={Probes * 3} overflow=0 invalid_decode=0\n")
     return Server, Clients
 
 
@@ -109,6 +111,18 @@ class FarmClockExchangeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "barrier incomplete"):
             Clock.Analyze(Server, Clients, RUN, Peers=2, Epochs=1, Probes=2)
 
+    def test_probe_before_all_clients_close_prior_phase_is_rejected(self):
+        Server, Clients = Fixture()
+        Server = [Line.replace("monotonic_us=950", "monotonic_us=1500") for Line in Server]
+        with self.assertRaisesRegex(ValueError, "preceded all-client quiescence"):
+            Clock.Analyze(Server, Clients, RUN, Peers=2, Epochs=1, Probes=2)
+
+    def test_missing_client_quiescence_barrier_is_rejected(self):
+        Server, Clients = Fixture()
+        Server = [Line for Line in Server if "event=quiesce_complete" not in Line]
+        with self.assertRaisesRegex(ValueError, "boundaries incomplete"):
+            Clock.Analyze(Server, Clients, RUN, Peers=2, Epochs=1, Probes=2)
+
     def test_probe_in_measured_phase_is_rejected(self):
         Server, Clients = Fixture()
         Server = [Line.replace("monotonic_us=2000", "monotonic_us=1000") for Line in Server]
@@ -126,6 +140,12 @@ class FarmClockExchangeTests(unittest.TestCase):
     def test_overflow_is_rejected(self):
         Server, Clients = Fixture()
         Clients[0][-1] = Clients[0][-1].replace("overflow=0", "overflow=1")
+        with self.assertRaisesRegex(ValueError, "trace incomplete"):
+            Clock.Analyze(Server, Clients, RUN, Peers=2, Epochs=1, Probes=2)
+
+    def test_decode_exception_is_reported_as_invalid_evidence(self):
+        Server, Clients = Fixture()
+        Clients[0][-1] = Clients[0][-1].replace("invalid_decode=0", "invalid_decode=1")
         with self.assertRaisesRegex(ValueError, "trace incomplete"):
             Clock.Analyze(Server, Clients, RUN, Peers=2, Epochs=1, Probes=2)
 

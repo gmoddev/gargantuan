@@ -23,6 +23,8 @@ struct GnsServiceSink {
 	void (*Record)(void *, GnsServiceRecord, std::span<const std::byte>) noexcept = nullptr;
 	// Optional terminal-only observation; the diagnostic is borrowed for this call.
 	void (*Closed)(void *, ConnectionId, const char *) noexcept = nullptr;
+	// Optional main-thread gate before the expensive backend status/config sample.
+	bool (*Interested)(void *, const char *, std::span<const std::byte>) noexcept = nullptr;
 };
 inline thread_local GnsServiceSink *ActiveGnsService = nullptr;
 }

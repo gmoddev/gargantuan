@@ -89,10 +89,20 @@ if PhysicalFarm then
     local ClockEpoch = 0
     local ClockAcknowledgements = {}
     local ClockAcknowledgementCount = 0
+    local ClockQuiesced = {}
+    local ClockQuiescedCount = 0
     local LastBroadcastTick = -60
     local LastStopTick = -60
     PhaseControl.OnServerEvent:Connect(function(Peer, Kind, Phase)
-        if Kind == "clock_done" and game:GetAttribute("ScaleClockActive") == true and
+        if Kind == "clock_quiesced" and CurrentPhase == "calibrating" and
+            Phase == game:GetAttribute("ScaleClockEpoch") then
+            local PeerKey = tostring(Peer.Slot) .. ":" .. tostring(Peer.Generation)
+            if not ClockQuiesced[PeerKey] then
+                ClockQuiesced[PeerKey] = true
+                ClockQuiescedCount += 1
+                Control:SetAttribute("ScaleClockQuiescedAcks", ClockQuiescedCount)
+            end
+        elseif Kind == "clock_done" and game:GetAttribute("ScaleClockActive") == true and
             Phase == game:GetAttribute("ScaleClockEpoch") then
             local PeerKey = tostring(Peer.Slot) .. ":" .. tostring(Peer.Generation)
             if not ClockAcknowledgements[PeerKey] then
@@ -173,7 +183,10 @@ if PhysicalFarm then
             ClockEpoch = NextClockEpoch
             ClockAcknowledgements = {}
             ClockAcknowledgementCount = 0
+            ClockQuiesced = {}
+            ClockQuiescedCount = 0
             Control:SetAttribute("ScaleClockAcks", 0)
+            Control:SetAttribute("ScaleClockQuiescedAcks", 0)
         end
         local NextOverload = game:GetAttribute("ScaleOverloadCase")
         if type(NextOverload) == "string" and NextOverload ~= CurrentOverloadCase and
@@ -202,7 +215,7 @@ if PhysicalFarm then
             LastBroadcastTick = PhaseTick - 60
             LastStopTick = PhaseTick - 60
         end
-        if CurrentPhase and CurrentPhase ~= "calibrating" and
+        if CurrentPhase and
             AcknowledgementCount < 32 and PhaseTick - LastBroadcastTick >= 60 then
             LastBroadcastTick = PhaseTick
             local Ok = pcall(function() PhaseControl:FireAllClients("phase", CurrentPhase) end)
@@ -275,11 +288,12 @@ local FarmCallbackCount = 0
 local FarmCallbackPhase = nil
 local FarmCallbackPhaseCount = 0
 local FarmClockStartedEpoch = 0
+local FarmClockQuiescedEpoch = 0
 if PhaseControl then
     PhaseControl.OnClientEvent:Connect(function(Kind, Phase)
         if Kind == "phase" and type(Phase) == "string" then
             Control:SetAttribute("ScalePhase", Phase)
-            PendingPhaseAcknowledgement = Phase
+            if Phase ~= "calibrating" then PendingPhaseAcknowledgement = Phase end
             print(string.format("[Content:ScalePhase] event=received phase=%s", Phase))
         elseif Kind == "stop" and Phase == Control:GetAttribute("ScalePhase") then
             PendingPhaseStop = Phase
@@ -503,8 +517,19 @@ RunService.PostSimulation:Connect(function()
     if PhaseControl then
         PhaseControlTick += 1
         local ClockEpoch = game:GetAttribute("ScaleClockEpoch")
+        if Control:GetAttribute("ScalePhase") == "calibrating" and
+            type(ClockEpoch) == "number" and ClockEpoch > FarmClockQuiescedEpoch then
+            -- This callback has already stopped counting the measured phase.
+            -- The server cannot enable any probe until all 32 peers submit this marker.
+            local Quiesced = pcall(function() PhaseControl:FireServer("clock_quiesced", ClockEpoch) end)
+            if Quiesced then
+                FarmClockQuiescedEpoch = ClockEpoch
+                print(string.format("[Qualification:FarmClock] event=client_quiesced epoch=%d", ClockEpoch))
+            end
+        end
         if game:GetAttribute("ScaleClockActive") == true and type(ClockEpoch) == "number" and
-            ClockEpoch > FarmClockStartedEpoch then
+            ClockEpoch > FarmClockStartedEpoch and FarmClockQuiescedEpoch >= ClockEpoch and
+            Control:GetAttribute("ScalePhase") == "calibrating" then
             FarmClockStartedEpoch = ClockEpoch
             task.spawn(function()
                 for Index = 1, 4 do

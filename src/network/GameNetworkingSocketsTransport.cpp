@@ -319,6 +319,7 @@ namespace gargantuan::network {
 			bool SampleBackend = true) const noexcept {
 			const auto *Sink = detail::ActiveGnsService;
 			if (!Sink || !Sink->Record) return;
+			if (Sink->Interested && !Sink->Interested(Sink->Context, Stage, Payload)) return;
 			const auto Iterator = Connections.find(Id);
 			if (Iterator == Connections.end()) return;
 			detail::GnsServiceRecord Value{.Stage = Stage, .Connection = Id,

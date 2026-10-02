@@ -16,6 +16,7 @@ CLIENT_READY_PREFIX = "[Qualification:Client] event=ready "
 PHASE_START_PREFIX = "[Qualification:Scale] event=phase_start "
 PHASE_END_PREFIX = "[Qualification:Scale] event=phase_end "
 CALIBRATION_START_PREFIX = "[Qualification:FarmClock] event=calibration_start "
+QUIESCE_COMPLETE_PREFIX = "[Qualification:FarmClock] event=quiesce_complete "
 PHASE_NAMES = ("baseline", "load", "resident", "evict", "reload")
 FIELDS = re.compile(r"([A-Za-z_]+)=([^\s]+)")
 
@@ -60,6 +61,7 @@ def Analyze(ServerLines, ClientLinesBySlot, RunId, Peers=32, Epochs=5, Probes=4)
     PhaseStarts = {}
     PhaseEnds = {}
     CalibrationStarts = {}
+    QuiescedEpochs = {}
     CompleteEpochs = set()
     ServerTerminal = []
     for Line in ServerLines:
@@ -88,6 +90,11 @@ def Analyze(ServerLines, ClientLinesBySlot, RunId, Peers=32, Epochs=5, Probes=4)
                     Row.get("next_phase") == PHASE_NAMES[Epoch - 1],
                     "calibration start identity invalid")
             CalibrationStarts[Epoch] = Number(Row, "monotonic_us") * 1000
+        elif (Row := Fields(Line, QUIESCE_COMPLETE_PREFIX)) is not None and Row.get("run") == RunId:
+            Epoch = Number(Row, "epoch")
+            Require(1 <= Epoch <= Epochs and Epoch not in QuiescedEpochs and
+                    Number(Row, "count") == Peers, "quiescence barrier invalid")
+            QuiescedEpochs[Epoch] = Number(Row, "monotonic_us") * 1000
         elif (Row := Fields(Line, NATIVE_PREFIX)) is not None and Row.get("run") == RunId:
             Require(Row.get("role") == "server" and Row.get("slot") == "-1",
                     "server native role invalid")
@@ -102,19 +109,23 @@ def Analyze(ServerLines, ClientLinesBySlot, RunId, Peers=32, Epochs=5, Probes=4)
     Require(len(ServerConnections) == Peers, "server ready identities incomplete")
     Require(set(PhaseStarts) == set(PHASE_NAMES[:Epochs]), "phase starts incomplete")
     Require(set(PhaseEnds) == set(PHASE_NAMES[:Epochs]) and
-            set(CalibrationStarts) == set(range(1, Epochs + 1)),
+            set(CalibrationStarts) == set(range(1, Epochs + 1)) and
+            set(QuiescedEpochs) == set(range(1, Epochs + 1)),
             "phase or calibration boundaries incomplete")
     for Epoch in range(1, Epochs + 1):
         Phase = PHASE_NAMES[Epoch - 1]
         Require(CalibrationStarts[Epoch] < PhaseStarts[Phase] < PhaseEnds[Phase],
                 "phase calibration boundary order invalid")
+        Require(CalibrationStarts[Epoch] <= QuiescedEpochs[Epoch] < PhaseStarts[Phase],
+                "quiescence preceded calibration or entered phase")
         if Epoch > 1:
             Require(PhaseEnds[PHASE_NAMES[Epoch - 2]] <= CalibrationStarts[Epoch],
                     "calibration overlapped prior measured phase")
     Require(CompleteEpochs == set(range(1, Epochs + 1)),
             "all-peer calibration barrier incomplete")
     Require(len(ServerTerminal) == 1 and Number(ServerTerminal[0], "records") == len(ServerRows) and
-            Number(ServerTerminal[0], "overflow") == 0, "server native trace incomplete")
+            Number(ServerTerminal[0], "overflow") == 0 and
+            Number(ServerTerminal[0], "invalid_decode") == 0, "server native trace incomplete")
 
     ClientRows = []
     for Slot, Lines in ClientLinesBySlot.items():
@@ -135,7 +146,8 @@ def Analyze(ServerLines, ClientLinesBySlot, RunId, Peers=32, Epochs=5, Probes=4)
         Count = sum(1 for ItemSlot, _ in ClientRows if ItemSlot == Slot)
         Require(len(Terminal) == 1 and Number(Terminal[0], "slot") == Slot and
                 Number(Terminal[0], "records") == Count and
-                Number(Terminal[0], "overflow") == 0, "client native trace incomplete")
+                Number(Terminal[0], "overflow") == 0 and
+                Number(Terminal[0], "invalid_decode") == 0, "client native trace incomplete")
 
     Samples = defaultdict(dict)
 
@@ -183,8 +195,8 @@ def Analyze(ServerLines, ClientLinesBySlot, RunId, Peers=32, Epochs=5, Probes=4)
         Require(T2 < PhaseStarts[PHASE_NAMES[Epoch - 1]] and
                 T3 < PhaseStarts[PHASE_NAMES[Epoch - 1]],
                 "clock probe entered measured phase")
-        Require(CalibrationStarts[Epoch] <= T2 <= T3,
-                "clock probe preceded its calibration window")
+        Require(QuiescedEpochs[Epoch] <= T2 <= T3,
+                "clock probe preceded all-client quiescence")
         Lower, Upper = OffsetInterval(T1, T2, T3, T4)
         Result.append({"Slot": Slot, "Epoch": Epoch, "Sequence": Sequence,
                        "Request": Request, "LowerNs": Lower, "UpperNs": Upper,
