@@ -25,7 +25,9 @@ namespace gargantuan::host::detail {
 		};
 		static constexpr std::size_t MaximumEvents = 65'536;
 		static constexpr std::size_t MaximumIdentities = 1'048'576;
-		network::detail::RecoveryCausalEvidence Verifier{32, MaximumEvents + 32, MaximumIdentities, 4};
+		// In addition to trace events, the verifier counts 32 captures and the
+		// 32-peer source checks at the service snapshot and final deadline.
+		network::detail::RecoveryCausalEvidence Verifier{32, MaximumEvents + 3 * 32, MaximumIdentities, 4};
 		std::vector<Snapshot> Initial;
 		std::vector<Snapshot> FinalSource;
 		std::vector<OwnedEvent> Events;
@@ -44,8 +46,7 @@ namespace gargantuan::host::detail {
 		void Observe(const Event &Value) {
 			using namespace network::detail;
 			if (!Failure().empty()) return;
-			if (!Value.Valid || Value.SourceScope != Scope) { Error = "invalid causal scope or native delivery"; return; }
-			if (Value.Kind == Kind::Delivery) {
+			if (Value.Valid && Value.SourceScope == Scope && Value.Kind == Kind::Delivery) {
 				const std::array Current{Value.GrantToken, Value.FirstSent, Value.Acked};
 				if (LastDelivery[Value.Connection] == Current) return;
 				LastDelivery[Value.Connection] = Current;
@@ -62,6 +63,7 @@ namespace gargantuan::host::detail {
 			// Do not retain dangling borrowed spans even though formatting uses owners.
 			Copy.Value.ResolvedPending = {}; Copy.Value.Entering = {}; Copy.Value.Leaving = {};
 			Events.push_back(std::move(Copy));
+			if (!Value.Valid || Value.SourceScope != Scope) { Error = "invalid causal scope or native delivery"; return; }
 			RecoveryCoverage Coverage{Value.CursorBefore, Value.CursorAfter};
 			for (const auto &Pending : Value.ResolvedPending) Coverage.ResolvedPendingTokens.push_back(Pending.Token);
 			switch (Value.Kind) {
@@ -183,7 +185,8 @@ namespace gargantuan::host::detail {
 					std::ostringstream Line;
 					Line << "quote\t" << Frame.Connection.Slot << '\t' << Frame.Connection.Generation << '\t'
 						<< Frame.Sequence.Value() << '\t' << Frame.CompleteBytes << '\t'
-						<< Frame.Fingerprint[0] << '\t' << Frame.Fingerprint[1] << '\n';
+						<< Frame.Fingerprint[0] << '\t' << Frame.Fingerprint[1] << '\t'
+						<< Frame.CursorBefore << '\t' << Frame.CursorAfter << '\n';
 					Output.Write(Line.str());
 				}
 				for (const auto &Peer : FinalSource) {
