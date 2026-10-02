@@ -30,6 +30,16 @@
 #include <unordered_set>
 #include <variant>
 
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <Windows.h>
+#endif
+
 #if defined(GARGANTUAN_WITH_GNS)
 #include "gargantuan/network/GameNetworkingSocketsTransport.hpp"
 #include "network/FarmCaptureEndpointAccess.hpp"
@@ -99,6 +109,40 @@ namespace gargantuan::host {
 			Handler PreviousTerminate = SIG_DFL;
 		};
 
+		// The farm runner signals this only after its result has already failed.
+		// Checking the event does not touch disk or alter transport state.
+		class FarmDiagnosticStop final {
+		  public:
+			explicit FarmDiagnosticStop(std::string_view Name) {
+				if (Name.empty()) return;
+#if defined(_WIN32)
+				const std::wstring WideName(Name.begin(), Name.end());
+				Event = OpenEventW(SYNCHRONIZE, FALSE, WideName.c_str());
+				if (!Event) throw std::runtime_error("farm diagnostic stop event is unavailable");
+#else
+				throw std::runtime_error("farm diagnostic stop event requires Windows");
+#endif
+			}
+			~FarmDiagnosticStop() {
+#if defined(_WIN32)
+				if (Event) CloseHandle(Event);
+#endif
+			}
+			FarmDiagnosticStop(const FarmDiagnosticStop &) = delete;
+			FarmDiagnosticStop &operator=(const FarmDiagnosticStop &) = delete;
+			bool Requested() const noexcept {
+#if defined(_WIN32)
+				return Event && WaitForSingleObject(Event, 0) == WAIT_OBJECT_0;
+#else
+				return false;
+#endif
+			}
+		  private:
+#if defined(_WIN32)
+			HANDLE Event = nullptr;
+#endif
+		};
+
 		bool IsPlayerOnlyArgument(std::string_view Argument) {
 			return Argument.starts_with("--connect") || Argument.starts_with("--window") ||
 				Argument.starts_with("--renderer") || Argument == "--headless";
@@ -137,6 +181,8 @@ namespace gargantuan::host {
 		Program.add_argument("--session-smoke").flag().help("require a bounded packaged game-session acceptance proof");
 		Program.add_argument("--max-ticks").scan<'i', int>().default_value(0).help("bounded test-only server tick count");
 		Program.add_argument("--farm-run-id").default_value(std::string()).help("bounded qualification run identity");
+		Program.add_argument("--farm-diagnostic-stop-event").default_value(std::string())
+			.help("run-owned Windows event for sealing failed farm diagnostics");
 		Program.add_argument("--farm-peers").scan<'i', int>().default_value(0).help("expected actual GameSession clients (1-32)");
 		Program.add_argument("--farm-scale-workload").flag().help("run the bounded 32-client qualified scale matrix");
 		Program.add_argument("--farm-recovery-workload").flag().help("run bounded post-reload overload and recovery cases");
@@ -316,12 +362,14 @@ namespace gargantuan::host {
 		const bool StartupSmoke = Program.is_used("--startup-smoke");
 		const bool SessionSmoke = Program.is_used("--session-smoke");
 		const auto FarmRunId = Program.get<std::string>("--farm-run-id");
+		const auto FarmDiagnosticStopEvent = Program.get<std::string>("--farm-diagnostic-stop-event");
 		const auto FarmPeers = Program.get<int>("--farm-peers");
 		const bool FarmScaleWorkload = Program.is_used("--farm-scale-workload");
 		const bool FarmRecoveryWorkload = Program.is_used("--farm-recovery-workload");
 		const auto FarmAdmissionEvidencePath = Program.get<std::string>("--farm-admission-evidence");
 		const auto FarmPublicationEvidencePath = Program.get<std::string>("--farm-publication-evidence");
-		const bool FarmMode = !FarmRunId.empty() || FarmPeers != 0 || FarmScaleWorkload || FarmRecoveryWorkload ||
+		const bool FarmMode = !FarmRunId.empty() || !FarmDiagnosticStopEvent.empty() || FarmPeers != 0 ||
+			FarmScaleWorkload || FarmRecoveryWorkload ||
 			!FarmAdmissionEvidencePath.empty() || !FarmPublicationEvidencePath.empty();
 		const auto ValidFarmRunId = std::all_of(FarmRunId.begin(), FarmRunId.end(), [](char Value) {
 			return (Value >= 'A' && Value <= 'Z') || (Value >= 'a' && Value <= 'z') ||
@@ -332,6 +380,8 @@ namespace gargantuan::host {
 			!BindEndpoint || SessionSmoke || StartupSmoke ||
 			(FarmScaleWorkload != !FarmAdmissionEvidencePath.empty()) ||
 			(FarmScaleWorkload != !FarmPublicationEvidencePath.empty()) ||
+			(!FarmDiagnosticStopEvent.empty() &&
+				(!FarmScaleWorkload || FarmDiagnosticStopEvent != "Local\\GargantuanFarmStop-" + FarmRunId)) ||
 			(FarmRecoveryWorkload && (!FarmScaleWorkload || Program.get<int>("--max-ticks") < 19000)) ||
 			(FarmScaleWorkload && (FarmPeers != 32 || Program.get<int>("--max-ticks") < 7200 ||
 				Residency != ContentResidencyMode::OnDemand)))) {
@@ -632,12 +682,17 @@ namespace gargantuan::host {
 			std::unique_ptr<detail::FarmPublicationEvidence> PublicationEvidence;
 			if (FarmScaleWorkload) PublicationEvidence = std::make_unique<detail::FarmPublicationEvidence>(
 				true, FarmRunId, -1, 0, std::filesystem::path(FarmPublicationEvidencePath));
+			FarmDiagnosticStop DiagnosticStop(FarmDiagnosticStopEvent);
 			if (FarmMode)
 				std::cout << "[Qualification:Server] event=start run=" << FarmRunId
 					<< " provider=" << ProviderName << " expected=" << FarmPeers << '\n';
 			if (SessionSmoke)
 				std::cout << "[Runtime:ServerFrame] unix_us,tick,interval_ns,poll_ns,engine_ns,session_ns,encode_ns,relevance_ns,materialize_ns,selected,committed,pending,wire_bytes\n";
 			while (Runtime->ProcessService->Alive && StopRequested == 0) {
+				if (DiagnosticStop.Requested()) {
+					std::cout << "[Qualification:Server] event=diagnostic_stop run=" << FarmRunId << '\n';
+					break;
+				}
 				const auto TickStarted = std::chrono::steady_clock::now();
 				if (ServerTickEvidence) ServerTickEvidence->BeginTick(Runtime->GetSimulationTick() + 1);
 				if (PublicationEvidence) PublicationEvidence->MarkFrameBegin(Runtime->GetSimulationTick() + 1);

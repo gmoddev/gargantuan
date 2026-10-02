@@ -44,6 +44,7 @@ $ResourceClock = [Diagnostics.Stopwatch]::StartNew()
 $LastResourceSampleMilliseconds = -2000L
 $CleanupErrors = [System.Collections.Generic.List[string]]::new()
 $Failure = $null
+$FarmStopEvent = $null
 $StartedUtc = [DateTimeOffset]::UtcNow
 $Result = $null
 
@@ -574,6 +575,63 @@ function Stop-RunProcess {
 	}
 }
 
+function Test-SealedFarmPublicationTrace {
+	param([Parameter(Mandatory = $true)][string]$Path,
+		[Parameter(Mandatory = $true)][string]$ExpectedRunId)
+	if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $false }
+	$Stream = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+	try {
+		$HeaderBytes = [Collections.Generic.List[byte]]::new()
+		while ($HeaderBytes.Count -lt 512) {
+			$Value = $Stream.ReadByte()
+			if ($Value -lt 0) { return $false }
+			$HeaderBytes.Add([byte]$Value)
+			if ($Value -eq 10) { break }
+		}
+		if ($HeaderBytes[$HeaderBytes.Count - 1] -ne 10) { return $false }
+		$Header = [Text.Encoding]::ASCII.GetString($HeaderBytes.ToArray())
+		$Prefix = "format=GargantuanFarmPublicationV1`trun=$ExpectedRunId`trole=SERVER`tslot=-1`tnonce=0`t"
+		if (-not $Header.StartsWith($Prefix, [StringComparison]::Ordinal)) { return $false }
+		if ($Header -cnotmatch 'count=([0-9]+)\x09dropped=0\x09decode_failures=0\x0A$') { return $false }
+		$Count = [long]$Matches[1]
+		return $Stream.Length -eq ($HeaderBytes.Count + 80L * $Count)
+	} finally { $Stream.Dispose() }
+}
+
+function Stop-FarmProcesses {
+	param([bool]$Failed)
+	if (-not $Failed) {
+		foreach ($Owner in $AllProcesses) { Stop-RunProcess -Owner $Owner }
+		return
+	}
+	# Once a child has failed, the run is already invalid. Let the server observe
+	# client departure and seal its bounded native traces before force cleanup.
+	$ServerOwner = $null
+	foreach ($Owner in $AllProcesses) {
+		if ($Owner.Label -ceq 'server') { $ServerOwner = $Owner }
+		else { Stop-RunProcess -Owner $Owner }
+	}
+	if ($ServerOwner) {
+		try {
+			if (-not $ServerOwner.Process.HasExited) {
+				if ($FarmStopEvent -and -not $FarmStopEvent.Set()) {
+					throw 'server diagnostic stop event was not signaled'
+				}
+				if (-not $ServerOwner.Process.WaitForExit(3000)) {
+					$CleanupErrors.Add('server diagnostic trace did not seal within 3000 ms')
+				}
+			}
+		} catch {
+			$CleanupErrors.Add("server diagnostic grace failed: $($_.Exception.Message)")
+		}
+		Stop-RunProcess -Owner $ServerOwner
+		if ($ScaleWorkload -and -not (Test-SealedFarmPublicationTrace `
+			-Path (Join-Path $RunDirectory 'publication-service.bin') -ExpectedRunId $RunId)) {
+			$CleanupErrors.Add('server native publication trace was not sealed or is incomplete')
+		}
+	}
+}
+
 function Assert-LogBounds {
 	foreach ($Owner in $AllProcesses) {
 		foreach ($Path in @($Owner.OutputPath, $Owner.ErrorPath)) {
@@ -927,12 +985,20 @@ try {
 	}
 	[IO.File]::WriteAllText((Join-Path $RunDirectory 'manifest.json'),
 		($Manifest | ConvertTo-Json -Depth 6), [Text.UTF8Encoding]::new($false))
+	if ($ScaleWorkload) {
+		$FarmStopEventName = "Local\GargantuanFarmStop-$RunId"
+		$CreatedNew = $false
+		$FarmStopEvent = [Threading.EventWaitHandle]::new($false,
+			[Threading.EventResetMode]::ManualReset, $FarmStopEventName, [ref]$CreatedNew)
+		if (-not $CreatedNew) { throw 'farm diagnostic stop event already exists' }
+	}
 	$ServerArguments = @('--bind', $Endpoint, '--farm-run-id', $RunId, '--farm-peers', [string]$Peers,
 		'--max-ticks', [string]$ServerTicks, '--reliable-mode', 'POOLED_SERVICE',
 		'--content-provider', $Provider.ToLowerInvariant())
 	if ($ScaleWorkload) { $ServerArguments += @('--farm-scale-workload',
 		'--farm-admission-evidence', (Join-Path $RunDirectory 'admission-fairness.tsv'),
 		'--farm-publication-evidence', (Join-Path $RunDirectory 'publication-service.bin'),
+		'--farm-diagnostic-stop-event', $FarmStopEventName,
 		'--content-residency', 'on-demand') }
 	if ($RecoveryWorkload) { $ServerArguments += '--farm-recovery-workload' }
 	if (-not [Net.IPAddress]::IsLoopback($BindAddress)) {
@@ -1061,7 +1127,8 @@ try {
 			$CleanupErrors.Add("resource evidence write failed: $($_.Exception.Message)")
 		}
 	}
-	foreach ($Owner in $AllProcesses) { Stop-RunProcess -Owner $Owner }
+	Stop-FarmProcesses -Failed ($Result.Status -ne 'PASS')
+	if ($FarmStopEvent) { $FarmStopEvent.Dispose() }
 	if ($InterfaceBaseline) {
 		try {
 			$InterfaceEnd = Get-NetAdapterStatistics -Name $BoundAdapter.Name
