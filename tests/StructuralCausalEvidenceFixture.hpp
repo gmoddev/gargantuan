@@ -232,7 +232,8 @@ inline void TestStructuralCausalEvidence() {
 		LiveAudit.Represented() && LiveAudit.ReferenceBytes(Connection) == LiveReference.Frame->CompleteBytes,
 		"R7 accepted current-state coverage resolves finite source fence without retroactively changing reference bytes");
 	Object->SetName("later-live-work-does-not-reopen-source-fence");
-	EnvelopeRequire(LiveAudit.Represented() && Coordinator.GetJournalLag(Connection) != 0,
+	EnvelopeRequire(LiveAudit.Represented() &&
+		ChangeJournal::Get().CreateCursor(World->GetObjectId()).NextSequence > LiveIdentity.CursorAfter,
 		"R7 later live source backlog cannot reopen represented cessation source prefix");
 
 	auto NextQuotedFrame = [&](ReplicationCoordinator &Frozen) {
