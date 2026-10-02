@@ -42,6 +42,19 @@ retained bytes from the prior reconciler's hash-verified index. This establishes
 only the bounded role-local evidence set. It does not establish capture
 retention, long-running resource stability, or production journal retention.
 
+When **both** provider manifests select the bounded recovery workload, the
+acceptance analyzer independently replays the canonical three-case recovery
+parser over each run's indexed Server stdout/stderr and all 32 indexed Clients
+stdout/stderr logs. It checks the sealed role results' run, manifest, provider,
+endpoint, and scale identity, then compares every recomputed recovery case to
+the separate reconciliation report. The fixed 20-second service-recovery gate
+is `MEASURED_PASS` only if Local and Node each pass gameplay, structural, and
+mixed service recovery. A valid failing case is reported as `MEASURED_FAIL`;
+an absent workload is `NOT MEASURED`. The strict snapshot/client final-Name
+sufficient proof is reported separately. `ExactRetainedWorkBytes` remains
+`NOT_MEASURED`, so the workload-derived exact structural-convergence deadline
+is not claimed even when that strict sufficient proof passes.
+
 The report independently re-reads the indexed Server `server.stdout.log`
 native admission receipt and `admission-fairness.tsv` timeline, then compares
 every final admission field and the full parsed fairness observation with the
@@ -64,7 +77,8 @@ The report records the already typed five-phase observations and final native
 admission conservation as measured subsets. It intentionally remains
 `INCOMPLETE` / `Foundation3LQualification=NOT CLAIMED`. Current role-local
 evidence does **not** establish canonical CPU/memory/network headroom, fixed
-20-second recovery, workload-derived exact convergence timing, journal
+20-second recovery without the separately indexed recovery workload,
+workload-derived exact convergence timing, journal
 retention margin under overload, full fairness/backpressure, full provider
 parity, or negotiated real-TLS transport details. Terminal zero journal backlog
 and zero failures do not establish the high-water retention margin. Those gates

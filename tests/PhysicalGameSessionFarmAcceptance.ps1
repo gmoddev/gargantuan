@@ -15,6 +15,31 @@ param(
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'AdmissionFairnessEvidence.ps1')
 
+function Import-FarmRecoveryParser {
+	$Path = Join-Path $PSScriptRoot 'PhysicalGameSessionFarm.ps1'
+	$Tokens = $null
+	$Errors = $null
+	$Ast = [Management.Automation.Language.Parser]::ParseFile($Path, [ref]$Tokens, [ref]$Errors)
+	if ($Errors.Count -ne 0) { throw 'canonical farm recovery parser has a syntax error' }
+	$Needed = @('Get-Fields', 'Get-Records', 'Get-RecoveryDiagnostics',
+		'Test-RecoveryQuiescent', 'Assert-RecoveryRecords')
+	foreach ($Function in $Ast.FindAll({ param($Node)
+		$Node -is [Management.Automation.Language.FunctionDefinitionAst]
+	}, $true)) {
+		if ($Function.Name -in $Needed) { $Function.Extent.Text }
+	}
+}
+
+foreach ($Definition in @(Import-FarmRecoveryParser)) {
+	. ([scriptblock]::Create($Definition))
+}
+foreach ($Name in @('Get-Fields', 'Get-Records', 'Get-RecoveryDiagnostics',
+	'Test-RecoveryQuiescent', 'Assert-RecoveryRecords')) {
+	if (-not (Get-Command $Name -CommandType Function -ErrorAction SilentlyContinue)) {
+		throw "canonical farm recovery parser lacks $Name"
+	}
+}
+
 function Read-BoundedJson {
 	param([string]$Path, [long]$MaximumBytes = 1048576)
 	$Resolved = [IO.Path]::GetFullPath($Path)
@@ -505,6 +530,77 @@ function Read-ProviderObservation {
 	}
 }
 
+function Read-RecoveryObservation {
+	param([System.Collections.IDictionary]$Report, [System.Collections.IDictionary]$Manifest,
+		$Server, $Clients)
+	if ($Manifest.Contains('RecoveryWorkload') -and $Manifest.RecoveryWorkload -isnot [bool]) {
+		throw 'recovery workload flag has invalid type'
+	}
+	if ($Manifest.RecoveryWorkload -ne $true) {
+		if ($null -ne $Report.RecoveryObservation) {
+			throw 'non-recovery run has a reconciled recovery claim'
+		}
+		return [ordered]@{ State = 'NOT MEASURED'; Workload = 'NOT RUN'
+			FixedServiceRecovery = 'NOT MEASURED'
+			StrictConvergenceSufficientProof = 'NOT MEASURED'
+			ExactRetainedWorkBytes = 'NOT_MEASURED'; Cases = @() }
+	}
+	if ($null -eq $Report.RecoveryObservation -or
+		$Server.Result.ScaleWorkload -ne $true -or $Clients.Result.ScaleWorkload -ne $true -or
+		$Server.Result.ManifestSha256 -ine $Report.ManifestSha256 -or
+		$Clients.Result.ManifestSha256 -ine $Report.ManifestSha256 -or
+		$Server.Result.Provider -cne $Report.Provider -or
+		$Clients.Result.Provider -cne $Report.Provider -or
+		$Server.Result.Endpoint -cne $Manifest.Endpoint -or
+		$Clients.Result.Endpoint -cne $Manifest.Endpoint) {
+		throw 'recovery workload lacks matching reconciled and sealed role results'
+	}
+	$ServerLog = [pscustomobject]@{
+		OutputPath = (Assert-IndexedFile -Root $Server.Root -Index $Server.Index -Name 'server.stdout.log')
+		ErrorPath = (Assert-IndexedFile -Root $Server.Root -Index $Server.Index -Name 'server.stderr.log')
+	}
+	$ClientLogs = @(0..31 | ForEach-Object {
+		$Label = 'client-{0:D2}' -f $_
+		[pscustomobject]@{
+			OutputPath = (Assert-IndexedFile -Root $Clients.Root -Index $Clients.Index -Name "$Label.stdout.log")
+			ErrorPath = (Assert-IndexedFile -Root $Clients.Root -Index $Clients.Index -Name "$Label.stderr.log")
+		}
+	})
+	$ExpectedNonces = @($Manifest.Nonces | ForEach-Object { [string]$_ })
+	$Connections = @($Report.Identity.Connections)
+	if ($ExpectedNonces.Count -ne 32 -or $Connections.Count -ne 32) {
+		throw 'recovery workload lacks 32 pinned client and connection identities'
+	}
+	$PreviousRunId = $script:RunId
+	try {
+		$script:RunId = [string]$Report.RunId
+		$Observed = Assert-RecoveryRecords -Server $ServerLog -Clients $ClientLogs `
+			-ExpectedNonces $ExpectedNonces -ExpectedConnections $Connections
+	} finally { $script:RunId = $PreviousRunId }
+	if (($Observed | ConvertTo-Json -Depth 12 -Compress) -cne
+		($Report.RecoveryObservation | ConvertTo-Json -Depth 12 -Compress)) {
+		throw 'reconciled recovery observation differs from immutable source logs'
+	}
+	$Cases = @($Observed.Cases)
+	if ($Cases.Count -ne 3 -or
+		(@($Cases | ForEach-Object Case) -join ',') -cne 'gameplay,structural,mixed' -or
+		$Observed.ExactRetainedWorkBytes -cne 'NOT_MEASURED' -or
+		@($Cases | Where-Object ExactRetainedWorkBytes -cne 'NOT_MEASURED').Count -ne 0) {
+		throw 'recovery observation has invalid case or retained-work classification'
+	}
+	$Fixed = if (@($Cases | Where-Object FixedServiceRecovery -ne 'MEASURED_PASS').Count -eq 0) {
+		'MEASURED_PASS'
+	} else { 'MEASURED_FAIL' }
+	$Strict = if (@($Cases | Where-Object StrictConvergenceSufficientProof -ne 'MEASURED_PASS').Count -eq 0) {
+		'MEASURED_PASS'
+	} else { 'INCONCLUSIVE_NOT_MEASURED' }
+	return [ordered]@{
+		State = $Observed.State; Workload = 'THREE_CASES_REPLAYED_FROM_INDEXED_LOGS'
+		FixedServiceRecovery = $Fixed; StrictConvergenceSufficientProof = $Strict
+		ExactRetainedWorkBytes = 'NOT_MEASURED'; Cases = $Cases
+	}
+}
+
 function Read-ProviderRun {
 	param([string]$ReportPath, [string]$ServerRoot, [string]$ClientRoot, [string]$ExpectedProvider)
 	$Report = Read-BoundedJson -Path $ReportPath
@@ -550,9 +646,11 @@ function Read-ProviderRun {
 		-ServerLogPath $Server.ServerLogPath
 	$ProviderObservation = Read-ProviderObservation -Report $Report -Manifest $Manifest `
 		-NodeProviderPath $Server.NodeProviderPath
+	$Recovery = Read-RecoveryObservation -Report $Report -Manifest $Manifest `
+		-Server $Server -Clients $Clients
 	return [pscustomobject]@{
 		Report = $Report; Manifest = $Manifest
-		Admission = $Admission; ProviderObservation = $ProviderObservation
+		Admission = $Admission; ProviderObservation = $ProviderObservation; Recovery = $Recovery
 		Resources = [ordered]@{ Server = $ServerResources; Clients = $ClientResources
 			ServerHost = $ServerHost; ClientHost = $ClientHost }
 		EvidenceRetention = [ordered]@{
@@ -597,12 +695,14 @@ $Observed = [ordered]@{
 	Local = [ordered]@{
 		Ready = $Local.Report.Identity.Ready; AcceptedBytes = $Local.Report.Admission.accepted
 		RetiredBytes = $Local.Report.Admission.retired; Admission = $Local.Admission
+		Recovery = $Local.Recovery
 		Provider = $Local.ProviderObservation; Resources = $Local.Resources
 		EvidenceRetention = $Local.EvidenceRetention
 	}
 	Node = [ordered]@{
 		Ready = $Node.Report.Identity.Ready; AcceptedBytes = $Node.Report.Admission.accepted
 		RetiredBytes = $Node.Report.Admission.retired; Admission = $Node.Admission
+		Recovery = $Node.Recovery
 		Provider = $Node.ProviderObservation; Resources = $Node.Resources
 		EvidenceRetention = $Node.EvidenceRetention
 	}
@@ -618,10 +718,11 @@ $Observed = [ordered]@{
 		[ordered]@{ Gate = 'Five-phase observation and terminal native admission conservation'; State = 'MEASURED' },
 		[ordered]@{ Gate = 'Full fairness, overload backpressure and journal retention margin'; State = 'NOT MEASURED'; Reason = 'terminal counters and exact-demand event waits do not prove saturated service, continuous backlog bounds, or the journal high-water margin' },
 		[ordered]@{ Gate = 'CPU, memory, network and transport headroom'; State = 'NOT MEASURED'; Reason = 'bounded host/NIC snapshots describe utilization, but no canonical CPU/memory/NIC pass percentage or concurrent packet-level reserve proof follows from those samples' },
-		[ordered]@{ Gate = 'Fixed 20-second service recovery'; State = 'NOT MEASURED'; Reason = 'no independently timed recovery workload or native recovery trace' },
+		[ordered]@{ Gate = 'Fixed 20-second service recovery'; State = $(if ($Local.Recovery.FixedServiceRecovery -eq 'MEASURED_PASS' -and $Node.Recovery.FixedServiceRecovery -eq 'MEASURED_PASS') { 'MEASURED_PASS' } elseif ($Local.Recovery.FixedServiceRecovery -eq 'MEASURED_FAIL' -or $Node.Recovery.FixedServiceRecovery -eq 'MEASURED_FAIL') { 'MEASURED_FAIL' } else { 'NOT MEASURED' }); Reason = 'three canonical cases per provider, replayed from indexed server/client recovery logs and matched to sealed reconciliation' },
+		[ordered]@{ Gate = 'Strict structural convergence sufficient proof'; State = $(if ($Local.Recovery.StrictConvergenceSufficientProof -eq 'MEASURED_PASS' -and $Node.Recovery.StrictConvergenceSufficientProof -eq 'MEASURED_PASS') { 'MEASURED_PASS' } else { 'NOT MEASURED' }); Reason = 'strict snapshot and client final-Name proof only; exact retained-work service bound remains unmeasured' },
 		[ordered]@{ Gate = 'Workload-derived exact structural convergence'; State = 'NOT MEASURED'; Reason = 'phase observations and final debt do not locate final accepted byte versus client observation' },
 		[ordered]@{ Gate = 'Journal retention margin and overload'; State = 'NOT MEASURED'; Reason = 'final zero journal backlog lacks retained-history high-water and overload chronology' },
-		[ordered]@{ Gate = 'Full Local/Node provider parity'; State = 'NOT MEASURED'; Reason = 'application service, real TLS, recovery, resource headroom and capture gates remain independent' }
+		[ordered]@{ Gate = 'Full Local/Node provider parity'; State = 'NOT MEASURED'; Reason = 'application service, real TLS, exact convergence, resource headroom and capture gates remain independent' }
 	)
 }
 $OutputPath = [IO.Path]::GetFullPath($OutputPath)

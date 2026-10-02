@@ -99,8 +99,103 @@ function Save-FairnessRows {
 	return (Read-AdmissionFairnessEvidence -Path $Path -RunId $RunId -ExpectedConnections $Connections)
 }
 
+function Import-RecoveryParser {
+	$Path = Join-Path $PSScriptRoot 'PhysicalGameSessionFarm.ps1'
+	$Tokens = $null; $Errors = $null
+	$Ast = [Management.Automation.Language.Parser]::ParseFile($Path, [ref]$Tokens, [ref]$Errors)
+	if ($Errors.Count -ne 0) { throw 'recovery fixture parser has invalid syntax' }
+	$Needed = @('Get-Fields', 'Get-Records', 'Get-RecoveryDiagnostics',
+		'Test-RecoveryQuiescent', 'Assert-RecoveryRecords')
+	foreach ($Function in $Ast.FindAll({ param($Node)
+		$Node -is [Management.Automation.Language.FunctionDefinitionAst]
+	}, $true)) {
+		if ($Function.Name -in $Needed) { $Function.Extent.Text }
+	}
+}
+foreach ($Definition in @(Import-RecoveryParser)) { . ([scriptblock]::Create($Definition)) }
+
+function Save-RecoveryLogs {
+	param([string]$ServerRoot, [string]$ClientRoot, [string]$RunId,
+		[string[]]$Nonces, [string[]]$Connections)
+	$Cases = @('gameplay', 'structural', 'mixed')
+	$ServerOutputPath = Join-Path $ServerRoot 'server.stdout.log'
+	$ServerOutput = [Collections.Generic.List[string]]::new()
+	$ServerError = [Collections.Generic.List[string]]::new()
+	for ($Index = 0; $Index -lt 32; $Index++) {
+		$ServerOutput.Add("[Qualification:Recovery] event=object run=$RunId index=$Index object_slot=$(100 + $Index) object_generation=1")
+	}
+	foreach ($CaseIndex in 0..2) {
+		$Case = $Cases[$CaseIndex]; $Tick = 1000 + 1000 * $CaseIndex
+		$Tail = 10000 + 10000 * $CaseIndex
+		$ServerOutput.Add("[Qualification:Recovery] event=case_start run=$RunId case=$Case tick=$Tick monotonic_us=$(100000000 * ($CaseIndex + 1))")
+		for ($Peer = 1; $Peer -le 32; $Peer++) {
+			$ServerError.Add("[Qualification:Recovery] event=ready_ack case=$Case peer_slot=$Peer peer_generation=1")
+			$ServerError.Add("[Qualification:Recovery] event=offered_ack case=$Case peer_slot=$Peer peer_generation=1")
+		}
+		if ($Case -ne 'gameplay') {
+			for ($Opportunity = 1; $Opportunity -le 480; $Opportunity++) {
+				$Time = 100000000 * ($CaseIndex + 1) + $Opportunity * 16667
+				$ServerOutput.Add("[Qualification:Recovery] event=structural_offer run=$RunId case=$Case opportunity=$Opportunity mutations=16 name_bytes=24576 monotonic_us=$Time")
+				$ServerOutput.Add("[Qualification:Recovery] event=retention run=$RunId case=$Case opportunity=$Opportunity retained=16 margin=99")
+			}
+		}
+		$ServerOutput.Add("[Qualification:Recovery] event=all_opportunities run=$RunId case=$Case opportunities=480 elapsed_us=8000000 tick=$($Tick + 480)")
+		$RawBytes = if ($Case -eq 'gameplay') { 0 } else { 188743680 }
+		$ServerOutput.Add("[Qualification:Recovery] event=cessation run=$RunId case=$Case tick=$($Tick + 481) monotonic_us=$(100000000 * ($CaseIndex + 1) + 8000001) journal_tail=$Tail raw_name_bytes=$RawBytes retained_high=16 minimum_retention_margin=99")
+		$ServerError.Add("[Qualification:Recovery] event=cessation_barrier run=$RunId case=$Case journal_tail=$Tail")
+		for ($Peer = 1; $Peer -le 32; $Peer++) {
+			$ServerError.Add("[Qualification:Recovery] event=probe_ack case=$Case peer_slot=$Peer peer_generation=1")
+			if ($Case -ne 'gameplay') {
+				$ServerError.Add("[Qualification:Recovery] event=name_ack case=$Case peer_slot=$Peer peer_generation=1")
+			}
+		}
+		$Sample = "outstanding=0 active_grants=0 scheduler_queued=0 native_queued=0 native_observed=32 feedback_observed=32 accepted=100 first_sent=100 acked=100 retired=100 terminal_release=0 journal_backlog=0 materialization_backlog=0 current_tail=$Tail retained=16 margin=99 journal_failures=0"
+		$ServerError.Add("[Qualification:Recovery] event=sample run=$RunId case=$Case elapsed_us=19000000 $Sample")
+		$ServerError.Add("[Qualification:Recovery] event=sample run=$RunId case=$Case elapsed_us=20000001 $Sample")
+		$ServerError.Add("[Qualification:Recovery] event=reader run=$RunId case=$Case catalog=1 next_sequence=$Tail")
+		for ($Peer = 1; $Peer -le 32; $Peer++) {
+			$ServerError.Add("[Qualification:Recovery] event=reader run=$RunId case=$Case catalog=0 connection_slot=$Peer connection_generation=1 next_sequence=$Tail prepared=0 pending_relevance=0")
+		}
+		$ServerError.Add("[Qualification:Recovery] event=strict_snapshot run=$RunId case=$Case elapsed_us=20000001 retained_work_bytes=NOT_MEASURED")
+		$ServerError.Add("[Qualification:Recovery] event=strict_deadline_barrier run=$RunId case=$Case elapsed_us=20471000")
+	}
+	[IO.File]::AppendAllLines($ServerOutputPath, $ServerOutput)
+	[IO.File]::WriteAllLines((Join-Path $ServerRoot 'server.stderr.log'), $ServerError)
+	$ClientLogs = @(
+		for ($Slot = 0; $Slot -lt 32; $Slot++) {
+			$Output = [Collections.Generic.List[string]]::new()
+			$ErrorLines = [Collections.Generic.List[string]]::new()
+			foreach ($Case in $Cases) {
+				$Rpc = if ($Case -eq 'structural') { 1 } else { 16 }
+				$Events = if ($Case -eq 'structural') { 60 } else { 480 }
+				$ErrorLines.Add("[Qualification:Recovery] event=client_offered case=$Case opportunities=480 rpc_completed=$Rpc rpc_errors=0 event_attempts=$Events event_offers=$Events event_acks=$Events")
+				$ErrorLines.Add("[Qualification:Recovery] event=client_probes case=$Case rpc_acks=10 rpc_errors=0 event_acks=10 rpc_p95_us=1000 rpc_p99_us=1000 rpc_max_us=1000 event_max_us=1000")
+				if ($Case -eq 'gameplay') { continue }
+				$CaseIndex = if ($Case -eq 'structural') { 1 } else { 2 }
+				for ($Index = 0; $Index -lt 32; $Index++) {
+					$Opportunity = if ($Index -lt 16) { 479 } else { 480 }
+					$Letter = [char]([int][char]'a' + (($CaseIndex * 7 + $Opportunity + $Index) % 26))
+					$Output.Add("[Qualification:Client] event=name_object run_id=$RunId slot=$Slot nonce=$($Nonces[$Slot]) case=$Case index=$Index object_slot=$(100 + $Index) object_generation=1 name_bytes=24576 letter=$Letter")
+				}
+				$Output.Add("[Qualification:Client] event=names_observed run_id=$RunId slot=$Slot nonce=$($Nonces[$Slot]) case=$Case objects=32")
+				$ErrorLines.Add("[Qualification:Recovery] event=client_names case=$Case objects=32")
+			}
+			$Label = 'client-{0:D2}' -f $Slot
+			$OutputPath = Join-Path $ClientRoot "$Label.stdout.log"
+			$ErrorPath = Join-Path $ClientRoot "$Label.stderr.log"
+			[IO.File]::WriteAllLines($OutputPath, $Output)
+			[IO.File]::WriteAllLines($ErrorPath, $ErrorLines)
+			[pscustomobject]@{ OutputPath = $OutputPath; ErrorPath = $ErrorPath }
+		}
+	)
+	$ServerLog = [pscustomobject]@{ OutputPath = $ServerOutputPath
+		ErrorPath = (Join-Path $ServerRoot 'server.stderr.log') }
+	return Assert-RecoveryRecords -Server $ServerLog -Clients $ClientLogs `
+		-ExpectedNonces $Nonces -ExpectedConnections $Connections
+}
+
 function New-RunFixture {
-	param([string]$Prefix, [string]$Provider, [string]$RunId)
+	param([string]$Prefix, [string]$Provider, [string]$RunId, [switch]$RecoveryWorkload)
 	$ServerRoot = Join-Path $TestRoot "$Prefix-server"
 	$ClientRoot = Join-Path $TestRoot "$Prefix-clients"
 	[void][IO.Directory]::CreateDirectory($ServerRoot)
@@ -109,13 +204,15 @@ function New-RunFixture {
 		Format = 'GargantuanPhysicalFarmEndpoint'; Version = 1
 		RunId = $RunId; SourceCommit = ('b' * 40)
 		Endpoint = '10.253.3.2:39450'; Provider = $Provider; ScaleWorkload = $true
-		ClientFrames = 9000; ServerTicks = 10000
+		ClientFrames = $(if ($RecoveryWorkload) { 18000 } else { 9000 })
+		ServerTicks = $(if ($RecoveryWorkload) { 19000 } else { 10000 })
 		Nonces = @(0..31 | ForEach-Object { [string](([UInt64]123 -shl 32) + [UInt64]($_ + 1)) })
 		ServerSha256 = ('a' * 64); ServerPackageSha256 = ('a' * 64)
 		PlayerSha256 = ('a' * 64); PlayerPackageSha256 = ('a' * 64)
 		ServerContentManifestSha256 = ('a' * 64); PlayerContentManifestSha256 = ('a' * 64)
 		ServerDeploymentSha256 = ('a' * 64); PlayerDeploymentSha256 = ('a' * 64)
 	}
+	if ($RecoveryWorkload) { $Manifest.RecoveryWorkload = $true }
 	if ($Provider -eq 'Node') {
 		$Manifest.NodeEndpoint = '127.0.0.1:39452'
 		$Manifest.NodeRootCertificateSha256 = ('c' * 64)
@@ -153,7 +250,9 @@ function New-RunFixture {
 	foreach ($RoleRoot in @($ServerRoot, $ClientRoot)) {
 		$RoleName = if ($RoleRoot -eq $ServerRoot) { 'Server' } else { 'Clients' }
 		Save-Json -Path (Join-Path $RoleRoot 'result.json') -Value ([ordered]@{
-			RunId = $RunId; Role = $RoleName; Status = 'PASS'
+			RunId = $RunId; Role = $RoleName; Status = 'PASS'; ScaleWorkload = $true
+			ManifestSha256 = (Get-FileHash -LiteralPath (Join-Path $RoleRoot 'run-manifest.json') -Algorithm SHA256).Hash.ToLowerInvariant()
+			Provider = $Provider; Endpoint = $Manifest.Endpoint
 			AggregateWorkingSetLimitBytes = 21474836480L
 		})
 	}
@@ -161,6 +260,10 @@ function New-RunFixture {
 	Save-HostRows -Root $ClientRoot -RunId $RunId -Role 'Clients' -Provider $Provider
 	$AdmissionLine = "[Qualification:Admission] event=result run=$RunId accepted=8192 retired=8192 terminal_release=0 outstanding=0 outstanding_high=2048 active_grants=0 grants_high=2 grant_deferrals=3 funded_deferrals=2 credit_deferrals=1 fairness_deferrals=1 max_wait_us=1000 peer_backlog_high=2048 global_backlog_high=8192 peer_credit_high=2048 global_credit_high=8192 fairness_rotations=1 pending_enters=0 pending_leaves=0 materialization_backlog=0 journal_backlog=0 structural_active_peers=0 oldest_pending_ticks=0 backlog_failures=0 journal_failures=0"
 	[IO.File]::WriteAllText((Join-Path $ServerRoot 'server.stdout.log'), "$AdmissionLine`n")
+	$Recovery = if ($RecoveryWorkload) {
+		Save-RecoveryLogs -ServerRoot $ServerRoot -ClientRoot $ClientRoot `
+			-RunId $RunId -Nonces $Manifest.Nonces -Connections $Connections
+	} else { $null }
 	Save-Index -Root $ServerRoot -RunId $RunId -Role 'Server'
 	Save-Index -Root $ClientRoot -RunId $RunId -Role 'Clients'
 	$Report = [ordered]@{
@@ -182,6 +285,7 @@ function New-RunFixture {
 			oldest_pending_ticks = 0; backlog_failures = 0; journal_failures = 0
 		}
 		AdmissionFairnessObservation = $Fairness
+		RecoveryObservation = $Recovery
 		NodeAuthenticatedManifest = $NodeAuthentication
 		ServerResourceSamples = $ServerSamples; ClientResourceSamples = $ClientSamples
 		ServerHostResourceSamples = 2; ClientHostResourceSamples = 2
@@ -241,7 +345,9 @@ try {
 		$Observed.Local.Admission.Fairness.MaximumObservedEligibilityToGrantMicroseconds -ne 200 -or
 		$Observed.Node.Provider.State -cne 'AUTHENTICATED_MANIFEST_RPC_MEASURED' -or
 		$Observed.Node.Provider.RealTls -cne 'NOT_MEASURED' -or
-		@($Observed.GateObservations | Where-Object { $_.State -eq 'NOT MEASURED' }).Count -ne 6) {
+		@($Observed.GateObservations | Where-Object { $_.State -eq 'NOT MEASURED' }).Count -ne 7 -or
+		$Observed.Local.Recovery.FixedServiceRecovery -cne 'NOT MEASURED' -or
+		$Observed.Node.Recovery.ExactRetainedWorkBytes -cne 'NOT_MEASURED') {
 		throw "resource/parity observation promoted a missing physical gate or lost resource evidence: status=$($Observed.Status) claim=$($Observed.Foundation3LQualification) parity=$($Observed.WorkloadPinParity.State) clients=$($Observed.Local.Resources.Clients.ProcessCount) server=$($Observed.Node.Resources.Server.ProcessCount) ws=$($Observed.Local.Resources.Clients.SumOfPerProcessPeakWorkingSetBytes) missing=$(@($Observed.GateObservations | Where-Object { $_.State -eq 'NOT MEASURED' }).Count)"
 	}
 	$OriginalOutput = [IO.File]::ReadAllText($OutputPath)
@@ -250,6 +356,61 @@ try {
 	if (-not $OverwriteRejected -or [IO.File]::ReadAllText($OutputPath) -cne $OriginalOutput) {
 		throw 'existing acceptance observation was overwritten'
 	}
+	$RecoveryLocal = New-RunFixture -Prefix 'recovery-local' -Provider 'Local' `
+		-RunId '9e93e53d-0e0c-4b8d-8a3b-9a761a406ebd' -RecoveryWorkload
+	$RecoveryNode = New-RunFixture -Prefix 'recovery-node' -Provider 'Node' `
+		-RunId 'ae93e53d-0e0c-4b8d-8a3b-9a761a406ebd' -RecoveryWorkload
+	$Local = $RecoveryLocal; $Node = $RecoveryNode
+	$RecoveryPath = Join-Path $TestRoot 'recovery-observed.json'
+	Invoke-Analyzer -OutputPath $RecoveryPath
+	$RecoveryObserved = Get-Content -LiteralPath $RecoveryPath -Raw | ConvertFrom-Json
+	if ($RecoveryObserved.Local.Recovery.FixedServiceRecovery -cne 'MEASURED_PASS' -or
+		$RecoveryObserved.Node.Recovery.FixedServiceRecovery -cne 'MEASURED_PASS' -or
+		$RecoveryObserved.Local.Recovery.StrictConvergenceSufficientProof -cne 'MEASURED_PASS' -or
+		$RecoveryObserved.Node.Recovery.ExactRetainedWorkBytes -cne 'NOT_MEASURED' -or
+		@($RecoveryObserved.GateObservations | Where-Object {
+			$_.Gate -ceq 'Fixed 20-second service recovery' -and $_.State -ceq 'MEASURED_PASS'
+		}).Count -ne 1 -or
+		$RecoveryObserved.Status -cne 'INCOMPLETE') {
+		throw 'two sealed recovery workloads did not prove only the fixed service gate'
+	}
+	$RecoveryServerErrorPath = Join-Path $Node.ServerRoot 'server.stderr.log'
+	$OriginalRecoveryServerError = [IO.File]::ReadAllText($RecoveryServerErrorPath)
+	Remove-Item -LiteralPath $RecoveryServerErrorPath
+	Assert-Rejected -Name 'missing indexed native recovery log' -OutputPath (Join-Path $TestRoot 'missing-recovery.json')
+	[IO.File]::WriteAllText($RecoveryServerErrorPath, $OriginalRecoveryServerError)
+	$ClientRecoveryPath = Join-Path $Local.ClientRoot 'client-00.stdout.log'
+	$OriginalClientRecovery = [IO.File]::ReadAllText($ClientRecoveryPath)
+	[IO.File]::WriteAllText($ClientRecoveryPath, $OriginalClientRecovery.Replace('object_slot=100', 'object_slot=999'))
+	Assert-Rejected -Name 'tampered indexed client ObjectId' -OutputPath (Join-Path $TestRoot 'tampered-client-recovery.json')
+	Save-Index -Root $Local.ClientRoot -RunId $Local.Report.RunId -Role 'Clients'
+	$Local.Report.ClientEvidenceSha256 = (Get-FileHash -LiteralPath (Join-Path $Local.ClientRoot 'evidence-sha256.json') -Algorithm SHA256).Hash.ToLowerInvariant()
+	Save-Json -Path $Local.ReportPath -Value $Local.Report
+	Assert-Rejected -Name 'rehashed wrong client ObjectId' -OutputPath (Join-Path $TestRoot 'rehashed-client-identity.json')
+	[IO.File]::WriteAllText($ClientRecoveryPath, $OriginalClientRecovery)
+	Save-Index -Root $Local.ClientRoot -RunId $Local.Report.RunId -Role 'Clients'
+	$Local.Report.ClientEvidenceSha256 = (Get-FileHash -LiteralPath (Join-Path $Local.ClientRoot 'evidence-sha256.json') -Algorithm SHA256).Hash.ToLowerInvariant()
+	Save-Json -Path $Local.ReportPath -Value $Local.Report
+	$Node.Report.RecoveryObservation.Cases[0].FixedServiceRecovery = 'MEASURED_FAIL'
+	Save-Json -Path $Node.ReportPath -Value $Node.Report
+	Assert-Rejected -Name 'forged recovery case in reconciliation' -OutputPath (Join-Path $TestRoot 'forged-recovery-report.json')
+	$Node.Report.RecoveryObservation.Cases[0].FixedServiceRecovery = 'MEASURED_PASS'
+	Save-Json -Path $Node.ReportPath -Value $Node.Report
+	$WrongCase = $OriginalRecoveryServerError.Replace('event=probe_ack case=mixed peer_slot=32',
+		'event=probe_ack case=other peer_slot=32')
+	[IO.File]::WriteAllText($RecoveryServerErrorPath, $WrongCase)
+	Save-Index -Root $Node.ServerRoot -RunId $Node.Report.RunId -Role 'Server'
+	$Node.Report.ServerEvidenceSha256 = (Get-FileHash -LiteralPath (Join-Path $Node.ServerRoot 'evidence-sha256.json') -Algorithm SHA256).Hash.ToLowerInvariant()
+	Save-Json -Path $Node.ReportPath -Value $Node.Report
+	Assert-Rejected -Name 'rehashed recovery case mismatch' -OutputPath (Join-Path $TestRoot 'rehashed-recovery-case.json')
+	[IO.File]::WriteAllText($RecoveryServerErrorPath, $OriginalRecoveryServerError)
+	Save-Index -Root $Node.ServerRoot -RunId $Node.Report.RunId -Role 'Server'
+	$Node.Report.ServerEvidenceSha256 = (Get-FileHash -LiteralPath (Join-Path $Node.ServerRoot 'evidence-sha256.json') -Algorithm SHA256).Hash.ToLowerInvariant()
+	Save-Json -Path $Node.ReportPath -Value $Node.Report
+	$Local = New-RunFixture -Prefix 'local-restored' -Provider 'Local' `
+		-RunId '7c93e53d-0e0c-4b8d-8a3b-9a761a406ebd'
+	$Node = New-RunFixture -Prefix 'node-restored' -Provider 'Node' `
+		-RunId '8d93e53d-0e0c-4b8d-8a3b-9a761a406ebd'
 	$OriginalNodeReport = [IO.File]::ReadAllText($Node.ReportPath)
 	$Node.Report.Admission.grants_high = 5
 	Save-Json -Path $Node.ReportPath -Value $Node.Report
