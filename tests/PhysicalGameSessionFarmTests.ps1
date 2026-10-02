@@ -215,7 +215,7 @@ try {
 } finally {
 	foreach ($Path in @($ServerPath, $ClientPath, $LiveLogPath, (Join-Path $Directory 'evidence-sha256.json')) +
 		@($ScaleClients | ForEach-Object OutputPath)) {
-		if (Test-Path -LiteralPath $Path) { Remove-Item -LiteralPath $Path -Force }
+		if ($Path -and (Test-Path -LiteralPath $Path)) { Remove-Item -LiteralPath $Path -Force }
 	}
 	Remove-Item -LiteralPath $Directory -Force
 }
