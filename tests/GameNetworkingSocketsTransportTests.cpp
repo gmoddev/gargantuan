@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <charconv>
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
@@ -251,6 +252,13 @@ int main(int ArgumentCount, char **Arguments) {
 		return GnsAckCycleFixture::Run() ? 0 : 1;
 	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--ack-cycle-prompt")
 		return GnsAckCycleFixture::Run(true) ? 0 : 1;
+	if (ArgumentCount == 3 && std::string_view(Arguments[1]) == "--ack-cycle-funded") {
+		const std::string_view Text(Arguments[2]);
+		std::uint64_t TailBudget = 0;
+		const auto Parsed = std::from_chars(Text.data(), Text.data() + Text.size(), TailBudget);
+		if (Parsed.ec != std::errc{} || Parsed.ptr != Text.data() + Text.size() || !TailBudget) return 2;
+		return GnsAckCycleFixture::Run(true, TailBudget) ? 0 : 1;
+	}
 	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--packet-tail")
 		return GnsPacketTailFixture::Run() ? 0 : 1;
 	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--four-grant")

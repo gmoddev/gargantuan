@@ -1,5 +1,6 @@
 #pragma once
 #include "../src/network/GnsAckDiagnosticsAccess.hpp"
+#include "../cmake/gns/PromptAckWireBudget.hpp"
 
 namespace GnsAckCycleFixture {
 using namespace gargantuan::network;
@@ -19,6 +20,11 @@ inline void Dump(const char *Side, std::uint64_t Token, const GargantuanAckDiagn
 		<< " ack_packets=" << Trace.AckPacketsSent << " ack_packet_bytes=" << Trace.AckPacketBytes
 		<< " latest_ack_packet_us=" << Trace.LastAckPacketSentAt
 		<< " maximum_prompt_reserve_bytes=" << Trace.MaximumPromptReserveBytes << '\n';
+	std::cout << "[Network:AckCycle:Wire] side=" << Side << " token=" << Token
+		<< " bytes=" << Trace.GrantWholeWireBytes << " ceiling=" << Trace.GrantWholeWireCeiling
+		<< " tail_budget=" << Trace.PromptTailBudget << " invalid=" << Trace.GrantWireInvalid
+		<< " final_allowed=" << Trace.PromptFinalWireAllowed << " prior_wire=" << Trace.PromptFinalPriorWireBytes
+		<< " background_rate=" << Trace.BackgroundRate << " background_burst=" << Trace.BackgroundBurst << '\n';
 	for (std::uint32_t Index = 0; Index < Trace.Count; ++Index) {
 		const auto &Event = Trace.Events[Index];
 		std::cout << "[Network:AckCycle:Native] side=" << Side << " token=" << Token
@@ -31,11 +37,11 @@ inline void Dump(const char *Side, std::uint64_t Token, const GargantuanAckDiagn
 // Production adapter + real pinned GNS, two successive obligations on the same
 // connection. Submission is explicitly gated by actual native ACK retirement.
 // This isolates ACK/polling; it does not claim to run GameSession credit/fairness.
-inline void Observe(std::size_t Bytes, std::chrono::microseconds PollPeriod, bool Prompt = false) {
+inline void Observe(std::size_t Bytes, std::chrono::microseconds PollPeriod, bool Prompt = false, std::uint64_t TailBudget = 0) {
 	PairFixture Pair = StartPair({.MaximumConnections = 1, .SendRate = 18 * 1024 * 1024}, TestLimits(), true);
 	struct Cleanup { PairFixture &Value; ~Cleanup() { StopPair(Value); } } Guard{Pair};
 	if (!Pair.ServerConnection.IsValid()) throw std::runtime_error("ACK cycle connection failed");
-	if (Prompt && !detail::GnsAckDiagnosticsAccess::PromptFinalGrantAck(*Pair.Server, Pair.ServerConnection, true))
+	if (Prompt && !detail::GnsAckDiagnosticsAccess::PromptFinalGrantAck(*Pair.Server, Pair.ServerConnection, true, TailBudget))
 		throw std::runtime_error("ACK prototype enable failed");
 	std::uint64_t Accepted = 0;
 	for (std::uint64_t Token = 1; Token <= 2; ++Token) {
@@ -104,11 +110,11 @@ inline void Observe(std::size_t Bytes, std::chrono::microseconds PollPeriod, boo
 			NativeAckedAt < Final->StructuralLastCompletedGrantCompletedAtMicroseconds ||
 			ObservedRetirement < NativeAckedAt || AckSentAt < ReceiverCompletedAt)
 			throw std::runtime_error("ACK cycle missing/inconsistent chronology");
-		const auto ExpectedRequests = Prompt && Bytes >= FiniteGrantServiceCurve::QuantumBytes &&
-			Final->LastCompletedStructuralSegmentEventCount > 1 ? 1u : 0u;
+		const auto ExpectedRequests = (TailBudget ? Sender.PromptFinalWireAllowed : Prompt &&
+			Bytes >= FiniteGrantServiceCurve::QuantumBytes && Final->LastCompletedStructuralSegmentEventCount > 1) ? 1u : 0u;
 		if (Requests != ExpectedRequests) throw std::runtime_error("final grant ACK request was missing or duplicated");
 		std::cout << "[Network:AckCycle:Grant] bytes=" << Bytes << " token=" << Token
-			<< " prompt=" << Prompt << " requests=" << Requests
+			<< " prompt=" << Prompt << " requests=" << Requests << " tail_budget=" << TailBudget
 			<< " poll_us=" << PollPeriod.count() << " activated_us=" << Activated
 			<< " first_us=" << Final->StructuralLastCompletedGrantFirstSendAtMicroseconds
 			<< " complete_us=" << Final->StructuralLastCompletedGrantCompletedAtMicroseconds
@@ -127,10 +133,47 @@ inline void Observe(std::size_t Bytes, std::chrono::microseconds PollPeriod, boo
 			<< " maximum_running_deficit=" << Final->StructuralLastCompletedGrantMaximumRunningDeficitByteMicroseconds
 			<< " service_failed=" << Final->StructuralLastCompletedGrantFailed << '\n';
 	}
+	// Observe a stated finite post-retirement interval, rather than declaring
+	// that ACK convergence bounds every future periodic control packet.
+	std::this_thread::sleep_for(100ms);
+	(void)Drain(*Pair.Server); (void)Drain(*Pair.Client);
+	const auto SenderSettled = detail::ReliableServiceFeedbackAccess::Observe(*Pair.Server, Pair.ServerConnection);
+	const auto ReceiverSettled = detail::ReliableServiceFeedbackAccess::Observe(*Pair.Client, Pair.ClientConnection);
+	if (!SenderSettled || !ReceiverSettled) throw std::runtime_error("ACK cycle post-retirement counters missing");
+	std::cout << "[Network:AckCycle:PostRetirement] bytes=" << Bytes << " prompt=" << Prompt
+		<< " tail_budget=" << TailBudget << " observation_us=100000"
+		<< " sender_packets=" << SenderSettled->NativePacketsSent << " sender_udp_bytes=" << SenderSettled->NativePacketBytesSent
+		<< " receiver_packets=" << ReceiverSettled->NativePacketsSent << " receiver_udp_bytes=" << ReceiverSettled->NativePacketBytesSent << '\n';
 }
 
-inline bool Run(bool Prompt = false) {
+inline bool Run(bool Prompt = false, std::uint64_t TailBudget = 0) {
 	try {
+		GargantuanPromptAckWireBudget Budget;
+		if (!Budget.ConfigureBackground(8 * 1024 * 1024, 32, 1348, 5, 20, 120) ||
+			Budget.BackgroundRate != 44574 || Budget.BackgroundBurst != 517632 || Budget.Reserve != 8344034)
+			throw std::runtime_error("ACK background reserve derivation mismatch");
+		if (Budget.ConfigureBackground(1, 32, 1348, 5, 20, 120) ||
+			Budget.ConfigureBackground(8 * 1024 * 1024, std::numeric_limits<std::uint64_t>::max(), 1348, 5, 20, 120))
+			throw std::runtime_error("ACK unfunded/overflowing background budget accepted");
+		Budget.Reserve = 8; Budget.StructuralPool = 64; Budget.TailBudget = 225;
+		Budget.Begin(1, 1000); Budget.Charge(452, 48);
+		if (!Budget.CanRequest(400) || Budget.CanRequest(401))
+			throw std::runtime_error("ACK wire exact boundary is not integer safe");
+		Budget.Charge(1, 0);
+		if (Budget.CanRequest(400)) throw std::runtime_error("ACK wire unfunded packet accepted");
+		Budget.Begin(2, 1000);
+		Budget.Charge(std::numeric_limits<std::uint64_t>::max(), 48);
+		if (!Budget.Invalid || Budget.CanRequest(1)) throw std::runtime_error("ACK wire charge overflow accepted");
+		Budget.Begin(3, 1000); Budget.Reserve = std::numeric_limits<std::uint64_t>::max();
+		if (Budget.CanRequest(1)) throw std::runtime_error("ACK wire ratio overflow accepted");
+		Budget.Reserve = 8; Budget.StructuralPool = 0;
+		if (Budget.CanRequest(1)) throw std::runtime_error("ACK wire zero divisor accepted");
+		Budget.StructuralPool = 64; Budget.TailBudget = 1348; Budget.Begin(4, 77);
+		if (Budget.CanRequest(1348)) throw std::runtime_error("ACK wire unfunded tiny grant accepted");
+		Budget.Begin(5, 524288); Budget.Charge(500000, 48);
+		if (!Budget.CanRequest(1348)) throw std::runtime_error("ACK wire funded finite grant rejected");
+		Budget.Charge(100000, 48); // Whole shared/retransmitted packets remain chargeable.
+		if (Budget.CanRequest(1348)) throw std::runtime_error("ACK wire retry/shared traffic was ignored");
 		GargantuanAckDiagnostics Repeated;
 		for (int Index = 0; Index < 1000; ++Index) {
 			Repeated.Record(GargantuanAckDiagnostics::AckSerialized, Index, 1, 0);
@@ -145,9 +188,9 @@ inline bool Run(bool Prompt = false) {
 			Repeated.Events[4].Identity != 2)
 			throw std::runtime_error("repeated ACKs displaced critical native events");
 		for (const auto Bytes : {std::size_t{393652}, std::size_t{524288}})
-			for (const auto PollPeriod : {1000us, 16667us}) Observe(Bytes, PollPeriod, Prompt);
+			for (const auto PollPeriod : {1000us, 16667us}) Observe(Bytes, PollPeriod, Prompt, TailBudget);
 		if (Prompt) for (const auto Bytes : {std::size_t{77}, std::size_t{1135}, std::size_t{1136}, std::size_t{1258}})
-			Observe(Bytes, 1000us, Prompt);
+			Observe(Bytes, 1000us, Prompt, TailBudget);
 		return true;
 	} catch (const std::exception &Error) {
 		std::cerr << "[Network:AckCycle] FAIL " << Error.what() << '\n';

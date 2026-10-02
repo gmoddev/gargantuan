@@ -30,6 +30,11 @@ struct GargantuanAckDiagnostics {
 	std::uint64_t LastAckPacketSentAt = 0;
 	std::int64_t LastAckPacketSentNativeAt = 0;
 	std::uint64_t MaximumPromptReserveBytes = 0;
+	std::uint64_t GrantWholeWireBytes = 0, GrantWholeWireCeiling = 0, PromptTailBudget = 0;
+	bool GrantWireInvalid = false;
+	bool PromptFinalWireAllowed = false;
+	std::uint64_t PromptFinalPriorWireBytes = 0;
+	std::uint64_t BackgroundRate = 0, BackgroundBurst = 0;
 	void Record(Kind Type, std::int64_t NativeAt, std::int64_t Identity, std::int64_t Value) noexcept {
 		// Every data packet may repeat the same ACK. Retain its first emission
 		// and aggregate all repetitions without consuming the critical event log.
@@ -66,5 +71,6 @@ class ISteamNetworkingSockets;
 namespace SteamNetworkingSocketsLib {
 bool GargantuanAccessAckDiagnostics(ISteamNetworkingSockets *Interface, std::uint32_t Handle,
 	bool Reset, GargantuanAckDiagnostics &Result);
-bool GargantuanConfigurePromptGrantAck(ISteamNetworkingSockets *Interface, std::uint32_t Handle, bool Enabled);
+bool GargantuanConfigurePromptGrantAck(ISteamNetworkingSockets *Interface, std::uint32_t Handle, bool Enabled,
+	std::uint64_t Reserve, std::uint64_t StructuralPool, std::uint64_t TailBudget, std::uint64_t Peers);
 }

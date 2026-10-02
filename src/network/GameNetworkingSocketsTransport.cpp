@@ -1004,13 +1004,15 @@ namespace gargantuan::network {
 		return true;
 	}
 	bool detail::GnsAckDiagnosticsAccess::PromptFinalGrantAck(GameNetworkingSocketsTransport &Transport,
-		ConnectionId Connection, bool Enabled) {
+		ConnectionId Connection, bool Enabled, std::uint64_t TailBudget) {
 		auto &Global = GlobalState();
 		std::lock_guard Lock(Global.Mutex);
 		const auto &State = *Transport.State;
 		const auto Found = State.Connections.find(Connection);
+		const PooledReliableServiceProfile Profile;
 		return Connection.IsValid() && State.Started && Global.Interface && Found != State.Connections.end() &&
-			SteamNetworkingSocketsLib::GargantuanConfigurePromptGrantAck(Global.Interface, Found->second.Handle, Enabled);
+			SteamNetworkingSocketsLib::GargantuanConfigurePromptGrantAck(Global.Interface, Found->second.Handle, Enabled,
+				Profile.RequiredTransportReserve, Profile.StructuralPool, TailBudget, 32); // Accepted Option C population.
 	}
 	bool detail::GnsAckDiagnosticsAccess::Read(GameNetworkingSocketsTransport &Transport,
 		ConnectionId Connection, GargantuanAckDiagnostics &Result, bool Reset) {
