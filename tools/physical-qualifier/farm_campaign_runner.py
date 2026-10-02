@@ -310,7 +310,7 @@ def StopNode(Config, Process, StageRoot):
             Row.get("Reason") != "STOP_REQUESTED" or Row.get("TcpReady") is not True or
             Row.get("ChildReaped") is not True):
         raise ValueError("[Qualification:FarmCampaign] owned Node run receipt failed")
-    return Receipt
+    return Receipt.resolve(strict=True)
 
 
 def RunRole(TicketPath):

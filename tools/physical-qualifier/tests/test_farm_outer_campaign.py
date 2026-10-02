@@ -1,6 +1,7 @@
 """Mock transfer tests for fixed Farm32 two-host staging."""
 
 import base64
+import ctypes
 import hashlib
 import json
 from pathlib import Path
@@ -364,6 +365,16 @@ class OuterCampaignTests(unittest.TestCase):
     def test_real_worker_paths_remain_under_task_sandbox(self):
         self.assertRaisesRegex(ValueError, "outside task sandbox", REAL_WORKER_SANDBOX,
                                r"C:\Windows\System32\something.exe")
+        self.assertRaisesRegex(ValueError, "unsafe fixed worker path", Outer.RemoteText,
+                               r"C:\Sandbox\Codex\RUNNER~1\stage")
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows 8.3 path alias")
+    def test_temp_alias_is_canonicalized_before_fixed_path_fixture(self):
+        Buffer = ctypes.create_unicode_buffer(1024)
+        Length = ctypes.windll.kernel32.GetShortPathNameW(str(self.Fixture.Root), Buffer, len(Buffer))
+        if not Length or Length >= len(Buffer) or Buffer.value.casefold() == str(self.Fixture.Root).casefold():
+            self.skipTest("volume has no distinct 8.3 alias")
+        self.assertEqual(self.Fixture.Root, Path(Buffer.value).resolve(strict=True))
 
 
 if __name__ == "__main__":

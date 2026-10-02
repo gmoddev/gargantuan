@@ -57,7 +57,7 @@ def UtcNow():
 class CampaignTests(unittest.TestCase):
     def setUp(self):
         self.Temporary = tempfile.TemporaryDirectory()
-        self.Root = Path(self.Temporary.name)
+        self.Root = Path(self.Temporary.name).resolve(strict=True)
         self.RunId = str(uuid.uuid4())
         self.CoordinatorRunId = str(uuid.uuid4())
         self.SourceCommit = "a" * 40
@@ -330,6 +330,12 @@ class CampaignTests(unittest.TestCase):
         })
         self.assertEqual(Receipt.resolve(strict=True), Campaign.StopNode(Ticket, Child, StageRoot))
         self.assertEqual(self.RunId, (StageRoot / "stop.request").read_text())
+        if sys.platform == "win32":
+            Buffer = ctypes.create_unicode_buffer(1024)
+            Length = ctypes.windll.kernel32.GetShortPathNameW(str(StageRoot), Buffer, len(Buffer))
+            if Length and Length < len(Buffer) and Buffer.value.casefold() != str(StageRoot).casefold():
+                self.assertEqual(Receipt.resolve(strict=True),
+                                 Campaign.StopNode(Ticket, Child, Path(Buffer.value)))
         Bad = json.loads(Receipt.read_text())
         Bad["Reason"] = "CHILD_EXITED"
         Save(Receipt, Bad)
