@@ -97,13 +97,21 @@ class OuterCampaignTests(unittest.TestCase):
             Path(self.Fixture.Spec["Roles"][Role]["StageRoot"]).rmdir()
 
     def test_recovery_manifest_profile_is_explicit_and_bounded(self):
-        self.assertEqual((9000, 10000,
-                          ["-ScaleWorkload", "-ClientFrames", "9000",
-                           "-ServerTicks", "10000"]), Outer.WorkloadProfile(False))
-        self.assertEqual((18000, 19000,
-                          ["-ScaleWorkload", "-ClientFrames", "18000",
-                           "-ServerTicks", "19000", "-RecoveryWorkload"]),
+        self.assertEqual((18001, 19001,
+                          ["-ScaleWorkload", "-ClientFrames", "18001",
+                           "-ServerTicks", "19001"]), Outer.WorkloadProfile(False))
+        self.assertEqual((25201, 26201,
+                          ["-ScaleWorkload", "-ClientFrames", "25201",
+                           "-ServerTicks", "26201", "-RecoveryWorkload"]),
                          Outer.WorkloadProfile(True))
+        for Recovery, RuntimeUs in ((False, 300000000), (True, 420000000)):
+            Frames, Ticks, _ = Outer.WorkloadProfile(Recovery)
+            # Independent runtime contract: the first iteration has no prior
+            # cadence sleep. Both ceilings must also satisfy endpoint bounds.
+            self.assertGreaterEqual((Frames - 1) * 16667, RuntimeUs)
+            self.assertLessEqual(Frames, 36000)
+            self.assertGreater(Ticks, Frames + 600)
+            self.assertLessEqual(Ticks, 48000)
         for Invalid in (None, 0, 1, "true"):
             with self.assertRaisesRegex(ValueError, "invalid recovery workload"):
                 Outer.WorkloadProfile(Invalid)

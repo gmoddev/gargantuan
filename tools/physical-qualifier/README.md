@@ -247,6 +247,13 @@ physical or provider PASS. This path has source/mock coverage but requires an
 official workflow-dispatch package, installed side-by-side Farm32 service,
 endpoint runtime staging, and actual control-only qualification before use.
 
+The fixed baseline/recovery frame ceilings cover their existing 300/420-second
+role-local runtime budgets at the Player's 16,667-us network cadence, including
+its first unslept frame: 18,001/25,201 client frames and the existing extra 1,000
+server ticks. These are process-lifetime ceilings, not workload duration or
+service allowances. Recovery convergence and ordinary-service deadlines remain
+unchanged; supervisors still enforce their original wall-clock budgets.
+
 Recovery collection preserves each `recovery-gameplay.tsv`,
 `recovery-structural.tsv`, and `recovery-mixed.tsv` server member up to its
 canonical 32 MiB limit and verifies its sealed hash. Offline recovery analysis

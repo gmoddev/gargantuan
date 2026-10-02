@@ -207,7 +207,13 @@ def ExpandRun(Value, RunId):
 def WorkloadProfile(RecoveryWorkload):
     if type(RecoveryWorkload) is not bool:
         raise ValueError("[Qualification:FarmOuter] invalid recovery workload selection")
-    ClientFrames, ServerTicks = (18000, 19000) if RecoveryWorkload else (9000, 10000)
+    # PlayerHost tests its frame ceiling before its 16,667-us cadence sleep.
+    # Cover the entire existing role-local wall-clock budget, including that
+    # first unslept frame; do not terminate a healthy run at the old 150/300 s
+    # frame limits while its 300/420 s supervisor budget is still available.
+    RunMicroseconds = (420000 if RecoveryWorkload else 300000) * 1000
+    ClientFrames = (RunMicroseconds + 16666) // 16667 + 1
+    ServerTicks = ClientFrames + 1000  # Existing bounded setup/terminal allowance.
     Arguments = ["-ScaleWorkload", "-ClientFrames", str(ClientFrames),
                  "-ServerTicks", str(ServerTicks)]
     if RecoveryWorkload:
