@@ -344,6 +344,23 @@ try {
 	Assert-Rejected -Name 'duplicate client nonce across hosts' -ReportPath (Join-Path $TestRoot 'bad-nonce-report.json')
 	[IO.File]::WriteAllText($Client31Path, $Client31)
 	Save-Index -Root $ClientRoot -RunId $RunId -Role 'Clients'
+	$ClockFixture = Join-Path $PSScriptRoot '../tools/physical-qualifier/tests/make_farm_clock_fixture.py'
+	& python $ClockFixture $ManifestPath $ServerRoot $ClientRoot
+	if ($LASTEXITCODE -ne 0) { throw 'clock fixture generation failed' }
+	Save-Index -Root $ServerRoot -RunId $RunId -Role 'Server'
+	Save-Index -Root $ClientRoot -RunId $RunId -Role 'Clients'
+	$ClockPath = Join-Path $TestRoot 'clock-report.json'
+	& $Reconciler -RunManifestPath $ManifestPath -ManifestSha256 $ManifestSha256 `
+		-ServerEvidenceRoot $ServerRoot -ClientEvidenceRoot $ClientRoot -ReportPath $ClockPath | Out-Null
+	$ClockReport = Get-Content -LiteralPath $ClockPath -Raw | ConvertFrom-Json
+	if ($ClockReport.Status -cne 'INCOMPLETE' -or $ClockReport.ClockObservation.Status -cne 'BOUNDED_AT_PROBE' -or
+		$ClockReport.ClockObservation.Samples.Count -ne 640 -or
+		$ClockReport.ClockObservation.OneWayLatency -cne 'NOT_MEASURED') { throw 'clock reconciliation scope or matrix wrong' }
+	$ClockLog = [IO.File]::ReadAllText($Client31Path)
+	[IO.File]::WriteAllText($Client31Path, $ClockLog.Replace('stage=GnsReceive', 'stage=Missing'))
+	Save-Index -Root $ClientRoot -RunId $RunId -Role 'Clients'
+	Assert-Rejected -Name 'rehashed incomplete clock path' -ReportPath (Join-Path $TestRoot 'partial-clock.json')
+	[IO.File]::WriteAllText($Client31Path, $ClockLog)
 	[IO.File]::WriteAllText((Join-Path $ClientRoot 'run-manifest.json'), '{}')
 	Save-Index -Root $ClientRoot -RunId $RunId -Role 'Clients'
 	Assert-Rejected -Name 'mismatched role manifest' -ReportPath (Join-Path $TestRoot 'bad-manifest-report.json')

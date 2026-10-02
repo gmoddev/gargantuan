@@ -274,6 +274,9 @@ function New-RunFixture {
 	Save-HostRows -Root $ClientRoot -RunId $RunId -Role 'Clients' -Provider $Provider
 	$AdmissionLine = "[Qualification:Admission] event=result run=$RunId accepted=8192 retired=8192 terminal_release=0 outstanding=0 outstanding_high=8192 active_grants=0 grants_high=2 grant_deferrals=3 funded_deferrals=2 credit_deferrals=1 fairness_deferrals=1 max_wait_us=1000 peer_backlog_high=2048 global_backlog_high=8192 peer_credit_high=8192 global_credit_high=8192 fairness_rotations=1 pending_enters=0 pending_leaves=0 materialization_backlog=0 journal_backlog=0 structural_active_peers=0 oldest_pending_ticks=0 backlog_failures=0 journal_failures=0"
 	[IO.File]::WriteAllText((Join-Path $ServerRoot 'server.stdout.log'), "$AdmissionLine`n")
+	for ($Slot = 0; $Slot -lt 32; $Slot++) {
+		[IO.File]::WriteAllText((Join-Path $ClientRoot ('client-{0:D2}.stdout.log' -f $Slot)), '')
+	}
 	$Recovery = if ($RecoveryWorkload) {
 		Save-RecoveryLogs -ServerRoot $ServerRoot -ClientRoot $ClientRoot `
 			-RunId $RunId -Nonces $Manifest.Nonces -Connections $Connections
@@ -474,7 +477,8 @@ try {
 		$Observed.Local.Capture.Status -cne 'NOT_MEASURED' -or
 		$Observed.Node.Capture.Status -cne 'NOT_MEASURED' -or
 		$Observed.Local.RemoteCadence.Status -cne 'NOT_MEASURED' -or
-		@($Observed.GateObservations | Where-Object { $_.State -eq 'NOT MEASURED' }).Count -ne 16 -or
+		@($Observed.GateObservations | Where-Object { $_.State -eq 'NOT MEASURED' }).Count -ne 17 -or
+		$Observed.Local.Clock.Status -cne 'NOT_MEASURED' -or
 		$Observed.Local.Recovery.FixedServiceRecovery -cne 'NOT MEASURED' -or
 		$Observed.Node.Recovery.ExactRetainedWorkBytes -cne 'NOT_MEASURED') {
 		throw "resource/parity observation promoted a missing physical gate or lost resource evidence: status=$($Observed.Status) claim=$($Observed.Foundation3LQualification) parity=$($Observed.WorkloadPinParity.State) clients=$($Observed.Local.Resources.Clients.ProcessCount) server=$($Observed.Node.Resources.Server.ProcessCount) ws=$($Observed.Local.Resources.Clients.SumOfPerProcessPeakWorkingSetBytes) missing=$(@($Observed.GateObservations | Where-Object { $_.State -eq 'NOT MEASURED' }).Count)"
@@ -880,6 +884,44 @@ try {
 	Save-Json -Path $Node.ReportPath -Value $Node.Report
 	Assert-Rejected -Name 'forged reconciled Character publication count' `
 		-OutputPath (Join-Path $TestRoot 'forged-publication.json')
+	$Node.Report.PublicationObservation.Server.Accepted = 32
+	. (Join-Path $PSScriptRoot 'PhysicalFarmClockEvidence.ps1')
+	$ClockFixture = Join-Path $PSScriptRoot '../tools/physical-qualifier/tests/make_farm_clock_fixture.py'
+	foreach ($Run in @($Local, $Node)) {
+		& python $ClockFixture (Join-Path $Run.ServerRoot 'run-manifest.json') $Run.ServerRoot $Run.ClientRoot
+		if ($LASTEXITCODE -ne 0) { throw 'clock fixture generation failed' }
+		Save-Index -Root $Run.ServerRoot -RunId $Run.Manifest.RunId -Role 'Server'
+		Save-Index -Root $Run.ClientRoot -RunId $Run.Manifest.RunId -Role 'Clients'
+		$Run.Report.ServerEvidenceSha256 = (Get-FileHash -LiteralPath (Join-Path $Run.ServerRoot 'evidence-sha256.json')).Hash.ToLowerInvariant()
+		$Run.Report.ClientEvidenceSha256 = (Get-FileHash -LiteralPath (Join-Path $Run.ClientRoot 'evidence-sha256.json')).Hash.ToLowerInvariant()
+		$Run.Report.PublicationObservation = Read-FarmPublicationObservation `
+			-ServerRoot $Run.ServerRoot -ClientRoot $Run.ClientRoot `
+			-ServerIndex (Get-Content -LiteralPath (Join-Path $Run.ServerRoot 'evidence-sha256.json') -Raw | ConvertFrom-Json -AsHashtable) `
+			-ClientIndex (Get-Content -LiteralPath (Join-Path $Run.ClientRoot 'evidence-sha256.json') -Raw | ConvertFrom-Json -AsHashtable) `
+			-RunManifestPath (Join-Path $Run.ServerRoot 'run-manifest.json') -ScratchParent $TestRoot
+		$Run.Report['ClockObservation'] = Read-FarmClockObservation -ServerRoot $Run.ServerRoot `
+			-ClientRoot $Run.ClientRoot -RunManifestPath (Join-Path $Run.ServerRoot 'run-manifest.json')
+		Save-Json -Path $Run.ReportPath -Value $Run.Report
+	}
+	$ClockPath = Join-Path $TestRoot 'clock-acceptance.json'
+	Invoke-Analyzer -OutputPath $ClockPath
+	$ClockReport = Get-Content -LiteralPath $ClockPath -Raw | ConvertFrom-Json
+	if ($ClockReport.Status -cne 'INCOMPLETE' -or $ClockReport.Local.Clock.Status -cne 'BOUNDED_AT_PROBE' -or
+		$ClockReport.Node.Clock.Samples.Count -ne 640 -or $ClockReport.Node.Clock.PhaseLongOffset -cne 'NOT_MEASURED' -or
+		@($ClockReport.GateObservations | Where-Object Gate -eq 'Native clock correlation at calibration probes' |
+			Where-Object State -eq 'MEASURED').Count -ne 1) { throw 'probe-scoped clock receipt was lost or promoted' }
+	$Node.Report.ClockObservation.Samples[0].LowerNs++
+	Save-Json -Path $Node.ReportPath -Value $Node.Report
+	Assert-Rejected -Name 'forged clock offset interval' -OutputPath (Join-Path $TestRoot 'forged-clock.json')
+	$Node.Report.ClockObservation.Samples[0].LowerNs--
+	$ClockObservation = $Node.Report.ClockObservation
+	$Node.Report.Remove('ClockObservation')
+	Save-Json -Path $Node.ReportPath -Value $Node.Report
+	Assert-Rejected -Name 'omitted present clock observation' -OutputPath (Join-Path $TestRoot 'omitted-clock.json')
+	$Node.Report['ClockObservation'] = $ClockObservation
+	$Node.Report.ClockObservation.AnalyzerSha256 = '0' * 64
+	Save-Json -Path $Node.ReportPath -Value $Node.Report
+	Assert-Rejected -Name 'changed clock analyzer pin' -OutputPath (Join-Path $TestRoot 'clock-analyzer.json')
 	Write-Output '[Qualification:FarmAcceptance] MOCK_TEST_OK'
 } finally {
 	if (-not $ResolvedRoot.StartsWith($ResolvedTemp + [IO.Path]::DirectorySeparatorChar,

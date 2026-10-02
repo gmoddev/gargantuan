@@ -30,6 +30,7 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'AdmissionFairnessEvidence.ps1')
 . (Join-Path $PSScriptRoot 'RecoveryCausalEvidence.ps1')
 . (Join-Path $PSScriptRoot 'PhysicalFarmPublicationEvidence.ps1')
+. (Join-Path $PSScriptRoot 'PhysicalFarmClockEvidence.ps1')
 
 function Import-FarmRecoveryParser {
 	$Path = Join-Path $PSScriptRoot 'PhysicalGameSessionFarm.ps1'
@@ -867,6 +868,14 @@ function Read-ProviderRun {
 	}
 	$ServerWorkTicks = Read-FarmServerWorkTicks -ServerRoot $Server.Root `
 		-ServerIndex $Server.Index -RunId $Report.RunId
+	$Clock = Read-FarmClockObservation -ServerRoot $Server.Root -ClientRoot $Clients.Root `
+		-RunManifestPath (Join-Path $Server.Root 'run-manifest.json')
+	if ($null -eq $Report.ClockObservation) {
+		if ($Clock.Status -cne 'NOT_MEASURED') { throw 'reconciliation omitted present clock evidence' }
+	} elseif (($Clock | ConvertTo-Json -Depth 12 -Compress) -cne
+		($Report.ClockObservation | ConvertTo-Json -Depth 12 -Compress)) {
+		throw 'reconciled clock observation differs from independently replayed indexed evidence'
+	}
 	$RemoteCadence = Read-FarmRemoteCadence -ClientRoot $Clients.Root `
 		-ClientIndex $Clients.Index -RunId $Report.RunId
 	$ProviderObservation = Read-ProviderObservation -Report $Report -Manifest $Manifest `
@@ -876,6 +885,7 @@ function Read-ProviderRun {
 	return [pscustomobject]@{
 		Report = $Report; Manifest = $Manifest
 		Admission = $Admission; Publication = $Publication; ServerWorkTicks = $ServerWorkTicks
+		Clock = $Clock
 		RemoteCadence = $RemoteCadence
 		ProviderObservation = $ProviderObservation; Recovery = $Recovery
 		Resources = [ordered]@{ Server = $ServerResources; Clients = $ClientResources
@@ -944,6 +954,7 @@ $Observed = [ordered]@{
 		Ready = $Local.Report.Identity.Ready; AcceptedBytes = $Local.Report.Admission.accepted
 		RetiredBytes = $Local.Report.Admission.retired; Admission = $Local.Admission
 		Publication = $Local.Publication
+		Clock = $Local.Clock
 		ServerWorkTicks = $Local.ServerWorkTicks
 		Capture = $LocalCapture
 		RemoteCadence = $Local.RemoteCadence
@@ -955,6 +966,7 @@ $Observed = [ordered]@{
 		Ready = $Node.Report.Identity.Ready; AcceptedBytes = $Node.Report.Admission.accepted
 		RetiredBytes = $Node.Report.Admission.retired; Admission = $Node.Admission
 		Publication = $Node.Publication
+		Clock = $Node.Clock
 		ServerWorkTicks = $Node.ServerWorkTicks
 		Capture = $NodeCapture
 		RemoteCadence = $Node.RemoteCadence
@@ -963,6 +975,7 @@ $Observed = [ordered]@{
 		EvidenceRetention = $Node.EvidenceRetention
 	}
 	GateObservations = @(
+		[ordered]@{ Gate = 'Native clock correlation at calibration probes'; State = $(if ($Local.Clock.Status -ceq 'BOUNDED_AT_PROBE' -and $Node.Clock.Status -ceq 'BOUNDED_AT_PROBE') { 'MEASURED' } else { 'NOT MEASURED' }); Reason = 'independent replay of 640 causal offset intervals per provider with indexed input and analyzer pins; phase-long offset and one-way latency remain unmeasured' },
 		[ordered]@{ Gate = 'Cross-provider exact workload/deployment pin parity'; State = 'MEASURED' },
 		[ordered]@{ Gate = 'Per-provider terminal native admission/debt conservation and bounded grants/credit'; State = 'MEASURED'; Reason = 'sealed final receipt, not an intra-run service or fairness bound' },
 		[ordered]@{ Gate = 'Per-provider exact-demand fairness event identity and observed eligibility waits'; State = 'MEASURED'; Reason = 'sealed native timeline; the separate accepted-grant bound remains scoped to recorded episodes' },

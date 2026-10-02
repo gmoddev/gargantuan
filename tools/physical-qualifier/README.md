@@ -261,4 +261,8 @@ runs from the repository `tests` directory: when staging those analysis scripts
 separately, keep `RecoveryCausalEvidence.ps1` beside
 `PhysicalGameSessionFarm.ps1`, `PhysicalGameSessionFarmReconcile.ps1`, and
 `PhysicalGameSessionFarmAcceptance.ps1`, together with their existing helpers.
+Keep `PhysicalFarmClockEvidence.ps1` beside the reconciliation/acceptance scripts;
+it independently joins the hash-indexed 32-client native calibration logs using
+`farm_clock_exchange.py`. Its 640 probe intervals do not synchronize whole phases
+or qualify one-way latency, and missing historical clock evidence remains unmeasured.
 The role-local endpoint supervisor does not import these analysis scripts.

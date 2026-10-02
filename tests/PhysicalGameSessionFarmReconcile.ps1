@@ -1,7 +1,8 @@
 #requires -Version 7.0
 # Offline reconciliation of two role-local Foundation 3L farm receipts. This
 # intentionally does not pronounce Local or Node provider qualification.
-# Stage AdmissionFairnessEvidence.ps1 and RecoveryCausalEvidence.ps1 beside this script.
+# Stage AdmissionFairnessEvidence.ps1, RecoveryCausalEvidence.ps1 and the
+# PhysicalFarmPublicationEvidence.ps1 / PhysicalFarmClockEvidence.ps1 adapters beside it.
 
 param(
 	[Parameter(Mandatory = $true)][string]$RunManifestPath,
@@ -15,6 +16,7 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'AdmissionFairnessEvidence.ps1')
 . (Join-Path $PSScriptRoot 'RecoveryCausalEvidence.ps1')
 . (Join-Path $PSScriptRoot 'PhysicalFarmPublicationEvidence.ps1')
+. (Join-Path $PSScriptRoot 'PhysicalFarmClockEvidence.ps1')
 
 function Get-RequiredJson {
 	param([string]$Path)
@@ -398,6 +400,11 @@ $Publication = Read-FarmPublicationObservation -ServerRoot $Server.Root -ClientR
 	-ScratchParent ([IO.Path]::GetDirectoryName($ReportPath))
 $Ledger = Get-Ledger -ScaleValidated $true `
 	-PublicationMeasured ($Publication.Status -ceq 'ACCEPTED_STATE_CHAIN_OBSERVED')
+$Clock = Read-FarmClockObservation -ServerRoot $Server.Root -ClientRoot $Clients.Root `
+	-RunManifestPath $RunManifestPath
+$Ledger += [ordered]@{ Gate = 'Native clock correlation at calibration probes';
+	State = $(if ($Clock.Status -ceq 'BOUNDED_AT_PROBE') { 'MEASURED' } else { 'NOT MEASURED' });
+	Evidence = '640 causal offset intervals across 32 clients and five epochs; no phase-long offset or one-way latency claim' }
 $Report = [ordered]@{
 	Format = 'GargantuanPhysicalFarmReconciliation'; Version = 1
 	RunId = $RunId; Provider = $Provider; ManifestSha256 = $ManifestSha256.ToLowerInvariant()
@@ -407,6 +414,7 @@ $Report = [ordered]@{
 	AdmissionFairnessObservation = $FairnessObservation
 	RecoveryObservation = $RecoveryObservation
 	PublicationObservation = $Publication
+	ClockObservation = $Clock
 	NodeAuthenticatedManifest = $NodeAuthenticatedManifest
 	ServerResourceSamples = $ServerSamples; ClientResourceSamples = $ClientSamples
 	ServerHostResourceSamples = $ServerHostSamples; ClientHostResourceSamples = $ClientHostSamples
