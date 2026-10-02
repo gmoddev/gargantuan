@@ -129,6 +129,16 @@ namespace gargantuan::host::detail {
 			return Line.str();
 		}
 	  public:
+		// Recovery records share the run-local exclusive writer and hard file
+		// bound, but never the admission event schema or its conservation totals.
+		template<class WriteRecords>
+		void WriteRecovery(std::string_view Case, WriteRecords &&Write) const {
+			if (Case != "gameplay" && Case != "structural" && Case != "mixed")
+				throw std::invalid_argument("unknown recovery evidence case");
+			ExclusiveWriter Output(Path.parent_path() / ("recovery-" + std::string(Case) + ".tsv"));
+			Write(Output);
+			Output.Flush();
+		}
 		explicit FarmAdmissionEvidence(std::string Value, std::filesystem::path EvidencePath)
 			: RunId(std::move(Value)), Path(std::move(EvidencePath)) {
 			if (!Path.is_absolute() || Path.filename() != "admission-fairness.tsv" ||

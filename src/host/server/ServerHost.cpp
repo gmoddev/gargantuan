@@ -671,12 +671,13 @@ namespace gargantuan::host {
 			std::unique_ptr<detail::FarmServerTickEvidence> ServerTickEvidence;
 			if (FarmScaleWorkload) ServerTickEvidence = std::make_unique<detail::FarmServerTickEvidence>(
 				FarmRunId, std::filesystem::path(FarmPublicationEvidencePath).parent_path() / "server-work-ticks.bin");
-			std::unique_ptr<PhysicalScaleQualification> ScaleQualification;
-			if (FarmScaleWorkload) ScaleQualification = std::make_unique<PhysicalScaleQualification>(
-				*Runtime, *Session, FarmRunId, FarmRecoveryWorkload, ServerTickEvidence.get());
 			std::unique_ptr<detail::FarmAdmissionEvidence> AdmissionEvidence;
 			if (FarmScaleWorkload) AdmissionEvidence = std::make_unique<detail::FarmAdmissionEvidence>(
 				FarmRunId, std::filesystem::path(FarmAdmissionEvidencePath));
+			// The writer outlives recovery buffers, including exception unwinding.
+			std::unique_ptr<PhysicalScaleQualification> ScaleQualification;
+			if (FarmScaleWorkload) ScaleQualification = std::make_unique<PhysicalScaleQualification>(
+				*Runtime, *Session, FarmRunId, FarmRecoveryWorkload, ServerTickEvidence.get());
 			if (ScaleQualification && AdmissionEvidence)
 				ScaleQualification->AttachAdmissionEvidence(*AdmissionEvidence);
 			std::unique_ptr<detail::FarmPublicationEvidence> PublicationEvidence;
@@ -1003,6 +1004,7 @@ namespace gargantuan::host {
 					std::this_thread::sleep_for(std::chrono::milliseconds(1));
 			}
 
+			if (ScaleQualification) ScaleQualification->DumpRecoveryEvidence();
 			if (AdmissionEvidence) AdmissionEvidence->Dump();
 			if (PublicationEvidence) PublicationEvidence->Dump();
 			if (ServerTickEvidence) ServerTickEvidence->Dump();

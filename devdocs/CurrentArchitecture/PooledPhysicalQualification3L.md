@@ -2126,3 +2126,38 @@ resolutions. It did not measure recovery and is not a retry PASS.
 The direct-fiber Local and real-TLS Node 32-client matrices remain **NOT
 MEASURED**. KI-006 remains **OPEN**; Foundation 3L remains **B — PARTIALLY
 READY**. No Foundation 3M work or PR merge is authorized by this diagnostic.
+
+## 2026-10-02 — causal recovery implementation in progress
+
+The [causal cessation fence amendment](PooledReliableServiceRecoveryContract3L.md#causal-cessation-fence-amendment--2026-10-02)
+selects C3/C5 under the current task's engineering-decision authorization.
+The preceding architecture-stop receipt remains historical evidence. It is not
+a claim that the new verifier or either provider has passed.
+
+The frozen quote remains an immutable exact reference under cessation state.
+Actual post-cessation bytes are audited at preparation/acceptance with source
+coverage and grant identity. Recovery closes a finite represented and retired
+prefix while moving relevance continues. The existing fixed service-recovery
+deadline, workload-derived reference deadline, F1, admission and reserve gates
+remain unchanged. Provider execution requires source-observer regressions,
+causal-ledger negative tests, farm parser tests and required CI first.
+
+The separate action investigation established that all seven failed requests in
+`43af4af0-06de-49b6-917d-f0557816b9ab` were refused locally: there were seven
+submission failures and no server action rejections. The retained evidence did
+not distinguish absent control, suspended prediction or scheduler refusal.
+Revision `be2b81bc8` adds bounded failure counters so a later diagnostic can
+attribute the exact branch. It does not retroactively establish that branch.
+
+At starting revision `82ecbd871`, Native run `37000058588` failed its Windows
+standalone reliable-workload small-case timing gates (RPC maximum 1107.5 ms),
+after CTest and 165 tooling tests passed. Same-head Native run `37000054845`
+passed; both sanitizer runs passed. Neither result erases the other. The added
+per-case wall-time diagnostics preserve every timing gate. The worker's
+`be2b81bc8` character-network suite and all eight real-GNS reliable-workload
+cases pass, with small-case RPC maximum 37.0447 ms. Hosted qualification of the
+eventual execution-changing recovery candidate is still required.
+
+Local/real-TLS Node 32-client qualification remains NOT MEASURED; KI-006 OPEN;
+Foundation 3L B — PARTIALLY READY. The established corrected F1 physical Phase 1
+PASS is unchanged.
