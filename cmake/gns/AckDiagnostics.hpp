@@ -46,6 +46,9 @@ struct GargantuanAckDiagnostics {
 	std::uint64_t StatsRequestsSent = 0, StatsImmediateSent = 0, StatsInstantaneousSent = 0, StatsLifetimeSent = 0;
 	std::uint64_t StatsRequestsReceived = 0, StatsImmediateReceived = 0, StatsInstantaneousReceived = 0;
 	std::uint64_t TracerRequestsSent = 0, FirstTracerAt = 0, FirstInstantaneousAt = 0;
+	std::int64_t NativeSnapshotNow = 0, NativeLastPingSent = 0, NativeLastPingReceived = 0, NativeStatsInFlight = 0;
+	int NativeTracerReady = 0, NativeActivity = 0;
+	std::uint32_t ObservedStatsNeedMask = 0;
 	void Stats(bool Sent, bool Request, bool Immediate, bool Instantaneous, bool Lifetime, bool Tracer) noexcept {
 		if (Sent) {
 			StatsRequestsSent += Request; StatsImmediateSent += Immediate;

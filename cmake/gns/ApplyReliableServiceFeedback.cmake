@@ -238,6 +238,9 @@ GargantuanReplaceFeedback("\t/// Called when we close the connection locally" [=
 		if (m_senderState.GargantuanAckTrace)
 			m_senderState.GargantuanAckTrace->Stats(Sent, Request, Immediate, Instantaneous, Lifetime, Tracer);
 	}
+	void GargantuanRecordStatsNeed(int Mask) {
+		if (m_senderState.GargantuanAckTrace) m_senderState.GargantuanAckTrace->ObservedStatsNeedMask |= Mask;
+	}
 	void GargantuanRecordPromptReserve(int Bytes) {
 		if (auto *Trace = m_senderState.GargantuanAckTrace.get())
 			Trace->MaximumPromptReserveBytes = std::max(Trace->MaximumPromptReserveBytes, uint64_t(Bytes));
@@ -259,6 +262,12 @@ GargantuanReplaceFeedback("\t/// Called when we close the connection locally" [=
 		if (Reset) m_senderState.GargantuanAckTrace.reset(new GargantuanAckDiagnostics());
 		if (!m_senderState.GargantuanAckTrace) return false;
 		Result = *m_senderState.GargantuanAckTrace;
+		Result.NativeSnapshotNow = SteamNetworkingSockets_GetLocalTimestamp();
+		Result.NativeLastPingSent = m_statsEndToEnd.m_ping.m_usecTimeLastSentPingRequest;
+		Result.NativeLastPingReceived = m_statsEndToEnd.m_ping.TimeRecvMostRecentPing();
+		Result.NativeStatsInFlight = m_statsEndToEnd.m_pktNumInFlight;
+		Result.NativeTracerReady = m_statsEndToEnd.ReadyToSendTracerPing(Result.NativeSnapshotNow);
+		Result.NativeActivity = int(m_statsEndToEnd.GetActivityLevel());
 		Result.GrantWholeWireBytes = m_senderState.GargantuanPromptWire.WireBytes;
 		Result.GrantWireInvalid = m_senderState.GargantuanPromptWire.Invalid;
 		Result.PromptTailBudget = m_senderState.GargantuanPromptWire.TailBudget;
@@ -300,7 +309,8 @@ GargantuanReplaceFeedback("\t// Connection quality stats?" [=[
 		(msgStatsIn.flags() & msgStatsIn.ACK_REQUEST_IMMEDIATE) != 0,
 		msgStatsIn.stats().has_instantaneous(), msgStatsIn.stats().has_lifetime(), false);
 	// Connection quality stats?]=])
-GargantuanReplaceFeedback("\tm_nFlags = nFlags;" "\tm_nGargantuanTracerReady = nReadyToSendTracer;\n\tm_nFlags = nFlags;")
+GargantuanReplaceFeedback("\tint nReadyToSendTracer = 0;" "\tm_nGargantuanTracerReady = statsEndToEnd.ReadyToSendTracerPing(m_usecNow); // Pure observation before reply-request branches.\n\tint nReadyToSendTracer = 0;")
+GargantuanReplaceFeedback("\tm_nStatsNeed = statsEndToEnd.GetStatsSendNeed( m_usecNow );" "\tm_nStatsNeed = statsEndToEnd.GetStatsSendNeed( m_usecNow );\n\tconnection.GargantuanRecordStatsNeed(m_nStatsNeed);")
 GargantuanReplaceFeedback("\t// Save time when we sent the last sequenced packet." [=[
 	if (ctx.m_bGargantuanPromptAck)
 	{

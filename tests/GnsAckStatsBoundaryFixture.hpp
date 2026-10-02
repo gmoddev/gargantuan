@@ -9,6 +9,7 @@ struct Totals {
 	std::uint64_t Tracers = 0, Instantaneous = 0, InstantaneousReceived = 0;
 	std::uint64_t ImmediateSent = 0, ImmediateReceived = 0, Requests = 0;
 	std::uint64_t FirstTracer = 0, FirstInstantaneous = 0;
+	std::uint32_t NeedMask = 0;
 	void Add(const GargantuanAckDiagnostics &Value) {
 		Require(!Value.Overflow, "stats-boundary observer overflow");
 		Tracers += Value.TracerRequestsSent;
@@ -17,11 +18,21 @@ struct Totals {
 		ImmediateSent += Value.StatsImmediateSent;
 		ImmediateReceived += Value.StatsImmediateReceived;
 		Requests += Value.StatsRequestsSent;
+		NeedMask |= Value.ObservedStatsNeedMask;
 		if (Value.FirstTracerAt && (!FirstTracer || Value.FirstTracerAt < FirstTracer)) FirstTracer = Value.FirstTracerAt;
 		if (Value.FirstInstantaneousAt && (!FirstInstantaneous || Value.FirstInstantaneousAt < FirstInstantaneous))
 			FirstInstantaneous = Value.FirstInstantaneousAt;
 	}
 };
+
+inline void PrintState(const char *Stage, const char *Side, const GargantuanAckDiagnostics &Value) {
+	std::cout << "[Network:AckStatsState] stage=" << Stage << " side=" << Side
+		<< " native_now=" << Value.NativeSnapshotNow << " last_ping_sent=" << Value.NativeLastPingSent
+		<< " last_ping_received=" << Value.NativeLastPingReceived << " tracer_ready=" << Value.NativeTracerReady
+		<< " stats_in_flight=" << Value.NativeStatsInFlight << " activity=" << Value.NativeActivity
+		<< " need_mask=" << Value.ObservedStatsNeedMask << " tracer_requests=" << Value.TracerRequestsSent
+		<< " instantaneous_sent=" << Value.StatsInstantaneousSent << " instantaneous_received=" << Value.StatsInstantaneousReceived << '\n';
+}
 
 inline void Observe(bool Prompt) {
 	OwnedPair Owner; auto &Pair = Owner.Pair;
@@ -34,7 +45,15 @@ inline void Observe(bool Prompt) {
 	const auto WireBefore = ReadWire(Pair);
 	const auto Start = std::chrono::steady_clock::now();
 	const auto StartUs = Now();
-	const auto End = Start + 24s;
+	const auto CycleStart = Start + 8s;
+	const auto End = CycleStart + 24s;
+	// Ordinary reliable ACKs themselves supply RTT samples. Continuous tiny
+	// grants every500ms therefore suppress the native5/7s tracer eligibility.
+	// Let the real idle interval elapse before resuming; never alter a timer.
+	Pump(*Pair.Server, *Pair.Client, Pair.ServerEvents, Pair.ClientEvents, 8s, [] { return false; });
+	Require(AckAccess::Read(*Pair.Server, Pair.ServerConnection, Sender) &&
+		AckAccess::Read(*Pair.Client, Pair.ClientConnection, Receiver), "quiet interval stats missing");
+	PrintState("after-quiet", "sender", Sender); PrintState("after-quiet", "receiver", Receiver);
 	Totals SenderTotals, ReceiverTotals;
 	std::uint64_t Accepted = 0, Grants = 0, Prompts = 0;
 	while (std::chrono::steady_clock::now() < End && Grants < 48) {
@@ -75,13 +94,19 @@ inline void Observe(bool Prompt) {
 		const auto Count = Requests(Sender, Token);
 		Require(Count == (Prompt && Bytes == 393652 ? 1u : 0u), "stats-boundary prompt was missing/duplicated/unfunded");
 		Prompts += Count;
-		std::this_thread::sleep_until(std::min(End, Start + 500ms * static_cast<std::int64_t>(Token)));
+		std::this_thread::sleep_until(std::min(End, CycleStart + 500ms * static_cast<std::int64_t>(Token)));
 	}
 	Pump(*Pair.Server, *Pair.Client, Pair.ServerEvents, Pair.ClientEvents, 100ms, [] { return false; });
 	Require(AckAccess::Read(*Pair.Server, Pair.ServerConnection, Sender) &&
 		AckAccess::Read(*Pair.Client, Pair.ClientConnection, Receiver), "final stats missing");
 	SenderTotals.Add(Sender); ReceiverTotals.Add(Receiver);
 	const auto Whole = Cost(WireBefore, ReadWire(Pair));
+	PrintState("terminal", "sender", Sender); PrintState("terminal", "receiver", Receiver);
+	std::cout << "[Network:AckStatsCoverage] prompt=" << Prompt << " grants=" << Grants
+		<< " tracer_requests=" << SenderTotals.Tracers + ReceiverTotals.Tracers
+		<< " instantaneous_sent=" << SenderTotals.Instantaneous + ReceiverTotals.Instantaneous
+		<< " instantaneous_received=" << SenderTotals.InstantaneousReceived + ReceiverTotals.InstantaneousReceived
+		<< " need_mask=" << (SenderTotals.NeedMask | ReceiverTotals.NeedMask) << '\n';
 	Require(Grants == 48 && SenderTotals.Tracers + ReceiverTotals.Tracers > 0 &&
 		SenderTotals.Instantaneous + ReceiverTotals.Instantaneous > 0 &&
 		SenderTotals.InstantaneousReceived + ReceiverTotals.InstantaneousReceived > 0,
