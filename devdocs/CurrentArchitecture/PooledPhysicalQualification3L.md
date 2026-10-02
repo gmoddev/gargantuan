@@ -2215,3 +2215,18 @@ and this run ID. No provider or physical PASS is inferred.
 Local/real-TLS Node 32-client qualification remains NOT MEASURED; KI-006 OPEN;
 Foundation 3L B — PARTIALLY READY. The established corrected F1 physical Phase 1
 PASS is unchanged.
+
+Worker-only diagnostic `91f08244-fbc2-4103-b7e8-46d4d92f375d` at
+`fa5b91f9c` exercised the narrow Name preflight under the same continuing-motion
+workload after exact native A/B tests passed. Gameplay recovery converged at
+315,005 us with 15,674 B accepted/first-sent/ACKed/retired. Structural recovery
+still failed: the immutable reference was 481,343,350 B in 1,289 frames, with
+bound 36,461,766 us. At 60,943,667 us the prefix remained unfinished:
+473,394,819 B accepted and 473,001,167 B first-sent/ACKed/retired.
+The corrected inclusive counter measured 45–86 ms validation/encoding during
+56–105 ms live Session samples. The optimization therefore does not establish
+recovery qualification; further attributable encoder work remains.
+Mixed recovery is NOT MEASURED. Cleanup verified no client/server processes and
+UDP 39450 unbound. Logs and causal TSVs remain under the run ID in
+`C:\Sandbox\Codex\Evidence\Farm32_fa5b91f9Diagnostic\`.
+No physical/provider attempt or PASS is inferred from this diagnostic.
