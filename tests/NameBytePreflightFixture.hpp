@@ -192,17 +192,28 @@ inline void TestNameBytePreflight() {
 		if (Reads >= 3) EnvelopeRequire(Counter(F.OptimizedWork, WorkCounter::NamePreflightRetries) > 0,
 			"odd read budget regression exercises the optimized recursive path");
 	}
+	bool SawExhaustedReadBudget = false, SawAtomicStopWithBudget = false;
 	for (const std::size_t Reads : {3u, 5u, 17u, 31u, 63u}) {
 		NameBytePreflightFixture F;
 		F.Names(1);
 		F.Compare(512, 0);
 		const auto InitialLag = F.Optimized->GetJournalLag(F.Connection);
 		const auto Exhausted = F.Compare(512, Reads, 1024);
-		EnvelopeRequire(!Exhausted.Frame && !Exhausted.Error.empty() &&
-			Exhausted.JournalRecordsExamined == Reads && F.Optimized->GetJournalLag(F.Connection) == InitialLag &&
+		std::cout << "[Network:NameBytePreflight] case=atomic-budget reads=" << Reads
+			<< " examined=" << Exhausted.JournalRecordsExamined << " error=" << Exhausted.Error << '\n';
+		EnvelopeRequire(!Exhausted.Frame &&
+			Exhausted.Error == "Structural operation exceeds the negotiated reliable message limit" &&
+			Exhausted.JournalRecordsExamined > 0 && Exhausted.JournalRecordsExamined <= Reads &&
+			F.Optimized->GetJournalLag(F.Connection) == InitialLag &&
 			Counter(F.OptimizedWork, WorkCounter::NamePreflightRetries) > 0,
-			"exhausted geometric journal tail preserves exact error, full read charge and uncommitted cursor");
+			"bounded geometric journal tail preserves exact atomic error, A/B read charge and uncommitted cursor");
+		// The real encoder stops at one indivisible record. Odd budgets can leave
+		// an unused remainder; Compare still requires exact A/B charge equality.
+		SawExhaustedReadBudget |= Exhausted.JournalRecordsExamined == Reads;
+		SawAtomicStopWithBudget |= Exhausted.JournalRecordsExamined < Reads;
 	}
+	EnvelopeRequire(SawExhaustedReadBudget && SawAtomicStopWithBudget,
+		"journal regressions exercise both exhaustion and an atomic stop before exhaustion");
 	for (const bool InvalidInsidePrefix : {true, false}) {
 		NameBytePreflightFixture F(4);
 		F.Objects[0]->SetName(std::string((InvalidInsidePrefix ? 40 : 24) * 1024, 'a'));
