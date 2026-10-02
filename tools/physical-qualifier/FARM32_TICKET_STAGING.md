@@ -50,6 +50,10 @@ physical acceptance gate. The host and role launchers still verify every pin.
    (`DumpcapFarm32Capture.ps1`) and `Dumpcap` (`dumpcap.exe`) pins. A Node
    manifest additionally requires `NodeRootCertificatePath` on both roles;
    each endpoint validates its root-certificate hash against the manifest.
+   The Node `SERVER` role also requires pinned `NodeStage` (`node-stage.json`)
+   and `NodeHelper` (`PhysicalGameSessionFarmNode.ps1`) fields. Prepare and
+   independently hash that worker-local stage before sealing tickets; it is
+   consumed exactly once by the server role.
    Source manifests must have identical **bytes**. The private
    stager validates the fresh inventory report and identity before writing
    tickets; the endpoint then independently checks installed pins and paths.

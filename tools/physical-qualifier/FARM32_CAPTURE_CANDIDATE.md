@@ -1,9 +1,11 @@
 # Foundation 3L Farm32 capture candidate
 
-This is a separate, source-only candidate for the 32-client five-phase Local
-and real-TLS Node campaigns. It has not been installed, used for a capture or
-qualified on the worker. The installed one/four-client capture service and
-`worker/PktMonCapture.ps1` are unchanged.
+This is a separate candidate for the 32-client five-phase Local and real-TLS
+Node campaigns. The Agent Coordinator Farm32 service at pinned revision
+`5ee889fab571a9047cbc0f8724f2077c7bb9eb74` is installed side by side on
+the worker. Its installed status and denial preflight passed, but no actual
+Farm32 capture or campaign has run. The installed one/four-client capture
+service and `worker/PktMonCapture.ps1` are unchanged.
 
 The worker candidate `worker/PktMonFarm32Capture.ps1` retains the pinned
 Mellanox miniport identity, physical NDIS layer, IPv4 UDP scope and complete
@@ -60,12 +62,14 @@ and both capture indices into a same-run outer receipt. All capture and outer
 indices deliberately say `SEALED_UNQUALIFIED`: this adapter does not prove
 bidirectional packet tuples, role result correctness beyond the sealed result,
 or the physical campaign verdict. The two-host orchestration, preflight and
-capture packet analysis remain separate work. Neither adapter nor Farm32
-service has been installed or run physically.
+capture packet analysis remain separate work. The source-only adapters have
+not run a physical campaign, and the installed Farm32 service has not started
+a capture. Its installed preflight receipt SHA-256 is
+`2caa2250554f8423302d348e86ae0fbb0e50f4ad0690881f688d4212d361e163`.
 
-Stage by hash-verifying a versioned candidate bundle on both endpoints, then
-installing only the new Farm32 service/root under a reviewed local procedure.
-Do not replace the old installed service or hook. Preserve all old evidence.
+Before a physical campaign, hash-verify the versioned source/tool bundle on
+both endpoints and recheck the installed Farm32 service/root. Do not replace
+the old installed service or hook. Preserve all old evidence.
 Rollback stops and deletes only the new Farm32 service after checking its
 ownership record, retains audit/ETL/pcap evidence, and leaves the baseline
 service and installed scripts untouched.
