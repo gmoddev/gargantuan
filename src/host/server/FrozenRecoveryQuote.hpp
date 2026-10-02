@@ -31,7 +31,7 @@ class FrozenRecoveryQuote final {
 		std::uint64_t JournalLagRecords = 0;
 	};
 	static constexpr std::size_t QueueCapacity = 64;
-	static constexpr std::uint64_t MaximumAdvances = 65'536;
+	static constexpr std::uint64_t MaximumFrames = 65'536;
 
 	FrozenRecoveryQuote(std::unique_ptr<network::ReplicationCoordinator> Snapshot,
 		std::map<network::ConnectionId, std::size_t> Limits) {
@@ -72,7 +72,7 @@ class FrozenRecoveryQuote final {
 	// Preallocate the exception fallback before starting the worker. Even an
 	// allocation failure in replay can report failure without allocating again.
 	Result ExceptionResult{.Step = {.Error = "frozen recovery oracle replay threw an exception"}};
-	Result ExhaustedResult{.Step = {.Error = "frozen recovery oracle advance bound exceeded"}};
+	Result ExhaustedResult{.Step = {.Error = "frozen recovery oracle frame bound exceeded"}};
 	std::jthread Worker;
 
 	bool Publish(std::stop_token Stop, Result Value) {
@@ -88,13 +88,25 @@ class FrozenRecoveryQuote final {
 	void Run(std::stop_token Stop, network::ReplicationCoordinator &Snapshot,
 		const std::map<network::ConnectionId, std::size_t> &Limits) noexcept {
 		try {
-			for (std::uint64_t Advance = 0; Advance < MaximumAdvances && !Stop.stop_requested(); ++Advance) {
+			std::uint64_t Frames = 0;
+			// Planning slices and filtered journal coverage are progress, not
+			// retained frame evidence. Their count is not bounded by MaximumFrames.
+			// The owning campaign's existing finite lifetime bounds execution;
+			// cancellation is checked between advances and during queue waits.
+			while (!Stop.stop_requested()) {
 				Result Value;
 				runtime_detail::WorkSample Work{};
 				const auto Started = std::chrono::steady_clock::now();
 				{
 					runtime_detail::WorkCapture Capture(&Work);
 					Value.Step = Snapshot.AdvanceFrozenJournalQuote(Limits);
+				}
+				if (Value.Step.Frame) {
+					if (Frames == MaximumFrames) {
+						Value.Step.Frame.reset();
+						Value.Step.Complete = false;
+						Value.Step.Error = std::move(ExhaustedResult.Step.Error);
+					} else ++Frames;
 				}
 				Value.AdvanceMicroseconds = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
 					std::chrono::steady_clock::now() - Started).count());
@@ -111,7 +123,6 @@ class FrozenRecoveryQuote final {
 				const bool Terminal = Value.Step.Complete || !Value.Step.Error.empty();
 				if (!Publish(Stop, std::move(Value)) || Terminal) return;
 			}
-			if (!Stop.stop_requested()) (void)Publish(Stop, std::move(ExhaustedResult));
 		} catch (...) {
 			// A system-level mutex failure cannot be recovered, but ordinary replay
 			// exceptions (including allocation) remain terminal evidence results.

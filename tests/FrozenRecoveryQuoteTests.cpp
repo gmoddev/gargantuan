@@ -5,6 +5,7 @@
 #include "../src/host/server/FrozenRecoveryQuote.hpp"
 #include "../src/network/GameSessionTestAccess.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <iostream>
@@ -34,16 +35,19 @@ struct Fixture {
 	std::shared_ptr<Folder> Object = std::make_shared<Folder>();
 	std::unique_ptr<ReplicationCoordinator> Source;
 	std::map<ConnectionId, std::size_t> Limits;
-	explicit Fixture(std::uint32_t Peers) {
+	explicit Fixture(std::uint32_t Peers, StructuralReplicationConfiguration Configuration = {},
+		bool RootOnly = false, bool SeedName = true) {
 		Object->SetParent(World);
-		Source = std::make_unique<ReplicationCoordinator>(World);
+		const auto Root = World->GetObjectId();
+		Source = std::make_unique<ReplicationCoordinator>(World,
+			[Root, RootOnly](ObjectId Id) { return !RootOnly || Id == Root; }, true, Configuration);
 		for (std::uint32_t Slot = 1; Slot <= Peers; ++Slot) {
 			const ConnectionId Connection{Slot, 1};
 			const auto Baseline = Source->AddPeer(Connection, ReplicationEpoch(1));
 			Require(Baseline.Frame.has_value(), "oracle fixture baseline must be accepted");
 			Limits.emplace(Connection, MaximumReliableServiceGroupBytes - ReliableServiceEnvelopeBytes);
 		}
-		Object->SetName("oracle-captured-name");
+		if (SeedName) Object->SetName("oracle-captured-name");
 	}
 	~Fixture() { Source.reset(); Object->Destroy(); World->Destroy(); }
 	std::unique_ptr<ReplicationCoordinator> Capture() {
@@ -54,8 +58,8 @@ struct Fixture {
 	}
 };
 
-template<class Predicate> void Await(Predicate &&Ready, const char *Message) {
-	const auto Deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
+template<class Predicate> void Await(Predicate &&Ready, const char *Message, std::chrono::seconds Timeout = std::chrono::seconds(15)) {
+	const auto Deadline = std::chrono::steady_clock::now() + Timeout;
 	while (!Ready()) {
 		Require(std::chrono::steady_clock::now() < Deadline, Message);
 		std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -151,6 +155,121 @@ void TestImmediateCancellationAndError() {
 	try { FrozenRecoveryQuote Null(nullptr, Input.Limits); } catch (const std::invalid_argument &) { Rejected = true; }
 	Require(Rejected, "invalid constructor cannot launch a worker");
 }
+
+StructuralReplicationConfiguration SingleRecordConfiguration() {
+	StructuralReplicationConfiguration Configuration;
+	Configuration.PeerQuantum = 1;
+	Configuration.MaximumJournalRecordsPerPeerTick = 1;
+	Require(Configuration.IsValid(), "single-record oracle configuration is production-legal");
+	return Configuration;
+}
+
+void TestManyEmptyJournalAdvances() {
+	Fixture Input(32, SingleRecordConfiguration(), true, false);
+	// Every retained record is irrelevant to every root-only peer. Each normal
+	// one-record source read advances coverage without producing frame evidence.
+	constexpr std::uint64_t Records = FrozenRecoveryQuote::MaximumFrames / 32 + 1;
+	for (std::uint64_t Index = 0; Index < Records; ++Index)
+		Input.Object->SetName("irrelevant-oracle-name-" + std::to_string(Index));
+	FrozenRecoveryQuote Oracle(Input.Capture(), Input.Limits);
+	std::uint64_t Empty = 0;
+	bool Complete = false;
+	Await([&] {
+		while (auto Result = Oracle.TryPop()) {
+			Require(Result->Step.Error.empty() && !Result->Step.Frame,
+				"empty journal progress cannot exhaust the reference frame budget");
+			if (Result->Step.Complete) {
+				Complete = true;
+				Require(Result->JournalLagRecords == 0, "empty reference completes exact captured journal coverage");
+			} else ++Empty;
+		}
+		return Complete;
+	}, "bounded empty journal replay completes", std::chrono::seconds(90));
+	Require(Empty == Records * 32 && Empty > FrozenRecoveryQuote::MaximumFrames,
+		"more than 65,536 legal empty advances remain distinct from frame evidence");
+	std::cout << "[Qualification:FrozenQuote] empty_journal_advances=" << Empty << '\n';
+}
+
+void TestManyEmptyPlanningAdvances() {
+	auto World = std::make_shared<DataModel>();
+	std::vector<std::shared_ptr<Folder>> Objects;
+	// With one coroutine resume per tick, these bounded flat inputs require
+	// >65,536 yields before any materialization frame. Retained planning records
+	// remain under the existing 262,144 per-peer limit; no journal suffix grows.
+	for (std::size_t Index = 0; Index < 9'000; ++Index) {
+		auto Object = std::make_shared<Folder>();
+		Object->SetParent(World);
+		Objects.push_back(std::move(Object));
+	}
+	StructuralReplicationConfiguration Configuration;
+	Configuration.PlanningWorkPerTick = 2;
+	Configuration.PlanningPeerQuantum = 1;
+	Configuration.PeerQuantum = 1;
+	Require(Configuration.IsValid(), "single-resume planning configuration is production-legal");
+	{
+		ReplicationCoordinator Source(World, {}, true, Configuration);
+		const ConnectionId Connection{1, 1};
+		PeerRelevanceSelection Root{.RequiredObjects = {World->GetObjectId()}, .DesiredObjects = {World->GetObjectId()}};
+		Require(Source.RegisterPeerPlanned(Connection, ReplicationEpoch(1),
+			std::make_shared<const PeerRelevanceSelection>(Root)).Succeeded(), "slow-planning source registers");
+		std::uint64_t Tick = 0;
+		while (!Source.IsPlanningReady(Connection) && Tick < 1'000) Source.ProcessPlanning(++Tick);
+		auto Baseline = Source.ProducePendingBaseline(Connection, 1, ++Tick);
+		Require(Baseline.Frame && Source.CommitSchedulerAcceptance(Connection, Baseline.Frame->Sequence).Succeeded(),
+			"slow-planning fixture accepts its ordinary root baseline");
+		auto Desired = Root;
+		for (const auto &Object : Objects) Desired.DesiredObjects.push_back(Object->GetObjectId());
+		std::ranges::sort(Desired.DesiredObjects);
+		Require(Source.RequestPlanning(Connection, std::make_shared<const PeerRelevanceSelection>(Desired), ++Tick).Succeeded(),
+			"large bounded selection remains unfinished at cessation");
+		std::string Error;
+		auto Snapshot = Source.CaptureFrozenQuote(Error);
+		Require(Snapshot && Error.empty(), "slow-planning projection captures exactly");
+		FrozenRecoveryQuote Oracle(std::move(Snapshot), {{Connection,
+			MaximumReliableServiceGroupBytes - ReliableServiceEnvelopeBytes}});
+		std::uint64_t Empty = 0;
+		Await([&] {
+			while (auto Result = Oracle.TryPop()) {
+				Require(Result->Step.Error.empty() && !Result->Step.Frame && !Result->Step.Complete,
+					"bounded unfinished planning remains progress beyond the frame-count threshold");
+				Require(Result->JournalLagRecords == 0, "planning test is independent of journal work");
+				++Empty;
+			}
+			return Empty > FrozenRecoveryQuote::MaximumFrames;
+		}, "bounded planning passes the former advance ceiling", std::chrono::seconds(90));
+		std::cout << "[Qualification:FrozenQuote] empty_planning_advances=" << Empty << '\n';
+		// Cancellation ends the deliberately slow diagnostic; it is not a
+		// successful reference completion and does not waive its remaining work.
+	}
+	World->Destroy();
+}
+
+void TestFrameBoundary(bool Overflow) {
+	Fixture Input(32, SingleRecordConfiguration(), false, false);
+	const auto Records = FrozenRecoveryQuote::MaximumFrames / 32 + (Overflow ? 1 : 0);
+	for (std::uint64_t Index = 0; Index < Records; ++Index)
+		Require(Input.Object->ApplyAttributeMutation("OracleSequence", WireValue(static_cast<int>(Index)),
+			ScriptSecurityContext::CoreTrusted()) == MutationStatus::Success,
+			"exact-frame-bound fixture emits ordinary source mutations");
+	FrozenRecoveryQuote Oracle(Input.Capture(), Input.Limits);
+	std::uint64_t Frames = 0;
+	bool Terminal = false;
+	Await([&] {
+		while (auto Result = Oracle.TryPop()) {
+			if (Result->Step.Frame) ++Frames;
+			if (!Result->Step.Error.empty() || Result->Step.Complete) {
+				Require(!Terminal, "one terminal reference result");
+				Terminal = true;
+				Require(Overflow ? (!Result->Step.Complete && Result->Step.Error == "frozen recovery oracle frame bound exceeded")
+					: (Result->Step.Complete && Result->Step.Error.empty() && Result->JournalLagRecords == 0),
+					"the frame boundary distinguishes terminal completion from a true extra frame");
+			}
+		}
+		return Terminal;
+	}, "exact frame budget replay terminates", std::chrono::seconds(90));
+	Require(Frames == FrozenRecoveryQuote::MaximumFrames, "exactly 65,536 frames remain admissible evidence");
+	std::cout << "[Qualification:FrozenQuote] reference_frames=" << Frames << " overflow=" << Overflow << '\n';
+}
 }
 
 int main() {
@@ -159,7 +278,11 @@ int main() {
 		TestExactReplayAndIsolation();
 		TestCancellationAtFullQueue();
 		TestImmediateCancellationAndError();
-		std::cout << "[Qualification:FrozenQuote] 3 focused cases passed\n";
+		TestManyEmptyJournalAdvances();
+		TestManyEmptyPlanningAdvances();
+		TestFrameBoundary(false);
+		TestFrameBoundary(true);
+		std::cout << "[Qualification:FrozenQuote] 7 focused cases passed\n";
 		return 0;
 	} catch (const std::exception &Error) {
 		std::cerr << "[Qualification:FrozenQuote] " << Error.what() << '\n';

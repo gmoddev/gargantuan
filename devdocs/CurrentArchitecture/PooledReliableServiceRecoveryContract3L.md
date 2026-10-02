@@ -140,6 +140,18 @@ encoding. Schema replacement cannot change the captured reference. Cancellation
 is checked between bounded advances and the worker joins before runtime teardown.
 Serial and worker replay must produce identical reference frames and totals.
 
+The 65,536 reference-frame evidence limit counts **frames**, not calls to the
+oracle. Filtered journal coverage and bounded planning continuations can legally
+produce more calls without producing any frame; terminal completion also needs
+its own call after the final frame. The metadata queue remains capped at 64.
+Replay execution remains owned by the campaign's existing explicit finite
+runtime, finite host/client tick limits, and stop-aware cancellation/join; no
+new total-work constant or service allowance is introduced. The farm's runtime
+deadline fails the run and cleans up its owned process tree when exhausted.
+Cancellation is not successful reference completion. Focused oracle tests cover
+more than 65,536 empty journal/planning advances, exactly 65,536 frames followed
+by completion, and rejection of a genuine 65,537th frame.
+
 The original cessation timestamp, 20-second service observation and immutable
 workload-derived deadline remain unchanged. Oracle execution never pauses the
 clock or extends a deadline. Removing oracle work does not excuse slow live
