@@ -323,6 +323,20 @@ retry examinations retain their existing hard budgets. The additional marker
 contains no cached value and introduces no new map, wire field or payload queue.
 `tests/NameCoalescingFixture.hpp` covers these contracts.
 
+A live all-native-Name candidate may skip an encoding attempt only when its
+selected valid string bytes alone prove that the complete frame exceeds the
+existing message limit. This lower-bound proof retains the original geometric
+retry and charges the same pinned journal examinations; it is not an admission
+size estimate. The successful frame still uses the ordinary encoder. All
+selected strings are validated before skipping an attempt so an invalid later
+value retains its existing error precedence. Mixed or unprovable candidates
+use the original path. A bounded call-local cache avoids revalidating the same
+immutable strings across retries and clears when the catalog cursor changes;
+it cannot survive preparation, acceptance or a later public call.
+`tests/NameBytePreflightFixture.hpp` compares this path against the original
+encoder for exact bytes, fingerprints, sequence, cursor, error and work-budget
+results, including rejection, semantic barriers and the complete 512 KiB bound.
+
 Qualification can capture a detached 3J cessation input on Main after catalog
 refresh reaches the journal tail. The capture copies the bounded retained
 journal suffix and each peer's accepted value state, pins immutable catalog
