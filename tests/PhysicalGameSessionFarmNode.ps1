@@ -413,5 +413,5 @@ try {
 		($Receipt | ConvertTo-Json -Depth 5)))
 	$Child.Dispose()
 }
-Write-Output "[Qualification:FarmNode] STOPPED run=$($Proof.RunId) reason=$Reason tcp_ready=$Ready receipt=$ReceiptPath"
+Write-Output "[Qualification:FarmNode] STOPPED run=$($Proof.RunId) reason=$Reason tcp_ready=$Ready receipt=$ReceiptPath receipt_sha256=$(Get-Sha256 $ReceiptPath)"
 if ($Reason -cne 'STOP_REQUESTED' -or -not $Ready -or -not $Receipt.ChildReaped) { exit 1 }

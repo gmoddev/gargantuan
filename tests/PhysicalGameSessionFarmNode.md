@@ -33,6 +33,8 @@ retained as separate, hash-pinned files with an 8-MiB hard acceptance cap each;
 the supervisor aborts on log overflow. The Node JSON log can therefore supply
 the matching negotiated-TLS receipt without logging the workload token or
 private-key bytes. A consumed stage is not reusable.
+The final `STOPPED` line prints the `node-run.json` SHA-256; retain this
+out-of-band value for the offline TLS matcher.
 
 `node-tcp-ready.json` and `node-run.json` explicitly record `TlsProven=false`:
 a TCP connect does not prove TLS. Physical Node qualification still needs the
