@@ -103,6 +103,7 @@ namespace {
 		World->InitializeLoadedProjectRevision();
 		(void)World->GetService("Workspace");
 		test::AddScaleGameplay(World, true, true, QualifiedProducerPlayerId, true);
+		World->MarkPersistenceSubtreeArchivable();
 		const auto Revision = World->GetAuthoritativeRevision();
 		auto Payload = PackageBuilder::Capture(ProjectValue, World, Revision, Revision);
 		Require(Payload.ContentUnits.empty(), "Qualified scale bootstrap unexpectedly generated another content unit");
