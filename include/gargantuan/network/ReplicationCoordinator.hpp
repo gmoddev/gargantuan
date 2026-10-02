@@ -164,6 +164,7 @@ namespace gargantuan::network {
 		ReliableReplicationSequence Sequence;
 		std::uint64_t CompleteBytes = 0;
 		std::array<std::uint64_t, 2> Fingerprint{};
+		std::uint64_t CursorBefore = 0, CursorAfter = 0;
 	};
 	struct FrozenJournalQuoteStep {
 		std::optional<FrozenJournalQuoteFrame> Frame;
@@ -239,9 +240,10 @@ namespace gargantuan::network {
 		// on Main at the cessation boundary; the result owns its journal suffix and
 		// peer value state and cannot read the live source or ChangeJournal.
 		[[nodiscard]] std::unique_ptr<ReplicationCoordinator> CaptureFrozenQuote(std::string &Error);
-		// One bounded production journal-to-GRPL replay step. This narrow quote
-		// requires no pending relevance work and caller-supplied negotiated frame
-		// limits; it does not include already-accepted unretired debt.
+		// One bounded detached planning / complete-GRPL replay step using only the
+		// captured selection/catalog/journal. Pending relevance is represented before
+		// journal work; an unfinished planning step is not completion. Caller supplies
+		// negotiated frame limits. Already-accepted unretired debt is separate.
 		[[nodiscard]] FrozenJournalQuoteStep AdvanceFrozenJournalQuote(
 			const std::map<ConnectionId, std::size_t> &MaximumFrameBytes);
 

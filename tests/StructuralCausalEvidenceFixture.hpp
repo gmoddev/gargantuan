@@ -176,6 +176,8 @@ inline void TestStructuralCausalEvidence() {
 	EnvelopeRequire(Expected.Frame && Actual.Frame && Expected.Frame->Sequence == Actual.Frame->Sequence &&
 		Expected.Frame->CompleteBytes == Actual.EncodedFrame.size() + ReliableServiceEnvelopeBytes &&
 		Expected.Frame->Fingerprint == ActualIdentity.Value.Fingerprint &&
+		Expected.Frame->CursorBefore == ActualIdentity.Value.CursorBefore &&
+		Expected.Frame->CursorAfter == ActualIdentity.Value.CursorAfter &&
 		ActualIdentity.Value.Fingerprint == ExactCandidateFingerprint(Actual.EncodedFrame) &&
 		ActualIdentity.Value.CursorAfter == CessationTail && Actual.Frame->Operations.size() == 1,
 		"R1 R6 no-motion exact replay and current-state Name coalescing agree byte-for-byte");
@@ -232,6 +234,56 @@ inline void TestStructuralCausalEvidence() {
 	Object->SetName("later-live-work-does-not-reopen-source-fence");
 	EnvelopeRequire(LiveAudit.Represented() && Coordinator.GetJournalLag(Connection) != 0,
 		"R7 later live source backlog cannot reopen represented cessation source prefix");
+
+	auto NextQuotedFrame = [&](ReplicationCoordinator &Frozen) {
+		FrozenJournalQuoteStep Result;
+		for (int Attempt = 0; Attempt < 2000; ++Attempt) {
+			Result = Frozen.AdvanceFrozenJournalQuote(FrameLimits);
+			EnvelopeRequire(Result.Error.empty(), "detached pending quote uses captured source without error");
+			if (Result.Frame || Result.Complete) return Result;
+		}
+		throw std::runtime_error("detached pending quote exceeded bounded test work");
+	};
+	Plan(RootOnly);
+	auto LeaveQuote = Coordinator.CaptureFrozenQuote(QuoteError);
+	EnvelopeRequire(LeaveQuote && QuoteError.empty(), "cessation quote captures installed pending Leave");
+	const auto BeforeDetachedEvents = Evidence.Count;
+	const auto ExpectedLeave = NextQuotedFrame(*LeaveQuote);
+	EnvelopeRequire(Evidence.Count == BeforeDetachedEvents, "detached planning cannot leak live source observer events");
+	const auto ActualLeave = Coordinator.ProducePendingRelevance(Connection, 8, ++Tick);
+	EnvelopeRequire(ExpectedLeave.Frame && ActualLeave.Frame &&
+		ExpectedLeave.Frame->Fingerprint == ExactCandidateFingerprint(ActualLeave.EncodedFrame) &&
+		ExpectedLeave.Frame->CompleteBytes == ActualLeave.EncodedFrame.size() + ReliableServiceEnvelopeBytes &&
+		ExpectedLeave.Frame->Sequence == ActualLeave.Frame->Sequence &&
+		ExpectedLeave.Frame->CursorBefore == ExpectedLeave.Frame->CursorAfter &&
+		Coordinator.CommitSchedulerAcceptance(Connection, ActualLeave.Frame->Sequence).Succeeded(),
+		"captured pending Leave reference equals exact no-motion production frame without invented journal progress");
+	const auto LeaveDone = NextQuotedFrame(*LeaveQuote);
+	EnvelopeRequire(LeaveDone.Complete && !LeaveDone.Frame, "frozen Leave then irrelevant journal coverage converges");
+
+	Plan(WithObject);
+	auto EnterQuote = Coordinator.CaptureFrozenQuote(QuoteError);
+	EnvelopeRequire(EnterQuote && QuoteError.empty(), "cessation quote captures installed pending Enter");
+	const auto ExpectedEnter = NextQuotedFrame(*EnterQuote);
+	const auto ActualEnter = Coordinator.ProducePendingRelevance(Connection, 8, ++Tick);
+	EnvelopeRequire(ExpectedEnter.Frame && ActualEnter.Frame &&
+		ExpectedEnter.Frame->Fingerprint == ExactCandidateFingerprint(ActualEnter.EncodedFrame) &&
+		ExpectedEnter.Frame->CompleteBytes == ActualEnter.EncodedFrame.size() + ReliableServiceEnvelopeBytes &&
+		ExpectedEnter.Frame->Sequence == ActualEnter.Frame->Sequence &&
+		Coordinator.CommitSchedulerAcceptance(Connection, ActualEnter.Frame->Sequence).Succeeded(),
+		"captured pending Enter reference equals exact no-motion production frame");
+	EnvelopeRequire(Coordinator.RequestPlanning(Connection, std::make_shared<const PeerRelevanceSelection>(RootOnly), ++Tick).Succeeded(),
+		"in-flight cessation input is captured before live planning executes");
+	auto InFlightQuote = Coordinator.CaptureFrozenQuote(QuoteError);
+	EnvelopeRequire(InFlightQuote && QuoteError.empty(), "captured in-flight input is detached from its coroutine");
+	// Source changes its mind after t0 without a journal mutation. The detached
+	// reference must still derive t0's known selection rather than future motion.
+	Plan(WithObject);
+	const auto InFlightExpected = NextQuotedFrame(*InFlightQuote);
+	EnvelopeRequire(InFlightExpected.Frame && InFlightExpected.Frame->CursorBefore == InFlightExpected.Frame->CursorAfter &&
+		Coordinator.GetView(Connection)->Knows(Object->GetObjectId()) &&
+		Coordinator.GetMetrics().StructuralPendingLeaves == 0,
+		"detached planning completes captured Leave while later live selection correctly retains the object");
 
 	Coordinator.RemovePeer(Connection);
 	EnvelopeRequire(Evidence.Last(StructuralCausalKind::PeerRemoved).Value.Connection == Connection && !Evidence.Overflow,

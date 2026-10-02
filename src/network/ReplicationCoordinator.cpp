@@ -344,13 +344,17 @@ namespace gargantuan::network {
 		Quote->PlanningAfter = {};
 		for (auto &[Connection, Peer] : Quote->Peers) {
 			(void)Connection;
+			const bool SelectionResolved = Peer.PlanningSelection == Peer.ResolvedSelection &&
+				Peer.DesiredDependencyCursor.Scope == Quote->DependencyCursor.Scope &&
+				Peer.DesiredDependencyCursor.NextSequence == Quote->DependencyCursor.NextSequence;
 			Peer.Planning.reset();
 			Peer.PlanningInputRecords = 0;
 			Peer.LastPlanningServiceTick = 0;
 			Peer.PlanningSelection = Peer.PlanningSelection
 				? std::make_shared<const PeerRelevanceSelection>(*Peer.PlanningSelection) : nullptr;
-			Peer.ResolvedSelection.reset();
-			if (Peer.Planned && Peer.PlanningSelection) Quote->PlanningPeers.insert(Connection);
+			Peer.ResolvedSelection = SelectionResolved ? Peer.PlanningSelection : nullptr;
+			if (Peer.Planned && Peer.PlanningSelection && (!SelectionResolved || !Peer.PendingTransitions.empty()))
+				Quote->PlanningPeers.insert(Connection);
 		}
 		Error.clear();
 		return Quote;
@@ -360,26 +364,72 @@ namespace gargantuan::network {
 		const std::map<ConnectionId, std::size_t> &MaximumFrameBytes) {
 		if (!FrozenQuote || MaximumFrameBytes.size() != Peers.size())
 			return {.Error = "Frozen journal quote peer set is invalid"};
+		bool NeedsPlanning = false;
 		for (const auto &[Connection, Peer] : Peers) {
 			const auto Limit = MaximumFrameBytes.find(Connection);
 			if (Limit == MaximumFrameBytes.end() || Limit->second < 36 ||
 				Limit->second > MaximumReliableServiceGroupBytes - ReliableServiceEnvelopeBytes ||
-				Peer.PreparedCommit || !Peer.PendingTransitions.empty() ||
-				Peer.DesiredDependencyCursor.Scope != DependencyCursor.Scope ||
-				Peer.DesiredDependencyCursor.NextSequence != DependencyCursor.NextSequence)
-				return {.Error = "Frozen journal quote has unresolved relevance or invalid frame limits"};
+				Peer.PreparedCommit)
+				return {.Error = "Frozen quote has unresolved preparation or invalid frame limits"};
+			const bool DependencyResolved = Peer.DesiredDependencyCursor.Scope == DependencyCursor.Scope &&
+				Peer.DesiredDependencyCursor.NextSequence == DependencyCursor.NextSequence;
+			if (!Peer.Planned && !DependencyResolved)
+				return {.Error = "Frozen non-planned quote has unresolved dependency selection"};
+			if (Peer.Planned && (!Peer.PlanningSelection || Peer.PlanningAwaitingSelection || !Peer.PlanningError.empty()))
+				return {.Error = "Frozen quote has an unavailable or failed captured planning selection"};
+			NeedsPlanning = NeedsPlanning || (Peer.Planned && (!DependencyResolved ||
+				Peer.PlanningSelection != Peer.ResolvedSelection || !Peer.PendingTransitions.empty()));
 			if (Peer.JournalCursor.NextSequence > FrozenJournalTail)
 				return {.Error = "Frozen journal quote cursor passed the cessation tail"};
 		}
+		// Recompute only the exact immutable selection/captured catalog at t0.
+		// Coroutine handles were detached at capture. One normal bounded planning
+		// tick per advance permits incomplete planning without treating it as Pending
+		// or reading later live relevance. No frame means progress remains unsealed.
+		if (NeedsPlanning) {
+			if (PlanningTick == std::numeric_limits<std::uint64_t>::max())
+				return {.Error = "Frozen quote planning tick exhausted"};
+			ProcessPlanning(PlanningTick + 1);
+		}
+		bool WaitingForPlanning = false;
 		auto Position = Peers.upper_bound(FrozenQuoteAfter);
 		for (std::size_t Visited = 0; Visited < Peers.size(); ++Visited) {
 			if (Position == Peers.end()) Position = Peers.begin();
 			const auto Connection = Position->first;
 			++Position;
-			if (GetJournalLag(Connection) == 0) continue;
-			FrozenQuoteAfter = Connection;
 			const auto Limit = MaximumFrameBytes.at(Connection);
 			const auto &Peer = Peers.at(Connection);
+			const auto FrameCursorBefore = Peer.JournalCursor.NextSequence;
+			if (!Peer.PlanningError.empty()) return {.Error = Peer.PlanningError};
+			if (Peer.Planned && (Peer.PlanningSelection != Peer.ResolvedSelection ||
+				Peer.DesiredDependencyCursor.Scope != DependencyCursor.Scope ||
+				Peer.DesiredDependencyCursor.NextSequence != DependencyCursor.NextSequence)) {
+				WaitingForPlanning = true;
+				continue;
+			}
+			if (!Peer.PendingTransitions.empty()) {
+				FrozenQuoteAfter = Connection;
+				if (Peer.Planned && !IsPlanningReady(Connection)) { WaitingForPlanning = true; continue; }
+				auto Produced = ProducePendingRelevance(Connection, Configuration.PeerQuantum, PlanningTick, Limit, Limit);
+				if (!Produced.Frame) {
+					if (Produced.Error == "No replication relevance changes are available") return {};
+					return {.Error = Produced.Error.empty() ? "Frozen pending relevance made no progress" : Produced.Error};
+				}
+				if (Produced.EncodedFrame.empty() || Produced.EncodedFrame.size() > Limit ||
+					Produced.EncodedFrame.size() > MaximumReliableServiceGroupBytes - ReliableServiceEnvelopeBytes)
+					return {.Error = "Frozen pending relevance exceeds its complete-message bound"};
+				const FrozenJournalQuoteFrame Frame{.Connection = Connection, .Sequence = Produced.Frame->Sequence,
+					.CompleteBytes = Produced.EncodedFrame.size() + ReliableServiceEnvelopeBytes,
+					.Fingerprint = detail::ExactCandidateFingerprint(Produced.EncodedFrame),
+					.CursorBefore = FrameCursorBefore,
+					.CursorAfter = Peer.PreparedCommit && Peer.PreparedCommit->JournalCursor
+						? Peer.PreparedCommit->JournalCursor->NextSequence : Peer.JournalCursor.NextSequence};
+				if (Peer.ExplicitSchedulerCommit && !CommitSchedulerAcceptance(Connection, Produced.Frame->Sequence).Succeeded())
+					return {.Error = "Frozen pending relevance could not commit its detached frame"};
+				return {.Frame = Frame};
+			}
+			if (GetJournalLag(Connection) == 0) continue;
+			FrozenQuoteAfter = Connection;
 			const auto InitialTransitions = Configuration.PeerQuantum;
 			const auto InitialJournalRecords = Configuration.MaximumJournalRecordsPerPeerTick;
 			auto Transitions = InitialTransitions;
@@ -460,13 +510,16 @@ namespace gargantuan::network {
 				.Connection = Connection, .Sequence = Produced.Frame->Sequence,
 				.CompleteBytes = Produced.EncodedFrame.size() + ReliableServiceEnvelopeBytes,
 				.Fingerprint = detail::ExactCandidateFingerprint(Produced.EncodedFrame),
+				.CursorBefore = FrameCursorBefore,
+				.CursorAfter = Peer.PreparedCommit && Peer.PreparedCommit->JournalCursor
+					? Peer.PreparedCommit->JournalCursor->NextSequence : Peer.JournalCursor.NextSequence,
 			};
 			if (auto &Peer = Peers.at(Connection); Peer.ExplicitSchedulerCommit &&
 				!CommitSchedulerAcceptance(Connection, Produced.Frame->Sequence).Succeeded())
 				return {.Error = "Frozen journal quote could not commit its detached frame"};
 			return {.Frame = Frame};
 		}
-		return {.Complete = true};
+		return {.Complete = !WaitingForPlanning};
 	}
 
 	void ReplicationCoordinator::BeginRetirementTick(std::uint64_t SimulationTick) {
