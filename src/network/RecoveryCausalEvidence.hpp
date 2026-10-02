@@ -4,6 +4,7 @@
 #include "gargantuan/network/ReliableServiceProfile.hpp"
 
 #include <array>
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -143,6 +144,7 @@ namespace gargantuan::network::detail {
 				if (Token == 0 || Token >= Fence.PendingTokenWatermark || !Peer.Pending.insert(Token).second)
 					return Fail("invalid captured pending token");
 				Peer.BaselinePending.insert(Token);
+				Peer.SeenPendingTokens.insert(Token);
 			}
 			for (const auto &Grant : Fence.ExistingGrants) {
 				if (!ValidGrant(Grant) || Grant.Sequence >= Fence.NextSequence ||
@@ -169,9 +171,11 @@ namespace gargantuan::network::detail {
 		bool ObservePending(ConnectionId Connection, std::uint64_t Token) {
 			auto *Peer = FindEvent(Connection);
 			if (!Peer) return false;
-			if (Peer->Prepared || Token <= Peer->LastPendingToken || PendingCount >= MaximumPendingTokens)
+			if (Peer->Prepared || Token < Peer->PendingWatermark || Peer->SeenPendingTokens.contains(Token) ||
+				PendingCount >= MaximumPendingTokens)
 				return Fail("invalid or unbounded new pending token");
-			Peer->LastPendingToken = Token;
+			Peer->LastPendingToken = std::max(Peer->LastPendingToken, Token);
+			Peer->SeenPendingTokens.insert(Token);
 			Peer->Pending.insert(Token);
 			++PendingCount;
 			return true;
@@ -201,10 +205,12 @@ namespace gargantuan::network::detail {
 		bool ObserveReplacement(ConnectionId Connection, std::uint64_t OldToken, std::uint64_t NewToken) {
 			auto *Peer = FindEvent(Connection);
 			if (!Peer) return false;
-			if (Peer->Prepared || NewToken <= Peer->LastPendingToken || !Peer->Pending.erase(OldToken))
+			if (Peer->Prepared || NewToken < Peer->PendingWatermark || Peer->SeenPendingTokens.contains(NewToken) ||
+				!Peer->Pending.erase(OldToken))
 				return Fail("unowned or stale pending replacement");
 			Peer->Pending.insert(NewToken);
-			Peer->LastPendingToken = NewToken;
+			Peer->SeenPendingTokens.insert(NewToken);
+			Peer->LastPendingToken = std::max(Peer->LastPendingToken, NewToken);
 			if (Peer->BaselinePending.erase(OldToken)) Peer->BaselinePending.insert(NewToken);
 			return true;
 		}
@@ -325,6 +331,10 @@ namespace gargantuan::network::detail {
 			std::uint64_t LastPendingToken = 0, LastGrantToken = 0, LastExistingSequence = 0, ReferenceBytes = 0;
 			std::set<std::uint64_t> Pending;
 			std::set<std::uint64_t> BaselinePending;
+			// Atomic planner installation reports map order, not mint order. Keep
+			// lifetime identity uniqueness instead of assuming callback token order.
+			// Bounded by captured pending count plus MaximumEvents.
+			std::set<std::uint64_t> SeenPendingTokens;
 			std::optional<RecoveryPreparedFrame> Prepared;
 			std::map<std::uint64_t, RecoveryAcceptedGrant> Grants;
 			std::optional<std::uint64_t> Cut;

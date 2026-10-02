@@ -197,6 +197,18 @@ namespace gargantuan::test {
 			RecoveryCausalEvidence Audit(32, 1000, 100, 4);
 			return Audit.CapturePeer(Fence()) && !Audit.ValidateSourceSnapshot(Peer, 20, 1, {2});
 		});
+		Test("R5 atomic planner map order need not equal token mint order", [&] {
+			RecoveryCausalEvidence Audit(32, 1000, 100, 4);
+			return Audit.CapturePeer(Fence()) && Audit.ObserveReplacement(Peer, 2, 11) &&
+				Audit.ObservePending(Peer, 10) && Audit.ValidateSourceSnapshot(Peer, 10, 1, {10, 11}) &&
+				!Audit.Represented() && Accept(Audit, Frame(1, 10, 20, {10, 11}), 1) && Retire(Audit, 1) && Audit.Converged();
+		});
+		Test("R5 previously cancelled token cannot be reminted out of order", [&] {
+			RecoveryCausalEvidence Audit(32, 1000, 100, 4);
+			return Audit.CapturePeer(Fence()) && Audit.ObservePending(Peer, 10) &&
+				Audit.ObserveCancellation(Peer, 10, RecoveryCancellationDisposition::CurrentStateSuperseded) &&
+				Audit.ObservePending(Peer, 11) && !Audit.ObservePending(Peer, 10);
+		});
 		std::cout << "[Recovery:CausalEvidence] cases=" << Cases << " failures=" << Failures << '\n';
 		return Failures == 0;
 	}
