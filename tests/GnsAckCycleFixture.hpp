@@ -113,6 +113,14 @@ inline void Observe(std::size_t Bytes, std::chrono::microseconds PollPeriod, boo
 		const auto ExpectedRequests = (TailBudget ? Sender.PromptFinalWireAllowed : Prompt &&
 			Bytes >= FiniteGrantServiceCurve::QuantumBytes && Final->LastCompletedStructuralSegmentEventCount > 1) ? 1u : 0u;
 		if (Requests != ExpectedRequests) throw std::runtime_error("final grant ACK request was missing or duplicated");
+		if (Final->StructuralLastCompletedGrantFailed)
+			throw std::runtime_error("healthy ACK cycle failed canonical finite-grant service");
+		if (Prompt && TailBudget == 1348 && ((Bytes >= 393652 && Requests != 1) || (Bytes <= 1258 && Requests != 0)))
+			throw std::runtime_error("known funded/denied transport shapes did not match independent expectation");
+		if (TailBudget && Requests && (Sender.GrantWireInvalid ||
+			Sender.PromptFinalPriorWireBytes > Sender.GrantWholeWireCeiling ||
+			1348 + TailBudget > Sender.GrantWholeWireCeiling - Sender.PromptFinalPriorWireBytes))
+			throw std::runtime_error("emitted prompt exceeded its independently reconstructed wire ceiling");
 		std::cout << "[Network:AckCycle:Grant] bytes=" << Bytes << " token=" << Token
 			<< " prompt=" << Prompt << " requests=" << Requests << " tail_budget=" << TailBudget
 			<< " poll_us=" << PollPeriod.count() << " activated_us=" << Activated

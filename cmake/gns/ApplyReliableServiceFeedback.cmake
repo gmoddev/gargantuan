@@ -62,7 +62,7 @@ GargantuanReplaceFeedback("\t// Fit as many blocks as possible." "\tif (m_sender
 GargantuanReplaceFeedback("\t// OK, we have a plaintext payload.  Encrypt and send it." [=[
 	// The request belongs to the existing packet that completes unique first
 	// transmission, never to enqueue, a segment boundary, or retransmission.
-	if (ctx.m_bGargantuanPromptAckReserved && m_senderState.GargantuanPromptFinalGrantAck)
+	if (ctx.m_bGargantuanPromptAckReserved && GargantuanCanReservePromptAck())
 	{
 		const auto &Grant = m_senderState.GargantuanFeedback;
 		uint64 UniqueBytes = 0;
@@ -147,10 +147,13 @@ GargantuanReplaceFeedback("\tpSendMessage->m_nMessageNumber = ++lane.m_nLastSent
 	{
 		const auto nGargantuanAttribution = GargantuanTakeReliableRetirementAttribution();
 		if ( nGargantuanAttribution.Token ) {
-			m_senderState.GargantuanPromptWire.Begin(nGargantuanAttribution.Token, pSendMessage->m_cbSize);
 			m_senderState.GargantuanFeedback.AttributeMessage( nGargantuanAttribution.Token,
 				pSendMessage->m_nMessageNumber, pSendMessage->m_cbSize,
 				nGargantuanAttribution.ActivatedAtMicroseconds );
+			if (!m_senderState.GargantuanFeedback.Invalid && !m_senderState.GargantuanFeedback.Purged &&
+				m_senderState.GargantuanFeedback.ActiveAttributedRetirementToken == nGargantuanAttribution.Token)
+				m_senderState.GargantuanPromptWire.Begin(nGargantuanAttribution.Token, pSendMessage->m_cbSize);
+			else m_senderState.GargantuanPromptWire.Invalid = true;
 		}
 	}]=])
 GargantuanReplaceFeedback("\tint nMaxPacketsPerThinkRemaining = g_cbUDPSocketBufferSize >> 11;" [=[
@@ -176,7 +179,11 @@ GargantuanReadFeedbackSource(steamnetworkingsockets_connections.h 9ece0f7051f1b6
 GargantuanReplaceFeedback("\tint m_cbMaxEncryptedPayload;" "\tint m_cbMaxEncryptedPayload;\n\tbool m_bGargantuanPromptAckReserved = false;\n\tbool m_bGargantuanPromptAck = false;")
 GargantuanReplaceFeedback("\t/// Called when we close the connection locally" [=[
 	bool GargantuanCanReservePromptAck() const {
-		return m_senderState.GargantuanPromptFinalGrantAck && m_senderState.GargantuanFeedback.StructuralActiveGrantBytes &&
+		const auto &Grant = m_senderState.GargantuanFeedback;
+		return m_senderState.GargantuanPromptFinalGrantAck && !Grant.Invalid && !Grant.Purged &&
+			Grant.ActiveAttributedRetirementToken && Grant.StructuralActiveGrantBytes &&
+			m_senderState.GargantuanPromptWire.Token == Grant.ActiveAttributedRetirementToken &&
+			m_senderState.GargantuanPromptWire.Bytes == Grant.StructuralActiveGrantBytes &&
 			(m_senderState.GargantuanPromptWire.TailBudget
 				? m_senderState.GargantuanPromptWire.CanRequest(k_cbSteamNetworkingSocketsMaxUDPMsgLen + 48)
 				: m_senderState.GargantuanFeedback.StructuralActiveGrantBytes >= gargantuan::network::FiniteGrantServiceCurve::QuantumBytes);
