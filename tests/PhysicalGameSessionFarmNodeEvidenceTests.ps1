@@ -19,6 +19,13 @@ function Expect-Rejection { param([scriptblock]$Case, [string]$Reason)
 	try { & $Case | Out-Null } catch { $Rejected = $true }
 	if (-not $Rejected) { throw "expected rejection: $Reason" }
 }
+function Save-NodeRunReceipt {
+	param([string]$Path, [string]$LogPath, [System.Collections.IDictionary]$Receipt)
+	$Receipt.StdoutBytes = [long](Get-Item -LiteralPath $LogPath).Length
+	$Receipt.StdoutSha256 = (Get-FileHash -LiteralPath $LogPath -Algorithm SHA256).Hash.ToLowerInvariant()
+	[IO.File]::WriteAllText($Path, ($Receipt | ConvertTo-Json -Depth 4))
+	return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+}
 
 $Endpoint = Join-Path $PSScriptRoot 'PhysicalGameSessionFarmEndpoint.ps1'
 $Reconciler = Join-Path $PSScriptRoot 'PhysicalGameSessionFarmReconcile.ps1'
@@ -29,6 +36,11 @@ foreach ($Definition in @(Import-Functions -Path $Endpoint -Names @(
 }
 foreach ($Definition in @(Import-Functions -Path $Reconciler -Names @(
 	'Get-RequiredJson', 'Assert-AuthenticatedNodeManifestReceipt'))) {
+	. ([scriptblock]::Create($Definition.Extent.Text))
+}
+$TlsAnalyzer = Join-Path $PSScriptRoot 'PhysicalGameSessionFarmNodeTls.ps1'
+foreach ($Definition in @(Import-Functions -Path $TlsAnalyzer -Names @(
+	'Get-NodeTlsLogMatchReceipt', 'Write-NodeTlsLogMatchReceipt'))) {
 	. ([scriptblock]::Create($Definition.Extent.Text))
 }
 
@@ -54,7 +66,7 @@ try {
 		ServerContentManifestSha256 = $ManifestHash
 	}
 	$Line = '[Qualification:NodeProvider] event=authenticated_manifest' +
-		" run=$($Run.RunId) project=$Project revision=$Revision endpoint=$($Run.NodeEndpoint)" +
+		" run=$($Run.RunId) request_id=server-content-1 project=$Project revision=$Revision endpoint=$($Run.NodeEndpoint)" +
 		" root_sha256=$RootHash manifest_sha256=$ManifestHash" +
 		" manifest_bytes=$(([IO.FileInfo]$ManifestJson).Length) rpc_count=1" +
 		' channel=grpc_ssl_credentials authenticated_rpc=1 tls_session_details=not_measured'
@@ -69,9 +81,89 @@ try {
 	}
 	$Validated = Assert-AuthenticatedNodeManifestReceipt -ServerRoot $Server -RunManifest $Run
 	if ($Validated.State -cne 'AUTHENTICATED_MANIFEST_RPC_MEASURED' -or
+		$Validated.RequestId -cne 'server-content-1' -or
 		$Validated.TlsSessionDetails -cne 'NOT_MEASURED') {
 		throw 'Node request was mistaken for full TLS/provider proof'
 	}
+	$NodeLog = Join-Path $Root 'node.stdout.log'
+	$TlsLine = [ordered]@{
+		time = '2026-10-01T00:00:00Z'; level = 'INFO'
+		msg = '[Content:TLS] authenticated manifest RPC'
+		request_id = 'server-content-1'; project_id = $Project
+		package_version = $Revision; principal_id = 'farm-server'
+		tls_version = 'TLSv1.3'; cipher_suite = 'TLS_AES_128_GCM_SHA256'
+		transport = 'grpc_tls'
+	} | ConvertTo-Json -Compress
+	[IO.File]::WriteAllText($NodeLog, "$TlsLine`n")
+	$StagePath = Join-Path $Root 'node-stage.json'
+	$Stage = [ordered]@{
+		Format = 'GargantuanFarmNodeStage'; Version = 1
+		RunId = $Run.RunId; ProjectId = $Project; Revision = $Revision
+		NodeEndpoint = $Run.NodeEndpoint; RootCertificateSha256 = $RootHash
+		NodeExecutableSha256 = 'd' * 64; ConfigSha256 = 'e' * 64
+		CertificateSha256 = 'f' * 64
+	}
+	[IO.File]::WriteAllText($StagePath, ($Stage | ConvertTo-Json -Depth 4))
+	$StageHash = (Get-FileHash -LiteralPath $StagePath -Algorithm SHA256).Hash.ToLowerInvariant()
+	$NodeRunPath = Join-Path $Root 'node-run.json'
+	$NodeRun = [ordered]@{
+		Format = 'GargantuanFarmNodeRun'; Version = 1
+		RunId = $Run.RunId; StageSha256 = $StageHash
+		NodeExecutableSha256 = 'd' * 64; ConfigSha256 = 'e' * 64
+		CertificateSha256 = 'f' * 64; RootCertificateSha256 = $RootHash
+		Pid = 1234; StartedUtc = '2026-10-01T00:00:00Z'
+		EndedUtc = '2026-10-01T00:00:01Z'; TcpReady = $true
+		ChildReaped = $true; Reason = 'STOP_REQUESTED'
+		StdoutPath = $NodeLog; StdoutSha256 = ''; StdoutBytes = 0
+		StderrPath = (Join-Path $Root 'node.stderr.log'); StderrSha256 = 'a' * 64
+		StderrBytes = 0
+	}
+	$RunPin = Save-NodeRunReceipt -Path $NodeRunPath -LogPath $NodeLog -Receipt $NodeRun
+	$TlsReceipt = Get-NodeTlsLogMatchReceipt -ServerReceiptPath $ReceiptPath -NodeStagePath $StagePath `
+		-NodeRunReceiptPath $NodeRunPath -NodeRunReceiptSha256 $RunPin -NodeStageSha256 $StageHash
+	$TlsReceiptPath = Join-Path $Root 'node-tls-match.json'
+	Write-NodeTlsLogMatchReceipt -Path $TlsReceiptPath -Receipt $TlsReceipt
+	if ($TlsReceipt.State -cne 'OFFLINE_LOG_MATCH_BOUND_TO_PINNED_NODE_RUN' -or
+		$TlsReceipt.RequestId -cne 'server-content-1' -or
+		$TlsReceipt.CipherSuite -cne 'TLS_AES_128_GCM_SHA256') {
+		throw 'offline Node TLS match was lost or promoted to physical provenance'
+	}
+	Expect-Rejection {
+		Get-NodeTlsLogMatchReceipt -ServerReceiptPath $ReceiptPath -NodeStagePath $StagePath `
+			-NodeRunReceiptPath $NodeRunPath -NodeRunReceiptSha256 ('0' * 64) `
+			-NodeStageSha256 $StageHash
+	} 'wrong independent run receipt pin'
+	Expect-Rejection {
+		Get-NodeTlsLogMatchReceipt -ServerReceiptPath $ReceiptPath -NodeStagePath $StagePath `
+			-NodeRunReceiptPath $NodeRunPath -NodeRunReceiptSha256 $RunPin `
+			-NodeStageSha256 ('0' * 64)
+	} 'wrong stage pin'
+	foreach ($Replacement in @(
+		@('server-content-1', 'server-content-2'),
+		@('TLSv1.3', 'TLSv1.1'),
+		@('TLS_AES_128_GCM_SHA256', 'TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256'),
+		@($Project, ('b' * 32))
+	)) {
+		[IO.File]::WriteAllText($NodeLog, ($TlsLine.Replace($Replacement[0], $Replacement[1]) + "`n"))
+		$RunPin = Save-NodeRunReceipt -Path $NodeRunPath -LogPath $NodeLog -Receipt $NodeRun
+		Expect-Rejection {
+			Get-NodeTlsLogMatchReceipt -ServerReceiptPath $ReceiptPath -NodeStagePath $StagePath `
+				-NodeRunReceiptPath $NodeRunPath -NodeRunReceiptSha256 $RunPin -NodeStageSha256 $StageHash
+		} "mismatched Node TLS field $($Replacement[0])"
+	}
+	[IO.File]::WriteAllText($NodeLog, "$TlsLine`n$TlsLine`n")
+	$RunPin = Save-NodeRunReceipt -Path $NodeRunPath -LogPath $NodeLog -Receipt $NodeRun
+	Expect-Rejection {
+		Get-NodeTlsLogMatchReceipt -ServerReceiptPath $ReceiptPath -NodeStagePath $StagePath `
+			-NodeRunReceiptPath $NodeRunPath -NodeRunReceiptSha256 $RunPin -NodeStageSha256 $StageHash
+	} 'duplicate matching TLS records'
+	[IO.File]::WriteAllText($NodeLog, "$TlsLine`n")
+	$RunPin = Save-NodeRunReceipt -Path $NodeRunPath -LogPath $NodeLog -Receipt $NodeRun
+	$BadLine = $Line.Replace('request_id=server-content-1', 'request_id=bad-id')
+	[IO.File]::WriteAllText($Log, "$BadLine`n")
+	Expect-Rejection {
+		Get-AuthenticatedNodeManifestReceipt -LogPath $Log -PackageRoot $Package -RunManifest $Run
+	} 'unbounded or malformed native request ID'
 	$BadLine = $Line.Replace("root_sha256=$RootHash", ('root_sha256=' + ('b' * 64)))
 	[IO.File]::WriteAllText($Log, "$BadLine`n")
 	Expect-Rejection {

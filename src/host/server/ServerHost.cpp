@@ -482,12 +482,14 @@ namespace gargantuan::host {
 #if defined(GARGANTUAN_WITH_NODE_CONTENT)
 					const auto Evidence = NodeProvider ? NodeProvider->GetAuthenticatedManifestEvidence() : std::nullopt;
 					if (!Evidence || !Evidence->TlsChannelConnected || Evidence->SuccessfulRequests == 0 ||
+						Evidence->RequestId.empty() || Evidence->RequestId.size() > 128 ||
 						Evidence->Package != PackageContentNamespace{Payload->Inspection.Identity, Payload->Inspection.Revision} ||
 						Evidence->ManifestDigest != Payload->ContentManifestDigest ||
 						Evidence->ManifestBytes != Availability->GetMetrics().ManifestBytes ||
 						!Evidence->RootCertificateDigest.IsValid())
 						throw std::runtime_error("Node authenticated manifest evidence differs from validated package bootstrap");
 					std::cout << "[Qualification:NodeProvider] event=authenticated_manifest run=" << FarmRunId
+						<< " request_id=" << Evidence->RequestId
 						<< " project=" << Evidence->Package.Project.ToString()
 						<< " revision=" << Evidence->Package.PackageVersion
 						<< " endpoint=" << NodeEndpointDiagnostic

@@ -60,7 +60,8 @@ on Windows when both PowerShell 7 and Go are available. It never runs the
 physical farm.
 
 The separate `PhysicalGameSessionFarmNodeEvidenceTests.ps1` covers the native
-ServerHost's bounded `authenticated_manifest` record. That record is emitted
+ServerHost's bounded `authenticated_manifest` record, including its exact
+`server-content-N` request ID. That record is emitted
 only after `NodeContentProvider` uses `grpc::SslCredentials`, connects, makes a
 Bearer-authenticated `GetManifest` RPC, validates the response identity/hash,
 and `ContentAvailability` verifies the manifest against the packaged digest.
@@ -70,4 +71,11 @@ index. The reconciler verifies the typed receipt and reports
 `AUTHENTICATED_MANIFEST_RPC_MEASURED`, while leaving the broader provider and
 real-TLS gate `NOT MEASURED`: negotiated TLS details, the separately pinned
 Node child/config, complete content delivery, and physical campaign behavior
-remain independent evidence.
+remain independent evidence. `PhysicalGameSessionFarmNodeTls.ps1` can match
+that request ID and package identity against an independently retained Node
+JSON log record from the official Node `GetManifest` success path and verify
+its TLS version/cipher pairing. It produces only
+`OFFLINE_LOG_MATCH_BOUND_TO_PINNED_NODE_RUN` only when the bounded
+`node.stdout.log` matches the independently hash-pinned `node-run.json` and
+`node-stage.json`, including run ID, root CA, stage hash, log path, byte count,
+and digest. The match is still not the full physical provider PASS gate.

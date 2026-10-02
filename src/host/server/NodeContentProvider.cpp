@@ -280,6 +280,7 @@ namespace gargantuan::host {
 			const auto Previous = State->AuthenticatedManifest && State->AuthenticatedManifest->Package == Package ?
 				State->AuthenticatedManifest->SuccessfulRequests : 0;
 			State->AuthenticatedManifest = NodeAuthenticatedManifestEvidence{
+				.RequestId = RequestId,
 				.Package = Package,
 				.RootCertificateDigest = State->RootCertificateDigest,
 				.ManifestDigest = ManifestDigest,

@@ -14,7 +14,14 @@ root-CA `grpc::SslCredentials`, sent its environment-backed Bearer credential,
 validated the RPC response identity and SHA-256, and passed the packaged
 manifest digest check in ContentAvailability. The role-local endpoint checks
 the native record against the pinned Server package and run-manifest CA, then
-indexes `node-provider.json`. The offline reconciler validates the receipt as
+indexes `node-provider.json` with the exact manifest request ID. A separate
+bounded offline analyzer can match that ID to the official Node's successful
+authenticated `GetManifest` TLS log and validate the negotiated version/cipher.
+The bounded Node helper can retain `node.stdout.log`; the analyzer requires
+the independently pinned Node run/stage receipts and exact log hash/size to
+bind the matched record to the owned child. This alone cannot establish the
+full physical gate.
+The offline reconciler validates the receipt as
 an authenticated request observation but deliberately leaves the full Node
 provider/real-TLS campaign gate **NOT MEASURED**. The source candidate has no
 physical 32-client Node run, negotiated TLS transcript, or full service

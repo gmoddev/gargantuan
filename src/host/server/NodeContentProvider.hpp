@@ -31,6 +31,7 @@ namespace gargantuan::host {
 	// gRPC TLS channel. ContentAvailability separately validates this manifest
 	// against the package digest before the ServerHost publishes farm evidence.
 	struct NodeAuthenticatedManifestEvidence final {
+		std::string RequestId;
 		PackageContentNamespace Package;
 		AssetContentId RootCertificateDigest;
 		AssetContentId ManifestDigest;

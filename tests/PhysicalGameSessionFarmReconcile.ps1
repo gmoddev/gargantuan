@@ -176,12 +176,13 @@ function Assert-AuthenticatedNodeManifestReceipt {
 		return [ordered]@{ State = 'NOT_APPLICABLE' }
 	}
 	$Receipt = Get-RequiredJson -Path $Path
-	$Fields = @('Format', 'Version', 'RunId', 'Provider', 'ProjectId', 'PackageVersion',
+	$Fields = @('Format', 'Version', 'RunId', 'Provider', 'RequestId', 'ProjectId', 'PackageVersion',
 		'NodeEndpoint', 'RootCertificateSha256', 'ManifestSha256', 'ManifestBytes',
 		'AuthenticatedManifestRpcCount', 'ChannelCredentials', 'TlsSessionDetails', 'Source')
 	if ($Receipt.Keys.Count -ne $Fields.Count -or @($Fields | Where-Object { -not $Receipt.Contains($_) }).Count -ne 0 -or
 		$Receipt.Format -cne 'GargantuanFarmNodeAuthenticatedManifest' -or
-		$Receipt.Version -ne 1 -or $Receipt.RunId -cne $RunManifest.RunId -or
+		$Receipt.Version -ne 2 -or $Receipt.RunId -cne $RunManifest.RunId -or
+		$Receipt.RequestId -cnotmatch '^server-content-[1-9][0-9]{0,19}$' -or
 		$Receipt.Provider -cne 'Node' -or $Receipt.ProjectId -cnotmatch '^[a-f0-9]{32}$' -or
 		$Receipt.PackageVersion -isnot [long] -or $Receipt.PackageVersion -le 0 -or
 		$Receipt.NodeEndpoint -cne $RunManifest.NodeEndpoint -or
@@ -199,6 +200,7 @@ function Assert-AuthenticatedNodeManifestReceipt {
 	}
 	return [ordered]@{
 		State = 'AUTHENTICATED_MANIFEST_RPC_MEASURED'
+		RequestId = $Receipt.RequestId
 		ProjectId = $Receipt.ProjectId; PackageVersion = $Receipt.PackageVersion
 		ManifestSha256 = $Receipt.ManifestSha256
 		RootCertificateSha256 = $Receipt.RootCertificateSha256

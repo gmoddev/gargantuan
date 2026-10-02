@@ -443,6 +443,7 @@ function Get-AuthenticatedNodeManifestReceipt {
 		$Record.manifest_sha256 -ine $RunManifest.ServerContentManifestSha256 -or
 		$Record.manifest_bytes -cne [string]$Bytes -or $Bytes -lt 1 -or $Bytes -gt 4194304 -or
 		$Record.rpc_count -cnotmatch '^[1-9][0-9]{0,4}$' -or
+		$Record.request_id -cnotmatch '^server-content-[1-9][0-9]{0,19}$' -or
 		[int]$Record.rpc_count -gt 10000 -or
 		$Record.channel -cne 'grpc_ssl_credentials' -or
 		$Record.authenticated_rpc -cne '1' -or
@@ -450,8 +451,9 @@ function Get-AuthenticatedNodeManifestReceipt {
 		throw 'authenticated Node manifest RPC differs from pinned package, CA, or channel semantics'
 	}
 	return [ordered]@{
-		Format = 'GargantuanFarmNodeAuthenticatedManifest'; Version = 1
+		Format = 'GargantuanFarmNodeAuthenticatedManifest'; Version = 2
 		RunId = $RunManifest.RunId; Provider = 'Node'
+		RequestId = $Record.request_id
 		ProjectId = $Package.ProjectId; PackageVersion = [long]$Package.Revision
 		NodeEndpoint = $RunManifest.NodeEndpoint
 		RootCertificateSha256 = $RunManifest.NodeRootCertificateSha256.ToLowerInvariant()

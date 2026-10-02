@@ -189,8 +189,9 @@ try {
 	[IO.File]::WriteAllText($ServerPath, ([IO.File]::ReadAllText($ServerPath)).Replace('provider=local', 'provider=node'))
 	$NodeReceiptPath = Join-Path $ServerRoot 'node-provider.json'
 	$NodeReceipt = [ordered]@{
-		Format = 'GargantuanFarmNodeAuthenticatedManifest'; Version = 1
+		Format = 'GargantuanFarmNodeAuthenticatedManifest'; Version = 2
 		RunId = $RunId; Provider = 'Node'
+		RequestId = 'server-content-1'
 		ProjectId = '0123456789abcdef0123456789abcdef'; PackageVersion = 17
 		NodeEndpoint = $Manifest.NodeEndpoint
 		RootCertificateSha256 = $HashPin; ManifestSha256 = $HashPin
