@@ -184,6 +184,19 @@ namespace gargantuan::test {
 			return Audit.CapturePeer(Fence()) && Accept(Audit, Frame(1, 10, 20, {2}), 1) && Retire(Audit, 1) &&
 				Audit.Converged() && !Audit.RejectEvidence("native feedback invalid") && !Audit.Converged();
 		});
+		Test("R10 source snapshot corroborates event derived state", [&] {
+			RecoveryCausalEvidence Audit(32, 1000, 100, 4);
+			return Audit.CapturePeer(Fence()) && Audit.ValidateSourceSnapshot(Peer, 10, 1, {2}) &&
+				Audit.ObserveReplacement(Peer, 2, 4) && Audit.ValidateSourceSnapshot(Peer, 10, 1, {4});
+		});
+		Test("R10 a missing cancellation event is detected not inferred", [&] {
+			RecoveryCausalEvidence Audit(32, 1000, 100, 4);
+			return Audit.CapturePeer(Fence()) && !Audit.ValidateSourceSnapshot(Peer, 10, 1, {});
+		});
+		Test("R10 a missing cursor coverage event is detected not inferred", [&] {
+			RecoveryCausalEvidence Audit(32, 1000, 100, 4);
+			return Audit.CapturePeer(Fence()) && !Audit.ValidateSourceSnapshot(Peer, 20, 1, {2});
+		});
 		std::cout << "[Recovery:CausalEvidence] cases=" << Cases << " failures=" << Failures << '\n';
 		return Failures == 0;
 	}

@@ -176,6 +176,17 @@ namespace gargantuan::network::detail {
 			++PendingCount;
 			return true;
 		}
+		bool ValidateSourceSnapshot(ConnectionId Connection, std::uint64_t Cursor, std::uint64_t NextSequence,
+			const std::vector<std::uint64_t> &PendingTokens) {
+			auto *Peer = FindEvent(Connection);
+			if (!Peer) return false;
+			if (Peer->Prepared || Cursor != Peer->Cursor || NextSequence != Peer->NextSequence ||
+				PendingTokens.size() != Peer->Pending.size()) return Fail("source snapshot differs from causal evidence");
+			const std::set<std::uint64_t> Observed(PendingTokens.begin(), PendingTokens.end());
+			if (Observed != Peer->Pending || Observed.size() != PendingTokens.size())
+				return Fail("source pending snapshot differs from causal evidence");
+			return true;
+		}
 		bool ObserveCancellation(ConnectionId Connection, std::uint64_t Token,
 			RecoveryCancellationDisposition Disposition) {
 			auto *Peer = FindEvent(Connection);
