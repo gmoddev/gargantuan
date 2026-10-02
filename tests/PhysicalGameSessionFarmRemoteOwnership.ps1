@@ -67,6 +67,8 @@ function Read-FarmRemoteOwnershipObservation {
 	}
 	if ($Rows.Count -ne 0 -and $Rows.Count -ne 33) { throw 'partial Remote ownership evidence' }
 	return [ordered]@{Contract='remote_ownership_v1'; RunId=[string]$Manifest.RunId;
+		AnalyzerSha256=(Get-FileHash -LiteralPath $PSCommandPath -Algorithm SHA256).Hash.ToLowerInvariant();
+		RunManifestSha256=(Get-FileHash -LiteralPath $RunManifestPath -Algorithm SHA256).Hash.ToLowerInvariant();
 		State=$(if($Rows.Count -eq 33){'MEASURED'}else{'NOT_MEASURED'}); RoleCount=$Rows.Count;
 		Observations=@($Rows.ToArray()); SourceHashes=@($Hashes.ToArray())}
 }

@@ -266,3 +266,9 @@ it independently joins the hash-indexed 32-client native calibration logs using
 `farm_clock_exchange.py`. Its 640 probe intervals do not synchronize whole phases
 or qualify one-way latency, and missing historical clock evidence remains unmeasured.
 The role-local endpoint supervisor does not import these analysis scripts.
+Also retain `PhysicalGameSessionFarmLifecycle.ps1` and
+`PhysicalGameSessionFarmRemoteOwnership.ps1` for independent post-Stop replay.
+`tests/PhysicalFarmAnalysisInventory.ps1` records the complete controller-side
+analysis dependency hashes and the selected Python/PowerShell executable pins
+for final preparation. The legacy `package.py` endpoint bundle is not consumed
+by this offline analysis path; its contents are not evidence of analyzer custody.

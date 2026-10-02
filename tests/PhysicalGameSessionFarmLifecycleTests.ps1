@@ -35,6 +35,16 @@ try {
 	$Result = Observe
 	if ($Result.State -ne 'MEASURED' -or $Result.RoleCount -ne 33 -or $Result.SourceHashes.Count -ne 33 -or
 		$Result.Observations[0].cached_bytes -ne 1024) { throw 'valid full receipt/cache diagnostics rejected' }; $Cases++
+	Assert-FarmLifecycleAdmission -Observation $Result -Admission @{accepted=10;retired=10;terminal_release=0}
+	$Cases++
+	foreach ($Name in @('accepted','retired','terminal_release')) {
+		$Admission = @{accepted=10;retired=10;terminal_release=0}
+		$Admission[$Name]++
+		$Failed = $false
+		try { Assert-FarmLifecycleAdmission -Observation $Result -Admission $Admission } catch { $Failed = $true }
+		if (-not $Failed) { throw "post-Stop counter reset/contradiction accepted: $Name" }
+		$Cases++
+	}
 	foreach ($Name in @('session_measured','session_terminal','valid','content_present')) {
 		Reject $Name ($Good.Replace("$Name=1", "$Name=0"))
 	}

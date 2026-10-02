@@ -31,6 +31,8 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'RecoveryCausalEvidence.ps1')
 . (Join-Path $PSScriptRoot 'PhysicalFarmPublicationEvidence.ps1')
 . (Join-Path $PSScriptRoot 'PhysicalFarmClockEvidence.ps1')
+. (Join-Path $PSScriptRoot 'PhysicalGameSessionFarmLifecycle.ps1')
+. (Join-Path $PSScriptRoot 'PhysicalGameSessionFarmRemoteOwnership.ps1')
 
 function Import-FarmRecoveryParser {
 	$Path = Join-Path $PSScriptRoot 'PhysicalGameSessionFarm.ps1'
@@ -876,6 +878,23 @@ function Read-ProviderRun {
 		($Report.ClockObservation | ConvertTo-Json -Depth 12 -Compress)) {
 		throw 'reconciled clock observation differs from independently replayed indexed evidence'
 	}
+	$Lifecycle = Read-FarmLifecycleObservation -ServerRoot $Server.Root -ClientRoot $Clients.Root `
+		-RunManifestPath (Join-Path $Server.Root 'run-manifest.json')
+	Assert-FarmLifecycleAdmission -Observation $Lifecycle -Admission $Report.Admission
+	if ($null -eq $Report.LifecycleObservation) {
+		if ($Lifecycle.State -cne 'NOT_MEASURED') { throw 'reconciliation omitted present lifecycle evidence' }
+	} elseif (($Lifecycle | ConvertTo-Json -Depth 12 -Compress) -cne
+		($Report.LifecycleObservation | ConvertTo-Json -Depth 12 -Compress)) {
+		throw 'reconciled lifecycle observation differs from independently replayed indexed evidence'
+	}
+	$RemoteOwnership = Read-FarmRemoteOwnershipObservation -ServerRoot $Server.Root -ClientRoot $Clients.Root `
+		-RunManifestPath (Join-Path $Server.Root 'run-manifest.json')
+	if ($null -eq $Report.RemoteOwnershipObservation) {
+		if ($RemoteOwnership.State -cne 'NOT_MEASURED') { throw 'reconciliation omitted present Remote ownership evidence' }
+	} elseif (($RemoteOwnership | ConvertTo-Json -Depth 12 -Compress) -cne
+		($Report.RemoteOwnershipObservation | ConvertTo-Json -Depth 12 -Compress)) {
+		throw 'reconciled Remote ownership differs from independently replayed indexed evidence'
+	}
 	$RemoteCadence = Read-FarmRemoteCadence -ClientRoot $Clients.Root `
 		-ClientIndex $Clients.Index -RunId $Report.RunId
 	$ProviderObservation = Read-ProviderObservation -Report $Report -Manifest $Manifest `
@@ -886,6 +905,8 @@ function Read-ProviderRun {
 		Report = $Report; Manifest = $Manifest
 		Admission = $Admission; Publication = $Publication; ServerWorkTicks = $ServerWorkTicks
 		Clock = $Clock
+		Lifecycle = $Lifecycle
+		RemoteOwnership = $RemoteOwnership
 		RemoteCadence = $RemoteCadence
 		ProviderObservation = $ProviderObservation; Recovery = $Recovery
 		Resources = [ordered]@{ Server = $ServerResources; Clients = $ClientResources
@@ -955,6 +976,8 @@ $Observed = [ordered]@{
 		RetiredBytes = $Local.Report.Admission.retired; Admission = $Local.Admission
 		Publication = $Local.Publication
 		Clock = $Local.Clock
+		Lifecycle = $Local.Lifecycle
+		RemoteOwnership = $Local.RemoteOwnership
 		ServerWorkTicks = $Local.ServerWorkTicks
 		Capture = $LocalCapture
 		RemoteCadence = $Local.RemoteCadence
@@ -967,6 +990,8 @@ $Observed = [ordered]@{
 		RetiredBytes = $Node.Report.Admission.retired; Admission = $Node.Admission
 		Publication = $Node.Publication
 		Clock = $Node.Clock
+		Lifecycle = $Node.Lifecycle
+		RemoteOwnership = $Node.RemoteOwnership
 		ServerWorkTicks = $Node.ServerWorkTicks
 		Capture = $NodeCapture
 		RemoteCadence = $Node.RemoteCadence
@@ -975,6 +1000,8 @@ $Observed = [ordered]@{
 		EvidenceRetention = $Node.EvidenceRetention
 	}
 	GateObservations = @(
+		[ordered]@{ Gate = 'RemoteManager queue and handler ownership bounds'; State = $(if ($Local.RemoteOwnership.State -ceq 'MEASURED' -and $Node.RemoteOwnership.State -ceq 'MEASURED') { 'MEASURED' } else { 'NOT MEASURED' }); Reason = 'native insertion high-waters, zero post-Stop ownership and exact release totals for server and 32 clients; work residence/lease overshoot is diagnostic and does not substitute for response scheduler latency' },
+		[ordered]@{ Gate = 'Logical lifecycle, readers, content and debt cleanup'; State = $(if ($Local.Lifecycle.State -ceq 'MEASURED' -and $Node.Lifecycle.State -ceq 'MEASURED') { 'MEASURED' } else { 'NOT MEASURED' }); Reason = 'independently replayed post-Stop server and 32 client receipts per provider; zero transient ownership and exact admission conservation; cached/resident content remains diagnostic and does not replace pre-Stop successful convergence' },
 		[ordered]@{ Gate = 'Native clock correlation at calibration probes'; State = $(if ($Local.Clock.Status -ceq 'BOUNDED_AT_PROBE' -and $Node.Clock.Status -ceq 'BOUNDED_AT_PROBE') { 'MEASURED' } else { 'NOT MEASURED' }); Reason = 'independent replay of 640 causal offset intervals per provider with indexed input and analyzer pins; phase-long offset and one-way latency remain unmeasured' },
 		[ordered]@{ Gate = 'Cross-provider exact workload/deployment pin parity'; State = 'MEASURED' },
 		[ordered]@{ Gate = 'Per-provider terminal native admission/debt conservation and bounded grants/credit'; State = 'MEASURED'; Reason = 'sealed final receipt, not an intra-run service or fairness bound' },
@@ -994,14 +1021,14 @@ $Observed = [ordered]@{
 		[ordered]@{ Gate = 'Tracked-root recipient Character cadence'; State = $(if ($Local.Publication.RecipientCharacterCadence.CanonicalVerdict -ceq 'FAIL' -or $Node.Publication.RecipientCharacterCadence.CanonicalVerdict -ceq 'FAIL') { 'MEASURED_FAIL' } elseif ($Local.Publication.RecipientCharacterCadence.CanonicalVerdict -ceq 'PASS' -and $Node.Publication.RecipientCharacterCadence.CanonicalVerdict -ceq 'PASS') { 'MEASURED_PASS' } else { 'NOT MEASURED' }); Reason = 'eight explicit roots and 64 recipient relationships in sealed five-phase native traces; <=250-ms recipient-local handled gap and <=12 authoritative ticks where phase boundaries are provable' },
 		[ordered]@{ Gate = 'Server work-tick p95/p99/max in all five phases'; State = $(if ($Local.ServerWorkTicks.Status -ceq 'MEASURED_FAIL' -or $Node.ServerWorkTicks.Status -ceq 'MEASURED_FAIL') { 'MEASURED_FAIL' } elseif ($Local.ServerWorkTicks.Status -ceq 'MEASURED_PASS' -and $Node.ServerWorkTicks.Status -ceq 'MEASURED_PASS') { 'MEASURED_PASS' } else { 'NOT MEASURED' }); Reason = 'hash-indexed FrameBegin-to-FrameEnd work time excludes deliberate 60-Hz pacing sleep; 16.667/33.334/100-ms phase limits' },
 		[ordered]@{ Gate = 'Designated producer Luau RPC and Event ACK cadence'; State = $(if ($Local.RemoteCadence.Status -ceq 'MEASURED_FAIL' -or $Node.RemoteCadence.Status -ceq 'MEASURED_FAIL') { 'MEASURED_FAIL' } elseif ($Local.RemoteCadence.Status -ceq 'MEASURED_PASS' -and $Node.RemoteCadence.Status -ceq 'MEASURED_PASS') { 'MEASURED_PASS' } else { 'NOT MEASURED' }); Reason = 'hash-indexed client-00 Luau invoke/return and offer/OnClientEvent callback on one local clock; 150/250/500-ms RPC and 250-ms Event RTT/ACK-gap limits' },
-		[ordered]@{ Gate = 'Full Character and Remote recipient cadence'; State = 'NOT MEASURED'; Reason = 'tracked-root recipient-local Character cadence and producer Remote timing are separate; cross-host Character service latency, ScaleEvent/ScaleFunction service for the other 31 clients, and cross-host one-way latency are not measured' },
+		[ordered]@{ Gate = 'Full Character and Remote recipient cadence'; State = 'NOT MEASURED'; Reason = 'canonical workload has one designated Remote/action producer; other 31 clients are Character recipients, not missing Remote producers. Due-tick Character service, producer Remote timing and cross-host diagnostics are separate evidence domains; final conjunctive review remains required' },
 		[ordered]@{ Gate = 'Full fairness, overload backpressure and journal retention margin'; State = 'NOT MEASURED'; Reason = 'terminal counters and exact-demand event waits do not prove saturated service, continuous backlog bounds, or the journal high-water margin' },
 		[ordered]@{ Gate = 'CPU, memory, network and transport headroom'; State = 'NOT MEASURED'; Reason = 'bounded host/NIC snapshots describe utilization, but no canonical CPU/memory/NIC pass percentage or concurrent packet-level reserve proof follows from those samples' },
 		[ordered]@{ Gate = 'Fixed 20-second service recovery'; State = $(if ($Local.Recovery.FixedServiceRecovery -eq 'MEASURED_PASS' -and $Node.Recovery.FixedServiceRecovery -eq 'MEASURED_PASS') { 'MEASURED_PASS' } elseif ($Local.Recovery.FixedServiceRecovery -eq 'MEASURED_FAIL' -or $Node.Recovery.FixedServiceRecovery -eq 'MEASURED_FAIL') { 'MEASURED_FAIL' } else { 'NOT MEASURED' }); Reason = 'three canonical cases per provider, replayed from indexed server/client recovery logs and matched to sealed reconciliation' },
 		[ordered]@{ Gate = 'Strict structural convergence sufficient proof'; State = $(if ($Local.Recovery.StrictConvergenceSufficientProof -eq 'MEASURED_PASS' -and $Node.Recovery.StrictConvergenceSufficientProof -eq 'MEASURED_PASS') { 'MEASURED_PASS' } else { 'NOT MEASURED' }); Reason = '32-peer audited complete-message W_i, exact canonical deadline, terminal source/readers/debt, and client final-Name proof; separate fixed ordinary-service gate' },
 		[ordered]@{ Gate = 'Workload-derived exact structural convergence'; State = $(if ($Local.Recovery.StrictConvergenceSufficientProof -eq 'MEASURED_PASS' -and $Node.Recovery.StrictConvergenceSufficientProof -eq 'MEASURED_PASS' -and $Local.Recovery.ExactRetainedWorkBytes -is [long] -and $Node.Recovery.ExactRetainedWorkBytes -is [long]) { 'MEASURED_PASS' } else { 'NOT MEASURED' }); Reason = 'immutable reference W_i is separately conserved; offline source-event replay proves finite baseline coverage and accepted-prefix first-send, ACK and retirement while later work remains live' },
-		[ordered]@{ Gate = 'Journal retention margin and overload'; State = 'NOT MEASURED'; Reason = 'final zero journal backlog lacks retained-history high-water and overload chronology' },
-		[ordered]@{ Gate = 'Sampled overload journal retention window'; State = $(if ($Local.Recovery.SampledJournalRetention -eq 'MEASURED_PASS' -and $Node.Recovery.SampledJournalRetention -eq 'MEASURED_PASS') { 'MEASURED_PASS' } else { 'NOT MEASURED' }); Reason = 'indexed opportunity and recovery samples remain within 16,384 records with nonnegative observed reader margin; transient between-sample minimum remains unmeasured' },
+		[ordered]@{ Gate = 'Journal retention margin and overload'; State = 'NOT MEASURED'; Reason = 'the separate fixed-workload gate includes post-mutation retained-history high-water and minimum reader margin; general continuous overload/fairness coverage still requires conjunctive review' },
+		[ordered]@{ Gate = 'Sampled overload journal retention window'; State = $(if ($Local.Recovery.SampledJournalRetention -eq 'MEASURED_PASS' -and $Node.Recovery.SampledJournalRetention -eq 'MEASURED_PASS') { 'MEASURED_PASS' } else { 'NOT MEASURED' }); Reason = 'indexed opportunity/recovery samples plus 7,680 immediate post-Name-mutation observations per structural/mixed case prove the fixed workload stays within 16,384 records with nonnegative reader margin; unrelated commits between these workload mutations are not inferred' },
 		[ordered]@{ Gate = 'Full Local/Node provider parity'; State = 'NOT MEASURED'; Reason = 'application service, real TLS, exact convergence, resource headroom and capture gates remain independent' }
 	)
 }

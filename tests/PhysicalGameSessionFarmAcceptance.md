@@ -167,7 +167,46 @@ PASS threshold is inferred from a measured value.
 
 Mock test:
 
+Post-Stop logical lifetime evidence is independently replayed from all 33
+hash-indexed stdout logs. The server and every client must report its exact run,
+role, slot and nonce, terminal GameSession, zero connections/readers/admission
+owners and zero transient Content ownership. Admission conservation remains
+exact; resident/cache counters are diagnostic. Successful pre-Stop retirement
+and zero terminal release remain separate requirements. All-absent historical
+receipts are `NOT_MEASURED`; partial, forged or omitted present receipts fail
+closed. This scoped measurement does not promote overall `INCOMPLETE`.
+
+The independent `remote_ownership_v1` receipt uses the same 33-role identity and
+custody checks. Its exact insertion high-waters and terminal accepted/released
+totals establish RemoteManager queue/handler boundedness and zero final owned
+work. Recorded residence times and lease overshoot remain diagnostics. This
+does not prove NetworkScheduler RpcResponse queue latency or replace the
+designated producer's application timing checks.
+
+Final preparation must retain a controller-side analysis inventory from the
+qualified source checkout. The actual outer campaign `collect` binds role and
+capture indices through `farm_campaign_runner.Reconcile`; it does not execute
+these PowerShell analyzers or consume the legacy `package.py` endpoint bundle.
+Keep the complete checkout-relative analyzer layout and use
+`PhysicalFarmAnalysisInventory.ps1` to hash the 19 transitive analysis files,
+including clock, lifecycle and Remote ownership helpers, before independent reconciliation.
+Its `SourceCommit` must match a clean HEAD for those files. Prepend the approved
+installed `C:\Sandbox\Codex\Tools\physical-qualifier\runtime` directory to
+the controller process PATH, then supply that exact `python.exe` path and its
+approved SHA256. The inventory rejects a different resolved Python executable
+and records the running PowerShell 7 path/hash. Retain the inventory outside
+the checkout with final preparation artifacts and compare its file/runtime pins
+again before analysis; it is a source custody receipt, not a provider PASS.
+
+The canonical ordinary Remote/action load has one producer. The other 31
+clients are Character recipients; their lack of additional RPC producers is
+not a missing workload gate. Cross-host latency diagnostics and final
+conjunctive qualification remain separate.
+
 ```powershell
 pwsh -NoProfile -File tests/PhysicalGameSessionFarmAcceptanceTests.ps1
 pwsh -NoProfile -File tests/PhysicalGameSessionFarmHostResourceTests.ps1
+pwsh -NoProfile -File tests/PhysicalGameSessionFarmLifecycleTests.ps1
+pwsh -NoProfile -File tests/PhysicalGameSessionFarmRemoteOwnershipTests.ps1
+pwsh -NoProfile -File tests/PhysicalFarmAnalysisInventoryTests.ps1
 ```

@@ -361,6 +361,32 @@ try {
 	Save-Index -Root $ClientRoot -RunId $RunId -Role 'Clients'
 	Assert-Rejected -Name 'rehashed incomplete clock path' -ReportPath (Join-Path $TestRoot 'partial-clock.json')
 	[IO.File]::WriteAllText($Client31Path, $ClockLog)
+	. (Join-Path $PSScriptRoot 'PhysicalFarmLifecycleFixture.ps1')
+	Add-FarmLifecycleFixture -ServerRoot $ServerRoot -ClientRoot $ClientRoot -Manifest $Manifest
+	Save-Index -Root $ServerRoot -RunId $RunId -Role 'Server'
+	Save-Index -Root $ClientRoot -RunId $RunId -Role 'Clients'
+	$LifecyclePath = Join-Path $TestRoot 'lifecycle-report.json'
+	& $Reconciler -RunManifestPath $ManifestPath -ManifestSha256 $ManifestSha256 `
+		-ServerEvidenceRoot $ServerRoot -ClientEvidenceRoot $ClientRoot -ReportPath $LifecyclePath | Out-Null
+	$LifecycleReport = Get-Content -LiteralPath $LifecyclePath -Raw | ConvertFrom-Json
+	if ($LifecycleReport.Status -cne 'INCOMPLETE' -or $LifecycleReport.LifecycleObservation.State -cne 'MEASURED' -or
+		$LifecycleReport.LifecycleObservation.RoleCount -ne 33 -or
+		$LifecycleReport.RemoteOwnershipObservation.State -cne 'MEASURED' -or
+		$LifecycleReport.RemoteOwnershipObservation.RoleCount -ne 33) { throw 'post-Stop lifecycle/Remote ownership scope lost or promoted' }
+	$LifecycleLog = [IO.File]::ReadAllText($Client31Path)
+	[IO.File]::WriteAllText($Client31Path, $ClockLog)
+	Save-Index -Root $ClientRoot -RunId $RunId -Role 'Clients'
+	Assert-Rejected -Name 'rehashed partial post-Stop lifecycle' -ReportPath (Join-Path $TestRoot 'partial-lifecycle.json')
+	[IO.File]::WriteAllText($Client31Path, $LifecycleLog.Replace('journal_readers=0', 'journal_readers=1'))
+	Save-Index -Root $ClientRoot -RunId $RunId -Role 'Clients'
+	Assert-Rejected -Name 'rehashed retained post-Stop reader' -ReportPath (Join-Path $TestRoot 'leaked-lifecycle.json')
+	[IO.File]::WriteAllText($Client31Path, $LifecycleLog.Replace('[Qualification:RemoteOwnership]', '[Qualification:RemoteMissing]'))
+	Save-Index -Root $ClientRoot -RunId $RunId -Role 'Clients'
+	Assert-Rejected -Name 'rehashed partial Remote ownership' -ReportPath (Join-Path $TestRoot 'partial-remote.json')
+	[IO.File]::WriteAllText($Client31Path, $LifecycleLog.Replace('dispatch_current=0', 'dispatch_current=1'))
+	Save-Index -Root $ClientRoot -RunId $RunId -Role 'Clients'
+	Assert-Rejected -Name 'rehashed retained Remote dispatch' -ReportPath (Join-Path $TestRoot 'leaked-remote.json')
+	[IO.File]::WriteAllText($Client31Path, $LifecycleLog)
 	[IO.File]::WriteAllText((Join-Path $ClientRoot 'run-manifest.json'), '{}')
 	Save-Index -Root $ClientRoot -RunId $RunId -Role 'Clients'
 	Assert-Rejected -Name 'mismatched role manifest' -ReportPath (Join-Path $TestRoot 'bad-manifest-report.json')

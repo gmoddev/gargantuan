@@ -65,6 +65,22 @@ function Read-FarmLifecycleObservation {
 	}
 	if ($Rows.Count -ne 0 -and $Rows.Count -ne 33) { throw 'partial lifecycle evidence cannot qualify cleanup' }
 	return [ordered]@{ Contract = 'logical_stop_v1'; RunId = [string]$Manifest.RunId;
+		AnalyzerSha256 = (Get-FileHash -LiteralPath $PSCommandPath -Algorithm SHA256).Hash.ToLowerInvariant();
+		RunManifestSha256 = (Get-FileHash -LiteralPath $RunManifestPath -Algorithm SHA256).Hash.ToLowerInvariant();
 		State = $(if ($Rows.Count -eq 33) { 'MEASURED' } else { 'NOT_MEASURED' });
 		RoleCount = $Rows.Count; Observations = @($Rows.ToArray()); SourceHashes = @($Hashes.ToArray()) }
+}
+
+function Assert-FarmLifecycleAdmission {
+	param($Observation, $Admission)
+	if ($Observation.State -ceq 'NOT_MEASURED') { return }
+	$Server = $Observation.Observations[0]
+	# ServerHost emits the final admission receipt immediately before Stop,
+	# without another Step. Successful pre-Stop convergence has no outstanding
+	# obligation that Stop could terminally release or newly accept.
+	foreach ($Name in @('accepted', 'retired', 'terminal_release')) {
+		if ([bigint]$Server[$Name] -ne [bigint]$Admission.$Name) {
+			throw "post-Stop lifecycle changed final server admission $Name"
+		}
+	}
 }

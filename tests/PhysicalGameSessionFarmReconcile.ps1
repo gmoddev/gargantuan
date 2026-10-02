@@ -2,7 +2,8 @@
 # Offline reconciliation of two role-local Foundation 3L farm receipts. This
 # intentionally does not pronounce Local or Node provider qualification.
 # Stage AdmissionFairnessEvidence.ps1, RecoveryCausalEvidence.ps1 and the
-# PhysicalFarmPublicationEvidence.ps1 / PhysicalFarmClockEvidence.ps1 adapters beside it.
+# PhysicalFarmPublicationEvidence.ps1 / PhysicalFarmClockEvidence.ps1 and
+# PhysicalGameSessionFarmLifecycle.ps1 / PhysicalGameSessionFarmRemoteOwnership.ps1 beside it.
 
 param(
 	[Parameter(Mandatory = $true)][string]$RunManifestPath,
@@ -17,6 +18,8 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'RecoveryCausalEvidence.ps1')
 . (Join-Path $PSScriptRoot 'PhysicalFarmPublicationEvidence.ps1')
 . (Join-Path $PSScriptRoot 'PhysicalFarmClockEvidence.ps1')
+. (Join-Path $PSScriptRoot 'PhysicalGameSessionFarmLifecycle.ps1')
+. (Join-Path $PSScriptRoot 'PhysicalGameSessionFarmRemoteOwnership.ps1')
 
 function Get-RequiredJson {
 	param([string]$Path)
@@ -277,7 +280,7 @@ function Get-Ledger {
 		[ordered]@{ Gate = 'Authoritative server tick, network and full Character cadence'; State = 'NOT MEASURED'; Evidence = 'requires bounded native application trace analysis' },
 		[ordered]@{ Gate = 'Character publication state-chain and role-local delays'; State = $(if ($PublicationMeasured) { 'MEASURED' } else { 'NOT MEASURED' }); Evidence = 'hash-indexed native due/accept and receive/handler join; no cross-host clock subtraction or full cadence verdict' },
 		[ordered]@{ Gate = 'Remote publication and recipient cadence'; State = 'NOT MEASURED'; Evidence = 'Character publication trace has no Remote offer, send or handler records' },
-		[ordered]@{ Gate = 'RPC handler and response queue bounds'; State = 'NOT MEASURED'; Evidence = 'requires native queue trace analysis' },
+		[ordered]@{ Gate = 'RPC handler and response queue bounds'; State = 'NOT MEASURED'; Evidence = 'RemoteManager insertion/terminal ownership is separately replayed; NetworkScheduler RpcResponse queue service remains independent' },
 		[ordered]@{ Gate = 'Fixed 20-second service recovery'; State = 'NOT MEASURED'; Evidence = 'requires independently timed recovery workload and trace' },
 		[ordered]@{ Gate = 'Exact accepted/retired/terminal/debt/grant/journal conservation'; State = 'MEASURED'; Evidence = 'final native admission receipt, exact byte equality, zero debt/grants and zero journal failures' },
 		[ordered]@{ Gate = 'Fairness, backlog and backpressure'; State = 'NOT MEASURED'; Evidence = 'requires admission/scheduler trace and overload case' },
@@ -402,6 +405,20 @@ $Ledger = Get-Ledger -ScaleValidated $true `
 	-PublicationMeasured ($Publication.Status -ceq 'ACCEPTED_STATE_CHAIN_OBSERVED')
 $Clock = Read-FarmClockObservation -ServerRoot $Server.Root -ClientRoot $Clients.Root `
 	-RunManifestPath $RunManifestPath
+$Lifecycle = Read-FarmLifecycleObservation -ServerRoot $Server.Root -ClientRoot $Clients.Root `
+	-RunManifestPath $RunManifestPath
+Assert-FarmLifecycleAdmission -Observation $Lifecycle -Admission $Admission
+$RemoteOwnership = Read-FarmRemoteOwnershipObservation -ServerRoot $Server.Root -ClientRoot $Clients.Root `
+	-RunManifestPath $RunManifestPath
+$Ledger += [ordered]@{ Gate = 'RemoteManager queue and handler ownership bounds';
+	State = $RemoteOwnership.State.Replace('_', ' ');
+	Evidence = '33 post-Stop native insertion high-waters, zero current ownership and exact accepted/released totals; residence diagnostics do not prove response scheduler latency' }
+foreach ($Gate in $Ledger) {
+	if ($Gate.Gate -ceq 'Logical lifecycle, readers, content and debt cleanup') {
+		$Gate.State = $Lifecycle.State.Replace('_', ' ')
+		$Gate.Evidence = 'independent post-Stop server and 32 client receipts prove terminal sessions, zero transient ownership and admission conservation; resident caches are diagnostic'
+	}
+}
 $Ledger += [ordered]@{ Gate = 'Native clock correlation at calibration probes';
 	State = $(if ($Clock.Status -ceq 'BOUNDED_AT_PROBE') { 'MEASURED' } else { 'NOT MEASURED' });
 	Evidence = '640 causal offset intervals across 32 clients and five epochs; no phase-long offset or one-way latency claim' }
@@ -415,6 +432,8 @@ $Report = [ordered]@{
 	RecoveryObservation = $RecoveryObservation
 	PublicationObservation = $Publication
 	ClockObservation = $Clock
+	LifecycleObservation = $Lifecycle
+	RemoteOwnershipObservation = $RemoteOwnership
 	NodeAuthenticatedManifest = $NodeAuthenticatedManifest
 	ServerResourceSamples = $ServerSamples; ClientResourceSamples = $ClientSamples
 	ServerHostResourceSamples = $ServerHostSamples; ClientHostResourceSamples = $ClientHostSamples

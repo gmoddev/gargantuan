@@ -477,7 +477,9 @@ try {
 		$Observed.Local.Capture.Status -cne 'NOT_MEASURED' -or
 		$Observed.Node.Capture.Status -cne 'NOT_MEASURED' -or
 		$Observed.Local.RemoteCadence.Status -cne 'NOT_MEASURED' -or
-		@($Observed.GateObservations | Where-Object { $_.State -eq 'NOT MEASURED' }).Count -ne 17 -or
+		@($Observed.GateObservations | Where-Object { $_.State -eq 'NOT MEASURED' }).Count -ne 19 -or
+		$Observed.Local.RemoteOwnership.State -cne 'NOT_MEASURED' -or
+		$Observed.Local.Lifecycle.State -cne 'NOT_MEASURED' -or
 		$Observed.Local.Clock.Status -cne 'NOT_MEASURED' -or
 		$Observed.Local.Recovery.FixedServiceRecovery -cne 'NOT MEASURED' -or
 		$Observed.Node.Recovery.ExactRetainedWorkBytes -cne 'NOT_MEASURED') {
@@ -922,6 +924,60 @@ try {
 	$Node.Report.ClockObservation.AnalyzerSha256 = '0' * 64
 	Save-Json -Path $Node.ReportPath -Value $Node.Report
 	Assert-Rejected -Name 'changed clock analyzer pin' -OutputPath (Join-Path $TestRoot 'clock-analyzer.json')
+	. (Join-Path $PSScriptRoot 'PhysicalFarmLifecycleFixture.ps1')
+	. (Join-Path $PSScriptRoot 'PhysicalGameSessionFarmLifecycle.ps1')
+	. (Join-Path $PSScriptRoot 'PhysicalGameSessionFarmRemoteOwnership.ps1')
+	foreach ($Run in @($Local, $Node)) {
+		Add-FarmLifecycleFixture -ServerRoot $Run.ServerRoot -ClientRoot $Run.ClientRoot -Manifest $Run.Manifest
+		Save-Index -Root $Run.ServerRoot -RunId $Run.Manifest.RunId -Role 'Server'
+		Save-Index -Root $Run.ClientRoot -RunId $Run.Manifest.RunId -Role 'Clients'
+		$Run.Report.ServerEvidenceSha256 = (Get-FileHash -LiteralPath (Join-Path $Run.ServerRoot 'evidence-sha256.json')).Hash.ToLowerInvariant()
+		$Run.Report.ClientEvidenceSha256 = (Get-FileHash -LiteralPath (Join-Path $Run.ClientRoot 'evidence-sha256.json')).Hash.ToLowerInvariant()
+		$Run.Report.PublicationObservation = Read-FarmPublicationObservation `
+			-ServerRoot $Run.ServerRoot -ClientRoot $Run.ClientRoot `
+			-ServerIndex (Get-Content -LiteralPath (Join-Path $Run.ServerRoot 'evidence-sha256.json') -Raw | ConvertFrom-Json -AsHashtable) `
+			-ClientIndex (Get-Content -LiteralPath (Join-Path $Run.ClientRoot 'evidence-sha256.json') -Raw | ConvertFrom-Json -AsHashtable) `
+			-RunManifestPath (Join-Path $Run.ServerRoot 'run-manifest.json') -ScratchParent $TestRoot
+		$Run.Report.ClockObservation = Read-FarmClockObservation -ServerRoot $Run.ServerRoot `
+			-ClientRoot $Run.ClientRoot -RunManifestPath (Join-Path $Run.ServerRoot 'run-manifest.json')
+		$Run.Report['LifecycleObservation'] = Read-FarmLifecycleObservation -ServerRoot $Run.ServerRoot `
+			-ClientRoot $Run.ClientRoot -RunManifestPath (Join-Path $Run.ServerRoot 'run-manifest.json')
+		$Run.Report['RemoteOwnershipObservation'] = Read-FarmRemoteOwnershipObservation -ServerRoot $Run.ServerRoot `
+			-ClientRoot $Run.ClientRoot -RunManifestPath (Join-Path $Run.ServerRoot 'run-manifest.json')
+		Save-Json -Path $Run.ReportPath -Value $Run.Report
+	}
+	$LifecyclePath = Join-Path $TestRoot 'lifecycle-acceptance.json'
+	Invoke-Analyzer -OutputPath $LifecyclePath
+	$LifecycleReport = Get-Content -LiteralPath $LifecyclePath -Raw | ConvertFrom-Json
+	if ($LifecycleReport.Status -cne 'INCOMPLETE' -or $LifecycleReport.Local.Lifecycle.RoleCount -ne 33 -or
+		$LifecycleReport.Node.Lifecycle.State -cne 'MEASURED' -or
+		$LifecycleReport.Local.RemoteOwnership.RoleCount -ne 33 -or
+		$LifecycleReport.Node.RemoteOwnership.State -cne 'MEASURED') { throw 'post-Stop lifecycle/Remote ownership missing or overclaimed' }
+	$Node.Report.LifecycleObservation.Observations[0].cached_bytes++
+	Save-Json -Path $Node.ReportPath -Value $Node.Report
+	Assert-Rejected -Name 'forged post-Stop lifecycle' -OutputPath (Join-Path $TestRoot 'forged-lifecycle.json')
+	$Node.Report.LifecycleObservation.Observations[0].cached_bytes--
+	$LifecycleObservation = $Node.Report.LifecycleObservation
+	$Node.Report.Remove('LifecycleObservation')
+	Save-Json -Path $Node.ReportPath -Value $Node.Report
+	Assert-Rejected -Name 'omitted present post-Stop lifecycle' -OutputPath (Join-Path $TestRoot 'omitted-lifecycle.json')
+	$Node.Report['LifecycleObservation'] = $LifecycleObservation
+	$Node.Report.LifecycleObservation.AnalyzerSha256 = '0' * 64
+	Save-Json -Path $Node.ReportPath -Value $Node.Report
+	Assert-Rejected -Name 'changed lifecycle analyzer pin' -OutputPath (Join-Path $TestRoot 'lifecycle-analyzer.json')
+	$Node.Report.LifecycleObservation.AnalyzerSha256 = (Get-FileHash -LiteralPath (Join-Path $PSScriptRoot 'PhysicalGameSessionFarmLifecycle.ps1')).Hash.ToLowerInvariant()
+	$Node.Report.RemoteOwnershipObservation.Observations[0].dispatch_high++
+	Save-Json -Path $Node.ReportPath -Value $Node.Report
+	Assert-Rejected -Name 'forged Remote ownership high-water' -OutputPath (Join-Path $TestRoot 'forged-remote.json')
+	$Node.Report.RemoteOwnershipObservation.Observations[0].dispatch_high--
+	$RemoteObservation = $Node.Report.RemoteOwnershipObservation
+	$Node.Report.Remove('RemoteOwnershipObservation')
+	Save-Json -Path $Node.ReportPath -Value $Node.Report
+	Assert-Rejected -Name 'omitted present Remote ownership' -OutputPath (Join-Path $TestRoot 'omitted-remote.json')
+	$Node.Report['RemoteOwnershipObservation'] = $RemoteObservation
+	$Node.Report.RemoteOwnershipObservation.AnalyzerSha256 = '0' * 64
+	Save-Json -Path $Node.ReportPath -Value $Node.Report
+	Assert-Rejected -Name 'changed Remote ownership analyzer pin' -OutputPath (Join-Path $TestRoot 'remote-analyzer.json')
 	Write-Output '[Qualification:FarmAcceptance] MOCK_TEST_OK'
 } finally {
 	if (-not $ResolvedRoot.StartsWith($ResolvedTemp + [IO.Path]::DirectorySeparatorChar,
