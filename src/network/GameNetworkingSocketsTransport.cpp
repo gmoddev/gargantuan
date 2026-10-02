@@ -1,4 +1,5 @@
 #include "gargantuan/network/GameNetworkingSocketsTransport.hpp"
+#include "gargantuan/network/ReliableServiceProfile.hpp"
 #include "GnsAckDiagnosticsAccess.hpp"
 #include "GnsServiceDiagnostics.hpp"
 #include "FarmCaptureEndpointAccess.hpp"
