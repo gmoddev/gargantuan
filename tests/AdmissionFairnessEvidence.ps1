@@ -25,6 +25,10 @@ function Read-AdmissionFairnessEvidence {
 	$DisposedEverEligibleCount = 0
 	$MaximumWait = [UInt64]0
 	$LatestTime = [UInt64]0
+	$MaximumTraceActiveGrants = [UInt64]0
+	$MaximumTracePeerCreditBytes = [UInt64]0
+	$MaximumTraceGlobalCreditBytes = [UInt64]0
+	$PreviousDeferrals = [UInt64[]]@(0, 0, 0, 0)
 	$Ended = $false
 	$Stream = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
 	$Reader = [IO.StreamReader]::new($Stream, [Text.UTF8Encoding]::new($false, $true))
@@ -66,9 +70,20 @@ function Read-AdmissionFairnessEvidence {
 			if ($N[0] -lt 1 -or $N[0] -gt 512 -or $N[1] -eq 0 -or $DemandId -eq 0 -or
 				$Bytes -eq 0 -or $Bytes -gt 524288 -or
 				$CreditAt -gt $At -or $EligibleSince -gt $At -or
+				$N[9] -gt 524288 -or $N[10] -gt 2097152 -or $N[11] -gt 4 -or
+				($Kind -ceq 'grant_accepted' -and $N[11] -eq 0) -or
 				($Expected.Count -gt 0 -and -not $Expected.Contains($Peer))) {
-				throw "admission fairness evidence event $Count has invalid identity, bytes, or chronology"
+				throw "admission fairness evidence event $Count has invalid identity, bytes, credit, grants, or chronology"
 			}
+			for ($Counter = 0; $Counter -lt 4; $Counter++) {
+				if ($N[12 + $Counter] -lt $PreviousDeferrals[$Counter]) {
+					throw "admission fairness evidence event $Count regresses a native deferral counter"
+				}
+				$PreviousDeferrals[$Counter] = $N[12 + $Counter]
+			}
+			$MaximumTracePeerCreditBytes = [Math]::Max($MaximumTracePeerCreditBytes, $N[9])
+			$MaximumTraceGlobalCreditBytes = [Math]::Max($MaximumTraceGlobalCreditBytes, $N[10])
+			$MaximumTraceActiveGrants = [Math]::Max($MaximumTraceActiveGrants, $N[11])
 			# Commit records a fresh ServiceTime() while other admission events
 			# may still use the step ledger's earlier Now. File order is causal,
 			# but timestamps need only be monotonic within one demand.
@@ -196,6 +211,14 @@ function Read-AdmissionFairnessEvidence {
 		})
 		return [pscustomobject]@{
 			Classification = 'EVIDENCE_INTEGRITY_AND_OBSERVED_TIMING_ONLY'
+			TraceCanonicalCounterBounds = 'MEASURED_PASS'
+			MaximumTraceActiveGrants = $MaximumTraceActiveGrants
+			MaximumTracePeerCreditBytes = $MaximumTracePeerCreditBytes
+			MaximumTraceGlobalCreditBytes = $MaximumTraceGlobalCreditBytes
+			LastTraceGrantDeferrals = $PreviousDeferrals[0]
+			LastTraceFundedDeferrals = $PreviousDeferrals[1]
+			LastTraceCreditDeferrals = $PreviousDeferrals[2]
+			LastTraceFairnessDeferrals = $PreviousDeferrals[3]
 			# This is a verdict on recorded, accepted exact-demand episodes only.
 			# It does not establish continuous source backlog or universal fairness.
 			AcceptedGrantWaitBoundMicroseconds = [UInt64]220500

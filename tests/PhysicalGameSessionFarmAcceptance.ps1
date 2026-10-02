@@ -540,6 +540,18 @@ function Read-AdmissionObservation {
 	}
 	$ObservedFairness = Read-AdmissionFairnessEvidence -Path $FairnessPath `
 		-RunId $Report.RunId -ExpectedConnections $Connections
+	if ($ObservedFairness.TraceCanonicalCounterBounds -cne 'MEASURED_PASS' -or
+		$ObservedFairness.MaximumTraceActiveGrants -gt $Admission.grants_high -or
+		$ObservedFairness.MaximumTracePeerCreditBytes -gt $Admission.peer_credit_high -or
+		$ObservedFairness.MaximumTraceGlobalCreditBytes -gt $Admission.global_credit_high -or
+		$ObservedFairness.LastTraceGrantDeferrals -gt $Admission.grant_deferrals -or
+		$ObservedFairness.LastTraceFundedDeferrals -gt $Admission.funded_deferrals -or
+		$ObservedFairness.LastTraceCreditDeferrals -gt $Admission.credit_deferrals -or
+		$ObservedFairness.LastTraceFairnessDeferrals -gt $Admission.fairness_deferrals -or
+		$Admission.pending_leaves -gt $Admission.pending_enters -or
+		$Admission.pending_enters -ne $Admission.pending_leaves) {
+		throw 'sealed native admission timeline or terminal pending transitions violate canonical counter bounds'
+	}
 	$RecordedFairness = $Report.AdmissionFairnessObservation
 	if ($null -eq $RecordedFairness -or
 		($ObservedFairness | ConvertTo-Json -Depth 10 -Compress) -cne
@@ -564,6 +576,7 @@ function Read-AdmissionObservation {
 		FairnessDeferrals = [long]$Admission.fairness_deferrals
 		FairnessRotations = [long]$Admission.fairness_rotations
 		AcceptedGrantWaitBound = $ObservedFairness.AcceptedGrantWaitBound
+		TraceCanonicalCounterBounds = $ObservedFairness.TraceCanonicalCounterBounds
 		ExactDemandEpisodeCoverage = $ObservedFairness.ExactDemandEpisodeCoverage
 		PendingEnters = [long]$Admission.pending_enters
 		PendingLeaves = [long]$Admission.pending_leaves
@@ -887,6 +900,7 @@ $Observed = [ordered]@{
 		[ordered]@{ Gate = 'Cross-provider exact workload/deployment pin parity'; State = 'MEASURED' },
 		[ordered]@{ Gate = 'Per-provider terminal native admission/debt conservation and bounded grants/credit'; State = 'MEASURED'; Reason = 'sealed final receipt, not an intra-run service or fairness bound' },
 		[ordered]@{ Gate = 'Per-provider exact-demand fairness event identity and observed eligibility waits'; State = 'MEASURED'; Reason = 'sealed native timeline; the separate accepted-grant bound remains scoped to recorded episodes' },
+		[ordered]@{ Gate = 'Sealed admission credit, grant, deferral and terminal pending counter bounds'; State = 'MEASURED_PASS'; Reason = 'all native timeline snapshots obey canonical credit/grant caps and monotonic deferral counters; terminal pending transitions reconcile, but per-peer ACK-gated ownership between events remains unmeasured' },
 		[ordered]@{ Gate = 'Recorded accepted-grant eligibility wait within 220.5 ms'; State = $(if ($Local.Admission.AcceptedGrantWaitBound -eq 'MEASURED_FAIL' -or $Node.Admission.AcceptedGrantWaitBound -eq 'MEASURED_FAIL') { 'MEASURED_FAIL' } elseif ($Local.Admission.AcceptedGrantWaitBound -eq 'MEASURED_PASS' -and $Node.Admission.AcceptedGrantWaitBound -eq 'MEASURED_PASS') { 'MEASURED_PASS' } else { 'NOT MEASURED' }); Reason = 'accepted exact-demand episodes only; interruptions, disposals and continuous semantic backlog remain separate' },
 		[ordered]@{ Gate = 'Node authenticated manifest RPC and root/content pins'; State = 'MEASURED'; Reason = 'indexed provider receipt' },
 		[ordered]@{ Gate = 'Node negotiated TLS for authenticated manifest RPC'; State = $(if ($Node.ProviderObservation.RealTls -ceq 'NEGOTIATED_TLS_MANIFEST_RPC_MEASURED') { 'MEASURED' } else { 'NOT MEASURED' }); Reason = 'requires independently pinned Node stage/run/log and exact request matcher; full provider parity remains separate' },

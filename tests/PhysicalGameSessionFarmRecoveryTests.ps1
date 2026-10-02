@@ -63,7 +63,7 @@ try {
 			$ServerError.Add("[Qualification:Recovery] event=quote_peer run=$RunId case=$Case connection_slot=$Peer connection_generation=1 accepted_unretired_complete_bytes=0 future_complete_bytes=77 w_complete_upper_bytes=77")
 		}
 		$ServerError.Add("[Qualification:Recovery] event=quote_result run=$RunId case=$Case status=PASS w_complete_upper_bytes=2464 quoted_frames=32 audited_frames=32 audited_accepted_bytes=2464 bound_us=20470537 reason=none tick=$($Tick + 482)")
-		$SampleFields = "outstanding=0 active_grants=0 scheduler_queued=0 native_queued=0 native_observed=32 feedback_observed=32 accepted=100 first_sent=100 acked=100 retired=100 terminal_release=0 journal_backlog=0 materialization_backlog=0 current_tail=$Tail retained=16 oldest=1 required=100 margin=99 journal_failures=0"
+		$SampleFields = "outstanding=0 active_grants=0 scheduler_queued=0 native_queued=0 native_observed=32 feedback_observed=32 accepted=100 first_sent=100 acked=100 retired=100 terminal_release=0 journal_backlog=0 materialization_backlog=0 current_tail=$Tail retained=16 oldest=1 required=100 margin=99 retained_high=16 minimum_retention_margin=99 journal_failures=0"
 		$ServerError.Add("[Qualification:Recovery] event=sample run=$RunId case=$Case elapsed_us=19000000 $SampleFields")
 		$ServerError.Add("[Qualification:Recovery] event=sample run=$RunId case=$Case elapsed_us=20000001 $SampleFields")
 		$ServerError.Add("[Qualification:Recovery] event=reader run=$RunId case=$Case catalog=1 connection_slot=0 connection_generation=0 next_sequence=$Tail prepared=0 pending_relevance=0")
@@ -224,6 +224,30 @@ try {
 		-ExpectedNonces $ExpectedNonces -ExpectedConnections $Connections) } catch { $RejectedMargin = $true }
 	if (-not $RejectedMargin) { throw 'sampled negative journal retention margin was accepted' }
 	[IO.File]::WriteAllText($Server.OutputPath, $OriginalOutput)
+	function Assert-RetentionRejected {
+		param([string]$OutputText, [string]$ErrorText, [string]$Reason)
+		if ($OutputText -ceq $OriginalOutput -and $ErrorText -ceq ($OriginalError -join "`n")) {
+			throw "retention fixture did not mutate: $Reason"
+		}
+		[IO.File]::WriteAllText($Server.OutputPath, $OutputText)
+		[IO.File]::WriteAllText($Server.ErrorPath, $ErrorText)
+		$Rejected = $false
+		try { [void](Assert-RecoveryRecords -Server $Server -Clients $Clients `
+			-ExpectedNonces $ExpectedNonces -ExpectedConnections $Connections) }
+		catch { $Rejected = $true }
+		if (-not $Rejected) { throw "invalid retention evidence was accepted: $Reason" }
+		[IO.File]::WriteAllText($Server.OutputPath, $OriginalOutput)
+		[IO.File]::WriteAllLines($Server.ErrorPath, $OriginalError)
+	}
+	Assert-RetentionRejected -Reason 'reader margin arithmetic' -ErrorText ($OriginalError -join "`n") `
+		-OutputText ($OriginalOutput.Replace('opportunity=1 retained=16 oldest=1 required=100 margin=99',
+			'opportunity=1 retained=16 oldest=1 required=101 margin=99'))
+	Assert-RetentionRejected -Reason 'forged 480-sample minimum' -ErrorText ($OriginalError -join "`n") `
+		-OutputText ($OriginalOutput.Replace('case=structural tick=2481 monotonic_us=208000001 journal_tail=20000 raw_name_bytes=188743680 retained_high=16 minimum_retention_margin=99',
+			'case=structural tick=2481 monotonic_us=208000001 journal_tail=20000 raw_name_bytes=188743680 retained_high=16 minimum_retention_margin=100'))
+	Assert-RetentionRejected -Reason 'recovery sampled high-water mismatch' -OutputText $OriginalOutput `
+		-ErrorText ([regex]::Replace(($OriginalError -join "`n"),
+			'(event=sample run=[^\n]+ case=mixed elapsed_us=19000000 [^\n]*?retained_high=)16', '${1}15'))
 	$OriginalClient = [IO.File]::ReadAllText($Clients[0].OutputPath)
 	[IO.File]::WriteAllText($Clients[0].OutputPath, $OriginalClient.Replace('object_slot=100', 'object_slot=999'))
 	$Rejected = $false

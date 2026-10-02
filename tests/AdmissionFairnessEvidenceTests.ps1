@@ -10,9 +10,13 @@ function New-Event {
 	param([string]$Kind, [UInt64]$Demand, [UInt64]$At, [UInt64]$Slot = 1,
 		[UInt64]$Generation = 1, [string]$Reason = 'none', [UInt64]$Episode = 0,
 		[UInt64]$Token = 0, [UInt64]$Bytes = 100, [UInt64]$CreditAt = 0,
-		[UInt64]$EligibleAt = 0, [UInt64]$PeerCredit = 0)
+		[UInt64]$EligibleAt = 0, [UInt64]$PeerCredit = 0,
+		[UInt64]$GlobalCredit = 524288, [UInt64]$ActiveGrants = [UInt64]($Kind -ceq 'grant_accepted'),
+		[UInt64]$GrantDeferrals = 0, [UInt64]$FundedDeferrals = 0,
+		[UInt64]$CreditDeferrals = 0, [UInt64]$FairnessDeferrals = 0)
 	return (@('event', $Kind, $Reason, $Slot, $Generation, $Demand, $Episode, $Token,
-		$Bytes, $At, $CreditAt, $EligibleAt, $PeerCredit, 524288, 0, 0, 0, 0, 0) -join "`t")
+		$Bytes, $At, $CreditAt, $EligibleAt, $PeerCredit, $GlobalCredit, $ActiveGrants,
+		$GrantDeferrals, $FundedDeferrals, $CreditDeferrals, $FairnessDeferrals) -join "`t")
 }
 
 function Write-Trace {
@@ -65,6 +69,9 @@ try {
 		$Result.RetainedEligibleWaiterCount -ne 1 -or $Result.OpenAfterInterruptionCount -ne 0 -or
 		$Result.RetainedEligibleWaiters[0].ObservedAgeLowerBoundMicroseconds -ne 400 -or
 		$Result.MaximumObservedEligibilityToGrantMicroseconds -ne 200 -or
+		$Result.TraceCanonicalCounterBounds -cne 'MEASURED_PASS' -or
+		$Result.MaximumTraceActiveGrants -ne 1 -or
+		$Result.MaximumTraceGlobalCreditBytes -ne 524288 -or
 		@($Result.PeerWaits | Where-Object { $_.Peer -ceq '1:1' })[0].GrantCount -ne 1 -or
 		@($Result.PeerWaits | Where-Object { $_.Peer -ceq '1:1' })[0].MaximumObservedWaitMicroseconds -ne 200 -or
 		@($Result.PeerWaits | Where-Object { $_.Peer -ceq '2:1' })[0].GrantCount -ne 0) {
@@ -112,6 +119,21 @@ try {
 		throw 'accepted grant beyond canonical wait was not classified as a measured failure'
 	}
 	$Changed = @($Events)
+	$Changed[1] = New-Event credit_eligible 1 1100 -Episode 1 -CreditAt 1050 -EligibleAt 1100 -PeerCredit 524289
+	Assert-Rejected $Changed 'peer credit beyond canonical burst cap'
+	$Changed = @($Events)
+	$Changed[1] = New-Event credit_eligible 1 1100 -Episode 1 -CreditAt 1050 -EligibleAt 1100 -PeerCredit 100 -GlobalCredit 2097153
+	Assert-Rejected $Changed 'global credit beyond canonical burst cap'
+	$Changed = @($Events)
+	$Changed[5] = New-Event grant_accepted 1 1500 -Episode 2 -Token 2 -CreditAt 1050 -EligibleAt 1300 -ActiveGrants 5
+	Assert-Rejected $Changed 'five concurrent native grants'
+	$Changed = @($Events)
+	$Changed[5] = New-Event grant_accepted 1 1500 -Episode 2 -Token 2 -CreditAt 1050 -EligibleAt 1300 -ActiveGrants 0
+	Assert-Rejected $Changed 'accepted grant with no native active grant'
+	$Changed = @($Events)
+	$Changed[4] = New-Event reservation_rolled_back 1 1350 -Reason rollback -Episode 2 -Token 1 -CreditAt 1050 -EligibleAt 1300 -GrantDeferrals 2
+	Assert-Rejected $Changed 'regressing native grant deferrals'
+	$Changed = @($Events)
 	$Changed[5] = New-Event grant_accepted 1 1500 -Episode 2 -Token 1 -CreditAt 1050 -EligibleAt 1300
 	Assert-Rejected $Changed 'reused rollback/grant token'
 	$Changed = @($Events)
@@ -143,7 +165,7 @@ try {
 	Write-Trace -Events $Events -Trailer "end`t15`t0"
 	try { [void](Read-AdmissionFairnessEvidence -Path $Path -RunId $RunId); throw 'bad trailer accepted' }
 	catch { if ($_.Exception.Message -ceq 'bad trailer accepted') { throw } }
-	Write-Output '[Qualification:Admission] analyzer_cases=16 PASS'
+Write-Output '[Qualification:Admission] analyzer_cases=21 PASS'
 } finally {
 	$Resolved = [IO.Path]::GetFullPath($Root)
 	if ($Resolved.StartsWith([IO.Path]::GetFullPath([IO.Path]::GetTempPath()), [StringComparison]::OrdinalIgnoreCase) -and

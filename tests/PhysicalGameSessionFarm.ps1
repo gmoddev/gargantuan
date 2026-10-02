@@ -83,8 +83,15 @@ function Get-Records {
 	param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][string]$Kind)
 	if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return @() }
 	$Prefix = "[Qualification:$Kind] "
-	return @(Read-SharedLogLines -Path $Path | Where-Object { $_.StartsWith($Prefix, [StringComparison]::Ordinal) } |
-		ForEach-Object { Get-Fields -Line $_ })
+	$Rows = [Collections.Generic.List[object]]::new()
+	$Lines = Read-SharedLogLines -Path $Path
+	for ($Index = 0; $Index -lt $Lines.Count; $Index++) {
+		if (-not $Lines[$Index].StartsWith($Prefix, [StringComparison]::Ordinal)) { continue }
+		$Fields = Get-Fields -Line $Lines[$Index]
+		$Fields['__line'] = $Index
+		$Rows.Add($Fields)
+	}
+	return @($Rows)
 }
 
 function Get-RecoveryDiagnostics {
@@ -271,21 +278,37 @@ function Assert-RecoveryRecords {
 			[long]$Cessations[0].monotonic_us -le [long]$Starts[0].monotonic_us) {
 			throw "recovery case $Case lacks bounded 480-opportunity cessation evidence"
 		}
+		$Tail = Get-RecoveryUnsigned -Row $Cessations[0] -Field 'journal_tail'
 		if ($ExpectedOffers -gt 0) {
+			$MinimumObservedRetentionMargin = [long]::MaxValue
+			$MaximumObservedRetained = 0L
 			for ($Index = 0; $Index -lt 480; $Index++) {
 				$Offer = $Offers[$Index]
+				$RetentionRow = $Retention[$Index]
+				$Oldest = Get-RecoveryUnsigned -Row $RetentionRow -Field 'oldest'
+				$Required = Get-RecoveryUnsigned -Row $RetentionRow -Field 'required'
+				$Margin = Get-RecoveryUnsigned -Row $RetentionRow -Field 'margin'
+				$Retained = Get-RecoveryUnsigned -Row $RetentionRow -Field 'retained'
 				if ([int]$Offer.opportunity -ne $Index + 1 -or [int]$Offer.mutations -ne 16 -or
 					[int]$Offer.name_bytes -ne 24576 -or
-					[int]$Retention[$Index].opportunity -ne $Index + 1 -or
-					[long]$Retention[$Index].margin -lt 0 -or
-					[long]$Retention[$Index].retained -lt 0 -or
-					[long]$Retention[$Index].retained -gt 16384 -or
+					[int]$RetentionRow.opportunity -ne $Index + 1 -or
+					[long]$Offer.__line -ge [long]$RetentionRow.__line -or
+					($Index -lt 479 -and [long]$RetentionRow.__line -ge [long]$Offers[$Index + 1].__line) -or
+					$Oldest -lt 1 -or $Required -lt $Oldest -or $Required -gt $Tail -or
+					$Margin -ne ($Required - $Oldest) -or $Retained -gt 16384 -or
 					($Index -gt 0 -and [long]$Offer.monotonic_us - [long]$Offers[$Index - 1].monotonic_us -lt 16667)) {
 					throw "recovery case $Case has an invalid structural offer cadence"
 				}
+				$MinimumObservedRetentionMargin = [math]::Min($MinimumObservedRetentionMargin, $Margin)
+				$MaximumObservedRetained = [math]::Max($MaximumObservedRetained, $Retained)
+			}
+			if ($MinimumObservedRetentionMargin -ne
+				(Get-RecoveryUnsigned -Row $Cessations[0] -Field 'minimum_retention_margin') -or
+				$MaximumObservedRetained -ne
+				(Get-RecoveryUnsigned -Row $Cessations[0] -Field 'retained_high')) {
+				throw "recovery case $Case cessation summary differs from 480 native retention samples"
 			}
 		}
-		$Tail = [long]$Cessations[0].journal_tail
 		$ExpectedRaw = if ($Case -eq 'gameplay') { 0L } else { 188743680L }
 		if ($Tail -le 0 -or [long]$Cessations[0].raw_name_bytes -ne $ExpectedRaw -or
 			[long]$Cessations[0].minimum_retention_margin -lt 0 -or
@@ -336,9 +359,19 @@ function Assert-RecoveryRecords {
 		} elseif ($NameRows.Count -ne 0) { throw 'gameplay recovery unexpectedly has Name ACKs' }
 		$Samples = @($Window | Where-Object { $_.event -eq 'sample' })
 		if ($Samples.Count -eq 0) { throw "recovery $Case lacks native service samples" }
+		$ObservedRetainedHigh = Get-RecoveryUnsigned -Row $Cessations[0] -Field 'retained_high'
+		$ObservedMinimumMargin = Get-RecoveryUnsigned -Row $Cessations[0] -Field 'minimum_retention_margin'
 		foreach ($Sample in $Samples) {
-			if ([long]$Sample.margin -lt 0 -or [long]$Sample.retained -lt 0 -or
-				[long]$Sample.retained -gt 16384 -or
+			$Oldest = Get-RecoveryUnsigned -Row $Sample -Field 'oldest'
+			$Required = Get-RecoveryUnsigned -Row $Sample -Field 'required'
+			$Margin = Get-RecoveryUnsigned -Row $Sample -Field 'margin'
+			$Retained = Get-RecoveryUnsigned -Row $Sample -Field 'retained'
+			$ObservedRetainedHigh = [math]::Max($ObservedRetainedHigh, $Retained)
+			$ObservedMinimumMargin = [math]::Min($ObservedMinimumMargin, $Margin)
+			if ($Oldest -lt 1 -or $Required -lt $Oldest -or $Required -gt $Tail -or
+				$Margin -ne ($Required - $Oldest) -or $Retained -gt 16384 -or
+				(Get-RecoveryUnsigned -Row $Sample -Field 'retained_high') -ne $ObservedRetainedHigh -or
+				(Get-RecoveryUnsigned -Row $Sample -Field 'minimum_retention_margin') -ne $ObservedMinimumMargin -or
 				[long]$Sample.journal_failures -ne 0 -or [long]$Sample.current_tail -ne $Tail) {
 				throw "recovery $Case lost retained journal coverage or mutated after cessation"
 			}

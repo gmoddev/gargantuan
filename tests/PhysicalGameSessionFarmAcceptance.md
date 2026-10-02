@@ -71,6 +71,14 @@ run-scoped verdict against the canonical 220.5-ms first-grant eligibility bound;
 an interruption, disposal, or open demand makes complete exact-demand episode
 coverage inconclusive. Even a passing set of accepted grants does not prove
 continuous semantic backlog, sustained fair share, or overload backpressure.
+The sealed admission timeline additionally rejects any snapshot exceeding the
+four-grant or peer/global credit caps, a grant-accepted snapshot with no active
+grant, or regressing cumulative deferrals. Its maxima and final sampled
+deferrals must fit the native final high-water and counters, and terminal
+pending enter/leave totals must reconcile. This is a bounded diagnostic
+subset: the trace has no grant-retirement event or continuous semantic backlog
+ledger, so it cannot prove one ACK-gated grant per peer between snapshots or
+saturated fair-share service.
 
 For Node, the report also checks the indexed authenticated manifest RPC
 receipt against the run manifest and reconciliation fields. Without additional
@@ -125,7 +133,10 @@ failures do not establish the high-water retention margin. When the
 indexed three-case recovery workload is present, the report separately records
 that its 480 structural/mixed offer samples and recovery samples stayed within
 the 16,384-record window with nonnegative observed reader margin. This sampled
-verdict cannot rule out a transient minimum between observation points. Full
+verdict now also verifies each reader margin as `required - oldest`, source-log
+offer/retention order, exact 480-sample minimum and high-water against the
+cessation summary, and monotonic cumulative recovery minima/maxima. It cannot
+rule out a transient minimum between observation points. Full
 fairness, backpressure, and continuous journal retention remain `NOT MEASURED`
 until their own bounded typed traces and acceptance analyzers exist.
 

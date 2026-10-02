@@ -137,7 +137,7 @@ function Save-RecoveryLogs {
 			for ($Opportunity = 1; $Opportunity -le 480; $Opportunity++) {
 				$Time = 100000000 * ($CaseIndex + 1) + $Opportunity * 16667
 				$ServerOutput.Add("[Qualification:Recovery] event=structural_offer run=$RunId case=$Case opportunity=$Opportunity mutations=16 name_bytes=24576 monotonic_us=$Time")
-				$ServerOutput.Add("[Qualification:Recovery] event=retention run=$RunId case=$Case opportunity=$Opportunity retained=16 margin=99")
+				$ServerOutput.Add("[Qualification:Recovery] event=retention run=$RunId case=$Case opportunity=$Opportunity retained=16 oldest=1 required=100 margin=99")
 			}
 		}
 		$ServerOutput.Add("[Qualification:Recovery] event=all_opportunities run=$RunId case=$Case opportunities=480 elapsed_us=8000000 tick=$($Tick + 480)")
@@ -155,7 +155,7 @@ function Save-RecoveryLogs {
 			$ServerError.Add("[Qualification:Recovery] event=quote_peer run=$RunId case=$Case connection_slot=$Peer connection_generation=1 accepted_unretired_complete_bytes=0 future_complete_bytes=77 w_complete_upper_bytes=77")
 		}
 		$ServerError.Add("[Qualification:Recovery] event=quote_result run=$RunId case=$Case status=PASS w_complete_upper_bytes=2464 quoted_frames=32 audited_frames=32 audited_accepted_bytes=2464 bound_us=20470537 reason=none tick=$($Tick + 482)")
-		$Sample = "outstanding=0 active_grants=0 scheduler_queued=0 native_queued=0 native_observed=32 feedback_observed=32 accepted=100 first_sent=100 acked=100 retired=100 terminal_release=0 journal_backlog=0 materialization_backlog=0 current_tail=$Tail retained=16 oldest=1 required=100 margin=99 journal_failures=0"
+		$Sample = "outstanding=0 active_grants=0 scheduler_queued=0 native_queued=0 native_observed=32 feedback_observed=32 accepted=100 first_sent=100 acked=100 retired=100 terminal_release=0 journal_backlog=0 materialization_backlog=0 current_tail=$Tail retained=16 oldest=1 required=100 margin=99 retained_high=16 minimum_retention_margin=99 journal_failures=0"
 		$ServerError.Add("[Qualification:Recovery] event=sample run=$RunId case=$Case elapsed_us=19000000 $Sample")
 		$ServerError.Add("[Qualification:Recovery] event=sample run=$RunId case=$Case elapsed_us=20000001 $Sample")
 		$ServerError.Add("[Qualification:Recovery] event=reader run=$RunId case=$Case catalog=1 connection_slot=0 connection_generation=0 next_sequence=$Tail prepared=0 pending_relevance=0")
@@ -268,7 +268,7 @@ function New-RunFixture {
 	}
 	Save-HostRows -Root $ServerRoot -RunId $RunId -Role 'Server' -Provider $Provider
 	Save-HostRows -Root $ClientRoot -RunId $RunId -Role 'Clients' -Provider $Provider
-	$AdmissionLine = "[Qualification:Admission] event=result run=$RunId accepted=8192 retired=8192 terminal_release=0 outstanding=0 outstanding_high=2048 active_grants=0 grants_high=2 grant_deferrals=3 funded_deferrals=2 credit_deferrals=1 fairness_deferrals=1 max_wait_us=1000 peer_backlog_high=2048 global_backlog_high=8192 peer_credit_high=2048 global_credit_high=8192 fairness_rotations=1 pending_enters=0 pending_leaves=0 materialization_backlog=0 journal_backlog=0 structural_active_peers=0 oldest_pending_ticks=0 backlog_failures=0 journal_failures=0"
+	$AdmissionLine = "[Qualification:Admission] event=result run=$RunId accepted=8192 retired=8192 terminal_release=0 outstanding=0 outstanding_high=8192 active_grants=0 grants_high=2 grant_deferrals=3 funded_deferrals=2 credit_deferrals=1 fairness_deferrals=1 max_wait_us=1000 peer_backlog_high=2048 global_backlog_high=8192 peer_credit_high=8192 global_credit_high=8192 fairness_rotations=1 pending_enters=0 pending_leaves=0 materialization_backlog=0 journal_backlog=0 structural_active_peers=0 oldest_pending_ticks=0 backlog_failures=0 journal_failures=0"
 	[IO.File]::WriteAllText((Join-Path $ServerRoot 'server.stdout.log'), "$AdmissionLine`n")
 	$Recovery = if ($RecoveryWorkload) {
 		Save-RecoveryLogs -ServerRoot $ServerRoot -ClientRoot $ClientRoot `
@@ -286,10 +286,10 @@ function New-RunFixture {
 		Identity = @{ Ready = 32; Connections = $Connections }
 		Admission = @{
 			accepted = 8192; retired = 8192; terminal_release = 0; outstanding = 0
-			outstanding_high = 2048; active_grants = 0; grants_high = 2
+			outstanding_high = 8192; active_grants = 0; grants_high = 2
 			grant_deferrals = 3; funded_deferrals = 2; credit_deferrals = 1
 			fairness_deferrals = 1; max_wait_us = 1000; peer_backlog_high = 2048
-			global_backlog_high = 8192; peer_credit_high = 2048; global_credit_high = 8192
+			global_backlog_high = 8192; peer_credit_high = 8192; global_credit_high = 8192
 			fairness_rotations = 1; pending_enters = 0; pending_leaves = 0
 			materialization_backlog = 0; journal_backlog = 0; structural_active_peers = 0
 			oldest_pending_ticks = 0; backlog_failures = 0; journal_failures = 0
