@@ -19,6 +19,10 @@ import sys
 import time
 import uuid
 
+# The pinned worker Python uses python312._pth and omits the script directory.
+# The fixed helper and its sibling ACL module are staged together under one
+# private, hash-verified tool root.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from private_ticket_acl import AssertPrivate, Harden
 
 

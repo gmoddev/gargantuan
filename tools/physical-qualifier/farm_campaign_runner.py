@@ -19,6 +19,8 @@ import sys
 import time
 import uuid
 
+# The pinned worker Python's ._pth does not add this verified stage directory.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from dependency import GetRoot
 
 UPSTREAM = GetRoot()

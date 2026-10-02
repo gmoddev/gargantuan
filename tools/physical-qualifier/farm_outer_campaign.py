@@ -140,6 +140,40 @@ class Transport:
             raise ValueError("[Qualification:FarmOuter] worker hash proof unavailable")
         return Value
 
+    def AddControlFirewall(self, RunId):
+        if not re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", RunId):
+            raise ValueError("[Qualification:FarmOuter] invalid control firewall run identity")
+        Name = "Codex-Gargantuan-Farm32-Control-" + RunId
+        Script = ("$ErrorActionPreference='Stop';$ProgressPreference='SilentlyContinue';"
+                  "$Name='" + Name + "';$Program='" + self.WorkerPython + "';"
+                  "$Added=$false;try{"
+                  "if(Get-NetFirewallRule -Name $Name -ErrorAction SilentlyContinue){"
+                  "throw 'stale task-owned control rule'};"
+                  "New-NetFirewallRule -Name $Name -DisplayName $Name -Direction Inbound "
+                  "-Action Allow -Protocol TCP -LocalPort 39451 -LocalAddress 192.168.0.108 "
+                  "-RemoteAddress 192.168.0.68 -Program $Program -Profile Private "
+                  "-Enabled True | Out-Null;$Added=$true;"
+                  "if(-not(Get-NetFirewallRule -Name $Name -ErrorAction Stop)){"
+                  "throw 'control rule did not persist'}"
+                  "}catch{if($Added){Get-NetFirewallRule -Name $Name -ErrorAction SilentlyContinue|"
+                  "Remove-NetFirewallRule -ErrorAction SilentlyContinue};throw}")
+        Encoded = base64.b64encode(Script.encode("utf-16le")).decode("ascii")
+        Checked(["ssh", "-o", "BatchMode=yes", WORKER_ALIAS, "pwsh.exe",
+                 "-NoProfile", "-NonInteractive", "-EncodedCommand", Encoded], 20)
+
+    def RemoveControlFirewall(self, RunId):
+        if not re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", RunId):
+            raise ValueError("[Qualification:FarmOuter] invalid control firewall run identity")
+        Name = "Codex-Gargantuan-Farm32-Control-" + RunId
+        Script = ("$ErrorActionPreference='Stop';$ProgressPreference='SilentlyContinue';"
+                  "$Name='" + Name + "';$Rule=Get-NetFirewallRule -Name $Name -ErrorAction Stop;"
+                  "$Rule|Remove-NetFirewallRule -ErrorAction Stop;"
+                  "if(Get-NetFirewallRule -Name $Name -ErrorAction SilentlyContinue){"
+                  "throw 'task-owned control rule remained'}")
+        Encoded = base64.b64encode(Script.encode("utf-16le")).decode("ascii")
+        Checked(["ssh", "-o", "BatchMode=yes", WORKER_ALIAS, "pwsh.exe",
+                 "-NoProfile", "-NonInteractive", "-EncodedCommand", Encoded], 20)
+
     def MakeWorkerToolRoot(self, Root):
         Root = WorkerSandbox(Root)
         Script = ("$ErrorActionPreference='Stop';"
@@ -504,6 +538,14 @@ def Launch(PrivateRoot, SpecPath, WorkerPython, WorkerHelper, TransportInstance=
         else:
             from farm_outer_endpoint import Verify
             Verify(Roots[Role], Index)
+    TransportInstance.AddControlFirewall(Identity["RunId"])
+    try:
+        return LaunchPrepared(TransportInstance, Roots, Spec, Identity, PrivateRoot)
+    finally:
+        TransportInstance.RemoveControlFirewall(Identity["RunId"])
+
+
+def LaunchPrepared(TransportInstance, Roots, Spec, Identity, PrivateRoot):
     BarrierStart = time.monotonic()
     ControlProbe(TransportInstance, Identity["RunId"])
     ProbeElapsed = time.monotonic() - BarrierStart

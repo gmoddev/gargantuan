@@ -1,5 +1,6 @@
 """Mock transfer tests for fixed Farm32 two-host staging."""
 
+import base64
 import hashlib
 import json
 from pathlib import Path
@@ -20,6 +21,15 @@ REAL_WORKER_SANDBOX = Outer.WorkerSandbox
 
 
 class MockTransport:
+    def __init__(self):
+        self.ControlRules = []
+
+    def AddControlFirewall(self, RunId):
+        self.ControlRules.append(("add", RunId))
+
+    def RemoveControlFirewall(self, RunId):
+        self.ControlRules.append(("remove", RunId))
+
     def WorkerDigest(self, File):
         if File.endswith("python.exe"):
             return "a" * 64
@@ -48,6 +58,16 @@ class MockTransport:
 
 
 class OuterCampaignTests(unittest.TestCase):
+    def test_staged_entrypoints_import_siblings_with_isolated_python(self):
+        for Name, Arguments in (("farm_outer_endpoint.py", ["--help"]),
+                                ("farm_campaign_runner.py", ["--help"]),
+                                ("farm_lifecycle.py", [])):
+            with self.subTest(Name=Name):
+                Result = subprocess.run([sys.executable, "-I", "-B", str(ROOT / Name),
+                                         *Arguments], capture_output=True, text=True,
+                                        timeout=10, check=False)
+                self.assertEqual(Result.returncode, 0, Result.stderr)
+
     def setUp(self):
         self.Fixture = FarmTicketStagingTests(methodName="test_fresh_secrets_fixed_copy_plan_and_runner_schema")
         self.Fixture.setUp()
@@ -137,6 +157,47 @@ class OuterCampaignTests(unittest.TestCase):
         Target.write_text(json.dumps(Row), encoding="utf-8")
         with self.assertRaises(ValueError):
             Outer.RequireFreshPreflights(self.Fixture.Private, self.Fixture.Identity)
+
+    def test_control_firewall_is_run_bound_and_removed_after_probe_failure(self):
+        Transport = MockTransport()
+        for Role in ("SERVER", "CLIENT"):
+            Source = Path(self.Fixture.Spec["Roles"][Role]["PreflightSource"])
+            Target = self.Fixture.Private / ("server-preflight.json" if Role == "SERVER" else
+                                             "client-preflight.json")
+            shutil.copyfile(Source, Target)
+        Outer.Stage(self.Fixture.Private, self.Fixture.SpecFile,
+                    r"C:\Python312\python.exe", r"C:\Sandbox\farm_outer_endpoint.py",
+                    Transport)
+        with mock.patch.object(Outer, "ControlProbe", side_effect=TimeoutError("mock blocked")):
+            with self.assertRaisesRegex(TimeoutError, "mock blocked"):
+                Outer.Launch(self.Fixture.Private, self.Fixture.SpecFile,
+                             r"C:\Python312\python.exe", r"C:\Sandbox\farm_outer_endpoint.py",
+                             Transport)
+        self.assertEqual([("add", self.Fixture.Identity["RunId"]),
+                          ("remove", self.Fixture.Identity["RunId"])], Transport.ControlRules)
+
+    def test_worker_firewall_commands_pin_one_program_port_and_peer(self):
+        Calls = []
+        def Capture(Arguments, Timeout):
+            Calls.append((Arguments, Timeout))
+        Transport = Outer.Transport(r"C:\Sandbox\Codex\Tools\physical-qualifier\runtime\python.exe",
+                                    r"C:\Sandbox\Codex\Tools\farm\farm_outer_endpoint.py")
+        RunId = self.Fixture.Identity["RunId"]
+        with mock.patch.object(Outer, "Checked", side_effect=Capture):
+            Transport.AddControlFirewall(RunId)
+            Transport.RemoveControlFirewall(RunId)
+        self.assertEqual(2, len(Calls))
+        Add = base64.b64decode(Calls[0][0][-1]).decode("utf-16le")
+        Remove = base64.b64decode(Calls[1][0][-1]).decode("utf-16le")
+        for Fixed in ("-LocalPort 39451", "-LocalAddress 192.168.0.108",
+                      "-RemoteAddress 192.168.0.68", "-Profile Private",
+                      "-Program $Program"):
+            self.assertIn(Fixed, Add)
+        self.assertIn("Codex-Gargantuan-Farm32-Control-" + RunId, Add)
+        self.assertIn("Codex-Gargantuan-Farm32-Control-" + RunId, Remove)
+        self.assertIn("Remove-NetFirewallRule", Remove)
+        with self.assertRaisesRegex(ValueError, "invalid control firewall run identity"):
+            Transport.AddControlFirewall("not-a-run")
 
     def test_collected_worker_index_verifies_every_member(self):
         Remote = self.Fixture.Root / "mock-worker-evidence"
