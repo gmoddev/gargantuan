@@ -2358,9 +2358,9 @@ investigation. Neither zero NIC error deltas nor clean cleanup establish zero
 capture/socket loss.
 
 The first 80,000 client capture packets show median 100-packet batch spacings of
-15,527.6 us and 15,545.8 us by direction. The synthetic emitter's short blocking
-`select` wait therefore underfeeds the planned capture-size exercise on these
-hosts. An artifact-only pacing correction preserves the original packet count,
+15,527.6 us and 15,545.8 us by direction. This was initially attributed to the
+synthetic emitter's short blocking `select` wait. The later V3 reproduction below
+disproves that as a sufficient explanation. An artifact-only pacing correction preserves the original packet count,
 20,000-packet/s ceiling, burst, and 480-second traffic bound. The failed outer
 controller also stopped its client capture child before the child's normal
 600-second close, losing final dumpcap loss diagnostics; the correction preserves
@@ -2371,3 +2371,32 @@ cleanup succeeded. Raw evidence is retained under the run ID in worker
 `C:\Sandbox\Codex\Evidence\Farm32NearCap-v1\`. Offline diagnostic export of the
 retained ETL is separate from near-capacity acceptance. No Local/Node qualification
 was performed and KI-006 remains open.
+
+Synthetic V3 run `845edec4-c1f7-4f6e-96c2-3747ae9caba1` remains **INCOMPLETE**.
+The run-bound, per-flow HELLO exchange preceded DATA; endpoint ledgers account
+for all 3,053,100 client DATA packets and all 3,052,400 worker DATA packets,
+with zero missing sequences. This establishes endpoint delivery for this run,
+not capture completeness. Worker ETL reached only 9,649,520,640 B. The client
+captured 6,113,310 packets and reported 1,022 pcap-buffer drops (dumpcap queue
+drops zero). The zero-loss gate therefore fails independently of capacity.
+Both capture services returned idle, both endpoint process inventories were
+empty, and task UDP sockets were released. Source/evidence is retained in the
+V3 artifact directory and the same endpoint evidence parents with this fresh UUID.
+
+Pinned Python 3.12.6 reports `monotonic()` as `GetTickCount64()` with 15.625-ms
+resolution. V3's nonblocking receive polling still produced median 100-packet
+spacings of 15,597.9/15,616.85 us. The 5-ms send deadlines used that coarse clock.
+V4 preparation uses monotonic, nonadjustable `QueryPerformanceCounter()` through
+`perf_counter()`, reported resolution 0.1 us, and rejects an inadequate pacing
+clock before opening sockets. A two-second no-network pacing check observed
+365 batches, median 5,475 us, minimum 5,007 us, maximum 6,375 us. Packet count,
+rate/burst ceilings, traffic duration and capture acceptance are unchanged.
+This local pacing check does not qualify live capture throughput or loss.
+
+The earlier V1 retained ETL was independently exported in 626,366 ms: 6,254,166
+complete frames, 6,255,341 events, zero reported ETW event loss, and a
+9,098,531,060-B pcapng. Bounded inspection finds all initial 3,800 client DATA
+packets in the worker NIC capture before the worker's first transmission. The
+missing V1 socket receipt packets therefore lie after that capture observation;
+the exact Windows filtering/drop mechanism was NOT MEASURED. Historical evidence
+is preserved and no later result upgrades either failed synthetic run.
