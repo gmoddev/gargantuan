@@ -148,6 +148,15 @@ must not be reported as having run on the current headless worker.
 
 ## Failure artifacts and hardening
 
+The standalone Release reliable-workload gate emits per-case
+`[Qualification:WorkloadTiming]` maxima for step intervals, each runtime step,
+session poll and session step, fixture observation, and sleep overshoot. These
+are wall times and can include host preemption; they do not by themselves
+attribute a stall to production CPU work. They reset between cases, unlike the
+session's lifetime remote-service-gap high-water. All RPC/Event/action latency
+gates remain unchanged: a host timing hypothesis does not turn a failed run into
+a PASS or permit its samples to be discarded.
+
 CTest prints failing output and writes JUnit results. On any failed job, the
 workflow uploads the configure log, CTest log, and JUnit file when available.
 No dependency or compiler cache is required for correctness; only the

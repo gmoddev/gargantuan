@@ -339,6 +339,10 @@ void RunReliableGameplayWorkload(
 		double MaximumRequiredAgeMs = 0;
 		std::size_t ServerBacklogHigh = 0;
 		std::uint64_t RecoveryActionRejections = 0;
+		std::uint64_t StepCount = 0;
+		double StepIntervalMs = 0, ClientRuntimeMs = 0, ServerRuntimeMs = 0;
+		double ServerPollMs = 0, ClientPollMs = 0, ServerSessionMs = 0, ClientSessionMs = 0;
+		double ObserverMs = 0, SleepOvershootMs = 0;
 	};
 	struct PendingEvent { Clock::time_point Started; std::vector<WireValue> Arguments; };
 	Observation Results;
@@ -407,14 +411,27 @@ void RunReliableGameplayWorkload(
 		else ++Results.Rejected;
 		Results.PendingHighWater = std::max(Results.PendingHighWater, PendingRequests);
 	};
+	std::optional<Clock::time_point> PreviousStepStarted;
 	auto Step = [&]() {
-		const auto Next = Clock::now() + std::chrono::microseconds(16'667);
-		ClientRuntime.Step();
-		ServerRuntime.Step();
-		(void)Server.Poll();
-		(void)Client.Poll();
-		Server.Step(Tick);
-		Client.Step(Tick++);
+		const auto StepStarted = Clock::now();
+		if (PreviousStepStarted)
+			Results.StepIntervalMs = std::max(Results.StepIntervalMs,
+				std::chrono::duration<double, std::milli>(StepStarted - *PreviousStepStarted).count());
+		PreviousStepStarted = StepStarted;
+		++Results.StepCount;
+		const auto Next = StepStarted + std::chrono::microseconds(16'667);
+		auto Measure = [&](double &Maximum, auto &&Operation) {
+			const auto Started = Clock::now();
+			Operation();
+			Maximum = std::max(Maximum, std::chrono::duration<double, std::milli>(Clock::now() - Started).count());
+		};
+		Measure(Results.ClientRuntimeMs, [&] { ClientRuntime.Step(); });
+		Measure(Results.ServerRuntimeMs, [&] { ServerRuntime.Step(); });
+		Measure(Results.ServerPollMs, [&] { (void)Server.Poll(); });
+		Measure(Results.ClientPollMs, [&] { (void)Client.Poll(); });
+		Measure(Results.ServerSessionMs, [&] { Server.Step(Tick); });
+		Measure(Results.ClientSessionMs, [&] { Client.Step(Tick++); });
+		const auto ObserverStarted = Clock::now();
 		if (ActionStarted) {
 			const auto Resolved = ActionService->GetAttributeValue("WorkloadResolved");
 			const auto Rejected = ActionService->GetAttributeValue("WorkloadRejected");
@@ -482,7 +499,14 @@ void RunReliableGameplayWorkload(
 			Results.PreparedSamples += Requirement.PreparedCommit;
 			Check(Requirement.Cursor.NextSequence >= Oldest, "live journal requirement remains retained");
 		}
+		const auto BeforeSleep = Clock::now();
+		Results.ObserverMs = std::max(Results.ObserverMs,
+			std::chrono::duration<double, std::milli>(BeforeSleep - ObserverStarted).count());
 		std::this_thread::sleep_until(Next);
+		// Attribute only time beyond the requested sleep or an already-late
+		// entry. These wall times include preemption and do not prove CPU cost.
+		Results.SleepOvershootMs = std::max(Results.SleepOvershootMs,
+			std::chrono::duration<double, std::milli>(Clock::now() - std::max(Next, BeforeSleep)).count());
 	};
 	auto Percentile = [](std::vector<double> Values, double Fraction) {
 		if (Values.empty()) return 0.0;
@@ -503,6 +527,7 @@ void RunReliableGameplayWorkload(
 	for (int Frame = 0; Frame < 120; ++Frame) Step();
 	for (const auto &Case : Cases) {
 		Results = {};
+		PreviousStepStarted.reset();
 		RecoveryProbeActive = false;
 		const auto Started = Clock::now();
 		const auto Before = Server.GetMetrics();
@@ -690,6 +715,12 @@ void RunReliableGameplayWorkload(
 			<< " pending_enters=" << After.StructuralPendingEnters << " pending_leaves=" << After.StructuralPendingLeaves
 			<< " decode_ns=" << Client.GetMetrics().ClientStructuralDecodeNanoseconds
 			<< " apply_ns=" << Client.GetMetrics().ClientStructuralApplyNanoseconds << '\n';
+		std::cout << "[Qualification:WorkloadTiming] case=" << Case.Name << " steps=" << Results.StepCount
+			<< " step_interval_max_ms=" << Results.StepIntervalMs
+			<< " client_runtime_max_ms=" << Results.ClientRuntimeMs << " server_runtime_max_ms=" << Results.ServerRuntimeMs
+			<< " server_poll_max_ms=" << Results.ServerPollMs << " client_poll_max_ms=" << Results.ClientPollMs
+			<< " server_session_max_ms=" << Results.ServerSessionMs << " client_session_max_ms=" << Results.ClientSessionMs
+			<< " observer_max_ms=" << Results.ObserverMs << " sleep_overshoot_max_ms=" << Results.SleepOvershootMs << '\n';
 		Check(After.ReliableAdmission.PeerCreditHighWater <= CandidateReliableService().PeerCreditCap() &&
 			After.ReliableAdmission.GlobalCreditHighWater <= CandidateReliableService().GlobalCreditCap(),
 			"finite peer and global credit stay within unchanged caps");
