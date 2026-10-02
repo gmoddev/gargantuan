@@ -221,3 +221,27 @@ At the time of that ordering fix, POOLED_SERVICE, physical gates, KI-006,
 Foundation 3L status and 3M were unchanged. D01 later superseded the
 short-window acceptance rules; F1 now supersedes D01's cross-grant service
 deficit for future qualification while those receipts remain historical.
+
+The Farm32 outer controller is `farm_outer_campaign.py`. Its `prepare` operation
+creates one-use ticket identity, generates a deployment-hash-checked scale
+manifest on the worker from both packaged roles, retains the exact same
+manifest bytes for the client, performs fresh role-local inventory (including
+the 8 GiB client free-memory floor), and seals `farm_ticket_staging.py`'s fixed
+copy plan. `stage` copies only those planned files plus the pinned coordinator
+runtime into private endpoint roots, verifies every copied member locally at
+each endpoint, and rechecks the worker Python/helper hash pins. The worker owns
+the normal-LAN coordinator listener on `192.168.0.108:39451`, while the client
+connects outbound; a nonce-bound control-only socket probe and the same-run
+`LISTENING_UNQUALIFIED` marker precede the two role launches. The fixed runner
+and endpoint helper use bounded hidden processes. `collect` copies every worker
+index member with a fresh SHA-256 check, binds the coordinator and both role
+results, and invokes the existing offline capture reconciler. For Node, it
+mirrors the bounded Node receipts/logs at their original one-run absolute path
+so the receipt's immutable path and hash pins remain verifiable. These
+operations record execution and sealed evidence only. Capture directions, real
+Node TLS, workload
+behavior, and all Foundation 3L acceptance gates remain independently checked
+by the offline reconciliation and acceptance tools; no outer stage result is a
+physical or provider PASS. This path has source/mock coverage but requires an
+official workflow-dispatch package, installed side-by-side Farm32 service,
+endpoint runtime staging, and actual control-only qualification before use.
