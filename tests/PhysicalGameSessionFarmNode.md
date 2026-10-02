@@ -9,16 +9,17 @@ and certificate policy.
 
 `Prepare` requires the farm run manifest and its out-of-band SHA-256, the
 hash-verified Server package, the qualified-scale descriptor and its SHA-256,
-an approved Node binary and SHA-256/source commit, a certificate/private-key
+an approved Node binary and SHA-256/source commit, a hash-pinned Windows
+`go.exe` metadata inspector, a certificate/private-key
 pair, and the manifest-pinned root CA. It checks the full Server deployment
 manifest, then requires the descriptor's dynamic `project_id`/`revision` to
 match `game.package.json` and `content/content.manifest.json`. The generated
-stage also requires `go.exe` on the Server endpoint and checks `go version -m`
+stage invokes the pinned `go.exe` with `version -m`
 on the exact hash-pinned Node binary. Its embedded `vcs=git`, `vcs.revision`,
 and `vcs.modified=false` must match the declared Node source commit. A binary
 built from a dirty source tree or a managed Git worktree without embedded VCS
 metadata fails closed. The stage records `NodeBinaryVcsStatus=MATCHED_CLEAN`;
-`Run` rechecks the binary hash and embedded revision before launch. The generated
+`Run` rechecks the inspector and binary hashes and embedded revision before launch. The generated
 TOML gives Node only a filesystem content package for that exact identity and
 the `content.manifest.read`/`content.blob.read` game-server principal. The
 Node token is read from the environment; neither it nor the private-key bytes
@@ -62,7 +63,7 @@ Optionally pass `-OfficialNodeBinary <path>` to also check the generated TOML
 with the pinned official `gargantuan-node validate-config --config` command.
 The fixture builds a local mock listener, tests bounded owned-child stop/reap,
 single-use staging, descriptor mismatch, wrong SAN, binary/validator-pin,
-wrong or absent embedded revision and dirty-source build
+wrong or absent embedded revision, dirty-source build, and inspector hash
 rejection, and exclusion of token/key material from staging. CMake registers it
 on Windows when both PowerShell 7 and Go are available. It never runs the
 physical farm.

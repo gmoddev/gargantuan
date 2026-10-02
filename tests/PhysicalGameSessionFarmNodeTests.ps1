@@ -49,6 +49,8 @@ $OldToken = [Environment]::GetEnvironmentVariable('GARGANTUAN_ENGINE_ADAPTER_TOK
 try {
 	$Tools = Join-Path $Root 'Tools'
 	[void][IO.Directory]::CreateDirectory($Tools)
+	$PinnedGo = Join-Path $Tools 'go.exe'
+	Copy-Item -LiteralPath (Get-Command $GoExecutable -CommandType Application).Source -Destination $PinnedGo
 	$Source = Join-Path $Tools 'PhysicalGameSessionFarmNode.ps1'
 	$Validator = Join-Path $Tools 'PhysicalGameSessionFarmEndpoint.ps1'
 	Copy-Item -LiteralPath $OriginalSource -Destination $Source
@@ -154,7 +156,8 @@ func main() {
 		RunManifestSha256 = Get-Pin $ManifestPath; ServerPackageRoot = $Package
 		DescriptorPath = $DescriptorPath; DescriptorSha256 = Get-Pin $DescriptorPath
 		NodeExecutablePath = $MockExecutable; NodeExecutableSha256 = Get-Pin $MockExecutable
-		NodeSourceCommit = $MockCommit; CertificatePath = $Certificate
+		NodeSourceCommit = $MockCommit; GoExecutablePath = $PinnedGo
+		GoExecutableSha256 = Get-Pin $PinnedGo; CertificatePath = $Certificate
 		PrivateKeyPath = $PrivateKey; RootCertificatePath = $Certificate
 	}
 	$Bad = $Prepare.Clone(); $Bad.StageRoot = Join-Path $Root 'BadRevision'
@@ -172,6 +175,7 @@ func main() {
 	if ($Proof.ProjectId -cne $ProjectId -or $Proof.Revision -ne $Revision -or
 		$Proof.NodeSourceCommit -cne $MockCommit -or
 		$Proof.NodeBinaryVcsStatus -cne 'MATCHED_CLEAN' -or
+		$Proof.GoExecutableSha256 -cne (Get-Pin $PinnedGo) -or
 		$ConfigText -notmatch [regex]::Escape($ProjectId) -or
 		$ConfigText -notmatch 'package_version = 23' -or
 		$ConfigText -notmatch '(?m)^level = "info"$' -or
@@ -196,6 +200,12 @@ func main() {
 	if (Test-Path -LiteralPath $Claim) { throw 'tampered validator consumed its run claim' }
 	Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'PhysicalGameSessionFarmEndpoint.ps1') `
 		-Destination $Validator -Force
+	[IO.File]::AppendAllText($PinnedGo, 'tampered inspector')
+	Expect-Rejection {
+		& $Source -Mode Run -StageRoot $Stage -StageSha256 $StagePin
+	} 'pinned Go metadata inspector changed after stage'
+	if (Test-Path -LiteralPath $Claim) { throw 'tampered inspector consumed its run claim' }
+	Copy-Item -LiteralPath (Get-Command $GoExecutable -CommandType Application).Source -Destination $PinnedGo -Force
 	$Info = [Diagnostics.ProcessStartInfo]::new()
 	$Info.FileName = (Get-Command pwsh).Source
 	$Info.UseShellExecute = $false
@@ -272,6 +282,9 @@ func main() {
 	$Bad = $Prepare.Clone(); $Bad.StageRoot = Join-Path $Root 'BadBinary'
 	$Bad.NodeExecutableSha256 = '0' * 64
 	Expect-Rejection { & $Source @Bad } 'unapproved Node binary'
+	$Bad = $Prepare.Clone(); $Bad.StageRoot = Join-Path $Root 'BadGoInspector'
+	$Bad.GoExecutableSha256 = '0' * 64
+	Expect-Rejection { & $Source @Bad } 'unapproved Go metadata inspector'
 	$DirtyExecutable = Join-Path $Root 'dirty-node.exe'
 	[IO.File]::AppendAllText($MockSource, "`n// intentionally dirty at build`n")
 	Push-Location $MockSourceRoot

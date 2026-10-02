@@ -12,6 +12,8 @@ param(
 	[string]$NodeExecutablePath,
 	[ValidatePattern('^[a-fA-F0-9]{64}$')][string]$NodeExecutableSha256,
 	[ValidatePattern('^[a-fA-F0-9]{40}$')][string]$NodeSourceCommit,
+	[string]$GoExecutablePath,
+	[ValidatePattern('^[a-fA-F0-9]{64}$')][string]$GoExecutableSha256,
 	[string]$CertificatePath,
 	[string]$PrivateKeyPath,
 	[string]$RootCertificatePath,
@@ -129,14 +131,21 @@ function Get-Sha256 {
 }
 
 function Assert-NodeBuildProvenance {
-	param([string]$ExecutablePath, [string]$SourceCommit)
+	param([string]$ExecutablePath, [string]$SourceCommit, [string]$GoExecutable)
 	if ($SourceCommit -cnotmatch '^[a-fA-F0-9]{40}$') {
 		throw 'Node source commit pin is invalid'
 	}
-	$Go = Get-Command go.exe -CommandType Application -ErrorAction Stop |
-		Select-Object -First 1
-	$Lines = @(& $Go.Source version -m $ExecutablePath 2>&1)
-	if ($LASTEXITCODE -ne 0 -or $Lines.Count -gt 128 -or
+	$PreviousGoRoot = [Environment]::GetEnvironmentVariable('GOROOT', 'Process')
+	try {
+		# `version -m` needs no SDK tree. A hash-pinned standalone go.exe can
+		# inspect build metadata on a worker without an installed Go toolchain.
+		[Environment]::SetEnvironmentVariable('GOROOT', [IO.Path]::GetDirectoryName($GoExecutable), 'Process')
+		$Lines = @(& $GoExecutable version -m $ExecutablePath 2>&1)
+		$ExitCode = $LASTEXITCODE
+	} finally {
+		[Environment]::SetEnvironmentVariable('GOROOT', $PreviousGoRoot, 'Process')
+	}
+	if ($ExitCode -ne 0 -or $Lines.Count -gt 128 -or
 		($Lines -join "`n").Length -gt 65536) {
 		throw 'pinned Node binary build metadata is unavailable or unbounded'
 	}
@@ -198,7 +207,8 @@ if ($Mode -eq 'Prepare') {
 	}
 	foreach ($Required in @($RunManifestPath, $RunManifestSha256, $ServerPackageRoot,
 		$DescriptorPath, $DescriptorSha256, $NodeExecutablePath, $NodeExecutableSha256,
-		$NodeSourceCommit, $CertificatePath, $PrivateKeyPath, $RootCertificatePath)) {
+		$NodeSourceCommit, $GoExecutablePath, $GoExecutableSha256,
+		$CertificatePath, $PrivateKeyPath, $RootCertificatePath)) {
 		if ([string]::IsNullOrWhiteSpace($Required)) { throw 'Prepare needs every pinned Node input' }
 	}
 	$Manifest = Read-PinnedRunManifest -Path $RunManifestPath -ExpectedSha256 $RunManifestSha256
@@ -209,7 +219,9 @@ if ($Mode -eq 'Prepare') {
 	$Descriptor = Assert-FilePin -Path $DescriptorPath -Sha256 $DescriptorSha256 -MaximumBytes 65536
 	$Identity = Assert-PackageIdentity -PackageRoot $Server -DescriptorFile $Descriptor
 	$Executable = Assert-FilePin -Path $NodeExecutablePath -Sha256 $NodeExecutableSha256
-	Assert-NodeBuildProvenance -ExecutablePath $Executable -SourceCommit $NodeSourceCommit
+	$GoExecutable = Assert-FilePin -Path $GoExecutablePath -Sha256 $GoExecutableSha256 -MaximumBytes 33554432
+	Assert-NodeBuildProvenance -ExecutablePath $Executable -SourceCommit $NodeSourceCommit `
+		-GoExecutable $GoExecutable
 	$Certificate = Assert-FilePin -Path $CertificatePath -MaximumBytes 65536
 	$Key = Assert-FilePin -Path $PrivateKeyPath -MaximumBytes 65536
 	$Root = Assert-FilePin -Path $RootCertificatePath -Sha256 $Manifest.NodeRootCertificateSha256 `
@@ -218,7 +230,7 @@ if ($Mode -eq 'Prepare') {
 		-Root $Root -HostName '127.0.0.1'
 	if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable(
 		$Manifest.NodeTokenEnvironment))) { throw 'Node token environment is empty' }
-	$Stage = Assert-DisjointStage -Stage $StageRoot -Inputs @($Server, $Descriptor, $Executable,
+	$Stage = Assert-DisjointStage -Stage $StageRoot -Inputs @($Server, $Descriptor, $Executable, $GoExecutable,
 		$Certificate, $Key, $Root, $RunManifestPath)
 	$ConfigText = @(
 		'schema_version = 1', '', '[host]',
@@ -258,6 +270,7 @@ if ($Mode -eq 'Prepare') {
 		NodeSourceCommit = $NodeSourceCommit.ToLowerInvariant()
 		NodeBinaryVcsStatus = 'MATCHED_CLEAN'
 		NodeExecutablePath = $Executable; NodeExecutableSha256 = $NodeExecutableSha256.ToLowerInvariant()
+		GoExecutablePath = $GoExecutable; GoExecutableSha256 = $GoExecutableSha256.ToLowerInvariant()
 		NodeEndpoint = $Manifest.NodeEndpoint; NodeTokenEnvironment = $Manifest.NodeTokenEnvironment
 		RootCertificatePath = $Root; RootCertificateSha256 = (Get-Sha256 $Root)
 		CertificatePath = $Certificate; CertificateSha256 = (Get-Sha256 $Certificate)
@@ -284,6 +297,7 @@ if ($Proof.Format -cne 'GargantuanFarmNodeStage' -or $Proof.Version -ne 1 -or
 	$Proof.Status -cne 'STAGED_NOT_TLS_PROVEN' -or
 	$Proof.NodeBinaryVcsStatus -cne 'MATCHED_CLEAN' -or
 	$Proof.HelperSha256 -cne (Get-Sha256 $PSCommandPath) -or
+	[string]$Proof.GoExecutableSha256 -cnotmatch '^[a-f0-9]{64}$' -or
 	[string]$Proof.EndpointValidatorSha256 -cnotmatch '^[a-f0-9]{64}$' -or
 	$Proof.NodeEndpoint -cnotmatch '^127\.0\.0\.1:[0-9]{4,5}$') {
 	throw 'Node stage schema or helper pin is invalid'
@@ -311,7 +325,9 @@ if ($Identity.ProjectId -cne $Proof.ProjectId -or $Identity.Revision -ne $Proof.
 	throw 'Node stage package identity changed'
 }
 $Executable = Assert-FilePin -Path $Proof.NodeExecutablePath -Sha256 $Proof.NodeExecutableSha256
-Assert-NodeBuildProvenance -ExecutablePath $Executable -SourceCommit $Proof.NodeSourceCommit
+$GoExecutable = Assert-FilePin -Path $Proof.GoExecutablePath -Sha256 $Proof.GoExecutableSha256 -MaximumBytes 33554432
+Assert-NodeBuildProvenance -ExecutablePath $Executable -SourceCommit $Proof.NodeSourceCommit `
+	-GoExecutable $GoExecutable
 $Config = Assert-FilePin -Path (Join-Path $Stage 'node.toml') -Sha256 $Proof.ConfigSha256 `
 	-MaximumBytes 65536
 $Root = Assert-FilePin -Path $Proof.RootCertificatePath -Sha256 $Proof.RootCertificateSha256 `

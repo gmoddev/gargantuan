@@ -292,7 +292,8 @@ def PrepareInputs(ConfigPath, TransportInstance=None):
         if not isinstance(Node, dict) or set(Node) != {"Endpoint", "RootCertificatePath",
                                                       "TokenEnvironment", "HelperPath", "StageRoot",
                                                       "DescriptorPath", "DescriptorSha256", "ExecutablePath",
-                                                      "ExecutableSha256", "SourceCommit", "CertificatePath",
+                                                      "ExecutableSha256", "SourceCommit", "GoExecutablePath",
+                                                      "GoExecutableSha256", "CertificatePath",
                                                       "PrivateKeyPath"}:
             raise ValueError("[Qualification:FarmOuter] invalid Node preparation")
         ManifestArgs += ["-NodeEndpoint", Node["Endpoint"],
@@ -322,7 +323,11 @@ def PrepareInputs(ConfigPath, TransportInstance=None):
                 TransportInstance.WorkerDigest(Helper) != Digest(
                     SOURCE.parent.parent / "tests" / "PhysicalGameSessionFarmNode.ps1")):
             raise ValueError("[Qualification:FarmOuter] Node helper source pin changed")
-        if not SHA.fullmatch(Node["DescriptorSha256"]) or not SHA.fullmatch(Node["ExecutableSha256"]):
+        if (not SHA.fullmatch(Node["DescriptorSha256"]) or
+                not SHA.fullmatch(Node["ExecutableSha256"]) or
+                not SHA.fullmatch(Node["GoExecutableSha256"]) or
+                TransportInstance.WorkerDigest(WorkerSandbox(Node["GoExecutablePath"])) !=
+                Node["GoExecutableSha256"].lower()):
             raise ValueError("[Qualification:FarmOuter] invalid Node source pins")
         TransportInstance.WorkerPowerShell(WorkerPowerShell["Path"], Helper,
             "-Mode", "Prepare", "-StageRoot",
@@ -332,7 +337,9 @@ def PrepareInputs(ConfigPath, TransportInstance=None):
             WorkerSandbox(Node["DescriptorPath"]), "-DescriptorSha256", Node["DescriptorSha256"],
             "-NodeExecutablePath", WorkerSandbox(Node["ExecutablePath"]),
             "-NodeExecutableSha256", Node["ExecutableSha256"],
-            "-NodeSourceCommit", Node["SourceCommit"], "-CertificatePath",
+            "-NodeSourceCommit", Node["SourceCommit"],
+            "-GoExecutablePath", WorkerSandbox(Node["GoExecutablePath"]),
+            "-GoExecutableSha256", Node["GoExecutableSha256"], "-CertificatePath",
             WorkerSandbox(Node["CertificatePath"]), "-PrivateKeyPath",
             WorkerSandbox(Node["PrivateKeyPath"]), "-RootCertificatePath",
             WorkerSandbox(Node["RootCertificatePath"]), Timeout=40)
