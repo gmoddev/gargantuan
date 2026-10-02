@@ -38,7 +38,11 @@ inline void TestStructuralCausalEvidence() {
 		const SavedEvent &Last(StructuralCausalKind Kind) const {
 			for (std::size_t Index = Count; Index != 0; --Index)
 				if (Events[Index - 1].Value.Kind == Kind) return Events[Index - 1];
-			throw std::runtime_error("Missing source causal evidence event");
+			std::string Kinds;
+			for (std::size_t Index = 0; Index < Count; ++Index)
+				Kinds += (Index == 0 ? "" : ",") + std::to_string(static_cast<unsigned>(Events[Index].Value.Kind));
+			throw std::runtime_error("Missing source causal evidence event kind=" + std::to_string(static_cast<unsigned>(Kind)) +
+				" observed=" + Kinds);
 		}
 	} Evidence;
 	auto World = std::make_shared<DataModel>();
@@ -107,7 +111,9 @@ inline void TestStructuralCausalEvidence() {
 		"R7 installed necessary Enter inherits baseline obligation and still requires accepted coverage");
 	const auto FirstPending = Evidence.Last(StructuralCausalKind::PendingAdded).Value.Pending;
 	EnvelopeRequire(FirstPending.Object == Object->GetObjectId() && FirstPending.Enter, "actual installed Enter has causal token");
-	Plan(WithObject);
+	auto CriticalObject = WithObject;
+	CriticalObject.RequiredObjects = CriticalObject.DesiredObjects;
+	Plan(CriticalObject);
 	const auto Replacement = Evidence.Last(StructuralCausalKind::PendingReplaced).Value;
 	EnvelopeRequire(Replacement.Pending.Token == FirstPending.Token && Replacement.ReplacementToken > FirstPending.Token,
 		"production replanning explicitly links the same obligation to its new token");

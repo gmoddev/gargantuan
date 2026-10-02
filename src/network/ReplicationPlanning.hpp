@@ -703,7 +703,7 @@ ReplicationProduceResult ReplicationCoordinator::ProducePlannedFrame(ConnectionI
 		SaturatingAdd(CandidateMetrics.StructuralTransitionsEncoded, Frame.Operations.size());
 		SaturatingAdd(CandidateMetrics.StructuralBytesEncoded, Encoded->size());
 		Metrics = CandidateMetrics;
-		return {{}, {}, Frame.Operations.size(), 0, {}, true, Encoded->size()};
+		return {{}, {}, Frame.Operations.size(), 0, {}, true, Encoded->size(), EvidenceFingerprint(*Encoded)};
 	}
 	auto Next = Peer.NextSequence.TryNext();
 	if (!Next) return {{}, "Reliable replication sequence is exhausted"};
@@ -739,6 +739,8 @@ ReplicationProduceResult ReplicationCoordinator::ProducePlannedFrame(ConnectionI
 	else SaturatingAdd(CandidateMetrics.IncrementalBytes, Encoded->size());
 	RequestedTemplates.merge(Requested);
 	Metrics = CandidateMetrics;
+	RecordCausalPreparation(Peer, Commit, *Encoded);
+	const auto Fingerprint = EvidenceFingerprint(*Encoded);
 	Peer.PreparedCommit = std::move(Commit);
-	return {std::move(Frame), {}, Count, 0, std::move(*Encoded)};
+	return {std::move(Frame), {}, Count, 0, std::move(*Encoded), false, 0, Fingerprint};
 }
