@@ -482,7 +482,11 @@ namespace gargantuan::network {
 			}
 			runtime_detail::RecordPublicationLatency({.Stage = "RpcResponseProduced", .Connection = Key.Connection,
 				.Object = Remote, .Sequence = Key.Request.Value(), .Kind = 104});
-			return SendMessage(Key.Connection, std::move(Message)).Accepted();
+			const auto Accepted = SendMessage(Key.Connection, std::move(Message)).Accepted();
+			if (Accepted)
+				runtime_detail::RecordPublicationLatency({.Stage = "RpcResponseSchedulerAccepted",
+					.Connection = Key.Connection, .Object = Remote, .Sequence = Key.Request.Value()});
+			return Accepted;
 		}
 
 		void RejectRequest(ConnectionId Connection, const RemoteMessage &Message, std::string Code, std::string Text) {
@@ -559,6 +563,8 @@ namespace gargantuan::network {
 					SaturatingIncrement(Metrics.ProtocolRejections);
 					return;
 				}
+				runtime_detail::RecordPublicationLatency({.Stage = "RpcCompletion", .Connection = Key.Connection,
+					.Object = Queued.Message.Remote, .Sequence = Key.Request.Value(), .Kind = 104});
 				if (Queued.Message.Kind == RemoteMessageKind::Response)
 					CompletePending(
 						Key,
@@ -573,8 +579,6 @@ namespace gargantuan::network {
 							Key.Request, RemoteRequestTerminalStatus::RemoteError, {}, std::move(Queued.Message.Error)
 						)
 					);
-				runtime_detail::RecordPublicationLatency({.Stage = "RpcCompletion", .Connection = Key.Connection,
-					.Object = Queued.Message.Remote, .Sequence = Key.Request.Value(), .Kind = 104});
 				return;
 			}
 			if (Queued.Message.Kind == RemoteMessageKind::Cancellation) {
@@ -1064,12 +1068,16 @@ namespace gargantuan::network {
 		};
 		if (!Message.IsValid()) return {RemoteSendStatus::InvalidArguments};
 		Implementation::PendingKey Key{Connection, Request};
+		runtime_detail::RecordPublicationLatency({.Stage = "RpcRequestStarted", .Connection = Connection,
+			.Object = Remote, .Sequence = Request.Value()});
 		auto Result = State->SendMessage(Connection, std::move(Message));
 		Result.Request = Request;
 		if (!Result.Accepted()) {
 			SaturatingIncrement(State->Metrics.ResourceRejections);
 			DrainSchedulerTerminals();
 		} else {
+			runtime_detail::RecordPublicationLatency({.Stage = "RpcRequestSchedulerAccepted",
+				.Connection = Connection, .Object = Remote, .Sequence = Request.Value()});
 			State->PendingRequests.emplace(
 				Key, Implementation::PendingRequest{Remote, State->GetTime() + Deadline, std::move(Completion)}
 			);
@@ -1135,6 +1143,13 @@ namespace gargantuan::network {
 			SaturatingIncrement(State->Metrics.ProtocolRejections);
 			return false;
 		}
+		if (Decoded->Kind == RemoteMessageKind::Request || Decoded->Kind == RemoteMessageKind::Response ||
+			Decoded->Kind == RemoteMessageKind::RequestError)
+			runtime_detail::RecordPublicationLatency({
+				.Stage = Decoded->Kind == RemoteMessageKind::Request ? "RpcRequestReceived" : "RpcResponseReceived",
+				.Connection = Received->Connection, .Object = Decoded->Remote,
+				.Sequence = Decoded->Request.Value(),
+				.Bytes = static_cast<std::uint32_t>(Received->Payload.size())});
 		State->Metrics.QueuedDispatchBytes += Received->Payload.size();
 		Peer->second.QueuedDispatchBytes += Received->Payload.size();
 		++Peer->second.QueuedDispatchMessages;

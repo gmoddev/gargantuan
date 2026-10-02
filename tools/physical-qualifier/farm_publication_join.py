@@ -566,6 +566,10 @@ def ReadClients(Database, ClientSources, ReadyBySlot, RunId, ExpectedClients):
             Require(Connection == ClientConnection and
                     ConnectionBySlot.setdefault(Slot, Connection) == Connection,
                     "client slot maps to a different connection generation")
+            if Value.Stage >= 14:
+                # RPC timing uses the same sealed trace but is independent of
+                # Character state publication and its acceptance join.
+                continue
             ServerState = (*ServerConnection, Value.ObjectSlot, Value.ObjectGeneration,
                            Value.Tick, Value.Sequence, Value.MaterializationEpoch)
             Row = Database.execute("""SELECT Control, FrameSeq, ServiceBytes, Forced,

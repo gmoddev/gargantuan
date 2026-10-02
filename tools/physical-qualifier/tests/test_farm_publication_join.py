@@ -97,6 +97,22 @@ class FarmPublicationJoinTests(unittest.TestCase):
         self.assertGreater(Result["ScratchPeakDatabaseBytes"], 0)
         self.assertEqual(list(self.Scratch.iterdir()), [])
 
+    def test_rpc_causal_records_do_not_enter_character_state_join(self):
+        Server = self.OrdinaryServer() + [
+            self.Record(17, 300, OS=18, OG=2, Bytes=64, Tick=0, Seq=7),
+            self.Record(18, 310, OS=18, OG=2, Tick=0, Seq=7),
+            self.Record(19, 320, OS=18, OG=2, Tick=0, Seq=7),
+            self.Record(20, 330, OS=18, OG=2, Tick=0, Seq=7),
+            self.Record(21, 340, OS=18, OG=2, Bytes=64, Tick=0, Seq=7)]
+        Client = self.ClientPair() + [
+            self.ClientRecord(14, 1200, OS=18, OG=2, Tick=0, Seq=7),
+            self.ClientRecord(15, 1210, OS=18, OG=2, Tick=0, Seq=7),
+            self.ClientRecord(16, 1220, OS=18, OG=2, Bytes=64, Tick=0, Seq=7),
+            self.ClientRecord(22, 1230, OS=18, OG=2, Bytes=64, Tick=0, Seq=7),
+            self.ClientRecord(23, 1240, OS=18, OG=2, Tick=0, Seq=7)]
+        self.Write(ServerRecords=Server, ClientRecords=Client)
+        self.assertEqual(self.Analyze()["Status"], "ACCEPTED_STATE_CHAIN_OBSERVED")
+
     def test_join_reports_sealed_phase_local_cadence_without_inventing_roots(self):
         self.Write()
         with self.ServerReady.open("a", encoding="utf-8") as Stream:

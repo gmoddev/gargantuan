@@ -388,10 +388,43 @@ namespace {
 				"farm trace overflow and malformed GCHR invalidate the evidence");
 		}
 		Check(runtime_detail::ActivePublicationLatency == Previous, "failed farm trace restores scoped sink");
+		const auto RpcDirectory = Root / "rpc";
+		std::filesystem::create_directory(RpcDirectory);
+		const auto RpcClientPath = RpcDirectory / "publication-service-0.bin";
+		{
+			host::detail::FarmPublicationEvidence Evidence(false, "test-run", 0, 17,
+				RpcClientPath, {1, 1}, 2);
+			runtime_detail::RecordPublicationLatency({.Stage = "RpcRequestStarted",
+				.Connection = {1, 1}, .Object = {18, 2}, .Sequence = 7});
+			RemoteMessage Request{.Kind = RemoteMessageKind::Request, .Remote = {18, 2},
+				.Request = RemoteRequestId{7}, .Deadline = std::chrono::milliseconds(1'000),
+				.Arguments = {WireValue(std::string("recovery"))}};
+			const auto Encoded = EncodeRemoteMessage(Request);
+			Check(Encoded.has_value(), "farm RPC diagnostic fixture encodes a real request");
+			if (Encoded) runtime_detail::RecordPublicationPacket("Handoff", {1, 1}, *Encoded);
+			Evidence.Dump();
+			Check(Evidence.Valid() && Evidence.Count() == 2,
+				"farm RPC diagnostic retains only bounded request metadata");
+		}
+		{
+			std::ifstream File(RpcClientPath, std::ios::binary);
+			const std::string Bytes(std::istreambuf_iterator<char>{File}, {});
+			const auto HeaderEnd = Bytes.find('\n');
+			if (HeaderEnd != std::string::npos && Bytes.size() >= HeaderEnd + 1 + 2 * 80) {
+				const auto Offset = HeaderEnd + 1 + 80;
+				Check(static_cast<unsigned char>(Bytes[Offset]) == 16 &&
+					static_cast<unsigned char>(Bytes[Offset + 12]) == 18 &&
+					static_cast<unsigned char>(Bytes[Offset + 16]) == 2 &&
+					static_cast<unsigned char>(Bytes[Offset + 40]) == 7,
+					"farm RPC GNS-accept marker retains remote and request identity");
+			} else Check(false, "farm RPC GNS-accept marker is present in sealed binary trace");
+		}
 		std::filesystem::remove(ServerPath);
 		std::filesystem::remove(DirectPath);
 		std::filesystem::remove(ClientPath);
 		std::filesystem::remove(OverflowPath);
+		std::filesystem::remove(RpcClientPath);
+		std::filesystem::remove(RpcDirectory);
 		std::filesystem::remove(DirectDirectory);
 		std::filesystem::remove(Root);
 	}

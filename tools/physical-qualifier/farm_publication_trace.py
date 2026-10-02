@@ -17,8 +17,9 @@ HEADER = re.compile(
     rb"\trole=(SERVER|CLIENT)\tslot=(-1|[0-9]{1,2})\tnonce=([0-9]+)"
     rb"\tcount=([0-9]+)\tdropped=([0-9]+)\tdecode_failures=([0-9]+)\n"
 )
-SERVER_STAGES = set(range(1, 9)) | {11, 12, 13}
-CLIENT_STAGES = {9, 10}
+RPC_STAGES = set(range(14, 24))
+SERVER_STAGES = set(range(1, 9)) | {11, 12, 13} | RPC_STAGES
+CLIENT_STAGES = {9, 10} | RPC_STAGES
 SERVER_CAP = 4_194_304
 CLIENT_CAP = 131_072
 
@@ -94,6 +95,13 @@ def IterRecords(PathValue, ExpectedRunId, ExpectedRole, ExpectedSlot=-1, Expecte
                         (DueTick == 0 or DueTick <= Tick) and
                         ServiceBytes == ControlEpoch == FrameSequence == 0,
                         "direct publication disposition lacks full generation/state identity")
+            if Stage in range(14, 24):
+                Require(ConnectionSlot > 0 and ConnectionGeneration > 0 and
+                        ObjectSlot > 0 and ObjectGeneration > 0 and Sequence > 0 and
+                        DueTick == ControlEpoch == MaterializationEpoch == FrameSequence == 0 and
+                        (ServiceBytes > 0 if Stage in (16, 17, 21, 22) else ServiceBytes == 0) and
+                        Tick == 0 and Flags == 0,
+                        "RPC stage lacks request/remote identity or carries unrelated fields")
             if Role == "CLIENT":
                 Require(Stage in CLIENT_STAGES, "server-only stage in client trace")
             Counts[Stage] = Counts.get(Stage, 0) + 1

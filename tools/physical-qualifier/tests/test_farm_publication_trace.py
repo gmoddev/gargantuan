@@ -40,6 +40,32 @@ class FarmPublicationTraceTests(unittest.TestCase):
         self.assertEqual(Value["Stages"], {1: 1, 3: 1, 8: 1, 11: 1})
         self.assertEqual(Value["CrossHostLatency"], "NOT_MEASURED")
 
+    @staticmethod
+    def Rpc(Stage, Nanoseconds, Bytes=0, Request=7):
+        return RECORD.pack(Stage, 0, 1, 1, 18, 2, Bytes,
+                           Nanoseconds, 0, Request, 0, 0, 0, 0)
+
+    def test_rpc_causal_stages_require_request_identity_and_byte_shape(self):
+        self.Write([self.Record(9, 100), self.Record(10, 150)] +
+                   [self.Rpc(Stage, 160 + Stage, 64 if Stage in (16, 22) else 0)
+                    for Stage in (14, 15, 16, 22, 23)])
+        Value = Validate(self.Path, "run-a", "CLIENT", 0, 17)
+        self.assertEqual({Stage: Value["Stages"][Stage] for Stage in (14, 15, 16, 22, 23)},
+                         {Stage: 1 for Stage in (14, 15, 16, 22, 23)})
+        self.Path = Path(self.Temp.name) / "publication-service.bin"
+        self.Write([self.Record(8, 100)] +
+                   [self.Rpc(Stage, 160 + Stage, 64 if Stage in (17, 21) else 0)
+                    for Stage in (17, 18, 19, 20, 21)], Role="SERVER", Slot=-1, Nonce=0)
+        Validate(self.Path, "run-a", "SERVER")
+        self.Write([self.Record(8, 100), self.Rpc(17, 177, 64, Request=0)],
+                   Role="SERVER", Slot=-1, Nonce=0)
+        with self.assertRaises(ValueError):
+            Validate(self.Path, "run-a", "SERVER")
+        self.Write([self.Record(8, 100), self.Rpc(16, 177, 0)],
+                   Role="SERVER", Slot=-1, Nonce=0)
+        with self.assertRaises(ValueError):
+            Validate(self.Path, "run-a", "SERVER")
+
     def test_rejects_retirement_with_packet_fields_or_client_role(self):
         Retired = RECORD.pack(11, 0, 1, 1, 8, 2, 0,
                               110, 200, 0, 0, 0, 0, 0)

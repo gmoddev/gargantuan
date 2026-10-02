@@ -2,6 +2,8 @@
 
 #include "../../runtime/PublicationLatencyDiagnostics.hpp"
 #include "gargantuan/network/CharacterProtocol.hpp"
+#include "gargantuan/network/RemoteProtocol.hpp"
+#include "gargantuan/network/BinaryCodec.hpp"
 
 #include <algorithm>
 #include <array>
@@ -39,6 +41,10 @@ public:
 		CharacterSnapshot, CharacterProduced, CharacterUnchanged,
 		SchedulerAccepted, ClientNativeReceive, ClientHandled,
 		RecipientRetired, CharacterDirectOffered, CharacterDirectRejected,
+		RpcRequestStarted, RpcRequestSchedulerAccepted, RpcRequestGnsAccepted,
+		RpcRequestReceived, RpcHandler, RpcResponseProduced,
+		RpcResponseSchedulerAccepted, RpcResponseGnsAccepted,
+		RpcResponseReceived, RpcCompletion,
 	};
 	struct Record {
 		std::uint64_t Nanoseconds = 0;
@@ -92,6 +98,14 @@ private:
 		if (Value == "RecipientRetired") return Stage::RecipientRetired;
 		if (Value == "CharacterDirectOffered") return Stage::CharacterDirectOffered;
 		if (Value == "CharacterDirectRejected") return Stage::CharacterDirectRejected;
+		if (Value == "RpcRequestStarted") return Stage::RpcRequestStarted;
+		if (Value == "RpcRequestSchedulerAccepted") return Stage::RpcRequestSchedulerAccepted;
+		if (Value == "RpcRequestReceived") return Stage::RpcRequestReceived;
+		if (Value == "RpcHandler") return Stage::RpcHandler;
+		if (Value == "RpcResponseProduced") return Stage::RpcResponseProduced;
+		if (Value == "RpcResponseSchedulerAccepted") return Stage::RpcResponseSchedulerAccepted;
+		if (Value == "RpcResponseReceived") return Stage::RpcResponseReceived;
+		if (Value == "RpcCompletion") return Stage::RpcCompletion;
 		return std::nullopt;
 	}
 	void Add(Record Value) noexcept {
@@ -102,7 +116,7 @@ private:
 		auto &Self = *static_cast<FarmPublicationEvidence *>(Context);
 		const auto Kind = StageOf(Value.Stage);
 		if (!Kind || (Self.Server && (*Kind == Stage::ClientNativeReceive || *Kind == Stage::ClientHandled)) ||
-			(!Self.Server && *Kind != Stage::ClientHandled)) return;
+			(!Self.Server && *Kind != Stage::ClientHandled && *Kind < Stage::RpcRequestStarted)) return;
 		Self.Add(Record{
 			.Nanoseconds = Value.Nanoseconds, .Tick = Value.Tick,
 			.Sequence = Value.Sequence, .DueTick = Value.Due,
@@ -118,6 +132,41 @@ private:
 	static void Packet(void *Context, const char *Name, network::ConnectionId Connection,
 		std::span<const std::byte> Payload, std::uint64_t Nanoseconds) noexcept {
 		auto &Self = *static_cast<FarmPublicationEvidence *>(Context);
+		if (std::string_view(Name) == "Handoff" && Payload.size() >= 32 &&
+			std::memcmp(Payload.data(), "GRMT", 4) == 0) {
+			// The fixed header is sufficient for request identity. Do not decode
+			// 16-KiB Event payloads or copy arguments on the measured send path.
+			const auto MessageKind = std::to_integer<std::uint8_t>(Payload[6]);
+			if (MessageKind != static_cast<std::uint8_t>(network::RemoteMessageKind::Request) &&
+				MessageKind != static_cast<std::uint8_t>(network::RemoteMessageKind::Response) &&
+				MessageKind != static_cast<std::uint8_t>(network::RemoteMessageKind::RequestError)) return;
+			try {
+				network::GameBinaryReader Input(Payload, "Remote diagnostic header");
+				std::uint32_t Magic = 0;
+				std::uint16_t Version = 0;
+				std::uint8_t Kind = 0, Reserved = 0;
+				ObjectId Remote;
+				std::uint64_t Publication = 0, Request = 0;
+				if (!Input.Integer(Magic) || !Input.Integer(Version) || !Input.Integer(Kind) ||
+					!Input.Integer(Reserved) || !network::ReadBinaryObjectId(Input, Remote) ||
+					!Input.Integer(Publication) || !Input.Integer(Request)) {
+					++Self.DecodeFailures;
+					return;
+				}
+				if (Version != network::RemoteProtocolVersion || Reserved != 0 ||
+					Publication == 0 || Request == 0) {
+					++Self.DecodeFailures;
+					return;
+				}
+				Self.Add(Record{.Nanoseconds = Nanoseconds, .Sequence = Request,
+					.ConnectionSlot = Connection.Slot, .ConnectionGeneration = Connection.Generation,
+					.ObjectSlot = Remote.Slot, .ObjectGeneration = Remote.Generation,
+					.Bytes = static_cast<std::uint32_t>(Payload.size()),
+					.Kind = Kind == static_cast<std::uint8_t>(network::RemoteMessageKind::Request)
+						? Stage::RpcRequestGnsAccepted : Stage::RpcResponseGnsAccepted});
+			} catch (...) { ++Self.DecodeFailures; }
+			return;
+		}
 		const auto Kind = StageOf(Name);
 		if (!Kind || (Self.Server && *Kind != Stage::SchedulerAccepted) ||
 			(!Self.Server && *Kind != Stage::ClientNativeReceive && *Kind != Stage::ClientHandled) ||
