@@ -2262,3 +2262,15 @@ checking the negotiated complete-frame limit. A bounded-encoder correction must
 still validate the entire candidate first, preserve invalid-value precedence,
 and retain the exact existing geometric retry, journal charge and final frame.
 It may cap encoding at the hard negotiated limit, never available credit.
+
+The correction at `025577469` passes the complete replication and relevance
+CTest targets on worker Release candidate `e62955e91` (2/2, 8.87 s). Its 68
+focused codec cases preserve exact wire output, late-invalid error precedence,
+zero/header/exact boundaries and the public global cap. A doomed candidate
+writes 458,931 payload bytes instead of 8,326,011. Production A/B current and
+historical Name fixtures preserve exact bytes, errors, cursors and budgets;
+historical attempted payload falls from 386,919,616 to 40,712,792 bytes. These
+are deterministic work counters, not a physical throughput claim. The same run
+passes 1,409,819 UTF-8 parity cases. Evidence is retained as
+`C:\Users\aiden\.codex\artifacts\bounded-encoder-e62955e9-tests.log`.
+Fresh 32-client recovery and hosted qualification remain separate gates.
