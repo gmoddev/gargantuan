@@ -3,10 +3,13 @@
 # formatting and its ten RPC/event completion gates, using bounded fake services.
 param(
     [string]$SourceHeader = (Join-Path $PSScriptRoot 'ContentScaleGameplay.hpp'),
+    [string]$LutePath = 'lute',
     [switch]$ReproduceMissingClientTick
 )
 $ErrorActionPreference = 'Stop'
-$Interpreter = (Get-Command luau.exe -ErrorAction Stop).Source
+# Lute is already pinned by rokit.toml and installed on hosted CI. The engine's
+# separate Luau dependency intentionally builds without standalone CLI tools.
+$Interpreter = (Get-Command $LutePath -ErrorAction Stop).Source
 $Source = Get-Content -LiteralPath $SourceHeader -Raw
 if ($ReproduceMissingClientTick) {
     # Negative control restores precisely the historical out-of-scope lookup.
@@ -118,7 +121,7 @@ NativePrint('[Qualification:RecoveryScript] cases=3 rpc_probes=30 completed_case
 $Path = Join-Path ([IO.Path]::GetTempPath()) ('gargantuan-recovery-client-' + [Guid]::NewGuid().ToString('N') + '.luau')
 try {
     [IO.File]::WriteAllText($Path, $Prelude + "`n" + $Source.Substring($Begin + 3, $End - $Begin - 3) + "`n" + $Assertions)
-    $Output = & $Interpreter $Path 2>&1
+    $Output = & $Interpreter run $Path 2>&1
     $Result = $LASTEXITCODE
     if ($ReproduceMissingClientTick) {
         if ($Result -eq 0 -or ($Output -join "`n") -notmatch "invalid argument #5 to 'format'.*number expected, got nil") {
