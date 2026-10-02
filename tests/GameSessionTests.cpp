@@ -2149,6 +2149,10 @@ end)
 			Child->SetParent(Npc);
 		}
 		auto Settings = Configuration(GameSessionRole::Server, "speculative-relevance");
+		auto Ground = std::make_shared<Part>();
+		Ground->SetAnchored(true);
+		Ground->SetSize({1024, 1, 1024});
+		Ground->SetParent(Runtime.Workspace);
 		// Real bounded planning intentionally spans more than one server step.
 		// Relevance can reverse before a planned Leave has ever been accepted.
 		Settings.StructuralReplication.PlanningWorkPerTick = 64;
@@ -2380,6 +2384,7 @@ int main(int ArgumentCount, char **Arguments) {
 		TestProductionLifecycleComposition(false, false, true);
 		TestCharacterRetirementAcrossStructuralFrames();
 		TestServerCharacterAutoLoadsPolicy();
+		TestSpeculativeRelevanceMaterialization();
 	} catch (const std::exception &Error) {
 		std::cerr << "Unexpected game-session test exception: " << Error.what() << '\n';
 		++Failures;

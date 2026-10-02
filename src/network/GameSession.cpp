@@ -1105,7 +1105,14 @@ namespace gargantuan::network {
 				PeerValue.MaterializedRemotes = std::move(DesiredRemotes);
 
 				std::set<ObjectId> DesiredCharacters;
-				for (const auto Character : Relevance->GetRuntimeCharacterCandidates(Connection)) {
+				// Selection is speculative until its structural transaction is accepted.
+				// Retain the previous materialized candidates until committed knowledge
+				// removes their RootPart, otherwise cancelled Leaves advance only the
+				// server's GCHR epoch and permanently stale-drop subsequent client state.
+				auto CharacterCandidates = PeerValue.MaterializedCharacters;
+				const auto SelectedCharacters = Relevance->GetRuntimeCharacterCandidates(Connection);
+				CharacterCandidates.insert(SelectedCharacters.begin(), SelectedCharacters.end());
+				for (const auto Character : CharacterCandidates) {
 					runtime_detail::CountWork(runtime_detail::WorkCounter::GraphCharacters);
 					runtime_detail::RecordWorkUnits(runtime_detail::WorkPhase::GraphSynchronization);
 					// The typed list is only an inspection hint. Removal before this
@@ -1115,7 +1122,7 @@ namespace gargantuan::network {
 						ObjectRegistry::Get().Lookup(Character)
 					);
 					auto RootPart = CharacterValue ? CharacterValue->GetRootPart() : std::nullopt;
-					const bool Materialized = View->Knows(Character) && Relevance->IsRuntimeRelevant(Connection, Character) && RootPart &&
+					const bool Materialized = View->Knows(Character) && RootPart &&
 						View->Knows((*RootPart)->GetObjectId());
 					runtime_detail::CountWork(runtime_detail::WorkCounter::GraphKnownChecks);
 					if (!Materialized) runtime_detail::CountWork(runtime_detail::WorkCounter::GraphIrrelevant);
