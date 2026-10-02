@@ -1989,6 +1989,15 @@ and structural failures. Reconciliation deliberately reports **INCOMPLETE**
 until the independent service, fairness, capture, real-TLS, recovery, resource
 and cleanup gates have physical evidence.
 
+The separate offline Local/Node acceptance-observation candidate compares two
+already-reconciled provider runs. It checks source/workload/deployment pin parity,
+reports bounded role-local process samples and indexed evidence sizes, and keeps
+the final verdict `INCOMPLETE`. The current typed receipts do not establish
+fixed 20-second service recovery, exact workload-derived structural convergence,
+journal retention margin under overload, simultaneous resource/network headroom,
+or full provider parity. Its socket-free mock tests do not constitute a provider
+run. See `tests/PhysicalGameSessionFarmAcceptance.md` for input and output scope.
+
 The installed four-client capture path is not silently extended to this
 campaign. Its worker service has a 90-second hard lease, whereas five required
 phases each exceed 13 seconds before startup, warmup and terminal propagation.
