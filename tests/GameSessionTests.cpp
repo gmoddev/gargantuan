@@ -1227,7 +1227,9 @@ namespace {
 		ServerRuntime.Destroy();
 	}
 
-	void TestProductionLifecycleComposition(bool MeasureHandoff = false, bool WithByteAdmission = false) {
+	void TestProductionLifecycleComposition(
+		bool MeasureHandoff = false, bool WithByteAdmission = false, bool TestControlRebind = false
+	) {
 		SimulatedTransportConfiguration TransportConfiguration;
 		TransportConfiguration.BaseLatency = 1ms;
 		auto Network = SimulatedNetwork::Create(TransportConfiguration);
@@ -1237,6 +1239,11 @@ namespace {
 		if (!Network || !ServerTransport || !ClientTransport) return;
 
 		auto ServerWorld = std::make_shared<DataModel>();
+		if (TestControlRebind) {
+			auto Marker = std::make_shared<Folder>();
+			Marker->SetName("ControlRebindMarker");
+			Marker->SetParent(ServerWorld);
+		}
 		DiskFilesystem SampleFilesystem(std::filesystem::path(GARGANTUAN_FIRST_COMPLETE_GAME_ROOT));
 		auto ServerAssets = std::dynamic_pointer_cast<AssetService>(ServerWorld->GetService("AssetService"));
 		ServerAssets->LoadProjectAssets(SampleFilesystem);
@@ -1353,6 +1360,8 @@ CharacterControl.ActionEnded:Connect(function(Character, ActionName)
 end)
 local Requested = false
 local RemoteSent = false
+local SawRootAbsent = false
+local ReboundActionRequested = false
 RunService.PreSimulation:Connect(function()
 	if DeniedDelay > 0 then
 		DeniedDelay -= 1
@@ -1371,6 +1380,17 @@ RunService.PreSimulation:Connect(function()
 	if not RemoteSent and Players.LocalPlayer and Players.LocalPlayer.Character then
 		SessionRemote:FireServer("session-ready")
 		RemoteSent = true
+	end
+	local Character = Players.LocalPlayer and Players.LocalPlayer.Character
+	if Requested and Character and game:FindFirstChild("ControlRebindMarker") then
+		if Character.RootPart == nil then
+			SawRootAbsent = true
+		elseif SawRootAbsent and not ReboundActionRequested then
+			ReboundActionRequested = CharacterControl:RequestAction("SessionLunge")
+			if ReboundActionRequested then
+				Character:SetAttribute("ReboundActionRequested", true)
+			end
+		end
 	end
 end)
 )");
@@ -1603,10 +1623,54 @@ end)
 			Check(host::detail::DecodePhysicalScaleCounter(
 				ClientRuntime->CharacterControl->GetAttributeValue("ServiceProbeReplies")) == 2,
 				"Luau SetAttribute numeric output is readable by the scale count gate");
+			std::uint64_t ReplacementTick = 161;
+			if (TestControlRebind && ServerCharacter && ServerCharacter->GetRootPart()) {
+				const auto CharacterId = ServerCharacter->GetObjectId();
+				const auto RootPart = *ServerCharacter->GetRootPart();
+				const auto RootId = RootPart->GetObjectId();
+				const auto BindingsBefore = Server.GetMetrics().CharacterControlBindings;
+				const auto RevocationsBefore = Server.GetMetrics().CharacterControlRevocations;
+				const auto ActionsBefore = detail::GameSessionTestAccess::GetCharacterMetrics(Server).ActionRequestsAccepted;
+				ServerCharacter->SetRootPart(std::nullopt);
+				for (std::uint64_t Tick = 161; Tick <= 190; ++Tick) {
+					ClientRuntime->Step();
+					ServerRuntime.Step();
+					Advance(Network, Server, Client, Tick);
+				}
+				const auto LocalPlayerDuringRevoke = ClientRuntime->Players->GetLocalPlayer();
+				const auto LocalCharacterDuringRevoke = LocalPlayerDuringRevoke && (*LocalPlayerDuringRevoke)->GetCharacter()
+					? *(*LocalPlayerDuringRevoke)->GetCharacter() : nullptr;
+				Check(ServerPlayers[0]->GetCharacter() && (*ServerPlayers[0]->GetCharacter())->GetObjectId() == CharacterId &&
+					RootPart->GetObjectId() == RootId && Server.GetMetrics().CharacterControlBindings == BindingsBefore &&
+					Server.GetMetrics().CharacterControlRevocations == RevocationsBefore + 1 &&
+					LocalCharacterDuringRevoke && LocalCharacterDuringRevoke->GetObjectId() == CharacterId &&
+					!LocalCharacterDuringRevoke->GetRootPart() &&
+					detail::GameSessionTestAccess::GetCharacterMetrics(Server).ActionRequestsAccepted == ActionsBefore &&
+					Client.GetStatus() == GameSessionStatus::Ready,
+					"same owner Character and RootPart lose one control lease when RootPart materialization becomes false");
+				ServerCharacter->SetRootPart(RootPart);
+				for (std::uint64_t Tick = 191; Tick <= 220; ++Tick) {
+					ClientRuntime->Step();
+					ServerRuntime.Step();
+					Advance(Network, Server, Client, Tick);
+				}
+				const auto LocalPlayer = ClientRuntime->Players->GetLocalPlayer();
+				const auto LocalCharacter = LocalPlayer && (*LocalPlayer)->GetCharacter()
+					? *(*LocalPlayer)->GetCharacter() : nullptr;
+				Check(ServerPlayers[0]->GetCharacter() && (*ServerPlayers[0]->GetCharacter())->GetObjectId() == CharacterId &&
+					RootPart->GetObjectId() == RootId && Server.GetMetrics().CharacterControlBindings == BindingsBefore + 1 &&
+					Server.GetMetrics().CharacterControlRevocations == RevocationsBefore + 1 && LocalCharacter &&
+					LocalCharacter->GetObjectId() == CharacterId && LocalCharacter->GetRootPart() &&
+					(*LocalCharacter->GetRootPart())->GetObjectId() == RootId &&
+					LocalCharacter->GetAttributeValue("ReboundActionRequested").has_value() &&
+					detail::GameSessionTestAccess::GetCharacterMetrics(Server).ActionRequestsAccepted == ActionsBefore + 1,
+					"same owner Character and RootPart regain a fresh control lease and accept another semantic action");
+				ReplacementTick = 221;
+			} else if (TestControlRebind) Check(false, "control rebind fixture establishes a root-bearing owner Character");
 
 			auto PreviousCharacter = ServerCharacter;
 			ServerPlayers[0]->LoadCharacter();
-			for (std::uint64_t Tick = 161; Tick <= 190; ++Tick) {
+			for (std::uint64_t Tick = ReplacementTick; Tick < ReplacementTick + 30; ++Tick) {
 				ClientRuntime->Step();
 				ServerRuntime.Step();
 				Advance(Network, Server, Client, Tick);
@@ -1629,7 +1693,8 @@ end)
 			(void)ClientTransport->Disconnect(
 				*ClientConnection, {DisconnectReason::LocalShutdown, "session lifecycle test disconnect"}
 			);
-		for (std::uint64_t Tick = 191; Tick <= 200; ++Tick)
+		for (std::uint64_t Tick = TestControlRebind ? 251 : 191;
+			Tick < (TestControlRebind ? 261 : 201); ++Tick)
 			Advance(Network, Server, Client, Tick);
 		Check(
 			ServerRuntime.Players->GetPlayers().empty(), "disconnect tears down the authoritative Player and Character"
@@ -2148,6 +2213,10 @@ int main(int ArgumentCount, char **Arguments) {
 			TestCharacterRetirementAcrossStructuralFrames();
 			return Failures == 0 ? 0 : 1;
 		}
+		if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--control-rebind") {
+			TestProductionLifecycleComposition(false, false, true);
+			return Failures == 0 ? 0 : 1;
+		}
 		if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--scale-counter") {
 			TestPhysicalScaleCounterDecoding();
 			TestRecoveryConvergenceBound();
@@ -2185,6 +2254,7 @@ int main(int ArgumentCount, char **Arguments) {
 		for (int Cycle = 0; Cycle < 100; ++Cycle)
 			TestProductionLifecycleComposition();
 		TestTwoClientIdentityAndControlIsolation();
+		TestProductionLifecycleComposition(false, false, true);
 		TestCharacterRetirementAcrossStructuralFrames();
 		TestServerCharacterAutoLoadsPolicy();
 	} catch (const std::exception &Error) {

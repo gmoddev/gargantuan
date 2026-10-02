@@ -1121,6 +1121,13 @@ namespace gargantuan::network {
 					if (!DesiredCharacters.contains(Character)) {
 						runtime_detail::CountWork(runtime_detail::WorkCounter::GraphChanges);
 						if (!Authority->MarkUnmaterialized(Connection, Character)) PeerHealthy = false;
+						else if (PeerValue.ControlledCharacter == Character) {
+							// MarkUnmaterialized revokes the native control lease. Clear the
+							// session's mirror so the same Player.Character can rebind when
+							// its RootPart becomes materialized again.
+							PeerValue.ControlledCharacter = {};
+							++Metrics.CharacterControlRevocations;
+						}
 					}
 				for (const auto Character : DesiredCharacters)
 					if (!PeerValue.MaterializedCharacters.contains(Character)) {
