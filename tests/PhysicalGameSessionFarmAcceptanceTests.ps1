@@ -301,6 +301,49 @@ function New-RunFixture {
 	}
 }
 
+function Save-RemoteCadenceLog {
+	param($Run, [switch]$SlowEvent)
+	$RunId = $Run.Report.RunId
+	$Nonce = $Run.Manifest.Nonces[0]
+	$Lines = [Collections.Generic.List[string]]::new()
+	$Lines.Add("[Qualification:Client] event=ready run_id=$RunId slot=0 nonce=$Nonce connection_slot=1 connection_generation=1")
+	$Sequence = 0
+	foreach ($Phase in @('baseline', 'load', 'resident', 'evict', 'reload')) {
+		$Rpc = [Collections.Generic.List[string]]::new()
+		for ($Index = 1; $Index -le 100; $Index++) {
+			$Started = [long]$Index * 51000000L
+			$Rpc.Add("$Index`:$Started`:$($Started + 50000000L):1")
+		}
+		$Events = [Collections.Generic.List[string]]::new()
+		for ($Index = 1; $Index -le 4; $Index++) {
+			$Sequence++
+			$Received = [long]$Index * 80000000L
+			$Offered = $Received - 40000000L
+			if ($SlowEvent -and $Phase -ceq 'reload' -and $Index -eq 4) {
+				$Offered = 300000000L; $Received = 550000001L
+			}
+			$Events.Add("$Sequence`:$Offered`:$Received")
+		}
+		foreach ($Kind in @('rpc', 'event')) {
+			$Rows = if ($Kind -ceq 'rpc') { $Rpc } else { $Events }
+			$Chunks = [int][Math]::Ceiling($Rows.Count / 32.0)
+			$Lines.Add("[Qualification:RemoteCadence] event=summary version=1 kind=$Kind phase=$Phase records=$($Rows.Count) chunks=$Chunks")
+			for ($Chunk = 1; $Chunk -le $Chunks; $Chunk++) {
+				$First = ($Chunk - 1) * 32
+				$Last = [Math]::Min($Rows.Count - 1, $First + 31)
+				$Joined = [string]::Join(',', @($Rows[$First..$Last]))
+				$Lines.Add("[Qualification:RemoteCadence] event=chunk version=1 kind=$Kind phase=$Phase index=$Chunk records=$Joined")
+			}
+		}
+		$Lines.Add("[Qualification:Producer] event=phase_metrics run_id=$RunId slot=0 nonce=$Nonce phase=$Phase status=PASS remote_samples=100 event_offers=4 event_acks=4 event_outstanding=0")
+	}
+	[IO.File]::WriteAllLines((Join-Path $Run.ClientRoot 'client-00.stdout.log'), $Lines)
+	Save-Index -Root $Run.ClientRoot -RunId $RunId -Role 'Clients'
+	$Run.Report.ClientEvidenceSha256 = (Get-FileHash -LiteralPath `
+		(Join-Path $Run.ClientRoot 'evidence-sha256.json') -Algorithm SHA256).Hash.ToLowerInvariant()
+	Save-Json -Path $Run.ReportPath -Value $Run.Report
+}
+
 function New-NodeTlsFixture {
 	param($NodeRun)
 	$StageRoot = Join-Path $TestRoot 'node-tls-stage'
@@ -410,7 +453,8 @@ try {
 		$Observed.Node.Provider.RealTls -cne 'NOT_MEASURED' -or
 		$Observed.Local.Publication.State -cne 'NOT_MEASURED' -or
 		$Observed.Local.ServerWorkTicks.Status -cne 'NOT_MEASURED' -or
-		@($Observed.GateObservations | Where-Object { $_.State -eq 'NOT MEASURED' }).Count -ne 12 -or
+		$Observed.Local.RemoteCadence.Status -cne 'NOT_MEASURED' -or
+		@($Observed.GateObservations | Where-Object { $_.State -eq 'NOT MEASURED' }).Count -ne 13 -or
 		$Observed.Local.Recovery.FixedServiceRecovery -cne 'NOT MEASURED' -or
 		$Observed.Node.Recovery.ExactRetainedWorkBytes -cne 'NOT_MEASURED') {
 		throw "resource/parity observation promoted a missing physical gate or lost resource evidence: status=$($Observed.Status) claim=$($Observed.Foundation3LQualification) parity=$($Observed.WorkloadPinParity.State) clients=$($Observed.Local.Resources.Clients.ProcessCount) server=$($Observed.Node.Resources.Server.ProcessCount) ws=$($Observed.Local.Resources.Clients.SumOfPerProcessPeakWorkingSetBytes) missing=$(@($Observed.GateObservations | Where-Object { $_.State -eq 'NOT MEASURED' }).Count)"
@@ -459,6 +503,56 @@ try {
 	try { Invoke-Analyzer -OutputPath $OutputPath } catch { $OverwriteRejected = $true }
 	if (-not $OverwriteRejected -or [IO.File]::ReadAllText($OutputPath) -cne $OriginalOutput) {
 		throw 'existing acceptance observation was overwritten'
+	}
+	$Local = New-RunFixture -Prefix 'remote-local' -Provider 'Local' `
+		-RunId '6c93e53d-0e0c-4b8d-8a3b-9a761a406ebd'
+	$Node = New-RunFixture -Prefix 'remote-node' -Provider 'Node' `
+		-RunId '6d93e53d-0e0c-4b8d-8a3b-9a761a406ebd'
+	Save-RemoteCadenceLog -Run $Local
+	Save-RemoteCadenceLog -Run $Node
+	$RemotePassPath = Join-Path $TestRoot 'remote-pass.json'
+	Invoke-Analyzer -OutputPath $RemotePassPath
+	$RemotePass = Get-Content -LiteralPath $RemotePassPath -Raw | ConvertFrom-Json
+	if ($RemotePass.Status -cne 'INCOMPLETE' -or
+		$RemotePass.Foundation3LQualification -cne 'NOT CLAIMED' -or
+		$RemotePass.Local.RemoteCadence.Status -cne 'MEASURED_PASS' -or
+		$RemotePass.Node.RemoteCadence.Phases.reload.RpcP95Ns -ne 50000000 -or
+		$RemotePass.Local.RemoteCadence.OtherClientsScaleRemoteRecipientService -cne 'NOT_MEASURED' -or
+		$RemotePass.Local.RemoteCadence.CrossHostOneWayLatency -cne 'NOT_MEASURED' -or
+		@($RemotePass.GateObservations | Where-Object {
+			$_.Gate -ceq 'Designated producer Luau RPC and Event ACK cadence' -and
+			$_.State -ceq 'MEASURED_PASS' }).Count -ne 1 -or
+		@($RemotePass.GateObservations | Where-Object {
+			$_.Gate -ceq 'Full Character and Remote recipient cadence' -and
+			$_.State -ceq 'NOT MEASURED' }).Count -ne 1) {
+		throw 'producer Remote trace was not adopted with partial coverage'
+	}
+	$NodeLogPath = Join-Path $Node.ClientRoot 'client-00.stdout.log'
+	$OriginalNodeLog = [IO.File]::ReadAllText($NodeLogPath)
+	$NodeLogRows = @([IO.File]::ReadAllLines($NodeLogPath) | Where-Object {
+		-not ($_ -match 'event=chunk version=1 kind=rpc phase=baseline index=1 ') })
+	[IO.File]::WriteAllLines($NodeLogPath, $NodeLogRows)
+	Save-Index -Root $Node.ClientRoot -RunId $Node.Report.RunId -Role 'Clients'
+	$Node.Report.ClientEvidenceSha256 = (Get-FileHash -LiteralPath `
+		(Join-Path $Node.ClientRoot 'evidence-sha256.json') -Algorithm SHA256).Hash.ToLowerInvariant()
+	Save-Json -Path $Node.ReportPath -Value $Node.Report
+	Assert-Rejected -Name 'rehashed missing Luau RPC trace chunk' `
+		-OutputPath (Join-Path $TestRoot 'remote-missing-chunk.json')
+	[IO.File]::WriteAllText($NodeLogPath, $OriginalNodeLog)
+	Save-RemoteCadenceLog -Run $Node -SlowEvent
+	$RemoteFailPath = Join-Path $TestRoot 'remote-fail.json'
+	Invoke-Analyzer -OutputPath $RemoteFailPath
+	$RemoteFail = Get-Content -LiteralPath $RemoteFailPath -Raw | ConvertFrom-Json
+	if ($RemoteFail.Node.RemoteCadence.Status -cne 'MEASURED_FAIL' -or
+		$RemoteFail.Node.RemoteCadence.Phases.reload.EventMaxRttNs -ne 250000001 -or
+		@($RemoteFail.GateObservations | Where-Object {
+			$_.Gate -ceq 'Designated producer Luau RPC and Event ACK cadence' -and
+			$_.State -ceq 'MEASURED_FAIL' }).Count -ne 1 -or
+		@($RemoteFail.GateObservations | Where-Object {
+			$_.Gate -ceq 'Full Character and Remote recipient cadence' -and
+			$_.State -ceq 'NOT MEASURED' }).Count -ne 1 -or
+		$RemoteFail.Status -cne 'INCOMPLETE') {
+		throw 'measured Luau Remote violation did not remain scoped and fail closed'
 	}
 	$RecoveryLocal = New-RunFixture -Prefix 'recovery-local' -Provider 'Local' `
 		-RunId '9e93e53d-0e0c-4b8d-8a3b-9a761a406ebd' -RecoveryWorkload

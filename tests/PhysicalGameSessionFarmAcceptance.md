@@ -93,9 +93,19 @@ including analyzer and parser source hashes,
 with each reconciliation. It exposes exact accepted/observed state-chain
 counts and server-local due-to-accept, forced-built-to-accept, and client-local
 receive-to-handler durations. It does not infer cross-host one-way latency,
-full per-recipient Character cadence, or Remote cadence; those gates remain
+full per-recipient Character cadence, or full Remote recipient cadence; those gates remain
 `NOT MEASURED`. A missing legacy trace set stays unmeasured, whereas an
 incomplete or invalid set is rejected.
+
+The designated Farm32 producer (client slot 0) now emits bounded Luau-local
+Remote traces after each phase drains. The acceptance analyzer replays its
+hash-indexed RPC invocation/return and Event offer/`OnClientEvent` callback
+records, requiring 100 RPCs per phase within p95/p99/max 150/250/500 ms and
+matched Events within 250 ms round trip and ACK service gap. Missing legacy
+traces remain `NOT MEASURED`; partial or malformed present traces are rejected,
+and a valid threshold violation is `MEASURED_FAIL`. The other 31 clients do not
+produce this measured ScaleEvent/ScaleFunction workload, so their Remote
+recipient service and cross-host one-way latency remain `NOT_MEASURED`.
 
 Current role-local
 evidence does **not** establish canonical CPU/memory/network headroom, fixed

@@ -92,6 +92,50 @@ function Read-FarmServerWorkTicks {
 	return $Observation
 }
 
+function Read-FarmRemoteCadence {
+	param([string]$ClientRoot, [System.Collections.IDictionary]$ClientIndex, [string]$RunId)
+	$Members = @($ClientIndex.Files | Where-Object Name -CEQ 'client-00.stdout.log')
+	if ($Members.Count -eq 0) {
+		return [ordered]@{ Status = 'NOT_MEASURED'; Reason = 'indexed producer Luau log absent'
+			OtherClientsScaleRemoteRecipientService = 'NOT_MEASURED'
+			CrossHostOneWayLatency = 'NOT_MEASURED' }
+	}
+	if ($Members.Count -ne 1) { throw 'indexed producer Luau log is duplicated' }
+	$LogPath = Assert-IndexedFile -Root $ClientRoot -Index $ClientIndex `
+		-Name 'client-00.stdout.log' -MaximumBytes 4194304
+	if (-not [IO.File]::ReadAllText($LogPath).Contains('[Qualification:RemoteCadence] ')) {
+		return [ordered]@{ Status = 'NOT_MEASURED'; Reason = 'producer Luau offer/completion trace absent'
+			OtherClientsScaleRemoteRecipientService = 'NOT_MEASURED'
+			CrossHostOneWayLatency = 'NOT_MEASURED' }
+	}
+	$ScriptPath = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../tools/physical-qualifier/farm_remote_cadence.py'))
+	if (-not (Test-Path -LiteralPath $ScriptPath -PathType Leaf)) {
+		throw 'bounded Remote Luau cadence analyzer is missing'
+	}
+	$Python = @(Get-Command python -CommandType Application -ErrorAction Stop)[0]
+	$Output = @(& $Python.Source $ScriptPath --clients-index `
+		(Join-Path $ClientRoot 'evidence-sha256.json') --producer-slot 0 2>&1)
+	$ExitCode = $LASTEXITCODE
+	if ($ExitCode -notin @(0, 1) -or $Output.Count -ne 1) {
+		$Detail = ((@($Output) | ForEach-Object { [string]$_ }) -join ' ')
+		if ($Detail.Length -gt 512) { $Detail = $Detail.Substring(0, 512) }
+		throw "bounded Remote Luau cadence analysis rejected indexed evidence: $Detail"
+	}
+	$Observation = [string]$Output[0] | ConvertFrom-Json -AsHashtable
+	if ($Observation.Format -cne 'GargantuanFarmRemoteLuauCadence' -or
+		$Observation.Version -ne 1 -or $Observation.RunId -cne $RunId -or
+		$Observation.ProducerSlot -ne 0 -or
+		$Observation.Status -cne $(if ($ExitCode -eq 0) { 'MEASURED_PASS' } else { 'MEASURED_FAIL' }) -or
+		$Observation.SourceSha256 -ine $Members[0].Sha256 -or
+		$Observation.OtherClientsScaleRemoteRecipientService -cne 'NOT_MEASURED' -or
+		$Observation.CrossHostOneWayLatency -cne 'NOT_MEASURED' -or
+		$Observation.Phases.Count -ne 5 -or
+		@($Observation.Phases.Keys | Where-Object { $_ -cnotin @('baseline', 'load', 'resident', 'evict', 'reload') }).Count -ne 0) {
+		throw 'bounded Remote Luau cadence observation is invalid'
+	}
+	return $Observation
+}
+
 function Assert-IndexedFile {
 	param([string]$Root, [System.Collections.IDictionary]$Index, [string]$Name,
 		[long]$MaximumBytes = 16777216)
@@ -754,6 +798,8 @@ function Read-ProviderRun {
 	}
 	$ServerWorkTicks = Read-FarmServerWorkTicks -ServerRoot $Server.Root `
 		-ServerIndex $Server.Index -RunId $Report.RunId
+	$RemoteCadence = Read-FarmRemoteCadence -ClientRoot $Clients.Root `
+		-ClientIndex $Clients.Index -RunId $Report.RunId
 	$ProviderObservation = Read-ProviderObservation -Report $Report -Manifest $Manifest `
 		-NodeProviderPath $Server.NodeProviderPath
 	$Recovery = Read-RecoveryObservation -Report $Report -Manifest $Manifest `
@@ -761,6 +807,7 @@ function Read-ProviderRun {
 	return [pscustomobject]@{
 		Report = $Report; Manifest = $Manifest
 		Admission = $Admission; Publication = $Publication; ServerWorkTicks = $ServerWorkTicks
+		RemoteCadence = $RemoteCadence
 		ProviderObservation = $ProviderObservation; Recovery = $Recovery
 		Resources = [ordered]@{ Server = $ServerResources; Clients = $ClientResources
 			ServerHost = $ServerHost; ClientHost = $ClientHost }
@@ -817,6 +864,7 @@ $Observed = [ordered]@{
 		RetiredBytes = $Local.Report.Admission.retired; Admission = $Local.Admission
 		Publication = $Local.Publication
 		ServerWorkTicks = $Local.ServerWorkTicks
+		RemoteCadence = $Local.RemoteCadence
 		Recovery = $Local.Recovery
 		Provider = $Local.ProviderObservation; Resources = $Local.Resources
 		EvidenceRetention = $Local.EvidenceRetention
@@ -826,6 +874,7 @@ $Observed = [ordered]@{
 		RetiredBytes = $Node.Report.Admission.retired; Admission = $Node.Admission
 		Publication = $Node.Publication
 		ServerWorkTicks = $Node.ServerWorkTicks
+		RemoteCadence = $Node.RemoteCadence
 		Recovery = $Node.Recovery
 		Provider = $Node.ProviderObservation; Resources = $Node.Resources
 		EvidenceRetention = $Node.EvidenceRetention
@@ -844,7 +893,8 @@ $Observed = [ordered]@{
 		[ordered]@{ Gate = 'Five-phase observation and terminal native admission conservation'; State = 'MEASURED' },
 		[ordered]@{ Gate = 'Character accepted-state chain and role-local publication delays'; State = $(if ($Local.Publication.Status -ceq 'ACCEPTED_STATE_CHAIN_OBSERVED' -and $Node.Publication.Status -ceq 'ACCEPTED_STATE_CHAIN_OBSERVED') { 'MEASURED' } else { 'NOT MEASURED' }); Reason = 'each provider independently rejoined all hash-sealed native Character traces; cross-host clocks remain separate' },
 		[ordered]@{ Gate = 'Server work-tick p95/p99/max in all five phases'; State = $(if ($Local.ServerWorkTicks.Status -ceq 'MEASURED_FAIL' -or $Node.ServerWorkTicks.Status -ceq 'MEASURED_FAIL') { 'MEASURED_FAIL' } elseif ($Local.ServerWorkTicks.Status -ceq 'MEASURED_PASS' -and $Node.ServerWorkTicks.Status -ceq 'MEASURED_PASS') { 'MEASURED_PASS' } else { 'NOT MEASURED' }); Reason = 'hash-indexed FrameBegin-to-FrameEnd work time excludes deliberate 60-Hz pacing sleep; 16.667/33.334/100-ms phase limits' },
-		[ordered]@{ Gate = 'Full Character and Remote recipient cadence'; State = 'NOT MEASURED'; Reason = 'Character join lacks cross-host service latency and per-recipient cadence distribution; Remote stages are absent' },
+		[ordered]@{ Gate = 'Designated producer Luau RPC and Event ACK cadence'; State = $(if ($Local.RemoteCadence.Status -ceq 'MEASURED_FAIL' -or $Node.RemoteCadence.Status -ceq 'MEASURED_FAIL') { 'MEASURED_FAIL' } elseif ($Local.RemoteCadence.Status -ceq 'MEASURED_PASS' -and $Node.RemoteCadence.Status -ceq 'MEASURED_PASS') { 'MEASURED_PASS' } else { 'NOT MEASURED' }); Reason = 'hash-indexed client-00 Luau invoke/return and offer/OnClientEvent callback on one local clock; 150/250/500-ms RPC and 250-ms Event RTT/ACK-gap limits' },
+		[ordered]@{ Gate = 'Full Character and Remote recipient cadence'; State = 'NOT MEASURED'; Reason = 'Character cross-host service latency and complete per-recipient cadence remain separate; ScaleEvent/ScaleFunction service for the other 31 clients and cross-host one-way latency are not measured' },
 		[ordered]@{ Gate = 'Full fairness, overload backpressure and journal retention margin'; State = 'NOT MEASURED'; Reason = 'terminal counters and exact-demand event waits do not prove saturated service, continuous backlog bounds, or the journal high-water margin' },
 		[ordered]@{ Gate = 'CPU, memory, network and transport headroom'; State = 'NOT MEASURED'; Reason = 'bounded host/NIC snapshots describe utilization, but no canonical CPU/memory/NIC pass percentage or concurrent packet-level reserve proof follows from those samples' },
 		[ordered]@{ Gate = 'Fixed 20-second service recovery'; State = $(if ($Local.Recovery.FixedServiceRecovery -eq 'MEASURED_PASS' -and $Node.Recovery.FixedServiceRecovery -eq 'MEASURED_PASS') { 'MEASURED_PASS' } elseif ($Local.Recovery.FixedServiceRecovery -eq 'MEASURED_FAIL' -or $Node.Recovery.FixedServiceRecovery -eq 'MEASURED_FAIL') { 'MEASURED_FAIL' } else { 'NOT MEASURED' }); Reason = 'three canonical cases per provider, replayed from indexed server/client recovery logs and matched to sealed reconciliation' },
