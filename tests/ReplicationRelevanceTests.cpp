@@ -162,7 +162,8 @@ namespace {
 				"large frozen quote peer registers");
 			for (std::uint64_t Tick = 1; Tick != 200 && !LiveLarge.IsPlanningReady(LargeConnection); ++Tick)
 				LiveLarge.ProcessPlanning(Tick);
-			auto LargeBaseline = LiveLarge.ProducePendingBaseline(LargeConnection, 64, 200);
+			const auto Limit = MaximumReliableServiceGroupBytes - ReliableServiceEnvelopeBytes;
+			auto LargeBaseline = LiveLarge.ProducePendingBaseline(LargeConnection, 64, Limit);
 			Check(LargeBaseline.Frame && LiveLarge.CommitSchedulerAcceptance(
 				LargeConnection, LargeBaseline.Frame->Sequence).Succeeded(),
 				"large frozen quote starts after an accepted baseline");
@@ -173,7 +174,6 @@ namespace {
 			auto LargeQuote = LiveLarge.CaptureFrozenQuote(Error);
 			Check(LargeQuote && Error.empty(), "large Name history is captured at cessation");
 			if (LargeQuote) {
-				const auto Limit = MaximumReliableServiceGroupBytes - ReliableServiceEnvelopeBytes;
 				const std::map<ConnectionId, std::size_t> Limits{{LargeConnection, Limit}};
 				runtime_detail::WorkSample QuoteWork{};
 				std::uint64_t LiveBytes = 0, QuotedBytes = 0;
