@@ -1,6 +1,7 @@
 #include "../src/network/GameSessionTestAccess.hpp"
 #include "../src/runtime/RuntimeWorkDiagnostics.hpp"
 #include "../src/host/common/FarmPublicationEvidence.hpp"
+#include "../src/host/common/FarmLifecycleEvidence.hpp"
 #include "../src/host/server/PhysicalScaleQualification.hpp"
 #include "PublicationLatencyFixture.hpp"
 #include "JoinedCharacterFixture.hpp"
@@ -629,7 +630,13 @@ namespace {
 		AfterUnstarted.reset();
 		GameSession Session(Transport, Configuration(GameSessionRole::Server, "one-shot-session"), &Runtime);
 		Check(Session.Start().Succeeded(), "one-shot GameSession starts once");
+		host::detail::FarmLifecycleEvidence BeforeStop;
+		BeforeStop.ObserveSession(Session);
+		Check(!BeforeStop.Valid(), "logical lifecycle receipt rejects a live session even with no peers");
 		Session.Stop();
+		host::detail::FarmLifecycleEvidence AfterStopEvidence;
+		AfterStopEvidence.ObserveSession(Session);
+		Check(AfterStopEvidence.Valid(), "post-Stop native snapshot proves terminal ownership release");
 		Check(
 			Session.GetStatus() == GameSessionStatus::Closed &&
 				Session.Start().Status == TransportOperationStatus::InvalidState,
@@ -1205,6 +1212,11 @@ namespace {
 		}
 		Client.Stop();
 		Server.Stop();
+		host::detail::FarmLifecycleEvidence ClientStopped, ServerStopped;
+		ClientStopped.ObserveSession(Client);
+		ServerStopped.ObserveSession(Server);
+		Check(ClientStopped.Valid() && ServerStopped.Valid(),
+			"connected production lifecycle leaves exact terminal session/admission/readers snapshots");
 		if (ClientRuntime) ClientRuntime->Destroy();
 		ServerRuntime.Destroy();
 	}

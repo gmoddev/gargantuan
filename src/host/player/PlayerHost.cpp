@@ -2,6 +2,7 @@
 
 #include "host/common/PackagedHost.hpp"
 #include "host/common/FarmPublicationEvidence.hpp"
+#include "host/common/FarmLifecycleEvidence.hpp"
 #include "host/player/FarmRecoveryObservation.hpp"
 #include "gargantuan/Engine.hpp"
 #include "gargantuan/Log.hpp"
@@ -685,6 +686,7 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 			if (const auto Value = Runtime->CharacterControl->GetAttributeValue("OfficialHostTimeline"))
 				if (const auto *TimelineText = std::get_if<std::string>(&*Value)) std::cout << *TimelineText << '\n';
 		}
+		host::detail::FarmLifecycleEvidence Lifecycle;
 		if (Session) {
 			const auto Metrics = Session->GetMetrics();
 			LOG_INFO(
@@ -702,9 +704,15 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 				static_cast<unsigned long long>(Metrics.ActionPresentationStops)
 			);
 			Session->Stop();
+			if (FarmScaleWorkload) Lifecycle.ObserveSession(*Session);
 		}
 		Session.reset();
 		Runtime->Destroy();
+		if (FarmScaleWorkload) {
+			Lifecycle.ObserveContent(Runtime->Content.get());
+			Lifecycle.Write(std::cout, FarmRunId, "client", FarmSlot, FarmClientNonce);
+			if (!Lifecycle.Valid()) ExitCode = 18;
+		}
 		Runtime.reset();
 		Renderer.reset();
 		ReportFarmResult(ExitCode, PublicationEvidence && !PublicationEvidence->Valid() ? "publication_evidence_invalid" :

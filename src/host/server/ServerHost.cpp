@@ -3,6 +3,7 @@
 #include "host/server/FarmAdmissionEvidence.hpp"
 #include "host/common/FarmPublicationEvidence.hpp"
 #include "host/common/FarmServerTickEvidence.hpp"
+#include "host/common/FarmLifecycleEvidence.hpp"
 
 #include "host/common/PackagedHost.hpp"
 #include "gargantuan/Engine.hpp"
@@ -1121,11 +1122,18 @@ namespace gargantuan::host {
 						  << " step_us=" << Metrics.Timing.Step.TotalMicroseconds << '\n';
 			}
 			const auto ShutdownStarted = std::chrono::steady_clock::now();
+			detail::FarmLifecycleEvidence Lifecycle;
 			LOG_INFO(App, "[Runtime:Server] Stopping peer acceptance and game session");
 			if (Session) Session->Stop();
+			if (FarmScaleWorkload && Session) Lifecycle.ObserveSession(*Session);
 			Session.reset();
 			LOG_INFO(App, "[Runtime:Server] Stopping authoritative runtime and content provider");
 			Runtime->Destroy();
+			if (FarmScaleWorkload) {
+				Lifecycle.ObserveContent(Runtime->Content.get());
+				Lifecycle.Write(std::cout, FarmRunId, "server", -1, 0);
+				if (!Lifecycle.Valid() || !Lifecycle.ContentPresent) ExitCode = 18;
+			}
 			Runtime.reset();
 			std::cout << "[Runtime:Server] ShutdownMicroseconds="
 					  << std::chrono::duration_cast<std::chrono::microseconds>(
