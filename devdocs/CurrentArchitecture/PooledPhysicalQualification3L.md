@@ -2244,3 +2244,21 @@ and retired, zero terminal release and zero outstanding debt. Its recovery RPC
 maximum was 37.1119 ms, Event maximum 37.1062 ms and action maximum 37.1747 ms.
 These are local native results. Hosted Native/sanitizer CI and official-package
 workflow `37065664987` remain pending; provider qualification is not inferred.
+
+Worker-only diagnostic `7b2333c6-bea0-43e7-9e0a-f1fd5fb29eba` exercised that
+candidate with 32 real clients and continuing motion. Gameplay recovery passed
+with 5,344 B conserved and prefix convergence at 332,047 us. Structural recovery
+still failed: reference 608,787,930 B in 1,608 frames, bound 33,798,602 us;
+at 46,220,886 us the prefix remained unfinished, with 565,137,624 B accepted,
+564,423,976 B first-sent and 563,661,224 B ACKed/retired. Mixed recovery remains
+NOT MEASURED. The narrower preflight and UTF-8 changes therefore remain
+insufficient for complete recovery qualification. Cleanup found no owned
+client/server process or UDP 39450 listener. Preserve the evidence under
+`C:\Sandbox\Codex\Evidence\Farm32_1dce88d9Diagnostic\` and the run ID.
+
+Source inspection next identified a separate avoidable cost: incremental
+production serializes doomed attempts up to the global 8 MiB codec bound before
+checking the negotiated complete-frame limit. A bounded-encoder correction must
+still validate the entire candidate first, preserve invalid-value precedence,
+and retain the exact existing geometric retry, journal charge and final frame.
+It may cap encoding at the hard negotiated limit, never available credit.
