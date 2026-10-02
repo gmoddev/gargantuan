@@ -15,6 +15,7 @@
 #include "gargantuan/render/RenderDirtyAccumulator.hpp"
 #include "gargantuan/runtime/ChangeJournal.hpp"
 #include "ProtocolUtf8ParityFixture.hpp"
+#include "BoundedReplicationEncodingFixture.hpp"
 
 #include <algorithm>
 #include <array>
@@ -633,6 +634,7 @@ int main() {
 	}
 	TestMixedSimulatorComposition();
 	Check(test::RunProtocolUtf8ParityTests(), "UTF-8 scalar parity and exact GRPL encoding pass");
+	Check(test::RunBoundedReplicationEncodingTests(), "bounded GRPL encoding preserves bytes, bounds and error precedence");
 	TestReplicaRenderDirtiness();
 	TestRepeatedReplicaPropertyPreflight();
 	TestRevisionedStructuralMaterialization();

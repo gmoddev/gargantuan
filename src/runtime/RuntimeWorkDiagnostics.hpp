@@ -110,6 +110,7 @@ enum class WorkCounter : std::size_t {
 	RelevanceUnchangedRoots, RelevanceUnchangedSelection, RelevanceOldRootVisits, RelevanceCandidateVisits,
 	RelevanceNoopQueryCandidates,
 	NamePreflightValidationBytes, NamePreflightCacheHits, NamePreflightRetries,
+	StructuralEncodePayloadBytes, StructuralEncodeLimitFailures,
 	Count
 };
 inline constexpr std::array<std::string_view, static_cast<std::size_t>(WorkCounter::Count)> WorkCounterNames{
@@ -135,7 +136,8 @@ inline constexpr std::array<std::string_view, static_cast<std::size_t>(WorkCount
 	"PlanningCharged", "PlanningResumes", "PlanningCompletedGroups", "PlanningReadyBatches", "PlanningRecordsHighWater", "PlanningServiceGap",
 	"RelevanceUnchangedRoots", "RelevanceUnchangedSelection", "RelevanceOldRootVisits", "RelevanceCandidateVisits",
 	"RelevanceNoopQueryCandidates",
-	"NamePreflightValidationBytes", "NamePreflightCacheHits", "NamePreflightRetries"
+	"NamePreflightValidationBytes", "NamePreflightCacheHits", "NamePreflightRetries",
+	"StructuralEncodePayloadBytes", "StructuralEncodeLimitFailures"
 };
 struct WorkSample : std::array<WorkDuration, WorkPhaseNames.size()> {
 	std::array<WorkProducerSample, WorkProducerNames.size()> Producers{};

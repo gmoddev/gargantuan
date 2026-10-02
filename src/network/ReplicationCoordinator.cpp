@@ -3,6 +3,7 @@
 #include "ReliableByteAdmissionDiagnostics.hpp"
 #include "GameSessionTestAccess.hpp"
 #include "FrozenReplicationSchema.hpp"
+#include "BoundedReplicationEncoding.hpp"
 #include "../runtime/RuntimeWorkDiagnostics.hpp"
 
 #include "gargantuan/InstanceProperty.hpp"
@@ -2089,7 +2090,7 @@ namespace gargantuan::network {
 		// Frame::IsValid checks the whole candidate before the writer's size limit,
 		// so a bad later string must not disappear behind an earlier oversize prefix.
 		auto ProvenOversizedNames = [&]() {
-			if (!NameBytePreflightEnabled || FrozenQuote || !PolicyManaged ||
+			if (!IncrementalEncodingOptimizationsEnabled || FrozenQuote || !PolicyManaged ||
 				MaximumTransitions <= 1 || Records.size() <= 1) return false;
 			if (Validation.Catalog.Scope != CatalogCursor.Scope ||
 				Validation.Catalog.NextSequence != CatalogCursor.NextSequence) {
@@ -2359,7 +2360,11 @@ namespace gargantuan::network {
 		}
 		if (Frame.Operations.size() > MaximumReplicationOperationsPerFrame)
 			return Finish({{}, "Replication frame operation limit exceeded"});
-		auto Encoded = runtime_detail::MeasureWork(runtime_detail::WorkPhase::StructuralValidationEncode, [&] { return EncodeReplicationFrame(Frame); });
+		auto Encoded = runtime_detail::MeasureWork(runtime_detail::WorkPhase::StructuralValidationEncode, [&] {
+			return IncrementalEncodingOptimizationsEnabled
+				? detail::EncodeReplicationFrameBounded(Frame, MaximumFrameBytes)
+				: EncodeReplicationFrame(Frame);
+		});
 		const bool FrameTooLarge = !Encoded && Encoded.error().Code == SerializationErrorCode::LimitExceeded &&
 			Encoded.error().Message == "Replication frame exceeds its byte limit";
 		if (!Encoded && !FrameTooLarge) return Finish({{}, Encoded.error().Format()});

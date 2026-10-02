@@ -255,7 +255,7 @@ namespace gargantuan::network {
 			ChangeCursor Catalog;
 			std::set<const std::string *> Validated;
 		};
-		bool NameBytePreflightEnabled = true;
+		bool IncrementalEncodingOptimizationsEnabled = true;
 		[[nodiscard]] ReplicationProduceResult ProduceIncrementalImpl(
 			ConnectionId Connection, std::size_t MaximumTransitions, std::size_t MaximumFrameBytes,
 			std::size_t MaximumJournalRecords, std::size_t AvailableFrameBytes, NameBytePreflightCache &Validation);

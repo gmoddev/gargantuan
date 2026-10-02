@@ -27,7 +27,7 @@ struct NameBytePreflightFixture {
 		std::ranges::sort(Selection.DesiredObjects);
 		Optimized = std::make_unique<Coordinator>(World);
 		Reference = std::make_unique<Coordinator>(World);
-		network::detail::GameSessionTestAccess::SetNameBytePreflightEnabled(*Reference, false);
+		network::detail::GameSessionTestAccess::SetIncrementalEncodingOptimizationsEnabled(*Reference, false);
 		for (auto *Source : {Optimized.get(), Reference.get()}) {
 			auto Baseline = Source->AddPeerBounded(Connection, network::ReplicationEpoch(1), Selection);
 			EnvelopeRequire(Baseline.Frame && Source->CommitSchedulerAcceptance(Connection, Baseline.Frame->Sequence).Succeeded(),
@@ -141,12 +141,17 @@ inline void TestNameBytePreflight() {
 		EnvelopeRequire(F.OptimizedWork[static_cast<std::size_t>(runtime_detail::WorkPhase::StructuralEncode)].Calls <
 			F.ReferenceWork[static_cast<std::size_t>(runtime_detail::WorkPhase::StructuralEncode)].Calls,
 			"Name byte proof eliminates actual doomed encoder calls");
+		EnvelopeRequire(Counter(F.OptimizedWork, WorkCounter::StructuralEncodePayloadBytes) <
+			Counter(F.ReferenceWork, WorkCounter::StructuralEncodePayloadBytes),
+			"encoding optimizations reduce actual payload writes across successful and discarded attempts");
 		std::cout << "[Network:NameBytePreflight] case=current"
 			<< " optimized_encode_calls=" << F.OptimizedWork[static_cast<std::size_t>(runtime_detail::WorkPhase::StructuralEncode)].Calls
 			<< " reference_encode_calls=" << F.ReferenceWork[static_cast<std::size_t>(runtime_detail::WorkPhase::StructuralEncode)].Calls
 			<< " optimized_encode_ns=" << F.OptimizedWork[static_cast<std::size_t>(runtime_detail::WorkPhase::StructuralEncode)].Nanoseconds
 			<< " reference_encode_ns=" << F.ReferenceWork[static_cast<std::size_t>(runtime_detail::WorkPhase::StructuralEncode)].Nanoseconds
 			<< " preflight_validation_bytes=" << Counter(F.OptimizedWork, WorkCounter::NamePreflightValidationBytes)
+			<< " optimized_payload_bytes=" << Counter(F.OptimizedWork, WorkCounter::StructuralEncodePayloadBytes)
+			<< " reference_payload_bytes=" << Counter(F.ReferenceWork, WorkCounter::StructuralEncodePayloadBytes)
 			<< " preflight_cache_hits=" << Counter(F.OptimizedWork, WorkCounter::NamePreflightCacheHits) << '\n';
 		F.Compare(512, 2048, F.Limit, F.Limit, false);
 		F.Objects.front()->SetName(std::string(24 * 1024, 'Z'));
@@ -160,11 +165,16 @@ inline void TestNameBytePreflight() {
 			F.OptimizedWork[static_cast<std::size_t>(runtime_detail::WorkPhase::StructuralEncode)].Calls <
 			F.ReferenceWork[static_cast<std::size_t>(runtime_detail::WorkPhase::StructuralEncode)].Calls,
 			"historical Name retries optimize while barrier and current suffix preserve every accepted frame");
+		EnvelopeRequire(Counter(F.OptimizedWork, WorkCounter::StructuralEncodePayloadBytes) <
+			Counter(F.ReferenceWork, WorkCounter::StructuralEncodePayloadBytes),
+			"historical frames reduce discarded payload writes while preserving exact accepted output");
 		std::cout << "[Network:NameBytePreflight] case=historical"
 			<< " optimized_encode_calls=" << F.OptimizedWork[static_cast<std::size_t>(runtime_detail::WorkPhase::StructuralEncode)].Calls
 			<< " reference_encode_calls=" << F.ReferenceWork[static_cast<std::size_t>(runtime_detail::WorkPhase::StructuralEncode)].Calls
 			<< " optimized_encode_ns=" << F.OptimizedWork[static_cast<std::size_t>(runtime_detail::WorkPhase::StructuralEncode)].Nanoseconds
-			<< " reference_encode_ns=" << F.ReferenceWork[static_cast<std::size_t>(runtime_detail::WorkPhase::StructuralEncode)].Nanoseconds << '\n';
+			<< " reference_encode_ns=" << F.ReferenceWork[static_cast<std::size_t>(runtime_detail::WorkPhase::StructuralEncode)].Nanoseconds
+			<< " optimized_payload_bytes=" << Counter(F.OptimizedWork, WorkCounter::StructuralEncodePayloadBytes)
+			<< " reference_payload_bytes=" << Counter(F.ReferenceWork, WorkCounter::StructuralEncodePayloadBytes) << '\n';
 	}
 	for (const std::size_t Reads : {0u, 1u, 2u, 3u, 5u, 17u, 31u, 63u}) {
 		NameBytePreflightFixture F;

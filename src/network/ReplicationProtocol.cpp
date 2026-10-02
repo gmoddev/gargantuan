@@ -1,4 +1,5 @@
 #include "gargantuan/network/ReplicationProtocol.hpp"
+#include "BoundedReplicationEncoding.hpp"
 #include "../runtime/RuntimeWorkDiagnostics.hpp"
 
 #include "gargantuan/network/BinaryCodec.hpp"
@@ -358,11 +359,26 @@ namespace gargantuan::network {
 	}
 
 	SerializationResult<std::vector<std::byte>> EncodeReplicationFrame(const ReplicationFrame &Frame) {
+		return detail::EncodeReplicationFrameBounded(Frame, MaximumReplicationFrameBytes);
+	}
+
+	SerializationResult<std::vector<std::byte>> detail::EncodeReplicationFrameBounded(
+		const ReplicationFrame &Frame, std::size_t MaximumBytes
+	) {
 		runtime_detail::WorkScope Work(runtime_detail::WorkPhase::StructuralEncode);
 		try {
 			if (!Frame.IsValid())
 				return SerializationFailure(SerializationErrorCode::InvalidValue, "Replication frame is invalid");
-			Writer Payload(MaximumReplicationFrameBytes - ReplicationHeaderBytes);
+			// Full validation above preserves invalid-data precedence even if an
+			// earlier valid prefix exceeds this bound. Available credit is unrelated.
+			MaximumBytes = std::min(MaximumBytes, MaximumReplicationFrameBytes);
+			if (MaximumBytes < ReplicationHeaderBytes) {
+				runtime_detail::CountWork(runtime_detail::WorkCounter::StructuralEncodeLimitFailures);
+				return SerializationFailure(
+					SerializationErrorCode::LimitExceeded, "Replication frame exceeds its byte limit"
+				);
+			}
+			Writer Payload(MaximumBytes - ReplicationHeaderBytes);
 			for (const auto &Entry : Frame.Schema) {
 				WriteSchemaId(Payload, Entry.Id);
 				Payload.Integer(Entry.DefinitionVersion);
@@ -370,11 +386,14 @@ namespace gargantuan::network {
 			}
 			for (const auto &Operation : Frame.Operations)
 				WriteOperation(Payload, Operation);
-			if (!Payload.Succeeded())
+			runtime_detail::CountWork(runtime_detail::WorkCounter::StructuralEncodePayloadBytes, Payload.Bytes.size());
+			if (!Payload.Succeeded()) {
+				runtime_detail::CountWork(runtime_detail::WorkCounter::StructuralEncodeLimitFailures);
 				return SerializationFailure(
 					SerializationErrorCode::LimitExceeded, "Replication frame exceeds its byte limit"
 				);
-			Writer Output(MaximumReplicationFrameBytes);
+			}
+			Writer Output(MaximumBytes);
 			Output.Integer(ReplicationMagic);
 			Output.Integer(Frame.Version);
 			Output.Integer(static_cast<std::uint8_t>(Frame.Kind));
