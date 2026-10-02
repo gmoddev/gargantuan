@@ -15,6 +15,7 @@
 #include <new>
 #include <set>
 #include <type_traits>
+#include <utility>
 
 namespace gargantuan::network {
 	namespace {
@@ -384,7 +385,9 @@ namespace gargantuan::network {
 			Output.Integer(static_cast<std::uint32_t>(Frame.Operations.size()));
 			Output.Integer(static_cast<std::uint32_t>(Payload.Bytes.size()));
 			Output.Bytes.insert(Output.Bytes.end(), Payload.Bytes.begin(), Payload.Bytes.end());
-			return Output.Bytes;
+			// Output.Bytes is a member lvalue, not an implicitly movable local.
+			// Transfer its completed allocation into expected instead of copying it.
+			return std::move(Output.Bytes);
 		} catch (const std::bad_alloc &) {
 			return SerializationFailure(
 				SerializationErrorCode::LimitExceeded, "Replication frame allocation exceeded available resources"
