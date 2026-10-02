@@ -118,6 +118,8 @@ def New(Root):
 
 def ValidateRole(Role, Input, Identity, Manifest, ManifestHash, WorkflowHash):
     ExpectedKeys = ROLE_KEYS | ({"NodeRootCertificatePath"} if Manifest["Provider"] == "Node" else set())
+    if Manifest["Provider"] == "Node" and Role == "SERVER":
+        ExpectedKeys |= {"NodeStage", "NodeHelper"}
     Exact(Input, ExpectedKeys, Role + " role")
     if not ENDPOINT_ID.fullmatch(Input["EndpointId"]):
         raise ValueError("[Qualification:FarmTickets] invalid endpoint ID")
@@ -143,6 +145,16 @@ def ValidateRole(Role, Input, Identity, Manifest, ManifestHash, WorkflowHash):
         raise ValueError("[Qualification:FarmTickets] capture and role evidence overlap")
     PowerShell = Pin(Input["PowerShell"], "PowerShell", "pwsh.exe")
     Supervisor = Pin(Input["Supervisor"], "supervisor", "PhysicalGameSessionFarmEndpoint.ps1")
+    NodeStage = None
+    NodeHelper = None
+    if Manifest["Provider"] == "Node" and Role == "SERVER":
+        NodeStage = Pin(Input["NodeStage"], "Node stage", "node-stage.json")
+        NodeHelper = Pin(Input["NodeHelper"], "Node helper", "PhysicalGameSessionFarmNode.ps1")
+        NodeRoot = PureWindowsPath(NodeStage["Path"]).parent
+        for Name in ("StageRoot", "PackageRoot", "EvidenceRoot", "RunRegistryRoot", "CaptureRoot"):
+            Boundary = WinPath(Input[Name], Name)
+            if Contained(NodeRoot, Boundary) or Contained(Boundary, NodeRoot):
+                raise ValueError("[Qualification:FarmTickets] Node stage overlaps campaign roots")
     EngineKeys = ("Service", "Hook") if Role == "SERVER" else ("CaptureScript", "Dumpcap")
     Engine = Exact(Input["CaptureEngine"], EngineKeys, "capture engine")
     Expected = {"Service": "AgentCoordinator.CaptureFarm32Service.exe", "Hook": "CaptureFarm32.ps1",
@@ -191,6 +203,9 @@ def ValidateRole(Role, Input, Identity, Manifest, ManifestHash, WorkflowHash):
               "CaptureControllerSha256": Digest(Path(__file__).with_name("farm_capture_campaign.py")),
               "PreflightPath": Input["PreflightPath"], "PreflightSha256": Digest(PreflightFile),
               "JournalRoot": Input["JournalRoot"], "ResultPath": Input["ResultPath"]}
+    if NodeStage is not None:
+        Ticket.update({"NodeStagePath": NodeStage["Path"], "NodeStageSha256": NodeStage["Sha256"],
+                       "NodeHelperPath": NodeHelper["Path"], "NodeHelperSha256": NodeHelper["Sha256"]})
     return Farm, Capture, Ticket, ManifestFile, PreflightFile
 
 

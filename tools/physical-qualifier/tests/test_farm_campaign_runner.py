@@ -113,6 +113,47 @@ class CampaignTests(unittest.TestCase):
         TicketFile = Save(Directory / "ticket.json", Ticket)
         return TicketFile, Ticket, Farm, Capture, Preflight
 
+    def NodeRole(self):
+        TicketFile, Ticket, FarmFile, _, PreflightFile = self.Role("SERVER")
+        Manifest = json.loads(self.Manifest.read_text())
+        Manifest.update({"Provider": "Node", "NodeEndpoint": "127.0.0.1:50051",
+                         "NodeRootCertificateSha256": "b" * 64,
+                         "NodeTokenEnvironment": "GARGANTUAN_ENGINE_ADAPTER_TOKEN"})
+        Save(self.Manifest, Manifest)
+        Preflight = json.loads(PreflightFile.read_text())
+        Preflight.update({"Provider": "Node", "ManifestSha256": Hash(self.Manifest)})
+        Save(PreflightFile, Preflight)
+        Farm = json.loads(FarmFile.read_text())
+        Farm["ManifestSHA256"] = Hash(self.Manifest)
+        PowerShell = self.Root / "pwsh.exe"
+        PowerShell.write_bytes(b"pinned test PowerShell")
+        Farm["PowerShellPath"] = str(PowerShell)
+        Farm["PowerShellSHA256"] = Hash(PowerShell)
+        Package = self.Root / "package"
+        Package.mkdir()
+        Farm["PackageRoot"] = str(Package)
+        Save(FarmFile, Farm)
+        Helper = self.Root / "PhysicalGameSessionFarmNode.ps1"
+        Helper.write_bytes(b"pinned Node helper")
+        StageRoot = self.Root / "node-stage"
+        StageRoot.mkdir()
+        StageFile = Save(StageRoot / "node-stage.json", {
+            "Format": "GargantuanFarmNodeStage", "Version": 1,
+            "Status": "STAGED_NOT_TLS_PROVEN", "RunId": self.RunId,
+            "SourceCommit": self.SourceCommit, "RunManifestSha256": Hash(self.Manifest),
+            "NodeEndpoint": Manifest["NodeEndpoint"],
+            "NodeTokenEnvironment": Manifest["NodeTokenEnvironment"],
+            "RootCertificateSha256": Manifest["NodeRootCertificateSha256"],
+            "HelperSha256": Hash(Helper),
+        })
+        Ticket.update({"ManifestSha256": Hash(self.Manifest),
+                       "PreflightSha256": Hash(PreflightFile),
+                       "FarmConfigSha256": Hash(FarmFile),
+                       "NodeStagePath": str(StageFile), "NodeStageSha256": Hash(StageFile),
+                       "NodeHelperPath": str(Helper), "NodeHelperSha256": Hash(Helper)})
+        Save(TicketFile, Ticket)
+        return TicketFile, Ticket, FarmFile, StageRoot
+
     def Host(self, ServerTicket, ClientTicket):
         return Save(self.Root / "host-config.json", {
             "Format": Campaign.FORMAT, "Version": 1, "CreatedUtc": UtcNow(),
@@ -167,6 +208,97 @@ class CampaignTests(unittest.TestCase):
         Save(TicketFile, Ticket)
         with self.assertRaisesRegex(ValueError, "capture controller pin changed"):
             Campaign.RunRole(TicketFile)
+
+    def test_node_server_requires_pinned_stage_and_stops_owned_child(self):
+        TicketFile, Ticket, FarmFile, StageRoot = self.NodeRole()
+        Campaign.VerifyRole(Ticket, "SERVER")
+        Events = []
+        NodeProcess = mock.Mock()
+        NodeProcess.poll.return_value = None
+
+        def FakeStart(Config, Farm, Manifest):
+            Events.append("node-start")
+            return NodeProcess, StageRoot
+
+        def FakeJoin(Endpoint, Workflows, Catalog, Journal):
+            Events.append("join")
+            EvidenceRoot = Path(json.loads(FarmFile.read_text())["EvidenceRoot"])
+            EvidenceRoot.mkdir()
+            Save(EvidenceRoot / "evidence-sha256.json", {"RunId": self.RunId})
+            Journal.Close({"Success": True})
+            return 0
+
+        def FakeStop(Config, Process, Root):
+            Events.append("node-stop")
+            self.assertIs(NodeProcess, Process)
+            self.assertTrue((Path(json.loads(FarmFile.read_text())["EvidenceRoot"]) /
+                             "evidence-sha256.json").is_file())
+            return Save(Root / "node-run.json", {"RunId": self.RunId})
+
+        with mock.patch.object(Campaign, "StartNode", side_effect=FakeStart), \
+                mock.patch.object(Campaign, "AwaitNodeReady", side_effect=lambda *Args: Events.append("node-ready")), \
+                mock.patch.object(Campaign, "StopNode", side_effect=FakeStop), \
+                mock.patch.object(Campaign, "Join", side_effect=FakeJoin), \
+                mock.patch.object(Campaign, "GetCatalog", return_value=object()):
+            self.assertEqual(0, Campaign.RunRole(TicketFile))
+        self.assertEqual(["node-start", "node-ready", "join", "node-stop"], Events)
+        Result = json.loads(Path(Ticket["ResultPath"]).read_text())
+        self.assertEqual(Hash(StageRoot / "node-run.json"), Result["NodeRunReceiptSha256"])
+        self.assertEqual(Ticket["NodeStageSha256"], Result["NodeStageSha256"])
+
+    def test_node_stage_swap_and_client_supervision_are_denied(self):
+        TicketFile, Ticket, _, StageRoot = self.NodeRole()
+        Stage = json.loads((StageRoot / "node-stage.json").read_text())
+        Stage["RunId"] = str(uuid.uuid4())
+        Save(StageRoot / "node-stage.json", Stage)
+        Ticket["NodeStageSha256"] = Hash(StageRoot / "node-stage.json")
+        Save(TicketFile, Ticket)
+        with self.assertRaisesRegex(ValueError, "Node stage identity mismatch"):
+            Campaign.VerifyRole(Ticket, "SERVER")
+        ClientTicket, Client, _, _, _ = self.Role("CLIENT")
+        Client.update({Key: Ticket[Key] for Key in Campaign.NODE_ROLE_KEYS})
+        Save(ClientTicket, Client)
+        with self.assertRaisesRegex(ValueError, "Node supervision ticket mismatch"):
+            Campaign.VerifyRole(Client, "CLIENT")
+
+    def test_node_child_command_marker_and_run_receipt_are_bounded(self):
+        _, Ticket, FarmFile, StageRoot = self.NodeRole()
+        Farm = json.loads(FarmFile.read_text())
+        Child = mock.Mock()
+        Child.poll.return_value = None
+        Child.wait.return_value = 0
+        with mock.patch.object(Campaign.subprocess, "Popen", return_value=Child) as Spawn:
+            Process, Root = Campaign.StartNode(Ticket, Farm, json.loads(self.Manifest.read_text()))
+        self.assertIs(Child, Process)
+        self.assertEqual(StageRoot, Root)
+        Args = Spawn.call_args.args[0]
+        self.assertEqual(Farm["PowerShellPath"], Args[0])
+        self.assertIn(Ticket["NodeStageSha256"], Args)
+        self.assertIn("900", Args)
+        Save(StageRoot / "node-tcp-ready.json", {
+            "Format": "GargantuanFarmNodeTcpReady", "Version": 1,
+            "RunId": self.RunId, "Pid": 101, "TlsProven": False,
+            "ObservedUtc": UtcNow(),
+        })
+        Campaign.AwaitNodeReady(Ticket, Child, StageRoot)
+        Marker = StageRoot / "node-tcp-ready.json"
+        BadMarker = json.loads(Marker.read_text())
+        BadMarker["TlsProven"] = True
+        Save(Marker, BadMarker)
+        with self.assertRaisesRegex(ValueError, "TCP marker identity mismatch"):
+            Campaign.AwaitNodeReady(Ticket, Child, StageRoot)
+        Receipt = Save(StageRoot / "node-run.json", {
+            "Format": "GargantuanFarmNodeRun", "Version": 1,
+            "RunId": self.RunId, "StageSha256": Ticket["NodeStageSha256"],
+            "Reason": "STOP_REQUESTED", "TcpReady": True, "ChildReaped": True,
+        })
+        self.assertEqual(Receipt, Campaign.StopNode(Ticket, Child, StageRoot))
+        self.assertEqual(self.RunId, (StageRoot / "stop.request").read_text())
+        Bad = json.loads(Receipt.read_text())
+        Bad["Reason"] = "CHILD_EXITED"
+        Save(Receipt, Bad)
+        with self.assertRaisesRegex(ValueError, "owned Node run receipt failed"):
+            Campaign.StopNode(Ticket, Child, StageRoot)
 
     def test_host_uses_only_pinned_tickets_and_exact_assignment(self):
         ServerFile, _, _, _, _ = self.Role("SERVER")
@@ -252,6 +384,66 @@ class CampaignTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "missing reverse direction"):
             Campaign.Reconcile(ConfigFile)
         self.assertFalse((self.Root / "analysis" / "outer-receipt.json").exists())
+
+    def test_node_reconcile_binds_sealed_server_receipt_and_independent_tls_match(self):
+        ConfigFile = self.ReconcileConfig(
+            "def Analyze(Server, Client):\n"
+            "    return {'RunId': '" + self.RunId + "', 'CoordinatorRunId': '" +
+            self.CoordinatorRunId + "', 'Status': 'BIDIRECTIONAL_32_TUPLES'}\n")
+        Config = json.loads(ConfigFile.read_text())
+        ServerIndex = Path(Config["ServerRoleIndexPath"])
+        Provider = Save(ServerIndex.parent / "node-provider.json", {"RunId": self.RunId})
+        Save(ServerIndex, {"RunId": self.RunId, "Role": "SERVER", "Files": [
+            {"Name": "node-provider.json", "Bytes": Provider.stat().st_size, "Sha256": Hash(Provider)}]})
+        NodeRoot = self.Root / "node-stage"
+        NodeRoot.mkdir()
+        Stage = Save(NodeRoot / "node-stage.json", {"RunId": self.RunId})
+        Run = Save(NodeRoot / "node-run.json", {"RunId": self.RunId})
+        PowerShell = self.Root / "pwsh.exe"
+        PowerShell.write_bytes(b"pinned PowerShell")
+        Matcher = self.Root / "PhysicalGameSessionFarmNodeTls.ps1"
+        Matcher.write_bytes(b"pinned TLS matcher")
+        Config.update({
+            "ServerRoleIndexSha256": Hash(ServerIndex),
+            "ServerNodeProviderReceiptPath": str(Provider),
+            "ServerNodeProviderReceiptSha256": Hash(Provider),
+            "NodeStagePath": str(Stage), "NodeStageSha256": Hash(Stage),
+            "NodeRunReceiptPath": str(Run), "NodeRunReceiptSha256": Hash(Run),
+            "NodePowerShellPath": str(PowerShell), "NodePowerShellSha256": Hash(PowerShell),
+            "NodeTlsMatcherPath": str(Matcher), "NodeTlsMatcherSha256": Hash(Matcher),
+            "NodeTlsMatchReceiptPath": str(self.Root / "analysis" / "node-tls-match.json"),
+        })
+        Save(ConfigFile, Config)
+
+        def FakeMatch(Args, **Kwargs):
+            self.assertEqual(str(PowerShell), Args[0])
+            self.assertIn(Hash(Stage), Args)
+            self.assertIn(Hash(Run), Args)
+            Save(Path(Config["NodeTlsMatchReceiptPath"]), {
+                "Format": "GargantuanFarmNodeTlsLogMatch", "Version": 1,
+                "State": "OFFLINE_LOG_MATCH_BOUND_TO_PINNED_NODE_RUN",
+                "RunId": self.RunId, "NodeStageSha256": Hash(Stage),
+                "NodeRunReceiptSha256": Hash(Run),
+            })
+            return mock.Mock(returncode=0)
+
+        with mock.patch.object(Campaign.subprocess, "run", side_effect=FakeMatch):
+            self.assertEqual(0, Campaign.Reconcile(ConfigFile))
+        Result = json.loads(Path(Config["ResultPath"]).read_text())
+        self.assertEqual("NOT_MEASURED", Result["ProviderGate"])
+        self.assertEqual("OFFLINE_LOG_MATCH_BOUND_TO_PINNED_NODE_RUN", Result["NodeTlsEvidence"])
+        self.assertEqual(Hash(Path(Config["NodeTlsMatchReceiptPath"])),
+                         Result["NodeTlsMatchReceiptSha256"])
+
+        Path(Config["ResultPath"]).unlink()
+        Path(Config["OuterReceiptPath"]).unlink()
+        Path(Config["DirectionReportPath"]).unlink()
+        Path(Config["NodeTlsMatchReceiptPath"]).unlink()
+        Save(ServerIndex, {"RunId": self.RunId, "Role": "SERVER", "Files": []})
+        Config["ServerRoleIndexSha256"] = Hash(ServerIndex)
+        Save(ConfigFile, Config)
+        with self.assertRaisesRegex(ValueError, "not sealed by server role"):
+            Campaign.Reconcile(ConfigFile)
 
     def test_reconcile_refuses_output_inside_sealed_capture_root(self):
         ConfigFile = self.ReconcileConfig(

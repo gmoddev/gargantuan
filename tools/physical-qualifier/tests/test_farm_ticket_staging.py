@@ -176,6 +176,12 @@ class FarmTicketStagingTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "invalid SERVER role fields"):
             self.Seal()
         self.Spec["Roles"]["SERVER"]["NodeRootCertificatePath"] = str(self.Root / "server" / "root-ca.pem")
+        with self.assertRaisesRegex(ValueError, "invalid SERVER role fields"):
+            self.Seal()
+        self.Spec["Roles"]["SERVER"]["NodeStage"] = Pin(
+            self.Root / "server" / "node-stage" / "node-stage.json")
+        self.Spec["Roles"]["SERVER"]["NodeHelper"] = Pin(
+            self.Root / "server" / "installed" / "PhysicalGameSessionFarmNode.ps1")
         with self.assertRaisesRegex(ValueError, "invalid CLIENT role fields"):
             self.Seal()
         self.Spec["Roles"]["CLIENT"]["NodeRootCertificatePath"] = str(self.Root / "client" / "root-ca.pem")
@@ -185,6 +191,13 @@ class FarmTicketStagingTests(unittest.TestCase):
         ClientFarm = json.loads((self.Private / "CLIENT" / "farm-config.json").read_text())
         self.assertIn("NodeRootCertificatePath", ServerFarm)
         self.assertIn("NodeRootCertificatePath", ClientFarm)
+        ServerTicket = json.loads((self.Private / "SERVER" / "ticket.json").read_text())
+        ClientTicket = json.loads((self.Private / "CLIENT" / "ticket.json").read_text())
+        self.assertEqual(self.Spec["Roles"]["SERVER"]["NodeStage"]["Sha256"],
+                         ServerTicket["NodeStageSha256"])
+        self.assertEqual(self.Spec["Roles"]["SERVER"]["NodeHelper"]["Sha256"],
+                         ServerTicket["NodeHelperSha256"])
+        self.assertNotIn("NodeStagePath", ClientTicket)
 
     def test_role_manifest_must_be_byte_identical(self):
         Alternate = self.Root / "client" / "alternate-manifest.json"

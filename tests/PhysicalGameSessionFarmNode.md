@@ -79,3 +79,24 @@ its TLS version/cipher pairing. It produces only
 `node.stdout.log` matches the independently hash-pinned `node-run.json` and
 `node-stage.json`, including run ID, root CA, stage hash, log path, byte count,
 and digest. The match is still not the full physical provider PASS gate.
+
+The Farm32 campaign's Node SERVER role ticket pins the prepared
+`node-stage.json` and this helper by SHA-256, in addition to its existing
+PowerShell pin. The ticket stager accepts those two pins only for the Node
+SERVER role; Local and Node CLIENT retain their existing schemas. Prepare the
+Node stage on the Server endpoint from an independently pinned copy of the
+same run manifest and package before sealing tickets. Its directory must be
+disjoint from role staging, package, capture, registry, and evidence roots.
+The role runner verifies the stage identity, starts the owned Node child
+before capture/Coordinator join, waits for its fresh run-bound TCP marker,
+and writes the same-run `stop.request` after role and capture completion. It
+requires a successful owned-child `node-run.json` before sealing its result.
+TCP readiness remains separate from TLS evidence.
+
+Optional Node-specific offline reconciliation requires independent SHA-256
+pins for `node-stage.json`, `node-run.json`, the server role's sealed
+`node-provider.json`, PowerShell, and the TLS matcher. It checks that the
+server role evidence index contains the provider receipt, then runs the
+pinned matcher and records its result hash. `ProviderGate` remains
+`NOT_MEASURED`; full content-provider and Foundation 3L gates require the
+separate physical acceptance evidence.
