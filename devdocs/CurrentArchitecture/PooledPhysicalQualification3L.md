@@ -2299,3 +2299,22 @@ Evidence remains under
 the local copy is `C:\Users\aiden\.codex\artifacts\farm32-e62955e9\`.
 `farm32-e62955e9-causal-replay.json` records the independent totals and TSV hashes.
 A fresh run is required after the completion and probe fixes are qualified.
+
+The completion fixes at `976fae8d5` pass 10 native DataModel owner/stage/type
+cases and the actual embedded client callback regression (three cases, 30 probes,
+three completion acknowledgments). Its negative control reproduces the exact
+historical missing-tick format error. A fresh worker run,
+`4da65aae-e7ab-4bfa-8d0c-4b2179080995`, records valid client probe summaries but
+**FAILS structural recovery at the unchanged deadline**. Reference work is
+783,570,166 B in 2,063 frames with a 36,344,307-us bound. At 36,348,017 us its
+prefix is unfinished: accepted 751,166,585 B, first-sent 750,772,933 B, and
+ACKed/retired 749,518,126 B. Mixed recovery is NOT MEASURED in this run.
+
+The final structural samples show 3,322–6,072-us Session work and
+935–1,063-us encoding, with four active grants. The previous serialization
+cost is reduced, but that alone does not qualify service. Grant delivery,
+retirement and slot reuse require causal attribution before another diagnostic;
+the earlier converged subset is not a substitute for this failure. Evidence is
+retained under `C:\Sandbox\Codex\Evidence\Farm32_976fae8d5Diagnostic\` and
+`C:\Users\aiden\.codex\artifacts\farm32-976fae8d5\`, with the run ID.
+Cleanup again found no owned farm processes or UDP 39450 listener.
