@@ -16,6 +16,7 @@
 #include "gargantuan/runtime/WireValue.hpp"
 #include "../../network/GameSessionTestAccess.hpp"
 #include "FarmAdmissionEvidence.hpp"
+#include "../../runtime/RuntimeWorkDiagnostics.hpp"
 
 #include <algorithm>
 #include <array>
@@ -311,6 +312,9 @@ namespace gargantuan::host {
 		ServerTickTiming CurrentServerTickTiming;
 		network::GameSessionMetrics PreviousRecoveryMetrics;
 		std::uint64_t LastQuoteAdvanceMicroseconds = 0;
+		std::uint64_t LastQuoteBuildMicroseconds = 0;
+		std::uint64_t LastQuoteEncodeMicroseconds = 0;
+		std::uint64_t LastQuoteEncodeRetries = 0;
 		bool LastQuoteAdvanceAttempted = false;
 		bool LastQuoteAdvanceProducedFrame = false;
 		bool RecoverySnapshotWritten = false;
@@ -374,6 +378,7 @@ namespace gargantuan::host {
 
 		void StepCessationQuote() {
 			LastQuoteAdvanceMicroseconds = 0;
+			LastQuoteBuildMicroseconds = LastQuoteEncodeMicroseconds = LastQuoteEncodeRetries = 0;
 			LastQuoteAdvanceAttempted = LastQuoteAdvanceProducedFrame = false;
 			if (!CessationQuote || !AdmissionEvidence || !QuoteFailure.empty()) return;
 			const auto Events = AdmissionEvidence->EventsSince(AdmissionEvidenceCursor);
@@ -393,8 +398,19 @@ namespace gargantuan::host {
 				// frozen frame sequence and W_i; it does not bound one advance's CPU.
 				LastQuoteAdvanceAttempted = true;
 				const auto AdvanceStarted = std::chrono::steady_clock::now();
-				const auto Step = CessationQuote->Replication->AdvanceFrozenJournalQuote(
-					CessationQuote->MaximumFrameBytes);
+				runtime_detail::WorkSample QuoteWork{};
+				network::FrozenJournalQuoteStep Step;
+				{
+					runtime_detail::WorkCapture Capture(&QuoteWork);
+					Step = CessationQuote->Replication->AdvanceFrozenJournalQuote(
+						CessationQuote->MaximumFrameBytes);
+				}
+				LastQuoteBuildMicroseconds = QuoteWork[static_cast<std::size_t>(
+					runtime_detail::WorkPhase::IncrementalPreparation)].ExclusiveNanoseconds / 1000;
+				LastQuoteEncodeMicroseconds = QuoteWork[static_cast<std::size_t>(
+					runtime_detail::WorkPhase::StructuralEncode)].ExclusiveNanoseconds / 1000;
+				LastQuoteEncodeRetries = QuoteWork.Counters[static_cast<std::size_t>(
+					runtime_detail::WorkCounter::EncodeRetries)];
 				LastQuoteAdvanceMicroseconds = static_cast<std::uint64_t>(
 					std::chrono::duration_cast<std::chrono::microseconds>(
 						std::chrono::steady_clock::now() - AdvanceStarted).count());
@@ -911,6 +927,9 @@ namespace gargantuan::host {
 					<< " prequalification_us=" << CurrentServerTickTiming.PreQualificationMicroseconds
 					<< " quote_us=" << QuoteMicroseconds
 					<< " quote_advance_us=" << LastQuoteAdvanceMicroseconds
+					<< " quote_build_us=" << LastQuoteBuildMicroseconds
+					<< " quote_encode_us=" << LastQuoteEncodeMicroseconds
+					<< " quote_encode_retries=" << LastQuoteEncodeRetries
 					<< " quote_advance_attempted=" << LastQuoteAdvanceAttempted
 					<< " quote_advance_frame=" << LastQuoteAdvanceProducedFrame
 					<< " quote_complete=" << QuoteComplete << " quote_sealed=" << QuoteSealed
