@@ -37,8 +37,10 @@ inline void PrintState(const char *Stage, const char *Side, const GargantuanAckD
 inline void Observe(bool Prompt) {
 	OwnedPair Owner; auto &Pair = Owner.Pair;
 	Require(Pair.ServerConnection.IsValid(), "stats-boundary real connection missing");
-	if (Prompt) Require(AckAccess::PromptFinalGrantAck(*Pair.Server, Pair.ServerConnection, true, 1348),
-		"stats-boundary funded policy rejected");
+	// The prompt arm exercises production activation; the control arm must
+	// explicitly disable it before its first attributed grant.
+	if (!Prompt) Require(AckAccess::PromptFinalGrantAck(*Pair.Server, Pair.ServerConnection, false),
+		"stats-boundary control override rejected");
 	GargantuanAckDiagnostics Sender, Receiver;
 	Require(AckAccess::Read(*Pair.Server, Pair.ServerConnection, Sender, true) &&
 		AckAccess::Read(*Pair.Client, Pair.ClientConnection, Receiver, true), "stats observers missing");
@@ -101,12 +103,28 @@ inline void Observe(bool Prompt) {
 		AckAccess::Read(*Pair.Client, Pair.ClientConnection, Receiver), "final stats missing");
 	SenderTotals.Add(Sender); ReceiverTotals.Add(Receiver);
 	const auto Whole = Cost(WireBefore, ReadWire(Pair));
+	const auto ObservedUs = Now() - StartUs;
+	// Independent whole-connection check, including denied tiny grants and
+	// the post-retirement tail. One actual peer has two endpoint emitters;
+	// each periodic class can send one maximum request and confirmation.
+	// Keep this arithmetic independent of the production budget helper.
+	constexpr std::uint64_t MaximumWire = 1300 + 48;
+	constexpr std::uint64_t PairRequestConfirmation = 2 * 2 * MaximumWire;
+	constexpr std::uint64_t PeriodicNumerator = PairRequestConfirmation * (24 + 6 + 1);
+	constexpr std::uint64_t PairPeriodicRate = (PeriodicNumerator + 119) / 120;
+	constexpr std::uint64_t PopulationPeriodicRate = (32 * PeriodicNumerator + 119) / 120;
+	const PooledReliableServiceProfile Profile;
+	const auto ResidualRate = Profile.RequiredTransportReserve - PopulationPeriodicRate;
+	const auto WholeWireLimit = Accepted + Accepted * ResidualRate / Profile.StructuralPool +
+		3 * PairRequestConfirmation + (ObservedUs * PairPeriodicRate + 999999) / 1000000;
 	PrintState("terminal", "sender", Sender); PrintState("terminal", "receiver", Receiver);
 	std::cout << "[Network:AckStatsCoverage] prompt=" << Prompt << " grants=" << Grants
 		<< " tracer_requests=" << SenderTotals.Tracers + ReceiverTotals.Tracers
 		<< " instantaneous_sent=" << SenderTotals.Instantaneous + ReceiverTotals.Instantaneous
 		<< " instantaneous_received=" << SenderTotals.InstantaneousReceived + ReceiverTotals.InstantaneousReceived
 		<< " need_mask=" << (SenderTotals.NeedMask | ReceiverTotals.NeedMask) << '\n';
+	Require(Whole.ConservativeIpv6Bytes <= WholeWireLimit,
+		"whole connection exceeded independently derived grant plus periodic-control funding");
 	Require(Grants == 48 && SenderTotals.Tracers + ReceiverTotals.Tracers > 0 &&
 		SenderTotals.Instantaneous + ReceiverTotals.Instantaneous > 0 &&
 		SenderTotals.InstantaneousReceived + ReceiverTotals.InstantaneousReceived > 0,
@@ -114,7 +132,7 @@ inline void Observe(bool Prompt) {
 	Require(!Prompt || (SenderTotals.ImmediateSent >= Prompts && ReceiverTotals.ImmediateReceived >= Prompts),
 		"successful final-packet prompts were not independently received");
 	std::cout << "[Network:AckStatsBoundary] prompt=" << Prompt << " grants=" << Grants
-		<< " accepted=" << Accepted << " prompts=" << Prompts << " observation_us=" << Now() - StartUs
+		<< " accepted=" << Accepted << " prompts=" << Prompts << " observation_us=" << ObservedUs
 		<< " tracer_requests=" << SenderTotals.Tracers + ReceiverTotals.Tracers
 		<< " instantaneous_sent=" << SenderTotals.Instantaneous + ReceiverTotals.Instantaneous
 		<< " instantaneous_received=" << SenderTotals.InstantaneousReceived + ReceiverTotals.InstantaneousReceived
@@ -123,7 +141,8 @@ inline void Observe(bool Prompt) {
 		<< " first_sender_instant_us=" << SenderTotals.FirstInstantaneous
 		<< " first_receiver_instant_us=" << ReceiverTotals.FirstInstantaneous
 		<< " sender_packets=" << Whole.SenderPackets << " receiver_packets=" << Whole.ReceiverPackets
-		<< " whole_ipv6_bound=" << Whole.ConservativeIpv6Bytes << " lifetime_120s=NOT_MEASURED result=PASS\n";
+		<< " whole_ipv6_bound=" << Whole.ConservativeIpv6Bytes << " whole_wire_limit=" << WholeWireLimit
+		<< " lifetime_120s=NOT_MEASURED result=PASS\n";
 }
 
 inline bool Run() {

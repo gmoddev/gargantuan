@@ -47,7 +47,7 @@ endmacro()
 
 GargantuanReadFeedbackSource(steamnetworkingsockets_snp.h 35a8d2721334f5632e042f3165095dcae90ced590b78392cc0f4346fceaba170)
 GargantuanReplaceFeedback("#pragma once" "#pragma once\n#include \"ReliableServiceFeedback.hpp\"\n#include \"AckDiagnostics.hpp\"\n#include \"PromptAckWireBudget.hpp\"\n#include <memory>")
-GargantuanReplaceFeedback("struct SSNPSenderState\n{" "struct SSNPSenderState\n{\n\tstd::unique_ptr<GargantuanAckDiagnostics> GargantuanAckTrace;\n\tGargantuanPromptAckWireBudget GargantuanPromptWire;\n\tbool GargantuanPromptFinalGrantAck = false; // Opt-in prototype, not production policy.\n\tGargantuanReliableServiceCounters GargantuanFeedback;\n\tbool GargantuanRunningStructuralGrant = false;")
+GargantuanReplaceFeedback("struct SSNPSenderState\n{" "struct SSNPSenderState\n{\n\tstd::unique_ptr<GargantuanAckDiagnostics> GargantuanAckTrace;\n\tGargantuanPromptAckWireBudget GargantuanPromptWire;\n\tbool GargantuanPromptFinalGrantAck = false; // Enabled only by funded attributed structural submission.\n\tGargantuanReliableServiceCounters GargantuanFeedback;\n\tbool GargantuanRunningStructuralGrant = false;")
 GargantuanReplaceFeedback("\tstatic constexpr uint16 k_nStatus_InFlight = 0xffff;" "\t// A failed SendEncryptedDataChunk queues retry without first-send service.\n\tbool m_bGargantuanEverSent;\n\n\tstatic constexpr uint16 k_nStatus_InFlight = 0xffff;")
 GargantuanWriteFeedbackSource()
 
@@ -83,8 +83,7 @@ GargantuanReplaceFeedback("\t// OK, we have a plaintext payload.  Encrypt and se
 		ctx.m_bGargantuanPromptAck = UniqueBytes && Grant.StructuralActiveGrantFirstSentBytes > 0 &&
 			Grant.StructuralActiveGrantBytes > Grant.StructuralActiveGrantFirstSentBytes &&
 			UniqueBytes == Grant.StructuralActiveGrantBytes - Grant.StructuralActiveGrantFirstSentBytes;
-		if (m_senderState.GargantuanPromptWire.TailBudget &&
-			!m_senderState.GargantuanPromptWire.CanRequest(k_cbSteamNetworkingSocketsMaxUDPMsgLen + 48))
+		if (!m_senderState.GargantuanPromptWire.CanRequest(k_cbSteamNetworkingSocketsMaxUDPMsgLen + 48))
 			ctx.m_bGargantuanPromptAck = false;
 		if (ctx.m_bGargantuanPromptAck && m_senderState.GargantuanAckTrace) {
 			m_senderState.GargantuanAckTrace->PromptFinalWireAllowed = true;
@@ -225,9 +224,7 @@ GargantuanReplaceFeedback("\t/// Called when we close the connection locally" [=
 			Grant.ActiveAttributedRetirementToken && Grant.StructuralActiveGrantBytes &&
 			m_senderState.GargantuanPromptWire.Token == Grant.ActiveAttributedRetirementToken &&
 			m_senderState.GargantuanPromptWire.Bytes == Grant.StructuralActiveGrantBytes &&
-			(m_senderState.GargantuanPromptWire.TailBudget
-				? m_senderState.GargantuanPromptWire.CanRequest(k_cbSteamNetworkingSocketsMaxUDPMsgLen + 48)
-				: m_senderState.GargantuanFeedback.StructuralActiveGrantBytes >= gargantuan::network::FiniteGrantServiceCurve::QuantumBytes);
+			m_senderState.GargantuanPromptWire.CanRequest(k_cbSteamNetworkingSocketsMaxUDPMsgLen + 48);
 	}
 	void GargantuanRecordIncomingWire(int Bytes) {
 		if (m_senderState.GargantuanAckTrace) m_senderState.GargantuanAckTrace->Incoming(Bytes);
@@ -246,12 +243,12 @@ GargantuanReplaceFeedback("\t/// Called when we close the connection locally" [=
 			Trace->MaximumPromptReserveBytes = std::max(Trace->MaximumPromptReserveBytes, uint64_t(Bytes));
 	}
 	bool GargantuanConfigurePromptGrantAck(bool Enabled, uint64_t Reserve, uint64_t Pool, uint64_t TailBudget, uint64_t Peers) {
-		if (Enabled && !GargantuanIsDirectUDP()) return false;
+		if (Enabled && (!GargantuanIsDirectUDP() || TailBudget < k_cbSteamNetworkingSocketsMaxUDPMsgLen + 48)) return false;
 		if (m_senderState.GargantuanFeedback.ActiveAttributedRetirementToken) return false;
 		GargantuanPromptAckWireBudget Budget;
 		Budget.StructuralPool = Pool;
 		Budget.TailBudget = TailBudget;
-		if (TailBudget && (!Pool || !Budget.ConfigureBackground(Reserve, Peers, k_cbSteamNetworkingSocketsMaxUDPMsgLen + 48,
+		if (Enabled && (!Pool || !Budget.ConfigureBackground(Reserve, Peers, k_cbSteamNetworkingSocketsMaxUDPMsgLen + 48,
 			k_usecLinkStatsMinPingRequestInterval / k_nMillion, k_usecLinkStatsInstantaneousReportInterval / k_nMillion,
 			k_usecLinkStatsLifetimeReportInterval / k_nMillion))) return false;
 		m_senderState.GargantuanPromptFinalGrantAck = Enabled;
@@ -356,6 +353,14 @@ bool GargantuanConfigurePromptGrantAck(ISteamNetworkingSockets *Interface, uint3
 	auto *Connection = GetConnectionByHandleForAPI(Handle, Lock, "GargantuanPromptGrantAck");
 	if (!Connection || Connection->m_pSteamNetworkingSocketsInterface != Interface) return false;
 	return Connection->GargantuanConfigurePromptGrantAck(Enabled, Reserve, Pool, TailBudget, Peers);
+}
+
+bool GargantuanConfigureFundedGrantAck(ISteamNetworkingSockets *Interface, uint32 Handle,
+	uint64_t Reserve, uint64_t Pool, uint64_t Peers) {
+	// The final packet and its immediate response use the pinned maximum
+	// datagram plus conservative IPv6/UDP headers, never a minimum-size Q gate.
+	return GargantuanConfigurePromptGrantAck(Interface, Handle, true, Reserve, Pool,
+		k_cbSteamNetworkingSocketsMaxUDPMsgLen + 48, Peers);
 }
 
 bool GargantuanAccessAckDiagnostics(ISteamNetworkingSockets *Interface, uint32 Handle,

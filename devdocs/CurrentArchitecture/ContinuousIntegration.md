@@ -50,6 +50,18 @@ the workflow makes no macOS CI claim.
 
 ## Fresh-checkout bootstrap
 
+The Windows complete CTest pass includes the funded structural ACK matrix,
+ordinary/FULL_RESERVATION and mixed FIFO isolation, simultaneous four-grant
+F1/pool verification, and one paired control/funded native statistics-boundary
+test. The latter observes actual pinned tracer and instantaneous-report paths
+over 32 seconds per arm; it does not claim 120-second lifetime path execution.
+It runs once, rather than inside every workload case. The GNS sanitizer job
+selects the separate failed-send retry-safety test for segment/message ownership,
+mixed FIFO, fault and exact conservation coverage without asserting healthy F1
+wall-clock timing under injected faults. The strict funded F1 matrix remains
+in Windows Release. No new CI gate is considered passed until its own execution
+is terminal green.
+
 The workflow deliberately supports a cold runner:
 
 1. `actions/checkout` initializes every Git submodule recursively and a

@@ -1312,6 +1312,16 @@ if(BUILD_TESTING)
 		add_test(NAME gargantuan_gns_failed_send_retry_safety COMMAND gargantuan_real_transport_tests --ack-retry-safety)
 		set_tests_properties(gargantuan_gns_failed_send_retry_safety
 			PROPERTIES LABELS "networking;optional;sanitizer-safety" TIMEOUT 45 RUN_SERIAL TRUE)
+		add_test(NAME gargantuan_gns_funded_ack COMMAND gargantuan_real_transport_tests --ack-cycle-funded 1348)
+		add_test(NAME gargantuan_gns_funded_ack_compatibility COMMAND gargantuan_real_transport_tests --ack-funded-compatibility)
+		add_test(NAME gargantuan_gns_funded_ack_four_grant COMMAND gargantuan_real_transport_tests --ack-funded-four-grant)
+		set_tests_properties(gargantuan_gns_funded_ack gargantuan_gns_funded_ack_compatibility
+			gargantuan_gns_funded_ack_four_grant PROPERTIES LABELS "networking;optional;f1;funded-ack" TIMEOUT 60 RUN_SERIAL TRUE)
+		# Actual pinned 5/20-second control paths: one control/funded pair, not
+		# repeated in each workload fixture or the sanitizer timing matrix.
+		add_test(NAME gargantuan_gns_funded_ack_stats COMMAND gargantuan_real_transport_tests --ack-stats-boundary)
+		set_tests_properties(gargantuan_gns_funded_ack_stats
+			PROPERTIES LABELS "networking;optional;funded-ack" TIMEOUT 100 RUN_SERIAL TRUE)
 		add_test(NAME gargantuan_f1_packet_tail COMMAND gargantuan_real_transport_tests --packet-tail)
 		add_test(NAME gargantuan_f1_four_grant COMMAND gargantuan_real_transport_tests --four-grant)
 		add_test(NAME gargantuan_f1_four_grant_sanitizer_safety

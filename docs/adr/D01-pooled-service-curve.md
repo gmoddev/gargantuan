@@ -290,3 +290,77 @@ retirement, debt conservation, pending and active-grant convergence, and
 The transport/gameplay reserves, FULL_RESERVATION, wire format and physical
 funding gates are unchanged. Historical D01/R3/S1/T2 evidence retains its
 original meaning; none is retroactively an F1 pass.
+
+### F1 delivery implementation amendment — funded final-packet ACK request
+
+The pinned direct-UDP transport may request its existing immediate ACK on the
+packet that completes unique first-send of an attributed POOLED_SERVICE grant,
+provided that packet and its immediate response are funded by the existing
+transport reserve. This is delivery acceleration, not a new service curve or
+permission to retire before ACK. One ACK-owned grant per peer, four global
+slots, 2 MiB/s peer credit, all F1 constants, C3/C5 recovery reference/deadline,
+and gameplay/control reservations remain unchanged.
+
+The adapter configures this policy once per connection generation, immediately
+before its first token-bearing structural submission. Native eligibility is
+direct UDP only, with valid unpurged feedback and an exact active token/byte
+match. Ordinary reliable and FULL_RESERVATION messages cannot initiate it.
+Unsupported transports or unfunded grants retain ordinary ACK behavior; they
+are neither rejected nor given additional F1 time. There is no minimum legal
+grant size and no Q-only fallback.
+
+The source-derived funding calculation uses the pinned 1,300-byte maximum UDP
+datagram plus 48 bytes of IPv6/UDP headers: `M = 1,348 B`. Both endpoints of the
+accepted 32-peer population may emit healthy periodic tracer/instantaneous/
+lifetime statistics at their pinned minimum 5/20/120-second intervals. Charging
+one maximum request and confirmation for each gives:
+
+```text
+C_periodic(T) <= 32 × 2 × 2M × (3 + T/5 + T/20 + T/120)
+periodic burst = 517,632 B
+periodic rate  = ceil(44,573.8666… B/s) = 44,574 B/s
+residual transport rate = 8,388,608 - 44,574 = 8,344,034 B/s
+```
+
+These are derived allocations within the existing 8 MiB/s reserve, not new
+architecture constants. The periodic burst fits the existing 2,287,206-byte
+worst-wave funded queue margin; it does not increase admission or pending
+bounds. The arithmetic rejects overflow and insufficient funding.
+
+For the active grant of exact size `W`, charge all successful outgoing and
+associated incoming datagrams since its native attribution, including whole
+shared packets, retransmissions and incoming duplicates rejected by decryption.
+Let that conservative bidirectional IPv6 wire count be `C`. Before final packet
+construction require:
+
+```text
+C + M final packet + M immediate response
+    <= W + floor(W × residual transport rate / 67,108,864)
+```
+
+The serializer reserves the actual flag bytes before segmentation. Only the
+successful packet containing the remaining unique structural bytes requests
+ACK, after an earlier positive first-send. Failed native sends do not count as
+service; retries preserve exact segment/message ownership. A retransmitted
+already-sent segment cannot create another first-send completion request.
+There is no separate request packet or pacing bypass. Pinned receiver processing
+handles the data before its statistics flags and immediately ACKs using the
+ordinary transport path. Receipt clears the aggressive ping timeout first, so
+the immediate response does not recursively request another immediate response.
+
+This proof bounds the incremental immediate response and healthy periodic
+control separately. It does not claim a finite bound on all future control
+traffic under arbitrary delay or loss. NACKs/retries remain real wire costs;
+optional delayed statistics confirmations remain ordinary control traffic.
+Qualification measures both endpoints through ACK convergence and the subsequent
+control observation interval. Feedback freshness is observation age, not an
+assumed network-latency bound. Whole-path reserve, lifecycle, capture, and fresh
+physical qualification remain independent gates.
+
+The native control reproduction attributes the earlier 22–30 ms post-drain
+wait to the pinned receiver's 50 ms delayed ACK deadline, not Main observation
+or a new first-send failure. The historical Q-only experiment is rejected:
+one 1,258-byte grant used 1,451 IPv4 wire bytes, exceeding the 8/64 reserve
+ratio. Funded eligibility leaves that grant's ACK policy unchanged. Existing
+historical failures and the separate F1 physical PASS retain their original
+meaning; native prototype success does not qualify a later recovery campaign.

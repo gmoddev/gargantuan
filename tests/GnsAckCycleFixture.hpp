@@ -41,7 +41,7 @@ inline void Dump(const char *Side, std::uint64_t Token, const GargantuanAckDiagn
 // This isolates ACK/polling; it does not claim to run GameSession credit/fairness.
 enum class Fault { None, NativeSendFailure, ReceiveLoss, SocketSendFailure, ReceiveDuplicate };
 inline void Observe(std::size_t Bytes, std::chrono::microseconds PollPeriod, bool Prompt = false,
-	std::uint64_t TailBudget = 0, Fault Failure = Fault::None, bool MixedAfter = false) {
+	std::uint64_t TailBudget = 0, Fault Failure = Fault::None, bool MixedAfter = false, bool ProductionPolicy = false) {
 	PairFixture Pair = StartPair({.MaximumConnections = 1, .SendRate = 18 * 1024 * 1024}, TestLimits(), true);
 	struct Cleanup { PairFixture &Value; ~Cleanup() { StopPair(Value); } } Guard{Pair};
 	struct LossCleanup {
@@ -53,8 +53,12 @@ inline void Observe(std::size_t Bytes, std::chrono::microseconds PollPeriod, boo
 		}
 	} Loss;
 	if (!Pair.ServerConnection.IsValid()) throw std::runtime_error("ACK cycle connection failed");
-	if (Prompt && !detail::GnsAckDiagnosticsAccess::PromptFinalGrantAck(*Pair.Server, Pair.ServerConnection, true, TailBudget))
-		throw std::runtime_error("ACK prototype enable failed");
+	for (const auto UnsafeBudget : {std::uint64_t{0}, std::uint64_t{1347}})
+		if (detail::GnsAckDiagnosticsAccess::PromptFinalGrantAck(*Pair.Server, Pair.ServerConnection, true, UnsafeBudget))
+			throw std::runtime_error("unfunded native ACK policy enabled");
+	if (!ProductionPolicy && !detail::GnsAckDiagnosticsAccess::PromptFinalGrantAck(
+		*Pair.Server, Pair.ServerConnection, Prompt, TailBudget))
+		throw std::runtime_error("ACK funded/control configuration failed");
 	std::uint64_t Accepted = 0;
 	for (std::uint64_t Token = 1; Token <= 2; ++Token) {
 		const auto Before = detail::ReliableServiceFeedbackAccess::Observe(*Pair.Server, Pair.ServerConnection);
@@ -191,8 +195,7 @@ inline void Observe(std::size_t Bytes, std::chrono::microseconds PollPeriod, boo
 			NativeAckedAt < Final->StructuralLastCompletedGrantCompletedAtMicroseconds ||
 			ObservedRetirement < NativeAckedAt || AckSentAt < ReceiverCompletedAt)
 			throw std::runtime_error("ACK cycle missing/inconsistent chronology");
-		const auto ExpectedRequests = (TailBudget ? Sender.PromptFinalWireAllowed : Prompt &&
-			Bytes >= FiniteGrantServiceCurve::QuantumBytes && Final->LastCompletedStructuralSegmentEventCount > 1) ? 1u : 0u;
+		const auto ExpectedRequests = Prompt && Sender.PromptFinalWireAllowed ? 1u : 0u;
 		if (Requests != ExpectedRequests) throw std::runtime_error("final grant ACK request was missing or duplicated");
 		if (Failure == Fault::None && Final->StructuralLastCompletedGrantFailed)
 			throw std::runtime_error("healthy ACK cycle failed canonical finite-grant service");
@@ -325,9 +328,10 @@ inline bool Run(bool Prompt = false, std::uint64_t TailBudget = 0) {
 			Repeated.Events[4].Identity != 2)
 			throw std::runtime_error("repeated ACKs displaced critical native events");
 		for (const auto Bytes : {std::size_t{393652}, std::size_t{524288}})
-			for (const auto PollPeriod : {1000us, 16667us}) Observe(Bytes, PollPeriod, Prompt, TailBudget);
+			for (const auto PollPeriod : {1000us, 16667us})
+				Observe(Bytes, PollPeriod, Prompt, TailBudget, Fault::None, false, Prompt && TailBudget == 1348);
 		if (Prompt) for (const auto Bytes : {std::size_t{77}, std::size_t{1135}, std::size_t{1136}, std::size_t{1258}})
-			Observe(Bytes, 1000us, Prompt, TailBudget);
+			Observe(Bytes, 1000us, Prompt, TailBudget, Fault::None, false, TailBudget == 1348);
 		if (Prompt && TailBudget == 1348) {
 			Observe(393652, 1000us, true, TailBudget, Fault::NativeSendFailure);
 			Observe(393652, 1000us, true, TailBudget, Fault::SocketSendFailure);

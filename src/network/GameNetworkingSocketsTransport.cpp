@@ -293,6 +293,7 @@ namespace gargantuan::network {
 			HSteamNetConnection Handle = k_HSteamNetConnection_Invalid;
 			ConnectionState State = ConnectionState::Connecting;
 			NetworkStatistics Statistics;
+			bool FundedAckPolicyConfigured = false;
 		};
 
 		explicit Impl(GameNetworkingSocketsTransportConfiguration Value) : Configuration(std::move(Value)) {}
@@ -854,6 +855,16 @@ namespace gargantuan::network {
 		}
 		const auto Token = detail::ReliableServiceFeedbackAccess::Token(Message);
 		const bool PooledStructuralGrant = Token && Message.Traffic() == TrafficClass::StructuralReplication;
+		if (PooledStructuralGrant && !Connection->second.FundedAckPolicyConfigured) {
+			const auto Profile = ReliableServiceProfile::PooledService();
+			// Configure once before native attribution, on this exact connection
+			// generation. Unsupported transports retain ordinary ACKs. Denial
+			// never rejects a grant or changes its F1/debt lifecycle.
+			SteamNetworkingSocketsLib::GargantuanConfigureFundedGrantAck(Global.Interface,
+				Connection->second.Handle, Profile.Pooled.RequiredTransportReserve,
+				Profile.Pooled.StructuralPool, Profile.MaximumConnections);
+			Connection->second.FundedAckPolicyConfigured = true;
+		}
 		// An accepted POOLED_SERVICE grant must not re-enter GNS's 5 ms
 		// underfilled-packet Nagle wait after its first reliable segment.
 		// FULL_RESERVATION and ordinary reliable traffic have no grant token.
@@ -1016,12 +1027,14 @@ namespace gargantuan::network {
 		ConnectionId Connection, bool Enabled, std::uint64_t TailBudget) {
 		auto &Global = GlobalState();
 		std::lock_guard Lock(Global.Mutex);
-		const auto &State = *Transport.State;
+		auto &State = *Transport.State;
 		const auto Found = State.Connections.find(Connection);
-		const PooledReliableServiceProfile Profile;
-		return Connection.IsValid() && State.Started && Global.Interface && Found != State.Connections.end() &&
+		const auto Profile = ReliableServiceProfile::PooledService();
+		const bool Configured = Connection.IsValid() && State.Started && Global.Interface && Found != State.Connections.end() &&
 			SteamNetworkingSocketsLib::GargantuanConfigurePromptGrantAck(Global.Interface, Found->second.Handle, Enabled,
-				Profile.RequiredTransportReserve, Profile.StructuralPool, TailBudget, 32); // Accepted Option C population.
+				Profile.Pooled.RequiredTransportReserve, Profile.Pooled.StructuralPool, TailBudget, Profile.MaximumConnections);
+		if (Configured) Found->second.FundedAckPolicyConfigured = true; // Preserve explicit A/B control.
+		return Configured;
 	}
 	bool detail::GnsAckDiagnosticsAccess::Read(GameNetworkingSocketsTransport &Transport,
 		ConnectionId Connection, GargantuanAckDiagnostics &Result, bool Reset) {

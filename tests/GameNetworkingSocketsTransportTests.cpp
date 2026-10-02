@@ -261,8 +261,6 @@ int main(int ArgumentCount, char **Arguments) {
 		return GnsFundedAckFourGrantFixture::Run() ? 0 : 1;
 	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--ack-stats-boundary")
 		return GnsAckStatsBoundaryFixture::Run() ? 0 : 1;
-	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--ack-cycle-prompt")
-		return GnsAckCycleFixture::Run(true) ? 0 : 1;
 	if (ArgumentCount == 3 && std::string_view(Arguments[1]) == "--ack-cycle-funded") {
 		const std::string_view Text(Arguments[2]);
 		std::uint64_t TailBudget = 0;

@@ -159,6 +159,8 @@ jobs:
       - name: Run complete headless CTest contract
         shell: pwsh
         run: |
+          # Complete CTest includes the funded ACK workload/mode/pool gates and
+          # one paired native statistics-boundary run; do not duplicate them here.
           ctest --test-dir build-ci -C Release --parallel 2 --timeout 300 --output-on-failure --no-tests=error --output-junit build-ci/ctest-results.xml
 
       - name: Verify pinned Farm32 control and evidence tooling

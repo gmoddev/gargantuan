@@ -108,4 +108,6 @@ bool GargantuanAccessAckDiagnostics(ISteamNetworkingSockets *Interface, std::uin
 bool GargantuanConfigurePromptGrantAck(ISteamNetworkingSockets *Interface, std::uint32_t Handle, bool Enabled,
 	std::uint64_t Reserve, std::uint64_t StructuralPool, std::uint64_t TailBudget, std::uint64_t Peers);
 bool GargantuanArmPromptFailure(ISteamNetworkingSockets *Interface, std::uint32_t Handle, bool AtSocket);
+bool GargantuanConfigureFundedGrantAck(ISteamNetworkingSockets *Interface, std::uint32_t Handle,
+	std::uint64_t Reserve, std::uint64_t StructuralPool, std::uint64_t Peers);
 }
