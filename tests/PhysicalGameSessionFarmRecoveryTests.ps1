@@ -45,6 +45,16 @@ $AdvanceCount = [regex]::Matches($ReplaySource, 'AdvanceFrozenJournalQuote\(').C
 if ($AdvanceCount -ne 1 -or $ReplaySource -match 'for\s*\(\s*std::size_t\s+Work') {
 	throw 'cessation quote may perform more than one full advance per server tick'
 }
+$HostSource = [IO.File]::ReadAllText((Join-Path $PSScriptRoot '../src/host/server/ServerHost.cpp'))
+$SessionEnd = $HostSource.IndexOf('const auto SessionEnded = std::chrono::steady_clock::now();', [StringComparison]::Ordinal)
+$QualificationStart = $HostSource.IndexOf('const auto QualificationStarted = std::chrono::steady_clock::now();', [StringComparison]::Ordinal)
+$ScaleStep = $HostSource.IndexOf('ScaleQualification->Step(Runtime->GetSimulationTick(), {', [StringComparison]::Ordinal)
+if ($SessionEnd -lt 0 -or $QualificationStart -le $SessionEnd -or $ScaleStep -le $QualificationStart -or
+	$QualificationSource -notmatch 'quote_advance_attempted=' -or
+	$QualificationSource -notmatch 'quote_complete=' -or
+	$QualificationSource -notmatch 'quote_lag_records=') {
+	throw 'farm-only per-tick source attribution lacks ordered Session/quote timing and progress'
+}
 $RunId = '7c93e53d-0e0c-4b8d-8a3b-9a761a406ebd'
 $ExpectedNonces = @(0..31 | ForEach-Object { [string](1000 + $_) })
 $Connections = @(0..31 | ForEach-Object { "$(1 + $_):1" })

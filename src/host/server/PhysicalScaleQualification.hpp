@@ -99,6 +99,12 @@ namespace gargantuan::host {
 	// This class neither injects relevance/Desired state nor bypasses admission.
 	class PhysicalScaleQualification final {
 	  public:
+		struct ServerTickTiming {
+			std::uint64_t PollMicroseconds = 0;
+			std::uint64_t EngineMicroseconds = 0;
+			std::uint64_t SessionMicroseconds = 0;
+			std::uint64_t PreQualificationMicroseconds = 0;
+		};
 		static constexpr std::size_t PeerCount = 32;
 		static constexpr std::size_t ActiveCharacters = 8;
 		static constexpr std::size_t NeighborhoodSize = 8;
@@ -116,7 +122,8 @@ namespace gargantuan::host {
 		}
 		void AttachAdmissionEvidence(detail::FarmAdmissionEvidence &Evidence) { AdmissionEvidence = &Evidence; }
 
-		void Step(std::uint64_t Tick) {
+		void Step(std::uint64_t Tick, ServerTickTiming Timing) {
+			CurrentServerTickTiming = Timing;
 			if (State == Stage::Complete) return;
 			if (State == Stage::OverloadReady || State == Stage::OverloadOffering ||
 				State == Stage::OverloadOffered || State == Stage::OverloadRecovery) {
@@ -301,6 +308,10 @@ namespace gargantuan::host {
 		std::uint64_t QuoteBoundMicroseconds = 0;
 		bool QuoteComplete = false, QuoteSealed = false, QuoteResultWritten = false;
 		std::string QuoteFailure;
+		ServerTickTiming CurrentServerTickTiming;
+		std::uint64_t LastQuoteAdvanceMicroseconds = 0;
+		bool LastQuoteAdvanceAttempted = false;
+		bool LastQuoteAdvanceProducedFrame = false;
 		bool RecoverySnapshotWritten = false;
 		std::size_t OverloadRetainedHighWater = 0;
 		std::int64_t OverloadMinimumRetentionMargin = std::numeric_limits<std::int64_t>::max();
@@ -361,6 +372,8 @@ namespace gargantuan::host {
 		}
 
 		void StepCessationQuote() {
+			LastQuoteAdvanceMicroseconds = 0;
+			LastQuoteAdvanceAttempted = LastQuoteAdvanceProducedFrame = false;
 			if (!CessationQuote || !AdmissionEvidence || !QuoteFailure.empty()) return;
 			const auto Events = AdmissionEvidence->EventsSince(AdmissionEvidenceCursor);
 			AdmissionEvidenceCursor += Events.size();
@@ -377,8 +390,14 @@ namespace gargantuan::host {
 				// Keep detached replay off the production service path as much as
 				// possible. One complete advance per server step preserves the exact
 				// frozen frame sequence and W_i; it does not bound one advance's CPU.
+				LastQuoteAdvanceAttempted = true;
+				const auto AdvanceStarted = std::chrono::steady_clock::now();
 				const auto Step = CessationQuote->Replication->AdvanceFrozenJournalQuote(
 					CessationQuote->MaximumFrameBytes);
+				LastQuoteAdvanceMicroseconds = static_cast<std::uint64_t>(
+					std::chrono::duration_cast<std::chrono::microseconds>(
+						std::chrono::steady_clock::now() - AdvanceStarted).count());
+				LastQuoteAdvanceProducedFrame = Step.Frame.has_value();
 				if (!Step.Error.empty()) { QuoteFailure = Step.Error; return; }
 				if (Step.Complete) QuoteComplete = true;
 				else if (Step.Frame) {
@@ -829,7 +848,11 @@ namespace gargantuan::host {
 				return;
 			}
 			if (State == Stage::OverloadRecovery) {
+				const auto QuoteStarted = std::chrono::steady_clock::now();
 				StepCessationQuote();
+				const auto QuoteMicroseconds = static_cast<std::uint64_t>(
+					std::chrono::duration_cast<std::chrono::microseconds>(
+						std::chrono::steady_clock::now() - QuoteStarted).count());
 				const auto Metrics = Session.GetMetrics();
 				const auto Remote = network::detail::GameSessionTestAccess::GetRemoteMetrics(Session);
 				TrySealCessationQuote(Metrics, Tick);
@@ -847,8 +870,25 @@ namespace gargantuan::host {
 				const auto ObservedAt = std::chrono::steady_clock::now();
 				const auto Elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
 					ObservedAt - OverloadCeased).count();
+				std::uint64_t QuoteLagRecords = 0;
+				if (CessationQuote)
+					for (const auto &[Connection, Limit] : CessationQuote->MaximumFrameBytes) {
+						(void)Limit;
+						QuoteLagRecords += CessationQuote->Replication->GetJournalLag(Connection);
+					}
 				std::cerr << "[Qualification:Recovery] event=sample run=" << RunId
 					<< " case=" << CaseName << " elapsed_us=" << Elapsed
+					<< " poll_us=" << CurrentServerTickTiming.PollMicroseconds
+					<< " engine_us=" << CurrentServerTickTiming.EngineMicroseconds
+					<< " session_us=" << CurrentServerTickTiming.SessionMicroseconds
+					<< " prequalification_us=" << CurrentServerTickTiming.PreQualificationMicroseconds
+					<< " quote_us=" << QuoteMicroseconds
+					<< " quote_advance_us=" << LastQuoteAdvanceMicroseconds
+					<< " quote_advance_attempted=" << LastQuoteAdvanceAttempted
+					<< " quote_advance_frame=" << LastQuoteAdvanceProducedFrame
+					<< " quote_complete=" << QuoteComplete << " quote_sealed=" << QuoteSealed
+					<< " quote_frames=" << QuotedFrameCount << " quote_audited=" << AuditedFrameCount
+					<< " quote_lag_records=" << QuoteLagRecords
 					<< " outstanding=" << Metrics.ReliableAdmission.OutstandingBytes
 					<< " active_grants=" << Metrics.ReliableAdmission.ActiveDrainGrants
 					<< " scheduler_queued=" << Metrics.SchedulerQueuedReliableBytes

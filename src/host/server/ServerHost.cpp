@@ -647,6 +647,7 @@ namespace gargantuan::host {
 				const auto SessionStarted = std::chrono::steady_clock::now();
 				if (Session) {
 					Session->Step(Runtime->GetSimulationTick());
+					const auto SessionEnded = std::chrono::steady_clock::now();
 					if (Session->GetStatus() == network::GameSessionStatus::Failed)
 						throw std::runtime_error(Session->GetFailure());
 					if (FarmMode) {
@@ -678,7 +679,17 @@ namespace gargantuan::host {
 							}
 						}
 						if (ScaleQualification) {
-							ScaleQualification->Step(Runtime->GetSimulationTick());
+							const auto QualificationStarted = std::chrono::steady_clock::now();
+							auto Microseconds = [](auto Duration) {
+								return static_cast<std::uint64_t>(std::chrono::duration_cast<
+									std::chrono::microseconds>(Duration).count());
+							};
+							ScaleQualification->Step(Runtime->GetSimulationTick(), {
+								.PollMicroseconds = Microseconds(EngineStarted - TickStarted),
+								.EngineMicroseconds = Microseconds(SessionStarted - EngineStarted),
+								.SessionMicroseconds = Microseconds(SessionEnded - SessionStarted),
+								.PreQualificationMicroseconds = Microseconds(QualificationStarted - SessionEnded),
+							});
 #if defined(GARGANTUAN_WITH_GNS)
 							if (ClockCalibration)
 								ClockCalibration->SetActive(World->GetAttributeValue(
