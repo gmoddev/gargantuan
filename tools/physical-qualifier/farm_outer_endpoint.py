@@ -7,6 +7,7 @@ of the pinned Farm32 host/role entrypoints. It never starts a capture itself.
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -64,6 +65,13 @@ def Verify(Root, IndexPath):
         File = Root / Entry["Name"]
         if File.is_symlink() or not File.is_file() or Digest(File) != Entry["Sha256"]:
             raise ValueError("[Qualification:FarmOuter] stage member hash mismatch")
+    if {"dependency.py", "upstream.lock.json"} <= Seen:
+        Spec = importlib.util.spec_from_file_location("farm32_stage_dependency", Root / "dependency.py")
+        if Spec is None or Spec.loader is None:
+            raise ValueError("[Qualification:FarmOuter] pinned coordinator dependency is unavailable")
+        Module = importlib.util.module_from_spec(Spec)
+        Spec.loader.exec_module(Module)
+        Module.GetRoot()  # Verify every pinned upstream source file before a role starts.
     return Index
 
 

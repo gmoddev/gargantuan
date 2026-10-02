@@ -83,6 +83,10 @@ class OuterCampaignTests(unittest.TestCase):
             File = (Path(Roots["SERVER"]) / ("ticket.json" if Role == "SERVER" else
                                                   "host-client-ticket.json"))
             Campaign.VerifyHostTicket(json.loads(File.read_text()), Role, Host)
+        Upstream = Path(Roots["SERVER"]) / ".agent-coordinator" / "agent_coordinator" / "control.py"
+        Upstream.write_bytes(Upstream.read_bytes() + b"\n# tampered mock\n")
+        with self.assertRaises(ValueError):
+            Endpoint.Verify(Roots["SERVER"], Path(Roots["SERVER"]) / "stage-index.json")
         with self.assertRaises(ValueError):
             Outer.Stage(self.Fixture.Private, self.Fixture.SpecFile,
                         r"C:\Python312\python.exe", r"C:\Sandbox\farm_outer_endpoint.py",
