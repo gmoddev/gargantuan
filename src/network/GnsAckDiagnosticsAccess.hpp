@@ -14,6 +14,7 @@ struct GnsAckDiagnosticsAccess {
 	// attributed grant is owned. Not exposed through the transport/public API.
 	static bool PromptFinalGrantAck(GameNetworkingSocketsTransport &Transport, ConnectionId Connection, bool Enabled,
 		std::uint64_t TailBudget = 0);
+	static bool FailNextFinalPacket(GameNetworkingSocketsTransport &Transport, ConnectionId Connection);
 };
 }
 }

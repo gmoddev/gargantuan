@@ -59,6 +59,8 @@ GargantuanReplaceFeedback("\t\tSNP_RecordReceivedPktNum( nPktNum, usecNow, bSche
 GargantuanReplaceFeedback("\t\tpReliableDecode += cbMsgSize;" "\t\tif (m_senderState.GargantuanAckTrace) m_senderState.GargantuanAckTrace->Record(GargantuanAckDiagnostics::MessageReceived, usecNow, nMsgNum, cbMsgSize);\n\t\tpReliableDecode += cbMsgSize;")
 GargantuanReplaceFeedback("\t\tm_receiverState.m_mapPacketGaps.rbegin()->second.m_usecWhenAckPrior = INT64_MAX; // Clear timer, we wrote everything we needed to" "\t\tif (m_senderState.GargantuanAckTrace) {\n\t\t\tm_senderState.GargantuanAckTrace->SerializedAckPacket = nLastPktToAck;\n\t\t\tm_senderState.GargantuanAckTrace->Record(GargantuanAckDiagnostics::AckSerialized, helper.UsecNow(), nLastPktToAck, 0);\n\t\t}\n\t\tm_receiverState.m_mapPacketGaps.rbegin()->second.m_usecWhenAckPrior = INT64_MAX; // Clear timer, we wrote everything we needed to")
 GargantuanReplaceFeedback("\t// Fit as many blocks as possible." "\tif (m_senderState.GargantuanAckTrace) m_senderState.GargantuanAckTrace->Record(GargantuanAckDiagnostics::FragmentedAckSerialized, helper.UsecNow(), nLastPktToAck, 0);\n\t// Fit as many blocks as possible.")
+GargantuanReplaceFeedback("\t\t\t*pLatestPktNum = LittleWord( uint16( nLastRecvPktNum ) );" "\t\t\t*pLatestPktNum = LittleWord( uint16( nLastRecvPktNum ) );\n\t\t\tif (m_senderState.GargantuanAckTrace) {\n\t\t\t\tm_senderState.GargantuanAckTrace->SerializedAckPacket = nLastRecvPktNum;\n\t\t\t\tm_senderState.GargantuanAckTrace->Record(GargantuanAckDiagnostics::AckSerialized, helper.UsecNow(), nLastRecvPktNum, 0);\n\t\t\t}")
+GargantuanReplaceFeedback("\t++nAckEnd;\n\n\t#ifdef SNP_ENABLE_PACKETSENDLOG" "\t++nAckEnd;\n\tif (m_senderState.GargantuanAckTrace) {\n\t\tm_senderState.GargantuanAckTrace->SerializedAckPacket = nAckEnd - 1;\n\t\tm_senderState.GargantuanAckTrace->Record(GargantuanAckDiagnostics::AckSerialized, helper.UsecNow(), nAckEnd - 1, nBlocks);\n\t}\n\n\t#ifdef SNP_ENABLE_PACKETSENDLOG")
 GargantuanReplaceFeedback("\t// OK, we have a plaintext payload.  Encrypt and send it." [=[
 	// The request belongs to the existing packet that completes unique first
 	// transmission, never to enqueue, a segment boundary, or retransmission.
@@ -91,6 +93,18 @@ GargantuanReplaceFeedback("\t// OK, we have a plaintext payload.  Encrypt and se
 	}
 
 	// OK, we have a plaintext payload.  Encrypt and send it.]=])
+GargantuanReplaceFeedback("\t// OK, we have a plaintext payload.  Encrypt and send it." [=[
+	// Bounded opt-in diagnostic: exercise the real native-send failure/retry
+	// branch without transmitting a packet and then pretending it failed.
+	const bool GargantuanFailPromptPacket = ctx.m_bGargantuanPromptAck && m_senderState.GargantuanAckTrace &&
+		m_senderState.GargantuanAckTrace->FailNextPromptPacket;
+	if (GargantuanFailPromptPacket) {
+		m_senderState.GargantuanAckTrace->FailNextPromptPacket = false;
+		++m_senderState.GargantuanAckTrace->InjectedNativeSendFailures;
+		m_senderState.GargantuanAckTrace->FirstSentBytesAtInjectedFailure = m_senderState.GargantuanFeedback.StructuralActiveGrantFirstSentBytes;
+	}
+	// OK, we have a plaintext payload.  Encrypt and send it.]=])
+GargantuanReplaceFeedback("nBytesSent = helper.InFlightPkt().m_pTransport->SendEncryptedDataChunk(" "nBytesSent = GargantuanFailPromptPacket ? 0 : helper.InFlightPkt().m_pTransport->SendEncryptedDataChunk(")
 GargantuanReplaceFeedback("\t\t// We have potentially transfered ownership of some reliable messages" [=[
 		if (ctx.m_bGargantuanPromptAck && m_senderState.GargantuanAckTrace)
 			m_senderState.GargantuanAckTrace->Record(GargantuanAckDiagnostics::PromptRequestFailed,
@@ -178,6 +192,12 @@ GargantuanWriteFeedbackSource()
 GargantuanReadFeedbackSource(steamnetworkingsockets_connections.h 9ece0f7051f1b67e44c75c27c10867a863b56e2a0d0ac95849aa116b5274a9ef)
 GargantuanReplaceFeedback("\tint m_cbMaxEncryptedPayload;" "\tint m_cbMaxEncryptedPayload;\n\tbool m_bGargantuanPromptAckReserved = false;\n\tbool m_bGargantuanPromptAck = false;")
 GargantuanReplaceFeedback("\t/// Called when we close the connection locally" [=[
+	bool GargantuanArmPromptFailure() {
+		if (!m_senderState.GargantuanPromptFinalGrantAck || !m_senderState.GargantuanAckTrace ||
+			m_senderState.GargantuanFeedback.ActiveAttributedRetirementToken) return false;
+		m_senderState.GargantuanAckTrace->FailNextPromptPacket = true;
+		return true;
+	}
 	bool GargantuanCanReservePromptAck() const {
 		const auto &Grant = m_senderState.GargantuanFeedback;
 		return m_senderState.GargantuanPromptFinalGrantAck && !Grant.Invalid && !Grant.Purged &&
@@ -269,6 +289,13 @@ GargantuanWriteFeedbackSource()
 
 GargantuanReadFeedbackSource(csteamnetworkingsockets.cpp 2b260c05cc8c262e785387ea3d08eee74cc03b6eed00493e961a82c05dec5451)
 GargantuanReplaceFeedback("static CSteamNetworkListenSocketBase *GetListenSocketByHandle" [=[
+bool GargantuanArmPromptFailure(ISteamNetworkingSockets *Interface, uint32 Handle) {
+	ConnectionScopeLock Lock;
+	auto *Connection = GetConnectionByHandleForAPI(Handle, Lock, "GargantuanPromptFailure");
+	if (!Connection || Connection->m_pSteamNetworkingSocketsInterface != Interface) return false;
+	return Connection->GargantuanArmPromptFailure();
+}
+
 bool GargantuanConfigurePromptGrantAck(ISteamNetworkingSockets *Interface, uint32 Handle, bool Enabled,
 	uint64_t Reserve, uint64_t Pool, uint64_t TailBudget, uint64_t Peers) {
 	ConnectionScopeLock Lock;

@@ -1003,6 +1003,14 @@ namespace gargantuan::network {
 		if (Connection.Generation != std::numeric_limits<std::uint32_t>::max()) State->FreeSlots.push_back(Connection.Slot);
 		return true;
 	}
+	bool detail::GnsAckDiagnosticsAccess::FailNextFinalPacket(GameNetworkingSocketsTransport &Transport, ConnectionId Connection) {
+		auto &Global = GlobalState();
+		std::lock_guard Lock(Global.Mutex);
+		const auto &State = *Transport.State;
+		const auto Found = State.Connections.find(Connection);
+		return Connection.IsValid() && State.Started && Global.Interface && Found != State.Connections.end() &&
+			SteamNetworkingSocketsLib::GargantuanArmPromptFailure(Global.Interface, Found->second.Handle);
+	}
 	bool detail::GnsAckDiagnosticsAccess::PromptFinalGrantAck(GameNetworkingSocketsTransport &Transport,
 		ConnectionId Connection, bool Enabled, std::uint64_t TailBudget) {
 		auto &Global = GlobalState();

@@ -37,9 +37,15 @@ inline void Dump(const char *Side, std::uint64_t Token, const GargantuanAckDiagn
 // Production adapter + real pinned GNS, two successive obligations on the same
 // connection. Submission is explicitly gated by actual native ACK retirement.
 // This isolates ACK/polling; it does not claim to run GameSession credit/fairness.
-inline void Observe(std::size_t Bytes, std::chrono::microseconds PollPeriod, bool Prompt = false, std::uint64_t TailBudget = 0) {
+enum class Fault { None, NativeSendFailure, ReceiveLoss };
+inline void Observe(std::size_t Bytes, std::chrono::microseconds PollPeriod, bool Prompt = false,
+	std::uint64_t TailBudget = 0, Fault Failure = Fault::None) {
 	PairFixture Pair = StartPair({.MaximumConnections = 1, .SendRate = 18 * 1024 * 1024}, TestLimits(), true);
 	struct Cleanup { PairFixture &Value; ~Cleanup() { StopPair(Value); } } Guard{Pair};
+	struct LossCleanup {
+		bool Enabled = false;
+		~LossCleanup() { if (Enabled) SteamNetworkingUtils()->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketLoss_Recv, 0); }
+	} Loss;
 	if (!Pair.ServerConnection.IsValid()) throw std::runtime_error("ACK cycle connection failed");
 	if (Prompt && !detail::GnsAckDiagnosticsAccess::PromptFinalGrantAck(*Pair.Server, Pair.ServerConnection, true, TailBudget))
 		throw std::runtime_error("ACK prototype enable failed");
@@ -52,10 +58,18 @@ inline void Observe(std::size_t Bytes, std::chrono::microseconds PollPeriod, boo
 		if (!detail::GnsAckDiagnosticsAccess::Read(*Pair.Server, Pair.ServerConnection, Sender, true) ||
 			!detail::GnsAckDiagnosticsAccess::Read(*Pair.Client, Pair.ClientConnection, Receiver, true))
 			throw std::runtime_error("ACK trace activation failed");
+		if (Failure == Fault::NativeSendFailure &&
+			!detail::GnsAckDiagnosticsAccess::FailNextFinalPacket(*Pair.Server, Pair.ServerConnection))
+			throw std::runtime_error("native final-packet failure could not be armed");
 		auto Intent = MakeNetworkMessageIntent(Pair.ServerConnection, DeliveryMode::ReliableOrdered,
 			TrafficClass::StructuralReplication, ReliableReplicationOrder{ReliableReplicationSequence(Token)},
 			std::vector<std::byte>(Bytes - ReliableServiceEnvelopeBytes, std::byte{0x37}), Pair.Limits);
 		const auto Activated = Now();
+		if (Failure == Fault::ReceiveLoss) {
+			if (!SteamNetworkingUtils()->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketLoss_Recv, 100))
+				throw std::runtime_error("native receive-loss injection failed");
+			Loss.Enabled = true;
+		}
 		if (!Intent || !detail::ReliableServiceFeedbackAccess::Attribute(*Intent, Token) ||
 			!detail::ReliableServiceFeedbackAccess::Activate(*Intent, Token, Activated) ||
 			!Pair.Server->Send(*Intent).Succeeded()) throw std::runtime_error("ACK cycle submission failed");
@@ -69,6 +83,11 @@ inline void Observe(std::size_t Bytes, std::chrono::microseconds PollPeriod, boo
 		while (std::chrono::steady_clock::now() < Deadline) {
 			std::this_thread::sleep_until(NextPoll);
 			NextPoll += PollPeriod;
+			if (Loss.Enabled && Now() - Activated >= 150000) {
+				if (!SteamNetworkingUtils()->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketLoss_Recv, 0))
+					throw std::runtime_error("native receive-loss removal failed");
+				Loss.Enabled = false;
+			}
 			(void)Drain(*Pair.Server);
 			for (const auto &Event : Drain(*Pair.Client))
 				if (const auto *Message = std::get_if<ReceivedMessageEvent>(&Event)) ReceivedBytes += Message->Payload.size();
@@ -87,9 +106,10 @@ inline void Observe(std::size_t Bytes, std::chrono::microseconds PollPeriod, boo
 		Dump("sender", Token, Sender); Dump("receiver", Token, Receiver);
 		const auto ReceiverAfter = detail::ReliableServiceFeedbackAccess::Observe(*Pair.Client, Pair.ClientConnection);
 		if (!ReceiverAfter) throw std::runtime_error("ACK cycle receiver terminal counters missing");
-		std::uint64_t NativeAckedAt = 0, ReceiverCompletedAt = 0, AckSentAt = 0, Requests = 0;
+		std::uint64_t NativeAckedAt = 0, ReceiverCompletedAt = 0, AckSentAt = 0, Requests = 0, FailedRequests = 0;
 		for (std::uint32_t Index = 0; Index < Sender.Count; ++Index) {
 			const auto &Event = Sender.Events[Index];
+			if (Event.Type == GargantuanAckDiagnostics::PromptRequestFailed) ++FailedRequests;
 			if (Event.Type == GargantuanAckDiagnostics::PromptRequestSent) {
 				if (Event.Identity != static_cast<std::int64_t>(Token))
 					throw std::runtime_error("ACK request has stale grant identity");
@@ -113,8 +133,13 @@ inline void Observe(std::size_t Bytes, std::chrono::microseconds PollPeriod, boo
 		const auto ExpectedRequests = (TailBudget ? Sender.PromptFinalWireAllowed : Prompt &&
 			Bytes >= FiniteGrantServiceCurve::QuantumBytes && Final->LastCompletedStructuralSegmentEventCount > 1) ? 1u : 0u;
 		if (Requests != ExpectedRequests) throw std::runtime_error("final grant ACK request was missing or duplicated");
-		if (Final->StructuralLastCompletedGrantFailed)
+		if (Failure == Fault::None && Final->StructuralLastCompletedGrantFailed)
 			throw std::runtime_error("healthy ACK cycle failed canonical finite-grant service");
+		if (Failure == Fault::NativeSendFailure && (Sender.InjectedNativeSendFailures != 1 || FailedRequests != 1 ||
+			!Sender.FirstSentBytesAtInjectedFailure || Sender.FirstSentBytesAtInjectedFailure >= Bytes || Requests != 1))
+			throw std::runtime_error("native failed final-send retry lost or duplicated its finite obligation");
+		if (Failure == Fault::ReceiveLoss && Final->ReliableStreamBytesRetransmitted <= Before->ReliableStreamBytesRetransmitted)
+			throw std::runtime_error("receive-loss case did not exercise retransmission");
 		if (Prompt && TailBudget == 1348 && ((Bytes >= 393652 && Requests != 1) || (Bytes <= 1258 && Requests != 0)))
 			throw std::runtime_error("known funded/denied transport shapes did not match independent expectation");
 		if (TailBudget && Requests && (Sender.GrantWireInvalid ||
@@ -123,6 +148,8 @@ inline void Observe(std::size_t Bytes, std::chrono::microseconds PollPeriod, boo
 			throw std::runtime_error("emitted prompt exceeded its independently reconstructed wire ceiling");
 		std::cout << "[Network:AckCycle:Grant] bytes=" << Bytes << " token=" << Token
 			<< " prompt=" << Prompt << " requests=" << Requests << " tail_budget=" << TailBudget
+			<< " fault=" << static_cast<int>(Failure) << " failed_requests=" << FailedRequests
+			<< " first_bytes_at_failed_send=" << Sender.FirstSentBytesAtInjectedFailure
 			<< " poll_us=" << PollPeriod.count() << " activated_us=" << Activated
 			<< " first_us=" << Final->StructuralLastCompletedGrantFirstSendAtMicroseconds
 			<< " complete_us=" << Final->StructuralLastCompletedGrantCompletedAtMicroseconds
@@ -199,6 +226,10 @@ inline bool Run(bool Prompt = false, std::uint64_t TailBudget = 0) {
 			for (const auto PollPeriod : {1000us, 16667us}) Observe(Bytes, PollPeriod, Prompt, TailBudget);
 		if (Prompt) for (const auto Bytes : {std::size_t{77}, std::size_t{1135}, std::size_t{1136}, std::size_t{1258}})
 			Observe(Bytes, 1000us, Prompt, TailBudget);
+		if (Prompt && TailBudget == 1348) {
+			Observe(393652, 1000us, true, TailBudget, Fault::NativeSendFailure);
+			Observe(393652, 1000us, true, TailBudget, Fault::ReceiveLoss);
+		}
 		return true;
 	} catch (const std::exception &Error) {
 		std::cerr << "[Network:AckCycle] FAIL " << Error.what() << '\n';
