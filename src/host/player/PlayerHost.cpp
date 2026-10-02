@@ -351,8 +351,16 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 			const auto SessionStarted = std::chrono::steady_clock::now();
 			if (Session) {
 				Session->Step(Runtime->GetSimulationTick());
-				if (Session->GetStatus() == network::GameSessionStatus::Failed)
-					throw std::runtime_error(Session->GetFailure());
+				if (Session->GetStatus() == network::GameSessionStatus::Failed) {
+					if (!FarmScaleWorkload || !FarmScaleCompleted)
+						throw std::runtime_error(Session->GetFailure());
+					// The host closes the qualified session only after its final
+					// admission, first-send, ACK, and retirement checks converge.
+					std::cout << "[Qualification:Client] event=server_closed_after_scale_complete run_id="
+						<< FarmRunId << " slot=" << FarmSlot << " nonce=" << FarmClientNonce
+						<< " steady_ns=" << FarmTimestamp() << '\n';
+					Runtime->ProcessService->MarkExit(0);
+				}
 				if (FarmEnabled) {
 					if (FarmScaleWorkload) {
 						const auto Beat = Runtime->CharacterControl->GetAttributeValue("ScaleCallbackBeat");
@@ -397,7 +405,7 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 								FarmScaleCurrentPhase = *PhaseName;
 								FarmScalePhaseSeen = std::chrono::steady_clock::now();
 							}
-							if (*PhaseName == "complete") {
+							if (*PhaseName == "complete" && !FarmScaleCompleted) {
 								FarmScaleCompleted = FarmScaleObservedPhases == FarmScalePhases.size() &&
 									(FarmSlot != 0 || FarmScaleProducerPhases == FarmScalePhases.size()) &&
 									(!FarmRecoveryWorkload || (FarmRecoveryNamesObserved[1] && FarmRecoveryNamesObserved[2]));
@@ -406,7 +414,7 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 									<< " observed_phases=" << FarmScaleObservedPhases
 									<< " producer_phases=" << FarmScaleProducerPhases
 									<< " steady_ns=" << FarmTimestamp() << std::endl;
-								Runtime->ProcessService->MarkExit(FarmScaleCompleted ? 0 : 16);
+								if (!FarmScaleCompleted) Runtime->ProcessService->MarkExit(16);
 							} else if (FarmScaleObservedPhases < FarmScalePhases.size() &&
 								*PhaseName == FarmScalePhases[FarmScaleObservedPhases]) {
 								const auto Root = Runtime->Workspace->FindFirstChild("ContentScaleRegion", false);

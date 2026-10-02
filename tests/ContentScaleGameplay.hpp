@@ -120,7 +120,7 @@ if PhysicalFarm then
                 PhaseAcknowledgements[PeerKey] = true
                 AcknowledgementCount += 1
             end
-        elseif Kind == "content_observed" and Phase == CurrentPhase then
+        elseif Kind == "content_observed" and type(Phase) == "string" and Phase == CurrentPhase then
             local PeerKey = tostring(Peer.Slot) .. ":" .. tostring(Peer.Generation)
             if not ContentObservations[PeerKey] then
                 ContentObservations[PeerKey] = true
@@ -584,7 +584,8 @@ RunService.PostSimulation:Connect(function()
                     ReceivedPhase, Objects, LocalPlayer.PlayerId))
             end
         end
-        if ContentObservedPhase == ReceivedPhase and not ContentObservationSubmitted and
+        if ContentObservedPhase ~= nil and ContentObservedPhase == ReceivedPhase and
+            not ContentObservationSubmitted and
             ContentObservationAttempts < 20 and
             PhaseControlTick - LastContentObservationTick >= 60 then
             LastContentObservationTick = PhaseControlTick

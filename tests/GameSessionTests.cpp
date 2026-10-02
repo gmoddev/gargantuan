@@ -1,6 +1,7 @@
 #include "../src/network/GameSessionTestAccess.hpp"
 #include "../src/runtime/RuntimeWorkDiagnostics.hpp"
 #include "../src/host/common/FarmPublicationEvidence.hpp"
+#include "../src/host/server/PhysicalScaleQualification.hpp"
 #include "PublicationLatencyFixture.hpp"
 #include "JoinedCharacterFixture.hpp"
 #include "gargantuan/Engine.hpp"
@@ -33,6 +34,7 @@
 #include <iostream>
 #include <iterator>
 #include <memory>
+#include <limits>
 #include <thread>
 #include <vector>
 
@@ -47,6 +49,55 @@ namespace {
 		if (Condition) return;
 		std::cerr << "FAIL: " << Message << '\n';
 		++Failures;
+	}
+
+	void TestPhysicalScaleCounterDecoding() {
+		using host::detail::DecodePhysicalScaleCounter;
+		Check(DecodePhysicalScaleCounter(WireValue(32)) == 32,
+			"host-authored integral scale count is accepted");
+		Check(DecodePhysicalScaleCounter(WireValue(32.0)) == 32,
+			"Luau-authored integral double scale count is accepted");
+		for (const auto Value : {31.0, 33.0, 31.5,
+			std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::infinity()})
+			Check(!DecodePhysicalScaleCounter(WireValue(Value)).has_value() ||
+				DecodePhysicalScaleCounter(WireValue(Value)) != 32,
+				"incorrect or nonfinite scale count cannot satisfy the 32-peer gate");
+		Check(!DecodePhysicalScaleCounter(std::nullopt).has_value() &&
+			!DecodePhysicalScaleCounter(WireValue(std::string("32"))).has_value() &&
+			!DecodePhysicalScaleCounter(WireValue(true)).has_value() &&
+			!DecodePhysicalScaleCounter(WireValue(-1)).has_value(),
+			"missing, wrong-type, and negative scale counts are rejected");
+
+		using host::detail::HasPhysicalScaleTerminalConvergence;
+		GameSessionMetrics Metrics;
+		Metrics.ReadyPeers = 32;
+		Metrics.StructuralFeedbackPeersObserved = 32;
+		Metrics.NativeQueuedReliablePeersObserved = 32;
+		Metrics.ReliableAdmission.AcceptedBytes = 774;
+		Metrics.ReliableAdmission.VerifiedAttributedRetirement = 774;
+		Check(HasPhysicalScaleTerminalConvergence(Metrics),
+			"connected peers with exact grant retirement may conclude");
+		Metrics.ReliableAdmission.VerifiedAttributedRetirement = 0;
+		Metrics.ReliableAdmission.OutstandingBytes = 774;
+		Check(!HasPhysicalScaleTerminalConvergence(Metrics),
+			"completion observation cannot replace accepted-grant retirement");
+		Metrics.ReliableAdmission.OutstandingBytes = 0;
+		Metrics.ReliableAdmission.TerminalReleasedBytes = 774;
+		Check(!HasPhysicalScaleTerminalConvergence(Metrics),
+			"terminal release cannot masquerade as retirement");
+		Metrics.ReliableAdmission.TerminalReleasedBytes = 0;
+		Metrics.ReliableAdmission.VerifiedAttributedRetirement = 774;
+		Metrics.ReadyPeers = 31;
+		Check(!HasPhysicalScaleTerminalConvergence(Metrics),
+			"a disconnected client cannot satisfy the terminal farm gate");
+		Metrics.ReadyPeers = 32;
+		Metrics.StructuralPendingEnters = 1;
+		Check(!HasPhysicalScaleTerminalConvergence(Metrics),
+			"unresolved structural pending work blocks terminal convergence");
+		Metrics.StructuralPendingLeaves = 1;
+		Metrics.NativeQueuedReliablePeersObserved = 31;
+		Check(!HasPhysicalScaleTerminalConvergence(Metrics),
+			"unobserved native queue feedback cannot masquerade as zero");
 	}
 
 	struct RetirementEvidenceCapture {
@@ -1479,6 +1530,9 @@ end)
 				ServiceMetrics.ClientRemoteMaximumServiceGapNanoseconds > 0 &&
 				ClientRuntime->CharacterControl->GetAttributeValue("ServiceProbeReplies") == std::optional<WireValue>(2.0),
 				"client service metrics observe validated Character and Remote processing without changing delivery");
+			Check(host::detail::DecodePhysicalScaleCounter(
+				ClientRuntime->CharacterControl->GetAttributeValue("ServiceProbeReplies")) == 2,
+				"Luau SetAttribute numeric output is readable by the scale count gate");
 
 			auto PreviousCharacter = ServerCharacter;
 			ServerPlayers[0]->LoadCharacter();
@@ -2024,6 +2078,10 @@ int main(int ArgumentCount, char **Arguments) {
 			TestCharacterRetirementAcrossStructuralFrames();
 			return Failures == 0 ? 0 : 1;
 		}
+		if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--scale-counter") {
+			TestPhysicalScaleCounterDecoding();
+			return Failures == 0 ? 0 : 1;
+		}
 		if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--late-handoff") {
 			TestProductionLifecycleComposition(true);
 			return Failures == 0 ? 0 : 1;
@@ -2036,6 +2094,7 @@ int main(int ArgumentCount, char **Arguments) {
 		}
 		if (ArgumentCount != 1) throw std::invalid_argument("Unknown game-session test selection");
 		TestGroundedNetworkLocomotion();
+		TestPhysicalScaleCounterDecoding();
 		TestPublicationLatencyBounds();
 		TestFarmPublicationEvidence();
 		TestProtocolBounds();

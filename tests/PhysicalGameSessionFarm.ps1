@@ -31,6 +31,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'AdmissionFairnessEvidence.ps1')
+. (Join-Path $PSScriptRoot 'PhysicalFarmPipeDrain.ps1')
 $ServerPackageRoot = [IO.Path]::GetFullPath($ServerPackageRoot)
 $PlayerPackageRoot = [IO.Path]::GetFullPath($PlayerPackageRoot)
 $EvidenceRoot = [IO.Path]::GetFullPath($EvidenceRoot)
@@ -357,8 +358,8 @@ function Start-LoggedProcess {
 			Label = $Label; Process = $Process; Pid = $Process.Id
 			OutputPath = $OutputPath; ErrorPath = $ErrorPath
 			OutputStream = $OutputStream; ErrorStream = $ErrorStream
-			OutputCopy = $Process.StandardOutput.BaseStream.CopyToAsync($OutputStream)
-			ErrorCopy = $Process.StandardError.BaseStream.CopyToAsync($ErrorStream)
+			OutputCopy = [PhysicalFarmPipeDrain]::Start($Process.StandardOutput.BaseStream, $OutputStream)
+			ErrorCopy = [PhysicalFarmPipeDrain]::Start($Process.StandardError.BaseStream, $ErrorStream)
 		}
 		$AllProcesses.Add($Owner)
 		return $Owner
@@ -745,6 +746,7 @@ try {
 		'--content-provider', $Provider.ToLowerInvariant())
 	if ($ScaleWorkload) { $ServerArguments += @('--farm-scale-workload',
 		'--farm-admission-evidence', (Join-Path $RunDirectory 'admission-fairness.tsv'),
+		'--farm-publication-evidence', (Join-Path $RunDirectory 'publication-service.bin'),
 		'--content-residency', 'on-demand') }
 	if ($RecoveryWorkload) { $ServerArguments += '--farm-recovery-workload' }
 	if (-not [Net.IPAddress]::IsLoopback($BindAddress)) {
@@ -774,7 +776,8 @@ try {
 		$Arguments = @('--headless', '--connect', $Endpoint, '--farm-run-id', $RunId,
 			'--farm-slot', [string]$Slot, '--farm-client-nonce', $ExpectedNonces[$Slot],
 			'--max-frames', [string]$ClientFrames)
-		if ($ScaleWorkload) { $Arguments += '--farm-scale-workload' }
+		if ($ScaleWorkload) { $Arguments += @('--farm-scale-workload',
+			'--farm-publication-evidence', (Join-Path $RunDirectory ('publication-service-{0}.bin' -f $Slot))) }
 		if ($RecoveryWorkload) { $Arguments += '--farm-recovery-workload' }
 		if (-not [Net.IPAddress]::IsLoopback($BindAddress)) { $Arguments += '--allow-insecure-development-network' }
 		$Clients.Add((Start-LoggedProcess -Executable $PlayerExecutable -WorkingDirectory $PlayerPackageRoot `

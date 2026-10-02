@@ -1575,9 +1575,16 @@ namespace gargantuan::network {
 								(void)ByteAdmission->RefreshService(Connection, detail::ReliableByteAdmission::ServiceObservation{
 									Result.ObservedAtMicroseconds, Result.Qualified, Result.Available, PeerValue.ReliableFeedback.OrdinaryDebt});
 							}
-							if (IsPooled()) (void)ByteAdmission->Allowance(Connection, ServiceTime());
-							if (IsPooled()) ByteAdmission->ObserveExactDemand(Connection,
-								Produced.EncodedFrame.size() + ReliableServiceEnvelopeBytes, ServiceTime(), Produced.DiagnosticFingerprint);
+							if (IsPooled()) {
+								// The encoded demand and its immediate eligibility check share
+								// one timestamp. Sampling twice can put eligibility before the
+								// exact demand by one microsecond in the evidence stream.
+								const auto AdmissionAt = ServiceTime();
+								(void)ByteAdmission->Allowance(Connection, AdmissionAt);
+								ByteAdmission->ObserveExactDemand(Connection,
+									Produced.EncodedFrame.size() + ReliableServiceEnvelopeBytes, AdmissionAt,
+									Produced.DiagnosticFingerprint);
+							}
 							Receipt = ByteAdmission->Reserve(Connection, Produced.EncodedFrame.size() + ReliableServiceEnvelopeBytes);
 							if (!Receipt) {
 								if (IsPooled() && Replication->DiscardSchedulerPreparation(Connection, Produced.Frame->Sequence).Succeeded()) {

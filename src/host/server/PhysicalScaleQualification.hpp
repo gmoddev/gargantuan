@@ -12,11 +12,13 @@
 #include "gargantuan/network/GameSession.hpp"
 #include "gargantuan/runtime/MutationGateway.hpp"
 #include "gargantuan/runtime/ChangeJournal.hpp"
+#include "gargantuan/runtime/WireValue.hpp"
 #include "../../network/GameSessionTestAccess.hpp"
 
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <iostream>
 #include <limits>
@@ -29,6 +31,38 @@
 #include <vector>
 
 namespace gargantuan::host {
+	namespace detail {
+		[[nodiscard]] inline std::optional<std::uint32_t> DecodePhysicalScaleCounter(
+			const std::optional<WireValue> &Value) {
+			if (!Value) return std::nullopt;
+			if (const auto *Integer = std::get_if<int>(&*Value)) {
+				if (*Integer < 0) return std::nullopt;
+				return static_cast<std::uint32_t>(*Integer);
+			}
+			if (const auto *Number = std::get_if<double>(&*Value)) {
+				if (!std::isfinite(*Number) || *Number < 0 ||
+					*Number > static_cast<double>(std::numeric_limits<std::uint32_t>::max()) ||
+					std::trunc(*Number) != *Number) return std::nullopt;
+				return static_cast<std::uint32_t>(*Number);
+			}
+			return std::nullopt;
+		}
+
+		[[nodiscard]] inline bool HasPhysicalScaleTerminalConvergence(
+			const network::GameSessionMetrics &Metrics) {
+			const auto &Admission = Metrics.ReliableAdmission;
+			return Metrics.ReadyPeers == 32 && Admission.TerminalReleasedBytes == 0 &&
+				Admission.AcceptedBytes == Admission.VerifiedAttributedRetirement &&
+				Admission.OutstandingBytes == 0 && Admission.ActiveDrainGrants == 0 &&
+				Metrics.StructuralFeedbackPeersObserved == 32 &&
+				Metrics.NativeQueuedReliablePeersObserved == 32 &&
+				Metrics.SchedulerQueuedReliableBytes == 0 && Metrics.NativeQueuedReliableBytes == 0 &&
+				Metrics.StructuralPendingEnters == Metrics.StructuralPendingLeaves &&
+				Metrics.StructuralActivePeers == 0 && Metrics.MaterializationBacklog == 0 &&
+				Metrics.JournalBacklogRecords == 0;
+		}
+	}
+
 	// Trusted, bounded host-only controller for the accepted 32-client recipient
 	// workload. The package's server script relays the authoritative DataModel
 	// ScalePhase attribute to the single producer through ScalePhaseControl and
@@ -60,14 +94,15 @@ namespace gargantuan::host {
 				return;
 			}
 			if (State == Stage::AwaitingClockQuiescence) {
-				const auto Acks = Runtime.CharacterControl->GetAttributeValue(
-					"ScaleClockQuiescedAcks", ScriptSecurityContext::CoreTrusted());
-				if (Acks == std::optional<WireValue>(WireValue(static_cast<int>(PeerCount)))) {
+				if (HasAllPeerAcks("ScaleClockQuiescedAcks")) {
 					std::cout << "[Qualification:FarmClock] event=quiesce_complete run=" << RunId
 						<< " epoch=" << CalibrationEpoch << " count=" << PeerCount << " tick=" << Tick
 						<< " monotonic_us=" << std::chrono::duration_cast<std::chrono::microseconds>(
 							std::chrono::steady_clock::now().time_since_epoch()).count() << '\n';
 					PublishClockState(true, Tick);
+					// Quiescence and active RPC calibration are separately bounded stages.
+					// A late final quiescence ACK must not consume the probe budget.
+					CalibrationTick = Tick;
 					State = Stage::Calibrating;
 					return;
 				}
@@ -76,9 +111,7 @@ namespace gargantuan::host {
 				return;
 			}
 			if (State == Stage::Calibrating) {
-				const auto Acks = Runtime.CharacterControl->GetAttributeValue(
-					"ScaleClockAcks", ScriptSecurityContext::CoreTrusted());
-				if (Acks == std::optional<WireValue>(WireValue(static_cast<int>(PeerCount)))) {
+				if (HasAllPeerAcks("ScaleClockAcks")) {
 					std::cout << "[Qualification:FarmClock] event=calibration_complete run=" << RunId
 						<< " epoch=" << CalibrationEpoch << " count=" << PeerCount << " tick=" << Tick << '\n';
 					PublishClockState(false, Tick);
@@ -90,17 +123,26 @@ namespace gargantuan::host {
 				return;
 			}
 			if (State == Stage::Concluding) {
-				// The final phase must reach the clients before the host closes GNS.
-				// A client may finish and disconnect during this bounded interval.
-				if (Tick - ConclusionTick >= CompletionPropagationTicks) {
+				const auto Metrics = Session.GetMetrics();
+				if (Metrics.ReadyPeers != PeerCount || Metrics.ReliableAdmission.TerminalReleasedBytes != 0)
+					Fail("client_or_grant_left_before_completion", Tick);
+				// Keep the clients connected until every accepted structural byte
+				// retires; their completion observation alone is not a drain proof.
+				if (Tick - ConclusionTick >= CompletionPropagationTicks &&
+					detail::HasPhysicalScaleTerminalConvergence(Metrics)) {
 					State = Stage::Complete;
 					const auto Provider = Runtime.Content->GetMetrics();
 					std::cout << "[Qualification:Scale] event=result run=" << RunId
 						<< " status=PASS phases=5 peers=32 active_characters=8 content_objects=512"
+						<< " native_observed=" << Metrics.NativeQueuedReliablePeersObserved
+						<< " feedback_observed=" << Metrics.StructuralFeedbackPeersObserved
 						<< " provider_acquisitions=" << Provider.Acquisitions
 						<< " provider_admissions=" << Provider.Admissions
 						<< " provider_evictions=" << Provider.Evictions << " tick=" << Tick << '\n';
+					return;
 				}
+				if (Tick - ConclusionTick >= MaximumPhaseTicks)
+					Fail("completion_did_not_converge", Tick);
 				return;
 			}
 			if (FirstTick == 0) FirstTick = Tick;
@@ -131,10 +173,8 @@ namespace gargantuan::host {
 			const bool ProducerFailed = Runtime.CharacterControl->GetAttributeValue("ScaleProducerFailed",
 				ScriptSecurityContext::CoreTrusted()) == std::optional<WireValue>(WireValue(std::string(PhaseName)));
 			if (ProducerFailed) Fail("producer_phase_metrics_failed", Tick);
-			const bool AllPeersAcknowledged = Runtime.CharacterControl->GetAttributeValue("ScalePhaseAcks",
-				ScriptSecurityContext::CoreTrusted()) == std::optional<WireValue>(WireValue(static_cast<int>(PeerCount)));
-			const bool AllContentObserved = Runtime.CharacterControl->GetAttributeValue("ScaleContentObservedAcks",
-				ScriptSecurityContext::CoreTrusted()) == std::optional<WireValue>(WireValue(static_cast<int>(PeerCount)));
+			const bool AllPeersAcknowledged = HasAllPeerAcks("ScalePhaseAcks");
+			const bool AllContentObserved = HasAllPeerAcks("ScaleContentObservedAcks");
 			if (AllPeersAcknowledged && !PhaseAcksObserved) {
 				PhaseAcksObserved = true;
 				std::cout << "[Qualification:Scale] event=phase_acks run=" << RunId << " phase=" << PhaseName
@@ -418,12 +458,10 @@ namespace gargantuan::host {
 				Fail("overload_control_publication_rejected", Tick);
 		}
 
-		[[nodiscard]] int OverloadCount(std::string_view Key) const {
+		[[nodiscard]] bool HasAllPeerAcks(std::string_view Key) const {
 			const auto Value = Runtime.CharacterControl->GetAttributeValue(std::string(Key),
 				ScriptSecurityContext::CoreTrusted());
-			if (!Value) return 0;
-			const auto *Number = std::get_if<int>(&*Value);
-			return Number ? *Number : -1;
+			return detail::DecodePhysicalScaleCounter(Value) == static_cast<std::uint32_t>(PeerCount);
 		}
 
 		struct RetentionObservation {
@@ -506,7 +544,7 @@ namespace gargantuan::host {
 			const auto CaseName = OverloadCases[OverloadCase];
 			if (Session.GetMetrics().ReadyPeers != PeerCount) Fail("client_left_during_overload", Tick);
 			if (State == Stage::OverloadReady) {
-				if (OverloadCount("ScaleOverloadReadyAcks") == static_cast<int>(PeerCount) &&
+				if (HasAllPeerAcks("ScaleOverloadReadyAcks") &&
 					Session.GetMetrics().MaterializationBacklog == 0) {
 					State = Stage::OverloadOffering;
 					OverloadStageStarted = Now;
@@ -534,7 +572,7 @@ namespace gargantuan::host {
 			return;
 			}
 			if (State == Stage::OverloadOffered) {
-				if (OverloadCount("ScaleOverloadOfferedAcks") == static_cast<int>(PeerCount)) {
+				if (HasAllPeerAcks("ScaleOverloadOfferedAcks")) {
 					PublishOverloadAttribute("ScaleOverloadCase", WireValue("recover_" + std::string(CaseName)), Tick);
 					OverloadCeased = std::chrono::steady_clock::now();
 					CessationJournalTail = ChangeJournal::Get().CreateCursor(

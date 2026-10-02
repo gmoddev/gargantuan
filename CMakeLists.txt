@@ -805,6 +805,9 @@ if(BUILD_TESTING)
 		find_program(GARGANTUAN_PWSH_EXECUTABLE NAMES pwsh)
 		find_program(GARGANTUAN_GO_EXECUTABLE NAMES go)
 		if(GARGANTUAN_PWSH_EXECUTABLE)
+			add_test(NAME gargantuan_physical_game_session_farm_pipe_drain
+				COMMAND "${GARGANTUAN_PWSH_EXECUTABLE}" -NoProfile -File
+				"${CMAKE_CURRENT_SOURCE_DIR}/tests/PhysicalFarmPipeDrainTests.ps1")
 			add_test(NAME gargantuan_physical_game_session_farm_evidence
 				COMMAND "${GARGANTUAN_PWSH_EXECUTABLE}" -NoProfile -File
 				"${CMAKE_CURRENT_SOURCE_DIR}/tests/PhysicalGameSessionFarmTests.ps1")
