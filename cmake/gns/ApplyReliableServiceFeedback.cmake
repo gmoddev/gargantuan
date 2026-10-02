@@ -46,14 +46,19 @@ macro(GargantuanWriteFeedbackSource)
 endmacro()
 
 GargantuanReadFeedbackSource(steamnetworkingsockets_snp.h 35a8d2721334f5632e042f3165095dcae90ced590b78392cc0f4346fceaba170)
-GargantuanReplaceFeedback("#pragma once" "#pragma once\n#include \"ReliableServiceFeedback.hpp\"")
-GargantuanReplaceFeedback("struct SSNPSenderState\n{" "struct SSNPSenderState\n{\n\tGargantuanReliableServiceCounters GargantuanFeedback;\n\tbool GargantuanRunningStructuralGrant = false;")
+GargantuanReplaceFeedback("#pragma once" "#pragma once\n#include \"ReliableServiceFeedback.hpp\"\n#include \"AckDiagnostics.hpp\"\n#include <memory>")
+GargantuanReplaceFeedback("struct SSNPSenderState\n{" "struct SSNPSenderState\n{\n\tstd::unique_ptr<GargantuanAckDiagnostics> GargantuanAckTrace;\n\tGargantuanReliableServiceCounters GargantuanFeedback;\n\tbool GargantuanRunningStructuralGrant = false;")
 GargantuanReplaceFeedback("\tstatic constexpr uint16 k_nStatus_InFlight = 0xffff;" "\t// A failed SendEncryptedDataChunk queues retry without first-send service.\n\tbool m_bGargantuanEverSent;\n\n\tstatic constexpr uint16 k_nStatus_InFlight = 0xffff;")
 GargantuanWriteFeedbackSource()
 
 GargantuanReadFeedbackSource(steamnetworkingsockets_snp.cpp 99e2b190b17993139bd3251f8862b81b58903a119ea456edacfec68f3dd9d65c)
 GargantuanReplaceFeedback("void SSNPSenderState::Shutdown()\n{" "void SSNPSenderState::Shutdown()\n{\n\tGargantuanSetRunningStructuralGrant(GargantuanRunningStructuralGrant, false);\n\tGargantuanFeedback.Purged = true; // Purge is never ACK retirement.")
-GargantuanReplaceFeedback("\t\tpMsg->Unlink();\n\t\tpMsg->Release();" "\t\tGargantuanFeedback.AckMessage(pMsg->m_nMessageNumber, pMsg->m_cbSize, info.m_cbHdr);\n\t\tpMsg->Unlink();\n\t\tpMsg->Release();")
+GargantuanReplaceFeedback("\t\tpMsg->Unlink();\n\t\tpMsg->Release();" "\t\tif (GargantuanAckTrace) GargantuanAckTrace->Record(GargantuanAckDiagnostics::MessageAcked, SteamNetworkingSockets_GetLocalTimestamp(), pMsg->m_nMessageNumber, pMsg->m_cbSize);\n\t\tGargantuanFeedback.AckMessage(pMsg->m_nMessageNumber, pMsg->m_cbSize, info.m_cbHdr);\n\t\tpMsg->Unlink();\n\t\tpMsg->Release();")
+GargantuanReplaceFeedback("\tAssertLocksHeldByCurrentThread( \"SNP_SendPacket\" );" "\tAssertLocksHeldByCurrentThread( \"SNP_SendPacket\" );\n\tif (m_senderState.GargantuanAckTrace) m_senderState.GargantuanAckTrace->SerializedAckPacket = 0;")
+GargantuanReplaceFeedback("\t\tSNP_RecordReceivedPktNum( nPktNum, usecNow, bScheduleAck );" "\t\tSNP_RecordReceivedPktNum( nPktNum, usecNow, bScheduleAck );\n\t\tif (bScheduleAck && m_senderState.GargantuanAckTrace) m_senderState.GargantuanAckTrace->Received(usecNow, nPktNum, m_receiverState.TimeWhenFlushAcks());")
+GargantuanReplaceFeedback("\t\tpReliableDecode += cbMsgSize;" "\t\tif (m_senderState.GargantuanAckTrace) m_senderState.GargantuanAckTrace->Record(GargantuanAckDiagnostics::MessageReceived, usecNow, nMsgNum, cbMsgSize);\n\t\tpReliableDecode += cbMsgSize;")
+GargantuanReplaceFeedback("\t\tm_receiverState.m_mapPacketGaps.rbegin()->second.m_usecWhenAckPrior = INT64_MAX; // Clear timer, we wrote everything we needed to" "\t\tif (m_senderState.GargantuanAckTrace) {\n\t\t\tm_senderState.GargantuanAckTrace->SerializedAckPacket = nLastPktToAck;\n\t\t\tm_senderState.GargantuanAckTrace->Record(GargantuanAckDiagnostics::AckSerialized, helper.UsecNow(), nLastPktToAck, 0);\n\t\t}\n\t\tm_receiverState.m_mapPacketGaps.rbegin()->second.m_usecWhenAckPrior = INT64_MAX; // Clear timer, we wrote everything we needed to")
+GargantuanReplaceFeedback("\t// Fit as many blocks as possible." "\tif (m_senderState.GargantuanAckTrace) m_senderState.GargantuanAckTrace->Record(GargantuanAckDiagnostics::FragmentedAckSerialized, helper.UsecNow(), nLastPktToAck, 0);\n\t// Fit as many blocks as possible.")
 GargantuanReplaceFeedback("\t\t\t\t\t\t// The most common case (hopefully): the segment is currently in flight" "\t\t\t\t\t\tm_senderState.GargantuanFeedback.AckSegment(cbSeg, relSeg.m_hStatusOrRetry == SNPSendReliableSegment_t::k_nStatus_Acked);\n\n\t\t\t\t\t\t// The most common case (hopefully): the segment is currently in flight")
 GargantuanReplaceFeedback("pInFlightSeg->m_hStatusOrRetry = SNPSendReliableSegment_t::k_nStatus_InFlight;" "pInFlightSeg->m_hStatusOrRetry = SNPSendReliableSegment_t::k_nStatus_InFlight;\n\t\t\t\tpInFlightSeg->m_bGargantuanEverSent = false;")
 GargantuanReplaceFeedback("\t// We sent a packet.  Track it" [=[
@@ -61,6 +66,9 @@ GargantuanReplaceFeedback("\t// We sent a packet.  Track it" [=[
 	// failed send leaves the segment on the retry list with EverSent=false;
 	// its later successful retry is unique first-send, not retransmission.
 	m_senderState.GargantuanFeedback.NativePacket(nBytesSent);
+	if (m_senderState.GargantuanAckTrace && m_senderState.GargantuanAckTrace->SerializedAckPacket)
+		m_senderState.GargantuanAckTrace->Record(GargantuanAckDiagnostics::AckPacketSent,
+			helper.UsecNow(), m_senderState.GargantuanAckTrace->SerializedAckPacket, nBytesSent);
 	const uint64 GargantuanPacketSentAt = GargantuanReliableServiceClock();
 	for (uint16 hGargantuanSeg : helper.InFlightPkt().m_vecReliableSegments)
 	{
@@ -122,6 +130,12 @@ GargantuanWriteFeedbackSource()
 
 GargantuanReadFeedbackSource(steamnetworkingsockets_connections.h 9ece0f7051f1b67e44c75c27c10867a863b56e2a0d0ac95849aa116b5274a9ef)
 GargantuanReplaceFeedback("\t/// Called when we close the connection locally" [=[
+	bool GargantuanAccessAckDiagnostics(bool Reset, GargantuanAckDiagnostics &Result) {
+		if (Reset) m_senderState.GargantuanAckTrace.reset(new GargantuanAckDiagnostics());
+		if (!m_senderState.GargantuanAckTrace) return false;
+		Result = *m_senderState.GargantuanAckTrace;
+		return true;
+	}
 	// Caller holds the existing connection lock. Direct fields avoid a second
 	// mutable status sample or the rate-estimator side effects of realtime status.
 	void GargantuanPopulateReliableServiceFeedback(GargantuanReliableServiceSnapshot &Result) const {
@@ -135,6 +149,14 @@ GargantuanWriteFeedbackSource()
 
 GargantuanReadFeedbackSource(csteamnetworkingsockets.cpp 2b260c05cc8c262e785387ea3d08eee74cc03b6eed00493e961a82c05dec5451)
 GargantuanReplaceFeedback("static CSteamNetworkListenSocketBase *GetListenSocketByHandle" [=[
+bool GargantuanAccessAckDiagnostics(ISteamNetworkingSockets *Interface, uint32 Handle,
+	bool Reset, GargantuanAckDiagnostics &Result) {
+	ConnectionScopeLock Lock;
+	auto *Connection = GetConnectionByHandleForAPI(Handle, Lock, "GargantuanAckDiagnostics");
+	if (!Connection || Connection->m_pSteamNetworkingSocketsInterface != Interface) return false;
+	return Connection->GargantuanAccessAckDiagnostics(Reset, Result);
+}
+
 bool GargantuanReadNativeFeedback(ISteamNetworkingSockets *Interface, uint32 Handle, GargantuanReliableServiceSnapshot &Result) {
 	ConnectionScopeLock Lock;
 	auto *Connection = GetConnectionByHandleForAPI(Handle, Lock, "GargantuanReliableServiceFeedback");

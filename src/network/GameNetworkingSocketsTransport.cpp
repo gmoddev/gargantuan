@@ -1,4 +1,5 @@
 #include "gargantuan/network/GameNetworkingSocketsTransport.hpp"
+#include "GnsAckDiagnosticsAccess.hpp"
 #include "GnsServiceDiagnostics.hpp"
 #include "FarmCaptureEndpointAccess.hpp"
 #include "ReliableServiceFeedback.hpp"
@@ -1001,6 +1002,15 @@ namespace gargantuan::network {
 		Final.reset();
 		if (Connection.Generation != std::numeric_limits<std::uint32_t>::max()) State->FreeSlots.push_back(Connection.Slot);
 		return true;
+	}
+	bool detail::GnsAckDiagnosticsAccess::Read(GameNetworkingSocketsTransport &Transport,
+		ConnectionId Connection, GargantuanAckDiagnostics &Result, bool Reset) {
+		auto &Global = GlobalState();
+		std::lock_guard Lock(Global.Mutex);
+		const auto &State = *Transport.State;
+		const auto Found = State.Connections.find(Connection);
+		return Connection.IsValid() && State.Started && Global.Interface && Found != State.Connections.end() &&
+			SteamNetworkingSocketsLib::GargantuanAccessAckDiagnostics(Global.Interface, Found->second.Handle, Reset, Result);
 	}
 	std::optional<detail::ReliableServiceFeedback> GameNetworkingSocketsTransport::ReadReliableServiceFeedback(
 		ConnectionId Connection) const {
