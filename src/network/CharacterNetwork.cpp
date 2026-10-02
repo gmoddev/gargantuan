@@ -2233,6 +2233,9 @@ namespace gargantuan::network {
 			const bool ReliableFrame = ReliableControl(Event);
 			if (!ReliableFrame && !IsExpectedStateFrameOrder(Event, Frame->FrameSequence)) return false;
 			if (Frame->MaterializationEpoch != Peer.MaterializationEpoch) {
+				SaturatingIncrement(Metrics.MaterializationEpochMismatches);
+				Metrics.LastExpectedMaterializationEpoch = Peer.MaterializationEpoch.Value();
+				Metrics.LastReceivedMaterializationEpoch = Frame->MaterializationEpoch.Value();
 				SaturatingIncrement(Metrics.StaleStatesDropped, static_cast<std::uint64_t>(Frame->StateCount));
 				return true;
 			}

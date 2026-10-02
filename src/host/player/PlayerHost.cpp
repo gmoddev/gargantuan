@@ -523,6 +523,9 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 										<< " pending_full=" << Native.ClientActionSubmissionPendingFull
 										<< " scheduler_rejected=" << Native.ClientActionSubmissionSchedulerRejected
 										<< " stale_states=" << Native.ClientCharacterStaleStatesDropped
+										<< " epoch_mismatches=" << Native.ClientMaterializationEpochMismatches
+										<< " expected_epoch=" << Native.ClientLastExpectedMaterializationEpoch
+										<< " received_epoch=" << Native.ClientLastReceivedMaterializationEpoch
 										<< " history_overflows=" << Native.ClientCharacterHistoryOverflows << std::endl;
 								}
 								FarmScalePreviousEventAcks = EventAcks;

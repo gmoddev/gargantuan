@@ -2164,6 +2164,9 @@ namespace gargantuan::network {
 			Result.ClientActionSubmissionPendingFull = CharacterMetrics.ActionSubmissionPendingFull;
 			Result.ClientActionSubmissionSchedulerRejected = CharacterMetrics.ActionSubmissionSchedulerRejected;
 			Result.ClientCharacterStaleStatesDropped = CharacterMetrics.StaleStatesDropped;
+			Result.ClientMaterializationEpochMismatches = CharacterMetrics.MaterializationEpochMismatches;
+			Result.ClientLastExpectedMaterializationEpoch = CharacterMetrics.LastExpectedMaterializationEpoch;
+			Result.ClientLastReceivedMaterializationEpoch = CharacterMetrics.LastReceivedMaterializationEpoch;
 			Result.ClientCharacterHistoryOverflows = CharacterMetrics.HistoryOverflows;
 		}
 		if (State->Relevance) {

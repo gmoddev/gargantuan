@@ -127,6 +127,9 @@ namespace gargantuan::network {
 		std::uint64_t SchedulerSubmissions = 0;
 		std::uint64_t BaselineMisses = 0;
 		std::uint64_t StaleStatesDropped = 0;
+		std::uint64_t MaterializationEpochMismatches = 0;
+		std::uint64_t LastExpectedMaterializationEpoch = 0;
+		std::uint64_t LastReceivedMaterializationEpoch = 0;
 		std::uint64_t InterpolationBufferUnderruns = 0;
 		std::uint64_t InterpolationResets = 0;
 		std::uint64_t LocalSmoothCorrections = 0;

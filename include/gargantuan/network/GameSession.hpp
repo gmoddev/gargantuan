@@ -108,6 +108,9 @@ namespace gargantuan::network {
 		std::uint64_t ClientActionSubmissionPendingFull = 0;
 		std::uint64_t ClientActionSubmissionSchedulerRejected = 0;
 		std::uint64_t ClientCharacterStaleStatesDropped = 0;
+		std::uint64_t ClientMaterializationEpochMismatches = 0;
+		std::uint64_t ClientLastExpectedMaterializationEpoch = 0;
+		std::uint64_t ClientLastReceivedMaterializationEpoch = 0;
 		std::uint64_t ClientCharacterHistoryOverflows = 0;
 		std::uint64_t ClientRemoteMessagesHandled = 0;
 		std::uint64_t ClientCharacterMaximumServiceGapNanoseconds = 0;
