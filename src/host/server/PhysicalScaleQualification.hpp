@@ -359,6 +359,20 @@ namespace gargantuan::host {
 				while (!Actual.empty() && !Expected.empty()) {
 					if (Actual.front().ExactBytes != Expected.front().CompleteBytes ||
 						Actual.front().ExactCandidateFingerprint != Expected.front().Fingerprint) {
+						const auto &Observed = Actual.front();
+						const auto &Quoted = Expected.front();
+						std::cerr << "[Qualification:Recovery] event=quote_mismatch run=" << RunId
+							<< " case=" << OverloadCases[OverloadCase]
+							<< " connection_slot=" << Connection.Slot
+							<< " connection_generation=" << Connection.Generation
+							<< " grant_token=" << Observed.GrantToken
+							<< " observed_bytes=" << Observed.ExactBytes
+							<< " quoted_bytes=" << Quoted.CompleteBytes
+							<< " quoted_sequence=" << Quoted.Sequence.Value()
+							<< " observed_fingerprint=" << Observed.ExactCandidateFingerprint[0]
+							<< ':' << Observed.ExactCandidateFingerprint[1]
+							<< " quoted_fingerprint=" << Quoted.Fingerprint[0]
+							<< ':' << Quoted.Fingerprint[1] << '\n';
 						QuoteFailure = "live accepted frame differs from cessation quote";
 						return;
 					}
