@@ -859,12 +859,19 @@ if PhysicalFarm then
             task.spawn(function()
                 for Index = 1, 10 do
                     local Started = os.clock()
+                    local StartedTick = PhaseTick
                     local Ok, Value = pcall(function()
                         return OverloadFunction:InvokeServerWithTimeout(1, "recovery")
                     end)
-                    if Ok and Value == "recovery" then
+                    local Ended = os.clock()
+                    local Passed = Ok and Value == "recovery"
+                    print(string.format("[Qualification:Recovery] event=rpc_probe case=%s player_id=%d index=%d client_tick=%d started_clock_ns=%d ended_clock_ns=%d elapsed_us=%d ok=%d",
+                        CurrentOverloadCase, LocalPlayer.PlayerId, Index, StartedTick,
+                        math.floor(Started * 1000000000), math.floor(Ended * 1000000000),
+                        math.floor((Ended - Started) * 1000000), if Passed then 1 else 0))
+                    if Passed then
                         RecoveryProbeAcks += 1
-                        table.insert(RecoveryRpcLatencies, math.floor((os.clock() - Started) * 1000000))
+                        table.insert(RecoveryRpcLatencies, math.floor((Ended - Started) * 1000000))
                     else RecoveryProbeErrors += 1 end
                     OverloadSequence += 1
                     RecoveryEventStarted[OverloadSequence] = os.clock()

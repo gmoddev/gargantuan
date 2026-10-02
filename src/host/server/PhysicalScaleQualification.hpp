@@ -831,6 +831,7 @@ namespace gargantuan::host {
 			if (State == Stage::OverloadRecovery) {
 				StepCessationQuote();
 				const auto Metrics = Session.GetMetrics();
+				const auto Remote = network::detail::GameSessionTestAccess::GetRemoteMetrics(Session);
 				TrySealCessationQuote(Metrics, Tick);
 				if (!QuoteFailure.empty()) {
 					if (QuoteResultWritten)
@@ -848,6 +849,11 @@ namespace gargantuan::host {
 					<< " active_grants=" << Metrics.ReliableAdmission.ActiveDrainGrants
 					<< " scheduler_queued=" << Metrics.SchedulerQueuedReliableBytes
 					<< " native_queued=" << Metrics.NativeQueuedReliableBytes
+					<< " remote_dispatch_messages=" << Remote.QueuedDispatchMessages
+					<< " remote_dispatch_bytes=" << Remote.QueuedDispatchBytes
+					<< " remote_deferred_messages=" << Remote.DeferredReliableMessages
+					<< " remote_deferred_bytes=" << Remote.DeferredReliableBytes
+					<< " remote_inflight_requests=" << Remote.InFlightRequests
 					<< " native_observed=" << Metrics.NativeQueuedReliablePeersObserved
 					<< " feedback_observed=" << Metrics.StructuralFeedbackPeersObserved
 					<< " accepted=" << Metrics.StructuralAcceptedFeedbackBytes

@@ -6,6 +6,7 @@
 #include <string>
 #include "gargantuan/network/CharacterNetwork.hpp"
 #include "gargantuan/network/ReplicationCoordinator.hpp"
+#include "gargantuan/network/RemoteManager.hpp"
 #include "gargantuan/runtime/SpatialRegionIndex.hpp"
 #include "gargantuan/runtime/ChangeJournal.hpp"
 
@@ -52,6 +53,7 @@ namespace gargantuan::network::detail {
 		[[nodiscard]] static std::optional<SpatialCellAddress> GetSpatialCellAddress(const GameSession &Session, ObjectId Object);
 		[[nodiscard]] static CharacterNetworkMetrics GetCharacterMetrics(const GameSession &Session);
 		[[nodiscard]] static std::uint64_t GetReliableEventsAccepted(const GameSession &Session);
+		[[nodiscard]] static RemoteMetrics GetRemoteMetrics(const GameSession &Session);
 		[[nodiscard]] static std::vector<ConnectionId> GetConnections(const GameSession &Session);
 		// Actual raw-history readers, not dependency/publication revision stamps.
 		[[nodiscard]] static std::vector<JournalRequirement> GetJournalRequirements(const GameSession &Session);

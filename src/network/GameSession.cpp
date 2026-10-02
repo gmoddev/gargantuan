@@ -2287,6 +2287,9 @@ namespace gargantuan::network {
 	std::uint64_t detail::GameSessionTestAccess::GetReliableEventsAccepted(const GameSession &Session) {
 		return Session.State->Remotes ? Session.State->Remotes->GetMetrics().ReliableEventsAccepted : 0;
 	}
+	RemoteMetrics detail::GameSessionTestAccess::GetRemoteMetrics(const GameSession &Session) {
+		return Session.State->Remotes ? Session.State->Remotes->GetMetrics() : RemoteMetrics{};
+	}
 	std::vector<ConnectionId> detail::GameSessionTestAccess::GetConnections(const GameSession &Session) {
 		std::vector<ConnectionId> Result;
 		for (const auto &[Connection, PeerValue] : Session.State->Peers) Result.push_back(Connection);
