@@ -2130,6 +2130,68 @@ end)
 		Runtime.Destroy();
 	}
 
+	void TestSpeculativeRelevanceMaterialization() {
+		auto Network = SimulatedNetwork::Create({.BaseLatency = 1ms});
+		auto World = std::make_shared<DataModel>();
+		HeadlessRenderer Renderer(Vector2(64, 64));
+		Engine Runtime(World, &Renderer, nullptr,
+			EngineProviderConfiguration{.AudioEnabled = false, .Mode = RuntimeMode::NetworkServer});
+		Runtime.ProcessService->Alive = true;
+		auto Npc = std::make_shared<KinematicCharacter>();
+		auto Root = std::make_shared<Part>();
+		Root->SetAnchored(true);
+		Root->SetParent(Npc);
+		Npc->SetRootPart(Root);
+		Npc->SetParent(Runtime.Workspace);
+		auto Settings = Configuration(GameSessionRole::Server, "speculative-relevance");
+		// Real bounded planning intentionally spans more than one server step.
+		// Relevance can reverse before a planned Leave has ever been accepted.
+		Settings.StructuralReplication.PlanningWorkPerTick = 1;
+		Settings.StructuralReplication.PlanningPeerQuantum = 1;
+		GameSession Server(Network->CreateTransport(), Settings, &Runtime);
+		GameSession Client(Network->CreateTransport(), Configuration(GameSessionRole::Client, "speculative-relevance"));
+		Check(Server.Start().Succeeded() && Client.Start().Succeeded(), "speculative relevance sessions start");
+		std::unique_ptr<HeadlessRenderer> ClientRenderer;
+		std::unique_ptr<Engine> ClientRuntime;
+		std::uint64_t Tick = 1;
+		auto Step = [&] {
+			Advance(Network, Server, Client, Tick++);
+			if (!ClientRuntime && Client.GetClientDataModel()) {
+				ClientRenderer = std::make_unique<HeadlessRenderer>(Vector2(64, 64));
+				ClientRuntime = std::make_unique<Engine>(Client.GetClientDataModel(), ClientRenderer.get(), nullptr,
+					EngineProviderConfiguration{.AudioEnabled = false, .Mode = RuntimeMode::NetworkClient});
+				Check(Client.AttachClientRuntime(*ClientRuntime), "speculative relevance client attaches");
+			}
+		};
+		for (int Index = 0; Index < 500; ++Index) Step();
+		const auto Identities = Server.GetPeerIdentities();
+		if (Identities.size() == 1 && ClientRuntime && Server.GetMetrics().MaterializedCharacters >= 2) {
+			const auto Connection = Identities.front().Connection;
+			const auto Before = Server.GetMetrics().MaterializedCharacters;
+			const auto BeforeBytes = Client.GetMetrics().ClientStructuralBytesReceived;
+			const std::array Far{glm::vec3{10000, 0, 0}};
+			Check(Server.SetTrustedReplicationFocus(Connection, Far), "far trusted focus is accepted");
+			Step();
+			std::cout << "[Network:SpeculativeRelevance] before=" << Before
+				<< " after=" << Server.GetMetrics().MaterializedCharacters
+				<< " bytes=" << Client.GetMetrics().ClientStructuralBytesReceived - BeforeBytes << '\n';
+			Check(Server.GetMetrics().MaterializedCharacters == Before,
+				"an unaccepted speculative Leave cannot retire a committed Character materialization");
+			const std::array Near{glm::vec3{0, 0, 0}};
+			Check(Server.SetTrustedReplicationFocus(Connection, Near), "near trusted focus cancels the speculative Leave");
+			for (int Index = 0; Index < 500; ++Index) Step();
+			const auto StaleBefore = Client.GetMetrics().ClientCharacterStaleStatesDropped;
+			for (int Index = 0; Index < 30; ++Index) Step();
+			Check(Server.GetMetrics().MaterializedCharacters == Before &&
+				Client.GetMetrics().ClientCharacterStaleStatesDropped == StaleBefore,
+				"Leave cancellation preserves the shared GCHR epoch and ongoing owner state service");
+		} else Check(false, "speculative relevance fixture materializes both owner and NPC");
+		Client.Stop();
+		Server.Stop();
+		if (ClientRuntime) ClientRuntime->Destroy();
+		Runtime.Destroy();
+	}
+
 	void TestServerCharacterAutoLoadsPolicy() {
 		auto Network = SimulatedNetwork::Create({.BaseLatency = 1ms});
 		auto ServerTransport = Network->CreateTransport();
@@ -2192,6 +2254,10 @@ end)
 int main(int ArgumentCount, char **Arguments) {
 	try {
 		gargantuan::BootstrapNativeRuntimeSchema();
+		if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--relevance-materialization") {
+			TestSpeculativeRelevanceMaterialization();
+			return Failures == 0 ? 0 : 1;
+		}
 		if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--farm-publication-overhead") {
 			constexpr int Samples = 500'000;
 			const auto Sample = [] {
