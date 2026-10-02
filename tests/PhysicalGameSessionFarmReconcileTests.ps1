@@ -86,6 +86,17 @@ try {
 	}
 	$ServerLines.Add("[Qualification:Scale] event=result run=$RunId status=PASS phases=5 peers=32 tick=5001")
 	$ServerLines.Add("[Qualification:Admission] event=result run=$RunId accepted=8192 retired=8192 terminal_release=0 outstanding=0 outstanding_high=2048 active_grants=0 grants_high=2 grant_deferrals=3 funded_deferrals=2 credit_deferrals=1 fairness_deferrals=1 max_wait_us=1000 peer_backlog_high=2048 global_backlog_high=8192 peer_credit_high=2048 global_credit_high=8192 fairness_rotations=1 pending_enters=0 pending_leaves=0 materialization_backlog=0 journal_backlog=0 structural_active_peers=0 oldest_pending_ticks=0 backlog_failures=0 journal_failures=0")
+	$FairnessPath = Join-Path $ServerRoot 'admission-fairness.tsv'
+	$FairnessLines = @(
+		"format=GargantuanAdmissionEvidenceV1`trun=$RunId",
+		(@('event', 'exact_demand', 'none', 1, 1, 1, 0, 0, 8192, 1000, 0, 0, 0, 0, 0, 0, 0, 0, 0) -join "`t"),
+		(@('event', 'credit_eligible', 'none', 1, 1, 1, 1, 0, 8192, 1100, 1050, 1100, 8192, 8192, 0, 0, 0, 0, 0) -join "`t"),
+		(@('event', 'grant_accepted', 'none', 1, 1, 1, 1, 1, 8192, 1300, 1050, 1100, 0, 0, 1, 0, 0, 0, 0) -join "`t"),
+		"end`t3`t0"
+	)
+	[IO.File]::WriteAllText($FairnessPath, ($FairnessLines -join "`n") + "`n", [Text.UTF8Encoding]::new($false))
+	$FairnessBytes = ([IO.FileInfo]$FairnessPath).Length
+	$ServerLines.Add("[Qualification:Admission] event=evidence_result run=$RunId file=admission-fairness.tsv events=3 bytes=$FairnessBytes overflow=0 write_failed=0")
 	[IO.File]::WriteAllLines((Join-Path $ServerRoot 'server.stdout.log'), $ServerLines)
 	[IO.File]::WriteAllText((Join-Path $ServerRoot 'server.stderr.log'), '')
 	$ResourceUtc = [DateTimeOffset]::UtcNow.ToString('O')
@@ -150,11 +161,24 @@ try {
 	$Report = Get-Content -LiteralPath $ReportPath -Raw | ConvertFrom-Json
 	if ($Report.Status -ne 'INCOMPLETE' -or $Report.ProviderQualification -ne 'NOT CLAIMED' -or
 		$Report.Identity.Ready -ne 32 -or $Report.Admission.accepted -ne 8192 -or
+		$Report.AdmissionFairnessObservation.Classification -cne 'EVIDENCE_INTEGRITY_AND_OBSERVED_TIMING_ONLY' -or
+		$Report.AdmissionFairnessObservation.MaximumObservedEligibilityToGrantMicroseconds -ne 200 -or
+		$Report.AdmissionFairnessObservation.GrantedCount -ne 1 -or
+		@($Report.Ledger | Where-Object Gate -eq 'Fairness, backlog and backpressure' |
+			Where-Object State -eq 'NOT MEASURED').Count -ne 1 -or
 		$Report.MissingGateCount -lt 7 -or
 		@($Report.Ledger | Where-Object Gate -eq 'Exact accepted/retired/terminal/debt/grant/journal conservation' |
 			Where-Object State -eq 'MEASURED').Count -ne 1) {
 		throw 'valid role-local evidence was promoted to provider qualification or lost missing gates'
 	}
+	$OriginalFairness = [IO.File]::ReadAllText($FairnessPath)
+	[IO.File]::WriteAllText($FairnessPath, $OriginalFairness.Replace("credit_eligible`tnone`t1`t1`t1`t1", "credit_eligible`tnone`t1`t1`t1`t2"))
+	Assert-Rejected -Name 'tampered immutable fairness evidence' -ReportPath (Join-Path $TestRoot 'tampered-fairness-report.json')
+	Save-Index -Root $ServerRoot -RunId $RunId -Role 'Server'
+	Assert-Rejected -Name 'rehash of semantically invalid fairness episode' `
+		-ReportPath (Join-Path $TestRoot 'bad-fairness-episode-report.json')
+	[IO.File]::WriteAllText($FairnessPath, $OriginalFairness)
+	Save-Index -Root $ServerRoot -RunId $RunId -Role 'Server'
 	$Manifest.Provider = 'Node'
 	$Manifest.NodeEndpoint = 'node.example.test:443'
 	$Manifest.NodeRootCertificateSha256 = $HashPin

@@ -7,6 +7,7 @@
 #     -PlayerPackageRoot C:\run\player -EvidenceRoot C:\run\evidence `
 #     -Endpoint 127.0.0.1:39450 -Peers 32
 # Add -ScaleWorkload -ClientFrames 9000 for the canonical five-phase matrix.
+# Stage AdmissionFairnessEvidence.ps1 beside this script for scale evidence.
 
 param(
 	[Parameter(Mandatory = $true)][string]$ServerPackageRoot,
@@ -28,6 +29,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'AdmissionFairnessEvidence.ps1')
 $ServerPackageRoot = [IO.Path]::GetFullPath($ServerPackageRoot)
 $PlayerPackageRoot = [IO.Path]::GetFullPath($PlayerPackageRoot)
 $EvidenceRoot = [IO.Path]::GetFullPath($EvidenceRoot)
@@ -241,7 +243,8 @@ function Assert-Records {
 		}
 	}
 	return [pscustomobject]@{ Ready = $Peers; UniqueNonces = $ServerNonces.Count;
-		UniqueConnections = $Connections.Count; UniquePlayers = $Players.Count }
+		UniqueConnections = $Connections.Count; UniquePlayers = $Players.Count;
+		Connections = @($Connections) }
 }
 
 function Assert-ScaleRecords {
@@ -553,6 +556,10 @@ try {
 	Assert-LogBounds
 	$Identity = Assert-Records -Clients $Clients -Server $Server -ExpectedNonces $ExpectedNonces
 	if ($ScaleWorkload) { Assert-ScaleRecords -Server $Server -Clients $Clients -ExpectedNonces $ExpectedNonces }
+	$FairnessObservation = if ($ScaleWorkload) {
+		Read-AdmissionFairnessEvidence -Path (Join-Path $RunDirectory 'admission-fairness.tsv') `
+			-RunId $RunId -ExpectedConnections $Identity.Connections
+	} else { $null }
 	$Result = [ordered]@{
 		RunId = $RunId; Status = 'PASS'; Gate = $(if ($ScaleWorkload) { 'five-phase-scale-control-preflight' } else { 'actual-GameSession-farm-preflight' })
 		Provider = $Provider; Peers = $Peers; Ready = $Identity.Ready
@@ -562,6 +569,7 @@ try {
 		ResourceSamples = $ResourceSamples.Count; ResourceEvidence = 'process-resources.csv'
 		CompletedUtc = [DateTimeOffset]::UtcNow.ToString('O')
 	}
+	if ($ScaleWorkload) { $Result.AdmissionFairnessObservation = $FairnessObservation }
 } catch {
 	$Failure = $_.Exception.Message
 	$Result = [ordered]@{

@@ -1,6 +1,7 @@
 #requires -Version 7.0
 # Offline reconciliation of two role-local Foundation 3L farm receipts. This
 # intentionally does not pronounce Local or Node provider qualification.
+# Stage AdmissionFairnessEvidence.ps1 beside this script; its absence fails closed.
 
 param(
 	[Parameter(Mandatory = $true)][string]$RunManifestPath,
@@ -11,6 +12,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'AdmissionFairnessEvidence.ps1')
 
 function Get-RequiredJson {
 	param([string]$Path)
@@ -136,7 +138,7 @@ function Get-UnsignedField {
 function Assert-AdmissionConservation {
 	param([string]$Path, [string]$ExpectedRunId)
 	$Lines = @([IO.File]::ReadAllLines($Path) | Where-Object {
-		$_.StartsWith('[Qualification:Admission] ', [StringComparison]::Ordinal)
+		$_.StartsWith('[Qualification:Admission] event=result ', [StringComparison]::Ordinal)
 	})
 	if ($Lines.Count -ne 1) { throw 'server lacks one final native admission receipt' }
 	$Record = Get-Fields -Line $Lines[0]
@@ -258,6 +260,17 @@ $ClientLogs = @(0..31 | ForEach-Object {
 $Identity = Assert-Records -Server $ServerLog -Clients $ClientLogs -ExpectedNonces $ExpectedNonces
 Assert-ScaleRecords -Server $ServerLog -Clients $ClientLogs -ExpectedNonces $ExpectedNonces
 $Admission = Assert-AdmissionConservation -Path $ServerLog.OutputPath -ExpectedRunId $RunId
+$FairnessObservation = Read-AdmissionFairnessEvidence -Path (Join-Path $Server.Root 'admission-fairness.tsv') `
+	-RunId $RunId -ExpectedConnections $Identity.Connections
+$FairnessSummary = @(Get-Records -Path $ServerLog.OutputPath -Kind 'Admission' |
+	Where-Object event -eq 'evidence_result')
+if ($FairnessSummary.Count -ne 1 -or $FairnessSummary[0].run -cne $RunId -or
+	$FairnessSummary[0].file -cne 'admission-fairness.tsv' -or
+	$FairnessSummary[0].events -cne [string]$FairnessObservation.EventCount -or
+	$FairnessSummary[0].bytes -cne [string]$FairnessObservation.FileBytes -or
+	$FairnessSummary[0].overflow -cne '0' -or $FairnessSummary[0].write_failed -cne '0') {
+	throw 'native fairness summary does not match immutable semantic evidence'
+}
 $Ledger = Get-Ledger -ScaleValidated $true
 $Report = [ordered]@{
 	Format = 'GargantuanPhysicalFarmReconciliation'; Version = 1
@@ -265,6 +278,7 @@ $Report = [ordered]@{
 	ServerEvidenceSha256 = $Server.IndexSha256; ClientEvidenceSha256 = $Clients.IndexSha256
 	Status = 'INCOMPLETE'; RoleLocalEvidence = 'VALIDATED'; ProviderQualification = 'NOT CLAIMED'
 	Identity = $Identity; Admission = $Admission
+	AdmissionFairnessObservation = $FairnessObservation
 	ServerResourceSamples = $ServerSamples; ClientResourceSamples = $ClientSamples
 	Ledger = $Ledger
 	MeasuredGateCount = @($Ledger | Where-Object State -eq 'MEASURED').Count
