@@ -792,6 +792,8 @@ def FetchIndexed(TransportInstance, RemoteRoot, LocalRoot, IndexName, RunId, Rol
                 not 0 <= Member["Bytes"] <= (335544832 if
                     Member["Name"] == "publication-service.bin" and Role == "SERVER" else
                     32 * 1024 * 1024 if Member["Name"] == "admission-fairness.tsv" and Role == "SERVER" else
+                    32 * 1024 * 1024 if Role == "SERVER" and IndexName == "evidence-sha256.json" and
+                    Member["Name"] in ("recovery-gameplay.tsv", "recovery-structural.tsv", "recovery-mixed.tsv") else
                     MaximumMemberBytes) or
                 not isinstance(Member["Sha256"], str) or
                 not SHA.fullmatch(Member["Sha256"])):

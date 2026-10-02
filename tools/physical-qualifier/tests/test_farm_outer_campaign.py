@@ -302,6 +302,48 @@ class OuterCampaignTests(unittest.TestCase):
                                "evidence-sha256.json", self.Fixture.Identity["RunId"],
                                "SERVER", 128, 16 * 1024 * 1024)
 
+    def test_recovery_causal_members_use_canonical_32_mib_server_cap(self):
+        Remote = self.Fixture.Root / "recovery-worker-evidence"
+        Remote.mkdir()
+        for Case in ("gameplay", "structural", "mixed"):
+            with self.subTest(Case=Case):
+                Member = Remote / f"recovery-{Case}.tsv"
+                with Member.open("wb") as Stream:
+                    Stream.truncate(32 * 1024 * 1024)
+                Index = {"RunId": self.Fixture.Identity["RunId"], "Role": "Server",
+                         "Files": [{"Name": Member.name, "Bytes": Member.stat().st_size,
+                                    "Sha256": Outer.Digest(Member)}]}
+                (Remote / "evidence-sha256.json").write_text(json.dumps(Index), encoding="utf-8")
+                Output = self.Fixture.Root / f"recovery-{Case}-copied"
+                Outer.FetchIndexed(MockTransport(), str(Remote), Output,
+                                   "evidence-sha256.json", self.Fixture.Identity["RunId"],
+                                   "SERVER", 128, 16 * 1024 * 1024)
+                self.assertEqual(Member.stat().st_size, (Output / Member.name).stat().st_size)
+                Index["Files"][0]["Bytes"] += 1
+                (Remote / "evidence-sha256.json").write_text(json.dumps(Index), encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "evidence member invalid"):
+                    Outer.FetchIndexed(MockTransport(), str(Remote), self.Fixture.Root / f"oversized-{Case}",
+                                       "evidence-sha256.json", self.Fixture.Identity["RunId"],
+                                       "SERVER", 128, 16 * 1024 * 1024)
+
+    def test_recovery_cap_does_not_expand_other_members_or_client_evidence(self):
+        Remote = self.Fixture.Root / "wrong-recovery-evidence"
+        Remote.mkdir()
+        for Number, (Name, Role, IndexName) in enumerate((
+                ("recovery-other.tsv", "SERVER", "evidence-sha256.json"),
+                ("recovery-gameplay.tsv", "CLIENT", "evidence-sha256.json"),
+                ("recovery-gameplay.tsv", "SERVER", "capture-sha256.json"))):
+            with self.subTest(Name=Name, Role=Role, IndexName=IndexName):
+                IndexRole = Role if IndexName == "capture-sha256.json" else (
+                    "Server" if Role == "SERVER" else "Clients")
+                Index = {"RunId": self.Fixture.Identity["RunId"], "Role": IndexRole,
+                         "Files": [{"Name": Name, "Bytes": 17 * 1024 * 1024, "Sha256": "a" * 64}]}
+                (Remote / IndexName).write_text(json.dumps(Index), encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "evidence member invalid"):
+                    Outer.FetchIndexed(MockTransport(), str(Remote), self.Fixture.Root / f"wrong-{Number}",
+                                       IndexName, self.Fixture.Identity["RunId"],
+                                       Role, 128, 16 * 1024 * 1024)
+
     def test_failed_launch_aborts_each_run_owned_endpoint_and_binds_reap_receipts(self):
         RunId = self.Fixture.Identity["RunId"]
         Roots = {Role: str(self.Fixture.Root / (Role.lower() + "-cleanup"))

@@ -246,3 +246,12 @@ by the offline reconciliation and acceptance tools; no outer stage result is a
 physical or provider PASS. This path has source/mock coverage but requires an
 official workflow-dispatch package, installed side-by-side Farm32 service,
 endpoint runtime staging, and actual control-only qualification before use.
+
+Recovery collection preserves each `recovery-gameplay.tsv`,
+`recovery-structural.tsv`, and `recovery-mixed.tsv` server member up to its
+canonical 32 MiB limit and verifies its sealed hash. Offline recovery analysis
+runs from the repository `tests` directory: when staging those analysis scripts
+separately, keep `RecoveryCausalEvidence.ps1` beside
+`PhysicalGameSessionFarm.ps1`, `PhysicalGameSessionFarmReconcile.ps1`, and
+`PhysicalGameSessionFarmAcceptance.ps1`, together with their existing helpers.
+The role-local endpoint supervisor does not import these analysis scripts.
