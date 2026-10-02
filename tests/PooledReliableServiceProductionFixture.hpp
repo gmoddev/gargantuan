@@ -300,20 +300,21 @@ inline bool RunPooledReliableServiceProductionTests() {
 				}
 			} Evidence;
 			Admission Production(ReliableServiceProfile::PooledService());
+			const std::array<std::uint64_t, 2> FrameFingerprint{0x1234, 0x5678};
 			Check(Production.BeginStep(0) && Production.ObserveService(Id,
 				Admission::ServiceObservation{0, true, true}), "initial evidence step");
 			Production.SetOrdinaryFunding(224 * 1024);
-			Production.DeferSize(Id, G);
+			Production.DeferSize(Id, G, FrameFingerprint);
 			Production.EndStep();
 			Check(Production.BeginStep(250'000) && Production.ObserveService(Id,
 				Admission::ServiceObservation{250'000, false, false}), "unavailable feedback step");
 			Production.SetOrdinaryFunding(224 * 1024);
-			Production.DeferSize(Id, G);
+			Production.DeferSize(Id, G, FrameFingerprint);
 			Production.EndStep();
 			Check(Production.BeginStep(260'000) && Production.ObserveService(Id,
 				Admission::ServiceObservation{260'000, true, true}), "restored feedback step");
 			Production.SetOrdinaryFunding(224 * 1024);
-			Production.DeferSize(Id, G);
+			Production.DeferSize(Id, G, FrameFingerprint);
 			auto Receipt = Production.Reserve(Id, G);
 			Check(Receipt && Production.Commit(*Receipt), "restored credit-eligible grant");
 			Production.EndStep();
@@ -329,7 +330,8 @@ inline bool RunPooledReliableServiceProductionTests() {
 				}
 				if (Event.Kind == detail::AdmissionEvidenceKind::GrantAccepted) {
 					Check(Event.DemandId == Demand && Event.GrantToken == Receipt->Token &&
-						Event.EligibleSinceMicroseconds == 260'000,
+						Event.EligibleSinceMicroseconds == 260'000 &&
+						Event.ExactCandidateFingerprint == FrameFingerprint,
 						"grant joins qualified eligibility, not cold demand");
 					++Accepted;
 				}

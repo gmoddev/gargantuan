@@ -297,6 +297,7 @@ private:
 			.ActiveGrants = Totals.ActiveDrainGrants, .GrantDeferrals = Totals.GrantDeferrals,
 			.FundedDeferrals = Totals.FundedDeferrals, .CreditDeferrals = Totals.CreditDeferrals,
 			.FairnessDeferrals = Totals.FairnessDeferrals,
+			.ExactCandidateFingerprint = Value.DiagnosticFingerprint,
 		});
 	}
 	static void ClearDiagnosticDemand(Peer &Value) noexcept {

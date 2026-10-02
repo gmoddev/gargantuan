@@ -1,6 +1,8 @@
 #include "host/server/FarmAdmissionEvidence.hpp"
 
+#include <array>
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -34,7 +36,11 @@ int main() {
 			ActiveAdmissionEvidence->Record(ActiveAdmissionEvidence->Context, AdmissionEvidenceEvent{
 				.Kind = AdmissionEvidenceKind::ExactDemand, .Connection = {1, 1},
 				.DemandId = 1, .ExactBytes = 524'288, .AtMicroseconds = 250'000,
+				.ExactCandidateFingerprint = {3, 5},
 			});
+			Check(Evidence.EventsSince(0).size() == 1 &&
+				Evidence.EventsSince(0).front().ExactCandidateFingerprint == std::array<std::uint64_t, 2>{3, 5} &&
+				Evidence.EventsSince(1).empty(), "in-memory audit preserves the exact encoded identity");
 			Check(!std::filesystem::exists(Path), "callback performs no hot-path file I/O");
 			Evidence.Dump();
 			Check(Evidence.Valid() && Evidence.Count() == 1 && Evidence.BytesWritten() > 64 &&

@@ -335,6 +335,17 @@ GameSession qualification accessor and must be added once, not replayed as
 unaccepted journal work. A convergence verdict still requires later accepted
 frames to be audited against the frozen quote.
 
+The 32-peer physical recovery controller performs that audit in memory. It
+records each later accepted complete-message size and encoded-frame fingerprint
+in admission order, compares it to the detached quote for the same connection,
+and checks the admission accepted-byte delta and unchanged source journal tail
+at the strict deadline. Only full terminal convergence and exact frame agreement
+allow a per-peer `W_i` complete-message upper envelope. Accepted-unretired debt
+is counted in full even if part was already first-sent at cessation, so this is
+conservative with respect to remaining native unique bytes. Frame grouping
+divergence, missing evidence, or late source mutation leaves `W_i` unmeasured;
+the frozen replay alone never establishes an exact live result.
+
 No per-peer historical property queue is required. For already-known objects,
 the existing journal preserves ordered create/destroy/reparent/tag/attribute and
 other structural barriers; ordinary property values use current authoritative

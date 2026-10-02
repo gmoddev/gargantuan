@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <sstream>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -153,6 +154,13 @@ namespace gargantuan::host::detail {
 			} catch (...) { WriteFailed = true; }
 		}
 		[[nodiscard]] bool Valid() const { return Dumped && !Overflow && !WriteFailed; }
+		// Main-owned qualification audit reads a stable slice immediately after
+		// each session step. The returned view must not survive another append.
+		[[nodiscard]] std::span<const network::detail::AdmissionEvidenceEvent> EventsSince(
+			std::size_t Index) const {
+			if (Index > Events.size()) return {};
+			return std::span(Events).subspan(Index);
+		}
 		[[nodiscard]] bool Overflowed() const { return Overflow; }
 		[[nodiscard]] bool Failed() const { return WriteFailed; }
 		[[nodiscard]] std::uint64_t Count() const { return Events.size(); }

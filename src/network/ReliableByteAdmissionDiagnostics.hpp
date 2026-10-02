@@ -50,6 +50,7 @@ namespace gargantuan::network::detail {
 		std::uint64_t EligibleSinceMicroseconds = 0, PeerCreditBytes = 0, GlobalCreditBytes = 0;
 		std::uint64_t ActiveGrants = 0, GrantDeferrals = 0, FundedDeferrals = 0;
 		std::uint64_t CreditDeferrals = 0, FairnessDeferrals = 0;
+		std::array<std::uint64_t, 2> ExactCandidateFingerprint{};
 	};
 	struct AdmissionEvidenceSink {
 		void *Context = nullptr;

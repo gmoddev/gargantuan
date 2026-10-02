@@ -621,6 +621,8 @@ namespace gargantuan::host {
 			std::unique_ptr<detail::FarmAdmissionEvidence> AdmissionEvidence;
 			if (FarmScaleWorkload) AdmissionEvidence = std::make_unique<detail::FarmAdmissionEvidence>(
 				FarmRunId, std::filesystem::path(FarmAdmissionEvidencePath));
+			if (ScaleQualification && AdmissionEvidence)
+				ScaleQualification->AttachAdmissionEvidence(*AdmissionEvidence);
 			std::unique_ptr<detail::FarmPublicationEvidence> PublicationEvidence;
 			if (FarmScaleWorkload) PublicationEvidence = std::make_unique<detail::FarmPublicationEvidence>(
 				true, FarmRunId, -1, 0, std::filesystem::path(FarmPublicationEvidencePath));
