@@ -1,9 +1,12 @@
 """Source-only Farm32 capture lifetime tests; no real capture is started."""
 
 from datetime import datetime, timedelta, timezone
+import base64
+import gzip
 import importlib.util
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import tempfile
@@ -34,6 +37,14 @@ class FixedClock:
 
 
 class CaptureCampaignTests(unittest.TestCase):
+    def test_versioned_embedded_exporter_matches_reviewable_source(self):
+        Worker = MODULE_PATH.parent / "worker"
+        Hook = (Worker / "PktMonFarm32Capture.ps1").read_text(encoding="utf-8-sig")
+        Match = re.search(r"\$CompressedDefinition = '([A-Za-z0-9+/=]+)'", Hook)
+        self.assertIsNotNone(Match)
+        self.assertEqual(gzip.decompress(base64.b64decode(Match[1])).replace(b"\r\n", b"\n"),
+                         (Worker / "Farm32NdisExport.cs").read_bytes().replace(b"\r\n", b"\n"))
+
     def setUp(self):
         self.Temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.Temp.cleanup)
