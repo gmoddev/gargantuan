@@ -2371,6 +2371,10 @@ namespace gargantuan::network {
 		const GameSession &Session, ObjectId Object) {
 		return Session.State->Relevance ? Session.State->Relevance->GetSpatialCellAddress(Object) : std::nullopt;
 	}
+	bool detail::GameSessionTestAccess::RequestClientCharacterAction(GameSession &Session, std::uint32_t Token, std::uint64_t Tick) {
+		return Session.State->Prediction && Session.State->PrimaryConnection &&
+			Session.State->Prediction->RequestAction(*Session.State->PrimaryConnection, Token, Tick);
+	}
 	CharacterNetworkMetrics detail::GameSessionTestAccess::GetCharacterMetrics(const GameSession &Session) {
 		return Session.State->Authority ? Session.State->Authority->GetMetrics() :
 			Session.State->Prediction ? Session.State->Prediction->GetMetrics() : CharacterNetworkMetrics{};

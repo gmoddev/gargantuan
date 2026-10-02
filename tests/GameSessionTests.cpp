@@ -2184,6 +2184,7 @@ end)
 		if (Identities.size() == 1 && ClientRuntime && Server.GetMetrics().MaterializedCharacters >= 2) {
 			const auto Connection = Identities.front().Connection;
 			const auto Before = Server.GetMetrics().MaterializedCharacters;
+			const auto BeforeOverflows = Client.GetMetrics().ClientCharacterHistoryOverflows;
 			const auto BeforeBytes = Client.GetMetrics().ClientStructuralBytesReceived;
 			const std::array Far{glm::vec3{10000, 0, 0}};
 			Check(Server.SetTrustedReplicationFocus(Connection, Far), "far trusted focus is accepted");
@@ -2204,8 +2205,12 @@ end)
 				<< " expected_epoch=" << Client.GetMetrics().ClientLastExpectedMaterializationEpoch
 				<< " received_epoch=" << Client.GetMetrics().ClientLastReceivedMaterializationEpoch << '\n';
 			Check(Server.GetMetrics().MaterializedCharacters == Before &&
-				Client.GetMetrics().ClientCharacterStaleStatesDropped == StaleBefore,
+				Client.GetMetrics().ClientCharacterStaleStatesDropped == StaleBefore &&
+				Client.GetMetrics().ClientCharacterHistoryOverflows == BeforeOverflows,
 				"Leave cancellation preserves the shared GCHR epoch and ongoing owner state service");
+			Check(detail::GameSessionTestAccess::RequestClientCharacterAction(Client, 1, Tick) &&
+				Client.GetMetrics().ClientActionSubmissionSuspended == 0,
+				"speculative Leave cancellation cannot suspend a locally valid owner action request");
 			for (int Index = 0; Index < 8; ++Index) {
 				Check(Server.SetTrustedReplicationFocus(Connection, Far), "oscillating far focus is accepted");
 				Step();
