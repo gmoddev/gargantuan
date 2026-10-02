@@ -12,6 +12,7 @@
 #include <iterator>
 #include <mutex>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <thread>
 #include <unordered_set>
@@ -82,6 +83,10 @@ namespace gargantuan::host {
 		std::atomic<std::uint64_t> NextRequestId{1};
 		std::mutex ContextMutex;
 		std::unordered_set<grpc::ClientContext *> ActiveContexts;
+		mutable std::mutex EvidenceMutex;
+		AssetContentId RootCertificateDigest;
+		bool TlsChannelConnected = false;
+		std::optional<NodeAuthenticatedManifestEvidence> AuthenticatedManifest;
 
 		void Register(grpc::ClientContext &Context) {
 			std::scoped_lock Lock(ContextMutex);
@@ -152,6 +157,12 @@ namespace gargantuan::host {
 
 	ContentProviderLifecycleResult NodeContentProvider::Start(const ContentRequestContext &Context) {
 		const auto &Configuration = State->Configuration;
+		{
+			std::scoped_lock Lock(State->EvidenceMutex);
+			State->RootCertificateDigest = {};
+			State->TlsChannelConnected = false;
+			State->AuthenticatedManifest.reset();
+		}
 		if (Configuration.Endpoint.empty() || Configuration.Endpoint.size() > Configuration.MaximumEndpointBytes ||
 			Configuration.WorkloadTokenEnvironment.size() > Configuration.MaximumSecretReferenceBytes ||
 			!IsPortableEnvironmentName(Configuration.WorkloadTokenEnvironment) ||
@@ -191,6 +202,9 @@ namespace gargantuan::host {
 			));
 
 		grpc::SslCredentialsOptions Credentials;
+		const auto RootDigest = AssetContentId::Hash(std::span(
+			reinterpret_cast<const std::uint8_t *>(Certificate.data()), Certificate.size()
+		));
 		Credentials.pem_root_certs = std::move(Certificate);
 		grpc::ChannelArguments Arguments;
 		const auto MaximumResponse = std::max(
@@ -213,6 +227,12 @@ namespace gargantuan::host {
 			State->Channel.reset();
 			State->ClearToken();
 			return std::unexpected(MakeError(ContentProviderErrorCode::Unavailable, "Node ContentStreaming TLS connection failed"));
+		}
+		{
+			std::scoped_lock Lock(State->EvidenceMutex);
+			State->RootCertificateDigest = RootDigest;
+			State->TlsChannelConnected = true;
+			State->AuthenticatedManifest.reset();
 		}
 		return {};
 	}
@@ -247,10 +267,33 @@ namespace gargantuan::host {
 		}
 		if (Response.request_id() != RequestId || Response.project_id() != Package.Project.ToString() ||
 			Response.package_version() != Package.PackageVersion ||
-			Response.manifest().size() > State->Configuration.MaximumManifestResponseBytes ||
-			!AssetContentId::Parse(Response.sha256()))
+			Response.manifest().size() > State->Configuration.MaximumManifestResponseBytes)
 			return std::unexpected(MakeError(ContentProviderErrorCode::InvalidResponse, "Node manifest response identity or bounds are invalid"));
+		auto ClaimedDigest = AssetContentId::Parse(Response.sha256());
+		const auto ManifestDigest = AssetContentId::Hash(std::span(
+			reinterpret_cast<const std::uint8_t *>(Response.manifest().data()), Response.manifest().size()
+		));
+		if (!ClaimedDigest || *ClaimedDigest != ManifestDigest)
+			return std::unexpected(MakeError(ContentProviderErrorCode::InvalidResponse, "Node manifest response identity or bounds are invalid"));
+		{
+			std::scoped_lock Lock(State->EvidenceMutex);
+			const auto Previous = State->AuthenticatedManifest && State->AuthenticatedManifest->Package == Package ?
+				State->AuthenticatedManifest->SuccessfulRequests : 0;
+			State->AuthenticatedManifest = NodeAuthenticatedManifestEvidence{
+				.Package = Package,
+				.RootCertificateDigest = State->RootCertificateDigest,
+				.ManifestDigest = ManifestDigest,
+				.ManifestBytes = Response.manifest().size(),
+				.SuccessfulRequests = Previous + 1,
+				.TlsChannelConnected = State->TlsChannelConnected,
+			};
+		}
 		return Response.manifest();
+	}
+
+	std::optional<NodeAuthenticatedManifestEvidence> NodeContentProvider::GetAuthenticatedManifestEvidence() const {
+		std::scoped_lock Lock(State->EvidenceMutex);
+		return State->AuthenticatedManifest;
 	}
 
 	ContentPayloadProviderResult

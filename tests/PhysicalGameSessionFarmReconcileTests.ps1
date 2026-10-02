@@ -187,6 +187,18 @@ try {
 	$ManifestSha256 = (Get-FileHash -LiteralPath $ManifestPath -Algorithm SHA256).Hash.ToLowerInvariant()
 	$ServerPath = Join-Path $ServerRoot 'server.stdout.log'
 	[IO.File]::WriteAllText($ServerPath, ([IO.File]::ReadAllText($ServerPath)).Replace('provider=local', 'provider=node'))
+	$NodeReceiptPath = Join-Path $ServerRoot 'node-provider.json'
+	$NodeReceipt = [ordered]@{
+		Format = 'GargantuanFarmNodeAuthenticatedManifest'; Version = 1
+		RunId = $RunId; Provider = 'Node'
+		ProjectId = '0123456789abcdef0123456789abcdef'; PackageVersion = 17
+		NodeEndpoint = $Manifest.NodeEndpoint
+		RootCertificateSha256 = $HashPin; ManifestSha256 = $HashPin
+		ManifestBytes = 200; AuthenticatedManifestRpcCount = 1
+		ChannelCredentials = 'grpc_ssl_credentials'; TlsSessionDetails = 'NOT_MEASURED'
+		Source = 'GargantuanServer/NodeContentProvider'
+	}
+	Save-Json -Path $NodeReceiptPath -Value $NodeReceipt
 	foreach ($Root in @($ServerRoot, $ClientRoot)) {
 		[IO.File]::Copy($ManifestPath, (Join-Path $Root 'run-manifest.json'), $true)
 		$RoleResultPath = Join-Path $Root 'result.json'
@@ -201,9 +213,18 @@ try {
 		-ServerEvidenceRoot $ServerRoot -ClientEvidenceRoot $ClientRoot -ReportPath $NodeReportPath |
 		Out-Null
 	$NodeReport = Get-Content -LiteralPath $NodeReportPath -Raw | ConvertFrom-Json
-	if ($NodeReport.Provider -ne 'Node' -or $NodeReport.ProviderQualification -ne 'NOT CLAIMED') {
+	if ($NodeReport.Provider -ne 'Node' -or $NodeReport.ProviderQualification -ne 'NOT CLAIMED' -or
+		$NodeReport.NodeAuthenticatedManifest.State -ne 'AUTHENTICATED_MANIFEST_RPC_MEASURED' -or
+		@($NodeReport.Ledger | Where-Object Gate -eq 'Content provider provenance and real TLS when Node' |
+			Where-Object State -eq 'NOT MEASURED').Count -ne 1) {
 		throw 'Node role-local evidence was rejected or promoted to real-TLS qualification'
 	}
+	Remove-Item -LiteralPath $NodeReceiptPath -Force
+	Save-Index -Root $ServerRoot -RunId $RunId -Role 'Server'
+	Assert-Rejected -Name 'missing authenticated Node manifest receipt' `
+		-ReportPath (Join-Path $TestRoot 'missing-node-request-report.json')
+	Save-Json -Path $NodeReceiptPath -Value $NodeReceipt
+	Save-Index -Root $ServerRoot -RunId $RunId -Role 'Server'
 	$ResourcePath = Join-Path $ServerRoot 'process-resources.csv'
 	$ResourceBaseline = [IO.File]::ReadAllText($ResourcePath)
 	$BadResources = @(Import-Csv -LiteralPath $ResourcePath)

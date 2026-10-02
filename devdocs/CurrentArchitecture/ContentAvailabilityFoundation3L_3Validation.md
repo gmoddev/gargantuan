@@ -6,6 +6,20 @@ last_verified: 2026-10-01
 
 # Foundation 3L.3 diagnostic validation ledger
 
+## Farm32 authenticated Node request evidence candidate (source-only, 2026-10-01)
+
+The optional Node farm path can now record one bounded, run-bound manifest RPC
+receipt after the official Server's Node provider has connected using pinned
+root-CA `grpc::SslCredentials`, sent its environment-backed Bearer credential,
+validated the RPC response identity and SHA-256, and passed the packaged
+manifest digest check in ContentAvailability. The role-local endpoint checks
+the native record against the pinned Server package and run-manifest CA, then
+indexes `node-provider.json`. The offline reconciler validates the receipt as
+an authenticated request observation but deliberately leaves the full Node
+provider/real-TLS campaign gate **NOT MEASURED**. The source candidate has no
+physical 32-client Node run, negotiated TLS transcript, or full service
+provenance receipt yet. KI-006 and Foundation 3L state remain unchanged.
+
 ## Corrected F1 physical Phase 1 passed; 32-client matrix remains (2026-10-01)
 
 The [fresh physical receipt](PooledPhysicalQualification3L.md#corrected-f1-physical-phase-1-passed-2026-10-01)

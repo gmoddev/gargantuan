@@ -168,6 +168,44 @@ function Assert-AdmissionConservation {
 	return [pscustomobject]$Values
 }
 
+function Assert-AuthenticatedNodeManifestReceipt {
+	param([string]$ServerRoot, [System.Collections.IDictionary]$RunManifest)
+	$Path = Join-Path $ServerRoot 'node-provider.json'
+	if ($RunManifest.Provider -cne 'Node') {
+		if (Test-Path -LiteralPath $Path) { throw 'Local provider has a Node receipt' }
+		return [ordered]@{ State = 'NOT_APPLICABLE' }
+	}
+	$Receipt = Get-RequiredJson -Path $Path
+	$Fields = @('Format', 'Version', 'RunId', 'Provider', 'ProjectId', 'PackageVersion',
+		'NodeEndpoint', 'RootCertificateSha256', 'ManifestSha256', 'ManifestBytes',
+		'AuthenticatedManifestRpcCount', 'ChannelCredentials', 'TlsSessionDetails', 'Source')
+	if ($Receipt.Keys.Count -ne $Fields.Count -or @($Fields | Where-Object { -not $Receipt.Contains($_) }).Count -ne 0 -or
+		$Receipt.Format -cne 'GargantuanFarmNodeAuthenticatedManifest' -or
+		$Receipt.Version -ne 1 -or $Receipt.RunId -cne $RunManifest.RunId -or
+		$Receipt.Provider -cne 'Node' -or $Receipt.ProjectId -cnotmatch '^[a-f0-9]{32}$' -or
+		$Receipt.PackageVersion -isnot [long] -or $Receipt.PackageVersion -le 0 -or
+		$Receipt.NodeEndpoint -cne $RunManifest.NodeEndpoint -or
+		$Receipt.RootCertificateSha256 -ine $RunManifest.NodeRootCertificateSha256 -or
+		$Receipt.ManifestSha256 -ine $RunManifest.ServerContentManifestSha256 -or
+		$Receipt.ManifestBytes -isnot [long] -or $Receipt.ManifestBytes -lt 1 -or
+		$Receipt.ManifestBytes -gt 4194304 -or
+		$Receipt.AuthenticatedManifestRpcCount -isnot [long] -or
+		$Receipt.AuthenticatedManifestRpcCount -lt 1 -or
+		$Receipt.AuthenticatedManifestRpcCount -gt 10000 -or
+		$Receipt.ChannelCredentials -cne 'grpc_ssl_credentials' -or
+		$Receipt.TlsSessionDetails -cne 'NOT_MEASURED' -or
+		$Receipt.Source -cne 'GargantuanServer/NodeContentProvider') {
+		throw 'authenticated Node receipt schema or pinned run identity is invalid'
+	}
+	return [ordered]@{
+		State = 'AUTHENTICATED_MANIFEST_RPC_MEASURED'
+		ProjectId = $Receipt.ProjectId; PackageVersion = $Receipt.PackageVersion
+		ManifestSha256 = $Receipt.ManifestSha256
+		RootCertificateSha256 = $Receipt.RootCertificateSha256
+		TlsSessionDetails = 'NOT_MEASURED'
+	}
+}
+
 function Get-Ledger {
 	param([bool]$ScaleValidated)
 	# These are the independent gates in PooledPhysicalQualification3L.md.
@@ -271,6 +309,8 @@ if ($FairnessSummary.Count -ne 1 -or $FairnessSummary[0].run -cne $RunId -or
 	$FairnessSummary[0].overflow -cne '0' -or $FairnessSummary[0].write_failed -cne '0') {
 	throw 'native fairness summary does not match immutable semantic evidence'
 }
+$NodeAuthenticatedManifest = Assert-AuthenticatedNodeManifestReceipt -ServerRoot $Server.Root `
+	-RunManifest $Manifest
 $Ledger = Get-Ledger -ScaleValidated $true
 $Report = [ordered]@{
 	Format = 'GargantuanPhysicalFarmReconciliation'; Version = 1
@@ -279,6 +319,7 @@ $Report = [ordered]@{
 	Status = 'INCOMPLETE'; RoleLocalEvidence = 'VALIDATED'; ProviderQualification = 'NOT CLAIMED'
 	Identity = $Identity; Admission = $Admission
 	AdmissionFairnessObservation = $FairnessObservation
+	NodeAuthenticatedManifest = $NodeAuthenticatedManifest
 	ServerResourceSamples = $ServerSamples; ClientResourceSamples = $ClientSamples
 	Ledger = $Ledger
 	MeasuredGateCount = @($Ledger | Where-Object State -eq 'MEASURED').Count

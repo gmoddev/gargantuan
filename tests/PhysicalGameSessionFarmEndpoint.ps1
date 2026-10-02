@@ -418,6 +418,59 @@ function Assert-ServerEvidence {
 	return [pscustomobject]@{ Ready = $Ready.Count; UniqueNonces = $NonceSet.Count }
 }
 
+function Get-AuthenticatedNodeManifestReceipt {
+	param([string]$LogPath, [string]$PackageRoot,
+		[System.Collections.IDictionary]$RunManifest)
+	if ($RunManifest.Provider -cne 'Node') { throw 'authenticated Node receipt requires Node provider' }
+	$Records = @(Get-TypedRecords -Path $LogPath -Kind 'NodeProvider' |
+		Where-Object event -eq 'authenticated_manifest')
+	if ($Records.Count -ne 1) { throw 'server lacks one authenticated Node manifest RPC record' }
+	$Record = $Records[0]
+	$PackagePath = Join-Path $PackageRoot 'game.package.json'
+	$ContentPath = Join-Path $PackageRoot 'content/content.manifest.json'
+	$Package = Get-Content -LiteralPath $PackagePath -Raw | ConvertFrom-Json -AsHashtable
+	$Content = Get-Content -LiteralPath $ContentPath -Raw | ConvertFrom-Json -AsHashtable
+	$Bytes = (Get-Item -LiteralPath $ContentPath).Length
+	if ($Package.ProjectId -cnotmatch '^[a-f0-9]{32}$' -or
+		$Package.Revision -isnot [long] -or $Package.Revision -le 0 -or
+		$Content.ProjectId -cne $Package.ProjectId -or
+		$Content.PackageVersion -ne $Package.Revision -or
+		$Record.run -cne $RunManifest.RunId -or
+		$Record.project -cne $Package.ProjectId -or
+		$Record.revision -cne [string]$Package.Revision -or
+		$Record.endpoint -cne $RunManifest.NodeEndpoint -or
+		$Record.root_sha256 -ine $RunManifest.NodeRootCertificateSha256 -or
+		$Record.manifest_sha256 -ine $RunManifest.ServerContentManifestSha256 -or
+		$Record.manifest_bytes -cne [string]$Bytes -or $Bytes -lt 1 -or $Bytes -gt 4194304 -or
+		$Record.rpc_count -cnotmatch '^[1-9][0-9]{0,4}$' -or
+		[int]$Record.rpc_count -gt 10000 -or
+		$Record.channel -cne 'grpc_ssl_credentials' -or
+		$Record.authenticated_rpc -cne '1' -or
+		$Record.tls_session_details -cne 'not_measured') {
+		throw 'authenticated Node manifest RPC differs from pinned package, CA, or channel semantics'
+	}
+	return [ordered]@{
+		Format = 'GargantuanFarmNodeAuthenticatedManifest'; Version = 1
+		RunId = $RunManifest.RunId; Provider = 'Node'
+		ProjectId = $Package.ProjectId; PackageVersion = [long]$Package.Revision
+		NodeEndpoint = $RunManifest.NodeEndpoint
+		RootCertificateSha256 = $RunManifest.NodeRootCertificateSha256.ToLowerInvariant()
+		ManifestSha256 = $RunManifest.ServerContentManifestSha256.ToLowerInvariant()
+		ManifestBytes = [long]$Bytes; AuthenticatedManifestRpcCount = [int]$Record.rpc_count
+		ChannelCredentials = 'grpc_ssl_credentials'; TlsSessionDetails = 'NOT_MEASURED'
+		Source = 'GargantuanServer/NodeContentProvider'
+	}
+}
+
+function Write-AuthenticatedNodeManifestReceipt {
+	param([string]$Path, [System.Collections.IDictionary]$Receipt)
+	$Bytes = [Text.UTF8Encoding]::new($false).GetBytes(($Receipt | ConvertTo-Json -Depth 4))
+	if ($Bytes.Length -gt 4096) { throw 'authenticated Node receipt exceeds its byte bound' }
+	$Stream = [IO.File]::Open($Path, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write,
+		[IO.FileShare]::None)
+	try { $Stream.Write($Bytes) } finally { $Stream.Dispose() }
+}
+
 function Assert-ClientEvidence {
 	param([object[]]$Clients, [System.Collections.IDictionary]$RunManifest)
 	if ($Clients.Count -ne 32) { throw 'client process count is not 32' }
@@ -598,6 +651,12 @@ try {
 		Assert-ServerEvidence -LogPath $Owners[0].OutputPath -RunManifest $Manifest -FairnessPath $FairnessPath
 	} else {
 		Assert-ClientEvidence -Clients @($Clients) -RunManifest $Manifest
+	}
+	if ($Role -eq 'Server' -and $Manifest.Provider -eq 'Node') {
+		$AuthenticatedNode = Get-AuthenticatedNodeManifestReceipt -LogPath $Owners[0].OutputPath `
+			-PackageRoot $Paths.Package -RunManifest $Manifest
+		Write-AuthenticatedNodeManifestReceipt -Path (Join-Path $Paths.Evidence 'node-provider.json') `
+			-Receipt $AuthenticatedNode
 	}
 	$Result = [ordered]@{
 		RunId = $RunId; Role = $Role; Status = 'PASS'; Provider = $Manifest.Provider

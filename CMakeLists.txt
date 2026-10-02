@@ -823,6 +823,9 @@ if(BUILD_TESTING)
 			add_test(NAME gargantuan_physical_game_session_farm_preflight
 				COMMAND "${GARGANTUAN_PWSH_EXECUTABLE}" -NoProfile -File
 				"${CMAKE_CURRENT_SOURCE_DIR}/tests/PhysicalGameSessionFarmPreflightTests.ps1")
+			add_test(NAME gargantuan_physical_game_session_farm_node_evidence
+				COMMAND "${GARGANTUAN_PWSH_EXECUTABLE}" -NoProfile -File
+				"${CMAKE_CURRENT_SOURCE_DIR}/tests/PhysicalGameSessionFarmNodeEvidenceTests.ps1")
 			if(GARGANTUAN_GO_EXECUTABLE)
 				add_test(NAME gargantuan_physical_game_session_farm_node
 					COMMAND "${GARGANTUAN_PWSH_EXECUTABLE}" -NoProfile -File

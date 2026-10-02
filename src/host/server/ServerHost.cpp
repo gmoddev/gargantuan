@@ -376,6 +376,9 @@ namespace gargantuan::host {
 			Renderer = std::make_unique<HeadlessRenderer>(Vector2(320, 180));
 			std::optional<ContentAvailabilityConfiguration> Content;
 			const bool IsNodeProvider = std::holds_alternative<NodeServerContentConfiguration>(HostConfiguration.Content);
+#if defined(GARGANTUAN_WITH_NODE_CONTENT)
+			std::shared_ptr<NodeContentProvider> NodeProvider;
+#endif
 			ContentResidencyMode ContentMode = ContentResidencyMode::FullyResident;
 			std::string_view EffectiveProviderName = "local";
 			std::string NodeEndpointDiagnostic;
@@ -407,6 +410,7 @@ namespace gargantuan::host {
 					.RootCertificateFile = Node->RootCertificateFile,
 					.WorkloadTokenEnvironment = Node->WorkloadTokenEnvironment,
 				});
+				NodeProvider = Provider;
 				Content = ContentAvailabilityConfiguration{
 					.Provider = std::move(Provider),
 					.Package = {Payload->Inspection.Identity, Payload->Inspection.Revision},
@@ -474,6 +478,27 @@ namespace gargantuan::host {
 				std::cout << "[Content:Server] Node bootstrap ready ManifestBytes="
 						  << Availability->GetMetrics().ManifestBytes
 						  << " WallMilliseconds=" << BootstrapMilliseconds << '\n';
+				if (FarmScaleWorkload) {
+#if defined(GARGANTUAN_WITH_NODE_CONTENT)
+					const auto Evidence = NodeProvider ? NodeProvider->GetAuthenticatedManifestEvidence() : std::nullopt;
+					if (!Evidence || !Evidence->TlsChannelConnected || Evidence->SuccessfulRequests == 0 ||
+						Evidence->Package != PackageContentNamespace{Payload->Inspection.Identity, Payload->Inspection.Revision} ||
+						Evidence->ManifestDigest != Payload->ContentManifestDigest ||
+						Evidence->ManifestBytes != Availability->GetMetrics().ManifestBytes ||
+						!Evidence->RootCertificateDigest.IsValid())
+						throw std::runtime_error("Node authenticated manifest evidence differs from validated package bootstrap");
+					std::cout << "[Qualification:NodeProvider] event=authenticated_manifest run=" << FarmRunId
+						<< " project=" << Evidence->Package.Project.ToString()
+						<< " revision=" << Evidence->Package.PackageVersion
+						<< " endpoint=" << NodeEndpointDiagnostic
+						<< " root_sha256=" << Evidence->RootCertificateDigest.ToString()
+						<< " manifest_sha256=" << Evidence->ManifestDigest.ToString()
+						<< " manifest_bytes=" << Evidence->ManifestBytes
+						<< " rpc_count=" << Evidence->SuccessfulRequests
+						<< " channel=grpc_ssl_credentials authenticated_rpc=1"
+						<< " tls_session_details=not_measured\n";
+#endif
+				}
 			}
 #if defined(GARGANTUAN_WITH_GNS)
 			if (BindEndpoint) {

@@ -54,3 +54,16 @@ single-use staging, descriptor mismatch, wrong SAN, binary/validator-pin
 rejection, and exclusion of token/key material from staging. CMake registers it
 on Windows when both PowerShell 7 and Go are available. It never runs the
 physical farm.
+
+The separate `PhysicalGameSessionFarmNodeEvidenceTests.ps1` covers the native
+ServerHost's bounded `authenticated_manifest` record. That record is emitted
+only after `NodeContentProvider` uses `grpc::SslCredentials`, connects, makes a
+Bearer-authenticated `GetManifest` RPC, validates the response identity/hash,
+and `ContentAvailability` verifies the manifest against the packaged digest.
+The role-local endpoint compares the record with the hashed Server package and
+run-manifest CA pin, then writes a new `node-provider.json` into its evidence
+index. The reconciler verifies the typed receipt and reports
+`AUTHENTICATED_MANIFEST_RPC_MEASURED`, while leaving the broader provider and
+real-TLS gate `NOT MEASURED`: negotiated TLS details, the separately pinned
+Node child/config, complete content delivery, and physical campaign behavior
+remain independent evidence.
