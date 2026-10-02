@@ -62,6 +62,36 @@ function Read-BoundedJson {
 	return Get-Content -LiteralPath $Resolved -Raw | ConvertFrom-Json -AsHashtable
 }
 
+function Read-FarmServerWorkTicks {
+	param([string]$ServerRoot, [System.Collections.IDictionary]$ServerIndex, [string]$RunId)
+	$Members = @($ServerIndex.Files | Where-Object Name -CEQ 'server-work-ticks.bin')
+	if ($Members.Count -eq 0) {
+		return [ordered]@{ Status = 'NOT_MEASURED'; Reason = 'indexed server work-tick evidence absent' }
+	}
+	if ($Members.Count -ne 1) { throw 'indexed server work-tick evidence is duplicated' }
+	$ScriptPath = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../tools/physical-qualifier/farm_server_tick.py'))
+	if (-not (Test-Path -LiteralPath $ScriptPath -PathType Leaf)) {
+		throw 'bounded server work-tick analyzer is missing'
+	}
+	$Python = @(Get-Command python -CommandType Application -ErrorAction Stop)[0]
+	$Output = @(& $Python.Source $ScriptPath (Join-Path $ServerRoot 'evidence-sha256.json') 2>&1)
+	$ExitCode = $LASTEXITCODE
+	if ($ExitCode -ne 0 -or $Output.Count -ne 1) {
+		$Detail = ((@($Output) | ForEach-Object { [string]$_ }) -join ' ')
+		if ($Detail.Length -gt 512) { $Detail = $Detail.Substring(0, 512) }
+		throw "bounded server work-tick analysis rejected indexed evidence: $Detail"
+	}
+	$Observation = [string]$Output[0] | ConvertFrom-Json -AsHashtable
+	if ($Observation.Format -cne 'GargantuanFarmServerWorkTicks' -or
+		$Observation.Version -ne 1 -or $Observation.RunId -cne $RunId -or
+		$Observation.Status -cnotin @('MEASURED_PASS', 'MEASURED_FAIL') -or
+		$Observation.Phases.Count -ne 5 -or
+		$Observation.CrossHostLatency -cne 'NOT_MEASURED') {
+		throw 'bounded server work-tick observation is invalid'
+	}
+	return $Observation
+}
+
 function Assert-IndexedFile {
 	param([string]$Root, [System.Collections.IDictionary]$Index, [string]$Name,
 		[long]$MaximumBytes = 16777216)
@@ -722,13 +752,15 @@ function Read-ProviderRun {
 		($Report.PublicationObservation | ConvertTo-Json -Depth 12 -Compress)) {
 		throw 'reconciled Character publication observation differs from sealed native evidence'
 	}
+	$ServerWorkTicks = Read-FarmServerWorkTicks -ServerRoot $Server.Root `
+		-ServerIndex $Server.Index -RunId $Report.RunId
 	$ProviderObservation = Read-ProviderObservation -Report $Report -Manifest $Manifest `
 		-NodeProviderPath $Server.NodeProviderPath
 	$Recovery = Read-RecoveryObservation -Report $Report -Manifest $Manifest `
 		-Server $Server -Clients $Clients
 	return [pscustomobject]@{
 		Report = $Report; Manifest = $Manifest
-		Admission = $Admission; Publication = $Publication
+		Admission = $Admission; Publication = $Publication; ServerWorkTicks = $ServerWorkTicks
 		ProviderObservation = $ProviderObservation; Recovery = $Recovery
 		Resources = [ordered]@{ Server = $ServerResources; Clients = $ClientResources
 			ServerHost = $ServerHost; ClientHost = $ClientHost }
@@ -784,6 +816,7 @@ $Observed = [ordered]@{
 		Ready = $Local.Report.Identity.Ready; AcceptedBytes = $Local.Report.Admission.accepted
 		RetiredBytes = $Local.Report.Admission.retired; Admission = $Local.Admission
 		Publication = $Local.Publication
+		ServerWorkTicks = $Local.ServerWorkTicks
 		Recovery = $Local.Recovery
 		Provider = $Local.ProviderObservation; Resources = $Local.Resources
 		EvidenceRetention = $Local.EvidenceRetention
@@ -792,6 +825,7 @@ $Observed = [ordered]@{
 		Ready = $Node.Report.Identity.Ready; AcceptedBytes = $Node.Report.Admission.accepted
 		RetiredBytes = $Node.Report.Admission.retired; Admission = $Node.Admission
 		Publication = $Node.Publication
+		ServerWorkTicks = $Node.ServerWorkTicks
 		Recovery = $Node.Recovery
 		Provider = $Node.ProviderObservation; Resources = $Node.Resources
 		EvidenceRetention = $Node.EvidenceRetention
@@ -809,6 +843,7 @@ $Observed = [ordered]@{
 		[ordered]@{ Gate = 'Role-local indexed evidence byte/file bounds'; State = 'MEASURED' },
 		[ordered]@{ Gate = 'Five-phase observation and terminal native admission conservation'; State = 'MEASURED' },
 		[ordered]@{ Gate = 'Character accepted-state chain and role-local publication delays'; State = $(if ($Local.Publication.Status -ceq 'ACCEPTED_STATE_CHAIN_OBSERVED' -and $Node.Publication.Status -ceq 'ACCEPTED_STATE_CHAIN_OBSERVED') { 'MEASURED' } else { 'NOT MEASURED' }); Reason = 'each provider independently rejoined all hash-sealed native Character traces; cross-host clocks remain separate' },
+		[ordered]@{ Gate = 'Server work-tick p95/p99/max in all five phases'; State = $(if ($Local.ServerWorkTicks.Status -ceq 'MEASURED_FAIL' -or $Node.ServerWorkTicks.Status -ceq 'MEASURED_FAIL') { 'MEASURED_FAIL' } elseif ($Local.ServerWorkTicks.Status -ceq 'MEASURED_PASS' -and $Node.ServerWorkTicks.Status -ceq 'MEASURED_PASS') { 'MEASURED_PASS' } else { 'NOT MEASURED' }); Reason = 'hash-indexed FrameBegin-to-FrameEnd work time excludes deliberate 60-Hz pacing sleep; 16.667/33.334/100-ms phase limits' },
 		[ordered]@{ Gate = 'Full Character and Remote recipient cadence'; State = 'NOT MEASURED'; Reason = 'Character join lacks cross-host service latency and per-recipient cadence distribution; Remote stages are absent' },
 		[ordered]@{ Gate = 'Full fairness, overload backpressure and journal retention margin'; State = 'NOT MEASURED'; Reason = 'terminal counters and exact-demand event waits do not prove saturated service, continuous backlog bounds, or the journal high-water margin' },
 		[ordered]@{ Gate = 'CPU, memory, network and transport headroom'; State = 'NOT MEASURED'; Reason = 'bounded host/NIC snapshots describe utilization, but no canonical CPU/memory/NIC pass percentage or concurrent packet-level reserve proof follows from those samples' },
