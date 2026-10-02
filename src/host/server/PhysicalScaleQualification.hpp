@@ -1,5 +1,6 @@
 #pragma once
 
+#include "host/common/FarmServerTickEvidence.hpp"
 #include "gargantuan/Engine.hpp"
 #include "gargantuan/animation/AnimationTrack.hpp"
 #include "gargantuan/classes/Animator.hpp"
@@ -79,9 +80,9 @@ namespace gargantuan::host {
 		static constexpr std::string_view ContentRootName = "ContentScaleRegion";
 
 		PhysicalScaleQualification(Engine &RuntimeValue, network::GameSession &SessionValue, std::string RunIdValue,
-			bool RecoveryWorkloadValue = false)
+			bool RecoveryWorkloadValue = false, detail::FarmServerTickEvidence *TickEvidenceValue = nullptr)
 			: Runtime(RuntimeValue), Session(SessionValue), RunId(std::move(RunIdValue)),
-				RecoveryWorkload(RecoveryWorkloadValue) {
+				RecoveryWorkload(RecoveryWorkloadValue), TickEvidence(TickEvidenceValue) {
 			if (RunId.empty() || !Runtime.Content || !Runtime.DataModel || !Runtime.CharacterControl)
 				throw std::invalid_argument("physical scale qualification requires a content-backed server runtime");
 		}
@@ -238,6 +239,7 @@ namespace gargantuan::host {
 		network::GameSession &Session;
 		std::string RunId;
 		bool RecoveryWorkload = false;
+		detail::FarmServerTickEvidence *TickEvidence = nullptr;
 		Stage State = Stage::WaitingForPeers;
 		Phase CurrentPhase = Phase::Baseline;
 		std::uint64_t FirstTick = 0;
@@ -416,6 +418,7 @@ namespace gargantuan::host {
 			CurrentPhase = Value;
 			PhaseTick = Tick;
 			PhaseStarted = std::chrono::steady_clock::now();
+			if (TickEvidence) TickEvidence->PhaseStart(static_cast<std::uint8_t>(Value), Tick);
 			PhaseAcksObserved = false;
 			ContentAcksObserved = false;
 			ProducerAckObserved = false;
@@ -668,6 +671,7 @@ namespace gargantuan::host {
 
 		void EndPhase(std::uint64_t Tick) {
 			const auto Ended = std::chrono::steady_clock::now();
+			if (TickEvidence) TickEvidence->PhaseEnd(static_cast<std::uint8_t>(CurrentPhase), Tick);
 			const auto Metrics = Session.GetMetrics();
 			const auto Provider = Runtime.Content->GetMetrics();
 			const auto Root = GetContentRoot();

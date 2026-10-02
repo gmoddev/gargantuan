@@ -2,6 +2,7 @@
 #include "host/server/PhysicalScaleQualification.hpp"
 #include "host/server/FarmAdmissionEvidence.hpp"
 #include "host/common/FarmPublicationEvidence.hpp"
+#include "host/common/FarmServerTickEvidence.hpp"
 
 #include "host/common/PackagedHost.hpp"
 #include "gargantuan/Engine.hpp"
@@ -611,9 +612,12 @@ namespace gargantuan::host {
 			std::map<std::uint64_t, network::ConnectionId> FarmIdentities;
 			std::size_t FarmReadyHighWater = 0;
 			bool FarmIdentityConflict = false;
+			std::unique_ptr<detail::FarmServerTickEvidence> ServerTickEvidence;
+			if (FarmScaleWorkload) ServerTickEvidence = std::make_unique<detail::FarmServerTickEvidence>(
+				FarmRunId, std::filesystem::path(FarmPublicationEvidencePath).parent_path() / "server-work-ticks.bin");
 			std::unique_ptr<PhysicalScaleQualification> ScaleQualification;
 			if (FarmScaleWorkload) ScaleQualification = std::make_unique<PhysicalScaleQualification>(
-				*Runtime, *Session, FarmRunId, FarmRecoveryWorkload);
+				*Runtime, *Session, FarmRunId, FarmRecoveryWorkload, ServerTickEvidence.get());
 			std::unique_ptr<detail::FarmAdmissionEvidence> AdmissionEvidence;
 			if (FarmScaleWorkload) AdmissionEvidence = std::make_unique<detail::FarmAdmissionEvidence>(
 				FarmRunId, std::filesystem::path(FarmAdmissionEvidencePath));
@@ -627,6 +631,7 @@ namespace gargantuan::host {
 				std::cout << "[Runtime:ServerFrame] unix_us,tick,interval_ns,poll_ns,engine_ns,session_ns,encode_ns,relevance_ns,materialize_ns,selected,committed,pending,wire_bytes\n";
 			while (Runtime->ProcessService->Alive && StopRequested == 0) {
 				const auto TickStarted = std::chrono::steady_clock::now();
+				if (ServerTickEvidence) ServerTickEvidence->BeginTick(Runtime->GetSimulationTick() + 1);
 				if (PublicationEvidence) PublicationEvidence->MarkFrameBegin(Runtime->GetSimulationTick() + 1);
 				if (Session) (void)Session->Poll();
 				const auto EngineStarted = std::chrono::steady_clock::now();
@@ -885,6 +890,7 @@ namespace gargantuan::host {
 						(ScaleQualification && !ScaleQualification->IsComplete()));
 					Runtime->ProcessService->MarkExit(SessionSmoke ? 8 : (FarmIncomplete ? 10 : (ContentIncomplete ? 9 : 0)));
 				}
+				if (ServerTickEvidence) ServerTickEvidence->EndTick(Runtime->GetSimulationTick());
 				if (BindEndpoint) {
 					TickDeadline += std::chrono::microseconds(16'667);
 					const auto Now = std::chrono::steady_clock::now();
@@ -898,9 +904,11 @@ namespace gargantuan::host {
 
 			if (AdmissionEvidence) AdmissionEvidence->Dump();
 			if (PublicationEvidence) PublicationEvidence->Dump();
+			if (ServerTickEvidence) ServerTickEvidence->Dump();
 			int ExitCode = Runtime->ProcessService->ExitCode;
 			if (AdmissionEvidence && !AdmissionEvidence->Valid()) ExitCode = 10;
 			if (PublicationEvidence && !PublicationEvidence->Valid()) ExitCode = 10;
+			if (ServerTickEvidence && !ServerTickEvidence->Valid()) ExitCode = 10;
 			if (FarmMode && (FarmReadyHighWater != static_cast<std::size_t>(FarmPeers) ||
 				FarmIdentities.size() != static_cast<std::size_t>(FarmPeers) || FarmIdentityConflict ||
 				(ScaleQualification && !ScaleQualification->IsComplete())))
