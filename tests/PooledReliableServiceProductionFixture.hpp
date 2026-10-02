@@ -340,7 +340,44 @@ inline bool RunPooledReliableServiceProductionTests() {
 			Check(Lifecycle[0].DemandId && Lifecycle[3].DemandId != Lifecycle[0].DemandId &&
 				Lifecycle[0].ActiveGrants == 1 && Lifecycle[1].ActiveGrants == 1 &&
 				Lifecycle[2].ActiveGrants == 0 && Lifecycle[3].ActiveGrants == 1 &&
-				Lifecycle[4].ActiveGrants == 0, "native active count follows exact lifecycle");
+				Lifecycle[4].ActiveGrants == 0 &&
+				Lifecycle[4].Reason == detail::AdmissionEvidenceReason::TerminalRelease,
+				"native active count and positive-debt terminal release follow exact lifecycle");
+		});
+		Test("ZeroDebtTerminalOwnerReleaseDoesNotReleaseBytes", [&] {
+			struct EvidenceCapture {
+				std::vector<detail::AdmissionEvidenceEvent> Events;
+				detail::AdmissionEvidenceSink Sink{this, Record};
+				detail::AdmissionEvidenceSink *Previous = detail::ActiveAdmissionEvidence;
+				EvidenceCapture() { detail::ActiveAdmissionEvidence = &Sink; }
+				~EvidenceCapture() { detail::ActiveAdmissionEvidence = Previous; }
+				static void Record(void *Context, const detail::AdmissionEvidenceEvent &Event) noexcept {
+				try { static_cast<EvidenceCapture *>(Context)->Events.push_back(Event); } catch (...) {}
+				}
+			} Evidence;
+			Admission Production(ReliableServiceProfile::PooledService());
+			Step(Production, 0);
+			Production.DeferSize(Id, G, {5, 6});
+			Production.EndStep();
+			Step(Production, 250'000);
+			Production.DeferSize(Id, G, {5, 6});
+			const auto Grant = Production.Reserve(Id, G);
+			Check(Grant && Production.Commit(*Grant) && Production.Retire(Id, Grant->Token, G) &&
+				Production.TerminalRelease(Id), "retired grant may clear owned slot at teardown");
+			Check(Production.GetMetrics().TerminalReleasedBytes == 0 &&
+				Production.GetMetrics().VerifiedAttributedRetirement == G,
+				"zero-debt terminal owner cleanup preserves byte conservation");
+			unsigned Retired = 0, Terminal = 0;
+			for (const auto &Event : Evidence.Events) {
+				if (Event.Kind == detail::AdmissionEvidenceKind::GrantRetired) ++Retired;
+				if (Event.Kind == detail::AdmissionEvidenceKind::GrantTerminalReleased) {
+					++Terminal;
+					Check(Event.Reason == detail::AdmissionEvidenceReason::None &&
+						Event.GrantToken == Grant->Token && Event.ActiveGrants == 0,
+						"terminal owner release is distinct from terminal byte release");
+				}
+			}
+			Check(Retired == 1 && Terminal == 1, "zero-debt lifecycle emits both transitions");
 		});
 		Test("CreditEligibilityEvidenceExcludesWarmupAndStaleFeedback", [&] {
 			struct EvidenceCapture {

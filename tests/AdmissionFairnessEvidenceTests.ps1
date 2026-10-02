@@ -101,6 +101,15 @@ try {
 	if ($LifecycleResult.GrantLifecycleCoverage -cne 'MEASURED_PASS' -or
 		$LifecycleResult.RetiredGrantCount -ne 2 -or $LifecycleResult.ReleasedGrantCount -ne 2 -or
 		$LifecycleResult.OpenGrantCount -ne 0) { throw 'complete ACK-gated grant chronology failed' }
+	$ZeroDebtTerminal = @($Lifecycle)
+	$ZeroDebtTerminal[4] = New-Event grant_terminal_released 30 1400 -Token 30 -ActiveGrants 0
+	Write-Trace -Events $ZeroDebtTerminal -Trailer "end`t10`t0" -Version 2
+	$ZeroDebtResult = Read-AdmissionFairnessEvidence -Path $Path -RunId $RunId
+	if ($ZeroDebtResult.GrantLifecycleCoverage -cne 'MEASURED_PASS' -or
+		$ZeroDebtResult.TerminalReleasedGrantCount -ne 1 -or
+		$ZeroDebtResult.TerminalDebtReleaseCount -ne 0) {
+		throw 'zero-debt terminal owner cleanup was misclassified as a byte release'
+	}
 	$Invalid = @($Lifecycle)
 	$Invalid[3] = New-Event grant_retired 30 1300 -Token 31 -ActiveGrants 1
 	Write-Trace -Events $Invalid -Trailer "end`t10`t0" -Version 2
@@ -116,12 +125,17 @@ try {
 	try { [void](Read-AdmissionFairnessEvidence -Path $Path -RunId $RunId); throw 'second grant before release accepted' }
 	catch { if ($_.Exception.Message -ceq 'second grant before release accepted') { throw } }
 	$Invalid = @($Lifecycle)
-	$Invalid[4] = New-Event grant_terminal_released 30 1400 -Token 30 -ActiveGrants 0
+	$Invalid[4] = New-Event grant_terminal_released 30 1400 -Token 30 -Reason terminal_release -ActiveGrants 0
 	Write-Trace -Events $Invalid -Trailer "end`t10`t0" -Version 2
+	try { [void](Read-AdmissionFairnessEvidence -Path $Path -RunId $RunId); throw 'contradictory terminal debt release accepted' }
+	catch { if ($_.Exception.Message -ceq 'contradictory terminal debt release accepted') { throw } }
+	$Invalid = @($Lifecycle[0..2])
+	$Invalid += New-Event grant_terminal_released 30 1300 -Token 30 -Reason terminal_release -ActiveGrants 0
+	Write-Trace -Events $Invalid -Trailer "end`t4`t0" -Version 2
 	$TerminalResult = Read-AdmissionFairnessEvidence -Path $Path -RunId $RunId
 	if ($TerminalResult.GrantLifecycleCoverage -cne 'MEASURED_FAIL' -or
-		$TerminalResult.TerminalReleasedGrantCount -ne 1) {
-		throw 'terminal release was not classified as a grant lifecycle failure'
+		$TerminalResult.TerminalDebtReleaseCount -ne 1) {
+		throw 'positive-debt terminal release was not classified as failure'
 	}
 	$CrossPeerClock = @(
 		(New-Event exact_demand 1 1000),
@@ -204,7 +218,7 @@ try {
 	Write-Trace -Events $Events -Trailer "end`t15`t0"
 	try { [void](Read-AdmissionFairnessEvidence -Path $Path -RunId $RunId); throw 'bad trailer accepted' }
 	catch { if ($_.Exception.Message -ceq 'bad trailer accepted') { throw } }
-Write-Output '[Qualification:Admission] analyzer_cases=26 PASS'
+Write-Output '[Qualification:Admission] analyzer_cases=28 PASS'
 } finally {
 	$Resolved = [IO.Path]::GetFullPath($Root)
 	if ($Resolved.StartsWith([IO.Path]::GetFullPath([IO.Path]::GetTempPath()), [StringComparison]::OrdinalIgnoreCase) -and

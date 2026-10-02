@@ -22,6 +22,7 @@ function Read-AdmissionFairnessEvidence {
 	$RetiredGrantCount = 0
 	$ReleasedGrantCount = 0
 	$TerminalReleasedGrantCount = 0
+	$TerminalDebtReleaseCount = 0
 	$PendingReplacement = $null
 	$Count = 0
 	$GrantCount = 0
@@ -97,7 +98,8 @@ function Read-AdmissionFairnessEvidence {
 			# but timestamps need only be monotonic within one demand.
 			$LatestTime = [Math]::Max($LatestTime, $At)
 			if ($Kind -cin @('grant_retired', 'grant_released', 'grant_terminal_released')) {
-				if (-not $IsV2 -or $Reason -cne 'none' -or $Token -eq 0 -or
+				if (-not $IsV2 -or $Reason -cnotin @('none', 'terminal_release') -or
+					($Kind -cne 'grant_terminal_released' -and $Reason -cne 'none') -or $Token -eq 0 -or
 					$Episode -ne 0 -or $CreditAt -ne 0 -or $EligibleSince -ne 0 -or
 					-not $AcceptedGrants.ContainsKey($Token) -or
 					-not $OpenGrantByPeer.ContainsKey($Peer) -or $OpenGrantByPeer[$Peer] -ne $Token) {
@@ -116,7 +118,13 @@ function Read-AdmissionFairnessEvidence {
 					if ($Kind -ceq 'grant_released' -and -not $Grant.Retired) {
 						throw 'grant released before exact ACK retirement'
 					}
-					if ($Kind -ceq 'grant_terminal_released') { $TerminalReleasedGrantCount++ }
+					if ($Kind -ceq 'grant_terminal_released') {
+						if (($Reason -ceq 'none') -ne [bool]$Grant.Retired) {
+							throw 'terminal owner release conflicts with exact debt retirement'
+						}
+						$TerminalReleasedGrantCount++
+						if ($Reason -ceq 'terminal_release') { $TerminalDebtReleaseCount++ }
+					}
 					$ReleasedGrantCount++
 					[void]$OpenGrantByPeer.Remove($Peer)
 					[void]$AcceptedGrants.Remove($Token)
@@ -261,12 +269,13 @@ function Read-AdmissionFairnessEvidence {
 			Classification = 'EVIDENCE_INTEGRITY_AND_OBSERVED_TIMING_ONLY'
 			TraceCanonicalCounterBounds = 'MEASURED_PASS'
 			GrantLifecycleCoverage = $(if (-not $IsV2 -or $GrantCount -eq 0) { 'NOT_MEASURED' }
-				elseif ($TerminalReleasedGrantCount -gt 0 -or $OpenGrantByPeer.Count -gt 0 -or
+				elseif ($TerminalDebtReleaseCount -gt 0 -or $OpenGrantByPeer.Count -gt 0 -or
 					$RetiredGrantCount -ne $GrantCount -or $ReleasedGrantCount -ne $GrantCount) { 'MEASURED_FAIL' }
 				else { 'MEASURED_PASS' })
 			RetiredGrantCount = $RetiredGrantCount
 			ReleasedGrantCount = $ReleasedGrantCount
 			TerminalReleasedGrantCount = $TerminalReleasedGrantCount
+			TerminalDebtReleaseCount = $TerminalDebtReleaseCount
 			OpenGrantCount = $OpenGrantByPeer.Count
 			MaximumTraceActiveGrants = $MaximumTraceActiveGrants
 			MaximumTracePeerCreditBytes = $MaximumTracePeerCreditBytes

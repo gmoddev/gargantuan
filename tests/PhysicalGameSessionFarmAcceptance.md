@@ -76,6 +76,10 @@ retirement, grant release, and terminal release after each accepted grant.
 Its offline reader rejects a second grant for the same generation before
 release, a release before retirement, duplicate lifecycle transitions, and
 native active-grant counts that disagree with the reconstructed chronology.
+A `grant_terminal_released` event distinguishes a zero-byte owner cleanup
+after verified ACK retirement (`reason=none`, valid) from unreconciled
+terminal debt (`reason=terminal_release`, failure). The canonical terminal
+release bound applies to bytes, not the number of owner-cleanup events.
 Historical V1 traces remain readable but their grant lifecycle is
 `NOT_MEASURED`. The sealed admission timeline additionally rejects any snapshot exceeding the
 four-grant or peer/global credit caps, a grant-accepted snapshot with no active

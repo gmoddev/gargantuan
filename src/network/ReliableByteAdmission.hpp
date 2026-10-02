@@ -78,7 +78,8 @@ public:
 		Totals.TerminalReleasedBytes += Bytes; Totals.OutstandingBytes -= Bytes;
 		if (Found->second.OwnsGrant) --Totals.ActiveDrainGrants;
 		if (Found->second.OwnsGrant)
-			EmitGrantLifecycle(Id, Found->second, AdmissionEvidenceKind::GrantTerminalReleased, Now);
+			EmitGrantLifecycle(Id, Found->second, AdmissionEvidenceKind::GrantTerminalReleased, Now,
+				Bytes ? AdmissionEvidenceReason::TerminalRelease : AdmissionEvidenceReason::None);
 		Found->second.OwnsGrant = false;
 		Found->second.Debt = Found->second.DebtToken = 0;
 		ClearDiagnosticGrant(Found->second);
@@ -311,11 +312,11 @@ private:
 		});
 	}
 	void EmitGrantLifecycle(ConnectionId Id, const Peer &Value, AdmissionEvidenceKind Kind,
-		std::uint64_t At) const noexcept {
+		std::uint64_t At, AdmissionEvidenceReason Reason = AdmissionEvidenceReason::None) const noexcept {
 		const auto *Sink = ActiveAdmissionEvidence;
 		if (!Sink || !Sink->Record || !Value.DiagnosticGrantDemandId) return;
 		Sink->Record(Sink->Context, AdmissionEvidenceEvent{
-			.Kind = Kind, .Connection = Id, .DemandId = Value.DiagnosticGrantDemandId,
+			.Kind = Kind, .Reason = Reason, .Connection = Id, .DemandId = Value.DiagnosticGrantDemandId,
 			.GrantToken = Value.DiagnosticGrantToken, .ExactBytes = Value.DiagnosticGrantBytes,
 			.AtMicroseconds = At, .PeerCreditBytes = Value.Credit.Bytes,
 			.GlobalCreditBytes = Global.Bytes, .ActiveGrants = Totals.ActiveDrainGrants,
