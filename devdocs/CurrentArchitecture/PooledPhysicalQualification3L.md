@@ -2013,3 +2013,41 @@ The current worker hook already uses a 256-MiB nonwrapping ETL and rejects
 traces at 240 MiB or with lost events; whether that limit suffices for the
 32-client campaign remains **not measured**. No new capture or 32-client
 physical run is claimed here.
+
+## 2026-10-01 — installed Farm32 capture infrastructure preflight
+
+The side-by-side Agent Coordinator Farm32 service at upstream revision
+`5ee889fab571a9047cbc0f8724f2077c7bb9eb74` was installed on the worker
+with EXE SHA-256
+`0aab359ef88cabb11ca2d5542ccfc3e1ca42c94a88bdfbe2e7bc602888383440`
+and pinned hook SHA-256
+`b731aa04d27212f596ba6641a39d49dbc32600aac580b5ca4776398084470dfc`.
+The original four-client service remained running and untouched. This is a
+synthetic capture-infrastructure result, not a
+GameSession, Local provider, Node provider, or Foundation 3L acceptance result.
+
+Run `42d6a3c6-da13-47e8-b856-c51832d9ecd8` captured 16 marked UDP packets in
+each direct-fiber direction. The installed service completed Start, Stop, and
+offline Finalize; Packet Monitor reported zero lost events. The worker returned
+to capture-idle after the run.
+
+Capacity run `c24358ef-68e0-4912-83cb-4dd7f3aa14dd` produced a nonwrapping
+964,689,920-byte (920-MiB) ETL, SHA-256
+`7b340308c21e604a57ff80f74a5bfd2255021e9c20e7a7bc32400f1fd59d69da`.
+The ETL final write followed the Stop marker by 3.608 seconds, within the
+service's 60-second hook bound. A separate offline replay through the installed
+hook exited 0 after 78.385 seconds, within the campaign's 180-second Finalize
+bound. It exported 796,092 complete fiber miniport frames into an
+885,137,460-byte pcapng, SHA-256
+`fbb655864f11731ac6bb48ba6d7d251a0fc23abe3de598ace6f72d95fef8b4bd`.
+The pcap matched the original export byte for byte. An independent stream parse
+found zero truncated blocks and all 789,300 marked synthetic packets; Packet
+Monitor reported 807,781 processed events and zero lost events.
+
+The retained evidence is under
+`C:\Sandbox\Codex\Evidence\Foundation3LFarm32` on the worker. Task-owned
+emitters exited, UDP 39452 is unbound, Packet Monitor and `netsh trace` are
+idle, no Packet Monitor filters remain, and the Farm32 service has no active
+capture record. The exact 960-MiB completeness threshold and a 32-client
+application capture remain **NOT MEASURED**. The Local and Node provider matrices,
+resource, overload/recovery, and final acceptance gates remain open.

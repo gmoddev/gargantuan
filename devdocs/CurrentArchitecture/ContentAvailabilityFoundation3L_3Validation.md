@@ -6,6 +6,20 @@ last_verified: 2026-10-01
 
 # Foundation 3L.3 diagnostic validation ledger
 
+## Installed Farm32 capture infrastructure qualified separately (2026-10-01)
+
+The side-by-side worker Farm32 capture service passed a marked bidirectional
+fiber smoke run and a 920-MiB ETL capacity run. Stop completed in 3.608 seconds;
+an offline replay through the pinned hook exited 0 in 78.385 seconds, exported
+796,092 complete frames, and reported zero lost events. The replay pcap was
+bit-identical to the original export and independently retained all 789,300
+marked packets without truncation. The worker returned to capture-idle. See
+the [full receipt](PooledPhysicalQualification3L.md)
+for pins, hashes, run IDs, and evidence location. The exact 960-MiB threshold
+and any 32-client GameSession capture are **NOT MEASURED**. This synthetic
+infrastructure result does not qualify either provider, KI-006, or Foundation
+3L; those remain **NOT MEASURED**, **OPEN**, and **B — PARTIALLY READY**.
+
 ## Farm32 authenticated Node request evidence candidate (source-only, 2026-10-01)
 
 The optional Node farm path can now record one bounded, run-bound manifest RPC
