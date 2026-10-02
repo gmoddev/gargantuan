@@ -699,10 +699,16 @@ namespace gargantuan::host {
 				if (Session) (void)Session->Poll();
 				const auto EngineStarted = std::chrono::steady_clock::now();
 				Runtime->Step();
-				const auto SessionStarted = std::chrono::steady_clock::now();
-				if (Session) {
+			const auto SessionStarted = std::chrono::steady_clock::now();
+			if (Session) {
+				runtime_detail::WorkSample SessionWork;
+				if (FarmRecoveryWorkload) {
+					runtime_detail::WorkCapture Capture(&SessionWork);
 					Session->Step(Runtime->GetSimulationTick());
-					const auto SessionEnded = std::chrono::steady_clock::now();
+				} else {
+					Session->Step(Runtime->GetSimulationTick());
+				}
+				const auto SessionEnded = std::chrono::steady_clock::now();
 					if (Session->GetStatus() == network::GameSessionStatus::Failed)
 						throw std::runtime_error(Session->GetFailure());
 					if (FarmMode) {
@@ -743,6 +749,14 @@ namespace gargantuan::host {
 								.PollMicroseconds = Microseconds(EngineStarted - TickStarted),
 								.EngineMicroseconds = Microseconds(SessionStarted - EngineStarted),
 								.SessionMicroseconds = Microseconds(SessionEnded - SessionStarted),
+								.SessionIncrementalMicroseconds = SessionWork[static_cast<std::size_t>(
+									runtime_detail::WorkPhase::IncrementalPreparation)].ExclusiveNanoseconds / 1'000,
+								.SessionBuildMicroseconds = SessionWork[static_cast<std::size_t>(
+									runtime_detail::WorkPhase::StructuralFrameBuild)].ExclusiveNanoseconds / 1'000,
+								.SessionEncodeMicroseconds = SessionWork[static_cast<std::size_t>(
+									runtime_detail::WorkPhase::StructuralValidationEncode)].ExclusiveNanoseconds / 1'000,
+								.SessionEncodeRetries = SessionWork.Counters[static_cast<std::size_t>(
+									runtime_detail::WorkCounter::EncodeRetries)],
 								.PreQualificationMicroseconds = Microseconds(QualificationStarted - SessionEnded),
 							});
 #if defined(GARGANTUAN_WITH_GNS)
