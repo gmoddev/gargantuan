@@ -51,6 +51,39 @@ function Save-ResourceRows {
 	return $Rows.Count
 }
 
+function Save-HostRows {
+	param([string]$Root, [string]$RunId, [string]$Role, [string]$Provider)
+	$HostName = if ($Role -eq 'Server') { 'WORKER' } else { 'CLIENT' }
+	$Address = if ($Role -eq 'Server') { '10.253.3.2' } else { '10.253.3.1' }
+	$Mac = if ($Role -eq 'Server') { 'AA-BB-CC-DD-EE-02' } else { 'AA-BB-CC-DD-EE-01' }
+	$Live = if ($Role -eq 'Server') { 1 } else { 32 }
+	$Rows = @(0, 1 | ForEach-Object {
+		$Sample = $_
+		[pscustomobject]@{
+			RunId = $RunId; Role = $Role; Provider = $Provider
+			HostName = $HostName; InterfaceIndex = 22; InterfaceMacAddress = $Mac
+			InterfaceAddress = $Address; InterfaceLinkSpeed = '10 Gbps'
+			Utc = [DateTimeOffset]::UtcNow.ToString('O')
+			SupervisorElapsedMilliseconds = 1000 + 2000 * $Sample
+			SampleStartTicks = 1000000 + 2000000 * $Sample
+			SampleEndTicks = 1001000 + 2000000 * $Sample
+			MonotonicFrequency = 1000000; LiveOwnedProcessCount = $Live
+			OwnedWorkingSetBytes = 1000000 * $Live + 50000 * $Sample
+			OwnedPrivateBytes = 900000 * $Live + 25000 * $Sample
+			HostTotalPhysicalBytes = 34359738368
+			HostAvailablePhysicalBytes = 17179869184 - 1048576 * $Sample
+			HostCpuIdle100ns = 1000000000 + 1000000000 * $Sample
+			HostCpuKernel100ns = 2000000000 + 2000000000 * $Sample
+			HostCpuUser100ns = 1000000000 + 1000000000 * $Sample
+			NicSentBytes = 1000000 + 20000000 * $Sample
+			NicReceivedBytes = 2000000 + 10000000 * $Sample
+			NicOutboundDiscardedPackets = 0; NicOutboundPacketErrors = 0
+			NicReceivedDiscardedPackets = 0; NicReceivedPacketErrors = 0
+		}
+	})
+	$Rows | Export-Csv -LiteralPath (Join-Path $Root 'host-resources.csv') -NoTypeInformation
+}
+
 function New-RunFixture {
 	param([string]$Prefix, [string]$Provider, [string]$RunId)
 	$ServerRoot = Join-Path $TestRoot "$Prefix-server"
@@ -85,6 +118,8 @@ function New-RunFixture {
 			AggregateWorkingSetLimitBytes = 21474836480L
 		})
 	}
+	Save-HostRows -Root $ServerRoot -RunId $RunId -Role 'Server' -Provider $Provider
+	Save-HostRows -Root $ClientRoot -RunId $RunId -Role 'Clients' -Provider $Provider
 	Save-Index -Root $ServerRoot -RunId $RunId -Role 'Server'
 	Save-Index -Root $ClientRoot -RunId $RunId -Role 'Clients'
 	$Report = [ordered]@{
@@ -98,6 +133,7 @@ function New-RunFixture {
 			accepted = 8192; retired = 8192; terminal_release = 0; outstanding = 0; active_grants = 0
 		}
 		ServerResourceSamples = $ServerSamples; ClientResourceSamples = $ClientSamples
+		ServerHostResourceSamples = 2; ClientHostResourceSamples = 2
 	}
 	$ReportPath = Join-Path $TestRoot "$Prefix-report.json"
 	Save-Json -Path $ReportPath -Value $Report
@@ -146,6 +182,10 @@ try {
 		$Observed.Local.Resources.Clients.CompleteSweepCount -ne 2 -or
 		$Observed.Local.Resources.Clients.CompleteSweepMaximumWorkingSetBytes -ne 32800000 -or
 		$Observed.Local.Resources.Clients.CompleteSweepLimitObservation -cne 'WITHIN_ROLE_LIMIT' -or
+		$Observed.Local.Resources.ClientHost.FullRoleSampleCount -ne 2 -or
+		$Observed.Local.Resources.ClientHost.MaximumObservedSimultaneousOwnedWorkingSetBytes -ne 32050000 -or
+		$Observed.Node.Resources.ServerHost.MaximumObservedHostCpuPercent -lt 66 -or
+		$Observed.Local.Resources.ServerHost.MaximumObservedNicSentBytesPerSecond -ne 10000000 -or
 		@($Observed.GateObservations | Where-Object { $_.State -eq 'NOT MEASURED' }).Count -ne 5) {
 		throw "resource/parity observation promoted a missing physical gate or lost resource evidence: status=$($Observed.Status) claim=$($Observed.Foundation3LQualification) parity=$($Observed.WorkloadPinParity.State) clients=$($Observed.Local.Resources.Clients.ProcessCount) server=$($Observed.Node.Resources.Server.ProcessCount) ws=$($Observed.Local.Resources.Clients.SumOfPerProcessPeakWorkingSetBytes) missing=$(@($Observed.GateObservations | Where-Object { $_.State -eq 'NOT MEASURED' }).Count)"
 	}
@@ -189,6 +229,58 @@ try {
 		throw 'sparse process samples falsely proved a complete-sweep resource bound'
 	}
 	[IO.File]::WriteAllText($SamplesPath, $OriginalSamples)
+	$HostPath = Join-Path $Node.ClientRoot 'host-resources.csv'
+	$OriginalHost = [IO.File]::ReadAllText($HostPath)
+	Remove-Item -LiteralPath $HostPath
+	Assert-Rejected -Name 'missing sealed client host observation' -OutputPath (Join-Path $TestRoot 'missing-host.json')
+	[IO.File]::WriteAllText($HostPath, $OriginalHost)
+	$HostRows = @(Import-Csv -LiteralPath $HostPath)
+	$HostRows[1].NicSentBytes = '1'
+	$HostRows | Export-Csv -LiteralPath $HostPath -NoTypeInformation
+	Save-Index -Root $Node.ClientRoot -RunId $Node.Report.RunId -Role 'Clients'
+	$Node.Report.ClientEvidenceSha256 = (Get-FileHash -LiteralPath (Join-Path $Node.ClientRoot 'evidence-sha256.json') -Algorithm SHA256).Hash.ToLowerInvariant()
+	Save-Json -Path $Node.ReportPath -Value $Node.Report
+	Assert-Rejected -Name 'rehashed NIC counter reset' -OutputPath (Join-Path $TestRoot 'counter-reset.json')
+	$HostRows[1].NicSentBytes = '21000000'
+	$HostRows[1].HostName = 'OTHERHOST'
+	$HostRows | Export-Csv -LiteralPath $HostPath -NoTypeInformation
+	Save-Index -Root $Node.ClientRoot -RunId $Node.Report.RunId -Role 'Clients'
+	$Node.Report.ClientEvidenceSha256 = (Get-FileHash -LiteralPath (Join-Path $Node.ClientRoot 'evidence-sha256.json') -Algorithm SHA256).Hash.ToLowerInvariant()
+	Save-Json -Path $Node.ReportPath -Value $Node.Report
+	Assert-Rejected -Name 'rehashed host identity drift' -OutputPath (Join-Path $TestRoot 'host-drift.json')
+	$HostRows[0].HostName = 'OTHERHOST'
+	$HostRows[0].SampleEndTicks = '7000000'
+	$HostRows[1].SampleEndTicks = '8000000'
+	$HostRows | Export-Csv -LiteralPath $HostPath -NoTypeInformation
+	Save-Index -Root $Node.ClientRoot -RunId $Node.Report.RunId -Role 'Clients'
+	$Node.Report.ClientEvidenceSha256 = (Get-FileHash -LiteralPath (Join-Path $Node.ClientRoot 'evidence-sha256.json') -Algorithm SHA256).Hash.ToLowerInvariant()
+	Save-Json -Path $Node.ReportPath -Value $Node.Report
+	Assert-Rejected -Name 'overskewed host snapshot' -OutputPath (Join-Path $TestRoot 'host-skew.json')
+	$HostRows[0].HostName = 'CLIENT'
+	$HostRows[1].HostName = 'CLIENT'
+	$HostRows[0].SampleEndTicks = '1001000'
+	$HostRows[1].SampleEndTicks = '3001000'
+	$HostRows[1].LiveOwnedProcessCount = '31'
+	$HostRows | Export-Csv -LiteralPath $HostPath -NoTypeInformation
+	Save-Index -Root $Node.ClientRoot -RunId $Node.Report.RunId -Role 'Clients'
+	$Node.Report.ClientEvidenceSha256 = (Get-FileHash -LiteralPath (Join-Path $Node.ClientRoot 'evidence-sha256.json') -Algorithm SHA256).Hash.ToLowerInvariant()
+	Save-Json -Path $Node.ReportPath -Value $Node.Report
+	# One earlier full-role sample still establishes overlap; remove it too.
+	$HostRows[0].LiveOwnedProcessCount = '31'
+	$HostRows | Export-Csv -LiteralPath $HostPath -NoTypeInformation
+	Save-Index -Root $Node.ClientRoot -RunId $Node.Report.RunId -Role 'Clients'
+	$Node.Report.ClientEvidenceSha256 = (Get-FileHash -LiteralPath (Join-Path $Node.ClientRoot 'evidence-sha256.json') -Algorithm SHA256).Hash.ToLowerInvariant()
+	Save-Json -Path $Node.ReportPath -Value $Node.Report
+	Assert-Rejected -Name 'no simultaneous 32-client observation' -OutputPath (Join-Path $TestRoot 'host-underfill.json')
+	$HostRows[0].LiveOwnedProcessCount = '32'
+	$HostRows[1].LiveOwnedProcessCount = '32'
+	$HostRows[1].NicSentBytes = '4000000000'
+	$HostRows | Export-Csv -LiteralPath $HostPath -NoTypeInformation
+	Save-Index -Root $Node.ClientRoot -RunId $Node.Report.RunId -Role 'Clients'
+	$Node.Report.ClientEvidenceSha256 = (Get-FileHash -LiteralPath (Join-Path $Node.ClientRoot 'evidence-sha256.json') -Algorithm SHA256).Hash.ToLowerInvariant()
+	Save-Json -Path $Node.ReportPath -Value $Node.Report
+	Assert-Rejected -Name 'impossible 10-Gbps NIC sample' -OutputPath (Join-Path $TestRoot 'host-nic-rate.json')
+	[IO.File]::WriteAllText($HostPath, $OriginalHost)
 	Save-Index -Root $Node.ClientRoot -RunId $Node.Report.RunId -Role 'Clients'
 	$Node.Report.ClientEvidenceSha256 = (Get-FileHash -LiteralPath (Join-Path $Node.ClientRoot 'evidence-sha256.json') -Algorithm SHA256).Hash.ToLowerInvariant()
 	Save-Json -Path $Node.ReportPath -Value $Node.Report

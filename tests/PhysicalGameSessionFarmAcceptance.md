@@ -23,6 +23,20 @@ simultaneous high-water or a host-memory-headroom proof. The two hosts have
 independent monotonic clocks; their CPU samples are not combined into a
 cross-host utilization percentage.
 
+Each role also seals `host-resources.csv` in its evidence index. The role-local
+supervisor samples Windows cumulative idle/kernel/user CPU time, available and
+total physical memory, a bounded sweep of currently live owned processes, and
+the pinned 10-Gbps fiber adapter's byte/error/discard counters. Each row names
+the host, role, provider, run, adapter index/MAC/address, monotonic start/end,
+and snapshot skew. The offline analyzer rejects missing or unsealed rows,
+counter reset/wrap, changed host/interface identity, invalid clock/CPU ranges,
+missing all-process snapshots, and physically impossible link rates. It reports
+CPU and NIC rates **per host and between adjacent samples**, plus minimum sampled
+available memory and maximum sampled simultaneous owned working set. The sweep
+is bounded in time but is not an atomic OS snapshot, and the fixed sampling
+interval can miss short peaks. The Server and Clients samples cannot be combined
+as one cross-host instant.
+
 The report also lists each role's indexed evidence file count and declared
 retained bytes from the prior reconciler's hash-verified index. This establishes
 only the bounded role-local evidence set. It does not establish capture
@@ -38,8 +52,17 @@ transport details. Those gates remain `NOT MEASURED` until their own bounded
 typed traces and acceptance analyzers exist. A Node authenticated manifest RPC
 receipt is a separate observation, not a full TLS transcript.
 
+The 4/8-GiB available-memory preflight and the endpoint's per-process/aggregate
+working-set limits are protective run bounds, not a final host-memory acceptance
+threshold. The 96-MiB/s backend envelope and its 64+8+4+8-MiB/s modeled
+commitments are canonical deployment context; host/NIC counters alone cannot
+prove reserved packet/retransmission capacity, provider overhead, or the
+application latency gates. No CPU-percentage, RSS-plateau, or NIC-utilization
+PASS threshold is inferred from a measured value.
+
 Mock test:
 
 ```powershell
 pwsh -NoProfile -File tests/PhysicalGameSessionFarmAcceptanceTests.ps1
+pwsh -NoProfile -File tests/PhysicalGameSessionFarmHostResourceTests.ps1
 ```

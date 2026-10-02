@@ -65,6 +65,7 @@ function Read-RoleEvidence {
 	$Result = Read-BoundedJson -Path $ResultPath
 	if ($Result.RunId -cne $Report.RunId -or $Result.Role -cne $Role -or
 		$Result.Status -cne 'PASS') { throw "$Role sealed role result is invalid" }
+	$HostResourcePath = Assert-IndexedFile -Root $Resolved -Index $Index -Name 'host-resources.csv'
 	$IndexedBytes = [long]0
 	foreach ($Entry in $Index.Files) {
 		if ([string]$Entry.Name -cnotmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$' -or
@@ -75,7 +76,7 @@ function Read-RoleEvidence {
 	}
 	return [pscustomobject]@{
 		Root = $Resolved; Manifest = (Read-BoundedJson -Path $ManifestPath); Result = $Result
-		ResourcePath = $ResourcePath; Index = $Index
+		ResourcePath = $ResourcePath; HostResourcePath = $HostResourcePath; Index = $Index
 		IndexedFiles = $Index.Files.Count; IndexedBytes = $IndexedBytes
 	}
 }
@@ -208,6 +209,128 @@ function Read-ResourceObservation {
 	}
 }
 
+function Read-HostResourceObservation {
+	param([string]$Path, [string]$RunId, [string]$Role, [string]$Provider,
+		[int]$ExpectedLiveProcesses, [long]$ExpectedCount)
+	$Rows = @(Import-Csv -LiteralPath $Path)
+	if ($Rows.Count -lt 2 -or $Rows.Count -gt 1000 -or $Rows.Count -ne $ExpectedCount) {
+		throw "$Role host resource sample count is invalid"
+	}
+	$Unsigned = @('InterfaceIndex', 'SupervisorElapsedMilliseconds', 'SampleStartTicks',
+		'SampleEndTicks', 'MonotonicFrequency', 'LiveOwnedProcessCount', 'OwnedWorkingSetBytes',
+		'OwnedPrivateBytes', 'HostTotalPhysicalBytes', 'HostAvailablePhysicalBytes',
+		'HostCpuIdle100ns', 'HostCpuKernel100ns', 'HostCpuUser100ns', 'NicSentBytes',
+		'NicReceivedBytes', 'NicOutboundDiscardedPackets', 'NicOutboundPacketErrors',
+		'NicReceivedDiscardedPackets', 'NicReceivedPacketErrors')
+	$Identity = $null; $Previous = $null; $Intervals = [Collections.Generic.List[object]]::new()
+	$FullRole = 0; $MinAvailable = [ulong]::MaxValue; $MaxOwnedWorkingSet = [ulong]0
+	$MaxOwnedPrivate = [ulong]0; $MaxSkew = [double]0; $MaxCpu = [double]0
+	$MaxSendRate = [double]0; $MaxReceiveRate = [double]0
+	foreach ($Row in $Rows) {
+		$Parsed = @{}
+		foreach ($Name in $Unsigned) {
+			$Value = [ulong]0
+			if ([string]$Row.$Name -cnotmatch '^(0|[1-9][0-9]*)$' -or
+				-not [ulong]::TryParse([string]$Row.$Name, [ref]$Value)) {
+				throw "invalid $Role host resource $Name"
+			}
+			$Parsed[$Name] = $Value
+		}
+		$Utc = [DateTimeOffset]::MinValue
+		if (-not [DateTimeOffset]::TryParse($Row.Utc, [ref]$Utc) -or
+			$Row.RunId -cne $RunId -or $Row.Role -cne $Role -or
+			$Row.Provider -cne $Provider -or $Row.HostName -cnotmatch '^[A-Za-z0-9][A-Za-z0-9_-]{0,62}$' -or
+			$Row.InterfaceMacAddress -cnotmatch '^(?:[0-9A-F]{2}-){5}[0-9A-F]{2}$' -or
+			$Row.InterfaceAddress -cnotin @('10.253.3.1', '10.253.3.2') -or
+			$Row.InterfaceLinkSpeed -cne '10 Gbps' -or $Parsed.InterfaceIndex -eq 0 -or
+			$Parsed.MonotonicFrequency -eq 0 -or $Parsed.SampleStartTicks -eq 0 -or
+			$Parsed.SampleEndTicks -lt $Parsed.SampleStartTicks -or
+			$Parsed.LiveOwnedProcessCount -gt $ExpectedLiveProcesses -or
+			($Parsed.LiveOwnedProcessCount -eq 0 -and
+				($Parsed.OwnedWorkingSetBytes -ne 0 -or $Parsed.OwnedPrivateBytes -ne 0)) -or
+			($Parsed.LiveOwnedProcessCount -gt 0 -and $Parsed.OwnedWorkingSetBytes -eq 0) -or
+			$Parsed.HostTotalPhysicalBytes -eq 0 -or
+			$Parsed.HostAvailablePhysicalBytes -gt $Parsed.HostTotalPhysicalBytes -or
+			$Parsed.HostCpuIdle100ns -gt $Parsed.HostCpuKernel100ns) {
+			throw "$Role host resource identity, counter, or physical range is invalid"
+		}
+		$SnapshotSkewMs = [double](1000.0 *
+			([decimal]$Parsed.SampleEndTicks - [decimal]$Parsed.SampleStartTicks) /
+			[decimal]$Parsed.MonotonicFrequency)
+		if ($SnapshotSkewMs -gt 5000) { throw "$Role host resource snapshot spans over five seconds" }
+		$ThisIdentity = "$($Row.HostName)|$($Parsed.InterfaceIndex)|$($Row.InterfaceMacAddress)|$($Row.InterfaceAddress)"
+		if ($null -eq $Identity) { $Identity = $ThisIdentity }
+		elseif ($ThisIdentity -cne $Identity) { throw "$Role host/interface identity changed" }
+		if ($null -ne $Previous) {
+			if ($Parsed.MonotonicFrequency -ne $Previous.Frequency -or
+				$Parsed.SampleStartTicks -le $Previous.EndTicks -or
+				$Parsed.SupervisorElapsedMilliseconds -le $Previous.Elapsed -or
+				$Utc -lt $Previous.Utc) {
+				throw "$Role host sample order or clock changed"
+			}
+			foreach ($Counter in @('HostCpuIdle100ns', 'HostCpuKernel100ns', 'HostCpuUser100ns',
+				'NicSentBytes', 'NicReceivedBytes', 'NicOutboundDiscardedPackets',
+				'NicOutboundPacketErrors', 'NicReceivedDiscardedPackets', 'NicReceivedPacketErrors')) {
+				if ($Parsed[$Counter] -lt $Previous.Counters[$Counter]) {
+					throw "$Role host $Counter counter reset or wrapped"
+				}
+			}
+			$ElapsedSeconds = [double](
+				([decimal]$Parsed.SampleStartTicks - [decimal]$Previous.StartTicks) /
+				[decimal]$Parsed.MonotonicFrequency)
+			$TotalCpu = ([decimal]$Parsed.HostCpuKernel100ns - [decimal]$Previous.Counters.HostCpuKernel100ns) +
+				([decimal]$Parsed.HostCpuUser100ns - [decimal]$Previous.Counters.HostCpuUser100ns)
+			$IdleCpu = [decimal]$Parsed.HostCpuIdle100ns - [decimal]$Previous.Counters.HostCpuIdle100ns
+			if ($ElapsedSeconds -le 0 -or $TotalCpu -le 0 -or $IdleCpu -gt $TotalCpu) {
+				throw "$Role host CPU interval is invalid"
+			}
+			$CpuPercent = [double](100 * ($TotalCpu - $IdleCpu) / $TotalCpu)
+			$SendBytes = [decimal]$Parsed.NicSentBytes - [decimal]$Previous.Counters.NicSentBytes
+			$ReceiveBytes = [decimal]$Parsed.NicReceivedBytes - [decimal]$Previous.Counters.NicReceivedBytes
+			$SendBps = [double]($SendBytes / [decimal]$ElapsedSeconds)
+			$ReceiveBps = [double]($ReceiveBytes / [decimal]$ElapsedSeconds)
+			if ($SendBps -gt 1250000000 -or $ReceiveBps -gt 1250000000) {
+				throw "$Role NIC counters exceed the pinned 10 Gbps link"
+			}
+			$MaxCpu = [math]::Max($MaxCpu, $CpuPercent)
+			$MaxSendRate = [math]::Max($MaxSendRate, $SendBps)
+			$MaxReceiveRate = [math]::Max($MaxReceiveRate, $ReceiveBps)
+			$Intervals.Add([ordered]@{ ElapsedSeconds = [math]::Round($ElapsedSeconds, 3)
+				HostCpuPercent = [math]::Round($CpuPercent, 3)
+				NicSentBytesPerSecond = [math]::Round($SendBps, 3)
+				NicReceivedBytesPerSecond = [math]::Round($ReceiveBps, 3) })
+		}
+		if ($Parsed.LiveOwnedProcessCount -eq $ExpectedLiveProcesses) { $FullRole++ }
+		$MinAvailable = [math]::Min($MinAvailable, $Parsed.HostAvailablePhysicalBytes)
+		$MaxOwnedWorkingSet = [math]::Max($MaxOwnedWorkingSet, $Parsed.OwnedWorkingSetBytes)
+		$MaxOwnedPrivate = [math]::Max($MaxOwnedPrivate, $Parsed.OwnedPrivateBytes)
+		$MaxSkew = [math]::Max($MaxSkew, $SnapshotSkewMs)
+		$Previous = [pscustomobject]@{ Frequency = $Parsed.MonotonicFrequency
+			StartTicks = $Parsed.SampleStartTicks; EndTicks = $Parsed.SampleEndTicks
+			Elapsed = $Parsed.SupervisorElapsedMilliseconds; Utc = $Utc; Counters = $Parsed }
+	}
+	if ($FullRole -lt 1) { throw "$Role host resource trace never observed all owned processes together" }
+	return [ordered]@{ Classification = 'BOUNDED_SAME_HOST_SNAPSHOT_SERIES'
+		HostName = $Rows[0].HostName; InterfaceIndex = [long]$Rows[0].InterfaceIndex
+		InterfaceMacAddress = $Rows[0].InterfaceMacAddress
+		InterfaceAddress = $Rows[0].InterfaceAddress; LinkSpeed = '10 Gbps'
+		SampleCount = $Rows.Count; FullRoleSampleCount = $FullRole
+		MaxSnapshotSkewMilliseconds = [math]::Round($MaxSkew, 3)
+		MinimumObservedAvailablePhysicalBytes = $MinAvailable
+		MaximumObservedSimultaneousOwnedWorkingSetBytes = $MaxOwnedWorkingSet
+		MaximumObservedSimultaneousOwnedPrivateBytes = $MaxOwnedPrivate
+		MaximumObservedHostCpuPercent = [math]::Round($MaxCpu, 3)
+		MaximumObservedNicSentBytesPerSecond = [math]::Round($MaxSendRate, 3)
+		MaximumObservedNicReceivedBytesPerSecond = [math]::Round($MaxReceiveRate, 3)
+		NicCounterDeltas = [ordered]@{
+			OutboundDiscardedPackets = [decimal]$Previous.Counters.NicOutboundDiscardedPackets - [decimal]$Rows[0].NicOutboundDiscardedPackets
+			OutboundPacketErrors = [decimal]$Previous.Counters.NicOutboundPacketErrors - [decimal]$Rows[0].NicOutboundPacketErrors
+			ReceivedDiscardedPackets = [decimal]$Previous.Counters.NicReceivedDiscardedPackets - [decimal]$Rows[0].NicReceivedDiscardedPackets
+			ReceivedPacketErrors = [decimal]$Previous.Counters.NicReceivedPacketErrors - [decimal]$Rows[0].NicReceivedPacketErrors
+		}
+		Intervals = @($Intervals) }
+}
+
 function Read-ProviderRun {
 	param([string]$ReportPath, [string]$ServerRoot, [string]$ClientRoot, [string]$ExpectedProvider)
 	$Report = Read-BoundedJson -Path $ReportPath
@@ -237,9 +360,22 @@ function Read-ProviderRun {
 	$ClientResources = Read-ResourceObservation -Path $Clients.ResourcePath -RunId $Report.RunId `
 		-ExpectedLabels $Labels -ExpectedCount ([long]$Report.ClientResourceSamples) `
 		-AggregateWorkingSetLimitBytes ([long]$Clients.Result.AggregateWorkingSetLimitBytes)
+	$ServerHost = Read-HostResourceObservation -Path $Server.HostResourcePath -RunId $Report.RunId `
+		-Role 'Server' -Provider $ExpectedProvider -ExpectedLiveProcesses 1 `
+		-ExpectedCount ([long]$Report.ServerHostResourceSamples)
+	$ClientHost = Read-HostResourceObservation -Path $Clients.HostResourcePath -RunId $Report.RunId `
+		-Role 'Clients' -Provider $ExpectedProvider -ExpectedLiveProcesses 32 `
+		-ExpectedCount ([long]$Report.ClientHostResourceSamples)
+	if ($ServerHost.HostName -ceq $ClientHost.HostName -or
+		$ServerHost.InterfaceMacAddress -ceq $ClientHost.InterfaceMacAddress -or
+		$ServerHost.InterfaceAddress -cne '10.253.3.2' -or
+		$ClientHost.InterfaceAddress -cne '10.253.3.1') {
+		throw 'Server/Clients host or fiber identity is invalid'
+	}
 	return [pscustomobject]@{
 		Report = $Report; Manifest = $Manifest
-		Resources = [ordered]@{ Server = $ServerResources; Clients = $ClientResources }
+		Resources = [ordered]@{ Server = $ServerResources; Clients = $ClientResources
+			ServerHost = $ServerHost; ClientHost = $ClientHost }
 		EvidenceRetention = [ordered]@{
 			Classification = 'RECONCILED_ROLE_LOCAL_INDEX_BOUNDS_ONLY'
 			ServerIndexedFiles = $Server.IndexedFiles; ServerIndexedBytes = $Server.IndexedBytes
@@ -253,6 +389,13 @@ $Local = Read-ProviderRun -ReportPath $LocalReportPath -ServerRoot $LocalServerE
 $Node = Read-ProviderRun -ReportPath $NodeReportPath -ServerRoot $NodeServerEvidenceRoot `
 	-ClientRoot $NodeClientEvidenceRoot -ExpectedProvider 'Node'
 if ($Local.Report.RunId -ceq $Node.Report.RunId) { throw 'Local and Node reused a physical run identity' }
+foreach ($Name in @('ServerHost', 'ClientHost')) {
+	foreach ($Field in @('HostName', 'InterfaceIndex', 'InterfaceMacAddress', 'InterfaceAddress')) {
+		if ($Local.Resources[$Name][$Field] -cne $Node.Resources[$Name][$Field]) {
+			throw "Local/Node $Name physical host identity changed: $Field"
+		}
+	}
+}
 $ComparableFields = @('SourceCommit', 'Endpoint', 'ClientFrames', 'ServerTicks',
 	'ServerSha256', 'ServerPackageSha256', 'PlayerSha256', 'PlayerPackageSha256',
 	'ServerContentManifestSha256', 'PlayerContentManifestSha256',
@@ -286,9 +429,10 @@ $Observed = [ordered]@{
 		[ordered]@{ Gate = 'Cross-provider exact workload/deployment pin parity'; State = 'MEASURED' },
 		[ordered]@{ Gate = 'Role-local bounded process sampling'; State = 'MEASURED' },
 		[ordered]@{ Gate = 'Complete-sweep role-local working set within supervisor limit'; State = $(if ($Local.Resources.Server.CompleteSweepCount -gt 0 -and $Local.Resources.Clients.CompleteSweepCount -gt 0 -and $Node.Resources.Server.CompleteSweepCount -gt 0 -and $Node.Resources.Clients.CompleteSweepCount -gt 0) { 'MEASURED' } else { 'NOT MEASURED' }); Reason = 'sequential per-process sweep; not a synchronized host memory or network headroom result' },
+		[ordered]@{ Gate = 'Role-local host CPU, memory, simultaneous owned processes, and fiber NIC counters'; State = 'MEASURED' },
 		[ordered]@{ Gate = 'Role-local indexed evidence byte/file bounds'; State = 'MEASURED' },
 		[ordered]@{ Gate = 'Five-phase observation and terminal native admission conservation'; State = 'MEASURED' },
-		[ordered]@{ Gate = 'CPU, memory, network and transport headroom'; State = 'NOT MEASURED'; Reason = 'process samples alone do not establish host/network headroom or a canonical resource threshold' },
+		[ordered]@{ Gate = 'CPU, memory, network and transport headroom'; State = 'NOT MEASURED'; Reason = 'bounded host/NIC snapshots describe utilization, but no canonical CPU/memory/NIC pass percentage or concurrent packet-level reserve proof follows from those samples' },
 		[ordered]@{ Gate = 'Fixed 20-second service recovery'; State = 'NOT MEASURED'; Reason = 'no independently timed recovery workload or native recovery trace' },
 		[ordered]@{ Gate = 'Workload-derived exact structural convergence'; State = 'NOT MEASURED'; Reason = 'phase observations and final debt do not locate final accepted byte versus client observation' },
 		[ordered]@{ Gate = 'Journal retention margin and overload'; State = 'NOT MEASURED'; Reason = 'final zero journal backlog lacks retained-history high-water and overload chronology' },

@@ -47,6 +47,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $OwnedProcesses = [Collections.Generic.List[object]]::new()
 $ResourceSamples = [Collections.Generic.List[object]]::new()
+$HostResourceSamples = [Collections.Generic.List[object]]::new()
 $CleanupErrors = [Collections.Generic.List[string]]::new()
 $Failure = $null
 $Result = $null
@@ -326,6 +327,124 @@ function Add-EndpointResourceSamples {
 	}
 }
 
+# Resource evidence is sampled on this role's own host and monotonic clock. The
+# process sum is one bounded sweep, not a sum of each process's separate peak.
+function Initialize-HostResourceCounters {
+	if ('FarmHostNativeCounters' -as [type]) { return }
+	$Source = @'
+using System;
+using System.Runtime.InteropServices;
+public static class FarmHostNativeCounters {
+    [StructLayout(LayoutKind.Sequential)]
+    public struct MemoryStatus {
+        public uint Length, Load;
+        public ulong TotalPhysical, AvailablePhysical, TotalPageFile, AvailablePageFile;
+        public ulong TotalVirtual, AvailableVirtual, AvailableExtendedVirtual;
+    }
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern bool GetSystemTimes(out ulong idle, out ulong kernel, out ulong user);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern bool GlobalMemoryStatusEx(ref MemoryStatus status);
+}
+'@
+	Add-Type -TypeDefinition $Source -ErrorAction Stop
+}
+
+function Get-HostResourceInterface {
+	param([Net.IPAddress]$ServerAddress, [string]$LocalRole)
+	if ($LocalRole -eq 'Server') {
+		$GameIp = Get-NetIPAddress -IPAddress $ServerAddress.ToString() -AddressFamily IPv4 -ErrorAction Stop |
+			Select-Object -First 1
+		$Index = [int]$GameIp.InterfaceIndex
+	} else {
+		$Route = Find-NetRoute -RemoteIPAddress $ServerAddress.ToString() -ErrorAction Stop |
+			Select-Object -First 1
+		$Index = [int]$Route.InterfaceIndex
+		$GameIp = Get-NetIPAddress -InterfaceIndex $Index -AddressFamily IPv4 -ErrorAction Stop |
+			Where-Object IPAddress -eq '10.253.3.1' | Select-Object -First 1
+	}
+	if (-not $GameIp -or $Index -le 0) { throw 'resource sampler cannot identify the game interface' }
+	$Adapter = Get-NetAdapter -InterfaceIndex $Index -ErrorAction Stop
+	if ($Adapter.Status -cne 'Up' -or $Adapter.LinkSpeed -cne '10 Gbps' -or
+		[string]::IsNullOrWhiteSpace($Adapter.MacAddress)) {
+		throw 'resource sampler game interface lost its qualified identity or link'
+	}
+	return [pscustomobject]@{
+		Index = $Index; MacAddress = [string]$Adapter.MacAddress
+		Address = [string]$GameIp.IPAddress; Name = [string]$Adapter.Name
+		HostName = [Environment]::MachineName
+	}
+}
+
+function Add-HostResourceSample {
+	param([object[]]$Owners, [string]$LocalRunId, [string]$LocalRole,
+		[string]$LocalProvider, $Interface, [Collections.Generic.List[object]]$Samples,
+		[long]$SupervisorElapsedMilliseconds)
+	if ($Samples.Count -ge 1000) { throw 'bounded host resource evidence exceeded 1000 records' }
+	$StartTicks = [Diagnostics.Stopwatch]::GetTimestamp()
+	$Idle = [ulong]0; $Kernel = [ulong]0; $User = [ulong]0
+	if (-not [FarmHostNativeCounters]::GetSystemTimes([ref]$Idle, [ref]$Kernel, [ref]$User)) {
+		throw 'host CPU counters are unavailable'
+	}
+	$WorkingSet = 0L; $Private = 0L; $Live = 0
+	foreach ($Owner in $Owners) {
+		try {
+			$Owner.Process.Refresh()
+			if ($Owner.Process.HasExited) { continue }
+			$WorkingSet += $Owner.Process.WorkingSet64
+			$Private += $Owner.Process.PrivateMemorySize64
+			$Live++
+		} catch {
+			if ($Owner.Process.HasExited) { continue }
+			throw "host resource sample failed for $($Owner.Label): $($_.Exception.Message)"
+		}
+	}
+	$Memory = [FarmHostNativeCounters+MemoryStatus]::new()
+	$Memory.Length = [Runtime.InteropServices.Marshal]::SizeOf(
+		[type][FarmHostNativeCounters+MemoryStatus])
+	if (-not [FarmHostNativeCounters]::GlobalMemoryStatusEx([ref]$Memory)) {
+		throw 'host memory counters are unavailable'
+	}
+	$Adapter = Get-NetAdapter -InterfaceIndex $Interface.Index -ErrorAction Stop
+	if ($Adapter.Status -cne 'Up' -or $Adapter.LinkSpeed -cne '10 Gbps' -or
+		$Adapter.MacAddress -cne $Interface.MacAddress -or $Adapter.Name -cne $Interface.Name) {
+		throw 'resource sampler interface changed during the run'
+	}
+	$Nic = $Adapter | Get-NetAdapterStatistics -ErrorAction Stop
+	if (-not $Nic) { throw 'game interface byte/packet counters are unavailable' }
+	$EndTicks = [Diagnostics.Stopwatch]::GetTimestamp()
+	$Samples.Add([pscustomobject]@{
+		RunId = $LocalRunId; Role = $LocalRole; Provider = $LocalProvider
+		HostName = $Interface.HostName; InterfaceIndex = $Interface.Index
+		InterfaceMacAddress = $Interface.MacAddress; InterfaceAddress = $Interface.Address
+		InterfaceLinkSpeed = '10 Gbps'; Utc = [DateTimeOffset]::UtcNow.ToString('O')
+		SupervisorElapsedMilliseconds = $SupervisorElapsedMilliseconds
+		SampleStartTicks = $StartTicks; SampleEndTicks = $EndTicks
+		MonotonicFrequency = [Diagnostics.Stopwatch]::Frequency
+		LiveOwnedProcessCount = $Live; OwnedWorkingSetBytes = $WorkingSet
+		OwnedPrivateBytes = $Private; HostTotalPhysicalBytes = $Memory.TotalPhysical
+		HostAvailablePhysicalBytes = $Memory.AvailablePhysical
+		HostCpuIdle100ns = $Idle; HostCpuKernel100ns = $Kernel; HostCpuUser100ns = $User
+		NicSentBytes = $Nic.SentBytes; NicReceivedBytes = $Nic.ReceivedBytes
+		NicOutboundDiscardedPackets = $Nic.OutboundDiscardedPackets
+		NicOutboundPacketErrors = $Nic.OutboundPacketErrors
+		NicReceivedDiscardedPackets = $Nic.ReceivedDiscardedPackets
+		NicReceivedPacketErrors = $Nic.ReceivedPacketErrors
+	})
+}
+
+function Add-TimedResourceSamples {
+	param([object[]]$Owners)
+	$Elapsed = $RunClock.ElapsedMilliseconds
+	if ($Elapsed - $script:LastResourceSampleMilliseconds -lt 2000) { return }
+	Add-EndpointResourceSamples -Owners $Owners -LocalRunId $RunId `
+		-Samples $ResourceSamples -SupervisorElapsedMilliseconds $Elapsed
+	Add-HostResourceSample -Owners $Owners -LocalRunId $RunId -LocalRole $Role `
+		-LocalProvider $Manifest.Provider -Interface $HostResourceInterface `
+		-Samples $HostResourceSamples -SupervisorElapsedMilliseconds $Elapsed
+	$script:LastResourceSampleMilliseconds = $Elapsed
+}
+
 function Assert-FairnessEvidence {
 	param([string]$Path, [string]$LocalRunId)
 	$File = Get-Item -LiteralPath $Path -ErrorAction Stop
@@ -520,6 +639,8 @@ try {
 	$Manifest = Read-PinnedRunManifest -Path $ManifestPath -ExpectedSha256 $ManifestSha256
 	$Network = Assert-RunManifest -Value $Manifest
 	$RunId = $Manifest.RunId
+	Initialize-HostResourceCounters
+	$HostResourceInterface = Get-HostResourceInterface -ServerAddress $Network.Address -LocalRole $Role
 	$Paths = Assert-RolePaths -LocalPackage $PackageRoot -LocalEvidence $EvidenceRoot -LocalRegistry $RunRegistryRoot
 	$Executable = Assert-LocalPackagePins -LocalRoot $Paths.Package -LocalRole $Role -RunManifest $Manifest
 	$AvailableMemoryBytes = [long](Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory * 1024L
@@ -555,6 +676,7 @@ try {
 		Where-Object { [string]$_ -match '^GARGANTUAN_ENGINE_ADAPTER_.*TOKEN' })
 	$RunStartedUtc = [DateTimeOffset]::UtcNow.ToString('O')
 	$RunClock = [Diagnostics.Stopwatch]::StartNew()
+	$script:LastResourceSampleMilliseconds = -2000L
 	if ($Role -eq 'Server') {
 		$FairnessPath = Join-Path $Paths.Evidence 'admission-fairness.tsv'
 		$Arguments = @('--bind', $Manifest.Endpoint, '--farm-run-id', $RunId,
@@ -577,6 +699,7 @@ try {
 			Assert-EndpointBounds -Owners @($Owners) -MaximumLogBytes $MaximumLogBytesPerStream `
 				-MaximumMemoryBytes $RoleWorkingSetBytes `
 				-MaximumAggregateMemoryBytes $EffectiveAggregateWorkingSetBytes -MaximumThreads $MaximumThreadsPerProcess
+			Add-TimedResourceSamples -Owners @($Owners)
 			if ($Owner.Process.HasExited) { throw "server exited before startup: $($Owner.Process.ExitCode)" }
 			$Owner.OutputStream.Flush()
 			$Start = @(Get-TypedRecords -Path $Owner.OutputPath -Kind 'Server' |
@@ -601,6 +724,7 @@ try {
 				-Arguments $Arguments -Label ('client-{0:D2}' -f $Slot) -OutputDirectory $Paths.Evidence `
 				-RemoveEnvironmentVariables $SecretVariables
 			$Owners.Add($Owner); $Clients.Add($Owner)
+			Add-TimedResourceSamples -Owners @($Owners)
 			if ($Slot -eq 0) {
 				$Clock = [Diagnostics.Stopwatch]::StartNew()
 				while ($Clock.ElapsedMilliseconds -lt $StartupTimeoutMilliseconds -and
@@ -608,6 +732,7 @@ try {
 					Assert-EndpointBounds -Owners @($Owners) -MaximumLogBytes $MaximumLogBytesPerStream `
 						-MaximumMemoryBytes $RoleWorkingSetBytes `
 						-MaximumAggregateMemoryBytes $EffectiveAggregateWorkingSetBytes -MaximumThreads $MaximumThreadsPerProcess
+					Add-TimedResourceSamples -Owners @($Owners)
 					if ($Owner.Process.HasExited) { throw 'producer client exited before readiness' }
 					$Owner.OutputStream.Flush()
 					$Ready = @(Get-TypedRecords -Path $Owner.OutputPath -Kind 'Client' | Where-Object {
@@ -621,16 +746,11 @@ try {
 			if ($StartupStaggerMilliseconds -gt 0) { Start-Sleep -Milliseconds $StartupStaggerMilliseconds }
 		}
 	}
-	$LastSample = -2000L
 	while ($RunClock.ElapsedMilliseconds -lt $RunTimeoutMilliseconds) {
 		Assert-EndpointBounds -Owners @($Owners) -MaximumLogBytes $MaximumLogBytesPerStream `
 			-MaximumMemoryBytes $RoleWorkingSetBytes `
 			-MaximumAggregateMemoryBytes $EffectiveAggregateWorkingSetBytes -MaximumThreads $MaximumThreadsPerProcess
-		if ($RunClock.ElapsedMilliseconds - $LastSample -ge 2000) {
-			Add-EndpointResourceSamples -Owners @($Owners) -LocalRunId $RunId `
-				-Samples $ResourceSamples -SupervisorElapsedMilliseconds $RunClock.ElapsedMilliseconds
-			$LastSample = $RunClock.ElapsedMilliseconds
-		}
+		Add-TimedResourceSamples -Owners @($Owners)
 		foreach ($Owner in $Owners) {
 			if ($Owner.Process.HasExited -and $Owner.Process.ExitCode -ne 0) {
 				throw "$($Owner.Label) exited $($Owner.Process.ExitCode)"
@@ -665,6 +785,7 @@ try {
 		Endpoint = $Manifest.Endpoint; ScaleWorkload = $Manifest.ScaleWorkload
 		ManifestSha256 = $ManifestSha256.ToLowerInvariant(); Verified = $Verified
 		Pids = @($Owners | ForEach-Object Pid); ResourceSamples = $ResourceSamples.Count
+		HostResourceSamples = $HostResourceSamples.Count
 		AvailableMemoryBytes = $AvailableMemoryBytes
 		WorkingSetLimitBytes = $RoleWorkingSetBytes
 		AggregateWorkingSetLimitBytes = $EffectiveAggregateWorkingSetBytes
@@ -685,6 +806,12 @@ try {
 		try {
 			$ResourceSamples | Export-Csv -LiteralPath (Join-Path $Paths.Evidence 'process-resources.csv') -NoTypeInformation
 		} catch { $CleanupErrors.Add("resource evidence: $($_.Exception.Message)") }
+		try {
+			$HostResourceSamples | Export-Csv -LiteralPath (Join-Path $Paths.Evidence 'host-resources.csv') -NoTypeInformation
+			if ((Get-Item -LiteralPath (Join-Path $Paths.Evidence 'host-resources.csv')).Length -gt 16777216) {
+				throw 'host resource evidence exceeds 16 MiB'
+			}
+		} catch { $CleanupErrors.Add("host resource evidence: $($_.Exception.Message)") }
 		if ($Role -eq 'Server' -and $OwnedProcesses.Count -gt 0 -and
 			(Get-NetUDPEndpoint -LocalPort $Network.Port -ErrorAction SilentlyContinue)) {
 			$CleanupErrors.Add("UDP port $($Network.Port) remained occupied after owned PID cleanup")
