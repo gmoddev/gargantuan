@@ -51,11 +51,18 @@ rescheduling, server-local due-to-accept and client-local receive-to-handler
 durations separately. The bounded database lives only under an explicit
 task-owned analysis directory and is removed after analysis.
 
-The current native trace has no reachable `RecipientRetired` event. An
-unresolved due relationship therefore fails closed, and explicit retirement
-remains `NOT_MEASURED`. Server and client steady clocks have unrelated origins;
-cross-host due-to-handler latency and phase-long drift remain `NOT_MEASURED`.
-The role-local join is a diagnostic result, not Foundation 3L acceptance.
+The Stage 11 `RecipientRetired` record is emitted only after an accepted GRPL
+Unpublish/Destroy and retains full recipient/ObjectId generations. The offline
+join treats it as an ordered relationship transition: it disposes only pending
+due work before that accepted leave, counts confirmed due work retired
+separately, and permits a later same-generation schedule and second retirement.
+Missing due origins, overdue forecasts, unresolved due work, unaccepted
+production, or unobserved accepted states invalidate due-chain conservation.
+The binary trace does not itself record the corresponding GRPL republish; a
+later Character schedule is evidence of reentry, not direct republish proof.
+Server and client steady clocks have unrelated origins, so cross-host
+due-to-handler latency and phase-long drift remain `NOT_MEASURED`. This
+role-local result alone is not Foundation 3L acceptance.
 
 This artifact is diagnostic-only until its timing cost is qualified against a
 full 32-client workload. A Release MSVC/GNS microbenchmark on the worker,

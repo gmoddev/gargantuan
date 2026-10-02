@@ -32,11 +32,26 @@ class FarmPublicationTraceTests(unittest.TestCase):
 
     def test_server_due_and_scheduler_acceptance_are_retained(self):
         self.Path = Path(self.Temp.name) / "publication-service.bin"
-        self.Write([self.Record(1, 50), self.Record(3, 75), self.Record(8, 100)],
+        Retired = RECORD.pack(11, 0, 1, 1, 8, 2, 0,
+                              110, 200, 0, 0, 0, 0, 0)
+        self.Write([self.Record(1, 50), self.Record(3, 75), self.Record(8, 100), Retired],
                    Role="SERVER", Slot=-1, Nonce=0)
         Value = Validate(self.Path, "run-a", "SERVER")
-        self.assertEqual(Value["Stages"], {1: 1, 3: 1, 8: 1})
+        self.assertEqual(Value["Stages"], {1: 1, 3: 1, 8: 1, 11: 1})
         self.assertEqual(Value["CrossHostLatency"], "NOT_MEASURED")
+
+    def test_rejects_retirement_with_packet_fields_or_client_role(self):
+        Retired = RECORD.pack(11, 0, 1, 1, 8, 2, 0,
+                              110, 200, 0, 0, 0, 0, 0)
+        self.Write([self.Record(9, 100), Retired, self.Record(10, 150)])
+        with self.assertRaises(ValueError):
+            Validate(self.Path, "run-a", "CLIENT", 0, 17)
+        self.Path = Path(self.Temp.name) / "publication-service.bin"
+        Bad = RECORD.pack(11, 0, 1, 1, 8, 2, 74,
+                          110, 200, 19, 0, 3, 7, 11)
+        self.Write([self.Record(8, 100), Bad], Role="SERVER", Slot=-1, Nonce=0)
+        with self.assertRaises(ValueError):
+            Validate(self.Path, "run-a", "SERVER")
 
     def test_rejects_overflow_decode_failure_and_truncation(self):
         for Dropped, DecodeFailures in ((1, 0), (0, 1)):

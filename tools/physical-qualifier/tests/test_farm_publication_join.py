@@ -38,6 +38,9 @@ class FarmPublicationJoinTests(unittest.TestCase):
     def ClientRecord(self, Stage, Ns, **Values):
         return self.Record(Stage, Ns, CS=1, CG=1, **Values)
 
+    def Retirement(self, Ns, OS=9, OG=2, Tick=101, CS=17, CG=2):
+        return self.Record(11, Ns, CS=CS, CG=CG, OS=OS, OG=OG, Tick=Tick)
+
     def OrdinaryServer(self):
         R = self.Record
         return [R(1, 100, CS=0, CG=0, OS=0, OG=0, Tick=100),
@@ -87,8 +90,8 @@ class FarmPublicationJoinTests(unittest.TestCase):
         self.assertEqual(Result["Server"]["Accepted"], 1)
         self.assertEqual(Result["ServerDueToAccepted"]["MaximumNs"], 50)
         self.assertEqual(Result["ClientReceiveToHandled"]["MaximumNs"], 100)
-        self.assertEqual(Result["Retirement"], "NOT_MEASURED")
-        self.assertEqual(Result["DueCompleteness"], "NOT_MEASURED")
+        self.assertEqual(Result["Retirement"], "NONE_OBSERVED")
+        self.assertEqual(Result["DueCompleteness"], "OBSERVED")
         self.assertEqual(Result["CrossHostDueToHandled"], "NOT_MEASURED")
         self.assertLess(Result["ScratchPages"], MAX_DATABASE_PAGES)
         self.assertGreater(Result["ScratchPeakDatabaseBytes"], 0)
@@ -166,11 +169,93 @@ class FarmPublicationJoinTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     self.Analyze()
 
-    def test_unresolved_due_or_retired_without_native_evidence_fails(self):
+    def test_unresolved_due_without_accepted_leave_fails(self):
         R = self.Record
         self.ServerRecords += [R(3, 270, OS=9, Due=101)]
         self.Write()
         with self.assertRaisesRegex(ValueError, "conservation incomplete"):
+            self.Analyze()
+
+    def test_accepted_leave_retires_only_prior_confirmed_due(self):
+        self.ServerRecords += [self.Record(3, 270, OS=9, Due=101),
+                               self.Retirement(280)]
+        self.Write()
+        Result = self.Analyze()
+        self.assertEqual(Result["Server"]["Due"], 2)
+        self.assertEqual(Result["Server"]["DueAccepted"], 1)
+        self.assertEqual(Result["Server"]["RetiredDue"], 1)
+        self.assertEqual(Result["Server"]["RetiredPending"], 1)
+        self.assertEqual(Result["Retirement"], "OBSERVED")
+        self.assertEqual(Result["DueCompleteness"], "OBSERVED")
+
+    def test_wrong_generation_leave_cannot_cancel_due_work(self):
+        self.ServerRecords += [self.Record(3, 270, OS=9, Due=101),
+                               self.Retirement(280, OG=3)]
+        self.Write()
+        with self.assertRaisesRegex(ValueError, "conservation incomplete"):
+            self.Analyze()
+
+    def test_same_generation_reentry_and_second_retirement(self):
+        self.ServerRecords[-1] = self.Record(2, 260, Due=110)
+        self.ServerRecords += [self.Record(3, 270, OS=9, Due=101),
+                               self.Retirement(280),
+                               self.Record(1, 300, CS=0, CG=0, OS=0, OG=0, Tick=102),
+                               self.Record(2, 310, OS=9, Tick=102, Due=103),
+                               self.Record(1, 400, CS=0, CG=0, OS=0, OG=0, Tick=103),
+                               self.Record(3, 410, OS=9, Tick=103, Due=103),
+                               self.Retirement(420, Tick=103)]
+        self.Write()
+        Result = self.Analyze()
+        self.assertEqual(Result["Server"]["Retired"], 2)
+        self.assertEqual(Result["Server"]["RetiredDue"], 2)
+        self.assertEqual(Result["Server"]["Due"], 3)
+        self.assertEqual(Result["Server"]["DueAccepted"], 1)
+
+    def test_same_due_tick_may_reenter_after_retirement(self):
+        self.ServerRecords[-1] = self.Record(2, 260, Due=110)
+        self.ServerRecords += [self.Record(3, 270, OS=9, Due=101),
+                               self.Retirement(280),
+                               self.Record(1, 300, CS=0, CG=0, OS=0, OG=0, Tick=102),
+                               self.Record(3, 310, OS=9, Tick=102, Due=101),
+                               self.Retirement(320, Tick=102)]
+        self.Write()
+        Result = self.Analyze()
+        self.assertEqual(Result["Server"]["Due"], 3)
+        self.assertEqual(Result["Server"]["RetiredDue"], 2)
+
+    def test_forecast_retirement_is_not_confirmed_due_retirement(self):
+        self.ServerRecords[2:2] = [self.Record(2, 120, OS=9, Tick=100, Due=101)]
+        self.ServerRecords += [self.Retirement(270)]
+        self.Write()
+        Result = self.Analyze()
+        self.assertEqual(Result["Server"]["RetiredPending"], 1)
+        self.assertEqual(Result["Server"]["RetiredDue"], 0)
+        self.assertEqual(Result["Server"]["Due"], 1)
+
+    def test_duplicate_retirement_without_reentry_fails(self):
+        self.ServerRecords += [self.Retirement(270), self.Retirement(280)]
+        self.Write()
+        with self.assertRaisesRegex(ValueError, "duplicate retirement"):
+            self.Analyze()
+
+    def test_retirement_does_not_hide_unaccepted_or_unobserved_state(self):
+        Unaccepted = self.ServerRecords[:7] + [self.Retirement(245, OS=8)]
+        self.Write(ServerRecords=Unaccepted)
+        with self.assertRaises(ValueError):
+            self.Analyze()
+        self.Write(ServerRecords=self.ServerRecords + [self.Retirement(270, OS=8)],
+                   ClientRecords=self.ClientRecords[:1])
+        with self.assertRaises(ValueError):
+            self.Analyze()
+
+    def test_overdue_forecast_and_missing_due_origin_fail(self):
+        self.ServerRecords += [self.Record(2, 270, OS=9, Due=101)]
+        self.Write()
+        with self.assertRaisesRegex(ValueError, "conservation incomplete"):
+            self.Analyze()
+        self.ServerRecords[-1] = self.Record(3, 270, OS=9, Due=99)
+        self.Write()
+        with self.assertRaisesRegex(ValueError, "FrameBegin origin"):
             self.Analyze()
 
     def test_wrong_run_slot_nonce_and_overflow_fail(self):
