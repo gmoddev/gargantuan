@@ -42,15 +42,34 @@ retained bytes from the prior reconciler's hash-verified index. This establishes
 only the bounded role-local evidence set. It does not establish capture
 retention, long-running resource stability, or production journal retention.
 
+The report independently re-reads the indexed Server `server.stdout.log`
+native admission receipt and `admission-fairness.tsv` timeline, then compares
+every final admission field and the full parsed fairness observation with the
+reconciliation JSON. It rejects a rehashed timeline or plausible numeric
+report change that differs from the native source. The per-provider admission
+section reports exact terminal accepted/retired/debt conservation, observed
+grant and credit high-water against their existing 4-grant, 512-KiB peer and
+2-MiB global limits, backlog/deferral counters, and observed per-generation
+eligibility waits. These are bounded subsets. A maximum observed wait by itself
+does not establish the canonical fairness verdict or overload backpressure.
+
+For Node, the report also checks the indexed authenticated manifest RPC
+receipt against the run manifest and reconciliation fields. It preserves
+`RealTls=NOT_MEASURED`: `grpc_ssl_credentials` and a matching root pin do not
+constitute a negotiated TLS-session or full provider provenance proof. Local
+evidence containing a Node receipt is rejected. Source, workload and
+deployment pin parity is measured; complete application/provider parity is not.
+
 The report records the already typed five-phase observations and final native
 admission conservation as measured subsets. It intentionally remains
 `INCOMPLETE` / `Foundation3LQualification=NOT CLAIMED`. Current role-local
 evidence does **not** establish canonical CPU/memory/network headroom, fixed
 20-second recovery, workload-derived exact convergence timing, journal
-retention margin under overload, full provider parity, or negotiated real-TLS
-transport details. Those gates remain `NOT MEASURED` until their own bounded
-typed traces and acceptance analyzers exist. A Node authenticated manifest RPC
-receipt is a separate observation, not a full TLS transcript.
+retention margin under overload, full fairness/backpressure, full provider
+parity, or negotiated real-TLS transport details. Terminal zero journal backlog
+and zero failures do not establish the high-water retention margin. Those gates
+remain `NOT MEASURED` until their own bounded typed traces and acceptance
+analyzers exist.
 
 The 4/8-GiB available-memory preflight and the endpoint's per-process/aggregate
 working-set limits are protective run bounds, not a final host-memory acceptance

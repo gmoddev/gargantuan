@@ -2,6 +2,7 @@
 # Socket-free acceptance-observation tests; no provider or physical run starts.
 $ErrorActionPreference = 'Stop'
 $Analyzer = Join-Path $PSScriptRoot 'PhysicalGameSessionFarmAcceptance.ps1'
+. (Join-Path $PSScriptRoot 'AdmissionFairnessEvidence.ps1')
 $Tokens = $null
 $Errors = $null
 [void][Management.Automation.Language.Parser]::ParseFile($Analyzer, [ref]$Tokens, [ref]$Errors)
@@ -84,6 +85,20 @@ function Save-HostRows {
 	$Rows | Export-Csv -LiteralPath (Join-Path $Root 'host-resources.csv') -NoTypeInformation
 }
 
+function Save-FairnessRows {
+	param([string]$Root, [string]$RunId, [string[]]$Connections)
+	$Path = Join-Path $Root 'admission-fairness.tsv'
+	$Lines = @(
+		"format=GargantuanAdmissionEvidenceV1`trun=$RunId",
+		(@('event', 'exact_demand', 'none', 1, 1, 1, 0, 0, 8192, 1000, 0, 0, 0, 0, 0, 0, 0, 0, 0) -join "`t"),
+		(@('event', 'credit_eligible', 'none', 1, 1, 1, 1, 0, 8192, 1100, 1050, 1100, 8192, 8192, 0, 0, 0, 0, 0) -join "`t"),
+		(@('event', 'grant_accepted', 'none', 1, 1, 1, 1, 1, 8192, 1300, 1050, 1100, 0, 0, 1, 0, 0, 0, 0) -join "`t"),
+		"end`t3`t0"
+	)
+	[IO.File]::WriteAllText($Path, ($Lines -join "`n") + "`n", [Text.UTF8Encoding]::new($false))
+	return (Read-AdmissionFairnessEvidence -Path $Path -RunId $RunId -ExpectedConnections $Connections)
+}
+
 function New-RunFixture {
 	param([string]$Prefix, [string]$Provider, [string]$RunId)
 	$ServerRoot = Join-Path $TestRoot "$Prefix-server"
@@ -111,6 +126,30 @@ function New-RunFixture {
 	}
 	$ServerSamples = Save-ResourceRows -Root $ServerRoot -RunId $RunId -Role 'Server'
 	$ClientSamples = Save-ResourceRows -Root $ClientRoot -RunId $RunId -Role 'Clients'
+	$Connections = @(1..32 | ForEach-Object { "$_`:1" })
+	$Fairness = Save-FairnessRows -Root $ServerRoot -RunId $RunId -Connections $Connections
+	$NodeAuthentication = [ordered]@{ State = 'NOT_APPLICABLE' }
+	if ($Provider -eq 'Node') {
+		$NodeReceipt = [ordered]@{
+			Format = 'GargantuanFarmNodeAuthenticatedManifest'; Version = 2
+			RunId = $RunId; Provider = 'Node'; RequestId = 'server-content-1'
+			ProjectId = '0123456789abcdef0123456789abcdef'; PackageVersion = 37L
+			NodeEndpoint = $Manifest.NodeEndpoint
+			RootCertificateSha256 = $Manifest.NodeRootCertificateSha256
+			ManifestSha256 = $Manifest.ServerContentManifestSha256; ManifestBytes = 512L
+			AuthenticatedManifestRpcCount = 1L; ChannelCredentials = 'grpc_ssl_credentials'
+			TlsSessionDetails = 'NOT_MEASURED'; Source = 'GargantuanServer/NodeContentProvider'
+		}
+		Save-Json -Path (Join-Path $ServerRoot 'node-provider.json') -Value $NodeReceipt
+		$NodeAuthentication = [ordered]@{
+			State = 'AUTHENTICATED_MANIFEST_RPC_MEASURED'
+			RequestId = $NodeReceipt.RequestId; ProjectId = $NodeReceipt.ProjectId
+			PackageVersion = $NodeReceipt.PackageVersion
+			ManifestSha256 = $NodeReceipt.ManifestSha256
+			RootCertificateSha256 = $NodeReceipt.RootCertificateSha256
+			TlsSessionDetails = 'NOT_MEASURED'
+		}
+	}
 	foreach ($RoleRoot in @($ServerRoot, $ClientRoot)) {
 		$RoleName = if ($RoleRoot -eq $ServerRoot) { 'Server' } else { 'Clients' }
 		Save-Json -Path (Join-Path $RoleRoot 'result.json') -Value ([ordered]@{
@@ -120,6 +159,8 @@ function New-RunFixture {
 	}
 	Save-HostRows -Root $ServerRoot -RunId $RunId -Role 'Server' -Provider $Provider
 	Save-HostRows -Root $ClientRoot -RunId $RunId -Role 'Clients' -Provider $Provider
+	$AdmissionLine = "[Qualification:Admission] event=result run=$RunId accepted=8192 retired=8192 terminal_release=0 outstanding=0 outstanding_high=2048 active_grants=0 grants_high=2 grant_deferrals=3 funded_deferrals=2 credit_deferrals=1 fairness_deferrals=1 max_wait_us=1000 peer_backlog_high=2048 global_backlog_high=8192 peer_credit_high=2048 global_credit_high=8192 fairness_rotations=1 pending_enters=0 pending_leaves=0 materialization_backlog=0 journal_backlog=0 structural_active_peers=0 oldest_pending_ticks=0 backlog_failures=0 journal_failures=0"
+	[IO.File]::WriteAllText((Join-Path $ServerRoot 'server.stdout.log'), "$AdmissionLine`n")
 	Save-Index -Root $ServerRoot -RunId $RunId -Role 'Server'
 	Save-Index -Root $ClientRoot -RunId $RunId -Role 'Clients'
 	$Report = [ordered]@{
@@ -129,9 +170,19 @@ function New-RunFixture {
 		ServerEvidenceSha256 = (Get-FileHash -LiteralPath (Join-Path $ServerRoot 'evidence-sha256.json') -Algorithm SHA256).Hash.ToLowerInvariant()
 		ClientEvidenceSha256 = (Get-FileHash -LiteralPath (Join-Path $ClientRoot 'evidence-sha256.json') -Algorithm SHA256).Hash.ToLowerInvariant()
 		Status = 'INCOMPLETE'; RoleLocalEvidence = 'VALIDATED'; ProviderQualification = 'NOT CLAIMED'
-		Identity = @{ Ready = 32 }; Admission = @{
-			accepted = 8192; retired = 8192; terminal_release = 0; outstanding = 0; active_grants = 0
+		Identity = @{ Ready = 32; Connections = $Connections }
+		Admission = @{
+			accepted = 8192; retired = 8192; terminal_release = 0; outstanding = 0
+			outstanding_high = 2048; active_grants = 0; grants_high = 2
+			grant_deferrals = 3; funded_deferrals = 2; credit_deferrals = 1
+			fairness_deferrals = 1; max_wait_us = 1000; peer_backlog_high = 2048
+			global_backlog_high = 8192; peer_credit_high = 2048; global_credit_high = 8192
+			fairness_rotations = 1; pending_enters = 0; pending_leaves = 0
+			materialization_backlog = 0; journal_backlog = 0; structural_active_peers = 0
+			oldest_pending_ticks = 0; backlog_failures = 0; journal_failures = 0
 		}
+		AdmissionFairnessObservation = $Fairness
+		NodeAuthenticatedManifest = $NodeAuthentication
 		ServerResourceSamples = $ServerSamples; ClientResourceSamples = $ClientSamples
 		ServerHostResourceSamples = 2; ClientHostResourceSamples = 2
 	}
@@ -186,7 +237,11 @@ try {
 		$Observed.Local.Resources.ClientHost.MaximumObservedSimultaneousOwnedWorkingSetBytes -ne 32050000 -or
 		$Observed.Node.Resources.ServerHost.MaximumObservedHostCpuPercent -lt 66 -or
 		$Observed.Local.Resources.ServerHost.MaximumObservedNicSentBytesPerSecond -ne 10000000 -or
-		@($Observed.GateObservations | Where-Object { $_.State -eq 'NOT MEASURED' }).Count -ne 5) {
+		$Observed.Local.Admission.MaximumActiveGrants -ne 2 -or
+		$Observed.Local.Admission.Fairness.MaximumObservedEligibilityToGrantMicroseconds -ne 200 -or
+		$Observed.Node.Provider.State -cne 'AUTHENTICATED_MANIFEST_RPC_MEASURED' -or
+		$Observed.Node.Provider.RealTls -cne 'NOT_MEASURED' -or
+		@($Observed.GateObservations | Where-Object { $_.State -eq 'NOT MEASURED' }).Count -ne 6) {
 		throw "resource/parity observation promoted a missing physical gate or lost resource evidence: status=$($Observed.Status) claim=$($Observed.Foundation3LQualification) parity=$($Observed.WorkloadPinParity.State) clients=$($Observed.Local.Resources.Clients.ProcessCount) server=$($Observed.Node.Resources.Server.ProcessCount) ws=$($Observed.Local.Resources.Clients.SumOfPerProcessPeakWorkingSetBytes) missing=$(@($Observed.GateObservations | Where-Object { $_.State -eq 'NOT MEASURED' }).Count)"
 	}
 	$OriginalOutput = [IO.File]::ReadAllText($OutputPath)
@@ -195,6 +250,44 @@ try {
 	if (-not $OverwriteRejected -or [IO.File]::ReadAllText($OutputPath) -cne $OriginalOutput) {
 		throw 'existing acceptance observation was overwritten'
 	}
+	$OriginalNodeReport = [IO.File]::ReadAllText($Node.ReportPath)
+	$Node.Report.Admission.grants_high = 5
+	Save-Json -Path $Node.ReportPath -Value $Node.Report
+	Assert-Rejected -Name 'forged five-grant high-water' -OutputPath (Join-Path $TestRoot 'five-grants.json')
+	$Node.Report.Admission.grants_high = 2
+	$Node.Report.Admission.fairness_deferrals = 2
+	Save-Json -Path $Node.ReportPath -Value $Node.Report
+	Assert-Rejected -Name 'forged admission counter within bounds' -OutputPath (Join-Path $TestRoot 'false-counter.json')
+	$Node.Report.Admission.fairness_deferrals = 1
+	$Node.Report.AdmissionFairnessObservation.MaximumObservedEligibilityToGrantMicroseconds = 0
+	Save-Json -Path $Node.ReportPath -Value $Node.Report
+	Assert-Rejected -Name 'forged fairness wait' -OutputPath (Join-Path $TestRoot 'false-fairness.json')
+	$Node.Report.AdmissionFairnessObservation.MaximumObservedEligibilityToGrantMicroseconds = 200
+	[IO.File]::WriteAllText($Node.ReportPath, $OriginalNodeReport)
+	$FairnessPath = Join-Path $Node.ServerRoot 'admission-fairness.tsv'
+	$OriginalFairness = [IO.File]::ReadAllText($FairnessPath)
+	[IO.File]::WriteAllText($FairnessPath, $OriginalFairness.Replace("grant_accepted`tnone`t1`t1`t1`t1`t1`t8192`t1300", "grant_accepted`tnone`t1`t1`t1`t1`t1`t8192`t1400"))
+	Save-Index -Root $Node.ServerRoot -RunId $Node.Report.RunId -Role 'Server'
+	$Node.Report.ServerEvidenceSha256 = (Get-FileHash -LiteralPath (Join-Path $Node.ServerRoot 'evidence-sha256.json') -Algorithm SHA256).Hash.ToLowerInvariant()
+	Save-Json -Path $Node.ReportPath -Value $Node.Report
+	Assert-Rejected -Name 'rehashed native fairness timeline differs from report' -OutputPath (Join-Path $TestRoot 'rehashed-fairness.json')
+	[IO.File]::WriteAllText($FairnessPath, $OriginalFairness)
+	Save-Index -Root $Node.ServerRoot -RunId $Node.Report.RunId -Role 'Server'
+	$Node.Report.ServerEvidenceSha256 = (Get-FileHash -LiteralPath (Join-Path $Node.ServerRoot 'evidence-sha256.json') -Algorithm SHA256).Hash.ToLowerInvariant()
+	Save-Json -Path $Node.ReportPath -Value $Node.Report
+	$ProviderPath = Join-Path $Node.ServerRoot 'node-provider.json'
+	$OriginalProvider = [IO.File]::ReadAllText($ProviderPath)
+	$ProviderReceipt = Get-Content -LiteralPath $ProviderPath -Raw | ConvertFrom-Json -AsHashtable
+	$ProviderReceipt.RequestId = 'server-content-2'
+	Save-Json -Path $ProviderPath -Value $ProviderReceipt
+	Save-Index -Root $Node.ServerRoot -RunId $Node.Report.RunId -Role 'Server'
+	$Node.Report.ServerEvidenceSha256 = (Get-FileHash -LiteralPath (Join-Path $Node.ServerRoot 'evidence-sha256.json') -Algorithm SHA256).Hash.ToLowerInvariant()
+	Save-Json -Path $Node.ReportPath -Value $Node.Report
+	Assert-Rejected -Name 'rehashed Node provider receipt differs from report' -OutputPath (Join-Path $TestRoot 'rehashed-provider.json')
+	[IO.File]::WriteAllText($ProviderPath, $OriginalProvider)
+	Save-Index -Root $Node.ServerRoot -RunId $Node.Report.RunId -Role 'Server'
+	$Node.Report.ServerEvidenceSha256 = (Get-FileHash -LiteralPath (Join-Path $Node.ServerRoot 'evidence-sha256.json') -Algorithm SHA256).Hash.ToLowerInvariant()
+	Save-Json -Path $Node.ReportPath -Value $Node.Report
 	$LimitPath = Join-Path $Node.ClientRoot 'result.json'
 	$OriginalLimit = [IO.File]::ReadAllText($LimitPath)
 	$Limited = Get-Content -LiteralPath $LimitPath -Raw | ConvertFrom-Json -AsHashtable

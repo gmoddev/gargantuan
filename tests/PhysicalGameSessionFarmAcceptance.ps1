@@ -13,6 +13,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'AdmissionFairnessEvidence.ps1')
 
 function Read-BoundedJson {
 	param([string]$Path, [long]$MaximumBytes = 1048576)
@@ -24,14 +25,15 @@ function Read-BoundedJson {
 }
 
 function Assert-IndexedFile {
-	param([string]$Root, [System.Collections.IDictionary]$Index, [string]$Name)
+	param([string]$Root, [System.Collections.IDictionary]$Index, [string]$Name,
+		[long]$MaximumBytes = 16777216)
 	$Entries = @($Index.Files | Where-Object Name -CEQ $Name)
 	if ($Entries.Count -ne 1) { throw "immutable evidence index lacks one $Name" }
 	$Entry = $Entries[0]
 	$Path = Join-Path $Root $Name
 	$Item = Get-Item -LiteralPath $Path -ErrorAction Stop
 	if ($Item.PSIsContainer -or $Item.Attributes.HasFlag([IO.FileAttributes]::ReparsePoint) -or
-		$Item.Length -ne [long]$Entry.Bytes -or $Item.Length -gt 16777216 -or
+		$Item.Length -ne [long]$Entry.Bytes -or $Item.Length -gt $MaximumBytes -or
 		[string]$Entry.Sha256 -cnotmatch '^[a-fA-F0-9]{64}$' -or
 		(Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash -ine $Entry.Sha256) {
 		throw "immutable evidence $Name does not match its index"
@@ -61,22 +63,56 @@ function Read-RoleEvidence {
 		throw "$Role run manifest does not match the reconciliation report"
 	}
 	$ResourcePath = Assert-IndexedFile -Root $Resolved -Index $Index -Name 'process-resources.csv'
+	$ServerLogPath = $null
 	$ResultPath = Assert-IndexedFile -Root $Resolved -Index $Index -Name 'result.json'
 	$Result = Read-BoundedJson -Path $ResultPath
 	if ($Result.RunId -cne $Report.RunId -or $Result.Role -cne $Role -or
 		$Result.Status -cne 'PASS') { throw "$Role sealed role result is invalid" }
 	$HostResourcePath = Assert-IndexedFile -Root $Resolved -Index $Index -Name 'host-resources.csv'
+	$FairnessPath = $null
+	$NodeProviderPath = $null
+	if ($Role -ceq 'Server') {
+		$ServerLogPath = Assert-IndexedFile -Root $Resolved -Index $Index -Name 'server.stdout.log'
+		$FairnessPath = Assert-IndexedFile -Root $Resolved -Index $Index `
+			-Name 'admission-fairness.tsv' -MaximumBytes 33554432
+		if ($Report.Provider -ceq 'Node') {
+			$NodeProviderPath = Assert-IndexedFile -Root $Resolved -Index $Index -Name 'node-provider.json'
+		} elseif (@($Index.Files | Where-Object Name -CEQ 'node-provider.json').Count -ne 0) {
+			throw 'Local role evidence unexpectedly contains a Node provider receipt'
+		}
+	}
 	$IndexedBytes = [long]0
+	$Names = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
 	foreach ($Entry in $Index.Files) {
 		if ([string]$Entry.Name -cnotmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$' -or
-			[long]$Entry.Bytes -lt 0 -or [long]$Entry.Bytes -gt 33554432) {
+			$Entry.Name -ieq 'evidence-sha256.json' -or
+			-not $Names.Add([string]$Entry.Name) -or [long]$Entry.Bytes -lt 0 -or
+			[long]$Entry.Bytes -gt $(if ($Role -ceq 'Server' -and
+				$Entry.Name -ceq 'admission-fairness.tsv') { 33554432 } else { 16777216 })) {
 			throw "$Role evidence index has an invalid retained-file bound"
+		}
+		$EntryPath = Join-Path $Resolved $Entry.Name
+		$EntryItem = Get-Item -LiteralPath $EntryPath -ErrorAction Stop
+		if ($EntryItem.PSIsContainer -or
+			$EntryItem.Attributes.HasFlag([IO.FileAttributes]::ReparsePoint) -or
+			$EntryItem.Length -ne [long]$Entry.Bytes -or
+			[string]$Entry.Sha256 -cnotmatch '^[a-fA-F0-9]{64}$' -or
+			(Get-FileHash -LiteralPath $EntryPath -Algorithm SHA256).Hash -ine $Entry.Sha256) {
+			throw "$Role indexed evidence $($Entry.Name) differs from its sealed bytes"
 		}
 		$IndexedBytes += [long]$Entry.Bytes
 	}
+	$Actual = @(Get-ChildItem -LiteralPath $Resolved -Force)
+	if ($Actual.Count -ne $Names.Count + 1 -or
+		@($Actual | Where-Object { $_.Name -ine 'evidence-sha256.json' -and
+			-not $Names.Contains($_.Name) }).Count -ne 0) {
+		throw "$Role evidence index does not cover the complete role-local root"
+	}
 	return [pscustomobject]@{
 		Root = $Resolved; Manifest = (Read-BoundedJson -Path $ManifestPath); Result = $Result
-		ResourcePath = $ResourcePath; HostResourcePath = $HostResourcePath; Index = $Index
+		ResourcePath = $ResourcePath; HostResourcePath = $HostResourcePath
+		FairnessPath = $FairnessPath; NodeProviderPath = $NodeProviderPath
+		ServerLogPath = $ServerLogPath; Index = $Index
 		IndexedFiles = $Index.Files.Count; IndexedBytes = $IndexedBytes
 	}
 }
@@ -331,6 +367,142 @@ function Read-HostResourceObservation {
 		Intervals = @($Intervals) }
 }
 
+function Read-AdmissionObservation {
+	param([System.Collections.IDictionary]$Report, [string]$FairnessPath, [string]$ServerLogPath)
+	$Admission = $Report.Admission
+	$Names = @('accepted', 'retired', 'terminal_release', 'outstanding', 'outstanding_high',
+		'active_grants', 'grants_high', 'grant_deferrals', 'funded_deferrals',
+		'credit_deferrals', 'fairness_deferrals', 'max_wait_us', 'peer_backlog_high',
+		'global_backlog_high', 'peer_credit_high', 'global_credit_high',
+		'fairness_rotations', 'pending_enters', 'pending_leaves',
+		'materialization_backlog', 'journal_backlog', 'structural_active_peers',
+		'oldest_pending_ticks', 'backlog_failures', 'journal_failures')
+	if ($Admission -isnot [System.Collections.IDictionary] -or
+		@($Names | Where-Object { -not $Admission.Contains($_) }).Count -ne 0) {
+		throw 'reconciliation lacks complete native admission fields'
+	}
+	foreach ($Name in $Names) {
+		if ($Admission[$Name] -isnot [ValueType] -or
+			[string]$Admission[$Name] -cnotmatch '^(0|[1-9][0-9]*)$') {
+			throw "reconciliation has invalid native admission $Name"
+		}
+	}
+	$Lines = @([IO.File]::ReadAllLines($ServerLogPath) | Where-Object {
+		$_.StartsWith('[Qualification:Admission] event=result ', [StringComparison]::Ordinal)
+	})
+	if ($Lines.Count -ne 1) { throw 'indexed server log lacks one final native admission receipt' }
+	$Native = [Collections.Generic.Dictionary[string, string]]::new([StringComparer]::Ordinal)
+	foreach ($Token in $Lines[0].Substring('[Qualification:Admission] '.Length).Split(' ')) {
+		$Parts = $Token.Split('=', 2)
+		if ($Parts.Count -ne 2 -or -not $Native.TryAdd($Parts[0], $Parts[1])) {
+			throw 'indexed native admission receipt contains duplicate or malformed fields'
+		}
+	}
+	if ($Native['event'] -cne 'result' -or $Native['run'] -cne $Report.RunId) {
+		throw 'indexed native admission receipt has a different run identity'
+	}
+	foreach ($Name in $Names) {
+		if (-not $Native.ContainsKey($Name) -or
+			$Native[$Name] -cne [string]$Admission[$Name]) {
+			throw "reconciled admission $Name differs from indexed native receipt"
+		}
+	}
+	if ($Admission.accepted -le 0 -or $Admission.accepted -ne $Admission.retired -or
+		$Admission.terminal_release -ne 0 -or $Admission.outstanding -ne 0 -or
+		$Admission.active_grants -ne 0 -or $Admission.grants_high -lt 1 -or
+		$Admission.grants_high -gt 4 -or $Admission.outstanding_high -gt 2097152 -or
+		$Admission.peer_credit_high -gt 524288 -or
+		$Admission.global_credit_high -gt 2097152 -or
+		$Admission.materialization_backlog -ne 0 -or $Admission.journal_backlog -ne 0 -or
+		$Admission.structural_active_peers -ne 0 -or
+		$Admission.backlog_failures -ne 0 -or $Admission.journal_failures -ne 0) {
+		throw 'native admission conservation or canonical bounded subset failed'
+	}
+	$Connections = @($Report.Identity.Connections)
+	if ($Connections.Count -ne 32 -or @($Connections | Select-Object -Unique).Count -ne 32) {
+		throw 'reconciliation lacks 32 distinct physical connection identities'
+	}
+	$ObservedFairness = Read-AdmissionFairnessEvidence -Path $FairnessPath `
+		-RunId $Report.RunId -ExpectedConnections $Connections
+	$RecordedFairness = $Report.AdmissionFairnessObservation
+	if ($null -eq $RecordedFairness -or
+		($ObservedFairness | ConvertTo-Json -Depth 10 -Compress) -cne
+		($RecordedFairness | ConvertTo-Json -Depth 10 -Compress)) {
+		throw 'reconciled admission fairness observation differs from sealed native timeline'
+	}
+	return [ordered]@{
+		Classification = 'TERMINAL_CONSERVATION_AND_BOUNDED_ADMISSION_SUBSETS_ONLY'
+		AcceptedBytes = [long]$Admission.accepted
+		RetiredBytes = [long]$Admission.retired
+		TerminalReleaseBytes = [long]$Admission.terminal_release
+		OutstandingBytes = [long]$Admission.outstanding
+		MaximumActiveGrants = [long]$Admission.grants_high
+		MaximumOutstandingBytes = [long]$Admission.outstanding_high
+		MaximumPeerCreditBytes = [long]$Admission.peer_credit_high
+		MaximumGlobalCreditBytes = [long]$Admission.global_credit_high
+		PeerBacklogHighBytes = [long]$Admission.peer_backlog_high
+		GlobalBacklogHighBytes = [long]$Admission.global_backlog_high
+		GrantDeferrals = [long]$Admission.grant_deferrals
+		FundedDeferrals = [long]$Admission.funded_deferrals
+		CreditDeferrals = [long]$Admission.credit_deferrals
+		FairnessDeferrals = [long]$Admission.fairness_deferrals
+		FairnessRotations = [long]$Admission.fairness_rotations
+		PendingEnters = [long]$Admission.pending_enters
+		PendingLeaves = [long]$Admission.pending_leaves
+		TerminalMaterializationBacklog = [long]$Admission.materialization_backlog
+		TerminalJournalBacklog = [long]$Admission.journal_backlog
+		JournalFailures = [long]$Admission.journal_failures
+		Fairness = $ObservedFairness
+	}
+}
+
+function Read-ProviderObservation {
+	param([System.Collections.IDictionary]$Report, [System.Collections.IDictionary]$Manifest,
+		[string]$NodeProviderPath)
+	if ($Report.Provider -ceq 'Local') {
+		if ($NodeProviderPath -or
+			$Report.NodeAuthenticatedManifest.State -cne 'NOT_APPLICABLE') {
+			throw 'Local provider has unexpected Node authentication evidence'
+		}
+		return [ordered]@{ State = 'LOCAL_PINNED_PACKAGE_ONLY'; RealTls = 'NOT_APPLICABLE' }
+	}
+	$Receipt = Read-BoundedJson -Path $NodeProviderPath
+	$Recorded = $Report.NodeAuthenticatedManifest
+	if ($Receipt.Format -cne 'GargantuanFarmNodeAuthenticatedManifest' -or
+		$Receipt.Version -ne 2 -or $Receipt.RunId -cne $Report.RunId -or
+		$Receipt.Provider -cne 'Node' -or
+		$Receipt.RequestId -cnotmatch '^server-content-[1-9][0-9]{0,19}$' -or
+		$Receipt.ProjectId -cnotmatch '^[a-f0-9]{32}$' -or
+		$Receipt.PackageVersion -isnot [long] -or $Receipt.PackageVersion -le 0 -or
+		$Receipt.NodeEndpoint -cne $Manifest.NodeEndpoint -or
+		$Receipt.RootCertificateSha256 -ine $Manifest.NodeRootCertificateSha256 -or
+		$Receipt.ManifestSha256 -ine $Manifest.ServerContentManifestSha256 -or
+		$Receipt.ManifestBytes -isnot [long] -or $Receipt.ManifestBytes -lt 1 -or
+		$Receipt.ManifestBytes -gt 4194304 -or
+		$Receipt.ChannelCredentials -cne 'grpc_ssl_credentials' -or
+		$Receipt.AuthenticatedManifestRpcCount -isnot [long] -or
+		$Receipt.AuthenticatedManifestRpcCount -lt 1 -or
+		$Receipt.AuthenticatedManifestRpcCount -gt 10000 -or
+		$Receipt.TlsSessionDetails -cne 'NOT_MEASURED' -or
+		$Receipt.Source -cne 'GargantuanServer/NodeContentProvider' -or
+		$Recorded.State -cne 'AUTHENTICATED_MANIFEST_RPC_MEASURED' -or
+		$Recorded.RequestId -cne $Receipt.RequestId -or
+		$Recorded.ProjectId -cne $Receipt.ProjectId -or
+		$Recorded.PackageVersion -ne $Receipt.PackageVersion -or
+		$Recorded.ManifestSha256 -ine $Receipt.ManifestSha256 -or
+		$Recorded.RootCertificateSha256 -ine $Receipt.RootCertificateSha256 -or
+		$Recorded.TlsSessionDetails -cne 'NOT_MEASURED') {
+		throw 'Node authenticated manifest subset differs from indexed provider receipt'
+	}
+	return [ordered]@{
+		State = 'AUTHENTICATED_MANIFEST_RPC_MEASURED'
+		RequestId = $Receipt.RequestId; ProjectId = $Receipt.ProjectId
+		PackageVersion = $Receipt.PackageVersion
+		RootCertificateSha256 = $Receipt.RootCertificateSha256
+		RealTls = 'NOT_MEASURED'
+	}
+}
+
 function Read-ProviderRun {
 	param([string]$ReportPath, [string]$ServerRoot, [string]$ClientRoot, [string]$ExpectedProvider)
 	$Report = Read-BoundedJson -Path $ReportPath
@@ -372,8 +544,13 @@ function Read-ProviderRun {
 		$ClientHost.InterfaceAddress -cne '10.253.3.1') {
 		throw 'Server/Clients host or fiber identity is invalid'
 	}
+	$Admission = Read-AdmissionObservation -Report $Report -FairnessPath $Server.FairnessPath `
+		-ServerLogPath $Server.ServerLogPath
+	$ProviderObservation = Read-ProviderObservation -Report $Report -Manifest $Manifest `
+		-NodeProviderPath $Server.NodeProviderPath
 	return [pscustomobject]@{
 		Report = $Report; Manifest = $Manifest
+		Admission = $Admission; ProviderObservation = $ProviderObservation
 		Resources = [ordered]@{ Server = $ServerResources; Clients = $ClientResources
 			ServerHost = $ServerHost; ClientHost = $ClientHost }
 		EvidenceRetention = [ordered]@{
@@ -417,21 +594,27 @@ $Observed = [ordered]@{
 	}
 	Local = [ordered]@{
 		Ready = $Local.Report.Identity.Ready; AcceptedBytes = $Local.Report.Admission.accepted
-		RetiredBytes = $Local.Report.Admission.retired; Resources = $Local.Resources
+		RetiredBytes = $Local.Report.Admission.retired; Admission = $Local.Admission
+		Provider = $Local.ProviderObservation; Resources = $Local.Resources
 		EvidenceRetention = $Local.EvidenceRetention
 	}
 	Node = [ordered]@{
 		Ready = $Node.Report.Identity.Ready; AcceptedBytes = $Node.Report.Admission.accepted
-		RetiredBytes = $Node.Report.Admission.retired; Resources = $Node.Resources
+		RetiredBytes = $Node.Report.Admission.retired; Admission = $Node.Admission
+		Provider = $Node.ProviderObservation; Resources = $Node.Resources
 		EvidenceRetention = $Node.EvidenceRetention
 	}
 	GateObservations = @(
 		[ordered]@{ Gate = 'Cross-provider exact workload/deployment pin parity'; State = 'MEASURED' },
+		[ordered]@{ Gate = 'Per-provider terminal native admission/debt conservation and bounded grants/credit'; State = 'MEASURED'; Reason = 'sealed final receipt, not an intra-run service or fairness bound' },
+		[ordered]@{ Gate = 'Per-provider exact-demand fairness event identity and observed eligibility waits'; State = 'MEASURED'; Reason = 'sealed native timeline, no canonical maximum-wait verdict from an observed maximum alone' },
+		[ordered]@{ Gate = 'Node authenticated manifest RPC and root/content pins'; State = 'MEASURED'; Reason = 'indexed provider receipt; negotiated TLS session remains unmeasured' },
 		[ordered]@{ Gate = 'Role-local bounded process sampling'; State = 'MEASURED' },
 		[ordered]@{ Gate = 'Complete-sweep role-local working set within supervisor limit'; State = $(if ($Local.Resources.Server.CompleteSweepCount -gt 0 -and $Local.Resources.Clients.CompleteSweepCount -gt 0 -and $Node.Resources.Server.CompleteSweepCount -gt 0 -and $Node.Resources.Clients.CompleteSweepCount -gt 0) { 'MEASURED' } else { 'NOT MEASURED' }); Reason = 'sequential per-process sweep; not a synchronized host memory or network headroom result' },
 		[ordered]@{ Gate = 'Role-local host CPU, memory, simultaneous owned processes, and fiber NIC counters'; State = 'MEASURED' },
 		[ordered]@{ Gate = 'Role-local indexed evidence byte/file bounds'; State = 'MEASURED' },
 		[ordered]@{ Gate = 'Five-phase observation and terminal native admission conservation'; State = 'MEASURED' },
+		[ordered]@{ Gate = 'Full fairness, overload backpressure and journal retention margin'; State = 'NOT MEASURED'; Reason = 'terminal counters and exact-demand event waits do not prove saturated service, continuous backlog bounds, or the journal high-water margin' },
 		[ordered]@{ Gate = 'CPU, memory, network and transport headroom'; State = 'NOT MEASURED'; Reason = 'bounded host/NIC snapshots describe utilization, but no canonical CPU/memory/NIC pass percentage or concurrent packet-level reserve proof follows from those samples' },
 		[ordered]@{ Gate = 'Fixed 20-second service recovery'; State = 'NOT MEASURED'; Reason = 'no independently timed recovery workload or native recovery trace' },
 		[ordered]@{ Gate = 'Workload-derived exact structural convergence'; State = 'NOT MEASURED'; Reason = 'phase observations and final debt do not locate final accepted byte versus client observation' },
