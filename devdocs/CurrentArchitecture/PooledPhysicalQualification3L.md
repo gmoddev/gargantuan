@@ -2230,3 +2230,17 @@ Mixed recovery is NOT MEASURED. Cleanup verified no client/server processes and
 UDP 39450 unbound. Logs and causal TSVs remain under the run ID in
 `C:\Sandbox\Codex\Evidence\Farm32_fa5b91f9Diagnostic\`.
 No physical/provider attempt or PASS is inferred from this diagnostic.
+
+The subsequent execution candidate `1dce88d9b` retains exact UTF-8 semantics
+while scanning complete ASCII words with bounded unaligned-safe reads and
+transferring the finished GRPL allocation rather than copying it. Native
+qualification passes 1,409,819 UTF-8 parity cases, the fixed GRPL wire/error
+regression, the full replication/relevance suites and seven oracle cases.
+The latter include more than 65,536 empty progress steps, exactly 65,536 real
+frames followed by completion, and rejection of frame 65,537. Name A/B tests
+retain exact outcomes with odd/exhausted budgets and atomic retry termination.
+The Release real-GNS workload passes all eight cases with 38,668,582 B created
+and retired, zero terminal release and zero outstanding debt. Its recovery RPC
+maximum was 37.1119 ms, Event maximum 37.1062 ms and action maximum 37.1747 ms.
+These are local native results. Hosted Native/sanitizer CI and official-package
+workflow `37065664987` remain pending; provider qualification is not inferred.
