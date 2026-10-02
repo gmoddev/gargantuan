@@ -16,6 +16,7 @@
 #include "gargantuan/runtime/ChangeJournal.hpp"
 #include "ProtocolUtf8ParityFixture.hpp"
 #include "BoundedReplicationEncodingFixture.hpp"
+#include "FarmRecoveryObservationFixture.hpp"
 
 #include <algorithm>
 #include <array>
@@ -635,6 +636,7 @@ int main() {
 	TestMixedSimulatorComposition();
 	Check(test::RunProtocolUtf8ParityTests(), "UTF-8 scalar parity and exact GRPL encoding pass");
 	Check(test::RunBoundedReplicationEncodingTests(), "bounded GRPL encoding preserves bytes, bounds and error precedence");
+	Check(test::RunFarmRecoveryObservationTests(), "farm recovery stage comes from the replicated DataModel");
 	TestReplicaRenderDirtiness();
 	TestRepeatedReplicaPropertyPreflight();
 	TestRevisionedStructuralMaterialization();

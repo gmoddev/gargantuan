@@ -343,6 +343,7 @@ local RpcErrors = 0
 local RpcTimeouts = 0
 local ProducerReported = false
 local CurrentOverloadCase = nil
+local RecoveryCallbackTick = 0
 local OverloadReadySent = false
 local OverloadOffered = 0
 local LastOverloadOfferAt = nil
@@ -766,6 +767,7 @@ if PhysicalFarm then
     -- This is a separate post-reload workload. The five content phases above
     -- retain their qualified traffic and completion semantics unchanged.
     RunService.PostSimulation:Connect(function()
+        RecoveryCallbackTick += 1
         local LocalPlayer = Players.LocalPlayer
         if not LocalPlayer or not PhaseControl then return end
         local Stage = game:GetAttribute("ScaleOverloadCase")
@@ -859,7 +861,7 @@ if PhysicalFarm then
             task.spawn(function()
                 for Index = 1, 10 do
                     local Started = os.clock()
-                    local StartedTick = PhaseTick
+                    local StartedTick = RecoveryCallbackTick
                     local Ok, Value = pcall(function()
                         return OverloadFunction:InvokeServerWithTimeout(1, "recovery")
                     end)

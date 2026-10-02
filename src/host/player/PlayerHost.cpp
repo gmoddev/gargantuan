@@ -2,6 +2,7 @@
 
 #include "host/common/PackagedHost.hpp"
 #include "host/common/FarmPublicationEvidence.hpp"
+#include "host/player/FarmRecoveryObservation.hpp"
 #include "gargantuan/Engine.hpp"
 #include "gargantuan/Log.hpp"
 #include "gargantuan/classes/DataModel.hpp"
@@ -398,6 +399,41 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 						std::cout << "[Qualification:Client] event=character_ready run_id=" << FarmRunId << " slot="
 								  << FarmSlot << " nonce=" << FarmClientNonce << " steady_ns=" << FarmTimestamp() << std::endl;
 					}
+					// Observe replicated recovery data before evaluating completion in
+					// this same step; final data and the completion marker may arrive together.
+					if (FarmRecoveryWorkload) {
+						const auto CaseIndex = host::detail::FarmRecoveryCaseIndex(*Runtime->DataModel);
+						{
+							if (CaseIndex != 0 && !FarmRecoveryNamesObserved[CaseIndex]) {
+								const auto Root = Runtime->Workspace->FindFirstChild("ScaleOverloadRegion", false);
+								std::array<std::shared_ptr<Instance>, 32> Observed{};
+								bool Complete = Root != nullptr;
+								for (std::size_t Index = 0; Complete && Index < Observed.size(); ++Index) {
+									const auto Holder = Root->FindFirstChild("part" + std::to_string(Index), false);
+									const auto Children = Holder ? Holder->GetChildren() : std::vector<std::shared_ptr<Instance>>{};
+									const auto Opportunity = Index < 16 ? 479 : 480;
+									const auto Letter = static_cast<char>('a' + (CaseIndex * 7 + Opportunity + Index) % 26);
+									Complete = Children.size() == 1 &&
+										Children.front()->GetName() == std::string(24 * 1024, Letter);
+									if (Complete) Observed[Index] = Children.front();
+								}
+								if (Complete) {
+									FarmRecoveryNamesObserved[CaseIndex] = true;
+									for (std::size_t Index = 0; Index < Observed.size(); ++Index)
+										std::cout << "[Qualification:Client] event=name_object run_id=" << FarmRunId
+											<< " slot=" << FarmSlot << " nonce=" << FarmClientNonce
+											<< " case=" << (CaseIndex == 1 ? "structural" : "mixed") << " index=" << Index
+											<< " object_slot=" << Observed[Index]->GetObjectId().Slot
+											<< " object_generation=" << Observed[Index]->GetObjectId().Generation
+											<< " name_bytes=24576 letter=" << static_cast<char>('a' +
+												(CaseIndex * 7 + (Index < 16 ? 479 : 480) + Index) % 26) << '\n';
+									std::cout << "[Qualification:Client] event=names_observed run_id=" << FarmRunId
+										<< " slot=" << FarmSlot << " nonce=" << FarmClientNonce
+										<< " case=" << (CaseIndex == 1 ? "structural" : "mixed") << " objects=32 steady_ns=" << FarmTimestamp() << '\n';
+								}
+							}
+						}
+					}
 					if (FarmScaleWorkload && FarmReady && FarmPlayerReady) {
 						const auto Phase = Runtime->CharacterControl->GetAttributeValue("ScalePhase");
 						if (Phase) if (const auto *PhaseName = std::get_if<std::string>(&*Phase)) {
@@ -413,6 +449,9 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 									<< " slot=" << FarmSlot << " nonce=" << FarmClientNonce
 									<< " observed_phases=" << FarmScaleObservedPhases
 									<< " producer_phases=" << FarmScaleProducerPhases
+									<< " recovery_structural_observed=" << FarmRecoveryNamesObserved[1]
+									<< " recovery_mixed_observed=" << FarmRecoveryNamesObserved[2]
+									<< " completion_valid=" << FarmScaleCompleted
 									<< " steady_ns=" << FarmTimestamp() << std::endl;
 								if (!FarmScaleCompleted) Runtime->ProcessService->MarkExit(16);
 							} else if (FarmScaleObservedPhases < FarmScalePhases.size() &&
@@ -538,41 +577,6 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 								FarmScalePreviousUnexpectedEndings = UnexpectedEndings;
 								++FarmScaleProducerPhases;
 								if (!Healthy) Runtime->ProcessService->MarkExit(17);
-							}
-						}
-					}
-					if (FarmRecoveryWorkload) {
-						const auto Case = Runtime->CharacterControl->GetAttributeValue("ScaleOverloadCase");
-						if (Case) if (const auto *CaseName = std::get_if<std::string>(&*Case)) {
-							const std::size_t CaseIndex = *CaseName == "recover_structural" ? 1 :
-								*CaseName == "recover_mixed" ? 2 : 0;
-							if (CaseIndex != 0 && !FarmRecoveryNamesObserved[CaseIndex]) {
-								const auto Root = Runtime->Workspace->FindFirstChild("ScaleOverloadRegion", false);
-								std::array<std::shared_ptr<Instance>, 32> Observed{};
-								bool Complete = Root != nullptr;
-								for (std::size_t Index = 0; Complete && Index < Observed.size(); ++Index) {
-									const auto Holder = Root->FindFirstChild("part" + std::to_string(Index), false);
-									const auto Children = Holder ? Holder->GetChildren() : std::vector<std::shared_ptr<Instance>>{};
-									const auto Opportunity = Index < 16 ? 479 : 480;
-									const auto Letter = static_cast<char>('a' + (CaseIndex * 7 + Opportunity + Index) % 26);
-									Complete = Children.size() == 1 &&
-										Children.front()->GetName() == std::string(24 * 1024, Letter);
-									if (Complete) Observed[Index] = Children.front();
-								}
-								if (Complete) {
-									FarmRecoveryNamesObserved[CaseIndex] = true;
-									for (std::size_t Index = 0; Index < Observed.size(); ++Index)
-										std::cout << "[Qualification:Client] event=name_object run_id=" << FarmRunId
-											<< " slot=" << FarmSlot << " nonce=" << FarmClientNonce
-											<< " case=" << CaseName->substr(8) << " index=" << Index
-											<< " object_slot=" << Observed[Index]->GetObjectId().Slot
-											<< " object_generation=" << Observed[Index]->GetObjectId().Generation
-											<< " name_bytes=24576 letter=" << static_cast<char>('a' +
-												(CaseIndex * 7 + (Index < 16 ? 479 : 480) + Index) % 26) << '\n';
-									std::cout << "[Qualification:Client] event=names_observed run_id=" << FarmRunId
-										<< " slot=" << FarmSlot << " nonce=" << FarmClientNonce
-										<< " case=" << CaseName->substr(8) << " objects=32 steady_ns=" << FarmTimestamp() << '\n';
-								}
 							}
 						}
 					}
