@@ -15,6 +15,14 @@ param(
 	[string]$NodeStageSha256,
 	[string]$NodeRunReceiptPath,
 	[string]$NodeRunReceiptSha256,
+	[string]$LocalServerCaptureIndexPath,
+	[string]$LocalClientCaptureIndexPath,
+	[string]$LocalOuterCaptureReceiptPath,
+	[string]$LocalCoordinatorResultPath,
+	[string]$NodeServerCaptureIndexPath,
+	[string]$NodeClientCaptureIndexPath,
+	[string]$NodeOuterCaptureReceiptPath,
+	[string]$NodeCoordinatorResultPath,
 	[Parameter(Mandatory = $true)][string]$OutputPath
 )
 
@@ -90,6 +98,45 @@ function Read-FarmServerWorkTicks {
 		$Observation.Phases.Count -ne 5 -or
 		$Observation.CrossHostLatency -cne 'NOT_MEASURED') {
 		throw 'bounded server work-tick observation is invalid'
+	}
+	return $Observation
+}
+
+function Read-FarmCaptureObservation {
+	param([string]$ServerCaptureIndexPath, [string]$ClientCaptureIndexPath,
+		[string]$OuterCaptureReceiptPath, [string]$CoordinatorResultPath,
+		[string]$ServerRoot, [string]$ClientRoot, [string]$RunId, [string]$Provider)
+	$Inputs = @($ServerCaptureIndexPath, $ClientCaptureIndexPath,
+		$OuterCaptureReceiptPath, $CoordinatorResultPath)
+	$Supplied = @($Inputs | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count
+	if ($Supplied -eq 0) {
+		return [ordered]@{ Status = 'NOT_MEASURED'
+			Reason = 'two hash-sealed capture roots and their outer receipt were not supplied' }
+	}
+	if ($Supplied -ne 4) { throw 'Farm32 capture acceptance inputs must be supplied together' }
+	$ScriptPath = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../tools/physical-qualifier/farm_capture_acceptance.py'))
+	if (-not (Test-Path -LiteralPath $ScriptPath -PathType Leaf)) {
+		throw 'bounded Farm32 capture analyzer is missing'
+	}
+	$Python = @(Get-Command python -CommandType Application -ErrorAction Stop)[0]
+	$Output = @(& $Python.Source $ScriptPath $ServerCaptureIndexPath $ClientCaptureIndexPath `
+		(Join-Path $ServerRoot 'evidence-sha256.json') `
+		(Join-Path $ClientRoot 'evidence-sha256.json') `
+		$OuterCaptureReceiptPath $CoordinatorResultPath 2>&1)
+	if ($LASTEXITCODE -ne 0 -or $Output.Count -ne 1) {
+		$Detail = ((@($Output) | ForEach-Object { [string]$_ }) -join ' ')
+		if ($Detail.Length -gt 512) { $Detail = $Detail.Substring(0, 512) }
+		throw "bounded Farm32 capture acceptance rejected evidence: $Detail"
+	}
+	$Observation = [string]$Output[0] | ConvertFrom-Json -AsHashtable
+	if ($Observation.Format -cne 'GargantuanFarm32CaptureAcceptance' -or
+		$Observation.Version -ne 1 -or $Observation.Status -cne 'MEASURED_PASS' -or
+		$Observation.RunId -cne $RunId -or $Observation.Provider -cne $Provider -or
+		$Observation.NonceBoundTuples -ne 32 -or
+		$Observation.Directions.Status -cne 'BIDIRECTIONAL_32_TUPLES' -or
+		$Observation.Loss.WorkerLostEvents -ne 0 -or
+		$Observation.Loss.ClientDroppedPackets -ne 0) {
+		throw 'bounded Farm32 capture observation identity or result is invalid'
 	}
 	return $Observation
 }
@@ -840,6 +887,18 @@ $Local = Read-ProviderRun -ReportPath $LocalReportPath -ServerRoot $LocalServerE
 	-ClientRoot $LocalClientEvidenceRoot -ExpectedProvider 'Local'
 $Node = Read-ProviderRun -ReportPath $NodeReportPath -ServerRoot $NodeServerEvidenceRoot `
 	-ClientRoot $NodeClientEvidenceRoot -ExpectedProvider 'Node'
+$LocalCapture = Read-FarmCaptureObservation -ServerCaptureIndexPath $LocalServerCaptureIndexPath `
+	-ClientCaptureIndexPath $LocalClientCaptureIndexPath `
+	-OuterCaptureReceiptPath $LocalOuterCaptureReceiptPath `
+	-CoordinatorResultPath $LocalCoordinatorResultPath `
+	-ServerRoot $LocalServerEvidenceRoot -ClientRoot $LocalClientEvidenceRoot `
+	-RunId $Local.Report.RunId -Provider 'Local'
+$NodeCapture = Read-FarmCaptureObservation -ServerCaptureIndexPath $NodeServerCaptureIndexPath `
+	-ClientCaptureIndexPath $NodeClientCaptureIndexPath `
+	-OuterCaptureReceiptPath $NodeOuterCaptureReceiptPath `
+	-CoordinatorResultPath $NodeCoordinatorResultPath `
+	-ServerRoot $NodeServerEvidenceRoot -ClientRoot $NodeClientEvidenceRoot `
+	-RunId $Node.Report.RunId -Provider 'Node'
 if (-not [string]::IsNullOrWhiteSpace($NodeTlsMatchReceiptPath)) {
 	$NodeTlsObservation = Read-NodeTlsObservation `
 		-ServerReceiptPath (Join-Path $NodeServerEvidenceRoot 'node-provider.json') `
@@ -881,6 +940,7 @@ $Observed = [ordered]@{
 		RetiredBytes = $Local.Report.Admission.retired; Admission = $Local.Admission
 		Publication = $Local.Publication
 		ServerWorkTicks = $Local.ServerWorkTicks
+		Capture = $LocalCapture
 		RemoteCadence = $Local.RemoteCadence
 		Recovery = $Local.Recovery
 		Provider = $Local.ProviderObservation; Resources = $Local.Resources
@@ -891,6 +951,7 @@ $Observed = [ordered]@{
 		RetiredBytes = $Node.Report.Admission.retired; Admission = $Node.Admission
 		Publication = $Node.Publication
 		ServerWorkTicks = $Node.ServerWorkTicks
+		Capture = $NodeCapture
 		RemoteCadence = $Node.RemoteCadence
 		Recovery = $Node.Recovery
 		Provider = $Node.ProviderObservation; Resources = $Node.Resources
@@ -908,6 +969,7 @@ $Observed = [ordered]@{
 		[ordered]@{ Gate = 'Complete-sweep role-local working set within supervisor limit'; State = $(if ($Local.Resources.Server.CompleteSweepCount -gt 0 -and $Local.Resources.Clients.CompleteSweepCount -gt 0 -and $Node.Resources.Server.CompleteSweepCount -gt 0 -and $Node.Resources.Clients.CompleteSweepCount -gt 0) { 'MEASURED' } else { 'NOT MEASURED' }); Reason = 'sequential per-process sweep; not a synchronized host memory or network headroom result' },
 		[ordered]@{ Gate = 'Role-local host CPU, memory, simultaneous owned processes, and fiber NIC counters'; State = 'MEASURED' },
 		[ordered]@{ Gate = 'Role-local indexed evidence byte/file bounds'; State = 'MEASURED' },
+		[ordered]@{ Gate = 'Nonce-bound 32-tuple bidirectional zero-loss capture on both endpoints'; State = $(if ($LocalCapture.Status -ceq 'MEASURED_PASS' -and $NodeCapture.Status -ceq 'MEASURED_PASS') { 'MEASURED_PASS' } else { 'NOT MEASURED' }); Reason = 'hash-sealed two-endpoint pcaps, native ready-time nonce-to-port mapping, zero-loss diagnostics, and nontruncated packets; no packet-reserve or headroom claim' },
 		[ordered]@{ Gate = 'Five-phase observation and terminal native admission conservation'; State = 'MEASURED' },
 		[ordered]@{ Gate = 'Character accepted-state chain and role-local publication delays'; State = $(if ($Local.Publication.Status -ceq 'ACCEPTED_STATE_CHAIN_OBSERVED' -and $Node.Publication.Status -ceq 'ACCEPTED_STATE_CHAIN_OBSERVED') { 'MEASURED' } else { 'NOT MEASURED' }); Reason = 'each provider independently rejoined all hash-sealed native Character traces; cross-host clocks remain separate' },
 		[ordered]@{ Gate = 'Tracked-root recipient Character cadence'; State = $(if ($Local.Publication.RecipientCharacterCadence.CanonicalVerdict -ceq 'FAIL' -or $Node.Publication.RecipientCharacterCadence.CanonicalVerdict -ceq 'FAIL') { 'MEASURED_FAIL' } elseif ($Local.Publication.RecipientCharacterCadence.CanonicalVerdict -ceq 'PASS' -and $Node.Publication.RecipientCharacterCadence.CanonicalVerdict -ceq 'PASS') { 'MEASURED_PASS' } else { 'NOT MEASURED' }); Reason = 'eight explicit roots and 64 recipient relationships in sealed five-phase native traces; <=250-ms recipient-local handled gap and <=12 authoritative ticks where phase boundaries are provable' },
