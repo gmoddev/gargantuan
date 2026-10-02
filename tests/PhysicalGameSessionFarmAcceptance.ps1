@@ -562,28 +562,17 @@ function Read-NodeTlsObservation {
 	foreach ($Pin in @($MatchReceiptSha256, $StageSha256, $RunReceiptSha256)) {
 		if ($Pin -cnotmatch '^[a-fA-F0-9]{64}$') { throw 'Node TLS evidence pin is invalid' }
 	}
-	$Receipt = Read-BoundedJson -Path $MatchReceiptPath -MaximumBytes 4096
+	$null = Read-BoundedJson -Path $MatchReceiptPath -MaximumBytes 4096
 	if ((Get-FileHash -LiteralPath $MatchReceiptPath -Algorithm SHA256).Hash -ine
 		$MatchReceiptSha256) { throw 'Node TLS match receipt differs from independent pin' }
 	$Derived = Get-NodeTlsLogMatchReceipt -ServerReceiptPath $ServerReceiptPath `
 		-NodeStagePath $StagePath -NodeRunReceiptPath $RunReceiptPath `
 		-NodeRunReceiptSha256 $RunReceiptSha256 -NodeStageSha256 $StageSha256
-	if ($Receipt.Keys.Count -ne $Derived.Keys.Count) {
-		throw 'Node TLS match receipt has an unexpected schema'
-	}
-	foreach ($Name in $Derived.Keys) {
-		if (-not $Receipt.Contains($Name)) {
-			throw "Node TLS match receipt differs from pinned source: $Name"
-		}
-		$Same = if ($Name -in @('RecordObservedUtc', 'NodeChildStartedUtc', 'NodeChildEndedUtc')) {
-			(Get-NodeTimestamp $Receipt[$Name]) -eq (Get-NodeTimestamp $Derived[$Name])
-		} else {
-			($Receipt[$Name] | ConvertTo-Json -Compress) -ceq
-			($Derived[$Name] | ConvertTo-Json -Compress)
-		}
-		if (-not $Same) {
-			throw "Node TLS match receipt differs from pinned source: $Name"
-		}
+	$ExpectedBytes = [Text.UTF8Encoding]::new($false).GetBytes(($Derived | ConvertTo-Json -Depth 4))
+	$ExpectedHash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData(
+		$ExpectedBytes)).ToLowerInvariant()
+	if ($ExpectedHash -ine $MatchReceiptSha256) {
+		throw 'Node TLS match receipt differs from pinned source'
 	}
 	return [ordered]@{
 		State = 'NEGOTIATED_TLS_MANIFEST_RPC_MEASURED'
