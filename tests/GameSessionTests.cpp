@@ -2143,11 +2143,16 @@ end)
 		Root->SetParent(Npc);
 		Npc->SetRootPart(Root);
 		Npc->SetParent(Runtime.Workspace);
+		for (int Index = 0; Index < 96; ++Index) {
+			auto Child = std::make_shared<Folder>();
+			Child->SetName("PlanningWork" + std::to_string(Index));
+			Child->SetParent(Npc);
+		}
 		auto Settings = Configuration(GameSessionRole::Server, "speculative-relevance");
 		// Real bounded planning intentionally spans more than one server step.
 		// Relevance can reverse before a planned Leave has ever been accepted.
-		Settings.StructuralReplication.PlanningWorkPerTick = 2;
-		Settings.StructuralReplication.PlanningPeerQuantum = 1;
+		Settings.StructuralReplication.PlanningWorkPerTick = 64;
+		Settings.StructuralReplication.PlanningPeerQuantum = 64;
 		Settings.HandshakeTimeoutTicks = 600;
 		GameSession Server(Network->CreateTransport(), Settings, &Runtime);
 		GameSession Client(Network->CreateTransport(), Configuration(GameSessionRole::Client, "speculative-relevance"));
@@ -2163,8 +2168,13 @@ end)
 					EngineProviderConfiguration{.AudioEnabled = false, .Mode = RuntimeMode::NetworkClient});
 				Check(Client.AttachClientRuntime(*ClientRuntime), "speculative relevance client attaches");
 			}
+			if (ClientRuntime) ClientRuntime->Step();
+			Runtime.Step();
 		};
 		for (int Index = 0; Index < 500; ++Index) Step();
+		std::cout << "[Network:SpeculativeRelevance] ready=" << Server.GetMetrics().ReadyPeers
+			<< " materialized=" << Server.GetMetrics().MaterializedCharacters
+			<< " server_failure=" << Server.GetFailure() << " client_failure=" << Client.GetFailure() << '\n';
 		const auto Identities = Server.GetPeerIdentities();
 		if (Identities.size() == 1 && ClientRuntime && Server.GetMetrics().MaterializedCharacters >= 2) {
 			const auto Connection = Identities.front().Connection;
