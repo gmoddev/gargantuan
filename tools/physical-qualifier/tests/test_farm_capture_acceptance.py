@@ -66,11 +66,17 @@ class FarmCaptureAcceptanceTests(unittest.TestCase):
         self.ServerRoleIndex = Index(self.ServerRole, "evidence-sha256.json", "role", "Server", {})
         self.ClientRoleIndex = Index(self.ClientRole, "evidence-sha256.json", "role", "Clients", {})
         (self.ServerCapture / "farm32-worker-capture.pcapng").write_bytes(FIXTURE.Pcap(self.Ports))
+        (self.ServerCapture / "farm32-worker-capture.etl").write_bytes(b"etl")
+        Save(self.ServerCapture / "farm32-netsh-owner.json", {
+            "CapturePort": 39450, "MiniportIfIndex": 19,
+            "CaptureLayers": ["NDIS physical miniport"],
+            "TraceMaximumMiB": 1024, "NoWrapThresholdMiB": 960})
         (self.ClientCapture / "farm32-client-capture.pcapng").write_bytes(FIXTURE.Pcap(self.Ports))
         (self.ServerCapture / "farm32-capture-summary.txt").write_text("Total Events  Lost  0\n", encoding="utf-8")
         Save(self.ClientCapture / "farm32-client-capture.json", {
             "Format": "GargantuanFarm32Dumpcap", "Version": 1, "RunId": RUN,
             "Filter": "udp port 39450 and host 10.253.3.2",
+            "DurationSeconds": 600, "AutostopKilobytes": 1048576,
             "CompletenessBytes": 960 * 1024 * 1024, "DumpcapSha256": "a" * 64})
         (self.ClientCapture / "farm32-dumpcap-error.txt").write_text(
             "Packets captured: 64\nPackets received/dropped on interface "
@@ -176,6 +182,23 @@ class FarmCaptureAcceptanceTests(unittest.TestCase):
         self.SealCaptures()
         self.SealOuter()
         with self.assertRaisesRegex(ValueError, "counters are missing"):
+            self.Analyze()
+
+    def test_worker_owner_port_or_etl_is_not_assumed(self):
+        Marker = self.ServerCapture / "farm32-netsh-owner.json"
+        Row = json.loads(Marker.read_text())
+        Row["CapturePort"] = 39452
+        Save(Marker, Row)
+        self.SealCaptures()
+        self.SealOuter()
+        with self.assertRaisesRegex(ValueError, "ownership or completeness"):
+            self.Analyze()
+        Row["CapturePort"] = 39450
+        Save(Marker, Row)
+        (self.ServerCapture / "farm32-worker-capture.etl").write_bytes(b"")
+        self.SealCaptures()
+        self.SealOuter()
+        with self.assertRaisesRegex(ValueError, "ownership or completeness"):
             self.Analyze()
 
     def test_outer_receipt_and_role_hash_mismatch_fail(self):
