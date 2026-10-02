@@ -20,6 +20,23 @@ foreach ($Name in $Needed) {
 		throw "missing recovery parser $Name"
 	}
 }
+$QualificationSource = [IO.File]::ReadAllText((Join-Path $PSScriptRoot '../src/host/server/PhysicalScaleQualification.hpp'))
+$RecoveryStart = $QualificationSource.IndexOf('if (State == Stage::OverloadRecovery) {', [StringComparison]::Ordinal)
+if ($RecoveryStart -lt 0) { throw 'missing recovery observation state' }
+$RecoverySource = $QualificationSource.Substring($RecoveryStart)
+$Position = 0
+foreach ($Snippet in @(
+	'StepCessationQuote();',
+	'const auto Metrics = Session.GetMetrics();',
+	'const auto Retention = ObserveRetention(Tick);',
+	'const auto ObservedAt = std::chrono::steady_clock::now();',
+	'ObservedAt - OverloadCeased).count();',
+	'if (!RecoverySnapshotWritten && ObservedAt - OverloadCeased >= StrictSnapshotTarget)',
+	'ObservedAt - OverloadCeased >= std::chrono::microseconds(QuoteBoundMicroseconds)')) {
+	$Found = $RecoverySource.IndexOf($Snippet, $Position, [StringComparison]::Ordinal)
+	if ($Found -lt 0) { throw "recovery observation can predate quote replay or metrics: $Snippet" }
+	$Position = $Found + $Snippet.Length
+}
 $RunId = '7c93e53d-0e0c-4b8d-8a3b-9a761a406ebd'
 $ExpectedNonces = @(0..31 | ForEach-Object { [string](1000 + $_) })
 $Connections = @(0..31 | ForEach-Object { "$(1 + $_):1" })
@@ -188,6 +205,13 @@ try {
 				'elapsed_us=20000001', 'elapsed_us=20480000')
 		} else { $_ }
 	})
+	Assert-RecoveryQuoteRejected -Reason 'quote-delayed structural observation past exact bound' -Lines @(
+		$OriginalError | ForEach-Object {
+			if ($_ -match 'event=sample run=.* case=structural ') {
+				$_.Replace('elapsed_us=19000000', 'elapsed_us=20470538').Replace(
+					'elapsed_us=20000001', 'elapsed_us=20470538')
+			} else { $_ }
+		})
 	$Moved = @($OriginalError | Where-Object { $_ -match 'event=name_ack case=structural peer_slot=32 ' })
 	$Modified = [Collections.Generic.List[string]]::new()
 	foreach ($Line in $OriginalError) {

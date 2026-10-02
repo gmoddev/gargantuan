@@ -842,7 +842,11 @@ namespace gargantuan::host {
 					Fail("recovery_quote_invalid", Tick);
 				}
 				const auto Retention = ObserveRetention(Tick);
-				const auto Elapsed = std::chrono::duration_cast<std::chrono::microseconds>(Now - OverloadCeased).count();
+				// Quote replay can take longer than a server step. Timestamp the
+				// observed metrics after replay, never with the pre-replay Now.
+				const auto ObservedAt = std::chrono::steady_clock::now();
+				const auto Elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
+					ObservedAt - OverloadCeased).count();
 				std::cerr << "[Qualification:Recovery] event=sample run=" << RunId
 					<< " case=" << CaseName << " elapsed_us=" << Elapsed
 					<< " outstanding=" << Metrics.ReliableAdmission.OutstandingBytes
@@ -874,7 +878,7 @@ namespace gargantuan::host {
 					<< " journal_lag_high=" << Metrics.StructuralMaximumJournalLagRecords
 					<< " journal_failures=" << Metrics.StructuralJournalLagFailures
 					<< " tick=" << Tick << '\n';
-				if (!RecoverySnapshotWritten && Now - OverloadCeased >= StrictSnapshotTarget) {
+				if (!RecoverySnapshotWritten && ObservedAt - OverloadCeased >= StrictSnapshotTarget) {
 					RecoverySnapshotWritten = true;
 					for (const auto &Reader : network::detail::GameSessionTestAccess::GetJournalRequirements(Session))
 						std::cerr << "[Qualification:Recovery] event=reader run=" << RunId
@@ -890,7 +894,7 @@ namespace gargantuan::host {
 						<< " retained_work_bytes=NOT_MEASURED tick=" << Tick << '\n';
 				}
 				if (RecoverySnapshotWritten && QuoteSealed &&
-					Now - OverloadCeased >= std::chrono::microseconds(QuoteBoundMicroseconds)) {
+					ObservedAt - OverloadCeased >= std::chrono::microseconds(QuoteBoundMicroseconds)) {
 					if (detail::HasPhysicalScaleTerminalConvergence(Metrics))
 						for (const auto &Reader : network::detail::GameSessionTestAccess::GetJournalRequirements(Session))
 							std::cerr << "[Qualification:Recovery] event=terminal_reader run=" << RunId
