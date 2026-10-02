@@ -2274,3 +2274,28 @@ are deterministic work counters, not a physical throughput claim. The same run
 passes 1,409,819 UTF-8 parity cases. Evidence is retained as
 `C:\Users\aiden\.codex\artifacts\bounded-encoder-e62955e9-tests.log`.
 Fresh 32-client recovery and hosted qualification remain separate gates.
+
+Worker-only run `3f153c08-544d-4894-8098-1e08ecc17665` on `e62955e91`
+reached all three causal recovery cases. Independent PowerShell replay confirms:
+
+| Case | Events / reference frames | Accepted = first-sent = ACKed = retired B | Earliest prefix convergence us | Original bound us |
+| --- | ---: | ---: | ---: | ---: |
+| Gameplay | 156 / 32 | 5,344 | 316,646 | 20,470,580 |
+| Structural | 7,662 / 1,213 | 450,564,901 | 22,914,408 | 31,475,696 |
+| Mixed | 164 / 32 | 14,779 | 320,709 | 20,471,273 |
+
+The farm nevertheless **FAILS**, first reported as client 08 exit 16 after
+`phase=complete`. Five content phases were observed, but the native completion
+check read `ScaleOverloadCase` from CharacterControl instead of its actual
+DataModel owner, so its recovery-name observations remained unset. Independently,
+the client recovery probe log used server-only `PhaseTick`; the resulting nil
+format argument aborted the coroutine before recording probe completion. These
+are distinct harness defects. The causal subset above does not establish full
+recovery gameplay, terminal farm, capture, or provider PASS. No owned client or
+server process or UDP 39450 listener remained after cleanup.
+
+Evidence remains under
+`C:\Sandbox\Codex\Evidence\Farm32_e62955e9Diagnostic\` with this run ID;
+the local copy is `C:\Users\aiden\.codex\artifacts\farm32-e62955e9\`.
+`farm32-e62955e9-causal-replay.json` records the independent totals and TSV hashes.
+A fresh run is required after the completion and probe fixes are qualified.
