@@ -454,7 +454,7 @@ try {
 		$Observed.Local.Publication.State -cne 'NOT_MEASURED' -or
 		$Observed.Local.ServerWorkTicks.Status -cne 'NOT_MEASURED' -or
 		$Observed.Local.RemoteCadence.Status -cne 'NOT_MEASURED' -or
-		@($Observed.GateObservations | Where-Object { $_.State -eq 'NOT MEASURED' }).Count -ne 13 -or
+		@($Observed.GateObservations | Where-Object { $_.State -eq 'NOT MEASURED' }).Count -ne 14 -or
 		$Observed.Local.Recovery.FixedServiceRecovery -cne 'NOT MEASURED' -or
 		$Observed.Node.Recovery.ExactRetainedWorkBytes -cne 'NOT_MEASURED') {
 		throw "resource/parity observation promoted a missing physical gate or lost resource evidence: status=$($Observed.Status) claim=$($Observed.Foundation3LQualification) parity=$($Observed.WorkloadPinParity.State) clients=$($Observed.Local.Resources.Clients.ProcessCount) server=$($Observed.Node.Resources.Server.ProcessCount) ws=$($Observed.Local.Resources.Clients.SumOfPerProcessPeakWorkingSetBytes) missing=$(@($Observed.GateObservations | Where-Object { $_.State -eq 'NOT MEASURED' }).Count)"
@@ -847,6 +847,8 @@ try {
 		$PublicationAcceptance.Local.Publication.AnalyzerSha256 -cnotmatch '^[a-f0-9]{64}$' -or
 		@($PublicationAcceptance.GateObservations | Where-Object Gate -eq 'Character accepted-state chain and role-local publication delays' |
 			Where-Object State -eq 'MEASURED').Count -ne 1 -or
+		@($PublicationAcceptance.GateObservations | Where-Object Gate -eq 'Tracked-root recipient Character cadence' |
+			Where-Object State -eq 'NOT MEASURED').Count -ne 1 -or
 		@($PublicationAcceptance.GateObservations | Where-Object Gate -eq 'Full Character and Remote recipient cadence' |
 			Where-Object State -eq 'NOT MEASURED').Count -ne 1) {
 		throw 'cross-provider Character publication subset was promoted or lost'
