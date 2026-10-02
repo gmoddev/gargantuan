@@ -241,6 +241,7 @@ namespace {
 #include "GnsFourGrantFixture.hpp"
 #include "GnsMixedTrafficFixture.hpp"
 #include "GnsAckCycleFixture.hpp"
+#include "GnsFundedAckCompatibilityFixture.hpp"
 
 int main(int ArgumentCount, char **Arguments) {
 	using namespace gargantuan;
@@ -250,6 +251,8 @@ int main(int ArgumentCount, char **Arguments) {
 	TestFarmClockCapture();
 	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--ack-cycle")
 		return GnsAckCycleFixture::Run() ? 0 : 1;
+	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--ack-funded-compatibility")
+		return GnsFundedAckCompatibilityFixture::Run() ? 0 : 1;
 	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--ack-cycle-prompt")
 		return GnsAckCycleFixture::Run(true) ? 0 : 1;
 	if (ArgumentCount == 3 && std::string_view(Arguments[1]) == "--ack-cycle-funded") {
