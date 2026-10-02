@@ -189,6 +189,50 @@ try {
 			Where-Object State -eq 'MEASURED').Count -ne 1) {
 		throw 'valid role-local evidence was promoted to provider qualification or lost missing gates'
 	}
+	$PublicationFixture = Join-Path $PSScriptRoot '../tools/physical-qualifier/tests/make_farm_publication_fixture.py'
+	& python $PublicationFixture $ManifestPath $ServerRoot $ClientRoot
+	if ($LASTEXITCODE -ne 0) { throw '32-client publication fixture generation failed' }
+	Save-Index -Root $ServerRoot -RunId $RunId -Role 'Server'
+	Save-Index -Root $ClientRoot -RunId $RunId -Role 'Clients'
+	$PublicationReportPath = Join-Path $TestRoot 'publication-report.json'
+	& $Reconciler -RunManifestPath $ManifestPath -ManifestSha256 $ManifestSha256 `
+		-ServerEvidenceRoot $ServerRoot -ClientEvidenceRoot $ClientRoot `
+		-ReportPath $PublicationReportPath | Out-Null
+	$PublicationReport = Get-Content -LiteralPath $PublicationReportPath -Raw | ConvertFrom-Json
+	if ($PublicationReport.PublicationObservation.Status -cne 'ACCEPTED_STATE_CHAIN_OBSERVED' -or
+		$PublicationReport.PublicationObservation.Server.Accepted -ne 32 -or
+		$PublicationReport.PublicationObservation.Client.ClientHandled -ne 32 -or
+		$PublicationReport.PublicationObservation.ServerDueToAccepted.MaximumNs -ne 414 -or
+		$PublicationReport.PublicationObservation.ClientReceiveToHandled.MaximumNs -ne 100 -or
+		$PublicationReport.PublicationObservation.AnalyzerSha256 -cnotmatch '^[a-f0-9]{64}$' -or
+		$PublicationReport.PublicationObservation.TraceParserSha256 -cnotmatch '^[a-f0-9]{64}$' -or
+		$PublicationReport.PublicationObservation.CrossHostDueToHandled -cne 'NOT_MEASURED' -or
+		@($PublicationReport.Ledger | Where-Object Gate -eq 'Character publication state-chain and role-local delays' |
+			Where-Object State -eq 'MEASURED').Count -ne 1 -or
+		@($PublicationReport.Ledger | Where-Object Gate -eq 'Remote publication and recipient cadence' |
+			Where-Object State -eq 'NOT MEASURED').Count -ne 1) {
+		throw 'indexed 32-client Character publication subset was not measured conservatively'
+	}
+	$ClientTrace = Join-Path $ClientRoot 'publication-service-0.bin'
+	$ClientTraceBytes = [IO.File]::ReadAllBytes($ClientTrace)
+	$ClientTraceBytes[$ClientTraceBytes.Length - 1] = $ClientTraceBytes[$ClientTraceBytes.Length - 1] -bxor 1
+	[IO.File]::WriteAllBytes($ClientTrace, $ClientTraceBytes)
+	Assert-Rejected -Name 'tampered indexed Character trace' `
+		-ReportPath (Join-Path $TestRoot 'tampered-publication-report.json')
+	Save-Index -Root $ClientRoot -RunId $RunId -Role 'Clients'
+	Assert-Rejected -Name 'rehash of invalid Character state identity' `
+		-ReportPath (Join-Path $TestRoot 'invalid-publication-report.json')
+	$ClientTraceBytes[$ClientTraceBytes.Length - 1] = $ClientTraceBytes[$ClientTraceBytes.Length - 1] -bxor 1
+	[IO.File]::WriteAllBytes($ClientTrace, $ClientTraceBytes)
+	Save-Index -Root $ClientRoot -RunId $RunId -Role 'Clients'
+	$LastTrace = Join-Path $ClientRoot 'publication-service-31.bin'
+	$LastTraceBytes = [IO.File]::ReadAllBytes($LastTrace)
+	[IO.File]::Delete($LastTrace)
+	Save-Index -Root $ClientRoot -RunId $RunId -Role 'Clients'
+	Assert-Rejected -Name 'partial native Character trace set' `
+		-ReportPath (Join-Path $TestRoot 'partial-publication-report.json')
+	[IO.File]::WriteAllBytes($LastTrace, $LastTraceBytes)
+	Save-Index -Root $ClientRoot -RunId $RunId -Role 'Clients'
 	$OriginalFairness = [IO.File]::ReadAllText($FairnessPath)
 	$HostPath = Join-Path $ServerRoot 'host-resources.csv'
 	$OriginalHost = [IO.File]::ReadAllText($HostPath)

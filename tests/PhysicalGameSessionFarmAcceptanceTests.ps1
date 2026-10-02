@@ -285,6 +285,9 @@ function New-RunFixture {
 			oldest_pending_ticks = 0; backlog_failures = 0; journal_failures = 0
 		}
 		AdmissionFairnessObservation = $Fairness
+		PublicationObservation = [ordered]@{
+			State = 'NOT_MEASURED'; Reason = 'indexed native Character publication traces absent'
+		}
 		RecoveryObservation = $Recovery
 		NodeAuthenticatedManifest = $NodeAuthentication
 		ServerResourceSamples = $ServerSamples; ClientResourceSamples = $ClientSamples
@@ -405,7 +408,8 @@ try {
 			$_.State -ceq 'MEASURED_PASS' }).Count -ne 1 -or
 		$Observed.Node.Provider.State -cne 'AUTHENTICATED_MANIFEST_RPC_MEASURED' -or
 		$Observed.Node.Provider.RealTls -cne 'NOT_MEASURED' -or
-		@($Observed.GateObservations | Where-Object { $_.State -eq 'NOT MEASURED' }).Count -ne 9 -or
+		$Observed.Local.Publication.State -cne 'NOT_MEASURED' -or
+		@($Observed.GateObservations | Where-Object { $_.State -eq 'NOT MEASURED' }).Count -ne 11 -or
 		$Observed.Local.Recovery.FixedServiceRecovery -cne 'NOT MEASURED' -or
 		$Observed.Node.Recovery.ExactRetainedWorkBytes -cne 'NOT_MEASURED') {
 		throw "resource/parity observation promoted a missing physical gate or lost resource evidence: status=$($Observed.Status) claim=$($Observed.Foundation3LQualification) parity=$($Observed.WorkloadPinParity.State) clients=$($Observed.Local.Resources.Clients.ProcessCount) server=$($Observed.Node.Resources.Server.ProcessCount) ws=$($Observed.Local.Resources.Clients.SumOfPerProcessPeakWorkingSetBytes) missing=$(@($Observed.GateObservations | Where-Object { $_.State -eq 'NOT MEASURED' }).Count)"
@@ -711,6 +715,51 @@ try {
 	$Node.Report.RunId = $Local.Report.RunId
 	Save-Json -Path $Node.ReportPath -Value $Node.Report
 	Assert-Rejected -Name 'reused provider run identity' -OutputPath (Join-Path $TestRoot 'reused-run.json')
+	$Node.Report.RunId = $Node.Manifest.RunId
+	$Node.Report.ProviderQualification = 'NOT CLAIMED'
+	$PublicationFixture = Join-Path $PSScriptRoot '../tools/physical-qualifier/tests/make_farm_publication_fixture.py'
+	. (Join-Path $PSScriptRoot 'PhysicalFarmPublicationEvidence.ps1')
+	foreach ($Run in @($Local, $Node)) {
+		$RunId = $Run.Manifest.RunId
+		$ServerReadyPath = Join-Path $Run.ServerRoot 'server.stdout.log'
+		for ($Slot = 0; $Slot -lt 32; $Slot++) {
+			$Nonce = $Run.Manifest.Nonces[$Slot]
+			[IO.File]::AppendAllText($ServerReadyPath,
+				"[Qualification:Server] event=ready run=$RunId nonce=$Nonce connection_slot=$($Slot + 1) connection_generation=1 session_epoch=1 player_id=$($Slot + 1) monotonic_us=$($Slot + 1)`n")
+			[IO.File]::AppendAllText((Join-Path $Run.ClientRoot ('client-{0:D2}.stdout.log' -f $Slot)),
+				"[Qualification:Client] event=ready run_id=$RunId slot=$Slot nonce=$Nonce connection_slot=$($Slot + 2) connection_generation=1 steady_ns=$($Slot + 1)`n")
+		}
+		& python $PublicationFixture (Join-Path $Run.ServerRoot 'run-manifest.json') `
+			$Run.ServerRoot $Run.ClientRoot
+		if ($LASTEXITCODE -ne 0) { throw 'cross-provider publication fixture generation failed' }
+		Save-Index -Root $Run.ServerRoot -RunId $RunId -Role 'Server'
+		Save-Index -Root $Run.ClientRoot -RunId $RunId -Role 'Clients'
+		$Run.Report.ServerEvidenceSha256 = (Get-FileHash -LiteralPath (Join-Path $Run.ServerRoot 'evidence-sha256.json') -Algorithm SHA256).Hash.ToLowerInvariant()
+		$Run.Report.ClientEvidenceSha256 = (Get-FileHash -LiteralPath (Join-Path $Run.ClientRoot 'evidence-sha256.json') -Algorithm SHA256).Hash.ToLowerInvariant()
+		$Run.Report.PublicationObservation = Read-FarmPublicationObservation `
+			-ServerRoot $Run.ServerRoot -ClientRoot $Run.ClientRoot `
+			-ServerIndex (Get-Content -LiteralPath (Join-Path $Run.ServerRoot 'evidence-sha256.json') -Raw | ConvertFrom-Json -AsHashtable) `
+			-ClientIndex (Get-Content -LiteralPath (Join-Path $Run.ClientRoot 'evidence-sha256.json') -Raw | ConvertFrom-Json -AsHashtable) `
+			-RunManifestPath (Join-Path $Run.ServerRoot 'run-manifest.json') -ScratchParent $TestRoot
+		Save-Json -Path $Run.ReportPath -Value $Run.Report
+	}
+	$PublicationAcceptancePath = Join-Path $TestRoot 'publication-acceptance.json'
+	Invoke-Analyzer -OutputPath $PublicationAcceptancePath
+	$PublicationAcceptance = Get-Content -LiteralPath $PublicationAcceptancePath -Raw | ConvertFrom-Json
+	if ($PublicationAcceptance.Status -cne 'INCOMPLETE' -or
+		$PublicationAcceptance.Local.Publication.Server.Accepted -ne 32 -or
+		$PublicationAcceptance.Node.Publication.Client.ClientHandled -ne 32 -or
+		$PublicationAcceptance.Local.Publication.AnalyzerSha256 -cnotmatch '^[a-f0-9]{64}$' -or
+		@($PublicationAcceptance.GateObservations | Where-Object Gate -eq 'Character accepted-state chain and role-local publication delays' |
+			Where-Object State -eq 'MEASURED').Count -ne 1 -or
+		@($PublicationAcceptance.GateObservations | Where-Object Gate -eq 'Full Character and Remote recipient cadence' |
+			Where-Object State -eq 'NOT MEASURED').Count -ne 1) {
+		throw 'cross-provider Character publication subset was promoted or lost'
+	}
+	$Node.Report.PublicationObservation.Server.Accepted = 31
+	Save-Json -Path $Node.ReportPath -Value $Node.Report
+	Assert-Rejected -Name 'forged reconciled Character publication count' `
+		-OutputPath (Join-Path $TestRoot 'forged-publication.json')
 	Write-Output '[Qualification:FarmAcceptance] MOCK_TEST_OK'
 } finally {
 	if (-not $ResolvedRoot.StartsWith($ResolvedTemp + [IO.Path]::DirectorySeparatorChar,

@@ -20,6 +20,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'AdmissionFairnessEvidence.ps1')
+. (Join-Path $PSScriptRoot 'PhysicalFarmPublicationEvidence.ps1')
 
 function Import-FarmRecoveryParser {
 	$Path = Join-Path $PSScriptRoot 'PhysicalGameSessionFarm.ps1'
@@ -712,13 +713,23 @@ function Read-ProviderRun {
 	}
 	$Admission = Read-AdmissionObservation -Report $Report -FairnessPath $Server.FairnessPath `
 		-ServerLogPath $Server.ServerLogPath
+	$Publication = Read-FarmPublicationObservation -ServerRoot $Server.Root -ClientRoot $Clients.Root `
+		-ServerIndex $Server.Index -ClientIndex $Clients.Index `
+		-RunManifestPath (Join-Path $Server.Root 'run-manifest.json') `
+		-ScratchParent ([IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($ReportPath)))
+	if ($null -eq $Report.PublicationObservation -or
+		($Publication | ConvertTo-Json -Depth 12 -Compress) -cne
+		($Report.PublicationObservation | ConvertTo-Json -Depth 12 -Compress)) {
+		throw 'reconciled Character publication observation differs from sealed native evidence'
+	}
 	$ProviderObservation = Read-ProviderObservation -Report $Report -Manifest $Manifest `
 		-NodeProviderPath $Server.NodeProviderPath
 	$Recovery = Read-RecoveryObservation -Report $Report -Manifest $Manifest `
 		-Server $Server -Clients $Clients
 	return [pscustomobject]@{
 		Report = $Report; Manifest = $Manifest
-		Admission = $Admission; ProviderObservation = $ProviderObservation; Recovery = $Recovery
+		Admission = $Admission; Publication = $Publication
+		ProviderObservation = $ProviderObservation; Recovery = $Recovery
 		Resources = [ordered]@{ Server = $ServerResources; Clients = $ClientResources
 			ServerHost = $ServerHost; ClientHost = $ClientHost }
 		EvidenceRetention = [ordered]@{
@@ -772,6 +783,7 @@ $Observed = [ordered]@{
 	Local = [ordered]@{
 		Ready = $Local.Report.Identity.Ready; AcceptedBytes = $Local.Report.Admission.accepted
 		RetiredBytes = $Local.Report.Admission.retired; Admission = $Local.Admission
+		Publication = $Local.Publication
 		Recovery = $Local.Recovery
 		Provider = $Local.ProviderObservation; Resources = $Local.Resources
 		EvidenceRetention = $Local.EvidenceRetention
@@ -779,6 +791,7 @@ $Observed = [ordered]@{
 	Node = [ordered]@{
 		Ready = $Node.Report.Identity.Ready; AcceptedBytes = $Node.Report.Admission.accepted
 		RetiredBytes = $Node.Report.Admission.retired; Admission = $Node.Admission
+		Publication = $Node.Publication
 		Recovery = $Node.Recovery
 		Provider = $Node.ProviderObservation; Resources = $Node.Resources
 		EvidenceRetention = $Node.EvidenceRetention
@@ -795,6 +808,8 @@ $Observed = [ordered]@{
 		[ordered]@{ Gate = 'Role-local host CPU, memory, simultaneous owned processes, and fiber NIC counters'; State = 'MEASURED' },
 		[ordered]@{ Gate = 'Role-local indexed evidence byte/file bounds'; State = 'MEASURED' },
 		[ordered]@{ Gate = 'Five-phase observation and terminal native admission conservation'; State = 'MEASURED' },
+		[ordered]@{ Gate = 'Character accepted-state chain and role-local publication delays'; State = $(if ($Local.Publication.Status -ceq 'ACCEPTED_STATE_CHAIN_OBSERVED' -and $Node.Publication.Status -ceq 'ACCEPTED_STATE_CHAIN_OBSERVED') { 'MEASURED' } else { 'NOT MEASURED' }); Reason = 'each provider independently rejoined all hash-sealed native Character traces; cross-host clocks remain separate' },
+		[ordered]@{ Gate = 'Full Character and Remote recipient cadence'; State = 'NOT MEASURED'; Reason = 'Character join lacks cross-host service latency and per-recipient cadence distribution; Remote stages are absent' },
 		[ordered]@{ Gate = 'Full fairness, overload backpressure and journal retention margin'; State = 'NOT MEASURED'; Reason = 'terminal counters and exact-demand event waits do not prove saturated service, continuous backlog bounds, or the journal high-water margin' },
 		[ordered]@{ Gate = 'CPU, memory, network and transport headroom'; State = 'NOT MEASURED'; Reason = 'bounded host/NIC snapshots describe utilization, but no canonical CPU/memory/NIC pass percentage or concurrent packet-level reserve proof follows from those samples' },
 		[ordered]@{ Gate = 'Fixed 20-second service recovery'; State = $(if ($Local.Recovery.FixedServiceRecovery -eq 'MEASURED_PASS' -and $Node.Recovery.FixedServiceRecovery -eq 'MEASURED_PASS') { 'MEASURED_PASS' } elseif ($Local.Recovery.FixedServiceRecovery -eq 'MEASURED_FAIL' -or $Node.Recovery.FixedServiceRecovery -eq 'MEASURED_FAIL') { 'MEASURED_FAIL' } else { 'NOT MEASURED' }); Reason = 'three canonical cases per provider, replayed from indexed server/client recovery logs and matched to sealed reconciliation' },

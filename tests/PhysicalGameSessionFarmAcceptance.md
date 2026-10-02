@@ -86,6 +86,18 @@ pin parity is measured; complete application/provider parity is not.
 The report records the already typed five-phase observations and final native
 admission conservation as measured subsets. It intentionally remains
 `INCOMPLETE` / `Foundation3LQualification=NOT CLAIMED`. Current role-local
+reconciliations also carry a hash-indexed native Character publication join
+when the server and all 32 client binary traces exist. This analyzer replays
+the join from both providers' sealed roots and compares the complete result,
+including analyzer and parser source hashes,
+with each reconciliation. It exposes exact accepted/observed state-chain
+counts and server-local due-to-accept, forced-built-to-accept, and client-local
+receive-to-handler durations. It does not infer cross-host one-way latency,
+full per-recipient Character cadence, or Remote cadence; those gates remain
+`NOT MEASURED`. A missing legacy trace set stays unmeasured, whereas an
+incomplete or invalid set is rejected.
+
+Current role-local
 evidence does **not** establish canonical CPU/memory/network headroom, fixed
 20-second recovery without the separately indexed recovery workload,
 workload-derived exact convergence timing, journal

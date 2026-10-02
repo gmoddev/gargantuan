@@ -13,6 +13,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'AdmissionFairnessEvidence.ps1')
+. (Join-Path $PSScriptRoot 'PhysicalFarmPublicationEvidence.ps1')
 
 function Get-RequiredJson {
 	param([string]$Path)
@@ -261,7 +262,7 @@ function Assert-AuthenticatedNodeManifestReceipt {
 }
 
 function Get-Ledger {
-	param([bool]$ScaleValidated)
+	param([bool]$ScaleValidated, [bool]$PublicationMeasured)
 	# These are the independent gates in PooledPhysicalQualification3L.md.
 	# A phase-control receipt proves only the listed subset. Other gates need
 	# native trace/capture/provider analyses rather than inferred success.
@@ -271,6 +272,8 @@ function Get-Ledger {
 		[ordered]@{ Gate = 'One-producer RPC/Event/action metrics'; State = $(if ($ScaleValidated) { 'MEASURED' } else { 'NOT MEASURED' }); Evidence = 'five typed producer metric receipts' },
 		[ordered]@{ Gate = 'Role-local CPU/RSS/thread/handle sampling'; State = 'MEASURED'; Evidence = 'pinned process-resources.csv on both hosts' },
 		[ordered]@{ Gate = 'Authoritative server tick, network and full Character cadence'; State = 'NOT MEASURED'; Evidence = 'requires bounded native application trace analysis' },
+		[ordered]@{ Gate = 'Character publication state-chain and role-local delays'; State = $(if ($PublicationMeasured) { 'MEASURED' } else { 'NOT MEASURED' }); Evidence = 'hash-indexed native due/accept and receive/handler join; no cross-host clock subtraction or full cadence verdict' },
+		[ordered]@{ Gate = 'Remote publication and recipient cadence'; State = 'NOT MEASURED'; Evidence = 'Character publication trace has no Remote offer, send or handler records' },
 		[ordered]@{ Gate = 'RPC handler and response queue bounds'; State = 'NOT MEASURED'; Evidence = 'requires native queue trace analysis' },
 		[ordered]@{ Gate = 'Fixed 20-second service recovery'; State = 'NOT MEASURED'; Evidence = 'requires independently timed recovery workload and trace' },
 		[ordered]@{ Gate = 'Exact accepted/retired/terminal/debt/grant/journal conservation'; State = 'MEASURED'; Evidence = 'final native admission receipt, exact byte equality, zero debt/grants and zero journal failures' },
@@ -379,7 +382,17 @@ if ($FairnessSummary.Count -ne 1 -or $FairnessSummary[0].run -cne $RunId -or
 }
 $NodeAuthenticatedManifest = Assert-AuthenticatedNodeManifestReceipt -ServerRoot $Server.Root `
 	-RunManifest $Manifest
-$Ledger = Get-Ledger -ScaleValidated $true
+$ReportPath = [IO.Path]::GetFullPath($ReportPath)
+if ($ReportPath.StartsWith($Server.Root + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase) -or
+	$ReportPath.StartsWith($Clients.Root + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
+	throw 'reconciliation report must remain outside immutable role-local evidence roots'
+}
+if (Test-Path -LiteralPath $ReportPath) { throw 'reconciliation report path already exists' }
+$Publication = Read-FarmPublicationObservation -ServerRoot $Server.Root -ClientRoot $Clients.Root `
+	-ServerIndex $Server.Index -ClientIndex $Clients.Index -RunManifestPath $RunManifestPath `
+	-ScratchParent ([IO.Path]::GetDirectoryName($ReportPath))
+$Ledger = Get-Ledger -ScaleValidated $true `
+	-PublicationMeasured ($Publication.Status -ceq 'ACCEPTED_STATE_CHAIN_OBSERVED')
 $Report = [ordered]@{
 	Format = 'GargantuanPhysicalFarmReconciliation'; Version = 1
 	RunId = $RunId; Provider = $Provider; ManifestSha256 = $ManifestSha256.ToLowerInvariant()
@@ -388,6 +401,7 @@ $Report = [ordered]@{
 	Identity = $Identity; Admission = $Admission
 	AdmissionFairnessObservation = $FairnessObservation
 	RecoveryObservation = $RecoveryObservation
+	PublicationObservation = $Publication
 	NodeAuthenticatedManifest = $NodeAuthenticatedManifest
 	ServerResourceSamples = $ServerSamples; ClientResourceSamples = $ClientSamples
 	ServerHostResourceSamples = $ServerHostSamples; ClientHostResourceSamples = $ClientHostSamples
@@ -395,12 +409,6 @@ $Report = [ordered]@{
 	MeasuredGateCount = @($Ledger | Where-Object State -eq 'MEASURED').Count
 	MissingGateCount = @($Ledger | Where-Object State -eq 'NOT MEASURED').Count
 }
-$ReportPath = [IO.Path]::GetFullPath($ReportPath)
-if ($ReportPath.StartsWith($Server.Root + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase) -or
-	$ReportPath.StartsWith($Clients.Root + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
-	throw 'reconciliation report must remain outside immutable role-local evidence roots'
-}
-if (Test-Path -LiteralPath $ReportPath) { throw 'reconciliation report path already exists' }
 $ReportBytes = [Text.UTF8Encoding]::new($false).GetBytes(($Report | ConvertTo-Json -Depth 8))
 $Stream = [IO.File]::Open($ReportPath, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
 try { $Stream.Write($ReportBytes) } finally { $Stream.Dispose() }

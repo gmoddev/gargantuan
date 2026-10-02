@@ -64,6 +64,21 @@ Server and client steady clocks have unrelated origins, so cross-host
 due-to-handler latency and phase-long drift remain `NOT_MEASURED`. This
 role-local result alone is not Foundation 3L acceptance.
 
+The Farm32 reconciler now runs that hash-indexed join when the server and all
+32 client traces are present. It records the join and its index/manifest pins
+as `PublicationObservation`, including the join and trace-parser source hashes,
+and marks only the Character accepted-state chain
+and role-local due-to-accept, forced-built-to-accept and receive-to-handler
+delays as measured. The cross-provider acceptance analyzer independently
+replays the same sealed join for Local and Node and rejects a changed
+reconciliation value. Legacy evidence with no publication traces remains
+`NOT_MEASURED`; a partial trace set is rejected. Each replay uses a bounded,
+temporary analysis directory outside the sealed roots. Full Character
+recipient cadence, cross-host due-to-handler latency, and Remote cadence stay
+unmeasured because these records do not contain a shared clock or Remote
+offer/send/handler events. Both reports remain `INCOMPLETE` and do not claim
+provider or Foundation 3L qualification.
+
 This artifact is diagnostic-only until its timing cost is qualified against a
 full 32-client workload. A Release MSVC/GNS microbenchmark on the worker,
 excluding buffer allocation and terminal file output, measured 48.6–49.8 ns
