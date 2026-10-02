@@ -19,6 +19,7 @@
 #include "ReliableEnvelopeContractFixture.hpp"
 #include "NameCoalescingFixture.hpp"
 #include "StructuralCausalEvidenceFixture.hpp"
+#include "FrozenQuoteSchemaFixture.hpp"
 
 #include <algorithm>
 #include <array>
@@ -1793,6 +1794,7 @@ int main() {
 		test::TestPreAcceptanceByteDeferral();
 		test::TestNameCoalescing();
 		test::TestStructuralCausalEvidence();
+		test::TestFrozenQuoteSchemaPin();
 	} catch (const std::exception &Error) {
 		std::cerr << "[Network:EnvelopeContract] " << Error.what() << '\n';
 		++Failures;

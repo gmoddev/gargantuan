@@ -2,6 +2,7 @@
 #include "PlanningLookup.hpp"
 #include "ReliableByteAdmissionDiagnostics.hpp"
 #include "GameSessionTestAccess.hpp"
+#include "FrozenReplicationSchema.hpp"
 #include "../runtime/RuntimeWorkDiagnostics.hpp"
 
 #include "gargantuan/InstanceProperty.hpp"
@@ -167,7 +168,7 @@ namespace gargantuan::network {
 		}
 
 		const InstanceProperty *FindNativeProperty(const PublishReplication &Object, std::string_view Name) {
-			const auto *Definition = GetActiveRuntimeSchemaRegistry().FindClassById(Object.ClassSchemaId);
+			const auto *Definition = detail::GetReplicationSchemaRegistry().FindClassById(Object.ClassSchemaId);
 			if (!Definition) return nullptr;
 			const auto Found = std::ranges::find_if(Definition->AllProperties, [&](const auto &Entry) {
 				return Entry.first == Name;
@@ -334,6 +335,10 @@ namespace gargantuan::network {
 		Quote->SourceRoot.reset();
 		Quote->IsInitiallyRelevant = {};
 		Quote->FrozenQuote = true;
+		// Capture on Main alongside the authoritative catalog. Published registries
+		// are immutable; this strong pin survives later schema replacement without
+		// reading the Main-owned lifecycle from the detached replay thread.
+		Quote->FrozenSchema = GetRuntimeSchemaLifecycle().GetActiveRegistry();
 		Quote->FrozenJournalOldest = First;
 		Quote->FrozenJournalTail = Tail;
 		Quote->FrozenJournalRecords = std::move(Read.Records);
@@ -362,8 +367,9 @@ namespace gargantuan::network {
 
 	FrozenJournalQuoteStep ReplicationCoordinator::AdvanceFrozenJournalQuote(
 		const std::map<ConnectionId, std::size_t> &MaximumFrameBytes) {
-		if (!FrozenQuote || MaximumFrameBytes.size() != Peers.size())
+		if (!FrozenQuote || !FrozenSchema || MaximumFrameBytes.size() != Peers.size())
 			return {.Error = "Frozen journal quote peer set is invalid"};
+		const detail::FrozenReplicationSchemaScope SchemaScope(*FrozenSchema);
 		bool NeedsPlanning = false;
 		for (const auto &[Connection, Peer] : Peers) {
 			const auto Limit = MaximumFrameBytes.find(Connection);

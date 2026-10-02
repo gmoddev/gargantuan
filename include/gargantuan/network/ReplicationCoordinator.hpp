@@ -18,6 +18,7 @@
 namespace gargantuan {
 	class Instance;
 	class InstanceProperty;
+	class RuntimeSchemaRegistry;
 }
 
 namespace gargantuan::network {
@@ -238,10 +239,12 @@ namespace gargantuan::network {
 		[[nodiscard]] ReplicationMetrics GetMetrics() const;
 		// Qualification-only detached input for exact retained-work replay. Capture
 		// on Main at the cessation boundary; the result owns its journal suffix and
-		// peer value state and cannot read the live source or ChangeJournal.
+		// peer value state plus an immutable schema pin. It cannot read the live
+		// source or ChangeJournal. Transfer exclusive ownership for detached replay.
 		[[nodiscard]] std::unique_ptr<ReplicationCoordinator> CaptureFrozenQuote(std::string &Error);
 		// One bounded detached planning / complete-GRPL replay step using only the
-		// captured selection/catalog/journal. Pending relevance is represented before
+		// captured selection/catalog/journal/schema. This is the worker replay entry;
+		// it must not race another call on this detached coordinator. Pending relevance is represented before
 		// journal work; an unfinished planning step is not completion. Caller supplies
 		// negotiated frame limits. Already-accepted unretired debt is separate.
 		[[nodiscard]] FrozenJournalQuoteStep AdvanceFrozenJournalQuote(
@@ -340,6 +343,7 @@ namespace gargantuan::network {
 		std::shared_ptr<Instance> SourceRoot;
 		ObjectId SourceRootId;
 		bool FrozenQuote = false;
+		std::shared_ptr<const RuntimeSchemaRegistry> FrozenSchema;
 		std::uint64_t FrozenJournalOldest = 0;
 		std::uint64_t FrozenJournalTail = 0;
 		std::vector<ChangeRecord> FrozenJournalRecords;

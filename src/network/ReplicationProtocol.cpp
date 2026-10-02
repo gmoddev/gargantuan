@@ -3,6 +3,7 @@
 
 #include "gargantuan/network/BinaryCodec.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
+#include "FrozenReplicationSchema.hpp"
 #include "gargantuan/runtime/AttributeValidation.hpp"
 #include "gargantuan/runtime/ProtocolInput.hpp"
 #include "gargantuan/runtime/TagIndex.hpp"
@@ -340,7 +341,7 @@ namespace gargantuan::network {
 
 	std::vector<SchemaCompatibilityEntry> CaptureReplicationSchemaCompatibility() {
 		std::vector<SchemaCompatibilityEntry> Result;
-		for (const auto *Definition : GetActiveRuntimeSchemaRegistry().EnumerateDefinitions())
+		for (const auto *Definition : detail::GetReplicationSchemaRegistry().EnumerateDefinitions())
 			Result.push_back(
 				{GetSchemaDefinitionId(*Definition),
 				 GetSchemaDefinitionVersion(*Definition),
