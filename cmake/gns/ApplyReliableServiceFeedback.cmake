@@ -47,7 +47,7 @@ endmacro()
 
 GargantuanReadFeedbackSource(steamnetworkingsockets_snp.h 35a8d2721334f5632e042f3165095dcae90ced590b78392cc0f4346fceaba170)
 GargantuanReplaceFeedback("#pragma once" "#pragma once\n#include \"ReliableServiceFeedback.hpp\"\n#include \"AckDiagnostics.hpp\"\n#include <memory>")
-GargantuanReplaceFeedback("struct SSNPSenderState\n{" "struct SSNPSenderState\n{\n\tstd::unique_ptr<GargantuanAckDiagnostics> GargantuanAckTrace;\n\tGargantuanReliableServiceCounters GargantuanFeedback;\n\tbool GargantuanRunningStructuralGrant = false;")
+GargantuanReplaceFeedback("struct SSNPSenderState\n{" "struct SSNPSenderState\n{\n\tstd::unique_ptr<GargantuanAckDiagnostics> GargantuanAckTrace;\n\tbool GargantuanPromptFinalGrantAck = false; // Opt-in prototype, not production policy.\n\tGargantuanReliableServiceCounters GargantuanFeedback;\n\tbool GargantuanRunningStructuralGrant = false;")
 GargantuanReplaceFeedback("\tstatic constexpr uint16 k_nStatus_InFlight = 0xffff;" "\t// A failed SendEncryptedDataChunk queues retry without first-send service.\n\tbool m_bGargantuanEverSent;\n\n\tstatic constexpr uint16 k_nStatus_InFlight = 0xffff;")
 GargantuanWriteFeedbackSource()
 
@@ -59,6 +59,36 @@ GargantuanReplaceFeedback("\t\tSNP_RecordReceivedPktNum( nPktNum, usecNow, bSche
 GargantuanReplaceFeedback("\t\tpReliableDecode += cbMsgSize;" "\t\tif (m_senderState.GargantuanAckTrace) m_senderState.GargantuanAckTrace->Record(GargantuanAckDiagnostics::MessageReceived, usecNow, nMsgNum, cbMsgSize);\n\t\tpReliableDecode += cbMsgSize;")
 GargantuanReplaceFeedback("\t\tm_receiverState.m_mapPacketGaps.rbegin()->second.m_usecWhenAckPrior = INT64_MAX; // Clear timer, we wrote everything we needed to" "\t\tif (m_senderState.GargantuanAckTrace) {\n\t\t\tm_senderState.GargantuanAckTrace->SerializedAckPacket = nLastPktToAck;\n\t\t\tm_senderState.GargantuanAckTrace->Record(GargantuanAckDiagnostics::AckSerialized, helper.UsecNow(), nLastPktToAck, 0);\n\t\t}\n\t\tm_receiverState.m_mapPacketGaps.rbegin()->second.m_usecWhenAckPrior = INT64_MAX; // Clear timer, we wrote everything we needed to")
 GargantuanReplaceFeedback("\t// Fit as many blocks as possible." "\tif (m_senderState.GargantuanAckTrace) m_senderState.GargantuanAckTrace->Record(GargantuanAckDiagnostics::FragmentedAckSerialized, helper.UsecNow(), nLastPktToAck, 0);\n\t// Fit as many blocks as possible.")
+GargantuanReplaceFeedback("\t// OK, we have a plaintext payload.  Encrypt and send it." [=[
+	// The request belongs to the existing packet that completes unique first
+	// transmission, never to enqueue, a segment boundary, or retransmission.
+	if (ctx.m_bGargantuanPromptAckReserved && m_senderState.GargantuanPromptFinalGrantAck)
+	{
+		const auto &Grant = m_senderState.GargantuanFeedback;
+		uint64 UniqueBytes = 0;
+		for (uint16 SegmentHandle : helper.InFlightPkt().m_vecReliableSegments)
+		{
+			const auto &Segment = m_senderState.m_listSentReliableSegments[SegmentHandle];
+			if (!Segment.m_bGargantuanEverSent && Grant.ActiveAttributedRetirementToken &&
+				Grant.ActiveAttributedMessageNumber == uint64_t(Segment.m_pMsg->m_nMessageNumber))
+			{
+				const int Begin = std::max(Segment.m_nOffset, Segment.m_pMsg->ReliableSendInfo().m_cbHdr);
+				const int End = std::min(Segment.m_nOffset + Segment.m_cbSize,
+					Segment.m_pMsg->ReliableSendInfo().m_cbHdr + Segment.m_pMsg->m_cbSize);
+				UniqueBytes += std::max(0, End - Begin);
+			}
+		}
+		ctx.m_bGargantuanPromptAck = UniqueBytes && Grant.StructuralActiveGrantFirstSentBytes > 0 &&
+			Grant.StructuralActiveGrantBytes > Grant.StructuralActiveGrantFirstSentBytes &&
+			UniqueBytes == Grant.StructuralActiveGrantBytes - Grant.StructuralActiveGrantFirstSentBytes;
+	}
+
+	// OK, we have a plaintext payload.  Encrypt and send it.]=])
+GargantuanReplaceFeedback("\t\t// We have potentially transfered ownership of some reliable messages" [=[
+		if (ctx.m_bGargantuanPromptAck && m_senderState.GargantuanAckTrace)
+			m_senderState.GargantuanAckTrace->Record(GargantuanAckDiagnostics::PromptRequestFailed,
+				helper.UsecNow(), m_senderState.GargantuanFeedback.ActiveAttributedRetirementToken, 0);
+		// We have potentially transfered ownership of some reliable messages]=])
 GargantuanReplaceFeedback("\t\t\t\t\t\t// The most common case (hopefully): the segment is currently in flight" "\t\t\t\t\t\tm_senderState.GargantuanFeedback.AckSegment(cbSeg, relSeg.m_hStatusOrRetry == SNPSendReliableSegment_t::k_nStatus_Acked);\n\n\t\t\t\t\t\t// The most common case (hopefully): the segment is currently in flight")
 GargantuanReplaceFeedback("pInFlightSeg->m_hStatusOrRetry = SNPSendReliableSegment_t::k_nStatus_InFlight;" "pInFlightSeg->m_hStatusOrRetry = SNPSendReliableSegment_t::k_nStatus_InFlight;\n\t\t\t\tpInFlightSeg->m_bGargantuanEverSent = false;")
 GargantuanReplaceFeedback("\t// We sent a packet.  Track it" [=[
@@ -66,6 +96,9 @@ GargantuanReplaceFeedback("\t// We sent a packet.  Track it" [=[
 	// failed send leaves the segment on the retry list with EverSent=false;
 	// its later successful retry is unique first-send, not retransmission.
 	m_senderState.GargantuanFeedback.NativePacket(nBytesSent);
+	if (ctx.m_bGargantuanPromptAck && m_senderState.GargantuanAckTrace)
+		m_senderState.GargantuanAckTrace->Record(GargantuanAckDiagnostics::PromptRequestSent,
+			helper.UsecNow(), m_senderState.GargantuanFeedback.ActiveAttributedRetirementToken, nBytesSent);
 	if (m_senderState.GargantuanAckTrace && m_senderState.GargantuanAckTrace->SerializedAckPacket)
 		m_senderState.GargantuanAckTrace->Record(GargantuanAckDiagnostics::AckPacketSent,
 			helper.UsecNow(), m_senderState.GargantuanAckTrace->SerializedAckPacket, nBytesSent);
@@ -129,7 +162,21 @@ GargantuanReplaceFeedback("\t\t// Sent too many packets in one burst?" [=[
 GargantuanWriteFeedbackSource()
 
 GargantuanReadFeedbackSource(steamnetworkingsockets_connections.h 9ece0f7051f1b67e44c75c27c10867a863b56e2a0d0ac95849aa116b5274a9ef)
+GargantuanReplaceFeedback("\tint m_cbMaxEncryptedPayload;" "\tint m_cbMaxEncryptedPayload;\n\tbool m_bGargantuanPromptAckReserved = false;\n\tbool m_bGargantuanPromptAck = false;")
 GargantuanReplaceFeedback("\t/// Called when we close the connection locally" [=[
+	bool GargantuanCanReservePromptAck() const {
+		return m_senderState.GargantuanPromptFinalGrantAck &&
+			m_senderState.GargantuanFeedback.StructuralActiveGrantBytes >= gargantuan::network::FiniteGrantServiceCurve::QuantumBytes;
+	}
+	void GargantuanRecordPromptReserve(int Bytes) {
+		if (auto *Trace = m_senderState.GargantuanAckTrace.get())
+			Trace->MaximumPromptReserveBytes = std::max(Trace->MaximumPromptReserveBytes, uint64_t(Bytes));
+	}
+	bool GargantuanConfigurePromptGrantAck(bool Enabled) {
+		if (m_senderState.GargantuanFeedback.ActiveAttributedRetirementToken) return false;
+		m_senderState.GargantuanPromptFinalGrantAck = Enabled;
+		return true;
+	}
 	bool GargantuanAccessAckDiagnostics(bool Reset, GargantuanAckDiagnostics &Result) {
 		if (Reset) m_senderState.GargantuanAckTrace.reset(new GargantuanAckDiagnostics());
 		if (!m_senderState.GargantuanAckTrace) return false;
@@ -147,8 +194,50 @@ GargantuanReplaceFeedback("\t/// Called when we close the connection locally" [=
 	/// Called when we close the connection locally]=])
 GargantuanWriteFeedbackSource()
 
+GargantuanReadFeedbackSource(steamnetworkingsockets_udp.h ea4f517b674eb15f367c8b443a90738bebdcfb3f892b2a59ba26829eabf4ccea)
+GargantuanReplaceFeedback("\tvoid Trim( int cbHdrOutSpaceRemaining );" "\tvoid GargantuanReservePromptAck(size_t HeaderBytes, CSteamNetworkConnectionBase &Connection);\n\tvoid Trim( int cbHdrOutSpaceRemaining );")
+GargantuanWriteFeedbackSource()
+
+GargantuanReadFeedbackSource(steamnetworkingsockets_udp.cpp a60888c40ea5a814485e56c1c528774d05df408130137fd909f66fc25d0aee2e)
+GargantuanReplaceFeedback("\t// Save time when we sent the last sequenced packet." [=[
+	if (ctx.m_bGargantuanPromptAck)
+	{
+		Assert(ctx.m_bGargantuanPromptAckReserved);
+		ctx.m_nFlags |= ctx.msg.ACK_REQUEST_E2E | ctx.msg.ACK_REQUEST_IMMEDIATE;
+		ctx.SlamFlagsAndCalcSize();
+	}
+	// Save time when we sent the last sequenced packet.]=])
+GargantuanReplaceFeedback("\nvoid UDPSendPacketContext_t::Trim( int cbHdrOutSpaceRemaining )" [=[
+
+void UDPSendPacketContext_t::GargantuanReservePromptAck(size_t HeaderBytes, CSteamNetworkConnectionBase &Connection)
+{
+	if (!Connection.GargantuanCanReservePromptAck()) return;
+	const auto OriginalFlags = m_nFlags;
+	const int OriginalMaximum = m_cbMaxEncryptedPayload;
+	m_nFlags |= msg.ACK_REQUEST_E2E | msg.ACK_REQUEST_IMMEDIATE;
+	SlamFlagsAndCalcSize();
+	CalcMaxEncryptedPayloadSize(HeaderBytes, &Connection);
+	const int PromptMaximum = m_cbMaxEncryptedPayload;
+	m_nFlags = OriginalFlags;
+	SlamFlagsAndCalcSize();
+	m_cbMaxEncryptedPayload = std::min(OriginalMaximum, PromptMaximum);
+	m_bGargantuanPromptAckReserved = true;
+	Connection.GargantuanRecordPromptReserve(OriginalMaximum - m_cbMaxEncryptedPayload);
+}
+
+void UDPSendPacketContext_t::Trim( int cbHdrOutSpaceRemaining )]=])
+GargantuanReplaceFeedback("\t// Would we like to try to send some additional stats, if there is room?" "\tGargantuanReservePromptAck(cbHdrtReserve, connection);\n\t// Would we like to try to send some additional stats, if there is room?")
+GargantuanWriteFeedbackSource()
+
 GargantuanReadFeedbackSource(csteamnetworkingsockets.cpp 2b260c05cc8c262e785387ea3d08eee74cc03b6eed00493e961a82c05dec5451)
 GargantuanReplaceFeedback("static CSteamNetworkListenSocketBase *GetListenSocketByHandle" [=[
+bool GargantuanConfigurePromptGrantAck(ISteamNetworkingSockets *Interface, uint32 Handle, bool Enabled) {
+	ConnectionScopeLock Lock;
+	auto *Connection = GetConnectionByHandleForAPI(Handle, Lock, "GargantuanPromptGrantAck");
+	if (!Connection || Connection->m_pSteamNetworkingSocketsInterface != Interface) return false;
+	return Connection->GargantuanConfigurePromptGrantAck(Enabled);
+}
+
 bool GargantuanAccessAckDiagnostics(ISteamNetworkingSockets *Interface, uint32 Handle,
 	bool Reset, GargantuanAckDiagnostics &Result) {
 	ConnectionScopeLock Lock;

@@ -11,7 +11,7 @@ std::uint64_t GargantuanReliableServiceClock() noexcept;
 // clock as finite-grant service and the Main observer. Do not mix the epochs.
 struct GargantuanAckDiagnostics {
 	enum Kind : std::uint32_t { Deadline = 1, MessageReceived, AckSerialized,
-		AckPacketSent, MessageAcked, FragmentedAckSerialized };
+		AckPacketSent, MessageAcked, FragmentedAckSerialized, PromptRequestSent, PromptRequestFailed };
 	struct Event {
 		std::uint64_t AtMicroseconds = 0;
 		std::int64_t NativeAtMicroseconds = 0;
@@ -29,6 +29,7 @@ struct GargantuanAckDiagnostics {
 	std::uint64_t RepeatedAckSerializations = 0, AckPacketsSent = 0, AckPacketBytes = 0;
 	std::uint64_t LastAckPacketSentAt = 0;
 	std::int64_t LastAckPacketSentNativeAt = 0;
+	std::uint64_t MaximumPromptReserveBytes = 0;
 	void Record(Kind Type, std::int64_t NativeAt, std::int64_t Identity, std::int64_t Value) noexcept {
 		// Every data packet may repeat the same ACK. Retain its first emission
 		// and aggregate all repetitions without consuming the critical event log.
@@ -65,4 +66,5 @@ class ISteamNetworkingSockets;
 namespace SteamNetworkingSocketsLib {
 bool GargantuanAccessAckDiagnostics(ISteamNetworkingSockets *Interface, std::uint32_t Handle,
 	bool Reset, GargantuanAckDiagnostics &Result);
+bool GargantuanConfigurePromptGrantAck(ISteamNetworkingSockets *Interface, std::uint32_t Handle, bool Enabled);
 }

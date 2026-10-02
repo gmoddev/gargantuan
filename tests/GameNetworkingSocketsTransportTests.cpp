@@ -249,6 +249,8 @@ int main(int ArgumentCount, char **Arguments) {
 	TestFarmClockCapture();
 	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--ack-cycle")
 		return GnsAckCycleFixture::Run() ? 0 : 1;
+	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--ack-cycle-prompt")
+		return GnsAckCycleFixture::Run(true) ? 0 : 1;
 	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--packet-tail")
 		return GnsPacketTailFixture::Run() ? 0 : 1;
 	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--four-grant")

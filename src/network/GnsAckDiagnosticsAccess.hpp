@@ -10,6 +10,9 @@ namespace detail {
 struct GnsAckDiagnosticsAccess {
 	static bool Read(GameNetworkingSocketsTransport &Transport, ConnectionId Connection,
 		GargantuanAckDiagnostics &Result, bool Reset = false);
+	// Prototype policy is disabled by default and may change only while no
+	// attributed grant is owned. Not exposed through the transport/public API.
+	static bool PromptFinalGrantAck(GameNetworkingSocketsTransport &Transport, ConnectionId Connection, bool Enabled);
 };
 }
 }
