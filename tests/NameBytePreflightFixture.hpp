@@ -96,6 +96,21 @@ struct NameBytePreflightFixture {
 		}
 		EnvelopeRequire(Optimized->GetJournalLag(Connection) == Reference->GetJournalLag(Connection),
 			"Name preflight preserves actual accepted cursor");
+		const auto *LeftView = Optimized->GetView(Connection);
+		const auto *RightView = Reference->GetView(Connection);
+		EnvelopeRequire(LeftView && RightView && LeftView->Connection == RightView->Connection &&
+			LeftView->Epoch == RightView->Epoch && LeftView->KnownObjects == RightView->KnownObjects &&
+			LeftView->RelevantObjects == RightView->RelevantObjects &&
+			LeftView->LatestStateSequences == RightView->LatestStateSequences,
+			"Name preflight preserves the accepted peer view snapshot");
+		const auto LeftMetrics = Optimized->GetMetrics(), RightMetrics = Reference->GetMetrics();
+		EnvelopeRequire(LeftMetrics.OperationsGenerated == RightMetrics.OperationsGenerated &&
+			LeftMetrics.OperationsCoalesced == RightMetrics.OperationsCoalesced &&
+			LeftMetrics.IncrementalBytes == RightMetrics.IncrementalBytes &&
+			LeftMetrics.StructuralTransitionsAccepted == RightMetrics.StructuralTransitionsAccepted &&
+			LeftMetrics.StructuralTransitionsCommitted == RightMetrics.StructuralTransitionsCommitted &&
+			LeftMetrics.ReplicationBacklog == RightMetrics.ReplicationBacklog,
+			"Name preflight preserves committed operation, byte, transition and backlog counters");
 		return Left;
 	}
 	void Drain() {
@@ -150,6 +165,68 @@ inline void TestNameBytePreflight() {
 			<< " reference_encode_calls=" << F.ReferenceWork[static_cast<std::size_t>(runtime_detail::WorkPhase::StructuralEncode)].Calls
 			<< " optimized_encode_ns=" << F.OptimizedWork[static_cast<std::size_t>(runtime_detail::WorkPhase::StructuralEncode)].Nanoseconds
 			<< " reference_encode_ns=" << F.ReferenceWork[static_cast<std::size_t>(runtime_detail::WorkPhase::StructuralEncode)].Nanoseconds << '\n';
+	}
+	for (const std::size_t Reads : {0u, 1u, 2u, 3u, 5u, 17u, 31u, 63u}) {
+		NameBytePreflightFixture F;
+		F.Names(1);
+		F.Compare(512, 0); // Refresh both catalogs without reading or accepting peer history.
+		const auto InitialLag = F.Optimized->GetJournalLag(F.Connection);
+		constexpr std::size_t FrameLimit = 32 * 1024;
+		const auto Deferred = F.Compare(512, Reads, FrameLimit, 0);
+		EnvelopeRequire(!Deferred.Frame && F.Optimized->GetJournalLag(F.Connection) == InitialLag,
+			"small read budgets and byte deferral cannot advance accepted history");
+		if (Reads == 0) {
+			EnvelopeRequire(Deferred.Error == "Replication transition work limit is invalid" &&
+				Deferred.JournalRecordsExamined == 0, "zero journal budget retains the original validation error");
+			continue;
+		}
+		EnvelopeRequire(Deferred.DeferredForBytes && Deferred.RequiredFrameBytes > 24 * 1024 &&
+			Deferred.RequiredFrameBytes <= FrameLimit, "odd read budgets retain exact bounded byte deferral");
+		const auto Rejected = F.Compare(512, Reads, FrameLimit, FrameLimit, false);
+		EnvelopeRequire(Rejected.Frame && F.Optimized->GetJournalLag(F.Connection) == InitialLag,
+			"bounded geometric preparation rejection preserves the original cursor");
+		const auto Accepted = F.Compare(512, Reads, FrameLimit, FrameLimit);
+		EnvelopeRequire(Accepted.Frame && Accepted.EncodedFrame == Rejected.EncodedFrame &&
+			F.Optimized->GetJournalLag(F.Connection) < InitialLag,
+			"bounded retry accepts exactly the rejected bytes without losing history");
+		if (Reads >= 3) EnvelopeRequire(Counter(F.OptimizedWork, WorkCounter::NamePreflightRetries) > 0,
+			"odd read budget regression exercises the optimized recursive path");
+	}
+	for (const std::size_t Reads : {3u, 5u, 17u, 31u, 63u}) {
+		NameBytePreflightFixture F;
+		F.Names(1);
+		F.Compare(512, 0);
+		const auto InitialLag = F.Optimized->GetJournalLag(F.Connection);
+		const auto Exhausted = F.Compare(512, Reads, 1024);
+		EnvelopeRequire(!Exhausted.Frame && !Exhausted.Error.empty() &&
+			Exhausted.JournalRecordsExamined == Reads && F.Optimized->GetJournalLag(F.Connection) == InitialLag &&
+			Counter(F.OptimizedWork, WorkCounter::NamePreflightRetries) > 0,
+			"exhausted geometric journal tail preserves exact error, full read charge and uncommitted cursor");
+	}
+	for (const bool InvalidInsidePrefix : {true, false}) {
+		NameBytePreflightFixture F(4);
+		F.Objects[0]->SetName(std::string((InvalidInsidePrefix ? 40 : 24) * 1024, 'a'));
+		if (!InvalidInsidePrefix) F.Objects[1]->SetName(std::string(24 * 1024, 'b'));
+		ChangeJournal::Get().Commit(F.World->GetObjectId(), F.Objects[InvalidInsidePrefix ? 1 : 2]->GetObjectId(),
+			PropertyUpdatedChange{"Name", WireValue(std::string{"\xc0\xaf", 2}), true});
+		F.Barrier(); // Keep the malformed historical Name instead of current-state coalescing.
+		F.Compare(512, 0);
+		const auto InitialLag = F.Optimized->GetJournalLag(F.Connection);
+		const auto Prefix = F.Compare(2, 31, 32 * 1024);
+		if (InvalidInsidePrefix) {
+			EnvelopeRequire(!Prefix.Frame && !Prefix.Error.empty() &&
+				F.Optimized->GetJournalLag(F.Connection) == InitialLag &&
+				Counter(F.OptimizedWork, WorkCounter::NamePreflightRetries) == 0,
+				"invalid selected Name wins over an earlier oversized string prefix");
+		} else {
+			EnvelopeRequire(Prefix.Frame && Counter(F.OptimizedWork, WorkCounter::NamePreflightRetries) > 0,
+				"malformed Name outside the transition prefix cannot reject a legal reduced prefix");
+			const auto RemainingLag = F.Optimized->GetJournalLag(F.Connection);
+			const auto Invalid = F.Compare(2, 31, 32 * 1024);
+			EnvelopeRequire(!Invalid.Frame && !Invalid.Error.empty() &&
+				F.Optimized->GetJournalLag(F.Connection) == RemainingLag,
+				"accepting the earlier valid prefix cannot discard the later invalid Name");
+		}
 	}
 	for (const auto &Invalid : std::array<std::string, 4>{std::string{"\xc0\xaf", 2}, std::string{"a\0b", 3},
 		std::string(MaximumProtocolStringBytes + 1, 'x'), std::string{"\xed\xa0\x80", 3}}) {
