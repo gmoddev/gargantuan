@@ -149,7 +149,20 @@ func main() {
 	}
 	$ManifestPath = Join-Path $Root 'run-manifest.json'
 	[IO.File]::WriteAllText($ManifestPath, ($Manifest | ConvertTo-Json -Depth 6))
-	[Environment]::SetEnvironmentVariable('GARGANTUAN_ENGINE_ADAPTER_TOKEN', 'test-only-value')
+	[Environment]::SetEnvironmentVariable('GARGANTUAN_ENGINE_ADAPTER_TOKEN', $null)
+	$TokenRoot = Join-Path $Root $Manifest.RunId
+	[void][IO.Directory]::CreateDirectory($TokenRoot)
+	$Sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+	& icacls.exe $TokenRoot /grant:r "*$($Sid):(OI)(CI)F" '*S-1-5-18:(OI)(CI)F' `
+		'*S-1-5-32-544:(OI)(CI)F' | Out-Null
+	if ($LASTEXITCODE -ne 0) { throw 'could not protect test token root' }
+	& icacls.exe $TokenRoot /inheritance:r | Out-Null
+	if ($LASTEXITCODE -ne 0) { throw 'could not remove test token inheritance' }
+	& icacls.exe $TokenRoot /setowner "*$Sid" | Out-Null
+	if ($LASTEXITCODE -ne 0) { throw 'could not own test token root' }
+	$TokenFile = Join-Path $TokenRoot 'node-token.secret'
+	$TokenValue = [Convert]::ToHexString([Security.Cryptography.RandomNumberGenerator]::GetBytes(32)).ToLowerInvariant()
+	[IO.File]::WriteAllText($TokenFile, $TokenValue, [Text.Encoding]::ASCII)
 	$Stage = Join-Path $Root 'Stage'
 	$Prepare = @{
 		Mode = 'Prepare'; StageRoot = $Stage; RunManifestPath = $ManifestPath
@@ -159,6 +172,7 @@ func main() {
 		NodeSourceCommit = $MockCommit; GoExecutablePath = $PinnedGo
 		GoExecutableSha256 = Get-Pin $PinnedGo; CertificatePath = $Certificate
 		PrivateKeyPath = $PrivateKey; RootCertificatePath = $Certificate
+		NodeTokenFilePath = $TokenFile; NodeTokenFileSha256 = Get-Pin $TokenFile
 	}
 	$Bad = $Prepare.Clone(); $Bad.StageRoot = Join-Path $Root 'BadRevision'
 	$Bad.NodeSourceCommit = 'f' * 40
@@ -179,7 +193,7 @@ func main() {
 		$ConfigText -notmatch [regex]::Escape($ProjectId) -or
 		$ConfigText -notmatch 'package_version = 23' -or
 		$ConfigText -notmatch '(?m)^level = "info"$' -or
-		$ConfigText -match 'test-only-value' -or $Proof.Contains('TokenValue') -or
+		$ConfigText.Contains($TokenValue) -or ($Proof | ConvertTo-Json).Contains($TokenValue) -or
 		$Proof.Contains('PrivateKeyPem')) {
 		throw 'Node config identity or secret separation failed'
 	}
@@ -299,8 +313,8 @@ func main() {
 	$Bad.PrivateKeyPath = $WrongKey
 	Expect-Rejection { & $Source @Bad } 'certificate/private-key mismatch'
 	$Bad = $Prepare.Clone(); $Bad.StageRoot = Join-Path $Root 'MissingToken'
-	[Environment]::SetEnvironmentVariable('GARGANTUAN_ENGINE_ADAPTER_TOKEN', $null)
-	Expect-Rejection { & $Source @Bad } 'missing environment-backed token'
+	$Bad.NodeTokenFileSha256 = '0' * 64
+	Expect-Rejection { & $Source @Bad } 'missing pinned one-run token'
 	Write-Output '[Qualification:FarmNode] MOCK_TEST_OK'
 } finally {
 	[Environment]::SetEnvironmentVariable('GARGANTUAN_ENGINE_ADAPTER_TOKEN', $OldToken)

@@ -1,7 +1,9 @@
 """Source-only tests of the fixed Farm32 endpoint staging boundary."""
 
 import hashlib
+import io
 import json
+from contextlib import redirect_stdout
 from pathlib import Path
 import sys
 import tempfile
@@ -84,6 +86,22 @@ class FarmOuterEndpointTests(unittest.TestCase):
             self.Root.chmod(0o755)
             with self.assertRaises(ValueError):
                 Endpoint.Verify(self.Root, self.Index)
+
+    def test_one_run_node_token_is_private_unique_and_retired(self):
+        RunRoot = Path(self.Temporary.name) / self.RunId
+        Endpoint.Prepare(RunRoot)
+        Output = io.StringIO()
+        with redirect_stdout(Output):
+            Endpoint.NewNodeToken(RunRoot)
+        TokenFile = RunRoot / "node-token.secret"
+        Token = TokenFile.read_text(encoding="ascii")
+        self.assertRegex(Token, r"^[0-9a-f]{64}$")
+        self.assertNotIn(Token, Output.getvalue())
+        with self.assertRaises(FileExistsError):
+            Endpoint.NewNodeToken(RunRoot)
+        Endpoint.RetireNodeToken(RunRoot)
+        self.assertFalse(TokenFile.exists())
+        Endpoint.RetireNodeToken(RunRoot)
 
     def RunInThread(self):
         Errors = []

@@ -4,6 +4,7 @@ import ctypes
 import datetime
 import hashlib
 import json
+import os
 from pathlib import Path
 import sys
 import tempfile
@@ -14,6 +15,7 @@ import uuid
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 import farm_campaign_runner as Campaign  # noqa: E402
+from private_ticket_acl import Harden  # noqa: E402
 
 
 MOCK_CAPTURE = r'''
@@ -150,12 +152,18 @@ class CampaignTests(unittest.TestCase):
         Helper.write_bytes(b"pinned Node helper")
         StageRoot = self.Root / "node-stage"
         StageRoot.mkdir()
+        TokenRoot = self.Root / self.RunId
+        TokenRoot.mkdir()
+        Harden(TokenRoot)
+        TokenFile = TokenRoot / "node-token.secret"
+        TokenFile.write_text("f" * 64, encoding="ascii")
         StageFile = Save(StageRoot / "node-stage.json", {
             "Format": "GargantuanFarmNodeStage", "Version": 1,
             "Status": "STAGED_NOT_TLS_PROVEN", "RunId": self.RunId,
             "SourceCommit": self.SourceCommit, "RunManifestSha256": Hash(self.Manifest),
             "NodeEndpoint": Manifest["NodeEndpoint"],
             "NodeTokenEnvironment": Manifest["NodeTokenEnvironment"],
+            "NodeTokenFilePath": str(TokenFile), "NodeTokenFileSha256": Hash(TokenFile),
             "RootCertificateSha256": Manifest["NodeRootCertificateSha256"],
             "HelperSha256": Hash(Helper),
         })
@@ -231,10 +239,12 @@ class CampaignTests(unittest.TestCase):
 
         def FakeStart(Config, Farm, Manifest):
             Events.append("node-start")
+            self.assertEqual("f" * 64, os.environ[Manifest["NodeTokenEnvironment"]])
             return NodeProcess, StageRoot
 
         def FakeJoin(Endpoint, Workflows, Catalog, Journal):
             Events.append("join")
+            self.assertEqual("f" * 64, os.environ["GARGANTUAN_ENGINE_ADAPTER_TOKEN"])
             EvidenceRoot = Path(json.loads(FarmFile.read_text())["EvidenceRoot"])
             EvidenceRoot.mkdir()
             Save(EvidenceRoot / "evidence-sha256.json", {"RunId": self.RunId})
@@ -255,6 +265,7 @@ class CampaignTests(unittest.TestCase):
                 mock.patch.object(Campaign, "GetCatalog", return_value=object()):
             self.assertEqual(0, Campaign.RunRole(TicketFile))
         self.assertEqual(["node-start", "node-ready", "join", "node-stop"], Events)
+        self.assertNotEqual("f" * 64, os.environ.get("GARGANTUAN_ENGINE_ADAPTER_TOKEN"))
         Result = json.loads(Path(Ticket["ResultPath"]).read_text())
         self.assertEqual(Hash(StageRoot / "node-run.json"), Result["NodeRunReceiptSha256"])
         self.assertEqual(Ticket["NodeStageSha256"], Result["NodeStageSha256"])
@@ -273,6 +284,18 @@ class CampaignTests(unittest.TestCase):
         Save(ClientTicket, Client)
         with self.assertRaisesRegex(ValueError, "Node supervision ticket mismatch"):
             Campaign.VerifyRole(Client, "CLIENT")
+
+    def test_node_token_tamper_fails_before_child_and_restores_environment(self):
+        TicketFile, _, _, StageRoot = self.NodeRole()
+        Stage = json.loads((StageRoot / "node-stage.json").read_text())
+        Path(Stage["NodeTokenFilePath"]).write_text("e" * 64, encoding="ascii")
+        Previous = os.environ.get("GARGANTUAN_ENGINE_ADAPTER_TOKEN")
+        with mock.patch.object(Campaign, "GetCatalog", return_value=object()), \
+                mock.patch.object(Campaign, "StartNode") as Start:
+            with self.assertRaisesRegex(ValueError, "Node token file pin mismatch"):
+                Campaign.RunRole(TicketFile)
+            Start.assert_not_called()
+        self.assertEqual(Previous, os.environ.get("GARGANTUAN_ENGINE_ADAPTER_TOKEN"))
 
     def test_node_child_command_marker_and_run_receipt_are_bounded(self):
         _, Ticket, FarmFile, StageRoot = self.NodeRole()

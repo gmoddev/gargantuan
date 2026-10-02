@@ -23,6 +23,7 @@ REAL_WORKER_SANDBOX = Outer.WorkerSandbox
 class MockTransport:
     def __init__(self):
         self.ControlRules = []
+        self.RetiredNodeRoots = []
 
     def AddControlFirewall(self, RunId):
         self.ControlRules.append(("add", RunId))
@@ -44,6 +45,8 @@ class MockTransport:
             Endpoint.Verify(*Arguments)
         elif Action == "abort":
             Endpoint.Abort(*Arguments)
+        elif Action == "retire-node-token":
+            self.RetiredNodeRoots.append(Arguments[0])
         else:
             raise AssertionError(Action)
 
@@ -175,6 +178,25 @@ class OuterCampaignTests(unittest.TestCase):
                              Transport)
         self.assertEqual([("add", self.Fixture.Identity["RunId"]),
                           ("remove", self.Fixture.Identity["RunId"])], Transport.ControlRules)
+
+    def test_node_token_retired_after_failed_launch_barrier(self):
+        Transport = MockTransport()
+        for Role in ("SERVER", "CLIENT"):
+            Source = Path(self.Fixture.Spec["Roles"][Role]["PreflightSource"])
+            Target = self.Fixture.Private / ("server-preflight.json" if Role == "SERVER" else
+                                             "client-preflight.json")
+            shutil.copyfile(Source, Target)
+        Outer.Stage(self.Fixture.Private, self.Fixture.SpecFile,
+                    r"C:\Python312\python.exe", r"C:\Sandbox\farm_outer_endpoint.py", Transport)
+        self.Fixture.Spec["Roles"]["SERVER"]["NodeStage"] = {"Path": "pinned", "Sha256": "a" * 64}
+        self.Fixture.SpecFile.write_text(json.dumps(self.Fixture.Spec), encoding="utf-8")
+        with mock.patch.object(Outer, "ControlProbe", side_effect=TimeoutError("mock blocked")):
+            with self.assertRaisesRegex(TimeoutError, "mock blocked"):
+                Outer.Launch(self.Fixture.Private, self.Fixture.SpecFile,
+                             r"C:\Python312\python.exe", r"C:\Sandbox\farm_outer_endpoint.py",
+                             Transport)
+        self.assertEqual([r"C:\Sandbox" + "\\" + self.Fixture.Identity["RunId"]],
+                         Transport.RetiredNodeRoots)
 
     def test_worker_firewall_commands_pin_one_program_port_and_peer(self):
         Calls = []

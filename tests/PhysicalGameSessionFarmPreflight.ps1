@@ -10,7 +10,9 @@ param(
 	[Parameter(Mandatory = $true)][string]$EvidenceRoot,
 	[Parameter(Mandatory = $true)][string]$RunRegistryRoot,
 	[Parameter(Mandatory = $true)][string]$ReportPath,
-	[string]$NodeRootCertificatePath
+	[string]$NodeRootCertificatePath,
+	[string]$NodeTokenFilePath,
+	[ValidatePattern('^[a-fA-F0-9]{64}$')][string]$NodeTokenFileSha256
 )
 
 $ErrorActionPreference = 'Stop'
@@ -65,6 +67,32 @@ function Get-ProcessBaseline {
 	return [pscustomobject]@{ ProcessCount = $Processes.Count; ThreadCount = $Threads }
 }
 
+function Test-NodeTokenFile {
+	param([string]$Path, [string]$Sha256, [string]$RunId)
+	if ([string]::IsNullOrWhiteSpace($Path) -or [string]::IsNullOrWhiteSpace($Sha256)) { return $false }
+	$Resolved = [IO.Path]::GetFullPath($Path)
+	if ([IO.Path]::GetFileName($Resolved) -cne 'node-token.secret' -or
+		[IO.Path]::GetFileName([IO.Path]::GetDirectoryName($Resolved)) -cne $RunId) { return $false }
+	$Parent = [IO.Path]::GetDirectoryName($Resolved)
+	$ParentItem = Get-Item -LiteralPath $Parent -ErrorAction Stop
+	$File = Get-Item -LiteralPath $Resolved -ErrorAction Stop
+	if (($ParentItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -or
+		($File.Attributes -band [IO.FileAttributes]::ReparsePoint) -or
+		$File.PSIsContainer -or $File.Length -ne 64 -or
+		(Get-FileHash -LiteralPath $Resolved -Algorithm SHA256).Hash -ine $Sha256) { return $false }
+	$Acl = Get-Acl -LiteralPath $Parent
+	$Sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+	$Allowed = @($Sid, 'S-1-5-18', 'S-1-5-32-544', 'S-1-3-4')
+	$Observed = @($Acl.Access | ForEach-Object {
+		$_.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value
+	})
+	if (-not $Acl.AreAccessRulesProtected -or
+		$Acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -cne $Sid -or
+		$Observed.Count -lt 1 -or $Sid -notin $Observed -or
+		@($Observed | Where-Object { $_ -notin $Allowed }).Count -ne 0) { return $false }
+	return [IO.File]::ReadAllText($Resolved, [Text.Encoding]::ASCII) -cmatch '^[a-f0-9]{64}$'
+}
+
 foreach ($Definition in @(Import-EndpointValidators)) {
 	. ([scriptblock]::Create($Definition.Extent.Text))
 }
@@ -107,8 +135,8 @@ if ($Role -eq 'Server' -and $Manifest.Provider -eq 'Node') {
 		(Test-Path -LiteralPath $NodeRootCertificatePath -PathType Leaf) -and
 		(Get-FileHash -LiteralPath $NodeRootCertificatePath -Algorithm SHA256).Hash -ieq
 		$Manifest.NodeRootCertificateSha256
-	$NodeTokenPresent = -not [string]::IsNullOrWhiteSpace(
-		[Environment]::GetEnvironmentVariable($Manifest.NodeTokenEnvironment))
+	$NodeTokenPresent = Test-NodeTokenFile -Path $NodeTokenFilePath `
+		-Sha256 $NodeTokenFileSha256 -RunId $Manifest.RunId
 }
 $Inventory = [ordered]@{
 	Format = 'GargantuanPhysicalFarmPreflight'; Version = 1

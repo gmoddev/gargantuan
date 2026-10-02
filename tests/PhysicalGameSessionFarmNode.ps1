@@ -17,6 +17,8 @@ param(
 	[string]$CertificatePath,
 	[string]$PrivateKeyPath,
 	[string]$RootCertificatePath,
+	[string]$NodeTokenFilePath,
+	[ValidatePattern('^[a-fA-F0-9]{64}$')][string]$NodeTokenFileSha256,
 	[ValidatePattern('^[a-fA-F0-9]{64}$')][string]$StageSha256,
 	[ValidateRange(60, 1200)][int]$MaximumRuntimeSeconds = 900
 )
@@ -130,6 +132,38 @@ function Get-Sha256 {
 	return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
 }
 
+function Assert-NodeTokenFile {
+	param([string]$Path, [string]$Sha256, [string]$RunId)
+	$Resolved = [IO.Path]::GetFullPath($Path)
+	if ([IO.Path]::GetFileName($Resolved) -cne 'node-token.secret' -or
+		[IO.Path]::GetFileName([IO.Path]::GetDirectoryName($Resolved)) -cne $RunId) {
+		throw 'Node token path is not bound to this run'
+	}
+	$Parent = [IO.Path]::GetDirectoryName($Resolved)
+	$ParentItem = Get-Item -LiteralPath $Parent -ErrorAction Stop
+	if ($ParentItem.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+		throw 'Node token parent is a link'
+	}
+	$Acl = Get-Acl -LiteralPath $Parent
+	$Sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+	$Allowed = @($Sid, 'S-1-5-18', 'S-1-5-32-544', 'S-1-3-4')
+	$Observed = @($Acl.Access | ForEach-Object {
+		$_.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value
+	})
+	if (-not $Acl.AreAccessRulesProtected -or
+		$Acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -cne $Sid -or
+		$Observed.Count -lt 1 -or $Sid -notin $Observed -or
+		@($Observed | Where-Object { $_ -notin $Allowed }).Count -ne 0) {
+		throw 'Node token directory is not private to this worker identity'
+	}
+	$File = Assert-FilePin -Path $Resolved -Sha256 $Sha256 -MaximumBytes 64
+	$Item = Get-Item -LiteralPath $File
+	if ($Item.Length -ne 64) { throw 'Node token length mismatch' }
+	$Value = [IO.File]::ReadAllText($File, [Text.Encoding]::ASCII)
+	if ($Value -cnotmatch '^[a-f0-9]{64}$') { throw 'Node token format mismatch' }
+	return $Value
+}
+
 function Assert-NodeBuildProvenance {
 	param([string]$ExecutablePath, [string]$SourceCommit, [string]$GoExecutable)
 	if ($SourceCommit -cnotmatch '^[a-fA-F0-9]{40}$') {
@@ -208,7 +242,8 @@ if ($Mode -eq 'Prepare') {
 	foreach ($Required in @($RunManifestPath, $RunManifestSha256, $ServerPackageRoot,
 		$DescriptorPath, $DescriptorSha256, $NodeExecutablePath, $NodeExecutableSha256,
 		$NodeSourceCommit, $GoExecutablePath, $GoExecutableSha256,
-		$CertificatePath, $PrivateKeyPath, $RootCertificatePath)) {
+		$CertificatePath, $PrivateKeyPath, $RootCertificatePath,
+		$NodeTokenFilePath, $NodeTokenFileSha256)) {
 		if ([string]::IsNullOrWhiteSpace($Required)) { throw 'Prepare needs every pinned Node input' }
 	}
 	$Manifest = Read-PinnedRunManifest -Path $RunManifestPath -ExpectedSha256 $RunManifestSha256
@@ -228,10 +263,10 @@ if ($Mode -eq 'Prepare') {
 		-MaximumBytes 65536
 	$CertificateThumbprint = Assert-Certificate -Certificate $Certificate -PrivateKey $Key `
 		-Root $Root -HostName '127.0.0.1'
-	if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable(
-		$Manifest.NodeTokenEnvironment))) { throw 'Node token environment is empty' }
+	$null = Assert-NodeTokenFile -Path $NodeTokenFilePath -Sha256 $NodeTokenFileSha256 `
+		-RunId $Manifest.RunId
 	$Stage = Assert-DisjointStage -Stage $StageRoot -Inputs @($Server, $Descriptor, $Executable, $GoExecutable,
-		$Certificate, $Key, $Root, $RunManifestPath)
+		$Certificate, $Key, $Root, $RunManifestPath, $NodeTokenFilePath)
 	$ConfigText = @(
 		'schema_version = 1', '', '[host]',
 		('id = ' + (Quote-Toml "farm32-$($Manifest.RunId)")),
@@ -272,6 +307,8 @@ if ($Mode -eq 'Prepare') {
 		NodeExecutablePath = $Executable; NodeExecutableSha256 = $NodeExecutableSha256.ToLowerInvariant()
 		GoExecutablePath = $GoExecutable; GoExecutableSha256 = $GoExecutableSha256.ToLowerInvariant()
 		NodeEndpoint = $Manifest.NodeEndpoint; NodeTokenEnvironment = $Manifest.NodeTokenEnvironment
+		NodeTokenFilePath = [IO.Path]::GetFullPath($NodeTokenFilePath)
+		NodeTokenFileSha256 = $NodeTokenFileSha256.ToLowerInvariant()
 		RootCertificatePath = $Root; RootCertificateSha256 = (Get-Sha256 $Root)
 		CertificatePath = $Certificate; CertificateSha256 = (Get-Sha256 $Certificate)
 		CertificateThumbprint = $CertificateThumbprint
@@ -336,11 +373,11 @@ $Certificate = Assert-FilePin -Path $Proof.CertificatePath -Sha256 $Proof.Certif
 	-MaximumBytes 65536
 $Key = Assert-FilePin -Path $Proof.PrivateKeyPath -MaximumBytes 65536
 if ((Assert-Certificate -Certificate $Certificate -PrivateKey $Key -Root $Root `
-	-HostName '127.0.0.1') -cne $Proof.CertificateThumbprint -or
-	[string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable(
-		$Proof.NodeTokenEnvironment))) {
-	throw 'Node TLS inputs or token environment changed'
+	-HostName '127.0.0.1') -cne $Proof.CertificateThumbprint) {
+	throw 'Node TLS inputs changed'
 }
+$NodeToken = Assert-NodeTokenFile -Path $Proof.NodeTokenFilePath `
+	-Sha256 $Proof.NodeTokenFileSha256 -RunId $Proof.RunId
 $ReceiptPath = Join-Path $Stage 'node-run.json'
 if (Test-Path -LiteralPath $ReceiptPath) { throw 'Node stage was already run' }
 $ClaimPath = Join-Path $Stage 'node-run.claim'
@@ -358,6 +395,8 @@ $Info.UseShellExecute = $false
 $Info.CreateNoWindow = $true
 $Info.RedirectStandardOutput = $true
 $Info.RedirectStandardError = $true
+$Info.Environment[$Proof.NodeTokenEnvironment] = $NodeToken
+$NodeToken = $null
 foreach ($Argument in @('serve', '--config', $Config)) { [void]$Info.ArgumentList.Add($Argument) }
 $Child = [Diagnostics.Process]::new()
 $Child.StartInfo = $Info

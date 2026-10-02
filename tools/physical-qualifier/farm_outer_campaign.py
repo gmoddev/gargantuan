@@ -33,7 +33,7 @@ CONTROL_PORT = 39451
 SHA = re.compile(r"[0-9a-f]{64}\Z")
 SAFE_REMOTE = re.compile(r"^[A-Za-z]:\\[A-Za-z0-9._\\-]{1,350}\Z")
 SAFE_ARGUMENT = re.compile(r"[A-Za-z0-9._:\\-]{1,512}\Z")
-ROLE_FILES = ("farm_campaign_runner.py", "farm_lifecycle.py", "dependency.py",
+ROLE_FILES = ("farm_campaign_runner.py", "farm_lifecycle.py", "private_ticket_acl.py", "dependency.py",
               "upstream.lock.json")
 
 
@@ -271,6 +271,8 @@ def PrepareInputs(ConfigPath, TransportInstance=None):
         raise ValueError("[Qualification:FarmOuter] worker PowerShell pin mismatch")
     WorkerRunRoot = str(PureWindowsPath(WorkerToolRoot) / RunId)
     TransportInstance.Remote("prepare", RemoteText(WorkerRunRoot))
+    NodeTokenPath = str(PureWindowsPath(WorkerRunRoot) / "node-token.secret")
+    NodeTokenSha256 = None
     for Name in ("NewPhysicalGameSessionFarmManifest.ps1",
                  "PhysicalGameSessionFarmPreflight.ps1",
                  "PhysicalGameSessionFarmEndpoint.ps1"):
@@ -329,6 +331,10 @@ def PrepareInputs(ConfigPath, TransportInstance=None):
                 TransportInstance.WorkerDigest(WorkerSandbox(Node["GoExecutablePath"])) !=
                 Node["GoExecutableSha256"].lower()):
             raise ValueError("[Qualification:FarmOuter] invalid Node source pins")
+        TransportInstance.Remote("new-node-token", RemoteText(WorkerRunRoot))
+        NodeTokenSha256 = TransportInstance.Remote("digest", RemoteText(NodeTokenPath)).stdout.strip()
+        if not SHA.fullmatch(NodeTokenSha256):
+            raise ValueError("[Qualification:FarmOuter] Node token pin unavailable")
         TransportInstance.WorkerPowerShell(WorkerPowerShell["Path"], Helper,
             "-Mode", "Prepare", "-StageRoot",
             WorkerSandbox(ExpandRun(Node["StageRoot"], RunId)), "-RunManifestPath", RemoteManifest,
@@ -342,7 +348,8 @@ def PrepareInputs(ConfigPath, TransportInstance=None):
             "-GoExecutableSha256", Node["GoExecutableSha256"], "-CertificatePath",
             WorkerSandbox(Node["CertificatePath"]), "-PrivateKeyPath",
             WorkerSandbox(Node["PrivateKeyPath"]), "-RootCertificatePath",
-            WorkerSandbox(Node["RootCertificatePath"]), Timeout=40)
+            WorkerSandbox(Node["RootCertificatePath"]), "-NodeTokenFilePath",
+            NodeTokenPath, "-NodeTokenFileSha256", NodeTokenSha256, Timeout=40)
         StagePath = str(PureWindowsPath(ExpandRun(Node["StageRoot"], RunId)) / "node-stage.json")
         StageHash = TransportInstance.Remote("digest", RemoteText(StagePath)).stdout.strip()
         if not SHA.fullmatch(StageHash):
@@ -359,7 +366,9 @@ def PrepareInputs(ConfigPath, TransportInstance=None):
                   "-RunRegistryRoot", Server["RunRegistryRoot"],
                   "-ReportPath", ServerPreflightRemote]
     if Config["Provider"] == "Node":
-        ServerArgs += ["-NodeRootCertificatePath", Spec["Roles"]["SERVER"]["NodeRootCertificatePath"]]
+        ServerArgs += ["-NodeRootCertificatePath", Spec["Roles"]["SERVER"]["NodeRootCertificatePath"],
+                       "-NodeTokenFilePath", NodeTokenPath,
+                       "-NodeTokenFileSha256", NodeTokenSha256]
     TransportInstance.WorkerPowerShell(WorkerPowerShell["Path"], PreflightScript,
                                        *ServerArgs, Timeout=45)
     ServerPreflight = Private / "server-preflight.json"
@@ -536,20 +545,30 @@ def Launch(PrivateRoot, SpecPath, WorkerPython, WorkerHelper, TransportInstance=
     Identity = ReadJson(PrivateRoot / "identity.json")
     Roots = {Role: Spec["Roles"][Role]["StageRoot"] for Role in ("SERVER", "CLIENT")}
     TransportInstance = TransportInstance or Transport(WorkerPython, WorkerHelper)
-    VerifyRuntimePins(PrivateRoot, WorkerPython, WorkerHelper, TransportInstance)
-    RequireFreshPreflights(PrivateRoot, Identity)
-    for Role in Roots:
-        Index = str(PureWindowsPath(Roots[Role]) / "stage-index.json")
-        if Role == "SERVER":
-            TransportInstance.Remote("verify", RemoteText(Roots[Role]), RemoteText(Index))
-        else:
-            from farm_outer_endpoint import Verify
-            Verify(Roots[Role], Index)
-    TransportInstance.AddControlFirewall(Identity["RunId"])
+    FirewallAdded = False
+    RuntimeVerified = False
     try:
+        VerifyRuntimePins(PrivateRoot, WorkerPython, WorkerHelper, TransportInstance)
+        RuntimeVerified = True
+        RequireFreshPreflights(PrivateRoot, Identity)
+        for Role in Roots:
+            Index = str(PureWindowsPath(Roots[Role]) / "stage-index.json")
+            if Role == "SERVER":
+                TransportInstance.Remote("verify", RemoteText(Roots[Role]), RemoteText(Index))
+            else:
+                from farm_outer_endpoint import Verify
+                Verify(Roots[Role], Index)
+        TransportInstance.AddControlFirewall(Identity["RunId"])
+        FirewallAdded = True
         return LaunchPrepared(TransportInstance, Roots, Spec, Identity, PrivateRoot)
     finally:
-        TransportInstance.RemoveControlFirewall(Identity["RunId"])
+        try:
+            if RuntimeVerified and "NodeStage" in Spec["Roles"]["SERVER"]:
+                WorkerRunRoot = str(PureWindowsPath(WorkerHelper).parent / Identity["RunId"])
+                TransportInstance.Remote("retire-node-token", RemoteText(WorkerRunRoot))
+        finally:
+            if FirewallAdded:
+                TransportInstance.RemoveControlFirewall(Identity["RunId"])
 
 
 def LaunchPrepared(TransportInstance, Roots, Spec, Identity, PrivateRoot):
