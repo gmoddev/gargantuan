@@ -378,8 +378,75 @@ namespace gargantuan::network {
 			if (GetJournalLag(Connection) == 0) continue;
 			FrozenQuoteAfter = Connection;
 			const auto Limit = MaximumFrameBytes.at(Connection);
-			auto Produced = ProduceIncremental(Connection, Configuration.PeerQuantum, Limit,
-				Configuration.MaximumJournalRecordsPerPeerTick, Limit);
+			const auto &Peer = Peers.at(Connection);
+			const auto InitialTransitions = Configuration.PeerQuantum;
+			const auto InitialJournalRecords = Configuration.MaximumJournalRecordsPerPeerTick;
+			auto Transitions = InitialTransitions;
+			auto JournalRecords = InitialJournalRecords;
+			// A frozen, all-Name prefix can prove an oversized candidate from string
+			// payload bytes alone. Follow the producer's exact geometric retry budgets
+			// before constructing or encoding it. Mixed or uncertain prefixes retain the
+			// original producer path, including its error and no-frame behavior.
+			if (Peer.PolicyManaged && Peer.JournalCursor.Scope == SourceRootId &&
+				Peer.JournalCursor.NextSequence >= FrozenJournalOldest &&
+				Peer.JournalCursor.NextSequence < FrozenJournalTail) {
+				const auto First = static_cast<std::size_t>(Peer.JournalCursor.NextSequence - FrozenJournalOldest);
+				std::set<ObjectId> ValidatedCurrentNames;
+				std::set<std::size_t> ValidatedHistoricNames;
+				bool Proven = true;
+				while (Transitions > 1 && Proven) {
+					const auto ReadLimit = std::min(MaximumWireJournalRecords, (JournalRecords + 1) / 2);
+					if (First > FrozenJournalRecords.size() || ReadLimit == 0) break;
+					const auto Count = std::min(ReadLimit, FrozenJournalRecords.size() - First);
+					if (Count == 0) break;
+					std::set<ObjectId> CurrentNames;
+					std::size_t NameBytes = 0;
+					std::size_t OperationCount = 0;
+					for (std::size_t Index = First; Index < First + Count; ++Index) {
+						const auto &Record = FrozenJournalRecords[Index];
+						const auto *Name = std::get_if<PropertyUpdatedChange>(&Record.Payload);
+						const auto Accepted = Peer.AcceptedParents.find(Record.Object);
+						const auto Published = Peer.PublicationJournalEnds.find(Record.Object);
+						const auto CatalogObject = Catalog.find(Record.Object);
+						if (!Name || !Name->Replicated || Name->DeclaringClassSchemaId ||
+							Name->PropertyName != "Name" || !std::holds_alternative<std::string>(Name->Value) ||
+							!Peer.View.Knows(Record.Object) || !Peer.View.RelevantObjects.contains(Record.Object) ||
+							Accepted == Peer.AcceptedParents.end() || Record.Sequence < Accepted->second.NameJournalEnd ||
+							(Published != Peer.PublicationJournalEnds.end() && Record.Sequence < Published->second) ||
+							CatalogObject == Catalog.end() || RetiredObjects.contains(Record.Object) ||
+							CatalogObject->second->Publication.Properties.contains("Name")) {
+							Proven = false;
+							break;
+						}
+						const bool CoalescedName = Record.Sequence >= NameCoalescingBegin;
+						if (CoalescedName && !CurrentNames.insert(Record.Object).second) continue;
+						if (OperationCount == Transitions) break;
+						const auto &Value = CoalescedName
+							? CatalogObject->second->Publication.Name : std::get<std::string>(Name->Value);
+						const bool Inserted = CoalescedName
+							? ValidatedCurrentNames.insert(Record.Object).second
+							: ValidatedHistoricNames.insert(Index).second;
+						if (Inserted) {
+							if (Value.size() > MaximumProtocolStringBytes ||
+								Value.find('\0') != std::string::npos || !IsValidProtocolUtf8(Value)) {
+								Proven = false;
+								break;
+							}
+						}
+						NameBytes += Value.size();
+						++OperationCount;
+					}
+					if (!Proven) break;
+					if (NameBytes <= Limit || Count == 1) break;
+					JournalRecords -= Count;
+					Transitions /= 2;
+				}
+				if (!Proven) {
+					Transitions = InitialTransitions;
+					JournalRecords = InitialJournalRecords;
+				}
+			}
+			auto Produced = ProduceIncremental(Connection, Transitions, Limit, JournalRecords, Limit);
 			if (!Produced.Frame) {
 				if (Produced.Error == "No relevant replication changes are available" ||
 					Produced.Error == "No replication changes are available") return {};

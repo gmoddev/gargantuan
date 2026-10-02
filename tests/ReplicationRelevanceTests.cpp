@@ -120,6 +120,9 @@ namespace {
 			auto Baseline = QuoteLive.ProducePendingBaseline(QuoteConnection, 8, 200);
 			Check(Baseline.Frame && QuoteLive.CommitSchedulerAcceptance(QuoteConnection, Baseline.Frame->Sequence).Succeeded(),
 				"frozen journal quote starts after an accepted baseline");
+			Check(QuoteObject->ApplyAttributeMutation("QuoteMarker", WireValue(7),
+				ScriptSecurityContext::CoreTrusted()) == MutationStatus::Success,
+				"frozen journal quote includes a mixed record before Name history");
 			QuoteObject->SetName("quoted-current-name");
 			auto Quote = QuoteLive.CaptureFrozenQuote(Error);
 			auto Reference = QuoteLive.CaptureFrozenQuote(Error);
@@ -145,8 +148,90 @@ namespace {
 			QuoteWorld->Destroy();
 		}
 		{
+			// Cessation freezes the journal, not future relevance decisions. This
+			// counterexample remains separate from the quote preflight oracle.
+			auto RelevanceWorld = std::make_shared<DataModel>();
+			auto RelevanceObject = std::make_shared<Folder>();
+			RelevanceObject->SetParent(RelevanceWorld);
+			const ConnectionId RelevanceConnection{86, 19};
+			PeerRelevanceSelection Initial{.RequiredObjects = {RelevanceWorld->GetObjectId()},
+				.DesiredObjects = {RelevanceWorld->GetObjectId(), RelevanceObject->GetObjectId()}};
+			std::ranges::sort(Initial.DesiredObjects);
+			ReplicationCoordinator RelevanceLive(RelevanceWorld);
+			Check(RelevanceLive.RegisterPeerPlanned(RelevanceConnection, ReplicationEpoch(1),
+				std::make_shared<const PeerRelevanceSelection>(Initial)).Succeeded(),
+				"relevance counterexample peer registers");
+			for (std::uint64_t Tick = 1; Tick != 200 && !RelevanceLive.IsPlanningReady(RelevanceConnection); ++Tick)
+				RelevanceLive.ProcessPlanning(Tick);
+			auto Baseline = RelevanceLive.ProducePendingBaseline(RelevanceConnection, 8, 200);
+			Check(Baseline.Frame && RelevanceLive.CommitSchedulerAcceptance(
+				RelevanceConnection, Baseline.Frame->Sequence).Succeeded(),
+				"relevance counterexample starts after an accepted baseline");
+			Check(RelevanceLive.GetView(RelevanceConnection)->Knows(RelevanceObject->GetObjectId()),
+				"relevance counterexample object is accepted before cessation");
+			const auto Tail = ChangeJournal::Get().CreateCursor(RelevanceWorld->GetObjectId()).NextSequence;
+			auto Frozen = RelevanceLive.CaptureFrozenQuote(Error);
+			Check(Frozen && Error.empty(), "relevance counterexample freezes a complete journal tail");
+			PeerRelevanceSelection RootOnly{.RequiredObjects = {RelevanceWorld->GetObjectId()},
+				.DesiredObjects = {RelevanceWorld->GetObjectId()}};
+			Check(RelevanceLive.RequestPlanning(RelevanceConnection,
+				std::make_shared<const PeerRelevanceSelection>(RootOnly), 201).Succeeded(),
+				"live peer can change Desired without a structural journal mutation");
+			for (std::uint64_t Tick = 202; Tick != 400 && !RelevanceLive.IsPlanningReady(RelevanceConnection); ++Tick)
+				RelevanceLive.ProcessPlanning(Tick);
+			auto Leave = RelevanceLive.ProducePendingRelevance(RelevanceConnection, 8, 400);
+			Check(Leave.Frame && RelevanceLive.CommitSchedulerAcceptance(
+				RelevanceConnection, Leave.Frame->Sequence).Succeeded(),
+				"live peer can accept a Leave after cessation");
+			const std::map<ConnectionId, std::size_t> Limits{{RelevanceConnection,
+				MaximumReliableServiceGroupBytes - ReliableServiceEnvelopeBytes}};
+			const auto FrozenStep = Frozen ? Frozen->AdvanceFrozenJournalQuote(Limits) : FrozenJournalQuoteStep{};
+			Check(FrozenStep.Complete && !FrozenStep.Frame && FrozenStep.Error.empty() &&
+				ChangeJournal::Get().CreateCursor(RelevanceWorld->GetObjectId()).NextSequence == Tail,
+				"frozen journal quote omits a later live relevance Leave despite an unchanged source tail");
+			RelevanceWorld->Destroy();
+		}
+		{
+			auto EmptyWorld = std::make_shared<DataModel>();
+			auto Unselected = std::make_shared<Folder>();
+			Unselected->SetParent(EmptyWorld);
+			const ConnectionId EmptyConnection{87, 19};
+			PeerRelevanceSelection RootOnly{.RequiredObjects = {EmptyWorld->GetObjectId()},
+				.DesiredObjects = {EmptyWorld->GetObjectId()}};
+			ReplicationCoordinator EmptyLive(EmptyWorld, {}, true, Configuration);
+			Check(EmptyLive.RegisterPeerPlanned(EmptyConnection, ReplicationEpoch(1),
+				std::make_shared<const PeerRelevanceSelection>(RootOnly)).Succeeded(),
+				"no-frame quote peer registers");
+			for (std::uint64_t Tick = 1; Tick != 200 && !EmptyLive.IsPlanningReady(EmptyConnection); ++Tick)
+				EmptyLive.ProcessPlanning(Tick);
+			auto Baseline = EmptyLive.ProducePendingBaseline(EmptyConnection, 8, 200);
+			Check(Baseline.Frame && EmptyLive.CommitSchedulerAcceptance(
+				EmptyConnection, Baseline.Frame->Sequence).Succeeded(),
+				"no-frame quote starts after an accepted baseline");
+			Unselected->SetName("unselected-name-update");
+			auto EmptyQuote = EmptyLive.CaptureFrozenQuote(Error);
+			auto EmptyOriginal = EmptyLive.CaptureFrozenQuote(Error);
+			Check(EmptyQuote && EmptyOriginal && Error.empty(), "no-frame quote captures irrelevant journal work");
+			if (EmptyQuote && EmptyOriginal) {
+				const auto BeforeLag = EmptyQuote->GetJournalLag(EmptyConnection);
+				const std::map<ConnectionId, std::size_t> Limits{{EmptyConnection,
+					MaximumReliableServiceGroupBytes - ReliableServiceEnvelopeBytes}};
+				const auto Step = EmptyQuote->AdvanceFrozenJournalQuote(Limits);
+				const auto Original = EmptyOriginal->ProduceIncremental(EmptyConnection,
+					Configuration.PeerQuantum, Limits.at(EmptyConnection),
+					Configuration.MaximumJournalRecordsPerPeerTick, Limits.at(EmptyConnection));
+				Check(!Step.Frame && !Step.Complete && Step.Error.empty() && !Original.Frame &&
+					EmptyQuote->GetJournalLag(EmptyConnection) == EmptyOriginal->GetJournalLag(EmptyConnection) &&
+					EmptyQuote->GetJournalLag(EmptyConnection) < BeforeLag,
+					"preflight preserves original no-frame cursor progress");
+			}
+			EmptyWorld->Destroy();
+		}
+		{
 			auto LargeWorld = std::make_shared<DataModel>();
 			std::array<std::shared_ptr<Folder>, 32> LargeObjects;
+			auto Unselected = std::make_shared<Folder>();
+			Unselected->SetParent(LargeWorld);
 			const ConnectionId LargeConnection{85, 19};
 			PeerRelevanceSelection LargeSelection{.RequiredObjects = {LargeWorld->GetObjectId()},
 				.DesiredObjects = {LargeWorld->GetObjectId()}};
@@ -174,15 +259,23 @@ namespace {
 				for (std::size_t Index = 0; Index < LargeObjects.size(); ++Index)
 					LargeObjects[Index]->SetName(std::string(24 * 1024,
 						static_cast<char>('a' + (Round + Index) % 26)));
+			Check(LargeObjects[0]->ApplyAttributeMutation("MixedQuoteMarker", WireValue(1),
+				ScriptSecurityContext::CoreTrusted()) == MutationStatus::Success,
+				"large quote includes a mixed record after historical Name updates");
+			for (std::size_t Index = 0; Index < 80; ++Index)
+				Unselected->SetName("unselected-" + std::to_string(Index));
 			auto LargeQuote = LiveLarge.CaptureFrozenQuote(Error);
+			auto OriginalQuote = LiveLarge.CaptureFrozenQuote(Error);
 			auto DelayedQuote = LiveLarge.CaptureFrozenQuote(Error);
 			Check(LargeQuote && Error.empty(), "large Name history is captured at cessation");
+			Check(OriginalQuote && Error.empty(), "unoptimized frozen reference captures the same cessation state");
 			Check(DelayedQuote && Error.empty(), "delayed audit captures the same cessation state");
-			if (LargeQuote && DelayedQuote) {
+			if (LargeQuote && OriginalQuote && DelayedQuote) {
+				LargeObjects[0]->SetName("post-cessation-name");
 				const std::map<ConnectionId, std::size_t> Limits{{LargeConnection, Limit}};
-				runtime_detail::WorkSample QuoteWork{};
+				runtime_detail::WorkSample QuoteWork{}, OriginalWork{};
 				std::uint64_t LiveBytes = 0, QuotedBytes = 0;
-				std::size_t Frames = 0, EmptySteps = 0;
+				std::size_t Frames = 0;
 				std::vector<FrozenJournalQuoteFrame> AcceptedFrames;
 				bool Complete = false;
 				for (std::size_t StepIndex = 0; StepIndex < 2048; ++StepIndex) {
@@ -197,31 +290,38 @@ namespace {
 						Complete = true;
 						break;
 					}
-					const auto LiveFrame = LiveLarge.ProduceIncremental(LargeConnection,
-						Configuration.PeerQuantum, Limit, Configuration.MaximumJournalRecordsPerPeerTick, Limit);
-					Check(static_cast<bool>(FrozenStep.Frame) == static_cast<bool>(LiveFrame.Frame),
-						"frozen and copied live journal agree on frame/no-frame progress");
+					ReplicationProduceResult OriginalFrame;
+					{
+						runtime_detail::WorkCapture Capture(&OriginalWork);
+						OriginalFrame = OriginalQuote->ProduceIncremental(LargeConnection,
+							Configuration.PeerQuantum, Limit, Configuration.MaximumJournalRecordsPerPeerTick, Limit);
+					}
+					if (OriginalFrame.Frame)
+						Check(OriginalQuote->CommitSchedulerAcceptance(LargeConnection, OriginalFrame.Frame->Sequence).Succeeded(),
+							"original frozen reference commits the same frame sequence");
+					Check(static_cast<bool>(FrozenStep.Frame) == static_cast<bool>(OriginalFrame.Frame) &&
+						LargeQuote->GetJournalLag(LargeConnection) == OriginalQuote->GetJournalLag(LargeConnection),
+						"optimized and original frozen paths agree on frame/no-frame cursor progress");
 					Check(LargeQuote->GetJournalLag(LargeConnection) < BeforeLag,
 						"every frozen quote step advances its bounded journal cursor");
-					if (!FrozenStep.Frame || !LiveFrame.Frame) { ++EmptySteps; continue; }
+					if (!FrozenStep.Frame || !OriginalFrame.Frame) continue;
 					Check(FrozenStep.Frame->Connection == LargeConnection &&
-						FrozenStep.Frame->Sequence == LiveFrame.Frame->Sequence &&
-						FrozenStep.Frame->CompleteBytes == LiveFrame.EncodedFrame.size() + ReliableServiceEnvelopeBytes &&
-						FrozenStep.Frame->Fingerprint == detail::ExactCandidateFingerprint(LiveFrame.EncodedFrame),
-						"every frozen frame matches copied live encoding, identity, and complete bytes");
-					Check(LiveLarge.CommitSchedulerAcceptance(LargeConnection, LiveFrame.Frame->Sequence).Succeeded(),
-						"copied live reference commits the same frame sequence");
-					AcceptedFrames.push_back({LargeConnection, LiveFrame.Frame->Sequence,
-						LiveFrame.EncodedFrame.size() + ReliableServiceEnvelopeBytes,
-						detail::ExactCandidateFingerprint(LiveFrame.EncodedFrame)});
-					LiveBytes += LiveFrame.EncodedFrame.size() + ReliableServiceEnvelopeBytes;
+						FrozenStep.Frame->Sequence == OriginalFrame.Frame->Sequence &&
+						FrozenStep.Frame->CompleteBytes == OriginalFrame.EncodedFrame.size() + ReliableServiceEnvelopeBytes &&
+						FrozenStep.Frame->Fingerprint == detail::ExactCandidateFingerprint(OriginalFrame.EncodedFrame),
+						"every optimized frame matches original frozen encoding, identity, and complete bytes");
+					AcceptedFrames.push_back({LargeConnection, OriginalFrame.Frame->Sequence,
+						OriginalFrame.EncodedFrame.size() + ReliableServiceEnvelopeBytes,
+						detail::ExactCandidateFingerprint(OriginalFrame.EncodedFrame)});
+					LiveBytes += OriginalFrame.EncodedFrame.size() + ReliableServiceEnvelopeBytes;
 					QuotedBytes += FrozenStep.Frame->CompleteBytes;
 					++Frames;
 				}
-				Check(Complete && LiveLarge.GetJournalLag(LargeConnection) == 0 && Frames >= 2 &&
-					EmptySteps != 0 && LiveBytes == QuotedBytes &&
-					QuoteWork.Counters[static_cast<std::size_t>(runtime_detail::WorkCounter::EncodeRetries)] != 0,
-					"large frozen quote completes after oversize retry and no-frame coalescing without changing W_i");
+				Check(Complete && OriginalQuote->GetJournalLag(LargeConnection) == 0 && Frames >= 2 &&
+					LiveBytes == QuotedBytes &&
+					OriginalWork.Counters[static_cast<std::size_t>(runtime_detail::WorkCounter::EncodeRetries)] >
+						QuoteWork.Counters[static_cast<std::size_t>(runtime_detail::WorkCounter::EncodeRetries)],
+					"historical Name preflight skips proven retries while mixed replay preserves W_i");
 				// Simulate live grants arriving before the observer gets one replay
 				// advance per server tick. Delayed sealing must still audit the same
 				// ordered accepted frames and exact complete-byte W_i.
