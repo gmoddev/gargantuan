@@ -165,6 +165,7 @@ jobs:
               gargantuan_remote_real_transport_tests \
               gargantuan_character_real_transport_tests \
               gargantuan_game_session_real_transport_tests \
+              gargantuan_replication_tests \
               gargantuan_gns_capacity_benchmark
 
           # Re-read discovered header dependencies. A first build alone can miss
@@ -182,7 +183,7 @@ jobs:
             --output-on-failure \
             --no-tests=error \
             --output-junit build-gns-sanitizers/ctest-gns-results.xml \
-            -R '^(gargantuan_real_transport|gargantuan_f1_packet_tail|gargantuan_f1_four_grant_sanitizer_safety|gargantuan_f1_mixed_traffic|gargantuan_gns_service_fairness|gargantuan_remote_real_transport|gargantuan_character_real_transport|gargantuan_game_session_real_transport)$'
+            -R '^(gargantuan_replication|gargantuan_real_transport|gargantuan_f1_packet_tail|gargantuan_f1_four_grant_sanitizer_safety|gargantuan_f1_mixed_traffic|gargantuan_gns_service_fairness|gargantuan_remote_real_transport|gargantuan_character_real_transport|gargantuan_game_session_real_transport)$'
 
       - name: Run profiled GameSession over GNS under sanitizers
         shell: bash
