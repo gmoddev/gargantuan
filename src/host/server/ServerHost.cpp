@@ -760,6 +760,12 @@ namespace gargantuan::host {
 									runtime_detail::WorkPhase::StructuralValidationEncode)].Nanoseconds / 1'000,
 								.SessionEncodeRetries = SessionWork.Counters[static_cast<std::size_t>(
 									runtime_detail::WorkCounter::EncodeRetries)],
+								.SessionNamePreflightRetries = SessionWork.Counters[static_cast<std::size_t>(
+									runtime_detail::WorkCounter::NamePreflightRetries)],
+								.SessionNameValidationBytes = SessionWork.Counters[static_cast<std::size_t>(
+									runtime_detail::WorkCounter::NamePreflightValidationBytes)],
+								.SessionNameValidationCacheHits = SessionWork.Counters[static_cast<std::size_t>(
+									runtime_detail::WorkCounter::NamePreflightCacheHits)],
 								.PreQualificationMicroseconds = Microseconds(QualificationStarted - SessionEnded),
 							});
 #if defined(GARGANTUAN_WITH_GNS)

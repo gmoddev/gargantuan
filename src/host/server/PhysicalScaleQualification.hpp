@@ -110,6 +110,9 @@ namespace gargantuan::host {
 			std::uint64_t SessionBuildMicroseconds = 0;
 			std::uint64_t SessionEncodeMicroseconds = 0;
 			std::uint64_t SessionEncodeRetries = 0;
+			std::uint64_t SessionNamePreflightRetries = 0;
+			std::uint64_t SessionNameValidationBytes = 0;
+			std::uint64_t SessionNameValidationCacheHits = 0;
 			std::uint64_t PreQualificationMicroseconds = 0;
 		};
 		static constexpr std::size_t PeerCount = 32;
@@ -947,6 +950,9 @@ namespace gargantuan::host {
 					<< " session_build_us=" << CurrentServerTickTiming.SessionBuildMicroseconds
 					<< " session_encode_us=" << CurrentServerTickTiming.SessionEncodeMicroseconds
 					<< " session_encode_retries=" << CurrentServerTickTiming.SessionEncodeRetries
+					<< " session_name_preflight_retries=" << CurrentServerTickTiming.SessionNamePreflightRetries
+					<< " session_name_validation_bytes=" << CurrentServerTickTiming.SessionNameValidationBytes
+					<< " session_name_validation_cache_hits=" << CurrentServerTickTiming.SessionNameValidationCacheHits
 					<< " relevance_us=" << RelevanceMicroseconds
 					<< " planning_us=" << PlanningMicroseconds
 					<< " materialization_us=" << MaterializationMicroseconds
