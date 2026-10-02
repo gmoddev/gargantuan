@@ -25,7 +25,25 @@ struct GargantuanAckDiagnostics {
 	std::uint64_t FirstReliablePacketAt = 0, LastReliablePacketAt = 0, ReliablePackets = 0;
 	std::int64_t LastReliablePacketNumber = 0;
 	std::int64_t LastDeadline = 0, SerializedAckPacket = 0;
+	std::int64_t LastRecordedSerializedAck = 0, LastRecordedSentAck = 0;
+	std::uint64_t RepeatedAckSerializations = 0, AckPacketsSent = 0, AckPacketBytes = 0;
+	std::uint64_t LastAckPacketSentAt = 0;
+	std::int64_t LastAckPacketSentNativeAt = 0;
 	void Record(Kind Type, std::int64_t NativeAt, std::int64_t Identity, std::int64_t Value) noexcept {
+		// Every data packet may repeat the same ACK. Retain its first emission
+		// and aggregate all repetitions without consuming the critical event log.
+		if (Type == AckSerialized) {
+			if (LastRecordedSerializedAck == Identity) { ++RepeatedAckSerializations; return; }
+			LastRecordedSerializedAck = Identity;
+		}
+		if (Type == AckPacketSent) {
+			++AckPacketsSent;
+			if (Value > 0) AckPacketBytes += static_cast<std::uint64_t>(Value);
+			LastAckPacketSentAt = SteamNetworkingSocketsLib::GargantuanReliableServiceClock();
+			LastAckPacketSentNativeAt = NativeAt;
+			if (LastRecordedSentAck == Identity) return;
+			LastRecordedSentAck = Identity;
+		}
 		if (Count == Events.size()) { Overflow = true; return; }
 		auto &Next = Events[Count++];
 		Next.AtMicroseconds = SteamNetworkingSocketsLib::GargantuanReliableServiceClock();

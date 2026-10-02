@@ -14,7 +14,10 @@ inline void Dump(const char *Side, std::uint64_t Token, const GargantuanAckDiagn
 	std::cout << "[Network:AckCycle] side=" << Side << " token=" << Token
 		<< " first_reliable_us=" << Trace.FirstReliablePacketAt << " last_reliable_us="
 		<< Trace.LastReliablePacketAt << " reliable_packets=" << Trace.ReliablePackets
-		<< " last_packet=" << Trace.LastReliablePacketNumber << " overflow=" << Trace.Overflow << '\n';
+		<< " last_packet=" << Trace.LastReliablePacketNumber << " overflow=" << Trace.Overflow
+		<< " repeated_ack_serializations=" << Trace.RepeatedAckSerializations
+		<< " ack_packets=" << Trace.AckPacketsSent << " ack_packet_bytes=" << Trace.AckPacketBytes
+		<< " latest_ack_packet_us=" << Trace.LastAckPacketSentAt << '\n';
 	for (std::uint32_t Index = 0; Index < Trace.Count; ++Index) {
 		const auto &Event = Trace.Events[Index];
 		std::cout << "[Network:AckCycle:Native] side=" << Side << " token=" << Token
@@ -100,6 +103,19 @@ inline void Observe(std::size_t Bytes, std::chrono::microseconds PollPeriod) {
 
 inline bool Run() {
 	try {
+		GargantuanAckDiagnostics Repeated;
+		for (int Index = 0; Index < 1000; ++Index) {
+			Repeated.Record(GargantuanAckDiagnostics::AckSerialized, Index, 1, 0);
+			Repeated.Record(GargantuanAckDiagnostics::AckPacketSent, Index, 1, 100);
+		}
+		Repeated.Record(GargantuanAckDiagnostics::MessageAcked, 1001, 2, 393652);
+		Repeated.Record(GargantuanAckDiagnostics::AckSerialized, 1002, 2, 0);
+		Repeated.Record(GargantuanAckDiagnostics::AckPacketSent, 1003, 2, 120);
+		if (Repeated.Overflow || Repeated.Count != 5 || Repeated.AckPacketsSent != 1001 ||
+			Repeated.AckPacketBytes != 100120 || Repeated.RepeatedAckSerializations != 999 ||
+			Repeated.Events[2].Type != GargantuanAckDiagnostics::MessageAcked ||
+			Repeated.Events[4].Identity != 2)
+			throw std::runtime_error("repeated ACKs displaced critical native events");
 		for (const auto Bytes : {std::size_t{393652}, std::size_t{524288}})
 			for (const auto PollPeriod : {1000us, 16667us}) Observe(Bytes, PollPeriod);
 		return true;
