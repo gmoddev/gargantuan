@@ -126,6 +126,7 @@ private:
 				? Value.Epoch : 0,
 			.ConnectionSlot = Value.Connection.Slot, .ConnectionGeneration = Value.Connection.Generation,
 			.ObjectSlot = Value.Object.Slot, .ObjectGeneration = Value.Object.Generation,
+			.Bytes = *Kind >= Stage::RpcRequestStarted ? Value.Bytes : 0,
 			.Kind = *Kind, .Flags = static_cast<std::uint16_t>(Value.Operations & 1u),
 		});
 	}

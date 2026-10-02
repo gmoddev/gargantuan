@@ -393,9 +393,11 @@ namespace {
 		const auto RpcClientPath = RpcDirectory / "publication-service-0.bin";
 		{
 			host::detail::FarmPublicationEvidence Evidence(false, "test-run", 0, 17,
-				RpcClientPath, {1, 1}, 2);
+				RpcClientPath, {1, 1}, 3);
 			runtime_detail::RecordPublicationLatency({.Stage = "RpcRequestStarted",
 				.Connection = {1, 1}, .Object = {18, 2}, .Sequence = 7});
+			runtime_detail::RecordPublicationLatency({.Stage = "RpcResponseReceived",
+				.Connection = {1, 1}, .Object = {18, 2}, .Sequence = 7, .Bytes = 42});
 			RemoteMessage Request{.Kind = RemoteMessageKind::Request, .Remote = {18, 2},
 				.Request = RemoteRequestId{7}, .Deadline = std::chrono::milliseconds(1'000),
 				.Arguments = {WireValue(std::string("recovery"))}};
@@ -403,20 +405,23 @@ namespace {
 			Check(Encoded.has_value(), "farm RPC diagnostic fixture encodes a real request");
 			if (Encoded) runtime_detail::RecordPublicationPacket("Handoff", {1, 1}, *Encoded);
 			Evidence.Dump();
-			Check(Evidence.Valid() && Evidence.Count() == 2,
+			Check(Evidence.Valid() && Evidence.Count() == 3,
 				"farm RPC diagnostic retains only bounded request metadata");
 		}
 		{
 			std::ifstream File(RpcClientPath, std::ios::binary);
 			const std::string Bytes(std::istreambuf_iterator<char>{File}, {});
 			const auto HeaderEnd = Bytes.find('\n');
-			if (HeaderEnd != std::string::npos && Bytes.size() >= HeaderEnd + 1 + 2 * 80) {
-				const auto Offset = HeaderEnd + 1 + 80;
+			if (HeaderEnd != std::string::npos && Bytes.size() >= HeaderEnd + 1 + 3 * 80) {
+				const auto Offset = HeaderEnd + 1 + 2 * 80;
 				Check(static_cast<unsigned char>(Bytes[Offset]) == 16 &&
 					static_cast<unsigned char>(Bytes[Offset + 12]) == 18 &&
 					static_cast<unsigned char>(Bytes[Offset + 16]) == 2 &&
 					static_cast<unsigned char>(Bytes[Offset + 40]) == 7,
 					"farm RPC GNS-accept marker retains remote and request identity");
+				Check(static_cast<unsigned char>(Bytes[HeaderEnd + 1 + 80]) == 22 &&
+					static_cast<unsigned char>(Bytes[HeaderEnd + 1 + 80 + 20]) == 42,
+					"farm RPC receive marker retains exact received bytes");
 			} else Check(false, "farm RPC GNS-accept marker is present in sealed binary trace");
 		}
 		std::filesystem::remove(ServerPath);
