@@ -89,6 +89,10 @@ separate count of confirmed due work retired. A different generation cannot
 cancel it. Unchanged suppression is counted separately. Missing accepted
 or observed production, overdue scheduled relationships and unavailable origins
 invalidate completeness; changing the metric cannot erase those failures.
+The farm-only `RecipientRetired` trace stage (11) is emitted from an accepted
+GRPL Unpublish/Destroy after scheduler commit, with the full recipient and
+object generations and current simulation tick. Preparation, credit deferral,
+and rejected scheduler work do not retire a relationship.
 Forced reliable states are included in traffic accounting and require separate
 acceptance/observation conservation from ordinary cadence samples.
 Their separate built-to-observation distribution starts at actual forced state

@@ -28,8 +28,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <functional>
 #include <iostream>
+#include <iterator>
 #include <memory>
 #include <thread>
 #include <vector>
@@ -46,6 +48,28 @@ namespace {
 		std::cerr << "FAIL: " << Message << '\n';
 		++Failures;
 	}
+
+	struct RetirementEvidenceCapture {
+		using Record = runtime_detail::PublicationLatencyRecord;
+		std::array<Record, 128> Records{};
+		std::size_t Count = 0;
+		bool Overflow = false;
+		runtime_detail::PublicationLatencySink Sink{this, Selected, Append, Packet};
+		runtime_detail::PublicationLatencySink *Previous = runtime_detail::ActivePublicationLatency;
+		static bool Selected(void *, ConnectionId) noexcept { return true; }
+		static void Append(void *Context, Record Value) noexcept {
+			if (std::string_view(Value.Stage) != "RecipientRetired") return;
+			auto &Self = *static_cast<RetirementEvidenceCapture *>(Context);
+			if (Self.Count == Self.Records.size()) { Self.Overflow = true; return; }
+			Self.Records[Self.Count++] = Value;
+		}
+		static void Packet(void *, const char *, ConnectionId, std::span<const std::byte>,
+			std::uint64_t) noexcept {}
+		RetirementEvidenceCapture() { runtime_detail::ActivePublicationLatency = &Sink; }
+		~RetirementEvidenceCapture() { runtime_detail::ActivePublicationLatency = Previous; }
+		RetirementEvidenceCapture(const RetirementEvidenceCapture &) = delete;
+		RetirementEvidenceCapture &operator=(const RetirementEvidenceCapture &) = delete;
+	};
 
 	float HorizontalDistance(const glm::vec3 &Left, const glm::vec3 &Right) {
 		return glm::distance(glm::vec2(Left.x, Left.z), glm::vec2(Right.x, Right.z));
@@ -178,15 +202,36 @@ namespace {
 		const auto Previous = runtime_detail::ActivePublicationLatency;
 		const auto ServerPath = Root / "publication-service.bin";
 		{
-			host::detail::FarmPublicationEvidence Evidence(true, "test-run", -1, 0, ServerPath, {}, 2);
+			host::detail::FarmPublicationEvidence Evidence(true, "test-run", -1, 0, ServerPath, {}, 3);
 			Evidence.MarkFrameBegin(10);
 			runtime_detail::RecordPublicationLatency({.Stage = "CharacterDue", .Connection = {1, 1},
 				.Object = {9, 2}, .Tick = 10, .Due = 10});
+			runtime_detail::RecordPublicationLatency({.Stage = "RecipientRetired", .Connection = {4, 7},
+				.Object = {9, 3}, .Tick = 11});
 			Evidence.Dump();
-			Check(Evidence.Valid() && Evidence.Count() == 2 && Evidence.BytesWritten() >= 160,
+			Check(Evidence.Valid() && Evidence.Count() == 3 && Evidence.BytesWritten() >= 240,
 				"farm server trace seals bounded records after measured work");
 		}
 		Check(runtime_detail::ActivePublicationLatency == Previous, "farm server trace restores scoped sink");
+		{
+			std::ifstream File(ServerPath, std::ios::binary);
+			const std::string Bytes(std::istreambuf_iterator<char>{File}, {});
+			const auto HeaderEnd = Bytes.find('\n');
+			if (HeaderEnd != std::string::npos && Bytes.size() >= HeaderEnd + 1 + 3 * 80) {
+				const auto Offset = HeaderEnd + 1 + 2 * 80;
+				auto Read32 = [&](std::size_t Index) {
+					std::uint32_t Value = 0;
+					for (std::size_t Byte = 0; Byte < 4; ++Byte)
+						Value |= static_cast<std::uint32_t>(static_cast<unsigned char>(Bytes[Offset + Index + Byte])) << (8 * Byte);
+					return Value;
+				};
+				Check(static_cast<unsigned char>(Bytes[Offset]) == 11 &&
+					Read32(4) == 4 && Read32(8) == 7 && Read32(12) == 9 && Read32(16) == 3 &&
+					static_cast<unsigned char>(Bytes[Offset + 32]) == 11 &&
+					static_cast<unsigned char>(Bytes[Offset + 40]) == 0,
+					"farm retirement stage preserves full recipient/object generations and tick without state sequence");
+			} else Check(false, "farm retirement record is present in the sealed binary trace");
+		}
 		const auto ClientPath = Root / "publication-service-0.bin";
 		{
 			host::detail::FarmPublicationEvidence Evidence(false, "test-run", 0, 17, ClientPath, {1, 1}, 2);
@@ -1708,11 +1753,39 @@ end)
 			"first connection cannot move the other Player's Character"
 		);
 
+		std::uint64_t NextTick = 251;
+		if (SecondCharacter && FirstConnection && SecondCharacter->GetRootPart()) {
+			const auto RootId = (*SecondCharacter->GetRootPart())->GetObjectId();
+			RetirementEvidenceCapture RetirementTrace;
+			auto StepRelevance = [&](int Steps) {
+				for (int Index = 0; Index < Steps; ++Index) {
+					if (FirstRuntime) FirstRuntime->Step();
+					if (SecondRuntime) SecondRuntime->Step();
+					ServerRuntime.Step();
+					Network->Pump();
+					(void)Server.Poll(); (void)First.Poll(); (void)Second.Poll();
+					Server.Step(NextTick); First.Step(NextTick); Second.Step(NextTick);
+					++NextTick;
+					(void)Network->Advance(20ms);
+				}
+			};
+			auto RootRetirements = [&] {
+				return std::count_if(RetirementTrace.Records.begin(),
+					RetirementTrace.Records.begin() + RetirementTrace.Count, [&](const auto &Record) {
+						return Record.Object == RootId && Record.Connection == *FirstConnection;
+					});
+			};
+			SecondCharacter->SetPosition({100000.0f, 6.0f, 0.0f});
+			StepRelevance(20);
+			Check(!RetirementTrace.Overflow && RootRetirements() == 1,
+				"accepted GRPL unpublish retires the remote RootPart relationship once");
+		} else Check(false, "remote RootPart unpublish regression has two live recipients");
+
 		if (FirstConnection)
 			(void)FirstTransport->Disconnect(
 				*FirstConnection, {DisconnectReason::LocalShutdown, "two-client isolation disconnect"}
 			);
-		for (std::uint64_t Tick = 251; Tick <= 265; ++Tick) {
+		for (std::uint64_t Tick = NextTick; Tick < NextTick + 15; ++Tick) {
 			Network->Pump();
 			(void)Server.Poll();
 			(void)First.Poll();
@@ -1776,6 +1849,7 @@ end)
 			Check(Previous && Previous->GetDescendants().size() >= 40,
 				"retirement regression materializes a dependency group within the per-peer structural cap");
 			const auto RevokesBefore = Server.GetMetrics().CharacterControlRevocations;
+			RetirementEvidenceCapture RetirementTrace;
 			Players.front()->RemoveCharacter();
 			for (int Index = 0; Index < 30 && Client.GetStatus() != GameSessionStatus::Failed; ++Index) Step();
 			std::cout << "[Network:RetirementTest] ready=" << (Client.GetStatus() == GameSessionStatus::Ready)
@@ -1788,6 +1862,17 @@ end)
 				Previous && Previous->GetDestroyed() && !ObjectRegistry::Get().Lookup(OldId) &&
 				Server.GetMetrics().CharacterControlRevocations == RevokesBefore + 1,
 				"relationship-driven recursive destruction and later bounded Leave frames retire each registry only once");
+			const auto OldRetirements = std::count_if(RetirementTrace.Records.begin(),
+				RetirementTrace.Records.begin() + RetirementTrace.Count, [&](const auto &Record) {
+					return Record.Object == OldId;
+				});
+			Check(!RetirementTrace.Overflow && OldRetirements == 1 &&
+				std::any_of(RetirementTrace.Records.begin(),
+					RetirementTrace.Records.begin() + RetirementTrace.Count, [&](const auto &Record) {
+						return Record.Object == OldId && Record.Connection.IsValid() && Record.Tick > 0 &&
+							Record.Sequence == 0;
+					}),
+				"accepted GRPL destroy retires the exact old recipient/Character generation once");
 			if (Client.GetStatus() != GameSessionStatus::Failed) {
 				Players.front()->LoadCharacter();
 				for (int Index = 0; Index < 30; ++Index) Step();
@@ -1795,6 +1880,13 @@ end)
 					*(*Local)->GetCharacter() != Previous && Players.front()->GetCharacter() &&
 					(*Players.front()->GetCharacter())->GetObjectId() != OldId,
 					"fresh Character materializes after delayed old-lifetime retirement");
+				if (Players.front()->GetCharacter()) {
+					const auto NewId = (*Players.front()->GetCharacter())->GetObjectId();
+					Check(std::none_of(RetirementTrace.Records.begin(),
+						RetirementTrace.Records.begin() + RetirementTrace.Count, [&](const auto &Record) {
+							return Record.Object == NewId;
+						}), "old-generation GRPL destroy never retires the new Character identity");
+				}
 			}
 		} else Check(false, "retirement regression establishes a Player and Character");
 		Client.Stop();

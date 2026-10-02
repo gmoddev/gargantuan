@@ -38,6 +38,7 @@ public:
 		FrameBegin = 1, CharacterNextDue, CharacterDue, StateBuilt,
 		CharacterSnapshot, CharacterProduced, CharacterUnchanged,
 		SchedulerAccepted, ClientNativeReceive, ClientHandled,
+		RecipientRetired,
 	};
 	struct Record {
 		std::uint64_t Nanoseconds = 0;
@@ -88,6 +89,7 @@ private:
 		if (Value == "SchedulerAccepted") return Stage::SchedulerAccepted;
 		if (Value == "ClientNativeReceive") return Stage::ClientNativeReceive;
 		if (Value == "ClientHandled") return Stage::ClientHandled;
+		if (Value == "RecipientRetired") return Stage::RecipientRetired;
 		return std::nullopt;
 	}
 	void Add(Record Value) noexcept {

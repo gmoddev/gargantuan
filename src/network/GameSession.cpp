@@ -1637,6 +1637,16 @@ namespace gargantuan::network {
 							);
 							return false;
 						}
+						// Only an accepted GRPL Leave retires a recipient/object relationship.
+						// Preparation, credit deferral and rejected scheduler work do not.
+						if (runtime_detail::ActivePublicationLatency)
+							for (const auto &Operation : Produced.Frame->Operations)
+								if (std::holds_alternative<UnpublishReplication>(Operation.Intent) ||
+									std::holds_alternative<DestroyReplication>(Operation.Intent))
+									runtime_detail::RecordPublicationLatency({
+										.Stage = "RecipientRetired", .Connection = Connection,
+										.Object = ReplicationObject(Operation.Intent), .Tick = SimulationTick,
+									});
 						if (!ApplyServerRemoteMaterialization(Connection, *Produced.Frame)) {
 							PendingPeerFailures.try_emplace(
 								Connection,
