@@ -21,7 +21,7 @@ function Import-FarmRecoveryParser {
 	$Errors = $null
 	$Ast = [Management.Automation.Language.Parser]::ParseFile($Path, [ref]$Tokens, [ref]$Errors)
 	if ($Errors.Count -ne 0) { throw 'canonical farm recovery parser has a syntax error' }
-	$Needed = @('Get-Fields', 'Get-Records', 'Get-RecoveryDiagnostics',
+	$Needed = @('Get-Fields', 'Read-SharedLogLines', 'Get-Records', 'Get-RecoveryDiagnostics',
 		'Test-RecoveryQuiescent', 'Assert-RecoveryRecords')
 	foreach ($Function in $Ast.FindAll({ param($Node)
 		$Node -is [Management.Automation.Language.FunctionDefinitionAst]
@@ -33,7 +33,7 @@ function Import-FarmRecoveryParser {
 foreach ($Definition in @(Import-FarmRecoveryParser)) {
 	. ([scriptblock]::Create($Definition))
 }
-foreach ($Name in @('Get-Fields', 'Get-Records', 'Get-RecoveryDiagnostics',
+foreach ($Name in @('Get-Fields', 'Read-SharedLogLines', 'Get-Records', 'Get-RecoveryDiagnostics',
 	'Test-RecoveryQuiescent', 'Assert-RecoveryRecords')) {
 	if (-not (Get-Command $Name -CommandType Function -ErrorAction SilentlyContinue)) {
 		throw "canonical farm recovery parser lacks $Name"

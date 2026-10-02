@@ -22,6 +22,26 @@ $Directory = Join-Path ([IO.Path]::GetTempPath()) ('physical-farm-test-' + [Guid
 $ServerPath = Join-Path $Directory 'server.log'
 $ClientPath = Join-Path $Directory 'client.log'
 try {
+	$LiveLogPath = Join-Path $Directory 'live-server.log'
+	$LiveWriter = [IO.File]::Open($LiveLogPath, [IO.FileMode]::CreateNew,
+		[IO.FileAccess]::Write, [IO.FileShare]::Read)
+	try {
+		$First = [Text.Encoding]::UTF8.GetBytes("[Qualification:Server] event=start run=live`n[Qualification:Server] event=res")
+		$LiveWriter.Write($First, 0, $First.Length)
+		$LiveWriter.Flush()
+		$Records = @(Get-Records -Path $LiveLogPath -Kind 'Server')
+		if ($Records.Count -ne 1 -or $Records[0].event -cne 'start') {
+			throw 'live direct-farm log reader exposed an incomplete line or failed sharing'
+		}
+		$Tail = [Text.Encoding]::UTF8.GetBytes("ult run=live`n")
+		$LiveWriter.Write($Tail, 0, $Tail.Length)
+		$LiveWriter.Flush()
+		$Records = @(Get-Records -Path $LiveLogPath -Kind 'Server')
+		if ($Records.Count -ne 2 -or $Records[1].event -cne 'result') {
+			throw 'live direct-farm log reader lost a completed line'
+		}
+	} finally { $LiveWriter.Dispose() }
+
 	[IO.File]::WriteAllLines($ServerPath, @(
 		'[Qualification:Server] event=start run=farm-parser-test provider=local expected=1',
 		'[Qualification:Server] event=ready run=farm-parser-test nonce=123 connection_slot=5 connection_generation=1 session_epoch=7 player_id=9 monotonic_us=5',
@@ -173,7 +193,7 @@ try {
 	}
 	Write-Output '[Qualification:Farm] TYPED_EVIDENCE_TEST_OK'
 } finally {
-	foreach ($Path in @($ServerPath, $ClientPath, (Join-Path $Directory 'evidence-sha256.json')) +
+	foreach ($Path in @($ServerPath, $ClientPath, $LiveLogPath, (Join-Path $Directory 'evidence-sha256.json')) +
 		@($ScaleClients | ForEach-Object OutputPath)) {
 		if (Test-Path -LiteralPath $Path) { Remove-Item -LiteralPath $Path -Force }
 	}

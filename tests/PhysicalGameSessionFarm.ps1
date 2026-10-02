@@ -55,11 +55,34 @@ function Get-Fields {
 	return $Fields
 }
 
+function Read-SharedLogLines {
+	param([Parameter(Mandatory = $true)][string]$Path)
+	$Stream = [IO.File]::Open($Path, [IO.FileMode]::Open,
+		[IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
+	try {
+		if ($Stream.Length -gt 16777216) { throw 'live farm log exceeds the hard read bound' }
+		$Length = [int]$Stream.Length
+		if ($Length -eq 0) { return @() }
+		$Bytes = [byte[]]::new($Length)
+		$Offset = 0
+		while ($Offset -lt $Length) {
+			$Count = $Stream.Read($Bytes, $Offset, $Length - $Offset)
+			if ($Count -le 0) { throw 'live farm log changed during bounded read' }
+			$Offset += $Count
+		}
+		$Content = [Text.UTF8Encoding]::new($false, $true).GetString($Bytes)
+		$LastNewline = $Content.LastIndexOf("`n", [StringComparison]::Ordinal)
+		if ($LastNewline -lt 0) { return @() }
+		return @($Content.Substring(0, $LastNewline + 1) -split '\r?\n' |
+			Where-Object Length -gt 0)
+	} finally { $Stream.Dispose() }
+}
+
 function Get-Records {
 	param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][string]$Kind)
 	if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return @() }
 	$Prefix = "[Qualification:$Kind] "
-	return @([IO.File]::ReadAllLines($Path) | Where-Object { $_.StartsWith($Prefix, [StringComparison]::Ordinal) } |
+	return @(Read-SharedLogLines -Path $Path | Where-Object { $_.StartsWith($Prefix, [StringComparison]::Ordinal) } |
 		ForEach-Object { Get-Fields -Line $_ })
 }
 
@@ -68,7 +91,7 @@ function Get-RecoveryDiagnostics {
 	if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return @() }
 	$Prefix = '[Qualification:Recovery] '
 	$Rows = [Collections.Generic.List[object]]::new()
-	$Lines = [IO.File]::ReadAllLines($Path)
+	$Lines = Read-SharedLogLines -Path $Path
 	for ($Index = 0; $Index -lt $Lines.Count; $Index++) {
 		$Offset = $Lines[$Index].IndexOf($Prefix, [StringComparison]::Ordinal)
 		if ($Offset -lt 0) { continue }
@@ -739,7 +762,8 @@ try {
 		Assert-LogBounds
 		if ($Server.Process.HasExited) { throw "server exited before farm start, exit $($Server.Process.ExitCode)" }
 		$Server.OutputStream.Flush()
-		if ((Get-Records -Path $Server.OutputPath -Kind 'Server' | Where-Object { $_.event -eq 'start' -and $_.run -eq $RunId }).Count -eq 1) { break }
+		if (@(Get-Records -Path $Server.OutputPath -Kind 'Server' | Where-Object {
+			$_.event -eq 'start' -and $_.run -eq $RunId }).Count -eq 1) { break }
 		Start-Sleep -Milliseconds 100
 	}
 	if ($Clock.ElapsedMilliseconds -ge $StartupTimeoutMilliseconds) { throw 'server farm startup timed out' }

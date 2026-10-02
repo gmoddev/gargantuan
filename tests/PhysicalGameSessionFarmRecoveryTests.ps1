@@ -6,7 +6,7 @@ $Tokens = $null
 $Errors = $null
 $Ast = [Management.Automation.Language.Parser]::ParseFile($Runner, [ref]$Tokens, [ref]$Errors)
 if ($Errors.Count) { throw "farm parser syntax failed: $($Errors[0].Message)" }
-$Needed = @('Get-Fields', 'Get-Records', 'Get-RecoveryDiagnostics',
+$Needed = @('Get-Fields', 'Read-SharedLogLines', 'Get-Records', 'Get-RecoveryDiagnostics',
 	'Test-RecoveryQuiescent', 'Assert-RecoveryRecords')
 foreach ($Function in $Ast.FindAll({ param($Node)
 	$Node -is [Management.Automation.Language.FunctionDefinitionAst]

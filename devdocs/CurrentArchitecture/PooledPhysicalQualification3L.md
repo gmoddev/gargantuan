@@ -2051,3 +2051,29 @@ idle, no Packet Monitor filters remain, and the Farm32 service has no active
 capture record. The exact 960-MiB completeness threshold and a 32-client
 application capture remain **NOT MEASURED**. The Local and Node provider matrices,
 resource, overload/recovery, and final acceptance gates remain open.
+
+## 2026-10-02 — 32-actual-client loopback farm preflight
+
+An isolated worker-local preflight used the task-owned diagnostic package built
+from `2cb7379fe` and the bounded direct farm runner. The first two diagnostic
+attempts (`farm-loopback-20261002-a` and `farm-loopback-20261002-b`) exposed
+qualification-tool defects before client workload: live log reads conflicted
+with open Windows writers, then a singleton hashtable's `.Count` obscured the
+server start record until its bounded tick budget expired. Both attempts
+cleaned up. The direct and two-host endpoint runners now read only complete
+lines through bounded, shared-read snapshots; the direct runner counts startup
+records as an array. Live-writer mock regressions cover both readers.
+
+Fresh loopback run `farm-loopback-20261002-c` passed the minimal actual-client
+farm gate: 32 independent Player/GameSession processes, 32 ready clients, 32
+unique run nonces, 32 unique connections, and 32 unique Players. The typed
+result reports 5,954 resource samples and is retained with 70 files at
+`C:\Sandbox\Codex\Evidence\Farm32LoopbackPreflight\farm-loopback-20261002-c`.
+Its evidence index SHA-256 is
+`4B8C8C710C57ABA0C8072A1A9EB3D632E2CCE74BEB70167FAEF546B04B5515F8`;
+the result SHA-256 is
+`4AC4BC9CCF5500827B244E798C8492C5342C4517847C17BEBF1F47F1BF7CEFF3`.
+After the run, no task-owned Gargantuan process or UDP 39450 listener remained.
+This same-host diagnostic preflight is not a direct-fiber Local provider matrix,
+real-TLS Node matrix, capture result, resource-headroom result, or Foundation
+3L acceptance. KI-006 remains OPEN and Foundation 3L remains B — PARTIALLY READY.

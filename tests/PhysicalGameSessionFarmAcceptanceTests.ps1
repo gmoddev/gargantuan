@@ -104,7 +104,7 @@ function Import-RecoveryParser {
 	$Tokens = $null; $Errors = $null
 	$Ast = [Management.Automation.Language.Parser]::ParseFile($Path, [ref]$Tokens, [ref]$Errors)
 	if ($Errors.Count -ne 0) { throw 'recovery fixture parser has invalid syntax' }
-	$Needed = @('Get-Fields', 'Get-Records', 'Get-RecoveryDiagnostics',
+	$Needed = @('Get-Fields', 'Read-SharedLogLines', 'Get-Records', 'Get-RecoveryDiagnostics',
 		'Test-RecoveryQuiescent', 'Assert-RecoveryRecords')
 	foreach ($Function in $Ast.FindAll({ param($Node)
 		$Node -is [Management.Automation.Language.FunctionDefinitionAst]

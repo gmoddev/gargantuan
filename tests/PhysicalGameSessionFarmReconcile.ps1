@@ -288,7 +288,7 @@ function Import-FarmParser {
 	$Errors = $null
 	$Ast = [Management.Automation.Language.Parser]::ParseFile($Path, [ref]$Tokens, [ref]$Errors)
 	if ($Errors.Count -ne 0) { throw 'canonical farm evidence parser has a syntax error' }
-	$Needed = @('Get-Fields', 'Get-Records', 'Get-RecoveryDiagnostics',
+	$Needed = @('Get-Fields', 'Read-SharedLogLines', 'Get-Records', 'Get-RecoveryDiagnostics',
 		'Test-RecoveryQuiescent', 'Assert-Records', 'Assert-ScaleRecords', 'Assert-RecoveryRecords')
 	foreach ($Function in $Ast.FindAll({ param($Node)
 		$Node -is [Management.Automation.Language.FunctionDefinitionAst]
@@ -342,7 +342,7 @@ $ClientHostSamples = Assert-HostResourceRows -Path (Join-Path $Clients.Root 'hos
 	-ExpectedCount ([long]$Clients.Result.HostResourceSamples)
 
 foreach ($Definition in @(Import-FarmParser)) { . ([scriptblock]::Create($Definition)) }
-foreach ($Name in @('Get-Fields', 'Get-Records', 'Get-RecoveryDiagnostics',
+foreach ($Name in @('Get-Fields', 'Read-SharedLogLines', 'Get-Records', 'Get-RecoveryDiagnostics',
 	'Test-RecoveryQuiescent', 'Assert-Records', 'Assert-ScaleRecords', 'Assert-RecoveryRecords')) {
 	if (-not (Get-Command $Name -CommandType Function -ErrorAction SilentlyContinue)) {
 		throw "canonical farm evidence parser lacks $Name"
