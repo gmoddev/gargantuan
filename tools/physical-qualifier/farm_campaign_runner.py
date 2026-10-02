@@ -343,6 +343,9 @@ def Reconcile(ConfigPath):
                ("OuterReceiptPath", "DirectionReportPath", "ResultPath")]
     if len(set(Outputs)) != 3 or any(File.exists() or not File.parent.is_dir() for File in Outputs):
         raise ValueError("[Qualification:FarmCampaign] stale or missing reconciliation output")
+    for File in Outputs:
+        if any(File == Source.parent or Source.parent in File.parents for Source in Inputs.values()):
+            raise ValueError("[Qualification:FarmCampaign] reconciliation output overlaps sealed evidence")
     Directions = ImportPinnedModule(Config["DirectionAnalyzerPath"], Config["DirectionAnalyzerSha256"],
                                     "farm_capture_directions.py", "farm_capture_directions")
     Binder = ImportPinnedModule(Config["CaptureBinderPath"], Config["CaptureBinderSha256"],

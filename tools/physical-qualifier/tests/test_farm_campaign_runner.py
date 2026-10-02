@@ -204,10 +204,14 @@ class CampaignTests(unittest.TestCase):
             Campaign.RunHost(HostFile)
 
     def ReconcileConfig(self, DirectionsBody):
+        Sealed = self.Root / "sealed"
+        Sealed.mkdir()
+        Analysis = self.Root / "analysis"
+        Analysis.mkdir()
         Files = {}
         for Name in ("CoordinatorResult", "ServerRoleIndex", "ClientRoleIndex",
                      "ServerCaptureIndex", "ClientCaptureIndex"):
-            Files[Name] = Save(self.Root / (Name + ".json"), {"RunId": self.RunId})
+            Files[Name] = Save(Sealed / (Name + ".json"), {"RunId": self.RunId})
         Directions = self.Root / "farm_capture_directions.py"
         Directions.write_text(DirectionsBody, encoding="utf-8")
         Binder = self.Root / "farm_capture_campaign.py"
@@ -222,9 +226,9 @@ class CampaignTests(unittest.TestCase):
                   "RunId": self.RunId, "CoordinatorRunId": self.CoordinatorRunId,
                   "DirectionAnalyzerPath": str(Directions), "DirectionAnalyzerSha256": Hash(Directions),
                   "CaptureBinderPath": str(Binder), "CaptureBinderSha256": Hash(Binder),
-                  "OuterReceiptPath": str(self.Root / "outer-receipt.json"),
-                  "DirectionReportPath": str(self.Root / "directions.json"),
-                  "ResultPath": str(self.Root / "campaign-analysis.json")}
+                  "OuterReceiptPath": str(Analysis / "outer-receipt.json"),
+                  "DirectionReportPath": str(Analysis / "directions.json"),
+                  "ResultPath": str(Analysis / "campaign-analysis.json")}
         for Name, File in Files.items():
             Config[Name + "Path"] = str(File)
             Config[Name + "Sha256"] = Hash(File)
@@ -236,7 +240,7 @@ class CampaignTests(unittest.TestCase):
             "    return {'RunId': '" + self.RunId + "', 'CoordinatorRunId': '" +
             self.CoordinatorRunId + "', 'Status': 'BIDIRECTIONAL_32_TUPLES'}\n")
         self.assertEqual(0, Campaign.Reconcile(ConfigFile))
-        Result = json.loads((self.Root / "campaign-analysis.json").read_text())
+        Result = json.loads((self.Root / "analysis" / "campaign-analysis.json").read_text())
         self.assertEqual("CAPTURE_DIRECTIONS_MEASURED", Result["Status"])
         self.assertEqual("NOT_MEASURED", Result["ProviderGate"])
         self.assertEqual("INCOMPLETE", Result["Foundation3LGate"])
@@ -247,7 +251,17 @@ class CampaignTests(unittest.TestCase):
             "    raise ValueError('missing reverse direction')\n")
         with self.assertRaisesRegex(ValueError, "missing reverse direction"):
             Campaign.Reconcile(ConfigFile)
-        self.assertFalse((self.Root / "outer-receipt.json").exists())
+        self.assertFalse((self.Root / "analysis" / "outer-receipt.json").exists())
+
+    def test_reconcile_refuses_output_inside_sealed_capture_root(self):
+        ConfigFile = self.ReconcileConfig(
+            "def Analyze(Server, Client):\n"
+            "    raise AssertionError('must not analyze unsafe output')\n")
+        Config = json.loads(ConfigFile.read_text())
+        Config["OuterReceiptPath"] = str(self.Root / "sealed" / "mutated-capture-root.json")
+        Save(ConfigFile, Config)
+        with self.assertRaisesRegex(ValueError, "overlaps sealed evidence"):
+            Campaign.Reconcile(ConfigFile)
 
 
 if __name__ == "__main__":

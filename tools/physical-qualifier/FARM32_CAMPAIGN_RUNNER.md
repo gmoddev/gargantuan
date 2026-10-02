@@ -26,6 +26,12 @@ message.
    Stop/autostop and offline export remain independent of the 540-second
    coordinator execution deadline. A missing capture or endpoint index fails
    the outer role result. The coordinator success result alone is insufficient.
+   The 500-second capture deadline is stricter than the workflow's legal
+   540-second execution ceiling. A coordinator-successful role that seals after
+   capture-start plus 500 seconds is **infrastructure incomplete**, not a
+   product-service failure. This timing margin must be independently qualified
+   on the actual two-host launch path before a physical campaign; this source
+   candidate does not claim every legal coordinator timing is covered.
 3. After copying both **complete immutable** role and capture roots to an
    offline analysis location, run `reconcile RECONCILE_CONFIG.json`. It calls
    the hash-pinned 32-tuple bidirectional analyzer, then the fixed capture
