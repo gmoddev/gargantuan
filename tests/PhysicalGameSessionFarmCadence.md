@@ -39,10 +39,23 @@ or write failure invalidates the host result. The independent streaming parser
 is `tools/physical-qualifier/farm_publication_trace.py`.
 
 The native receive timestamp means first successful GNS poll of a decoded
-message, not kernel arrival or rendered application visibility. Server and
-client steady clocks have unrelated origins. Merely sealing these traces does
-not establish cross-host due-to-handler latency; a separately qualified clock
-bridge and full offline identity/conservation join are required.
+message, not kernel arrival or rendered application visibility. The offline
+`tools/physical-qualifier/farm_publication_join.py` joins sealed server/client
+traces by full recipient/ObjectId generations, control/materialization epochs,
+authoritative tick, state and frame sequences, and exact attributed state
+bytes. Run-scoped ready nonces map server connections to separately allocated
+client-local connections; numeric `ConnectionId` values are never equated
+across hosts. The join fails on overflow or missing/duplicate accepted and
+observed states. It reports forced states, unchanged suppression, forecast
+rescheduling, server-local due-to-accept and client-local receive-to-handler
+durations separately. The bounded database lives only under an explicit
+task-owned analysis directory and is removed after analysis.
+
+The current native trace has no reachable `RecipientRetired` event. An
+unresolved due relationship therefore fails closed, and explicit retirement
+remains `NOT_MEASURED`. Server and client steady clocks have unrelated origins;
+cross-host due-to-handler latency and phase-long drift remain `NOT_MEASURED`.
+The role-local join is a diagnostic result, not Foundation 3L acceptance.
 
 This artifact is diagnostic-only until its timing cost is qualified against a
 full 32-client workload. A Release MSVC/GNS microbenchmark on the worker,

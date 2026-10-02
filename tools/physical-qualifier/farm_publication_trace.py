@@ -8,6 +8,7 @@ import argparse
 import re
 import struct
 from pathlib import Path
+from typing import NamedTuple
 
 
 RECORD = struct.Struct("<HHIIIIIQQQQQQQ")
@@ -22,12 +23,30 @@ SERVER_CAP = 4_194_304
 CLIENT_CAP = 131_072
 
 
+class PublicationRecord(NamedTuple):
+    Stage: int
+    Flags: int
+    ConnectionSlot: int
+    ConnectionGeneration: int
+    ObjectSlot: int
+    ObjectGeneration: int
+    ServiceBytes: int
+    Nanoseconds: int
+    Tick: int
+    Sequence: int
+    DueTick: int
+    ControlEpoch: int
+    MaterializationEpoch: int
+    FrameSequence: int
+
+
 def Require(Condition, Message):
     if not Condition:
         raise ValueError("[Qualification:Publication] " + Message)
 
 
-def Validate(PathValue, ExpectedRunId, ExpectedRole, ExpectedSlot=-1, ExpectedNonce=0):
+def IterRecords(PathValue, ExpectedRunId, ExpectedRole, ExpectedSlot=-1, ExpectedNonce=0):
+    """Yield one validated record at a time from the same open evidence file."""
     PathValue = Path(PathValue)
     Require(PathValue.is_file() and not PathValue.is_symlink(), "trace is missing or redirected")
     with PathValue.open("rb") as Stream:
@@ -50,9 +69,10 @@ def Validate(PathValue, ExpectedRunId, ExpectedRole, ExpectedSlot=-1, ExpectedNo
         for _ in range(Count):
             Bytes = Stream.read(RECORD.size)
             Require(len(Bytes) == RECORD.size, "truncated trace record")
+            Value = PublicationRecord(*RECORD.unpack(Bytes))
             (Stage, Flags, ConnectionSlot, ConnectionGeneration, ObjectSlot, ObjectGeneration,
              ServiceBytes, Nanoseconds, Tick, Sequence, DueTick, ControlEpoch,
-             MaterializationEpoch, FrameSequence) = RECORD.unpack(Bytes)
+             MaterializationEpoch, FrameSequence) = Value
             Require(Stage in Stages and Flags <= 1 and Nanoseconds >= PreviousNs,
                     "invalid stage, flags, or process-local time order")
             PreviousNs = Nanoseconds
@@ -64,12 +84,21 @@ def Validate(PathValue, ExpectedRunId, ExpectedRole, ExpectedSlot=-1, ExpectedNo
             if Role == "CLIENT":
                 Require(Stage in CLIENT_STAGES, "server-only stage in client trace")
             Counts[Stage] = Counts.get(Stage, 0) + 1
+            yield Value
         Require(Stream.read(1) == b"", "unexpected trailing trace bytes")
     Require((8 in Counts if Role == "SERVER" else 9 in Counts and 10 in Counts),
             "required packet stages absent")
-    return {"RunId": RunId, "Role": Role, "Slot": Slot, "Nonce": Nonce,
-            "Records": Count, "Stages": Counts, "Bytes": PathValue.stat().st_size,
-            "CrossHostLatency": "NOT_MEASURED"}
+
+
+def Validate(PathValue, ExpectedRunId, ExpectedRole, ExpectedSlot=-1, ExpectedNonce=0):
+    Counts = {}
+    Count = 0
+    for Value in IterRecords(PathValue, ExpectedRunId, ExpectedRole, ExpectedSlot, ExpectedNonce):
+        Counts[Value.Stage] = Counts.get(Value.Stage, 0) + 1
+        Count += 1
+    return {"RunId": ExpectedRunId, "Role": ExpectedRole, "Slot": ExpectedSlot,
+            "Nonce": ExpectedNonce, "Records": Count, "Stages": Counts,
+            "Bytes": Path(PathValue).stat().st_size, "CrossHostLatency": "NOT_MEASURED"}
 
 
 if __name__ == "__main__":
