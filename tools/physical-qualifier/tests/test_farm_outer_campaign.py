@@ -69,6 +69,18 @@ class OuterCampaignTests(unittest.TestCase):
         for Role in ("SERVER", "CLIENT"):
             Path(self.Fixture.Spec["Roles"][Role]["StageRoot"]).rmdir()
 
+    def test_recovery_manifest_profile_is_explicit_and_bounded(self):
+        self.assertEqual((9000, 10000,
+                          ["-ScaleWorkload", "-ClientFrames", "9000",
+                           "-ServerTicks", "10000"]), Outer.WorkloadProfile(False))
+        self.assertEqual((18000, 19000,
+                          ["-ScaleWorkload", "-ClientFrames", "18000",
+                           "-ServerTicks", "19000", "-RecoveryWorkload"]),
+                         Outer.WorkloadProfile(True))
+        for Invalid in (None, 0, 1, "true"):
+            with self.assertRaisesRegex(ValueError, "invalid recovery workload"):
+                Outer.WorkloadProfile(Invalid)
+
     def test_stage_rebases_host_tickets_and_checks_each_destination(self):
         Roots = Outer.Stage(self.Fixture.Private, self.Fixture.SpecFile,
                             r"C:\Python312\python.exe", r"C:\Sandbox\farm_outer_endpoint.py",

@@ -168,6 +168,17 @@ def ExpandRun(Value, RunId):
     return Value
 
 
+def WorkloadProfile(RecoveryWorkload):
+    if type(RecoveryWorkload) is not bool:
+        raise ValueError("[Qualification:FarmOuter] invalid recovery workload selection")
+    ClientFrames, ServerTicks = (18000, 19000) if RecoveryWorkload else (9000, 10000)
+    Arguments = ["-ScaleWorkload", "-ClientFrames", str(ClientFrames),
+                 "-ServerTicks", str(ServerTicks)]
+    if RecoveryWorkload:
+        Arguments.append("-RecoveryWorkload")
+    return ClientFrames, ServerTicks, Arguments
+
+
 def PrepareInputs(ConfigPath, TransportInstance=None):
     """Create fresh one-run manifest and role-local inventory, then seal tickets.
 
@@ -176,12 +187,13 @@ def PrepareInputs(ConfigPath, TransportInstance=None):
     Player package. No capture or GameSession process is started here.
     """
     Config = ReadJson(ConfigPath)
-    Required = {"Format", "Version", "Provider", "SourceCommit", "PrivateRoot",
+    Required = {"Format", "Version", "Provider", "RecoveryWorkload", "SourceCommit", "PrivateRoot",
                 "TemplatePath", "WorkerToolRoot", "WorkerPlayerPackageRoot",
                 "WorkerPython", "WorkerPythonSha256", "WorkerHelper", "Node"}
     if (not isinstance(Config, dict) or set(Config) != Required or
             Config["Format"] != "GargantuanFarm32OuterPreparation" or Config["Version"] != 1 or
             Config["Provider"] not in ("Local", "Node") or
+            type(Config["RecoveryWorkload"]) is not bool or
             not re.fullmatch(r"[0-9a-f]{40}", Config["SourceCommit"])):
         raise ValueError("[Qualification:FarmOuter] invalid preparation config")
     WorkerToolRoot = WorkerSandbox(Config["WorkerToolRoot"])
@@ -213,6 +225,13 @@ def PrepareInputs(ConfigPath, TransportInstance=None):
             Spec.get("Host", {}).get("HostIp") != WORKER_IP or
             Spec.get("Host", {}).get("Port") != CONTROL_PORT):
         raise ValueError("[Qualification:FarmOuter] worker-host ticket template mismatch")
+    for Role in ("SERVER", "CLIENT"):
+        Timeout = Spec["Roles"][Role].get("RunTimeoutMilliseconds")
+        if Config["RecoveryWorkload"]:
+            if type(Timeout) is not int or Timeout != 420000:
+                raise ValueError("[Qualification:FarmOuter] recovery role timeout mismatch")
+        elif Timeout is not None and (type(Timeout) is not int or Timeout != 300000):
+            raise ValueError("[Qualification:FarmOuter] baseline role timeout mismatch")
     WorkerPowerShell = Spec["Roles"]["SERVER"]["PowerShell"]
     if TransportInstance.WorkerDigest(WorkerPowerShell["Path"]) != WorkerPowerShell["Sha256"]:
         raise ValueError("[Qualification:FarmOuter] worker PowerShell pin mismatch")
@@ -228,11 +247,12 @@ def PrepareInputs(ConfigPath, TransportInstance=None):
             raise ValueError("[Qualification:FarmOuter] worker preparation source hash mismatch")
     ManifestScript = str(PureWindowsPath(WorkerRunRoot) / "NewPhysicalGameSessionFarmManifest.ps1")
     ManifestRoot = str(PureWindowsPath(WorkerRunRoot) / "manifest")
+    ClientFrames, ServerTicks, WorkloadArguments = WorkloadProfile(Config["RecoveryWorkload"])
     ManifestArgs = ["-ServerPackageRoot", WorkerSandbox(Spec["Roles"]["SERVER"]["PackageRoot"]),
                     "-PlayerPackageRoot", WorkerSandbox(Config["WorkerPlayerPackageRoot"]),
                     "-OutputRoot", RemoteText(ManifestRoot), "-RunId", RunId,
                     "-Endpoint", "10.253.3.2:39450", "-Provider", Config["Provider"],
-                    "-ScaleWorkload", "-ClientFrames", "9000", "-ServerTicks", "10000"]
+                    *WorkloadArguments]
     if Config["Provider"] == "Node":
         Node = Config["Node"]
         if not isinstance(Node, dict) or set(Node) != {"Endpoint", "RootCertificatePath",
@@ -257,8 +277,9 @@ def PrepareInputs(ConfigPath, TransportInstance=None):
             ReadJson(LocalManifest).get("RunId") != RunId or
             ReadJson(LocalManifest).get("SourceCommit") != Config["SourceCommit"] or
             ReadJson(LocalManifest).get("ScaleWorkload") is not True or
-            ReadJson(LocalManifest).get("ClientFrames", 0) < 9000 or
-            ReadJson(LocalManifest).get("ServerTicks", 0) <= ReadJson(LocalManifest).get("ClientFrames", 0) + 600):
+            ReadJson(LocalManifest).get("RecoveryWorkload", False) is not Config["RecoveryWorkload"] or
+            ReadJson(LocalManifest).get("ClientFrames") != ClientFrames or
+            ReadJson(LocalManifest).get("ServerTicks") != ServerTicks):
         raise ValueError("[Qualification:FarmOuter] generated package manifest mismatch")
     if Config["Provider"] == "Node":
         Node = Config["Node"]
