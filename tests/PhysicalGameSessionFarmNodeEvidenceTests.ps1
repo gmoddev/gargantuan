@@ -40,7 +40,7 @@ foreach ($Definition in @(Import-Functions -Path $Reconciler -Names @(
 }
 $TlsAnalyzer = Join-Path $PSScriptRoot 'PhysicalGameSessionFarmNodeTls.ps1'
 foreach ($Definition in @(Import-Functions -Path $TlsAnalyzer -Names @(
-	'Get-NodeTlsLogMatchReceipt', 'Write-NodeTlsLogMatchReceipt'))) {
+	'Get-NodeTimestamp', 'Get-NodeTlsLogMatchReceipt', 'Write-NodeTlsLogMatchReceipt'))) {
 	. ([scriptblock]::Create($Definition.Extent.Text))
 }
 
@@ -113,6 +113,7 @@ try {
 		CertificateSha256 = 'f' * 64; RootCertificateSha256 = $RootHash
 		Pid = 1234; StartedUtc = '2026-10-01T00:00:00Z'
 		EndedUtc = '2026-10-01T00:00:01Z'; TcpReady = $true
+		TlsProven = $false; LogsDiscarded = $false
 		ChildReaped = $true; Reason = 'STOP_REQUESTED'
 		StdoutPath = $NodeLog; StdoutSha256 = ''; StdoutBytes = 0
 		StderrPath = (Join-Path $Root 'node.stderr.log'); StderrSha256 = 'a' * 64
@@ -125,7 +126,11 @@ try {
 	Write-NodeTlsLogMatchReceipt -Path $TlsReceiptPath -Receipt $TlsReceipt
 	if ($TlsReceipt.State -cne 'OFFLINE_LOG_MATCH_BOUND_TO_PINNED_NODE_RUN' -or
 		$TlsReceipt.RequestId -cne 'server-content-1' -or
-		$TlsReceipt.CipherSuite -cne 'TLS_AES_128_GCM_SHA256') {
+		$TlsReceipt.CipherSuite -cne 'TLS_AES_128_GCM_SHA256' -or
+		$TlsReceipt.Transport -cne 'grpc_tls' -or
+		$TlsReceipt.RecordObservedUtc -cne '2026-10-01T00:00:00.0000000+00:00' -or
+		$TlsReceipt.NodeChildStartedUtc -cne '2026-10-01T00:00:00.0000000+00:00' -or
+		$TlsReceipt.NodeChildEndedUtc -cne '2026-10-01T00:00:01.0000000+00:00') {
 		throw 'offline Node TLS match was lost or promoted to physical provenance'
 	}
 	Expect-Rejection {
@@ -140,6 +145,9 @@ try {
 	} 'wrong stage pin'
 	foreach ($Replacement in @(
 		@('server-content-1', 'server-content-2'),
+		@('2026-10-01T00:00:00Z', '2026-09-30T23:59:59Z'),
+		@('2026-10-01T00:00:00Z', 'invalid-time'),
+		@('grpc_tls', 'grpc_plaintext'),
 		@('TLSv1.3', 'TLSv1.1'),
 		@('TLS_AES_128_GCM_SHA256', 'TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256'),
 		@($Project, ('b' * 32))
@@ -158,6 +166,38 @@ try {
 			-NodeRunReceiptPath $NodeRunPath -NodeRunReceiptSha256 $RunPin -NodeStageSha256 $StageHash
 	} 'duplicate matching TLS records'
 	[IO.File]::WriteAllText($NodeLog, "$TlsLine`n")
+	$Extra = $TlsLine | ConvertFrom-Json -AsHashtable
+	$Extra['authorization'] = 'redacted'
+	[IO.File]::WriteAllText($NodeLog, (($Extra | ConvertTo-Json -Compress) + "`n"))
+	$RunPin = Save-NodeRunReceipt -Path $NodeRunPath -LogPath $NodeLog -Receipt $NodeRun
+	Expect-Rejection {
+		Get-NodeTlsLogMatchReceipt -ServerReceiptPath $ReceiptPath -NodeStagePath $StagePath `
+			-NodeRunReceiptPath $NodeRunPath -NodeRunReceiptSha256 $RunPin -NodeStageSha256 $StageHash
+	} 'unexpected credential field in TLS log record'
+	[IO.File]::WriteAllText($NodeLog, "$TlsLine`n")
+	$RunPin = Save-NodeRunReceipt -Path $NodeRunPath -LogPath $NodeLog -Receipt $NodeRun
+	$BadServer = $Receipt | ConvertTo-Json -Depth 4 | ConvertFrom-Json -AsHashtable
+	$BadServer.TlsSessionDetails = 'TLSv1.3'
+	[IO.File]::WriteAllText($ReceiptPath, ($BadServer | ConvertTo-Json -Depth 4))
+	Expect-Rejection {
+		Get-NodeTlsLogMatchReceipt -ServerReceiptPath $ReceiptPath -NodeStagePath $StagePath `
+			-NodeRunReceiptPath $NodeRunPath -NodeRunReceiptSha256 $RunPin -NodeStageSha256 $StageHash
+	} 'server receipt fabricated TLS negotiation'
+	[IO.File]::WriteAllText($ReceiptPath, ($Receipt | ConvertTo-Json -Depth 4))
+	$NodeRun.StartedUtc = '2026-10-01T00:00:02Z'
+	$RunPin = Save-NodeRunReceipt -Path $NodeRunPath -LogPath $NodeLog -Receipt $NodeRun
+	Expect-Rejection {
+		Get-NodeTlsLogMatchReceipt -ServerReceiptPath $ReceiptPath -NodeStagePath $StagePath `
+			-NodeRunReceiptPath $NodeRunPath -NodeRunReceiptSha256 $RunPin -NodeStageSha256 $StageHash
+	} 'TLS event predates owned child'
+	$NodeRun.StartedUtc = '2026-10-01T00:00:00Z'
+	$NodeRun.EndedUtc = 'invalid-time'
+	$RunPin = Save-NodeRunReceipt -Path $NodeRunPath -LogPath $NodeLog -Receipt $NodeRun
+	Expect-Rejection {
+		Get-NodeTlsLogMatchReceipt -ServerReceiptPath $ReceiptPath -NodeStagePath $StagePath `
+			-NodeRunReceiptPath $NodeRunPath -NodeRunReceiptSha256 $RunPin -NodeStageSha256 $StageHash
+	} 'malformed owned-child end timestamp'
+	$NodeRun.EndedUtc = '2026-10-01T00:00:01Z'
 	$RunPin = Save-NodeRunReceipt -Path $NodeRunPath -LogPath $NodeLog -Receipt $NodeRun
 	$BadLine = $Line.Replace('request_id=server-content-1', 'request_id=bad-id')
 	[IO.File]::WriteAllText($Log, "$BadLine`n")

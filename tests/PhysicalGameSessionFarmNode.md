@@ -74,11 +74,17 @@ Node child/config, complete content delivery, and physical campaign behavior
 remain independent evidence. `PhysicalGameSessionFarmNodeTls.ps1` can match
 that request ID and package identity against an independently retained Node
 JSON log record from the official Node `GetManifest` success path and verify
-its TLS version/cipher pairing. It produces only
+its TLS version/cipher pairing. It produces
 `OFFLINE_LOG_MATCH_BOUND_TO_PINNED_NODE_RUN` only when the bounded
 `node.stdout.log` matches the independently hash-pinned `node-run.json` and
 `node-stage.json`, including run ID, root CA, stage hash, log path, byte count,
-and digest. The match is still not the full physical provider PASS gate.
+and digest. The matcher additionally requires the negotiated-TLS record to
+fall within that owned child's start/end interval, requires the exact
+non-secret JSON record schema, and rejects a Server receipt that claims TLS
+negotiation by itself. This proves a successful authenticated `GetManifest`
+RPC reached the pinned Node child over negotiated TLS when a physical record
+is available; it does not prove the separate content-delivery or full physical
+provider PASS gate.
 
 The Farm32 campaign's Node SERVER role ticket pins the prepared
 `node-stage.json` and this helper by SHA-256, in addition to its existing
