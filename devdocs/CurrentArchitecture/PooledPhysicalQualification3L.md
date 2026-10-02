@@ -2077,3 +2077,52 @@ After the run, no task-owned Gargantuan process or UDP 39450 listener remained.
 This same-host diagnostic preflight is not a direct-fiber Local provider matrix,
 real-TLS Node matrix, capture result, resource-headroom result, or Foundation
 3L acceptance. KI-006 remains OPEN and Foundation 3L remains B — PARTIALLY READY.
+
+## 2026-10-02 — recovery cessation-quote contract conflict
+
+The worker-only 32-actual-client Local loopback diagnostic at revision
+`1a8a9b704` reached the structural recovery case. Run
+`0db602d1-5c1e-4431-b618-1dd307546818` is retained under
+`C:\Sandbox\Codex\Evidence\Farm32_1a8a9bDiagnostic` on the worker. Its
+`server.stderr.log` SHA-256 is
+`f7ab8b26dff018216f2cd9eb2c00545641a99be84bd9dc0d9b8a2de15edb2943`;
+the `admission-fairness.tsv` SHA-256 is
+`24864d864ea1004fde8a806073e47f3ca3890d991acef70ffa1af66273a4b65f`.
+This is diagnostic evidence, not a provider qualification result.
+
+The first recorded quote mismatch was connection slot 6, generation 1, grant
+token 3424: live accepted complete bytes **118**, frozen quoted complete bytes
+**344,548**, quoted sequence 119. The diagnostic printed
+`observed_fingerprint=0:0`; the quote fingerprint was
+`9916901384590782373:9383686036810715964`. The source journal tail stayed
+at 23,272 while live pending Leaves rose from zero to six before the mismatch.
+The trace does not record the 118-byte frame's decoded operation, so its exact
+opcode is **NOT MEASURED**. A deterministic regression at `da6a37dfc` proves
+that a post-capture live relevance Leave can be accepted with no journal-tail
+change while a frozen journal-only quote cannot replay it.
+
+The [recovery contract](PooledReliableServiceRecoveryContract3L.md) defines
+`W_i` from semantically necessary work at excess-demand cessation. The
+[canonical physical workload](#actual-client-and-provider-gate) requires eight
+moving/root-motion Characters through the accepted overload/recovery cases.
+The current quote freezes relevance selection and journal state at cessation,
+but normal live relevance planning continues after that point. Consequently
+the strict frame-by-frame live/quote identity audit can encounter later
+legitimate relevance work that was unknowable to the frozen quote. Stopping
+motion would change the specified workload; counting future work in cessation
+`W_i` or ignoring live frames would change the current evidence contract.
+**ARCHITECTURE DECISION REQUIRED** on how recovery under continuing motion
+defines and verifies cessation work while preserving the fixed 20-second
+service-recovery gate, exact convergence, fairness and normal relevance.
+
+The frozen quote's proven oversize-Name preflight at `da6a37dfc` is independent
+of this conflict. Its native oracle matched 40 frames on sequence, complete
+bytes, fingerprint and cursor; it reduced encoding retries from 195 to 150
+without changing live production. A later worker-only instrumentation run at
+`403592934`, ID `43af4af0-06de-49b6-917d-f0557816b9ab`, ended in the
+baseline phase when client 00 reported seven action requests and zero action
+resolutions. It did not measure recovery and is not a retry PASS.
+
+The direct-fiber Local and real-TLS Node 32-client matrices remain **NOT
+MEASURED**. KI-006 remains **OPEN**; Foundation 3L remains **B — PARTIALLY
+READY**. No Foundation 3M work or PR merge is authorized by this diagnostic.
