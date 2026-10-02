@@ -46,7 +46,7 @@ function Assert-PreflightInventory {
 		$Inventory.GameInterfaceIndex -le 0 -or
 		($LocalRole -eq 'Server' -and $Inventory.GameInterfaceAddress -cne
 			($RunManifest.Endpoint -split ':')[0]) -or
-		($LocalRole -eq 'Clients' -and $Inventory.GameInterfaceAddress -cne '10.253.3.2') -or
+		($LocalRole -eq 'Clients' -and $Inventory.GameInterfaceAddress -cne '10.253.3.1') -or
 		($LocalRole -eq 'Server' -and $Inventory.GameUdpPortOccupied)) {
 		throw 'role-local direct fiber interface, route, MTU, or server UDP socket is not ready'
 	}
@@ -92,7 +92,7 @@ if ($Role -eq 'Server') {
 	$Route = Find-NetRoute -RemoteIPAddress $Address -ErrorAction Stop | Select-Object -First 1
 	$InterfaceIndex = [int]$Route.InterfaceIndex
 	$GameIp = Get-NetIPAddress -InterfaceIndex $InterfaceIndex -AddressFamily IPv4 |
-		Where-Object IPAddress -eq '10.253.3.2' | Select-Object -First 1
+		Where-Object IPAddress -eq '10.253.3.1' | Select-Object -First 1
 	if (-not $GameIp) { throw 'client route does not use the qualified fiber address' }
 }
 $Adapter = Get-NetAdapter -InterfaceIndex $InterfaceIndex -ErrorAction Stop

@@ -19,20 +19,24 @@ function Expect-Rejection {
 	if (-not $Rejected) { throw "expected preflight rejection: $Reason" }
 }
 
-$Manifest = @{ Endpoint = '10.253.3.1:39450'; Provider = 'Local' }
+$Manifest = @{ Endpoint = '10.253.3.2:39450'; Provider = 'Local' }
 $Good = [ordered]@{
 	LogicalProcessors = 16; AvailableMemoryBytes = 16GB
 	EvidenceDriveFreeBytes = 10GB; PackageDriveFreeBytes = 10GB
 	ProcessCount = 100; ThreadCount = 1500
 	GameInterfaceStatus = 'Up'; GameInterfaceLinkSpeed = '10 Gbps'
 	GameInterfaceMtu = 1500; GameInterfaceIndex = 19
-	GameInterfaceAddress = '10.253.3.1'; GameUdpPortOccupied = $false
+	GameInterfaceAddress = '10.253.3.2'; GameUdpPortOccupied = $false
 	NodeRootCertificateMatches = $false; NodeTokenPresent = $false
 }
 Assert-PreflightInventory -Inventory $Good -LocalRole Server -RunManifest $Manifest
 $Client = [ordered]@{} + $Good
-$Client.GameInterfaceAddress = '10.253.3.2'
+$Client.GameInterfaceAddress = '10.253.3.1'
 Assert-PreflightInventory -Inventory $Client -LocalRole Clients -RunManifest $Manifest
+$Client.GameInterfaceAddress = '10.253.3.2'
+Expect-Rejection { Assert-PreflightInventory -Inventory $Client -LocalRole Clients -RunManifest $Manifest } `
+	'client cannot claim the worker fiber address'
+$Client.GameInterfaceAddress = '10.253.3.1'
 $Client.AvailableMemoryBytes = 4GB
 Expect-Rejection { Assert-PreflightInventory -Inventory $Client -LocalRole Clients -RunManifest $Manifest } `
 	'32-client worker lacks 8 GiB free memory'
@@ -49,7 +53,7 @@ $Server.GameUdpPortOccupied = $true
 Expect-Rejection { Assert-PreflightInventory -Inventory $Server -LocalRole Server -RunManifest $Manifest } `
 	'game UDP port already bound'
 $Server.GameUdpPortOccupied = $false
-$NodeManifest = @{ Endpoint = '10.253.3.1:39450'; Provider = 'Node' }
+$NodeManifest = @{ Endpoint = '10.253.3.2:39450'; Provider = 'Node' }
 Expect-Rejection { Assert-PreflightInventory -Inventory $Server -LocalRole Server -RunManifest $NodeManifest } `
 	'Node root or token absent'
 $Server.NodeRootCertificateMatches = $true
