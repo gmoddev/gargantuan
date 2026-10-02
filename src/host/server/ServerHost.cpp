@@ -1,6 +1,7 @@
 #include "host/server/ServerHost.hpp"
 #include "host/server/PhysicalScaleQualification.hpp"
 #include "host/server/FarmAdmissionEvidence.hpp"
+#include "host/common/FarmPublicationEvidence.hpp"
 
 #include "host/common/PackagedHost.hpp"
 #include "gargantuan/Engine.hpp"
@@ -139,6 +140,8 @@ namespace gargantuan::host {
 		Program.add_argument("--farm-recovery-workload").flag().help("run bounded post-reload overload and recovery cases");
 		Program.add_argument("--farm-admission-evidence").default_value(std::string())
 			.help("fixed new role-local fairness evidence file for the 32-client scale run");
+		Program.add_argument("--farm-publication-evidence").default_value(std::string())
+			.help("fixed new role-local Character publication evidence file for the scale run");
 		Program.add_argument("--reliable-rate").scan<'u', std::uint64_t>().default_value(std::uint64_t{0})
 			.help("trusted per-connection application byte reservation per second; requires aggregate rate and peers");
 		Program.add_argument("--reliable-mode").default_value(std::string("FULL_RESERVATION"))
@@ -315,8 +318,9 @@ namespace gargantuan::host {
 		const bool FarmScaleWorkload = Program.is_used("--farm-scale-workload");
 		const bool FarmRecoveryWorkload = Program.is_used("--farm-recovery-workload");
 		const auto FarmAdmissionEvidencePath = Program.get<std::string>("--farm-admission-evidence");
+		const auto FarmPublicationEvidencePath = Program.get<std::string>("--farm-publication-evidence");
 		const bool FarmMode = !FarmRunId.empty() || FarmPeers != 0 || FarmScaleWorkload || FarmRecoveryWorkload ||
-			!FarmAdmissionEvidencePath.empty();
+			!FarmAdmissionEvidencePath.empty() || !FarmPublicationEvidencePath.empty();
 		const auto ValidFarmRunId = std::all_of(FarmRunId.begin(), FarmRunId.end(), [](char Value) {
 			return (Value >= 'A' && Value <= 'Z') || (Value >= 'a' && Value <= 'z') ||
 				(Value >= '0' && Value <= '9') || Value == '-';
@@ -325,6 +329,7 @@ namespace gargantuan::host {
 			FarmPeers < 1 || FarmPeers > 32 || Program.get<int>("--max-ticks") <= 0 ||
 			!BindEndpoint || SessionSmoke || StartupSmoke ||
 			(FarmScaleWorkload != !FarmAdmissionEvidencePath.empty()) ||
+			(FarmScaleWorkload != !FarmPublicationEvidencePath.empty()) ||
 			(FarmRecoveryWorkload && (!FarmScaleWorkload || Program.get<int>("--max-ticks") < 19000)) ||
 			(FarmScaleWorkload && (FarmPeers != 32 || Program.get<int>("--max-ticks") < 7200 ||
 				Residency != ContentResidencyMode::OnDemand)))) {
@@ -612,6 +617,9 @@ namespace gargantuan::host {
 			std::unique_ptr<detail::FarmAdmissionEvidence> AdmissionEvidence;
 			if (FarmScaleWorkload) AdmissionEvidence = std::make_unique<detail::FarmAdmissionEvidence>(
 				FarmRunId, std::filesystem::path(FarmAdmissionEvidencePath));
+			std::unique_ptr<detail::FarmPublicationEvidence> PublicationEvidence;
+			if (FarmScaleWorkload) PublicationEvidence = std::make_unique<detail::FarmPublicationEvidence>(
+				true, FarmRunId, -1, 0, std::filesystem::path(FarmPublicationEvidencePath));
 			if (FarmMode)
 				std::cout << "[Qualification:Server] event=start run=" << FarmRunId
 					<< " provider=" << ProviderName << " expected=" << FarmPeers << '\n';
@@ -619,6 +627,7 @@ namespace gargantuan::host {
 				std::cout << "[Runtime:ServerFrame] unix_us,tick,interval_ns,poll_ns,engine_ns,session_ns,encode_ns,relevance_ns,materialize_ns,selected,committed,pending,wire_bytes\n";
 			while (Runtime->ProcessService->Alive && StopRequested == 0) {
 				const auto TickStarted = std::chrono::steady_clock::now();
+				if (PublicationEvidence) PublicationEvidence->MarkFrameBegin(Runtime->GetSimulationTick() + 1);
 				if (Session) (void)Session->Poll();
 				const auto EngineStarted = std::chrono::steady_clock::now();
 				Runtime->Step();
@@ -888,8 +897,10 @@ namespace gargantuan::host {
 			}
 
 			if (AdmissionEvidence) AdmissionEvidence->Dump();
+			if (PublicationEvidence) PublicationEvidence->Dump();
 			int ExitCode = Runtime->ProcessService->ExitCode;
 			if (AdmissionEvidence && !AdmissionEvidence->Valid()) ExitCode = 10;
+			if (PublicationEvidence && !PublicationEvidence->Valid()) ExitCode = 10;
 			if (FarmMode && (FarmReadyHighWater != static_cast<std::size_t>(FarmPeers) ||
 				FarmIdentities.size() != static_cast<std::size_t>(FarmPeers) || FarmIdentityConflict ||
 				(ScaleQualification && !ScaleQualification->IsComplete())))
@@ -907,6 +918,13 @@ namespace gargantuan::host {
 					<< " bytes=" << AdmissionEvidence->BytesWritten()
 					<< " overflow=" << AdmissionEvidence->Overflowed()
 					<< " write_failed=" << AdmissionEvidence->Failed() << '\n';
+			if (PublicationEvidence)
+				std::cout << "[Qualification:Publication] event=evidence_result run=" << FarmRunId
+					<< " file=publication-service.bin records=" << PublicationEvidence->Count()
+					<< " bytes=" << PublicationEvidence->BytesWritten()
+					<< " overflow=" << PublicationEvidence->Overflowed()
+					<< " decode_failures=" << PublicationEvidence->Failures()
+					<< " valid=" << PublicationEvidence->Valid() << '\n';
 			if (Session && HostConfiguration.ReliableService) {
 				const auto Metrics = Session->GetMetrics();
 				const auto &M = Metrics.ReliableAdmission;

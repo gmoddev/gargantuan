@@ -1,5 +1,6 @@
 #include "../src/network/GameSessionTestAccess.hpp"
 #include "../src/runtime/RuntimeWorkDiagnostics.hpp"
+#include "../src/host/common/FarmPublicationEvidence.hpp"
 #include "PublicationLatencyFixture.hpp"
 #include "JoinedCharacterFixture.hpp"
 #include "gargantuan/Engine.hpp"
@@ -167,6 +168,66 @@ namespace {
 			Joined.End();
 		}
 		Check(runtime_detail::ActivePublicationLatency == Previous, "joined diagnostic restores scoped sink");
+	}
+
+	void TestFarmPublicationEvidence() {
+		const auto Root = std::filesystem::temp_directory_path() /
+			("gargantuan-farm-publication-" + std::to_string(
+				std::chrono::steady_clock::now().time_since_epoch().count()));
+		std::filesystem::create_directory(Root);
+		const auto Previous = runtime_detail::ActivePublicationLatency;
+		const auto ServerPath = Root / "publication-service.bin";
+		{
+			host::detail::FarmPublicationEvidence Evidence(true, "test-run", -1, 0, ServerPath, {}, 2);
+			Evidence.MarkFrameBegin(10);
+			runtime_detail::RecordPublicationLatency({.Stage = "CharacterDue", .Connection = {1, 1},
+				.Object = {9, 2}, .Tick = 10, .Due = 10});
+			Evidence.Dump();
+			Check(Evidence.Valid() && Evidence.Count() == 2 && Evidence.BytesWritten() >= 160,
+				"farm server trace seals bounded records after measured work");
+		}
+		Check(runtime_detail::ActivePublicationLatency == Previous, "farm server trace restores scoped sink");
+		const auto ClientPath = Root / "publication-service-0.bin";
+		{
+			host::detail::FarmPublicationEvidence Evidence(false, "test-run", 0, 17, ClientPath, {1, 1}, 2);
+			CharacterStateFrame Frame{.ServerTick = 31, .FrameSequence = CharacterStateFrameSequence{1}, .StateCount = 1};
+			Frame.States[0] = CharacterAuthoritativeState{.Character = {9, 2},
+				.ControlEpoch = CharacterControlEpoch{7}, .StateSequence = RealtimeStateSequence{12},
+				.AuthoritativeTick = 31};
+			const auto Bytes = EncodeCharacterMessage(Frame);
+			Check(Bytes.has_value(), "farm client trace fixture encodes a valid state");
+			if (Bytes) {
+				runtime_detail::RecordPublicationPacket("ClientNativeReceive", {1, 2}, *Bytes);
+				runtime_detail::RecordPublicationPacket("ClientNativeReceive", {1, 1}, *Bytes);
+				runtime_detail::RecordPublicationPacket("ClientHandled", {1, 1}, *Bytes);
+			}
+			Evidence.Dump();
+			Check(Evidence.Valid() && Evidence.Count() == 2,
+				"farm client trace retains only its actual full-generation recipient");
+		}
+		Check(runtime_detail::ActivePublicationLatency == Previous, "farm client trace restores scoped sink");
+		const auto OverflowPath = Root / "publication-service-1.bin";
+		{
+			host::detail::FarmPublicationEvidence Evidence(false, "test-run", 1, 18, OverflowPath, {1, 1}, 1);
+			std::array<std::byte, 4> Invalid{std::byte{0x47}, std::byte{0x43}, std::byte{0x48}, std::byte{0x52}};
+			runtime_detail::RecordPublicationPacket("ClientHandled", {1, 1}, Invalid);
+			CharacterStateFrame Frame{.ServerTick = 31, .FrameSequence = CharacterStateFrameSequence{1}, .StateCount = 1};
+			Frame.States[0] = CharacterAuthoritativeState{.Character = {9, 2},
+				.ControlEpoch = CharacterControlEpoch{7}, .StateSequence = RealtimeStateSequence{12},
+				.AuthoritativeTick = 31};
+			if (const auto Bytes = EncodeCharacterMessage(Frame)) {
+				runtime_detail::RecordPublicationPacket("ClientNativeReceive", {1, 1}, *Bytes);
+				runtime_detail::RecordPublicationPacket("ClientHandled", {1, 1}, *Bytes);
+			}
+			Evidence.Dump();
+			Check(!Evidence.Valid() && Evidence.Overflowed() && Evidence.Failures() == 1,
+				"farm trace overflow and malformed GCHR invalidate the evidence");
+		}
+		Check(runtime_detail::ActivePublicationLatency == Previous, "failed farm trace restores scoped sink");
+		std::filesystem::remove(ServerPath);
+		std::filesystem::remove(ClientPath);
+		std::filesystem::remove(OverflowPath);
+		std::filesystem::remove(Root);
 	}
 
 	class HandoffTransport final : public IGameTransport {
@@ -1804,6 +1865,68 @@ end)
 int main(int ArgumentCount, char **Arguments) {
 	try {
 		gargantuan::BootstrapNativeRuntimeSchema();
+		if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--farm-publication-overhead") {
+			constexpr int Samples = 500'000;
+			const auto Sample = [] {
+				for (int Index = 0; Index < Samples; ++Index)
+					runtime_detail::RecordPublicationLatency({.Stage = "CharacterDue", .Connection = {1, 1},
+						.Object = {9, 1}, .Tick = static_cast<std::uint64_t>(Index), .Due = 1, .Kind = 5});
+			};
+			const auto OffBegin = std::chrono::steady_clock::now();
+			Sample();
+			const auto OffEnd = std::chrono::steady_clock::now();
+			const auto Directory = std::filesystem::temp_directory_path() / "farm-publication-overhead";
+			std::filesystem::create_directories(Directory);
+			const auto Path = Directory / "publication-service.bin";
+			std::filesystem::remove(Path);
+			std::chrono::steady_clock::time_point OnBegin, OnEnd;
+			{
+				host::detail::FarmPublicationEvidence Evidence(true, "overhead", -1, 0, Path);
+				OnBegin = std::chrono::steady_clock::now();
+				Sample();
+				OnEnd = std::chrono::steady_clock::now();
+				if (Evidence.Count() != Samples) throw std::runtime_error("farm publication overhead sample lost records");
+			}
+			std::filesystem::remove(Path);
+			CharacterStateFrame Frame{.ServerTick = 31, .FrameSequence = CharacterStateFrameSequence{1},
+				.StateCount = 8};
+			for (int Index = 0; Index < 8; ++Index)
+				Frame.States[Index] = CharacterAuthoritativeState{.Character = {static_cast<std::uint32_t>(9 + Index), 1},
+					.ControlEpoch = CharacterControlEpoch{7}, .StateSequence = RealtimeStateSequence{12},
+					.AuthoritativeTick = 31};
+			const auto Packet = EncodeCharacterMessage(Frame);
+			if (!Packet) throw std::runtime_error("farm publication packet benchmark fixture is invalid");
+			constexpr int Packets = 100'000;
+			const auto PacketSample = [&] {
+				for (int Index = 0; Index < Packets; ++Index)
+					runtime_detail::RecordPublicationPacket("SchedulerAccepted", {1, 1}, *Packet);
+			};
+			const auto PacketOffBegin = std::chrono::steady_clock::now();
+			PacketSample();
+			const auto PacketOffEnd = std::chrono::steady_clock::now();
+			std::filesystem::remove(Path);
+			std::chrono::steady_clock::time_point PacketOnBegin, PacketOnEnd;
+			{
+				host::detail::FarmPublicationEvidence Evidence(true, "overhead", -1, 0, Path);
+				PacketOnBegin = std::chrono::steady_clock::now();
+				PacketSample();
+				PacketOnEnd = std::chrono::steady_clock::now();
+				if (Evidence.Count() != Packets * 8)
+					throw std::runtime_error("farm publication packet sample lost records");
+			}
+			std::filesystem::remove(Path);
+			const auto OffNs = std::chrono::duration_cast<std::chrono::nanoseconds>(OffEnd - OffBegin).count();
+			const auto OnNs = std::chrono::duration_cast<std::chrono::nanoseconds>(OnEnd - OnBegin).count();
+			std::cout << "[Qualification:Publication] benchmark_samples=" << Samples
+				<< " off_ns_per_event=" << double(OffNs) / Samples
+				<< " on_ns_per_event=" << double(OnNs) / Samples
+				<< " packet_states=8 packet_samples=" << Packets
+				<< " packet_off_ns=" << double(std::chrono::duration_cast<std::chrono::nanoseconds>(
+					PacketOffEnd - PacketOffBegin).count()) / Packets
+				<< " packet_on_ns=" << double(std::chrono::duration_cast<std::chrono::nanoseconds>(
+					PacketOnEnd - PacketOnBegin).count()) / Packets << '\n';
+			return 0;
+		}
 		if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--character-retirement") {
 			TestCharacterRetirementAcrossStructuralFrames();
 			return Failures == 0 ? 0 : 1;
@@ -1821,6 +1944,7 @@ int main(int ArgumentCount, char **Arguments) {
 		if (ArgumentCount != 1) throw std::invalid_argument("Unknown game-session test selection");
 		TestGroundedNetworkLocomotion();
 		TestPublicationLatencyBounds();
+		TestFarmPublicationEvidence();
 		TestProtocolBounds();
 		TestServerSessionSignalLifetime();
 		TestSessionOwnershipAndEndpointPolicy();

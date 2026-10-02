@@ -617,6 +617,10 @@ namespace gargantuan::network {
 					break;
 				}
 				auto Event = DecodeMessage(Id, *Message);
+				// The farm-only publication sink records the first polled native
+				// receive before GameSession dispatch, without retaining a payload.
+				if (Event && Role == TransportRole::Client)
+					runtime_detail::RecordPublicationPacket("ClientNativeReceive", Id, Event->Payload);
 				if (Event && detail::ActiveGnsService) Observe(Id, "GnsReceive", Event->Payload,
 					static_cast<int>(Event->Delivery), static_cast<int>(Event->Traffic), Message->m_nMessageNumber,
 					SteamAPI_ISteamNetworkingUtils_GetLocalTimestamp(SteamNetworkingUtils()) - Message->m_usecTimeReceived);

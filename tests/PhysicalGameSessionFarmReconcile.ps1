@@ -40,12 +40,14 @@ function Assert-EvidenceRoot {
 	$Index = Get-RequiredJson -Path $IndexPath
 	if ($Index.RunId -cne $ExpectedRunId -or $Index.Role -cne $ExpectedRole -or
 		$Index.Files -isnot [array] -or $Index.Files.Count -lt 4 -or
-		$Index.Files.Count -gt 80) { throw "$ExpectedRole evidence index schema or identity is invalid" }
+		$Index.Files.Count -gt 128) { throw "$ExpectedRole evidence index schema or identity is invalid" }
 	$Expected = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
 	foreach ($File in $Index.Files) {
 		$Name = [string]$File.Name
 		$MaximumBytes = if ($Name -ceq 'admission-fairness.tsv' -and $ExpectedRole -ceq 'Server') {
 			33554432
+		} elseif ($Name -ceq 'publication-service.bin' -and $ExpectedRole -ceq 'Server') {
+			335544832
 		} else {
 			16777216
 		}

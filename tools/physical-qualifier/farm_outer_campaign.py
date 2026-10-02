@@ -676,8 +676,10 @@ def FetchIndexed(TransportInstance, RemoteRoot, LocalRoot, IndexName, RunId, Rol
                 not re.fullmatch(r"[A-Za-z0-9._-]{1,96}", Member["Name"]) or
                 Member["Name"] in Seen or Member["Name"] == IndexName or
                 type(Member["Bytes"]) is not int or
-                not 0 <= Member["Bytes"] <= (32 * 1024 * 1024 if
-                    Member["Name"] == "admission-fairness.tsv" else MaximumMemberBytes) or
+                not 0 <= Member["Bytes"] <= (335544832 if
+                    Member["Name"] == "publication-service.bin" and Role == "SERVER" else
+                    32 * 1024 * 1024 if Member["Name"] == "admission-fairness.tsv" and Role == "SERVER" else
+                    MaximumMemberBytes) or
                 not isinstance(Member["Sha256"], str) or
                 not SHA.fullmatch(Member["Sha256"])):
             raise ValueError("[Qualification:FarmOuter] indexed worker evidence member invalid")

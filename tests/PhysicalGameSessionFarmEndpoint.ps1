@@ -683,11 +683,13 @@ try {
 	$script:LastResourceSampleMilliseconds = -2000L
 	if ($Role -eq 'Server') {
 		$FairnessPath = Join-Path $Paths.Evidence 'admission-fairness.tsv'
+		$PublicationPath = Join-Path $Paths.Evidence 'publication-service.bin'
 		$Arguments = @('--bind', $Manifest.Endpoint, '--farm-run-id', $RunId,
 			'--farm-peers', '32', '--max-ticks', [string]$Manifest.ServerTicks,
 			'--reliable-mode', 'POOLED_SERVICE', '--content-provider', $Manifest.Provider.ToLowerInvariant())
 		if ($Manifest.ScaleWorkload) { $Arguments += @('--farm-scale-workload',
-			'--farm-admission-evidence', $FairnessPath, '--content-residency', 'on-demand') }
+			'--farm-admission-evidence', $FairnessPath,
+			'--farm-publication-evidence', $PublicationPath, '--content-residency', 'on-demand') }
 		if ($Manifest.RecoveryWorkload) { $Arguments += '--farm-recovery-workload' }
 		if (-not [Net.IPAddress]::IsLoopback($Network.Address)) { $Arguments += '--allow-insecure-development-network' }
 		if ($Manifest.Provider -eq 'Node') {
@@ -723,7 +725,8 @@ try {
 			$Arguments = @('--headless', '--connect', $Manifest.Endpoint, '--farm-run-id', $RunId,
 				'--farm-slot', [string]$Slot, '--farm-client-nonce', [string]$Manifest.Nonces[$Slot],
 				'--max-frames', [string]$Manifest.ClientFrames)
-			if ($Manifest.ScaleWorkload) { $Arguments += '--farm-scale-workload' }
+			if ($Manifest.ScaleWorkload) { $Arguments += @('--farm-scale-workload',
+				'--farm-publication-evidence', (Join-Path $Paths.Evidence ('publication-service-{0}.bin' -f $Slot))) }
 			if ($Manifest.RecoveryWorkload) { $Arguments += '--farm-recovery-workload' }
 			if (-not [Net.IPAddress]::IsLoopback($Network.Address)) { $Arguments += '--allow-insecure-development-network' }
 			$Owner = Start-EndpointProcess -Executable $Executable -WorkingDirectory $Paths.Package `

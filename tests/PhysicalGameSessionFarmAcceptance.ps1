@@ -53,7 +53,7 @@ function Read-RoleEvidence {
 	$Index = Read-BoundedJson -Path $IndexPath
 	$ExpectedHash = if ($Role -ceq 'Server') { $Report.ServerEvidenceSha256 } else { $Report.ClientEvidenceSha256 }
 	if ($Index.RunId -cne $Report.RunId -or $Index.Role -cne $Role -or
-		$Index.Files -isnot [array] -or $Index.Files.Count -lt 2 -or $Index.Files.Count -gt 80 -or
+		$Index.Files -isnot [array] -or $Index.Files.Count -lt 2 -or $Index.Files.Count -gt 128 -or
 		[string]$ExpectedHash -cnotmatch '^[a-fA-F0-9]{64}$' -or
 		(Get-FileHash -LiteralPath $IndexPath -Algorithm SHA256).Hash -ine $ExpectedHash) {
 		throw "$Role evidence index does not match the reconciliation report"
@@ -88,7 +88,9 @@ function Read-RoleEvidence {
 			$Entry.Name -ieq 'evidence-sha256.json' -or
 			-not $Names.Add([string]$Entry.Name) -or [long]$Entry.Bytes -lt 0 -or
 			[long]$Entry.Bytes -gt $(if ($Role -ceq 'Server' -and
-				$Entry.Name -ceq 'admission-fairness.tsv') { 33554432 } else { 16777216 })) {
+				$Entry.Name -ceq 'admission-fairness.tsv') { 33554432 }
+				elseif ($Role -ceq 'Server' -and $Entry.Name -ceq 'publication-service.bin') { 335544832 }
+				else { 16777216 })) {
 			throw "$Role evidence index has an invalid retained-file bound"
 		}
 		$EntryPath = Join-Path $Resolved $Entry.Name

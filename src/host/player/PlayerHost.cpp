@@ -1,6 +1,7 @@
 #include "host/player/PlayerHost.hpp"
 
 #include "host/common/PackagedHost.hpp"
+#include "host/common/FarmPublicationEvidence.hpp"
 #include "gargantuan/Engine.hpp"
 #include "gargantuan/Log.hpp"
 #include "gargantuan/classes/DataModel.hpp"
@@ -51,6 +52,8 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 		.help("explicit nonzero test-only game-session client nonce");
 	Program.add_argument("--farm-scale-workload").flag().help("exit after bounded qualified scale workload completion");
 	Program.add_argument("--farm-recovery-workload").flag().help("observe bounded post-reload overload and recovery cases");
+	Program.add_argument("--farm-publication-evidence").default_value(std::string())
+		.help("fixed new role-local Character publication evidence file for the scale run");
 	Program.add_argument("--allow-insecure-development-network")
 		.flag()
 		.help("allow DevelopmentLocal networking beyond loopback; authentication is not provided");
@@ -72,8 +75,10 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 	const auto FarmClientNonce = Program.get<std::uint64_t>("--farm-client-nonce");
 	const bool FarmScaleWorkload = Program.is_used("--farm-scale-workload");
 	const bool FarmRecoveryWorkload = Program.is_used("--farm-recovery-workload");
+	const auto FarmPublicationEvidencePath = Program.get<std::string>("--farm-publication-evidence");
 	const bool FarmEnabled = Program.is_used("--farm-run-id") || Program.is_used("--farm-slot") ||
-		Program.is_used("--farm-client-nonce") || FarmScaleWorkload || FarmRecoveryWorkload;
+		Program.is_used("--farm-client-nonce") || FarmScaleWorkload || FarmRecoveryWorkload ||
+		!FarmPublicationEvidencePath.empty();
 	bool FarmRunIdValid = !FarmRunId.empty() && FarmRunId.size() <= 64;
 	for (const char Character : FarmRunId)
 		FarmRunIdValid = FarmRunIdValid && ((Character >= '0' && Character <= '9') ||
@@ -85,6 +90,7 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 		 FarmClientNonce == 0 || !Program.is_used("--headless") || ClientText.empty() ||
 		 Program.get<int>("--max-frames") <= 0 || Program.get<int>("--max-frames") > 36'000 ||
 		 (FarmScaleWorkload && Program.get<int>("--max-frames") < 9000) ||
+		 (FarmScaleWorkload != !FarmPublicationEvidencePath.empty()) ||
 		 (FarmRecoveryWorkload && (!FarmScaleWorkload || Program.get<int>("--max-frames") < 18000)) ||
 		 Program.is_used("--session-smoke") || Program.is_used("--startup-smoke"))) {
 		std::cerr << "GargantuanPlayer client farm arguments are invalid.\n";
@@ -170,6 +176,7 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 	std::unique_ptr<BaseRenderer> Renderer;
 	std::unique_ptr<Engine> Runtime;
 	std::unique_ptr<network::GameSession> Session;
+	std::unique_ptr<host::detail::FarmPublicationEvidence> PublicationEvidence;
 	try {
 		auto PackagedWorld = PackageBuilder::LoadWorld(*Payload, PackageRoot);
 		const Vector2 ViewportSize(720, 540);
@@ -245,6 +252,9 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 			const auto Connection = Session->GetPrimaryConnection();
 			FarmReady = Session->GetStatus() == network::GameSessionStatus::Ready && Connection.has_value();
 			if (!FarmReady) throw std::runtime_error("client farm game session did not reach Ready");
+			if (FarmScaleWorkload) PublicationEvidence = std::make_unique<host::detail::FarmPublicationEvidence>(
+				false, FarmRunId, FarmSlot, FarmClientNonce,
+				std::filesystem::path(FarmPublicationEvidencePath), *Connection);
 			std::cout << "[Qualification:Client] event=ready run_id=" << FarmRunId << " slot=" << FarmSlot
 					  << " nonce=" << FarmClientNonce << " connection_slot=" << Connection->Slot
 					  << " connection_generation=" << Connection->Generation
@@ -630,7 +640,17 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 					NetworkFrameDeadline = Now;
 			}
 		}
-		const auto ExitCode = Runtime->ProcessService->ExitCode;
+		if (PublicationEvidence) PublicationEvidence->Dump();
+		int ExitCode = Runtime->ProcessService->ExitCode;
+		if (PublicationEvidence && !PublicationEvidence->Valid()) ExitCode = 17;
+		if (PublicationEvidence)
+			std::cout << "[Qualification:Publication] event=evidence_result run_id=" << FarmRunId
+				<< " slot=" << FarmSlot << " file=publication-service-" << FarmSlot << ".bin"
+				<< " records=" << PublicationEvidence->Count()
+				<< " bytes=" << PublicationEvidence->BytesWritten()
+				<< " overflow=" << PublicationEvidence->Overflowed()
+				<< " decode_failures=" << PublicationEvidence->Failures()
+				<< " valid=" << PublicationEvidence->Valid() << '\n';
 		if (SessionSmoke) {
 			if (const auto Value = Runtime->CharacterControl->GetAttributeValue("RemoteFunctionMetrics"))
 				if (const auto *MetricsText = std::get_if<std::string>(&*Value)) std::cout << *MetricsText << '\n';
@@ -659,7 +679,8 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 		Runtime->Destroy();
 		Runtime.reset();
 		Renderer.reset();
-		ReportFarmResult(ExitCode, FarmScaleWorkload ? (FarmScaleCompleted ? "scale_complete" : "scale_incomplete") :
+		ReportFarmResult(ExitCode, PublicationEvidence && !PublicationEvidence->Valid() ? "publication_evidence_invalid" :
+			FarmScaleWorkload ? (FarmScaleCompleted ? "scale_complete" : "scale_incomplete") :
 			(FarmReady ? "completed" : "not_ready"));
 		return ExitCode;
 	} catch (const std::exception &Error) {

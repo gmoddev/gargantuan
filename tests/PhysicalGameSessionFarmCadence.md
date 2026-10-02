@@ -26,6 +26,34 @@ are available. The existing `ClientCharacterMaximumServiceGapNanoseconds`
 metric is a cumulative gap between any handled Character messages, not a
 per-recipient/root cadence measure.
 
+The farm-only `publication-service.bin` server artifact and
+`publication-service-<slot>.bin` artifacts for the 32 real Players now retain
+fixed 80-byte records for authoritative due/snapshot/acceptance and first
+polled native receive/handler completion. They retain full connection and
+ObjectId generations, control and materialization epochs, authoritative tick,
+state and frame sequences; no packet payload is retained. The server reserves
+at most 320 MiB for 4,194,304 records, and each client reserves at most 10 MiB
+for 131,072 records. Both buffers are allocated before measured work and
+written to exclusive role-local files after it; any overflow, decode failure
+or write failure invalidates the host result. The independent streaming parser
+is `tools/physical-qualifier/farm_publication_trace.py`.
+
+The native receive timestamp means first successful GNS poll of a decoded
+message, not kernel arrival or rendered application visibility. Server and
+client steady clocks have unrelated origins. Merely sealing these traces does
+not establish cross-host due-to-handler latency; a separately qualified clock
+bridge and full offline identity/conservation join are required.
+
+This artifact is diagnostic-only until its timing cost is qualified against a
+full 32-client workload. A Release MSVC/GNS microbenchmark on the worker,
+excluding buffer allocation and terminal file output, measured 48.6–49.8 ns
+per retained `CharacterDue` record and 1.901–1.908 µs per eight-state GCHR
+packet decoded and retained at `SchedulerAccepted` (three repeats). The
+inactive-sink cases measured about 0.66 ns per scalar event and 0.44 ns per
+packet. This isolated A/B estimate does not prove that recording leaves the
+physical due-service timing unchanged. Run the reproducible estimate with
+`gargantuan_game_session_tests --farm-publication-overhead`.
+
 The offline parser mock test is
 `pwsh -NoProfile -File tests/PhysicalGameSessionFarmCadenceTests.ps1`.
 `ContentScaleGameplayLuauSyntaxTests.ps1` compiles the embedded client script
