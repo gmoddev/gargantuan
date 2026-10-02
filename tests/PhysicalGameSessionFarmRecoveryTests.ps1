@@ -131,6 +131,17 @@ try {
 		-ExpectedNonces $ExpectedNonces -ExpectedConnections $Connections) } catch { $RejectedMutation = $true }
 	if (-not $RejectedMutation) { throw 'post-cessation structural mutation was accepted' }
 	[IO.File]::WriteAllLines($Server.ErrorPath, $OriginalError)
+	$OriginalOutput = [IO.File]::ReadAllText($Server.OutputPath)
+	$BadMargin = [regex]::Replace($OriginalOutput,
+		'(event=retention[^\r\n]*?margin=)99', '${1}-1',
+		[Text.RegularExpressions.RegexOptions]::None, [timespan]::FromSeconds(1))
+	if ($BadMargin -ceq $OriginalOutput) { throw 'negative-margin fixture did not change' }
+	[IO.File]::WriteAllText($Server.OutputPath, $BadMargin)
+	$RejectedMargin = $false
+	try { [void](Assert-RecoveryRecords -Server $Server -Clients $Clients `
+		-ExpectedNonces $ExpectedNonces -ExpectedConnections $Connections) } catch { $RejectedMargin = $true }
+	if (-not $RejectedMargin) { throw 'sampled negative journal retention margin was accepted' }
+	[IO.File]::WriteAllText($Server.OutputPath, $OriginalOutput)
 	$OriginalClient = [IO.File]::ReadAllText($Clients[0].OutputPath)
 	[IO.File]::WriteAllText($Clients[0].OutputPath, $OriginalClient.Replace('object_slot=100', 'object_slot=999'))
 	$Rejected = $false

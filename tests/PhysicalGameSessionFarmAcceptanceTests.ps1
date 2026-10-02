@@ -399,9 +399,13 @@ try {
 		$Observed.Local.Resources.ServerHost.MaximumObservedNicSentBytesPerSecond -ne 10000000 -or
 		$Observed.Local.Admission.MaximumActiveGrants -ne 2 -or
 		$Observed.Local.Admission.Fairness.MaximumObservedEligibilityToGrantMicroseconds -ne 200 -or
+		$Observed.Local.Admission.AcceptedGrantWaitBound -cne 'MEASURED_PASS' -or
+		@($Observed.GateObservations | Where-Object {
+			$_.Gate -ceq 'Recorded accepted-grant eligibility wait within 220.5 ms' -and
+			$_.State -ceq 'MEASURED_PASS' }).Count -ne 1 -or
 		$Observed.Node.Provider.State -cne 'AUTHENTICATED_MANIFEST_RPC_MEASURED' -or
 		$Observed.Node.Provider.RealTls -cne 'NOT_MEASURED' -or
-		@($Observed.GateObservations | Where-Object { $_.State -eq 'NOT MEASURED' }).Count -ne 8 -or
+		@($Observed.GateObservations | Where-Object { $_.State -eq 'NOT MEASURED' }).Count -ne 9 -or
 		$Observed.Local.Recovery.FixedServiceRecovery -cne 'NOT MEASURED' -or
 		$Observed.Node.Recovery.ExactRetainedWorkBytes -cne 'NOT_MEASURED') {
 		throw "resource/parity observation promoted a missing physical gate or lost resource evidence: status=$($Observed.Status) claim=$($Observed.Foundation3LQualification) parity=$($Observed.WorkloadPinParity.State) clients=$($Observed.Local.Resources.Clients.ProcessCount) server=$($Observed.Node.Resources.Server.ProcessCount) ws=$($Observed.Local.Resources.Clients.SumOfPerProcessPeakWorkingSetBytes) missing=$(@($Observed.GateObservations | Where-Object { $_.State -eq 'NOT MEASURED' }).Count)"
@@ -461,6 +465,11 @@ try {
 	$RecoveryObserved = Get-Content -LiteralPath $RecoveryPath -Raw | ConvertFrom-Json
 	if ($RecoveryObserved.Local.Recovery.FixedServiceRecovery -cne 'MEASURED_PASS' -or
 		$RecoveryObserved.Node.Recovery.FixedServiceRecovery -cne 'MEASURED_PASS' -or
+		$RecoveryObserved.Local.Recovery.SampledJournalRetention -cne 'MEASURED_PASS' -or
+		$RecoveryObserved.Node.Recovery.MinimumCessationRetentionMarginRecords -ne 99 -or
+		@($RecoveryObserved.GateObservations | Where-Object {
+			$_.Gate -ceq 'Sampled overload journal retention window' -and
+			$_.State -ceq 'MEASURED_PASS' }).Count -ne 1 -or
 		$RecoveryObserved.Local.Recovery.StrictConvergenceSufficientProof -cne 'MEASURED_PASS' -or
 		$RecoveryObserved.Node.Recovery.ExactRetainedWorkBytes -cne 'NOT_MEASURED' -or
 		@($RecoveryObserved.GateObservations | Where-Object {
@@ -530,6 +539,33 @@ try {
 	[IO.File]::WriteAllText($FairnessPath, $OriginalFairness)
 	Save-Index -Root $Node.ServerRoot -RunId $Node.Report.RunId -Role 'Server'
 	$Node.Report.ServerEvidenceSha256 = (Get-FileHash -LiteralPath (Join-Path $Node.ServerRoot 'evidence-sha256.json') -Algorithm SHA256).Hash.ToLowerInvariant()
+	Save-Json -Path $Node.ReportPath -Value $Node.Report
+	$SlowFairness = $OriginalFairness.Replace("grant_accepted`tnone`t1`t1`t1`t1`t1`t8192`t1300",
+		"grant_accepted`tnone`t1`t1`t1`t1`t1`t8192`t221601")
+	if ($SlowFairness -ceq $OriginalFairness) { throw 'slow fairness fixture did not change' }
+	[IO.File]::WriteAllText($FairnessPath, $SlowFairness)
+	Save-Index -Root $Node.ServerRoot -RunId $Node.Report.RunId -Role 'Server'
+	$Node.Report.ServerEvidenceSha256 = (Get-FileHash -LiteralPath (Join-Path $Node.ServerRoot 'evidence-sha256.json') -Algorithm SHA256).Hash.ToLowerInvariant()
+	$Node.Report.AdmissionFairnessObservation = Read-AdmissionFairnessEvidence -Path $FairnessPath `
+		-RunId $Node.Report.RunId -ExpectedConnections $Node.Report.Identity.Connections
+	Save-Json -Path $Node.ReportPath -Value $Node.Report
+	$SlowPath = Join-Path $TestRoot 'slow-fairness.json'
+	Invoke-Analyzer -OutputPath $SlowPath
+	$SlowObserved = Get-Content -LiteralPath $SlowPath -Raw | ConvertFrom-Json
+	if ($SlowObserved.Node.Admission.AcceptedGrantWaitBound -cne 'MEASURED_FAIL' -or
+		@($SlowObserved.GateObservations | Where-Object {
+			$_.Gate -ceq 'Recorded accepted-grant eligibility wait within 220.5 ms' -and
+			$_.State -ceq 'MEASURED_FAIL' }).Count -ne 1 -or
+		@($SlowObserved.GateObservations | Where-Object {
+			$_.Gate -ceq 'Full fairness, overload backpressure and journal retention margin' -and
+			$_.State -ceq 'NOT MEASURED' }).Count -ne 1) {
+		throw 'accepted-grant fairness violation was not scoped as a measured failure'
+	}
+	[IO.File]::WriteAllText($FairnessPath, $OriginalFairness)
+	Save-Index -Root $Node.ServerRoot -RunId $Node.Report.RunId -Role 'Server'
+	$Node.Report.ServerEvidenceSha256 = (Get-FileHash -LiteralPath (Join-Path $Node.ServerRoot 'evidence-sha256.json') -Algorithm SHA256).Hash.ToLowerInvariant()
+	$Node.Report.AdmissionFairnessObservation = Read-AdmissionFairnessEvidence -Path $FairnessPath `
+		-RunId $Node.Report.RunId -ExpectedConnections $Node.Report.Identity.Connections
 	Save-Json -Path $Node.ReportPath -Value $Node.Report
 	$ProviderPath = Join-Path $Node.ServerRoot 'node-provider.json'
 	$OriginalProvider = [IO.File]::ReadAllText($ProviderPath)

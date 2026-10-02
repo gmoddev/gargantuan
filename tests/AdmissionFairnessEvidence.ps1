@@ -1,5 +1,6 @@
 # Offline interpretation of the bounded farm admission trace. This validates
-# evidence identity and reports observed waits; it defines no fairness limit.
+# evidence identity and checks accepted-grant waits against the canonical model
+# bound; it does not prove sustained fairness or continuous source backlog.
 function Read-AdmissionFairnessEvidence {
 	param(
 		[Parameter(Mandatory = $true)][string]$Path,
@@ -19,6 +20,7 @@ function Read-AdmissionFairnessEvidence {
 	$PendingReplacement = $null
 	$Count = 0
 	$GrantCount = 0
+	$InterruptedEligibilityEpisodeCount = 0
 	$DisposedEligibleCount = 0
 	$DisposedEverEligibleCount = 0
 	$MaximumWait = [UInt64]0
@@ -123,6 +125,7 @@ function Read-AdmissionFairnessEvidence {
 						throw 'eligibility interruption has no active exact-demand episode'
 					}
 					$Demand.Active = $false
+					$InterruptedEligibilityEpisodeCount++
 				}
 				'reservation_rolled_back' {
 					if ($Reason -cne 'rollback' -or $Token -eq 0 -or -not $Demand.Active -or
@@ -193,7 +196,19 @@ function Read-AdmissionFairnessEvidence {
 		})
 		return [pscustomobject]@{
 			Classification = 'EVIDENCE_INTEGRITY_AND_OBSERVED_TIMING_ONLY'
+			# This is a verdict on recorded, accepted exact-demand episodes only.
+			# It does not establish continuous source backlog or universal fairness.
+			AcceptedGrantWaitBoundMicroseconds = [UInt64]220500
+			AcceptedGrantWaitBound = $(if ($GrantCount -eq 0) { 'NOT_MEASURED' }
+				elseif ($MaximumWait -gt 220500) { 'MEASURED_FAIL' }
+				else { 'MEASURED_PASS' })
+			ExactDemandEpisodeCoverage = $(if ($GrantCount -eq 0) { 'NOT_MEASURED' }
+				elseif ($MaximumWait -gt 220500) { 'MEASURED_FAIL' }
+				elseif ($InterruptedEligibilityEpisodeCount -gt 0 -or $DisposedEligibleCount -gt 0 -or
+					$Current.Count -gt 0 -or $OpenAfterInterruptionCount -gt 0) { 'INCONCLUSIVE_NOT_MEASURED' }
+				else { 'MEASURED_PASS' })
 			RunId = $RunId; EventCount = $Count; FileBytes = $File.Length
+			InterruptedEligibilityEpisodeCount = $InterruptedEligibilityEpisodeCount
 			ExactDemandCount = $Demands.Count; EverEligibleDemandCount = $EverEligibleCount
 			GrantedCount = $GrantCount; DisposedEverEligibleDemandCount = $DisposedEverEligibleCount
 			DisposedWhileEligibleCount = $DisposedEligibleCount

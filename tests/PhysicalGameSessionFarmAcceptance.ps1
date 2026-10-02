@@ -486,6 +486,8 @@ function Read-AdmissionObservation {
 		CreditDeferrals = [long]$Admission.credit_deferrals
 		FairnessDeferrals = [long]$Admission.fairness_deferrals
 		FairnessRotations = [long]$Admission.fairness_rotations
+		AcceptedGrantWaitBound = $ObservedFairness.AcceptedGrantWaitBound
+		ExactDemandEpisodeCoverage = $ObservedFairness.ExactDemandEpisodeCoverage
 		PendingEnters = [long]$Admission.pending_enters
 		PendingLeaves = [long]$Admission.pending_leaves
 		TerminalMaterializationBacklog = [long]$Admission.materialization_backlog
@@ -605,6 +607,7 @@ function Read-RecoveryObservation {
 		return [ordered]@{ State = 'NOT MEASURED'; Workload = 'NOT RUN'
 			FixedServiceRecovery = 'NOT MEASURED'
 			StrictConvergenceSufficientProof = 'NOT MEASURED'
+			SampledJournalRetention = 'NOT MEASURED'
 			ExactRetainedWorkBytes = 'NOT_MEASURED'; Cases = @() }
 	}
 	if ($null -eq $Report.RecoveryObservation -or
@@ -659,6 +662,9 @@ function Read-RecoveryObservation {
 	return [ordered]@{
 		State = $Observed.State; Workload = 'THREE_CASES_REPLAYED_FROM_INDEXED_LOGS'
 		FixedServiceRecovery = $Fixed; StrictConvergenceSufficientProof = $Strict
+		SampledJournalRetention = 'MEASURED_PASS'
+		MinimumCessationRetentionMarginRecords = [long](@($Cases | ForEach-Object MinimumRetentionMarginRecords |
+			Measure-Object -Minimum).Minimum)
 		ExactRetainedWorkBytes = 'NOT_MEASURED'; Cases = $Cases
 	}
 }
@@ -780,7 +786,8 @@ $Observed = [ordered]@{
 	GateObservations = @(
 		[ordered]@{ Gate = 'Cross-provider exact workload/deployment pin parity'; State = 'MEASURED' },
 		[ordered]@{ Gate = 'Per-provider terminal native admission/debt conservation and bounded grants/credit'; State = 'MEASURED'; Reason = 'sealed final receipt, not an intra-run service or fairness bound' },
-		[ordered]@{ Gate = 'Per-provider exact-demand fairness event identity and observed eligibility waits'; State = 'MEASURED'; Reason = 'sealed native timeline, no canonical maximum-wait verdict from an observed maximum alone' },
+		[ordered]@{ Gate = 'Per-provider exact-demand fairness event identity and observed eligibility waits'; State = 'MEASURED'; Reason = 'sealed native timeline; the separate accepted-grant bound remains scoped to recorded episodes' },
+		[ordered]@{ Gate = 'Recorded accepted-grant eligibility wait within 220.5 ms'; State = $(if ($Local.Admission.AcceptedGrantWaitBound -eq 'MEASURED_FAIL' -or $Node.Admission.AcceptedGrantWaitBound -eq 'MEASURED_FAIL') { 'MEASURED_FAIL' } elseif ($Local.Admission.AcceptedGrantWaitBound -eq 'MEASURED_PASS' -and $Node.Admission.AcceptedGrantWaitBound -eq 'MEASURED_PASS') { 'MEASURED_PASS' } else { 'NOT MEASURED' }); Reason = 'accepted exact-demand episodes only; interruptions, disposals and continuous semantic backlog remain separate' },
 		[ordered]@{ Gate = 'Node authenticated manifest RPC and root/content pins'; State = 'MEASURED'; Reason = 'indexed provider receipt' },
 		[ordered]@{ Gate = 'Node negotiated TLS for authenticated manifest RPC'; State = $(if ($Node.ProviderObservation.RealTls -ceq 'NEGOTIATED_TLS_MANIFEST_RPC_MEASURED') { 'MEASURED' } else { 'NOT MEASURED' }); Reason = 'requires independently pinned Node stage/run/log and exact request matcher; full provider parity remains separate' },
 		[ordered]@{ Gate = 'Role-local bounded process sampling'; State = 'MEASURED' },
@@ -794,6 +801,7 @@ $Observed = [ordered]@{
 		[ordered]@{ Gate = 'Strict structural convergence sufficient proof'; State = $(if ($Local.Recovery.StrictConvergenceSufficientProof -eq 'MEASURED_PASS' -and $Node.Recovery.StrictConvergenceSufficientProof -eq 'MEASURED_PASS') { 'MEASURED_PASS' } else { 'NOT MEASURED' }); Reason = 'strict snapshot and client final-Name proof only; exact retained-work service bound remains unmeasured' },
 		[ordered]@{ Gate = 'Workload-derived exact structural convergence'; State = 'NOT MEASURED'; Reason = 'phase observations and final debt do not locate final accepted byte versus client observation' },
 		[ordered]@{ Gate = 'Journal retention margin and overload'; State = 'NOT MEASURED'; Reason = 'final zero journal backlog lacks retained-history high-water and overload chronology' },
+		[ordered]@{ Gate = 'Sampled overload journal retention window'; State = $(if ($Local.Recovery.SampledJournalRetention -eq 'MEASURED_PASS' -and $Node.Recovery.SampledJournalRetention -eq 'MEASURED_PASS') { 'MEASURED_PASS' } else { 'NOT MEASURED' }); Reason = 'indexed opportunity and recovery samples remain within 16,384 records with nonnegative observed reader margin; transient between-sample minimum remains unmeasured' },
 		[ordered]@{ Gate = 'Full Local/Node provider parity'; State = 'NOT MEASURED'; Reason = 'application service, real TLS, exact convergence, resource headroom and capture gates remain independent' }
 	)
 }

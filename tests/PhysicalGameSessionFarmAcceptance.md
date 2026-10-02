@@ -63,8 +63,11 @@ report change that differs from the native source. The per-provider admission
 section reports exact terminal accepted/retired/debt conservation, observed
 grant and credit high-water against their existing 4-grant, 512-KiB peer and
 2-MiB global limits, backlog/deferral counters, and observed per-generation
-eligibility waits. These are bounded subsets. A maximum observed wait by itself
-does not establish the canonical fairness verdict or overload backpressure.
+eligibility waits. The accepted exact-demand episodes now have a separate
+run-scoped verdict against the canonical 220.5-ms first-grant eligibility bound;
+an interruption, disposal, or open demand makes complete exact-demand episode
+coverage inconclusive. Even a passing set of accepted grants does not prove
+continuous semantic backlog, sustained fair share, or overload backpressure.
 
 For Node, the report also checks the indexed authenticated manifest RPC
 receipt against the run manifest and reconciliation fields. Without additional
@@ -88,10 +91,14 @@ evidence does **not** establish canonical CPU/memory/network headroom, fixed
 workload-derived exact convergence timing, journal
 retention margin under overload, full fairness/backpressure, or full provider
 parity. Negotiated real-TLS details remain unmeasured when the optional Node
-owned-child evidence is not supplied. Terminal zero journal backlog
-and zero failures do not establish the high-water retention margin. Those gates
-remain `NOT MEASURED` until their own bounded typed traces and acceptance
-analyzers exist.
+owned-child evidence is not supplied. Terminal zero journal backlog and zero
+failures do not establish the high-water retention margin. When the
+indexed three-case recovery workload is present, the report separately records
+that its 480 structural/mixed offer samples and recovery samples stayed within
+the 16,384-record window with nonnegative observed reader margin. This sampled
+verdict cannot rule out a transient minimum between observation points. Full
+fairness, backpressure, and continuous journal retention remain `NOT MEASURED`
+until their own bounded typed traces and acceptance analyzers exist.
 
 The 4/8-GiB available-memory preflight and the endpoint's per-process/aggregate
 working-set limits are protective run bounds, not a final host-memory acceptance

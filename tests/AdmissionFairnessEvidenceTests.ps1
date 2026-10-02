@@ -59,6 +59,9 @@ try {
 		$Result.EverEligibleDemandCount -ne 4 -or $Result.GrantedCount -ne 1 -or
 		$Result.DisposedEverEligibleDemandCount -ne 2 -or
 		$Result.DisposedWhileEligibleCount -ne 2 -or $Result.OpenDemandCount -ne 1 -or
+		$Result.InterruptedEligibilityEpisodeCount -ne 1 -or
+		$Result.AcceptedGrantWaitBound -cne 'MEASURED_PASS' -or
+		$Result.ExactDemandEpisodeCoverage -cne 'INCONCLUSIVE_NOT_MEASURED' -or
 		$Result.RetainedEligibleWaiterCount -ne 1 -or $Result.OpenAfterInterruptionCount -ne 0 -or
 		$Result.RetainedEligibleWaiters[0].ObservedAgeLowerBoundMicroseconds -ne 400 -or
 		$Result.MaximumObservedEligibilityToGrantMicroseconds -ne 200 -or
@@ -87,6 +90,26 @@ try {
 		$CrossPeerResult.MaximumObservedEligibilityToGrantMicroseconds -ne 300 -or
 		$CrossPeerResult.LatestRecordedMicroseconds -ne 1400) {
 		throw 'cross-peer ledger and fresh ServiceTime timestamps were misordered'
+	}
+	$Bounded = @(
+		(New-Event exact_demand 10 1000),
+		(New-Event credit_eligible 10 1100 -Episode 1 -CreditAt 1050 -EligibleAt 1100 -PeerCredit 100),
+		(New-Event grant_accepted 10 221600 -Episode 1 -Token 10 -CreditAt 1050 -EligibleAt 1100)
+	)
+	Write-Trace -Events $Bounded -Trailer "end`t3`t0"
+	$BoundedResult = Read-AdmissionFairnessEvidence -Path $Path -RunId $RunId
+	if ($BoundedResult.AcceptedGrantWaitBoundMicroseconds -ne 220500 -or
+		$BoundedResult.AcceptedGrantWaitBound -cne 'MEASURED_PASS' -or
+		$BoundedResult.ExactDemandEpisodeCoverage -cne 'MEASURED_PASS') {
+		throw 'exact 220.5-ms accepted-grant bound failed'
+	}
+	$OverBound = @($Bounded)
+	$OverBound[2] = New-Event grant_accepted 10 221601 -Episode 1 -Token 10 -CreditAt 1050 -EligibleAt 1100
+	Write-Trace -Events $OverBound -Trailer "end`t3`t0"
+	$OverBoundResult = Read-AdmissionFairnessEvidence -Path $Path -RunId $RunId
+	if ($OverBoundResult.AcceptedGrantWaitBound -cne 'MEASURED_FAIL' -or
+		$OverBoundResult.ExactDemandEpisodeCoverage -cne 'MEASURED_FAIL') {
+		throw 'accepted grant beyond canonical wait was not classified as a measured failure'
 	}
 	$Changed = @($Events)
 	$Changed[5] = New-Event grant_accepted 1 1500 -Episode 2 -Token 1 -CreditAt 1050 -EligibleAt 1300
@@ -120,7 +143,7 @@ try {
 	Write-Trace -Events $Events -Trailer "end`t15`t0"
 	try { [void](Read-AdmissionFairnessEvidence -Path $Path -RunId $RunId); throw 'bad trailer accepted' }
 	catch { if ($_.Exception.Message -ceq 'bad trailer accepted') { throw } }
-	Write-Output '[Qualification:Admission] analyzer_cases=14 PASS'
+	Write-Output '[Qualification:Admission] analyzer_cases=16 PASS'
 } finally {
 	$Resolved = [IO.Path]::GetFullPath($Root)
 	if ($Resolved.StartsWith([IO.Path]::GetFullPath([IO.Path]::GetTempPath()), [StringComparison]::OrdinalIgnoreCase) -and

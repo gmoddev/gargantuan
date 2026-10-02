@@ -167,6 +167,7 @@ function Assert-RecoveryRecords {
 					[int]$Offer.name_bytes -ne 24576 -or
 					[int]$Retention[$Index].opportunity -ne $Index + 1 -or
 					[long]$Retention[$Index].margin -lt 0 -or
+					[long]$Retention[$Index].retained -lt 0 -or
 					[long]$Retention[$Index].retained -gt 16384 -or
 					($Index -gt 0 -and [long]$Offer.monotonic_us - [long]$Offers[$Index - 1].monotonic_us -lt 16667)) {
 					throw "recovery case $Case has an invalid structural offer cadence"
@@ -177,6 +178,7 @@ function Assert-RecoveryRecords {
 		$ExpectedRaw = if ($Case -eq 'gameplay') { 0L } else { 188743680L }
 		if ($Tail -le 0 -or [long]$Cessations[0].raw_name_bytes -ne $ExpectedRaw -or
 			[long]$Cessations[0].minimum_retention_margin -lt 0 -or
+			[long]$Cessations[0].retained_high -lt 0 -or
 			[long]$Cessations[0].retained_high -gt 16384) {
 			throw "recovery case $Case cessation accounting is invalid"
 		}
@@ -224,7 +226,8 @@ function Assert-RecoveryRecords {
 		$Samples = @($Window | Where-Object { $_.event -eq 'sample' })
 		if ($Samples.Count -eq 0) { throw "recovery $Case lacks native service samples" }
 		foreach ($Sample in $Samples) {
-			if ([long]$Sample.margin -lt 0 -or [long]$Sample.retained -gt 16384 -or
+			if ([long]$Sample.margin -lt 0 -or [long]$Sample.retained -lt 0 -or
+				[long]$Sample.retained -gt 16384 -or
 				[long]$Sample.journal_failures -ne 0 -or [long]$Sample.current_tail -ne $Tail) {
 				throw "recovery $Case lost retained journal coverage or mutated after cessation"
 			}
