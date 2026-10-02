@@ -2305,4 +2305,44 @@ namespace gargantuan::network {
 	ReplicationMetrics detail::GameSessionTestAccess::GetReplicationMetrics(const GameSession &Session) {
 		return Session.State->Replication ? Session.State->Replication->GetMetrics() : ReplicationMetrics{};
 	}
+	std::optional<detail::FrozenCessationQuote> detail::GameSessionTestAccess::CaptureFrozenCessationQuote(
+		const GameSession &Session, std::string &Error) {
+		const auto *State = Session.State.get();
+		if (!State || !State->Replication || !State->ByteAdmission || !State->IsPooled() ||
+			State->Peers.empty() || State->Peers.size() != State->Replication->Peers.size()) {
+			Error = "Frozen cessation quote requires a complete pooled server peer set";
+			return {};
+		}
+		FrozenCessationQuote Result;
+		std::uint64_t AcceptedSum = 0;
+		for (const auto &[Connection, Peer] : State->Peers) {
+			if (Peer.Phase != PeerPhase::Ready) {
+				Error = "Frozen cessation quote requires every peer to be ready";
+				return {};
+			}
+			const auto MaximumFrame = std::min<std::uint64_t>(Peer.Limits.MaximumReliableMessageBytes,
+				MaximumReliableServiceGroupBytes - ReliableServiceEnvelopeBytes);
+			if (MaximumFrame < 36) {
+				Error = "Frozen cessation quote peer frame limit is invalid";
+				return {};
+			}
+			Result.MaximumFrameBytes.emplace(Connection, static_cast<std::size_t>(MaximumFrame));
+			const auto Debt = State->ByteAdmission->Debt(Connection);
+			if (Debt > MaximumReliableServiceGroupBytes ||
+				Debt > std::numeric_limits<std::uint64_t>::max() - AcceptedSum) {
+				Error = "Frozen cessation quote accepted debt is invalid";
+				return {};
+			}
+			AcceptedSum += Debt;
+			Result.AcceptedUnretiredCompleteBytes.emplace(Connection, Debt);
+		}
+		if (AcceptedSum != State->ByteAdmission->GetMetrics().OutstandingBytes) {
+			Error = "Frozen cessation quote accepted debt does not conserve";
+			return {};
+		}
+		Result.Replication = State->Replication->CaptureFrozenQuote(Error);
+		if (!Result.Replication) return {};
+		Error.clear();
+		return Result;
+	}
 }

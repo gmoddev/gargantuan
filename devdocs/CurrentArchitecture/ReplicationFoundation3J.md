@@ -318,6 +318,23 @@ retry examinations retain their existing hard budgets. The additional marker
 contains no cached value and introduces no new map, wire field or payload queue.
 `tests/NameCoalescingFixture.hpp` covers these contracts.
 
+Qualification can capture a detached 3J cessation input on Main after catalog
+refresh reaches the journal tail. The capture copies the bounded retained
+journal suffix and each peer's accepted value state, pins immutable catalog
+templates, and discards live planning coroutines before any replay. The detached
+reader stops at that tail and never reads the live DataModel or ChangeJournal;
+any continuation is rebuilt against the frozen catalog. A narrow journal-only
+replay uses the production `ProduceIncremental` encoder and scheduler-acceptance
+commit on this detached state, with the caller's negotiated frame limit, to
+record complete-message sizes and frame fingerprints. It fails closed if
+relevance transitions or an unaccepted preparation remain. This is a
+qualification measurement seam, not a new production queue, admission policy,
+or generic assertion that later live scheduling must choose identical frames.
+Already-accepted unretired complete-message debt is captured separately by the
+GameSession qualification accessor and must be added once, not replayed as
+unaccepted journal work. A convergence verdict still requires later accepted
+frames to be audited against the frozen quote.
+
 No per-peer historical property queue is required. For already-known objects,
 the existing journal preserves ordered create/destroy/reparent/tag/attribute and
 other structural barriers; ordinary property values use current authoritative

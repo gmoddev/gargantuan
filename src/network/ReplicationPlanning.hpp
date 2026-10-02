@@ -132,7 +132,7 @@ struct ReplicationCoordinator::PlanningContinuation {
 				const auto &Seeds = Pass == 0 ? Selection->DesiredObjects : Selection->RequiredObjects;
 				for (const auto Object : Seeds) { co_yield 0; Retain(Owner); Frontier.push_back({Object, 0}); runtime_detail::CountWork(runtime_detail::WorkCounter::DependencySeeds); }
 				for (const auto Object : Selection->RequiredObjects) { co_yield 0; Retain(Owner); Frontier.push_back({Object, 0}); runtime_detail::CountWork(runtime_detail::WorkCounter::DependencySeeds); }
-				if (Pass == 1 && Frontier.empty()) { Retain(Owner); Frontier.push_back({Owner.SourceRoot->GetObjectId(), 0}); }
+				if (Pass == 1 && Frontier.empty()) { Retain(Owner); Frontier.push_back({Owner.SourceRootId, 0}); }
 				while (!Frontier.empty()) {
 					co_yield 0;
 					const auto [Object, Depth] = Frontier.front();
@@ -397,7 +397,7 @@ struct ReplicationCoordinator::PlanningContinuation {
 
 ReplicationScheduleResult ReplicationCoordinator::RegisterPeerPlanned(ConnectionId Connection, ReplicationEpoch Epoch,
 	std::shared_ptr<const PeerRelevanceSelection> Selection) {
-	if (!SourceRoot || !Connection.IsValid() || !Epoch.IsValid() || !Selection) return {"Invalid replication peer or source"};
+	if (!SourceRootId.IsValid() || !Connection.IsValid() || !Epoch.IsValid() || !Selection) return {"Invalid replication peer or source"};
 	if (Peers.size() + DetachedPlanning.size() >= 1'024) return {"Structural planning peer limit exceeded"};
 	if (Peers.contains(Connection) || DetachedPlanning.contains(Connection)) return {"Replication peer identity is already registered or retiring"};
 	for (const auto &[Existing, State] : Peers) {

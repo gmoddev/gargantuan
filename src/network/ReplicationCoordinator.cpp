@@ -4,6 +4,7 @@
 #include "../runtime/RuntimeWorkDiagnostics.hpp"
 
 #include "gargantuan/InstanceProperty.hpp"
+#include "gargantuan/network/ReliableServiceProfile.hpp"
 #include "gargantuan/classes/Instance.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/runtime/ChangeJournal.hpp"
@@ -270,6 +271,7 @@ namespace gargantuan::network {
 		if (!Configuration.IsValid()) throw std::invalid_argument("Structural replication configuration is invalid");
 		PlanningRemaining = Configuration.PlanningWorkPerTick; // Tick zero also owns one finite allowance.
 		if (!this->SourceRoot) return;
+		SourceRootId = this->SourceRoot->GetObjectId();
 		auto SnapshotValue = CaptureSnapshot(this->SourceRoot);
 		CatalogCursor = SnapshotValue.Cursor;
 		NameCoalescingBegin = CatalogCursor.NextSequence;
@@ -287,6 +289,132 @@ namespace gargantuan::network {
 			SaturatingAdd(Metrics.StructuralTemplateBuilds, 1);
 		}
 		Metrics.CatalogObjects = Catalog.size();
+	}
+
+	std::unique_ptr<ReplicationCoordinator> ReplicationCoordinator::CaptureFrozenQuote(std::string &Error) {
+		if (FrozenQuote || !SourceRoot || !SourceRootId.IsValid()) {
+			Error = "Frozen quote source is invalid";
+			return {};
+		}
+		if (!RefreshCatalog(Error)) return {};
+		const auto Tail = ChangeJournal::Get().CreateCursor(SourceRootId).NextSequence;
+		if (CatalogCursor.NextSequence != Tail) {
+			Error = "Replication catalog did not reach the cessation journal tail";
+			return {};
+		}
+		auto First = Tail;
+		for (const auto &[Connection, Peer] : Peers) {
+			(void)Connection;
+			if (Peer.PreparedCommit) {
+				Error = "A structural preparation is still awaiting acceptance at cessation";
+				return {};
+			}
+			if (Peer.JournalCursor.Scope != SourceRootId || Peer.JournalCursor.NextSequence > Tail) {
+				Error = "A peer journal cursor is outside the cessation scope";
+				return {};
+			}
+			First = std::min(First, Peer.JournalCursor.NextSequence);
+		}
+		const auto Retention = ChangeJournal::Get().GetRetentionWindow(SourceRootId);
+		if (First < Retention.OldestSequence || Tail - First > Retention.Capacity) {
+			Error = "Cessation journal suffix is outside retained history";
+			return {};
+		}
+		auto Read = ChangeJournal::Get().Read({SourceRootId, First}, static_cast<std::size_t>(Tail - First));
+		if (Read.Status != ChangeReadStatus::Available || Read.Cursor.NextSequence < Tail) {
+			Error = "Cessation journal suffix is outside retained history";
+			return {};
+		}
+		// The source and peers are Main-owned; no authoritative mutation can occur
+		// between this copy and the journal read. Do not retain active coroutine
+		// handles: they borrow the original coordinator and peer by reference.
+		auto Quote = std::make_unique<ReplicationCoordinator>(*this);
+		Quote->SourceRoot.reset();
+		Quote->IsInitiallyRelevant = {};
+		Quote->FrozenQuote = true;
+		Quote->FrozenJournalOldest = First;
+		Quote->FrozenJournalTail = Tail;
+		Quote->FrozenJournalRecords = std::move(Read.Records);
+		Quote->DetachedPlanning.clear();
+		Quote->PlanningPeers.clear();
+		Quote->PlanningRecordCount = 0;
+		Quote->Metrics.PlanningRecords = 0;
+		Quote->PlanningAfter = {};
+		for (auto &[Connection, Peer] : Quote->Peers) {
+			(void)Connection;
+			Peer.Planning.reset();
+			Peer.PlanningInputRecords = 0;
+			Peer.LastPlanningServiceTick = 0;
+			Peer.PlanningSelection = Peer.PlanningSelection
+				? std::make_shared<const PeerRelevanceSelection>(*Peer.PlanningSelection) : nullptr;
+			Peer.ResolvedSelection.reset();
+			if (Peer.Planned && Peer.PlanningSelection) Quote->PlanningPeers.insert(Connection);
+		}
+		Error.clear();
+		return Quote;
+	}
+
+	ChangeReadResult ReplicationCoordinator::ReadJournal(ChangeCursor Cursor, std::size_t MaximumRecords) const {
+		if (!FrozenQuote) return ChangeJournal::Get().Read(Cursor, MaximumRecords);
+		ChangeReadResult Result{.Cursor = Cursor};
+		if (Cursor.Scope != SourceRootId || Cursor.NextSequence < FrozenJournalOldest) {
+			Result.Status = ChangeReadStatus::ResnapshotRequired;
+			Result.Cursor.NextSequence = FrozenJournalOldest;
+			return Result;
+		}
+		if (MaximumRecords == 0 || Cursor.NextSequence >= FrozenJournalTail) return Result;
+		const auto First = static_cast<std::size_t>(Cursor.NextSequence - FrozenJournalOldest);
+		const auto Count = std::min(MaximumRecords, FrozenJournalRecords.size() - First);
+		Result.Records.assign(FrozenJournalRecords.begin() + static_cast<std::ptrdiff_t>(First),
+			FrozenJournalRecords.begin() + static_cast<std::ptrdiff_t>(First + Count));
+		Result.Cursor.NextSequence += Count;
+		return Result;
+	}
+
+	FrozenJournalQuoteStep ReplicationCoordinator::AdvanceFrozenJournalQuote(
+		const std::map<ConnectionId, std::size_t> &MaximumFrameBytes) {
+		if (!FrozenQuote || MaximumFrameBytes.size() != Peers.size())
+			return {.Error = "Frozen journal quote peer set is invalid"};
+		for (const auto &[Connection, Peer] : Peers) {
+			const auto Limit = MaximumFrameBytes.find(Connection);
+			if (Limit == MaximumFrameBytes.end() || Limit->second < 36 ||
+				Limit->second > MaximumReliableServiceGroupBytes - ReliableServiceEnvelopeBytes ||
+				Peer.PreparedCommit || !Peer.PendingTransitions.empty() ||
+				Peer.DesiredDependencyCursor.Scope != DependencyCursor.Scope ||
+				Peer.DesiredDependencyCursor.NextSequence != DependencyCursor.NextSequence)
+				return {.Error = "Frozen journal quote has unresolved relevance or invalid frame limits"};
+			if (Peer.JournalCursor.NextSequence > FrozenJournalTail)
+				return {.Error = "Frozen journal quote cursor passed the cessation tail"};
+		}
+		auto Position = Peers.upper_bound(FrozenQuoteAfter);
+		for (std::size_t Visited = 0; Visited < Peers.size(); ++Visited) {
+			if (Position == Peers.end()) Position = Peers.begin();
+			const auto Connection = Position->first;
+			++Position;
+			if (GetJournalLag(Connection) == 0) continue;
+			FrozenQuoteAfter = Connection;
+			const auto Limit = MaximumFrameBytes.at(Connection);
+			auto Produced = ProduceIncremental(Connection, Configuration.PeerQuantum, Limit,
+				Configuration.MaximumJournalRecordsPerPeerTick, Limit);
+			if (!Produced.Frame) {
+				if (Produced.Error == "No relevant replication changes are available" ||
+					Produced.Error == "No replication changes are available") return {};
+				return {.Error = Produced.Error.empty() ? "Frozen journal quote made no progress" : Produced.Error};
+			}
+			if (Produced.EncodedFrame.empty() || Produced.EncodedFrame.size() > Limit ||
+				Produced.EncodedFrame.size() > MaximumReliableServiceGroupBytes - ReliableServiceEnvelopeBytes)
+				return {.Error = "Frozen journal quote frame exceeds its complete-message bound"};
+			const FrozenJournalQuoteFrame Frame{
+				.Connection = Connection, .Sequence = Produced.Frame->Sequence,
+				.CompleteBytes = Produced.EncodedFrame.size() + ReliableServiceEnvelopeBytes,
+				.Fingerprint = detail::ExactCandidateFingerprint(Produced.EncodedFrame),
+			};
+			if (auto &Peer = Peers.at(Connection); Peer.ExplicitSchedulerCommit &&
+				!CommitSchedulerAcceptance(Connection, Produced.Frame->Sequence).Succeeded())
+				return {.Error = "Frozen journal quote could not commit its detached frame"};
+			return {.Frame = Frame};
+		}
+		return {.Complete = true};
 	}
 
 	void ReplicationCoordinator::BeginRetirementTick(std::uint64_t SimulationTick) {
@@ -351,6 +479,7 @@ namespace gargantuan::network {
 	}
 
 	bool ReplicationCoordinator::RefreshCatalog(std::string &Error) {
+		if (FrozenQuote) return true;
 		runtime_detail::WorkScope Work(runtime_detail::WorkPhase::CatalogRefresh);
 		if (!SourceRoot || !CatalogCursor.Scope.IsValid()) {
 			Error = "Replication catalog source is invalid";
@@ -831,8 +960,8 @@ namespace gargantuan::network {
 			.RequiredObjects = Selection.RequiredObjects,
 			.DesiredObjects = Selection.RequiredObjects,
 		};
-		if (RequiredSelection.DesiredObjects.empty() && SourceRoot)
-			RequiredSelection.RequiredObjects = RequiredSelection.DesiredObjects = {SourceRoot->GetObjectId()};
+		if (RequiredSelection.DesiredObjects.empty() && SourceRootId.IsValid())
+			RequiredSelection.RequiredObjects = RequiredSelection.DesiredObjects = {SourceRootId};
 		std::set<ObjectId> Required;
 		if (!BuildDependencyClosure(RequiredSelection, Required, Error)) return false;
 
@@ -1578,7 +1707,7 @@ namespace gargantuan::network {
 		const PeerRelevanceSelection &Selection,
 		bool ExplicitSchedulerCommit
 	) {
-		if (!SourceRoot || !Connection.IsValid() || !Epoch.IsValid()) return {"Invalid replication peer or source"};
+		if (!SourceRootId.IsValid() || !Connection.IsValid() || !Epoch.IsValid()) return {"Invalid replication peer or source"};
 		if (Peers.contains(Connection)) return {"Replication peer is already registered"};
 		for (const auto &[Existing, State] : Peers)
 			if (Existing.Slot == Connection.Slot && State.View.Connection.IsValid())
@@ -1709,7 +1838,7 @@ namespace gargantuan::network {
 		// charged, including history coalesced by an accepted complete Enter.
 		const auto ReadLimit = std::min(PolicyManaged ? MaximumWireJournalRecords : MaximumTransitions,
 			(MaximumJournalRecords + 1) / 2);
-		auto Read = ChangeJournal::Get().Read(Peer->second.JournalCursor, ReadLimit);
+		auto Read = ReadJournal(Peer->second.JournalCursor, ReadLimit);
 		auto Finish = [&](ReplicationProduceResult Result) {
 			Result.JournalRecordsExamined += Read.Records.size();
 			return Result;

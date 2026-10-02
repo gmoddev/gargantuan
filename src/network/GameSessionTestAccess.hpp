@@ -1,7 +1,11 @@
 #pragma once
 
 #include <cstdint>
+#include <map>
+#include <memory>
+#include <string>
 #include "gargantuan/network/CharacterNetwork.hpp"
+#include "gargantuan/network/ReplicationCoordinator.hpp"
 #include "gargantuan/runtime/SpatialRegionIndex.hpp"
 #include "gargantuan/runtime/ChangeJournal.hpp"
 
@@ -11,6 +15,11 @@ namespace gargantuan::network {
 }
 
 namespace gargantuan::network::detail {
+	struct FrozenCessationQuote {
+		std::unique_ptr<ReplicationCoordinator> Replication;
+		std::map<ConnectionId, std::uint64_t> AcceptedUnretiredCompleteBytes;
+		std::map<ConnectionId, std::size_t> MaximumFrameBytes;
+	};
 	struct JournalRequirement {
 		ChangeCursor Cursor;
 		ConnectionId Connection;
@@ -47,5 +56,9 @@ namespace gargantuan::network::detail {
 		// Actual raw-history readers, not dependency/publication revision stamps.
 		[[nodiscard]] static std::vector<JournalRequirement> GetJournalRequirements(const GameSession &Session);
 		[[nodiscard]] static ReplicationMetrics GetReplicationMetrics(const GameSession &Session);
+		// Main-only qualification capture. Accepted debt and the detached 3J
+		// source are sampled without an intervening session step.
+		[[nodiscard]] static std::optional<FrozenCessationQuote> CaptureFrozenCessationQuote(
+			const GameSession &Session, std::string &Error);
 	};
 }

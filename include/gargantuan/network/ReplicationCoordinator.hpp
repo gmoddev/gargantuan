@@ -3,6 +3,7 @@
 #include "gargantuan/network/ReplicationProtocol.hpp"
 #include "gargantuan/network/ReplicationRelevance.hpp"
 #include "gargantuan/runtime/ProtocolInput.hpp"
+#include "gargantuan/runtime/ChangeJournal.hpp"
 
 #include <deque>
 #include <array>
@@ -157,6 +158,18 @@ namespace gargantuan::network {
 		}
 	};
 
+	struct FrozenJournalQuoteFrame {
+		ConnectionId Connection;
+		ReliableReplicationSequence Sequence;
+		std::uint64_t CompleteBytes = 0;
+		std::array<std::uint64_t, 2> Fingerprint{};
+	};
+	struct FrozenJournalQuoteStep {
+		std::optional<FrozenJournalQuoteFrame> Frame;
+		bool Complete = false;
+		std::string Error;
+	};
+
 	class ReplicationCoordinator {
 		friend class detail::GameSessionTestAccess;
 	  public:
@@ -221,6 +234,15 @@ namespace gargantuan::network {
 			return Metrics;
 		}
 		[[nodiscard]] ReplicationMetrics GetMetrics() const;
+		// Qualification-only detached input for exact retained-work replay. Capture
+		// on Main at the cessation boundary; the result owns its journal suffix and
+		// peer value state and cannot read the live source or ChangeJournal.
+		[[nodiscard]] std::unique_ptr<ReplicationCoordinator> CaptureFrozenQuote(std::string &Error);
+		// One bounded production journal-to-GRPL replay step. This narrow quote
+		// requires no pending relevance work and caller-supplied negotiated frame
+		// limits; it does not include already-accepted unretired debt.
+		[[nodiscard]] FrozenJournalQuoteStep AdvanceFrozenJournalQuote(
+			const std::map<ConnectionId, std::size_t> &MaximumFrameBytes);
 
 	  private:
 		struct PlanningContinuation;
@@ -313,6 +335,12 @@ namespace gargantuan::network {
 			std::string PlanningError;
 		};
 		std::shared_ptr<Instance> SourceRoot;
+		ObjectId SourceRootId;
+		bool FrozenQuote = false;
+		std::uint64_t FrozenJournalOldest = 0;
+		std::uint64_t FrozenJournalTail = 0;
+		std::vector<ChangeRecord> FrozenJournalRecords;
+		ConnectionId FrozenQuoteAfter;
 		InitialRelevancePolicy IsInitiallyRelevant;
 		bool StructuralTemplateReuseEnabled = true;
 		StructuralReplicationConfiguration Configuration;
@@ -348,6 +376,7 @@ namespace gargantuan::network {
 			std::size_t AvailableFrameBytes);
 
 		bool RefreshCatalog(std::string &Error);
+		[[nodiscard]] ChangeReadResult ReadJournal(ChangeCursor Cursor, std::size_t MaximumRecords) const;
 		void BeginRetirementTick(std::uint64_t SimulationTick);
 		void ReclaimRetiredTemplates();
 		bool BuildDependencyClosure(

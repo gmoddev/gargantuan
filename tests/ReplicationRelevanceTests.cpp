@@ -8,12 +8,14 @@
 #include "gargantuan/classes/WeldConstraint.hpp"
 #include "gargantuan/network/ReplicaApplier.hpp"
 #include "gargantuan/network/ReplicationCoordinator.hpp"
+#include "gargantuan/network/ReliableServiceProfile.hpp"
 #include "gargantuan/network/ReplicationRelevance.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/render/Renderer.hpp"
 #include "gargantuan/services/Players.hpp"
 #include "../src/runtime/RuntimeWorkDiagnostics.hpp"
 #include "../src/network/PlanningLookup.hpp"
+#include "../src/network/ReliableByteAdmissionDiagnostics.hpp"
 #include "ReliableEnvelopeContractFixture.hpp"
 #include "NameCoalescingFixture.hpp"
 
@@ -38,6 +40,110 @@ namespace {
 
 	bool Contains(const std::vector<ObjectId> &Objects, ObjectId Object) {
 		return std::ranges::binary_search(Objects, Object);
+	}
+
+	void TestFrozenQuoteInput() {
+		auto World = std::make_shared<DataModel>();
+		auto Object = std::make_shared<Folder>();
+		Object->SetParent(World);
+		ReplicationCoordinator Live(World);
+		const ConnectionId Connection{82, 19};
+		PeerRelevanceSelection Selection{.RequiredObjects = {World->GetObjectId()},
+			.DesiredObjects = {World->GetObjectId(), Object->GetObjectId()}};
+		std::ranges::sort(Selection.DesiredObjects);
+		Check(Live.AddPeer(Connection, ReplicationEpoch(1), Selection).Succeeded(),
+			"frozen quote peer has an accepted baseline");
+		Object->SetName("cessation-name");
+		std::string Error;
+		auto Frozen = Live.CaptureFrozenQuote(Error);
+		Check(Frozen && Error.empty(), "frozen quote captures a complete cessation journal suffix");
+		if (Frozen) {
+			Object->SetName("later-name");
+			const auto LiveFrame = Live.ProduceIncremental(Connection);
+			const auto FrozenFrame = Frozen->ProduceIncremental(Connection);
+			Check(LiveFrame.Succeeded() && FrozenFrame.Succeeded(),
+				"both live and frozen paths use the production incremental encoder");
+			if (LiveFrame.Frame && FrozenFrame.Frame) {
+				const auto Current = EncodeReplicationFrame(*LiveFrame.Frame);
+				const auto Ceased = EncodeReplicationFrame(*FrozenFrame.Frame);
+				Check(Current && Ceased && *Current != *Ceased,
+					"a later live mutation cannot alter frozen GRPL output");
+				const auto &FrozenUpdate = std::get<PropertyReplicationUpdate>(FrozenFrame.Frame->Operations.front().Intent);
+				Check(std::get<std::string>(FrozenUpdate.Value) == "cessation-name",
+					"frozen replay uses the cessation publication value");
+			}
+			Check(!Frozen->ProduceIncremental(Connection).Succeeded(),
+				"frozen replay cannot read journal records committed after cessation");
+		}
+		World->Destroy();
+		StructuralReplicationConfiguration Configuration;
+		Configuration.PlanningWorkPerTick = 2;
+		Configuration.PlanningPeerQuantum = 1;
+		std::unique_ptr<ReplicationCoordinator> FrozenPlanned;
+		const ConnectionId PlannedConnection{83, 19};
+		{
+			auto PlannedWorld = std::make_shared<DataModel>();
+			auto Input = std::make_shared<const PeerRelevanceSelection>(PeerRelevanceSelection{
+				.RequiredObjects = {PlannedWorld->GetObjectId()},
+				.DesiredObjects = {PlannedWorld->GetObjectId()}});
+			ReplicationCoordinator Planned(PlannedWorld, {}, true, Configuration);
+			Check(Planned.RegisterPeerPlanned(PlannedConnection, ReplicationEpoch(1), Input).Succeeded(),
+				"planned frozen-quote peer registers");
+			Planned.ProcessPlanning(1);
+			FrozenPlanned = Planned.CaptureFrozenQuote(Error);
+			Check(FrozenPlanned && Error.empty(), "capture detaches an active planning continuation");
+			PlannedWorld->Destroy();
+		}
+		if (FrozenPlanned) {
+			for (std::uint64_t Tick = 2; Tick != 2000 && !FrozenPlanned->IsPlanningReady(PlannedConnection); ++Tick)
+				FrozenPlanned->ProcessPlanning(Tick);
+			Check(FrozenPlanned->IsPlanningReady(PlannedConnection),
+				"frozen planner completes after the live coordinator and source are destroyed");
+			const auto Frame = FrozenPlanned->ProducePendingBaseline(PlannedConnection, 8, 2000);
+			Check(Frame.Frame && FrozenPlanned->CommitSchedulerAcceptance(PlannedConnection, Frame.Frame->Sequence).Succeeded(),
+				"frozen planner uses normal bounded GRPL preparation and acceptance");
+		}
+		{
+			auto QuoteWorld = std::make_shared<DataModel>();
+			auto QuoteObject = std::make_shared<Folder>();
+			QuoteObject->SetParent(QuoteWorld);
+			const ConnectionId QuoteConnection{84, 19};
+			PeerRelevanceSelection QuoteSelection{.RequiredObjects = {QuoteWorld->GetObjectId()},
+				.DesiredObjects = {QuoteWorld->GetObjectId(), QuoteObject->GetObjectId()}};
+			std::ranges::sort(QuoteSelection.DesiredObjects);
+			ReplicationCoordinator QuoteLive(QuoteWorld);
+			Check(QuoteLive.RegisterPeerPlanned(QuoteConnection, ReplicationEpoch(1),
+				std::make_shared<const PeerRelevanceSelection>(QuoteSelection)).Succeeded(),
+				"frozen journal quote peer registers");
+			for (std::uint64_t Tick = 1; Tick != 200 && !QuoteLive.IsPlanningReady(QuoteConnection); ++Tick)
+				QuoteLive.ProcessPlanning(Tick);
+			auto Baseline = QuoteLive.ProducePendingBaseline(QuoteConnection, 8, 200);
+			Check(Baseline.Frame && QuoteLive.CommitSchedulerAcceptance(QuoteConnection, Baseline.Frame->Sequence).Succeeded(),
+				"frozen journal quote starts after an accepted baseline");
+			QuoteObject->SetName("quoted-current-name");
+			auto Quote = QuoteLive.CaptureFrozenQuote(Error);
+			auto Reference = QuoteLive.CaptureFrozenQuote(Error);
+			Check(Quote && Error.empty(), "journal quote captures the accepted planned peer");
+			Check(Reference && Error.empty(), "independent frozen reference captures the same cessation state");
+			if (Quote && Reference) {
+				QuoteObject->SetName("later-unquoted-name");
+				const std::map<ConnectionId, std::size_t> Limits{{QuoteConnection,
+					MaximumReliableServiceGroupBytes - ReliableServiceEnvelopeBytes}};
+				const auto Expected = Reference->ProduceIncremental(QuoteConnection, Configuration.PeerQuantum,
+					Limits.at(QuoteConnection), Configuration.MaximumJournalRecordsPerPeerTick,
+					Limits.at(QuoteConnection));
+				const auto Step = Quote->AdvanceFrozenJournalQuote(Limits);
+				Check(Step.Frame && Step.Error.empty() && Expected.Frame &&
+					Step.Frame->Sequence == Expected.Frame->Sequence &&
+					Step.Frame->CompleteBytes == Expected.EncodedFrame.size() + ReliableServiceEnvelopeBytes &&
+					Step.Frame->Fingerprint == detail::ExactCandidateFingerprint(Expected.EncodedFrame),
+					"bounded quote uses exact complete-message bytes from production GRPL encoding");
+				const auto Done = Quote->AdvanceFrozenJournalQuote(Limits);
+				Check(Done.Complete && Done.Error.empty() && !Done.Frame,
+					"frozen journal quote ends at the captured tail despite later mutations");
+			}
+			QuoteWorld->Destroy();
+		}
 	}
 
 	void TestPlanningLimits() {
@@ -1486,6 +1592,7 @@ int main() {
 	TestPlanningReferenceChange();
 	TestPlanningStaleCriticalInput();
 	TestPlanningLimits();
+	TestFrozenQuoteInput();
 	TestDependencyInvalidation();
 	TestBoundedCatalogRetirement();
 	TestBoundedPeerEvaluation();
