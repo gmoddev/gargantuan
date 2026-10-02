@@ -2,6 +2,7 @@
 
 #include "../../network/GameSessionTestAccess.hpp"
 #include "gargantuan/content/ContentAvailability.hpp"
+#include "FarmRemoteOwnershipEvidence.hpp"
 #include <cstdint>
 #include <ostream>
 #include <string_view>
@@ -14,11 +15,12 @@ struct FarmLifecycleEvidence {
 	bool SessionTerminal = false;
 	std::uint64_t Connections = 0, JournalReaders = 0, AdmissionOwners = 0, AdmissionBytes = 0;
 	network::ReliableByteAdmissionMetrics Admission;
+	network::RemoteMetrics Remotes;
 	bool ContentPresent = false;
 	ContentAvailabilityMetrics Content;
 
 	[[nodiscard]] bool Valid() const {
-		return SessionMeasured && SessionTerminal && !Connections && !JournalReaders && !AdmissionOwners &&
+		return SessionMeasured && SessionTerminal && ValidRemoteOwnership(Remotes) && !Connections && !JournalReaders && !AdmissionOwners &&
 			Admission.AcceptedBytes <= Admission.ReservedBytes &&
 			Admission.RolledBackBytes == Admission.ReservedBytes - Admission.AcceptedBytes &&
 			!Admission.OutstandingBytes && !Admission.ActiveDrainGrants &&
@@ -36,6 +38,7 @@ struct FarmLifecycleEvidence {
 		AdmissionOwners = Metrics.ReliableAdmissionPeerStates;
 		AdmissionBytes = Metrics.ReliableAdmissionLogicalBytes;
 		Admission = Metrics.ReliableAdmission;
+		Remotes = network::detail::GameSessionTestAccess::GetRemoteMetrics(Session);
 	}
 	void ObserveContent(const ContentAvailabilityService *Service) {
 		ContentPresent = Service != nullptr;
@@ -57,6 +60,7 @@ struct FarmLifecycleEvidence {
 			<< " resident=" << Content.ResidentUnits << " cached_bytes=" << Content.CachedPayloadBytes
 			<< " records=" << Content.RetainedRecordCount << " resident_objects=" << Content.ResidentPackageObjects
 			<< " valid=" << Valid() << '\n';
+		WriteFarmRemoteOwnership(Out, Run, Role, Slot, Nonce, Remotes);
 	}
 };
 }

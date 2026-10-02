@@ -166,6 +166,7 @@ namespace gargantuan::network {
 		std::unique_ptr<ReplicationRelevance> Relevance;
 		ReplicaApplier Replica;
 		std::unique_ptr<RemoteManager> Remotes;
+		RemoteMetrics FinalRemoteMetrics;
 		std::unique_ptr<AuthoritativeCharacterNetwork> Authority;
 		std::unique_ptr<PredictedCharacterNetwork> Prediction;
 		std::set<ObjectId> ServerCharacters;
@@ -512,6 +513,7 @@ namespace gargantuan::network {
 			}
 			for (const auto Connection : Connections)
 				TearDownPeer(Connection);
+			if (Remotes) FinalRemoteMetrics = Remotes->GetMetrics();
 			Remotes.reset();
 			Authority.reset();
 			Prediction.reset();
@@ -2383,7 +2385,7 @@ namespace gargantuan::network {
 		return Session.State->Remotes ? Session.State->Remotes->GetMetrics().ReliableEventsAccepted : 0;
 	}
 	RemoteMetrics detail::GameSessionTestAccess::GetRemoteMetrics(const GameSession &Session) {
-		return Session.State->Remotes ? Session.State->Remotes->GetMetrics() : RemoteMetrics{};
+		return Session.State->Remotes ? Session.State->Remotes->GetMetrics() : Session.State->FinalRemoteMetrics;
 	}
 	std::vector<ConnectionId> detail::GameSessionTestAccess::GetConnections(const GameSession &Session) {
 		std::vector<ConnectionId> Result;
