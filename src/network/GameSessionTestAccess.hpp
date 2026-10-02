@@ -17,6 +17,7 @@ namespace gargantuan::network::detail {
 		bool Catalog = false;
 		bool PreparedCommit = false;
 		std::uint64_t NameCoalescingBegin = 0;
+		bool PendingRelevance = false;
 	};
 
 	enum class GameSessionFailurePoint : std::uint8_t {

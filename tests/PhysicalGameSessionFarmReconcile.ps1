@@ -125,6 +125,56 @@ function Assert-ResourceRows {
 	return $Rows.Count
 }
 
+function Assert-HostResourceRows {
+	param([string]$Path, [string]$ExpectedRunId, [string]$ExpectedRole,
+		[string]$ExpectedProvider, [long]$ExpectedCount)
+	$Rows = @(Import-Csv -LiteralPath $Path)
+	if ($Rows.Count -lt 2 -or $Rows.Count -gt 1000 -or $Rows.Count -ne $ExpectedCount) {
+		throw "$ExpectedRole host resource sample count is invalid"
+	}
+	$Previous = $null
+	$Identity = $null
+	foreach ($Row in $Rows) {
+		$Utc = [DateTimeOffset]::MinValue
+		if ($Row.RunId -cne $ExpectedRunId -or $Row.Role -cne $ExpectedRole -or
+			$Row.Provider -cne $ExpectedProvider -or
+			$Row.HostName -cnotmatch '^[A-Za-z0-9][A-Za-z0-9_-]{0,62}$' -or
+			$Row.InterfaceMacAddress -cnotmatch '^(?:[0-9A-F]{2}-){5}[0-9A-F]{2}$' -or
+			$Row.InterfaceAddress -cnotin @('10.253.3.1', '10.253.3.2') -or
+			$Row.InterfaceLinkSpeed -cne '10 Gbps' -or
+			-not [DateTimeOffset]::TryParse($Row.Utc, [ref]$Utc)) {
+			throw "$ExpectedRole host resource identity is invalid"
+		}
+		foreach ($Name in @('InterfaceIndex', 'SupervisorElapsedMilliseconds', 'SampleStartTicks',
+			'SampleEndTicks', 'MonotonicFrequency', 'HostTotalPhysicalBytes',
+			'HostAvailablePhysicalBytes', 'LiveOwnedProcessCount')) {
+			if ([string]$Row.$Name -cnotmatch '^(0|[1-9][0-9]*)$') {
+				throw "$ExpectedRole host resource $Name is invalid"
+			}
+		}
+		$ThisIdentity = "$($Row.HostName)|$($Row.InterfaceIndex)|$($Row.InterfaceMacAddress)|$($Row.InterfaceAddress)"
+		if ($null -eq $Identity) { $Identity = $ThisIdentity }
+		elseif ($Identity -cne $ThisIdentity) { throw "$ExpectedRole host/interface identity changed" }
+		$Start = [long]$Row.SampleStartTicks
+		$End = [long]$Row.SampleEndTicks
+		$Elapsed = [long]$Row.SupervisorElapsedMilliseconds
+		$Frequency = [long]$Row.MonotonicFrequency
+		if ([long]$Row.InterfaceIndex -le 0 -or $Start -le 0 -or $End -lt $Start -or
+			$Frequency -le 0 -or [long]$Row.HostTotalPhysicalBytes -le 0 -or
+			[long]$Row.HostAvailablePhysicalBytes -gt [long]$Row.HostTotalPhysicalBytes) {
+			throw "$ExpectedRole host resource physical bounds are invalid"
+		}
+		if ($null -ne $Previous -and ($Start -le $Previous.End -or
+			$Elapsed -le $Previous.Elapsed -or $Frequency -ne $Previous.Frequency -or
+			$Utc -lt $Previous.Utc)) {
+			throw "$ExpectedRole host resource chronology is invalid"
+		}
+		$Previous = [pscustomobject]@{ End = $End; Elapsed = $Elapsed;
+			Frequency = $Frequency; Utc = $Utc }
+	}
+	return $Rows.Count
+}
+
 function Get-UnsignedField {
 	param([System.Collections.IDictionary]$Record, [string]$Name)
 	$Value = [UInt64]0
@@ -236,7 +286,8 @@ function Import-FarmParser {
 	$Errors = $null
 	$Ast = [Management.Automation.Language.Parser]::ParseFile($Path, [ref]$Tokens, [ref]$Errors)
 	if ($Errors.Count -ne 0) { throw 'canonical farm evidence parser has a syntax error' }
-	$Needed = @('Get-Fields', 'Get-Records', 'Assert-Records', 'Assert-ScaleRecords')
+	$Needed = @('Get-Fields', 'Get-Records', 'Get-RecoveryDiagnostics',
+		'Test-RecoveryQuiescent', 'Assert-Records', 'Assert-ScaleRecords', 'Assert-RecoveryRecords')
 	foreach ($Function in $Ast.FindAll({ param($Node)
 		$Node -is [Management.Automation.Language.FunctionDefinitionAst]
 	}, $true)) {
@@ -281,9 +332,16 @@ $ServerSamples = Assert-ResourceRows -Path (Join-Path $Server.Root 'process-reso
 	-ExpectedRunId $RunId -Labels @('server') -ExpectedCount ([long]$Server.Result.ResourceSamples)
 $ClientSamples = Assert-ResourceRows -Path (Join-Path $Clients.Root 'process-resources.csv') `
 	-ExpectedRunId $RunId -Labels $ClientLabels -ExpectedCount ([long]$Clients.Result.ResourceSamples)
+$ServerHostSamples = Assert-HostResourceRows -Path (Join-Path $Server.Root 'host-resources.csv') `
+	-ExpectedRunId $RunId -ExpectedRole 'Server' -ExpectedProvider $Manifest.Provider `
+	-ExpectedCount ([long]$Server.Result.HostResourceSamples)
+$ClientHostSamples = Assert-HostResourceRows -Path (Join-Path $Clients.Root 'host-resources.csv') `
+	-ExpectedRunId $RunId -ExpectedRole 'Clients' -ExpectedProvider $Manifest.Provider `
+	-ExpectedCount ([long]$Clients.Result.HostResourceSamples)
 
 foreach ($Definition in @(Import-FarmParser)) { . ([scriptblock]::Create($Definition)) }
-foreach ($Name in @('Get-Fields', 'Get-Records', 'Assert-Records', 'Assert-ScaleRecords')) {
+foreach ($Name in @('Get-Fields', 'Get-Records', 'Get-RecoveryDiagnostics',
+	'Test-RecoveryQuiescent', 'Assert-Records', 'Assert-ScaleRecords', 'Assert-RecoveryRecords')) {
 	if (-not (Get-Command $Name -CommandType Function -ErrorAction SilentlyContinue)) {
 		throw "canonical farm evidence parser lacks $Name"
 	}
@@ -293,12 +351,18 @@ $Provider = [string]$Manifest.Provider
 $ScaleWorkload = $true
 $ExpectedNonces = [Collections.Generic.List[string]]::new()
 foreach ($Nonce in $Manifest.Nonces) { $ExpectedNonces.Add([string]$Nonce) }
-$ServerLog = [pscustomobject]@{ OutputPath = (Join-Path $Server.Root 'server.stdout.log') }
+$ServerLog = [pscustomobject]@{ OutputPath = (Join-Path $Server.Root 'server.stdout.log');
+	ErrorPath = (Join-Path $Server.Root 'server.stderr.log') }
 $ClientLogs = @(0..31 | ForEach-Object {
-	[pscustomobject]@{ OutputPath = (Join-Path $Clients.Root ('client-{0:D2}.stdout.log' -f $_)) }
+	[pscustomobject]@{ OutputPath = (Join-Path $Clients.Root ('client-{0:D2}.stdout.log' -f $_));
+		ErrorPath = (Join-Path $Clients.Root ('client-{0:D2}.stderr.log' -f $_)) }
 })
 $Identity = Assert-Records -Server $ServerLog -Clients $ClientLogs -ExpectedNonces $ExpectedNonces
 Assert-ScaleRecords -Server $ServerLog -Clients $ClientLogs -ExpectedNonces $ExpectedNonces
+$RecoveryObservation = if ($Manifest.RecoveryWorkload -eq $true) {
+	Assert-RecoveryRecords -Server $ServerLog -Clients $ClientLogs -ExpectedNonces $ExpectedNonces `
+		-ExpectedConnections $Identity.Connections
+} else { $null }
 $Admission = Assert-AdmissionConservation -Path $ServerLog.OutputPath -ExpectedRunId $RunId
 $FairnessObservation = Read-AdmissionFairnessEvidence -Path (Join-Path $Server.Root 'admission-fairness.tsv') `
 	-RunId $RunId -ExpectedConnections $Identity.Connections
@@ -321,8 +385,10 @@ $Report = [ordered]@{
 	Status = 'INCOMPLETE'; RoleLocalEvidence = 'VALIDATED'; ProviderQualification = 'NOT CLAIMED'
 	Identity = $Identity; Admission = $Admission
 	AdmissionFairnessObservation = $FairnessObservation
+	RecoveryObservation = $RecoveryObservation
 	NodeAuthenticatedManifest = $NodeAuthenticatedManifest
 	ServerResourceSamples = $ServerSamples; ClientResourceSamples = $ClientSamples
+	ServerHostResourceSamples = $ServerHostSamples; ClientHostResourceSamples = $ClientHostSamples
 	Ledger = $Ledger
 	MeasuredGateCount = @($Ledger | Where-Object State -eq 'MEASURED').Count
 	MissingGateCount = @($Ledger | Where-Object State -eq 'NOT MEASURED').Count

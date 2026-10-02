@@ -48,6 +48,10 @@ namespace gargantuan::test {
 		if (PhysicalFarm) {
 			auto PhaseControl = std::make_shared<RemoteEvent>();
 			PhaseControl->SetName("ScalePhaseControl"); PhaseControl->SetParent(World);
+			auto OverloadEvent = std::make_shared<RemoteEvent>();
+			OverloadEvent->SetName("ScaleOverloadEvent"); OverloadEvent->SetParent(World);
+			auto OverloadFunction = std::make_shared<RemoteFunction>();
+			OverloadFunction->SetName("ScaleOverloadFunction"); OverloadFunction->SetParent(World);
 		}
 		auto ServerScript = std::make_shared<Script>();
 		ServerScript->SetName("ScaleServerPolicy");
@@ -61,7 +65,20 @@ local Function = game:FindFirstChild("ScaleFunction")
 local Event = game:FindFirstChild("ScaleEvent")
 if PhysicalFarm then
     local PhaseControl = game:FindFirstChild("ScalePhaseControl")
+    local OverloadEvent = game:FindFirstChild("ScaleOverloadEvent")
+    local OverloadFunction = game:FindFirstChild("ScaleOverloadFunction")
     local RunService = game:GetService("RunService")
+    local CurrentOverloadCase = nil
+    local OverloadReady = {}
+    local OverloadOffered = {}
+    local RecoveryProbeSeen = {}
+    local RecoveryNameSeen = {}
+    local OverloadReadyCount = 0
+    local OverloadOfferedCount = 0
+    OverloadEvent.OnServerEvent:Connect(function(Peer, Message, Sequence, Case)
+        OverloadEvent:FireClient(Peer.Slot, Peer.Generation, Message, Sequence, Case)
+    end)
+    OverloadFunction:SetServerHandler(function(_, Message) return Message end)
     local CurrentPhase = nil
     local PendingCompletion = nil
     local PhaseAcknowledgements = {}
@@ -99,11 +116,58 @@ if PhysicalFarm then
             Peer.Slot == game:GetAttribute("ScaleProducerConnectionSlot") and
             Peer.Generation == game:GetAttribute("ScaleProducerConnectionGeneration") then
             Control:SetAttribute("ScaleProducerFailed", Phase)
+        elseif Kind == "overload_ready" and Phase == CurrentOverloadCase then
+            local Key = tostring(Peer.Slot) .. ":" .. tostring(Peer.Generation)
+            if not OverloadReady[Key] then
+                OverloadReady[Key] = true
+                OverloadReadyCount += 1
+                Control:SetAttribute("ScaleOverloadReadyAcks", OverloadReadyCount)
+                print(string.format("[Qualification:Recovery] event=ready_ack case=%s peer_slot=%d peer_generation=%d count=%d",
+                    Phase, Peer.Slot, Peer.Generation, OverloadReadyCount))
+            end
+        elseif Kind == "overload_offered" and Phase == CurrentOverloadCase then
+            local Key = tostring(Peer.Slot) .. ":" .. tostring(Peer.Generation)
+            if not OverloadOffered[Key] then
+                OverloadOffered[Key] = true
+                OverloadOfferedCount += 1
+                Control:SetAttribute("ScaleOverloadOfferedAcks", OverloadOfferedCount)
+                print(string.format("[Qualification:Recovery] event=offered_ack case=%s peer_slot=%d peer_generation=%d count=%d",
+                    Phase, Peer.Slot, Peer.Generation, OverloadOfferedCount))
+            end
+        elseif Kind == "recovery_done" and
+            game:GetAttribute("ScaleOverloadCase") == "recover_" .. tostring(Phase) then
+            local Key = tostring(Peer.Slot) .. ":" .. tostring(Peer.Generation)
+            if not RecoveryProbeSeen[Key] then
+                RecoveryProbeSeen[Key] = true
+                print(string.format("[Qualification:Recovery] event=probe_ack case=%s peer_slot=%d peer_generation=%d",
+                    Phase, Peer.Slot, Peer.Generation))
+            end
+        elseif Kind == "name_converged" and
+            game:GetAttribute("ScaleOverloadCase") == "recover_" .. tostring(Phase) then
+            local Key = tostring(Peer.Slot) .. ":" .. tostring(Peer.Generation)
+            if not RecoveryNameSeen[Key] then
+                RecoveryNameSeen[Key] = true
+                print(string.format("[Qualification:Recovery] event=name_ack case=%s peer_slot=%d peer_generation=%d",
+                    Phase, Peer.Slot, Peer.Generation))
+            end
         end
     end)
     RunService.PostSimulation:Connect(function()
         PhaseTick += 1
         local NextPhase = game:GetAttribute("ScalePhase")
+        local NextOverload = game:GetAttribute("ScaleOverloadCase")
+        if type(NextOverload) == "string" and NextOverload ~= CurrentOverloadCase and
+            (NextOverload == "gameplay" or NextOverload == "structural" or NextOverload == "mixed") then
+            CurrentOverloadCase = NextOverload
+            OverloadReady = {}
+            OverloadOffered = {}
+            RecoveryProbeSeen = {}
+            RecoveryNameSeen = {}
+            OverloadReadyCount = 0
+            OverloadOfferedCount = 0
+            Control:SetAttribute("ScaleOverloadReadyAcks", 0)
+            Control:SetAttribute("ScaleOverloadOfferedAcks", 0)
+        end
         if type(NextPhase) == "string" and NextPhase ~= CurrentPhase then
             CurrentPhase = NextPhase
             PendingCompletion = nil
@@ -169,6 +233,8 @@ local Workspace = if PhysicalFarm then game:GetService("Workspace") else nil
 local Function = game:FindFirstChild("ScaleFunction")
 local Event = game:FindFirstChild("ScaleEvent")
 local PhaseControl = if PhysicalFarm then game:FindFirstChild("ScalePhaseControl") else nil
+local OverloadEvent = if PhysicalFarm then game:FindFirstChild("ScaleOverloadEvent") else nil
+local OverloadFunction = if PhysicalFarm then game:FindFirstChild("ScaleOverloadFunction") else nil
 assert(Control:RegisterAction("ScaleLunge", "asset://d9d9e9649adbad59588d137c2a642e1d", 0.5, Vector3.new(0.9, 0, 0), 0, true))
 local Phase = nil
 local PendingPhaseAcknowledgement = nil
@@ -235,6 +301,43 @@ local RpcSamples = {}
 local RpcErrors = 0
 local RpcTimeouts = 0
 local ProducerReported = false
+local CurrentOverloadCase = nil
+local OverloadReadySent = false
+local OverloadOffered = 0
+local LastOverloadOfferAt = nil
+local OverloadOfferedSent = false
+local OverloadRpcPending = 0
+local OverloadRpcCompleted = 0
+local OverloadRpcErrors = 0
+local OverloadEventOffers = 0
+local OverloadEventAttempts = 0
+local OverloadEventAcks = 0
+local RecoveryProbesStarted = false
+local RecoveryProbesDone = false
+local RecoveryProbeAcks = 0
+local RecoveryProbeErrors = 0
+local RecoveryEventAcks = 0
+local RecoveryRpcLatencies = {}
+local RecoveryEventLatencies = {}
+local RecoveryEventStarted = {}
+local RecoveryNameSent = false
+local RecoveryResultSent = false
+local OverloadSequence = 0
+if OverloadEvent then
+    OverloadEvent.OnClientEvent:Connect(function(Message, Sequence, Case)
+        if Case ~= CurrentOverloadCase then return end
+        if Message == "recovery" then
+            local Started = RecoveryEventStarted[Sequence]
+            if Started then
+                RecoveryEventStarted[Sequence] = nil
+                RecoveryEventAcks += 1
+                table.insert(RecoveryEventLatencies, math.floor((os.clock() - Started) * 1000000))
+            end
+        else
+            OverloadEventAcks += 1
+        end
+    end)
+end
 Event.OnClientEvent:Connect(function(Message, Sequence)
     if not EventPending or EventPending.Sequence ~= Sequence or EventPending.Phase ~= Message then
         if PhysicalFarm then PhaseTrafficFailure = true end
@@ -522,6 +625,164 @@ RunService.PostSimulation:Connect(function()
         Event:FireServer(Phase, EventSequence)
     end
 end)
+if PhysicalFarm then
+    -- This is a separate post-reload workload. The five content phases above
+    -- retain their qualified traffic and completion semantics unchanged.
+    RunService.PostSimulation:Connect(function()
+        local LocalPlayer = Players.LocalPlayer
+        if not LocalPlayer or not PhaseControl then return end
+        local Stage = game:GetAttribute("ScaleOverloadCase")
+        if Stage == "gameplay" or Stage == "structural" or Stage == "mixed" then
+            if Stage ~= CurrentOverloadCase then
+                CurrentOverloadCase = Stage
+                OverloadReadySent = false
+                OverloadOffered = 0
+                LastOverloadOfferAt = nil
+                OverloadOfferedSent = false
+                OverloadRpcPending = 0
+                OverloadRpcCompleted = 0
+                OverloadRpcErrors = 0
+                OverloadEventOffers = 0
+                OverloadEventAttempts = 0
+                OverloadEventAcks = 0
+                RecoveryProbesStarted = false
+                RecoveryProbesDone = false
+                RecoveryProbeAcks = 0
+                RecoveryProbeErrors = 0
+                RecoveryEventAcks = 0
+                RecoveryRpcLatencies = {}
+                RecoveryEventLatencies = {}
+                RecoveryEventStarted = {}
+                RecoveryNameSent = false
+                RecoveryResultSent = false
+            end
+            if not OverloadReadySent then
+                local Root = Workspace:FindFirstChild("ScaleOverloadRegion")
+                local Materialized = Root ~= nil
+                if Materialized then
+                    for Index = 0, 31 do
+                        local Holder = Root:FindFirstChild("part" .. tostring(Index))
+                        if not Holder or #Holder:GetChildren() ~= 1 then
+                            Materialized = false
+                            break
+                        end
+                    end
+                end
+                if Materialized then
+                    OverloadReadySent = pcall(function() PhaseControl:FireServer("overload_ready", Stage) end)
+                end
+            end
+            local Now = os.clock()
+            if OverloadReadySent and OverloadOffered < 480 and
+                (not LastOverloadOfferAt or Now - LastOverloadOfferAt >= 1 / 60) then
+                LastOverloadOfferAt = Now
+                OverloadOffered += 1
+                local Offered = OverloadOffered
+                local Burst = Stage ~= "structural"
+                if Offered == 1 then
+                    local Count = if Burst then 16 else 1
+                    local Payload = if Burst then string.rep("r", 16300) else "small"
+                    for _ = 1, Count do
+                        OverloadRpcPending += 1
+                        task.spawn(function()
+                            local Ok, Value = pcall(function()
+                                return OverloadFunction:InvokeServerWithTimeout(5, Payload)
+                            end)
+                            if Ok and Value == Payload then OverloadRpcCompleted += 1
+                            else OverloadRpcErrors += 1 end
+                            OverloadRpcPending -= 1
+                        end)
+                    end
+                end
+                if Burst or Offered % 8 == 0 then
+                    OverloadSequence += 1
+                    OverloadEventAttempts += 1
+                    local Payload = if Burst then string.rep("e", 16300) else "small"
+                    local Ok = pcall(function()
+                        OverloadEvent:FireServer(Payload, OverloadSequence, Stage)
+                    end)
+                    if Ok then OverloadEventOffers += 1 end
+                end
+            end
+            if OverloadOffered == 480 and OverloadRpcPending == 0 and not OverloadOfferedSent then
+                OverloadOfferedSent = pcall(function()
+                    PhaseControl:FireServer("overload_offered", Stage)
+                end)
+                if OverloadOfferedSent then
+                    print(string.format("[Qualification:Recovery] event=client_offered case=%s player_id=%d opportunities=%d rpc_completed=%d rpc_errors=%d event_attempts=%d event_offers=%d event_acks=%d",
+                        Stage, LocalPlayer.PlayerId, OverloadOffered, OverloadRpcCompleted,
+                        OverloadRpcErrors, OverloadEventAttempts, OverloadEventOffers, OverloadEventAcks))
+                end
+            end
+            return
+        end
+        if Stage ~= "recover_" .. tostring(CurrentOverloadCase) then return end
+        if not RecoveryProbesStarted then
+            RecoveryProbesStarted = true
+            task.spawn(function()
+                for Index = 1, 10 do
+                    local Started = os.clock()
+                    local Ok, Value = pcall(function()
+                        return OverloadFunction:InvokeServerWithTimeout(1, "recovery")
+                    end)
+                    if Ok and Value == "recovery" then
+                        RecoveryProbeAcks += 1
+                        table.insert(RecoveryRpcLatencies, math.floor((os.clock() - Started) * 1000000))
+                    else RecoveryProbeErrors += 1 end
+                    OverloadSequence += 1
+                    RecoveryEventStarted[OverloadSequence] = os.clock()
+                    pcall(function()
+                        OverloadEvent:FireServer("recovery", OverloadSequence, CurrentOverloadCase)
+                    end)
+                    task.wait(0.2)
+                end
+                RecoveryProbesDone = true
+            end)
+        end
+        if RecoveryProbesDone and not RecoveryResultSent and
+            RecoveryProbeAcks == 10 and RecoveryProbeErrors == 0 and RecoveryEventAcks == 10 then
+            table.sort(RecoveryRpcLatencies)
+            table.sort(RecoveryEventLatencies)
+            RecoveryResultSent = pcall(function()
+                PhaseControl:FireServer("recovery_done", CurrentOverloadCase)
+            end)
+            if RecoveryResultSent then
+                print(string.format("[Qualification:Recovery] event=client_probes case=%s player_id=%d rpc_acks=%d rpc_errors=%d event_acks=%d rpc_p95_us=%d rpc_p99_us=%d rpc_max_us=%d event_max_us=%d",
+                    CurrentOverloadCase, LocalPlayer.PlayerId, RecoveryProbeAcks,
+                    RecoveryProbeErrors, RecoveryEventAcks,
+                    RecoveryRpcLatencies[10], RecoveryRpcLatencies[10],
+                    RecoveryRpcLatencies[10], RecoveryEventLatencies[10]))
+            end
+        end
+        if CurrentOverloadCase ~= "gameplay" and not RecoveryNameSent then
+            local Root = Workspace:FindFirstChild("ScaleOverloadRegion")
+            local Complete = Root ~= nil
+            local CaseIndex = if CurrentOverloadCase == "structural" then 1 else 2
+            if Complete then
+                for Index = 0, 31 do
+                    local Holder = Root:FindFirstChild("part" .. tostring(Index))
+                    local Children = if Holder then Holder:GetChildren() else {}
+                    local Opportunity = if Index < 16 then 479 else 480
+                    local Letter = string.char(string.byte("a") +
+                        ((CaseIndex * 7 + Opportunity + Index) % 26))
+                    if #Children ~= 1 or Children[1].Name ~= string.rep(Letter, 24576) then
+                        Complete = false
+                        break
+                    end
+                end
+            end
+            if Complete then
+                RecoveryNameSent = pcall(function()
+                    PhaseControl:FireServer("name_converged", CurrentOverloadCase)
+                end)
+                if RecoveryNameSent then
+                    print(string.format("[Qualification:Recovery] event=client_names case=%s player_id=%d objects=32 bytes_per_name=24576",
+                        CurrentOverloadCase, LocalPlayer.PlayerId))
+                end
+            end
+        end
+    end)
+end
 )");
 		ClientScript->SetParent(World);
 	}

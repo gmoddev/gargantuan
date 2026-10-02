@@ -4,13 +4,17 @@
 #include "gargantuan/animation/AnimationTrack.hpp"
 #include "gargantuan/classes/Animator.hpp"
 #include "gargantuan/classes/DataModel.hpp"
+#include "gargantuan/classes/Folder.hpp"
 #include "gargantuan/classes/KinematicCharacter.hpp"
 #include "gargantuan/classes/MeshPart.hpp"
 #include "gargantuan/classes/Part.hpp"
 #include "gargantuan/classes/Player.hpp"
 #include "gargantuan/network/GameSession.hpp"
 #include "gargantuan/runtime/MutationGateway.hpp"
+#include "gargantuan/runtime/ChangeJournal.hpp"
+#include "../../network/GameSessionTestAccess.hpp"
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstdint>
@@ -40,14 +44,21 @@ namespace gargantuan::host {
 		static constexpr std::string_view ContentKey = "workspace/scale";
 		static constexpr std::string_view ContentRootName = "ContentScaleRegion";
 
-		PhysicalScaleQualification(Engine &RuntimeValue, network::GameSession &SessionValue, std::string RunIdValue)
-			: Runtime(RuntimeValue), Session(SessionValue), RunId(std::move(RunIdValue)) {
+		PhysicalScaleQualification(Engine &RuntimeValue, network::GameSession &SessionValue, std::string RunIdValue,
+			bool RecoveryWorkloadValue = false)
+			: Runtime(RuntimeValue), Session(SessionValue), RunId(std::move(RunIdValue)),
+				RecoveryWorkload(RecoveryWorkloadValue) {
 			if (RunId.empty() || !Runtime.Content || !Runtime.DataModel || !Runtime.CharacterControl)
 				throw std::invalid_argument("physical scale qualification requires a content-backed server runtime");
 		}
 
 		void Step(std::uint64_t Tick) {
 			if (State == Stage::Complete) return;
+			if (State == Stage::OverloadReady || State == Stage::OverloadOffering ||
+				State == Stage::OverloadOffered || State == Stage::OverloadRecovery) {
+				StepOverload(Tick);
+				return;
+			}
 			if (State == Stage::Concluding) {
 				// The final phase must reach the clients before the host closes GNS.
 				// A client may finish and disconnect during this bounded interval.
@@ -147,12 +158,15 @@ namespace gargantuan::host {
 		static constexpr std::uint64_t MaximumPhaseTicks = 1'200;
 		static constexpr std::uint64_t MaximumSetupTicks = 1'200;
 		static constexpr std::uint64_t CompletionPropagationTicks = 120;
-		enum class Stage : std::uint8_t { WaitingForPeers, Warming, Measuring, Concluding, Complete };
+		enum class Stage : std::uint8_t { WaitingForPeers, Warming, Measuring,
+			OverloadReady, OverloadOffering, OverloadOffered, OverloadRecovery,
+			Concluding, Complete };
 		enum class Phase : std::uint8_t { Baseline, Load, Resident, Evict, Reload };
 
 		Engine &Runtime;
 		network::GameSession &Session;
 		std::string RunId;
+		bool RecoveryWorkload = false;
 		Stage State = Stage::WaitingForPeers;
 		Phase CurrentPhase = Phase::Baseline;
 		std::uint64_t FirstTick = 0;
@@ -168,6 +182,25 @@ namespace gargantuan::host {
 		ObjectId FirstContentRoot;
 		std::vector<std::shared_ptr<Part>> Grounds;
 		std::vector<std::shared_ptr<AnimationTrack>> RootTracks;
+		std::shared_ptr<Folder> OverloadRoot;
+		std::array<std::shared_ptr<Part>, 32> OverloadParts{};
+		std::uint64_t CessationJournalTail = 0;
+		bool RecoverySnapshotWritten = false;
+		std::size_t OverloadRetainedHighWater = 0;
+		std::int64_t OverloadMinimumRetentionMargin = std::numeric_limits<std::int64_t>::max();
+		std::size_t OverloadCase = 0;
+		std::uint32_t OverloadOpportunities = 0;
+		std::chrono::steady_clock::time_point OverloadStageStarted;
+		std::chrono::steady_clock::time_point LastOverloadOpportunity;
+		std::chrono::steady_clock::time_point OverloadCeased;
+		static constexpr std::array<std::string_view, 3> OverloadCases{"gameplay", "structural", "mixed"};
+		static constexpr std::uint32_t OverloadOpportunityCount = 480;
+		static constexpr std::size_t OverloadNameBytes = 24 * 1024;
+		// Keep the fixed 20-second service observation separate from the
+		// stronger sufficient convergence proof. Sample close to its derived
+		// 20.4705-second ceiling so delivery has the full lawful interval.
+		static constexpr auto StrictSnapshotTarget = std::chrono::microseconds(20'400'000);
+		static constexpr auto StrictConvergenceDeadline = std::chrono::microseconds(20'470'500);
 
 		[[nodiscard]] static std::string_view Name(Phase Value) {
 			switch (Value) {
@@ -319,6 +352,222 @@ namespace gargantuan::host {
 					PhaseStarted.time_since_epoch()).count() << '\n';
 		}
 
+		void PublishOverloadAttribute(std::string_view Key, WireValue Value, std::uint64_t Tick) {
+			if (Runtime.DataModel->ApplyAttributeMutation(std::string(Key), std::move(Value),
+				ScriptSecurityContext::CoreTrusted()) != MutationStatus::Success)
+				Fail("overload_control_publication_rejected", Tick);
+		}
+
+		[[nodiscard]] int OverloadCount(std::string_view Key) const {
+			const auto Value = Runtime.CharacterControl->GetAttributeValue(std::string(Key),
+				ScriptSecurityContext::CoreTrusted());
+			if (!Value) return 0;
+			const auto *Number = std::get_if<int>(&*Value);
+			return Number ? *Number : -1;
+		}
+
+		struct RetentionObservation {
+			std::size_t Retained = 0;
+			std::uint64_t Oldest = 1;
+			std::uint64_t Required = 1;
+			std::int64_t Margin = 0;
+		};
+
+		[[nodiscard]] RetentionObservation ObserveRetention() {
+			const auto Window = ChangeJournal::Get().GetRetentionWindow(Runtime.DataModel->GetObjectId());
+			auto Required = Window.NextSequence;
+			for (const auto &Reader : network::detail::GameSessionTestAccess::GetJournalRequirements(Session))
+				Required = std::min(Required, Reader.Cursor.NextSequence);
+			const auto Margin = static_cast<std::int64_t>(Required) - static_cast<std::int64_t>(Window.OldestSequence);
+			OverloadRetainedHighWater = std::max(OverloadRetainedHighWater, Window.RetainedRecords);
+			OverloadMinimumRetentionMargin = std::min(OverloadMinimumRetentionMargin, Margin);
+			return {Window.RetainedRecords, Window.OldestSequence, Required, Margin};
+		}
+
+		void BeginOverloadCase(std::uint64_t Tick) {
+			if (OverloadCase >= OverloadCases.size()) Fail("overload_case_out_of_range", Tick);
+			OverloadOpportunities = 0;
+			OverloadRetainedHighWater = 0;
+			OverloadMinimumRetentionMargin = std::numeric_limits<std::int64_t>::max();
+			PublishOverloadAttribute("ScaleOverloadCase", WireValue(std::string(OverloadCases[OverloadCase])), Tick);
+			OverloadStageStarted = std::chrono::steady_clock::now();
+			State = Stage::OverloadReady;
+			std::cout << "[Qualification:Recovery] event=case_start run=" << RunId
+				<< " case=" << OverloadCases[OverloadCase] << " tick=" << Tick
+				<< " monotonic_us=" << std::chrono::duration_cast<std::chrono::microseconds>(
+					OverloadStageStarted.time_since_epoch()).count() << '\n';
+		}
+
+		void InitializeOverload(std::uint64_t Tick) {
+			OverloadRoot = std::make_shared<Folder>();
+			OverloadRoot->SetName("ScaleOverloadRegion");
+			OverloadRoot->SetParent(Runtime.Workspace);
+			for (std::size_t Index = 0; Index < OverloadParts.size(); ++Index) {
+				auto Holder = std::make_shared<Folder>();
+				Holder->SetName("part" + std::to_string(Index));
+				Holder->SetParent(OverloadRoot);
+				auto Value = std::make_shared<Part>();
+				Value->SetName("initial");
+				Value->SetAnchored(true);
+				Value->SetCanCollide(false);
+				Value->SetCanTouch(false);
+				Value->SetPosition({0.0f, 8.0f, 0.0f});
+				Value->SetParent(Holder);
+				std::cout << "[Qualification:Recovery] event=object run=" << RunId
+					<< " index=" << Index << " object_slot=" << Value->GetObjectId().Slot
+					<< " object_generation=" << Value->GetObjectId().Generation << '\n';
+				OverloadParts[Index] = std::move(Value);
+			}
+			PublishOverloadAttribute("ScaleOverloadEnabled", WireValue(true), Tick);
+			BeginOverloadCase(Tick);
+		}
+
+		void OfferOverloadNameWork(std::uint64_t Tick) {
+			if (OverloadCase == 0) return;
+			const auto First = ((OverloadOpportunities - 1) % 2) * 16;
+			for (std::size_t Index = First; Index < First + 16; ++Index) {
+				const auto Letter = static_cast<char>('a' + (OverloadCase * 7 + OverloadOpportunities + Index) % 26);
+				OverloadParts[Index]->SetName(std::string(OverloadNameBytes, Letter));
+			}
+			std::cout << "[Qualification:Recovery] event=structural_offer run=" << RunId
+				<< " case=" << OverloadCases[OverloadCase] << " opportunity=" << OverloadOpportunities
+				<< " mutations=16 name_bytes=" << OverloadNameBytes << " tick=" << Tick
+				<< " monotonic_us=" << std::chrono::duration_cast<std::chrono::microseconds>(
+					std::chrono::steady_clock::now().time_since_epoch()).count() << '\n';
+			const auto Retention = ObserveRetention();
+			std::cout << "[Qualification:Recovery] event=retention run=" << RunId
+				<< " case=" << OverloadCases[OverloadCase] << " opportunity=" << OverloadOpportunities
+				<< " retained=" << Retention.Retained << " oldest=" << Retention.Oldest
+				<< " required=" << Retention.Required << " margin=" << Retention.Margin << '\n';
+		}
+
+		void StepOverload(std::uint64_t Tick) {
+			const auto Now = std::chrono::steady_clock::now();
+			const auto CaseName = OverloadCases[OverloadCase];
+			if (Session.GetMetrics().ReadyPeers != PeerCount) Fail("client_left_during_overload", Tick);
+			if (State == Stage::OverloadReady) {
+				if (OverloadCount("ScaleOverloadReadyAcks") == static_cast<int>(PeerCount) &&
+					Session.GetMetrics().MaterializationBacklog == 0) {
+					State = Stage::OverloadOffering;
+					OverloadStageStarted = Now;
+					LastOverloadOpportunity = Now - std::chrono::microseconds(16'667);
+					std::cout << "[Qualification:Recovery] event=all_ready run=" << RunId
+						<< " case=" << CaseName << " tick=" << Tick << '\n';
+				} else if (Now - OverloadStageStarted > std::chrono::seconds(30))
+					Fail("overload_clients_not_ready", Tick);
+				return;
+			}
+			if (State == Stage::OverloadOffering) {
+				if (Now - LastOverloadOpportunity < std::chrono::microseconds(16'667)) return;
+				LastOverloadOpportunity = Now;
+				++OverloadOpportunities;
+				OfferOverloadNameWork(Tick);
+				if (OverloadCase == 0) (void)ObserveRetention();
+				if (OverloadOpportunities == OverloadOpportunityCount) {
+					State = Stage::OverloadOffered;
+					std::cout << "[Qualification:Recovery] event=all_opportunities run=" << RunId
+						<< " case=" << CaseName << " opportunities=" << OverloadOpportunities
+						<< " elapsed_us=" << std::chrono::duration_cast<std::chrono::microseconds>(
+							Now - OverloadStageStarted).count() << " tick=" << Tick << '\n';
+					OverloadStageStarted = Now;
+				}
+			return;
+			}
+			if (State == Stage::OverloadOffered) {
+				if (OverloadCount("ScaleOverloadOfferedAcks") == static_cast<int>(PeerCount)) {
+					PublishOverloadAttribute("ScaleOverloadCase", WireValue("recover_" + std::string(CaseName)), Tick);
+					OverloadCeased = std::chrono::steady_clock::now();
+					CessationJournalTail = ChangeJournal::Get().CreateCursor(
+						Runtime.DataModel->GetObjectId()).NextSequence;
+					RecoverySnapshotWritten = false;
+					State = Stage::OverloadRecovery;
+					const auto Metrics = Session.GetMetrics();
+					std::cout << "[Qualification:Recovery] event=cessation run=" << RunId
+						<< " case=" << CaseName << " tick=" << Tick
+						<< " monotonic_us=" << std::chrono::duration_cast<std::chrono::microseconds>(
+							OverloadCeased.time_since_epoch()).count()
+						<< " journal_tail=" << CessationJournalTail
+						<< " raw_name_bytes=" << (OverloadCase == 0 ? 0 :
+								OverloadOpportunityCount * 16 * OverloadNameBytes)
+						<< " retained_high=" << OverloadRetainedHighWater
+						<< " minimum_retention_margin=" << OverloadMinimumRetentionMargin
+						<< " journal_backlog=" << Metrics.JournalBacklogRecords
+						<< " outstanding=" << Metrics.ReliableAdmission.OutstandingBytes
+						<< " scheduler_queued=" << Metrics.SchedulerQueuedReliableBytes
+						<< " native_queued=" << Metrics.NativeQueuedReliableBytes
+						<< " native_observed=" << Metrics.NativeQueuedReliablePeersObserved << '\n';
+					// Luau print uses this same redirected stderr stream. These barrier
+					// markers order remote ACKs without comparing endpoint clocks.
+					std::cerr << "[Qualification:Recovery] event=cessation_barrier run=" << RunId
+						<< " case=" << CaseName << " journal_tail=" << CessationJournalTail << '\n';
+				} else if (Now - OverloadStageStarted > std::chrono::seconds(30))
+					Fail("overload_client_offers_incomplete", Tick);
+				return;
+			}
+			if (State == Stage::OverloadRecovery) {
+				const auto Metrics = Session.GetMetrics();
+				const auto Retention = ObserveRetention();
+				const auto Elapsed = std::chrono::duration_cast<std::chrono::microseconds>(Now - OverloadCeased).count();
+				std::cerr << "[Qualification:Recovery] event=sample run=" << RunId
+					<< " case=" << CaseName << " elapsed_us=" << Elapsed
+					<< " outstanding=" << Metrics.ReliableAdmission.OutstandingBytes
+					<< " active_grants=" << Metrics.ReliableAdmission.ActiveDrainGrants
+					<< " scheduler_queued=" << Metrics.SchedulerQueuedReliableBytes
+					<< " native_queued=" << Metrics.NativeQueuedReliableBytes
+					<< " native_observed=" << Metrics.NativeQueuedReliablePeersObserved
+					<< " feedback_observed=" << Metrics.StructuralFeedbackPeersObserved
+					<< " accepted=" << Metrics.StructuralAcceptedFeedbackBytes
+					<< " first_sent=" << Metrics.StructuralFirstSentFeedbackBytes
+					<< " acked=" << Metrics.StructuralAckedFeedbackBytes
+					<< " retired=" << Metrics.ReliableAdmission.VerifiedAttributedRetirement
+					<< " terminal_release=" << Metrics.ReliableAdmission.TerminalReleasedBytes
+					<< " journal_backlog=" << Metrics.JournalBacklogRecords
+					<< " materialization_backlog=" << Metrics.MaterializationBacklog
+					<< " pending_enters=" << Metrics.StructuralPendingEnters
+					<< " pending_leaves=" << Metrics.StructuralPendingLeaves
+					<< " current_tail=" << ChangeJournal::Get().CreateCursor(
+						Runtime.DataModel->GetObjectId()).NextSequence
+					<< " retained=" << Retention.Retained << " oldest=" << Retention.Oldest
+					<< " required=" << Retention.Required << " margin=" << Retention.Margin
+					<< " retained_high=" << OverloadRetainedHighWater
+					<< " minimum_retention_margin=" << OverloadMinimumRetentionMargin
+					<< " journal_lag_high=" << Metrics.StructuralMaximumJournalLagRecords
+					<< " journal_failures=" << Metrics.StructuralJournalLagFailures
+					<< " tick=" << Tick << '\n';
+				if (!RecoverySnapshotWritten && Now - OverloadCeased >= StrictSnapshotTarget) {
+					RecoverySnapshotWritten = true;
+					for (const auto &Reader : network::detail::GameSessionTestAccess::GetJournalRequirements(Session))
+						std::cerr << "[Qualification:Recovery] event=reader run=" << RunId
+							<< " case=" << CaseName << " catalog=" << Reader.Catalog
+							<< " connection_slot=" << Reader.Connection.Slot
+							<< " connection_generation=" << Reader.Connection.Generation
+							<< " next_sequence=" << Reader.Cursor.NextSequence
+							<< " prepared=" << Reader.PreparedCommit
+							<< " pending_relevance=" << Reader.PendingRelevance << '\n';
+					std::cerr << "[Qualification:Recovery] event=strict_snapshot run=" << RunId
+						<< " case=" << CaseName << " elapsed_us=" << Elapsed
+						<< " cessation_tail=" << CessationJournalTail
+						<< " retained_work_bytes=NOT_MEASURED tick=" << Tick << '\n';
+				}
+				if (Now - OverloadCeased >= StrictConvergenceDeadline) {
+					std::cerr << "[Qualification:Recovery] event=strict_deadline_barrier run=" << RunId
+						<< " case=" << CaseName << " elapsed_us=" << Elapsed << '\n';
+					if (++OverloadCase < OverloadCases.size()) BeginOverloadCase(Tick);
+					else PublishCompletion(Tick);
+				}
+			}
+		}
+
+		void PublishCompletion(std::uint64_t Tick) {
+			if (Runtime.DataModel->ApplyAttributeMutation("ScalePhase", WireValue(std::string("complete")),
+				ScriptSecurityContext::CoreTrusted()) != MutationStatus::Success)
+				Fail("completion_publication_rejected", Tick);
+			ConclusionTick = Tick;
+			State = Stage::Concluding;
+			std::cout << "[Qualification:Scale] event=completion_published run=" << RunId
+				<< " phase=complete propagation_ticks=" << CompletionPropagationTicks << " tick=" << Tick << '\n';
+		}
+
 		void EndPhase(std::uint64_t Tick) {
 			const auto Ended = std::chrono::steady_clock::now();
 			const auto Metrics = Session.GetMetrics();
@@ -357,13 +606,8 @@ namespace gargantuan::host {
 			case Phase::Reload:
 				if (Provider.Acquisitions != 1 || Provider.Admissions != 2 || !Root ||
 					Root->GetObjectId() == FirstContentRoot) Fail("fresh_reload_mismatch", Tick);
-				if (Runtime.DataModel->ApplyAttributeMutation("ScalePhase", WireValue(std::string("complete")),
-					ScriptSecurityContext::CoreTrusted()) != MutationStatus::Success)
-					Fail("completion_publication_rejected", Tick);
-				ConclusionTick = Tick;
-				State = Stage::Concluding;
-				std::cout << "[Qualification:Scale] event=completion_published run=" << RunId
-					<< " phase=complete propagation_ticks=" << CompletionPropagationTicks << " tick=" << Tick << '\n';
+				if (RecoveryWorkload) InitializeOverload(Tick);
+				else PublishCompletion(Tick);
 				break;
 			}
 		}

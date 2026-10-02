@@ -2200,6 +2200,20 @@ namespace gargantuan::network {
 			Result.CharacterMaximumCurrentPublicationAgeTicks = CharacterMetrics.MaximumCurrentPublicationAgeTicks;
 		}
 		for (const auto &[Connection, PeerValue] : State->Peers) {
+			Result.StructuralAcceptedFeedbackBytes += PeerValue.ReliableFeedback.Accepted.Structural;
+			if (PeerValue.ReliableFeedback.Previous) {
+				Result.StructuralFirstSentFeedbackBytes +=
+					PeerValue.ReliableFeedback.Previous->StructuralPayloadBytesFirstSent;
+				Result.StructuralAckedFeedbackBytes +=
+					PeerValue.ReliableFeedback.Previous->StructuralPayloadBytesAcked;
+				++Result.StructuralFeedbackPeersObserved;
+			}
+			if (const auto Scheduler = State->Scheduler.GetStatistics(Connection))
+				Result.SchedulerQueuedReliableBytes += Scheduler->QueuedReliableBytes;
+			if (const auto Native = State->Transport->GetStatistics(Connection); Native && Native->QueuedReliableBytes) {
+				Result.NativeQueuedReliableBytes += *Native->QueuedReliableBytes;
+				++Result.NativeQueuedReliablePeersObserved;
+			}
 			if (const auto *View = State->Replication ? State->Replication->GetView(Connection) : nullptr)
 				Result.MaterializedObjects += View->KnownObjects.size();
 			Result.MaterializedCharacters += PeerValue.MaterializedCharacters.size();
@@ -2267,7 +2281,8 @@ namespace gargantuan::network {
 		if (!Replication) return Result;
 		Result.push_back({Replication->CatalogCursor, {}, true, false, Replication->NameCoalescingBegin});
 		for (const auto &[Connection, Peer] : Replication->Peers)
-			Result.push_back({Peer.JournalCursor, Connection, false, Peer.PreparedCommit.has_value(), Replication->NameCoalescingBegin});
+			Result.push_back({Peer.JournalCursor, Connection, false, Peer.PreparedCommit.has_value(),
+				Replication->NameCoalescingBegin, Replication->HasPendingRelevance(Connection)});
 		return Result;
 	}
 	ReplicationMetrics detail::GameSessionTestAccess::GetReplicationMetrics(const GameSession &Session) {

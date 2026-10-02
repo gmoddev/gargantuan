@@ -121,9 +121,14 @@ def New(Root):
 
 def ValidateRole(Role, Input, Identity, Manifest, ManifestHash, WorkflowHash):
     ExpectedKeys = ROLE_KEYS | ({"NodeRootCertificatePath"} if Manifest["Provider"] == "Node" else set())
+    if Manifest.get("RecoveryWorkload") is True:
+        ExpectedKeys |= {"RunTimeoutMilliseconds"}
     if Manifest["Provider"] == "Node" and Role == "SERVER":
         ExpectedKeys |= {"NodeStage", "NodeHelper"}
     Exact(Input, ExpectedKeys, Role + " role")
+    if Manifest.get("RecoveryWorkload") is True and (type(Input["RunTimeoutMilliseconds"]) is not int or
+            Input["RunTimeoutMilliseconds"] != 420000):
+        raise ValueError("[Qualification:FarmTickets] recovery role timeout must be 420000 ms")
     if not ENDPOINT_ID.fullmatch(Input["EndpointId"]):
         raise ValueError("[Qualification:FarmTickets] invalid endpoint ID")
     ipaddress.IPv4Address(Input["PeerIp"])
@@ -183,6 +188,8 @@ def ValidateRole(Role, Input, Identity, Manifest, ManifestHash, WorkflowHash):
             "ManifestPath": Input["ManifestPath"], "ManifestSHA256": Digest(ManifestFile),
             "PackageRoot": Input["PackageRoot"], "EvidenceRoot": Input["EvidenceRoot"],
             "RunRegistryRoot": Input["RunRegistryRoot"]}
+    if Manifest.get("RecoveryWorkload") is True:
+        Farm["RunTimeoutMilliseconds"] = Input["RunTimeoutMilliseconds"]
     if Manifest["Provider"] == "Node":
         Farm["NodeRootCertificatePath"] = str(WinPath(Input["NodeRootCertificatePath"], "Node root"))
     Capture = {"Format": "GargantuanFarm32CaptureCampaign", "Version": 1,

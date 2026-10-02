@@ -2184,6 +2184,10 @@ namespace {
 			(void)Journal.Commit(Scope, Scope, TagAddedChange{std::to_string(Index)});
 		const auto End = Journal.CreateCursor(Scope);
 		const auto Oldest = End.NextSequence - 137;
+		const auto Window = Journal.GetRetentionWindow(Scope);
+		Check(Window.OldestSequence == Oldest && Window.NextSequence == End.NextSequence &&
+			Window.RetainedRecords == 137 && Window.Capacity == 137,
+			"read-only journal retention window matches bounded cursor reference");
 		for (std::uint64_t Sequence = Start.NextSequence; Sequence <= End.NextSequence + 1; ++Sequence) {
 			for (const auto Limit : {0u, 1u, 17u, 137u, 512u}) {
 				const auto Read = Journal.Read({Scope, Sequence}, Limit);

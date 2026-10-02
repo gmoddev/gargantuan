@@ -82,6 +82,12 @@ namespace gargantuan {
 		ChangeCursor Cursor;
 		std::vector<ChangeRecord> Records;
 	};
+	struct ChangeRetentionWindow {
+		std::uint64_t OldestSequence = 1;
+		std::uint64_t NextSequence = 1;
+		std::size_t RetainedRecords = 0;
+		std::size_t Capacity = DefaultChangeJournalCapacity;
+	};
 
 	struct ChangeJournalProfile {
 		std::uint64_t CommitCount = 0;
@@ -98,6 +104,7 @@ namespace gargantuan {
 		void EnsureCanCommit(ObjectId scope, std::size_t count) const;
 		[[nodiscard]] std::vector<ChangeRecord> ReadSince(std::uint64_t sequence) const;
 		[[nodiscard]] ChangeCursor CreateCursor(ObjectId scope = {}) const;
+		[[nodiscard]] ChangeRetentionWindow GetRetentionWindow(ObjectId scope = {}) const;
 		[[nodiscard]] ChangeReadResult Read(ChangeCursor cursor, std::size_t maximumRecords = std::numeric_limits<std::size_t>::max()) const;
 		void SetCapacity(std::size_t capacity);
 		[[nodiscard]] std::size_t GetCapacity() const;

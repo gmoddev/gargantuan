@@ -14,6 +14,7 @@ param(
 	[Parameter(Mandatory = $true)][string]$Endpoint,
 	[ValidateSet('Local', 'Node')][string]$Provider = 'Local',
 	[switch]$ScaleWorkload,
+	[switch]$RecoveryWorkload,
 	[ValidateRange(60, 36000)][int]$ClientFrames = 1800,
 	[ValidateRange(7200, 48000)][int]$ServerTicks = 9000,
 	[string]$NodeEndpoint,
@@ -131,6 +132,9 @@ function Get-RolePins {
 
 Assert-EndpointText -Text $Endpoint
 if ($ScaleWorkload -and $ClientFrames -lt 9000) { throw 'ScaleWorkload needs at least 9000 client frames' }
+if ($RecoveryWorkload -and (-not $ScaleWorkload -or $ClientFrames -lt 18000 -or $ServerTicks -lt 19000)) {
+	throw 'RecoveryWorkload needs ScaleWorkload, 18000 client frames, and 19000 server ticks'
+}
 if ($ServerTicks -le $ClientFrames + 600) {
 	throw 'server tick bound must exceed client frames plus 600 setup/convergence ticks'
 }
@@ -161,6 +165,7 @@ $Manifest = [ordered]@{
 	RunId = $RunId; SourceCommit = $ServerPins.SourceCommit
 	Endpoint = $Endpoint; Provider = $Provider
 	ScaleWorkload = [bool]$ScaleWorkload
+	RecoveryWorkload = [bool]$RecoveryWorkload
 	ClientFrames = $ClientFrames; ServerTicks = $ServerTicks; Nonces = $Nonces
 	ServerSha256 = $ServerPins.BinarySha256
 	ServerPackageSha256 = $ServerPins.PackageSha256

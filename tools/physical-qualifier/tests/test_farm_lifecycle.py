@@ -154,6 +154,23 @@ class FarmLifecycleTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "config fields"):
             Farm.FarmLifecycle(File)
 
+    def test_recovery_runtime_bound_is_manifest_scoped(self):
+        File, Config, _ = self.Config("SERVER")
+        Config["RunTimeoutMilliseconds"] = 420000
+        File.write_text(json.dumps(Config), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "recovery runtime bound"):
+            Farm.FarmLifecycle(File)
+        Manifest = json.loads(self.Manifest.read_text())
+        Manifest["RecoveryWorkload"] = True
+        self.Manifest.write_text(json.dumps(Manifest), encoding="utf-8")
+        Config["ManifestSHA256"] = Hash(self.Manifest)
+        File.write_text(json.dumps(Config), encoding="utf-8")
+        self.assertEqual(420000, Farm.FarmLifecycle(File).Config["RunTimeoutMilliseconds"])
+        Config["RunTimeoutMilliseconds"] = 300000
+        File.write_text(json.dumps(Config), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "recovery runtime bound"):
+            Farm.FarmLifecycle(File)
+
     @unittest.skipUnless(os.name == "nt", "actual PowerShell process test is Windows-only")
     def test_actual_child_launch_barriers_results_and_cleanup(self):
         ServerFile, _, _ = self.Config("SERVER")

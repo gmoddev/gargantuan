@@ -79,8 +79,9 @@ function Assert-RunManifest {
 		'PlayerSha256', 'PlayerPackageSha256', 'ServerContentManifestSha256',
 		'PlayerContentManifestSha256', 'ServerDeploymentSha256', 'PlayerDeploymentSha256')
 	$NodeFields = @('NodeEndpoint', 'NodeRootCertificateSha256', 'NodeTokenEnvironment')
-	$Allowed = if ($Value.Provider -eq 'Node') { @($Common + $NodeFields) } else { $Common }
-	foreach ($Key in $Allowed) { if (-not $Value.Contains($Key)) { throw "manifest lacks $Key" } }
+	$Required = if ($Value.Provider -eq 'Node') { @($Common + $NodeFields) } else { $Common }
+	$Allowed = @($Required + 'RecoveryWorkload')
+	foreach ($Key in $Required) { if (-not $Value.Contains($Key)) { throw "manifest lacks $Key" } }
 	foreach ($Key in $Value.Keys) { if ($Key -notin $Allowed) { throw "manifest has unrecognized field $Key" } }
 	if ($Value.Format -cne 'GargantuanPhysicalFarmEndpoint' -or $Value.Version -isnot [long] -or
 		$Value.Version -ne 1 -or
@@ -89,6 +90,9 @@ function Assert-RunManifest {
 		$Value.RunId -cnotmatch '^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$' -or
 		$Value.SourceCommit -cnotmatch '^[0-9a-f]{40}$' -or
 		$Value.Provider -cnotin @('Local', 'Node') -or $Value.ScaleWorkload -isnot [bool] -or
+		($Value.Contains('RecoveryWorkload') -and
+			($Value.RecoveryWorkload -isnot [bool] -or ($Value.RecoveryWorkload -and
+				(-not $Value.ScaleWorkload -or $Value.ClientFrames -lt 18000 -or $Value.ServerTicks -lt 19000)))) -or
 		$Value.ClientFrames -isnot [long] -or $Value.ClientFrames -lt 60 -or
 		$Value.ClientFrames -gt 36000 -or ($Value.ScaleWorkload -and $Value.ClientFrames -lt 9000) -or
 		$Value.ServerTicks -isnot [long] -or
@@ -684,6 +688,7 @@ try {
 			'--reliable-mode', 'POOLED_SERVICE', '--content-provider', $Manifest.Provider.ToLowerInvariant())
 		if ($Manifest.ScaleWorkload) { $Arguments += @('--farm-scale-workload',
 			'--farm-admission-evidence', $FairnessPath, '--content-residency', 'on-demand') }
+		if ($Manifest.RecoveryWorkload) { $Arguments += '--farm-recovery-workload' }
 		if (-not [Net.IPAddress]::IsLoopback($Network.Address)) { $Arguments += '--allow-insecure-development-network' }
 		if ($Manifest.Provider -eq 'Node') {
 			$Arguments += @('--content-node-endpoint', $Manifest.NodeEndpoint,
@@ -719,6 +724,7 @@ try {
 				'--farm-slot', [string]$Slot, '--farm-client-nonce', [string]$Manifest.Nonces[$Slot],
 				'--max-frames', [string]$Manifest.ClientFrames)
 			if ($Manifest.ScaleWorkload) { $Arguments += '--farm-scale-workload' }
+			if ($Manifest.RecoveryWorkload) { $Arguments += '--farm-recovery-workload' }
 			if (-not [Net.IPAddress]::IsLoopback($Network.Address)) { $Arguments += '--allow-insecure-development-network' }
 			$Owner = Start-EndpointProcess -Executable $Executable -WorkingDirectory $Paths.Package `
 				-Arguments $Arguments -Label ('client-{0:D2}' -f $Slot) -OutputDirectory $Paths.Evidence `

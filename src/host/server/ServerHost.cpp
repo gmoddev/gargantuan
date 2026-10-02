@@ -135,6 +135,7 @@ namespace gargantuan::host {
 		Program.add_argument("--farm-run-id").default_value(std::string()).help("bounded qualification run identity");
 		Program.add_argument("--farm-peers").scan<'i', int>().default_value(0).help("expected actual GameSession clients (1-32)");
 		Program.add_argument("--farm-scale-workload").flag().help("run the bounded 32-client qualified scale matrix");
+		Program.add_argument("--farm-recovery-workload").flag().help("run bounded post-reload overload and recovery cases");
 		Program.add_argument("--farm-admission-evidence").default_value(std::string())
 			.help("fixed new role-local fairness evidence file for the 32-client scale run");
 		Program.add_argument("--reliable-rate").scan<'u', std::uint64_t>().default_value(std::uint64_t{0})
@@ -311,8 +312,9 @@ namespace gargantuan::host {
 		const auto FarmRunId = Program.get<std::string>("--farm-run-id");
 		const auto FarmPeers = Program.get<int>("--farm-peers");
 		const bool FarmScaleWorkload = Program.is_used("--farm-scale-workload");
+		const bool FarmRecoveryWorkload = Program.is_used("--farm-recovery-workload");
 		const auto FarmAdmissionEvidencePath = Program.get<std::string>("--farm-admission-evidence");
-		const bool FarmMode = !FarmRunId.empty() || FarmPeers != 0 || FarmScaleWorkload ||
+		const bool FarmMode = !FarmRunId.empty() || FarmPeers != 0 || FarmScaleWorkload || FarmRecoveryWorkload ||
 			!FarmAdmissionEvidencePath.empty();
 		const auto ValidFarmRunId = std::all_of(FarmRunId.begin(), FarmRunId.end(), [](char Value) {
 			return (Value >= 'A' && Value <= 'Z') || (Value >= 'a' && Value <= 'z') ||
@@ -322,6 +324,7 @@ namespace gargantuan::host {
 			FarmPeers < 1 || FarmPeers > 32 || Program.get<int>("--max-ticks") <= 0 ||
 			!BindEndpoint || SessionSmoke || StartupSmoke ||
 			(FarmScaleWorkload != !FarmAdmissionEvidencePath.empty()) ||
+			(FarmRecoveryWorkload && (!FarmScaleWorkload || Program.get<int>("--max-ticks") < 19000)) ||
 			(FarmScaleWorkload && (FarmPeers != 32 || Program.get<int>("--max-ticks") < 7200 ||
 				Residency != ContentResidencyMode::OnDemand)))) {
 			std::cerr << "[Qualification:Server] Invalid bounded farm arguments.\n";
@@ -594,7 +597,8 @@ namespace gargantuan::host {
 			std::size_t FarmReadyHighWater = 0;
 			bool FarmIdentityConflict = false;
 			std::unique_ptr<PhysicalScaleQualification> ScaleQualification;
-			if (FarmScaleWorkload) ScaleQualification = std::make_unique<PhysicalScaleQualification>(*Runtime, *Session, FarmRunId);
+			if (FarmScaleWorkload) ScaleQualification = std::make_unique<PhysicalScaleQualification>(
+				*Runtime, *Session, FarmRunId, FarmRecoveryWorkload);
 			std::unique_ptr<detail::FarmAdmissionEvidence> AdmissionEvidence;
 			if (FarmScaleWorkload) AdmissionEvidence = std::make_unique<detail::FarmAdmissionEvidence>(
 				FarmRunId, std::filesystem::path(FarmAdmissionEvidencePath));

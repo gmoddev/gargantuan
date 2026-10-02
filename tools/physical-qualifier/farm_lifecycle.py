@@ -80,6 +80,7 @@ class FarmLifecycle:
         if not isinstance(Config, dict) or Config.get("Role") not in ("SERVER", "CLIENT"):
             raise ValueError("[Qualification:FarmLifecycle] invalid installed role")
         Allowed = CONFIG_KEYS | ({NODE_KEY} if NODE_KEY in Config else set())
+        Allowed |= ({"RunTimeoutMilliseconds"} if "RunTimeoutMilliseconds" in Config else set())
         if set(Config) != Allowed:
             raise ValueError("[Qualification:FarmLifecycle] invalid installed config fields")
         if not CanonicalUuid(Config["RunId"]) or not CanonicalUuid(Config["CoordinatorRunId"]):
@@ -102,6 +103,11 @@ class FarmLifecycle:
                 not isinstance(ManifestData.get("Nonces"), list) or len(ManifestData["Nonces"]) != 32):
             raise ValueError("[Qualification:FarmLifecycle] installed run manifest mismatch")
         self.ManifestData = ManifestData
+        Recovery = ManifestData.get("RecoveryWorkload", False)
+        if type(Recovery) is not bool or (("RunTimeoutMilliseconds" in Config) != Recovery) or \
+                (Recovery and (type(Config["RunTimeoutMilliseconds"]) is not int or
+                               Config["RunTimeoutMilliseconds"] != 420000)):
+            raise ValueError("[Qualification:FarmLifecycle] invalid recovery runtime bound")
         if (ManifestData["Provider"] == "Node") != (NODE_KEY in Config):
             raise ValueError("[Qualification:FarmLifecycle] Node certificate config mismatch")
         self.Package = Path(Config["PackageRoot"]).resolve(strict=True)
@@ -149,6 +155,8 @@ class FarmLifecycle:
                 "-RunRegistryRoot", str(self.Registry)]
         if self.NodeCertificate is not None and Role == "SERVER":
             Args.extend(("-NodeRootCertificatePath", str(self.NodeCertificate)))
+        if "RunTimeoutMilliseconds" in self.Config:
+            Args.extend(("-RunTimeoutMilliseconds", str(self.Config["RunTimeoutMilliseconds"])))
         self.Output = self.OutputFile.open("xb")
         try:
             self.Error = self.ErrorFile.open("xb")

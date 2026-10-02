@@ -74,6 +74,15 @@ namespace gargantuan::network {
 		ReliableByteAdmissionMetrics ReliableAdmission;
 		std::uint64_t ReliableAdmissionPeerStates = 0;
 		std::uint64_t ReliableAdmissionLogicalBytes = 0;
+		// Read-only aggregate queue observations. A missing native value is
+		// explicit so qualification cannot mistake unavailable feedback for zero.
+		std::uint64_t SchedulerQueuedReliableBytes = 0;
+		std::uint64_t NativeQueuedReliableBytes = 0;
+		std::uint32_t NativeQueuedReliablePeersObserved = 0;
+		std::uint64_t StructuralAcceptedFeedbackBytes = 0;
+		std::uint64_t StructuralFirstSentFeedbackBytes = 0;
+		std::uint64_t StructuralAckedFeedbackBytes = 0;
+		std::uint32_t StructuralFeedbackPeersObserved = 0;
 		std::uint64_t TransportConnections = 0;
 		std::uint64_t AcceptedPeers = 0;
 		std::uint64_t ReadyPeers = 0;

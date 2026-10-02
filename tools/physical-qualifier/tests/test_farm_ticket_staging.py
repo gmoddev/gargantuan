@@ -137,6 +137,27 @@ class FarmTicketStagingTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "preflight identity mismatch"):
             Staging.Seal(self.Private, self.SpecFile)
 
+    def test_recovery_timeout_is_fixed_and_propagated_only_when_opted_in(self):
+        Manifest = json.loads(self.Manifest.read_text())
+        Manifest["RecoveryWorkload"] = True
+        Save(self.Manifest, Manifest)
+        for Role in ("SERVER", "CLIENT"):
+            File = Path(self.Spec["Roles"][Role]["PreflightSource"])
+            Row = json.loads(File.read_text())
+            Row["ManifestSha256"] = Hash(self.Manifest)
+            Save(File, Row)
+        with self.assertRaisesRegex(ValueError, "invalid SERVER role fields"):
+            self.Seal()
+        self.Spec["Roles"]["SERVER"]["RunTimeoutMilliseconds"] = 300000
+        self.Spec["Roles"]["CLIENT"]["RunTimeoutMilliseconds"] = 420000
+        with self.assertRaisesRegex(ValueError, "recovery role timeout"):
+            self.Seal()
+        self.Spec["Roles"]["SERVER"]["RunTimeoutMilliseconds"] = 420000
+        self.Seal()
+        for Role in ("SERVER", "CLIENT"):
+            Farm = json.loads((self.Private / Role / "farm-config.json").read_text())
+            self.assertEqual(420000, Farm["RunTimeoutMilliseconds"])
+
     def test_rejects_path_escape_and_command_field(self):
         Role = self.Spec["Roles"]["SERVER"]
         Role["TicketPath"] = str(self.Root / "outside" / "ticket.json")

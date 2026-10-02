@@ -147,10 +147,27 @@ try {
 	foreach ($Role in @('Server', 'Clients')) {
 		$Root = if ($Role -eq 'Server') { $ServerRoot } else { $ClientRoot }
 		$Samples = if ($Role -eq 'Server') { 2 } else { 32 }
+		$Address = if ($Role -eq 'Server') { '10.253.3.2' } else { '10.253.3.1' }
+		@(
+			[pscustomobject]@{ RunId = $RunId; Role = $Role; Provider = 'Local'; HostName = 'HostPC';
+				InterfaceIndex = 7; InterfaceMacAddress = 'AA-BB-CC-DD-EE-FF'; InterfaceAddress = $Address;
+				InterfaceLinkSpeed = '10 Gbps'; Utc = $ResourceUtc;
+				SupervisorElapsedMilliseconds = 1000; SampleStartTicks = 1000000;
+				SampleEndTicks = 1000100; MonotonicFrequency = 1000000;
+				LiveOwnedProcessCount = 1; HostTotalPhysicalBytes = 17179869184;
+				HostAvailablePhysicalBytes = 8589934592 },
+			[pscustomobject]@{ RunId = $RunId; Role = $Role; Provider = 'Local'; HostName = 'HostPC';
+				InterfaceIndex = 7; InterfaceMacAddress = 'AA-BB-CC-DD-EE-FF'; InterfaceAddress = $Address;
+				InterfaceLinkSpeed = '10 Gbps'; Utc = $ResourceUtc;
+				SupervisorElapsedMilliseconds = 3000; SampleStartTicks = 3000000;
+				SampleEndTicks = 3000100; MonotonicFrequency = 1000000;
+				LiveOwnedProcessCount = 1; HostTotalPhysicalBytes = 17179869184;
+				HostAvailablePhysicalBytes = 8589934592 }
+		) | Export-Csv -LiteralPath (Join-Path $Root 'host-resources.csv') -NoTypeInformation
 		Save-Json -Path (Join-Path $Root 'result.json') -Value ([ordered]@{
 			RunId = $RunId; Role = $Role; Status = 'PASS'; Provider = 'Local'
 			Endpoint = $Manifest.Endpoint; ManifestSha256 = $ManifestSha256
-			ResourceSamples = $Samples
+			ResourceSamples = $Samples; HostResourceSamples = 2
 		})
 		Save-Index -Root $Root -RunId $RunId -Role $Role
 	}
@@ -161,6 +178,7 @@ try {
 	$Report = Get-Content -LiteralPath $ReportPath -Raw | ConvertFrom-Json
 	if ($Report.Status -ne 'INCOMPLETE' -or $Report.ProviderQualification -ne 'NOT CLAIMED' -or
 		$Report.Identity.Ready -ne 32 -or $Report.Admission.accepted -ne 8192 -or
+		$Report.ServerHostResourceSamples -ne 2 -or $Report.ClientHostResourceSamples -ne 2 -or
 		$Report.AdmissionFairnessObservation.Classification -cne 'EVIDENCE_INTEGRITY_AND_OBSERVED_TIMING_ONLY' -or
 		$Report.AdmissionFairnessObservation.MaximumObservedEligibilityToGrantMicroseconds -ne 200 -or
 		$Report.AdmissionFairnessObservation.GrantedCount -ne 1 -or
@@ -172,6 +190,14 @@ try {
 		throw 'valid role-local evidence was promoted to provider qualification or lost missing gates'
 	}
 	$OriginalFairness = [IO.File]::ReadAllText($FairnessPath)
+	$HostPath = Join-Path $ServerRoot 'host-resources.csv'
+	$OriginalHost = [IO.File]::ReadAllText($HostPath)
+	[IO.File]::WriteAllText($HostPath, $OriginalHost.Replace('AA-BB-CC-DD-EE-FF', 'AA-BB-CC-DD-EE-XX'))
+	Save-Index -Root $ServerRoot -RunId $RunId -Role 'Server'
+	Assert-Rejected -Name 'invalid sealed host identity' `
+		-ReportPath (Join-Path $TestRoot 'host-identity-report.json')
+	[IO.File]::WriteAllText($HostPath, $OriginalHost)
+	Save-Index -Root $ServerRoot -RunId $RunId -Role 'Server'
 	[IO.File]::WriteAllText($FairnessPath, $OriginalFairness.Replace("credit_eligible`tnone`t1`t1`t1`t1", "credit_eligible`tnone`t1`t1`t1`t2"))
 	Assert-Rejected -Name 'tampered immutable fairness evidence' -ReportPath (Join-Path $TestRoot 'tampered-fairness-report.json')
 	Save-Index -Root $ServerRoot -RunId $RunId -Role 'Server'
@@ -207,6 +233,10 @@ try {
 		$RoleResult.Provider = 'Node'
 		$RoleResult.ManifestSha256 = $ManifestSha256
 		Save-Json -Path $RoleResultPath -Value $RoleResult
+		$HostPath = Join-Path $Root 'host-resources.csv'
+		$HostRows = @(Import-Csv -LiteralPath $HostPath)
+		foreach ($HostRow in $HostRows) { $HostRow.Provider = 'Node' }
+		$HostRows | Export-Csv -LiteralPath $HostPath -NoTypeInformation
 		Save-Index -Root $Root -RunId $RunId -Role $RoleResult.Role
 	}
 	$NodeReportPath = Join-Path $TestRoot 'valid-node-report.json'

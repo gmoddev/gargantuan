@@ -48,6 +48,7 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 	Program.add_argument("--farm-client-nonce").scan<'u', std::uint64_t>().default_value(std::uint64_t{0})
 		.help("explicit nonzero test-only game-session client nonce");
 	Program.add_argument("--farm-scale-workload").flag().help("exit after bounded qualified scale workload completion");
+	Program.add_argument("--farm-recovery-workload").flag().help("observe bounded post-reload overload and recovery cases");
 	Program.add_argument("--allow-insecure-development-network")
 		.flag()
 		.help("allow DevelopmentLocal networking beyond loopback; authentication is not provided");
@@ -68,8 +69,9 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 	const auto FarmSlot = Program.get<int>("--farm-slot");
 	const auto FarmClientNonce = Program.get<std::uint64_t>("--farm-client-nonce");
 	const bool FarmScaleWorkload = Program.is_used("--farm-scale-workload");
+	const bool FarmRecoveryWorkload = Program.is_used("--farm-recovery-workload");
 	const bool FarmEnabled = Program.is_used("--farm-run-id") || Program.is_used("--farm-slot") ||
-		Program.is_used("--farm-client-nonce") || FarmScaleWorkload;
+		Program.is_used("--farm-client-nonce") || FarmScaleWorkload || FarmRecoveryWorkload;
 	bool FarmRunIdValid = !FarmRunId.empty() && FarmRunId.size() <= 64;
 	for (const char Character : FarmRunId)
 		FarmRunIdValid = FarmRunIdValid && ((Character >= '0' && Character <= '9') ||
@@ -81,6 +83,7 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 		 FarmClientNonce == 0 || !Program.is_used("--headless") || ClientText.empty() ||
 		 Program.get<int>("--max-frames") <= 0 || Program.get<int>("--max-frames") > 36'000 ||
 		 (FarmScaleWorkload && Program.get<int>("--max-frames") < 9000) ||
+		 (FarmRecoveryWorkload && (!FarmScaleWorkload || Program.get<int>("--max-frames") < 18000)) ||
 		 Program.is_used("--session-smoke") || Program.is_used("--startup-smoke"))) {
 		std::cerr << "GargantuanPlayer client farm arguments are invalid.\n";
 		return 2;
@@ -106,6 +109,7 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 	bool FarmPlayerReady = false;
 	bool FarmCharacterReady = false;
 	bool FarmScaleCompleted = false;
+	std::array<bool, 3> FarmRecoveryNamesObserved{};
 	constexpr std::array<std::string_view, 5> FarmScalePhases{"baseline", "load", "resident", "evict", "reload"};
 	std::size_t FarmScaleObservedPhases = 0;
 	std::string FarmScaleCurrentPhase;
@@ -261,8 +265,8 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 		const auto MaximumFrames = RequestedFrames > 0 ? RequestedFrames
 													   : (Program.is_used("--startup-smoke") ? 12 : 0);
 		const bool SessionSmoke = Program.is_used("--session-smoke");
-		if (SessionSmoke) {
-			Runtime->RenderPublishing.SetProfilingEnabled(true);
+		if (SessionSmoke) Runtime->RenderPublishing.SetProfilingEnabled(true);
+		if (SessionSmoke || FarmRecoveryWorkload) {
 			SDL_SetLogOutputFunction([](void *, int, SDL_LogPriority, const char *Message) {
 				std::cerr << Message << '\n';
 			}, nullptr);
@@ -337,7 +341,8 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 							}
 							if (*PhaseName == "complete") {
 								FarmScaleCompleted = FarmScaleObservedPhases == FarmScalePhases.size() &&
-									(FarmSlot != 0 || FarmScaleProducerPhases == FarmScalePhases.size());
+									(FarmSlot != 0 || FarmScaleProducerPhases == FarmScalePhases.size()) &&
+									(!FarmRecoveryWorkload || (FarmRecoveryNamesObserved[1] && FarmRecoveryNamesObserved[2]));
 								std::cout << "[Qualification:Client] event=scale_complete run_id=" << FarmRunId
 									<< " slot=" << FarmSlot << " nonce=" << FarmClientNonce
 									<< " observed_phases=" << FarmScaleObservedPhases
@@ -450,6 +455,41 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 								FarmScalePreviousUnexpectedEndings = UnexpectedEndings;
 								++FarmScaleProducerPhases;
 								if (!Healthy) Runtime->ProcessService->MarkExit(17);
+							}
+						}
+					}
+					if (FarmRecoveryWorkload) {
+						const auto Case = Runtime->CharacterControl->GetAttributeValue("ScaleOverloadCase");
+						if (Case) if (const auto *CaseName = std::get_if<std::string>(&*Case)) {
+							const std::size_t CaseIndex = *CaseName == "recover_structural" ? 1 :
+								*CaseName == "recover_mixed" ? 2 : 0;
+							if (CaseIndex != 0 && !FarmRecoveryNamesObserved[CaseIndex]) {
+								const auto Root = Runtime->Workspace->FindFirstChild("ScaleOverloadRegion", false);
+								std::array<std::shared_ptr<Instance>, 32> Observed{};
+								bool Complete = Root != nullptr;
+								for (std::size_t Index = 0; Complete && Index < Observed.size(); ++Index) {
+									const auto Holder = Root->FindFirstChild("part" + std::to_string(Index), false);
+									const auto Children = Holder ? Holder->GetChildren() : std::vector<std::shared_ptr<Instance>>{};
+									const auto Opportunity = Index < 16 ? 479 : 480;
+									const auto Letter = static_cast<char>('a' + (CaseIndex * 7 + Opportunity + Index) % 26);
+									Complete = Children.size() == 1 &&
+										Children.front()->GetName() == std::string(24 * 1024, Letter);
+									if (Complete) Observed[Index] = Children.front();
+								}
+								if (Complete) {
+									FarmRecoveryNamesObserved[CaseIndex] = true;
+									for (std::size_t Index = 0; Index < Observed.size(); ++Index)
+										std::cout << "[Qualification:Client] event=name_object run_id=" << FarmRunId
+											<< " slot=" << FarmSlot << " nonce=" << FarmClientNonce
+											<< " case=" << CaseName->substr(8) << " index=" << Index
+											<< " object_slot=" << Observed[Index]->GetObjectId().Slot
+											<< " object_generation=" << Observed[Index]->GetObjectId().Generation
+											<< " name_bytes=24576 letter=" << static_cast<char>('a' +
+												(CaseIndex * 7 + (Index < 16 ? 479 : 480) + Index) % 26) << '\n';
+									std::cout << "[Qualification:Client] event=names_observed run_id=" << FarmRunId
+										<< " slot=" << FarmSlot << " nonce=" << FarmClientNonce
+										<< " case=" << CaseName->substr(8) << " objects=32 steady_ns=" << FarmTimestamp() << '\n';
+								}
 							}
 						}
 					}
