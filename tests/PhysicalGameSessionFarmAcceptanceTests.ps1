@@ -38,7 +38,9 @@ function Save-ResourceRows {
 				Utc = $Now; SupervisorElapsedMilliseconds = 1000 + 2000 * $Sample
 				MonotonicTicks = 1000000 + 2000000 * $Sample + $Index
 				MonotonicFrequency = 1000000
-				WorkingSetBytes = 1000000 + 50000 * $Sample
+				WorkingSetBytes = if ($Role -eq 'Clients') {
+					1000000 + 50000 * (($Sample + $Index) % 2)
+				} else { 1000000 + 50000 * $Sample }
 				PrivateBytes = 900000 + 25000 * $Sample
 				CpuMilliseconds = 10 + 10 * $Sample
 				Threads = 4; Handles = 16
@@ -76,6 +78,13 @@ function New-RunFixture {
 	}
 	$ServerSamples = Save-ResourceRows -Root $ServerRoot -RunId $RunId -Role 'Server'
 	$ClientSamples = Save-ResourceRows -Root $ClientRoot -RunId $RunId -Role 'Clients'
+	foreach ($RoleRoot in @($ServerRoot, $ClientRoot)) {
+		$RoleName = if ($RoleRoot -eq $ServerRoot) { 'Server' } else { 'Clients' }
+		Save-Json -Path (Join-Path $RoleRoot 'result.json') -Value ([ordered]@{
+			RunId = $RunId; Role = $RoleName; Status = 'PASS'
+			AggregateWorkingSetLimitBytes = 21474836480L
+		})
+	}
 	Save-Index -Root $ServerRoot -RunId $RunId -Role 'Server'
 	Save-Index -Root $ClientRoot -RunId $RunId -Role 'Clients'
 	$Report = [ordered]@{
@@ -134,6 +143,9 @@ try {
 		$Observed.Local.Resources.Clients.Processes[0].Label -cne 'client-00' -or
 		$Observed.Node.Resources.Server.ProcessCount -ne 1 -or
 		$Observed.Local.Resources.Clients.SumOfPerProcessPeakWorkingSetBytes -ne 33600000 -or
+		$Observed.Local.Resources.Clients.CompleteSweepCount -ne 2 -or
+		$Observed.Local.Resources.Clients.CompleteSweepMaximumWorkingSetBytes -ne 32800000 -or
+		$Observed.Local.Resources.Clients.CompleteSweepLimitObservation -cne 'WITHIN_ROLE_LIMIT' -or
 		@($Observed.GateObservations | Where-Object { $_.State -eq 'NOT MEASURED' }).Count -ne 5) {
 		throw "resource/parity observation promoted a missing physical gate or lost resource evidence: status=$($Observed.Status) claim=$($Observed.Foundation3LQualification) parity=$($Observed.WorkloadPinParity.State) clients=$($Observed.Local.Resources.Clients.ProcessCount) server=$($Observed.Node.Resources.Server.ProcessCount) ws=$($Observed.Local.Resources.Clients.SumOfPerProcessPeakWorkingSetBytes) missing=$(@($Observed.GateObservations | Where-Object { $_.State -eq 'NOT MEASURED' }).Count)"
 	}
@@ -143,6 +155,43 @@ try {
 	if (-not $OverwriteRejected -or [IO.File]::ReadAllText($OutputPath) -cne $OriginalOutput) {
 		throw 'existing acceptance observation was overwritten'
 	}
+	$LimitPath = Join-Path $Node.ClientRoot 'result.json'
+	$OriginalLimit = [IO.File]::ReadAllText($LimitPath)
+	$Limited = Get-Content -LiteralPath $LimitPath -Raw | ConvertFrom-Json -AsHashtable
+	$Limited.AggregateWorkingSetLimitBytes = 32799999L
+	Save-Json -Path $LimitPath -Value $Limited
+	Save-Index -Root $Node.ClientRoot -RunId $Node.Report.RunId -Role 'Clients'
+	$Node.Report.ClientEvidenceSha256 = (Get-FileHash -LiteralPath (Join-Path $Node.ClientRoot 'evidence-sha256.json') -Algorithm SHA256).Hash.ToLowerInvariant()
+	Save-Json -Path $Node.ReportPath -Value $Node.Report
+	Assert-Rejected -Name 'complete resource sweep over role limit' -OutputPath (Join-Path $TestRoot 'over-limit.json')
+	[IO.File]::WriteAllText($LimitPath, $OriginalLimit)
+	Save-Index -Root $Node.ClientRoot -RunId $Node.Report.RunId -Role 'Clients'
+	$Node.Report.ClientEvidenceSha256 = (Get-FileHash -LiteralPath (Join-Path $Node.ClientRoot 'evidence-sha256.json') -Algorithm SHA256).Hash.ToLowerInvariant()
+	Save-Json -Path $Node.ReportPath -Value $Node.Report
+	$SamplesPath = Join-Path $Node.ClientRoot 'process-resources.csv'
+	$OriginalSamples = [IO.File]::ReadAllText($SamplesPath)
+	$Sparse = @(Import-Csv -LiteralPath $SamplesPath)
+	for ($Index = 0; $Index -lt $Sparse.Count; $Index++) {
+		$Sparse[$Index].SupervisorElapsedMilliseconds = [string](1000 + 100 * [math]::Floor($Index / 2) + 10 * ($Index % 2))
+	}
+	$Sparse | Export-Csv -LiteralPath $SamplesPath -NoTypeInformation
+	Save-Index -Root $Node.ClientRoot -RunId $Node.Report.RunId -Role 'Clients'
+	$Node.Report.ClientEvidenceSha256 = (Get-FileHash -LiteralPath (Join-Path $Node.ClientRoot 'evidence-sha256.json') -Algorithm SHA256).Hash.ToLowerInvariant()
+	Save-Json -Path $Node.ReportPath -Value $Node.Report
+	$SparseOutput = Join-Path $TestRoot 'sparse-sweeps.json'
+	Invoke-Analyzer -OutputPath $SparseOutput
+	$SparseObservation = Get-Content -LiteralPath $SparseOutput -Raw | ConvertFrom-Json
+	if ($SparseObservation.Node.Resources.Clients.CompleteSweepCount -ne 0 -or
+		$SparseObservation.Node.Resources.Clients.CompleteSweepLimitObservation -cne 'NOT_MEASURED' -or
+		@($SparseObservation.GateObservations | Where-Object {
+			$_.Gate -ceq 'Complete-sweep role-local working set within supervisor limit' -and
+			$_.State -ceq 'NOT MEASURED' }).Count -ne 1) {
+		throw 'sparse process samples falsely proved a complete-sweep resource bound'
+	}
+	[IO.File]::WriteAllText($SamplesPath, $OriginalSamples)
+	Save-Index -Root $Node.ClientRoot -RunId $Node.Report.RunId -Role 'Clients'
+	$Node.Report.ClientEvidenceSha256 = (Get-FileHash -LiteralPath (Join-Path $Node.ClientRoot 'evidence-sha256.json') -Algorithm SHA256).Hash.ToLowerInvariant()
+	Save-Json -Path $Node.ReportPath -Value $Node.Report
 	$OriginalNodeReport = [IO.File]::ReadAllText($Node.ReportPath)
 	$Node.Report.ProviderQualification = 'PASS'
 	Save-Json -Path $Node.ReportPath -Value $Node.Report

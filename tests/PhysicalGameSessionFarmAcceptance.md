@@ -11,7 +11,15 @@ hashes, distinct run IDs, and identical source, workload, binary, package,
 content, and deployment pins. It independently checks the indexed resource CSVs
 and reports per-process working-set, private-byte, thread, handle, and observed
 CPU high-water/delta. `SumOfPerProcessPeak*` is a conservative sum of separate
-process peaks, **not** a synchronized aggregate high-water. The two hosts have
+process peaks, **not** a synchronized aggregate high-water. The offline
+analyzer also groups rows bearing the same supervisor sweep timestamp,
+requires one unique row from every expected role process for a complete
+sweep, and reports the largest sum of working set and private bytes across
+complete sweeps. It checks each complete working-set sweep against the
+`AggregateWorkingSetLimitBytes` recorded in the indexed role result. A
+partial sweep is counted but never used as a 32-process aggregate. The sweep
+reads processes sequentially, so even a complete sweep is not an atomic
+simultaneous high-water or a host-memory-headroom proof. The two hosts have
 independent monotonic clocks; their CPU samples are not combined into a
 cross-host utilization percentage.
 

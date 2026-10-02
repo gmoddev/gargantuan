@@ -61,6 +61,10 @@ function Read-RoleEvidence {
 		throw "$Role run manifest does not match the reconciliation report"
 	}
 	$ResourcePath = Assert-IndexedFile -Root $Resolved -Index $Index -Name 'process-resources.csv'
+	$ResultPath = Assert-IndexedFile -Root $Resolved -Index $Index -Name 'result.json'
+	$Result = Read-BoundedJson -Path $ResultPath
+	if ($Result.RunId -cne $Report.RunId -or $Result.Role -cne $Role -or
+		$Result.Status -cne 'PASS') { throw "$Role sealed role result is invalid" }
 	$IndexedBytes = [long]0
 	foreach ($Entry in $Index.Files) {
 		if ([string]$Entry.Name -cnotmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$' -or
@@ -70,14 +74,18 @@ function Read-RoleEvidence {
 		$IndexedBytes += [long]$Entry.Bytes
 	}
 	return [pscustomobject]@{
-		Root = $Resolved; Manifest = (Read-BoundedJson -Path $ManifestPath)
+		Root = $Resolved; Manifest = (Read-BoundedJson -Path $ManifestPath); Result = $Result
 		ResourcePath = $ResourcePath; Index = $Index
 		IndexedFiles = $Index.Files.Count; IndexedBytes = $IndexedBytes
 	}
 }
 
 function Read-ResourceObservation {
-	param([string]$Path, [string]$RunId, [string[]]$ExpectedLabels, [long]$ExpectedCount)
+	param([string]$Path, [string]$RunId, [string[]]$ExpectedLabels, [long]$ExpectedCount,
+		[long]$AggregateWorkingSetLimitBytes)
+	if ($AggregateWorkingSetLimitBytes -le 0 -or $AggregateWorkingSetLimitBytes -gt 34359738368L) {
+		throw 'role-local aggregate working-set limit is invalid'
+	}
 	$Rows = @(Import-Csv -LiteralPath $Path)
 	if ($Rows.Count -ne $ExpectedCount -or $Rows.Count -gt 20000 -or
 		$Rows.Count -lt $ExpectedLabels.Count) { throw 'resource row count does not match the role receipt' }
@@ -146,9 +154,54 @@ function Read-ResourceObservation {
 		$TotalPeakWorkingSet += $PeakWorkingSet
 		$TotalPeakPrivate += $PeakPrivate
 	}
+	# All owners in one supervisor sweep share the same elapsed-millisecond
+	# stamp. Reconstruct only complete sweeps; readings within a sweep are
+	# sequential, so this is not a synchronized host-memory high-water.
+	$CompleteSweeps = 0L
+	$PartialSweeps = 0L
+	$MaximumSweepWorkingSet = [decimal]0
+	$MaximumSweepPrivate = [decimal]0
+	$MaximumSweepSkewMicroseconds = [decimal]0
+	foreach ($Batch in @($Rows | Group-Object SupervisorElapsedMilliseconds)) {
+		$BatchLabels = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+		$SweepWorkingSet = [decimal]0
+		$SweepPrivate = [decimal]0
+		$FirstTick = [long]::MaxValue
+		$LastTick = 0L
+		$Frequency = 0L
+		foreach ($Row in $Batch.Group) {
+			if (-not $BatchLabels.Add($Row.Label)) { throw 'duplicate process in one resource sweep' }
+			$SweepWorkingSet += [decimal][long]$Row.WorkingSetBytes
+			$SweepPrivate += [decimal][long]$Row.PrivateBytes
+			$Tick = [long]$Row.MonotonicTicks
+			$RowFrequency = [long]$Row.MonotonicFrequency
+			if ($Frequency -ne 0 -and $Frequency -ne $RowFrequency) {
+				throw 'resource sweep mixes monotonic clock frequencies'
+			}
+			$Frequency = $RowFrequency
+			$FirstTick = [Math]::Min($FirstTick, $Tick)
+			$LastTick = [Math]::Max($LastTick, $Tick)
+		}
+		if ($BatchLabels.Count -eq $ExpectedLabels.Count) {
+			$CompleteSweeps++
+			if ($SweepWorkingSet -gt $AggregateWorkingSetLimitBytes) {
+				throw 'complete resource sweep exceeds the role-local aggregate limit'
+			}
+			$MaximumSweepWorkingSet = [Math]::Max($MaximumSweepWorkingSet, $SweepWorkingSet)
+			$MaximumSweepPrivate = [Math]::Max($MaximumSweepPrivate, $SweepPrivate)
+			$Skew = [decimal]($LastTick - $FirstTick) * 1000000 / $Frequency
+			$MaximumSweepSkewMicroseconds = [Math]::Max($MaximumSweepSkewMicroseconds, $Skew)
+		} else { $PartialSweeps++ }
+	}
 	return [ordered]@{
 		Classification = 'ROLE_LOCAL_PROCESS_SAMPLES_ONLY'
 		SampleCount = $Rows.Count; ProcessCount = $Processes.Count
+		CompleteSweepCount = $CompleteSweeps; PartialSweepCount = $PartialSweeps
+		CompleteSweepMaximumWorkingSetBytes = [long]$MaximumSweepWorkingSet
+		CompleteSweepMaximumPrivateBytes = [long]$MaximumSweepPrivate
+		MaximumSweepSkewMicroseconds = [math]::Round($MaximumSweepSkewMicroseconds, 3)
+		AggregateWorkingSetLimitBytes = $AggregateWorkingSetLimitBytes
+		CompleteSweepLimitObservation = $(if ($CompleteSweeps -gt 0) { 'WITHIN_ROLE_LIMIT' } else { 'NOT_MEASURED' })
 		SumOfPerProcessPeakWorkingSetBytes = $TotalPeakWorkingSet
 		SumOfPerProcessPeakPrivateBytes = $TotalPeakPrivate
 		Processes = @($Processes)
@@ -179,9 +232,11 @@ function Read-ProviderRun {
 	}
 	$Labels = @(0..31 | ForEach-Object { 'client-{0:D2}' -f $_ })
 	$ServerResources = Read-ResourceObservation -Path $Server.ResourcePath -RunId $Report.RunId `
-		-ExpectedLabels @('server') -ExpectedCount ([long]$Report.ServerResourceSamples)
+		-ExpectedLabels @('server') -ExpectedCount ([long]$Report.ServerResourceSamples) `
+		-AggregateWorkingSetLimitBytes ([long]$Server.Result.AggregateWorkingSetLimitBytes)
 	$ClientResources = Read-ResourceObservation -Path $Clients.ResourcePath -RunId $Report.RunId `
-		-ExpectedLabels $Labels -ExpectedCount ([long]$Report.ClientResourceSamples)
+		-ExpectedLabels $Labels -ExpectedCount ([long]$Report.ClientResourceSamples) `
+		-AggregateWorkingSetLimitBytes ([long]$Clients.Result.AggregateWorkingSetLimitBytes)
 	return [pscustomobject]@{
 		Report = $Report; Manifest = $Manifest
 		Resources = [ordered]@{ Server = $ServerResources; Clients = $ClientResources }
@@ -230,6 +285,7 @@ $Observed = [ordered]@{
 	GateObservations = @(
 		[ordered]@{ Gate = 'Cross-provider exact workload/deployment pin parity'; State = 'MEASURED' },
 		[ordered]@{ Gate = 'Role-local bounded process sampling'; State = 'MEASURED' },
+		[ordered]@{ Gate = 'Complete-sweep role-local working set within supervisor limit'; State = $(if ($Local.Resources.Server.CompleteSweepCount -gt 0 -and $Local.Resources.Clients.CompleteSweepCount -gt 0 -and $Node.Resources.Server.CompleteSweepCount -gt 0 -and $Node.Resources.Clients.CompleteSweepCount -gt 0) { 'MEASURED' } else { 'NOT MEASURED' }); Reason = 'sequential per-process sweep; not a synchronized host memory or network headroom result' },
 		[ordered]@{ Gate = 'Role-local indexed evidence byte/file bounds'; State = 'MEASURED' },
 		[ordered]@{ Gate = 'Five-phase observation and terminal native admission conservation'; State = 'MEASURED' },
 		[ordered]@{ Gate = 'CPU, memory, network and transport headroom'; State = 'NOT MEASURED'; Reason = 'process samples alone do not establish host/network headroom or a canonical resource threshold' },
