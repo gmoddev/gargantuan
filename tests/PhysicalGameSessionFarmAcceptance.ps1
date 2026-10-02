@@ -29,7 +29,8 @@ function Import-FarmRecoveryParser {
 	$Ast = [Management.Automation.Language.Parser]::ParseFile($Path, [ref]$Tokens, [ref]$Errors)
 	if ($Errors.Count -ne 0) { throw 'canonical farm recovery parser has a syntax error' }
 	$Needed = @('Get-Fields', 'Read-SharedLogLines', 'Get-Records', 'Get-RecoveryDiagnostics',
-		'Test-RecoveryQuiescent', 'Assert-RecoveryRecords')
+		'Test-RecoveryQuiescent', 'Test-RecoveryServiceHealthy', 'Get-RecoveryUnsigned',
+		'Get-RecoveryCeilDiv', 'Assert-RecoveryQuote', 'Assert-RecoveryRecords')
 	foreach ($Function in $Ast.FindAll({ param($Node)
 		$Node -is [Management.Automation.Language.FunctionDefinitionAst]
 	}, $true)) {
@@ -41,7 +42,8 @@ foreach ($Definition in @(Import-FarmRecoveryParser)) {
 	. ([scriptblock]::Create($Definition))
 }
 foreach ($Name in @('Get-Fields', 'Read-SharedLogLines', 'Get-Records', 'Get-RecoveryDiagnostics',
-	'Test-RecoveryQuiescent', 'Assert-RecoveryRecords')) {
+	'Test-RecoveryQuiescent', 'Test-RecoveryServiceHealthy', 'Get-RecoveryUnsigned',
+	'Get-RecoveryCeilDiv', 'Assert-RecoveryQuote', 'Assert-RecoveryRecords')) {
 	if (-not (Get-Command $Name -CommandType Function -ErrorAction SilentlyContinue)) {
 		throw "canonical farm recovery parser lacks $Name"
 	}
@@ -724,8 +726,10 @@ function Read-RecoveryObservation {
 	$Cases = @($Observed.Cases)
 	if ($Cases.Count -ne 3 -or
 		(@($Cases | ForEach-Object Case) -join ',') -cne 'gameplay,structural,mixed' -or
-		$Observed.ExactRetainedWorkBytes -cne 'NOT_MEASURED' -or
-		@($Cases | Where-Object ExactRetainedWorkBytes -cne 'NOT_MEASURED').Count -ne 0) {
+		$Observed.ExactRetainedWorkBytes -isnot [long] -or
+		@($Cases | Where-Object { $_.ExactRetainedWorkBytes -isnot [long] }).Count -ne 0 -or
+		[long]$Observed.ExactRetainedWorkBytes -ne [long](@($Cases | ForEach-Object ExactRetainedWorkBytes |
+			Measure-Object -Sum).Sum)) {
 		throw 'recovery observation has invalid case or retained-work classification'
 	}
 	$Fixed = if (@($Cases | Where-Object FixedServiceRecovery -ne 'MEASURED_PASS').Count -eq 0) {
@@ -740,7 +744,7 @@ function Read-RecoveryObservation {
 		SampledJournalRetention = 'MEASURED_PASS'
 		MinimumCessationRetentionMarginRecords = [long](@($Cases | ForEach-Object MinimumRetentionMarginRecords |
 			Measure-Object -Minimum).Minimum)
-		ExactRetainedWorkBytes = 'NOT_MEASURED'; Cases = $Cases
+		ExactRetainedWorkBytes = [long]$Observed.ExactRetainedWorkBytes; Cases = $Cases
 	}
 }
 
@@ -899,8 +903,8 @@ $Observed = [ordered]@{
 		[ordered]@{ Gate = 'Full fairness, overload backpressure and journal retention margin'; State = 'NOT MEASURED'; Reason = 'terminal counters and exact-demand event waits do not prove saturated service, continuous backlog bounds, or the journal high-water margin' },
 		[ordered]@{ Gate = 'CPU, memory, network and transport headroom'; State = 'NOT MEASURED'; Reason = 'bounded host/NIC snapshots describe utilization, but no canonical CPU/memory/NIC pass percentage or concurrent packet-level reserve proof follows from those samples' },
 		[ordered]@{ Gate = 'Fixed 20-second service recovery'; State = $(if ($Local.Recovery.FixedServiceRecovery -eq 'MEASURED_PASS' -and $Node.Recovery.FixedServiceRecovery -eq 'MEASURED_PASS') { 'MEASURED_PASS' } elseif ($Local.Recovery.FixedServiceRecovery -eq 'MEASURED_FAIL' -or $Node.Recovery.FixedServiceRecovery -eq 'MEASURED_FAIL') { 'MEASURED_FAIL' } else { 'NOT MEASURED' }); Reason = 'three canonical cases per provider, replayed from indexed server/client recovery logs and matched to sealed reconciliation' },
-		[ordered]@{ Gate = 'Strict structural convergence sufficient proof'; State = $(if ($Local.Recovery.StrictConvergenceSufficientProof -eq 'MEASURED_PASS' -and $Node.Recovery.StrictConvergenceSufficientProof -eq 'MEASURED_PASS') { 'MEASURED_PASS' } else { 'NOT MEASURED' }); Reason = 'strict snapshot and client final-Name proof only; exact retained-work service bound remains unmeasured' },
-		[ordered]@{ Gate = 'Workload-derived exact structural convergence'; State = 'NOT MEASURED'; Reason = 'phase observations and final debt do not locate final accepted byte versus client observation' },
+		[ordered]@{ Gate = 'Strict structural convergence sufficient proof'; State = $(if ($Local.Recovery.StrictConvergenceSufficientProof -eq 'MEASURED_PASS' -and $Node.Recovery.StrictConvergenceSufficientProof -eq 'MEASURED_PASS') { 'MEASURED_PASS' } else { 'NOT MEASURED' }); Reason = '32-peer audited complete-message W_i, exact canonical deadline, terminal source/readers/debt, and client final-Name proof; separate fixed ordinary-service gate' },
+		[ordered]@{ Gate = 'Workload-derived exact structural convergence'; State = $(if ($Local.Recovery.StrictConvergenceSufficientProof -eq 'MEASURED_PASS' -and $Node.Recovery.StrictConvergenceSufficientProof -eq 'MEASURED_PASS' -and $Local.Recovery.ExactRetainedWorkBytes -is [long] -and $Node.Recovery.ExactRetainedWorkBytes -is [long]) { 'MEASURED_PASS' } else { 'NOT MEASURED' }); Reason = 'frozen 3J complete-message quote is audited against every post-cessation accepted frame and terminal structural conservation at its W_i-derived bound' },
 		[ordered]@{ Gate = 'Journal retention margin and overload'; State = 'NOT MEASURED'; Reason = 'final zero journal backlog lacks retained-history high-water and overload chronology' },
 		[ordered]@{ Gate = 'Sampled overload journal retention window'; State = $(if ($Local.Recovery.SampledJournalRetention -eq 'MEASURED_PASS' -and $Node.Recovery.SampledJournalRetention -eq 'MEASURED_PASS') { 'MEASURED_PASS' } else { 'NOT MEASURED' }); Reason = 'indexed opportunity and recovery samples remain within 16,384 records with nonnegative observed reader margin; transient between-sample minimum remains unmeasured' },
 		[ordered]@{ Gate = 'Full Local/Node provider parity'; State = 'NOT MEASURED'; Reason = 'application service, real TLS, exact convergence, resource headroom and capture gates remain independent' }

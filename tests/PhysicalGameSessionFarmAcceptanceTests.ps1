@@ -105,7 +105,8 @@ function Import-RecoveryParser {
 	$Ast = [Management.Automation.Language.Parser]::ParseFile($Path, [ref]$Tokens, [ref]$Errors)
 	if ($Errors.Count -ne 0) { throw 'recovery fixture parser has invalid syntax' }
 	$Needed = @('Get-Fields', 'Read-SharedLogLines', 'Get-Records', 'Get-RecoveryDiagnostics',
-		'Test-RecoveryQuiescent', 'Assert-RecoveryRecords')
+		'Test-RecoveryQuiescent', 'Test-RecoveryServiceHealthy', 'Get-RecoveryUnsigned',
+		'Get-RecoveryCeilDiv', 'Assert-RecoveryQuote', 'Assert-RecoveryRecords')
 	foreach ($Function in $Ast.FindAll({ param($Node)
 		$Node -is [Management.Automation.Language.FunctionDefinitionAst]
 	}, $true)) {
@@ -142,6 +143,7 @@ function Save-RecoveryLogs {
 		$ServerOutput.Add("[Qualification:Recovery] event=all_opportunities run=$RunId case=$Case opportunities=480 elapsed_us=8000000 tick=$($Tick + 480)")
 		$RawBytes = if ($Case -eq 'gameplay') { 0 } else { 188743680 }
 		$ServerOutput.Add("[Qualification:Recovery] event=cessation run=$RunId case=$Case tick=$($Tick + 481) monotonic_us=$(100000000 * ($CaseIndex + 1) + 8000001) journal_tail=$Tail raw_name_bytes=$RawBytes retained_high=16 minimum_retention_margin=99")
+		$ServerError.Add("[Qualification:Recovery] event=quote_capture run=$RunId case=$Case status=READY reason=none tick=$($Tick + 481)")
 		$ServerError.Add("[Qualification:Recovery] event=cessation_barrier run=$RunId case=$Case journal_tail=$Tail")
 		for ($Peer = 1; $Peer -le 32; $Peer++) {
 			$ServerError.Add("[Qualification:Recovery] event=probe_ack case=$Case peer_slot=$Peer peer_generation=1")
@@ -149,15 +151,23 @@ function Save-RecoveryLogs {
 				$ServerError.Add("[Qualification:Recovery] event=name_ack case=$Case peer_slot=$Peer peer_generation=1")
 			}
 		}
-		$Sample = "outstanding=0 active_grants=0 scheduler_queued=0 native_queued=0 native_observed=32 feedback_observed=32 accepted=100 first_sent=100 acked=100 retired=100 terminal_release=0 journal_backlog=0 materialization_backlog=0 current_tail=$Tail retained=16 margin=99 journal_failures=0"
+		for ($Peer = 1; $Peer -le 32; $Peer++) {
+			$ServerError.Add("[Qualification:Recovery] event=quote_peer run=$RunId case=$Case connection_slot=$Peer connection_generation=1 accepted_unretired_complete_bytes=0 future_complete_bytes=77 w_complete_upper_bytes=77")
+		}
+		$ServerError.Add("[Qualification:Recovery] event=quote_result run=$RunId case=$Case status=PASS w_complete_upper_bytes=2464 quoted_frames=32 audited_frames=32 audited_accepted_bytes=2464 bound_us=20470537 reason=none tick=$($Tick + 482)")
+		$Sample = "outstanding=0 active_grants=0 scheduler_queued=0 native_queued=0 native_observed=32 feedback_observed=32 accepted=100 first_sent=100 acked=100 retired=100 terminal_release=0 journal_backlog=0 materialization_backlog=0 current_tail=$Tail retained=16 oldest=1 required=100 margin=99 journal_failures=0"
 		$ServerError.Add("[Qualification:Recovery] event=sample run=$RunId case=$Case elapsed_us=19000000 $Sample")
 		$ServerError.Add("[Qualification:Recovery] event=sample run=$RunId case=$Case elapsed_us=20000001 $Sample")
-		$ServerError.Add("[Qualification:Recovery] event=reader run=$RunId case=$Case catalog=1 next_sequence=$Tail")
+		$ServerError.Add("[Qualification:Recovery] event=reader run=$RunId case=$Case catalog=1 connection_slot=0 connection_generation=0 next_sequence=$Tail prepared=0 pending_relevance=0")
 		for ($Peer = 1; $Peer -le 32; $Peer++) {
 			$ServerError.Add("[Qualification:Recovery] event=reader run=$RunId case=$Case catalog=0 connection_slot=$Peer connection_generation=1 next_sequence=$Tail prepared=0 pending_relevance=0")
 		}
-		$ServerError.Add("[Qualification:Recovery] event=strict_snapshot run=$RunId case=$Case elapsed_us=20000001 retained_work_bytes=NOT_MEASURED")
-		$ServerError.Add("[Qualification:Recovery] event=strict_deadline_barrier run=$RunId case=$Case elapsed_us=20471000")
+		$ServerError.Add("[Qualification:Recovery] event=strict_snapshot run=$RunId case=$Case elapsed_us=20000001 cessation_tail=$Tail retained_work_bytes=NOT_MEASURED")
+		$ServerError.Add("[Qualification:Recovery] event=terminal_reader run=$RunId case=$Case catalog=1 connection_slot=0 connection_generation=0 next_sequence=$Tail prepared=0 pending_relevance=0")
+		for ($Peer = 1; $Peer -le 32; $Peer++) {
+			$ServerError.Add("[Qualification:Recovery] event=terminal_reader run=$RunId case=$Case catalog=0 connection_slot=$Peer connection_generation=1 next_sequence=$Tail prepared=0 pending_relevance=0")
+		}
+		$ServerError.Add("[Qualification:Recovery] event=strict_deadline_barrier run=$RunId case=$Case elapsed_us=20471000 bound_us=20470537")
 	}
 	[IO.File]::AppendAllLines($ServerOutputPath, $ServerOutput)
 	[IO.File]::WriteAllLines((Join-Path $ServerRoot 'server.stderr.log'), $ServerError)
@@ -570,7 +580,10 @@ try {
 			$_.Gate -ceq 'Sampled overload journal retention window' -and
 			$_.State -ceq 'MEASURED_PASS' }).Count -ne 1 -or
 		$RecoveryObserved.Local.Recovery.StrictConvergenceSufficientProof -cne 'MEASURED_PASS' -or
-		$RecoveryObserved.Node.Recovery.ExactRetainedWorkBytes -cne 'NOT_MEASURED' -or
+		$RecoveryObserved.Node.Recovery.ExactRetainedWorkBytes -ne 7392 -or
+		@($RecoveryObserved.GateObservations | Where-Object {
+			$_.Gate -ceq 'Workload-derived exact structural convergence' -and
+			$_.State -ceq 'MEASURED_PASS' }).Count -ne 1 -or
 		@($RecoveryObserved.GateObservations | Where-Object {
 			$_.Gate -ceq 'Fixed 20-second service recovery' -and $_.State -ceq 'MEASURED_PASS'
 		}).Count -ne 1 -or

@@ -50,10 +50,13 @@ endpoint, and scale identity, then compares every recomputed recovery case to
 the separate reconciliation report. The fixed 20-second service-recovery gate
 is `MEASURED_PASS` only if Local and Node each pass gameplay, structural, and
 mixed service recovery. A valid failing case is reported as `MEASURED_FAIL`;
-an absent workload is `NOT MEASURED`. The strict snapshot/client final-Name
-sufficient proof is reported separately. `ExactRetainedWorkBytes` remains
-`NOT_MEASURED`, so the workload-derived exact structural-convergence deadline
-is not claimed even when that strict sufficient proof passes.
+an absent workload is `NOT MEASURED`. The fixed ordinary-service observation
+is separate from structural convergence. For each case, a frozen 3J quote is
+audited against every post-cessation accepted complete frame; the parser
+recomputes all 32 peers' exact `W_i`, the canonical workload-derived deadline,
+terminal reader/source/debt conservation, and client final-Name observation.
+Missing or divergent quote evidence fails closed. A parser fixture is not a
+physical Local or Node recovery result.
 
 The report independently re-reads the indexed Server `server.stdout.log`
 native admission receipt and `admission-fairness.tsv` timeline, then compares
@@ -92,10 +95,14 @@ the join from both providers' sealed roots and compares the complete result,
 including analyzer and parser source hashes,
 with each reconciliation. It exposes exact accepted/observed state-chain
 counts and server-local due-to-accept, forced-built-to-accept, and client-local
-receive-to-handler durations. It does not infer cross-host one-way latency,
-full per-recipient Character cadence, or full Remote recipient cadence; those gates remain
-`NOT MEASURED`. A missing legacy trace set stays unmeasured, whereas an
-incomplete or invalid set is rejected.
+receive-to-handler durations. Eight explicit server root identities bind the
+64 expected recipient relationships. When five sealed phase windows and every
+root relationship are complete, the join checks recipient-local handled gaps
+against 250 ms and authoritative state-tick deltas against 12 ticks. Ambiguous
+phase edges remain `NOT_MEASURED`; proven threshold failures are reported as
+failures. It does not infer cross-host one-way latency or full Remote recipient
+cadence. A missing legacy trace set stays unmeasured, whereas an incomplete or
+invalid set is rejected.
 
 The designated Farm32 producer (client slot 0) now emits bounded Luau-local
 Remote traces after each phase drains. The acceptance analyzer replays its
@@ -109,8 +116,8 @@ recipient service and cross-host one-way latency remain `NOT_MEASURED`.
 
 Current role-local
 evidence does **not** establish canonical CPU/memory/network headroom, fixed
-20-second recovery without the separately indexed recovery workload,
-workload-derived exact convergence timing, journal
+20-second recovery or exact convergence without the separately indexed recovery workload,
+journal
 retention margin under overload, full fairness/backpressure, or full provider
 parity. Negotiated real-TLS details remain unmeasured when the optional Node
 owned-child evidence is not supplied. Terminal zero journal backlog and zero
