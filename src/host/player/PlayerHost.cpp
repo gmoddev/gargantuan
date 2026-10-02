@@ -326,9 +326,11 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 					if (FarmScaleWorkload) {
 						const auto Beat = Runtime->CharacterControl->GetAttributeValue("ScaleCallbackBeat");
 						if (Beat) {
-							const auto *Count = std::get_if<int>(&*Beat);
-							if (!Count || *Count <= 0 || *Count % 60 != 0 ||
-								(*Count != FarmLastCallbackBeat && *Count != FarmLastCallbackBeat + 60))
+							// Luau attribute numbers are represented as doubles on the native side.
+							const auto *Count = std::get_if<double>(&*Beat);
+							if (!Count || *Count <= 0.0 ||
+								(*Count != static_cast<double>(FarmLastCallbackBeat) &&
+								 *Count != static_cast<double>(FarmLastCallbackBeat + 60)))
 								throw std::runtime_error("invalid farm callback beat sequence");
 							if (*Count != FarmLastCallbackBeat) {
 								const auto Phase = Runtime->CharacterControl->GetAttributeValue("ScaleCallbackPhase");
@@ -337,7 +339,7 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 									std::find(FarmScalePhases.begin(), FarmScalePhases.end(), std::string_view(*PhaseName)) ==
 										FarmScalePhases.end())
 									throw std::runtime_error("invalid farm callback beat phase");
-								FarmLastCallbackBeat = *Count;
+								FarmLastCallbackBeat = static_cast<int>(*Count);
 								std::cout << "[Qualification:Callback] event=beat run_id=" << FarmRunId
 									<< " slot=" << FarmSlot << " nonce=" << FarmClientNonce
 									<< " phase=" << *PhaseName
