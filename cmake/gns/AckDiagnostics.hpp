@@ -42,6 +42,21 @@ struct GargantuanAckDiagnostics {
 	// Associated datagrams, including duplicates and packets rejected by crypto.
 	// Kept independently of a grant so late duplicates remain observable.
 	std::uint64_t AssociatedReceivedPackets = 0, AssociatedReceivedUdpBytes = 0;
+	std::uint64_t StatsRequestsSent = 0, StatsImmediateSent = 0, StatsInstantaneousSent = 0, StatsLifetimeSent = 0;
+	std::uint64_t StatsRequestsReceived = 0, StatsImmediateReceived = 0, StatsInstantaneousReceived = 0;
+	std::uint64_t TracerRequestsSent = 0, FirstTracerAt = 0, FirstInstantaneousAt = 0;
+	void Stats(bool Sent, bool Request, bool Immediate, bool Instantaneous, bool Lifetime, bool Tracer) noexcept {
+		if (Sent) {
+			StatsRequestsSent += Request; StatsImmediateSent += Immediate;
+			StatsInstantaneousSent += Instantaneous; StatsLifetimeSent += Lifetime;
+			TracerRequestsSent += Tracer && Request;
+			if (Tracer && Request && !FirstTracerAt) FirstTracerAt = SteamNetworkingSocketsLib::GargantuanReliableServiceClock();
+			if (Instantaneous && !FirstInstantaneousAt) FirstInstantaneousAt = SteamNetworkingSocketsLib::GargantuanReliableServiceClock();
+		} else {
+			StatsRequestsReceived += Request; StatsImmediateReceived += Immediate;
+			StatsInstantaneousReceived += Instantaneous;
+		}
+	}
 	void Incoming(int Bytes) noexcept {
 		if (Bytes <= 0 || AssociatedReceivedPackets == UINT64_MAX ||
 			static_cast<std::uint64_t>(Bytes) > UINT64_MAX - AssociatedReceivedUdpBytes) {

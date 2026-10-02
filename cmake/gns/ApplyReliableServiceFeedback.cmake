@@ -223,6 +223,10 @@ GargantuanReplaceFeedback("\t/// Called when we close the connection locally" [=
 		if (m_senderState.GargantuanPromptFinalGrantAck && m_senderState.GargantuanFeedback.ActiveAttributedRetirementToken && Bytes > 0)
 			m_senderState.GargantuanPromptWire.Charge(Bytes, 48);
 	}
+	void GargantuanRecordStats(bool Sent, bool Request, bool Immediate, bool Instantaneous, bool Lifetime, bool Tracer) {
+		if (m_senderState.GargantuanAckTrace)
+			m_senderState.GargantuanAckTrace->Stats(Sent, Request, Immediate, Instantaneous, Lifetime, Tracer);
+	}
 	void GargantuanRecordPromptReserve(int Bytes) {
 		if (auto *Trace = m_senderState.GargantuanAckTrace.get())
 			Trace->MaximumPromptReserveBytes = std::max(Trace->MaximumPromptReserveBytes, uint64_t(Bytes));
@@ -264,6 +268,7 @@ GargantuanReplaceFeedback("\t/// Called when we close the connection locally" [=
 GargantuanWriteFeedbackSource()
 
 GargantuanReadFeedbackSource(steamnetworkingsockets_udp.h ea4f517b674eb15f367c8b443a90738bebdcfb3f892b2a59ba26829eabf4ccea)
+GargantuanReplaceFeedback("\tint m_nStatsNeed;" "\tint m_nStatsNeed;\n\tint m_nGargantuanTracerReady = 0;")
 GargantuanReplaceFeedback("\tCSteamNetworkConnectionUDP( CSteamNetworkingSockets *pSteamNetworkingSocketsInterface, ConnectionScopeLock &scopeLock );" "\tbool GargantuanIsDirectUDP() const override { return true; }\n\tCSteamNetworkConnectionUDP( CSteamNetworkingSockets *pSteamNetworkingSocketsInterface, ConnectionScopeLock &scopeLock );")
 GargantuanReplaceFeedback("\tvoid Trim( int cbHdrOutSpaceRemaining );" "\tvoid GargantuanReservePromptAck(size_t HeaderBytes, CSteamNetworkConnectionBase &Connection);\n\tvoid Trim( int cbHdrOutSpaceRemaining );")
 GargantuanWriteFeedbackSource()
@@ -271,6 +276,20 @@ GargantuanWriteFeedbackSource()
 GargantuanReadFeedbackSource(steamnetworkingsockets_udp.cpp a60888c40ea5a814485e56c1c528774d05df408130137fd909f66fc25d0aee2e)
 GargantuanReplaceFeedback("\tconst uint8 *pIn = pPkt + sizeof(*hdr);" "\t// Charge once after header/connection/state association, before decrypt can\n\t// reject a duplicate, old sequence, or crypto-invalid consumed datagram.\n\tm_connection.GargantuanRecordIncomingWire(cbPkt);\n\tconst uint8 *pIn = pPkt + sizeof(*hdr);")
 GargantuanReplaceFeedback("\tif ( SendPacketGather( 2, gather, cbSend ) )" "\t// Distinct opt-in socket failure: preserve packet-number and TrackSentStats\n\t// mutation, but never transmit a packet and then pretend it failed.\n\tif ( !m_connection.GargantuanFailSocketSend(ctx.m_bGargantuanPromptAck) && SendPacketGather( 2, gather, cbSend ) )")
+GargantuanReplaceFeedback("\t\treturn cbSend;\n\treturn 0;" [=[
+	{
+		m_connection.GargantuanRecordStats(true, (ctx.msg.flags() & ctx.msg.ACK_REQUEST_E2E) != 0,
+			(ctx.msg.flags() & ctx.msg.ACK_REQUEST_IMMEDIATE) != 0,
+			ctx.msg.stats().has_instantaneous(), ctx.msg.stats().has_lifetime(), ctx.m_nGargantuanTracerReady > 0);
+		return cbSend;
+	}
+	return 0;]=])
+GargantuanReplaceFeedback("\t// Connection quality stats?" [=[
+	m_connection.GargantuanRecordStats(false, (msgStatsIn.flags() & msgStatsIn.ACK_REQUEST_E2E) != 0,
+		(msgStatsIn.flags() & msgStatsIn.ACK_REQUEST_IMMEDIATE) != 0,
+		msgStatsIn.stats().has_instantaneous(), msgStatsIn.stats().has_lifetime(), false);
+	// Connection quality stats?]=])
+GargantuanReplaceFeedback("\tm_nFlags = nFlags;" "\tm_nGargantuanTracerReady = nReadyToSendTracer;\n\tm_nFlags = nFlags;")
 GargantuanReplaceFeedback("\t// Save time when we sent the last sequenced packet." [=[
 	if (ctx.m_bGargantuanPromptAck)
 	{
