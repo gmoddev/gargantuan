@@ -451,9 +451,10 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 								++FarmScaleProducerPhases;
 								if (!Healthy) Runtime->ProcessService->MarkExit(17);
 							}
+						}
 					}
 				}
-			if (SessionSmoke) {
+				if (SessionSmoke) {
 					const auto Metrics = Session->GetMetrics();
 					const bool CameraReady = Headless || Runtime->Workspace->GetCurrentCamera()->GetCameraType() ==
 															 Enums::CameraType::Scriptable;
