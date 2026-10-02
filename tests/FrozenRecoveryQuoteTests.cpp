@@ -158,7 +158,10 @@ void TestImmediateCancellationAndError() {
 
 StructuralReplicationConfiguration SingleRecordConfiguration() {
 	StructuralReplicationConfiguration Configuration;
-	Configuration.PeerQuantum = 1;
+	// The real baseline contains the DataModel and its Folder child. Keep that
+	// complete two-object dependency group legal; one journal record per advance
+	// still guarantees exactly one ordinary update in each reference frame.
+	Configuration.PeerQuantum = 2;
 	Configuration.MaximumJournalRecordsPerPeerTick = 1;
 	Require(Configuration.IsValid(), "single-record oracle configuration is production-legal");
 	return Configuration;
