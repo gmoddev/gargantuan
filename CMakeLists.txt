@@ -1309,6 +1309,9 @@ if(BUILD_TESTING)
 	endif()
 	if(GARGANTUAN_WITH_GNS)
 		add_test(NAME gargantuan_real_transport COMMAND gargantuan_real_transport_tests)
+		add_test(NAME gargantuan_gns_failed_send_retry_safety COMMAND gargantuan_real_transport_tests --ack-retry-safety)
+		set_tests_properties(gargantuan_gns_failed_send_retry_safety
+			PROPERTIES LABELS "networking;optional;sanitizer-safety" TIMEOUT 45 RUN_SERIAL TRUE)
 		add_test(NAME gargantuan_f1_packet_tail COMMAND gargantuan_real_transport_tests --packet-tail)
 		add_test(NAME gargantuan_f1_four_grant COMMAND gargantuan_real_transport_tests --four-grant)
 		add_test(NAME gargantuan_f1_four_grant_sanitizer_safety

@@ -39,6 +39,7 @@ struct GargantuanAckDiagnostics {
 	bool FailNextPromptSocketSend = false;
 	std::uint64_t InjectedNativeSendFailures = 0, FirstSentBytesAtInjectedFailure = 0;
 	std::uint64_t InjectedSocketSendFailures = 0;
+	std::uint64_t FailedPacketReferencesReleased = 0;
 	// Associated datagrams, including duplicates and packets rejected by crypto.
 	// Kept independently of a grant so late duplicates remain observable.
 	std::uint64_t AssociatedReceivedPackets = 0, AssociatedReceivedUdpBytes = 0;

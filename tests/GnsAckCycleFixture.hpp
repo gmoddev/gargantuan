@@ -41,7 +41,7 @@ inline void Dump(const char *Side, std::uint64_t Token, const GargantuanAckDiagn
 // This isolates ACK/polling; it does not claim to run GameSession credit/fairness.
 enum class Fault { None, NativeSendFailure, ReceiveLoss, SocketSendFailure, ReceiveDuplicate };
 inline void Observe(std::size_t Bytes, std::chrono::microseconds PollPeriod, bool Prompt = false,
-	std::uint64_t TailBudget = 0, Fault Failure = Fault::None) {
+	std::uint64_t TailBudget = 0, Fault Failure = Fault::None, bool MixedAfter = false) {
 	PairFixture Pair = StartPair({.MaximumConnections = 1, .SendRate = 18 * 1024 * 1024}, TestLimits(), true);
 	struct Cleanup { PairFixture &Value; ~Cleanup() { StopPair(Value); } } Guard{Pair};
 	struct LossCleanup {
@@ -85,10 +85,26 @@ inline void Observe(std::size_t Bytes, std::chrono::microseconds PollPeriod, boo
 			!detail::ReliableServiceFeedbackAccess::Activate(*Intent, Token, Activated) ||
 			!Pair.Server->Send(*Intent).Succeeded()) throw std::runtime_error("ACK cycle submission failed");
 		Accepted += Bytes;
+		constexpr std::size_t OrdinaryBytes = 128;
+		if (MixedAfter) {
+			auto Ordinary = MakeNetworkMessageIntent(Pair.ServerConnection, DeliveryMode::ReliableOrdered,
+				TrafficClass::ReliableApplication, std::monostate{},
+				std::vector<std::byte>(OrdinaryBytes - ReliableServiceEnvelopeBytes, std::byte{0x52}), Pair.Limits);
+			if (!Ordinary || !Pair.Server->Send(*Ordinary).Succeeded())
+				throw std::runtime_error("mixed failed-packet ordinary submission failed");
+		}
 		if (detail::GnsAckDiagnosticsAccess::PromptFinalGrantAck(*Pair.Server, Pair.ServerConnection, !Prompt))
 			throw std::runtime_error("ACK policy changed while attributed obligation is owned");
 		std::optional<detail::ReliableServiceFeedback> Final;
 		std::uint64_t ObservedRetirement = 0, ReceivedBytes = 0;
+		std::vector<std::vector<std::byte>> ReceivedPayloads;
+		auto ReceiveClient = [&] {
+			for (const auto &Event : Drain(*Pair.Client))
+				if (const auto *Message = std::get_if<ReceivedMessageEvent>(&Event)) {
+					ReceivedBytes += Message->Payload.size();
+					ReceivedPayloads.push_back(Message->Payload);
+				}
+		};
 		const auto Deadline = std::chrono::steady_clock::now() + 2s;
 		auto NextPoll = std::chrono::steady_clock::now() + PollPeriod;
 		while (std::chrono::steady_clock::now() < Deadline) {
@@ -100,8 +116,7 @@ inline void Observe(std::size_t Bytes, std::chrono::microseconds PollPeriod, boo
 				Loss.Enabled = false;
 			}
 			(void)Drain(*Pair.Server);
-			for (const auto &Event : Drain(*Pair.Client))
-				if (const auto *Message = std::get_if<ReceivedMessageEvent>(&Event)) ReceivedBytes += Message->Payload.size();
+			ReceiveClient();
 			Final = detail::ReliableServiceFeedbackAccess::Observe(*Pair.Server, Pair.ServerConnection);
 			if (!Final || !Final->CountersValid) throw std::runtime_error("ACK cycle invalid native feedback");
 			if (Final->LastAttributedRetirementToken == Token) {
@@ -109,8 +124,7 @@ inline void Observe(std::size_t Bytes, std::chrono::microseconds PollPeriod, boo
 				// Native receipt/ACK can happen after the earlier client drain and
 				// before this sender sample. Consume the already received message;
 				// do not add a latency grace period or infer delivery from ACK.
-				for (const auto &Event : Drain(*Pair.Client))
-					if (const auto *Message = std::get_if<ReceivedMessageEvent>(&Event)) ReceivedBytes += Message->Payload.size();
+				ReceiveClient();
 				break;
 			}
 		}
@@ -121,14 +135,14 @@ inline void Observe(std::size_t Bytes, std::chrono::microseconds PollPeriod, boo
 			while (std::chrono::steady_clock::now() < DuplicateDeadline) {
 				std::this_thread::sleep_for(1ms);
 				(void)Drain(*Pair.Server);
-				for (const auto &Event : Drain(*Pair.Client))
-					if (const auto *Message = std::get_if<ReceivedMessageEvent>(&Event)) ReceivedBytes += Message->Payload.size();
+				ReceiveClient();
 			}
 			Final = detail::ReliableServiceFeedbackAccess::Observe(*Pair.Server, Pair.ServerConnection);
 		}
 		if (!ObservedRetirement || !Final || Final->StructuralPayloadBytesFirstSent != Accepted ||
 			Final->StructuralPayloadBytesAcked != Accepted || Final->LastAttributedRetiredPayloadBytes != Bytes ||
-			ReceivedBytes != Bytes - ReliableServiceEnvelopeBytes || Final->PendingReliableStreamBytes != 0 ||
+			ReceivedBytes != Bytes - ReliableServiceEnvelopeBytes + (MixedAfter ? OrdinaryBytes - ReliableServiceEnvelopeBytes : 0) ||
+			Final->ReliablePayloadBytesAcked != Accepted + (MixedAfter ? Token * OrdinaryBytes : 0) || Final->PendingReliableStreamBytes != 0 ||
 			Final->SentUnackedReliableStreamBytes != 0) {
 			std::cerr << "[Network:AckCycle:ConvergenceFailure] bytes=" << Bytes << " token=" << Token
 				<< " fault=" << static_cast<int>(Failure) << " observed_retire=" << ObservedRetirement
@@ -142,6 +156,11 @@ inline void Observe(std::size_t Bytes, std::chrono::microseconds PollPeriod, boo
 			if (detail::GnsAckDiagnosticsAccess::Read(*Pair.Client, Pair.ClientConnection, Receiver)) Dump("receiver", Token, Receiver);
 			throw std::runtime_error("ACK cycle conservation/convergence failed");
 		}
+		std::vector<std::vector<std::byte>> ExpectedPayloads{
+			std::vector<std::byte>(Bytes - ReliableServiceEnvelopeBytes, std::byte{0x37})};
+		if (MixedAfter) ExpectedPayloads.emplace_back(OrdinaryBytes - ReliableServiceEnvelopeBytes, std::byte{0x52});
+		if (ReceivedPayloads != ExpectedPayloads)
+			throw std::runtime_error("failed packet changed reliable FIFO/payload identity");
 		if (!detail::GnsAckDiagnosticsAccess::Read(*Pair.Server, Pair.ServerConnection, Sender) ||
 			!detail::GnsAckDiagnosticsAccess::Read(*Pair.Client, Pair.ClientConnection, Receiver))
 			throw std::runtime_error("ACK cycle missing trace");
@@ -184,6 +203,11 @@ inline void Observe(std::size_t Bytes, std::chrono::microseconds PollPeriod, boo
 			Sender.InjectedNativeSendFailures != 0 || !Sender.FirstSentBytesAtInjectedFailure ||
 			Sender.FirstSentBytesAtInjectedFailure >= Bytes || Requests != 1))
 			throw std::runtime_error("post-bookkeeping socket failure lost or duplicated its finite obligation");
+		if ((Failure == Fault::NativeSendFailure || Failure == Fault::SocketSendFailure) &&
+			Sender.FailedPacketReferencesReleased == 0)
+			throw std::runtime_error("failed local packet retained an unreachable segment reference");
+		if (MixedAfter && Sender.FailedPacketReferencesReleased < 2)
+			throw std::runtime_error("mixed failure did not exercise both ordinary and structural packet ownership");
 		if (Failure == Fault::ReceiveDuplicate &&
 			(Receiver.AssociatedReceivedPackets <= Final->NativePacketsSent - Before->NativePacketsSent ||
 			Receiver.AssociatedReceivedUdpBytes <= Final->NativePacketBytesSent - Before->NativePacketBytesSent))
@@ -199,8 +223,10 @@ inline void Observe(std::size_t Bytes, std::chrono::microseconds PollPeriod, boo
 		std::cout << "[Network:AckCycle:Grant] bytes=" << Bytes << " token=" << Token
 			<< " prompt=" << Prompt << " requests=" << Requests << " tail_budget=" << TailBudget
 			<< " fault=" << static_cast<int>(Failure) << " failed_requests=" << FailedRequests
+			<< " mixed_ordinary=" << MixedAfter
 			<< " first_bytes_at_failed_send=" << Sender.FirstSentBytesAtInjectedFailure
 			<< " socket_send_failures=" << Sender.InjectedSocketSendFailures
+			<< " failed_packet_refs_released=" << Sender.FailedPacketReferencesReleased
 			<< " poll_us=" << PollPeriod.count() << " activated_us=" << Activated
 			<< " first_us=" << Final->StructuralLastCompletedGrantFirstSendAtMicroseconds
 			<< " complete_us=" << Final->StructuralLastCompletedGrantCompletedAtMicroseconds
@@ -230,6 +256,22 @@ inline void Observe(std::size_t Bytes, std::chrono::microseconds PollPeriod, boo
 		<< " tail_budget=" << TailBudget << " observation_us=100000"
 		<< " sender_packets=" << SenderSettled->NativePacketsSent << " sender_udp_bytes=" << SenderSettled->NativePacketBytesSent
 		<< " receiver_packets=" << ReceiverSettled->NativePacketsSent << " receiver_udp_bytes=" << ReceiverSettled->NativePacketBytesSent << '\n';
+}
+
+inline bool RunRetrySafety() {
+	try {
+		// Scheduling delay is injected deliberately. These cases assert native
+		// lifetime/accounting/FIFO only, never a physical or wall-time F1 PASS.
+		Observe(393652, 1000us, true, 1348, Fault::NativeSendFailure);
+		Observe(393652, 1000us, true, 1348, Fault::SocketSendFailure);
+		Observe(393652, 1000us, true, 1348, Fault::NativeSendFailure, true);
+		Observe(393652, 1000us, true, 1348, Fault::SocketSendFailure, true);
+		Observe(393652, 1000us, true, 1348, Fault::ReceiveLoss);
+		Observe(393652, 1000us, true, 1348, Fault::ReceiveDuplicate);
+		return true;
+	} catch (const std::exception &Error) {
+		std::cerr << "[Network:AckRetrySafety] FAIL " << Error.what() << '\n'; return false;
+	}
 }
 
 inline bool Run(bool Prompt = false, std::uint64_t TailBudget = 0) {

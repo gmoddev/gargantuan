@@ -110,6 +110,17 @@ GargantuanReplaceFeedback("\t\t// We have potentially transfered ownership of so
 			m_senderState.GargantuanAckTrace->Record(GargantuanAckDiagnostics::PromptRequestFailed,
 				helper.UsecNow(), m_senderState.GargantuanFeedback.ActiveAttributedRetirementToken, 0);
 		// We have potentially transfered ownership of some reliable messages]=])
+GargantuanReplaceFeedback("\t\tSNP_QueueReliableSegmentsForRetry( helper.m_insertInflightPkt.second, 0, \"Send fail\" );" [=[
+		SNP_QueueReliableSegmentsForRetry( helper.m_insertInflightPkt.second, 0, "Send fail" );
+		// This local packet will never enter the in-flight map. Drop its segment
+		// references after establishing retry ownership. A zero-ref retry segment
+		// remains in the native retry list; RemoveRefCountReliableSegment only
+		// destroys an ACKED zero-ref segment. The next send takes its own ref.
+		for (uint16 SegmentHandle : helper.InFlightPkt().m_vecReliableSegments) {
+			m_senderState.RemoveRefCountReliableSegment(SegmentHandle);
+			if (m_senderState.GargantuanAckTrace)
+				++m_senderState.GargantuanAckTrace->FailedPacketReferencesReleased;
+		}]=])
 GargantuanReplaceFeedback("\t\t\t\t\t\t// The most common case (hopefully): the segment is currently in flight" "\t\t\t\t\t\tm_senderState.GargantuanFeedback.AckSegment(cbSeg, relSeg.m_hStatusOrRetry == SNPSendReliableSegment_t::k_nStatus_Acked);\n\n\t\t\t\t\t\t// The most common case (hopefully): the segment is currently in flight")
 GargantuanReplaceFeedback("pInFlightSeg->m_hStatusOrRetry = SNPSendReliableSegment_t::k_nStatus_InFlight;" "pInFlightSeg->m_hStatusOrRetry = SNPSendReliableSegment_t::k_nStatus_InFlight;\n\t\t\t\tpInFlightSeg->m_bGargantuanEverSent = false;")
 GargantuanReplaceFeedback("\t// We sent a packet.  Track it" [=[

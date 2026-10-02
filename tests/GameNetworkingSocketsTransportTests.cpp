@@ -253,6 +253,8 @@ int main(int ArgumentCount, char **Arguments) {
 	TestFarmClockCapture();
 	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--ack-cycle")
 		return GnsAckCycleFixture::Run() ? 0 : 1;
+	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--ack-retry-safety")
+		return GnsAckCycleFixture::RunRetrySafety() ? 0 : 1;
 	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--ack-funded-compatibility")
 		return GnsFundedAckCompatibilityFixture::Run() ? 0 : 1;
 	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--ack-funded-four-grant")

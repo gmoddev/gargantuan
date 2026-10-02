@@ -234,21 +234,26 @@ inline void FundedMixedGrant() {
 inline void TinySplitByOrdinaryPacketOccupancy() {
 	std::size_t SplitCases = 0;
 	// Bounded packet-boundary sweep, not a synthetic segment counter. The preceding
-	// ordinary Reliable message is followed immediately by production NoNagle.
-	// Different native framing/header states may place one boundary differently.
-	for (const std::size_t PrefixBytes : {std::size_t{1072}, std::size_t{1088}, std::size_t{1104}, std::size_t{1120}}) {
+	// ordinary Reliable messages are followed immediately by production NoNagle.
+	// One reliable segment caps at1137 including its private header and leaves
+	// enough packet headroom for77B. Two separately bounded ordinary messages can
+	// consume that headroom, exercising actual packet occupancy rather than
+	// confusing the reliable-segment cap with the plaintext-packet capacity.
+	for (const std::size_t SecondPrefixBytes : {std::size_t{48}, std::size_t{64}, std::size_t{80}, std::size_t{96}, std::size_t{112}}) {
 		OwnedPair Owner; auto &Pair = Owner.Pair; StartObserver(Pair);
-		constexpr std::uint64_t Token = 9, Bytes = 77;
+		constexpr std::uint64_t Token = 9, Bytes = 77, PrefixBytes = 1072;
 		auto Ordinary = Intent(Pair, TrafficClass::ReliableApplication, PrefixBytes, std::byte{0x61});
+		auto SecondOrdinary = Intent(Pair, TrafficClass::ReliableApplication, SecondPrefixBytes, std::byte{0x63});
 		auto Tiny = Intent(Pair, TrafficClass::StructuralReplication, Bytes, std::byte{0x62}, Token);
 		Require(Access::Attribute(Tiny, Token), "tiny grant attribution failed");
 		const auto Before = ReadWire(Pair);
 		Require(Access::Activate(Tiny, Token, Now()), "tiny grant activation failed");
-		Send(Pair, Ordinary); Send(Pair, Tiny);
-		const auto Result = Complete(Pair, Before, PrefixBytes + Bytes, Bytes, Token);
+		Send(Pair, Ordinary); Send(Pair, SecondOrdinary); Send(Pair, Tiny);
+		const auto Result = Complete(Pair, Before, PrefixBytes + SecondPrefixBytes + Bytes, Bytes, Token);
 		Require(Requests(Result.Sender, Token) == 0 && !Result.Sender.PromptFinalWireAllowed,
 			"multi-packet tiny grant must not bypass the funded-wire predicate");
-		ExactPayloads(Pair, {Payload(PrefixBytes, std::byte{0x61}), Payload(Bytes, std::byte{0x62})});
+		ExactPayloads(Pair, {Payload(PrefixBytes, std::byte{0x61}), Payload(SecondPrefixBytes, std::byte{0x63}),
+			Payload(Bytes, std::byte{0x62})});
 		const auto &Final = Result.AtAck.Sender;
 		std::uint64_t NativeBytes = 0;
 		for (std::uint32_t Index = 0; Index < Final.LastCompletedStructuralSegmentEventCount; ++Index)
@@ -261,6 +266,9 @@ inline void TinySplitByOrdinaryPacketOccupancy() {
 			++SplitCases;
 		}
 		Print("tiny-mixed-boundary", Result, Token);
+		std::cout << "[Network:FundedAckCompatibility] ordinary_prefix_bytes=" << PrefixBytes
+			<< " second_prefix_bytes=" << SecondPrefixBytes << " tiny_bytes=" << Bytes
+			<< " tiny_segments=" << Final.LastCompletedStructuralSegmentEventCount << '\n';
 	}
 	Require(SplitCases > 0, "native boundary sweep did not exercise a tiny grant split by ordinary traffic");
 	std::cout << "[Network:FundedAckCompatibility] tiny_split_cases=" << SplitCases << " result=PASS\n";
