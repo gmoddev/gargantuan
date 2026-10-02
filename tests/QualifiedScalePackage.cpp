@@ -77,6 +77,8 @@ namespace {
 		Require(Filesystem::is_directory(PlayerRuntime) && Filesystem::is_directory(ServerRuntime),
 			"Qualified scale runtime distributions are unavailable");
 		Filesystem::create_directory(Output);
+		const auto ProjectRoot = Filesystem::path(GARGANTUAN_FIRST_COMPLETE_GAME_ROOT);
+		BootstrapProjectRuntimeSchema(ProjectRoot);
 
 		const auto Fixture = Output / "fixture";
 		test::WriteScalePackage(Fixture, QualifiedScaleObjects);
@@ -92,8 +94,6 @@ namespace {
 				SourceBytes.size())) == SourceEntry.Digest,
 			"Canonical scale fixture differs from the qualified 512-object/273032-byte unit");
 
-		const auto ProjectRoot = Filesystem::path(GARGANTUAN_FIRST_COMPLETE_GAME_ROOT);
-		BootstrapProjectRuntimeSchema(ProjectRoot);
 		DiskFilesystem ProjectFilesystem(ProjectRoot);
 		auto ProjectValue = Project::fromExisting(&ProjectFilesystem);
 		auto World = std::make_shared<DataModel>();
