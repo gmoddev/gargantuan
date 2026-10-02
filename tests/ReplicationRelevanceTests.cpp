@@ -144,6 +144,78 @@ namespace {
 			}
 			QuoteWorld->Destroy();
 		}
+		{
+			auto LargeWorld = std::make_shared<DataModel>();
+			std::array<std::shared_ptr<Folder>, 32> LargeObjects;
+			const ConnectionId LargeConnection{85, 19};
+			PeerRelevanceSelection LargeSelection{.RequiredObjects = {LargeWorld->GetObjectId()},
+				.DesiredObjects = {LargeWorld->GetObjectId()}};
+			for (auto &Object : LargeObjects) {
+				Object = std::make_shared<Folder>();
+				Object->SetParent(LargeWorld);
+				LargeSelection.DesiredObjects.push_back(Object->GetObjectId());
+			}
+			std::ranges::sort(LargeSelection.DesiredObjects);
+			ReplicationCoordinator LiveLarge(LargeWorld, {}, true, Configuration);
+			Check(LiveLarge.RegisterPeerPlanned(LargeConnection, ReplicationEpoch(1),
+				std::make_shared<const PeerRelevanceSelection>(LargeSelection)).Succeeded(),
+				"large frozen quote peer registers");
+			for (std::uint64_t Tick = 1; Tick != 200 && !LiveLarge.IsPlanningReady(LargeConnection); ++Tick)
+				LiveLarge.ProcessPlanning(Tick);
+			auto LargeBaseline = LiveLarge.ProducePendingBaseline(LargeConnection, 64, 200);
+			Check(LargeBaseline.Frame && LiveLarge.CommitSchedulerAcceptance(
+				LargeConnection, LargeBaseline.Frame->Sequence).Succeeded(),
+				"large frozen quote starts after an accepted baseline");
+			for (std::size_t Round = 0; Round < 20; ++Round)
+				for (std::size_t Index = 0; Index < LargeObjects.size(); ++Index)
+					LargeObjects[Index]->SetName(std::string(24 * 1024,
+						static_cast<char>('a' + (Round + Index) % 26)));
+			auto LargeQuote = LiveLarge.CaptureFrozenQuote(Error);
+			Check(LargeQuote && Error.empty(), "large Name history is captured at cessation");
+			if (LargeQuote) {
+				const auto Limit = MaximumReliableServiceGroupBytes - ReliableServiceEnvelopeBytes;
+				const std::map<ConnectionId, std::size_t> Limits{{LargeConnection, Limit}};
+				runtime_detail::WorkSample QuoteWork{};
+				std::uint64_t LiveBytes = 0, QuotedBytes = 0;
+				std::size_t Frames = 0, EmptySteps = 0;
+				bool Complete = false;
+				for (std::size_t StepIndex = 0; StepIndex < 2048; ++StepIndex) {
+					const auto BeforeLag = LargeQuote->GetJournalLag(LargeConnection);
+					network::FrozenJournalQuoteStep FrozenStep;
+					{
+						runtime_detail::WorkCapture Capture(&QuoteWork);
+						FrozenStep = LargeQuote->AdvanceFrozenJournalQuote(Limits);
+					}
+					Check(FrozenStep.Error.empty(), "large frozen quote step has no error");
+					if (FrozenStep.Complete) {
+						Complete = true;
+						break;
+					}
+					const auto LiveFrame = LiveLarge.ProduceIncremental(LargeConnection,
+						Configuration.PeerQuantum, Limit, Configuration.MaximumJournalRecordsPerPeerTick, Limit);
+					Check(static_cast<bool>(FrozenStep.Frame) == static_cast<bool>(LiveFrame.Frame),
+						"frozen and copied live journal agree on frame/no-frame progress");
+					Check(LargeQuote->GetJournalLag(LargeConnection) < BeforeLag,
+						"every frozen quote step advances its bounded journal cursor");
+					if (!FrozenStep.Frame || !LiveFrame.Frame) { ++EmptySteps; continue; }
+					Check(FrozenStep.Frame->Connection == LargeConnection &&
+						FrozenStep.Frame->Sequence == LiveFrame.Frame->Sequence &&
+						FrozenStep.Frame->CompleteBytes == LiveFrame.EncodedFrame.size() + ReliableServiceEnvelopeBytes &&
+						FrozenStep.Frame->Fingerprint == detail::ExactCandidateFingerprint(LiveFrame.EncodedFrame),
+						"every frozen frame matches copied live encoding, identity, and complete bytes");
+					Check(LiveLarge.CommitSchedulerAcceptance(LargeConnection, LiveFrame.Frame->Sequence).Succeeded(),
+						"copied live reference commits the same frame sequence");
+					LiveBytes += LiveFrame.EncodedFrame.size() + ReliableServiceEnvelopeBytes;
+					QuotedBytes += FrozenStep.Frame->CompleteBytes;
+					++Frames;
+				}
+				Check(Complete && LiveLarge.GetJournalLag(LargeConnection) == 0 && Frames >= 2 &&
+					EmptySteps != 0 && LiveBytes == QuotedBytes &&
+					QuoteWork.Counters[static_cast<std::size_t>(runtime_detail::WorkCounter::EncodeRetries)] != 0,
+					"large frozen quote completes after oversize retry and no-frame coalescing without changing W_i");
+			}
+			LargeWorld->Destroy();
+		}
 	}
 
 	void TestPlanningLimits() {

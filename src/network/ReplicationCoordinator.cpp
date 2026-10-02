@@ -16,6 +16,7 @@
 #include <limits>
 #include <map>
 #include <set>
+#include <span>
 #include <stdexcept>
 #include <type_traits>
 #include <vector>
@@ -1834,13 +1835,33 @@ namespace gargantuan::network {
 				? CatalogCursor.NextSequence - Peer->second.JournalCursor.NextSequence
 				: std::uint64_t{0}
 		);
-		// Reserve a geometric tail for byte-limit retries. Every copied record is
+		// Reserve a geometric tail for byte-limit retries. Every examined record is
 		// charged, including history coalesced by an accepted complete Enter.
 		const auto ReadLimit = std::min(PolicyManaged ? MaximumWireJournalRecords : MaximumTransitions,
 			(MaximumJournalRecords + 1) / 2);
-		auto Read = ReadJournal(Peer->second.JournalCursor, ReadLimit);
+		ChangeReadResult Read;
+		std::span<const ChangeRecord> Records;
+		if (FrozenQuote) {
+			// The frozen suffix is owned by this detached coordinator. Replaying a
+			// large Name journal must not deep-copy its values on every peer read or
+			// byte-limit retry; the live journal path retains its copied snapshot.
+			const auto Cursor = Peer->second.JournalCursor;
+			Read.Cursor = Cursor;
+			if (Cursor.Scope != SourceRootId || Cursor.NextSequence < FrozenJournalOldest) {
+				Read.Status = ChangeReadStatus::ResnapshotRequired;
+				Read.Cursor.NextSequence = FrozenJournalOldest;
+			} else if (ReadLimit != 0 && Cursor.NextSequence < FrozenJournalTail) {
+				const auto First = static_cast<std::size_t>(Cursor.NextSequence - FrozenJournalOldest);
+				const auto Count = std::min(ReadLimit, FrozenJournalRecords.size() - First);
+				Records = std::span<const ChangeRecord>(FrozenJournalRecords).subspan(First, Count);
+				Read.Cursor.NextSequence += Count;
+			}
+		} else {
+			Read = ReadJournal(Peer->second.JournalCursor, ReadLimit);
+			Records = std::span<const ChangeRecord>(Read.Records);
+		}
 		auto Finish = [&](ReplicationProduceResult Result) {
-			Result.JournalRecordsExamined += Read.Records.size();
+			Result.JournalRecordsExamined += Records.size();
 			return Result;
 		};
 		if (Read.Status == ChangeReadStatus::ResnapshotRequired) {
@@ -1848,14 +1869,14 @@ namespace gargantuan::network {
 			Metrics = CandidateMetrics;
 			return {{}, "Authoritative journal cursor requires a new baseline"};
 		}
-		SaturatingAdd(CandidateMetrics.StructuralTransitionsOffered, Read.Records.size());
-		if (Read.Records.empty()) return {{}, "No replication changes are available"};
+		SaturatingAdd(CandidateMetrics.StructuralTransitionsOffered, Records.size());
+		if (Records.empty()) return {{}, "No replication changes are available"};
 		if (MaximumTransitions == 0) {
 			// A saturated structural selector must not pin a prefix that cannot
 			// produce any operation. This narrow path skips non-replicated property
 			// records only; it stops before every lifecycle/replicated mutation.
 			// It uses the same shared journal read budget and never prepares a frame.
-			for (const auto &Record : Read.Records) {
+			for (const auto &Record : Records) {
 				const auto *Property = std::get_if<PropertyUpdatedChange>(&Record.Payload);
 				if (!Property || Property->Replicated) break;
 				Peer->second.JournalCursor.NextSequence = Record.Sequence + 1;
@@ -1884,17 +1905,17 @@ namespace gargantuan::network {
 		ReplicationFrame Frame{
 			ReplicationProtocolVersion, ReplicationMessageKind::Incremental, Peer->second.View.Epoch, CandidateNextSequence
 		};
-		Frame.Operations.reserve(std::min(MaximumTransitions, Read.Records.size()));
+		Frame.Operations.reserve(std::min(MaximumTransitions, Records.size()));
 		auto ProcessedCursor = Peer->second.JournalCursor;
 		std::set<ObjectId> PublishedThisFrame;
 		std::set<ObjectId> CurrentNames;
 		std::set<ObjectId> DestroyedThisFrame;
 		std::set<ObjectId> BatchPublishObjects;
-		for (const auto &Record : Read.Records)
+		for (const auto &Record : Records)
 			if (std::holds_alternative<ObjectCreatedChange>(Record.Payload) && Catalog.contains(Record.Object) &&
 				(!PolicyManaged || ReadView().RelevantObjects.contains(Record.Object)))
 				BatchPublishObjects.insert(Record.Object);
-		for (const auto &Record : Read.Records) {
+		for (const auto &Record : Records) {
 			const auto *Name = std::get_if<PropertyUpdatedChange>(&Record.Payload);
 			const bool NativeName = Name && Name->Replicated && !Name->DeclaringClassSchemaId && Name->PropertyName == "Name" &&
 				std::holds_alternative<std::string>(Name->Value);
@@ -2089,10 +2110,10 @@ namespace gargantuan::network {
 			if (MaximumTransitions == 1)
 				return Finish({{}, "Structural operation exceeds the negotiated reliable message limit"});
 			// A one-record read cannot be made smaller; its operation is atomic.
-			if (Read.Records.size() == 1)
+			if (Records.size() == 1)
 				return Finish({{}, "Structural operation exceeds the negotiated reliable message limit"});
 			return Finish(ProduceIncremental(Connection, MaximumTransitions / 2, MaximumFrameBytes,
-				MaximumJournalRecords - Read.Records.size(), AvailableFrameBytes));
+				MaximumJournalRecords - Records.size(), AvailableFrameBytes));
 		}
 		if (Encoded->size() > AvailableFrameBytes) {
 			const auto Fingerprint = EvidenceFingerprint(*Encoded);
