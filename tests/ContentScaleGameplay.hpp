@@ -86,11 +86,24 @@ if PhysicalFarm then
     local ContentObservations = {}
     local ContentObservationCount = 0
     local PhaseTick = 0
+    local ClockEpoch = 0
+    local ClockAcknowledgements = {}
+    local ClockAcknowledgementCount = 0
     local LastBroadcastTick = -60
     local LastStopTick = -60
     PhaseControl.OnServerEvent:Connect(function(Peer, Kind, Phase)
-        if Kind == "ready" then
-            if CurrentPhase then PhaseControl:FireClient(Peer.Slot, Peer.Generation, "phase", CurrentPhase) end
+        if Kind == "clock_done" and game:GetAttribute("ScaleClockActive") == true and
+            Phase == game:GetAttribute("ScaleClockEpoch") then
+            local PeerKey = tostring(Peer.Slot) .. ":" .. tostring(Peer.Generation)
+            if not ClockAcknowledgements[PeerKey] then
+                ClockAcknowledgements[PeerKey] = true
+                ClockAcknowledgementCount += 1
+                Control:SetAttribute("ScaleClockAcks", ClockAcknowledgementCount)
+            end
+        elseif Kind == "ready" then
+            if CurrentPhase and CurrentPhase ~= "calibrating" then
+                PhaseControl:FireClient(Peer.Slot, Peer.Generation, "phase", CurrentPhase)
+            end
         elseif Kind == "phase_ack" and Phase == CurrentPhase then
             local PeerKey = tostring(Peer.Slot) .. ":" .. tostring(Peer.Generation)
             if not PhaseAcknowledgements[PeerKey] then
@@ -155,6 +168,13 @@ if PhysicalFarm then
     RunService.PostSimulation:Connect(function()
         PhaseTick += 1
         local NextPhase = game:GetAttribute("ScalePhase")
+        local NextClockEpoch = game:GetAttribute("ScaleClockEpoch")
+        if type(NextClockEpoch) == "number" and NextClockEpoch ~= ClockEpoch then
+            ClockEpoch = NextClockEpoch
+            ClockAcknowledgements = {}
+            ClockAcknowledgementCount = 0
+            Control:SetAttribute("ScaleClockAcks", 0)
+        end
         local NextOverload = game:GetAttribute("ScaleOverloadCase")
         if type(NextOverload) == "string" and NextOverload ~= CurrentOverloadCase and
             (NextOverload == "gameplay" or NextOverload == "structural" or NextOverload == "mixed") then
@@ -182,7 +202,8 @@ if PhysicalFarm then
             LastBroadcastTick = PhaseTick - 60
             LastStopTick = PhaseTick - 60
         end
-        if CurrentPhase and AcknowledgementCount < 32 and PhaseTick - LastBroadcastTick >= 60 then
+        if CurrentPhase and CurrentPhase ~= "calibrating" and
+            AcknowledgementCount < 32 and PhaseTick - LastBroadcastTick >= 60 then
             LastBroadcastTick = PhaseTick
             local Ok = pcall(function() PhaseControl:FireAllClients("phase", CurrentPhase) end)
             if Ok then print(string.format("[Content:ScalePhase] event=broadcast phase=%s", CurrentPhase)) end
@@ -253,6 +274,7 @@ local PhaseControlTick = 0
 local FarmCallbackCount = 0
 local FarmCallbackPhase = nil
 local FarmCallbackPhaseCount = 0
+local FarmClockStartedEpoch = 0
 if PhaseControl then
     PhaseControl.OnClientEvent:Connect(function(Kind, Phase)
         if Kind == "phase" and type(Phase) == "string" then
@@ -459,7 +481,8 @@ RunService.PostSimulation:Connect(function()
     if PhysicalFarm then
         local CurrentPhase = Control:GetAttribute("ScalePhase")
         if CurrentPhase ~= FarmCallbackPhase then
-            if FarmCallbackPhase and FarmCallbackPhase ~= "complete" then
+            if FarmCallbackPhase and FarmCallbackPhase ~= "complete" and
+                FarmCallbackPhase ~= "calibrating" then
                 print(string.format("[Qualification:Callback] event=phase_result phase=%s callbacks=%d total=%d",
                     FarmCallbackPhase, FarmCallbackPhaseCount, FarmCallbackCount))
             end
@@ -467,7 +490,7 @@ RunService.PostSimulation:Connect(function()
             FarmCallbackPhaseCount = 0
             if CurrentPhase then Control:SetAttribute("ScaleCallbackPhase", CurrentPhase) end
         end
-        if CurrentPhase and CurrentPhase ~= "complete" then
+        if CurrentPhase and CurrentPhase ~= "complete" and CurrentPhase ~= "calibrating" then
             FarmCallbackCount += 1
             FarmCallbackPhaseCount += 1
             -- The host timestamps this sparse beat after the callback returns.
@@ -479,6 +502,33 @@ RunService.PostSimulation:Connect(function()
     end
     if PhaseControl then
         PhaseControlTick += 1
+        local ClockEpoch = game:GetAttribute("ScaleClockEpoch")
+        if game:GetAttribute("ScaleClockActive") == true and type(ClockEpoch) == "number" and
+            ClockEpoch > FarmClockStartedEpoch then
+            FarmClockStartedEpoch = ClockEpoch
+            task.spawn(function()
+                for Index = 1, 4 do
+                    local Marker = string.format("clock:%d:%d", ClockEpoch, Index)
+                    local Ok, Value = pcall(function()
+                        return Function:InvokeServerWithTimeout(2, Marker)
+                    end)
+                    if not Ok or Value ~= Marker then
+                        print(string.format("[Qualification:FarmClock] event=probe_failed epoch=%d index=%d", ClockEpoch, Index))
+                        return
+                    end
+                    task.wait(0.25)
+                end
+                for Attempt = 1, 3 do
+                    local Ok = pcall(function() PhaseControl:FireServer("clock_done", ClockEpoch) end)
+                    if Ok then
+                        print(string.format("[Qualification:FarmClock] event=client_done epoch=%d", ClockEpoch))
+                        return
+                    end
+                    task.wait(0.1)
+                end
+                print(string.format("[Qualification:FarmClock] event=ack_failed epoch=%d", ClockEpoch))
+            end)
+        end
         if not PhaseReadySent then
             PhaseReadySent = pcall(function() PhaseControl:FireServer("ready", "") end)
         end
@@ -542,7 +592,7 @@ RunService.PostSimulation:Connect(function()
             LocalPlayer.PlayerId, tostring(IsProducer), ProducerPlayerId))
     end
     local NextPhase = Control:GetAttribute("ScalePhase")
-    if PhysicalFarm and NextPhase == "complete" then return end
+    if PhysicalFarm and (NextPhase == "complete" or NextPhase == "calibrating") then return end
     if ProducerPlayerId ~= 0 and LocalPlayer.PlayerId ~= ProducerPlayerId then return end
     if not LocalPlayer.Character then return end
     if not NextPhase then return end

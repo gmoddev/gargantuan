@@ -97,6 +97,12 @@ construction; it is not mislabeled as a cadence-due sample.
 The bounded trace is analyzed after measured phases, with a 4,194,304-record
 cap, full overflow/decode accounting and no payload retention. Normative RPC
 p95/p99/max 150/250/500 ms and Event ACK/action 250 ms remain unchanged.
+The physical 32-client fixture's bounded in-band clock calibration uses the
+existing RemoteFunction echo during warmup and between-phase gaps, never as
+part of a measured phase. Its native four-timestamp exchange yields a causal
+cross-host offset interval at each probe. It is not an exact one-way latency
+measurement or a phase-long drift guarantee; see
+[the Farm32 calibration note](../../tests/PhysicalGameSessionFarmClock.md).
 Due-service percentiles describe these measured runs, not a new universal
 Character latency guarantee. Rendered/GPU visibility is not measured.
 

@@ -31,6 +31,7 @@
 #if defined(GARGANTUAN_WITH_GNS)
 #include "gargantuan/network/GameNetworkingSocketsTransport.hpp"
 #include "host/common/TransportServiceSmoke.hpp"
+#include "host/common/FarmClockCalibration.hpp"
 #endif
 #if defined(GARGANTUAN_WITH_NODE_CONTENT)
 #include "host/server/NodeContentProvider.hpp"
@@ -459,6 +460,15 @@ namespace gargantuan::host {
 					.Mode = RuntimeMode::NetworkServer,
 				}
 			);
+#if defined(GARGANTUAN_WITH_GNS)
+			std::unique_ptr<FarmClockCalibration> ClockCalibration;
+			if (FarmScaleWorkload) {
+				auto ClockRemote = World->FindFirstChild("ScaleFunction", false);
+				if (!ClockRemote) throw std::runtime_error("farm clock RemoteFunction is absent from the package");
+				ClockCalibration = std::make_unique<FarmClockCalibration>(FarmRunId, "server", -1);
+				ClockCalibration->SetTarget(ClockRemote->GetObjectId());
+			}
+#endif
 			if (IsNodeProvider) {
 				auto *Availability = Runtime->GetContentAvailability();
 				const auto Deadline = ContentBootstrapStarted + NodeBootstrapDeadline;
@@ -632,10 +642,16 @@ namespace gargantuan::host {
 									<< " monotonic_us=" << std::chrono::duration_cast<std::chrono::microseconds>(
 										std::chrono::steady_clock::now().time_since_epoch()).count() << '\n';
 						}
-					if (ScaleQualification) {
-						ScaleQualification->Step(Runtime->GetSimulationTick());
-						if (ScaleQualification->IsComplete()) Runtime->ProcessService->MarkExit(0);
-					}
+						if (ScaleQualification) {
+							ScaleQualification->Step(Runtime->GetSimulationTick());
+#if defined(GARGANTUAN_WITH_GNS)
+							if (ClockCalibration)
+								ClockCalibration->SetActive(World->GetAttributeValue(
+									"ScaleClockActive", ScriptSecurityContext::CoreTrusted()) ==
+									std::optional<WireValue>(WireValue(true)));
+#endif
+							if (ScaleQualification->IsComplete()) Runtime->ProcessService->MarkExit(0);
+						}
 					}
 					if (SessionSmoke) {
 						const auto Metrics = Session->GetMetrics();

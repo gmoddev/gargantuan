@@ -31,6 +31,7 @@
 #if defined(GARGANTUAN_WITH_GNS)
 #include "gargantuan/network/GameNetworkingSocketsTransport.hpp"
 #include "host/common/TransportServiceSmoke.hpp"
+#include "host/common/FarmClockCalibration.hpp"
 #endif
 
 using namespace gargantuan;
@@ -237,6 +238,9 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 		if (!ClientText.empty() && !Session->AttachClientRuntime(*Runtime)) {
 			throw std::runtime_error("client game-session runtime bridge failed to attach");
 		}
+		std::unique_ptr<FarmClockCalibration> ClockCalibration;
+		if (FarmScaleWorkload)
+			ClockCalibration = std::make_unique<FarmClockCalibration>(FarmRunId, "client", FarmSlot);
 		if (FarmEnabled) {
 			const auto Connection = Session->GetPrimaryConnection();
 			FarmReady = Session->GetStatus() == network::GameSessionStatus::Ready && Connection.has_value();
@@ -293,6 +297,23 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 		while (Runtime->ProcessService->Alive) {
 			const auto FrameStarted = std::chrono::steady_clock::now();
 			if (Session) (void)Session->Poll();
+#if defined(GARGANTUAN_WITH_GNS)
+			if (ClockCalibration) {
+				const bool ClockActive = World->GetAttributeValue("ScaleClockActive") ==
+					std::optional<WireValue>(WireValue(true));
+				if (ClockActive) {
+					const auto EpochValue = World->GetAttributeValue("ScaleClockEpoch");
+					const auto *Epoch = EpochValue ? std::get_if<int>(&*EpochValue) : nullptr;
+					if (!Epoch || *Epoch < 1 || *Epoch > 5)
+						throw std::runtime_error("farm clock epoch is invalid");
+					ClockCalibration->SetEpoch(*Epoch);
+					auto ClockRemote = World->FindFirstChild("ScaleFunction", false);
+					if (!ClockRemote) throw std::runtime_error("farm clock RemoteFunction is not materialized");
+					ClockCalibration->SetTarget(ClockRemote->GetObjectId());
+				}
+				ClockCalibration->SetActive(ClockActive);
+			}
+#endif
 			const auto EventServiceStarted = std::chrono::steady_clock::now();
 			HostEvent Event;
 			while (Host.PollEvent(Event)) {
@@ -397,7 +418,8 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 										<< " steady_ns=" << FarmTimestamp() << std::endl;
 									++FarmScaleObservedPhases;
 								}
-						} else if (FarmScaleObservedPhases < FarmScalePhases.size() &&
+						} else if (*PhaseName != "calibrating" &&
+								FarmScaleObservedPhases < FarmScalePhases.size() &&
 								(FarmScaleObservedPhases == 0 || *PhaseName != FarmScalePhases[FarmScaleObservedPhases - 1])) {
 								std::cout << "[Qualification:Client] event=phase_sequence_invalid run_id=" << FarmRunId
 									<< " slot=" << FarmSlot << " nonce=" << FarmClientNonce

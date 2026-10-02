@@ -59,6 +59,20 @@ namespace gargantuan::host {
 				StepOverload(Tick);
 				return;
 			}
+			if (State == Stage::Calibrating) {
+				const auto Acks = Runtime.CharacterControl->GetAttributeValue(
+					"ScaleClockAcks", ScriptSecurityContext::CoreTrusted());
+				if (Acks == std::optional<WireValue>(WireValue(static_cast<int>(PeerCount)))) {
+					std::cout << "[Qualification:FarmClock] event=calibration_complete run=" << RunId
+						<< " epoch=" << CalibrationEpoch << " count=" << PeerCount << " tick=" << Tick << '\n';
+					PublishClockState(false, Tick);
+					BeginPhase(NextPhase, Tick);
+					return;
+				}
+				if (Tick - CalibrationTick >= MaximumCalibrationTicks)
+					Fail("clock_calibration_did_not_converge", Tick);
+				return;
+			}
 			if (State == Stage::Concluding) {
 				// The final phase must reach the clients before the host closes GNS.
 				// A client may finish and disconnect during this bounded interval.
@@ -88,7 +102,7 @@ namespace gargantuan::host {
 					++ConvergedWarmupTicks;
 				else ConvergedWarmupTicks = 0;
 				if (Tick - SetupTick >= WarmupTicks && ConvergedWarmupTicks >= 2) {
-					BeginPhase(Phase::Baseline, Tick);
+					BeginCalibration(Phase::Baseline, Tick);
 					return;
 				}
 				if (Tick - SetupTick >= MaximumSetupTicks) Fail("initial_materialization_did_not_converge", Tick);
@@ -158,7 +172,8 @@ namespace gargantuan::host {
 		static constexpr std::uint64_t MaximumPhaseTicks = 1'200;
 		static constexpr std::uint64_t MaximumSetupTicks = 1'200;
 		static constexpr std::uint64_t CompletionPropagationTicks = 120;
-		enum class Stage : std::uint8_t { WaitingForPeers, Warming, Measuring,
+		static constexpr std::uint64_t MaximumCalibrationTicks = 600;
+		enum class Stage : std::uint8_t { WaitingForPeers, Warming, Calibrating, Measuring,
 			OverloadReady, OverloadOffering, OverloadOffered, OverloadRecovery,
 			Concluding, Complete };
 		enum class Phase : std::uint8_t { Baseline, Load, Resident, Evict, Reload };
@@ -172,6 +187,9 @@ namespace gargantuan::host {
 		std::uint64_t FirstTick = 0;
 		std::uint64_t SetupTick = 0;
 		std::uint64_t PhaseTick = 0;
+		std::uint64_t CalibrationTick = 0;
+		int CalibrationEpoch = 0;
+		Phase NextPhase = Phase::Baseline;
 		std::chrono::steady_clock::time_point PhaseStarted;
 		std::uint64_t ConclusionTick = 0;
 		std::uint64_t ConvergedWarmupTicks = 0;
@@ -350,6 +368,32 @@ namespace gargantuan::host {
 			std::cout << "[Qualification:Scale] event=phase_start run=" << RunId << " phase=" << Name(Value)
 				<< " tick=" << Tick << " monotonic_us=" << std::chrono::duration_cast<std::chrono::microseconds>(
 					PhaseStarted.time_since_epoch()).count() << '\n';
+		}
+
+		void PublishClockState(bool Active, std::uint64_t Tick) {
+			if (Runtime.DataModel->ApplyAttributeMutation("ScaleClockActive", WireValue(Active),
+				ScriptSecurityContext::CoreTrusted()) != MutationStatus::Success)
+				Fail("clock_state_publication_rejected", Tick);
+		}
+
+		void BeginCalibration(Phase Value, std::uint64_t Tick) {
+			if (CalibrationEpoch >= 5) Fail("clock_epoch_limit_exceeded", Tick);
+			++CalibrationEpoch;
+			NextPhase = Value;
+			CalibrationTick = Tick;
+			// Close the previous measured callback window before any probe offer.
+			if (Runtime.DataModel->ApplyAttributeMutation("ScalePhase", WireValue(std::string("calibrating")),
+				ScriptSecurityContext::CoreTrusted()) != MutationStatus::Success)
+				Fail("clock_phase_publication_rejected", Tick);
+			if (Runtime.DataModel->ApplyAttributeMutation("ScaleClockEpoch", WireValue(CalibrationEpoch),
+				ScriptSecurityContext::CoreTrusted()) != MutationStatus::Success)
+				Fail("clock_epoch_publication_rejected", Tick);
+			PublishClockState(true, Tick);
+			State = Stage::Calibrating;
+			std::cout << "[Qualification:FarmClock] event=calibration_start run=" << RunId
+				<< " epoch=" << CalibrationEpoch << " next_phase=" << Name(Value) << " tick=" << Tick
+				<< " monotonic_us=" << std::chrono::duration_cast<std::chrono::microseconds>(
+					std::chrono::steady_clock::now().time_since_epoch()).count() << '\n';
 		}
 
 		void PublishOverloadAttribute(std::string_view Key, WireValue Value, std::uint64_t Tick) {
@@ -588,20 +632,20 @@ namespace gargantuan::host {
 			if (Provider.Failures != 0) Fail("provider_failure", Tick);
 			switch (CurrentPhase) {
 			case Phase::Baseline:
-				BeginPhase(Phase::Load, Tick);
+				BeginCalibration(Phase::Load, Tick);
 				break;
 			case Phase::Load:
 				if (Provider.Acquisitions != 1 || Provider.Admissions != 1 || !Root)
 					Fail("shared_first_admission_mismatch", Tick);
 				FirstContentRoot = Root->GetObjectId();
-				BeginPhase(Phase::Resident, Tick);
+				BeginCalibration(Phase::Resident, Tick);
 				break;
 			case Phase::Resident:
-				BeginPhase(Phase::Evict, Tick);
+				BeginCalibration(Phase::Evict, Tick);
 				break;
 			case Phase::Evict:
 				if (Provider.Evictions != 1) Fail("content_eviction_mismatch", Tick);
-				BeginPhase(Phase::Reload, Tick);
+				BeginCalibration(Phase::Reload, Tick);
 				break;
 			case Phase::Reload:
 				if (Provider.Acquisitions != 1 || Provider.Admissions != 2 || !Root ||

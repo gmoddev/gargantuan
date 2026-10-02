@@ -1,6 +1,7 @@
 #include "gargantuan/network/GameNetworkingSocketsTransport.hpp"
 #include "../src/network/ReliableServiceFeedback.hpp"
 #include "../src/network/GnsServiceDiagnostics.hpp"
+#include "../src/host/common/FarmClockCalibration.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Folder.hpp"
 #include "gargantuan/classes/RemoteEvent.hpp"
@@ -188,6 +189,47 @@ namespace {
 		if (Pair.Server)
 			(void)Pair.Server->Stop({DisconnectReason::LocalShutdown, "Test server shutdown"});
 	}
+
+	void TestFarmClockCapture() {
+		const gargantuan::ObjectId Remote{123, 1};
+		auto Clock = std::make_unique<gargantuan::host::FarmClockCalibration>("test-run", "client", 0);
+		Clock->SetTarget(Remote);
+		Clock->SetEpoch(1);
+		Clock->SetActive(true);
+		Check(Clock->IsActive(), "farm clock sink activates only for a valid target");
+		RemoteMessage Request{.Kind = RemoteMessageKind::Request, .Remote = Remote,
+			.Request = RemoteRequestId(7), .Deadline = 1s,
+			.Arguments = {std::string("clock:1:1")}};
+		auto Encoded = EncodeRemoteMessage(Request);
+		Check(Encoded.has_value(), "farm clock request uses the existing Remote wire format");
+		if (Encoded) {
+			detail::GnsServiceRecord Value{.Stage = "GnsBefore", .Connection = {1, 1},
+				.Nanoseconds = 100, .Result = -1};
+			Clock->Capture(Value, *Encoded);
+			Check(Clock->Count() == 1 && Clock->At(0).Request == 7 &&
+				Clock->At(0).Epoch == 1 && Clock->At(0).Sequence == 1,
+				"farm clock captures bounded native request identity");
+			Request.Arguments = {std::string("ordinary-rpc")};
+			Encoded = EncodeRemoteMessage(Request);
+			if (Encoded) Clock->Capture(Value, *Encoded);
+			Check(Clock->Count() == 1, "farm clock ignores ordinary reliable gameplay");
+		}
+		RemoteMessage Reply{.Kind = RemoteMessageKind::Response, .Remote = Remote,
+			.Request = RemoteRequestId(8), .Arguments = {std::string("clock:1:4")}};
+		Encoded = EncodeRemoteMessage(Reply);
+		if (Encoded) {
+			detail::GnsServiceRecord Value{.Stage = "GnsReceive", .Connection = {1, 1},
+				.Nanoseconds = 200, .Result = -1};
+			Clock->Capture(Value, *Encoded);
+			Check(!Clock->IsActive(), "fourth native reply closes client observation before phase traffic");
+			Clock->SetActive(true);
+			Check(!Clock->IsActive(), "completed epoch cannot reactivate the sink");
+			Clock->SetEpoch(2);
+			Clock->SetActive(true);
+			Check(Clock->IsActive(), "next bounded calibration epoch reactivates the sink");
+		}
+		Clock->SetActive(false);
+	}
 }
 
 #include "ReliableServiceFeedbackFixture.hpp"
@@ -202,6 +244,7 @@ int main(int ArgumentCount, char **Arguments) {
 	using namespace gargantuan::network;
 	try { gargantuan::BootstrapNativeRuntimeSchema(); }
 	catch (const std::exception &Error) { std::cerr << Error.what() << '\n'; return 1; }
+	TestFarmClockCapture();
 	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--packet-tail")
 		return GnsPacketTailFixture::Run() ? 0 : 1;
 	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--four-grant")
