@@ -2170,6 +2170,7 @@ end)
 				ClientRenderer = std::make_unique<HeadlessRenderer>(Vector2(64, 64));
 				ClientRuntime = std::make_unique<Engine>(Client.GetClientDataModel(), ClientRenderer.get(), nullptr,
 					EngineProviderConfiguration{.AudioEnabled = false, .Mode = RuntimeMode::NetworkClient});
+				ClientRuntime->ProcessService->Alive = true;
 				Check(Client.AttachClientRuntime(*ClientRuntime), "speculative relevance client attaches");
 			}
 			if (ClientRuntime) ClientRuntime->Step();
@@ -2197,6 +2198,11 @@ end)
 			for (int Index = 0; Index < 500; ++Index) Step();
 			const auto StaleBefore = Client.GetMetrics().ClientCharacterStaleStatesDropped;
 			for (int Index = 0; Index < 30; ++Index) Step();
+			std::cout << "[Network:SpeculativeRelevance] stale_delta="
+				<< Client.GetMetrics().ClientCharacterStaleStatesDropped - StaleBefore
+				<< " history_overflows=" << Client.GetMetrics().ClientCharacterHistoryOverflows
+				<< " expected_epoch=" << Client.GetMetrics().ClientLastExpectedMaterializationEpoch
+				<< " received_epoch=" << Client.GetMetrics().ClientLastReceivedMaterializationEpoch << '\n';
 			Check(Server.GetMetrics().MaterializedCharacters == Before &&
 				Client.GetMetrics().ClientCharacterStaleStatesDropped == StaleBefore,
 				"Leave cancellation preserves the shared GCHR epoch and ongoing owner state service");
