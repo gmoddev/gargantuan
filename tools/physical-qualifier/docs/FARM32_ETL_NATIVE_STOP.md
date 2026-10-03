@@ -63,9 +63,15 @@ receipt identifies the archive; small original receipts remain in place.
 The source hook passes 304 qualifier tests, both PS5.1/PS7 interop-compiling
 simulations, and the legacy four-client hook simulation. Candidate build and
 eight probe self-tests pass; both instrumented Release aggregate workload modes
-pass on the worker. Exact-source hosted Windows Release and GNS sanitizer jobs
-pass; Linux Native CI remains pending at this checkpoint. The ten original
-GNS JUnit results were independently verified. No fresh F1 or provider PASS
+pass on the worker. Exact-source hosted Windows Release, Linux ASan/UBSan and
+GNS sanitizer jobs pass. Original JUnit artifacts independently verify 95
+Windows, 53 Linux and 10 GNS tests. Native dispatch `37091176350` completed at
+2026-10-03 04:19:14 UTC; GNS run `37091175492` had already passed. The source-owned
+CI and official qualified-package verifiers both return `MEASURED_PASS`.
+The retained CI index at
+`C:\Users\aiden\.codex\artifacts\f1-ci-evidence-9ae8-v1\ci-index.json`
+has SHA-256 `15e4cfb62ae667bd753ce047074fb025f24b8de4fc9358b8aed03505893476be`.
+These are CI/package results only. No fresh F1 or provider PASS
 follows from this diagnostic.
 
 ## Client drop diagnostic preparation and external action

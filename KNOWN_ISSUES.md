@@ -86,8 +86,9 @@ This closes the ordering defect, not general planning work or Foundation health.
 ## KI-006: Remaining physical pooled-service qualification
 
 2026-10-03 UTC diagnostic checkpoint: candidate `9ae8f68c2` passes the
-exact-source hosted Windows Release job and GNS sanitizer workflow; Linux
-Native CI is still pending. The installed native-stop diagnostic
+exact-source hosted Windows Release, Linux ASan/UBSan and GNS sanitizer jobs.
+Original JUnit artifacts independently verify 95 Windows, 53 Linux and 10 GNS
+tests; source-owned CI and official package verification both pass. The installed native-stop diagnostic
 `a17d3e70-d5c7-428e-afa2-2277ab550e3a` preserved every marked packet in both
 captures, but the client application missed 629 valid captured datagrams.
 The precise Windows receive-path loss remains **NOT MEASURED**. A subsequent
