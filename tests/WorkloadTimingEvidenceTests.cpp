@@ -3,6 +3,7 @@
 #include "WorkloadRemoteEvidence.hpp"
 
 #include <iostream>
+#include <memory>
 #include <sstream>
 
 int main() {
@@ -105,8 +106,9 @@ int main() {
 	Anchor.Print(AnchorText, "mixed", "FULL_RESERVATION", "BEGIN");
 	Check(AnchorText.str().find("case=mixed profile=FULL_RESERVATION boundary=BEGIN pid=") != std::string::npos,
 		"deferred anchor identifies exact case/profile boundary");
-	WorkloadRemoteEvidence Remote;
-	static_assert(sizeof(WorkloadRemoteEvidence) < 128 * 1024);
+	auto RemoteStorage = std::make_unique<WorkloadRemoteEvidence>();
+	auto &Remote = *RemoteStorage;
+	static_assert(sizeof(WorkloadRemoteEvidence) < 384 * 1024);
 	Remote.Begin(40, true, false, 48, 1000, 123);
 	Remote.Submitted(40, true, 48, 1100, 123);
 	Remote.Begin(41, false, false, 48, 1200, 123);
@@ -139,21 +141,23 @@ int main() {
 		"early case end and unobserved submission cannot be promoted to timeout or completion");
 	Remote.End(40, 53, 491793000, 123, 0, true);
 	Check(Remote.Invalid && Remote.Records[0].EndNs == 491792000, "duplicate callback cannot overwrite first terminal evidence");
-	WorkloadRemoteEvidence InvalidRemote;
+	auto InvalidRemoteStorage = std::make_unique<WorkloadRemoteEvidence>();
+	auto &InvalidRemote = *InvalidRemoteStorage;
 	InvalidRemote.Begin(1, true, false, 1, 100, 1);
 	InvalidRemote.Submitted(1, true, 2, 200, 1);
 	InvalidRemote.End(1, 1, 150, 1, 0, true);
 	Check(InvalidRemote.Invalid && !InvalidRemote.Records[0].Terminal, "callback preceding completed submission is rejected");
-	InvalidRemote = {};
+	InvalidRemote.Reset();
 	InvalidRemote.Begin(1, false, false, 1, 100, 1);
 	InvalidRemote.End(2, 2, 200, 1, -1, true);
 	Check(InvalidRemote.Invalid && !InvalidRemote.Records[0].Terminal, "unknown Remote ID cannot satisfy an outstanding operation");
-	InvalidRemote = {};
+	InvalidRemote.Reset();
 	InvalidRemote.Begin(1, true, false, 1, 100, 1);
 	InvalidRemote.Submitted(1, false, 1, 101, 1);
 	InvalidRemote.End(1, 2, 200, 1, 0, true);
 	Check(InvalidRemote.Invalid && !InvalidRemote.Records[0].Terminal, "rejected submission cannot later be claimed accepted completion");
-	WorkloadRemoteEvidence RemoteBound;
+	auto RemoteBoundStorage = std::make_unique<WorkloadRemoteEvidence>();
+	auto &RemoteBound = *RemoteBoundStorage;
 	for (std::size_t Index = 0; Index < WorkloadRemoteEvidence::Capacity; ++Index) {
 		RemoteBound.Begin(Index + 1, true, false, Index, Index * 10 + 1, 123);
 		RemoteBound.Submitted(Index + 1, true, Index, Index * 10 + 2, 123);
@@ -168,5 +172,71 @@ int main() {
 	RemoteBound.Print(RemoteBoundText, "mixed", "POOLED_SERVICE", 2002, 20003, false);
 	Check(RemoteBoundText.str().find("records=1062 capacity=1062 invalid=0 overflow=1") != std::string::npos,
 		"Remote diagnostic truncation remains explicit and bounded");
+	WorkloadSleepLedger Sleeps(123);
+	Sleeps.Begin(10, 5, 123); Sleeps.End(20, 123); // Completed before this Remote begins.
+	const auto StartSleep = Sleeps.Snapshot(100, 123);
+	Sleeps.Begin(200, 40, 123);
+	Check(!Sleeps.Snapshot(210, 123).Valid, "an endpoint inside an active measured sleep cannot claim whole-sleep attribution");
+	Sleeps.End(260, 123);
+	Sleeps.Begin(300, 0, 123); Sleeps.End(310, 123); // Already-late sleep request remains zero.
+	const auto EndSleep = Sleeps.Snapshot(500, 123);
+	Sleeps.Begin(600, 90, 123); Sleeps.End(800, 123); // Completed after this Remote ends.
+	Check(EndSleep.Valid && EndSleep.Count - StartSleep.Count == 2 &&
+		EndSleep.RequestedNs - StartSleep.RequestedNs == 40 && EndSleep.ActualNs - StartSleep.ActualNs == 70,
+		"per-Remote frozen cumulative differences contain only its two completed measured sleep intervals");
+	WorkloadEndpointCounters StartCounters{{100, 200, true, true}, {110, 220, true, true}, 90, 110, StartSleep};
+	WorkloadEndpointCounters EndCounters{{310, 10220, true, true}, {330, 10420, true, true}, 490, 510, EndSleep};
+	Remote.Reset();
+	Remote.Begin(190, true, false, 400, 100, 123, StartCounters);
+	Remote.Begin(191, false, false, 400, 120, 123, StartCounters);
+	Remote.End(191, 404, 520, 123, -1, true, EndCounters);
+	Remote.End(190, 404, 500, 123, 0, true, EndCounters);
+	Remote.Submitted(190, true, 404, 501, 123);
+	Remote.Submitted(191, true, 404, 521, 123);
+	Check(!Remote.Invalid && Remote.Records[0].Id == 190 && Remote.Records[1].Id == 191 &&
+		Remote.Records[0].StartCounters.BeforeCpu.Thread100ns == 100 &&
+		Remote.Records[0].EndCounters.Sleep.Count == EndSleep.Count,
+		"CPU/sleep endpoints stay attached to exact concurrent Remote IDs with reversed or synchronous completion");
+	const auto PrintCounters = [&](const WorkloadEndpointCounters &Begin, const WorkloadEndpointCounters &End,
+		std::uint64_t EndThread = 123, bool Terminal = true) {
+		std::ostringstream Text;
+		PrintRemoteCounters(Text, "burst-concurrent", "FULL_RESERVATION", 190, true,
+			100, 500, 123, EndThread, Terminal, Begin, End);
+		return Text.str();
+	};
+	const auto CounterText = PrintCounters(StartCounters, EndCounters);
+	Check(CounterText.find("thread_cpu_lower_100ns=200 thread_cpu_upper_100ns=230") != std::string::npos &&
+		CounterText.find("process_cpu_lower_100ns=10000 process_cpu_upper_100ns=10220") != std::string::npos,
+		"CPU endpoints yield counter bounds without clamping multicore process counters to wall time");
+	Check(CounterText.find("sleep_delta_valid=1 measured_sleep_count=2 measured_sleep_requested_ns=40 measured_sleep_actual_ns=70") != std::string::npos,
+		"exact Remote ID retains matched requested and actual sleep totals instead of unrelated phase maxima");
+	Check(PrintCounters(StartCounters, EndCounters, 999).find("thread_cpu_lower_100ns=NOT_MEASURED") != std::string::npos &&
+		PrintCounters(StartCounters, EndCounters, 123, false).find("measured_sleep_count=NOT_MEASURED") != std::string::npos,
+		"wrong callback thread or missing terminal boundary never fabricates resource attribution");
+	auto InvalidCounters = EndCounters;
+	InvalidCounters.BeforeCpu.ThreadValid = false;
+	Check(PrintCounters(StartCounters, InvalidCounters).find("thread_cpu_lower_100ns=NOT_MEASURED") != std::string::npos,
+		"unavailable endpoint CPU sample remains unmeasured");
+	InvalidCounters = EndCounters; InvalidCounters.BeforeCpu.Thread100ns = 1;
+	Check(PrintCounters(StartCounters, InvalidCounters).find("thread_cpu_lower_100ns=NOT_MEASURED") != std::string::npos,
+		"CPU rollback cannot become a zero delta");
+	InvalidCounters = EndCounters; InvalidCounters.BeforeNs = 99;
+	Check(PrintCounters(StartCounters, InvalidCounters).find("endpoint_order_valid=0") != std::string::npos,
+		"overlapping endpoint sampling envelopes invalidate resource bounds");
+	InvalidCounters = EndCounters; InvalidCounters.Sleep.Count = StartCounters.Sleep.Count;
+	Check(PrintCounters(StartCounters, InvalidCounters).find("sleep_delta_valid=0") != std::string::npos,
+		"inconsistent frozen cumulative sleep count and totals cannot pass");
+	WorkloadSleepLedger WrongSleep(123);
+	WrongSleep.Begin(10, 5, 123); WrongSleep.End(20, 999);
+	Check(!WrongSleep.Snapshot(30, 123).Valid, "foreign-thread sleep completion is invalid");
+	WorkloadSleepLedger OverflowSleep(123);
+	OverflowSleep.Completed.ActualNs = std::numeric_limits<std::uint64_t>::max();
+	OverflowSleep.Begin(10, 0, 123); OverflowSleep.End(11, 123);
+	Check(OverflowSleep.Invalid && !OverflowSleep.Snapshot(20, 123).Valid, "sleep sum overflow cannot wrap to plausible evidence");
+	const auto Zero = WorkloadCpuRange(5, 5, 5, 5, true);
+	Check(Zero && Zero->Lower100ns == 0 && Zero->Upper100ns == 0,
+		"sampled zero CPU counters remain explicit bounds, not a claim of no physical execution");
+	Check(RemoteBoundText.str().size() < 2 * 1024 * 1024,
+		"maximum bounded Remote log remains below two MiB per case");
 	return Failures == 0 ? 0 : 1;
 }

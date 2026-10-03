@@ -293,6 +293,23 @@ is subtracted from the measured RPC/Event/action latency.
 CTest prints failing output and writes JUnit results. On any failed job, the
 workflow uploads the configure log, CTest log, and JUnit file when available.
 
+Each bounded RPC/Event record also reports `RemoteResourceSpan` observations
+for that exact latency interval. CPU reads bracket each steady-clock endpoint;
+monotonic endpoint samples yield lower/upper differences in reported thread and
+process CPU counters (100 ns units). These are bounds on sampled accounting,
+not physical timing precision or proof of an infrastructure pause. Process CPU
+includes every process thread and can exceed elapsed wall time. Missing reads,
+counter rollback, mismatched threads, or invalid boundaries remain unmeasured.
+
+The fixture's same-thread cumulative sleep ledger reports only whole completed
+measured sleep windows between those endpoints, with requested and actual
+nanoseconds. Each window includes the existing measurement envelope around
+`sleep_until`; it is not a kernel wait-state measurement. Earlier/later sleeps
+are excluded, and overlapping, invalid, or overflowing observations are not
+attributed. Observation overhead remains in the original latency measurement;
+no thresholds, waits, scheduling policy, or assertion results are adjusted.
+Earlier failed runs without these endpoint samples remain unattributed.
+
 The native ACK statistics-boundary fixture retains each failed conservation,
 retirement, pending, unacked and zero-retransmission predicate separately, plus
 bounded sender/receiver ACK event records. Its combined assertion is not proof

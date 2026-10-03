@@ -1,6 +1,7 @@
 #pragma once
 
 #include "WorkloadTimingEvidence.hpp"
+#include "WorkloadRemoteSpanCounters.hpp"
 
 namespace gargantuan::test_detail {
 
@@ -16,18 +17,23 @@ struct WorkloadRemoteEvidence {
 		int TerminalStatus = -1;
 		bool Rpc = false, Recovery = false, Decided = false, Accepted = false, Terminal = false;
 		bool PayloadMatched = false;
+		WorkloadEndpointCounters StartCounters, EndCounters;
 	};
 	std::array<Record, Capacity> Records{};
 	std::size_t Count = 0;
 	bool Invalid = false, Overflow = false;
+	void Reset() noexcept {
+		for (auto &Value : Records) Value = Record{};
+		Count = 0; Invalid = false; Overflow = false;
+	}
 
 	void Begin(std::uint64_t Id, bool Rpc, bool Recovery, std::uint64_t Step,
-		std::uint64_t Ns, std::uint64_t Thread) noexcept {
+		std::uint64_t Ns, std::uint64_t Thread, const WorkloadEndpointCounters &Counters = {}) noexcept {
 		if (Overflow) return;
 		if (!Id || !Ns || (Count && Id != Records[0].Id + Count)) { Invalid = true; return; }
 		if (Count == Capacity) { Overflow = true; return; }
 		Records[Count++] = {.Id = Id, .StartStep = Step, .StartNs = Ns,
-			.StartThread = Thread, .Rpc = Rpc, .Recovery = Recovery};
+			.StartThread = Thread, .Rpc = Rpc, .Recovery = Recovery, .StartCounters = Counters};
 	}
 	[[nodiscard]] Record *Find(std::uint64_t Id) noexcept {
 		if (!Count || Id < Records[0].Id) { Invalid = true; return nullptr; }
@@ -50,7 +56,7 @@ struct WorkloadRemoteEvidence {
 		Value->SubmittedStep = Step; Value->SubmittedNs = Ns; Value->SubmittedThread = Thread;
 	}
 	void End(std::uint64_t Id, std::uint64_t Step, std::uint64_t Ns, std::uint64_t Thread,
-		int TerminalStatus, bool PayloadMatched) noexcept {
+		int TerminalStatus, bool PayloadMatched, const WorkloadEndpointCounters &Counters = {}) noexcept {
 		auto *Value = Find(Id);
 		if (!Value) return;
 		if (Value->Terminal || (Value->Decided && (!Value->Accepted || Ns < Value->SubmittedNs || Step < Value->SubmittedStep)) ||
@@ -59,6 +65,7 @@ struct WorkloadRemoteEvidence {
 		}
 		Value->Terminal = true; Value->EndStep = Step; Value->EndNs = Ns; Value->EndThread = Thread;
 		Value->TerminalStatus = TerminalStatus; Value->PayloadMatched = PayloadMatched;
+		Value->EndCounters = Counters;
 	}
 	void Print(std::ostream &Output, std::string_view Case, std::string_view Profile,
 		std::uint64_t ObservedStep, std::uint64_t ObservedNs, bool Deadline) const {
@@ -75,6 +82,8 @@ struct WorkloadRemoteEvidence {
 				<< " accepted=" << Value.Accepted << " terminal=" << Value.Terminal << " end_step=" << Value.EndStep
 				<< " end_ns=" << Value.EndNs << " end_tid=" << Value.EndThread << " terminal_status=" << Value.TerminalStatus
 				<< " payload_matched=" << Value.PayloadMatched << " observed_step=" << ObservedStep << " observed_ns=" << ObservedNs << '\n';
+			PrintRemoteCounters(Output, Case, Profile, Value.Id, Value.Rpc, Value.StartNs, Value.EndNs,
+				Value.StartThread, Value.EndThread, Value.Terminal, Value.StartCounters, Value.EndCounters);
 		}
 	}
 };
