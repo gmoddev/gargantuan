@@ -29,6 +29,9 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <Windows.h>
+// Keep the Win32 alias from rewriting Gargantuan's filesystem method names
+// in translation units that include this diagnostic before DiskFilesystem.
+#undef CreateDirectory
 #include <fcntl.h>
 #include <io.h>
 #include <share.h>
