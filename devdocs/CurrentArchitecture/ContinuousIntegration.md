@@ -211,10 +211,12 @@ establish a wait reason, change the workload or replace wall-clock acceptance.
 
 Ordinary qualifying push/PR and default dispatch retain the complete Windows
 CTest/tooling matrix and all five unchanged standalone workloads. The fixed
-`Aggregate32Structural` scheduler case replaces only the original fifth
-`--reliable-workload-32-structural` invocation, exactly once. Its owned bounded
+`Full` scheduler case wraps the third `--reliable-workload` invocation and
+`Aggregate32Structural` wraps the fifth `--reliable-workload-32-structural`
+invocation, each exactly once in its original logical order. Their owned bounded
 ETL, decoded events, child logs, metadata and cleanup evidence are always
-retained. The four other logical invocations, dependent Linux and GNS gates
+retained when reached. Commands one, two and four remain direct; all five
+logical invocations, dependent Linux and GNS gates
 remain mandatory. Helper compilation and noncapture self-tests precede this
 qualification. Original child failure remains failure; capture, loss, clock
 coverage or cleanup failure also prevents qualification. No request clock,
@@ -236,6 +238,28 @@ anchors. Retained maxima or a long low-CPU span alone do not establish the cause
 of a failed RPC. Scheduler attribution requires overlapping request-linked
 evidence; neither waiting nor ready-thread time is subtracted from latency.
 Earlier failed runs remain failed, including those without this evidence.
+
+The bounded Full diagnostic preserves original nonzero child exits and stops
+the gate, even when an ordered failed-case evidence prefix is retained.
+The always-run artifact upload preserves both Full and aggregate raw sets plus
+the fixed helper and workload binaries; a command-three failure may leave the
+later aggregate set absent because that workload was never started.
+
+Full offline coverage requires the bounded actual scheduler CSV, the original
+ordered eight case anchor pairs for a successful child, and complete bounded
+RPC/Event and action chronologies joined to original endpoint/resource records.
+A failed child can retain only a complete ordered case prefix. Phase maxima are
+sampled evidence rather than complete operation coverage. Pending endpoints use
+the existing post-END-anchor observation; action native thread identity and raw
+CPU brackets are not measured per action. Retention does not imply native PASS,
+causal attribution, a timing discount, or a change to any performance gate.
+The final post-anchor observation is bounded by the measured child-exit QPC.
+MSVC's steady nanoseconds use `floor(QPC × 10^9 / frequency)`; the validator
+checks that relation against both measured case-anchor brackets. The difference
+of two floors is at most the ceiling of their difference, so the conservative
+upper observation bound uses the earliest END QPC and an exact integer ceiling.
+This is clock-conversion uncertainty, not added latency slack. It asserts no
+unmeasured hosted compiler-source pin or arbitrary global clock offset.
 
 The manual `scheduler_trace` input enables one bounded Windows scheduler
 diagnostic around the existing FULL `--reliable-workload` invocation. This

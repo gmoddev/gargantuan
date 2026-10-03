@@ -6,6 +6,8 @@ import math
 from pathlib import Path
 
 CSV_FIELDS = 'Qpc,Processor,Opcode,Version,HeaderPid,HeaderTid,NewTid,OldTid,TargetTid,TargetPid,OldWaitReason,OldWaitMode,OldState,ReadyAdjustReason,ReadyAdjustIncrement,ReadyFlags'.split(',')
+FULL_CASES = ('small', 'upper', 'burst-concurrent', 'mixed', 'gameplay-overload',
+              'structural-overload', 'mixed-overload', 'recovery')
 
 
 def Validate(Metadata, Stdout, Case="Full", CsvPath=None):
@@ -61,6 +63,26 @@ def Validate(Metadata, Stdout, Case="Full", CsvPath=None):
         if len(Pair) == 2:
             Require(Pair[0]["qpc_after"] <= Pair[1]["qpc_before"] and Pair[0]["steady_ns"] <= Pair[1]["steady_ns"], "case clock order invalid")
     Extra = {}
+    if Case == "Full":
+        try:
+            Require([(Value.get('case'), Value.get('boundary')) for Value in Anchors] ==
+                    [(Name, Boundary) for Name in FULL_CASES[:len(ByCase)] for Boundary in ('BEGIN', 'END')]
+                    and 0 < len(ByCase) <= len(FULL_CASES), 'Full anchors are not a complete ordered case prefix')
+            Require(type(Metadata.get('ChildExitCode')) is int and
+                    (Metadata['ChildExitCode'] != 0 or tuple(ByCase) == FULL_CASES),
+                    'successful Full workload must retain all eight cases')
+            Require(Metadata.get('WorkloadArguments') == ['--reliable-workload'],
+                    'Full workload arguments differ from fixed third command')
+            Previous = None
+            for Pair in ByCase.values():
+                if Previous is not None and len(Pair) == len(Previous) == 2:
+                    Require(Previous[-1]['qpc_after'] <= Pair[0]['qpc_before'] and
+                            Previous[-1]['steady_ns'] <= Pair[0]['steady_ns'], 'Full case clocks overlap')
+                Previous = Pair
+            Extra = ValidateSchedulerCsv(Metadata, CsvPath, '--reliable-workload')
+            Extra.update(ValidateFullEvidence(Metadata, Stdout, ByCase))
+        except (OSError, ValueError, KeyError, TypeError, UnicodeError) as Error:
+            Errors.append('Full coverage: ' + str(Error))
     if Case == "Aggregate32Structural":
         try:
             Expected = ("aggregate-baseline", "aggregate-overload", "aggregate-recovery")
@@ -103,6 +125,10 @@ def Validate(Metadata, Stdout, Case="Full", CsvPath=None):
 
 
 def ValidateAggregateCsv(Metadata, CsvPath):
+    return ValidateSchedulerCsv(Metadata, CsvPath, '--reliable-workload-32-structural')
+
+
+def ValidateSchedulerCsv(Metadata, CsvPath, Argument):
     def Need(Value, Message):
         if not Value:
             raise ValueError(Message)
@@ -140,7 +166,195 @@ def ValidateAggregateCsv(Metadata, CsvPath):
     Need(Count == Metadata['DecodedRows'] and Switches > 0 and Readies > 0, "main scheduler rows incomplete")
     Need(FirstMain == Metadata['MainFirstQpc'] and LastMain == Metadata['MainLastQpc'], "main coverage metadata differs from raw CSV")
     return {'SchedulerCsvRows': Count, 'MainSwitchRows': Switches, 'MainReadyRows': Readies,
-            'FixedWorkloadArgument': '--reliable-workload-32-structural'}
+            'FixedWorkloadArgument': Argument}
+
+
+def ValidateFullEvidence(Metadata, Stdout, Arms):
+    """Retain original endpoint joins; neither recompute gates nor attribute waits."""
+    def Need(Value, Message):
+        if not Value:
+            raise ValueError(Message)
+
+    def Number(Row, Name):
+        Value = Row[Name]
+        Need(Value.isascii() and Value.isdigit() and len(Value) <= 20 and int(Value) <= 2**64 - 1,
+             'invalid integer ' + Name)
+        return int(Value)
+
+    def Duration(Row, Name, Optional=False):
+        if Optional and Row[Name] == 'NOT_MEASURED':
+            Unknown.add(Name)
+            return
+        Value = float(Row[Name])
+        Need(math.isfinite(Value) and Value >= 0, 'invalid duration ' + Name)
+
+    Labels = {'ReliableGameplay': 1, 'RemoteChronology': 1, 'RemoteSpan': 1062,
+              'RemoteResourceSpan': 1062, 'ActionChronology': 1, 'ActionSpan': 29,
+              'WorkloadCpu': 9, 'WorkloadPhaseSpan': 9}
+    Need(len(Stdout.encode('utf-8')) <= 32 * 1024 * 1024, 'Full stdout cap')
+    Rows, Unknown = {Name: {} for Name in Arms}, set()
+    for Line in Stdout.splitlines():
+        Prefix, Separator, Tail = Line.partition('] ')
+        Label = Prefix.removeprefix('[Qualification:')
+        if Label not in Labels:
+            continue
+        Parts = [Part.split('=', 1) for Part in Tail.split()]
+        Need(Separator and len(Line) <= 8192 and all(len(Part) == 2 and len(Part[1]) <= 1024 for Part in Parts),
+             'bounded Full evidence fields')
+        Row = dict(Parts)
+        Need(len(Row) == len(Parts) and Row.get('case') in Arms, 'Full evidence duplicate field/unanchored case')
+        if Label not in ('ReliableGameplay', 'WorkloadCpu'):
+            Need(Row.get('profile') == 'FULL_RESERVATION', 'Full evidence profile mismatch')
+        Values = Rows[Row['case']].setdefault(Label, [])
+        Values.append(Row)
+        Need(len(Values) <= Labels[Label], 'Full evidence row cap')
+
+    RemoteCount = ActionCount = Pending = 0
+    LastRemote = LastAction = 0
+    for Index, (Name, Pair) in enumerate(Arms.items()):
+        Need(len(Pair) == 2, 'Full anchor pair incomplete')
+        Begin, End = Pair[0]['steady_ns'], Pair[1]['steady_ns']
+        NextBegin = list(Arms.values())[Index + 1][0]['steady_ns'] if Index + 1 < len(Arms) else None
+        # MSVC steady_ns=floor(QPC*1e9/F); verify the measured anchor brackets
+        # agree before using this clock relation. For q in the END bracket,
+        # floor(B*1e9/F)-floor(q*1e9/F) <= ceil((B-q_before)*1e9/F).
+        # The earliest bracket and integer ceiling are conservative conversion
+        # uncertainty, not a moved latency endpoint or a service allowance.
+        Frequency = Metadata['QpcFrequency']
+        Exit = Metadata['AfterChildExitQpc']
+        Need(type(Frequency) is int and Frequency > 0 and type(Exit) is int and
+             Exit >= Pair[1]['qpc_after'], 'Full child-exit clock boundary invalid')
+        for Anchor in Pair:
+            Need(Anchor['qpc_before'] * 1_000_000_000 // Frequency <= Anchor['steady_ns'] <=
+                 Anchor['qpc_after'] * 1_000_000_000 // Frequency, 'Full measured steady/QPC anchor mapping differs')
+        ExitTicks = Exit - Pair[1]['qpc_before']
+        ObservationLimit = End + (ExitTicks * 1_000_000_000 + Frequency - 1) // Frequency
+        if NextBegin is not None:
+            ObservationLimit = min(ObservationLimit, NextBegin)
+        Data = Rows[Name]
+        for Label, Capacity in (('RemoteChronology', 1062), ('ActionChronology', 29)):
+            Header = Data.get(Label, [])
+            Need(len(Header) == 1 and Header[0]['invalid'] == Header[0]['overflow'] == '0' and
+                 Number(Header[0], 'capacity') == Capacity, Label + ' missing/invalid/overflow')
+        Summaries = Data.get('ReliableGameplay', [])
+        Need(len(Summaries) == 1, 'Full summary missing/duplicate')
+        Summary = Summaries[0]
+        Spans, Resources = {}, {}
+        for Label, Target in (('RemoteSpan', Spans), ('RemoteResourceSpan', Resources)):
+            for Row in Data.get(Label, []):
+                Id = Number(Row, 'id')
+                Need(Id > 0 and Id not in Target and Row['kind'] in ('RPC', 'EVENT'), 'Full remote identity duplicate/invalid')
+                Target[Id] = Row
+        Count = Number(Data['RemoteChronology'][0], 'records')
+        Need(Count <= 1062 and len(Spans) == Count and Spans.keys() == Resources.keys(), 'Full remote/resource coverage differs')
+        if Count:
+            First = min(Spans)
+            Need(First == LastRemote + 1 and set(Spans) == set(range(First, First + Count)), 'Full remote IDs dropped/reused')
+            LastRemote = First + Count - 1
+        Completed = {'RPC': 0, 'EVENT': 0}
+        Rejected = KnownErrors = 0
+        Observations = set()
+        for Id, Span in Spans.items():
+            Resource = Resources[Id]
+            for Field in ('kind', 'start_ns', 'end_ns', 'start_tid', 'end_tid', 'terminal'):
+                Need(Span[Field] == Resource[Field], 'Full remote/resource endpoints differ')
+            Start, Submitted, Finished, Observed = (Number(Span, Field) for Field in
+                                                  ('start_ns', 'submitted_ns', 'end_ns', 'observed_ns'))
+            Observations.add(Observed)
+            Need(Begin <= Start <= End <= Observed <= ObservationLimit and
+                 Number(Span, 'start_tid') == Metadata['ChildMainTid'], 'Full original start/observation boundary invalid')
+            Need(Begin <= Number(Resource, 'start_sample_before_ns') <= Start <=
+                 Number(Resource, 'start_sample_after_ns') <= End, 'Full original start bracket invalid')
+            Need(Span['accepted'] in ('0', '1') and Span['terminal'] in ('0', '1') and
+                 Span['recovery_probe'] in ('0', '1'), 'Full remote boolean invalid')
+            Steps = [Number(Span, Field) for Field in ('start_step', 'submitted_step', 'end_step')]
+            Need(Number(Span, 'observed_step') >= max(Steps), 'Full remote observation step reversed')
+            Outcome = Span['outcome']
+            Need(Outcome in ('TERMINAL', 'REJECTED', 'MISSING_AT_SERVICE_DEADLINE', 'MISSING_AT_CASE_END',
+                             'SUBMISSION_NOT_OBSERVED'), 'Full remote outcome invalid')
+            if Outcome != 'SUBMISSION_NOT_OBSERVED':
+                Need(Start <= Submitted <= End and Number(Span, 'submitted_tid') == Metadata['ChildMainTid'] and
+                     Steps[1] >= Steps[0], 'Full original submission boundary invalid')
+            if Span['terminal'] == '1':
+                Need(Span['accepted'] == '1' and Outcome == 'TERMINAL' and Start <= Finished <= End and
+                     Steps[2] >= Steps[0] and Number(Span, 'end_tid') == Metadata['ChildMainTid'] and
+                     Resource['endpoint_order_valid'] == '1', 'Full original terminal boundary invalid')
+                Need((Submitted <= Finished and Steps[1] <= Steps[2]) or
+                     (Finished <= Submitted and Steps[2] <= Steps[1]), 'Full inline callback clock/step order invalid')
+                Need(Number(Resource, 'start_sample_after_ns') <= Number(Resource, 'end_sample_before_ns') <=
+                     Finished <= Number(Resource, 'end_sample_after_ns') <= End, 'Full original terminal bracket invalid')
+                Need(Span['payload_matched'] in ('0', '1') and
+                     (Span['terminal_status'] == '-1' if Span['kind'] == 'EVENT' else Number(Span, 'terminal_status') <= 6),
+                     'Full terminal result invalid')
+                KnownErrors += int(Span['payload_matched'] != '1' or
+                                   (Span['kind'] == 'RPC' and Span['terminal_status'] != '0'))
+                Completed[Span['kind']] += 1
+                ValidateAggregateResource(Resource, Number, Need)
+            else:
+                Need(Finished == 0 and Steps[2] == 0 and Span['end_tid'] == '0' and Span['terminal_status'] == '-1' and
+                     Span['payload_matched'] == '0' and Resource['endpoint_order_valid'] == '0', 'Full nonterminal endpoint fabricated')
+                Need((Outcome == 'REJECTED' and Span['accepted'] == '0') or
+                     (Outcome.startswith('MISSING_') and Span['accepted'] == '1') or
+                     (Outcome == 'SUBMISSION_NOT_OBSERVED' and Span['accepted'] == '0' and Submitted == 0),
+                     'Full nonterminal outcome differs')
+                for Field, Value in Resource.items():
+                    if Field.startswith('end_'):
+                        Need(Value == '0', 'Full nonterminal resource endpoint fabricated')
+                    if '_cpu_lower_' in Field or '_cpu_upper_' in Field or Field.startswith('measured_sleep_'):
+                        Need(Value == 'NOT_MEASURED', 'Full nonterminal derived resource fabricated')
+                Need(Resource['sleep_delta_valid'] == '0', 'Full nonterminal sleep delta fabricated')
+                Rejected += int(Outcome == 'REJECTED')
+                Pending += int(Outcome != 'REJECTED')
+                Need(Metadata['ChildExitCode'] != 0 or Outcome == 'REJECTED', 'successful Full has unfinished remote')
+        Need(len(Observations) <= 1, 'Full remote observation timestamps differ')
+        Need(Completed['RPC'] == Number(Summary, 'rpc_count') and Completed['EVENT'] == Number(Summary, 'event_count') and
+             Rejected == Number(Summary, 'rejected') and KnownErrors <= Number(Summary, 'errors'), 'Full summary remote conservation differs')
+        Need(Metadata['ChildExitCode'] != 0 or Number(Summary, 'errors') == 0, 'successful Full has workload errors')
+        RemoteCount += Count
+        Actions = Data.get('ActionSpan', [])
+        Need(len(Actions) == Number(Data['ActionChronology'][0], 'records'), 'Full action records missing')
+        CompleteActions = 0
+        for Row in Actions:
+            Id, Start, Finished = (Number(Row, Field) for Field in ('sequence', 'start_ns', 'observed_end_ns'))
+            Need(Id == LastAction + 1 and Begin <= Start <= End and Start <= Finished and
+                 Number(Row, 'observed_end_step') >= Number(Row, 'start_step') and Row['recovery_probe'] in ('0', '1'),
+                 'Full action identity/clock invalid')
+            LastAction = Id
+            Outcome = Row['outcome']
+            Need(Outcome in ('COMPLETED', 'REJECTED', 'MISSING_AT_SERVICE_DEADLINE', 'MISSING_AT_CASE_END'), 'Full action outcome invalid')
+            if Outcome.startswith('MISSING_'):
+                Need(Metadata['ChildExitCode'] != 0 and End <= Finished <= ObservationLimit and
+                     (not Observations or Finished in Observations),
+                     'Full pending action observation fabricated')
+                Pending += 1
+            else:
+                Need(Finished <= End, 'Full completed action outside measured case')
+            CompleteActions += int(Outcome == 'COMPLETED')
+            for Field in ('wall_ms', 'thread_cpu_ms', 'process_cpu_ms'):
+                Duration(Row, Field, Optional=Field != 'wall_ms')
+        Need(CompleteActions == Number(Summary, 'action_count'), 'Full action summary conservation differs')
+        ActionCount += len(Actions)
+        Phases = ('step_interval', 'client_runtime', 'server_runtime', 'server_poll', 'client_poll',
+                  'server_session', 'client_session', 'observer', 'sleep')
+        for Label in ('WorkloadCpu', 'WorkloadPhaseSpan'):
+            Need(len(Data.get(Label, [])) == len(Phases) and
+                 {Row['phase'] for Row in Data[Label]} == set(Phases), 'Full sampled phase maxima incomplete/duplicate')
+        Cpu = {Row['phase']: Row for Row in Data['WorkloadCpu']}
+        for Row in Data['WorkloadPhaseSpan']:
+            Need(Row['timestamps_valid'] == '1' and Number(Row, 'native_tid') == Metadata['ChildMainTid'] and
+                 Begin <= Number(Row, 'start_ns') <= Number(Row, 'end_ns') <= End and
+                 Row['step'] == Cpu[Row['phase']]['step'], 'Full sampled phase original clock invalid')
+            for Field in ('wall_ms', 'thread_cpu_ms', 'process_cpu_ms', 'requested_sleep_ms', 'actual_sleep_ms'):
+                Duration(Cpu[Row['phase']], Field, Optional=Field in ('thread_cpu_ms', 'process_cpu_ms'))
+    return {'CompleteFullCases': len(Arms), 'CompleteRemoteRecords': RemoteCount, 'CompleteActionRecords': ActionCount,
+            'PendingObservedRecords': Pending, 'NativeChildExitCode': Metadata['ChildExitCode'],
+            'NativeQualification': 'CHILD_SUCCEEDED' if Metadata['ChildExitCode'] == 0 else 'CHILD_FAILED',
+            'OperationCoverage': 'SAMPLED_MAXIMA_NOT_COMPLETE_CAUSAL_PROOF',
+            'RemoteCoverage': 'COMPLETE_SUBMITTED_RPC_AND_EVENT_RECORDS',
+            'ActionNativeTid': 'NOT_MEASURED', 'ActionRawCpuBrackets': 'NOT_MEASURED',
+            'FinalObservationClockBound': 'END_QPC_BRACKET_TO_MEASURED_CHILD_EXIT_INTEGER_CEILING',
+            'SampledClockMapping': 'MSVC_QPC_FLOOR_RELATION_VERIFIED_AT_BOTH_CASE_ANCHORS',
+            'ObservationBoundary': 'POST_END_ANCHOR_NO_LATENCY_SUBTRACTION', 'UnknownResourceFields': sorted(Unknown)}
 
 
 def ValidateAggregateEvidence(Metadata, Stdout, Arms):

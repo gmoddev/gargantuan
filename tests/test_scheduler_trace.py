@@ -17,6 +17,50 @@ SPEC.loader.exec_module(VALIDATOR)
 
 
 class SchedulerTraceTests(unittest.TestCase):
+    def FullFixture(self, Root, Exit=0, Cases=8):
+        Metadata, Aggregate, File = self.AggregateFixture(Root)
+        Metadata.update(WorkloadCase='Full', WorkloadArguments=['--reliable-workload'], ChildExitCode=Exit)
+        Templates = {Label: next(dict(Part.split('=', 1) for Part in Line.split()[1:])
+            for Line in Aggregate.splitlines() if Line.startswith('[Qualification:' + Label + ']'))
+            for Label in ('RemoteSpan', 'RemoteResourceSpan')}
+        Lines = []
+        for Index, Name in enumerate(VALIDATOR.FULL_CASES[:Cases]):
+            Begin, End = 10 + Index * 110, 100 + Index * 110
+            def Emit(Label, **Fields):
+                Lines.append('[Qualification:' + Label + '] case=' + Name + ' ' +
+                             ' '.join(Key + '=' + str(Value) for Key, Value in Fields.items()))
+            for Boundary, Tick in (('BEGIN', Begin), ('END', End)):
+                Emit('ClockAnchor', profile='FULL_RESERVATION', boundary=Boundary, pid=42, native_tid=43,
+                     native_valid=1, steady_ns=Tick * 100, qpc_before=Tick, qpc_after=Tick + 1,
+                     qpc_frequency=10000000)
+            Emit('ReliableGameplay', rpc_count=1, event_count=1, action_count=1, rejected=0, errors=0)
+            Emit('RemoteChronology', profile='FULL_RESERVATION', records=2, capacity=1062, invalid=0, overflow=0)
+            for Offset, Kind in enumerate(('RPC', 'EVENT')):
+                Start = Begin * 100 + 100 + Offset * 20
+                Finished = Start + 10
+                for Label in ('RemoteSpan', 'RemoteResourceSpan'):
+                    Row = {Key: Value for Key, Value in Templates[Label].items()
+                           if Key not in ('case', 'phase_index', 'peer', 'slot', 'generation')}
+                    Row.update(id=Index * 2 + Offset + 1, kind=Kind, start_ns=Start, end_ns=Finished)
+                    if Label == 'RemoteSpan':
+                        Row.update(submitted_ns=Start + 5, observed_ns=End * 100 + 1,
+                                   terminal_status=0 if Kind == 'RPC' else -1)
+                    else:
+                        Row.update(start_sample_before_ns=Start - 1, start_sample_after_ns=Start + 1,
+                                   end_sample_before_ns=Finished - 1, end_sample_after_ns=Finished + 1)
+                    Emit(Label, **Row)
+            Emit('ActionChronology', profile='FULL_RESERVATION', records=1, capacity=29, invalid=0, overflow=0)
+            Emit('ActionSpan', profile='FULL_RESERVATION', sequence=Index + 1, recovery_probe=0,
+                 outcome='COMPLETED', start_step=1, observed_end_step=2, start_ns=Begin * 100 + 50,
+                 observed_end_ns=Begin * 100 + 60, wall_ms=.00001, thread_cpu_ms=0, process_cpu_ms=0)
+            for Phase in ('step_interval', 'client_runtime', 'server_runtime', 'server_poll', 'client_poll',
+                          'server_session', 'client_session', 'observer', 'sleep'):
+                Emit('WorkloadCpu', phase=Phase, step=1, wall_ms=0, thread_cpu_ms=0, process_cpu_ms=0,
+                     requested_sleep_ms=0, actual_sleep_ms=0)
+                Emit('WorkloadPhaseSpan', profile='FULL_RESERVATION', phase=Phase, step=1, native_tid=43,
+                     start_ns=Begin * 100 + 50, end_ns=Begin * 100 + 60, timestamps_valid=1)
+        return Metadata, '\n'.join(Lines), File
+
     def AggregateFixture(self, Root, Exit=0, SameLocalIdentity=False):
         Metadata, _ = self.Fixture()
         Metadata.update(WorkloadCase='Aggregate32Structural', ChildExitCode=Exit, DecodedRows=4,
@@ -256,22 +300,27 @@ class SchedulerTraceTests(unittest.TestCase):
             Result = VALIDATOR.Validate(Metadata, '\n'.join(Lines), 'Aggregate32Structural', File)
             self.assertEqual(Result['State'], 'LOSS_FREE_ANCHOR_WINDOW_RETAINED', Result)
 
-    def test_normal_ci_preserves_five_workloads_with_fixed_fifth_traced_once(self):
+    def test_normal_ci_preserves_order_with_full_and_aggregate_traced_once(self):
         Workflow = (ROOT / '.github/workflows/native-ci.yml').read_text()
         Start = Workflow.index('      - name: Run qualified reliable workload timing in Release')
         End = Workflow.index('      - name:', Start + 20)
         Commands = Workflow[Start:End]
         for Flags in ('--pooled --reliable-workload\n', '--pooled --reliable-workload-32-structural\n',
-                      'tests.exe --reliable-workload\n', 'tests.exe --reliable-workload-32\n'):
+                      'SchedulerTrace.ps1 -Case Full\n', 'tests.exe --reliable-workload-32\n'):
             self.assertEqual(Commands.count(Flags), 1)
         self.assertEqual(Commands.count('SchedulerTrace.ps1 -Case Aggregate32Structural'), 1)
         self.assertEqual(Commands.count('if not %errorlevel%==0 exit /b %errorlevel%'), 5)
         self.assertNotIn('if errorlevel 1', Commands)
         Positions = [Commands.index(Flags) for Flags in ('--pooled --reliable-workload\n',
-            '--pooled --reliable-workload-32-structural\n', 'tests.exe --reliable-workload\n',
+            '--pooled --reliable-workload-32-structural\n', 'SchedulerTrace.ps1 -Case Full\n',
             'tests.exe --reliable-workload-32\n', 'SchedulerTrace.ps1 -Case Aggregate32Structural')]
         self.assertEqual(Positions, sorted(Positions))
         self.assertNotIn('tests.exe --reliable-workload-32-structural', Commands)
+        self.assertNotIn('tests.exe --reliable-workload\n', Commands)
+        self.assertIn('if not "%SCHEDULER_TRACE%"=="true" (\n            pwsh -NoProfile -File tools\\ci\\SchedulerTrace.ps1 -Case Full\n          )', Commands)
+        Manual = Workflow[Workflow.index('      - name: Trace one FULL'):Workflow.index('      - name: Trace fixed FULL')]
+        self.assertIn("github.event_name == 'workflow_dispatch' && inputs.scheduler_trace", Manual)
+        self.assertEqual(Manual.count('& tools/ci/SchedulerTrace.ps1'), 1)
         Build = Workflow[Workflow.index('      - name: Build bounded scheduler diagnostic'):Workflow.index('      - name: Trace one FULL')]
         self.assertNotIn('        if:', Build)
         self.assertIn('test_scheduler_trace.py', Build)
@@ -280,9 +329,44 @@ class SchedulerTraceTests(unittest.TestCase):
         self.assertNotIn('if errorlevel 1', Build)
         Upload = Workflow[Workflow.index('      - name: Upload native CI diagnostics'):]
         self.assertIn('        if: always()', Upload)
+        self.assertIn('            build-ci/scheduler-trace/\n', Upload)
         self.assertIn('            build-ci/scheduler-trace-aggregate32-structural/', Upload)
         self.assertEqual(Upload.count('            build-ci/scheduler-trace.exe\n'), 1)
         self.assertEqual(Upload.count('            build-ci/gargantuan_game_session_real_transport_tests.exe\n'), 1)
+
+    @unittest.skipUnless(os.name == 'nt', 'Windows cmd exit semantics')
+    def test_normal_and_manual_full_route_exact_once_without_capture(self):
+        Workflow = (ROOT / '.github/workflows/native-ci.yml').read_text()
+        Start = Workflow.index('      - name: Run qualified reliable workload timing in Release')
+        Block = Workflow[Start:Workflow.index('      - name:', Start + 20)]
+        Body = Block[Block.index('        run: |\n') + len('        run: |\n'):]
+        Commands = '\n'.join(Line[10:] for Line in Body.splitlines())
+        Replacements = (
+            ('build-ci\\gargantuan_game_session_real_transport_tests.exe --pooled --reliable-workload-32-structural', 'POOLED32'),
+            ('build-ci\\gargantuan_game_session_real_transport_tests.exe --pooled --reliable-workload', 'POOLED'),
+            ('pwsh -NoProfile -File tools\\ci\\SchedulerTrace.ps1 -Case Full', 'FULL'),
+            ('build-ci\\gargantuan_game_session_real_transport_tests.exe --reliable-workload-32', 'UNPOOLED32'),
+            ('pwsh -NoProfile -File tools\\ci\\SchedulerTrace.ps1 -Case Aggregate32Structural', 'AGGREGATE'))
+        for Command, Label in Replacements:
+            self.assertEqual(Commands.count(Command), 1)
+            Commands = Commands.replace(Command, 'call :Record ' + Label)
+        for Manual in (False, True):
+            for Code in (0, 17, -1073740791):
+                with tempfile.TemporaryDirectory() as Directory:
+                    Root = Path(Directory)
+                    Prelude = '@echo off\nset "SCHEDULER_TRACE=' + str(Manual).lower() + '"\n'
+                    if Manual:
+                        Prelude += 'call :Record FULL\nif not %errorlevel%==0 exit /b %errorlevel%\n'
+                    (Root / 'route.cmd').write_text(Prelude + Commands + '\nexit /b 0\n:Record\n' +
+                        'echo %1>>order.txt\nif "%1"=="FULL" exit /b ' + str(Code) + '\nexit /b 0\n')
+                    Result = subprocess.run(['cmd', '/d', '/c', str(Root / 'route.cmd')], cwd=Root,
+                        text=True, capture_output=True, timeout=30, creationflags=subprocess.CREATE_NO_WINDOW)
+                    self.assertEqual(Result.returncode & 0xffffffff, Code & 0xffffffff, Result.stdout + Result.stderr)
+                    Expected = ['FULL', 'POOLED', 'POOLED32', 'UNPOOLED32', 'AGGREGATE'] if Manual else [
+                        'POOLED', 'POOLED32', 'FULL', 'UNPOOLED32', 'AGGREGATE']
+                    if Code:
+                        Expected = Expected[:Expected.index('FULL') + 1]
+                    self.assertEqual((Root / 'order.txt').read_text().splitlines(), Expected)
 
     @unittest.skipUnless(os.name == 'nt', 'Windows cmd exit semantics')
     def test_cmd_guard_preserves_signed_native_failures_before_later_success(self):
@@ -403,28 +487,170 @@ class SchedulerTraceTests(unittest.TestCase):
         return Metadata, "\n".join(Lines)
 
     def test_loss_free_fixture_window_retained_without_causal_claim(self):
-        Result = VALIDATOR.Validate(*self.Fixture())
-        self.assertEqual(Result["State"], "LOSS_FREE_ANCHOR_WINDOW_RETAINED", Result)
-        self.assertEqual(Result["CausalVerdict"], "NOT_CLAIMED")
+        with tempfile.TemporaryDirectory() as Directory:
+            Metadata, Log, File = self.FullFixture(Path(Directory))
+            Result = VALIDATOR.Validate(Metadata, Log, 'Full', File)
+            self.assertEqual(Result["State"], "LOSS_FREE_ANCHOR_WINDOW_RETAINED", Result)
+            self.assertEqual(Result["CausalVerdict"], "NOT_CLAIMED")
+            self.assertEqual(Result['CompleteFullCases'], 8)
+            self.assertEqual(Result['CompleteRemoteRecords'], 16)
+            self.assertEqual(Result['ActionNativeTid'], 'NOT_MEASURED')
+
+    def test_full_complete_ordered_prefix_retains_original_failure_only(self):
+        with tempfile.TemporaryDirectory() as Directory:
+            Metadata, Log, File = self.FullFixture(Path(Directory), Exit=17, Cases=2)
+            Result = VALIDATOR.Validate(Metadata, Log, 'Full', File)
+            self.assertEqual(Result['State'], 'LOSS_FREE_ANCHOR_WINDOW_RETAINED', Result)
+            self.assertEqual(Result['NativeQualification'], 'CHILD_FAILED')
+            self.assertEqual(Result['NativeChildExitCode'], 17)
+            self.assertEqual(VALIDATOR.Validate(dict(Metadata, ChildExitCode=0), Log, 'Full', File)['State'], 'INCOMPLETE')
+            for Bad in (Log.replace('case=small', 'case=recovery'), Log + '\n' + Log,
+                        Log.replace('boundary=END', 'boundary=BEGIN'), Log.replace('case=upper', 'case=mixed')):
+                self.assertEqual(VALIDATOR.Validate(Metadata, Bad, 'Full', File)['State'], 'INCOMPLETE')
+
+    def test_full_missing_duplicate_overflow_and_endpoint_denials(self):
+        with tempfile.TemporaryDirectory() as Directory:
+            Metadata, Log, File = self.FullFixture(Path(Directory))
+            for Old, New in (('capacity=1062', 'capacity=208'), ('capacity=29', 'capacity=30'),
+                             ('invalid=0', 'invalid=1'), ('overflow=0', 'overflow=1'),
+                             ('records=2', 'records=1'), ('rpc_count=1', 'rpc_count=2'),
+                             ('action_count=1', 'action_count=0'), ('start_tid=43', 'start_tid=44'),
+                             ('submitted_ns=1105', 'submitted_ns=1099'),
+                             ('end_sample_after_ns=1111', 'end_sample_after_ns=1109'),
+                             ('thread_cpu_lower_100ns=1', 'thread_cpu_lower_100ns=2'),
+                             ('observed_ns=10001', 'observed_ns=9999'),
+                             ('phase=observer', 'phase=sleep'), ('native_tid=43 start_ns', 'native_tid=44 start_ns')):
+                with self.subTest(Old=Old):
+                    self.assertIn(Old, Log)
+                    self.assertEqual(VALIDATOR.Validate(Metadata, Log.replace(Old, New), 'Full', File)['State'], 'INCOMPLETE')
+            for Label in ('RemoteSpan', 'RemoteResourceSpan', 'ActionSpan', 'WorkloadPhaseSpan', 'WorkloadCpu'):
+                Lines = Log.splitlines()
+                Removed = next(Line for Line in Lines if Line.startswith('[Qualification:' + Label + ']'))
+                Lines.remove(Removed)
+                self.assertEqual(VALIDATOR.Validate(Metadata, '\n'.join(Lines), 'Full', File)['State'], 'INCOMPLETE')
+                self.assertEqual(VALIDATOR.Validate(Metadata, Log + '\n' + Removed, 'Full', File)['State'], 'INCOMPLETE')
+            self.assertEqual(VALIDATOR.Validate(Metadata, Log, 'Full', None)['State'], 'INCOMPLETE')
+            File.write_text(File.read_text().replace(',36,5,', ',36,99,'))
+            self.assertEqual(VALIDATOR.Validate(Metadata, Log, 'Full', File)['State'], 'INCOMPLETE')
+
+    def test_full_inline_callback_and_unmeasured_action_cpu_are_not_retimed(self):
+        with tempfile.TemporaryDirectory() as Directory:
+            Metadata, Log, File = self.FullFixture(Path(Directory))
+            Lines = Log.splitlines()
+            Index = next(Index for Index, Line in enumerate(Lines) if Line.startswith('[Qualification:RemoteSpan]'))
+            Lines[Index] = Lines[Index].replace('submitted_ns=1105', 'submitted_ns=1115').replace('submitted_step=1', 'submitted_step=3')
+            Log = '\n'.join(Lines)
+            Log = Log.replace('thread_cpu_ms=0', 'thread_cpu_ms=NOT_MEASURED')
+            Result = VALIDATOR.Validate(Metadata, Log, 'Full', File)
+            self.assertEqual(Result['State'], 'LOSS_FREE_ANCHOR_WINDOW_RETAINED', Result)
+            self.assertIn('thread_cpu_ms', Result['UnknownResourceFields'])
+
+    def test_full_initial_cross_case_and_action_identity_gaps_fail(self):
+        with tempfile.TemporaryDirectory() as Directory:
+            Metadata, Log, File = self.FullFixture(Path(Directory))
+            for Old, New in ((' id=1 ', ' id=99 '), (' id=3 ', ' id=99 '),
+                             ('sequence=1 ', 'sequence=99 '), ('sequence=2 ', 'sequence=99 ')):
+                self.assertIn(Old, Log)
+                Result = VALIDATOR.Validate(Metadata, Log.replace(Old, New), 'Full', File)
+                self.assertEqual(Result['State'], 'INCOMPLETE', Result)
+
+    def test_full_final_post_anchor_observation_bound_uses_measured_child_exit(self):
+        with tempfile.TemporaryDirectory() as Directory:
+            Metadata, Log, File = self.FullFixture(Path(Directory))
+            # Last END is steady_ns=87000/qpc_before=870; child exit=1000
+            # and QPC frequency=10MHz give conservative upper endpoint100000ns.
+            Changed = Log.replace('observed_ns=87001', 'observed_ns=100000')
+            Result = VALIDATOR.Validate(Metadata, Changed, 'Full', File)
+            self.assertEqual(Result['State'], 'LOSS_FREE_ANCHOR_WINDOW_RETAINED', Result)
+            self.assertEqual(VALIDATOR.Validate(Metadata, Changed.replace('observed_ns=100000',
+                'observed_ns=100001'), 'Full', File)['State'], 'INCOMPLETE')
+            for Bad in (0, -1, None, True):
+                Result = VALIDATOR.Validate(dict(Metadata, QpcFrequency=Bad), Log, 'Full', File)
+                self.assertEqual(Result['State'], 'INCOMPLETE', Result)
+            self.assertEqual(VALIDATOR.Validate(Metadata, Log.replace('steady_ns=87000',
+                'steady_ns=87101'), 'Full', File)['State'], 'INCOMPLETE')
+            Metadata, Log, File = self.FullFixture(Path(Directory), Exit=17, Cases=1)
+            Lines = Log.splitlines()
+            Index = next(Index for Index, Line in enumerate(Lines) if Line.startswith('[Qualification:ActionSpan]'))
+            Lines[Index] = Lines[Index].replace('outcome=COMPLETED', 'outcome=MISSING_AT_CASE_END').replace(
+                'observed_end_ns=1060', 'observed_end_ns=100001')
+            Lines = [Line.replace('action_count=1', 'action_count=0').replace('observed_ns=10001', 'observed_ns=100001')
+                     for Line in Lines]
+            self.assertEqual(VALIDATOR.Validate(Metadata, '\n'.join(Lines), 'Full', File)['State'], 'INCOMPLETE')
+
+    def test_full_failed_missing_or_rejected_original_endpoints_remain_unmeasured(self):
+        with tempfile.TemporaryDirectory() as Directory:
+            Metadata, Log, File = self.FullFixture(Path(Directory), Exit=17, Cases=1)
+            for Accepted in (False, True):
+                Lines = Log.splitlines()
+                SpanIndex = next(Index for Index, Line in enumerate(Lines) if Line.startswith('[Qualification:RemoteSpan]'))
+                ResourceIndex = SpanIndex + 1
+                Span = dict(Part.split('=', 1) for Part in Lines[SpanIndex].split()[1:])
+                Resource = dict(Part.split('=', 1) for Part in Lines[ResourceIndex].split()[1:])
+                Span.update(outcome='MISSING_AT_CASE_END' if Accepted else 'REJECTED', accepted=str(int(Accepted)),
+                            terminal='0', end_step='0', end_ns='0', end_tid='0', terminal_status='-1', payload_matched='0')
+                Resource.update(terminal='0', endpoint_order_valid='0', sleep_delta_valid='0')
+                for Key in list(Resource):
+                    if Key.startswith('end_'):
+                        Resource[Key] = '0'
+                    if '_cpu_lower_' in Key or '_cpu_upper_' in Key or Key.startswith('measured_sleep_'):
+                        Resource[Key] = 'NOT_MEASURED'
+                for Index, Label, Row in ((SpanIndex, 'RemoteSpan', Span), (ResourceIndex, 'RemoteResourceSpan', Resource)):
+                    Lines[Index] = '[Qualification:' + Label + '] ' + ' '.join(Key + '=' + Value for Key, Value in Row.items())
+                Lines = [Line.replace('rpc_count=1', 'rpc_count=0').replace('rejected=0', 'rejected=' + str(int(not Accepted)))
+                         if Line.startswith('[Qualification:ReliableGameplay]') else Line for Line in Lines]
+                Result = VALIDATOR.Validate(Metadata, '\n'.join(Lines), 'Full', File)
+                self.assertEqual(Result['State'], 'LOSS_FREE_ANCHOR_WINDOW_RETAINED', Result)
+                self.assertEqual(Result['NativeQualification'], 'CHILD_FAILED')
+                self.assertEqual(Result['PendingObservedRecords'], int(Accepted))
+                Bad = '\n'.join(Lines).replace('end_sample_after_ns=0', 'end_sample_after_ns=1111')
+                self.assertEqual(VALIDATOR.Validate(Metadata, Bad, 'Full', File)['State'], 'INCOMPLETE')
+            Lines = Log.splitlines()
+            Index = next(Index for Index, Line in enumerate(Lines) if Line.startswith('[Qualification:ActionSpan]'))
+            Lines[Index] = Lines[Index].replace('outcome=COMPLETED', 'outcome=MISSING_AT_CASE_END').replace(
+                'observed_end_ns=1060', 'observed_end_ns=10001').replace('observed_end_step=2', 'observed_end_step=480')
+            Lines = [Line.replace('action_count=1', 'action_count=0') if Line.startswith('[Qualification:ReliableGameplay]')
+                     else Line for Line in Lines]
+            Result = VALIDATOR.Validate(Metadata, '\n'.join(Lines), 'Full', File)
+            self.assertEqual(Result['State'], 'LOSS_FREE_ANCHOR_WINDOW_RETAINED', Result)
+            self.assertEqual(Result['PendingObservedRecords'], 1)
+            self.assertEqual(Result['ObservationBoundary'], 'POST_END_ANCHOR_NO_LATENCY_SUBTRACTION')
+
+    def test_full_validator_cli_requires_actual_raw_csv_and_evidence(self):
+        for Valid in (True, False):
+            with tempfile.TemporaryDirectory() as Directory:
+                Root = Path(Directory)
+                Metadata, Log, _ = self.FullFixture(Root)
+                if not Valid:
+                    Log = Log.replace('capacity=1062', 'capacity=208')
+                (Root / 'metadata.json').write_text(json.dumps(Metadata))
+                (Root / 'workload.stdout.txt').write_text(Log)
+                Result = subprocess.run([sys.executable, '-B', str(ROOT / 'tools/ci/SchedulerTraceValidate.py'),
+                    '--root', str(Root), '--case', 'Full'], text=True, capture_output=True, timeout=30)
+                self.assertEqual(Result.returncode, 0 if Valid else 125, Result.stdout + Result.stderr)
 
     def test_loss_clock_coverage_and_cleanup_mutations_fail(self):
-        Metadata, Log = self.Fixture()
-        for Name, Value in (("EventsLost", 1), ("HeaderBuffersLost", 1), ("MainFirstQpc", 11),
-                            ("MainLastQpc", 899), ("ChildPid", 9), ("ChildMainTid", 9),
-                            ("ControllerQpcFrequency", 1), ("ClockType", 2), ("CsvCapped", True),
-                            ("ChildTreeReaped", False), ("TimedOut", True), ("ChildLogCapped", True),
-                            ("UnsupportedEvents", 1), ("StopStatus", 1), ("BeforeChildResumeQpc", 11),
-                            ("WorkloadCase", "AckStats"), ("WorkloadCase", None)):
-            Changed = copy.deepcopy(Metadata)
-            Changed[Name] = Value
-            with self.subTest(Name=Name):
-                self.assertEqual(VALIDATOR.Validate(Changed, Log)["State"], "INCOMPLETE")
+        with tempfile.TemporaryDirectory() as Directory:
+            Metadata, Log, File = self.FullFixture(Path(Directory))
+            self.assertEqual(VALIDATOR.Validate(Metadata, Log, 'Full', File)['State'], 'LOSS_FREE_ANCHOR_WINDOW_RETAINED')
+            for Name, Value in (("EventsLost", 1), ("HeaderBuffersLost", 1), ("MainFirstQpc", 11),
+                                ("MainLastQpc", 869), ("ChildPid", 9), ("ChildMainTid", 9),
+                                ("ControllerQpcFrequency", 1), ("ClockType", 2), ("CsvCapped", True),
+                                ("ChildTreeReaped", False), ("TimedOut", True), ("ChildLogCapped", True),
+                                ("UnsupportedEvents", 1), ("StopStatus", 1), ("BeforeChildResumeQpc", 11),
+                                ("WorkloadCase", "AckStats"), ("WorkloadCase", None)):
+                Changed = copy.deepcopy(Metadata)
+                Changed[Name] = Value
+                with self.subTest(Name=Name):
+                    self.assertEqual(VALIDATOR.Validate(Changed, Log, 'Full', File)["State"], "INCOMPLETE")
 
     def test_missing_malformed_or_duplicate_anchors_fail(self):
-        Metadata, Log = self.Fixture()
-        for Bad in ("", Log.splitlines()[0], Log + "\n" + Log, Log.replace("native_valid=1", "native_valid=0"),
-                    Log.replace("qpc_before=10", "qpc_before=INVALID")):
-            self.assertEqual(VALIDATOR.Validate(Metadata, Bad)["State"], "INCOMPLETE")
+        with tempfile.TemporaryDirectory() as Directory:
+            Metadata, Log, File = self.FullFixture(Path(Directory))
+            self.assertEqual(VALIDATOR.Validate(Metadata, Log, 'Full', File)['State'], 'LOSS_FREE_ANCHOR_WINDOW_RETAINED')
+            for Bad in ("", Log.splitlines()[0], Log + "\n" + Log, Log.replace("native_valid=1", "native_valid=0"),
+                        Log.replace("qpc_before=10", "qpc_before=INVALID")):
+                self.assertEqual(VALIDATOR.Validate(Metadata, Bad, 'Full', File)["State"], "INCOMPLETE")
     def test_wrapper_exit_precedence_without_operational_calls(self):
         Result = subprocess.run(
             ["pwsh", "-NoProfile", "-File", str(ROOT / "tools/ci/SchedulerTrace.ps1"), "-SelfTest"],
