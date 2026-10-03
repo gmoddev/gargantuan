@@ -100,8 +100,14 @@ all 9,669,000 marked packets in both captures and zero recorder loss. The raw
 outer cleanup failure and 668 synthetic client receive gaps remain unchanged;
 the hash-bound supplemental closure records later exact ownership/socket
 checks. See [capture receipt](tools/physical-qualifier/docs/FARM32_ETL_NATIVE_STOP.md).
-Remaining gates are client memory at least 8 GiB available, both 32-client
-provider matrices and final acceptance.
+The 07:12 UTC client preflight now passes with 11,806,433,280 B available.
+Local run `d05185d7-b2dc-4c3c-8a78-1ad4c782faed` then stopped before capture or
+workload because the staged controller's `farm_capture_directions` dependency
+was omitted; isolated worker Python also needs explicit sibling import setup.
+Both-host import-only reproduction confirms this infrastructure defect. Failed
+receipts are preserved; later cleanup verifies processes/ports/capture clear
+and run secrets retired. Both 32-client provider matrices and final acceptance
+remain unmeasured; corrected staging must qualify before a fresh attempt.
 Historical synthetic socket-loss attribution is not a new pooled-service gate.
 **KI-006 OPEN; Foundation 3L B — PARTIALLY READY.**
 

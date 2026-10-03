@@ -36,10 +36,26 @@ See the [complete capture and closure receipt](../../tools/physical-qualifier/do
 Historical synthetic socket receive gaps remain
 unattributed, but the accepted funding-gate review does not make that attribution
 a prerequisite for production GNS testing. Recorder completeness remains required.
-The client reading on `DESKTOP-B8V8NAN` at 06:38 UTC is 4.346 GiB available, below
-the unchanged **8-GiB client** gate; the worker has 22.424 GiB, above its
-**4-GiB server** gate. The older wording below claiming 8 GiB on both endpoints
-is superseded by these actual farm roles and source-enforced thresholds.
+The earlier 06:38 UTC client reading was below the unchanged **8-GiB client**
+gate. After the user freed memory, fresh role preflights at 07:12 UTC measured
+11,806,433,280 B available on `DESKTOP-B8V8NAN` and 24,079,781,888 B on the worker,
+passing the **8-GiB client / 4-GiB server** thresholds. These are preflight
+observations, not application resource qualification. Each new run must recheck.
+
+Local attempt `d05185d7-b2dc-4c3c-8a78-1ad4c782faed`, coordinator
+`e929ef36-a69e-43f8-ad06-be7ecaccfd4a`, passed the control barrier but failed
+before capture or farm workload startup. Both staged capture-controller children
+failed to import `farm_capture_directions`: the staging list omitted this
+dependency, and the worker's isolated Python also requires explicit sibling
+import setup. Import-only reproduction on both hosts confirms the defect.
+No capture/farm evidence roots were created; provider behavior is NOT MEASURED.
+Original FAILED role receipts (including `ChildTreeReaped=false`) remain intact.
+A separate 07:17 UTC cleanup receipt verifies recorded processes absent, ports
+clear, capture idle and exact one-run tickets retired. Evidence is retained under
+`C:\Sandbox\Codex\Artifacts\Farm32-9ae8f68c2-LocalRecovery-Private-v1`, including
+`failed-run-retirement.json`. The staging correction must qualify before a fresh
+identity is used; this infrastructure failure does not invalidate prior F1 or
+recorder evidence.
 
 Fresh Local and authenticated real-TLS Node 32-client matrices, complete moving
 recovery/resource/parity evidence, and final acceptance/audit remain
