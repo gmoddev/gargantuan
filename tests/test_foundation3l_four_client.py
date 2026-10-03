@@ -146,6 +146,21 @@ class FourClientTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "certificate changed"):
             self.RunNative(Rows)
 
+    def test_per_grant_deficit_resets_but_generation_diagnostics_do_not(self):
+        Rows = copy.deepcopy(self.Rows)
+        for Row in Rows:
+            # A later independent grant can have a smaller maximum; the
+            # exported connection maximum remains the earlier 1000 byte-us.
+            if Row["last_completed_token"] >= 5:
+                Row["last_completed_max_run_deficit_byte_us"] = 500
+            Row["current_run_deficit_byte_us"] = 500 if Row["debt_token"] else 0
+        self.assertEqual(self.RunNative(Rows)["MaximumGrants"], 128)
+        for Field in ("running_us", "max_run_deficit_byte_us"):
+            Broken = copy.deepcopy(Rows)
+            Broken[12][Field] = 0  # Second grant after first grant retirement.
+            with self.subTest(Field=Field), self.assertRaisesRegex(ValueError, "counters regressed"):
+                self.RunNative(Broken)
+
     def test_missing_evidence_is_not_measured(self):
         self.assertEqual(Replay.Replay({}, "a" * 40)["State"], "NOT_MEASURED")
 
@@ -334,6 +349,8 @@ class FourClientTests(unittest.TestCase):
         self.assertEqual(len(Result["Capture"]["SERVER"]["Tuples"]), 4)
         self.assertNotEqual(Result["RunId"], Result["LifecycleRunId"])
         self.assertTrue(Result["CompletedUtc"].endswith("+00:00"))
+        self.assertEqual(Result["CompletionClockDomain"], "CONTROLLING_HOST_UTC")
+        self.assertEqual(Result["CompletedUtc"], "2027-01-15T08:00:00+00:00")
 
     def test_validly_resealed_capture_loss_fails(self):
         Inputs = self.FullFixture()

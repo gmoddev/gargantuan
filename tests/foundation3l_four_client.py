@@ -172,6 +172,10 @@ def ReplayNative(ServerCsv, ServerLog, AdmissionsCsv=None):
             PreviousGlobal = Row
             Previous = Peers.get(Slot)
             if Previous:
+                # SyncStructuralGrant accumulates elapsed deltas and takes a
+                # connection-generation maximum of independently reset grant
+                # maxima. These two exported diagnostics never reset at grant
+                # turnover; current/last-completed per-grant deficits may.
                 Require(all(Row[K] >= Previous[K] for K in ("feedback_us", "structural_first", "structural_ack",
                         "running_us", "max_run_deficit_byte_us", "retry", "accepted_structural", "retirement_sequence")),
                         "native cumulative counters regressed")
@@ -538,5 +542,6 @@ def ReplayInputs(Inputs, ExpectedCommit):
         EndpointJournal(Files, Results[Role], Source, RunId, Tuples)
     Require(set(Captures["CLIENT"]["Tuples"]) == set(Captures["SERVER"]["Tuples"]), "capture endpoint tuple mismatch")
     return {"State": "MEASURED_PASS", "SourceCommit": ExpectedCommit, "RunId": RunId, "LifecycleRunId": LifecycleRunId,
-            "CompletedUtc": CompletedUtc, "CandidatePins": Pins, "InputHashes": Hashes, "Native": Native,
+            "CompletedUtc": CompletedUtc, "CompletionClockDomain": "CONTROLLING_HOST_UTC",
+            "CandidatePins": Pins, "InputHashes": Hashes, "Native": Native,
             "Gameplay": Gameplay, "Capture": Captures}
