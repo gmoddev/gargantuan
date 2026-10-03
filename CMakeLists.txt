@@ -4,6 +4,15 @@
 cmake_minimum_required(VERSION 3.25)
 project(gargantuan CXX)
 
+# On Windows, vcpkg appends z-applocal to each Ninja link rule. Those commands
+# copy dependencies into the same output directory, so parallel links can race
+# on a DLL even when the link inputs themselves are independent. Keep compile
+# jobs parallel while serializing the combined link and app-local copy rules.
+if(WIN32 AND CMAKE_GENERATOR MATCHES "^Ninja" AND VCPKG_APPLOCAL_DEPS)
+	set_property(GLOBAL APPEND PROPERTY JOB_POOLS GargantuanVcpkgApplocalLink=1)
+	set(CMAKE_JOB_POOL_LINK GargantuanVcpkgApplocalLink)
+endif()
+
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -785,6 +794,90 @@ if(BUILD_TESTING)
 		GARGANTUAN_RUNTIME_DISTRIBUTION_ROOT="$<TARGET_FILE_DIR:gargantuan_player>/RuntimeDistribution"
 	)
 	add_dependencies(gargantuan_packaging_benchmark gargantuan_runtime_distribution)
+	add_executable(gargantuan_qualified_scale_package "tests/QualifiedScalePackage.cpp")
+	add_executable(gargantuan_workload_timing_evidence_tests "tests/WorkloadTimingEvidenceTests.cpp")
+	target_compile_features(gargantuan_workload_timing_evidence_tests PRIVATE cxx_std_20)
+	add_test(NAME gargantuan_workload_timing_evidence COMMAND gargantuan_workload_timing_evidence_tests)
+	target_link_libraries(gargantuan_qualified_scale_package PRIVATE gargantuan_core nlohmann_json)
+	target_compile_definitions(gargantuan_qualified_scale_package PRIVATE
+		GARGANTUAN_FIRST_COMPLETE_GAME_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/samples/FirstCompleteGame"
+	)
+	add_dependencies(gargantuan_qualified_scale_package
+		gargantuan_runtime_distribution gargantuan_server_runtime_distribution)
+	if(WIN32)
+		find_program(GARGANTUAN_PWSH_EXECUTABLE NAMES pwsh)
+		find_program(GARGANTUAN_GO_EXECUTABLE NAMES go)
+		if(GARGANTUAN_PWSH_EXECUTABLE)
+			add_test(NAME gargantuan_physical_game_session_farm_pipe_drain
+				COMMAND "${GARGANTUAN_PWSH_EXECUTABLE}" -NoProfile -File
+				"${CMAKE_CURRENT_SOURCE_DIR}/tests/PhysicalFarmPipeDrainTests.ps1")
+			add_test(NAME gargantuan_physical_game_session_farm_evidence
+				COMMAND "${GARGANTUAN_PWSH_EXECUTABLE}" -NoProfile -File
+				"${CMAKE_CURRENT_SOURCE_DIR}/tests/PhysicalGameSessionFarmTests.ps1")
+			add_test(NAME gargantuan_physical_game_session_farm_cleanup
+				COMMAND "${GARGANTUAN_PWSH_EXECUTABLE}" -NoProfile -File
+				"${CMAKE_CURRENT_SOURCE_DIR}/tests/PhysicalGameSessionFarmCleanupTests.ps1")
+			add_test(NAME gargantuan_physical_game_session_farm_endpoint
+				COMMAND "${GARGANTUAN_PWSH_EXECUTABLE}" -NoProfile -File
+				"${CMAKE_CURRENT_SOURCE_DIR}/tests/PhysicalGameSessionFarmEndpointTests.ps1")
+			add_test(NAME gargantuan_physical_game_session_farm_manifest
+				COMMAND "${GARGANTUAN_PWSH_EXECUTABLE}" -NoProfile -File
+				"${CMAKE_CURRENT_SOURCE_DIR}/tests/NewPhysicalGameSessionFarmManifestTests.ps1")
+			add_test(NAME gargantuan_physical_game_session_farm_reconciliation
+				COMMAND "${GARGANTUAN_PWSH_EXECUTABLE}" -NoProfile -File
+				"${CMAKE_CURRENT_SOURCE_DIR}/tests/PhysicalGameSessionFarmReconcileTests.ps1")
+			add_test(NAME gargantuan_physical_game_session_farm_acceptance_observation
+				COMMAND "${GARGANTUAN_PWSH_EXECUTABLE}" -NoProfile -File
+				"${CMAKE_CURRENT_SOURCE_DIR}/tests/PhysicalGameSessionFarmAcceptanceTests.ps1")
+			add_test(NAME gargantuan_physical_game_session_farm_logical_lifecycle
+				COMMAND "${GARGANTUAN_PWSH_EXECUTABLE}" -NoProfile -File
+				"${CMAKE_CURRENT_SOURCE_DIR}/tests/PhysicalGameSessionFarmLifecycleTests.ps1")
+			add_test(NAME gargantuan_physical_game_session_farm_f1_evidence
+				COMMAND "${GARGANTUAN_PWSH_EXECUTABLE}" -NoProfile -File
+				"${CMAKE_CURRENT_SOURCE_DIR}/tests/PhysicalGameSessionFarmF1Tests.ps1")
+			add_test(NAME gargantuan_physical_game_session_farm_remote_ownership
+				COMMAND "${GARGANTUAN_PWSH_EXECUTABLE}" -NoProfile -File
+				"${CMAKE_CURRENT_SOURCE_DIR}/tests/PhysicalGameSessionFarmRemoteOwnershipTests.ps1")
+			add_test(NAME gargantuan_physical_game_session_farm_analysis_inventory
+				COMMAND "${GARGANTUAN_PWSH_EXECUTABLE}" -NoProfile -File
+				"${CMAKE_CURRENT_SOURCE_DIR}/tests/PhysicalFarmAnalysisInventoryTests.ps1")
+			add_test(NAME gargantuan_physical_game_session_farm_fairness_evidence
+				COMMAND "${GARGANTUAN_PWSH_EXECUTABLE}" -NoProfile -File
+				"${CMAKE_CURRENT_SOURCE_DIR}/tests/AdmissionFairnessEvidenceTests.ps1")
+			add_test(NAME gargantuan_physical_game_session_farm_recovery_evidence
+				COMMAND "${GARGANTUAN_PWSH_EXECUTABLE}" -NoProfile -File
+				"${CMAKE_CURRENT_SOURCE_DIR}/tests/PhysicalGameSessionFarmRecoveryTests.ps1")
+			add_test(NAME gargantuan_physical_game_session_farm_causal_replay
+				COMMAND "${GARGANTUAN_PWSH_EXECUTABLE}" -NoProfile -File
+				"${CMAKE_CURRENT_SOURCE_DIR}/tests/RecoveryCausalEvidenceTests.ps1")
+			add_test(NAME gargantuan_physical_game_session_farm_preflight
+				COMMAND "${GARGANTUAN_PWSH_EXECUTABLE}" -NoProfile -File
+				"${CMAKE_CURRENT_SOURCE_DIR}/tests/PhysicalGameSessionFarmPreflightTests.ps1")
+			add_test(NAME gargantuan_physical_game_session_farm_node_evidence
+				COMMAND "${GARGANTUAN_PWSH_EXECUTABLE}" -NoProfile -File
+				"${CMAKE_CURRENT_SOURCE_DIR}/tests/PhysicalGameSessionFarmNodeEvidenceTests.ps1")
+			add_test(NAME gargantuan_physical_game_session_farm_node_resources
+				COMMAND "${GARGANTUAN_PWSH_EXECUTABLE}" -NoProfile -File
+				"${CMAKE_CURRENT_SOURCE_DIR}/tests/PhysicalFarmNodeResourcesTests.ps1")
+			add_test(NAME gargantuan_physical_game_session_farm_node_tls_generation
+				COMMAND "${GARGANTUAN_PWSH_EXECUTABLE}" -NoProfile -File
+				"${CMAKE_CURRENT_SOURCE_DIR}/tests/NewPhysicalGameSessionFarmNodeTlsTests.ps1")
+			if(GARGANTUAN_GO_EXECUTABLE)
+				add_test(NAME gargantuan_physical_game_session_farm_node
+					COMMAND "${GARGANTUAN_PWSH_EXECUTABLE}" -NoProfile -File
+					"${CMAKE_CURRENT_SOURCE_DIR}/tests/PhysicalGameSessionFarmNodeTests.ps1"
+					-GoExecutable "${GARGANTUAN_GO_EXECUTABLE}")
+			endif()
+			add_test(NAME gargantuan_farm32_worker_capture_hook
+				COMMAND "${GARGANTUAN_PWSH_EXECUTABLE}" -NoProfile -File
+				"${CMAKE_CURRENT_SOURCE_DIR}/tools/physical-qualifier/tests/TestCaptureHooks.ps1"
+				-HookPath "${CMAKE_CURRENT_SOURCE_DIR}/tools/physical-qualifier/worker/PktMonFarm32Capture.ps1"
+				-Farm32)
+			add_test(NAME gargantuan_farm32_client_capture_source
+				COMMAND "${GARGANTUAN_PWSH_EXECUTABLE}" -NoProfile -File
+				"${CMAKE_CURRENT_SOURCE_DIR}/tools/physical-qualifier/tests/TestDumpcapFarm32Capture.ps1")
+		endif()
+	endif()
 	add_executable(gargantuan_gui_foundation_benchmark "tests/GuiFoundationBenchmark.cpp")
 	target_link_libraries(gargantuan_gui_foundation_benchmark PRIVATE gargantuan_core)
 	add_executable(gargantuan_prerun_bootstrap_tests "tests/PreRunBootstrapTests.cpp")
@@ -793,6 +886,9 @@ if(BUILD_TESTING)
 	target_link_libraries(gargantuan_attributes_tags_profile PRIVATE gargantuan_core)
 	add_executable(gargantuan_networking_contract_tests "tests/NetworkingContractsTests.cpp")
 	target_link_libraries(gargantuan_networking_contract_tests PRIVATE gargantuan_core)
+	add_executable(gargantuan_farm_admission_evidence_tests "tests/FarmAdmissionEvidenceTests.cpp")
+	target_include_directories(gargantuan_farm_admission_evidence_tests PRIVATE
+		"${CMAKE_CURRENT_SOURCE_DIR}/src" "${CMAKE_CURRENT_SOURCE_DIR}/include")
 	add_executable(gargantuan_simulated_transport_tests "tests/SimulatedTransportTests.cpp")
 	target_link_libraries(gargantuan_simulated_transport_tests PRIVATE gargantuan_core)
 	add_executable(gargantuan_scheduler_contract_tests "tests/SchedulerContractTests.cpp")
@@ -825,6 +921,10 @@ if(BUILD_TESTING)
 		GARGANTUAN_FIRST_COMPLETE_GAME_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/samples/FirstCompleteGame"
 	)
 	add_test(NAME GameSessionTests COMMAND gargantuan_game_session_tests)
+	add_executable(gargantuan_frozen_recovery_quote_tests "tests/FrozenRecoveryQuoteTests.cpp")
+	target_link_libraries(gargantuan_frozen_recovery_quote_tests PRIVATE gargantuan_core)
+	add_test(NAME FrozenRecoveryQuoteTests COMMAND gargantuan_frozen_recovery_quote_tests)
+	set_tests_properties(FrozenRecoveryQuoteTests PROPERTIES TIMEOUT 420 LABELS "network;qualification;lifecycle")
 	add_executable(gargantuan_game_session_benchmark "tests/GameSessionBenchmark.cpp")
 	target_link_libraries(gargantuan_game_session_benchmark PRIVATE gargantuan_core)
 	target_compile_definitions(gargantuan_game_session_benchmark PRIVATE
@@ -880,6 +980,21 @@ if(BUILD_TESTING)
 			gargantuan_gns_transport
 		)
 		add_executable(gargantuan_game_session_real_transport_tests "tests/GameSessionGnsTests.cpp")
+		# Manual physical Phase 1 probe. Only its socket-free self-test is CTest.
+		add_executable(gargantuan_physical_gns_funding_probe "tests/PhysicalGnsFundingProbe.cpp")
+		target_link_libraries(gargantuan_physical_gns_funding_probe PRIVATE gargantuan_core gargantuan_gns_transport)
+		set(GARGANTUAN_PROBE_SOURCE "unlabelled-source-see-external-manifest" CACHE STRING
+			"Physical probe source identity, confirmed by the staging manifest")
+		target_compile_definitions(gargantuan_physical_gns_funding_probe PRIVATE
+			GARGANTUAN_PROBE_SOURCE="${GARGANTUAN_PROBE_SOURCE}")
+		foreach(GARGANTUAN_PROBE_MODULE IN LISTS GARGANTUAN_RUNTIME_LUAU_MODULES)
+			add_custom_command(TARGET gargantuan_physical_gns_funding_probe POST_BUILD
+				COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:gargantuan_physical_gns_funding_probe>/runtime"
+				COMMAND ${CMAKE_COMMAND} -E copy_if_different
+					"${CMAKE_CURRENT_SOURCE_DIR}/assets/runtime/${GARGANTUAN_PROBE_MODULE}"
+					"$<TARGET_FILE_DIR:gargantuan_physical_gns_funding_probe>/runtime/${GARGANTUAN_PROBE_MODULE}"
+			)
+		endforeach()
 		target_link_libraries(gargantuan_game_session_real_transport_tests PRIVATE
 			gargantuan_core
 			gargantuan_gns_transport
@@ -1000,6 +1115,7 @@ if(BUILD_TESTING)
 				gargantuan_remote_real_transport_tests
 				gargantuan_character_real_transport_tests
 				gargantuan_game_session_real_transport_tests
+				gargantuan_physical_gns_funding_probe
 			)
 			set(GARGANTUAN_PROTOBUF_RUNTIMES "")
 			if(TARGET protobuf::libprotobuf)
@@ -1023,6 +1139,11 @@ if(BUILD_TESTING)
 					COMMAND ${CMAKE_COMMAND} -E copy_if_different
 						"${GARGANTUAN_PROTOBUF_RUNTIME}"
 						"$<TARGET_FILE_DIR:gargantuan_game_session_real_transport_tests>"
+				)
+				add_custom_command(TARGET gargantuan_physical_gns_funding_probe POST_BUILD
+					COMMAND ${CMAKE_COMMAND} -E copy_if_different
+						"${GARGANTUAN_PROTOBUF_RUNTIME}"
+						"$<TARGET_FILE_DIR:gargantuan_physical_gns_funding_probe>"
 				)
 				add_custom_command(TARGET gargantuan_real_transport_tests POST_BUILD
 					COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -1109,6 +1230,7 @@ if(BUILD_TESTING)
 	add_test(NAME gargantuan_gui_foundation_benchmark_smoke COMMAND gargantuan_gui_foundation_benchmark --quick)
 	add_test(NAME gargantuan_prerun_bootstrap COMMAND gargantuan_prerun_bootstrap_tests)
 	add_test(NAME gargantuan_networking_contracts COMMAND gargantuan_networking_contract_tests)
+	add_test(NAME gargantuan_farm_admission_evidence COMMAND gargantuan_farm_admission_evidence_tests)
 	add_test(NAME gargantuan_simulated_transport COMMAND gargantuan_simulated_transport_tests)
 	add_test(NAME gargantuan_scheduler_contract COMMAND gargantuan_scheduler_contract_tests)
 	add_test(NAME gargantuan_replication COMMAND gargantuan_replication_tests)
@@ -1202,9 +1324,48 @@ if(BUILD_TESTING)
 	endif()
 	if(GARGANTUAN_WITH_GNS)
 		add_test(NAME gargantuan_real_transport COMMAND gargantuan_real_transport_tests)
+		add_test(NAME gargantuan_gns_failed_send_retry_safety COMMAND gargantuan_real_transport_tests --ack-retry-safety)
+		set_tests_properties(gargantuan_gns_failed_send_retry_safety
+			PROPERTIES LABELS "networking;optional;sanitizer-safety" TIMEOUT 45 RUN_SERIAL TRUE)
+		add_test(NAME gargantuan_gns_funded_ack COMMAND gargantuan_real_transport_tests --ack-cycle-funded 1348)
+		add_test(NAME gargantuan_gns_funded_ack_compatibility COMMAND gargantuan_real_transport_tests --ack-funded-compatibility)
+		add_test(NAME gargantuan_gns_funded_ack_four_grant COMMAND gargantuan_real_transport_tests --ack-funded-four-grant)
+		set_tests_properties(gargantuan_gns_funded_ack gargantuan_gns_funded_ack_compatibility
+			gargantuan_gns_funded_ack_four_grant PROPERTIES LABELS "networking;optional;f1;funded-ack" TIMEOUT 60 RUN_SERIAL TRUE)
+		# Actual pinned 5/20-second control paths: one control/funded pair, not
+		# repeated in each workload fixture or the sanitizer timing matrix.
+		add_test(NAME gargantuan_gns_funded_ack_stats COMMAND gargantuan_real_transport_tests --ack-stats-boundary)
+		set_tests_properties(gargantuan_gns_funded_ack_stats
+			PROPERTIES LABELS "networking;optional;funded-ack" TIMEOUT 100 RUN_SERIAL TRUE)
+		add_test(NAME gargantuan_f1_packet_tail COMMAND gargantuan_real_transport_tests --packet-tail)
+		add_test(NAME gargantuan_f1_four_grant COMMAND gargantuan_real_transport_tests --four-grant)
+		add_test(NAME gargantuan_f1_four_grant_sanitizer_safety
+			COMMAND gargantuan_real_transport_tests --four-grant-sanitizer-safety)
+		add_test(NAME gargantuan_f1_mixed_traffic COMMAND gargantuan_real_transport_tests --mixed-traffic)
+		set_tests_properties(gargantuan_f1_packet_tail gargantuan_f1_four_grant
+			gargantuan_f1_four_grant_sanitizer_safety gargantuan_f1_mixed_traffic
+			PROPERTIES LABELS "networking;optional;f1" TIMEOUT 30 RUN_SERIAL TRUE)
+		add_test(NAME gargantuan_pooled_service_source_contract
+			COMMAND ${CMAKE_COMMAND}
+				"-DGnsRoot=${gamenetworkingsockets_SOURCE_DIR}"
+				"-DGargantuanRoot=${CMAKE_CURRENT_SOURCE_DIR}"
+				-P "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/PooledServiceSourceChecks.cmake")
+		set_tests_properties(gargantuan_pooled_service_source_contract
+			PROPERTIES LABELS "networking;optional" TIMEOUT 10)
+		add_test(NAME gargantuan_gns_observe_source_contract
+			COMMAND ${CMAKE_COMMAND}
+				"-DGargantuanRoot=${CMAKE_CURRENT_SOURCE_DIR}"
+				-P "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/GnsObserveSourceChecks.cmake")
+		set_tests_properties(gargantuan_gns_observe_source_contract
+			PROPERTIES LABELS "networking;optional;f1" TIMEOUT 10)
 		add_test(NAME gargantuan_remote_real_transport COMMAND gargantuan_remote_real_transport_tests)
 		add_test(NAME gargantuan_character_real_transport COMMAND gargantuan_character_real_transport_tests)
 		add_test(NAME gargantuan_game_session_real_transport COMMAND gargantuan_game_session_real_transport_tests)
+		add_test(NAME gargantuan_physical_gns_probe_self_test COMMAND gargantuan_physical_gns_funding_probe --self-test)
+		add_test(NAME gargantuan_physical_gns_probe_invalid_arguments COMMAND gargantuan_physical_gns_funding_probe server 10.253.3.2 39450 3)
+		set_tests_properties(gargantuan_physical_gns_probe_self_test gargantuan_physical_gns_probe_invalid_arguments
+			PROPERTIES LABELS "networking;headless;optional" TIMEOUT 10)
+		set_tests_properties(gargantuan_physical_gns_probe_invalid_arguments PROPERTIES WILL_FAIL TRUE)
 		if(WIN32)
 			add_test(NAME gargantuan_packaged_game_session
 				COMMAND powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass

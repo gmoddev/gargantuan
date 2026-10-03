@@ -7,7 +7,7 @@
 #include <memory>
 
 namespace gargantuan::network {
-	namespace detail { struct ReliableServiceFeedbackAccess; }
+	namespace detail { struct ReliableServiceFeedbackAccess; struct FarmCaptureEndpointAccess; struct GnsAckDiagnosticsAccess; }
 	inline constexpr std::uint32_t NativeMaximumGnsConnections = 4096;
 	inline constexpr std::uint32_t NativeMaximumGnsPendingEvents = 1'048'576;
 	inline constexpr std::size_t NativeMaximumGnsPendingReceiveBytes = 64 * 1024 * 1024;
@@ -44,6 +44,8 @@ namespace gargantuan::network {
 
 	  private:
 		friend struct detail::ReliableServiceFeedbackAccess;
+		friend struct detail::FarmCaptureEndpointAccess;
+		friend struct detail::GnsAckDiagnosticsAccess;
 		bool EnableReliableServiceFeedback() override;
 		std::optional<detail::ReliableServiceFeedback> ReadReliableServiceFeedback(ConnectionId Connection) const override;
 		bool ReleaseReliableServiceFeedback(ConnectionId Connection) override;

@@ -4,20 +4,35 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+    inputs:
+      scheduler_trace:
+        description: Capture one bounded Windows FULL workload scheduler diagnostic
+        type: boolean
+        default: false
+      scheduler_pair_diagnostic:
+        description: Diagnostic only - trace FULL and ACK statistics once, without qualification or packaging
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 jobs:
   windows-native:
-    name: Windows x64 / MSVC 19.50+ / Release
+    name: ${{ github.event_name == 'workflow_dispatch' && inputs.scheduler_pair_diagnostic && 'Windows causal diagnostic - not qualification' || 'Windows x64 / MSVC 19.50+ / Release' }}
     runs-on: windows-2025-vs2026
     timeout-minutes: 90
     env:
       CMAKE_BUILD_PARALLEL_LEVEL: 4
       VULKAN_SDK_CHOCOLATEY_VERSION: 1.4.350
+      SCHEDULER_TRACE: ${{ github.event_name == 'workflow_dispatch' && inputs.scheduler_trace }}
 
     steps:
+      - name: Reject conflicting diagnostic selections
+        if: github.event_name == 'workflow_dispatch' && inputs.scheduler_trace && inputs.scheduler_pair_diagnostic
+        shell: pwsh
+        run: throw 'Select either the legacy FULL diagnostic or the diagnostic-only pair'
+
       - name: Checkout recursive dependencies
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -37,6 +52,9 @@ jobs:
             throw "Submodules are missing, conflicted, or not at their pinned revisions:`n$($Invalid -join "`n")"
           }
           $Status
+          $SourceCommit = git rev-parse HEAD
+          if ($LASTEXITCODE -ne 0) { throw 'Unable to record actual CI source commit' }
+          $SourceCommit | Set-Content -Encoding ascii qualified-source-commit.txt
 
       - name: Install pinned repository tools
         uses: paradoxum-games/setup-rokit@c6a9749169e3a0146019b899cd0342556f773908 # v3
@@ -156,25 +174,147 @@ jobs:
           if errorlevel 1 exit /b %errorlevel%
           cmake --build build-ci --config Release --parallel %CMAKE_BUILD_PARALLEL_LEVEL%
 
-      - name: Run complete headless CTest contract
+      - name: Build bounded scheduler diagnostic
+        if: github.event_name == 'workflow_dispatch' && (inputs.scheduler_trace || inputs.scheduler_pair_diagnostic)
+        shell: cmd
+        run: |
+          call "%VSDEVCMD%" -arch=x64 -host_arch=x64
+          if errorlevel 1 exit /b %errorlevel%
+          cl /nologo /std:c++20 /O2 /W4 /WX /EHsc tools\ci\SchedulerTrace.cpp /Febuild-ci\scheduler-trace.exe /Fobuild-ci\scheduler-trace.obj advapi32.lib tdh.lib
+          if errorlevel 1 exit /b %errorlevel%
+          set "SCHEDULER_TRACE_TEST_HELPER=%CD%\build-ci\scheduler-trace.exe"
+          python -m unittest discover -s tests -p "test_scheduler_trace.py" -v
+          if errorlevel 1 exit /b %errorlevel%
+
+      - name: Trace one FULL workload before independent native gates
+        if: github.event_name == 'workflow_dispatch' && inputs.scheduler_trace
         shell: pwsh
         run: |
-          ctest --test-dir build-ci -C Release --parallel 2 --timeout 300 --output-on-failure --no-tests=error --output-junit build-ci/ctest-results.xml
+          & tools/ci/SchedulerTrace.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Trace fixed FULL and ACK statistics pair without qualification
+        if: github.event_name == 'workflow_dispatch' && inputs.scheduler_pair_diagnostic
+        shell: pwsh
+        run: |
+          & tools/ci/SchedulerTrace.ps1 -Pair
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Run complete headless CTest contract
+        if: "!(github.event_name == 'workflow_dispatch' && inputs.scheduler_pair_diagnostic)"
+        shell: pwsh
+        run: |
+          # Complete CTest includes the funded ACK workload/mode/pool gates and
+          # one paired native statistics-boundary run; do not duplicate them here.
+          # CTest changes into --test-dir before opening its JUnit output.
+          ctest --test-dir build-ci -C Release --parallel 2 --timeout 300 --output-on-failure --no-tests=error --output-junit "$env:GITHUB_WORKSPACE/build-ci/ctest-results.xml"
+          if ($LASTEXITCODE -ne 0) { throw 'Complete headless CTest contract failed' }
+          if (-not (Test-Path -LiteralPath build-ci/ctest-results.xml -PathType Leaf) -or
+              (Get-Item -LiteralPath build-ci/ctest-results.xml).Length -eq 0) {
+            throw 'CTest did not produce the required upload-path JUnit evidence'
+          }
+
+      - name: Verify pinned Farm32 control and evidence tooling
+        if: "!(github.event_name == 'workflow_dispatch' && inputs.scheduler_pair_diagnostic)"
+        shell: pwsh
+        run: |
+          python tools/physical-qualifier/bootstrap.py
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned Agent Coordinator bootstrap failed' }
+          python -m unittest discover -s tools/physical-qualifier/tests -p 'test_f1_candidate_source.py' -v
+          if ($LASTEXITCODE -ne 0) { throw 'F1 candidate source inventory tests failed' }
+          python -m unittest discover -s tests -p 'test_foundation3l_four_client.py' -v
+          if ($LASTEXITCODE -ne 0) { throw 'F1 raw four-client evidence replay tests failed' }
+          python -m unittest discover -s tools/physical-qualifier/tests -p 'test_qualifier.py' -k phase1_raw_evidence -v
+          if ($LASTEXITCODE -ne 0) { throw 'F1 raw evidence collection tests failed' }
+          python -m unittest discover -s tools/physical-qualifier/tests -p 'test_qualifier.py' -k phase1_stage_is_distinct_and_fixed -v
+          if ($LASTEXITCODE -ne 0) { throw 'F1 fixed capture staging test failed' }
+          python -m unittest discover -s tools/physical-qualifier/tests -p 'test_farm_*.py' -v
+          if ($LASTEXITCODE -ne 0) { throw 'Farm32 control and evidence tests failed' }
+          python -m unittest discover -s tests -p 'test_foundation3l_acceptance.py' -v
+          if ($LASTEXITCODE -ne 0) { throw 'Final Foundation 3L conjunction tests failed' }
+          python -m unittest discover -s tests -p 'test_ci_junit_output.py' -v
+          if ($LASTEXITCODE -ne 0) { throw 'CI JUnit output-path regression tests failed' }
+          # Control-only mocks; no capture, NIC, or installed-service operation.
+          & tools/physical-qualifier/tests/TestCaptureHooks.ps1 -HookPath tools/physical-qualifier/worker/PktMonFarm32Capture.ps1 -Farm32
+          & tools/physical-qualifier/tests/TestDumpcapFarm32Capture.ps1
+          & tests/ContentScaleGameplayRecoveryTests.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Client recovery callback regression failed' }
+          & tests/ContentScaleGameplayRecoveryTests.ps1 -ReproduceMissingClientTick
+          if ($LASTEXITCODE -ne 0) { throw 'Client recovery negative control failed' }
+
+      - name: Run qualified reliable workload timing in Release
+        if: "!(github.event_name == 'workflow_dispatch' && inputs.scheduler_pair_diagnostic)"
+        shell: cmd
+        run: |
+          build-ci\gargantuan_game_session_real_transport_tests.exe --pooled --reliable-workload
+          if errorlevel 1 exit /b %errorlevel%
+          build-ci\gargantuan_game_session_real_transport_tests.exe --pooled --reliable-workload-32-structural
+          if errorlevel 1 exit /b %errorlevel%
+          rem Explicit diagnostics already ran FULL once before CTest; never repeat it.
+          if not "%SCHEDULER_TRACE%"=="true" (
+            build-ci\gargantuan_game_session_real_transport_tests.exe --reliable-workload
+          )
+          if errorlevel 1 exit /b %errorlevel%
+          build-ci\gargantuan_game_session_real_transport_tests.exe --reliable-workload-32
+          if errorlevel 1 exit /b %errorlevel%
+          build-ci\gargantuan_game_session_real_transport_tests.exe --reliable-workload-32-structural
+          if errorlevel 1 exit /b %errorlevel%
+
+      - name: Package qualified 32-client physical candidate
+        if: github.event_name == 'workflow_dispatch' && !inputs.scheduler_trace && !inputs.scheduler_pair_diagnostic
+        shell: pwsh
+        run: |
+          $PackageRoot = Join-Path $PWD 'build-ci/QualifiedScalePhysical'
+          $PlayerRuntime = Join-Path $PWD 'build-ci/RuntimeDistribution'
+          $ServerRuntime = Join-Path $PWD 'build-ci/ServerRuntimeDistribution'
+          & (Join-Path $PWD 'build-ci/gargantuan_qualified_scale_package.exe') `
+            $PackageRoot $PlayerRuntime $ServerRuntime
+          if ($LASTEXITCODE -ne 0) { throw 'Qualified scale package generation failed' }
+          foreach ($Role in @('Player', 'Server')) {
+            $RoleRoot = Join-Path $PackageRoot $Role
+            $Files = @(Get-ChildItem -LiteralPath $RoleRoot -File -Recurse | Sort-Object FullName |
+              ForEach-Object {
+                [ordered]@{
+                  Path = [IO.Path]::GetRelativePath($RoleRoot, $_.FullName).Replace('\', '/')
+                  Bytes = $_.Length
+                  Sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+                }
+              })
+            if ($Files.Count -lt 3) { throw "Qualified $Role package is incomplete" }
+            [IO.File]::WriteAllText((Join-Path $RoleRoot 'deployment-sha256.json'),
+              ([ordered]@{ Format = 'GargantuanFarmDeployment'; Version = 1;
+                SourceCommit = $env:GITHUB_SHA; Files = $Files } | ConvertTo-Json -Depth 5),
+              [Text.UTF8Encoding]::new($false))
+          }
+
+      - name: Upload qualified 32-client physical candidate
+        if: github.event_name == 'workflow_dispatch' && !inputs.scheduler_trace && !inputs.scheduler_pair_diagnostic
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: qualified-scale-${{ github.sha }}
+          if-no-files-found: error
+          include-hidden-files: true
+          path: build-ci/QualifiedScalePhysical/
 
       - name: Upload native CI diagnostics
-        if: failure()
+        if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: native-ci-diagnostics
           if-no-files-found: ignore
           path: |
+            qualified-source-commit.txt
             build-ci/CMakeFiles/CMakeConfigureLog.yaml
             build-ci/Testing/Temporary/LastTest.log
             build-ci/ctest-results.xml
+            build-ci/scheduler-trace/
+            build-ci/scheduler-trace-ack-stats/
+            build-ci/scheduler-trace-pair.json
 
   linux-sanitizers:
     name: Ubuntu 24.04 / Clang 19 / ASan + UBSan / Headless
     needs: windows-native
+    if: "!(github.event_name == 'workflow_dispatch' && inputs.scheduler_pair_diagnostic)"
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     env:
@@ -197,6 +337,7 @@ jobs:
         run: |
           set -euo pipefail
           git submodule status --recursive | tee /tmp/gargantuan-submodules.txt
+          git rev-parse HEAD > qualified-source-commit.txt
           if grep -Eq '^[\-+U]' /tmp/gargantuan-submodules.txt; then
             echo "Submodules are missing, conflicted, or not at their pinned revisions."
             exit 1
@@ -281,15 +422,17 @@ jobs:
             --timeout 300 \
             --output-on-failure \
             --no-tests=error \
-            --output-junit build-sanitizers/ctest-results.xml
+            --output-junit "$GITHUB_WORKSPACE/build-sanitizers/ctest-results.xml"
+          test -s "$GITHUB_WORKSPACE/build-sanitizers/ctest-results.xml"
 
       - name: Upload sanitizer diagnostics
-        if: failure()
+        if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: sanitizer-ci-diagnostics
           if-no-files-found: ignore
           path: |
+            qualified-source-commit.txt
             build-sanitizers/CMakeFiles/CMakeConfigureLog.yaml
             build-sanitizers/Testing/Temporary/LastTest.log
             build-sanitizers/ctest-results.xml

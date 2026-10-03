@@ -1337,7 +1337,27 @@ namespace gargantuan::network {
 					.StateCount = 1,
 				};
 				Frame.States[0] = *State;
+				std::uint64_t DirectDue = 0;
+				if (runtime_detail::PublicationLatencySelected(Connection)) {
+					const auto Publication = Peer.Published.find(Character);
+					DirectDue = Publication != Peer.Published.end() &&
+						Publication->second.DesiredDueTick <= AuthoritativeTick &&
+						Publication->second.QueueKind != PeerState::PublicationQueueKind::Wheel &&
+						Publication->second.QueueKind != PeerState::PublicationQueueKind::None
+						? Publication->second.DesiredDueTick : 0;
+					runtime_detail::RecordPublicationLatency({.Stage = "CharacterDirectOffered",
+						.Connection = Connection, .Object = Character, .Tick = AuthoritativeTick,
+						.Sequence = State->StateSequence.Value(), .Due = DirectDue,
+						.Epoch = Frame.MaterializationEpoch.Value(), .Kind = 5,
+						.Operations = Reliable ? 1u : 0u});
+				}
 				Queued = QueueStateFrame(Connection, Frame, Visible->second, Reliable);
+				if (!Queued && runtime_detail::PublicationLatencySelected(Connection))
+					runtime_detail::RecordPublicationLatency({.Stage = "CharacterDirectRejected",
+						.Connection = Connection, .Object = Character, .Tick = AuthoritativeTick,
+						.Sequence = State->StateSequence.Value(), .Due = DirectDue,
+						.Epoch = Frame.MaterializationEpoch.Value(), .Kind = 5,
+						.Operations = Reliable ? 1u : 0u});
 				Peer.NextFrameSequence = Peer.NextFrameSequence.TryNext().value_or(CharacterStateFrameSequence{});
 				if (Queued) {
 					auto &Publication = Peer.Published[Character];
@@ -2213,6 +2233,9 @@ namespace gargantuan::network {
 			const bool ReliableFrame = ReliableControl(Event);
 			if (!ReliableFrame && !IsExpectedStateFrameOrder(Event, Frame->FrameSequence)) return false;
 			if (Frame->MaterializationEpoch != Peer.MaterializationEpoch) {
+				SaturatingIncrement(Metrics.MaterializationEpochMismatches);
+				Metrics.LastExpectedMaterializationEpoch = Peer.MaterializationEpoch.Value();
+				Metrics.LastReceivedMaterializationEpoch = Frame->MaterializationEpoch.Value();
 				SaturatingIncrement(Metrics.StaleStatesDropped, static_cast<std::uint64_t>(Frame->StateCount));
 				return true;
 			}
@@ -2437,12 +2460,25 @@ namespace gargantuan::network {
 	bool PredictedCharacterNetwork::RequestAction(
 		ConnectionId Connection, std::uint32_t ActionToken, std::uint64_t SimulationTick
 	) {
+		SaturatingIncrement(Metrics.ActionSubmissionAttempts);
 		auto Found = Peers.find(Connection);
-		if (Found == Peers.end() || !Found->second.Control || !Found->second.NextAction.IsValid() ||
-			Found->second.PredictionSuspended)
+		if (Found == Peers.end() || !Found->second.Control) {
+			SaturatingIncrement(Metrics.ActionSubmissionNoControl);
 			return false;
+		}
+		if (!Found->second.NextAction.IsValid() || SimulationTick == 0) {
+			SaturatingIncrement(Metrics.ActionSubmissionInvalid);
+			return false;
+		}
+		if (Found->second.PredictionSuspended) {
+			SaturatingIncrement(Metrics.ActionSubmissionSuspended);
+			return false;
+		}
 		auto Definition = Actions.find(ActionToken);
-		if (SimulationTick == 0 || Found->second.PendingActionCount >= MaximumPendingCharacterActions) return false;
+		if (Found->second.PendingActionCount >= MaximumPendingCharacterActions) {
+			SaturatingIncrement(Metrics.ActionSubmissionPendingFull);
+			return false;
+		}
 		auto &Peer = Found->second;
 		const auto BasedOn = Peer.NextInput.Value() > 1 ? CharacterInputSequence(Peer.NextInput.Value() - 1)
 														: CharacterInputSequence{};
@@ -2453,7 +2489,10 @@ namespace gargantuan::network {
 			BasedOn,
 			ActionToken,
 		};
-		if (!Queue(Connection, CharacterMessage(Request), {}, true)) return false;
+		if (!Queue(Connection, CharacterMessage(Request), {}, true)) {
+			SaturatingIncrement(Metrics.ActionSubmissionSchedulerRejected);
+			return false;
+		}
 		Peer.PendingActions[Peer.PendingActionCount++] = {Request.ActionSequence, ActionToken};
 		if (PredictionEnabled && Definition != Actions.end()) {
 			Peer.PredictedAction = CharacterActionState{

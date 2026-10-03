@@ -131,6 +131,14 @@ representable size before any count-directed allocation. The writer enforces its
 8 MiB budget incrementally rather than materializing an oversized payload, and
 allocation failures are normalized at both codec entry points.
 
+Incremental production additionally applies its negotiated hard complete-frame
+limit through the private bounded encoder. It validates the entire candidate
+before size rejection, preserving invalid-data precedence, and stops payload
+writes at that limit rather than first serializing up to 8 MiB. The existing
+smaller-prefix retry, journal charges and successful GRPL bytes are unchanged.
+Available admission credit is not an encoding limit; byte deferral still uses
+the exact successfully encoded frame. The public codec retains its 8 MiB cap.
+
 `WireValue` has one explicit tag and language-neutral field layout for each of
 its 15 semantic alternatives. Decoding rejects unsupported tags, invalid UTF-8,
 non-finite or otherwise invalid values, duplicate map keys, duplicate Tags,

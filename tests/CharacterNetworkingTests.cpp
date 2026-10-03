@@ -1057,7 +1057,9 @@ namespace {
 			"history overflow clears bounded replay state and suspends further prediction"
 		);
 		Check(
-			!Client.RequestAction(Connection, 1, MaximumCharacterPredictionHistory + 3),
+			!Client.RequestAction(Connection, 1, MaximumCharacterPredictionHistory + 3) &&
+				Client.GetMetrics().ActionSubmissionAttempts == 1 &&
+				Client.GetMetrics().ActionSubmissionSuspended == 1,
 			"a suspended predictor cannot accumulate an action beyond its history bound"
 		);
 
@@ -2743,6 +2745,8 @@ end
 			"prediction-admission fixture materializes a controlled replica"
 		);
 		CharacterControlTransition Bind{Source, CharacterControlEpoch(9), StateChannelId(77), 1, true};
+		Check(!Client.RequestAction(Connection, 1, 1) && Client.GetMetrics().ActionSubmissionNoControl == 1,
+			"action submission records missing local control separately from server policy rejection");
 		auto BindBytes = EncodeCharacterMessage(CharacterMessage(Bind));
 		Check(
 			Client.HandleTransportEvent(TransportEvent(
@@ -2757,6 +2761,8 @@ end
 			"prediction-admission fixture accepts its reliable control bind"
 		);
 		const auto Initial = Character->GetCFrame();
+		Check(!Client.RequestAction(Connection, 1, 0) && Client.GetMetrics().ActionSubmissionInvalid == 1,
+			"action submission records an invalid simulation tick without queuing a request");
 		Scheduler.NextSubmission = {SchedulerSubmitStatus::DroppedUnreliable};
 		Check(
 			!Client.SubmitInput(Connection, World, 2, 1.0f / 60.0f, {1.0f, 0.0f}, 0.0f, false) &&
@@ -2780,6 +2786,15 @@ end
 				Character->GetPosition().x > Initial.Position.x && Client.GetPredictionHistorySize(Connection) == 1,
 			"the first admitted input owns sequence one and then records local prediction"
 		);
+		Scheduler.NextSubmission = {SchedulerSubmitStatus::ReliableBacklogExhausted};
+		Check(!Client.RequestAction(Connection, 1, 4) && Client.GetMetrics().ActionSubmissionSchedulerRejected == 1,
+			"action submission identifies scheduler refusal independently of control and prediction");
+		Scheduler.NextSubmission = {SchedulerSubmitStatus::Accepted};
+		for (std::size_t Index = 0; Index < MaximumPendingCharacterActions; ++Index)
+			Check(Client.RequestAction(Connection, 1, 5 + Index), "legal pending action remains admissible");
+		Check(!Client.RequestAction(Connection, 1, 100) && Client.GetMetrics().ActionSubmissionPendingFull == 1 &&
+			Client.GetMetrics().ActionRequestsRejected == 0,
+			"pending action saturation is a local bound, never a fabricated server rejection");
 	}
 
 	void TestReliableCharacterFailureAndActionResults() {

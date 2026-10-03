@@ -1,5 +1,9 @@
 # Current architecture
 
+- [Physical agent coordination ownership and migration](PhysicalAgentCoordination.md)
+  records the pinned GantriaEngine library, local Gargantuan adapter, validation
+  scope and preservation of installed physical-PC tooling.
+
 - [Foundation 3L security closure](ContentAvailabilitySecurityClosure3L.md)
   preserves SEC-3L-001's raw-address lifetime ABA finding and records full-ObjectId
   package ownership, deterministic address-reuse regression, bounded metadata,

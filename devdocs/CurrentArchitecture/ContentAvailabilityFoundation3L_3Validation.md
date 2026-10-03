@@ -1,10 +1,660 @@
 ---
 status: partial-validation
 owner: runtime-networking
-last_verified: 2026-09-24
+last_verified: 2026-10-03
 ---
 
 # Foundation 3L.3 diagnostic validation ledger
+
+## Current tooling and controlled capacity qualification (2026-10-03 15:10 UTC)
+
+Tooling/test source `1ccefb336e28e4c9beacc5d0f847d34bb3d49838` passes all four
+original, first-attempt required workflows: Native push `37126255211`, Native
+PR `37126310252`, GNS push `37126255209`, and GNS PR `37126310248`. Each Native
+workflow passes 95 Windows and 53 Linux CTest cases; each GNS workflow passes
+10 cases. Windows tooling and all five standalone workloads also pass. Original
+REST metadata, six job logs, six artifact ZIPs, and their JUnit/source markers
+are retained and independently verified. The PR checkout is merge commit
+`cfc1bfd88610379f5fc35642b14dc40d66a747b1`; its tree and every executed artifact
+tree equal the reviewed source tree `ee8f361af59b91ba56d41329807f024be11ed891`.
+All 2,982 paired exact Remote/resource intervals validate identity, endpoint
+ordering, sampled CPU bounds and completed-sleep deltas. No historical failed
+interval gains a causal explanation from these successful observations.
+
+Archive `tooling-ci-1ccefb3-original-v1/index.json` has SHA-256
+`c07d07371a66a68122aaed8ac73c84fd838f441139d3dd642ef6c800903442f6`;
+checkout reconciliation SHA-256 is
+`12a4915212de19aa021c78c36436ecb2d853da3514fbe593594bf3246a5d6513`.
+Both live under the retained controller artifact root. This supersedes the
+pending-current-CI checkpoints below, without relabeling any historical run.
+
+Controlled worker attempt `da348bc1-2953-4c1f-b44d-1dbfd74ebd78` at source
+`e2ff1af6f94a4d5827cf8fc5326152c8f6cf88a9` separately passes the complete
+95-case native matrix and all five original standalone commands. Its frozen
+declaration precedes every recorded step; no native child is retried, capped,
+forced or substituted. The original worker verifier and independent controller
+replay agree, with 75 retained raw members and inventory SHA-256
+`d7e5dc3f242cafe1ee0159e36f530fba72cc7b659e082128a42a703c33741252`.
+Postflight reports no task-owned process and no UDP 39450 listener.
+
+The corrected environment uses the isolated normal Python runtime and a
+27-character task TEMP root, with a prospective worst-case successful packaging
+path proof of 238 characters against the existing 240-character bound. Earlier
+attempt `79d013a8-4712-4a03-800b-b21e0827815e` remains FAIL (93/95, all five
+standalones pass): both failing packaging fixtures reported the existing path
+bound. Their unchanged binaries pass separately with short TEMP. The preceding
+84/95 attempt also remains failed. No path limit, negative test, service curve,
+latency gate, admission policy or production source changed for this correction.
+
+Native execution candidate remains `9ae8f68c2c8ed50589b5c54ed56657fa6fd02aad`;
+the production/build input diff to current tooling source is empty. Fresh
+exact-tooling offline F1 replay matches the retained physical result. Dormant
+Local/Node launch preparation passes 54 isolated guard tests; it has not been
+adopted or launched. Installed package/service pins match, and retained same-NIC
+active/persistent address inventories span a measured natural reboot on both
+hosts. Fresh per-run resource, link, route, import and idle checks remain required.
+
+At 15:09:45 UTC `DESKTOP-B8V8NAN` has 7.781 GiB available, below the unchanged
+8-GiB preflight. No stale task-owned farm was found. Local32, real-TLS Node32,
+provider parity and final acceptance/audit remain **NOT MEASURED**. No physical
+attempt followed this qualification. **KI-006 OPEN; Foundation 3L B — PARTIALLY
+READY.** Resume with fresh resource checks, final guarded launch adoption, Local
+qualification, then Node qualification and the independent final conjunction.
+
+## Hosted failure attribution before the corrected Local32 launch (2026-10-03)
+
+No provider attempt followed the staging fix while its hosted checks were
+unresolved. Native `37106409866` passes 95 CTest cases and Farm32 tooling but
+fails FULL_RESERVATION recovery RPC p99/max 1191.79 ms and Event 1191.78 ms.
+The fixture observes 833.651 ms sleeping against a 16.4441-ms request with
+zero thread/process CPU; the exact OS cause and individual RPC chronology
+remain NOT MEASURED. Native `37107296441` similarly passes CTest/tooling but
+fails recovery RPC/Event/action gates. Its failing action spans steps 420–424,
+490.332 ms and zero thread/process CPU; the 337.95-ms server poll at step 422
+lies inside it. These elapsed-time failures remain failures.
+
+Native push `37107293083` fails two different CTest gates. The ACK statistics
+control arm passes 48 grants and its independent wire bound, but the prompt
+arm fails a combined eight-predicate assertion. The failing predicate/token
+was not recorded. The strict four-grant test's 462 peer-0 segments sum to
+524,288 B and independently reproduce its 86,063,889,408 byte-us running
+deficit, above 18,025,216,000. Activation-to-completion is 35,210 us, within
+the finite envelope; maximum individual intersegment gap is 485 us. This is
+cumulative underservice, not evidence of the separate 833-ms sleep event.
+Native sender CPU/wake attribution and other peer timelines are NOT MEASURED.
+
+Test-only `018cc2883274b832b11549045e10f02176eae6ac` adds failure-only exact
+ACK predicates/state/events and retains every peer before failing four-grant
+validation. No native production input, clock, threshold or deadline changes.
+The controlled worker builds the native target incrementally with four jobs
+and executes each diagnostic once: ACK stats PASS (48 grants per arm; control
+wire 7,204,128 <= 7,587,729 B, prompt wire 7,204,179 <= 7,587,727 B), strict
+four-grant PASS (27,706-us common interval; peer maximum 3,103,784,960 and pool
+maximum 8,455,716,864 byte-us). Receipt:
+`C:\Sandbox\Codex\Artifacts\native-failure-diagnostics-8c7.json`.
+No owned native process remains and tracked source is clean. This controlled
+result validates the diagnostic integration, not the cause of the historical
+hosted failures or a fresh physical provider gate. CI remains unresolved;
+Local32/Node32 remain unmeasured and KI-006 remains open.
+
+## Funded-ACK F1 candidate qualified physically (2026-10-03 UTC)
+
+Execution source `9ae8f68c2c8ed50589b5c54ed56657fa6fd02aad` has terminal-green
+exact-source hosted qualification: Native `37091176350` (95 Windows / 53 Linux
+original JUnit cases) and GNS sanitizer `37091175492` (10 cases). The official
+package and source-owned CI verifiers pass. This resolves the older pending-CI
+checkpoint below for this execution candidate; it does not imply that every
+later receipt-head CI run succeeds.
+
+Fresh physical `454bf4f8-c8f2-4c18-9866-1b61218da514` / lifecycle
+`7a48260b-6911-4394-bbb5-65a65e17bac0` is **F1 PHYSICAL PHASE 1 — PASS**.
+Independent raw replay proves 128 maximum grants, all four peer certificates,
+32 common four-grant intervals, protected gameplay, zero-loss complete
+bidirectional capture, exact 67,134,444-B acceptance/retirement conservation,
+endpoint/coordinator/outer success and clean restoration. The
+[physical receipt](PooledPhysicalQualification3L.md#funded-ack-candidate-f1-physical-phase-1-passed-2026-10-03-utc)
+records exact source, bounds, hashes, bootstrap scope and replay correction.
+
+The separate Farm32 near-capacity recorder now passes with supplemental cleanup
+under its prospectively reviewed recorder-only contract. Run
+`6e9b80d8-671c-4870-9566-63f67b803a4b` retains a 15,050,735,616-byte ETL,
+all 9,669,000 emitted marked packets in both captures and zero native/export/
+dumpcap loss. The original outer cleanup predicate failed on an additional
+PowerShell process; its INCOMPLETE receipt remains unchanged. A separately
+tested, hash-bound finalizer proves later exact ownership/socket cleanup.
+Client synthetic delivery remains FAIL668, independently from recorder PASS.
+See the [complete capture and closure receipt](../../tools/physical-qualifier/docs/FARM32_ETL_NATIVE_STOP.md).
+Historical synthetic socket receive gaps remain
+unattributed, but the accepted funding-gate review does not make that attribution
+a prerequisite for production GNS testing. Recorder completeness remains required.
+The earlier 06:38 UTC client reading was below the unchanged **8-GiB client**
+gate. After the user freed memory, fresh role preflights at 07:12 UTC measured
+11,806,433,280 B available on `DESKTOP-B8V8NAN` and 24,079,781,888 B on the worker,
+passing the **8-GiB client / 4-GiB server** thresholds. These are preflight
+observations, not application resource qualification. Each new run must recheck.
+
+Local attempt `d05185d7-b2dc-4c3c-8a78-1ad4c782faed`, coordinator
+`e929ef36-a69e-43f8-ad06-be7ecaccfd4a`, passed the control barrier but failed
+before capture or farm workload startup. Both staged capture-controller children
+failed to import `farm_capture_directions`: the staging list omitted this
+dependency, and the worker's isolated Python also requires explicit sibling
+import setup. Import-only reproduction on both hosts confirms the defect.
+No capture/farm evidence roots were created; provider behavior is NOT MEASURED.
+Original FAILED role receipts (including `ChildTreeReaped=false`) remain intact.
+A separate 07:17 UTC cleanup receipt verifies recorded processes absent, ports
+clear, capture idle and exact one-run tickets retired. Evidence is retained under
+`C:\Sandbox\Codex\Artifacts\Farm32-9ae8f68c2-LocalRecovery-Private-v1`, including
+`failed-run-retirement.json`. The staging correction must qualify before a fresh
+identity is used; this infrastructure failure does not invalidate prior F1 or
+recorder evidence.
+
+Fresh Local and authenticated real-TLS Node 32-client matrices, complete moving
+recovery/resource/parity evidence, and final acceptance/audit remain
+**NOT MEASURED**. **KI-006 OPEN; Foundation 3L B — PARTIALLY READY; no 3M or merge.**
+
+Receipt-head Native push `37097874975` remains a failed FULL_RESERVATION mixed
+action measurement (2,227.25 ms against 250 ms). Long zero-CPU wall spans were
+recorded, but its exact per-action chronology is unavailable; no gate is waived.
+The same-head PR run `37097877256` passes. Test-only change `eef3a0e9a` now
+buffers bounded action submission/resolution steps, timestamps and CPU counters,
+including rejection/missing evidence, without changing workload scheduling or
+latency thresholds. The standalone test passes; hosted validation of this
+diagnostic change remains pending at this checkpoint. It does not change the
+frozen physical probe or Player/Server execution candidate.
+
+## Causal recovery and materialization corrections deterministically validated (2026-10-02)
+
+The [C3/C5 cessation-fence amendment](PooledReliableServiceRecoveryContract3L.md#causal-cessation-fence-amendment--2026-10-02)
+is implemented as an immutable cessation reference plus source-confirmed
+semantic coverage and exact accepted live obligations. Each captured generation
+must represent its journal fence and baseline pending transitions, then first-send,
+ACK and retire the finite accepted prefix. New live work remains audited without
+reopening that completed cut. An unresolved planning input holds the fence open
+until an actual valid planning installation supplies its baseline pending set.
+Absence from a sampled pending set is not cancellation evidence.
+
+The detached reference now quotes captured pending/in-flight relevance against
+the frozen catalog before journal replay, retaining exact complete bytes,
+fingerprints, sequences and cursor bounds. It remains a cessation-state
+counterfactual, not an unconditional bound on future live encoding. Its fixed
+workload-derived deadline is not enlarged by later deltas. The canonical moving
+workload must meet that deadline and the unchanged 20-second service-recovery
+gate. F1, admission/fairness, transport reserves and motion requirements are
+unchanged.
+
+| Evidence | Result and scope |
+| --- | --- |
+| Internal causal tracker | **32 cases PASS**, including missing/duplicate evidence, token reuse, callback ordering, unresolved planning and finite-prefix convergence negatives. |
+| Independent offline causal reconciliation | **37 cases PASS**; validates source dispositions, exact prepared/accepted byte identity and delivery/retirement prefix evidence. |
+| Actual replication source R1–R10 | **PASS** through production coordinator fixtures: no-motion exact replay; journal-independent Enter/Leave; cancellation versus acceptance; oscillation; coalescing; continued live mutation and withheld-baseline negative; generation isolation; provider-independent source behavior; exact byte evidence. |
+| Frozen reference | Pending and in-flight relevance planning regressions **PASS**, including exact cursor trace and no live source reads during replay. |
+| Worker native source suites | `gargantuan_networking_contracts` and `gargantuan_replication_relevance`: **2/2 PASS**, including the tracker and actual-source cases above. |
+| Final execution-changing hosted CI | **PENDING / NOT QUALIFIED** at this checkpoint; earlier green revisions do not qualify the new candidate. |
+| Fresh Local / real-TLS Node 32-client provider matrix | **NOT MEASURED**. No new provider result is inferred from these deterministic checks. |
+
+The source tests found an attributable instrumentation defect: the planned
+structural-frame path omitted the preparation callback and returned a zero
+diagnostic fingerprint. The correction records the exact encoded candidate
+before payload transfer and preserves its fingerprint for byte-deferred retry.
+This allows acceptance to bind to the actual prepared bytes rather than inventing
+coverage from aggregate counters. Integration revisions `979e1b72b`,
+`38abeca10` and `1f4ba2cfb` respectively retain the planned-frame correction,
+offline verifier and bounded farm failure/reference-cursor evidence.
+
+The separate Character materialization A/B regression used the same real
+bounded relevance-planning path. With the old predicate, an unaccepted
+speculative Leave reduced server materialization from 2 to 1 while the client
+received **0 structural bytes**. The client expected epoch 2 but received epoch
+4, recorded one history overflow and refused a valid owner action. The
+correction (`6c3bb0875`, owner-action regression `af77ce4f9`) retains previously
+materialized candidates while their Character and RootPart remain in committed
+knowledge. A speculative selection no longer retires that accepted lifetime.
+The corrected fixture preserves materialization at 2, records zero stale-state
+delta and history overflows, admits the owner action, and passes eight
+unaccepted reversals followed by accepted Leave and fresh Enter. The complete
+GameSession suite passes. Retained evidence is under
+`C:\Users\aiden\.codex\artifacts\baseline-action-attribution\` in
+`action-materialization-before.log`, `action-materialization-corrected.log`
+and `action-game-session-tests.log`.
+
+This does **not** retrospectively attribute the seven local submission failures
+in historical run `43af4af0-06de-49b6-917d-f0557816b9ab`: its exact absent-control,
+suspended-prediction or scheduler-refusal branch was **NOT MEASURED**. New
+bounded branch counters and the controlled A/B isolate a real production defect
+without replacing that missing historical evidence.
+
+The client `DESKTOP-B8V8NAN` currently has approximately **1.27 GiB** available;
+the worker `HOSTPC` has approximately **19.5 GiB**. The unchanged **8-GiB minimum
+on each endpoint** therefore blocks physical preflight on the client. New
+worker-local diagnostic execution is not a provider qualification. The next
+canonical work is final candidate CI and packaging/preflight, restoration of
+the client resource gate, then fresh canonical Local and real-TLS Node
+32-client matrices and the final Foundation 3L acceptance sweep. None is waived.
+
+The established corrected **F1 PHYSICAL PHASE 1 — PASS** remains valid.
+**KI-006 OPEN; Foundation 3L B — PARTIALLY READY; no 3M or automatic merge.**
+The dated entries below preserve their original source and measured scope;
+their descriptions of an unimplemented farm are historical, not current source
+status.
+
+## Installed Farm32 capture infrastructure qualified separately (2026-10-01)
+
+The side-by-side worker Farm32 capture service passed a marked bidirectional
+fiber smoke run and a 920-MiB ETL capacity run. Stop completed in 3.608 seconds;
+an offline replay through the pinned hook exited 0 in 78.385 seconds, exported
+796,092 complete frames, and reported zero lost events. The replay pcap was
+bit-identical to the original export and independently retained all 789,300
+marked packets without truncation. The worker returned to capture-idle. See
+the [full receipt](PooledPhysicalQualification3L.md)
+for pins, hashes, run IDs, and evidence location. The exact 960-MiB threshold
+and any 32-client GameSession capture are **NOT MEASURED**. This synthetic
+infrastructure result does not qualify either provider, KI-006, or Foundation
+3L; those remain **NOT MEASURED**, **OPEN**, and **B — PARTIALLY READY**.
+
+## Farm32 authenticated Node request evidence candidate (source-only, 2026-10-01)
+
+The optional Node farm path can now record one bounded, run-bound manifest RPC
+receipt after the official Server's Node provider has connected using pinned
+root-CA `grpc::SslCredentials`, sent its environment-backed Bearer credential,
+validated the RPC response identity and SHA-256, and passed the packaged
+manifest digest check in ContentAvailability. The role-local endpoint checks
+the native record against the pinned Server package and run-manifest CA, then
+indexes `node-provider.json` with the exact manifest request ID. A separate
+bounded offline analyzer can match that ID to the official Node's successful
+authenticated `GetManifest` TLS log and validate the negotiated version/cipher.
+The bounded Node helper can retain `node.stdout.log`; the analyzer requires
+the independently pinned Node run/stage receipts and exact log hash/size to
+bind the matched record to the owned child. This alone cannot establish the
+full physical gate.
+The offline reconciler validates the receipt as
+an authenticated request observation but deliberately leaves the full Node
+provider/real-TLS campaign gate **NOT MEASURED**. The source candidate has no
+physical 32-client Node run, negotiated TLS transcript, or full service
+provenance receipt yet. KI-006 and Foundation 3L state remain unchanged.
+
+## Corrected F1 physical Phase 1 passed; 32-client matrix remains (2026-10-01)
+
+The [fresh physical receipt](PooledPhysicalQualification3L.md#corrected-f1-physical-phase-1-passed-2026-10-01)
+records physical run `e120a1f0-47ae-45e0-869f-9d0450795bc4` and outer
+lifecycle `e29e2200-1538-480f-9969-3ca8b01458fb`. All six hosted
+execution-changing CI jobs and 72 qualifier tests passed before the run.
+Four real clients connected through production GNS and completed 128 exact
+512-KiB accepted grants, 32 per peer. Native unique first-send completed each
+maximum grant 28,681–28,974 µs after activation. The greatest peer running
+deficit was 8,925,478,912 byte-µs, below the unchanged 18,025,216,000-byte-µs
+bound; 29 genuine four-grant overlap episodes totaled 622,756 µs. The sum of
+four peer maxima bounds the common pool deficit at 29,695,672,320 byte-µs,
+below 72,100,864,000 byte-µs. The direct pool high-water was **NOT MEASURED**.
+All first-send and ACK bytes converged, with accepted = retired = 67,134,512 B,
+zero retries and zero terminal release. Both capture manifests verified, all
+four tuples were bidirectional in both captures, the worker ETW recorded zero
+lost events, the coordinator and outer lifecycle succeeded, and owner-verified
+cleanup restored the staged endpoints. **F1 PHYSICAL PHASE 1 — PASS.**
+
+The next canonical gate is the separately measured **32-actual-client Local
+and real-TLS Node matrix**, followed by the final Foundation 3L acceptance
+sweep. The current benchmark has one actual client plus protocol observers;
+the smallest 32-actual-client farm, its exact-source/deployment/link preflight,
+and its evidence collection remain to be qualified before those provider
+runs. No 32-client provider result is inferred from Phase 1. **KI-006 OPEN;
+Foundation 3L B — PARTIALLY READY; no 3M or automatic merge.**
+
+## Corrected F1 transport candidate worker-local qualification (2026-10-01)
+
+The [candidate receipt](PooledPhysicalQualification3L.md#corrected-f1-candidate-deterministic-preflight-2026-10-01)
+pins source `ce4733de8d68086667bc8fe5138bcc743f21c54e`, the corrected
+`ReliableNoNagle` structural tail path, and the subsequent pre-send diagnostic
+sampling correction. The pinned-GNS old/new 1,258-byte regression passed its
+expected FAIL/PASS comparison, the qualifier suite passed 70/70, and 100/100
+worker-local four-client 32-wave GameSession campaigns passed with common
+four-grant overlap, exact accepted/retired conservation and per-run cleanup.
+The largest observed peer running deficit was 12,816,974,912 byte-µs against
+F1's unchanged 18,025,216,000-byte-µs bound. Exact attribution of the older
+rare status-to-send stall remains **NOT MEASURED**. Hosted CI, endpoint
+staging, capture, physical service and outer lifecycle remain separate gates;
+this entry does not supersede the historical physical FAIL below. **KI-006
+OPEN; Foundation 3L B — PARTIALLY READY; no 3M.**
+
+## F1 physical Phase 1 native running-drain failure (2026-09-30)
+
+The [final authorized attempt](PooledPhysicalQualification3L.md#f1-phase-1-reached-native-drain-and-failed-its-running-bound-2026-09-30)
+used physical run `374a128c-3fa9-47d5-9603-5a97c3f79139` and lifecycle
+run `e5ecb1e4-df26-4586-a2e3-dbad4c4f92b2`. All control, package, CI,
+evidence, tunnel and server-owned-socket preflights passed. Four real clients
+connected, all four GNS tuples were captured in both directions, and four
+finite grants were outstanding. Two subsequent 1,258-byte grants first-sent
+1,135 bytes promptly but delayed their last 123 bytes long enough to exceed
+F1's **18,025,216,000 byte-µs** intra-grant bound. Valid/current native
+feedback recorded 75,547,803,648 and 76,118,228,992 byte-µs at the first
+failure, then sticky service failure through grant completion. Their finite
+completion envelopes passed separately; the common four-peer interval and
+maximum-grant gate were **NOT MEASURED**. Native cleanup conserved all 25,648
+accepted bytes; the overall physical coordinator and lifecycle failed because
+the F1 production service contract failed. The two-attempt retry budget is
+exhausted. **KI-006 OPEN; Foundation 3L B — PARTIALLY READY; no 3M.** Next:
+attribute the native packetization/scheduling tail gap and make an explicit
+transport/architecture decision before new physical authorization.
+
+## F1 physical Phase 1 server-live false negative (2026-09-30)
+
+The [fresh post-control-correction attempt](PooledPhysicalQualification3L.md#f1-phase-1-stopped-at-an-impossible-server-live-marker-2026-09-30)
+used physical run `18f17968-521e-431e-a402-7b549c214166` and lifecycle
+run `e1087ede-b4a0-44ef-85f8-1fafd32a359d`. The actual worker child
+connected to the coordinator and started the pinned probe, but the qualifier
+required a `event=listening` marker absent from that F1 binary. A separate
+worker-local loopback test proved the live probe owned the UDP socket across
+the six-second readiness window with no marker. Client probes did not start;
+F1 service, delivery and convergence remain **NOT MEASURED**. Capture evidence
+was retained and both endpoint stages were rolled back. The exact PID-owned
+socket proof is now the pending qualified correction. **KI-006 OPEN;
+Foundation 3L B — PARTIALLY READY.**
+
+## F1 physical Phase 1 control-barrier stop (2026-09-30)
+
+The [single fresh F1 attempt](PooledPhysicalQualification3L.md#f1-physical-phase-1-stopped-at-the-worker-control-barrier-2026-09-30)
+passed both endpoint package/self-test checks, evidence-root and interactive
+normal-LAN preflights, and both tunnel handshakes. Physical run
+`4523839a-4d29-44b0-9246-9c7bc9053fed` stopped before probe or capture:
+the actual worker physical endpoint timed out connecting to the client
+coordinator's TCP `39451` control listener. The outer lifecycle run
+`e61b4f94-7df4-4029-831c-416f3989c5be` failed after the server role
+reported that endpoint failure. F1 grant, service, delivery, capture, and
+convergence gates are **NOT MEASURED**. Owner-verified cleanup restored both
+endpoint stages and the worker candidate payload; the capture service is
+idle. The attempt was not retried. **KI-006 OPEN; Foundation 3L B — PARTIALLY
+READY.** The next gate is an actual-process control-connect diagnosis and
+bounded deterministic preflight, followed by a separately authorized fresh
+physical F1 Phase 1 attempt.
+
+## F1 finite-grant candidate preflight (2026-09-29)
+
+The canonical [F1 amendment](../../docs/adr/D01-pooled-service-curve.md)
+defines the 16 MiB/s requirement for finite accepted grants; the 2 MiB/s peer
+credit and all admission limits remain unchanged. Deterministic production
+admission, native attribution, grant-scoped finite/running checks, four-peer
+overlap, ACK and retirement suites passed on the F1 source. The new Phase 1
+adapter pins a separate F1 probe, 24-file native source archive and twelve
+runtime assets. The copied Windows probe passed socket-free self-test and the
+candidate's real-file hash/provenance preflight passed. The earlier D01 probe
+and installed endpoint copies were not replaced. Physical F1 Phase 1 remains
+unrun; KI-006 is OPEN and Foundation 3L remains B — PARTIALLY READY. The
+[physical receipt](PooledPhysicalQualification3L.md) retains all earlier runs
+under their original contract.
+
+## Capture-runtime and workload preflight update (2026-09-28)
+
+The worker's installed capture helper now has the bounded 30-second hook
+runtime. A real installed-service capture-only export completed in 26.656
+seconds, with a complete 27,006-block pcapng and idle cleanup; installed
+executable and hook hashes were rechecked. Bounded worker-only four-peer
+loopback variants accepted and cleanly retired over 67 MiB aggregate but
+failed the three-batch, three-consecutive-window Phase 1 proof. A first 6-ms
+summary double-counted window rows on repeat analysis; its raw CSV held two
+isolated all-peer eligible steps. The corrected fresh 6-ms run recorded zero
+all-peer eligible steps and one feedable below-floor interval, despite clean
+aggregate retirement and four-grant high water. ACK-positive windows were interrupted by
+ACK-empty samples while all four grants existed, and GNS pending queues
+emptied before a repeatable sustained overlap formed. The floor evaluator's
+17 socket-free edge/eligibility/idempotency cases pass. Native result `3` on the earlier
+60-byte unreliable client send means `k_EResultNoConnection` after the
+qualifier producer exhausted its 512-sample cap and shut down; it was not a
+GNS queue-limit result. No fresh physical Phase 1 retry occurred, and neither
+canonical physical service throughput nor final Foundation 3L acceptance was
+established. The next gate is an architecture decision about the current
+queue/grant and per-window ACK-positive measurement contract. See the
+[current physical receipt](PooledPhysicalQualification3L.md#local-four-peer-contract-remains-blocked-after-bounded-demand-correction-2026-09-28).
+
+## Diagnostic Phase 1 underfed-window and export stop (2026-09-28)
+
+The [single diagnostic attempt](PooledPhysicalQualification3L.md#one-diagnostic-phase-1-attempt-no-sustained-four-grant-window-2026-09-28)
+used physical run `69bfc09f-b04c-4a10-a545-3d01cca2dd97` and lifecycle
+run `f5482f2a-5f30-424d-9c0d-2524e8dbd2dd`. Four actual clients reached
+Ready, one producer and three non-producers registered, wave 1 ran, and four
+grants became active. The producer recorded 83 RPC and 82 Event samples with
+no terminal transport rejection. The native trace has 4,449 journal-demand
+rows but only two four-grant attributed-backlog rows, no eligible class-2 or
+class-3 floor interval, no qualified batch and `floor_failure=0`. The server
+rejected the incomplete sustained overlap proof, then clients saw its GNS
+close. This is an **INVALID / UNDERFED QUALIFICATION WINDOW**; canonical
+per-peer and aggregate service are **not measured**. It does not retroactively
+resolve the earlier 6.714-ms row's **INDETERMINATE** validity or its
+untimestamped scheduler rejection.
+
+The client pcap finalized with all four bidirectional tuples. The worker's
+as-run capture gate failed because its installed service killed a 19.262-second
+owned ETL export at 15 seconds. A post-run export of the preserved raw ETL
+recovered a complete matching pcap and allowed owned service cleanup, but did
+not change the failed result. Agent Coordinator draft PR #3 raises the fixed
+hook bound to 30 seconds with a slow-stop acknowledgement regression;
+Gargantuan's endpoint wait is now 45 seconds. The installed service remains
+unchanged and idle; the temporary diagnostic probe was restored to its prior
+pin. Local Python suites, Windows helper tests and physical hook simulation
+pass; hosted CI is pending. **STRENGTHENED FOUR-CLIENT PHASE 1 — FAIL;
+KI-006 OPEN; Foundation 3L B — PARTIALLY READY.** The one physical attempt
+was not retried. Next: attribute and correct the bounded workload's missing
+sustained four-peer overlap, separately qualify the new service runtime, then
+consider any further physical attempt under fresh authorization. No 3M or
+merge.
+
+## Corrected Phase 1 attribution and capture-finalization repair (2026-09-28)
+
+The [post-run attribution](PooledPhysicalQualification3L.md#post-run-attribution-of-the-corrected-phase-1-stop-2026-09-28)
+classifies the sole 6.714-ms under-floor row **INDETERMINATE** for canonical
+qualification. Its byte arithmetic is correct, but the retained trace does
+not prove continuous four-peer eligibility or feedable backlog, and the
+producer's generic terminal error has no timestamp or transport status.
+The producer completed only bounded, sequential gameplay submissions; a
+flood or production scheduler defect is not established. The physical and
+outer lifecycle verdicts remain FAIL. At that checkpoint no new Phase 1 or
+later 3L gate had run. The adapter's abort capture finalization is repaired and has local
+regression coverage. The opt-in native send diagnostics have a separately
+pinned Windows build and socket-free analyzer pass on both endpoints; abort
+capture and worker service-stop smokes passed independently. The candidate
+had not yet been installed for a fresh diagnostic physical attempt. The
+subsequent single diagnostic run and source-only service correction are
+recorded above. KI-006 stays OPEN; Foundation 3L stays B — PARTIALLY READY.
+
+## Corrected strengthened Phase 1 service/transport stop (2026-09-28)
+
+The [corrected physical receipt](PooledPhysicalQualification3L.md#corrected-strengthened-phase-1-stopped-on-servicetransport-failure-2026-09-28)
+records physical run `da16daee-49d2-4812-a985-3159806d202e` and lifecycle
+run `0e9effd2-3d1c-4afa-9003-c577c5683711`. The first client was the sole
+producer, four real GNS clients connected, the runner-owned tunnel preflight
+passed, and wave 1 began. Under four active grants and journal demand, native
+feedback marked a 6,714-microsecond peer interval below the unchanged 16-MiB/s
+floor: 38,995 unique first-send bytes versus 112,643 required. The worker
+reported `floor_failure=1`; the producer client also saw a terminal GNS
+scheduler submission rejection. No full four-grant batch qualified, the
+client capture was incomplete after abort, and the worker endpoint timed out
+waiting for capture stop. Both endpoint and physical coordinator results were
+`ABORT/Success=false`; outer lifecycle `Success=false`.
+
+The corrected attempt was not retried. Task-owned state was cleaned, prior
+qualifier installations restored, and evidence retained. The coupled service
+and transport failure still needs causal attribution; the full funding gate
+cannot pass on this evidence. **STRENGTHENED FOUR-CLIENT PHASE 1 — FAIL;
+KI-006 OPEN; Foundation 3L B — PARTIALLY READY.** Phase 2 Local/Node,
+32 actual clients and the final sweep are **not measured**. The exact next
+task is bounded GNS submission/native-feedback timing attribution and abort
+capture-finalization diagnosis before any further physical attempt. No 3M or
+merge.
+
+## Strengthened Phase 1 missing-producer stop (2026-09-28)
+
+The [fresh physical attempt](PooledPhysicalQualification3L.md#strengthened-phase-1-fresh-attempt-stopped-at-missing-producer-2026-09-28)
+used physical ID `68b5abfe-ed9c-44b3-963e-c1d6543fc7d8` and lifecycle ID
+`fa69fa22-bc5f-4236-8516-eaf6aacce018`. The runner's built-in one-use
+tunnel preflight passed and four actual GNS clients connected. The server
+then rejected the staged workload because all four clients advertised
+`producer=0`; its first explicit failure was `exactly one gameplay producer
+required`. No workload wave, qualified four-grant backlog interval or
+structural-service window occurred. Both endpoint and physical coordinator
+results were `ABORT/Success=false`; the outer lifecycle returned
+`Success=false`, host exit 1. Both endpoint captures saw all four tuples in
+both directions, and the evidence manifests verified without mismatches.
+The run was not retried, and task-owned state was cleaned while evidence was
+retained. Installed qualifier pins returned to their prior version; the
+capture hook and production service were unchanged. **STRENGTHENED FOUR-CLIENT
+PHASE 1 — FAIL BEFORE SERVICE MEASUREMENT; KI-006 OPEN; Foundation 3L B —
+PARTIALLY READY.** Correct and independently qualify the exactly-one-producer
+Phase 1 stage before any separately authorized fresh physical attempt. No 3M
+or merge.
+
+## Strengthened Phase 1 pre-assignment stop (2026-09-28)
+
+The [Phase 1 staging receipt](PooledPhysicalQualification3L.md#strengthened-phase-1-staging-stopped-before-assignment-2026-09-28)
+records staged physical ID `ffa573c0-91a8-418a-9ac6-4efb63b12728` and
+label `2370720e43cb49e6`. Both endpoint catalogs, the pinned strengthened
+probe self-test, evidence roots, worker capture-idle state, fiber interfaces
+and an independent two-way tunnel proof passed without a physical launch.
+That independent tunnel check consumed the worker's one-use reverse-proof file.
+The lifecycle runner's repeated preflight then timed out **before assignment**.
+There is no lifecycle run ID, probe, capture, or funding measurement; the staged
+ID is not a completed physical attempt. No retry was made. Task-owned state was
+cleaned and both qualifier copies restored to their prior deployment pin.
+The consumed-proof failure now has prompt reporting and a regression test.
+**STRENGTHENED FOUR-CLIENT PHASE 1 — NOT MEASURED; KI-006 OPEN; Foundation 3L
+B — PARTIALLY READY.** A separately authorized fresh stage should use only the
+lifecycle runner's built-in one-use tunnel preflight. No 3M or merge.
+
+## Four-client physical readiness passed; historical lifecycle false negative corrected post-run (2026-09-28)
+
+The [physical receipt](PooledPhysicalQualification3L.md#four-client-physical-readiness-passed-historical-lifecycle-false-negative-corrected-post-run-2026-09-28)
+records one fresh run `acd22294-75d5-4457-b69e-73bb6a00d8af`, lifecycle run
+`55d56c05-4dda-435b-a27b-d8578a084978`, after separate client autostop,
+worker four-flow NDIS capture and four-client classification proofs. Server
+Ready/active 4/4 met the canonical one-second interval; all four clients
+reported Ready and clean remote close, with good cleanup. The complete client
+pcap contains 603 outbound/402 inbound exact-tuple packets; the worker pcap
+contains the matching 603 inbound/402 outbound across all four source ports.
+Both endpoint and physical coordinator results are successful and classified
+`FOUR_CLIENT_READINESS_ONLY`; raw evidence manifests verify. The outer
+lifecycle host also completed successfully, but its enclosing adapter returned
+FAIL because the server Codex agent ended `NEEDS_USER/MISSING_CAPABILITY`
+instead of `IDLE` after protocol completion. Agent Coordinator runtime
+correction `6a9824cca891ad4cea0e1e6a0d1e374c09b02f7e` and test revision
+`2712a4bc26db0b5f6924631ebe5ab9a25c158475` passed 87 local tests and
+hosted Windows/Ubuntu CI, including delayed completion and the failure cases
+that must not be reconciled. All four retained evidence manifests verified.
+The original outer FAIL is unchanged, and this run was not retried.
+**FOUR-CLIENT PHYSICAL READINESS — PASS; OUTER LIFECYCLE RECONCILIATION —
+HISTORICAL FALSE NEGATIVE, CORRECTED POST-RUN; KI-006 OPEN; Foundation 3L
+B — PARTIALLY READY.**
+Strengthened Phase 1, 3M and merge were not started.
+
+## Four-client physical readiness capture stop (2026-09-28)
+
+The [physical receipt](PooledPhysicalQualification3L.md#four-client-application-readiness-passed-capture-gate-failed-2026-09-28)
+records one fresh physical run `4a0eedd7-a16a-4be2-a876-d618723db4ba` and
+lifecycle run `25e59048-71d5-4d3f-b716-fb8cd17b6f60`. Preflights and both
+tunnel handshakes passed. Four unique client nonces and four source-port tuples
+were observed; the server accepted four GNS connections and its canonical
+Ready/active 4/4 interval passed. All four clients reported Ready and clean
+close. The client raw pcapng ended mid-block; its valid-prefix diagnostic
+counted 584 outbound / 334 inbound but does not satisfy the capture gate. The
+worker miniport counted 155 outbound / 298 inbound, with zero inbound on two
+of the four ports, despite zero reported drops or lost events. Both physical
+endpoint results, the coordinator and lifecycle host failed; cleanup passed.
+The single run was not retried. **FOUR-CLIENT SIMULTANEOUS READINESS — FAIL;
+KI-006 OPEN; Foundation 3L B — PARTIALLY READY.** Next: bounded capture and
+classification attribution before a separately authorized fresh four-client
+attempt. Strengthened Phase 1, 3M and merge remain gated.
+
+## One-client physical readiness passed (2026-09-28)
+
+The [physical receipt](PooledPhysicalQualification3L.md#one-client-physical-readiness-passed-2026-09-28)
+records one separately authorized fresh attempt after correcting the temporary
+Codex named-profile file format. Physical run
+`61920077-ed08-4552-b4d6-0d314e431959` and lifecycle run
+`2e195100-fcc5-47ae-9442-6443bcf97025` passed both evidence/LAN
+preflights, both tunnel handshakes, agent registration, the capture/listener
+barrier, live GNS connection/accept, both GameSession Ready reports, the
+client clean close, bidirectional packet gates on both PCs, successful
+`FINALIZE`/`RUN_DONE`, and host completion. Client capture counted 98 outbound
+/ 43 inbound; worker miniport counted 86 outbound / 147 inbound, with zero
+reported drops or lost ETL events. Cleanup passed on both PCs.
+**ONE-CLIENT PHYSICAL READINESS — PASS; KI-006 OPEN; Foundation 3L B —
+PARTIALLY READY.** Four-client simultaneous readiness, Phase 1 funding
+completion, 3M, final acceptance and merge remain gated.
+
+## Live-GNS worker capture proof passed; fresh lifecycle agent startup failed (2026-09-28)
+
+The [physical receipt](PooledPhysicalQualification3L.md#live-gns-capture-corrected-fresh-one-client-lifecycle-stopped-at-agent-startup-2026-09-28)
+attributes the previous missing ingress to Packet Monitor's `-t UDP` predicate
+on live-GNS receive frames. A fixed peer-MAC/IPv4/port-39450 filter and
+miniport-only export passed a real-GNS capture-only proof: worker inbound 135,
+outbound 32, no lost events, packet truncation, duplicate miniport groups or
+reported drops. The installed hook/service pin is `2BC2E143…`; the pcap gate
+still requires the exact UDP tuple in both directions. No NIC offload changed.
+
+One fresh interactive-profile physical run
+`429c38d7-26bd-474d-b5d1-e97d13b0e8bd` and lifecycle run
+`575f286e-2c91-438c-9e4a-1f63a96d4cc5` passed evidence/LAN preflights
+and both SSH tunnel handshakes. Both Codex agents failed before session IDs or
+registration; the coordinator aborted at its registration deadline. Physical
+capture and GNS were not started in that run, so its client and worker packet
+counts and GameSession result are **not measured**. Cleanup passed. The run was
+not retried. **ONE-CLIENT PHYSICAL READINESS — FAIL; KI-006 OPEN; Foundation
+3L B — PARTIALLY READY.** Next: diagnose the agent startup failure and make a
+separately authorized fresh one-client attempt before four-client readiness.
+
+## Interactive one-client path reached Ready; worker capture gate failed (2026-09-28)
+
+The [physical receipt](PooledPhysicalQualification3L.md#interactive-one-client-gns-and-ready-passed-worker-ingress-capture-failed-2026-09-28)
+records run `a1e20f02-cb11-425d-99b4-b30119261eff` and lifecycle run
+`b7fc58d9-4295-4e5c-99ef-23b253747a9d` under the explicitly authorized
+`PHYSICAL_QUALIFICATION_INTERACTIVE` profile. Both normal-user evidence/LAN
+checks and the two fixed tunnel handshakes passed. The GNS server accepted the
+client at `10.253.3.1:51824 -> 10.253.3.2:39450`; both sides connected and
+reported Ready, and the client clean-close gate passed. Client capture counted
+125 outbound / 51 inbound packets. The worker miniport captured 62 outbound /
+0 inbound, despite receiving and accepting the connection. Worker capture
+validation therefore failed, `RUN_DONE Success=false`, and the lifecycle
+agents failed. No retry or four-client test occurred. Restricted Foundation 2B
+qualification is unchanged and is not implied by the interactive physical
+result. Cleanup passed. **ONE-CLIENT PHYSICAL READINESS — FAIL; KI-006 OPEN;
+Foundation 3L B — PARTIALLY READY.** Next: attribute worker live-GNS ingress
+capture before another authorized fresh attempt; no 3M.
+
+## One-client physical lifecycle transport passed; GNS path failed (2026-09-28)
+
+The [physical receipt](PooledPhysicalQualification3L.md#both-lifecycle-tunnel-directions-passed-physical-gns-connection-timed-out-2026-09-28)
+records fresh physical run `116805d6-7777-4422-9c23-d11644358297` and
+lifecycle run `ae30e49e-4a24-46e1-a77c-4d4d3b7de82b`. Both restricted
+evidence roots, fixed worker broker, authenticated main-to-worker SSH forward
+and restricted-worker-to-main reverse handshake passed before assignment.
+Both agents pulled and registered, and the physical worker was listening on
+UDP `10.253.3.2:39450` before the client launched. The client GNS connection
+timed out; each capture had outbound 0/inbound 0 qualified UDP packets.
+GameSession Ready, clean close and one-client readiness did not pass. The run
+was not retried; all task-owned tunnel, daemon, broker, capture and probe
+resources cleaned. KI-006 OPEN; Foundation 3L B — PARTIALLY READY. Next is
+bounded attribution of the client-to-worker fiber GNS path before any new
+one-client attempt, not four-client readiness or 3M.
+
+## Both evidence roots ready; one-client socket stop (2026-09-27)
+
+The [physical receipt](PooledPhysicalQualification3L.md#one-client-dual-evidence-preflight-passed-worker-socket-denied-2026-09-27)
+records exact restricted-identity read/write/delete success for both physical
+evidence roots **before daemon start**. In one fresh lifecycle attempt, both
+agents pulled and registered and the client returned LIVE. The worker wrote
+its evidence but its socket setup failed with `WinError 10013` before capture,
+GNS or GameSession. The host aborted; no retry occurred. Packet counts and
+application readiness remain not measured. KI-006 OPEN; Foundation 3L
+B — PARTIALLY READY. The next task is bounded worker socket-policy diagnosis,
+not four-client readiness, Phase 1 or 3M.
+
+## One-client physical lifecycle gate (2026-09-27)
+
+The [physical receipt](PooledPhysicalQualification3L.md#one-client-lifecycle-attempt-stopped-at-worker-evidence-access-2026-09-27)
+records one fresh attempt after the restricted client evidence preflight passed.
+Both agents pulled and registered; the client returned LIVE, but the worker
+could not create its separate service-evidence directory (`WinError 5`). The
+host aborted, with no GNS/GameSession or packet-direction measurement. There
+was no retry. The client ACL correction is qualified only for its fixed root;
+the worker evidence root needs its own bounded provisioning and restricted
+preflight before a new attempt. KI-006 OPEN; Foundation 3L B — PARTIALLY READY;
+four-client readiness and 3M not started.
 
 ## Direct fiber production-GNS Phase 1 (2026-09-24)
 

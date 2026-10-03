@@ -15,6 +15,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <vector>
 
 namespace gargantuan {
 	class DataModel;
@@ -59,10 +60,29 @@ namespace gargantuan::network {
 		[[nodiscard]] static NetworkLimits DefaultLimits();
 	};
 
+	// Read-only connection evidence for a bounded host qualification run. The
+	// nonce is client-supplied identity, not authentication or Player authority.
+	struct GameSessionPeerIdentity {
+		ConnectionId Connection;
+		std::uint64_t Nonce = 0;
+		std::uint64_t SessionEpoch = 0;
+		std::uint32_t PlayerId = 0;
+		bool Ready = false;
+	};
+
 	struct GameSessionMetrics {
 		ReliableByteAdmissionMetrics ReliableAdmission;
 		std::uint64_t ReliableAdmissionPeerStates = 0;
 		std::uint64_t ReliableAdmissionLogicalBytes = 0;
+		// Read-only aggregate queue observations. A missing native value is
+		// explicit so qualification cannot mistake unavailable feedback for zero.
+		std::uint64_t SchedulerQueuedReliableBytes = 0;
+		std::uint64_t NativeQueuedReliableBytes = 0;
+		std::uint32_t NativeQueuedReliablePeersObserved = 0;
+		std::uint64_t StructuralAcceptedFeedbackBytes = 0;
+		std::uint64_t StructuralFirstSentFeedbackBytes = 0;
+		std::uint64_t StructuralAckedFeedbackBytes = 0;
+		std::uint32_t StructuralFeedbackPeersObserved = 0;
 		std::uint64_t TransportConnections = 0;
 		std::uint64_t AcceptedPeers = 0;
 		std::uint64_t ReadyPeers = 0;
@@ -81,6 +101,17 @@ namespace gargantuan::network {
 		std::uint64_t ClientStructuralDecodeNanoseconds = 0;
 		std::uint64_t ClientStructuralApplyNanoseconds = 0;
 		std::uint64_t ClientCharacterMessagesHandled = 0;
+		std::uint64_t ClientActionSubmissionAttempts = 0;
+		std::uint64_t ClientActionSubmissionNoControl = 0;
+		std::uint64_t ClientActionSubmissionSuspended = 0;
+		std::uint64_t ClientActionSubmissionInvalid = 0;
+		std::uint64_t ClientActionSubmissionPendingFull = 0;
+		std::uint64_t ClientActionSubmissionSchedulerRejected = 0;
+		std::uint64_t ClientCharacterStaleStatesDropped = 0;
+		std::uint64_t ClientMaterializationEpochMismatches = 0;
+		std::uint64_t ClientLastExpectedMaterializationEpoch = 0;
+		std::uint64_t ClientLastReceivedMaterializationEpoch = 0;
+		std::uint64_t ClientCharacterHistoryOverflows = 0;
 		std::uint64_t ClientRemoteMessagesHandled = 0;
 		std::uint64_t ClientCharacterMaximumServiceGapNanoseconds = 0;
 		std::uint64_t ClientRemoteMaximumServiceGapNanoseconds = 0;
@@ -250,6 +281,7 @@ namespace gargantuan::network {
 		[[nodiscard]] std::shared_ptr<DataModel> GetClientDataModel() const;
 		[[nodiscard]] std::optional<ConnectionId> GetPrimaryConnection() const;
 		[[nodiscard]] std::shared_ptr<Player> GetAcceptedPlayer(ConnectionId Connection) const;
+		[[nodiscard]] std::vector<GameSessionPeerIdentity> GetPeerIdentities() const;
 		bool SetTrustedReplicationFocus(ConnectionId Connection, std::span<const glm::vec3> FocusPoints);
 
 	  private:

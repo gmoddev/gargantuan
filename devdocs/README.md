@@ -9,6 +9,9 @@ project scaffold.
 
 ## Read this first
 
+- [Physical agent coordination ownership](CurrentArchitecture/PhysicalAgentCoordination.md)
+  routes qualification tooling to the standalone pinned GantriaEngine project.
+
 - [Current architecture](CurrentArchitecture/README.md) explains the engine that
   exists today.
 - [Subsystem audit](CurrentArchitecture/SubsystemAudit.md) records what works,

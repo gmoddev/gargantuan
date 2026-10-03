@@ -1,8 +1,13 @@
 #include "gargantuan/network/ReplicationCoordinator.hpp"
 #include "PlanningLookup.hpp"
+#include "ReliableByteAdmissionDiagnostics.hpp"
+#include "GameSessionTestAccess.hpp"
+#include "FrozenReplicationSchema.hpp"
+#include "BoundedReplicationEncoding.hpp"
 #include "../runtime/RuntimeWorkDiagnostics.hpp"
 
 #include "gargantuan/InstanceProperty.hpp"
+#include "gargantuan/network/ReliableServiceProfile.hpp"
 #include "gargantuan/classes/Instance.hpp"
 #include "gargantuan/reflection/RuntimeSchemaLifecycle.hpp"
 #include "gargantuan/runtime/ChangeJournal.hpp"
@@ -14,6 +19,7 @@
 #include <limits>
 #include <map>
 #include <set>
+#include <span>
 #include <stdexcept>
 #include <type_traits>
 #include <vector>
@@ -24,6 +30,10 @@ namespace gargantuan::network {
 		constexpr std::size_t MaximumDependencyClosureDepth = 64;
 		constexpr std::size_t MaximumDependencyClosureObjects = MaximumPeerDesiredObjects;
 		constexpr std::size_t MaximumCatalogRefreshBatches = 16;
+		std::array<std::uint64_t, 2> EvidenceFingerprint(const std::vector<std::byte> &Encoded) noexcept {
+			return (detail::ActiveAdmissionEvidence || detail::ActiveStructuralCausalEvidence) ? detail::ExactCandidateFingerprint(Encoded) :
+				std::array<std::uint64_t, 2>{};
+		}
 
 		PublishReplication MakePublish(SnapshotObject Object) {
 			return {
@@ -159,7 +169,7 @@ namespace gargantuan::network {
 		}
 
 		const InstanceProperty *FindNativeProperty(const PublishReplication &Object, std::string_view Name) {
-			const auto *Definition = GetActiveRuntimeSchemaRegistry().FindClassById(Object.ClassSchemaId);
+			const auto *Definition = detail::GetReplicationSchemaRegistry().FindClassById(Object.ClassSchemaId);
 			if (!Definition) return nullptr;
 			const auto Found = std::ranges::find_if(Definition->AllProperties, [&](const auto &Entry) {
 				return Entry.first == Name;
@@ -265,6 +275,7 @@ namespace gargantuan::network {
 		if (!Configuration.IsValid()) throw std::invalid_argument("Structural replication configuration is invalid");
 		PlanningRemaining = Configuration.PlanningWorkPerTick; // Tick zero also owns one finite allowance.
 		if (!this->SourceRoot) return;
+		SourceRootId = this->SourceRoot->GetObjectId();
 		auto SnapshotValue = CaptureSnapshot(this->SourceRoot);
 		CatalogCursor = SnapshotValue.Cursor;
 		NameCoalescingBegin = CatalogCursor.NextSequence;
@@ -282,6 +293,240 @@ namespace gargantuan::network {
 			SaturatingAdd(Metrics.StructuralTemplateBuilds, 1);
 		}
 		Metrics.CatalogObjects = Catalog.size();
+	}
+
+	std::unique_ptr<ReplicationCoordinator> ReplicationCoordinator::CaptureFrozenQuote(std::string &Error) {
+		if (FrozenQuote || !SourceRoot || !SourceRootId.IsValid()) {
+			Error = "Frozen quote source is invalid";
+			return {};
+		}
+		if (!RefreshCatalog(Error)) return {};
+		const auto Tail = ChangeJournal::Get().CreateCursor(SourceRootId).NextSequence;
+		if (CatalogCursor.NextSequence != Tail) {
+			Error = "Replication catalog did not reach the cessation journal tail";
+			return {};
+		}
+		auto First = Tail;
+		for (const auto &[Connection, Peer] : Peers) {
+			(void)Connection;
+			if (Peer.PreparedCommit) {
+				Error = "A structural preparation is still awaiting acceptance at cessation";
+				return {};
+			}
+			if (Peer.JournalCursor.Scope != SourceRootId || Peer.JournalCursor.NextSequence > Tail) {
+				Error = "A peer journal cursor is outside the cessation scope";
+				return {};
+			}
+			First = std::min(First, Peer.JournalCursor.NextSequence);
+		}
+		const auto Retention = ChangeJournal::Get().GetRetentionWindow(SourceRootId);
+		if (First < Retention.OldestSequence || Tail - First > Retention.Capacity) {
+			Error = "Cessation journal suffix is outside retained history";
+			return {};
+		}
+		auto Read = ChangeJournal::Get().Read({SourceRootId, First}, static_cast<std::size_t>(Tail - First));
+		if (Read.Status != ChangeReadStatus::Available || Read.Cursor.NextSequence < Tail) {
+			Error = "Cessation journal suffix is outside retained history";
+			return {};
+		}
+		// The source and peers are Main-owned; no authoritative mutation can occur
+		// between this copy and the journal read. Do not retain active coroutine
+		// handles: they borrow the original coordinator and peer by reference.
+		auto Quote = std::make_unique<ReplicationCoordinator>(*this);
+		Quote->SourceRoot.reset();
+		Quote->IsInitiallyRelevant = {};
+		Quote->FrozenQuote = true;
+		// Capture on Main alongside the authoritative catalog. Published registries
+		// are immutable; this strong pin survives later schema replacement without
+		// reading the Main-owned lifecycle from the detached replay thread.
+		Quote->FrozenSchema = GetRuntimeSchemaLifecycle().GetActiveRegistry();
+		Quote->FrozenJournalOldest = First;
+		Quote->FrozenJournalTail = Tail;
+		Quote->FrozenJournalRecords = std::move(Read.Records);
+		Quote->DetachedPlanning.clear();
+		Quote->PlanningPeers.clear();
+		Quote->PlanningRecordCount = 0;
+		Quote->Metrics.PlanningRecords = 0;
+		Quote->PlanningAfter = {};
+		for (auto &[Connection, Peer] : Quote->Peers) {
+			(void)Connection;
+			const bool SelectionResolved = Peer.PlanningSelection == Peer.ResolvedSelection &&
+				Peer.DesiredDependencyCursor.Scope == Quote->DependencyCursor.Scope &&
+				Peer.DesiredDependencyCursor.NextSequence == Quote->DependencyCursor.NextSequence;
+			Peer.Planning.reset();
+			Peer.PlanningInputRecords = 0;
+			Peer.LastPlanningServiceTick = 0;
+			Peer.PlanningSelection = Peer.PlanningSelection
+				? std::make_shared<const PeerRelevanceSelection>(*Peer.PlanningSelection) : nullptr;
+			Peer.ResolvedSelection = SelectionResolved ? Peer.PlanningSelection : nullptr;
+			if (Peer.Planned && Peer.PlanningSelection && (!SelectionResolved || !Peer.PendingTransitions.empty()))
+				Quote->PlanningPeers.insert(Connection);
+		}
+		Error.clear();
+		return Quote;
+	}
+
+	FrozenJournalQuoteStep ReplicationCoordinator::AdvanceFrozenJournalQuote(
+		const std::map<ConnectionId, std::size_t> &MaximumFrameBytes) {
+		if (!FrozenQuote || !FrozenSchema || MaximumFrameBytes.size() != Peers.size())
+			return {.Error = "Frozen journal quote peer set is invalid"};
+		const detail::FrozenReplicationSchemaScope SchemaScope(*FrozenSchema);
+		bool NeedsPlanning = false;
+		for (const auto &[Connection, Peer] : Peers) {
+			const auto Limit = MaximumFrameBytes.find(Connection);
+			if (Limit == MaximumFrameBytes.end() || Limit->second < 36 ||
+				Limit->second > MaximumReliableServiceGroupBytes - ReliableServiceEnvelopeBytes ||
+				Peer.PreparedCommit)
+				return {.Error = "Frozen quote has unresolved preparation or invalid frame limits"};
+			const bool DependencyResolved = Peer.DesiredDependencyCursor.Scope == DependencyCursor.Scope &&
+				Peer.DesiredDependencyCursor.NextSequence == DependencyCursor.NextSequence;
+			if (!Peer.Planned && !DependencyResolved)
+				return {.Error = "Frozen non-planned quote has unresolved dependency selection"};
+			if (Peer.Planned && (!Peer.PlanningSelection || Peer.PlanningAwaitingSelection || !Peer.PlanningError.empty()))
+				return {.Error = "Frozen quote has an unavailable or failed captured planning selection"};
+			NeedsPlanning = NeedsPlanning || (Peer.Planned && (!DependencyResolved ||
+				Peer.PlanningSelection != Peer.ResolvedSelection || !Peer.PendingTransitions.empty()));
+			if (Peer.JournalCursor.NextSequence > FrozenJournalTail)
+				return {.Error = "Frozen journal quote cursor passed the cessation tail"};
+		}
+		// Recompute only the exact immutable selection/captured catalog at t0.
+		// Coroutine handles were detached at capture. One normal bounded planning
+		// tick per advance permits incomplete planning without treating it as Pending
+		// or reading later live relevance. No frame means progress remains unsealed.
+		if (NeedsPlanning) {
+			if (PlanningTick == std::numeric_limits<std::uint64_t>::max())
+				return {.Error = "Frozen quote planning tick exhausted"};
+			ProcessPlanning(PlanningTick + 1);
+		}
+		bool WaitingForPlanning = false;
+		auto Position = Peers.upper_bound(FrozenQuoteAfter);
+		for (std::size_t Visited = 0; Visited < Peers.size(); ++Visited) {
+			if (Position == Peers.end()) Position = Peers.begin();
+			const auto Connection = Position->first;
+			++Position;
+			const auto Limit = MaximumFrameBytes.at(Connection);
+			const auto &Peer = Peers.at(Connection);
+			const auto FrameCursorBefore = Peer.JournalCursor.NextSequence;
+			if (!Peer.PlanningError.empty()) return {.Error = Peer.PlanningError};
+			if (Peer.Planned && (Peer.PlanningSelection != Peer.ResolvedSelection ||
+				Peer.DesiredDependencyCursor.Scope != DependencyCursor.Scope ||
+				Peer.DesiredDependencyCursor.NextSequence != DependencyCursor.NextSequence)) {
+				WaitingForPlanning = true;
+				continue;
+			}
+			if (!Peer.PendingTransitions.empty()) {
+				FrozenQuoteAfter = Connection;
+				if (Peer.Planned && !IsPlanningReady(Connection)) { WaitingForPlanning = true; continue; }
+				auto Produced = ProducePendingRelevance(Connection, Configuration.PeerQuantum, PlanningTick, Limit, Limit);
+				if (!Produced.Frame) {
+					if (Produced.Error == "No replication relevance changes are available") return {};
+					return {.Error = Produced.Error.empty() ? "Frozen pending relevance made no progress" : Produced.Error};
+				}
+				if (Produced.EncodedFrame.empty() || Produced.EncodedFrame.size() > Limit ||
+					Produced.EncodedFrame.size() > MaximumReliableServiceGroupBytes - ReliableServiceEnvelopeBytes)
+					return {.Error = "Frozen pending relevance exceeds its complete-message bound"};
+				const FrozenJournalQuoteFrame Frame{.Connection = Connection, .Sequence = Produced.Frame->Sequence,
+					.CompleteBytes = Produced.EncodedFrame.size() + ReliableServiceEnvelopeBytes,
+					.Fingerprint = detail::ExactCandidateFingerprint(Produced.EncodedFrame),
+					.CursorBefore = FrameCursorBefore,
+					.CursorAfter = Peer.PreparedCommit && Peer.PreparedCommit->JournalCursor
+						? Peer.PreparedCommit->JournalCursor->NextSequence : Peer.JournalCursor.NextSequence};
+				if (Peer.ExplicitSchedulerCommit && !CommitSchedulerAcceptance(Connection, Produced.Frame->Sequence).Succeeded())
+					return {.Error = "Frozen pending relevance could not commit its detached frame"};
+				return {.Frame = Frame};
+			}
+			if (GetJournalLag(Connection) == 0) continue;
+			FrozenQuoteAfter = Connection;
+			const auto InitialTransitions = Configuration.PeerQuantum;
+			const auto InitialJournalRecords = Configuration.MaximumJournalRecordsPerPeerTick;
+			auto Transitions = InitialTransitions;
+			auto JournalRecords = InitialJournalRecords;
+			// A frozen, all-Name prefix can prove an oversized candidate from string
+			// payload bytes alone. Follow the producer's exact geometric retry budgets
+			// before constructing or encoding it. Mixed or uncertain prefixes retain the
+			// original producer path, including its error and no-frame behavior.
+			if (Peer.PolicyManaged && Peer.JournalCursor.Scope == SourceRootId &&
+				Peer.JournalCursor.NextSequence >= FrozenJournalOldest &&
+				Peer.JournalCursor.NextSequence < FrozenJournalTail) {
+				const auto First = static_cast<std::size_t>(Peer.JournalCursor.NextSequence - FrozenJournalOldest);
+				std::set<ObjectId> ValidatedCurrentNames;
+				std::set<std::size_t> ValidatedHistoricNames;
+				bool Proven = true;
+				while (Transitions > 1 && Proven) {
+					const auto ReadLimit = std::min(MaximumWireJournalRecords, (JournalRecords + 1) / 2);
+					if (First > FrozenJournalRecords.size() || ReadLimit == 0) break;
+					const auto Count = std::min(ReadLimit, FrozenJournalRecords.size() - First);
+					if (Count == 0) break;
+					std::set<ObjectId> CurrentNames;
+					std::size_t NameBytes = 0;
+					std::size_t OperationCount = 0;
+					for (std::size_t Index = First; Index < First + Count; ++Index) {
+						const auto &Record = FrozenJournalRecords[Index];
+						const auto *Name = std::get_if<PropertyUpdatedChange>(&Record.Payload);
+						const auto Accepted = Peer.AcceptedParents.find(Record.Object);
+						const auto Published = Peer.PublicationJournalEnds.find(Record.Object);
+						const auto CatalogObject = Catalog.find(Record.Object);
+						if (!Name || !Name->Replicated || Name->DeclaringClassSchemaId ||
+							Name->PropertyName != "Name" || !std::holds_alternative<std::string>(Name->Value) ||
+							!Peer.View.Knows(Record.Object) || !Peer.View.RelevantObjects.contains(Record.Object) ||
+							Accepted == Peer.AcceptedParents.end() || Record.Sequence < Accepted->second.NameJournalEnd ||
+							(Published != Peer.PublicationJournalEnds.end() && Record.Sequence < Published->second) ||
+							CatalogObject == Catalog.end() || RetiredObjects.contains(Record.Object) ||
+							CatalogObject->second->Publication.Properties.contains("Name")) {
+							Proven = false;
+							break;
+						}
+						const bool CoalescedName = Record.Sequence >= NameCoalescingBegin;
+						if (CoalescedName && !CurrentNames.insert(Record.Object).second) continue;
+						if (OperationCount == Transitions) break;
+						const auto &Value = CoalescedName
+							? CatalogObject->second->Publication.Name : std::get<std::string>(Name->Value);
+						const bool Inserted = CoalescedName
+							? ValidatedCurrentNames.insert(Record.Object).second
+							: ValidatedHistoricNames.insert(Index).second;
+						if (Inserted) {
+							if (Value.size() > MaximumProtocolStringBytes ||
+								Value.find('\0') != std::string::npos || !IsValidProtocolUtf8(Value)) {
+								Proven = false;
+								break;
+							}
+						}
+						NameBytes += Value.size();
+						++OperationCount;
+					}
+					if (!Proven) break;
+					if (NameBytes <= Limit || Count == 1) break;
+					JournalRecords -= Count;
+					Transitions /= 2;
+				}
+				if (!Proven) {
+					Transitions = InitialTransitions;
+					JournalRecords = InitialJournalRecords;
+				}
+			}
+			auto Produced = ProduceIncremental(Connection, Transitions, Limit, JournalRecords, Limit);
+			if (!Produced.Frame) {
+				if (Produced.Error == "No relevant replication changes are available" ||
+					Produced.Error == "No replication changes are available") return {};
+				return {.Error = Produced.Error.empty() ? "Frozen journal quote made no progress" : Produced.Error};
+			}
+			if (Produced.EncodedFrame.empty() || Produced.EncodedFrame.size() > Limit ||
+				Produced.EncodedFrame.size() > MaximumReliableServiceGroupBytes - ReliableServiceEnvelopeBytes)
+				return {.Error = "Frozen journal quote frame exceeds its complete-message bound"};
+			const FrozenJournalQuoteFrame Frame{
+				.Connection = Connection, .Sequence = Produced.Frame->Sequence,
+				.CompleteBytes = Produced.EncodedFrame.size() + ReliableServiceEnvelopeBytes,
+				.Fingerprint = detail::ExactCandidateFingerprint(Produced.EncodedFrame),
+				.CursorBefore = FrameCursorBefore,
+				.CursorAfter = Peer.PreparedCommit && Peer.PreparedCommit->JournalCursor
+					? Peer.PreparedCommit->JournalCursor->NextSequence : Peer.JournalCursor.NextSequence,
+			};
+			if (auto &Peer = Peers.at(Connection); Peer.ExplicitSchedulerCommit &&
+				!CommitSchedulerAcceptance(Connection, Produced.Frame->Sequence).Succeeded())
+				return {.Error = "Frozen journal quote could not commit its detached frame"};
+			return {.Frame = Frame};
+		}
+		return {.Complete = !WaitingForPlanning};
 	}
 
 	void ReplicationCoordinator::BeginRetirementTick(std::uint64_t SimulationTick) {
@@ -346,13 +591,14 @@ namespace gargantuan::network {
 	}
 
 	bool ReplicationCoordinator::RefreshCatalog(std::string &Error) {
+		if (FrozenQuote) return true;
 		runtime_detail::WorkScope Work(runtime_detail::WorkPhase::CatalogRefresh);
 		if (!SourceRoot || !CatalogCursor.Scope.IsValid()) {
 			Error = "Replication catalog source is invalid";
 			return false;
 		}
 		for (std::size_t Batch = 0; Batch < MaximumCatalogRefreshBatches; ++Batch) {
-			auto Read = ChangeJournal::Get().Read(CatalogCursor, MaximumWireJournalRecords);
+			auto Read = ChangeJournal::Get().ReadPinned(CatalogCursor, MaximumWireJournalRecords);
 			if (Read.Status == ChangeReadStatus::ResnapshotRequired) {
 				try {
 					auto SnapshotValue = CaptureSnapshot(SourceRoot);
@@ -396,7 +642,8 @@ namespace gargantuan::network {
 				std::map<ObjectId, std::uint64_t> Touched;
 				auto CandidateNameBegin = NameCoalescingBegin;
 				std::set<ObjectId> PendingRetired;
-				for (const auto &Record : Read.Records) {
+				for (const auto &Pinned : Read.Records) {
+					const auto &Record = *Pinned;
 					const auto *Name = std::get_if<PropertyUpdatedChange>(&Record.Payload);
 					if (!Name || !Name->Replicated || Name->DeclaringClassSchemaId || Name->PropertyName != "Name" ||
 						!std::holds_alternative<std::string>(Name->Value)) CandidateNameBegin = Record.Sequence + 1;
@@ -728,6 +975,50 @@ namespace gargantuan::network {
 		}
 	}
 
+	void ReplicationCoordinator::RecordCausalPreparation(const PeerState &Peer,
+		const PreparedStructuralCommit &Commit, std::span<const std::byte> Encoded) const {
+		if (FrozenQuote || !detail::ActiveStructuralCausalEvidence) return;
+		std::vector<detail::StructuralPendingIdentity> Resolved;
+		Resolved.reserve(Commit.Entering.size() + Commit.Leaving.size());
+		auto Add = [&](ObjectId Object) {
+			const auto Found = Peer.PendingTransitions.find(Object);
+			if (Found != Peer.PendingTransitions.end())
+				Resolved.push_back({Found->second.Token, Object, Found->second.Kind == PendingTransitionKind::Enter});
+		};
+		for (const auto Object : Commit.Entering) Add(Object);
+		for (const auto Object : Commit.Leaving) Add(Object);
+		detail::RecordStructuralCausal({.Kind = detail::StructuralCausalKind::Prepared,
+			.Connection = Peer.View.Connection, .SourceScope = SourceRootId,
+			.Sequence = Commit.Sequence.Value(), .CompleteBytes = Encoded.size() + ReliableServiceEnvelopeBytes,
+			.CursorBefore = Peer.JournalCursor.NextSequence,
+			.CursorAfter = Commit.JournalCursor ? Commit.JournalCursor->NextSequence : Peer.JournalCursor.NextSequence,
+			.AcceptedRevision = Peer.AcceptedRevision, .Fingerprint = detail::ExactCandidateFingerprint(Encoded),
+			.ResolvedPending = Resolved, .Entering = Commit.Entering, .Leaving = Commit.Leaving});
+	}
+
+	void ReplicationCoordinator::RecordCausalPendingReplacement(const PeerState &Peer,
+		const std::map<ObjectId, PendingTransition> &Replacement) const {
+		if (FrozenQuote || !detail::ActiveStructuralCausalEvidence) return;
+		for (const auto &[Object, Old] : Peer.PendingTransitions) {
+			const auto Found = Replacement.find(Object);
+			if (Found != Replacement.end() && Found->second.Token == Old.Token) continue;
+			const bool Replaced = Found != Replacement.end() && Found->second.Kind == Old.Kind;
+			detail::RecordStructuralCausal({
+				.Kind = Replaced ? detail::StructuralCausalKind::PendingReplaced : detail::StructuralCausalKind::PendingCancelled,
+				.Reason = Replaced ? detail::StructuralCausalReason::Replanned : detail::StructuralCausalReason::NoLongerRequired,
+				.Connection = Peer.View.Connection, .SourceScope = SourceRootId,
+				.Pending = {Old.Token, Object, Old.Kind == PendingTransitionKind::Enter},
+				.ReplacementToken = Replaced ? Found->second.Token : 0});
+		}
+		for (const auto &[Object, New] : Replacement) {
+			const auto Found = Peer.PendingTransitions.find(Object);
+			if (Found != Peer.PendingTransitions.end() && Found->second.Kind == New.Kind) continue;
+			detail::RecordStructuralCausal({.Kind = detail::StructuralCausalKind::PendingAdded,
+				.Connection = Peer.View.Connection, .SourceScope = SourceRootId,
+				.Pending = {New.Token, Object, New.Kind == PendingTransitionKind::Enter}});
+		}
+	}
+
 	void ReplicationCoordinator::RefreshPendingMetrics(ReplicationMetrics &Snapshot) const {
 		runtime_detail::WorkScope Work(runtime_detail::WorkPhase::GraphMetrics);
 		Snapshot.MaterializationBacklog = 0;
@@ -778,6 +1069,12 @@ namespace gargantuan::network {
 		PeerState &Peer, const PeerRelevanceSelection &Selection, std::uint64_t SimulationTick, std::string &Error
 	) {
 		runtime_detail::WorkScope Work(runtime_detail::WorkPhase::DesiredState);
+		auto RecordPending = [&](detail::StructuralCausalKind Kind, ObjectId Object,
+			const PendingTransition &Old, std::uint64_t Replacement, detail::StructuralCausalReason Reason) {
+			if (!FrozenQuote) detail::RecordStructuralCausal({.Kind = Kind, .Reason = Reason,
+				.Connection = Peer.View.Connection, .SourceScope = SourceRootId,
+				.Pending = {Old.Token, Object, Old.Kind == PendingTransitionKind::Enter}, .ReplacementToken = Replacement});
+		};
 		if (Peer.PreparedCommit) {
 			Error = "A structural frame is awaiting scheduler acceptance";
 			return false;
@@ -794,6 +1091,8 @@ namespace gargantuan::network {
 										(RetiredObjects.contains(Iterator->first) ||
 										 !Catalog.contains(Iterator->first));
 				if (StaleEnter) {
+					RecordPending(detail::StructuralCausalKind::PendingCancelled, Iterator->first, Iterator->second, 0,
+						detail::StructuralCausalReason::ObjectRetired);
 					Iterator = Peer.PendingTransitions.erase(Iterator);
 					--PendingTransitionCount;
 					SaturatingAdd(Metrics.StructuralTransitionsCancelled, 1);
@@ -805,9 +1104,12 @@ namespace gargantuan::network {
 						Error = "Structural pending transition token is exhausted";
 						return false;
 					}
+					const auto Old = Iterator->second;
 					Iterator->second.Critical = true;
 					Iterator->second.Token = Peer.NextPendingToken++;
 					Peer.CriticalQueue.push_back({Iterator->first, Iterator->second.Token});
+					RecordPending(detail::StructuralCausalKind::PendingReplaced, Iterator->first, Old, Iterator->second.Token,
+						detail::StructuralCausalReason::Replanned);
 					SaturatingAdd(Metrics.StructuralTransitionsReplanned, 1);
 				}
 				++Iterator;
@@ -826,8 +1128,8 @@ namespace gargantuan::network {
 			.RequiredObjects = Selection.RequiredObjects,
 			.DesiredObjects = Selection.RequiredObjects,
 		};
-		if (RequiredSelection.DesiredObjects.empty() && SourceRoot)
-			RequiredSelection.RequiredObjects = RequiredSelection.DesiredObjects = {SourceRoot->GetObjectId()};
+		if (RequiredSelection.DesiredObjects.empty() && SourceRootId.IsValid())
+			RequiredSelection.RequiredObjects = RequiredSelection.DesiredObjects = {SourceRootId};
 		std::set<ObjectId> Required;
 		if (!BuildDependencyClosure(RequiredSelection, Required, Error)) return false;
 
@@ -848,6 +1150,8 @@ namespace gargantuan::network {
 				++Iterator;
 				continue;
 			}
+			RecordPending(detail::StructuralCausalKind::PendingCancelled, Iterator->first, Iterator->second, 0,
+				detail::StructuralCausalReason::NoLongerRequired);
 			Iterator = Peer.PendingTransitions.erase(Iterator);
 			--PendingTransitionCount;
 			runtime_detail::CountWork(runtime_detail::WorkCounter::CandidateCancelled);
@@ -864,11 +1168,21 @@ namespace gargantuan::network {
 					Error = "Structural pending transition token is exhausted";
 					return false;
 				}
+				const auto Old = Existing->second;
 				Existing->second.Kind = Kind;
 				Existing->second.Critical = Critical;
 				Existing->second.Token = Peer.NextPendingToken++;
 				auto &Queue = Critical ? Peer.CriticalQueue : Peer.OrdinaryQueue;
 				Queue.push_back({Object, Existing->second.Token});
+				if (Old.Kind == Kind)
+					RecordPending(detail::StructuralCausalKind::PendingReplaced, Object, Old, Existing->second.Token,
+						detail::StructuralCausalReason::Replanned);
+				else {
+					RecordPending(detail::StructuralCausalKind::PendingCancelled, Object, Old, 0,
+						detail::StructuralCausalReason::NoLongerRequired);
+					RecordPending(detail::StructuralCausalKind::PendingAdded, Object, Existing->second, 0,
+						detail::StructuralCausalReason::None);
+				}
 				SaturatingAdd(Metrics.StructuralTransitionsReplanned, 1);
 				runtime_detail::CountWork(runtime_detail::WorkCounter::CandidateReplanned);
 				return true;
@@ -893,6 +1207,7 @@ namespace gargantuan::network {
 			++PendingTransitionCount;
 			auto &Queue = Critical ? Peer.CriticalQueue : Peer.OrdinaryQueue;
 			Queue.push_back({Object, Transition.Token});
+			RecordPending(detail::StructuralCausalKind::PendingAdded, Object, Transition, 0, detail::StructuralCausalReason::None);
 			return true;
 		};
 
@@ -1466,10 +1781,11 @@ namespace gargantuan::network {
 				MaximumFrameBytes, AvailableFrameBytes);
 		}
 		if (Encoded->size() > AvailableFrameBytes) {
+			const auto Fingerprint = EvidenceFingerprint(*Encoded);
 			SaturatingAdd(CandidateMetrics.StructuralBytesEncoded, Encoded->size());
 			SaturatingAdd(CandidateMetrics.StructuralTransitionsEncoded, SelectedWorkCount);
 			Metrics = CandidateMetrics;
-			return {{}, {}, SelectedWorkCount, 0, {}, true, Encoded->size()};
+			return {{}, {}, SelectedWorkCount, 0, {}, true, Encoded->size(), Fingerprint};
 		}
 		SaturatingAdd(CandidateMetrics.StructuralBytesEncoded, Encoded->size());
 		SaturatingAdd(CandidateMetrics.StructuralTransitionsEncoded, SelectedWorkCount);
@@ -1519,11 +1835,13 @@ namespace gargantuan::network {
 			.TransitionCount = SelectedWorkCount,
 			.Parents = CaptureAcceptedParents(CurrentPeer, Frame, CatalogCursor.NextSequence),
 		};
+		RecordCausalPreparation(CurrentPeer, Commit, *Encoded);
 		if (CurrentPeer.ExplicitSchedulerCommit)
 			CurrentPeer.PreparedCommit = std::move(Commit);
 		else
 			ApplyPreparedCommit(CurrentPeer, std::move(Commit));
-		return {std::move(Frame), {}, SelectedWorkCount, 0, std::move(*Encoded)};
+		const auto Fingerprint = EvidenceFingerprint(*Encoded);
+		return {std::move(Frame), {}, SelectedWorkCount, 0, std::move(*Encoded), false, 0, Fingerprint};
 	}
 
 	ReplicationProduceResult ReplicationCoordinator::AddPeer(ConnectionId Connection, ReplicationEpoch Epoch) {
@@ -1571,7 +1889,7 @@ namespace gargantuan::network {
 		const PeerRelevanceSelection &Selection,
 		bool ExplicitSchedulerCommit
 	) {
-		if (!SourceRoot || !Connection.IsValid() || !Epoch.IsValid()) return {"Invalid replication peer or source"};
+		if (!SourceRootId.IsValid() || !Connection.IsValid() || !Epoch.IsValid()) return {"Invalid replication peer or source"};
 		if (Peers.contains(Connection)) return {"Replication peer is already registered"};
 		for (const auto &[Existing, State] : Peers)
 			if (Existing.Slot == Connection.Slot && State.View.Connection.IsValid())
@@ -1675,6 +1993,14 @@ namespace gargantuan::network {
 	ReplicationProduceResult ReplicationCoordinator::ProduceIncremental(
 		ConnectionId Connection, std::size_t MaximumTransitions, std::size_t MaximumFrameBytes,
 		std::size_t MaximumJournalRecords, std::size_t AvailableFrameBytes) {
+		NameBytePreflightCache Validation;
+		return ProduceIncrementalImpl(Connection, MaximumTransitions, MaximumFrameBytes,
+			MaximumJournalRecords, AvailableFrameBytes, Validation);
+	}
+
+	ReplicationProduceResult ReplicationCoordinator::ProduceIncrementalImpl(
+		ConnectionId Connection, std::size_t MaximumTransitions, std::size_t MaximumFrameBytes,
+		std::size_t MaximumJournalRecords, std::size_t AvailableFrameBytes, NameBytePreflightCache &Validation) {
 		runtime_detail::WorkScope Work(runtime_detail::WorkPhase::IncrementalPreparation);
 		auto Peer = Peers.find(Connection);
 		if (Peer == Peers.end()) return {{}, "Replication peer is not registered"};
@@ -1698,13 +2024,35 @@ namespace gargantuan::network {
 				? CatalogCursor.NextSequence - Peer->second.JournalCursor.NextSequence
 				: std::uint64_t{0}
 		);
-		// Reserve a geometric tail for byte-limit retries. Every copied record is
+		// Reserve a geometric tail for byte-limit retries. Every examined record is
 		// charged, including history coalesced by an accepted complete Enter.
 		const auto ReadLimit = std::min(PolicyManaged ? MaximumWireJournalRecords : MaximumTransitions,
 			(MaximumJournalRecords + 1) / 2);
-		auto Read = ChangeJournal::Get().Read(Peer->second.JournalCursor, ReadLimit);
+		PinnedChangeReadResult Read;
+		std::vector<const ChangeRecord *> Records;
+		if (FrozenQuote) {
+			// The frozen suffix is owned by this detached coordinator. Live reads
+			// pin immutable journal records; both paths avoid value copies on retry.
+			const auto Cursor = Peer->second.JournalCursor;
+			Read.Cursor = Cursor;
+			if (Cursor.Scope != SourceRootId || Cursor.NextSequence < FrozenJournalOldest) {
+				Read.Status = ChangeReadStatus::ResnapshotRequired;
+				Read.Cursor.NextSequence = FrozenJournalOldest;
+			} else if (ReadLimit != 0 && Cursor.NextSequence < FrozenJournalTail) {
+				const auto First = static_cast<std::size_t>(Cursor.NextSequence - FrozenJournalOldest);
+				const auto Count = std::min(ReadLimit, FrozenJournalRecords.size() - First);
+				Records.reserve(Count);
+				for (std::size_t Index = 0; Index < Count; ++Index)
+					Records.push_back(&FrozenJournalRecords[First + Index]);
+				Read.Cursor.NextSequence += Count;
+			}
+		} else {
+			Read = ChangeJournal::Get().ReadPinned(Peer->second.JournalCursor, ReadLimit);
+			Records.reserve(Read.Records.size());
+			for (const auto &Pinned : Read.Records) Records.push_back(Pinned.get());
+		}
 		auto Finish = [&](ReplicationProduceResult Result) {
-			Result.JournalRecordsExamined += Read.Records.size();
+			Result.JournalRecordsExamined += Records.size();
 			return Result;
 		};
 		if (Read.Status == ChangeReadStatus::ResnapshotRequired) {
@@ -1712,21 +2060,81 @@ namespace gargantuan::network {
 			Metrics = CandidateMetrics;
 			return {{}, "Authoritative journal cursor requires a new baseline"};
 		}
-		SaturatingAdd(CandidateMetrics.StructuralTransitionsOffered, Read.Records.size());
-		if (Read.Records.empty()) return {{}, "No replication changes are available"};
+		SaturatingAdd(CandidateMetrics.StructuralTransitionsOffered, Records.size());
+		if (Records.empty()) return {{}, "No replication changes are available"};
 		if (MaximumTransitions == 0) {
+			const auto CursorBefore = Peer->second.JournalCursor.NextSequence;
 			// A saturated structural selector must not pin a prefix that cannot
 			// produce any operation. This narrow path skips non-replicated property
 			// records only; it stops before every lifecycle/replicated mutation.
 			// It uses the same shared journal read budget and never prepares a frame.
-			for (const auto &Record : Read.Records) {
+			for (const auto *Pinned : Records) {
+				const auto &Record = *Pinned;
 				const auto *Property = std::get_if<PropertyUpdatedChange>(&Record.Payload);
 				if (!Property || Property->Replicated) break;
 				Peer->second.JournalCursor.NextSequence = Record.Sequence + 1;
 			}
 			CandidateMetrics.ReplicationBacklog = Peer->second.JournalCursor.NextSequence < CatalogCursor.NextSequence ? 1 : 0;
 			Metrics = CandidateMetrics;
+			if (!FrozenQuote && Peer->second.JournalCursor.NextSequence != CursorBefore)
+				detail::RecordStructuralCausal({.Kind = detail::StructuralCausalKind::NoFrame,
+					.Reason = detail::StructuralCausalReason::FilteredOrAlreadyCovered,
+					.Connection = Connection, .SourceScope = SourceRootId,
+					.CursorBefore = CursorBefore, .CursorAfter = Peer->second.JournalCursor.NextSequence,
+					.AcceptedRevision = Peer->second.AcceptedRevision});
 			return Finish({{}, "No relevant replication changes are available"});
+		}
+		// Prove only an all-native-Name candidate that the normal encoder would
+		// reject for size. This is a lower bound, never an alternate serializer or
+		// admission estimate. Validate every selected value before skipping a retry:
+		// Frame::IsValid checks the whole candidate before the writer's size limit,
+		// so a bad later string must not disappear behind an earlier oversize prefix.
+		auto ProvenOversizedNames = [&]() {
+			if (!IncrementalEncodingOptimizationsEnabled || FrozenQuote || !PolicyManaged ||
+				MaximumTransitions <= 1 || Records.size() <= 1) return false;
+			if (Validation.Catalog.Scope != CatalogCursor.Scope ||
+				Validation.Catalog.NextSequence != CatalogCursor.NextSequence) {
+				Validation.Validated.clear();
+				Validation.Catalog = CatalogCursor;
+			}
+			std::set<ObjectId> CurrentNames;
+			std::size_t NameBytes = 0, OperationCount = 0;
+			for (const auto *Record : Records) {
+				const auto *Name = std::get_if<PropertyUpdatedChange>(&Record->Payload);
+				const auto Accepted = Peer->second.AcceptedParents.find(Record->Object);
+				const auto Published = Peer->second.PublicationJournalEnds.find(Record->Object);
+				const auto Object = Catalog.find(Record->Object);
+				if (!Name || !Name->Replicated || Name->DeclaringClassSchemaId || Name->PropertyName != "Name" ||
+					!std::holds_alternative<std::string>(Name->Value) ||
+					!Peer->second.View.Knows(Record->Object) || !Peer->second.View.RelevantObjects.contains(Record->Object) ||
+					Accepted == Peer->second.AcceptedParents.end() || Record->Sequence < Accepted->second.NameJournalEnd ||
+					(Published != Peer->second.PublicationJournalEnds.end() && Record->Sequence < Published->second) ||
+					Object == Catalog.end() || RetiredObjects.contains(Record->Object) ||
+					Object->second->Publication.Properties.contains("Name")) return false;
+				const bool Coalesced = Record->Sequence >= NameCoalescingBegin;
+				if (Coalesced && !CurrentNames.insert(Record->Object).second) continue;
+				if (OperationCount == MaximumTransitions) break;
+				const auto &Value = Coalesced ? Object->second->Publication.Name : std::get<std::string>(Name->Value);
+				if (!Validation.Validated.contains(&Value)) {
+					if (Value.size() > MaximumProtocolStringBytes || Value.find('\0') != std::string::npos ||
+						Validation.Validated.size() == MaximumStructuralJournalRecordsPerCall) return false;
+					runtime_detail::CountWork(runtime_detail::WorkCounter::NamePreflightValidationBytes, Value.size());
+					if (!IsValidProtocolUtf8(Value)) return false;
+					Validation.Validated.insert(&Value);
+				} else runtime_detail::CountWork(runtime_detail::WorkCounter::NamePreflightCacheHits);
+				NameBytes += Value.size();
+				++OperationCount;
+			}
+			return NameBytes > MaximumFrameBytes;
+		};
+		if (ProvenOversizedNames()) {
+			// Keep the existing geometric attempt and full pinned-read charge. Only
+			// copying/encoding the already-proven doomed candidate is omitted. Outer
+			// reads retain historical string storage across this call-local cache.
+			runtime_detail::CountWork(runtime_detail::WorkCounter::EncodeRetries);
+			runtime_detail::CountWork(runtime_detail::WorkCounter::NamePreflightRetries);
+			return Finish(ProduceIncrementalImpl(Connection, MaximumTransitions / 2, MaximumFrameBytes,
+				MaximumJournalRecords - Records.size(), AvailableFrameBytes, Validation));
 		}
 		// Property updates and coalesced history only read accepted membership.
 		// Copy it lazily if a legacy journal create/destroy actually changes it;
@@ -1748,17 +2156,18 @@ namespace gargantuan::network {
 		ReplicationFrame Frame{
 			ReplicationProtocolVersion, ReplicationMessageKind::Incremental, Peer->second.View.Epoch, CandidateNextSequence
 		};
-		Frame.Operations.reserve(std::min(MaximumTransitions, Read.Records.size()));
+		Frame.Operations.reserve(std::min(MaximumTransitions, Records.size()));
 		auto ProcessedCursor = Peer->second.JournalCursor;
 		std::set<ObjectId> PublishedThisFrame;
 		std::set<ObjectId> CurrentNames;
 		std::set<ObjectId> DestroyedThisFrame;
 		std::set<ObjectId> BatchPublishObjects;
-		for (const auto &Record : Read.Records)
-			if (std::holds_alternative<ObjectCreatedChange>(Record.Payload) && Catalog.contains(Record.Object) &&
-				(!PolicyManaged || ReadView().RelevantObjects.contains(Record.Object)))
-				BatchPublishObjects.insert(Record.Object);
-		for (const auto &Record : Read.Records) {
+		for (const auto *Record : Records)
+			if (std::holds_alternative<ObjectCreatedChange>(Record->Payload) && Catalog.contains(Record->Object) &&
+				(!PolicyManaged || ReadView().RelevantObjects.contains(Record->Object)))
+				BatchPublishObjects.insert(Record->Object);
+		for (const auto *Pinned : Records) {
+			const auto &Record = *Pinned;
 			const auto *Name = std::get_if<PropertyUpdatedChange>(&Record.Payload);
 			const bool NativeName = Name && Name->Replicated && !Name->DeclaringClassSchemaId && Name->PropertyName == "Name" &&
 				std::holds_alternative<std::string>(Name->Value);
@@ -1936,15 +2345,26 @@ namespace gargantuan::network {
 			}
 		}
 		if (Frame.Operations.empty()) {
+			const auto CursorBefore = Peer->second.JournalCursor.NextSequence;
 			if (CandidateView) Peer->second.View = std::move(*CandidateView);
 			Peer->second.JournalCursor = ProcessedCursor;
 			CandidateMetrics.ReplicationBacklog = ProcessedCursor.NextSequence < CatalogCursor.NextSequence ? 1 : 0;
 			Metrics = CandidateMetrics;
+			if (!FrozenQuote && ProcessedCursor.NextSequence != CursorBefore)
+				detail::RecordStructuralCausal({.Kind = detail::StructuralCausalKind::NoFrame,
+					.Reason = detail::StructuralCausalReason::FilteredOrAlreadyCovered,
+					.Connection = Connection, .SourceScope = SourceRootId,
+					.CursorBefore = CursorBefore, .CursorAfter = ProcessedCursor.NextSequence,
+					.AcceptedRevision = Peer->second.AcceptedRevision});
 			return Finish({{}, "No relevant replication changes are available"});
 		}
 		if (Frame.Operations.size() > MaximumReplicationOperationsPerFrame)
 			return Finish({{}, "Replication frame operation limit exceeded"});
-		auto Encoded = runtime_detail::MeasureWork(runtime_detail::WorkPhase::StructuralValidationEncode, [&] { return EncodeReplicationFrame(Frame); });
+		auto Encoded = runtime_detail::MeasureWork(runtime_detail::WorkPhase::StructuralValidationEncode, [&] {
+			return IncrementalEncodingOptimizationsEnabled
+				? detail::EncodeReplicationFrameBounded(Frame, MaximumFrameBytes)
+				: EncodeReplicationFrame(Frame);
+		});
 		const bool FrameTooLarge = !Encoded && Encoded.error().Code == SerializationErrorCode::LimitExceeded &&
 			Encoded.error().Message == "Replication frame exceeds its byte limit";
 		if (!Encoded && !FrameTooLarge) return Finish({{}, Encoded.error().Format()});
@@ -1953,17 +2373,18 @@ namespace gargantuan::network {
 			if (MaximumTransitions == 1)
 				return Finish({{}, "Structural operation exceeds the negotiated reliable message limit"});
 			// A one-record read cannot be made smaller; its operation is atomic.
-			if (Read.Records.size() == 1)
+			if (Records.size() == 1)
 				return Finish({{}, "Structural operation exceeds the negotiated reliable message limit"});
-			return Finish(ProduceIncremental(Connection, MaximumTransitions / 2, MaximumFrameBytes,
-				MaximumJournalRecords - Read.Records.size(), AvailableFrameBytes));
+			return Finish(ProduceIncrementalImpl(Connection, MaximumTransitions / 2, MaximumFrameBytes,
+				MaximumJournalRecords - Records.size(), AvailableFrameBytes, Validation));
 		}
 		if (Encoded->size() > AvailableFrameBytes) {
+			const auto Fingerprint = EvidenceFingerprint(*Encoded);
 			SaturatingAdd(CandidateMetrics.StructuralTransitionsSelected, Frame.Operations.size());
 			SaturatingAdd(CandidateMetrics.StructuralTransitionsEncoded, Frame.Operations.size());
 			SaturatingAdd(CandidateMetrics.StructuralBytesEncoded, Encoded->size());
 			Metrics = CandidateMetrics;
-			return Finish({{}, {}, Frame.Operations.size(), 0, {}, true, Encoded->size()});
+			return Finish({{}, {}, Frame.Operations.size(), 0, {}, true, Encoded->size(), Fingerprint});
 		}
 		SaturatingAdd(CandidateMetrics.StructuralBytesEncoded, Encoded->size());
 		SaturatingAdd(CandidateMetrics.StructuralTransitionsEncoded, Frame.Operations.size());
@@ -2004,6 +2425,7 @@ namespace gargantuan::network {
 				.TransitionCount = OperationCount,
 				.Parents = std::move(AcceptedParents),
 			};
+			RecordCausalPreparation(Peer->second, *Peer->second.PreparedCommit, *Encoded);
 		} else {
 			if (CandidateView) Peer->second.View = std::move(*CandidateView);
 			Peer->second.NextSequence = CandidateNextSequence;
@@ -2016,7 +2438,8 @@ namespace gargantuan::network {
 			}
 			ApplyAcceptedParents(Peer->second, std::move(AcceptedParents));
 		}
-		return Finish({std::move(Frame), {}, OperationCount, 0, std::move(*Encoded)});
+		const auto Fingerprint = EvidenceFingerprint(*Encoded);
+		return Finish({std::move(Frame), {}, OperationCount, 0, std::move(*Encoded), false, 0, Fingerprint});
 	}
 
 	ReplicationProduceResult
@@ -2106,6 +2529,8 @@ namespace gargantuan::network {
 	bool ReplicationCoordinator::RemovePeer(ConnectionId Connection) {
 		auto Peer = Peers.find(Connection);
 		if (Peer == Peers.end()) return false;
+		if (!FrozenQuote) detail::RecordStructuralCausal({.Kind = detail::StructuralCausalKind::PeerRemoved,
+			.Reason = detail::StructuralCausalReason::GenerationRemoved, .Connection = Connection, .SourceScope = SourceRootId});
 		PendingTransitionCount -= std::min(PendingTransitionCount, Peer->second.PendingTransitions.size());
 		if (Peer->second.Planning) {
 			auto Plan = Peer->second.Planning;
@@ -2182,6 +2607,8 @@ namespace gargantuan::network {
 		// Preparation owns only proposed acceptance metadata. Known, journal and
 		// sequence remain untouched, and the complete plan can be prepared again.
 		Peer->second.PreparedCommit.reset();
+		if (!FrozenQuote) detail::RecordStructuralCausal({.Kind = detail::StructuralCausalKind::Rejected,
+			.Connection = Connection, .SourceScope = SourceRootId, .Sequence = Sequence.Value()});
 		return {};
 	}
 

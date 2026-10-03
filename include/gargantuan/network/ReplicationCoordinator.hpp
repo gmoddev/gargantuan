@@ -3,18 +3,22 @@
 #include "gargantuan/network/ReplicationProtocol.hpp"
 #include "gargantuan/network/ReplicationRelevance.hpp"
 #include "gargantuan/runtime/ProtocolInput.hpp"
+#include "gargantuan/runtime/ChangeJournal.hpp"
 
 #include <deque>
+#include <array>
 #include <functional>
 #include <map>
 #include <memory>
 #include <optional>
 #include <set>
+#include <span>
 #include <string>
 
 namespace gargantuan {
 	class Instance;
 	class InstanceProperty;
+	class RuntimeSchemaRegistry;
 }
 
 namespace gargantuan::network {
@@ -141,6 +145,9 @@ namespace gargantuan::network {
 		std::vector<std::byte> EncodedFrame;
 		bool DeferredForBytes = false;
 		std::size_t RequiredFrameBytes = 0;
+		// Qualification-only identity of the exact encoded candidate, including
+		// candidates deferred before scheduler acceptance.
+		std::array<std::uint64_t, 2> DiagnosticFingerprint{};
 		[[nodiscard]] bool Succeeded() const {
 			return Frame.has_value();
 		}
@@ -151,6 +158,19 @@ namespace gargantuan::network {
 		[[nodiscard]] bool Succeeded() const {
 			return Error.empty();
 		}
+	};
+
+	struct FrozenJournalQuoteFrame {
+		ConnectionId Connection;
+		ReliableReplicationSequence Sequence;
+		std::uint64_t CompleteBytes = 0;
+		std::array<std::uint64_t, 2> Fingerprint{};
+		std::uint64_t CursorBefore = 0, CursorAfter = 0;
+	};
+	struct FrozenJournalQuoteStep {
+		std::optional<FrozenJournalQuoteFrame> Frame;
+		bool Complete = false;
+		std::string Error;
 	};
 
 	class ReplicationCoordinator {
@@ -217,8 +237,28 @@ namespace gargantuan::network {
 			return Metrics;
 		}
 		[[nodiscard]] ReplicationMetrics GetMetrics() const;
+		// Qualification-only detached input for exact retained-work replay. Capture
+		// on Main at the cessation boundary; the result owns its journal suffix and
+		// peer value state plus an immutable schema pin. It cannot read the live
+		// source or ChangeJournal. Transfer exclusive ownership for detached replay.
+		[[nodiscard]] std::unique_ptr<ReplicationCoordinator> CaptureFrozenQuote(std::string &Error);
+		// One bounded detached planning / complete-GRPL replay step using only the
+		// captured selection/catalog/journal/schema. This is the worker replay entry;
+		// it must not race another call on this detached coordinator. Pending relevance is represented before
+		// journal work; an unfinished planning step is not completion. Caller supplies
+		// negotiated frame limits. Already-accepted unretired debt is separate.
+		[[nodiscard]] FrozenJournalQuoteStep AdvanceFrozenJournalQuote(
+			const std::map<ConnectionId, std::size_t> &MaximumFrameBytes);
 
 	  private:
+		struct NameBytePreflightCache {
+			ChangeCursor Catalog;
+			std::set<const std::string *> Validated;
+		};
+		bool IncrementalEncodingOptimizationsEnabled = true;
+		[[nodiscard]] ReplicationProduceResult ProduceIncrementalImpl(
+			ConnectionId Connection, std::size_t MaximumTransitions, std::size_t MaximumFrameBytes,
+			std::size_t MaximumJournalRecords, std::size_t AvailableFrameBytes, NameBytePreflightCache &Validation);
 		struct PlanningContinuation;
 		enum class PendingTransitionKind : std::uint8_t { Enter, Leave };
 		struct PendingTransition {
@@ -309,6 +349,13 @@ namespace gargantuan::network {
 			std::string PlanningError;
 		};
 		std::shared_ptr<Instance> SourceRoot;
+		ObjectId SourceRootId;
+		bool FrozenQuote = false;
+		std::shared_ptr<const RuntimeSchemaRegistry> FrozenSchema;
+		std::uint64_t FrozenJournalOldest = 0;
+		std::uint64_t FrozenJournalTail = 0;
+		std::vector<ChangeRecord> FrozenJournalRecords;
+		ConnectionId FrozenQuoteAfter;
 		InitialRelevancePolicy IsInitiallyRelevant;
 		bool StructuralTemplateReuseEnabled = true;
 		StructuralReplicationConfiguration Configuration;
@@ -355,6 +402,10 @@ namespace gargantuan::network {
 		void RefreshPendingMetrics(ReplicationMetrics &Snapshot) const;
 		void CompactPendingQueues(PeerState &Peer);
 		void ApplyPreparedCommit(PeerState &Peer, PreparedStructuralCommit Commit);
+		void RecordCausalPreparation(const PeerState &Peer, const PreparedStructuralCommit &Commit,
+			std::span<const std::byte> Encoded) const;
+		void RecordCausalPendingReplacement(const PeerState &Peer,
+			const std::map<ObjectId, PendingTransition> &Replacement) const;
 		AcceptedParentMap CaptureAcceptedParents(const PeerState &Peer, const ReplicationFrame &Frame, std::uint64_t JournalEnd);
 		static void ApplyAcceptedParents(PeerState &Peer, AcceptedParentMap Parents);
 		PreparedPublishReplication MakePeerPublish(

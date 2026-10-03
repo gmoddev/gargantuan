@@ -1,5 +1,8 @@
 #include "gargantuan/network/GameNetworkingSocketsTransport.hpp"
 #include "../src/network/ReliableServiceFeedback.hpp"
+#include "../src/network/GnsServiceDiagnostics.hpp"
+#include "../src/network/FarmCaptureEndpointAccess.hpp"
+#include "../src/host/common/FarmClockCalibration.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Folder.hpp"
 #include "gargantuan/classes/RemoteEvent.hpp"
@@ -13,11 +16,13 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <charconv>
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <string_view>
 #include <thread>
 #include <variant>
 #include <vector>
@@ -104,6 +109,11 @@ namespace {
 		return Result;
 	}
 
+	struct SendDiagnosticCapture {
+		std::array<detail::GnsServiceRecord, 6> Records{};
+		std::size_t Count = 0;
+	};
+
 	std::optional<NetworkMessageIntent> Message(
 		ConnectionId Destination,
 		DeliveryMode Delivery,
@@ -181,18 +191,99 @@ namespace {
 		if (Pair.Server)
 			(void)Pair.Server->Stop({DisconnectReason::LocalShutdown, "Test server shutdown"});
 	}
+
+	void TestFarmClockCapture() {
+		const gargantuan::ObjectId Remote{123, 1};
+		auto Clock = std::make_unique<gargantuan::host::FarmClockCalibration>("test-run", "client", 0);
+		Clock->SetTarget(Remote);
+		Clock->SetEpoch(1);
+		Clock->SetActive(true);
+		Check(Clock->IsActive(), "farm clock sink activates only for a valid target");
+		RemoteMessage Request{.Kind = RemoteMessageKind::Request, .Remote = Remote,
+			.Request = RemoteRequestId(7), .Deadline = 1s,
+			.Arguments = {std::string("clock:1:1")}};
+		auto Encoded = EncodeRemoteMessage(Request);
+		Check(Encoded.has_value(), "farm clock request uses the existing Remote wire format");
+		if (Encoded) {
+			detail::GnsServiceRecord Value{.Stage = "GnsBefore", .Connection = {1, 1},
+				.Nanoseconds = 100, .Result = -1};
+			Clock->Capture(Value, *Encoded);
+			Check(Clock->Count() == 1 && Clock->At(0).Request == 7 &&
+				Clock->At(0).Epoch == 1 && Clock->At(0).Sequence == 1,
+				"farm clock captures bounded native request identity");
+			Request.Arguments = {std::string("ordinary-rpc")};
+			Encoded = EncodeRemoteMessage(Request);
+			if (Encoded) Clock->Capture(Value, *Encoded);
+			Check(Clock->Count() == 1, "farm clock ignores ordinary reliable gameplay");
+		}
+		RemoteMessage Reply{.Kind = RemoteMessageKind::Response, .Remote = Remote,
+			.Request = RemoteRequestId(8), .Arguments = {std::string("clock:1:4")}};
+		Encoded = EncodeRemoteMessage(Reply);
+		if (Encoded) {
+			detail::GnsServiceRecord Value{.Stage = "GnsReceive", .Connection = {1, 1},
+				.Nanoseconds = 200, .Result = -1};
+			Clock->Capture(Value, *Encoded);
+			Check(!Clock->IsActive(), "fourth native reply closes client observation before phase traffic");
+			Clock->SetActive(true);
+			Check(!Clock->IsActive(), "completed epoch cannot reactivate the sink");
+			Clock->SetEpoch(2);
+			Clock->SetActive(true);
+			Check(Clock->IsActive(), "next bounded calibration epoch reactivates the sink");
+		}
+		Clock->SetActive(false);
+	}
 }
 
 #include "ReliableServiceFeedbackFixture.hpp"
+#include "PooledServiceCurveFixture.hpp"
+#include "FiniteGrantServiceCurveFixture.hpp"
+#include "GnsPacketTailFixture.hpp"
+#include "GnsFourGrantFixture.hpp"
+#include "GnsMixedTrafficFixture.hpp"
+#include "GnsAckCycleFixture.hpp"
+#include "GnsFundedAckCompatibilityFixture.hpp"
+#include "GnsFundedAckFourGrantFixture.hpp"
+#include "GnsAckStatsBoundaryFixture.hpp"
 
 int main(int ArgumentCount, char **Arguments) {
 	using namespace gargantuan;
 	using namespace gargantuan::network;
 	try { gargantuan::BootstrapNativeRuntimeSchema(); }
 	catch (const std::exception &Error) { std::cerr << Error.what() << '\n'; return 1; }
+	TestFarmClockCapture();
+	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--ack-cycle")
+		return GnsAckCycleFixture::Run() ? 0 : 1;
+	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--ack-retry-safety")
+		return GnsAckCycleFixture::RunRetrySafety() ? 0 : 1;
+	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--ack-funded-compatibility")
+		return GnsFundedAckCompatibilityFixture::Run() ? 0 : 1;
+	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--ack-funded-four-grant")
+		return GnsFundedAckFourGrantFixture::Run() ? 0 : 1;
+	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--ack-stats-boundary")
+		return GnsAckStatsBoundaryFixture::Run() ? 0 : 1;
+	if (ArgumentCount == 3 && std::string_view(Arguments[1]) == "--ack-cycle-funded") {
+		const std::string_view Text(Arguments[2]);
+		std::uint64_t TailBudget = 0;
+		const auto Parsed = std::from_chars(Text.data(), Text.data() + Text.size(), TailBudget);
+		if (Parsed.ec != std::errc{} || Parsed.ptr != Text.data() + Text.size() || !TailBudget) return 2;
+		return GnsAckCycleFixture::Run(true, TailBudget) ? 0 : 1;
+	}
+	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--packet-tail")
+		return GnsPacketTailFixture::Run() ? 0 : 1;
+	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--four-grant")
+		return GnsFourGrantFixture::Run() ? 0 : 1;
+	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--four-grant-sanitizer-safety")
+		return GnsFourGrantFixture::Run(false) ? 0 : 1;
+	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--mixed-traffic")
+		return GnsMixedTrafficFixture::Run() ? 0 : 1;
 	const bool FeedbackPassed = FeedbackFixture::Run();
+	const bool ServiceCurvePassed = ServiceCurveFixture::Run();
+	const bool FiniteGrantPassed = FiniteGrantServiceCurveFixture::Run();
 	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--reliable-feedback") return FeedbackPassed ? 0 : 1;
+	if (ArgumentCount == 2 && std::string_view(Arguments[1]) == "--service-curve") return ServiceCurvePassed && FiniteGrantPassed ? 0 : 1;
 	Check(FeedbackPassed, "native reliable-service feedback contract");
+	Check(ServiceCurvePassed, "native pooled service curve contract");
+	Check(FiniteGrantPassed, "finite-grant service reference differential");
 	std::cout << "[Networking:GNS] validating configuration\n" << std::flush;
 
 	{
@@ -238,12 +329,118 @@ int main(int ArgumentCount, char **Arguments) {
 		StopPair(Pair);
 		return 1;
 	}
+	const auto DirectRemote = detail::FarmCaptureEndpointAccess::GetDirectRemoteEndpoint(
+		*Pair.Server, Pair.ServerConnection);
+	Check(DirectRemote && DirectRemote->Host == "127.0.0.1" && DirectRemote->Port != 0,
+		"farm capture reads direct UDP port from the native server connection");
+	Check(!detail::FarmCaptureEndpointAccess::GetDirectRemoteEndpoint(
+		*Pair.Server, {Pair.ServerConnection.Slot, Pair.ServerConnection.Generation + 1}),
+		"farm capture rejects another generation in the same adapter slot");
+	Check(!detail::FarmCaptureEndpointAccess::GetDirectRemoteEndpoint(
+		*Pair.Client, Pair.ClientConnection),
+		"farm capture cannot treat a client-side server address as a client source port");
 	for (const auto &Event : Pair.ServerEvents) Check(IsValidTransportEvent(Event, Pair.Limits),
 		"server lifecycle events satisfy the backend-neutral contract");
 	for (const auto &Event : Pair.ClientEvents) Check(IsValidTransportEvent(Event, Pair.Limits),
 		"client lifecycle events satisfy the backend-neutral contract");
 	Pair.ServerEvents.clear();
 	Pair.ClientEvents.clear();
+
+	{
+		std::cout << "[Networking:GNS] structural send diagnostic metadata\n" << std::flush;
+		auto ObservedPair = StartPair({.MaximumConnections = 1, .SendRate = 18 * 1024 * 1024},
+			TestLimits(), true);
+		struct PairCleanup {
+			PairFixture &Value;
+			~PairCleanup() { StopPair(Value); }
+		} Cleanup{ObservedPair};
+		Check(ObservedPair.ServerConnection.IsValid(), "structural diagnostic pair connects");
+		if (ObservedPair.ServerConnection.IsValid()) {
+			constexpr std::uint64_t Token = 91;
+			constexpr std::size_t CompleteBytes = 1258;
+			auto Intent = MakeNetworkMessageIntent(ObservedPair.ServerConnection,
+				DeliveryMode::ReliableOrdered, TrafficClass::StructuralReplication,
+				ReliableReplicationOrder{ReliableReplicationSequence(Token)},
+				std::vector<std::byte>(CompleteBytes - ReliableServiceEnvelopeBytes, std::byte{0x45}),
+				ObservedPair.Limits);
+			Check(Intent && detail::ReliableServiceFeedbackAccess::Attribute(*Intent, Token),
+				"structural diagnostic message has one retirement token");
+			if (Intent && detail::ReliableServiceFeedbackAccess::Token(*Intent)) {
+				SendDiagnosticCapture Capture;
+				detail::GnsServiceSink Sink{&Capture,
+					[](void *Context, detail::GnsServiceRecord Value, std::span<const std::byte>) noexcept {
+						auto &Observed = *static_cast<SendDiagnosticCapture *>(Context);
+						if (Observed.Count < Observed.Records.size())
+							Observed.Records[Observed.Count] = Value;
+						++Observed.Count;
+					}, nullptr};
+				auto *PreviousSink = detail::ActiveGnsService;
+				detail::ActiveGnsService = &Sink;
+				struct SinkCleanup {
+					detail::GnsServiceSink *Previous;
+					~SinkCleanup() { detail::ActiveGnsService = Previous; }
+				} Restore{PreviousSink};
+				auto FullReservation = MakeNetworkMessageIntent(ObservedPair.ServerConnection,
+					DeliveryMode::ReliableOrdered, TrafficClass::StructuralReplication,
+					ReliableReplicationOrder{ReliableReplicationSequence(Token - 1)},
+					std::vector<std::byte>(64, std::byte{0x46}), ObservedPair.Limits);
+				Check(FullReservation && ObservedPair.Server->Send(*FullReservation).Succeeded(),
+					"un-tokened structural send retains ordinary diagnostics");
+				auto Gameplay = Message(ObservedPair.ServerConnection, DeliveryMode::ReliableOrdered,
+					{std::byte{0x47}}, ObservedPair.Limits);
+				Check(Gameplay && ObservedPair.Server->Send(*Gameplay).Succeeded(),
+					"reliable gameplay send retains ordinary diagnostics");
+				Check(Capture.Count == 4, "un-tokened reliable sends preserve paired metadata events");
+				if (Capture.Count == 4) {
+					for (const auto Index : {std::size_t{0}, std::size_t{2}}) {
+						const auto &Before = Capture.Records[Index], &Queued = Capture.Records[Index + 1];
+						Check(std::string_view(Before.Stage) == "GnsBefore" &&
+							std::string_view(Queued.Stage) == "GnsQueued" &&
+							Before.Result == -1 && Queued.Result == static_cast<int>(k_EResultOK) &&
+							Queued.MessageNumber > 0 &&
+							Before.Traffic == Queued.Traffic &&
+							Before.QueueUs >= 0 && Queued.QueueUs >= 0 &&
+							Before.RateMin > 0 && Before.RateMax > 0 && Before.SendBuffer > 0 &&
+							Queued.RateMin > 0 && Queued.RateMax > 0 && Queued.SendBuffer > 0,
+								"un-tokened structural and gameplay diagnostics retain native sampling");
+					}
+					Check(Capture.Records[0].Traffic == static_cast<int>(TrafficClass::StructuralReplication) &&
+						Capture.Records[2].Traffic == static_cast<int>(TrafficClass::ReliableApplication),
+						"un-tokened structural and gameplay diagnostic classes stay distinct");
+				}
+				const auto ActivatedAt = static_cast<std::uint64_t>(
+					std::chrono::duration_cast<std::chrono::microseconds>(
+						std::chrono::steady_clock::now().time_since_epoch()).count());
+				Check(detail::ReliableServiceFeedbackAccess::Activate(*Intent, Token, ActivatedAt),
+					"structural diagnostic message records grant activation");
+				const auto Sent = ObservedPair.Server->Send(*Intent);
+				Check(Sent.Succeeded(), "structural diagnostic send succeeds");
+				Check(Capture.Count == 6, "token-bearing structural send keeps before and queued diagnostic events");
+				if (Capture.Count == 6) {
+					const auto &Before = Capture.Records[4], &Queued = Capture.Records[5];
+					Check(std::string_view(Before.Stage) == "GnsBefore" &&
+						std::string_view(Queued.Stage) == "GnsQueued" &&
+						Before.Connection == ObservedPair.ServerConnection &&
+						Queued.Connection == ObservedPair.ServerConnection &&
+						Before.Nanoseconds != 0 && Queued.Nanoseconds >= Before.Nanoseconds &&
+						Before.Bytes == CompleteBytes - ReliableServiceEnvelopeBytes &&
+						Queued.Bytes == Before.Bytes &&
+						Before.Delivery == static_cast<int>(DeliveryMode::ReliableOrdered) &&
+						Queued.Delivery == Before.Delivery &&
+						Before.Traffic == static_cast<int>(TrafficClass::StructuralReplication) &&
+						Queued.Traffic == Before.Traffic &&
+						Before.MessageNumber == -1 && Queued.MessageNumber > 0 &&
+						Before.Result == -1 && Queued.Result == static_cast<int>(k_EResultOK),
+						"structural diagnostic events preserve send identity and result");
+					Check(Before.RateMin == -1 && Before.RateMax == -1 && Before.SendBuffer == -1 &&
+						Queued.PendingReliable == -1 && Queued.UnackedReliable == -1 &&
+						Queued.PendingUnreliable == -1 && Queued.QueueUs == -1 && Queued.Rate == -1 &&
+						Queued.RateMin == -1 && Queued.RateMax == -1 && Queued.SendBuffer == -1,
+						"unsampled post-send backend diagnostics remain unavailable");
+				}
+			}
+		}
+	}
 
 	{
 		std::cout << "[Networking:GNS] reliable delivery\n" << std::flush;
@@ -596,6 +793,9 @@ int main(int ArgumentCount, char **Arguments) {
 	Check(HasDisconnect(Pair.ClientEvents, DisconnectReason::RemoteShutdown),
 		"client observes server close as a structured remote shutdown");
 	StopPair(Pair);
+	Check(!detail::FarmCaptureEndpointAccess::GetDirectRemoteEndpoint(
+		*Pair.Server, Pair.ServerConnection),
+		"farm capture rejects a stopped connection and stale native handle");
 
 	{
 		std::cout << "[Networking:GNS] receive queue exhaustion\n" << std::flush;

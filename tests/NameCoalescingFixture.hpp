@@ -1,5 +1,6 @@
 #pragma once
 #include "ReliableEnvelopeContractFixture.hpp"
+#include "../src/network/ReliableByteAdmissionDiagnostics.hpp"
 
 namespace gargantuan::test {
 struct NameCoalescingFixture {
@@ -39,6 +40,31 @@ struct NameCoalescingFixture {
 };
 
 inline void TestNameCoalescing() {
+	{
+		// A deferred exact frame retains its plan identity across an identical
+		// retry, but a same-size current-state replan must not inherit it.
+		struct EvidenceScope {
+			network::detail::AdmissionEvidenceSink Sink{nullptr,
+				[](void *, const network::detail::AdmissionEvidenceEvent &) noexcept {}};
+			network::detail::AdmissionEvidenceSink *Previous = network::detail::ActiveAdmissionEvidence;
+			EvidenceScope() { network::detail::ActiveAdmissionEvidence = &Sink; }
+			~EvidenceScope() { network::detail::ActiveAdmissionEvidence = Previous; }
+		} Evidence;
+		NameCoalescingFixture F;
+		F.First->SetName("same-A");
+		auto First = F.Produce(512, 2048, 0);
+		auto Retry = F.Produce(512, 2048, 0);
+		EnvelopeRequire(First.DeferredForBytes && Retry.DeferredForBytes &&
+			First.RequiredFrameBytes == Retry.RequiredFrameBytes &&
+			First.DiagnosticFingerprint == Retry.DiagnosticFingerprint,
+			"identical deferred exact candidate keeps one diagnostic identity");
+		F.First->SetName("same-B");
+		auto Replanned = F.Produce(512, 2048, 0);
+		EnvelopeRequire(Replanned.DeferredForBytes &&
+			Replanned.RequiredFrameBytes == First.RequiredFrameBytes &&
+			Replanned.DiagnosticFingerprint != First.DiagnosticFingerprint,
+			"same-size current-state replan changes diagnostic identity");
+	}
 	{
 		NameCoalescingFixture F;
 		F.First->SetName("A"); F.First->SetName("B"); F.First->SetName("C");

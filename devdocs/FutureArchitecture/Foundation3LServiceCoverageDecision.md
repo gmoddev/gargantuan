@@ -6,6 +6,13 @@ last_verified: 2026-09-14
 
 # Foundation 3L physical service-contract decision
 
+**Superseded service-health interpretation (2026-09-29):** The Option C
+capacity, credit and admission values below remain in force. The former
+short-window first-send floor plus positive ACK predicate, and physical
+three-by-three window acceptance derived from it, are superseded by
+[D01](../../docs/adr/D01-pooled-service-curve.md). Historical model and
+validation receipts remain accurate for their recorded revision.
+
 ## Current Option C proof checkpoint (2026-09-14)
 
 The selected Option C numeric model is **PASS: 33 existing model cases plus
@@ -27,7 +34,7 @@ already executed model cases.
 | Structural credit | Peer 2 MiB/s capped at G; global 64 MiB/s capped at 4G |
 | Pending / committed bounds | Pending at most G per peer and 32G globally; committed structural debt at most 4G; at most four grants |
 | Active-grant floor | Verified 16 MiB/s per active grant; four floors fit the 64 MiB/s pool |
-| Feedback | Fresh and at/above floor, age at most 50 ms; missing/error/stale/below-floor feedback cannot authorize another grant |
+| Feedback | Fresh within 50 ms; generation-owned D01 first-send service curve, bounded structural unacked bytes, and eventual ACK/retirement determine health. A zero-ACK short sample alone is healthy. |
 
 At admission, committed + reserved + prospective structural debt, fresh
 gameplay/control headroom and the transport reserve must fit the funded 50-ms

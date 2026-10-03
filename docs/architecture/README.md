@@ -32,9 +32,13 @@ append-only history: later decisions supersede earlier ADRs rather than rewritin
 them. An accepted ADR may lead implementation, so it is not evidence that every
 described facility already exists.
 
-The repository does not yet have a canonical `docs/adr/` series. Until that
-series is introduced, documents explicitly labeled accepted design direction,
-including the game networking architecture, have ADR-like authority.
+The Foundation 3L [D01 pooled service-curve decision](../adr/D01-pooled-service-curve.md)
+starts the canonical `docs/adr/` series. Its F1 amendment governs finite
+accepted-grant drain capacity and supersedes D01's earlier cross-grant
+deficit and the short-window POOLED_SERVICE health/qualification models.
+Other documents explicitly
+labeled accepted design direction, including the game networking architecture,
+retain ADR-like authority until migrated into that series.
 
 ### Protocol specifications
 
@@ -129,6 +133,8 @@ The following documents describe recently implemented, source-verified slices:
 - [Script security](../../devdocs/CurrentArchitecture/ScriptSecurity.md)
 - [SourceMount and FileLink compatibility](../../devdocs/CurrentArchitecture/SourceMount.md)
 - [Continuous native build and test contract](../../devdocs/CurrentArchitecture/ContinuousIntegration.md)
+- [Physical agent coordination ownership and migration](../../devdocs/CurrentArchitecture/PhysicalAgentCoordination.md)
+  routes the project adapter to the pinned GantriaEngine implementation.
 - [Optional telemetry host integration](../../devdocs/CurrentArchitecture/TelemetryIntegration.md)
 - [EditorHost protocol](../../devdocs/CurrentArchitecture/EditorHostProtocol.md)
 - [Editor viewport](../../devdocs/CurrentArchitecture/EditorViewport.md)
@@ -138,6 +144,11 @@ These files are candidates for gradual migration into `docs/architecture/` and
 a goal; each migration must verify claims against current code and tests.
 
 ## Accepted and future direction
+
+- [Gargantuan physical readiness profile](../../tools/physical-qualifier/docs/PROTOCOL.md)
+  retains project-specific probe/capture/evidence policy; generic coordination is
+  owned by [GantriaEngine Agent Coordinator](https://github.com/GantriaEngine/agent-coordinator).
+  Production transport and Foundation 3L acceptance gates are unchanged.
 
 - [Future architecture](../src/content/docs/developing/future-architecture.mdx)
   is the broad accepted direction, with implementation status stated per section.

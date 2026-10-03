@@ -5,13 +5,18 @@
 #include "gargantuan/network/RemoteManager.hpp"
 #include "gargantuan/runtime/ChangeJournal.hpp"
 #include "PooledReliableServiceRecoveryContractFixture.hpp"
+#include "WorkloadTimingEvidence.hpp"
+#include "WorkloadActionEvidence.hpp"
+#include "WorkloadRemoteEvidence.hpp"
 #include "../src/network/GameSessionTestAccess.hpp"
 #include "../src/network/GnsServiceDiagnostics.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <map>
+#include <memory>
 #include <cstdlib>
 #include <steam/steamnetworkingsockets.h>
 #include <steam/steamnetworkingsockets_flat.h>
@@ -64,16 +69,32 @@ void RunAggregateReliableGameplay(Engine &ServerRuntime, Engine &PrimaryRuntime,
 		}
 	};
 	std::vector<std::unique_ptr<Peer>> Peers;
+	struct AggregateStepSpan {
+		std::uint64_t Tick = 0;
+		std::uint32_t SlowestPeer = 0;
+		double GapMs = 0, BeforeStepMs = 0, WorkMs = 0;
+		double PriorObserverMs = 0, PriorSleepRequestedMs = 0, PriorSleepActualMs = 0;
+		double PrimaryRuntimeMs = 0, ServerRuntimeMs = 0, ServerPollMs = 0, PrimaryPollMs = 0;
+		double ServerSessionMs = 0, PrimarySessionMs = 0;
+		double PeerPollMs = 0, PeerRuntimeMs = 0, PeerSessionMs = 0, SlowestPeerMs = 0;
+		std::optional<double> ThreadCpuMs, ProcessCpuMs, PriorSleepProcessCpuMs;
+	};
 	struct AggregateBounds {
 		std::uint64_t MinimumMargin = DefaultChangeJournalCapacity, RequiredHigh = 0, OldestSequence = 0, PendingHigh = 0;
 		ConnectionId OldestOwner;
 		bool CatalogOwner = false;
 		double OldestAgeMs = 0, ServiceGapMs = 0;
+		// Retain bounded diagnostics without printing inside a measured step.
+		std::array<AggregateStepSpan, 4> SlowSteps{};
+		std::size_t SlowStepCount = 0;
 	} Bounds;
 	struct JournalTime { std::uint64_t Sequence = 0; Clock::time_point Observed; };
 	std::vector<JournalTime> JournalTimes(DefaultChangeJournalCapacity);
 	std::uint64_t LastJournalTail = 0;
 	auto LastStep = Clock::now();
+	auto LastSleepEnd = LastStep;
+	double PriorObserverMs = 0, PriorSleepRequestedMs = 0, PriorSleepActualMs = 0;
+	std::optional<double> PriorSleepProcessCpuMs;
 	bool Disconnected = false;
 	auto CheckSession = [&](const GameSession &Session) {
 		if (Session.GetStatus() != GameSessionStatus::Failed) return;
@@ -89,29 +110,68 @@ void RunAggregateReliableGameplay(Engine &ServerRuntime, Engine &PrimaryRuntime,
 	};
 	auto Step = [&]() {
 		const auto Next = Clock::now() + std::chrono::microseconds(16'667);
-		PrimaryRuntime.Step();
-		ServerRuntime.Step();
-		(void)Server.Poll();
-		(void)Primary.Poll();
-		Server.Step(Tick);
-		Primary.Step(Tick);
-		for (auto &Peer : Peers) {
-			(void)Peer->Session->Poll();
+		const auto Started = Clock::now();
+		const auto StartedCpu = test_detail::CaptureWorkloadCpu();
+		AggregateStepSpan Span;
+		Span.Tick = Tick;
+		Span.BeforeStepMs = std::chrono::duration<double, std::milli>(Started - LastSleepEnd).count();
+		Span.PriorObserverMs = PriorObserverMs;
+		Span.PriorSleepRequestedMs = PriorSleepRequestedMs;
+		Span.PriorSleepActualMs = PriorSleepActualMs;
+		Span.PriorSleepProcessCpuMs = PriorSleepProcessCpuMs;
+		auto Time = [&](double &Duration, auto &&Action) {
+			const auto Begin = Clock::now();
+			Action();
+			Duration += std::chrono::duration<double, std::milli>(Clock::now() - Begin).count();
+		};
+		Time(Span.PrimaryRuntimeMs, [&] { PrimaryRuntime.Step(); });
+		Time(Span.ServerRuntimeMs, [&] { ServerRuntime.Step(); });
+		Time(Span.ServerPollMs, [&] { (void)Server.Poll(); });
+		Time(Span.PrimaryPollMs, [&] { (void)Primary.Poll(); });
+		Time(Span.ServerSessionMs, [&] { Server.Step(Tick); });
+		Time(Span.PrimarySessionMs, [&] { Primary.Step(Tick); });
+		for (std::size_t PeerIndex = 0; PeerIndex < Peers.size(); ++PeerIndex) {
+			auto &Peer = Peers[PeerIndex];
+			const auto PeerStarted = Clock::now();
+			Time(Span.PeerPollMs, [&] { (void)Peer->Session->Poll(); });
 			if (!Peer->Runtime && Peer->Session->GetClientDataModel()) {
+				const auto RuntimeStarted = Clock::now();
 				Peer->Renderer = std::make_unique<HeadlessRenderer>(Vector2(32, 32));
 				Peer->Runtime = std::make_unique<Engine>(Peer->Session->GetClientDataModel(), Peer->Renderer.get(),
 					std::function<void(std::string, std::string)>{},
 					EngineProviderConfiguration{.AudioEnabled = false, .Mode = RuntimeMode::NetworkClient});
 				Peer->Runtime->ProcessService->Alive = true;
 				Check(Peer->Session->AttachClientRuntime(*Peer->Runtime), "aggregate client attaches trusted runtime");
+				Span.PeerRuntimeMs += std::chrono::duration<double, std::milli>(Clock::now() - RuntimeStarted).count();
 			}
-			if (Peer->Runtime) Peer->Runtime->Step();
-			Peer->Session->Step(Tick);
+			if (Peer->Runtime) Time(Span.PeerRuntimeMs, [&] { Peer->Runtime->Step(); });
+			Time(Span.PeerSessionMs, [&] { Peer->Session->Step(Tick); });
+			const auto PeerMs = std::chrono::duration<double, std::milli>(Clock::now() - PeerStarted).count();
+			if (PeerMs > Span.SlowestPeerMs) {
+				Span.SlowestPeerMs = PeerMs;
+				Span.SlowestPeer = static_cast<std::uint32_t>(PeerIndex + 1);
+			}
 		}
 		++Tick;
 		const auto ObservedAt = Clock::now();
-		Bounds.ServiceGapMs = std::max(Bounds.ServiceGapMs, std::chrono::duration<double, std::milli>(ObservedAt - LastStep).count());
+		const auto ObservedCpu = test_detail::CaptureWorkloadCpu();
+		Span.WorkMs = std::chrono::duration<double, std::milli>(ObservedAt - Started).count();
+		Span.GapMs = std::chrono::duration<double, std::milli>(ObservedAt - LastStep).count();
+		Span.ThreadCpuMs = test_detail::WorkloadTimingEvidence::CpuDelta(StartedCpu.Thread100ns, ObservedCpu.Thread100ns,
+			StartedCpu.ThreadValid, ObservedCpu.ThreadValid);
+		Span.ProcessCpuMs = test_detail::WorkloadTimingEvidence::CpuDelta(StartedCpu.Process100ns, ObservedCpu.Process100ns,
+			StartedCpu.ProcessValid, ObservedCpu.ProcessValid);
+		Bounds.ServiceGapMs = std::max(Bounds.ServiceGapMs, Span.GapMs);
+		for (std::size_t Index = 0; Index < Bounds.SlowSteps.size(); ++Index) {
+			if (Bounds.SlowSteps[Index].GapMs >= Span.GapMs) continue;
+			for (std::size_t Move = Bounds.SlowSteps.size() - 1; Move > Index; --Move)
+				Bounds.SlowSteps[Move] = Bounds.SlowSteps[Move - 1];
+			Bounds.SlowSteps[Index] = Span;
+			Bounds.SlowStepCount = std::min(Bounds.SlowStepCount + 1, Bounds.SlowSteps.size());
+			break;
+		}
 		LastStep = ObservedAt;
+		const auto ObserverStarted = Clock::now();
 		const auto Metrics = Server.GetMetrics();
 		Bounds.PendingHigh = std::max(Bounds.PendingHigh, Metrics.StructuralPendingEnters + Metrics.StructuralPendingLeaves);
 		const auto Tail = ChangeJournal::Get().CreateCursor(ServerRuntime.DataModel->GetObjectId());
@@ -134,7 +194,16 @@ void RunAggregateReliableGameplay(Engine &ServerRuntime, Engine &PrimaryRuntime,
 		}
 		CheckSession(Primary);
 		for (const auto &Peer : Peers) CheckSession(*Peer->Session);
+		PriorObserverMs = std::chrono::duration<double, std::milli>(Clock::now() - ObserverStarted).count();
+		const auto BeforeSleep = Clock::now();
+		const auto BeforeSleepCpu = test_detail::CaptureWorkloadCpu();
+		PriorSleepRequestedMs = std::chrono::duration<double, std::milli>(std::max(Next, BeforeSleep) - BeforeSleep).count();
 		std::this_thread::sleep_until(Next);
+		LastSleepEnd = Clock::now();
+		const auto AfterSleepCpu = test_detail::CaptureWorkloadCpu();
+		PriorSleepActualMs = std::chrono::duration<double, std::milli>(LastSleepEnd - BeforeSleep).count();
+		PriorSleepProcessCpuMs = test_detail::WorkloadTimingEvidence::CpuDelta(BeforeSleepCpu.Process100ns, AfterSleepCpu.Process100ns,
+			BeforeSleepCpu.ProcessValid, AfterSleepCpu.ProcessValid);
 	};
 	for (std::uint32_t Index = 1; Index < QualificationPeerCount; ++Index) {
 		auto Value = std::make_unique<Peer>();
@@ -182,6 +251,9 @@ void RunAggregateReliableGameplay(Engine &ServerRuntime, Engine &PrimaryRuntime,
 	for (const bool Overload : {false, true, false}) {
 		Bounds = {};
 		LastStep = Clock::now();
+		LastSleepEnd = LastStep;
+		PriorObserverMs = PriorSleepRequestedMs = PriorSleepActualMs = 0;
+		PriorSleepProcessCpuMs.reset();
 		const auto Before = Server.GetMetrics();
 		for (auto &Sample : Samples) Sample = {};
 		const std::size_t Active = Overload ? QualificationPeerCount : std::min(8u, QualificationPeerCount);
@@ -261,6 +333,25 @@ void RunAggregateReliableGameplay(Engine &ServerRuntime, Engine &PrimaryRuntime,
 			<< " journal_owner=" << (!Bounds.RequiredHigh ? "none" : Bounds.CatalogOwner ? "catalog" : "peer")
 			<< " journal_owner_slot=" << Bounds.OldestOwner.Slot << " journal_owner_generation=" << Bounds.OldestOwner.Generation
 			<< " journal_oldest_age_ms=" << Bounds.OldestAgeMs << " journal_recovery_backlog=" << After.JournalBacklogRecords << '\n';
+		for (std::size_t Index = 0; Index < Bounds.SlowStepCount; ++Index) {
+			const auto &Span = Bounds.SlowSteps[Index];
+			std::cout << "[Qualification:AggregateStep] overload=" << Overload << " rank=" << Index << " tick=" << Span.Tick
+				<< " gap_ms=" << Span.GapMs << " before_step_ms=" << Span.BeforeStepMs << " work_ms=" << Span.WorkMs
+				<< " prior_observer_ms=" << Span.PriorObserverMs
+				<< " prior_sleep_requested_ms=" << Span.PriorSleepRequestedMs << " prior_sleep_actual_ms=" << Span.PriorSleepActualMs
+				<< " primary_runtime_ms=" << Span.PrimaryRuntimeMs << " server_runtime_ms=" << Span.ServerRuntimeMs
+				<< " server_poll_ms=" << Span.ServerPollMs << " primary_poll_ms=" << Span.PrimaryPollMs
+				<< " server_session_ms=" << Span.ServerSessionMs << " primary_session_ms=" << Span.PrimarySessionMs
+				<< " peer_poll_ms=" << Span.PeerPollMs << " peer_runtime_ms=" << Span.PeerRuntimeMs
+				<< " peer_session_ms=" << Span.PeerSessionMs << " slowest_peer=" << Span.SlowestPeer
+				<< " slowest_peer_ms=" << Span.SlowestPeerMs << " thread_cpu_ms=";
+			if (Span.ThreadCpuMs) std::cout << *Span.ThreadCpuMs; else std::cout << "NOT_MEASURED";
+			std::cout << " process_cpu_ms=";
+			if (Span.ProcessCpuMs) std::cout << *Span.ProcessCpuMs; else std::cout << "NOT_MEASURED";
+			std::cout << " prior_sleep_process_cpu_ms=";
+			if (Span.PriorSleepProcessCpuMs) std::cout << *Span.PriorSleepProcessCpuMs; else std::cout << "NOT_MEASURED";
+			std::cout << '\n';
+		}
 		Check(Admission.PeerCreditHighWater <= CandidateReliableService().PeerCreditCap() && Admission.GlobalCreditHighWater <= CandidateReliableService().GlobalCreditCap(),
 			"aggregate byte credit stays within unchanged caps");
 		Check(After.PlanningMaximumTickWork <= 65'536 && After.StructuralMaximumTransitionsSelectedPerTick <= 8'192,
@@ -339,6 +430,16 @@ void RunReliableGameplayWorkload(
 		double MaximumRequiredAgeMs = 0;
 		std::size_t ServerBacklogHigh = 0;
 		std::uint64_t RecoveryActionRejections = 0;
+		std::uint64_t StepCount = 0;
+		test_detail::WorkloadTimingEvidence CpuTiming;
+		test_detail::WorkloadActionEvidence ActionTiming;
+		// Case reset moves only this pointer; the bounded record array never
+		// creates a second large temporary on the Windows fixture stack.
+		std::unique_ptr<test_detail::WorkloadRemoteEvidence> RemoteTiming = std::make_unique<test_detail::WorkloadRemoteEvidence>();
+		test_detail::WorkloadSleepLedger CompletedSleeps{};
+		double StepIntervalMs = 0, ClientRuntimeMs = 0, ServerRuntimeMs = 0;
+		double ServerPollMs = 0, ClientPollMs = 0, ServerSessionMs = 0, ClientSessionMs = 0;
+		double ObserverMs = 0, SleepOvershootMs = 0;
 	};
 	struct PendingEvent { Clock::time_point Started; std::vector<WireValue> Arguments; };
 	Observation Results;
@@ -349,6 +450,9 @@ void RunReliableGameplayWorkload(
 	int ActionSequence = 0;
 	std::optional<Clock::time_point> ActionStarted;
 	bool RecoveryProbeActive = false;
+	const auto ActionTimestamp = [](Clock::time_point Value) {
+		return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(Value.time_since_epoch()).count());
+	};
 	struct JournalTime { std::uint64_t Sequence = 0; Clock::time_point Observed; };
 	std::vector<JournalTime> JournalTimes(DefaultChangeJournalCapacity);
 	std::uint64_t LastObservedTail = ChangeJournal::Get().CreateCursor(ServerRuntime.DataModel->GetObjectId()).NextSequence;
@@ -371,8 +475,13 @@ void RunReliableGameplayWorkload(
 		}
 		const auto Found = Events.find(std::get<int>(Invocation.Arguments[0]));
 		if (Found == Events.end()) { ++Results.Errors; return; }
-		if (Invocation.Arguments != Found->second.Arguments) ++Results.Errors;
-		Results.Event.push_back(std::chrono::duration<double, std::milli>(Clock::now() - Found->second.Started).count());
+		const bool PayloadMatched = Invocation.Arguments == Found->second.Arguments;
+		if (!PayloadMatched) ++Results.Errors;
+		const auto CompletionEvidence = test_detail::WorkloadObservedEndpoint::Capture(Results.CompletedSleeps);
+		const auto CompletedAt = CompletionEvidence.At;
+		Results.Event.push_back(std::chrono::duration<double, std::milli>(CompletedAt - Found->second.Started).count());
+		Results.RemoteTiming->End(static_cast<std::uint64_t>(Found->first), Results.StepCount, ActionTimestamp(CompletedAt),
+			CompletionEvidence.Thread, -1, PayloadMatched, CompletionEvidence.Counters);
 		Events.erase(Found);
 	});
 
@@ -387,42 +496,91 @@ void RunReliableGameplayWorkload(
 		const auto Encoded = EncodeRemoteMessage(Message);
 		Check(Encoded && Encoded->size() == FrameBytes, "qualified payload uses exact encoded frame bytes");
 		Results.OfferedBytes += FrameBytes + ReliableServiceEnvelopeBytes;
-		const auto Started = Clock::now();
+		const auto StartEvidence = test_detail::WorkloadObservedEndpoint::Capture(Results.CompletedSleeps);
+		const auto Started = StartEvidence.At;
+		Results.RemoteTiming->Begin(static_cast<std::uint64_t>(Id), Rpc, RecoveryProbeActive, Results.StepCount,
+			ActionTimestamp(Started), StartEvidence.Thread, StartEvidence.Counters);
 		RemoteSendResult Sent;
+		Clock::time_point SubmittedAt;
 		if (Rpc) {
 			++PendingRequests;
 			Sent = Sender->StartRequest(*Connection, Message.Remote, Arguments,
-				[&, Started, Arguments](RemoteRequestResult Result) {
+				[&, Started, Arguments, Id](RemoteRequestResult Result) {
 					--PendingRequests;
-					if (Result.Outcome.Status != RemoteRequestTerminalStatus::Success || Result.Results != Arguments)
+					const bool PayloadMatched = Result.Results == Arguments;
+					if (Result.Outcome.Status != RemoteRequestTerminalStatus::Success || !PayloadMatched)
 						++Results.Errors;
-					Results.Rpc.push_back(std::chrono::duration<double, std::milli>(Clock::now() - Started).count());
+					const auto CompletionEvidence = test_detail::WorkloadObservedEndpoint::Capture(Results.CompletedSleeps);
+					const auto CompletedAt = CompletionEvidence.At;
+					Results.Rpc.push_back(std::chrono::duration<double, std::milli>(CompletedAt - Started).count());
+					Results.RemoteTiming->End(static_cast<std::uint64_t>(Id), Results.StepCount, ActionTimestamp(CompletedAt),
+						CompletionEvidence.Thread, static_cast<int>(Result.Outcome.Status), PayloadMatched, CompletionEvidence.Counters);
 				});
+			SubmittedAt = Clock::now();
 			if (!Sent.Accepted()) --PendingRequests;
 		} else {
 			Sent = Sender->SendEvent(*Connection, Message.Remote, Arguments);
+			SubmittedAt = Clock::now();
 			if (Sent.Accepted()) Events.emplace(Id, PendingEvent{Started, std::move(Arguments)});
 		}
+		Results.RemoteTiming->Submitted(static_cast<std::uint64_t>(Id), Sent.Accepted(), Results.StepCount,
+			ActionTimestamp(SubmittedAt), test_detail::WorkloadNativeThread());
 		if (Sent.Accepted()) Results.AcceptedBytes += FrameBytes + ReliableServiceEnvelopeBytes;
 		else ++Results.Rejected;
 		Results.PendingHighWater = std::max(Results.PendingHighWater, PendingRequests);
 	};
+	std::optional<Clock::time_point> PreviousStepStarted;
+	test_detail::WorkloadCpuSample PreviousStepCpu;
+	double PreviousRequestedSleepMs = 0, PreviousActualSleepMs = 0;
 	auto Step = [&]() {
-		const auto Next = Clock::now() + std::chrono::microseconds(16'667);
-		ClientRuntime.Step();
-		ServerRuntime.Step();
-		(void)Server.Poll();
-		(void)Client.Poll();
-		Server.Step(Tick);
-		Client.Step(Tick++);
+		using test_detail::CaptureWorkloadCpu;
+		using test_detail::WorkloadPhase;
+		const auto StepCpu = CaptureWorkloadCpu();
+		const auto StepStarted = Clock::now();
+		if (PreviousStepStarted) {
+			Results.StepIntervalMs = std::max(Results.StepIntervalMs,
+				std::chrono::duration<double, std::milli>(StepStarted - *PreviousStepStarted).count());
+			Results.CpuTiming.Record(WorkloadPhase::StepInterval, Results.StepCount,
+				std::chrono::duration<double, std::milli>(StepStarted - *PreviousStepStarted).count(),
+				PreviousStepCpu, StepCpu, PreviousRequestedSleepMs, PreviousActualSleepMs,
+				ActionTimestamp(*PreviousStepStarted), ActionTimestamp(StepStarted));
+		}
+		PreviousStepStarted = StepStarted;
+		PreviousStepCpu = StepCpu;
+		++Results.StepCount;
+		const auto Next = StepStarted + std::chrono::microseconds(16'667);
+		auto Measure = [&](double &Maximum, WorkloadPhase Phase, auto &&Operation) {
+			const auto CpuBefore = CaptureWorkloadCpu();
+			const auto Started = Clock::now();
+			Operation();
+			const auto Ended = Clock::now();
+			const auto CpuAfter = CaptureWorkloadCpu();
+			const auto WallMs = std::chrono::duration<double, std::milli>(Ended - Started).count();
+			Maximum = std::max(Maximum, WallMs);
+			Results.CpuTiming.Record(Phase, Results.StepCount, WallMs, CpuBefore, CpuAfter,
+				0, 0, ActionTimestamp(Started), ActionTimestamp(Ended));
+		};
+		Measure(Results.ClientRuntimeMs, WorkloadPhase::ClientRuntime, [&] { ClientRuntime.Step(); });
+		Measure(Results.ServerRuntimeMs, WorkloadPhase::ServerRuntime, [&] { ServerRuntime.Step(); });
+		Measure(Results.ServerPollMs, WorkloadPhase::ServerPoll, [&] { (void)Server.Poll(); });
+		Measure(Results.ClientPollMs, WorkloadPhase::ClientPoll, [&] { (void)Client.Poll(); });
+		Measure(Results.ServerSessionMs, WorkloadPhase::ServerSession, [&] { Server.Step(Tick); });
+		Measure(Results.ClientSessionMs, WorkloadPhase::ClientSession, [&] { Client.Step(Tick++); });
+		const auto ObserverCpu = CaptureWorkloadCpu();
+		const auto ObserverStarted = Clock::now();
 		if (ActionStarted) {
 			const auto Resolved = ActionService->GetAttributeValue("WorkloadResolved");
 			const auto Rejected = ActionService->GetAttributeValue("WorkloadRejected");
 			if (IsActionSequence(Resolved)) {
-				Results.Action.push_back(std::chrono::duration<double, std::milli>(Clock::now() - *ActionStarted).count());
+				const auto ResolvedAt = Clock::now();
+				const auto ResolvedCpu = CaptureWorkloadCpu();
+				Results.Action.push_back(std::chrono::duration<double, std::milli>(ResolvedAt - *ActionStarted).count());
+				Results.ActionTiming.End(ActionSequence, Results.StepCount, ActionTimestamp(ResolvedAt), ResolvedCpu, false);
 				if (ActionService->GetAttributeValue("WorkloadAccepted") != std::optional<WireValue>(true)) ++Results.Errors;
 				ActionStarted.reset();
 			} else if (IsActionSequence(Rejected)) {
+				const auto RejectedAt = Clock::now();
+				Results.ActionTiming.End(ActionSequence, Results.StepCount, ActionTimestamp(RejectedAt), CaptureWorkloadCpu(), true);
 				const auto Authority = detail::GameSessionTestAccess::GetCharacterMetrics(Server);
 				const auto Prediction = detail::GameSessionTestAccess::GetCharacterMetrics(Client);
 				std::cout << "[Qualification:ActionRejected] sequence=" << ActionSequence
@@ -482,7 +640,28 @@ void RunReliableGameplayWorkload(
 			Results.PreparedSamples += Requirement.PreparedCommit;
 			Check(Requirement.Cursor.NextSequence >= Oldest, "live journal requirement remains retained");
 		}
+		const auto BeforeSleep = Clock::now();
+		Results.ObserverMs = std::max(Results.ObserverMs,
+			std::chrono::duration<double, std::milli>(BeforeSleep - ObserverStarted).count());
+		const auto SleepCpu = CaptureWorkloadCpu();
+		Results.CpuTiming.Record(WorkloadPhase::Observer, Results.StepCount,
+			std::chrono::duration<double, std::milli>(BeforeSleep - ObserverStarted).count(), ObserverCpu, SleepCpu,
+			0, 0, ActionTimestamp(ObserverStarted), ActionTimestamp(BeforeSleep));
+		PreviousRequestedSleepMs = std::chrono::duration<double, std::milli>(std::max(Next, BeforeSleep) - BeforeSleep).count();
+		Results.CompletedSleeps.Begin(ActionTimestamp(BeforeSleep),
+			ActionTimestamp(std::max(Next, BeforeSleep)) - ActionTimestamp(BeforeSleep), test_detail::WorkloadNativeThread());
 		std::this_thread::sleep_until(Next);
+		const auto AfterSleep = Clock::now();
+		Results.CompletedSleeps.End(ActionTimestamp(AfterSleep), test_detail::WorkloadNativeThread());
+		const auto AfterSleepCpu = CaptureWorkloadCpu();
+		PreviousActualSleepMs = std::chrono::duration<double, std::milli>(AfterSleep - BeforeSleep).count();
+		Results.CpuTiming.Record(WorkloadPhase::Sleep, Results.StepCount, PreviousActualSleepMs,
+			SleepCpu, AfterSleepCpu, PreviousRequestedSleepMs, PreviousActualSleepMs,
+			ActionTimestamp(BeforeSleep), ActionTimestamp(AfterSleep));
+		// Attribute only time beyond the requested sleep or an already-late
+		// entry. These wall times include preemption and do not prove CPU cost.
+		Results.SleepOvershootMs = std::max(Results.SleepOvershootMs,
+			std::chrono::duration<double, std::milli>(AfterSleep - std::max(Next, BeforeSleep)).count());
 	};
 	auto Percentile = [](std::vector<double> Values, double Fraction) {
 		if (Values.empty()) return 0.0;
@@ -503,7 +682,9 @@ void RunReliableGameplayWorkload(
 	for (int Frame = 0; Frame < 120; ++Frame) Step();
 	for (const auto &Case : Cases) {
 		Results = {};
+		PreviousStepStarted.reset();
 		RecoveryProbeActive = false;
+		const auto CaseClockAnchor = test_detail::WorkloadClockAnchor::Capture();
 		const auto Started = Clock::now();
 		const auto Before = Server.GetMetrics();
 		const auto JournalStart = ChangeJournal::Get().CreateCursor(ServerRuntime.DataModel->GetObjectId()).NextSequence;
@@ -523,8 +704,10 @@ void RunReliableGameplayWorkload(
 		}
 		for (int Frame = 0; Frame < 480 && Client.GetStatus() == GameSessionStatus::Ready; ++Frame) {
 			if (Frame % 60 == 0 && !ActionStarted) {
+				const auto ActionCpu = test_detail::CaptureWorkloadCpu();
 				ActionStarted = Clock::now();
 				(void)ActionService->ApplyAttributeMutation("WorkloadRequest", WireValue(++ActionSequence));
+				Results.ActionTiming.Begin(ActionSequence, Results.StepCount, ActionTimestamp(*ActionStarted), ActionCpu, false);
 			}
 			if (Frame % Case.IntervalTicks == 0 && PendingRequests == 0) {
 				for (int Index = 0; Index < Case.Concurrency; ++Index) Send(true, Case.Frame);
@@ -610,8 +793,10 @@ void RunReliableGameplayWorkload(
 				NextRecoveryProbe = Now + 1s;
 				++RecoveryAttempts;
 				Send(true, 128); Send(false, 128);
+				const auto ActionCpu = test_detail::CaptureWorkloadCpu();
 				ActionStarted = Clock::now();
 				(void)ActionService->ApplyAttributeMutation("WorkloadRequest", WireValue(++ActionSequence));
+				Results.ActionTiming.Begin(ActionSequence, Results.StepCount, ActionTimestamp(*ActionStarted), ActionCpu, true);
 			}
 			const auto ServerQueue = ServerTransport.GetStatistics(ServerConnections.front());
 			const auto ClientQueue = ClientTransport.GetStatistics(*Connection);
@@ -690,6 +875,22 @@ void RunReliableGameplayWorkload(
 			<< " pending_enters=" << After.StructuralPendingEnters << " pending_leaves=" << After.StructuralPendingLeaves
 			<< " decode_ns=" << Client.GetMetrics().ClientStructuralDecodeNanoseconds
 			<< " apply_ns=" << Client.GetMetrics().ClientStructuralApplyNanoseconds << '\n';
+		std::cout << "[Qualification:WorkloadTiming] case=" << Case.Name << " steps=" << Results.StepCount
+			<< " step_interval_max_ms=" << Results.StepIntervalMs
+			<< " client_runtime_max_ms=" << Results.ClientRuntimeMs << " server_runtime_max_ms=" << Results.ServerRuntimeMs
+			<< " server_poll_max_ms=" << Results.ServerPollMs << " client_poll_max_ms=" << Results.ClientPollMs
+			<< " server_session_max_ms=" << Results.ServerSessionMs << " client_session_max_ms=" << Results.ClientSessionMs
+			<< " observer_max_ms=" << Results.ObserverMs << " sleep_overshoot_max_ms=" << Results.SleepOvershootMs << '\n';
+		const auto Profile = CandidateReliableService().IsPooled() ? "POOLED_SERVICE" : "FULL_RESERVATION";
+		Results.CpuTiming.Print(std::cout, Case.Name, Profile);
+		CaseClockAnchor.Print(std::cout, Case.Name, Profile, "BEGIN");
+		test_detail::WorkloadClockAnchor::Capture().Print(std::cout, Case.Name, Profile, "END");
+		const auto ActionObservedAt = Clock::now();
+		Results.ActionTiming.Print(std::cout, Case.Name, Results.StepCount, ActionTimestamp(ActionObservedAt),
+			test_detail::CaptureWorkloadCpu(), ActionObservedAt >= DrainDeadline,
+			CandidateReliableService().IsPooled() ? "POOLED_SERVICE" : "FULL_RESERVATION");
+		Results.RemoteTiming->Print(std::cout, Case.Name, Profile, Results.StepCount, ActionTimestamp(ActionObservedAt),
+			ActionObservedAt >= DrainDeadline);
 		Check(After.ReliableAdmission.PeerCreditHighWater <= CandidateReliableService().PeerCreditCap() &&
 			After.ReliableAdmission.GlobalCreditHighWater <= CandidateReliableService().GlobalCreditCap(),
 			"finite peer and global credit stay within unchanged caps");
