@@ -19,6 +19,7 @@
 #include "FarmRecoveryEvidence.hpp"
 #include "FrozenRecoveryQuote.hpp"
 #include "../../runtime/RuntimeWorkDiagnostics.hpp"
+#include "../../runtime/PublicationLatencyDiagnostics.hpp"
 
 #include <algorithm>
 #include <array>
@@ -656,6 +657,8 @@ namespace gargantuan::host {
 			CurrentPhase = Value;
 			PhaseTick = Tick;
 			PhaseStarted = std::chrono::steady_clock::now();
+			runtime_detail::RecordPublicationLatency({.Stage="TrafficPhaseStart",
+				.Sequence=static_cast<std::uint64_t>(Value) + 1, .Operations=1});
 			if (TickEvidence) TickEvidence->PhaseStart(static_cast<std::uint8_t>(Value), Tick);
 			PhaseAcksObserved = false;
 			ContentAcksObserved = false;
@@ -1054,6 +1057,8 @@ namespace gargantuan::host {
 		}
 
 		void EndPhase(std::uint64_t Tick) {
+			runtime_detail::RecordPublicationLatency({.Stage="TrafficPhaseEnd",
+				.Sequence=static_cast<std::uint64_t>(CurrentPhase) + 1});
 			const auto Ended = std::chrono::steady_clock::now();
 			if (TickEvidence) TickEvidence->PhaseEnd(static_cast<std::uint8_t>(CurrentPhase), Tick);
 			const auto Metrics = Session.GetMetrics();

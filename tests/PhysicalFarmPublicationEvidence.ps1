@@ -50,5 +50,8 @@ function Read-FarmPublicationObservation {
 	$Observation['TraceParserSha256'] = (Get-FileHash -LiteralPath `
 		(Join-Path ([IO.Path]::GetDirectoryName($ScriptPath)) 'farm_publication_trace.py') `
 		-Algorithm SHA256).Hash.ToLowerInvariant()
+	$Observation['OrdinaryDemandAnalyzerSha256'] = (Get-FileHash -LiteralPath `
+		(Join-Path ([IO.Path]::GetDirectoryName($ScriptPath)) 'farm_ordinary_demand.py') `
+		-Algorithm SHA256).Hash.ToLowerInvariant()
 	return $Observation
 }

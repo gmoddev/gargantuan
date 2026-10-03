@@ -917,6 +917,11 @@ function Read-ProviderRun {
 		-ServerIndex $Server.Index -ClientIndex $Clients.Index `
 		-RunManifestPath (Join-Path $Server.Root 'run-manifest.json') `
 		-ScratchParent ([IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($ReportPath)))
+	if ($Publication.OrdinaryDemand.State -ceq 'MEASURED_PASS' -and
+		($Publication.OrdinaryDemand.ServerClock.Host -ine $ServerHost.HostName -or
+		 $Publication.OrdinaryDemand.ClientClock.Host -ine $ClientHost.HostName)) {
+		throw 'sender QPC domains differ from independently indexed owning host resources'
+	}
 	if ($null -eq $Report.PublicationObservation -or
 		($Publication | ConvertTo-Json -Depth 12 -Compress) -cne
 		($Report.PublicationObservation | ConvertTo-Json -Depth 12 -Compress)) {
@@ -1069,6 +1074,7 @@ $Observed = [ordered]@{
 		EvidenceRetention = $Node.EvidenceRetention
 	}
 	GateObservations = @(
+		[ordered]@{ Gate='Actual ordinary complete-message all-interval demand'; State=$(if ($Local.Publication.OrdinaryDemand.State -ceq 'MEASURED_PASS' -and $Node.Publication.OrdinaryDemand.State -ceq 'MEASURED_PASS') { 'MEASURED_PASS' } else { 'NOT MEASURED' }); Reason='successful native transport sends, complete adapter-inclusive bytes, forced Character traffic, fixed five phase scopes and all32 sender traces; per-peer and per-direction aggregate budgets on explicit same-host QPC domains' },
 		[ordered]@{ Gate='Every finite native first-send grant, including final grants'; State=$(if ($Local.F1.State -ceq 'MEASURED_PASS' -and $Node.F1.State -ceq 'MEASURED_PASS') { 'MEASURED_PASS' } else { 'NOT MEASURED' }); Reason='32 generation-scoped native grant histories independently replayed per provider; exact ACK/retirement cannot erase a failed last or earlier grant' },
 		[ordered]@{ Gate = 'Separate Node provider process resource measurement'; State = $Node.ProviderObservation.ProcessResources.State.Replace('_', ' '); Reason = 'bounded owned Go child CPU, memory, threads and handles, distinct from Engine and client farm; no invented utilization SLA' },
 		[ordered]@{ Gate = 'RemoteManager queue and handler ownership bounds'; State = $(if ($Local.RemoteOwnership.State -ceq 'MEASURED' -and $Node.RemoteOwnership.State -ceq 'MEASURED') { 'MEASURED' } else { 'NOT MEASURED' }); Reason = 'native insertion high-waters, zero post-Stop ownership and exact release totals for server and 32 clients; work residence/lease overshoot is diagnostic and does not substitute for response scheduler latency' },

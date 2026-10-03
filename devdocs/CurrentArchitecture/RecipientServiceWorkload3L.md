@@ -55,6 +55,34 @@ per peer/direction and 64 manager-wide. The one ordinary producer is below
 eight (N=32) and 16 (N=200). The 16,384-B encoded-frame ceiling is unchanged.
 The fixture audits actual all-interval demand, not just these average bounds.
 
+The physical farm records successful native GNS ordinary reliable sends at the
+same transport-acceptance boundary used by `DueServiceFixture`'s simulator
+audit. Each record charges the complete encoded message (payload plus the
+32-byte adapter) once; GRPL structural traffic and per-state companions are not
+ordinary message charges. Forced reliable Character frames are counted and
+reported explicitly. Fixed-phase send rejection invalidates this evidence;
+normal `WouldBlock` retry does not mint another successful message. Character
+zero-rejection, producer completion, ownership and delivery gates remain
+independent, so shaping or unfinished offered work cannot qualify by itself.
+
+Five sender-local start/end markers delimit the accepted fixed workload;
+bootstrap, clock calibration and deliberate overload remain separate scopes.
+Offline replay applies exact integer all-interval token-bucket arithmetic,
+including tied arrivals, both per peer and over each complete direction. It
+does not average per phase or reset demand credit at a grant boundary. All 32
+client traces are mandatory, including peers with zero ordinary messages.
+The existing fixed publication metadata caps also bound these records; no
+payload is retained. A missing boundary, overflow, malformed record or partial
+receipt fails closed.
+
+Raw Windows QPC ticks and a startup host/frequency receipt are used only for
+these demand records. The 32 ingress senders must identify one common owning
+host and QPC domain, matched to the independently indexed client host resource
+receipt. Server egress has its own domain. No cross-host timestamp subtraction
+or one-way latency inference occurs. Existing publication nanoseconds remain
+process-local. This ordinary message-demand audit neither counts wire packet
+overhead nor replaces the separately qualified funded transport reserve.
+
 Unreliable input/state still consume host and path capacity. Even continuous
 promotion plus the reliable mix is <865 KiB/s aggregate before structural work.
 The configured simulator backend is 16 MiB/s per connection. The existing

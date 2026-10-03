@@ -13,6 +13,7 @@
 #include <filesystem>
 #include <limits>
 #include <optional>
+#include <ostream>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -21,6 +22,13 @@
 #include <vector>
 
 #if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <Windows.h>
 #include <fcntl.h>
 #include <io.h>
 #include <share.h>
@@ -45,6 +53,7 @@ public:
 		RpcRequestReceived, RpcHandler, RpcResponseProduced,
 		RpcResponseSchedulerAccepted, RpcResponseGnsAccepted,
 		RpcResponseReceived, RpcCompletion,
+		OrdinaryReliableSent, OrdinaryReliableRejected, TrafficPhase,
 	};
 	struct Record {
 		std::uint64_t Nanoseconds = 0;
@@ -76,6 +85,7 @@ private:
 	bool Server;
 	bool Dumped = false, Overflow = false, WriteFailed = false;
 	std::uint64_t DecodeFailures = 0, FileBytes = 0;
+	std::uint64_t TrafficPhase = 0;
 	std::vector<Record> Records;
 	runtime_detail::PublicationLatencySink Sink{this, Selected, Append, Packet};
 	runtime_detail::PublicationLatencySink *Previous = nullptr;
@@ -106,7 +116,19 @@ private:
 		if (Value == "RpcResponseSchedulerAccepted") return Stage::RpcResponseSchedulerAccepted;
 		if (Value == "RpcResponseReceived") return Stage::RpcResponseReceived;
 		if (Value == "RpcCompletion") return Stage::RpcCompletion;
+		if (Value == "OrdinaryReliableSent") return Stage::OrdinaryReliableSent;
+		if (Value == "OrdinaryReliableRejected") return Stage::OrdinaryReliableRejected;
+		if (Value == "TrafficPhaseStart" || Value == "TrafficPhaseEnd") return Stage::TrafficPhase;
 		return std::nullopt;
+	}
+	static std::uint64_t TrafficClockNow() noexcept {
+#if defined(_WIN32)
+		LARGE_INTEGER Counter{};
+		return QueryPerformanceCounter(&Counter) && Counter.QuadPart > 0
+			? static_cast<std::uint64_t>(Counter.QuadPart) : 0;
+#else
+		return 0; // The physical farm's shared-host domain is explicitly Windows QPC.
+#endif
 	}
 	void Add(Record Value) noexcept {
 		if (Records.size() >= Limit) { Overflow = true; return; }
@@ -117,6 +139,16 @@ private:
 		const auto Kind = StageOf(Value.Stage);
 		if (!Kind || (Self.Server && (*Kind == Stage::ClientNativeReceive || *Kind == Stage::ClientHandled)) ||
 			(!Self.Server && *Kind != Stage::ClientHandled && *Kind < Stage::RpcRequestStarted)) return;
+		if (*Kind >= Stage::OrdinaryReliableSent) {
+			const auto Counter = TrafficClockNow();
+			if (!Counter) { ++Self.DecodeFailures; return; }
+			Self.Add(Record{.Nanoseconds = Value.Nanoseconds, .Sequence = Value.Sequence,
+				.DueTick = Value.Kind, .FrameSequence = Counter,
+				.ConnectionSlot = Value.Connection.Slot, .ConnectionGeneration = Value.Connection.Generation,
+				.Bytes = Value.Bytes, .Kind = *Kind,
+				.Flags = static_cast<std::uint16_t>(Value.Operations)});
+			return;
+		}
 		Self.Add(Record{
 			.Nanoseconds = Value.Nanoseconds, .Tick = Value.Tick,
 			.Sequence = Value.Sequence, .DueTick = Value.Due,
@@ -253,6 +285,31 @@ public:
 	FarmPublicationEvidence &operator=(const FarmPublicationEvidence &) = delete;
 	void MarkFrameBegin(std::uint64_t Tick) const noexcept {
 		if (Server) runtime_detail::RecordPublicationLatency({.Stage = "FrameBegin", .Tick = Tick});
+	}
+	void SetTrafficPhase(std::string_view Name) noexcept {
+		constexpr std::array<std::string_view, 5> Names{"baseline", "load", "resident", "evict", "reload"};
+		std::uint64_t Next = 0;
+		for (std::size_t I = 0; I < Names.size(); ++I) if (Name == Names[I]) Next = I + 1;
+		if (Next == TrafficPhase) return;
+		if (TrafficPhase) runtime_detail::RecordPublicationLatency({.Stage="TrafficPhaseEnd",
+			.Connection=ClientConnection, .Sequence=TrafficPhase});
+		TrafficPhase = Next;
+		if (Next) runtime_detail::RecordPublicationLatency({.Stage="TrafficPhaseStart",
+			.Connection=ClientConnection, .Sequence=Next, .Operations=1});
+	}
+	void WriteTrafficClock(std::ostream &Out) const {
+		std::string Host = "unknown";
+		std::uint64_t Frequency = 0;
+#if defined(_WIN32)
+		char Buffer[MAX_COMPUTERNAME_LENGTH + 1]{}; DWORD Length = sizeof(Buffer);
+		LARGE_INTEGER Value{};
+		if (GetComputerNameA(Buffer, &Length) && QueryPerformanceFrequency(&Value) && Value.QuadPart > 0) {
+			Host.assign(Buffer, Length); Frequency = static_cast<std::uint64_t>(Value.QuadPart);
+		}
+#endif
+		Out << "[Qualification:TrafficClock] contract=sender_qpc_v1 run=" << RunId
+			<< " role=" << (Server ? "SERVER" : "CLIENT") << " slot=" << Slot << " nonce=" << Nonce
+			<< " host=" << Host << " frequency=" << Frequency << '\n';
 	}
 	void Dump() noexcept {
 		if (Dumped) return;

@@ -553,7 +553,7 @@ try {
 		$Observed.Local.Capture.Status -cne 'NOT_MEASURED' -or
 		$Observed.Node.Capture.Status -cne 'NOT_MEASURED' -or
 		$Observed.Local.RemoteCadence.Status -cne 'NOT_MEASURED' -or
-		@($Observed.GateObservations | Where-Object { $_.State -eq 'NOT MEASURED' }).Count -ne 22 -or
+		@($Observed.GateObservations | Where-Object { $_.State -eq 'NOT MEASURED' }).Count -ne 23 -or
 		$Observed.Local.F1.State -cne 'NOT_MEASURED' -or
 		$Observed.Local.Workload.State -cne 'MEASURED_PASS' -or
 		$Observed.Local.Admission.FixedWorkloadFairness.State -cne 'NOT_MEASURED' -or
@@ -568,6 +568,11 @@ try {
 	Save-Json -Path $Local.ReportPath -Value $Local.Report
 	Assert-Rejected -Name 'forged F1 without native receipts' -OutputPath (Join-Path $TestRoot 'forged-f1.json')
 	$Local.Report.Remove('F1Observation')
+	Save-Json -Path $Local.ReportPath -Value $Local.Report
+	$Local.Report.PublicationObservation['OrdinaryDemand'] = @{State='MEASURED_PASS';Contract='ordinary_sender_demand_v1'}
+	Save-Json -Path $Local.ReportPath -Value $Local.Report
+	Assert-Rejected -Name 'forged ordinary demand without native traces' -OutputPath (Join-Path $TestRoot 'forged-demand.json')
+	$Local.Report.PublicationObservation.Remove('OrdinaryDemand')
 	Save-Json -Path $Local.ReportPath -Value $Local.Report
 	$TlsInputs = New-NodeTlsFixture -NodeRun $Node
 	$TlsObservedPath = Join-Path $TestRoot 'tls-observed.json'

@@ -29,6 +29,7 @@ $Paths = @(
 	'tests/PhysicalFarmNodeResources.ps1',
 	'tools/physical-qualifier/farm_publication_join.py',
 	'tools/physical-qualifier/farm_publication_trace.py',
+	'tools/physical-qualifier/farm_ordinary_demand.py',
 	'tools/physical-qualifier/farm_clock_exchange.py',
 	'tools/physical-qualifier/farm_server_tick.py',
 	'tools/physical-qualifier/farm_remote_cadence.py',

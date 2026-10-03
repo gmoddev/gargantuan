@@ -257,6 +257,7 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 			if (FarmScaleWorkload) PublicationEvidence = std::make_unique<host::detail::FarmPublicationEvidence>(
 				false, FarmRunId, FarmSlot, FarmClientNonce,
 				std::filesystem::path(FarmPublicationEvidencePath), *Connection);
+			if (PublicationEvidence) PublicationEvidence->WriteTrafficClock(std::cout);
 			std::cout << "[Qualification:Client] event=ready run_id=" << FarmRunId << " slot=" << FarmSlot
 					  << " nonce=" << FarmClientNonce << " connection_slot=" << Connection->Slot
 					  << " connection_generation=" << Connection->Generation
@@ -309,6 +310,11 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 		while (Runtime->ProcessService->Alive) {
 			const auto FrameStarted = std::chrono::steady_clock::now();
 			if (Session) (void)Session->Poll();
+			if (PublicationEvidence) {
+				const auto Phase = World->GetAttributeValue("ScalePhase");
+				const auto *Name = Phase ? std::get_if<std::string>(&*Phase) : nullptr;
+				PublicationEvidence->SetTrafficPhase(Name ? std::string_view(*Name) : std::string_view{});
+			}
 #if defined(GARGANTUAN_WITH_GNS)
 			if (ClockCalibration) {
 				const bool ClockActive = World->GetAttributeValue("ScaleClockActive") ==

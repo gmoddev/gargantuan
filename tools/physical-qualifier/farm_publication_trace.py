@@ -18,8 +18,9 @@ HEADER = re.compile(
     rb"\tcount=([0-9]+)\tdropped=([0-9]+)\tdecode_failures=([0-9]+)\n"
 )
 RPC_STAGES = set(range(14, 24))
-SERVER_STAGES = set(range(1, 9)) | {11, 12, 13} | RPC_STAGES
-CLIENT_STAGES = {9, 10} | RPC_STAGES
+TRAFFIC_STAGES = {24, 25, 26}
+SERVER_STAGES = set(range(1, 9)) | {11, 12, 13} | RPC_STAGES | TRAFFIC_STAGES
+CLIENT_STAGES = {9, 10} | RPC_STAGES | TRAFFIC_STAGES
 SERVER_CAP = 4_194_304
 CLIENT_CAP = 131_072
 
@@ -102,6 +103,16 @@ def IterRecords(PathValue, ExpectedRunId, ExpectedRole, ExpectedSlot=-1, Expecte
                         (ServiceBytes > 0 if Stage in (16, 17, 21, 22) else ServiceBytes == 0) and
                         Tick == 0 and Flags == 0,
                         "RPC stage lacks request/remote identity or carries unrelated fields")
+            if Stage in (24, 25):
+                Require(ConnectionSlot > 0 and ConnectionGeneration > 0 and ServiceBytes > 32 and
+                        DueTick in (0, 1, 2) and FrameSequence > 0 and
+                        ObjectSlot == ObjectGeneration == Tick == Sequence == ControlEpoch == MaterializationEpoch == 0 and
+                        (Flags == 0 or DueTick == 2), "ordinary complete-message record invalid")
+            if Stage == 26:
+                Require(1 <= Sequence <= 5 and FrameSequence > 0 and
+                        ObjectSlot == ObjectGeneration == Tick == ServiceBytes == DueTick == ControlEpoch == MaterializationEpoch == 0 and
+                        (Role == "SERVER" or ConnectionSlot > 0 and ConnectionGeneration > 0),
+                        "sender-local traffic phase boundary invalid")
             if Role == "CLIENT":
                 Require(Stage in CLIENT_STAGES, "server-only stage in client trace")
             Counts[Stage] = Counts.get(Stage, 0) + 1

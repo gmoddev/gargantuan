@@ -687,6 +687,7 @@ namespace gargantuan::host {
 			if (FarmScaleWorkload) F1Evidence = std::make_unique<detail::FarmF1Evidence>();
 			if (FarmScaleWorkload) PublicationEvidence = std::make_unique<detail::FarmPublicationEvidence>(
 				true, FarmRunId, -1, 0, std::filesystem::path(FarmPublicationEvidencePath));
+			if (PublicationEvidence) PublicationEvidence->WriteTrafficClock(std::cout);
 			FarmDiagnosticStop DiagnosticStop(FarmDiagnosticStopEvent);
 			if (FarmMode)
 				std::cout << "[Qualification:Server] event=start run=" << FarmRunId

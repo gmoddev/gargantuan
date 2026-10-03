@@ -404,6 +404,9 @@ $Publication = Read-FarmPublicationObservation -ServerRoot $Server.Root -ClientR
 	-ScratchParent ([IO.Path]::GetDirectoryName($ReportPath))
 $Ledger = Get-Ledger -ScaleValidated $true `
 	-PublicationMeasured ($Publication.Status -ceq 'ACCEPTED_STATE_CHAIN_OBSERVED')
+$Ledger += [ordered]@{ Gate='Actual ordinary complete-message all-interval demand';
+	State=$(if ($Publication.OrdinaryDemand.State -ceq 'MEASURED_PASS') { 'MEASURED_PASS' } else { 'NOT MEASURED' });
+	Evidence='fixed five phase scopes, complete successful transport messages, forced Character included; exact peer/global buckets on separate sender-owned QPC domains' }
 $Clock = Read-FarmClockObservation -ServerRoot $Server.Root -ClientRoot $Clients.Root `
 	-RunManifestPath $RunManifestPath
 $Lifecycle = Read-FarmLifecycleObservation -ServerRoot $Server.Root -ClientRoot $Clients.Root `

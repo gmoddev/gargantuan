@@ -792,7 +792,23 @@ namespace gargantuan::network {
 		std::lock_guard Lock(Global.Mutex);
 		std::int64_t PendingReliable = -1;
 		bool HasPendingStatus = false;
+		auto RecordOrdinary = [&](const char *Stage) {
+			if (!runtime_detail::PublicationLatencySelected(Message.Destination())) return;
+			if (Message.Delivery() == DeliveryMode::ReliableOrdered &&
+				Message.Traffic() != TrafficClass::StructuralReplication) {
+				// Match the simulator's successful transport-send demand boundary.
+				// One complete message, including the adapter; never one per state.
+				const auto Payload = Message.Payload();
+				const bool Character = Payload.size() >= 7 && std::memcmp(Payload.data(), "GCHR", 4) == 0;
+				const bool Remote = Payload.size() >= 7 && std::memcmp(Payload.data(), "GRMT", 4) == 0;
+				runtime_detail::RecordPublicationLatency({.Stage=Stage, .Connection=Message.Destination(),
+					.Kind=Character ? 2u : Remote ? 1u : 0u,
+					.Bytes=static_cast<std::uint32_t>(Payload.size() + AdapterEnvelopeBytes),
+					.Operations=Character && std::to_integer<unsigned>(Payload[6]) == 5 ? 1u : 0u});
+			}
+		};
 		auto Fail = [&](TransportOperationStatus Status, const char *Site, int BackendResult = -1) {
+			if (Status != TransportOperationStatus::WouldBlock) RecordOrdinary("OrdinaryReliableRejected");
 			if (std::getenv("GARGANTUAN_GNS_LIFECYCLE_TRACE")) {
 				std::int64_t SentUnacked = -1, QueueUs = -1, SendRate = -1;
 				int NativeStatus = -1, ConnectionStateValue = -1;
@@ -898,6 +914,7 @@ namespace gargantuan::network {
 			MessageNumber, -1, static_cast<int>(Result), nullptr, !PooledStructuralGrant);
 		switch (Result) {
 		case k_EResultOK:
+			RecordOrdinary("OrdinaryReliableSent");
 			SaturatingAdd(*Connection->second.Statistics.MessagesSent, 1);
 			SaturatingAdd(*Connection->second.Statistics.BytesSent, Message.Payload().size());
 			return Operation(TransportOperationStatus::Succeeded);

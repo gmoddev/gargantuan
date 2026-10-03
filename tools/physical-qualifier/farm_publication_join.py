@@ -814,6 +814,8 @@ def Join(ServerPath, ServerReadyPath, ClientSources, RunId, ScratchParent,
     Require(shutil.disk_usage(ScratchParent).free >= MAX_DATABASE_BYTES,
             "scratch volume has less than the bounded 4 GiB database cap free")
     ReadyBySlot = ReadyMappings(ServerReadyPath, ClientSources, RunId, ExpectedClients)
+    from farm_ordinary_demand import Analyze as AnalyzeOrdinaryDemand
+    OrdinaryDemand = AnalyzeOrdinaryDemand(ServerPath, ServerReadyPath, ClientSources, ReadyBySlot, RunId)
     Windows = PhaseWindows(ServerReadyPath, RunId)
     Roots = RootMarkers(ServerReadyPath, RunId, ExpectedClients, ReadyBySlot)
     Require(Roots is None or Windows is not None,
@@ -869,6 +871,7 @@ def Join(ServerPath, ServerReadyPath, ClientSources, RunId, ScratchParent,
                         "ClientReceiveToHandled": Handled,
                         "RecipientCharacterCadence": Cadence,
                         "CharacterDueService": DueCoverage,
+                        "OrdinaryDemand": OrdinaryDemand,
                         "Retirement": "OBSERVED" if Server["Retired"] else "NONE_OBSERVED",
                         "CrossHostDueToHandled": "NOT_MEASURED",
                         "ScratchPeakDatabaseBytes": DatabaseBytes,

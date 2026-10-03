@@ -6,6 +6,7 @@
 #include "PublicationLatencyFixture.hpp"
 #include "JoinedCharacterFixture.hpp"
 #include "FarmF1EvidenceFixture.hpp"
+#include "FarmOrdinaryEvidenceFixture.hpp"
 #include "gargantuan/Engine.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Folder.hpp"
@@ -2413,6 +2414,7 @@ int main(int ArgumentCount, char **Arguments) {
 		TestPublicationLatencyBounds();
 		TestFarmPublicationEvidence();
 		TestFarmF1Evidence();
+		TestFarmOrdinaryEvidence();
 		TestProtocolBounds();
 		TestServerSessionSignalLifetime();
 		TestSessionOwnershipAndEndpointPolicy();
