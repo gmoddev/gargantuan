@@ -13,6 +13,7 @@ import json
 from pathlib import Path, PurePosixPath
 import re
 import subprocess
+import sys
 import tempfile
 import uuid
 import xml.etree.ElementTree as ET
@@ -448,6 +449,7 @@ def ReplayFourClient(Root, Inputs, Source):
                    cwd=Root, check=True, stdout=subprocess.DEVNULL)
     Spec = importlib.util.spec_from_file_location("foundation3l_four_client", Script)
     Module = importlib.util.module_from_spec(Spec)
+    sys.modules[Spec.name] = Module
     Spec.loader.exec_module(Module)
     Result = Module.Replay(Inputs, Source)
     Require(isinstance(Result, dict) and Result.get("State") in
