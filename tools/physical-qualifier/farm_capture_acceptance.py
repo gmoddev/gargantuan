@@ -96,6 +96,7 @@ def ZeroLoss(ServerRoot, ClientRoot, RunId):
             not (ServerRoot / "farm32-worker-capture.etl").is_file() or
             not 0 < (ServerRoot / "farm32-worker-capture.etl").stat().st_size < directions.MAX_CAPTURE_BYTES):
         raise ValueError("worker Farm32 capture ownership or completeness marker is invalid")
+    directions.AssertWorkerStopIdentity(WorkerMarker, RunId, RequireStopped=True)
     Summary = ReadText(ServerRoot / "farm32-capture-summary.txt", 65536)
     Loss = WORKER_LOSS.findall(Summary)
     if len(Loss) != 1 or int(Loss[0]) != 0:

@@ -75,7 +75,15 @@ physical NDIS layer, IPv4/UDP scope and complete Ethernet frame export.
 snap length, packet direction, or zero-loss acceptance.
 
 Worker Stop closes only its owned trace. Offline Finalize requires idle capture,
-zero lost ETW events, a fresh output and sufficient free space. Both exporters
+zero lost ETW events, a fresh output and sufficient free space. The
+[exact-session native Stop candidate](docs/FARM32_ETL_NATIVE_STOP.md) replaces
+netsh's native stop path with supported `ControlTraceW` against the recorded
+session and then performs only named netsh cleanup. Its explicit
+`ExactOwnedControlTraceW-v1` policy, native start identity, successful native
+Stop and zero native loss counters are required by sealing and replay. Markers
+are UTF-8 without BOM on both PowerShell hosts. This candidate still requires
+fresh full-profile qualification; the bounded 5-GiB diagnostic is not that gate.
+Both exporters
 reject the packet that would reach 15 GiB before writing it. An oversized
 pending export is not published. The fast exporter reads one EventLog record
 and writes one packet at a time, with 64-bit stream offsets and packet-local

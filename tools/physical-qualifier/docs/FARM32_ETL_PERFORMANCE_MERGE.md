@@ -1,5 +1,9 @@
 # Farm32 packet ETL preservation
 
+The current source correction is the [exact-owned native Stop candidate](FARM32_ETL_NATIVE_STOP.md).
+The V4/V5 results below remain failed historical evidence. `perfMerge=no` alone
+did not prevent the observed replacement of packet buffers.
+
 ## Qualification status after V5
 
 The `perfMerge=no` candidate remains **UNQUALIFIED**. Fresh synthetic run

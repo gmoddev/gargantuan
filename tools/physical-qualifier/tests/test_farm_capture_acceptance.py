@@ -67,11 +67,18 @@ class FarmCaptureAcceptanceTests(unittest.TestCase):
         self.ClientRoleIndex = Index(self.ClientRole, "evidence-sha256.json", "role", "Clients", {})
         (self.ServerCapture / "farm32-worker-capture.pcapng").write_bytes(FIXTURE.Pcap(self.Ports))
         (self.ServerCapture / "farm32-worker-capture.etl").write_bytes(b"etl")
+        Etl = "C:\\Capture\\" + RUN + "\\farm32-worker-capture.etl"
         Save(self.ServerCapture / "farm32-netsh-owner.json", {
             "Profile": "Farm32Capture16GiB-v2",
             "CapturePort": 39450, "MiniportIfIndex": 19,
             "CaptureLayers": ["NDIS physical miniport"],
-            "TraceMaximumMiB": 16384, "NoWrapThresholdMiB": 15360, "PerformanceMetadataMerge": False})
+            "TraceMaximumMiB": 16384, "NoWrapThresholdMiB": 15360, "PerformanceMetadataMerge": False,
+            "StopPolicy": "ExactOwnedControlTraceW-v1", "TraceIdentityRecorded": True,
+            "Etl": Etl, "ControlSessionName": "GargantuanFarm32-" + hashlib.sha256(Etl.upper().encode("utf-8")).hexdigest(),
+            "TraceSessionName": "NetTrace-GargantuanFarm32-" + hashlib.sha256(Etl.upper().encode("utf-8")).hexdigest(),
+            "TraceSessionGuid": "b0028665-e414-45e5-81ba-027ae70a35d6",
+            "TraceSessionHandle": "18446744073709551615", "NativeStopRecorded": True,
+            "NativeEventsLost": 0, "NativeLogBuffersLost": 0, "NativeBuffersWritten": 10})
         (self.ClientCapture / "farm32-client-capture.pcapng").write_bytes(FIXTURE.Pcap(self.Ports))
         (self.ServerCapture / "farm32-capture-summary.txt").write_text("Total Events  Lost  0\n", encoding="utf-8")
         Save(self.ClientCapture / "farm32-client-capture.json", {
@@ -247,6 +254,24 @@ class FarmCaptureAcceptanceTests(unittest.TestCase):
             with self.subTest(Name=Name, Fields=Fields), self.assertRaisesRegex(ValueError, "marker is invalid"):
                 self.Analyze()
             Save(File, Original)
+
+    def test_native_stop_policy_and_generation_receipt_required(self):
+        File = self.ServerCapture / "farm32-netsh-owner.json"
+        Original = json.loads(File.read_text())
+        for Key, Value in (("StopPolicy", None), ("StopPolicy", "netsh"), ("TraceIdentityRecorded", False),
+                           ("TraceIdentityRecorded", 1), ("TraceSessionGuid", "invalid"),
+                           ("TraceSessionHandle", "18446744073709551616"), ("TraceSessionHandle", "0"),
+                           ("TraceSessionName", "NetTrace"), ("ControlSessionName", "NetTrace"),
+                           ("NativeStopRecorded", None), ("NativeStopRecorded", False), ("NativeStopRecorded", 1),
+                           ("NativeEventsLost", 1), ("NativeLogBuffersLost", 1), ("NativeBuffersWritten", 2**32),
+                           ("NativeEventsLost", True), ("NativeBuffersWritten", -1),
+                           ("Etl", "C:\\different\\farm32-worker-capture.etl")):
+            Save(File, {**Original, Key: Value})
+            self.SealCaptures()
+            self.SealOuter()
+            with self.subTest(Key=Key, Value=Value), self.assertRaises(ValueError):
+                self.Analyze()
+        Save(File, Original)
 
     def test_outer_receipt_and_role_hash_mismatch_fail(self):
         Outer = json.loads(self.Outer.read_text())

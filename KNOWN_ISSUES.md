@@ -85,6 +85,17 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+Capture-infrastructure implementation checkpoint: the Farm32
+[exact-session native ETW Stop candidate](tools/physical-qualifier/docs/FARM32_ETL_NATIVE_STOP.md)
+has bounded ownership, partial-Start/expired-lease cleanup, retained native-loss
+evidence, and UTF-8-without-BOM marker tests. A separate 5-GiB diagnostic
+preserved the previously affected ETL band and both captures independently
+contain every marked packet, but that run still failed with 290 client
+application receive gaps. Neither it nor source/mock validation qualifies the
+full near-capacity profile. Fresh capture qualification and subsequent
+provider gates remain outstanding; **KI-006 OPEN; Foundation 3L B — PARTIALLY
+READY**. Historical F1 physical PASS is unchanged.
+
 2026-10-02 causal recovery implementation checkpoint: the
 [C3/C5 cessation-fence amendment](devdocs/CurrentArchitecture/PooledReliableServiceRecoveryContract3L.md#causal-cessation-fence-amendment--2026-10-02)
 now has generation-safe source evidence, a finite accepted-prefix verifier and

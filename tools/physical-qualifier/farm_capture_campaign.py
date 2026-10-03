@@ -18,6 +18,8 @@ import sys
 import time
 import uuid
 
+from farm_capture_directions import AssertWorkerStopIdentity
+
 
 CONFIG_KEYS = frozenset({"Format", "Version", "RunId", "CoordinatorRunId", "Role",
                          "CaptureRoot", "RoleEvidenceRoot", "PowerShellPath", "PowerShellSha256"})
@@ -162,7 +164,7 @@ def RoleEvidence(Root, RunId, Role):
 
 def SealCapture(Config, StartedUtc, ReadyUtc, StoppedUtc, RoleIndex, ClockSeconds):
     Directory = Config["CaptureDirectory"]
-    AssertCaptureProfile(Config)
+    AssertCaptureProfile(Config, RequireStopped=True)
     Pcap = Directory / ("farm32-worker-capture.pcapng" if Config["Role"] == "SERVER" else
                         "farm32-client-capture.pcapng")
     if not Pcap.is_file() or not 0 < Pcap.stat().st_size < MAX_CAPTURE_BYTES or \
@@ -199,7 +201,7 @@ def SealCapture(Config, StartedUtc, ReadyUtc, StoppedUtc, RoleIndex, ClockSecond
     return Directory / "capture-sha256.json"
 
 
-def AssertCaptureProfile(Config):
+def AssertCaptureProfile(Config, RequireStopped=False):
     Worker = Config["Role"] == "SERVER"
     Marker = ReadJson(Config["CaptureDirectory"] / (
         "farm32-netsh-owner.json" if Worker else "farm32-client-capture.json"))
@@ -210,6 +212,8 @@ def AssertCaptureProfile(Config):
     if (any(Marker.get(Key) != Value for Key, Value in Expected.items()) or
             (Worker and Marker.get("PerformanceMetadataMerge") is not False)):
         raise ValueError("[Qualification:FarmCapture] capture profile marker differs from the pinned candidate")
+    if Worker:
+        AssertWorkerStopIdentity(Marker, Config["RunId"], RequireStopped=RequireStopped)
 
 
 class FarmCaptureController:

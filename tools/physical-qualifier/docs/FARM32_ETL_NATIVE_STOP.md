@@ -1,0 +1,120 @@
+# Farm32 exact-owned native ETW Stop candidate
+
+## Status and evidence
+
+**Source candidate; full near-capacity qualification remains outstanding.**
+The existing `Farm32Capture16GiB-v2` storage profile, 16-GiB recorder cap,
+strict 15-GiB completeness threshold, 600-second service lease, 60-second
+privileged hook bound, packet scope and offline export bounds are unchanged.
+No service executable, IPC operation, upstream deployment pin or installed
+endpoint artifact is changed by this source correction.
+
+V4 and V5 lost packet buffers in their retained ETLs. Their metadata replacement
+starts exactly at `file_size mod 2^32`; the
+[historical attribution](FARM32_ETL_PERFORMANCE_MERGE.md) preserves the exact
+counts. The internal Windows fault function is **NOT MEASURED**. Explicit
+`perfMerge=no` alone was insufficient.
+
+Separate diagnostic `022b3c56-fb8a-4bc2-83d6-bef807cc2d15` used supported native
+Stop. ETL sizes were 5,378,146,304 bytes before FLUSH, 5,390,729,216 before STOP,
+and 5,392,302,080 after STOP and named cleanup. Bounded 5-MiB pre-FLUSH and
+8-MiB pre-STOP witnesses cover the complete historical 4-MiB overwrite band;
+the corresponding packet regions remain identical across native Stop and
+netsh cleanup. Header changes are preserved separately. This establishes the
+tested path's preservation, not an unlimited claim about Windows internals.
+
+Later independent replay found all 3,442,300 marked packets exactly once in
+both directions in each capture. The worker pcap has 3,472,054 packet frames,
+5,108,517,148 bytes and SHA-256
+`ddf04425546ffb6e71cc38727ed5639ce92501ffe8b1195c49e38c65e605b1f4`.
+ETW reports zero lost events. The **original run remains FAILED**: 290 client
+application receive gaps exist even though those packets are in the client
+capture. No application gate was waived, no receipt rewritten, and no full
+near-capacity/provider PASS follows.
+
+Retained independent receipts:
+
+- `C:\Users\aiden\.codex\artifacts\farm32-direct-stop-5g-audit-v1\worker-capture-audit.json`
+- `C:\Users\aiden\.codex\artifacts\farm32-direct-stop-5g-audit-v1\native-stop-result.json`
+- `C:\Users\aiden\.codex\artifacts\farm32-direct-stop-5g-audit-v1\named-control-v2-result.json`
+- `C:\Users\aiden\.codex\artifacts\farm32-5g-loss-audit-v1\client-loss-attribution.json`
+
+The original native-stop receipt says sequence validation was not measured at
+that stage; the later independent audit supplies that result without editing it.
+
+## Owned lifecycle
+
+The existing hash-pinned PowerShell hook embeds a small 64-bit interop wrapper
+for Microsoft's supported [QueryAllTracesW](https://learn.microsoft.com/en-us/windows/win32/api/evntrace/nf-evntrace-queryalltracesw)
+and [ControlTraceW](https://learn.microsoft.com/en-us/windows/win32/api/evntrace/nf-evntrace-controltracew)
+APIs. It accepts only QUERY, FLUSH and STOP, bounds enumeration to 256 sessions
+and strings to 2,048 UTF-16 characters, checks native layout, and releases all
+unmanaged allocations. It needs no new runtime or generic execution interface.
+
+Start writes an exclusive ownership intent before asking netsh to create a
+trace. Its control name is `GargantuanFarm32-` plus the lowercase SHA-256 of the
+canonical uppercase ETL path encoded as UTF-8. The measured Windows mapping
+is `NetTrace-<control name>` for the native session. The source explicitly asks
+for 512-KiB buffers. Native enumeration and QUERY must agree on that exact name,
+canonical ETL path, nonzero handle, GUID, buffer size, hard cap and sequential
+nonappend/noncircular/nonrotating file mode. The observed native handle is
+stored as a decimal string, preserving every bit of its unsigned 64-bit value.
+
+Stop rechecks those identities, FLUSHes, re-enumerates, QUERYs again, and then
+STOPs by **exact name with handle zero**. This avoids interpreting an old
+numeric handle that Windows could reuse for an unrelated name. The recorded
+handle/GUID/path still have to match each query. The APIs do not offer an
+atomic compare-and-stop generation primitive; the unique path-derived name
+and exclusive service-owned run prevent legitimate reuse, while observed
+replacement or ambiguity fails closed. This is not protection against another
+administrator intentionally replacing the same exact session in the final
+API-call race.
+
+After native success, the marker atomically retains `NativeStopRecorded=true`,
+the maximum observed `NativeEventsLost` and `NativeLogBuffersLost`, and the
+STOP `NativeBuffersWritten`. All are unsigned 32-bit counters. Named netsh
+cleanup follows only after native absence is confirmed; native errors never
+fall back to an unqualified/global netsh stop. Final named status and native
+enumeration must both be idle. Nonzero native loss is reported after cleanup
+and remains invalid even if a later exporter reports zero.
+
+The same operation handles service lease expiry and restart recovery without
+an age-based rejection. Partial Start before trace creation can clean up
+without an ETL; it cannot export. Partial Start after creation matches only
+the exact intended name/path and records cleanup while remaining unqualified
+because no successful Start identity exists. Repeated successful Stop is
+idempotent. If STOP succeeded but its marker write failed, later cleanup may
+close netsh's wrapper, but cannot manufacture a successful native receipt.
+
+## Marker and independent replay
+
+`farm32-netsh-owner.json` remains retained evidence. `StopPolicy` is
+`ExactOwnedControlTraceW-v1`; `ControlSessionName`, `TraceSessionName`,
+`TraceSessionGuid`, `TraceSessionHandle` and `TraceIdentityRecorded` bind Start.
+`NativeStopRecorded` plus the three counters bind actual Stop. Before Stop the
+flag is false and all three counters are null. The historical active-status
+file describes Start only; it is not a current liveness signal.
+
+Both initial and replacement JSON writes use UTF-8 **without BOM** regardless
+of whether the fixed service starts Windows PowerShell 5.1 or offline export
+uses PowerShell 7. Writes use an exclusive temporary sibling and atomic
+move/replace. Fresh readiness rejects absent or malformed start identity;
+sealing and offline replay additionally require successful native Stop with
+zero loss. Finalize also checks native absence. Old markers do not satisfy
+the new policy. Historical receipts retain their original interpretation.
+
+## Validation and remaining gate
+
+Source-executing hook simulations compile the actual embedded interop under
+Windows PowerShell 5.1 and PowerShell 7 while replacing only OS calls. They
+exercise ownership mutations, duplicate/replaced sessions, append mode,
+partial Start on both sides of native creation, full uint64 handles, expired
+cleanup, native errors, post-STOP marker-write failure, loss retention,
+idempotence, exact named cleanup, no-BOM bytes and existing bounded export.
+Python campaign/replay mutations cover the corresponding receipt gates.
+
+These tests neither start ETW nor prove installed native behavior. Next, pin
+the committed hook through the existing reviewed updater, verify installed
+bytes and service identity, and run the separately bounded capture preflight.
+The unchanged full near-capacity exact-sequence, zero-loss, full-frame,
+deadline, export and cleanup gates must all pass before provider use.

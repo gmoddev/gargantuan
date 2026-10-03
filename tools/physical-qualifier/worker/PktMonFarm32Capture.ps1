@@ -11,9 +11,231 @@ $Pcap = Join-Path $EvidenceDir 'farm32-worker-capture.pcapng'
 # One noncircular ETL file. Reaching the reserve below the hard storage cap
 # invalidates evidence rather than permitting silent truncation or wraparound.
 $CaptureProfile = 'Farm32Capture16GiB-v2'
+$StopPolicy = 'ExactOwnedControlTraceW-v1'
 $TraceMaximumMiB = 16384
 $NoWrapThresholdMiB = 15360
 $UnixEpochTicks = [datetime]::new(1970, 1, 1, 0, 0, 0, [DateTimeKind]::Utc).Ticks
+$EvidenceDir = [IO.Path]::GetFullPath($EvidenceDir)
+$Etl = [IO.Path]::GetFullPath($Etl)
+$Pcap = [IO.Path]::GetFullPath($Pcap)
+$Marker = [IO.Path]::GetFullPath($Marker)
+$NameHash = [Security.Cryptography.SHA256]::Create()
+try { $NameBytes = $NameHash.ComputeHash([Text.Encoding]::UTF8.GetBytes($Etl.ToUpperInvariant())) }
+finally { $NameHash.Dispose() }
+$TraceSessionName = 'GargantuanFarm32-' + ([BitConverter]::ToString($NameBytes).Replace('-', '').ToLowerInvariant())
+
+function InitializeFarm32Etw {
+    if ('GargantuanQualification.Farm32EtwV1' -as [type]) { return }
+    $EtwDefinition = @'
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Runtime.InteropServices;
+namespace GargantuanQualification {
+    public sealed class Farm32EtwSession {
+        public string Name, FileName, Guid;
+        public ulong Handle;
+        public uint BufferSizeKiB, MaximumFileSizeMiB, LogFileMode;
+        public uint EventsLost, LogBuffersLost, BuffersWritten;
+    }
+    public static class Farm32EtwV1 {
+        [StructLayout(LayoutKind.Sequential)]
+        private struct Wnode {
+            public uint BufferSize, ProviderId;
+            public ulong HistoricalContext;
+            public long TimeStamp;
+            public Guid Guid;
+            public uint ClientContext, Flags;
+        }
+        [StructLayout(LayoutKind.Sequential)]
+        private struct Properties {
+            public Wnode Wnode;
+            public uint BufferSize, MinimumBuffers, MaximumBuffers, MaximumFileSize;
+            public uint LogFileMode, FlushTimer, EnableFlags, AgeLimit, NumberOfBuffers;
+            public uint FreeBuffers, EventsLost, BuffersWritten, LogBuffersLost, RealTimeBuffersLost;
+            public IntPtr LoggerThreadId;
+            public uint LogFileNameOffset, LoggerNameOffset;
+        }
+        private const int NameChars = 2048, MaximumSessions = 256;
+        private static readonly int PropertiesSize = Marshal.SizeOf(typeof(Properties));
+        private static readonly int AllocationSize = PropertiesSize + 4 * NameChars;
+        [DllImport("advapi32.dll", CharSet=CharSet.Unicode, ExactSpelling=true)]
+        private static extern uint QueryAllTracesW([In, Out] IntPtr[] Properties, uint Count, out uint Actual);
+        [DllImport("advapi32.dll", CharSet=CharSet.Unicode, ExactSpelling=true)]
+        private static extern uint ControlTraceW(ulong Handle, string Name, IntPtr Properties, uint Operation);
+        public static int NativePropertiesSize { get { return PropertiesSize; } }
+        private static IntPtr Allocate(string GuidText) {
+            if (IntPtr.Size != 8 || PropertiesSize != 120 || Marshal.SizeOf(typeof(Wnode)) != 48)
+                throw new InvalidDataException("Unexpected 64-bit Windows ETW layout");
+            var Memory = Marshal.AllocHGlobal(AllocationSize);
+            try {
+                Marshal.Copy(new byte[AllocationSize], 0, Memory, AllocationSize);
+                var Value = new Properties();
+                Value.Wnode.BufferSize = (uint)AllocationSize;
+                if (GuidText != null) Value.Wnode.Guid = new Guid(GuidText);
+                Value.LoggerNameOffset = (uint)PropertiesSize;
+                Value.LogFileNameOffset = (uint)(PropertiesSize + 2 * NameChars);
+                Marshal.StructureToPtr(Value, Memory, false);
+                return Memory;
+            } catch { Marshal.FreeHGlobal(Memory); throw; }
+        }
+        private static string ReadString(IntPtr Memory, uint Offset, bool AllowAbsent) {
+            if (Offset == 0 && AllowAbsent) return "";
+            if (Offset < PropertiesSize || Offset >= AllocationSize || (Offset & 1) != 0)
+                throw new InvalidDataException("Invalid ETW string offset");
+            int Limit = Math.Min(NameChars, (AllocationSize - (int)Offset) / 2);
+            for (int Length = 0; Length < Limit; ++Length) {
+                if (Marshal.ReadInt16(Memory, (int)Offset + 2 * Length) == 0)
+                    return Marshal.PtrToStringUni(IntPtr.Add(Memory, (int)Offset), Length);
+            }
+            throw new InvalidDataException("Unterminated ETW string");
+        }
+        private static Farm32EtwSession Read(IntPtr Memory) {
+            var Value = (Properties)Marshal.PtrToStructure(Memory, typeof(Properties));
+            return new Farm32EtwSession {
+                Name=ReadString(Memory, Value.LoggerNameOffset, false),
+                FileName=ReadString(Memory, Value.LogFileNameOffset, true),
+                Guid=Value.Wnode.Guid.ToString("D"), Handle=Value.Wnode.HistoricalContext,
+                BufferSizeKiB=Value.BufferSize, MaximumFileSizeMiB=Value.MaximumFileSize,
+                LogFileMode=Value.LogFileMode, EventsLost=Value.EventsLost,
+                LogBuffersLost=Value.LogBuffersLost, BuffersWritten=Value.BuffersWritten
+            };
+        }
+        public static Farm32EtwSession[] All() {
+            var Memory = new IntPtr[MaximumSessions];
+            try {
+                for (int Index = 0; Index < Memory.Length; ++Index) Memory[Index] = Allocate(null);
+                uint Count;
+                uint Code = QueryAllTracesW(Memory, (uint)Memory.Length, out Count);
+                if (Code != 0 || Count > MaximumSessions)
+                    throw new InvalidOperationException("QueryAllTracesW failed or exceeded bound: " + Code);
+                var Result = new Farm32EtwSession[Count];
+                for (int Index = 0; Index < Result.Length; ++Index) Result[Index] = Read(Memory[Index]);
+                return Result;
+            } finally { foreach (var Item in Memory) if (Item != IntPtr.Zero) Marshal.FreeHGlobal(Item); }
+        }
+        public static Farm32EtwSession Control(Farm32EtwSession Session, string Operation) {
+            if (Session == null || String.IsNullOrEmpty(Session.Name) || Session.Name.Length > 1024 || Session.Handle == 0)
+                throw new InvalidDataException("Exact ETW session identity is missing");
+            uint Control;
+            switch (Operation) { case "QUERY": Control=0; break; case "STOP": Control=1; break;
+                case "FLUSH": Control=3; break; default: throw new InvalidDataException("Unsupported ETW operation"); }
+            var Memory = Allocate(Session.Guid);
+            try {
+                // Use the exact unique name, never a potentially recycled numeric handle.
+                // Callers still compare the queried GUID/handle/path before each mutation.
+                uint Code = ControlTraceW(0, Session.Name, Memory, Control);
+                if (Code != 0) throw new InvalidOperationException("ControlTraceW " + Operation + " failed: " + Code);
+                return Read(Memory);
+            } finally { Marshal.FreeHGlobal(Memory); }
+        }
+    }
+}
+'@
+    Add-Type -TypeDefinition $EtwDefinition -ErrorAction Stop
+}
+
+function GetFarm32NativeSessions {
+    InitializeFarm32Etw
+    return [GargantuanQualification.Farm32EtwV1]::All()
+}
+
+function InvokeFarm32NativeControl($Session, [string]$Operation) {
+    InitializeFarm32Etw
+    return [GargantuanQualification.Farm32EtwV1]::Control($Session, $Operation)
+}
+
+function AssertSameFarm32Session($Expected, $Actual) {
+    if ($null -eq $Actual -or $Expected.Name -cne $Actual.Name -or
+        $Expected.Guid -cne $Actual.Guid -or $Expected.Handle -ne $Actual.Handle -or
+        ![StringComparer]::OrdinalIgnoreCase.Equals($Expected.FileName, $Actual.FileName)) {
+        throw 'Native trace identity changed.'
+    }
+}
+
+function GetOwnedFarm32Session($Owner) {
+    $Sessions = @(GetFarm32NativeSessions)
+    $Matches = @($Sessions | Where-Object {
+        ($null -ne $Owner -and $Owner.TraceIdentityRecorded -and $_.Name -eq $Owner.TraceSessionName) -or
+        ($_.FileName -and [StringComparer]::OrdinalIgnoreCase.Equals([IO.Path]::GetFullPath($_.FileName), $Etl))
+    })
+    if ($Matches.Count -eq 0) { return $null }
+    if ($Matches.Count -ne 1) { throw 'Native trace ownership is ambiguous.' }
+    $Session = $Matches[0]
+    if ($Session.Name -cne ('NetTrace-' + $TraceSessionName) -or !$Session.FileName -or
+        ![StringComparer]::OrdinalIgnoreCase.Equals([IO.Path]::GetFullPath($Session.FileName), $Etl) -or
+        $Session.Handle -eq 0 -or $Session.BufferSizeKiB -ne 512 -or
+        $Session.MaximumFileSizeMiB -ne $TraceMaximumMiB -or
+        ($Session.LogFileMode -band 1) -eq 0 -or ($Session.LogFileMode -band 14) -ne 0) {
+        throw 'Native trace differs from the task-owned session.'
+    }
+    if ($null -ne $Owner -and $Owner.TraceIdentityRecorded) {
+        if ($Owner.TraceSessionName -cne $Session.Name -or $Owner.TraceSessionGuid -cne $Session.Guid -or
+            $Owner.TraceSessionHandle -cne $Session.Handle.ToString([Globalization.CultureInfo]::InvariantCulture)) {
+            throw 'Native trace generation differs from the ownership marker.'
+        }
+    }
+    return $Session
+}
+
+function WriteFarm32Owner($Owner, [bool]$Initial) {
+    $Pending = $Marker + '.pending'
+    $Stream = [IO.File]::Open($Pending, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+    try {
+        $Bytes = [Text.UTF8Encoding]::new($false).GetBytes(($Owner | ConvertTo-Json -Depth 6) + "`n")
+        $Stream.Write($Bytes, 0, $Bytes.Length)
+        $Stream.Flush()
+    } finally { $Stream.Dispose() }
+    try {
+        if ($Initial) { [IO.File]::Move($Pending, $Marker) }
+        else { [IO.File]::Replace($Pending, $Marker, [NullString]::Value) }
+    } finally { if (Test-Path -LiteralPath $Pending) { Remove-Item -LiteralPath $Pending -Force } }
+}
+
+function StopOwnedFarm32Trace($Owner) {
+    # No lease-age rejection here: service deadline, lease loss and restart
+    # recovery deliberately invoke this fixed operation after expiry.
+    $Session = GetOwnedFarm32Session $Owner
+    if ($null -ne $Session) {
+        $Queried = InvokeFarm32NativeControl $Session 'QUERY'
+        AssertSameFarm32Session $Session $Queried
+        $Flushed = InvokeFarm32NativeControl $Session 'FLUSH'
+        AssertSameFarm32Session $Session $Flushed
+        $Current = GetOwnedFarm32Session $Owner
+        AssertSameFarm32Session $Session $Current
+        $Queried = InvokeFarm32NativeControl $Session 'QUERY'
+        AssertSameFarm32Session $Session $Queried
+        # STOP errors may already have closed the session. Do not automatically
+        # retry or fall back to netsh's global stop; preserve failure for recovery.
+        $Stopped = InvokeFarm32NativeControl $Session 'STOP'
+        $Owner.NativeStopRecorded = $true
+        $Owner.NativeEventsLost = [uint32](($Session.EventsLost, $Flushed.EventsLost, $Queried.EventsLost, $Stopped.EventsLost | Measure-Object -Maximum).Maximum)
+        $Owner.NativeLogBuffersLost = [uint32](($Session.LogBuffersLost, $Flushed.LogBuffersLost, $Queried.LogBuffersLost, $Stopped.LogBuffersLost | Measure-Object -Maximum).Maximum)
+        $Owner.NativeBuffersWritten = $Stopped.BuffersWritten
+        WriteFarm32Owner $Owner $false
+        "[Qualification:Capture] NativeStop Name=$($Session.Name) Guid=$($Session.Guid) Handle=$($Session.Handle) BuffersWritten=$($Stopped.BuffersWritten) EventsLost=$($Stopped.EventsLost) LogBuffersLost=$($Stopped.LogBuffersLost)" | Write-Output
+    }
+    if ($null -ne (GetOwnedFarm32Session $Owner)) { throw 'Owned native trace remains after Stop.' }
+    $Status = GetTraceStatus $TraceSessionName
+    if ($Status -notmatch 'There is no trace session currently in progress' -and !$Status.Contains($Etl)) {
+        throw 'A different netsh trace is protected during cleanup.'
+    }
+    # Query again immediately before named cleanup, protecting a reused name.
+    if ($null -ne (GetOwnedFarm32Session $Owner)) { throw 'Native trace reappeared before netsh cleanup.' }
+    $Output = & netsh trace stop "sessionname=$TraceSessionName" 2>&1
+    $Code = $LASTEXITCODE
+    $Text = $Output -join "`n"
+    if ($Code -ne 0 -and $Text -notmatch 'There is no trace session currently in progress') { throw $Text }
+    $Text | Write-Output
+    if ((GetTraceStatus $TraceSessionName) -notmatch 'There is no trace session currently in progress' -or
+        $null -ne (GetOwnedFarm32Session $Owner)) { throw 'Owned trace cleanup did not become idle.' }
+    if ($Owner.NativeStopRecorded -and ($Owner.NativeEventsLost -ne 0 -or $Owner.NativeLogBuffersLost -ne 0)) {
+        throw 'Native ETW loss was recorded; cleanup completed but capture is incomplete.'
+    }
+    if ($Owner.TraceIdentityRecorded -and !$Owner.NativeStopRecorded) {
+        throw 'Native Stop success is unmeasured; cleanup completed but capture is incomplete.'
+    }
+}
 
 function InvokeNetsh([string[]]$Arguments) {
     $Output = & netsh @Arguments 2>&1
@@ -21,8 +243,10 @@ function InvokeNetsh([string[]]$Arguments) {
     return ($Output -join "`n")
 }
 
-function GetTraceStatus {
-    $Output = & netsh trace show status 2>&1
+function GetTraceStatus([string]$SessionName = '') {
+    $Arguments = @('trace','show','status')
+    if ($SessionName) { $Arguments += "sessionname=$SessionName" }
+    $Output = & netsh @Arguments 2>&1
     $Text = $Output -join "`n"
     if ($LASTEXITCODE -ne 0 -and $Text -notmatch 'There is no trace session currently in progress') {
         throw $Text
@@ -152,7 +376,11 @@ if ($Action -eq 'Start') {
     if ($Status -notmatch 'There is no trace session currently in progress') {
         throw 'An existing Windows trace session is protected.'
     }
-    foreach ($Artifact in @($Marker, $Etl, $Pcap, ($Pcap + '.pending'),
+    if ((GetTraceStatus $TraceSessionName) -notmatch 'There is no trace session currently in progress') {
+        throw 'The named Windows trace session already exists.'
+    }
+    if ($null -ne (GetOwnedFarm32Session $null)) { throw 'An existing native trace is protected.' }
+    foreach ($Artifact in @($Marker, ($Marker + '.pending'), $Etl, $Pcap, ($Pcap + '.pending'),
         (Join-Path $EvidenceDir 'farm32-capture-active.txt'),
         (Join-Path $EvidenceDir 'farm32-capture-summary.txt'))) {
         if (Test-Path -LiteralPath $Artifact) {
@@ -172,37 +400,84 @@ if ($Action -eq 'Start') {
     $Owned = @{Profile=$CaptureProfile; Etl=$Etl; Pcap=$Pcap; InterfaceGuid=$Guid; MiniportIfIndex=$Adapter.ifIndex;
                CapturePort=$CapturePort; CaptureLayers=@('NDIS physical miniport');
                TraceMaximumMiB=$TraceMaximumMiB; NoWrapThresholdMiB=$NoWrapThresholdMiB;
-               PerformanceMetadataMerge=$false}
-    $Owned | ConvertTo-Json | Set-Content -LiteralPath $Marker -Encoding UTF8
+               PerformanceMetadataMerge=$false; StopPolicy=$StopPolicy;
+               ControlSessionName=$TraceSessionName; TraceSessionName=$null; TraceIdentityRecorded=$false;
+               TraceSessionGuid=$null; TraceSessionHandle=$null;
+               NativeStopRecorded=$false; NativeEventsLost=$null; NativeLogBuffersLost=$null; NativeBuffersWritten=$null}
+    WriteFarm32Owner $Owned $true
     $StartArguments = @('trace','start','capture=yes','capturetype=physical',
         "CaptureInterface=$Guid",'Ethernet.Type=IPv4','Protocol=17',
         'IPv4.Address=10.253.3.1','CaptureMultiLayer=no','PacketTruncateBytes=1518',
-        # Preserve the packet logger's ETL instead of rewriting it to merge
-        # optional performance metadata at Stop. V4's merged file contained
-        # metadata buffers in place of six packet-buffer sequence numbers.
-        'report=disabled','perfMerge=no','persistent=no','fileMode=single',"maxSize=$TraceMaximumMiB","traceFile=$Etl")
+        # perfMerge=no alone did not preserve V5. Native exact-session Stop is
+        # a separate stop-policy candidate; keep all capture/storage filters.
+        'report=disabled','perfMerge=no','persistent=no','fileMode=single','bufferSize=512',"maxSize=$TraceMaximumMiB","traceFile=$Etl",
+        "sessionname=$TraceSessionName")
     InvokeNetsh $StartArguments | Write-Output
-    $ActiveStatus = GetTraceStatus
+    $Session = GetOwnedFarm32Session $null
+    if ($null -eq $Session) { throw 'Started trace has no exact native identity.' }
+    $Queried = InvokeFarm32NativeControl $Session 'QUERY'
+    AssertSameFarm32Session $Session $Queried
+    $Owned.TraceSessionName = $Session.Name
+    $Owned.TraceSessionGuid = $Session.Guid
+    $Owned.TraceSessionHandle = $Session.Handle.ToString([Globalization.CultureInfo]::InvariantCulture)
+    $Owned.TraceIdentityRecorded = $true
+    WriteFarm32Owner $Owned $false
+    $ActiveStatus = GetTraceStatus $TraceSessionName
     if (!$ActiveStatus.Contains($Etl)) { throw 'Windows trace did not become task-owned.' }
     $ActiveStatus | Set-Content -LiteralPath (Join-Path $EvidenceDir 'farm32-capture-active.txt')
 } else {
     if (!(Test-Path -LiteralPath $Marker)) {
-        if ($Action -eq 'Stop') { return }
+        if ($Action -eq 'Stop') {
+            if ($null -ne (GetOwnedFarm32Session $null)) { throw 'Native trace exists without its ownership marker.' }
+            return
+        }
         throw 'Farm32 capture ownership marker is missing.'
     }
+    if ((Get-Item -LiteralPath $Marker).Length -gt 65536 -or
+        ((Get-Item -LiteralPath $Marker).Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+        throw 'Capture ownership marker is oversized or redirected.'
+    }
     $Owned = Get-Content -Raw -LiteralPath $Marker | ConvertFrom-Json
+    if ($Owned.NativeStopRecorded -isnot [bool]) { throw 'Native stop evidence state is missing.' }
+    foreach ($Counter in @('NativeEventsLost','NativeLogBuffersLost','NativeBuffersWritten')) {
+        $Value = $Owned.$Counter
+        if (($Owned.NativeStopRecorded -and (($Value -isnot [int] -and $Value -isnot [long]) -or $Value -lt 0 -or $Value -gt [uint32]::MaxValue)) -or
+            (!$Owned.NativeStopRecorded -and $null -ne $Value)) { throw 'Native stop counter is invalid.' }
+    }
+    $ParsedHandle = [uint64]0
+    if ($Owned.TraceIdentityRecorded -and ![uint64]::TryParse($Owned.TraceSessionHandle, [ref]$ParsedHandle)) {
+        throw 'Native trace handle is invalid.'
+    }
     if ($Owned.Profile -ne $CaptureProfile -or
         $Owned.Etl -ne $Etl -or $Owned.Pcap -ne $Pcap -or $Owned.MiniportIfIndex -ne 19 -or
         $Owned.TraceMaximumMiB -ne $TraceMaximumMiB -or
         $Owned.NoWrapThresholdMiB -ne $NoWrapThresholdMiB -or
-        $Owned.PerformanceMetadataMerge -isnot [bool] -or $Owned.PerformanceMetadataMerge) {
+        $Owned.PerformanceMetadataMerge -isnot [bool] -or $Owned.PerformanceMetadataMerge -or
+        $Owned.StopPolicy -cne $StopPolicy -or $Owned.ControlSessionName -cne $TraceSessionName -or
+        $Owned.TraceIdentityRecorded -isnot [bool] -or
+        ($Owned.TraceIdentityRecorded -and
+         ($Owned.TraceSessionName -cne ('NetTrace-' + $TraceSessionName) -or
+          $Owned.TraceSessionGuid -cnotmatch '^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$' -or
+          $Owned.TraceSessionHandle -isnot [string] -or $Owned.TraceSessionHandle -cnotmatch '^[1-9][0-9]{0,19}$')) -or
+        (!$Owned.TraceIdentityRecorded -and ($null -ne $Owned.TraceSessionName -or $null -ne $Owned.TraceSessionGuid -or $null -ne $Owned.TraceSessionHandle))) {
         throw 'Capture ownership marker does not match the evidence directory.'
     }
-    $Status = GetTraceStatus
-    if ($Status -notmatch 'There is no trace session currently in progress') {
-        if (!$Status.Contains($Owned.Etl)) { throw 'Current Windows trace differs from the task-owned session.' }
-        if ($Action -eq 'Finalize') { throw 'Farm32 trace is still active; stop it before offline export.' }
-        InvokeNetsh @('trace','stop') | Write-Output
+    if ($Action -eq 'Stop') {
+        StopOwnedFarm32Trace $Owned
+    } else {
+        if (!$Owned.TraceIdentityRecorded) { throw 'Farm32 capture never recorded its native start identity.' }
+        if (!$Owned.NativeStopRecorded -or $Owned.NativeEventsLost -ne 0 -or $Owned.NativeLogBuffersLost -ne 0) {
+            throw 'Farm32 capture lacks a zero-loss native Stop receipt.'
+        }
+        if ((GetTraceStatus $TraceSessionName) -notmatch 'There is no trace session currently in progress' -or
+            $null -ne (GetOwnedFarm32Session $Owned)) {
+            throw 'Farm32 trace is still active; stop it before offline export.'
+        }
+    }
+    if ($Action -eq 'Stop' -and !$Owned.TraceIdentityRecorded -and !(Test-Path -LiteralPath $Owned.Etl)) {
+        # Failed Start never created a trace: absence was verified above. This
+        # is cleanup only and can never become exportable capture evidence.
+        return
     }
     if (Test-Path -LiteralPath $Owned.Etl) {
         # Single-file mode never wraps. A full file may have stopped recording

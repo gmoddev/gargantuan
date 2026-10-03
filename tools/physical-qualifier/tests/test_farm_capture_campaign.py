@@ -3,12 +3,14 @@
 from datetime import datetime, timedelta, timezone
 import base64
 import gzip
+import hashlib
 import importlib.util
 import json
 import os
 import re
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -16,6 +18,7 @@ import uuid
 
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "farm_capture_campaign.py"
+sys.path.insert(0, str(MODULE_PATH.parent))
 SPEC = importlib.util.spec_from_file_location("farm_capture_campaign", MODULE_PATH)
 campaign = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(campaign)
@@ -87,6 +90,12 @@ class CaptureCampaignTests(unittest.TestCase):
         if Role == "SERVER":
             Name = "farm32-netsh-owner.json"
             Row.update(TraceMaximumMiB=16384, NoWrapThresholdMiB=15360, PerformanceMetadataMerge=False)
+            Etl = "C:\\Capture\\" + self.RunId + "\\farm32-worker-capture.etl"
+            Row.update(NativeStopRecorded=True, NativeEventsLost=0, NativeLogBuffersLost=0, NativeBuffersWritten=10,
+                       StopPolicy="ExactOwnedControlTraceW-v1", TraceIdentityRecorded=True,
+                       Etl=Etl, TraceSessionName="NetTrace-test", TraceSessionGuid=str(uuid.uuid4()), TraceSessionHandle="18446744073709551615",
+                       ControlSessionName="GargantuanFarm32-" + hashlib.sha256(Etl.upper().encode("utf-8")).hexdigest())
+            Row["TraceSessionName"] = "NetTrace-" + Row["ControlSessionName"]
         else:
             Name = "farm32-client-capture.json"
             Row.update(DurationSeconds=600, AutostopKilobytes=16777216,
@@ -124,6 +133,42 @@ class CaptureCampaignTests(unittest.TestCase):
             WriteJson(Marker, Row)
             with self.subTest(Value=Value), self.assertRaisesRegex(ValueError, "profile marker"):
                 campaign.AssertCaptureProfile(Config)
+
+    def test_worker_native_stop_identity_required_before_readiness(self):
+        Config = self.Config("SERVER")
+        self.Capture.mkdir()
+        self.CaptureMarker("SERVER")
+        Marker = self.Capture / "farm32-netsh-owner.json"
+        Original = campaign.ReadJson(Marker)
+        for Key, Value in (("StopPolicy", None), ("StopPolicy", "netsh"), ("TraceIdentityRecorded", False),
+                           ("TraceIdentityRecorded", 1), ("TraceSessionName", ""), ("TraceSessionGuid", "stale"),
+                           ("TraceSessionHandle", "18446744073709551616"), ("TraceSessionHandle", 1),
+                           ("ControlSessionName", "NetTrace"), ("Etl", "C:\\unrelated.etl")):
+            with self.subTest(Key=Key, Value=Value):
+                WriteJson(Marker, {**Original, Key: Value})
+                with self.assertRaises(ValueError):
+                    campaign.AssertCaptureProfile(Config)
+
+    def test_bom_marker_is_not_silently_accepted(self):
+        Config = self.Config("SERVER")
+        self.Capture.mkdir()
+        self.CaptureMarker("SERVER")
+        Marker = self.Capture / "farm32-netsh-owner.json"
+        Marker.write_bytes(b"\xef\xbb\xbf" + Marker.read_bytes())
+        with self.assertRaises(json.JSONDecodeError):
+            campaign.AssertCaptureProfile(Config)
+
+    def test_active_marker_can_be_ready_but_cannot_be_sealed(self):
+        Config = self.Config("SERVER")
+        self.Capture.mkdir()
+        self.CaptureMarker("SERVER")
+        Marker = self.Capture / "farm32-netsh-owner.json"
+        Row = campaign.ReadJson(Marker)
+        Row.update(NativeStopRecorded=False, NativeEventsLost=None, NativeLogBuffersLost=None, NativeBuffersWritten=None)
+        WriteJson(Marker, Row)
+        campaign.AssertCaptureProfile(Config)
+        with self.assertRaisesRegex(ValueError, "missing or records loss"):
+            campaign.AssertCaptureProfile(Config, RequireStopped=True)
 
     def test_worker_stop_precedes_offline_finalize_and_seals_separate_root(self):
         Config = self.Config("SERVER")

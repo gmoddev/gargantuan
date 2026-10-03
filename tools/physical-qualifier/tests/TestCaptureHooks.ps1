@@ -10,6 +10,10 @@ if ($Farm32) {
     if (-not $HookText.Contains($DiskQuery)) { throw 'Farm32 disk query seam changed' }
     $HookText = $HookText.Replace($DiskQuery,
         '$Drive = [pscustomobject]@{IsReady=$true; AvailableFreeSpace=$global:TestDiskFree}')
+    # Compile the actual interop definition, but replace only its two native
+    # call sites. All production ownership/identity/Stop logic executes.
+    $HookText = $HookText.Replace('[GargantuanQualification.Farm32EtwV1]::All()', '@(Get-TestNativeSessions)')
+    $HookText = $HookText.Replace('[GargantuanQualification.Farm32EtwV1]::Control($Session, $Operation)', '(Invoke-TestNativeControl $Session $Operation)')
 }
 $HookBlock = [ScriptBlock]::Create($HookText)
 $Prefix = if ($Farm32) { 'farm32-' } else { '' }
@@ -24,10 +28,54 @@ $global:TestEtl = ''
 $global:TestEventsEmpty = $false
 $global:TestLostEvents = 0
 $global:TestCalls = [System.Collections.Generic.List[string]]::new()
+$global:TestNativeCalls = [System.Collections.Generic.List[string]]::new()
+$global:TestControlName = ''
+$global:TestNativeGuid = [Guid]::NewGuid().ToString('D')
+$global:TestNativeFailure = ''
+$global:TestNativeDuplicate = $false
+$global:TestNativeHandle = [uint64]42
+$global:TestNativeMode = 1
+$global:TestNativeLoss = 0
+$global:TestReplaceQueryCountdown = 0
+$global:TestFailMarkerAfterStop = $false
+$global:TestStartBeforeTraceFailure = $false
+function global:Get-TestNativeSessions {
+    if (!$global:TestActive) { return }
+    $Value = [pscustomobject]@{
+        Name=('NetTrace-' + $global:TestControlName)
+        FileName=$(if ($global:TestForeign) { 'C:\unrelated.etl' } else { $global:TestEtl })
+        Guid=$global:TestNativeGuid; Handle=$global:TestNativeHandle; BufferSizeKiB=512
+        MaximumFileSizeMiB=16384; LogFileMode=$global:TestNativeMode; EventsLost=$global:TestNativeLoss; LogBuffersLost=0; BuffersWritten=10
+    }
+    $Value
+    if ($global:TestNativeDuplicate) { $Value }
+}
+function global:Invoke-TestNativeControl($Session, [string]$Operation) {
+    $global:TestNativeCalls.Add($Operation)
+    if ($Operation -eq $global:TestNativeFailure) { throw 'Injected native failure' }
+    if ($Operation -eq 'QUERY' -and $global:TestReplaceQueryCountdown -gt 0) {
+        $global:TestReplaceQueryCountdown--
+        if ($global:TestReplaceQueryCountdown -eq 0) {
+            $global:TestNativeGuid = [Guid]::NewGuid().ToString('D')
+            return @(Get-TestNativeSessions)[0]
+        }
+    }
+    if ($Operation -eq 'STOP') {
+        $global:TestActive = $false
+        if ($global:TestFailMarkerAfterStop) {
+            [IO.File]::WriteAllText((Join-Path (Split-Path $global:TestEtl -Parent) 'farm32-netsh-owner.json.pending'), 'preserved')
+        }
+    }
+    return $Session
+}
 function global:netsh {
     param([Parameter(ValueFromRemainingArguments=$true)][string[]]$Arguments)
     $global:TestCalls.Add(($Arguments -join ' '))
     $global:LASTEXITCODE = 0
+    if ($global:TestStartBeforeTraceFailure -and ($Arguments[0..1] -join ' ') -eq 'trace start') {
+        $global:LASTEXITCODE = 1
+        return 'Injected failure before trace creation'
+    }
     if (($Arguments[0..2] -join ' ') -eq 'trace show status') {
         if (!$global:TestActive) {
             $global:LASTEXITCODE = 1
@@ -38,6 +86,9 @@ function global:netsh {
     }
     if (($Arguments[0..1] -join ' ') -eq 'trace start') {
         $global:TestEtl = ($Arguments | Where-Object {$_ -like 'traceFile=*'}).Substring(10)
+        $NameArgument = @($Arguments | Where-Object {$_ -like 'sessionname=*'})
+        $global:TestControlName = if ($NameArgument.Count) { $NameArgument[0].Substring(12) } else { '' }
+        $global:TestNativeGuid = [Guid]::NewGuid().ToString('D')
         [IO.File]::WriteAllBytes($global:TestEtl,[byte[]]@(1,2,3))
         $global:TestActive = $true
         return 'Trace started.'
@@ -88,7 +139,11 @@ try {
     & $HookBlock $First Start 39450
     Assert $global:TestActive 'Capture did not start'
     $Expected = 'trace start capture=yes capturetype=physical CaptureInterface={a33455f8-3b6f-46f1-b981-7c861e6b3cd3} Ethernet.Type=IPv4 Protocol=17 IPv4.Address=10.253.3.1 CaptureMultiLayer=no PacketTruncateBytes=1518 report=disabled persistent=no fileMode=single maxSize=' + $TraceMaximumMiB + ' traceFile=' + $global:TestEtl
-    if ($Farm32) { $Expected = $Expected.Replace('report=disabled persistent=no', 'report=disabled perfMerge=no persistent=no') }
+    if ($Farm32) {
+        $Expected = $Expected.Replace('report=disabled persistent=no', 'report=disabled perfMerge=no persistent=no')
+        $Expected = $Expected.Replace('fileMode=single maxSize=', 'fileMode=single bufferSize=512 maxSize=')
+        $Expected += ' sessionname=' + $global:TestControlName
+    }
     Assert ([bool]($global:TestCalls | Where-Object {$_ -eq $Expected})) 'Physical-interface trace filters or storage bound changed'
     $Owner = Get-Content (Join-Path $First ($Prefix + 'netsh-owner.json')) -Raw | ConvertFrom-Json
     Assert ($Owner.MiniportIfIndex -eq 19 -and $Owner.CapturePort -eq 39450 -and
@@ -96,8 +151,21 @@ try {
             ($Owner.CaptureLayers -join ',') -eq 'NDIS physical miniport') 'Capture ownership marker is incomplete'
     if ($Farm32) { Assert ($Owner.Profile -ceq 'Farm32Capture16GiB-v2') 'Farm32 versioned profile is absent' }
     if ($Farm32) { Assert ($Owner.PerformanceMetadataMerge -is [bool] -and !$Owner.PerformanceMetadataMerge) 'Farm32 performance metadata merge was not disabled' }
+    if ($Farm32) {
+        Assert ($Owner.StopPolicy -ceq 'ExactOwnedControlTraceW-v1' -and $Owner.TraceIdentityRecorded -eq $true -and
+            $Owner.ControlSessionName -ceq $global:TestControlName -and $Owner.TraceSessionName -ceq ('NetTrace-' + $global:TestControlName) -and
+            $Owner.TraceSessionGuid -ceq $global:TestNativeGuid -and $Owner.TraceSessionHandle -ceq '42') 'Exact native identity was not captured'
+        $MarkerBytes = [IO.File]::ReadAllBytes((Join-Path $First 'farm32-netsh-owner.json'))
+        Assert ($MarkerBytes[0] -eq 123) 'Ownership JSON begins with a BOM'
+        Assert ([GargantuanQualification.Farm32EtwV1]::NativePropertiesSize -eq 120) 'ETW native layout differs'
+    }
     & $HookBlock $First Stop
     Assert (!$global:TestActive) 'Capture did not stop'
+    if ($Farm32) {
+        Assert (($global:TestNativeCalls -join ',') -eq 'QUERY,QUERY,FLUSH,QUERY,STOP') 'Native stop sequence differs'
+        Assert (@($global:TestCalls | Where-Object {$_ -ceq 'trace stop'}).Count -eq 0) 'Farm32 used a global stop'
+        Assert ([bool]($global:TestCalls | Where-Object {$_ -ceq ('trace stop sessionname=' + $global:TestControlName)})) 'Named cleanup was not performed'
+    }
     if ($Farm32) {
         $global:TestDiskFree = 17GB - 1
         $Rejected = $false
@@ -259,10 +327,130 @@ public sealed class Farm32CountingStream : Stream {
         Assert $Rejected 'Farm32 capture overwrote an existing ETL'
         Assert (@($global:TestCalls | Where-Object { $_ -like 'trace start *' }).Count -eq $Before) 'Farm32 preexisting-artifact denial started a trace'
         Assert ((Get-Content -LiteralPath (Join-Path $Seventh 'farm32-worker-capture.etl') -Raw) -eq 'preserved') 'Farm32 existing ETL changed'
+
+        # Failed Start after the OS starts capture must retain a cleanup intent.
+        $Partial = Join-Path $TestDir 'partial-start'
+        New-Item -ItemType Directory -Path $Partial | Out-Null
+        $global:TestNativeFailure = 'QUERY'
+        $Rejected = $false
+        try { & $HookBlock $Partial Start } catch { $Rejected = $_.Exception.Message -match 'Injected native failure' }
+        Assert ($Rejected -and $global:TestActive) 'Partial Start seam was not exercised'
+        $PartialOwner = Get-Content -Raw -LiteralPath (Join-Path $Partial 'farm32-netsh-owner.json') | ConvertFrom-Json
+        Assert (!$PartialOwner.TraceIdentityRecorded -and $null -eq $PartialOwner.TraceSessionGuid) 'Partial Start falsely recorded a native identity'
+        $global:TestNativeFailure = ''
+        & $HookBlock $Partial Stop
+        Assert (!$global:TestActive) 'Partial Start was not safely stopped'
+        $NativeStops = @($global:TestNativeCalls | Where-Object {$_ -eq 'STOP'}).Count
+        & $HookBlock $Partial Stop
+        Assert (@($global:TestNativeCalls | Where-Object {$_ -eq 'STOP'}).Count -eq $NativeStops) 'Repeated Stop invoked native STOP again'
+
+        $Generation = Join-Path $TestDir 'generation'
+        New-Item -ItemType Directory -Path $Generation | Out-Null
+        $global:TestNativeHandle = [uint64]::MaxValue
+        & $HookBlock $Generation Start
+        $GenerationMarker = Join-Path $Generation 'farm32-netsh-owner.json'
+        $OriginalMarker = [IO.File]::ReadAllBytes($GenerationMarker)
+        $GenerationOwner = Get-Content -Raw -LiteralPath $GenerationMarker | ConvertFrom-Json
+        Assert ($GenerationOwner.TraceSessionHandle -ceq '18446744073709551615') 'Native handle lost 64-bit precision'
+        foreach ($Field in @('StopPolicy','ControlSessionName','TraceSessionName','TraceSessionGuid','TraceSessionHandle')) {
+            $Mutated = [Text.Encoding]::UTF8.GetString($OriginalMarker) | ConvertFrom-Json
+            $Mutated.$Field = 'stale'
+            [IO.File]::WriteAllText($GenerationMarker, ($Mutated | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
+            $Count = $global:TestNativeCalls.Count
+            $Rejected = $false
+            try { & $HookBlock $Generation Stop } catch { $Rejected = $true }
+            Assert ($Rejected -and $global:TestActive -and $global:TestNativeCalls.Count -eq $Count) "Mutated ownership $Field invoked native control"
+        }
+        [IO.File]::WriteAllBytes($GenerationMarker, $OriginalMarker)
+        $SavedGuid = $global:TestNativeGuid
+        $global:TestNativeGuid = [Guid]::NewGuid().ToString('D')
+        $Rejected = $false
+        try { & $HookBlock $Generation Stop } catch { $Rejected = $_.Exception.Message -match 'generation' }
+        Assert ($Rejected -and $global:TestActive) 'Reused session generation was stopped'
+        $global:TestNativeGuid = $SavedGuid
+        $global:TestNativeDuplicate = $true
+        $Rejected = $false
+        try { & $HookBlock $Generation Stop } catch { $Rejected = $_.Exception.Message -match 'ambiguous' }
+        Assert ($Rejected -and $global:TestActive) 'Ambiguous native sessions were stopped'
+        $global:TestNativeDuplicate = $false
+        $global:TestNativeFailure = 'STOP'
+        $NetshStops = @($global:TestCalls | Where-Object {$_ -like 'trace stop*'}).Count
+        $Rejected = $false
+        try { & $HookBlock $Generation Stop } catch { $Rejected = $_.Exception.Message -match 'Injected native failure' }
+        Assert ($Rejected -and $global:TestActive) 'Native STOP error was suppressed'
+        Assert (@($global:TestCalls | Where-Object {$_ -like 'trace stop*'}).Count -eq $NetshStops) 'Native error fell back to netsh Stop'
+        $global:TestNativeFailure = ''
+        # Service expiry/restart must still use this fixed Stop: old evidence
+        # timestamps cannot make the hook refuse its cleanup responsibility.
+        (Get-Item -LiteralPath $GenerationMarker).LastWriteTimeUtc = [datetime]'2000-01-01T00:00:00Z'
+        & $HookBlock $Generation Stop
+        Assert (!$global:TestActive) 'Old persisted capture was not stopped'
+        $global:TestNativeHandle = [uint64]42
+        Assert ($HookText.Contains('ControlTraceW(0, Session.Name, Memory, Control)')) 'Native control can target a recycled numeric handle'
+        $EmptyStart = Join-Path $TestDir 'empty-start'
+        New-Item -ItemType Directory -Path $EmptyStart | Out-Null
+        $global:TestStartBeforeTraceFailure = $true
+        $Rejected = $false
+        try { & $HookBlock $EmptyStart Start } catch { $Rejected = $true }
+        Assert ($Rejected -and !$global:TestActive) 'Pre-creation Start failure was not exercised'
+        $global:TestStartBeforeTraceFailure = $false
+        & $HookBlock $EmptyStart Stop
+        $Rejected = $false
+        try { & $HookBlock $EmptyStart Finalize } catch { $Rejected = $true }
+        Assert $Rejected 'Failed Start produced exportable evidence'
+
+        $Raced = Join-Path $TestDir 'raced'
+        New-Item -ItemType Directory -Path $Raced | Out-Null
+        & $HookBlock $Raced Start
+        $SavedGuid = $global:TestNativeGuid
+        $global:TestNativeMode = 5
+        $Rejected = $false
+        try { & $HookBlock $Raced Stop } catch { $Rejected = $true }
+        Assert ($Rejected -and $global:TestActive) 'Append mode was accepted'
+        $global:TestNativeMode = 1
+        $global:TestReplaceQueryCountdown = 2
+        $BeforeStops = @($global:TestNativeCalls | Where-Object {$_ -eq 'STOP'}).Count
+        $Rejected = $false
+        try { & $HookBlock $Raced Stop } catch { $Rejected = $_.Exception.Message -match 'identity changed' }
+        Assert ($Rejected -and $global:TestActive) 'Final-query generation replacement was not protected'
+        Assert (@($global:TestNativeCalls | Where-Object {$_ -eq 'STOP'}).Count -eq $BeforeStops) 'Replaced trace received native STOP'
+        $global:TestNativeGuid = $SavedGuid
+        & $HookBlock $Raced Stop
+
+        $Loss = Join-Path $TestDir 'native-loss'
+        New-Item -ItemType Directory -Path $Loss | Out-Null
+        & $HookBlock $Loss Start
+        $global:TestNativeLoss = 3
+        $Rejected = $false
+        try { & $HookBlock $Loss Stop } catch { $Rejected = $_.Exception.Message -match 'Native ETW loss' }
+        Assert ($Rejected -and !$global:TestActive) 'Native loss skipped cleanup or was accepted'
+        $LossOwner = Get-Content -Raw -LiteralPath (Join-Path $Loss 'farm32-netsh-owner.json') | ConvertFrom-Json
+        Assert ($LossOwner.NativeStopRecorded -and $LossOwner.NativeEventsLost -eq 3) 'Native loss receipt was not retained'
+        $global:TestNativeLoss = 0
+        $Rejected = $false
+        try { & $HookBlock $Loss Finalize } catch { $Rejected = $_.Exception.Message -match 'zero-loss native Stop' }
+        Assert $Rejected 'Finalize ignored authoritative native loss'
+
+        $WriteFailure = Join-Path $TestDir 'stop-receipt-failure'
+        New-Item -ItemType Directory -Path $WriteFailure | Out-Null
+        & $HookBlock $WriteFailure Start
+        $global:TestFailMarkerAfterStop = $true
+        $Rejected = $false
+        try { & $HookBlock $WriteFailure Stop } catch { $Rejected = $true }
+        Assert ($Rejected -and !$global:TestActive) 'STOP/write failure seam was not exercised'
+        $global:TestFailMarkerAfterStop = $false
+        $Rejected = $false
+        try { & $HookBlock $WriteFailure Stop } catch { $Rejected = $_.Exception.Message -match 'unmeasured' }
+        Assert ($Rejected -and !$global:TestActive) 'Cleanup retry fabricated native Stop evidence'
+        $Rejected = $false
+        try { & $HookBlock $WriteFailure Finalize } catch { $Rejected = $true }
+        Assert $Rejected 'Finalize accepted missing native Stop receipt'
+        Assert (@($global:TestCalls | Where-Object {$_ -ceq 'trace stop'}).Count -eq 0) 'Farm32 issued an unqualified netsh Stop'
     }
     Write-Output 'Capture hook simulation passed: exact scope, export, ownership and cleanup.'
 } finally {
     Remove-Item Function:\netsh,Function:\Get-NetAdapter,Function:\Get-NetIPAddress,Function:\Get-NetIPInterface,Function:\Get-WinEvent,Function:\tracerpt
+    Remove-Item Function:\Get-TestNativeSessions,Function:\Invoke-TestNativeControl
     $Resolved = [IO.Path]::GetFullPath($TestDir)
     if ((Split-Path $Resolved -Parent) -ne ([IO.Path]::GetTempPath().TrimEnd('\')) -or
         (Split-Path $Resolved -Leaf) -notlike 'qualifier-hook-test-*') {
