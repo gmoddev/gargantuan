@@ -19,6 +19,7 @@ import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from dependency import Load
+from f1_candidate_source import FORMAT as F1_CANDIDATE_FORMAT, VerifyArchive as VerifyCandidateArchive
 
 Legacy, Transport = Load()
 MAX_FRAME, MAX_LOG = Transport.MAX_FRAME, Transport.MAX_LOG
@@ -32,6 +33,7 @@ PHASE1_BASE_HEAD = "ce4733de8d68086667bc8fe5138bcc743f21c54e"
 PHASE1_OVERLAY = "18AF89DAEEF3D5DD8E1AC6ED7089EDBEF278990AA211CBB4E54BCF3555D846FB"
 PHASE1_PROBE_SHA = "925DC0684787B1D629901D5047FF9ECC968AFC5F4E579DE576F701322E9BB99F"
 PHASE1_SOURCE_ARCHIVE = "f1-native-source.zip"
+PHASE1_SOURCE_FORMAT = "F1_LEGACY_31_V1"
 PHASE1_RUNTIME_MANIFEST_SHA = "E105DBA76473990C5AE3AB410762851C7183396FF894A093E526ED26B335D7A9"
 PHASE1_NATIVE_DEPENDENCIES = {
     "SDL3.dll": "6D4483E633AD0B0C12EC8870FD334134E5EBB4ACAE236A8284663D5B6531410A",
@@ -202,6 +204,16 @@ class ProbeGroup:
         return self.poll()
 
 
+def CheckPhase1SourceArchive(Manifest, ArchivePath):
+    Format = Manifest.get("SourceArchiveFormat", "F1_LEGACY_31_V1")
+    if Format != PHASE1_SOURCE_FORMAT or Manifest.get("BaseHead") != PHASE1_BASE_HEAD:
+        raise ValueError("Phase 1 source archive format/revision pin mismatch")
+    if Format == F1_CANDIDATE_FORMAT:
+        VerifyCandidateArchive(ArchivePath, PHASE1_BASE_HEAD)
+    elif Format != "F1_LEGACY_31_V1":
+        raise ValueError("Phase 1 source archive format is unsupported")
+
+
 class LocalRun:
     def __init__(self, Config, Log):
         self.Config, self.Log = Config, Log
@@ -234,6 +246,8 @@ class LocalRun:
                                  Digest(ManifestPath.parent / PHASE1_SOURCE_ARCHIVE) != PHASE1_OVERLAY):
             raise ValueError("Phase 1 native source archive hash mismatch")
         if IsPhase1(Config):
+            CheckPhase1SourceArchive(Manifest, ManifestPath.parent / PHASE1_SOURCE_ARCHIVE)
+        if IsPhase1(Config):
             RuntimeHashes = Manifest.get("RuntimeSha256")
             if not isinstance(RuntimeHashes, dict) or hashlib.sha256(json.dumps(
                     RuntimeHashes, sort_keys=True, separators=(",", ":")).encode()).hexdigest().upper() != PHASE1_RUNTIME_MANIFEST_SHA:
@@ -259,6 +273,9 @@ class LocalRun:
         if IsPhase1(Config) and Config["Role"] == "CLIENT":
             if Config["CaptureCommand"][-3] != "duration:" + str(PHASE1_CAPTURE_DURATION):
                 raise ValueError("Phase 1 requires the fixed client capture duration")
+            if Config["CaptureCommand"].count("-B") != 1 or Config["CaptureCommand"][
+                    Config["CaptureCommand"].index("-B"):Config["CaptureCommand"].index("-B") + 2] != ["-B", "64"]:
+                raise ValueError("Phase 1 requires the fixed 64 MiB client capture buffer")
         if Config["Role"] == "CLIENT" and not 1 <= Config["Nonce"] <= 2147483648 - Clients:
             raise ValueError("invalid nonce")
         if not Path(Config["WorkDir"]).is_dir():
@@ -583,6 +600,7 @@ def Stage(Args):
                             "1" if Phase1 else "0"] + ([] if Phase1 else ["--readiness-smoke"]),
               "EvidenceDir": str(Directory / "client-evidence"),
               "CaptureCommand": [r"C:\Program Files\Wireshark\dumpcap.exe", "-i", Args.capture_device,
+                                 *(["-B", "64"] if Clients == 4 else []),
                                  "-s", "0", "-f", "udp and host 10.253.3.1 and host 10.253.3.2 and port 39450",
                                  "-a", "duration:" + str(PHASE1_CAPTURE_DURATION if Phase1 else
                                                            CLIENT_CAPTURE_DURATION if Clients == 4 else 90),

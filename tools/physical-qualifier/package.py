@@ -24,7 +24,7 @@ def Main():
     shutil.copytree(Upstream, Output / "tool/.agent-coordinator", ignore=shutil.ignore_patterns(".git", "__pycache__", "*.pyc", "bin", "obj", "publish", "build", "dist", "*.egg-info"))
     Scripts = Output / "skill/scripts"
     Scripts.mkdir(exist_ok=True)
-    for Name in ("qualifier.py", "dependency.py", "upstream.lock.json"):
+    for Name in ("qualifier.py", "dependency.py", "f1_candidate_source.py", "upstream.lock.json"):
         shutil.copyfile(Source / Name, Scripts / Name)
     # The installed personal skill can predate this project's qualified NDIS
     # hook. Keep both packaged entrypoints on the same pinned capture policy.

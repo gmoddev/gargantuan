@@ -207,6 +207,7 @@ class QualificationTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "probe hash"):
                 Q.ValidateConfig({**Config, "ArtifactSHA256": Q.PROBE_SHA})
         self.assertEqual("duration:70", Client["CaptureCommand"][-3])
+        self.assertEqual(["-B", "64"], Client["CaptureCommand"][3:5])
         self.assertEqual(["server", "10.253.3.2", "39450", "4"], Server["ProbeArgs"])
         self.assertEqual(["client", "10.253.3.2", "39450", "92707", "1"], Client["ProbeArgs"])
         Probe = self.Root / "gargantuan_physical_gns_funding_probe.exe"
@@ -235,6 +236,12 @@ class QualificationTests(unittest.TestCase):
                 return Q.PHASE1_PROBE_SHA
             with mock.patch.object(Q, "Digest", side_effect=TestDigest):
                 Q.LocalRun(Client, Log).Check()
+                OriginalCapture = list(Client["CaptureCommand"])
+                for Buffer in ([], ["-B", "1"], ["-B", "64", "-B", "64"]):
+                    Client["CaptureCommand"] = OriginalCapture[:3] + Buffer + OriginalCapture[5:]
+                    with self.assertRaisesRegex(ValueError, "capture buffer"):
+                        Q.LocalRun(Client, Log).Check()
+                Client["CaptureCommand"] = OriginalCapture
                 OldManifest = json.loads(Manifest.read_text())
                 OldManifest["Contract"] = "D01"
                 Manifest.write_text(json.dumps(OldManifest))

@@ -55,6 +55,22 @@ def PinnedRevision() -> str:
 
 def Main() -> None:
     Root = Path(__file__).resolve().parents[2]
+    if len(sys.argv) >= 2 and sys.argv[1] in ("--candidate", "--verify-candidate", "--verify-candidate-tree"):
+        from f1_candidate_source import FORMAT, Create, VerifyPinned, VerifyTree
+        Mode = sys.argv[1]
+        if len(sys.argv) != (5 if Mode == "--verify-candidate-tree" else 4):
+            raise SystemExit("usage: --candidate commit output.zip | --verify-candidate commit archive.zip | "
+                             "--verify-candidate-tree commit archive.zip source-root")
+        Expected, ArchivePath = sys.argv[2], Path(sys.argv[3]).resolve()
+        if Mode == "--candidate":
+            Hash = Create(Root, Expected, ArchivePath)
+            print(json.dumps({"SourceArchiveFormat": FORMAT, "BaseHead": Expected,
+                              "SourceArchive": ArchivePath.name, "OverlayArchiveSha256": Hash}))
+        else:
+            Manifest = (VerifyTree(Path(sys.argv[4]).resolve(), ArchivePath, Expected)
+                        if Mode == "--verify-candidate-tree" else VerifyPinned(Root, ArchivePath, Expected))
+            print("[Qualification:Source] candidate_verified=" + str(len(Manifest["Files"])))
+        return
     SourceRevision = PinnedRevision()
     if len(sys.argv) == 3 and sys.argv[1] == "--verify-pinned":
         with zipfile.ZipFile(Path(sys.argv[2]).resolve()) as Archive:
