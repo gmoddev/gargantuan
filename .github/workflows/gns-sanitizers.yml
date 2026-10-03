@@ -33,6 +33,7 @@ jobs:
         run: |
           set -euo pipefail
           git submodule status --recursive | tee /tmp/gargantuan-submodules.txt
+          git rev-parse HEAD > qualified-source-commit.txt
           if grep -Eq '^[\-+U]' /tmp/gargantuan-submodules.txt; then
             echo "Submodules are missing, conflicted, or not at their pinned revisions."
             exit 1
@@ -205,12 +206,13 @@ jobs:
           build-gns-sanitizers/gargantuan_game_session_real_transport_tests --pooled --reliable-profile
 
       - name: Upload GNS sanitizer diagnostics
-        if: failure()
+        if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: gns-sanitizer-diagnostics
           if-no-files-found: ignore
           path: |
+            qualified-source-commit.txt
             build-gns-sanitizers/CMakeFiles/CMakeConfigureLog.yaml
             build-gns-sanitizers/Testing/Temporary/LastTest.log
             build-gns-sanitizers/ctest-gns-results.xml

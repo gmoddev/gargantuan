@@ -37,6 +37,9 @@ jobs:
             throw "Submodules are missing, conflicted, or not at their pinned revisions:`n$($Invalid -join "`n")"
           }
           $Status
+          $SourceCommit = git rev-parse HEAD
+          if ($LASTEXITCODE -ne 0) { throw 'Unable to record actual CI source commit' }
+          $SourceCommit | Set-Content -Encoding ascii qualified-source-commit.txt
 
       - name: Install pinned repository tools
         uses: paradoxum-games/setup-rokit@c6a9749169e3a0146019b899cd0342556f773908 # v3
@@ -174,6 +177,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'F1 fixed capture staging test failed' }
           python -m unittest discover -s tools/physical-qualifier/tests -p 'test_farm_*.py' -v
           if ($LASTEXITCODE -ne 0) { throw 'Farm32 control and evidence tests failed' }
+          python -m unittest discover -s tests -p 'test_foundation3l_acceptance.py' -v
+          if ($LASTEXITCODE -ne 0) { throw 'Final Foundation 3L conjunction tests failed' }
           # Control-only mocks; no capture, NIC, or installed-service operation.
           & tools/physical-qualifier/tests/TestCaptureHooks.ps1 -HookPath tools/physical-qualifier/worker/PktMonFarm32Capture.ps1 -Farm32
           & tools/physical-qualifier/tests/TestDumpcapFarm32Capture.ps1
@@ -233,12 +238,13 @@ jobs:
           path: build-ci/QualifiedScalePhysical/
 
       - name: Upload native CI diagnostics
-        if: failure()
+        if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: native-ci-diagnostics
           if-no-files-found: ignore
           path: |
+            qualified-source-commit.txt
             build-ci/CMakeFiles/CMakeConfigureLog.yaml
             build-ci/Testing/Temporary/LastTest.log
             build-ci/ctest-results.xml
@@ -268,6 +274,7 @@ jobs:
         run: |
           set -euo pipefail
           git submodule status --recursive | tee /tmp/gargantuan-submodules.txt
+          git rev-parse HEAD > qualified-source-commit.txt
           if grep -Eq '^[\-+U]' /tmp/gargantuan-submodules.txt; then
             echo "Submodules are missing, conflicted, or not at their pinned revisions."
             exit 1
@@ -355,12 +362,13 @@ jobs:
             --output-junit build-sanitizers/ctest-results.xml
 
       - name: Upload sanitizer diagnostics
-        if: failure()
+        if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: sanitizer-ci-diagnostics
           if-no-files-found: ignore
           path: |
+            qualified-source-commit.txt
             build-sanitizers/CMakeFiles/CMakeConfigureLog.yaml
             build-sanitizers/Testing/Temporary/LastTest.log
             build-sanitizers/ctest-results.xml
