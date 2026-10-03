@@ -85,6 +85,23 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+2026-10-03 UTC external-action checkpoint: candidate `9ae8f68c2` passes the
+exact-source hosted Windows Release job and GNS sanitizer workflow; Linux
+Native CI is still pending. The installed native-stop diagnostic
+`a17d3e70-d5c7-428e-afa2-2277ab550e3a` preserved every marked packet in both
+captures, but the client application missed 629 valid captured datagrams.
+The precise Windows receive-path loss remains **NOT MEASURED**. A subsequent
+manually elevated drop-diagnostic setup failed before capture because Windows
+ellipsized its filter name. Its one retained filter needs fixed-input,
+ownership-checked Administrator cleanup. The corrected short-name helper and
+103-test harness are prepared; the next manual-helper wait expired without
+capture or traffic. Both setup results remain failed/incomplete.
+See the [complete native-stop checkpoint](tools/physical-qualifier/docs/FARM32_ETL_NATIVE_STOP.md).
+The client briefly reported 8.54 GiB available, then fell below 1 GiB; the
+unchanged 8-GiB provider preflight is not currently cleared. No fresh F1,
+Local/Node provider or final acceptance PASS is claimed. **KI-006 OPEN;
+Foundation 3L B — PARTIALLY READY; no 3M or merge.**
+
 Capture-infrastructure implementation checkpoint: the Farm32
 [exact-session native ETW Stop candidate](tools/physical-qualifier/docs/FARM32_ETL_NATIVE_STOP.md)
 has bounded ownership, partial-Start/expired-lease cleanup, retained native-loss
