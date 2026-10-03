@@ -49,6 +49,16 @@ farm summary as evidence. The four-client argument map is passed only to the
 fixed tracked `tests/foundation3l_four_client.py:Replay(Inputs, ExpectedCommit)`
 implementation. Until that implementation and its complete inputs are present,
 the fresh four-client gate remains unmeasured.
+
+The four-client input map includes `ServerCsv`, `AdmissionsCsv`, and a
+`ClientCsv` map keyed by the four exact nonce strings. `RawCsvSha256` contains
+`Server`, `Admissions`, and those same four nonce keys. The admissions CSV is
+`physical-gns-server-admissions.csv`, recorded at successful grant acceptance;
+it preserves token, generation, exact bytes and the original activation value.
+Only the production pre-Ready sentinel identifies bootstrap work. Every other
+accepted grant requires its native finite-service certificate. The endpoint
+collector copies these bounded files into its evidence root before sealing the
+manifest, and final replay joins each supplied CSV hash to that sealed copy.
 PowerShell is selected by its explicit absolute executable path and hash,
 following the existing analysis-inventory/runtime pin pattern. There is no
 `pwsh` PATH fallback and no caller-selected replay script. The fixed farm
@@ -69,7 +79,7 @@ failure and cannot itself authorize final PASS.
 The final typed conjunction requires each provider's:
 
 - five-phase, all-32-client workload and exact terminal conservation;
-- generation-scoped F1 native completion and sticky failure evidence;
+- generation-safe, grant-scoped F1 native completion and sticky failure evidence;
 - ACK-gated grant lifecycle, recorded wait bound and fixed-workload fairness;
 - accepted Character state chain, due-service cadence and all-window ordinary
   successful-send demand (including forced Character traffic);
