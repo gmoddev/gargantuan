@@ -1,4 +1,5 @@
 #include "WorkloadTimingEvidence.hpp"
+#include "WorkloadActionEvidence.hpp"
 
 #include <iostream>
 #include <sstream>
@@ -42,5 +43,43 @@ int main() {
 	Check(!First.ThreadValid && !Last.ThreadValid && !First.ProcessValid && !Last.ProcessValid,
 		"unsupported platforms report counters as not measured");
 #endif
+	WorkloadActionEvidence Actions;
+	Actions.Begin(7, 180, 1'000'000'000, Before, false);
+	Actions.End(7, 239, 3'227'250'000, {100, 200, true, true}, false);
+	Actions.Begin(8, 240, 4'000'000'000, {}, true);
+	Actions.End(8, 241, 4'001'000'000, {}, true);
+	Actions.Begin(9, 242, 5'000'000'000, Before, true);
+	std::ostringstream ActionText;
+	Actions.Print(ActionText, "mixed", 300, 25'000'000'000, {200100, 300200, true, true}, true);
+	Check(ActionText.str().find("sequence=7 recovery_probe=0 outcome=COMPLETED start_step=180 observed_end_step=239 start_ns=1000000000 observed_end_ns=3227250000 wall_ms=2227.25 thread_cpu_ms=0 process_cpu_ms=0") != std::string::npos,
+		"action tuple joins original submission and resolution, retaining slow off-CPU span without latency discount");
+	Check(ActionText.str().find("sequence=8 recovery_probe=1 outcome=REJECTED") != std::string::npos &&
+		ActionText.str().find("wall_ms=1 thread_cpu_ms=NOT_MEASURED process_cpu_ms=NOT_MEASURED") != std::string::npos,
+		"rejected action and unavailable CPU are distinguishable from successful zero CPU");
+	Check(ActionText.str().find("sequence=9 recovery_probe=1 outcome=MISSING_AT_SERVICE_DEADLINE") != std::string::npos &&
+		Actions.Records[2].Outcome == "PENDING", "missing completion is an observation, not a fabricated terminal event");
+	std::ostringstream EarlyText;
+	Actions.Print(EarlyText, "mixed", 243, 5'010'000'000, {}, false);
+	Check(EarlyText.str().find("outcome=MISSING_AT_CASE_END") != std::string::npos,
+		"early disconnected case end does not claim a service timeout");
+	Actions.End(9, 244, 5'020'000'000, Before, false);
+	Actions.End(9, 245, 5'030'000'000, Before, false);
+	Check(Actions.Invalid && Actions.Records[2].EndStep == 244, "duplicate completion cannot overwrite first evidence");
+	WorkloadActionEvidence WrongIdentity;
+	WrongIdentity.Begin(1, 1, 10, {}, false);
+	WrongIdentity.End(2, 2, 20, {}, false);
+	Check(WrongIdentity.Invalid && WrongIdentity.Records[0].Outcome == "PENDING", "wrong sequence cannot resolve an action");
+	WorkloadActionEvidence Bounded;
+	for (std::size_t Index = 0; Index < WorkloadActionEvidence::Capacity; ++Index) {
+		Bounded.Begin(Index + 1, Index, Index * 10, Before, false);
+		Bounded.End(Index + 1, Index + 1, Index * 10 + 1, Before, false);
+	}
+	Bounded.Begin(WorkloadActionEvidence::Capacity + 1, 100, 1000, Before, true);
+	Check(Bounded.Count == WorkloadActionEvidence::Capacity && Bounded.Overflow && !Bounded.Invalid,
+		"bounded diagnostics fail visibly without overwriting chronology or affecting workload scheduling");
+	std::ostringstream BoundedText;
+	Bounded.Print(BoundedText, "mixed", 100, 1000, Before, false);
+	Check(BoundedText.str().find("records=29 capacity=29 invalid=0 overflow=1") != std::string::npos,
+		"receipt exposes truncation rather than claiming complete evidence");
 	return Failures == 0 ? 0 : 1;
 }

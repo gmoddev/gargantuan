@@ -6,6 +6,7 @@
 #include "gargantuan/runtime/ChangeJournal.hpp"
 #include "PooledReliableServiceRecoveryContractFixture.hpp"
 #include "WorkloadTimingEvidence.hpp"
+#include "WorkloadActionEvidence.hpp"
 #include "../src/network/GameSessionTestAccess.hpp"
 #include "../src/network/GnsServiceDiagnostics.hpp"
 
@@ -429,6 +430,7 @@ void RunReliableGameplayWorkload(
 		std::uint64_t RecoveryActionRejections = 0;
 		std::uint64_t StepCount = 0;
 		test_detail::WorkloadTimingEvidence CpuTiming;
+		test_detail::WorkloadActionEvidence ActionTiming;
 		double StepIntervalMs = 0, ClientRuntimeMs = 0, ServerRuntimeMs = 0;
 		double ServerPollMs = 0, ClientPollMs = 0, ServerSessionMs = 0, ClientSessionMs = 0;
 		double ObserverMs = 0, SleepOvershootMs = 0;
@@ -442,6 +444,9 @@ void RunReliableGameplayWorkload(
 	int ActionSequence = 0;
 	std::optional<Clock::time_point> ActionStarted;
 	bool RecoveryProbeActive = false;
+	const auto ActionTimestamp = [](Clock::time_point Value) {
+		return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(Value.time_since_epoch()).count());
+	};
 	struct JournalTime { std::uint64_t Sequence = 0; Clock::time_point Observed; };
 	std::vector<JournalTime> JournalTimes(DefaultChangeJournalCapacity);
 	std::uint64_t LastObservedTail = ChangeJournal::Get().CreateCursor(ServerRuntime.DataModel->GetObjectId()).NextSequence;
@@ -541,10 +546,15 @@ void RunReliableGameplayWorkload(
 			const auto Resolved = ActionService->GetAttributeValue("WorkloadResolved");
 			const auto Rejected = ActionService->GetAttributeValue("WorkloadRejected");
 			if (IsActionSequence(Resolved)) {
-				Results.Action.push_back(std::chrono::duration<double, std::milli>(Clock::now() - *ActionStarted).count());
+				const auto ResolvedAt = Clock::now();
+				const auto ResolvedCpu = CaptureWorkloadCpu();
+				Results.Action.push_back(std::chrono::duration<double, std::milli>(ResolvedAt - *ActionStarted).count());
+				Results.ActionTiming.End(ActionSequence, Results.StepCount, ActionTimestamp(ResolvedAt), ResolvedCpu, false);
 				if (ActionService->GetAttributeValue("WorkloadAccepted") != std::optional<WireValue>(true)) ++Results.Errors;
 				ActionStarted.reset();
 			} else if (IsActionSequence(Rejected)) {
+				const auto RejectedAt = Clock::now();
+				Results.ActionTiming.End(ActionSequence, Results.StepCount, ActionTimestamp(RejectedAt), CaptureWorkloadCpu(), true);
 				const auto Authority = detail::GameSessionTestAccess::GetCharacterMetrics(Server);
 				const auto Prediction = detail::GameSessionTestAccess::GetCharacterMetrics(Client);
 				std::cout << "[Qualification:ActionRejected] sequence=" << ActionSequence
@@ -662,8 +672,10 @@ void RunReliableGameplayWorkload(
 		}
 		for (int Frame = 0; Frame < 480 && Client.GetStatus() == GameSessionStatus::Ready; ++Frame) {
 			if (Frame % 60 == 0 && !ActionStarted) {
+				const auto ActionCpu = test_detail::CaptureWorkloadCpu();
 				ActionStarted = Clock::now();
 				(void)ActionService->ApplyAttributeMutation("WorkloadRequest", WireValue(++ActionSequence));
+				Results.ActionTiming.Begin(ActionSequence, Results.StepCount, ActionTimestamp(*ActionStarted), ActionCpu, false);
 			}
 			if (Frame % Case.IntervalTicks == 0 && PendingRequests == 0) {
 				for (int Index = 0; Index < Case.Concurrency; ++Index) Send(true, Case.Frame);
@@ -749,8 +761,10 @@ void RunReliableGameplayWorkload(
 				NextRecoveryProbe = Now + 1s;
 				++RecoveryAttempts;
 				Send(true, 128); Send(false, 128);
+				const auto ActionCpu = test_detail::CaptureWorkloadCpu();
 				ActionStarted = Clock::now();
 				(void)ActionService->ApplyAttributeMutation("WorkloadRequest", WireValue(++ActionSequence));
+				Results.ActionTiming.Begin(ActionSequence, Results.StepCount, ActionTimestamp(*ActionStarted), ActionCpu, true);
 			}
 			const auto ServerQueue = ServerTransport.GetStatistics(ServerConnections.front());
 			const auto ClientQueue = ClientTransport.GetStatistics(*Connection);
@@ -836,6 +850,10 @@ void RunReliableGameplayWorkload(
 			<< " server_session_max_ms=" << Results.ServerSessionMs << " client_session_max_ms=" << Results.ClientSessionMs
 			<< " observer_max_ms=" << Results.ObserverMs << " sleep_overshoot_max_ms=" << Results.SleepOvershootMs << '\n';
 		Results.CpuTiming.Print(std::cout, Case.Name);
+		const auto ActionObservedAt = Clock::now();
+		Results.ActionTiming.Print(std::cout, Case.Name, Results.StepCount, ActionTimestamp(ActionObservedAt),
+			test_detail::CaptureWorkloadCpu(), ActionObservedAt >= DrainDeadline,
+			CandidateReliableService().IsPooled() ? "POOLED_SERVICE" : "FULL_RESERVATION");
 		Check(After.ReliableAdmission.PeerCreditHighWater <= CandidateReliableService().PeerCreditCap() &&
 			After.ReliableAdmission.GlobalCreditHighWater <= CandidateReliableService().GlobalCreditCap(),
 			"finite peer and global credit stay within unchanged caps");
