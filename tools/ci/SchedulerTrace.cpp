@@ -337,11 +337,11 @@ void Drain(HANDLE Pipe, const fs::path &Path, std::atomic<bool> &Capped, std::at
         File.flush(); if (!File.good()) Failed = true;
     } catch (...) { Failed = true; }
 }
-int Run(const fs::path &Root, const GUID &Guid, const std::wstring &GuidText) {
+int Run(const fs::path &Root, const GUID &Guid, const std::wstring &GuidText, bool AckStats = false) {
     if (!Root.is_absolute() || !fs::is_directory(Root)) throw std::runtime_error("absolute repository required");
-    const fs::path Binary = Root / "build-ci/gargantuan_game_session_real_transport_tests.exe";
+    const fs::path Binary = Root / (AckStats ? "build-ci/gargantuan_real_transport_tests.exe" : "build-ci/gargantuan_game_session_real_transport_tests.exe");
     if (!fs::is_regular_file(Binary)) throw std::runtime_error("fixed workload executable absent");
-    const fs::path Output = Root / "build-ci/scheduler-trace";
+    const fs::path Output = Root / (AckStats ? "build-ci/scheduler-trace-ack-stats" : "build-ci/scheduler-trace");
     if (!fs::create_directory(Output)) throw std::runtime_error("new output directory required");
     const fs::path Etl = Output / "scheduler.etl";
     SECURITY_ATTRIBUTES Security{sizeof(Security), nullptr, TRUE};
@@ -392,7 +392,7 @@ int Run(const fs::path &Root, const GUID &Guid, const std::wstring &GuidText) {
     Startup.StartupInfo.hStdInput = Input.Value;
     Startup.lpAttributeList = Attributes;
     PROCESS_INFORMATION Child{};
-    std::wstring Command = L"\"" + Binary.wstring() + L"\" --reliable-workload";
+    std::wstring Command = L"\"" + Binary.wstring() + (AckStats ? L"\" --ack-stats-boundary" : L"\" --reliable-workload");
     const BOOL Created = CreateProcessW(Binary.c_str(), Command.data(), nullptr, nullptr, TRUE,
         CREATE_SUSPENDED | CREATE_NO_WINDOW | EXTENDED_STARTUPINFO_PRESENT, nullptr, Root.c_str(),
         &Startup.StartupInfo, &Child);
@@ -480,6 +480,7 @@ int Run(const fs::path &Root, const GUID &Guid, const std::wstring &GuidText) {
         fs::file_size(Etl) < 512ULL * 1024 * 1024 && !TimedOut && !LogCapped && !LogFailed && TreeReaped && Resumed;
     std::ofstream Metadata(Output / "metadata.json", std::ios::binary);
     Metadata << "{\n\"Format\":\"GargantuanSchedulerTrace\",\"Version\":1,\n"
+        << "\"WorkloadCase\":\"" << (AckStats ? "AckStats" : "Full") << "\",\n"
         << "\"SessionName\":" << JsonString(Utf8(SessionName)) << ",\"SessionGuid\":" << JsonString(Utf8(GuidText))
         << ",\"EtlPath\":" << JsonString(Utf8(Etl.wstring())) << ",\n"
         << "\"DiagnosticComplete\":" << (DiagnosticComplete ? "true" : "false") << ",\"CausalVerdict\":\"NOT_CLAIMED\",\n"
@@ -519,6 +520,8 @@ int wmain(int Count, wchar_t **Args) {
         if (Count == 2 && std::wstring(Args[1]) == L"--self-test") return SelfTest();
         if (Count == 4 && std::wstring(Args[1]) == L"--run")
             return Run(fs::path(Args[2]), ParseGuid(Args[3]), Args[3]);
+        if (Count == 4 && std::wstring(Args[1]) == L"--run-ack-stats")
+            return Run(fs::path(Args[2]), ParseGuid(Args[3]), Args[3], true);
         if (Count == 4 && std::wstring(Args[1]) == L"--cleanup")
             return Cleanup(ParseGuid(Args[2]), Args[3]) == ERROR_SUCCESS ? 0 : 125;
         std::cerr << "[Qualification:SchedulerTrace] invalid arguments\n";

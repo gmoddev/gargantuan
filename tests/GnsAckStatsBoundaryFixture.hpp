@@ -1,5 +1,6 @@
 #pragma once
 #include <iterator>
+#include "AckStatsTimingEvidence.hpp"
 
 // Real native timers, no clock override. Included after the shared production
 // adapter fixture and compatibility helpers.
@@ -36,7 +37,8 @@ inline void PrintState(const char *Stage, const char *Side, const GargantuanAckD
 }
 
 inline void Observe(bool Prompt) {
-	OwnedPair Owner; auto &Pair = Owner.Pair;
+    AckStatsTimingEvidence::Arm DiagnosticArm(Prompt);
+    OwnedPair Owner; auto &Pair = Owner.Pair;
 	Require(Pair.ServerConnection.IsValid(), "stats-boundary real connection missing");
 	// The prompt arm exercises production activation; the control arm must
 	// explicitly disable it before its first attributed grant.
@@ -54,8 +56,10 @@ inline void Observe(bool Prompt) {
 	// grants every500ms therefore suppress the native5/7s tracer eligibility.
 	// Let the real idle interval elapse before resuming; never alter a timer.
 	Pump(*Pair.Server, *Pair.Client, Pair.ServerEvents, Pair.ClientEvents, 8s, [] { return false; });
-	Require(AckAccess::Read(*Pair.Server, Pair.ServerConnection, Sender) &&
-		AckAccess::Read(*Pair.Client, Pair.ClientConnection, Receiver), "quiet interval stats missing");
+    Require(AckStatsTimingEvidence::ReadNativeSnapshot("after-quiet", "sender", Prompt, 0, Sender,
+            [&] { return AckAccess::Read(*Pair.Server, Pair.ServerConnection, Sender); }) &&
+        AckStatsTimingEvidence::ReadNativeSnapshot("after-quiet", "receiver", Prompt, 0, Receiver,
+            [&] { return AckAccess::Read(*Pair.Client, Pair.ClientConnection, Receiver); }), "quiet interval stats missing");
 	PrintState("after-quiet", "sender", Sender); PrintState("after-quiet", "receiver", Receiver);
 	Totals SenderTotals, ReceiverTotals;
 	std::uint64_t Accepted = 0, Grants = 0, Prompts = 0;
@@ -158,7 +162,8 @@ inline void Observe(bool Prompt) {
 			}
 			const auto PrintFailureState = [&](const char *Side, auto &Transport, auto Connection) {
 				GargantuanAckDiagnostics Trace;
-				const bool Available = AckAccess::Read(Transport, Connection, Trace);
+                const bool Available = AckStatsTimingEvidence::ReadNativeSnapshot("grant-failure", Side, Prompt, Token, Trace,
+                    [&] { return AckAccess::Read(Transport, Connection, Trace); });
 				std::cerr << "[Network:AckStatsFailureState] side=" << Side << " available=" << Available;
 				if (Available) std::cerr << " overflow=" << Trace.Overflow << " events=" << Trace.Count
 					<< " associated_received_packets=" << Trace.AssociatedReceivedPackets
@@ -196,8 +201,10 @@ inline void Observe(bool Prompt) {
 		std::this_thread::sleep_until(std::min(End, CycleStart + 500ms * static_cast<std::int64_t>(Token)));
 	}
 	Pump(*Pair.Server, *Pair.Client, Pair.ServerEvents, Pair.ClientEvents, 100ms, [] { return false; });
-	Require(AckAccess::Read(*Pair.Server, Pair.ServerConnection, Sender) &&
-		AckAccess::Read(*Pair.Client, Pair.ClientConnection, Receiver), "final stats missing");
+    Require(AckStatsTimingEvidence::ReadNativeSnapshot("terminal", "sender", Prompt, Grants, Sender,
+            [&] { return AckAccess::Read(*Pair.Server, Pair.ServerConnection, Sender); }) &&
+        AckStatsTimingEvidence::ReadNativeSnapshot("terminal", "receiver", Prompt, Grants, Receiver,
+            [&] { return AckAccess::Read(*Pair.Client, Pair.ClientConnection, Receiver); }), "final stats missing");
 	SenderTotals.Add(Sender); ReceiverTotals.Add(Receiver);
 	const auto Whole = Cost(WireBefore, ReadWire(Pair));
 	const auto ObservedUs = Now() - StartUs;
@@ -243,6 +250,7 @@ inline void Observe(bool Prompt) {
 }
 
 inline bool Run() {
+    AckStatsTimingEvidence::Session Diagnostic;
 	try { Observe(false); Observe(true); return true; }
 	catch (const std::exception &Error) {
 		std::cerr << "[Network:AckStatsBoundary] FAIL " << Error.what() << '\n'; return false;
