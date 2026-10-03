@@ -802,6 +802,7 @@ namespace gargantuan::network {
 				const bool Character = Payload.size() >= 7 && std::memcmp(Payload.data(), "GCHR", 4) == 0;
 				const bool Remote = Payload.size() >= 7 && std::memcmp(Payload.data(), "GRMT", 4) == 0;
 				runtime_detail::RecordPublicationLatency({.Stage=Stage, .Connection=Message.Destination(),
+					.Sequence=runtime_detail::ActiveOrdinaryDemand.Sequence, .Epoch=runtime_detail::ActiveOrdinaryDemand.Phase,
 					.Kind=Character ? 2u : Remote ? 1u : 0u,
 					.Bytes=static_cast<std::uint32_t>(Payload.size() + AdapterEnvelopeBytes),
 					.Operations=Character && std::to_integer<unsigned>(Payload[6]) == 5 ? 1u : 0u});

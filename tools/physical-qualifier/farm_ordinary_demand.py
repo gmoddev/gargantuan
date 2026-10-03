@@ -7,6 +7,7 @@ is inferred from these demand buckets. Replay uses O(32) metadata/merge state.
 """
 import heapq
 import re
+import sqlite3
 from pathlib import Path
 
 from farm_publication_trace import IterRecords, Require
@@ -55,12 +56,13 @@ def ClockReceipt(PathValue, Run, Role, Slot, Nonce):
     return Rows[0] if Rows else None
 
 
-def Offers(Records, Role, Slot, Connections):
+def Offers(Records, Role, Slot, Connections, Database):
     Phase = 0
     Expected = 1
     Previous = 0
+    LastQueued = 0
     for Value in Records:
-        if Value.Stage not in (24, 25, 26):
+        if Value.Stage not in (24, 25, 26, 27):
             continue
         Require(Value.FrameSequence >= Previous, "sender QPC regressed")
         Previous = Value.FrameSequence
@@ -76,16 +78,41 @@ def Offers(Records, Role, Slot, Connections):
             continue
         Connection = Value.ConnectionSlot, Value.ConnectionGeneration
         Require(Connection in Connections, "ordinary send has unqualified generation")
-        # Bootstrap/calibration and deliberate overload are separate workload
-        # domains. Every fixed-phase ordinary send, including control, is charged.
-        if not Phase:
+        if Value.Stage == 27:
+            Require(Value.Sequence == LastQueued + 1 and Value.ControlEpoch == Phase,
+                    "ordinary enqueue identity or originating phase mismatch")
+            LastQueued = Value.Sequence
+            Database.execute("INSERT INTO OrdinaryPending VALUES(?,?,?,?,?,?,?,?,?)",
+                             (Role, Slot, Value.Sequence, *Connection, Phase,
+                              Value.ServiceBytes, Value.DueTick, Value.Flags))
+            continue
+        Origin = Phase
+        if Value.Sequence:
+            Pending = Database.execute("SELECT CS,CG,Phase,Bytes,Kind,Forced FROM OrdinaryPending "
+                                       "WHERE Role=? AND Slot=? AND Sequence=?",
+                                       (Role, Slot, Value.Sequence)).fetchone()
+            Require(Pending == (*Connection, Value.ControlEpoch, Value.ServiceBytes, Value.DueTick, Value.Flags),
+                    "ordinary handoff lacks exact queued identity/bytes/origin")
+            Database.execute("DELETE FROM OrdinaryPending WHERE Role=? AND Slot=? AND Sequence=?",
+                             (Role, Slot, Value.Sequence))
+            Origin = Value.ControlEpoch
+        else:
+            Require(Value.ControlEpoch == 0 and Value.DueTick == 0,
+                    "direct ordinary control send forged queued phase or gameplay identity")
+        # A queued message retains its admitted phase even after phase End or
+        # deliberate overload. Direct non-scheduler sends use the current phase.
+        # Actual handoff QPC drives the buckets; crossing phases never resets them.
+        if not Origin:
             continue
         Require(Value.Stage == 24, "fixed-workload ordinary transport send rejected")
         if Value.DueTick == 1:
             Require(Value.ServiceBytes - 32 <= 16384, "Remote encoded frame exceeds canonical cap")
         yield (Value.FrameSequence, Slot if Role == "CLIENT" else Connections[Connection],
-               Phase, Value.ServiceBytes, Value.Flags)
+               Origin, Value.ServiceBytes, Value.Flags)
     Require(Phase == 0 and Expected == 6, "traffic phase evidence incomplete")
+    Require(Database.execute("SELECT count(*) FROM OrdinaryPending WHERE Role=? AND Slot=? AND Phase>0",
+                             (Role, Slot)).fetchone()[0] == 0,
+            "fixed-phase ordinary queued work was dropped or never handed off")
 
 
 def Direction(Streams, Frequency):
@@ -112,7 +139,12 @@ def Direction(Streams, Frequency):
             for Slot, Pair in enumerate(Peers)], "Phases": Phases}
 
 
-def Analyze(ServerPath, ServerLog, ClientSources, ReadyBySlot, Run):
+def Analyze(ServerPath, ServerLog, ClientSources, ReadyBySlot, Run, Database=None):
+    if Database is None:
+        # Standalone deterministic fixtures. Production supplies its existing
+        # bounded disk-backed 4-GiB scratch database, not an in-memory queue.
+        with sqlite3.connect(":memory:") as Temporary:
+            return Analyze(ServerPath, ServerLog, ClientSources, ReadyBySlot, Run, Temporary)
     ServerClock = ClockReceipt(ServerLog, Run, "SERVER", -1, 0)
     ClientClocks = {Slot: ClockReceipt(Log, Run, "CLIENT", Slot, Nonce)
                     for Slot, (_, Nonce, Log) in ClientSources.items()}
@@ -124,10 +156,12 @@ def Analyze(ServerPath, ServerLog, ClientSources, ReadyBySlot, Run):
     Require(all(Value == ClientClock for Value in ClientClocks.values()),
             "client sender clocks do not share one verified host/QPC domain")
     Connections = {Value[0]: Slot for Slot, Value in ReadyBySlot.items()}
-    Egress = Direction([Offers(IterRecords(ServerPath, Run, "SERVER"), "SERVER", -1, Connections)],
+    Database.execute("CREATE TABLE OrdinaryPending(Role TEXT,Slot INTEGER,Sequence INTEGER,CS INTEGER,CG INTEGER,"
+                     "Phase INTEGER,Bytes INTEGER,Kind INTEGER,Forced INTEGER,PRIMARY KEY(Role,Slot,Sequence)) WITHOUT ROWID")
+    Egress = Direction([Offers(IterRecords(ServerPath, Run, "SERVER"), "SERVER", -1, Connections, Database)],
                        ServerClock["Frequency"])
     Ingress = Direction([Offers(IterRecords(PathValue, Run, "CLIENT", Slot, Nonce), "CLIENT", Slot,
-                                 {ReadyBySlot[Slot][1]: Slot})
+                                 {ReadyBySlot[Slot][1]: Slot}, Database)
                          for Slot, (PathValue, Nonce, _) in sorted(ClientSources.items())],
                         ClientClock["Frequency"])
     Require(all(Row["ForcedCharacterMessages"] for Row in Egress["Phases"]),

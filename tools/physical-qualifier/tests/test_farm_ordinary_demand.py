@@ -25,9 +25,9 @@ class OrdinaryDemandTests(unittest.TestCase):
                 f"slot={Slot} nonce={Nonce} host={Host} frequency=10000000\n")
 
     @staticmethod
-    def Rec(Stage, At, Slot=1, Phase=0, Bytes=0, Flags=0, Kind=0):
+    def Rec(Stage, At, Slot=1, Phase=0, Bytes=0, Flags=0, Kind=0, Sequence=0, Origin=0):
         return RECORD.pack(Stage, Flags, Slot, int(Slot != 0), 0, 0, Bytes,
-                           At, 0, Phase, Kind, 0, 0, At)
+                           At, 0, Phase if Stage == 26 else Sequence, Kind, Origin, 0, At)
 
     @staticmethod
     def Packet(Stage, At):
@@ -41,13 +41,16 @@ class OrdinaryDemandTests(unittest.TestCase):
     def Make(self, Repeat=1, Rejected=False, MissingEnd=False, Size=212):
         self.Log.write_text(self.Clock("SERVER", -1, 0, "WORKER"))
         Rows = [self.Packet(8, 1)]
+        Sequence = 0
         for Phase in range(1, 6):
             At = Phase * 100000000
             Rows.append(self.Rec(26, At, 0, Phase, Flags=1))
             for Slot in range(1, 33):
                 for _ in range(Repeat if Slot == 1 else 1):
+                    Sequence += 1
+                    Rows.append(self.Rec(27, At + 1, Slot, Bytes=Size, Flags=1, Kind=2, Sequence=Sequence, Origin=Phase))
                     Rows.append(self.Rec(25 if Rejected and Slot == 1 else 24, At + 1,
-                                         Slot, Bytes=Size, Flags=1, Kind=2))
+                                         Slot, Bytes=Size, Flags=1, Kind=2, Sequence=Sequence, Origin=Phase))
             if not MissingEnd or Phase != 5:
                 Rows.append(self.Rec(26, At + 2, 0, Phase))
         self.Write(self.Server, "SERVER", -1, 0, Rows)
@@ -59,13 +62,74 @@ class OrdinaryDemandTests(unittest.TestCase):
                 At = Phase * 100000000
                 Rows.append(self.Rec(26, At, 1, Phase, Flags=1))
                 if Slot == 0:
-                    Rows.append(self.Rec(24, At + 1, Bytes=112, Kind=1))
+                    Rows.append(self.Rec(27, At + 1, Bytes=112, Kind=1, Sequence=Phase, Origin=Phase))
+                    Rows.append(self.Rec(24, At + 1, Bytes=112, Kind=1, Sequence=Phase, Origin=Phase))
                 Rows.append(self.Rec(26, At + 2, 1, Phase))
             self.Write(PathValue, "CLIENT", Slot, Slot + 100, Rows)
             self.Clients[Slot] = PathValue, Slot + 100, Log
 
     def Analyze(self):
         return Analyze(self.Server, self.Log, self.Clients, self.Ready, "test")
+
+    def ServerRows(self):
+        Raw = self.Server.read_bytes().split(b"\n", 1)[1]
+        return [list(RECORD.unpack(Raw[I:I + RECORD.size])) for I in range(0, len(Raw), RECORD.size)]
+
+    def ReplaceServer(self, Rows):
+        self.Write(self.Server, "SERVER", -1, 0, [RECORD.pack(*Row) for Row in Rows])
+
+    def test_late_normal_tail_after_last_phase_is_charged(self):
+        Rows = self.ServerRows()
+        Tail = next(Row for Row in Rows if Row[0] == 24 and Row[9] == 160)
+        Rows.remove(Tail)
+        Tail[7] = Tail[13] = Rows[-1][13] + 1
+        Rows.append(Tail)
+        self.ReplaceServer(Rows)
+        Value = self.Analyze()
+        self.assertEqual(Value["Egress"]["Phases"][-1]["Messages"], 32)
+        self.assertEqual(Value["Egress"]["Global"]["Messages"], 160)
+
+    def test_excessive_tail_after_phase_end_still_fails(self):
+        Rows = self.ServerRows()
+        End = Rows.pop()
+        Tail = []
+        for Sequence in range(161, 177):
+            Rows.append(list(RECORD.unpack(self.Rec(27, End[13] - 1, Bytes=212, Flags=1, Kind=2, Sequence=Sequence, Origin=5))))
+            Tail.append(list(RECORD.unpack(self.Rec(24, End[13] + 1, Bytes=212, Flags=1, Kind=2, Sequence=Sequence, Origin=5))))
+        self.ReplaceServer(Rows + [End] + Tail)
+        with self.assertRaisesRegex(ValueError, "all-interval"):
+            self.Analyze()
+
+    def test_pending_ordinary_tail_cannot_disappear(self):
+        Rows = self.ServerRows()
+        Rows.remove(next(Row for Row in Rows if Row[0] == 24 and Row[9] == 160))
+        self.ReplaceServer(Rows)
+        with self.assertRaisesRegex(ValueError, "dropped or never"):
+            self.Analyze()
+
+    def test_missing_enqueue_is_not_direct_gameplay(self):
+        Rows = self.ServerRows()
+        Rows.remove(next(Row for Row in Rows if Row[0] == 27 and Row[9] == 160))
+        self.ReplaceServer(Rows)
+        with self.assertRaisesRegex(ValueError, "lacks exact queued"):
+            self.Analyze()
+
+    def test_handoff_cannot_relabel_origin_or_size(self):
+        for Field, Value in ((11, 0), (6, 213), (9, 0)):
+            self.Make()
+            Rows = self.ServerRows()
+            next(Row for Row in Rows if Row[0] == 24 and Row[9] == 160)[Field] = Value
+            self.ReplaceServer(Rows)
+            with self.assertRaises(ValueError):
+                self.Analyze()
+
+    def test_duplicate_success_cannot_double_count(self):
+        Rows = self.ServerRows()
+        Index = next(I for I, Row in enumerate(Rows) if Row[0] == 24 and Row[9] == 160)
+        Rows.insert(Index + 1, Rows[Index][:])
+        self.ReplaceServer(Rows)
+        with self.assertRaisesRegex(ValueError, "lacks exact queued"):
+            self.Analyze()
 
     def test_complete_bytes_all_peers_same_host(self):
         Value = self.Analyze()

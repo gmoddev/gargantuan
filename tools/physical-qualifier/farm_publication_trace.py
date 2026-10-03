@@ -18,7 +18,7 @@ HEADER = re.compile(
     rb"\tcount=([0-9]+)\tdropped=([0-9]+)\tdecode_failures=([0-9]+)\n"
 )
 RPC_STAGES = set(range(14, 24))
-TRAFFIC_STAGES = {24, 25, 26}
+TRAFFIC_STAGES = {24, 25, 26, 27}
 SERVER_STAGES = set(range(1, 9)) | {11, 12, 13} | RPC_STAGES | TRAFFIC_STAGES
 CLIENT_STAGES = {9, 10} | RPC_STAGES | TRAFFIC_STAGES
 SERVER_CAP = 4_194_304
@@ -103,10 +103,11 @@ def IterRecords(PathValue, ExpectedRunId, ExpectedRole, ExpectedSlot=-1, Expecte
                         (ServiceBytes > 0 if Stage in (16, 17, 21, 22) else ServiceBytes == 0) and
                         Tick == 0 and Flags == 0,
                         "RPC stage lacks request/remote identity or carries unrelated fields")
-            if Stage in (24, 25):
+            if Stage in (24, 25, 27):
                 Require(ConnectionSlot > 0 and ConnectionGeneration > 0 and ServiceBytes > 32 and
                         DueTick in (0, 1, 2) and FrameSequence > 0 and
-                        ObjectSlot == ObjectGeneration == Tick == Sequence == ControlEpoch == MaterializationEpoch == 0 and
+                        ObjectSlot == ObjectGeneration == Tick == MaterializationEpoch == 0 and
+                        0 <= ControlEpoch <= 5 and (Stage != 27 or Sequence > 0) and
                         (Flags == 0 or DueTick == 2), "ordinary complete-message record invalid")
             if Stage == 26:
                 Require(1 <= Sequence <= 5 and FrameSequence > 0 and

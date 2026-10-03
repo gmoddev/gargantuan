@@ -3,6 +3,7 @@
 #include "../../runtime/PublicationLatencyDiagnostics.hpp"
 #include "gargantuan/network/CharacterProtocol.hpp"
 #include "gargantuan/network/RemoteProtocol.hpp"
+#include "gargantuan/network/ReliableServiceProfile.hpp"
 #include "gargantuan/network/BinaryCodec.hpp"
 
 #include <algorithm>
@@ -56,7 +57,7 @@ public:
 		RpcRequestReceived, RpcHandler, RpcResponseProduced,
 		RpcResponseSchedulerAccepted, RpcResponseGnsAccepted,
 		RpcResponseReceived, RpcCompletion,
-		OrdinaryReliableSent, OrdinaryReliableRejected, TrafficPhase,
+		OrdinaryReliableSent, OrdinaryReliableRejected, TrafficPhase, OrdinaryReliableQueued,
 	};
 	struct Record {
 		std::uint64_t Nanoseconds = 0;
@@ -89,8 +90,9 @@ private:
 	bool Dumped = false, Overflow = false, WriteFailed = false;
 	std::uint64_t DecodeFailures = 0, FileBytes = 0;
 	std::uint64_t TrafficPhase = 0;
+	std::uint64_t OrdinarySequence = 0;
 	std::vector<Record> Records;
-	runtime_detail::PublicationLatencySink Sink{this, Selected, Append, Packet};
+	runtime_detail::PublicationLatencySink Sink{this, Selected, Append, Packet, QueueOrdinary};
 	runtime_detail::PublicationLatencySink *Previous = nullptr;
 
 	static bool Selected(void *Context, network::ConnectionId Connection) noexcept {
@@ -121,6 +123,7 @@ private:
 		if (Value == "RpcCompletion") return Stage::RpcCompletion;
 		if (Value == "OrdinaryReliableSent") return Stage::OrdinaryReliableSent;
 		if (Value == "OrdinaryReliableRejected") return Stage::OrdinaryReliableRejected;
+		if (Value == "OrdinaryReliableQueued") return Stage::OrdinaryReliableQueued;
 		if (Value == "TrafficPhaseStart" || Value == "TrafficPhaseEnd") return Stage::TrafficPhase;
 		return std::nullopt;
 	}
@@ -137,6 +140,22 @@ private:
 		if (Records.size() >= Limit) { Overflow = true; return; }
 		try { Records.push_back(Value); } catch (...) { Overflow = true; }
 	}
+	static runtime_detail::OrdinaryDemandTag QueueOrdinary(void *Context, network::ConnectionId Connection,
+		std::span<const std::byte> Payload) noexcept {
+		auto &Self = *static_cast<FarmPublicationEvidence *>(Context);
+		// Origin metadata follows the existing bounded scheduler message.
+		if (Self.OrdinarySequence >= Self.Limit || Payload.size() > std::numeric_limits<std::uint32_t>::max() - network::ReliableServiceEnvelopeBytes) {
+			Self.Overflow = true; return {};
+		}
+		const runtime_detail::OrdinaryDemandTag Tag{++Self.OrdinarySequence, Self.TrafficPhase};
+		const bool Character = Payload.size() >= 7 && std::memcmp(Payload.data(), "GCHR", 4) == 0;
+		const bool Remote = Payload.size() >= 7 && std::memcmp(Payload.data(), "GRMT", 4) == 0;
+		runtime_detail::RecordPublicationLatency({.Stage="OrdinaryReliableQueued", .Connection=Connection,
+			.Sequence=Tag.Sequence, .Epoch=Tag.Phase, .Kind=Character ? 2u : Remote ? 1u : 0u,
+			.Bytes=static_cast<std::uint32_t>(Payload.size() + network::ReliableServiceEnvelopeBytes),
+			.Operations=Character && std::to_integer<unsigned>(Payload[6]) == 5 ? 1u : 0u});
+		return Tag;
+	}
 	static void Append(void *Context, runtime_detail::PublicationLatencyRecord Value) noexcept {
 		auto &Self = *static_cast<FarmPublicationEvidence *>(Context);
 		const auto Kind = StageOf(Value.Stage);
@@ -145,8 +164,9 @@ private:
 		if (*Kind >= Stage::OrdinaryReliableSent) {
 			const auto Counter = TrafficClockNow();
 			if (!Counter) { ++Self.DecodeFailures; return; }
+			if (*Kind == Stage::TrafficPhase) Self.TrafficPhase = Value.Operations ? Value.Sequence : 0;
 			Self.Add(Record{.Nanoseconds = Value.Nanoseconds, .Sequence = Value.Sequence,
-				.DueTick = Value.Kind, .FrameSequence = Counter,
+				.DueTick = Value.Kind, .ControlEpoch = Value.Epoch, .FrameSequence = Counter,
 				.ConnectionSlot = Value.Connection.Slot, .ConnectionGeneration = Value.Connection.Generation,
 				.Bytes = Value.Bytes, .Kind = *Kind,
 				.Flags = static_cast<std::uint16_t>(Value.Operations)});

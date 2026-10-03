@@ -14,22 +14,25 @@ inline void TestFarmOrdinaryEvidence() {
 	const auto Path = Root / "publication-service-0.bin";
 	try {
 		{
-			host::detail::FarmPublicationEvidence Evidence(false, "traffic-test", 0, 17, Path, {1, 1}, 3);
+			host::detail::FarmPublicationEvidence Evidence(false, "traffic-test", 0, 17, Path, {1, 1}, 4);
 			std::ostringstream Clock; Evidence.WriteTrafficClock(Clock);
 			if (Clock.str().find("contract=sender_qpc_v1") == std::string::npos ||
 				Clock.str().find("frequency=0") != std::string::npos)
 				throw std::runtime_error("farm sender QPC domain missing");
 			Evidence.SetTrafficPhase("baseline");
-			runtime_detail::RecordPublicationLatency({.Stage="OrdinaryReliableSent", .Connection={1, 1},
-				.Kind=2, .Bytes=212, .Operations=1});
+			std::array<std::byte, 180> Payload{};
+			std::memcpy(Payload.data(), "GCHR", 4); Payload[6] = std::byte{5};
+			const auto Tag = runtime_detail::QueueOrdinaryDemand({1, 1}, Payload);
 			Evidence.SetTrafficPhase("baseline", true);
 			Evidence.SetTrafficPhase("baseline", true); // Retained phase cannot reopen during overload.
+			runtime_detail::RecordPublicationLatency({.Stage="OrdinaryReliableSent", .Connection={1, 1},
+				.Sequence=Tag.Sequence, .Epoch=Tag.Phase, .Kind=2, .Bytes=212, .Operations=1});
 			Evidence.Dump();
-			if (!Evidence.Valid() || Evidence.Count() != 3) throw std::runtime_error("farm bounded traffic metadata lost");
+			if (!Evidence.Valid() || Evidence.Count() != 4) throw std::runtime_error("farm bounded traffic metadata lost");
 		}
 		std::ifstream Input(Path, std::ios::binary);
 		std::string Header; std::getline(Input, Header);
-		std::array<unsigned char, 240> Bytes{};
+		std::array<unsigned char, 320> Bytes{};
 		Input.read(reinterpret_cast<char *>(Bytes.data()), Bytes.size());
 		auto Integer = [&](std::size_t Offset, std::size_t Width) {
 			std::uint64_t Value=0;
@@ -37,9 +40,10 @@ inline void TestFarmOrdinaryEvidence() {
 			return Value;
 		};
 		if (Input.gcount() != static_cast<std::streamsize>(Bytes.size()) || Integer(0,2) != 26 || Integer(2,2) != 1 ||
-			Integer(80,2) != 24 || Integer(82,2) != 1 || Integer(100,4) != 212 ||
+			Integer(80,2) != 27 || Integer(82,2) != 1 || Integer(100,4) != 212 || Integer(120,8) != 1 || Integer(136,8) != 1 ||
 			Integer(160,2) != 26 || Integer(162,2) != 0 || !Integer(72,8) ||
-			Integer(72,8) > Integer(152,8) || Integer(152,8) > Integer(232,8))
+			Integer(240,2) != 24 || Integer(280,8) != 1 || Integer(296,8) != 1 ||
+			Integer(72,8) > Integer(152,8) || Integer(152,8) > Integer(232,8) || Integer(232,8) > Integer(312,8))
 			throw std::runtime_error("farm complete-byte/phase/QPC encoding differs");
 	} catch (...) { std::filesystem::remove_all(Root); throw; }
 	std::filesystem::remove_all(Root);

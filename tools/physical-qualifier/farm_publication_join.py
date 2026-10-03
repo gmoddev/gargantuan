@@ -815,7 +815,6 @@ def Join(ServerPath, ServerReadyPath, ClientSources, RunId, ScratchParent,
             "scratch volume has less than the bounded 4 GiB database cap free")
     ReadyBySlot = ReadyMappings(ServerReadyPath, ClientSources, RunId, ExpectedClients)
     from farm_ordinary_demand import Analyze as AnalyzeOrdinaryDemand
-    OrdinaryDemand = AnalyzeOrdinaryDemand(ServerPath, ServerReadyPath, ClientSources, ReadyBySlot, RunId)
     Windows = PhaseWindows(ServerReadyPath, RunId)
     Roots = RootMarkers(ServerReadyPath, RunId, ExpectedClients, ReadyBySlot)
     Require(Roots is None or Windows is not None,
@@ -832,6 +831,7 @@ def Join(ServerPath, ServerReadyPath, ClientSources, RunId, ScratchParent,
         Database = CreateDatabase(DatabasePath)
         try:
             with Database:
+                OrdinaryDemand = AnalyzeOrdinaryDemand(ServerPath, ServerReadyPath, ClientSources, ReadyBySlot, RunId, Database)
                 Server = ReadServer(Database, ServerPath, RunId,
                                     {Pair[0] for Pair in ReadyBySlot.values()})
                 Clients = ReadClients(Database, ClientSources, ReadyBySlot, RunId,

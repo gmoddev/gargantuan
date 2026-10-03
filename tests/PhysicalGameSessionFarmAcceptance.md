@@ -221,6 +221,19 @@ and records the running PowerShell 7 path/hash. Retain the inventory outside
 the checkout with final preparation artifacts and compare its file/runtime pins
 again before analysis; it is a source custody receipt, not a provider PASS.
 
+Ordinary complete-message demand is charged at successful transport handoff,
+with the exact originating phase retained in the existing scheduler message's
+private metadata. A late normal reliable tail remains normal even when its
+handoff follows phase End or the deliberate overload marker. Per-peer and
+global all-interval buckets keep their history across those boundaries. Replay
+joins each queued identity to one successful handoff and rejects changed bytes,
+phase relabeling, duplicate success, rejection, or unresolved fixed-phase work.
+The metadata join uses the existing bounded 4-GiB SQLite analysis scratch;
+native storage remains the existing bounded message queue and trace. Direct
+non-scheduler control sends use their current phase; Remote/Character reliable
+messages require their production scheduler identity. No phase transition
+requires an empty queue, adds delay, or grants a fresh burst allowance.
+
 The finite-grant receipt observes the existing successful admission boundary
 in `GameSession::SubmitStructural`. Pre-Ready bootstrap grants carry the existing
 sentinel activation and are recorded separately by exact token and complete-byte
