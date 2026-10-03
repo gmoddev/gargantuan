@@ -215,7 +215,8 @@ def ValidateAggregateEvidence(Metadata, Stdout, Arms):
             return Result
 
         Headers, Chronologies = PeerRows('AggregatePeerEvidence'), PeerRows('RemoteChronology')
-        Need(len(set(Stable.values())) == 32, 'connection identity reused by peers')
+        # Each peer owns a separate client transport. Its slot/generation pair
+        # is transport-local; the peer index is part of the evidence identity.
         Spans, Resources = {}, {}
         for Label, Target in (('RemoteSpan', Spans), ('RemoteResourceSpan', Resources)):
             for Row in Data.get(Label, []):

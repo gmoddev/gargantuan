@@ -17,7 +17,7 @@ SPEC.loader.exec_module(VALIDATOR)
 
 
 class SchedulerTraceTests(unittest.TestCase):
-    def AggregateFixture(self, Root, Exit=0):
+    def AggregateFixture(self, Root, Exit=0, SameLocalIdentity=False):
         Metadata, _ = self.Fixture()
         Metadata.update(WorkloadCase='Aggregate32Structural', ChildExitCode=Exit, DecodedRows=4,
                         WorkloadArguments=['--reliable-workload-32-structural'])
@@ -35,7 +35,7 @@ class SchedulerTraceTests(unittest.TestCase):
             for Peer in range(33):
                 for Kind in ('poll', 'engine', 'session'):
                     Emit('AggregateOperationSpan', peer=Peer, side='server' if Peer == 32 else 'client',
-                         slot=0 if Peer == 32 else Peer + 1, generation=0 if Peer == 32 else 1,
+                         slot=0 if Peer == 32 else 1 if SameLocalIdentity else Peer + 1, generation=0 if Peer == 32 else 1,
                          coverage='phase_maximum', tick=1, subphase=Kind, start_ns=Begin * 100 + 50,
                          end_ns=Begin * 100 + 60, native_tid=43, timestamps_valid=1, thread_cpu_ms=0,
                          process_cpu_ms=0, before_thread_100ns=1, after_thread_100ns=1,
@@ -44,7 +44,7 @@ class SchedulerTraceTests(unittest.TestCase):
             Active = 32 if Index == 1 else 8
             Count = 16 if Index == 1 else 4
             for Peer in range(32):
-                Context = dict(peer=Peer, slot=Peer + 1, generation=1)
+                Context = dict(peer=Peer, slot=1 if SameLocalIdentity else Peer + 1, generation=1)
                 Emit('AggregatePeerEvidence', **Context, configured=1, invalid=0)
                 Emit('RemoteChronology', **Context, records=Count if Peer < Active else 0,
                      capacity=208, invalid=0, overflow=0)
@@ -207,6 +207,18 @@ class SchedulerTraceTests(unittest.TestCase):
                 self.assertEqual(Result.returncode, 125, Result.stdout + Result.stderr)
                 self.assertNotIn('Traceback', Result.stderr)
                 self.assertEqual(json.loads((Root / 'coverage.json').read_text())['State'], 'INCOMPLETE')
+
+    def test_aggregate_connection_identity_is_local_to_each_peer_transport(self):
+        with tempfile.TemporaryDirectory() as Directory:
+            Metadata, Log, File = self.AggregateFixture(Path(Directory), SameLocalIdentity=True)
+            Result = VALIDATOR.Validate(Metadata, Log, 'Aggregate32Structural', File)
+            self.assertEqual(Result['State'], 'LOSS_FREE_ANCHOR_WINDOW_RETAINED', Result)
+            Lines = Log.splitlines()
+            for Index, Line in enumerate(Lines):
+                if 'case=aggregate-overload ' in Line and 'peer=0 ' in Line:
+                    Lines[Index] = Line.replace('generation=1', 'generation=2')
+            Result = VALIDATOR.Validate(Metadata, '\n'.join(Lines), 'Aggregate32Structural', File)
+            self.assertEqual(Result['State'], 'INCOMPLETE', Result)
 
     def test_aggregate_failed_rpc_outcomes_and_inline_callback_are_retained(self):
         with tempfile.TemporaryDirectory() as Directory:
