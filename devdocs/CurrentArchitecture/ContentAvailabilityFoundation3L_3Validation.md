@@ -6,6 +6,61 @@ last_verified: 2026-10-03
 
 # Foundation 3L.3 diagnostic validation ledger
 
+## Current tooling and controlled capacity qualification (2026-10-03 15:10 UTC)
+
+Tooling/test source `1ccefb336e28e4c9beacc5d0f847d34bb3d49838` passes all four
+original, first-attempt required workflows: Native push `37126255211`, Native
+PR `37126310252`, GNS push `37126255209`, and GNS PR `37126310248`. Each Native
+workflow passes 95 Windows and 53 Linux CTest cases; each GNS workflow passes
+10 cases. Windows tooling and all five standalone workloads also pass. Original
+REST metadata, six job logs, six artifact ZIPs, and their JUnit/source markers
+are retained and independently verified. The PR checkout is merge commit
+`cfc1bfd88610379f5fc35642b14dc40d66a747b1`; its tree and every executed artifact
+tree equal the reviewed source tree `ee8f361af59b91ba56d41329807f024be11ed891`.
+All 2,982 paired exact Remote/resource intervals validate identity, endpoint
+ordering, sampled CPU bounds and completed-sleep deltas. No historical failed
+interval gains a causal explanation from these successful observations.
+
+Archive `tooling-ci-1ccefb3-original-v1/index.json` has SHA-256
+`c07d07371a66a68122aaed8ac73c84fd838f441139d3dd642ef6c800903442f6`;
+checkout reconciliation SHA-256 is
+`12a4915212de19aa021c78c36436ecb2d853da3514fbe593594bf3246a5d6513`.
+Both live under the retained controller artifact root. This supersedes the
+pending-current-CI checkpoints below, without relabeling any historical run.
+
+Controlled worker attempt `da348bc1-2953-4c1f-b44d-1dbfd74ebd78` at source
+`e2ff1af6f94a4d5827cf8fc5326152c8f6cf88a9` separately passes the complete
+95-case native matrix and all five original standalone commands. Its frozen
+declaration precedes every recorded step; no native child is retried, capped,
+forced or substituted. The original worker verifier and independent controller
+replay agree, with 75 retained raw members and inventory SHA-256
+`d7e5dc3f242cafe1ee0159e36f530fba72cc7b659e082128a42a703c33741252`.
+Postflight reports no task-owned process and no UDP 39450 listener.
+
+The corrected environment uses the isolated normal Python runtime and a
+27-character task TEMP root, with a prospective worst-case successful packaging
+path proof of 238 characters against the existing 240-character bound. Earlier
+attempt `79d013a8-4712-4a03-800b-b21e0827815e` remains FAIL (93/95, all five
+standalones pass): both failing packaging fixtures reported the existing path
+bound. Their unchanged binaries pass separately with short TEMP. The preceding
+84/95 attempt also remains failed. No path limit, negative test, service curve,
+latency gate, admission policy or production source changed for this correction.
+
+Native execution candidate remains `9ae8f68c2c8ed50589b5c54ed56657fa6fd02aad`;
+the production/build input diff to current tooling source is empty. Fresh
+exact-tooling offline F1 replay matches the retained physical result. Dormant
+Local/Node launch preparation passes 54 isolated guard tests; it has not been
+adopted or launched. Installed package/service pins match, and retained same-NIC
+active/persistent address inventories span a measured natural reboot on both
+hosts. Fresh per-run resource, link, route, import and idle checks remain required.
+
+At 15:09:45 UTC `DESKTOP-B8V8NAN` has 7.781 GiB available, below the unchanged
+8-GiB preflight. No stale task-owned farm was found. Local32, real-TLS Node32,
+provider parity and final acceptance/audit remain **NOT MEASURED**. No physical
+attempt followed this qualification. **KI-006 OPEN; Foundation 3L B — PARTIALLY
+READY.** Resume with fresh resource checks, final guarded launch adoption, Local
+qualification, then Node qualification and the independent final conjunction.
+
 ## Hosted failure attribution before the corrected Local32 launch (2026-10-03)
 
 No provider attempt followed the staging fix while its hosted checks were

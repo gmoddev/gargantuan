@@ -6,6 +6,20 @@ last_verified: 2026-10-03
 
 # Foundation 3L pooled physical qualification attempt
 
+## Provider continuation checkpoint (2026-10-03 15:10 UTC)
+
+All four original required workflows for tooling source `1ccefb336` and the
+separately predeclared controlled 95-case/five-workload run are complete and
+successful. Original artifacts, checkout identities and raw controlled evidence
+are independently verified in the
+[validation ledger](ContentAvailabilityFoundation3L_3Validation.md#current-tooling-and-controlled-capacity-qualification-2026-10-03-1510-utc).
+The frozen native candidate remains `9ae8f68c2`; exact-tooling offline replay
+reproduces the F1 physical PASS below. No fresh physical attempt occurred during
+this continuation. Local32 and real-TLS Node32 remain **NOT MEASURED**; their
+reviewed launchers remain dormant while client RAM is below the existing 8-GiB
+gate (7.781 GiB at 15:09:45 UTC). Final guarded adoption and fresh per-run
+preflights precede any launch. Historical failed runs retain their verdicts.
+
 ## Funded-ACK candidate F1 physical Phase 1 passed (2026-10-03 UTC)
 
 **F1 PHYSICAL PHASE 1 — PASS** for execution source

@@ -85,6 +85,20 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+2026-10-03 15:10 UTC checkpoint: current tooling source `1ccefb336` passes both
+original Native workflows (95 Windows / 53 Linux cases each, tooling and five
+standalones) and both original GNS sanitizer workflows (10 cases each). Original
+artifacts and executed checkout identities are independently reconciled. The
+controlled worker's complete 95-case/five-workload attempt `da348bc1` also passes
+after a prospectively qualified short-TEMP environment correction. Historical
+hosted timing/F1 failures and earlier controlled failures remain failed; new
+passing observations do not attribute their unmeasured causes. See the
+[current qualification receipt](devdocs/CurrentArchitecture/ContentAvailabilityFoundation3L_3Validation.md#current-tooling-and-controlled-capacity-qualification-2026-10-03-1510-utc).
+The physical native candidate and acceptance gates are unchanged. Client free
+memory is 7.781 GiB against the required 8 GiB at 15:09:45 UTC. Fresh Local32,
+real-TLS Node32, parity and final acceptance/audit remain unmeasured. **KI-006
+remains OPEN; Foundation 3L remains B — PARTIALLY READY.**
+
 The original `138510b02` push/PR Native runs are both terminal failures,
 with both corresponding GNS sanitizer runs successful. Push run `37115422832`
 passed all 95 CTest cases, then failed FULL_RESERVATION mixed Event 238 at
