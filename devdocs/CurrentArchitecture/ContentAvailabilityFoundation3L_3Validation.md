@@ -6,6 +6,42 @@ last_verified: 2026-10-03
 
 # Foundation 3L.3 diagnostic validation ledger
 
+## Aggregate diagnostic development qualified; hosted CI pending (2026-10-03)
+
+Execution-changing diagnostic source `8854feecf` retains the original workload,
+RPC clocks and latency gates. It adds bounded per-peer request/resource records,
+phase anchors, sampled operation matrices, strict completeness validation,
+DWORD failure propagation and any-nonzero guards for all five normal CI commands.
+Both helper and workload binaries accompany raw scheduler evidence for independent
+hash verification. Production/native build inputs remain unchanged from retained
+F1 source `9ae8f68c2`.
+
+Worker development trace at source `860dcbe6f`, session
+`2c7113d6-da0c-40ac-895b-e94b5e990825`, completes all three original aggregate
+phases: 7,424 paired RPC/resource records, 2,124,985 decoded scheduler rows,
+zero trace loss, child/controller/coverage/cleanup exit zero and owned cleanup
+verified. Final source changes only the CI guards and binary retention after that
+trace. Twenty noncapture scheduler tests pass without skips; the compiled timing
+unit passes its immutable callback identity and unchanged 32-MiB output bound.
+The first development trace remains a pre-workload failure: the copied executable
+lacked adjacent font/runtime assets, produced no RPC records, and cleanup passed.
+Its unsigned crash status exposed the now-corrected wrapper conversion defect.
+
+The development native suite remains **92/95, FAILED**: three PowerShell helpers
+resolved the inactive Windows Store Python alias. Only those three are rerun with
+the existing hash-pinned Python runtime on process PATH, and pass 3/3. This does not
+relabel the original suite or substitute for hosted CI. Exact review is
+`C:\Users\aiden\.codex\artifacts\aggregate-integrated-be17-v1\development-review.json`,
+SHA-256 `ced8e40570f94b3850325197bb1448520cd47255705dd04288ea96bc3d6bbbb1`.
+
+All original `3c8f65d39` CI outcomes are now archived: Native push Windows/Linux
+and both GNS runs pass; Native PR Windows fails and its Linux job is skipped.
+Archive index SHA-256 is
+`20f6d0bc9db4519564f8d5c67d556480fb33fe0c7baabb19c0498b4e0ed137d5`.
+That failure's exact mechanism remains **NOT MEASURED**; later diagnostic PASS
+does not explain it. New original push/PR qualification is required before any
+fresh physical launch. V4 stays unadopted. **KI-006 OPEN; 3L B — PARTIALLY READY**.
+
 ## Original aggregate timing failure after capture correction (2026-10-03)
 
 Tooling source `3c8f65d39` passes all 315 local tooling tests. Original Native PR

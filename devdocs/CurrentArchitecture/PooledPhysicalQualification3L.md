@@ -6,6 +6,23 @@ last_verified: 2026-10-03
 
 # Foundation 3L pooled physical qualification attempt
 
+## Aggregate diagnostic candidate awaits original CI (2026-10-03)
+
+The fixed original aggregate command passes a bounded worker development trace
+with all three phases and 7,424 paired request/resource records, loss-free native
+scheduler evidence and verified cleanup. Source `8854feecf` additionally preserves
+negative native failures in every standalone CI guard and retains the actual
+helper/workload binaries for hash verification. It changes no production,
+admission, transport, workload or latency gate. The earlier failed development
+staging and 92/95 environment-affected native suite remain failed; corrected
+runtime selection passes the three affected tests separately.
+
+These are development results, not hosted CI or physical acceptance. New original
+CI, exact-source review and a fresh dormant launcher precede Local32/Node32.
+Retained F1 PASS is unchanged; **KI-006 OPEN; 3L B — PARTIALLY READY**. The
+[development validation entry](ContentAvailabilityFoundation3L_3Validation.md#aggregate-diagnostic-development-qualified-hosted-ci-pending-2026-10-03)
+records the immutable evidence and remaining gates.
+
 ## Corrected capture staging awaits aggregate timing qualification (2026-10-03)
 
 Capture-root correction at tooling `3c8f65d39` passes 315 local tooling tests.

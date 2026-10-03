@@ -85,6 +85,15 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+2026-10-03 aggregate diagnostic continuation: source `8854feecf` adds complete
+bounded request/resource evidence and preserves unsigned native failures through
+signed process exits and all five CI guards. A fresh development trace passes all
+three phases with 7,424 paired records, no loss and verified cleanup; 20 noncapture
+tests pass without skips. The original CI p99 failure remains unexplained, and
+all earlier failed development/physical receipts remain failed. New original
+hosted CI and a separately reviewed launcher must qualify before physical work.
+No production or acceptance invariant changes. **KI-006 OPEN; 3L B — PARTIALLY READY**.
+
 2026-10-03 continuation after capture-root qualification: source `3c8f65d39`
 passes 315 local tooling tests and its original PR Windows 95-case CTest/tooling
 steps, but Native PR `37151679339` fails three FULL_RESERVATION aggregate RPC

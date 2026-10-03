@@ -219,6 +219,12 @@ remain mandatory. Helper compilation and noncapture self-tests precede this
 qualification. Original child failure remains failure; capture, loss, clock
 coverage or cleanup failure also prevents qualification. No request clock,
 threshold, argument, workload, priority, affinity or timer policy changes.
+The helper and exact workload executable are retained with diagnostics so their
+wrapper hashes can be independently recomputed. Native DWORD failure statuses
+remain raw in receipts; only returned process status uses the signed equivalent.
+All five normal standalone guards reject any nonzero status, including a negative
+native crash. Helper tests are a distinct mandatory suite, independently checked
+from the existing physical-control/evidence tooling suites.
 
 Aggregate request identities and original steady-clock endpoints join bounded
 CPU/sleep observations and buffered peer-operation spans to bracketed QPC
