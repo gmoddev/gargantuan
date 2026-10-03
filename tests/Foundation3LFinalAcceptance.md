@@ -16,7 +16,10 @@ process on either physical endpoint, change acceptance bounds, close KI-006,
 start 3M, or merge a pull request. Its only subprocesses are local Git inspection
 and the repository's existing PowerShell offline farm replayer.
 
-Run from a clean checkout of the full candidate commit:
+Run from a clean checkout of the reviewed offline analyzer commit. When that
+commit is the physical execution source, `--analyzer-commit` may be omitted.
+When a later analyzer B corrects offline evidence parsing, pass B explicitly;
+`--source-commit` remains the native execution candidate A.
 
 Freeze the native/analyzer execution candidate A before its build. Dispatch CI
 and the qualified-scale artifact on A, build the four-client probe and owned
@@ -28,10 +31,18 @@ A. This avoids a build/hash self-reference cycle. A final PR documentation or
 pin receipt commit does not retrospectively relabel an A executable as B. This
 checker proves CI and physical execution provenance for the explicit A source;
 it does not waive required separate validation of the B qualifier.
+The checker requires A to be an ancestor of clean HEAD B and records B plus
+hashes of the fixed final/four-client entrypoints, their F1 dependencies, and
+all farm dependencies enumerated by `PhysicalFarmAnalysisInventory.ps1`. It
+still replays raw four-client evidence in this
+invocation. CI, the qualified package, both physical manifests and the four-
+client source archive remain pinned to A. A B receipt is analyzer provenance,
+not a claim that B's native runtime was physically qualified.
 
 ```powershell
 python tests/foundation3l_acceptance.py `
   --source-commit <40-lowercase-hex> `
+  --analyzer-commit <clean-reviewed-analyzer-HEAD-if-different-from-source> `
   --farm-inputs <raw-farm-arguments.json> `
   --powershell-path <absolute-pwsh.exe-path> --powershell-sha256 <runtime-sha256> `
   --four-client-inputs <raw-four-client-arguments.json> `

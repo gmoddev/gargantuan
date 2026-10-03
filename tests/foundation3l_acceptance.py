@@ -68,6 +68,62 @@ def Commit(Value):
     return Value
 
 
+ANALYZER_FILES = (
+    "tests/foundation3l_acceptance.py",
+    "tests/foundation3l_four_client.py",
+    "tests/PhysicalFarmAnalysisInventory.ps1",
+    "tests/PhysicalGameSessionFarmAcceptance.ps1",
+    "tests/PhysicalGameSessionFarmReconcile.ps1",
+    "tests/PhysicalGameSessionFarm.ps1",
+    "tests/PhysicalGameSessionFarmEndpoint.ps1",
+    "tests/PhysicalGameSessionFarmNodeTls.ps1",
+    "tests/AdmissionFairnessEvidence.ps1",
+    "tests/RecoveryCausalEvidence.ps1",
+    "tests/PhysicalFarmPublicationEvidence.ps1",
+    "tests/PhysicalFarmClockEvidence.ps1",
+    "tests/PhysicalGameSessionFarmLifecycle.ps1",
+    "tests/PhysicalGameSessionFarmRemoteOwnership.ps1",
+    "tests/PhysicalGameSessionFarmF1.ps1",
+    "tests/PhysicalFarmNodeResources.ps1",
+    "tools/physical-qualifier/qualifier.py",
+    "tools/physical-qualifier/dependency.py",
+    "tools/physical-qualifier/upstream.lock.json",
+    "tools/physical-qualifier/f1_candidate_source.py",
+    "tools/physical-qualifier/workflows/four-client-phase1-lifecycle.json",
+    "tools/physical-qualifier/farm_publication_join.py",
+    "tools/physical-qualifier/farm_publication_trace.py",
+    "tools/physical-qualifier/farm_ordinary_demand.py",
+    "tools/physical-qualifier/farm_clock_exchange.py",
+    "tools/physical-qualifier/farm_server_tick.py",
+    "tools/physical-qualifier/farm_remote_cadence.py",
+    "tools/physical-qualifier/farm_capture_acceptance.py",
+    "tools/physical-qualifier/farm_capture_directions.py",
+)
+
+
+def VerifyAnalyzerCheckout(Root, SourceCommit, AnalyzerCommit):
+    """Bind the clean offline replayer to B without relabeling native candidate A."""
+    SourceCommit, AnalyzerCommit = Commit(SourceCommit), Commit(AnalyzerCommit)
+    Head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=Root, text=True).strip()
+    Require(Head == AnalyzerCommit, "run the final replay from its exact reviewed analyzer commit")
+    Require(not subprocess.check_output(["git", "status", "--porcelain", "--untracked-files=no"], cwd=Root),
+            "tracked analyzer source is dirty")
+    Ancestor = subprocess.run(["git", "merge-base", "--is-ancestor", SourceCommit, AnalyzerCommit],
+                             cwd=Root, capture_output=True, timeout=10,
+                             creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+    Require(Ancestor.returncode == 0, "analyzer is not a descendant of the physical execution source")
+    Files = []
+    for Name in ANALYZER_FILES:
+        Tracked = subprocess.run(["git", "ls-files", "--error-unmatch", "--", Name],
+                                 cwd=Root, capture_output=True, timeout=10,
+                                 creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+        Require(Tracked.returncode == 0, f"untracked fixed analyzer dependency: {Name}")
+        Files.append({"Path": Name, "Sha256": Digest(ReadBytes(Root / Name))})
+    return {"Format": "GargantuanFoundation3LAnalyzerProvenance", "Version": 1,
+            "ExecutionSourceCommit": SourceCommit, "AnalyzerCommit": AnalyzerCommit,
+            "DescendsFromExecutionSource": True, "Files": Files}
+
+
 def Pinned(Root, Entry, Maximum=8 * 1024 * 1024):
     Require(isinstance(Entry, dict) and set(Entry) == {"Path", "Sha256"}, "invalid pinned file entry")
     Relative = PurePosixPath(Entry["Path"])
@@ -488,6 +544,7 @@ def ReplayFourClient(Root, Inputs, Source):
 def Main():
     Parser = argparse.ArgumentParser(description=__doc__)
     Parser.add_argument("--source-commit", required=True)
+    Parser.add_argument("--analyzer-commit", help="clean reviewed offline analyzer HEAD; defaults to execution source")
     Parser.add_argument("--farm-inputs", required=True, type=Path,
                         help="JSON raw parameter map for the fixed offline farm acceptance script")
     Parser.add_argument("--powershell-path", required=True, help="absolute pinned PowerShell 7 executable; no PATH lookup")
@@ -500,12 +557,10 @@ def Main():
     Parser.add_argument("--output", required=True, type=Path)
     Args = Parser.parse_args()
     Source = Commit(Args.source_commit)
+    Analyzer = Commit(Args.analyzer_commit) if Args.analyzer_commit is not None else Source
     PowerShell = PinnedPowerShell(Args.powershell_path, Args.powershell_sha256)
     Root = Path(__file__).resolve().parents[1]
-    Head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=Root, text=True).strip()
-    Require(Head == Source, "run the final replay from its exact reviewed source commit")
-    Require(not subprocess.check_output(["git", "status", "--porcelain", "--untracked-files=no"], cwd=Root),
-            "tracked analyzer source is dirty")
+    AnalyzerProvenance = VerifyAnalyzerCheckout(Root, Source, Analyzer)
     Require(not Args.output.exists(), "output already exists")
     for Part in (Args.output.absolute(), *Args.output.absolute().parents):
         Require(not Part.is_symlink() and not getattr(Part, "is_junction", lambda: False)(), "redirected output path")
@@ -538,6 +593,7 @@ def Main():
         if Args.four_client_inputs:
             Result["FourClientInputMapSha256"] = Digest(ReadBytes(Args.four_client_inputs))
         Result["AnalyzerSha256"] = Digest(ReadBytes(__file__))
+        Result["AnalyzerProvenance"] = AnalyzerProvenance
         Result["PowerShellPath"] = str(PowerShell)
         Result["PowerShellSha256"] = Args.powershell_sha256
         with Args.output.open("x", encoding="utf-8", newline="\n") as File:

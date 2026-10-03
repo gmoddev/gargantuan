@@ -2,6 +2,7 @@ import copy
 import io
 import json
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
 from unittest import mock
@@ -48,6 +49,72 @@ def Xml(Names, Suffix=""):
     return ('<testsuite tests="%d" failures="0" errors="0">' % len(Names) +
             "".join(f'<testcase name="{Name}" status="run">{Suffix}</testcase>' for Name in sorted(Names)) +
             '</testsuite>').encode()
+
+
+class AnalyzerProvenanceTests(unittest.TestCase):
+    AUTHOR = ("-c", "user.email=foundation3l-fixture@users.noreply.github.com",
+              "-c", "user.name=Foundation3L Fixture")
+
+    def setUp(self):
+        self.Temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.Temporary.cleanup)
+        self.Root = Path(self.Temporary.name)
+        subprocess.run(["git", "init", "-q", str(self.Root)], check=True, capture_output=True)
+        (self.Root / ".git/fixture-hooks").mkdir()
+        for Name in A.ANALYZER_FILES:
+            File = self.Root / Name
+            File.parent.mkdir(parents=True, exist_ok=True)
+            File.write_text("frozen A\n", encoding="utf-8")
+        self.Git("add", "--", *A.ANALYZER_FILES)
+        self.Git(*self.AUTHOR, "commit", "-qm", "A")
+        self.Source = self.Git("rev-parse", "HEAD").strip()
+        (self.Root / "tests/foundation3l_four_client.py").write_text("reviewed B\n", encoding="utf-8")
+        self.Git("add", "--", "tests/foundation3l_four_client.py")
+        self.Git(*self.AUTHOR, "commit", "-qm", "B")
+        self.Analyzer = self.Git("rev-parse", "HEAD").strip()
+
+    def Git(self, *Arguments):
+        Result = subprocess.run(["git", "-c", f"core.hooksPath={self.Root / '.git/fixture-hooks'}",
+                                 *Arguments], cwd=self.Root,
+                                capture_output=True, text=True)
+        self.assertEqual(Result.returncode, 0, Result.stderr or Result.stdout)
+        return Result.stdout
+
+    def test_clean_descendant_b_records_exact_analyzer_without_relabeling_a(self):
+        Result = A.VerifyAnalyzerCheckout(self.Root, self.Source, self.Analyzer)
+        self.assertEqual(Result["ExecutionSourceCommit"], self.Source)
+        self.assertEqual(Result["AnalyzerCommit"], self.Analyzer)
+        self.assertEqual([Row["Path"] for Row in Result["Files"]], list(A.ANALYZER_FILES))
+        for Row in Result["Files"]:
+            self.assertEqual(Row["Sha256"], A.Digest((self.Root / Row["Path"]).read_bytes()))
+        # Omitting the explicit B pin must retain the old exact-A-head rule.
+        with self.assertRaisesRegex(A.EvidenceError, "exact reviewed analyzer commit"):
+            A.VerifyAnalyzerCheckout(self.Root, self.Source, self.Source)
+
+    def test_wrong_head_divergent_source_and_dirty_analyzer_fail(self):
+        with self.assertRaisesRegex(A.EvidenceError, "exact reviewed analyzer commit"):
+            A.VerifyAnalyzerCheckout(self.Root, self.Source, "f" * 40)
+        Tree = self.Git("rev-parse", "HEAD^{tree}").strip()
+        Unrelated = self.Git(*self.AUTHOR, "commit-tree", Tree, "-m", "unrelated").strip()
+        with self.assertRaisesRegex(A.EvidenceError, "not a descendant"):
+            A.VerifyAnalyzerCheckout(self.Root, Unrelated, self.Analyzer)
+        (self.Root / "tests/foundation3l_four_client.py").write_text("uncommitted bypass\n", encoding="utf-8")
+        with self.assertRaisesRegex(A.EvidenceError, "tracked analyzer source is dirty"):
+            A.VerifyAnalyzerCheckout(self.Root, self.Source, self.Analyzer)
+
+    def test_missing_tracked_analyzer_dependency_fails_in_clean_descendant(self):
+        Missing = A.ANALYZER_FILES[-1]
+        self.Git("rm", "--", Missing)
+        self.Git(*self.AUTHOR, "commit", "-qm", "remove required analyzer")
+        Head = self.Git("rev-parse", "HEAD").strip()
+        with self.assertRaisesRegex(A.EvidenceError, "untracked fixed analyzer dependency"):
+            A.VerifyAnalyzerCheckout(self.Root, self.Source, Head)
+
+    def test_execution_source_is_analyzer_when_head_is_a(self):
+        self.Git("checkout", "-q", "--detach", self.Source)
+        Result = A.VerifyAnalyzerCheckout(self.Root, self.Source, self.Source)
+        self.assertEqual(Result["ExecutionSourceCommit"], self.Source)
+        self.assertEqual(Result["AnalyzerCommit"], self.Source)
 
 
 class FinalTests(unittest.TestCase):
