@@ -221,6 +221,29 @@ workload output and diagnostic metadata are retained by the always-run artifact
 upload. Missing or lost scheduler evidence cannot establish a causal diagnosis,
 and a later green diagnostic never changes an earlier failed result.
 
+The separate `scheduler_pair_diagnostic` dispatch is **diagnostic only**. It
+runs the fixed FULL workload and ACK statistics-boundary case once each, with
+separate owned sessions and outputs. A failed first workload does not suppress
+the second observation when cleanup is verified; unverified session/process
+cleanup prevents the second launch. Both original child exits are retained.
+This mode skips qualification CTest, standalone workload qualification,
+packaging and Linux execution. Its Windows job name explicitly identifies it
+as diagnostic rather than qualification, and the final acceptance verifier
+rejects that job as a replacement for required CI even if it succeeds.
+Ordinary push/PR execution still runs the complete native matrix and all five
+unchanged standalone commands. The two diagnostic selections are mutually
+exclusive. No diagnostic result supplies a new physical authorization gate.
+
+ACK statistics diagnostics are fixture-only and opt-in. Bracketed QPC/steady
+observations bind F1's steady-clock microsecond timestamps; reconstruction must
+include their one-microsecond representation uncertainty. The supported GNS
+service-thread initialization callback records bounded thread identities for
+ETL lifecycle correlation. GNS's `GetLocalTimestamp` clock has its own mutable
+offset and may clamp a long gap, so a beginning/end offset cannot map all native
+events to QPC. Bracketed native snapshots establish observations at those points
+only. Neither clock instrumentation nor thread observation changes service
+timestamps, deadlines, thread priority or transport scheduling.
+
 The diagnostic uses a named system logger with a fresh GUID, 8 MiB of configured
 buffers and a 512 MiB sequential ETL limit. Decoded CSV is capped at 512 MiB;
 each child output stream is capped at 32 MiB. A Job Object owns the suspended

@@ -274,6 +274,18 @@ class CITests(unittest.TestCase):
         self.assertEqual(Result['State'], 'MEASURED_PASS')
         self.assertEqual(len(Result['Jobs']), 3)
 
+    def test_successful_diagnostic_dispatch_is_not_native_qualification(self):
+        # Even a successful diagnostic with the correct source/artifact pins
+        # cannot stand in for the complete Windows and Linux qualification.
+        Windows = self.Documents['0-Jobs.json']['jobs'][0]
+        Windows['name'] = 'Windows causal diagnostic - not qualification'
+        with self.assertRaisesRegex(A.EvidenceError, 'unexpected/missing workflow jobs'):
+            self.Verify()
+        Windows['name'] = self.Entries[0]['Name']
+        Windows['steps'][0]['conclusion'] = 'skipped'
+        with self.assertRaisesRegex(A.EvidenceError, 'required CTest step missing/failed'):
+            self.Verify()
+
     def test_metadata_failures(self):
         Changes = [('0-Run.json', 'head_sha', '2' * 40), ('0-Run.json', 'conclusion', 'failure'),
                    ('0-Run.json', 'event', 'pull_request'), ('0-Run.json', 'status', 'in_progress'),

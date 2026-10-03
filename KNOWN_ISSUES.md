@@ -85,6 +85,20 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+The original `138510b02` push/PR Native runs are both terminal failures,
+with both corresponding GNS sanitizer runs successful. Push run `37115422832`
+passed all 95 CTest cases, then failed FULL_RESERVATION mixed Event 238 at
+435.3776 ms. Its exact interval does not intersect any retained maximum-phase
+span; the 3399.7984 ms client-poll maximum begins 177.4484 ms **after** that
+Event completed. It cannot explain the failed Event. PR run `37115424856`
+passed 94 of 95 tests and failed the statistics-boundary fixture's unchanged
+F1 predicate after successful byte/ACK/retirement conservation. The original
+log lacks that failing grant's exact first-send timeline. The fixture now
+prints its original bounded completed-grant snapshot and segment records on
+F1 failure as well as conservation failure, without changing either predicate.
+Neither historical failure is classified as an infrastructure failure, and
+neither is replaced by a passing diagnostic or a different host's result.
+
 The retained manual scheduler diagnostic from hosted run `37115431988` passed
 its unchanged workload but its original decoder classified 299,065 CSwitch
 version 5/28-byte events as unsupported, leaving diagnostic coverage
