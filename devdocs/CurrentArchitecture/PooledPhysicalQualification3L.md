@@ -1,10 +1,87 @@
 ---
 status: f1-phase1-pass-later-gates-pending
 owner: runtime-networking-and-runtime-host
-last_verified: 2026-10-01
+last_verified: 2026-10-03
 ---
 
 # Foundation 3L pooled physical qualification attempt
+
+## Funded-ACK candidate F1 physical Phase 1 passed (2026-10-03 UTC)
+
+**F1 PHYSICAL PHASE 1 — PASS** for execution source
+`9ae8f68c2c8ed50589b5c54ed56657fa6fd02aad`, with pin-only qualifier
+`d4fa8b64f2645a87e798f7a0a858a7d4d4285771`. This fresh run qualifies the
+reserve-funded ACK/retry correction; it does not replace the historical
+October 1 result below. Before execution, exact-source Native CI `37091176350`
+and GNS sanitizer CI `37091175492` passed; original JUnit verifies 95 Windows,
+53 Linux and 10 GNS tests. Both endpoints passed all eight socket-free probe
+self-tests, exact installed-file checks and fresh evidence/control preflights.
+
+Physical run `454bf4f8-c8f2-4c18-9866-1b61218da514` and lifecycle
+`7a48260b-6911-4394-bbb5-65a65e17bac0` completed four actual clients and
+32 maximum-grant waves per peer through unchanged production admission.
+The raw replay establishes 128 complete 524,288-byte grants and two subsequent
+1,258-byte certificates. Four pre-ready bootstrap admissions (5,171, 5,171,
+6,361 and 6,361 B) carry the explicit pre-ready timestamp sentinel; they are
+conserved separately and are not invented qualified F1 certificates.
+
+| Slot | Maximum grants | First-send completion min–max, µs | Maximum running deficit, byte-µs |
+| --- | ---: | ---: | ---: |
+| 1 | 32 | 28,025–28,940 | 7,230,980,096 |
+| 2 | 32 | 28,012–28,846 | 7,012,876,288 |
+| 3 | 32 | 27,980–28,984 | 6,392,119,296 |
+| 4 | 32 | 27,880–28,857 | 5,653,921,792 |
+
+All finite and native latched running certificates pass the unchanged F1
+bounds. There are 32 common four-grant intervals totaling 857,089 µs. The pool
+proof sums the four native all-subinterval certificates: the conservative
+sum of peer maxima is 26,289,897,472 byte-µs, below 72,100,864,000. A directly
+sampled pool maximum is **NOT MEASURED**. Each peer first-sent and ACKed
+16,777,216 campaign bytes. Separately counted retry bytes are 18,328, 25,150,
+29,698 and 44,479; none count as new service. Accepted = retired =
+67,134,444 B, with terminal release, outstanding debt and active grants zero.
+Pending high-water is 2,097,152 B. The designated gameplay producer completed
+80 RPCs and 80 events within the unchanged latency gates.
+
+Both sealed captures contain 68,209 complete frames with zero reported loss.
+Ports 57170–57173 are bidirectional at both endpoints, with exact matching
+opposite-direction counts. The worker ETL is 93,847,552 B, below the independent
+four-client profile's 240-MiB threshold. This does not qualify the different
+Farm32 16-GiB profile. Endpoint, physical coordinator and outer lifecycle
+results all succeed; both endpoints finish IDLE.
+
+The offline replayer initially rejected the canonical preassignment request
+UUIDs because it required every journal envelope to use the assigned lifecycle
+UUID. The correction pairs each request/reply with its endpoint, assigned run,
+canonical workflow schema/hash and subsequent registration; other rows retain
+their run checks. Twenty-one replay tests and 24 final-acceptance tests pass.
+The original physical evidence is unchanged. Independent agent and root replay
+both return `MEASURED_PASS`; no additional physical attempt was performed.
+
+Evidence is retained under
+`C:\Sandbox\Codex\Evidence\physical-qualifier\lifecycle-cfb2fec6b24c5d02`,
+including the hash-verified worker copy. Native CSV SHA-256 is
+`9BD15A23C9A8C408C17DA60B8ED511F37E72BCC86CC64F6289A433585FF5780C`;
+admission CSV SHA-256 is
+`668C2FC83E076C99B82128B9A67C8A367B7AE9C82C813B32FBA45F193614AAAB`.
+The complete replay, input hashes and analyzer provenance are retained at
+`C:\Users\aiden\.codex\artifacts\f1-replay-454bf4f8-v1`; `result.json`
+SHA-256 is `EE58D7894B9122232B494579C4767BAFCE336F80E0C8F30AE3529B21CD90CA1B`.
+
+Owner-verified cleanup restored both installed baselines and removed temporary
+profiles, tickets, keys, scheduled task and daemons. Both rollback checks report
+zero owned processes, lifecycle listeners and UDP 39450 bindings; tunnel cleanup
+passes. The capture service is Running/idle, Packet Monitor and Windows trace
+are stopped, and no filters remain. The restoration receipt is retained in
+`prepared-cfb2fec6b24c5d02\lifecycle\endpoint-restoration.json` under the
+`gargantuan-f1-funded-ack-final-stage-9ae8-d4fa-v2` artifact. The previous stage
+`822b60a9-6d33-40c4-9559-f74dc19c0475` was rejected for an expired readiness
+proof before assignment, capture or probe; it was fully rolled back and retired.
+
+**KI-006 remains OPEN; Foundation 3L remains B — PARTIALLY READY.** Fresh
+Local/real-TLS Node 32-client matrices, their resource/recovery/evidence gates
+and final acceptance remain outstanding. No 3M work or merge is authorized by
+this result.
 
 ## Corrected F1 physical Phase 1 passed (2026-10-01)
 

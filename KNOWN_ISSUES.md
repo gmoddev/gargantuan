@@ -85,6 +85,20 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+2026-10-03 UTC fresh funded-ACK F1 checkpoint: execution source `9ae8f68c2`
+passes physical run `454bf4f8-c8f2-4c18-9866-1b61218da514`, lifecycle
+`7a48260b-6911-4394-bbb5-65a65e17bac0`. Independent raw replay verifies
+128 maximum grants, four peer service curves, 32 common drain intervals,
+complete zero-loss bidirectional captures, gameplay, exact retirement,
+successful lifecycle and restored endpoints. An offline-only verifier fix
+correctly binds preassignment request UUIDs to the later assigned lifecycle;
+physical evidence and production behavior did not change. See the
+[fresh physical receipt](devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md#funded-ack-candidate-f1-physical-phase-1-passed-2026-10-03-utc).
+Remaining gates are Farm32 near-capacity capture qualification, client memory
+at least 8 GiB available, both 32-client provider matrices and final acceptance.
+Historical synthetic socket-loss attribution is not a new pooled-service gate.
+**KI-006 OPEN; Foundation 3L B — PARTIALLY READY.**
+
 2026-10-03 UTC diagnostic checkpoint: candidate `9ae8f68c2` passes the
 exact-source hosted Windows Release, Linux ASan/UBSan and GNS sanitizer jobs.
 Original JUnit artifacts independently verify 95 Windows, 53 Linux and 10 GNS

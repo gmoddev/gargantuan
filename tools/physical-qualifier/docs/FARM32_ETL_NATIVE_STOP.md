@@ -76,6 +76,22 @@ follows from this diagnostic.
 
 ## Client drop diagnostic preparation and external action
 
+Tiny observer calibration `ddbb9cc5-9ec0-4ca5-9354-5a0bc13a1811` failed before
+native capture or traffic. All staged source hashes matched, but the worker's
+embedded Python `python312._pth` includes only its runtime directory, DLLs and
+standard-library ZIP. Direct script execution therefore could not import the
+adjacent `CalibrationOwner` module. The controller aborted; exact owned-filter
+cleanup and both endpoint port checks passed, with no ETL or active capture.
+An import-only check using an explicitly added, hash-verified stage directory
+passes on that same runtime without opening sockets. The separately versioned
+v2 launcher verifies all five staged source hashes, then explicitly imports
+from that stage in the embedded runtime. Its 87 offline tests and the actual
+worker import-only preflight pass. Fresh identity
+`5824b202-2e6e-43c8-96ff-15d6d99a0e2f` expired the bounded manual-helper wait
+without a helper, capture, filter or traffic starting; cleanup reported no
+errors. Both identities are retired. Neither supplies an observer or service
+result, and neither Administrator launcher should be reused.
+
 Client driver access requires an Administrator process; the normal controller
 cannot use PktMon. A fixed-input manually launched helper was prepared with
 an automated pre-capture barrier, process-creation identity, exact tuple filters,
@@ -265,6 +281,15 @@ Python campaign/replay mutations cover the corresponding receipt gates.
 
 These simulations neither start ETW nor prove installed native behavior. The
 installed adoption and fresh diagnostic above supply separate bounded native
-evidence. Resolve the client receive loss before the next capture preflight.
-The unchanged full near-capacity exact-sequence, zero-loss, full-frame,
-deadline, export and cleanup gates must all pass before provider use.
+evidence. The unchanged full near-capacity exact-sequence, zero-recorder-loss,
+full-frame, deadline, export and cleanup gates must all pass before provider
+use. Synthetic socket delivery and recorder completeness are distinct: the
+accepted [physical funding-gate review](../../../devdocs/CurrentArchitecture/PhysicalFundingGateReview3L.md)
+does not require attribution of every historical synthetic UDP receive loss
+before bounded real-GNS qualification. The existing diagnostic kit additionally
+requires exact application receive convergence; its failed results remain
+failed. A prospective recorder-only qualification must independently prove
+complete producers and every emitted marked sequence in both captures, and
+report application delivery separately. The 5-GiB diagnostics do not establish
+the outstanding 14-GiB near-capacity gate. The independent four-client F1
+capture profile does not use the Farm32 large-file profile.

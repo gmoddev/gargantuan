@@ -1,10 +1,41 @@
 ---
 status: partial-validation
 owner: runtime-networking
-last_verified: 2026-10-02
+last_verified: 2026-10-03
 ---
 
 # Foundation 3L.3 diagnostic validation ledger
+
+## Funded-ACK F1 candidate qualified physically (2026-10-03 UTC)
+
+Execution source `9ae8f68c2c8ed50589b5c54ed56657fa6fd02aad` has terminal-green
+exact-source hosted qualification: Native `37091176350` (95 Windows / 53 Linux
+original JUnit cases) and GNS sanitizer `37091175492` (10 cases). The official
+package and source-owned CI verifiers pass. This resolves the older pending-CI
+checkpoint below for this execution candidate; it does not imply that every
+later receipt-head CI run succeeds.
+
+Fresh physical `454bf4f8-c8f2-4c18-9866-1b61218da514` / lifecycle
+`7a48260b-6911-4394-bbb5-65a65e17bac0` is **F1 PHYSICAL PHASE 1 — PASS**.
+Independent raw replay proves 128 maximum grants, all four peer certificates,
+32 common four-grant intervals, protected gameplay, zero-loss complete
+bidirectional capture, exact 67,134,444-B acceptance/retirement conservation,
+endpoint/coordinator/outer success and clean restoration. The
+[physical receipt](PooledPhysicalQualification3L.md#funded-ack-candidate-f1-physical-phase-1-passed-2026-10-03-utc)
+records exact source, bounds, hashes, bootstrap scope and replay correction.
+
+The changed Farm32 large-file capture profile still requires its separate
+near-capacity qualification. Historical synthetic socket receive gaps remain
+unattributed, but the accepted funding-gate review does not make that attribution
+a prerequisite for production GNS testing. Recorder completeness remains required.
+The latest client reading on `DESKTOP-B8V8NAN` is 2.855 GiB available, below
+the unchanged **8-GiB client** gate; the worker has 22.424 GiB, above its
+**4-GiB server** gate. The older wording below claiming 8 GiB on both endpoints
+is superseded by these actual farm roles and source-enforced thresholds.
+
+Fresh Local and authenticated real-TLS Node 32-client matrices, complete moving
+recovery/resource/parity evidence, and final acceptance/audit remain
+**NOT MEASURED**. **KI-006 OPEN; Foundation 3L B — PARTIALLY READY; no 3M or merge.**
 
 ## Causal recovery and materialization corrections deterministically validated (2026-10-02)
 
