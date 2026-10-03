@@ -8,6 +8,7 @@
 #include "WorkloadTimingEvidence.hpp"
 #include "WorkloadActionEvidence.hpp"
 #include "WorkloadRemoteEvidence.hpp"
+#include "AggregateWorkloadEvidence.hpp"
 #include "../src/network/GameSessionTestAccess.hpp"
 #include "../src/network/GnsServiceDiagnostics.hpp"
 
@@ -77,6 +78,7 @@ void RunAggregateReliableGameplay(Engine &ServerRuntime, Engine &PrimaryRuntime,
 		double PrimaryRuntimeMs = 0, ServerRuntimeMs = 0, ServerPollMs = 0, PrimaryPollMs = 0;
 		double ServerSessionMs = 0, PrimarySessionMs = 0;
 		double PeerPollMs = 0, PeerRuntimeMs = 0, PeerSessionMs = 0, SlowestPeerMs = 0;
+		test_detail::AggregateStepOperations Operations;
 		std::optional<double> ThreadCpuMs, ProcessCpuMs, PriorSleepProcessCpuMs;
 	};
 	struct AggregateBounds {
@@ -96,6 +98,11 @@ void RunAggregateReliableGameplay(Engine &ServerRuntime, Engine &PrimaryRuntime,
 	double PriorObserverMs = 0, PriorSleepRequestedMs = 0, PriorSleepActualMs = 0;
 	std::optional<double> PriorSleepProcessCpuMs;
 	bool Disconnected = false;
+	bool AggregatePhaseActive = false;
+	std::uint32_t AggregatePhase = 0;
+	test_detail::WorkloadSleepLedger AggregateSleeps;
+	std::vector<std::unique_ptr<test_detail::AggregatePeerEvidence>> AggregatePeers;
+	std::unique_ptr<test_detail::AggregateOperationEvidence> AggregateOperations;
 	auto CheckSession = [&](const GameSession &Session) {
 		if (Session.GetStatus() != GameSessionStatus::Failed) return;
 		if (!Disconnected) {
@@ -114,26 +121,36 @@ void RunAggregateReliableGameplay(Engine &ServerRuntime, Engine &PrimaryRuntime,
 		const auto StartedCpu = test_detail::CaptureWorkloadCpu();
 		AggregateStepSpan Span;
 		Span.Tick = Tick;
+		Span.Operations.Tick = Tick;
+		Span.Operations.StartedNs = test_detail::WorkloadTimestamp(Started);
+		Span.Operations.GapStartedNs = test_detail::WorkloadTimestamp(LastStep);
+		Span.Operations.Before = StartedCpu;
 		Span.BeforeStepMs = std::chrono::duration<double, std::milli>(Started - LastSleepEnd).count();
 		Span.PriorObserverMs = PriorObserverMs;
 		Span.PriorSleepRequestedMs = PriorSleepRequestedMs;
 		Span.PriorSleepActualMs = PriorSleepActualMs;
 		Span.PriorSleepProcessCpuMs = PriorSleepProcessCpuMs;
-		auto Time = [&](double &Duration, auto &&Action) {
+		auto Time = [&](double &Duration, auto &&Action, std::size_t Peer, std::size_t Subphase) {
+			const auto BeforeCpu = AggregatePhaseActive ? test_detail::CaptureWorkloadCpu() : test_detail::WorkloadCpuSample{};
 			const auto Begin = Clock::now();
 			Action();
-			Duration += std::chrono::duration<double, std::milli>(Clock::now() - Begin).count();
+			const auto End = Clock::now();
+			Duration += std::chrono::duration<double, std::milli>(End - Begin).count();
+			if (AggregatePhaseActive) Span.Operations.Spans[Peer][Subphase] = {
+				test_detail::WorkloadTimestamp(Begin), test_detail::WorkloadTimestamp(End),
+				test_detail::WorkloadNativeThread(), BeforeCpu, test_detail::CaptureWorkloadCpu(),
+				Peer < 32 ? AggregatePeers[Peer]->Slot : 0, Peer < 32 ? AggregatePeers[Peer]->Generation : 0};
 		};
-		Time(Span.PrimaryRuntimeMs, [&] { PrimaryRuntime.Step(); });
-		Time(Span.ServerRuntimeMs, [&] { ServerRuntime.Step(); });
-		Time(Span.ServerPollMs, [&] { (void)Server.Poll(); });
-		Time(Span.PrimaryPollMs, [&] { (void)Primary.Poll(); });
-		Time(Span.ServerSessionMs, [&] { Server.Step(Tick); });
-		Time(Span.PrimarySessionMs, [&] { Primary.Step(Tick); });
+		Time(Span.PrimaryRuntimeMs, [&] { PrimaryRuntime.Step(); }, 0, 1);
+		Time(Span.ServerRuntimeMs, [&] { ServerRuntime.Step(); }, 32, 1);
+		Time(Span.ServerPollMs, [&] { (void)Server.Poll(); }, 32, 0);
+		Time(Span.PrimaryPollMs, [&] { (void)Primary.Poll(); }, 0, 0);
+		Time(Span.ServerSessionMs, [&] { Server.Step(Tick); }, 32, 2);
+		Time(Span.PrimarySessionMs, [&] { Primary.Step(Tick); }, 0, 2);
 		for (std::size_t PeerIndex = 0; PeerIndex < Peers.size(); ++PeerIndex) {
 			auto &Peer = Peers[PeerIndex];
 			const auto PeerStarted = Clock::now();
-			Time(Span.PeerPollMs, [&] { (void)Peer->Session->Poll(); });
+			Time(Span.PeerPollMs, [&] { (void)Peer->Session->Poll(); }, PeerIndex + 1, 0);
 			if (!Peer->Runtime && Peer->Session->GetClientDataModel()) {
 				const auto RuntimeStarted = Clock::now();
 				Peer->Renderer = std::make_unique<HeadlessRenderer>(Vector2(32, 32));
@@ -144,8 +161,8 @@ void RunAggregateReliableGameplay(Engine &ServerRuntime, Engine &PrimaryRuntime,
 				Check(Peer->Session->AttachClientRuntime(*Peer->Runtime), "aggregate client attaches trusted runtime");
 				Span.PeerRuntimeMs += std::chrono::duration<double, std::milli>(Clock::now() - RuntimeStarted).count();
 			}
-			if (Peer->Runtime) Time(Span.PeerRuntimeMs, [&] { Peer->Runtime->Step(); });
-			Time(Span.PeerSessionMs, [&] { Peer->Session->Step(Tick); });
+			if (Peer->Runtime) Time(Span.PeerRuntimeMs, [&] { Peer->Runtime->Step(); }, PeerIndex + 1, 1);
+			Time(Span.PeerSessionMs, [&] { Peer->Session->Step(Tick); }, PeerIndex + 1, 2);
 			const auto PeerMs = std::chrono::duration<double, std::milli>(Clock::now() - PeerStarted).count();
 			if (PeerMs > Span.SlowestPeerMs) {
 				Span.SlowestPeerMs = PeerMs;
@@ -155,6 +172,8 @@ void RunAggregateReliableGameplay(Engine &ServerRuntime, Engine &PrimaryRuntime,
 		++Tick;
 		const auto ObservedAt = Clock::now();
 		const auto ObservedCpu = test_detail::CaptureWorkloadCpu();
+		Span.Operations.EndedNs = test_detail::WorkloadTimestamp(ObservedAt);
+		Span.Operations.After = ObservedCpu;
 		Span.WorkMs = std::chrono::duration<double, std::milli>(ObservedAt - Started).count();
 		Span.GapMs = std::chrono::duration<double, std::milli>(ObservedAt - LastStep).count();
 		Span.ThreadCpuMs = test_detail::WorkloadTimingEvidence::CpuDelta(StartedCpu.Thread100ns, ObservedCpu.Thread100ns,
@@ -162,6 +181,7 @@ void RunAggregateReliableGameplay(Engine &ServerRuntime, Engine &PrimaryRuntime,
 		Span.ProcessCpuMs = test_detail::WorkloadTimingEvidence::CpuDelta(StartedCpu.Process100ns, ObservedCpu.Process100ns,
 			StartedCpu.ProcessValid, ObservedCpu.ProcessValid);
 		Bounds.ServiceGapMs = std::max(Bounds.ServiceGapMs, Span.GapMs);
+		if (AggregatePhaseActive) AggregateOperations->Record(Span.Operations, Span.GapMs);
 		for (std::size_t Index = 0; Index < Bounds.SlowSteps.size(); ++Index) {
 			if (Bounds.SlowSteps[Index].GapMs >= Span.GapMs) continue;
 			for (std::size_t Move = Bounds.SlowSteps.size() - 1; Move > Index; --Move)
@@ -198,8 +218,12 @@ void RunAggregateReliableGameplay(Engine &ServerRuntime, Engine &PrimaryRuntime,
 		const auto BeforeSleep = Clock::now();
 		const auto BeforeSleepCpu = test_detail::CaptureWorkloadCpu();
 		PriorSleepRequestedMs = std::chrono::duration<double, std::milli>(std::max(Next, BeforeSleep) - BeforeSleep).count();
+		AggregateSleeps.Begin(test_detail::WorkloadTimestamp(BeforeSleep),
+			static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::max(Next, BeforeSleep) - BeforeSleep).count()),
+			test_detail::WorkloadNativeThread());
 		std::this_thread::sleep_until(Next);
 		LastSleepEnd = Clock::now();
+		AggregateSleeps.End(test_detail::WorkloadTimestamp(LastSleepEnd), test_detail::WorkloadNativeThread());
 		const auto AfterSleepCpu = test_detail::CaptureWorkloadCpu();
 		PriorSleepActualMs = std::chrono::duration<double, std::milli>(LastSleepEnd - BeforeSleep).count();
 		PriorSleepProcessCpuMs = test_detail::WorkloadTimingEvidence::CpuDelta(BeforeSleepCpu.Process100ns, AfterSleepCpu.Process100ns,
@@ -230,6 +254,9 @@ void RunAggregateReliableGameplay(Engine &ServerRuntime, Engine &PrimaryRuntime,
 	Add(PrimaryRuntime, Primary);
 	for (auto &Peer : Peers) Add(*Peer->Runtime, *Peer->Session);
 	if (Managers.size() != QualificationPeerCount) return;
+	AggregateOperations = std::make_unique<test_detail::AggregateOperationEvidence>();
+	for (std::uint32_t Index = 0; Index < QualificationPeerCount; ++Index)
+		AggregatePeers.push_back(std::make_unique<test_detail::AggregatePeerEvidence>());
 	auto *Receiver = Function->GetRemoteManager();
 	Receiver->SetRequestHandler(Function->GetNetworkObjectId(),
 		[](const RemoteInvocation &Invocation, RemoteManager::RequestReply Reply) {
@@ -248,8 +275,15 @@ void RunAggregateReliableGameplay(Engine &ServerRuntime, Engine &PrimaryRuntime,
 	std::vector<Engine *> Runtimes{&PrimaryRuntime};
 	std::vector<GameSession *> Sessions{&Primary};
 	for (auto &Peer : Peers) { Runtimes.push_back(Peer->Runtime.get()); Sessions.push_back(Peer->Session.get()); }
+	static constexpr std::array<std::string_view, 3> AggregateCases{"aggregate-baseline", "aggregate-overload", "aggregate-recovery"};
+	const auto AggregateProfile = CandidateReliableService().IsPooled() ? "POOLED_SERVICE" : "FULL_RESERVATION";
 	for (const bool Overload : {false, true, false}) {
 		Bounds = {};
+		AggregateOperations->Reset();
+		for (std::uint32_t Index = 0; Index < QualificationPeerCount; ++Index)
+			AggregatePeers[Index]->Configure(AggregatePhase, Index, Connections[Index].Slot, Connections[Index].Generation);
+		AggregatePhaseActive = true;
+		const auto AggregateBeginAnchor = test_detail::WorkloadClockAnchor::Capture();
 		LastStep = Clock::now();
 		LastSleepEnd = LastStep;
 		PriorObserverMs = PriorSleepRequestedMs = PriorSleepActualMs = 0;
@@ -281,16 +315,38 @@ void RunAggregateReliableGameplay(Engine &ServerRuntime, Engine &PrimaryRuntime,
 					if (Sample.Pending != 0) continue;
 					for (int Call = 0; Call < Concurrent; ++Call) {
 						std::vector<WireValue> Arguments{static_cast<int>(Index), std::string(3072 - 62, static_cast<char>('a' + Call))};
+						auto &Diagnostic = *AggregatePeers[Index];
+						const auto DiagnosticId = ++Diagnostic.RequestSequence;
+						test_detail::WorkloadEndpointCounters StartCounters;
+						StartCounters.BeforeNs = test_detail::WorkloadTimestamp(Clock::now());
+						StartCounters.BeforeCpu = test_detail::CaptureWorkloadCpu();
 						const auto Submitted = Clock::now();
+						StartCounters.AfterCpu = test_detail::CaptureWorkloadCpu();
+						StartCounters.AfterNs = test_detail::WorkloadTimestamp(Clock::now());
+						const auto SubmitThread = test_detail::WorkloadNativeThread();
+						StartCounters.Sleep = AggregateSleeps.Snapshot(test_detail::WorkloadTimestamp(Submitted), SubmitThread);
 						++Sample.Pending;
+						Diagnostic.Remote.Begin(DiagnosticId, true, false, Tick, test_detail::WorkloadTimestamp(Submitted), SubmitThread, StartCounters);
 						const auto Sent = Managers[Index]->StartRequest(Connections[Index], Function->GetNetworkObjectId(), Arguments,
-							[&, Index, Arguments, Submitted](RemoteRequestResult Result) {
+							[&, Index, Arguments, Submitted, DiagnosticId](RemoteRequestResult Result) {
 								auto &Completed = Samples[Index];
 								--Completed.Pending;
 								++Completed.Completed;
 								if (Result.Outcome.Status != RemoteRequestTerminalStatus::Success || Result.Results != Arguments) ++Completed.Errors;
-								Completed.Latencies.push_back(std::chrono::duration<double, std::milli>(Clock::now() - Submitted).count());
+								test_detail::WorkloadEndpointCounters EndCounters;
+								EndCounters.BeforeNs = test_detail::WorkloadTimestamp(Clock::now());
+								EndCounters.BeforeCpu = test_detail::CaptureWorkloadCpu();
+								const auto CompletedAt = Clock::now();
+								EndCounters.AfterCpu = test_detail::CaptureWorkloadCpu();
+								EndCounters.AfterNs = test_detail::WorkloadTimestamp(Clock::now());
+								const auto EndThread = test_detail::WorkloadNativeThread();
+								EndCounters.Sleep = AggregateSleeps.Snapshot(test_detail::WorkloadTimestamp(CompletedAt), EndThread);
+								Completed.Latencies.push_back(std::chrono::duration<double, std::milli>(CompletedAt - Submitted).count());
+								AggregatePeers[Index]->Remote.End(DiagnosticId, Tick, test_detail::WorkloadTimestamp(CompletedAt), EndThread,
+									static_cast<int>(Result.Outcome.Status), Result.Results == Arguments, EndCounters);
 							});
+						Diagnostic.Remote.Submitted(DiagnosticId, Sent.Accepted(), Tick, test_detail::WorkloadTimestamp(Clock::now()),
+							test_detail::WorkloadNativeThread());
 						if (Sent.Accepted()) ++Sample.Accepted;
 						else { --Sample.Pending; ++Sample.Errors; }
 						Sample.PendingHigh = std::max(Sample.PendingHigh, Sample.Pending);
@@ -317,10 +373,25 @@ void RunAggregateReliableGameplay(Engine &ServerRuntime, Engine &PrimaryRuntime,
 		auto Pending = [&]() { return std::any_of(Samples.begin(), Samples.end(), [](const Sample &Value) { return Value.Pending != 0; }); };
 		while (!Disconnected && (Pending() || !Converged() || Server.GetMetrics().JournalBacklogRecords != 0) && Clock::now() < Deadline) Step();
 		Check(!Pending() && Converged(), "aggregate accepted requests drain and all peers converge");
+		const auto AggregateEndAnchor = test_detail::WorkloadClockAnchor::Capture();
+		const bool AggregateDeadlineReached = Clock::now() >= Deadline;
+		AggregatePhaseActive = false;
 		const auto After = Server.GetMetrics();
 		const auto &Admission = After.ReliableAdmission;
+		const auto AggregateDrainMs = std::chrono::duration<double, std::milli>(Clock::now() - Ended).count();
+		const auto AggregateCase = AggregateCases[AggregatePhase];
+		const auto AggregateContext = " phase_index=" + std::to_string(AggregatePhase);
+		AggregateBeginAnchor.Print(std::cout, AggregateCase, AggregateProfile, "BEGIN", AggregateContext);
+		AggregateEndAnchor.Print(std::cout, AggregateCase, AggregateProfile, "END", AggregateContext);
+		AggregateOperations->Print(std::cout, AggregateCase, AggregateProfile, AggregatePhase);
+		for (const auto &Diagnostic : AggregatePeers) {
+			std::cout << "[Qualification:AggregatePeerEvidence] case=" << AggregateCase << " profile=" << AggregateProfile
+				<< Diagnostic->Context() << " configured=" << Diagnostic->Configured << " invalid=" << Diagnostic->Invalid << '\n';
+			Diagnostic->Remote.Print(std::cout, AggregateCase, AggregateProfile, Tick, AggregateEndAnchor.SteadyNs,
+				AggregateDeadlineReached, Diagnostic->Context());
+		}
 		std::cout << "[Qualification:AggregateBounds] overload=" << Overload << " duration_s=" << std::chrono::duration<double>(Ended - Started).count()
-			<< " drain_ms=" << std::chrono::duration<double, std::milli>(Clock::now() - Ended).count()
+			<< " drain_ms=" << AggregateDrainMs
 			<< " structural_reserved=" << Admission.ReservedBytes - Before.ReliableAdmission.ReservedBytes
 			<< " structural_accepted=" << Admission.AcceptedBytes - Before.ReliableAdmission.AcceptedBytes
 			<< " credit_deferrals=" << Admission.CreditDeferrals - Before.ReliableAdmission.CreditDeferrals
@@ -378,6 +449,7 @@ void RunAggregateReliableGameplay(Engine &ServerRuntime, Engine &PrimaryRuntime,
 		for (auto &Object : Pressure) Object->Destroy();
 		for (int Frame = 0; Frame < 120; ++Frame) Step();
 		if (Failures) break;
+		++AggregatePhase;
 	}
 	Receiver->SetRequestHandler(Function->GetNetworkObjectId(), {});
 	Receiver->SetEventHandler(Event->GetNetworkObjectId(), {});

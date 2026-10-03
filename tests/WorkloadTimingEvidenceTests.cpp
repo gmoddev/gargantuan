@@ -1,6 +1,7 @@
 #include "WorkloadTimingEvidence.hpp"
 #include "WorkloadActionEvidence.hpp"
 #include "WorkloadRemoteEvidence.hpp"
+#include "AggregateWorkloadEvidence.hpp"
 
 #include <iostream>
 #include <memory>
@@ -238,5 +239,123 @@ int main() {
 		"sampled zero CPU counters remain explicit bounds, not a claim of no physical execution");
 	Check(RemoteBoundText.str().size() < 2 * 1024 * 1024,
 		"maximum bounded Remote log remains below two MiB per case");
+	auto Aggregate = std::make_unique<AggregatePeerEvidence>();
+	static_assert(AggregatePeerEvidence::RemoteEvidence::Capacity == 208);
+	static_assert(WorkloadRemoteEvidence::Capacity == 1062);
+	Aggregate->Configure(0, 7, 1, 3);
+	Aggregate->Remote.Begin(1, true, false, 400, 100, 123, StartCounters);
+	Aggregate->Remote.End(1, 400, 100, 123, 0, true, StartCounters);
+	Aggregate->Remote.Submitted(1, true, 400, 100, 123); // Timestamp ties and inline completion.
+	Aggregate->Remote.Begin(2, true, false, 400, 120, 123);
+	Aggregate->Remote.Submitted(2, false, 400, 120, 123);
+	Aggregate->Remote.Begin(3, true, false, 401, 140, 123);
+	Aggregate->Remote.Submitted(3, true, 401, 140, 123);
+	std::ostringstream AggregateText;
+	Aggregate->Remote.Print(AggregateText, "aggregate-baseline", "FULL_RESERVATION", 410, 500, false, Aggregate->Context());
+	Check(!Aggregate->Invalid && !Aggregate->Remote.Invalid &&
+		AggregateText.str().find("phase_index=0 peer=7 slot=1 generation=3") != std::string::npos &&
+		AggregateText.str().find("id=1 recovery_probe=0 outcome=TERMINAL") != std::string::npos &&
+		AggregateText.str().find("id=2 recovery_probe=0 outcome=REJECTED") != std::string::npos &&
+		AggregateText.str().find("id=3 recovery_probe=0 outcome=MISSING_AT_CASE_END") != std::string::npos,
+		"aggregate ties, inline completion, rejection and missing callback retain explicit phase/peer generation identity");
+	Aggregate->Remote.End(1, 410, 500, 123, 0, true);
+	Check(Aggregate->Remote.Invalid && Aggregate->Remote.Records[0].EndNs == 100,
+		"aggregate duplicate terminal cannot overwrite the original clock point");
+	Aggregate->Configure(1, 7, 1, 3);
+	Check(!Aggregate->Invalid && Aggregate->Remote.Count == 0 && Aggregate->Phase == 1 &&
+		Aggregate->Context().find("phase_index=1") != std::string::npos, "new ordinal resets only diagnostic records after phase evidence was emitted");
+	Aggregate->Configure(1, 7, 1, 3);
+	Check(Aggregate->Invalid && Aggregate->Phase == 1, "duplicate phase cannot reuse a phase identity");
+	AggregatePeerEvidence WrongPhase;
+	WrongPhase.Configure(1, 0, 1, 1);
+	Check(WrongPhase.Invalid && !WrongPhase.Configured, "initial aggregate phase cannot skip baseline");
+	AggregatePeerEvidence WrongGeneration;
+	WrongGeneration.Configure(0, 1, 2, 3);
+	WrongGeneration.Configure(1, 1, 2, 4);
+	Check(WrongGeneration.Invalid && WrongGeneration.Generation == 3 && WrongGeneration.Phase == 0,
+		"generation change cannot relabel captured aggregate evidence");
+	Aggregate->Remote.Reset();
+	for (std::size_t Index = 0; Index < 208; ++Index) {
+		Aggregate->Remote.Begin(Index + 1, true, false, Index, Index * 10 + 1, 123);
+		Aggregate->Remote.Submitted(Index + 1, true, Index, Index * 10 + 1, 123);
+		Aggregate->Remote.End(Index + 1, Index, Index * 10 + 2, 123, 0, true);
+	}
+	Aggregate->Remote.Begin(209, true, false, 209, 2091, 123);
+	Aggregate->Remote.End(209, 209, 2092, 123, 0, true);
+	Aggregate->Remote.Submitted(209, true, 209, 2093, 123);
+	Check(Aggregate->Remote.Count == 208 && Aggregate->Remote.Overflow && !Aggregate->Remote.Invalid &&
+		Aggregate->Remote.Records[0].EndNs == 2, "aggregate208 overflow is explicit and preserves the complete earlier observations");
+	auto Operations = std::make_unique<AggregateOperationEvidence>();
+	AggregateStepOperations Operation;
+	Operation.Tick = 7; Operation.GapStartedNs = 90; Operation.StartedNs = 100; Operation.EndedNs = 200;
+	Operation.Spans[7][1] = {110, 150, 123, Before, Before, 1, 3};
+	Operations->Record(Operation, 149.999);
+	Check(Operations->ObservedSteps == 1 && Operations->Count == 0 && Operations->Maxima[7][1].EndNs == 150,
+		"short operation remains a phase maximum without inventing complete step coverage");
+	Operation.Tick = 8; Operation.Spans[7][1].StartNs = 150; Operation.Spans[7][1].EndNs = 150;
+	Operations->Record(Operation, 150);
+	Check(Operations->Count == 1 && Operations->Snapshots[0].Tick == 8 && Operations->MaximumTicks[7][1] == 7,
+		"selection uses existing150ms p95 diagnostic boundary and preserves timestamp ties plus matching maximum identity");
+	Operation.Tick = 9; Operation.Spans[7][1].StartNs = 99;
+	Operations->Record(Operation, 200);
+	Check(Operations->Invalid && Operations->MaximumTicks[7][1] == 7, "operation outside its step cannot impersonate a matching interval");
+	Operations->Reset();
+	Operation.Spans[7][1] = {110, 150, 123, {}, {}, 1, 3};
+	for (std::size_t Index = 0; Index < AggregateOperationEvidence::SnapshotCapacity + 1; ++Index) {
+		Operation.Tick = Index;
+		Operations->Record(Operation, 150);
+	}
+	Check(Operations->Count == 64 && Operations->Overflow && !Operations->Invalid && Operations->Snapshots[0].Tick == 0,
+		"sampled operation overflow cannot overwrite earlier intervals or alter the workload");
+	std::ostringstream OperationsText;
+	Operations->Print(OperationsText, "aggregate-baseline", "FULL_RESERVATION", 0);
+	Check(OperationsText.str().find("coverage=SAMPLED_NOT_COMPLETE_CAUSAL_PROOF") != std::string::npos &&
+		OperationsText.str().find("peer=7 side=client slot=1 generation=3 coverage=slow_step tick=0 subphase=engine start_ns=110 end_ns=150 native_tid=123") != std::string::npos &&
+		OperationsText.str().find("thread_cpu_ms=NOT_MEASURED process_cpu_ms=NOT_MEASURED") != std::string::npos,
+		"operation receipt retains exact sampled identity/clock bounds and explicit unavailable CPU without causal claims");
+	std::ostringstream OrdinalAnchor;
+	Anchor.Print(OrdinalAnchor, "aggregate-recovery", "FULL_RESERVATION", "END", " phase_index=2");
+	Check(OrdinalAnchor.str().find("case=aggregate-recovery profile=FULL_RESERVATION boundary=END phase_index=2 pid=") != std::string::npos,
+		"same-baseline Boolean phases are separated by actual ordinal and case identity");
+	// Deterministic conservative output budget: all numeric raw fields have at
+	// most20 digits. Additional slack covers mutually incompatible largest
+	// derived counter ranges, missing outcomes and optional unavailable values.
+	const auto MaximumNumber = std::numeric_limits<std::uint64_t>::max();
+	BoundedWorkloadRemoteEvidence<1> ExtremeRemote;
+	ExtremeRemote.Count = 1;
+	auto &ExtremeRecord = ExtremeRemote.Records[0];
+	ExtremeRecord.Id = ExtremeRecord.StartStep = ExtremeRecord.SubmittedStep = ExtremeRecord.EndStep = MaximumNumber;
+	ExtremeRecord.StartNs = ExtremeRecord.SubmittedNs = ExtremeRecord.EndNs = MaximumNumber;
+	ExtremeRecord.StartThread = ExtremeRecord.SubmittedThread = ExtremeRecord.EndThread = MaximumNumber;
+	ExtremeRecord.Rpc = ExtremeRecord.Decided = ExtremeRecord.Accepted = ExtremeRecord.Terminal = ExtremeRecord.PayloadMatched = true;
+	ExtremeRecord.StartCounters = ExtremeRecord.EndCounters = {
+		{MaximumNumber, MaximumNumber, true, true}, {MaximumNumber, MaximumNumber, true, true},
+		MaximumNumber, MaximumNumber, {MaximumNumber, MaximumNumber, MaximumNumber, MaximumNumber, true}};
+	std::ostringstream ExtremeRemoteText;
+	ExtremeRemote.Print(ExtremeRemoteText, "aggregate-recovery", "FULL_RESERVATION", MaximumNumber, MaximumNumber, true,
+		" phase_index=2 peer=31 slot=4294967295 generation=4294967295");
+	std::ostringstream ExtremeHeaderText;
+	ExtremeRemote.Count = 0;
+	ExtremeRemote.Print(ExtremeHeaderText, "aggregate-recovery", "FULL_RESERVATION", MaximumNumber, MaximumNumber, true,
+		" phase_index=2 peer=31 slot=4294967295 generation=4294967295");
+	std::ostringstream ExtremeOperationText;
+	AggregateOperationEvidence::PrintSpan(ExtremeOperationText, "aggregate-recovery", "FULL_RESERVATION",
+		"phase_maximum", 2, 32, MaximumNumber, 2,
+		{MaximumNumber, MaximumNumber, MaximumNumber, {MaximumNumber, MaximumNumber, false, false},
+		 {MaximumNumber, MaximumNumber, false, false}, 4294967295u, 4294967295u});
+	// Successful unchanged command offers48/peer to8 baseline peers,208/peer
+	// to32 overload peers,48/peer to8 recovery peers. All32 peer chronology
+	// headers are emitted in each phase, including peers with no requests.
+	// The extra64 header bytes cover capacity/count digits and validity flags.
+	// A maximum-label row per snapshot overcounts actual operation emission.
+	constexpr std::size_t CommandRequests = 8 * 48 + 32 * 208 + 8 * 48;
+	const auto OutputUpperBound = CommandRequests * (ExtremeRemoteText.str().size() - ExtremeHeaderText.str().size() + 200) +
+		3 * 32 * (ExtremeHeaderText.str().size() + 64) +
+		3 * (64 + 1) * 33 * 3 * (ExtremeOperationText.str().size() + 80) +
+		3 * 32 * 256 + 512 * 1024;
+	Check(CommandRequests == 7424 && OutputUpperBound < 32 * 1024 * 1024,
+		"complete unchanged aggregate command diagnostics fit original32MiB stream limit without enlarging reserve");
+	std::cout << "[Qualification:AggregateEvidenceBudget] rpc_records=" << CommandRequests
+		<< " stdout_upper_bytes=" << OutputUpperBound << " stream_limit_bytes=" << 32 * 1024 * 1024 << '\n';
 	return Failures == 0 ? 0 : 1;
 }

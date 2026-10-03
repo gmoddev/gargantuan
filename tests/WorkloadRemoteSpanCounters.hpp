@@ -74,7 +74,8 @@ struct WorkloadCounterRange { std::uint64_t Lower100ns = 0, Upper100ns = 0; };
 
 inline void PrintRemoteCounters(std::ostream &Output, std::string_view Case, std::string_view Profile,
 	std::uint64_t Id, bool Rpc, std::uint64_t StartNs, std::uint64_t EndNs, std::uint64_t StartThread,
-	std::uint64_t EndThread, bool Terminal, const WorkloadEndpointCounters &Start, const WorkloadEndpointCounters &End) {
+	std::uint64_t EndThread, bool Terminal, const WorkloadEndpointCounters &Start, const WorkloadEndpointCounters &End,
+	std::string_view Context = {}) {
 	const bool Boundaries = Terminal && StartThread && StartThread == EndThread && Start.BeforeNs &&
 		Start.BeforeNs <= StartNs && StartNs <= Start.AfterNs && Start.AfterNs <= End.BeforeNs &&
 		End.BeforeNs <= EndNs && EndNs <= End.AfterNs;
@@ -93,7 +94,7 @@ inline void PrintRemoteCounters(std::ostream &Output, std::string_view Case, std
 			(End.Sleep.RequestedNs == Start.Sleep.RequestedNs && End.Sleep.ActualNs == Start.Sleep.ActualNs &&
 			 End.Sleep.LastCompletedNs == Start.Sleep.LastCompletedNs) : End.Sleep.LastCompletedNs >= StartNs);
 	Output << "[Qualification:RemoteResourceSpan] case=" << Case << " profile=" << Profile << " kind=" << (Rpc ? "RPC" : "EVENT")
-		<< " id=" << Id << " start_ns=" << StartNs << " end_ns=" << EndNs << " start_tid=" << StartThread << " end_tid=" << EndThread
+		<< " id=" << Id << Context << " start_ns=" << StartNs << " end_ns=" << EndNs << " start_tid=" << StartThread << " end_tid=" << EndThread
 		<< " terminal=" << Terminal << " endpoint_order_valid=" << Boundaries
 		<< " start_sample_before_ns=" << Start.BeforeNs << " start_sample_after_ns=" << Start.AfterNs
 		<< " end_sample_before_ns=" << End.BeforeNs << " end_sample_after_ns=" << End.AfterNs;

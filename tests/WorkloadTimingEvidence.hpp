@@ -54,8 +54,10 @@ struct WorkloadClockAnchor {
 #endif
 		return Value;
 	}
-	void Print(std::ostream &Output, std::string_view Case, std::string_view Profile, std::string_view Boundary) const {
+	void Print(std::ostream &Output, std::string_view Case, std::string_view Profile, std::string_view Boundary,
+		std::string_view Context = {}) const {
 		Output << "[Qualification:ClockAnchor] case=" << Case << " profile=" << Profile << " boundary=" << Boundary
+			<< Context
 			<< " pid=" << Process << " native_tid=" << Thread << " native_valid=" << NativeValid
 			<< " steady_ns=" << SteadyNs << " qpc_before=" << QpcBefore << " qpc_after=" << QpcAfter
 			<< " qpc_frequency=" << QpcFrequency << '\n';

@@ -8,8 +8,9 @@ namespace gargantuan::test_detail {
 // Conservative product of existing 480 frames, minimum eight-tick interval,
 // maximum 16 RPCs plus one Event; plus two probes per second over 20 seconds.
 // This limits diagnostics only. It neither admits nor schedules Remote work.
-struct WorkloadRemoteEvidence {
-	static constexpr std::size_t Capacity = (480 / 8) * (16 + 1) + 2 * (20 + 1);
+template<std::size_t MaximumRecords>
+struct BoundedWorkloadRemoteEvidence {
+	static constexpr std::size_t Capacity = MaximumRecords;
 	struct Record {
 		std::uint64_t Id = 0, StartStep = 0, SubmittedStep = 0, EndStep = 0;
 		std::uint64_t StartNs = 0, SubmittedNs = 0, EndNs = 0;
@@ -68,24 +69,26 @@ struct WorkloadRemoteEvidence {
 		Value->EndCounters = Counters;
 	}
 	void Print(std::ostream &Output, std::string_view Case, std::string_view Profile,
-		std::uint64_t ObservedStep, std::uint64_t ObservedNs, bool Deadline) const {
+		std::uint64_t ObservedStep, std::uint64_t ObservedNs, bool Deadline, std::string_view Context = {}) const {
 		Output << "[Qualification:RemoteChronology] case=" << Case << " profile=" << Profile << " records=" << Count
-			<< " capacity=" << Capacity << " invalid=" << Invalid << " overflow=" << Overflow << '\n';
+			<< " capacity=" << Capacity << " invalid=" << Invalid << " overflow=" << Overflow << Context << '\n';
 		for (std::size_t Index = 0; Index < Count; ++Index) {
 			const auto &Value = Records[Index];
 			const auto Outcome = !Value.Decided ? "SUBMISSION_NOT_OBSERVED" : !Value.Accepted ? "REJECTED" :
 				Value.Terminal ? "TERMINAL" : Deadline ? "MISSING_AT_SERVICE_DEADLINE" : "MISSING_AT_CASE_END";
 			Output << "[Qualification:RemoteSpan] case=" << Case << " profile=" << Profile << " kind=" << (Value.Rpc ? "RPC" : "EVENT")
-				<< " id=" << Value.Id << " recovery_probe=" << Value.Recovery << " outcome=" << Outcome
+				<< " id=" << Value.Id << " recovery_probe=" << Value.Recovery << " outcome=" << Outcome << Context
 				<< " start_step=" << Value.StartStep << " start_ns=" << Value.StartNs << " start_tid=" << Value.StartThread
 				<< " submitted_step=" << Value.SubmittedStep << " submitted_ns=" << Value.SubmittedNs << " submitted_tid=" << Value.SubmittedThread
 				<< " accepted=" << Value.Accepted << " terminal=" << Value.Terminal << " end_step=" << Value.EndStep
 				<< " end_ns=" << Value.EndNs << " end_tid=" << Value.EndThread << " terminal_status=" << Value.TerminalStatus
 				<< " payload_matched=" << Value.PayloadMatched << " observed_step=" << ObservedStep << " observed_ns=" << ObservedNs << '\n';
 			PrintRemoteCounters(Output, Case, Profile, Value.Id, Value.Rpc, Value.StartNs, Value.EndNs,
-				Value.StartThread, Value.EndThread, Value.Terminal, Value.StartCounters, Value.EndCounters);
+				Value.StartThread, Value.EndThread, Value.Terminal, Value.StartCounters, Value.EndCounters, Context);
 		}
 	}
 };
+
+using WorkloadRemoteEvidence = BoundedWorkloadRemoteEvidence<(480 / 8) * (16 + 1) + 2 * (20 + 1)>;
 
 } // namespace gargantuan::test_detail
