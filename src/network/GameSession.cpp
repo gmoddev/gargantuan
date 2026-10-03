@@ -1349,7 +1349,7 @@ namespace gargantuan::network {
 			const detail::PooledReliableServiceFeedback::Result &Result, std::uint64_t Now) {
 			if (const auto *Sink = detail::ActivePooledService; Sink && Sink->Record)
 				Sink->Record(Sink->Context, detail::PooledServiceRecord{
-					.Connection = Connection, .SimulationTick = SimulationTick, .NowMicroseconds = Now,
+					.Connection = Connection, .SimulationTick = CurrentTick, .NowMicroseconds = Now,
 					.DebtToken = ByteAdmission->DebtToken(Connection), .DebtBytes = ByteAdmission->Debt(Connection),
 					.StructuralJournalLag = Replication->GetJournalLag(Connection),
 					.Accepted = Accepted, .Feedback = Sample, .Result = Result,
