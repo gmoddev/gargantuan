@@ -832,6 +832,9 @@ if(BUILD_TESTING)
 			add_test(NAME gargantuan_physical_game_session_farm_logical_lifecycle
 				COMMAND "${GARGANTUAN_PWSH_EXECUTABLE}" -NoProfile -File
 				"${CMAKE_CURRENT_SOURCE_DIR}/tests/PhysicalGameSessionFarmLifecycleTests.ps1")
+			add_test(NAME gargantuan_physical_game_session_farm_f1_evidence
+				COMMAND "${GARGANTUAN_PWSH_EXECUTABLE}" -NoProfile -File
+				"${CMAKE_CURRENT_SOURCE_DIR}/tests/PhysicalGameSessionFarmF1Tests.ps1")
 			add_test(NAME gargantuan_physical_game_session_farm_remote_ownership
 				COMMAND "${GARGANTUAN_PWSH_EXECUTABLE}" -NoProfile -File
 				"${CMAKE_CURRENT_SOURCE_DIR}/tests/PhysicalGameSessionFarmRemoteOwnershipTests.ps1")
