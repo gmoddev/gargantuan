@@ -15,6 +15,7 @@ from pathlib import Path
 import re
 import secrets
 import socket
+import stat
 import subprocess
 import sys
 import time
@@ -47,11 +48,83 @@ def ReadJson(File):
 
 
 def Prepare(Root):
-    Root = Path(Root).resolve()
+    Root = UnlinkedPath(Root)
     if Root.exists() or not Root.parent.is_dir():
         raise ValueError("[Qualification:FarmOuter] stage root already exists")
+    ParentIdentity = Root.parent.stat()
     Root.mkdir(mode=0o700)
+    UnlinkedPath(Root)
+    CurrentParent = Root.parent.stat()
+    if (ParentIdentity.st_dev, ParentIdentity.st_ino) != (CurrentParent.st_dev, CurrentParent.st_ino):
+        raise ValueError("[Qualification:FarmOuter] preparation parent changed")
     Harden(Root)
+    UnlinkedPath(Root)
+
+
+def UnlinkedPath(Value):
+    if not isinstance(Value, (str, Path)) or not 1 <= len(str(Value)) <= 512:
+        raise ValueError("[Qualification:FarmOuter] invalid preparation path")
+    Root = Path(Value)
+    if not Root.is_absolute() or str(Root).startswith("\\\\") or ".." in Root.parts:
+        raise ValueError("[Qualification:FarmOuter] preparation path is not local and absolute")
+    for Current in (Root, *Root.parents):
+        try:
+            Attributes = Current.lstat()
+        except FileNotFoundError:
+            continue
+        if stat.S_ISLNK(Attributes.st_mode) or \
+                getattr(Attributes, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT:
+            raise ValueError("[Qualification:FarmOuter] preparation reparse path is forbidden")
+    return Root.resolve()
+
+
+def PrepareCapture(Root, IndexPath):
+    """Provision only the capture root named by the verified one-use role ticket."""
+    Root = UnlinkedPath(Root).resolve(strict=True)
+    if UnlinkedPath(IndexPath) != Root / "stage-index.json":
+        raise ValueError("[Qualification:FarmOuter] capture preparation index escaped its stage")
+    Index = Verify(Root, IndexPath)
+    Required = {"ticket.json", "farm-config.json", "capture-config.json", "farm_campaign_runner.py",
+                "farm_capture_campaign.py", "farm_lifecycle.py", "private_ticket_acl.py",
+                "dependency.py", "upstream.lock.json", "farm_capture_directions.py"}
+    if not Required <= {Entry["Name"] for Entry in Index["Files"]}:
+        raise ValueError("[Qualification:FarmOuter] capture preparation stage is incomplete")
+    Ticket = ReadJson(Root / "ticket.json")
+    # Load only verified stage modules. VerifyRole binds the pinned configs,
+    # identity, manifest, workflow and fresh actual-role preflight.
+    Modules = []
+    for Name in ("farm_campaign_runner", "farm_capture_campaign"):
+        Spec = importlib.util.spec_from_file_location("prepared_" + Name, Root / (Name + ".py"))
+        Module = importlib.util.module_from_spec(Spec)
+        Spec.loader.exec_module(Module)
+        Modules.append(Module)
+    Campaign, Capture = Modules
+    for Name, BaseName in (("FarmConfigPath", "farm-config.json"),
+                           ("CaptureConfigPath", "capture-config.json"),
+                           ("CaptureControllerPath", "farm_capture_campaign.py")):
+        if UnlinkedPath(Ticket.get(Name, "")) != Root / BaseName:
+            raise ValueError("[Qualification:FarmOuter] capture preparation escaped its stage")
+    _, Farm, _ = Campaign.VerifyRole(Ticket, Ticket.get("Role"))
+    Config = Capture.ReadConfig(Root / "capture-config.json", CaptureRootMustExist=False)
+    CaptureRoot = Config["CaptureRoot"]
+    Protected = [Root, *[UnlinkedPath(Farm[Name]) for Name in
+                         ("EvidenceRoot", "PackageRoot", "RunRegistryRoot")],
+                 UnlinkedPath(Ticket["JournalRoot"]), UnlinkedPath(Ticket["ResultPath"])]
+    if "NodeStagePath" in Ticket:
+        Protected.append(UnlinkedPath(Ticket["NodeStagePath"]).parent)
+    for Boundary in Protected:
+        if CaptureRoot == Boundary or CaptureRoot in Boundary.parents or Boundary in CaptureRoot.parents:
+            raise ValueError("[Qualification:FarmOuter] capture preparation overlaps a protected root")
+    if CaptureRoot.exists():
+        raise ValueError("[Qualification:FarmOuter] capture preparation root already exists")
+    Prepare(CaptureRoot)
+    Verify(Root, IndexPath)
+    # Exercise the exact consumer before any service, capture or role is started.
+    Configured = Capture.Configured(Root / "capture-config.json")
+    if any(Configured[Name] != Config[Name] for Name in
+           ("CaptureRoot", "RoleEvidenceRoot", "RunId", "CoordinatorRunId", "Role")):
+        raise ValueError("[Qualification:FarmOuter] capture preparation config changed")
+    print("[Qualification:FarmOuter] CAPTURE_ROOT_PREPARED_CONFIGURED_ONLY", flush=True)
 
 
 def NewNodeToken(Root):
@@ -262,7 +335,7 @@ def Run(Root, IndexPath, ConfigPath, Action):
 
 def Main():
     Parser = argparse.ArgumentParser(description=__doc__)
-    Parser.add_argument("Action", choices=("prepare", "new-node-token", "retire-node-token",
+    Parser.add_argument("Action", choices=("prepare", "prepare-capture", "new-node-token", "retire-node-token",
                                            "retire-node-tls",
                                            "verify", "digest", "probe", "abort", "host", "role"))
     Parser.add_argument("Root")
@@ -271,6 +344,8 @@ def Main():
     Args = Parser.parse_args()
     if Args.Action == "prepare" and Args.IndexOrPort is None:
         Prepare(Args.Root)
+    elif Args.Action == "prepare-capture" and Args.IndexOrPort is not None and Args.ConfigOrRunId is None:
+        PrepareCapture(Args.Root, Args.IndexOrPort)
     elif Args.Action == "new-node-token" and Args.IndexOrPort is None:
         NewNodeToken(Args.Root)
     elif Args.Action == "retire-node-token" and Args.IndexOrPort is None:

@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path
 import re
+import stat
 import subprocess
 import sys
 import time
@@ -78,8 +79,12 @@ def LocalPath(Value, MustExist=False):
         raise ValueError("[Qualification:FarmCapture] path must be local and absolute")
     Current = File
     while True:
-        if Current.exists() and (Current.is_symlink() or
-                                 (hasattr(Current, "is_junction") and Current.is_junction())):
+        try:
+            Attributes = Current.lstat()
+        except FileNotFoundError:
+            Attributes = None
+        if Attributes is not None and (stat.S_ISLNK(Attributes.st_mode) or
+                getattr(Attributes, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT):
             raise ValueError("[Qualification:FarmCapture] reparse path is forbidden")
         if Current == Current.parent:
             break
@@ -96,7 +101,7 @@ def PinnedFile(Value, Expected, Name):
     return File
 
 
-def Configured(ConfigPath):
+def ReadConfig(ConfigPath, CaptureRootMustExist=True):
     Config = ReadJson(ConfigPath, 8192)
     if not isinstance(Config, dict) or Config.get("Format") != "GargantuanFarm32CaptureCampaign" or \
             type(Config.get("Version")) is not int or Config["Version"] != 1 or \
@@ -119,9 +124,11 @@ def Configured(ConfigPath):
     for Name, ExpectedName in RequiredNames.items():
         if Name in Config and Config[Name].name.lower() != ExpectedName.lower():
             raise ValueError("[Qualification:FarmCapture] unexpected fixed capture executable")
-    Config["CaptureRoot"] = LocalPath(Config["CaptureRoot"], MustExist=True)
+    Config["CaptureRoot"] = LocalPath(Config["CaptureRoot"], MustExist=CaptureRootMustExist)
     Config["RoleEvidenceRoot"] = LocalPath(Config["RoleEvidenceRoot"])
-    if not Config["CaptureRoot"].is_dir() or not Config["RoleEvidenceRoot"].parent.is_dir() or \
+    if ((CaptureRootMustExist and not Config["CaptureRoot"].is_dir()) or
+            not Config["CaptureRoot"].parent.is_dir() or
+            not Config["RoleEvidenceRoot"].parent.is_dir()) or \
             Config["CaptureRoot"] == Config["RoleEvidenceRoot"] or \
             Config["CaptureRoot"] in Config["RoleEvidenceRoot"].parents or \
             Config["RoleEvidenceRoot"] in Config["CaptureRoot"].parents:
@@ -130,6 +137,11 @@ def Configured(ConfigPath):
     if Config["CaptureDirectory"].exists():
         raise ValueError("[Qualification:FarmCapture] capture run directory already exists")
     return Config
+
+
+def Configured(ConfigPath):
+    """Strict, read-only validation; capture starts only in RunRole."""
+    return ReadConfig(ConfigPath)
 
 
 def FixedRun(Command, Timeout, Runner=subprocess.run):
@@ -403,6 +415,8 @@ def Main():
     Sub = Parser.add_subparsers(dest="Operation", required=True)
     Role = Sub.add_parser("role")
     Role.add_argument("Config")
+    Validate = Sub.add_parser("validate")
+    Validate.add_argument("Config")
     Bind = Sub.add_parser("bind")
     for Name in ("RunId", "CoordinatorRunId", "CoordinatorResult", "ServerIndex", "ClientIndex",
                  "ServerCapture", "ClientCapture", "Receipt"):
@@ -410,6 +424,10 @@ def Main():
     Args = Parser.parse_args()
     if Args.Operation == "role":
         return RunRole(Args.Config)
+    if Args.Operation == "validate":
+        Configured(Args.Config)
+        print("[Qualification:FarmCapture] CONFIGURED_ONLY", flush=True)
+        return 0
     BindReceipt(Args.RunId, Args.CoordinatorRunId, Args.CoordinatorResult,
                 Args.ServerIndex, Args.ClientIndex, Args.ServerCapture, Args.ClientCapture, Args.Receipt)
     return 0

@@ -46,6 +46,8 @@ class MockTransport:
             Endpoint.Prepare(Arguments[0])
         elif Action == "verify":
             Endpoint.Verify(*Arguments)
+        elif Action == "prepare-capture":
+            Endpoint.PrepareCapture(*Arguments)
         elif Action == "abort":
             Endpoint.Abort(*Arguments)
         elif Action == "retire-node-token":
@@ -158,6 +160,132 @@ class OuterCampaignTests(unittest.TestCase):
         })
         for Role in ("SERVER", "CLIENT"):
             Path(self.Fixture.Spec["Roles"][Role]["StageRoot"]).rmdir()
+            Path(self.Fixture.Spec["Roles"][Role]["CaptureRoot"]).rmdir()
+
+    def test_stage_provisions_missing_capture_roots_with_real_consumer_validation(self):
+        for Role in ("SERVER", "CLIENT"):
+            Config = self.Fixture.Private / Role / "capture-config.json"
+            with self.assertRaises(FileNotFoundError):
+                Capture.Configured(Config)
+        # ACL confinement may run its fixed OS utility, but no capture or native
+        # workload may start while staging the real consumer configs.
+        with mock.patch.object(Capture, "RunRole", side_effect=AssertionError("capture started")), \
+                mock.patch.object(Capture.FarmCaptureController, "Start", side_effect=AssertionError("capture started")):
+            Roots = Outer.Stage(self.Fixture.Private, self.Fixture.SpecFile,
+                                r"C:\Python312\python.exe", r"C:\Sandbox\farm_outer_endpoint.py",
+                                MockTransport())
+        for Role, Directory in Roots.items():
+            Config = Capture.Configured(Path(Directory) / "capture-config.json")
+            self.assertTrue(Config["CaptureRoot"].is_dir())
+            self.assertFalse(Config["CaptureDirectory"].exists())
+            self.assertFalse(Config["RoleEvidenceRoot"].exists())
+            # Run the actual isolated staged CLI, not a mocked Configured call.
+            Result = subprocess.run([sys.executable, "-I", "-B", str(Path(Directory) /
+                                    "farm_capture_campaign.py"), "validate",
+                                     str(Path(Directory) / "capture-config.json")],
+                                    capture_output=True, text=True, timeout=10)
+            self.assertEqual(Result.returncode, 0, Result.stderr)
+            self.assertIn("CONFIGURED_ONLY", Result.stdout)
+            self.assertFalse(Config["CaptureDirectory"].exists())
+            with self.assertRaisesRegex(ValueError, "already exists"):
+                Endpoint.PrepareCapture(Directory, Path(Directory) / "stage-index.json")
+
+    def test_capture_provisioning_rejects_missing_parent_and_protected_overlap(self):
+        # Both are invalid sealed inputs; reject before any capture root exists.
+        for Variant in ("missing-parent", "overlap", "private-overlap"):
+            with self.subTest(Variant=Variant):
+                Role = self.Fixture.Spec["Roles"]["SERVER"]
+                OriginalRoot = Path(Role["CaptureRoot"])
+                CaptureFile = self.Fixture.Private / "SERVER" / "capture-config.json"
+                CaptureConfig = json.loads(CaptureFile.read_text())
+                CaptureConfig["CaptureRoot"] = (str(self.Fixture.Root / "absent-parent" / "capture")
+                    if Variant == "missing-parent" else Role["PackageRoot"] if Variant == "overlap"
+                    else str(self.Fixture.Private / "capture"))
+                Role["CaptureRoot"] = CaptureConfig["CaptureRoot"]
+                self.Fixture.SpecFile.write_text(json.dumps(self.Fixture.Spec))
+                CaptureFile.write_text(json.dumps(CaptureConfig))
+                TicketFile = self.Fixture.Private / "SERVER" / "ticket.json"
+                Ticket = json.loads(TicketFile.read_text())
+                Ticket["CaptureConfigSha256"] = Outer.Digest(CaptureFile)
+                TicketFile.write_text(json.dumps(Ticket))
+                PlanFile = self.Fixture.Private / "copy-plan.json"
+                Plan = json.loads(PlanFile.read_text())
+                for Row in Plan["Files"]:
+                    if Row["Source"] in (str(CaptureFile), str(TicketFile)):
+                        Row["Sha256"] = Outer.Digest(Row["Source"])
+                PlanFile.write_text(json.dumps(Plan))
+                with self.assertRaises(ValueError):
+                    Outer.Stage(self.Fixture.Private, self.Fixture.SpecFile,
+                                r"C:\Python312\python.exe", r"C:\Sandbox\farm_outer_endpoint.py",
+                                MockTransport())
+                self.assertFalse(OriginalRoot.exists())
+                # The failed Stage consumes its roots; use a fresh fixture for
+                # the next separately sealed negative, never reuse that Stage.
+                if Variant != "private-overlap":
+                    self.Fixture.tearDown()
+                    self.setUp()
+
+    def test_capture_preparation_rejects_changed_role_identity_and_stage_path(self):
+        Roots = Outer.Stage(self.Fixture.Private, self.Fixture.SpecFile,
+                            r"C:\Python312\python.exe", r"C:\Sandbox\farm_outer_endpoint.py",
+                            MockTransport())
+        Stage = Path(Roots["CLIENT"])
+        CaptureRoot = Path(self.Fixture.Spec["Roles"]["CLIENT"]["CaptureRoot"])
+        CaptureRoot.rmdir()
+        ConfigFile = Stage / "capture-config.json"
+        TicketFile = Stage / "ticket.json"
+        IndexFile = Stage / "stage-index.json"
+        Original = {File: File.read_bytes() for File in (ConfigFile, TicketFile, IndexFile)}
+        for Variant in ("role", "run", "config-path", "pin", "index-path", "unlisted-import"):
+            with self.subTest(Variant=Variant):
+                for File, Bytes in Original.items():
+                    File.write_bytes(Bytes)
+                Config = json.loads(ConfigFile.read_text())
+                Ticket = json.loads(TicketFile.read_text())
+                if Variant == "role":
+                    Config["Role"] = "SERVER"
+                elif Variant == "run":
+                    Config["RunId"] = self.Fixture.Identity["CoordinatorRunId"]
+                elif Variant == "config-path":
+                    Ticket["CaptureConfigPath"] = str(self.Fixture.Private / "CLIENT" / "capture-config.json")
+                elif Variant == "pin":
+                    Config["DumpcapSha256"] = "0" * 64
+                ConfigFile.write_text(json.dumps(Config))
+                Ticket["CaptureConfigSha256"] = Outer.Digest(ConfigFile)
+                TicketFile.write_text(json.dumps(Ticket))
+                Index = json.loads(IndexFile.read_text())
+                for Entry in Index["Files"]:
+                    if Entry["Name"] in (ConfigFile.name, TicketFile.name):
+                        Entry["Sha256"] = Outer.Digest(Stage / Entry["Name"])
+                if Variant == "unlisted-import":
+                    Index["Files"] = [Entry for Entry in Index["Files"]
+                                      if Entry["Name"] != "farm_capture_directions.py"]
+                IndexFile.write_text(json.dumps(Index))
+                with self.assertRaises(ValueError):
+                    Endpoint.PrepareCapture(Stage, IndexFile if Variant != "index-path" else
+                                            self.Fixture.Private / "client-stage-index.json")
+                self.assertFalse(CaptureRoot.exists())
+
+    def test_capture_preparation_rejects_real_reparse_root_before_any_child(self):
+        Roots = Outer.Stage(self.Fixture.Private, self.Fixture.SpecFile,
+                            r"C:\Python312\python.exe", r"C:\Sandbox\farm_outer_endpoint.py",
+                            MockTransport())
+        Stage = Path(Roots["CLIENT"])
+        CaptureRoot = Path(self.Fixture.Spec["Roles"]["CLIENT"]["CaptureRoot"])
+        CaptureRoot.rmdir()
+        Target = self.Fixture.Root / "redirect-target"
+        Target.mkdir()
+        if Endpoint.os.name == "nt":
+            Result = subprocess.run(["cmd.exe", "/d", "/c", "mklink", "/J", str(CaptureRoot), str(Target)],
+                                    capture_output=True, text=True, timeout=10,
+                                    creationflags=subprocess.CREATE_NO_WINDOW)
+            self.assertEqual(Result.returncode, 0, Result.stderr)
+        else:
+            CaptureRoot.symlink_to(Target, target_is_directory=True)
+        with self.assertRaisesRegex(ValueError, "reparse"):
+            Endpoint.PrepareCapture(Stage, Stage / "stage-index.json")
+        self.assertEqual(list(Target.iterdir()), [])
+        CaptureRoot.rmdir() if Endpoint.os.name == "nt" else CaptureRoot.unlink()
 
     def test_recovery_manifest_profile_is_explicit_and_bounded(self):
         self.assertEqual((18001, 19001,

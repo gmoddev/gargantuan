@@ -241,7 +241,17 @@ manifest bytes for the client, performs fresh role-local inventory (including
 the 8 GiB client free-memory floor), and seals `farm_ticket_staging.py`'s fixed
 copy plan. `stage` copies only those planned files plus the pinned coordinator
 runtime into private endpoint roots, verifies every copied member locally at
-each endpoint, and rechecks the worker Python/helper hash pins. The worker owns
+each endpoint, and rechecks the worker Python/helper hash pins. It then uses the
+fixed `prepare-capture` endpoint operation to create only each sealed role's
+fresh CaptureRoot under that endpoint's identity. The parent must already exist;
+stale roots, reparse ancestry and overlap with the stage, package, private or
+role-owned outputs are rejected. The one-use ticket, exact config pins and fresh
+role preflight bind this preparation. Actual capture `Configured` validation
+passes before any role launches; `farm_capture_campaign.py validate CONFIG`
+exposes the same read-only check. Staging does not create CaptureRoot/RunId or
+RoleEvidenceRoot: the capture controller and native farm respectively retain
+those ownership boundaries. No capture, probe, service or installed config is
+started or replaced by preparation. The worker owns
 the normal-LAN coordinator listener on `192.168.0.108:39451`, while the client
 connects outbound; a nonce-bound control-only socket probe and the same-run
 `LISTENING_UNQUALIFIED` marker precede the two role launches. The fixed runner

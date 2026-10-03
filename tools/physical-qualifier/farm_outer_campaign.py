@@ -591,6 +591,28 @@ def Stage(PrivateRoot, SpecPath, WorkerPython, WorkerHelper, TransportInstance=N
             shutil.copyfile(Index, Path(Destination))
             from farm_outer_endpoint import Verify
             Verify(Roots[Role], Destination)
+    # CaptureRoot is a fresh parent owned by staging; the capture controller
+    # owns its RunId child and the native farm owns RoleEvidenceRoot later.
+    for Role in Roots:
+        CaptureRoot = Tickets.WinPath(Spec["Roles"][Role]["CaptureRoot"], "capture root")
+        CaptureConfig = ReadJson(PrivateRoot / Role / "capture-config.json")
+        if (CaptureConfig.get("RunId") != Identity["RunId"] or
+                CaptureConfig.get("CoordinatorRunId") != Identity["CoordinatorRunId"] or
+                CaptureConfig.get("Role") != Role or
+                Tickets.WinPath(CaptureConfig.get("CaptureRoot"), "sealed capture root") != CaptureRoot or
+                Tickets.WinPath(CaptureConfig.get("RoleEvidenceRoot"), "sealed role root") !=
+                Tickets.WinPath(Spec["Roles"][Role]["EvidenceRoot"], "role root")):
+            raise ValueError("[Qualification:FarmOuter] capture preparation spec/config mismatch")
+        PrivateBoundary = Tickets.WinPath(str(PrivateRoot), "private root")
+        if Tickets.Contained(CaptureRoot, PrivateBoundary) or Tickets.Contained(PrivateBoundary, CaptureRoot):
+            raise ValueError("[Qualification:FarmOuter] capture preparation overlaps private root")
+    for Role in Roots:
+        Index = str(PureWindowsPath(Roots[Role]) / "stage-index.json")
+        if Role == "SERVER":
+            TransportInstance.Remote("prepare-capture", RemoteText(Roots[Role]), RemoteText(Index))
+        else:
+            from farm_outer_endpoint import PrepareCapture
+            PrepareCapture(Roots[Role], Index)
     return Roots
 
 

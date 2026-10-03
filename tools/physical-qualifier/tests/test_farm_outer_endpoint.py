@@ -6,6 +6,7 @@ import json
 from contextlib import redirect_stdout
 from pathlib import Path
 import sys
+import subprocess
 import tempfile
 import threading
 import time
@@ -86,6 +87,26 @@ class FarmOuterEndpointTests(unittest.TestCase):
             self.Root.chmod(0o755)
             with self.assertRaises(ValueError):
                 Endpoint.Verify(self.Root, self.Index)
+
+    def test_prepare_requires_existing_parent_and_rejects_reparse_ancestry(self):
+        Base = Path(self.Temporary.name).resolve(strict=True)
+        with self.assertRaisesRegex(ValueError, "already exists"):
+            Endpoint.Prepare(Base / "absent-parent" / "child")
+        self.assertFalse((Base / "absent-parent").exists())
+        Target = Base / "target"
+        Target.mkdir()
+        Link = Base / "redirect"
+        if Endpoint.os.name == "nt":
+            Result = subprocess.run(["cmd.exe", "/d", "/c", "mklink", "/J", str(Link), str(Target)],
+                                    capture_output=True, text=True, timeout=10,
+                                    creationflags=subprocess.CREATE_NO_WINDOW)
+            self.assertEqual(Result.returncode, 0, Result.stderr)
+        else:
+            Link.symlink_to(Target, target_is_directory=True)
+        with self.assertRaisesRegex(ValueError, "reparse"):
+            Endpoint.Prepare(Link / "child")
+        self.assertFalse((Target / "child").exists())
+        Link.rmdir() if Endpoint.os.name == "nt" else Link.unlink()
 
     def test_one_run_node_token_is_private_unique_and_retired(self):
         RunRoot = Path(self.Temporary.name) / self.RunId
