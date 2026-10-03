@@ -281,10 +281,12 @@ by this offline analysis path; its contents are not evidence of analyzer custody
 
 ## New F1 candidate source provenance
 
-The historical `make_f1_source_archive.py output.zip`, `--verify-pinned`, and
-`--verify-tree` modes retain the original 31-file archive and committed legacy
-manifest. They must not be used to claim coverage of a newer native execution
-candidate. The explicit candidate modes preserve historical pins and outputs:
+The `make_f1_source_archive.py output.zip`, `--verify-pinned`, and `--verify-tree`
+modes select the format in the pinned manifest. Prefix those arguments with
+`--legacy` to reproduce or verify the historical 31-file ce4733 archive using
+`phase1-f1-ce4733-source-manifest.json`. That historical inventory cannot claim
+coverage of newer native execution. Explicit candidate modes accept an
+independently selected revision without changing either manifest:
 
 ```text
 python tools/physical-qualifier/make_f1_source_archive.py --candidate <full-qualified-commit> <new-directory>/f1-native-source.zip

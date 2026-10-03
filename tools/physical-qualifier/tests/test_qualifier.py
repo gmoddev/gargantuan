@@ -218,6 +218,7 @@ class QualificationTests(unittest.TestCase):
                                         "GnsPin": Q.GNS_PIN, "Contract": "F1",
                                         "ProbeSHA256": Q.PHASE1_PROBE_SHA,
                                         "SourceArchive": Q.PHASE1_SOURCE_ARCHIVE,
+                                        "SourceArchiveFormat": Q.PHASE1_SOURCE_FORMAT,
                                         "NativeDependenciesSha256": Q.PHASE1_NATIVE_DEPENDENCIES,
                                         "RuntimeSha256": RuntimeHashes}))
         (self.Root / Q.PHASE1_SOURCE_ARCHIVE).write_bytes(b"test source archive")
@@ -234,7 +235,7 @@ class QualificationTests(unittest.TestCase):
                 if PathValue.name in Q.PHASE1_NATIVE_DEPENDENCIES:
                     return Q.PHASE1_NATIVE_DEPENDENCIES[PathValue.name]
                 return Q.PHASE1_PROBE_SHA
-            with mock.patch.object(Q, "Digest", side_effect=TestDigest):
+            with mock.patch.object(Q, "Digest", side_effect=TestDigest), mock.patch.object(Q, "VerifyCandidateArchive"):
                 Q.LocalRun(Client, Log).Check()
                 OriginalCapture = list(Client["CaptureCommand"])
                 for Buffer in ([], ["-B", "1"], ["-B", "64", "-B", "64"]):

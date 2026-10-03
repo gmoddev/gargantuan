@@ -11,6 +11,7 @@ Tool = Path(__file__).parents[1]
 sys.path.insert(0, str(Tool))
 import f1_candidate_source as S
 import qualifier as Q
+import make_f1_source_archive as Generator
 
 
 class CandidateSourceTests(unittest.TestCase):
@@ -63,6 +64,20 @@ class CandidateSourceTests(unittest.TestCase):
         for Value in ("HEAD", "--all", "a" * 39):
             with self.assertRaises(ValueError):
                 S.ReadRevision(self.Root, Value)
+
+    def test_pinned_cli_dispatches_candidate_without_changing_legacy_receipt(self):
+        Output = Path(self.Temp.name) / "pinned.zip"
+        Manifest = {"BaseHead": self.Head, "SourceArchiveFormat": S.FORMAT}
+        Script = str(self.Root / "tools/physical-qualifier/make_f1_source_archive.py")
+        with mock.patch.object(Generator, "__file__", Script), mock.patch.object(Generator, "PinnedManifest", return_value=Manifest):
+            for Arguments in ([str(Output)], ["--verify-pinned", str(Output)],
+                              ["--verify-tree", str(Output), str(self.Root)]):
+                with mock.patch.object(sys, "argv", [Script, *Arguments]):
+                    Generator.Main()
+        self.assertEqual(Output.read_bytes(), self.Archive.read_bytes())
+        Legacy = Generator.PinnedManifest(True)
+        self.assertEqual("ce4733de8d68086667bc8fe5138bcc743f21c54e", Legacy["BaseHead"])
+        self.assertEqual("18AF89DAEEF3D5DD8E1AC6ED7089EDBEF278990AA211CBB4E54BCF3555D846FB", Legacy["OverlayArchiveSha256"])
 
     def test_extra_omitted_and_changed_archive_files_reject(self):
         for Transform in (lambda E: E.update({"extra.txt": b"extra"}),

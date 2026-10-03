@@ -44,9 +44,12 @@ NATIVE_SOURCE_PATHS = (
 )
 
 
-def PinnedRevision() -> str:
-    Manifest = json.loads((Path(__file__).resolve().parent /
-                           "phase1-f1-source-manifest.json").read_text(encoding="utf-8"))
+def PinnedManifest(Legacy=False):
+    Name = "phase1-f1-ce4733-source-manifest.json" if Legacy else "phase1-f1-source-manifest.json"
+    return json.loads((Path(__file__).resolve().parent / Name).read_text(encoding="utf-8"))
+
+
+def PinnedRevision(Manifest) -> str:
     Revision = Manifest.get("BaseHead")
     if not isinstance(Revision, str) or not re.fullmatch(r"[0-9a-f]{40}", Revision):
         raise SystemExit("[Qualification:Source] invalid pinned F1 source revision")
@@ -71,7 +74,27 @@ def Main() -> None:
                         if Mode == "--verify-candidate-tree" else VerifyPinned(Root, ArchivePath, Expected))
             print("[Qualification:Source] candidate_verified=" + str(len(Manifest["Files"])))
         return
-    SourceRevision = PinnedRevision()
+    Legacy = len(sys.argv) >= 2 and sys.argv[1] == "--legacy"
+    if Legacy:
+        del sys.argv[1]
+    Manifest = PinnedManifest(Legacy)
+    SourceRevision = PinnedRevision(Manifest)
+    Format = Manifest.get("SourceArchiveFormat", "F1_LEGACY_31_V1")
+    if Format == "F1_OWNED_TREE_V2":
+        from f1_candidate_source import Create, VerifyPinned, VerifyTree
+        if len(sys.argv) == 3 and sys.argv[1] == "--verify-pinned":
+            Verified = VerifyPinned(Root, Path(sys.argv[2]).resolve(), SourceRevision)
+            print("[Qualification:Source] pinned_verified=" + str(len(Verified["Files"])))
+        elif len(sys.argv) == 4 and sys.argv[1] == "--verify-tree":
+            Verified = VerifyTree(Path(sys.argv[3]).resolve(), Path(sys.argv[2]).resolve(), SourceRevision)
+            print("[Qualification:Source] verified=" + str(len(Verified["Files"])))
+        elif len(sys.argv) == 2 and not sys.argv[1].startswith("--"):
+            print("[Qualification:Source] sha256=" + Create(Root, SourceRevision, Path(sys.argv[1]).resolve()))
+        else:
+            raise SystemExit("invalid pinned candidate archive command")
+        return
+    if Format != "F1_LEGACY_31_V1":
+        raise SystemExit("unsupported pinned F1 archive format")
     if len(sys.argv) == 3 and sys.argv[1] == "--verify-pinned":
         with zipfile.ZipFile(Path(sys.argv[2]).resolve()) as Archive:
             if Archive.namelist() != sorted(NATIVE_SOURCE_PATHS):
