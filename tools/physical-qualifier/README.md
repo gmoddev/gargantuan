@@ -1,5 +1,16 @@
 # Gargantuan physical qualification adapter
 
+Current deployment provenance is recorded in the
+[active F1 source manifest](phase1-f1-source-manifest.json) and the
+[physical receipt](../../devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md).
+The funded-ACK candidate requires a fresh four-client qualification before the
+Local/Node provider matrices. Its deployment includes five pinned native DLLs
+and twelve runtime assets. Earlier source/probe hashes and installed-service
+receipts below are historical; they do not override that manifest or qualify a
+new candidate. Required hosted CI includes the original uploaded JUnit evidence,
+not only a successful workflow status. Farm32 capture remains unqualified until
+the corrected stop path passes a fresh complete test near its storage limit.
+
 The development Phase 1 probe and result analyzer implement the
 [D01/F1 finite-grant drain contract](../../docs/adr/D01-pooled-service-curve.md):
 each accepted maximum-size grant must complete unique native first-send within
