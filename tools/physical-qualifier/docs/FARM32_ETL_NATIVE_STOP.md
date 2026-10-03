@@ -2,12 +2,51 @@
 
 ## Status and evidence
 
-**Source candidate; full near-capacity qualification remains outstanding.**
+**Installed candidate; full near-capacity qualification remains outstanding.**
 The existing `Farm32Capture16GiB-v2` storage profile, 16-GiB recorder cap,
 strict 15-GiB completeness threshold, 600-second service lease, 60-second
 privileged hook bound, packet scope and offline export bounds are unchanged.
-No service executable, IPC operation, upstream deployment pin or installed
-endpoint artifact is changed by this source correction.
+No service executable, IPC operation or upstream deployment pin changed.
+The separately recorded hook adoption below remains unqualified for provider use.
+
+## Installed adoption and fresh diagnostic (2026-10-03 UTC)
+
+Source `9ae8f68c2c8ed50589b5c54ed56657fa6fd02aad` supplies the installed hook
+SHA-256 `E286C083022E963E228D5C2CE0C346BC8CE2F9BE450F01D0E8226B94780C4E93`.
+The fixed-input v2 updater retained prior bytes/ACLs, changed only the hook and
+its hash pin, then proved both services running and Farm32 idle. Configuration
+SHA-256 is `1F93A4EA2AEAD911AAD4DF0FE6D952ADAFE91E570A9B9348800FE64A3D7F9614`.
+Its receipt is retained under
+`C:\ProgramData\GantriaEngine\AgentCoordinatorCaptureFarm32\hook-adoption-Farm32NativeStop-v2-9ae8f68c2c`.
+The v1 updater aborted before mutation because it rejected netsh's measured
+exit code 1 for the exact no-session response. V2 accepts that response only
+with code 0/1 and empty stderr; twelve direct idle-check cases and seven
+transaction/rollback cases pass. No capture behavior changed in that updater.
+
+Fresh bounded diagnostic `a17d3e70-d5c7-428e-afa2-2277ab550e3a` remains
+**FAILED**. The installed native Stop recorded 10,287 buffers written, zero
+events/log buffers lost, and a 5,393,350,656-byte ETL. Named closure and service
+idle were proven. The client application missed 629 DATA packets despite all
+HELLO/END records arriving; the worker application received its complete stream.
+Bounded observations found no receive exception, a maximum 7.300-ms client loop
+gap, and zero host-wide UDP input-error increment. Both NIC error/discard deltas
+were zero. These counters do not locate the missing packets or waive the loss.
+
+The client capture closed with 3,443,900 frames and all dumpcap loss counters
+zero. Packet/header reconciliation is a separate read-only investigation.
+The original controller aborted offline worker export after the application
+failure; a separately bounded offline export is diagnostic only. It cannot
+change the original `DIAGNOSTIC_INCOMPLETE` result. Original task cleanup proved
+no owned endpoint children or UDP sockets and both worker services running/idle.
+Full near-capacity qualification and production/provider use remain blocked.
+
+The source hook passes 304 qualifier tests, both PS5.1/PS7 interop-compiling
+simulations, and the legacy four-client hook simulation. Candidate build and
+eight probe self-tests pass; both instrumented Release aggregate workload modes
+pass on the worker. Required exact-source hosted CI remains pending. No fresh
+F1 or provider PASS follows from this diagnostic.
+
+## Earlier native-stop diagnostic
 
 V4 and V5 lost packet buffers in their retained ETLs. Their metadata replacement
 starts exactly at `file_size mod 2^32`; the
