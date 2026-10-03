@@ -18,6 +18,9 @@ import sys
 import time
 import uuid
 
+# The verified role stage is absent from isolated Python / the worker's ._pth.
+# This controller runs as its own child, so the parent's sys.path is not inherited.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from farm_capture_directions import AssertWorkerStopIdentity
 
 

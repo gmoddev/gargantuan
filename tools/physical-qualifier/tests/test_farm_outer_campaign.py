@@ -105,12 +105,38 @@ class OuterCampaignTests(unittest.TestCase):
     def test_staged_entrypoints_import_siblings_with_isolated_python(self):
         for Name, Arguments in (("farm_outer_endpoint.py", ["--help"]),
                                 ("farm_campaign_runner.py", ["--help"]),
+                                ("farm_capture_campaign.py", ["--help"]),
                                 ("farm_lifecycle.py", [])):
             with self.subTest(Name=Name):
                 Result = subprocess.run([sys.executable, "-I", "-B", str(ROOT / Name),
                                          *Arguments], capture_output=True, text=True,
                                         timeout=10, check=False)
                 self.assertEqual(Result.returncode, 0, Result.stderr)
+
+    def test_actual_role_stages_include_capture_import_closure(self):
+        Roots = Outer.Stage(self.Fixture.Private, self.Fixture.SpecFile,
+                            r"C:\Python312\python.exe", r"C:\Sandbox\farm_outer_endpoint.py",
+                            MockTransport())
+        for Role, Directory in Roots.items():
+            with self.subTest(Role=Role):
+                Stage = Path(Directory)
+                Controller = Stage / "farm_capture_campaign.py"
+                Dependency = Stage / "farm_capture_directions.py"
+                self.assertEqual(Outer.Digest(ROOT / Dependency.name), Outer.Digest(Dependency))
+                Endpoint.Verify(Stage, Stage / "stage-index.json")
+                Result = subprocess.run([sys.executable, "-I", "-B", str(Controller), "--help"],
+                                        cwd=self.Fixture.Root, capture_output=True, text=True, timeout=10)
+                self.assertEqual(Result.returncode, 0, Result.stderr)
+                self.assertIn("role", Result.stdout)
+                # Removing the actual staged dependency must fail both pin
+                # verification and execution, even with the checkout available.
+                Dependency.rename(Dependency.with_suffix(".held"))
+                with self.assertRaises(ValueError):
+                    Endpoint.Verify(Stage, Stage / "stage-index.json")
+                Missing = subprocess.run([sys.executable, "-I", "-B", str(Controller), "--help"],
+                                         cwd=self.Fixture.Root, capture_output=True, text=True, timeout=10)
+                self.assertNotEqual(Missing.returncode, 0)
+                self.assertIn("farm_capture_directions", Missing.stderr)
 
     def setUp(self):
         self.Fixture = FarmTicketStagingTests(methodName="test_fresh_secrets_fixed_copy_plan_and_runner_schema")

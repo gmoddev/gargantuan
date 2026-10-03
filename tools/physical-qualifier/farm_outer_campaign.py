@@ -1,7 +1,7 @@
 """Fixed two-host staging and control for one already-packaged Farm32 run.
 
 The input spec is sealed by farm_ticket_staging after fresh role preflights. This
-layer copies only its 14 fixed members, stages the pinned local coordinator
+layer copies only its fixed declared members, stages the pinned local coordinator
 library, checks private endpoint roots and exact hashes, proves the worker's
 normal-LAN control path, and starts the fixed host/role entrypoints. It does
 not grant a physical PASS; offline reconciliation remains separate.
@@ -39,7 +39,7 @@ SHA = re.compile(r"[0-9a-f]{64}\Z")
 SAFE_REMOTE = re.compile(r"^[A-Za-z]:\\[A-Za-z0-9._\\-]{1,350}\Z")
 SAFE_ARGUMENT = re.compile(r"[A-Za-z0-9._:\\-]{1,512}\Z")
 ROLE_FILES = ("farm_campaign_runner.py", "farm_lifecycle.py", "private_ticket_acl.py", "dependency.py",
-              "upstream.lock.json")
+              "upstream.lock.json", "farm_capture_directions.py")
 
 
 def Digest(File):

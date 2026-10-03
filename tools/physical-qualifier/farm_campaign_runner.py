@@ -16,6 +16,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import threading
 import time
 import uuid
 
@@ -64,6 +65,55 @@ CAPTURE_FINISH_SECONDS = 3000
 PREFLIGHT_AGE_SECONDS = 120
 TICKET_AGE_SECONDS = 3600
 MAX_JSON_BYTES = 65536
+CAPTURE_STDERR_BYTES = 65536
+
+
+class CaptureStderr:
+    """Drain the child continuously, retaining only a bounded raw stderr prefix."""
+    def __init__(self, File):
+        self.File = Path(File)
+        self.Output = self.File.open("xb", buffering=0)
+        self.Thread = None
+        self.Total = 0
+        self.Retained = 0
+        self.Error = None
+
+    def Start(self, Stream):
+        def Drain():
+            try:
+                while True:
+                    Block = Stream.read(4096)
+                    if not Block:
+                        break
+                    self.Total += len(Block)
+                    Prefix = Block[:max(0, CAPTURE_STDERR_BYTES - self.Retained)]
+                    if self.Error is None:
+                        try:
+                            Written = self.Output.write(Prefix)
+                            self.Retained += Written
+                            if Written != len(Prefix):
+                                self.Error = "short stderr log write"
+                        except OSError as Error:
+                            # A full log disk must not block the controller on
+                            # its stderr pipe while it is releasing capture.
+                            self.Error = str(Error)[:1024]
+            except OSError as Error:
+                self.Error = str(Error)[:1024]
+            finally:
+                self.Output.close()
+                Stream.close()
+        self.Thread = threading.Thread(target=Drain, name="FarmCaptureStderr", daemon=True)
+        self.Thread.start()
+
+    def Finish(self):
+        if self.Thread is None:
+            self.Output.close()
+        else:
+            self.Thread.join(timeout=5)
+        Complete = self.Thread is None or not self.Thread.is_alive()
+        return {"RetainedBytes": self.Retained, "ObservedBytes": self.Total,
+                "LimitBytes": CAPTURE_STDERR_BYTES, "Truncated": self.Total > CAPTURE_STDERR_BYTES,
+                "DrainComplete": Complete, "ReadError": self.Error}
 
 
 def Exact(Value, Keys, Name):
@@ -332,6 +382,12 @@ def RunRole(TicketPath):
     ResultPath = Path(Config["ResultPath"]).resolve()
     if ResultPath.exists() or not ResultPath.parent.is_dir():
         raise ValueError("[Qualification:FarmCampaign] stale role result")
+    # Result files can share the outer artifact directory across roles/runs.
+    # Bind diagnostic names to this one-use result identity, not its parent.
+    StderrPath = ResultPath.with_name(ResultPath.stem + ".capture-controller.stderr.log")
+    DiagnosticPath = ResultPath.with_name(ResultPath.stem + ".capture-controller-diagnostic.json")
+    if StderrPath.exists() or DiagnosticPath.exists():
+        raise ValueError("[Qualification:FarmCampaign] stale capture diagnostic")
     for Root in (Path(Farm["EvidenceRoot"]).resolve(), Path(Capture["CaptureRoot"]).resolve()):
         if (JournalRoot == Root or JournalRoot in Root.parents or Root in JournalRoot.parents or
                 ResultPath == Root or Root in ResultPath.parents):
@@ -347,6 +403,7 @@ def RunRole(TicketPath):
     PreviousToken = None
     Started = None
     JoinCode = 1
+    Stderr = None
     try:
         if "NodeStagePath" in Config:
             Manifest = ReadJson(Pinned(Config["ManifestPath"], Config["ManifestSha256"], "manifest"))
@@ -360,11 +417,13 @@ def RunRole(TicketPath):
         CaptureEnvironment = os.environ.copy()
         if TokenEnvironment is not None:
             CaptureEnvironment.pop(TokenEnvironment, None)
+        Stderr = CaptureStderr(StderrPath)
         CaptureProcess = subprocess.Popen(
             [sys.executable, "-B", str(Controller), "role", Config["CaptureConfigPath"]],
             cwd=str(Controller.parent), stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL, creationflags=Flags, env=CaptureEnvironment)
+            stderr=subprocess.PIPE, creationflags=Flags, env=CaptureEnvironment)
         Started = time.monotonic()
+        Stderr.Start(CaptureProcess.stderr)
         Deadline = Started + READY_SECONDS
         while not Ready.is_file():
             if CaptureProcess.poll() is not None:
@@ -425,6 +484,12 @@ def RunRole(TicketPath):
                         os.environ.pop(TokenEnvironment, None)
                     else:
                         os.environ[TokenEnvironment] = PreviousToken
+                if Stderr is not None:
+                    Diagnostic = Stderr.Finish()
+                    Diagnostic.update({"Format": "GargantuanFarmCaptureControllerDiagnostic", "Version": 1,
+                                       "RunId": Config["RunId"], "Role": Role,
+                                       "ExitCode": CaptureProcess.poll() if CaptureProcess is not None else None})
+                    WriteNewJson(DiagnosticPath, Diagnostic)
 
 
 def RunHost(ConfigPath):

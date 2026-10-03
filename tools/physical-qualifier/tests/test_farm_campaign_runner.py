@@ -3,6 +3,7 @@
 import ctypes
 import datetime
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -229,6 +230,76 @@ class CampaignTests(unittest.TestCase):
         Save(TicketFile, Ticket)
         with self.assertRaisesRegex(ValueError, "capture controller pin changed"):
             Campaign.RunRole(TicketFile)
+
+    def FailedCapture(self, Source, Role="CLIENT", ResultName=None):
+        self.Controller.write_text(Source, encoding="utf-8")
+        TicketFile, Ticket, _, _, _ = self.Role(Role)
+        if ResultName is not None:
+            Ticket["ResultPath"] = str(self.Root / ResultName)
+            Save(TicketFile, Ticket)
+        with mock.patch.object(Campaign, "GetCatalog", return_value=object()), mock.patch.object(Campaign, "Join") as Join:
+            with self.assertRaisesRegex(RuntimeError, "capture controller ended before ready"):
+                Campaign.RunRole(TicketFile)
+            Join.assert_not_called()
+        Result = Path(Ticket["ResultPath"])
+        return Result.with_name(Result.stem + ".capture-controller.stderr.log").read_bytes(), json.loads(
+            Result.with_name(Result.stem + ".capture-controller-diagnostic.json").read_text())
+
+    def test_capture_diagnostics_are_unique_for_two_runs_sharing_result_parent(self):
+        FirstRunId = self.RunId
+        FirstText, FirstDiagnostic = self.FailedCapture("import first_run_missing_dependency\n", ResultName="first-run.json")
+        FirstLog = self.Root / "first-run.capture-controller.stderr.log"
+        FirstReceipt = self.Root / "first-run.capture-controller-diagnostic.json"
+        OriginalReceipt = FirstReceipt.read_bytes()
+        self.RunId = str(uuid.uuid4())
+        self.CoordinatorRunId = str(uuid.uuid4())
+        SecondManifestRoot = self.Root / "second-run-manifest"
+        SecondManifestRoot.mkdir()
+        self.Manifest = Save(SecondManifestRoot / "run-manifest.json", {
+            "Format": "GargantuanPhysicalFarmEndpoint", "Version": 1,
+            "RunId": self.RunId, "SourceCommit": self.SourceCommit,
+            "Provider": "Local", "Nonces": [str(Number) for Number in range(32)]})
+        SecondText, SecondDiagnostic = self.FailedCapture("import second_run_missing_dependency\n",
+                                                        Role="SERVER", ResultName="second-run.json")
+        self.assertIn(b"first_run_missing_dependency", FirstText)
+        self.assertIn(b"second_run_missing_dependency", SecondText)
+        self.assertEqual(FirstDiagnostic["RunId"], FirstRunId)
+        self.assertEqual(SecondDiagnostic["RunId"], self.RunId)
+        self.assertEqual(FirstLog.read_bytes(), FirstText)
+        self.assertEqual(FirstReceipt.read_bytes(), OriginalReceipt)
+        self.assertEqual(len(list(self.Root.glob("*.capture-controller.stderr.log"))), 2)
+
+    def test_capture_import_error_is_retained_without_role_launch(self):
+        Text, Diagnostic = self.FailedCapture("import farm_capture_missing_dependency_for_test\n")
+        self.assertIn(b"ModuleNotFoundError", Text)
+        self.assertIn(b"farm_capture_missing_dependency_for_test", Text)
+        self.assertEqual(Diagnostic["ExitCode"], 1)
+        self.assertEqual(Diagnostic["RunId"], self.RunId)
+        self.assertTrue(Diagnostic["DrainComplete"])
+        self.assertFalse(Diagnostic["Truncated"])
+        self.assertIsNone(Diagnostic["ReadError"])
+
+    def test_capture_stderr_flood_is_drained_but_retained_prefix_is_bounded(self):
+        Size = Campaign.CAPTURE_STDERR_BYTES * 3
+        Text, Diagnostic = self.FailedCapture(f"import sys\nsys.stderr.buffer.write(b'x' * {Size})\nsys.exit(4)\n")
+        self.assertEqual(Text, b"x" * Campaign.CAPTURE_STDERR_BYTES)
+        self.assertEqual(Diagnostic["ObservedBytes"], Size)
+        self.assertEqual(Diagnostic["RetainedBytes"], Campaign.CAPTURE_STDERR_BYTES)
+        self.assertEqual(Diagnostic["ExitCode"], 4)
+        self.assertTrue(Diagnostic["Truncated"])
+        self.assertTrue(Diagnostic["DrainComplete"])
+
+    def test_capture_stderr_write_failure_does_not_block_pipe_drain(self):
+        Logger = Campaign.CaptureStderr(self.Root / "failed-disk.log")
+        Logger.Output = mock.Mock(wraps=Logger.Output)
+        Logger.Output.write.side_effect = OSError("simulated full disk")
+        Logger.Start(io.BytesIO(b"x" * (Campaign.CAPTURE_STDERR_BYTES * 2)))
+        Diagnostic = Logger.Finish()
+        self.assertTrue(Diagnostic["DrainComplete"])
+        self.assertEqual(Diagnostic["ObservedBytes"], Campaign.CAPTURE_STDERR_BYTES * 2)
+        self.assertEqual(Diagnostic["RetainedBytes"], 0)
+        self.assertIn("full disk", Diagnostic["ReadError"])
+        Logger.Output.write.assert_called_once()
 
     def test_node_server_requires_pinned_stage_and_stops_owned_child(self):
         TicketFile, Ticket, FarmFile, StageRoot = self.NodeRole()
