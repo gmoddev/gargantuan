@@ -193,6 +193,7 @@ def ValidateAggregateEvidence(Metadata, Stdout, Arms):
     Stable, RecordCount = {}, 0
     for Phase, (Name, Pair) in enumerate(Arms.items()):
         Data = Rows[Name]
+        Need(len(Pair) == 2, 'incomplete aggregate anchor pair')
         Begin, End = Pair[0]['steady_ns'], Pair[1]['steady_ns']
         def Context(Row):
             Peer = Number(Row, 'peer')

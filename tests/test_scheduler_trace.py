@@ -189,6 +189,25 @@ class SchedulerTraceTests(unittest.TestCase):
                     self.assertEqual(Result['State'], 'INCOMPLETE', Result)
                     self.assertEqual(Result['CausalVerdict'], 'NOT_CLAIMED')
 
+    def test_aggregate_missing_single_anchor_cli_retains_incomplete_receipt(self):
+        for Boundary in ('BEGIN', 'END'):
+            with tempfile.TemporaryDirectory() as Directory:
+                Root = Path(Directory)
+                Metadata, Log, _ = self.AggregateFixture(Root)
+                Lines = Log.splitlines()
+                Index = next(Index for Index, Line in enumerate(Lines) if
+                    Line.startswith('[Qualification:ClockAnchor] case=aggregate-baseline ') and
+                    'boundary=' + Boundary in Line)
+                Lines.pop(Index)
+                (Root / 'metadata.json').write_text(json.dumps(Metadata), encoding='utf-8')
+                (Root / 'workload.stdout.txt').write_text('\n'.join(Lines), encoding='utf-8')
+                Result = subprocess.run([sys.executable, '-B', str(ROOT / 'tools/ci/SchedulerTraceValidate.py'),
+                    '--root', str(Root), '--case', 'Aggregate32Structural'], text=True, capture_output=True,
+                    timeout=30, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+                self.assertEqual(Result.returncode, 125, Result.stdout + Result.stderr)
+                self.assertNotIn('Traceback', Result.stderr)
+                self.assertEqual(json.loads((Root / 'coverage.json').read_text())['State'], 'INCOMPLETE')
+
     def test_aggregate_failed_rpc_outcomes_and_inline_callback_are_retained(self):
         with tempfile.TemporaryDirectory() as Directory:
             Metadata, Log, File = self.AggregateFixture(Path(Directory))
