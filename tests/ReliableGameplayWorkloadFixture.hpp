@@ -7,6 +7,7 @@
 #include "PooledReliableServiceRecoveryContractFixture.hpp"
 #include "WorkloadTimingEvidence.hpp"
 #include "WorkloadActionEvidence.hpp"
+#include "WorkloadRemoteEvidence.hpp"
 #include "../src/network/GameSessionTestAccess.hpp"
 #include "../src/network/GnsServiceDiagnostics.hpp"
 
@@ -431,6 +432,7 @@ void RunReliableGameplayWorkload(
 		std::uint64_t StepCount = 0;
 		test_detail::WorkloadTimingEvidence CpuTiming;
 		test_detail::WorkloadActionEvidence ActionTiming;
+		test_detail::WorkloadRemoteEvidence RemoteTiming;
 		double StepIntervalMs = 0, ClientRuntimeMs = 0, ServerRuntimeMs = 0;
 		double ServerPollMs = 0, ClientPollMs = 0, ServerSessionMs = 0, ClientSessionMs = 0;
 		double ObserverMs = 0, SleepOvershootMs = 0;
@@ -469,8 +471,12 @@ void RunReliableGameplayWorkload(
 		}
 		const auto Found = Events.find(std::get<int>(Invocation.Arguments[0]));
 		if (Found == Events.end()) { ++Results.Errors; return; }
-		if (Invocation.Arguments != Found->second.Arguments) ++Results.Errors;
-		Results.Event.push_back(std::chrono::duration<double, std::milli>(Clock::now() - Found->second.Started).count());
+		const bool PayloadMatched = Invocation.Arguments == Found->second.Arguments;
+		if (!PayloadMatched) ++Results.Errors;
+		const auto CompletedAt = Clock::now();
+		Results.Event.push_back(std::chrono::duration<double, std::milli>(CompletedAt - Found->second.Started).count());
+		Results.RemoteTiming.End(static_cast<std::uint64_t>(Found->first), Results.StepCount, ActionTimestamp(CompletedAt),
+			test_detail::WorkloadNativeThread(), -1, PayloadMatched);
 		Events.erase(Found);
 	});
 
@@ -486,21 +492,32 @@ void RunReliableGameplayWorkload(
 		Check(Encoded && Encoded->size() == FrameBytes, "qualified payload uses exact encoded frame bytes");
 		Results.OfferedBytes += FrameBytes + ReliableServiceEnvelopeBytes;
 		const auto Started = Clock::now();
+		Results.RemoteTiming.Begin(static_cast<std::uint64_t>(Id), Rpc, RecoveryProbeActive, Results.StepCount,
+			ActionTimestamp(Started), test_detail::WorkloadNativeThread());
 		RemoteSendResult Sent;
+		Clock::time_point SubmittedAt;
 		if (Rpc) {
 			++PendingRequests;
 			Sent = Sender->StartRequest(*Connection, Message.Remote, Arguments,
-				[&, Started, Arguments](RemoteRequestResult Result) {
+				[&, Started, Arguments, Id](RemoteRequestResult Result) {
 					--PendingRequests;
-					if (Result.Outcome.Status != RemoteRequestTerminalStatus::Success || Result.Results != Arguments)
+					const bool PayloadMatched = Result.Results == Arguments;
+					if (Result.Outcome.Status != RemoteRequestTerminalStatus::Success || !PayloadMatched)
 						++Results.Errors;
-					Results.Rpc.push_back(std::chrono::duration<double, std::milli>(Clock::now() - Started).count());
+					const auto CompletedAt = Clock::now();
+					Results.Rpc.push_back(std::chrono::duration<double, std::milli>(CompletedAt - Started).count());
+					Results.RemoteTiming.End(static_cast<std::uint64_t>(Id), Results.StepCount, ActionTimestamp(CompletedAt),
+						test_detail::WorkloadNativeThread(), static_cast<int>(Result.Outcome.Status), PayloadMatched);
 				});
+			SubmittedAt = Clock::now();
 			if (!Sent.Accepted()) --PendingRequests;
 		} else {
 			Sent = Sender->SendEvent(*Connection, Message.Remote, Arguments);
+			SubmittedAt = Clock::now();
 			if (Sent.Accepted()) Events.emplace(Id, PendingEvent{Started, std::move(Arguments)});
 		}
+		Results.RemoteTiming.Submitted(static_cast<std::uint64_t>(Id), Sent.Accepted(), Results.StepCount,
+			ActionTimestamp(SubmittedAt), test_detail::WorkloadNativeThread());
 		if (Sent.Accepted()) Results.AcceptedBytes += FrameBytes + ReliableServiceEnvelopeBytes;
 		else ++Results.Rejected;
 		Results.PendingHighWater = std::max(Results.PendingHighWater, PendingRequests);
@@ -518,7 +535,8 @@ void RunReliableGameplayWorkload(
 				std::chrono::duration<double, std::milli>(StepStarted - *PreviousStepStarted).count());
 			Results.CpuTiming.Record(WorkloadPhase::StepInterval, Results.StepCount,
 				std::chrono::duration<double, std::milli>(StepStarted - *PreviousStepStarted).count(),
-				PreviousStepCpu, StepCpu, PreviousRequestedSleepMs, PreviousActualSleepMs);
+				PreviousStepCpu, StepCpu, PreviousRequestedSleepMs, PreviousActualSleepMs,
+				ActionTimestamp(*PreviousStepStarted), ActionTimestamp(StepStarted));
 		}
 		PreviousStepStarted = StepStarted;
 		PreviousStepCpu = StepCpu;
@@ -532,7 +550,8 @@ void RunReliableGameplayWorkload(
 			const auto CpuAfter = CaptureWorkloadCpu();
 			const auto WallMs = std::chrono::duration<double, std::milli>(Ended - Started).count();
 			Maximum = std::max(Maximum, WallMs);
-			Results.CpuTiming.Record(Phase, Results.StepCount, WallMs, CpuBefore, CpuAfter);
+			Results.CpuTiming.Record(Phase, Results.StepCount, WallMs, CpuBefore, CpuAfter,
+				0, 0, ActionTimestamp(Started), ActionTimestamp(Ended));
 		};
 		Measure(Results.ClientRuntimeMs, WorkloadPhase::ClientRuntime, [&] { ClientRuntime.Step(); });
 		Measure(Results.ServerRuntimeMs, WorkloadPhase::ServerRuntime, [&] { ServerRuntime.Step(); });
@@ -619,14 +638,16 @@ void RunReliableGameplayWorkload(
 			std::chrono::duration<double, std::milli>(BeforeSleep - ObserverStarted).count());
 		const auto SleepCpu = CaptureWorkloadCpu();
 		Results.CpuTiming.Record(WorkloadPhase::Observer, Results.StepCount,
-			std::chrono::duration<double, std::milli>(BeforeSleep - ObserverStarted).count(), ObserverCpu, SleepCpu);
+			std::chrono::duration<double, std::milli>(BeforeSleep - ObserverStarted).count(), ObserverCpu, SleepCpu,
+			0, 0, ActionTimestamp(ObserverStarted), ActionTimestamp(BeforeSleep));
 		PreviousRequestedSleepMs = std::chrono::duration<double, std::milli>(std::max(Next, BeforeSleep) - BeforeSleep).count();
 		std::this_thread::sleep_until(Next);
 		const auto AfterSleep = Clock::now();
 		const auto AfterSleepCpu = CaptureWorkloadCpu();
 		PreviousActualSleepMs = std::chrono::duration<double, std::milli>(AfterSleep - BeforeSleep).count();
 		Results.CpuTiming.Record(WorkloadPhase::Sleep, Results.StepCount, PreviousActualSleepMs,
-			SleepCpu, AfterSleepCpu, PreviousRequestedSleepMs, PreviousActualSleepMs);
+			SleepCpu, AfterSleepCpu, PreviousRequestedSleepMs, PreviousActualSleepMs,
+			ActionTimestamp(BeforeSleep), ActionTimestamp(AfterSleep));
 		// Attribute only time beyond the requested sleep or an already-late
 		// entry. These wall times include preemption and do not prove CPU cost.
 		Results.SleepOvershootMs = std::max(Results.SleepOvershootMs,
@@ -653,6 +674,7 @@ void RunReliableGameplayWorkload(
 		Results = {};
 		PreviousStepStarted.reset();
 		RecoveryProbeActive = false;
+		const auto CaseClockAnchor = test_detail::WorkloadClockAnchor::Capture();
 		const auto Started = Clock::now();
 		const auto Before = Server.GetMetrics();
 		const auto JournalStart = ChangeJournal::Get().CreateCursor(ServerRuntime.DataModel->GetObjectId()).NextSequence;
@@ -849,11 +871,16 @@ void RunReliableGameplayWorkload(
 			<< " server_poll_max_ms=" << Results.ServerPollMs << " client_poll_max_ms=" << Results.ClientPollMs
 			<< " server_session_max_ms=" << Results.ServerSessionMs << " client_session_max_ms=" << Results.ClientSessionMs
 			<< " observer_max_ms=" << Results.ObserverMs << " sleep_overshoot_max_ms=" << Results.SleepOvershootMs << '\n';
-		Results.CpuTiming.Print(std::cout, Case.Name);
+		const auto Profile = CandidateReliableService().IsPooled() ? "POOLED_SERVICE" : "FULL_RESERVATION";
+		Results.CpuTiming.Print(std::cout, Case.Name, Profile);
+		CaseClockAnchor.Print(std::cout, Case.Name, Profile, "BEGIN");
+		test_detail::WorkloadClockAnchor::Capture().Print(std::cout, Case.Name, Profile, "END");
 		const auto ActionObservedAt = Clock::now();
 		Results.ActionTiming.Print(std::cout, Case.Name, Results.StepCount, ActionTimestamp(ActionObservedAt),
 			test_detail::CaptureWorkloadCpu(), ActionObservedAt >= DrainDeadline,
 			CandidateReliableService().IsPooled() ? "POOLED_SERVICE" : "FULL_RESERVATION");
+		Results.RemoteTiming.Print(std::cout, Case.Name, Profile, Results.StepCount, ActionTimestamp(ActionObservedAt),
+			ActionObservedAt >= DrainDeadline);
 		Check(After.ReliableAdmission.PeerCreditHighWater <= CandidateReliableService().PeerCreditCap() &&
 			After.ReliableAdmission.GlobalCreditHighWater <= CandidateReliableService().GlobalCreditCap(),
 			"finite peer and global credit stay within unchanged caps");
