@@ -94,8 +94,14 @@ successful lifecycle and restored endpoints. An offline-only verifier fix
 correctly binds preassignment request UUIDs to the later assigned lifecycle;
 physical evidence and production behavior did not change. See the
 [fresh physical receipt](devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md#funded-ack-candidate-f1-physical-phase-1-passed-2026-10-03-utc).
-Remaining gates are Farm32 near-capacity capture qualification, client memory
-at least 8 GiB available, both 32-client provider matrices and final acceptance.
+Farm32 near-capacity recorder evidence now passes with separately measured
+cleanup in `6e9b80d8-671c-4870-9566-63f67b803a4b`: a 15,050,735,616-byte ETL,
+all 9,669,000 marked packets in both captures and zero recorder loss. The raw
+outer cleanup failure and 668 synthetic client receive gaps remain unchanged;
+the hash-bound supplemental closure records later exact ownership/socket
+checks. See [capture receipt](tools/physical-qualifier/docs/FARM32_ETL_NATIVE_STOP.md).
+Remaining gates are client memory at least 8 GiB available, both 32-client
+provider matrices and final acceptance.
 Historical synthetic socket-loss attribution is not a new pooled-service gate.
 **KI-006 OPEN; Foundation 3L B — PARTIALLY READY.**
 

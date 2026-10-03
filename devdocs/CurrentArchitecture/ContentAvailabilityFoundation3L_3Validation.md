@@ -24,11 +24,19 @@ endpoint/coordinator/outer success and clean restoration. The
 [physical receipt](PooledPhysicalQualification3L.md#funded-ack-candidate-f1-physical-phase-1-passed-2026-10-03-utc)
 records exact source, bounds, hashes, bootstrap scope and replay correction.
 
-The changed Farm32 large-file capture profile still requires its separate
-near-capacity qualification. Historical synthetic socket receive gaps remain
+The separate Farm32 near-capacity recorder now passes with supplemental cleanup
+under its prospectively reviewed recorder-only contract. Run
+`6e9b80d8-671c-4870-9566-63f67b803a4b` retains a 15,050,735,616-byte ETL,
+all 9,669,000 emitted marked packets in both captures and zero native/export/
+dumpcap loss. The original outer cleanup predicate failed on an additional
+PowerShell process; its INCOMPLETE receipt remains unchanged. A separately
+tested, hash-bound finalizer proves later exact ownership/socket cleanup.
+Client synthetic delivery remains FAIL668, independently from recorder PASS.
+See the [complete capture and closure receipt](../../tools/physical-qualifier/docs/FARM32_ETL_NATIVE_STOP.md).
+Historical synthetic socket receive gaps remain
 unattributed, but the accepted funding-gate review does not make that attribution
 a prerequisite for production GNS testing. Recorder completeness remains required.
-The latest client reading on `DESKTOP-B8V8NAN` is 2.855 GiB available, below
+The client reading on `DESKTOP-B8V8NAN` at 06:38 UTC is 4.346 GiB available, below
 the unchanged **8-GiB client** gate; the worker has 22.424 GiB, above its
 **4-GiB server** gate. The older wording below claiming 8 GiB on both endpoints
 is superseded by these actual farm roles and source-enforced thresholds.
@@ -36,6 +44,16 @@ is superseded by these actual farm roles and source-enforced thresholds.
 Fresh Local and authenticated real-TLS Node 32-client matrices, complete moving
 recovery/resource/parity evidence, and final acceptance/audit remain
 **NOT MEASURED**. **KI-006 OPEN; Foundation 3L B — PARTIALLY READY; no 3M or merge.**
+
+Receipt-head Native push `37097874975` remains a failed FULL_RESERVATION mixed
+action measurement (2,227.25 ms against 250 ms). Long zero-CPU wall spans were
+recorded, but its exact per-action chronology is unavailable; no gate is waived.
+The same-head PR run `37097877256` passes. Test-only change `eef3a0e9a` now
+buffers bounded action submission/resolution steps, timestamps and CPU counters,
+including rejection/missing evidence, without changing workload scheduling or
+latency thresholds. The standalone test passes; hosted validation of this
+diagnostic change remains pending at this checkpoint. It does not change the
+frozen physical probe or Player/Server execution candidate.
 
 ## Causal recovery and materialization corrections deterministically validated (2026-10-02)
 

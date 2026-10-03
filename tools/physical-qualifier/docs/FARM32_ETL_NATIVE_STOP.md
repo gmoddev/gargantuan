@@ -2,12 +2,66 @@
 
 ## Status and evidence
 
-**Installed candidate; full near-capacity qualification remains outstanding.**
+**Near-capacity recorder qualified with separately measured cleanup (2026-10-03 UTC).**
 The existing `Farm32Capture16GiB-v2` storage profile, 16-GiB recorder cap,
 strict 15-GiB completeness threshold, 600-second service lease, 60-second
 privileged hook bound, packet scope and offline export bounds are unchanged.
 No service executable, IPC operation or upstream deployment pin changed.
-The separately recorded hook adoption below remains unqualified for provider use.
+The recorder qualification below clears this capture-profile prerequisite only;
+provider and Foundation 3L acceptance remain separate gates.
+
+## Fresh near-capacity recorder and supplemental closure
+
+Run `6e9b80d8-671c-4870-9566-63f67b803a4b` used the prospectively reviewed
+`Farm32RecorderOnlyNearCap-v1` contract and the unchanged installed hook.
+Both producers completed: client 4,836,400 DATA datagrams and worker 4,823,000,
+each with exact 1,400-byte payloads, no send retries, all per-flow terminal
+records and the bounded drain. Independent streaming replay found all
+9,669,000 marked packets, with exact identities, sequences and payloads across
+all 32 flows in both directions, in **both** full-frame captures.
+
+| Retained file | Bytes | SHA-256 |
+| --- | ---: | --- |
+| Worker ETL | 15,050,735,616 | `c245a3c6fb53f6ff02fb7d1b589d48244380d2220f8a04212cd4eac09d1f88ad` |
+| Worker pcapng | 14,271,448,344 | `df99b9c182fcfe710ad898aa84bbef9583bac72ab2919ecdac280d542efc68f0` |
+| Client pcapng | 14,271,444,532 | `906f53c24cf40fe2ef268ef23f3ba21b063512bbebfd25f1930dbe2bfe6633fe` |
+
+The ETL satisfies `14 GiB <= size < 15 GiB`. Exact-owned native Stop recorded
+28,707 buffers and zero lost events/log buffers. Offline export also reports
+zero loss. The client has 9,669,000 frames and zero dumpcap drops; the worker
+has 9,669,014 frames, including 14 unmarked frames. Both capture manifests and
+producer hashes join exactly. This is a recorder proof, not a socket-delivery
+fix: **client application delivery remains FAIL, with 668 missing DATA
+datagrams; worker application delivery passes**.
+
+The original outer receipt remains `RECORDER_ONLY_NEAR_CAP_INCOMPLETE`, exit 1.
+Its sole error was the broad cleanup predicate matching a command line that
+contained the evidence root. It reported PowerShell PID 42024, outside the
+four recorded launch/child identities. That process's historical command line
+and exact exit time are **NOT MEASURED**; its purpose is not inferred.
+
+A fixed-run supplemental finalizer retains and hash-checks all original
+receipts, rejoins the frozen recorder contract and requires separate fresh
+cleanup observations. Its 19 positive/negative tests pass. Client inventories
+at 06:35:02–06:35:03 UTC prove recorded PIDs 15496, 29856, 50788 and 68072,
+their descendants and readable exact launches absent, with UDP clear. Worker
+observation at 06:24:31 UTC proves named capture/Packet Monitor idle, both
+services running/idle, no owned process and UDP 39450 clear. These observations
+do not assert uninterrupted absence since the original failure.
+
+Supplemental verdict is **`RECORDER_MEASURED_PASS_WITH_SUPPLEMENTAL_CLEANUP`**;
+receipt SHA-256 is
+`d977f4b32a811ceea86c393dbd8c630bced26efc222063c579a172a152fdd9d5` at
+`C:\Users\aiden\.codex\artifacts\farm32-recorder-closure-6e9-v1\supplemental-closure.json`.
+Original client evidence is retained under
+`C:\Sandbox\Codex\Evidence\Farm32RecorderOnlyNearCap-v1\6e9b80d8-671c-4870-9566-63f67b803a4b`;
+its `worker-original-archive` contains every worker manifest member with
+verified size and SHA-256. Exact duplicate retirement is recorded separately
+by the relocation receipts; small original worker receipts remain under
+`C:\Sandbox\Codex\Evidence\Foundation3LFarm32\6e9b80d8-671c-4870-9566-63f67b803a4b`.
+The frozen kit has 80 passing offline tests and actual isolated-worker import
+preflight. No historical failed diagnostic is upgraded. The earlier sections
+below describe their original checkpoints, not the current prerequisite state.
 
 ## Installed adoption and fresh diagnostic (2026-10-03 UTC)
 
@@ -291,5 +345,6 @@ requires exact application receive convergence; its failed results remain
 failed. A prospective recorder-only qualification must independently prove
 complete producers and every emitted marked sequence in both captures, and
 report application delivery separately. The 5-GiB diagnostics do not establish
-the outstanding 14-GiB near-capacity gate. The independent four-client F1
+the 14-GiB near-capacity gate; the fresh recorder and supplemental closure
+above now supply that proof. The independent four-client F1
 capture profile does not use the Farm32 large-file profile.
