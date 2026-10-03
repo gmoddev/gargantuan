@@ -1,4 +1,5 @@
 #pragma once
+#include <iterator>
 
 // Real native timers, no clock override. Included after the shared production
 // adapter fixture and compatibility helpers.
@@ -71,7 +72,9 @@ inline void Observe(bool Prompt) {
 		// Later alternate funded/tiny grants through the native 20s stats period.
 		const std::size_t Bytes = Token > 14 && Token % 2 == 0 ? 393652 : 77;
 		auto Message = Intent(Pair, TrafficClass::StructuralReplication, Bytes, std::byte{0x49}, Token);
-		Require(Access::Attribute(Message, Token) && Access::Activate(Message, Token, Now()),
+		Require(Access::Attribute(Message, Token), "stats-boundary finite grant activation failed");
+		const auto ActivatedAt = Now();
+		Require(Access::Activate(Message, Token, ActivatedAt),
 			"stats-boundary finite grant activation failed");
 		Send(Pair, Message); Accepted += Bytes;
 		std::this_thread::sleep_for(50ms);
@@ -84,11 +87,72 @@ inline void Observe(bool Prompt) {
 		}
 		Pump(*Pair.Server, *Pair.Client, Pair.ServerEvents, Pair.ClientEvents, 5ms, [] { return false; });
 		Final = ReadWire(Pair);
-		Require(Final.Sender.StructuralPayloadBytesFirstSent == Accepted && Final.Sender.StructuralPayloadBytesAcked == Accepted &&
+		const bool Conserved = Final.Sender.StructuralPayloadBytesFirstSent == Accepted && Final.Sender.StructuralPayloadBytesAcked == Accepted &&
 			Final.Sender.LastAttributedRetirementToken == Token && Final.Sender.LastAttributedRetiredPayloadBytes == Bytes &&
 			Final.Sender.ActiveAttributedRetirementToken == 0 && Final.Sender.PendingReliableStreamBytes == 0 &&
-			Final.Sender.SentUnackedReliableStreamBytes == 0 && Final.Sender.ReliableStreamBytesRetransmitted == 0,
-			"stats-boundary grant did not conserve/retire its exact bytes");
+			Final.Sender.SentUnackedReliableStreamBytes == 0 && Final.Sender.ReliableStreamBytesRetransmitted == 0;
+		if (!Conserved) {
+			// Failure-only evidence: never extend the preceding deadline or hide
+			// which of these independent delivery/accounting predicates failed.
+			std::cerr << "[Network:AckStatsFailure] prompt=" << Prompt << " token=" << Token
+				<< " bytes=" << Bytes << " accepted=" << Accepted << " activated_us=" << ActivatedAt
+				<< " elapsed_us=" << Now() - ActivatedAt
+				<< " deadline_elapsed=" << (std::chrono::steady_clock::now() >= Deadline)
+				<< " first_sent_equal=" << (Final.Sender.StructuralPayloadBytesFirstSent == Accepted)
+				<< " ack_equal=" << (Final.Sender.StructuralPayloadBytesAcked == Accepted)
+				<< " retired_token_equal=" << (Final.Sender.LastAttributedRetirementToken == Token)
+				<< " retired_bytes_equal=" << (Final.Sender.LastAttributedRetiredPayloadBytes == Bytes)
+				<< " active_clear=" << (Final.Sender.ActiveAttributedRetirementToken == 0)
+				<< " pending_clear=" << (Final.Sender.PendingReliableStreamBytes == 0)
+				<< " unacked_clear=" << (Final.Sender.SentUnackedReliableStreamBytes == 0)
+				<< " retransmission_zero=" << (Final.Sender.ReliableStreamBytesRetransmitted == 0)
+				<< " first_sent=" << Final.Sender.StructuralPayloadBytesFirstSent
+				<< " acked=" << Final.Sender.StructuralPayloadBytesAcked
+				<< " retired_token=" << Final.Sender.LastAttributedRetirementToken
+				<< " retired_bytes=" << Final.Sender.LastAttributedRetiredPayloadBytes
+				<< " active_token=" << Final.Sender.ActiveAttributedRetirementToken
+				<< " pending=" << Final.Sender.PendingReliableStreamBytes
+				<< " unacked=" << Final.Sender.SentUnackedReliableStreamBytes
+				<< " retransmitted=" << Final.Sender.ReliableStreamBytesRetransmitted
+				<< " sender_packets=" << Final.Sender.NativePacketsSent
+				<< " sender_packet_bytes=" << Final.Sender.NativePacketBytesSent
+				<< " receiver_packets=" << Final.Receiver.NativePacketsSent
+				<< " receiver_packet_bytes=" << Final.Receiver.NativePacketBytesSent
+				<< " receiver_pending=" << Final.Receiver.PendingReliableStreamBytes
+				<< " receiver_unacked=" << Final.Receiver.SentUnackedReliableStreamBytes
+				<< " receiver_retransmitted=" << Final.Receiver.ReliableStreamBytesRetransmitted
+				<< " grant_failed=" << Final.Sender.StructuralLastCompletedGrantFailed
+				<< " service_failed=" << Final.Sender.StructuralServiceFailed << '\n';
+			const auto PrintFailureState = [&](const char *Side, auto &Transport, auto Connection) {
+				GargantuanAckDiagnostics Trace;
+				const bool Available = AckAccess::Read(Transport, Connection, Trace);
+				std::cerr << "[Network:AckStatsFailureState] side=" << Side << " available=" << Available;
+				if (Available) std::cerr << " overflow=" << Trace.Overflow << " events=" << Trace.Count
+					<< " associated_received_packets=" << Trace.AssociatedReceivedPackets
+					<< " associated_received_udp_bytes=" << Trace.AssociatedReceivedUdpBytes
+					<< " reliable_packets=" << Trace.ReliablePackets
+					<< " first_reliable_us=" << Trace.FirstReliablePacketAt << " last_reliable_us=" << Trace.LastReliablePacketAt
+					<< " last_deadline=" << Trace.LastDeadline << " serialized_ack_packet=" << Trace.SerializedAckPacket
+					<< " ack_packets=" << Trace.AckPacketsSent << " ack_packet_bytes=" << Trace.AckPacketBytes
+					<< " last_ack_us=" << Trace.LastAckPacketSentAt
+					<< " grant_wire=" << Trace.GrantWholeWireBytes << " grant_wire_ceiling=" << Trace.GrantWholeWireCeiling
+					<< " grant_wire_invalid=" << Trace.GrantWireInvalid << " prompt_allowed=" << Trace.PromptFinalWireAllowed
+					<< " prompt_prior_wire=" << Trace.PromptFinalPriorWireBytes << " prompt_tail_budget=" << Trace.PromptTailBudget;
+				std::cerr << '\n';
+				if (!Available) return;
+				PrintState("grant-failure", Side, Trace);
+				for (std::size_t Index = 0; Index < std::min<std::size_t>(Trace.Count, std::size(Trace.Events)); ++Index) {
+					const auto &Event = Trace.Events[Index];
+					std::cerr << "[Network:AckStatsFailureEvent] side=" << Side << " index=" << Index
+						<< " kind=" << static_cast<int>(Event.Type) << " identity=" << Event.Identity
+						<< " at_us=" << Event.AtMicroseconds << " native_at_us=" << Event.NativeAtMicroseconds
+						<< " value=" << Event.Value << '\n';
+				}
+			};
+			PrintFailureState("sender", *Pair.Server, Pair.ServerConnection);
+			PrintFailureState("receiver", *Pair.Client, Pair.ClientConnection);
+		}
+		Require(Conserved, "stats-boundary grant did not conserve/retire its exact bytes");
 		Require(!Final.Sender.StructuralLastCompletedGrantFailed && !Final.Sender.StructuralServiceFailed,
 			"stats boundary violated unchanged F1");
 		ExactPayloads(Pair, {Payload(Bytes, std::byte{0x49})});
