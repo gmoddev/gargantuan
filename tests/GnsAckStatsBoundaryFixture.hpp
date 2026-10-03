@@ -91,10 +91,12 @@ inline void Observe(bool Prompt) {
 			Final.Sender.LastAttributedRetirementToken == Token && Final.Sender.LastAttributedRetiredPayloadBytes == Bytes &&
 			Final.Sender.ActiveAttributedRetirementToken == 0 && Final.Sender.PendingReliableStreamBytes == 0 &&
 			Final.Sender.SentUnackedReliableStreamBytes == 0 && Final.Sender.ReliableStreamBytesRetransmitted == 0;
-		if (!Conserved) {
+		const bool F1Healthy = !Final.Sender.StructuralLastCompletedGrantFailed && !Final.Sender.StructuralServiceFailed;
+		if (!Conserved || !F1Healthy) {
 			// Failure-only evidence: never extend the preceding deadline or hide
-			// which of these independent delivery/accounting predicates failed.
+			// which independent delivery/accounting or F1 service predicate failed.
 			std::cerr << "[Network:AckStatsFailure] prompt=" << Prompt << " token=" << Token
+				<< " conserved=" << Conserved << " f1_healthy=" << F1Healthy
 				<< " bytes=" << Bytes << " accepted=" << Accepted << " activated_us=" << ActivatedAt
 				<< " elapsed_us=" << Now() - ActivatedAt
 				<< " deadline_elapsed=" << (std::chrono::steady_clock::now() >= Deadline)
@@ -123,6 +125,37 @@ inline void Observe(bool Prompt) {
 				<< " receiver_retransmitted=" << Final.Receiver.ReliableStreamBytesRetransmitted
 				<< " grant_failed=" << Final.Sender.StructuralLastCompletedGrantFailed
 				<< " service_failed=" << Final.Sender.StructuralServiceFailed << '\n';
+			// Use the original Final snapshot. Its completed segment record survives
+			// ACK/retirement; never relabel an older completed token as this grant.
+			const auto &Sample = Final.Sender;
+			std::cerr << "[Network:AckStatsFailureCurve] token=" << Token
+				<< " connection_slot=" << Sample.Connection.Slot << " connection_generation=" << Sample.Connection.Generation
+				<< " observed_us=" << Sample.ObservedAtMicroseconds
+				<< " active_token=" << Sample.ActiveAttributedRetirementToken
+				<< " active_bytes=" << Sample.StructuralActiveGrantBytes
+				<< " active_first_sent=" << Sample.StructuralActiveGrantFirstSentBytes
+				<< " active_started_us=" << Sample.StructuralActiveGrantStartedAtMicroseconds
+				<< " completed_sequence=" << Sample.StructuralCompletedGrantSequence
+				<< " completed_token=" << Sample.StructuralLastCompletedGrantToken
+				<< " completed_token_matches=" << (Sample.StructuralLastCompletedGrantToken == Token)
+				<< " completed_bytes=" << Sample.StructuralLastCompletedGrantBytes
+				<< " activated_us=" << Sample.StructuralLastCompletedGrantActivatedAtMicroseconds
+				<< " first_send_us=" << Sample.StructuralLastCompletedGrantFirstSendAtMicroseconds
+				<< " completed_us=" << Sample.StructuralLastCompletedGrantCompletedAtMicroseconds
+				<< " completed_max_running_byte_us=" << Sample.StructuralLastCompletedGrantMaximumRunningDeficitByteMicroseconds
+				<< " generation_max_finite_shortfall_byte_us=" << Sample.StructuralMaximumFiniteShortfallByteMicroseconds
+				<< " peer_rate_bytes_per_second=" << FiniteGrantServiceCurve::PeerRateBytesPerSecond
+				<< " finite_intercept_byte_us=" << FiniteGrantServiceCurve::FiniteInterceptByteMicroseconds
+				<< " running_bound_byte_us=" << FiniteGrantServiceCurve::RunningBoundByteMicroseconds
+				<< " segment_events=" << Sample.LastCompletedStructuralSegmentEventCount
+				<< " segment_count_invalid=" << (Sample.LastCompletedStructuralSegmentEventCount > std::size(Sample.LastCompletedStructuralSegmentEvents))
+				<< '\n';
+			for (std::size_t Index = 0; Index < std::min<std::size_t>(Sample.LastCompletedStructuralSegmentEventCount,
+				std::size(Sample.LastCompletedStructuralSegmentEvents)); ++Index) {
+				const auto &Event = Sample.LastCompletedStructuralSegmentEvents[Index];
+				std::cerr << "[Network:AckStatsFailureSegment] completed_token=" << Sample.StructuralLastCompletedGrantToken
+					<< " index=" << Index << " at_us=" << Event.AtMicroseconds << " bytes=" << Event.PayloadBytes << '\n';
+			}
 			const auto PrintFailureState = [&](const char *Side, auto &Transport, auto Connection) {
 				GargantuanAckDiagnostics Trace;
 				const bool Available = AckAccess::Read(Transport, Connection, Trace);
@@ -153,7 +186,7 @@ inline void Observe(bool Prompt) {
 			PrintFailureState("receiver", *Pair.Client, Pair.ClientConnection);
 		}
 		Require(Conserved, "stats-boundary grant did not conserve/retire its exact bytes");
-		Require(!Final.Sender.StructuralLastCompletedGrantFailed && !Final.Sender.StructuralServiceFailed,
+		Require(F1Healthy,
 			"stats boundary violated unchanged F1");
 		ExactPayloads(Pair, {Payload(Bytes, std::byte{0x49})});
 		Require(AckAccess::Read(*Pair.Server, Pair.ServerConnection, Sender), "grant prompt evidence missing");
