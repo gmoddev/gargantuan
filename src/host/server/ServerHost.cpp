@@ -2,6 +2,7 @@
 #include "host/server/PhysicalScaleQualification.hpp"
 #include "host/server/FarmAdmissionEvidence.hpp"
 #include "host/common/FarmPublicationEvidence.hpp"
+#include "host/server/FarmF1Evidence.hpp"
 #include "host/common/FarmServerTickEvidence.hpp"
 #include "host/common/FarmLifecycleEvidence.hpp"
 
@@ -682,6 +683,8 @@ namespace gargantuan::host {
 			if (ScaleQualification && AdmissionEvidence)
 				ScaleQualification->AttachAdmissionEvidence(*AdmissionEvidence);
 			std::unique_ptr<detail::FarmPublicationEvidence> PublicationEvidence;
+			std::unique_ptr<detail::FarmF1Evidence> F1Evidence;
+			if (FarmScaleWorkload) F1Evidence = std::make_unique<detail::FarmF1Evidence>();
 			if (FarmScaleWorkload) PublicationEvidence = std::make_unique<detail::FarmPublicationEvidence>(
 				true, FarmRunId, -1, 0, std::filesystem::path(FarmPublicationEvidencePath));
 			FarmDiagnosticStop DiagnosticStop(FarmDiagnosticStopEvent);
@@ -1021,6 +1024,8 @@ namespace gargantuan::host {
 			if (AdmissionEvidence && !AdmissionEvidence->Valid()) ExitCode = 10;
 			if (PublicationEvidence && !PublicationEvidence->Valid()) ExitCode = 10;
 			if (ServerTickEvidence && !ServerTickEvidence->Valid()) ExitCode = 10;
+			if (F1Evidence && !F1Evidence->Valid()) ExitCode = 10;
+			if (F1Evidence) F1Evidence->Write(std::cout, FarmRunId);
 			if (FarmMode && (FarmReadyHighWater != static_cast<std::size_t>(FarmPeers) ||
 				FarmIdentities.size() != static_cast<std::size_t>(FarmPeers) || FarmIdentityConflict ||
 				(ScaleQualification && !ScaleQualification->IsComplete())))

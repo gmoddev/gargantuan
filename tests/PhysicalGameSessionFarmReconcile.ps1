@@ -20,6 +20,7 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'PhysicalFarmClockEvidence.ps1')
 . (Join-Path $PSScriptRoot 'PhysicalGameSessionFarmLifecycle.ps1')
 . (Join-Path $PSScriptRoot 'PhysicalGameSessionFarmRemoteOwnership.ps1')
+. (Join-Path $PSScriptRoot 'PhysicalGameSessionFarmF1.ps1')
 
 function Get-RequiredJson {
 	param([string]$Path)
@@ -410,6 +411,10 @@ $Lifecycle = Read-FarmLifecycleObservation -ServerRoot $Server.Root -ClientRoot 
 Assert-FarmLifecycleAdmission -Observation $Lifecycle -Admission $Admission
 $RemoteOwnership = Read-FarmRemoteOwnershipObservation -ServerRoot $Server.Root -ClientRoot $Clients.Root `
 	-RunManifestPath $RunManifestPath
+$F1 = Read-FarmF1Observation -ServerRoot $Server.Root -RunManifestPath $RunManifestPath
+Assert-FarmF1Admission -Observation $F1 -Admission $Admission
+$Ledger += [ordered]@{ Gate='Every finite native first-send grant, including final grants';
+	State=$F1.State; Evidence='32 generation-scoped sticky native verdict histories; exact completed, first-send, ACK and retirement conservation' }
 $Ledger += [ordered]@{ Gate = 'RemoteManager queue and handler ownership bounds';
 	State = $RemoteOwnership.State.Replace('_', ' ');
 	Evidence = '33 post-Stop native insertion high-waters, zero current ownership and exact accepted/released totals; residence diagnostics do not prove response scheduler latency' }
@@ -434,6 +439,7 @@ $Report = [ordered]@{
 	ClockObservation = $Clock
 	LifecycleObservation = $Lifecycle
 	RemoteOwnershipObservation = $RemoteOwnership
+	F1Observation = $F1
 	NodeAuthenticatedManifest = $NodeAuthenticatedManifest
 	ServerResourceSamples = $ServerSamples; ClientResourceSamples = $ClientSamples
 	ServerHostResourceSamples = $ServerHostSamples; ClientHostResourceSamples = $ClientHostSamples

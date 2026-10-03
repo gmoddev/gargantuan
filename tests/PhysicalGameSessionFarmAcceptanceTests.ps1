@@ -553,7 +553,8 @@ try {
 		$Observed.Local.Capture.Status -cne 'NOT_MEASURED' -or
 		$Observed.Node.Capture.Status -cne 'NOT_MEASURED' -or
 		$Observed.Local.RemoteCadence.Status -cne 'NOT_MEASURED' -or
-		@($Observed.GateObservations | Where-Object { $_.State -eq 'NOT MEASURED' }).Count -ne 21 -or
+		@($Observed.GateObservations | Where-Object { $_.State -eq 'NOT MEASURED' }).Count -ne 22 -or
+		$Observed.Local.F1.State -cne 'NOT_MEASURED' -or
 		$Observed.Local.Workload.State -cne 'MEASURED_PASS' -or
 		$Observed.Local.Admission.FixedWorkloadFairness.State -cne 'NOT_MEASURED' -or
 		$Observed.Local.RemoteOwnership.State -cne 'NOT_MEASURED' -or
@@ -563,6 +564,11 @@ try {
 		$Observed.Node.Recovery.ExactRetainedWorkBytes -cne 'NOT_MEASURED') {
 		throw "resource/parity observation promoted a missing physical gate or lost resource evidence: status=$($Observed.Status) claim=$($Observed.Foundation3LQualification) parity=$($Observed.WorkloadPinParity.State) clients=$($Observed.Local.Resources.Clients.ProcessCount) server=$($Observed.Node.Resources.Server.ProcessCount) ws=$($Observed.Local.Resources.Clients.SumOfPerProcessPeakWorkingSetBytes) missing=$(@($Observed.GateObservations | Where-Object { $_.State -eq 'NOT MEASURED' }).Count)"
 	}
+	$Local.Report['F1Observation'] = @{ State='MEASURED_PASS'; Contract='finite_grant_v1' }
+	Save-Json -Path $Local.ReportPath -Value $Local.Report
+	Assert-Rejected -Name 'forged F1 without native receipts' -OutputPath (Join-Path $TestRoot 'forged-f1.json')
+	$Local.Report.Remove('F1Observation')
+	Save-Json -Path $Local.ReportPath -Value $Local.Report
 	$TlsInputs = New-NodeTlsFixture -NodeRun $Node
 	$TlsObservedPath = Join-Path $TestRoot 'tls-observed.json'
 	Invoke-Analyzer -OutputPath $TlsObservedPath -TlsInputs $TlsInputs

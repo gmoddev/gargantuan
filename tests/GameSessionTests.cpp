@@ -5,6 +5,7 @@
 #include "../src/host/server/PhysicalScaleQualification.hpp"
 #include "PublicationLatencyFixture.hpp"
 #include "JoinedCharacterFixture.hpp"
+#include "FarmF1EvidenceFixture.hpp"
 #include "gargantuan/Engine.hpp"
 #include "gargantuan/classes/DataModel.hpp"
 #include "gargantuan/classes/Folder.hpp"
@@ -2411,6 +2412,7 @@ int main(int ArgumentCount, char **Arguments) {
 		TestRecoveryConvergenceBound();
 		TestPublicationLatencyBounds();
 		TestFarmPublicationEvidence();
+		TestFarmF1Evidence();
 		TestProtocolBounds();
 		TestServerSessionSignalLifetime();
 		TestSessionOwnershipAndEndpointPolicy();

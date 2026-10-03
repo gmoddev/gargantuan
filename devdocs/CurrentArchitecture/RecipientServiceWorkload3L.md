@@ -112,6 +112,19 @@ measurement or a phase-long drift guarantee; see
 Due-service percentiles describe these measured runs, not a new universal
 Character latency guarantee. Rendered/GPU visibility is not measured.
 
+The physical farm separately retains bounded F1 first-send evidence for all 32
+connection generations. The private Main-thread pooled-feedback tap records
+each completed native grant before retirement or freshness-driven requalification
+can admit its successor. Its 32-entry farm-owned summary latches any service
+failure, checks consecutive completion identities, and sums exact grant bytes.
+The final grant is included even when all its bytes later ACK and retire. Final
+completed bytes, accepted bytes, unique first-send, ACK and retirement must agree;
+the parser independently joins the 32 ready identities and terminal admission
+totals. Retaining a failed grant verdict is diagnostic history, not a cross-grant
+service curve. Historical runs without these receipts remain unmeasured for this
+gate. Native service evidence does not replace the distinct four-grant pool
+probe, delivery, fairness, capture or recovery gates.
+
 The unchanged historical `phaseHealthy` result still includes tick and raw-gap
 guards. The qualified mode separately gates normative Remote/action service,
 zero Character scheduler rejection, complete due/accepted-state accounting and

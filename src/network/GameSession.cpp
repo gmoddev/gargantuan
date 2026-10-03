@@ -1344,6 +1344,17 @@ namespace gargantuan::network {
 			ByteAdmission->SetOrdinaryFunding(*Funded);
 			return true;
 		}
+		void RecordPooledObservation(ConnectionId Connection, const detail::ReliableServiceAcceptedBytes &Accepted,
+			const std::optional<detail::ReliableServiceFeedback> &Sample,
+			const detail::PooledReliableServiceFeedback::Result &Result, std::uint64_t Now) {
+			if (const auto *Sink = detail::ActivePooledService; Sink && Sink->Record)
+				Sink->Record(Sink->Context, detail::PooledServiceRecord{
+					.Connection = Connection, .SimulationTick = SimulationTick, .NowMicroseconds = Now,
+					.DebtToken = ByteAdmission->DebtToken(Connection), .DebtBytes = ByteAdmission->Debt(Connection),
+					.StructuralJournalLag = Replication->GetJournalLag(Connection),
+					.Accepted = Accepted, .Feedback = Sample, .Result = Result,
+					.Admission = ByteAdmission->GetMetrics()});
+		}
 
 		void TearDownPeer(ConnectionId Connection) {
 			auto Iterator = Peers.find(Connection);
@@ -1532,15 +1543,7 @@ namespace gargantuan::network {
 							const auto Result = Peers.at(Connection).ReliableFeedback.Observe(Connection, *Accepted, Sample,
 								ObservedNow, ByteAdmission->DebtToken(Connection), ByteAdmission->Debt(Connection));
 							RecordCausalDelivery(Connection, Peers.at(Connection), Sample, Result.Valid);
-							if (const auto *Sink = detail::ActivePooledService; Sink && Sink->Record)
-								Sink->Record(Sink->Context, detail::PooledServiceRecord{
-									.Connection = Connection, .SimulationTick = SimulationTick,
-									.NowMicroseconds = ObservedNow,
-									.DebtToken = ByteAdmission->DebtToken(Connection),
-									.DebtBytes = ByteAdmission->Debt(Connection),
-									.StructuralJournalLag = Replication->GetJournalLag(Connection),
-									.Accepted = *Accepted, .Feedback = Sample, .Result = Result,
-									.Admission = ByteAdmission->GetMetrics()});
+							RecordPooledObservation(Connection, *Accepted, Sample, Result, ObservedNow);
 							if (!Result.Valid || (Result.RetiredBytes &&
 								!RetireStructural(Connection, Result.RetiredToken, Result.RetiredBytes)) || Result.Terminal) {
 								PendingPeerFailures.try_emplace(Connection, DisconnectInfo{DisconnectReason::TransportFailure,
@@ -1624,6 +1627,7 @@ namespace gargantuan::network {
 								const auto Result = PeerValue.ReliableFeedback.Observe(Connection, *Accepted, Sample,
 									ServiceTime(), ByteAdmission->DebtToken(Connection), ByteAdmission->Debt(Connection));
 								RecordCausalDelivery(Connection, PeerValue, Sample, Result.Valid);
+								RecordPooledObservation(Connection, *Accepted, Sample, Result, ServiceTime());
 								if (!Result.Valid || (Result.RetiredBytes &&
 									!RetireStructural(Connection, Result.RetiredToken, Result.RetiredBytes)) || Result.Terminal) {
 									PendingPeerFailures.try_emplace(Connection, DisconnectInfo{DisconnectReason::TransportFailure,

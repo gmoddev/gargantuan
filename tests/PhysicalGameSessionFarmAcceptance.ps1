@@ -33,6 +33,7 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'PhysicalFarmClockEvidence.ps1')
 . (Join-Path $PSScriptRoot 'PhysicalGameSessionFarmLifecycle.ps1')
 . (Join-Path $PSScriptRoot 'PhysicalGameSessionFarmRemoteOwnership.ps1')
+. (Join-Path $PSScriptRoot 'PhysicalGameSessionFarmF1.ps1')
 . (Join-Path $PSScriptRoot 'PhysicalFarmNodeResources.ps1')
 
 function Import-FarmRecoveryParser {
@@ -940,6 +941,12 @@ function Read-ProviderRun {
 		($Report.LifecycleObservation | ConvertTo-Json -Depth 12 -Compress)) {
 		throw 'reconciled lifecycle observation differs from independently replayed indexed evidence'
 	}
+	$F1 = Read-FarmF1Observation -ServerRoot $Server.Root -RunManifestPath (Join-Path $Server.Root 'run-manifest.json')
+	Assert-FarmF1Admission -Observation $F1 -Admission $Report.Admission
+	if ($null -eq $Report.F1Observation) {
+		if ($F1.State -cne 'NOT_MEASURED') { throw 'reconciliation omitted present native F1 evidence' }
+	} elseif (($F1 | ConvertTo-Json -Depth 12 -Compress) -cne
+		($Report.F1Observation | ConvertTo-Json -Depth 12 -Compress)) { throw 'reconciliation native F1 differs from independent replay' }
 	$RemoteOwnership = Read-FarmRemoteOwnershipObservation -ServerRoot $Server.Root -ClientRoot $Clients.Root `
 		-RunManifestPath (Join-Path $Server.Root 'run-manifest.json')
 	if ($null -eq $Report.RemoteOwnershipObservation) {
@@ -961,6 +968,7 @@ function Read-ProviderRun {
 		Clock = $Clock
 		Lifecycle = $Lifecycle
 		RemoteOwnership = $RemoteOwnership
+		F1 = $F1
 		RemoteCadence = $RemoteCadence
 		ProviderObservation = $ProviderObservation; Recovery = $Recovery
 		Resources = [ordered]@{ Server = $ServerResources; Clients = $ClientResources
@@ -1036,6 +1044,7 @@ $Observed = [ordered]@{
 		Clock = $Local.Clock
 		Lifecycle = $Local.Lifecycle
 		RemoteOwnership = $Local.RemoteOwnership
+		F1 = $Local.F1
 		ServerWorkTicks = $Local.ServerWorkTicks
 		Capture = $LocalCapture
 		RemoteCadence = $Local.RemoteCadence
@@ -1051,6 +1060,7 @@ $Observed = [ordered]@{
 		Clock = $Node.Clock
 		Lifecycle = $Node.Lifecycle
 		RemoteOwnership = $Node.RemoteOwnership
+		F1 = $Node.F1
 		ServerWorkTicks = $Node.ServerWorkTicks
 		Capture = $NodeCapture
 		RemoteCadence = $Node.RemoteCadence
@@ -1059,6 +1069,7 @@ $Observed = [ordered]@{
 		EvidenceRetention = $Node.EvidenceRetention
 	}
 	GateObservations = @(
+		[ordered]@{ Gate='Every finite native first-send grant, including final grants'; State=$(if ($Local.F1.State -ceq 'MEASURED_PASS' -and $Node.F1.State -ceq 'MEASURED_PASS') { 'MEASURED_PASS' } else { 'NOT MEASURED' }); Reason='32 generation-scoped native grant histories independently replayed per provider; exact ACK/retirement cannot erase a failed last or earlier grant' },
 		[ordered]@{ Gate = 'Separate Node provider process resource measurement'; State = $Node.ProviderObservation.ProcessResources.State.Replace('_', ' '); Reason = 'bounded owned Go child CPU, memory, threads and handles, distinct from Engine and client farm; no invented utilization SLA' },
 		[ordered]@{ Gate = 'RemoteManager queue and handler ownership bounds'; State = $(if ($Local.RemoteOwnership.State -ceq 'MEASURED' -and $Node.RemoteOwnership.State -ceq 'MEASURED') { 'MEASURED' } else { 'NOT MEASURED' }); Reason = 'native insertion high-waters, zero post-Stop ownership and exact release totals for server and 32 clients; work residence/lease overshoot is diagnostic and does not substitute for response scheduler latency' },
 		[ordered]@{ Gate = 'Logical lifecycle, readers, content and debt cleanup'; State = $(if ($Local.Lifecycle.State -ceq 'MEASURED' -and $Node.Lifecycle.State -ceq 'MEASURED') { 'MEASURED' } else { 'NOT MEASURED' }); Reason = 'independently replayed post-Stop server and 32 client receipts per provider; zero transient ownership and exact admission conservation; cached/resident content remains diagnostic and does not replace pre-Stop successful convergence' },
