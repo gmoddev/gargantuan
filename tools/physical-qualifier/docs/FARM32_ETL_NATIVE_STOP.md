@@ -81,7 +81,7 @@ remain independent mandatory checks.
 Setup `d3b30465-1abf-4eaf-8a3a-fb73174b2682` failed before capture or traffic:
 Windows ellipsized the first long filter name in its table. The exact-name
 check rejected it, and cleanup correctly refused an unrecognized inventory.
-One task-owned filter remains; no trace was started. V2 uses 23-character
+One task-owned filter remained; no trace was started. V2 uses 23-character
 run-derived names, parses the measured complete two-line tuple format, and
 preserves full inventory checks. Its integrated harness passes 103 tests;
 the separate fixed-run cleanup passes 11 tests and verifies the five retained
@@ -91,13 +91,65 @@ is authorized by this recovery helper.
 
 V2 preparation `508b86d6-38fc-4424-b5aa-d52a00889117` expired its 300-second
 manual-helper wait without any helper, capture or traffic starting. It remains
-`DIAGNOSTIC_INCOMPLETE`; its identity must not be reused. The old-filter recovery
-and a fresh diagnostic require the unavailable manual Administrator launch.
+`DIAGNOSTIC_INCOMPLETE`; its identity must not be reused. At that checkpoint,
+old-filter recovery and a fresh diagnostic required a manual Administrator launch.
 The fixed cleanup launcher is
 `C:\Users\aiden\.codex\artifacts\Admin-Cleanup-d3b30465.ps1`;
 the frozen corrected kit is
 `C:\Users\aiden\.codex\artifacts\farm32-client-drop-5g-v2`.
-No completed drop trace or Windows drop reason has been measured yet.
+The subsequent execution below supersedes that external-action checkpoint.
+
+## Completed client drop diagnostic (2026-10-03 UTC)
+
+The user launched the fixed recovery helper. Its immutable
+`fixed-owned-filter-recovery-v2/recovery-result.json` records
+`EXACT_OWNED_FILTER_REMOVED`, no capture Start/Stop, and the original failed
+qualification unchanged. Fresh observations confirmed empty filters and idle
+Packet Monitor before a new run.
+
+Fresh run `ccd6f159-acd1-4b43-bb69-b58947e4970f` completed the reviewed v2
+barrier, drop observer, full captures, offline replay and cleanup. Its outer
+result is successful **DIAGNOSTIC_ONLY_NOT_NEAR_CAP**, not provider qualification.
+The client sent 1,726,200 DATA datagrams and received all 1,724,500 worker DATA
+datagrams. Both applications have zero sequence gaps. Both full captures contain
+all 3,460,300 marked DATA/HELLO/END packets exactly once across all 32 tuples.
+Client dumpcap and worker ETW report zero loss. Retained files are:
+
+| File | Bytes | SHA-256 |
+| --- | ---: | --- |
+| Client pcapng | 5,107,403,332 | `b0811b6cfe5ebdf11e9e99aeff1315ef9d06173a944be424617c89f7f92b7ed4` |
+| Worker ETL | 5,389,156,352 | `6d1fbf5848f7bc63492b67294c2f7f17a0158af32d265ecd99b0fff65f6b6361` |
+| Worker pcapng | 5,107,403,824 | `cb653c8882afe49ebfdffe4666de2f8337020eff78464c6ea39a6b6f28ed9027` |
+
+The worker pcapng has four additional unmarked frames. Exact marked sequence
+identity agrees between captures. Native Stop, named cleanup and service idle
+passed; both services remain running. No owned endpoint process or relevant UDP
+socket remains. The drop helper independently reports
+`OWNED_SESSION_AND_FILTERS_CLEARED` with no cleanup error.
+
+The 27,649-byte drop ETL has SHA-256
+`0a6d69502c9db2439ab74ed9d3484c0d8de8d142f45fabbd70e517401fe3f8f7`.
+It contains 1,113 rundown events, zero raw drop events, and zero values in all
+158 drop-counter and 197 flow-counter rows. Its drop-only pcapng has zero
+packets. Native event/buffer-loss counters are zero. This establishes no
+observed drop, but **observer traffic coverage is NOT MEASURED**. It cannot
+prove the preceding 629-packet application loss is fixed or identify its cause.
+The earlier failures remain failed. No host-wide IP/UDP counter is attributed
+to these flows without packet-level evidence.
+
+Receipts are under
+`C:\Sandbox\Codex\Evidence\Farm32ClientDropTraffic5GiB-v2\ccd6f159-acd1-4b43-bb69-b58947e4970f`;
+the worker originals remain under
+`C:\Sandbox\Codex\Evidence\Foundation3LFarm32\ccd6f159-acd1-4b43-bb69-b58947e4970f`.
+Closed drop analysis is retained at
+`C:\Users\aiden\.codex\artifacts\farm32-drop-decode-v1\ccd6f159-acd1-4b43-bb69-b58947e4970f\analysis-v2\counter-summary.json`.
+The actual text export uses a UTF-16 BOM. The initial strict UTF-8 decoder
+failed closed; a separate BOM-aware decoder passes 17 regressions and retains
+the failed output. No packet-format calibration is inferred from absent events.
+
+This successful 5-GiB diagnostic does not satisfy the unchanged full near-capacity
+gate or explain the intermittent receive-path loss. Those remain prerequisites
+to provider use. No fresh F1 or Local/Node provider run was performed.
 
 ## Earlier native-stop diagnostic
 

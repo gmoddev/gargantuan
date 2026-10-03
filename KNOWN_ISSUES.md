@@ -85,20 +85,26 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
-2026-10-03 UTC external-action checkpoint: candidate `9ae8f68c2` passes the
+2026-10-03 UTC diagnostic checkpoint: candidate `9ae8f68c2` passes the
 exact-source hosted Windows Release job and GNS sanitizer workflow; Linux
 Native CI is still pending. The installed native-stop diagnostic
 `a17d3e70-d5c7-428e-afa2-2277ab550e3a` preserved every marked packet in both
 captures, but the client application missed 629 valid captured datagrams.
 The precise Windows receive-path loss remains **NOT MEASURED**. A subsequent
 manually elevated drop-diagnostic setup failed before capture because Windows
-ellipsized its filter name. Its one retained filter needs fixed-input,
-ownership-checked Administrator cleanup. The corrected short-name helper and
-103-test harness are prepared; the next manual-helper wait expired without
-capture or traffic. Both setup results remain failed/incomplete.
+ellipsized its filter name. Fixed-input, ownership-checked Administrator cleanup
+has now removed its exact retained filter. The corrected short-name helper
+completed fresh run `ccd6f159-acd1-4b43-bb69-b58947e4970f`: both applications
+received every DATA packet, both full captures contain all 3,460,300 marked
+packets with zero reported capture loss, and endpoint/filter cleanup passed.
+Its result is **DIAGNOSTIC_ONLY_NOT_NEAR_CAP**. The drop-only observer contains
+no drops and all-zero flow counters, so positive observer coverage is
+**NOT MEASURED**. The historical 629-packet loss remains unexplained; its failed
+receipt and both failed/incomplete setup receipts remain unchanged.
 See the [complete native-stop checkpoint](tools/physical-qualifier/docs/FARM32_ETL_NATIVE_STOP.md).
-The client briefly reported 8.54 GiB available, then fell below 1 GiB; the
-unchanged 8-GiB provider preflight is not currently cleared. No fresh F1,
+The client briefly reported 8.54 GiB available, then fell below 1 GiB; the latest
+post-diagnostic reading is 4.36 GiB. The unchanged 8-GiB provider preflight is
+not currently cleared. No fresh F1,
 Local/Node provider or final acceptance PASS is claimed. **KI-006 OPEN;
 Foundation 3L B — PARTIALLY READY; no 3M or merge.**
 
