@@ -10,6 +10,7 @@ from datetime import datetime
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path, PurePosixPath
 import re
 import subprocess
@@ -313,6 +314,7 @@ def VerifyProvenance(IndexPath, IndexPin, Inputs, CI, Four, Source):
     Root = Path(IndexPath).parent
     Package = VerifyQualifiedPackage(Root, Index['QualifiedPackage'], Source, CI)
     Stages = []
+    StageRecords = []
     for Provider in ('Local', 'Node'):
         ManifestBytes = ReadBytes(Path(Inputs[Provider + 'ClientEvidenceRoot']) / 'run-manifest.json')
         Manifest = JsonData(ManifestBytes)
@@ -325,13 +327,30 @@ def VerifyProvenance(IndexPath, IndexPin, Inputs, CI, Four, Source):
                 Stage.get('Role') == 'CLIENT' and Stage.get('SourceCommit') == Source and
                 Stage.get('RunId') == Manifest.get('RunId') and Stage.get('ManifestSha256') == Digest(ManifestBytes),
                 "controller stage does not bind the replayed provider manifest")
+        Require(str(uuid.UUID(Stage['CoordinatorRunId'])) == Stage['CoordinatorRunId'],
+                'controller stage coordinator identity is not canonical')
         Stages.append(Timestamp(Stage.get('CreatedUtc')))
-    Sequence = {'State': 'NOT_MEASURED', 'Reason': 'four-client controlling-host completion timestamp absent'}
-    if Four.get('State') == 'MEASURED_PASS' and Four.get('CompletedUtc') is not None:
+        StageRecords.append(Stage)
+    Sequence = {'State': 'NOT_MEASURED', 'Reason': 'four-client or Local controller completion evidence absent'}
+    LocalCompletion = None
+    if 'LocalHostTerminal' in Index:
+        Terminal = JsonData(Pinned(Root, Index['LocalHostTerminal']))
+        Coordinator = ReadJson(Inputs['LocalCoordinatorResultPath'])
+        Require(Terminal.get('Format') == 'GargantuanFarm32Terminal' and Terminal.get('Version') == 1 and
+                Terminal.get('RunId') == StageRecords[0]['RunId'] and Terminal.get('Action') == 'host' and
+                type(Terminal.get('ChildExitCode')) is int and Terminal['ChildExitCode'] == 0 and
+                Terminal.get('ChildTreeReaped') is True and Terminal.get('Outcome') == 'COMPLETED' and
+                Coordinator.get('RunId') == StageRecords[0].get('CoordinatorRunId') and
+                Coordinator.get('Success') is True, 'Local controller completion/coordinator mismatch')
+        LocalCompletion = Timestamp(Terminal.get('EndedUtc'))
+        Require(Stages[0] <= LocalCompletion <= Stages[1], 'Node campaign was staged before Local completed')
+    if (Four.get('State') == 'MEASURED_PASS' and Four.get('CompletedUtc') is not None and
+            LocalCompletion is not None):
         Require(Four.get('CompletionClockDomain') == 'CONTROLLING_HOST_UTC', 'four-client completion clock domain absent')
         Require(Timestamp(Four['CompletedUtc']) <= min(Stages), 'provider campaign was staged before fresh four-client completion')
         Sequence = {'State': 'MEASURED_PASS', 'ClockDomain': 'CONTROLLING_HOST_UTC',
                     'FourCompletedUtc': Four['CompletedUtc'], 'LocalCreatedUtc': Stages[0].isoformat(),
+                    'LocalCompletedUtc': LocalCompletion.isoformat(),
                     'NodeCreatedUtc': Stages[1].isoformat()}
     return {'Package': Package, 'Sequence': Sequence, 'InventorySha256': Digest(Data)}
 
@@ -422,7 +441,14 @@ def FinalObservation(SourceCommit, ProviderObservation, CI, FourClient, Provenan
             "ResourcePolicy": "measured canonical bounds; no invented CPU/RSS/NIC percentage SLA"}
 
 
-def ReplayProviders(Root, Arguments, Destination):
+def PinnedPowerShell(PathValue, ExpectedHash):
+    Require(isinstance(PathValue, str) and Path(PathValue).is_absolute() and
+            Path(PathValue).name.lower() in ('pwsh', 'pwsh.exe'), 'absolute PowerShell 7 executable path required')
+    Require(Digest(ReadBytes(PathValue, 64 * 1024 * 1024)) == Hash(ExpectedHash), 'PowerShell executable pin mismatch')
+    return Path(PathValue)
+
+
+def ReplayProviders(Root, Arguments, Destination, PowerShell):
     Required = {"LocalReportPath", "LocalServerEvidenceRoot", "LocalClientEvidenceRoot",
                 "NodeReportPath", "NodeServerEvidenceRoot", "NodeClientEvidenceRoot"}
     Optional = {"NodeTlsMatchReceiptPath", "NodeTlsMatchReceiptSha256", "NodeStagePath", "NodeStageSha256",
@@ -433,12 +459,14 @@ def ReplayProviders(Root, Arguments, Destination):
     Require(isinstance(Arguments, dict) and Required <= set(Arguments) and
             set(Arguments) <= Required | Optional and all(isinstance(Value, str) and Value for Value in Arguments.values()),
             "invalid raw farm replay arguments")
-    Command = ["pwsh", "-NoLogo", "-NoProfile", "-NonInteractive", "-File",
+    Require(isinstance(PowerShell, Path) and PowerShell.is_absolute(), 'pinned PowerShell executable required')
+    Command = [str(PowerShell), "-NoLogo", "-NoProfile", "-NonInteractive", "-File",
                str(Root / "tests/PhysicalGameSessionFarmAcceptance.ps1")]
     for Key, Value in Arguments.items():
         Command.extend(("-" + Key, Value))
     Command.extend(("-OutputPath", str(Destination)))
-    subprocess.run(Command, check=True, timeout=1800)
+    subprocess.run(Command, check=True, timeout=1800,
+                   creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
     return ReadJson(Destination)
 
 
@@ -462,6 +490,8 @@ def Main():
     Parser.add_argument("--source-commit", required=True)
     Parser.add_argument("--farm-inputs", required=True, type=Path,
                         help="JSON raw parameter map for the fixed offline farm acceptance script")
+    Parser.add_argument("--powershell-path", required=True, help="absolute pinned PowerShell 7 executable; no PATH lookup")
+    Parser.add_argument("--powershell-sha256", required=True)
     Parser.add_argument("--ci-index", type=Path)
     Parser.add_argument("--ci-index-sha256")
     Parser.add_argument("--four-client-inputs", type=Path, help="raw input map for fixed four-client evidence replay")
@@ -470,6 +500,7 @@ def Main():
     Parser.add_argument("--output", required=True, type=Path)
     Args = Parser.parse_args()
     Source = Commit(Args.source_commit)
+    PowerShell = PinnedPowerShell(Args.powershell_path, Args.powershell_sha256)
     Root = Path(__file__).resolve().parents[1]
     Head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=Root, text=True).strip()
     Require(Head == Source, "run the final replay from its exact reviewed source commit")
@@ -490,7 +521,7 @@ def Main():
     else:
         Require(Args.ci_index_sha256 is None, "CI pin without inventory")
     with tempfile.TemporaryDirectory(prefix="gargantuan-3l-final-") as Temporary:
-        Farm = ReplayProviders(Root, Inputs, Path(Temporary) / "farm.json")
+        Farm = ReplayProviders(Root, Inputs, Path(Temporary) / "farm.json", PowerShell)
         Four = (ReplayFourClient(Root, ReadJson(Args.four_client_inputs), Source)
                 if Args.four_client_inputs else
                 {"State": "NOT_MEASURED", "Reason": "fresh four-client raw replay required"})
@@ -507,6 +538,8 @@ def Main():
         if Args.four_client_inputs:
             Result["FourClientInputMapSha256"] = Digest(ReadBytes(Args.four_client_inputs))
         Result["AnalyzerSha256"] = Digest(ReadBytes(__file__))
+        Result["PowerShellPath"] = str(PowerShell)
+        Result["PowerShellSha256"] = Args.powershell_sha256
         with Args.output.open("x", encoding="utf-8", newline="\n") as File:
             json.dump(Result, File, indent=2)
             File.write("\n")

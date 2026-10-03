@@ -107,7 +107,34 @@ class FinalTests(unittest.TestCase):
 
     def test_raw_map_cannot_replace_fixed_replayer(self):
         with self.assertRaises(A.EvidenceError):
-            A.ReplayProviders(Path('.'), {"Script": "fake.ps1", "Status": "PASS"}, Path('ignored.json'))
+            A.ReplayProviders(Path('.'), {"Script": "fake.ps1", "Status": "PASS"}, Path('ignored.json'), None)
+
+    def test_powershell_is_explicit_and_hash_pinned(self):
+        with tempfile.TemporaryDirectory() as Root:
+            Executable = Path(Root) / 'pwsh.exe'
+            Executable.write_bytes(b'pinned-runtime-fixture')
+            Hash = A.Digest(Executable.read_bytes())
+            self.assertEqual(A.PinnedPowerShell(str(Executable), Hash), Executable)
+            for PathValue, Pin in ((str(Executable), '0' * 64), ('pwsh', Hash),
+                                   (str(Path(Root) / 'script.ps1'), Hash)):
+                with self.assertRaises(A.EvidenceError):
+                    A.PinnedPowerShell(PathValue, Pin)
+
+    def test_replayer_uses_explicit_runtime_and_fixed_script(self):
+        with tempfile.TemporaryDirectory() as Root:
+            Root = Path(Root)
+            Arguments = {Key: str(Root / Key) for Key in (
+                'LocalReportPath', 'LocalServerEvidenceRoot', 'LocalClientEvidenceRoot',
+                'NodeReportPath', 'NodeServerEvidenceRoot', 'NodeClientEvidenceRoot')}
+            Destination = Root / 'result.json'
+            Runtime = Root / 'pwsh.exe'
+            def Run(Command, **Options):
+                self.assertEqual(Command[0], str(Runtime))
+                self.assertEqual(Command[Command.index('-File') + 1], str(Root / 'tests/PhysicalGameSessionFarmAcceptance.ps1'))
+                self.assertTrue(Options['check'])
+                Destination.write_text(json.dumps(Providers()))
+            with mock.patch.object(A.subprocess, 'run', side_effect=Run):
+                self.assertEqual(A.ReplayProviders(Root, Arguments, Destination, Runtime), Providers())
 
     def test_four_replay_has_no_summary_bypass(self):
         with tempfile.TemporaryDirectory() as Root:
@@ -336,10 +363,20 @@ class ProvenanceTests(unittest.TestCase):
             Inputs[Role + 'ClientEvidenceRoot'] = str(Directory)
             Stage = {'Format': 'GargantuanFarm32Campaign', 'Version': 1, 'Role': 'CLIENT',
                      'SourceCommit': SOURCE, 'RunId': Manifest['RunId'], 'ManifestSha256': A.Digest(Raw),
-                     'CreatedUtc': '2026-10-02T03:00:00Z'}
+                     'CoordinatorRunId': '55555555-5555-4555-8555-555555555555',
+                     'CreatedUtc': '2026-10-02T03:00:00Z' if Role == 'Local' else '2026-10-02T04:00:00Z'}
             Raw = json.dumps(Stage).encode()
             (self.Root / f'{Role}-stage.json').write_bytes(Raw)
             Index[Role + 'ClientStage'] = {'Path': f'{Role}-stage.json', 'Sha256': A.Digest(Raw)}
+        Terminal = {'Format': 'GargantuanFarm32Terminal', 'Version': 1,
+                    'RunId': Providers()['LocalRunId'], 'Action': 'host', 'ChildExitCode': 0,
+                    'ChildTreeReaped': True, 'Outcome': 'COMPLETED', 'EndedUtc': '2026-10-02T03:30:00Z'}
+        Raw = json.dumps(Terminal).encode()
+        (self.Root / 'local-terminal.json').write_bytes(Raw)
+        Index['LocalHostTerminal'] = {'Path': 'local-terminal.json', 'Sha256': A.Digest(Raw)}
+        Coordinator = self.Root / 'local-coordinator.json'
+        Coordinator.write_text(json.dumps({'RunId': '55555555-5555-4555-8555-555555555555', 'Success': True}))
+        Inputs['LocalCoordinatorResultPath'] = str(Coordinator)
         Raw = json.dumps(Index).encode()
         IndexPath = self.Root / 'provenance.json'
         IndexPath.write_bytes(Raw)
@@ -365,6 +402,29 @@ class ProvenanceTests(unittest.TestCase):
         PathValue.write_text(json.dumps(Manifest))
         with self.assertRaisesRegex(A.EvidenceError, 'differs from CI package'):
             A.VerifyProvenance(Index, Hash, Inputs, self.CI, Physical, SOURCE)
+
+    def test_local_completion_before_node_is_required(self):
+        Index, Hash, Inputs, Physical = self.Provenance()
+        Value = json.loads(Index.read_bytes())
+        del Value['LocalHostTerminal']
+        Raw = json.dumps(Value).encode()
+        Index.write_bytes(Raw)
+        Result = A.VerifyProvenance(Index, A.Digest(Raw), Inputs, self.CI, Physical, SOURCE)
+        self.assertEqual(Result['Sequence']['State'], 'NOT_MEASURED')
+        for Change in ({'EndedUtc': '2026-10-02T04:00:01Z'}, {'ChildExitCode': 1},
+                       {'ChildTreeReaped': False}, {'RunId': Providers()['NodeRunId']}):
+            Index, Hash, Inputs, Physical = self.Provenance()
+            Value = json.loads(Index.read_bytes())
+            TerminalPath = self.Root / 'local-terminal.json'
+            Terminal = json.loads(TerminalPath.read_bytes())
+            Terminal.update(Change)
+            Raw = json.dumps(Terminal).encode()
+            TerminalPath.write_bytes(Raw)
+            Value['LocalHostTerminal']['Sha256'] = A.Digest(Raw)
+            Raw = json.dumps(Value).encode()
+            Index.write_bytes(Raw)
+            with self.assertRaises(A.EvidenceError):
+                A.VerifyProvenance(Index, A.Digest(Raw), Inputs, self.CI, Physical, SOURCE)
 
 
 if __name__ == '__main__':

@@ -18,10 +18,22 @@ and the repository's existing PowerShell offline farm replayer.
 
 Run from a clean checkout of the full candidate commit:
 
+Freeze the native/analyzer execution candidate A before its build. Dispatch CI
+and the qualified-scale artifact on A, build the four-client probe and owned
+source archive from A, and preserve that clean A checkout for final replay.
+A later child B may record the newly measured qualifier artifact pins without
+changing A's native execution source. Qualify B's adapter/pin changes separately;
+the four-client native manifest and both official farm packages still identify
+A. This avoids a build/hash self-reference cycle. A final PR documentation or
+pin receipt commit does not retrospectively relabel an A executable as B. This
+checker proves CI and physical execution provenance for the explicit A source;
+it does not waive required separate validation of the B qualifier.
+
 ```powershell
 python tests/foundation3l_acceptance.py `
   --source-commit <40-lowercase-hex> `
   --farm-inputs <raw-farm-arguments.json> `
+  --powershell-path <absolute-pwsh.exe-path> --powershell-sha256 <runtime-sha256> `
   --four-client-inputs <raw-four-client-arguments.json> `
   --ci-index <ci-index.json> --ci-index-sha256 <independently-retained-sha256> `
   --provenance-index <provenance.json> --provenance-index-sha256 <independently-retained-sha256> `
@@ -37,6 +49,11 @@ farm summary as evidence. The four-client argument map is passed only to the
 fixed tracked `tests/foundation3l_four_client.py:Replay(Inputs, ExpectedCommit)`
 implementation. Until that implementation and its complete inputs are present,
 the fresh four-client gate remains unmeasured.
+PowerShell is selected by its explicit absolute executable path and hash,
+following the existing analysis-inventory/runtime pin pattern. There is no
+`pwsh` PATH fallback and no caller-selected replay script. The fixed farm
+script's `#requires -Version 7.0` remains enforced. Windows subprocess creation
+uses `CREATE_NO_WINDOW`.
 
 ## Provider replay
 
@@ -126,7 +143,8 @@ The separate pinned provenance index is:
     "Archive": {"Path": "qualified-scale.zip", "Sha256": "<sha256>"}
   },
   "LocalClientStage": {"Path": "local-client-stage.json", "Sha256": "<sha256>"},
-  "NodeClientStage": {"Path": "node-client-stage.json", "Sha256": "<sha256>"}
+  "NodeClientStage": {"Path": "node-client-stage.json", "Sha256": "<sha256>"},
+  "LocalHostTerminal": {"Path": "local-host.terminal.json", "Sha256": "<sha256>"}
 }
 ```
 
@@ -146,9 +164,15 @@ Retain the root-owned CLIENT campaign stage configurations. Their RunId,
 SourceCommit and ManifestSha256 must bind the same indexed provider manifests.
 The fresh four-client replay must expose an evidence-backed `CompletedUtc`
 with `CompletionClockDomain = CONTROLLING_HOST_UTC`. Both provider stage
-`CreatedUtc` values must follow that completion. This is broad session ordering
+`CreatedUtc` values must follow that completion. The controlling-host
+`farm_outer_endpoint.py` Local `host.terminal.json` must additionally prove
+`Outcome=COMPLETED`, `ChildExitCode=0`, and `ChildTreeReaped=true` for that exact
+Local RunId. The separately replayed Local coordinator must succeed with the
+stage's CoordinatorRunId. Enforce Local stage <= Local host `EndedUtc` <= Node
+stage: a later successful Node receipt cannot repair overlapping or reversed
+campaign order. This is broad session ordering
 from one controller's UTC records, not cross-host native timestamp subtraction.
-If the completion timestamp is absent, order remains NOT_MEASURED.
+If either required completion receipt is absent, order remains NOT_MEASURED.
 
 ## Validation and remaining real inputs
 
