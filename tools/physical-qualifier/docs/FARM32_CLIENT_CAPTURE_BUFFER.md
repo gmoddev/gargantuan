@@ -46,3 +46,11 @@ rate using the corrected pacing clock, retain exact endpoint DATA ledgers,
 report zero capture drops at both ends, and satisfy the existing full-packet,
 direction, size, export, and cleanup gates. Actual allocation and physical
 zero-loss results for this buffer candidate are **NOT MEASURED** here.
+
+The subsequent V4 synthetic run `0309a027-a783-44e7-8465-584eb20babaf`
+records the fixed request and 9,619,900 client packets with zero reported drops.
+Its 14,198,972,932-B client pcap passes exact marked sequence/flow verification.
+That is an observed client-side result; actual driver buffer allocation remains
+unmeasured. Worker capture has independently verified interior sequence gaps,
+so the combined near-capacity profile remains unqualified. See the preserved
+[physical receipt](../../../devdocs/CurrentArchitecture/PooledPhysicalQualification3L.md).

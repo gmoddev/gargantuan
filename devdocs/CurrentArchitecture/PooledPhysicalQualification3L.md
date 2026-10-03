@@ -2400,3 +2400,28 @@ packets in the worker NIC capture before the worker's first transmission. The
 missing V1 socket receipt packets therefore lie after that capture observation;
 the exact Windows filtering/drop mechanism was NOT MEASURED. Historical evidence
 is preserved and no later result upgrades either failed synthetic run.
+
+Synthetic V4 run `0309a027-a783-44e7-8465-584eb20babaf` reached the intended
+near-capacity exercise: worker ETL 15,054,929,920 B, below the unchanged 15-GiB
+completeness ceiling and above the 14-GiB exercise threshold. QueryPerformanceCounter
+pacing and the fixed client `-B 64` request were used. All 4,803,800 client DATA
+packets and 4,806,500 worker DATA packets reached the opposite application with
+exact per-flow sequence conservation. The client pcap contains 9,619,900 marked
+packets, zero reported drops, and passes its independent full-sequence verifier.
+
+The worker export completed, but **capture qualification remains INCOMPLETE**.
+Its 14,274,812,236-B pcap has 9,730,757 packet blocks, matching both the export
+count and the raw NDIS packet-event count; tracerpt reports zero lost ETW events.
+Independent offline inspection nevertheless finds 877 missing client-to-worker
+DATA packets and 1,138 missing worker-to-client DATA packets. These are interior
+sequence gaps, not missing terminal markers, duplicate sequences, or merely
+out-of-order recording. The raw event count and zero ETW-loss report do not
+establish packet completeness. The exact worker recording mechanism requires
+further attribution; neither application delivery nor the successful client
+capture waives the worker evidence gate.
+
+Client and worker cleanup receipts report no owned processes or task UDP
+sockets; both capture services are running and idle. Original evidence remains
+under the existing endpoint evidence parents with this UUID. The failed outer
+receipt remains unchanged. No production/provider run or Foundation 3L PASS is
+claimed by this synthetic infrastructure exercise.
