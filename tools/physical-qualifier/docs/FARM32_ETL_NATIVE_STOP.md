@@ -63,8 +63,41 @@ receipt identifies the archive; small original receipts remain in place.
 The source hook passes 304 qualifier tests, both PS5.1/PS7 interop-compiling
 simulations, and the legacy four-client hook simulation. Candidate build and
 eight probe self-tests pass; both instrumented Release aggregate workload modes
-pass on the worker. Required exact-source hosted CI remains pending. No fresh
-F1 or provider PASS follows from this diagnostic.
+pass on the worker. Exact-source hosted Windows Release and GNS sanitizer jobs
+pass; Linux Native CI remains pending at this checkpoint. The ten original
+GNS JUnit results were independently verified. No fresh F1 or provider PASS
+follows from this diagnostic.
+
+## Client drop diagnostic preparation and external action
+
+Client driver access requires an Administrator process; the normal controller
+cannot use PktMon. A fixed-input manually launched helper was prepared with
+an automated pre-capture barrier, process-creation identity, exact tuple filters,
+a 180-second capture lifetime, bounded storage and owned cleanup. It cannot
+start application traffic or change network policy. Its truncated drop records
+are diagnostic only; normal full-frame capture and exact application delivery
+remain independent mandatory checks.
+
+Setup `d3b30465-1abf-4eaf-8a3a-fb73174b2682` failed before capture or traffic:
+Windows ellipsized the first long filter name in its table. The exact-name
+check rejected it, and cleanup correctly refused an unrecognized inventory.
+One task-owned filter remains; no trace was started. V2 uses 23-character
+run-derived names, parses the measured complete two-line tuple format, and
+preserves full inventory checks. Its integrated harness passes 103 tests;
+the separate fixed-run cleanup passes 11 tests and verifies the five retained
+old receipt hashes plus two fresh idle/exact-inventory observations before
+removing that single known inventory. No arbitrary capture or filter cleanup
+is authorized by this recovery helper.
+
+V2 preparation `508b86d6-38fc-4424-b5aa-d52a00889117` expired its 300-second
+manual-helper wait without any helper, capture or traffic starting. It remains
+`DIAGNOSTIC_INCOMPLETE`; its identity must not be reused. The old-filter recovery
+and a fresh diagnostic require the unavailable manual Administrator launch.
+The fixed cleanup launcher is
+`C:\Users\aiden\.codex\artifacts\Admin-Cleanup-d3b30465.ps1`;
+the frozen corrected kit is
+`C:\Users\aiden\.codex\artifacts\farm32-client-drop-5g-v2`.
+No completed drop trace or Windows drop reason has been measured yet.
 
 ## Earlier native-stop diagnostic
 
