@@ -267,7 +267,20 @@ class FourClientTests(unittest.TestCase):
             {"Success": True, "RunId": Lifecycle, "Type": "RESULT", "Role": "CLIENT", "Evidence":
              [Evidence(Client / "result.json"), Evidence(Coordinator / "result.json")]}]}
         Save(Host / "result.json", Outer)
-        Journal = [{"Event": "RECEIVE", "RunId": Lifecycle, "Type": "CLEANED", "Role": R, "Success": True}
+        Workflow = json.loads((Replay.TOOLS / "workflows" / "four-client-phase1-lifecycle.json").read_text())
+        Schema = {K: Workflow[K] for K in ("SchemaId", "SchemaVersion")}
+        Schema["SchemaHash"] = Replay.hashlib.sha256(json.dumps(Workflow, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        Journal = []
+        for Index, Role in enumerate(("CLIENT", "SERVER"), 3):
+            Request = str(Replay.uuid.UUID(int=Index))
+            Journal += [{"Event": "RECEIVE", "Version": 1, "RunId": Request, "Sequence": 1,
+                         "Type": "PULL_ASSIGNMENT", "EndpointId": Role},
+                        {"Event": "SEND", "Version": 1, "RunId": Request, "Sequence": 1, "TimestampUnixMs": 1_799_999_999_000,
+                         "Type": "ASSIGNMENT", "Assignment": {"RunId": Lifecycle, "Role": Role,
+                         **Schema, "Parameters": {}, "ExpiresUnixMs": 1_800_000_000_000}},
+                        {"Event": "RECEIVE", "Version": 1, "RunId": Lifecycle, "Sequence": 2,
+                         "Type": "REGISTER", "Role": Role, **Schema}]
+        Journal += [{"Event": "RECEIVE", "RunId": Lifecycle, "Type": "CLEANED", "Role": R, "Success": True}
                    for R in ("CLIENT", "SERVER")] + [{**Outer, "Event": "RESULT"}]
         (Host / "control.jsonl").write_text("\n".join(json.dumps(R) for R in Journal))
         Inputs["LifecycleQualification"] = str(self.Root / "qualification.json")
@@ -384,10 +397,66 @@ class FourClientTests(unittest.TestCase):
     def test_missing_cleaned_event_cannot_be_replaced_by_success_summary(self):
         Inputs = self.FullFixture()
         File = Path(Inputs["LifecycleHostRoot"])/"control.jsonl"
-        File.write_text("\n".join(File.read_text().splitlines()[1:]))
+        Rows = [json.loads(Line) for Line in File.read_text().splitlines()]
+        Rows.pop(next(I for I, Row in enumerate(Rows) if Row.get("Type") == "CLEANED"))
+        File.write_text("\n".join(json.dumps(Row) for Row in Rows))
         self.SealInputs(Inputs)
         with self.assertRaisesRegex(ValueError, "CLEANED"):
             self.FullReplay(Inputs)
+
+    def test_assignment_request_identity_and_schema_mutations_fail(self):
+        Inputs = self.FullFixture()
+        File = Path(Inputs["LifecycleHostRoot"]) / "control.jsonl"
+        Original = File.read_text()
+        Cases = [
+            (0, "RunId", "not-a-uuid"), (0, "RunId", "22222222-2222-4222-8222-222222222222"),
+            (0, "EndpointId", "OTHER"), (0, "Sequence", 2), (0, "Event", "SEND"),
+            (1, "RunId", str(Replay.uuid.UUID(int=99))), (1, "Version", 2), (1, "Version", True), (1, "Success", False),
+            (2, "SchemaVersion", True), (2, "Version", True),
+            (2, "RunId", str(Replay.uuid.UUID(int=3))), (2, "SchemaHash", "0" * 64),
+            (3, "RunId", str(Replay.uuid.UUID(int=3))), (3, "EndpointId", "CLIENT"),
+            (6, "RunId", str(Replay.uuid.UUID(int=3))),
+        ]
+        for Index, Key, Value in Cases:
+            Rows = [json.loads(Line) for Line in Original.splitlines()]
+            Rows[Index][Key] = Value
+            File.write_text("\n".join(json.dumps(Row) for Row in Rows))
+            self.SealInputs(Inputs)
+            with self.subTest(Index=Index, Key=Key), self.assertRaises(ValueError):
+                self.FullReplay(Inputs)
+        for Key, Value in (("RunId", str(Replay.uuid.UUID(int=99))), ("Role", "SERVER"),
+                           ("SchemaHash", "0" * 64), ("SchemaId", "other"), ("SchemaVersion", 2),
+                           ("SchemaVersion", True), ("ExpiresUnixMs", True), ("ExpiresUnixMs", 0),
+                           ("ExpiresUnixMs", 1_799_999_998_999)):
+            Rows = [json.loads(Line) for Line in Original.splitlines()]
+            Rows[1]["Assignment"][Key] = Value
+            File.write_text("\n".join(json.dumps(Row) for Row in Rows))
+            self.SealInputs(Inputs)
+            with self.subTest(Assignment=Key), self.assertRaises(ValueError):
+                self.FullReplay(Inputs)
+
+    def test_assignment_pair_missing_duplicate_or_reordered_fails(self):
+        Inputs = self.FullFixture()
+        File = Path(Inputs["LifecycleHostRoot"]) / "control.jsonl"
+        Original = [json.loads(Line) for Line in File.read_text().splitlines()]
+        for Index in range(6):
+            for Mode in ("missing", "duplicate"):
+                Rows = list(Original)
+                if Mode == "missing":
+                    Rows.pop(Index)
+                else:
+                    Rows.insert(Index, Original[Index])
+                File.write_text("\n".join(json.dumps(Row) for Row in Rows))
+                self.SealInputs(Inputs)
+                with self.subTest(Index=Index, Mode=Mode), self.assertRaises(ValueError):
+                    self.FullReplay(Inputs)
+        for Left, Right in ((0, 1), (1, 2)):
+            Rows = list(Original)
+            Rows[Left], Rows[Right] = Rows[Right], Rows[Left]
+            File.write_text("\n".join(json.dumps(Row) for Row in Rows))
+            self.SealInputs(Inputs)
+            with self.subTest(Reorder=(Left, Right)), self.assertRaises(ValueError):
+                self.FullReplay(Inputs)
 
     def test_admission_activation_cannot_be_moved_or_reclassified(self):
         Inputs = self.FullFixture()

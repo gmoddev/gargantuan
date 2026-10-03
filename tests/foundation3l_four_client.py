@@ -344,11 +344,68 @@ def Needed(Files, Name):
     return Files[Name.casefold()]
 
 
+def LifecycleAssignments(Rows, RunId):
+    # The pinned coordinator replies under the request UUID, then switches its
+    # Link.Config to the assigned run before REGISTER. These are two identities,
+    # not a general exemption from run binding (control.py Host/Agent).
+    Workflow = json.loads(Read(TOOLS / "workflows" / "four-client-phase1-lifecycle.json"))
+    Schema = {K: Workflow[K] for K in ("SchemaId", "SchemaVersion")}
+    Schema["SchemaHash"] = hashlib.sha256(json.dumps(Workflow, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    Requests, Assigned, Registered, Exempt = {}, set(), set(), set()
+    for Index, Row in enumerate(Rows):
+        Kind = Row.get("Type")
+        if Kind in ("PULL_ASSIGNMENT", "ASSIGNMENT"):
+            RequestId = Row.get("RunId")
+            try:
+                ValidUuid = str(uuid.UUID(RequestId)) == RequestId
+            except (ValueError, TypeError, AttributeError):
+                ValidUuid = False
+            Require(ValidUuid and RequestId != RunId and type(Row.get("Version")) is int and Row["Version"] == 1 and
+                    type(Row.get("Sequence")) is int and Row["Sequence"] == 1,
+                    "invalid lifecycle assignment request envelope")
+            if Kind == "PULL_ASSIGNMENT":
+                Role = Row.get("EndpointId")
+                Require(Row.get("Event") == "RECEIVE" and Role in Workflow["Roles"] and
+                        Role not in Requests.values() and RequestId not in Requests,
+                        "duplicate/invalid lifecycle assignment endpoint")
+                Requests[RequestId] = Role
+            else:
+                Assignment = Row.get("Assignment")
+                Require(Row.get("Event") == "SEND" and RequestId in Requests and
+                        isinstance(Assignment, dict), "unpaired lifecycle assignment")
+                Role = Requests[RequestId]
+                Require(Role not in Assigned and Assignment.get("Role") == Role and
+                        Assignment.get("RunId") == RunId and
+                        type(Assignment.get("SchemaVersion")) is int and
+                        all(Assignment.get(K) == V for K, V in Schema.items()) and
+                        Assignment.get("Parameters") == {}, "lifecycle assignment identity/schema mismatch")
+                Expiry = Assignment.get("ExpiresUnixMs")
+                Require(type(Expiry) is int and Expiry > 0 and
+                        (type(Row.get("TimestampUnixMs")) is not int or Expiry >= Row["TimestampUnixMs"]),
+                        "invalid/expired lifecycle assignment")
+                Assigned.add(Role)
+            Exempt.add(Index)
+        elif Kind == "REGISTER":
+            Role = Row.get("Role")
+            Require(Row.get("Event") == "RECEIVE" and Row.get("RunId") == RunId and
+                    type(Row.get("Version")) is int and Row["Version"] == 1 and
+                    type(Row.get("Sequence")) is int and Row["Sequence"] == 2 and
+                    Role in Assigned and Role not in Registered and
+                    type(Row.get("SchemaVersion")) is int and
+                    all(Row.get(K) == V for K, V in Schema.items()),
+                    "lifecycle registration identity/schema mismatch")
+            Registered.add(Role)
+    Require(len(Requests) == 2 and Assigned == Registered == set(Workflow["Roles"]),
+            "missing lifecycle assignment/registration evidence")
+    return Exempt
+
+
 def Journal(Files, Result, RunId, Lifecycle=False):
     Rows = [json.loads(Line) for Line in Read(Needed(Files, "control.jsonl")).splitlines()]
     Require(0 < len(Rows) <= 4096 and all(isinstance(R, dict) for R in Rows), "invalid control journal")
-    Require(all(R.get("RunId", RunId) == RunId and R.get("Success", True) is True and
-                R.get("Event") not in ("ERROR", "ABORT") and R.get("Type") not in ("ABORT", "ERROR") for R in Rows),
+    Exempt = LifecycleAssignments(Rows, RunId) if Lifecycle else set()
+    Require(all((Index in Exempt or R.get("RunId", RunId) == RunId) and R.get("Success", True) is True and
+                R.get("Event") not in ("ERROR", "ABORT") and R.get("Type") not in ("ABORT", "ERROR") for Index, R in enumerate(Rows)),
             "control journal records failure/wrong run")
     Results = [R for R in Rows if R.get("Event") == "RESULT"]
     Require(len(Results) == 1 and all(Results[0].get(K) == V for K, V in Result.items()), "control journal result mismatch")
