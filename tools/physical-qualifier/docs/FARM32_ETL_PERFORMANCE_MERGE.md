@@ -1,5 +1,40 @@
 # Farm32 packet ETL preservation
 
+## Qualification status after V5
+
+The `perfMerge=no` candidate remains **UNQUALIFIED**. Fresh synthetic run
+`795b1265-b9b1-476b-968a-c3434f1e2568` failed exact worker packet convergence.
+Its client capture contains all 9,622,100 marked packets with zero reported
+drops. The worker capture lacks 2,684 DATA packets: 1,339 client-to-worker
+across 20 flows and 1,345 worker-to-client across all 32 flows. Both endpoints
+completed cleanup, left no owned children or UDP listeners, and returned both
+capture services to running/idle. This run does not qualify provider use.
+
+The raw V5 ETL contains 28,711 512-KiB buffers (15,052,832,768 bytes).
+`OpenTraceW` reports 28,719 buffers written and zero events/buffers lost.
+Eight metadata buffers with diagnostic logger identifier 65535 occupy slots
+4135 through 4142; those buffers contain no NDIS packet records or marked DATA.
+All missing DATA ranges have both neighbors in the surrounding raw buffers.
+No duplicate DATA packets were found. Export counts do not establish packet
+completeness when the source ETL has already lost packet buffers.
+
+The overwrite location has an exact relationship in both failed traces:
+
+| Run | ETL bytes | ETL bytes modulo 2^32 | First metadata buffer offset |
+| --- | ---: | ---: | ---: |
+| V4 | 15,054,929,920 | 2,170,028,032 | 4139 × 524,288 = 2,170,028,032 |
+| V5 | 15,052,832,768 | 2,167,930,880 | 4135 × 524,288 = 2,167,930,880 |
+
+This supports a truncated append-offset hypothesis for stop-time metadata.
+The exact internal Windows branch is **NOT MEASURED**. V5 falsifies the earlier
+hypothesis that disabling optional performance merging alone prevents the
+loss. Preserve both failed runs; do not repair their ETLs or reinterpret either
+as PASS. A supported correction and a fresh complete near-capacity run are
+still required. Read-only V5 sequence, header, and missing-range joins are at
+`C:\Users\aiden\.codex\artifacts\farm32-v5-offline-diagnosis`.
+
+## Earlier V4 correction hypothesis
+
 The Farm32 worker hook explicitly passes `perfMerge=no` to `netsh trace start`.
 This disables optional stop-time performance metadata merging. It preserves the
 physical NDIS interface/filter, complete packet retention, noncircular 16-GiB
