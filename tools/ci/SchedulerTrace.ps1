@@ -1,11 +1,19 @@
 # Run only fixed diagnostic cases, once each. No trace or workload retries.
 [CmdletBinding(DefaultParameterSetName='Case')]
 param(
-    [Parameter(ParameterSetName='Case')][ValidateSet('Full','AckStats')][string]$Case='Full',
+    [Parameter(ParameterSetName='Case')][ValidateSet('Full','AckStats','Aggregate32Structural')][string]$Case='Full',
     [Parameter(ParameterSetName='Pair')][switch]$Pair,
     [Parameter(ParameterSetName='SelfTest')][switch]$SelfTest
 )
 $ErrorActionPreference = 'Stop'
+function GetFixedCase([ValidateSet('Full','AckStats','Aggregate32Structural')][string]$Case) {
+    switch ($Case) {
+        'Full' { return [pscustomobject]@{ Binary='build-ci/gargantuan_game_session_real_transport_tests.exe'; Output='build-ci/scheduler-trace'; Argument='--reliable-workload'; Command='--run' } }
+        'AckStats' { return [pscustomobject]@{ Binary='build-ci/gargantuan_real_transport_tests.exe'; Output='build-ci/scheduler-trace-ack-stats'; Argument='--ack-stats-boundary'; Command='--run-ack-stats' } }
+        'Aggregate32Structural' { return [pscustomobject]@{ Binary='build-ci/gargantuan_game_session_real_transport_tests.exe'; Output='build-ci/scheduler-trace-aggregate32-structural'; Argument='--reliable-workload-32-structural'; Command='--run-aggregate32-structural' } }
+    }
+    throw 'Unsupported fixed workload case'
+}
 function ResolveExit([object]$ChildExit, [int]$ControllerExit, [bool]$TimedOut, [int]$CleanupExit) {
     if ($null -ne $ChildExit -and $ChildExit -ne 0) { return [int]$ChildExit }
     if ($TimedOut -or $CleanupExit -ne 0) { return 125 }
@@ -26,6 +34,13 @@ function InvokePair([scriptblock]$InvokeCase) {
         NativeCIQualification=$false; CausalVerdict='NOT_CLAIMED' }
 }
 if ($SelfTest) {
+    $Selection = GetFixedCase 'Aggregate32Structural'
+    if ($Selection.Binary -ne 'build-ci/gargantuan_game_session_real_transport_tests.exe' -or
+        $Selection.Output -ne 'build-ci/scheduler-trace-aggregate32-structural' -or
+        $Selection.Argument -ne '--reliable-workload-32-structural' -or
+        $Selection.Command -ne '--run-aggregate32-structural' -or
+        (GetFixedCase 'Full').Argument -ne '--reliable-workload' -or
+        (GetFixedCase 'AckStats').Argument -ne '--ack-stats-boundary') { throw 'Fixed case binding test failed' }
     foreach ($ExitCase in @(
         @(17, 125, $true, 125, 17), @(0, 0, $false, 0, 0), @(0, 125, $false, 0, 125),
         @($null, 125, $false, 0, 125), @(0, 0, $true, 0, 125), @(0, 0, $false, 125, 125)
@@ -58,13 +73,14 @@ if ($SelfTest) {
     Write-Output '[Qualification:SchedulerTrace] wrapper-self-test=PASS no-session-or-child-created'
     exit 0
 }
-function InvokeFixedCase([ValidateSet('Full','AckStats')][string]$Case) {
+function InvokeFixedCase([ValidateSet('Full','AckStats','Aggregate32Structural')][string]$Case) {
 $Root = (Get-Location).ProviderPath
 $Helper = Join-Path $Root 'build-ci/scheduler-trace.exe'
-$Workload = Join-Path $Root $(if ($Case -eq 'AckStats') { 'build-ci/gargantuan_real_transport_tests.exe' } else { 'build-ci/gargantuan_game_session_real_transport_tests.exe' })
-$Output = Join-Path $Root $(if ($Case -eq 'AckStats') { 'build-ci/scheduler-trace-ack-stats' } else { 'build-ci/scheduler-trace' })
-$Arguments = $(if ($Case -eq 'AckStats') { '--ack-stats-boundary' } else { '--reliable-workload' })
-$RunCommand = $(if ($Case -eq 'AckStats') { '--run-ack-stats' } else { '--run' })
+$Selection = GetFixedCase $Case
+$Workload = Join-Path $Root $Selection.Binary
+$Output = Join-Path $Root $Selection.Output
+$Arguments = $Selection.Argument
+$RunCommand = $Selection.Command
 $Etl = Join-Path $Output 'scheduler.etl'
 $SessionGuid = [Guid]::NewGuid().ToString('D')
 $ControllerExit = 125

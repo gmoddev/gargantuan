@@ -32,6 +32,24 @@ constexpr GUID ThreadProvider{0x3d6fa8d1, 0xfe05, 0x11d0, {0x9d, 0xda, 0x00, 0xc
 constexpr GUID KernelControl{0x9e814aad, 0x3204, 0x11d2, {0x9a, 0x82, 0x00, 0x60, 0x08, 0xa8, 0x69, 0x39}};
 constexpr GUID NullGuid{};
 constexpr char CsvHeader[] = "Qpc,Processor,Opcode,Version,HeaderPid,HeaderTid,NewTid,OldTid,TargetTid,TargetPid,OldWaitReason,OldWaitMode,OldState,ReadyAdjustReason,ReadyAdjustIncrement,ReadyFlags\n";
+enum class FixedCase { Full, AckStats, Aggregate32Structural };
+struct CaseSpec {
+    const wchar_t *Binary;
+    const wchar_t *Output;
+    const wchar_t *Argument;
+    const char *Name;
+};
+CaseSpec GetCaseSpec(FixedCase Case) {
+    switch (Case) {
+    case FixedCase::Full:
+        return {L"build-ci/gargantuan_game_session_real_transport_tests.exe", L"build-ci/scheduler-trace", L"--reliable-workload", "Full"};
+    case FixedCase::AckStats:
+        return {L"build-ci/gargantuan_real_transport_tests.exe", L"build-ci/scheduler-trace-ack-stats", L"--ack-stats-boundary", "AckStats"};
+    case FixedCase::Aggregate32Structural:
+        return {L"build-ci/gargantuan_game_session_real_transport_tests.exe", L"build-ci/scheduler-trace-aggregate32-structural", L"--reliable-workload-32-structural", "Aggregate32Structural"};
+    }
+    throw std::runtime_error("unsupported fixed workload case");
+}
 struct Handle {
     HANDLE Value = nullptr;
     ~Handle() { if (Value && Value != INVALID_HANDLE_VALUE) CloseHandle(Value); }
@@ -249,6 +267,14 @@ DecodeResult Decode(const fs::path &Etl, Decoder &State) {
     return Result;
 }
 int SelfTest() {
+    const auto Aggregate = GetCaseSpec(FixedCase::Aggregate32Structural);
+    if (std::wstring(Aggregate.Binary) != L"build-ci/gargantuan_game_session_real_transport_tests.exe" ||
+        std::wstring(Aggregate.Output) != L"build-ci/scheduler-trace-aggregate32-structural" ||
+        std::wstring(Aggregate.Argument) != L"--reliable-workload-32-structural" ||
+        std::string(Aggregate.Name) != "Aggregate32Structural" ||
+        std::wstring(GetCaseSpec(FixedCase::Full).Argument) != L"--reliable-workload" ||
+        std::wstring(GetCaseSpec(FixedCase::AckStats).Argument) != L"--ack-stats-boundary") return 13;
+    try { (void)GetCaseSpec(static_cast<FixedCase>(99)); return 14; } catch (...) {}
     const GUID Id = ParseGuid(L"11111111-2222-4333-8444-555555555555");
     Properties Value;
     Value.Value.Wnode.Guid = Id;
@@ -337,11 +363,12 @@ void Drain(HANDLE Pipe, const fs::path &Path, std::atomic<bool> &Capped, std::at
         File.flush(); if (!File.good()) Failed = true;
     } catch (...) { Failed = true; }
 }
-int Run(const fs::path &Root, const GUID &Guid, const std::wstring &GuidText, bool AckStats = false) {
+int Run(const fs::path &Root, const GUID &Guid, const std::wstring &GuidText, FixedCase Case = FixedCase::Full) {
     if (!Root.is_absolute() || !fs::is_directory(Root)) throw std::runtime_error("absolute repository required");
-    const fs::path Binary = Root / (AckStats ? "build-ci/gargantuan_real_transport_tests.exe" : "build-ci/gargantuan_game_session_real_transport_tests.exe");
+    const auto Selection = GetCaseSpec(Case);
+    const fs::path Binary = Root / Selection.Binary;
     if (!fs::is_regular_file(Binary)) throw std::runtime_error("fixed workload executable absent");
-    const fs::path Output = Root / (AckStats ? "build-ci/scheduler-trace-ack-stats" : "build-ci/scheduler-trace");
+    const fs::path Output = Root / Selection.Output;
     if (!fs::create_directory(Output)) throw std::runtime_error("new output directory required");
     const fs::path Etl = Output / "scheduler.etl";
     SECURITY_ATTRIBUTES Security{sizeof(Security), nullptr, TRUE};
@@ -369,6 +396,8 @@ int Run(const fs::path &Root, const GUID &Guid, const std::wstring &GuidText, bo
     if (Recording.StartStatus != ERROR_SUCCESS) {
         std::ofstream Failure(Output / "metadata.json", std::ios::binary);
         Failure << "{\"Format\":\"GargantuanSchedulerTrace\",\"Version\":1,\"DiagnosticComplete\":false,"
+            << "\"WorkloadCase\":" << JsonString(Selection.Name)
+            << ",\"WorkloadArguments\":[" << JsonString(Utf8(Selection.Argument)) << "],"
             << "\"State\":\"CAPTURE_UNAVAILABLE\",\"ChildLaunchAttempts\":0,\"ChildResumed\":false,"
             << "\"CausalVerdict\":\"NOT_CLAIMED\",\"StartStatus\":" << Recording.StartStatus
             << ",\"SessionGuid\":" << JsonString(Utf8(GuidText)) << ",\"EtlPath\":" << JsonString(Utf8(Etl.wstring())) << "}\n";
@@ -392,7 +421,7 @@ int Run(const fs::path &Root, const GUID &Guid, const std::wstring &GuidText, bo
     Startup.StartupInfo.hStdInput = Input.Value;
     Startup.lpAttributeList = Attributes;
     PROCESS_INFORMATION Child{};
-    std::wstring Command = L"\"" + Binary.wstring() + (AckStats ? L"\" --ack-stats-boundary" : L"\" --reliable-workload");
+    std::wstring Command = L"\"" + Binary.wstring() + L"\" " + Selection.Argument;
     const BOOL Created = CreateProcessW(Binary.c_str(), Command.data(), nullptr, nullptr, TRUE,
         CREATE_SUSPENDED | CREATE_NO_WINDOW | EXTENDED_STARTUPINFO_PRESENT, nullptr, Root.c_str(),
         &Startup.StartupInfo, &Child);
@@ -480,7 +509,8 @@ int Run(const fs::path &Root, const GUID &Guid, const std::wstring &GuidText, bo
         fs::file_size(Etl) < 512ULL * 1024 * 1024 && !TimedOut && !LogCapped && !LogFailed && TreeReaped && Resumed;
     std::ofstream Metadata(Output / "metadata.json", std::ios::binary);
     Metadata << "{\n\"Format\":\"GargantuanSchedulerTrace\",\"Version\":1,\n"
-        << "\"WorkloadCase\":\"" << (AckStats ? "AckStats" : "Full") << "\",\n"
+        << "\"WorkloadCase\":" << JsonString(Selection.Name)
+        << ",\"WorkloadArguments\":[" << JsonString(Utf8(Selection.Argument)) << "],\n"
         << "\"SessionName\":" << JsonString(Utf8(SessionName)) << ",\"SessionGuid\":" << JsonString(Utf8(GuidText))
         << ",\"EtlPath\":" << JsonString(Utf8(Etl.wstring())) << ",\n"
         << "\"DiagnosticComplete\":" << (DiagnosticComplete ? "true" : "false") << ",\"CausalVerdict\":\"NOT_CLAIMED\",\n"
@@ -521,7 +551,9 @@ int wmain(int Count, wchar_t **Args) {
         if (Count == 4 && std::wstring(Args[1]) == L"--run")
             return Run(fs::path(Args[2]), ParseGuid(Args[3]), Args[3]);
         if (Count == 4 && std::wstring(Args[1]) == L"--run-ack-stats")
-            return Run(fs::path(Args[2]), ParseGuid(Args[3]), Args[3], true);
+            return Run(fs::path(Args[2]), ParseGuid(Args[3]), Args[3], FixedCase::AckStats);
+        if (Count == 4 && std::wstring(Args[1]) == L"--run-aggregate32-structural")
+            return Run(fs::path(Args[2]), ParseGuid(Args[3]), Args[3], FixedCase::Aggregate32Structural);
         if (Count == 4 && std::wstring(Args[1]) == L"--cleanup")
             return Cleanup(ParseGuid(Args[2]), Args[3]) == ERROR_SUCCESS ? 0 : 125;
         std::cerr << "[Qualification:SchedulerTrace] invalid arguments\n";

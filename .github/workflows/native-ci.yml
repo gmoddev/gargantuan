@@ -175,7 +175,6 @@ jobs:
           cmake --build build-ci --config Release --parallel %CMAKE_BUILD_PARALLEL_LEVEL%
 
       - name: Build bounded scheduler diagnostic
-        if: github.event_name == 'workflow_dispatch' && (inputs.scheduler_trace || inputs.scheduler_pair_diagnostic)
         shell: cmd
         run: |
           call "%VSDEVCMD%" -arch=x64 -host_arch=x64
@@ -257,7 +256,7 @@ jobs:
           if errorlevel 1 exit /b %errorlevel%
           build-ci\gargantuan_game_session_real_transport_tests.exe --reliable-workload-32
           if errorlevel 1 exit /b %errorlevel%
-          build-ci\gargantuan_game_session_real_transport_tests.exe --reliable-workload-32-structural
+          pwsh -NoProfile -File tools\ci\SchedulerTrace.ps1 -Case Aggregate32Structural
           if errorlevel 1 exit /b %errorlevel%
 
       - name: Package qualified 32-client physical candidate
@@ -309,6 +308,7 @@ jobs:
             build-ci/ctest-results.xml
             build-ci/scheduler-trace/
             build-ci/scheduler-trace-ack-stats/
+            build-ci/scheduler-trace-aggregate32-structural/
             build-ci/scheduler-trace-pair.json
 
   linux-sanitizers:

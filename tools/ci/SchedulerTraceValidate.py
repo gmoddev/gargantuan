@@ -60,6 +60,29 @@ def Validate(Metadata, Stdout, Case="Full", CsvPath=None):
         if len(Pair) == 2:
             Require(Pair[0]["qpc_after"] <= Pair[1]["qpc_before"] and Pair[0]["steady_ns"] <= Pair[1]["steady_ns"], "case clock order invalid")
     Extra = {}
+    if Case == "Aggregate32Structural":
+        try:
+            Expected = ("aggregate-baseline", "aggregate-overload", "aggregate-recovery")
+            Require(list(ByCase) == list(Expected[:len(ByCase)]) and 0 < len(ByCase) <= 3,
+                    "aggregate phases missing, unexpected or out of order")
+            Require([(Value.get("case"), Value.get("boundary")) for Value in Anchors] ==
+                    [(Name, Boundary) for Name in Expected[:len(ByCase)] for Boundary in ("BEGIN", "END")],
+                    "aggregate anchor sequence is not a complete ordered prefix")
+            for Index, Pair in enumerate(ByCase.values()):
+                Require(all(Value.get("phase_index") == str(Index) for Value in Pair),
+                        "aggregate phase identity differs from fixed case")
+                if Index and len(Pair) == 2:
+                    Previous = list(ByCase.values())[Index - 1]
+                    Require(len(Previous) == 2 and Previous[-1]["qpc_after"] <= Pair[0]["qpc_before"] and
+                            Previous[-1]["steady_ns"] <= Pair[0]["steady_ns"], "aggregate phase clocks overlap")
+            Require(type(Metadata.get("ChildExitCode")) is int and
+                    (Metadata["ChildExitCode"] != 0 or tuple(ByCase) == Expected),
+                    "successful aggregate workload must retain all three phases")
+            Require(Metadata.get("WorkloadArguments") == ["--reliable-workload-32-structural"],
+                    "aggregate workload arguments differ from fixed fifth command")
+            Extra = ValidateAggregateCsv(Metadata, CsvPath)
+        except (OSError, ValueError, KeyError, TypeError, UnicodeError) as Error:
+            Errors.append("aggregate coverage: " + str(Error))
     if Case == "AckStats":
         try:
             Require(set(ByCase) in ({"ackstats-control"}, {"ackstats-control", "ackstats-prompt"}), "unexpected stats arms")
@@ -75,6 +98,47 @@ def Validate(Metadata, Stdout, Case="Full", CsvPath=None):
             "State": "LOSS_FREE_ANCHOR_WINDOW_RETAINED" if not Errors else "INCOMPLETE",
             "CausalVerdict": "NOT_CLAIMED", "Errors": Errors, "FixtureAnchorCount": len(Anchors),
             "Note": "Window retention does not prove a scheduler cause; inspect the exact CSwitch/ReadyThread chain. Unknown lifecycle versions limit other-thread identity attribution.", **Extra}
+
+
+def ValidateAggregateCsv(Metadata, CsvPath):
+    def Need(Value, Message):
+        if not Value:
+            raise ValueError(Message)
+    Need(CsvPath is not None and CsvPath.is_file() and CsvPath.stat().st_size <= 512 * 1024 * 1024,
+         "bounded scheduler CSV absent")
+    Count, Last, FirstMain, LastMain, Switches, Readies = 0, 0, 0, 0, 0, 0
+    Main = Metadata['ChildMainTid']
+    with CsvPath.open('r', encoding='ascii', newline='') as Stream:
+        csv.field_size_limit(1024)
+        Reader = csv.DictReader(Stream)
+        Need(Reader.fieldnames == CSV_FIELDS, "unexpected scheduler CSV schema")
+        for Row in Reader:
+            Count += 1
+            Need(Count <= 5_000_000 and None not in Row and all(V is not None for V in Row.values()),
+                 "CSV cap/schema")
+            Tick, Opcode = int(Row['Qpc']), int(Row['Opcode'])
+            Need(Tick > 0 and Tick >= Last, "unordered scheduler CSV")
+            Last = Tick
+            IsMain = False
+            if Opcode == 36:
+                Need(int(Row['Version']) in (2, 5), "unsupported switch schema")
+                IsMain = int(Row['NewTid']) == Main or int(Row['OldTid']) == Main
+                Switches += int(IsMain)
+            elif Opcode == 50:
+                Need(int(Row['Version']) == 2, "unsupported ready schema")
+                IsMain = int(Row['TargetTid']) == Main
+                Readies += int(IsMain)
+            else:
+                Need(Opcode in (1, 2, 3, 4) and int(Row['Version']) in (2, 3), "unsupported lifecycle schema")
+                IsMain = int(Row['TargetTid']) == Main
+                if IsMain: Need(int(Row['TargetPid']) == Metadata['ChildPid'], "main lifecycle PID mismatch")
+            if IsMain:
+                if not FirstMain: FirstMain = Tick
+                LastMain = Tick
+    Need(Count == Metadata['DecodedRows'] and Switches > 0 and Readies > 0, "main scheduler rows incomplete")
+    Need(FirstMain == Metadata['MainFirstQpc'] and LastMain == Metadata['MainLastQpc'], "main coverage metadata differs from raw CSV")
+    return {'SchedulerCsvRows': Count, 'MainSwitchRows': Switches, 'MainReadyRows': Readies,
+            'FixedWorkloadArgument': '--reliable-workload-32-structural'}
 
 
 def ValidateStats(Metadata, Stdout, CsvPath, Arms):
@@ -156,7 +220,7 @@ def ValidateStats(Metadata, Stdout, CsvPath, Arms):
 def Main():
     Parser = argparse.ArgumentParser()
     Parser.add_argument("--root", type=Path, required=True)
-    Parser.add_argument("--case", choices=("Full", "AckStats"), default="Full")
+    Parser.add_argument("--case", choices=("Full", "AckStats", "Aggregate32Structural"), default="Full")
     Args = Parser.parse_args()
     Result = {"State": "INCOMPLETE", "CausalVerdict": "NOT_CLAIMED"}
     try:
