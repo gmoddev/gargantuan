@@ -460,12 +460,31 @@ class QualificationTests(unittest.TestCase):
         Client.Send("CLIENT_RUNNING", Pid=456)
         Server.Send("SERVER_DONE", Success=True, Classification=Q.PHASE1_CLASSIFICATION)
         Client.Send("CLIENT_DONE", Success=True, Classification="FOUR_CLIENT_READINESS_ONLY")
-        self.Read(Server, "RUN_DONE")
+        # The coordinator may read CLIENT_DONE first on its separate socket,
+        # issuing one legal late FINALIZE before it reads the already-sent
+        # SERVER_DONE. A completed endpoint does not send its result twice.
+        self.Read(Server, "RUN_DONE", AllowLateFinalize=True)
         self.Read(Client, "RUN_DONE")
         self.Finish(1)
         Result = json.loads((self.Root / "coordinator" / "result.json").read_text())
         self.assertFalse(Result["Success"])
         self.assertEqual("endpoint result classification mismatch", Result["Detail"])
+
+    def test_completed_server_terminal_reader_accepts_both_socket_orders(self):
+        for Types in (("RUN_DONE",), ("FINALIZE", "RUN_DONE")):
+            with self.subTest(Types=Types):
+                Frames = iter({"Type": Type} for Type in Types)
+                Link = SimpleNamespace(Read=lambda: next(Frames))
+                self.assertEqual("RUN_DONE", self.Read(Link, "RUN_DONE", AllowLateFinalize=True)["Type"])
+                self.assertEqual(list(Frames), [])
+        for Types in (("FINALIZE", "FINALIZE", "RUN_DONE"), ("ABORT",), ("SERVER_DONE",)):
+            with self.subTest(Invalid=Types):
+                Frames = iter({"Type": Type} for Type in Types)
+                with self.assertRaises(AssertionError):
+                    self.Read(SimpleNamespace(Read=lambda: next(Frames)), "RUN_DONE", AllowLateFinalize=True)
+        # Every other fixture retains its strict next-frame expectation.
+        with self.assertRaises(AssertionError):
+            self.Read(SimpleNamespace(Read=lambda: {"Type": "FINALIZE"}), "RUN_DONE")
 
     def tearDown(self):
         for Link in self.Links:
@@ -500,11 +519,17 @@ class QualificationTests(unittest.TestCase):
         Link.Send("STAGE_READY", Role=Role, ArtifactSHA256=self.Config["ArtifactSHA256"], Endpoint=self.Config["Endpoint"])
         return Link
 
-    def Read(self, Link, Expected):
+    def Read(self, Link, Expected, AllowLateFinalize=False):
+        if AllowLateFinalize:
+            self.assertEqual(Expected, "RUN_DONE")
+        Finalized = False
         Deadline = time.monotonic() + 3
         while time.monotonic() < Deadline:
             Row = Link.Read()
             if Row:
+                if AllowLateFinalize and not Finalized and Row["Type"] == "FINALIZE":
+                    Finalized = True
+                    continue
                 self.assertEqual(Expected, Row["Type"])
                 return Row
         self.fail("missing " + Expected)
