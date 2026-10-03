@@ -32,13 +32,33 @@ Bounded observations found no receive exception, a maximum 7.300-ms client loop
 gap, and zero host-wide UDP input-error increment. Both NIC error/discard deltas
 were zero. These counters do not locate the missing packets or waive the loss.
 
-The client capture closed with 3,443,900 frames and all dumpcap loss counters
-zero. Packet/header reconciliation is a separate read-only investigation.
+Independent replay subsequently found all 3,443,900 marked packets exactly
+once in both directions in each capture. The client capture contains 3,443,900
+frames, 5,083,196,932 bytes, SHA-256
+`d34fb1e2329aea4e7166174255a2baa3a13f43ab9cd75661e39a08962dc048db`,
+with all dumpcap loss counters zero. All 629 application-missing packets and
+13 neighboring packets have the expected tuple/run/payload, valid IPv4 and
+nonzero valid UDP checksums, 1,428-byte unfragmented IPv4 packets and 1,408-byte
+UDP datagrams. The loss therefore lies after the client capture observation
+and before application receive; the exact Windows component is **NOT MEASURED**.
+
 The original controller aborted offline worker export after the application
-failure; a separately bounded offline export is diagnostic only. It cannot
-change the original `DIAGNOSTIC_INCOMPLETE` result. Original task cleanup proved
-no owned endpoint children or UDP sockets and both worker services running/idle.
-Full near-capacity qualification and production/provider use remain blocked.
+failure. A separate bounded export completed in 354.919 seconds and produced
+3,474,171 packet frames, 5,111,354,168 bytes, SHA-256
+`b70187f4f1bd0c5d79e588c3b7cb3e266a1343ec54f50df3853c6f6ca29352f5`.
+This diagnostic replay cannot change the original `DIAGNOSTIC_INCOMPLETE`
+result. Original task cleanup proved no owned endpoint children or UDP sockets
+and both worker services running/idle. Full near-capacity qualification and
+production/provider use remain blocked.
+
+Independent receipts are retained at
+`C:\Users\aiden\.codex\artifacts\farm32-a17d-client-loss-audit-v1\client-loss-attribution.json`
+and
+`C:\Users\aiden\.codex\artifacts\farm32-a17d-worker-audit-v1\worker-capture-audit.json`.
+Both raw worker files were copied and size/hash-verified under
+`C:\Sandbox\Codex\Evidence\Farm32InstalledStop5GiB-v1\a17d3e70-d5c7-428e-afa2-2277ab550e3a\worker-capture-archive`
+before their exact worker copies were retired. The retained worker relocation
+receipt identifies the archive; small original receipts remain in place.
 
 The source hook passes 304 qualifier tests, both PS5.1/PS7 interop-compiling
 simulations, and the legacy four-client hook simulation. Candidate build and
@@ -152,8 +172,8 @@ cleanup, native errors, post-STOP marker-write failure, loss retention,
 idempotence, exact named cleanup, no-BOM bytes and existing bounded export.
 Python campaign/replay mutations cover the corresponding receipt gates.
 
-These tests neither start ETW nor prove installed native behavior. Next, pin
-the committed hook through the existing reviewed updater, verify installed
-bytes and service identity, and run the separately bounded capture preflight.
+These simulations neither start ETW nor prove installed native behavior. The
+installed adoption and fresh diagnostic above supply separate bounded native
+evidence. Resolve the client receive loss before the next capture preflight.
 The unchanged full near-capacity exact-sequence, zero-loss, full-frame,
 deadline, export and cleanup gates must all pass before provider use.
