@@ -2,6 +2,8 @@
 
 #include "../../network/GameSessionTestAccess.hpp"
 #include "gargantuan/content/ContentAvailability.hpp"
+#include "gargantuan/network/GameSession.hpp"
+#include "gargantuan/network/ReliableServiceProfile.hpp"
 #include "FarmRemoteOwnershipEvidence.hpp"
 #include <cstdint>
 #include <ostream>
