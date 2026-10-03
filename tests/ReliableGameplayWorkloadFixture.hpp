@@ -10,6 +10,7 @@
 #include "../src/network/GnsServiceDiagnostics.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <map>
@@ -65,16 +66,32 @@ void RunAggregateReliableGameplay(Engine &ServerRuntime, Engine &PrimaryRuntime,
 		}
 	};
 	std::vector<std::unique_ptr<Peer>> Peers;
+	struct AggregateStepSpan {
+		std::uint64_t Tick = 0;
+		std::uint32_t SlowestPeer = 0;
+		double GapMs = 0, BeforeStepMs = 0, WorkMs = 0;
+		double PriorObserverMs = 0, PriorSleepRequestedMs = 0, PriorSleepActualMs = 0;
+		double PrimaryRuntimeMs = 0, ServerRuntimeMs = 0, ServerPollMs = 0, PrimaryPollMs = 0;
+		double ServerSessionMs = 0, PrimarySessionMs = 0;
+		double PeerPollMs = 0, PeerRuntimeMs = 0, PeerSessionMs = 0, SlowestPeerMs = 0;
+		std::optional<double> ThreadCpuMs, ProcessCpuMs, PriorSleepProcessCpuMs;
+	};
 	struct AggregateBounds {
 		std::uint64_t MinimumMargin = DefaultChangeJournalCapacity, RequiredHigh = 0, OldestSequence = 0, PendingHigh = 0;
 		ConnectionId OldestOwner;
 		bool CatalogOwner = false;
 		double OldestAgeMs = 0, ServiceGapMs = 0;
+		// Retain bounded diagnostics without printing inside a measured step.
+		std::array<AggregateStepSpan, 4> SlowSteps{};
+		std::size_t SlowStepCount = 0;
 	} Bounds;
 	struct JournalTime { std::uint64_t Sequence = 0; Clock::time_point Observed; };
 	std::vector<JournalTime> JournalTimes(DefaultChangeJournalCapacity);
 	std::uint64_t LastJournalTail = 0;
 	auto LastStep = Clock::now();
+	auto LastSleepEnd = LastStep;
+	double PriorObserverMs = 0, PriorSleepRequestedMs = 0, PriorSleepActualMs = 0;
+	std::optional<double> PriorSleepProcessCpuMs;
 	bool Disconnected = false;
 	auto CheckSession = [&](const GameSession &Session) {
 		if (Session.GetStatus() != GameSessionStatus::Failed) return;
@@ -90,29 +107,68 @@ void RunAggregateReliableGameplay(Engine &ServerRuntime, Engine &PrimaryRuntime,
 	};
 	auto Step = [&]() {
 		const auto Next = Clock::now() + std::chrono::microseconds(16'667);
-		PrimaryRuntime.Step();
-		ServerRuntime.Step();
-		(void)Server.Poll();
-		(void)Primary.Poll();
-		Server.Step(Tick);
-		Primary.Step(Tick);
-		for (auto &Peer : Peers) {
-			(void)Peer->Session->Poll();
+		const auto Started = Clock::now();
+		const auto StartedCpu = test_detail::CaptureWorkloadCpu();
+		AggregateStepSpan Span;
+		Span.Tick = Tick;
+		Span.BeforeStepMs = std::chrono::duration<double, std::milli>(Started - LastSleepEnd).count();
+		Span.PriorObserverMs = PriorObserverMs;
+		Span.PriorSleepRequestedMs = PriorSleepRequestedMs;
+		Span.PriorSleepActualMs = PriorSleepActualMs;
+		Span.PriorSleepProcessCpuMs = PriorSleepProcessCpuMs;
+		auto Time = [&](double &Duration, auto &&Action) {
+			const auto Begin = Clock::now();
+			Action();
+			Duration += std::chrono::duration<double, std::milli>(Clock::now() - Begin).count();
+		};
+		Time(Span.PrimaryRuntimeMs, [&] { PrimaryRuntime.Step(); });
+		Time(Span.ServerRuntimeMs, [&] { ServerRuntime.Step(); });
+		Time(Span.ServerPollMs, [&] { (void)Server.Poll(); });
+		Time(Span.PrimaryPollMs, [&] { (void)Primary.Poll(); });
+		Time(Span.ServerSessionMs, [&] { Server.Step(Tick); });
+		Time(Span.PrimarySessionMs, [&] { Primary.Step(Tick); });
+		for (std::size_t PeerIndex = 0; PeerIndex < Peers.size(); ++PeerIndex) {
+			auto &Peer = Peers[PeerIndex];
+			const auto PeerStarted = Clock::now();
+			Time(Span.PeerPollMs, [&] { (void)Peer->Session->Poll(); });
 			if (!Peer->Runtime && Peer->Session->GetClientDataModel()) {
+				const auto RuntimeStarted = Clock::now();
 				Peer->Renderer = std::make_unique<HeadlessRenderer>(Vector2(32, 32));
 				Peer->Runtime = std::make_unique<Engine>(Peer->Session->GetClientDataModel(), Peer->Renderer.get(),
 					std::function<void(std::string, std::string)>{},
 					EngineProviderConfiguration{.AudioEnabled = false, .Mode = RuntimeMode::NetworkClient});
 				Peer->Runtime->ProcessService->Alive = true;
 				Check(Peer->Session->AttachClientRuntime(*Peer->Runtime), "aggregate client attaches trusted runtime");
+				Span.PeerRuntimeMs += std::chrono::duration<double, std::milli>(Clock::now() - RuntimeStarted).count();
 			}
-			if (Peer->Runtime) Peer->Runtime->Step();
-			Peer->Session->Step(Tick);
+			if (Peer->Runtime) Time(Span.PeerRuntimeMs, [&] { Peer->Runtime->Step(); });
+			Time(Span.PeerSessionMs, [&] { Peer->Session->Step(Tick); });
+			const auto PeerMs = std::chrono::duration<double, std::milli>(Clock::now() - PeerStarted).count();
+			if (PeerMs > Span.SlowestPeerMs) {
+				Span.SlowestPeerMs = PeerMs;
+				Span.SlowestPeer = static_cast<std::uint32_t>(PeerIndex + 1);
+			}
 		}
 		++Tick;
 		const auto ObservedAt = Clock::now();
-		Bounds.ServiceGapMs = std::max(Bounds.ServiceGapMs, std::chrono::duration<double, std::milli>(ObservedAt - LastStep).count());
+		const auto ObservedCpu = test_detail::CaptureWorkloadCpu();
+		Span.WorkMs = std::chrono::duration<double, std::milli>(ObservedAt - Started).count();
+		Span.GapMs = std::chrono::duration<double, std::milli>(ObservedAt - LastStep).count();
+		Span.ThreadCpuMs = test_detail::WorkloadTimingEvidence::CpuDelta(StartedCpu.Thread100ns, ObservedCpu.Thread100ns,
+			StartedCpu.ThreadValid, ObservedCpu.ThreadValid);
+		Span.ProcessCpuMs = test_detail::WorkloadTimingEvidence::CpuDelta(StartedCpu.Process100ns, ObservedCpu.Process100ns,
+			StartedCpu.ProcessValid, ObservedCpu.ProcessValid);
+		Bounds.ServiceGapMs = std::max(Bounds.ServiceGapMs, Span.GapMs);
+		for (std::size_t Index = 0; Index < Bounds.SlowSteps.size(); ++Index) {
+			if (Bounds.SlowSteps[Index].GapMs >= Span.GapMs) continue;
+			for (std::size_t Move = Bounds.SlowSteps.size() - 1; Move > Index; --Move)
+				Bounds.SlowSteps[Move] = Bounds.SlowSteps[Move - 1];
+			Bounds.SlowSteps[Index] = Span;
+			Bounds.SlowStepCount = std::min(Bounds.SlowStepCount + 1, Bounds.SlowSteps.size());
+			break;
+		}
 		LastStep = ObservedAt;
+		const auto ObserverStarted = Clock::now();
 		const auto Metrics = Server.GetMetrics();
 		Bounds.PendingHigh = std::max(Bounds.PendingHigh, Metrics.StructuralPendingEnters + Metrics.StructuralPendingLeaves);
 		const auto Tail = ChangeJournal::Get().CreateCursor(ServerRuntime.DataModel->GetObjectId());
@@ -135,7 +191,16 @@ void RunAggregateReliableGameplay(Engine &ServerRuntime, Engine &PrimaryRuntime,
 		}
 		CheckSession(Primary);
 		for (const auto &Peer : Peers) CheckSession(*Peer->Session);
+		PriorObserverMs = std::chrono::duration<double, std::milli>(Clock::now() - ObserverStarted).count();
+		const auto BeforeSleep = Clock::now();
+		const auto BeforeSleepCpu = test_detail::CaptureWorkloadCpu();
+		PriorSleepRequestedMs = std::chrono::duration<double, std::milli>(std::max(Next, BeforeSleep) - BeforeSleep).count();
 		std::this_thread::sleep_until(Next);
+		LastSleepEnd = Clock::now();
+		const auto AfterSleepCpu = test_detail::CaptureWorkloadCpu();
+		PriorSleepActualMs = std::chrono::duration<double, std::milli>(LastSleepEnd - BeforeSleep).count();
+		PriorSleepProcessCpuMs = test_detail::WorkloadTimingEvidence::CpuDelta(BeforeSleepCpu.Process100ns, AfterSleepCpu.Process100ns,
+			BeforeSleepCpu.ProcessValid, AfterSleepCpu.ProcessValid);
 	};
 	for (std::uint32_t Index = 1; Index < QualificationPeerCount; ++Index) {
 		auto Value = std::make_unique<Peer>();
@@ -183,6 +248,9 @@ void RunAggregateReliableGameplay(Engine &ServerRuntime, Engine &PrimaryRuntime,
 	for (const bool Overload : {false, true, false}) {
 		Bounds = {};
 		LastStep = Clock::now();
+		LastSleepEnd = LastStep;
+		PriorObserverMs = PriorSleepRequestedMs = PriorSleepActualMs = 0;
+		PriorSleepProcessCpuMs.reset();
 		const auto Before = Server.GetMetrics();
 		for (auto &Sample : Samples) Sample = {};
 		const std::size_t Active = Overload ? QualificationPeerCount : std::min(8u, QualificationPeerCount);
@@ -262,6 +330,25 @@ void RunAggregateReliableGameplay(Engine &ServerRuntime, Engine &PrimaryRuntime,
 			<< " journal_owner=" << (!Bounds.RequiredHigh ? "none" : Bounds.CatalogOwner ? "catalog" : "peer")
 			<< " journal_owner_slot=" << Bounds.OldestOwner.Slot << " journal_owner_generation=" << Bounds.OldestOwner.Generation
 			<< " journal_oldest_age_ms=" << Bounds.OldestAgeMs << " journal_recovery_backlog=" << After.JournalBacklogRecords << '\n';
+		for (std::size_t Index = 0; Index < Bounds.SlowStepCount; ++Index) {
+			const auto &Span = Bounds.SlowSteps[Index];
+			std::cout << "[Qualification:AggregateStep] overload=" << Overload << " rank=" << Index << " tick=" << Span.Tick
+				<< " gap_ms=" << Span.GapMs << " before_step_ms=" << Span.BeforeStepMs << " work_ms=" << Span.WorkMs
+				<< " prior_observer_ms=" << Span.PriorObserverMs
+				<< " prior_sleep_requested_ms=" << Span.PriorSleepRequestedMs << " prior_sleep_actual_ms=" << Span.PriorSleepActualMs
+				<< " primary_runtime_ms=" << Span.PrimaryRuntimeMs << " server_runtime_ms=" << Span.ServerRuntimeMs
+				<< " server_poll_ms=" << Span.ServerPollMs << " primary_poll_ms=" << Span.PrimaryPollMs
+				<< " server_session_ms=" << Span.ServerSessionMs << " primary_session_ms=" << Span.PrimarySessionMs
+				<< " peer_poll_ms=" << Span.PeerPollMs << " peer_runtime_ms=" << Span.PeerRuntimeMs
+				<< " peer_session_ms=" << Span.PeerSessionMs << " slowest_peer=" << Span.SlowestPeer
+				<< " slowest_peer_ms=" << Span.SlowestPeerMs << " thread_cpu_ms=";
+			if (Span.ThreadCpuMs) std::cout << *Span.ThreadCpuMs; else std::cout << "NOT_MEASURED";
+			std::cout << " process_cpu_ms=";
+			if (Span.ProcessCpuMs) std::cout << *Span.ProcessCpuMs; else std::cout << "NOT_MEASURED";
+			std::cout << " prior_sleep_process_cpu_ms=";
+			if (Span.PriorSleepProcessCpuMs) std::cout << *Span.PriorSleepProcessCpuMs; else std::cout << "NOT_MEASURED";
+			std::cout << '\n';
+		}
 		Check(Admission.PeerCreditHighWater <= CandidateReliableService().PeerCreditCap() && Admission.GlobalCreditHighWater <= CandidateReliableService().GlobalCreditCap(),
 			"aggregate byte credit stays within unchanged caps");
 		Check(After.PlanningMaximumTickWork <= 65'536 && After.StructuralMaximumTransitionsSelectedPerTick <= 8'192,
