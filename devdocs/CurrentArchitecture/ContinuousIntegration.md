@@ -224,7 +224,11 @@ wrapper hashes can be independently recomputed. Native DWORD failure statuses
 remain raw in receipts; only returned process status uses the signed equivalent.
 All five normal standalone guards reject any nonzero status, including a negative
 native crash. Helper tests are a distinct mandatory suite, independently checked
-from the existing physical-control/evidence tooling suites.
+from the existing physical-control/evidence tooling suites. The seven Windows
+tooling suite counts are 12, 21, 4, 1, 226, 29 and 2 (**295 total**); the separate
+scheduler helper suite has **20**, for **315 hosted Python tests**. The local
+full tooling matrix's 315 tests are a different scope and do not replace either
+hosted suite.
 
 Aggregate request identities and original steady-clock endpoints join bounded
 CPU/sleep observations and buffered peer-operation spans to bracketed QPC

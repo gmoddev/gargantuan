@@ -85,6 +85,17 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+2026-10-03 c33 original CI continuation: Native PR `37158397178` fails logical
+command 3, FULL_RESERVATION `--reliable-workload`, upper case. RPC p95 is
+218.8903 ms against 150 ms; action 17 is 556.5228 ms against 250 ms. Native
+95/95, helper 20 and hosted tooling 295 pass; dependent Linux is skipped.
+Fourth/fifth commands never start, so no scheduler trace measures this failed
+invocation. Request-linked runtime overlaps are known; their OS/blocking cause
+remains **NOT MEASURED**. The next correction instruments that original command
+using the existing bounded Full helper exactly once, preserving all gates and
+arguments. Dormant V5 stays unadopted with null pins. No physical attempt or
+production-policy change occurred. **KI-006 OPEN; 3L B — PARTIALLY READY**.
+
 2026-10-03 aggregate diagnostic continuation: source `8854feecf` adds complete
 bounded request/resource evidence and preserves unsigned native failures through
 signed process exits and all five CI guards. A fresh development trace passes all

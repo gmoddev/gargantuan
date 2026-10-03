@@ -6,6 +6,24 @@ last_verified: 2026-10-03
 
 # Foundation 3L pooled physical qualification attempt
 
+## c33 original CI failure blocks physical launch (2026-10-03)
+
+Original Native PR `37158397178` fails FULL_RESERVATION's third command,
+`--reliable-workload`, upper case: RPC p95 218.8903 ms exceeds 150 ms and
+action 17's 556.5228 ms exceeds 250 ms. Windows CTest 95, helper 20 and hosted
+tooling 295 pass; Linux is skipped. The fourth/fifth commands never start, so
+their scheduler evidence cannot diagnose this failure. Exact request/phase
+overlaps exist, but the scheduling or blocking mechanism remains **NOT MEASURED**.
+
+The existing bounded Full helper will instrument this exact invocation once
+after deterministic qualification. Workload, flags, clocks, gates, production,
+admission and reserves remain unchanged. Dormant V5's independent static review
+is complete, with 71 pure tests in each mode and unchanged 54-gate/20-field
+assembly; both adoption pins remain null. No new physical attempt occurred.
+Retained F1 PASS and the failed b52d supplemental cleanup remain unchanged.
+**KI-006 OPEN; 3L B — PARTIALLY READY**. Earlier pending paragraphs are historical
+and do not authorize launch.
+
 ## Aggregate diagnostic candidate awaits original CI (2026-10-03)
 
 The fixed original aggregate command passes a bounded worker development trace

@@ -6,6 +6,33 @@ last_verified: 2026-10-03
 
 # Foundation 3L.3 diagnostic validation ledger
 
+## Original c33 FULL upper timing failure (2026-10-03)
+
+Original Native PR `37158397178`, Windows job `111306493573`, fails logical
+command 3, `--reliable-workload`, FULL_RESERVATION case `upper`. RPC 133 takes
+218.8903 ms and fails p95 <=150 ms; its p99/max gates pass. Action 17 takes
+556.5228 ms against the actual unchanged **250-ms** action bound. Native
+CTest 95/95, scheduler helper 20 and hosted tooling 295 pass. Commands 4 and 5
+never start; no scheduler trace exists for this failed command. Dependent
+Linux is skipped. Successful push/GNS counterparts do not replace this result.
+
+Request-bound evidence contains RPC 133's 109.9831-ms client-runtime overlap
+and action 17's 428.002-ms server-session and 40.3118-ms observer overlaps.
+Bracketed CPU/sleep observations are retained; low CPU does not prove a wait,
+descheduling or hypervisor cause. The mechanism remains **NOT MEASURED**.
+Independent raw attribution is
+`C:\Users\aiden\.codex\artifacts\farm32-v5-independent-finalization\failed-original-native-pr-attribution-v1\analysis.json`,
+SHA-256 `bccb29f0fdf99fcb7c81eb677e736ae11355b475406135290f8c87d43adf4eb3`.
+
+The next prospective diagnostic correction wraps the original third command
+with the existing fixed bounded Full scheduler helper exactly once, retaining
+its actual arguments, order, clocks and gates. The fifth aggregate wrapper
+remains. No production correction is yet supported by this evidence. Dormant
+V5 is independently reviewed but unadopted; no current CI certificate or fresh
+physical run exists. Retained F1 PASS remains valid. **KI-006 OPEN; 3L B —
+PARTIALLY READY**. Earlier pending/development sections record their historical
+state and do not override this failed original CI classification.
+
 ## Aggregate diagnostic development qualified; hosted CI pending (2026-10-03)
 
 Execution-changing diagnostic source `8854feecf` retains the original workload,
@@ -42,10 +69,21 @@ That failure's exact mechanism remains **NOT MEASURED**; later diagnostic PASS
 does not explain it. New original push/PR qualification is required before any
 fresh physical launch. V4 stays unadopted. **KI-006 OPEN; 3L B — PARTIALLY READY**.
 
+## Hosted test count reconciliation (2026-10-03)
+
+The seven hosted control/evidence tooling suites contain 12, 21, 4, 1, 226,
+29 and 2 tests, totaling **295**. The separate scheduler helper suite adds
+**20**, for **315 hosted Python tests** at `c33d573d5`. The retained local
+315-test tooling matrix has a different scope. Earlier summaries incorrectly
+called the hosted tooling subtotal 315; the original raw logs and test commands
+remain unchanged. This discrepancy was caught before current CI qualification,
+finalization or physical adoption. Both hosted suites remain independently
+mandatory; no gate or test inventory changed.
+
 ## Original aggregate timing failure after capture correction (2026-10-03)
 
 Tooling source `3c8f65d39` passes all 315 local tooling tests. Original Native PR
-run `37151679339` passes all 95 Windows CTest cases and its 315-case tooling
+run `37151679339` passes all 95 Windows CTest cases and its 295-case hosted tooling
 step, then fails the fifth standalone FULL_RESERVATION
 `--reliable-workload-32-structural` command. Its first normal phase has zero
 structural pressure: peers 0, 1 and 7 report RPC p99 354.201, 355.002 and
