@@ -201,6 +201,16 @@ their observed granularity never alter any service or latency gate.
 
 CTest prints failing output and writes JUnit results. On any failed job, the
 workflow uploads the configure log, CTest log, and JUnit file when available.
+
+The native ACK statistics-boundary fixture retains each failed conservation,
+retirement, pending, unacked and zero-retransmission predicate separately, plus
+bounded sender/receiver ACK event records. Its combined assertion is not proof
+that conservation specifically failed. The four-grant fixture snapshots all
+four peers before validating or printing, so one failure cannot suppress the
+other simultaneous native timelines. Failure output is bounded by the existing
+128 ACK events per endpoint and 512 first-send segments per peer. These
+diagnostics do not extend a wait, reset evidence or change any gate.
+
 No dependency or compiler cache is required for correctness; only the
 repository-tool download cache is currently enabled. Protobuf and the pinned GNS
 source must therefore restore successfully on a cold runner.

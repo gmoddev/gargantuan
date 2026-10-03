@@ -85,6 +85,19 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+2026-10-03 08:43 UTC continuation: fresh Local32 remains unlaunched after the
+staging correction. Later hosted qualification exposes distinct failures:
+Native `37106409866` fails recovery RPC/Event timing with nonexecuting host
+time; `37107293083` fails the ACK statistics-boundary combined assertion and
+strict four-grant F1; `37107296441` fails recovery RPC/Event/action timing.
+The four-grant peer-0 native timeline independently reproduces a running
+deficit of 86,063,889,408 byte-us while finite completion passes at 35,210 us.
+The exact ACK predicate and native sender cause remain NOT MEASURED in those
+historical logs. Failure-only diagnostics retain all predicates and all four
+peer timelines. One controlled-worker execution of each updated fixture passes
+at `018cc2883`; that does not erase or explain the hosted failures. Required
+hosted qualification and the full provider gates remain outstanding.
+
 2026-10-03 UTC fresh funded-ACK F1 checkpoint: execution source `9ae8f68c2`
 passes physical run `454bf4f8-c8f2-4c18-9866-1b61218da514`, lifecycle
 `7a48260b-6911-4394-bbb5-65a65e17bac0`. Independent raw replay verifies

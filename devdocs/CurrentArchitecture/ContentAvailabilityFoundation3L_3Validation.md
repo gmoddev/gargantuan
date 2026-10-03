@@ -6,6 +6,42 @@ last_verified: 2026-10-03
 
 # Foundation 3L.3 diagnostic validation ledger
 
+## Hosted failure attribution before the corrected Local32 launch (2026-10-03)
+
+No provider attempt followed the staging fix while its hosted checks were
+unresolved. Native `37106409866` passes 95 CTest cases and Farm32 tooling but
+fails FULL_RESERVATION recovery RPC p99/max 1191.79 ms and Event 1191.78 ms.
+The fixture observes 833.651 ms sleeping against a 16.4441-ms request with
+zero thread/process CPU; the exact OS cause and individual RPC chronology
+remain NOT MEASURED. Native `37107296441` similarly passes CTest/tooling but
+fails recovery RPC/Event/action gates. Its failing action spans steps 420–424,
+490.332 ms and zero thread/process CPU; the 337.95-ms server poll at step 422
+lies inside it. These elapsed-time failures remain failures.
+
+Native push `37107293083` fails two different CTest gates. The ACK statistics
+control arm passes 48 grants and its independent wire bound, but the prompt
+arm fails a combined eight-predicate assertion. The failing predicate/token
+was not recorded. The strict four-grant test's 462 peer-0 segments sum to
+524,288 B and independently reproduce its 86,063,889,408 byte-us running
+deficit, above 18,025,216,000. Activation-to-completion is 35,210 us, within
+the finite envelope; maximum individual intersegment gap is 485 us. This is
+cumulative underservice, not evidence of the separate 833-ms sleep event.
+Native sender CPU/wake attribution and other peer timelines are NOT MEASURED.
+
+Test-only `018cc2883274b832b11549045e10f02176eae6ac` adds failure-only exact
+ACK predicates/state/events and retains every peer before failing four-grant
+validation. No native production input, clock, threshold or deadline changes.
+The controlled worker builds the native target incrementally with four jobs
+and executes each diagnostic once: ACK stats PASS (48 grants per arm; control
+wire 7,204,128 <= 7,587,729 B, prompt wire 7,204,179 <= 7,587,727 B), strict
+four-grant PASS (27,706-us common interval; peer maximum 3,103,784,960 and pool
+maximum 8,455,716,864 byte-us). Receipt:
+`C:\Sandbox\Codex\Artifacts\native-failure-diagnostics-8c7.json`.
+No owned native process remains and tracked source is clean. This controlled
+result validates the diagnostic integration, not the cause of the historical
+hosted failures or a fresh physical provider gate. CI remains unresolved;
+Local32/Node32 remain unmeasured and KI-006 remains open.
+
 ## Funded-ACK F1 candidate qualified physically (2026-10-03 UTC)
 
 Execution source `9ae8f68c2c8ed50589b5c54ed56657fa6fd02aad` has terminal-green
