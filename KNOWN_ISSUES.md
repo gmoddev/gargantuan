@@ -85,6 +85,24 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+2026-10-03 causal-diagnostic continuation: head `457d9be28` push Windows
+passes 95 CTest cases and the standalone workloads, but PR Native run
+`37110761630` fails FULL_RESERVATION recovery RPC p99 (491.791 ms) and
+Event RTT (491.774 ms). Recovery step 50 spans 423.31 ms across sequential
+runtime/session calls with zero measured, quantized thread/process CPU
+increments. This does not distinguish a subordinate wait from descheduling;
+the exact slow Remote identity and kernel thread states were not measured.
+Fixture-only bounded chronology now retains those identities, original
+submission/callback timestamps, native thread IDs, QPC anchors and paired
+maximum phase intervals for a causal scheduler diagnostic. The failed run
+remains failed. No latency threshold, workload, native candidate or provider
+gate changes; fresh Local32 remains unlaunched.
+One controlled worker execution of the chronology fixture passes all original
+FULL workload gates and verifies 745 Remote records, 71 actions, 16 clock
+anchors and 72 paired phase spans. Recovery RPC p99/max is 36.7056 ms and Event
+maximum is 36.6985 ms. This validates the observer on that host, not the cause
+of the hosted failure or a replacement for required CI.
+
 2026-10-03 08:43 UTC continuation: fresh Local32 remains unlaunched after the
 staging correction. Later hosted qualification exposes distinct failures:
 Native `37106409866` fails recovery RPC/Event timing with nonexecuting host

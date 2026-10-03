@@ -199,6 +199,49 @@ distinguish their CPU consumption from this quantization, and use scheduler
 tracing when the counters cannot resolve the question. CPU counter values and
 their observed granularity never alter any service or latency gate.
 
+Fixture-only `ClockAnchor`, `RemoteChronology`, `RemoteSpan` and
+`WorkloadPhaseSpan` records bind existing RPC/Event identities and their
+original latency timestamps to native thread IDs and bracketed QPC/steady-clock
+anchors. Accepted, rejected, terminal and unobserved submissions remain
+distinct. Maximum phase spans retain paired start/end timestamps from the same
+observation. The fixed diagnostic buffer reports invalid or overflowing
+evidence explicitly, and prints after the case. These records enable exact
+correlation with separately collected scheduler events; they do not themselves
+establish a wait reason, change the workload or replace wall-clock acceptance.
+
+The manual `scheduler_trace` input enables one bounded Windows scheduler
+diagnostic around the existing FULL `--reliable-workload` invocation. Ordinary
+push/PR execution retains all five untraced commands. The diagnostic replaces
+that invocation once before the independent CTest gates, preserves its exit
+status, and skips its later duplicate. This ordering retains causal evidence
+even if an independent native gate would otherwise stop the workflow first;
+it does not retry a failure or omit a required test from a successful job.
+It is not a physical-package dispatch. Its own kernel session, original ETL,
+workload output and diagnostic metadata are retained by the always-run artifact
+upload. Missing or lost scheduler evidence cannot establish a causal diagnosis,
+and a later green diagnostic never changes an earlier failed result.
+
+The diagnostic uses a named system logger with a fresh GUID, 8 MiB of configured
+buffers and a 512 MiB sequential ETL limit. Decoded CSV is capped at 512 MiB;
+each child output stream is capped at 32 MiB. A Job Object owns the suspended
+child before it is resumed. Capture-start failure launches no child. The child
+has a 600-second deadline; decoding has a separate 180-second limit, with a
+960-second outer controller watchdog and identity-matched cleanup fallback.
+Only the owned session handle, or its verified GUID/name/path on recovery, may
+be stopped. Original child exit is retained before decoding. Loss, unsupported
+scheduler layouts, truncation or missing clock coverage fail the diagnostic;
+they never become evidence of an application or scheduler cause. Self-tests
+exercise decoding, bounds, clock coverage and exit precedence without starting
+a kernel session or native workload.
+
+The controller uses the Windows SDK system-logger API rather than changing
+thread priority, affinity, timer resolution or service policy. See Microsoft's
+[system tracing contract](https://learn.microsoft.com/en-us/windows/win32/etw/configuring-and-starting-a-systemtraceprovider-session)
+and [logging mode bounds](https://learn.microsoft.com/en-us/windows/win32/etw/logging-mode-constants).
+Ready-to-running delay and time waiting are distinct evidence. A gap in guest
+events alone does not identify a hypervisor cause, and neither time category
+is subtracted from the measured RPC/Event/action latency.
+
 CTest prints failing output and writes JUnit results. On any failed job, the
 workflow uploads the configure log, CTest log, and JUnit file when available.
 

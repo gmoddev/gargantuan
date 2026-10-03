@@ -4,6 +4,11 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+    inputs:
+      scheduler_trace:
+        description: Capture one bounded Windows FULL workload scheduler diagnostic
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -16,6 +21,7 @@ jobs:
     env:
       CMAKE_BUILD_PARALLEL_LEVEL: 4
       VULKAN_SDK_CHOCOLATEY_VERSION: 1.4.350
+      SCHEDULER_TRACE: ${{ github.event_name == 'workflow_dispatch' && inputs.scheduler_trace }}
 
     steps:
       - name: Checkout recursive dependencies
@@ -159,6 +165,25 @@ jobs:
           if errorlevel 1 exit /b %errorlevel%
           cmake --build build-ci --config Release --parallel %CMAKE_BUILD_PARALLEL_LEVEL%
 
+      - name: Build bounded scheduler diagnostic
+        if: github.event_name == 'workflow_dispatch' && inputs.scheduler_trace
+        shell: cmd
+        run: |
+          call "%VSDEVCMD%" -arch=x64 -host_arch=x64
+          if errorlevel 1 exit /b %errorlevel%
+          cl /nologo /std:c++20 /O2 /W4 /WX /EHsc tools\ci\SchedulerTrace.cpp /Febuild-ci\scheduler-trace.exe /Fobuild-ci\scheduler-trace.obj advapi32.lib tdh.lib
+          if errorlevel 1 exit /b %errorlevel%
+          set "SCHEDULER_TRACE_TEST_HELPER=%CD%\build-ci\scheduler-trace.exe"
+          python -m unittest discover -s tests -p "test_scheduler_trace.py" -v
+          if errorlevel 1 exit /b %errorlevel%
+
+      - name: Trace one FULL workload before independent native gates
+        if: github.event_name == 'workflow_dispatch' && inputs.scheduler_trace
+        shell: pwsh
+        run: |
+          & tools/ci/SchedulerTrace.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Run complete headless CTest contract
         shell: pwsh
         run: |
@@ -206,7 +231,10 @@ jobs:
           if errorlevel 1 exit /b %errorlevel%
           build-ci\gargantuan_game_session_real_transport_tests.exe --pooled --reliable-workload-32-structural
           if errorlevel 1 exit /b %errorlevel%
-          build-ci\gargantuan_game_session_real_transport_tests.exe --reliable-workload
+          rem Explicit diagnostics already ran FULL once before CTest; never repeat it.
+          if not "%SCHEDULER_TRACE%"=="true" (
+            build-ci\gargantuan_game_session_real_transport_tests.exe --reliable-workload
+          )
           if errorlevel 1 exit /b %errorlevel%
           build-ci\gargantuan_game_session_real_transport_tests.exe --reliable-workload-32
           if errorlevel 1 exit /b %errorlevel%
@@ -214,7 +242,7 @@ jobs:
           if errorlevel 1 exit /b %errorlevel%
 
       - name: Package qualified 32-client physical candidate
-        if: github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch' && !inputs.scheduler_trace
         shell: pwsh
         run: |
           $PackageRoot = Join-Path $PWD 'build-ci/QualifiedScalePhysical'
@@ -241,7 +269,7 @@ jobs:
           }
 
       - name: Upload qualified 32-client physical candidate
-        if: github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch' && !inputs.scheduler_trace
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: qualified-scale-${{ github.sha }}
@@ -260,6 +288,7 @@ jobs:
             build-ci/CMakeFiles/CMakeConfigureLog.yaml
             build-ci/Testing/Temporary/LastTest.log
             build-ci/ctest-results.xml
+            build-ci/scheduler-trace/
 
   linux-sanitizers:
     name: Ubuntu 24.04 / Clang 19 / ASan + UBSan / Headless
