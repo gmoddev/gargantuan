@@ -234,3 +234,12 @@ FIFO and payload checks. It does not extend or resample the preceding native
 first-send service-curve gate. Hosted GNS sanitizer run `37080031865` exposed
 the old fixture's FIFO failure at `140a2539f`; its exact collected payload count
 was not recorded and that failed run remains failed evidence.
+
+The deliberate receive-loss regression also exercises repeated fragmented ACK
+serialization. Native suite `1722a9ebb` passed 13 of 14 selected tests, but that
+case filled the bounded opt-in event log with the same packet identity and lost
+its later message-ACK event. Observation now retains the first fragmented-ACK
+event per changed identity plus exact count and last timestamps for repetitions,
+matching the existing ordinary-ACK strategy. Distinct-event and counter overflow
+remain failures. This observer change does not alter transport scheduling,
+packet accounting, injected loss, or the failed run's qualification result.

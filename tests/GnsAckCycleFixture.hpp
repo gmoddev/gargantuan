@@ -17,6 +17,8 @@ inline void Dump(const char *Side, std::uint64_t Token, const GargantuanAckDiagn
 		<< Trace.LastReliablePacketAt << " reliable_packets=" << Trace.ReliablePackets
 		<< " last_packet=" << Trace.LastReliablePacketNumber << " overflow=" << Trace.Overflow
 		<< " repeated_ack_serializations=" << Trace.RepeatedAckSerializations
+		<< " fragmented_ack_serializations=" << Trace.FragmentedAckSerializations
+		<< " last_fragmented_ack_us=" << Trace.LastFragmentedAckAt
 		<< " ack_packets=" << Trace.AckPacketsSent << " ack_packet_bytes=" << Trace.AckPacketBytes
 		<< " associated_recv_packets=" << Trace.AssociatedReceivedPackets
 		<< " associated_recv_udp_bytes=" << Trace.AssociatedReceivedUdpBytes
@@ -263,6 +265,28 @@ inline void Observe(std::size_t Bytes, std::chrono::microseconds PollPeriod, boo
 
 inline bool RunRetrySafety() {
 	try {
+		GargantuanAckDiagnostics RepeatedFragments;
+		for (int Index = 1; Index <= 1000; ++Index)
+			RepeatedFragments.Record(GargantuanAckDiagnostics::FragmentedAckSerialized, Index, 3, 0);
+		RepeatedFragments.Record(GargantuanAckDiagnostics::MessageAcked, 1001, 2, 393652);
+		RepeatedFragments.Record(GargantuanAckDiagnostics::FragmentedAckSerialized, 1002, 4, 0);
+		if (RepeatedFragments.Overflow || RepeatedFragments.Count != 3 ||
+			RepeatedFragments.FragmentedAckSerializations != 1001 ||
+			RepeatedFragments.LastFragmentedAckNativeAt != 1002 ||
+			RepeatedFragments.Events[0].NativeAtMicroseconds != 1 ||
+			RepeatedFragments.Events[1].Type != GargantuanAckDiagnostics::MessageAcked ||
+			RepeatedFragments.Events[2].Identity != 4)
+			throw std::runtime_error("fragmented ACK repetitions displaced critical native events");
+		GargantuanAckDiagnostics DistinctFragments;
+		for (int Index = 1; Index <= 129; ++Index)
+			DistinctFragments.Record(GargantuanAckDiagnostics::FragmentedAckSerialized, Index, Index, 0);
+		if (!DistinctFragments.Overflow || DistinctFragments.Count != 128)
+			throw std::runtime_error("distinct native event overflow was hidden");
+		GargantuanAckDiagnostics CounterOverflow;
+		CounterOverflow.FragmentedAckSerializations = UINT64_MAX;
+		CounterOverflow.Record(GargantuanAckDiagnostics::FragmentedAckSerialized, 1, 3, 0);
+		if (!CounterOverflow.Overflow || CounterOverflow.Count != 0)
+			throw std::runtime_error("fragmented ACK counter overflow was hidden");
 		// Scheduling delay is injected deliberately. These cases assert native
 		// lifetime/accounting/FIFO only, never a physical or wall-time F1 PASS.
 		Observe(393652, 1000us, true, 1348, Fault::NativeSendFailure);

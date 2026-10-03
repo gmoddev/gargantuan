@@ -26,6 +26,9 @@ struct GargantuanAckDiagnostics {
 	std::int64_t LastReliablePacketNumber = 0;
 	std::int64_t LastDeadline = 0, SerializedAckPacket = 0;
 	std::int64_t LastRecordedSerializedAck = 0, LastRecordedSentAck = 0;
+	std::int64_t LastRecordedFragmentedAck = -1;
+	std::uint64_t FragmentedAckSerializations = 0, LastFragmentedAckAt = 0;
+	std::int64_t LastFragmentedAckNativeAt = 0;
 	std::uint64_t RepeatedAckSerializations = 0, AckPacketsSent = 0, AckPacketBytes = 0;
 	std::uint64_t LastAckPacketSentAt = 0;
 	std::int64_t LastAckPacketSentNativeAt = 0;
@@ -75,6 +78,17 @@ struct GargantuanAckDiagnostics {
 		if (Type == AckSerialized) {
 			if (LastRecordedSerializedAck == Identity) { ++RepeatedAckSerializations; return; }
 			LastRecordedSerializedAck = Identity;
+		}
+		// A receive gap can serialize the same fragmented ACK on every outgoing
+		// packet. Preserve its first event and exact repetition/last-time totals,
+		// as for ordinary ACKs, without displacing message/retirement evidence.
+		if (Type == FragmentedAckSerialized) {
+			if (FragmentedAckSerializations == UINT64_MAX) { Overflow = true; return; }
+			++FragmentedAckSerializations;
+			LastFragmentedAckAt = SteamNetworkingSocketsLib::GargantuanReliableServiceClock();
+			LastFragmentedAckNativeAt = NativeAt;
+			if (LastRecordedFragmentedAck == Identity) return;
+			LastRecordedFragmentedAck = Identity;
 		}
 		if (Type == AckPacketSent) {
 			++AckPacketsSent;
