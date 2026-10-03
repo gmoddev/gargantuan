@@ -829,6 +829,15 @@ if(BUILD_TESTING)
 			add_test(NAME gargantuan_physical_game_session_farm_acceptance_observation
 				COMMAND "${GARGANTUAN_PWSH_EXECUTABLE}" -NoProfile -File
 				"${CMAKE_CURRENT_SOURCE_DIR}/tests/PhysicalGameSessionFarmAcceptanceTests.ps1")
+			add_test(NAME gargantuan_physical_game_session_farm_logical_lifecycle
+				COMMAND "${GARGANTUAN_PWSH_EXECUTABLE}" -NoProfile -File
+				"${CMAKE_CURRENT_SOURCE_DIR}/tests/PhysicalGameSessionFarmLifecycleTests.ps1")
+			add_test(NAME gargantuan_physical_game_session_farm_remote_ownership
+				COMMAND "${GARGANTUAN_PWSH_EXECUTABLE}" -NoProfile -File
+				"${CMAKE_CURRENT_SOURCE_DIR}/tests/PhysicalGameSessionFarmRemoteOwnershipTests.ps1")
+			add_test(NAME gargantuan_physical_game_session_farm_analysis_inventory
+				COMMAND "${GARGANTUAN_PWSH_EXECUTABLE}" -NoProfile -File
+				"${CMAKE_CURRENT_SOURCE_DIR}/tests/PhysicalFarmAnalysisInventoryTests.ps1")
 			add_test(NAME gargantuan_physical_game_session_farm_fairness_evidence
 				COMMAND "${GARGANTUAN_PWSH_EXECUTABLE}" -NoProfile -File
 				"${CMAKE_CURRENT_SOURCE_DIR}/tests/AdmissionFairnessEvidenceTests.ps1")
