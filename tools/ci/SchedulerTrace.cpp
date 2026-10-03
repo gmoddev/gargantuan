@@ -171,6 +171,17 @@ struct Decoder {
                 << static_cast<unsigned>(Data[13]) << ',' << static_cast<unsigned>(Data[14]) << ",,,";
             MainEvent = New == MainThread || Old == MainThread;
             ++Switches;
+        } else if (Op == 36 && Version == 5 && Record->UserDataLength == 28 &&
+                   Record->EventHeader.Flags == 848) {
+            // The reviewed 64-bit CSwitch v5 trace has the same four fields
+            // needed for scheduler attribution at offsets 0/4/12/14. Byte 13
+            // is ThreadFlags in v3/v4, not v2 OldWaitMode; do not reinterpret
+            // it or the unneeded v5 trailing bytes. Unknown layouts still fail.
+            const auto New = U32(Data), Old = U32(Data + 4);
+            Row << ',' << New << ',' << Old << ",,," << static_cast<unsigned>(Data[12])
+                << ",," << static_cast<unsigned>(Data[14]) << ",,,";
+            MainEvent = New == MainThread || Old == MainThread;
+            ++Switches;
         } else if (Op == 50 && Version == 2 && Record->UserDataLength == 8) {
             Row << ",,," << U32(Data) << ",,,,," << static_cast<unsigned>(Data[4]) << ','
                 << static_cast<int>(static_cast<signed char>(Data[5])) << ',' << static_cast<unsigned>(Data[6]);
@@ -267,21 +278,42 @@ int SelfTest() {
     Event.EventHeader.TimeStamp.QuadPart = 140;
     State.Event(&Event);
     if (Rows.str() != "140,0,50,2,0,0,,,17,,,,,2,-1,4\n" || State.MainLast != 140 || State.Readies != 1) return 6;
+    Rows.str("");
+    std::array<BYTE, 29> V5{};
+    std::memcpy(V5.data(), &New, 4); std::memcpy(V5.data() + 4, &Old, 4);
+    V5[12] = 15; V5[13] = 0x60; V5[14] = 5;
+    V5[24] = 8; V5[25] = 0x91; V5[26] = 0x7f; V5[27] = 3;
+    Event.UserData = V5.data(); Event.UserDataLength = 28;
+    Event.EventHeader.Flags = 848; Event.EventHeader.EventDescriptor.Opcode = 36;
+    Event.EventHeader.EventDescriptor.Version = 5;
+    Event.EventHeader.TimeStamp.QuadPart = 150;
+    State.Event(&Event);
+    if (Rows.str() != "150,0,36,5,0,0,17,19,,,15,,5,,,\n" || State.Switches != 2 ||
+        State.MainLast != 150) return 11;
+    Rows.str("");
+    Event.UserDataLength = 27; State.Event(&Event);
+    Event.UserDataLength = 29; State.Event(&Event);
+    Event.UserDataLength = 28; Event.EventHeader.EventDescriptor.Version = 4; State.Event(&Event);
+    Event.EventHeader.EventDescriptor.Version = 5; Event.EventHeader.Flags = 0; State.Event(&Event);
+    if (!Rows.str().empty() || State.Unsupported != 4) return 12;
+    Event.UserData = Payload.data(); Event.UserDataLength = 8;
+    Event.EventHeader.Flags = 0; Event.EventHeader.EventDescriptor.Opcode = 50;
+    Event.EventHeader.EventDescriptor.Version = 2;
     State.Rows = RowLimit;
     State.Event(&Event);
     if (!State.Capped || State.Rows != RowLimit) return 3;
     Event.EventHeader.EventDescriptor.Version = 99;
     State.Event(&Event);
-    if (State.Unsupported != 1) return 4;
+    if (State.Unsupported != 5) return 4;
     Event.EventHeader.EventDescriptor.Version = 2; Event.UserDataLength = 7;
     State.Event(&Event);
-    if (State.Unsupported != 2) return 7;
+    if (State.Unsupported != 6) return 7;
     Event.UserDataLength = 8; State.Rows = 0; State.Bytes = CsvLimit;
     State.Capped = false; State.Event(&Event);
     if (!State.Capped || State.Rows != 0) return 8;
     try { (void)ParseGuid(L"00000000-0000-0000-0000-000000000000"); return 5; } catch (...) {}
     try { (void)ParseGuid(L"9e814aad-3204-11d2-9a82-006008a86939"); return 10; } catch (...) {}
-    std::cout << "[Qualification:SchedulerTrace] self-test=PASS no-session-or-child-created\n";
+    std::cout << "[Qualification:SchedulerTrace] self-test=PASS v5-layout=PASS no-session-or-child-created\n";
     return 0;
 }
 void Drain(HANDLE Pipe, const fs::path &Path, std::atomic<bool> &Capped, std::atomic<bool> &Failed) noexcept {

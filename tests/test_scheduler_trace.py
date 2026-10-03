@@ -70,7 +70,7 @@ class SchedulerTraceTests(unittest.TestCase):
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         self.assertEqual(Result.returncode, 0, Result.stdout + Result.stderr)
-        self.assertIn("self-test=PASS no-session-or-child-created", Result.stdout)
+        self.assertIn("self-test=PASS v5-layout=PASS no-session-or-child-created", Result.stdout)
 
     @unittest.skipUnless(os.environ.get("SCHEDULER_TRACE_TEST_HELPER"), "native compile-only helper not supplied")
     def test_native_rejects_reserved_guid_before_any_trace(self):

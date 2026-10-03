@@ -234,6 +234,31 @@ they never become evidence of an application or scheduler cause. Self-tests
 exercise decoding, bounds, clock coverage and exit precedence without starting
 a kernel session or native workload.
 
+The decoder recognizes the originally supported CSwitch version 2/24-byte
+layout and the exact observed version 5/28-byte, 64-bit-header layout. The
+version 5 branch retains raw `Version=5` and reads only NewThreadId,
+OldThreadId, OldThreadWaitReason and OldThreadState from byte offsets
+0/4/12/14. These common fields follow the [Microsoft PerfView parser at
+`33a2fb6c`](https://github.com/microsoft/perfview/blob/33a2fb6cdb3bb920ae0210b28d39ce66578ad0cf/src/TraceEvent/Parsers/KernelTraceEventParser.cs#L4306-L4356),
+and 16 matching raw-QPC samples were independently decoded by Windows
+Performance Toolkit `xperf` 10.0.26100.7705 (binary SHA-256
+`6e0c15d303e9369a8756b7f9b63978220ba3c8f9b9471a00b0e63958cc095561`).
+Version 5 byte 13 is not treated
+as the version 2 OldWaitMode; the CSV field is blank, and the unneeded trailing
+bytes are not interpreted. Other versions, lengths or header flags remain
+unsupported. The native non-capture self-test exercises both valid layouts and
+rejects unknown version 5 lengths, versions and flags.
+
+The manual hosted diagnostic run `37115431988` predates this decoder change.
+Its original `DiagnosticComplete=false`, 299,065 unsupported CSwitch events,
+coverage `INCOMPLETE`, and failed hosted job remain historical facts. An
+independent offline replay of its retained ETL established the exact version 5
+layout. The retained ETL SHA-256 is
+`b6680a4472090830746662c2b24012d2646a1f5970a6d3fa07bf73885b4c5ac3`;
+the replay reproduced all 160,537 originally accepted CSV rows byte-for-byte
+at SHA-256 `d9f0544393e415b32f687c07eb44177d3a6159566b81c92b49f8cbb4c8838fd9`;
+that offline result does not relabel the original diagnostic or CI gate.
+
 The controller uses the Windows SDK system-logger API rather than changing
 thread priority, affinity, timer resolution or service policy. See Microsoft's
 [system tracing contract](https://learn.microsoft.com/en-us/windows/win32/etw/configuring-and-starting-a-systemtraceprovider-session)

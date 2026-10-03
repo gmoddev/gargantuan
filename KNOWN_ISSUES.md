@@ -85,6 +85,16 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+The retained manual scheduler diagnostic from hosted run `37115431988` passed
+its unchanged workload but its original decoder classified 299,065 CSwitch
+version 5/28-byte events as unsupported, leaving diagnostic coverage
+`INCOMPLETE` and the hosted job failed. Offline native replay identified one
+exact observed version 5 layout and reproduced the original 160,537 accepted
+CSV rows byte-for-byte. The decoder now recognizes only its four proven common
+scheduler fields; this implementation correction does not change the original
+run's result or qualify the cause of prior RPC/Event timing failures. A fresh
+hosted execution and causal analysis remain necessary.
+
 2026-10-03 causal-diagnostic continuation: head `457d9be28` push Windows
 passes 95 CTest cases and the standalone workloads, but PR Native run
 `37110761630` fails FULL_RESERVATION recovery RPC p99 (491.791 ms) and
