@@ -164,7 +164,13 @@ jobs:
         run: |
           # Complete CTest includes the funded ACK workload/mode/pool gates and
           # one paired native statistics-boundary run; do not duplicate them here.
-          ctest --test-dir build-ci -C Release --parallel 2 --timeout 300 --output-on-failure --no-tests=error --output-junit build-ci/ctest-results.xml
+          # CTest changes into --test-dir before opening its JUnit output.
+          ctest --test-dir build-ci -C Release --parallel 2 --timeout 300 --output-on-failure --no-tests=error --output-junit "$env:GITHUB_WORKSPACE/build-ci/ctest-results.xml"
+          if ($LASTEXITCODE -ne 0) { throw 'Complete headless CTest contract failed' }
+          if (-not (Test-Path -LiteralPath build-ci/ctest-results.xml -PathType Leaf) -or
+              (Get-Item -LiteralPath build-ci/ctest-results.xml).Length -eq 0) {
+            throw 'CTest did not produce the required upload-path JUnit evidence'
+          }
 
       - name: Verify pinned Farm32 control and evidence tooling
         shell: pwsh
@@ -183,6 +189,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Farm32 control and evidence tests failed' }
           python -m unittest discover -s tests -p 'test_foundation3l_acceptance.py' -v
           if ($LASTEXITCODE -ne 0) { throw 'Final Foundation 3L conjunction tests failed' }
+          python -m unittest discover -s tests -p 'test_ci_junit_output.py' -v
+          if ($LASTEXITCODE -ne 0) { throw 'CI JUnit output-path regression tests failed' }
           # Control-only mocks; no capture, NIC, or installed-service operation.
           & tools/physical-qualifier/tests/TestCaptureHooks.ps1 -HookPath tools/physical-qualifier/worker/PktMonFarm32Capture.ps1 -Farm32
           & tools/physical-qualifier/tests/TestDumpcapFarm32Capture.ps1
@@ -363,7 +371,8 @@ jobs:
             --timeout 300 \
             --output-on-failure \
             --no-tests=error \
-            --output-junit build-sanitizers/ctest-results.xml
+            --output-junit "$GITHUB_WORKSPACE/build-sanitizers/ctest-results.xml"
+          test -s "$GITHUB_WORKSPACE/build-sanitizers/ctest-results.xml"
 
       - name: Upload sanitizer diagnostics
         if: always()

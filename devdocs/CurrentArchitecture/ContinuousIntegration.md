@@ -62,6 +62,15 @@ wall-clock timing under injected faults. The strict funded F1 matrix remains
 in Windows Release. No new CI gate is considered passed until its own execution
 is terminal green.
 
+All three CTest invocations write JUnit to an absolute path rooted at
+`GITHUB_WORKSPACE`. CTest changes its working directory to `--test-dir`, so
+passing another build-directory-relative JUnit path would create a nested file
+outside the artifact upload list. Each successful test step also requires its
+exact upload-path XML to exist and be nonempty. The diagnostics upload remains
+`if: always()`; a green test summary without retained raw JUnit is incomplete
+qualification evidence. The small Python regression executes real CTest against
+temporary passing/failing tests and checks these workflow/output boundaries.
+
 The workflow deliberately supports a cold runner:
 
 1. `actions/checkout` initializes every Git submodule recursively and a
