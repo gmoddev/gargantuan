@@ -178,12 +178,12 @@ jobs:
         shell: cmd
         run: |
           call "%VSDEVCMD%" -arch=x64 -host_arch=x64
-          if errorlevel 1 exit /b %errorlevel%
+          if not %errorlevel%==0 exit /b %errorlevel%
           cl /nologo /std:c++20 /O2 /W4 /WX /EHsc tools\ci\SchedulerTrace.cpp /Febuild-ci\scheduler-trace.exe /Fobuild-ci\scheduler-trace.obj advapi32.lib tdh.lib
-          if errorlevel 1 exit /b %errorlevel%
+          if not %errorlevel%==0 exit /b %errorlevel%
           set "SCHEDULER_TRACE_TEST_HELPER=%CD%\build-ci\scheduler-trace.exe"
           python -m unittest discover -s tests -p "test_scheduler_trace.py" -v
-          if errorlevel 1 exit /b %errorlevel%
+          if not %errorlevel%==0 exit /b %errorlevel%
 
       - name: Trace one FULL workload before independent native gates
         if: github.event_name == 'workflow_dispatch' && inputs.scheduler_trace
@@ -246,18 +246,18 @@ jobs:
         shell: cmd
         run: |
           build-ci\gargantuan_game_session_real_transport_tests.exe --pooled --reliable-workload
-          if errorlevel 1 exit /b %errorlevel%
+          if not %errorlevel%==0 exit /b %errorlevel%
           build-ci\gargantuan_game_session_real_transport_tests.exe --pooled --reliable-workload-32-structural
-          if errorlevel 1 exit /b %errorlevel%
+          if not %errorlevel%==0 exit /b %errorlevel%
           rem Explicit diagnostics already ran FULL once before CTest; never repeat it.
           if not "%SCHEDULER_TRACE%"=="true" (
             build-ci\gargantuan_game_session_real_transport_tests.exe --reliable-workload
           )
-          if errorlevel 1 exit /b %errorlevel%
+          if not %errorlevel%==0 exit /b %errorlevel%
           build-ci\gargantuan_game_session_real_transport_tests.exe --reliable-workload-32
-          if errorlevel 1 exit /b %errorlevel%
+          if not %errorlevel%==0 exit /b %errorlevel%
           pwsh -NoProfile -File tools\ci\SchedulerTrace.ps1 -Case Aggregate32Structural
-          if errorlevel 1 exit /b %errorlevel%
+          if not %errorlevel%==0 exit /b %errorlevel%
 
       - name: Package qualified 32-client physical candidate
         if: github.event_name == 'workflow_dispatch' && !inputs.scheduler_trace && !inputs.scheduler_pair_diagnostic
@@ -309,6 +309,8 @@ jobs:
             build-ci/scheduler-trace/
             build-ci/scheduler-trace-ack-stats/
             build-ci/scheduler-trace-aggregate32-structural/
+            build-ci/scheduler-trace.exe
+            build-ci/gargantuan_game_session_real_transport_tests.exe
             build-ci/scheduler-trace-pair.json
 
   linux-sanitizers:

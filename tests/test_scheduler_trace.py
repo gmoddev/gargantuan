@@ -265,14 +265,48 @@ class SchedulerTraceTests(unittest.TestCase):
                       'tests.exe --reliable-workload\n', 'tests.exe --reliable-workload-32\n'):
             self.assertEqual(Commands.count(Flags), 1)
         self.assertEqual(Commands.count('SchedulerTrace.ps1 -Case Aggregate32Structural'), 1)
+        self.assertEqual(Commands.count('if not %errorlevel%==0 exit /b %errorlevel%'), 5)
+        self.assertNotIn('if errorlevel 1', Commands)
+        Positions = [Commands.index(Flags) for Flags in ('--pooled --reliable-workload\n',
+            '--pooled --reliable-workload-32-structural\n', 'tests.exe --reliable-workload\n',
+            'tests.exe --reliable-workload-32\n', 'SchedulerTrace.ps1 -Case Aggregate32Structural')]
+        self.assertEqual(Positions, sorted(Positions))
         self.assertNotIn('tests.exe --reliable-workload-32-structural', Commands)
         Build = Workflow[Workflow.index('      - name: Build bounded scheduler diagnostic'):Workflow.index('      - name: Trace one FULL')]
         self.assertNotIn('        if:', Build)
         self.assertIn('test_scheduler_trace.py', Build)
         self.assertIn('SCHEDULER_TRACE_TEST_HELPER=', Build)
+        self.assertEqual(Build.count('if not %errorlevel%==0 exit /b %errorlevel%'), 3)
+        self.assertNotIn('if errorlevel 1', Build)
         Upload = Workflow[Workflow.index('      - name: Upload native CI diagnostics'):]
         self.assertIn('        if: always()', Upload)
         self.assertIn('            build-ci/scheduler-trace-aggregate32-structural/', Upload)
+        self.assertEqual(Upload.count('            build-ci/scheduler-trace.exe\n'), 1)
+        self.assertEqual(Upload.count('            build-ci/gargantuan_game_session_real_transport_tests.exe\n'), 1)
+
+    @unittest.skipUnless(os.name == 'nt', 'Windows cmd exit semantics')
+    def test_cmd_guard_preserves_signed_native_failures_before_later_success(self):
+        for Code in (0, 17, -1073740791, -1):
+            with tempfile.TemporaryDirectory() as Directory:
+                Root = Path(Directory)
+                Script = Root / 'guard.cmd'
+                Script.write_text('@echo off\npwsh -NoProfile -Command "exit ' + str(Code) + '"\n' +
+                    'if not %errorlevel%==0 exit /b %errorlevel%\necho continued>continued.txt\nexit /b 0\n')
+                Result = subprocess.run(['cmd', '/d', '/c', str(Script)], cwd=Root, text=True,
+                    capture_output=True, timeout=30, creationflags=subprocess.CREATE_NO_WINDOW)
+                self.assertEqual(Result.returncode & 0xffffffff, Code & 0xffffffff,
+                                 Result.stdout + Result.stderr)
+                self.assertEqual((Root / 'continued.txt').exists(), Code == 0)
+        # Reproduce the original cmd guard defect without running a workload.
+        with tempfile.TemporaryDirectory() as Directory:
+            Root = Path(Directory)
+            Script = Root / 'old-guard.cmd'
+            Script.write_text('@echo off\npwsh -NoProfile -Command "exit -1073740791"\n' +
+                'if errorlevel 1 exit /b %errorlevel%\necho continued>continued.txt\nexit /b 0\n')
+            Result = subprocess.run(['cmd', '/d', '/c', str(Script)], cwd=Root, text=True,
+                capture_output=True, timeout=30, creationflags=subprocess.CREATE_NO_WINDOW)
+            self.assertEqual(Result.returncode, 0)
+            self.assertTrue((Root / 'continued.txt').is_file())
     def StatsFixture(self, Root):
         Metadata, Log = self.Fixture()
         Metadata.update(WorkloadCase='AckStats', ChildExitCode=1, UnsupportedLifecycleEvents=0, DecodedRows=2)
