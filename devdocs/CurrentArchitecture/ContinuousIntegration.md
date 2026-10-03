@@ -224,3 +224,13 @@ first-send curves in the uninstrumented Windows Release CTest matrix.
 Dedicated uninstrumented repeatability and fresh physical qualification are
 also required before claiming F1 capacity. A failure in either strict setting
 remains a qualification blocker even when sanitizer safety passes.
+
+The mixed-traffic fixture separately pumps application receive events after
+native ACK/retirement convergence. The funded ACK can complete on the native
+service thread before the fixture's ACK predicate is first evaluated; that
+predicate does not prove that the application has polled its ordered messages.
+The separate bounded receive wait retains exact control/structural/gameplay
+FIFO and payload checks. It does not extend or resample the preceding native
+first-send service-curve gate. Hosted GNS sanitizer run `37080031865` exposed
+the old fixture's FIFO failure at `140a2539f`; its exact collected payload count
+was not recorded and that failed run remains failed evidence.
