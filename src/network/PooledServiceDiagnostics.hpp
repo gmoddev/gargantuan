@@ -18,6 +18,10 @@ struct PooledServiceRecord {
 struct PooledServiceSink {
 	void *Context = nullptr;
 	void (*Record)(void *, const PooledServiceRecord &) noexcept = nullptr;
+	// Successful production admission, before transport submission. Bootstrap
+	// keeps exact debt ownership but deliberately has no qualified F1 clock.
+	void (*AcceptedGrant)(void *, ConnectionId, std::uint64_t Token,
+		std::uint64_t Bytes, std::uint64_t ActivatedAtMicroseconds) noexcept = nullptr;
 };
 inline thread_local PooledServiceSink *ActivePooledService = nullptr;
 }

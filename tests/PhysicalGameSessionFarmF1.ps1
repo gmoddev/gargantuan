@@ -18,6 +18,7 @@ function Read-FarmF1Observation {
 			-not $Nonces.Add($Matches[2]) -or -not $Connections.Add($Matches[3] + ':' + $Matches[4])) { throw 'F1 ready identity mismatch' }
 	}
 	$Numeric = @('samples','completed','qualified','completed_bytes','accepted','first_sent','acked','retired',
+		'qualified_accepted','qualified_bytes','bootstrap_accepted','bootstrap_bytes','bootstrap_retired','pending_token',
 		'last_token','last_bytes','last_activated_us','last_first_us','last_completed_us',
 		'max_running_byte_us','max_finite_shortfall_byte_us','failed','valid')
 	$Expected = @('event','contract','run','connection') + $Numeric
@@ -46,7 +47,11 @@ function Read-FarmF1Observation {
 				([bigint]101911296000 + [bigint]$Row.last_bytes * 1000000) -or
 			[bigint]$Row.completed_bytes -lt [bigint]$Row.completed -or
 			[bigint]$Row.completed_bytes -gt [bigint]$Row.completed * 524288 -or
-			$Row.completed_bytes -ne $Row.accepted -or $Row.accepted -ne $Row.first_sent -or
+			$Row.pending_token -ne 0 -or $Row.completed -ne $Row.qualified_accepted -or
+			$Row.completed_bytes -ne $Row.qualified_bytes -or $Row.bootstrap_bytes -ne $Row.bootstrap_retired -or
+			[bigint]$Row.bootstrap_bytes -lt [bigint]$Row.bootstrap_accepted -or
+			[bigint]$Row.bootstrap_bytes -gt [bigint]$Row.bootstrap_accepted * 524288 -or
+			[bigint]$Row.completed_bytes + [bigint]$Row.bootstrap_bytes -ne [bigint]$Row.accepted -or $Row.accepted -ne $Row.first_sent -or
 			$Row.first_sent -ne $Row.acked -or $Row.acked -ne $Row.retired) { throw 'native finite-grant service or terminal conservation failed' }
 		$Rows.Add($Row)
 	}

@@ -1703,6 +1703,9 @@ namespace gargantuan::network {
 								"Reliable byte reservation commit failed"});
 							return false;
 						}
+						if (IsPooled() && Receipt && detail::ActivePooledService && detail::ActivePooledService->AcceptedGrant)
+							detail::ActivePooledService->AcceptedGrant(detail::ActivePooledService->Context,
+								Connection, Receipt->Token, Receipt->Bytes, GrantActivatedAt);
 						auto Committed = Replication->CommitSchedulerAcceptance(Connection, Produced.Frame->Sequence);
 						if (!Committed.Succeeded()) {
 							PendingPeerFailures.try_emplace(

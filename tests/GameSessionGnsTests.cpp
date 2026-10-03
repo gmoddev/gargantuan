@@ -11,6 +11,7 @@
 #include "gargantuan/render/Renderer.hpp"
 #include "gargantuan/services/AssetService.hpp"
 #include "gargantuan/services/Players.hpp"
+#include "../src/host/server/FarmF1Evidence.hpp"
 
 #include <chrono>
 #include <cstdint>
@@ -205,6 +206,8 @@ end)
 	ServerRuntime.ProcessService->Alive = true;
 
 	std::shared_ptr<GameNetworkingSocketsTransport> ServerTransport;
+	std::unique_ptr<host::detail::FarmF1Evidence> FiniteEvidence;
+	if (QualificationPooled) FiniteEvidence = std::make_unique<host::detail::FarmF1Evidence>();
 	std::unique_ptr<GameSession> Server;
 	std::uint16_t Port = 0;
 	for (std::uint32_t Candidate = 39400; Candidate < 39500; ++Candidate) {
@@ -274,6 +277,23 @@ end)
 		"real GNS completes accepted peer, trusted LocalPlayer, and gameplay-ready phases"
 	);
 	const auto PeerIdentities = Server->GetPeerIdentities();
+	if (FiniteEvidence && !Workload) {
+		// Real GameSession bootstrap uses production admission and pinned GNS,
+		// unlike a synthetic completed-certificate fixture. Retain exact bootstrap
+		// debt while deliberately excluding its sentinel activation from F1.
+		const auto Deadline = std::chrono::steady_clock::now() + 2s;
+		while (std::chrono::steady_clock::now() < Deadline && Server->GetMetrics().ReliableAdmission.OutstandingBytes) {
+			(void)Server->Poll(); (void)Client.Poll();
+			Server->Step(Tick); Client.Step(Tick++); std::this_thread::sleep_for(1ms);
+		}
+		const auto Observations = FiniteEvidence->Observations();
+		Check(Observations.size() == 1 && Observations[0].BootstrapAccepted > 0 &&
+			Observations[0].BootstrapBytes > 0 && Observations[0].BootstrapBytes == Observations[0].BootstrapRetired &&
+			Observations[0].BootstrapBytes + Observations[0].QualifiedBytes == Observations[0].Accepted &&
+			Observations[0].Accepted == Observations[0].FirstSent && Observations[0].FirstSent == Observations[0].Acked &&
+			Observations[0].Acked == Observations[0].Retired && !Observations[0].PendingToken && !Observations[0].Failed,
+			"real pooled GameSession bootstrap keeps exact admission/send/ACK/retirement outside qualified F1 certificates");
+	}
 	Check(PeerIdentities.size() == 1 && PeerIdentities.front().Ready &&
 		PeerIdentities.front().Nonce == ClientConfiguration.ClientNonce &&
 		PeerIdentities.front().PlayerId != 0 && PeerIdentities.front().SessionEpoch != 0,

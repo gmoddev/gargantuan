@@ -221,6 +221,20 @@ and records the running PowerShell 7 path/hash. Retain the inventory outside
 the checkout with final preparation artifacts and compare its file/runtime pins
 again before analysis; it is a source custody receipt, not a provider PASS.
 
+The finite-grant receipt observes the existing successful admission boundary
+in `GameSession::SubmitStructural`. Pre-Ready bootstrap grants carry the existing
+sentinel activation and are recorded separately by exact token and complete-byte
+size. They retain first-send/ACK/retirement conservation but do not manufacture
+qualified F1 completion certificates. Every Ready qualified grant must match its
+native completion token, byte size, activation time, and sticky service verdict;
+missing certificates, unmatched retirement, and a later return to bootstrap fail
+closed. A bounded one-outstanding-grant record per peer is sufficient because
+the existing admission is ACK gated. `completed_bytes + bootstrap_bytes` must
+equal all admitted/first-sent/ACKed/retired bytes. Bootstrap alone cannot satisfy
+the qualified service gate. The real `--pooled --reliable-profile` GameSession/GNS
+fixture exercises this production bootstrap path; historical receipts are not
+retroactively assigned the new admission fields.
+
 The canonical ordinary Remote/action load has one producer. The other 31
 clients are Character recipients; their lack of additional RPC producers is
 not a missing workload gate. Cross-host latency diagnostics and final
