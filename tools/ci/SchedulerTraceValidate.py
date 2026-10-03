@@ -2,6 +2,7 @@
 import argparse
 import csv
 import json
+import math
 from pathlib import Path
 
 CSV_FIELDS = 'Qpc,Processor,Opcode,Version,HeaderPid,HeaderTid,NewTid,OldTid,TargetTid,TargetPid,OldWaitReason,OldWaitMode,OldState,ReadyAdjustReason,ReadyAdjustIncrement,ReadyFlags'.split(',')
@@ -81,6 +82,7 @@ def Validate(Metadata, Stdout, Case="Full", CsvPath=None):
             Require(Metadata.get("WorkloadArguments") == ["--reliable-workload-32-structural"],
                     "aggregate workload arguments differ from fixed fifth command")
             Extra = ValidateAggregateCsv(Metadata, CsvPath)
+            Extra.update(ValidateAggregateEvidence(Metadata, Stdout, ByCase))
         except (OSError, ValueError, KeyError, TypeError, UnicodeError) as Error:
             Errors.append("aggregate coverage: " + str(Error))
     if Case == "AckStats":
@@ -139,6 +141,239 @@ def ValidateAggregateCsv(Metadata, CsvPath):
     Need(FirstMain == Metadata['MainFirstQpc'] and LastMain == Metadata['MainLastQpc'], "main coverage metadata differs from raw CSV")
     return {'SchedulerCsvRows': Count, 'MainSwitchRows': Switches, 'MainReadyRows': Readies,
             'FixedWorkloadArgument': '--reliable-workload-32-structural'}
+
+
+def ValidateAggregateEvidence(Metadata, Stdout, Arms):
+    """Check bounded fixture evidence completeness, never latency or causation."""
+    def Need(Value, Message):
+        if not Value:
+            raise ValueError(Message)
+
+    def Number(Row, Name):
+        Value = Row[Name]
+        Need(Value.isascii() and Value.isdigit() and len(Value) <= 20 and int(Value) <= 2**64 - 1,
+             'invalid integer ' + Name)
+        return int(Value)
+
+    Need(len(Stdout.encode('utf-8')) <= 32 * 1024 * 1024, 'aggregate stdout cap')
+    Rows = {Name: {} for Name in Arms}
+    Current = None
+    Labels = {'AggregatePeerEvidence', 'RemoteChronology', 'RemoteSpan', 'RemoteResourceSpan',
+              'AggregateOperationCoverage', 'AggregateStepSnapshot', 'AggregateOperationSpan', 'Aggregate'}
+    for Line in Stdout.splitlines():
+        if not Line.startswith('[Qualification:'):
+            continue
+        Prefix, _, Tail = Line.partition('] ')
+        Label = Prefix.removeprefix('[Qualification:')
+        if Label not in Labels and Label != 'ClockAnchor':
+            continue
+        Parts = [Part.split('=', 1) for Part in Tail.split()]
+        Need(len(Line) <= 8192 and all(len(Part) == 2 and len(Part[1]) <= 1024 for Part in Parts),
+             'bounded fixture evidence fields')
+        Row = dict(Parts)
+        Need(len(Row) == len(Parts), 'duplicate fixture evidence field')
+        if Label == 'ClockAnchor':
+            if Row.get('case') in Arms and Row.get('boundary') == 'BEGIN': Current = Row['case']
+            continue
+        if Label == 'Aggregate':
+            Need(Current in Arms, 'aggregate summary outside retained phase')
+            Name = Current
+        else:
+            Name = Row.get('case')
+            if Name not in Arms:
+                # Earlier single-peer diagnostic cases have separate ownership.
+                Need(not str(Name).startswith('aggregate-'), 'unexpected aggregate evidence case')
+                continue
+            Need(Name == Current and Row.get('profile') == 'FULL_RESERVATION' and
+                 Row.get('phase_index') == Arms[Name][0]['phase_index'], 'aggregate evidence phase/profile mismatch')
+        Rows[Name].setdefault(Label, []).append(Row)
+        Limit = 32 * 208 if Label in ('RemoteSpan', 'RemoteResourceSpan') else 64 * 99 + 99
+        Need(len(Rows[Name][Label]) <= Limit, 'aggregate evidence row cap')
+
+    Stable, RecordCount = {}, 0
+    for Phase, (Name, Pair) in enumerate(Arms.items()):
+        Data = Rows[Name]
+        Begin, End = Pair[0]['steady_ns'], Pair[1]['steady_ns']
+        def Context(Row):
+            Peer = Number(Row, 'peer')
+            Need(Peer < 32, 'peer outside fixed population')
+            Identity = (Number(Row, 'slot'), Number(Row, 'generation'))
+            Need(Identity[0] > 0 and Identity[1] > 0 and max(Identity) <= 2**32 - 1,
+                 'invalid connection identity')
+            if Peer in Stable: Need(Stable[Peer] == Identity, 'generation/slot changed across phase')
+            else: Stable[Peer] = Identity
+            return Peer, Identity
+
+        def PeerRows(Label):
+            Result = {}
+            for Row in Data.get(Label, []):
+                Peer, _ = Context(Row)
+                Need(Peer not in Result, 'duplicate ' + Label)
+                Result[Peer] = Row
+            Need(set(Result) == set(range(32)), 'missing fixed peer ' + Label)
+            return Result
+
+        Headers, Chronologies = PeerRows('AggregatePeerEvidence'), PeerRows('RemoteChronology')
+        Need(len(set(Stable.values())) == 32, 'connection identity reused by peers')
+        Spans, Resources = {}, {}
+        for Label, Target in (('RemoteSpan', Spans), ('RemoteResourceSpan', Resources)):
+            for Row in Data.get(Label, []):
+                Peer, _ = Context(Row)
+                Key = (Peer, Number(Row, 'id'))
+                Need(Row.get('kind') == 'RPC' and Key[1] > 0 and Key not in Target, 'RPC identity duplicate/invalid')
+                Target[Key] = Row
+        Need(Spans.keys() == Resources.keys(), 'RPC/resource record coverage differs')
+        Active = 32 if Phase == 1 else 8
+        Summaries = {}
+        for Row in Data.get('Aggregate', []):
+            Peer = Number(Row, 'peer')
+            Need(Peer < Active and Peer not in Summaries and Number(Row, 'connected') == 32 and
+                 Number(Row, 'active') == Active and Number(Row, 'overload') == int(Phase == 1),
+                 'aggregate summary identity duplicate/invalid')
+            Summaries[Peer] = Row
+        Need(set(Summaries) == set(range(Active)), 'missing active peer summaries')
+        for Peer in range(32):
+            Header, Chronology = Headers[Peer], Chronologies[Peer]
+            Need(Header['configured'] == '1' and Header['invalid'] == '0' and
+                 Chronology['invalid'] == Chronology['overflow'] == '0' and Number(Chronology, 'capacity') == 208,
+                 'peer evidence invalid/overflow/unconfigured')
+            Count = Number(Chronology, 'records')
+            Need(Count <= (208 if Phase == 1 else 48) and (Peer < Active or Count == 0), 'RPC count outside reachable bound')
+            Need({Id for Owner, Id in Spans if Owner == Peer} == set(range(1, Count + 1)),
+                 'RPC chronology dropped/noncontiguous records')
+            Accepted = Completed = Errors = 0
+            for Id in range(1, Count + 1):
+                Span, Resource = Spans[(Peer, Id)], Resources[(Peer, Id)]
+                for Field in ('start_ns', 'end_ns', 'start_tid', 'end_tid', 'terminal'):
+                    Need(Span[Field] == Resource[Field], 'RPC/resource endpoints differ')
+                Start, Submitted, Finished = (Number(Span, Field) for Field in ('start_ns', 'submitted_ns', 'end_ns'))
+                Observed = Number(Span, 'observed_ns')
+                Need(Begin <= Start <= End and Observed == End and Span['recovery_probe'] == '0' and
+                     Number(Span, 'start_tid') == Metadata['ChildMainTid'], 'RPC start/observation boundary invalid')
+                Need(Number(Span, 'observed_step') >= max(Number(Span, 'start_step'),
+                     Number(Span, 'submitted_step'), Number(Span, 'end_step')), 'RPC step observation reversed')
+                Need(Resource['start_sample_before_ns'].isdigit() and
+                     Begin <= Number(Resource, 'start_sample_before_ns') <= Start <= Number(Resource, 'start_sample_after_ns') <= End,
+                     'RPC original start clock bracket invalid')
+                Need(Span['accepted'] in ('0', '1') and Span['terminal'] in ('0', '1'), 'RPC boolean invalid')
+                IsAccepted, Terminal = Span['accepted'] == '1', Span['terminal'] == '1'
+                Accepted += int(IsAccepted); Completed += int(Terminal)
+                Outcome = Span['outcome']
+                Need(Outcome in ('TERMINAL', 'REJECTED', 'MISSING_AT_SERVICE_DEADLINE', 'MISSING_AT_CASE_END',
+                                 'SUBMISSION_NOT_OBSERVED'), 'RPC outcome invalid')
+                if Outcome != 'SUBMISSION_NOT_OBSERVED':
+                    Need(Start <= Submitted <= End and Number(Span, 'submitted_tid') == Metadata['ChildMainTid'] and
+                         Number(Span, 'submitted_step') >= Number(Span, 'start_step'), 'RPC submission boundary invalid')
+                if Terminal:
+                    Need(IsAccepted and Outcome == 'TERMINAL' and Start <= Finished <= End and
+                         Number(Span, 'end_step') >= Number(Span, 'start_step') and
+                         Number(Span, 'end_tid') == Metadata['ChildMainTid'] and Resource['endpoint_order_valid'] == '1',
+                         'RPC terminal boundary invalid')
+                    Need((Submitted <= Finished and Number(Span, 'submitted_step') <= Number(Span, 'end_step')) or
+                         (Finished <= Submitted and Number(Span, 'end_step') <= Number(Span, 'submitted_step')),
+                         'RPC callback/submission clock and step order disagree')
+                    Need(Number(Resource, 'start_sample_after_ns') <= Number(Resource, 'end_sample_before_ns') <=
+                         Finished <= Number(Resource, 'end_sample_after_ns') <= End, 'RPC original terminal clock bracket invalid')
+                    Need(Span['payload_matched'] in ('0', '1') and Number(Span, 'terminal_status') <= 6, 'RPC terminal result invalid')
+                    Errors += int(Span['terminal_status'] != '0' or Span['payload_matched'] != '1')
+                    ValidateAggregateResource(Resource, Number, Need)
+                else:
+                    Need(Finished == 0 and Number(Span, 'end_tid') == 0 and Span['terminal_status'] == '-1' and
+                         Resource['endpoint_order_valid'] == '0', 'missing/rejected RPC fabricated terminal')
+                    Need((not IsAccepted and Outcome in ('REJECTED', 'SUBMISSION_NOT_OBSERVED')) or
+                         (IsAccepted and Outcome in ('MISSING_AT_SERVICE_DEADLINE', 'MISSING_AT_CASE_END')),
+                         'RPC outcome contradicts acceptance')
+                    Need(Resource['sleep_delta_valid'] == '0' and
+                         all(Resource[Kind + '_cpu_' + Bound + '_100ns'] == 'NOT_MEASURED'
+                             for Kind in ('thread', 'process') for Bound in ('lower', 'upper')) and
+                         all(Resource['measured_sleep_' + Kind] == 'NOT_MEASURED'
+                             for Kind in ('count', 'requested_ns', 'actual_ns')),
+                         'nonterminal RPC fabricated resource deltas')
+                    Errors += int(Outcome == 'REJECTED')
+                if Metadata['ChildExitCode'] == 0:
+                    Need(IsAccepted and Terminal and Errors == 0, 'successful child has incomplete/error RPC')
+            if Peer < Active:
+                Summary = Summaries[Peer]
+                Need(Accepted == Number(Summary, 'accepted') and Completed == Number(Summary, 'completed') and
+                     Errors == Number(Summary, 'errors'), 'RPC counts disagree with aggregate summary')
+                Need(Count > 0, 'active peer has no RPC chronology')
+            RecordCount += Count
+        ValidateAggregateOperations(Data, Stable, Begin, End, Metadata['ChildMainTid'], Number, Need)
+    return {'CompleteAggregatePhases': len(Arms), 'CompleteRpcRecords': RecordCount,
+            'OperationCoverage': 'SAMPLED_NOT_COMPLETE_CAUSAL_PROOF', 'RpcCoverage': 'COMPLETE_SUBMITTED_RECORDS'}
+
+
+def ValidateAggregateResource(Row, Number, Need):
+    for Kind in ('thread', 'process'):
+        Values = []
+        for Boundary in ('start_before', 'start_after', 'end_before', 'end_after'):
+            Need(Row[Boundary + '_' + Kind + '_valid'] == '1', 'RPC endpoint CPU counter unavailable/invalid')
+            Values.append(Number(Row, Boundary + '_' + Kind + '_100ns'))
+        Need(Values == sorted(Values) and Number(Row, Kind + '_cpu_lower_100ns') == Values[2] - Values[1] and
+             Number(Row, Kind + '_cpu_upper_100ns') == Values[3] - Values[0], 'RPC endpoint CPU brackets invalid')
+    Need(Row['sleep_delta_valid'] == Row['start_sleep_valid'] == Row['end_sleep_valid'] == '1',
+         'RPC sleep ledger invalid')
+    for Name in ('count', 'requested_ns', 'actual_ns'):
+        First, Last = Number(Row, 'start_sleep_' + Name), Number(Row, 'end_sleep_' + Name)
+        Need(Last >= First and Number(Row, 'measured_sleep_' + Name) == Last - First, 'RPC sleep delta invalid')
+    Start, End = Number(Row, 'start_ns'), Number(Row, 'end_ns')
+    First, Last = Number(Row, 'start_sleep_last_completed_ns'), Number(Row, 'end_sleep_last_completed_ns')
+    Need(First <= Start and First <= Last <= End and Number(Row, 'measured_sleep_actual_ns') <= End - Start,
+         'RPC sleep endpoints invalid')
+    if Number(Row, 'measured_sleep_count') == 0:
+        Need(First == Last and Number(Row, 'measured_sleep_requested_ns') == Number(Row, 'measured_sleep_actual_ns') == 0,
+             'RPC sleep ledger changed without sleep')
+    else: Need(Last >= Start, 'RPC measured sleep predates request')
+
+
+def ValidateAggregateOperations(Data, Stable, Begin, End, MainTid, Number, Need):
+    Coverage = Data.get('AggregateOperationCoverage', [])
+    Need(len(Coverage) == 1, 'operation coverage header missing/duplicate')
+    Header = Coverage[0]
+    Need(Header['invalid'] == Header['overflow'] == '0' and Number(Header, 'capacity') == 64 and
+         Number(Header, 'observed_steps') > 0 and Number(Header, 'snapshots') <= 64 and
+         Header['selection'] == 'existing_p95_gap_ge_150ms' and
+         Header['coverage'] == 'SAMPLED_NOT_COMPLETE_CAUSAL_PROOF', 'operation coverage invalid/overflow/scope')
+    Snapshots = {}
+    for Row in Data.get('AggregateStepSnapshot', []):
+        Tick = Number(Row, 'tick')
+        Need(Tick not in Snapshots and Begin <= Number(Row, 'gap_start_ns') <= Number(Row, 'work_start_ns') <=
+             Number(Row, 'work_end_ns') == Number(Row, 'gap_end_ns') <= End, 'operation snapshot timestamp/identity invalid')
+        Snapshots[Tick] = Row
+    Need(len(Snapshots) == Number(Header, 'snapshots'), 'operation snapshot count mismatch')
+    Keys, Maxima = set(), set()
+    for Row in Data.get('AggregateOperationSpan', []):
+        Peer, Tick = Number(Row, 'peer'), Number(Row, 'tick')
+        Need(Peer <= 32 and Row['subphase'] in ('poll', 'engine', 'session') and
+             Row['coverage'] in ('phase_maximum', 'slow_step'), 'operation matrix scope invalid')
+        Key = (Row['coverage'], Tick, Peer, Row['subphase'])
+        Need(Key not in Keys and Row['timestamps_valid'] == '1' and Number(Row, 'native_tid') == MainTid and
+             Begin <= Number(Row, 'start_ns') <= Number(Row, 'end_ns') <= End, 'operation matrix invalid/duplicate')
+        Keys.add(Key)
+        Need(Row['side'] == ('server' if Peer == 32 else 'client') and
+             (Number(Row, 'slot'), Number(Row, 'generation')) == ((0, 0) if Peer == 32 else Stable[Peer]),
+             'operation generation/side mismatch')
+        if Row['coverage'] == 'phase_maximum':
+            Need((Peer, Row['subphase']) not in Maxima, 'operation maxima duplicate')
+            Maxima.add((Peer, Row['subphase']))
+        else:
+            Need(Tick in Snapshots and Number(Snapshots[Tick], 'work_start_ns') <= Number(Row, 'start_ns') <=
+                 Number(Row, 'end_ns') <= Number(Snapshots[Tick], 'work_end_ns'), 'operation snapshot/span boundary mismatch')
+        for Kind in ('thread', 'process'):
+            Need(Row['before_' + Kind + '_valid'] in ('0', '1') and Row['after_' + Kind + '_valid'] in ('0', '1'),
+                 'operation CPU validity flag invalid')
+            if Row['before_' + Kind + '_valid'] == Row['after_' + Kind + '_valid'] == '1':
+                Need(Number(Row, 'after_' + Kind + '_100ns') >= Number(Row, 'before_' + Kind + '_100ns'),
+                     'operation CPU counter reversed')
+                Need(math.isfinite(float(Row[Kind + '_cpu_ms'])) and float(Row[Kind + '_cpu_ms']) >= 0,
+                     'operation CPU duration invalid')
+            else: Need(Row[Kind + '_cpu_ms'] == 'NOT_MEASURED', 'operation CPU measurement fabricated')
+    Need(Maxima == {(Peer, Kind) for Peer in range(33) for Kind in ('poll', 'engine', 'session')},
+         'operation phase maxima incomplete')
+    for Tick in Snapshots:
+        Need({(Peer, Kind) for Scope, Step, Peer, Kind in Keys if Scope == 'slow_step' and Step == Tick} ==
+             {(Peer, Kind) for Peer in range(33) for Kind in ('poll', 'engine', 'session')},
+             'selected operation snapshot matrix incomplete')
 
 
 def ValidateStats(Metadata, Stdout, CsvPath, Arms):

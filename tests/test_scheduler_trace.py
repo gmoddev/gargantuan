@@ -26,6 +26,54 @@ class SchedulerTraceTests(unittest.TestCase):
                                  ('aggregate-recovery', 700, 900))):
             for Boundary, Tick in (('BEGIN', Begin), ('END', End)):
                 Lines.append(f'[Qualification:ClockAnchor] case={Name} profile=FULL_RESERVATION boundary={Boundary} phase_index={Index} pid=42 native_tid=43 native_valid=1 steady_ns={Tick * 100} qpc_before={Tick} qpc_after={Tick + 1} qpc_frequency=10000000')
+            def Emit(Label, **Fields):
+                Lines.append('[Qualification:' + Label + '] case=' + Name +
+                    ' profile=FULL_RESERVATION phase_index=' + str(Index) + ' ' +
+                    ' '.join(Key + '=' + str(Value) for Key, Value in Fields.items()))
+            Emit('AggregateOperationCoverage', observed_steps=480, snapshots=0, capacity=64, invalid=0,
+                 overflow=0, selection='existing_p95_gap_ge_150ms', coverage='SAMPLED_NOT_COMPLETE_CAUSAL_PROOF')
+            for Peer in range(33):
+                for Kind in ('poll', 'engine', 'session'):
+                    Emit('AggregateOperationSpan', peer=Peer, side='server' if Peer == 32 else 'client',
+                         slot=0 if Peer == 32 else Peer + 1, generation=0 if Peer == 32 else 1,
+                         coverage='phase_maximum', tick=1, subphase=Kind, start_ns=Begin * 100 + 50,
+                         end_ns=Begin * 100 + 60, native_tid=43, timestamps_valid=1, thread_cpu_ms=0,
+                         process_cpu_ms=0, before_thread_100ns=1, after_thread_100ns=1,
+                         before_process_100ns=1, after_process_100ns=1, before_thread_valid=1,
+                         after_thread_valid=1, before_process_valid=1, after_process_valid=1)
+            Active = 32 if Index == 1 else 8
+            Count = 16 if Index == 1 else 4
+            for Peer in range(32):
+                Context = dict(peer=Peer, slot=Peer + 1, generation=1)
+                Emit('AggregatePeerEvidence', **Context, configured=1, invalid=0)
+                Emit('RemoteChronology', **Context, records=Count if Peer < Active else 0,
+                     capacity=208, invalid=0, overflow=0)
+                for Id in range(1, (Count if Peer < Active else 0) + 1):
+                    Start = Begin * 100 + 100 + Id * 20
+                    Finished = Start + 10
+                    Emit('RemoteSpan', **Context, kind='RPC', id=Id, recovery_probe=0, outcome='TERMINAL',
+                         start_step=1, start_ns=Start, start_tid=43, submitted_step=1, submitted_ns=Start + 5,
+                         submitted_tid=43, accepted=1, terminal=1, end_step=2, end_ns=Finished, end_tid=43,
+                         terminal_status=0, payload_matched=1, observed_step=480, observed_ns=End * 100)
+                    Counters = {Boundary + '_' + Kind + '_valid': 1
+                        for Boundary in ('start_before', 'start_after', 'end_before', 'end_after')
+                        for Kind in ('thread', 'process')}
+                    Counters.update({Boundary + '_' + Kind + '_100ns': Value
+                        for Boundary, Value in zip(('start_before', 'start_after', 'end_before', 'end_after'), (1, 2, 3, 4))
+                        for Kind in ('thread', 'process')})
+                    Emit('RemoteResourceSpan', **Context, **Counters, kind='RPC', id=Id, start_ns=Start,
+                         end_ns=Finished, start_tid=43, end_tid=43, terminal=1, endpoint_order_valid=1,
+                         start_sample_before_ns=Start - 1, start_sample_after_ns=Start + 1,
+                         end_sample_before_ns=Finished - 1, end_sample_after_ns=Finished + 1,
+                         thread_cpu_lower_100ns=1, thread_cpu_upper_100ns=3,
+                         process_cpu_lower_100ns=1, process_cpu_upper_100ns=3,
+                         start_sleep_count=0, start_sleep_requested_ns=0, start_sleep_actual_ns=0,
+                         start_sleep_last_completed_ns=0, start_sleep_valid=1, end_sleep_count=0,
+                         end_sleep_requested_ns=0, end_sleep_actual_ns=0, end_sleep_last_completed_ns=0,
+                         end_sleep_valid=1, sleep_delta_valid=1, measured_sleep_count=0,
+                         measured_sleep_requested_ns=0, measured_sleep_actual_ns=0)
+            for Peer in range(Active):
+                Lines.append(f'[Qualification:Aggregate] overload={int(Index == 1)} connected=32 active={Active} peer={Peer} accepted={Count} completed={Count} errors=0')
         File = Root / 'scheduler.csv'
         with File.open('w', encoding='ascii', newline='') as Stream:
             Writer = csv.DictWriter(Stream, fieldnames=VALIDATOR.CSV_FIELDS)
@@ -44,13 +92,16 @@ class SchedulerTraceTests(unittest.TestCase):
             self.assertEqual(Result['State'], 'LOSS_FREE_ANCHOR_WINDOW_RETAINED', Result)
             self.assertEqual(Result['CausalVerdict'], 'NOT_CLAIMED')
             self.assertEqual(Result['SchedulerCsvRows'], 4)
+            self.assertEqual(Result['CompleteAggregatePhases'], 3)
+            self.assertEqual(Result['CompleteRpcRecords'], 576)
             # A first-phase assertion failure preserves its complete prefix;
             # loss-free tracing cannot turn the child's nonzero exit into PASS.
             Metadata['ChildExitCode'] = 17
-            Result = VALIDATOR.Validate(Metadata, '\n'.join(Log.splitlines()[:2]), 'Aggregate32Structural', File)
+            Prefix = Log[:Log.index('[Qualification:ClockAnchor] case=aggregate-overload')].rstrip()
+            Result = VALIDATOR.Validate(Metadata, Prefix, 'Aggregate32Structural', File)
             self.assertEqual(Result['State'], 'LOSS_FREE_ANCHOR_WINDOW_RETAINED', Result)
             Metadata['ChildExitCode'] = 0
-            self.assertEqual(VALIDATOR.Validate(Metadata, '\n'.join(Log.splitlines()[:2]),
+            self.assertEqual(VALIDATOR.Validate(Metadata, Prefix,
                 'Aggregate32Structural', File)['State'], 'INCOMPLETE')
 
     def test_aggregate_identity_loss_bounds_case_and_raw_csv_denials(self):
@@ -62,10 +113,11 @@ class SchedulerTraceTests(unittest.TestCase):
                 with self.subTest(Key=Key):
                     self.assertEqual(VALIDATOR.Validate(dict(Metadata, **{Key: Value}), Log,
                         'Aggregate32Structural', File)['State'], 'INCOMPLETE')
+            Anchors = [Line for Line in Log.splitlines() if Line.startswith('[Qualification:ClockAnchor]')]
             for Bad in (Log.replace('aggregate-baseline', 'recovery'), Log.replace('FULL_RESERVATION', 'POOLED_SERVICE'),
-                        '\n'.join(Log.splitlines()[2:] + Log.splitlines()[:2]), Log + '\n' + Log,
+                        '\n'.join(Anchors[2:] + Anchors[:2]), Log + '\n' + Log,
                         Log.replace('phase_index=1', 'phase_index=0'), Log.replace('phase_index=0 ', ''),
-                        '\n'.join(Log.splitlines()[Index] for Index in (0, 2, 1, 3, 4, 5)),
+                        '\n'.join(Anchors[Index] for Index in (0, 2, 1, 3, 4, 5)),
                         Log.replace('qpc_before=300 qpc_after=301', 'qpc_before=100 qpc_after=101')):
                 self.assertEqual(VALIDATOR.Validate(Metadata, Bad, 'Aggregate32Structural', File)['State'], 'INCOMPLETE')
             Original = File.read_text()
@@ -91,6 +143,87 @@ class SchedulerTraceTests(unittest.TestCase):
                 Coverage = json.loads((Root / 'coverage.json').read_text())
                 self.assertEqual(Coverage['State'], 'LOSS_FREE_ANCHOR_WINDOW_RETAINED' if Valid else 'INCOMPLETE')
                 self.assertEqual(Coverage['CausalVerdict'], 'NOT_CLAIMED')
+
+    def test_aggregate_complete_rpc_and_operation_evidence_denials(self):
+        with tempfile.TemporaryDirectory() as Directory:
+            Metadata, Log, File = self.AggregateFixture(Path(Directory))
+            Lines = Log.splitlines()
+            def Changed(Label, Old=None, New=None, Drop=False, Duplicate=False):
+                Output = list(Lines)
+                Index = next(Index for Index, Line in enumerate(Output) if Line.startswith('[Qualification:' + Label + ']'))
+                if Drop: Output.pop(Index)
+                elif Duplicate: Output.insert(Index, Output[Index])
+                else: Output[Index] = Output[Index].replace(Old, New)
+                return '\n'.join(Output)
+            Mutations = [('\n'.join(Line for Line in Lines if Line.startswith('[Qualification:ClockAnchor]')), 'anchors-only')]
+            for Label in ('AggregatePeerEvidence', 'RemoteChronology', 'RemoteSpan', 'RemoteResourceSpan',
+                          'AggregateOperationCoverage', 'AggregateOperationSpan', 'Aggregate'):
+                Mutations.extend(((Changed(Label, Drop=True), 'dropped-' + Label),
+                                  (Changed(Label, Duplicate=True), 'duplicate-' + Label)))
+            for Label, Old, New in (
+                    ('AggregatePeerEvidence', 'generation=1', 'generation=2'),
+                    ('RemoteSpan', 'phase_index=0', 'phase_index=1'),
+                    ('RemoteSpan', 'id=1 ', 'id=9 '),
+                    ('RemoteSpan', 'terminal=1', 'terminal=0'),
+                    ('RemoteSpan', 'observed_ns=20000', 'observed_ns=19999'),
+                    ('RemoteResourceSpan', 'endpoint_order_valid=1', 'endpoint_order_valid=0'),
+                    ('RemoteResourceSpan', 'start_sample_before_ns=1119', 'start_sample_before_ns=1121'),
+                    ('RemoteResourceSpan', 'thread_cpu_lower_100ns=1', 'thread_cpu_lower_100ns=2'),
+                    ('RemoteResourceSpan', 'sleep_delta_valid=1', 'sleep_delta_valid=0'),
+                    ('RemoteChronology', 'invalid=0', 'invalid=1'),
+                    ('RemoteChronology', 'overflow=0', 'overflow=1'),
+                    ('RemoteChronology', 'records=4', 'records=5'),
+                    ('Aggregate', 'accepted=4', 'accepted=3'),
+                    ('Aggregate', 'completed=4', 'completed=3'),
+                    ('Aggregate', 'errors=0', 'errors=1'),
+                    ('AggregateOperationCoverage', 'overflow=0', 'overflow=1'),
+                    ('AggregateOperationCoverage', 'invalid=0', 'invalid=1'),
+                    ('AggregateOperationCoverage', 'SAMPLED_NOT_COMPLETE_CAUSAL_PROOF', 'COMPLETE'),
+                    ('AggregateOperationCoverage', 'snapshots=0', 'snapshots=1'),
+                    ('AggregateOperationSpan', 'timestamps_valid=1', 'timestamps_valid=0'),
+                    ('AggregateOperationSpan', 'generation=1', 'generation=2')):
+                Mutations.append((Changed(Label, Old, New), Label + ':' + Old))
+            for Bad, Name in Mutations:
+                with self.subTest(Name=Name):
+                    Result = VALIDATOR.Validate(Metadata, Bad, 'Aggregate32Structural', File)
+                    self.assertEqual(Result['State'], 'INCOMPLETE', Result)
+                    self.assertEqual(Result['CausalVerdict'], 'NOT_CLAIMED')
+
+    def test_aggregate_failed_rpc_outcomes_and_inline_callback_are_retained(self):
+        with tempfile.TemporaryDirectory() as Directory:
+            Metadata, Log, File = self.AggregateFixture(Path(Directory))
+            Prefix = Log[:Log.index('[Qualification:ClockAnchor] case=aggregate-overload')].rstrip()
+            for Accepted in (False, True):
+                Lines = Prefix.splitlines()
+                SpanIndex = next(Index for Index, Line in enumerate(Lines) if Line.startswith('[Qualification:RemoteSpan]'))
+                ResourceIndex = SpanIndex + 1
+                Span = dict(Part.split('=', 1) for Part in Lines[SpanIndex].split()[1:])
+                Resource = dict(Part.split('=', 1) for Part in Lines[ResourceIndex].split()[1:])
+                Span.update(outcome='MISSING_AT_CASE_END' if Accepted else 'REJECTED', accepted=str(int(Accepted)),
+                            terminal='0', end_step='0', end_ns='0', end_tid='0', terminal_status='-1', payload_matched='0')
+                Resource.update(terminal='0', end_ns='0', end_tid='0', endpoint_order_valid='0',
+                                end_sample_before_ns='0', end_sample_after_ns='0', sleep_delta_valid='0')
+                for Key in list(Resource):
+                    if Key.startswith('end_'):
+                        Resource[Key] = '0'
+                    if '_cpu_lower_' in Key or '_cpu_upper_' in Key or Key.startswith('measured_sleep_'):
+                        Resource[Key] = 'NOT_MEASURED'
+                Lines[SpanIndex] = '[Qualification:RemoteSpan] ' + ' '.join(Key + '=' + Value for Key, Value in Span.items())
+                Lines[ResourceIndex] = '[Qualification:RemoteResourceSpan] ' + ' '.join(Key + '=' + Value for Key, Value in Resource.items())
+                SummaryIndex = next(Index for Index, Line in enumerate(Lines) if Line.startswith('[Qualification:Aggregate]') and 'peer=0 ' in Line)
+                Lines[SummaryIndex] = Lines[SummaryIndex].replace('completed=4', 'completed=3').replace(
+                    'accepted=4', 'accepted=4' if Accepted else 'accepted=3').replace('errors=0', 'errors=0' if Accepted else 'errors=1')
+                Result = VALIDATOR.Validate(dict(Metadata, ChildExitCode=17), '\n'.join(Lines), 'Aggregate32Structural', File)
+                self.assertEqual(Result['State'], 'LOSS_FREE_ANCHOR_WINDOW_RETAINED', Result)
+                self.assertEqual(Result['CausalVerdict'], 'NOT_CLAIMED')
+                self.assertEqual(VALIDATOR.Validate(Metadata, '\n'.join(Lines), 'Aggregate32Structural', File)['State'], 'INCOMPLETE')
+            # The real StartRequest may invoke an accepted terminal callback
+            # synchronously before Submitted observes its return; do not reorder it.
+            Lines = Log.splitlines()
+            Index = next(Index for Index, Line in enumerate(Lines) if Line.startswith('[Qualification:RemoteSpan]'))
+            Lines[Index] = Lines[Index].replace('submitted_step=1', 'submitted_step=3').replace('submitted_ns=1125', 'submitted_ns=1135')
+            Result = VALIDATOR.Validate(Metadata, '\n'.join(Lines), 'Aggregate32Structural', File)
+            self.assertEqual(Result['State'], 'LOSS_FREE_ANCHOR_WINDOW_RETAINED', Result)
 
     def test_normal_ci_preserves_five_workloads_with_fixed_fifth_traced_once(self):
         Workflow = (ROOT / '.github/workflows/native-ci.yml').read_text()
