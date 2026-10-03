@@ -22,7 +22,8 @@ inline void TestFarmOrdinaryEvidence() {
 			Evidence.SetTrafficPhase("baseline");
 			runtime_detail::RecordPublicationLatency({.Stage="OrdinaryReliableSent", .Connection={1, 1},
 				.Kind=2, .Bytes=212, .Operations=1});
-			Evidence.SetTrafficPhase("calibrating");
+			Evidence.SetTrafficPhase("baseline", true);
+			Evidence.SetTrafficPhase("baseline", true); // Retained phase cannot reopen during overload.
 			Evidence.Dump();
 			if (!Evidence.Valid() || Evidence.Count() != 3) throw std::runtime_error("farm bounded traffic metadata lost");
 		}

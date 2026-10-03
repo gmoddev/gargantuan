@@ -286,10 +286,10 @@ public:
 	void MarkFrameBegin(std::uint64_t Tick) const noexcept {
 		if (Server) runtime_detail::RecordPublicationLatency({.Stage = "FrameBegin", .Tick = Tick});
 	}
-	void SetTrafficPhase(std::string_view Name) noexcept {
+	void SetTrafficPhase(std::string_view Name, bool DeliberateOverload = false) noexcept {
 		constexpr std::array<std::string_view, 5> Names{"baseline", "load", "resident", "evict", "reload"};
 		std::uint64_t Next = 0;
-		for (std::size_t I = 0; I < Names.size(); ++I) if (Name == Names[I]) Next = I + 1;
+		for (std::size_t I = 0; !DeliberateOverload && I < Names.size(); ++I) if (Name == Names[I]) Next = I + 1;
 		if (Next == TrafficPhase) return;
 		if (TrafficPhase) runtime_detail::RecordPublicationLatency({.Stage="TrafficPhaseEnd",
 			.Connection=ClientConnection, .Sequence=TrafficPhase});

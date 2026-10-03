@@ -313,7 +313,11 @@ int gargantuan::host::RunPackagedPlayer(int argc, char *argv[]) {
 			if (PublicationEvidence) {
 				const auto Phase = World->GetAttributeValue("ScalePhase");
 				const auto *Name = Phase ? std::get_if<std::string>(&*Phase) : nullptr;
-				PublicationEvidence->SetTrafficPhase(Name ? std::string_view(*Name) : std::string_view{});
+				// Recovery deliberately retains ScalePhase=reload. Its existing
+				// enable transition ends fixed demand before the next Luau step.
+				const bool Overload = World->GetAttributeValue("ScaleOverloadEnabled") ==
+					std::optional<WireValue>(WireValue(true));
+				PublicationEvidence->SetTrafficPhase(Name ? std::string_view(*Name) : std::string_view{}, Overload);
 			}
 #if defined(GARGANTUAN_WITH_GNS)
 			if (ClockCalibration) {

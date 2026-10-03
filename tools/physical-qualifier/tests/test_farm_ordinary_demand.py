@@ -149,6 +149,13 @@ class OrdinaryDemandTests(unittest.TestCase):
         self.assertIn('if (!runtime_detail::PublicationLatencySelected(Message.Destination())) return;', Send)
         self.assertNotIn('RecordOrdinary("OrdinaryReliableSent")', Send[:Send.index('case k_EResultOK:')])
 
+    def test_client_closes_reload_before_deliberate_overload_callback(self):
+        Root = Path(__file__).resolve().parents[3]
+        Player = (Root / "src/host/player/PlayerHost.cpp").read_text()
+        Loop = Player[Player.index('while (Runtime->ProcessService->Alive)'):]
+        self.assertLess(Loop.index('GetAttributeValue("ScaleOverloadEnabled")'), Loop.index('Runtime->Step()'))
+        self.assertIn('std::string_view{}, Overload)', Loop)
+
 
 if __name__ == "__main__":
     unittest.main()

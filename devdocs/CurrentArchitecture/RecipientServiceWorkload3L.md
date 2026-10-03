@@ -67,6 +67,9 @@ independent, so shaping or unfinished offered work cannot qualify by itself.
 
 Five sender-local start/end markers delimit the accepted fixed workload;
 bootstrap, clock calibration and deliberate overload remain separate scopes.
+The client closes the retained `reload` phase at the existing replicated
+`ScaleOverloadEnabled` transition before the next Luau step; the overload
+workload intentionally leaves the `ScalePhase` label unchanged.
 Offline replay applies exact integer all-interval token-bucket arithmetic,
 including tied arrivals, both per peer and over each complete direction. It
 does not average per phase or reset demand credit at a grant boundary. All 32
