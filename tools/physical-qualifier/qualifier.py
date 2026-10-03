@@ -226,6 +226,7 @@ class LocalRun:
         self.HookHashes = {}
         self.CleanupResult = None
         self.ServerListenerLogged = False
+        self.StartedUnixNs = None
 
     def Check(self):
         Config = self.Config
@@ -366,6 +367,7 @@ class LocalRun:
     def Start(self):
         Env = dict(os.environ, GARGANTUAN_GNS_LIFECYCLE_TRACE="1")
         self.Started = time.monotonic()
+        self.StartedUnixNs = time.time_ns()
         Clients = self.Config.get("ReadinessClients", 1)
         Nonces = (range(self.Config["Nonce"], self.Config["Nonce"] + Clients)
                   if self.Config["Role"] == "CLIENT" else (None,))
@@ -496,6 +498,31 @@ class LocalRun:
                 "EvidencePath": str(self.Log.Directory), "Pid": self.Probe.pid,
                 "Detail": Stderr[-2048:]}
 
+    def CollectPhase1Evidence(self):
+        if not IsPhase1(self.Config) or self.Config.get("ControlPreflight") or self.StartedUnixNs is None:
+            return
+        Work = Path(self.Config["WorkDir"]).resolve()
+        Names = ({"physical-gns-server.csv": 64 * 1024 * 1024,
+                  "physical-gns-server-admissions.csv": 64 * 1024} if self.Config["Role"] == "SERVER" else
+                 {"physical-gns-client-" + str(Nonce) + ".csv": 64 * 1024 for Nonce in self.ClientNonces})
+        if self.Config["Role"] == "CLIENT" and len(Names) != 4:
+            raise ValueError("Phase 1 requires four raw client CSV identities")
+        for Name, Limit in Names.items():
+            Source, Destination = Work / Name, self.Log.Directory / Name
+            if not Source.is_file() or Source.is_symlink() or Source.resolve().parent != Work:
+                raise ValueError("Phase 1 raw evidence is missing/redirected: " + Name)
+            Before = Source.stat()
+            if not 0 < Before.st_size <= Limit or Before.st_mtime_ns < self.StartedUnixNs:
+                raise ValueError("Phase 1 raw evidence is stale/oversized: " + Name)
+            if Destination.exists():
+                raise ValueError("Phase 1 raw evidence destination already exists: " + Name)
+            shutil.copyfile(Source, Destination)
+            After = Source.stat()
+            Hash = Digest(Destination)
+            if (Before.st_size, Before.st_mtime_ns) != (After.st_size, After.st_mtime_ns) or Hash != Digest(Source):
+                raise ValueError("Phase 1 raw evidence changed during collection: " + Name)
+            self.Log.Write("RAW_EVIDENCE", Path=Name, SHA256=Hash, Bytes=After.st_size)
+
     def Cleanup(self):
         if self.CleanupResult is not None:
             return list(self.CleanupResult)
@@ -548,6 +575,12 @@ class LocalRun:
                 Errors.append("capture direction validation failed: " + str(Error))
         for File in self.Files:
             File.close()
+        try:
+            # Children are stopped and their files closed. Journal.Close then
+            # hashes these fixed bounded CSVs into the endpoint manifest.
+            self.CollectPhase1Evidence()
+        except Exception as Error:
+            Errors.append("raw Phase 1 evidence collection failed: " + str(Error))
         self.Log.Write("LOCAL_CLEANUP", Errors=Errors)
         self.CleanupResult = list(Errors)
         return list(Errors)

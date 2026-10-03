@@ -318,13 +318,17 @@ def Manifest(Root, Hashes):
     Require(isinstance(Value.get("Files"), list) and 0 < len(Value["Files"]) <= 256, "invalid evidence manifest")
     Hashes[str(File)] = Digest(File)
     Files = {}
+    TotalBytes = 0
     for Entry in Value["Files"]:
         Name = Entry["Path"]
         Require(isinstance(Name, str) and re.fullmatch(r"[A-Za-z0-9_.-]+", Name) and Name.casefold() not in Files,
                 "unsafe/duplicate manifest path")
         Target = Root / Name
         Require(Target.is_file() and Target.resolve().parent == Root and not Target.is_symlink(), "manifest path escaped/missing")
-        Require(type(Entry["Bytes"]) is int and Target.stat().st_size == Entry["Bytes"] and
+        Require(type(Entry["Bytes"]) is int and 0 <= Entry["Bytes"] <= 1024**3, "manifest file exceeds bounded replay input")
+        TotalBytes += Entry["Bytes"]
+        Require(TotalBytes <= 2 * 1024**3, "endpoint evidence exceeds bounded replay input")
+        Require(Target.stat().st_size == Entry["Bytes"] and
                 Digest(Target) == Entry["SHA256"].upper(), "evidence manifest hash/size mismatch: " + Name)
         Files[Name.casefold()] = Target
         Hashes[str(Target)] = Entry["SHA256"].upper()
@@ -448,6 +452,10 @@ def ReplayInputs(Inputs, ExpectedCommit):
         Require(Path(File).is_file() and Path(File).stat().st_size <= 64 * 1024 * 1024 and
                 Digest(File) == Inputs["RawCsvSha256"][Key].upper(), "raw CSV pin mismatch: " + Key)
         Hashes[str(Path(File))] = Digest(File)
+        Sealed = Needed(Server, "physical-gns-server.csv" if Key == "Server" else "physical-gns-server-admissions.csv") if Key in (
+            "Server", "Admissions") else Needed(Client, "physical-gns-client-" + Key + ".csv")
+        Require(Digest(Sealed) == Hashes[str(Path(File))] and Sealed.stat().st_size == Path(File).stat().st_size,
+                "raw CSV differs from endpoint sealed evidence: " + Key)
     ServerLogs = [File for Name, File in Server.items() if re.fullmatch(r"probe-server(?:-[0-9]+)?\.stdout\.log", Name)]
     Require(len(ServerLogs) == 1, "missing/ambiguous server log")
     Native = ReplayNative(Inputs["ServerCsv"], ServerLogs[0], Inputs["AdmissionsCsv"])

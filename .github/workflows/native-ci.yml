@@ -173,6 +173,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Pinned Agent Coordinator bootstrap failed' }
           python -m unittest discover -s tools/physical-qualifier/tests -p 'test_f1_candidate_source.py' -v
           if ($LASTEXITCODE -ne 0) { throw 'F1 candidate source inventory tests failed' }
+          python -m unittest discover -s tests -p 'test_foundation3l_four_client.py' -v
+          if ($LASTEXITCODE -ne 0) { throw 'F1 raw four-client evidence replay tests failed' }
+          python -m unittest discover -s tools/physical-qualifier/tests -p 'test_qualifier.py' -k phase1_raw_evidence -v
+          if ($LASTEXITCODE -ne 0) { throw 'F1 raw evidence collection tests failed' }
           python -m unittest discover -s tools/physical-qualifier/tests -p 'test_qualifier.py' -k phase1_stage_is_distinct_and_fixed -v
           if ($LASTEXITCODE -ne 0) { throw 'F1 fixed capture staging test failed' }
           python -m unittest discover -s tools/physical-qualifier/tests -p 'test_farm_*.py' -v

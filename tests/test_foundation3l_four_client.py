@@ -3,6 +3,7 @@ import copy
 import ast
 import csv
 import json
+import shutil
 from pathlib import Path
 import struct
 import sys
@@ -214,6 +215,8 @@ class FourClientTests(unittest.TestCase):
         Inputs["AdmissionsCsv"] = str(Accepted)
         Inputs["RawCsvSha256"]["Admissions"] = Replay.Digest(Accepted)
         (Server / "probe-server.stdout.log").write_text(self.Text + Line("AdmissionBoundary", format="F1_ACCEPTED_ACTIVATION_V1", records=128))
+        shutil.copyfile(self.Csv, Server / "physical-gns-server.csv")
+        shutil.copyfile(Accepted, Server / "physical-gns-server-admissions.csv")
         Inputs["ClientCsv"] = {}
         for Nonce in range(101, 105):
             File = self.Root / (str(Nonce) + ".csv")
@@ -221,6 +224,7 @@ class FourClientTests(unittest.TestCase):
                             for N in range(1, 81)) if Nonce == 101 else ""))
             Inputs["ClientCsv"][str(Nonce)] = str(File)
             Inputs["RawCsvSha256"][str(Nonce)] = Replay.Digest(File)
+            shutil.copyfile(File, Client / f"physical-gns-client-{Nonce}.csv")
             Text = Line("Result", **{"pass": 1}, scope="Phase1-only")
             Text += Line("Cleanup", good=1, created=0, retired=0, terminal=0, outstanding=0, grants=0)
             Text += Line("Summary", role="client", nonce=Nonce, producer=int(Nonce == 101), waves=32, applied=32,
@@ -375,6 +379,8 @@ class FourClientTests(unittest.TestCase):
         for Replacement in ("1000001", str(2**64 - 1), "0"):
             File.write_text(Original.replace("1000000", Replacement))
             Inputs["RawCsvSha256"]["Admissions"] = Replay.Digest(File)
+            shutil.copyfile(File, Path(Inputs["ServerRoot"]) / "physical-gns-server-admissions.csv")
+            self.SealInputs(Inputs)
             with self.subTest(Activation=Replacement), self.assertRaises(ValueError):
                 self.FullReplay(Inputs)
 
@@ -385,6 +391,8 @@ class FourClientTests(unittest.TestCase):
         for Changed in (Lines[:1] + Lines[2:], Lines + Lines[1:2]):
             File.write_text("\n".join(Changed) + "\n")
             Inputs["RawCsvSha256"]["Admissions"] = Replay.Digest(File)
+            shutil.copyfile(File, Path(Inputs["ServerRoot"]) / "physical-gns-server-admissions.csv")
+            self.SealInputs(Inputs)
             with self.assertRaises(ValueError):
                 self.FullReplay(Inputs)
 
