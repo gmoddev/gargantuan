@@ -276,6 +276,11 @@ func main() {
 		$Receipt.StderrSha256 -cne (Get-Pin $Receipt.StderrPath)) {
 		throw 'Node child log retention is not bounded and hash-pinned'
 	}
+	. (Join-Path $PSScriptRoot 'PhysicalFarmNodeResources.ps1')
+	$ResourceObservation = Read-FarmNodeResources -RunReceiptPath (Join-Path $Stage 'node-run.json') `
+		-RunReceiptSha256 (Get-Pin (Join-Path $Stage 'node-run.json')) -RunId $Manifest.RunId
+	if ($ResourceObservation.State -cne 'MEASURED' -or $ResourceObservation.Samples -lt 2 -or
+		$ResourceObservation.Pid -ne $Receipt.Pid) { throw 'owned Node child resource evidence missing' }
 	Expect-Rejection { & $Source -Mode Run -StageRoot $Stage -StageSha256 $StagePin } 'single-use Node stage'
 	$BadDescriptor = Join-Path $Root 'bad-descriptor.json'
 	$Descriptor.revision = 24

@@ -25,6 +25,21 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+function Add-NodeResourceSample {
+	param($Child, [string]$RunId, [Collections.Generic.List[object]]$Samples)
+	if ($Samples.Count -ge 1202) { throw 'Node resource sample bound exceeded' }
+	$Child.Refresh()
+	if ($Child.HasExited) { return }
+	$Samples.Add([pscustomobject][ordered]@{
+		RunId = $RunId; Pid = $Child.Id
+		MonotonicTicks = [Diagnostics.Stopwatch]::GetTimestamp()
+		MonotonicFrequency = [Diagnostics.Stopwatch]::Frequency
+		Cpu100ns = $Child.TotalProcessorTime.Ticks
+		WorkingSetBytes = $Child.WorkingSet64; PrivateBytes = $Child.PrivateMemorySize64
+		Threads = $Child.Threads.Count; Handles = $Child.HandleCount
+	})
+}
+
 function Assert-FilePin {
 	param([string]$Path, [string]$Sha256, [long]$MaximumBytes = 0)
 	$Resolved = [IO.Path]::GetFullPath($Path)
@@ -385,7 +400,10 @@ Write-NewFile -Path $ClaimPath -Bytes ([Text.UTF8Encoding]::new($false).GetBytes
 $MaximumLogBytes = 8MB
 $StdoutPath = Join-Path $Stage 'node.stdout.log'
 $StderrPath = Join-Path $Stage 'node.stderr.log'
-foreach ($LogPath in @($StdoutPath, $StderrPath)) {
+$ResourcePath = Join-Path $Stage 'node-resources.csv'
+$ResourceSamples = [Collections.Generic.List[object]]::new()
+$NextResourceSample = 0L
+foreach ($LogPath in @($StdoutPath, $StderrPath, $ResourcePath)) {
 	if (Test-Path -LiteralPath $LogPath) { throw 'Node stage contains an unexpected child log' }
 }
 $Info = [Diagnostics.ProcessStartInfo]::new()
@@ -416,6 +434,11 @@ try {
 	$Deadline = $StartedUtc.AddSeconds($MaximumRuntimeSeconds)
 	$ReadyDeadline = $StartedUtc.AddSeconds(15)
 	while (-not $Child.HasExited -and [DateTimeOffset]::UtcNow -lt $Deadline) {
+		$Now = [Diagnostics.Stopwatch]::GetTimestamp()
+		if ($Now -ge $NextResourceSample) {
+			Add-NodeResourceSample -Child $Child -RunId $Proof.RunId -Samples $ResourceSamples
+			$NextResourceSample = $Now + [Diagnostics.Stopwatch]::Frequency
+		}
 		if ($StdoutStream.Length -gt $MaximumLogBytes -or
 			$StderrStream.Length -gt $MaximumLogBytes -or
 			$Stdout.IsFaulted -or $Stderr.IsFaulted) {
@@ -457,6 +480,10 @@ try {
 	throw
 } finally {
 	if ($Started) {
+		if (-not $Child.HasExited) {
+			try { Add-NodeResourceSample -Child $Child -RunId $Proof.RunId -Samples $ResourceSamples }
+			catch { $Reason = 'RESOURCE_OBSERVATION_FAILED' }
+		}
 		if (-not $Child.HasExited) { try { $Child.Kill($true) } catch { } }
 		try { [void]$Child.WaitForExit(10000) } catch { }
 		if ($Child.HasExited) { $ExitCode = $Child.ExitCode }
@@ -470,6 +497,9 @@ try {
 	if ($StdoutBytes -gt $MaximumLogBytes -or $StderrBytes -gt $MaximumLogBytes) {
 		$Reason = 'LOG_BOUND'
 	}
+	$ResourceSamples.ToArray() | Export-Csv -LiteralPath $ResourcePath -NoTypeInformation -Encoding utf8
+	$ResourceBytes = (Get-Item -LiteralPath $ResourcePath).Length
+	if ($ResourceBytes -gt 1MB -or $ResourceSamples.Count -lt 2) { $Reason = 'RESOURCE_OBSERVATION_FAILED' }
 	$Receipt = [ordered]@{
 		Format = 'GargantuanFarmNodeRun'; Version = 1
 		RunId = $Proof.RunId; StageSha256 = $StageSha256.ToLowerInvariant()
@@ -482,6 +512,9 @@ try {
 		TcpReady = $Ready; TlsProven = $false; Reason = $Reason
 		ExitCode = $ExitCode; ChildReaped = [bool]($Started -and $Child.HasExited)
 		LogsDiscarded = $false
+		ResourceContract = 'node_process_resources_v1'; ResourcePath = $ResourcePath
+		ResourceBytes = $ResourceBytes; ResourceSamples = $ResourceSamples.Count
+		ResourceSha256 = if ($ResourceBytes -le 1MB) { Get-Sha256 $ResourcePath } else { $null }
 		StdoutPath = $StdoutPath; StdoutBytes = $StdoutBytes
 		StdoutSha256 = if ($StdoutBytes -le $MaximumLogBytes -and
 			(Test-Path -LiteralPath $StdoutPath)) { Get-Sha256 $StdoutPath } else { $null }

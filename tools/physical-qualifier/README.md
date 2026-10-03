@@ -237,7 +237,7 @@ connects outbound; a nonce-bound control-only socket probe and the same-run
 and endpoint helper use bounded hidden processes. `collect` copies every worker
 index member with a fresh SHA-256 check, binds the coordinator and both role
 results, and invokes the existing offline capture reconciler. For Node, it
-mirrors the bounded Node receipts/logs at their original one-run absolute path
+mirrors the bounded Node receipts/logs and hash-pinned process-resource CSV at their original one-run absolute path
 so the receipt's immutable path and hash pins remain verifiable. These
 operations record execution and sealed evidence only. Capture directions, real
 Node TLS, workload

@@ -5,7 +5,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from farm_publication_join import (
-    CreateDatabase, PhaseWindows, RelationshipCadence, RootMarkers,
+    CreateDatabase, PhaseWindows, RelationshipCadence, RootMarkers, DueServiceCoverage,
 )
 
 
@@ -73,7 +73,7 @@ class FarmPublicationCadenceTests(unittest.TestCase):
             self.AddState(0, 100, Tick, Ns)
         Result = RelationshipCadence(self.Database, WINDOWS, None, 32)
         self.assertEqual(Result["RootIdentity"], "NOT_MEASURED")
-        self.assertEqual(Result["CanonicalVerdict"], "NOT_MEASURED")
+        self.assertEqual(Result["RawGapDiagnosticVerdict"], "NOT_MEASURED")
         self.assertEqual(Result["RelationshipCount"], 1)
         Baseline = Result["Relationships"][0]["Phases"][0]
         self.assertEqual(Baseline["States"], 3)
@@ -112,7 +112,7 @@ class FarmPublicationCadenceTests(unittest.TestCase):
         self.assertTrue(all(Row["Phases"][0]["MaximumHandledGapNs"] == 100
                             for Row in Result["Relationships"]))
 
-    def test_complete_64_root_relationships_apply_canonical_limits(self):
+    def test_raw_gap_diagnostic_does_not_replace_canonical_due_service(self):
         Roots = {(100 + Index, 1): {
             "OwnerSlot": Index * 4,
             "RecipientSlots": tuple(range(Index // 2 * 8, Index // 2 * 8 + 8))}
@@ -120,26 +120,41 @@ class FarmPublicationCadenceTests(unittest.TestCase):
         for (Object, _), Marker in Roots.items():
             for Slot in Marker["RecipientSlots"]:
                 for Window in WINDOWS:
+                    self.Database.execute("INSERT INTO DueWork VALUES (?,?,?,?,?,?,?,?)",
+                                          (Slot + 1, 1, Object, 1, 0, 0, Window["StartTick"], "ACCEPTED"))
                     for Tick in (Window["StartTick"] - 1, Window["StartTick"],
                                  Window["StartTick"] + 2, Window["EndTick"],
                                  Window["EndTick"] + 1):
                         self.AddState(Slot, Object, Tick, Tick * 1_000_000)
         Result = RelationshipCadence(self.Database, WINDOWS, Roots, 32)
         self.assertEqual(Result["RootCoverage"], "OBSERVED")
-        self.assertEqual(Result["CanonicalVerdict"], "PASS")
+        self.assertEqual(Result["RawGapDiagnosticVerdict"], "PASS")
         self.assertEqual(Result["RelationshipCount"], 64)
+        Ready = {Slot: ((Slot + 1, 1), (1, 1)) for Slot in range(32)}
+        def Due(Rejected=0):
+            return DueServiceCoverage(self.Database, WINDOWS, Roots, Ready, {"DirectRejected": Rejected})
+        self.assertEqual(Due()["Verdict"], "PASS")
         self.Database.execute("""UPDATE Produced SET HandledNs=HandledNs+300000000
             WHERE CS=1 AND OS=100 AND Tick>=102""")
         Result = RelationshipCadence(self.Database, WINDOWS, Roots, 32)
-        self.assertEqual(Result["CanonicalVerdict"], "FAIL")
-        self.assertEqual(Result["CanonicalViolations"][0]["Phase"], "baseline")
+        self.assertEqual(Result["RawGapDiagnosticVerdict"], "FAIL")
+        self.assertEqual(Result["RawGapDiagnosticViolations"][0]["Phase"], "baseline")
+        self.assertEqual(Due()["Verdict"], "PASS")
+        self.assertEqual(Due(1)["Verdict"], "FAIL")
         self.Database.execute("""UPDATE Produced SET HandledNs=HandledNs-300000000
             WHERE CS=1 AND OS=100 AND Tick>=102""")
         self.Database.execute("""UPDATE Produced SET HandledNs=HandledNs+300000000
             WHERE CS=1 AND OS=100 AND Tick>=100""")
         Result = RelationshipCadence(self.Database, WINDOWS, Roots, 32)
-        self.assertEqual(Result["CanonicalVerdict"], "NOT_MEASURED")
+        self.assertEqual(Result["RawGapDiagnosticVerdict"], "NOT_MEASURED")
         self.assertTrue(Result["AmbiguousBoundaryGaps"])
+        self.assertEqual(Due()["Verdict"], "PASS")
+        self.Database.execute("UPDATE DueWork SET Resolution=NULL WHERE CS=1 AND OS=100 AND Due=100")
+        self.assertEqual(Due()["Verdict"], "FAIL")
+        self.Database.execute("DELETE FROM DueWork WHERE CS=1 AND OS=100 AND Due=100")
+        self.assertEqual(Due()["Verdict"], "NOT_MEASURED")
+        self.assertEqual(DueServiceCoverage(self.Database, WINDOWS, None, Ready,
+                                          {"DirectRejected": 0})["Verdict"], "NOT_MEASURED")
 
 
 if __name__ == "__main__":

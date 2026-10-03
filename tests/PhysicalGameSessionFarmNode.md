@@ -50,6 +50,17 @@ private-key bytes. A consumed stage is not reusable.
 The final `STOPPED` line prints the `node-run.json` SHA-256; retain this
 out-of-band value for the offline TLS matcher.
 
+The same run receipt pins `node-resources.csv` under the owned stage. The
+supervisor records only bounded process metadata: monotonic CPU time, working
+set, private bytes, thread and handle counts, at one-second opportunities and
+immediately before termination. The existing 1,200-second maximum lifetime
+bounds this to 1,202 samples and a 1-MiB CSV. Fewer than two samples or overflow
+fails closed. The outer collector verifies its size/hash before copying it.
+`PhysicalFarmNodeResources.ps1` independently verifies identity, monotonicity
+and receipt custody, reporting provider cost separately from Engine and clients.
+Sampling may miss transient peaks; these diagnostics introduce no CPU or memory
+PASS threshold. All-absent historical fields remain `NOT_MEASURED`.
+
 `node-tcp-ready.json` and `node-run.json` explicitly record `TlsProven=false`:
 a TCP connect does not prove TLS. Physical Node qualification still needs the
 Gargantuan Server's authenticated gRPC content request over the pinned CA,
@@ -65,6 +76,7 @@ Run the source-only deterministic fixture with:
 ```powershell
 pwsh -NoProfile -File tests/PhysicalGameSessionFarmNodeTests.ps1
 pwsh -NoProfile -File tests/NewPhysicalGameSessionFarmNodeTlsTests.ps1
+pwsh -NoProfile -File tests/PhysicalFarmNodeResourcesTests.ps1
 ```
 
 Optionally pass `-OfficialNodeBinary <path>` to also check the generated TOML

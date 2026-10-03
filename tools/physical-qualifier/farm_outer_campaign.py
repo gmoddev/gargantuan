@@ -817,6 +817,24 @@ def FetchIndexed(TransportInstance, RemoteRoot, LocalRoot, IndexName, RunId, Rol
     return Index
 
 
+def FetchNodeResources(TransportInstance, NodeRun, NodeRoot):
+    """Copy only the pinned bounded provider-process CSV; no directory walk."""
+    Fields = {"ResourceContract", "ResourcePath", "ResourceBytes", "ResourceSamples", "ResourceSha256"}
+    Present = Fields.intersection(NodeRun)
+    if not Present:
+        return  # Historical receipts do not gain resource coverage.
+    if (Present != Fields or NodeRun["ResourceContract"] != "node_process_resources_v1" or
+            NodeRun["ResourcePath"] != str(NodeRoot / "node-resources.csv") or
+            type(NodeRun["ResourceBytes"]) is not int or not 0 < NodeRun["ResourceBytes"] <= 1024 ** 2 or
+            type(NodeRun["ResourceSamples"]) is not int or not 2 <= NodeRun["ResourceSamples"] <= 1202 or
+            not isinstance(NodeRun["ResourceSha256"], str) or not SHA.fullmatch(NodeRun["ResourceSha256"])):
+        raise ValueError("[Qualification:FarmOuter] Node resource receipt path or bound invalid")
+    Target = NodeRoot / "node-resources.csv"
+    TransportInstance.Fetch(NodeRun["ResourcePath"], Target, Timeout=30)
+    if Target.stat().st_size != NodeRun["ResourceBytes"] or Digest(Target) != NodeRun["ResourceSha256"]:
+        raise ValueError("[Qualification:FarmOuter] Node resource transfer changed")
+
+
 def Collect(PrivateRoot, SpecPath, WorkerPython, WorkerHelper, TransportInstance=None):
     """Bind typed role/capture results; Node log match is an independent gate."""
     AssertPrivate(PrivateRoot)
@@ -899,6 +917,7 @@ def Collect(PrivateRoot, SpecPath, WorkerPython, WorkerHelper, TransportInstance
             if (Path(RemoteLog).stat().st_size != NodeRun[Name + "Bytes"] or
                     Digest(RemoteLog) != NodeRun[Name + "Sha256"]):
                 raise ValueError("[Qualification:FarmOuter] Node log transfer changed")
+        FetchNodeResources(TransportInstance, NodeRun, NodeRoot)
         Provider = ServerRole.parent / "node-provider.json"
         if not Provider.is_file():
             raise ValueError("[Qualification:FarmOuter] server Node provider receipt absent")

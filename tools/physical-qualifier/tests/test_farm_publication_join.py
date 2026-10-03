@@ -126,7 +126,7 @@ class FarmPublicationJoinTests(unittest.TestCase):
         Cadence = Result["RecipientCharacterCadence"]
         self.assertEqual(Cadence["Status"], "RECIPIENT_LOCAL_OBSERVED")
         self.assertEqual(Cadence["RootIdentity"], "NOT_MEASURED")
-        self.assertEqual(Cadence["CanonicalVerdict"], "NOT_MEASURED")
+        self.assertEqual(Cadence["RawGapDiagnosticVerdict"], "NOT_MEASURED")
         self.assertEqual(Cadence["RelationshipCount"], 1)
         self.assertEqual(Cadence["Relationships"][0]["Phases"][0]["States"], 1)
         self.assertEqual(Result["CrossHostDueToHandled"], "NOT_MEASURED")

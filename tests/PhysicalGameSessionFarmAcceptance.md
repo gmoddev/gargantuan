@@ -120,11 +120,17 @@ with each reconciliation. It exposes exact accepted/observed state-chain
 counts and server-local due-to-accept, forced-built-to-accept, and client-local
 receive-to-handler durations. Eight explicit server root identities bind the
 64 expected recipient relationships. When five sealed phase windows and every
-root relationship are complete, the join checks recipient-local handled gaps
-against 250 ms and authoritative state-tick deltas against 12 ticks. Ambiguous
-phase edges remain `NOT_MEASURED`; proven threshold failures are reported as
-failures. It does not infer cross-host one-way latency or full Remote recipient
-cadence. A missing legacy trace set stays unmeasured, whereas an incomplete or
+root relationship are complete, the join retains recipient-local handled gaps
+against 250 ms and state-tick deltas against 12 ticks as raw-gap diagnostics.
+They are not the canonical gate: `RecipientServiceWorkload3L.md`'s measurement
+contract and `PhysicalFundingGateReview3L.md` gate 5 require confirmed due work,
+acceptance and observation, with zero scheduler rejection. The separate
+`CharacterDueService` observation requires all 64 root/recipient relationships
+in all five phases (320 phase relationships), at least one confirmed due record
+per relationship/phase, complete due/accepted/handled conservation, and zero
+rejections. Missing phase coverage remains `NOT_MEASURED`. A raw gap alone
+cannot fail or pass that due-service gate. Cross-host one-way latency remains
+separate. A missing legacy trace set stays unmeasured, whereas an incomplete or
 invalid set is rejected.
 
 The designated Farm32 producer (client slot 0) now emits bounded Luau-local
@@ -188,7 +194,7 @@ qualified source checkout. The actual outer campaign `collect` binds role and
 capture indices through `farm_campaign_runner.Reconcile`; it does not execute
 these PowerShell analyzers or consume the legacy `package.py` endpoint bundle.
 Keep the complete checkout-relative analyzer layout and use
-`PhysicalFarmAnalysisInventory.ps1` to hash the 19 transitive analysis files,
+`PhysicalFarmAnalysisInventory.ps1` to hash the 20 transitive analysis files,
 including clock, lifecycle and Remote ownership helpers, before independent reconciliation.
 Its `SourceCommit` must match a clean HEAD for those files. Prepend the approved
 installed `C:\Sandbox\Codex\Tools\physical-qualifier\runtime` directory to
@@ -203,10 +209,22 @@ clients are Character recipients; their lack of additional RPC producers is
 not a missing workload gate. Cross-host latency diagnostics and final
 conjunctive qualification remain separate.
 
+The Node provider's owned-process `node-resources.csv` is independently pinned
+by `node-run.json` and replayed separately from Engine and client resource
+observations. It records monotonic CPU time, working set, private bytes, threads
+and handles at one-second opportunities plus a final pre-termination sample,
+bounded to 1,202 rows and 1 MiB by the existing 1,200-second process lifetime.
+The outer collector verifies and retains that exact file. Absent historical
+resource fields remain `NOT_MEASURED`; partial fields or mismatched identity,
+chronology, hash or successful owned-child cleanup fail closed. These are
+sampled cost diagnostics; no new CPU, memory or latency acceptance threshold
+is inferred from them.
+
 ```powershell
 pwsh -NoProfile -File tests/PhysicalGameSessionFarmAcceptanceTests.ps1
 pwsh -NoProfile -File tests/PhysicalGameSessionFarmHostResourceTests.ps1
 pwsh -NoProfile -File tests/PhysicalGameSessionFarmLifecycleTests.ps1
 pwsh -NoProfile -File tests/PhysicalGameSessionFarmRemoteOwnershipTests.ps1
 pwsh -NoProfile -File tests/PhysicalFarmAnalysisInventoryTests.ps1
+pwsh -NoProfile -File tests/PhysicalFarmNodeResourcesTests.ps1
 ```

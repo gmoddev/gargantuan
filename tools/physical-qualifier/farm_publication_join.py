@@ -618,7 +618,7 @@ def RelationshipCadence(Database, Windows, Roots, ExpectedClients):
     """Measure only recipient-local handler gaps, grouped by server state ticks."""
     if Windows is None:
         return {"Status": "NOT_MEASURED", "RootIdentity": "NOT_MEASURED",
-                "RootCoverage": "NOT_MEASURED", "CanonicalVerdict": "NOT_MEASURED",
+                "RootCoverage": "NOT_MEASURED", "RawGapDiagnosticVerdict": "NOT_MEASURED",
                 "PhaseWindows": [], "Relationships": []}
     def Empty(Phase):
         return {"Phase": Phase, "States": 0, "Pairs": 0, "WithinPairs": 0,
@@ -702,7 +702,7 @@ def RelationshipCadence(Database, Windows, Roots, ExpectedClients):
                        "StaleHandled": StaleByKey.get((Slot, CS, CG, OS, OG, Lifetime), 0),
                        "Phases": Stats})
     Result = {"Status": "RECIPIENT_LOCAL_OBSERVED", "RootIdentity": "NOT_MEASURED",
-              "RootCoverage": "NOT_MEASURED", "CanonicalVerdict": "NOT_MEASURED",
+              "RootCoverage": "NOT_MEASURED", "RawGapDiagnosticVerdict": "NOT_MEASURED",
               "PhaseWindows": Windows, "RelationshipCount": len(Report),
               "Relationships": Report,
               "MissingRootMarker": ROOT_MARKER.strip()}
@@ -747,12 +747,48 @@ def RelationshipCadence(Database, Windows, Roots, ExpectedClients):
                                   "UnresolvedBoundaryPairs": Phase["BoundaryUnresolved"]})
     Result["ExpectedRootRelationships"] = 64
     Result["MissingRootRelationships"] = Missing
-    Result["CanonicalViolations"] = Violations
+    Result["RawGapDiagnosticViolations"] = Violations
     Result["AmbiguousBoundaryGaps"] = Ambiguous
     Result["RootCoverage"] = "OBSERVED" if not Missing else "INCOMPLETE"
-    Result["CanonicalVerdict"] = ("FAIL" if Violations else "NOT_MEASURED" if Missing or Ambiguous
+    Result["RawGapDiagnosticVerdict"] = ("FAIL" if Violations else "NOT_MEASURED" if Missing or Ambiguous
                                   else "PASS")
     Result["MissingRootMarker"] = None
+    return Result
+
+
+def DueServiceCoverage(Database, Windows, Roots, ReadyBySlot, Server):
+    """Canonical due accounting, independent of diagnostic raw observation gaps.
+
+    RecipientServiceWorkload3L.md Measurement contract and
+    PhysicalFundingGateReview3L.md ordered gate 5 retain causal due service.
+    ReadServer/ReadClients already require exact due/accepted/handled conservation.
+    """
+    Result = {"Verdict": "NOT_MEASURED", "PhaseRelationships": [],
+              "SchedulerRejections": Server["DirectRejected"],
+              "CrossHostLatency": "NOT_MEASURED"}
+    if Windows is None or Roots is None:
+        return Result
+    Missing = []
+    for Root, Marker in sorted(Roots.items()):
+        for Slot in Marker["RecipientSlots"]:
+            Connection = ReadyBySlot[Slot][0]
+            for Window in Windows:
+                Counts = Database.execute("""SELECT count(*),
+                    sum(CASE WHEN Resolution IS NULL THEN 1 ELSE 0 END)
+                    FROM DueWork WHERE CS=? AND CG=? AND OS=? AND OG=?
+                    AND Due>=? AND Due<=?""",
+                    (*Connection, *Root, Window["StartTick"], Window["EndTick"])).fetchone()
+                Row = {"ClientSlot": Slot, "ObjectSlot": Root[0], "ObjectGeneration": Root[1],
+                       "Phase": Window["Phase"], "ConfirmedDue": Counts[0],
+                       "UnresolvedDue": Counts[1] or 0}
+                Result["PhaseRelationships"].append(Row)
+                if Counts[0] == 0:
+                    Missing.append(Row)
+    Require(len(Result["PhaseRelationships"]) == 320, "due-service root/phase mapping incomplete")
+    Failed = Server["DirectRejected"] or any(Row["UnresolvedDue"] for Row in Result["PhaseRelationships"])
+    Result.update({"Verdict": "FAIL" if Failed else "NOT_MEASURED" if Missing else "PASS",
+                   "MissingPhaseRelationships": Missing,
+                   "DueConservation": "OBSERVED", "AcceptedHandledConservation": "OBSERVED"})
     return Result
 
 
@@ -812,6 +848,7 @@ def Join(ServerPath, ServerReadyPath, ClientSources, RunId, ScratchParent,
                 Handled = Duration(Database, "P.HandledNs IS NOT NULL",
                                    "P.HandledNs-P.ReceiveNs")
                 Cadence = RelationshipCadence(Database, Windows, Roots, ExpectedClients)
+                DueCoverage = DueServiceCoverage(Database, Windows, Roots, ReadyBySlot, Server)
                 Require(Ordinary["Count"] + Forced["Count"] + Direct["Count"] ==
                         Server["Accepted"] and
                         all(Value["MinimumNs"] is None or Value["MinimumNs"] >= 0
@@ -831,6 +868,7 @@ def Join(ServerPath, ServerReadyPath, ClientSources, RunId, ScratchParent,
                         "ServerDirectBuiltToAccepted": Direct,
                         "ClientReceiveToHandled": Handled,
                         "RecipientCharacterCadence": Cadence,
+                        "CharacterDueService": DueCoverage,
                         "Retirement": "OBSERVED" if Server["Retired"] else "NONE_OBSERVED",
                         "CrossHostDueToHandled": "NOT_MEASURED",
                         "ScratchPeakDatabaseBytes": DatabaseBytes,

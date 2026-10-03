@@ -388,6 +388,12 @@ function New-NodeTlsFixture {
 	})
 	$StagePin = (Get-FileHash -LiteralPath $StagePath -Algorithm SHA256).Hash.ToLowerInvariant()
 	$RunReceiptPath = Join-Path $StageRoot 'node-run.json'
+	$ResourcePath = Join-Path $StageRoot 'node-resources.csv'
+	@(1..3 | ForEach-Object { [pscustomobject][ordered]@{
+		RunId=$NodeRun.Manifest.RunId; Pid=1234L; MonotonicTicks=([long]$_ * 1000000L)
+		MonotonicFrequency=1000000L; Cpu100ns=([long]$_ * 10000L)
+		WorkingSetBytes=1000000L; PrivateBytes=2000000L; Threads=4L; Handles=40L
+	} }) | Export-Csv -LiteralPath $ResourcePath -NoTypeInformation -Encoding utf8
 	Save-Json -Path $RunReceiptPath -Value ([ordered]@{
 		Format = 'GargantuanFarmNodeRun'; Version = 1
 		RunId = $NodeRun.Manifest.RunId; StageSha256 = $StagePin
@@ -402,6 +408,9 @@ function New-NodeTlsFixture {
 		StdoutBytes = (Get-Item -LiteralPath $NodeLogPath).Length
 		StderrPath = (Join-Path $StageRoot 'node.stderr.log')
 		StderrSha256 = ('a' * 64); StderrBytes = 0L
+		ResourceContract = 'node_process_resources_v1'; ResourcePath = $ResourcePath
+		ResourceBytes = (Get-Item -LiteralPath $ResourcePath).Length; ResourceSamples = 3L
+		ResourceSha256 = (Get-FileHash -LiteralPath $ResourcePath -Algorithm SHA256).Hash.ToLowerInvariant()
 	})
 	$RunPin = (Get-FileHash -LiteralPath $RunReceiptPath -Algorithm SHA256).Hash.ToLowerInvariant()
 	$MatchPath = Join-Path $TestRoot 'node-tls-match.json'
@@ -477,7 +486,7 @@ try {
 		$Observed.Local.Capture.Status -cne 'NOT_MEASURED' -or
 		$Observed.Node.Capture.Status -cne 'NOT_MEASURED' -or
 		$Observed.Local.RemoteCadence.Status -cne 'NOT_MEASURED' -or
-		@($Observed.GateObservations | Where-Object { $_.State -eq 'NOT MEASURED' }).Count -ne 19 -or
+		@($Observed.GateObservations | Where-Object { $_.State -eq 'NOT MEASURED' }).Count -ne 20 -or
 		$Observed.Local.RemoteOwnership.State -cne 'NOT_MEASURED' -or
 		$Observed.Local.Lifecycle.State -cne 'NOT_MEASURED' -or
 		$Observed.Local.Clock.Status -cne 'NOT_MEASURED' -or
@@ -490,6 +499,9 @@ try {
 	Invoke-Analyzer -OutputPath $TlsObservedPath -TlsInputs $TlsInputs
 	$TlsObserved = Get-Content -LiteralPath $TlsObservedPath -Raw | ConvertFrom-Json
 	if ($TlsObserved.Node.Provider.RealTls -cne 'NEGOTIATED_TLS_MANIFEST_RPC_MEASURED' -or
+		$TlsObserved.Node.Provider.ProcessResources.State -cne 'MEASURED' -or
+		$TlsObserved.Node.Provider.ProcessResources.ObservedCpu100ns -ne 20000L -or
+		$TlsObserved.Node.Provider.ProcessResources.HeadroomThreshold -cne 'NOT_DEFINED' -or
 		$TlsObserved.Node.Provider.TlsEvidence.TlsVersion -cne 'TLSv1.3' -or
 		$TlsObserved.Node.Provider.TlsEvidence.CipherSuite -cne 'TLS_AES_128_GCM_SHA256' -or
 		@($TlsObserved.GateObservations | Where-Object {
@@ -502,6 +514,12 @@ try {
 			$_.State -ceq 'NOT MEASURED' }).Count -ne 1) {
 		throw 'pinned TLS match was not adopted with bounded proof scope'
 	}
+	$ResourcePath = Join-Path (Split-Path -Parent $TlsInputs.NodeRunReceiptPath) 'node-resources.csv'
+	$OriginalResources = [IO.File]::ReadAllBytes($ResourcePath)
+	[IO.File]::AppendAllText($ResourcePath, "forged`n")
+	Assert-Rejected -Name 'Node resources differ from pinned run receipt' -TlsInputs $TlsInputs `
+		-OutputPath (Join-Path $TestRoot 'node-resources-tampered.json')
+	[IO.File]::WriteAllBytes($ResourcePath, $OriginalResources)
 	$WrongPin = @{} + $TlsInputs
 	$WrongPin.NodeTlsMatchReceiptSha256 = '0' * 64
 	Assert-Rejected -Name 'wrong TLS match receipt pin' -TlsInputs $WrongPin `

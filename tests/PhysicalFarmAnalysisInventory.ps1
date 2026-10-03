@@ -25,6 +25,7 @@ $Paths = @(
 	'tests/PhysicalFarmClockEvidence.ps1',
 	'tests/PhysicalGameSessionFarmLifecycle.ps1',
 	'tests/PhysicalGameSessionFarmRemoteOwnership.ps1',
+	'tests/PhysicalFarmNodeResources.ps1',
 	'tools/physical-qualifier/farm_publication_join.py',
 	'tools/physical-qualifier/farm_publication_trace.py',
 	'tools/physical-qualifier/farm_clock_exchange.py',

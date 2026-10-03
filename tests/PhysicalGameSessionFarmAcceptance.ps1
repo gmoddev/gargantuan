@@ -33,6 +33,7 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'PhysicalFarmClockEvidence.ps1')
 . (Join-Path $PSScriptRoot 'PhysicalGameSessionFarmLifecycle.ps1')
 . (Join-Path $PSScriptRoot 'PhysicalGameSessionFarmRemoteOwnership.ps1')
+. (Join-Path $PSScriptRoot 'PhysicalFarmNodeResources.ps1')
 
 function Import-FarmRecoveryParser {
 	$Path = Join-Path $PSScriptRoot 'PhysicalGameSessionFarm.ps1'
@@ -923,6 +924,7 @@ $Local = Read-ProviderRun -ReportPath $LocalReportPath -ServerRoot $LocalServerE
 	-ClientRoot $LocalClientEvidenceRoot -ExpectedProvider 'Local'
 $Node = Read-ProviderRun -ReportPath $NodeReportPath -ServerRoot $NodeServerEvidenceRoot `
 	-ClientRoot $NodeClientEvidenceRoot -ExpectedProvider 'Node'
+$Node.ProviderObservation['ProcessResources'] = [ordered]@{ State='NOT_MEASURED'; Reason='pinned Node owned-child receipt absent' }
 $LocalCapture = Read-FarmCaptureObservation -ServerCaptureIndexPath $LocalServerCaptureIndexPath `
 	-ClientCaptureIndexPath $LocalClientCaptureIndexPath `
 	-OuterCaptureReceiptPath $LocalOuterCaptureReceiptPath `
@@ -943,6 +945,8 @@ if (-not [string]::IsNullOrWhiteSpace($NodeTlsMatchReceiptPath)) {
 		-RunReceiptPath $NodeRunReceiptPath -RunReceiptSha256 $NodeRunReceiptSha256
 	$Node.ProviderObservation['RealTls'] = $NodeTlsObservation.State
 	$Node.ProviderObservation['TlsEvidence'] = $NodeTlsObservation
+	$Node.ProviderObservation['ProcessResources'] = Read-FarmNodeResources -RunReceiptPath $NodeRunReceiptPath `
+		-RunReceiptSha256 $NodeRunReceiptSha256 -RunId $Node.Report.RunId
 }
 if ($Local.Report.RunId -ceq $Node.Report.RunId) { throw 'Local and Node reused a physical run identity' }
 foreach ($Name in @('ServerHost', 'ClientHost')) {
@@ -1000,6 +1004,7 @@ $Observed = [ordered]@{
 		EvidenceRetention = $Node.EvidenceRetention
 	}
 	GateObservations = @(
+		[ordered]@{ Gate = 'Separate Node provider process resource measurement'; State = $Node.ProviderObservation.ProcessResources.State.Replace('_', ' '); Reason = 'bounded owned Go child CPU, memory, threads and handles, distinct from Engine and client farm; no invented utilization SLA' },
 		[ordered]@{ Gate = 'RemoteManager queue and handler ownership bounds'; State = $(if ($Local.RemoteOwnership.State -ceq 'MEASURED' -and $Node.RemoteOwnership.State -ceq 'MEASURED') { 'MEASURED' } else { 'NOT MEASURED' }); Reason = 'native insertion high-waters, zero post-Stop ownership and exact release totals for server and 32 clients; work residence/lease overshoot is diagnostic and does not substitute for response scheduler latency' },
 		[ordered]@{ Gate = 'Logical lifecycle, readers, content and debt cleanup'; State = $(if ($Local.Lifecycle.State -ceq 'MEASURED' -and $Node.Lifecycle.State -ceq 'MEASURED') { 'MEASURED' } else { 'NOT MEASURED' }); Reason = 'independently replayed post-Stop server and 32 client receipts per provider; zero transient ownership and exact admission conservation; cached/resident content remains diagnostic and does not replace pre-Stop successful convergence' },
 		[ordered]@{ Gate = 'Native clock correlation at calibration probes'; State = $(if ($Local.Clock.Status -ceq 'BOUNDED_AT_PROBE' -and $Node.Clock.Status -ceq 'BOUNDED_AT_PROBE') { 'MEASURED' } else { 'NOT MEASURED' }); Reason = 'independent replay of 640 causal offset intervals per provider with indexed input and analyzer pins; phase-long offset and one-way latency remain unmeasured' },
@@ -1018,7 +1023,7 @@ $Observed = [ordered]@{
 		[ordered]@{ Gate = 'Nonce-bound 32-tuple bidirectional zero-loss capture on both endpoints'; State = $(if ($LocalCapture.Status -ceq 'MEASURED_PASS' -and $NodeCapture.Status -ceq 'MEASURED_PASS') { 'MEASURED_PASS' } else { 'NOT MEASURED' }); Reason = 'hash-sealed two-endpoint pcaps, native ready-time nonce-to-port mapping, zero-loss diagnostics, and nontruncated packets; no packet-reserve or headroom claim' },
 		[ordered]@{ Gate = 'Five-phase observation and terminal native admission conservation'; State = 'MEASURED' },
 		[ordered]@{ Gate = 'Character accepted-state chain and role-local publication delays'; State = $(if ($Local.Publication.Status -ceq 'ACCEPTED_STATE_CHAIN_OBSERVED' -and $Node.Publication.Status -ceq 'ACCEPTED_STATE_CHAIN_OBSERVED') { 'MEASURED' } else { 'NOT MEASURED' }); Reason = 'each provider independently rejoined all hash-sealed native Character traces; cross-host clocks remain separate' },
-		[ordered]@{ Gate = 'Tracked-root recipient Character cadence'; State = $(if ($Local.Publication.RecipientCharacterCadence.CanonicalVerdict -ceq 'FAIL' -or $Node.Publication.RecipientCharacterCadence.CanonicalVerdict -ceq 'FAIL') { 'MEASURED_FAIL' } elseif ($Local.Publication.RecipientCharacterCadence.CanonicalVerdict -ceq 'PASS' -and $Node.Publication.RecipientCharacterCadence.CanonicalVerdict -ceq 'PASS') { 'MEASURED_PASS' } else { 'NOT MEASURED' }); Reason = 'eight explicit roots and 64 recipient relationships in sealed five-phase native traces; <=250-ms recipient-local handled gap and <=12 authoritative ticks where phase boundaries are provable' },
+		[ordered]@{ Gate = 'Tracked-root recipient Character cadence'; State = $(if ($Local.Publication.CharacterDueService.Verdict -ceq 'FAIL' -or $Node.Publication.CharacterDueService.Verdict -ceq 'FAIL') { 'MEASURED_FAIL' } elseif ($Local.Publication.CharacterDueService.Verdict -ceq 'PASS' -and $Node.Publication.CharacterDueService.Verdict -ceq 'PASS') { 'MEASURED_PASS' } else { 'NOT MEASURED' }); Reason = 'canonical FrameBegin/due, accepted and handled conservation for eight roots and 64 relationships in all five phases, with zero scheduler rejection; raw observation-gap limits remain diagnostics under RecipientServiceWorkload3L and PhysicalFundingGateReview3L' },
 		[ordered]@{ Gate = 'Server work-tick p95/p99/max in all five phases'; State = $(if ($Local.ServerWorkTicks.Status -ceq 'MEASURED_FAIL' -or $Node.ServerWorkTicks.Status -ceq 'MEASURED_FAIL') { 'MEASURED_FAIL' } elseif ($Local.ServerWorkTicks.Status -ceq 'MEASURED_PASS' -and $Node.ServerWorkTicks.Status -ceq 'MEASURED_PASS') { 'MEASURED_PASS' } else { 'NOT MEASURED' }); Reason = 'hash-indexed FrameBegin-to-FrameEnd work time excludes deliberate 60-Hz pacing sleep; 16.667/33.334/100-ms phase limits' },
 		[ordered]@{ Gate = 'Designated producer Luau RPC and Event ACK cadence'; State = $(if ($Local.RemoteCadence.Status -ceq 'MEASURED_FAIL' -or $Node.RemoteCadence.Status -ceq 'MEASURED_FAIL') { 'MEASURED_FAIL' } elseif ($Local.RemoteCadence.Status -ceq 'MEASURED_PASS' -and $Node.RemoteCadence.Status -ceq 'MEASURED_PASS') { 'MEASURED_PASS' } else { 'NOT MEASURED' }); Reason = 'hash-indexed client-00 Luau invoke/return and offer/OnClientEvent callback on one local clock; 150/250/500-ms RPC and 250-ms Event RTT/ACK-gap limits' },
 		[ordered]@{ Gate = 'Full Character and Remote recipient cadence'; State = 'NOT MEASURED'; Reason = 'canonical workload has one designated Remote/action producer; other 31 clients are Character recipients, not missing Remote producers. Due-tick Character service, producer Remote timing and cross-host diagnostics are separate evidence domains; final conjunctive review remains required' },
