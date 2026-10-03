@@ -85,6 +85,18 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+2026-10-03 continuation after capture-root qualification: source `3c8f65d39`
+passes 315 local tooling tests and its original PR Windows 95-case CTest/tooling
+steps, but Native PR `37151679339` fails three FULL_RESERVATION aggregate RPC
+p99 gates in the fifth standalone's normal phase. All requests complete and
+no pooled F1 first-send failure is measured. Aggregate request endpoints were
+absent, so the exact cause remains **NOT MEASURED**. Request-linked bounded
+timing/scheduler evidence must qualify before another physical launch; no
+threshold or workload is weakened. Dormant V4 is not adopted or executed.
+The failed Local `b52d6e7b` separately has all six secrets retired and idle
+closure, with original failed receipts preserved. Retained F1 PASS remains
+valid; **KI-006 OPEN; Foundation 3L B — PARTIALLY READY**.
+
 2026-10-03 20:30 UTC continuation: the client resource gate passed with 19.177
 GiB available at 19:52 UTC. Fresh Local run
 `b52d6e7b-6ebb-44e2-b12c-a2b4fb88bbc0` reached its control barrier, then both

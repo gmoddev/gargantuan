@@ -209,9 +209,27 @@ evidence explicitly, and prints after the case. These records enable exact
 correlation with separately collected scheduler events; they do not themselves
 establish a wait reason, change the workload or replace wall-clock acceptance.
 
+Ordinary qualifying push/PR and default dispatch retain the complete Windows
+CTest/tooling matrix and all five unchanged standalone workloads. The fixed
+`Aggregate32Structural` scheduler case replaces only the original fifth
+`--reliable-workload-32-structural` invocation, exactly once. Its owned bounded
+ETL, decoded events, child logs, metadata and cleanup evidence are always
+retained. The four other logical invocations, dependent Linux and GNS gates
+remain mandatory. Helper compilation and noncapture self-tests precede this
+qualification. Original child failure remains failure; capture, loss, clock
+coverage or cleanup failure also prevents qualification. No request clock,
+threshold, argument, workload, priority, affinity or timer policy changes.
+
+Aggregate request identities and original steady-clock endpoints join bounded
+CPU/sleep observations and buffered peer-operation spans to bracketed QPC
+anchors. Retained maxima or a long low-CPU span alone do not establish the cause
+of a failed RPC. Scheduler attribution requires overlapping request-linked
+evidence; neither waiting nor ready-thread time is subtracted from latency.
+Earlier failed runs remain failed, including those without this evidence.
+
 The manual `scheduler_trace` input enables one bounded Windows scheduler
-diagnostic around the existing FULL `--reliable-workload` invocation. Ordinary
-push/PR execution retains all five untraced commands. The diagnostic replaces
+diagnostic around the existing FULL `--reliable-workload` invocation. This
+distinct diagnostic replaces
 that invocation once before the independent CTest gates, preserves its exit
 status, and skips its later duplicate. This ordering retains causal evidence
 even if an independent native gate would otherwise stop the workflow first;
@@ -231,7 +249,8 @@ packaging and Linux execution. Its Windows job name explicitly identifies it
 as diagnostic rather than qualification, and the final acceptance verifier
 rejects that job as a replacement for required CI even if it succeeds.
 Ordinary push/PR execution still runs the complete native matrix and all five
-unchanged standalone commands. The two diagnostic selections are mutually
+unchanged logical standalone commands, with the fixed aggregate trace described
+above. The two manual diagnostic selections are mutually
 exclusive. No diagnostic result supplies a new physical authorization gate.
 
 ACK statistics diagnostics are fixture-only and opt-in. Bracketed QPC/steady

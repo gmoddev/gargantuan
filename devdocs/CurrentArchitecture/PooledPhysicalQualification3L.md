@@ -6,6 +6,24 @@ last_verified: 2026-10-03
 
 # Foundation 3L pooled physical qualification attempt
 
+## Corrected capture staging awaits aggregate timing qualification (2026-10-03)
+
+Capture-root correction at tooling `3c8f65d39` passes 315 local tooling tests.
+Its original Native PR run `37151679339` passes 95 CTest cases and the tooling
+step, then fails three aggregate RPC p99 gates in FULL_RESERVATION's first
+normal phase of `--reliable-workload-32-structural` (354.201/355.002/418.106 ms
+against 250 ms). No pooled structural work is active in that phase. The exact
+mechanism remains unmeasured because aggregate request chronology was absent.
+Bounded request-linked scheduler instrumentation is the next correction;
+no latency sample, threshold, admission or transport policy is adjusted.
+
+Failed Local `b52d6e7b` has a separate completed cleanup chain proving all six
+one-run secrets absent and both endpoints idle. Its original failed role
+terminals and incomplete first cleanup receipt are preserved. Dormant V4 was
+reviewed but not adopted or executed. No physical attempt followed this hosted
+failure. Retained F1 PASS remains valid; fresh Local32/Node32 and final audit
+remain outstanding. See the [current validation entry](ContentAvailabilityFoundation3L_3Validation.md#original-aggregate-timing-failure-after-capture-correction-2026-10-03).
+
 ## Local startup failure before service measurement (2026-10-03 20:30 UTC)
 
 Local attempt `b52d6e7b-6ebb-44e2-b12c-a2b4fb88bbc0` and Coordinator

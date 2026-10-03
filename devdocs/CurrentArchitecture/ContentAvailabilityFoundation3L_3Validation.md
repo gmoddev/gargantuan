@@ -6,6 +6,39 @@ last_verified: 2026-10-03
 
 # Foundation 3L.3 diagnostic validation ledger
 
+## Original aggregate timing failure after capture correction (2026-10-03)
+
+Tooling source `3c8f65d39` passes all 315 local tooling tests. Original Native PR
+run `37151679339` passes all 95 Windows CTest cases and its 315-case tooling
+step, then fails the fifth standalone FULL_RESERVATION
+`--reliable-workload-32-structural` command. Its first normal phase has zero
+structural pressure: peers 0, 1 and 7 report RPC p99 354.201, 355.002 and
+418.106 ms against the unchanged 250-ms bound. All eight active peers complete
+48 accepted requests without errors; p95 and maximum bounds pass. Dependent
+PR Linux is skipped. This is a valid aggregate RPC failure, not pooled F1
+first-send evidence. No counterpart or controlled-worker result replaces it.
+
+The retained four worst aggregate steps include a 3,120.54-ms work interval
+with 78.125-ms thread and 125-ms process CPU. The fixture lacks request-bound
+endpoints for this aggregate phase. A request spanning that entire interval
+would exceed the observed 418.106-ms maximum; the long interval therefore is
+not itself a causal attribution. Exact blocking, ready-thread starvation or
+other OS/production cause remains **NOT MEASURED**. Original analysis is
+`C:\Users\aiden\.codex\artifacts\native-pr-failure-37151679339-v1\analysis.json`,
+SHA-256 `6c5d418903aa0b45f3545ee0591b78b4467f38155433a78eca7d996498cd64f6`.
+Prospective bounded aggregate request/resource/clock and peer-operation evidence,
+plus the fixed fifth-command ETW wrapper, preserve every elapsed-time gate.
+
+Separately, the exact failed Local `b52d6e7b` cleanup chain is complete:
+supplemental V2 verifies all six one-run secrets absent and both endpoints idle.
+Its receipt SHA-256 is
+`63be3d4f38ddcc74c48c90b2f3f0e6ed870fcf97668c6412b8de365f6a9c4707`.
+The original false role-reaping receipts and incomplete V1 cleanup remain
+unchanged. Dormant V4 was reviewed with 58 tests in both Python modes but was
+not adopted or launched; its source failed the required original CI above.
+Retained native `9ae8f68c2` F1 PASS remains valid. Fresh Local32, real-TLS Node32
+and final acceptance remain unqualified; **KI-006 OPEN; 3L B — PARTIALLY READY**.
+
 ## Local capture startup attribution (2026-10-03 20:30 UTC)
 
 Fresh Local run `b52d6e7b-6ebb-44e2-b12c-a2b4fb88bbc0`, Coordinator
