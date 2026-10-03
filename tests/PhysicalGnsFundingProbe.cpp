@@ -333,6 +333,8 @@ struct Probe {
 			Samples.Analyze();
 			const auto Profile = ReliableServiceProfile::PooledService();
 			Samples.Dump("physical-gns-server.csv");
+			Samples.DumpAdmissions("physical-gns-server-admissions.csv");
+			std::cout << "[Probe:AdmissionBoundary] format=F1_ACCEPTED_ACTIVATION_V1 records=" << Samples.AdmissionCount << '\n';
 			for (const auto &[Id, P] : Participants) std::cout << "[Probe:Peer] slot=" << Id.Slot << " generation=" << Id.Generation << " nonce=" << P.Nonce << " producer=" << P.Producer << '\n';
 			std::uint64_t DemandRows = 0, FourGrantDebtRows = 0;
 			for (const auto &R : Samples.Rows) {
@@ -418,6 +420,7 @@ void SelfTest() {
 			const std::uint64_t Token = Wave * PeerCount + Peer + 1;
 			const std::uint64_t Prior = std::uint64_t(Wave - 1) * GroupBytes;
 			const bool Active = Point != 2;
+			if (Point == 0) Trace::AcceptedGrant(&T, Id, Token, GroupBytes, Start);
 			detail::PooledServiceRecord R{.Connection = Id, .SimulationTick = Step,
 				.NowMicroseconds = Time, .DebtToken = Active ? Token : 0,
 				.DebtBytes = Active ? GroupBytes : 0,
@@ -448,6 +451,7 @@ void SelfTest() {
 					Point == 2 ? (Slow ? RunningDeficitBound + 1 : 10'000'000'000ULL) : 0,
 				.StructuralLastCompletedGrantFailed = Point == 2 && Slow};
 			R.Result.Valid = true; R.Result.Available = !Stale; R.Result.Qualified = !Slow && !Stale;
+			R.Accepted.Structural = Prior + GroupBytes;
 			R.Admission.ActiveDrainGrants = Active ? PeerCount : 0;
 			if (!Active) { R.Result.RetiredToken = Token; R.Result.RetiredBytes = GroupBytes; }
 			Trace::Record(&T, R);
@@ -494,9 +498,25 @@ void SelfTest() {
 			NoOverlap.Peers[Peer].Grants[G].CompletedAtMicroseconds -= 6000;
 	NoOverlap.Analyze();
 	Require(!NoOverlap.PoolQualifiedUs && !NoOverlap.Passed(), "ACK/debt overlap counted as pool drain");
+	Trace Bootstrap;
+	Trace::AcceptedGrant(&Bootstrap, {1, 1}, 1, 77, std::numeric_limits<std::uint64_t>::max());
+	detail::PooledServiceRecord BootstrapRetirement{.Connection = {1, 1}};
+	BootstrapRetirement.Accepted.Structural = 77;
+	BootstrapRetirement.Result.RetiredToken = 1; BootstrapRetirement.Result.RetiredBytes = 77;
+	Trace::Record(&Bootstrap, BootstrapRetirement);
+	Require(!Bootstrap.Invalid && Bootstrap.Admissions[0].Retired && !Bootstrap.Admissions[0].Certified,
+		"bootstrap admission boundary was incorrectly classified as qualified service");
+	Trace MissingCertificate;
+	Trace::AcceptedGrant(&MissingCertificate, {1, 1}, 1, 77, 1000);
+	Trace::Record(&MissingCertificate, BootstrapRetirement);
+	Require(MissingCertificate.Invalid, "small Ready grant retired without exact native completion certificate");
+	Trace DuplicateAdmission;
+	Trace::AcceptedGrant(&DuplicateAdmission, {1, 1}, 1, 77, 1000);
+	Trace::AcceptedGrant(&DuplicateAdmission, {1, 1}, 1, 77, 1000);
+	Require(DuplicateAdmission.Invalid, "duplicate accepted obligation escaped evidence failure");
 	Good.Rows.resize(Trace::Capacity); FeedCurve(Good, 999, 3, 2);
 	Require(Good.Overflow, "trace overflow did not fail closed");
-	std::cout << "[Probe:SelfTest] pass=1 sockets=0 contract=F1 cases=5\n";
+	std::cout << "[Probe:SelfTest] pass=1 sockets=0 contract=F1 cases=8\n";
 }
 }
 int main(int Count, char **Args) {
