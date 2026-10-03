@@ -101,6 +101,32 @@ function Save-FairnessRows {
 	return (Read-AdmissionFairnessEvidence -Path $Path -RunId $RunId -ExpectedConnections $Connections)
 }
 
+function Save-CompleteFairness {
+	param($Run, [switch]$MissingPeer, [switch]$OpenEligible)
+	$Rows=[Collections.Generic.List[string]]::new()
+	$Rows.Add("format=GargantuanAdmissionEvidenceV2`trun=$($Run.Report.RunId)")
+	$Last=if ($MissingPeer) {31} else {32}
+	foreach ($Peer in 1..$Last) {
+		$At=1000*$Peer
+		$Rows.Add((@('event','exact_demand','none',$Peer,1,$Peer,0,0,256,$At,0,0,0,0,0,0,0,0,0) -join "`t"))
+		$Rows.Add((@('event','credit_eligible','none',$Peer,1,$Peer,1,0,256,($At+100),($At+50),($At+100),256,256,0,0,0,0,0) -join "`t"))
+		$Rows.Add((@('event','grant_accepted','none',$Peer,1,$Peer,1,$Peer,256,($At+200),($At+50),($At+100),0,0,1,0,0,0,0) -join "`t"))
+		$Rows.Add((@('event','grant_retired','none',$Peer,1,$Peer,0,$Peer,256,($At+300),0,0,0,0,1,0,0,0,0) -join "`t"))
+		$Rows.Add((@('event','grant_released','none',$Peer,1,$Peer,0,$Peer,256,($At+400),0,0,0,0,0,0,0,0,0) -join "`t"))
+	}
+	if ($OpenEligible) {
+		$Rows.Add((@('event','exact_demand','none',1,1,33,0,0,256,40000,0,0,0,0,0,0,0,0,0) -join "`t"))
+		$Rows.Add((@('event','credit_eligible','none',1,1,33,1,0,256,40100,40050,40100,256,256,0,0,0,0,0) -join "`t"))
+	}
+	$Rows.Add("end`t$($Rows.Count-1)`t0")
+	$Path=Join-Path $Run.ServerRoot 'admission-fairness.tsv'
+	[IO.File]::WriteAllLines($Path,$Rows)
+	$Run.Report.AdmissionFairnessObservation=Read-AdmissionFairnessEvidence -Path $Path -RunId $Run.Report.RunId -ExpectedConnections $Run.Report.Identity.Connections
+	Save-Index -Root $Run.ServerRoot -RunId $Run.Report.RunId -Role 'Server'
+	$Run.Report.ServerEvidenceSha256=(Get-FileHash (Join-Path $Run.ServerRoot 'evidence-sha256.json')).Hash.ToLowerInvariant()
+	Save-Json -Path $Run.ReportPath -Value $Run.Report
+}
+
 function Import-RecoveryParser {
 	$Path = Join-Path $PSScriptRoot 'PhysicalGameSessionFarm.ps1'
 	$Tokens = $null; $Errors = $null
@@ -208,6 +234,45 @@ function Save-RecoveryLogs {
 		-ExpectedNonces $Nonces -ExpectedConnections $Connections
 }
 
+function Add-WorkloadFixture {
+	param([string]$ServerRoot, [string]$ClientRoot, [string]$RunId, [string]$Provider, [string[]]$Nonces)
+	$Names = @('baseline','load','resident','evict','reload')
+	$Lines = [Collections.Generic.List[string]]::new()
+	$Lines.Add("[Qualification:Server] event=start run=$RunId provider=$($Provider.ToLowerInvariant()) expected=32")
+	for ($Slot=0; $Slot -lt 32; $Slot++) {
+		$Lines.Add("[Qualification:Server] event=ready run=$RunId nonce=$($Nonces[$Slot]) connection_slot=$($Slot+1) connection_generation=1 session_epoch=1 player_id=$($Slot+1) monotonic_us=$($Slot+1)")
+	}
+	$Lines.Add("[Qualification:Server] event=result run=$RunId provider=$($Provider.ToLowerInvariant()) expected=32 ready_high_water=32 unique_ready=32 identity_conflict=0 exit=0")
+	for ($Index=0; $Index -lt 5; $Index++) {
+		$Phase=$Names[$Index]; $Tick=1+1000*$Index; $Time=1000000+14000000*$Index
+		$Lines.Add("[Qualification:Scale] event=phase_start run=$RunId phase=$Phase tick=$Tick monotonic_us=$Time")
+		$Lines.Add("[Qualification:Scale] event=phase_acks run=$RunId phase=$Phase count=32 tick=$($Tick+1)")
+		$Lines.Add("[Qualification:Scale] event=content_acks run=$RunId phase=$Phase count=32 tick=$($Tick+2)")
+		$Lines.Add("[Qualification:Scale] event=phase_stop_requested run=$RunId phase=$Phase tick=$($Tick+3) elapsed_us=13000001")
+		$Lines.Add("[Qualification:Scale] event=producer_ack run=$RunId phase=$Phase tick=$($Tick+4)")
+		$Lines.Add("[Qualification:Scale] event=phase_end run=$RunId phase=$Phase ticks=781 elapsed_us=13000001 monotonic_us=$($Time+13000001) producer_done=1 phase_acks=32 content_acks=32 tick=$($Tick+781)")
+	}
+	$Lines.Add("[Qualification:Scale] event=result run=$RunId status=PASS phases=5 peers=32 tick=5001")
+	[IO.File]::AppendAllLines((Join-Path $ServerRoot 'server.stdout.log'), $Lines)
+	for ($Slot=0; $Slot -lt 32; $Slot++) {
+		$Nonce=$Nonces[$Slot]; $Lines=[Collections.Generic.List[string]]::new()
+		$Lines.Add("[Qualification:Client] event=start run_id=$RunId slot=$Slot nonce=$Nonce steady_ns=1")
+		$Lines.Add("[Qualification:Client] event=ready run_id=$RunId slot=$Slot nonce=$Nonce connection_slot=$($Slot+2) connection_generation=1 steady_ns=2")
+		foreach ($Phase in $Names) {
+			$Objects=if ($Phase -in @('load','resident','reload')) {512} else {0}
+			$Root=if ($Objects) {100+$Slot} else {0}
+			$Generation=if ($Phase -eq 'reload') {2} elseif ($Objects) {1} else {0}
+			$Lines.Add("[Qualification:Client] event=phase_observed run_id=$RunId slot=$Slot nonce=$Nonce phase=$Phase objects=$Objects root_slot=$Root root_generation=$Generation receive_to_observed_us=1000")
+			if ($Slot -eq 0) {
+				$Lines.Add("[Qualification:Producer] event=phase_metrics run_id=$RunId slot=0 nonce=$Nonce phase=$Phase status=PASS metrics_phase_valid=1 producer_healthy=1 remote_samples=100 remote_p95_us=1000 remote_p99_us=2000 remote_max_us=3000 remote_errors=0 remote_timeouts=0 event_offers=4 event_acks=4 event_outstanding=0 event_max_rtt_us=1000 event_max_gap_us=1000 action_requests=1 action_resolutions=1 action_endings=1 action_max_result_us=1000 submission_failures=0 action_rejections=0 unexpected_endings=0")
+			}
+		}
+		$Lines.Add("[Qualification:Client] event=scale_complete run_id=$RunId slot=$Slot nonce=$Nonce observed_phases=5 producer_phases=$(if ($Slot -eq 0) {5} else {0})")
+		$Lines.Add("[Qualification:Client] event=result run_id=$RunId slot=$Slot nonce=$Nonce status=PASS exit_code=0 reason=scale_complete local_player=1 character=1 steady_ns=3")
+		[IO.File]::AppendAllLines((Join-Path $ClientRoot ('client-{0:D2}.stdout.log' -f $Slot)), $Lines)
+	}
+}
+
 function New-RunFixture {
 	param([string]$Prefix, [string]$Provider, [string]$RunId, [switch]$RecoveryWorkload)
 	$ServerRoot = Join-Path $TestRoot "$Prefix-server"
@@ -281,6 +346,7 @@ function New-RunFixture {
 		Save-RecoveryLogs -ServerRoot $ServerRoot -ClientRoot $ClientRoot `
 			-RunId $RunId -Nonces $Manifest.Nonces -Connections $Connections
 	} else { $null }
+	Add-WorkloadFixture -ServerRoot $ServerRoot -ClientRoot $ClientRoot -RunId $RunId -Provider $Provider -Nonces $Manifest.Nonces
 	Save-Index -Root $ServerRoot -RunId $RunId -Role 'Server'
 	Save-Index -Root $ClientRoot -RunId $RunId -Role 'Clients'
 	$Report = [ordered]@{
@@ -290,7 +356,7 @@ function New-RunFixture {
 		ServerEvidenceSha256 = (Get-FileHash -LiteralPath (Join-Path $ServerRoot 'evidence-sha256.json') -Algorithm SHA256).Hash.ToLowerInvariant()
 		ClientEvidenceSha256 = (Get-FileHash -LiteralPath (Join-Path $ClientRoot 'evidence-sha256.json') -Algorithm SHA256).Hash.ToLowerInvariant()
 		Status = 'INCOMPLETE'; RoleLocalEvidence = 'VALIDATED'; ProviderQualification = 'NOT CLAIMED'
-		Identity = @{ Ready = 32; Connections = $Connections }
+		Identity = @{ Ready = 32; UniqueNonces=32; UniqueConnections=32; UniquePlayers=32; Connections = $Connections }
 		Admission = @{
 			accepted = 8192; retired = 8192; terminal_release = 0; outstanding = 0
 			outstanding_high = 8192; active_grants = 0; grants_high = 2
@@ -323,7 +389,6 @@ function Save-RemoteCadenceLog {
 	$RunId = $Run.Report.RunId
 	$Nonce = $Run.Manifest.Nonces[0]
 	$Lines = [Collections.Generic.List[string]]::new()
-	$Lines.Add("[Qualification:Client] event=ready run_id=$RunId slot=0 nonce=$Nonce connection_slot=1 connection_generation=1")
 	$Sequence = 0
 	foreach ($Phase in @('baseline', 'load', 'resident', 'evict', 'reload')) {
 		$Rpc = [Collections.Generic.List[string]]::new()
@@ -352,7 +417,9 @@ function Save-RemoteCadenceLog {
 				$Lines.Add("[Qualification:RemoteCadence] event=chunk version=1 kind=$Kind phase=$Phase index=$Chunk records=$Joined")
 			}
 		}
-		$Lines.Add("[Qualification:Producer] event=phase_metrics run_id=$RunId slot=0 nonce=$Nonce phase=$Phase status=PASS remote_samples=100 event_offers=4 event_acks=4 event_outstanding=0")
+	}
+	foreach ($Line in [IO.File]::ReadAllLines((Join-Path $Run.ClientRoot 'client-00.stdout.log'))) {
+		if (-not $Line.StartsWith('[Qualification:RemoteCadence]')) { $Lines.Add($Line) }
 	}
 	[IO.File]::WriteAllLines((Join-Path $Run.ClientRoot 'client-00.stdout.log'), $Lines)
 	Save-Index -Root $Run.ClientRoot -RunId $RunId -Role 'Clients'
@@ -486,7 +553,9 @@ try {
 		$Observed.Local.Capture.Status -cne 'NOT_MEASURED' -or
 		$Observed.Node.Capture.Status -cne 'NOT_MEASURED' -or
 		$Observed.Local.RemoteCadence.Status -cne 'NOT_MEASURED' -or
-		@($Observed.GateObservations | Where-Object { $_.State -eq 'NOT MEASURED' }).Count -ne 20 -or
+		@($Observed.GateObservations | Where-Object { $_.State -eq 'NOT MEASURED' }).Count -ne 21 -or
+		$Observed.Local.Workload.State -cne 'MEASURED_PASS' -or
+		$Observed.Local.Admission.FixedWorkloadFairness.State -cne 'NOT_MEASURED' -or
 		$Observed.Local.RemoteOwnership.State -cne 'NOT_MEASURED' -or
 		$Observed.Local.Lifecycle.State -cne 'NOT_MEASURED' -or
 		$Observed.Local.Clock.Status -cne 'NOT_MEASURED' -or
@@ -699,6 +768,7 @@ try {
 	Invoke-Analyzer -OutputPath $SlowPath
 	$SlowObserved = Get-Content -LiteralPath $SlowPath -Raw | ConvertFrom-Json
 	if ($SlowObserved.Node.Admission.AcceptedGrantWaitBound -cne 'MEASURED_FAIL' -or
+		$SlowObserved.Node.Admission.FixedWorkloadFairness.State -cne 'MEASURED_FAIL' -or
 		@($SlowObserved.GateObservations | Where-Object {
 			$_.Gate -ceq 'Recorded accepted-grant eligibility wait within 220.5 ms' -and
 			$_.State -ceq 'MEASURED_FAIL' }).Count -ne 1 -or
@@ -864,13 +934,6 @@ try {
 	foreach ($Run in @($Local, $Node)) {
 		$RunId = $Run.Manifest.RunId
 		$ServerReadyPath = Join-Path $Run.ServerRoot 'server.stdout.log'
-		for ($Slot = 0; $Slot -lt 32; $Slot++) {
-			$Nonce = $Run.Manifest.Nonces[$Slot]
-			[IO.File]::AppendAllText($ServerReadyPath,
-				"[Qualification:Server] event=ready run=$RunId nonce=$Nonce connection_slot=$($Slot + 1) connection_generation=1 session_epoch=1 player_id=$($Slot + 1) monotonic_us=$($Slot + 1)`n")
-			[IO.File]::AppendAllText((Join-Path $Run.ClientRoot ('client-{0:D2}.stdout.log' -f $Slot)),
-				"[Qualification:Client] event=ready run_id=$RunId slot=$Slot nonce=$Nonce connection_slot=$($Slot + 2) connection_generation=1 steady_ns=$($Slot + 1)`n")
-		}
 		& python $PublicationFixture (Join-Path $Run.ServerRoot 'run-manifest.json') `
 			$Run.ServerRoot $Run.ClientRoot
 		if ($LASTEXITCODE -ne 0) { throw 'cross-provider publication fixture generation failed' }
@@ -996,6 +1059,52 @@ try {
 	$Node.Report.RemoteOwnershipObservation.AnalyzerSha256 = '0' * 64
 	Save-Json -Path $Node.ReportPath -Value $Node.Report
 	Assert-Rejected -Name 'changed Remote ownership analyzer pin' -OutputPath (Join-Path $TestRoot 'remote-analyzer.json')
+	$Local = New-RunFixture -Prefix 'conjunction-local' -Provider 'Local' -RunId '7c93e53d-0e0c-4b8d-8a3b-9a761a406ebd'
+	$Node = New-RunFixture -Prefix 'conjunction-node' -Provider 'Node' -RunId '8d93e53d-0e0c-4b8d-8a3b-9a761a406ebd'
+	Save-CompleteFairness -Run $Local
+	Save-CompleteFairness -Run $Node
+	$ConjunctionPath=Join-Path $TestRoot 'complete-fairness.json'
+	Invoke-Analyzer -OutputPath $ConjunctionPath
+	$Conjunction=Get-Content $ConjunctionPath -Raw | ConvertFrom-Json
+	if ($Conjunction.Local.Admission.FixedWorkloadFairness.State -cne 'MEASURED_PASS' -or
+		$Conjunction.Node.Admission.FixedWorkloadFairness.GrantedPeers -ne 32 -or
+		$Conjunction.Status -cne 'INCOMPLETE') { throw 'complete fixed workload conjunction missing or overclaimed' }
+	Save-CompleteFairness -Run $Node -MissingPeer
+	$MissingPath=Join-Path $TestRoot 'missing-fairness-peer.json'
+	Invoke-Analyzer -OutputPath $MissingPath
+	$Missing=Get-Content $MissingPath -Raw | ConvertFrom-Json
+	if ($Missing.Node.Admission.FixedWorkloadFairness.State -cne 'NOT_MEASURED' -or
+		$Missing.Node.Admission.FixedWorkloadFairness.MissingGrantedPeers[0] -cne '32:1') { throw '31 granted peers incorrectly proved fairness' }
+	Save-CompleteFairness -Run $Node -OpenEligible
+	$OpenPath=Join-Path $TestRoot 'open-fairness-eligibility.json'
+	Invoke-Analyzer -OutputPath $OpenPath
+	$Open=Get-Content $OpenPath -Raw | ConvertFrom-Json
+	if ($Open.Node.Admission.FixedWorkloadFairness.State -cne 'NOT_MEASURED' -or
+		$Open.Node.Admission.FixedWorkloadFairness.GrantedPeers -ne 32 -or
+		$Open.Node.Admission.ExactDemandEpisodeCoverage -cne 'INCONCLUSIVE_NOT_MEASURED') { throw 'open eligible work was hidden by 32 granted peers' }
+	$Node.Report.AdmissionFairnessObservation.ExactDemandEpisodeCoverage='MEASURED_PASS'
+	Save-Json -Path $Node.ReportPath -Value $Node.Report
+	Assert-Rejected -Name 'forged complete fairness hides open eligibility' -OutputPath (Join-Path $TestRoot 'forged-complete-fairness.json')
+	Save-CompleteFairness -Run $Node
+	$Node.Report.Remove('AdmissionFairnessObservation')
+	Save-Json -Path $Node.ReportPath -Value $Node.Report
+	Assert-Rejected -Name 'omitted fairness observation' -OutputPath (Join-Path $TestRoot 'omitted-fairness.json')
+	Save-CompleteFairness -Run $Node
+	$NativePath=Join-Path $Node.ClientRoot 'client-00.stdout.log'
+	$NativeOriginal=[IO.File]::ReadAllText($NativePath)
+	$Changes=@{
+		'unresolved-action'=$NativeOriginal.Replace('action_resolutions=1','action_resolutions=0')
+		'missing-content'=(($NativeOriginal -split "`n" | Where-Object { $_ -notmatch 'event=phase_observed .*phase=reload ' }) -join "`n")
+		'stale-reload-root'=$NativeOriginal.Replace('root_generation=2','root_generation=1')
+		'missing-client-ready'=(($NativeOriginal -split "`n" | Where-Object { $_ -notmatch '\[Qualification:Client\] event=ready ' }) -join "`n")
+	}
+	foreach ($Name in $Changes.Keys) {
+		[IO.File]::WriteAllText($NativePath,$Changes[$Name])
+		Save-Index -Root $Node.ClientRoot -RunId $Node.Report.RunId -Role 'Clients'
+		$Node.Report.ClientEvidenceSha256=(Get-FileHash (Join-Path $Node.ClientRoot 'evidence-sha256.json')).Hash.ToLowerInvariant()
+		Save-Json -Path $Node.ReportPath -Value $Node.Report
+		Assert-Rejected -Name "rehashed workload $Name with stale reconciled PASS" -OutputPath (Join-Path $TestRoot "$Name.json")
+	}
 	Write-Output '[Qualification:FarmAcceptance] MOCK_TEST_OK'
 } finally {
 	if (-not $ResolvedRoot.StartsWith($ResolvedTemp + [IO.Path]::DirectorySeparatorChar,

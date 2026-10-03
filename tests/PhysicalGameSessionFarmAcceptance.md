@@ -133,6 +133,23 @@ cannot fail or pass that due-service gate. Cross-host one-way latency remains
 separate. A missing legacy trace set stays unmeasured, whereas an incomplete or
 invalid set is rejected.
 
+Final acceptance independently imports the existing `Assert-Records` and
+`Assert-ScaleRecords` validators from the canonical farm script. It replays
+all 33 indexed stdout logs, checks the exact ready identities against the
+reconciled report, and rechecks every five-phase content transition, fresh
+reload identity, phase duration, and designated producer RPC/Event/action
+requirement. A rehashed log with missing observations or failed action results
+cannot retain the earlier reconciliation's successful workload claim.
+
+`FixedWorkloadFairness` is a separate conjunction over the independently
+replayed native timeline: all 32 ready peer generations must have received a
+grant, and accepted-grant wait, exact-demand episode coverage, and V2 grant
+lifecycle coverage must all pass. Missing granted peers, unfinished eligible
+work, interrupted/disposed eligibility, or historical V1 lifecycle evidence
+cannot produce that PASS. Existing measured failures remain failures. This
+proves only the recorded exact-demand episodes of the fixed workload; it does
+not establish an indefinitely saturated source or a cross-grant drain rate.
+
 The designated Farm32 producer (client slot 0) now emits bounded Luau-local
 Remote traces after each phase drains. The acceptance analyzer replays its
 hash-indexed RPC invocation/return and Event offer/`OnClientEvent` callback

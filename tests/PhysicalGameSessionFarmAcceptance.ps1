@@ -43,7 +43,7 @@ function Import-FarmRecoveryParser {
 	if ($Errors.Count -ne 0) { throw 'canonical farm recovery parser has a syntax error' }
 	$Needed = @('Get-Fields', 'Read-SharedLogLines', 'Get-Records', 'Get-RecoveryDiagnostics',
 		'Test-RecoveryQuiescent', 'Test-RecoveryServiceHealthy', 'Get-RecoveryUnsigned',
-		'Get-RecoveryCeilDiv', 'Assert-RecoveryQuote', 'Assert-RecoveryRecords')
+		'Get-RecoveryCeilDiv', 'Assert-RecoveryQuote', 'Assert-RecoveryRecords', 'Assert-Records', 'Assert-ScaleRecords')
 	foreach ($Function in $Ast.FindAll({ param($Node)
 		$Node -is [Management.Automation.Language.FunctionDefinitionAst]
 	}, $true)) {
@@ -56,7 +56,7 @@ foreach ($Definition in @(Import-FarmRecoveryParser)) {
 }
 foreach ($Name in @('Get-Fields', 'Read-SharedLogLines', 'Get-Records', 'Get-RecoveryDiagnostics',
 	'Test-RecoveryQuiescent', 'Test-RecoveryServiceHealthy', 'Get-RecoveryUnsigned',
-	'Get-RecoveryCeilDiv', 'Assert-RecoveryQuote', 'Assert-RecoveryRecords')) {
+	'Get-RecoveryCeilDiv', 'Assert-RecoveryQuote', 'Assert-RecoveryRecords', 'Assert-Records', 'Assert-ScaleRecords')) {
 	if (-not (Get-Command $Name -CommandType Function -ErrorAction SilentlyContinue)) {
 		throw "canonical farm recovery parser lacks $Name"
 	}
@@ -640,6 +640,56 @@ function Read-AdmissionObservation {
 	}
 }
 
+function Get-FixedWorkloadFairness {
+	param($Observation, [string[]]$ExpectedConnections)
+	$Expected = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+	foreach ($Peer in $ExpectedConnections) {
+		if (-not $Expected.Add($Peer)) { throw 'fixed workload fairness has duplicate peer identity' }
+	}
+	if ($Expected.Count -ne 32) { throw 'fixed workload fairness requires 32 exact ready identities' }
+	$Seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+	$Granted = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+	foreach ($Row in $Observation.PeerWaits) {
+		if (-not $Expected.Contains($Row.Peer) -or -not $Seen.Add($Row.Peer)) {
+			throw 'fixed workload fairness has foreign or duplicate observed peer'
+		}
+		if ($Row.GrantCount -gt 0) { [void]$Granted.Add($Row.Peer) }
+	}
+	$Missing = @($Expected | Where-Object { -not $Granted.Contains($_) } | Sort-Object)
+	$Parts = @($Observation.AcceptedGrantWaitBound, $Observation.ExactDemandEpisodeCoverage,
+		$Observation.GrantLifecycleCoverage)
+	$State = if ('MEASURED_FAIL' -cin $Parts) { 'MEASURED_FAIL' }
+		elseif ($Missing.Count -eq 0 -and @($Parts | Where-Object { $_ -cne 'MEASURED_PASS' }).Count -eq 0) { 'MEASURED_PASS' }
+		else { 'NOT_MEASURED' }
+	return [ordered]@{ State=$State; GrantedPeers=$Granted.Count; RequiredPeers=32; MissingGrantedPeers=$Missing;
+		AcceptedGrantWaitBound=$Observation.AcceptedGrantWaitBound;
+		ExactDemandEpisodeCoverage=$Observation.ExactDemandEpisodeCoverage;
+		GrantLifecycleCoverage=$Observation.GrantLifecycleCoverage;
+		Scope='recorded exact-demand episodes of this fixed 32-peer workload; no continuous-source claim' }
+}
+
+function Read-WorkloadObservation {
+	param($Report, $Manifest, $Server, $Clients)
+	$RunId = [string]$Report.RunId; $Provider = [string]$Manifest.Provider
+	$Peers = 32; $ScaleWorkload = $true
+	$ExpectedNonces = [Collections.Generic.List[string]]::new()
+	foreach ($Nonce in $Manifest.Nonces) { $ExpectedNonces.Add([string]$Nonce) }
+	$ServerLog = [pscustomobject]@{ OutputPath=(Assert-IndexedFile -Root $Server.Root -Index $Server.Index -Name 'server.stdout.log') }
+	$ClientLogs = @(0..31 | ForEach-Object {
+		[pscustomobject]@{ OutputPath=(Assert-IndexedFile -Root $Clients.Root -Index $Clients.Index -Name ('client-{0:D2}.stdout.log' -f $_)) }
+	})
+	$Identity = Assert-Records -Server $ServerLog -Clients $ClientLogs -ExpectedNonces $ExpectedNonces
+	Assert-ScaleRecords -Server $ServerLog -Clients $ClientLogs -ExpectedNonces $ExpectedNonces
+	foreach ($Name in @('Ready','UniqueNonces','UniqueConnections','UniquePlayers')) {
+		if ($Identity.$Name -ne $Report.Identity.$Name) { throw 'reconciled workload identity differs from native logs' }
+	}
+	if ((@($Identity.Connections | Sort-Object) -join ',') -cne
+		(@($Report.Identity.Connections | Sort-Object) -join ',')) { throw 'reconciled ready connections differ from native logs' }
+	return [ordered]@{ State='MEASURED_PASS'; Scope='canonical five-phase workload independently replayed';
+		Ready=32; Phases=5; ProducerSlot=0;
+		ParserSha256=(Get-FileHash -LiteralPath (Join-Path $PSScriptRoot 'PhysicalGameSessionFarm.ps1')).Hash.ToLowerInvariant() }
+}
+
 function Read-ProviderObservation {
 	param([System.Collections.IDictionary]$Report, [System.Collections.IDictionary]$Manifest,
 		[string]$NodeProviderPath)
@@ -860,6 +910,8 @@ function Read-ProviderRun {
 	}
 	$Admission = Read-AdmissionObservation -Report $Report -FairnessPath $Server.FairnessPath `
 		-ServerLogPath $Server.ServerLogPath
+	$Workload = Read-WorkloadObservation -Report $Report -Manifest $Manifest -Server $Server -Clients $Clients
+	$Admission['FixedWorkloadFairness'] = Get-FixedWorkloadFairness -Observation $Admission.Fairness -ExpectedConnections $Report.Identity.Connections
 	$Publication = Read-FarmPublicationObservation -ServerRoot $Server.Root -ClientRoot $Clients.Root `
 		-ServerIndex $Server.Index -ClientIndex $Clients.Index `
 		-RunManifestPath (Join-Path $Server.Root 'run-manifest.json') `
@@ -904,6 +956,7 @@ function Read-ProviderRun {
 		-Server $Server -Clients $Clients
 	return [pscustomobject]@{
 		Report = $Report; Manifest = $Manifest
+		Workload = $Workload
 		Admission = $Admission; Publication = $Publication; ServerWorkTicks = $ServerWorkTicks
 		Clock = $Clock
 		Lifecycle = $Lifecycle
@@ -976,6 +1029,7 @@ $Observed = [ordered]@{
 		ComparableFields = $ComparableFields
 	}
 	Local = [ordered]@{
+		Workload = $Local.Workload
 		Ready = $Local.Report.Identity.Ready; AcceptedBytes = $Local.Report.Admission.accepted
 		RetiredBytes = $Local.Report.Admission.retired; Admission = $Local.Admission
 		Publication = $Local.Publication
@@ -990,6 +1044,7 @@ $Observed = [ordered]@{
 		EvidenceRetention = $Local.EvidenceRetention
 	}
 	Node = [ordered]@{
+		Workload = $Node.Workload
 		Ready = $Node.Report.Identity.Ready; AcceptedBytes = $Node.Report.Admission.accepted
 		RetiredBytes = $Node.Report.Admission.retired; Admission = $Node.Admission
 		Publication = $Node.Publication
@@ -1021,7 +1076,8 @@ $Observed = [ordered]@{
 		[ordered]@{ Gate = 'Role-local host CPU, memory, simultaneous owned processes, and fiber NIC counters'; State = 'MEASURED' },
 		[ordered]@{ Gate = 'Role-local indexed evidence byte/file bounds'; State = 'MEASURED' },
 		[ordered]@{ Gate = 'Nonce-bound 32-tuple bidirectional zero-loss capture on both endpoints'; State = $(if ($LocalCapture.Status -ceq 'MEASURED_PASS' -and $NodeCapture.Status -ceq 'MEASURED_PASS') { 'MEASURED_PASS' } else { 'NOT MEASURED' }); Reason = 'hash-sealed two-endpoint pcaps, native ready-time nonce-to-port mapping, zero-loss diagnostics, and nontruncated packets; no packet-reserve or headroom claim' },
-		[ordered]@{ Gate = 'Five-phase observation and terminal native admission conservation'; State = 'MEASURED' },
+		[ordered]@{ Gate = 'Five-phase observation and terminal native admission conservation'; State = 'MEASURED_PASS'; Reason = 'canonical Assert-Records and Assert-ScaleRecords independently replay all 33 logs, five content phases and designated producer RPC/Event/action requirements' },
+		[ordered]@{ Gate = 'Fixed 32-peer exact-demand fairness conjunction'; State = $(if ($Local.Admission.FixedWorkloadFairness.State -ceq 'MEASURED_FAIL' -or $Node.Admission.FixedWorkloadFairness.State -ceq 'MEASURED_FAIL') { 'MEASURED_FAIL' } elseif ($Local.Admission.FixedWorkloadFairness.State -ceq 'MEASURED_PASS' -and $Node.Admission.FixedWorkloadFairness.State -ceq 'MEASURED_PASS') { 'MEASURED_PASS' } else { 'NOT MEASURED' }); Reason = 'all 32 ready peers granted, accepted wait bound, complete recorded eligibility episodes and V2 ACK-gated lifecycle; no general continuous-source claim' },
 		[ordered]@{ Gate = 'Character accepted-state chain and role-local publication delays'; State = $(if ($Local.Publication.Status -ceq 'ACCEPTED_STATE_CHAIN_OBSERVED' -and $Node.Publication.Status -ceq 'ACCEPTED_STATE_CHAIN_OBSERVED') { 'MEASURED' } else { 'NOT MEASURED' }); Reason = 'each provider independently rejoined all hash-sealed native Character traces; cross-host clocks remain separate' },
 		[ordered]@{ Gate = 'Tracked-root recipient Character cadence'; State = $(if ($Local.Publication.CharacterDueService.Verdict -ceq 'FAIL' -or $Node.Publication.CharacterDueService.Verdict -ceq 'FAIL') { 'MEASURED_FAIL' } elseif ($Local.Publication.CharacterDueService.Verdict -ceq 'PASS' -and $Node.Publication.CharacterDueService.Verdict -ceq 'PASS') { 'MEASURED_PASS' } else { 'NOT MEASURED' }); Reason = 'canonical FrameBegin/due, accepted and handled conservation for eight roots and 64 relationships in all five phases, with zero scheduler rejection; raw observation-gap limits remain diagnostics under RecipientServiceWorkload3L and PhysicalFundingGateReview3L' },
 		[ordered]@{ Gate = 'Server work-tick p95/p99/max in all five phases'; State = $(if ($Local.ServerWorkTicks.Status -ceq 'MEASURED_FAIL' -or $Node.ServerWorkTicks.Status -ceq 'MEASURED_FAIL') { 'MEASURED_FAIL' } elseif ($Local.ServerWorkTicks.Status -ceq 'MEASURED_PASS' -and $Node.ServerWorkTicks.Status -ceq 'MEASURED_PASS') { 'MEASURED_PASS' } else { 'NOT MEASURED' }); Reason = 'hash-indexed FrameBegin-to-FrameEnd work time excludes deliberate 60-Hz pacing sleep; 16.667/33.334/100-ms phase limits' },
