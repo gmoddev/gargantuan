@@ -6,6 +6,54 @@ last_verified: 2026-10-03
 
 # Foundation 3L.3 diagnostic validation ledger
 
+## Local capture startup attribution (2026-10-03 20:30 UTC)
+
+Fresh Local run `b52d6e7b-6ebb-44e2-b12c-a2b4fb88bbc0`, Coordinator
+`067e0c39-c482-4fda-8e37-6a1571b4178b`, failed before capture readiness.
+Actual isolated staged imports and CLIENT projection verification passed.
+Both controllers then exited with complete bounded `WinError 2` diagnostics
+at `Configured -> LocalPath(CaptureRoot, MustExist=True)`, before capture
+construction, service invocation or native farm launch. Staging created its
+own tool roots but omitted the two fresh sealed capture parents. Existing
+tests precreated those directories and missed the integration defect.
+
+Retained attribution is
+`C:\Users\aiden\.codex\artifacts\role-startup-b52d-v1\ATTRIBUTION.md`;
+its twelve-member manifest SHA-256 is
+`e491de8875a6ab017de01ac57dd021a753ef64f8ead315ba28e21788488533af`.
+CLIENT/SERVER diagnostic stderr is 199/219 bytes, respectively, with complete
+drain and no truncation or read error. Original failed role terminals retain
+`ChildTreeReaped=false`; the aborted worker host records successful reap.
+Later idle observations do not rewrite either original terminal.
+
+Reviewed capture-root correction `d8743cda27309276ee375e9dcb1744f7ff92bc7b`
+is adopted as `f4c2a6a05`. It verifies the complete staged import closure,
+ticket/config identity, fresh actual-role preflight, executable pins and path
+confinement before exclusively creating the sealed capture parent under the
+endpoint SID. It then exercises the strict read-only consumer. Capture RunId
+children and native role evidence retain their existing owners. Five independent
+focused regressions cover real missing roots, mismatched bindings, omitted
+import hashes, protected-path overlap and actual Windows junction rejection.
+No production input, admission, reserve, service equation or installed endpoint
+tool changed. Full candidate qualification and CI remain required before launch.
+
+Initial tooling discovery separately exposed a protocol-fixture ordering
+failure: an already-completed SERVER received legal late `FINALIZE` before
+`RUN_DONE`. Cross-socket reads need not follow the test's send order. The pinned
+coordinator already permits this transition; no runtime behavior changed.
+Fixture correction `2ee159616` (adopted as `8f9b1d475`) accepts at most one such
+frame and retains the classification-mismatch failure assertion. Deterministic
+reader tests exercise both legal sequences and reject duplicate or unrelated
+frames. The original failed suite is retained; subsequent qualification is
+recorded separately rather than replacing that result.
+
+Client available memory was 19.177 GiB at 19:52:31 UTC, passing the unchanged
+8-GiB gate. Receipt-only head `3add509ee` also has all four original attempt-1
+workflows successful with all six job artifacts retained. The native candidate
+remains `9ae8f68c2`; retained F1 PASS is unchanged. V3 launch adoption is revoked
+after the attributed startup defect, and its consumed run identity is not reused.
+**Local32 and Node32 service gates NOT MEASURED; KI-006 OPEN; 3L B — PARTIALLY READY.**
+
 ## Current tooling and controlled capacity qualification (2026-10-03 15:10 UTC)
 
 Tooling/test source `1ccefb336e28e4c9beacc5d0f847d34bb3d49838` passes all four

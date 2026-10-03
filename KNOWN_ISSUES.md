@@ -85,6 +85,22 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+2026-10-03 20:30 UTC continuation: the client resource gate passed with 19.177
+GiB available at 19:52 UTC. Fresh Local run
+`b52d6e7b-6ebb-44e2-b12c-a2b4fb88bbc0` reached its control barrier, then both
+capture controllers failed before capture readiness because staging had not
+created their sealed per-run capture parent directories. Complete bounded
+stderr proves `WinError 2` at strict configuration validation. Neither native
+farm nor production service was measured. Historical failed role terminals
+retain their unproven child-tree cleanup state; subsequent cleanup requires a
+separate exact-run closure. The correction provisions only the verified sealed
+capture parent under its actual endpoint identity and exercises the strict
+consumer before role launch. Full qualification and a fresh candidate are
+required before another attempt. Local32, real-TLS Node32 and final acceptance
+remain unqualified; **KI-006 OPEN; Foundation 3L B — PARTIALLY READY**.
+
+The following 15:10 UTC checkpoint is historical:
+
 2026-10-03 15:10 UTC checkpoint: current tooling source `1ccefb336` passes both
 original Native workflows (95 Windows / 53 Linux cases each, tooling and five
 standalones) and both original GNS sanitizer workflows (10 cases each). Original

@@ -6,6 +6,20 @@ last_verified: 2026-10-03
 
 # Foundation 3L pooled physical qualification attempt
 
+## Local startup failure before service measurement (2026-10-03 20:30 UTC)
+
+Local attempt `b52d6e7b-6ebb-44e2-b12c-a2b4fb88bbc0` and Coordinator
+`067e0c39-c482-4fda-8e37-6a1571b4178b` failed before either capture became
+ready. Both actual staged imports passed; both strict capture configurations
+then rejected missing sealed parent directories. This is an attributed staging
+defect, with no native farm or production service measurement. Original failed
+cleanup terminals are preserved. The
+[validation ledger](ContentAvailabilityFoundation3L_3Validation.md#local-capture-startup-attribution-2026-10-03-2030-utc)
+records raw evidence and the reviewed provisioning correction. V3 is revoked;
+new candidate qualification, exact-run cleanup and fresh preflights precede
+another attempt. The client RAM gate passed at 19:52 UTC. Retained F1 physical
+PASS remains valid; Local32, real-TLS Node32 and final acceptance remain pending.
+
 ## Provider continuation checkpoint (2026-10-03 15:10 UTC)
 
 All four original required workflows for tooling source `1ccefb336` and the
