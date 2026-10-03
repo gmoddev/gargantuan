@@ -207,7 +207,8 @@ def AssertCaptureProfile(Config):
     Expected.update({"TraceMaximumMiB": 16384, "NoWrapThresholdMiB": 15360} if Worker else
                     {"DurationSeconds": 600, "AutostopKilobytes": 16777216,
                      "CompletenessBytes": MAX_CAPTURE_BYTES, "RequestedBufferMiB": 64})
-    if any(Marker.get(Key) != Value for Key, Value in Expected.items()):
+    if (any(Marker.get(Key) != Value for Key, Value in Expected.items()) or
+            (Worker and Marker.get("PerformanceMetadataMerge") is not False)):
         raise ValueError("[Qualification:FarmCapture] capture profile marker differs from the pinned candidate")
 
 

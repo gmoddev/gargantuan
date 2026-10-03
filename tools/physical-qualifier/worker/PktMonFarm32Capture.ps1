@@ -171,12 +171,16 @@ if ($Action -eq 'Start') {
     $Guid = ([Guid]$Adapter.InterfaceGuid).ToString('B')
     $Owned = @{Profile=$CaptureProfile; Etl=$Etl; Pcap=$Pcap; InterfaceGuid=$Guid; MiniportIfIndex=$Adapter.ifIndex;
                CapturePort=$CapturePort; CaptureLayers=@('NDIS physical miniport');
-               TraceMaximumMiB=$TraceMaximumMiB; NoWrapThresholdMiB=$NoWrapThresholdMiB}
+               TraceMaximumMiB=$TraceMaximumMiB; NoWrapThresholdMiB=$NoWrapThresholdMiB;
+               PerformanceMetadataMerge=$false}
     $Owned | ConvertTo-Json | Set-Content -LiteralPath $Marker -Encoding UTF8
     $StartArguments = @('trace','start','capture=yes','capturetype=physical',
         "CaptureInterface=$Guid",'Ethernet.Type=IPv4','Protocol=17',
         'IPv4.Address=10.253.3.1','CaptureMultiLayer=no','PacketTruncateBytes=1518',
-        'report=disabled','persistent=no','fileMode=single',"maxSize=$TraceMaximumMiB","traceFile=$Etl")
+        # Preserve the packet logger's ETL instead of rewriting it to merge
+        # optional performance metadata at Stop. V4's merged file contained
+        # metadata buffers in place of six packet-buffer sequence numbers.
+        'report=disabled','perfMerge=no','persistent=no','fileMode=single',"maxSize=$TraceMaximumMiB","traceFile=$Etl")
     InvokeNetsh $StartArguments | Write-Output
     $ActiveStatus = GetTraceStatus
     if (!$ActiveStatus.Contains($Etl)) { throw 'Windows trace did not become task-owned.' }
@@ -190,7 +194,8 @@ if ($Action -eq 'Start') {
     if ($Owned.Profile -ne $CaptureProfile -or
         $Owned.Etl -ne $Etl -or $Owned.Pcap -ne $Pcap -or $Owned.MiniportIfIndex -ne 19 -or
         $Owned.TraceMaximumMiB -ne $TraceMaximumMiB -or
-        $Owned.NoWrapThresholdMiB -ne $NoWrapThresholdMiB) {
+        $Owned.NoWrapThresholdMiB -ne $NoWrapThresholdMiB -or
+        $Owned.PerformanceMetadataMerge -isnot [bool] -or $Owned.PerformanceMetadataMerge) {
         throw 'Capture ownership marker does not match the evidence directory.'
     }
     $Status = GetTraceStatus

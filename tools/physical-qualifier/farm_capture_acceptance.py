@@ -92,6 +92,7 @@ def ZeroLoss(ServerRoot, ClientRoot, RunId):
             WorkerMarker.get("CaptureLayers") != ["NDIS physical miniport"] or
             WorkerMarker.get("TraceMaximumMiB") != 16384 or
             WorkerMarker.get("NoWrapThresholdMiB") != 15360 or
+            WorkerMarker.get("PerformanceMetadataMerge") is not False or
             not (ServerRoot / "farm32-worker-capture.etl").is_file() or
             not 0 < (ServerRoot / "farm32-worker-capture.etl").stat().st_size < directions.MAX_CAPTURE_BYTES):
         raise ValueError("worker Farm32 capture ownership or completeness marker is invalid")

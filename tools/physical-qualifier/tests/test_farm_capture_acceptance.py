@@ -71,7 +71,7 @@ class FarmCaptureAcceptanceTests(unittest.TestCase):
             "Profile": "Farm32Capture16GiB-v2",
             "CapturePort": 39450, "MiniportIfIndex": 19,
             "CaptureLayers": ["NDIS physical miniport"],
-            "TraceMaximumMiB": 16384, "NoWrapThresholdMiB": 15360})
+            "TraceMaximumMiB": 16384, "NoWrapThresholdMiB": 15360, "PerformanceMetadataMerge": False})
         (self.ClientCapture / "farm32-client-capture.pcapng").write_bytes(FIXTURE.Pcap(self.Ports))
         (self.ServerCapture / "farm32-capture-summary.txt").write_text("Total Events  Lost  0\n", encoding="utf-8")
         Save(self.ClientCapture / "farm32-client-capture.json", {
@@ -234,6 +234,9 @@ class FarmCaptureAcceptanceTests(unittest.TestCase):
             (self.ServerCapture, "farm32-netsh-owner.json", {"TraceMaximumMiB": 1024, "NoWrapThresholdMiB": 960}),
             (self.ClientCapture, "farm32-client-capture.json", {"AutostopKilobytes": 1048576}),
             (self.ServerCapture, "farm32-netsh-owner.json", {"Profile": "old"}),
+            (self.ServerCapture, "farm32-netsh-owner.json", {"PerformanceMetadataMerge": None}),
+            (self.ServerCapture, "farm32-netsh-owner.json", {"PerformanceMetadataMerge": True}),
+            (self.ServerCapture, "farm32-netsh-owner.json", {"PerformanceMetadataMerge": 0}),
             (self.ClientCapture, "farm32-client-capture.json", {"Profile": "old"}),
         ):
             File = Root / Name

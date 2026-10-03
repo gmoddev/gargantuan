@@ -88,12 +88,14 @@ try {
     & $HookBlock $First Start 39450
     Assert $global:TestActive 'Capture did not start'
     $Expected = 'trace start capture=yes capturetype=physical CaptureInterface={a33455f8-3b6f-46f1-b981-7c861e6b3cd3} Ethernet.Type=IPv4 Protocol=17 IPv4.Address=10.253.3.1 CaptureMultiLayer=no PacketTruncateBytes=1518 report=disabled persistent=no fileMode=single maxSize=' + $TraceMaximumMiB + ' traceFile=' + $global:TestEtl
+    if ($Farm32) { $Expected = $Expected.Replace('report=disabled persistent=no', 'report=disabled perfMerge=no persistent=no') }
     Assert ([bool]($global:TestCalls | Where-Object {$_ -eq $Expected})) 'Physical-interface trace filters or storage bound changed'
     $Owner = Get-Content (Join-Path $First ($Prefix + 'netsh-owner.json')) -Raw | ConvertFrom-Json
     Assert ($Owner.MiniportIfIndex -eq 19 -and $Owner.CapturePort -eq 39450 -and
             $Owner.TraceMaximumMiB -eq $TraceMaximumMiB -and $Owner.NoWrapThresholdMiB -eq $NoWrapThresholdMiB -and
             ($Owner.CaptureLayers -join ',') -eq 'NDIS physical miniport') 'Capture ownership marker is incomplete'
     if ($Farm32) { Assert ($Owner.Profile -ceq 'Farm32Capture16GiB-v2') 'Farm32 versioned profile is absent' }
+    if ($Farm32) { Assert ($Owner.PerformanceMetadataMerge -is [bool] -and !$Owner.PerformanceMetadataMerge) 'Farm32 performance metadata merge was not disabled' }
     & $HookBlock $First Stop
     Assert (!$global:TestActive) 'Capture did not stop'
     if ($Farm32) {

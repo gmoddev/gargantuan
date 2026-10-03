@@ -86,12 +86,29 @@ class CaptureCampaignTests(unittest.TestCase):
         Row = {"Profile": "Farm32Capture16GiB-v2"}
         if Role == "SERVER":
             Name = "farm32-netsh-owner.json"
-            Row.update(TraceMaximumMiB=16384, NoWrapThresholdMiB=15360)
+            Row.update(TraceMaximumMiB=16384, NoWrapThresholdMiB=15360, PerformanceMetadataMerge=False)
         else:
             Name = "farm32-client-capture.json"
             Row.update(DurationSeconds=600, AutostopKilobytes=16777216,
                        CompletenessBytes=15 * 1024 ** 3, RequestedBufferMiB=64)
         WriteJson(self.Capture / Name, Row)
+
+    def test_worker_performance_metadata_merge_is_explicitly_disabled(self):
+        Config = self.Config("SERVER")
+        self.Capture.mkdir()
+        self.CaptureMarker("SERVER")
+        Marker = self.Capture / "farm32-netsh-owner.json"
+        Original = json.loads(Marker.read_text())
+        campaign.AssertCaptureProfile(Config)
+        for Value in (None, True, 0, "false"):
+            Row = dict(Original)
+            if Value is None:
+                Row.pop("PerformanceMetadataMerge")
+            else:
+                Row["PerformanceMetadataMerge"] = Value
+            WriteJson(Marker, Row)
+            with self.subTest(Value=Value), self.assertRaises(ValueError):
+                campaign.AssertCaptureProfile(Config)
 
     def test_client_requested_buffer_marker_is_pinned(self):
         Config = self.Config("CLIENT")
