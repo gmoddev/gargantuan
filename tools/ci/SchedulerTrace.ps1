@@ -14,8 +14,19 @@ function GetFixedCase([ValidateSet('Full','AckStats','Aggregate32Structural')][s
     }
     throw 'Unsupported fixed workload case'
 }
+function NormalizeChildExit([object]$ChildExit) {
+    # GetExitCodeProcess emits a DWORD; PowerShell exit consumes signed Int32.
+    # Normalize only the returned process status. Raw metadata/receipts retain
+    # the original unsigned value and its exact failure evidence.
+    if ($ChildExit -isnot [int] -and $ChildExit -isnot [long] -and
+        $ChildExit -isnot [uint32] -and $ChildExit -isnot [uint64]) { return 125 }
+    $Value = [decimal]$ChildExit
+    if ($Value -lt -2147483648 -or $Value -gt 4294967295) { return 125 }
+    if ($Value -gt 2147483647) { return [int]([long]$Value - 4294967296L) }
+    return [int]$Value
+}
 function ResolveExit([object]$ChildExit, [int]$ControllerExit, [bool]$TimedOut, [int]$CleanupExit) {
-    if ($null -ne $ChildExit -and $ChildExit -ne 0) { return [int]$ChildExit }
+    if ($null -ne $ChildExit -and $ChildExit -ne 0) { return NormalizeChildExit $ChildExit }
     if ($TimedOut -or $CleanupExit -ne 0) { return 125 }
     return $ControllerExit
 }
@@ -27,7 +38,7 @@ function InvokePair([scriptblock]$InvokeCase) {
     else { $Results += [pscustomobject]@{ Case='AckStats'; State='NOT_STARTED'; ExitCode=$null; ChildExitCode=$null; CleanupVerified=$false } }
     $ExitCode = 0
     foreach ($Result in $Results) {
-        if ($null -ne $Result.ChildExitCode -and $Result.ChildExitCode -ne 0) { $ExitCode = [int]$Result.ChildExitCode; break }
+        if ($null -ne $Result.ChildExitCode -and $Result.ChildExitCode -ne 0) { $ExitCode = NormalizeChildExit $Result.ChildExitCode; break }
         if ($Result.State -ne 'COMPLETED' -or $Result.ExitCode -ne 0) { $ExitCode = 125 }
     }
     return [pscustomobject]@{ Format='GargantuanSchedulerTracePair'; Version=1; Cases=$Results; ExitCode=$ExitCode
@@ -43,9 +54,17 @@ if ($SelfTest) {
         (GetFixedCase 'AckStats').Argument -ne '--ack-stats-boundary') { throw 'Fixed case binding test failed' }
     foreach ($ExitCase in @(
         @(17, 125, $true, 125, 17), @(0, 0, $false, 0, 0), @(0, 125, $false, 0, 125),
-        @($null, 125, $false, 0, 125), @(0, 0, $true, 0, 125), @(0, 0, $false, 125, 125)
+        @($null, 125, $false, 0, 125), @(0, 0, $true, 0, 125), @(0, 0, $false, 125, 125),
+        @(3221226505L, 125, $true, 125, -1073740791), @(4294967295L, 125, $true, 125, -1),
+        @(-1073740791, 125, $true, 125, -1073740791), @(-2147483648, 125, $true, 125, -2147483648)
     )) {
         if ((ResolveExit $ExitCase[0] $ExitCase[1] $ExitCase[2] $ExitCase[3]) -ne $ExitCase[4]) { throw 'Exit precedence test failed' }
+    }
+    foreach ($ExitCase in @(@(0, 0), @(17, 17), @(2147483647, 2147483647), @(2147483648L, -2147483648),
+                            @(3221226505L, -1073740791), @(4294967295L, -1), @(-1, -1),
+                            @(-2147483648, -2147483648), @(4294967296L, 125), @(-2147483649L, 125),
+                            @('3221226505', 125), @(17.5, 125), @($null, 125))) {
+        if ((NormalizeChildExit $ExitCase[0]) -ne $ExitCase[1]) { throw 'DWORD exit normalization test failed' }
     }
     foreach ($FirstExit in @(0, 17)) {
         foreach ($Clean in @($false, $true)) {
@@ -70,6 +89,15 @@ if ($SelfTest) {
         $PairResult.Cases[0].ChildExitCode -ne 0 -or $PairResult.Cases[1].ChildExitCode -ne 23) {
         throw 'Pair second-child failure retention test failed'
     }
+    $PairResult = InvokePair {
+        param($Name)
+        [pscustomobject]@{ Case=$Name; State='COMPLETED'; ExitCode=-1073740791; ChildExitCode=3221226505L; CleanupVerified=$true }
+    }
+    if ($PairResult.ExitCode -ne -1073740791 -or $PairResult.Cases.Count -ne 2 -or
+        $PairResult.Cases[0].ChildExitCode -ne 3221226505L -or $PairResult.Cases[1].ChildExitCode -ne 3221226505L) {
+        throw 'Pair unsigned native status retention test failed'
+    }
+    Write-Output '[Qualification:SchedulerTrace] dword-exit-normalization=PASS raw-status-preserved'
     Write-Output '[Qualification:SchedulerTrace] wrapper-self-test=PASS no-session-or-child-created'
     exit 0
 }

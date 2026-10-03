@@ -399,6 +399,7 @@ class SchedulerTraceTests(unittest.TestCase):
         )
         self.assertEqual(Result.returncode, 0, Result.stdout + Result.stderr)
         self.assertIn("wrapper-self-test=PASS no-session-or-child-created", Result.stdout)
+        self.assertIn("dword-exit-normalization=PASS raw-status-preserved", Result.stdout)
 
     @unittest.skipUnless(os.environ.get("SCHEDULER_TRACE_TEST_HELPER"), "native compile-only helper not supplied")
     def test_native_payload_bounds_and_ownership_without_capture(self):
