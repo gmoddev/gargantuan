@@ -9,11 +9,24 @@ namespace gargantuan::test_detail {
 // Diagnostics only. Bounds follow the existing 480-frame/40-frame submission
 // cadence and final overload submission, never admission or latency policy.
 struct AggregatePeerEvidence {
+	struct Identity {
+		std::uint32_t Phase = 0, Peer = 0, Slot = 0, Generation = 0;
+	};
 	using RemoteEvidence = BoundedWorkloadRemoteEvidence<(480 / 40) * 16 + 16>;
 	RemoteEvidence Remote;
 	std::uint64_t RequestSequence = 0;
 	std::uint32_t Peer = 0, Slot = 0, Generation = 0, Phase = 0;
 	bool Configured = false, Invalid = false;
+	[[nodiscard]] Identity CaptureIdentity() const noexcept { return {Phase, Peer, Slot, Generation}; }
+	void End(const Identity &Captured, std::uint64_t Id, std::uint64_t Step,
+		std::uint64_t Ns, std::uint64_t Thread, int TerminalStatus, bool PayloadMatched,
+		const WorkloadEndpointCounters &Counters = {}) noexcept {
+		if (!Configured || Captured.Phase != Phase || Captured.Peer != Peer ||
+			Captured.Slot != Slot || Captured.Generation != Generation) {
+			Invalid = true; return;
+		}
+		Remote.End(Id, Step, Ns, Thread, TerminalStatus, PayloadMatched, Counters);
+	}
 	void Configure(std::uint32_t PhaseValue, std::uint32_t PeerValue,
 		std::uint32_t SlotValue, std::uint32_t GenerationValue) noexcept {
 		if (PhaseValue > 2 || PeerValue >= 32 || !SlotValue || !GenerationValue || (!Configured && PhaseValue != 0) ||

@@ -317,6 +317,7 @@ void RunAggregateReliableGameplay(Engine &ServerRuntime, Engine &PrimaryRuntime,
 						std::vector<WireValue> Arguments{static_cast<int>(Index), std::string(3072 - 62, static_cast<char>('a' + Call))};
 						auto &Diagnostic = *AggregatePeers[Index];
 						const auto DiagnosticId = ++Diagnostic.RequestSequence;
+						const auto DiagnosticIdentity = Diagnostic.CaptureIdentity();
 						test_detail::WorkloadEndpointCounters StartCounters;
 						StartCounters.BeforeNs = test_detail::WorkloadTimestamp(Clock::now());
 						StartCounters.BeforeCpu = test_detail::CaptureWorkloadCpu();
@@ -328,7 +329,7 @@ void RunAggregateReliableGameplay(Engine &ServerRuntime, Engine &PrimaryRuntime,
 						++Sample.Pending;
 						Diagnostic.Remote.Begin(DiagnosticId, true, false, Tick, test_detail::WorkloadTimestamp(Submitted), SubmitThread, StartCounters);
 						const auto Sent = Managers[Index]->StartRequest(Connections[Index], Function->GetNetworkObjectId(), Arguments,
-							[&, Index, Arguments, Submitted, DiagnosticId](RemoteRequestResult Result) {
+							[&, Index, Arguments, Submitted, DiagnosticId, DiagnosticIdentity](RemoteRequestResult Result) {
 								auto &Completed = Samples[Index];
 								--Completed.Pending;
 								++Completed.Completed;
@@ -342,7 +343,7 @@ void RunAggregateReliableGameplay(Engine &ServerRuntime, Engine &PrimaryRuntime,
 								const auto EndThread = test_detail::WorkloadNativeThread();
 								EndCounters.Sleep = AggregateSleeps.Snapshot(test_detail::WorkloadTimestamp(CompletedAt), EndThread);
 								Completed.Latencies.push_back(std::chrono::duration<double, std::milli>(CompletedAt - Submitted).count());
-								AggregatePeers[Index]->Remote.End(DiagnosticId, Tick, test_detail::WorkloadTimestamp(CompletedAt), EndThread,
+								AggregatePeers[Index]->End(DiagnosticIdentity, DiagnosticId, Tick, test_detail::WorkloadTimestamp(CompletedAt), EndThread,
 									static_cast<int>(Result.Outcome.Status), Result.Results == Arguments, EndCounters);
 							});
 						Diagnostic.Remote.Submitted(DiagnosticId, Sent.Accepted(), Tick, test_detail::WorkloadTimestamp(Clock::now()),

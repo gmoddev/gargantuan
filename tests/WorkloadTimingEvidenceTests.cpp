@@ -243,6 +243,7 @@ int main() {
 	static_assert(AggregatePeerEvidence::RemoteEvidence::Capacity == 208);
 	static_assert(WorkloadRemoteEvidence::Capacity == 1062);
 	Aggregate->Configure(0, 7, 1, 3);
+	const auto OriginalAggregateIdentity = Aggregate->CaptureIdentity();
 	Aggregate->Remote.Begin(1, true, false, 400, 100, 123, StartCounters);
 	Aggregate->Remote.End(1, 400, 100, 123, 0, true, StartCounters);
 	Aggregate->Remote.Submitted(1, true, 400, 100, 123); // Timestamp ties and inline completion.
@@ -264,6 +265,14 @@ int main() {
 	Aggregate->Configure(1, 7, 1, 3);
 	Check(!Aggregate->Invalid && Aggregate->Remote.Count == 0 && Aggregate->Phase == 1 &&
 		Aggregate->Context().find("phase_index=1") != std::string::npos, "new ordinal resets only diagnostic records after phase evidence was emitted");
+	Aggregate->Remote.Begin(1, true, false, 411, 600, 123);
+	Aggregate->Remote.Submitted(1, true, 411, 600, 123);
+	Aggregate->End(OriginalAggregateIdentity, 1, 412, 700, 123, 0, true);
+	Check(Aggregate->Invalid && !Aggregate->Remote.Records[0].Terminal && Aggregate->Remote.Records[0].StartNs == 600,
+		"late callback from the previous phase cannot relabel a reused local ID as current evidence");
+	Aggregate->End(Aggregate->CaptureIdentity(), 1, 412, 700, 123, 0, true);
+	Check(Aggregate->Remote.Records[0].Terminal && Aggregate->Remote.Records[0].EndNs == 700,
+		"matching immutable identity retains the original callback endpoint despite prior diagnostic invalidity");
 	Aggregate->Configure(1, 7, 1, 3);
 	Check(Aggregate->Invalid && Aggregate->Phase == 1, "duplicate phase cannot reuse a phase identity");
 	AggregatePeerEvidence WrongPhase;
@@ -274,6 +283,19 @@ int main() {
 	WrongGeneration.Configure(1, 1, 2, 4);
 	Check(WrongGeneration.Invalid && WrongGeneration.Generation == 3 && WrongGeneration.Phase == 0,
 		"generation change cannot relabel captured aggregate evidence");
+	for (int Component = 0; Component < 3; ++Component) {
+		AggregatePeerEvidence IdentityMismatch;
+		IdentityMismatch.Configure(0, 1, 2, 3);
+		IdentityMismatch.Remote.Begin(1, true, false, 1, 100, 123);
+		IdentityMismatch.Remote.Submitted(1, true, 1, 100, 123);
+		auto Captured = IdentityMismatch.CaptureIdentity();
+		if (Component == 0) ++Captured.Peer;
+		if (Component == 1) ++Captured.Slot;
+		if (Component == 2) ++Captured.Generation;
+		IdentityMismatch.End(Captured, 1, 2, 200, 123, 0, true);
+		Check(IdentityMismatch.Invalid && !IdentityMismatch.Remote.Records[0].Terminal,
+			"foreign peer, slot or generation completion cannot satisfy the current diagnostic obligation");
+	}
 	Aggregate->Remote.Reset();
 	for (std::size_t Index = 0; Index < 208; ++Index) {
 		Aggregate->Remote.Begin(Index + 1, true, false, Index, Index * 10 + 1, 123);
