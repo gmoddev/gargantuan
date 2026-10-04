@@ -306,7 +306,7 @@ int DecodeOnly(const fs::path &Input, const fs::path &Destination, DWORD MainThr
         throw std::runtime_error("offline decode output parent must be a directory");
     const auto Parent = fs::canonical(Destination.parent_path());
     for (auto Current = Parent;; Current = Current.parent_path()) {
-        if (Current == Etl.parent_path())
+        if (fs::equivalent(Current, Etl.parent_path()))
             throw std::runtime_error("offline decode output cannot be inside the retained input directory");
         if (Current == Current.parent_path()) break;
     }

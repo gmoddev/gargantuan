@@ -725,6 +725,7 @@ class SchedulerTraceTests(unittest.TestCase):
                      (Source, Root / 'inside-original'), (Root / 'missing.etl', Root / 'output')]
             # Both source and output parent must reject actual Windows junctions.
             if os.name == 'nt':
+                Cases.append((Source, Path(str(Root).upper()) / 'inside-original-case'))
                 Result = subprocess.run(['cmd', '/d', '/c', 'mklink /J "' + str(Linked) + '" "' + str(Target) + '"'],
                     text=True, capture_output=True, timeout=30, creationflags=subprocess.CREATE_NO_WINDOW)
                 self.assertEqual(Result.returncode, 0, Result.stdout + Result.stderr)

@@ -313,8 +313,9 @@ a kernel session or native workload.
 Decoded rows remain streamed under the unchanged 512 MiB CSV byte cap and
 180-second decode deadline. Each emitted row has positive byte length, so that
 byte cap also bounds the row counter far below its 64-bit range. There is no
-independent five-million-row cutoff: it prematurely truncated a complete
-retained Full ETL while its decoded CSV was only 309,432,716 bytes. That original
+independent five-million-row cutoff: it prematurely truncated a retained Full
+ETL whose capture brackets all cases while its decoded CSV was only 309,432,716
+bytes. That original
 development diagnostic remains failed; loss-free ETL and successful native
 execution do not retroactively qualify its incomplete original CSV.
 
