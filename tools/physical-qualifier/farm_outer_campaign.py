@@ -11,6 +11,7 @@ import argparse
 import base64
 from datetime import datetime, timedelta, timezone
 import hashlib
+import gzip
 import json
 import os
 from pathlib import Path, PureWindowsPath
@@ -178,6 +179,17 @@ class Transport:
         Encoded = base64.b64encode(Script.encode("utf-16le")).decode("ascii")
         Checked(["ssh", "-o", "BatchMode=yes", WORKER_ALIAS, "pwsh.exe",
                  "-NoProfile", "-NonInteractive", "-EncodedCommand", Encoded], 20)
+
+    def GameFirewall(self, Plan, Remove=False):
+        """Use only the sealed projection's executable; never change existing rules."""
+        Script = GameFirewallScript(Plan, Remove)
+        Encoded, Payload = GameFirewallPayload(Script)
+        Arguments = ["ssh", "-o", "BatchMode=yes", WORKER_ALIAS, "pwsh.exe",
+                     "-NoProfile", "-NonInteractive", "-EncodedCommand", Encoded]
+        if len(" ".join(Arguments)) > 7600:
+            raise ValueError("[Qualification:FarmOuter] game firewall remote command exceeds bound")
+        return subprocess.run(Arguments, input=Payload, check=True, capture_output=True, text=True,
+                              timeout=180, creationflags=Hidden())
 
     def MakeWorkerToolRoot(self, Root):
         Root = WorkerSandbox(Root)
@@ -675,6 +687,246 @@ def RequireFreshPreflights(PrivateRoot, Identity):
         Tickets.Fresh(Row.get("ObservedUtc"), 120, "role preflight")
 
 
+def GameFirewallPlan(PrivateRoot, Identity):
+    """Join local sealed inputs to the already prepared native Server projection."""
+    RunId = Identity["RunId"]
+    if not re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", RunId):
+        raise ValueError("[Qualification:FarmOuter] invalid game firewall run identity")
+    Host = ReadJson(PrivateRoot / "host-config.json")
+    TicketPath = PrivateRoot / "SERVER" / "ticket.json"
+    Ticket = ReadJson(TicketPath)
+    FarmPath = PrivateRoot / "SERVER" / "farm-config.json"
+    Farm = ReadJson(FarmPath)
+    CopyPlan = ReadJson(PrivateRoot / "copy-plan.json")
+    FarmPins = [Row for Row in CopyPlan["Files"] if Row["Endpoint"] == "SERVER" and
+                Row["Name"] == "farm-config"]
+    Manifest = ReadJson(Host["ManifestPath"])
+    ManifestHash = Digest(Host["ManifestPath"])
+    Preflight = ReadJson(PrivateRoot / "server-preflight.json")
+    RuntimeRoot = str(PureWindowsPath(WorkerSandbox(Farm["RunRegistryRoot"])) /
+                      (RunId + ".Server.runtime"))
+    if (Host["RunId"] != RunId or Ticket["RunId"] != RunId or Farm["RunId"] != RunId or
+            CopyPlan["RunId"] != RunId or Manifest["RunId"] != RunId or
+            Host["Roles"]["SERVER"]["TicketSha256"] != Digest(TicketPath) or
+            len(FarmPins) != 1 or Path(FarmPins[0]["Source"]).resolve() != FarmPath.resolve() or
+            FarmPins[0]["Sha256"] != Digest(FarmPath) or
+            Ticket["FarmConfigSha256"] != Digest(FarmPath) or
+            Manifest["Endpoint"] != "10.253.3.2:39450" or
+            Host["ManifestSha256"] != ManifestHash or Ticket["ManifestSha256"] != ManifestHash or
+            Farm["ManifestSHA256"] != ManifestHash or
+            Ticket["SourceCommit"] != Manifest["SourceCommit"] or
+            Farm["SourceCommit"] != Manifest["SourceCommit"] or
+            Preflight["SourceCommit"] != Manifest["SourceCommit"] or
+            Preflight["RunId"] != RunId or Preflight["Role"] != "Server" or
+            Preflight["Endpoint"] != Manifest["Endpoint"] or
+            Preflight["ManifestSha256"] != ManifestHash or
+            Ticket["PreflightSha256"] != Digest(PrivateRoot / "server-preflight.json") or
+            Preflight["RuntimeProjectionRoot"] != RuntimeRoot or
+            Preflight["GameInterfaceAddress"] != "10.253.3.2"):
+        raise ValueError("[Qualification:FarmOuter] game firewall sealed projection binding changed")
+    Plan = {"RunId": RunId, "Name": "Codex-Gargantuan-Farm32-Game-" + RunId,
+            "OwnerId": str(uuid.uuid4()), "Program": str(PureWindowsPath(RuntimeRoot) / "GargantuanServer.exe"),
+            "ProgramSha256": Manifest["ServerSha256"].lower(), "SourceCommit": Manifest["SourceCommit"],
+            "ManifestPath": WorkerSandbox(Farm["ManifestPath"]), "ManifestSha256": ManifestHash,
+            "PackageRoot": WorkerSandbox(Farm["PackageRoot"]), "RunRegistryRoot": Farm["RunRegistryRoot"],
+            "RuntimeRoot": RuntimeRoot, "RuntimeReceiptSha256": Preflight["RuntimeProjectionReceiptSha256"],
+            "DeploymentSha256": Manifest["ServerDeploymentSha256"].lower(),
+            "SupervisorPath": WorkerSandbox(Farm["SupervisorPath"]),
+            "SupervisorSha256": Farm["SupervisorSHA256"].lower()}
+    ValidateGameFirewallPlan(Plan)
+    return Plan
+
+
+def ValidateGameFirewallPlan(Plan):
+    Keys = {"RunId", "Name", "OwnerId", "Program", "ProgramSha256", "SourceCommit", "ManifestPath",
+            "ManifestSha256", "PackageRoot", "RunRegistryRoot", "RuntimeRoot", "RuntimeReceiptSha256",
+            "DeploymentSha256", "SupervisorPath", "SupervisorSha256"}
+    UuidPattern = r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}"
+    if (not isinstance(Plan, dict) or set(Plan) != Keys or
+            any(not isinstance(Value, str) for Value in Plan.values()) or
+            not re.fullmatch(UuidPattern, Plan["RunId"]) or not re.fullmatch(UuidPattern, Plan["OwnerId"]) or
+            Plan["Name"] != "Codex-Gargantuan-Farm32-Game-" + Plan["RunId"] or
+            not re.fullmatch(r"[0-9a-f]{40}", Plan["SourceCommit"]) or
+            any(not SHA.fullmatch(Plan[Key]) for Key in Keys if Key.endswith("Sha256"))):
+        raise ValueError("[Qualification:FarmOuter] invalid game firewall plan")
+    for Key in ("Program", "ManifestPath", "PackageRoot", "RunRegistryRoot", "RuntimeRoot", "SupervisorPath"):
+        WorkerSandbox(Plan[Key])
+    ExpectedRoot = str(PureWindowsPath(Plan["RunRegistryRoot"]) / (Plan["RunId"] + ".Server.runtime"))
+    if Plan["RuntimeRoot"] != ExpectedRoot or Plan["Program"] != str(PureWindowsPath(ExpectedRoot) / "GargantuanServer.exe"):
+        raise ValueError("[Qualification:FarmOuter] game firewall executable is not the exact runtime projection")
+
+
+def GameFirewallPayload(Script):
+    """Keep SSH argv small; authenticate bounded in-memory bytes before execution."""
+    Bytes = Script.encode("utf-8")
+    Packed = gzip.compress(Bytes, mtime=0)
+    if not 0 < len(Bytes) <= 16384 or not 0 < len(Packed) <= 4096:
+        raise ValueError("[Qualification:FarmOuter] game firewall script size exceeds bound")
+    Expected = hashlib.sha256(Bytes).hexdigest()
+    Bootstrap = (r"""
+$ErrorActionPreference='Stop';$ProgressPreference='SilentlyContinue'
+$Data=[Console]::In.ReadToEnd()
+if ($Data.Length -gt 8192) { throw 'game UDP compressed input exceeds bound' }
+$Packed=[Convert]::FromBase64String($Data)
+if ($Packed.Length -eq 0 -or $Packed.Length -gt 4096) { throw 'game UDP compressed bytes exceed bound' }
+$Memory=[IO.MemoryStream]::new($Packed,$false)
+$Zip=[IO.Compression.GZipStream]::new($Memory,[IO.Compression.CompressionMode]::Decompress)
+$Output=[IO.MemoryStream]::new();$Buffer=[byte[]]::new(1024)
+try {
+    while (($Count=$Zip.Read($Buffer,0,$Buffer.Length)) -gt 0) {
+        if ($Output.Length + $Count -gt 16384) { throw 'game UDP decompressed bytes exceed bound' }
+        $Output.Write($Buffer,0,$Count)
+    }
+} finally { $Zip.Dispose();$Memory.Dispose() }
+$Bytes=$Output.ToArray();$Output.Dispose()
+if ($Bytes.Length -ne """ + str(len(Bytes)) +
+                 " -or [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($Bytes)).ToLowerInvariant() -cne '" +
+                 Expected + r"""') { throw 'game UDP generated-script bytes changed' }
+$Text=[Text.UTF8Encoding]::new($false,$true).GetString($Bytes)
+& ([scriptblock]::Create($Text))
+""")
+    return base64.b64encode(Bootstrap.encode("utf-16le")).decode("ascii"), base64.b64encode(Packed).decode("ascii")
+
+
+def GameFirewallScript(Plan, Remove=False):
+    ValidateGameFirewallPlan(Plan)
+    Payload = base64.b64encode(json.dumps(Plan).encode("utf-8")).decode("ascii")
+    Prefix = ("$ErrorActionPreference='Stop';$ProgressPreference='SilentlyContinue';\n"
+              "$Plan=([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('" + Payload +
+              "'))|ConvertFrom-Json -AsHashtable);\n")
+    Common = r'''
+$Description = 'GargantuanFarm32GameUDP:' + $Plan.RunId + ':' + $Plan.OwnerId + ':' + $Plan.ProgramSha256
+function Assert-OwnedRule($Rule, [switch]$Effective) {
+    if (@($Rule).Count -ne 1 -or $Rule.Name -cne $Plan.Name -or $Rule.DisplayName -cne $Plan.Name -or
+        $Rule.Description -cne $Description -or [string]$Rule.Direction -cne 'Inbound' -or
+        [string]$Rule.Action -cne 'Allow' -or [string]$Rule.Enabled -cne 'True' -or
+        [string]$Rule.Profile -cne 'Private') { throw 'game UDP rule ownership or policy changed' }
+    $App = @($Rule | Get-NetFirewallApplicationFilter)
+    $Port = @($Rule | Get-NetFirewallPortFilter)
+    $Address = @($Rule | Get-NetFirewallAddressFilter)
+    $Interface = @($Rule | Get-NetFirewallInterfaceFilter)
+    $InterfaceType = @($Rule | Get-NetFirewallInterfaceTypeFilter)
+    $Service = @($Rule | Get-NetFirewallServiceFilter)
+    $Security = @($Rule | Get-NetFirewallSecurityFilter)
+    if ($App.Count -ne 1 -or $App[0].Program -cne $Plan.Program -or
+        ($null -ne $App[0].Package -and [string]$App[0].Package -cne 'Any') -or
+        $Service.Count -ne 1 -or [string]$Service[0].Service -cne 'Any' -or
+        $InterfaceType.Count -ne 1 -or [string]$InterfaceType[0].InterfaceType -cne 'Any' -or
+        $Security.Count -ne 1 -or [string]$Security[0].Authentication -cne 'NotRequired' -or
+        [string]$Security[0].Encryption -cne 'NotRequired' -or
+        [string]$Security[0].OverrideBlockRules -cne 'False' -or
+        [string]$Security[0].LocalUser -cne 'Any' -or [string]$Security[0].RemoteUser -cne 'Any' -or
+        [string]$Security[0].RemoteMachine -cne 'Any' -or $Port.Count -ne 1 -or
+        [string]$Port[0].Protocol -notin @('UDP', '17') -or @($Port[0].LocalPort).Count -ne 1 -or
+        [string]$Port[0].LocalPort -cne '39450' -or [string]$Port[0].RemotePort -cne 'Any' -or
+        $Address.Count -ne 1 -or @($Address[0].LocalAddress).Count -ne 1 -or
+        [string]$Address[0].LocalAddress -cne '10.253.3.2' -or @($Address[0].RemoteAddress).Count -ne 1 -or
+        [string]$Address[0].RemoteAddress -cne '10.253.3.1' -or $Interface.Count -ne 1 -or
+        @($Interface[0].InterfaceAlias).Count -ne 1 -or
+        ($Effective -and [string]$Interface[0].InterfaceAlias -cne $GameInterface)) {
+        throw 'game UDP rule application, address, port or interface changed'
+    }
+}
+function Remove-OwnedRule {
+    $Rule = @(Get-NetFirewallRule -PolicyStore PersistentStore -Name $Plan.Name -ErrorAction SilentlyContinue)
+    if ($Rule.Count -eq 0) {
+        if (Get-NetFirewallRule -PolicyStore ActiveStore -Name $Plan.Name -ErrorAction SilentlyContinue) {
+            throw 'game UDP effective rule remains without owned persistent rule'
+        }
+        return
+    }
+    $CleanupIp = @(Get-NetIPAddress -IPAddress '10.253.3.2' -AddressFamily IPv4 -ErrorAction Stop)
+    if ($CleanupIp.Count -ne 1) { throw 'game UDP cleanup interface is ambiguous' }
+    $GameInterface = [string]$CleanupIp[0].InterfaceAlias
+    Assert-OwnedRule $Rule -Effective
+    $Rule | Remove-NetFirewallRule -ErrorAction Stop
+    if ((Get-NetFirewallRule -PolicyStore PersistentStore -Name $Plan.Name -ErrorAction SilentlyContinue) -or
+        (Get-NetFirewallRule -PolicyStore ActiveStore -Name $Plan.Name -ErrorAction SilentlyContinue)) {
+        throw 'owned game UDP rule removal was not observed'
+    }
+}
+'''
+    if Remove:
+        return Prefix + Common + "\nRemove-OwnedRule\n"
+    return Prefix + Common + r'''
+if ((Get-NetFirewallRule -PolicyStore PersistentStore -Name $Plan.Name -ErrorAction SilentlyContinue) -or
+    (Get-NetFirewallRule -PolicyStore ActiveStore -Name $Plan.Name -ErrorAction SilentlyContinue)) {
+    throw 'stale task-owned game UDP rule'
+}
+if ((Get-FileHash -LiteralPath $Plan.SupervisorPath -Algorithm SHA256).Hash -ine $Plan.SupervisorSha256) {
+    throw 'game UDP projection validator hash changed'
+}
+$Tokens = $null; $Errors = $null
+$Ast = [Management.Automation.Language.Parser]::ParseFile($Plan.SupervisorPath, [ref]$Tokens, [ref]$Errors)
+$Names = @('Assert-DeploymentManifest', 'Assert-ProjectionPlainPath', 'Read-ProjectionJson',
+    'Get-NativeRuntimePlan', 'Get-RuntimeProjectionPath', 'Assert-RuntimeProjection', 'Assert-PreparedRuntimeProjection')
+$Definitions = @($Ast.FindAll({ param($Node)
+    $Node -is [Management.Automation.Language.FunctionDefinitionAst] -and $Node.Name -in $Names
+}, $true))
+if ($Errors.Count -ne 0 -or $Definitions.Count -ne $Names.Count -or
+    @($Names | Where-Object { $Name = $_; @($Definitions | Where-Object Name -CEQ $Name).Count -ne 1 }).Count -ne 0) {
+    throw 'game UDP projection validators invalid'
+}
+foreach ($Definition in $Definitions) { . ([scriptblock]::Create($Definition.Extent.Text)) }
+if ((Get-FileHash -LiteralPath $Plan.ManifestPath -Algorithm SHA256).Hash -ine $Plan.ManifestSha256) {
+    throw 'game UDP manifest changed'
+}
+$Manifest = Read-ProjectionJson -Path $Plan.ManifestPath
+if ($Manifest.RunId -cne $Plan.RunId -or $Manifest.SourceCommit -cne $Plan.SourceCommit -or
+    $Manifest.Endpoint -cne '10.253.3.2:39450' -or $Manifest.ServerSha256 -ine $Plan.ProgramSha256 -or
+    $Manifest.ServerDeploymentSha256 -ine $Plan.DeploymentSha256) { throw 'game UDP native identity changed' }
+$NativePlan = Get-NativeRuntimePlan -LocalRoot $Plan.PackageRoot -DeploymentSha256 $Plan.DeploymentSha256 `
+    -SourceCommit $Plan.SourceCommit -LocalRole Server
+$Runtime = Assert-PreparedRuntimeProjection -LocalRoot $Plan.PackageRoot -Registry $Plan.RunRegistryRoot `
+    -LocalRunId $Plan.RunId -LocalRole Server -Plan $NativePlan
+if ($Runtime -cne $Plan.RuntimeRoot -or (Join-Path $Runtime $NativePlan.Binary) -cne $Plan.Program -or
+    (Get-FileHash -LiteralPath ($Runtime + '.json') -Algorithm SHA256).Hash -ine $Plan.RuntimeReceiptSha256 -or
+    (Get-FileHash -LiteralPath $Plan.Program -Algorithm SHA256).Hash -ine $Plan.ProgramSha256) {
+    throw 'game UDP runtime projection changed'
+}
+$GameIp = @(Get-NetIPAddress -IPAddress '10.253.3.2' -AddressFamily IPv4 -ErrorAction Stop)
+if ($GameIp.Count -ne 1) { throw 'game UDP local fiber address is ambiguous' }
+$Profile = @(Get-NetConnectionProfile -InterfaceIndex $GameIp[0].InterfaceIndex -ErrorAction Stop)
+if ($Profile.Count -ne 1 -or [string]$Profile[0].NetworkCategory -cne 'Private') {
+    throw 'game UDP fiber interface is not Private'
+}
+$GameInterface = [string]$GameIp[0].InterfaceAlias
+if ([string]::IsNullOrWhiteSpace($GameInterface)) { throw 'game UDP fiber interface alias absent' }
+# Deny conservatively when an inbound Block could match this program/UDP port.
+# Address/service/interface restrictions are deliberately not used to dismiss a Block.
+foreach ($Block in @(Get-NetFirewallRule -PolicyStore ActiveStore -Enabled True -Direction Inbound -Action Block)) {
+    if ([string]$Block.Profile -ne 'Any' -and 'Private' -notin @(([string]$Block.Profile -split ',') | ForEach-Object Trim)) { continue }
+    $App = @($Block | Get-NetFirewallApplicationFilter)
+    $Port = @($Block | Get-NetFirewallPortFilter)
+    if ($App.Count -ne 1 -or $Port.Count -ne 1) { throw 'game UDP Block filters unavailable' }
+    if ($App[0].Program -ine 'Any' -and $App[0].Program -ine $Plan.Program) { continue }
+    if ([string]$Port[0].Protocol -notin @('Any', '256', 'UDP', '17')) { continue }
+    foreach ($LocalPort in @($Port[0].LocalPort)) {
+        if ([string]$LocalPort -eq 'Any') { throw 'matching inbound game UDP Block rule' }
+        if ([string]$LocalPort -match '^([0-9]+)(?:-([0-9]+))?$') {
+            $Lower = [long]$Matches[1]; $Upper = if ($Matches[2]) { [long]$Matches[2] } else { $Lower }
+            if ($Lower -le 39450 -and $Upper -ge 39450) { throw 'matching inbound game UDP Block rule' }
+        } else { throw 'ambiguous inbound game UDP Block port' }
+    }
+}
+$Added = $false
+try {
+    New-NetFirewallRule -PolicyStore PersistentStore -Name $Plan.Name -DisplayName $Plan.Name `
+        -Description $Description -Direction Inbound -Action Allow -Protocol UDP -LocalPort 39450 `
+        -RemotePort Any -LocalAddress '10.253.3.2' -RemoteAddress '10.253.3.1' -Program $Plan.Program `
+        -InterfaceAlias $GameInterface -Profile Private -Enabled True -ErrorAction Stop | Out-Null
+    $Added = $true
+    Assert-OwnedRule @(Get-NetFirewallRule -PolicyStore PersistentStore -Name $Plan.Name -ErrorAction Stop) -Effective
+    Assert-OwnedRule @(Get-NetFirewallRule -PolicyStore ActiveStore -Name $Plan.Name -ErrorAction Stop) -Effective
+    Write-Output '[Qualification:GameUDP] OWNED_RULE_EFFECTIVE'
+} catch {
+    $Failure = $_
+    if ($Added) { Remove-OwnedRule }
+    throw $Failure
+}
+'''
+
+
 def Launch(PrivateRoot, SpecPath, WorkerPython, WorkerHelper, TransportInstance=None):
     """Start a sealed worker host and two roles; never start before control proof."""
     AssertPrivate(PrivateRoot)
@@ -684,6 +936,7 @@ def Launch(PrivateRoot, SpecPath, WorkerPython, WorkerHelper, TransportInstance=
     Roots = {Role: Spec["Roles"][Role]["StageRoot"] for Role in ("SERVER", "CLIENT")}
     TransportInstance = TransportInstance or Transport(WorkerPython, WorkerHelper)
     FirewallAdded = False
+    GameRule = None
     RuntimeVerified = False
     try:
         VerifyRuntimePins(PrivateRoot, WorkerPython, WorkerHelper, TransportInstance)
@@ -698,6 +951,9 @@ def Launch(PrivateRoot, SpecPath, WorkerPython, WorkerHelper, TransportInstance=
                 Verify(Roots[Role], Index)
         TransportInstance.AddControlFirewall(Identity["RunId"])
         FirewallAdded = True
+        GameRule = GameFirewallPlan(PrivateRoot, Identity)
+        WriteNew(PrivateRoot / "game-firewall-ownership.json", GameRule)
+        TransportInstance.GameFirewall(GameRule)
         return LaunchPrepared(TransportInstance, Roots, Spec, Identity, PrivateRoot)
     finally:
         try:
@@ -708,8 +964,12 @@ def Launch(PrivateRoot, SpecPath, WorkerPython, WorkerHelper, TransportInstance=
                 finally:
                     TransportInstance.Remote("retire-node-tls", RemoteText(WorkerRunRoot))
         finally:
-            if FirewallAdded:
-                TransportInstance.RemoveControlFirewall(Identity["RunId"])
+            try:
+                if GameRule is not None:
+                    TransportInstance.GameFirewall(GameRule, Remove=True)
+            finally:
+                if FirewallAdded:
+                    TransportInstance.RemoveControlFirewall(Identity["RunId"])
 
 
 def LaunchPrepared(TransportInstance, Roots, Spec, Identity, PrivateRoot):

@@ -6,6 +6,27 @@ last_verified: 2026-10-04
 
 # Foundation 3L.3 diagnostic validation ledger
 
+## Local32 projected game-UDP permission (2026-10-04)
+
+The [fresh Local32 receipt](PooledPhysicalQualification3L.md#local32-projected-server-udp-permission-omission-2026-10-04)
+records tooling `7a3e7ea8` run `1aeb7221-8c47-4ccd-98c1-389d486e1c4c`.
+Native package startup now succeeds; client slot 0 times out before Ready.
+Both captures retain 21 matching bootstrap requests reaching the worker and
+zero replies. The original capture/terminal failures remain failures; the
+recovered worker pcap is diagnostic only. The exact original WFP drop decision
+is **NOT MEASURED**. Compiled package-restricted firewall exceptions and source
+inspection expose the missing projected-Server UDP permission prerequisite.
+
+The outer launcher now binds, verifies and cleans up only a sealed run's exact
+projected executable/fiber/UDP rule. This infrastructure correction does not
+change production, F1 or admission and does not establish provider acceptance.
+The 240-case farm and 47-case optimized outer suites pass without skips;
+ROOT independently replays the 12 focused game-rule cases. Current hosted
+checks, exact failed-run cleanup and fresh preflight precede a new identity.
+Local24, Node26 and the four common final
+acceptance gates remain unmeasured for a completed provider campaign.
+**KI-006 OPEN; Foundation 3L B — PARTIALLY READY; no 3M.**
+
 ## Fixed trace child ordinary scheduling (2026-10-04)
 
 Original `3e030710` Native PR `37173701281`, Windows job `111351799079`, fails

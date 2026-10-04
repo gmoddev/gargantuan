@@ -3,8 +3,9 @@
 import base64
 import ctypes
 import hashlib
+import gzip
 import json
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 import shutil
 import subprocess
 import sys
@@ -25,6 +26,7 @@ REAL_WORKER_SANDBOX = Outer.WorkerSandbox
 class MockTransport:
     def __init__(self):
         self.ControlRules = []
+        self.GameRules = []
         self.RetiredNodeRoots = []
         self.RetiredTlsRoots = []
 
@@ -33,6 +35,9 @@ class MockTransport:
 
     def RemoveControlFirewall(self, RunId):
         self.ControlRules.append(("remove", RunId))
+
+    def GameFirewall(self, Plan, Remove=False):
+        self.GameRules.append(("remove" if Remove else "add", Plan))
 
     def WorkerDigest(self, File):
         if File.endswith("python.exe"):
@@ -408,6 +413,7 @@ class OuterCampaignTests(unittest.TestCase):
             Outer.RequireFreshPreflights(self.Fixture.Private, self.Fixture.Identity)
 
     def test_control_firewall_is_run_bound_and_removed_after_probe_failure(self):
+        self.PrepareGameFirewallFixture()
         Transport = MockTransport()
         for Role in ("SERVER", "CLIENT"):
             Source = Path(self.Fixture.Spec["Roles"][Role]["PreflightSource"])
@@ -424,8 +430,386 @@ class OuterCampaignTests(unittest.TestCase):
                              Transport)
         self.assertEqual([("add", self.Fixture.Identity["RunId"]),
                           ("remove", self.Fixture.Identity["RunId"])], Transport.ControlRules)
+        self.assertEqual(["add", "remove"], [Row[0] for Row in Transport.GameRules])
+        self.assertEqual(Transport.GameRules[0][1], Transport.GameRules[1][1])
+
+    def PrepareGameFirewallFixture(self):
+        Manifest = json.loads(self.Fixture.Manifest.read_text())
+        Manifest.update(Endpoint='10.253.3.2:39450', ServerSha256='b' * 64,
+                        ServerDeploymentSha256='c' * 64)
+        self.Fixture.Manifest.write_text(json.dumps(Manifest), encoding='utf-8')
+        ManifestHash = Outer.Digest(self.Fixture.Manifest)
+        HostPath = self.Fixture.Private / 'host-config.json'
+        Host = json.loads(HostPath.read_text())
+        Host['ManifestSha256'] = ManifestHash
+        for Role in ('SERVER', 'CLIENT'):
+            PreflightPath = Path(self.Fixture.Spec['Roles'][Role]['PreflightSource'])
+            Preflight = json.loads(PreflightPath.read_text())
+            Label = 'Server' if Role == 'SERVER' else 'Clients'
+            Preflight.update(ManifestSha256=ManifestHash, SourceCommit='a' * 40,
+                             Endpoint=Manifest['Endpoint'], GameInterfaceAddress='10.253.3.2',
+                             RuntimeProjectionRoot=str(PureWindowsPath(
+                                 self.Fixture.Spec['Roles'][Role]['RunRegistryRoot']) /
+                                 (self.Fixture.Identity['RunId'] + '.' + Label + '.runtime')),
+                             RuntimeProjectionReceiptSha256='d' * 64)
+            PreflightPath.write_text(json.dumps(Preflight), encoding='utf-8')
+            shutil.copyfile(PreflightPath, self.Fixture.Private / (Role.lower() + '-preflight.json'))
+            FarmPath = self.Fixture.Private / Role / 'farm-config.json'
+            Farm = json.loads(FarmPath.read_text())
+            Farm['ManifestSHA256'] = ManifestHash
+            FarmPath.write_text(json.dumps(Farm), encoding='utf-8')
+            TicketPath = self.Fixture.Private / Role / 'ticket.json'
+            Ticket = json.loads(TicketPath.read_text())
+            Ticket.update(ManifestSha256=ManifestHash, PreflightSha256=Outer.Digest(PreflightPath),
+                          FarmConfigSha256=Outer.Digest(FarmPath))
+            TicketPath.write_text(json.dumps(Ticket), encoding='utf-8')
+            Host['Roles'][Role]['TicketSha256'] = Outer.Digest(TicketPath)
+        HostPath.write_text(json.dumps(Host), encoding='utf-8')
+        PlanPath = self.Fixture.Private / 'copy-plan.json'
+        Plan = json.loads(PlanPath.read_text())
+        for Row in Plan['Files']:
+            Row['Sha256'] = Outer.Digest(Row['Source'])
+        PlanPath.write_text(json.dumps(Plan), encoding='utf-8')
+
+    def test_game_firewall_plan_joins_sealed_native_projection(self):
+        self.PrepareGameFirewallFixture()
+        Plan = Outer.GameFirewallPlan(self.Fixture.Private, self.Fixture.Identity)
+        ExpectedRoot = str(PureWindowsPath(self.Fixture.Spec['Roles']['SERVER']['RunRegistryRoot']) /
+                           (self.Fixture.Identity['RunId'] + '.Server.runtime'))
+        self.assertEqual(Plan['Program'], str(PureWindowsPath(ExpectedRoot) / 'GargantuanServer.exe'))
+        self.assertEqual(Plan['ProgramSha256'], 'b' * 64)
+        self.assertEqual(Plan['RuntimeReceiptSha256'], 'd' * 64)
+        self.assertEqual(Plan['Name'], 'Codex-Gargantuan-Farm32-Game-' + self.Fixture.Identity['RunId'])
+        self.assertNotEqual(Plan['OwnerId'], self.Fixture.Identity['RunId'])
+
+    def test_game_firewall_denies_changed_projection_manifest_or_farm_pins(self):
+        self.PrepareGameFirewallFixture()
+        Cases = [('server-preflight.json', 'RuntimeProjectionRoot', r'C:\Sandbox\wrong'),
+                 ('server-preflight.json', 'Endpoint', '127.0.0.1:39450'),
+                 ('SERVER/farm-config.json', 'RunRegistryRoot', r'C:\Sandbox\wrong'),
+                 ('SERVER/ticket.json', 'ManifestSha256', '0' * 64)]
+        for Name, Key, Value in Cases:
+            with self.subTest(Name=Name, Key=Key):
+                File = self.Fixture.Private / Name
+                Original = File.read_bytes()
+                Row = json.loads(Original)
+                Row[Key] = Value
+                File.write_text(json.dumps(Row), encoding='utf-8')
+                try:
+                    with self.assertRaisesRegex(ValueError, 'sealed projection binding'):
+                        Outer.GameFirewallPlan(self.Fixture.Private, self.Fixture.Identity)
+                finally:
+                    File.write_bytes(Original)
+
+    def test_game_firewall_unsafe_or_nonprojected_program_never_invokes_worker(self):
+        self.PrepareGameFirewallFixture()
+        Plan = Outer.GameFirewallPlan(self.Fixture.Private, self.Fixture.Identity)
+        Transport = Outer.Transport(r'C:\Python312\python.exe', r'C:\Sandbox\farm_outer_endpoint.py')
+        for Key, Value in (('RunId', 'not-a-run'), ('Name', 'unrelated'),
+                           ('Program', r'C:\Sandbox\original\GargantuanServer.exe'),
+                           ('ProgramSha256', 'bad'), ('Program', "C:\\Sandbox\\bad'path.exe")):
+            with self.subTest(Key=Key, Value=Value), mock.patch.object(Outer, 'Checked') as Checked:
+                Changed = dict(Plan, **{Key: Value})
+                with self.assertRaises(ValueError):
+                    Transport.GameFirewall(Changed)
+                Checked.assert_not_called()
+
+    def test_game_firewall_transport_uses_hash_bound_memory_payload_and_bounded_command(self):
+        self.PrepareGameFirewallFixture()
+        Plan = Outer.GameFirewallPlan(self.Fixture.Private, self.Fixture.Identity)
+        Transport = Outer.Transport(r'C:\Python312\python.exe', r'C:\Sandbox\farm_outer_endpoint.py')
+        with mock.patch.object(Outer.subprocess, 'run') as Run:
+            Transport.GameFirewall(Plan)
+        Arguments = Run.call_args.args[0]
+        self.assertLessEqual(len(' '.join(Arguments)), 7600)
+        Payload = Run.call_args.kwargs['input']
+        Packed = base64.b64decode(Payload)
+        self.assertLessEqual(len(Packed), 4096)
+        Script = gzip.decompress(Packed)
+        self.assertEqual(Script.decode('utf-8'), Outer.GameFirewallScript(Plan))
+        Bootstrap = base64.b64decode(Arguments[-1]).decode('utf-16le')
+        self.assertIn(hashlib.sha256(Script).hexdigest(), Bootstrap)
+        self.assertIn('16384', Bootstrap)
+        self.assertIn('[Console]::In.ReadToEnd()', Bootstrap)
+        self.assertEqual(Run.call_args.kwargs['timeout'], 180)
+        for Bad in ('', 'x' * 16385):
+            with self.assertRaisesRegex(ValueError, 'size exceeds bound'):
+                Outer.GameFirewallPayload(Bad)
+        # The actual PowerShell decoder must refuse altered bytes before the
+        # script block runs, including a small compressed decompression bomb.
+        PowerShell = shutil.which('pwsh') or shutil.which('pwsh.exe')
+        self.assertIsNotNone(PowerShell)
+        Encoded, Good = Outer.GameFirewallPayload("Write-Output 'VERIFIED_SCRIPT_ONLY'")
+        for Input, Success in ((Good, True),
+                               (base64.b64encode(gzip.compress(b"Write-Output 'UNTRUSTED_EXECUTION'")).decode(), False),
+                               (base64.b64encode(gzip.compress(b'x' * 16385)).decode(), False),
+                               (base64.b64encode(b'x' * 4097).decode(), False)):
+            with self.subTest(Success=Success, Bytes=len(Input)):
+                Result = subprocess.run([PowerShell, '-NoProfile', '-NonInteractive', '-EncodedCommand', Encoded],
+                                        input=Input, capture_output=True, text=True, timeout=30,
+                                        creationflags=Outer.Hidden())
+                self.assertEqual(Result.returncode == 0, Success, Result.stderr)
+                self.assertNotIn('UNTRUSTED_EXECUTION', Result.stdout)
+                if Success:
+                    self.assertIn('VERIFIED_SCRIPT_ONLY', Result.stdout)
+
+    def test_game_firewall_cleanup_on_late_preflight_failure_and_success(self):
+        self.PrepareGameFirewallFixture()
+        Outer.Stage(self.Fixture.Private, self.Fixture.SpecFile,
+                    r'C:\Python312\python.exe', r'C:\Sandbox\farm_outer_endpoint.py', MockTransport())
+        for Failure in (None, ValueError('late preflight changed')):
+            with self.subTest(Failure=Failure):
+                Transport = MockTransport()
+                Ownership = self.Fixture.Private / 'game-firewall-ownership.json'
+                if Ownership.exists():
+                    Ownership.unlink()  # Owned pure fixture only, not a campaign retry.
+                def Prepared(*Arguments):
+                    if Failure:
+                        raise Failure
+                    return 0
+                with mock.patch.object(Outer, 'LaunchPrepared', side_effect=Prepared):
+                    if Failure:
+                        with self.assertRaisesRegex(ValueError, 'late preflight changed'):
+                            Outer.Launch(self.Fixture.Private, self.Fixture.SpecFile,
+                                         r'C:\Python312\python.exe', r'C:\Sandbox\farm_outer_endpoint.py', Transport)
+                    else:
+                        self.assertEqual(Outer.Launch(self.Fixture.Private, self.Fixture.SpecFile,
+                                                     r'C:\Python312\python.exe', r'C:\Sandbox\farm_outer_endpoint.py', Transport), 0)
+                self.assertEqual(['add', 'remove'], [Row[0] for Row in Transport.GameRules])
+                self.assertEqual(Transport.GameRules[0][1], Transport.GameRules[1][1])
+                self.assertEqual(json.loads(Ownership.read_text()), Transport.GameRules[0][1])
+                self.assertEqual(['add', 'remove'], [Row[0] for Row in Transport.ControlRules])
+
+    def test_game_firewall_failed_add_still_reconciles_only_its_ownership(self):
+        self.PrepareGameFirewallFixture()
+        Transport = MockTransport()
+        Outer.Stage(self.Fixture.Private, self.Fixture.SpecFile,
+                    r'C:\Python312\python.exe', r'C:\Sandbox\farm_outer_endpoint.py', Transport)
+        Original = Transport.GameFirewall
+        def FailAdd(Plan, Remove=False):
+            Original(Plan, Remove)
+            if not Remove:
+                raise RuntimeError('denied stale or blocked game rule')
+        with mock.patch.object(Transport, 'GameFirewall', side_effect=FailAdd), \
+                mock.patch.object(Outer, 'LaunchPrepared') as LaunchPrepared:
+            with self.assertRaisesRegex(RuntimeError, 'denied stale or blocked'):
+                Outer.Launch(self.Fixture.Private, self.Fixture.SpecFile,
+                             r'C:\Python312\python.exe', r'C:\Sandbox\farm_outer_endpoint.py', Transport)
+            LaunchPrepared.assert_not_called()
+        self.assertEqual(['add', 'remove'], [Row[0] for Row in Transport.GameRules])
+        self.assertEqual(Transport.GameRules[0][1], Transport.GameRules[1][1])
+
+    def test_game_firewall_stale_ownership_preserves_file_and_original_failure(self):
+        self.PrepareGameFirewallFixture()
+        Transport = MockTransport()
+        Outer.Stage(self.Fixture.Private, self.Fixture.SpecFile,
+                    r'C:\Python312\python.exe', r'C:\Sandbox\farm_outer_endpoint.py', Transport)
+        Ownership = self.Fixture.Private / 'game-firewall-ownership.json'
+        Original = b'prior owned receipt must remain unchanged'
+        Ownership.write_bytes(Original)
+        def RefuseDifferentOwner(Plan, Remove=False):
+            self.assertTrue(Remove)
+            raise RuntimeError('different ownership marker; no deletion')
+        with mock.patch.object(Transport, 'GameFirewall', side_effect=RefuseDifferentOwner) as GameFirewall, \
+                mock.patch.object(Outer, 'LaunchPrepared') as Prepared:
+            with self.assertRaisesRegex(RuntimeError, 'no deletion') as Raised:
+                Outer.Launch(self.Fixture.Private, self.Fixture.SpecFile,
+                             r'C:\Python312\python.exe', r'C:\Sandbox\farm_outer_endpoint.py', Transport)
+            self.assertIsInstance(Raised.exception.__context__, FileExistsError)
+            self.assertEqual(GameFirewall.call_count, 1)
+            Prepared.assert_not_called()
+        self.assertEqual(Ownership.read_bytes(), Original)
+        self.assertEqual(['add', 'remove'], [Row[0] for Row in Transport.ControlRules])
+
+    def test_game_firewall_cleanup_failure_cannot_report_success(self):
+        self.PrepareGameFirewallFixture()
+        Transport = MockTransport()
+        Outer.Stage(self.Fixture.Private, self.Fixture.SpecFile,
+                    r'C:\Python312\python.exe', r'C:\Sandbox\farm_outer_endpoint.py', Transport)
+        def FailRemove(Plan, Remove=False):
+            if Remove:
+                raise RuntimeError('owned rule cleanup unproven')
+        for Failure in (None, ValueError('original native launch failure')):
+            with self.subTest(Failure=Failure):
+                Ownership = self.Fixture.Private / 'game-firewall-ownership.json'
+                if Ownership.exists():
+                    Ownership.unlink()  # Owned pure fixture only.
+                Transport.ControlRules.clear()
+                with mock.patch.object(Transport, 'GameFirewall', side_effect=FailRemove), \
+                        mock.patch.object(Outer, 'LaunchPrepared', return_value=0, side_effect=Failure):
+                    with self.assertRaisesRegex(RuntimeError, 'cleanup unproven') as Raised:
+                        Outer.Launch(self.Fixture.Private, self.Fixture.SpecFile,
+                                     r'C:\Python312\python.exe', r'C:\Sandbox\farm_outer_endpoint.py', Transport)
+                if Failure:
+                    self.assertIs(Raised.exception.__context__, Failure)
+                self.assertEqual(['add', 'remove'], [Row[0] for Row in Transport.ControlRules])
+
+    def RunMockGameFirewall(self, State):
+        """Execute generated PowerShell with every network/security cmdlet mocked."""
+        if not (self.Fixture.Private / 'server-preflight.json').exists():
+            self.PrepareGameFirewallFixture()
+        Plan = Outer.GameFirewallPlan(self.Fixture.Private, self.Fixture.Identity)
+        Supervisor = self.Fixture.Root / ('mock-supervisor-' + State + '.ps1')
+        Supervisor.write_text('''
+function Assert-DeploymentManifest { }
+function Assert-ProjectionPlainPath { }
+function Read-ProjectionJson { param($Path)
+    return @{ RunId=$global:FixedPlan.RunId; SourceCommit=$global:FixedPlan.SourceCommit;
+        Endpoint='10.253.3.2:39450'; ServerSha256=$global:FixedPlan.ProgramSha256;
+        ServerDeploymentSha256=$global:FixedPlan.DeploymentSha256 }
+}
+function Get-NativeRuntimePlan { param($LocalRoot,$DeploymentSha256,$SourceCommit,$LocalRole)
+    if ($LocalRole -cne 'Server' -or $LocalRoot -cne $global:FixedPlan.PackageRoot -or
+        $DeploymentSha256 -cne $global:FixedPlan.DeploymentSha256 -or $SourceCommit -cne $global:FixedPlan.SourceCommit) {
+        throw 'mock native plan was not source bound'
+    }
+    return @{ Binary='GargantuanServer.exe' }
+}
+function Get-RuntimeProjectionPath { }
+function Assert-RuntimeProjection { }
+function Assert-PreparedRuntimeProjection { param($LocalRoot,$Registry,$LocalRunId,$LocalRole,$Plan)
+    if ($LocalRoot -cne $global:FixedPlan.PackageRoot -or $Registry -cne $global:FixedPlan.RunRegistryRoot -or
+        $LocalRunId -cne $global:FixedPlan.RunId -or $LocalRole -cne 'Server') { throw 'mock projection identity differs' }
+    return $global:FixedPlan.RuntimeRoot
+}
+''', encoding='utf-8')
+        Plan['SupervisorPath'] = str(Supervisor)
+        if State == 'DuplicateValidator':
+            Supervisor.write_text(Supervisor.read_text().replace(
+                'function Assert-RuntimeProjection { }', 'function Get-NativeRuntimePlan { }'), encoding='utf-8')
+        Plan['SupervisorSha256'] = Outer.Digest(Supervisor)
+        Add = Outer.GameFirewallScript(Plan)
+        Remove = Outer.GameFirewallScript(Plan, Remove=True)
+        Prefix = ('$global:FixedPlan=' + "('" + json.dumps(Plan).replace("'", "''") + "'|ConvertFrom-Json);\n" +
+                  "$global:State='" + State + "';$global:Rule=$null;$global:Created=0;$global:Removed=0;\n")
+        Mocks = r'''
+function Get-FileHash { param($LiteralPath,$Algorithm)
+    $Hash = switch ($LiteralPath) {
+        $global:FixedPlan.SupervisorPath { $global:FixedPlan.SupervisorSha256 }
+        $global:FixedPlan.ManifestPath { $global:FixedPlan.ManifestSha256 }
+        ($global:FixedPlan.RuntimeRoot + '.json') { $global:FixedPlan.RuntimeReceiptSha256 }
+        $global:FixedPlan.Program { if ($global:State -eq 'HashChanged') {'0'*64} else {$global:FixedPlan.ProgramSha256} }
+        default { throw 'unrecognized mock file hash' }
+    }
+    [pscustomobject]@{ Hash=$Hash }
+}
+function Get-NetIPAddress { param($IPAddress,$AddressFamily)
+    [pscustomobject]@{ InterfaceIndex=19; InterfaceAlias='Ethernet 4' }
+}
+function Get-NetConnectionProfile { param($InterfaceIndex)
+    [pscustomobject]@{ NetworkCategory=$(if ($global:State -eq 'PublicInterface') {'Public'} else {'Private'}) }
+}
+function Get-NetFirewallRule { [CmdletBinding()] param($PolicyStore,$Name,$Enabled,$Direction,$Action)
+    if ($Name) {
+        if ($global:State -eq 'Stale') { return [pscustomobject]@{ Name=$Name; Description='unrelated owner' } }
+        if ($global:State -eq 'MissingEffective' -and $PolicyStore -eq 'ActiveStore') { return }
+        return $global:Rule
+    }
+    if ($Action -eq 'Block' -and $global:State -in @('BlockAny','BlockRange','UnrelatedTcp','UnrelatedProgram')) {
+        return [pscustomobject]@{ Profile='Private';
+            App=[pscustomobject]@{ Program=$(if($global:State -eq 'UnrelatedProgram') {'C:\unrelated.exe'} else {'Any'}) };
+            Port=[pscustomobject]@{ Protocol=$(if($global:State -eq 'UnrelatedTcp') {'TCP'} else {'UDP'});
+                LocalPort=$(if($global:State -eq 'BlockRange') {'39000-40000'} else {'Any'}) } }
+    }
+}
+function Get-NetFirewallApplicationFilter { param([Parameter(ValueFromPipeline=$true)]$Rule) process { $Rule.App } }
+function Get-NetFirewallPortFilter { param([Parameter(ValueFromPipeline=$true)]$Rule) process { $Rule.Port } }
+function Get-NetFirewallAddressFilter { param([Parameter(ValueFromPipeline=$true)]$Rule) process { $Rule.Address } }
+function Get-NetFirewallInterfaceFilter { param([Parameter(ValueFromPipeline=$true)]$Rule) process { $Rule.Interface } }
+function Get-NetFirewallInterfaceTypeFilter { param([Parameter(ValueFromPipeline=$true)]$Rule) process { $Rule.InterfaceType } }
+function Get-NetFirewallServiceFilter { param([Parameter(ValueFromPipeline=$true)]$Rule) process { $Rule.Service } }
+function Get-NetFirewallSecurityFilter { param([Parameter(ValueFromPipeline=$true)]$Rule) process { $Rule.Security } }
+function New-NetFirewallRule { [CmdletBinding()] param($PolicyStore,$Name,$DisplayName,$Description,$Direction,
+    $Action,$Protocol,$LocalPort,$RemotePort,$LocalAddress,$RemoteAddress,$Program,$InterfaceAlias,$Profile,$Enabled)
+    if ($PolicyStore -cne 'PersistentStore') { throw 'mock wrong policy store' }
+    $global:Created += 1
+    $global:Rule=[pscustomobject]@{ Name=$Name; DisplayName=$DisplayName; Description=$Description;
+        Direction=$Direction; Action=$Action; Enabled='True'; Profile=$Profile;
+        App=[pscustomobject]@{ Program=$Program; Package=$null };
+        Port=[pscustomobject]@{ Protocol=$Protocol; LocalPort=$LocalPort; RemotePort=$RemotePort };
+        Address=[pscustomobject]@{ LocalAddress=$LocalAddress; RemoteAddress=$RemoteAddress };
+        Interface=[pscustomobject]@{ InterfaceAlias=$InterfaceAlias };
+        InterfaceType=[pscustomobject]@{ InterfaceType='Any' };
+        Service=[pscustomobject]@{ Service='Any' };
+        Security=[pscustomobject]@{ Authentication='NotRequired'; Encryption='NotRequired';
+            OverrideBlockRules='False'; LocalUser='Any'; RemoteUser='Any'; RemoteMachine='Any' } }
+    switch ($global:State) {
+        'WrongProgram' { $global:Rule.App.Program='C:\unrelated.exe' }
+        'WrongPort' { $global:Rule.Port.LocalPort=39451 }
+        'WrongAddress' { $global:Rule.Address.RemoteAddress='Any' }
+        'WrongRuleProfile' { $global:Rule.Profile='Public' }
+        'WrongInterface' { $global:Rule.Interface.InterfaceAlias='Any' }
+        'WrongPackage' { $global:Rule.App.Package='S-1-15-2-1234' }
+        'WrongService' { $global:Rule.Service.Service='unrelated' }
+        'WrongInterfaceType' { $global:Rule.InterfaceType.InterfaceType='Wireless' }
+        'WrongAuthentication' { $global:Rule.Security.Authentication='Required' }
+        'WrongEncryption' { $global:Rule.Security.Encryption='Required' }
+        'OverrideBlock' { $global:Rule.Security.OverrideBlockRules='True' }
+        'WrongUser' { $global:Rule.Security.LocalUser='unrelated' }
+        'WrongRemoteUser' { $global:Rule.Security.RemoteUser='unrelated' }
+        'WrongRemoteMachine' { $global:Rule.Security.RemoteMachine='unrelated' }
+    }
+    return $global:Rule
+}
+function Remove-NetFirewallRule { param([Parameter(ValueFromPipeline=$true)]$Rule) process {
+    if ($Rule.Description -cne $global:Rule.Description) { throw 'mock unrelated deletion' }
+    $global:Removed += 1;$global:Rule=$null
+} }
+'''
+        Encoded, Payload = Outer.GameFirewallPayload(Add)
+        Invocation = ("$Failure=$null;try { & ([scriptblock]::Create([Text.Encoding]::Unicode.GetString(" +
+                      "[Convert]::FromBase64String('" + Encoded + "'))));" +
+                      "& ([scriptblock]::Create([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('" +
+                      base64.b64encode(Remove.encode()).decode() + "')))) } catch { $Failure=[string]$_ };" +
+                      "@{ Created=$global:Created; Removed=$global:Removed; Failure=$Failure }|ConvertTo-Json -Compress;" +
+                      "if($Failure){exit 1}")
+        Script = self.Fixture.Root / ('mock-game-firewall-' + State + '.ps1')
+        Script.write_text(Prefix + Mocks + Invocation, encoding='utf-8')
+        PowerShell = shutil.which('pwsh') or shutil.which('pwsh.exe')
+        self.assertIsNotNone(PowerShell, 'pure generated firewall regression requires PowerShell')
+        Result = subprocess.run([PowerShell, '-NoProfile', '-NonInteractive', '-File', str(Script)],
+                                input=Payload, capture_output=True, text=True, timeout=30, creationflags=Outer.Hidden())
+        Lines = Result.stdout.strip().splitlines()
+        self.assertTrue(Lines, Result.stderr)
+        return Result.returncode, json.loads(Lines[-1])
+
+    def test_generated_game_rule_denies_stale_block_hash_and_wrong_interface_profile(self):
+        for State, Reason in (('Stale', 'stale'), ('BlockAny', 'Block'), ('BlockRange', 'Block'),
+                              ('HashChanged', 'projection changed'), ('PublicInterface', 'not Private'),
+                              ('DuplicateValidator', 'validators invalid')):
+            with self.subTest(State=State):
+                Code, Row = self.RunMockGameFirewall(State)
+                self.assertNotEqual(Code, 0)
+                self.assertIn(Reason, Row['Failure'])
+                self.assertEqual(Row['Created'], 0)
+                self.assertEqual(Row['Removed'], 0)
+
+    def test_generated_game_rule_requires_exact_effective_filters_and_preserves_changed_rules(self):
+        for State in ('WrongProgram', 'WrongPort', 'WrongAddress', 'WrongRuleProfile', 'WrongInterface',
+                      'WrongPackage', 'WrongService', 'WrongInterfaceType', 'WrongAuthentication',
+                      'WrongEncryption', 'OverrideBlock', 'WrongUser', 'WrongRemoteUser', 'WrongRemoteMachine'):
+            with self.subTest(State=State):
+                Code, Row = self.RunMockGameFirewall(State)
+                self.assertNotEqual(Code, 0)
+                self.assertIn('changed', Row['Failure'])
+                self.assertEqual(Row['Created'], 1)
+                self.assertEqual(Row['Removed'], 0)
+
+    def test_generated_game_rule_cleans_owned_rule_if_effective_publication_fails(self):
+        Code, Row = self.RunMockGameFirewall('MissingEffective')
+        self.assertNotEqual(Code, 0)
+        self.assertEqual(Row['Created'], 1)
+        self.assertEqual(Row['Removed'], 1)
+
+    def test_generated_game_rule_normal_cleanup_and_unrelated_blocks(self):
+        for State in ('Healthy', 'UnrelatedTcp', 'UnrelatedProgram'):
+            with self.subTest(State=State):
+                Code, Row = self.RunMockGameFirewall(State)
+                self.assertEqual(Code, 0, Row['Failure'])
+                self.assertEqual(Row, {'Created': 1, 'Removed': 1, 'Failure': None})
 
     def test_node_token_retired_after_failed_launch_barrier(self):
+        self.PrepareGameFirewallFixture()
         Transport = MockTransport()
         for Role in ("SERVER", "CLIENT"):
             Source = Path(self.Fixture.Spec["Roles"][Role]["PreflightSource"])

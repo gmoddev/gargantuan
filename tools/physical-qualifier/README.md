@@ -255,6 +255,14 @@ started or replaced by preparation. The worker owns
 the normal-LAN coordinator listener on `192.168.0.108:39451`, while the client
 connects outbound; a nonce-bound control-only socket probe and the same-run
 `LISTENING_UNQUALIFIED` marker precede the two role launches. The fixed runner
+also verifies and publishes a run-owned inbound game-UDP rule for the exact
+hash-verified projected worker Server executable: local `10.253.3.2:39450`,
+remote `10.253.3.1`, and the verified Private fiber interface. This permission
+is distinct from coordinator TCP. Stale names, changed deployment/projection
+pins, ambiguous interfaces, explicit matching Blocks or differing effective
+filters deny launch. Its sealed ownership receipt permits cleanup of only
+that unchanged rule on every launch exit; cleanup failures remain failures.
+No global firewall profile or unrelated exception changes. The fixed runner
 and endpoint helper use bounded hidden processes. `collect` copies every worker
 index member with a fresh SHA-256 check, binds the coordinator and both role
 results, and invokes the existing offline capture reconciler. For Node, it

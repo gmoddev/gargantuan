@@ -6,6 +6,64 @@ last_verified: 2026-10-04
 
 # Foundation 3L pooled physical qualification attempt
 
+## Local32 projected-server UDP permission omission (2026-10-04)
+
+Fresh tooling `7a3e7ea8` run `1aeb7221-8c47-4ccd-98c1-389d486e1c4c`,
+coordinator `3f9857cd-746d-44da-9750-19fb8307df19`, follows successful
+original six-job hosted checks and independently closed `f0c18bed` cleanup.
+Both staged imports and capture configurations pass. The unchanged native
+Server starts in 14 ms from the compact exact runtime projection and publishes
+its ready socket before client slot 0 starts. The client bootstrap times out
+before Ready; the provider workload does not begin. All three outer terminals
+remain FAILED with original `ChildTreeReaped=false`. Collection lacks the
+worker evidence index; both original capture gates remain INCOMPLETE.
+
+The retained client pcap contains 21 requests from `10.253.3.1:64428` to
+`10.253.3.2:39450`, each UDP length 520. Offline export of the original worker
+ETL through its exact pinned NDIS exporter yields 125,851 frames and the same
+21 requests, matched by payload SHA-256 and tuple in order, with no response
+in either capture. The export is diagnostic only and does not repair either
+capture gate. Cross-host one-way latency and an original per-packet WFP drop
+decision are **NOT MEASURED**.
+
+Read-only effective firewall inspection finds Private inbound default Block
+and no rule for the projected Server path. The apparently broad UWP exceptions
+are package SID/family restricted in compiled WFP filters, including the
+`ALE_PACKAGE_FAMILY_NAME` restriction omitted from the high-level Package
+field. This supports the firewall explanation; it is not an observed original
+drop verdict. Source inspection proves the independent infrastructure defect:
+the launcher establishes coordinator TCP permission but does not establish or
+verify game UDP permission for the newly projected executable. Historical
+package/probe exceptions do not follow an executable into a new path.
+
+The correction binds a temporary worker permission to the sealed run, exact
+verified native projection, Private fiber interface, local UDP 39450 and the
+single peer fiber address. Both persistent and effective scope must match;
+stale ownership, changed hashes, ambiguous profiles/interfaces and explicit
+matching Blocks deny launch. Every launch exit reconciles only its unchanged
+owned rule and propagates cleanup failures. Unrelated rules, production
+transport, admission, F1 constants and installed services remain unchanged.
+Local deterministic qualification passes 240 farm tests and 47 optimized outer
+tests without skips; ROOT separately replays the 12 focused game-rule cases.
+Generated PowerShell runs against mocked network/security getters, including
+exact scope, explicit Blocks, failed publication, stale ownership, altered
+rules, AST-name duplication and the bounded hash-checked compressed transport.
+No test publishes an operational rule or starts a physical workload. Receipt:
+`C:\Users\aiden\.codex\artifacts\farm32-game-udp-lifecycle-source-qualification-v1\result.json`,
+SHA-256 `6d7c0f85f4dac5651dd6b1c6e7943669984dc68bc757830328a4d8cd7c36e3b3`.
+Current execution-changing CI, exact failed-run retirement and fresh endpoint
+preflights remain separate required gates before another provider attempt.
+
+Diagnostic raw/reconciliation files remain under
+`C:\Users\aiden\.codex\artifacts\farm32-1aeb-failed-packet-attribution-v1`.
+Its `packet-reconciliation.json` SHA-256 is
+`fe208d2e5f6123e3e996359bd8a52a0863b62c960cfe1aa0aba028d6e8e4c131`;
+compiled WFP XML SHA-256 is
+`913048a629a411c7aa1a78e59da377b8b6551d4febf989f1ef53bdea03791a1f`.
+Retained F1 Phase 1 remains PASS. **KI-006 OPEN; Foundation 3L B — PARTIALLY
+READY; no 3M.** No completed Local32, real-TLS Node32 or final acceptance PASS
+is inferred from this failed attempt or the correction.
+
 ## Local32 native path-length startup failure (2026-10-04)
 
 Fresh run `f0c18bed-722e-4820-86f6-20be1e6f60c1`, coordinator

@@ -182,6 +182,23 @@ published. Choose compact, fresh run/role registry names; retain full run
 identity and exact content hashes. Do not change Windows global long-path
 settings or native package contents to accommodate qualifier naming.
 
+Before launching either farm role, the outer controller binds a temporary
+worker game-UDP permission to the sealed run's exact projected
+`GargantuanServer.exe`, its SHA-256, the verified native closure, and the
+preflight projection receipt. The rule allows only inbound UDP `39450` from
+`10.253.3.1` to `10.253.3.2` on the currently verified Private fiber interface.
+It is separate from the normal-LAN coordinator TCP permission. An original
+package-path exception does not authorize a different projected executable.
+
+The rule has a run UUID name and independent ownership marker. Existing names,
+changed projection bytes, ambiguous interfaces, non-Private profiles and
+potentially applicable explicit Blocks deny launch. Both persistent and
+effective rule filters must match before the roles start. Every launch exit
+reconciles this exact owned rule; altered ownership or scope denies removal
+and fails cleanup. Unrelated rules and firewall profiles remain unchanged.
+Rule publication is an infrastructure prerequisite, never application
+readiness, packet-delivery evidence or provider acceptance.
+
 The October 4 Local32 startup failure exposed the missing distinction. It is
 historical failed infrastructure evidence, not a production F1 measurement or a
 provider PASS. Projection preparation does not count as a physical run or

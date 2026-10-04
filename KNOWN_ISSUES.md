@@ -85,6 +85,28 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+2026-10-04 Local32 game-UDP prerequisite: tooling `7a3e7ea8` passes its six
+original hosted checks and the preceding `f0c18bed` failed run is independently
+closed. Fresh run `1aeb7221-8c47-4ccd-98c1-389d486e1c4c` starts the unchanged
+native Server from its exact compact projection, then slot 0 bootstrap times
+out before Ready. Retained captures match 21 incoming requests and zero
+responses. Current compiled firewall policy restricts apparently broad UWP
+exceptions to package identities; the exact original WFP drop decision is
+**NOT MEASURED**. The launcher had established coordinator TCP permission
+without verifying game UDP permission for the new Server executable path.
+
+The bounded correction verifies the sealed projection and a run-owned inbound
+UDP 39450 rule restricted to both fiber addresses and the Private interface,
+and reconciles only that unchanged rule on every launch exit. Stale names,
+changed ownership/scope, explicit matching Blocks or differing effective
+filters fail closed. Production transport/admission/F1 and installed services
+are unchanged. The 240 farm and 47 optimized outer tests pass without skips,
+with ROOT separately replaying the 12 focused game-rule cases. Current CI,
+exact fresh failed-run cleanup,
+Local32/real-TLS Node32 and final acceptance remain required. Original failed
+terminals and incomplete captures are preserved. **KI-006 OPEN; Foundation 3L
+B — PARTIALLY READY; no 3M.**
+
 2026-10-04 second Local32 startup attribution: tooling `578edaa4` has all six
 original push/PR Windows, Linux and GNS jobs green. The prior failed run's
 six control secrets were separately retired with independently replayed
