@@ -6,6 +6,46 @@ last_verified: 2026-10-04
 
 # Foundation 3L.3 diagnostic validation ledger
 
+## Fixed trace child ordinary scheduling (2026-10-04)
+
+Original `3e030710` Native PR `37173701281`, Windows job `111351799079`, fails
+the third standalone FULL `upper` action 17 at 1892.3673 ms. Native JUnit
+verifies 95/95; later standalone commands never execute and PR Linux is skipped.
+The raw log, original ZIP, loss-free Full ETL/CSV and failed-case prefix remain
+unchanged. Request-linked scheduler reconstruction measures 3.3673 ms scheduled
+and 1889.0000 ms off CPU in that action. Four-core continuity over its largest
+750.7253-ms ready gap attributes 2253.2416 aggregate CPU ms to SYSTEM
+`CompatTelRunner.exe` and 532.1935 ms to its PowerShell child. These process
+identities and base priorities are measured by bounded, read-only WPT decoding;
+all 425,126 original switches join within the decoder's one-microsecond
+representation. Root host/virtualization causes outside these measured intervals
+and original API priority-class queries are **NOT MEASURED**.
+
+The fixed launcher omitted a priority-class flag, allowing the documented
+Below Normal/Idle inheritance path. Its source-scoped correction explicitly
+requests Normal for the suspended traced child, assigns the existing owned job,
+then checks actual Normal class/main normal relative priority before resume.
+Mismatch/query failure prevents workload execution and preserves cleanup/error
+evidence. New metadata, early child result and wrapper record actual API values;
+the source-current verifier denies missing or different scheduling evidence.
+No production engine or CMake build input, grant/admission/service constant, gameplay
+clock, workload, affinity or timer changes. Appraiser and all other background
+tasks remain untouched.
+
+All 33 helper tests pass in normal and optimized modes without skips on the
+trusted worker. The separate nine-process harmless API regression reproduces
+the unmodified inheritance path and proves explicit Normal children under
+Normal, Below Normal and Idle parents, with exact ownership/reap evidence.
+Its independently retained API receipt SHA-256 is
+`02cf0295d1cf9e5ac673df4aa66a0009dfbfddf835ba3686fd99e4b0d0f8a520`.
+Raw attribution is retained under `native-pr-3e030710-action17-independent-v1`
+and `native-pr-3e030710-offline-wpt-v1`; harmless API evidence is under
+`scheduler-normal-priority-v1`. These local tests do not qualify hosted timing.
+New original hosted checks and current candidate adoption remain required;
+the failed original job is not retried or substituted. Retained NativeA F1 PASS
+is unchanged. Fresh Local32, real-TLS Node32 and final acceptance remain
+unmeasured. **KI-006 OPEN; 3L B — PARTIALLY READY**.
+
 ## Local32 startup layout attribution (2026-10-04)
 
 The [fresh Local32 receipt](PooledPhysicalQualification3L.md#local32-package-envelope-startup-failure-2026-10-04)

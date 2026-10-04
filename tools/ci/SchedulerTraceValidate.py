@@ -27,6 +27,13 @@ def Validate(Metadata, Stdout, Case="Full", CsvPath=None):
                            ("TimedOut", False), ("ChildLogCapped", False), ("ChildLogFailed", False), ("CsvCapped", False), ("DecodeTimedOut", False)):
         Require(type(Metadata.get(Name)) is bool and Metadata[Name] is Expected, Name + " invalid")
     Require(type(Metadata.get("ChildLaunchAttempts")) is int and Metadata["ChildLaunchAttempts"] == 1, "expected one workload launch")
+    for Name, Expected in (("RequestedChildCreationFlags", 134742052), ("ChildPriorityClass", 32),
+                           ("ChildThreadPriority", 0), ("PriorityQueryError", 0)):
+        Require(type(Metadata.get(Name)) is int and Metadata[Name] == Expected,
+                Name + " ordinary scheduling policy differs or is unmeasured")
+    Require(Metadata.get("PriorityVerifiedBeforeResume") is True, "ordinary child priority not verified before resume")
+    Require(type(Metadata.get("ControllerPriorityClass")) is int and
+            Metadata["ControllerPriorityClass"] in (32, 64, 128, 256, 16384, 32768), "controller priority class unmeasured")
     Require(type(Metadata.get("ClockType")) is int and Metadata["ClockType"] == 1, "trace is not QPC")
     Frequency = Metadata.get("QpcFrequency")
     Require(type(Frequency) is int and Frequency > 0 and Frequency == Metadata.get("ControllerQpcFrequency"), "QPC frequency mismatch")

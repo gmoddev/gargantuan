@@ -116,6 +116,7 @@ $ControllerTimedOut = $false
 $CleanupExit = 125
 $CoverageExit = 125
 $ChildExit = $null
+$ChildScheduling = $null
 $ChildTreeReaped = $false
 $ZeroLaunch = $false
 $Started = [DateTime]::UtcNow.ToString('o')
@@ -161,6 +162,13 @@ try {
                 $MetadataPath = Join-Path $Output $Name
                 if (Test-Path -LiteralPath $MetadataPath -PathType Leaf) {
                     $Metadata = Get-Content -LiteralPath $MetadataPath -Raw | ConvertFrom-Json
+                    if ($Metadata.PSObject.Properties.Name -contains 'RequestedChildCreationFlags') {
+                        $ChildScheduling = [ordered]@{}
+                        foreach ($Field in @('RequestedChildCreationFlags', 'ControllerPriorityClass', 'ChildPriorityClass',
+                                             'ChildThreadPriority', 'PriorityQueryError', 'PriorityVerifiedBeforeResume')) {
+                            $ChildScheduling[$Field] = $Metadata.$Field
+                        }
+                    }
                     if ($Metadata.ChildTreeReaped -is [bool] -and $Metadata.ChildTreeReaped) { $ChildTreeReaped = $true }
                     if ($Metadata.ChildLaunchAttempts -is [long] -and $Metadata.ChildLaunchAttempts -eq 0) { $ZeroLaunch = $true }
                     if ($Metadata.ChildResumed -eq $true) { $ChildExit = $Metadata.ChildExitCode; break }
@@ -180,6 +188,7 @@ try {
             HelperSha256=$HelperHash; WorkloadSha256=$WorkloadHash
             WorkloadArguments=@($Arguments); WorkloadCase=$Case; ControllerExitCode=$ControllerExit
             ControllerTimedOut=$ControllerTimedOut; CleanupExitCode=$CleanupExit; ChildExitCode=$ChildExit
+            ChildScheduling=$ChildScheduling
             CleanupVerified=($CleanupExit -eq 0 -and ($ChildTreeReaped -or $ZeroLaunch))
             ControllerDeadlineMs=960000; CleanupDeadlineMs=30000
             CoverageExitCode=$CoverageExit

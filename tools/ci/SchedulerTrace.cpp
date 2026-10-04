@@ -24,6 +24,11 @@ constexpr wchar_t SessionName[] = L"Gargantuan-CI-WorkloadScheduler";
 constexpr ULONG TraceFlags = EVENT_TRACE_FLAG_PROCESS | EVENT_TRACE_FLAG_THREAD |
     EVENT_TRACE_FLAG_CSWITCH | EVENT_TRACE_FLAG_DISPATCHER;
 constexpr DWORD WorkloadLimitMs = 600000;
+constexpr DWORD WorkloadCreationFlags = CREATE_SUSPENDED | CREATE_NO_WINDOW |
+    EXTENDED_STARTUPINFO_PRESENT | NORMAL_PRIORITY_CLASS;
+bool OrdinaryPriority(DWORD Class, int Relative) noexcept {
+    return Class == NORMAL_PRIORITY_CLASS && Relative == THREAD_PRIORITY_NORMAL;
+}
 constexpr ULONGLONG DecodeLimitMs = 180000;
 constexpr std::uint64_t CsvLimit = 512ULL * 1024 * 1024;
 constexpr std::uint64_t ChildLogLimit = 32ULL * 1024 * 1024; // Each stream, exact write cap.
@@ -462,6 +467,119 @@ void Drain(HANDLE Pipe, const fs::path &Path, std::atomic<bool> &Capped, std::at
         File.flush(); if (!File.good()) Failed = true;
     } catch (...) { Failed = true; }
 }
+// This separate regression launches only exit-only copies of this helper. The
+// existing --self-test still creates neither a session nor a child.
+void PriorityTestChild(const std::wstring &Argument, DWORD Class, DWORD Expected) {
+    std::array<wchar_t, 32768> Name{};
+    const DWORD Length = GetModuleFileNameW(nullptr, Name.data(), static_cast<DWORD>(Name.size()));
+    if (!Length || Length >= Name.size()) throw std::runtime_error("priority test helper path unavailable");
+    const DWORD ParentClass = GetPriorityClass(GetCurrentProcess());
+    Handle Job, Process, Thread, Input, Write, Read;
+    Job.Value = CreateJobObjectW(nullptr, nullptr);
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION Limits{};
+    Limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    if (!Job.Value || !SetInformationJobObject(Job.Value, JobObjectExtendedLimitInformation, &Limits, sizeof(Limits)))
+        throw std::runtime_error("priority test job unavailable");
+    SECURITY_ATTRIBUTES Security{sizeof(Security), nullptr, TRUE};
+    if (!CreatePipe(&Read.Value, &Write.Value, &Security, 4096) ||
+        !SetHandleInformation(Read.Value, HANDLE_FLAG_INHERIT, 0))
+        throw std::runtime_error("priority test output pipe unavailable");
+    Input.Value = CreateFileW(L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+        &Security, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (Input.Value == INVALID_HANDLE_VALUE) throw std::runtime_error("priority test input unavailable");
+    SIZE_T AttributeBytes = 0;
+    InitializeProcThreadAttributeList(nullptr, 1, 0, &AttributeBytes);
+    std::vector<BYTE> AttributeStorage(AttributeBytes);
+    auto *Attributes = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(AttributeStorage.data());
+    if (!InitializeProcThreadAttributeList(Attributes, 1, 0, &AttributeBytes))
+        throw std::runtime_error("priority test handle list unavailable");
+    HANDLE Inherited[]{Write.Value, Input.Value};
+    if (!UpdateProcThreadAttribute(Attributes, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+        Inherited, sizeof(Inherited), nullptr, nullptr)) {
+        DeleteProcThreadAttributeList(Attributes);
+        throw std::runtime_error("priority test handle list update failed");
+    }
+    STARTUPINFOEXW Startup{}; Startup.StartupInfo.cb = sizeof(Startup);
+    Startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+    Startup.StartupInfo.hStdOutput = Write.Value; Startup.StartupInfo.hStdError = Write.Value;
+    Startup.StartupInfo.hStdInput = Input.Value; Startup.lpAttributeList = Attributes;
+    PROCESS_INFORMATION Child{};
+    std::wstring Command = L"\"" + std::wstring(Name.data(), Length) + L"\" " + Argument;
+    const BOOL Created = CreateProcessW(Name.data(), Command.data(), nullptr, nullptr, TRUE,
+        CREATE_SUSPENDED | CREATE_NO_WINDOW | EXTENDED_STARTUPINFO_PRESENT | Class,
+        nullptr, nullptr, &Startup.StartupInfo, &Child);
+    DeleteProcThreadAttributeList(Attributes);
+    Write.Close(); Input.Close();
+    if (!Created) throw std::runtime_error("priority test child unavailable");
+    Process.Value = Child.hProcess; Thread.Value = Child.hThread;
+    const bool Assigned = AssignProcessToJobObject(Job.Value, Process.Value) != FALSE;
+    const DWORD Actual = GetPriorityClass(Process.Value);
+    const int Relative = GetThreadPriority(Thread.Value);
+    bool Passed = Assigned && Actual == Expected && Relative == THREAD_PRIORITY_NORMAL;
+    if (Passed) {
+        const DWORD Deadline = Argument == L"--priority-parent-test" ? 25000 : 5000;
+        Passed = ResumeThread(Thread.Value) != static_cast<DWORD>(-1) &&
+            WaitForSingleObject(Process.Value, Deadline) == WAIT_OBJECT_0;
+        DWORD Exit = 125;
+        Passed = Passed && GetExitCodeProcess(Process.Value, &Exit) && Exit == 0;
+    }
+    // Reap even on query, ownership or resume failure. No retry or replacement.
+    TerminateProcess(Process.Value, 125);
+    const bool RootReaped = WaitForSingleObject(Process.Value, 5000) == WAIT_OBJECT_0;
+    TerminateJobObject(Job.Value, 125);
+    JOBOBJECT_BASIC_ACCOUNTING_INFORMATION Accounting{};
+    bool TreeReaped = false;
+    for (unsigned Attempt = 0; Attempt < 100; ++Attempt) {
+        if (!QueryInformationJobObject(Job.Value, JobObjectBasicAccountingInformation,
+            &Accounting, sizeof(Accounting), nullptr)) break;
+        if (Accounting.ActiveProcesses == 0) { TreeReaped = true; break; }
+        Sleep(10);
+    }
+    std::cout << "[Qualification:PriorityCase] argument=" << Utf8(Argument) << " parent_class=" << ParentClass
+        << " requested_class=" << Class << " expected_class=" << Expected << " actual_class=" << Actual
+        << " relative_priority=" << Relative << " assigned=" << Assigned << " root_reaped=" << RootReaped
+        << " tree_reaped=" << TreeReaped << " passed=" << Passed << '\n';
+    if (!RootReaped || !TreeReaped) throw std::runtime_error("priority test reap failed");
+    std::array<char, 512> Buffer{};
+    DWORD Count = 0;
+    std::size_t Total = 0;
+    while (ReadFile(Read.Value, Buffer.data(), static_cast<DWORD>(Buffer.size()), &Count, nullptr) && Count) {
+        Total += Count;
+        if (Total > 8192) throw std::runtime_error("priority test child output exceeded bound");
+        std::cout.write(Buffer.data(), Count);
+    }
+    if (GetLastError() != ERROR_BROKEN_PIPE) throw std::runtime_error("priority test output read failed");
+    if (!Passed) throw std::runtime_error("priority test query/exit failed");
+}
+int PriorityParentTest() {
+    const DWORD ParentClass = GetPriorityClass(GetCurrentProcess());
+    if ((ParentClass != NORMAL_PRIORITY_CLASS && ParentClass != BELOW_NORMAL_PRIORITY_CLASS &&
+         ParentClass != IDLE_PRIORITY_CLASS) || GetThreadPriority(GetCurrentThread()) != THREAD_PRIORITY_NORMAL)
+        throw std::runtime_error("priority test parent outside fixed ordinary classes");
+    PriorityTestChild(L"--priority-probe", 0, ParentClass);
+    PriorityTestChild(L"--priority-probe", NORMAL_PRIORITY_CLASS, NORMAL_PRIORITY_CLASS);
+    return 0;
+}
+int PrioritySelfTest() {
+    const DWORD OriginalClass = GetPriorityClass(GetCurrentProcess());
+    const int OriginalRelative = GetThreadPriority(GetCurrentThread());
+    if (!OriginalClass || OriginalRelative == THREAD_PRIORITY_ERROR_RETURN)
+        throw std::runtime_error("priority test controller query failed");
+    for (const DWORD Class : {NORMAL_PRIORITY_CLASS, BELOW_NORMAL_PRIORITY_CLASS, IDLE_PRIORITY_CLASS})
+        PriorityTestChild(L"--priority-parent-test", Class, Class);
+    if (!OrdinaryPriority(NORMAL_PRIORITY_CLASS, THREAD_PRIORITY_NORMAL) ||
+        OrdinaryPriority(0, THREAD_PRIORITY_NORMAL) || OrdinaryPriority(NORMAL_PRIORITY_CLASS, THREAD_PRIORITY_ERROR_RETURN) ||
+        OrdinaryPriority(BELOW_NORMAL_PRIORITY_CLASS, THREAD_PRIORITY_NORMAL) ||
+        OrdinaryPriority(IDLE_PRIORITY_CLASS, THREAD_PRIORITY_NORMAL) ||
+        OrdinaryPriority(HIGH_PRIORITY_CLASS, THREAD_PRIORITY_NORMAL) ||
+        OrdinaryPriority(NORMAL_PRIORITY_CLASS, THREAD_PRIORITY_BELOW_NORMAL) ||
+        OrdinaryPriority(NORMAL_PRIORITY_CLASS, THREAD_PRIORITY_ABOVE_NORMAL) ||
+        GetPriorityClass(GetCurrentProcess()) != OriginalClass || GetThreadPriority(GetCurrentThread()) != OriginalRelative)
+        throw std::runtime_error("priority test denial/controller preservation failed");
+    std::cout << "[Qualification:SchedulerTrace] priority-self-test=PASS parents=3 default-inheritance-controls=3"
+        " explicit-normal-children=3 query-denials=PASS own-children-reaped=PASS controller-unchanged=PASS no-session-or-workload-created\n";
+    return 0;
+}
 int Run(const fs::path &Root, const GUID &Guid, const std::wstring &GuidText, FixedCase Case = FixedCase::Full) {
     if (!Root.is_absolute() || !fs::is_directory(Root)) throw std::runtime_error("absolute repository required");
     const auto Selection = GetCaseSpec(Case);
@@ -522,10 +640,14 @@ int Run(const fs::path &Root, const GUID &Guid, const std::wstring &GuidText, Fi
     PROCESS_INFORMATION Child{};
     std::wstring Command = L"\"" + Binary.wstring() + L"\" " + Selection.Argument;
     const BOOL Created = CreateProcessW(Binary.c_str(), Command.data(), nullptr, nullptr, TRUE,
-        CREATE_SUSPENDED | CREATE_NO_WINDOW | EXTENDED_STARTUPINFO_PRESENT, nullptr, Root.c_str(),
+        WorkloadCreationFlags, nullptr, Root.c_str(),
         &Startup.StartupInfo, &Child);
     const DWORD LaunchError = Created ? ERROR_SUCCESS : GetLastError();
     DWORD ExitCode = 125, OwnershipError = ERROR_SUCCESS;
+    const DWORD ControllerPriorityClass = GetPriorityClass(GetCurrentProcess());
+    DWORD ChildPriorityClass = 0, PriorityError = ERROR_SUCCESS;
+    int ChildThreadPriority = THREAD_PRIORITY_ERROR_RETURN;
+    bool PriorityVerifiedBeforeResume = false;
     if (Created) {
         Process.Value = Child.hProcess; Thread.Value = Child.hThread;
         if (!AssignProcessToJobObject(Job.Value, Process.Value)) {
@@ -550,8 +672,20 @@ int Run(const fs::path &Root, const GUID &Guid, const std::wstring &GuidText, Fi
     bool TimedOut = false, TreeReaped = false, Resumed = false;
     std::uint64_t BeforeResumeQpc = 0, AfterChildExitQpc = 0;
     if (Created) {
+        if (OwnershipError == ERROR_SUCCESS) {
+            ChildPriorityClass = GetPriorityClass(Process.Value);
+            const DWORD ClassError = ChildPriorityClass ? ERROR_SUCCESS : GetLastError();
+            ChildThreadPriority = GetThreadPriority(Thread.Value);
+            const DWORD ThreadError = ChildThreadPriority == THREAD_PRIORITY_ERROR_RETURN ? GetLastError() : ERROR_SUCCESS;
+            PriorityError = ClassError ? ClassError : ThreadError;
+            PriorityVerifiedBeforeResume = PriorityError == ERROR_SUCCESS &&
+                OrdinaryPriority(ChildPriorityClass, ChildThreadPriority);
+            if (!PriorityVerifiedBeforeResume && !PriorityError) PriorityError = ERROR_INVALID_DATA;
+        }
         if (OwnershipError != ERROR_SUCCESS) {
             TerminateProcess(Process.Value, 125);
+        } else if (!PriorityVerifiedBeforeResume) {
+            OwnershipError = PriorityError; TerminateJobObject(Job.Value, 125);
         } else if ((BeforeResumeQpc = Qpc(), ResumeThread(Thread.Value)) == static_cast<DWORD>(-1)) {
             OwnershipError = GetLastError(); TerminateJobObject(Job.Value, 125);
         } else {
@@ -586,6 +720,11 @@ int Run(const fs::path &Root, const GUID &Guid, const std::wstring &GuidText, Fi
         std::ofstream ChildResult(Output / "child-result.json", std::ios::binary);
         ChildResult << "{\"ChildResumed\":" << (Resumed ? "true" : "false")
             << ",\"ChildExitCode\":" << ExitCode << ",\"ChildPid\":" << Child.dwProcessId
+            << ",\"RequestedChildCreationFlags\":" << WorkloadCreationFlags
+            << ",\"ControllerPriorityClass\":" << ControllerPriorityClass
+            << ",\"ChildPriorityClass\":" << ChildPriorityClass << ",\"ChildThreadPriority\":" << ChildThreadPriority
+            << ",\"PriorityQueryError\":" << PriorityError
+            << ",\"PriorityVerifiedBeforeResume\":" << (PriorityVerifiedBeforeResume ? "true" : "false")
             << ",\"ChildTreeReaped\":" << (TreeReaped ? "true" : "false") << "}\n";
         ChildResult.flush();
     }
@@ -605,7 +744,8 @@ int Run(const fs::path &Root, const GUID &Guid, const std::wstring &GuidText, Fi
         Decoding.HeaderBuffersLost == 0 && Decoding.ClockType == 1 && Decoding.Frequency > 0 &&
         !Decoded.Capped && !Decoded.WriteFailed && !Decoded.TimedOut && Decoded.Csv.good() && Decoded.Unsupported == 0 &&
         Decoded.Switches > 0 && Decoded.Readies > 0 && Decoded.MainFirst > 0 && Decoded.MainLast > Decoded.MainFirst &&
-        fs::file_size(Etl) < 512ULL * 1024 * 1024 && !TimedOut && !LogCapped && !LogFailed && TreeReaped && Resumed;
+        fs::file_size(Etl) < 512ULL * 1024 * 1024 && !TimedOut && !LogCapped && !LogFailed && TreeReaped && Resumed &&
+        PriorityVerifiedBeforeResume;
     std::ofstream Metadata(Output / "metadata.json", std::ios::binary);
     Metadata << "{\n\"Format\":\"GargantuanSchedulerTrace\",\"Version\":1,\n"
         << "\"WorkloadCase\":" << JsonString(Selection.Name)
@@ -619,6 +759,11 @@ int Run(const fs::path &Root, const GUID &Guid, const std::wstring &GuidText, Fi
         << ",\"HeaderEventsLost\":" << Decoding.HeaderEventsLost << ",\"HeaderBuffersLost\":" << Decoding.HeaderBuffersLost << ",\n"
         << "\"ChildLaunchAttempts\":1,\"ChildPid\":" << Child.dwProcessId << ",\"ChildMainTid\":" << Child.dwThreadId
         << ",\"LaunchError\":" << LaunchError << ",\"OwnershipError\":" << OwnershipError
+        << ",\"RequestedChildCreationFlags\":" << WorkloadCreationFlags
+        << ",\"ControllerPriorityClass\":" << ControllerPriorityClass
+        << ",\"ChildPriorityClass\":" << ChildPriorityClass << ",\"ChildThreadPriority\":" << ChildThreadPriority
+        << ",\"PriorityQueryError\":" << PriorityError
+        << ",\"PriorityVerifiedBeforeResume\":" << (PriorityVerifiedBeforeResume ? "true" : "false")
         << ",\"ChildExitCode\":" << ExitCode << ",\"ChildResumed\":" << (Resumed ? "true" : "false")
         << ",\"TimedOut\":" << (TimedOut ? "true" : "false") << ",\"ChildTreeReaped\":" << (TreeReaped ? "true" : "false") << ",\n"
         << "\"ChildLogCapped\":" << (LogCapped ? "true" : "false") << ",\"ChildLogFailed\":" << (LogFailed ? "true" : "false") << ",\n"
@@ -647,6 +792,11 @@ int Run(const fs::path &Root, const GUID &Guid, const std::wstring &GuidText, Fi
 int wmain(int Count, wchar_t **Args) {
     try {
         if (Count == 2 && std::wstring(Args[1]) == L"--self-test") return SelfTest();
+        if (Count == 2 && std::wstring(Args[1]) == L"--priority-self-test") return PrioritySelfTest();
+        if (Count == 2 && std::wstring(Args[1]) == L"--priority-parent-test") return PriorityParentTest();
+        if (Count == 2 && std::wstring(Args[1]) == L"--priority-probe")
+            return GetPriorityClass(GetCurrentProcess()) != 0 &&
+                GetThreadPriority(GetCurrentThread()) == THREAD_PRIORITY_NORMAL ? 0 : 125;
         if (Count == 5 && std::wstring(Args[1]) == L"--decode")
             return DecodeOnly(fs::path(Args[2]), fs::path(Args[3]), ParseMainThread(Args[4]));
         if (Count == 4 && std::wstring(Args[1]) == L"--run")

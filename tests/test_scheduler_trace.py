@@ -477,7 +477,10 @@ class SchedulerTraceTests(unittest.TestCase):
             Metadata[Name] = True
         for Name in ("TimedOut", "ChildLogCapped", "ChildLogFailed", "CsvCapped", "DecodeTimedOut"):
             Metadata[Name] = False
-        Metadata.update(ChildLaunchAttempts=1, ClockType=1, QpcFrequency=10000000, ControllerQpcFrequency=10000000,
+        Metadata.update(RequestedChildCreationFlags=134742052, ControllerPriorityClass=16384,
+                        ChildPriorityClass=32, ChildThreadPriority=0, PriorityQueryError=0,
+                        PriorityVerifiedBeforeResume=True,
+                        ChildLaunchAttempts=1, ClockType=1, QpcFrequency=10000000, ControllerQpcFrequency=10000000,
                         ControllerStartQpc=1, AfterTraceStartQpc=2, BeforeChildResumeQpc=3, AfterChildExitQpc=1000,
                         ControllerEndQpc=1001, HeaderStartFileTime=1, HeaderEndFileTime=2,
                         ChildPid=42, ChildMainTid=43, MainFirstQpc=4, MainLastQpc=999)
@@ -676,6 +679,54 @@ class SchedulerTraceTests(unittest.TestCase):
         Validator = (ROOT / 'tools/ci/SchedulerTraceValidate.py').read_text()
         self.assertNotIn('5_000_000', Validator)
         self.assertEqual(Validator.count('Count <= CsvBytes'), 2)
+
+    def test_ordinary_child_priority_metadata_is_required_without_latency_discount(self):
+        with tempfile.TemporaryDirectory() as Directory:
+            Metadata, Log, File = self.FullFixture(Path(Directory))
+            self.assertEqual(VALIDATOR.Validate(Metadata, Log, 'Full', File)['State'], 'LOSS_FREE_ANCHOR_WINDOW_RETAINED')
+            for Name, Values in {
+                'RequestedChildCreationFlags': (None, 134742020, '134742052', True),
+                'ControllerPriorityClass': (None, 0, True),
+                'ChildPriorityClass': (None, 0, 16384, 128, True),
+                'ChildThreadPriority': (None, -1, 1, 2147483647, False),
+                'PriorityQueryError': (None, 5, False),
+                'PriorityVerifiedBeforeResume': (None, False, 1),
+            }.items():
+                for Value in Values:
+                    with self.subTest(Name=Name, Value=Value):
+                        Changed = dict(Metadata)
+                        if Value is None:
+                            del Changed[Name]
+                        else:
+                            Changed[Name] = Value
+                        self.assertEqual(VALIDATOR.Validate(Changed, Log, 'Full', File)['State'], 'INCOMPLETE')
+            Failed, FailedLog, FailedFile = self.FullFixture(Path(Directory), Exit=1, Cases=2)
+            Verdict = VALIDATOR.Validate(Failed, FailedLog, 'Full', FailedFile)
+            self.assertEqual(Verdict['State'], 'LOSS_FREE_ANCHOR_WINDOW_RETAINED')
+            self.assertEqual(Failed['ChildExitCode'], 1)
+
+    @unittest.skipUnless(os.environ.get('SCHEDULER_TRACE_TEST_HELPER'), 'native helper not supplied')
+    def test_native_priority_inheritance_controls_and_ordinary_child_without_capture(self):
+        Result = subprocess.run([os.environ['SCHEDULER_TRACE_TEST_HELPER'], '--priority-self-test'],
+                                text=True, capture_output=True, timeout=100,
+                                creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        self.assertEqual(Result.returncode, 0, Result.stdout + Result.stderr)
+        for Part in ('priority-self-test=PASS', 'parents=3', 'default-inheritance-controls=3',
+                     'explicit-normal-children=3', 'query-denials=PASS', 'own-children-reaped=PASS',
+                     'controller-unchanged=PASS', 'no-session-or-workload-created'):
+            self.assertIn(Part, Result.stdout)
+        Rows = [dict(Part.split('=', 1) for Part in Line.split()[1:]) for Line in Result.stdout.splitlines()
+                if Line.startswith('[Qualification:PriorityCase] ')]
+        self.assertEqual(len(Rows), 9)
+        Controls = [Row for Row in Rows if Row['argument'] == '--priority-probe' and Row['requested_class'] == '0']
+        Fixed = [Row for Row in Rows if Row['argument'] == '--priority-probe' and Row['requested_class'] == '32']
+        self.assertEqual({(Row['parent_class'], Row['actual_class']) for Row in Controls},
+                         {('32', '32'), ('16384', '16384'), ('64', '64')})
+        self.assertEqual({(Row['parent_class'], Row['actual_class']) for Row in Fixed},
+                         {('32', '32'), ('16384', '32'), ('64', '32')})
+        self.assertTrue(all(Row['relative_priority'] == '0' and
+                            all(Row[Name] == '1' for Name in ('assigned', 'root_reaped', 'tree_reaped', 'passed'))
+                            for Row in Rows))
 
     @unittest.skipUnless(os.environ.get("SCHEDULER_TRACE_TEST_HELPER"), "native compile-only helper not supplied")
     def test_native_payload_bounds_and_ownership_without_capture(self):

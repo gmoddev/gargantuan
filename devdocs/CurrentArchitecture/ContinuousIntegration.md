@@ -220,15 +220,17 @@ logical invocations, dependent Linux and GNS gates
 remain mandatory. Helper compilation and noncapture self-tests precede this
 qualification. Original child failure remains failure; capture, loss, clock
 coverage or cleanup failure also prevents qualification. No request clock,
-threshold, argument, workload, priority, affinity or timer policy changes.
+threshold, argument, workload, affinity or timer policy changes. The ordinary
+child scheduling contract below supersedes inherited priority for the fixed
+diagnostic child only.
 The helper and exact workload executable are retained with diagnostics so their
 wrapper hashes can be independently recomputed. Native DWORD failure statuses
 remain raw in receipts; only returned process status uses the signed equivalent.
 All five normal standalone guards reject any nonzero status, including a negative
 native crash. Helper tests are a distinct mandatory suite, independently checked
 from the existing physical-control/evidence tooling suites. The seven Windows
-tooling suite counts are 12, 21, 4, 1, 226, 29 and 2 (**295 total**); the separate
-scheduler helper suite now contains **31**, for a combined inventory of **326**.
+tooling suite counts are 12, 21, 4, 1, 228, 32 and 3 (**301 total**); the separate
+scheduler helper suite now contains **33**, for a combined inventory of **334**.
 The historical `c33d573d5` hosted jobs ran 20 helper tests plus 295 tooling tests,
 or 315 total. The local full tooling matrix's 315 tests are a different scope
 and do not replace either hosted suite. New source requires its own original
@@ -331,6 +333,45 @@ coverage and duration. It never edits original metadata or declares original
 CI/native qualification. A separately identified offline reconstruction must
 join the preserved input hash and original child/clock evidence to that receipt;
 no offline result substitutes for a new original hosted job.
+
+### Ordinary scheduling for the fixed traced child (2026-10-04)
+
+The fixed traced child is created suspended with explicit
+`NORMAL_PRIORITY_CLASS`, then assigned to its existing owned Job Object.
+Immediately before resume, `GetPriorityClass` must report Normal and
+`GetThreadPriority` must report `THREAD_PRIORITY_NORMAL`. Query failure or a
+different policy prevents resume, preserves status 125 and reaps the owned
+process tree. Requested flags, controller class, actual child class and main
+relative priority, query status and pre-resume verification are retained in the
+early child result, final metadata and wrapper. The current-source offline
+validator requires this measured policy. The controller's own scheduling,
+ordinary direct commands, production transport, F1, latency clocks, workload,
+affinity and timer policy remain unchanged. No background task or service is
+disabled or stopped.
+
+The [Windows process creation contract](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-createprocessw)
+allows an unspecified child class to inherit an Idle or Below Normal parent.
+[Scheduling priorities](https://learn.microsoft.com/en-us/windows/win32/procthread/scheduling-priorities)
+maps ordinary relative priority to base 6 under Below Normal and base 8 under
+Normal. The original `3e030710` PR Full trace records base-6 PowerShell/helper/
+workload threads competing with base-8/9 Compatibility Appraiser threads.
+The original API priority-class queries were **NOT MEASURED**; those base
+priorities alone are not reclassified as API observations. Its action failure
+remains failed. The new explicit ordinary class removes this launcher's ability
+to inherit a lower class; it does not promise a future hosted latency PASS.
+
+The separate `--priority-self-test` launches only bounded, exit-only copies of
+the helper. Three owned parent processes, created at Normal, Below Normal and
+Idle, each compare an unspecified child against an explicit Normal child.
+Actual class/relative-priority and ownership/reap results are printed for all
+nine process launches. Only test-owned creation flags select those classes;
+the controller's class is preserved. Nested parents have a 25-second bound,
+each probe has a 5-second bound, cleanup is bounded and logs are capped at
+8 KiB. No session, transport or workload starts. Existing `--self-test` retains
+its no-child guarantee. Positive API controls and wrong-class/query/missing-
+evidence denials supplement unchanged loss, clock, cleanup and original-exit
+tests. Historical original validators and receipts remain immutable; this
+current-source requirement does not retroactively qualify old jobs.
 
 The decoder recognizes the originally supported CSwitch version 2/24-byte
 layout and the exact observed version 5/28-byte, 64-bit-header layout. The

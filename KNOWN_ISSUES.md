@@ -85,6 +85,28 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+2026-10-04 hosted scheduling attribution: source `3e030710` Native PR
+`37173701281`, Windows job `111351799079`, passes 95 CTest cases but fails
+standalone command 3, FULL `upper` action 17 at 1892.3673 ms against 250 ms.
+Commands 4/5 never start and dependent PR Linux is skipped. The retained,
+loss-free scheduler trace measures 1889.0000 ms off CPU and 3.3673 ms scheduled
+inside that action. Its largest 750.7253-ms ready/preemption gap coincides with
+Compatibility Appraiser and its PowerShell child consuming approximately 93%
+of four-core running time. Independent Windows Performance Toolkit decoding
+joins every original CSwitch row, identifies the SYSTEM appraiser command and
+records base-6 workload/launcher threads versus base-8/9 competitors. Original
+API priority classes remain **NOT MEASURED**.
+
+The fixed trace launcher now requests ordinary Normal class and verifies actual
+class/main relative priority before resuming its owned child. A bounded API
+regression reproduces unspecified Below Normal/Idle inheritance and verifies
+explicit Normal under all three parent classes. All 33 helper tests pass in
+normal and optimized modes without skips. No background task, service, workload
+or latency limit changes. This corrects launch-policy dependence, not the
+historical failed result; fresh original hosted CI remains required before any
+new candidate adoption. Failed-run cleanup and both provider matrices remain
+outstanding. **KI-006 OPEN; Foundation 3L B — PARTIALLY READY; no 3M.**
+
 2026-10-04 Local32 startup attribution: tooling `2537f4517` has successful
 original push/PR Windows, Linux and GNS checks. Fresh Local run
 `cf89463c-cd4a-4d18-849a-cb66b51ba97e` passes staged imports and strict capture
