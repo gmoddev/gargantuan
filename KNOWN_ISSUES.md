@@ -85,6 +85,17 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+2026-10-04 decoder continuation: the development Full native child passes all
+eight cases, but its original diagnostic fails at the obsolete five-million-row
+cutoff with only 309,432,716 CSV bytes. Removing that independent cutoff retains
+the existing 512-MiB byte and 180-second time bounds. The corrected SDK helper
+passes 31 tests in both normal and optimized Python modes without skips. A
+separate read-only replay decodes the unchanged ETL into 7,731,540 rows and
+478,326,842 bytes in 16,609 ms without reported loss or truncation. The original
+diagnostic remains failed; no workload or capture is rerun. New original hosted
+CI and independent candidate qualification still precede physical adoption.
+**KI-006 OPEN; 3L B — PARTIALLY READY**.
+
 2026-10-03 c33 original CI continuation: Native PR `37158397178` fails logical
 command 3, FULL_RESERVATION `--reliable-workload`, upper case. RPC p95 is
 218.8903 ms against 150 ms; action 17 is 556.5228 ms against 250 ms. Native

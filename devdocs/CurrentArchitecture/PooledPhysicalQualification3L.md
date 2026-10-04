@@ -1,10 +1,23 @@
 ---
 status: f1-phase1-pass-later-gates-pending
 owner: runtime-networking-and-runtime-host
-last_verified: 2026-10-03
+last_verified: 2026-10-04
 ---
 
 # Foundation 3L pooled physical qualification attempt
+
+## Full diagnostic decoder qualified locally; original CI required (2026-10-04)
+
+The Full development native child passes, while its original diagnostic remains
+failed at the obsolete five-million-row cutoff. The corrected SDK helper passes
+31 tests in each Python mode without skips. A separate read-only replay of the
+unchanged retained ETL decodes all 7,731,540 rows within the existing byte/time
+bounds. Original evidence is preserved; this replay launches no workload or
+capture and does not explain the earlier hosted timing failure. See the
+[decoder validation receipt](ContentAvailabilityFoundation3L_3Validation.md#full-decoder-correction-and-retained-etl-reconstruction-2026-10-04).
+New original push/PR CI and independent candidate review are still required
+before fresh Local32/Node32 adoption. V5 remains unadopted with null pins.
+Retained F1 PASS is unchanged; **KI-006 OPEN; 3L B — PARTIALLY READY**.
 
 ## c33 original CI failure blocks physical launch (2026-10-03)
 

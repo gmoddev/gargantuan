@@ -1,10 +1,50 @@
 ---
 status: partial-validation
 owner: runtime-networking
-last_verified: 2026-10-03
+last_verified: 2026-10-04
 ---
 
 # Foundation 3L.3 diagnostic validation ledger
+
+## Full decoder correction and retained-ETL reconstruction (2026-10-04)
+
+Development Full session `0ba00652-2c7b-42ea-821e-b8434952c531` at diagnostic
+source `c4fc00dac` completes all eight native cases, 745 RPC/Event records and
+72 action records. The original controller/coverage exit is **125**: an
+independent five-million-row cutoff truncates its CSV at 309,432,716 bytes,
+before the unchanged 536,870,912-byte bound. Cleanup succeeds. Its eight raw
+members, failed metadata, coverage and wrapper remain unchanged.
+
+Decoder source `10c1ee591`, with test-only junction setup correction
+`6cc66808c`, removes that row cutoff while retaining byte/time bounds and adds
+a confined read-only `--decode` path. Windows SDK compilation uses `/W4 /WX`;
+the resulting helper SHA-256 is
+`92b65b79fd2f8df5c9a5d2da05cb394fbd8580b67bfad48e9998bca0e9331500`.
+All 31 helper tests pass without skips in both normal and optimized Python
+modes. The earlier junction-fixture setup failure remains recorded separately.
+Production/native build inputs, workload arguments, clocks and gates are unchanged.
+
+One bounded offline replay of the preserved 306,053,120-byte ETL, SHA-256
+`21e096548eb023e33d99d3742a8507b3c77d4187a5ac2312f17b9869bccf0d56`,
+completes at 00:30 UTC: 7,731,540 rows, 478,326,842 CSV bytes, 16,609-ms decode,
+zero reported header loss/unsupported events, and no cap, timeout or write error.
+All eight original member hashes agree before and after; no child or capture
+starts. New CSV SHA-256 is
+`62f244e2bbb1df5a6d9159778acd4b03170ed8f8331bc34746e4fff36d80811d`.
+Raw replay evidence is under
+`C:\Users\aiden\.codex\artifacts\scheduler-offline-decode-v1`.
+Independent replay verifies the exact original CSV prefix, all 16 anchors,
+eight cases, 745 remote records, 72 action records and zero pending observations,
+with 19,768 main-thread switches and 9,453 ready rows. Its separate review is
+`independent-replay-v1\review.json`, SHA-256
+`b8ef24761976eefd08cd72bea0e12926f71296939601aa0151ef5d8b7d985943`.
+Original capture/child fields remain intact in the explicitly derived metadata;
+only decoder evidence changes. Both helper test logs and compile/input/output
+provenance are independently joined.
+This is supplemental offline decoding, not a retroactive diagnostic PASS or
+a measurement of the earlier cloud failure's cause. New original hosted CI
+remains required; dormant V5 remains unadopted, no fresh physical attempt has
+occurred, and retained F1 PASS remains valid. **KI-006 OPEN; 3L B — PARTIALLY READY**.
 
 ## Original c33 FULL upper timing failure (2026-10-03)
 

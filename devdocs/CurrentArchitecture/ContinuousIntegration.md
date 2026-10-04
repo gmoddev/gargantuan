@@ -228,9 +228,11 @@ All five normal standalone guards reject any nonzero status, including a negativ
 native crash. Helper tests are a distinct mandatory suite, independently checked
 from the existing physical-control/evidence tooling suites. The seven Windows
 tooling suite counts are 12, 21, 4, 1, 226, 29 and 2 (**295 total**); the separate
-scheduler helper suite has **20**, for **315 hosted Python tests**. The local
-full tooling matrix's 315 tests are a different scope and do not replace either
-hosted suite.
+scheduler helper suite now contains **31**, for a combined inventory of **326**.
+The historical `c33d573d5` hosted jobs ran 20 helper tests plus 295 tooling tests,
+or 315 total. The local full tooling matrix's 315 tests are a different scope
+and do not replace either hosted suite. New source requires its own original
+hosted results; the updated inventory is not a claim that those jobs passed.
 
 Aggregate request identities and original steady-clock endpoints join bounded
 CPU/sleep observations and buffered peer-operation spans to bracketed QPC
