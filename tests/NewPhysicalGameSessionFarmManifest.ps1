@@ -25,6 +25,19 @@ param(
 $ErrorActionPreference = 'Stop'
 $RunId = $RunId.ToLowerInvariant()
 
+# Import only read-only package validators; this creator never creates a runtime
+# projection or invokes the endpoint supervisor.
+$Tokens = $null; $Errors = $null
+$EndpointAst = [Management.Automation.Language.Parser]::ParseFile(
+	(Join-Path $PSScriptRoot 'PhysicalGameSessionFarmEndpoint.ps1'), [ref]$Tokens, [ref]$Errors)
+if ($Errors.Count -ne 0) { throw 'endpoint validator syntax invalid' }
+$ValidatorNames = @('Assert-DeploymentManifest', 'Assert-ProjectionPlainPath', 'Read-ProjectionJson', 'Get-NativeRuntimePlan')
+$Definitions = @($EndpointAst.FindAll({ param($Node)
+	$Node -is [Management.Automation.Language.FunctionDefinitionAst] -and $Node.Name -in $ValidatorNames
+}, $true))
+if ($Definitions.Count -ne $ValidatorNames.Count) { throw 'native package validator set incomplete' }
+foreach ($Definition in $Definitions) { . ([scriptblock]::Create($Definition.Extent.Text)) }
+
 function Assert-EndpointText {
 	param([string]$Text, [switch]$AllowDns)
 	$Parts = $Text -split ':'
@@ -114,6 +127,10 @@ function Get-RolePins {
 	}
 	if ($Found -ne $Expected.Count) { throw "$Role package is missing a listed file" }
 	$Binary = if ($Role -eq 'Server') { 'GargantuanServer.exe' } else { 'GargantuanPlayer.exe' }
+	$NativeRole = if ($Role -eq 'Server') { 'Server' } else { 'Clients' }
+	[void](Get-NativeRuntimePlan -LocalRoot $PackageRoot -DeploymentSha256 `
+		(Get-FileHash -LiteralPath $DeploymentPath -Algorithm SHA256).Hash `
+		-SourceCommit $Deployment.SourceCommit -LocalRole $NativeRole)
 	$Required = @($Binary, 'game.package.json', 'content/content.manifest.json')
 	foreach ($Relative in $Required) {
 		if (-not $Expected.ContainsKey($Relative)) { throw "$Role package is missing required $Relative" }

@@ -160,6 +160,24 @@ of the client-to-worker fiber GNS path before another fresh one-client run.
 
 ## Two-PC migration
 
+### Farm32 deployment envelope and native runtime closure
+
+The hash-pinned qualified role artifact is a deployment envelope. Its
+`deployment-sha256.json` is qualification evidence and is not native game
+content. Before ARM, source-owned staging derives a new run/role runtime
+projection from the exact game content table plus `game.package.json`, checks
+equality with the pinned deployment inventory, and verifies every copied byte.
+The inventory and projection receipt stay outside the executable's closed
+runtime root. Read-only preflight and the endpoint verify the prepared copy;
+the endpoint launches that copy. Original envelopes and all eight manifest pins
+remain unchanged. Stale or partial projections fail closed and remain evidence;
+staging never deletes or retries them. Native package integrity remains enforced.
+
+The October 4 Local32 startup failure exposed the missing distinction. It is
+historical failed infrastructure evidence, not a production F1 measurement or a
+provider PASS. Projection preparation does not count as a physical run or
+replace native package validation and the canonical provider/evidence gates.
+
 Keep the currently installed tools/runtime/service on the controlling PC and
 dockerbox. Package the pinned adapter/library into a fresh sibling bundle, verify
 every manifest hash and run control/hook tests. Stage only when directed; do not

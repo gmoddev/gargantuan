@@ -269,6 +269,8 @@ jobs:
           & (Join-Path $PWD 'build-ci/gargantuan_qualified_scale_package.exe') `
             $PackageRoot $PlayerRuntime $ServerRuntime
           if ($LASTEXITCODE -ne 0) { throw 'Qualified scale package generation failed' }
+          $ProjectionRun = [Guid]::NewGuid().ToString()
+          $ProjectionRegistry = Join-Path $PWD 'build-ci/QualifiedScaleRuntimeCheck'
           foreach ($Role in @('Player', 'Server')) {
             $RoleRoot = Join-Path $PackageRoot $Role
             $Files = @(Get-ChildItem -LiteralPath $RoleRoot -File -Recurse | Sort-Object FullName |
@@ -284,6 +286,17 @@ jobs:
               ([ordered]@{ Format = 'GargantuanFarmDeployment'; Version = 1;
                 SourceCommit = $env:GITHUB_SHA; Files = $Files } | ConvertTo-Json -Depth 5),
               [Text.UTF8Encoding]::new($false))
+            # The upload is a pinned deployment envelope. The native host must
+            # receive its closed content projection, without this sidecar.
+            $LocalRole = if ($Role -eq 'Server') { 'Server' } else { 'Clients' }
+            $DeploymentPin = (Get-FileHash -LiteralPath (Join-Path $RoleRoot 'deployment-sha256.json') `
+              -Algorithm SHA256).Hash.ToLowerInvariant()
+            & ./tests/NewPhysicalGameSessionFarmProjection.ps1 -PackageRoot $RoleRoot `
+              -RunRegistryRoot $ProjectionRegistry -RunId $ProjectionRun -Role $LocalRole `
+              -DeploymentSha256 $DeploymentPin -SourceCommit $env:GITHUB_SHA
+            $RuntimeRoot = Join-Path $ProjectionRegistry "$ProjectionRun.$LocalRole.runtime"
+            & (Join-Path $PWD 'build-ci/gargantuan-packager.exe') validate $RuntimeRoot
+            if ($LASTEXITCODE -ne 0) { throw "Qualified $Role runtime projection failed native validation" }
           }
 
       - name: Upload qualified 32-client physical candidate

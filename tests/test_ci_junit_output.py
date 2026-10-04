@@ -17,6 +17,19 @@ OUTPUTS = {
 
 
 class CIJUnitTests(unittest.TestCase):
+    def test_qualified_envelope_checks_native_projection_after_sidecar(self):
+        Text = (ROOT / '.github/workflows/native-ci.yml').read_text()
+        Step = Text.split('- name: Package qualified 32-client physical candidate', 1)[1].split(
+            '- name: Upload qualified 32-client physical candidate', 1)[0]
+        Sidecar = Step.index("WriteAllText((Join-Path $RoleRoot 'deployment-sha256.json')")
+        Projection = Step.index('& ./tests/NewPhysicalGameSessionFarmProjection.ps1')
+        Native = Step.index("'build-ci/gargantuan-packager.exe') validate $RuntimeRoot")
+        self.assertLess(Sidecar, Projection)
+        self.assertLess(Projection, Native)
+        self.assertIn("'build-ci/QualifiedScaleRuntimeCheck'", Step)
+        self.assertIn('-DeploymentSha256 $DeploymentPin -SourceCommit $env:GITHUB_SHA', Step)
+        self.assertIn('if ($LASTEXITCODE -ne 0)', Step[Native:])
+
     def test_all_workflow_outputs_are_absolute_and_match_uploaded_members(self):
         for Name, Expected in OUTPUTS.items():
             Text = (ROOT / ".github/workflows" / Name).read_text()

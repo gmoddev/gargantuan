@@ -374,10 +374,22 @@ class ProvenanceTests(unittest.TestCase):
         self.Pins = {}
         for Role in ('Player', 'Server'):
             Records = []
-            for Name in (f'Gargantuan{Role}.exe', 'game.package.json', 'content/content.manifest.json'):
+            for Name in (f'Gargantuan{Role}.exe', 'content/content.manifest.json'):
                 Data = (Role + Name).encode()
                 self.Files[f'{Role}/{Name}'] = Data
                 Records.append({'Path': Name, 'Bytes': len(Data), 'Sha256': A.Digest(Data)})
+            Content = [{'Path': Record['Path'], 'Size': Record['Bytes'], 'Sha256': Record['Sha256'],
+                        'Category': 'Runtime' if Record['Path'].endswith('.exe') else 'Project'}
+                       for Record in Records]
+            Table = json.dumps(Content, ensure_ascii=False, separators=(',', ':')).encode()
+            Package = {'Format': 'GargantuanGamePackage', 'PackageFormatVersion': 2,
+                       'RuntimeCompatibility': 1, 'ProjectId': 'a' * 32, 'DisplayName': 'Test',
+                       'Configuration': 'Release', 'Revision': 1, 'UnsavedChanges': False,
+                       'Player': f'Gargantuan{Role}.exe', 'Startup': {},
+                       'ContentTableSha256': A.Digest(Table), 'Content': Content}
+            Data = json.dumps(Package).encode()
+            self.Files[f'{Role}/game.package.json'] = Data
+            Records.insert(1, {'Path': 'game.package.json', 'Bytes': len(Data), 'Sha256': A.Digest(Data)})
             Data = json.dumps({'Format': 'GargantuanFarmDeployment', 'Version': 1,
                                'SourceCommit': SOURCE, 'Files': Records}).encode()
             self.Files[f'{Role}/deployment-sha256.json'] = Data
@@ -403,6 +415,59 @@ class ProvenanceTests(unittest.TestCase):
         Result = A.VerifyQualifiedPackage(self.Root, self.Package(), SOURCE, self.CI)
         self.assertEqual(Result['Pins'], self.Pins)
         self.assertEqual(Result['State'], 'MEASURED_PASS')
+        self.assertEqual(Result['RuntimeInventories']['Server']['Files'], 3)
+        self.assertEqual(Result['RuntimeInventories']['Server']['Layout'],
+                         'DEPLOYMENT_ENVELOPE_REQUIRES_RUNTIME_PROJECTION')
+
+    def test_deployment_cannot_extend_native_content_closure(self):
+        # This is hash-consistent deployment evidence, but the native host
+        # would reject its extra file. Inventory hashes alone are insufficient.
+        Name = 'Server/extra.dll'
+        self.Files[Name] = b'new deployment member'
+        Manifest = json.loads(self.Files['Server/deployment-sha256.json'])
+        Manifest['Files'].append({'Path': 'extra.dll', 'Bytes': len(self.Files[Name]),
+                                  'Sha256': A.Digest(self.Files[Name])})
+        self.Files['Server/deployment-sha256.json'] = json.dumps(Manifest).encode()
+        with self.assertRaisesRegex(A.EvidenceError, 'outside native runtime closure'):
+            A.VerifyQualifiedPackage(self.Root, self.Package(), SOURCE, self.CI)
+
+    def test_native_table_and_exact_deployment_basis(self):
+        Original = json.loads(self.Files['Server/game.package.json'])
+        Deployment = json.loads(self.Files['Server/deployment-sha256.json'])['Files']
+        for Mode in ('table', 'size', 'digest', 'missing', 'duplicate', 'order', 'redirect', 'bool-size'):
+            with self.subTest(Mode=Mode):
+                Package = json.loads(json.dumps(Original))
+                if Mode == 'table':
+                    Package['ContentTableSha256'] = '0' * 64
+                elif Mode == 'size':
+                    Package['Content'][0]['Size'] += 1
+                elif Mode == 'digest':
+                    Package['Content'][0]['Sha256'] = '0' * 64
+                elif Mode == 'missing':
+                    Package['Content'].pop()
+                elif Mode == 'duplicate':
+                    Package['Content'].append(dict(Package['Content'][0]))
+                elif Mode == 'order':
+                    Package['Content'].reverse()
+                elif Mode == 'redirect':
+                    Package['Content'][0]['Path'] = '../escape'
+                else:
+                    Package['Content'][0]['Size'] = True
+                if Mode != 'table':
+                    Package['ContentTableSha256'] = A.Digest(json.dumps(
+                        Package['Content'], ensure_ascii=False, separators=(',', ':')).encode())
+                with self.assertRaises(A.EvidenceError):
+                    A.VerifyNativeRuntimeInventory(json.dumps(Package).encode(), Deployment)
+
+    def test_native_inventory_rejects_nonobject_and_boolean_compatibility(self):
+        Deployment = json.loads(self.Files['Server/deployment-sha256.json'])['Files']
+        for Value in (None, [], ['Content']):
+            with self.assertRaises(A.EvidenceError):
+                A.VerifyNativeRuntimeInventory(json.dumps(Value).encode(), Deployment)
+        Package = json.loads(self.Files['Server/game.package.json'])
+        Package['RuntimeCompatibility'] = True
+        with self.assertRaises(A.EvidenceError):
+            A.VerifyNativeRuntimeInventory(json.dumps(Package).encode(), Deployment)
 
     def test_extra_omitted_corrupt_and_case_alias_members(self):
         for Mode in ('extra', 'missing', 'corrupt', 'alias', 'redirect'):

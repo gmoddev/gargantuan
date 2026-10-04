@@ -23,7 +23,8 @@ function Import-EndpointValidators {
 	$Ast = [Management.Automation.Language.Parser]::ParseFile($Source, [ref]$Tokens, [ref]$Errors)
 	if ($Errors.Count -ne 0) { throw 'role-local endpoint has a syntax error' }
 	$Names = @('Assert-RunManifest', 'Read-PinnedRunManifest', 'Assert-RolePaths',
-		'Assert-LocalPackagePins', 'Assert-DeploymentManifest')
+		'Assert-LocalPackagePins', 'Assert-DeploymentManifest', 'Assert-ProjectionPlainPath',
+		'Read-ProjectionJson', 'Get-NativeRuntimePlan', 'Get-RuntimeProjectionPath', 'Assert-RuntimeProjection', 'Assert-PreparedRuntimeProjection')
 	$Definitions = @($Ast.FindAll({ param($Node)
 		$Node -is [Management.Automation.Language.FunctionDefinitionAst] -and
 		$Node.Name -in $Names
@@ -100,6 +101,11 @@ $Manifest = Read-PinnedRunManifest -Path $ManifestPath -ExpectedSha256 $Manifest
 $Paths = Assert-RolePaths -LocalPackage $PackageRoot -LocalEvidence $EvidenceRoot `
 	-LocalRegistry $RunRegistryRoot
 [void](Assert-LocalPackagePins -LocalRoot $Paths.Package -LocalRole $Role -RunManifest $Manifest)
+$Prefix = if ($Role -eq 'Server') { 'Server' } else { 'Player' }
+$RuntimePlan = Get-NativeRuntimePlan -LocalRoot $Paths.Package -DeploymentSha256 $Manifest["${Prefix}DeploymentSha256"] `
+	-SourceCommit $Manifest.SourceCommit -LocalRole $Role
+$RuntimeRoot = Assert-PreparedRuntimeProjection -LocalRoot $Paths.Package -Registry $Paths.Registry `
+	-LocalRunId $Manifest.RunId -LocalRole $Role -Plan $RuntimePlan
 $ReportPath = [IO.Path]::GetFullPath($ReportPath)
 if (Test-Path -LiteralPath $ReportPath) { throw 'stale preflight report path already exists' }
 if ($ReportPath.StartsWith($Paths.Package + [IO.Path]::DirectorySeparatorChar,
@@ -145,6 +151,8 @@ $Inventory = [ordered]@{
 	ManifestSha256 = $ManifestSha256.ToLowerInvariant()
 	DeploymentSha256 = $(if ($Role -eq 'Server') { $Manifest.ServerDeploymentSha256 }
 		else { $Manifest.PlayerDeploymentSha256 })
+	RuntimeProjectionRoot = $RuntimeRoot
+	RuntimeProjectionReceiptSha256 = (Get-FileHash -LiteralPath ($RuntimeRoot + '.json') -Algorithm SHA256).Hash.ToLowerInvariant()
 	LogicalProcessors = [long](($Processors | Measure-Object NumberOfLogicalProcessors -Sum).Sum)
 	PhysicalCores = [long](($Processors | Measure-Object NumberOfCores -Sum).Sum)
 	AvailableMemoryBytes = [long]$OperatingSystem.FreePhysicalMemory * 1024L

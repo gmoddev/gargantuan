@@ -27,22 +27,10 @@ function Expect-Rejection {
 
 function Write-MockPackage {
 	param([string]$Root, [ValidateSet('Server', 'Player')][string]$Role)
-	[void][IO.Directory]::CreateDirectory((Join-Path $Root 'content'))
-	$Binary = if ($Role -eq 'Server') { 'GargantuanServer.exe' } else { 'GargantuanPlayer.exe' }
-	$Names = @($Binary, 'game.package.json', 'content/content.manifest.json', 'runtime.dll')
-	foreach ($Name in $Names) {
-		[IO.File]::WriteAllText((Join-Path $Root $Name), "$Role/$Name")
-	}
-	$Files = @($Names | ForEach-Object {
-		$Path = Join-Path $Root $_
-		[ordered]@{ Path = $_; Bytes = ([IO.FileInfo]$Path).Length;
-			Sha256 = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
-	})
-	[IO.File]::WriteAllText((Join-Path $Root 'deployment-sha256.json'),
-		([ordered]@{ Format = 'GargantuanFarmDeployment'; Version = 1;
-			SourceCommit = 'a' * 40; Files = $Files } |
-		ConvertTo-Json -Depth 5))
+	Write-ProjectionTestEnvelope -Root $Root -Role $Role
 }
+
+. (Join-Path $PSScriptRoot 'PhysicalFarmPackageTestFixture.ps1')
 
 $Root = Join-Path ([IO.Path]::GetTempPath()) ('farm-manifest-test-' + [Guid]::NewGuid().ToString('N'))
 $ServerPackage = Join-Path $Root 'ServerPackage'
@@ -108,13 +96,13 @@ try {
 			-OutputRoot (Join-Path $Root 'InvalidRunId') -RunId 'farm-not-a-uuid' `
 			-Endpoint '127.0.0.1:39450' -ClientFrames 1800 -ServerTicks 9000 | Out-Null
 	} 'non-UUID physical run ID'
-	[IO.File]::WriteAllText((Join-Path $PlayerPackage 'runtime.dll'), 'tampered')
+	[IO.File]::WriteAllText((Join-Path $PlayerPackage 'runtime/DefaultActionMap.luau'), 'tampered')
 	Expect-Rejection {
 		& $Creator -ServerPackageRoot $ServerPackage -PlayerPackageRoot $PlayerPackage `
 			-OutputRoot (Join-Path $Root 'TamperedOutput') -Endpoint '127.0.0.1:39450' `
 			-Provider Local -ClientFrames 1800 -ServerTicks 9000 | Out-Null
 	} 'mismatched listed runtime file'
-	[IO.File]::WriteAllText((Join-Path $PlayerPackage 'runtime.dll'), 'Player/runtime.dll')
+	[IO.File]::WriteAllText((Join-Path $PlayerPackage 'runtime/DefaultActionMap.luau'), 'mock-Player/runtime/DefaultActionMap.luau')
 	[IO.File]::WriteAllText((Join-Path $PlayerPackage 'unlisted.dll'), 'extra')
 	Expect-Rejection {
 		& $Creator -ServerPackageRoot $ServerPackage -PlayerPackageRoot $PlayerPackage `
@@ -122,7 +110,7 @@ try {
 			-Provider Local -ClientFrames 1800 -ServerTicks 9000 | Out-Null
 	} 'unlisted role package file'
 	Remove-Item -LiteralPath (Join-Path $PlayerPackage 'unlisted.dll') -Force
-	Remove-Item -LiteralPath (Join-Path $PlayerPackage 'runtime.dll') -Force
+	Remove-Item -LiteralPath (Join-Path $PlayerPackage 'runtime/DefaultActionMap.luau') -Force
 	Expect-Rejection {
 		& $Creator -ServerPackageRoot $ServerPackage -PlayerPackageRoot $PlayerPackage `
 			-OutputRoot (Join-Path $Root 'MissingOutput') -Endpoint '127.0.0.1:39450' `

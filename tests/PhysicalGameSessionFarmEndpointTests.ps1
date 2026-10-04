@@ -193,6 +193,7 @@ try {
 		Assert-FairnessEvidence -Path $FairnessPath -LocalRunId $Manifest.RunId
 	} 'native fairness evidence overflow marker'
 	Write-Output '[Qualification:FarmEndpoint] MOCK_TEST_OK'
+	& (Join-Path $PSScriptRoot 'NewPhysicalGameSessionFarmProjectionTests.ps1')
 } finally {
 	$ResolvedRoot = [IO.Path]::GetFullPath($Root)
 	$ResolvedTemp = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\', '/')

@@ -68,6 +68,49 @@ class MockTransport:
 
 
 class OuterCampaignTests(unittest.TestCase):
+    def test_runtime_projection_fixed_inputs_and_failure_stops_before_client(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as Directory:
+            PowerShell = Path(Directory) / 'pwsh.exe'
+            PowerShell.write_bytes(b'harmless mocked runtime')
+            Spec = {'Roles': {
+                'SERVER': {'PackageRoot': r'C:\Sandbox\ServerEnvelope', 'RunRegistryRoot': r'C:\Sandbox\ServerRegistry'},
+                'CLIENT': {'PackageRoot': str(Path(Directory) / 'PlayerEnvelope'),
+                           'RunRegistryRoot': str(Path(Directory) / 'ClientRegistry'),
+                           'PowerShell': {'Path': str(PowerShell), 'Sha256': Outer.Digest(PowerShell)}}}}
+            Manifest = {'RunId': '12345678-1234-4234-8234-123456789abc', 'SourceCommit': 'a' * 40,
+                        'ServerDeploymentSha256': 'b' * 64, 'PlayerDeploymentSha256': 'c' * 64}
+            Transport = mock.Mock()
+            with mock.patch.object(Outer, 'Checked') as Checked:
+                Outer.PrepareRuntimeProjections(Transport, r'C:\Sandbox\pwsh.exe', r'C:\Sandbox\run', Spec, Manifest)
+                WorkerArgs = Transport.WorkerPowerShell.call_args
+                self.assertEqual(WorkerArgs.kwargs, {'Timeout': 180})
+                self.assertEqual(WorkerArgs.args[0:2], (r'C:\Sandbox\pwsh.exe',
+                    r'C:\Sandbox\run\NewPhysicalGameSessionFarmProjection.ps1'))
+                self.assertEqual(WorkerArgs.args[2:], ('-PackageRoot', r'C:\Sandbox\ServerEnvelope',
+                    '-RunRegistryRoot', r'C:\Sandbox\ServerRegistry', '-RunId', Manifest['RunId'],
+                    '-Role', 'Server', '-DeploymentSha256', 'b' * 64, '-SourceCommit', 'a' * 40))
+                ClientArgs = Checked.call_args.args[0]
+                self.assertEqual(ClientArgs[:5], [str(PowerShell), '-NoProfile', '-NonInteractive', '-File',
+                    str(Outer.SOURCE.parent.parent / 'tests' / 'NewPhysicalGameSessionFarmProjection.ps1')])
+                self.assertEqual(ClientArgs[5:], ['-PackageRoot', Spec['Roles']['CLIENT']['PackageRoot'],
+                    '-RunRegistryRoot', Spec['Roles']['CLIENT']['RunRegistryRoot'], '-RunId', Manifest['RunId'],
+                    '-Role', 'Clients', '-DeploymentSha256', 'c' * 64, '-SourceCommit', 'a' * 40])
+                self.assertEqual(Checked.call_args.args[1], 180)
+            Transport.WorkerPowerShell.side_effect = ValueError('partial source copy')
+            with mock.patch.object(Outer, 'Checked') as Checked:
+                with self.assertRaisesRegex(ValueError, 'partial source copy'):
+                    Outer.PrepareRuntimeProjections(Transport, 'fixed-pwsh', 'fixed-run', Spec, Manifest)
+                Checked.assert_not_called()
+
+    def test_runtime_projection_precedes_preflight_and_ticket_sealing(self):
+        import inspect
+        Source = inspect.getsource(Outer.PrepareInputsOnce)
+        self.assertIn('"NewPhysicalGameSessionFarmProjection.ps1",', Source)
+        Position = Source.index('PrepareRuntimeProjections(')
+        self.assertLess(Position, Source.index('PreflightScript ='))
+        self.assertLess(Position, Source.index('Tickets.Seal('))
+
     def test_offline_budgets_enclose_export_without_extending_live_capture(self):
         self.assertEqual(Capture.ROLE_DEADLINE_SECONDS, 500)
         self.assertEqual(Capture.STOP_TIMEOUT_SECONDS, 80)

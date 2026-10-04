@@ -49,6 +49,15 @@ $FarmStopEvent = $null
 $StartedUtc = [DateTimeOffset]::UtcNow
 $Result = $null
 
+function Assert-ClosedNativeRuntimeRoot {
+	param([string]$Root)
+	# This direct launcher accepts native runtime roots, not deployment envelopes.
+	# PackageBuilder remains authoritative for full native content validation.
+	if (Test-Path -LiteralPath (Join-Path $Root 'deployment-sha256.json')) {
+		throw 'direct farm requires an already-closed native runtime projection; deployment envelope sidecar is not runtime content'
+	}
+}
+
 function Get-Fields {
 	param([Parameter(Mandatory = $true)][string]$Line)
 	$Fields = @{}
@@ -922,6 +931,8 @@ try {
 		-not (Test-Path -LiteralPath $PlayerExecutable -PathType Leaf)) {
 		throw 'packaged GargantuanServer.exe or GargantuanPlayer.exe is missing'
 	}
+	Assert-ClosedNativeRuntimeRoot -Root $ServerPackageRoot
+	Assert-ClosedNativeRuntimeRoot -Root $PlayerPackageRoot
 	if ($Provider -eq 'Node') {
 		if ([string]::IsNullOrWhiteSpace($NodeEndpoint) -or
 			-not (Test-Path -LiteralPath $NodeRootCertificate -PathType Leaf) -or

@@ -245,6 +245,238 @@ function Assert-DeploymentManifest {
 	if ($Found -ne $Expected.Count) { throw 'role-local package omits a deployment-manifest file' }
 }
 
+function Assert-ProjectionPlainPath {
+	param([string]$Path)
+	if (-not [IO.Path]::IsPathFullyQualified($Path)) { throw 'projection path must be absolute' }
+	$Current = [IO.Path]::GetFullPath($Path)
+	while ($Current) {
+		if (Test-Path -LiteralPath $Current) {
+			if ((Get-Item -LiteralPath $Current -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) {
+				throw 'projection path contains redirection'
+			}
+		}
+		$Current = [IO.Path]::GetDirectoryName($Current)
+	}
+}
+
+function Read-ProjectionJson {
+	param([string]$Path)
+	if ((Get-Item -LiteralPath $Path).Length -gt 4MB) { throw 'projection JSON exceeds bound' }
+	$Bytes = [IO.File]::ReadAllBytes($Path)
+	$Offset = if ($Bytes.Length -ge 3 -and $Bytes[0] -eq 239 -and $Bytes[1] -eq 187 -and $Bytes[2] -eq 191) { 3 } else { 0 }
+	$Text = [Text.UTF8Encoding]::new($false, $true).GetString($Bytes, $Offset, $Bytes.Length - $Offset)
+	$Document = [Text.Json.JsonDocument]::Parse($Text)
+	try {
+		$Pending = [Collections.Generic.Stack[Text.Json.JsonElement]]::new()
+		$Pending.Push($Document.RootElement)
+		while ($Pending.Count -gt 0) {
+			$Element = $Pending.Pop()
+			if ($Element.ValueKind -eq [Text.Json.JsonValueKind]::Object) {
+				$Names = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+				foreach ($Property in $Element.EnumerateObject()) {
+					if (-not $Names.Add($Property.Name)) { throw 'duplicate projection JSON property' }
+					$Pending.Push($Property.Value)
+				}
+			} elseif ($Element.ValueKind -eq [Text.Json.JsonValueKind]::Array) {
+				foreach ($Value in $Element.EnumerateArray()) { $Pending.Push($Value) }
+			}
+		}
+	} finally { $Document.Dispose() }
+	return ConvertFrom-Json -InputObject $Text -AsHashtable
+}
+
+function Get-NativeRuntimePlan {
+	param([string]$LocalRoot, [string]$DeploymentSha256, [string]$SourceCommit,
+		[ValidateSet('Server', 'Clients')][string]$LocalRole)
+	Assert-ProjectionPlainPath -Path $LocalRoot
+	Assert-DeploymentManifest -LocalRoot $LocalRoot -ExpectedSha256 $DeploymentSha256 -ExpectedSourceCommit $SourceCommit
+	$ManifestPath = Join-Path $LocalRoot 'game.package.json'
+	if ((Get-Item -LiteralPath $ManifestPath).Length -gt 4MB) { throw 'game manifest exceeds native bound' }
+	$Game = Read-ProjectionJson -Path $ManifestPath
+	$Deployment = Read-ProjectionJson -Path (Join-Path $LocalRoot 'deployment-sha256.json')
+	$Keys = @('Format', 'PackageFormatVersion', 'RuntimeCompatibility', 'ProjectId', 'DisplayName',
+		'Configuration', 'Revision', 'UnsavedChanges', 'Player', 'Startup', 'ContentTableSha256', 'Content')
+	$Binary = if ($LocalRole -eq 'Server') { 'GargantuanServer.exe' } else { 'GargantuanPlayer.exe' }
+	if ($Game.Count -ne 12 -or @($Keys | Where-Object { -not $Game.Contains($_) }).Count -ne 0 -or
+		$Game.Format -cne 'GargantuanGamePackage' -or $Game.PackageFormatVersion -ne 2 -or
+		$Game.RuntimeCompatibility -ne 1 -or $Game.ProjectId -cnotmatch '^[a-f0-9]{32}$' -or
+		$Game.Revision -isnot [long] -or $Game.Revision -le 0 -or $Game.Player -cne $Binary -or
+		$Game.Content -isnot [array] -or $Game.Content.Count -lt 1 -or $Game.Content.Count -gt 9999 -or
+		$Game.ContentTableSha256 -cnotmatch '^[a-f0-9]{64}$' -or $Game.Startup -isnot [System.Collections.IDictionary] -or
+		$Game.Startup.Count -ne 4) { throw 'native runtime manifest schema is invalid' }
+	$Expected = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::OrdinalIgnoreCase)
+	$Canonical = [Collections.Generic.List[object]]::new()
+	$Prior = ''; $Total = 0L
+	foreach ($Entry in $Game.Content) {
+		# Uppercase hex preserves native UTF8 byte order (including prefixes),
+		# unlike Ordinal comparison of UTF16 text for astral path characters.
+		$Segments = @([string]$Entry.Path -split '/')
+		if ($Entry -isnot [System.Collections.IDictionary] -or $Entry.Count -ne 4 -or
+			@('Path', 'Size', 'Sha256', 'Category' | Where-Object { -not $Entry.Contains($_) }).Count -ne 0 -or
+			$Entry.Path -isnot [string] -or [Text.Encoding]::UTF8.GetByteCount($Entry.Path) -gt 512 -or
+			$Entry.Path -cnotmatch '^[^\\/:*?"<>|\x00-\x1f]+(?:/[^\\/:*?"<>|\x00-\x1f]+)*$' -or
+			$Segments -contains '.' -or $Segments -contains '..' -or
+			$Entry.Path -iin @('game.package.json', 'deployment-sha256.json') -or
+			($Prior -and [StringComparer]::Ordinal.Compare(
+				[Convert]::ToHexString([Text.Encoding]::UTF8.GetBytes($Prior)),
+				[Convert]::ToHexString([Text.Encoding]::UTF8.GetBytes($Entry.Path))) -ge 0) -or
+			$Entry.Size -isnot [long] -or $Entry.Size -lt 0 -or $Entry.Size -gt 512MB -or
+			$Entry.Sha256 -cnotmatch '^[a-f0-9]{64}$' -or
+			$Entry.Category -cnotin @('Runtime', 'Project', 'Asset', 'Shader', 'Notice') -or
+			-not $Expected.TryAdd($Entry.Path, $Entry)) { throw 'native content entry identity or bound invalid' }
+		if ($Total -gt 8GB - $Entry.Size) { throw 'native content aggregate bound exceeded' }
+		$Total += $Entry.Size; $Prior = $Entry.Path
+		$Canonical.Add([ordered]@{ Path = $Entry.Path; Size = $Entry.Size; Sha256 = $Entry.Sha256; Category = $Entry.Category })
+	}
+	$TableBytes = [Text.UTF8Encoding]::new($false).GetBytes((ConvertTo-Json -InputObject @($Canonical.ToArray()) -Compress -Depth 8))
+	$TableHash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($TableBytes)).ToLowerInvariant()
+	if ($TableHash -cne $Game.ContentTableSha256) { throw 'native ordered content table hash mismatch' }
+	$Required = @($Binary, $Game.Startup.Project, $Game.Startup.AssetCatalog, $Game.Startup.ContentManifest,
+		'runtime/DefaultActionMap.luau', 'runtime/DefaultInteractionRuntime.luau', 'runtime/DefaultCharacterRuntime.luau',
+		'runtime/DefaultLocomotion.luau', 'runtime/DefaultCamera.luau', 'runtime/DefaultPlayerRuntime.luau',
+		'runtime/GargantuanSans.ttf', 'shaders/gui.frag.spv', 'shaders/gui.vert.spv',
+		'shaders/opaque.frag.spv', 'shaders/opaque.vert.spv', 'shaders/shadow.frag.spv', 'shaders/shadow.vert.spv',
+		'shaders/sky.frag.spv', 'shaders/sky.vert.spv', 'notices/Gargantuan.txt', 'notices/SDL3.txt',
+		'notices/SDL3_image.txt', 'notices/SDL3_ttf.txt')
+	if ($null -ne $Game.Startup.PreRun) { $Required += $Game.Startup.PreRun }
+	foreach ($Name in $Required) {
+		if ($Name -isnot [string] -or -not $Expected.ContainsKey($Name)) { throw 'native required startup/runtime entry absent' }
+	}
+	if ($Deployment.Files.Count -ne $Expected.Count + 1) { throw 'deployment/native membership differs' }
+	$Files = [Collections.Generic.List[object]]::new()
+	foreach ($Entry in $Deployment.Files) {
+		if ($Entry.Path -ceq 'game.package.json') {
+			$PackageHash = $Entry.Sha256.ToLowerInvariant()
+		} else {
+			$Native = $null
+			if (-not $Expected.TryGetValue($Entry.Path, [ref]$Native) -or
+				$Native.Path -cne $Entry.Path -or $Native.Size -ne $Entry.Bytes -or $Native.Sha256 -ine $Entry.Sha256) {
+				throw 'deployment/native size or hash differs'
+			}
+		}
+		$Files.Add([ordered]@{ Path = $Entry.Path; Bytes = $Entry.Bytes; Sha256 = $Entry.Sha256.ToLowerInvariant() })
+	}
+	if (-not $PackageHash) { throw 'deployment lacks exact game descriptor' }
+	return [pscustomobject]@{ Files = @($Files.ToArray()); ContentBytes = $Total; PackageSha256 = $PackageHash;
+		DeploymentSha256 = $DeploymentSha256.ToLowerInvariant(); SourceCommit = $SourceCommit; Binary = $Binary }
+}
+
+function Get-RuntimeProjectionPath {
+	param([string]$Registry, [string]$LocalRunId, [ValidateSet('Server', 'Clients')][string]$LocalRole)
+	if ($LocalRunId -cnotmatch '^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$') { throw 'projection run identity invalid' }
+	Assert-ProjectionPlainPath -Path $Registry
+	return Join-Path ([IO.Path]::GetFullPath($Registry)) "$LocalRunId.$LocalRole.runtime"
+}
+
+function Assert-RuntimeProjection {
+	param([string]$LocalRoot, [string]$RuntimeRoot, [object]$Plan)
+	Assert-ProjectionPlainPath -Path $RuntimeRoot
+	if (-not (Test-Path -LiteralPath $RuntimeRoot -PathType Container)) { throw 'runtime projection directory absent' }
+	$Expected = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::OrdinalIgnoreCase)
+	$Directories = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+	foreach ($Entry in $Plan.Files) {
+		$Expected.Add($Entry.Path, $Entry)
+		$Parent = [IO.Path]::GetDirectoryName($Entry.Path.Replace('/', [IO.Path]::DirectorySeparatorChar))
+		while ($Parent) { [void]$Directories.Add($Parent.Replace('\', '/')); $Parent = [IO.Path]::GetDirectoryName($Parent) }
+	}
+	$Found = 0
+	foreach ($Item in Get-ChildItem -LiteralPath $RuntimeRoot -Recurse -Force) {
+		if ($Item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'runtime projection redirected' }
+		$Relative = [IO.Path]::GetRelativePath($RuntimeRoot, $Item.FullName).Replace('\', '/')
+		if ($Item.PSIsContainer) {
+			if (-not $Directories.Contains($Relative)) { throw 'runtime projection undeclared directory' }
+			continue
+		}
+		$Entry = $null
+		if (-not $Expected.TryGetValue($Relative, [ref]$Entry) -or $Relative -cne $Entry.Path -or
+			$Item.Length -ne $Entry.Bytes -or (Get-FileHash -LiteralPath $Item.FullName -Algorithm SHA256).Hash -ine $Entry.Sha256) {
+			throw 'runtime projection content mismatch'
+		}
+		$Found += 1
+	}
+	if ($Found -ne $Expected.Count) { throw 'runtime projection missing content' }
+}
+
+function New-RuntimeProjection {
+	param([string]$LocalRoot, [string]$Registry, [string]$LocalRunId,
+		[ValidateSet('Server', 'Clients')][string]$LocalRole, [object]$Plan)
+	$RuntimeRoot = Get-RuntimeProjectionPath -Registry $Registry -LocalRunId $LocalRunId -LocalRole $LocalRole
+	$CurrentPlan = Get-NativeRuntimePlan -LocalRoot $LocalRoot -DeploymentSha256 $Plan.DeploymentSha256 `
+		-SourceCommit $Plan.SourceCommit -LocalRole $LocalRole
+	if ((ConvertTo-Json -InputObject $CurrentPlan.Files -Depth 8 -Compress) -cne
+		(ConvertTo-Json -InputObject $Plan.Files -Depth 8 -Compress) -or $CurrentPlan.PackageSha256 -cne $Plan.PackageSha256) {
+		throw 'projection plan changed before copy'
+	}
+	$Source = [IO.Path]::GetFullPath($LocalRoot).TrimEnd('\', '/')
+	$Separator = [IO.Path]::DirectorySeparatorChar
+	if ($RuntimeRoot.StartsWith($Source + $Separator, [StringComparison]::OrdinalIgnoreCase) -or
+		$Source.StartsWith($RuntimeRoot + $Separator, [StringComparison]::OrdinalIgnoreCase) -or $RuntimeRoot -ieq $Source) {
+		throw 'projection and source overlap'
+	}
+	$Attempt = $RuntimeRoot + '.attempt'; $Receipt = $RuntimeRoot + '.json'
+	foreach ($Path in @($RuntimeRoot, $Attempt, $Receipt)) {
+		Assert-ProjectionPlainPath -Path $Path
+		if (Test-Path -LiteralPath $Path) { throw 'stale or partial projection; no retry permitted' }
+	}
+	$CopyBytes = 0L
+	foreach ($Entry in $Plan.Files) { $CopyBytes += $Entry.Bytes }
+	if ([IO.DriveInfo]::new([IO.Path]::GetPathRoot($RuntimeRoot)).AvailableFreeSpace -lt $CopyBytes + 1GB) {
+		throw 'runtime projection disk headroom insufficient'
+	}
+	[void][IO.Directory]::CreateDirectory($Registry)
+	$Stream = [IO.File]::Open($Attempt, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+	try { $Stream.Write([Text.Encoding]::UTF8.GetBytes("$LocalRunId/$LocalRole")) } finally { $Stream.Dispose() }
+	if (Test-Path -LiteralPath $RuntimeRoot) { throw 'projection creation race; preserve attempt' }
+	[void][IO.Directory]::CreateDirectory($RuntimeRoot)
+	foreach ($Entry in $Plan.Files) {
+		$InputPath = Join-Path $Source $Entry.Path; $Target = Join-Path $RuntimeRoot $Entry.Path
+		Assert-ProjectionPlainPath -Path $InputPath; Assert-ProjectionPlainPath -Path $Target
+		if ((Get-Item -LiteralPath $InputPath).Length -ne $Entry.Bytes -or
+			(Get-FileHash -LiteralPath $InputPath -Algorithm SHA256).Hash -ine $Entry.Sha256) { throw 'projection source changed before copy' }
+		[void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($Target))
+		[IO.File]::Copy($InputPath, $Target, $false)
+	}
+	Assert-RuntimeProjection -LocalRoot $Source -RuntimeRoot $RuntimeRoot -Plan $Plan
+	Assert-DeploymentManifest -LocalRoot $Source -ExpectedSha256 $Plan.DeploymentSha256 -ExpectedSourceCommit $Plan.SourceCommit
+	$Value = [ordered]@{ Format = 'GargantuanFarmRuntimeProjection'; Version = 1; RunId = $LocalRunId; Role = $LocalRole;
+		SourceCommit = $Plan.SourceCommit; PackageRoot = $Source; RuntimeRoot = $RuntimeRoot;
+		PackageSha256 = $Plan.PackageSha256; DeploymentSha256 = $Plan.DeploymentSha256; Files = $Plan.Files }
+	$Stream = [IO.File]::Open($Receipt, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+	try { $Stream.Write([Text.UTF8Encoding]::new($false).GetBytes(($Value | ConvertTo-Json -Depth 8))) } finally { $Stream.Dispose() }
+	return $RuntimeRoot
+}
+
+function Assert-PreparedRuntimeProjection {
+	param([string]$LocalRoot, [string]$Registry, [string]$LocalRunId,
+		[ValidateSet('Server', 'Clients')][string]$LocalRole, [object]$Plan)
+	$RuntimeRoot = Get-RuntimeProjectionPath -Registry $Registry -LocalRunId $LocalRunId -LocalRole $LocalRole
+	$ReceiptPath = $RuntimeRoot + '.json'
+	$AttemptPath = $RuntimeRoot + '.attempt'
+	Assert-ProjectionPlainPath -Path $AttemptPath
+	if (-not (Test-Path -LiteralPath $AttemptPath -PathType Leaf) -or
+		(Get-Item -LiteralPath $AttemptPath).Length -gt 128 -or
+		[IO.File]::ReadAllText($AttemptPath, [Text.UTF8Encoding]::new($false, $true)) -cne "$LocalRunId/$LocalRole") {
+		throw 'prepared runtime projection one-use attempt identity invalid'
+	}
+	Assert-ProjectionPlainPath -Path $ReceiptPath
+	if (-not (Test-Path -LiteralPath $ReceiptPath -PathType Leaf) -or (Get-Item -LiteralPath $ReceiptPath).Length -gt 4MB) {
+		throw 'prepared runtime projection receipt absent or oversized'
+	}
+	$Receipt = Read-ProjectionJson -Path $ReceiptPath
+	$Keys = @('Format', 'Version', 'RunId', 'Role', 'SourceCommit', 'PackageRoot', 'RuntimeRoot',
+		'PackageSha256', 'DeploymentSha256', 'Files')
+	if ($Receipt.Count -ne $Keys.Count -or @($Keys | Where-Object { -not $Receipt.Contains($_) }).Count -ne 0 -or
+		$Receipt.Format -cne 'GargantuanFarmRuntimeProjection' -or $Receipt.Version -isnot [long] -or $Receipt.Version -ne 1 -or
+		$Receipt.RunId -cne $LocalRunId -or $Receipt.Role -cne $LocalRole -or
+		$Receipt.PackageRoot -cne [IO.Path]::GetFullPath($LocalRoot).TrimEnd('\', '/') -or
+		$Receipt.RuntimeRoot -cne $RuntimeRoot -or $Receipt.SourceCommit -cne $Plan.SourceCommit -or
+		$Receipt.PackageSha256 -cne $Plan.PackageSha256 -or $Receipt.DeploymentSha256 -cne $Plan.DeploymentSha256 -or
+		(ConvertTo-Json -InputObject $Receipt.Files -Depth 8 -Compress) -cne
+		(ConvertTo-Json -InputObject $Plan.Files -Depth 8 -Compress)) { throw 'prepared runtime projection receipt mismatch' }
+	Assert-RuntimeProjection -LocalRoot $LocalRoot -RuntimeRoot $RuntimeRoot -Plan $Plan
+	return $RuntimeRoot
+}
+
 function Assert-RolePaths {
 	param([string]$LocalPackage, [string]$LocalEvidence, [string]$LocalRegistry)
 	$Package = [IO.Path]::GetFullPath($LocalPackage).TrimEnd('\', '/')
@@ -672,7 +904,13 @@ try {
 	Initialize-HostResourceCounters
 	$HostResourceInterface = Get-HostResourceInterface -ServerAddress $Network.Address -LocalRole $Role
 	$Paths = Assert-RolePaths -LocalPackage $PackageRoot -LocalEvidence $EvidenceRoot -LocalRegistry $RunRegistryRoot
-	$Executable = Assert-LocalPackagePins -LocalRoot $Paths.Package -LocalRole $Role -RunManifest $Manifest
+	[void](Assert-LocalPackagePins -LocalRoot $Paths.Package -LocalRole $Role -RunManifest $Manifest)
+	$Prefix = if ($Role -eq 'Server') { 'Server' } else { 'Player' }
+	$RuntimePlan = Get-NativeRuntimePlan -LocalRoot $Paths.Package -DeploymentSha256 $Manifest["${Prefix}DeploymentSha256"] `
+		-SourceCommit $Manifest.SourceCommit -LocalRole $Role
+	$RuntimeRoot = Assert-PreparedRuntimeProjection -LocalRoot $Paths.Package -Registry $Paths.Registry `
+		-LocalRunId $Manifest.RunId -LocalRole $Role -Plan $RuntimePlan
+	$Executable = Join-Path $RuntimeRoot $RuntimePlan.Binary
 	$AvailableMemoryBytes = [long](Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory * 1024L
 	if ($AvailableMemoryBytes -lt 4294967296L) { throw 'role-local host lacks 4 GiB available memory' }
 	$EffectiveAggregateWorkingSetBytes = [long][math]::Min(
@@ -701,6 +939,7 @@ try {
 	[void][IO.Directory]::CreateDirectory($Paths.Evidence)
 	$EvidenceCreated = $true
 	[IO.File]::Copy($ManifestPath, (Join-Path $Paths.Evidence 'run-manifest.json'))
+	[IO.File]::Copy(($RuntimeRoot + '.json'), (Join-Path $Paths.Evidence 'runtime-projection.json'))
 	$Owners = $OwnedProcesses
 	$SecretVariables = @([Environment]::GetEnvironmentVariables().Keys |
 		Where-Object { [string]$_ -match '^GARGANTUAN_ENGINE_ADAPTER_.*TOKEN' })
@@ -723,7 +962,7 @@ try {
 				'--content-node-root-ca', [IO.Path]::GetFullPath($NodeRootCertificatePath),
 				'--content-node-token-env', $Manifest.NodeTokenEnvironment)
 		}
-		$Owner = Start-EndpointProcess -Executable $Executable -WorkingDirectory $Paths.Package `
+		$Owner = Start-EndpointProcess -Executable $Executable -WorkingDirectory $RuntimeRoot `
 			-Arguments $Arguments -Label 'server' -OutputDirectory $Paths.Evidence
 		$Owners.Add($Owner)
 		$Clock = [Diagnostics.Stopwatch]::StartNew()
@@ -755,7 +994,7 @@ try {
 				'--farm-publication-evidence', (Join-Path $Paths.Evidence ('publication-service-{0}.bin' -f $Slot))) }
 			if ($Manifest.RecoveryWorkload) { $Arguments += '--farm-recovery-workload' }
 			if (-not [Net.IPAddress]::IsLoopback($Network.Address)) { $Arguments += '--allow-insecure-development-network' }
-			$Owner = Start-EndpointProcess -Executable $Executable -WorkingDirectory $Paths.Package `
+			$Owner = Start-EndpointProcess -Executable $Executable -WorkingDirectory $RuntimeRoot `
 				-Arguments $Arguments -Label ('client-{0:D2}' -f $Slot) -OutputDirectory $Paths.Evidence `
 				-RemoveEnvironmentVariables $SecretVariables
 			$Owners.Add($Owner); $Clients.Add($Owner)

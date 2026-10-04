@@ -6,6 +6,29 @@ last_verified: 2026-10-04
 
 # Foundation 3L.3 diagnostic validation ledger
 
+## Local32 startup layout attribution (2026-10-04)
+
+The [fresh Local32 receipt](PooledPhysicalQualification3L.md#local32-package-envelope-startup-failure-2026-10-04)
+records the original attempt and successful six-job tooling CI. The first
+failure is the qualifier inventory inside the closed native package, before
+Ready/client/service measurement. The official ZIP and deployed content match;
+the correction must stage only the native content table plus game manifest in
+a new runtime projection, preserving the original inventory outside that root.
+Deployment hashes alone are insufficient native-startup qualification.
+
+The clean-projection correction passes the 23-case projection suite, 228-test
+farm Python scope and 32-test acceptance scope. Unchanged NativeA Server and
+headless Player both pass bounded startup from exact 58-file runtime copies,
+with no bind/connect, provider workload or capture. Originals and runtime
+copies remain byte-identical; the startup receipt is pinned in the physical
+receipt. Required current-source CI and actual failed-run control-secret
+retirement remain prerequisites, not inferred successes.
+
+Deterministic projection/closure qualification, required current CI, exact
+failed-run secret cleanup and fresh endpoint preflights are prerequisites to a
+new Local32 identity. No Node32 or final 54-gate acceptance result is inferred
+from these infrastructure checks. **KI-006 OPEN; 3L B — PARTIALLY READY**.
+
 ## Full decoder correction and retained-ETL reconstruction (2026-10-04)
 
 Development Full session `0ba00652-2c7b-42ea-821e-b8434952c531` at diagnostic

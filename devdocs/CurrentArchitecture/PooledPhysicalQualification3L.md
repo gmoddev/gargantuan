@@ -6,6 +6,59 @@ last_verified: 2026-10-04
 
 # Foundation 3L pooled physical qualification attempt
 
+## Local32 package-envelope startup failure (2026-10-04)
+
+The corrected source separates the deployment envelope from a fresh, exact
+native runtime projection before preflight and ticket sealing. The final
+projection suite passes 23 cases, including UTF8 path bounds/order, stale or
+partial copies, redirection, missing/extra content, tampering and receipt
+identity. The complete farm Python scope passes 228 tests, and acceptance
+passes 32 tests normally and with optimization. These are distinct scopes.
+
+Actual unchanged NativeA Server startup (12 ticks, no bind) and headless Player
+startup (12 frames, no connect) both exit 0 from the projected 58-file roots.
+Both child processes are reaped; runtime and original envelope inventories are
+unchanged. The diagnostic receipt is
+`C:\Users\aiden\.codex\artifacts\farm32-native-runtime-startup-v1\result.json`,
+SHA-256 `bc103808f4a52581278cf047a5f85a8db274fae630b4621fa7c788a5e335c21e`.
+This is package-startup qualification, not a physical provider attempt. Required
+execution-changing CI and failed-run secret retirement remain separate gates.
+
+Tooling head `2537f4517733a25990fd5f6456a59c962b39ff13` is qualified by all
+six original hosted jobs: Native push `37165435339`, Native PR `37165437335`,
+GNS push `37165435338` and GNS PR `37165437338`. Both Windows jobs pass 95
+native tests, both Linux jobs pass 53, and both GNS jobs pass 10. Complete
+original checkout/log/artifact reconciliation and the four independent raw
+scheduler trace replays pass. Earlier CI failures remain historical failures.
+
+The fresh Local32 attempt is physical run
+`cf89463c-cd4a-4d18-849a-cb66b51ba97e`, coordinator run
+`9e0aa139-56f9-436b-a7e9-87c5288f8f4a`. Both staged imports and strict capture
+configuration pass. SERVER control acknowledges launch at 02:26:56.454 UTC;
+the endpoint reports native exit **3** at 02:26:58.671107 UTC, before readiness.
+CLIENT never receives its launch operation. No client probe evidence or F1
+service measurement exists. Missing capture collection and conservative
+false child-reap terminal bits are downstream failures, not alternate causes.
+
+Both deployed and official Server envelopes contain 57 declared content files,
+`game.package.json`, and the undeclared qualifier `deployment-sha256.json`.
+Every declared size/hash matches, and the ordered content-table hash matches.
+`PackageBuilder::ParseManifest` permits only declared content and the game
+manifest; CI writes the qualifier inventory after the generator's native
+validation. The exact thrown native exception text and emission timestamp are
+**NOT MEASURED** because the native catch exposes only the generic integrity
+diagnostic. The retained source and byte-closure evidence establish the layout
+defect without inferring missing native events.
+
+Attribution is retained in
+`C:\Users\aiden\.codex\artifacts\role-startup-cf89463c-v1\attribution.json`,
+SHA-256 `29f24058cecb6e350d8a8d1b4457267a993a37984ccd28d3d0159b605335b4ef`.
+Fresh supplemental observation confirms idle endpoints; the original failed
+terminals and sequence remain unchanged. Exact-secret cleanup and independently
+qualified clean runtime staging precede any fresh attempt. Local32, real-TLS
+Node32 and the final acceptance sweep remain unqualified. The retained F1 PASS
+is unchanged and must not be rerun. **KI-006 OPEN; 3L B — PARTIALLY READY**.
+
 ## Full diagnostic decoder qualified locally; original CI required (2026-10-04)
 
 The Full development native child passes, while its original diagnostic remains

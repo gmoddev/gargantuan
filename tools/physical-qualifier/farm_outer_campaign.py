@@ -224,6 +224,27 @@ def WorkloadProfile(RecoveryWorkload):
     return ClientFrames, ServerTicks, Arguments
 
 
+def PrepareRuntimeProjections(TransportInstance, WorkerPowerShell, WorkerRunRoot, Spec, Manifest):
+    """Prepare exact native closures once, before inventory preflights or ARM."""
+    HelperName = "NewPhysicalGameSessionFarmProjection.ps1"
+    Helper = SOURCE.parent.parent / "tests" / HelperName
+    RemoteHelper = str(PureWindowsPath(WorkerRunRoot) / HelperName)
+    Client = Spec["Roles"]["CLIENT"]
+    PowerShell = Path(Client["PowerShell"]["Path"])
+    if Digest(PowerShell) != Client["PowerShell"]["Sha256"]:
+        raise ValueError("[Qualification:FarmOuter] client projection PowerShell pin changed")
+    for Role, Label, Prefix in (("SERVER", "Server", "Server"), ("CLIENT", "Clients", "Player")):
+        Input = Spec["Roles"][Role]
+        Args = ["-PackageRoot", Input["PackageRoot"], "-RunRegistryRoot", Input["RunRegistryRoot"],
+                "-RunId", Manifest["RunId"], "-Role", Label,
+                "-DeploymentSha256", Manifest[Prefix + "DeploymentSha256"],
+                "-SourceCommit", Manifest["SourceCommit"]]
+        if Role == "SERVER":
+            TransportInstance.WorkerPowerShell(WorkerPowerShell, RemoteHelper, *Args, Timeout=180)
+        else:
+            Checked([str(PowerShell), "-NoProfile", "-NonInteractive", "-File", str(Helper), *Args], 180)
+
+
 def PrepareInputsOnce(ConfigPath, TransportInstance=None, AttemptId=None):
     """Create fresh one-run manifest and role-local inventory, then seal tickets.
 
@@ -289,6 +310,7 @@ def PrepareInputsOnce(ConfigPath, TransportInstance=None, AttemptId=None):
     NodeTokenPath = str(PureWindowsPath(WorkerRunRoot) / "node-token.secret")
     NodeTokenSha256 = None
     for Name in ("NewPhysicalGameSessionFarmManifest.ps1",
+                 "NewPhysicalGameSessionFarmProjection.ps1",
                  "NewPhysicalGameSessionFarmNodeTls.ps1",
                  "PhysicalGameSessionFarmPreflight.ps1",
                  "PhysicalGameSessionFarmEndpoint.ps1"):
@@ -415,6 +437,7 @@ def PrepareInputsOnce(ConfigPath, TransportInstance=None, AttemptId=None):
         Spec["Roles"]["SERVER"]["NodeStage"] = {"Path": StagePath, "Sha256": StageHash}
         Spec["Roles"]["SERVER"]["NodeHelper"] = {"Path": Helper,
             "Sha256": TransportInstance.Remote("digest", Helper).stdout.strip()}
+    PrepareRuntimeProjections(TransportInstance, WorkerPowerShell["Path"], WorkerRunRoot, Spec, ReadJson(LocalManifest))
     PreflightScript = str(PureWindowsPath(WorkerRunRoot) / "PhysicalGameSessionFarmPreflight.ps1")
     ServerPreflightRemote = str(PureWindowsPath(WorkerRunRoot) / "server-preflight.json")
     Server = Spec["Roles"]["SERVER"]

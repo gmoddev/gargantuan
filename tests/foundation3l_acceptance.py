@@ -277,6 +277,61 @@ def VerifyCI(IndexPath, IndexSha256, ExpectedCommit):
             "InventorySha256": Digest(Data)}
 
 
+def VerifyNativeRuntimeInventory(PackageData, DeploymentFiles):
+    """Join a deployment envelope to the native closed runtime projection.
+
+    The inventory sidecar is evidence outside that projection, not native
+    content. This checks byte closure; native Validate/Load still owns package
+    startup semantics.
+    """
+    Require(len(PackageData) <= 4 * 1024 ** 2, "native package manifest exceeds 4 MiB")
+    Package = JsonData(PackageData)
+    Require(isinstance(Package, dict), "native package manifest must be an object")
+    Fields = {'Format', 'PackageFormatVersion', 'RuntimeCompatibility', 'ProjectId',
+              'DisplayName', 'Configuration', 'Revision', 'UnsavedChanges', 'Player',
+              'Startup', 'ContentTableSha256', 'Content'}
+    Require(set(Package) == Fields and Package.get('Format') == 'GargantuanGamePackage' and
+            type(Package.get('PackageFormatVersion')) is int and Package['PackageFormatVersion'] in (1, 2) and
+            type(Package.get('RuntimeCompatibility')) is int and Package['RuntimeCompatibility'] == 1 and
+            isinstance(Package.get('Content'), list) and
+            0 < len(Package['Content']) <= 16384, "invalid native package inventory shape")
+    Expected = {Record['Path']: Record for Record in DeploymentFiles}
+    Require('game.package.json' in Expected, "deployment lacks native manifest")
+    Native = {'game.package.json'}
+    Folded = {'game.package.json'}
+    Canonical = []
+    Prior = ''
+    Total = 0
+    for Record in Package['Content']:
+        Require(isinstance(Record, dict) and set(Record) == {'Path', 'Size', 'Sha256', 'Category'},
+                "invalid native content record")
+        Name = Record.get('Path')
+        Require(isinstance(Name, str) and 0 < len(Name.encode('utf-8')) <= 512 and
+                re.fullmatch(r'[^\\/:*?"<>|\x00-\x1f]+(?:/[^\\/:*?"<>|\x00-\x1f]+)*', Name) and
+                all(Part not in ('.', '..') for Part in Name.split('/')) and Name > Prior and
+                Name.casefold() not in Folded, "unsafe/duplicate/unordered native content path")
+        Size = Record.get('Size')
+        Require(type(Size) is int and 0 <= Size <= 512 * 1024 ** 2 and
+                Record.get('Category') in ('Runtime', 'Project', 'Asset', 'Shader', 'Notice'),
+                "invalid native content size/category")
+        Pin = Hash(Record.get('Sha256'))
+        Total += Size
+        Require(Total <= 8 * 1024 ** 3, "native content exceeds aggregate bound")
+        Match = Expected.get(Name)
+        Require(Match is not None and Match['Bytes'] == Size and Match['Sha256'].lower() == Pin,
+                "native/deployment byte basis differs")
+        Native.add(Name)
+        Folded.add(Name.casefold())
+        Prior = Name
+        # PackageBuilder::EncodeContent uses ordered_json with this exact key order.
+        Canonical.append({'Path': Name, 'Size': Size, 'Sha256': Pin, 'Category': Record['Category']})
+    Table = json.dumps(Canonical, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
+    Require(Digest(Table) == Hash(Package.get('ContentTableSha256')), "native content table hash mismatch")
+    Require(set(Expected) == Native, "deployment includes content outside native runtime closure")
+    return {'State': 'BYTE_CLOSURE_VERIFIED', 'Layout': 'DEPLOYMENT_ENVELOPE_REQUIRES_RUNTIME_PROJECTION',
+            'Files': len(Native), 'ContentTableSha256': Digest(Table), 'ContentBytes': Total}
+
+
 def VerifyQualifiedPackage(IndexRoot, Entry, ExpectedCommit, CI):
     """Stream the original GitHub ZIP; never extract, execute, or trust its manifest alone."""
     Require(CI.get("State") == "MEASURED_PASS", "qualified package needs verified CI")
@@ -302,6 +357,7 @@ def VerifyQualifiedPackage(IndexRoot, Entry, ExpectedCommit, CI):
     Require(ActualHash == Hash(Item["Sha256"]) and Metadata.get("digest") == "sha256:" + ActualHash and
             Metadata.get("size_in_bytes") == Archive.stat().st_size, "qualified artifact ZIP digest mismatch")
     Pins = {}
+    RuntimeInventories = {}
     with zipfile.ZipFile(Archive) as Zip:
         Infos = Zip.infolist()
         Require(0 < len(Infos) <= 22000 and sum(Item.file_size for Item in Infos) <= 2 * 1024 ** 3,
@@ -357,8 +413,13 @@ def VerifyQualifiedPackage(IndexRoot, Entry, ExpectedCommit, CI):
                          'content/content.manifest.json': 'ContentManifestSha256'}.get(Relative)
                 if Field:
                     Pins[Role + Field] = Actual
+            PackageName = Role + '/game.package.json'
+            Require(PackageName in Files and Files[PackageName].file_size <= 4 * 1024 ** 2,
+                    "native package manifest absent/oversized")
+            RuntimeInventories[Role] = VerifyNativeRuntimeInventory(Zip.read(PackageName), Manifest['Files'])
         Require(set(Files) == ExpectedFiles and len(Pins) == 8, "qualified package contains extra/missing files")
-    return {"State": "MEASURED_PASS", "ArtifactId": Metadata["id"], "ArchiveSha256": ActualHash, "Pins": Pins}
+    return {"State": "MEASURED_PASS", "ArtifactId": Metadata["id"], "ArchiveSha256": ActualHash,
+            "Pins": Pins, "RuntimeInventories": RuntimeInventories}
 
 
 def VerifyProvenance(IndexPath, IndexPin, Inputs, CI, Four, Source):

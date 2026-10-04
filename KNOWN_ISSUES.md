@@ -85,6 +85,27 @@ This closes the ordering defect, not general planning work or Foundation health.
 
 ## KI-006: Remaining physical pooled-service qualification
 
+2026-10-04 Local32 startup attribution: tooling `2537f4517` has successful
+original push/PR Windows, Linux and GNS checks. Fresh Local run
+`cf89463c-cd4a-4d18-849a-cb66b51ba97e` passes staged imports and strict capture
+configuration, but the native server exits 3 before readiness. The official
+NativeA ZIP and deployed Server both contain one undeclared native-package
+member, `deployment-sha256.json`; every declared content size/hash matches.
+CI appended this qualifier inventory after native package validation. The
+qualifier had verified deployment bytes without establishing native runtime
+closure. A source-owned clean runtime projection must preserve the original
+envelope/pins and keep inventory evidence outside the executable package.
+Original failed terminals remain failed; supplemental cleanup must prove idle
+and retire the six exact secrets separately. Local service, Node32 and final
+acceptance remain **NOT MEASURED**. Retained F1 PASS is unchanged.
+**KI-006 OPEN; Foundation 3L B — PARTIALLY READY; no 3M.**
+
+The clean-projection implementation is now locally qualified: 23 projection
+cases, 228 farm Python tests, 32 acceptance tests, and actual bounded NativeA
+Server/Player startup from unchanged declared content pass. No bind/connect or
+provider measurement occurs. Required current-source CI, exact failed-run
+secret retirement and fresh Local32/Node32/final acceptance remain outstanding.
+
 2026-10-04 decoder continuation: the development Full native child passes all
 eight cases, but its original diagnostic fails at the obsolete five-million-row
 cutoff with only 309,432,716 CSV bytes. Removing that independent cutoff retains
