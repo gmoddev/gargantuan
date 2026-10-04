@@ -26,7 +26,6 @@ constexpr ULONG TraceFlags = EVENT_TRACE_FLAG_PROCESS | EVENT_TRACE_FLAG_THREAD 
 constexpr DWORD WorkloadLimitMs = 600000;
 constexpr ULONGLONG DecodeLimitMs = 180000;
 constexpr std::uint64_t CsvLimit = 512ULL * 1024 * 1024;
-constexpr std::uint64_t RowLimit = 5000000;
 constexpr std::uint64_t ChildLogLimit = 32ULL * 1024 * 1024; // Each stream, exact write cap.
 constexpr GUID ThreadProvider{0x3d6fa8d1, 0xfe05, 0x11d0, {0x9d, 0xda, 0x00, 0xc0, 0x4f, 0xd7, 0xba, 0x7c}};
 constexpr GUID KernelControl{0x9e814aad, 0x3204, 0x11d2, {0x9a, 0x82, 0x00, 0x60, 0x08, 0xa8, 0x69, 0x39}};
@@ -216,7 +215,10 @@ struct Decoder {
         }
         Row << '\n';
         const std::string Text = Row.str();
-        if (Rows >= RowLimit || Bytes + Text.size() > CsvLimit) { Capped = true; return; }
+        // Every emitted row contains a newline, so the existing byte cap
+        // also bounds Rows far below uint64_t. A separate observed row-count
+        // cutoff truncated complete traces before reaching that hard cap.
+        if (Bytes > CsvLimit || Text.size() > CsvLimit - Bytes) { Capped = true; return; }
         *Stream << Text;
         WriteFailed = !Stream->good();
         Bytes += Text.size(); ++Rows;
@@ -265,6 +267,94 @@ DecodeResult Decode(const fs::path &Etl, Decoder &State) {
     Result.ProcessStatus = ProcessTrace(&Reader, 1, nullptr, nullptr);
     CloseTrace(Reader);
     return Result;
+}
+void RequirePlainLocalPath(const fs::path &Path) {
+    if (!Path.is_absolute() || GetDriveTypeW(Path.root_path().c_str()) != DRIVE_FIXED)
+        throw std::runtime_error("offline decode requires an absolute local fixed-drive path");
+    for (const auto &Component : Path)
+        if (Component == L"." || Component == L"..")
+            throw std::runtime_error("offline decode path must have canonical components");
+    for (auto Current = Path.lexically_normal();; Current = Current.parent_path()) {
+        const DWORD Attributes = GetFileAttributesW(Current.c_str());
+        if (Attributes == INVALID_FILE_ATTRIBUTES || (Attributes & FILE_ATTRIBUTE_REPARSE_POINT))
+            throw std::runtime_error("offline decode path missing or reparse-linked");
+        if (Current == Current.parent_path()) break;
+    }
+}
+DWORD ParseMainThread(const wchar_t *Text) {
+    const std::wstring Value(Text);
+    if (Value.empty() || Value.size() > 10 || !std::all_of(Value.begin(), Value.end(),
+        [](wchar_t Character) { return Character >= L'0' && Character <= L'9'; }))
+        throw std::runtime_error("offline decode requires a positive uint32 main thread ID");
+    const auto Number = std::stoull(Value);
+    if (Number == 0 || Number > UINT32_MAX)
+        throw std::runtime_error("offline decode requires a positive uint32 main thread ID");
+    return static_cast<DWORD>(Number);
+}
+int DecodeOnly(const fs::path &Input, const fs::path &Destination, DWORD MainThread) {
+    // This branch only reads an existing ETL. It never constructs Trace,
+    // starts a session, launches a child, or changes the retained raw files.
+    RequirePlainLocalPath(Input);
+    if (!fs::is_regular_file(Input) || fs::file_size(Input) >= CsvLimit)
+        throw std::runtime_error("offline decode requires a bounded regular ETL");
+    const auto Etl = fs::canonical(Input);
+    const auto InputBytes = fs::file_size(Etl);
+    if (!Destination.is_absolute() || Destination.filename().empty() || fs::exists(Destination))
+        throw std::runtime_error("offline decode output must be a new exclusive directory");
+    RequirePlainLocalPath(Destination.parent_path());
+    if (!fs::is_directory(Destination.parent_path()))
+        throw std::runtime_error("offline decode output parent must be a directory");
+    const auto Parent = fs::canonical(Destination.parent_path());
+    for (auto Current = Parent;; Current = Current.parent_path()) {
+        if (Current == Etl.parent_path())
+            throw std::runtime_error("offline decode output cannot be inside the retained input directory");
+        if (Current == Current.parent_path()) break;
+    }
+    const auto Output = Parent / Destination.filename();
+    if (!fs::create_directory(Output))
+        throw std::runtime_error("offline decode output directory was already created");
+    Decoder Decoded;
+    Decoded.MainThread = MainThread;
+    Decoded.Csv.open(Output / "scheduler.csv", std::ios::binary);
+    if (!Decoded.Csv.is_open()) throw std::runtime_error("offline decode CSV could not be created");
+    Decoded.Csv << CsvHeader;
+    Decoded.Bytes = sizeof(CsvHeader) - 1;
+    const auto Result = Decode(Etl, Decoded);
+    const auto DurationMs = GetTickCount64() - Decoded.StartedMs;
+    Decoded.Csv.flush();
+    Decoded.WriteFailed = Decoded.WriteFailed || !Decoded.Csv.good();
+    Decoded.Csv.close();
+    Decoded.WriteFailed = Decoded.WriteFailed || Decoded.Csv.fail();
+    const bool Complete = Result.OpenStatus == ERROR_SUCCESS && Result.ProcessStatus == ERROR_SUCCESS &&
+        Result.HeaderEventsLost == 0 && Result.HeaderBuffersLost == 0 && Result.ClockType == 1 && Result.Frequency > 0 &&
+        !Decoded.Capped && !Decoded.WriteFailed && !Decoded.TimedOut && Decoded.Unsupported == 0 &&
+        Decoded.Switches > 0 && Decoded.Readies > 0 && Decoded.MainFirst > 0 && Decoded.MainLast > Decoded.MainFirst &&
+        fs::file_size(Output / "scheduler.csv") == Decoded.Bytes && fs::file_size(Etl) == InputBytes;
+    std::ofstream Receipt(Output / "decode.json", std::ios::binary);
+    Receipt << "{\n\"Format\":\"GargantuanSchedulerOfflineDecode\",\"Version\":1,\"Scope\":\"DECODE_ONLY\","
+        << "\"NoChildLaunched\":true,\"NoCaptureStarted\":true,\"OriginalDiagnosticRelabeled\":false,"
+        << "\"CausalVerdict\":\"NOT_CLAIMED\",\"DecodeComplete\":" << (Complete ? "true" : "false")
+        << ",\"InputEtl\":" << JsonString(Utf8(Etl.wstring())) << ",\"InputEtlBytes\":" << InputBytes
+        << ",\"OutputCsv\":" << JsonString(Utf8((Output / "scheduler.csv").wstring()))
+        << ",\"MainThreadId\":" << MainThread << ",\"CsvBytes\":" << Decoded.Bytes
+        << ",\"DecodeOpenStatus\":" << Result.OpenStatus << ",\"DecodeProcessStatus\":" << Result.ProcessStatus
+        << ",\"HeaderEventsLost\":" << Result.HeaderEventsLost << ",\"HeaderBuffersLost\":" << Result.HeaderBuffersLost
+        << ",\"QpcFrequency\":" << Result.Frequency << ",\"ClockType\":" << Result.ClockType
+        << ",\"HeaderStartFileTime\":" << Result.StartFileTime << ",\"HeaderEndFileTime\":" << Result.EndFileTime
+        << ",\"DecodedRows\":" << Decoded.Rows << ",\"UnsupportedEvents\":" << Decoded.Unsupported
+        << ",\"UnsupportedLifecycleEvents\":" << Decoded.UnsupportedLifecycle
+        << ",\"DecodedFirstQpc\":" << Decoded.First << ",\"DecodedLastQpc\":" << Decoded.Last
+        << ",\"MainFirstQpc\":" << Decoded.MainFirst << ",\"MainLastQpc\":" << Decoded.MainLast
+        << ",\"CsvCapped\":" << (Decoded.Capped ? "true" : "false")
+        << ",\"DecodeTimedOut\":" << (Decoded.TimedOut ? "true" : "false")
+        << ",\"WriteFailed\":" << (Decoded.WriteFailed ? "true" : "false")
+        << ",\"DecodeDurationMs\":" << DurationMs
+        << ",\"TraceFileCapBytes\":536870912,\"CsvCapBytes\":536870912,\"DecodeDeadlineMs\":180000\n}\n";
+    Receipt.flush();
+    if (!Receipt.good()) return 125;
+    std::cout << "[Qualification:SchedulerDecode] decode_only=1 rows=" << Decoded.Rows
+        << " bytes=" << Decoded.Bytes << " complete=" << Complete << " no-session-or-child-created\n";
+    return Complete ? 0 : 125;
 }
 int SelfTest() {
     const auto Aggregate = GetCaseSpec(FixedCase::Aggregate32Structural);
@@ -325,21 +415,30 @@ int SelfTest() {
     Event.UserData = Payload.data(); Event.UserDataLength = 8;
     Event.EventHeader.Flags = 0; Event.EventHeader.EventDescriptor.Opcode = 50;
     Event.EventHeader.EventDescriptor.Version = 2;
-    State.Rows = RowLimit;
+    // Simulate a consistent large decoded prefix without allocating it.
+    // The actual Event path must emit row5,000,001 below the unchanged byte cap.
+    const auto RowBytes = std::string("150,0,50,2,0,0,,,17,,,,,2,-1,4\n").size();
+    State.Rows = 5000000; State.Bytes = State.Rows * RowBytes;
     State.Event(&Event);
-    if (!State.Capped || State.Rows != RowLimit) return 3;
+    if (State.Capped || State.Rows != 5000001 || Rows.str().empty()) return 3;
     Event.EventHeader.EventDescriptor.Version = 99;
     State.Event(&Event);
     if (State.Unsupported != 5) return 4;
     Event.EventHeader.EventDescriptor.Version = 2; Event.UserDataLength = 7;
     State.Event(&Event);
     if (State.Unsupported != 6) return 7;
-    Event.UserDataLength = 8; State.Rows = 0; State.Bytes = CsvLimit;
+    Event.UserDataLength = 8; State.Rows = 0; State.Bytes = CsvLimit - RowBytes;
+    State.Capped = false; Rows.str(""); State.Event(&Event);
+    if (State.Capped || State.Rows != 1 || State.Bytes != CsvLimit || Rows.str().size() != RowBytes) return 8;
+    State.Rows = 0; State.Bytes = CsvLimit - RowBytes + 1;
     State.Capped = false; State.Event(&Event);
     if (!State.Capped || State.Rows != 0) return 8;
+    State.Bytes = UINT64_MAX; State.Capped = false; State.Event(&Event);
+    if (!State.Capped || State.Rows != 0) return 15;
     try { (void)ParseGuid(L"00000000-0000-0000-0000-000000000000"); return 5; } catch (...) {}
     try { (void)ParseGuid(L"9e814aad-3204-11d2-9a82-006008a86939"); return 10; } catch (...) {}
     std::cout << "[Qualification:SchedulerTrace] self-test=PASS v5-layout=PASS no-session-or-child-created\n";
+    std::cout << "[Qualification:SchedulerTrace] rows-over-five-million=PASS byte-cap=PASS overflow-denial=PASS\n";
     return 0;
 }
 void Drain(HANDLE Pipe, const fs::path &Path, std::atomic<bool> &Capped, std::atomic<bool> &Failed) noexcept {
@@ -548,6 +647,8 @@ int Run(const fs::path &Root, const GUID &Guid, const std::wstring &GuidText, Fi
 int wmain(int Count, wchar_t **Args) {
     try {
         if (Count == 2 && std::wstring(Args[1]) == L"--self-test") return SelfTest();
+        if (Count == 5 && std::wstring(Args[1]) == L"--decode")
+            return DecodeOnly(fs::path(Args[2]), fs::path(Args[3]), ParseMainThread(Args[4]));
         if (Count == 4 && std::wstring(Args[1]) == L"--run")
             return Run(fs::path(Args[2]), ParseGuid(Args[3]), Args[3]);
         if (Count == 4 && std::wstring(Args[1]) == L"--run-ack-stats")

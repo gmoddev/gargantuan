@@ -134,6 +134,7 @@ def ValidateSchedulerCsv(Metadata, CsvPath, Argument):
             raise ValueError(Message)
     Need(CsvPath is not None and CsvPath.is_file() and CsvPath.stat().st_size <= 512 * 1024 * 1024,
          "bounded scheduler CSV absent")
+    CsvBytes = CsvPath.stat().st_size
     Count, Last, FirstMain, LastMain, Switches, Readies = 0, 0, 0, 0, 0, 0
     Main = Metadata['ChildMainTid']
     with CsvPath.open('r', encoding='ascii', newline='') as Stream:
@@ -142,7 +143,7 @@ def ValidateSchedulerCsv(Metadata, CsvPath, Argument):
         Need(Reader.fieldnames == CSV_FIELDS, "unexpected scheduler CSV schema")
         for Row in Reader:
             Count += 1
-            Need(Count <= 5_000_000 and None not in Row and all(V is not None for V in Row.values()),
+            Need(Count <= CsvBytes and None not in Row and all(V is not None for V in Row.values()),
                  "CSV cap/schema")
             Tick, Opcode = int(Row['Qpc']), int(Row['Opcode'])
             Need(Tick > 0 and Tick >= Last, "unordered scheduler CSV")
@@ -631,6 +632,7 @@ def ValidateStats(Metadata, Stdout, CsvPath, Arms):
              Row['stage'] in ('after-quiet', 'terminal', 'grant-failure'), "native snapshot identity/value")
     Need(Snapshots, "native snapshot brackets absent")
     Need(CsvPath is not None and CsvPath.is_file() and CsvPath.stat().st_size <= 512 * 1024 * 1024, "bounded scheduler CSV absent")
+    CsvBytes = CsvPath.stat().st_size
     Identities = {int(Row['native_tid']): [] for Row in Services}
     Count, Last = 0, 0
     with CsvPath.open('r', encoding='ascii', newline='') as Stream:
@@ -639,7 +641,7 @@ def ValidateStats(Metadata, Stdout, CsvPath, Arms):
         Need(Reader.fieldnames == CSV_FIELDS, "unexpected scheduler CSV schema")
         for Row in Reader:
             Count += 1
-            Need(Count <= 5_000_000 and None not in Row and all(Value is not None for Value in Row.values()), "CSV cap/schema")
+            Need(Count <= CsvBytes and None not in Row and all(Value is not None for Value in Row.values()), "CSV cap/schema")
             Tick = int(Row['Qpc'])
             Need(Tick > 0 and Tick >= Last, "unordered scheduler CSV")
             Last = Tick

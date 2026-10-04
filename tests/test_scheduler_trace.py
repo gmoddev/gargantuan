@@ -661,6 +661,22 @@ class SchedulerTraceTests(unittest.TestCase):
         self.assertIn("wrapper-self-test=PASS no-session-or-child-created", Result.stdout)
         self.assertIn("dword-exit-normalization=PASS raw-status-preserved", Result.stdout)
 
+    def test_decoder_keeps_byte_time_bounds_and_decode_only_has_no_capture_or_child(self):
+        Source = (ROOT / 'tools/ci/SchedulerTrace.cpp').read_text()
+        self.assertIn('constexpr std::uint64_t CsvLimit = 512ULL * 1024 * 1024;', Source)
+        self.assertIn('constexpr ULONGLONG DecodeLimitMs = 180000;', Source)
+        self.assertNotIn('RowLimit', Source)
+        self.assertIn('Bytes > CsvLimit || Text.size() > CsvLimit - Bytes', Source)
+        Body = Source[Source.index('int DecodeOnly('):Source.index('int SelfTest()')]
+        for Call in ('StartTraceW(', 'ControlTraceW(', 'CreateProcessW(', 'Run(', 'Cleanup('):
+            self.assertNotIn(Call, Body)
+        self.assertIn('Decode(Etl, Decoded)', Body)
+        self.assertIn('fs::create_directory(Output)', Body)
+        self.assertIn('RequirePlainLocalPath(Destination.parent_path())', Body)
+        Validator = (ROOT / 'tools/ci/SchedulerTraceValidate.py').read_text()
+        self.assertNotIn('5_000_000', Validator)
+        self.assertEqual(Validator.count('Count <= CsvBytes'), 2)
+
     @unittest.skipUnless(os.environ.get("SCHEDULER_TRACE_TEST_HELPER"), "native compile-only helper not supplied")
     def test_native_payload_bounds_and_ownership_without_capture(self):
         Result = subprocess.run(
@@ -670,6 +686,63 @@ class SchedulerTraceTests(unittest.TestCase):
         )
         self.assertEqual(Result.returncode, 0, Result.stdout + Result.stderr)
         self.assertIn("self-test=PASS v5-layout=PASS no-session-or-child-created", Result.stdout)
+        self.assertIn('rows-over-five-million=PASS byte-cap=PASS overflow-denial=PASS', Result.stdout)
+
+    @unittest.skipUnless(os.environ.get('SCHEDULER_TRACE_TEST_HELPER'), 'native compile-only helper not supplied')
+    def test_native_decode_rejects_invalid_arguments_without_output_or_capture(self):
+        with tempfile.TemporaryDirectory() as Directory:
+            Root = Path(Directory)
+            Source, Output = Root / 'input.etl', Root / 'output'
+            Source.write_bytes(b'not-an-etl')
+            for Tid in ('0', '-1', '+1', '4294967296', '17x', ''):
+                Result = subprocess.run([os.environ['SCHEDULER_TRACE_TEST_HELPER'], '--decode',
+                    str(Source), str(Output), Tid], text=True, capture_output=True, timeout=30,
+                    creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+                self.assertEqual(Result.returncode, 125)
+                self.assertIn('positive uint32 main thread ID', Result.stderr)
+                self.assertFalse(Output.exists())
+            for Args in ([str(Source), str(Output)], [str(Source), str(Output), '17', '--run']):
+                Result = subprocess.run([os.environ['SCHEDULER_TRACE_TEST_HELPER'], '--decode', *Args],
+                    text=True, capture_output=True, timeout=30, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+                self.assertEqual(Result.returncode, 125)
+                self.assertIn('invalid arguments', Result.stderr)
+                self.assertFalse(Output.exists())
+
+    @unittest.skipUnless(os.environ.get('SCHEDULER_TRACE_TEST_HELPER'), 'native compile-only helper not supplied')
+    def test_native_decode_exclusive_and_plain_path_denials_preserve_inputs(self):
+        with tempfile.TemporaryDirectory() as Directory:
+            Root = Path(Directory)
+            Source, Existing = Root / 'input.etl', Root / 'existing'
+            Original = b'not-an-etl'
+            Source.write_bytes(Original)
+            Existing.mkdir()
+            Marker = Existing / 'original.txt'
+            Marker.write_bytes(b'preserved')
+            Linked, Target = Root / 'linked', Root / 'target'
+            Target.mkdir()
+            (Target / 'input.etl').write_bytes(Original)
+            Cases = [(Source, Existing), (Source, Root / 'missing-parent' / 'output'),
+                     (Source, Root / 'inside-original'), (Root / 'missing.etl', Root / 'output')]
+            # Both source and output parent must reject actual Windows junctions.
+            if os.name == 'nt':
+                Result = subprocess.run(['cmd', '/d', '/c', 'mklink /J "' + str(Linked) + '" "' + str(Target) + '"'],
+                    text=True, capture_output=True, timeout=30, creationflags=subprocess.CREATE_NO_WINDOW)
+                self.assertEqual(Result.returncode, 0, Result.stdout + Result.stderr)
+                Cases.extend(((Linked / 'input.etl', Root / 'output'), (Source, Linked / 'output')))
+            try:
+                for Input, Output in Cases:
+                    Result = subprocess.run([os.environ['SCHEDULER_TRACE_TEST_HELPER'], '--decode',
+                        str(Input), str(Output), '17'], text=True, capture_output=True, timeout=30,
+                        creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+                    self.assertEqual(Result.returncode, 125, Result.stdout + Result.stderr)
+                    if Output != Existing:
+                        self.assertFalse(Output.exists(), str(Output))
+                self.assertEqual(Source.read_bytes(), Original)
+                self.assertEqual(Marker.read_bytes(), b'preserved')
+                self.assertEqual((Target / 'input.etl').read_bytes(), Original)
+            finally:
+                if Linked.exists():
+                    os.rmdir(Linked) # Remove only this test-owned junction, never its target.
 
     @unittest.skipUnless(os.environ.get("SCHEDULER_TRACE_TEST_HELPER"), "native compile-only helper not supplied")
     def test_native_rejects_reserved_guid_before_any_trace(self):

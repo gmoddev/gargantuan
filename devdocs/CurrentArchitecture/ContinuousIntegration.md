@@ -310,6 +310,25 @@ they never become evidence of an application or scheduler cause. Self-tests
 exercise decoding, bounds, clock coverage and exit precedence without starting
 a kernel session or native workload.
 
+Decoded rows remain streamed under the unchanged 512 MiB CSV byte cap and
+180-second decode deadline. Each emitted row has positive byte length, so that
+byte cap also bounds the row counter far below its 64-bit range. There is no
+independent five-million-row cutoff: it prematurely truncated a complete
+retained Full ETL while its decoded CSV was only 309,432,716 bytes. That original
+development diagnostic remains failed; loss-free ETL and successful native
+execution do not retroactively qualify its incomplete original CSV.
+
+The helper's separate `--decode <existing-etl> <new-output-directory> <main-tid>`
+mode reads a bounded regular ETL on a local fixed drive and invokes the same
+decoder without starting a session, child, service or workload. Input ancestry
+and the existing output parent must be free of reparse points; the output is
+exclusive and outside the retained input directory. It writes a new CSV and
+`DECODE_ONLY` receipt with actual statuses, row/byte counts, header loss, QPC
+coverage and duration. It never edits original metadata or declares original
+CI/native qualification. A separately identified offline reconstruction must
+join the preserved input hash and original child/clock evidence to that receipt;
+no offline result substitutes for a new original hosted job.
+
 The decoder recognizes the originally supported CSwitch version 2/24-byte
 layout and the exact observed version 5/28-byte, 64-bit-header layout. The
 version 5 branch retains raw `Version=5` and reads only NewThreadId,
